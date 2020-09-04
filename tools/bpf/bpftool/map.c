@@ -739,10 +739,6 @@ static int dump_map_elem(int fd, void *key, void *value,
 	/* lookup error handling */
 	lookup_errno = errno;
 
-	if (map_is_map_of_maps(map_info->type) ||
-	    map_is_map_of_progs(map_info->type))
-		return 0;
-
 	if (json_output) {
 		jsonw_start_object(json_wtr);
 		jsonw_name(json_wtr, "key");
