@@ -58,6 +58,16 @@ void test_ksyms_btf(void)
 	CHECK(data->out__bpf_prog_active != bpf_prog_active_addr, "bpf_prog_active",
 	      "got %llu, exp %llu\n", data->out__bpf_prog_active, bpf_prog_active_addr);
 
+	CHECK(data->out__rq_cpu == -1, "rq_cpu",
+	      "got %u, exp != -1\n", data->out__rq_cpu);
+	CHECK(data->out__percpu_bpf_prog_active == -1, "percpu_bpf_prog_active",
+	      "got %d, exp != -1\n", data->out__percpu_bpf_prog_active);
+
+	CHECK(data->out__this_rq_cpu == -1, "this_rq_cpu",
+	      "got %u, exp != -1\n", data->out__this_rq_cpu);
+	CHECK(data->out__this_bpf_prog_active == -1, "this_bpf_prog_active",
+	      "got %d, exp != -1\n", data->out__this_bpf_prog_active);
+
 cleanup:
 	test_ksyms_btf__destroy(skel);
 }
