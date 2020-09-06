@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include "test_sk_ref_track_invalid.skel.h"
 
-void test_reference_tracking(void)
+static void test_sk_lookup(void)
 {
 	const char *file = "test_sk_lookup_kern.o";
 	const char *obj_name = "ref_track";
@@ -49,4 +50,21 @@ void test_reference_tracking(void)
 
 cleanup:
 	bpf_object__close(obj);
+}
+
+static void test_sk_release_invalid(void)
+{
+	struct test_sk_ref_track_invalid *skel;
+	int duration = 0;
+
+	skel = test_sk_ref_track_invalid__open_and_load();
+	if (CHECK(skel, "open_and_load", "verifier accepted sk_release of BTF struct sock*\n"))
+		test_sk_ref_track_invalid__destroy(skel);
+}
+
+void test_reference_tracking(void)
+{
+	test_sk_lookup();
+	if (test__start_subtest("invalid sk_release"))
+		test_sk_release_invalid();
 }
