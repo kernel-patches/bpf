@@ -3908,6 +3908,9 @@ static int resolve_map_arg_type(struct bpf_verifier_env *env,
 	return 0;
 }
 
+BTF_ID_LIST(btf_fullsock_ids)
+BTF_ID(struct, sock)
+
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
 			  const struct bpf_func_proto *fn)
@@ -4000,37 +4003,15 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		expected_type = PTR_TO_SOCKET;
 		if (!(register_is_null(reg) &&
 		      arg_type == ARG_PTR_TO_SOCKET_OR_NULL)) {
-			if (type != expected_type)
+			if (type != expected_type &&
+			    type != PTR_TO_BTF_ID)
 				goto err_type;
 		}
+		meta->btf_id = btf_fullsock_ids[0];
 	} else if (arg_type == ARG_PTR_TO_BTF_ID) {
-		bool ids_match = false;
-
 		expected_type = PTR_TO_BTF_ID;
 		if (type != expected_type)
 			goto err_type;
-		if (!fn->check_btf_id) {
-			if (reg->btf_id != meta->btf_id) {
-				ids_match = btf_struct_ids_match(&env->log, reg->off, reg->btf_id,
-								 meta->btf_id);
-				if (!ids_match) {
-					verbose(env, "Helper has type %s got %s in R%d\n",
-						kernel_type_name(meta->btf_id),
-						kernel_type_name(reg->btf_id), regno);
-					return -EACCES;
-				}
-			}
-		} else if (!fn->check_btf_id(reg->btf_id, arg)) {
-			verbose(env, "Helper does not support %s in R%d\n",
-				kernel_type_name(reg->btf_id), regno);
-
-			return -EACCES;
-		}
-		if ((reg->off && !ids_match) || !tnum_is_const(reg->var_off) || reg->var_off.value) {
-			verbose(env, "R%d is a pointer to in-kernel struct with non-zero offset\n",
-				regno);
-			return -EACCES;
-		}
 	} else if (arg_type == ARG_PTR_TO_SPIN_LOCK) {
 		if (meta->func_id == BPF_FUNC_spin_lock) {
 			if (process_spin_lock(env, regno, true))
@@ -4083,6 +4064,33 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	} else {
 		verbose(env, "unsupported arg_type %d\n", arg_type);
 		return -EFAULT;
+	}
+
+	if (type == PTR_TO_BTF_ID) {
+		bool ids_match = false;
+
+		if (!fn->check_btf_id) {
+			if (reg->btf_id != meta->btf_id) {
+				ids_match = btf_struct_ids_match(&env->log, reg->off, reg->btf_id,
+								 meta->btf_id);
+				if (!ids_match) {
+					verbose(env, "Helper has type %s got %s in R%d\n",
+						kernel_type_name(meta->btf_id),
+						kernel_type_name(reg->btf_id), regno);
+					return -EACCES;
+				}
+			}
+		} else if (!fn->check_btf_id(reg->btf_id, arg)) {
+			verbose(env, "Helper does not support %s in R%d\n",
+				kernel_type_name(reg->btf_id), regno);
+
+			return -EACCES;
+		}
+		if ((reg->off && !ids_match) || !tnum_is_const(reg->var_off) || reg->var_off.value) {
+			verbose(env, "R%d is a pointer to in-kernel struct with non-zero offset\n",
+				regno);
+			return -EACCES;
+		}
 	}
 
 	if (arg_type == ARG_CONST_MAP_PTR) {
@@ -4560,6 +4568,9 @@ static int release_reference(struct bpf_verifier_env *env,
 	struct bpf_verifier_state *vstate = env->cur_state;
 	int err;
 	int i;
+
+	if (!ref_obj_id)
+		return -EINVAL;
 
 	err = release_reference_state(cur_func(env), ref_obj_id);
 	if (err)
