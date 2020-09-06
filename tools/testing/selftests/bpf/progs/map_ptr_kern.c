@@ -74,8 +74,8 @@ static inline int check(struct bpf_map *indirect, struct bpf_map *direct,
 	return 1;
 }
 
-static inline int check_default(struct bpf_map *indirect,
-				struct bpf_map *direct)
+static __attribute__ ((noinline)) int
+check_default(struct bpf_map *indirect, struct bpf_map *direct)
 {
 	VERIFY(check(indirect, direct, sizeof(__u32), sizeof(__u32),
 		     MAX_ENTRIES));
