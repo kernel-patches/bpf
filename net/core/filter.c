@@ -3596,8 +3596,8 @@ void bpf_clear_redirect_map(struct bpf_map *map)
 	}
 }
 
-int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
-		    struct bpf_prog *xdp_prog)
+int xdp_do_redirect_ext(struct net_device *dev, struct xdp_buff *xdp,
+			struct bpf_prog *xdp_prog, enum bpf_map_type *map_type)
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 	struct bpf_map *map = READ_ONCE(ri->map);
@@ -3609,6 +3609,8 @@ int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 	ri->tgt_value = NULL;
 	WRITE_ONCE(ri->map, NULL);
 
+	*map_type = BPF_MAP_TYPE_UNSPEC;
+
 	if (unlikely(!map)) {
 		fwd = dev_get_by_index_rcu(dev_net(dev), index);
 		if (unlikely(!fwd)) {
@@ -3618,6 +3620,7 @@ int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 
 		err = dev_xdp_enqueue(fwd, xdp, dev);
 	} else {
+		*map_type = map->map_type;
 		err = __bpf_tx_xdp_map(dev, fwd, map, xdp);
 	}
 
@@ -3629,6 +3632,15 @@ int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 err:
 	_trace_xdp_redirect_map_err(dev, xdp_prog, fwd, map, index, err);
 	return err;
+}
+EXPORT_SYMBOL_GPL(xdp_do_redirect_ext);
+
+int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
+		    struct bpf_prog *xdp_prog)
+{
+	enum bpf_map_type dummy;
+
+	return xdp_do_redirect_ext(dev, xdp, xdp_prog, &dummy);
 }
 EXPORT_SYMBOL_GPL(xdp_do_redirect);
 

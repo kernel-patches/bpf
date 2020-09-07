@@ -942,6 +942,8 @@ static inline int xdp_ok_fwd_dev(const struct net_device *fwd,
  */
 int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 			    struct xdp_buff *xdp, struct bpf_prog *prog);
+int xdp_do_redirect_ext(struct net_device *dev, struct xdp_buff *xdp,
+			struct bpf_prog *xdp_prog, enum bpf_map_type *map_type);
 int xdp_do_redirect(struct net_device *dev,
 		    struct xdp_buff *xdp,
 		    struct bpf_prog *prog);
