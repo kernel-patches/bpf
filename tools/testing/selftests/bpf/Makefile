@@ -51,6 +51,7 @@ TEST_FILES = test_lwt_ip_encap.o \
 # Order correspond to 'make run_tests' order
 TEST_PROGS := test_kmod.sh \
 	test_xdp_redirect.sh \
+	test_xdp_redirect_multi.sh \
 	test_xdp_meta.sh \
 	test_xdp_veth.sh \
 	test_offload.py \
@@ -79,7 +80,8 @@ TEST_PROGS_EXTENDED := with_addr.sh \
 # Compile but not part of 'make run_tests'
 TEST_GEN_PROGS_EXTENDED = test_sock_addr test_skb_cgroup_id_user \
 	flow_dissector_load test_flow_dissector test_tcp_check_syncookie_user \
-	test_lirc_mode2_user xdping test_cpp runqslower bench
+	test_lirc_mode2_user xdping test_cpp runqslower bench \
+	xdp_redirect_multi
 
 TEST_CUSTOM_PROGS = urandom_read
 
