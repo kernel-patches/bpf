@@ -116,6 +116,11 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 	xp_dma_sync_for_device(pool, dma, size);
 }
 
+static inline bool xsk_do_redirect_rx_full(int err, enum bpf_map_type map_type)
+{
+	return err == -ENOBUFS && map_type == BPF_MAP_TYPE_XSKMAP;
+}
+
 #else
 
 static inline void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries)
@@ -235,6 +240,10 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 {
 }
 
+static inline bool xsk_do_redirect_rx_full(int err, enum bpf_map_type map_type)
+{
+	return false;
+}
 #endif /* CONFIG_XDP_SOCKETS */
 
 #endif /* _LINUX_XDP_SOCK_DRV_H */
