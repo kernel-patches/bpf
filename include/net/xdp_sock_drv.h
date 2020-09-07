@@ -7,7 +7,10 @@
 #define _LINUX_XDP_SOCK_DRV_H
 
 #include <net/xdp_sock.h>
+#include <linux/netdevice.h>
 #include <net/xsk_buff_pool.h>
+
+#define XSK_NAPI_WEIGHT (NAPI_POLL_WEIGHT << 2)
 
 #ifdef CONFIG_XDP_SOCKETS
 
