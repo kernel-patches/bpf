@@ -3859,6 +3859,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	}
 
 	info->reg_type = PTR_TO_BTF_ID;
+
+	/* When we trace extension program, we want to get the context
+	 * type of the program that the extension is attached to, so
+	 * we can access the argument properly in the trace program.
+	 */
+	if (tgt_prog && tgt_prog->type == BPF_PROG_TYPE_EXT)
+		tgt_prog = tgt_prog->aux->linked_prog;
+
 	if (tgt_prog) {
 		ret = btf_translate_to_vmlinux(log, btf, t, tgt_prog->type, arg);
 		if (ret > 0) {
