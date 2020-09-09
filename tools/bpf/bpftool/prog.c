@@ -29,6 +29,9 @@
 #include "main.h"
 #include "xlated_dumper.h"
 
+#define BPF_METADATA_PREFIX "bpf_metadata_"
+#define BPF_METADATA_PREFIX_LEN strlen(BPF_METADATA_PREFIX)
+
 const char * const prog_type_name[] = {
 	[BPF_PROG_TYPE_UNSPEC]			= "unspec",
 	[BPF_PROG_TYPE_SOCKET_FILTER]		= "socket_filter",
@@ -151,6 +154,221 @@ static void show_prog_maps(int fd, __u32 num_maps)
 	}
 }
 
+static int bpf_prog_find_metadata(int prog_fd, int *map_id)
+{
+	struct bpf_prog_info prog_info = {};
+	struct bpf_map_info map_info;
+	__u32 prog_info_len;
+	__u32 map_info_len;
+	int saved_errno;
+	__u32 *map_ids;
+	int nr_maps;
+	int map_fd;
+	int ret;
+	__u32 i;
+
+	prog_info_len = sizeof(prog_info);
+
+	ret = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &prog_info_len);
+	if (ret)
+		return ret;
+
+	if (!prog_info.nr_map_ids) {
+		errno = ENOENT;
+		return -1;
+	}
+
+	map_ids = calloc(prog_info.nr_map_ids, sizeof(__u32));
+	if (!map_ids) {
+		errno = ENOMEM;
+		return -1;
+	}
+
+	nr_maps = prog_info.nr_map_ids;
+	memset(&prog_info, 0, sizeof(prog_info));
+	prog_info.nr_map_ids = nr_maps;
+	prog_info.map_ids = ptr_to_u64(map_ids);
+	prog_info_len = sizeof(prog_info);
+
+	ret = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &prog_info_len);
+	if (ret)
+		goto free_map_ids;
+
+	for (i = 0; i < prog_info.nr_map_ids; i++) {
+		map_fd = bpf_map_get_fd_by_id(map_ids[i]);
+		if (map_fd < 0) {
+			ret = -1;
+			goto free_map_ids;
+		}
+
+		memset(&map_info, 0, sizeof(map_info));
+		map_info_len = sizeof(map_info);
+		ret = bpf_obj_get_info_by_fd(map_fd, &map_info, &map_info_len);
+
+		saved_errno = errno;
+		close(map_fd);
+		errno = saved_errno;
+		if (ret)
+			goto free_map_ids;
+
+		if (map_info.type != BPF_MAP_TYPE_ARRAY)
+			continue;
+		if (map_info.key_size != sizeof(int))
+			continue;
+		if (map_info.max_entries != 1)
+			continue;
+		if (!map_info.btf_value_type_id)
+			continue;
+		if (!strstr(map_info.name, ".rodata"))
+			continue;
+
+		*map_id = map_ids[i];
+		goto free_map_ids;
+	}
+
+	ret = -1;
+	errno = ENOENT;
+
+free_map_ids:
+	saved_errno = errno;
+	free(map_ids);
+	errno = saved_errno;
+	return ret;
+}
+
+static bool has_metadata_prefix(const char *s)
+{
+	return strstr(s, BPF_METADATA_PREFIX) == s;
+}
+
+static void show_prog_metadata(int fd, __u32 num_maps)
+{
+	const struct btf_type *t_datasec, *t_var;
+	struct bpf_map_info map_info = {};
+	struct btf_var_secinfo *vsi;
+	bool printed_header = false;
+	struct btf *btf = NULL;
+	unsigned int i, vlen;
+	__u32 map_info_len;
+	void *value = NULL;
+	const char *name;
+	int map_id = 0;
+	int key = 0;
+	int map_fd;
+	int err;
+
+	if (!num_maps)
+		return;
+
+	err = bpf_prog_find_metadata(fd, &map_id);
+	if (err < 0)
+		return;
+
+	map_fd = bpf_map_get_fd_by_id(map_id);
+	if (map_fd < 0)
+		return;
+
+	map_info_len = sizeof(map_info);
+	err = bpf_obj_get_info_by_fd(map_fd, &map_info, &map_info_len);
+	if (err)
+		goto out_close;
+
+	value = malloc(map_info.value_size);
+	if (!value)
+		goto out_close;
+
+	if (bpf_map_lookup_elem(map_fd, &key, value))
+		goto out_free;
+
+	err = btf__get_from_id(map_info.btf_id, &btf);
+	if (err || !btf)
+		goto out_free;
+
+	t_datasec = btf__type_by_id(btf, map_info.btf_value_type_id);
+	if (!btf_is_datasec(t_datasec))
+		goto out_free;
+
+	vlen = btf_vlen(t_datasec);
+	vsi = btf_var_secinfos(t_datasec);
+
+	/* We don't proceed to check the kinds of the elements of the DATASEC.
+	 * The verifier enforces them to be BTF_KIND_VAR.
+	 */
+
+	if (json_output) {
+		struct btf_dumper d = {
+			.btf = btf,
+			.jw = json_wtr,
+			.is_plain_text = false,
+		};
+
+		for (i = 0; i < vlen; i++, vsi++) {
+			t_var = btf__type_by_id(btf, vsi->type);
+			name = btf__name_by_offset(btf, t_var->name_off);
+
+			if (!has_metadata_prefix(name))
+				continue;
+
+			if (!printed_header) {
+				jsonw_name(json_wtr, "metadata");
+				jsonw_start_object(json_wtr);
+				printed_header = true;
+			}
+
+			jsonw_name(json_wtr, name + BPF_METADATA_PREFIX_LEN);
+			err = btf_dumper_type(&d, t_var->type, value + vsi->offset);
+			if (err) {
+				p_err("btf dump failed: %d", err);
+				break;
+			}
+		}
+		if (printed_header)
+			jsonw_end_object(json_wtr);
+	} else {
+		json_writer_t *btf_wtr = jsonw_new(stdout);
+		struct btf_dumper d = {
+			.btf = btf,
+			.jw = btf_wtr,
+			.is_plain_text = true,
+		};
+		if (!btf_wtr) {
+			p_err("jsonw alloc failed");
+			goto out_free;
+		}
+
+		for (i = 0; i < vlen; i++, vsi++) {
+			t_var = btf__type_by_id(btf, vsi->type);
+			name = btf__name_by_offset(btf, t_var->name_off);
+
+			if (!has_metadata_prefix(name))
+				continue;
+
+			if (!printed_header) {
+				printf("\tmetadata:");
+				printed_header = true;
+			}
+
+			printf("\n\t\t%s = ", name + BPF_METADATA_PREFIX_LEN);
+
+			jsonw_reset(btf_wtr);
+			err = btf_dumper_type(&d, t_var->type, value + vsi->offset);
+			if (err) {
+				p_err("btf dump failed: %d", err);
+				break;
+			}
+		}
+		if (printed_header)
+			jsonw_destroy(&btf_wtr);
+	}
+
+out_free:
+	btf__free(btf);
+	free(value);
+
+out_close:
+	close(map_fd);
+}
+
 static void print_prog_header_json(struct bpf_prog_info *info)
 {
 	jsonw_uint_field(json_wtr, "id", info->id);
@@ -228,6 +446,8 @@ static void print_prog_json(struct bpf_prog_info *info, int fd)
 
 	emit_obj_refs_json(&refs_table, info->id, json_wtr);
 
+	show_prog_metadata(fd, info->nr_map_ids);
+
 	jsonw_end_object(json_wtr);
 }
 
@@ -297,6 +517,8 @@ static void print_prog_plain(struct bpf_prog_info *info, int fd)
 	emit_obj_refs_plain(&refs_table, info->id, "\n\tpids ");
 
 	printf("\n");
+
+	show_prog_metadata(fd, info->nr_map_ids);
 }
 
 static int show_prog(int fd)
