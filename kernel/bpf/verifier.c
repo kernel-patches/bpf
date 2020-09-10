@@ -9572,25 +9572,29 @@ static void convert_pseudo_ld_imm64(struct bpf_verifier_env *env)
 			insn->src_reg = 0;
 }
 
-/* single env->prog->insni[off] instruction was replaced with the range
- * insni[off, off + cnt).  Adjust corresponding insn_aux_data by copying
- * [0, off) and [off, end) to new locations, so the patched range stays zero
+/* Instructions from the range env->prog->insni[off, off + cnt_old) were
+ * replaced with the range insni[off, off + cnt). Adjust corresponding
+ * insn_aux_data by copying [0, off) and [off, end) to new locations, so the
+ * patched range stays zero.
  */
-static int adjust_insn_aux_data(struct bpf_verifier_env *env,
-				struct bpf_prog *new_prog, u32 off, u32 cnt)
+static int adjust_insns_aux_data(struct bpf_verifier_env *env,
+				 struct bpf_prog *new_prog, u32 off,
+				 u32 cnt_old, u32 cnt)
 {
 	struct bpf_insn_aux_data *new_data, *old_data = env->insn_aux_data;
 	struct bpf_insn *insn = new_prog->insnsi;
 	u32 prog_len;
 	int i;
 
-	/* aux info at OFF always needs adjustment, no matter fast path
-	 * (cnt == 1) is taken or not. There is no guarantee INSN at OFF is the
-	 * original insn at old prog.
+	/* aux infos at [off, off + cnt_old) need adjustment even on the fast
+	 * path (cnt == cnt_old). There is no guarantee the insns at [off,
+	 * off + cnt_old) are the original ones at old prog.
 	 */
-	old_data[off].zext_dst = insn_has_def32(env, insn + off + cnt - 1);
+	for (i = off; i < off + cnt_old; i++)
+		old_data[i].zext_dst =
+			insn_has_def32(env, insn + i + cnt - cnt_old);
 
-	if (cnt == 1)
+	if (cnt == cnt_old)
 		return 0;
 	prog_len = new_prog->len;
 	new_data = vzalloc(array_size(prog_len,
@@ -9598,9 +9602,10 @@ static int adjust_insn_aux_data(struct bpf_verifier_env *env,
 	if (!new_data)
 		return -ENOMEM;
 	memcpy(new_data, old_data, sizeof(struct bpf_insn_aux_data) * off);
-	memcpy(new_data + off + cnt - 1, old_data + off,
-	       sizeof(struct bpf_insn_aux_data) * (prog_len - off - cnt + 1));
-	for (i = off; i < off + cnt - 1; i++) {
+	memcpy(new_data + off + cnt - cnt_old, old_data + off,
+	       sizeof(struct bpf_insn_aux_data) *
+		       (prog_len - off - cnt + cnt_old));
+	for (i = off; i < off + cnt - cnt_old; i++) {
 		new_data[i].seen = env->pass_cnt;
 		new_data[i].zext_dst = insn_has_def32(env, insn + i);
 	}
@@ -9636,7 +9641,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 				env->insn_aux_data[off].orig_idx);
 		return NULL;
 	}
-	if (adjust_insn_aux_data(env, new_prog, off, len))
+	if (adjust_insns_aux_data(env, new_prog, off, 1, len))
 		return NULL;
 	adjust_subprog_starts(env, off, len);
 	return new_prog;
