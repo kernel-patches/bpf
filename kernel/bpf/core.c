@@ -429,10 +429,10 @@ static void bpf_adj_linfo(struct bpf_prog *prog, u32 off, u32 delta)
 		linfo[i].insn_off += delta;
 }
 
-struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
-				       const struct bpf_insn *patch, u32 len)
+struct bpf_prog *bpf_patch_insns(struct bpf_prog *prog, u32 off, u32 len_old,
+				 const struct bpf_insn *patch, u32 len)
 {
-	u32 insn_adj_cnt, insn_rest, insn_delta = len - 1;
+	u32 insn_adj_cnt, insn_rest, insn_delta = len - len_old;
 	const u32 cnt_max = S16_MAX;
 	struct bpf_prog *prog_adj;
 	int err;
@@ -451,7 +451,7 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	 * we afterwards may not fail anymore.
 	 */
 	if (insn_adj_cnt > cnt_max &&
-	    (err = bpf_adj_branches(prog, off, off + 1, off + len, true)))
+	    (err = bpf_adj_branches(prog, off, off + len_old, off + len, true)))
 		return ERR_PTR(err);
 
 	/* Several new instructions need to be inserted. Make room
@@ -468,14 +468,13 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	/* Patching happens in 3 steps:
 	 *
 	 * 1) Move over tail of insnsi from next instruction onwards,
-	 *    so we can patch the single target insn with one or more
-	 *    new ones (patching is always from 1 to n insns, n > 0).
+	 *    so we can patch the target insns.
 	 * 2) Inject new instructions at the target location.
 	 * 3) Adjust branch offsets if necessary.
 	 */
 	insn_rest = insn_adj_cnt - off - len;
 
-	memmove(prog_adj->insnsi + off + len, prog_adj->insnsi + off + 1,
+	memmove(prog_adj->insnsi + off + len, prog_adj->insnsi + off + len_old,
 		sizeof(*patch) * insn_rest);
 	memcpy(prog_adj->insnsi + off, patch, sizeof(*patch) * len);
 
@@ -483,7 +482,8 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	 * the ship has sailed to reverse to the original state. An
 	 * overflow cannot happen at this point.
 	 */
-	BUG_ON(bpf_adj_branches(prog_adj, off, off + 1, off + len, false));
+	BUG_ON(bpf_adj_branches(prog_adj, off, off + len_old, off + len,
+				false));
 
 	bpf_adj_linfo(prog_adj, off, insn_delta);
 
@@ -1155,7 +1155,7 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 		if (!rewritten)
 			continue;
 
-		tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
+		tmp = bpf_patch_insns(clone, i, 1, insn_buff, rewritten);
 		if (IS_ERR(tmp)) {
 			/* Patching may have repointed aux->prog during
 			 * realloc from the original one, so we need to

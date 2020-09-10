@@ -9628,7 +9628,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 {
 	struct bpf_prog *new_prog;
 
-	new_prog = bpf_patch_insn_single(env->prog, off, patch, len);
+	new_prog = bpf_patch_insns(env->prog, off, 1, patch, len);
 	if (IS_ERR(new_prog)) {
 		if (PTR_ERR(new_prog) == -ERANGE)
 			verbose(env,
