@@ -9614,17 +9614,18 @@ static int adjust_insns_aux_data(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static void adjust_subprog_starts(struct bpf_verifier_env *env, u32 off, u32 len)
+static void adjust_subprog_starts(struct bpf_verifier_env *env, u32 off,
+				  u32 len_old, u32 len)
 {
 	int i;
 
-	if (len == 1)
+	if (len == len_old)
 		return;
 	/* NOTE: fake 'exit' subprog should be updated as well. */
 	for (i = 0; i <= env->subprog_cnt; i++) {
 		if (env->subprog_info[i].start <= off)
 			continue;
-		env->subprog_info[i].start += len - 1;
+		env->subprog_info[i].start += len - len_old;
 	}
 }
 
@@ -9643,7 +9644,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 	}
 	if (adjust_insns_aux_data(env, new_prog, off, 1, len))
 		return NULL;
-	adjust_subprog_starts(env, off, len);
+	adjust_subprog_starts(env, off, 1, len);
 	return new_prog;
 }
 
