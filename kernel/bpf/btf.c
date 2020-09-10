@@ -3706,10 +3706,10 @@ errout:
 
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog)
 {
-	struct bpf_prog *tgt_prog = prog->aux->linked_prog;
+	struct bpf_tracing_link *tgt_link = prog->aux->tgt_link;
 
-	if (tgt_prog) {
-		return tgt_prog->aux->btf;
+	if (tgt_link && tgt_link->tgt_prog) {
+		return tgt_link->tgt_prog->aux->btf;
 	} else {
 		return btf_vmlinux;
 	}
@@ -3733,13 +3733,16 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		    struct bpf_insn_access_aux *info)
 {
 	const struct btf_type *t = prog->aux->attach_func_proto;
-	struct bpf_prog *tgt_prog = prog->aux->linked_prog;
 	struct btf *btf = bpf_prog_get_target_btf(prog);
 	const char *tname = prog->aux->attach_func_name;
 	struct bpf_verifier_log *log = info->log;
+	struct bpf_prog *tgt_prog = NULL;
 	const struct btf_param *args;
 	u32 nr_args, arg;
 	int i, ret;
+
+	if (prog->aux->tgt_link)
+		tgt_prog = prog->aux->tgt_link->tgt_prog;
 
 	if (off % 8) {
 		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
@@ -4572,7 +4575,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog,
 		return -EFAULT;
 	}
 	if (prog_type == BPF_PROG_TYPE_EXT)
-		prog_type = prog->aux->linked_prog->type;
+		prog_type = prog->aux->tgt_link->tgt_prog->type;
 
 	t = btf_type_by_id(btf, t->type);
 	if (!t || !btf_type_is_func_proto(t)) {
