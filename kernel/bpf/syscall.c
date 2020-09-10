@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
+#include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/syscalls.h>
 #include <linux/slab.h>
@@ -2582,10 +2583,16 @@ static struct bpf_tracing_link *bpf_tracing_link_create(struct bpf_prog *prog,
 	return link;
 }
 
-static int bpf_tracing_prog_attach(struct bpf_prog *prog)
+static int bpf_tracing_prog_attach(struct bpf_prog *prog,
+				   int tgt_prog_fd,
+				   u32 btf_id)
 {
-	struct bpf_tracing_link *link, *olink;
 	struct bpf_link_primer link_primer;
+	struct bpf_prog *tgt_prog = NULL;
+	struct bpf_tracing_link *link;
+	struct btf_func_model fmodel;
+	long addr;
+	u64 key;
 	int err;
 
 	switch (prog->type) {
@@ -2613,28 +2620,80 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog)
 		err = -EINVAL;
 		goto out_put_prog;
 	}
+	if (tgt_prog_fd) {
+		/* For now we only allow new targets for BPF_PROG_TYPE_EXT */
+		if (prog->type != BPF_PROG_TYPE_EXT ||
+		    !btf_id) {
+			err = -EINVAL;
+			goto out_put_prog;
+		}
 
-	link = READ_ONCE(prog->aux->tgt_link);
-	if (!link) {
-		err = -ENOENT;
+		tgt_prog = bpf_prog_get(tgt_prog_fd);
+		if (IS_ERR(tgt_prog)) {
+			err = PTR_ERR(tgt_prog);
+			tgt_prog = NULL;
+			goto out_put_prog;
+		}
+
+		key = ((u64)tgt_prog->aux->id) << 32 | btf_id;
+	} else if (btf_id) {
+		err = -EINVAL;
 		goto out_put_prog;
 	}
-	olink = cmpxchg(&prog->aux->tgt_link, link, NULL);
-	if (olink != link) {
-		err = -ENOENT;
-		goto out_put_prog;
+
+	link = READ_ONCE(prog->aux->tgt_link);
+	if (link) {
+		if (tgt_prog && link->trampoline->key != key) {
+			link = NULL;
+		} else {
+			struct bpf_tracing_link *olink;
+
+			olink = cmpxchg(&prog->aux->tgt_link, link, NULL);
+			if (olink != link) {
+				link = NULL;
+			} else if (tgt_prog) {
+				/* re-using link that already has ref on
+				 * tgt_prog, don't take another
+				 */
+				bpf_prog_put(tgt_prog);
+				tgt_prog = NULL;
+			}
+		}
+	}
+
+	if (!link) {
+		if (!tgt_prog) {
+			err = -ENOENT;
+			goto out_put_prog;
+		}
+
+		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
+					      &fmodel, &addr, NULL, NULL);
+		if (err)
+			goto out_put_prog;
+
+		link = bpf_tracing_link_create(prog, tgt_prog);
+		if (IS_ERR(link)) {
+			err = PTR_ERR(link);
+			goto out_put_prog;
+		}
+		tgt_prog = NULL;
+
+		err = bpf_trampoline_get(key, (void *)addr, &fmodel, &link->trampoline);
+		if (err)
+			goto out_put_link;
 	}
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err) {
 		kfree(link);
-		goto out_put_prog;
+		goto out_put_link;
 	}
 
 	err = bpf_trampoline_link_prog(prog, link->trampoline);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
-		goto out_put_prog;
+		goto out_put_link;
 	}
 
 	/* at this point the link is no longer referenced from struct bpf_prog,
@@ -2643,8 +2702,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog)
 	link->link.prog = prog;
 
 	return bpf_link_settle(&link_primer);
+out_put_link:
+	bpf_link_put(&link->link);
 out_put_prog:
 	bpf_prog_put(prog);
+	if (tgt_prog)
+		bpf_prog_put(tgt_prog);
 	return err;
 }
 
@@ -2722,7 +2785,7 @@ static const struct bpf_link_ops bpf_raw_tp_link_lops = {
 	.fill_link_info = bpf_raw_tp_link_fill_link_info,
 };
 
-#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.prog_fd
+#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.tgt_btf_id
 
 static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 {
@@ -2746,8 +2809,9 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_EXT:
 	case BPF_PROG_TYPE_LSM:
 		if (attr->raw_tracepoint.name) {
-			/* The attach point for this category of programs
-			 * should be specified via btf_id during program load.
+			/* The attach point for this category of programs should
+			 * be specified via btf_id during program load, or using
+			 * tgt_btf_id.
 			 */
 			err = -EINVAL;
 			goto out_put_prog;
@@ -2757,7 +2821,9 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 			tp_name = prog->aux->attach_func_name;
 			break;
 		}
-		return bpf_tracing_prog_attach(prog);
+		return bpf_tracing_prog_attach(prog,
+					       attr->raw_tracepoint.tgt_prog_fd,
+					       attr->raw_tracepoint.tgt_btf_id);
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
 		if (strncpy_from_user(buf,
