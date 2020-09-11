@@ -120,26 +120,41 @@ void test_d_path(void)
 	if (err < 0)
 		goto cleanup;
 
+	if (!bss->called_stat && !bss->called_close) {
+		PRINT_FAIL("trampolines not called\n");
+		goto cleanup;
+	}
+
+	if (!bss->called_stat) {
+		fprintf(stdout, "fentry/vfs_getattr not called\n");
+		goto cleanup;
+	}
+
+	if (!bss->called_close) {
+		fprintf(stdout, "fentry/filp_close not called\n");
+		goto cleanup;
+	}
+
 	for (int i = 0; i < MAX_FILES; i++) {
-		CHECK(strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
+		CHECK(bss->called_stat && strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
 		      "check",
 		      "failed to get stat path[%d]: %s vs %s\n",
 		      i, src.paths[i], bss->paths_stat[i]);
-		CHECK(strncmp(src.paths[i], bss->paths_close[i], MAX_PATH_LEN),
+		CHECK(bss->called_close && strncmp(src.paths[i], bss->paths_close[i], MAX_PATH_LEN),
 		      "check",
 		      "failed to get close path[%d]: %s vs %s\n",
 		      i, src.paths[i], bss->paths_close[i]);
 		/* The d_path helper returns size plus NUL char, hence + 1 */
-		CHECK(bss->rets_stat[i] != strlen(bss->paths_stat[i]) + 1,
+		CHECK(bss->called_stat && bss->rets_stat[i] != strlen(bss->paths_stat[i]) + 1,
 		      "check",
 		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
 		      i, bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1,
 		      bss->paths_stat[i]);
-		CHECK(bss->rets_close[i] != strlen(bss->paths_stat[i]) + 1,
+		CHECK(bss->called_close && bss->rets_close[i] != strlen(bss->paths_close[i]) + 1,
 		      "check",
 		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
 		      i, bss->rets_close[i], strlen(bss->paths_close[i]) + 1,
-		      bss->paths_stat[i]);
+		      bss->paths_close[i]);
 	}
 
 cleanup:
