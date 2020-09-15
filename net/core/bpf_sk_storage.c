@@ -701,7 +701,7 @@ bpf_sk_storage_map_seq_find_next(struct bpf_iter_seq_sk_storage_map_info *info,
 		if (!selem) {
 			/* not found, unlock and go to the next bucket */
 			b = &smap->buckets[bucket_id++];
-			raw_spin_unlock_bh(&b->lock);
+			rcu_read_unlock();
 			skip_elems = 0;
 			break;
 		}
@@ -715,7 +715,7 @@ bpf_sk_storage_map_seq_find_next(struct bpf_iter_seq_sk_storage_map_info *info,
 
 	for (i = bucket_id; i < (1U << smap->bucket_log); i++) {
 		b = &smap->buckets[i];
-		raw_spin_lock_bh(&b->lock);
+		rcu_read_lock();
 		count = 0;
 		hlist_for_each_entry(selem, &b->list, map_node) {
 			sk_storage = rcu_dereference_raw(selem->local_storage);
@@ -726,7 +726,7 @@ bpf_sk_storage_map_seq_find_next(struct bpf_iter_seq_sk_storage_map_info *info,
 			}
 			count++;
 		}
-		raw_spin_unlock_bh(&b->lock);
+		rcu_read_unlock();
 		skip_elems = 0;
 	}
 
@@ -806,13 +806,10 @@ static void bpf_sk_storage_map_seq_stop(struct seq_file *seq, void *v)
 	struct bpf_local_storage_map *smap;
 	struct bpf_local_storage_map_bucket *b;
 
-	if (!v) {
+	if (!v)
 		(void)__bpf_sk_storage_map_seq_show(seq, v);
-	} else {
-		smap = (struct bpf_local_storage_map *)info->map;
-		b = &smap->buckets[info->bucket_id];
-		raw_spin_unlock_bh(&b->lock);
-	}
+	else
+		rcu_read_unlock();
 }
 
 static int bpf_iter_init_sk_storage_map(void *priv_data,
