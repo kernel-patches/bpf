@@ -336,6 +336,26 @@ out:
 	return err;
 }
 
+struct bpf_trampoline *bpf_trampoline_get(u64 key, void *addr,
+					  struct btf_func_model *fmodel)
+{
+	struct bpf_trampoline *tr;
+
+	tr = bpf_trampoline_lookup(key);
+	if (!tr)
+		return ERR_PTR(-ENOMEM);
+
+	mutex_lock(&tr->mutex);
+	if (tr->func.addr)
+		goto out;
+
+	memcpy(&tr->func.model, fmodel, sizeof(*fmodel));
+	tr->func.addr = addr;
+out:
+	mutex_unlock(&tr->mutex);
+	return tr;
+}
+
 void bpf_trampoline_put(struct bpf_trampoline *tr)
 {
 	if (!tr)
