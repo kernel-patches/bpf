@@ -2628,8 +2628,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 
 static enum bpf_prog_type resolve_prog_type(struct bpf_prog *prog)
 {
-	return prog->aux->linked_prog ? prog->aux->linked_prog->type
-				      : prog->type;
+	return prog->aux->tgt_prog ? prog->aux->tgt_prog->type : prog->type;
 }
 
 static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
@@ -11271,8 +11270,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 static int check_attach_btf_id(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog;
-	struct bpf_prog *tgt_prog = prog->aux->linked_prog;
 	u32 btf_id = prog->aux->attach_btf_id;
+	struct bpf_prog *tgt_prog = prog->aux->tgt_prog;
 	struct btf_func_model fmodel;
 	struct bpf_trampoline *tr;
 	const struct btf_type *t;
@@ -11336,7 +11335,9 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	if (IS_ERR(tr))
 		return PTR_ERR(tr);
 
-	prog->aux->trampoline = tr;
+	mutex_lock(&prog->aux->tgt_mutex);
+	prog->aux->tgt_trampoline = tr;
+	mutex_unlock(&prog->aux->tgt_mutex);
 	return 0;
 }
 
