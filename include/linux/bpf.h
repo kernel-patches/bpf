@@ -743,6 +743,8 @@ struct bpf_prog_aux {
 	struct mutex tgt_mutex; /* protects writing of tgt_* pointers below */
 	struct bpf_prog *tgt_prog;
 	struct bpf_trampoline *tgt_trampoline;
+	enum bpf_prog_type tgt_prog_type;
+	enum bpf_attach_type tgt_attach_type;
 	bool verifier_zext; /* Zero extensions has been inserted by verifier. */
 	bool offload_requested;
 	bool attach_btf_trace; /* true if attaching to BTF-enabled raw tp */

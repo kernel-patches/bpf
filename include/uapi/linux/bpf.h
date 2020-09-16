@@ -239,6 +239,7 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
+	BPF_TRACE_FREPLACE,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -633,6 +634,7 @@ union bpf_attr {
 		__u32		flags;		/* extra flags */
 		__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 		__u32		iter_info_len;	/* iter_info length */
+		__u32		target_btf_id;	/* btf_id of target to attach to */
 	} link_create;
 
 	struct { /* struct used by BPF_LINK_UPDATE command */

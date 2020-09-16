@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
+#include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/syscalls.h>
 #include <linux/slab.h>
@@ -2555,12 +2556,18 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.fill_link_info = bpf_tracing_link_fill_link_info,
 };
 
-static int bpf_tracing_prog_attach(struct bpf_prog *prog)
+static int bpf_tracing_prog_attach(struct bpf_prog *prog,
+				   int tgt_prog_fd,
+				   u32 btf_id)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
 	struct bpf_tracing_link *link;
+	struct btf_func_model fmodel;
+	bool new_trampoline = false;
 	struct bpf_trampoline *tr;
+	long addr;
+	u64 key;
 	int err;
 
 	switch (prog->type) {
@@ -2588,6 +2595,24 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog)
 		err = -EINVAL;
 		goto out_put_prog;
 	}
+	if (tgt_prog_fd) {
+		/* For now we only allow new targets for BPF_PROG_TYPE_EXT */
+		if (prog->type != BPF_PROG_TYPE_EXT || !btf_id) {
+			err = -EINVAL;
+			goto out_put_prog;
+		}
+
+		tgt_prog = bpf_prog_get(tgt_prog_fd);
+		if (IS_ERR(tgt_prog)) {
+			err = PTR_ERR(tgt_prog);
+			goto out_put_prog;
+		}
+
+		key = ((u64)tgt_prog->aux->id) << 32 | btf_id;
+	} else if (btf_id) {
+		err = -EINVAL;
+		goto out_put_prog;
+	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
 	if (!link) {
@@ -2600,33 +2625,65 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog)
 
 	mutex_lock(&prog->aux->tgt_mutex);
 
-	if (!prog->aux->tgt_trampoline) {
-		err = -ENOENT;
-		goto out_unlock;
+	if (!prog->aux->tgt_trampoline ||
+	    (tgt_prog && prog->aux->tgt_trampoline->key != key)) {
+		new_trampoline = true;
+	} else {
+		if (tgt_prog) {
+			/* re-using ref to tgt_prog, don't take another */
+			bpf_prog_put(tgt_prog);
+		}
+		tr = prog->aux->tgt_trampoline;
+		tgt_prog = prog->aux->tgt_prog;
 	}
-	tr = prog->aux->tgt_trampoline;
-	tgt_prog = prog->aux->tgt_prog;
+
+	if (new_trampoline) {
+		if (!tgt_prog) {
+			err = -ENOENT;
+			goto out_unlock;
+		}
+
+		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
+					      &fmodel, &addr, NULL, NULL);
+		if (err) {
+			bpf_prog_put(tgt_prog);
+			goto out_unlock;
+		}
+
+		tr = bpf_trampoline_get(key, (void *)addr, &fmodel);
+		if (IS_ERR(tr)) {
+			err = PTR_ERR(tr);
+			bpf_prog_put(tgt_prog);
+			goto out_unlock;
+		}
+	}
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err) {
-		goto out_unlock;
+		goto out_put_tgt;
 	}
 
 	err = bpf_trampoline_link_prog(prog, tr);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
-		goto out_unlock;
+		goto out_put_tgt;
 	}
 
 	link->tgt_prog = tgt_prog;
 	link->trampoline = tr;
-
-	prog->aux->tgt_prog = NULL;
-	prog->aux->tgt_trampoline = NULL;
+	if (!new_trampoline) {
+		prog->aux->tgt_trampoline = NULL;
+		prog->aux->tgt_prog = NULL;
+	}
 	mutex_unlock(&prog->aux->tgt_mutex);
 
 	return bpf_link_settle(&link_primer);
+out_put_tgt:
+	if (new_trampoline) {
+		bpf_prog_put(tgt_prog);
+		bpf_trampoline_put(tr);
+	}
 out_unlock:
 	mutex_unlock(&prog->aux->tgt_mutex);
 	kfree(link);
@@ -2744,7 +2801,7 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 			tp_name = prog->aux->attach_func_name;
 			break;
 		}
-		return bpf_tracing_prog_attach(prog);
+		return bpf_tracing_prog_attach(prog, 0, 0);
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
 		if (strncpy_from_user(buf,
@@ -2864,6 +2921,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_CGROUP_GETSOCKOPT:
 	case BPF_CGROUP_SETSOCKOPT:
 		return BPF_PROG_TYPE_CGROUP_SOCKOPT;
+	case BPF_TRACE_FREPLACE:
+		return BPF_PROG_TYPE_EXT;
 	case BPF_TRACE_ITER:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_SK_LOOKUP:
@@ -3924,10 +3983,16 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *
 	    prog->expected_attach_type == BPF_TRACE_ITER)
 		return bpf_iter_link_attach(attr, prog);
 
+	if (attr->link_create.attach_type == BPF_TRACE_FREPLACE &&
+	    !prog->expected_attach_type)
+		return bpf_tracing_prog_attach(prog,
+					       attr->link_create.target_fd,
+					       attr->link_create.target_btf_id);
+
 	return -EINVAL;
 }
 
-#define BPF_LINK_CREATE_LAST_FIELD link_create.iter_info_len
+#define BPF_LINK_CREATE_LAST_FIELD link_create.target_btf_id
 static int link_create(union bpf_attr *attr)
 {
 	enum bpf_prog_type ptype;
@@ -3961,6 +4026,7 @@ static int link_create(union bpf_attr *attr)
 		ret = cgroup_bpf_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_TRACING:
+	case BPF_PROG_TYPE_EXT:
 		ret = tracing_bpf_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
