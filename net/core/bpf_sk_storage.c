@@ -219,7 +219,7 @@ static void __selem_link_sk(struct bpf_sk_storage *sk_storage,
 			    struct bpf_sk_storage_elem *selem)
 {
 	RCU_INIT_POINTER(selem->sk_storage, sk_storage);
-	hlist_add_head(&selem->snode, &sk_storage->list);
+	hlist_add_head_rcu(&selem->snode, &sk_storage->list);
 }
 
 static void selem_unlink_map(struct bpf_sk_storage_elem *selem)
