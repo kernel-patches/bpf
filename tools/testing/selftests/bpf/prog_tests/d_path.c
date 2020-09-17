@@ -120,6 +120,12 @@ void test_d_path(void)
 	if (err < 0)
 		goto cleanup;
 
+	if (CHECK(!bss->called_stat || !bss->called_close,
+		  "check",
+		  "failed to call trampolines called_stat %d, bss->called_close %d\n",
+		   bss->called_stat, bss->called_close))
+		goto cleanup;
+
 	for (int i = 0; i < MAX_FILES; i++) {
 		CHECK(strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
 		      "check",
