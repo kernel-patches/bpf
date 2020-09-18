@@ -1475,6 +1475,9 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_MAP_LOOKUP_AND_DELETE_ELEM))
 		return -EINVAL;
 
+	if (attr->flags & ~BPF_F_LOCK)
+		return -EINVAL;
+
 	f = fdget(ufd);
 	map = __bpf_map_get(f);
 	if (IS_ERR(map))
@@ -1485,13 +1488,19 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 		goto err_put;
 	}
 
+	if ((attr->flags & BPF_F_LOCK) &&
+	    !map_value_has_spin_lock(map)) {
+		err = -EINVAL;
+		goto err_put;
+	}
+
 	key = __bpf_copy_key(ukey, map->key_size);
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
 		goto err_put;
 	}
 
-	value_size = map->value_size;
+	value_size = bpf_map_value_size(map);
 
 	err = -ENOMEM;
 	value = kmalloc(value_size, GFP_USER | __GFP_NOWARN);
@@ -1502,7 +1511,24 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	    map->map_type == BPF_MAP_TYPE_STACK) {
 		err = map->ops->map_pop_elem(map, value);
 	} else {
-		err = -ENOTSUPP;
+		err = bpf_map_copy_value(map, key, value, attr->flags);
+		if (err)
+			goto free_value;
+
+		if (bpf_map_is_dev_bound(map)) {
+			err = bpf_map_offload_delete_elem(map, key);
+		} else if (IS_FD_PROG_ARRAY(map) ||
+			   map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
+			/* These maps require sleepable context */
+			err = map->ops->map_delete_elem(map, key);
+		} else {
+			bpf_disable_instrumentation();
+			rcu_read_lock();
+			err = map->ops->map_delete_elem(map, key);
+			rcu_read_unlock();
+			bpf_enable_instrumentation();
+			maybe_wait_bpf_programs(map);
+		}
 	}
 
 	if (err)
