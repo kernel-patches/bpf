@@ -7,6 +7,7 @@
 #include "bpf_iter_task.skel.h"
 #include "bpf_iter_task_stack.skel.h"
 #include "bpf_iter_task_file.skel.h"
+#include "bpf_iter_task_btf.skel.h"
 #include "bpf_iter_tcp4.skel.h"
 #include "bpf_iter_tcp6.skel.h"
 #include "bpf_iter_udp4.skel.h"
@@ -165,6 +166,69 @@ static void test_task_file(void)
 
 done:
 	bpf_iter_task_file__destroy(skel);
+}
+
+#define FSBUFSZ		8192
+
+static char fsbuf[FSBUFSZ];
+
+static void do_btf_read(struct bpf_program *prog)
+{
+	int iter_fd = -1, len = 0, bufleft = FSBUFSZ;
+	struct bpf_link *link;
+	char *buf = fsbuf;
+
+	link = bpf_program__attach_iter(prog, NULL);
+	if (CHECK(IS_ERR(link), "attach_iter", "attach_iter failed\n"))
+		return;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(link));
+	if (CHECK(iter_fd < 0, "create_iter", "create_iter failed\n"))
+		goto free_link;
+
+	do {
+		len = read(iter_fd, buf, bufleft);
+		if (len > 0) {
+			buf += len;
+			bufleft -= len;
+		}
+	} while (len > 0);
+
+	if (CHECK(len < 0, "read", "read failed: %s\n", strerror(errno)))
+		goto free_link;
+
+	CHECK(strstr(fsbuf, "(struct fs_struct)") == NULL,
+	      "check for btf representation of fs_struct in iter data",
+	      "struct fs_struct not found");
+free_link:
+	if (iter_fd > 0)
+		close(iter_fd);
+	bpf_link__destroy(link);
+}
+
+static void test_task_btf(void)
+{
+	struct bpf_iter_task_btf__bss *bss;
+	struct bpf_iter_task_btf *skel;
+
+	skel = bpf_iter_task_btf__open_and_load();
+	if (CHECK(!skel, "bpf_iter_task_btf__open_and_load",
+		  "skeleton open_and_load failed\n"))
+		return;
+
+	bss = skel->bss;
+
+	do_btf_read(skel->progs.dump_task_fs_struct);
+
+	if (CHECK(bss->tasks == 0, "check if iterated over tasks",
+		  "no task iteration, did BPF program run?\n"))
+		goto cleanup;
+
+	CHECK(bss->seq_err != 0, "check for unexpected err",
+	      "bpf_seq_btf_write returned %ld", bss->seq_err);
+
+cleanup:
+	bpf_iter_task_btf__destroy(skel);
 }
 
 static void test_tcp4(void)
@@ -957,6 +1021,8 @@ void test_bpf_iter(void)
 		test_task_stack();
 	if (test__start_subtest("task_file"))
 		test_task_file();
+	if (test__start_subtest("task_btf"))
+		test_task_btf();
 	if (test__start_subtest("tcp4"))
 		test_tcp4();
 	if (test__start_subtest("tcp6"))
