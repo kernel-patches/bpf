@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/bpf_perf_event.h>
+#include <linux/btf.h>
 #include <linux/filter.h>
 #include <linux/uaccess.h>
 #include <linux/ctype.h>
@@ -15,6 +16,9 @@
 #include <linux/syscalls.h>
 #include <linux/error-injection.h>
 #include <linux/btf_ids.h>
+
+#include <uapi/linux/bpf.h>
+#include <uapi/linux/btf.h>
 
 #include <asm/tlb.h>
 
@@ -1144,6 +1148,88 @@ static const struct bpf_func_proto bpf_d_path_proto = {
 	.allowed	= bpf_d_path_allowed,
 };
 
+#define BTF_F_ALL	(BTF_F_COMPACT  | BTF_F_NONAME | \
+			 BTF_F_PTR_RAW | BTF_F_ZERO)
+
+BPF_CALL_5(bpf_btf_snprintf, char *, str, u32, str_size, struct btf_ptr *, ptr,
+	   u32, btf_ptr_size, u64, flags)
+{
+	u8 btf_kind = BTF_KIND_TYPEDEF;
+	char type_name[KSYM_NAME_LEN];
+	const struct btf_type *t;
+	const struct btf *btf;
+	const char *btf_type;
+	s32 btf_id;
+	int ret;
+
+	if (unlikely(flags & ~(BTF_F_ALL)))
+		return -EINVAL;
+
+	if (btf_ptr_size != sizeof(struct btf_ptr))
+		return -EINVAL;
+
+	btf = bpf_get_btf_vmlinux();
+
+	if (IS_ERR_OR_NULL(btf))
+		return PTR_ERR(btf);
+
+	if (ptr->type != NULL) {
+		ret = copy_from_kernel_nofault(type_name, ptr->type,
+					       sizeof(type_name));
+		if (ret)
+			return ret;
+
+		btf_type = type_name;
+
+		if (strncmp(btf_type, "struct ", strlen("struct ")) == 0) {
+			btf_kind = BTF_KIND_STRUCT;
+			btf_type += strlen("struct ");
+		} else if (strncmp(btf_type, "union ", strlen("union ")) == 0) {
+			btf_kind = BTF_KIND_UNION;
+			btf_type += strlen("union ");
+		} else if (strncmp(btf_type, "enum ", strlen("enum ")) == 0) {
+			btf_kind = BTF_KIND_ENUM;
+			btf_type += strlen("enum ");
+		}
+
+		if (strlen(btf_type) == 0)
+			return -EINVAL;
+
+		/* Assume type specified is a typedef as there's not much
+		 * benefit in specifying int types other than wasting time
+		 * on BTF lookups; we optimize for the most useful path.
+		 *
+		 * Fall back to BTF_KIND_INT if this fails.
+		 */
+		btf_id = btf_find_by_name_kind(btf, btf_type, btf_kind);
+		if (btf_id < 0)
+			btf_id = btf_find_by_name_kind(btf, btf_type,
+						       BTF_KIND_INT);
+	} else if (ptr->type_id > 0)
+		btf_id = ptr->type_id;
+	else
+		return -EINVAL;
+
+	if (btf_id > 0)
+		t = btf_type_by_id(btf, btf_id);
+	if (btf_id <= 0 || !t)
+		return -ENOENT;
+
+	return btf_type_snprintf_show(btf, btf_id, ptr->ptr, str, str_size,
+				      flags);
+}
+
+const struct bpf_func_proto bpf_btf_snprintf_proto = {
+	.func		= bpf_btf_snprintf,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM,
+	.arg2_type	= ARG_CONST_SIZE,
+	.arg3_type	= ARG_PTR_TO_MEM,
+	.arg4_type	= ARG_CONST_SIZE,
+	.arg5_type	= ARG_ANYTHING,
+};
+
 const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1230,6 +1316,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_task_stack_proto;
 	case BPF_FUNC_copy_from_user:
 		return prog->aux->sleepable ? &bpf_copy_from_user_proto : NULL;
+	case BPF_FUNC_btf_snprintf:
+		return &bpf_btf_snprintf_proto;
 	default:
 		return NULL;
 	}
