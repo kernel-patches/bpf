@@ -5328,17 +5328,26 @@ static void btf_seq_show(struct btf_show *show, const char *fmt, ...)
 	va_end(args);
 }
 
-void btf_type_seq_show(const struct btf *btf, u32 type_id, void *obj,
-			struct seq_file *m)
+int btf_type_seq_show_flags(const struct btf *btf, u32 type_id, void *obj,
+			struct seq_file *m, u64 flags)
 {
 	struct btf_show sseq;
 
 	sseq.target = m;
 	sseq.showfn = btf_seq_show;
-	sseq.flags = BTF_SHOW_NONAME | BTF_SHOW_COMPACT | BTF_SHOW_ZERO |
-		     BTF_SHOW_UNSAFE;
+	sseq.flags = flags;
 
 	btf_type_show(btf, type_id, obj, &sseq);
+
+	return sseq.state.status;
+}
+
+void btf_type_seq_show(const struct btf *btf, u32 type_id, void *obj,
+		       struct seq_file *m)
+{
+	(void) btf_type_seq_show_flags(btf, type_id, obj, m,
+				       BTF_SHOW_NONAME | BTF_SHOW_COMPACT |
+				       BTF_SHOW_ZERO | BTF_SHOW_UNSAFE);
 }
 
 struct btf_show_snprintf {

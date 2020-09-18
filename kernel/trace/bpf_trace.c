@@ -71,6 +71,10 @@ static struct bpf_raw_event_map *bpf_get_raw_tracepoint_module(const char *name)
 u64 bpf_get_stackid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 bpf_get_stack(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 
+static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
+				  u64 flags, const struct btf **btf,
+				  s32 *btf_id);
+
 /**
  * trace_call_bpf - invoke BPF program
  * @call: tracepoint event
@@ -780,6 +784,30 @@ static const struct bpf_func_proto bpf_seq_write_proto = {
 	.btf_id		= bpf_seq_write_btf_ids,
 };
 
+BPF_CALL_4(bpf_seq_btf_write, struct seq_file *, m, struct btf_ptr *, ptr,
+	   u32, btf_ptr_size, u64, flags)
+{
+	const struct btf *btf;
+	s32 btf_id;
+	int ret;
+
+	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
+	if (ret)
+		return ret;
+
+	return btf_type_seq_show_flags(btf, btf_id, ptr->ptr, m, flags);
+}
+
+static const struct bpf_func_proto bpf_seq_btf_write_proto = {
+	.func		= bpf_seq_btf_write,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_BTF_ID,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
+	.btf_id		= bpf_seq_write_btf_ids,
+};
+
 static __always_inline int
 get_map_perf_counter(struct bpf_map *map, u64 flags,
 		     u64 *value, u64 *enabled, u64 *running)
@@ -1151,15 +1179,14 @@ static const struct bpf_func_proto bpf_d_path_proto = {
 #define BTF_F_ALL	(BTF_F_COMPACT  | BTF_F_NONAME | \
 			 BTF_F_PTR_RAW | BTF_F_ZERO)
 
-BPF_CALL_5(bpf_btf_snprintf, char *, str, u32, str_size, struct btf_ptr *, ptr,
-	   u32, btf_ptr_size, u64, flags)
+static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
+				  u64 flags, const struct btf **btf,
+				  s32 *btf_id)
 {
 	u8 btf_kind = BTF_KIND_TYPEDEF;
 	char type_name[KSYM_NAME_LEN];
 	const struct btf_type *t;
-	const struct btf *btf;
 	const char *btf_type;
-	s32 btf_id;
 	int ret;
 
 	if (unlikely(flags & ~(BTF_F_ALL)))
@@ -1168,10 +1195,10 @@ BPF_CALL_5(bpf_btf_snprintf, char *, str, u32, str_size, struct btf_ptr *, ptr,
 	if (btf_ptr_size != sizeof(struct btf_ptr))
 		return -EINVAL;
 
-	btf = bpf_get_btf_vmlinux();
+	*btf = bpf_get_btf_vmlinux();
 
-	if (IS_ERR_OR_NULL(btf))
-		return PTR_ERR(btf);
+	if (IS_ERR_OR_NULL(*btf))
+		return PTR_ERR(*btf);
 
 	if (ptr->type != NULL) {
 		ret = copy_from_kernel_nofault(type_name, ptr->type,
@@ -1201,19 +1228,33 @@ BPF_CALL_5(bpf_btf_snprintf, char *, str, u32, str_size, struct btf_ptr *, ptr,
 		 *
 		 * Fall back to BTF_KIND_INT if this fails.
 		 */
-		btf_id = btf_find_by_name_kind(btf, btf_type, btf_kind);
-		if (btf_id < 0)
-			btf_id = btf_find_by_name_kind(btf, btf_type,
-						       BTF_KIND_INT);
+		*btf_id = btf_find_by_name_kind(*btf, btf_type, btf_kind);
+		if (*btf_id < 0)
+			*btf_id = btf_find_by_name_kind(*btf, btf_type,
+							BTF_KIND_INT);
 	} else if (ptr->type_id > 0)
-		btf_id = ptr->type_id;
+		*btf_id = ptr->type_id;
 	else
 		return -EINVAL;
 
-	if (btf_id > 0)
-		t = btf_type_by_id(btf, btf_id);
-	if (btf_id <= 0 || !t)
+	if (*btf_id > 0)
+		t = btf_type_by_id(*btf, *btf_id);
+	if (*btf_id <= 0 || !t)
 		return -ENOENT;
+
+	return 0;
+}
+
+BPF_CALL_5(bpf_btf_snprintf, char *, str, u32, str_size, struct btf_ptr *, ptr,
+	   u32, btf_ptr_size, u64, flags)
+{
+	const struct btf *btf;
+	s32 btf_id;
+	int ret;
+
+	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
+	if (ret)
+		return ret;
 
 	return btf_type_snprintf_show(btf, btf_id, ptr->ptr, str, str_size,
 				      flags);
@@ -1714,6 +1755,10 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_seq_write:
 		return prog->expected_attach_type == BPF_TRACE_ITER ?
 		       &bpf_seq_write_proto :
+		       NULL;
+	case BPF_FUNC_seq_btf_write:
+		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		       &bpf_seq_btf_write_proto :
 		       NULL;
 	case BPF_FUNC_d_path:
 		return &bpf_d_path_proto;

@@ -3621,6 +3621,15 @@ union bpf_attr {
  *		The number of bytes that were written (or would have been
  *		written if output had to be truncated due to string size),
  *		or a negative error in cases of failure.
+ *
+ * long bpf_seq_btf_write(struct seq_file *m, struct btf_ptr *ptr, u32 ptr_size, u64 flags)
+ *	Description
+ *		Use BTF to write to seq_write a string representation of
+ *		*ptr*->ptr, using *ptr*->type name or *ptr*->type_id as per
+ *		bpf_btf_snprintf() above.  *flags* are identical to those
+ *		used for bpf_btf_snprintf.
+ *	Return
+ *		0 on success or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3773,6 +3782,7 @@ union bpf_attr {
 	FN(d_path),			\
 	FN(copy_from_user),		\
 	FN(btf_snprintf),		\
+	FN(seq_btf_write),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
