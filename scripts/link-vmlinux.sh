@@ -342,8 +342,13 @@ vmlinux_link vmlinux "${kallsymso}" ${btf_vmlinux_bin_o}
 
 # fill in BTF IDs
 if [ -n "${CONFIG_DEBUG_INFO_BTF}" ]; then
-info BTFIDS vmlinux
-${RESOLVE_BTFIDS} vmlinux
+	info BTFIDS vmlinux
+	# Let's be more permissive if CONFIG_BPF is disabled
+	# and do not fail if there's no data to resolve.
+	if [ -z "${CONFIG_BPF}" ]; then
+	  no_fail=--no-fail
+	fi
+	${RESOLVE_BTFIDS} $no_fail vmlinux
 fi
 
 if [ -n "${CONFIG_BUILDTIME_TABLE_SORT}" ]; then
