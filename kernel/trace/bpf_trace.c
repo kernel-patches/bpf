@@ -1114,10 +1114,11 @@ BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
 }
 
 BTF_SET_START(btf_allowlist_d_path)
-BTF_ID(func, vfs_truncate)
-BTF_ID(func, vfs_fallocate)
+BTF_ID(func, security_path_truncate)
+BTF_ID(func, security_file_permission)
+BTF_ID(func, security_inode_getattr)
+BTF_ID(func, security_file_open)
 BTF_ID(func, dentry_open)
-BTF_ID(func, vfs_getattr)
 BTF_ID(func, filp_close)
 BTF_SET_END(btf_allowlist_d_path)
 
