@@ -486,7 +486,12 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 static bool is_ptr_cast_function(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_tcp_sock ||
-		func_id == BPF_FUNC_sk_fullsock;
+		func_id == BPF_FUNC_sk_fullsock ||
+		func_id == BPF_FUNC_skc_to_tcp_sock ||
+		func_id == BPF_FUNC_skc_to_tcp6_sock ||
+		func_id == BPF_FUNC_skc_to_udp6_sock ||
+		func_id == BPF_FUNC_skc_to_tcp_timewait_sock ||
+		func_id == BPF_FUNC_skc_to_tcp_request_sock;
 }
 
 /* string representation of 'enum bpf_reg_type' */
@@ -3973,6 +3978,16 @@ static const struct bpf_reg_types sock_types = {
 	},
 };
 
+static const struct bpf_reg_types btf_id_sock_common_types = {
+	.types = {
+		PTR_TO_SOCK_COMMON,
+		PTR_TO_SOCKET,
+		PTR_TO_TCP_SOCK,
+		PTR_TO_XDP_SOCK,
+		PTR_TO_BTF_ID,
+	},
+};
+
 static const struct bpf_reg_types mem_types = {
 	.types = {
 		PTR_TO_STACK,
@@ -4014,6 +4029,7 @@ static const struct bpf_reg_types *compatible_reg_types[] = {
 	[ARG_PTR_TO_CTX]		= &context_types,
 	[ARG_PTR_TO_CTX_OR_NULL]	= &context_types,
 	[ARG_PTR_TO_SOCK_COMMON]	= &sock_types,
+	[ARG_PTR_TO_BTF_ID_SOCK_COMMON]	= &btf_id_sock_common_types,
 	[ARG_PTR_TO_SOCKET]		= &fullsock_types,
 	[ARG_PTR_TO_SOCKET_OR_NULL]	= &fullsock_types,
 	[ARG_PTR_TO_BTF_ID]		= &btf_ptr_types,
@@ -4579,9 +4595,13 @@ static bool check_btf_id_ok(const struct bpf_func_proto *fn)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++)
-		if (fn->arg_type[i] == ARG_PTR_TO_BTF_ID && !fn->arg_btf_id[i])
-			return false;
+	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
+		if (fn->arg_type[i] == ARG_PTR_TO_BTF_ID ||
+		    fn->arg_type[i] == ARG_PTR_TO_BTF_ID_SOCK_COMMON) {
+			if (!fn->arg_btf_id[i])
+				return false;
+		}
+	}
 
 	return true;
 }
