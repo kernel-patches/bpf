@@ -6088,7 +6088,7 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 	u32 cookie;
 	int ret;
 
-	if (unlikely(th_len < sizeof(*th)))
+	if (unlikely(!sk || th_len < sizeof(*th)))
 		return -EINVAL;
 
 	/* sk_listener() allows TCP_NEW_SYN_RECV, which makes no sense here. */
@@ -6141,7 +6141,8 @@ static const struct bpf_func_proto bpf_tcp_check_syncookie_proto = {
 	.gpl_only	= true,
 	.pkt_access	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_SOCK_COMMON,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
+	.arg1_btf_id	= &btf_sock_ids[BTF_SOCK_TYPE_SOCK_COMMON],
 	.arg2_type	= ARG_PTR_TO_MEM,
 	.arg3_type	= ARG_CONST_SIZE,
 	.arg4_type	= ARG_PTR_TO_MEM,
@@ -6155,7 +6156,7 @@ BPF_CALL_5(bpf_tcp_gen_syncookie, struct sock *, sk, void *, iph, u32, iph_len,
 	u32 cookie;
 	u16 mss;
 
-	if (unlikely(th_len < sizeof(*th) || th_len != th->doff * 4))
+	if (unlikely(!sk || th_len < sizeof(*th) || th_len != th->doff * 4))
 		return -EINVAL;
 
 	if (sk->sk_protocol != IPPROTO_TCP || sk->sk_state != TCP_LISTEN)
@@ -6210,7 +6211,8 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 	.gpl_only	= true, /* __cookie_v*_init_sequence() is GPL */
 	.pkt_access	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_SOCK_COMMON,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
+	.arg1_btf_id	= &btf_sock_ids[BTF_SOCK_TYPE_SOCK_COMMON],
 	.arg2_type	= ARG_PTR_TO_MEM,
 	.arg3_type	= ARG_CONST_SIZE,
 	.arg4_type	= ARG_PTR_TO_MEM,
