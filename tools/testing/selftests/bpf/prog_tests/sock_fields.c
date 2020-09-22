@@ -144,6 +144,8 @@ static void check_result(void)
 	      "srv_sk", "Unexpected. Check srv_sk output. egress_linum:%u\n",
 	      egress_linum);
 
+	CHECK(!skel->bss->lsndtime, "srv_tp", "Unexpected lsndtime:0\n");
+
 	CHECK(cli_sk.state == 10 ||
 	      !cli_sk.state ||
 	      cli_sk.family != AF_INET6 ||
