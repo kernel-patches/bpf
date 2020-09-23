@@ -566,6 +566,11 @@ union bpf_attr {
 						 */
 		__aligned_u64	ctx_in;
 		__aligned_u64	ctx_out;
+		__u32		cpu_plus;	/* run this program on cpu
+						 * (cpu_plus - 1).
+						 * If cpu_plus == 0, run on
+						 * current cpu.
+						 */
 	} test;
 
 	struct { /* anonymous struct used by BPF_*_GET_*_ID */
