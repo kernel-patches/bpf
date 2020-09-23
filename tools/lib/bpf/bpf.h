@@ -251,6 +251,17 @@ struct bpf_prog_bind_opts {
 
 LIBBPF_API int bpf_prog_bind_map(int prog_fd, int map_fd,
 				 const struct bpf_prog_bind_opts *opts);
+
+struct bpf_prog_test_run_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 cpu_plus;
+};
+#define bpf_prog_test_run_opts__last_field cpu_plus
+
+LIBBPF_API
+int bpf_prog_test_run_xattr_opts(struct bpf_prog_test_run_attr *test_attr,
+				 const struct bpf_prog_test_run_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

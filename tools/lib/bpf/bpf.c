@@ -684,7 +684,8 @@ int bpf_prog_test_run(int prog_fd, int repeat, void *data, __u32 size,
 	return ret;
 }
 
-int bpf_prog_test_run_xattr(struct bpf_prog_test_run_attr *test_attr)
+int bpf_prog_test_run_xattr_opts(struct bpf_prog_test_run_attr *test_attr,
+				 const struct bpf_prog_test_run_opts *opts)
 {
 	union bpf_attr attr;
 	int ret;
@@ -693,6 +694,11 @@ int bpf_prog_test_run_xattr(struct bpf_prog_test_run_attr *test_attr)
 		return -EINVAL;
 
 	memset(&attr, 0, sizeof(attr));
+	if (opts) {
+		if (!OPTS_VALID(opts, bpf_prog_test_run_opts))
+			return -EINVAL;
+		attr.test.cpu_plus = opts->cpu_plus;
+	}
 	attr.test.prog_fd = test_attr->prog_fd;
 	attr.test.data_in = ptr_to_u64(test_attr->data_in);
 	attr.test.data_out = ptr_to_u64(test_attr->data_out);
@@ -710,6 +716,11 @@ int bpf_prog_test_run_xattr(struct bpf_prog_test_run_attr *test_attr)
 	test_attr->retval = attr.test.retval;
 	test_attr->duration = attr.test.duration;
 	return ret;
+}
+
+int bpf_prog_test_run_xattr(struct bpf_prog_test_run_attr *test_attr)
+{
+	return bpf_prog_test_run_xattr_opts(test_attr, NULL);
 }
 
 static int bpf_obj_get_next_id(__u32 start_id, __u32 *next_id, int cmd)
