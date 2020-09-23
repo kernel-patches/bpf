@@ -5316,8 +5316,8 @@ static __printf(2, 3) void btf_seq_show(struct btf_show *show, const char *fmt,
 	va_end(args);
 }
 
-static int btf_type_seq_show_flags(const struct btf *btf, u32 type_id,
-				   void *obj, struct seq_file *m, u64 flags)
+int btf_type_seq_show_flags(const struct btf *btf, u32 type_id,
+			    void *obj, struct seq_file *m, u64 flags)
 {
 	struct btf_show sseq;
 
