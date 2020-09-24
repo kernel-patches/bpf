@@ -42,11 +42,13 @@ setup()
 	ip addr add ${LOCAL_IP}/24 dev veth1
 	ip netns exec $TARGET_NS ip link set veth0 up
 	ip link set veth1 up
+	ln -s xdping xdping_realtime
 }
 
 cleanup()
 {
 	set +e
+	rm xdping_realtime
 	ip netns delete $TARGET_NS 2>/dev/null
 	ip link del veth1 2>/dev/null
 	if [[ $server_pid -ne 0 ]]; then
@@ -54,7 +56,7 @@ cleanup()
 	fi
 }
 
-test()
+test1()
 {
 	client_args="$1"
 	server_args="$2"
@@ -77,6 +79,28 @@ test()
 	echo "Test client args '$client_args'; server args '$server_args': PASS"
 }
 
+test2()
+{
+	client_args="$1"
+        server_args="$2"
+
+        echo "Test client args '$client_args'; server args '$server_args'"
+
+        server_pid=0
+        if [[ -n "$server_args" ]]; then
+                ip netns exec $TARGET_NS ./xdping_realtime $server_args &
+                server_pid=$!
+                sleep 10
+        fi
+        ./xdping_realtime $client_args $TARGET_IP
+
+        if [[ $server_pid -ne 0 ]]; then
+                kill -TERM $server_pid
+                server_pid=0
+        fi
+
+        echo "Test client args '$client_args'; server args '$server_args': PASS"
+}
 set -e
 
 server_pid=0
@@ -85,14 +109,18 @@ trap cleanup EXIT
 
 setup
 
-for server_args in "" "-I veth0 -s -S" ; do
-	# client in skb mode
-	client_args="-I veth1 -S"
-	test "$client_args" "$server_args"
+for tests in test1 test2; do
+	echo "Running ${tests}:"
+	for server_args in "" "-I veth0 -s -S" ; do
+		# client in skb mode
+		client_args="-I veth1 -S"
+		${tests} "$client_args" "$server_args"
 
-	# client with count of 10 RTT measurements.
-	client_args="-I veth1 -S -c 10"
-	test "$client_args" "$server_args"
+		# client with count of 10 RTT measurements.
+		client_args="-I veth1 -S -c 10"
+		${tests} "$client_args" "$server_args"
+	done
+
 done
 
 echo "OK. All tests passed"
