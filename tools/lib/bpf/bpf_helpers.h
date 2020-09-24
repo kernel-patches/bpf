@@ -54,6 +54,38 @@
 #endif
 
 /*
+ * Misc useful helper macros
+ */
+#ifndef __throw_build_bug
+# define __throw_build_bug()	__builtin_trap()
+#endif
+
+static __always_inline void
+bpf_tail_call_static(void *ctx, const void *map, const __u32 slot)
+{
+	if (!__builtin_constant_p(slot))
+		__throw_build_bug();
+
+	/*
+	 * Don't gamble, but _guarantee_ that LLVM won't optimize setting
+	 * r2 and r3 from different paths ending up at the same call insn as
+	 * otherwise we won't be able to use the jmpq/nopl retpoline-free
+	 * patching by the x86-64 JIT in the kernel.
+	 *
+	 * Note on clobber list: we need to stay in-line with BPF calling
+	 * convention, so even if we don't end up using r0, r4, r5, we need
+	 * to mark them as clobber so that LLVM doesn't end up using them
+	 * before / after the call.
+	 */
+	asm volatile("r1 = %[ctx]\n\t"
+		     "r2 = %[map]\n\t"
+		     "r3 = %[slot]\n\t"
+		     "call 12\n\t"
+		     :: [ctx]"r"(ctx), [map]"r"(map), [slot]"i"(slot)
+		     : "r0", "r1", "r2", "r3", "r4", "r5");
+}
+
+/*
  * Helper structure used by eBPF C program
  * to describe BPF map attributes to libbpf loader
  */
