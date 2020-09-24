@@ -166,6 +166,17 @@ const struct bpf_func_proto bpf_ktime_get_boot_ns_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 };
+BPF_CALL_0(bpf_ktime_get_real_ns)
+{
+	/* NMI safe access to clock realtime */
+	return ktime_get_real_fast_ns();
+}
+
+const struct bpf_func_proto bpf_ktime_get_real_ns_proto = {
+	.func		= bpf_ktime_get_real_ns,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+};
 
 BPF_CALL_0(bpf_get_current_pid_tgid)
 {
@@ -657,6 +668,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_ktime_get_ns_proto;
 	case BPF_FUNC_ktime_get_boot_ns:
 		return &bpf_ktime_get_boot_ns_proto;
+	case BPF_FUNC_ktime_get_real_ns:
+		return &bpf_ktime_get_real_ns_proto;
 	case BPF_FUNC_ringbuf_output:
 		return &bpf_ringbuf_output_proto;
 	case BPF_FUNC_ringbuf_reserve:
