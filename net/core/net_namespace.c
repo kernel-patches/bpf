@@ -19,6 +19,7 @@
 #include <linux/net_namespace.h>
 #include <linux/sched/task.h>
 #include <linux/uidgid.h>
+#include <linux/cookie.h>
 
 #include <net/sock.h>
 #include <net/netlink.h>
@@ -69,7 +70,7 @@ EXPORT_SYMBOL_GPL(pernet_ops_rwsem);
 
 static unsigned int max_gen_ptrs = INITIAL_NET_GEN_PTRS;
 
-static atomic64_t cookie_gen;
+DEFINE_COOKIE(net_cookie);
 
 u64 net_gen_cookie(struct net *net)
 {
@@ -78,7 +79,7 @@ u64 net_gen_cookie(struct net *net)
 
 		if (res)
 			return res;
-		res = atomic64_inc_return(&cookie_gen);
+		res = gen_cookie_next(&net_cookie);
 		atomic64_cmpxchg(&net->net_cookie, 0, res);
 	}
 }
