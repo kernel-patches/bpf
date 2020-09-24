@@ -251,6 +251,32 @@ struct bpf_prog_bind_opts {
 
 LIBBPF_API int bpf_prog_bind_map(int prog_fd, int map_fd,
 				 const struct bpf_prog_bind_opts *opts);
+
+struct bpf_test_run_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	int repeat;
+	const void *data_in;
+	__u32 data_size_in;
+	void *data_out;      /* optional */
+	__u32 data_size_out; /* in: max length of data_out
+			      * out: length of data_out
+			      */
+	__u32 retval;        /* out: return code of the BPF program */
+	__u32 duration;      /* out: average per repetition in ns */
+	const void *ctx_in; /* optional */
+	__u32 ctx_size_in;
+	void *ctx_out;      /* optional */
+	__u32 ctx_size_out; /* in: max length of ctx_out
+			     * out: length of cxt_out
+			     */
+	__u32 flags;
+	__u32 cpu;
+};
+#define bpf_test_run_opts__last_field cpu
+
+LIBBPF_API int bpf_prog_test_run_opts(int prog_fd,
+				      struct bpf_test_run_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
