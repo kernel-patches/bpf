@@ -2648,8 +2648,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 
 static enum bpf_prog_type resolve_prog_type(struct bpf_prog *prog)
 {
-	return prog->aux->linked_prog ? prog->aux->linked_prog->type
-				      : prog->type;
+	return prog->aux->dst_prog ? prog->aux->dst_prog->type : prog->type;
 }
 
 static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
@@ -11245,7 +11244,7 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
-			    const struct bpf_prog *tgt_prog,
+			    const struct bpf_prog *dst_prog,
 			    u32 btf_id,
 			    struct bpf_attach_target_info *tgt_info)
 {
@@ -11262,7 +11261,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		bpf_log(log, "Tracing programs must provide btf_id\n");
 		return -EINVAL;
 	}
-	btf = tgt_prog ? tgt_prog->aux->btf : btf_vmlinux;
+	btf = dst_prog ? dst_prog->aux->btf : btf_vmlinux;
 	if (!btf) {
 		bpf_log(log,
 			"FENTRY/FEXIT program can only be attached to another program annotated with BTF\n");
@@ -11278,8 +11277,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		bpf_log(log, "attach_btf_id %u doesn't have a name\n", btf_id);
 		return -EINVAL;
 	}
-	if (tgt_prog) {
-		struct bpf_prog_aux *aux = tgt_prog->aux;
+	if (dst_prog) {
+		struct bpf_prog_aux *aux = dst_prog->aux;
 
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {
@@ -11303,11 +11302,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				return -EINVAL;
 			}
 		}
-		if (!tgt_prog->jited) {
+		if (!dst_prog->jited) {
 			bpf_log(log, "Can attach to only JITed progs\n");
 			return -EINVAL;
 		}
-		if (tgt_prog->type == prog->type) {
+		if (dst_prog->type == prog->type) {
 			/* Cannot fentry/fexit another fentry/fexit program.
 			 * Cannot attach program extension to another extension.
 			 * It's ok to attach fentry/fexit to extension program.
@@ -11315,10 +11314,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Cannot recursively attach\n");
 			return -EINVAL;
 		}
-		if (tgt_prog->type == BPF_PROG_TYPE_TRACING &&
+		if (dst_prog->type == BPF_PROG_TYPE_TRACING &&
 		    prog_extension &&
-		    (tgt_prog->expected_attach_type == BPF_TRACE_FENTRY ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT)) {
+		    (dst_prog->expected_attach_type == BPF_TRACE_FENTRY ||
+		     dst_prog->expected_attach_type == BPF_TRACE_FEXIT)) {
 			/* Program extensions can extend all program types
 			 * except fentry/fexit. The reason is the following.
 			 * The fentry/fexit programs are used for performance
@@ -11346,7 +11345,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 	switch (prog->expected_attach_type) {
 	case BPF_TRACE_RAW_TP:
-		if (tgt_prog) {
+		if (dst_prog) {
 			bpf_log(log,
 				"Only FENTRY/FEXIT progs are attachable to another BPF prog\n");
 			return -EINVAL;
@@ -11405,18 +11404,18 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (!btf_type_is_func_proto(t))
 			return -EINVAL;
 
-		if (tgt_prog && conservative)
+		if (dst_prog && conservative)
 			t = NULL;
 
 		ret = btf_distill_func_proto(log, btf, t, tname, &tgt_info->fmodel);
 		if (ret < 0)
 			return ret;
 
-		if (tgt_prog) {
+		if (dst_prog) {
 			if (subprog == 0)
-				addr = (long) tgt_prog->bpf_func;
+				addr = (long) dst_prog->bpf_func;
 			else
-				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
+				addr = (long) dst_prog->aux->func[subprog]->bpf_func;
 		} else {
 			addr = kallsyms_lookup_name(tname);
 			if (!addr) {
@@ -11453,7 +11452,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				return ret;
 			}
 		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN) {
-			if (tgt_prog) {
+			if (dst_prog) {
 				bpf_log(log, "can't modify return codes of BPF programs\n");
 				return -EINVAL;
 			}
@@ -11475,7 +11474,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 static int check_attach_btf_id(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog;
-	struct bpf_prog *tgt_prog = prog->aux->linked_prog;
+	struct bpf_prog *dst_prog = prog->aux->dst_prog;
 	struct bpf_attach_target_info tgt_info = {};
 	u32 btf_id = prog->aux->attach_btf_id;
 	struct bpf_trampoline *tr;
@@ -11496,13 +11495,17 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	    prog->type != BPF_PROG_TYPE_EXT)
 		return 0;
 
-	ret = bpf_check_attach_target(&env->log, prog, tgt_prog, btf_id, &tgt_info);
+	ret = bpf_check_attach_target(&env->log, prog, dst_prog, btf_id, &tgt_info);
 	if (ret)
 		return ret;
 
-	if (tgt_prog && prog->type == BPF_PROG_TYPE_EXT) {
-		env->ops = bpf_verifier_ops[tgt_prog->type];
-		prog->expected_attach_type = tgt_prog->expected_attach_type;
+	if (dst_prog && prog->type == BPF_PROG_TYPE_EXT) {
+		/* to make freplace equivalent to their targets, they need to
+		 * inherit env->ops and expected_attach_type for the rest of the
+		 * verification
+		 */
+		env->ops = bpf_verifier_ops[dst_prog->type];
+		prog->expected_attach_type = dst_prog->expected_attach_type;
 	}
 
 	/* store info about the attachment target that will be used later */
@@ -11524,12 +11527,12 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 			return ret;
 	}
 
-	key = bpf_trampoline_compute_key(tgt_prog, btf_id);
+	key = bpf_trampoline_compute_key(dst_prog, btf_id);
 	tr = bpf_trampoline_get(key, &tgt_info);
 	if (!tr)
 		return -ENOMEM;
 
-	prog->aux->trampoline = tr;
+	prog->aux->dst_trampoline = tr;
 	return 0;
 }
 

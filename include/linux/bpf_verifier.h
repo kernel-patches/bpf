@@ -459,7 +459,7 @@ static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
 
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
-			    const struct bpf_prog *tgt_prog,
+			    const struct bpf_prog *dst_prog,
 			    u32 btf_id,
 			    struct bpf_attach_target_info *tgt_info);
 
