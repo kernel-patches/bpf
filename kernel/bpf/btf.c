@@ -3860,7 +3860,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 	info->reg_type = PTR_TO_BTF_ID;
 	if (dst_prog) {
-		ret = btf_translate_to_vmlinux(log, btf, t, dst_prog->type, arg);
+		enum bpf_prog_type dst_type;
+
+		if (dst_prog->type == BPF_PROG_TYPE_EXT)
+			dst_type = dst_prog->aux->saved_dst_prog_type;
+		else
+			dst_type = dst_prog->type;
+
+		ret = btf_translate_to_vmlinux(log, btf, t, dst_type, arg);
 		if (ret > 0) {
 			info->btf_id = ret;
 			return true;
