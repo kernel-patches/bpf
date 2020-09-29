@@ -146,6 +146,7 @@ LIBBPF_API struct btf_dump *btf_dump__new(const struct btf *btf,
 LIBBPF_API void btf_dump__free(struct btf_dump *d);
 
 LIBBPF_API int btf_dump__dump_type(struct btf_dump *d, __u32 id);
+LIBBPF_API int btf_dump__dump_type_raw(const struct btf_dump *d, __u32 id);
 
 struct btf_dump_emit_type_decl_opts {
 	/* size of this struct, for forward/backward compatiblity */

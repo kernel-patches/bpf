@@ -1438,3 +1438,177 @@ static const char *btf_dump_ident_name(struct btf_dump *d, __u32 id)
 {
 	return btf_dump_resolve_name(d, id, d->ident_names);
 }
+
+static const char * const btf_kind_str_mapping[] = {
+	[BTF_KIND_UNKN]		= "UNKNOWN",
+	[BTF_KIND_INT]		= "INT",
+	[BTF_KIND_PTR]		= "PTR",
+	[BTF_KIND_ARRAY]	= "ARRAY",
+	[BTF_KIND_STRUCT]	= "STRUCT",
+	[BTF_KIND_UNION]	= "UNION",
+	[BTF_KIND_ENUM]		= "ENUM",
+	[BTF_KIND_FWD]		= "FWD",
+	[BTF_KIND_TYPEDEF]	= "TYPEDEF",
+	[BTF_KIND_VOLATILE]	= "VOLATILE",
+	[BTF_KIND_CONST]	= "CONST",
+	[BTF_KIND_RESTRICT]	= "RESTRICT",
+	[BTF_KIND_FUNC]		= "FUNC",
+	[BTF_KIND_FUNC_PROTO]	= "FUNC_PROTO",
+	[BTF_KIND_VAR]		= "VAR",
+	[BTF_KIND_DATASEC]	= "DATASEC",
+};
+
+static const char *btf_kind_str(__u16 kind)
+{
+	if (kind > BTF_KIND_DATASEC)
+		return "UNKNOWN";
+	return btf_kind_str_mapping[kind];
+}
+
+static const char *btf_int_enc_str(__u8 encoding)
+{
+	switch (encoding) {
+	case 0:
+		return "(none)";
+	case BTF_INT_SIGNED:
+		return "SIGNED";
+	case BTF_INT_CHAR:
+		return "CHAR";
+	case BTF_INT_BOOL:
+		return "BOOL";
+	default:
+		return "UNKN";
+	}
+}
+
+static const char *btf_var_linkage_str(__u32 linkage)
+{
+	switch (linkage) {
+	case BTF_VAR_STATIC:
+		return "static";
+	case BTF_VAR_GLOBAL_ALLOCATED:
+		return "global-alloc";
+	default:
+		return "(unknown)";
+	}
+}
+
+static const char *btf_func_linkage_str(const struct btf_type *t)
+{
+	switch (btf_vlen(t)) {
+	case BTF_FUNC_STATIC:
+		return "static";
+	case BTF_FUNC_GLOBAL:
+		return "global";
+	case BTF_FUNC_EXTERN:
+		return "extern";
+	default:
+		return "(unknown)";
+	}
+}
+
+static const char *btf_str(const struct btf *btf, __u32 off)
+{
+	if (!off)
+		return "(anon)";
+	return btf__str_by_offset(btf, off) ?: "(invalid)";
+}
+
+int btf_dump__dump_type_raw(const struct btf_dump *d, __u32 id)
+{
+	const struct btf_type *t;
+	int kind, i;
+	__u32 vlen;
+
+	t = btf__type_by_id(d->btf, id);
+	if (!t)
+		return -EINVAL;
+
+	vlen = btf_vlen(t);
+	kind = btf_kind(t);
+
+	btf_dump_printf(d, "[%u] %s '%s'", id, btf_kind_str(kind), btf_str(d->btf, t->name_off));
+
+	switch (kind) {
+	case BTF_KIND_INT:
+		btf_dump_printf(d, " size=%u bits_offset=%u nr_bits=%u encoding=%s",
+				t->size, btf_int_offset(t), btf_int_bits(t),
+				btf_int_enc_str(btf_int_encoding(t)));
+		break;
+	case BTF_KIND_PTR:
+	case BTF_KIND_CONST:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_TYPEDEF:
+		btf_dump_printf(d, " type_id=%u", t->type);
+		break;
+	case BTF_KIND_ARRAY: {
+		const struct btf_array *arr = btf_array(t);
+
+		btf_dump_printf(d, " type_id=%u index_type_id=%u nr_elems=%u",
+				arr->type, arr->index_type, arr->nelems);
+		break;
+	}
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION: {
+		const struct btf_member *m = btf_members(t);
+
+		btf_dump_printf(d, " size=%u vlen=%u", t->size, vlen);
+		for (i = 0; i < vlen; i++, m++) {
+			__u32 bit_off, bit_sz;
+
+			bit_off = btf_member_bit_offset(t, i);
+			bit_sz = btf_member_bitfield_size(t, i);
+			btf_dump_printf(d, "\n\t'%s' type_id=%u bits_offset=%u",
+					btf_str(d->btf, m->name_off), m->type, bit_off);
+			if (bit_sz)
+				btf_dump_printf(d, " bitfield_size=%u", bit_sz);
+		}
+		break;
+	}
+	case BTF_KIND_ENUM: {
+		const struct btf_enum *v = btf_enum(t);
+
+		btf_dump_printf(d, " size=%u vlen=%u", t->size, vlen);
+		for (i = 0; i < vlen; i++, v++) {
+			btf_dump_printf(d, "\n\t'%s' val=%u",
+					btf_str(d->btf, v->name_off), v->val);
+		}
+		break;
+	}
+	case BTF_KIND_FWD:
+		btf_dump_printf(d, " fwd_kind=%s", btf_kflag(t) ? "union" : "struct");
+		break;
+	case BTF_KIND_FUNC:
+		btf_dump_printf(d, " type_id=%u linkage=%s", t->type, btf_func_linkage_str(t));
+		break;
+	case BTF_KIND_FUNC_PROTO: {
+		const struct btf_param *p = btf_params(t);
+
+		btf_dump_printf(d, " ret_type_id=%u vlen=%u", t->type, vlen);
+		for (i = 0; i < vlen; i++, p++) {
+			btf_dump_printf(d, "\n\t'%s' type_id=%u",
+					btf_str(d->btf, p->name_off), p->type);
+		}
+		break;
+	}
+	case BTF_KIND_VAR:
+		btf_dump_printf(d, " type_id=%u, linkage=%s",
+				t->type, btf_var_linkage_str(btf_var(t)->linkage));
+		break;
+	case BTF_KIND_DATASEC: {
+		const struct btf_var_secinfo *v = btf_var_secinfos(t);
+
+		btf_dump_printf(d, " size=%u vlen=%u", t->size, vlen);
+		for (i = 0; i < vlen; i++, v++) {
+			btf_dump_printf(d, "\n\ttype_id=%u offset=%u size=%u",
+					v->type, v->offset, v->size);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+
+	return 0;
+}
