@@ -15,7 +15,7 @@
 #include "map_in_map.h"
 
 #define ARRAY_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_MMAPABLE | BPF_F_ACCESS_MASK)
+	(BPF_F_NUMA_NODE | BPF_F_MMAPABLE | BPF_F_ACCESS_MASK | BPF_F_SHARE_PE)
 
 static void bpf_array_free_percpu(struct bpf_array *array)
 {
@@ -62,6 +62,10 @@ int array_map_alloc_check(union bpf_attr *attr)
 
 	if (attr->map_type != BPF_MAP_TYPE_ARRAY &&
 	    attr->map_flags & BPF_F_MMAPABLE)
+		return -EINVAL;
+
+	if (attr->map_type != BPF_MAP_TYPE_PERF_EVENT_ARRAY &&
+	    attr->map_flags & BPF_F_SHARE_PE)
 		return -EINVAL;
 
 	if (attr->value_size > KMALLOC_MAX_SIZE)
@@ -778,6 +782,26 @@ static int fd_array_map_delete_elem(struct bpf_map *map, void *key)
 	}
 }
 
+static void perf_event_fd_array_map_free(struct bpf_map *map)
+{
+	struct bpf_event_entry *ee;
+	struct bpf_array *array;
+	int i;
+
+	if ((map->map_flags & BPF_F_SHARE_PE) == 0) {
+		fd_array_map_free(map);
+		return;
+	}
+
+	array = container_of(map, struct bpf_array, map);
+	for (i = 0; i < array->map.max_entries; i++) {
+		ee = READ_ONCE(array->ptrs[i]);
+		if (ee)
+			fd_array_map_delete_elem(map, &i);
+	}
+	bpf_map_area_free(array);
+}
+
 static void *prog_fd_array_get_ptr(struct bpf_map *map,
 				   struct file *map_file, int fd)
 {
@@ -1134,6 +1158,9 @@ static void perf_event_fd_array_release(struct bpf_map *map,
 	struct bpf_event_entry *ee;
 	int i;
 
+	if (map->map_flags & BPF_F_SHARE_PE)
+		return;
+
 	rcu_read_lock();
 	for (i = 0; i < array->map.max_entries; i++) {
 		ee = READ_ONCE(array->ptrs[i]);
@@ -1148,7 +1175,7 @@ const struct bpf_map_ops perf_event_array_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = fd_array_map_alloc_check,
 	.map_alloc = array_map_alloc,
-	.map_free = fd_array_map_free,
+	.map_free = perf_event_fd_array_map_free,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = fd_array_map_lookup_elem,
 	.map_delete_elem = fd_array_map_delete_elem,
