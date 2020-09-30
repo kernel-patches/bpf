@@ -159,24 +159,36 @@ extern struct btf_id_set name;
  * skc_to_*_sock() helpers. All these sockets should have
  * sock_common as the first argument in its memory layout.
  */
-#define BTF_SOCK_TYPE_xxx \
+
+#define __BTF_SOCK_TYPE_xxx \
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_INET, inet_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_INET_CONN, inet_connection_sock)	\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_INET_REQ, inet_request_sock)	\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_INET_TW, inet_timewait_sock)	\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_REQ, request_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_SOCK, sock)				\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_SOCK_COMMON, sock_common)		\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP, tcp_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP_REQ, tcp_request_sock)		\
-	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP_TW, tcp_timewait_sock)		\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP6, tcp6_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UDP, udp_sock)			\
 	BTF_SOCK_TYPE(BTF_SOCK_TYPE_UDP6, udp6_sock)
 
+#define __BTF_SOCK_TW_TYPE_xxx \
+	BTF_SOCK_TYPE(BTF_SOCK_TYPE_INET_TW, inet_timewait_sock)	\
+	BTF_SOCK_TYPE(BTF_SOCK_TYPE_TCP_TW, tcp_timewait_sock)
+
+#ifdef CONFIG_INET
+#define BTF_SOCK_TYPE_xxx						\
+	__BTF_SOCK_TYPE_xxx						\
+	__BTF_SOCK_TW_TYPE_xxx
+#else
+#define BTF_SOCK_TYPE_xxx	__BTF_SOCK_TYPE_xxx
+#endif
+
 enum {
 #define BTF_SOCK_TYPE(name, str) name,
-BTF_SOCK_TYPE_xxx
+__BTF_SOCK_TYPE_xxx
+__BTF_SOCK_TW_TYPE_xxx
 #undef BTF_SOCK_TYPE
 MAX_BTF_SOCK_TYPE,
 };
