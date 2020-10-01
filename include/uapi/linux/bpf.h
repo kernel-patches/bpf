@@ -3665,6 +3665,16 @@ union bpf_attr {
  * 	Return
  * 		The helper returns **TC_ACT_REDIRECT** on success or
  * 		**TC_ACT_SHOT** on error.
+ *
+ * u64 bpf_ktime_get_real_ns(void)
+ *	Description
+ *		Return the real time since epoch in nanoseconds.
+ *		See: **clock_gettime**\ (**CLOCK_REALTIME**)
+ *
+ *		As REALCLOCK can jump around, this helper should not be used to
+ *		measure passage of time.
+ *	Return
+ *		Current *ktime*.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3820,6 +3830,7 @@ union bpf_attr {
 	FN(seq_printf_btf),		\
 	FN(skb_cgroup_classid),		\
 	FN(redirect_neigh),		\
+	FN(ktime_get_real_ns),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
