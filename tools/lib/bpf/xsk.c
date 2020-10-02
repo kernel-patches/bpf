@@ -705,7 +705,7 @@ int xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
 	struct xsk_ctx *ctx;
 	int err, ifindex;
 
-	if (!umem || !xsk_ptr || !(rx || tx) || !fill || !comp)
+	if (!umem || !xsk_ptr || !(rx || tx))
 		return -EFAULT;
 
 	xsk = calloc(1, sizeof(*xsk));
@@ -735,12 +735,24 @@ int xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
 
 	ctx = xsk_get_ctx(umem, ifindex, queue_id);
 	if (!ctx) {
+		if (!fill || !comp) {
+			err = -EFAULT;
+			goto out_socket;
+		}
+
 		ctx = xsk_create_ctx(xsk, umem, ifindex, ifname, queue_id,
 				     fill, comp);
 		if (!ctx) {
 			err = -ENOMEM;
 			goto out_socket;
 		}
+	} else if ((fill && ctx->fill != fill) || (comp && ctx->comp != comp)) {
+		/* If the xsk_socket__create_shared() api is used for the first socket
+		 * registration, then make sure the fill and completion rings supplied
+		 * are the same as the ones used to register the umem. If not, bail out.
+		 */
+		err = -EINVAL;
+		goto out_socket;
 	}
 	xsk->ctx = ctx;
 
