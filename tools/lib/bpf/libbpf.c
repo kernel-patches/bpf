@@ -3861,50 +3861,49 @@ bpf_object__create_maps(struct bpf_object *obj)
 			}
 		}
 
-		if (map->fd >= 0) {
-			pr_debug("map '%s': skipping creation (preset fd=%d)\n",
-				 map->name, map->fd);
-			continue;
-		}
-
-		err = bpf_object__create_map(obj, map);
-		if (err)
-			goto err_out;
-
-		pr_debug("map '%s': created successfully, fd=%d\n", map->name,
-			 map->fd);
-
-		if (bpf_map__is_internal(map)) {
-			err = bpf_object__populate_internal_map(obj, map);
-			if (err < 0) {
-				zclose(map->fd);
+		if (map->fd < 0) {
+			err = bpf_object__create_map(obj, map);
+			if (err)
 				goto err_out;
-			}
-		}
 
-		if (map->init_slots_sz) {
-			for (j = 0; j < map->init_slots_sz; j++) {
-				const struct bpf_map *targ_map;
-				int fd;
+			pr_debug("map '%s': created successfully, fd=%d\n", map->name,
+				 map->fd);
 
-				if (!map->init_slots[j])
-					continue;
-
-				targ_map = map->init_slots[j];
-				fd = bpf_map__fd(targ_map);
-				err = bpf_map_update_elem(map->fd, &j, &fd, 0);
-				if (err) {
-					err = -errno;
-					pr_warn("map '%s': failed to initialize slot [%d] to map '%s' fd=%d: %d\n",
-						map->name, j, targ_map->name,
-						fd, err);
+			if (bpf_map__is_internal(map)) {
+				err = bpf_object__populate_internal_map(obj, map);
+				if (err < 0) {
+					zclose(map->fd);
 					goto err_out;
 				}
-				pr_debug("map '%s': slot [%d] set to map '%s' fd=%d\n",
-					 map->name, j, targ_map->name, fd);
 			}
-			zfree(&map->init_slots);
-			map->init_slots_sz = 0;
+
+			if (map->init_slots_sz) {
+				for (j = 0; j < map->init_slots_sz; j++) {
+					const struct bpf_map *targ_map;
+					int fd;
+
+					if (!map->init_slots[j])
+						continue;
+
+					targ_map = map->init_slots[j];
+					fd = bpf_map__fd(targ_map);
+					err = bpf_map_update_elem(map->fd, &j, &fd, 0);
+					if (err) {
+						err = -errno;
+						pr_warn("map '%s': failed to initialize slot [%d] to map '%s' fd=%d: %d\n",
+							map->name, j, targ_map->name,
+							fd, err);
+						goto err_out;
+					}
+					pr_debug("map '%s': slot [%d] set to map '%s' fd=%d\n",
+						map->name, j, targ_map->name, fd);
+				}
+				zfree(&map->init_slots);
+				map->init_slots_sz = 0;
+			}
+		} else {
+			pr_debug("map '%s': skipping creation (preset fd=%d)\n",
+				 map->name, map->fd);
 		}
 
 		if (map->pin_path && !map->pinned) {
