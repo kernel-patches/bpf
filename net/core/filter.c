@@ -3739,6 +3739,44 @@ static const struct bpf_func_proto bpf_xdp_adjust_head_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_1(bpf_xdp_get_frags_count, struct  xdp_buff*, xdp)
+{
+	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
+
+	return xdp->mb ? sinfo->nr_frags : 0;
+}
+
+const struct bpf_func_proto bpf_xdp_get_frags_count_proto = {
+	.func		= bpf_xdp_get_frags_count,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+};
+
+BPF_CALL_1(bpf_xdp_get_frags_total_size, struct  xdp_buff*, xdp)
+{
+	struct skb_shared_info *sinfo;
+	int nfrags, i, size = 0;
+
+	if (likely(!xdp->mb))
+		return 0;
+
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+	nfrags = min_t(u8, sinfo->nr_frags, MAX_SKB_FRAGS);
+
+	for (i = 0; i < nfrags; i++)
+		size += skb_frag_size(&sinfo->frags[i]);
+
+	return size;
+}
+
+const struct bpf_func_proto bpf_xdp_get_frags_total_size_proto = {
+	.func		= bpf_xdp_get_frags_total_size,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+};
+
 BPF_CALL_2(bpf_xdp_adjust_tail, struct xdp_buff *, xdp, int, offset)
 {
 	void *data_hard_end = xdp_data_hard_end(xdp); /* use xdp->frame_sz */
@@ -7092,6 +7130,10 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_redirect_map_proto;
 	case BPF_FUNC_xdp_adjust_tail:
 		return &bpf_xdp_adjust_tail_proto;
+	case BPF_FUNC_xdp_get_frags_count:
+		return &bpf_xdp_get_frags_count_proto;
+	case BPF_FUNC_xdp_get_frags_total_size:
+		return &bpf_xdp_get_frags_total_size_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
 #ifdef CONFIG_INET

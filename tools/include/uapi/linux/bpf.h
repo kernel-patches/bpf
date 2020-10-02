@@ -3668,6 +3668,18 @@ union bpf_attr {
  * 	Return
  * 		The helper returns **TC_ACT_REDIRECT** on success or
  * 		**TC_ACT_SHOT** on error.
+ *
+ * int bpf_xdp_get_frags_count(struct xdp_buff *xdp_md)
+ *	Description
+ *		Get the number of fragments for a given xdp multi-buffer.
+ *	Return
+ *		The number of fragments
+ *
+ * int bpf_xdp_get_frags_total_size(struct xdp_buff *xdp_md)
+ *	Description
+ *		Get the total size of fragments for a given xdp multi-buffer.
+ *	Return
+ *		The total size of fragments for a given xdp multi-buffer.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3823,6 +3835,8 @@ union bpf_attr {
 	FN(seq_printf_btf),		\
 	FN(skb_cgroup_classid),		\
 	FN(redirect_neigh),		\
+	FN(xdp_get_frags_count),	\
+	FN(xdp_get_frags_total_size),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
