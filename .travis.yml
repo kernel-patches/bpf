@@ -1,0 +1,33 @@
+sudo: required
+language: bash
+dist: bionic
+services:
+    - docker
+
+env:
+    global:
+        - PROJECT_NAME='libbpf'
+        - AUTHOR_EMAIL="$(git log -1 --pretty=\"%aE\")"
+        - REPO_ROOT="$TRAVIS_BUILD_DIR"
+        - CI_ROOT="$REPO_ROOT/travis-ci"
+        - VMTEST_ROOT="$CI_ROOT/vmtest"
+
+addons:
+    apt:
+        packages:
+            - qemu-kvm
+            - zstd
+            - binutils-dev
+            - elfutils
+            - libcap-dev
+            - libelf-dev
+            - libdw-dev
+            - python3-docutils
+
+jobs:
+    include:
+        - stage: Builds & Tests
+          name: Kernel LATEST + selftests
+          language: bash
+          env: KERNEL=LATEST
+          script:  $CI_ROOT/vmtest/run_vmtest.sh || travis_terminate 1
