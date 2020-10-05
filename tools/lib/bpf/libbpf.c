@@ -9128,10 +9128,13 @@ int bpf_program__set_attach_target(struct bpf_program *prog,
 	if (attach_prog_fd)
 		btf_id = libbpf_find_prog_btf_id(attach_func_name,
 						 attach_prog_fd);
-	else
-		btf_id = __find_vmlinux_btf_id(prog->obj->btf_vmlinux,
-					       attach_func_name,
+	else {
+		struct btf *btf = libbpf_find_kernel_btf();
+
+		btf_id = __find_vmlinux_btf_id(btf, attach_func_name,
 					       prog->expected_attach_type);
+		btf__free(btf);
+	}
 
 	if (btf_id < 0)
 		return btf_id;
