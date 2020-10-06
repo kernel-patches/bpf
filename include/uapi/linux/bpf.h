@@ -3718,6 +3718,18 @@ union bpf_attr {
  *		never return NULL.
  *	Return
  *		A pointer pointing to the kernel percpu variable on this cpu.
+ *
+ * int bpf_mtu_lookup(void *ctx, u32 ifindex, u64 flags)
+ *	Description
+ *		Lookup MTU of net device based on ifindex.  The Linux kernel
+ *		route table can configure MTUs on a more specific per route
+ *		level, which is not provided by this helper. For route level
+ *		MTU checks use the **bpf_fib_lookup**\ () helper.
+ *
+ *		*ctx* is either **struct xdp_md** for XDP programs or
+ *		**struct sk_buff** tc cls_act programs.
+ *	Return
+ *		On success, MTU size is returned. On error, a negative value.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3875,6 +3887,7 @@ union bpf_attr {
 	FN(redirect_neigh),		\
 	FN(bpf_per_cpu_ptr),            \
 	FN(bpf_this_cpu_ptr),		\
+	FN(mtu_lookup),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

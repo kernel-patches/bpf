@@ -5512,6 +5512,58 @@ static const struct bpf_func_proto bpf_skb_fib_lookup_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
+static int bpf_mtu_lookup(struct net *netns, u32 ifindex, u64 flags)
+{
+	struct net_device *dev;
+
+	// XXX: Do we even need flags?
+	// Flag idea: get ctx dev->mtu for XDP_TX or redir out-same-dev
+	if (flags)
+		return -EINVAL;
+
+	dev = dev_get_by_index_rcu(netns, ifindex);
+	if (!dev)
+		return -ENODEV;
+
+	return dev->mtu;
+}
+
+BPF_CALL_3(bpf_skb_mtu_lookup, struct sk_buff *, skb,
+	   u32, ifindex, u64, flags)
+{
+	struct net *netns = dev_net(skb->dev);
+
+	return bpf_mtu_lookup(netns, ifindex, flags);
+}
+
+BPF_CALL_3(bpf_xdp_mtu_lookup, struct xdp_buff *, xdp,
+	   u32, ifindex, u64, flags)
+{
+	struct net *netns = dev_net(xdp->rxq->dev);
+	// XXX: Handle if this runs in devmap prog (then is rxq invalid?)
+
+	return bpf_mtu_lookup(netns, ifindex, flags);
+}
+
+static const struct bpf_func_proto bpf_skb_mtu_lookup_proto = {
+	.func		= bpf_skb_mtu_lookup,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_ANYTHING,
+};
+
+static const struct bpf_func_proto bpf_xdp_mtu_lookup_proto = {
+	.func		= bpf_xdp_mtu_lookup,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_ANYTHING,
+};
+
+
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 static int bpf_push_seg6_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len)
 {
@@ -7075,6 +7127,8 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_socket_uid_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_skb_fib_lookup_proto;
+	case BPF_FUNC_mtu_lookup:
+		return &bpf_skb_mtu_lookup_proto;
 	case BPF_FUNC_sk_fullsock:
 		return &bpf_sk_fullsock_proto;
 	case BPF_FUNC_sk_storage_get:
@@ -7144,6 +7198,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_adjust_tail_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
+	case BPF_FUNC_mtu_lookup:
+		return &bpf_xdp_mtu_lookup_proto;
 #ifdef CONFIG_INET
 	case BPF_FUNC_sk_lookup_udp:
 		return &bpf_xdp_sk_lookup_udp_proto;
