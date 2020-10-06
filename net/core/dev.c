@@ -3870,6 +3870,7 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	switch (tcf_classify(skb, miniq->filter_list, &cl_res, false)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
+		*ret = NET_XMIT_SUCCESS;
 		skb->tc_index = TC_H_MIN(cl_res.classid);
 		break;
 	case TC_ACT_SHOT:
@@ -4064,9 +4065,10 @@ static int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 {
 	struct net_device *dev = skb->dev;
 	struct netdev_queue *txq;
+	bool mtu_check = false;
+	bool again = false;
 	struct Qdisc *q;
 	int rc = -ENOMEM;
-	bool again = false;
 
 	skb_reset_mac_header(skb);
 
@@ -4082,14 +4084,28 @@ static int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 
 	qdisc_pkt_len_init(skb);
 #ifdef CONFIG_NET_CLS_ACT
+	mtu_check = skb_is_redirected(skb);
 	skb->tc_at_ingress = 0;
 # ifdef CONFIG_NET_EGRESS
 	if (static_branch_unlikely(&egress_needed_key)) {
+		unsigned int len_orig = skb->len;
+
 		skb = sch_handle_egress(skb, &rc, dev);
 		if (!skb)
 			goto out;
+		/* BPF-prog ran and could have changed packet size beyond MTU */
+		if (rc == NET_XMIT_SUCCESS && skb->len > len_orig)
+			mtu_check = true;
 	}
 # endif
+	/* MTU-check only happens on "last" net_device in a redirect sequence
+	 * (e.g. above sch_handle_egress can steal SKB and skb_do_redirect it
+	 * either ingress or egress to another device).
+	 */
+	if (mtu_check && !is_skb_forwardable(dev, skb)) {
+		rc = -EMSGSIZE;
+		goto drop;
+	}
 #endif
 	/* If device/qdisc don't need skb->dst, release it right now while
 	 * its hot in this cpu cache.
@@ -4157,7 +4173,7 @@ recursion_alert:
 
 	rc = -ENETDOWN;
 	rcu_read_unlock_bh();
-
+drop:
 	atomic_long_inc(&dev->tx_dropped);
 	kfree_skb_list(skb);
 	return rc;
