@@ -55,7 +55,7 @@
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
 	},
-	.errstr = "invalid bpf_ld_imm64 insn",
+	.errstr = "last insn is not an exit or jmp",
 	.result = REJECT,
 },
 {
