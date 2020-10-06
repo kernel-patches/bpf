@@ -64,6 +64,11 @@ static const u8 eth_reserved_addr_base[ETH_ALEN] __aligned(2) =
 { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
 #define eth_stp_addr eth_reserved_addr_base
 
+static inline void eth_set_protocol(struct sk_buff *skb, struct net_device *dev)
+{
+	skb->protocol = eth_type_trans(skb, dev);
+}
+
 /**
  * is_link_local_ether_addr - Determine if given Ethernet address is link-local
  * @addr: Pointer to a six-byte array containing the Ethernet address
