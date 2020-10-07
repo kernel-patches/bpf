@@ -54,21 +54,13 @@
 	"test5 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
-	},
-	.errstr = "invalid bpf_ld_imm64 insn",
-	.result = REJECT,
-},
-{
-	"test6 ld_imm64",
-	.insns = {
-	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
 	BPF_RAW_INSN(0, 0, 0, 0, 0),
 	BPF_EXIT_INSN(),
 	},
 	.result = ACCEPT,
 },
 {
-	"test7 ld_imm64",
+	"test6 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, 0, 0, 0, 1),
@@ -78,7 +70,7 @@
 	.retval = 1,
 },
 {
-	"test8 ld_imm64",
+	"test7 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 1, 1),
 	BPF_RAW_INSN(0, 0, 0, 0, 1),
@@ -88,7 +80,7 @@
 	.result = REJECT,
 },
 {
-	"test9 ld_imm64",
+	"test8 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, 0, 0, 1, 1),
@@ -98,7 +90,7 @@
 	.result = REJECT,
 },
 {
-	"test10 ld_imm64",
+	"test9 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, BPF_REG_1, 0, 0, 1),
@@ -108,7 +100,7 @@
 	.result = REJECT,
 },
 {
-	"test11 ld_imm64",
+	"test10 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, 0, BPF_REG_1, 0, 1),
@@ -118,7 +110,7 @@
 	.result = REJECT,
 },
 {
-	"test12 ld_imm64",
+	"test11 ld_imm64",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_1, 0),
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, BPF_REG_1, 0, 1),
@@ -129,7 +121,7 @@
 	.result = REJECT,
 },
 {
-	"test13 ld_imm64",
+	"test12 ld_imm64",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_1, 0),
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, BPF_REG_1, 0, 1),
@@ -140,7 +132,7 @@
 	.result = REJECT,
 },
 {
-	"test14 ld_imm64: reject 2nd imm != 0",
+	"test13 ld_imm64: reject 2nd imm != 0",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_0, 0),
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, BPF_REG_1,
