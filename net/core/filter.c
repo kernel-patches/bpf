@@ -5506,7 +5506,7 @@ BPF_CALL_4(bpf_skb_fib_lookup, struct sk_buff *, skb,
 		struct net_device *dev;
 
 		dev = dev_get_by_index_rcu(net, params->ifindex);
-		if (!is_skb_forwardable(dev, skb))
+		if (!is_skb_fwd_size_ok(dev, skb))
 			rc = BPF_FIB_LKUP_RET_FRAG_NEEDED;
 
 		params->mtu = dev->mtu; /* union with tot_len */

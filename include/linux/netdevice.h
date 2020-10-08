@@ -3862,8 +3862,31 @@ int xdp_umem_query(struct net_device *dev, u16 queue_id);
 
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
-bool is_skb_forwardable(const struct net_device *dev,
-			const struct sk_buff *skb);
+
+static __always_inline bool is_skb_fwd_size_ok(const struct net_device *dev,
+					       const struct sk_buff *skb)
+{
+	const u32 vlan_hdr_len = 4; /* VLAN_HLEN */
+	unsigned int mtu = dev->mtu + dev->hard_header_len + vlan_hdr_len;
+
+	/* Assumes SKB length at L2 */
+	if (likely(skb->len <= mtu))
+		return true;
+
+	/* If TSO is enabled, we don't care about the length as the packet
+	 * could be forwarded without being segmented before.
+	 */
+	return skb_is_gso(skb);
+}
+
+static __always_inline bool is_skb_forwardable(const struct net_device *dev,
+					       const struct sk_buff *skb)
+{
+	if (unlikely(!(dev->flags & IFF_UP)))
+		return false;
+
+	return is_skb_fwd_size_ok(dev, skb);
+}
 
 static __always_inline int ____dev_forward_skb(struct net_device *dev,
 					       struct sk_buff *skb,
