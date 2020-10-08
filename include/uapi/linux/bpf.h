@@ -3718,6 +3718,56 @@ union bpf_attr {
  *		never return NULL.
  *	Return
  *		A pointer pointing to the kernel percpu variable on this cpu.
+ *
+ * int bpf_mtu_check(void *ctx, u32 ifindex, u32 *mtu_result, s32 len_diff, u64 flags)
+ *	Description
+ *		Check ctx packet size against MTU of net device (based on
+ *		*ifindex*).  This helper will likely be used in combination with
+ *		helpers that adjust/change the packet size.  The argument
+ *		*len_diff* can be used for querying with a planned size
+ *		change. This allows to check MTU prior to changing packet ctx.
+ *
+ *		The Linux kernel route table can configure MTUs on a more
+ *		specific per route level, which is not provided by this helper.
+ *		For route level MTU checks use the **bpf_fib_lookup**\ ()
+ *		helper.
+ *
+ *		*ctx* is either **struct xdp_md** for XDP programs or
+ *		**struct sk_buff** for tc cls_act programs.
+ *
+ *		The *flags* argument can be a combination of one or more of the
+ *		following values:
+ *
+ *              **BPF_MTU_CHK_RELAX**
+ *			This flag relax or increase the MTU with room for one
+ *			VLAN header (4 bytes) and take into account net device
+ *			hard_header_len.  This relaxation is also used by the
+ *			kernels own forwarding MTU checks.
+ *
+ *		**BPF_MTU_CHK_GSO**
+ *			This flag will only works for *ctx* **struct sk_buff**.
+ *			If packet context contains extra packet segment buffers
+ *			(often knows as frags), then those are also checked
+ *			against the MTU size.
+ *
+ *		The *mtu_result* pointer contains the MTU value of the net
+ *		device including the L2 header size (usually 14 bytes Ethernet
+ *		header). The net device configured MTU is the L3 size, but as
+ *		XDP and TX length operate at L2 this helper include L2 header
+ *		size in reported MTU.
+ *
+ *	Return
+ *		* 0 on success, and populate MTU value in *mtu_result* pointer.
+ *
+ *		* < 0 if any input argument is invalid (*mtu_result* not updated)
+ *
+ *		MTU violations return positive values, but also populate MTU
+ *		value in *mtu_result* pointer, as this can be needed for
+ *		implemeting PMTU handing:
+ *
+ *		* **BPF_MTU_CHK_RET_FRAG_NEEDED**
+ *		* **BPF_MTU_CHK_RET_GSO_TOOBIG**
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3875,6 +3925,7 @@ union bpf_attr {
 	FN(redirect_neigh),		\
 	FN(bpf_per_cpu_ptr),            \
 	FN(bpf_this_cpu_ptr),		\
+	FN(mtu_check),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4887,6 +4938,18 @@ struct bpf_fib_lookup {
 	__be16	h_vlan_TCI;
 	__u8	smac[6];     /* ETH_ALEN */
 	__u8	dmac[6];     /* ETH_ALEN */
+};
+
+/* bpf_mtu_check flags*/
+enum  bpf_mtu_check_flags {
+	BPF_MTU_CHK_RELAX = (1U << 0),
+	BPF_MTU_CHK_GSO   = (1U << 1),
+};
+
+enum bpf_mtu_check_ret {
+	BPF_MTU_CHK_RET_SUCCESS,      /* check and lookup successful */
+	BPF_MTU_CHK_RET_FRAG_NEEDED,  /* fragmentation required to fwd */
+	BPF_MTU_CHK_RET_GSO_TOOBIG,   /* GSO re-segmentation needed to fwd */
 };
 
 enum bpf_task_fd_type {
