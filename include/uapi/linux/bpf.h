@@ -435,6 +435,11 @@ enum {
 
 /* Share perf_event among processes */
 	BPF_F_PRESERVE_ELEMS	= (1U << 11),
+
+/* Do not inline (array) map lookups so the array map can be used for
+ * map in map with dynamic max entries.
+ */
+	BPF_F_NO_INLINE		= (1U << 12),
 };
 
 /* Flags for BPF_PROG_QUERY. */
