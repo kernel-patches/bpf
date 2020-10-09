@@ -4813,12 +4813,14 @@ struct bpf_raw_tracepoint_args {
 	__u64 args[0];
 };
 
-/* DIRECT:  Skip the FIB rules and go to FIB table associated with device
- * OUTPUT:  Do lookup from egress perspective; default is ingress
+/* DIRECT:      Skip the FIB rules and go to FIB table associated with device
+ * OUTPUT:      Do lookup from egress perspective; default is ingress
+ * SKIP_NEIGH:  Skip neighbour lookup and return BPF_FIB_LKUP_RET_NO_NEIGH on success
  */
 enum {
-	BPF_FIB_LOOKUP_DIRECT  = (1U << 0),
-	BPF_FIB_LOOKUP_OUTPUT  = (1U << 1),
+	BPF_FIB_LOOKUP_DIRECT      = (1U << 0),
+	BPF_FIB_LOOKUP_OUTPUT      = (1U << 1),
+	BPF_FIB_LOOKUP_SKIP_NEIGH  = (1U << 2),
 };
 
 enum {
