@@ -111,7 +111,8 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	ops = bpf_map_types[type];
 	if (!ops)
 		return ERR_PTR(-EINVAL);
-
+	if (ops->map_swap_ops)
+		ops = ops->map_swap_ops(attr);
 	if (ops->map_alloc_check) {
 		err = ops->map_alloc_check(attr);
 		if (err)
