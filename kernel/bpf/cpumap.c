@@ -423,7 +423,7 @@ __cpu_map_entry_alloc(struct bpf_cpumap_val *value, u32 cpu, int map_id)
 	struct xdp_bulk_queue *bq;
 
 	/* Have map->numa_node, but choose node of redirect target CPU */
-	numa = cpu_to_node(cpu);
+	numa = local_memory_node(cpu_to_node(cpu));
 
 	rcpu = kzalloc_node(sizeof(*rcpu), gfp, numa);
 	if (!rcpu)
