@@ -243,7 +243,7 @@ static ino_t get_inode_from_kernfs(struct kernfs_node* node)
 	}
 }
 
-int pids_cgrp_id = 1;
+int pids_cgroup_id = 1;
 
 static INLINE void* populate_cgroup_info(struct cgroup_data_t* cgroup_data,
 					 struct task_struct* task,
@@ -262,7 +262,7 @@ static INLINE void* populate_cgroup_info(struct cgroup_data_t* cgroup_data,
 				BPF_CORE_READ(task, cgroups, subsys[i]);
 			if (subsys != NULL) {
 				int subsys_id = BPF_CORE_READ(subsys, ss, id);
-				if (subsys_id == pids_cgrp_id) {
+				if (subsys_id == pids_cgroup_id) {
 					proc_kernfs = BPF_CORE_READ(subsys, cgroup, kn);
 					root_kernfs = BPF_CORE_READ(subsys, ss, root, kf_root, kn);
 					break;
