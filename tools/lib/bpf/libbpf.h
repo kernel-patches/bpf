@@ -93,8 +93,11 @@ struct bpf_object_open_opts {
 	 * system Kconfig for CONFIG_xxx externs.
 	 */
 	const char *kconfig;
+	/* Attach trampolines via batch mode.
+	 */
+	bool trampoline_attach_batch;
 };
-#define bpf_object_open_opts__last_field kconfig
+#define bpf_object_open_opts__last_field trampoline_attach_batch
 
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 LIBBPF_API struct bpf_object *

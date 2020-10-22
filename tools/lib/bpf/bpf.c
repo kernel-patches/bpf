@@ -858,6 +858,18 @@ int bpf_raw_tracepoint_open(const char *name, int prog_fd)
 	return sys_bpf(BPF_RAW_TRACEPOINT_OPEN, &attr, sizeof(attr));
 }
 
+int bpf_trampoline_batch_attach(int *ifds, int *ofds, int count)
+{
+	union bpf_attr attr;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.trampoline_batch.in = ptr_to_u64(ifds);
+	attr.trampoline_batch.out = ptr_to_u64(ofds);
+	attr.trampoline_batch.count = count;
+
+	return sys_bpf(BPF_TRAMPOLINE_BATCH_ATTACH, &attr, sizeof(attr));
+}
+
 int bpf_load_btf(const void *btf, __u32 btf_size, char *log_buf, __u32 log_buf_size,
 		 bool do_log)
 {
