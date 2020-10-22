@@ -5076,6 +5076,32 @@ static int adjust_direct_size(int new_size, struct ftrace_hash **free_hash)
 	return 0;
 }
 
+static struct ftrace_direct_func *get_direct_func(unsigned long addr)
+{
+	struct ftrace_direct_func *direct;
+
+	direct = ftrace_find_direct_func(addr);
+	if (!direct) {
+		direct = kmalloc(sizeof(*direct), GFP_KERNEL);
+		if (!direct)
+			return NULL;
+		direct->addr = addr;
+		direct->count = 0;
+		list_add_rcu(&direct->next, &ftrace_direct_funcs);
+		ftrace_direct_func_count++;
+	}
+
+	return direct;
+}
+
+static void put_direct_func(struct ftrace_direct_func *direct)
+{
+	list_del_rcu(&direct->next);
+	synchronize_rcu_tasks();
+	kfree(direct);
+	ftrace_direct_func_count--;
+}
+
 /**
  * register_ftrace_direct - Call a custom trampoline directly
  * @ip: The address of the nop at the beginning of a function
@@ -5114,17 +5140,10 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 	if (!entry)
 		goto out_unlock;
 
-	direct = ftrace_find_direct_func(addr);
+	direct = get_direct_func(addr);
 	if (!direct) {
-		direct = kmalloc(sizeof(*direct), GFP_KERNEL);
-		if (!direct) {
-			kfree(entry);
-			goto out_unlock;
-		}
-		direct->addr = addr;
-		direct->count = 0;
-		list_add_rcu(&direct->next, &ftrace_direct_funcs);
-		ftrace_direct_func_count++;
+		kfree(entry);
+		goto out_unlock;
 	}
 
 	entry->ip = ip;
@@ -5144,13 +5163,10 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 	if (ret) {
 		kfree(entry);
 		if (!direct->count) {
-			list_del_rcu(&direct->next);
-			synchronize_rcu_tasks();
-			kfree(direct);
+			put_direct_func(direct);
 			if (free_hash)
 				free_ftrace_hash(free_hash);
 			free_hash = NULL;
-			ftrace_direct_func_count--;
 		}
 	} else {
 		direct->count++;
