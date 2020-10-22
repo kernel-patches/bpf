@@ -31,6 +31,7 @@
 #include <linux/poll.h>
 #include <linux/bpf-netns.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/rcupdate_wait.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -2919,6 +2920,8 @@ static int bpf_trampoline_batch(const union bpf_attr *attr, int cmd)
 	batch = bpf_trampoline_batch_alloc(count);
 	if (!batch)
 		goto out_clean;
+
+	synchronize_rcu_mult(call_rcu_tasks, call_rcu_tasks_trace);
 
 	for (i = 0; i < count; i++) {
 		if (cmd == BPF_TRAMPOLINE_BATCH_ATTACH) {
