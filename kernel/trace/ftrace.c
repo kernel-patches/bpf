@@ -5231,6 +5231,81 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 }
 EXPORT_SYMBOL_GPL(register_ftrace_direct);
 
+int register_ftrace_direct_ips(unsigned long *ips, unsigned long *addrs,
+			       int count)
+{
+	struct ftrace_hash *free_hash = NULL;
+	struct ftrace_direct_func *direct;
+	struct ftrace_func_entry *entry;
+	int i, j;
+	int ret;
+
+	mutex_lock(&direct_mutex);
+
+	/* Check all the ips */
+	for (i = 0; i < count; i++) {
+		ret = check_direct_ip(ips[i]);
+		if (ret)
+			goto out_unlock;
+	}
+
+	ret = -ENOMEM;
+	if (adjust_direct_size(direct_functions->count + count, &free_hash))
+		goto out_unlock;
+
+	for (i = 0; i < count; i++) {
+		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+		if (!entry)
+			goto out_clean;
+
+		direct = get_direct_func(addrs[i]);
+		if (!direct) {
+			kfree(entry);
+			goto out_clean;
+		}
+
+		direct->count++;
+		entry->ip = ips[i];
+		entry->direct = addrs[i];
+		__add_hash_entry(direct_functions, entry);
+	}
+
+	ret = ftrace_set_filter_ips(&direct_ops, ips, count, 0);
+
+	if (!ret && !(direct_ops.flags & FTRACE_OPS_FL_ENABLED)) {
+		ret = register_ftrace_function(&direct_ops);
+		if (ret)
+			ftrace_set_filter_ips(&direct_ops, ips, count, 1);
+	}
+
+ out_clean:
+	if (ret) {
+		for (j = 0; j < i; j++) {
+			direct = get_direct_func(addrs[j]);
+			if (!direct)
+				continue;
+
+			if (!direct->count)
+				put_direct_func(direct);
+
+			entry = ftrace_lookup_ip(direct_functions, ips[j]);
+			if (WARN_ON_ONCE(!entry))
+				continue;
+			free_hash_entry(direct_functions, entry);
+		}
+	}
+ out_unlock:
+	mutex_unlock(&direct_mutex);
+
+	if (free_hash) {
+		synchronize_rcu_tasks();
+		free_ftrace_hash(free_hash);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(register_ftrace_direct_ips);
+
 static struct ftrace_func_entry *find_direct_entry(unsigned long *ip,
 						   struct dyn_ftrace **recp)
 {
