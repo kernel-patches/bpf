@@ -583,6 +583,13 @@ enum bpf_tramp_prog_type {
 	BPF_TRAMP_REPLACE, /* more than MAX */
 };
 
+struct bpf_trampoline_batch {
+	int count;
+	int idx;
+	unsigned long *ips;
+	unsigned long *addrs;
+};
+
 struct bpf_trampoline {
 	/* hlist for trampoline_table */
 	struct hlist_node hlist;
@@ -644,11 +651,14 @@ static __always_inline unsigned int bpf_dispatcher_nop_func(
 	return bpf_func(ctx, insnsi);
 }
 #ifdef CONFIG_BPF_JIT
-int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr);
+int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr,
+			     struct bpf_trampoline_batch *batch);
 int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr);
 struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
+struct bpf_trampoline_batch *bpf_trampoline_batch_alloc(int count);
+void bpf_trampoline_batch_free(struct bpf_trampoline_batch *batch);
 #define BPF_DISPATCHER_INIT(_name) {				\
 	.mutex = __MUTEX_INITIALIZER(_name.mutex),		\
 	.func = &_name##_func,					\
@@ -693,7 +703,8 @@ void bpf_ksym_add(struct bpf_ksym *ksym);
 void bpf_ksym_del(struct bpf_ksym *ksym);
 #else
 static inline int bpf_trampoline_link_prog(struct bpf_prog *prog,
-					   struct bpf_trampoline *tr)
+					   struct bpf_trampoline *tr,
+					   struct bpf_trampoline_batch *batch)
 {
 	return -ENOTSUPP;
 }

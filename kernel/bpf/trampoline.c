@@ -107,6 +107,51 @@ out:
 	return tr;
 }
 
+static int bpf_trampoline_batch_add(struct bpf_trampoline_batch *batch,
+				    unsigned long ip, unsigned long addr)
+{
+	int idx = batch->idx;
+
+	if (idx >= batch->count)
+		return -EINVAL;
+
+	batch->ips[idx] = ip;
+	batch->addrs[idx] = addr;
+	batch->idx++;
+	return 0;
+}
+
+struct bpf_trampoline_batch *bpf_trampoline_batch_alloc(int count)
+{
+	struct bpf_trampoline_batch *batch;
+
+	batch = kmalloc(sizeof(*batch), GFP_KERNEL);
+	if (!batch)
+		return NULL;
+
+	batch->ips = kcalloc(count, sizeof(batch->ips[0]), GFP_KERNEL);
+	batch->addrs = kcalloc(count, sizeof(batch->addrs[0]), GFP_KERNEL);
+	if (!batch->ips || !batch->addrs) {
+		kfree(batch->ips);
+		kfree(batch->addrs);
+		kfree(batch);
+		return NULL;
+	}
+
+	batch->count = count;
+	batch->idx = 0;
+	return batch;
+}
+
+void bpf_trampoline_batch_free(struct bpf_trampoline_batch *batch)
+{
+	if (!batch)
+		return;
+	kfree(batch->ips);
+	kfree(batch->addrs);
+	kfree(batch);
+}
+
 static int is_ftrace_location(void *ip)
 {
 	long addr;
@@ -144,7 +189,8 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 }
 
 /* first time registering */
-static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
+static int register_fentry(struct bpf_trampoline *tr, void *new_addr,
+			   struct bpf_trampoline_batch *batch)
 {
 	void *ip = tr->func.addr;
 	int ret;
@@ -154,9 +200,12 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 		return ret;
 	tr->func.ftrace_managed = ret;
 
-	if (tr->func.ftrace_managed)
-		ret = register_ftrace_direct((long)ip, (long)new_addr);
-	else
+	if (tr->func.ftrace_managed) {
+		if (batch)
+			ret = bpf_trampoline_batch_add(batch, (long)ip, (long)new_addr);
+		else
+			ret = register_ftrace_direct((long)ip, (long)new_addr);
+	} else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
 	return ret;
 }
@@ -185,7 +234,8 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total)
 	return tprogs;
 }
 
-static int bpf_trampoline_update(struct bpf_trampoline *tr)
+static int bpf_trampoline_update(struct bpf_trampoline *tr,
+				 struct bpf_trampoline_batch *batch)
 {
 	void *old_image = tr->image + ((tr->selector + 1) & 1) * PAGE_SIZE/2;
 	void *new_image = tr->image + (tr->selector & 1) * PAGE_SIZE/2;
@@ -230,7 +280,7 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 		err = modify_fentry(tr, old_image, new_image);
 	else
 		/* first time registering */
-		err = register_fentry(tr, new_image);
+		err = register_fentry(tr, new_image, batch);
 	if (err)
 		goto out;
 	tr->selector++;
@@ -261,7 +311,8 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 	}
 }
 
-int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr)
+int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr,
+			     struct bpf_trampoline_batch *batch)
 {
 	enum bpf_tramp_prog_type kind;
 	int err = 0;
@@ -299,7 +350,7 @@ int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr)
 	}
 	hlist_add_head(&prog->aux->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
-	err = bpf_trampoline_update(tr);
+	err = bpf_trampoline_update(tr, batch);
 	if (err) {
 		hlist_del(&prog->aux->tramp_hlist);
 		tr->progs_cnt[kind]--;
@@ -326,7 +377,7 @@ int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr)
 	}
 	hlist_del(&prog->aux->tramp_hlist);
 	tr->progs_cnt[kind]--;
-	err = bpf_trampoline_update(tr);
+	err = bpf_trampoline_update(tr, NULL);
 out:
 	mutex_unlock(&tr->mutex);
 	return err;
