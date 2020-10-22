@@ -5055,6 +5055,27 @@ static int check_direct_ip(unsigned long ip)
 	return 0;
 }
 
+static int adjust_direct_size(int new_size, struct ftrace_hash **free_hash)
+{
+	if (ftrace_hash_empty(direct_functions) ||
+	    direct_functions->count > 2 * (1 << direct_functions->size_bits)) {
+		struct ftrace_hash *new_hash;
+		int size = ftrace_hash_empty(direct_functions) ? 0 : new_size;
+
+		if (size < 32)
+			size = 32;
+
+		new_hash = dup_hash(direct_functions, size);
+		if (!new_hash)
+			return -ENOMEM;
+
+		*free_hash = direct_functions;
+		direct_functions = new_hash;
+	}
+
+	return 0;
+}
+
 /**
  * register_ftrace_direct - Call a custom trampoline directly
  * @ip: The address of the nop at the beginning of a function
@@ -5086,22 +5107,8 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 		goto out_unlock;
 
 	ret = -ENOMEM;
-	if (ftrace_hash_empty(direct_functions) ||
-	    direct_functions->count > 2 * (1 << direct_functions->size_bits)) {
-		struct ftrace_hash *new_hash;
-		int size = ftrace_hash_empty(direct_functions) ? 0 :
-			direct_functions->count + 1;
-
-		if (size < 32)
-			size = 32;
-
-		new_hash = dup_hash(direct_functions, size);
-		if (!new_hash)
-			goto out_unlock;
-
-		free_hash = direct_functions;
-		direct_functions = new_hash;
-	}
+	if (adjust_direct_size(direct_functions->count + 1, &free_hash))
+		goto out_unlock;
 
 	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
