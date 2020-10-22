@@ -10874,6 +10874,47 @@ out_clean:
 	return ret;
 }
 
+static int detach_trace_batch(struct bpf_object_skeleton *s)
+{
+	int *in_fds, *out_fds, cnt;
+	int i, ret = -ENOMEM;
+
+	in_fds = calloc(s->prog_cnt, sizeof(in_fds[0]));
+	out_fds = calloc(s->prog_cnt, sizeof(out_fds[0]));
+	if (!in_fds || !out_fds)
+		goto out_clean;
+
+	for (cnt = 0, i = 0; i < s->prog_cnt; i++) {
+		struct bpf_program *prog = *s->progs[i].prog;
+		struct bpf_link **link = s->progs[i].link;
+
+		if (!is_trampoline(prog))
+			continue;
+		in_fds[cnt++] = (*link)->fd;
+	}
+
+	ret = bpf_trampoline_batch_detach(in_fds, out_fds, cnt);
+	if (ret)
+		goto out_clean;
+
+	for (i = 0; i < s->prog_cnt; i++) {
+		struct bpf_program *prog = *s->progs[i].prog;
+		struct bpf_link **link = s->progs[i].link;
+
+		if (!is_trampoline(prog))
+			continue;
+
+		bpf_link__disconnect(*link);
+		bpf_link__destroy(*link);
+		*link = NULL;
+	}
+
+out_clean:
+	free(in_fds);
+	free(out_fds);
+	return ret;
+}
+
 int bpf_object__attach_skeleton(struct bpf_object_skeleton *s)
 {
 	struct bpf_object *obj = *s->obj;
@@ -10914,10 +10955,19 @@ int bpf_object__attach_skeleton(struct bpf_object_skeleton *s)
 
 void bpf_object__detach_skeleton(struct bpf_object_skeleton *s)
 {
+	struct bpf_object *obj = *s->obj;
 	int i;
 
+	if (obj->trampoline_attach_batch)
+		detach_trace_batch(s);
+
 	for (i = 0; i < s->prog_cnt; i++) {
+		struct bpf_program *prog = *s->progs[i].prog;
 		struct bpf_link **link = s->progs[i].link;
+
+		/* Program was attached via batch mode. */
+		if (obj->trampoline_attach_batch && is_trampoline(prog))
+			continue;
 
 		bpf_link__destroy(*link);
 		*link = NULL;

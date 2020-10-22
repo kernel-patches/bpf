@@ -337,4 +337,5 @@ LIBBPF_0.2.0 {
 		perf_buffer__consume_buffer;
 		xsk_socket__create_shared;
 		bpf_trampoline_batch_attach;
+		bpf_trampoline_batch_detach;
 } LIBBPF_0.1.0;
