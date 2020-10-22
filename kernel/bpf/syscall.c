@@ -2505,7 +2505,7 @@ static void bpf_tracing_link_release(struct bpf_link *link)
 		container_of(link, struct bpf_tracing_link, link);
 
 	WARN_ON_ONCE(bpf_trampoline_unlink_prog(link->prog,
-						tr_link->trampoline));
+						tr_link->trampoline, NULL));
 
 	bpf_trampoline_put(tr_link->trampoline);
 
@@ -2940,10 +2940,33 @@ static int bpf_trampoline_batch(const union bpf_attr *attr, int cmd)
 				goto out_clean;
 
 			out[i] = fd;
+		} else {
+			struct bpf_tracing_link *tr_link;
+			struct bpf_link *link;
+
+			link = bpf_link_get_from_fd(in[i]);
+			if (IS_ERR(link)) {
+				ret = PTR_ERR(link);
+				goto out_clean;
+			}
+
+			if (link->type != BPF_LINK_TYPE_TRACING) {
+				ret = -EINVAL;
+				bpf_link_put(link);
+				goto out_clean;
+			}
+
+			tr_link = container_of(link, struct bpf_tracing_link, link);
+			bpf_trampoline_unlink_prog(link->prog, tr_link->trampoline, batch);
+			bpf_link_put(link);
 		}
 	}
 
-	ret = register_ftrace_direct_ips(batch->ips, batch->addrs, batch->idx);
+	if (cmd == BPF_TRAMPOLINE_BATCH_ATTACH)
+		ret = register_ftrace_direct_ips(batch->ips, batch->addrs, batch->idx);
+	else
+		ret = unregister_ftrace_direct_ips(batch->ips, batch->addrs, batch->idx);
+
 	if (!ret)
 		WARN_ON_ONCE(copy_to_user(uout, out, count * sizeof(u32)));
 
@@ -4515,6 +4538,7 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		err = bpf_raw_tracepoint_open(&attr);
 		break;
 	case BPF_TRAMPOLINE_BATCH_ATTACH:
+	case BPF_TRAMPOLINE_BATCH_DETACH:
 		err = bpf_trampoline_batch(&attr, cmd);
 		break;
 	case BPF_BTF_LOAD:

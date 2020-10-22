@@ -653,7 +653,8 @@ static __always_inline unsigned int bpf_dispatcher_nop_func(
 #ifdef CONFIG_BPF_JIT
 int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr,
 			     struct bpf_trampoline_batch *batch);
-int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr);
+int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr,
+			       struct bpf_trampoline_batch *batch);
 struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);

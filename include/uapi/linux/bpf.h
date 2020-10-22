@@ -126,6 +126,7 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TRAMPOLINE_BATCH_ATTACH,
+	BPF_TRAMPOLINE_BATCH_DETACH,
 };
 
 enum bpf_map_type {
@@ -632,7 +633,7 @@ union bpf_attr {
 		__u32 prog_fd;
 	} raw_tracepoint;
 
-	struct { /* anonymous struct used by BPF_TRAMPOLINE_BATCH_ATTACH */
+	struct { /* anonymous struct used by BPF_TRAMPOLINE_BATCH_* */
 		__aligned_u64	in;
 		__aligned_u64	out;
 		__u32		count;

@@ -164,14 +164,18 @@ static int is_ftrace_location(void *ip)
 	return 1;
 }
 
-static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
+static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr,
+			     struct bpf_trampoline_batch *batch)
 {
 	void *ip = tr->func.addr;
 	int ret;
 
-	if (tr->func.ftrace_managed)
-		ret = unregister_ftrace_direct((long)ip, (long)old_addr);
-	else
+	if (tr->func.ftrace_managed) {
+		if (batch)
+			ret = bpf_trampoline_batch_add(batch, (long)ip, (long)old_addr);
+		else
+			ret = unregister_ftrace_direct((long)ip, (long)old_addr);
+	} else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
 	return ret;
 }
@@ -248,7 +252,7 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr,
 		return PTR_ERR(tprogs);
 
 	if (total == 0) {
-		err = unregister_fentry(tr, old_image);
+		err = unregister_fentry(tr, old_image, batch);
 		tr->selector = 0;
 		goto out;
 	}
@@ -361,13 +365,16 @@ out:
 }
 
 /* bpf_trampoline_unlink_prog() should never fail. */
-int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr)
+int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr,
+			       struct bpf_trampoline_batch *batch)
 {
 	enum bpf_tramp_prog_type kind;
-	int err;
+	int err = 0;
 
 	kind = bpf_attach_type_to_tramp(prog);
 	mutex_lock(&tr->mutex);
+	if (hlist_unhashed(&prog->aux->tramp_hlist))
+		goto out;
 	if (kind == BPF_TRAMP_REPLACE) {
 		WARN_ON_ONCE(!tr->extension_prog);
 		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_JUMP,
@@ -375,9 +382,9 @@ int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr)
 		tr->extension_prog = NULL;
 		goto out;
 	}
-	hlist_del(&prog->aux->tramp_hlist);
+	hlist_del_init(&prog->aux->tramp_hlist);
 	tr->progs_cnt[kind]--;
-	err = bpf_trampoline_update(tr, NULL);
+	err = bpf_trampoline_update(tr, batch);
 out:
 	mutex_unlock(&tr->mutex);
 	return err;
