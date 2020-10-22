@@ -5374,6 +5374,57 @@ int unregister_ftrace_direct(unsigned long ip, unsigned long addr)
 }
 EXPORT_SYMBOL_GPL(unregister_ftrace_direct);
 
+int unregister_ftrace_direct_ips(unsigned long *ips, unsigned long *addrs,
+				 int count)
+{
+	struct ftrace_direct_func *direct;
+	struct ftrace_func_entry *entry;
+	int i, del = 0, ret = -ENODEV;
+
+	mutex_lock(&direct_mutex);
+
+	for (i = 0; i < count; i++) {
+		entry = find_direct_entry(&ips[i], NULL);
+		if (!entry)
+			goto out_unlock;
+		del++;
+	}
+
+	if (direct_functions->count - del == 0)
+		unregister_ftrace_function(&direct_ops);
+
+	ret = ftrace_set_filter_ips(&direct_ops, ips, count, 1);
+
+	WARN_ON(ret);
+
+	for (i = 0; i < count; i++) {
+		entry = __ftrace_lookup_ip(direct_functions, ips[i]);
+		if (WARN_ON(!entry))
+			continue;
+
+		remove_hash_entry(direct_functions, entry);
+
+		direct = ftrace_find_direct_func(addrs[i]);
+		if (!WARN_ON(!direct)) {
+			/* This is the good path (see the ! before WARN) */
+			direct->count--;
+			WARN_ON(direct->count < 0);
+			if (!direct->count) {
+				list_del_rcu(&direct->next);
+				synchronize_rcu_tasks();
+				kfree(direct);
+				kfree(entry);
+				ftrace_direct_func_count--;
+			}
+		}
+	}
+ out_unlock:
+	mutex_unlock(&direct_mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(unregister_ftrace_direct_ips);
+
 static struct ftrace_ops stub_ops = {
 	.func		= ftrace_stub,
 };
