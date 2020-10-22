@@ -4978,10 +4978,58 @@ ftrace_set_hash(struct ftrace_ops *ops, unsigned char *buf, int len,
 }
 
 static int
+ftrace_set_hash_ips(struct ftrace_ops *ops, unsigned long *ips,
+		    int count, int remove, int enable)
+{
+	struct ftrace_hash **orig_hash;
+	struct ftrace_hash *hash;
+	int ret, i;
+
+	if (unlikely(ftrace_disabled))
+		return -ENODEV;
+
+	mutex_lock(&ops->func_hash->regex_lock);
+
+	if (enable)
+		orig_hash = &ops->func_hash->filter_hash;
+	else
+		orig_hash = &ops->func_hash->notrace_hash;
+
+	hash = alloc_and_copy_ftrace_hash(FTRACE_HASH_DEFAULT_BITS, *orig_hash);
+	if (!hash) {
+		ret = -ENOMEM;
+		goto out_regex_unlock;
+	}
+
+	for (i = 0; i < count; i++) {
+		ret = ftrace_match_addr(hash, ips[i], remove);
+		if (ret < 0)
+			goto out_regex_unlock;
+	}
+
+	mutex_lock(&ftrace_lock);
+	ret = ftrace_hash_move_and_update_ops(ops, orig_hash, hash, enable);
+	mutex_unlock(&ftrace_lock);
+
+ out_regex_unlock:
+	mutex_unlock(&ops->func_hash->regex_lock);
+
+	free_ftrace_hash(hash);
+	return ret;
+}
+
+static int
 ftrace_set_addr(struct ftrace_ops *ops, unsigned long ip, int remove,
 		int reset, int enable)
 {
 	return ftrace_set_hash(ops, NULL, 0, ip, remove, reset, enable);
+}
+
+static int
+ftrace_set_addrs(struct ftrace_ops *ops, unsigned long *ips,
+		 int count, int remove, int enable)
+{
+	return ftrace_set_hash_ips(ops, ips, count, remove, enable);
 }
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
@@ -5394,6 +5442,14 @@ int ftrace_set_filter_ip(struct ftrace_ops *ops, unsigned long ip,
 	return ftrace_set_addr(ops, ip, remove, reset, 1);
 }
 EXPORT_SYMBOL_GPL(ftrace_set_filter_ip);
+
+int ftrace_set_filter_ips(struct ftrace_ops *ops, unsigned long *ips,
+			 int count, int remove)
+{
+	ftrace_ops_init(ops);
+	return ftrace_set_addrs(ops, ips, count, remove, 1);
+}
+EXPORT_SYMBOL_GPL(ftrace_set_filter_ips);
 
 /**
  * ftrace_ops_set_global_filter - setup ops to use global filters
