@@ -5025,6 +5025,36 @@ struct ftrace_direct_func *ftrace_find_direct_func(unsigned long addr)
 	return NULL;
 }
 
+static int check_direct_ip(unsigned long ip)
+{
+	struct dyn_ftrace *rec;
+
+	/* See if there's a direct function at @ip already */
+	if (ftrace_find_rec_direct(ip))
+		return -EBUSY;
+
+	rec = lookup_rec(ip, ip);
+	if (!rec)
+		return -ENODEV;
+
+	/*
+	 * Check if the rec says it has a direct call but we didn't
+	 * find one earlier?
+	 */
+	if (WARN_ON(rec->flags & FTRACE_FL_DIRECT))
+		return -ENODEV;
+
+	/* Make sure the ip points to the exact record */
+	if (ip != rec->ip) {
+		ip = rec->ip;
+		/* Need to check this ip for a direct. */
+		if (ftrace_find_rec_direct(ip))
+			return -EBUSY;
+	}
+
+	return 0;
+}
+
 /**
  * register_ftrace_direct - Call a custom trampoline directly
  * @ip: The address of the nop at the beginning of a function
@@ -5047,34 +5077,13 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 	struct ftrace_direct_func *direct;
 	struct ftrace_func_entry *entry;
 	struct ftrace_hash *free_hash = NULL;
-	struct dyn_ftrace *rec;
 	int ret = -EBUSY;
 
 	mutex_lock(&direct_mutex);
 
-	/* See if there's a direct function at @ip already */
-	if (ftrace_find_rec_direct(ip))
+	ret = check_direct_ip(ip);
+	if (ret)
 		goto out_unlock;
-
-	ret = -ENODEV;
-	rec = lookup_rec(ip, ip);
-	if (!rec)
-		goto out_unlock;
-
-	/*
-	 * Check if the rec says it has a direct call but we didn't
-	 * find one earlier?
-	 */
-	if (WARN_ON(rec->flags & FTRACE_FL_DIRECT))
-		goto out_unlock;
-
-	/* Make sure the ip points to the exact record */
-	if (ip != rec->ip) {
-		ip = rec->ip;
-		/* Need to check this ip for a direct. */
-		if (ftrace_find_rec_direct(ip))
-			goto out_unlock;
-	}
 
 	ret = -ENOMEM;
 	if (ftrace_hash_empty(direct_functions) ||
