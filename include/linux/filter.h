@@ -342,7 +342,7 @@ static inline bool insn_is_zext(const struct bpf_insn *insn)
 /* Function call */
 
 #define BPF_CAST_CALL(x)					\
-		((u64 (*)(u64, u64, u64, u64, u64))(x))
+		((u64 (*)(u64, u64, u64, u64, u64))(uintptr_t)(x))
 
 #define BPF_EMIT_CALL(FUNC)					\
 	((struct bpf_insn) {					\
