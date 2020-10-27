@@ -5593,6 +5593,122 @@ static const struct bpf_func_proto bpf_skb_fib_lookup_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
+static int __bpf_lookup_mtu(struct net_device *dev_curr, u32 ifindex, u64 flags)
+{
+	struct net *netns = dev_net(dev_curr);
+	struct net_device *dev;
+	int mtu;
+
+	/* Non-redirect use-cases can use ifindex=0 and save ifindex lookup */
+	if (ifindex == 0)
+		dev = dev_curr;
+	else
+		dev = dev_get_by_index_rcu(netns, ifindex);
+
+	if (!dev)
+		return -ENODEV;
+
+	/* XDP+TC len is L2: Add L2-header as dev MTU is L3 size */
+	mtu = dev->mtu + dev->hard_header_len;
+
+	/*  Same relax as xdp_ok_fwd_dev() and is_skb_forwardable() */
+	if (flags & BPF_MTU_CHK_RELAX)
+		mtu += VLAN_HLEN;
+
+	return mtu;
+}
+
+BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
+	   u32, ifindex, u32 *, mtu_result, s32, len_diff, u64, flags)
+{
+	int ret = BPF_MTU_CHK_RET_FRAG_NEEDED;
+	struct net_device *dev = skb->dev;
+	int len = skb->len;
+	int mtu;
+
+	if (flags & ~(BPF_MTU_CHK_RELAX | BPF_MTU_CHK_SEGS))
+		return -EINVAL;
+
+	mtu = __bpf_lookup_mtu(dev, ifindex, flags);
+	if (unlikely(mtu < 0))
+		return mtu; /* errno */
+
+	len += len_diff; /* len_diff can be negative, minus result pass check */
+	if (len <= mtu) {
+		ret = BPF_MTU_CHK_RET_SUCCESS;
+		goto out;
+	}
+	/* At this point, skb->len exceed MTU, but as it include length of all
+	 * segments, and SKB can get re-segmented in transmit path (see
+	 * validate_xmit_skb), we cannot reject MTU-check for GSO packets.
+	 */
+	if (skb_is_gso(skb)) {
+		ret = BPF_MTU_CHK_RET_SUCCESS;
+
+		/* SKB could get dropped later due to segs > MTU or lacking
+		 * features, thus allow BPF-prog to validate segs length here.
+		 */
+		if (flags & BPF_MTU_CHK_SEGS &&
+		    skb_gso_validate_network_len(skb, mtu)) {
+			ret = BPF_MTU_CHK_RET_SEGS_TOOBIG;
+			goto out;
+		}
+	}
+out:
+	if (mtu_result)
+		*mtu_result = mtu;
+
+	return ret;
+}
+
+BPF_CALL_5(bpf_xdp_check_mtu, struct xdp_buff *, xdp,
+	   u32, ifindex, u32 *, mtu_result, s32, len_diff, u64, flags)
+{
+	struct net_device *dev = xdp->rxq->dev;
+	int len = xdp->data_end - xdp->data;
+	int ret = BPF_MTU_CHK_RET_SUCCESS;
+	int mtu;
+
+	/* XDP variant doesn't support multi-buffer segment check (yet) */
+	if (flags & ~BPF_MTU_CHK_RELAX)
+		return -EINVAL;
+
+	mtu = __bpf_lookup_mtu(dev, ifindex, flags);
+	if (unlikely(mtu < 0))
+		return mtu; /* errno */
+
+	len += len_diff; /* len_diff can be negative, minus result pass check */
+	if (len > mtu)
+		ret = BPF_MTU_CHK_RET_FRAG_NEEDED;
+
+	if (mtu_result)
+		*mtu_result = mtu;
+
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_skb_check_mtu_proto = {
+	.func		= bpf_skb_check_mtu,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_PTR_TO_MEM,
+	.arg4_type      = ARG_ANYTHING,
+	.arg5_type      = ARG_ANYTHING,
+};
+
+static const struct bpf_func_proto bpf_xdp_check_mtu_proto = {
+	.func		= bpf_xdp_check_mtu,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_PTR_TO_MEM,
+	.arg4_type      = ARG_ANYTHING,
+	.arg5_type      = ARG_ANYTHING,
+};
+
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 static int bpf_push_seg6_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len)
 {
@@ -7158,6 +7274,8 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_socket_uid_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_skb_fib_lookup_proto;
+	case BPF_FUNC_check_mtu:
+		return &bpf_skb_check_mtu_proto;
 	case BPF_FUNC_sk_fullsock:
 		return &bpf_sk_fullsock_proto;
 	case BPF_FUNC_sk_storage_get:
@@ -7227,6 +7345,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_adjust_tail_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
+	case BPF_FUNC_check_mtu:
+		return &bpf_xdp_check_mtu_proto;
 #ifdef CONFIG_INET
 	case BPF_FUNC_sk_lookup_udp:
 		return &bpf_xdp_sk_lookup_udp_proto;

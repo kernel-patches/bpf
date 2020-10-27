@@ -3745,6 +3745,63 @@ union bpf_attr {
  * 	Return
  * 		The helper returns **TC_ACT_REDIRECT** on success or
  * 		**TC_ACT_SHOT** on error.
+ *
+ * int bpf_check_mtu(void *ctx, u32 ifindex, u32 *mtu_result, s32 len_diff, u64 flags)
+ *	Description
+ *		Check ctx packet size against MTU of net device (based on
+ *		*ifindex*).  This helper will likely be used in combination with
+ *		helpers that adjust/change the packet size.  The argument
+ *		*len_diff* can be used for querying with a planned size
+ *		change. This allows to check MTU prior to changing packet ctx.
+ *
+ *		Specifying *ifindex* zero means the MTU check is performed
+ *		against the current net device.  This is practical if this isn't
+ *		used prior to redirect.
+ *
+ *		The Linux kernel route table can configure MTUs on a more
+ *		specific per route level, which is not provided by this helper.
+ *		For route level MTU checks use the **bpf_fib_lookup**\ ()
+ *		helper.
+ *
+ *		*ctx* is either **struct xdp_md** for XDP programs or
+ *		**struct sk_buff** for tc cls_act programs.
+ *
+ *		The *flags* argument can be a combination of one or more of the
+ *		following values:
+ *
+ *              **BPF_MTU_CHK_RELAX**
+ *			This flag relax or increase the MTU with room for one
+ *			VLAN header (4 bytes). This relaxation is also used by
+ *			the kernels own forwarding MTU checks.
+ *
+ *		**BPF_MTU_CHK_SEGS**
+ *			This flag will only works for *ctx* **struct sk_buff**.
+ *			If packet context contains extra packet segment buffers
+ *			(often knows as GSO skb), then MTU check is partly
+ *			skipped, because in transmit path it is possible for the
+ *			skb packet to get re-segmented (depending on net device
+ *			features).  This could still be a MTU violation, so this
+ *			flag enables performing MTU check against segments, with
+ *			a different violation return code to tell it apart.
+ *
+ *		The *mtu_result* pointer contains the MTU value of the net
+ *		device including the L2 header size (usually 14 bytes Ethernet
+ *		header). The net device configured MTU is the L3 size, but as
+ *		XDP and TX length operate at L2 this helper include L2 header
+ *		size in reported MTU.
+ *
+ *	Return
+ *		* 0 on success, and populate MTU value in *mtu_result* pointer.
+ *
+ *		* < 0 if any input argument is invalid (*mtu_result* not updated)
+ *
+ *		MTU violations return positive values, but also populate MTU
+ *		value in *mtu_result* pointer, as this can be needed for
+ *		implementing PMTU handing:
+ *
+ *		* **BPF_MTU_CHK_RET_FRAG_NEEDED**
+ *		* **BPF_MTU_CHK_RET_SEGS_TOOBIG**
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3903,6 +3960,7 @@ union bpf_attr {
 	FN(bpf_per_cpu_ptr),            \
 	FN(bpf_this_cpu_ptr),		\
 	FN(redirect_peer),		\
+	FN(check_mtu),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4925,6 +4983,18 @@ struct bpf_redir_neigh {
 		__be32		ipv4_nh;
 		__u32		ipv6_nh[4];  /* in6_addr; network order */
 	};
+};
+
+/* bpf_check_mtu flags*/
+enum  bpf_check_mtu_flags {
+	BPF_MTU_CHK_RELAX = (1U << 0),
+	BPF_MTU_CHK_SEGS  = (1U << 1),
+};
+
+enum bpf_check_mtu_ret {
+	BPF_MTU_CHK_RET_SUCCESS,      /* check and lookup successful */
+	BPF_MTU_CHK_RET_FRAG_NEEDED,  /* fragmentation required to fwd */
+	BPF_MTU_CHK_RET_SEGS_TOOBIG,  /* GSO re-segmentation needed to fwd */
 };
 
 enum bpf_task_fd_type {
