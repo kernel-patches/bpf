@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-y := core.o
-CFLAGS_core.o += $(call cc-disable-warning, override-init)
+# ___bpf_prog_run() needs GCSE disabled on x86; see 3193c0836f203 for details
+cflags-core-$(CONFIG_X86) := -fno-gcse
+CFLAGS_core.o += $(call cc-disable-warning, override-init) $(cflags-core-y)
 
 obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o helpers.o tnum.o bpf_iter.o map_iter.o task_iter.o prog_iter.o
 obj-$(CONFIG_BPF_SYSCALL) += hashtab.o arraymap.o percpu_freelist.o bpf_lru_list.o lpm_trie.o map_in_map.o
