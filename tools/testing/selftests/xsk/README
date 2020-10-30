@@ -1,0 +1,72 @@
+Copyright (c) 2020 Intel Corporation, Weqaar Janjua <weqaar.a.janjua@intel.com>
+
+AF_XDP selftests based on veth
+
+# End-to-end AF_XDP over Veth test
+#
+# Topology:
+# ---------
+#                 -----------
+#               _ | Process | _
+#              /  -----------  \
+#             /        |        \
+#            /         |         \
+#      -----------     |     -----------
+#      | Thread1 |     |     | Thread2 |
+#      -----------     |     -----------
+#           |          |          |
+#      -----------     |     -----------
+#      |  xskX   |     |     |  xskY   |
+#      -----------     |     -----------
+#           |          |          |
+#      -----------     |     ----------
+#      |  vethX  | --------- |  vethY |
+#      -----------   peer    ----------
+#           |          |          |
+#      namespaceX      |     namespaceY
+
+AF_XDP is an address family optimized for high performance packet processing,
+it is XDP’s user-space interface.
+
+An AF_XDP socket is linked to a single UMEM which is a region of virtual
+contiguous memory, divided into equal-sized frames.
+
+Refer to AF_XDP Kernel Documentation for detailed information:
+https://www.kernel.org/doc/html/latest/networking/af_xdp.html
+
+Prerequisites setup by script TEST_PREREQUISITES.sh:
+
+   Set up veth interfaces as per the topology shown ^^:
+   * setup two veth interfaces and one namespace
+   ** veth<xxxx> in root namespace
+   ** veth<yyyy> in af_xdp<xxxx> namespace
+   ** namespace af_xdp<xxxx>
+   * create a spec file veth.spec that includes this run-time configuration
+     that is read by test scripts - filenames prefixed with TEST_XSK_
+   *** xxxx and yyyy are randomly generated 4 digit numbers used to avoid
+       conflict with any existing interface
+
+Kernel configuration:
+---------------------
+See "config" file for recommended kernel config options.
+
+Turn on XDP sockets and veth support when compiling i.e.
+	Networking support -->
+		Networking options -->
+			[ * ] XDP sockets
+
+Executing Tests:
+----------------
+Must run with CAP_NET_ADMIN capability.
+
+Run (summary only):
+  sudo make summary=1 run_tests
+
+Run (full color-coded output):
+  sudo make colorconsole=1 run_tests
+
+Run (full output without color-coding):
+  sudo make run_tests
+
+Clean:
+  make clean

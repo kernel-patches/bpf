@@ -67,6 +67,7 @@ TARGETS += tpm2
 TARGETS += user
 TARGETS += vm
 TARGETS += x86
+TARGETS += xsk
 TARGETS += zram
 #Please keep the TARGETS list alphabetically sorted
 # Run "make quicktest=1 run_tests" or
