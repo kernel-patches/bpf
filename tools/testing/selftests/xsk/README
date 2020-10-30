@@ -66,6 +66,10 @@ The following tests are run:
    c. Socket Teardown
       Create a Tx and a Rx socket, Tx from one socket, Rx on another. Destroy
       both sockets, then repeat multiple times. Only nopoll mode is used
+   d. Bi-directional sockets
+      Configure sockets as bi-directional tx/rx sockets, sets up fill and
+      completion rings on each socket, tx/rx in both directions. Only nopoll
+      mode is used
 
 2. AF_XDP DRV/Native mode
    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -74,10 +78,11 @@ The following tests are run:
    a. nopoll
    b. poll
    c. Socket Teardown
+   d. Bi-directional sockets
    * Only copy mode is supported because veth does not currently support
      zero-copy mode
 
-Total tests: 6.
+Total tests: 8.
 
 Flow:
 * Single process spawns two threads: Tx and Rx

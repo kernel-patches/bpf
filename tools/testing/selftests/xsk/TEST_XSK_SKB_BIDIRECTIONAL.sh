@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: GPL-2.0
 # Copyright(c) 2020 Intel Corporation.
 
+#Includes
 . prereqs.sh
 . xskenv.sh
 
-TEST_NAME="DRV SOCKET TEARDOWN"
+TEST_NAME="SKB BIDIRECTIONAL SOCKETS"
 
-vethXDPnative ${VETH0} ${VETH1} ${NS1}
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-N" "-T")
+params=("-S" "-B")
 execxdpxceiver params
 
 retval=$?
