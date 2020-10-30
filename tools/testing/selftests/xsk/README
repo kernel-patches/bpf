@@ -64,7 +64,16 @@ The following tests are run:
    a. nopoll - soft-irq processing
    b. poll - using poll() syscall
 
-Total tests: 2.
+2. AF_XDP DRV/Native mode
+   Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
+   packets before SKB allocation. Provides better performance than SKB. Driver
+   hook available just after DMA of buffer descriptor.
+   a. nopoll
+   b. poll
+   * Only copy mode is supported because veth does not currently support
+     zero-copy mode
+
+Total tests: 4.
 
 Flow:
 * Single process spawns two threads: Tx and Rx

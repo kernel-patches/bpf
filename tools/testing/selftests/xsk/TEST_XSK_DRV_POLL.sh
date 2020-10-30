@@ -5,14 +5,17 @@
 . prereqs.sh
 . xskenv.sh
 
-TEST_NAME="SKB POLL"
+TEST_NAME="DRV POLL"
 
-vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-S" "-p")
+params=("-N" "-p")
 execxdpxceiver params
 
 retval=$?
 test_status $retval "${TEST_NAME}"
+
+# Must be called in the last test to execute
+cleanup_exit ${VETH0} ${VETH1} ${NS1}
 
 test_exit $retval 0

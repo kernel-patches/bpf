@@ -5,11 +5,11 @@
 . prereqs.sh
 . xskenv.sh
 
-TEST_NAME="SKB POLL"
+TEST_NAME="DRV NOPOLL"
 
-vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-S" "-p")
+params=("-N")
 execxdpxceiver params
 
 retval=$?
