@@ -5,11 +5,11 @@
 . prereqs.sh
 . xskenv.sh
 
-TEST_NAME="DRV POLL"
+TEST_NAME="SKB SOCKET TEARDOWN"
 
-vethXDPnative ${VETH0} ${VETH1} ${NS1}
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-N" "-p")
+params=("-S" "-T")
 execxdpxceiver params
 
 retval=$?
