@@ -34,6 +34,10 @@ contiguous memory, divided into equal-sized frames.
 Refer to AF_XDP Kernel Documentation for detailed information:
 https://www.kernel.org/doc/html/latest/networking/af_xdp.html
 
+The test program contains two threads, each thread is single socket with
+a unique UMEM. It validates in-order packet delivery and packet content
+by sending packets to each other.
+
 Prerequisites setup by script TEST_PREREQUISITES.sh:
 
    Set up veth interfaces as per the topology shown ^^:
@@ -45,6 +49,37 @@ Prerequisites setup by script TEST_PREREQUISITES.sh:
      that is read by test scripts - filenames prefixed with TEST_XSK_
    *** xxxx and yyyy are randomly generated 4 digit numbers used to avoid
        conflict with any existing interface
+
+Tests Information:
+------------------
+These selftests test AF_XDP SKB and Native/DRV modes using veth
+Virtual Ethernet interfaces.
+
+The following tests are run:
+
+1. AF_XDP SKB mode
+   Generic mode XDP is driver independent, used when the driver does
+   not have support for XDP. Works on any netdevice using sockets and
+   generic XDP path. XDP hook from netif_receive_skb().
+   a. nopoll - soft-irq processing
+   b. poll - using poll() syscall
+
+Total tests: 2.
+
+Flow:
+* Single process spawns two threads: Tx and Rx
+* Each of these two threads attach to a veth interface within their assigned
+  namespaces
+* Each thread Creates one AF_XDP socket connected to a unique umem for each
+  veth interface
+* Tx thread Transmits 10k packets from veth<xxxx> to veth<yyyy>
+* Rx thread verifies if all 10k packets were received and delivered in-order,
+  and have the right content
+
+Enable/disable debug mode:
+--------------------------
+To enable L2 - L4 headers and payload dump of each packet on STDOUT, add
+parameter -D to params array in TEST_XSK_<TEST>.sh, i.e. params=("-S" "-D")
 
 Kernel configuration:
 ---------------------
