@@ -336,4 +336,6 @@ LIBBPF_0.2.0 {
 		perf_buffer__epoll_fd;
 		perf_buffer__consume_buffer;
 		xsk_socket__create_shared;
+		xsk_setup_xdp_prog;
+		xsk_update_xskmap;
 } LIBBPF_0.1.0;

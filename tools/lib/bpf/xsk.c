@@ -351,13 +351,8 @@ int xsk_umem__create_v0_0_2(struct xsk_umem **umem_ptr, void *umem_area,
 COMPAT_VERSION(xsk_umem__create_v0_0_2, xsk_umem__create, LIBBPF_0.0.2)
 DEFAULT_VERSION(xsk_umem__create_v0_0_4, xsk_umem__create, LIBBPF_0.0.4)
 
-static int xsk_load_xdp_prog(struct xsk_socket *xsk)
+static int get_bpf_prog(struct bpf_prog_cfg *cfg_ptr, int xsks_map_fd)
 {
-	static const int log_buf_size = 16 * 1024;
-	struct xsk_ctx *ctx = xsk->ctx;
-	char log_buf[log_buf_size];
-	int err, prog_fd;
-
 	/* This is the C-program:
 	 * SEC("xdp_sock") int xdp_sock_prog(struct xdp_md *ctx)
 	 * {
@@ -382,7 +377,7 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		/* *(u32 *)(r10 - 4) = r2 */
 		BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, -4),
 		/* r1 = xskmap[] */
-		BPF_LD_MAP_FD(BPF_REG_1, ctx->xsks_map_fd),
+		BPF_LD_MAP_FD(BPF_REG_1, xsks_map_fd),
 		/* r3 = XDP_PASS */
 		BPF_MOV64_IMM(BPF_REG_3, 2),
 		/* call bpf_redirect_map */
@@ -394,7 +389,7 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		/* r2 += -4 */
 		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, -4),
 		/* r1 = xskmap[] */
-		BPF_LD_MAP_FD(BPF_REG_1, ctx->xsks_map_fd),
+		BPF_LD_MAP_FD(BPF_REG_1, xsks_map_fd),
 		/* call bpf_map_lookup_elem */
 		BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
 		/* r1 = r0 */
@@ -406,7 +401,7 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		/* r2 = *(u32 *)(r10 - 4) */
 		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10, -4),
 		/* r1 = xskmap[] */
-		BPF_LD_MAP_FD(BPF_REG_1, ctx->xsks_map_fd),
+		BPF_LD_MAP_FD(BPF_REG_1, xsks_map_fd),
 		/* r3 = 0 */
 		BPF_MOV64_IMM(BPF_REG_3, 0),
 		/* call bpf_redirect_map */
@@ -414,17 +409,42 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		/* The jumps are to this instruction */
 		BPF_EXIT_INSN(),
 	};
-	size_t insns_cnt = sizeof(prog) / sizeof(struct bpf_insn);
 
-	prog_fd = bpf_load_program(BPF_PROG_TYPE_XDP, prog, insns_cnt,
-				   "LGPL-2.1 or BSD-2-Clause", 0, log_buf,
+	cfg_ptr->prog = malloc(sizeof(prog));
+	if (!cfg_ptr->prog)
+		return -ENOMEM;
+	memcpy(cfg_ptr->prog, prog, sizeof(prog));
+	cfg_ptr->license = "LGPL-2.1 or BSD-2-Clause";
+	cfg_ptr->insns_cnt = sizeof(prog) / sizeof(struct bpf_insn);
+
+	return 0;
+}
+
+static int xsk_load_xdp_prog(struct xsk_socket *xsk, struct bpf_prog_cfg *user_cfg)
+{
+	static const int log_buf_size = 16 * 1024;
+	struct xsk_ctx *ctx = xsk->ctx;
+	char log_buf[log_buf_size];
+	struct bpf_prog_cfg cfg;
+	int err, prog_fd;
+
+	if (user_cfg && user_cfg->insns_cnt) {
+		cfg = *user_cfg;
+	} else {
+		err = get_bpf_prog(&cfg, ctx->xsks_map_fd);
+		if (err)
+			return err;
+	}
+
+	prog_fd = bpf_load_program(BPF_PROG_TYPE_XDP, cfg.prog, cfg.insns_cnt,
+				   cfg.license, 0, log_buf,
 				   log_buf_size);
 	if (prog_fd < 0) {
 		pr_warn("BPF log buffer:\n%s", log_buf);
 		return prog_fd;
 	}
 
-	err = bpf_set_link_xdp_fd(xsk->ctx->ifindex, prog_fd,
+	err = bpf_set_link_xdp_fd(ctx->ifindex, prog_fd,
 				  xsk->config.xdp_flags);
 	if (err) {
 		close(prog_fd);
@@ -566,8 +586,43 @@ static int xsk_set_bpf_maps(struct xsk_socket *xsk)
 				   &xsk->fd, 0);
 }
 
-static int xsk_setup_xdp_prog(struct xsk_socket *xsk)
+static int xsk_create_xsk_struct(int ifindex, struct xsk_socket *xsk)
 {
+	char ifname[IFNAMSIZ];
+	struct xsk_ctx *ctx;
+	char *interface;
+	int res = -1;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx)
+		goto error_ctx;
+
+	interface = if_indextoname(ifindex, &ifname[0]);
+	if (!interface) {
+		res = -errno;
+		goto error_ifindex;
+	}
+
+	ctx->ifindex = ifindex;
+	strncpy(ctx->ifname, ifname, IFNAMSIZ - 1);
+	ctx->ifname[IFNAMSIZ - 1] = 0;
+
+	xsk->ctx = ctx;
+
+	return 0;
+
+error_ifindex:
+	free(ctx);
+error_ctx:
+	return res;
+}
+
+static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
+				struct bpf_prog_cfg *cfg,
+				bool force_set_map,
+				int *xsks_map_fd)
+{
+	struct xsk_socket *xsk = _xdp;
 	struct xsk_ctx *ctx = xsk->ctx;
 	__u32 prog_id = 0;
 	int err;
@@ -578,14 +633,17 @@ static int xsk_setup_xdp_prog(struct xsk_socket *xsk)
 		return err;
 
 	if (!prog_id) {
-		err = xsk_create_bpf_maps(xsk);
-		if (err)
-			return err;
+		if (!cfg || !cfg->insns_cnt) {
+			err = xsk_create_bpf_maps(xsk);
+			if (err)
+				return err;
+		} else {
+			ctx->xsks_map_fd = cfg->xsks_map_fd;
+		}
 
-		err = xsk_load_xdp_prog(xsk);
+		err = xsk_load_xdp_prog(xsk, cfg);
 		if (err) {
-			xsk_delete_bpf_maps(xsk);
-			return err;
+			goto err_load_xdp_prog;
 		}
 	} else {
 		ctx->prog_fd = bpf_prog_get_fd_by_id(prog_id);
@@ -598,15 +656,29 @@ static int xsk_setup_xdp_prog(struct xsk_socket *xsk)
 		}
 	}
 
-	if (xsk->rx)
+	if (xsk->rx || force_set_map) {
 		err = xsk_set_bpf_maps(xsk);
-	if (err) {
-		xsk_delete_bpf_maps(xsk);
-		close(ctx->prog_fd);
-		return err;
+		if (err) {
+			if (!prog_id) {
+				goto err_set_bpf_maps;
+			} else {
+				close(ctx->prog_fd);
+				return err;
+			}
+		}
 	}
+	if (xsks_map_fd)
+		*xsks_map_fd = ctx->xsks_map_fd;
 
 	return 0;
+
+err_set_bpf_maps:
+	close(ctx->prog_fd);
+	bpf_set_link_xdp_fd(ctx->ifindex, -1, 0);
+err_load_xdp_prog:
+	xsk_delete_bpf_maps(xsk);
+
+	return err;
 }
 
 static struct xsk_ctx *xsk_get_ctx(struct xsk_umem *umem, int ifindex,
@@ -687,6 +759,39 @@ static struct xsk_ctx *xsk_create_ctx(struct xsk_socket *xsk,
 	ctx->comp = comp;
 	list_add(&ctx->list, &umem->ctx_list);
 	return ctx;
+}
+
+static void xsk_destroy_xsk_struct(struct xsk_socket *xsk)
+{
+	free(xsk->ctx);
+	free(xsk);
+}
+
+int xsk_update_xskmap(struct xsk_socket *xsk, int fd)
+{
+	xsk->ctx->xsks_map_fd = fd;
+	return xsk_set_bpf_maps(xsk);
+}
+
+int xsk_setup_xdp_prog(int ifindex, struct bpf_prog_cfg *cfg,
+		       int *xsks_map_fd)
+{
+	struct xsk_socket *xsk;
+	int res = -1;
+
+	xsk = calloc(1, sizeof(*xsk));
+	if (!xsk)
+		return res;
+
+	res = xsk_create_xsk_struct(ifindex, xsk);
+	if (res)
+		return -EINVAL;
+
+	res = __xsk_setup_xdp_prog(xsk, cfg, false, xsks_map_fd);
+
+	xsk_destroy_xsk_struct(xsk);
+
+	return res;
 }
 
 int xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
@@ -838,7 +943,7 @@ int xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
 	ctx->prog_fd = -1;
 
 	if (!(xsk->config.libbpf_flags & XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD)) {
-		err = xsk_setup_xdp_prog(xsk);
+		err = __xsk_setup_xdp_prog(xsk, NULL, false, NULL);
 		if (err)
 			goto out_mmap_tx;
 	}

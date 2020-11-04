@@ -201,6 +201,19 @@ struct xsk_umem_config {
 	__u32 flags;
 };
 
+struct bpf_prog_cfg {
+	struct bpf_insn *prog;
+	const char *license;
+	size_t insns_cnt;
+	int xsks_map_fd;
+};
+
+LIBBPF_API int xsk_setup_xdp_prog(int ifindex,
+				  struct bpf_prog_cfg *cfg,
+				  int *xsks_map_fd);
+LIBBPF_API int xsk_update_xskmap(struct xsk_socket *xsk,
+				 int xsks_map_fd);
+
 /* Flags for the libbpf_flags field. */
 #define XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD (1 << 0)
 
