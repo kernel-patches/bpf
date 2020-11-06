@@ -1212,7 +1212,7 @@ static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
 	*btf = bpf_get_btf_vmlinux();
 
 	if (IS_ERR_OR_NULL(*btf))
-		return PTR_ERR(*btf);
+		return PTR_ERR_OR_ZERO(*btf);
 
 	if (ptr->type_id > 0)
 		*btf_id = ptr->type_id;
