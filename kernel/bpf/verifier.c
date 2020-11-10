@@ -7778,7 +7778,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return 0;
 }
 
-static int check_return_code(struct bpf_verifier_env *env)
+static int check_return_code(struct bpf_verifier_env *env, bool is_subprog)
 {
 	struct tnum enforce_attach_type_range = tnum_unknown;
 	const struct bpf_prog *prog = env->prog;
@@ -7788,10 +7788,12 @@ static int check_return_code(struct bpf_verifier_env *env)
 	int err;
 
 	/* LSM and struct_ops func-ptr's return type could be "void" */
-	if ((prog_type == BPF_PROG_TYPE_STRUCT_OPS ||
-	     prog_type == BPF_PROG_TYPE_LSM) &&
-	    !prog->aux->attach_func_proto->type)
-		return 0;
+	if (!is_subprog) {
+		if ((prog_type == BPF_PROG_TYPE_STRUCT_OPS ||
+		     prog_type == BPF_PROG_TYPE_LSM) &&
+		    !prog->aux->attach_func_proto->type)
+			return 0;
+	}
 
 	/* eBPF calling convetion is such that R0 is used
 	 * to return the value from eBPF program.
@@ -7806,6 +7808,16 @@ static int check_return_code(struct bpf_verifier_env *env)
 	if (is_pointer_value(env, BPF_REG_0)) {
 		verbose(env, "R0 leaks addr as return value\n");
 		return -EACCES;
+	}
+
+	reg = cur_regs(env) + BPF_REG_0;
+	if (is_subprog) {
+		if (reg->type != SCALAR_VALUE) {
+			verbose(env, "At subprogram exit the register R0 is not a scalar value (%s)\n",
+				reg_type_str[reg->type]);
+			return -EINVAL;
+		}
+		return 0;
 	}
 
 	switch (prog_type) {
@@ -7861,7 +7873,6 @@ static int check_return_code(struct bpf_verifier_env *env)
 		return 0;
 	}
 
-	reg = cur_regs(env) + BPF_REG_0;
 	if (reg->type != SCALAR_VALUE) {
 		verbose(env, "At program exit the register R0 is not a known value (%s)\n",
 			reg_type_str[reg->type]);
@@ -9253,6 +9264,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	bool do_print_state = false;
 	int prev_insn_idx = -1;
+	const bool is_subprog = env->cur_state->frame[0]->subprogno;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -9517,7 +9529,7 @@ static int do_check(struct bpf_verifier_env *env)
 				if (err)
 					return err;
 
-				err = check_return_code(env);
+				err = check_return_code(env, is_subprog);
 				if (err)
 					return err;
 process_bpf_exit:
