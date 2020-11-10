@@ -98,12 +98,13 @@ int main(int argc, char **argv)
 {
 	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	struct bpf_prog_load_attr prog_load_attr = {
-		.prog_type	= BPF_PROG_TYPE_XDP,
+		.prog_type	= BPF_PROG_TYPE_UNSPEC,
 	};
-	struct bpf_program *prog, *dummy_prog;
+	struct bpf_program *prog, *dummy_prog, *devmap_prog;
+	int prog_fd, dummy_prog_fd, devmap_prog_fd;
+	struct bpf_devmap_val devmap_val;
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
-	int prog_fd, dummy_prog_fd;
 	const char *optstr = "FSN";
 	struct bpf_object *obj;
 	int ret, opt, key = 0;
@@ -157,16 +158,18 @@ int main(int argc, char **argv)
 		return 1;
 
 	prog = bpf_program__next(NULL, obj);
-	dummy_prog = bpf_program__next(prog, obj);
-	if (!prog || !dummy_prog) {
+	devmap_prog = bpf_object__find_program_by_title(obj, "xdp_devmap/map_prog");
+	dummy_prog = bpf_object__find_program_by_title(obj, "xdp_redirect_dummy");
+	if (!prog || !devmap_prog || !dummy_prog) {
 		printf("finding a prog in obj file failed\n");
 		return 1;
 	}
 	/* bpf_prog_load_xattr gives us the pointer to first prog's fd,
-	 * so we're missing only the fd for dummy prog
+	 * so we're missing the fd for devmap and dummy prog
 	 */
+	devmap_prog_fd = bpf_program__fd(devmap_prog);
 	dummy_prog_fd = bpf_program__fd(dummy_prog);
-	if (prog_fd < 0 || dummy_prog_fd < 0) {
+	if (prog_fd < 0 || devmap_prog_fd < 0 || dummy_prog_fd < 0) {
 		printf("bpf_prog_load_xattr: %s\n", strerror(errno));
 		return 1;
 	}
@@ -209,7 +212,9 @@ int main(int argc, char **argv)
 	signal(SIGTERM, int_exit);
 
 	/* populate virtual to physical port map */
-	ret = bpf_map_update_elem(tx_port_map_fd, &key, &ifindex_out, 0);
+	devmap_val.bpf_prog.fd = devmap_prog_fd;
+	devmap_val.ifindex = ifindex_out;
+	ret = bpf_map_update_elem(tx_port_map_fd, &key, &devmap_val, 0);
 	if (ret) {
 		perror("bpf_update_elem");
 		goto out;
