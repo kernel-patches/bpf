@@ -40,12 +40,11 @@ static inline long do_strncpy_from_user(char *dst, const char __user *src,
 		/* Fall back to byte-at-a-time if we get a page fault */
 		unsafe_get_user(c, (unsigned long __user *)(src+res), byte_at_a_time);
 
+		if (has_zero(c, &data, &constants))
+			goto byte_at_a_time;
+
 		*(unsigned long *)(dst+res) = c;
-		if (has_zero(c, &data, &constants)) {
-			data = prep_zero_mask(c, data, &constants);
-			data = create_zero_mask(data);
-			return res + find_zero(data);
-		}
+
 		res += sizeof(unsigned long);
 		max -= sizeof(unsigned long);
 	}
