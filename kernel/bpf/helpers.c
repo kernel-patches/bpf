@@ -14,6 +14,7 @@
 #include <linux/jiffies.h>
 #include <linux/pid_namespace.h>
 #include <linux/proc_ns.h>
+#include <linux/sched/mm.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -41,11 +42,45 @@ const struct bpf_func_proto bpf_map_lookup_elem_proto = {
 	.arg2_type	= ARG_PTR_TO_MAP_KEY,
 };
 
+#ifdef CONFIG_MEMCG_KMEM
+static __always_inline int __bpf_map_update_elem(struct bpf_map *map, void *key,
+						 void *value, u64 flags)
+{
+	struct mem_cgroup *old_memcg;
+	bool in_interrupt;
+	int ret;
+
+	/*
+	 * If update from an interrupt context results in a memory allocation,
+	 * the memory cgroup to charge can't be determined from the context
+	 * of the current task. Instead, we charge the memory cgroup, which
+	 * contained a process created the map.
+	 */
+	in_interrupt = in_interrupt();
+	if (in_interrupt)
+		old_memcg = set_active_memcg(map->memcg);
+
+	ret = map->ops->map_update_elem(map, key, value, flags);
+
+	if (in_interrupt)
+		set_active_memcg(old_memcg);
+
+	return ret;
+}
+#else
+static __always_inline int __bpf_map_update_elem(struct bpf_map *map, void *key,
+						 void *value, u64 flags)
+{
+	return map->ops->map_update_elem(map, key, value, flags);
+}
+#endif
+
 BPF_CALL_4(bpf_map_update_elem, struct bpf_map *, map, void *, key,
 	   void *, value, u64, flags)
 {
 	WARN_ON_ONCE(!rcu_read_lock_held());
-	return map->ops->map_update_elem(map, key, value, flags);
+
+	return __bpf_map_update_elem(map, key, value, flags);
 }
 
 const struct bpf_func_proto bpf_map_update_elem_proto = {
