@@ -28,7 +28,8 @@ static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
 	struct xsk_map_node *node;
 	int err;
 
-	node = kzalloc(sizeof(*node), GFP_ATOMIC | __GFP_NOWARN);
+	node = kzalloc(sizeof(*node),
+		       GFP_ATOMIC | __GFP_NOWARN | __GFP_ACCOUNT);
 	if (!node)
 		return ERR_PTR(-ENOMEM);
 
