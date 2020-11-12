@@ -17,6 +17,8 @@
 #include <linux/error-injection.h>
 #include <linux/btf_ids.h>
 
+#include <net/bpf_sk_storage.h>
+
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/btf.h>
 
@@ -1750,6 +1752,14 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		       NULL;
 	case BPF_FUNC_d_path:
 		return &bpf_d_path_proto;
+	case BPF_FUNC_sk_storage_get:
+		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		       &bpf_sk_storage_get_proto :
+		       NULL;
+	case BPF_FUNC_sk_storage_delete:
+		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		       &bpf_sk_storage_delete_proto :
+		       NULL;
 	default:
 		return raw_tp_prog_func_proto(func_id, prog);
 	}
