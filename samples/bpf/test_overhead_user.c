@@ -125,12 +125,10 @@ static void unload_progs(void)
 
 int main(int argc, char **argv)
 {
-	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	char filename[256];
 	int num_cpu = 8;
 	int test_flags = ~0;
 
-	setrlimit(RLIMIT_MEMLOCK, &r);
 
 	if (argc > 1)
 		test_flags = atoi(argv[1]) ? : test_flags;

@@ -290,16 +290,11 @@ static int test_debug_fs_uprobe(char *binary_path, long offset, bool is_return)
 
 int main(int argc, char **argv)
 {
-	struct rlimit r = {1024*1024, RLIM_INFINITY};
 	extern char __executable_start;
 	char filename[256], buf[256];
 	__u64 uprobe_file_offset;
 
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-	if (setrlimit(RLIMIT_MEMLOCK, &r)) {
-		perror("setrlimit(RLIMIT_MEMLOCK)");
-		return 1;
-	}
 
 	if (load_kallsyms()) {
 		printf("failed to process /proc/kallsyms\n");
