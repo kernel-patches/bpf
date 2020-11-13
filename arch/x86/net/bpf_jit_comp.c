@@ -1972,6 +1972,8 @@ struct x64_jit_data {
 	struct jit_context ctx;
 };
 
+#define MAX_JIT_PASSES 20
+
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	struct bpf_binary_header *header = NULL;
@@ -2042,7 +2044,7 @@ skip_init_addrs:
 	 * may converge on the last pass. In such case do one more
 	 * pass to emit the final image.
 	 */
-	for (pass = 0; pass < 20 || image; pass++) {
+	for (pass = 0; pass < MAX_JIT_PASSES || image; pass++) {
 		proglen = do_jit(prog, addrs, image, oldproglen, &ctx);
 		if (proglen <= 0) {
 out_image:
@@ -2054,13 +2056,22 @@ out_image:
 		}
 		if (image) {
 			if (proglen != oldproglen) {
+#ifdef CONFIG_BPF_JIT_ALWAYS_ON
+				pr_warn("bpf_jit: proglen=%d != oldproglen=%d pass=%d\n",
+					proglen, oldproglen, pass);
+#else
 				pr_err("bpf_jit: proglen=%d != oldproglen=%d\n",
 				       proglen, oldproglen);
 				goto out_image;
+#endif
 			}
 			break;
 		}
+#ifdef CONFIG_BPF_JIT_ALWAYS_ON
+		if (proglen == oldproglen || pass >= (MAX_JIT_PASSES - 1)) {
+#else
 		if (proglen == oldproglen) {
+#endif
 			/*
 			 * The number of entries in extable is the number of BPF_LDX
 			 * insns that access kernel memory via "pointer to BTF type".
