@@ -9668,6 +9668,10 @@ static int perf_event_set_bpf_handler(struct perf_event *event, u32 prog_fd)
 	if (event->prog)
 		return -EEXIST;
 
+	if (event->attr.type == PERF_TYPE_SOFTWARE &&
+	    event->attr.config == PERF_COUNT_SW_DUMMY)
+		return -EOPNOTSUPP;
+
 	prog = bpf_prog_get_type(prog_fd, BPF_PROG_TYPE_PERF_EVENT);
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
