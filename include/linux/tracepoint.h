@@ -12,6 +12,7 @@
  * Heavily inspired from the Linux Kernel Markers.
  */
 
+#include <linux/gfp.h>
 #include <linux/smp.h>
 #include <linux/srcu.h>
 #include <linux/errno.h>
@@ -41,7 +42,8 @@ extern int
 tracepoint_probe_register_prio(struct tracepoint *tp, void *probe, void *data,
 			       int prio);
 extern int
-tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data);
+tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data,
+			    gfp_t flags);
 extern void
 for_each_kernel_tracepoint(void (*fct)(struct tracepoint *tp, void *priv),
 		void *priv);
@@ -267,7 +269,8 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 	unregister_trace_##name(void (*probe)(data_proto), void *data)	\
 	{								\
 		return tracepoint_probe_unregister(&__tracepoint_##name,\
-						(void *)probe, data);	\
+						(void *)probe, data,	\
+						GFP_KERNEL);		\
 	}								\
 	static inline void						\
 	check_trace_callback_type_##name(void (*cb)(data_proto))	\

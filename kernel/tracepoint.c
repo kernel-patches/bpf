@@ -53,10 +53,9 @@ struct tp_probes {
 	struct tracepoint_func probes[];
 };
 
-static inline void *allocate_probes(int count)
+static inline void *allocate_probes(int count, gfp_t flags)
 {
-	struct tp_probes *p  = kmalloc(struct_size(p, probes, count),
-				       GFP_KERNEL);
+	struct tp_probes *p  = kmalloc(struct_size(p, probes, count), flags);
 	return p == NULL ? NULL : p->probes;
 }
 
@@ -150,7 +149,7 @@ func_add(struct tracepoint_func **funcs, struct tracepoint_func *tp_func,
 		}
 	}
 	/* + 2 : one for new probe, one for NULL func */
-	new = allocate_probes(nr_probes + 2);
+	new = allocate_probes(nr_probes + 2, GFP_KERNEL);
 	if (new == NULL)
 		return ERR_PTR(-ENOMEM);
 	if (old) {
@@ -174,7 +173,7 @@ func_add(struct tracepoint_func **funcs, struct tracepoint_func *tp_func,
 }
 
 static void *func_remove(struct tracepoint_func **funcs,
-		struct tracepoint_func *tp_func)
+		struct tracepoint_func *tp_func, gfp_t flags)
 {
 	int nr_probes = 0, nr_del = 0, i;
 	struct tracepoint_func *old, *new;
@@ -207,7 +206,7 @@ static void *func_remove(struct tracepoint_func **funcs,
 		int j = 0;
 		/* N -> M, (N > 1, M > 0) */
 		/* + 1 for NULL */
-		new = allocate_probes(nr_probes - nr_del + 1);
+		new = allocate_probes(nr_probes - nr_del + 1, flags);
 		if (new == NULL)
 			return ERR_PTR(-ENOMEM);
 		for (i = 0; old[i].func; i++)
@@ -288,13 +287,13 @@ static int tracepoint_add_func(struct tracepoint *tp,
  * by preempt_disable around the call site.
  */
 static int tracepoint_remove_func(struct tracepoint *tp,
-		struct tracepoint_func *func)
+		struct tracepoint_func *func, gfp_t flags)
 {
 	struct tracepoint_func *old, *tp_funcs;
 
 	tp_funcs = rcu_dereference_protected(tp->funcs,
 			lockdep_is_held(&tracepoints_mutex));
-	old = func_remove(&tp_funcs, func);
+	old = func_remove(&tp_funcs, func, flags);
 	if (IS_ERR(old)) {
 		WARN_ON_ONCE(PTR_ERR(old) != -ENOMEM);
 		return PTR_ERR(old);
@@ -371,7 +370,8 @@ EXPORT_SYMBOL_GPL(tracepoint_probe_register);
  *
  * Returns 0 if ok, error value on error.
  */
-int tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data)
+int tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data,
+				gfp_t flags)
 {
 	struct tracepoint_func tp_func;
 	int ret;
@@ -379,7 +379,7 @@ int tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data)
 	mutex_lock(&tracepoints_mutex);
 	tp_func.func = probe;
 	tp_func.data = data;
-	ret = tracepoint_remove_func(tp, &tp_func);
+	ret = tracepoint_remove_func(tp, &tp_func, flags);
 	mutex_unlock(&tracepoints_mutex);
 	return ret;
 }
