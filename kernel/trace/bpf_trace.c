@@ -2113,9 +2113,11 @@ int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *prog)
 	return __bpf_probe_register(btp, prog);
 }
 
-int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog)
+int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog,
+			 gfp_t flags)
 {
-	return tracepoint_probe_unregister(btp->tp, (void *)btp->bpf_func, prog);
+	return tracepoint_probe_unregister(btp->tp, (void *)btp->bpf_func, prog,
+					   flags);
 }
 
 int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
