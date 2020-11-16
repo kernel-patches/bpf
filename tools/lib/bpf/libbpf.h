@@ -41,6 +41,7 @@ enum libbpf_errno {
 	LIBBPF_ERRNO__WRNGPID,	/* Wrong pid in netlink message */
 	LIBBPF_ERRNO__INVSEQ,	/* Invalid netlink sequence */
 	LIBBPF_ERRNO__NLPARSE,	/* netlink parsing error */
+	LIBBPF_ERRNO__INVXDP,	/* Invalid XDP data */
 	__LIBBPF_ERRNO__END,
 };
 
