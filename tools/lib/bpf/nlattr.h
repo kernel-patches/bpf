@@ -76,6 +76,11 @@ static inline uint8_t libbpf_nla_getattr_u8(const struct nlattr *nla)
 	return *(uint8_t *)libbpf_nla_data(nla);
 }
 
+static inline uint16_t libbpf_nla_getattr_u16(const struct nlattr *nla)
+{
+	return *(uint16_t *)libbpf_nla_data(nla);
+}
+
 static inline uint32_t libbpf_nla_getattr_u32(const struct nlattr *nla)
 {
 	return *(uint32_t *)libbpf_nla_data(nla);
@@ -100,7 +105,24 @@ int libbpf_nla_parse(struct nlattr *tb[], int maxtype, struct nlattr *head,
 int libbpf_nla_parse_nested(struct nlattr *tb[], int maxtype,
 			    struct nlattr *nla,
 			    struct libbpf_nla_policy *policy);
+int libbpf_nla_parse_table(struct nlattr *tb[], int elem, struct nlattr *head,
+			   int type, struct libbpf_nla_policy *policy);
 
 int libbpf_nla_dump_errormsg(struct nlmsghdr *nlh);
+
+struct nlattr *libbpf_nla_next(struct nlattr *current);
+
+struct nlattr *libbpf_nla_nest_start(struct nlattr *start, int attrtype);
+
+int libbpf_nla_nest_end(struct nlattr *start, struct nlattr *next);
+
+struct nlattr *libbpf_nla_put_u32(struct nlattr *start, int attrtype, uint32_t val);
+
+struct nlattr *libbpf_nla_put_str(struct nlattr *start, int attrtype,
+				  const char *string, int max_len);
+
+struct nlattr *libbpf_nla_put_flag(struct nlattr *start, int attrtype);
+
+int libbpf_nla_attrs_length(struct nlattr *start, struct nlattr *next);
 
 #endif /* __LIBBPF_NLATTR_H */

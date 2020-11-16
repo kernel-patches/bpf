@@ -84,6 +84,52 @@ static inline int nlmsg_len(const struct nlmsghdr *nlh)
 }
 
 /**
+ * Create attribute index table based on a stream of attributes.
+ * @arg tb		Index array to be filled (indexed from 0 to elem-1).
+ * @arg elem		Number of attributes in the table.
+ * @arg maxtype		Maximum attribute type expected and accepted.
+ * @arg head		Head of attribute stream.
+ * @arg policy		Attribute validation policy.
+ *
+ * Iterates over the stream of attributes and stores a pointer to each
+ * attribute in the index array using incremented counter as index to
+ * the array. Attribute with a index greater than or equal to the elem value
+ * specified will be ignored and function terminates with error. If a policy
+ * is not NULL, the attribute will be validated using the specified policy.
+ *
+ * @see nla_validate
+ * @return 0 on success or a negative error code.
+ */
+int libbpf_nla_parse_table(struct nlattr *tb[], int elem, struct nlattr *head,
+			   int maxtype, struct libbpf_nla_policy *policy)
+{
+	struct nlattr *nla;
+	int rem, err = 0;
+	int idx = 0;
+
+	memset(tb, 0, sizeof(struct nlattr *) * elem);
+
+	libbpf_nla_for_each_attr(nla, libbpf_nla_data(head), libbpf_nla_len(head), rem) {
+		if (idx >= elem) {
+			err = -EMSGSIZE;
+			goto errout;
+		}
+
+		if (policy) {
+			err = validate_nla(nla, maxtype, policy);
+			if (err < 0)
+				goto errout;
+		}
+
+		tb[idx] = nla;
+		idx++;
+	}
+
+errout:
+	return err;
+}
+
+/**
  * Create attribute index based on a stream of attributes.
  * @arg tb		Index array to be filled (maxtype+1 elements).
  * @arg maxtype		Maximum attribute type expected and accepted.
@@ -192,4 +238,63 @@ int libbpf_nla_dump_errormsg(struct nlmsghdr *nlh)
 	pr_warn("Kernel error message: %s\n", errmsg);
 
 	return 0;
+}
+
+struct nlattr *libbpf_nla_next(struct nlattr *current)
+{
+	return current + NLA_ALIGN(current->nla_len) / sizeof(struct nlattr);
+}
+
+struct nlattr *libbpf_nla_nest_start(struct nlattr *start, int attrtype)
+{
+	start->nla_len = NLA_HDRLEN;
+	start->nla_type = attrtype | NLA_F_NESTED;
+	return start + 1;
+}
+
+int libbpf_nla_nest_end(struct nlattr *start, struct nlattr *next)
+{
+	start->nla_len += (unsigned char *)next  - (unsigned char *)start - NLA_HDRLEN;
+	return start->nla_len;
+}
+
+struct nlattr *libbpf_nla_put_u32(struct nlattr *start, int attrtype, uint32_t val)
+{
+	struct nlattr *next = start + 1;
+
+	start->nla_type = attrtype;
+	start->nla_len = NLA_HDRLEN + NLA_ALIGN(sizeof(uint32_t));
+	memcpy((char *)next, &val, sizeof(uint32_t));
+
+	return next + 1;
+}
+
+struct nlattr *libbpf_nla_put_str(struct nlattr *start, int attrtype,
+				  const char *string, int max_len)
+{
+	struct nlattr *next = start + 1;
+	size_t len = max_len > 0 ? strnlen(string, max_len - 1) : 0;
+	char *ptr = ((char *)next) + len;
+
+	start->nla_type = attrtype;
+	start->nla_len = NLA_HDRLEN + NLA_ALIGN(len + 1);
+	strncpy((char *)next, string, len);
+
+	for (size_t idx = len; idx < start->nla_len; ++idx, ptr++)
+		*ptr = '\0';
+
+	return libbpf_nla_next(start);
+}
+
+struct nlattr *libbpf_nla_put_flag(struct nlattr *start, int attrtype)
+{
+	start->nla_type = attrtype;
+	start->nla_len = NLA_HDRLEN;
+
+	return start + 1;
+}
+
+int libbpf_nla_attrs_length(struct nlattr *start, struct nlattr *next)
+{
+	return ((unsigned char *)next  - (unsigned char *)start);
 }
