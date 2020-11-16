@@ -926,7 +926,7 @@ static int veth_enable_xdp(struct net_device *dev)
 		for (i = 0; i < dev->real_num_rx_queues; i++) {
 			struct veth_rq *rq = &priv->rq[i];
 
-			err = xdp_rxq_info_reg(&rq->xdp_rxq, dev, i);
+			err = xdp_rxq_info_reg(&rq->xdp_rxq, dev, i, 0);
 			if (err < 0)
 				goto err_rxq_reg;
 
