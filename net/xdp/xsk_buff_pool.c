@@ -159,8 +159,8 @@ static int __xp_assign_dev(struct xsk_buff_pool *pool,
 		/* For copy-mode, we are done. */
 		return 0;
 
-	if (!netdev->netdev_ops->ndo_bpf ||
-	    !netdev->netdev_ops->ndo_xsk_wakeup) {
+	if (!(NETIF_F_XDP & netdev->features &&
+	      NETIF_F_AF_XDP_ZC & netdev->features)) {
 		err = -EOPNOTSUPP;
 		goto err_unreg_pool;
 	}
