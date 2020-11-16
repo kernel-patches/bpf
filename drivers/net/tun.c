@@ -2721,6 +2721,10 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 				     ~(NETIF_F_HW_VLAN_CTAG_TX |
 				       NETIF_F_HW_VLAN_STAG_TX);
 
+		/* Currently tap does not support XDP, only tun does. */
+		if (tun->flags == IFF_TUN)
+			xdp_set_feature_flag(&dev->features);
+
 		tun->flags = (tun->flags & ~TUN_FEATURES) |
 			      (ifr->ifr_flags & TUN_FEATURES);
 

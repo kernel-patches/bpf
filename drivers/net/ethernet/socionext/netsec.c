@@ -2099,6 +2099,7 @@ static int netsec_probe(struct platform_device *pdev)
 	ndev->features |= NETIF_F_HIGHDMA | NETIF_F_RXCSUM | NETIF_F_GSO |
 				NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	ndev->hw_features = ndev->features;
+	xdp_set_feature_flag(&ndev->features);
 
 	priv->rx_cksum_offload_flag = true;
 

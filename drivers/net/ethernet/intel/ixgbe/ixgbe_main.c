@@ -10880,6 +10880,9 @@ skip_sriov:
 	if (adapter->flags2 & IXGBE_FLAG2_RSC_ENABLED)
 		netdev->features |= NETIF_F_LRO;
 
+	xdp_set_feature_flag(&netdev->features);
+	xsk_set_feature_flag(&netdev->features);
+
 	if (ixgbe_check_fw_error(adapter)) {
 		err = -EIO;
 		goto err_sw_init;

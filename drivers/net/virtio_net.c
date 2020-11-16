@@ -3017,6 +3017,7 @@ static int virtnet_probe(struct virtio_device *vdev)
 		dev->hw_features |= NETIF_F_LRO;
 
 	dev->vlan_features = dev->features;
+	xdp_set_feature_flag(&dev->features);
 
 	/* MTU range: 68 - 65535 */
 	dev->min_mtu = MIN_MTU;

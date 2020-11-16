@@ -4980,6 +4980,8 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 
 	netdev->features         |= NETIF_F_HIGHDMA;
 	netdev->features         |= NETIF_F_HW_VLAN_STAG_FILTER;
+	xdp_set_feature_flag(&netdev->features);
+	xsk_set_feature_flag(&netdev->features);
 
 	netdev->priv_flags       |= IFF_UNICAST_FLT;
 

@@ -839,6 +839,7 @@ static void qede_init_ndev(struct qede_dev *edev)
 	ndev->features = hw_features | NETIF_F_RXHASH | NETIF_F_RXCSUM |
 			 NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HIGHDMA |
 			 NETIF_F_HW_VLAN_CTAG_FILTER | NETIF_F_HW_VLAN_CTAG_TX;
+	xdp_set_feature_flag(&ndev->features);
 
 	ndev->hw_features = hw_features;
 
