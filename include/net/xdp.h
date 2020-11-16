@@ -254,6 +254,19 @@ struct xdp_attachment_info {
 	u32 flags;
 };
 
+#if defined(CONFIG_NET) && defined(CONFIG_BPF_SYSCALL)
+static __always_inline void
+xdp_set_feature_flag(netdev_features_t *features)
+{
+	*features |= NETIF_F_XDP;
+}
+#else
+static __always_inline void
+xdp_set_feature_flag(netdev_features_t *features)
+{
+}
+#endif
+
 struct netdev_bpf;
 bool xdp_attachment_flags_ok(struct xdp_attachment_info *info,
 			     struct netdev_bpf *bpf);

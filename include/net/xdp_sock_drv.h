@@ -22,6 +22,12 @@ void xsk_clear_rx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool);
 bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool);
 
+static __always_inline void
+xsk_set_feature_flag(netdev_features_t *features)
+{
+	*features |= NETIF_F_AF_XDP_ZC;
+}
+
 static inline u32 xsk_pool_get_headroom(struct xsk_buff_pool *pool)
 {
 	return XDP_PACKET_HEADROOM + pool->headroom;
@@ -232,6 +238,11 @@ static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_bu
 static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 						    dma_addr_t dma,
 						    size_t size)
+{
+}
+
+static __always_inline void
+xsk_set_feature_flag(netdev_features_t *features)
 {
 }
 

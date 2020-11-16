@@ -85,6 +85,8 @@ enum {
 
 	NETIF_F_HW_MACSEC_BIT,		/* Offload MACsec operations */
 
+	NETIF_F_XDP_BIT,		/* XDP support */
+	NETIF_F_AF_XDP_ZC_BIT,		/* AF_XDP zero-copy support */
 	/*
 	 * Add your fresh new feature above and remember to update
 	 * netdev_features_strings[] in net/core/ethtool.c and maybe
@@ -157,6 +159,9 @@ enum {
 #define NETIF_F_GRO_FRAGLIST	__NETIF_F(GRO_FRAGLIST)
 #define NETIF_F_GSO_FRAGLIST	__NETIF_F(GSO_FRAGLIST)
 #define NETIF_F_HW_MACSEC	__NETIF_F(HW_MACSEC)
+#define NETIF_F_XDP		__NETIF_F(XDP)
+#define NETIF_F_AF_XDP_ZC	__NETIF_F(AF_XDP_ZC)
+
 
 /* Finds the next feature with the highest number of the range of start till 0.
  */
@@ -182,6 +187,7 @@ static inline int find_next_netdev_feature(u64 feature, unsigned long start)
 /* Features valid for ethtool to change */
 /* = all defined minus driver/device-class-related */
 #define NETIF_F_NEVER_CHANGE	(NETIF_F_VLAN_CHALLENGED | \
+				 NETIF_F_XDP | NETIF_F_AF_XDP_ZC | \
 				 NETIF_F_LLTX | NETIF_F_NETNS_LOCAL)
 
 /* remember that ((t)1 << t_BITS) is undefined in C99 */
