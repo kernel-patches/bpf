@@ -15,7 +15,6 @@
 #include <arpa/inet.h>
 #include <asm/barrier.h>
 #include <linux/compiler.h>
-#include <linux/ethtool.h>
 #include <linux/filter.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
@@ -31,6 +30,7 @@
 #include <sys/types.h>
 
 #include "bpf.h"
+#include "ethtool.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
 #include "xsk.h"
@@ -930,4 +930,53 @@ void xsk_socket__delete(struct xsk_socket *xsk)
 	if (xsk->fd != umem->fd)
 		close(xsk->fd);
 	free(xsk);
+}
+
+int xsk_socket__get_caps(const char *ifname, __u32 *xdp_caps, __u16 *bind_caps)
+{
+	struct ethnl_params param;
+	int ret;
+
+	if (!xdp_caps || !bind_caps || !ifname ||
+	    (strnlen(ifname, IFNAMSIZ) >= IFNAMSIZ))
+		return -EINVAL;
+
+	param.nl_family = ETHTOOL_GENL_NAME;
+	param.xdp_zc_flags = 0;
+	param.ifname = ifname;
+	param.xdp_flags = 0;
+
+	/* First, get the netlink family id */
+	ret = libbpf_ethnl_get_ethtool_family_id(&param);
+	if (ret)
+		return ret;
+
+	/* Second, get number of features */
+	param.features = 0;
+	ret = libbpf_ethnl_get_netdev_features(&param);
+	if (ret)
+		return ret;
+
+	/* Third, get the features description */
+	ret = libbpf_ethnl_get_netdev_features(&param);
+	if (ret)
+		return ret;
+
+	*xdp_caps  = XDP_FLAGS_SKB_MODE;
+	*bind_caps = XDP_COPY;
+
+	if (param.xdp_idx == -1 || param.xdp_zc_idx == -1)
+		return 0;
+
+	/* Finally, get features flags and process it */
+	ret = libbpf_ethnl_get_active_bits(&param);
+	if (!ret) {
+		if (param.xdp_flags) {
+			*xdp_caps |= XDP_FLAGS_DRV_MODE;
+			if (param.xdp_zc_flags)
+				*bind_caps |= XDP_ZEROCOPY;
+		}
+	}
+
+	return ret;
 }

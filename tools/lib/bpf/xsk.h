@@ -247,7 +247,8 @@ xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
 /* Returns 0 for success and -EBUSY if the umem is still in use. */
 LIBBPF_API int xsk_umem__delete(struct xsk_umem *umem);
 LIBBPF_API void xsk_socket__delete(struct xsk_socket *xsk);
-
+LIBBPF_API int xsk_socket__get_caps(const char *ifname, __u32 *xdp_caps,
+				    __u16 *bind_caps);
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
