@@ -1152,9 +1152,15 @@ static void get_unpriv_disabled()
 
 static bool test_as_unpriv(struct bpf_test *test)
 {
-	return !test->prog_type ||
-	       test->prog_type == BPF_PROG_TYPE_SOCKET_FILTER ||
-	       test->prog_type == BPF_PROG_TYPE_CGROUP_SKB;
+	bool req_aligned = false;
+
+#ifndef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+	req_aligned = test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS;
+#endif
+	return (!test->prog_type ||
+		test->prog_type == BPF_PROG_TYPE_SOCKET_FILTER ||
+		test->prog_type == BPF_PROG_TYPE_CGROUP_SKB) &&
+		!req_aligned;
 }
 
 static int do_test(bool unpriv, unsigned int from, unsigned int to)
