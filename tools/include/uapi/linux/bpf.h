@@ -3787,6 +3787,18 @@ union bpf_attr {
  *		*ARG_PTR_TO_BTF_ID* of type *task_struct*.
  *	Return
  *		Pointer to the current task.
+ *
+ * long bpf_lsm_set_bprm_opts(struct linux_binprm *bprm, u64 flags)
+ *
+ *	Description
+ *		Set or clear certain options on *bprm*:
+ *
+ *		**BPF_LSM_F_BPRM_SECUREEXEC** Set the secureexec bit
+ *		which sets the **AT_SECURE** auxv for glibc. The bit
+ *		is cleared if the flag is not specified.
+ *	Return
+ *		**-EINVAL** if invalid *flags* are passed.
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3948,6 +3960,7 @@ union bpf_attr {
 	FN(task_storage_get),		\
 	FN(task_storage_delete),	\
 	FN(get_current_task_btf),	\
+	FN(lsm_set_bprm_opts),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4117,6 +4130,11 @@ enum bpf_lwt_encap_mode {
 	BPF_LWT_ENCAP_SEG6,
 	BPF_LWT_ENCAP_SEG6_INLINE,
 	BPF_LWT_ENCAP_IP,
+};
+
+/* Flags for LSM helpers */
+enum {
+	BPF_LSM_F_BPRM_SECUREEXEC	= (1ULL << 0),
 };
 
 #define __bpf_md_ptr(type, name)	\
