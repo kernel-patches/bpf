@@ -1957,8 +1957,13 @@ process:
 			goto csum_error;
 		}
 		if (unlikely(sk->sk_state != TCP_LISTEN)) {
-			inet_csk_reqsk_queue_drop_and_put(sk, req);
-			goto lookup;
+			nsk = reuseport_select_sock(sk, sk->sk_hash, NULL, 0);
+			if (!nsk) {
+				inet_csk_reqsk_queue_drop_and_put(sk, req);
+				goto lookup;
+			}
+			inet_csk_reqsk_queue_migrated(sk, nsk, req);
+			sk = nsk;
 		}
 		/* We own a reference on the listener, increase it again
 		 * as we might lose it too soon.
