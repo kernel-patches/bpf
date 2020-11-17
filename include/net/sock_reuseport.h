@@ -13,8 +13,9 @@ extern spinlock_t reuseport_lock;
 struct sock_reuseport {
 	struct rcu_head		rcu;
 
-	u16			max_socks;	/* length of socks */
-	u16			num_socks;	/* elements in socks */
+	u16			max_socks;		/* length of socks */
+	u16			num_socks;		/* elements in socks */
+	u16			num_closed_socks;	/* closed elements in socks */
 	/* The last synq overflow event timestamp of this
 	 * reuse->socks[] group.
 	 */
@@ -23,6 +24,7 @@ struct sock_reuseport {
 	unsigned int		reuseport_id;
 	unsigned int		bind_inany:1;
 	unsigned int		has_conns:1;
+	unsigned int		migrate_req:1;
 	struct bpf_prog __rcu	*prog;		/* optional BPF sock selector */
 	struct sock		*socks[];	/* array of sock pointers */
 };
