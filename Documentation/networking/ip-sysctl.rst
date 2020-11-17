@@ -712,6 +712,21 @@ tcp_syncookies - INTEGER
 	network connections you can set this knob to 2 to enable
 	unconditionally generation of syncookies.
 
+tcp_migrate_req - INTEGER
+	By default, when a listening socket is closed, child sockets are also
+	closed. If it has SO_REUSEPORT enabled, the dropped connections should
+	have been accepted by other listeners on the same port. This option
+	makes it possible to migrate child sockets to another listener when
+	calling close() or shutdown().
+
+	Default: 0
+
+	Note that the source and destination listeners _must_ have the same
+	settings at the socket API level. If there are different kinds of
+	sockets on the port, disable this option or use
+	BPF_PROG_TYPE_SK_REUSEPORT program to select the correct socket by
+	bpf_sk_select_reuseport() or to cancel migration by returning SK_DROP.
+
 tcp_fastopen - INTEGER
 	Enable TCP Fast Open (RFC7413) to send and accept data in the opening
 	SYN packet.
