@@ -8914,6 +8914,22 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 	SOCK_ADDR_LOAD_NESTED_FIELD_SIZE_OFF(S, NS, F, NF,		       \
 					     BPF_FIELD_SIZEOF(NS, NF), 0)
 
+#define SOCK_ADDR_LOAD_NESTED_FIELD_SIZE_OFF_OR_NULL(S, NS, F, NF, SIZE, OFF)	\
+	do {									\
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(S, F), si->dst_reg,	\
+				      si->src_reg, offsetof(S, F));		\
+		*insn++ = BPF_JMP_IMM(BPF_JEQ, si->dst_reg, 0, 1);		\
+		*insn++ = BPF_LDX_MEM(						\
+			SIZE, si->dst_reg, si->dst_reg,				\
+			bpf_target_off(NS, NF, sizeof_field(NS, NF),		\
+				       target_size)				\
+			+ OFF);							\
+	} while (0)
+
+#define SOCK_ADDR_LOAD_NESTED_FIELD_OR_NULL(S, NS, F, NF)			\
+	SOCK_ADDR_LOAD_NESTED_FIELD_SIZE_OFF_OR_NULL(S, NS, F, NF,		\
+						     BPF_FIELD_SIZEOF(NS, NF), 0)
+
 /* SOCK_ADDR_STORE_NESTED_FIELD_OFF() has semantic similar to
  * SOCK_ADDR_LOAD_NESTED_FIELD_SIZE_OFF() but for store operation.
  *
@@ -9858,7 +9874,7 @@ static void bpf_init_reuseport_kern(struct sk_reuseport_kern *reuse_kern,
 	reuse_kern->skb = skb;
 	reuse_kern->sk = sk;
 	reuse_kern->selected_sk = NULL;
-	reuse_kern->data_end = skb->data + skb_headlen(skb);
+	reuse_kern->data_end = skb ? skb->data + skb_headlen(skb) : NULL;
 	reuse_kern->hash = hash;
 	reuse_kern->reuseport_id = reuse->reuseport_id;
 	reuse_kern->bind_inany = reuse->bind_inany;
@@ -10039,10 +10055,10 @@ sk_reuseport_is_valid_access(int off, int size,
 	})
 
 #define SK_REUSEPORT_LOAD_SKB_FIELD(SKB_FIELD)				\
-	SOCK_ADDR_LOAD_NESTED_FIELD(struct sk_reuseport_kern,		\
-				    struct sk_buff,			\
-				    skb,				\
-				    SKB_FIELD)
+	SOCK_ADDR_LOAD_NESTED_FIELD_OR_NULL(struct sk_reuseport_kern,	\
+					    struct sk_buff,		\
+					    skb,			\
+					    SKB_FIELD)
 
 #define SK_REUSEPORT_LOAD_SK_FIELD(SK_FIELD)				\
 	SOCK_ADDR_LOAD_NESTED_FIELD(struct sk_reuseport_kern,		\

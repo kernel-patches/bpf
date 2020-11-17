@@ -224,6 +224,7 @@ struct sock *reuseport_detach_sock(struct sock *sk)
 {
 	struct sock_reuseport *reuse;
 	struct sock *nsk = NULL;
+	struct bpf_prog *prog;
 	int i;
 
 	spin_lock_bh(&reuseport_lock);
@@ -249,8 +250,16 @@ struct sock *reuseport_detach_sock(struct sock *sk)
 		reuse->socks[i] = reuse->socks[reuse->num_socks];
 
 		if (reuse->migrate_req) {
-			if (reuse->num_socks)
-				nsk = i == reuse->num_socks ? reuse->socks[i - 1] : reuse->socks[i];
+			if (reuse->num_socks) {
+				prog = rcu_dereference(reuse->prog);
+				if (prog && prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
+					nsk = bpf_run_sk_reuseport(reuse, sk, prog,
+								   NULL, sk->sk_hash);
+
+				if (!nsk)
+					nsk = i == reuse->num_socks ?
+						reuse->socks[i - 1] : reuse->socks[i];
+			}
 
 			reuse->num_closed_socks++;
 			reuse->socks[reuse->max_socks - reuse->num_closed_socks] = sk;
@@ -340,8 +349,16 @@ struct sock *reuseport_select_sock(struct sock *sk,
 		/* paired with smp_wmb() in reuseport_add_sock() */
 		smp_rmb();
 
-		if (!prog || !skb)
+		if (!prog)
 			goto select_by_hash;
+
+		if (!skb) {
+			if (reuse->migrate_req &&
+			    prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
+				sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash);
+
+			goto select_by_hash;
+		}
 
 		if (prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
 			sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash);
