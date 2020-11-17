@@ -992,6 +992,36 @@ struct sock *inet_csk_reqsk_queue_add(struct sock *sk,
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_add);
 
+void inet_csk_reqsk_queue_migrate(struct sock *sk, struct sock *nsk)
+{
+	struct request_sock_queue *old_accept_queue, *new_accept_queue;
+
+	old_accept_queue = &inet_csk(sk)->icsk_accept_queue;
+	new_accept_queue = &inet_csk(nsk)->icsk_accept_queue;
+
+	spin_lock(&old_accept_queue->rskq_lock);
+	spin_lock(&new_accept_queue->rskq_lock);
+
+	if (old_accept_queue->rskq_accept_head) {
+		if (new_accept_queue->rskq_accept_head)
+			old_accept_queue->rskq_accept_tail->dl_next =
+				new_accept_queue->rskq_accept_head;
+		else
+			new_accept_queue->rskq_accept_tail = old_accept_queue->rskq_accept_tail;
+
+		new_accept_queue->rskq_accept_head = old_accept_queue->rskq_accept_head;
+		old_accept_queue->rskq_accept_head = NULL;
+		old_accept_queue->rskq_accept_tail = NULL;
+
+		WRITE_ONCE(nsk->sk_ack_backlog, nsk->sk_ack_backlog + sk->sk_ack_backlog);
+		WRITE_ONCE(sk->sk_ack_backlog, 0);
+	}
+
+	spin_unlock(&new_accept_queue->rskq_lock);
+	spin_unlock(&old_accept_queue->rskq_lock);
+}
+EXPORT_SYMBOL(inet_csk_reqsk_queue_migrate);
+
 struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 					 struct request_sock *req, bool own_req)
 {
