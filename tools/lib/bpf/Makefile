@@ -107,6 +107,7 @@ override CFLAGS += -Werror -Wall
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
 override CFLAGS += -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
+override CFLAGS += -DLIBBPF_VERSION="$(LIBBPF_VERSION)"
 
 # flags specific for shared library
 SHLIB_FLAGS := -DSHARED -fPIC

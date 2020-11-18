@@ -136,6 +136,18 @@ static void pr_perm_msg(int err)
 
 #define STRERR_BUFSIZE  128
 
+#ifndef LIBBPF_VERSION
+#define LIBBPF_VERSION unset
+#endif
+#define __str(s) #s
+#define _str(s) __str(s)
+static const char *_libbpf_version = _str(LIBBPF_VERSION);
+
+const char *libbpf_version(void)
+{
+	return _libbpf_version;
+}
+
 /* Copied from tools/perf/util/util.h */
 #ifndef zfree
 # define zfree(ptr) ({ free(*ptr); *ptr = NULL; })

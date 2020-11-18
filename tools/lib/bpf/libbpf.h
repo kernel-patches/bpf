@@ -45,6 +45,7 @@ enum libbpf_errno {
 };
 
 LIBBPF_API int libbpf_strerror(int err, char *buf, size_t size);
+LIBBPF_API const char *libbpf_version(void);
 
 enum libbpf_print_level {
         LIBBPF_WARN,
