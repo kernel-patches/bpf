@@ -888,6 +888,8 @@ static int xsk_setsockopt(struct socket *sock, int level, int optname,
 			return -EINVAL;
 		if (copy_from_sockptr(&entries, optval, sizeof(entries)))
 			return -EFAULT;
+		if (entries < XDP_RXTX_RING_MIN_ENTRIES)
+			return -EINVAL;
 
 		mutex_lock(&xs->mutex);
 		if (xs->state != XSK_READY) {
