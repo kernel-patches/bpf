@@ -211,6 +211,17 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len,
 	return 0;
 }
 
+static bool xsk_writeable(struct xdp_sock *xs)
+{
+	if (!xs->tx)
+		return false;
+
+	if (xskq_cons_left(xs->tx) > xs->tx->nentries / 2)
+		return false;
+
+	return true;
+}
+
 static bool xsk_is_bound(struct xdp_sock *xs)
 {
 	if (READ_ONCE(xs->state) == XSK_BOUND) {
@@ -296,7 +307,8 @@ void xsk_tx_release(struct xsk_buff_pool *pool)
 	rcu_read_lock();
 	list_for_each_entry_rcu(xs, &pool->xsk_tx_list, tx_list) {
 		__xskq_cons_release(xs->tx);
-		xs->sk.sk_write_space(&xs->sk);
+		if (xsk_writeable(xs))
+			xs->sk.sk_write_space(&xs->sk);
 	}
 	rcu_read_unlock();
 }
@@ -499,7 +511,8 @@ static int xsk_generic_xmit(struct sock *sk)
 
 out:
 	if (sent_frame)
-		sk->sk_write_space(sk);
+		if (xsk_writeable(xs))
+			sk->sk_write_space(sk);
 
 	mutex_unlock(&xs->mutex);
 	return err;
@@ -556,7 +569,8 @@ static __poll_t xsk_poll(struct file *file, struct socket *sock,
 
 	if (xs->rx && !xskq_prod_is_empty(xs->rx))
 		mask |= EPOLLIN | EPOLLRDNORM;
-	if (xs->tx && !xskq_cons_is_full(xs->tx))
+
+	if (xsk_writeable(xs))
 		mask |= EPOLLOUT | EPOLLWRNORM;
 
 	return mask;
