@@ -360,6 +360,56 @@ err:
 	return -1;
 }
 
+static int finit_module(int fd, const char *param_values, int flags)
+{
+	return syscall(__NR_finit_module, fd, param_values, flags);
+}
+
+static int delete_module(const char *name, int flags)
+{
+	return syscall(__NR_delete_module, name, flags);
+}
+
+void unload_bpf_sidecar_module()
+{
+	if (delete_module("bpf_sidecar", 0)) {
+		if (errno == ENOENT) {
+			if (env.verbosity > VERBOSE_NONE)
+				fprintf(stdout, "bpf_sidecar.ko is already unloaded.\n");
+			return;
+		}
+		fprintf(env.stderr, "Failed to unload bpf_sidecar.ko from kernel: %d\n", -errno);
+		exit(1);
+	}
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Successfully unloaded bpf_sidecar.ko.\n");
+}
+
+void load_bpf_sidecar_module()
+{
+	int fd;
+
+	/* ensure previous instance of the module is unloaded */
+	unload_bpf_sidecar_module();
+
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Loading bpf_sidecar.ko...\n");
+
+	fd = open("bpf_sidecar.ko", O_RDONLY);
+	if (fd < 0) {
+		fprintf(env.stderr, "Can't find bpf_sidecar.ko kernel module: %d\n", -errno);
+		exit(1);
+	}
+	if (finit_module(fd, "", 0)) {
+		fprintf(env.stderr, "Failed to load bpf_sidecar.ko into the kernel: %d\n", -errno);
+		exit(1);
+	}
+	close(fd);
+
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Successfully loaded bpf_sidecar.ko.\n");
+}
+
 /* extern declarations for test funcs */
 #define DEFINE_TEST(name) extern void test_##name(void);
 #include <prog_tests/tests.h>
@@ -678,6 +728,7 @@ int main(int argc, char **argv)
 
 	save_netns();
 	stdio_hijack();
+	load_bpf_sidecar_module();
 	for (i = 0; i < prog_test_cnt; i++) {
 		struct prog_test_def *test = &prog_test_defs[i];
 
@@ -722,6 +773,7 @@ int main(int argc, char **argv)
 		if (test->need_cgroup_cleanup)
 			cleanup_cgroup_environment();
 	}
+	unload_bpf_sidecar_module();
 	stdio_restore();
 
 	if (env.get_test_cnt) {
