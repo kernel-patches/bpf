@@ -2060,7 +2060,11 @@ struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 
 void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 {
-	struct module *mod = __module_address((unsigned long)btp);
+	struct module *mod;
+
+	preempt_disable();
+	mod = __module_address((unsigned long)btp);
+	preempt_enable();
 
 	if (mod)
 		module_put(mod);
