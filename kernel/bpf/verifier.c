@@ -3600,10 +3600,14 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	int err;
+	int load_reg;
 
 	switch (insn->imm) {
 	case BPF_ADD:
 	case BPF_ADD | BPF_FETCH:
+	case BPF_SET:
+	case BPF_SET | BPF_FETCH:
+	case BPF_CMPSET | BPF_FETCH: /* CMPSET without FETCH is not supported */
 		break;
 	default:
 		verbose(env, "BPF_ATOMIC uses invalid atomic opcode %02x\n", insn->imm);
@@ -3624,6 +3628,13 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 	if (err)
 		return err;
+
+	if (BPF_OP(insn->imm) == BPF_CMPSET) {
+		/* check src3 operand */
+		err = check_reg_arg(env, BPF_REG_0, SRC_OP);
+		if (err)
+			return err;
+	}
 
 	if (is_pointer_value(env, insn->src_reg)) {
 		verbose(env, "R%d leaks addr into mem\n", insn->src_reg);
@@ -3655,11 +3666,16 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	if (!(insn->imm & BPF_FETCH))
 		return 0;
 
-	/* check and record load of old value into src reg  */
-	err = check_reg_arg(env, insn->src_reg, DST_OP);
+	if (BPF_OP(insn->imm) == BPF_CMPSET)
+		load_reg = BPF_REG_0;
+	else
+		load_reg = insn->src_reg;
+
+	/* check and record load of old value */
+	err = check_reg_arg(env, load_reg, DST_OP);
 	if (err)
 		return err;
-	regs[insn->src_reg].type = SCALAR_VALUE;
+	regs[load_reg].type = SCALAR_VALUE;
 
 	return 0;
 }

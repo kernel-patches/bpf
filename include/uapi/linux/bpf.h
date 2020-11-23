@@ -45,6 +45,9 @@
 #define BPF_EXIT	0x90	/* function return */
 
 /* atomic op type fields (stored in immediate) */
+#define BPF_SET		0xe0	/* atomic write */
+#define BPF_CMPSET	0xf0	/* atomic compare-and-write */
+
 #define BPF_FETCH	0x01	/* fetch previous value into src reg */
 
 /* Register numbers */

@@ -1638,6 +1638,16 @@ out:
 				(u32) SRC,
 				(atomic_t *)(unsigned long) (DST + insn->off));
 			break;
+		case BPF_SET | BPF_FETCH:
+			SRC = (u32) atomic_xchg(
+				(atomic_t *)(unsigned long) (DST + insn->off),
+				(u32) SRC);
+			break;
+		case BPF_CMPSET | BPF_FETCH:
+			BPF_R0 = (u32) atomic_cmpxchg(
+				(atomic_t *)(unsigned long) (DST + insn->off),
+				(u32) BPF_R0, (u32) SRC);
+			break;
 		default:
 			goto default_label;
 		}
@@ -1654,6 +1664,16 @@ out:
 			SRC = (u64) atomic64_fetch_add(
 				(u64) SRC,
 				(atomic64_t *)(s64) (DST + insn->off));
+			break;
+		case BPF_SET | BPF_FETCH:
+			SRC = (u64) atomic64_xchg(
+				(atomic64_t *)(u64) (DST + insn->off),
+				(u64) SRC);
+			break;
+		case BPF_CMPSET | BPF_FETCH:
+			BPF_R0 = (u64) atomic64_cmpxchg(
+				(atomic64_t *)(u64) (DST + insn->off),
+				(u64) BPF_R0, (u64) SRC);
 			break;
 		default:
 			goto default_label;
