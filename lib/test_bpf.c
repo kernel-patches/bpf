@@ -4295,7 +4295,7 @@ static struct bpf_test tests[] = {
 		{ { 0, 0xffffffff } },
 		.stack_depth = 40,
 	},
-	/* BPF_STX | BPF_XADD | BPF_W/DW */
+	/* BPF_STX | BPF_ATOMIC | BPF_W/DW */
 	{
 		"STX_XADD_W: Test: 0x12 + 0x10 = 0x22",
 		.u.insns_int = {
