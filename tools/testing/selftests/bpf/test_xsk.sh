@@ -176,6 +176,30 @@ retval=$?
 test_status $retval "${TEST_NAME}"
 statusList+=($retval)
 
+### TEST 5
+TEST_NAME="SKB SOCKET TEARDOWN"
+
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+
+params=("-S" "-T")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 6
+TEST_NAME="DRV SOCKET TEARDOWN"
+
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
+
+params=("-N" "-T")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
 ## END TESTS
 
 cleanup_exit ${VETH0} ${VETH1} ${NS1}
