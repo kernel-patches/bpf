@@ -3,11 +3,12 @@
 
 #include <test_progs.h>
 #include "test_ksyms.skel.h"
+#include "test_kallsyms_lookup.skel.h"
 #include <sys/stat.h>
 
 static int duration;
 
-void test_ksyms(void)
+void test_ksyms_variables(void)
 {
 	const char *btf_path = "/sys/kernel/btf/vmlinux";
 	struct test_ksyms *skel;
@@ -58,4 +59,47 @@ void test_ksyms(void)
 
 cleanup:
 	test_ksyms__destroy(skel);
+}
+
+void test_kallsyms_lookup(void)
+{
+	struct test_kallsyms_lookup *skel;
+	int err;
+
+	skel = test_kallsyms_lookup__open_and_load();
+	if (CHECK(!skel, "skel_open", "failed to open and load skeleton\n"))
+		return;
+
+	err = test_kallsyms_lookup__attach(skel);
+	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
+		goto cleanup;
+
+	/* trigger tracepoint */
+	usleep(1);
+
+	CHECK(strcmp(skel->bss->name, "schedule"), "name",
+	      "got \"%s\", exp \"schedule\"\n", skel->bss->name);
+	CHECK(strcmp(skel->bss->name_truncated, "sched"), "name_truncated",
+	      "got \"%s\", exp \"sched\"\n", skel->bss->name_truncated);
+	CHECK(strcmp(skel->bss->name_invalid, ""), "name_invalid",
+	      "got \"%s\", exp \"\"\n", skel->bss->name_invalid);
+	CHECK(strcmp(skel->bss->module_name, ""), "module_name",
+	      "got \"%s\", exp \"\"\n", skel->bss->module_name);
+	CHECK(skel->bss->schedule_ret != 9, "schedule_ret",
+	      "got %d, exp 0\n", skel->bss->schedule_ret);
+	CHECK(skel->bss->sched_ret != 9, "sched_ret",
+	      "got %d, exp 0\n", skel->bss->sched_ret);
+	CHECK(skel->bss->invalid_ret != -EINVAL, "invalid_ret",
+	      "got %d, exp %d\n", skel->bss->invalid_ret, -EINVAL);
+
+cleanup:
+	test_kallsyms_lookup__destroy(skel);
+}
+
+void test_ksyms(void)
+{
+	if (test__start_subtest("ksyms_variables"))
+		test_ksyms_variables();
+	if (test__start_subtest("kallsyms_lookup"))
+		test_kallsyms_lookup();
 }
