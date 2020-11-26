@@ -3817,6 +3817,21 @@ union bpf_attr {
  *		The **hash_algo** is returned on success,
  *		**-EOPNOTSUP** if IMA is disabled or **-EINVAL** if
  *		invalid arguments are passed.
+ *
+ * long bpf_kallsyms_lookup(u64 address, char *symbol, u32 symbol_size, char *module, u32 module_size)
+ *	Description
+ *		Uses kallsyms to write the name of the symbol at *address*
+ *		into *symbol* of size *symbol_sz*. This is guaranteed to be
+ *		zero terminated.
+ *		If the symbol is in a module, up to *module_size* bytes of
+ *		the module name is written in *module*. This is also
+ *		guaranteed to be zero-terminated. Note: a module name
+ *		is always shorter than 64 bytes.
+ *	Return
+ *		On success, the strictly positive length of the full symbol
+ *		name, If this is greater than *symbol_size*, the written
+ *		symbol is truncated.
+ *		On error, a negative value.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3981,6 +3996,7 @@ union bpf_attr {
 	FN(bprm_opts_set),		\
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
+	FN(kallsyms_lookup),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

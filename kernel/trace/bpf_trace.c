@@ -17,6 +17,7 @@
 #include <linux/error-injection.h>
 #include <linux/btf_ids.h>
 #include <linux/bpf_lsm.h>
+#include <linux/kallsyms.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1260,6 +1261,44 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_5(bpf_kallsyms_lookup, u64, address, char *, symbol, u32, symbol_size,
+	   char *, module, u32, module_size)
+{
+	char buffer[KSYM_SYMBOL_LEN];
+	unsigned long offset, size;
+	const char *name;
+	char *modname;
+	long ret;
+
+	name = kallsyms_lookup(address, &size, &offset, &modname, buffer);
+	if (!name)
+		return -EINVAL;
+
+	ret = strlen(name) + 1;
+	if (symbol_size) {
+		strncpy(symbol, name, symbol_size);
+		symbol[symbol_size - 1] = '\0';
+	}
+
+	if (modname && module_size) {
+		strncpy(module, modname, module_size);
+		module[module_size - 1] = '\0';
+	}
+
+	return ret;
+}
+
+const struct bpf_func_proto bpf_kallsyms_lookup_proto = {
+	.func		= bpf_kallsyms_lookup,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_PTR_TO_MEM,
+	.arg5_type	= ARG_CONST_SIZE,
+};
+
 const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1356,6 +1395,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_per_cpu_ptr_proto;
 	case BPF_FUNC_bpf_this_cpu_ptr:
 		return &bpf_this_cpu_ptr_proto;
+	case BPF_FUNC_kallsyms_lookup:
+		return &bpf_kallsyms_lookup_proto;
 	default:
 		return NULL;
 	}
