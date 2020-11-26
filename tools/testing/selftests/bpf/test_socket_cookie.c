@@ -133,6 +133,7 @@ static int run_test(int cgfd)
 	struct bpf_prog_load_attr attr;
 	struct bpf_program *prog;
 	struct bpf_object *pobj;
+	struct bpf_link *link;
 	const char *prog_name;
 	int server_fd = -1;
 	int client_fd = -1;
@@ -153,11 +154,18 @@ static int run_test(int cgfd)
 	bpf_object__for_each_program(prog, pobj) {
 		prog_name = bpf_program__section_name(prog);
 
-		if (libbpf_attach_type_by_name(prog_name, &attach_type))
-			goto err;
+		if (bpf_program__is_tracing(prog)) {
+			link = bpf_program__attach(prog);
+			err = !link;
+			continue;
+		} else {
+			if (libbpf_attach_type_by_name(prog_name, &attach_type))
+				goto err;
 
-		err = bpf_prog_attach(bpf_program__fd(prog), cgfd, attach_type,
-				      BPF_F_ALLOW_OVERRIDE);
+			err = bpf_prog_attach(bpf_program__fd(prog), cgfd,
+					      attach_type,
+					      BPF_F_ALLOW_OVERRIDE);
+		}
 		if (err) {
 			log_err("Failed to attach prog %s", prog_name);
 			goto out;
