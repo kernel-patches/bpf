@@ -21,12 +21,13 @@
 
 static int ifindex_in;
 static int ifindex_out;
-static bool ifindex_out_xdp_dummy_attached = true;
+static bool ifindex_out_xdp_dummy_attached = false;
+static bool xdp_prog_attached = false;
 static __u32 prog_id;
 static __u32 dummy_prog_id;
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
-static int rxcnt_map_fd;
+static int pktcnt_map_fd;
 
 static void int_exit(int sig)
 {
@@ -60,26 +61,46 @@ static void int_exit(int sig)
 	exit(0);
 }
 
-static void poll_stats(int interval, int ifindex)
+static void poll_stats(int interval, int if_ingress, int if_egress)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
-	__u64 values[nr_cpus], prev[nr_cpus];
+	__u64 values[nr_cpus], in_prev[nr_cpus], e_prev[nr_cpus];
+	__u64 sum;
+	__u32 key;
+	int i;
 
-	memset(prev, 0, sizeof(prev));
+	memset(in_prev, 0, sizeof(in_prev));
+	memset(e_prev, 0, sizeof(e_prev));
 
 	while (1) {
-		__u64 sum = 0;
-		__u32 key = 0;
-		int i;
+		sum = 0;
+		key = 0;
 
 		sleep(interval);
-		assert(bpf_map_lookup_elem(rxcnt_map_fd, &key, values) == 0);
-		for (i = 0; i < nr_cpus; i++)
-			sum += (values[i] - prev[i]);
-		if (sum)
-			printf("ifindex %i: %10llu pkt/s\n",
-			       ifindex, sum / interval);
-		memcpy(prev, values, sizeof(values));
+		if (bpf_map_lookup_elem(pktcnt_map_fd, &key, values) == 0) {
+			for (i = 0; i < nr_cpus; i++)
+				sum += (values[i] - in_prev[i]);
+			if (sum)
+				printf("in ifindex %i: %10llu pkt/s",
+				       if_ingress, sum / interval);
+			memcpy(in_prev, values, sizeof(values));
+		}
+
+		if (!xdp_prog_attached) {
+			printf("\n");
+			continue;
+		}
+
+		sum = 0;
+		key = 1;
+		if (bpf_map_lookup_elem(pktcnt_map_fd, &key, values) == 0) {
+			for (i = 0; i < nr_cpus; i++)
+				sum += (values[i] - e_prev[i]);
+			if (sum)
+				printf(", out ifindex %i: %10llu pkt/s\n",
+				       if_egress, sum / interval);
+			memcpy(e_prev, values, sizeof(values));
+		}
 	}
 }
 
@@ -90,7 +111,8 @@ static void usage(const char *prog)
 		"OPTS:\n"
 		"    -S    use skb-mode\n"
 		"    -N    enforce native mode\n"
-		"    -F    force loading prog\n",
+		"    -F    force loading prog\n"
+		"    -X    load xdp program on egress\n",
 		prog);
 }
 
@@ -98,13 +120,14 @@ int main(int argc, char **argv)
 {
 	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	struct bpf_prog_load_attr prog_load_attr = {
-		.prog_type	= BPF_PROG_TYPE_XDP,
+		.prog_type	= BPF_PROG_TYPE_UNSPEC,
 	};
-	struct bpf_program *prog, *dummy_prog;
+	struct bpf_program *prog, *dummy_prog, *devmap_prog;
+	int prog_fd, dummy_prog_fd, devmap_prog_fd = -1;
+	struct bpf_devmap_val devmap_val;
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
-	int prog_fd, dummy_prog_fd;
-	const char *optstr = "FSN";
+	const char *optstr = "FSNX";
 	struct bpf_object *obj;
 	int ret, opt, key = 0;
 	char filename[256];
@@ -120,6 +143,9 @@ int main(int argc, char **argv)
 			break;
 		case 'F':
 			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
+			break;
+		case 'X':
+			xdp_prog_attached = true;
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -157,23 +183,14 @@ int main(int argc, char **argv)
 		return 1;
 
 	prog = bpf_program__next(NULL, obj);
-	dummy_prog = bpf_program__next(prog, obj);
-	if (!prog || !dummy_prog) {
-		printf("finding a prog in obj file failed\n");
-		return 1;
-	}
-	/* bpf_prog_load_xattr gives us the pointer to first prog's fd,
-	 * so we're missing only the fd for dummy prog
-	 */
-	dummy_prog_fd = bpf_program__fd(dummy_prog);
-	if (prog_fd < 0 || dummy_prog_fd < 0) {
-		printf("bpf_prog_load_xattr: %s\n", strerror(errno));
+	if (!prog || prog_fd <0) {
+		printf("finding prog in obj file failed\n");
 		return 1;
 	}
 
 	tx_port_map_fd = bpf_object__find_map_fd_by_name(obj, "tx_port");
-	rxcnt_map_fd = bpf_object__find_map_fd_by_name(obj, "rxcnt");
-	if (tx_port_map_fd < 0 || rxcnt_map_fd < 0) {
+	pktcnt_map_fd = bpf_object__find_map_fd_by_name(obj, "pktcnt");
+	if (tx_port_map_fd < 0 || pktcnt_map_fd < 0) {
 		printf("bpf_object__find_map_fd_by_name failed\n");
 		return 1;
 	}
@@ -190,32 +207,59 @@ int main(int argc, char **argv)
 	}
 	prog_id = info.id;
 
-	/* Loading dummy XDP prog on out-device */
-	if (bpf_set_link_xdp_fd(ifindex_out, dummy_prog_fd,
-			    (xdp_flags | XDP_FLAGS_UPDATE_IF_NOEXIST)) < 0) {
-		printf("WARN: link set xdp fd failed on %d\n", ifindex_out);
-		ifindex_out_xdp_dummy_attached = false;
-	}
+	/* Loading dummy XDP prog on out-device if no xdp_prog_attached*/
+	if (xdp_prog_attached) {
+		devmap_prog = bpf_object__find_program_by_title(obj, "xdp_devmap/map_prog");
+		if (!devmap_prog) {
+			printf("finding devmap_prog in obj file failed\n");
+			return 1;
+		}
+		devmap_prog_fd = bpf_program__fd(devmap_prog);
+		if (devmap_prog_fd < 0) {
+			printf("find devmap_prog fd: %s\n", strerror(errno));
+			return 1;
+		}
+	} else {
+		dummy_prog = bpf_object__find_program_by_title(obj, "xdp_redirect_dummy");
+		if (!dummy_prog) {
+			printf("finding dummy_prog in obj file failed\n");
+			return 1;
+		}
 
-	memset(&info, 0, sizeof(info));
-	ret = bpf_obj_get_info_by_fd(dummy_prog_fd, &info, &info_len);
-	if (ret) {
-		printf("can't get prog info - %s\n", strerror(errno));
-		return ret;
+		dummy_prog_fd = bpf_program__fd(dummy_prog);
+		if (dummy_prog_fd < 0) {
+			printf("find dummy_prog fd: %s\n", strerror(errno));
+			return 1;
+		}
+
+		if (bpf_set_link_xdp_fd(ifindex_out, dummy_prog_fd,
+				    (xdp_flags | XDP_FLAGS_UPDATE_IF_NOEXIST)) == 0) {
+			ifindex_out_xdp_dummy_attached = true;
+		} else {
+			printf("WARN: link set xdp fd failed on %d\n", ifindex_out);
+		}
+
+		memset(&info, 0, sizeof(info));
+		ret = bpf_obj_get_info_by_fd(dummy_prog_fd, &info, &info_len);
+		if (ret) {
+			printf("can't get prog info - %s\n", strerror(errno));
+			return ret;
+		}
+		dummy_prog_id = info.id;
 	}
-	dummy_prog_id = info.id;
 
 	signal(SIGINT, int_exit);
 	signal(SIGTERM, int_exit);
 
-	/* populate virtual to physical port map */
-	ret = bpf_map_update_elem(tx_port_map_fd, &key, &ifindex_out, 0);
+	devmap_val.ifindex = ifindex_out;
+	devmap_val.bpf_prog.fd = devmap_prog_fd;
+	ret = bpf_map_update_elem(tx_port_map_fd, &key, &devmap_val, 0);
 	if (ret) {
-		perror("bpf_update_elem");
+		perror("bpf_update_elem tx_port_map_fd");
 		goto out;
 	}
 
-	poll_stats(2, ifindex_out);
+	poll_stats(2, ifindex_in, ifindex_out);
 
 out:
 	return 0;

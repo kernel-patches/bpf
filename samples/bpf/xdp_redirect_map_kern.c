@@ -22,19 +22,19 @@
 struct {
 	__uint(type, BPF_MAP_TYPE_DEVMAP);
 	__uint(key_size, sizeof(int));
-	__uint(value_size, sizeof(int));
+	__uint(value_size, sizeof(struct bpf_devmap_val));
 	__uint(max_entries, 100);
 } tx_port SEC(".maps");
 
-/* Count RX packets, as XDP bpf_prog doesn't get direct TX-success
- * feedback.  Redirect TX errors can be caught via a tracepoint.
+/* Count RX/TX packets, use key 0 for rx pkt count, key 1 for tx
+ * pkt count.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, long);
-	__uint(max_entries, 1);
-} rxcnt SEC(".maps");
+	__uint(max_entries, 2);
+} pktcnt SEC(".maps");
 
 static void swap_src_dst_mac(void *data)
 {
@@ -72,7 +72,7 @@ int xdp_redirect_map_prog(struct xdp_md *ctx)
 	vport = 0;
 
 	/* count packet in global counter */
-	value = bpf_map_lookup_elem(&rxcnt, &key);
+	value = bpf_map_lookup_elem(&pktcnt, &key);
 	if (value)
 		*value += 1;
 
@@ -80,6 +80,20 @@ int xdp_redirect_map_prog(struct xdp_md *ctx)
 
 	/* send packet out physical port */
 	return bpf_redirect_map(&tx_port, vport, 0);
+}
+
+SEC("xdp_devmap/map_prog")
+int xdp_devmap_prog(struct xdp_md *ctx)
+{
+	long *value;
+	u32 key = 1;
+
+	/* count packet in global counter */
+	value = bpf_map_lookup_elem(&pktcnt, &key);
+	if (value)
+		*value += 1;
+
+	return XDP_PASS;
 }
 
 /* Redirect require an XDP bpf_prog loaded on the TX device */
