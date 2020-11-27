@@ -13,7 +13,7 @@
 	"context stores via BPF_ATOMIC",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_ATOMIC_ADD(BPF_W, BPF_REG_1, BPF_REG_0, offsetof(struct __sk_buff)),
+	BPF_ATOMIC_ADD(BPF_W, BPF_REG_1, BPF_REG_0, offsetof(struct __sk_buff, mark)),
 	BPF_EXIT_INSN(),
 	},
 	.errstr = "BPF_ATOMIC stores into R1 ctx is not allowed",
