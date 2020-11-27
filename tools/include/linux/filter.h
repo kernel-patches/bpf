@@ -190,6 +190,26 @@
 		.off   = OFF,					\
 		.imm   = BPF_ADD | BPF_FETCH })
 
+/* Atomic memory sub, *(uint *)(dst_reg + off16) -= src_reg */
+
+#define BPF_ATOMIC_SUB(SIZE, DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_SUB })
+
+/* Atomic memory sub with fetch, src_reg = atomic_fetch_sub(*(dst_reg + off), src_reg); */
+
+#define BPF_ATOMIC_FETCH_SUB(SIZE, DST, SRC, OFF)		\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_SUB | BPF_FETCH })
+
 /* Atomic exchange, src_reg = atomic_xchg((dst_reg + off), src_reg) */
 
 #define BPF_ATOMIC_XCHG(SIZE, DST, SRC, OFF)			\

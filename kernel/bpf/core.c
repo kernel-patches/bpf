@@ -1650,6 +1650,7 @@ out:
 	STX_ATOMIC_W:
 		switch (IMM) {
 		ATOMIC(BPF_ADD, add)
+		ATOMIC(BPF_SUB, sub)
 
 		case BPF_XCHG:
 			if (BPF_SIZE(insn->code) == BPF_W)

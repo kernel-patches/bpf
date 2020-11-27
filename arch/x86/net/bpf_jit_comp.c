@@ -823,6 +823,7 @@ static int emit_atomic(u8 **pprog, u8 atomic_op,
 
 	/* emit opcode */
 	switch (atomic_op) {
+	case BPF_SUB:
 	case BPF_ADD:
 		/* lock *(u32/u64*)(dst_reg + off) <op>= src_reg */
 		EMIT1(simple_alu_opcodes[atomic_op]);
@@ -1306,8 +1307,19 @@ st:			if (is_imm8(insn->off))
 
 		case BPF_STX | BPF_ATOMIC | BPF_W:
 		case BPF_STX | BPF_ATOMIC | BPF_DW:
-			err = emit_atomic(&prog, insn->imm, dst_reg, src_reg,
-					  insn->off, BPF_SIZE(insn->code));
+			if (insn->imm == (BPF_SUB | BPF_FETCH)) {
+				/*
+				 * x86 doesn't have an XSUB insn, so we negate
+				 * and XADD instead.
+				 */
+				emit_neg(&prog, src_reg, BPF_SIZE(insn->code) == BPF_DW);
+				err = emit_atomic(&prog, BPF_ADD | BPF_FETCH,
+						  dst_reg, src_reg, insn->off,
+						  BPF_SIZE(insn->code));
+			} else {
+				err = emit_atomic(&prog, insn->imm, dst_reg, src_reg,
+						  insn->off, BPF_SIZE(insn->code));
+			}
 			if (err)
 				return err;
 			break;
