@@ -790,7 +790,8 @@ static void detect_reg_usage(struct bpf_insn *insn, int insn_cnt,
 }
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
-		  int oldproglen, struct jit_context *ctx)
+		  int oldproglen, struct jit_context *ctx, bool no_optz,
+		  bool allow_grow)
 {
 	bool tail_call_reachable = bpf_prog->aux->tail_call_reachable;
 	struct bpf_insn *insn = bpf_prog->insnsi;
@@ -1408,7 +1409,7 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 				return -EFAULT;
 			}
 			jmp_offset = addrs[i + insn->off] - addrs[i];
-			if (is_imm8(jmp_offset)) {
+			if (is_imm8(jmp_offset) && !no_optz) {
 				EMIT2(jmp_cond, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
 				EMIT2_off32(0x0F, jmp_cond + 0x10, jmp_offset);
@@ -1431,11 +1432,11 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 			else
 				jmp_offset = addrs[i + insn->off] - addrs[i];
 
-			if (!jmp_offset)
+			if (!jmp_offset && !no_optz)
 				/* Optimize out nop jumps */
 				break;
 emit_jmp:
-			if (is_imm8(jmp_offset)) {
+			if (is_imm8(jmp_offset) && !no_optz) {
 				EMIT2(0xEB, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
 				EMIT1_off32(0xE9, jmp_offset);
@@ -1476,7 +1477,7 @@ emit_jmp:
 		}
 
 		if (image) {
-			if (unlikely(proglen + ilen > oldproglen)) {
+			if (unlikely(proglen + ilen > oldproglen) && !allow_grow) {
 				pr_err("bpf_jit: fatal error\n");
 				return -EFAULT;
 			}
@@ -1972,6 +1973,9 @@ struct x64_jit_data {
 	struct jit_context ctx;
 };
 
+#define MAX_JIT_PASSES 25
+#define NO_OPTZ_PASSES (MAX_JIT_PASSES - 5)
+
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	struct bpf_binary_header *header = NULL;
@@ -1981,6 +1985,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct jit_context ctx = {};
 	bool tmp_blinded = false;
 	bool extra_pass = false;
+	bool no_optz = false;
+	bool allow_grow = false;
 	u8 *image = NULL;
 	int *addrs;
 	int pass;
@@ -2042,8 +2048,23 @@ skip_init_addrs:
 	 * may converge on the last pass. In such case do one more
 	 * pass to emit the final image.
 	 */
-	for (pass = 0; pass < 20 || image; pass++) {
-		proglen = do_jit(prog, addrs, image, oldproglen, &ctx);
+	for (pass = 0; pass < MAX_JIT_PASSES || image; pass++) {
+		/*
+		 * On the 21th pass, if the image still doesn't converge,
+		 * then no_optz is set afterward to make do_jit() disable
+		 * some size optimizations to reduce the size variance.
+		 * The side effect is that the image size may grow, so
+		 * allow_grow is flipped to true only for this pass.
+		 */
+		if (pass == NO_OPTZ_PASSES && !image) {
+			pr_warn("bpf_jit: disable optimizations for further passes\n");
+			no_optz = true;
+			allow_grow = true;
+		} else {
+			allow_grow = false;
+		}
+
+		proglen = do_jit(prog, addrs, image, oldproglen, &ctx, no_optz, allow_grow);
 		if (proglen <= 0) {
 out_image:
 			image = NULL;
