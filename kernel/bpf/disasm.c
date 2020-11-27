@@ -83,6 +83,7 @@ const char *const bpf_alu_string[16] = {
 const char *const bpf_atomic_alu_string[16] = {
 	[BPF_ADD >> 4]  = "add",
 	[BPF_SUB >> 4]  = "sub",
+	[BPF_AND >> 4]  = "and",
 };
 
 static const char *const bpf_ldst_string[] = {
@@ -159,7 +160,8 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->dst_reg,
 				insn->off, insn->src_reg);
 		else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
-			 (insn->imm == BPF_ADD || insn->imm == BPF_SUB)) {
+			 (insn->imm == BPF_ADD || insn->imm == BPF_SUB ||
+			  (insn->imm == BPF_AND))) {
 			verbose(cbs->private_data, "(%02x) lock *(%s *)(r%d %+d) %s r%d\n",
 				insn->code,
 				bpf_ldst_string[BPF_SIZE(insn->code) >> 3],
@@ -168,7 +170,8 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->src_reg);
 		} else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
 			   (insn->imm == (BPF_ADD | BPF_FETCH) ||
-			    insn->imm == (BPF_SUB | BPF_FETCH))) {
+			    insn->imm == (BPF_SUB | BPF_FETCH) ||
+			    insn->imm == (BPF_AND | BPF_FETCH))) {
 			verbose(cbs->private_data, "(%02x) r%d = atomic%s_fetch_%s(*(%s *)(r%d %+d), r%d)\n",
 				insn->code, insn->src_reg,
 				BPF_SIZE(insn->code) == BPF_DW ? "64" : "",

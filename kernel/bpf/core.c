@@ -1651,7 +1651,10 @@ out:
 		switch (IMM) {
 		ATOMIC(BPF_ADD, add)
 		ATOMIC(BPF_SUB, sub)
-
+		ATOMIC(BPF_AND, and)
+		ATOMIC(BPF_OR, or)
+		ATOMIC(BPF_XOR, xor)
+#undef ATOMIC
 		case BPF_XCHG:
 			if (BPF_SIZE(insn->code) == BPF_W)
 				SRC = (u32) atomic_xchg(
