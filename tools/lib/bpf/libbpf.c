@@ -4021,6 +4021,8 @@ static bool kernel_supports(enum kern_feature_id feat_id)
 			pr_warn("Detection of kernel %s support failed: %d\n", feat->desc, ret);
 			WRITE_ONCE(feat->res, FEAT_MISSING);
 		}
+		/* reset errno after probing to prevent leaking it to caller */
+		errno = 0;
 	}
 
 	return READ_ONCE(feat->res) == FEAT_SUPPORTED;
