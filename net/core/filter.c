@@ -3981,8 +3981,8 @@ void bpf_clear_redirect_map(struct bpf_map *map)
 	}
 }
 
-int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
-		    struct bpf_prog *xdp_prog)
+int __xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
+		      struct bpf_prog *xdp_prog)
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 	struct bpf_map *map = READ_ONCE(ri->map);
@@ -4015,7 +4015,7 @@ err:
 	_trace_xdp_redirect_map_err(dev, xdp_prog, fwd, map, index, err);
 	return err;
 }
-EXPORT_SYMBOL_GPL(xdp_do_redirect);
+EXPORT_SYMBOL_GPL(__xdp_do_redirect);
 
 static int xdp_do_generic_redirect_map(struct net_device *dev,
 				       struct sk_buff *skb,
@@ -4091,12 +4091,45 @@ err:
 	return err;
 }
 
+static u64 __bpf_xdp_redirect_opt(u32 index, struct bpf_redirect_info *ri)
+{
+	const struct bpf_prog *xdp_prog;
+	struct net_device *fwd, *dev;
+	struct xdp_buff *xdp;
+	int err;
+
+	xdp_prog = ri->xdp_prog_redirect_opt;
+	xdp = ri->xdp;
+	dev = xdp->rxq->dev;
+
+	ri->xdp_prog_redirect_opt = NULL;
+
+	fwd = dev_get_by_index_rcu(dev_net(dev), index);
+	if (unlikely(!fwd)) {
+		err = -EINVAL;
+		goto err;
+	}
+
+	err = dev_xdp_enqueue(fwd, xdp, dev);
+	if (unlikely(err))
+		goto err;
+
+	_trace_xdp_redirect_map(dev, xdp_prog, fwd, NULL, index);
+	return XDP_REDIRECT;
+err:
+	_trace_xdp_redirect_map_err(dev, xdp_prog, fwd, NULL, index, err);
+	return XDP_ABORTED;
+}
+
 BPF_CALL_2(bpf_xdp_redirect, u32, ifindex, u64, flags)
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 
 	if (unlikely(flags))
 		return XDP_ABORTED;
+
+	if (ri->xdp_prog_redirect_opt)
+		return __bpf_xdp_redirect_opt(ifindex, ri);
 
 	ri->flags = flags;
 	ri->tgt_index = ifindex;
@@ -4114,6 +4147,64 @@ static const struct bpf_func_proto bpf_xdp_redirect_proto = {
 	.arg2_type      = ARG_ANYTHING,
 };
 
+static u64 __bpf_xdp_redirect_map_opt(struct bpf_map *map, u32 index, u64 flags,
+				      struct bpf_redirect_info *ri)
+{
+	const struct bpf_prog *xdp_prog;
+	struct net_device *dev;
+	struct xdp_buff *xdp;
+	void *val;
+	int err;
+
+	xdp_prog = ri->xdp_prog_redirect_opt;
+	xdp = ri->xdp;
+	dev = xdp->rxq->dev;
+
+	ri->xdp_prog_redirect_opt = NULL;
+
+	switch (map->map_type) {
+	case BPF_MAP_TYPE_DEVMAP: {
+		val = __dev_map_lookup_elem(map, index);
+		if (unlikely(!val))
+			return flags;
+		err = dev_map_enqueue(val, xdp, dev);
+		break;
+	}
+	case BPF_MAP_TYPE_DEVMAP_HASH: {
+		val = __dev_map_hash_lookup_elem(map, index);
+		if (unlikely(!val))
+			return flags;
+		err = dev_map_enqueue(val, xdp, dev);
+		break;
+	}
+	case BPF_MAP_TYPE_CPUMAP: {
+		val = __cpu_map_lookup_elem(map, index);
+		if (unlikely(!val))
+			return flags;
+		err = cpu_map_enqueue(val, xdp, dev);
+		break;
+	}
+	case BPF_MAP_TYPE_XSKMAP: {
+		val = __xsk_map_lookup_elem(map, index);
+		if (unlikely(!val))
+			return flags;
+		err = __xsk_map_redirect(val, xdp);
+		break;
+	}
+	default:
+		return flags;
+	}
+
+	if (unlikely(err))
+		goto err;
+
+	_trace_xdp_redirect_map(dev, xdp_prog, val, map, index);
+	return XDP_REDIRECT;
+err:
+	_trace_xdp_redirect_map_err(dev, xdp_prog, val, map, index, err);
+	return XDP_ABORTED;
+}
+
 BPF_CALL_3(bpf_xdp_redirect_map, struct bpf_map *, map, u32, ifindex,
 	   u64, flags)
 {
@@ -4122,6 +4213,9 @@ BPF_CALL_3(bpf_xdp_redirect_map, struct bpf_map *, map, u32, ifindex,
 	/* Lower bits of the flags are used as return code on lookup failure */
 	if (unlikely(flags > XDP_TX))
 		return XDP_ABORTED;
+
+	if (ri->xdp_prog_redirect_opt)
+		return __bpf_xdp_redirect_map_opt(map, ifindex, flags, ri);
 
 	ri->tgt_value = __xdp_map_lookup_elem(map, ifindex);
 	if (unlikely(!ri->tgt_value)) {

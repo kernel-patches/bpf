@@ -534,7 +534,8 @@ struct bpf_prog {
 				kprobe_override:1, /* Do we override a kprobe? */
 				has_callchain_buf:1, /* callchain buffer allocated? */
 				enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
-				call_get_stack:1; /* Do we call bpf_get_stack() or bpf_get_stackid() */
+				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
+				redirect_opt:1; /* All bpf_redirect{,_map}() are leaf calls */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
 	u32			len;		/* Number of filter blocks */
@@ -622,6 +623,8 @@ struct bpf_redirect_info {
 	struct bpf_map *map;
 	u32 kern_flags;
 	struct bpf_nh_params nh;
+	const struct bpf_prog *xdp_prog_redirect_opt;
+	struct xdp_buff *xdp;
 };
 
 DECLARE_PER_CPU(struct bpf_redirect_info, bpf_redirect_info);
@@ -734,12 +737,24 @@ DECLARE_BPF_DISPATCHER(xdp)
 static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
 					    struct xdp_buff *xdp)
 {
+	if (prog->redirect_opt) {
+		struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
+
+		ri->xdp_prog_redirect_opt = prog;
+		ri->xdp = xdp;
+	}
+
 	/* Caller needs to hold rcu_read_lock() (!), otherwise program
 	 * can be released while still running, or map elements could be
 	 * freed early while still having concurrent users. XDP fastpath
 	 * already takes rcu_read_lock() when fetching the program, so
 	 * it's not necessary here anymore.
 	 */
+	return __BPF_PROG_RUN(prog, xdp, BPF_DISPATCHER_FUNC(xdp));
+}
+
+static __always_inline u32 bpf_prog_run_xdp_skb(const struct bpf_prog *prog, struct xdp_buff *xdp)
+{
 	return __BPF_PROG_RUN(prog, xdp, BPF_DISPATCHER_FUNC(xdp));
 }
 
@@ -951,9 +966,16 @@ static inline int xdp_ok_fwd_dev(const struct net_device *fwd,
  */
 int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 			    struct xdp_buff *xdp, struct bpf_prog *prog);
-int xdp_do_redirect(struct net_device *dev,
-		    struct xdp_buff *xdp,
-		    struct bpf_prog *prog);
+int __xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp, struct bpf_prog *prog);
+static inline int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
+				  struct bpf_prog *prog)
+{
+	if (prog->redirect_opt)
+		return 0;
+
+	return __xdp_do_redirect(dev, xdp, prog);
+}
+
 void xdp_do_flush(void);
 
 /* The xdp_do_flush_map() helper has been renamed to drop the _map suffix, as

@@ -5032,6 +5032,58 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 	return state->acquired_refs ? -EINVAL : 0;
 }
 
+static void check_redirect_opt(struct bpf_verifier_env *env, int func_id, int insn_idx)
+{
+	struct bpf_insn *insns = env->prog->insnsi;
+	int insn_cnt = env->prog->len;
+	struct bpf_insn *insn;
+	bool is_leaf = false;
+
+	if (!(func_id == BPF_FUNC_redirect || func_id == BPF_FUNC_redirect_map))
+		return;
+
+	/* Naive peephole leaf node checking */
+	insn_idx++;
+	if (insn_idx >= insn_cnt)
+		return;
+
+	insn = &insns[insn_idx];
+	switch (insn->code) {
+	/* Is the instruction following the call, an exit? */
+	case BPF_JMP | BPF_EXIT:
+		is_leaf = true;
+		break;
+	/* Follow the true branch of "if return value (r/w0) is not
+	 * zero", and look for exit.
+	 */
+	case BPF_JMP | BPF_JSGT | BPF_K:
+	case BPF_JMP32 | BPF_JSGT | BPF_K:
+	case BPF_JMP | BPF_JGT | BPF_K:
+	case BPF_JMP32 | BPF_JGT | BPF_K:
+	case BPF_JMP | BPF_JNE | BPF_K:
+	case BPF_JMP32 | BPF_JNE | BPF_K:
+		if (insn->dst_reg == BPF_REG_0 && insn->imm == 0) {
+			insn_idx += insn->off + 1;
+			if (insn_idx >= insn_cnt)
+				break;
+
+			insn = &insns[insn_idx];
+			is_leaf = insn->code == (BPF_JMP | BPF_EXIT);
+		}
+		break;
+	default:
+		break;
+	}
+
+	if (!env->redirect_call_cnt++) {
+		env->all_leaves_redirect = is_leaf;
+		return;
+	}
+
+	if (!is_leaf)
+		env->all_leaves_redirect = false;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn_idx)
 {
 	const struct bpf_func_proto *fn = NULL;
@@ -5124,6 +5176,8 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 			return err;
 		}
 	}
+
+	check_redirect_opt(env, func_id, insn_idx);
 
 	regs = cur_regs(env);
 
@@ -11894,6 +11948,17 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	return 0;
 }
 
+static void validate_redirect_opt(struct bpf_verifier_env *env)
+{
+	if (env->subprog_cnt != 1)
+		return;
+
+	if (env->subprog_info[0].has_tail_call)
+		return;
+
+	env->prog->redirect_opt = env->all_leaves_redirect;
+}
+
 struct btf *bpf_get_btf_vmlinux(void)
 {
 	if (!btf_vmlinux && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
@@ -12091,6 +12156,9 @@ skip_full_check:
 
 	if (ret == 0)
 		adjust_btf_func(env);
+
+	if (ret == 0)
+		validate_redirect_opt(env);
 
 err_release_maps:
 	if (!env->prog->aux->used_maps)
