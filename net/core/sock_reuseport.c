@@ -202,7 +202,7 @@ int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 	}
 
 	reuse->socks[reuse->num_socks] = sk;
-	/* paired with smp_rmb() in reuseport_select_sock() */
+	/* paired with smp_rmb() in __reuseport_select_sock() */
 	smp_wmb();
 	reuse->num_socks++;
 	rcu_assign_pointer(sk->sk_reuseport_cb, reuse);
@@ -313,12 +313,13 @@ static struct sock *run_bpf_filter(struct sock_reuseport *reuse, u16 socks,
  *  @hdr_len: BPF filter expects skb data pointer at payload data.  If
  *    the skb does not yet point at the payload, this parameter represents
  *    how far the pointer needs to advance to reach the payload.
+ *  @migration: represents if it is selecting a listener for SYN or
+ *    migrating ESTABLISHED/SYN_RECV sockets or NEW_SYN_RECV socket.
  *  Returns a socket that should receive the packet (or NULL on error).
  */
-struct sock *reuseport_select_sock(struct sock *sk,
-				   u32 hash,
-				   struct sk_buff *skb,
-				   int hdr_len)
+struct sock *__reuseport_select_sock(struct sock *sk, u32 hash,
+				     struct sk_buff *skb, int hdr_len,
+				     u8 migration)
 {
 	struct sock_reuseport *reuse;
 	struct bpf_prog *prog;
@@ -332,13 +333,19 @@ struct sock *reuseport_select_sock(struct sock *sk,
 	if (!reuse)
 		goto out;
 
-	prog = rcu_dereference(reuse->prog);
 	socks = READ_ONCE(reuse->num_socks);
 	if (likely(socks)) {
 		/* paired with smp_wmb() in reuseport_add_sock() */
 		smp_rmb();
 
-		if (!prog || !skb)
+		prog = rcu_dereference(reuse->prog);
+		if (!prog)
+			goto select_by_hash;
+
+		if (migration)
+			goto out;
+
+		if (!skb)
 			goto select_by_hash;
 
 		if (prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
@@ -367,7 +374,20 @@ out:
 	rcu_read_unlock();
 	return sk2;
 }
+
+struct sock *reuseport_select_sock(struct sock *sk, u32 hash,
+				   struct sk_buff *skb, int hdr_len)
+{
+	return __reuseport_select_sock(sk, hash, skb, hdr_len, BPF_SK_REUSEPORT_MIGRATE_NO);
+}
 EXPORT_SYMBOL(reuseport_select_sock);
+
+struct sock *reuseport_select_migrated_sock(struct sock *sk, u32 hash,
+					    struct sk_buff *skb)
+{
+	return __reuseport_select_sock(sk, hash, skb, 0, BPF_SK_REUSEPORT_MIGRATE_REQUEST);
+}
+EXPORT_SYMBOL(reuseport_select_migrated_sock);
 
 int reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog)
 {
