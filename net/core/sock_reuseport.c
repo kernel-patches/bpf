@@ -247,8 +247,15 @@ struct sock *reuseport_detach_sock(struct sock *sk)
 		prog = rcu_dereference(reuse->prog);
 
 		if (sk->sk_protocol == IPPROTO_TCP) {
-			if (reuse->num_socks && !prog)
-				nsk = i == reuse->num_socks ? reuse->socks[i - 1] : reuse->socks[i];
+			if (reuse->num_socks) {
+				if (prog)
+					nsk = bpf_run_sk_reuseport(reuse, sk, prog, NULL, 0,
+								   BPF_SK_REUSEPORT_MIGRATE_QUEUE);
+
+				if (!nsk)
+					nsk = i == reuse->num_socks ?
+						reuse->socks[i - 1] : reuse->socks[i];
+			}
 
 			reuse->num_closed_socks++;
 			reuse->socks[reuse->max_socks - reuse->num_closed_socks] = sk;
@@ -342,15 +349,9 @@ struct sock *__reuseport_select_sock(struct sock *sk, u32 hash,
 		if (!prog)
 			goto select_by_hash;
 
-		if (migration)
-			goto out;
-
-		if (!skb)
-			goto select_by_hash;
-
 		if (prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
 			sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash, migration);
-		else
+		else if (!skb)
 			sk2 = run_bpf_filter(reuse, socks, prog, skb, hdr_len);
 
 select_by_hash:
