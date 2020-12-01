@@ -216,9 +216,11 @@ int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 }
 EXPORT_SYMBOL(reuseport_add_sock);
 
-void reuseport_detach_sock(struct sock *sk)
+struct sock *reuseport_detach_sock(struct sock *sk)
 {
 	struct sock_reuseport *reuse;
+	struct bpf_prog *prog;
+	struct sock *nsk = NULL;
 	int i;
 
 	spin_lock_bh(&reuseport_lock);
@@ -242,8 +244,12 @@ void reuseport_detach_sock(struct sock *sk)
 
 		reuse->num_socks--;
 		reuse->socks[i] = reuse->socks[reuse->num_socks];
+		prog = rcu_dereference(reuse->prog);
 
 		if (sk->sk_protocol == IPPROTO_TCP) {
+			if (reuse->num_socks && !prog)
+				nsk = i == reuse->num_socks ? reuse->socks[i - 1] : reuse->socks[i];
+
 			reuse->num_closed_socks++;
 			reuse->socks[reuse->max_socks - reuse->num_closed_socks] = sk;
 		} else {
@@ -264,6 +270,8 @@ void reuseport_detach_sock(struct sock *sk)
 		call_rcu(&reuse->rcu, reuseport_free_rcu);
 out:
 	spin_unlock_bh(&reuseport_lock);
+
+	return nsk;
 }
 EXPORT_SYMBOL(reuseport_detach_sock);
 
