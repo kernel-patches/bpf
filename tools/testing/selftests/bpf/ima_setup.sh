@@ -31,8 +31,24 @@ setup()
         mount "${loop_device}" "${mount_dir}"
 
         cp "${TEST_BINARY}" "${mount_dir}"
-        local mount_uuid="$(blkid -s UUID -o value ${loop_device})"
-        echo "measure func=BPRM_CHECK fsuuid=${mount_uuid}" > ${IMA_POLICY_FILE}
+        local mount_uuid=""
+        # This can be done with blkid -s UUID -o value ${loop_device} but
+        # blkid might not be available everywhere, especially in busybox
+        # environments.
+        for uuid in $(ls /dev/disk/by-uuid); do
+                local link_target="$(readlink -f /dev/disk/by-uuid/${uuid})"
+                if [[ "${loop_device}" == "${link_target}" ]]; then
+                        mount_uuid="${uuid}"
+                        break;
+                fi
+        done
+
+        if [[ -z "${mount_uuid}" ]]; then
+                echo "Could not find mount_uuid for ${loop_device}"
+                exit 1;
+        fi
+
+        echo "measure func=BPRM_CHECK fsuuid=${mount_uuid:?}" > ${IMA_POLICY_FILE}
 }
 
 cleanup() {
