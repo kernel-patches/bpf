@@ -70,6 +70,7 @@ FILES=                                          \
          test-libaio.bin			\
          test-libzstd.bin			\
          test-clang-bpf-co-re.bin		\
+         test-clang-bpf-atomics.bin		\
          test-file-handle.bin			\
          test-libpfm4.bin
 
@@ -330,6 +331,9 @@ $(OUTPUT)test-libzstd.bin:
 $(OUTPUT)test-clang-bpf-co-re.bin:
 	$(CLANG) -S -g -target bpf -o - $(patsubst %.bin,%.c,$(@F)) |	\
 		grep BTF_KIND_VAR
+
+$(OUTPUT)test-clang-bpf-atomics.bin:
+	$(CLANG) -S -g -target bpf -mcpu=v3 -Werror=implicit-function-declaration -o - $(patsubst %.bin,%.c,$(@F)) 2>&1
 
 $(OUTPUT)test-file-handle.bin:
 	$(BUILD)
