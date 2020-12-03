@@ -15,8 +15,8 @@ struct socket_cookie {
 
 void test_socket_cookie(void)
 {
+	struct bpf_link *set_link, *update_sockops_link, *update_tracing_link;
 	socklen_t addr_len = sizeof(struct sockaddr_in6);
-	struct bpf_link *set_link, *update_link;
 	int server_fd, client_fd, cgroup_fd;
 	struct socket_cookie_prog *skel;
 	__u32 cookie_expected_value;
@@ -39,15 +39,21 @@ void test_socket_cookie(void)
 		  PTR_ERR(set_link)))
 		goto close_cgroup_fd;
 
-	update_link = bpf_program__attach_cgroup(skel->progs.update_cookie,
-						 cgroup_fd);
-	if (CHECK(IS_ERR(update_link), "update-link-cg-attach", "err %ld\n",
-		  PTR_ERR(update_link)))
+	update_sockops_link = bpf_program__attach_cgroup(
+		skel->progs.update_cookie_sockops, cgroup_fd);
+	if (CHECK(IS_ERR(update_sockops_link), "update-sockops-link-cg-attach",
+		  "err %ld\n", PTR_ERR(update_sockops_link)))
 		goto free_set_link;
+
+	update_tracing_link = bpf_program__attach(
+		skel->progs.update_cookie_tracing);
+	if (CHECK(IS_ERR(update_tracing_link), "update-tracing-link-attach",
+		  "err %ld\n", PTR_ERR(update_tracing_link)))
+		goto free_update_sockops_link;
 
 	server_fd = start_server(AF_INET6, SOCK_STREAM, "::1", 0, 0);
 	if (CHECK(server_fd < 0, "start_server", "errno %d\n", errno))
-		goto free_update_link;
+		goto free_update_tracing_link;
 
 	client_fd = connect_to_fd(server_fd, 0);
 	if (CHECK(client_fd < 0, "connect_to_fd", "errno %d\n", errno))
@@ -71,8 +77,10 @@ close_client_fd:
 	close(client_fd);
 close_server_fd:
 	close(server_fd);
-free_update_link:
-	bpf_link__destroy(update_link);
+free_update_tracing_link:
+	bpf_link__destroy(update_tracing_link);
+free_update_sockops_link:
+	bpf_link__destroy(update_sockops_link);
 free_set_link:
 	bpf_link__destroy(set_link);
 close_cgroup_fd:
