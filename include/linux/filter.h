@@ -280,6 +280,66 @@ static inline bool insn_is_zext(const struct bpf_insn *insn)
 		.off   = OFF,					\
 		.imm   = BPF_ADD | BPF_FETCH })
 
+/* Atomic memory and, *(uint *)(dst_reg + off16) &= src_reg */
+
+#define BPF_ATOMIC_AND(SIZE, DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_AND })
+
+/* Atomic memory and with fetch, src_reg = atomic_fetch_and(*(dst_reg + off), src_reg); */
+
+#define BPF_ATOMIC_FETCH_AND(SIZE, DST, SRC, OFF)		\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_AND | BPF_FETCH })
+
+/* Atomic memory or, *(uint *)(dst_reg + off16) |= src_reg */
+
+#define BPF_ATOMIC_OR(SIZE, DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_OR })
+
+/* Atomic memory or with fetch, src_reg = atomic_fetch_or(*(dst_reg + off), src_reg); */
+
+#define BPF_ATOMIC_FETCH_OR(SIZE, DST, SRC, OFF)		\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_OR | BPF_FETCH })
+
+/* Atomic memory xor, *(uint *)(dst_reg + off16) ^= src_reg */
+
+#define BPF_ATOMIC_XOR(SIZE, DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_XOR })
+
+/* Atomic memory xor with fetch, src_reg = atomic_fetch_xor(*(dst_reg + off), src_reg); */
+
+#define BPF_ATOMIC_FETCH_XOR(SIZE, DST, SRC, OFF)		\
+	((struct bpf_insn) {					\
+		.code  = BPF_STX | BPF_SIZE(SIZE) | BPF_ATOMIC,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = BPF_XOR | BPF_FETCH })
+
 /* Atomic exchange, src_reg = atomic_xchg((dst_reg + off), src_reg) */
 
 #define BPF_ATOMIC_XCHG(SIZE, DST, SRC, OFF)			\
