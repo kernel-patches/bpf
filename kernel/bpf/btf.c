@@ -5777,6 +5777,24 @@ btf_module_read(struct file *file, struct kobject *kobj,
 	return len;
 }
 
+struct btf *bpf_get_btf_module(__u32 obj_id)
+{
+	struct btf *btf = ERR_PTR(-ENOENT);
+	struct btf_module *btf_mod;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(btf_mod, &btf_modules, list) {
+		if (!btf_mod->btf || obj_id != btf_mod->btf->id)
+			continue;
+
+		refcount_inc(&btf_mod->btf->refcnt);
+		btf = btf_mod->btf;
+		break;
+	}
+	rcu_read_unlock();
+	return btf;
+}
+
 static void btf_module_free(struct rcu_head *rcu)
 {
 	struct btf_module *btf_mod = container_of(rcu, struct btf_module, rcu);

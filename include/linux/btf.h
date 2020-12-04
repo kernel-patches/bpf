@@ -214,6 +214,14 @@ const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
 const char *btf_name_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+struct btf *bpf_get_btf_module(__u32 obj_id);
+#else
+static inline struct btf *bpf_get_btf_module(__u32 obj_id)
+{
+	return ERR_PTR(-ENOTSUPP);
+}
+#endif
 #else
 static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
 						    u32 type_id)
@@ -224,6 +232,10 @@ static inline const char *btf_name_by_offset(const struct btf *btf,
 					     u32 offset)
 {
 	return NULL;
+}
+static inline struct btf *bpf_get_btf_module(__u32 obj_id)
+{
+	return ERR_PTR(-ENOTSUPP);
 }
 #endif
 

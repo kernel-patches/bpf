@@ -75,8 +75,8 @@ u64 bpf_get_stackid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 bpf_get_stack(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 
 static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
-				  u64 flags, const struct btf **btf,
-				  s32 *btf_id);
+				  u64 flags, struct btf **btf,
+				  bool *btf_is_vmlinux, s32 *btf_id);
 
 /**
  * trace_call_bpf - invoke BPF program
@@ -796,15 +796,22 @@ static const struct bpf_func_proto bpf_seq_write_proto = {
 BPF_CALL_4(bpf_seq_printf_btf, struct seq_file *, m, struct btf_ptr *, ptr,
 	   u32, btf_ptr_size, u64, flags)
 {
-	const struct btf *btf;
+	bool btf_is_vmlinux;
+	struct btf *btf;
 	s32 btf_id;
 	int ret;
 
-	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
+	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf,
+				     &btf_is_vmlinux, &btf_id);
 	if (ret)
 		return ret;
 
-	return btf_type_seq_show_flags(btf, btf_id, ptr->ptr, m, flags);
+	ret = btf_type_seq_show_flags(btf, btf_id, ptr->ptr, m, flags);
+	/* modules refcount their BTF */
+	if (!btf_is_vmlinux)
+		btf_put(btf);
+
+	return ret;
 }
 
 static const struct bpf_func_proto bpf_seq_printf_btf_proto = {
@@ -1215,7 +1222,8 @@ static const struct bpf_func_proto bpf_d_path_proto = {
 			 BTF_F_PTR_RAW | BTF_F_ZERO)
 
 static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
-				  u64 flags, const struct btf **btf,
+				  u64 flags, struct btf **btf,
+				  bool *btf_is_vmlinux,
 				  s32 *btf_id)
 {
 	const struct btf_type *t;
@@ -1226,7 +1234,14 @@ static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
 	if (btf_ptr_size != sizeof(struct btf_ptr))
 		return -EINVAL;
 
-	*btf = bpf_get_btf_vmlinux();
+	*btf_is_vmlinux = false;
+
+	if (ptr->obj_id > 0)
+		*btf = bpf_get_btf_module(ptr->obj_id);
+	if (ptr->obj_id == 0 || IS_ERR(*btf)) {
+		*btf = bpf_get_btf_vmlinux();
+		*btf_is_vmlinux = true;
+	}
 
 	if (IS_ERR_OR_NULL(*btf))
 		return IS_ERR(*btf) ? PTR_ERR(*btf) : -EINVAL;
@@ -1247,16 +1262,23 @@ static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
 BPF_CALL_5(bpf_snprintf_btf, char *, str, u32, str_size, struct btf_ptr *, ptr,
 	   u32, btf_ptr_size, u64, flags)
 {
-	const struct btf *btf;
+	bool btf_is_vmlinux;
+	struct btf *btf;
 	s32 btf_id;
 	int ret;
 
-	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
+	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf,
+				     &btf_is_vmlinux, &btf_id);
 	if (ret)
 		return ret;
 
-	return btf_type_snprintf_show(btf, btf_id, ptr->ptr, str, str_size,
-				      flags);
+	ret = btf_type_snprintf_show(btf, btf_id, ptr->ptr, str, str_size,
+				     flags);
+	/* modules refcount their BTF */
+	if (!btf_is_vmlinux)
+		btf_put(btf);
+
+	return ret;
 }
 
 const struct bpf_func_proto bpf_snprintf_btf_proto = {

@@ -3641,7 +3641,9 @@ union bpf_attr {
  *		the pointer data is carried out to avoid kernel crashes during
  *		operation.  Smaller types can use string space on the stack;
  *		larger programs can use map data to store the string
- *		representation.
+ *		representation.  Module-specific data structures can be
+ *		displayed if the module BTF object id is supplied in the
+ *		*ptr*->obj_id field.
  *
  *		The string can be subsequently shared with userspace via
  *		bpf_perf_event_output() or ring buffer interfaces.
@@ -5124,15 +5126,14 @@ struct bpf_sk_lookup {
 /*
  * struct btf_ptr is used for typed pointer representation; the
  * type id is used to render the pointer data as the appropriate type
- * via the bpf_snprintf_btf() helper described above.  A flags field -
- * potentially to specify additional details about the BTF pointer
- * (rather than its mode of display) - is included for future use.
- * Display flags - BTF_F_* - are passed to bpf_snprintf_btf separately.
+ * via the bpf_snprintf_btf() helper described above.  The obj_id
+ * is used to specify an object id (such as a module); if unset
+ * a core vmlinux type id is assumed.
  */
 struct btf_ptr {
 	void *ptr;
 	__u32 type_id;
-	__u32 flags;		/* BTF ptr flags; unused at present. */
+	__u32 obj_id;		/* BTF object; vmlinux if 0 */
 };
 
 /*
