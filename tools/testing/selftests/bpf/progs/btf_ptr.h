@@ -16,7 +16,7 @@
 struct btf_ptr {
 	void *ptr;
 	__u32 type_id;
-	__u32 flags;
+	__u32 obj_id;
 };
 
 enum {
