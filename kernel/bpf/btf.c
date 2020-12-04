@@ -5758,13 +5758,13 @@ bool btf_id_set_contains(const struct btf_id_set *set, u32 id)
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 struct btf_module {
 	struct list_head list;
+	struct rcu_head	rcu;
 	struct module *module;
 	struct btf *btf;
 	struct bin_attribute *sysfs_attr;
 };
 
 static LIST_HEAD(btf_modules);
-static DEFINE_MUTEX(btf_module_mutex);
 
 static ssize_t
 btf_module_read(struct file *file, struct kobject *kobj,
@@ -5777,10 +5777,21 @@ btf_module_read(struct file *file, struct kobject *kobj,
 	return len;
 }
 
+static void btf_module_free(struct rcu_head *rcu)
+{
+	struct btf_module *btf_mod = container_of(rcu, struct btf_module, rcu);
+
+	if (btf_mod->sysfs_attr)
+		sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
+	btf_put(btf_mod->btf);
+	kfree(btf_mod->sysfs_attr);
+	kfree(btf_mod);
+}
+
 static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			     void *module)
 {
-	struct btf_module *btf_mod, *tmp;
+	struct btf_module *btf_mod;
 	struct module *mod = module;
 	struct btf *btf;
 	int err = 0;
@@ -5811,11 +5822,9 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			goto out;
 		}
 
-		mutex_lock(&btf_module_mutex);
 		btf_mod->module = module;
 		btf_mod->btf = btf;
-		list_add(&btf_mod->list, &btf_modules);
-		mutex_unlock(&btf_module_mutex);
+		list_add_rcu(&btf_mod->list, &btf_modules);
 
 		if (IS_ENABLED(CONFIG_SYSFS)) {
 			struct bin_attribute *attr;
@@ -5845,20 +5854,14 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 
 		break;
 	case MODULE_STATE_GOING:
-		mutex_lock(&btf_module_mutex);
-		list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+		list_for_each_entry(btf_mod, &btf_modules, list) {
 			if (btf_mod->module != module)
 				continue;
 
-			list_del(&btf_mod->list);
-			if (btf_mod->sysfs_attr)
-				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
-			btf_put(btf_mod->btf);
-			kfree(btf_mod->sysfs_attr);
-			kfree(btf_mod);
+			list_del_rcu(&btf_mod->list);
+			call_rcu(&btf_mod->rcu, btf_module_free);
 			break;
 		}
-		mutex_unlock(&btf_module_mutex);
 		break;
 	}
 out:
