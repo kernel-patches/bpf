@@ -4270,6 +4270,8 @@ static int ena_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 
+	xdp_set_basic_properties(&netdev->xdp_properties);
+
 	u64_stats_init(&adapter->syncp);
 
 	rc = ena_enable_msix_and_set_admin_interrupts(adapter);

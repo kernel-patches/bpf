@@ -1111,6 +1111,8 @@ static int efx_pci_probe(struct pci_dev *pci_dev,
 	netif_info(efx, probe, efx->net_dev,
 		   "Solarflare NIC detected\n");
 
+	xdp_set_full_properties(&efx->net_dev->xdp_properties);
+
 	if (!efx->type->is_vf)
 		efx_probe_vpd_strings(efx);
 

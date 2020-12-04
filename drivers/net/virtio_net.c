@@ -3018,6 +3018,8 @@ static int virtnet_probe(struct virtio_device *vdev)
 
 	dev->vlan_features = dev->features;
 
+	xdp_set_full_properties(&dev->xdp_properties);
+
 	/* MTU range: 68 - 65535 */
 	dev->min_mtu = MIN_MTU;
 	dev->max_mtu = MAX_MTU;

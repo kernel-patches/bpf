@@ -1556,6 +1556,8 @@ static struct net_device *xennet_create_dev(struct xenbus_device *dev)
          */
 	netdev->features |= netdev->hw_features;
 
+	xdp_set_full_properties(&netdev->xdp_properties);
+
 	netdev->ethtool_ops = &xennet_ethtool_ops;
 	netdev->min_mtu = ETH_MIN_MTU;
 	netdev->max_mtu = XEN_NETIF_MAX_TX_SIZE;

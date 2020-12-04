@@ -10844,6 +10844,9 @@ skip_sriov:
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 	netdev->priv_flags |= IFF_SUPP_NOFCS;
 
+	xdp_set_full_properties(&netdev->xdp_properties);
+	xsk_set_zc_property(&netdev->xdp_properties);
+
 	/* MTU range: 68 - 9710 */
 	netdev->min_mtu = ETH_MIN_MTU;
 	netdev->max_mtu = IXGBE_MAX_JUMBO_FRAME_SIZE - (ETH_HLEN + ETH_FCS_LEN);

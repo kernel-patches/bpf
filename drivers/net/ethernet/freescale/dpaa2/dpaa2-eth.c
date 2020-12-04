@@ -4014,6 +4014,7 @@ static int dpaa2_eth_netdev_init(struct net_device *net_dev)
 			    NETIF_F_SG | NETIF_F_HIGHDMA |
 			    NETIF_F_LLTX | NETIF_F_HW_TC;
 	net_dev->hw_features = net_dev->features;
+	xdp_set_full_properties(&net_dev->xdp_properties);
 
 	return 0;
 }

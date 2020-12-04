@@ -4099,7 +4099,12 @@ int nfp_net_init(struct nfp_net *nn)
 		return err;
 
 	if (nn->dp.netdev) {
+		struct net_device *dev = nn->dp.netdev;
+
 		nfp_net_netdev_init(nn);
+
+		xdp_set_hw_offload_property(&dev->xdp_properties);
+		xdp_set_basic_properties(&dev->xdp_properties);
 
 		err = nfp_ccm_mbox_init(nn);
 		if (err)
