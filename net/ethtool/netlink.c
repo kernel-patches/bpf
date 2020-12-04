@@ -231,20 +231,21 @@ struct ethnl_dump_ctx {
 
 static const struct ethnl_request_ops *
 ethnl_default_requests[__ETHTOOL_MSG_USER_CNT] = {
-	[ETHTOOL_MSG_STRSET_GET]	= &ethnl_strset_request_ops,
-	[ETHTOOL_MSG_LINKINFO_GET]	= &ethnl_linkinfo_request_ops,
-	[ETHTOOL_MSG_LINKMODES_GET]	= &ethnl_linkmodes_request_ops,
-	[ETHTOOL_MSG_LINKSTATE_GET]	= &ethnl_linkstate_request_ops,
-	[ETHTOOL_MSG_DEBUG_GET]		= &ethnl_debug_request_ops,
-	[ETHTOOL_MSG_WOL_GET]		= &ethnl_wol_request_ops,
-	[ETHTOOL_MSG_FEATURES_GET]	= &ethnl_features_request_ops,
-	[ETHTOOL_MSG_PRIVFLAGS_GET]	= &ethnl_privflags_request_ops,
-	[ETHTOOL_MSG_RINGS_GET]		= &ethnl_rings_request_ops,
-	[ETHTOOL_MSG_CHANNELS_GET]	= &ethnl_channels_request_ops,
-	[ETHTOOL_MSG_COALESCE_GET]	= &ethnl_coalesce_request_ops,
-	[ETHTOOL_MSG_PAUSE_GET]		= &ethnl_pause_request_ops,
-	[ETHTOOL_MSG_EEE_GET]		= &ethnl_eee_request_ops,
-	[ETHTOOL_MSG_TSINFO_GET]	= &ethnl_tsinfo_request_ops,
+	[ETHTOOL_MSG_STRSET_GET]		= &ethnl_strset_request_ops,
+	[ETHTOOL_MSG_LINKINFO_GET]		= &ethnl_linkinfo_request_ops,
+	[ETHTOOL_MSG_LINKMODES_GET]		= &ethnl_linkmodes_request_ops,
+	[ETHTOOL_MSG_LINKSTATE_GET]		= &ethnl_linkstate_request_ops,
+	[ETHTOOL_MSG_DEBUG_GET]			= &ethnl_debug_request_ops,
+	[ETHTOOL_MSG_WOL_GET]			= &ethnl_wol_request_ops,
+	[ETHTOOL_MSG_FEATURES_GET]		= &ethnl_features_request_ops,
+	[ETHTOOL_MSG_PRIVFLAGS_GET]		= &ethnl_privflags_request_ops,
+	[ETHTOOL_MSG_RINGS_GET]			= &ethnl_rings_request_ops,
+	[ETHTOOL_MSG_CHANNELS_GET]		= &ethnl_channels_request_ops,
+	[ETHTOOL_MSG_COALESCE_GET]		= &ethnl_coalesce_request_ops,
+	[ETHTOOL_MSG_PAUSE_GET]			= &ethnl_pause_request_ops,
+	[ETHTOOL_MSG_EEE_GET]			= &ethnl_eee_request_ops,
+	[ETHTOOL_MSG_TSINFO_GET]		= &ethnl_tsinfo_request_ops,
+	[ETHTOOL_MSG_XDP_PROPERTIES_GET]	= &ethnl_xdp_request_ops,
 };
 
 static struct ethnl_dump_ctx *ethnl_dump_context(struct netlink_callback *cb)
@@ -911,6 +912,15 @@ static const struct genl_ops ethtool_genl_ops[] = {
 		.dumpit	= ethnl_tunnel_info_dumpit,
 		.policy = ethnl_tunnel_info_get_policy,
 		.maxattr = ARRAY_SIZE(ethnl_tunnel_info_get_policy) - 1,
+	},
+	{
+		.cmd	= ETHTOOL_MSG_XDP_PROPERTIES_GET,
+		.doit	= ethnl_default_doit,
+		.start	= ethnl_default_start,
+		.dumpit	= ethnl_default_dumpit,
+		.done	= ethnl_default_done,
+		.policy = ethnl_properties_get_policy,
+		.maxattr = ARRAY_SIZE(ethnl_properties_get_policy) - 1,
 	},
 };
 
