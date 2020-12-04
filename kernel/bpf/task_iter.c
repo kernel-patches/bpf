@@ -33,17 +33,17 @@ retry:
 	pid = find_ge_pid(*tid, ns);
 	if (pid) {
 		*tid = pid_nr_ns(pid, ns);
-		task = get_pid_task(pid, PIDTYPE_PID);
+		task = pid_task(pid, PIDTYPE_PID);
 		if (!task) {
 			++*tid;
 			goto retry;
-		} else if (skip_if_dup_files && task->tgid != task->pid &&
+		} else if (skip_if_dup_files && !thread_group_leader(task) &&
 			   task->files == task->group_leader->files) {
-			put_task_struct(task);
 			task = NULL;
 			++*tid;
 			goto retry;
 		}
+		get_task_struct(task);
 	}
 	rcu_read_unlock();
 
@@ -164,7 +164,7 @@ again:
 		curr_files = get_files_struct(curr_task);
 		if (!curr_files) {
 			put_task_struct(curr_task);
-			curr_tid = ++(info->tid);
+			curr_tid = curr_tid + 1;
 			info->fd = 0;
 			goto again;
 		}
