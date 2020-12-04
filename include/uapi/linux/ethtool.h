@@ -688,6 +688,7 @@ enum ethtool_stringset {
 	ETH_SS_TS_TX_TYPES,
 	ETH_SS_TS_RX_FILTERS,
 	ETH_SS_UDP_TUNNEL_TYPES,
+	ETH_SS_XDP_PROPERTIES,
 
 	/* add new constants above here */
 	ETH_SS_COUNT

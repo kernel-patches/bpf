@@ -4,6 +4,7 @@
 #include <linux/net_tstamp.h>
 #include <linux/phy.h>
 #include <linux/rtnetlink.h>
+#include <uapi/linux/xdp_properties.h>
 
 #include "common.h"
 
@@ -282,6 +283,16 @@ const char udp_tunnel_type_names[][ETH_GSTRING_LEN] = {
 };
 static_assert(ARRAY_SIZE(udp_tunnel_type_names) ==
 	      __ETHTOOL_UDP_TUNNEL_TYPE_CNT);
+
+const char xdp_properties_strings[XDP_PROPERTIES_COUNT][ETH_GSTRING_LEN] = {
+	[XDP_F_ABORTED_BIT] =		XDP_PROPERTIES_ABORTED_STR,
+	[XDP_F_DROP_BIT] =		XDP_PROPERTIES_DROP_STR,
+	[XDP_F_PASS_BIT] =		XDP_PROPERTIES_PASS_STR,
+	[XDP_F_TX_BIT] =		XDP_PROPERTIES_TX_STR,
+	[XDP_F_REDIRECT_BIT] =		XDP_PROPERTIES_REDIRECT_STR,
+	[XDP_F_ZEROCOPY_BIT] =		XDP_PROPERTIES_ZEROCOPY_STR,
+	[XDP_F_HW_OFFLOAD_BIT] =	XDP_PROPERTIES_HW_OFFLOAD_STR,
+};
 
 /* return false if legacy contained non-0 deprecated fields
  * maxtxpkt/maxrxpkt. rest of ksettings always updated

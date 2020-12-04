@@ -5,8 +5,10 @@
 
 #include <linux/netdevice.h>
 #include <linux/ethtool.h>
+#include <linux/xdp_properties.h>
 
 #define ETHTOOL_DEV_FEATURE_WORDS	DIV_ROUND_UP(NETDEV_FEATURE_COUNT, 32)
+#define ETHTOOL_XDP_PROPERTIES_WORDS	DIV_ROUND_UP(XDP_PROPERTIES_COUNT, 32)
 
 /* compose link mode index from speed, type and duplex */
 #define ETHTOOL_LINK_MODE(speed, type, duplex) \
@@ -22,6 +24,8 @@ extern const char
 tunable_strings[__ETHTOOL_TUNABLE_COUNT][ETH_GSTRING_LEN];
 extern const char
 phy_tunable_strings[__ETHTOOL_PHY_TUNABLE_COUNT][ETH_GSTRING_LEN];
+extern const char
+xdp_properties_strings[XDP_PROPERTIES_COUNT][ETH_GSTRING_LEN];
 extern const char link_mode_names[][ETH_GSTRING_LEN];
 extern const char netif_msg_class_names[][ETH_GSTRING_LEN];
 extern const char wol_mode_names[][ETH_GSTRING_LEN];

@@ -80,6 +80,11 @@ static const struct strset_info info_template[] = {
 		.count		= __ETHTOOL_UDP_TUNNEL_TYPE_CNT,
 		.strings	= udp_tunnel_type_names,
 	},
+	[ETH_SS_XDP_PROPERTIES] = {
+		.per_dev	= false,
+		.count		= ARRAY_SIZE(xdp_properties_strings),
+		.strings	= xdp_properties_strings,
+	},
 };
 
 struct strset_req_info {

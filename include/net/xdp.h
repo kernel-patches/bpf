@@ -7,6 +7,7 @@
 #define __LINUX_NET_XDP_H__
 
 #include <linux/skbuff.h> /* skb_shared_info */
+#include <linux/xdp_properties.h>
 
 /**
  * DOC: XDP RX-queue information
@@ -238,6 +239,100 @@ struct xdp_attachment_info {
 	struct bpf_prog *prog;
 	u32 flags;
 };
+
+#if defined(CONFIG_NET) && defined(CONFIG_BPF_SYSCALL)
+
+static __always_inline void
+xdp_set_aborted_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_ABORTED;
+}
+
+static __always_inline void
+xdp_set_pass_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_PASS;
+}
+
+static __always_inline void
+xdp_set_drop_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_DROP;
+}
+
+static __always_inline void
+xdp_set_tx_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_TX;
+}
+
+static __always_inline void
+xdp_set_redirect_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_REDIRECT;
+}
+
+static __always_inline void
+xdp_set_hw_offload_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_HW_OFFLOAD;
+}
+
+static __always_inline void
+xdp_set_basic_properties(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_BASIC;
+}
+
+static __always_inline void
+xdp_set_full_properties(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_FULL;
+}
+
+#else
+
+static __always_inline void
+xdp_set_aborted_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_pass_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_drop_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_tx_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_redirect_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_hw_offload_property(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_basic_properties(xdp_properties_t *properties)
+{
+}
+
+static __always_inline void
+xdp_set_full_properties(xdp_properties_t *properties)
+{
+}
+
+#endif
 
 struct netdev_bpf;
 bool xdp_attachment_flags_ok(struct xdp_attachment_info *info,

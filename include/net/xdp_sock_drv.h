@@ -8,6 +8,7 @@
 
 #include <net/xdp_sock.h>
 #include <net/xsk_buff_pool.h>
+#include <linux/xdp_properties.h>
 
 #ifdef CONFIG_XDP_SOCKETS
 
@@ -114,6 +115,11 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 						    size_t size)
 {
 	xp_dma_sync_for_device(pool, dma, size);
+}
+
+static inline void xsk_set_zc_property(xdp_properties_t *properties)
+{
+	*properties |= XDP_F_ZEROCOPY;
 }
 
 #else
@@ -232,6 +238,10 @@ static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_bu
 static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 						    dma_addr_t dma,
 						    size_t size)
+{
+}
+
+static inline void xsk_set_zc_property(xdp_properties_t *properties)
 {
 }
 
