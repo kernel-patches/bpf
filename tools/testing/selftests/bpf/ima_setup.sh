@@ -10,7 +10,7 @@ TEST_BINARY="/bin/true"
 
 usage()
 {
-	echo "Usage: $0 <setup|cleanup|run> <existing_tmp_dir>"
+	echo "Usage: $0 -a <setup|cleanup|run> -d <existing_tmp_dir> -v <yes|no>"
 	exit 1
 }
 
@@ -77,12 +77,40 @@ run()
 
 main()
 {
-	[[ $# -ne 2 ]] && usage
+	local tmp_dir=""
+	local action=""
+	local verbosity="no"
 
-	local action="$1"
-	local tmp_dir="$2"
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		-v | --verbosity)
+			shift
+			verbosity="$1"
+			shift
+			;;
+		-a | --action)
+			shift
+			action="$1"
+			shift
+			;;
+		-d | --dir)
+			shift
+			tmp_dir="$1"
+			shift
+			;;
+		* )
+			break
+			;;
+		esac
+	done
+
+	if [[ "${verbosity}" == "no" ]]; then
+		exec 1> /dev/null
+		exec 2>&1
+	fi
 
 	[[ ! -d "${tmp_dir}" ]] && echo "Directory ${tmp_dir} doesn't exist" && exit 1
+	[[ -z "${action}" ]] && usage
 
 	if [[ "${action}" == "setup" ]]; then
 		setup "${tmp_dir}"

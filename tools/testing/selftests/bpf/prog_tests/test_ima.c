@@ -12,6 +12,8 @@
 
 #include "ima.skel.h"
 
+#define HELPER_VERBOSITY() (env.verbosity == VERBOSE_NONE ? "no" : "yes")
+
 static int run_measured_process(const char *measured_dir, u32 *monitored_pid)
 {
 	int child_pid, child_status;
@@ -19,7 +21,8 @@ static int run_measured_process(const char *measured_dir, u32 *monitored_pid)
 	child_pid = fork();
 	if (child_pid == 0) {
 		*monitored_pid = getpid();
-		execlp("./ima_setup.sh", "./ima_setup.sh", "run", measured_dir,
+		execlp("./ima_setup.sh", "./ima_setup.sh", "-v",
+		       HELPER_VERBOSITY(), "-a", "run", "-d", measured_dir,
 		       NULL);
 		exit(errno);
 
@@ -52,7 +55,8 @@ void test_test_ima(void)
 	if (CHECK(measured_dir == NULL, "mkdtemp", "err %d\n", errno))
 		goto close_prog;
 
-	snprintf(cmd, sizeof(cmd), "./ima_setup.sh setup %s", measured_dir);
+	snprintf(cmd, sizeof(cmd), "./ima_setup.sh -v %s -a setup -d %s",
+		 HELPER_VERBOSITY(), measured_dir);
 	if (CHECK_FAIL(system(cmd)))
 		goto close_clean;
 
@@ -67,7 +71,8 @@ void test_test_ima(void)
 	      "ima_hash = %lu\n", skel->bss->ima_hash);
 
 close_clean:
-	snprintf(cmd, sizeof(cmd), "./ima_setup.sh cleanup %s", measured_dir);
+	snprintf(cmd, sizeof(cmd), "./ima_setup.sh -v %s -a cleanup -d %s",
+		 HELPER_VERBOSITY(), measured_dir);
 	CHECK_FAIL(system(cmd));
 close_prog:
 	ima__destroy(skel);
