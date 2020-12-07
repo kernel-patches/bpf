@@ -699,7 +699,7 @@ void inet_unhash(struct sock *sk)
 
 	if (rcu_access_pointer(sk->sk_reuseport_cb)) {
 		nsk = reuseport_detach_sock(sk);
-		if (nsk)
+		if (!IS_ERR_OR_NULL(nsk))
 			inet_csk_reqsk_queue_migrate(sk, nsk);
 	}
 

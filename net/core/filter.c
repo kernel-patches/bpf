@@ -9890,9 +9890,28 @@ struct sock *bpf_run_sk_reuseport(struct sock_reuseport *reuse, struct sock *sk,
 {
 	struct sk_reuseport_kern reuse_kern;
 	enum sk_action action;
+	bool allocated = false;
+
+	if (migration) {
+		/* cancel migration for possibly incapable eBPF program */
+		if (prog->expected_attach_type != BPF_SK_REUSEPORT_SELECT_OR_MIGRATE)
+			return ERR_PTR(-ENOTSUPP);
+
+		if (!skb) {
+			allocated = true;
+			skb = alloc_skb(0, GFP_ATOMIC);
+			if (!skb)
+				return ERR_PTR(-ENOMEM);
+		}
+	} else if (!skb) {
+		return NULL; /* fall back to select by hash */
+	}
 
 	bpf_init_reuseport_kern(&reuse_kern, reuse, sk, skb, hash, migration);
 	action = BPF_PROG_RUN(prog, &reuse_kern);
+
+	if (allocated)
+		kfree_skb(skb);
 
 	if (action == SK_PASS)
 		return reuse_kern.selected_sk;
