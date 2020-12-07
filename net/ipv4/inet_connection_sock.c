@@ -138,6 +138,7 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 	bool reuse = sk->sk_reuse;
 	bool reuseport = !!sk->sk_reuseport;
 	kuid_t uid = sock_i_uid((struct sock *)sk);
+	struct sock_reuseport *reuseport_cb = rcu_access_pointer(sk->sk_reuseport_cb);
 
 	/*
 	 * Unlike other sk lookup places we do not check
@@ -156,14 +157,16 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 				if ((!relax ||
 				     (!reuseport_ok &&
 				      reuseport && sk2->sk_reuseport &&
-				      !rcu_access_pointer(sk->sk_reuseport_cb) &&
+				      (!reuseport_cb ||
+				       reuseport_cb == rcu_access_pointer(sk2->sk_reuseport_cb)) &&
 				      (sk2->sk_state == TCP_TIME_WAIT ||
 				       uid_eq(uid, sock_i_uid(sk2))))) &&
 				    inet_rcv_saddr_equal(sk, sk2, true))
 					break;
 			} else if (!reuseport_ok ||
 				   !reuseport || !sk2->sk_reuseport ||
-				   rcu_access_pointer(sk->sk_reuseport_cb) ||
+				   (reuseport_cb &&
+				    reuseport_cb != rcu_access_pointer(sk2->sk_reuseport_cb)) ||
 				   (sk2->sk_state != TCP_TIME_WAIT &&
 				    !uid_eq(uid, sock_i_uid(sk2)))) {
 				if (inet_rcv_saddr_equal(sk, sk2, true))
