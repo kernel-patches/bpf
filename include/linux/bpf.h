@@ -1914,6 +1914,7 @@ struct sk_reuseport_kern {
 	u32 hash;
 	u32 reuseport_id;
 	bool bind_inany;
+	u8 migration;
 };
 bool bpf_tcp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 				  struct bpf_insn_access_aux *info);

@@ -313,7 +313,7 @@ static struct sock *__reuseport_select_sock(struct sock *sk, u32 hash,
 			goto select_by_hash;
 
 		if (prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
-			sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash);
+			sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash, migration);
 		else
 			sk2 = run_bpf_filter(reuse, socks, prog, skb, hdr_len);
 

@@ -9860,7 +9860,7 @@ out:
 static void bpf_init_reuseport_kern(struct sk_reuseport_kern *reuse_kern,
 				    struct sock_reuseport *reuse,
 				    struct sock *sk, struct sk_buff *skb,
-				    u32 hash)
+				    u32 hash, u8 migration)
 {
 	reuse_kern->skb = skb;
 	reuse_kern->sk = sk;
@@ -9869,16 +9869,17 @@ static void bpf_init_reuseport_kern(struct sk_reuseport_kern *reuse_kern,
 	reuse_kern->hash = hash;
 	reuse_kern->reuseport_id = reuse->reuseport_id;
 	reuse_kern->bind_inany = reuse->bind_inany;
+	reuse_kern->migration = migration;
 }
 
 struct sock *bpf_run_sk_reuseport(struct sock_reuseport *reuse, struct sock *sk,
 				  struct bpf_prog *prog, struct sk_buff *skb,
-				  u32 hash)
+				  u32 hash, u8 migration)
 {
 	struct sk_reuseport_kern reuse_kern;
 	enum sk_action action;
 
-	bpf_init_reuseport_kern(&reuse_kern, reuse, sk, skb, hash);
+	bpf_init_reuseport_kern(&reuse_kern, reuse, sk, skb, hash, migration);
 	action = BPF_PROG_RUN(prog, &reuse_kern);
 
 	if (action == SK_PASS)
@@ -10017,6 +10018,10 @@ sk_reuseport_is_valid_access(int off, int size,
 	case offsetof(struct sk_reuseport_md, hash):
 		return size == size_default;
 
+	case bpf_ctx_range(struct sk_reuseport_md, migration):
+		return prog->expected_attach_type == BPF_SK_REUSEPORT_SELECT_OR_MIGRATE &&
+			size == sizeof(__u8);
+
 	/* Fields that allow narrowing */
 	case bpf_ctx_range(struct sk_reuseport_md, eth_protocol):
 		if (size < sizeof_field(struct sk_buff, protocol))
@@ -10088,6 +10093,10 @@ static u32 sk_reuseport_convert_ctx_access(enum bpf_access_type type,
 
 	case offsetof(struct sk_reuseport_md, bind_inany):
 		SK_REUSEPORT_LOAD_FIELD(bind_inany);
+		break;
+
+	case offsetof(struct sk_reuseport_md, migration):
+		SK_REUSEPORT_LOAD_FIELD(migration);
 		break;
 	}
 
