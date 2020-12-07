@@ -4432,6 +4432,20 @@ struct sk_msg_md {
 	__bpf_md_ptr(struct bpf_sock *, sk); /* current socket */
 };
 
+/* Migration type for SO_REUSEPORT enabled TCP sockets.
+ *
+ * BPF_SK_REUSEPORT_MIGRATE_NO      : Select a listener for SYN packets.
+ * BPF_SK_REUSEPORT_MIGRATE_QUEUE   : Migrate ESTABLISHED and SYN_RECV sockets in
+ *                                    the accept queue at close() or shutdown().
+ * BPF_SK_REUSEPORT_MIGRATE_REQUEST : Migrate NEW_SYN_RECV socket at receiving the
+ *                                    final ACK of 3WHS or retransmitting SYN+ACKs.
+ */
+enum {
+	BPF_SK_REUSEPORT_MIGRATE_NO,
+	BPF_SK_REUSEPORT_MIGRATE_QUEUE,
+	BPF_SK_REUSEPORT_MIGRATE_REQUEST,
+};
+
 struct sk_reuseport_md {
 	/*
 	 * Start of directly accessible data. It begins from
