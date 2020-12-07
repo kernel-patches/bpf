@@ -3766,11 +3766,6 @@ static int mvneta_change_mtu(struct net_device *dev, int mtu)
 		mtu = ALIGN(MVNETA_RX_PKT_SIZE(mtu), 8);
 	}
 
-	if (pp->xdp_prog && mtu > MVNETA_MAX_RX_BUF_SIZE) {
-		netdev_info(dev, "Illegal MTU value %d for XDP mode\n", mtu);
-		return -EINVAL;
-	}
-
 	dev->mtu = mtu;
 
 	if (!netif_running(dev)) {
@@ -4467,11 +4462,6 @@ static int mvneta_xdp_setup(struct net_device *dev, struct bpf_prog *prog,
 	bool need_update, running = netif_running(dev);
 	struct mvneta_port *pp = netdev_priv(dev);
 	struct bpf_prog *old_prog;
-
-	if (prog && dev->mtu > MVNETA_MAX_RX_BUF_SIZE) {
-		NL_SET_ERR_MSG_MOD(extack, "Jumbo frames not supported on XDP");
-		return -EOPNOTSUPP;
-	}
 
 	if (pp->bm_priv) {
 		NL_SET_ERR_MSG_MOD(extack,
