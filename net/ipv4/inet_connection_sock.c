@@ -992,6 +992,74 @@ struct sock *inet_csk_reqsk_queue_add(struct sock *sk,
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_add);
 
+void inet_csk_reqsk_queue_migrate(struct sock *sk, struct sock *nsk)
+{
+	struct request_sock_queue *old_accept_queue, *new_accept_queue;
+	struct fastopen_queue *old_fastopenq, *new_fastopenq;
+	spinlock_t *l1, *l2, *l3, *l4;
+
+	old_accept_queue = &inet_csk(sk)->icsk_accept_queue;
+	new_accept_queue = &inet_csk(nsk)->icsk_accept_queue;
+	old_fastopenq = &old_accept_queue->fastopenq;
+	new_fastopenq = &new_accept_queue->fastopenq;
+
+	l1 = &old_accept_queue->rskq_lock;
+	l2 = &new_accept_queue->rskq_lock;
+	l3 = &old_fastopenq->lock;
+	l4 = &new_fastopenq->lock;
+
+	/* sk is never selected as the new listener from reuse->socks[],
+	 * so inversion deadlock does not happen here,
+	 * but change the order to avoid the warning of lockdep.
+	 */
+	if (sk < nsk) {
+		swap(l1, l2);
+		swap(l3, l4);
+	}
+
+	spin_lock(l1);
+	spin_lock_nested(l2, SINGLE_DEPTH_NESTING);
+
+	if (old_accept_queue->rskq_accept_head) {
+		if (new_accept_queue->rskq_accept_head)
+			old_accept_queue->rskq_accept_tail->dl_next =
+				new_accept_queue->rskq_accept_head;
+		else
+			new_accept_queue->rskq_accept_tail = old_accept_queue->rskq_accept_tail;
+
+		new_accept_queue->rskq_accept_head = old_accept_queue->rskq_accept_head;
+		old_accept_queue->rskq_accept_head = NULL;
+		old_accept_queue->rskq_accept_tail = NULL;
+
+		WRITE_ONCE(nsk->sk_ack_backlog, nsk->sk_ack_backlog + sk->sk_ack_backlog);
+		WRITE_ONCE(sk->sk_ack_backlog, 0);
+	}
+
+	spin_unlock(l2);
+	spin_unlock(l1);
+
+	spin_lock_bh(l3);
+	spin_lock_bh_nested(l4, SINGLE_DEPTH_NESTING);
+
+	new_fastopenq->qlen += old_fastopenq->qlen;
+	old_fastopenq->qlen = 0;
+
+	if (old_fastopenq->rskq_rst_head) {
+		if (new_fastopenq->rskq_rst_head)
+			old_fastopenq->rskq_rst_tail->dl_next = new_fastopenq->rskq_rst_head;
+		else
+			old_fastopenq->rskq_rst_tail = new_fastopenq->rskq_rst_tail;
+
+		new_fastopenq->rskq_rst_head = old_fastopenq->rskq_rst_head;
+		old_fastopenq->rskq_rst_head = NULL;
+		old_fastopenq->rskq_rst_tail = NULL;
+	}
+
+	spin_unlock_bh(l4);
+	spin_unlock_bh(l3);
+}
+EXPORT_SYMBOL(inet_csk_reqsk_queue_migrate);
+
 struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 					 struct request_sock *req, bool own_req)
 {
