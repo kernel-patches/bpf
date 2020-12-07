@@ -226,6 +226,19 @@ static inline void reqsk_queue_added(struct request_sock_queue *queue)
 	atomic_inc(&queue->qlen);
 }
 
+static inline void reqsk_queue_migrated(struct request_sock_queue *old_accept_queue,
+					struct request_sock_queue *new_accept_queue,
+					const struct request_sock *req)
+{
+	atomic_dec(&old_accept_queue->qlen);
+	atomic_inc(&new_accept_queue->qlen);
+
+	if (req->num_timeout == 0) {
+		atomic_dec(&old_accept_queue->young);
+		atomic_inc(&new_accept_queue->young);
+	}
+}
+
 static inline int reqsk_queue_len(const struct request_sock_queue *queue)
 {
 	return atomic_read(&queue->qlen);

@@ -32,10 +32,10 @@ extern int reuseport_alloc(struct sock *sk, bool bind_inany);
 extern int reuseport_add_sock(struct sock *sk, struct sock *sk2,
 			      bool bind_inany);
 extern struct sock *reuseport_detach_sock(struct sock *sk);
-extern struct sock *reuseport_select_sock(struct sock *sk,
-					  u32 hash,
-					  struct sk_buff *skb,
-					  int hdr_len);
+extern struct sock *reuseport_select_sock(struct sock *sk, u32 hash,
+					  struct sk_buff *skb, int hdr_len);
+extern struct sock *reuseport_select_migrated_sock(struct sock *sk, u32 hash,
+						   struct sk_buff *skb);
 extern int reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog);
 extern int reuseport_detach_prog(struct sock *sk);
 

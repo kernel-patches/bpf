@@ -743,8 +743,17 @@ static void reqsk_timer_handler(struct timer_list *t)
 	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
 	int max_syn_ack_retries, qlen, expire = 0, resend = 0;
 
-	if (inet_sk_state_load(sk_listener) != TCP_LISTEN)
-		goto drop;
+	if (inet_sk_state_load(sk_listener) != TCP_LISTEN) {
+		sk_listener = reuseport_select_migrated_sock(sk_listener,
+							     req_to_sk(req)->sk_hash, NULL);
+		if (!sk_listener) {
+			sk_listener = req->rsk_listener;
+			goto drop;
+		}
+		inet_csk_reqsk_queue_migrated(req->rsk_listener, sk_listener, req);
+		icsk = inet_csk(sk_listener);
+		queue = &icsk->icsk_accept_queue;
+	}
 
 	max_syn_ack_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
 	/* Normally all the openreqs are young and become mature

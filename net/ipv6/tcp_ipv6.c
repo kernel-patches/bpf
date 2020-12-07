@@ -1640,8 +1640,13 @@ process:
 			goto csum_error;
 		}
 		if (unlikely(sk->sk_state != TCP_LISTEN)) {
-			inet_csk_reqsk_queue_drop_and_put(sk, req);
-			goto lookup;
+			nsk = reuseport_select_migrated_sock(sk, req_to_sk(req)->sk_hash, skb);
+			if (!nsk) {
+				inet_csk_reqsk_queue_drop_and_put(sk, req);
+				goto lookup;
+			}
+			inet_csk_reqsk_queue_migrated(sk, nsk, req);
+			sk = nsk;
 		}
 		sock_hold(sk);
 		refcounted = true;

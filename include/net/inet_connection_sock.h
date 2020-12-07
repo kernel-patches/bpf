@@ -272,6 +272,17 @@ static inline void inet_csk_reqsk_queue_added(struct sock *sk)
 	reqsk_queue_added(&inet_csk(sk)->icsk_accept_queue);
 }
 
+static inline void inet_csk_reqsk_queue_migrated(struct sock *sk,
+						 struct sock *nsk,
+						 struct request_sock *req)
+{
+	reqsk_queue_migrated(&inet_csk(sk)->icsk_accept_queue,
+			     &inet_csk(nsk)->icsk_accept_queue,
+			     req);
+	sock_put(sk);
+	req->rsk_listener = nsk;
+}
+
 static inline int inet_csk_reqsk_queue_len(const struct sock *sk)
 {
 	return reqsk_queue_len(&inet_csk(sk)->icsk_accept_queue);
