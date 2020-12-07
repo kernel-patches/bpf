@@ -500,6 +500,16 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 	    tcp_rsk(req)->tfo_listener) {
 		spin_lock_bh(&queue->fastopenq.lock);
 		if (tcp_rsk(req)->tfo_listener) {
+			if (req->rsk_listener != sk) {
+				/* TFO request was migrated to another listener so
+				 * the new listener must be used in reqsk_fastopen_remove()
+				 * to hold requests which cause RST.
+				 */
+				sock_put(req->rsk_listener);
+				sock_hold(sk);
+				req->rsk_listener = sk;
+			}
+
 			/* We are still waiting for the final ACK from 3WHS
 			 * so can't free req now. Instead, we set req->sk to
 			 * NULL to signify that the child socket is taken
@@ -954,7 +964,6 @@ static void inet_child_forget(struct sock *sk, struct request_sock *req,
 
 	if (sk->sk_protocol == IPPROTO_TCP && tcp_rsk(req)->tfo_listener) {
 		BUG_ON(rcu_access_pointer(tcp_sk(child)->fastopen_rsk) != req);
-		BUG_ON(sk != req->rsk_listener);
 
 		/* Paranoid, to prevent race condition if
 		 * an inbound pkt destined for child is
