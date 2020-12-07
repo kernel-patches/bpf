@@ -1655,6 +1655,13 @@ union bpf_attr {
  * 		A 8-byte long non-decreasing number on success, or 0 if the
  * 		socket field is missing inside *skb*.
  *
+ * u64 bpf_get_socket_cookie(struct bpf_sock *sk)
+ * 	Description
+ * 		Equivalent to bpf_get_socket_cookie() helper that accepts
+ * 		*skb*, but gets socket from **struct bpf_sock** context.
+ * 	Return
+ * 		A 8-byte long non-decreasing number.
+ *
  * u64 bpf_get_socket_cookie(struct bpf_sock_addr *ctx)
  * 	Description
  * 		Equivalent to bpf_get_socket_cookie() helper that accepts
@@ -4472,6 +4479,7 @@ struct sk_reuseport_md {
 	__u32 bind_inany;	/* Is sock bound to an INANY address? */
 	__u32 hash;		/* A hash of the packet 4 tuples */
 	__u8 migration;		/* Migration type */
+	__bpf_md_ptr(struct bpf_sock *, sk); /* Current listening socket */
 };
 
 #define BPF_TAG_SIZE	8
