@@ -681,6 +681,7 @@ void inet_unhash(struct sock *sk)
 {
 	struct inet_hashinfo *hashinfo = sk->sk_prot->h.hashinfo;
 	struct inet_listen_hashbucket *ilb = NULL;
+	struct sock *nsk;
 	spinlock_t *lock;
 
 	if (sk_unhashed(sk))
@@ -696,8 +697,12 @@ void inet_unhash(struct sock *sk)
 	if (sk_unhashed(sk))
 		goto unlock;
 
-	if (rcu_access_pointer(sk->sk_reuseport_cb))
-		reuseport_detach_sock(sk);
+	if (rcu_access_pointer(sk->sk_reuseport_cb)) {
+		nsk = reuseport_detach_sock(sk);
+		if (nsk)
+			inet_csk_reqsk_queue_migrate(sk, nsk);
+	}
+
 	if (ilb) {
 		inet_unhash2(hashinfo, sk);
 		ilb->count--;
