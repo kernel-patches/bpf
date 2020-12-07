@@ -73,8 +73,30 @@ struct xdp_buff {
 	void *data_hard_start;
 	struct xdp_rxq_info *rxq;
 	struct xdp_txq_info *txq;
+	/* If any of the bitfield lengths for frame_sz or mb below change,
+	 * make sure the defines here are also updated!
+	 */
+#ifdef __BIG_ENDIAN_BITFIELD
+#define MB_SHIFT	  0
+#define MB_MASK		  0x00000001
+#define FRAME_SZ_SHIFT	  1
+#define FRAME_SZ_MASK	  0xfffffffe
+#else
+#define MB_SHIFT	  31
+#define MB_MASK		  0x80000000
+#define FRAME_SZ_SHIFT	  0
+#define FRAME_SZ_MASK	  0x7fffffff
+#endif
+#define FRAME_SZ_OFFSET() offsetof(struct xdp_buff, __u32_bit_fields_offset)
+#define MB_OFFSET()	  offsetof(struct xdp_buff, __u32_bit_fields_offset)
+	/* private: */
+	u32 __u32_bit_fields_offset[0];
+	/* public: */
 	u32 frame_sz:31; /* frame size to deduce data_hard_end/reserved tailroom*/
 	u32 mb:1; /* xdp non-linear buffer */
+
+	/* Temporary registers to make conditional access/stores possible. */
+	u64 tmp_reg[2];
 };
 
 /* Reserve memory area at end-of data area.
