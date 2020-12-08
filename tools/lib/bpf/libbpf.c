@@ -4795,6 +4795,7 @@ static int load_module_btfs(struct bpf_object *obj)
 
 		mod_btf = &obj->btf_modules[obj->btf_module_cnt++];
 
+		btf__set_fd(btf, fd);
 		mod_btf->btf = btf;
 		mod_btf->id = id;
 		mod_btf->fd = fd;
@@ -5445,6 +5446,10 @@ struct bpf_core_relo_res
 	__u32 orig_type_id;
 	__u32 new_sz;
 	__u32 new_type_id;
+	/* FD of the module BTF containing the target candidate, or 0 for
+	 * vmlinux BTF
+	 */
+	int btf_obj_fd;
 };
 
 /* Calculate original and target relocation values, given local and target
@@ -5469,6 +5474,7 @@ static int bpf_core_calc_relo(const struct bpf_program *prog,
 	res->fail_memsz_adjust = false;
 	res->orig_sz = res->new_sz = 0;
 	res->orig_type_id = res->new_type_id = 0;
+	res->btf_obj_fd = 0;
 
 	if (core_relo_is_field_based(relo->kind)) {
 		err = bpf_core_calc_field_relo(prog, relo, local_spec,
@@ -5519,6 +5525,9 @@ static int bpf_core_calc_relo(const struct bpf_program *prog,
 	} else if (core_relo_is_type_based(relo->kind)) {
 		err = bpf_core_calc_type_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_type_relo(relo, targ_spec, &res->new_val);
+		if (!err && relo->kind == BPF_TYPE_ID_TARGET &&
+		    targ_spec && targ_spec->btf != prog->obj->btf_vmlinux)
+			res->btf_obj_fd = btf__fd(targ_spec->btf);
 	} else if (core_relo_is_enumval_based(relo->kind)) {
 		err = bpf_core_calc_enumval_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_enumval_relo(relo, targ_spec, &res->new_val);
@@ -5725,10 +5734,14 @@ poison:
 		}
 
 		insn[0].imm = new_val;
-		insn[1].imm = 0; /* currently only 32-bit values are supported */
-		pr_debug("prog '%s': relo #%d: patched insn #%d (LDIMM64) imm64 %llu -> %u\n",
+		/* btf_obj_fd is zero for all relos but BPF_TYPE_ID_TARGET
+		 * with target type in the kernel module BTF
+		 */
+		insn[1].imm = res->btf_obj_fd;
+		pr_debug("prog '%s': relo #%d: patched insn #%d (LDIMM64) imm64 %llu -> %llu\n",
 			 prog->name, relo_idx, insn_idx,
-			 (unsigned long long)imm, new_val);
+			 (unsigned long long)imm,
+			 ((unsigned long long)res->btf_obj_fd << 32) | new_val);
 		break;
 	}
 	default:
