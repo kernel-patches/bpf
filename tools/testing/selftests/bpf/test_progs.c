@@ -370,8 +370,48 @@ static int delete_module(const char *name, int flags)
 	return syscall(__NR_delete_module, name, flags);
 }
 
+/*
+ * Trigger synchronize_rcu() in kernel.
+ *
+ * ARRAY_OF_MAPS/HASH_OF_MAPS lookup/update operations trigger synchronize_rcu()
+ * if looking up an existing non-NULL element or updating the map with a valid
+ * inner map FD. Use this fact to trigger synchronize_rcu(): create map-in-map,
+ * create a trivial ARRAY map, update map-in-map with ARRAY inner map. Then
+ * cleanup. At the end, at least one synchronize_rcu() would be called.
+ */
+int kern_sync_rcu(void)
+{
+	int inner_map_fd, outer_map_fd, err, zero = 0;
+
+	inner_map_fd = bpf_create_map(BPF_MAP_TYPE_ARRAY, 4, 4, 1, 0);
+	if (inner_map_fd < 0) {
+		fprintf(env.stderr,
+			"sync_rcu: failed to created outer map: %d\n", -errno);
+		return -1;
+	}
+
+	outer_map_fd = bpf_create_map_in_map(BPF_MAP_TYPE_ARRAY_OF_MAPS, NULL,
+					     sizeof(int), inner_map_fd, 1, 0);
+	if (outer_map_fd < 0) {
+		fprintf(env.stderr,
+			"sync_rcu: failed to created outer map: %d\n", -errno);
+		close(inner_map_fd);
+		return -1;
+	}
+
+	err = bpf_map_update_elem(outer_map_fd, &zero, &inner_map_fd, 0);
+	if (err)
+		err = -errno;
+
+	close(inner_map_fd);
+	close(outer_map_fd);
+	return err;
+}
+
 static void unload_bpf_testmod(void)
 {
+	if (kern_sync_rcu())
+		fprintf(env.stderr, "Failed to trigger kernel-side RCU sync!\n");
 	if (delete_module("bpf_testmod", 0)) {
 		if (errno == ENOENT) {
 			if (env.verbosity > VERBOSE_NONE)
