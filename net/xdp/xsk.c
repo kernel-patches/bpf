@@ -435,6 +435,19 @@ static int xsk_generic_xmit(struct sock *sk)
 	if (xs->queue_id >= xs->dev->real_num_tx_queues)
 		goto out;
 
+	if (xs->skb_undone) {
+		if (xs->skb_undone_reserve) {
+			if (xskq_prod_reserve(xs->pool->cq))
+				goto out;
+
+			xs->skb_undone_reserve = false;
+		}
+
+		skb = xs->skb_undone;
+		xs->skb_undone = NULL;
+		goto xmit;
+	}
+
 	while (xskq_cons_peek_desc(xs->tx, &desc, xs->pool)) {
 		char *buffer;
 		u64 addr;
@@ -454,12 +467,7 @@ static int xsk_generic_xmit(struct sock *sk)
 		addr = desc.addr;
 		buffer = xsk_buff_raw_get_data(xs->pool, addr);
 		err = skb_store_bits(skb, 0, buffer, len);
-		/* This is the backpressure mechanism for the Tx path.
-		 * Reserve space in the completion queue and only proceed
-		 * if there is space in it. This avoids having to implement
-		 * any buffering in the Tx path.
-		 */
-		if (unlikely(err) || xskq_prod_reserve(xs->pool->cq)) {
+		if (unlikely(err)) {
 			kfree_skb(skb);
 			goto out;
 		}
@@ -470,12 +478,22 @@ static int xsk_generic_xmit(struct sock *sk)
 		skb_shinfo(skb)->destructor_arg = (void *)(long)desc.addr;
 		skb->destructor = xsk_destruct_skb;
 
+		/* This is the backpressure mechanism for the Tx path.
+		 * Reserve space in the completion queue and only proceed
+		 * if there is space in it. This avoids having to implement
+		 * any buffering in the Tx path.
+		 */
+		if (xskq_prod_reserve(xs->pool->cq)) {
+			xs->skb_undone_reserve = true;
+			xs->skb_undone = skb;
+			goto out;
+		}
+
+xmit:
 		err = __dev_direct_xmit(skb, xs->queue_id);
 		if  (err == NETDEV_TX_BUSY) {
 			/* Tell user-space to retry the send */
-			skb->destructor = sock_wfree;
-			/* Free skb without triggering the perf drop trace */
-			consume_skb(skb);
+			xs->skb_undone = skb;
 			err = -EAGAIN;
 			goto out;
 		}

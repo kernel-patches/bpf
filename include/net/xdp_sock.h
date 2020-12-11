@@ -76,6 +76,9 @@ struct xdp_sock {
 	struct mutex mutex;
 	struct xsk_queue *fq_tmp; /* Only as tmp storage before bind */
 	struct xsk_queue *cq_tmp; /* Only as tmp storage before bind */
+
+	struct sk_buff *skb_undone;
+	bool skb_undone_reserve;
 };
 
 #ifdef CONFIG_XDP_SOCKETS
