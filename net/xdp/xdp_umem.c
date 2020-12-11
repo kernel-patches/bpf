@@ -97,7 +97,6 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 {
 	unsigned int gup_flags = FOLL_WRITE;
 	long npgs;
-	int err;
 
 	umem->pgs = kcalloc(umem->npgs, sizeof(*umem->pgs),
 			    GFP_KERNEL | __GFP_NOWARN);
@@ -112,20 +111,14 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 	if (npgs != umem->npgs) {
 		if (npgs >= 0) {
 			umem->npgs = npgs;
-			err = -ENOMEM;
-			goto out_pin;
+			xdp_umem_unpin_pages(umem);
+			return -ENOMEM;
 		}
-		err = npgs;
-		goto out_pgs;
+		kfree(umem->pgs);
+		umem->pgs = NULL;
+		return (int)npgs;
 	}
 	return 0;
-
-out_pin:
-	xdp_umem_unpin_pages(umem);
-out_pgs:
-	kfree(umem->pgs);
-	umem->pgs = NULL;
-	return err;
 }
 
 static int xdp_umem_account_pages(struct xdp_umem *umem)
