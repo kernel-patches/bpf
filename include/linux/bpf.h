@@ -761,9 +761,15 @@ struct bpf_ctx_arg_aux {
 	u32 btf_id;
 };
 
+struct btf_mod_pair {
+	struct btf *btf;
+	struct module *module;
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
+	u32 used_btf_cnt;
 	u32 max_ctx_offset;
 	u32 max_pkt_offset;
 	u32 max_tp_access;
@@ -802,6 +808,7 @@ struct bpf_prog_aux {
 	const struct bpf_prog_ops *ops;
 	struct bpf_map **used_maps;
 	struct mutex used_maps_mutex; /* mutex for used_maps and used_map_cnt */
+	struct btf_mod_pair *used_btfs;
 	struct bpf_prog *prog;
 	struct user_struct *user;
 	u64 load_time; /* ns since boottime */
@@ -1208,6 +1215,8 @@ struct bpf_prog * __must_check bpf_prog_inc_not_zero(struct bpf_prog *prog);
 void bpf_prog_put(struct bpf_prog *prog);
 void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 			  struct bpf_map **used_maps, u32 len);
+void __bpf_free_used_btfs(struct bpf_prog_aux *aux,
+			  struct btf_mod_pair *used_btfs, u32 len);
 
 void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock);
 void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock);
