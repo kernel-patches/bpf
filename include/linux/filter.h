@@ -531,6 +531,7 @@ struct bpf_prog {
 				dst_needed:1,	/* Do we need dst entry? */
 				blinded:1,	/* Was blinded */
 				is_func:1,	/* program is a bpf function */
+				padded:1,	/* jitted image was padded */
 				kprobe_override:1, /* Do we override a kprobe? */
 				has_callchain_buf:1, /* callchain buffer allocated? */
 				enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
