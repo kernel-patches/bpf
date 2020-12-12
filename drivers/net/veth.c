@@ -710,11 +710,7 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 		skb = nskb;
 	}
 
-	xdp.data_hard_start = skb->head;
-	xdp.data = skb_mac_header(skb);
-	xdp.data_end = xdp.data + pktlen;
-	xdp.data_meta = xdp.data;
-
+	xdp_prepare_buff(&xdp, skb->head, skb->mac_header, pktlen);
 	/* SKB "head" area always have tailroom for skb_shared_info */
 	frame_sz = (void *)skb_end_pointer(skb) - xdp.data_hard_start;
 	frame_sz += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));

@@ -134,10 +134,8 @@ bool bnxt_rx_xdp(struct bnxt *bp, struct bnxt_rx_ring_info *rxr, u16 cons,
 
 	txr = rxr->bnapi->tx_ring;
 	xdp_init_buff(&xdp, PAGE_SIZE, &rxr->xdp_rxq);
-	xdp.data_hard_start = *data_ptr - offset;
-	xdp.data = *data_ptr;
+	xdp_prepare_buff(&xdp, *data_ptr - offset, offset, *len);
 	xdp_set_data_meta_invalid(&xdp);
-	xdp.data_end = *data_ptr + *len;
 	orig_data = xdp.data;
 
 	rcu_read_lock();

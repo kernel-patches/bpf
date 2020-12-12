@@ -45,10 +45,8 @@ u32 netvsc_run_xdp(struct net_device *ndev, struct netvsc_channel *nvchan,
 	}
 
 	xdp_init_buff(xdp, PAGE_SIZE, &nvchan->xdp_rxq);
-	xdp->data_hard_start = page_address(page);
-	xdp->data = xdp->data_hard_start + NETVSC_XDP_HDRM;
+	xdp_prepare_buff(xdp, page_address(page), NETVSC_XDP_HDRM, len);
 	xdp_set_data_meta_invalid(xdp);
-	xdp->data_end = xdp->data + len;
 
 	memcpy(xdp->data, data, len);
 

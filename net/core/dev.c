@@ -4592,7 +4592,7 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 	__be16 orig_eth_type;
 	struct ethhdr *eth;
 	bool orig_bcast;
-	int hlen, off;
+	int off;
 
 	/* Reinjected packets coming from act_mirred or similar should
 	 * not get XDP generic processing.
@@ -4624,11 +4624,9 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 	 * header.
 	 */
 	mac_len = skb->data - skb_mac_header(skb);
-	hlen = skb_headlen(skb) + mac_len;
-	xdp->data = skb->data - mac_len;
-	xdp->data_meta = xdp->data;
-	xdp->data_end = xdp->data + hlen;
-	xdp->data_hard_start = skb->data - skb_headroom(skb);
+	xdp_prepare_buff(xdp, skb->data - skb_headroom(skb),
+			 skb_headroom(skb) - mac_len,
+			 skb_headlen(skb) + mac_len);
 
 	/* SKB "head" area always have tailroom for skb_shared_info */
 	frame_sz = (void *)skb_end_pointer(skb) - xdp->data_hard_start;
