@@ -211,7 +211,7 @@ static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		int wlen = skb_network_offset(skb);
 
 		switch (skb_protocol(skb, true)) {
-		case htons(ETH_P_IP):
+		case __constant_htons(ETH_P_IP):
 			wlen += sizeof(struct iphdr);
 			if (!pskb_may_pull(skb, wlen) ||
 			    skb_try_make_writable(skb, wlen))
@@ -221,7 +221,7 @@ static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				& ~INET_ECN_MASK;
 			break;
 
-		case htons(ETH_P_IPV6):
+		case __constant_htons(ETH_P_IPV6):
 			wlen += sizeof(struct ipv6hdr);
 			if (!pskb_may_pull(skb, wlen) ||
 			    skb_try_make_writable(skb, wlen))
@@ -304,11 +304,11 @@ static struct sk_buff *dsmark_dequeue(struct Qdisc *sch)
 	pr_debug("index %d->%d\n", skb->tc_index, index);
 
 	switch (skb_protocol(skb, true)) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		ipv4_change_dsfield(ip_hdr(skb), p->mv[index].mask,
 				    p->mv[index].value);
 			break;
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		ipv6_change_dsfield(ipv6_hdr(skb), p->mv[index].mask,
 				    p->mv[index].value);
 			break;

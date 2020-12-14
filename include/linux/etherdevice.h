@@ -77,7 +77,7 @@ static inline bool is_link_local_ether_addr(const u8 *addr)
 {
 	__be16 *a = (__be16 *)addr;
 	static const __be16 *b = (const __be16 *)eth_reserved_addr_base;
-	static const __be16 m = cpu_to_be16(0xfff0);
+	static const __be16 m = __constant_cpu_to_be16(0xfff0);
 
 #if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)
 	return (((*(const u32 *)addr) ^ (*(const u32 *)b)) |

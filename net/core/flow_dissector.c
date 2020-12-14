@@ -1025,7 +1025,7 @@ proto_again:
 	fdret = FLOW_DISSECT_RET_CONTINUE;
 
 	switch (proto) {
-	case htons(ETH_P_IP): {
+	case __constant_htons(ETH_P_IP): {
 		const struct iphdr *iph;
 		struct iphdr _iph;
 
@@ -1071,7 +1071,7 @@ proto_again:
 
 		break;
 	}
-	case htons(ETH_P_IPV6): {
+	case __constant_htons(ETH_P_IPV6): {
 		const struct ipv6hdr *iph;
 		struct ipv6hdr _iph;
 
@@ -1119,8 +1119,8 @@ proto_again:
 
 		break;
 	}
-	case htons(ETH_P_8021AD):
-	case htons(ETH_P_8021Q): {
+	case __constant_htons(ETH_P_8021AD):
+	case __constant_htons(ETH_P_8021Q): {
 		const struct vlan_hdr *vlan = NULL;
 		struct vlan_hdr _vlan;
 		__be16 saved_vlan_tpid = proto;
@@ -1170,7 +1170,7 @@ proto_again:
 		fdret = FLOW_DISSECT_RET_PROTO_AGAIN;
 		break;
 	}
-	case htons(ETH_P_PPP_SES): {
+	case __constant_htons(ETH_P_PPP_SES): {
 		struct {
 			struct pppoe_hdr hdr;
 			__be16 proto;
@@ -1184,11 +1184,11 @@ proto_again:
 		proto = hdr->proto;
 		nhoff += PPPOE_SES_HLEN;
 		switch (proto) {
-		case htons(PPP_IP):
+		case __constant_htons(PPP_IP):
 			proto = htons(ETH_P_IP);
 			fdret = FLOW_DISSECT_RET_PROTO_AGAIN;
 			break;
-		case htons(PPP_IPV6):
+		case __constant_htons(PPP_IPV6):
 			proto = htons(ETH_P_IPV6);
 			fdret = FLOW_DISSECT_RET_PROTO_AGAIN;
 			break;
@@ -1198,7 +1198,7 @@ proto_again:
 		}
 		break;
 	}
-	case htons(ETH_P_TIPC): {
+	case __constant_htons(ETH_P_TIPC): {
 		struct tipc_basic_hdr *hdr, _hdr;
 
 		hdr = __skb_header_pointer(skb, nhoff, sizeof(_hdr),
@@ -1220,8 +1220,8 @@ proto_again:
 		break;
 	}
 
-	case htons(ETH_P_MPLS_UC):
-	case htons(ETH_P_MPLS_MC):
+	case __constant_htons(ETH_P_MPLS_UC):
+	case __constant_htons(ETH_P_MPLS_MC):
 		fdret = __skb_flow_dissect_mpls(skb, flow_dissector,
 						target_container, data,
 						nhoff, hlen, mpls_lse,
@@ -1229,7 +1229,7 @@ proto_again:
 		nhoff += sizeof(struct mpls_label);
 		mpls_lse++;
 		break;
-	case htons(ETH_P_FCOE):
+	case __constant_htons(ETH_P_FCOE):
 		if ((hlen - nhoff) < FCOE_HEADER_LEN) {
 			fdret = FLOW_DISSECT_RET_OUT_BAD;
 			break;
@@ -1239,14 +1239,14 @@ proto_again:
 		fdret = FLOW_DISSECT_RET_OUT_GOOD;
 		break;
 
-	case htons(ETH_P_ARP):
-	case htons(ETH_P_RARP):
+	case __constant_htons(ETH_P_ARP):
+	case __constant_htons(ETH_P_RARP):
 		fdret = __skb_flow_dissect_arp(skb, flow_dissector,
 					       target_container, data,
 					       nhoff, hlen);
 		break;
 
-	case htons(ETH_P_BATMAN):
+	case __constant_htons(ETH_P_BATMAN):
 		fdret = __skb_flow_dissect_batadv(skb, key_control, data,
 						  &proto, &nhoff, hlen, flags);
 		break;

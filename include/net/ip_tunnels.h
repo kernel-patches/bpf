@@ -319,11 +319,11 @@ static inline bool pskb_inet_may_pull(struct sk_buff *skb)
 
 	switch (skb->protocol) {
 #if IS_ENABLED(CONFIG_IPV6)
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		nhlen = sizeof(struct ipv6hdr);
 		break;
 #endif
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		nhlen = sizeof(struct iphdr);
 		break;
 	default:

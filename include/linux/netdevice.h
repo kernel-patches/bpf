@@ -4700,9 +4700,9 @@ static inline bool can_checksum_protocol(netdev_features_t features,
 	}
 
 	switch (protocol) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		return !!(features & NETIF_F_IP_CSUM);
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		return !!(features & NETIF_F_IPV6_CSUM);
 	default:
 		return false;

@@ -141,7 +141,7 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb,
 			fptr = (struct frag_hdr *)((u8 *)ipv6h + err);
 			fptr->frag_off = htons(offset);
 			if (skb->next)
-				fptr->frag_off |= htons(IP6_MF);
+				fptr->frag_off |= __constant_htons(IP6_MF);
 			offset += (ntohs(ipv6h->payload_len) -
 				   sizeof(struct frag_hdr));
 		}
@@ -324,7 +324,7 @@ INDIRECT_CALLABLE_SCOPE int ipv6_gro_complete(struct sk_buff *skb, int nhoff)
 	int err = -ENOSYS;
 
 	if (skb->encapsulation) {
-		skb_set_inner_protocol(skb, cpu_to_be16(ETH_P_IPV6));
+		skb_set_inner_protocol(skb, __constant_cpu_to_be16(ETH_P_IPV6));
 		skb_set_inner_network_header(skb, nhoff);
 	}
 
@@ -367,7 +367,7 @@ static int ip4ip6_gro_complete(struct sk_buff *skb, int nhoff)
 }
 
 static struct packet_offload ipv6_packet_offload __read_mostly = {
-	.type = cpu_to_be16(ETH_P_IPV6),
+	.type = __constant_cpu_to_be16(ETH_P_IPV6),
 	.callbacks = {
 		.gso_segment = ipv6_gso_segment,
 		.gro_receive = ipv6_gro_receive,

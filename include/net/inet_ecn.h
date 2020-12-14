@@ -174,13 +174,13 @@ static inline void ipv6_copy_dscp(unsigned int dscp, struct ipv6hdr *inner)
 static inline int INET_ECN_set_ce(struct sk_buff *skb)
 {
 	switch (skb_protocol(skb, true)) {
-	case cpu_to_be16(ETH_P_IP):
+	case __constant_cpu_to_be16(ETH_P_IP):
 		if (skb_network_header(skb) + sizeof(struct iphdr) <=
 		    skb_tail_pointer(skb))
 			return IP_ECN_set_ce(ip_hdr(skb));
 		break;
 
-	case cpu_to_be16(ETH_P_IPV6):
+	case __constant_cpu_to_be16(ETH_P_IPV6):
 		if (skb_network_header(skb) + sizeof(struct ipv6hdr) <=
 		    skb_tail_pointer(skb))
 			return IP6_ECN_set_ce(skb, ipv6_hdr(skb));
@@ -193,13 +193,13 @@ static inline int INET_ECN_set_ce(struct sk_buff *skb)
 static inline int INET_ECN_set_ect1(struct sk_buff *skb)
 {
 	switch (skb_protocol(skb, true)) {
-	case cpu_to_be16(ETH_P_IP):
+	case __constant_cpu_to_be16(ETH_P_IP):
 		if (skb_network_header(skb) + sizeof(struct iphdr) <=
 		    skb_tail_pointer(skb))
 			return IP_ECN_set_ect1(ip_hdr(skb));
 		break;
 
-	case cpu_to_be16(ETH_P_IPV6):
+	case __constant_cpu_to_be16(ETH_P_IPV6):
 		if (skb_network_header(skb) + sizeof(struct ipv6hdr) <=
 		    skb_tail_pointer(skb))
 			return IP6_ECN_set_ect1(skb, ipv6_hdr(skb));
@@ -274,10 +274,10 @@ static inline int IP_ECN_decapsulate(const struct iphdr *oiph,
 	__u8 inner;
 
 	switch (skb_protocol(skb, true)) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		inner = ip_hdr(skb)->tos;
 		break;
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		inner = ipv6_get_dsfield(ipv6_hdr(skb));
 		break;
 	default:
@@ -293,10 +293,10 @@ static inline int IP6_ECN_decapsulate(const struct ipv6hdr *oipv6h,
 	__u8 inner;
 
 	switch (skb_protocol(skb, true)) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		inner = ip_hdr(skb)->tos;
 		break;
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		inner = ipv6_get_dsfield(ipv6_hdr(skb));
 		break;
 	default:

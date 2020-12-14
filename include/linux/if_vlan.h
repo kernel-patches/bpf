@@ -302,8 +302,8 @@ static inline bool vlan_uses_dev(const struct net_device *dev)
 static inline bool eth_type_vlan(__be16 ethertype)
 {
 	switch (ethertype) {
-	case htons(ETH_P_8021Q):
-	case htons(ETH_P_8021AD):
+	case __constant_htons(ETH_P_8021Q):
+	case __constant_htons(ETH_P_8021AD):
 		return true;
 	default:
 		return false;

@@ -3396,9 +3396,9 @@ static const struct bpf_func_proto bpf_skb_change_type_proto = {
 static u32 bpf_skb_net_base_len(const struct sk_buff *skb)
 {
 	switch (skb->protocol) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		return sizeof(struct iphdr);
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		return sizeof(struct ipv6hdr);
 	default:
 		return ~0U;
@@ -6401,10 +6401,10 @@ BPF_CALL_1(bpf_skb_ecn_set_ce, struct sk_buff *, skb)
 	unsigned int iphdr_len;
 
 	switch (skb_protocol(skb, true)) {
-	case cpu_to_be16(ETH_P_IP):
+	case __constant_cpu_to_be16(ETH_P_IP):
 		iphdr_len = sizeof(struct iphdr);
 		break;
-	case cpu_to_be16(ETH_P_IPV6):
+	case __constant_cpu_to_be16(ETH_P_IPV6):
 		iphdr_len = sizeof(struct ipv6hdr);
 		break;
 	default:

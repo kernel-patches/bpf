@@ -159,43 +159,43 @@ struct sctp_paramhdr {
 enum sctp_param {
 
 	/* RFC 2960 Section 3.3.5 */
-	SCTP_PARAM_HEARTBEAT_INFO		= cpu_to_be16(1),
+	SCTP_PARAM_HEARTBEAT_INFO		= __constant_cpu_to_be16(1),
 	/* RFC 2960 Section 3.3.2.1 */
-	SCTP_PARAM_IPV4_ADDRESS			= cpu_to_be16(5),
-	SCTP_PARAM_IPV6_ADDRESS			= cpu_to_be16(6),
-	SCTP_PARAM_STATE_COOKIE			= cpu_to_be16(7),
-	SCTP_PARAM_UNRECOGNIZED_PARAMETERS	= cpu_to_be16(8),
-	SCTP_PARAM_COOKIE_PRESERVATIVE		= cpu_to_be16(9),
-	SCTP_PARAM_HOST_NAME_ADDRESS		= cpu_to_be16(11),
-	SCTP_PARAM_SUPPORTED_ADDRESS_TYPES	= cpu_to_be16(12),
-	SCTP_PARAM_ECN_CAPABLE			= cpu_to_be16(0x8000),
+	SCTP_PARAM_IPV4_ADDRESS			= __constant_cpu_to_be16(5),
+	SCTP_PARAM_IPV6_ADDRESS			= __constant_cpu_to_be16(6),
+	SCTP_PARAM_STATE_COOKIE			= __constant_cpu_to_be16(7),
+	SCTP_PARAM_UNRECOGNIZED_PARAMETERS	= __constant_cpu_to_be16(8),
+	SCTP_PARAM_COOKIE_PRESERVATIVE		= __constant_cpu_to_be16(9),
+	SCTP_PARAM_HOST_NAME_ADDRESS		= __constant_cpu_to_be16(11),
+	SCTP_PARAM_SUPPORTED_ADDRESS_TYPES	= __constant_cpu_to_be16(12),
+	SCTP_PARAM_ECN_CAPABLE			= __constant_cpu_to_be16(0x8000),
 
 	/* AUTH Extension Section 3 */
-	SCTP_PARAM_RANDOM			= cpu_to_be16(0x8002),
-	SCTP_PARAM_CHUNKS			= cpu_to_be16(0x8003),
-	SCTP_PARAM_HMAC_ALGO			= cpu_to_be16(0x8004),
+	SCTP_PARAM_RANDOM			= __constant_cpu_to_be16(0x8002),
+	SCTP_PARAM_CHUNKS			= __constant_cpu_to_be16(0x8003),
+	SCTP_PARAM_HMAC_ALGO			= __constant_cpu_to_be16(0x8004),
 
 	/* Add-IP: Supported Extensions, Section 4.2 */
-	SCTP_PARAM_SUPPORTED_EXT	= cpu_to_be16(0x8008),
+	SCTP_PARAM_SUPPORTED_EXT	= __constant_cpu_to_be16(0x8008),
 
 	/* PR-SCTP Sec 3.1 */
-	SCTP_PARAM_FWD_TSN_SUPPORT	= cpu_to_be16(0xc000),
+	SCTP_PARAM_FWD_TSN_SUPPORT	= __constant_cpu_to_be16(0xc000),
 
 	/* Add-IP Extension. Section 3.2 */
-	SCTP_PARAM_ADD_IP		= cpu_to_be16(0xc001),
-	SCTP_PARAM_DEL_IP		= cpu_to_be16(0xc002),
-	SCTP_PARAM_ERR_CAUSE		= cpu_to_be16(0xc003),
-	SCTP_PARAM_SET_PRIMARY		= cpu_to_be16(0xc004),
-	SCTP_PARAM_SUCCESS_REPORT	= cpu_to_be16(0xc005),
-	SCTP_PARAM_ADAPTATION_LAYER_IND = cpu_to_be16(0xc006),
+	SCTP_PARAM_ADD_IP		= __constant_cpu_to_be16(0xc001),
+	SCTP_PARAM_DEL_IP		= __constant_cpu_to_be16(0xc002),
+	SCTP_PARAM_ERR_CAUSE		= __constant_cpu_to_be16(0xc003),
+	SCTP_PARAM_SET_PRIMARY		= __constant_cpu_to_be16(0xc004),
+	SCTP_PARAM_SUCCESS_REPORT	= __constant_cpu_to_be16(0xc005),
+	SCTP_PARAM_ADAPTATION_LAYER_IND = __constant_cpu_to_be16(0xc006),
 
 	/* RE-CONFIG. Section 4 */
-	SCTP_PARAM_RESET_OUT_REQUEST		= cpu_to_be16(0x000d),
-	SCTP_PARAM_RESET_IN_REQUEST		= cpu_to_be16(0x000e),
-	SCTP_PARAM_RESET_TSN_REQUEST		= cpu_to_be16(0x000f),
-	SCTP_PARAM_RESET_RESPONSE		= cpu_to_be16(0x0010),
-	SCTP_PARAM_RESET_ADD_OUT_STREAMS	= cpu_to_be16(0x0011),
-	SCTP_PARAM_RESET_ADD_IN_STREAMS		= cpu_to_be16(0x0012),
+	SCTP_PARAM_RESET_OUT_REQUEST		= __constant_cpu_to_be16(0x000d),
+	SCTP_PARAM_RESET_IN_REQUEST		= __constant_cpu_to_be16(0x000e),
+	SCTP_PARAM_RESET_TSN_REQUEST		= __constant_cpu_to_be16(0x000f),
+	SCTP_PARAM_RESET_RESPONSE		= __constant_cpu_to_be16(0x0010),
+	SCTP_PARAM_RESET_ADD_OUT_STREAMS	= __constant_cpu_to_be16(0x0011),
+	SCTP_PARAM_RESET_ADD_IN_STREAMS		= __constant_cpu_to_be16(0x0012),
 }; /* enum */
 
 
@@ -206,13 +206,13 @@ enum sctp_param {
  *
  */
 enum {
-	SCTP_PARAM_ACTION_DISCARD     = cpu_to_be16(0x0000),
-	SCTP_PARAM_ACTION_DISCARD_ERR = cpu_to_be16(0x4000),
-	SCTP_PARAM_ACTION_SKIP        = cpu_to_be16(0x8000),
-	SCTP_PARAM_ACTION_SKIP_ERR    = cpu_to_be16(0xc000),
+	SCTP_PARAM_ACTION_DISCARD     = __constant_cpu_to_be16(0x0000),
+	SCTP_PARAM_ACTION_DISCARD_ERR = __constant_cpu_to_be16(0x4000),
+	SCTP_PARAM_ACTION_SKIP        = __constant_cpu_to_be16(0x8000),
+	SCTP_PARAM_ACTION_SKIP_ERR    = __constant_cpu_to_be16(0xc000),
 };
 
-enum { SCTP_PARAM_ACTION_MASK = cpu_to_be16(0xc000), };
+enum { SCTP_PARAM_ACTION_MASK = __constant_cpu_to_be16(0xc000), };
 
 /* RFC 2960 Section 3.3.1 Payload Data (DATA) (0) */
 
@@ -465,17 +465,17 @@ struct sctp_operr_chunk {
  */
 enum sctp_error {
 
-	SCTP_ERROR_NO_ERROR	   = cpu_to_be16(0x00),
-	SCTP_ERROR_INV_STRM	   = cpu_to_be16(0x01),
-	SCTP_ERROR_MISS_PARAM 	   = cpu_to_be16(0x02),
-	SCTP_ERROR_STALE_COOKIE	   = cpu_to_be16(0x03),
-	SCTP_ERROR_NO_RESOURCE 	   = cpu_to_be16(0x04),
-	SCTP_ERROR_DNS_FAILED      = cpu_to_be16(0x05),
-	SCTP_ERROR_UNKNOWN_CHUNK   = cpu_to_be16(0x06),
-	SCTP_ERROR_INV_PARAM       = cpu_to_be16(0x07),
-	SCTP_ERROR_UNKNOWN_PARAM   = cpu_to_be16(0x08),
-	SCTP_ERROR_NO_DATA         = cpu_to_be16(0x09),
-	SCTP_ERROR_COOKIE_IN_SHUTDOWN = cpu_to_be16(0x0a),
+	SCTP_ERROR_NO_ERROR	   = __constant_cpu_to_be16(0x00),
+	SCTP_ERROR_INV_STRM	   = __constant_cpu_to_be16(0x01),
+	SCTP_ERROR_MISS_PARAM 	   = __constant_cpu_to_be16(0x02),
+	SCTP_ERROR_STALE_COOKIE	   = __constant_cpu_to_be16(0x03),
+	SCTP_ERROR_NO_RESOURCE 	   = __constant_cpu_to_be16(0x04),
+	SCTP_ERROR_DNS_FAILED      = __constant_cpu_to_be16(0x05),
+	SCTP_ERROR_UNKNOWN_CHUNK   = __constant_cpu_to_be16(0x06),
+	SCTP_ERROR_INV_PARAM       = __constant_cpu_to_be16(0x07),
+	SCTP_ERROR_UNKNOWN_PARAM   = __constant_cpu_to_be16(0x08),
+	SCTP_ERROR_NO_DATA         = __constant_cpu_to_be16(0x09),
+	SCTP_ERROR_COOKIE_IN_SHUTDOWN = __constant_cpu_to_be16(0x0a),
 
 
 	/* SCTP Implementation Guide:
@@ -484,9 +484,9 @@ enum sctp_error {
 	 *  13  Protocol Violation
 	 */
 
-	SCTP_ERROR_RESTART         = cpu_to_be16(0x0b),
-	SCTP_ERROR_USER_ABORT      = cpu_to_be16(0x0c),
-	SCTP_ERROR_PROTO_VIOLATION = cpu_to_be16(0x0d),
+	SCTP_ERROR_RESTART         = __constant_cpu_to_be16(0x0b),
+	SCTP_ERROR_USER_ABORT      = __constant_cpu_to_be16(0x0c),
+	SCTP_ERROR_PROTO_VIOLATION = __constant_cpu_to_be16(0x0d),
 
 	/* ADDIP Section 3.3  New Error Causes
 	 *
@@ -501,11 +501,11 @@ enum sctp_error {
 	 * 0x00A3          Association Aborted due to illegal ASCONF-ACK
 	 * 0x00A4          Request refused - no authorization.
 	 */
-	SCTP_ERROR_DEL_LAST_IP	= cpu_to_be16(0x00A0),
-	SCTP_ERROR_RSRC_LOW	= cpu_to_be16(0x00A1),
-	SCTP_ERROR_DEL_SRC_IP	= cpu_to_be16(0x00A2),
-	SCTP_ERROR_ASCONF_ACK   = cpu_to_be16(0x00A3),
-	SCTP_ERROR_REQ_REFUSED	= cpu_to_be16(0x00A4),
+	SCTP_ERROR_DEL_LAST_IP	= __constant_cpu_to_be16(0x00A0),
+	SCTP_ERROR_RSRC_LOW	= __constant_cpu_to_be16(0x00A1),
+	SCTP_ERROR_DEL_SRC_IP	= __constant_cpu_to_be16(0x00A2),
+	SCTP_ERROR_ASCONF_ACK   = __constant_cpu_to_be16(0x00A3),
+	SCTP_ERROR_REQ_REFUSED	= __constant_cpu_to_be16(0x00A4),
 
 	/* AUTH Section 4.  New Error Cause
 	 *
@@ -517,7 +517,7 @@ enum sctp_error {
 	 * --------------------------------------------------------------
 	 * 0x0105          Unsupported HMAC Identifier
 	 */
-	 SCTP_ERROR_UNSUP_HMAC	= cpu_to_be16(0x0105)
+	 SCTP_ERROR_UNSUP_HMAC	= __constant_cpu_to_be16(0x0105)
 };
 
 

@@ -1890,7 +1890,7 @@ static int ipv4_proc_init(void);
  */
 
 static struct packet_offload ip_packet_offload __read_mostly = {
-	.type = cpu_to_be16(ETH_P_IP),
+	.type = __constant_cpu_to_be16(ETH_P_IP),
 	.callbacks = {
 		.gso_segment = inet_gso_segment,
 		.gro_receive = inet_gro_receive,
@@ -1930,7 +1930,7 @@ static int __init ipv4_offload_init(void)
 fs_initcall(ipv4_offload_init);
 
 static struct packet_type ip_packet_type __read_mostly = {
-	.type = cpu_to_be16(ETH_P_IP),
+	.type = __constant_cpu_to_be16(ETH_P_IP),
 	.func = ip_rcv,
 	.list_func = ip_list_rcv,
 };

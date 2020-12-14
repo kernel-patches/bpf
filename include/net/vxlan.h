@@ -26,11 +26,11 @@ struct vxlanhdr {
 };
 
 /* VXLAN header flags. */
-#define VXLAN_HF_VNI	cpu_to_be32(BIT(27))
+#define VXLAN_HF_VNI	__constant_cpu_to_be32(BIT(27))
 
 #define VXLAN_N_VID     (1u << 24)
 #define VXLAN_VID_MASK  (VXLAN_N_VID - 1)
-#define VXLAN_VNI_MASK	cpu_to_be32(VXLAN_VID_MASK << 8)
+#define VXLAN_VNI_MASK	__constant_cpu_to_be32(VXLAN_VID_MASK << 8)
 #define VXLAN_HLEN (sizeof(struct udphdr) + sizeof(struct vxlanhdr))
 
 #define VNI_HASH_BITS	10
@@ -57,11 +57,11 @@ struct vxlanhdr {
  */
 
 /* VXLAN-RCO header flags. */
-#define VXLAN_HF_RCO	cpu_to_be32(BIT(21))
+#define VXLAN_HF_RCO	__constant_cpu_to_be32(BIT(21))
 
 /* Remote checksum offload header option */
-#define VXLAN_RCO_MASK	cpu_to_be32(0x7f)  /* Last byte of vni field */
-#define VXLAN_RCO_UDP	cpu_to_be32(0x80)  /* Indicate UDP RCO (TCP when not set *) */
+#define VXLAN_RCO_MASK	__constant_cpu_to_be32(0x7f)  /* Last byte of vni field */
+#define VXLAN_RCO_UDP	__constant_cpu_to_be32(0x80)  /* Indicate UDP RCO (TCP when not set *) */
 #define VXLAN_RCO_SHIFT	1		   /* Left shift of start */
 #define VXLAN_RCO_SHIFT_MASK ((1 << VXLAN_RCO_SHIFT) - 1)
 #define VXLAN_MAX_REMCSUM_START (0x7f << VXLAN_RCO_SHIFT)
@@ -107,9 +107,9 @@ struct vxlanhdr_gbp {
 };
 
 /* VXLAN-GBP header flags. */
-#define VXLAN_HF_GBP	cpu_to_be32(BIT(31))
+#define VXLAN_HF_GBP	__constant_cpu_to_be32(BIT(31))
 
-#define VXLAN_GBP_USED_BITS (VXLAN_HF_GBP | cpu_to_be32(0xFFFFFF))
+#define VXLAN_GBP_USED_BITS (VXLAN_HF_GBP | __constant_cpu_to_be32(0xFFFFFF))
 
 /* skb->mark mapping
  *
@@ -169,12 +169,12 @@ struct vxlanhdr_gpe {
 };
 
 /* VXLAN-GPE header flags. */
-#define VXLAN_HF_VER	cpu_to_be32(BIT(29) | BIT(28))
-#define VXLAN_HF_NP	cpu_to_be32(BIT(26))
-#define VXLAN_HF_OAM	cpu_to_be32(BIT(24))
+#define VXLAN_HF_VER	__constant_cpu_to_be32(BIT(29) | BIT(28))
+#define VXLAN_HF_NP	__constant_cpu_to_be32(BIT(26))
+#define VXLAN_HF_OAM	__constant_cpu_to_be32(BIT(24))
 
 #define VXLAN_GPE_USED_BITS (VXLAN_HF_VER | VXLAN_HF_NP | VXLAN_HF_OAM | \
-			     cpu_to_be32(0xff))
+			     __constant_cpu_to_be32(0xff))
 
 struct vxlan_metadata {
 	u32		gbp;
@@ -305,10 +305,10 @@ static inline netdev_features_t vxlan_features_check(struct sk_buff *skb,
 		return features;
 
 	switch (vlan_get_protocol(skb)) {
-	case htons(ETH_P_IP):
+	case __constant_htons(ETH_P_IP):
 		l4_hdr = ip_hdr(skb)->protocol;
 		break;
-	case htons(ETH_P_IPV6):
+	case __constant_htons(ETH_P_IPV6):
 		l4_hdr = ipv6_hdr(skb)->nexthdr;
 		break;
 	default:
