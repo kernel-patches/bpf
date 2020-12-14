@@ -61,6 +61,11 @@ void test_test_global_funcs(void)
 		{ "test_global_func6.o" , "modified ctx ptr R2" },
 		{ "test_global_func7.o" , "foo() doesn't return scalar" },
 		{ "test_global_func8.o" },
+		{ "test_global_func9.o" },
+		{ "test_global_func10.o", "invalid indirect read from stack off -8+4 size 8" },
+		{ "test_global_func11.o", "Caller passes invalid args into func#1" },
+		{ "test_global_func12.o", "invalid mem access 'mem_or_null'" },
+		{ "test_global_func13.o", "Caller passes invalid args into func#1" },
 	};
 	libbpf_print_fn_t old_print_fn = NULL;
 	int err, i, duration = 0;
