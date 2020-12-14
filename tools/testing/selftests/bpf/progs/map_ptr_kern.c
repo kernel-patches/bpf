@@ -111,7 +111,7 @@ static inline int check_hash(void)
 	VERIFY(check_default_noinline(&hash->map, map));
 
 	VERIFY(hash->n_buckets == MAX_ENTRIES);
-	VERIFY(hash->elem_size == 64);
+	VERIFY(hash->elem_size == 72);
 
 	VERIFY(hash->count.counter == 0);
 	for (i = 0; i < HALF_ENTRIES; ++i) {
