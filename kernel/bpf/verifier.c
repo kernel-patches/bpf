@@ -3885,6 +3885,29 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 	}
 }
 
+int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+		  int regno, u32 mem_size)
+{
+	if (register_is_null(reg))
+		return 0;
+
+	if (reg_type_may_be_null(reg->type)) {
+		const struct bpf_reg_state saved_reg = *reg;
+		int rv;
+
+		if (mark_ptr_not_null_reg(reg)) {
+			verbose(env, "R%d type=%s expected nullable\n", regno,
+				reg_type_str[reg->type]);
+			return -EINVAL;
+		}
+		rv = check_helper_mem_access(env, regno, mem_size, 1, NULL);
+		*reg = saved_reg;
+		return rv;
+	}
+
+	return check_helper_mem_access(env, regno, mem_size, 1, NULL);
+}
+
 /* Implementation details:
  * bpf_map_lookup returns PTR_TO_MAP_VALUE_OR_NULL
  * Two bpf_map_lookups (even with the same key) will have different reg->id.
@@ -11436,6 +11459,13 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 				mark_reg_known_zero(env, regs, i);
 			else if (regs[i].type == SCALAR_VALUE)
 				mark_reg_unknown(env, regs, i);
+			else if (regs[i].type == PTR_TO_MEM_OR_NULL) {
+				const u32 mem_size = regs[i].mem_size;
+
+				mark_reg_known_zero(env, regs, i);
+				regs[i].mem_size = mem_size;
+				regs[i].id = i;
+			}
 		}
 	} else {
 		/* 1st arg to a function */

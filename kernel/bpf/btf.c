@@ -5352,10 +5352,6 @@ int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			goto out;
 		}
 		if (btf_type_is_ptr(t)) {
-			if (reg[i + 1].type == SCALAR_VALUE) {
-				bpf_log(log, "R%d is not a pointer\n", i + 1);
-				goto out;
-			}
 			/* If function expects ctx type in BTF check that caller
 			 * is passing PTR_TO_CTX.
 			 */
@@ -5368,6 +5364,30 @@ int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				}
 				if (check_ctx_reg(env, &reg[i + 1], i + 1))
 					goto out;
+				continue;
+			}
+
+			t = btf_type_by_id(btf, t->type);
+			while (btf_type_is_modifier(t))
+				t = btf_type_by_id(btf, t->type);
+			if (btf_type_is_struct(t)) {
+				u32 mem_size;
+				const struct btf_type *ret =
+					btf_resolve_size(btf, t, &mem_size);
+
+				if (IS_ERR(ret)) {
+					bpf_log(log,
+						"unable to resolve the size of type '%s': %ld\n",
+						btf_name_by_offset(btf,
+								   t->name_off),
+						PTR_ERR(ret));
+					return -EINVAL;
+				}
+
+				if (check_mem_reg(env, &reg[i + 1], i + 1,
+						  mem_size))
+					goto out;
+
 				continue;
 			}
 		}
@@ -5471,10 +5491,33 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog,
 			reg[i + 1].type = SCALAR_VALUE;
 			continue;
 		}
-		if (btf_type_is_ptr(t) &&
-		    btf_get_prog_ctx_type(log, btf, t, prog_type, i)) {
-			reg[i + 1].type = PTR_TO_CTX;
-			continue;
+		if (btf_type_is_ptr(t)) {
+			if (btf_get_prog_ctx_type(log, btf, t, prog_type, i)) {
+				reg[i + 1].type = PTR_TO_CTX;
+				continue;
+			}
+
+			t = btf_type_by_id(btf, t->type);
+			while (btf_type_is_modifier(t))
+				t = btf_type_by_id(btf, t->type);
+			if (btf_type_is_struct(t)) {
+				const struct btf_type *ret = btf_resolve_size(
+					btf, t, &reg[i + 1].mem_size);
+
+				if (IS_ERR(ret)) {
+					const char *tname = btf_name_by_offset(
+						btf, t->name_off);
+					bpf_log(log,
+						"unable to resolve the size of type '%s': %ld\n",
+						tname, PTR_ERR(ret));
+					return -EINVAL;
+				}
+
+				reg[i + 1].type = PTR_TO_MEM_OR_NULL;
+				reg[i + 1].id = i + 1;
+
+				continue;
+			}
 		}
 		bpf_log(log, "Arg#%d type %s in %s() is not supported yet.\n",
 			i, btf_kind_str[BTF_INFO_KIND(t->info)], tname);
