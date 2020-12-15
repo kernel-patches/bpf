@@ -1325,7 +1325,7 @@ enum bpf_iter_feature {
 	BPF_ITER_RESCHED	= BIT(0),
 };
 
-#define BPF_ITER_CTX_ARG_MAX 2
+#define BPF_ITER_CTX_ARG_MAX 3
 struct bpf_iter_reg {
 	const char *target;
 	bpf_iter_attach_target_t attach_target;
