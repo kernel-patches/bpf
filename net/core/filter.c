@@ -5568,11 +5568,21 @@ BPF_CALL_4(bpf_skb_fib_lookup, struct sk_buff *, skb,
 #endif
 	}
 
-	if (!rc) {
+	if (rc == BPF_FIB_LKUP_RET_SUCCESS) {
 		struct net_device *dev;
+		u32 mtu;
 
 		dev = dev_get_by_index_rcu(net, params->ifindex);
-		if (!is_skb_forwardable(dev, skb))
+		mtu = READ_ONCE(dev->mtu);
+
+		/* Using tot_len for (L3) MTU check if provided by user */
+		if (params->tot_len && params->tot_len > mtu)
+			rc = BPF_FIB_LKUP_RET_FRAG_NEEDED;
+
+		/* Notice at this TC cls_bpf level skb->len contains L2 size,
+		 * but is_skb_forwardable takes that into account
+		 */
+		if (params->tot_len == 0 && !is_skb_forwardable(dev, skb))
 			rc = BPF_FIB_LKUP_RET_FRAG_NEEDED;
 	}
 
