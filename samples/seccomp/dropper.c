@@ -46,7 +46,7 @@ static int install_filter(int nr, int arch, int error)
 		perror("prctl(NO_NEW_PRIVS)");
 		return 1;
 	}
-	if (prctl(PR_SET_SECCOMP, 2, &prog)) {
+	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog)) {
 		perror("prctl(PR_SET_SECCOMP)");
 		return 1;
 	}
