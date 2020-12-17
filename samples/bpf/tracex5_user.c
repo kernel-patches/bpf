@@ -28,7 +28,7 @@ static void install_accept_all_seccomp(void)
 		.len = (unsigned short)(sizeof(filter)/sizeof(filter[0])),
 		.filter = filter,
 	};
-	if (prctl(PR_SET_SECCOMP, 2, &prog))
+	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog))
 		perror("prctl");
 }
 
