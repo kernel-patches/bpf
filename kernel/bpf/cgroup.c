@@ -1310,6 +1310,15 @@ static int sockopt_alloc_buf(struct bpf_sockopt_kern *ctx, int max_optlen)
 		max_optlen = PAGE_SIZE;
 	}
 
+	if (max_optlen <= sizeof(ctx->buf)) {
+		/* When the optval fits into BPF_SOCKOPT_KERN_BUF_SIZE
+		 * bytes avoid the cost of kzalloc.
+		 */
+		ctx->optval = ctx->buf;
+		ctx->optval_end = ctx->optval + max_optlen;
+		return max_optlen;
+	}
+
 	ctx->optval = kzalloc(max_optlen, GFP_USER);
 	if (!ctx->optval)
 		return -ENOMEM;
@@ -1321,7 +1330,29 @@ static int sockopt_alloc_buf(struct bpf_sockopt_kern *ctx, int max_optlen)
 
 static void sockopt_free_buf(struct bpf_sockopt_kern *ctx)
 {
+	if (ctx->optval == ctx->buf)
+		return;
 	kfree(ctx->optval);
+}
+
+static void *sockopt_export_buf(struct bpf_sockopt_kern *ctx)
+{
+	void *p;
+
+	if (ctx->optval != ctx->buf)
+		return ctx->optval;
+
+	/* We've used bpf_sockopt_kern->buf as an intermediary storage,
+	 * but the BPF program indicates that we need to pass this
+	 * data to the kernel setsockopt handler. No way to export
+	 * on-stack buf, have to allocate a new buffer. The caller
+	 * is responsible for the kfree().
+	 */
+	p = kzalloc(ctx->optlen, GFP_USER);
+	if (!p)
+		return ERR_PTR(-ENOMEM);
+	memcpy(p, ctx->optval, ctx->optlen);
+	return p;
 }
 
 int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
@@ -1389,8 +1420,14 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		 * use original userspace data.
 		 */
 		if (ctx.optlen != 0) {
-			*optlen = ctx.optlen;
-			*kernel_optval = ctx.optval;
+			void *buf = sockopt_export_buf(&ctx);
+
+			if (!IS_ERR(buf)) {
+				*optlen = ctx.optlen;
+				*kernel_optval = buf;
+			} else {
+				ret = PTR_ERR(buf);
+			}
 		}
 	}
 
