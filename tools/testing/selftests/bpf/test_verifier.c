@@ -296,6 +296,49 @@ static void bpf_fill_scale(struct bpf_test *self)
 	}
 }
 
+static int bpf_fill_torturous_jumps_insn(struct bpf_insn *insn)
+{
+	unsigned int len = 259, hlen = 128;
+	int i;
+
+	insn[0] = BPF_EMIT_CALL(BPF_FUNC_get_prandom_u32);
+	for (i = 1; i <= hlen; i++) {
+		insn[i]        = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, i, hlen);
+		insn[i + hlen] = BPF_JMP_A(hlen - i);
+	}
+	insn[len - 2] = BPF_MOV64_IMM(BPF_REG_0, 1);
+	insn[len - 1] = BPF_EXIT_INSN();
+
+	return len;
+}
+
+static void bpf_fill_torturous_jumps(struct bpf_test *self)
+{
+	struct bpf_insn *insn = self->fill_insns;
+	int i = 0;
+
+	switch (self->retval) {
+	case 1:
+		self->prog_len = bpf_fill_torturous_jumps_insn(insn);
+		return;
+	case 2:
+		/* main */
+		insn[i++] = BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 3);
+		insn[i++] = BPF_ST_MEM(BPF_B, BPF_REG_10, -32, 0);
+		insn[i++] = BPF_MOV64_IMM(BPF_REG_0, 2);
+		insn[i++] = BPF_EXIT_INSN();
+
+		/* subprog */
+		i += bpf_fill_torturous_jumps_insn(insn + i);
+
+		self->prog_len = i;
+		return;
+	default:
+		self->prog_len = 0;
+		break;
+	}
+}
+
 /* BPF_SK_LOOKUP contains 13 instructions, if you need to fix up maps */
 #define BPF_SK_LOOKUP(func)						\
 	/* struct bpf_sock_tuple tuple = {} */				\
