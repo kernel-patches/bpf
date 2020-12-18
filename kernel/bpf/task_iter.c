@@ -33,7 +33,7 @@ retry:
 	pid = find_ge_pid(*tid, ns);
 	if (pid) {
 		*tid = pid_nr_ns(pid, ns);
-		task = get_pid_task(pid, PIDTYPE_PID);
+		task = pid_task(pid, PIDTYPE_PID);
 		if (!task) {
 			++*tid;
 			goto retry;
@@ -44,6 +44,7 @@ retry:
 			++*tid;
 			goto retry;
 		}
+		get_task_struct(task);
 	}
 	rcu_read_unlock();
 
@@ -148,12 +149,12 @@ task_file_seq_get_next(struct bpf_iter_seq_task_file_info *info)
 	 * it held a reference to the task/files_struct/file.
 	 * Otherwise, it does not hold any reference.
 	 */
-again:
 	if (info->task) {
 		curr_task = info->task;
 		curr_files = info->files;
 		curr_fd = info->fd;
 	} else {
+again:
 		curr_task = task_seq_get_next(ns, &curr_tid, true);
 		if (!curr_task) {
 			info->task = NULL;
