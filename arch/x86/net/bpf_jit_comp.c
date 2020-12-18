@@ -789,8 +789,31 @@ static void detect_reg_usage(struct bpf_insn *insn, int insn_cnt,
 	}
 }
 
+static int emit_nops(u8 **pprog, int len)
+{
+	u8 *prog = *pprog;
+	int i, noplen, cnt = 0;
+
+	while (len > 0) {
+		noplen = len;
+
+		if (noplen > ASM_NOP_MAX)
+			noplen = ASM_NOP_MAX;
+
+		for (i = 0; i < noplen; i++)
+			EMIT1(ideal_nops[noplen][i]);
+		len -= noplen;
+	}
+
+	*pprog = prog;
+
+	return cnt;
+}
+
+#define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
+
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
-		  int oldproglen, struct jit_context *ctx)
+		  int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
 	bool tail_call_reachable = bpf_prog->aux->tail_call_reachable;
 	struct bpf_insn *insn = bpf_prog->insnsi;
@@ -824,6 +847,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		u8 jmp_cond;
 		int ilen;
 		u8 *func;
+		int nops;
 
 		switch (insn->code) {
 			/* ALU */
@@ -1409,6 +1433,13 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 			}
 			jmp_offset = addrs[i + insn->off] - addrs[i];
 			if (is_imm8(jmp_offset)) {
+				if (jmp_padding) {
+					nops = INSN_SZ_DIFF - 2;
+					WARN_ONCE((nops != 0 && nops != 4),
+						  "unexpected cond_jmp padding: %d bytes\n",
+						  nops);
+					cnt += emit_nops(&prog, nops);
+				}
 				EMIT2(jmp_cond, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
 				EMIT2_off32(0x0F, jmp_cond + 0x10, jmp_offset);
@@ -1431,11 +1462,29 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 			else
 				jmp_offset = addrs[i + insn->off] - addrs[i];
 
-			if (!jmp_offset)
-				/* Optimize out nop jumps */
+			if (!jmp_offset) {
+				/*
+				 * If jmp_padding is enabled, the extra nops will
+				 * be inserted. Otherwise, optimize out nop jumps.
+				 */
+				if (jmp_padding) {
+					nops = INSN_SZ_DIFF;
+					WARN_ONCE((nops != 0 && nops != 2 && nops != 5),
+						  "unexpected nop jump padding: %d bytes\n",
+						  nops);
+					cnt += emit_nops(&prog, nops);
+				}
 				break;
+			}
 emit_jmp:
 			if (is_imm8(jmp_offset)) {
+				if (jmp_padding) {
+					nops = INSN_SZ_DIFF - 2;
+					WARN_ONCE((nops != 0 && nops != 3),
+						  "unexpected jump padding: %d bytes\n",
+						  nops);
+					cnt += emit_nops(&prog, INSN_SZ_DIFF - 2);
+				}
 				EMIT2(0xEB, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
 				EMIT1_off32(0xE9, jmp_offset);
@@ -1576,26 +1625,6 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 
 	*pprog = prog;
 	return 0;
-}
-
-static void emit_nops(u8 **pprog, unsigned int len)
-{
-	unsigned int i, noplen;
-	u8 *prog = *pprog;
-	int cnt = 0;
-
-	while (len > 0) {
-		noplen = len;
-
-		if (noplen > ASM_NOP_MAX)
-			noplen = ASM_NOP_MAX;
-
-		for (i = 0; i < noplen; i++)
-			EMIT1(ideal_nops[noplen][i]);
-		len -= noplen;
-	}
-
-	*pprog = prog;
 }
 
 static void emit_align(u8 **pprog, u32 align)
@@ -1970,7 +1999,11 @@ struct x64_jit_data {
 	u8 *image;
 	int proglen;
 	struct jit_context ctx;
+	bool padded;
 };
+
+#define MAX_PASSES 20
+#define PADDING_PASSES (MAX_PASSES - 5)
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
@@ -1981,6 +2014,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct jit_context ctx = {};
 	bool tmp_blinded = false;
 	bool extra_pass = false;
+	bool padding = false;
 	u8 *image = NULL;
 	int *addrs;
 	int pass;
@@ -2010,6 +2044,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		}
 		prog->aux->jit_data = jit_data;
 	}
+	padding = jit_data->padded;
 	addrs = jit_data->addrs;
 	if (addrs) {
 		ctx = jit_data->ctx;
@@ -2043,7 +2078,9 @@ skip_init_addrs:
 	 * pass to emit the final image.
 	 */
 	for (pass = 0; pass < 20 || image; pass++) {
-		proglen = do_jit(prog, addrs, image, oldproglen, &ctx);
+		if (!padding && pass >= PADDING_PASSES)
+			padding = true;
+		proglen = do_jit(prog, addrs, image, oldproglen, &ctx, padding);
 		if (proglen <= 0) {
 out_image:
 			image = NULL;
@@ -2097,6 +2134,7 @@ out_image:
 			jit_data->proglen = proglen;
 			jit_data->image = image;
 			jit_data->header = header;
+			jit_data->padded = padding;
 		}
 		prog->bpf_func = (void *)image;
 		prog->jited = 1;
