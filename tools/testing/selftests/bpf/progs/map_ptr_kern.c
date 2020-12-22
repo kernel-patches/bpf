@@ -648,6 +648,25 @@ static inline int check_ringbuf(void)
 	return 1;
 }
 
+struct {
+	__uint(type, BPF_MAP_TYPE_TIMEOUT_HASH);
+	__uint(max_entries, MAX_ENTRIES);
+	__type(key, __u32);
+	__type(value, __u32);
+} m_timeout SEC(".maps");
+
+static inline int check_timeout_hash(void)
+{
+	struct bpf_htab *timeout_hash = (struct bpf_htab *)&m_timeout;
+	struct bpf_map *map = (struct bpf_map *)&m_timeout;
+
+	VERIFY(check_default(&timeout_hash->map, map));
+	VERIFY(timeout_hash->n_buckets == MAX_ENTRIES);
+	VERIFY(timeout_hash->elem_size == 64);
+
+	return 1;
+}
+
 SEC("cgroup_skb/egress")
 int cg_skb(void *ctx)
 {
@@ -679,6 +698,7 @@ int cg_skb(void *ctx)
 	VERIFY_TYPE(BPF_MAP_TYPE_SK_STORAGE, check_sk_storage);
 	VERIFY_TYPE(BPF_MAP_TYPE_DEVMAP_HASH, check_devmap_hash);
 	VERIFY_TYPE(BPF_MAP_TYPE_RINGBUF, check_ringbuf);
+	VERIFY_TYPE(BPF_MAP_TYPE_TIMEOUT_HASH, check_timeout_hash);
 
 	return 1;
 }
