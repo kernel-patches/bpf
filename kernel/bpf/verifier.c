@@ -244,7 +244,7 @@ struct bpf_call_arg_meta {
 	u32 ret_btf_id;
 };
 
-struct btf *btf_vmlinux;
+static struct btf *btf_vmlinux;
 
 static DEFINE_MUTEX(bpf_verifier_lock);
 
