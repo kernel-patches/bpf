@@ -73,7 +73,7 @@ $(OUTPUT)%.lex.o: $(OUTPUT)%.lex.c
 
 PROGS = $(OUTPUT)bpf_jit_disasm $(OUTPUT)bpf_dbg $(OUTPUT)bpf_asm
 
-all: $(PROGS) bpftool runqslower
+all: $(PROGS) bpftool runqslower ksnoop
 
 $(OUTPUT)bpf_jit_disasm: CFLAGS += -DPACKAGE='bpf_jit_disasm'
 $(OUTPUT)bpf_jit_disasm: $(OUTPUT)bpf_jit_disasm.o
@@ -89,7 +89,7 @@ $(OUTPUT)bpf_exp.lex.c: $(OUTPUT)bpf_exp.yacc.c
 $(OUTPUT)bpf_exp.yacc.o: $(OUTPUT)bpf_exp.yacc.c
 $(OUTPUT)bpf_exp.lex.o: $(OUTPUT)bpf_exp.lex.c
 
-clean: bpftool_clean runqslower_clean resolve_btfids_clean
+clean: bpftool_clean runqslower_clean resolve_btfids_clean ksnoop_clean
 	$(call QUIET_CLEAN, bpf-progs)
 	$(Q)$(RM) -r -- $(OUTPUT)*.o $(OUTPUT)bpf_jit_disasm $(OUTPUT)bpf_dbg \
 	       $(OUTPUT)bpf_asm $(OUTPUT)bpf_exp.yacc.* $(OUTPUT)bpf_exp.lex.*
@@ -97,7 +97,7 @@ clean: bpftool_clean runqslower_clean resolve_btfids_clean
 	$(Q)$(RM) -- $(OUTPUT)FEATURE-DUMP.bpf
 	$(Q)$(RM) -r -- $(OUTPUT)feature
 
-install: $(PROGS) bpftool_install runqslower_install
+install: $(PROGS) bpftool_install runqslower_install ksnoop_install
 	$(call QUIET_INSTALL, bpf_jit_disasm)
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(prefix)/bin
 	$(Q)$(INSTALL) $(OUTPUT)bpf_jit_disasm $(DESTDIR)$(prefix)/bin/bpf_jit_disasm
@@ -124,6 +124,15 @@ runqslower_install:
 runqslower_clean:
 	$(call descend,runqslower,clean)
 
+ksnoop:
+	$(call descend,ksnoop)
+
+ksnoop_install:
+	$(call descend,ksnoop,install)
+
+ksnoop_clean:
+	$(call descend,ksnoop,clean)
+
 resolve_btfids:
 	$(call descend,resolve_btfids)
 
@@ -132,4 +141,5 @@ resolve_btfids_clean:
 
 .PHONY: all install clean bpftool bpftool_install bpftool_clean \
 	runqslower runqslower_install runqslower_clean \
+	ksnoop ksnoop_install ksnoop_clean \
 	resolve_btfids resolve_btfids_clean
