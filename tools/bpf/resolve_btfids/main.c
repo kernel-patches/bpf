@@ -139,6 +139,8 @@ int eprintf(int level, int var, const char *fmt, ...)
 #define pr_debug2(fmt, ...) pr_debugN(2, pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_err(fmt, ...) \
 	eprintf(0, verbose, pr_fmt(fmt), ##__VA_ARGS__)
+#define pr_info(fmt, ...) \
+	eprintf(0, verbose, pr_fmt(fmt), ##__VA_ARGS__)
 
 static bool is_btf_id(const char *name)
 {
@@ -526,8 +528,13 @@ static int symbols_resolve(struct object *obj)
 
 		id = btf_id__find(root, str);
 		if (id) {
-			id->id = type_id;
-			(*nr)--;
+			if (id->id) {
+				pr_info("WARN: multiple IDs found for '%s' (%d, %d)\n",
+					str, id->id, type_id);
+			} else {
+				id->id = type_id;
+				(*nr)--;
+			}
 		}
 	}
 
