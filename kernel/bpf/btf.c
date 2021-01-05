@@ -166,7 +166,8 @@
  *
  */
 
-#define BITS_PER_U128 (sizeof(u64) * BITS_PER_BYTE * 2)
+#define BITS_PER_U128 128
+#define BITS_PER_U512 512
 #define BITS_PER_BYTE_MASK (BITS_PER_BYTE - 1)
 #define BITS_PER_BYTE_MASKED(bits) ((bits) & BITS_PER_BYTE_MASK)
 #define BITS_ROUNDDOWN_BYTES(bits) ((bits) >> 3)
@@ -1907,9 +1908,9 @@ static int btf_int_check_member(struct btf_verifier_env *env,
 	nr_copy_bits = BTF_INT_BITS(int_data) +
 		BITS_PER_BYTE_MASKED(struct_bits_off);
 
-	if (nr_copy_bits > BITS_PER_U128) {
+	if (nr_copy_bits > BITS_PER_U512) {
 		btf_verifier_log_member(env, struct_type, member,
-					"nr_copy_bits exceeds 128");
+					"nr_copy_bits exceeds 512");
 		return -EINVAL;
 	}
 
@@ -1963,9 +1964,9 @@ static int btf_int_check_kflag_member(struct btf_verifier_env *env,
 
 	bytes_offset = BITS_ROUNDDOWN_BYTES(struct_bits_off);
 	nr_copy_bits = nr_bits + BITS_PER_BYTE_MASKED(struct_bits_off);
-	if (nr_copy_bits > BITS_PER_U128) {
+	if (nr_copy_bits > BITS_PER_U512) {
 		btf_verifier_log_member(env, struct_type, member,
-					"nr_copy_bits exceeds 128");
+					"nr_copy_bits exceeds 512");
 		return -EINVAL;
 	}
 
@@ -2012,9 +2013,9 @@ static s32 btf_int_check_meta(struct btf_verifier_env *env,
 
 	nr_bits = BTF_INT_BITS(int_data) + BTF_INT_OFFSET(int_data);
 
-	if (nr_bits > BITS_PER_U128) {
-		btf_verifier_log_type(env, t, "nr_bits exceeds %zu",
-				      BITS_PER_U128);
+	if (nr_bits > BITS_PER_U512) {
+		btf_verifier_log_type(env, t, "nr_bits exceeds %u",
+				      BITS_PER_U512);
 		return -EINVAL;
 	}
 
@@ -2078,6 +2079,37 @@ static void btf_int128_print(struct btf_show *show, void *data)
 	else
 		btf_show_type_values(show, "0x%llx%016llx", upper_num,
 				     lower_num);
+}
+
+static void btf_bigint_print(struct btf_show *show, void *data, u16 nr_bits)
+{
+	/* data points to 256 or 512 bit int type */
+	char buf[129];
+	int last_u64 = nr_bits / 64 - 1;
+	bool seen_nonzero = false;
+	int i;
+
+	for (i = 0; i <= last_u64; i++) {
+#ifdef __BIG_ENDIAN_BITFIELD
+		u64 v = ((u64 *)data)[i];
+#else
+		u64 v = ((u64 *)data)[last_u64 - i];
+#endif
+		if (!seen_nonzero) {
+			if (!v && i != last_u64)
+				continue;
+
+			snprintf(buf, sizeof(buf), "%llx", v);
+
+			seen_nonzero = true;
+		} else {
+			size_t off = strlen(buf);
+
+			snprintf(buf + off, sizeof(buf) - off, "%016llx", v);
+		}
+	}
+
+	btf_show_type_value(show, "0x%s", buf);
 }
 
 static void btf_int128_shift(u64 *print_num, u16 left_shift_bits,
@@ -2172,7 +2204,7 @@ static void btf_int_show(const struct btf *btf, const struct btf_type *t,
 	u32 int_data = btf_type_int(t);
 	u8 encoding = BTF_INT_ENCODING(int_data);
 	bool sign = encoding & BTF_INT_SIGNED;
-	u8 nr_bits = BTF_INT_BITS(int_data);
+	u16 nr_bits = BTF_INT_BITS(int_data);
 	void *safe_data;
 
 	safe_data = btf_show_start_type(show, t, type_id, data);
@@ -2186,6 +2218,10 @@ static void btf_int_show(const struct btf *btf, const struct btf_type *t,
 	}
 
 	switch (nr_bits) {
+	case 512:
+	case 256:
+		btf_bigint_print(show, safe_data, nr_bits);
+		break;
 	case 128:
 		btf_int128_print(show, safe_data);
 		break;
