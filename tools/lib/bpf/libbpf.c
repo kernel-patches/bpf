@@ -2538,9 +2538,12 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 	struct bpf_program *prog;
 	int i;
 
-	/* CO-RE relocations need kernel BTF */
+	/* CO-RE relocations need kernel BTF or an override BTF.
+	 * If override BTF present CO-RE can use it.
+	 */
 	if (obj->btf_ext && obj->btf_ext->core_relo_info.len)
-		return true;
+		if (!obj->btf_vmlinux_override)
+			return true;
 
 	/* Support for typed ksyms needs kernel BTF */
 	for (i = 0; i < obj->nr_extern; i++) {
@@ -2559,6 +2562,27 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 	}
 
 	return false;
+}
+
+static int bpf_object__load_override_btf(struct bpf_object *obj,
+										 const char *targ_btf_path)
+{
+	/* Could have been be set via `bpf_object_open_opts` */
+	if (obj->btf_vmlinux_override)
+		return 0;
+
+	if (!targ_btf_path)
+		return 0;
+
+	obj->btf_vmlinux_override = btf__parse(targ_btf_path, NULL);
+	if (IS_ERR_OR_NULL(obj->btf_vmlinux_override)) {
+		int err = PTR_ERR(obj->btf_vmlinux_override);
+		obj->btf_vmlinux_override = NULL;
+		pr_warn("failed to parse target BTF: %d\n", err);
+		return err;
+	}
+
+	return 0;
 }
 
 static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
@@ -6031,7 +6055,7 @@ patch_insn:
 }
 
 static int
-bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
+bpf_object__relocate_core(struct bpf_object *obj)
 {
 	const struct btf_ext_info_sec *sec;
 	const struct bpf_core_relo *rec;
@@ -6044,15 +6068,6 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 
 	if (obj->btf_ext->core_relo_info.len == 0)
 		return 0;
-
-	if (targ_btf_path) {
-		obj->btf_vmlinux_override = btf__parse(targ_btf_path, NULL);
-		if (IS_ERR_OR_NULL(obj->btf_vmlinux_override)) {
-			err = PTR_ERR(obj->btf_vmlinux_override);
-			pr_warn("failed to parse target BTF: %d\n", err);
-			return err;
-		}
-	}
 
 	cand_cache = hashmap__new(bpf_core_hash_fn, bpf_core_equal_fn, NULL);
 	if (IS_ERR(cand_cache)) {
@@ -6556,14 +6571,14 @@ bpf_object__relocate_calls(struct bpf_object *obj, struct bpf_program *prog)
 }
 
 static int
-bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
+bpf_object__relocate(struct bpf_object *obj)
 {
 	struct bpf_program *prog;
 	size_t i;
 	int err;
 
 	if (obj->btf_ext) {
-		err = bpf_object__relocate_core(obj, targ_btf_path);
+		err = bpf_object__relocate_core(obj);
 		if (err) {
 			pr_warn("failed to perform CO-RE relocations: %d\n",
 				err);
@@ -7088,7 +7103,7 @@ static struct bpf_object *
 __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 		   const struct bpf_object_open_opts *opts)
 {
-	const char *obj_name, *kconfig;
+	const char *obj_name, *kconfig, *core_btf_path;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	char tmp_name[64];
@@ -7124,6 +7139,14 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 		obj->kconfig = strdup(kconfig);
 		if (!obj->kconfig)
 			return ERR_PTR(-ENOMEM);
+	}
+
+	core_btf_path = OPTS_GET(opts, core_btf_path, NULL);
+	if (core_btf_path) {
+		pr_debug("parse btf '%s' for CO-RE relocations\n", core_btf_path);
+		obj->btf_vmlinux_override = btf__parse(core_btf_path, NULL);
+		if (IS_ERR_OR_NULL(obj->btf_vmlinux_override))
+			pr_warn("can't parse btf at '%s'\n", core_btf_path);
 	}
 
 	err = bpf_object__elf_init(obj);
@@ -7481,13 +7504,14 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 	}
 
 	err = bpf_object__probe_loading(obj);
+	err = err ? : bpf_object__load_override_btf(obj, attr->target_btf_path);
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
 	err = err ? : bpf_object__sanitize_maps(obj);
 	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
 	err = err ? : bpf_object__create_maps(obj);
-	err = err ? : bpf_object__relocate(obj, attr->target_btf_path);
+	err = err ? : bpf_object__relocate(obj);
 	err = err ? : bpf_object__load_progs(obj, attr->log_level);
 
 	/* clean up module BTFs */
