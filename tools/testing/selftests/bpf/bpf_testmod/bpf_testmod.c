@@ -22,6 +22,8 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	};
 
 	trace_bpf_testmod_test_read(current, &ctx);
+	ctx.len++;
+	trace_bpf_testmod_test_read_bare(current, &ctx);
 
 	return -EIO; /* always fail */
 }
