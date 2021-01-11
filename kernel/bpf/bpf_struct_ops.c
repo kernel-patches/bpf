@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/btf.h>
+#include <linux/btf_common.h>
 #include <linux/filter.h>
 #include <linux/slab.h>
 #include <linux/numa.h>

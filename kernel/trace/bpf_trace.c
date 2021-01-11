@@ -8,6 +8,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_perf_event.h>
 #include <linux/btf.h>
+#include <linux/btf_common.h>
 #include <linux/filter.h>
 #include <linux/uaccess.h>
 #include <linux/ctype.h>

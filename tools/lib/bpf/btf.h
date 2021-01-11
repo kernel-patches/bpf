@@ -180,6 +180,13 @@ LIBBPF_API int
 btf_dump__emit_type_decl(struct btf_dump *d, __u32 id,
 			 const struct btf_dump_emit_type_decl_opts *opts);
 
+/* "show" API (shared with kernel) for displaying typed data (as opposed to
+ * dumping a type.
+ */
+LIBBPF_API int
+btf__snprintf(struct btf *btf, char *buf, int len, __u32 id, void *obj,
+	      __u64 flags);
+
 /*
  * A set of helpers for easier BTF types handling
  */

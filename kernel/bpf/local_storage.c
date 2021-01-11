@@ -2,6 +2,7 @@
 #include <linux/bpf-cgroup.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/btf_common.h>
 #include <linux/bug.h>
 #include <linux/filter.h>
 #include <linux/mm.h>

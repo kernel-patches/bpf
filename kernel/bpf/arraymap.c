@@ -4,6 +4,7 @@
  */
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/btf_common.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
