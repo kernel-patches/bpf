@@ -7683,12 +7683,14 @@ static bool __sock_filter_check_attach_type(int off,
 		switch (attach_type) {
 		case BPF_CGROUP_INET_SOCK_CREATE:
 		case BPF_CGROUP_INET_SOCK_RELEASE:
+		case BPF_CGROUP_INET_SOCK_POST_CONNECT:
 			goto full_access;
 		default:
 			return false;
 		}
 	case bpf_ctx_range(struct bpf_sock, src_ip4):
 		switch (attach_type) {
+		case BPF_CGROUP_INET_SOCK_POST_CONNECT:
 		case BPF_CGROUP_INET4_POST_BIND:
 			goto read_only;
 		default:
@@ -7696,6 +7698,7 @@ static bool __sock_filter_check_attach_type(int off,
 		}
 	case bpf_ctx_range_till(struct bpf_sock, src_ip6[0], src_ip6[3]):
 		switch (attach_type) {
+		case BPF_CGROUP_INET_SOCK_POST_CONNECT:
 		case BPF_CGROUP_INET6_POST_BIND:
 			goto read_only;
 		default:
@@ -7703,6 +7706,7 @@ static bool __sock_filter_check_attach_type(int off,
 		}
 	case bpf_ctx_range(struct bpf_sock, src_port):
 		switch (attach_type) {
+		case BPF_CGROUP_INET_SOCK_POST_CONNECT:
 		case BPF_CGROUP_INET4_POST_BIND:
 		case BPF_CGROUP_INET6_POST_BIND:
 			goto read_only;

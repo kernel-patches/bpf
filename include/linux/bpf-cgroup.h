@@ -213,11 +213,28 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *map, void *key,
 	__ret;								       \
 })
 
+#define BPF_CGROUP_RUN_SK_PROG_LOCKED(sk, type)				       \
+({									       \
+	int __ret = 0;							       \
+	if (cgroup_bpf_enabled) {					       \
+		lock_sock(sk);						       \
+		__ret = __cgroup_bpf_run_filter_sk(sk, type);		       \
+		release_sock(sk);					       \
+	}								       \
+	__ret;								       \
+})
+
 #define BPF_CGROUP_RUN_PROG_INET_SOCK(sk)				       \
 	BPF_CGROUP_RUN_SK_PROG(sk, BPF_CGROUP_INET_SOCK_CREATE)
 
 #define BPF_CGROUP_RUN_PROG_INET_SOCK_RELEASE(sk)			       \
 	BPF_CGROUP_RUN_SK_PROG(sk, BPF_CGROUP_INET_SOCK_RELEASE)
+
+#define BPF_CGROUP_RUN_PROG_INET_SOCK_POST_CONNECT(sk)			       \
+	BPF_CGROUP_RUN_SK_PROG(sk, BPF_CGROUP_INET_SOCK_POST_CONNECT)
+
+#define BPF_CGROUP_RUN_PROG_INET_SOCK_POST_CONNECT_LOCKED(sk)		       \
+	BPF_CGROUP_RUN_SK_PROG_LOCKED(sk, BPF_CGROUP_INET_SOCK_POST_CONNECT)
 
 #define BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk)				       \
 	BPF_CGROUP_RUN_SK_PROG(sk, BPF_CGROUP_INET4_POST_BIND)

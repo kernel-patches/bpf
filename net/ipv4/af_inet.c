@@ -574,7 +574,10 @@ int inet_dgram_connect(struct socket *sock, struct sockaddr *uaddr,
 
 	if (!inet_sk(sk)->inet_num && inet_autobind(sk))
 		return -EAGAIN;
-	return sk->sk_prot->connect(sk, uaddr, addr_len);
+	err = sk->sk_prot->connect(sk, uaddr, addr_len);
+	if (!err)
+		err = BPF_CGROUP_RUN_PROG_INET_SOCK_POST_CONNECT_LOCKED(sk);
+	return err;
 }
 EXPORT_SYMBOL(inet_dgram_connect);
 
@@ -723,6 +726,8 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 
 	lock_sock(sock->sk);
 	err = __inet_stream_connect(sock, uaddr, addr_len, flags, 0);
+	if (!err)
+		err = BPF_CGROUP_RUN_PROG_INET_SOCK_POST_CONNECT(sock->sk);
 	release_sock(sock->sk);
 	return err;
 }
