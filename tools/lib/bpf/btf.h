@@ -294,6 +294,20 @@ static inline bool btf_is_datasec(const struct btf_type *t)
 	return btf_kind(t) == BTF_KIND_DATASEC;
 }
 
+static inline bool btf_has_size(const struct btf_type *t)
+{
+	switch (BTF_INFO_KIND(t->info)) {
+	case BTF_KIND_INT:
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION:
+	case BTF_KIND_ENUM:
+	case BTF_KIND_DATASEC:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static inline __u8 btf_int_encoding(const struct btf_type *t)
 {
 	return BTF_INT_ENCODING(*(__u32 *)(t + 1));
@@ -307,6 +321,11 @@ static inline __u8 btf_int_offset(const struct btf_type *t)
 static inline __u8 btf_int_bits(const struct btf_type *t)
 {
 	return BTF_INT_BITS(*(__u32 *)(t + 1));
+}
+
+static inline __u32 btf_int(const struct btf_type *t)
+{
+	return *(__u32 *)(t + 1);
 }
 
 static inline struct btf_array *btf_array(const struct btf_type *t)
