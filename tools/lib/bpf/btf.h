@@ -180,6 +180,23 @@ LIBBPF_API int
 btf_dump__emit_type_decl(struct btf_dump *d, __u32 id,
 			 const struct btf_dump_emit_type_decl_opts *opts);
 
+
+struct btf_dump_emit_type_data_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+	int indent_level;
+	/* below match "show" flags for bpf_show_snprintf() */
+	bool compact;
+	bool noname;
+	bool zero;
+};
+#define btf_dump_emit_type_data_opts__last_field zero
+
+LIBBPF_API int
+btf_dump__emit_type_data(struct btf_dump *d, __u32 id,
+			 const struct btf_dump_emit_type_data_opts *opts,
+			 void *data);
+
 /*
  * A set of helpers for easier BTF types handling
  */
