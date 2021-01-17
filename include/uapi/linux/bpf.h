@@ -164,6 +164,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_RINGBUF,
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
+	BPF_MAP_TYPE_TIMEOUT_HASH,
 };
 
 /* Note that tracing related programs such as
@@ -399,7 +400,9 @@ enum bpf_link_type {
  */
 #define BPF_PSEUDO_CALL		1
 
-/* flags for BPF_MAP_UPDATE_ELEM command */
+/* flags for BPF_MAP_UPDATE_ELEM command, upper 32 bits are timeout for
+ * BPF_MAP_TYPE_TIMEOUT_HASH (in milliseconds).
+ */
 enum {
 	BPF_ANY		= 0, /* create new element or update existing */
 	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
