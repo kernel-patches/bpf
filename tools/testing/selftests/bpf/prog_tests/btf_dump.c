@@ -232,6 +232,237 @@ err_out:
 	btf__free(btf);
 }
 
+#define STRSIZE				2048
+#define	EXPECTED_STRSIZE		256
+
+void btf_dump_snprintf(void *ctx, const char *fmt, va_list args)
+{
+	char *s = ctx, new[STRSIZE];
+
+	vsnprintf(new, STRSIZE, fmt, args);
+	strncat(s, new, STRSIZE);
+	vfprintf(ctx, fmt, args);
+}
+
+/* skip "enum "/"struct " prefixes */
+#define SKIP_PREFIX(_typestr, _prefix)					\
+	do {								\
+		if (strstr(_typestr, _prefix) == _typestr)		\
+			_typestr += strlen(_prefix) + 1;		\
+	} while (0)
+
+int btf_dump_data(struct btf *btf, struct btf_dump *d,
+		  char *ptrtype, __u64 flags, void *ptr,
+		  char *str, char *expectedval)
+{
+	struct btf_dump_emit_type_data_opts opts = { 0 };
+	int ret = 0, cmp;
+	__s32 type_id;
+
+	opts.sz = sizeof(opts);
+	opts.compact = true;
+	if (flags & BTF_F_NONAME)
+		opts.noname = true;
+	if (flags & BTF_F_ZERO)
+		opts.zero = true;
+	SKIP_PREFIX(ptrtype, "enum");
+	SKIP_PREFIX(ptrtype, "struct");
+	SKIP_PREFIX(ptrtype, "union");
+	type_id = btf__find_by_name(btf, ptrtype);
+	if (CHECK(type_id <= 0, "find type id",
+		  "no '%s' in BTF: %d\n", ptrtype, type_id)) {
+		ret = -ENOENT;
+		goto err;
+	}
+	str[0] = '\0';
+	ret = btf_dump__emit_type_data(d, type_id, &opts, ptr);
+	if (CHECK(ret < 0, "btf_dump__emit_type_data",
+		  "failed: %d\n", ret))
+		goto err;
+
+	cmp = strncmp(str, expectedval, EXPECTED_STRSIZE);
+	if (CHECK(cmp, "ensure expected/actual match",
+		  "'%s' does not match expected '%s': %d\n",
+		  str, expectedval, cmp))
+		ret = -EFAULT;
+
+err:
+	if (ret)
+		btf_dump__free(d);
+	return ret;
+}
+
+#define TEST_BTF_DUMP_DATA(_b, _d, _str, _type, _flags, _expected, ...)	\
+	do {								\
+		char _expectedval[EXPECTED_STRSIZE] = _expected;	\
+		char __ptrtype[64] = #_type;				\
+		char *_ptrtype = (char *)__ptrtype;			\
+		static _type _ptrdata = __VA_ARGS__;			\
+		void *_ptr = &_ptrdata;					\
+									\
+		if (btf_dump_data(_b, _d, _ptrtype, _flags, _ptr,	\
+				  _str, _expectedval))			\
+			return;						\
+	} while (0)
+
+/* Use where expected data string matches its stringified declaration */
+#define TEST_BTF_DUMP_DATA_C(_b, _d, _str, _type, _opts, ...)		\
+	TEST_BTF_DUMP_DATA(_b, _d, _str, _type, _opts,			\
+			   "(" #_type ")" #__VA_ARGS__,	__VA_ARGS__)
+
+void test_btf_dump_data(void)
+{
+	struct btf *btf = libbpf_find_kernel_btf();
+	char str[STRSIZE];
+	struct btf_dump_opts opts = { .ctx = str };
+	struct btf_dump *d;
+
+	if (CHECK(!btf, "get kernel BTF", "no kernel BTF found"))
+		return;
+
+	d = btf_dump__new(btf, NULL, &opts, btf_dump_snprintf);
+
+	if (CHECK(!d, "new dump", "could not create BTF dump"))
+		return;
+
+	/* Verify type display for various types. */
+
+	/* simple int */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, int, 0, 1234);
+	TEST_BTF_DUMP_DATA(btf, d, str, int, BTF_F_NONAME, "1234", 1234);
+
+	/* zero value should be printed at toplevel */
+	TEST_BTF_DUMP_DATA(btf, d, str, int, 0, "(int)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, int, BTF_F_NONAME, "0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, int, BTF_F_ZERO, "(int)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, int, BTF_F_NONAME | BTF_F_ZERO,
+			   "0", 0);
+	TEST_BTF_DUMP_DATA_C(btf, d, str, int, 0, -4567);
+	TEST_BTF_DUMP_DATA(btf, d, str, int, BTF_F_NONAME, "-4567", -4567);
+
+	/* simple char */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, char, 0, 100);
+	TEST_BTF_DUMP_DATA(btf, d, str, char, BTF_F_NONAME, "100", 100);
+	/* zero value should be printed at toplevel */
+	TEST_BTF_DUMP_DATA(btf, d, str, char, 0, "(char)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, char, BTF_F_NONAME, "0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, char, BTF_F_ZERO, "(char)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, char, BTF_F_NONAME | BTF_F_ZERO,
+			   "0", 0);
+
+	/* simple typedef */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, uint64_t, 0, 100);
+	TEST_BTF_DUMP_DATA(btf, d, str, u64, BTF_F_NONAME, "1", 1);
+	/* zero value should be printed at toplevel */
+	TEST_BTF_DUMP_DATA(btf, d, str, u64, 0, "(u64)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, u64, BTF_F_NONAME, "0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, u64, BTF_F_ZERO, "(u64)0", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, u64, BTF_F_NONAME | BTF_F_ZERO,
+			   "0", 0);
+
+	/* typedef struct */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, atomic_t, 0, {.counter = (int)1,});
+	TEST_BTF_DUMP_DATA(btf, d, str, atomic_t, BTF_F_NONAME, "{1,}",
+			   {.counter = 1,});
+	/* typedef with 0 value should be printed at toplevel */
+	TEST_BTF_DUMP_DATA(btf, d, str, atomic_t, 0, "(atomic_t){}",
+			   {.counter = 0,});
+	TEST_BTF_DUMP_DATA(btf, d, str, atomic_t, BTF_F_NONAME, "{}",
+			   {.counter = 0,});
+	TEST_BTF_DUMP_DATA(btf, d, str, atomic_t, BTF_F_ZERO,
+			   "(atomic_t){.counter = (int)0,}",
+			   {.counter = 0,});
+	TEST_BTF_DUMP_DATA(btf, d, str, atomic_t, BTF_F_NONAME | BTF_F_ZERO,
+			   "{0,}", {.counter = 0,});
+	/* enum where enum value does (and does not) exist */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, enum bpf_cmd, 0, BPF_MAP_CREATE);
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd, 0,
+			   "(enum bpf_cmd)BPF_MAP_CREATE", 0);
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd, BTF_F_NONAME,
+			   "BPF_MAP_CREATE",
+			   BPF_MAP_CREATE);
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd,
+			   BTF_F_NONAME | BTF_F_ZERO,
+			   "BPF_MAP_CREATE", 0);
+
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd, BTF_F_ZERO,
+			   "(enum bpf_cmd)BPF_MAP_CREATE",
+			   BPF_MAP_CREATE);
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd,
+			   BTF_F_NONAME | BTF_F_ZERO,
+			   "BPF_MAP_CREATE", BPF_MAP_CREATE);
+	TEST_BTF_DUMP_DATA_C(btf, d, str, enum bpf_cmd, 0, 2000);
+	TEST_BTF_DUMP_DATA(btf, d, str, enum bpf_cmd, BTF_F_NONAME,
+			   "2000", 2000);
+
+	/* simple struct */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, struct btf_enum, 0,
+			     {.name_off = (__u32)3,.val = (__s32)-1,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum, BTF_F_NONAME,
+			   "{3,-1,}",
+			   { .name_off = 3, .val = -1,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum, BTF_F_NONAME, "{-1,}",
+			   { .name_off = 0, .val = -1,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum,
+			   BTF_F_NONAME | BTF_F_ZERO,
+			   "{0,-1,}",
+			   { .name_off = 0, .val = -1,});
+	/* empty struct should be printed */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum, 0,
+			   "(struct btf_enum){}",
+			   { .name_off = 0, .val = 0,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum, BTF_F_NONAME, "{}",
+			   { .name_off = 0, .val = 0,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct btf_enum, BTF_F_ZERO,
+			   "(struct btf_enum){.name_off = (__u32)0,.val = (__s32)0,}",
+			   { .name_off = 0, .val = 0,});
+
+	/* struct with pointers */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct list_head, 0,
+			   "(struct list_head){.next = (struct list_head *)0x1,}",
+			   { .next = (struct list_head *)1 });
+	/* NULL pointer should not be displayed */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct list_head, 0,
+			   "(struct list_head){}",
+			   { .next = (struct list_head *)0 });
+	/* struct with char array */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct bpf_prog_info, 0,
+			   "(struct bpf_prog_info){.name = (char[])['f','o','o',],}",
+			   { .name = "foo",});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct bpf_prog_info, BTF_F_NONAME,
+			   "{['f','o','o',],}",
+			   {.name = "foo",});
+	/* leading null char means do not display string */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct bpf_prog_info, 0,
+			   "(struct bpf_prog_info){}",
+			   {.name = {'\0', 'f', 'o', 'o'}});
+	/* handle non-printable characters */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct bpf_prog_info, 0,
+			   "(struct bpf_prog_info){.name = (char[])[1,2,3,],}",
+			   { .name = {1, 2, 3, 0}});
+
+	/* struct with non-char array */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct __sk_buff, 0,
+			   "(struct __sk_buff){.cb = (__u32[])[1,2,3,4,5,],}",
+			   { .cb = {1, 2, 3, 4, 5,},});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct __sk_buff, BTF_F_NONAME,
+			   "{[1,2,3,4,5,],}",
+			   { .cb = { 1, 2, 3, 4, 5},});
+	/* For non-char, arrays, show non-zero values only */
+	TEST_BTF_DUMP_DATA(btf, d, str, struct __sk_buff, 0,
+			   "(struct __sk_buff){.cb = (__u32[])[1,],}",
+			   { .cb = { 0, 0, 1, 0, 0},});
+
+	/* struct with bitfields */
+	TEST_BTF_DUMP_DATA_C(btf, d, str, struct bpf_insn, 0,
+		{.code = (__u8)1,.dst_reg = (__u8)0x2,.src_reg = (__u8)0x3,.off = (__s16)4,.imm = (__s32)5,});
+	TEST_BTF_DUMP_DATA(btf, d, str, struct bpf_insn, BTF_F_NONAME,
+			   "{1,0x2,0x3,4,5,}",
+			   { .code = 1, .dst_reg = 0x2, .src_reg = 0x3, .off = 4,
+			     .imm = 5,});
+}
+
+
 void test_btf_dump() {
 	int i;
 
@@ -245,4 +476,6 @@ void test_btf_dump() {
 	}
 	if (test__start_subtest("btf_dump: incremental"))
 		test_btf_dump_incremental();
+	if (test__start_subtest("btf_dump: data"))
+		test_btf_dump_data();
 }
