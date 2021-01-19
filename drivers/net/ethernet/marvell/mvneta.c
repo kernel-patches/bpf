@@ -2038,12 +2038,16 @@ mvneta_xdp_put_buff(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 {
 	int i;
 
+	if (likely(!xdp->mb))
+		goto out;
+
 	for (i = 0; i < xdp_sinfo->nr_frags; i++) {
 		skb_frag_t *frag = &xdp_sinfo->frags[i];
 
 		page_pool_put_full_page(rxq->page_pool,
 					xdp_get_frag_page(frag), true);
 	}
+out:
 	page_pool_put_page(rxq->page_pool, virt_to_head_page(xdp->data),
 			   sync_len, true);
 }
@@ -2244,7 +2248,6 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 {
 	unsigned char *data = page_address(page);
 	int data_len = -MVNETA_MH_SIZE, len;
-	struct xdp_shared_info *xdp_sinfo;
 	struct net_device *dev = pp->dev;
 	enum dma_data_direction dma_dir;
 
@@ -2268,9 +2271,6 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	prefetch(data);
 	xdp_prepare_buff(xdp, data, pp->rx_offset_correction + MVNETA_MH_SIZE,
 			 data_len, false);
-
-	xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
-	xdp_sinfo->nr_frags = 0;
 }
 
 static void
@@ -2305,12 +2305,18 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 		xdp_set_frag_size(frag, data_len);
 		xdp_set_frag_page(frag, page);
 
+		if (!xdp->mb) {
+			xdp_sinfo->data_length = *size;
+			xdp->mb = 1;
+		}
 		/* last fragment */
 		if (len == *size) {
 			struct xdp_shared_info *sinfo;
 
 			sinfo = xdp_get_shared_info_from_buff(xdp);
 			sinfo->nr_frags = xdp_sinfo->nr_frags;
+			sinfo->data_length = xdp_sinfo->data_length;
+
 			memcpy(sinfo->frags, xdp_sinfo->frags,
 			       sinfo->nr_frags * sizeof(skb_frag_t));
 		}
@@ -2325,11 +2331,15 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 		      struct xdp_buff *xdp, u32 desc_status)
 {
 	struct xdp_shared_info *xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
-	int i, num_frags = xdp_sinfo->nr_frags;
 	skb_frag_t frag_list[MAX_SKB_FRAGS];
+	int i, num_frags = 0;
 	struct sk_buff *skb;
 
-	memcpy(frag_list, xdp_sinfo->frags, sizeof(skb_frag_t) * num_frags);
+	if (unlikely(xdp->mb)) {
+		num_frags = xdp_sinfo->nr_frags;
+		memcpy(frag_list, xdp_sinfo->frags,
+		       sizeof(skb_frag_t) * num_frags);
+	}
 
 	skb = build_skb(xdp->data_hard_start, PAGE_SIZE);
 	if (!skb)
@@ -2340,6 +2350,9 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
 	skb_put(skb, xdp->data_end - xdp->data);
 	mvneta_rx_csum(pp, desc_status, skb);
+
+	if (likely(!xdp->mb))
+		return skb;
 
 	for (i = 0; i < num_frags; i++) {
 		struct page *page = xdp_get_frag_page(&frag_list[i]);
@@ -2402,6 +2415,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 			frame_sz = size - ETH_FCS_LEN;
 			desc_status = rx_status;
 
+			xdp_buf.mb = 0;
 			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
 					     &size, page);
 		} else {
