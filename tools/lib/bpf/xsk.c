@@ -47,9 +47,12 @@
  #define PF_XDP AF_XDP
 #endif
 
+#define XSKMAP_NOT_NEEDED -1
+
 enum xsk_prog {
 	XSK_PROG_FALLBACK,
 	XSK_PROG_REDIRECT_FLAGS,
+	XSK_PROG_REDIRECT_XSK,
 };
 
 struct xsk_umem {
@@ -361,7 +364,11 @@ static enum xsk_prog get_xsk_prog(void)
 {
 	__u32 kver = get_kernel_version();
 
-	return kver < KERNEL_VERSION(5, 3, 0) ? XSK_PROG_FALLBACK : XSK_PROG_REDIRECT_FLAGS;
+	if (kver < KERNEL_VERSION(5, 3, 0))
+		return XSK_PROG_FALLBACK;
+	if (kver < KERNEL_VERSION(5, 12, 0))
+		return XSK_PROG_REDIRECT_FLAGS;
+	return XSK_PROG_REDIRECT_XSK;
 }
 
 static int xsk_load_xdp_prog(struct xsk_socket *xsk)
@@ -445,10 +452,25 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		BPF_EMIT_CALL(BPF_FUNC_redirect_map),
 		BPF_EXIT_INSN(),
 	};
+
+	/* This is the post-5.12 kernel C-program:
+	 * SEC("xdp_sock") int xdp_sock_prog(struct xdp_md *ctx)
+	 * {
+	 *     return bpf_redirect_xsk(ctx, XDP_PASS);
+	 * }
+	 */
+	struct bpf_insn prog_redirect_xsk[] = {
+		/* r2 = XDP_PASS */
+		BPF_MOV64_IMM(BPF_REG_2, 2),
+		/* call bpf_redirect_xsk */
+		BPF_EMIT_CALL(BPF_FUNC_redirect_xsk),
+		BPF_EXIT_INSN(),
+	};
 	size_t insns_cnt[] = {sizeof(prog) / sizeof(struct bpf_insn),
 			      sizeof(prog_redirect_flags) / sizeof(struct bpf_insn),
+			      sizeof(prog_redirect_xsk) / sizeof(struct bpf_insn),
 	};
-	struct bpf_insn *progs[] = {prog, prog_redirect_flags};
+	struct bpf_insn *progs[] = {prog, prog_redirect_flags, prog_redirect_xsk};
 	enum xsk_prog option = get_xsk_prog();
 
 	prog_fd = bpf_load_program(BPF_PROG_TYPE_XDP, progs[option], insns_cnt[option],
@@ -508,11 +530,21 @@ out:
 	return ret;
 }
 
+static bool xskmap_required(void)
+{
+	return get_xsk_prog() != XSK_PROG_REDIRECT_XSK;
+}
+
 static int xsk_create_bpf_maps(struct xsk_socket *xsk)
 {
 	struct xsk_ctx *ctx = xsk->ctx;
 	int max_queues;
 	int fd;
+
+	if (!xskmap_required()) {
+		ctx->xsks_map_fd = XSKMAP_NOT_NEEDED;
+		return 0;
+	}
 
 	max_queues = xsk_get_max_queues(xsk);
 	if (max_queues < 0)
@@ -531,6 +563,9 @@ static int xsk_create_bpf_maps(struct xsk_socket *xsk)
 static void xsk_delete_bpf_maps(struct xsk_socket *xsk)
 {
 	struct xsk_ctx *ctx = xsk->ctx;
+
+	if (ctx->xsks_map_fd == XSKMAP_NOT_NEEDED)
+		return;
 
 	bpf_map_delete_elem(ctx->xsks_map_fd, &ctx->queue_id);
 	close(ctx->xsks_map_fd);
@@ -563,7 +598,7 @@ static int xsk_lookup_bpf_maps(struct xsk_socket *xsk)
 	if (err)
 		goto out_map_ids;
 
-	ctx->xsks_map_fd = -1;
+	ctx->xsks_map_fd = XSKMAP_NOT_NEEDED;
 
 	for (i = 0; i < prog_info.nr_map_ids; i++) {
 		fd = bpf_map_get_fd_by_id(map_ids[i]);
@@ -585,7 +620,7 @@ static int xsk_lookup_bpf_maps(struct xsk_socket *xsk)
 	}
 
 	err = 0;
-	if (ctx->xsks_map_fd == -1)
+	if (ctx->xsks_map_fd == XSKMAP_NOT_NEEDED && xskmap_required())
 		err = -ENOENT;
 
 out_map_ids:
@@ -596,6 +631,9 @@ out_map_ids:
 static int xsk_set_bpf_maps(struct xsk_socket *xsk)
 {
 	struct xsk_ctx *ctx = xsk->ctx;
+
+	if (ctx->xsks_map_fd == XSKMAP_NOT_NEEDED)
+		return 0;
 
 	return bpf_map_update_elem(ctx->xsks_map_fd, &ctx->queue_id,
 				   &xsk->fd, 0);
