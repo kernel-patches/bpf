@@ -245,6 +245,54 @@ retval=$?
 test_status $retval "${TEST_NAME}"
 statusList+=($retval)
 
+### TEST 10
+TEST_NAME="SKB EXT BPF_REDIRECT_MAP"
+
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+
+params=("-S" "--ext-prog1")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 11
+TEST_NAME="DRV EXT BPF_REDIRECT_MAP"
+
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
+
+params=("-N" "--ext-prog1")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 12
+TEST_NAME="SKB EXT BPF_REDIRECT_XSK"
+
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+
+params=("-S" "--ext-prog2")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 13
+TEST_NAME="DRV EXT BPF_REDIRECT_XSK"
+
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
+
+params=("-N" "--ext-prog2")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
 ## END TESTS
 
 cleanup_exit ${VETH0} ${VETH1} ${NS1}

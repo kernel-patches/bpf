@@ -124,6 +124,8 @@ struct ifobject {
 	u32 src_ip;
 	u16 src_port;
 	u16 dst_port;
+	int prog_fd;
+	struct bpf_object *obj;
 };
 
 static struct ifobject *ifdict[MAX_INTERFACES];

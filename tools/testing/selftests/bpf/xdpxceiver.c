@@ -45,7 +45,7 @@
  *    - Only copy mode is supported because veth does not currently support
  *      zero-copy mode
  *
- * Total tests: 8
+ * Total tests: 13
  *
  * Flow:
  * -----
@@ -93,6 +93,7 @@ typedef __u16 __sum16;
 #include <unistd.h>
 #include <stdatomic.h>
 #include <bpf/xsk.h>
+#include <bpf/bpf.h>
 #include "xdpxceiver.h"
 #include "../kselftest.h"
 
@@ -296,6 +297,23 @@ static void xsk_populate_fill_ring(struct xsk_umem_info *umem)
 	xsk_ring_prod__submit(&umem->fq, XSK_RING_PROD__DEFAULT_NUM_DESCS);
 }
 
+static int update_xskmap(struct bpf_object *obj, struct xsk_socket_info *xsk)
+{
+	int xskmap, fd, key = opt_queue;
+	struct bpf_map *map;
+
+	map = bpf_object__find_map_by_name(obj, "xsks_map");
+	xskmap = bpf_map__fd(map);
+	if (xskmap < 0)
+		return 0;
+
+	fd = xsk_socket__fd(xsk->xsk);
+	if (bpf_map_update_elem(xskmap, &key, &fd, 0))
+		return -1;
+
+	return 0;
+}
+
 static int xsk_configure_socket(struct ifobject *ifobject)
 {
 	struct xsk_socket_config cfg;
@@ -310,7 +328,7 @@ static int xsk_configure_socket(struct ifobject *ifobject)
 	ifobject->xsk->umem = ifobject->umem;
 	cfg.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;
 	cfg.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
-	cfg.libbpf_flags = 0;
+	cfg.libbpf_flags = ifobject->obj ? XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD : 0;
 	cfg.xdp_flags = opt_xdp_flags;
 	cfg.bind_flags = opt_xdp_bind_flags;
 
@@ -328,6 +346,11 @@ static int xsk_configure_socket(struct ifobject *ifobject)
 	if (ret)
 		return 1;
 
+	if (ifobject->obj) {
+		if (update_xskmap(ifobject->obj, ifobject->xsk))
+			exit_with_error(errno);
+	}
+
 	return 0;
 }
 
@@ -342,6 +365,8 @@ static struct option long_options[] = {
 	{"bidi", optional_argument, 0, 'B'},
 	{"debug", optional_argument, 0, 'D'},
 	{"tx-pkt-count", optional_argument, 0, 'C'},
+	{"ext-prog1", no_argument, 0, 1},
+	{"ext-prog2", no_argument, 0, 1},
 	{0, 0, 0, 0}
 };
 
@@ -441,9 +466,30 @@ static int validate_interfaces(void)
 	return ret;
 }
 
+static int load_xdp_program(char *argv0, struct bpf_object **obj, int ext_prog)
+{
+	struct bpf_prog_load_attr prog_load_attr = {
+		.prog_type      = BPF_PROG_TYPE_XDP,
+	};
+	char xdp_filename[256];
+	int prog_fd;
+
+	snprintf(xdp_filename, sizeof(xdp_filename), "%s_ext%d.o", argv0, ext_prog);
+	prog_load_attr.file = xdp_filename;
+
+	if (bpf_prog_load_xattr(&prog_load_attr, obj, &prog_fd))
+		return -1;
+	return prog_fd;
+}
+
+static int attach_xdp_program(int ifindex, int prog_fd)
+{
+	return bpf_set_link_xdp_fd(ifindex, prog_fd, opt_xdp_flags);
+}
+
 static void parse_command_line(int argc, char **argv)
 {
-	int option_index, interface_index = 0, c;
+	int option_index = 0, interface_index = 0, ext_prog = 0, c;
 
 	opterr = 0;
 
@@ -454,6 +500,9 @@ static void parse_command_line(int argc, char **argv)
 			break;
 
 		switch (c) {
+		case 1:
+			ext_prog = atoi(long_options[option_index].name + strlen("ext-prog"));
+			break;
 		case 'i':
 			if (interface_index == MAX_INTERFACES)
 				break;
@@ -508,6 +557,22 @@ static void parse_command_line(int argc, char **argv)
 	if (!validate_interfaces()) {
 		usage(basename(argv[0]));
 		ksft_exit_xfail();
+	}
+
+	if (ext_prog) {
+		struct bpf_object *obj;
+		int prog_fd;
+
+		for (int i = 0; i < MAX_INTERFACES; i++) {
+			prog_fd = load_xdp_program(argv[0], &obj, ext_prog);
+			if (prog_fd < 0) {
+				ksft_test_result_fail("ERROR: could not load ext XDP program\n");
+				ksft_exit_xfail();
+			}
+
+			ifdict[i]->prog_fd = prog_fd;
+			ifdict[i]->obj = obj;
+		}
 	}
 }
 
@@ -818,6 +883,7 @@ static void *worker_testapp_validate(void *arg)
 	struct generic_data *data = (struct generic_data *)malloc(sizeof(struct generic_data));
 	struct iphdr *ip_hdr = (struct iphdr *)(pkt_data + sizeof(struct ethhdr));
 	struct ethhdr *eth_hdr = (struct ethhdr *)pkt_data;
+	struct ifobject *ifobject = (struct ifobject *)arg;
 	void *bufs = NULL;
 
 	pthread_attr_setstacksize(&attr, THREAD_STACK);
@@ -830,6 +896,9 @@ static void *worker_testapp_validate(void *arg)
 
 		if (strcmp(((struct ifobject *)arg)->nsname, ""))
 			switch_namespace(((struct ifobject *)arg)->ifdict_index);
+
+		if (ifobject->obj && attach_xdp_program(ifobject->ifindex, ifobject->prog_fd) < 0)
+			exit_with_error(errno);
 	}
 
 	if (((struct ifobject *)arg)->fv.vector == tx) {
@@ -1035,7 +1104,7 @@ int main(int argc, char **argv)
 	ifaceconfig->src_port = UDP_SRC_PORT;
 
 	for (int i = 0; i < MAX_INTERFACES; i++) {
-		ifdict[i] = (struct ifobject *)malloc(sizeof(struct ifobject));
+		ifdict[i] = (struct ifobject *)calloc(1, sizeof(struct ifobject));
 		if (!ifdict[i])
 			exit_with_error(errno);
 
