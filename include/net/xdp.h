@@ -107,10 +107,54 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	((xdp)->data_hard_start + (xdp)->frame_sz -	\
 	 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
-static inline struct skb_shared_info *
+struct xdp_shared_info {
+	u16 nr_frags;
+	u16 data_length; /* paged area length */
+	skb_frag_t frags[MAX_SKB_FRAGS];
+};
+
+static inline struct xdp_shared_info *
 xdp_get_shared_info_from_buff(struct xdp_buff *xdp)
 {
-	return (struct skb_shared_info *)xdp_data_hard_end(xdp);
+	BUILD_BUG_ON(sizeof(struct xdp_shared_info) >
+		     sizeof(struct skb_shared_info));
+	return (struct xdp_shared_info *)xdp_data_hard_end(xdp);
+}
+
+static inline struct page *xdp_get_frag_page(const skb_frag_t *frag)
+{
+	return frag->bv_page;
+}
+
+static inline unsigned int xdp_get_frag_offset(const skb_frag_t *frag)
+{
+	return frag->bv_offset;
+}
+
+static inline unsigned int xdp_get_frag_size(const skb_frag_t *frag)
+{
+	return frag->bv_len;
+}
+
+static inline void *xdp_get_frag_address(const skb_frag_t *frag)
+{
+	return page_address(xdp_get_frag_page(frag)) +
+	       xdp_get_frag_offset(frag);
+}
+
+static inline void xdp_set_frag_page(skb_frag_t *frag, struct page *page)
+{
+	frag->bv_page = page;
+}
+
+static inline void xdp_set_frag_offset(skb_frag_t *frag, u32 offset)
+{
+	frag->bv_offset = offset;
+}
+
+static inline void xdp_set_frag_size(skb_frag_t *frag, u32 size)
+{
+	frag->bv_len = size;
 }
 
 struct xdp_frame {
@@ -140,12 +184,15 @@ static __always_inline void xdp_frame_bulk_init(struct xdp_frame_bulk *bq)
 	bq->xa = NULL;
 }
 
-static inline struct skb_shared_info *
+static inline struct xdp_shared_info *
 xdp_get_shared_info_from_frame(struct xdp_frame *frame)
 {
 	void *data_hard_start = frame->data - frame->headroom - sizeof(*frame);
 
-	return (struct skb_shared_info *)(data_hard_start + frame->frame_sz -
+	/* xdp_shared_info struct must be aligned to skb_shared_info
+	 * area in buffer tailroom
+	 */
+	return (struct xdp_shared_info *)(data_hard_start + frame->frame_sz -
 				SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
 }
 
