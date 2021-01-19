@@ -637,8 +637,17 @@ struct bpf_redirect_info {
 	u32 tgt_index;
 	void *tgt_value;
 	struct bpf_map *map;
+	u32 tgt_type;
 	u32 kern_flags;
 	struct bpf_nh_params nh;
+};
+
+enum xdp_redirect_type {
+	XDP_REDIR_UNSET,
+	XDP_REDIR_DEV_IFINDEX,
+	XDP_REDIR_DEV_MAP,
+	XDP_REDIR_CPU_MAP,
+	XDP_REDIR_XSK_MAP,
 };
 
 DECLARE_PER_CPU(struct bpf_redirect_info, bpf_redirect_info);
