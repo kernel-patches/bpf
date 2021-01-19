@@ -3836,6 +3836,12 @@ union bpf_attr {
  *	Return
  *		A pointer to a struct socket on success or NULL if the file is
  *		not a socket.
+ *
+ * long bpf_redirect_xsk(struct xdp_buff *xdp_md, u64 action)
+ *	Description
+ *		Redirect to the registered AF_XDP socket.
+ *	Return
+ *		**XDP_REDIRECT** on success, otherwise the action parameter is returned.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4001,6 +4007,7 @@ union bpf_attr {
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
+	FN(redirect_xsk),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

@@ -3977,6 +3977,9 @@ int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 	case XDP_REDIR_XSK_MAP:
 		err = __xsk_map_redirect(fwd, xdp);
 		break;
+	case XDP_REDIR_XSK:
+		err = xsk_redirect(fwd, xdp);
+		break;
 	default:
 		err = -EBADRQC;
 	}
@@ -4044,25 +4047,33 @@ int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 	ri->tgt_type = XDP_REDIR_UNSET;
 	ri->tgt_value = NULL;
 
-	if (type == XDP_REDIR_DEV_IFINDEX) {
+	switch (type) {
+	case XDP_REDIR_DEV_IFINDEX: {
 		fwd = dev_get_by_index_rcu(dev_net(dev), (u32)(long)fwd);
 		if (unlikely(!fwd)) {
 			err = -EINVAL;
-			goto err;
+			break;
 		}
 
 		err = xdp_ok_fwd_dev(fwd, skb->len);
 		if (unlikely(err))
-			goto err;
+			break;
 
 		skb->dev = fwd;
 		_trace_xdp_redirect(dev, xdp_prog, index);
 		generic_xdp_tx(skb, xdp_prog);
 		return 0;
 	}
+	case XDP_REDIR_XSK:
+		err = xsk_generic_redirect(dev, xdp);
+		if (err)
+			break;
+		consume_skb(skb);
+		break;
+	default:
+		return xdp_do_generic_redirect_map(dev, skb, xdp, xdp_prog, fwd, type);
+	}
 
-	return xdp_do_generic_redirect_map(dev, skb, xdp, xdp_prog, fwd, type);
-err:
 	_trace_xdp_redirect_err(dev, xdp_prog, index, err);
 	return err;
 }
@@ -4142,6 +4153,32 @@ static const struct bpf_func_proto bpf_xdp_redirect_map_proto = {
 	.arg1_type      = ARG_CONST_MAP_PTR,
 	.arg2_type      = ARG_ANYTHING,
 	.arg3_type      = ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_xdp_redirect_xsk, struct xdp_buff *, xdp, u64, action)
+{
+	struct net_device *dev = xdp->rxq->dev;
+	u32 queue_id = xdp->rxq->queue_index;
+	struct bpf_redirect_info *ri;
+	struct xdp_sock *xs;
+
+	xs = READ_ONCE(dev->_rx[queue_id].xsk);
+	if (!xs)
+		return action;
+
+	ri = this_cpu_ptr(&bpf_redirect_info);
+	ri->tgt_type = XDP_REDIR_XSK;
+	ri->tgt_value = xs;
+
+	return XDP_REDIRECT;
+}
+
+static const struct bpf_func_proto bpf_xdp_redirect_xsk_proto = {
+	.func           = bpf_xdp_redirect_xsk,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
 };
 
 static unsigned long bpf_skb_copy(void *dst_buff, const void *skb,
@@ -7260,6 +7297,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_tcp_gen_syncookie:
 		return &bpf_tcp_gen_syncookie_proto;
 #endif
+	case BPF_FUNC_redirect_xsk:
+		return &bpf_xdp_redirect_xsk_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}

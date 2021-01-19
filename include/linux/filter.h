@@ -648,6 +648,7 @@ enum xdp_redirect_type {
 	XDP_REDIR_DEV_MAP,
 	XDP_REDIR_CPU_MAP,
 	XDP_REDIR_XSK_MAP,
+	XDP_REDIR_XSK,
 };
 
 DECLARE_PER_CPU(struct bpf_redirect_info, bpf_redirect_info);

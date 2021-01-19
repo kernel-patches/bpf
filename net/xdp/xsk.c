@@ -134,6 +134,28 @@ int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 	return 0;
 }
 
+static struct xdp_sock *xsk_get_at_qid(struct net_device *dev, u16 queue_id)
+{
+	return READ_ONCE(dev->_rx[queue_id].xsk);
+}
+
+static void xsk_clear(struct xdp_sock *xs)
+{
+	struct net_device *dev = xs->dev;
+	u16 queue_id = xs->queue_id;
+
+	if (queue_id < dev->num_rx_queues)
+		WRITE_ONCE(dev->_rx[queue_id].xsk, NULL);
+}
+
+static void xsk_reg(struct xdp_sock *xs)
+{
+	struct net_device *dev = xs->dev;
+	u16 queue_id = xs->queue_id;
+
+	WRITE_ONCE(dev->_rx[queue_id].xsk, xs);
+}
+
 void xp_release(struct xdp_buff_xsk *xskb)
 {
 	xskb->pool->free_heads[xskb->pool->free_heads_cnt++] = xskb;
@@ -184,7 +206,7 @@ static void xsk_copy_xdp(struct xdp_buff *to, struct xdp_buff *from, u32 len)
 	memcpy(to_buf, from_buf, len + metalen);
 }
 
-static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+static int ____xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	struct xdp_buff *xsk_xdp;
 	int err;
@@ -209,6 +231,22 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 		return err;
 	}
 	return 0;
+}
+
+static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+{
+	int err;
+	u32 len;
+
+	if (likely(xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL)) {
+		len = xdp->data_end - xdp->data;
+		return __xsk_rcv_zc(xs, xdp, len);
+	}
+
+	err = ____xsk_rcv(xs, xdp);
+	if (!err)
+		xdp_return_buff(xdp);
+	return err;
 }
 
 static bool xsk_tx_writeable(struct xdp_sock *xs)
@@ -248,6 +286,39 @@ static void xsk_flush(struct xdp_sock *xs)
 	sock_def_readable(&xs->sk);
 }
 
+int xsk_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
+{
+	struct list_head *flush_list = this_cpu_ptr(&xskmap_flush_list);
+	int err;
+
+	sk_mark_napi_id_once_xdp(&xs->sk, xdp);
+	err = __xsk_rcv(xs, xdp);
+	if (err)
+		return err;
+
+	if (!xs->flush_node.prev)
+		list_add(&xs->flush_node, flush_list);
+	return 0;
+}
+
+int xsk_generic_redirect(struct net_device *dev, struct xdp_buff *xdp)
+{
+	struct xdp_sock *xs;
+	u32 queue_id;
+	int err;
+
+	queue_id = xdp->rxq->queue_index;
+	xs = xsk_get_at_qid(dev, queue_id);
+	if (!xs)
+		return -EINVAL;
+
+	spin_lock_bh(&xs->rx_lock);
+	err = ____xsk_rcv(xs, xdp);
+	xsk_flush(xs);
+	spin_unlock_bh(&xs->rx_lock);
+	return err;
+}
+
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	int err;
@@ -255,7 +326,7 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	spin_lock_bh(&xs->rx_lock);
 	err = xsk_rcv_check(xs, xdp);
 	if (!err) {
-		err = __xsk_rcv(xs, xdp);
+		err = ____xsk_rcv(xs, xdp);
 		xsk_flush(xs);
 	}
 	spin_unlock_bh(&xs->rx_lock);
@@ -264,22 +335,12 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 
 static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
-	int err;
-	u32 len;
+	int err = xsk_rcv_check(xs, xdp);
 
-	err = xsk_rcv_check(xs, xdp);
 	if (err)
 		return err;
 
-	if (xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL) {
-		len = xdp->data_end - xdp->data;
-		return __xsk_rcv_zc(xs, xdp, len);
-	}
-
-	err = __xsk_rcv(xs, xdp);
-	if (!err)
-		xdp_return_buff(xdp);
-	return err;
+	return __xsk_rcv(xs, xdp);
 }
 
 int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
@@ -661,6 +722,7 @@ static void xsk_unbind_dev(struct xdp_sock *xs)
 
 	if (xs->state != XSK_BOUND)
 		return;
+	xsk_clear(xs);
 	WRITE_ONCE(xs->state, XSK_UNBOUND);
 
 	/* Wait for driver to stop using the xdp socket. */
@@ -892,7 +954,7 @@ static int xsk_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 			goto out_unlock;
 		}
 
-		err = xp_assign_dev(xs->pool, dev, qid, flags);
+		err = xp_assign_dev(xs, xs->pool, dev, qid, flags);
 		if (err) {
 			xp_destroy(xs->pool);
 			xs->pool = NULL;
@@ -918,6 +980,7 @@ out_unlock:
 		 */
 		smp_wmb();
 		WRITE_ONCE(xs->state, XSK_BOUND);
+		xsk_reg(xs);
 	}
 out_release:
 	mutex_unlock(&xs->mutex);
