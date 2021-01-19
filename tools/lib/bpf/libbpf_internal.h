@@ -349,4 +349,6 @@ struct bpf_core_relo {
 	enum bpf_core_relo_kind kind;
 };
 
+__u32 get_kernel_version(void);
+
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

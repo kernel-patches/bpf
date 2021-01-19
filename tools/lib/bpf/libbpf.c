@@ -693,7 +693,7 @@ bpf_object__add_programs(struct bpf_object *obj, Elf_Data *sec_data,
 	return 0;
 }
 
-static __u32 get_kernel_version(void)
+__u32 get_kernel_version(void)
 {
 	__u32 major, minor, patch;
 	struct utsname info;
