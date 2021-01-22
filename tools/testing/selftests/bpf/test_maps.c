@@ -639,6 +639,52 @@ static void test_stackmap(unsigned int task, void *data)
 	close(fd);
 }
 
+static void test_timeout_map(unsigned int task, void *data)
+{
+	int val1 = 1, val2 = 2, val3 = 3;
+	int key1 = 1, key2 = 2, key3 = 3;
+	int fd;
+
+	fd = bpf_create_map(BPF_MAP_TYPE_TIMEOUT_HASH, sizeof(int), sizeof(int),
+			    3, map_flags);
+	if (fd < 0) {
+		printf("Failed to create timeout map '%s'!\n", strerror(errno));
+		exit(1);
+	}
+
+	/* Timeout after 1 secs */
+	assert(bpf_map_update_elem(fd, &key1, &val1, (u64)1000<<32) == 0);
+	/* Timeout after 2 secs */
+	assert(bpf_map_update_elem(fd, &key2, &val2, (u64)2000<<32) == 0);
+	/* Timeout after 10 secs */
+	assert(bpf_map_update_elem(fd, &key3, &val3, (u64)10000<<32) == 0);
+
+	sleep(1);
+	assert(bpf_map_lookup_elem(fd, &key1, &val1) != 0);
+	val2 = 0;
+	assert(bpf_map_lookup_elem(fd, &key2, &val2) == 0 && val2 == 2);
+
+	sleep(1);
+	assert(bpf_map_lookup_elem(fd, &key1, &val1) != 0);
+	assert(bpf_map_lookup_elem(fd, &key2, &val2) != 0);
+
+	/* Modify timeout to expire it earlier */
+	val3 = 0;
+	assert(bpf_map_lookup_elem(fd, &key3, &val3) == 0 && val3 == 3);
+	assert(bpf_map_update_elem(fd, &key3, &val3, (u64)1000<<32) == 0);
+	sleep(1);
+	assert(bpf_map_lookup_elem(fd, &key3, &val3) != 0);
+
+	/* Add one elem expired immediately and try to delete this expired */
+	assert(bpf_map_update_elem(fd, &key3, &val3, 0) == 0);
+	assert(bpf_map_delete_elem(fd, &key3) == -1 && errno == ENOENT);
+
+	/* Add one elem and let the map removal clean up */
+	assert(bpf_map_update_elem(fd, &key3, &val3, (u64)10000<<32) == 0);
+
+	close(fd);
+}
+
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
@@ -1305,6 +1351,7 @@ static void test_map_stress(void)
 
 	run_parallel(100, test_arraymap, NULL);
 	run_parallel(100, test_arraymap_percpu, NULL);
+	run_parallel(100, test_timeout_map, NULL);
 }
 
 #define TASKS 1024
@@ -1759,6 +1806,25 @@ static void test_reuseport_array(void)
 	close(map_fd);
 }
 
+static void test_large_timeout_map(int nr_elems)
+{
+	int val, key;
+	int i, fd;
+
+	fd = bpf_create_map(BPF_MAP_TYPE_TIMEOUT_HASH, sizeof(int), sizeof(int),
+			    nr_elems, map_flags);
+	if (fd < 0) {
+		printf("Failed to create a large timeout map '%s'!\n", strerror(errno));
+		exit(1);
+	}
+	for (i = 0; i < nr_elems; i++) {
+		key = val = i;
+		/* Timeout after 10 secs */
+		assert(bpf_map_update_elem(fd, &key, &val, (u64)10000<<32) == 0);
+	}
+	close(fd);
+}
+
 static void run_all_tests(void)
 {
 	test_hashmap(0, NULL);
@@ -1788,6 +1854,8 @@ static void run_all_tests(void)
 	test_stackmap(0, NULL);
 
 	test_map_in_map();
+
+	test_large_timeout_map(1000000);
 }
 
 #define DEFINE_TEST(name) extern void test_##name(void);
