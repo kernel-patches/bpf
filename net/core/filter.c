@@ -5301,21 +5301,17 @@ static int bpf_fib_set_fwd_params(struct bpf_fib_lookup *params,
 #endif
 
 #if IS_ENABLED(CONFIG_INET)
-static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
+static int bpf_ipv4_fib_lookup(struct net *net, struct net_device *dev,
+			       struct bpf_fib_lookup *params,
 			       u32 flags, bool check_mtu)
 {
 	struct fib_nh_common *nhc;
 	struct in_device *in_dev;
 	struct neighbour *neigh;
-	struct net_device *dev;
 	struct fib_result res;
 	struct flowi4 fl4;
 	int err;
 	u32 mtu;
-
-	dev = dev_get_by_index_rcu(net, params->ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
 
 	/* verify forwarding is enabled on this interface */
 	in_dev = __in_dev_get_rcu(dev);
@@ -5418,14 +5414,14 @@ static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 #endif
 
 #if IS_ENABLED(CONFIG_IPV6)
-static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
+static int bpf_ipv6_fib_lookup(struct net *net, struct net_device *dev,
+			       struct bpf_fib_lookup *params,
 			       u32 flags, bool check_mtu)
 {
 	struct in6_addr *src = (struct in6_addr *) params->ipv6_src;
 	struct in6_addr *dst = (struct in6_addr *) params->ipv6_dst;
 	struct fib6_result res = {};
 	struct neighbour *neigh;
-	struct net_device *dev;
 	struct inet6_dev *idev;
 	struct flowi6 fl6;
 	int strict = 0;
@@ -5435,10 +5431,6 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	/* link local addresses are never forwarded */
 	if (rt6_need_strict(dst) || rt6_need_strict(src))
 		return BPF_FIB_LKUP_RET_NOT_FWDED;
-
-	dev = dev_get_by_index_rcu(net, params->ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
 
 	idev = __in6_dev_get_safely(dev);
 	if (unlikely(!idev || !idev->cnf.forwarding))
@@ -5533,22 +5525,27 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 BPF_CALL_4(bpf_xdp_fib_lookup, struct xdp_buff *, ctx,
 	   struct bpf_fib_lookup *, params, int, plen, u32, flags)
 {
+	struct net *net = dev_net(ctx->rxq->dev);
+	struct net_device *dev;
+
 	if (plen < sizeof(*params))
 		return -EINVAL;
 
 	if (flags & ~(BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_OUTPUT))
 		return -EINVAL;
 
+	dev = dev_get_by_index_rcu(net, params->ifindex);
+	if (unlikely(!dev))
+		return -ENODEV;
+
 	switch (params->family) {
 #if IS_ENABLED(CONFIG_INET)
 	case AF_INET:
-		return bpf_ipv4_fib_lookup(dev_net(ctx->rxq->dev), params,
-					   flags, true);
+		return bpf_ipv4_fib_lookup(net, dev, params, flags, true);
 #endif
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
-		return bpf_ipv6_fib_lookup(dev_net(ctx->rxq->dev), params,
-					   flags, true);
+		return bpf_ipv6_fib_lookup(net, dev, params, flags, true);
 #endif
 	}
 	return -EAFNOSUPPORT;
@@ -5568,7 +5565,9 @@ BPF_CALL_4(bpf_skb_fib_lookup, struct sk_buff *, skb,
 	   struct bpf_fib_lookup *, params, int, plen, u32, flags)
 {
 	struct net *net = dev_net(skb->dev);
+	struct net_device *dev;
 	int rc = -EAFNOSUPPORT;
+	bool check_mtu = false;
 
 	if (plen < sizeof(*params))
 		return -EINVAL;
@@ -5576,23 +5575,30 @@ BPF_CALL_4(bpf_skb_fib_lookup, struct sk_buff *, skb,
 	if (flags & ~(BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_OUTPUT))
 		return -EINVAL;
 
+	dev = dev_get_by_index_rcu(net, params->ifindex);
+	if (unlikely(!dev))
+		return -ENODEV;
+
+	if (params->tot_len)
+		check_mtu = true;
+
 	switch (params->family) {
 #if IS_ENABLED(CONFIG_INET)
 	case AF_INET:
-		rc = bpf_ipv4_fib_lookup(net, params, flags, false);
+		rc = bpf_ipv4_fib_lookup(net, dev, params, flags, check_mtu);
 		break;
 #endif
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
-		rc = bpf_ipv6_fib_lookup(net, params, flags, false);
+		rc = bpf_ipv6_fib_lookup(net, dev, params, flags, check_mtu);
 		break;
 #endif
 	}
 
-	if (!rc) {
-		struct net_device *dev;
-
-		dev = dev_get_by_index_rcu(net, params->ifindex);
+	if (rc == BPF_FIB_LKUP_RET_SUCCESS && !check_mtu) {
+		/* When tot_len isn't provided by user,
+		 * check skb against net_device MTU
+		 */
 		if (!is_skb_forwardable(dev, skb))
 			rc = BPF_FIB_LKUP_RET_FRAG_NEEDED;
 	}
