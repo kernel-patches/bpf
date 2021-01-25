@@ -3836,6 +3836,28 @@ union bpf_attr {
  *	Return
  *		A pointer to a struct socket on success or NULL if the file is
  *		not a socket.
+ *
+ * long bpf_redirect_map_multi(struct bpf_map *map, struct bpf_map *ex_map, u64 flags)
+ * 	Description
+ * 		This is a multicast implementation for XDP redirect. It will
+ * 		redirect the packet to ALL the interfaces in *map*, but
+ * 		exclude the interfaces in *ex_map*.
+ *
+ * 		The forwarding *map* could be either BPF_MAP_TYPE_DEVMAP or
+ * 		BPF_MAP_TYPE_DEVMAP_HASH. To get better performance, the
+ * 		*ex_map* is limited to BPF_MAP_TYPE_DEVMAP_HASH and must be
+ * 		keyed by ifindex for the helper to work.
+ *
+ * 		Currently the *flags* only supports *BPF_F_EXCLUDE_INGRESS*,
+ * 		which additionally excludes the current ingress device.
+ *
+ * 		See also bpf_redirect_map() as a unicast implementation,
+ * 		which supports redirecting packet to a specific ifindex
+ * 		in the map. As both helpers use struct bpf_redirect_info
+ * 		to store the redirect info, we will use a a NULL tgt_value
+ * 		to distinguish multicast and unicast redirecting.
+ * 	Return
+ * 		**XDP_REDIRECT** on success, or **XDP_ABORTED** on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4001,6 +4023,7 @@ union bpf_attr {
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
+	FN(redirect_map_multi),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4175,6 +4198,11 @@ enum bpf_lwt_encap_mode {
 /* Flags for bpf_bprm_opts_set helper */
 enum {
 	BPF_F_BPRM_SECUREEXEC	= (1ULL << 0),
+};
+
+/* BPF_FUNC_redirect_map_multi flags. */
+enum {
+	BPF_F_EXCLUDE_INGRESS	= (1ULL << 0),
 };
 
 #define __bpf_md_ptr(type, name)	\
