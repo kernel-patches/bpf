@@ -35,6 +35,7 @@
 #define VETH_XDP_HEADROOM	(XDP_PACKET_HEADROOM + NET_IP_ALIGN)
 
 #define VETH_XDP_TX_BULK_SIZE	16
+#define VETH_XDP_BATCH		8
 
 struct veth_stats {
 	u64	rx_drops;
@@ -787,27 +788,35 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 	int i, done = 0;
 
 	for (i = 0; i < budget; i++) {
-		void *ptr = __ptr_ring_consume(&rq->xdp_ring);
-		struct sk_buff *skb;
+		void *frames[VETH_XDP_BATCH];
+		void *skbs[VETH_XDP_BATCH];
+		int i, n_frame, n_skb = 0;
 
-		if (!ptr)
+		n_frame = __ptr_ring_consume_batched(&rq->xdp_ring, frames,
+						     VETH_XDP_BATCH);
+		if (!n_frame)
 			break;
 
-		if (veth_is_xdp_frame(ptr)) {
-			struct xdp_frame *frame = veth_ptr_to_xdp(ptr);
+		for (i = 0; i < n_frame; i++) {
+			void *f = frames[i];
+			struct sk_buff *skb;
 
-			stats->xdp_bytes += frame->len;
-			skb = veth_xdp_rcv_one(rq, frame, bq, stats);
-		} else {
-			skb = ptr;
-			stats->xdp_bytes += skb->len;
-			skb = veth_xdp_rcv_skb(rq, skb, bq, stats);
+			if (veth_is_xdp_frame(f)) {
+				struct xdp_frame *frame = veth_ptr_to_xdp(f);
+
+				stats->xdp_bytes += frame->len;
+				skb = veth_xdp_rcv_one(rq, frame, bq, stats);
+			} else {
+				skb = f;
+				stats->xdp_bytes += skb->len;
+				skb = veth_xdp_rcv_skb(rq, skb, bq, stats);
+			}
+			if (skb)
+				skbs[n_skb++] = skb;
 		}
-
-		if (skb)
-			napi_gro_receive(&rq->xdp_napi, skb);
-
-		done++;
+		for (i = 0; i < n_skb; i++)
+			napi_gro_receive(&rq->xdp_napi, skbs[i]);
+		done += n_frame;
 	}
 
 	u64_stats_update_begin(&rq->stats.syncp);
@@ -818,7 +827,7 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 	rq->stats.vs.xdp_packets += done;
 	u64_stats_update_end(&rq->stats.syncp);
 
-	return done;
+	return i;
 }
 
 static int veth_poll(struct napi_struct *napi, int budget)
