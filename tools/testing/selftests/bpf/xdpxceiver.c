@@ -33,6 +33,8 @@
  *       Configure sockets as bi-directional tx/rx sockets, sets up fill and
  *       completion rings on each socket, tx/rx in both directions. Only nopoll
  *       mode is used
+ *    e. Tracing - XSK_TRACE_DROP_RXQ_FULL
+ *       Reduce the RXQ size and do not read from it. Validate traces.
  *
  * 2. AF_XDP DRV/Native mode
  *    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -44,8 +46,9 @@
  *    d. Bi-directional sockets
  *    - Only copy mode is supported because veth does not currently support
  *      zero-copy mode
+ *    e. Tracing - XSK_TRACE_DROP_RXQ_FULL
  *
- * Total tests: 8
+ * Total tests: 10
  *
  * Flow:
  * -----
@@ -310,7 +313,9 @@ static int xsk_configure_socket(struct ifobject *ifobject)
 		exit_with_error(errno);
 
 	ifobject->xsk->umem = ifobject->umem;
-	cfg.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;
+	cfg.rx_size = opt_trace_enable && (opt_trace_code == XSK_TRACE_DROP_RXQ_FULL) ?
+						TRACE_RXQ_FULL_RXQ_SIZE :
+						XSK_RING_CONS__DEFAULT_NUM_DESCS;
 	cfg.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 	cfg.libbpf_flags = 0;
 	cfg.xdp_flags = opt_xdp_flags;
@@ -363,7 +368,7 @@ static void usage(const char *prog)
 	    "  -B, --bidi           Bi-directional sockets test\n"
 	    "  -D, --debug          Debug mode - dump packets L2 - L5\n"
 	    "  -C, --tx-pkt-count=n Number of packets to send\n"
-	    "  -t, --trace-enable   Enable trace\n";
+	    "  -t, --trace-enable=n Enable trace and execute test 'n'\n";
 	ksft_print_msg(str, prog);
 }
 
@@ -450,7 +455,7 @@ static void parse_command_line(int argc, char **argv)
 	opterr = 0;
 
 	for (;;) {
-		c = getopt_long(argc, argv, "i:q:pSNcTBDC:t", long_options, &option_index);
+		c = getopt_long(argc, argv, "i:q:pSNcTBDC:t:", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -503,6 +508,7 @@ static void parse_command_line(int argc, char **argv)
 			break;
 		case 't':
 			opt_trace_enable = 1;
+			opt_trace_code = atoi(optarg);
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -730,6 +736,29 @@ static void worker_pkt_dump(void)
 	}
 }
 
+static void worker_trace_validate(FILE *fp, char *ifname)
+{
+	char trace_str[128];
+	char *line = NULL;
+	size_t len = 0;
+	int ret = 0;
+
+	snprintf(trace_str, sizeof(trace_str),
+		"xsk_packet_drop: netdev: %s qid 0 reason: %s",
+		ifname, reason_str);
+
+	while (trace_counter != expected_traces) {
+		while ((ret = getline(&line, &len, fp)) == EOF)
+			continue;
+		if (strstr(line, trace_str) != NULL)
+			trace_counter++;
+	}
+
+	sigvar = 1;
+
+	fclose(fp);
+}
+
 static void worker_pkt_validate(void)
 {
 	u32 payloadseqnum = -2;
@@ -851,6 +880,25 @@ out_close:
 	return ret;
 }
 
+static FILE *get_eof_trace(void)
+{
+	FILE *ret_fp;
+	char *line = NULL;
+	size_t len = 0;
+	int ret = 0;
+
+	ret_fp = fopen(TRACE_FILE, "r");
+	if (ret_fp == NULL) {
+		ksft_print_msg("Error opening %s\n", TRACE_FILE);
+		return NULL;
+	}
+
+	/* Go to end of file and record the file pointer */
+	while ((ret = getline(&line, &len, ret_fp)) != EOF)
+		;
+
+	return ret_fp;
+}
 
 static void *worker_testapp_validate(void *arg)
 {
@@ -900,11 +948,21 @@ static void *worker_testapp_validate(void *arg)
 		}
 
 		ksft_print_msg("Sending %d packets on interface %s\n",
-			       (opt_pkt_count - 1), ifobject->ifname);
+			       (opt_trace_enable ? opt_pkt_count : opt_pkt_count - 1),
+			       ifobject->ifname);
 		tx_only_all(ifobject);
 	} else if (ifobject->fv.vector == rx) {
 		struct pollfd fds[MAX_SOCKS] = { };
+		FILE *tr_fp = NULL;
 		int ret;
+
+		if (opt_trace_enable) {
+			tr_fp = get_eof_trace();
+			if (tr_fp == NULL) {
+				ksft_print_msg("Error getting EOF of trace\n");
+				exit_with_error(-1);
+			}
+		}
 
 		if (!bidi_pass)
 			thread_common_ops(ifobject, bufs, &sync_mutex_tx, &spinning_rx);
@@ -932,15 +990,22 @@ static void *worker_testapp_validate(void *arg)
 				if (ret <= 0)
 					continue;
 			}
-			rx_pkt(ifobject->xsk, fds);
-			worker_pkt_validate();
+
+			if (!opt_trace_enable) {
+				rx_pkt(ifobject->xsk, fds);
+				worker_pkt_validate();
+			} else {
+				worker_trace_validate(tr_fp, ifobject->ifname);
+			}
 
 			if (sigvar)
 				break;
 		}
 
-		ksft_print_msg("Received %d packets on interface %s\n",
-			       pkt_counter, ifobject->ifname);
+		ksft_print_msg("%s %d packets on interface %s\n",
+			       opt_trace_enable ? "Traced" : "Received",
+			       opt_trace_enable ? trace_counter : pkt_counter,
+			       ifobject->ifname);
 
 		if (opt_teardown)
 			ksft_print_msg("Destroying socket\n");
@@ -1086,13 +1151,29 @@ int main(int argc, char **argv)
 
 	parse_command_line(argc, argv);
 
-	num_frames = ++opt_pkt_count;
+	num_frames = opt_trace_enable ? opt_pkt_count : ++opt_pkt_count;
 
 	init_iface_config(ifaceconfig);
 
 	if (opt_trace_enable) {
 		if (enable_disable_trace(1)) {
 			ksft_test_result_fail("ERROR: failed to enable tracing for trace test\n");
+			ksft_exit_xfail();
+		}
+		switch (opt_trace_code) {
+		case XSK_TRACE_DROP_RXQ_FULL:
+			if (opt_pkt_count <= TRACE_RXQ_FULL_RXQ_SIZE ||
+				(opt_pkt_count > TRACE_MAX_PKTS)) {
+				ksft_test_result_fail("ERROR: invalid packet count %i\n",
+						      opt_pkt_count);
+				ksft_exit_xfail();
+			}
+			expected_traces = opt_pkt_count - TRACE_RXQ_FULL_RXQ_SIZE;
+			reason_str = "rxq full";
+			break;
+		default:
+			ksft_test_result_fail("ERROR: unsupported trace %i\n",
+						opt_trace_code);
 			ksft_exit_xfail();
 		}
 	}

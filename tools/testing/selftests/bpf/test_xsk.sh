@@ -83,6 +83,7 @@ done
 
 TEST_NAME="PREREQUISITES"
 DEFAULTPKTS=10000
+TRACEPKTS=64
 
 URANDOM=/dev/urandom
 [ ! -e "${URANDOM}" ] && { echo "${URANDOM} not found. Skipping tests."; test_exit 1 1; }
@@ -240,6 +241,30 @@ TEST_NAME="DRV BIDIRECTIONAL SOCKETS"
 vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
 params=("-N" "-B" "-C" "${DEFAULTPKTS}")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 10
+TEST_NAME="SKB TRACE DROP RXQ_FULL"
+
+vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
+
+params=("-S" "-t" "0" "-C" "${TRACEPKTS}")
+execxdpxceiver params
+
+retval=$?
+test_status $retval "${TEST_NAME}"
+statusList+=($retval)
+
+### TEST 11
+TEST_NAME="DRV TRACE DROP RXQ_FULL"
+
+vethXDPnative ${VETH0} ${VETH1} ${NS1}
+
+params=("-N" "-t" "0" "-C" "${TRACEPKTS}")
 execxdpxceiver params
 
 retval=$?
