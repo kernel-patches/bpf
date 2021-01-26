@@ -37,12 +37,11 @@
  * which queue in bpf_cpu_map_entry contains packets.
  */
 
-#define CPU_MAP_BULK_SIZE 8  /* 8 == one cacheline on 64-bit archs */
 struct bpf_cpu_map_entry;
 struct bpf_cpu_map;
 
 struct xdp_bulk_queue {
-	void *q[CPU_MAP_BULK_SIZE];
+	void *q[XDP_BATCH_SIZE];
 	struct list_head flush_node;
 	struct bpf_cpu_map_entry *obj;
 	unsigned int count;
@@ -237,8 +236,6 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 	return nframes;
 }
 
-#define CPUMAP_BATCH 8
-
 static int cpu_map_kthread_run(void *data)
 {
 	struct bpf_cpu_map_entry *rcpu = data;
@@ -254,8 +251,8 @@ static int cpu_map_kthread_run(void *data)
 		struct xdp_cpumap_stats stats = {}; /* zero stats */
 		gfp_t gfp = __GFP_ZERO | GFP_ATOMIC;
 		unsigned int drops = 0, sched = 0;
-		void *frames[CPUMAP_BATCH];
-		void *skbs[CPUMAP_BATCH];
+		void *frames[XDP_BATCH_SIZE];
+		void *skbs[XDP_BATCH_SIZE];
 		int i, n, m, nframes;
 
 		/* Release CPU reschedule checks */
@@ -278,7 +275,7 @@ static int cpu_map_kthread_run(void *data)
 		 * consume side valid as no-resize allowed of queue.
 		 */
 		n = __ptr_ring_consume_batched(rcpu->queue, frames,
-					       CPUMAP_BATCH);
+					       XDP_BATCH_SIZE);
 		for (i = 0; i < n; i++) {
 			void *f = frames[i];
 			struct page *page = virt_to_page(f);
@@ -656,7 +653,7 @@ static void bq_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_frame *xdpf)
 	struct list_head *flush_list = this_cpu_ptr(&cpu_map_flush_list);
 	struct xdp_bulk_queue *bq = this_cpu_ptr(rcpu->bulkq);
 
-	if (unlikely(bq->count == CPU_MAP_BULK_SIZE))
+	if (unlikely(bq->count == XDP_BATCH_SIZE))
 		bq_flush_to_queue(bq);
 
 	/* Notice, xdp_buff/page MUST be queued here, long enough for

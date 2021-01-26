@@ -124,6 +124,7 @@ struct xdp_frame {
 	struct net_device *dev_rx; /* used by cpumap */
 };
 
+#define XDP_BATCH_SIZE		8 /* 8 == one cacheline on 64-bit archs */
 #define XDP_BULK_QUEUE_SIZE	16
 struct xdp_frame_bulk {
 	int count;

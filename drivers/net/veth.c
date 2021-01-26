@@ -793,7 +793,7 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 		int i, n_frame, n_skb = 0;
 
 		n_frame = __ptr_ring_consume_batched(&rq->xdp_ring, frames,
-						     VETH_XDP_BATCH);
+						     XDP_BATCH_SIZE);
 		if (!n_frame)
 			break;
 
