@@ -11,6 +11,7 @@
 
 #define pr_fmt(fmt) "AF_XDP: %s: " fmt, __func__
 
+#include <linux/bpf_trace.h>
 #include <linux/if_xdp.h>
 #include <linux/init.h>
 #include <linux/sched/mm.h>
@@ -158,6 +159,7 @@ static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 	addr = xp_get_handle(xskb);
 	err = xskq_prod_reserve_desc(xs->rx, addr, len);
 	if (err) {
+		trace_xsk_packet_drop(xs->dev->name, xs->queue_id, XSK_TRACE_DROP_RXQ_FULL);
 		xs->rx_queue_full++;
 		return err;
 	}
@@ -192,6 +194,7 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 
 	len = xdp->data_end - xdp->data;
 	if (len > xsk_pool_get_rx_frame_size(xs->pool)) {
+		trace_xsk_packet_drop(xs->dev->name, xs->queue_id, XSK_TRACE_DROP_PKT_TOO_BIG);
 		xs->rx_dropped++;
 		return -ENOSPC;
 	}
@@ -516,6 +519,8 @@ static int xsk_generic_xmit(struct sock *sk)
 		if (err == NET_XMIT_DROP) {
 			/* SKB completed but not sent */
 			err = -EBUSY;
+			trace_xsk_packet_drop(xs->dev->name, xs->queue_id,
+					      XSK_TRACE_DROP_DRV_ERR_TX);
 			goto out;
 		}
 

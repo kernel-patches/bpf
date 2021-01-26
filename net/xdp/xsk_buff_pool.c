@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <linux/bpf_trace.h>
 #include <net/xsk_buff_pool.h>
 #include <net/xdp_sock.h>
 #include <net/xdp_sock_drv.h>
@@ -445,8 +446,11 @@ static struct xdp_buff_xsk *__xp_alloc(struct xsk_buff_pool *pool)
 	u64 addr;
 	bool ok;
 
-	if (pool->free_heads_cnt == 0)
+	if (pool->free_heads_cnt == 0) {
+		trace_xsk_packet_drop(pool->netdev->name, pool->queue_id,
+				      XSK_TRACE_DROP_POOL_EMPTY);
 		return NULL;
+	}
 
 	xskb = pool->free_heads[--pool->free_heads_cnt];
 
@@ -454,6 +458,8 @@ static struct xdp_buff_xsk *__xp_alloc(struct xsk_buff_pool *pool)
 		if (!xskq_cons_peek_addr_unchecked(pool->fq, &addr)) {
 			pool->fq->queue_empty_descs++;
 			xp_release(xskb);
+			trace_xsk_packet_drop(pool->netdev->name, pool->queue_id,
+					      XSK_TRACE_DROP_FQ_EMPTY);
 			return NULL;
 		}
 
