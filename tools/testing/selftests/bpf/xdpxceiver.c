@@ -35,6 +35,8 @@
  *       mode is used
  *    e. Tracing - XSK_TRACE_DROP_RXQ_FULL
  *       Reduce the RXQ size and do not read from it. Validate traces.
+ *    f. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
+ *       Increase the headroom size and send packets. Validate traces.
  *
  * 2. AF_XDP DRV/Native mode
  *    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -47,8 +49,9 @@
  *    - Only copy mode is supported because veth does not currently support
  *      zero-copy mode
  *    e. Tracing - XSK_TRACE_DROP_RXQ_FULL
+ *    f. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
  *
- * Total tests: 10
+ * Total tests: 12
  *
  * Flow:
  * -----
@@ -275,13 +278,23 @@ static void gen_eth_frame(struct xsk_umem_info *umem, u64 addr)
 static void xsk_configure_umem(struct ifobject *data, void *buffer, u64 size)
 {
 	int ret;
+	struct xsk_umem_config cfg = {
+		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
+		.frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE,
+		.frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM,
+		.flags = XSK_UMEM__DEFAULT_FLAGS
+	};
+
+	if (opt_trace_code == XSK_TRACE_DROP_PKT_TOO_BIG)
+		cfg.frame_headroom = XSK_UMEM__DEFAULT_FRAME_SIZE - XDP_PACKET_HEADROOM - 1;
 
 	data->umem = calloc(1, sizeof(struct xsk_umem_info));
 	if (!data->umem)
 		exit_with_error(errno);
 
 	ret = xsk_umem__create(&data->umem->umem, buffer, size,
-			       &data->umem->fq, &data->umem->cq, NULL);
+			       &data->umem->fq, &data->umem->cq, &cfg);
 	if (ret)
 		exit_with_error(ret);
 
@@ -1170,6 +1183,10 @@ int main(int argc, char **argv)
 			}
 			expected_traces = opt_pkt_count - TRACE_RXQ_FULL_RXQ_SIZE;
 			reason_str = "rxq full";
+			break;
+		case XSK_TRACE_DROP_PKT_TOO_BIG:
+			expected_traces = opt_pkt_count;
+			reason_str = "packet too big";
 			break;
 		default:
 			ksft_test_result_fail("ERROR: unsupported trace %i\n",
