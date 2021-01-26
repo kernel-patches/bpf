@@ -1317,6 +1317,15 @@ void do_user_addr_fault(struct pt_regs *regs,
 		if (emulate_vsyscall(hw_error_code, regs, address))
 			return;
 	}
+
+#ifdef CONFIG_BPF_JIT
+	/*
+	 * Faults incurred by bpf program might need emulation, i.e.,
+	 * clearing the dest register.
+	 */
+	if (fixup_bpf_exception(regs, X86_TRAP_PF, hw_error_code, address))
+		return;
+#endif
 #endif
 
 	/*

@@ -155,6 +155,20 @@ enum handler_type ex_get_fault_handler_type(unsigned long ip)
 		return EX_HANDLER_OTHER;
 }
 
+int fixup_bpf_exception(struct pt_regs *regs, int trapnr,
+			unsigned long error_code, unsigned long fault_addr)
+{
+	const struct exception_table_entry *e;
+	ex_handler_t handler;
+
+	e = search_bpf_extables(regs->ip);
+	if (!e)
+		return 0;
+
+	handler = ex_fixup_handler(e);
+	return handler(e, regs, trapnr, error_code, fault_addr);
+}
+
 int fixup_exception(struct pt_regs *regs, int trapnr, unsigned long error_code,
 		    unsigned long fault_addr)
 {

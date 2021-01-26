@@ -38,6 +38,9 @@ enum handler_type {
 
 extern int fixup_exception(struct pt_regs *regs, int trapnr,
 			   unsigned long error_code, unsigned long fault_addr);
+extern int fixup_bpf_exception(struct pt_regs *regs, int trapnr,
+			       unsigned long error_code,
+			       unsigned long fault_addr);
 extern int fixup_bug(struct pt_regs *regs, int trapnr);
 extern enum handler_type ex_get_fault_handler_type(unsigned long ip);
 extern void early_fixup_exception(struct pt_regs *regs, int trapnr);
