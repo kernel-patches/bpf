@@ -37,6 +37,8 @@
  *       Reduce the RXQ size and do not read from it. Validate traces.
  *    f. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
  *       Increase the headroom size and send packets. Validate traces.
+ *    g. Tracing - XSK_TRACE_DROP_FQ_EMPTY
+ *       Do not populate the fill queue and send packets. Validate traces.
  *
  * 2. AF_XDP DRV/Native mode
  *    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -50,8 +52,9 @@
  *      zero-copy mode
  *    e. Tracing - XSK_TRACE_DROP_RXQ_FULL
  *    f. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
+ *    g. Tracing - XSK_TRACE_DROP_FQ_EMPTY
  *
- * Total tests: 12
+ * Total tests: 14
  *
  * Flow:
  * -----
@@ -981,7 +984,9 @@ static void *worker_testapp_validate(void *arg)
 			thread_common_ops(ifobject, bufs, &sync_mutex_tx, &spinning_rx);
 
 		ksft_print_msg("Interface [%s] vector [Rx]\n", ifobject->ifname);
-		xsk_populate_fill_ring(ifobject->umem);
+		if (opt_trace_code != XSK_TRACE_DROP_FQ_EMPTY)
+			xsk_populate_fill_ring(ifobject->umem);
+
 
 		TAILQ_INIT(&head);
 		if (debug_pkt_dump) {
@@ -1187,6 +1192,10 @@ int main(int argc, char **argv)
 		case XSK_TRACE_DROP_PKT_TOO_BIG:
 			expected_traces = opt_pkt_count;
 			reason_str = "packet too big";
+			break;
+		case XSK_TRACE_DROP_FQ_EMPTY:
+			expected_traces = opt_pkt_count;
+			reason_str = "fq empty";
 			break;
 		default:
 			ksft_test_result_fail("ERROR: unsupported trace %i\n",
