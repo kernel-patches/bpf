@@ -563,14 +563,13 @@ static int veth_xdp_tx(struct veth_rq *rq, struct xdp_buff *xdp,
 	return 0;
 }
 
-static struct sk_buff *veth_xdp_rcv_one(struct veth_rq *rq,
-					struct xdp_frame *frame,
-					struct veth_xdp_tx_bq *bq,
-					struct veth_stats *stats)
+static struct xdp_frame *veth_xdp_rcv_one(struct veth_rq *rq,
+					  struct xdp_frame *frame,
+					  struct veth_xdp_tx_bq *bq,
+					  struct veth_stats *stats)
 {
 	struct xdp_frame orig_frame;
 	struct bpf_prog *xdp_prog;
-	struct sk_buff *skb;
 
 	rcu_read_lock();
 	xdp_prog = rcu_dereference(rq->xdp_prog);
@@ -624,18 +623,54 @@ static struct sk_buff *veth_xdp_rcv_one(struct veth_rq *rq,
 	}
 	rcu_read_unlock();
 
-	skb = xdp_build_skb_from_frame(frame, rq->dev);
-	if (!skb) {
-		xdp_return_frame(frame);
-		stats->rx_drops++;
-	}
-
-	return skb;
+	return frame;
 err_xdp:
 	rcu_read_unlock();
 	xdp_return_frame(frame);
 xdp_xmit:
 	return NULL;
+}
+
+static void veth_xdp_rcv_batch(struct veth_rq *rq, void **frames,
+			       int n_xdpf, struct veth_xdp_tx_bq *bq,
+			       struct veth_stats *stats)
+{
+	void *skbs[XDP_BATCH_SIZE];
+	int i, n_skb = 0;
+
+	for (i = 0; i < n_xdpf; i++) {
+		struct xdp_frame *frame = frames[i];
+
+		stats->xdp_bytes += frame->len;
+		frame = veth_xdp_rcv_one(rq, frame, bq, stats);
+		if (frame)
+			frames[n_skb++] = frame;
+	}
+
+	if (!n_skb)
+		return;
+
+	if (xdp_alloc_skb_bulk(skbs, n_skb, GFP_ATOMIC) < 0) {
+		for (i = 0; i < n_skb; i++) {
+			xdp_return_frame(frames[i]);
+			stats->rx_drops++;
+		}
+		return;
+	}
+
+	for (i = 0; i < n_skb; i++) {
+		struct sk_buff *skb = skbs[i];
+
+		memset(skb, 0, offsetof(struct sk_buff, tail));
+		skb = __xdp_build_skb_from_frame(frames[i], skb,
+						 rq->dev);
+		if (!skb) {
+			xdp_return_frame(frames[i]);
+			stats->rx_drops++;
+			continue;
+		}
+		napi_gro_receive(&rq->xdp_napi, skb);
+	}
 }
 
 static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
@@ -788,9 +823,10 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 	int i, done = 0;
 
 	for (i = 0; i < budget; i++) {
+		int i, n_frame, n_xdpf = 0, n_skb = 0;
 		void *frames[VETH_XDP_BATCH];
 		void *skbs[VETH_XDP_BATCH];
-		int i, n_frame, n_skb = 0;
+		void *xdpf[VETH_XDP_BATCH];
 
 		n_frame = __ptr_ring_consume_batched(&rq->xdp_ring, frames,
 						     XDP_BATCH_SIZE);
@@ -798,24 +834,26 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 			break;
 
 		for (i = 0; i < n_frame; i++) {
-			void *f = frames[i];
-			struct sk_buff *skb;
-
-			if (veth_is_xdp_frame(f)) {
-				struct xdp_frame *frame = veth_ptr_to_xdp(f);
-
-				stats->xdp_bytes += frame->len;
-				skb = veth_xdp_rcv_one(rq, frame, bq, stats);
-			} else {
-				skb = f;
-				stats->xdp_bytes += skb->len;
-				skb = veth_xdp_rcv_skb(rq, skb, bq, stats);
-			}
-			if (skb)
-				skbs[n_skb++] = skb;
+			if (veth_is_xdp_frame(frames[i]))
+				xdpf[n_xdpf++] = veth_ptr_to_xdp(frames[i]);
+			else
+				skbs[n_skb++] = frames[i];
 		}
-		for (i = 0; i < n_skb; i++)
-			napi_gro_receive(&rq->xdp_napi, skbs[i]);
+
+		/* ndo_xdp_xmit */
+		if (n_xdpf)
+			veth_xdp_rcv_batch(rq, xdpf, n_xdpf, bq, stats);
+
+		/* ndo_start_xmit */
+		for (i = 0; i < n_skb; i++) {
+			struct sk_buff *skb = skbs[i];
+
+			stats->xdp_bytes += skb->len;
+			skb = veth_xdp_rcv_skb(rq, skb, bq, stats);
+			if (skb)
+				napi_gro_receive(&rq->xdp_napi, skb);
+		}
+
 		done += n_frame;
 	}
 
