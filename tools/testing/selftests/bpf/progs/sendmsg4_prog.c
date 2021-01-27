@@ -21,7 +21,14 @@ int _version SEC("version") = 1;
 SEC("cgroup/sendmsg4")
 int sendmsg_v4_prog(struct bpf_sock_addr *ctx)
 {
+	int prio;
+
 	if (ctx->type != SOCK_DGRAM)
+		return 0;
+
+	if (bpf_getsockopt(ctx, SOL_SOCKET, SO_PRIORITY, &prio, sizeof(prio)))
+		return 0;
+	if (bpf_setsockopt(ctx, SOL_SOCKET, SO_PRIORITY, &prio, sizeof(prio)))
 		return 0;
 
 	/* Rewrite source. */
