@@ -1272,7 +1272,7 @@ out:
 	return err;
 }
 
-int udpv6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
+static int __udpv6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len, bool locked)
 {
 	struct ipv6_txoptions opt_space;
 	struct udp_sock *up = udp_sk(sk);
@@ -1361,7 +1361,8 @@ do_udp_sendmsg:
 		 * There are pending frames.
 		 * The socket lock must be held while it's corked.
 		 */
-		lock_sock(sk);
+		if (!locked)
+			lock_sock(sk);
 		if (likely(up->pending)) {
 			if (unlikely(up->pending != AF_INET6)) {
 				release_sock(sk);
@@ -1370,7 +1371,8 @@ do_udp_sendmsg:
 			dst = NULL;
 			goto do_append_data;
 		}
-		release_sock(sk);
+		if (!locked)
+			release_sock(sk);
 	}
 	ulen += sizeof(struct udphdr);
 
@@ -1533,11 +1535,13 @@ back_from_confirm:
 		goto out;
 	}
 
-	lock_sock(sk);
+	if (!locked)
+		lock_sock(sk);
 	if (unlikely(up->pending)) {
 		/* The socket is already corked while preparing it. */
 		/* ... which is an evident application bug. --ANK */
-		release_sock(sk);
+		if (!locked)
+			release_sock(sk);
 
 		net_dbg_ratelimited("udp cork app bug 2\n");
 		err = -EINVAL;
@@ -1562,7 +1566,8 @@ do_append_data:
 
 	if (err > 0)
 		err = np->recverr ? net_xmit_errno(err) : 0;
-	release_sock(sk);
+	if (!locked)
+		release_sock(sk);
 
 out:
 	dst_release(dst);
@@ -1591,6 +1596,16 @@ do_confirm:
 		goto back_from_confirm;
 	err = 0;
 	goto out;
+}
+
+int udpv6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	return __udpv6_sendmsg(sk, msg, len, false);
+}
+
+int udpv6_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	return __udpv6_sendmsg(sk, msg, len, true);
 }
 
 void udpv6_destroy_sock(struct sock *sk)

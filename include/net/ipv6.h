@@ -1119,6 +1119,7 @@ int inet6_hash_connect(struct inet_timewait_death_row *death_row,
 int inet6_sendmsg(struct socket *sock, struct msghdr *msg, size_t size);
 int inet6_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		  int flags);
+int udpv6_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t len);
 
 /*
  * reassembly.c

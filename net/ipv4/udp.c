@@ -1825,6 +1825,7 @@ int udp_read_sock(struct sock *sk, read_descriptor_t *desc,
 
 	return copied;
 }
+EXPORT_SYMBOL(udp_read_sock);
 
 /*
  * 	This should be easy, if there is something there we
