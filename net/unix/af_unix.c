@@ -662,6 +662,7 @@ static ssize_t unix_stream_splice_read(struct socket *,  loff_t *ppos,
 static int __unix_dgram_sendmsg(struct sock*, struct msghdr *, size_t);
 static int unix_dgram_sendmsg(struct socket *, struct msghdr *, size_t);
 static int unix_dgram_recvmsg(struct socket *, struct msghdr *, size_t, int);
+int unix_read_sock(struct sock *sk, read_descriptor_t *desc, sk_read_actor_t recv_actor);
 static int unix_dgram_connect(struct socket *, struct sockaddr *,
 			      int, int);
 static int unix_seqpacket_sendmsg(struct socket *, struct msghdr *, size_t);
@@ -739,6 +740,7 @@ static const struct proto_ops unix_dgram_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	unix_shutdown,
 	.sendmsg =	unix_dgram_sendmsg,
+	.read_sock =	unix_read_sock,
 	.sendmsg_locked = __unix_dgram_sendmsg,
 	.recvmsg =	unix_dgram_recvmsg,
 	.mmap =		sock_no_mmap,
@@ -2188,6 +2190,50 @@ out_free:
 	mutex_unlock(&u->iolock);
 out:
 	return err;
+}
+
+int unix_read_sock(struct sock *sk, read_descriptor_t *desc,
+		   sk_read_actor_t recv_actor)
+{
+	unsigned int flags = MSG_DONTWAIT;
+	struct unix_sock *u = unix_sk(sk);
+	struct sk_buff *skb;
+	int copied = 0;
+
+	while (1) {
+		int offset, err;
+
+		mutex_lock(&u->iolock);
+		skb = __skb_recv_datagram(sk, &sk->sk_receive_queue, flags,
+					  &offset, &err);
+		if (!skb) {
+			mutex_unlock(&u->iolock);
+			break;
+		}
+
+		if (offset < skb->len) {
+			int used;
+			size_t len;
+
+			len = skb->len - offset;
+			used = recv_actor(desc, skb, offset, len);
+			if (used <= 0) {
+				if (!copied)
+					copied = used;
+				mutex_unlock(&u->iolock);
+				break;
+			} else if (used <= len) {
+				copied += used;
+				offset += used;
+			}
+		}
+		mutex_unlock(&u->iolock);
+
+		if (!desc->count)
+			break;
+	}
+
+	return copied;
 }
 
 /*
