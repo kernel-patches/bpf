@@ -2362,3 +2362,4 @@ EXPORT_SYMBOL(bpf_stats_enabled_key);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(xdp_exception);
 EXPORT_TRACEPOINT_SYMBOL_GPL(xdp_bulk_tx);
+EXPORT_TRACEPOINT_SYMBOL_GPL(xsk_packet_drop);

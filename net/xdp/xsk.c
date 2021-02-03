@@ -11,6 +11,7 @@
 
 #define pr_fmt(fmt) "AF_XDP: %s: " fmt, __func__
 
+#include <linux/bpf_trace.h>
 #include <linux/if_xdp.h>
 #include <linux/init.h>
 #include <linux/sched/mm.h>
@@ -189,9 +190,13 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	struct xdp_buff *xsk_xdp;
 	int err;
 	u32 len;
+	u32 max = xsk_pool_get_rx_frame_size(xs->pool);
 
 	len = xdp->data_end - xdp->data;
-	if (len > xsk_pool_get_rx_frame_size(xs->pool)) {
+	if (len > max) {
+		trace_xsk_packet_drop(xs->dev->name, xs->queue_id,
+				      XSK_TRACE_DROP_PKT_TOO_BIG,
+				      len, max, 0);
 		xs->rx_dropped++;
 		return -ENOSPC;
 	}

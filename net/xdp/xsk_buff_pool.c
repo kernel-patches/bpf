@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <linux/bpf_trace.h>
 #include <net/xsk_buff_pool.h>
 #include <net/xdp_sock.h>
 #include <net/xdp_sock_drv.h>
@@ -460,6 +461,8 @@ static struct xdp_buff_xsk *__xp_alloc(struct xsk_buff_pool *pool)
 		ok = pool->unaligned ? xp_check_unaligned(pool, &addr) :
 		     xp_check_aligned(pool, &addr);
 		if (!ok) {
+			trace_xsk_packet_drop(pool->netdev->name, pool->queue_id,
+					       XSK_TRACE_DROP_INVALID_FILLADDR, addr, 0, 0);
 			pool->fq->invalid_descs++;
 			xskq_cons_release(pool->fq);
 			continue;

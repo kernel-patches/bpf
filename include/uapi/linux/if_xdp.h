@@ -108,4 +108,10 @@ struct xdp_desc {
 
 /* UMEM descriptor is __u64 */
 
+enum xdp_trace_reasons {
+	XSK_TRACE_DROP_PKT_TOO_BIG,
+	XSK_TRACE_DROP_INVALID_FILLADDR,
+	XSK_TRACE_DROP_INVALID_TXD,
+};
+
 #endif /* _LINUX_IF_XDP_H */
