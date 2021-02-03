@@ -2194,8 +2194,6 @@ static inline void tcp_bpf_clone(const struct sock *sk, struct sock *newsk)
 #ifdef CONFIG_NET_SOCK_MSG
 int tcp_bpf_sendmsg_redir(struct sock *sk, struct sk_msg *msg, u32 bytes,
 			  int flags);
-int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
-		      struct msghdr *msg, int len, int flags);
 #endif /* CONFIG_NET_SOCK_MSG */
 
 #ifdef CONFIG_CGROUP_BPF
