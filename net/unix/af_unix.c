@@ -659,6 +659,7 @@ static ssize_t unix_stream_sendpage(struct socket *, struct page *, int offset,
 static ssize_t unix_stream_splice_read(struct socket *,  loff_t *ppos,
 				       struct pipe_inode_info *, size_t size,
 				       unsigned int flags);
+static int __unix_dgram_sendmsg(struct sock*, struct msghdr *, size_t);
 static int unix_dgram_sendmsg(struct socket *, struct msghdr *, size_t);
 static int unix_dgram_recvmsg(struct socket *, struct msghdr *, size_t, int);
 static int unix_dgram_connect(struct socket *, struct sockaddr *,
@@ -738,6 +739,7 @@ static const struct proto_ops unix_dgram_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	unix_shutdown,
 	.sendmsg =	unix_dgram_sendmsg,
+	.sendmsg_locked = __unix_dgram_sendmsg,
 	.recvmsg =	unix_dgram_recvmsg,
 	.mmap =		sock_no_mmap,
 	.sendpage =	sock_no_sendpage,
@@ -1611,10 +1613,10 @@ static void scm_stat_del(struct sock *sk, struct sk_buff *skb)
  *	Send AF_UNIX data.
  */
 
-static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
-			      size_t len)
+static int __unix_dgram_sendmsg(struct sock *sk, struct msghdr *msg,
+				size_t len)
 {
-	struct sock *sk = sock->sk;
+	struct socket *sock = sk->sk_socket;
 	struct net *net = sock_net(sk);
 	struct unix_sock *u = unix_sk(sk);
 	DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr, msg->msg_name);
@@ -1812,6 +1814,12 @@ out:
 		sock_put(other);
 	scm_destroy(&scm);
 	return err;
+}
+
+static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
+			      size_t len)
+{
+	return __unix_dgram_sendmsg(sock->sk, msg, len);
 }
 
 /* We use paged skbs for stream sockets, and limit occupancy to 32768
