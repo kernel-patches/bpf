@@ -42,6 +42,8 @@
 #define POLL_TMOUT 1000
 #define NEED_WAKEUP true
 #define TRACE_ENABLE_FILE "/sys/kernel/debug/tracing/events/xsk/xsk_packet_drop/enable"
+#define TRACE_FILE "/sys/kernel/debug/tracing/trace"
+#define TRACE_MAX_PKTS 100 /* limit size to avoid filling trace buffer */
 
 typedef __u32 u32;
 typedef __u16 u16;
@@ -66,11 +68,15 @@ static int opt_teardown;
 static int opt_bidi;
 static u32 opt_xdp_bind_flags = XDP_USE_NEED_WAKEUP;
 static int opt_trace_enable;
+static int opt_trace_code = -1;
 static int reset_trace;
 static u8 pkt_data[XSK_UMEM__DEFAULT_FRAME_SIZE];
 static u32 pkt_counter;
+static u32 trace_counter;
 static u32 prev_pkt = -1;
 static int sigvar;
+static int expected_traces;
+static const char *reason_str;
 
 struct xsk_umem_info {
 	struct xsk_ring_prod fq;
