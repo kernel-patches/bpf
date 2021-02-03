@@ -82,6 +82,7 @@ do
 done
 
 TEST_NAME="PREREQUISITES"
+DEFAULTPKTS=10000
 
 URANDOM=/dev/urandom
 [ ! -e "${URANDOM}" ] && { echo "${URANDOM} not found. Skipping tests."; test_exit 1 1; }
@@ -154,7 +155,7 @@ TEST_NAME="SKB NOPOLL"
 
 vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-S")
+params=("-S" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -166,7 +167,7 @@ TEST_NAME="SKB POLL"
 
 vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-S" "-p")
+params=("-S" "-p" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -178,7 +179,7 @@ TEST_NAME="DRV NOPOLL"
 
 vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-N")
+params=("-N" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -190,7 +191,7 @@ TEST_NAME="DRV POLL"
 
 vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-N" "-p")
+params=("-N" "-p" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -202,7 +203,7 @@ TEST_NAME="SKB SOCKET TEARDOWN"
 
 vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-S" "-T")
+params=("-S" "-T" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -214,7 +215,7 @@ TEST_NAME="DRV SOCKET TEARDOWN"
 
 vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-N" "-T")
+params=("-N" "-T" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -226,7 +227,7 @@ TEST_NAME="SKB BIDIRECTIONAL SOCKETS"
 
 vethXDPgeneric ${VETH0} ${VETH1} ${NS1}
 
-params=("-S" "-B")
+params=("-S" "-B" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
@@ -238,7 +239,7 @@ TEST_NAME="DRV BIDIRECTIONAL SOCKETS"
 
 vethXDPnative ${VETH0} ${VETH1} ${NS1}
 
-params=("-N" "-B")
+params=("-N" "-B" "-C" "${DEFAULTPKTS}")
 execxdpxceiver params
 
 retval=$?
