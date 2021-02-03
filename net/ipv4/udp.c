@@ -1018,7 +1018,7 @@ int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)
 }
 EXPORT_SYMBOL_GPL(udp_cmsg_send);
 
-int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
+static int __udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len, bool locked)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct udp_sock *up = udp_sk(sk);
@@ -1057,15 +1057,18 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		 * There are pending frames.
 		 * The socket lock must be held while it's corked.
 		 */
-		lock_sock(sk);
+		if (!locked)
+			lock_sock(sk);
 		if (likely(up->pending)) {
 			if (unlikely(up->pending != AF_INET)) {
-				release_sock(sk);
+				if (!locked)
+					release_sock(sk);
 				return -EINVAL;
 			}
 			goto do_append_data;
 		}
-		release_sock(sk);
+		if (!locked)
+			release_sock(sk);
 	}
 	ulen += sizeof(struct udphdr);
 
@@ -1235,11 +1238,13 @@ back_from_confirm:
 		goto out;
 	}
 
-	lock_sock(sk);
+	if (!locked)
+		lock_sock(sk);
 	if (unlikely(up->pending)) {
 		/* The socket is already corked while preparing it. */
 		/* ... which is an evident application bug. --ANK */
-		release_sock(sk);
+		if (!locked)
+			release_sock(sk);
 
 		net_dbg_ratelimited("socket already corked\n");
 		err = -EINVAL;
@@ -1266,7 +1271,8 @@ do_append_data:
 		err = udp_push_pending_frames(sk);
 	else if (unlikely(skb_queue_empty(&sk->sk_write_queue)))
 		up->pending = 0;
-	release_sock(sk);
+	if (!locked)
+		release_sock(sk);
 
 out:
 	ip_rt_put(rt);
@@ -1296,7 +1302,17 @@ do_confirm:
 	err = 0;
 	goto out;
 }
+
+int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	return __udp_sendmsg(sk, msg, len, false);
+}
 EXPORT_SYMBOL(udp_sendmsg);
+
+int udp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t len)
+{
+	return __udp_sendmsg(sk, msg, len, true);
+}
 
 int udp_sendpage(struct sock *sk, struct page *page, int offset,
 		 size_t size, int flags)
