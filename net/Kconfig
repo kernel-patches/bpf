@@ -305,20 +305,19 @@ config BPF_JIT
 	  /proc/sys/net/core/bpf_jit_harden   (optional)
 	  /proc/sys/net/core/bpf_jit_kallsyms (optional)
 
-config BPF_STREAM_PARSER
-	bool "enable BPF STREAM_PARSER"
+config BPF_SOCK_MAP
+	bool "enable BPF socket maps"
 	depends on INET
 	depends on BPF_SYSCALL
 	depends on CGROUP_BPF
 	select STREAM_PARSER
 	select NET_SOCK_MSG
 	help
-	  Enabling this allows a stream parser to be used with
-	  BPF_MAP_TYPE_SOCKMAP.
+	  Enabling this allows skb parser and verdict to be used with
+	  BPF_MAP_TYPE_SOCKMAP or BPF_MAP_TYPE_SOCKHASH.
 
-	  BPF_MAP_TYPE_SOCKMAP provides a map type to use with network sockets.
-	  It can be used to enforce socket policy, implement socket redirects,
-	  etc.
+	  This provides a BPF map type to use with network sockets. It can
+	  be used to enforce socket policy, implement socket redirects, etc.
 
 config NET_FLOW_LIMIT
 	bool
