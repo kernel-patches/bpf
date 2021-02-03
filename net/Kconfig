@@ -422,6 +422,7 @@ config SOCK_VALIDATE_XMIT
 
 config NET_SOCK_MSG
 	bool
+	select SKB_EXTENSIONS
 	default n
 	help
 	  The NET_SOCK_MSG provides a framework for plain sockets (e.g. TCP) or

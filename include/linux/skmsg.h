@@ -438,4 +438,49 @@ static inline bool sk_psock_strp_enabled(struct sk_psock *psock)
 		return false;
 	return psock->bpf_running;
 }
+
+struct skb_bpf_ext {
+	__u32 flags;
+	struct sock *sk_redir;
+};
+
+static inline void bpf_compute_data_end_sk_skb(struct sk_buff *skb)
+{
+	skb->data_end = skb->data + skb_headlen(skb);
+}
+
+#if IS_ENABLED(CONFIG_NET_SOCK_MSG)
+static inline
+bool skb_bpf_ext_ingress(const struct sk_buff *skb)
+{
+	struct skb_bpf_ext *ext = skb_ext_find(skb, SKB_EXT_BPF);
+
+	return ext->flags & BPF_F_INGRESS;
+}
+
+static inline
+void skb_bpf_ext_set_ingress(const struct sk_buff *skb)
+{
+	struct skb_bpf_ext *ext = skb_ext_find(skb, SKB_EXT_BPF);
+
+	ext->flags |= BPF_F_INGRESS;
+}
+
+static inline
+struct sock *skb_bpf_ext_redirect_fetch(struct sk_buff *skb)
+{
+	struct skb_bpf_ext *ext = skb_ext_find(skb, SKB_EXT_BPF);
+
+	return ext->sk_redir;
+}
+
+static inline
+void skb_bpf_ext_redirect_clear(struct sk_buff *skb)
+{
+	struct skb_bpf_ext *ext = skb_ext_find(skb, SKB_EXT_BPF);
+
+	ext->flags = 0;
+	ext->sk_redir = NULL;
+}
+#endif /* CONFIG_NET_SOCK_MSG */
 #endif /* _LINUX_SKMSG_H */
