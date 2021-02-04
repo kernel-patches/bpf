@@ -188,6 +188,7 @@ enum reloc_type {
 	RELO_CALL,
 	RELO_DATA,
 	RELO_EXTERN,
+	RELO_LOCAL_FUNC,
 };
 
 struct reloc_desc {
@@ -572,6 +573,12 @@ static bool insn_is_subprog_call(const struct bpf_insn *insn)
 	       insn->src_reg == BPF_PSEUDO_CALL &&
 	       insn->dst_reg == 0 &&
 	       insn->off == 0;
+}
+
+static bool insn_is_pseudo_func(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LD | BPF_IMM | BPF_DW) &&
+	       insn->src_reg == BPF_PSEUDO_FUNC;
 }
 
 static int
@@ -3395,6 +3402,16 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 		return 0;
 	}
 
+	if (insn->code == (BPF_LD | BPF_IMM | BPF_DW) &&
+	    GELF_ST_BIND(sym->st_info) == STB_LOCAL &&
+	    GELF_ST_TYPE(sym->st_info) == STT_SECTION &&
+	    shdr_idx == obj->efile.text_shndx) {
+		reloc_desc->type = RELO_LOCAL_FUNC;
+		reloc_desc->insn_idx = insn_idx;
+		reloc_desc->sym_off = sym->st_value;
+		return 0;
+	}
+
 	if (insn->code != (BPF_LD | BPF_IMM | BPF_DW)) {
 		pr_warn("prog '%s': invalid relo against '%s' for insns[%d].code 0x%x\n",
 			prog->name, sym_name, insn_idx, insn->code);
@@ -6172,6 +6189,9 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 			}
 			relo->processed = true;
 			break;
+		case RELO_LOCAL_FUNC:
+			insn[0].src_reg = BPF_PSEUDO_FUNC;
+			/* fallthrough */
 		case RELO_CALL:
 			/* will be handled as a follow up pass */
 			break;
@@ -6358,11 +6378,11 @@ bpf_object__reloc_code(struct bpf_object *obj, struct bpf_program *main_prog,
 
 	for (insn_idx = 0; insn_idx < prog->sec_insn_cnt; insn_idx++) {
 		insn = &main_prog->insns[prog->sub_insn_off + insn_idx];
-		if (!insn_is_subprog_call(insn))
+		if (!insn_is_subprog_call(insn) && !insn_is_pseudo_func(insn))
 			continue;
 
 		relo = find_prog_insn_relo(prog, insn_idx);
-		if (relo && relo->type != RELO_CALL) {
+		if (relo && relo->type != RELO_CALL && relo->type != RELO_LOCAL_FUNC) {
 			pr_warn("prog '%s': unexpected relo for insn #%zu, type %d\n",
 				prog->name, insn_idx, relo->type);
 			return -LIBBPF_ERRNO__RELOC;
@@ -6374,8 +6394,15 @@ bpf_object__reloc_code(struct bpf_object *obj, struct bpf_program *main_prog,
 			 * call always has imm = -1, but for static functions
 			 * relocation is against STT_SECTION and insn->imm
 			 * points to a start of a static function
+			 *
+			 * for local func relocation, the imm field encodes
+			 * the byte offset in the corresponding section.
 			 */
-			sub_insn_idx = relo->sym_off / BPF_INSN_SZ + insn->imm + 1;
+			if (relo->type == RELO_CALL)
+				sub_insn_idx = relo->sym_off / BPF_INSN_SZ + insn->imm + 1;
+			else
+				sub_insn_idx = relo->sym_off / BPF_INSN_SZ +
+					       insn->imm / BPF_INSN_SZ + 1;
 		} else {
 			/* if subprogram call is to a static function within
 			 * the same ELF section, there won't be any relocation
