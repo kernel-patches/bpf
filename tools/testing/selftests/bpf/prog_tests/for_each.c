@@ -2,6 +2,7 @@
 /* Copyright (c) 2021 Facebook */
 #include <test_progs.h>
 #include "for_each_hash_map_elem.skel.h"
+#include "for_each_array_map_elem.skel.h"
 
 static int duration;
 
@@ -84,8 +85,61 @@ out:
 	for_each_hash_map_elem__destroy(skel);
 }
 
+static void test_array_map(void)
+{
+	int i, arraymap_fd, percpu_map_fd, err;
+	struct for_each_array_map_elem *skel;
+	__u32 key, num_cpus, max_entries;
+	__u64 *percpu_valbuf = NULL;
+	__u64 val, expected_total;
+
+	skel = for_each_array_map_elem__open_and_load();
+	if (CHECK(!skel, "for_each_array_map_elem__open_and_load",
+		  "skeleton open_and_load failed\n"))
+		return;
+
+	arraymap_fd = bpf_map__fd(skel->maps.arraymap);
+	expected_total = 0;
+	max_entries = bpf_map__max_entries(skel->maps.arraymap);
+	for (i = 0; i < max_entries; i++) {
+		key = i;
+		val = i + 1;
+		/* skip the last iteration for expected total */
+		if (i != max_entries - 1)
+			expected_total += val;
+		err = bpf_map_update_elem(arraymap_fd, &key, &val, BPF_ANY);
+		if (CHECK(err, "map_update", "map_update failed\n"))
+			goto out;
+	}
+
+	num_cpus = bpf_num_possible_cpus();
+        percpu_map_fd = bpf_map__fd(skel->maps.percpu_map);
+        percpu_valbuf = malloc(sizeof(__u64) * num_cpus);
+        if (CHECK_FAIL(!percpu_valbuf))
+                goto out;
+
+	key = 0;
+        for (i = 0; i < num_cpus; i++)
+                percpu_valbuf[i] = i + 1;
+	err = bpf_map_update_elem(percpu_map_fd, &key, percpu_valbuf, BPF_ANY);
+	if (CHECK(err, "percpu_map_update", "map_update failed\n"))
+		goto out;
+
+	do_dummy_read(skel->progs.dump_task);
+
+	ASSERT_EQ(skel->bss->called, 1, "called");
+	ASSERT_EQ(skel->bss->arraymap_output, expected_total, "array_output");
+	ASSERT_EQ(skel->bss->cpu + 1, skel->bss->percpu_val, "percpu_val");
+
+out:
+	free(percpu_valbuf);
+	for_each_array_map_elem__destroy(skel);
+}
+
 void test_for_each(void)
 {
 	if (test__start_subtest("hash_map"))
 		test_hash_map();
+	if (test__start_subtest("array_map"))
+		test_array_map();
 }
