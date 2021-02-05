@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Create 2 namespaces with two veth peers, and
 # forward packets in-between using generic XDP
 #
@@ -72,7 +72,6 @@ test_xdp_redirect()
 	cleanup
 }
 
-set -e
 trap cleanup 2 3 6 9
 
 test_xdp_redirect xdpgeneric
