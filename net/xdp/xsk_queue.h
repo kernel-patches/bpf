@@ -6,6 +6,7 @@
 #ifndef _LINUX_XSK_QUEUE_H
 #define _LINUX_XSK_QUEUE_H
 
+#include <linux/bpf_trace.h>
 #include <linux/types.h>
 #include <linux/if_xdp.h>
 #include <net/xdp_sock.h>
@@ -175,6 +176,9 @@ static inline bool xskq_cons_is_valid_desc(struct xsk_queue *q,
 					   struct xsk_buff_pool *pool)
 {
 	if (!xp_validate_desc(pool, d)) {
+		trace_xsk_packet_drop(pool->netdev->name, pool->queue_id,
+				       XSK_TRACE_DROP_INVALID_TXD, d->addr,
+				       d->len, d->options);
 		q->invalid_descs++;
 		return false;
 	}
