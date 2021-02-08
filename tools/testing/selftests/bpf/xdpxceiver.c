@@ -72,6 +72,7 @@
 typedef __u16 __sum16;
 #include <linux/if_link.h>
 #include <linux/if_ether.h>
+#include <linux/if_xdp.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <arpa/inet.h>
@@ -108,7 +109,8 @@ static void __exit_with_error(int error, const char *file, const char *func, int
 #define print_ksft_result(void)\
 	(ksft_test_result_pass("PASS: %s %s %s%s\n", uut ? "DRV" : "SKB", opt_poll ? "POLL" :\
 			       "NOPOLL", opt_teardown ? "Socket Teardown" : "",\
-			       opt_bidi ? "Bi-directional Sockets" : ""))
+			       opt_bidi ? "Bi-directional Sockets" : "",\
+			       opt_trace_enable ? "Trace enabled" : ""))
 
 static void pthread_init_mutex(void)
 {
@@ -342,6 +344,7 @@ static struct option long_options[] = {
 	{"bidi", optional_argument, 0, 'B'},
 	{"debug", optional_argument, 0, 'D'},
 	{"tx-pkt-count", optional_argument, 0, 'C'},
+	{"trace-enable", optional_argument, 0, 't'},
 	{0, 0, 0, 0}
 };
 
@@ -359,7 +362,8 @@ static void usage(const char *prog)
 	    "  -T, --tear-down      Tear down sockets by repeatedly recreating them\n"
 	    "  -B, --bidi           Bi-directional sockets test\n"
 	    "  -D, --debug          Debug mode - dump packets L2 - L5\n"
-	    "  -C, --tx-pkt-count=n Number of packets to send\n";
+	    "  -C, --tx-pkt-count=n Number of packets to send\n"
+	    "  -t, --trace-enable   Enable trace\n";
 	ksft_print_msg(str, prog);
 }
 
@@ -446,7 +450,7 @@ static void parse_command_line(int argc, char **argv)
 	opterr = 0;
 
 	for (;;) {
-		c = getopt_long(argc, argv, "i:q:pSNcTBDC:", long_options, &option_index);
+		c = getopt_long(argc, argv, "i:q:pSNcTBDC:t", long_options, &option_index);
 
 		if (c == -1)
 			break;
@@ -496,6 +500,9 @@ static void parse_command_line(int argc, char **argv)
 			break;
 		case 'C':
 			opt_pkt_count = atoi(optarg);
+			break;
+		case 't':
+			opt_trace_enable = 1;
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -803,6 +810,48 @@ static void thread_common_ops(struct ifobject *ifobject, void *bufs, pthread_mut
 		exit_with_error(ret);
 }
 
+static int enable_disable_trace(bool enable)
+{
+	FILE *en_fp;
+	int val;
+	int read, ret = 0;
+
+	en_fp = fopen(TRACE_ENABLE_FILE, "r+");
+	if (en_fp == NULL) {
+		ksft_print_msg("Error opening %s\n", TRACE_ENABLE_FILE);
+		return -1;
+	}
+
+	/* Read current value */
+	read = fscanf(en_fp, "%i", &val);
+	if (read != 1) {
+		ksft_print_msg("Error reading from %s\n", TRACE_ENABLE_FILE);
+		ret = -1;
+		goto out_close;
+	}
+
+	if (val != enable) {
+		char w[2];
+
+		snprintf(w, 2, "%d", enable);
+		if (fputs(w, en_fp) == EOF) {
+			ksft_print_msg("Error writing to %s\n", TRACE_ENABLE_FILE);
+			ret = -1;
+		} else {
+			ksft_print_msg("Trace %s\n", enable == 1 ? "enabled" : "disabled");
+		}
+	}
+
+	/* If we are enabling the trace, flag to restore it to its original state (off) on exit */
+	reset_trace = enable;
+
+out_close:
+	fclose(en_fp);
+
+	return ret;
+}
+
+
 static void *worker_testapp_validate(void *arg)
 {
 	struct udphdr *udp_hdr =
@@ -1041,6 +1090,13 @@ int main(int argc, char **argv)
 
 	init_iface_config(ifaceconfig);
 
+	if (opt_trace_enable) {
+		if (enable_disable_trace(1)) {
+			ksft_test_result_fail("ERROR: failed to enable tracing for trace test\n");
+			ksft_exit_xfail();
+		}
+	}
+
 	pthread_init_mutex();
 
 	ksft_set_plan(1);
@@ -1056,6 +1112,9 @@ int main(int argc, char **argv)
 
 	for (int i = 0; i < MAX_INTERFACES; i++)
 		free(ifdict[i]);
+
+	if (reset_trace)
+		enable_disable_trace(0);
 
 	pthread_destroy_mutex();
 
