@@ -37,6 +37,8 @@
  *       Increase the headroom size and send packets. Validate traces.
  *    f. Tracing - XSK_TRACE_DROP_INVALID_FILLADDR
  *       Populate the fill queue with invalid addresses. Validate traces.
+ *    g. Tracing - XSK_TRACE_DROP_INVALID_TXD
+ *       Populate the tx descriptors with invalid addresses. Validate traces.
  *
  * 2. AF_XDP DRV/Native mode
  *    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -50,8 +52,9 @@
  *      zero-copy mode
  *    e. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
  *    f. Tracing - XSK_TRACE_DROP_INVALID_FILLADDR
+ *    g. Tracing - XSK_TRACE_DROP_INVALID_TXD
  *
- * Total tests: 12
+ * Total tests: 14
  *
  * Flow:
  * -----
@@ -560,8 +563,11 @@ static inline void complete_tx_only(struct xsk_socket_info *xsk, int batch_size)
 	if (!xsk->outstanding_tx)
 		return;
 
-	if (!NEED_WAKEUP || xsk_ring_prod__needs_wakeup(&xsk->tx))
+	if (!NEED_WAKEUP || xsk_ring_prod__needs_wakeup(&xsk->tx)) {
 		kick_tx(xsk);
+		if (opt_trace_code == XSK_TRACE_DROP_INVALID_TXD)
+			xsk->outstanding_tx = 0;
+	}
 
 	rcvd = xsk_ring_cons__peek(&xsk->umem->cq, batch_size, &idx);
 	if (rcvd) {
@@ -632,6 +638,7 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frameptr, int batch_size)
 {
 	u32 idx;
 	unsigned int i;
+	bool invalid_tx_test = opt_trace_code == XSK_TRACE_DROP_INVALID_TXD;
 
 	while (xsk_ring_prod__reserve(&xsk->tx, batch_size, &idx) < batch_size)
 		complete_tx_only(xsk, batch_size);
@@ -640,7 +647,8 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frameptr, int batch_size)
 		struct xdp_desc *tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx + i);
 
 		tx_desc->addr = (*frameptr + i) << XSK_UMEM__DEFAULT_FRAME_SHIFT;
-		tx_desc->len = PKT_SIZE;
+		tx_desc->len = invalid_tx_test ? XSK_UMEM__DEFAULT_FRAME_SIZE + 1 : PKT_SIZE;
+
 	}
 
 	xsk_ring_prod__submit(&xsk->tx, batch_size);
@@ -1014,7 +1022,10 @@ static void *worker_testapp_validate(void *arg)
 				rx_pkt(ifobject->xsk, fds);
 				worker_pkt_validate();
 			} else {
-				worker_trace_validate(tr_fp, ifobject->ifname);
+				worker_trace_validate(tr_fp,
+					opt_trace_code == XSK_TRACE_DROP_INVALID_TXD ?
+					ifdict[!ifobject->ifdict_index]->ifname :
+					ifobject->ifname);
 			}
 
 			if (sigvar)
@@ -1186,6 +1197,9 @@ int main(int argc, char **argv)
 			break;
 		case XSK_TRACE_DROP_INVALID_FILLADDR:
 			reason_str = "invalid fill addr";
+			break;
+		case XSK_TRACE_DROP_INVALID_TXD:
+			reason_str = "invalid tx desc";
 			break;
 		default:
 			ksft_test_result_fail("ERROR: unsupported trace %i\n",
