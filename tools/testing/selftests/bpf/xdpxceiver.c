@@ -35,6 +35,8 @@
  *       mode is used
  *    e. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
  *       Increase the headroom size and send packets. Validate traces.
+ *    f. Tracing - XSK_TRACE_DROP_INVALID_FILLADDR
+ *       Populate the fill queue with invalid addresses. Validate traces.
  *
  * 2. AF_XDP DRV/Native mode
  *    Works on any netdevice with XDP_REDIRECT support, driver dependent. Processes
@@ -47,8 +49,9 @@
  *    - Only copy mode is supported because veth does not currently support
  *      zero-copy mode
  *    e. Tracing - XSK_TRACE_DROP_PKT_TOO_BIG
+ *    f. Tracing - XSK_TRACE_DROP_INVALID_FILLADDR
  *
- * Total tests: 10
+ * Total tests: 12
  *
  * Flow:
  * -----
@@ -276,7 +279,8 @@ static void xsk_configure_umem(struct ifobject *data, void *buffer, u64 size)
 {
 	int ret;
 	struct xsk_umem_config cfg = {
-		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.fill_size = opt_trace_code == XSK_TRACE_DROP_INVALID_FILLADDR ? opt_pkt_count :
+						XSK_RING_PROD__DEFAULT_NUM_DESCS,
 		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
 		.frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE,
 		.frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM,
@@ -302,13 +306,21 @@ static void xsk_populate_fill_ring(struct xsk_umem_info *umem)
 {
 	int ret, i;
 	u32 idx;
+	u32 num_addrs = XSK_RING_PROD__DEFAULT_NUM_DESCS;
+	u32 invalid = 0;
 
-	ret = xsk_ring_prod__reserve(&umem->fq, XSK_RING_PROD__DEFAULT_NUM_DESCS, &idx);
-	if (ret != XSK_RING_PROD__DEFAULT_NUM_DESCS)
+	if (opt_trace_code == XSK_TRACE_DROP_INVALID_FILLADDR) {
+		num_addrs = opt_pkt_count;
+		invalid = num_frames * XSK_UMEM__DEFAULT_FRAME_SIZE;
+	}
+
+	ret = xsk_ring_prod__reserve(&umem->fq, num_addrs, &idx);
+	if (ret != num_addrs)
 		exit_with_error(ret);
-	for (i = 0; i < XSK_RING_PROD__DEFAULT_NUM_DESCS; i++)
-		*xsk_ring_prod__fill_addr(&umem->fq, idx++) = i * XSK_UMEM__DEFAULT_FRAME_SIZE;
-	xsk_ring_prod__submit(&umem->fq, XSK_RING_PROD__DEFAULT_NUM_DESCS);
+	for (i = 0; i < num_addrs; i++)
+		*xsk_ring_prod__fill_addr(&umem->fq, idx++) =
+			(i * XSK_UMEM__DEFAULT_FRAME_SIZE) + invalid;
+	xsk_ring_prod__submit(&umem->fq, num_addrs);
 }
 
 static int xsk_configure_socket(struct ifobject *ifobject)
@@ -1171,6 +1183,9 @@ int main(int argc, char **argv)
 		switch (opt_trace_code) {
 		case XSK_TRACE_DROP_PKT_TOO_BIG:
 			reason_str = "packet too big";
+			break;
+		case XSK_TRACE_DROP_INVALID_FILLADDR:
+			reason_str = "invalid fill addr";
 			break;
 		default:
 			ksft_test_result_fail("ERROR: unsupported trace %i\n",
