@@ -293,6 +293,7 @@ static int btf_type_size(const struct btf_type *t)
 	case BTF_KIND_FUNC:
 		return base_size;
 	case BTF_KIND_INT:
+	case BTF_KIND_FLOAT:
 		return base_size + sizeof(__u32);
 	case BTF_KIND_ENUM:
 		return base_size + vlen * sizeof(struct btf_enum);
@@ -340,6 +341,7 @@ static int btf_bswap_type_rest(struct btf_type *t)
 	case BTF_KIND_FUNC:
 		return 0;
 	case BTF_KIND_INT:
+	case BTF_KIND_FLOAT:
 		*(__u32 *)(t + 1) = bswap_32(*(__u32 *)(t + 1));
 		return 0;
 	case BTF_KIND_ENUM:
@@ -578,6 +580,7 @@ __s64 btf__resolve_size(const struct btf *btf, __u32 type_id)
 		case BTF_KIND_UNION:
 		case BTF_KIND_ENUM:
 		case BTF_KIND_DATASEC:
+		case BTF_KIND_FLOAT:
 			size = t->size;
 			goto done;
 		case BTF_KIND_PTR:
@@ -621,6 +624,7 @@ int btf__align_of(const struct btf *btf, __u32 id)
 	switch (kind) {
 	case BTF_KIND_INT:
 	case BTF_KIND_ENUM:
+	case BTF_KIND_FLOAT:
 		return min(btf_ptr_sz(btf), (size_t)t->size);
 	case BTF_KIND_PTR:
 		return btf_ptr_sz(btf);
@@ -1699,16 +1703,8 @@ static int btf_commit_type(struct btf *btf, int data_sz)
 	return btf->start_id + btf->nr_types - 1;
 }
 
-/*
- * Append new BTF_KIND_INT type with:
- *   - *name* - non-empty, non-NULL type name;
- *   - *sz* - power-of-2 (1, 2, 4, ..) size of the type, in bytes;
- *   - encoding is a combination of BTF_INT_SIGNED, BTF_INT_CHAR, BTF_INT_BOOL.
- * Returns:
- *   - >0, type ID of newly added BTF type;
- *   - <0, on error.
- */
-int btf__add_int(struct btf *btf, const char *name, size_t byte_sz, int encoding)
+static int btf_add_int_float(struct btf *btf, int kind, const char *name,
+			     size_t byte_sz, int encoding)
 {
 	struct btf_type *t;
 	int sz, name_off;
@@ -1716,10 +1712,13 @@ int btf__add_int(struct btf *btf, const char *name, size_t byte_sz, int encoding
 	/* non-empty name */
 	if (!name || !name[0])
 		return -EINVAL;
-	/* byte_sz must be power of 2 */
-	if (!byte_sz || (byte_sz & (byte_sz - 1)) || byte_sz > 16)
+	/* BTF_KIND_INT's byte_sz must be power of 2 */
+	if (!byte_sz ||
+	    (kind == BTF_KIND_INT && (byte_sz & (byte_sz - 1))) ||
+	    byte_sz > 16)
 		return -EINVAL;
-	if (encoding & ~(BTF_INT_SIGNED | BTF_INT_CHAR | BTF_INT_BOOL))
+	if (kind == BTF_KIND_INT &&
+	    (encoding & ~(BTF_INT_SIGNED | BTF_INT_CHAR | BTF_INT_BOOL)))
 		return -EINVAL;
 
 	/* deconstruct BTF, if necessary, and invalidate raw_data */
@@ -1740,12 +1739,33 @@ int btf__add_int(struct btf *btf, const char *name, size_t byte_sz, int encoding
 		return name_off;
 
 	t->name_off = name_off;
-	t->info = btf_type_info(BTF_KIND_INT, 0, 0);
+	t->info = btf_type_info(kind, 0, 0);
 	t->size = byte_sz;
-	/* set INT info, we don't allow setting legacy bit offset/size */
-	*(__u32 *)(t + 1) = (encoding << 24) | (byte_sz * 8);
+	if (kind == BTF_KIND_INT)
+		/* set INT info, we don't allow setting legacy bit offset/size
+		 */
+		*(__u32 *)(t + 1) = (encoding << 24) | (byte_sz * 8);
+	else if (kind == BTF_KIND_FLOAT)
+		/* set FLOAT info */
+		*(__u32 *)(t + 1) = byte_sz * 8;
+	else
+		return -EINVAL;
 
 	return btf_commit_type(btf, sz);
+}
+
+/*
+ * Append new BTF_KIND_INT type with:
+ *   - *name* - non-empty, non-NULL type name;
+ *   - *sz* - power-of-2 (1, 2, 4, ..) size of the type, in bytes;
+ *   - encoding is a combination of BTF_INT_SIGNED, BTF_INT_CHAR, BTF_INT_BOOL.
+ * Returns:
+ *   - >0, type ID of newly added BTF type;
+ *   - <0, on error.
+ */
+int btf__add_int(struct btf *btf, const char *name, size_t byte_sz, int encoding)
+{
+	return btf_add_int_float(btf, BTF_KIND_INT, name, byte_sz, encoding);
 }
 
 /* it's completely legal to append BTF types with type IDs pointing forward to
@@ -2363,6 +2383,19 @@ int btf__add_datasec(struct btf *btf, const char *name, __u32 byte_sz)
 	t->size = byte_sz;
 
 	return btf_commit_type(btf, sz);
+}
+
+/*
+ * Append new BTF_KIND_FLOAT type with:
+ *   - *name* - non-empty, non-NULL type name;
+ *   - *sz* - size of the type, in bytes;
+ * Returns:
+ *   - >0, type ID of newly added BTF type;
+ *   - <0, on error.
+ */
+int btf__add_float(struct btf *btf, const char *name, size_t byte_sz)
+{
+	return btf_add_int_float(btf, BTF_KIND_FLOAT, name, byte_sz, 0);
 }
 
 /*
@@ -3343,8 +3376,8 @@ static bool btf_equal_common(struct btf_type *t1, struct btf_type *t2)
 	       t1->size == t2->size;
 }
 
-/* Calculate type signature hash of INT. */
-static long btf_hash_int(struct btf_type *t)
+/* Calculate type signature hash of an INT or a FLOAT. */
+static long btf_hash_int_float(struct btf_type *t)
 {
 	__u32 info = *(__u32 *)(t + 1);
 	long h;
@@ -3354,8 +3387,8 @@ static long btf_hash_int(struct btf_type *t)
 	return h;
 }
 
-/* Check structural equality of two INTs. */
-static bool btf_equal_int(struct btf_type *t1, struct btf_type *t2)
+/* Check structural equality of two INTs or two FLOATs. */
+static bool btf_equal_int_float(struct btf_type *t1, struct btf_type *t2)
 {
 	__u32 info1, info2;
 
@@ -3621,7 +3654,8 @@ static int btf_dedup_prep(struct btf_dedup *d)
 			h = btf_hash_common(t);
 			break;
 		case BTF_KIND_INT:
-			h = btf_hash_int(t);
+		case BTF_KIND_FLOAT:
+			h = btf_hash_int_float(t);
 			break;
 		case BTF_KIND_ENUM:
 			h = btf_hash_enum(t);
@@ -3679,11 +3713,12 @@ static int btf_dedup_prim_type(struct btf_dedup *d, __u32 type_id)
 		return 0;
 
 	case BTF_KIND_INT:
-		h = btf_hash_int(t);
+	case BTF_KIND_FLOAT:
+		h = btf_hash_int_float(t);
 		for_each_dedup_cand(d, hash_entry, h) {
 			cand_id = (__u32)(long)hash_entry->value;
 			cand = btf_type_by_id(d->btf, cand_id);
-			if (btf_equal_int(t, cand)) {
+			if (btf_equal_int_float(t, cand)) {
 				new_id = cand_id;
 				break;
 			}
@@ -3966,7 +4001,8 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 
 	switch (cand_kind) {
 	case BTF_KIND_INT:
-		return btf_equal_int(cand_type, canon_type);
+	case BTF_KIND_FLOAT:
+		return btf_equal_int_float(cand_type, canon_type);
 
 	case BTF_KIND_ENUM:
 		if (d->opts.dont_resolve_fwds)
@@ -4471,6 +4507,7 @@ static int btf_dedup_remap_type(struct btf_dedup *d, __u32 type_id)
 	switch (btf_kind(t)) {
 	case BTF_KIND_INT:
 	case BTF_KIND_ENUM:
+	case BTF_KIND_FLOAT:
 		break;
 
 	case BTF_KIND_FWD:
