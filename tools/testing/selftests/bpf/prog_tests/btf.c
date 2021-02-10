@@ -3531,6 +3531,150 @@ static struct btf_raw_test raw_tests[] = {
 	.max_entries = 1,
 },
 
+{
+	.descr = "float test #1, well-formed",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_FLOAT_ENC(1, 16, 2),			/* [2] */
+		BTF_TYPE_FLOAT_ENC(10, 32, 4),			/* [3] */
+		BTF_TYPE_FLOAT_ENC(16, 64, 8),			/* [4] */
+		BTF_TYPE_FLOAT_ENC(23, 128, 16),		/* [5] */
+		BTF_STRUCT_ENC(35, 4, 30),			/* [6] */
+		BTF_MEMBER_ENC(NAME_TBD, 2, 0),
+		BTF_MEMBER_ENC(NAME_TBD, 3, 16),
+		BTF_MEMBER_ENC(NAME_TBD, 4, 48),
+		BTF_MEMBER_ENC(NAME_TBD, 5, 112),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0_Float16\0float\0double\0long_double\0floats"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 30,
+	.key_type_id = 1,
+	.value_type_id = 6,
+	.max_entries = 1,
+},
+{
+	.descr = "float test #2, truncated",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), 4),
+								/* [2] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 2,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "meta_left:0 meta_needed:4",
+},
+{
+	.descr = "float test #3, invalid vlen",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 1), 4),
+		BTF_FLOAT_ENC(32),
+								/* [2] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 2,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "vlen != 0",
+},
+{
+	.descr = "float test #4, invalid kind_flag",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_FLOAT, 1, 0), 4),
+		BTF_FLOAT_ENC(32),
+								/* [2] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 2,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Invalid btf_info kind_flag",
+},
+{
+	.descr = "float test #5, invalid float_data",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), 4),
+		BTF_FLOAT_ENC(32) | 0x100,
+								/* [2] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 2,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Invalid float_data:120",
+},
+{
+	.descr = "float test #6, invalid nr_bits",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), 4),
+		BTF_FLOAT_ENC(64),
+								/* [2] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 2,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "nr_bits exceeds type_size",
+},
+{
+	.descr = "float test #7, member does not fit",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_FLOAT_ENC(1, 32, 4),			/* [2] */
+		BTF_STRUCT_ENC(7, 1, 4),			/* [3] */
+		BTF_MEMBER_ENC(NAME_TBD, 2, 1),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0float\0floats"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "float_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = 4,
+	.key_type_id = 1,
+	.value_type_id = 3,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Member exceeds struct_size",
+},
+
 }; /* struct btf_raw_test raw_tests[] */
 
 static const char *get_next_str(const char *start, const char *end)
@@ -6632,6 +6776,7 @@ static int btf_type_size(const struct btf_type *t)
 	case BTF_KIND_FUNC:
 		return base_size;
 	case BTF_KIND_INT:
+	case BTF_KIND_FLOAT:
 		return base_size + sizeof(__u32);
 	case BTF_KIND_ENUM:
 		return base_size + vlen * sizeof(struct btf_enum);
