@@ -66,4 +66,9 @@
 #define BTF_FUNC_ENC(name, func_proto) \
 	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_FUNC, 0, 0), func_proto)
 
+#define BTF_FLOAT_ENC(nr_bits) nr_bits
+#define BTF_TYPE_FLOAT_ENC(name, bits, sz)				\
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), sz),	\
+	BTF_FLOAT_ENC(bits)
+
 #endif /* _TEST_BTF_H */
