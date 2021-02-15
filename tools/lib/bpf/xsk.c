@@ -616,6 +616,7 @@ static int xsk_lookup_bpf_maps(struct xsk_socket *xsk)
 	__u32 i, *map_ids, num_maps, prog_len = sizeof(struct bpf_prog_info);
 	__u32 map_len = sizeof(struct bpf_map_info);
 	struct bpf_prog_info prog_info = {};
+	const char *map_name = "xsks_map";
 	struct xsk_ctx *ctx = xsk->ctx;
 	struct bpf_map_info map_info;
 	int fd, err;
@@ -645,13 +646,14 @@ static int xsk_lookup_bpf_maps(struct xsk_socket *xsk)
 		if (fd < 0)
 			continue;
 
+		memset(&map_info, 0, map_len);
 		err = bpf_obj_get_info_by_fd(fd, &map_info, &map_len);
 		if (err) {
 			close(fd);
 			continue;
 		}
 
-		if (!strcmp(map_info.name, "xsks_map")) {
+		if (!strncmp(map_info.name, map_name, strlen(map_name))) {
 			ctx->xsks_map_fd = fd;
 			continue;
 		}
