@@ -834,6 +834,16 @@ static int emit_atomic(u8 **pprog, u8 atomic_op,
 
 	emit_insn_suffix(&prog, dst_reg, src_reg, off);
 
+	if (atomic_op == BPF_CMPXCHG && bpf_size == BPF_W) {
+		/*
+		 * BPF_CMPXCHG unconditionally loads into R0, which means it
+		 * zero-extends 32-bit values. However x86 CMPXCHG doesn't do a
+		 * load if the comparison is successful. Therefore zero-extend
+		 * explicitly.
+		 */
+		emit_mov_reg(&prog, false, BPF_REG_0, BPF_REG_0);
+	}
+
 	*pprog = prog;
 	return 0;
 }
