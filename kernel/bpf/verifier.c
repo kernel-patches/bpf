@@ -11666,6 +11666,32 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			continue;
 		}
 
+		/* BPF_CMPXCHG always loads a value into R0, therefore always
+		 * zero-extends. However some archs' equivalent instruction only
+		 * does this load when the comparison is successful. So here we
+		 * add a BPF_ZEXT_REG after every 32-bit CMPXCHG, so that such
+		 * archs' JITs don't need to deal with the issue. Archs that
+		 * don't face this issue may use insn_is_zext to detect and skip
+		 * the added instruction.
+		 */
+		if (insn->code == (BPF_STX | BPF_W | BPF_ATOMIC) && insn->imm == BPF_CMPXCHG) {
+			struct bpf_insn zext_patch[2] = { [1] = BPF_ZEXT_REG(BPF_REG_0) };
+
+			if (!memcmp(&insn[1], &zext_patch[1], sizeof(struct bpf_insn)))
+				/* Probably done by opt_subreg_zext_lo32_rnd_hi32. */
+				continue;
+
+			zext_patch[0] = *insn;
+			new_prog = bpf_patch_insn_data(env, i + delta, zext_patch, 2);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			continue;
+		}
+
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
