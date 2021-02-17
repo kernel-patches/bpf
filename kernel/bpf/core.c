@@ -1103,6 +1103,8 @@ static struct bpf_prog *bpf_prog_clone_create(struct bpf_prog *fp_other,
 		 * this still needs to be adapted.
 		 */
 		memcpy(fp, fp_other, fp_other->pages * PAGE_SIZE);
+		fp_other->stats = NULL;
+		fp_other->active = NULL;
 	}
 
 	return fp;
