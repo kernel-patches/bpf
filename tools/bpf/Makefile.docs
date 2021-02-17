@@ -3,7 +3,7 @@ ifndef allow-override
   include ../scripts/Makefile.include
   include ../scripts/utilities.mak
 else
-  # Assume Makefile.helpers is being run from bpftool/Documentation
+  # Assume Makefile.docs is being run from bpftool/Documentation
   # subdirectory. Go up two more directories to fetch bpf.h header and
   # associated script.
   UP2DIR := ../../

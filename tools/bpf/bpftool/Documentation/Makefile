@@ -16,8 +16,8 @@ prefix ?= /usr/local
 mandir ?= $(prefix)/man
 man8dir = $(mandir)/man8
 
-# Load targets for building eBPF helpers man page.
-include ../../Makefile.helpers
+# Load targets for building eBPF man page.
+include ../../Makefile.docs
 
 MAN8_RST = $(wildcard bpftool*.rst)
 
