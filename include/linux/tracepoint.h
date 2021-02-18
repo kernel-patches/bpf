@@ -18,6 +18,7 @@
 #include <linux/types.h>
 #include <linux/cpumask.h>
 #include <linux/rcupdate.h>
+#include <linux/rcupdate_trace.h>
 #include <linux/tracepoint-defs.h>
 #include <linux/static_call.h>
 
@@ -38,7 +39,12 @@ extern struct srcu_struct tracepoint_srcu;
 extern int
 tracepoint_probe_register(struct tracepoint *tp, void *probe, void *data);
 extern int
+tracepoint_probe_register_mayfault(struct tracepoint *tp, void *probe, void *data);
+extern int
 tracepoint_probe_register_prio(struct tracepoint *tp, void *probe, void *data,
+			       int prio);
+extern int
+tracepoint_probe_register_prio_mayfault(struct tracepoint *tp, void *probe, void *data,
 			       int prio);
 extern int
 tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data);
@@ -80,6 +86,7 @@ int unregister_tracepoint_module_notifier(struct notifier_block *nb)
 #ifdef CONFIG_TRACEPOINTS
 static inline void tracepoint_synchronize_unregister(void)
 {
+	synchronize_rcu_tasks_trace();
 	synchronize_srcu(&tracepoint_srcu);
 	synchronize_rcu();
 }
@@ -166,11 +173,12 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
  * has a "void" prototype, then it is invalid to declare a function
  * as "(void *, void)".
  */
-#define __DO_TRACE(name, proto, args, cond, rcuidle)			\
+#define __DO_TRACE(name, proto, args, cond, rcuidle, tp_flags)		\
 	do {								\
 		struct tracepoint_func *it_func_ptr;			\
 		int __maybe_unused __idx = 0;				\
 		void *__data;						\
+		bool mayfault = (tp_flags) & TRACEPOINT_MAYFAULT;	\
 									\
 		if (!(cond))						\
 			return;						\
@@ -178,9 +186,12 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 		/* srcu can't be used from NMI */			\
 		WARN_ON_ONCE(rcuidle && in_nmi());			\
 									\
-		/* keep srcu and sched-rcu usage consistent */		\
-		preempt_disable_notrace();				\
-									\
+		if (mayfault) {						\
+			rcu_read_lock_trace();				\
+		} else {						\
+			/* keep srcu and sched-rcu usage consistent */	\
+			preempt_disable_notrace();			\
+		}							\
 		/*							\
 		 * For rcuidle callers, use srcu since sched-rcu	\
 		 * doesn't work from the idle path.			\
@@ -192,6 +203,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 									\
 		it_func_ptr =						\
 			rcu_dereference_raw((&__tracepoint_##name)->funcs); \
+									\
 		if (it_func_ptr) {					\
 			__data = (it_func_ptr)->data;			\
 			__DO_TRACE_CALL(name)(args);			\
@@ -202,21 +214,24 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 			srcu_read_unlock_notrace(&tracepoint_srcu, __idx);\
 		}							\
 									\
-		preempt_enable_notrace();				\
+		if (mayfault)						\
+			rcu_read_unlock_trace();			\
+		else							\
+			preempt_enable_notrace();			\
 	} while (0)
 
 #ifndef MODULE
-#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args) \
+#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args, tp_flags) \
 	static inline void trace_##name##_rcuidle(proto)		\
 	{								\
 		if (static_key_false(&__tracepoint_##name.key))		\
 			__DO_TRACE(name,				\
 				TP_PROTO(data_proto),			\
 				TP_ARGS(data_args),			\
-				TP_CONDITION(cond), 1);			\
+				TP_CONDITION(cond), 1, tp_flags);	\
 	}
 #else
-#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args)
+#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args, tp_flags)
 #endif
 
 /*
@@ -231,7 +246,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
  * even when this tracepoint is off. This code has no purpose other than
  * poking RCU a bit.
  */
-#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args) \
+#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args, tp_flags) \
 	extern int __traceiter_##name(data_proto);			\
 	DECLARE_STATIC_CALL(tp_func_##name, __traceiter_##name);	\
 	extern struct tracepoint __tracepoint_##name;			\
@@ -241,15 +256,17 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 			__DO_TRACE(name,				\
 				TP_PROTO(data_proto),			\
 				TP_ARGS(data_args),			\
-				TP_CONDITION(cond), 0);			\
+				TP_CONDITION(cond), 0, tp_flags);	\
 		if (IS_ENABLED(CONFIG_LOCKDEP) && (cond)) {		\
 			rcu_read_lock_sched_notrace();			\
 			rcu_dereference_sched(__tracepoint_##name.funcs);\
 			rcu_read_unlock_sched_notrace();		\
 		}							\
+		if ((tp_flags) & TRACEPOINT_MAYFAULT)			\
+			might_fault();					\
 	}								\
 	__DECLARE_TRACE_RCU(name, PARAMS(proto), PARAMS(args),		\
-		PARAMS(cond), PARAMS(data_proto), PARAMS(data_args))	\
+		PARAMS(cond), PARAMS(data_proto), PARAMS(data_args), tp_flags)	\
 	static inline int						\
 	register_trace_##name(void (*probe)(data_proto), void *data)	\
 	{								\
@@ -257,10 +274,23 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 						(void *)probe, data);	\
 	}								\
 	static inline int						\
+	register_trace_mayfault_##name(void (*probe)(data_proto), void *data)	\
+	{								\
+		return tracepoint_probe_register_mayfault(&__tracepoint_##name,	\
+						(void *)probe, data);	\
+	}								\
+	static inline int						\
 	register_trace_prio_##name(void (*probe)(data_proto), void *data,\
 				   int prio)				\
 	{								\
 		return tracepoint_probe_register_prio(&__tracepoint_##name, \
+					      (void *)probe, data, prio); \
+	}								\
+	static inline int						\
+	register_trace_prio_mayfault_##name(void (*probe)(data_proto),	\
+			void *data, int prio)				\
+	{								\
+		return tracepoint_probe_register_prio_mayfault(&__tracepoint_##name, \
 					      (void *)probe, data, prio); \
 	}								\
 	static inline int						\
@@ -284,7 +314,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
  * structures, so we create an array of pointers that will be used for iteration
  * on the tracepoints.
  */
-#define DEFINE_TRACE_FN(_name, _reg, _unreg, proto, args)		\
+#define DEFINE_TRACE_FN_FLAGS(_name, _reg, _unreg, proto, args, tp_flags) \
 	static const char __tpstrtab_##_name[]				\
 	__section("__tracepoints_strings") = #_name;			\
 	extern struct static_call_key STATIC_CALL_KEY(tp_func_##_name);	\
@@ -298,7 +328,8 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 		.iterator = &__traceiter_##_name,			\
 		.regfunc = _reg,					\
 		.unregfunc = _unreg,					\
-		.funcs = NULL };					\
+		.funcs = NULL,						\
+		.flags = tp_flags };					\
 	__TRACEPOINT_ENTRY(_name);					\
 	int __traceiter_##_name(void *__data, proto)			\
 	{								\
@@ -318,8 +349,11 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 	}								\
 	DEFINE_STATIC_CALL(tp_func_##_name, __traceiter_##_name);
 
+#define DEFINE_TRACE_FN(_name, _reg, _unreg, proto, args)		\
+	DEFINE_TRACE_FN_FLAGS(_name, _reg, _unreg, PARAMS(proto), PARAMS(args), 0)
+
 #define DEFINE_TRACE(name, proto, args)		\
-	DEFINE_TRACE_FN(name, NULL, NULL, PARAMS(proto), PARAMS(args));
+	DEFINE_TRACE_FN(name, NULL, NULL, PARAMS(proto), PARAMS(args))
 
 #define EXPORT_TRACEPOINT_SYMBOL_GPL(name)				\
 	EXPORT_SYMBOL_GPL(__tracepoint_##name);				\
@@ -332,7 +366,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 
 
 #else /* !TRACEPOINTS_ENABLED */
-#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args) \
+#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args, tp_flags) \
 	static inline void trace_##name(proto)				\
 	{ }								\
 	static inline void trace_##name##_rcuidle(proto)		\
@@ -340,6 +374,18 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 	static inline int						\
 	register_trace_##name(void (*probe)(data_proto),		\
 			      void *data)				\
+	{								\
+		return -ENOSYS;						\
+	}								\
+	static inline int						\
+	register_trace_mayfault_##name(void (*probe)(data_proto),	\
+			      void *data)				\
+	{								\
+		return -ENOSYS;						\
+	}								\
+	static inline int						\
+	register_trace_prio_mayfault_##name(void (*probe)(data_proto),	\
+			void *data, int prio)				\
 	{								\
 		return -ENOSYS;						\
 	}								\
@@ -358,6 +404,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 		return false;						\
 	}
 
+#define DEFINE_TRACE_FN_FLAGS(name, reg, unreg, proto, args, tp_flags)
 #define DEFINE_TRACE_FN(name, reg, unreg, proto, args)
 #define DEFINE_TRACE(name, proto, args)
 #define EXPORT_TRACEPOINT_SYMBOL_GPL(name)
@@ -413,13 +460,20 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 	__DECLARE_TRACE(name, PARAMS(proto), PARAMS(args),		\
 			cpu_online(raw_smp_processor_id()),		\
 			PARAMS(void *__data, proto),			\
-			PARAMS(__data, args))
+			PARAMS(__data, args), 0)
+
+#define DECLARE_TRACE_MAYFAULT(name, proto, args)			\
+	__DECLARE_TRACE(name, PARAMS(proto), PARAMS(args),		\
+			cpu_online(raw_smp_processor_id()),		\
+			PARAMS(void *__data, proto),			\
+			PARAMS(__data, args),				\
+			TRACEPOINT_MAYFAULT)
 
 #define DECLARE_TRACE_CONDITION(name, proto, args, cond)		\
 	__DECLARE_TRACE(name, PARAMS(proto), PARAMS(args),		\
 			cpu_online(raw_smp_processor_id()) && (PARAMS(cond)), \
 			PARAMS(void *__data, proto),			\
-			PARAMS(__data, args))
+			PARAMS(__data, args), 0)
 
 #define TRACE_EVENT_FLAGS(event, flag)
 
@@ -550,6 +604,9 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 #define TRACE_EVENT_FN(name, proto, args, struct,		\
 		assign, print, reg, unreg)			\
 	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
+#define TRACE_EVENT_FN_MAYFAULT(name, proto, args, struct,	\
+		assign, print, reg, unreg)			\
+	DECLARE_TRACE_MAYFAULT(name, PARAMS(proto), PARAMS(args))
 #define TRACE_EVENT_FN_COND(name, proto, args, cond, struct,		\
 		assign, print, reg, unreg)			\
 	DECLARE_TRACE_CONDITION(name, PARAMS(proto),	\

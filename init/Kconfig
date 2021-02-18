@@ -2031,6 +2031,7 @@ config PROFILING
 #
 config TRACEPOINTS
 	bool
+	select TASKS_TRACE_RCU
 
 endmenu		# General setup
 

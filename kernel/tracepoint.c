@@ -60,9 +60,14 @@ static inline void *allocate_probes(int count)
 	return p == NULL ? NULL : p->probes;
 }
 
-static void srcu_free_old_probes(struct rcu_head *head)
+static void rcu_tasks_trace_free_old_probes(struct rcu_head *head)
 {
 	kfree(container_of(head, struct tp_probes, rcu));
+}
+
+static void srcu_free_old_probes(struct rcu_head *head)
+{
+	call_rcu_tasks_trace(head, rcu_tasks_trace_free_old_probes);
 }
 
 static void rcu_free_old_probes(struct rcu_head *head)
@@ -85,7 +90,7 @@ static __init int release_early_probes(void)
 	return 0;
 }
 
-/* SRCU is initialized at core_initcall */
+/* SRCU and Tasks Trace RCU are initialized at core_initcall */
 postcore_initcall(release_early_probes);
 
 static inline void release_probes(struct tracepoint_func *old)
@@ -95,8 +100,9 @@ static inline void release_probes(struct tracepoint_func *old)
 			struct tp_probes, probes[0]);
 
 		/*
-		 * We can't free probes if SRCU is not initialized yet.
-		 * Postpone the freeing till after SRCU is initialized.
+		 * We can't free probes if SRCU and Tasks Trace RCU are not
+		 * initialized yet. Postpone the freeing till after both are
+		 * initialized.
 		 */
 		if (unlikely(!ok_to_free_tracepoints)) {
 			tp_probes->rcu.next = early_probes;
@@ -105,10 +111,9 @@ static inline void release_probes(struct tracepoint_func *old)
 		}
 
 		/*
-		 * Tracepoint probes are protected by both sched RCU and SRCU,
-		 * by calling the SRCU callback in the sched RCU callback we
-		 * cover both cases. So let us chain the SRCU and sched RCU
-		 * callbacks to wait for both grace periods.
+		 * Tracepoint probes are protected by sched RCU, SRCU and
+		 * Tasks Trace RCU by chaining the callbacks we cover all three
+		 * cases and wait for all three grace periods.
 		 */
 		call_rcu(&tp_probes->rcu, rcu_free_old_probes);
 	}
@@ -316,20 +321,7 @@ static int tracepoint_remove_func(struct tracepoint *tp,
 	return 0;
 }
 
-/**
- * tracepoint_probe_register_prio -  Connect a probe to a tracepoint with priority
- * @tp: tracepoint
- * @probe: probe handler
- * @data: tracepoint data
- * @prio: priority of this function over other registered functions
- *
- * Returns 0 if ok, error value on error.
- * Note: if @tp is within a module, the caller is responsible for
- * unregistering the probe before the module is gone. This can be
- * performed either with a tracepoint module going notifier, or from
- * within module exit functions.
- */
-int tracepoint_probe_register_prio(struct tracepoint *tp, void *probe,
+static int __tracepoint_probe_register_prio(struct tracepoint *tp, void *probe,
 				   void *data, int prio)
 {
 	struct tracepoint_func tp_func;
@@ -343,13 +335,67 @@ int tracepoint_probe_register_prio(struct tracepoint *tp, void *probe,
 	mutex_unlock(&tracepoints_mutex);
 	return ret;
 }
+
+/**
+ * tracepoint_probe_register_prio -  Connect a probe to a tracepoint with priority
+ * @tp: tracepoint
+ * @probe: probe handler
+ * @data: tracepoint data
+ * @prio: priority of this function over other registered functions
+ *
+ * Non-faultable probes can only be registered on non-faultable tracepoints.
+ *
+ * Returns 0 if ok, error value on error.
+ * Note: if @tp is within a module, the caller is responsible for
+ * unregistering the probe before the module is gone. This can be
+ * performed either with a tracepoint module going notifier, or from
+ * within module exit functions.
+ */
+int tracepoint_probe_register_prio(struct tracepoint *tp, void *probe,
+				   void *data, int prio)
+{
+	if (tp->flags & TRACEPOINT_MAYFAULT)
+		return -EINVAL;
+
+	return __tracepoint_probe_register_prio(tp, probe, data, prio);
+}
 EXPORT_SYMBOL_GPL(tracepoint_probe_register_prio);
+
+/**
+ * tracepoint_probe_register_prio_mayfault - Connect a faultable probe to a tracepoint with priority
+ * @tp: tracepoint
+ * @probe: probe handler
+ * @data: tracepoint data
+ * @prio: priority of this function over other registered functions
+ *
+ * When the TRACEPOINT_MAYFAULT flag is provided on registration, the probe
+ * callback will be called with preemption enabled, and is allowed to take
+ * page faults. Faultable probes can only be registered on faultable
+ * tracepoints.
+ *
+ * Returns 0 if ok, error value on error.
+ * Note: if @tp is within a module, the caller is responsible for
+ * unregistering the probe before the module is gone. This can be
+ * performed either with a tracepoint module going notifier, or from
+ * within module exit functions.
+ */
+int tracepoint_probe_register_prio_mayfault(struct tracepoint *tp, void *probe,
+				   void *data, int prio)
+{
+	if (!(tp->flags & TRACEPOINT_MAYFAULT))
+		return -EINVAL;
+
+	return __tracepoint_probe_register_prio(tp, probe, data, prio);
+}
+EXPORT_SYMBOL_GPL(tracepoint_probe_register_prio_mayfault);
 
 /**
  * tracepoint_probe_register -  Connect a probe to a tracepoint
  * @tp: tracepoint
  * @probe: probe handler
  * @data: tracepoint data
+ *
+ * Non-faultable probes can only be registered on non-faultable tracepoints.
  *
  * Returns 0 if ok, error value on error.
  * Note: if @tp is within a module, the caller is responsible for
@@ -362,6 +408,29 @@ int tracepoint_probe_register(struct tracepoint *tp, void *probe, void *data)
 	return tracepoint_probe_register_prio(tp, probe, data, TRACEPOINT_DEFAULT_PRIO);
 }
 EXPORT_SYMBOL_GPL(tracepoint_probe_register);
+
+/**
+ * tracepoint_probe_register_mayfault - Connect a faultable probe to a tracepoint
+ * @tp: tracepoint
+ * @probe: probe handler
+ * @data: tracepoint data
+ *
+ * When the TRACEPOINT_MAYFAULT flag is provided on registration, the probe
+ * callback will be called with preemption enabled, and is allowed to take
+ * page faults. Faultable probes can only be registered on faultable
+ * tracepoints.
+ *
+ * Returns 0 if ok, error value on error.
+ * Note: if @tp is within a module, the caller is responsible for
+ * unregistering the probe before the module is gone. This can be
+ * performed either with a tracepoint module going notifier, or from
+ * within module exit functions.
+ */
+int tracepoint_probe_register_mayfault(struct tracepoint *tp, void *probe, void *data)
+{
+	return tracepoint_probe_register_prio_mayfault(tp, probe, data, TRACEPOINT_DEFAULT_PRIO);
+}
+EXPORT_SYMBOL_GPL(tracepoint_probe_register_mayfault);
 
 /**
  * tracepoint_probe_unregister -  Disconnect a probe from a tracepoint
