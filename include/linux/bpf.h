@@ -505,6 +505,7 @@ enum bpf_cgroup_storage_type {
  * See include/trace/bpf_probe.h
  */
 #define MAX_BPF_FUNC_ARGS 12
+#define MAX_BPF_FUNC_REGISTER_ARGS 5
 
 struct btf_func_model {
 	u8 ret_size;
