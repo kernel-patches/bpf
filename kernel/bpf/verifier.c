@@ -186,6 +186,9 @@ struct bpf_verifier_stack_elem {
 					  POISON_POINTER_DELTA))
 #define BPF_MAP_PTR(X)		((struct bpf_map *)((X) & ~BPF_MAP_PTR_UNPRIV))
 
+static int check_map_func_compatibility(struct bpf_verifier_env *env,
+					struct bpf_map *map, int func_id);
+
 static bool bpf_map_ptr_poisoned(const struct bpf_insn_aux_data *aux)
 {
 	return BPF_MAP_PTR(aux->map_ptr_state) == BPF_MAP_PTR_POISON;
@@ -248,6 +251,7 @@ struct bpf_call_arg_meta {
 	u32 btf_id;
 	struct btf *ret_btf;
 	u32 ret_btf_id;
+	int map_ptr_cnt;
 };
 
 struct btf *btf_vmlinux;
@@ -451,7 +455,8 @@ static bool arg_type_may_be_null(enum bpf_arg_type type)
 	       type == ARG_PTR_TO_MEM_OR_NULL ||
 	       type == ARG_PTR_TO_CTX_OR_NULL ||
 	       type == ARG_PTR_TO_SOCKET_OR_NULL ||
-	       type == ARG_PTR_TO_ALLOC_MEM_OR_NULL;
+	       type == ARG_PTR_TO_ALLOC_MEM_OR_NULL ||
+	       type == ARG_CONST_MAP_PTR_OR_NULL;
 }
 
 /* Determine whether the function releases some resources allocated by another
@@ -4512,6 +4517,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_CONST_SIZE_OR_ZERO]	= &scalar_types,
 	[ARG_CONST_ALLOC_SIZE_OR_ZERO]	= &scalar_types,
 	[ARG_CONST_MAP_PTR]		= &const_map_ptr_types,
+	[ARG_CONST_MAP_PTR_OR_NULL]	= &const_map_ptr_types,
 	[ARG_PTR_TO_CTX]		= &context_types,
 	[ARG_PTR_TO_CTX_OR_NULL]	= &context_types,
 	[ARG_PTR_TO_SOCK_COMMON]	= &sock_types,
@@ -4657,9 +4663,22 @@ skip_type_check:
 		meta->ref_obj_id = reg->ref_obj_id;
 	}
 
-	if (arg_type == ARG_CONST_MAP_PTR) {
-		/* bpf_map_xxx(map_ptr) call: remember that map_ptr */
-		meta->map_ptr = reg->map_ptr;
+	if (arg_type == ARG_CONST_MAP_PTR ||
+	    arg_type == ARG_CONST_MAP_PTR_OR_NULL) {
+		if (!register_is_null(reg)) {
+			err = check_map_func_compatibility(env, reg->map_ptr, meta->func_id);
+			if (err)
+				return err;
+			meta->map_ptr = reg->map_ptr;
+		}
+		/* With multiple map pointers in the same function signature,
+		 * any future checks using the cached map_ptr become ambiguous
+		 * (which of the maps would it be referring to?), so unset
+		 * map_ptr to trigger the error conditions in the checks that
+		 * use it.
+		 */
+		if (++meta->map_ptr_cnt > 1)
+			meta->map_ptr = NULL;
 	} else if (arg_type == ARG_PTR_TO_MAP_KEY) {
 		/* bpf_map_xxx(..., map_ptr, ..., key) call:
 		 * check that [key, key + map->key_size) are within
@@ -5716,10 +5735,6 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 	}
 
 	do_refine_retval_range(regs, fn->ret_type, func_id, &meta);
-
-	err = check_map_func_compatibility(env, meta.map_ptr, func_id);
-	if (err)
-		return err;
 
 	if ((func_id == BPF_FUNC_get_stack ||
 	     func_id == BPF_FUNC_get_task_stack) &&
