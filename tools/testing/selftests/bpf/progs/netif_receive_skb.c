@@ -16,6 +16,13 @@ bool skip = false;
 #define STRSIZE			2048
 #define EXPECTED_STRSIZE	256
 
+#if defined(bpf_target_s390)
+/* NULL points to a readable struct lowcore on s390, so take _REGION1_SIZE */
+#define BADPTR			((void *)(1ULL << 53))
+#else
+#define BADPTR			0
+#endif
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x)	(sizeof(x) / sizeof((x)[0]))
 #endif
@@ -113,11 +120,11 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 	}
 
 	/* Check invalid ptr value */
-	p.ptr = 0;
+	p.ptr = BADPTR;
 	__ret = bpf_snprintf_btf(str, STRSIZE, &p, sizeof(p), 0);
 	if (__ret >= 0) {
-		bpf_printk("printing NULL should generate error, got (%d)",
-			   __ret);
+		bpf_printk("printing %p should generate error, got (%d)",
+			   BADPTR, __ret);
 		ret = -ERANGE;
 	}
 
