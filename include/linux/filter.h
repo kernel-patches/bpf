@@ -646,9 +646,18 @@ struct bpf_redirect_info {
 	u32 flags;
 	u32 tgt_index;
 	void *tgt_value;
-	struct bpf_map *map;
+	u32 map_id;
+	u32 tgt_type;
 	u32 kern_flags;
 	struct bpf_nh_params nh;
+};
+
+enum xdp_redirect_type {
+	XDP_REDIR_UNSET,
+	XDP_REDIR_DEV_IFINDEX,
+	XDP_REDIR_DEV_MAP,
+	XDP_REDIR_CPU_MAP,
+	XDP_REDIR_XSK_MAP,
 };
 
 DECLARE_PER_CPU(struct bpf_redirect_info, bpf_redirect_info);
@@ -1473,7 +1482,8 @@ static inline bool bpf_sk_lookup_run_v6(struct net *net, int protocol,
 #endif /* IS_ENABLED(CONFIG_IPV6) */
 
 static __always_inline int __bpf_xdp_redirect_map(struct bpf_map *map, u32 ifindex, u64 flags,
-						  void *lookup_elem(struct bpf_map *map, u32 key))
+						  void *lookup_elem(struct bpf_map *map, u32 key),
+						  enum xdp_redirect_type type)
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 
@@ -1488,13 +1498,13 @@ static __always_inline int __bpf_xdp_redirect_map(struct bpf_map *map, u32 ifind
 		 * performs multiple lookups, the last one always takes
 		 * precedence.
 		 */
-		WRITE_ONCE(ri->map, NULL);
+		ri->tgt_type = XDP_REDIR_UNSET;
 		return flags;
 	}
 
-	ri->flags = flags;
 	ri->tgt_index = ifindex;
-	WRITE_ONCE(ri->map, map);
+	ri->tgt_type = type;
+	ri->map_id = map->id;
 
 	return XDP_REDIRECT;
 }
