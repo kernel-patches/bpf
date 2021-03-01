@@ -2,6 +2,22 @@
 #include <test_progs.h>
 #include "test_attach_probe.skel.h"
 
+#if defined(__powerpc64__)
+/*
+ * We get the GEP (Global Entry Point) address from kallsyms,
+ * but then the function is called locally, so we need to adjust
+ * the address to get LEP (Local Entry Point).
+ */
+#define LEP_OFFSET 8
+
+static ssize_t get_offset(ssize_t offset)
+{
+	return offset + LEP_OFFSET;
+}
+#else
+#define get_offset(offset) (offset)
+#endif
+
 ssize_t get_base_addr() {
 	size_t start, offset;
 	char buf[256];
@@ -36,7 +52,7 @@ void test_attach_probe(void)
 	if (CHECK(base_addr < 0, "get_base_addr",
 		  "failed to find base addr: %zd", base_addr))
 		return;
-	uprobe_offset = (size_t)&get_base_addr - base_addr;
+	uprobe_offset = get_offset((size_t)&get_base_addr - base_addr);
 
 	skel = test_attach_probe__open_and_load();
 	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
