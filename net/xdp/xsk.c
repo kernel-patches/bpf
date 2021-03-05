@@ -484,8 +484,14 @@ static int xsk_generic_xmit(struct sock *sk)
 		 * if there is space in it. This avoids having to implement
 		 * any buffering in the Tx path.
 		 */
+		if (unlikely(err)) {
+			kfree_skb(skb);
+			goto out;
+		}
+
 		spin_lock_irqsave(&xs->pool->cq_lock, flags);
-		if (unlikely(err) || xskq_prod_reserve(xs->pool->cq)) {
+		err = xskq_prod_reserve(xs->pool->cq);
+		if (unlikely(err)) {
 			spin_unlock_irqrestore(&xs->pool->cq_lock, flags);
 			kfree_skb(skb);
 			goto out;
