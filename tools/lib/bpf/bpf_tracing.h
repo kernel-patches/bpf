@@ -457,4 +457,19 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 		___ret;							    \
 	})
 
+/*
+ * BPF_SNPRINTF wraps the bpf_snprintf helper with variadic arguments instead of
+ * an array of u64.
+ */
+#define BPF_SNPRINTF(out, out_size, fmt, args...)			    \
+	({								    \
+		_Pragma("GCC diagnostic push")				    \
+		_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	    \
+		___bpf_build_param(args);				    \
+		_Pragma("GCC diagnostic pop")				    \
+		int ___ret = bpf_snprintf(out, out_size, fmt,		    \
+					    ___param, sizeof(___param));    \
+		___ret;							    \
+	})
+
 #endif
