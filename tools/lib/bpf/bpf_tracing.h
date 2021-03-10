@@ -413,6 +413,34 @@ typeof(name(0)) name(struct pt_regs *ctx)				    \
 }									    \
 static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
+#define ___bpf_build_param0(narg, x)
+#define ___bpf_build_param1(narg, x) ___param[narg - 1] = x
+#define ___bpf_build_param2(narg, x, args...) ___param[narg - 2] = x; \
+					      ___bpf_build_param1(narg, args)
+#define ___bpf_build_param3(narg, x, args...) ___param[narg - 3] = x; \
+					      ___bpf_build_param2(narg, args)
+#define ___bpf_build_param4(narg, x, args...) ___param[narg - 4] = x; \
+					      ___bpf_build_param3(narg, args)
+#define ___bpf_build_param5(narg, x, args...) ___param[narg - 5] = x; \
+					      ___bpf_build_param4(narg, args)
+#define ___bpf_build_param6(narg, x, args...) ___param[narg - 6] = x; \
+					      ___bpf_build_param5(narg, args)
+#define ___bpf_build_param7(narg, x, args...) ___param[narg - 7] = x; \
+					      ___bpf_build_param6(narg, args)
+#define ___bpf_build_param8(narg, x, args...) ___param[narg - 8] = x; \
+					      ___bpf_build_param7(narg, args)
+#define ___bpf_build_param9(narg, x, args...) ___param[narg - 9] = x; \
+					      ___bpf_build_param8(narg, args)
+#define ___bpf_build_param10(narg, x, args...) ___param[narg - 10] = x; \
+					       ___bpf_build_param9(narg, args)
+#define ___bpf_build_param11(narg, x, args...) ___param[narg - 11] = x; \
+					       ___bpf_build_param10(narg, args)
+#define ___bpf_build_param12(narg, x, args...) ___param[narg - 12] = x; \
+					       ___bpf_build_param11(narg, args)
+#define ___bpf_build_param(args...) \
+	unsigned long long ___param[___bpf_narg(args)];			\
+	___bpf_apply(___bpf_build_param, ___bpf_narg(args))(___bpf_narg(args), args)
+
 /*
  * BPF_SEQ_PRINTF to wrap bpf_seq_printf to-be-printed values
  * in a structure.
@@ -422,7 +450,7 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 		_Pragma("GCC diagnostic push")				    \
 		_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	    \
 		static const char ___fmt[] = fmt;			    \
-		unsigned long long ___param[] = { args };		    \
+		___bpf_build_param(args);				    \
 		_Pragma("GCC diagnostic pop")				    \
 		int ___ret = bpf_seq_printf(seq, ___fmt, sizeof(___fmt),    \
 					    ___param, sizeof(___param));    \
