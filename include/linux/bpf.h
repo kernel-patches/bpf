@@ -1902,6 +1902,10 @@ extern const struct bpf_func_proto bpf_task_storage_get_proto;
 extern const struct bpf_func_proto bpf_task_storage_delete_proto;
 extern const struct bpf_func_proto bpf_for_each_map_elem_proto;
 
+#define MAX_SNPRINTF_VARARGS		12
+#define MAX_SNPRINTF_MEMCPY		6
+#define MAX_SNPRINTF_STR_LEN		128
+
 const struct bpf_func_proto *bpf_tracing_func_proto(
 	enum bpf_func_id func_id, const struct bpf_prog *prog);
 

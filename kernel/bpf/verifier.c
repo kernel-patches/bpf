@@ -5732,6 +5732,137 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 	return state->acquired_refs ? -EINVAL : 0;
 }
 
+int check_bpf_snprintf_call(struct bpf_verifier_env *env,
+			    struct bpf_reg_state *regs)
+{
+	struct bpf_reg_state *fmt_reg = &regs[BPF_REG_3];
+	struct bpf_reg_state *data_len_reg = &regs[BPF_REG_5];
+	struct bpf_map *fmt_map = fmt_reg->map_ptr;
+	int err, fmt_map_off, i, fmt_cnt = 0, memcpy_cnt = 0, num_args;
+	u64 fmt_addr;
+	char *fmt;
+
+	/* data must be an array of u64 so data_len must be a multiple of 8 */
+	if (data_len_reg->var_off.value & 7)
+		return -EINVAL;
+	num_args = data_len_reg->var_off.value / 8;
+
+	/* fmt being ARG_PTR_TO_CONST_STR guarantees that var_off is const
+	 * and map_direct_value_addr is set.
+	 */
+	fmt_map_off = fmt_reg->off + fmt_reg->var_off.value;
+	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
+						  fmt_map_off);
+	if (err)
+		return err;
+	fmt = (char *)fmt_addr;
+
+	/* We are also guaranteed that fmt+fmt_map_off is NULL terminated, we
+	 * can focus on validating the format specifiers.
+	 */
+	for (i = fmt_map_off; fmt[i] != '\0'; i++) {
+		if ((!isprint(fmt[i]) && !isspace(fmt[i])) ||
+		    !isascii(fmt[i])) {
+			verbose(env, "only printable ascii for now\n");
+			return -EINVAL;
+		}
+
+		if (fmt[i] != '%')
+			continue;
+
+		if (fmt[i + 1] == '%') {
+			i++;
+			continue;
+		}
+
+		if (fmt_cnt >= MAX_SNPRINTF_VARARGS) {
+			verbose(env, "too many format specifiers\n");
+			return -E2BIG;
+		}
+
+		if (fmt_cnt >= num_args) {
+			verbose(env, "not enough parameters to print\n");
+			return -EINVAL;
+		}
+
+		/* fmt[i] != 0 && fmt[last] == 0, so we can access fmt[i + 1] */
+		i++;
+
+		/* skip optional "[0 +-][num]" width formating field */
+		while (fmt[i] == '0' || fmt[i] == '+'  || fmt[i] == '-' ||
+		       fmt[i] == ' ')
+			i++;
+		if (fmt[i] >= '1' && fmt[i] <= '9') {
+			i++;
+			while (fmt[i] >= '0' && fmt[i] <= '9')
+				i++;
+		}
+
+		if (fmt[i] == 's') {
+			if (memcpy_cnt >= MAX_SNPRINTF_MEMCPY) {
+				verbose(env, "too many buffer copies\n");
+				return -E2BIG;
+			}
+
+			fmt_cnt++;
+			memcpy_cnt++;
+			continue;
+		}
+
+		if (fmt[i] == 'p') {
+			if (fmt[i + 1] == 0 ||  fmt[i + 1] == 'K' ||
+			    fmt[i + 1] == 'x' || fmt[i + 1] == 'B' ||
+			    fmt[i + 1] == 's' || fmt[i + 1] == 'S') {
+				fmt_cnt++;
+				continue;
+			}
+
+			/* only support "%pI4", "%pi4", "%pI6" and "%pi6". */
+			if (fmt[i + 1] != 'i' && fmt[i + 1] != 'I') {
+				verbose(env, "invalid specifier %%p%c\n",
+					fmt[i+1]);
+				return -EINVAL;
+			}
+			if (fmt[i + 2] != '4' && fmt[i + 2] != '6') {
+				verbose(env, "invalid specifier %%p%c%c\n",
+					fmt[i+1], fmt[i+2]);
+				return -EINVAL;
+			}
+
+			if (memcpy_cnt >= MAX_SNPRINTF_MEMCPY) {
+				verbose(env, "too many buffer copies\n");
+				return -E2BIG;
+			}
+
+			i += 2;
+			fmt_cnt++;
+			memcpy_cnt++;
+			continue;
+		}
+
+		if (fmt[i] == 'l') {
+			i++;
+			if (fmt[i] == 'l')
+				i++;
+		}
+
+		if (fmt[i] != 'i' && fmt[i] != 'd' && fmt[i] != 'u' &&
+		    fmt[i] != 'x' && fmt[i] != 'X') {
+			verbose(env, "invalid format specifier %%%c\n", fmt[i]);
+			return -EINVAL;
+		}
+
+		fmt_cnt++;
+	}
+
+	if (fmt_cnt != num_args) {
+		verbose(env, "too many parameters to print\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -5844,6 +5975,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 					set_map_elem_callback_state);
 		if (err < 0)
 			return -EINVAL;
+	}
+
+	if (func_id == BPF_FUNC_snprintf) {
+		err = check_bpf_snprintf_call(env, regs);
+		if (err < 0)
+			return err;
 	}
 
 	/* reset caller saved regs */

@@ -1271,6 +1271,114 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+struct bpf_snprintf_buf {
+	char buf[MAX_SNPRINTF_MEMCPY][MAX_SNPRINTF_STR_LEN];
+};
+static DEFINE_PER_CPU(struct bpf_snprintf_buf, bpf_snprintf_buf);
+static DEFINE_PER_CPU(int, bpf_snprintf_buf_used);
+
+BPF_CALL_5(bpf_snprintf, char *, out, u32, out_size, char *, fmt, u64 *, args,
+	   u32, args_len)
+{
+	int err, i, buf_used, copy_size, fmt_cnt = 0, memcpy_cnt = 0;
+	u64 params[MAX_SNPRINTF_VARARGS];
+	struct bpf_snprintf_buf *bufs;
+
+	buf_used = this_cpu_inc_return(bpf_snprintf_buf_used);
+	if (WARN_ON_ONCE(buf_used > 1)) {
+		err = -EBUSY;
+		goto out;
+	}
+
+	bufs = this_cpu_ptr(&bpf_snprintf_buf);
+
+	/*
+	 * The verifier has already done most of the heavy-work for us in
+	 * check_bpf_snprintf_call. We know that fmt is well formatted and that
+	 * args_len is valid. The only task left is to convert some of the
+	 * arguments. For the %s and %pi* specifiers, we need to read buffers
+	 * from a kernel address during the helper call.
+	 */
+	for (i = 0; fmt[i] != '\0'; i++) {
+		if (fmt[i] != '%')
+			continue;
+
+		if (fmt[i + 1] == '%') {
+			i++;
+			continue;
+		}
+
+		/* fmt[i] != 0 && fmt[last] == 0, so we can access fmt[i + 1] */
+		i++;
+
+		/* skip optional "[0 +-][num]" width formating field */
+		while (fmt[i] == '0' || fmt[i] == '+'  || fmt[i] == '-' ||
+		       fmt[i] == ' ')
+			i++;
+		if (fmt[i] >= '1' && fmt[i] <= '9') {
+			i++;
+			while (fmt[i] >= '0' && fmt[i] <= '9')
+				i++;
+		}
+
+		if (fmt[i] == 's') {
+			void *unsafe_ptr = (void *)(long)args[fmt_cnt];
+
+			err = strncpy_from_kernel_nofault(bufs->buf[memcpy_cnt],
+							  unsafe_ptr,
+							  MAX_SNPRINTF_STR_LEN);
+			if (err < 0)
+				bufs->buf[memcpy_cnt][0] = '\0';
+			params[fmt_cnt] = (u64)(long)bufs->buf[memcpy_cnt];
+
+			fmt_cnt++;
+			memcpy_cnt++;
+			continue;
+		}
+
+		if (fmt[i] == 'p' && (fmt[i + 1] == 'i' || fmt[i + 1] == 'I')) {
+			copy_size = (fmt[i + 2] == '4') ? 4 : 16;
+
+			err = copy_from_kernel_nofault(bufs->buf[memcpy_cnt],
+						(void *) (long) args[fmt_cnt],
+						copy_size);
+			if (err < 0)
+				memset(bufs->buf[memcpy_cnt], 0, copy_size);
+			params[fmt_cnt] = (u64)(long)bufs->buf[memcpy_cnt];
+
+			i += 2;
+			fmt_cnt++;
+			memcpy_cnt++;
+			continue;
+		}
+
+		params[fmt_cnt] = args[fmt_cnt];
+		fmt_cnt++;
+	}
+
+	/* Maximumly we can have MAX_SNPRINTF_VARARGS parameters, just give
+	 * all of them to snprintf().
+	 */
+	err = snprintf(out, out_size, fmt, params[0], params[1], params[2],
+		       params[3], params[4], params[5], params[6], params[7],
+		       params[8], params[9], params[10], params[11]) + 1;
+
+out:
+	this_cpu_dec(bpf_snprintf_buf_used);
+	return err;
+}
+
+static const struct bpf_func_proto bpf_snprintf_proto = {
+	.func		= bpf_snprintf,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM,
+	.arg2_type	= ARG_CONST_SIZE,
+	.arg3_type	= ARG_PTR_TO_CONST_STR,
+	.arg4_type	= ARG_PTR_TO_MEM,
+	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
 const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1373,6 +1481,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_task_storage_delete_proto;
 	case BPF_FUNC_for_each_map_elem:
 		return &bpf_for_each_map_elem_proto;
+	case BPF_FUNC_snprintf:
+		return &bpf_snprintf_proto;
 	default:
 		return NULL;
 	}
