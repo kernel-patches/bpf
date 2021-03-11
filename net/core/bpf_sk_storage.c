@@ -723,7 +723,7 @@ EXPORT_SYMBOL_GPL(bpf_sk_storage_diag_put);
 struct bpf_iter_seq_sk_storage_map_info {
 	struct bpf_map *map;
 	unsigned int bucket_id;
-	unsigned skip_elems;
+	unsigned int skip_elems;
 };
 
 static struct bpf_local_storage_elem *
