@@ -107,7 +107,7 @@ setup_vethPairs() {
 	        echo "setting up ${VETH0}: namespace: ${NS0}"
 	fi
 	ip netns add ${NS1}
-	ip link add ${VETH0} type veth peer name ${VETH1}
+	ip link add ${VETH0} numtxqueues 4 numrxqueues 4 type veth peer name ${VETH1} numtxqueues 4 numrxqueues 4
 	if [ -f /proc/net/if_inet6 ]; then
 		echo 1 > /proc/sys/net/ipv6/conf/${VETH0}/disable_ipv6
 	fi
