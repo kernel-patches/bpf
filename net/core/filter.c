@@ -2927,7 +2927,7 @@ BPF_CALL_4(bpf_msg_pop_data, struct sk_msg *, msg, u32, start,
 	 *
 	 * Then if B is non-zero AND there is no space allocate space and
 	 * compact A, B regions into page. If there is space shift ring to
-	 * the rigth free'ing the next element in ring to place B, leaving
+	 * the right freeing the next element in ring to place B, leaving
 	 * A untouched except to reduce length.
 	 */
 	if (start != offset) {
@@ -3706,7 +3706,7 @@ static inline int __bpf_skb_change_tail(struct sk_buff *skb, u32 new_len,
 	 * be the one responsible for writing buffers.
 	 *
 	 * It's really expected to be a slow path operation here for
-	 * control message replies, so we're implicitly linearizing,
+	 * control message replies, so we're implicitly linearising,
 	 * uncloning and drop offloads from the skb by this.
 	 */
 	ret = __bpf_try_make_writable(skb, skb->len);
@@ -3774,7 +3774,7 @@ static inline int __bpf_skb_change_head(struct sk_buff *skb, u32 head_room,
 		 * allow to expand on mac header. This means that
 		 * skb->protocol network header, etc, stay as is.
 		 * Compared to bpf_skb_change_tail(), we're more
-		 * flexible due to not needing to linearize or
+		 * flexible due to not needing to linearise or
 		 * reset GSO. Intention for this helper is to be
 		 * used by an L3 skb that needs to push mac header
 		 * for redirection into L2 device.
