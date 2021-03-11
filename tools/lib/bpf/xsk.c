@@ -28,6 +28,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <linux/if_link.h>
 
 #include "bpf.h"
 #include "libbpf.h"
@@ -70,6 +71,7 @@ struct xsk_ctx {
 	int ifindex;
 	struct list_head list;
 	int prog_fd;
+	int link_fd;
 	int xsks_map_fd;
 	char ifname[IFNAMSIZ];
 };
@@ -409,7 +411,7 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 	static const int log_buf_size = 16 * 1024;
 	struct xsk_ctx *ctx = xsk->ctx;
 	char log_buf[log_buf_size];
-	int err, prog_fd;
+	int prog_fd;
 
 	/* This is the fallback C-program:
 	 * SEC("xdp_sock") int xdp_sock_prog(struct xdp_md *ctx)
@@ -499,14 +501,43 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		return prog_fd;
 	}
 
-	err = bpf_set_link_xdp_fd(xsk->ctx->ifindex, prog_fd,
-				  xsk->config.xdp_flags);
+	ctx->prog_fd = prog_fd;
+	return 0;
+}
+
+static int xsk_create_bpf_link(struct xsk_socket *xsk)
+{
+	/* bpf_link only accepts XDP_FLAGS_MODES, but xsk->config.xdp_flags
+	 * might have set XDP_FLAGS_UPDATE_IF_NOEXIST
+	 */
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
+			    .flags = (xsk->config.xdp_flags & XDP_FLAGS_MODES));
+	struct xsk_ctx *ctx = xsk->ctx;
+	__u32 prog_id = 0;
+	int link_fd;
+	int err;
+
+	err = bpf_get_link_xdp_id(ctx->ifindex, &prog_id, xsk->config.xdp_flags);
 	if (err) {
-		close(prog_fd);
+		pr_warn("getting XDP prog id failed\n");
 		return err;
 	}
 
-	ctx->prog_fd = prog_fd;
+	/* if there's a netlink-based XDP prog loaded on interface, bail out
+	 * and ask user to do the removal by himself
+	 */
+	if (prog_id) {
+		pr_warn("Netlink-based XDP prog detected, please unload it in order to launch AF_XDP prog\n");
+		return -EINVAL;
+	}
+
+	link_fd = bpf_link_create(ctx->prog_fd, ctx->ifindex, BPF_XDP, &opts);
+	if (link_fd < 0) {
+		pr_warn("bpf_link_create failed: %s\n", strerror(errno));
+		return link_fd;
+	}
+
+	ctx->link_fd = link_fd;
 	return 0;
 }
 
@@ -626,8 +657,32 @@ static int xsk_lookup_bpf_maps(struct xsk_socket *xsk)
 	}
 
 	err = 0;
-	if (ctx->xsks_map_fd == -1)
+	if (ctx->xsks_map_fd != -1)
+		goto out_map_ids;
+
+	/* if prog load is forced and we found bpf_link on a given ifindex BUT
+	 * the underlying XDP prog is not an AF-XDP one, close old prog's fd,
+	 * load AF-XDP and update existing bpf_link
+	 */
+	if (!(xsk->config.xdp_flags & XDP_FLAGS_UPDATE_IF_NOEXIST)) {
+		close(ctx->prog_fd);
+		err = xsk_create_bpf_maps(xsk);
+		if (err)
+			goto out_map_ids;
+
+		err = xsk_load_xdp_prog(xsk);
+		if (err) {
+			xsk_delete_bpf_maps(xsk);
+			goto out_map_ids;
+		}
+
+		/* if update failed, caller will close fds */
+		err = bpf_link_update(ctx->link_fd, ctx->prog_fd, 0);
+		if (err)
+			pr_warn("bpf_link_update failed: %s\n", strerror(errno));
+	} else {
 		err = -ENOENT;
+	}
 
 out_map_ids:
 	free(map_ids);
@@ -667,6 +722,53 @@ static int xsk_create_xsk_struct(int ifindex, struct xsk_socket *xsk)
 	return 0;
 }
 
+static int xsk_link_lookup(struct xsk_ctx *ctx, __u32 *prog_id)
+{
+	struct bpf_link_info link_info;
+	__u32 link_len;
+	__u32 id = 0;
+	int err;
+	int fd;
+
+	while (true) {
+		err = bpf_link_get_next_id(id, &id);
+		if (err) {
+			if (errno == ENOENT) {
+				err = 0;
+				break;
+			}
+			pr_warn("can't get next link: %s\n", strerror(errno));
+			break;
+		}
+
+		fd = bpf_link_get_fd_by_id(id);
+		if (fd < 0) {
+			if (errno == ENOENT)
+				continue;
+			pr_warn("can't get link by id (%u): %s\n", id, strerror(errno));
+			err = -errno;
+			break;
+		}
+
+		link_len = sizeof(struct bpf_link_info);
+		memset(&link_info, 0, link_len);
+		err = bpf_obj_get_info_by_fd(fd, &link_info, &link_len);
+		if (err) {
+			pr_warn("can't get link info: %s\n", strerror(errno));
+			close(fd);
+			break;
+		}
+		if (link_info.xdp.ifindex == ctx->ifindex) {
+			ctx->link_fd = fd;
+			*prog_id = link_info.prog_id;
+			break;
+		}
+		close(fd);
+	}
+
+	return err;
+}
+
 static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
 				int *xsks_map_fd)
 {
@@ -675,8 +777,7 @@ static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
 	__u32 prog_id = 0;
 	int err;
 
-	err = bpf_get_link_xdp_id(ctx->ifindex, &prog_id,
-				  xsk->config.xdp_flags);
+	err = xsk_link_lookup(ctx, &prog_id);
 	if (err)
 		return err;
 
@@ -686,9 +787,12 @@ static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
 			return err;
 
 		err = xsk_load_xdp_prog(xsk);
-		if (err) {
+		if (err)
 			goto err_load_xdp_prog;
-		}
+
+		err = xsk_create_bpf_link(xsk);
+		if (err)
+			goto err_create_bpf_link;
 	} else {
 		ctx->prog_fd = bpf_prog_get_fd_by_id(prog_id);
 		if (ctx->prog_fd < 0)
@@ -696,20 +800,15 @@ static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
 		err = xsk_lookup_bpf_maps(xsk);
 		if (err) {
 			close(ctx->prog_fd);
+			close(ctx->link_fd);
 			return err;
 		}
 	}
 
 	if (xsk->rx) {
 		err = xsk_set_bpf_maps(xsk);
-		if (err) {
-			if (!prog_id) {
-				goto err_set_bpf_maps;
-			} else {
-				close(ctx->prog_fd);
-				return err;
-			}
-		}
+		if (err)
+			goto err_set_bpf_maps;
 	}
 	if (xsks_map_fd)
 		*xsks_map_fd = ctx->xsks_map_fd;
@@ -717,8 +816,9 @@ static int __xsk_setup_xdp_prog(struct xsk_socket *_xdp,
 	return 0;
 
 err_set_bpf_maps:
+	close(ctx->link_fd);
+err_create_bpf_link:
 	close(ctx->prog_fd);
-	bpf_set_link_xdp_fd(ctx->ifindex, -1, 0);
 err_load_xdp_prog:
 	xsk_delete_bpf_maps(xsk);
 
@@ -1054,6 +1154,7 @@ void xsk_socket__delete(struct xsk_socket *xsk)
 	if (ctx->prog_fd != -1) {
 		xsk_delete_bpf_maps(xsk);
 		close(ctx->prog_fd);
+		close(ctx->link_fd);
 	}
 
 	err = xsk_get_mmap_offsets(xsk->fd, &off);
