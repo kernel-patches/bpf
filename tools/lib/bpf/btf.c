@@ -1108,7 +1108,7 @@ static int btf_fixup_datasec(struct bpf_object *obj, struct btf *btf,
 	const struct btf_type *t_var;
 	struct btf_var_secinfo *vsi;
 	const struct btf_var *var;
-	int ret;
+	int ret, nr_vars = 0;
 
 	if (!name) {
 		pr_debug("No name found in string section for DATASEC kind.\n");
@@ -1117,27 +1117,27 @@ static int btf_fixup_datasec(struct bpf_object *obj, struct btf *btf,
 
 	/* .extern datasec size and var offsets were set correctly during
 	 * extern collection step, so just skip straight to sorting variables
+	 * One exception is the datasec may only have extern funcs,
+	 * t->size is 0 in this case.  This will be handled
+	 * with !nr_vars later.
 	 */
 	if (t->size)
 		goto sort_vars;
 
-	ret = bpf_object__section_size(obj, name, &size);
-	if (ret || !size || (t->size && t->size != size)) {
-		pr_debug("Invalid size for section %s: %u bytes\n", name, size);
-		return -ENOENT;
-	}
-
-	t->size = size;
+	bpf_object__section_size(obj, name, &size);
 
 	for (i = 0, vsi = btf_var_secinfos(t); i < vars; i++, vsi++) {
 		t_var = btf__type_by_id(btf, vsi->type);
-		var = btf_var(t_var);
 
-		if (!btf_is_var(t_var)) {
-			pr_debug("Non-VAR type seen in section %s\n", name);
+		if (btf_is_func(t_var)) {
+			continue;
+		} else if (!btf_is_var(t_var)) {
+			pr_debug("Non-VAR and Non-FUNC type seen in section %s\n", name);
 			return -EINVAL;
 		}
 
+		nr_vars++;
+		var = btf_var(t_var);
 		if (var->linkage == BTF_VAR_STATIC)
 			continue;
 
@@ -1156,6 +1156,16 @@ static int btf_fixup_datasec(struct bpf_object *obj, struct btf *btf,
 
 		vsi->offset = off;
 	}
+
+	if (!nr_vars)
+		return 0;
+
+	if (!size) {
+		pr_debug("Invalid size for section %s: %u bytes\n", name, size);
+		return -ENOENT;
+	}
+
+	t->size = size;
 
 sort_vars:
 	qsort(btf_var_secinfos(t), vars, sizeof(*vsi), compare_vsi_off);

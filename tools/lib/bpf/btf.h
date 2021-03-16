@@ -368,6 +368,11 @@ btf_var_secinfos(const struct btf_type *t)
 	return (struct btf_var_secinfo *)(t + 1);
 }
 
+static inline enum btf_func_linkage btf_func_linkage(const struct btf_type *t)
+{
+	return (enum btf_func_linkage)BTF_INFO_VLEN(t->info);
+}
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
