@@ -9799,12 +9799,23 @@ const struct bpf_prog_ops sk_filter_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
 };
 
+BTF_SET_START(bpf_tc_cls_kfunc_ids)
+BTF_ID(func, bpf_kfunc_call_test1)
+BTF_ID(func, bpf_kfunc_call_test2)
+BTF_SET_END(bpf_tc_cls_kfunc_ids)
+
+static bool tc_cls_check_kern_func_call(u32 kfunc_id)
+{
+	return btf_id_set_contains(&bpf_tc_cls_kfunc_ids, kfunc_id);
+}
+
 const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 	.get_func_proto		= tc_cls_act_func_proto,
 	.is_valid_access	= tc_cls_act_is_valid_access,
 	.convert_ctx_access	= tc_cls_act_convert_ctx_access,
 	.gen_prologue		= tc_cls_act_prologue,
 	.gen_ld_abs		= bpf_gen_ld_abs,
+	.check_kern_func_call	= tc_cls_check_kern_func_call,
 };
 
 const struct bpf_prog_ops tc_cls_act_prog_ops = {
