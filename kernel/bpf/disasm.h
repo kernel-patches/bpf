@@ -22,7 +22,8 @@ const char *func_id_name(int id);
 typedef __printf(2, 3) void (*bpf_insn_print_t)(void *private_data,
 						const char *, ...);
 typedef const char *(*bpf_insn_revmap_call_t)(void *private_data,
-					      const struct bpf_insn *insn);
+					      const struct bpf_insn *insn,
+					      char *buf, size_t len);
 typedef const char *(*bpf_insn_print_imm_t)(void *private_data,
 					    const struct bpf_insn *insn,
 					    __u64 full_imm);

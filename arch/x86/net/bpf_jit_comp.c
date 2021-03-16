@@ -2327,3 +2327,8 @@ out:
 					   tmp : orig_prog);
 	return prog;
 }
+
+bool bpf_jit_supports_kfunc_call(void)
+{
+	return true;
+}

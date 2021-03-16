@@ -426,6 +426,7 @@ enum bpf_reg_type {
 	PTR_TO_PERCPU_BTF_ID,	 /* reg points to a percpu kernel variable */
 	PTR_TO_FUNC,		 /* reg points to a bpf program function */
 	PTR_TO_MAP_KEY,		 /* reg points to a map element key */
+	__BPF_REG_TYPE_MAX,
 };
 
 /* The information passed from prog-specific *_is_valid_access
@@ -479,6 +480,7 @@ struct bpf_verifier_ops {
 				 const struct btf_type *t, int off, int size,
 				 enum bpf_access_type atype,
 				 u32 *next_btf_id);
+	bool (*check_kern_func_call)(u32 kfunc_btf_id);
 };
 
 struct bpf_prog_offload_ops {
@@ -779,6 +781,8 @@ struct btf_mod_pair {
 	struct module *module;
 };
 
+struct bpf_kern_func_desc_tab;
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -816,6 +820,7 @@ struct bpf_prog_aux {
 	struct bpf_prog **func;
 	void *jit_data; /* JIT specific data. arch dependent */
 	struct bpf_jit_poke_descriptor *poke_tab;
+	struct bpf_kern_func_desc_tab *kfunc_tab;
 	u32 size_poke_tab;
 	struct bpf_ksym ksym;
 	const struct bpf_prog_ops *ops;
@@ -1514,6 +1519,9 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 			   struct btf_func_model *m);
 
 struct bpf_reg_state;
+int btf_check_kern_func_arg_match(struct bpf_verifier_env *env,
+				  const struct btf *btf, u32 func_id,
+				  struct bpf_reg_state *regs);
 int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			     struct bpf_reg_state *regs);
 int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog,
@@ -1526,6 +1534,10 @@ struct bpf_link *bpf_link_by_id(u32 id);
 
 const struct bpf_func_proto *bpf_base_func_proto(enum bpf_func_id func_id);
 void bpf_task_storage_free(struct task_struct *task);
+bool bpf_prog_has_kern_func_call(const struct bpf_prog *prog);
+const struct btf_func_model *
+bpf_jit_find_kern_func_model(const struct bpf_prog *prog,
+			      const struct bpf_insn *insn);
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -1705,6 +1717,18 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 
 static inline void bpf_task_storage_free(struct task_struct *task)
 {
+}
+
+static inline bool bpf_prog_has_kern_func_call(const struct bpf_prog *prog)
+{
+	return false;
+}
+
+static inline const struct btf_func_model *
+bpf_jit_find_kern_func_model(const struct bpf_prog *prog,
+			     const struct bpf_insn *insn)
+{
+	return NULL;
 }
 #endif /* CONFIG_BPF_SYSCALL */
 

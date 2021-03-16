@@ -19,16 +19,25 @@ static const char *__func_get_name(const struct bpf_insn_cbs *cbs,
 {
 	BUILD_BUG_ON(ARRAY_SIZE(func_id_str) != __BPF_FUNC_MAX_ID);
 
-	if (insn->src_reg != BPF_PSEUDO_CALL &&
+	if (!insn->src_reg &&
 	    insn->imm >= 0 && insn->imm < __BPF_FUNC_MAX_ID &&
 	    func_id_str[insn->imm])
 		return func_id_str[insn->imm];
 
-	if (cbs && cbs->cb_call)
-		return cbs->cb_call(cbs->private_data, insn);
+	if (cbs && cbs->cb_call) {
+		const char *res;
+
+		res = cbs->cb_call(cbs->private_data, insn, buff, len);
+		if (res)
+			return res;
+	}
 
 	if (insn->src_reg == BPF_PSEUDO_CALL)
-		snprintf(buff, len, "%+d", insn->imm);
+		snprintf(buff, len, "pc%+d", insn->imm);
+	else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
+		snprintf(buff, len, "kfunc#%d", insn->imm);
+	else
+		snprintf(buff, len, "unknown#%d", insn->imm);
 
 	return buff;
 }
@@ -255,18 +264,9 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 		if (opcode == BPF_CALL) {
 			char tmp[64];
 
-			if (insn->src_reg == BPF_PSEUDO_CALL) {
-				verbose(cbs->private_data, "(%02x) call pc%s\n",
-					insn->code,
-					__func_get_name(cbs, insn,
-							tmp, sizeof(tmp)));
-			} else {
-				strcpy(tmp, "unknown");
-				verbose(cbs->private_data, "(%02x) call %s#%d\n", insn->code,
-					__func_get_name(cbs, insn,
-							tmp, sizeof(tmp)),
-					insn->imm);
-			}
+			verbose(cbs->private_data,
+				"(%02x) call %s\n", insn->code,
+				__func_get_name(cbs, insn, tmp, sizeof(tmp)));
 		} else if (insn->code == (BPF_JMP | BPF_JA)) {
 			verbose(cbs->private_data, "(%02x) goto pc%+d\n",
 				insn->code, insn->off);

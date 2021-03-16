@@ -167,7 +167,8 @@ static const char *print_call_helper(struct dump_data *dd,
 }
 
 static const char *print_call(void *private_data,
-			      const struct bpf_insn *insn)
+			      const struct bpf_insn *insn,
+			      char *buf, size_t len)
 {
 	struct dump_data *dd = private_data;
 	unsigned long address = dd->address_call_base + insn->imm;
