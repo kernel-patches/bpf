@@ -498,7 +498,7 @@ static struct btf_raw_test raw_tests[] = {
 	.value_type_id = 7,
 	.max_entries = 1,
 	.btf_load_err = true,
-	.err_str = "Invalid size",
+	.err_str = "Invalid offset+size",
 },
 {
 	.descr = "global data test #10, invalid var size",
@@ -696,7 +696,7 @@ static struct btf_raw_test raw_tests[] = {
 	.err_str = "Invalid offset",
 },
 {
-	.descr = "global data test #15, not var kind",
+	.descr = "global data test #15, not var/func kind",
 	.raw_types = {
 		/* int */
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
@@ -716,7 +716,7 @@ static struct btf_raw_test raw_tests[] = {
 	.value_type_id = 3,
 	.max_entries = 1,
 	.btf_load_err = true,
-	.err_str = "Not a VAR kind member",
+	.err_str = "Neither a VAR nor a FUNC",
 },
 {
 	.descr = "global data test #16, invalid var referencing sec",
@@ -2803,7 +2803,7 @@ static struct btf_raw_test raw_tests[] = {
 			BTF_FUNC_PROTO_ARG_ENC(NAME_TBD, 1),
 			BTF_FUNC_PROTO_ARG_ENC(NAME_TBD, 2),
 		/* void func(int a, unsigned int b) */
-		BTF_TYPE_ENC(NAME_TBD, BTF_INFO_ENC(BTF_KIND_FUNC, 0, 2), 3), 	/* [4] */
+		BTF_TYPE_ENC(NAME_TBD, BTF_INFO_ENC(BTF_KIND_FUNC, 0, 3), 3), 	/* [4] */
 		BTF_END_RAW,
 	},
 	.str_sec = "\0a\0b\0func",
@@ -3529,6 +3529,152 @@ static struct btf_raw_test raw_tests[] = {
 	.key_type_id = 1,
 	.value_type_id = 1,
 	.max_entries = 1,
+},
+
+{
+	.descr = "datasec: func only",
+	.raw_types = {
+		/* int */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		/* void (*)(void) */
+		BTF_FUNC_PROTO_ENC(0, 0),		/* [2] */
+		BTF_FUNC_ENC(NAME_NTH(1), 2),		/* [3] */
+		BTF_FUNC_ENC(NAME_NTH(2), 2),		/* [4] */
+		/* .ksym section */
+		BTF_TYPE_ENC(NAME_NTH(3), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 2), 0), /* [5] */
+		BTF_VAR_SECINFO_ENC(3, 0, 0),
+		BTF_VAR_SECINFO_ENC(4, 0, 0),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0foo1\0foo2\0.ksym\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 1,
+},
+
+{
+	.descr = "datasec: func and var",
+	.raw_types = {
+		/* int */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		/* void (*)(void) */
+		BTF_FUNC_PROTO_ENC(0, 0),		/* [2] */
+		BTF_FUNC_ENC(NAME_NTH(1), 2),		/* [3] */
+		BTF_FUNC_ENC(NAME_NTH(2), 2),		/* [4] */
+		/* int */
+		BTF_VAR_ENC(NAME_NTH(4), 1, 0),		/* [5] */
+		BTF_VAR_ENC(NAME_NTH(5), 1, 0),		/* [6] */
+		/* .ksym section */
+		BTF_TYPE_ENC(NAME_NTH(3), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 4), 8), /* [7] */
+		BTF_VAR_SECINFO_ENC(3, 0, 0),
+		BTF_VAR_SECINFO_ENC(4, 0, 0),
+		BTF_VAR_SECINFO_ENC(5, 0, 4),
+		BTF_VAR_SECINFO_ENC(6, 4, 4),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0foo1\0foo2\0.ksym\0a\0b\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 1,
+},
+
+{
+	.descr = "datasec: func and var, invalid size/offset for func",
+	.raw_types = {
+		/* int */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		/* void (*)(void) */
+		BTF_FUNC_PROTO_ENC(0, 0),		/* [2] */
+		BTF_FUNC_ENC(NAME_NTH(1), 2),		/* [3] */
+		BTF_FUNC_ENC(NAME_NTH(2), 2),		/* [4] */
+		/* int */
+		BTF_VAR_ENC(NAME_NTH(4), 1, 0),		/* [5] */
+		BTF_VAR_ENC(NAME_NTH(5), 1, 0),		/* [6] */
+		/* .ksym section */
+		BTF_TYPE_ENC(NAME_NTH(3), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 4), 8), /* [7] */
+		BTF_VAR_SECINFO_ENC(3, 0, 0),
+		BTF_VAR_SECINFO_ENC(5, 0, 4),
+		BTF_VAR_SECINFO_ENC(4, 4, 0),	/* func has non zero vsi->offset */
+		BTF_VAR_SECINFO_ENC(6, 4, 4),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0foo1\0foo2\0.ksym\0a\0b\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Invalid size/offset",
+},
+
+{
+	.descr = "datasec: func and var, datasec size 0",
+	.raw_types = {
+		/* int */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		/* void (*)(void) */
+		BTF_FUNC_PROTO_ENC(0, 0),		/* [2] */
+		BTF_FUNC_ENC(NAME_NTH(1), 2),		/* [3] */
+		BTF_FUNC_ENC(NAME_NTH(2), 2),		/* [4] */
+		/* int */
+		BTF_VAR_ENC(NAME_NTH(4), 1, 0),		/* [5] */
+		BTF_VAR_ENC(NAME_NTH(5), 1, 0),		/* [6] */
+		/* .ksym section */
+		BTF_TYPE_ENC(NAME_NTH(3), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 4), 0), /* [7] */
+		BTF_VAR_SECINFO_ENC(3, 0, 0),
+		BTF_VAR_SECINFO_ENC(4, 0, 0),
+		BTF_VAR_SECINFO_ENC(5, 0, 4),
+		BTF_VAR_SECINFO_ENC(6, 4, 4),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0foo1\0foo2\0.ksym\0a\0b\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Invalid offset+size",
+},
+
+{
+	.descr = "datasec: func and var, zero vsi->size for var",
+	.raw_types = {
+		/* int */
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		/* void (*)(void) */
+		BTF_FUNC_PROTO_ENC(0, 0),		/* [2] */
+		BTF_FUNC_ENC(NAME_NTH(1), 2),		/* [3] */
+		BTF_FUNC_ENC(NAME_NTH(2), 2),		/* [4] */
+		/* int */
+		BTF_VAR_ENC(NAME_NTH(4), 1, 0),		/* [5] */
+		BTF_VAR_ENC(NAME_NTH(5), 1, 0),		/* [6] */
+		/* .ksym section */
+		BTF_TYPE_ENC(NAME_NTH(3), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 4), 8), /* [7] */
+		BTF_VAR_SECINFO_ENC(3, 0, 0),
+		BTF_VAR_SECINFO_ENC(4, 0, 0),
+		BTF_VAR_SECINFO_ENC(5, 0, 0),	/* var has zero vsi->size */
+		BTF_VAR_SECINFO_ENC(6, 0, 4),
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0foo1\0foo2\0.ksym\0a\0b\0"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 1,
+	.btf_load_err = true,
+	.err_str = "Invalid size",
 },
 
 {

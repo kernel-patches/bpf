@@ -3439,7 +3439,7 @@ static s32 btf_func_check_meta(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	if (btf_type_vlen(t) > BTF_FUNC_GLOBAL) {
+	if (btf_type_vlen(t) > BTF_FUNC_EXTERN) {
 		btf_verifier_log_type(env, t, "Invalid func linkage");
 		return -EINVAL;
 	}
@@ -3532,7 +3532,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 				  u32 meta_left)
 {
 	const struct btf_var_secinfo *vsi;
-	u64 last_vsi_end_off = 0, sum = 0;
+	u64 last_vsi_end_off = 0;
 	u32 i, meta_needed;
 
 	meta_needed = btf_type_vlen(t) * sizeof(*vsi);
@@ -3540,11 +3540,6 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		btf_verifier_log_basic(env, t,
 				       "meta_left:%u meta_needed:%u",
 				       meta_left, meta_needed);
-		return -EINVAL;
-	}
-
-	if (!t->size) {
-		btf_verifier_log_type(env, t, "size == 0");
 		return -EINVAL;
 	}
 
@@ -3569,19 +3564,13 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (vsi->offset < last_vsi_end_off || vsi->offset >= t->size) {
+		if (vsi->offset < last_vsi_end_off) {
 			btf_verifier_log_vsi(env, t, vsi,
 					     "Invalid offset");
 			return -EINVAL;
 		}
 
-		if (!vsi->size || vsi->size > t->size) {
-			btf_verifier_log_vsi(env, t, vsi,
-					     "Invalid size");
-			return -EINVAL;
-		}
-
-		last_vsi_end_off = vsi->offset + vsi->size;
+		last_vsi_end_off = (u64)vsi->offset + vsi->size;
 		if (last_vsi_end_off > t->size) {
 			btf_verifier_log_vsi(env, t, vsi,
 					     "Invalid offset+size");
@@ -3589,12 +3578,6 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		}
 
 		btf_verifier_log_vsi(env, t, vsi, NULL);
-		sum += vsi->size;
-	}
-
-	if (t->size < sum) {
-		btf_verifier_log_type(env, t, "Invalid btf_info size");
-		return -EINVAL;
 	}
 
 	return meta_needed;
@@ -3611,9 +3594,28 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 		u32 var_type_id = vsi->type, type_id, type_size = 0;
 		const struct btf_type *var_type = btf_type_by_id(env->btf,
 								 var_type_id);
-		if (!var_type || !btf_type_is_var(var_type)) {
+		if (!var_type) {
 			btf_verifier_log_vsi(env, v->t, vsi,
-					     "Not a VAR kind member");
+					     "type not found");
+			return -EINVAL;
+		}
+
+		if (btf_type_is_func(var_type)) {
+			if (vsi->size || vsi->offset) {
+				btf_verifier_log_vsi(env, v->t, vsi,
+						     "Invalid size/offset");
+				return -EINVAL;
+			}
+			continue;
+		} else if (btf_type_is_var(var_type)) {
+			if (!vsi->size) {
+				btf_verifier_log_vsi(env, v->t, vsi,
+						     "Invalid size");
+				return -EINVAL;
+			}
+		} else {
+			btf_verifier_log_vsi(env, v->t, vsi,
+					     "Neither a VAR nor a FUNC");
 			return -EINVAL;
 		}
 
@@ -3849,9 +3851,11 @@ static int btf_func_check(struct btf_verifier_env *env,
 	const struct btf_param *args;
 	const struct btf *btf;
 	u16 nr_args, i;
+	bool is_extern;
 
 	btf = env->btf;
 	proto_type = btf_type_by_id(btf, t->type);
+	is_extern = btf_type_vlen(t) == BTF_FUNC_EXTERN;
 
 	if (!proto_type || !btf_type_is_func_proto(proto_type)) {
 		btf_verifier_log_type(env, t, "Invalid type_id");
@@ -3861,7 +3865,7 @@ static int btf_func_check(struct btf_verifier_env *env,
 	args = (const struct btf_param *)(proto_type + 1);
 	nr_args = btf_type_vlen(proto_type);
 	for (i = 0; i < nr_args; i++) {
-		if (!args[i].name_off && args[i].type) {
+		if (!is_extern && !args[i].name_off && args[i].type) {
 			btf_verifier_log_type(env, t, "Invalid arg#%u", i + 1);
 			return -EINVAL;
 		}
