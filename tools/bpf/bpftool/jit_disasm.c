@@ -118,7 +118,10 @@ void disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
 	info.arch = bfd_get_arch(bfdf);
 	info.mach = bfd_get_mach(bfdf);
 	if (disassembler_options)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
 		info.disassembler_options = disassembler_options;
+#pragma GCC diagnostic pop
 	info.buffer = image;
 	info.buffer_length = len;
 
