@@ -346,8 +346,6 @@ struct nfp_insn_meta {
 	struct list_head l;
 };
 
-#define BPF_SIZE_MASK	0x18
-
 static inline u8 mbpf_class(const struct nfp_insn_meta *meta)
 {
 	return BPF_CLASS(meta->insn.code);
@@ -375,7 +373,7 @@ static inline bool is_mbpf_alu(const struct nfp_insn_meta *meta)
 
 static inline bool is_mbpf_load(const struct nfp_insn_meta *meta)
 {
-	return (meta->insn.code & ~BPF_SIZE_MASK) == (BPF_LDX | BPF_MEM);
+	return (meta->insn.code & ~BPF_LD_ST_SIZE_MASK) == (BPF_LDX | BPF_MEM);
 }
 
 static inline bool is_mbpf_jmp32(const struct nfp_insn_meta *meta)
@@ -395,7 +393,7 @@ static inline bool is_mbpf_jmp(const struct nfp_insn_meta *meta)
 
 static inline bool is_mbpf_store(const struct nfp_insn_meta *meta)
 {
-	return (meta->insn.code & ~BPF_SIZE_MASK) == (BPF_STX | BPF_MEM);
+	return (meta->insn.code & ~BPF_LD_ST_SIZE_MASK) == (BPF_STX | BPF_MEM);
 }
 
 static inline bool is_mbpf_load_pkt(const struct nfp_insn_meta *meta)
@@ -430,7 +428,7 @@ static inline bool is_mbpf_classic_store_pkt(const struct nfp_insn_meta *meta)
 
 static inline bool is_mbpf_atomic(const struct nfp_insn_meta *meta)
 {
-	return (meta->insn.code & ~BPF_SIZE_MASK) == (BPF_STX | BPF_ATOMIC);
+	return (meta->insn.code & ~BPF_LD_ST_SIZE_MASK) == (BPF_STX | BPF_ATOMIC);
 }
 
 static inline bool is_mbpf_mul(const struct nfp_insn_meta *meta)

@@ -11384,15 +11384,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		bpf_convert_ctx_access_t convert_ctx_access;
 
-		if (insn->code == (BPF_LDX | BPF_MEM | BPF_B) ||
-		    insn->code == (BPF_LDX | BPF_MEM | BPF_H) ||
-		    insn->code == (BPF_LDX | BPF_MEM | BPF_W) ||
-		    insn->code == (BPF_LDX | BPF_MEM | BPF_DW))
+		/* opcode: BPF_MEM | <size> | BPF_LDX */
+		if ((insn->code & ~BPF_LD_ST_SIZE_MASK) == (BPF_LDX | BPF_MEM))
 			type = BPF_READ;
-		else if (insn->code == (BPF_STX | BPF_MEM | BPF_B) ||
-			 insn->code == (BPF_STX | BPF_MEM | BPF_H) ||
-			 insn->code == (BPF_STX | BPF_MEM | BPF_W) ||
-			 insn->code == (BPF_STX | BPF_MEM | BPF_DW))
+		/* opcode: BPF_MEM | <size> | BPF_STX */
+		else if ((insn->code & ~BPF_LD_ST_SIZE_MASK) == (BPF_STX | BPF_MEM))
 			type = BPF_WRITE;
 		else
 			continue;

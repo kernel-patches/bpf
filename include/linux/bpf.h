@@ -995,6 +995,7 @@ struct bpf_array {
 				 BPF_F_RDONLY_PROG |	\
 				 BPF_F_WRONLY |		\
 				 BPF_F_WRONLY_PROG)
+#define BPF_LD_ST_SIZE_MASK	0x18	/* mask of size modifier */
 
 #define BPF_MAP_CAN_READ	BIT(0)
 #define BPF_MAP_CAN_WRITE	BIT(1)
