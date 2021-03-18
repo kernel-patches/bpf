@@ -64,7 +64,7 @@ __u64 test7_result = 0;
 SEC("fentry/bpf_fentry_test7")
 int BPF_PROG(test7, struct bpf_fentry_test_t *arg)
 {
-	if (arg == 0)
+	if (!arg)
 		test7_result = 1;
 	return 0;
 }
@@ -73,7 +73,7 @@ __u64 test8_result = 0;
 SEC("fentry/bpf_fentry_test8")
 int BPF_PROG(test8, struct bpf_fentry_test_t *arg)
 {
-	if (arg->a == 0)
+	if (!arg->a)
 		test8_result = 1;
 	return 0;
 }
