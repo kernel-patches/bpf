@@ -270,7 +270,7 @@ IS_LITTLE_ENDIAN = $(shell $(CC) -dM -E - </dev/null | \
 MENDIAN=$(if $(IS_LITTLE_ENDIAN),-mlittle-endian,-mbig-endian)
 
 CLANG_SYS_INCLUDES = $(call get_sys_includes,$(CLANG))
-BPF_CFLAGS = -g -D__TARGET_ARCH_$(SRCARCH) $(MENDIAN) 			\
+BPF_CFLAGS = -D__TARGET_ARCH_$(SRCARCH) $(MENDIAN) 			\
 	     -I$(INCLUDE_DIR) -I$(CURDIR) -I$(APIDIR)			\
 	     -I$(abspath $(OUTPUT)/../usr/include)
 
@@ -282,30 +282,39 @@ $(OUTPUT)/test_xdp_noinline.o: BPF_CFLAGS += -fno-inline
 
 $(OUTPUT)/flow_dissector_load.o: flow_dissector_load.h
 
-# Build BPF object using Clang
+# Build BPF object using Clang.
+# Source files with .nobtf.c suffix are built without BTF
 # $1 - input .c file
 # $2 - output .o file
 # $3 - CFLAGS
 define CLANG_BPF_BUILD_RULE
 	$(call msg,CLNG-BPF,$(TRUNNER_BINARY),$2)
-	$(Q)$(CLANG) $3 -O2 -target bpf -c $1 -o $2 -mcpu=v3
+	$(Q)$(CLANG) $3 -O2 -target bpf -mcpu=v3			\
+		     $(if $(filter %.nobtf.c,$1),,-g)			\
+		     -c $1 -o $2
 endef
 # Similar to CLANG_BPF_BUILD_RULE, but with disabled alu32
 define CLANG_NOALU32_BPF_BUILD_RULE
 	$(call msg,CLNG-BPF,$(TRUNNER_BINARY),$2)
-	$(Q)$(CLANG) $3 -O2 -target bpf -c $1 -o $2 -mcpu=v2
+	$(Q)$(CLANG) $3 -O2 -target bpf -mcpu=v2			\
+		     $(if $(filter %.nobtf.c,$1),,-g)			\
+		     -c $1 -o $2
 endef
 # Build BPF object using GCC
 define GCC_BPF_BUILD_RULE
 	$(call msg,GCC-BPF,$(TRUNNER_BINARY),$2)
-	$(Q)$(BPF_GCC) $3 -O2 -c $1 -o $2
+	$(Q)$(BPF_GCC) $3 -O2 						\
+		       $(if $(filter %.nobtf.c,$1),,-g)			\
+		       -c $1 -o $2
 endef
 
 SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
 
 LINKED_SKELS := test_static_linked.skel.h
 
-test_static_linked.skel.h-deps := test_static_linked1.o test_static_linked2.o
+test_static_linked.skel.h-deps := test_static_linked1.o \
+				  test_static_linked2.o \
+				  test_static_linked3.nobtf.o
 
 # Set up extra TRUNNER_XXX "temporary" variables in the environment (relies on
 # $eval()) and pass control to DEFINE_TEST_RUNNER_RULES.

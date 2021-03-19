@@ -6,7 +6,7 @@
 
 void test_static_linked(void)
 {
-	int err;
+	int err, key = 0, value = 0;
 	struct test_static_linked* skel;
 
 	skel = test_static_linked__open();
@@ -34,6 +34,10 @@ void test_static_linked(void)
 
 	ASSERT_EQ(skel->bss->var1, 1 * 2 + 2 + 3, "var1");
 	ASSERT_EQ(skel->bss->var2, 4 * 3 + 5 + 6, "var2");
+
+	err = bpf_map_lookup_elem(bpf_map__fd(skel->maps.legacy_map), &key, &value);
+	ASSERT_OK(err, "legacy_map_lookup");
+	ASSERT_EQ(value, 1 * 3 + 3,  "legacy_map_value");
 
 cleanup:
 	test_static_linked__destroy(skel);
