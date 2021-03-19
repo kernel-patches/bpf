@@ -157,6 +157,11 @@ static inline void xdp_set_frag_size(skb_frag_t *frag, u32 size)
 	frag->bv_len = size;
 }
 
+static inline unsigned int xdp_get_frag_tailroom(const skb_frag_t *frag)
+{
+	return PAGE_SIZE - xdp_get_frag_size(frag) - xdp_get_frag_offset(frag);
+}
+
 struct xdp_frame {
 	void *data;
 	u16 len;
