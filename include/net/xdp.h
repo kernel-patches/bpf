@@ -75,6 +75,10 @@ struct xdp_buff {
 	struct xdp_txq_info *txq;
 	u32 frame_sz:31; /* frame size to deduce data_hard_end/reserved tailroom*/
 	u32 mb:1; /* xdp non-linear buffer */
+	u32 frame_length; /* Total frame length across all buffers. Only needs
+			   * to be updated by helper functions, as it will be
+			   * initialized at XDP program start.
+			   */
 };
 
 static __always_inline void
@@ -235,6 +239,14 @@ void xdp_convert_frame_to_buff(struct xdp_frame *frame, struct xdp_buff *xdp)
 	xdp->data_meta = frame->data - frame->metasize;
 	xdp->frame_sz = frame->frame_sz;
 	xdp->mb = frame->mb;
+	xdp->frame_length = frame->len;
+
+	if (unlikely(xdp->mb)) {
+		struct xdp_shared_info *xdp_sinfo;
+
+		xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
+		xdp->frame_length += xdp_sinfo->data_length;
+	}
 }
 
 static inline

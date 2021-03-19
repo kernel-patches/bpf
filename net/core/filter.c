@@ -3873,6 +3873,7 @@ static int bpf_xdp_mb_adjust_tail(struct xdp_buff *xdp, int offset)
 		memset(xdp_get_frag_address(frag) + size, 0, offset);
 		xdp_set_frag_size(frag, size + offset);
 		xdp_sinfo->data_length += offset;
+		xdp->frame_length += offset;
 	} else {
 		int i, frags_to_free = 0;
 
@@ -3894,6 +3895,7 @@ static int bpf_xdp_mb_adjust_tail(struct xdp_buff *xdp, int offset)
 				 * to adjust the data_length in line.
 				 */
 				xdp_sinfo->data_length -= shrink;
+				xdp->frame_length -= shrink;
 				xdp_set_frag_size(frag, size - shrink);
 				break;
 			}
@@ -9125,6 +9127,12 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 				      offsetof(struct xdp_txq_info, dev));
 		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
 				      offsetof(struct net_device, ifindex));
+		break;
+	case offsetof(struct xdp_md, frame_length):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff,
+						       frame_length),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_buff, frame_length));
 		break;
 	}
 
