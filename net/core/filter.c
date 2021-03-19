@@ -4549,10 +4549,53 @@ static const struct bpf_func_proto bpf_sk_ancestor_cgroup_id_proto = {
 };
 #endif
 
-static unsigned long bpf_xdp_copy(void *dst_buff, const void *src_buff,
+static unsigned long bpf_xdp_copy(void *dst_buff, const void *ctx,
 				  unsigned long off, unsigned long len)
 {
-	memcpy(dst_buff, src_buff + off, len);
+	struct xdp_buff *xdp = (struct xdp_buff *)ctx;
+	struct xdp_shared_info *xdp_sinfo;
+	unsigned long base_len;
+	const void *src_buff;
+
+	if (likely(!xdp->mb)) {
+		src_buff = xdp->data;
+		memcpy(dst_buff, src_buff + off, len);
+
+		return 0;
+	}
+
+	base_len = xdp->data_end - xdp->data;
+	xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
+	do {
+		unsigned long copy_len;
+
+		if (off < base_len) {
+			src_buff = xdp->data + off;
+			copy_len = min(len, base_len - off);
+		} else {
+			unsigned long frag_off_total = base_len;
+			int i;
+
+			for (i = 0; i < xdp_sinfo->nr_frags; i++) {
+				skb_frag_t *frag = &xdp_sinfo->frags[i];
+				unsigned long frag_len = xdp_get_frag_size(frag);
+				unsigned long frag_off = off - frag_off_total;
+
+				if (frag_off < frag_len) {
+					src_buff = xdp_get_frag_address(frag) +
+						   frag_off;
+					copy_len = min(len, frag_len - frag_off);
+					break;
+				}
+				frag_off_total += frag_len;
+			}
+		}
+		memcpy(dst_buff, src_buff, copy_len);
+		off += copy_len;
+		len -= copy_len;
+		dst_buff += copy_len;
+	} while (len);
+
 	return 0;
 }
 
@@ -4564,10 +4607,19 @@ BPF_CALL_5(bpf_xdp_event_output, struct xdp_buff *, xdp, struct bpf_map *, map,
 	if (unlikely(flags & ~(BPF_F_CTXLEN_MASK | BPF_F_INDEX_MASK)))
 		return -EINVAL;
 	if (unlikely(!xdp ||
-		     xdp_size > (unsigned long)(xdp->data_end - xdp->data)))
+		     (likely(!xdp->mb) &&
+		      xdp_size > (unsigned long)(xdp->data_end - xdp->data))))
 		return -EFAULT;
+	if (unlikely(xdp->mb)) {
+		struct xdp_shared_info *xdp_sinfo;
 
-	return bpf_event_output(map, flags, meta, meta_size, xdp->data,
+		xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
+		if (unlikely(xdp_size > ((int)(xdp->data_end - xdp->data) +
+					 xdp_sinfo->data_length)))
+			return -EFAULT;
+	}
+
+	return bpf_event_output(map, flags, meta, meta_size, xdp,
 				xdp_size, bpf_xdp_copy);
 }
 
