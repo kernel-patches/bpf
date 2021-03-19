@@ -85,6 +85,18 @@ static const char *get_map_ident(const struct bpf_map *map)
 	else
 		return NULL;
 }
+static const char *datasec_ident(const char *sec_name)
+{
+	if (strcmp(sec_name, ".data") == 0)
+		return "data";
+	if (strcmp(sec_name, ".bss") == 0)
+		return "bss";
+	if (strcmp(sec_name, ".rodata") == 0)
+		return "rodata";
+	if (strcmp(sec_name, ".kconfig") == 0)
+		return "kconfig";
+	return NULL;
+}
 
 static void codegen_btf_dump_printf(void *ctx, const char *fmt, va_list args)
 {
@@ -104,18 +116,12 @@ static int codegen_datasec_def(struct bpf_object *obj,
 	char var_ident[256];
 	bool strip_mods = false;
 
-	if (strcmp(sec_name, ".data") == 0) {
-		sec_ident = "data";
-	} else if (strcmp(sec_name, ".bss") == 0) {
-		sec_ident = "bss";
-	} else if (strcmp(sec_name, ".rodata") == 0) {
-		sec_ident = "rodata";
-		strip_mods = true;
-	} else if (strcmp(sec_name, ".kconfig") == 0) {
-		sec_ident = "kconfig";
-	} else {
+	sec_ident = datasec_ident(sec_name);
+	if (!sec_ident)
 		return 0;
-	}
+
+	if (strcmp(sec_name, ".rodata") == 0)
+		strip_mods = true;
 
 	printf("	struct %s__%s {\n", obj_name, sec_ident);
 	for (i = 0; i < vlen; i++, sec_var++) {
@@ -188,22 +194,63 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 	struct btf *btf = bpf_object__btf(obj);
 	int n = btf__get_nr_types(btf);
 	struct btf_dump *d;
+	struct bpf_map *map;
+	const struct btf_type *sec;
+	const char *sec_ident, *map_ident;
 	int i, err = 0;
 
 	d = btf_dump__new(btf, NULL, NULL, codegen_btf_dump_printf);
 	if (IS_ERR(d))
 		return PTR_ERR(d);
 
-	for (i = 1; i <= n; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-
-		if (!btf_is_datasec(t))
+	bpf_object__for_each_map(map, obj) {
+		/* only generate definitions for memory-mapped internal maps */
+		if (!bpf_map__is_internal(map))
+			continue;
+		if (!(bpf_map__def(map)->map_flags & BPF_F_MMAPABLE))
 			continue;
 
-		err = codegen_datasec_def(obj, btf, d, t, obj_name);
-		if (err)
-			goto out;
+		map_ident = get_map_ident(map);
+		if (!map_ident)
+			continue;
+
+		sec = NULL;
+		for (i = 1; i <= n; i++) {
+			const struct btf_type *t = btf__type_by_id(btf, i);
+			const char *name;
+
+			if (!btf_is_datasec(t))
+				continue;
+
+			name = btf__str_by_offset(btf, t->name_off);
+			sec_ident = datasec_ident(name);
+			if (!sec_ident)
+				continue;
+
+			if (strcmp(sec_ident, map_ident) == 0) {
+				sec = t;
+				break;
+			}
+		}
+
+		/* In rare cases when BPF object file is using global
+		 * variables, but is compiled without BTF, we will have
+		 * special internal map, but no corresponding DATASEC BTF
+		 * type. In such case, generate empty structs for each such
+		 * map. It will still be memory-mapped as a convenience for
+		 * applications that know exact memory layout to expect.
+		 */
+		if (!sec) {
+			printf("	struct %s__%s {\n", obj_name, map_ident);
+			printf("	} *%s;\n", map_ident);
+		} else {
+			err = codegen_datasec_def(obj, btf, d, sec, obj_name);
+			if (err)
+				goto out;
+		}
 	}
+
+
 out:
 	btf_dump__free(d);
 	return err;
