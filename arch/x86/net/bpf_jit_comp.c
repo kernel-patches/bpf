@@ -2012,7 +2012,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		/* remember return value in a stack for bpf prog to access */
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 		im->ip_after_call = prog;
-		memcpy(prog, ideal_nops[NOP_ATOMIC5], X86_PATCH_SIZE);
+		memcpy(prog, x86_nops[5], X86_PATCH_SIZE);
 		prog += X86_PATCH_SIZE;
 	}
 
