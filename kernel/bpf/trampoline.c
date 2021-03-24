@@ -107,6 +107,26 @@ out:
 	return tr;
 }
 
+static struct module *ip_module_get(unsigned long ip)
+{
+	struct module *mod;
+	int err = 0;
+
+	preempt_disable();
+	mod = __module_text_address(ip);
+	if (mod && !try_module_get(mod))
+		err = -ENOENT;
+	preempt_enable();
+	return err ? ERR_PTR(err) : mod;
+}
+
+static void ip_module_put(unsigned long ip)
+{
+	preempt_disable();
+	module_put(__module_text_address(ip));
+	preempt_enable();
+}
+
 static int is_ftrace_location(void *ip)
 {
 	long addr;
@@ -128,6 +148,9 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 		ret = unregister_ftrace_direct((long)ip, (long)old_addr);
 	else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
+
+	if (!ret)
+		ip_module_put((unsigned long) ip);
 	return ret;
 }
 
@@ -146,6 +169,7 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 /* first time registering */
 static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 {
+	struct module *mod;
 	void *ip = tr->func.addr;
 	int ret;
 
@@ -154,10 +178,17 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 		return ret;
 	tr->func.ftrace_managed = ret;
 
+	mod = ip_module_get((unsigned long) ip);
+	if (IS_ERR(mod))
+		return -ENOENT;
+
 	if (tr->func.ftrace_managed)
 		ret = register_ftrace_direct((long)ip, (long)new_addr);
 	else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
+
+	if (ret)
+		module_put(mod);
 	return ret;
 }
 
