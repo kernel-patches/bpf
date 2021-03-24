@@ -1924,6 +1924,7 @@ extern const struct bpf_func_proto bpf_skc_to_tcp_request_sock_proto;
 extern const struct bpf_func_proto bpf_skc_to_udp6_sock_proto;
 extern const struct bpf_func_proto bpf_copy_from_user_proto;
 extern const struct bpf_func_proto bpf_snprintf_btf_proto;
+extern const struct bpf_func_proto bpf_snprintf_proto;
 extern const struct bpf_func_proto bpf_per_cpu_ptr_proto;
 extern const struct bpf_func_proto bpf_this_cpu_ptr_proto;
 extern const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto;
@@ -2048,5 +2049,10 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 
 struct btf_id_set;
 bool btf_id_set_contains(const struct btf_id_set *set, u32 id);
+
+enum bpf_printf_mod_type;
+int bpf_printf_preamble(char *fmt, u32 fmt_size, const u64 *raw_args,
+			u64 *final_args, enum bpf_printf_mod_type *mod,
+			u32 num_args);
 
 #endif /* _LINUX_BPF_H */
