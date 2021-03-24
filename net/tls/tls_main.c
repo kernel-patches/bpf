@@ -754,6 +754,12 @@ static void tls_update(struct sock *sk, struct proto *p,
 
 	ctx = tls_get_ctx(sk);
 	if (likely(ctx)) {
+		/* TLS does not have an unhash proto in SW cases, but we need
+		 * to ensure we stop using the sock_map unhash routine because
+		 * the associated psock is being removed. So use the original
+		 * unhash handler.
+		 */
+		WRITE_ONCE(sk->sk_prot->unhash, p->unhash);
 		ctx->sk_write_space = write_space;
 		ctx->sk_proto = p;
 	} else {

@@ -349,7 +349,6 @@ static inline void sk_psock_update_proto(struct sock *sk,
 static inline void sk_psock_restore_proto(struct sock *sk,
 					  struct sk_psock *psock)
 {
-	sk->sk_prot->unhash = psock->saved_unhash;
 	if (inet_csk_has_ulp(sk)) {
 		tcp_update_ulp(sk, psock->sk_proto, psock->saved_write_space);
 	} else {
