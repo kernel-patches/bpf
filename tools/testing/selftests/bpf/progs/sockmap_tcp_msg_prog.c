@@ -16,10 +16,7 @@ int bpf_prog1(struct sk_msg_md *msg)
 	if (data + 8 > data_end)
 		return SK_DROP;
 
-	bpf_printk("data length %i\n", (__u64)msg->data_end - (__u64)msg->data);
 	d = (char *)data;
-	bpf_printk("hello sendmsg hook %i %i\n", d[0], d[1]);
-
 	return SK_PASS;
 }
 
