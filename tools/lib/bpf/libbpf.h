@@ -16,6 +16,9 @@
 #include <stdbool.h>
 #include <sys/types.h>  // for size_t
 #include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <linux/pkt_sched.h>
+#include <linux/tc_act/tc_bpf.h>
 
 #include "libbpf_common.h"
 
@@ -772,6 +775,121 @@ LIBBPF_API struct bpf_linker *bpf_linker__new(const char *filename, struct bpf_l
 LIBBPF_API int bpf_linker__add_file(struct bpf_linker *linker, const char *filename);
 LIBBPF_API int bpf_linker__finalize(struct bpf_linker *linker);
 LIBBPF_API void bpf_linker__free(struct bpf_linker *linker);
+
+/*
+ * Requirements:
+ *  If choosing hw offload mode (skip_sw = true), ifindex during prog load must be set.
+ */
+
+/* Convenience macros for the clsact attach hooks */
+#define BPF_TC_CLSACT_INGRESS TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS)
+#define BPF_TC_CLSACT_EGRESS TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_EGRESS)
+
+struct bpf_tc_cls_opts {
+	size_t sz;
+	__u32 chain_index;
+	__u32 handle;
+	__u32 priority;
+	__u32 class_id;
+	bool direct_action;
+	bool skip_sw;
+	bool skip_hw;
+	size_t :0;
+};
+
+#define bpf_tc_cls_opts__last_field skip_hw
+
+/* Acts as a handle for an attached filter */
+struct bpf_tc_cls_attach_id {
+	__u32 ifindex;
+	union {
+		__u32 block_index;
+		__u32 parent_id;
+	};
+	__u32 protocol;
+	__u32 chain_index;
+	__u32 handle;
+	__u32 priority;
+};
+
+struct bpf_tc_cls_info {
+	struct bpf_tc_cls_attach_id id;
+	__u32 class_id;
+	__u32 bpf_flags;
+	__u32 bpf_flags_gen;
+};
+
+/* id is out parameter that will be written to, it must not be NULL */
+LIBBPF_API int bpf_tc_cls_attach_dev(int fd, __u32 ifindex, __u32 parent_id,
+				     __u32 protocol,
+				     const struct bpf_tc_cls_opts *opts,
+				     struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_change_dev(int fd, __u32 ifindex, __u32 parent_id,
+				     __u32 protocol,
+				     const struct bpf_tc_cls_opts *opts,
+				     struct bpf_tc_cls_attach_id *id);
+/* This replaces an existing filter with the same attributes, so the arguments
+ * can be filled in from an existing attach_id when replacing, and otherwise be
+ * used like bpf_tc_cls_attach_dev.
+ */
+LIBBPF_API int bpf_tc_cls_replace_dev(int fd, __u32 ifindex, __u32 parent_id,
+				      __u32 protocol,
+				      const struct bpf_tc_cls_opts *opts,
+				      struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_detach_dev(const struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_get_info_dev(int fd, __u32 ifindex, __u32 parent_id,
+				       __u32 protocol,
+				       const struct bpf_tc_cls_opts *opts,
+				       struct bpf_tc_cls_info *info);
+
+/* id is out parameter that will be written to, it must not be NULL */
+LIBBPF_API int bpf_tc_cls_attach_block(int fd, __u32 block_index,
+				       __u32 protocol,
+				       const struct bpf_tc_cls_opts *opts,
+				       struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_change_block(int fd, __u32 block_index,
+				       __u32 protocol,
+				       const struct bpf_tc_cls_opts *opts,
+				       struct bpf_tc_cls_attach_id *id);
+/* This replaces an existing filter with the same attributes, so the arguments
+ * can be filled in from an existing attach_id when replacing, and otherwise be
+ * used like bpf_tc_cls_attach_block.
+ */
+LIBBPF_API int bpf_tc_cls_replace_block(int fd, __u32 block_index,
+					__u32 protocol,
+					const struct bpf_tc_cls_opts *opts,
+					struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_detach_block(const struct bpf_tc_cls_attach_id *id);
+LIBBPF_API int bpf_tc_cls_get_info_block(int fd, __u32 block_index,
+					 __u32 protocol,
+					 const struct bpf_tc_cls_opts *opts,
+					 struct bpf_tc_cls_info *info);
+
+struct bpf_tc_act_opts {
+	size_t sz;
+	__u32 index;
+	int action;
+	void *cookie;
+	size_t cookie_len;
+	__u8 hw_stats_type;
+	bool no_percpu;
+	size_t :0;
+};
+
+#define bpf_tc_act_opts__last_field no_percpu
+
+struct bpf_tc_act_info {
+	__u32 index;
+	__u32 capab;
+	int action;
+	int refcnt;
+	int bindcnt;
+};
+
+LIBBPF_API int bpf_tc_act_attach(int fd, const struct bpf_tc_act_opts *opts, __u32 *index);
+LIBBPF_API int bpf_tc_act_replace(int fd, const struct bpf_tc_act_opts *opts, __u32 *index);
+LIBBPF_API int bpf_tc_act_detach(__u32 index);
+LIBBPF_API int bpf_tc_act_get_info(int fd, struct bpf_tc_act_info *info);
 
 #ifdef __cplusplus
 } /* extern "C" */

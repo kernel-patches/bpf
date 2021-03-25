@@ -359,4 +359,18 @@ LIBBPF_0.4.0 {
 		bpf_linker__finalize;
 		bpf_linker__free;
 		bpf_linker__new;
+		bpf_tc_act_attach;
+		bpf_tc_act_replace;
+		bpf_tc_act_detach;
+		bpf_tc_act_get_info;
+		bpf_tc_cls_attach_block;
+		bpf_tc_cls_attach_dev;
+		bpf_tc_cls_change_block;
+		bpf_tc_cls_change_dev;
+		bpf_tc_cls_detach_block;
+		bpf_tc_cls_detach_dev;
+		bpf_tc_cls_replace_block;
+		bpf_tc_cls_replace_dev;
+		bpf_tc_cls_get_info_dev;
+		bpf_tc_cls_get_info_block;
 } LIBBPF_0.3.0;
