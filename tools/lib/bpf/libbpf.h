@@ -268,6 +268,21 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
 
+struct bpf_tc_cls_opts;
+struct bpf_tc_act_opts;
+
+LIBBPF_API struct bpf_link *
+bpf_program__attach_tc_cls_dev(struct bpf_program *prog, __u32 ifindex,
+			       __u32 parent_id, __u32 protocol,
+			       const struct bpf_tc_cls_opts *opts);
+LIBBPF_API struct bpf_link *
+bpf_program__attach_tc_cls_block(struct bpf_program *prog, __u32 block_index,
+				 __u32 protocol,
+				 const struct bpf_tc_cls_opts *opts);
+LIBBPF_API struct bpf_link *
+bpf_program__attach_tc_act(struct bpf_program *prog,
+			   const struct bpf_tc_act_opts *opts);
+
 struct bpf_map;
 
 LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops(struct bpf_map *map);

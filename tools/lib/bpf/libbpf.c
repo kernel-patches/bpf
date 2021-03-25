@@ -33,6 +33,7 @@
 #include <linux/filter.h>
 #include <linux/list.h>
 #include <linux/limits.h>
+#include <linux/rtnetlink.h>
 #include <linux/perf_event.h>
 #include <linux/ring_buffer.h>
 #include <linux/version.h>
@@ -6848,7 +6849,7 @@ static int bpf_object__collect_relos(struct bpf_object *obj)
 
 	for (i = 0; i < obj->nr_programs; i++) {
 		struct bpf_program *p = &obj->programs[i];
-		
+
 		if (!p->nr_reloc)
 			continue;
 
@@ -9444,6 +9445,10 @@ int bpf_prog_load_xattr(const struct bpf_prog_load_attr *attr,
 struct bpf_link {
 	int (*detach)(struct bpf_link *link);
 	int (*destroy)(struct bpf_link *link);
+	union {
+		struct bpf_tc_cls_attach_id *tc_cls_id;
+		__u32 tc_act_index;
+	};
 	char *pin_path;		/* NULL, if not pinned */
 	int fd;			/* hook FD, -1 if not applicable */
 	bool disconnected;
@@ -10198,6 +10203,109 @@ struct bpf_link *bpf_map__attach_struct_ops(struct bpf_map *map)
 	link->fd = map->fd;
 
 	return link;
+}
+
+static int bpf_link__detach_tc_cls(struct bpf_link *link)
+{
+	return bpf_tc_cls_detach_dev(link->tc_cls_id);
+}
+
+static int bpf_link__destroy_tc_cls(struct bpf_link *link)
+{
+	zfree(&link->tc_cls_id);
+	return 0;
+}
+
+struct bpf_link *bpf_program__attach_tc_cls_dev(struct bpf_program *prog,
+						__u32 ifindex, __u32 parent_id,
+						__u32 protocol,
+						const struct bpf_tc_cls_opts *opts)
+{
+	struct bpf_tc_cls_attach_id *id = NULL;
+	struct bpf_link *link = NULL;
+	char errmsg[STRERR_BUFSIZE];
+	int prog_fd, err;
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return ERR_PTR(-ENOMEM);
+	link->detach = &bpf_link__detach_tc_cls;
+	link->destroy = &bpf_link__destroy_tc_cls;
+	link->fd = -1;
+
+	id = calloc(1, sizeof(*id));
+	if (!id) {
+		err = -ENOMEM;
+		goto end;
+	}
+
+	err = bpf_tc_cls_attach_dev(prog_fd, ifindex, parent_id, protocol, opts, id);
+	if (err < 0) {
+		pr_warn("prog '%s': failed to attach classifier: %s\n",
+			prog->name,
+			libbpf_strerror_r(err, errmsg, sizeof(errmsg)));
+		goto end;
+	}
+
+	link->tc_cls_id = id;
+	return link;
+
+end:
+	free(id);
+	free(link);
+	return ERR_PTR(err);
+}
+
+struct bpf_link *bpf_program__attach_tc_cls_block(struct bpf_program *prog,
+						  __u32 block_index, __u32 protocol,
+						  const struct bpf_tc_cls_opts *opts)
+{
+	return bpf_program__attach_tc_cls_dev(prog, TCM_IFINDEX_MAGIC_BLOCK, block_index,
+					      protocol, opts);
+}
+
+static int bpf_link__detach_tc_act(struct bpf_link *link)
+{
+	return bpf_tc_act_detach(link->tc_act_index);
+}
+
+struct bpf_link *bpf_program__attach_tc_act(struct bpf_program *prog,
+					    const struct bpf_tc_act_opts *opts)
+{
+	struct bpf_link *link = NULL;
+	char errmsg[STRERR_BUFSIZE];
+	int prog_fd, err;
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loading\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return ERR_PTR(-ENOMEM);
+	link->detach = &bpf_link__detach_tc_act;
+	link->fd = -1;
+
+	err = bpf_tc_act_attach(prog_fd, opts, &link->tc_act_index);
+	if (err < 0) {
+		pr_warn("prog '%s': failed to attach action: %s\n", prog->name,
+			libbpf_strerror_r(err, errmsg, sizeof(errmsg)));
+		goto end;
+	}
+
+	return link;
+
+end:
+	free(link);
+	return ERR_PTR(err);
 }
 
 enum bpf_perf_event_ret

@@ -373,4 +373,7 @@ LIBBPF_0.4.0 {
 		bpf_tc_cls_replace_dev;
 		bpf_tc_cls_get_info_dev;
 		bpf_tc_cls_get_info_block;
+		bpf_program__attach_tc_cls_dev;
+		bpf_program__attach_tc_cls_block;
+		bpf_program__attach_tc_act;
 } LIBBPF_0.3.0;
