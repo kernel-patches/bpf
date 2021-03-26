@@ -8,6 +8,11 @@
 #define MAX_ENTRIES 8
 #define HALF_ENTRIES (MAX_ENTRIES >> 1)
 
+#ifndef PAGE_SIZE
+/* use reasonable value for various configurations */
+#define PAGE_SIZE 65536
+#endif
+
 _Static_assert(MAX_ENTRIES < LOOP_BOUND, "MAX_ENTRIES must be < LOOP_BOUND");
 
 enum bpf_map_type g_map_type = BPF_MAP_TYPE_UNSPEC;
@@ -635,7 +640,7 @@ struct bpf_ringbuf_map {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 12);
+	__uint(max_entries, PAGE_SIZE);
 } m_ringbuf SEC(".maps");
 
 static inline int check_ringbuf(void)
@@ -643,7 +648,7 @@ static inline int check_ringbuf(void)
 	struct bpf_ringbuf_map *ringbuf = (struct bpf_ringbuf_map *)&m_ringbuf;
 	struct bpf_map *map = (struct bpf_map *)&m_ringbuf;
 
-	VERIFY(check(&ringbuf->map, map, 0, 0, 1 << 12));
+	VERIFY(check(&ringbuf->map, map, 0, 0, PAGE_SIZE));
 
 	return 1;
 }
