@@ -201,6 +201,8 @@ static void run_test(int cgroup_fd)
 	if (CHECK(!skel, "skel_load", "sockopt_sk skeleton failed\n"))
 		goto cleanup;
 
+	skel->bss->page_size = getpagesize();
+
 	skel->links._setsockopt =
 		bpf_program__attach_cgroup(skel->progs._setsockopt, cgroup_fd);
 	if (CHECK(IS_ERR(skel->links._setsockopt),
