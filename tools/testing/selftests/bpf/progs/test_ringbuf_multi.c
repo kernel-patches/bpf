@@ -4,6 +4,11 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
+#ifndef PAGE_SIZE
+/* use reasonable value for various configurations */
+#define PAGE_SIZE 65536
+#endif
+
 char _license[] SEC("license") = "GPL";
 
 struct sample {
@@ -15,7 +20,7 @@ struct sample {
 
 struct ringbuf_map {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 12);
+	__uint(max_entries, PAGE_SIZE);
 } ringbuf1 SEC(".maps"),
   ringbuf2 SEC(".maps");
 

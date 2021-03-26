@@ -5,11 +5,16 @@
 #include <stdint.h>
 #include <bpf/bpf_helpers.h>
 
+#ifndef PAGE_SIZE
+/* use reasonable value for various configurations */
+#define PAGE_SIZE 65536
+#endif
+
 char _license[] SEC("license") = "GPL";
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 4096);
+	__uint(max_entries, PAGE_SIZE);
 	__uint(map_flags, BPF_F_MMAPABLE | BPF_F_RDONLY_PROG);
 	__type(key, __u32);
 	__type(value, char);
@@ -17,7 +22,8 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 512 * 4); /* at least 4 pages of data */
+	/* at least 4 pages of data */
+	__uint(max_entries, 4 * (PAGE_SIZE / sizeof (__u64)));
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, __u32);
 	__type(value, __u64);

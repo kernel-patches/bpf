@@ -15,6 +15,11 @@
 #include "test_ringbuf.skel.h"
 
 #define EDONE 7777
+#ifdef PAGE_SIZE
+#undef PAGE_SIZE
+#endif
+/* this is not actual page size, but the value used for ringbuf */
+#define PAGE_SIZE 65536
 
 static int duration = 0;
 
@@ -110,9 +115,9 @@ void test_ringbuf(void)
 	CHECK(skel->bss->avail_data != 3 * rec_sz,
 	      "err_avail_size", "exp %ld, got %ld\n",
 	      3L * rec_sz, skel->bss->avail_data);
-	CHECK(skel->bss->ring_size != 4096,
+	CHECK(skel->bss->ring_size != PAGE_SIZE,
 	      "err_ring_size", "exp %ld, got %ld\n",
-	      4096L, skel->bss->ring_size);
+	      (long)PAGE_SIZE, skel->bss->ring_size);
 	CHECK(skel->bss->cons_pos != 0,
 	      "err_cons_pos", "exp %ld, got %ld\n",
 	      0L, skel->bss->cons_pos);
