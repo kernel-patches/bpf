@@ -191,7 +191,7 @@ static void *ringbuf_libbpf_consumer(void *input)
 {
 	struct ringbuf_libbpf_ctx *ctx = &ringbuf_libbpf_ctx;
 
-	while (ring_buffer__poll(ctx->ringbuf, -1) >= 0) {
+	while (ring_buffer__poll_wait(ctx->ringbuf) >= 0) {
 		if (args.back2back)
 			bufs_trigger_batch();
 	}

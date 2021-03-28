@@ -121,7 +121,7 @@ void test_ringbuf(void)
 	      3L * rec_sz, skel->bss->prod_pos);
 
 	/* poll for samples */
-	err = ring_buffer__poll(ringbuf, -1);
+	err = ring_buffer__poll_wait(ringbuf);
 
 	/* -EDONE is used as an indicator that we are done */
 	if (CHECK(err != -EDONE, "err_done", "done err: %d\n", err))
@@ -130,7 +130,7 @@ void test_ringbuf(void)
 	CHECK(cnt != 2, "cnt", "exp %d samples, got %d\n", 2, cnt);
 
 	/* we expect extra polling to return nothing */
-	err = ring_buffer__poll(ringbuf, 0);
+	err = ring_buffer__poll_nowait(ringbuf);
 	if (CHECK(err != 0, "extra_samples", "poll result: %d\n", err))
 		goto cleanup;
 	cnt = atomic_xchg(&sample_cnt, 0);
@@ -148,7 +148,7 @@ void test_ringbuf(void)
 	CHECK(skel->bss->cons_pos != 3 * rec_sz,
 	      "err_cons_pos", "exp %ld, got %ld\n",
 	      3L * rec_sz, skel->bss->cons_pos);
-	err = ring_buffer__poll(ringbuf, -1);
+	err = ring_buffer__poll_wait(ringbuf);
 	CHECK(err <= 0, "poll_err", "err %d\n", err);
 	cnt = atomic_xchg(&sample_cnt, 0);
 	CHECK(cnt != 2, "cnt", "exp %d samples, got %d\n", 2, cnt);

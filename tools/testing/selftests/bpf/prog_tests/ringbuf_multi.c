@@ -80,12 +80,12 @@ void test_ringbuf_multi(void)
 	syscall(__NR_getpgid);
 
 	/* poll for samples, should get 2 ringbufs back */
-	err = ring_buffer__poll(ringbuf, -1);
+	err = ring_buffer__poll_wait(ringbuf);
 	if (CHECK(err != 2, "poll_res", "expected 2 records, got %d\n", err))
 		goto cleanup;
 
 	/* expect extra polling to return nothing */
-	err = ring_buffer__poll(ringbuf, 0);
+	err = ring_buffer__poll_nowait(ringbuf);
 	if (CHECK(err < 0, "extra_samples", "poll result: %d\n", err))
 		goto cleanup;
 

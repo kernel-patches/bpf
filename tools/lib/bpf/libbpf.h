@@ -540,6 +540,9 @@ LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 
+#define ring_buffer__poll_wait(rb) ring_buffer__poll(rb, -1)
+#define ring_buffer__poll_nowait(rb) ring_buffer__poll(rb, 0)
+
 /* Perf buffer APIs */
 struct perf_buffer;
 
