@@ -839,6 +839,12 @@ dwarf-version-$(CONFIG_DEBUG_INFO_DWARF5) := 5
 DEBUG_CFLAGS	+= -gdwarf-$(dwarf-version-y)
 endif
 
+# gcc emits compilation flags in dwarf DW_AT_producer by default
+# while clang needs explicit flag. Add this flag explicitly.
+ifdef CONFIG_CC_IS_CLANG
+DEBUG_CFLAGS	+= -grecord-gcc-switches
+endif
+
 ifdef CONFIG_DEBUG_INFO_REDUCED
 DEBUG_CFLAGS	+= $(call cc-option, -femit-struct-debug-baseonly) \
 		   $(call cc-option,-fno-var-tracking)
