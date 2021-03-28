@@ -24,7 +24,7 @@ static __always_inline long get_flags()
 	long sz;
 
 	if (!wakeup_data_size)
-		return 0;
+		return BPF_RB_MAY_WAKEUP;
 
 	sz = bpf_ringbuf_query(&ringbuf, BPF_RB_AVAIL_DATA);
 	return sz >= wakeup_data_size ? BPF_RB_FORCE_WAKEUP : BPF_RB_NO_WAKEUP;

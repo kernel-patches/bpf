@@ -71,7 +71,7 @@ int test_ringbuf(void *ctx)
 	sample->seq = total;
 	total += 1;
 
-	bpf_ringbuf_submit(sample, 0);
+	bpf_ringbuf_submit(sample, BPF_RB_MAY_WAKEUP);
 
 	return 0;
 }

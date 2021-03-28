@@ -4058,6 +4058,8 @@ union bpf_attr {
  * 		Copy *size* bytes from *data* into a ring buffer *ringbuf*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
  * 		of new data availability is sent.
+ * 		If **BPF_RB_MAY_WAKEUP** is specified in *flags*, notification
+ * 		of new data availability is sent if needed.
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 	Return
@@ -4066,6 +4068,7 @@ union bpf_attr {
  * void *bpf_ringbuf_reserve(void *ringbuf, u64 size, u64 flags)
  * 	Description
  * 		Reserve *size* bytes of payload in a ring buffer *ringbuf*.
+ * 		*flags* must be 0.
  * 	Return
  * 		Valid pointer with *size* bytes of memory available; NULL,
  * 		otherwise.
@@ -4075,6 +4078,8 @@ union bpf_attr {
  * 		Submit reserved ring buffer sample, pointed to by *data*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
  * 		of new data availability is sent.
+ * 		If **BPF_RB_MAY_WAKEUP** is specified in *flags*, notification
+ * 		of new data availability is sent if needed.
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 	Return
@@ -4085,6 +4090,8 @@ union bpf_attr {
  * 		Discard reserved ring buffer sample, pointed to by *data*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
  * 		of new data availability is sent.
+ * 		If **BPF_RB_MAY_WAKEUP** is specified in *flags*, notification
+ * 		of new data availability is sent if needed.
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 	Return
@@ -4965,6 +4972,7 @@ enum {
  * BPF_FUNC_bpf_ringbuf_output flags.
  */
 enum {
+	BPF_RB_MAY_WAKEUP		= 0,
 	BPF_RB_NO_WAKEUP		= (1ULL << 0),
 	BPF_RB_FORCE_WAKEUP		= (1ULL << 1),
 };

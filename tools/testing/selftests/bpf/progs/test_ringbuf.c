@@ -21,7 +21,7 @@ struct {
 /* inputs */
 int pid = 0;
 long value = 0;
-long flags = 0;
+long flags = BPF_RB_MAY_WAKEUP;
 
 /* outputs */
 long total = 0;

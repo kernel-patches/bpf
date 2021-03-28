@@ -38,7 +38,7 @@ void BPF_PROG(ima, struct linux_binprm *bprm)
 			return;
 
 		*sample = ima_hash;
-		bpf_ringbuf_submit(sample, 0);
+		bpf_ringbuf_submit(sample, BPF_RB_MAY_WAKEUP);
 	}
 
 	return;
