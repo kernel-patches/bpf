@@ -397,26 +397,35 @@ static void bpf_ringbuf_commit(void *sample, u64 flags, bool discard)
 
 BPF_CALL_2(bpf_ringbuf_submit, void *, sample, u64, flags)
 {
+	if (unlikely(flags & ~(BPF_RB_NO_WAKEUP | BPF_RB_FORCE_WAKEUP)))
+		return -EINVAL;
+
 	bpf_ringbuf_commit(sample, flags, false /* discard */);
+
 	return 0;
 }
 
 const struct bpf_func_proto bpf_ringbuf_submit_proto = {
 	.func		= bpf_ringbuf_submit,
-	.ret_type	= RET_VOID,
+	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_ALLOC_MEM,
 	.arg2_type	= ARG_ANYTHING,
 };
 
 BPF_CALL_2(bpf_ringbuf_discard, void *, sample, u64, flags)
 {
+
+	if (unlikely(flags & ~(BPF_RB_NO_WAKEUP | BPF_RB_FORCE_WAKEUP)))
+		return -EINVAL;
+
 	bpf_ringbuf_commit(sample, flags, true /* discard */);
+
 	return 0;
 }
 
 const struct bpf_func_proto bpf_ringbuf_discard_proto = {
 	.func		= bpf_ringbuf_discard,
-	.ret_type	= RET_VOID,
+	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_ALLOC_MEM,
 	.arg2_type	= ARG_ANYTHING,
 };

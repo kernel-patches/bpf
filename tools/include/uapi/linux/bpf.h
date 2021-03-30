@@ -4070,7 +4070,7 @@ union bpf_attr {
  * 		Valid pointer with *size* bytes of memory available; NULL,
  * 		otherwise.
  *
- * void bpf_ringbuf_submit(void *data, u64 flags)
+ * long bpf_ringbuf_submit(void *data, u64 flags)
  * 	Description
  * 		Submit reserved ring buffer sample, pointed to by *data*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
@@ -4078,9 +4078,9 @@ union bpf_attr {
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 	Return
- * 		Nothing. Always succeeds.
+ * 		0 on success, or a negative error in case of failure.
  *
- * void bpf_ringbuf_discard(void *data, u64 flags)
+ * long bpf_ringbuf_discard(void *data, u64 flags)
  * 	Description
  * 		Discard reserved ring buffer sample, pointed to by *data*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
@@ -4088,7 +4088,7 @@ union bpf_attr {
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 	Return
- * 		Nothing. Always succeeds.
+ * 		0 on success, or a negative error in case of failure.
  *
  * u64 bpf_ringbuf_query(void *ringbuf, u64 flags)
  *	Description
