@@ -108,8 +108,8 @@
 #define A64_CMN_I(sf, Rn, imm12) A64_ADDS_I(sf, A64_ZR, Rn, imm12)
 /* Rn - imm12; set condition flags */
 #define A64_CMP_I(sf, Rn, imm12) A64_SUBS_I(sf, A64_ZR, Rn, imm12)
-/* Rd = Rn */
-#define A64_MOV(sf, Rd, Rn) A64_ADD_I(sf, Rd, Rn, 0)
+/* Rd = Rn; MOV (to/from SP) */
+#define A64_MOV_SP(sf, Rd, Rn) A64_ADD_I(sf, Rd, Rn, 0)
 
 /* Bitfield move */
 #define A64_BITFIELD(sf, Rd, Rn, immr, imms, type) \
@@ -133,6 +133,9 @@
 /* Zero extend */
 #define A64_UXTH(sf, Rd, Rn) A64_UBFM(sf, Rd, Rn, 0, 15)
 #define A64_UXTW(sf, Rd, Rn) A64_UBFM(sf, Rd, Rn, 0, 31)
+
+/* Rd = Rm; MOV (register) */
+#define A64_MOV(sf, Rd, Rm) aarch64_insn_gen_move_reg(Rd, Rm, A64_VARIANT(sf))
 
 /* Move wide (immediate) */
 #define A64_MOVEW(sf, Rd, imm16, shift, type) \

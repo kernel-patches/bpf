@@ -229,7 +229,7 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 
 	/* Save FP and LR registers to stay align with ARM64 AAPCS */
 	emit(A64_PUSH(A64_FP, A64_LR, A64_SP), ctx);
-	emit(A64_MOV(1, A64_FP, A64_SP), ctx);
+	emit(A64_MOV_SP(1, A64_FP, A64_SP), ctx);
 
 	/* Save callee-saved registers */
 	emit(A64_PUSH(r6, r7, A64_SP), ctx);
@@ -237,7 +237,7 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 	emit(A64_PUSH(fp, tcc, A64_SP), ctx);
 
 	/* Set up BPF prog stack base register */
-	emit(A64_MOV(1, fp, A64_SP), ctx);
+	emit(A64_MOV_SP(1, fp, A64_SP), ctx);
 
 	if (!ebpf_from_cbpf) {
 		/* Initialize tail_call_cnt */
