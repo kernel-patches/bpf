@@ -517,14 +517,9 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			return ERR_PTR(err);
 
 		skb_reserve(skb, hr);
-		skb_put(skb, len);
 
 		buffer = xsk_buff_raw_get_data(xs->pool, desc->addr);
-		err = skb_store_bits(skb, 0, buffer, len);
-		if (unlikely(err)) {
-			kfree_skb(skb);
-			return ERR_PTR(err);
-		}
+		memcpy(__skb_put(skb, len), buffer, ALIGN(len, sizeof(long)));
 	}
 
 	skb->dev = dev;
