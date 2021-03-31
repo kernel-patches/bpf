@@ -227,8 +227,13 @@ gen_btf()
 
 	vmlinux_link ${1}
 
+	local paholeopt=-J
+	if ${PAHOLE} --btf_gen_floats --help >/dev/null 2>&1; then
+		paholeopt="${paholeopt} --btf_gen_floats"
+	fi
+
 	info "BTF" ${2}
-	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} -J ${1}
+	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} ${paholeopt} ${1}
 
 	# Create ${2} which contains just .BTF section but no symbols. Add
 	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
