@@ -445,6 +445,9 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 	sock_wfree(skb);
 }
 
+#define XSK_SKB_HEADLEN		256
+#define XSK_COPY_THRESHOLD	(XSK_SKB_HEADLEN / 2)
+
 static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 					      struct xdp_desc *desc)
 {
@@ -452,13 +455,21 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 	u32 hr, len, ts, offset, copy, copied;
 	struct sk_buff *skb;
 	struct page *page;
+	bool need_pull;
 	void *buffer;
 	int err, i;
 	u64 addr;
 
 	hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(xs->dev->needed_headroom));
+	len = hr;
 
-	skb = sock_alloc_send_skb(&xs->sk, hr, 1, &err);
+	need_pull = !(xs->dev->priv_flags & IFF_TX_SKB_NO_LINEAR);
+	if (need_pull) {
+		len += XSK_SKB_HEADLEN;
+		hr += NET_IP_ALIGN;
+	}
+
+	skb = sock_alloc_send_skb(&xs->sk, len, 1, &err);
 	if (unlikely(!skb))
 		return ERR_PTR(err);
 
@@ -488,6 +499,11 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 	skb->data_len += len;
 	skb->truesize += ts;
 
+	if (need_pull && unlikely(!__pskb_pull_tail(skb, ETH_HLEN))) {
+		kfree_skb(skb);
+		return ERR_PTR(-ENOMEM);
+	}
+
 	refcount_add(ts, &xs->sk.sk_wmem_alloc);
 
 	return skb;
@@ -498,19 +514,20 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 {
 	struct net_device *dev = xs->dev;
 	struct sk_buff *skb;
+	u32 len = desc->len;
 
-	if (dev->priv_flags & IFF_TX_SKB_NO_LINEAR) {
+	if ((dev->priv_flags & IFF_TX_SKB_NO_LINEAR) ||
+	    (len > XSK_COPY_THRESHOLD && likely(dev->features & NETIF_F_SG))) {
 		skb = xsk_build_skb_zerocopy(xs, desc);
 		if (IS_ERR(skb))
 			return skb;
 	} else {
-		u32 hr, tr, len;
 		void *buffer;
+		u32 hr, tr;
 		int err;
 
 		hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(dev->needed_headroom));
 		tr = dev->needed_tailroom;
-		len = desc->len;
 
 		skb = sock_alloc_send_skb(&xs->sk, hr + len + tr, 1, &err);
 		if (unlikely(!skb))
