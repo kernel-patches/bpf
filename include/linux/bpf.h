@@ -2078,4 +2078,6 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 struct btf_id_set;
 bool btf_id_set_contains(const struct btf_id_set *set, u32 id);
 
+int bpf_timer_create(union bpf_attr *attr);
+
 #endif /* _LINUX_BPF_H */

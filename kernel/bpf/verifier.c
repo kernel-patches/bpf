@@ -5991,6 +5991,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			return -EINVAL;
 	}
 
+	if (func_id == BPF_FUNC_map_delete_elem &&
+	    env->prog->type == BPF_PROG_TYPE_TIMER) {
+		verbose(env, "bpf_map_delete_elem() can't be called in a timer program\n");
+		return -EINVAL;
+	}
+
 	/* reset caller saved regs */
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
 		mark_reg_not_init(env, regs, caller_saved[i]);

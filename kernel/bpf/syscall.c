@@ -4350,6 +4350,19 @@ out_prog_put:
 	return ret;
 }
 
+#define BPF_TIMER_CREATE_LAST_FIELD timer_create.flags
+
+static int bpf_create_timer(union bpf_attr *attr)
+{
+	if (CHECK_ATTR(BPF_TIMER_CREATE))
+		return -EINVAL;
+
+	if (!bpf_capable())
+		return -EPERM;
+
+	return bpf_timer_create(attr);
+}
+
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
 {
 	union bpf_attr attr;
@@ -4485,6 +4498,9 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		break;
 	case BPF_PROG_BIND_MAP:
 		err = bpf_prog_bind_map(&attr);
+		break;
+	case BPF_TIMER_CREATE:
+		err = bpf_create_timer(&attr);
 		break;
 	default:
 		err = -EINVAL;
