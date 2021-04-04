@@ -12,10 +12,7 @@ static int duration;
 
 typedef unsigned long long map_key_t;
 typedef unsigned long long map_value_t;
-typedef struct {
-	map_value_t v; /* padding */
-} __bpf_percpu_val_align pcpu_map_value_t;
-
+typedef BPF_PERCPU_TYPE(map_value_t) pcpu_map_value_t;
 
 static int map_populate(int map_fd, int num)
 {
