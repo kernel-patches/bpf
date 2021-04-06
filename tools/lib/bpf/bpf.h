@@ -128,6 +128,16 @@ LIBBPF_API int bpf_map_delete_elem(int fd, const void *key);
 LIBBPF_API int bpf_map_get_next_key(int fd, const void *key, void *next_key);
 LIBBPF_API int bpf_map_freeze(int fd);
 
+#define __bpf_percpu_align __attribute__((__aligned__(8)))
+
+#define BPF_PERCPU_TYPE(type)		\
+	struct {			\
+		type v;			\
+		/* padding */		\
+	} __bpf_percpu_align
+
+#define bpf_percpu(name, cpu) ((name)[(cpu)].v)
+
 struct bpf_map_batch_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	__u64 elem_flags;

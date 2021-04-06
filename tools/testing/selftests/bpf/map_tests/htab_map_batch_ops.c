@@ -10,27 +10,31 @@
 #include <bpf_util.h>
 #include <test_maps.h>
 
+typedef BPF_PERCPU_TYPE(int) pcpu_map_value_t;
+
 static void map_batch_update(int map_fd, __u32 max_entries, int *keys,
 			     void *values, bool is_pcpu)
 {
-	typedef BPF_DECLARE_PERCPU(int, value);
-	value *v = NULL;
+	unsigned int nr_cpus = bpf_num_possible_cpus();
+	pcpu_map_value_t *v;
 	int i, j, err;
+	int offset = 0;
 	DECLARE_LIBBPF_OPTS(bpf_map_batch_opts, opts,
 		.elem_flags = 0,
 		.flags = 0,
 	);
 
 	if (is_pcpu)
-		v = (value *)values;
+		v = values;
 
 	for (i = 0; i < max_entries; i++) {
 		keys[i] = i + 1;
 		if (is_pcpu)
-			for (j = 0; j < bpf_num_possible_cpus(); j++)
-				bpf_percpu(v[i], j) = i + 2 + j;
+			for (j = 0; j < nr_cpus; j++)
+				bpf_percpu(v + offset, j) = i + 2 + j;
 		else
 			((int *)values)[i] = i + 2;
+		offset += nr_cpus;
 	}
 
 	err = bpf_map_update_batch(map_fd, keys, values, &max_entries, &opts);
@@ -40,22 +44,23 @@ static void map_batch_update(int map_fd, __u32 max_entries, int *keys,
 static void map_batch_verify(int *visited, __u32 max_entries,
 			     int *keys, void *values, bool is_pcpu)
 {
-	typedef BPF_DECLARE_PERCPU(int, value);
-	value *v = NULL;
+	unsigned int nr_cpus = bpf_num_possible_cpus();
+	pcpu_map_value_t *v;
 	int i, j;
+	int offset = 0;
 
 	if (is_pcpu)
-		v = (value *)values;
+		v = values;
 
 	memset(visited, 0, max_entries * sizeof(*visited));
 	for (i = 0; i < max_entries; i++) {
-
 		if (is_pcpu) {
-			for (j = 0; j < bpf_num_possible_cpus(); j++) {
-				CHECK(keys[i] + 1 + j != bpf_percpu(v[i], j),
+			for (j = 0; j < nr_cpus; j++) {
+				int value = bpf_percpu(v + offset, j);
+				CHECK(keys[i] + 1 + j != value,
 				      "key/value checking",
-				      "error: i %d j %d key %d value %d\n",
-				      i, j, keys[i], bpf_percpu(v[i],  j));
+				      "error: i %d j %d key %d value %d\n", i,
+				      j, keys[i], value);
 			}
 		} else {
 			CHECK(keys[i] + 1 != ((int *)values)[i],
@@ -63,9 +68,8 @@ static void map_batch_verify(int *visited, __u32 max_entries,
 			      "error: i %d key %d value %d\n", i, keys[i],
 			      ((int *)values)[i]);
 		}
-
+		offset += nr_cpus;
 		visited[i] = 1;
-
 	}
 	for (i = 0; i < max_entries; i++) {
 		CHECK(visited[i] != 1, "visited checking",
@@ -75,11 +79,10 @@ static void map_batch_verify(int *visited, __u32 max_entries,
 
 void __test_map_lookup_and_delete_batch(bool is_pcpu)
 {
+	unsigned int nr_cpus = bpf_num_possible_cpus();
 	__u32 batch, count, total, total_success;
-	typedef BPF_DECLARE_PERCPU(int, value);
 	int map_fd, *keys, *visited, key;
 	const __u32 max_entries = 10;
-	value pcpu_values[max_entries];
 	int err, step, value_size;
 	bool nospace_err;
 	void *values;
@@ -100,12 +103,13 @@ void __test_map_lookup_and_delete_batch(bool is_pcpu)
 	CHECK(map_fd == -1,
 	      "bpf_create_map_xattr()", "error:%s\n", strerror(errno));
 
-	value_size = is_pcpu ? sizeof(value) : sizeof(int);
-	keys = malloc(max_entries * sizeof(int));
 	if (is_pcpu)
-		values = pcpu_values;
+		value_size = sizeof(pcpu_map_value_t) * nr_cpus;
 	else
-		values = malloc(max_entries * sizeof(int));
+		value_size = sizeof(int);
+
+	keys = malloc(max_entries * sizeof(int));
+	values = calloc(max_entries, value_size);
 	visited = malloc(max_entries * sizeof(int));
 	CHECK(!keys || !values || !visited, "malloc()",
 	      "error:%s\n", strerror(errno));
@@ -203,7 +207,7 @@ void __test_map_lookup_and_delete_batch(bool is_pcpu)
 		CHECK(total != max_entries, "delete with steps",
 		      "total = %u, max_entries = %u\n", total, max_entries);
 
-		/* check map is empty, errono == ENOENT */
+		/* check map is empty, errno == ENOENT */
 		err = bpf_map_get_next_key(map_fd, NULL, &key);
 		CHECK(!err || errno != ENOENT, "bpf_map_get_next_key()",
 		      "error: %s\n", strerror(errno));

@@ -30,6 +30,8 @@
 #define ENOTSUPP 524
 #endif
 
+typedef BPF_PERCPU_TYPE(long) pcpu_map_value_t;
+
 static int skips;
 
 static int map_flags;
@@ -147,13 +149,13 @@ static void test_hashmap_sizes(unsigned int task, void *data)
 static void test_hashmap_percpu(unsigned int task, void *data)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, value);
+	pcpu_map_value_t value[nr_cpus];
 	long long key, next_key, first_key;
 	int expected_key_mask = 0;
 	int fd, i;
 
-	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_HASH, sizeof(key),
-			    sizeof(bpf_percpu(value, 0)), 2, map_flags);
+	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_HASH, sizeof(key), sizeof(long),
+			    2, map_flags);
 	if (fd < 0) {
 		printf("Failed to create hashmap '%s'!\n", strerror(errno));
 		exit(1);
@@ -400,11 +402,11 @@ static void test_arraymap(unsigned int task, void *data)
 static void test_arraymap_percpu(unsigned int task, void *data)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, values);
+	pcpu_map_value_t values[nr_cpus];
 	int key, next_key, fd, i;
 
 	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_ARRAY, sizeof(key),
-			    sizeof(bpf_percpu(values, 0)), 2, 0);
+			    sizeof(long), 2, 0);
 	if (fd < 0) {
 		printf("Failed to create arraymap '%s'!\n", strerror(errno));
 		exit(1);
@@ -459,7 +461,7 @@ static void test_arraymap_percpu(unsigned int task, void *data)
 static void test_arraymap_percpu_many_keys(void)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, values);
+	pcpu_map_value_t values[nr_cpus];
 	/* nr_keys is not too large otherwise the test stresses percpu
 	 * allocator more than anything else
 	 */
@@ -467,7 +469,7 @@ static void test_arraymap_percpu_many_keys(void)
 	int key, fd, i;
 
 	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_ARRAY, sizeof(key),
-			    sizeof(bpf_percpu(values, 0)), nr_keys, 0);
+			    sizeof(long), nr_keys, 0);
 	if (fd < 0) {
 		printf("Failed to create per-cpu arraymap '%s'!\n",
 		       strerror(errno));
