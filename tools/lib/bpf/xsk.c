@@ -858,11 +858,13 @@ int xsk_socket__create_shared(struct xsk_socket **xsk_ptr,
 	struct xsk_socket *xsk;
 	struct xsk_ctx *ctx;
 	int err, ifindex;
-	bool unmap = umem->fill_save != fill;
+	bool unmap;
 	bool rx_setup_done = false, tx_setup_done = false;
 
 	if (!umem || !xsk_ptr || !(rx || tx))
 		return -EFAULT;
+
+	unmap = umem->fill_save != fill;
 
 	xsk = calloc(1, sizeof(*xsk));
 	if (!xsk)
