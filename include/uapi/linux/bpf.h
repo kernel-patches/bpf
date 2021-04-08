@@ -5224,6 +5224,7 @@ struct xdp_md {
 	__u32 rx_queue_index;  /* rxq->queue_index  */
 
 	__u32 egress_ifindex;  /* txq->dev->ifindex */
+	__u32 frame_length;
 };
 
 /* DEVMAP map-value layout

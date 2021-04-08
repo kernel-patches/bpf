@@ -768,6 +768,13 @@ static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
 	 * already takes rcu_read_lock() when fetching the program, so
 	 * it's not necessary here anymore.
 	 */
+	xdp->frame_length = xdp->data_end - xdp->data;
+	if (unlikely(xdp->mb)) {
+		struct xdp_shared_info *xdp_sinfo;
+
+		xdp_sinfo = xdp_get_shared_info_from_buff(xdp);
+		xdp->frame_length += xdp_sinfo->data_length;
+	}
 	return __BPF_PROG_RUN(prog, xdp, BPF_DISPATCHER_FUNC(xdp));
 }
 
