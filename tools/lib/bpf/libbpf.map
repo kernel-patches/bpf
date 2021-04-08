@@ -349,6 +349,7 @@ LIBBPF_0.3.0 {
 		ring_buffer__epoll_fd;
 		xsk_setup_xdp_prog;
 		xsk_socket__update_xskmap;
+		bpf_map__inner_map;
 } LIBBPF_0.2.0;
 
 LIBBPF_0.4.0 {
