@@ -2265,6 +2265,140 @@ free_prog:
 	return err;
 }
 
+#define BPF_FUNCTIONS_ALLOC 100
+#define BPF_FUNCTIONS_MAX   (BPF_FUNCTIONS_ALLOC*10)
+
+struct bpf_functions {
+	struct mutex mutex;
+	unsigned long *addrs;
+	int cnt;
+	int alloc;
+};
+
+static int bpf_functions_release(struct inode *inode, struct file *file)
+{
+	struct bpf_functions *funcs = file->private_data;
+
+	kfree(funcs->addrs);
+	kfree(funcs);
+	return 0;
+}
+
+static const struct file_operations bpf_functions_fops = {
+	.release = bpf_functions_release,
+};
+
+static struct bpf_functions *bpf_functions_get_from_fd(u32 ufd, struct fd *p)
+{
+	struct fd f = fdget(ufd);
+
+	if (!f.file)
+		return ERR_PTR(-EBADF);
+	if (f.file->f_op != &bpf_functions_fops) {
+		fdput(f);
+		return ERR_PTR(-EINVAL);
+	}
+	*p = f;
+	return f.file->private_data;
+}
+
+static unsigned long bpf_get_kernel_func_addr(u32 btf_id, struct btf *btf)
+{
+	const struct btf_type *t;
+	const char *tname;
+
+	t = btf_type_by_id(btf, btf_id);
+	if (!t)
+		return 0;
+	tname = btf_name_by_offset(btf, t->name_off);
+	if (!tname)
+		return 0;
+	if (!btf_type_is_func(t))
+		return 0;
+	t = btf_type_by_id(btf, t->type);
+	if (!btf_type_is_func_proto(t))
+		return 0;
+
+	return kallsyms_lookup_name(tname);
+}
+
+#define BPF_FUNCTIONS_ADD_LAST_FIELD functions_add.btf_id
+
+static int bpf_functions_add(union bpf_attr *attr)
+{
+	struct bpf_functions *funcs;
+	unsigned long addr, *p;
+	struct fd orig = { };
+	int ret = 0, fd;
+	struct btf *btf;
+
+	if (CHECK_ATTR(BPF_FUNCTIONS_ADD))
+		return -EINVAL;
+
+	if (!attr->functions_add.btf_id)
+		return -EINVAL;
+
+	/* fd >=  0  use existing bpf_functions object
+	 * fd == -1  create new bpf_functions object
+	 */
+	fd = attr->functions_add.fd;
+	if (fd < -1)
+		return -EINVAL;
+
+	btf = bpf_get_btf_vmlinux();
+	if (!btf)
+		return -EINVAL;
+
+	addr = bpf_get_kernel_func_addr(attr->functions_add.btf_id, btf);
+	if (!addr)
+		return -EINVAL;
+
+	if (!ftrace_location(addr))
+		return -EINVAL;
+
+	if (fd >= 0) {
+		funcs = bpf_functions_get_from_fd(fd, &orig);
+		if (IS_ERR(funcs))
+			return PTR_ERR(funcs);
+	} else {
+		funcs = kzalloc(sizeof(*funcs), GFP_USER);
+		if (!funcs)
+			return -ENOMEM;
+
+		mutex_init(&funcs->mutex);
+		fd = anon_inode_getfd("bpf-functions", &bpf_functions_fops,
+				      funcs, O_CLOEXEC);
+		if (fd < 0) {
+			kfree(funcs);
+			return fd;
+		}
+		ret = fd;
+	}
+
+	mutex_lock(&funcs->mutex);
+
+	if (funcs->cnt == BPF_FUNCTIONS_MAX) {
+		ret = -EINVAL;
+		goto out_put;
+	}
+	if (funcs->cnt == funcs->alloc) {
+		funcs->alloc += BPF_FUNCTIONS_ALLOC;
+		p = krealloc(funcs->addrs, funcs->alloc * sizeof(p[0]), GFP_USER);
+		if (!p) {
+			ret = -ENOMEM;
+			goto out_put;
+		}
+		funcs->addrs = p;
+	}
+
+	funcs->addrs[funcs->cnt++] = addr;
+
+out_put:
+	mutex_unlock(&funcs->mutex);
+	fdput(orig);
+	return ret;
+}
+
 #define BPF_OBJ_LAST_FIELD file_flags
 
 static int bpf_obj_pin(const union bpf_attr *attr)
@@ -4486,6 +4620,9 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		break;
 	case BPF_PROG_BIND_MAP:
 		err = bpf_prog_bind_map(&attr);
+		break;
+	case BPF_FUNCTIONS_ADD:
+		err = bpf_functions_add(&attr);
 		break;
 	default:
 		err = -EINVAL;

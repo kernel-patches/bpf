@@ -862,6 +862,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_FUNCTIONS_ADD,
 };
 
 enum bpf_map_type {
@@ -1458,6 +1459,10 @@ union bpf_attr {
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
 
+	struct { /* BPF_FUNCTIONS_ADD */
+		__u32		fd;
+		__u32		btf_id;
+	} functions_add;
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF
