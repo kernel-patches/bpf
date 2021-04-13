@@ -26,11 +26,14 @@ void test_fentry_test(void)
 	      err, errno, retval, duration);
 
 	result = (__u64 *)fentry_skel->bss;
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < 8; i++) {
 		if (CHECK(result[i] != 1, "result",
 			  "fentry_test%d failed err %lld\n", i + 1, result[i]))
 			goto cleanup;
 	}
+
+	ASSERT_EQ(result[8], 8, "result");
+	ASSERT_EQ(result[9], 2, "result");
 
 cleanup:
 	fentry_test__destroy(fentry_skel);

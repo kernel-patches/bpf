@@ -77,3 +77,19 @@ int BPF_PROG(test8, struct bpf_fentry_test_t *arg)
 		test8_result = 1;
 	return 0;
 }
+
+__u64 test9_result = 0;
+SEC("fentry.ftrace/bpf_fentry_test*")
+int BPF_PROG(test9)
+{
+	test9_result++;
+	return 0;
+}
+
+__u64 test10_result = 0;
+SEC("fentry.ftrace/bpf_fentry_test1|bpf_fentry_test2")
+int BPF_PROG(test10)
+{
+	test10_result++;
+	return 0;
+}
