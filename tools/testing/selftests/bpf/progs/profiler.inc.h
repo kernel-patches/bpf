@@ -189,7 +189,7 @@ static INLINE void populate_ancestors(struct task_struct* task,
 #endif
 	for (num_ancestors = 0; num_ancestors < MAX_ANCESTORS; num_ancestors++) {
 		parent = BPF_CORE_READ(parent, real_parent);
-		if (parent == NULL)
+		if (!parent)
 			break;
 		ppid = BPF_CORE_READ(parent, tgid);
 		if (is_init_process(ppid))
@@ -361,7 +361,7 @@ get_var_kill_data(struct pt_regs* ctx, int spid, int tpid, int sig)
 	int zero = 0;
 	struct var_kill_data_t* kill_data = bpf_map_lookup_elem(&data_heap, &zero);
 
-	if (kill_data == NULL)
+	if (!kill_data)
 		return NULL;
 	struct task_struct* task = (struct task_struct*)bpf_get_current_task();
 
@@ -386,14 +386,14 @@ static INLINE int trace_var_sys_kill(void* ctx, int tpid, int sig)
 	u32 spid = get_userspace_pid();
 	struct var_kill_data_arr_t* arr_struct = bpf_map_lookup_elem(&var_tpid_to_data, &tpid);
 
-	if (arr_struct == NULL) {
+	if (!arr_struct) {
 		struct var_kill_data_t* kill_data = get_var_kill_data(ctx, spid, tpid, sig);
 		int zero = 0;
 
-		if (kill_data == NULL)
+		if (!kill_data)
 			return 0;
 		arr_struct = bpf_map_lookup_elem(&data_heap, &zero);
-		if (arr_struct == NULL)
+		if (!arr_struct)
 			return 0;
 		bpf_probe_read(&arr_struct->array[0], sizeof(arr_struct->array[0]), kill_data);
 	} else {
@@ -402,7 +402,7 @@ static INLINE int trace_var_sys_kill(void* ctx, int tpid, int sig)
 		if (index == -1) {
 			struct var_kill_data_t* kill_data =
 				get_var_kill_data(ctx, spid, tpid, sig);
-			if (kill_data == NULL)
+			if (!kill_data)
 				return 0;
 #ifdef UNROLL
 #pragma unroll
@@ -433,7 +433,7 @@ static INLINE int trace_var_sys_kill(void* ctx, int tpid, int sig)
 		} else {
 			struct var_kill_data_t* kill_data =
 				get_var_kill_data(ctx, spid, tpid, sig);
-			if (kill_data == NULL)
+			if (!kill_data)
 				return 0;
 			bpf_probe_read(&arr_struct->array[index],
 				       sizeof(arr_struct->array[index]),
@@ -534,14 +534,14 @@ static INLINE bool is_dentry_allowed_for_filemod(struct dentry* file_dentry,
 	*device_id = dev_id;
 	bool* allowed_device = bpf_map_lookup_elem(&allowed_devices, &dev_id);
 
-	if (allowed_device == NULL)
+	if (!allowed_device)
 		return false;
 
 	u64 ino = BPF_CORE_READ(file_dentry, d_inode, i_ino);
 	*file_ino = ino;
 	bool* allowed_file = bpf_map_lookup_elem(&allowed_file_inodes, &ino);
 
-	if (allowed_file == NULL)
+	if (!allowed_fil)
 		if (!is_ancestor_in_allowed_inodes(BPF_CORE_READ(file_dentry, d_parent)))
 			return false;
 	return true;
@@ -625,7 +625,7 @@ int raw_tracepoint__sched_process_exit(void* ctx)
 	struct var_kill_data_arr_t* arr_struct = bpf_map_lookup_elem(&var_tpid_to_data, &tpid);
 	struct var_kill_data_t* kill_data = bpf_map_lookup_elem(&data_heap, &zero);
 
-	if (arr_struct == NULL || kill_data == NULL)
+	if (!arr_struct || !kill_data)
 		goto out;
 
 	struct task_struct* task = (struct task_struct*)bpf_get_current_task();
@@ -767,7 +767,7 @@ int kprobe_ret__do_filp_open(struct pt_regs* ctx)
 
 	struct file* filp = (struct file*)PT_REGS_RC_CORE(ctx);
 
-	if (filp == NULL || IS_ERR(filp))
+	if (!filp || IS_ERR(filp))
 		goto out;
 	unsigned int flags = BPF_CORE_READ(filp, f_flags);
 	if ((flags & (O_RDWR | O_WRONLY)) == 0)
