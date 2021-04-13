@@ -643,6 +643,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 	attr.link_create.target_fd = target_fd;
 	attr.link_create.attach_type = attach_type;
 	attr.link_create.flags = OPTS_GET(opts, flags, 0);
+	attr.link_create.funcs_fd = OPTS_GET(opts, funcs_fd, 0);
 
 	if (iter_info_len) {
 		attr.link_create.iter_info =
@@ -970,4 +971,15 @@ int bpf_prog_bind_map(int prog_fd, int map_fd,
 	attr.prog_bind_map.flags = OPTS_GET(opts, flags, 0);
 
 	return sys_bpf(BPF_PROG_BIND_MAP, &attr, sizeof(attr));
+}
+
+int bpf_functions_add(int fd, int btf_id)
+{
+	union bpf_attr attr;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.functions_add.fd = fd;
+	attr.functions_add.btf_id = btf_id;
+
+	return sys_bpf(BPF_FUNCTIONS_ADD, &attr, sizeof(attr));
 }

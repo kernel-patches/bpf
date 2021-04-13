@@ -8838,6 +8838,10 @@ static const struct bpf_sec_def section_defs[] = {
 		.expected_attach_type = BPF_TRACE_ITER,
 		.is_attach_btf = true,
 		.attach_fn = attach_iter),
+	SEC_DEF("fentry.ftrace/", TRACING,
+		.expected_attach_type = BPF_TRACE_FTRACE_ENTRY,
+		.is_attach_btf = true,
+		.attach_fn = attach_trace),
 	BPF_EAPROG_SEC("xdp_devmap/",		BPF_PROG_TYPE_XDP,
 						BPF_XDP_DEVMAP),
 	BPF_EAPROG_SEC("xdp_cpumap/",		BPF_PROG_TYPE_XDP,
@@ -9125,6 +9129,7 @@ invalid_prog:
 #define BTF_TRACE_PREFIX "btf_trace_"
 #define BTF_LSM_PREFIX "bpf_lsm_"
 #define BTF_ITER_PREFIX "bpf_iter_"
+#define BTF_FTRACE_PROBE "bpf_ftrace_probe"
 #define BTF_MAX_NAME_SIZE 128
 
 static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
@@ -9158,6 +9163,9 @@ static inline int find_attach_btf_id(struct btf *btf, const char *name,
 	else if (attach_type == BPF_TRACE_ITER)
 		err = find_btf_by_prefix_kind(btf, BTF_ITER_PREFIX, name,
 					      BTF_KIND_FUNC);
+	else if (attach_type == BPF_TRACE_FTRACE_ENTRY)
+		err = btf__find_by_name_kind(btf, BTF_FTRACE_PROBE,
+					     BTF_KIND_FUNC);
 	else
 		err = btf__find_by_name_kind(btf, name, BTF_KIND_FUNC);
 
@@ -10191,8 +10199,74 @@ static struct bpf_link *bpf_program__attach_btf_id(struct bpf_program *prog)
 	return (struct bpf_link *)link;
 }
 
+static struct bpf_link *bpf_program__attach_ftrace(struct bpf_program *prog)
+{
+	char *pattern = prog->sec_name + prog->sec_def->len;
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	int prog_fd, link_fd, cnt, err, i;
+	enum bpf_attach_type attach_type;
+	struct bpf_link *link = NULL;
+	__s32 *ids = NULL;
+	int funcs_fd = -1;
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	err = bpf_object__load_vmlinux_btf(prog->obj, true);
+	if (err)
+		return ERR_PTR(err);
+
+	cnt = btf__find_by_pattern_kind(prog->obj->btf_vmlinux, pattern,
+					BTF_KIND_FUNC, &ids);
+	if (cnt <= 0)
+		return ERR_PTR(-EINVAL);
+
+	for (i = 0; i < cnt; i++) {
+		err = bpf_functions_add(funcs_fd, ids[i]);
+		if (err < 0) {
+			pr_warn("prog '%s': can't attach function BTF ID %d\n",
+				prog->name, ids[i]);
+			goto out_err;
+		}
+		if (funcs_fd == -1)
+			funcs_fd = err;
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+	link->detach = &bpf_link__detach_fd;
+
+	opts.funcs_fd = funcs_fd;
+
+	attach_type = bpf_program__get_expected_attach_type(prog);
+	link_fd = bpf_link_create(prog_fd, 0, attach_type, &opts);
+	if (link_fd < 0) {
+		err = -errno;
+		goto out_err;
+	}
+	link->fd = link_fd;
+	free(ids);
+	return link;
+
+out_err:
+	if (funcs_fd != -1)
+		close(funcs_fd);
+	free(link);
+	free(ids);
+	return ERR_PTR(err);
+}
+
 struct bpf_link *bpf_program__attach_trace(struct bpf_program *prog)
 {
+	if (prog->expected_attach_type == BPF_TRACE_FTRACE_ENTRY)
+		return bpf_program__attach_ftrace(prog);
+
 	return bpf_program__attach_btf_id(prog);
 }
 

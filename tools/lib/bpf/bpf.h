@@ -175,8 +175,9 @@ struct bpf_link_create_opts {
 	union bpf_iter_link_info *iter_info;
 	__u32 iter_info_len;
 	__u32 target_btf_id;
+	__u32 funcs_fd;
 };
-#define bpf_link_create_opts__last_field target_btf_id
+#define bpf_link_create_opts__last_field funcs_fd
 
 LIBBPF_API int bpf_link_create(int prog_fd, int target_fd,
 			       enum bpf_attach_type attach_type,
@@ -277,6 +278,8 @@ struct bpf_test_run_opts {
 
 LIBBPF_API int bpf_prog_test_run_opts(int prog_fd,
 				      struct bpf_test_run_opts *opts);
+
+LIBBPF_API int bpf_functions_add(int fd, int btf_id);
 
 #ifdef __cplusplus
 } /* extern "C" */
