@@ -980,6 +980,7 @@ enum bpf_attach_type {
 	BPF_SK_LOOKUP,
 	BPF_XDP,
 	BPF_SK_SKB_VERDICT,
+	BPF_TRACE_FTRACE_ENTRY,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -993,6 +994,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_ITER = 4,
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
+	BPF_LINK_TYPE_FTRACE = 7,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1427,6 +1429,7 @@ union bpf_attr {
 				__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 				__u32		iter_info_len;	/* iter_info length */
 			};
+			__u32		funcs_fd;
 		};
 	} link_create;
 

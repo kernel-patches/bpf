@@ -1965,6 +1965,11 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 	    prog_type != BPF_PROG_TYPE_EXT)
 		return -EINVAL;
 
+	if (prog_type == BPF_PROG_TYPE_TRACING &&
+	    expected_attach_type == BPF_TRACE_FTRACE_ENTRY &&
+	    !IS_ENABLED(CONFIG_FUNCTION_TRACER))
+		return -EINVAL;
+
 	switch (prog_type) {
 	case BPF_PROG_TYPE_CGROUP_SOCK:
 		switch (expected_attach_type) {
@@ -2861,6 +2866,144 @@ out_put_prog:
 	return err;
 }
 
+#ifdef CONFIG_FUNCTION_TRACER
+struct bpf_tracing_ftrace_link {
+	struct bpf_link link;
+	enum bpf_attach_type attach_type;
+	struct ftrace_ops ops;
+};
+
+static void bpf_tracing_ftrace_link_release(struct bpf_link *link)
+{
+	struct bpf_tracing_ftrace_link *tr_link =
+		container_of(link, struct bpf_tracing_ftrace_link, link);
+
+	WARN_ON(unregister_ftrace_function(&tr_link->ops));
+}
+
+static void bpf_tracing_ftrace_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_tracing_ftrace_link *tr_link =
+		container_of(link, struct bpf_tracing_ftrace_link, link);
+
+	kfree(tr_link);
+}
+
+static void bpf_tracing_ftrace_link_show_fdinfo(const struct bpf_link *link,
+					       struct seq_file *seq)
+{
+	struct bpf_tracing_ftrace_link *tr_link =
+		container_of(link, struct bpf_tracing_ftrace_link, link);
+
+	seq_printf(seq,
+		   "attach_type:\t%d\n",
+		   tr_link->attach_type);
+}
+
+static int bpf_tracing_ftrace_link_fill_link_info(const struct bpf_link *link,
+						 struct bpf_link_info *info)
+{
+	struct bpf_tracing_ftrace_link *tr_link =
+		container_of(link, struct bpf_tracing_ftrace_link, link);
+
+	info->tracing.attach_type = tr_link->attach_type;
+	return 0;
+}
+
+static const struct bpf_link_ops bpf_tracing_ftrace_lops = {
+	.release = bpf_tracing_ftrace_link_release,
+	.dealloc = bpf_tracing_ftrace_link_dealloc,
+	.show_fdinfo = bpf_tracing_ftrace_link_show_fdinfo,
+	.fill_link_info = bpf_tracing_ftrace_link_fill_link_info,
+};
+
+static void
+bpf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
+			 struct ftrace_ops *ops,  struct ftrace_regs *fregs)
+{
+	struct bpf_tracing_ftrace_link *tr_link;
+	struct bpf_prog *prog;
+	u64 start;
+
+	tr_link = container_of(ops, struct bpf_tracing_ftrace_link, ops);
+	prog = tr_link->link.prog;
+
+	if (prog->aux->sleepable)
+		start = __bpf_prog_enter_sleepable(prog);
+	else
+		start = __bpf_prog_enter(prog);
+
+	if (start)
+		bpf_trace_run2(tr_link->link.prog, ip, parent_ip);
+
+	if (prog->aux->sleepable)
+		__bpf_prog_exit_sleepable(prog, start);
+	else
+		__bpf_prog_exit(prog, start);
+}
+
+static int bpf_tracing_ftrace_attach(struct bpf_prog *prog, int funcs_fd)
+{
+	struct bpf_tracing_ftrace_link *link;
+	struct bpf_link_primer link_primer;
+	struct bpf_functions *funcs;
+	struct ftrace_ops *ops;
+	int err = -ENOMEM;
+	struct fd orig;
+	int i;
+
+	if (prog->type != BPF_PROG_TYPE_TRACING)
+		return -EINVAL;
+
+	if (prog->expected_attach_type != BPF_TRACE_FTRACE_ENTRY)
+		return -EINVAL;
+
+	funcs = bpf_functions_get_from_fd(funcs_fd, &orig);
+	if (IS_ERR(funcs))
+		return PTR_ERR(funcs);
+
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link)
+		goto out_free;
+
+	ops = &link->ops;
+	ops->func = bpf_ftrace_function_call;
+	ops->flags = FTRACE_OPS_FL_DYNAMIC;
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_FTRACE,
+		      &bpf_tracing_ftrace_lops, prog);
+	link->attach_type = prog->expected_attach_type;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err)
+		goto out_free;
+
+	for (i = 0; i < funcs->cnt; i++) {
+		err = ftrace_set_filter_ip(ops, funcs->addrs[i], 0, 0);
+		if (err)
+			goto out_free;
+	}
+
+	err = register_ftrace_function(ops);
+	if (err)
+		goto out_free;
+
+	fdput(orig);
+	return bpf_link_settle(&link_primer);
+
+out_free:
+	kfree(link);
+	fdput(orig);
+	return err;
+}
+#else
+static int bpf_tracing_ftrace_attach(struct bpf_prog *prog __maybe_unused,
+				     int funcs_fd __maybe_unused)
+{
+	return -ENODEV;
+}
+#endif /* CONFIG_FUNCTION_TRACER */
+
 struct bpf_raw_tp_link {
 	struct bpf_link link;
 	struct bpf_raw_event_map *btp;
@@ -3093,6 +3236,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_CGROUP_GETSOCKOPT:
 	case BPF_CGROUP_SETSOCKOPT:
 		return BPF_PROG_TYPE_CGROUP_SOCKOPT;
+	case BPF_TRACE_FTRACE_ENTRY:
 	case BPF_TRACE_ITER:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_SK_LOOKUP:
@@ -4149,6 +4293,9 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *
 
 	if (prog->expected_attach_type == BPF_TRACE_ITER)
 		return bpf_iter_link_attach(attr, prog);
+	else if (prog->expected_attach_type == BPF_TRACE_FTRACE_ENTRY)
+		return bpf_tracing_ftrace_attach(prog,
+						 attr->link_create.funcs_fd);
 	else if (prog->type == BPF_PROG_TYPE_EXT)
 		return bpf_tracing_prog_attach(prog,
 					       attr->link_create.target_fd,

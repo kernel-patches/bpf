@@ -8946,6 +8946,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 			break;
 		case BPF_TRACE_RAW_TP:
 		case BPF_MODIFY_RETURN:
+		case BPF_TRACE_FTRACE_ENTRY:
 			return 0;
 		case BPF_TRACE_ITER:
 			break;
@@ -12794,6 +12795,14 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+__maybe_unused
+void bpf_ftrace_probe(unsigned long ip __maybe_unused,
+		      unsigned long parent_ip __maybe_unused)
+{
+}
+
+BTF_ID_LIST_SINGLE(btf_ftrace_probe_id, func, bpf_ftrace_probe);
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
@@ -13021,6 +13030,25 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		}
 
 		break;
+	case BPF_TRACE_FTRACE_ENTRY:
+		if (tgt_prog) {
+			bpf_log(log,
+				"Only FENTRY/FEXIT progs are attachable to another BPF prog\n");
+			return -EINVAL;
+		}
+		if (btf_id != btf_ftrace_probe_id[0]) {
+			bpf_log(log,
+				"Only btf id '%d' allowed for ftrace probe\n",
+				btf_ftrace_probe_id[0]);
+			return -EINVAL;
+		}
+		t = btf_type_by_id(btf, t->type);
+		if (!btf_type_is_func_proto(t))
+			return -EINVAL;
+		ret = btf_distill_func_proto(log, btf, t, tname, &tgt_info->fmodel);
+		if (ret < 0)
+			return ret;
+		break;
 	}
 	tgt_info->tgt_addr = addr;
 	tgt_info->tgt_name = tname;
@@ -13080,6 +13108,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
 		if (!bpf_iter_prog_supported(prog))
 			return -EINVAL;
+		return 0;
+	} else if (prog->expected_attach_type == BPF_TRACE_FTRACE_ENTRY) {
 		return 0;
 	}
 
