@@ -203,9 +203,6 @@ static void probe_jit_enable(void)
 		case 1:
 			printf("JIT compiler is enabled\n");
 			break;
-		case 2:
-			printf("JIT compiler is enabled with debugging traces in kernel logs\n");
-			break;
 		case -1:
 			printf("Unable to retrieve JIT-compiler status\n");
 			break;

@@ -1910,10 +1910,6 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	flush_icache_range((unsigned long)ctx.target,
 			   (unsigned long)&ctx.target[ctx.idx]);
 
-	if (bpf_jit_enable > 1)
-		/* Dump JIT code */
-		bpf_jit_dump(prog->len, image_size, 2, ctx.target);
-
 	bpf_jit_binary_lock_ro(header);
 	prog->bpf_func = (void *)ctx.target;
 	prog->jited = 1;

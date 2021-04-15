@@ -646,17 +646,7 @@ void bpf_jit_compile(struct bpf_prog *fp)
 		bpf_jit_build_prologue(fp, code_base, &cgctx);
 		bpf_jit_build_body(fp, code_base, &cgctx, addrs);
 		bpf_jit_build_epilogue(code_base, &cgctx);
-
-		if (bpf_jit_enable > 1)
-			pr_info("Pass %d: shrink = %d, seen = 0x%x\n", pass,
-				proglen - (cgctx.idx * 4), cgctx.seen);
 	}
-
-	if (bpf_jit_enable > 1)
-		/* Note that we output the base address of the code_base
-		 * rather than image, since opcodes are in code_base.
-		 */
-		bpf_jit_dump(flen, proglen, pass, code_base);
 
 	bpf_flush_icache(code_base, code_base + (proglen/4));
 

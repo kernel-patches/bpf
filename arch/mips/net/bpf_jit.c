@@ -1250,10 +1250,6 @@ void bpf_jit_compile(struct bpf_prog *fp)
 	/* Update the icache */
 	flush_icache_range((ptr)ctx.target, (ptr)(ctx.target + ctx.idx));
 
-	if (bpf_jit_enable > 1)
-		/* Dump JIT code */
-		bpf_jit_dump(fp->len, alloc_size, 2, ctx.target);
-
 	fp->bpf_func = (void *)ctx.target;
 	fp->jited = 1;
 

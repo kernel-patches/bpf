@@ -7,7 +7,7 @@
  *
  * To get the disassembly of the JIT code, do the following:
  *
- *  1) `echo 2 > /proc/sys/net/core/bpf_jit_enable`
+ *  1) Insert bpf_jit_dump() and recompile the kernel to output JITed image into log
  *  2) Load a BPF filter (e.g. `tcpdump -p -n -s 0 -i eth1 host 192.168.20.0/24`)
  *  3) Run e.g. `bpf_jit_disasm -o` to read out the last JIT code
  *
