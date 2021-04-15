@@ -146,63 +146,69 @@ static void test_hashmap_sizes(unsigned int task, void *data)
 
 static void test_hashmap_percpu(unsigned int task, void *data)
 {
-	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, value);
+	int nr_cpus = libbpf_num_possible_cpus();
+	__s64 *values;
 	long long key, next_key, first_key;
 	int expected_key_mask = 0;
 	int fd, i;
 
+	if (nr_cpus < 0) {
+		printf("Failed get possible cpus\n");
+		exit(1);
+	}
+
+	values = alloca(nr_cpus * sizeof(__s64));
+
 	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_HASH, sizeof(key),
-			    sizeof(bpf_percpu(value, 0)), 2, map_flags);
+			    sizeof(*values), 2, map_flags);
 	if (fd < 0) {
 		printf("Failed to create hashmap '%s'!\n", strerror(errno));
 		exit(1);
 	}
 
 	for (i = 0; i < nr_cpus; i++)
-		bpf_percpu(value, i) = i + 100;
+		values[i] = i + 100;
 
 	key = 1;
 	/* Insert key=1 element. */
 	assert(!(expected_key_mask & key));
-	assert(bpf_map_update_elem(fd, &key, value, BPF_ANY) == 0);
+	assert(bpf_map_update_elem(fd, &key, values, BPF_ANY) == 0);
 	expected_key_mask |= key;
 
 	/* BPF_NOEXIST means add new element if it doesn't exist. */
-	assert(bpf_map_update_elem(fd, &key, value, BPF_NOEXIST) == -1 &&
+	assert(bpf_map_update_elem(fd, &key, values, BPF_NOEXIST) == -1 &&
 	       /* key=1 already exists. */
 	       errno == EEXIST);
 
 	/* -1 is an invalid flag. */
-	assert(bpf_map_update_elem(fd, &key, value, -1) == -1 &&
+	assert(bpf_map_update_elem(fd, &key, values, -1) == -1 &&
 	       errno == EINVAL);
 
 	/* Check that key=1 can be found. Value could be 0 if the lookup
 	 * was run from a different CPU.
 	 */
-	bpf_percpu(value, 0) = 1;
-	assert(bpf_map_lookup_elem(fd, &key, value) == 0 &&
-	       bpf_percpu(value, 0) == 100);
+	values[0] = 1;
+	assert(bpf_map_lookup_elem(fd, &key, values) == 0 && values[0] == 100);
 
 	key = 2;
 	/* Check that key=2 is not found. */
-	assert(bpf_map_lookup_elem(fd, &key, value) == -1 && errno == ENOENT);
+	assert(bpf_map_lookup_elem(fd, &key, values) == -1 && errno == ENOENT);
 
 	/* BPF_EXIST means update existing element. */
-	assert(bpf_map_update_elem(fd, &key, value, BPF_EXIST) == -1 &&
+	assert(bpf_map_update_elem(fd, &key, values, BPF_EXIST) == -1 &&
 	       /* key=2 is not there. */
 	       errno == ENOENT);
 
 	/* Insert key=2 element. */
 	assert(!(expected_key_mask & key));
-	assert(bpf_map_update_elem(fd, &key, value, BPF_NOEXIST) == 0);
+	assert(bpf_map_update_elem(fd, &key, values, BPF_NOEXIST) == 0);
 	expected_key_mask |= key;
 
 	/* key=1 and key=2 were inserted, check that key=0 cannot be
 	 * inserted due to max_entries limit.
 	 */
 	key = 0;
-	assert(bpf_map_update_elem(fd, &key, value, BPF_NOEXIST) == -1 &&
+	assert(bpf_map_update_elem(fd, &key, values, BPF_NOEXIST) == -1 &&
 	       errno == E2BIG);
 
 	/* Check that key = 0 doesn't exist. */
@@ -219,10 +225,10 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 		assert((expected_key_mask & next_key) == next_key);
 		expected_key_mask &= ~next_key;
 
-		assert(bpf_map_lookup_elem(fd, &next_key, value) == 0);
+		assert(bpf_map_lookup_elem(fd, &next_key, values) == 0);
 
 		for (i = 0; i < nr_cpus; i++)
-			assert(bpf_percpu(value, i) == i + 100);
+			assert(values[i] == i + 100);
 
 		key = next_key;
 	}
@@ -230,7 +236,7 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 
 	/* Update with BPF_EXIST. */
 	key = 1;
-	assert(bpf_map_update_elem(fd, &key, value, BPF_EXIST) == 0);
+	assert(bpf_map_update_elem(fd, &key, values, BPF_EXIST) == 0);
 
 	/* Delete both elements. */
 	key = 1;
@@ -399,37 +405,42 @@ static void test_arraymap(unsigned int task, void *data)
 
 static void test_arraymap_percpu(unsigned int task, void *data)
 {
-	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, values);
+	int nr_cpus = libbpf_num_possible_cpus();
+	__s64 *values;
 	int key, next_key, fd, i;
 
+	if (nr_cpus < 0) {
+		printf("Failed get possible cpus\n");
+		exit(1);
+	}
+
+	values = alloca(nr_cpus * sizeof(__s64));
+
 	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_ARRAY, sizeof(key),
-			    sizeof(bpf_percpu(values, 0)), 2, 0);
+			    sizeof(*values), 2, 0);
 	if (fd < 0) {
 		printf("Failed to create arraymap '%s'!\n", strerror(errno));
 		exit(1);
 	}
 
 	for (i = 0; i < nr_cpus; i++)
-		bpf_percpu(values, i) = i + 100;
+		values[i] = i + 100;
 
 	key = 1;
 	/* Insert key=1 element. */
 	assert(bpf_map_update_elem(fd, &key, values, BPF_ANY) == 0);
 
-	bpf_percpu(values, 0) = 0;
+	values[0] = 0;
 	assert(bpf_map_update_elem(fd, &key, values, BPF_NOEXIST) == -1 &&
 	       errno == EEXIST);
 
 	/* Check that key=1 can be found. */
-	assert(bpf_map_lookup_elem(fd, &key, values) == 0 &&
-	       bpf_percpu(values, 0) == 100);
+	assert(bpf_map_lookup_elem(fd, &key, values) == 0 && values[0] == 100);
 
 	key = 0;
 	/* Check that key=0 is also found and zero initialized. */
-	assert(bpf_map_lookup_elem(fd, &key, values) == 0 &&
-	       bpf_percpu(values, 0) == 0 &&
-	       bpf_percpu(values, nr_cpus - 1) == 0);
+	assert(bpf_map_lookup_elem(fd, &key, values) == 0 && values[0] == 0 &&
+	       values[nr_cpus - 1] == 0);
 
 	/* Check that key=2 cannot be inserted due to max_entries limit. */
 	key = 2;
@@ -458,16 +469,23 @@ static void test_arraymap_percpu(unsigned int task, void *data)
 
 static void test_arraymap_percpu_many_keys(void)
 {
-	unsigned int nr_cpus = bpf_num_possible_cpus();
-	BPF_DECLARE_PERCPU(long, values);
+	unsigned int nr_cpus = libbpf_num_possible_cpus();
+	__s64 *values;
 	/* nr_keys is not too large otherwise the test stresses percpu
 	 * allocator more than anything else
 	 */
 	unsigned int nr_keys = 2000;
 	int key, fd, i;
 
+	if (nr_cpus < 0) {
+		printf("Failed get possible cpus\n");
+		exit(1);
+	}
+
+	values = alloca(nr_cpus * sizeof(__s64));
+
 	fd = bpf_create_map(BPF_MAP_TYPE_PERCPU_ARRAY, sizeof(key),
-			    sizeof(bpf_percpu(values, 0)), nr_keys, 0);
+			    sizeof(*values), nr_keys, 0);
 	if (fd < 0) {
 		printf("Failed to create per-cpu arraymap '%s'!\n",
 		       strerror(errno));
@@ -475,19 +493,19 @@ static void test_arraymap_percpu_many_keys(void)
 	}
 
 	for (i = 0; i < nr_cpus; i++)
-		bpf_percpu(values, i) = i + 10;
+		values[i] = i + 10;
 
 	for (key = 0; key < nr_keys; key++)
 		assert(bpf_map_update_elem(fd, &key, values, BPF_ANY) == 0);
 
 	for (key = 0; key < nr_keys; key++) {
 		for (i = 0; i < nr_cpus; i++)
-			bpf_percpu(values, i) = 0;
+			values[i] = 0;
 
 		assert(bpf_map_lookup_elem(fd, &key, values) == 0);
 
 		for (i = 0; i < nr_cpus; i++)
-			assert(bpf_percpu(values, i) == i + 10);
+			assert(values[i] == i + 10);
 	}
 
 	close(fd);

@@ -12,10 +12,7 @@ static int duration;
 
 typedef unsigned long long map_key_t;
 typedef unsigned long long map_value_t;
-typedef struct {
-	map_value_t v; /* padding */
-} __bpf_percpu_val_align pcpu_map_value_t;
-
+typedef __s64 pcpu_map_value_t;
 
 static int map_populate(int map_fd, int num)
 {
@@ -24,7 +21,7 @@ static int map_populate(int map_fd, int num)
 	map_key_t key;
 
 	for (i = 0; i < nr_cpus; i++)
-		bpf_percpu(value, i) = FILL_VALUE;
+		value[i] = FILL_VALUE;
 
 	for (key = 1; key <= num; key++) {
 		err = bpf_map_update_elem(map_fd, &key, value, BPF_NOEXIST);
@@ -103,7 +100,7 @@ static int check_values_one_cpu(pcpu_map_value_t *value, map_value_t expected)
 	map_value_t val;
 
 	for (i = 0; i < nr_cpus; i++) {
-		val = bpf_percpu(value, i);
+		val = value[i];
 		if (val) {
 			if (CHECK(val != expected, "map value",
 				  "unexpected for cpu %d: 0x%llx\n", i, val))
