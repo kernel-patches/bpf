@@ -86,7 +86,6 @@ Values:
 
 	- 0 - disable the JIT (default value)
 	- 1 - enable the JIT
-	- 2 - enable the JIT and ask the compiler to emit traces on kernel log.
 
 bpf_jit_harden
 --------------

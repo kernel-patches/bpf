@@ -504,25 +504,12 @@ been previously enabled by root::
 
   echo 1 > /proc/sys/net/core/bpf_jit_enable
 
-For JIT developers, doing audits etc, each compile run can output the generated
-opcode image into the kernel log via::
-
-  echo 2 > /proc/sys/net/core/bpf_jit_enable
-
-Example output from dmesg::
-
-    [ 3389.935842] flen=6 proglen=70 pass=3 image=ffffffffa0069c8f
-    [ 3389.935847] JIT code: 00000000: 55 48 89 e5 48 83 ec 60 48 89 5d f8 44 8b 4f 68
-    [ 3389.935849] JIT code: 00000010: 44 2b 4f 6c 4c 8b 87 d8 00 00 00 be 0c 00 00 00
-    [ 3389.935850] JIT code: 00000020: e8 1d 94 ff e0 3d 00 08 00 00 75 16 be 17 00 00
-    [ 3389.935851] JIT code: 00000030: 00 e8 28 94 ff e0 83 f8 01 75 07 b8 ff ff 00 00
-    [ 3389.935852] JIT code: 00000040: eb 02 31 c0 c9 c3
-
-When CONFIG_BPF_JIT_ALWAYS_ON is enabled, bpf_jit_enable is permanently set to 1 and
-setting any other value than that will return in failure. This is even the case for
-setting bpf_jit_enable to 2, since dumping the final JIT image into the kernel log
-is discouraged and introspection through bpftool (under tools/bpf/bpftool/) is the
-generally recommended approach instead.
+When CONFIG_BPF_JIT_ALWAYS_ON is enabled, bpf_jit_enable is permanently set
+to 1 and setting any other value than that will return in failure.
+For debugging JITs, the introspection through bpftool (tools/bpf/bpftool/)
+is the generally recommended approach instead. For JIT developers, doing
+audits etc, you can insert bpf_jit_dump() and recompile the kernel to
+output the generated opcode image into the kernel log.
 
 In the kernel source tree under tools/bpf/, there's bpf_jit_disasm for
 generating disassembly out of the kernel log's hexdump::
