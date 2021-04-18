@@ -3961,7 +3961,7 @@ put_file:
 #define BPF_DO_BATCH(fn)			\
 	do {					\
 		if (!fn) {			\
-			err = -ENOTSUPP;	\
+			err = -EOPNOTSUPP;	\
 			goto err_put;		\
 		}				\
 		err = fn(map, attr, uattr);	\
