@@ -699,12 +699,11 @@ struct cpumap_kthread_ctx {
 	int map_id;			//	offset:8;  size:4; signed:1;
 	u32 act;			//	offset:12; size:4; signed:0;
 	int cpu;			//	offset:16; size:4; signed:1;
-	unsigned int drops;		//	offset:20; size:4; signed:0;
-	unsigned int processed;		//	offset:24; size:4; signed:0;
-	int sched;			//	offset:28; size:4; signed:1;
-	unsigned int xdp_pass;		//	offset:32; size:4; signed:0;
-	unsigned int xdp_drop;		//	offset:36; size:4; signed:0;
-	unsigned int xdp_redirect;	//	offset:40; size:4; signed:0;
+	unsigned int processed;		//	offset:20; size:4; signed:0;
+	int sched;			//	offset:24; size:4; signed:1;
+	unsigned int xdp_pass;		//	offset:28; size:4; signed:0;
+	unsigned int xdp_drop;		//	offset:32; size:4; signed:0;
+	unsigned int xdp_redirect;	//	offset:36; size:4; signed:0;
 };
 
 SEC("tracepoint/xdp/xdp_cpumap_kthread")
@@ -717,7 +716,6 @@ int trace_xdp_cpumap_kthread(struct cpumap_kthread_ctx *ctx)
 	if (!rec)
 		return 0;
 	rec->processed += ctx->processed;
-	rec->dropped   += ctx->drops;
 	rec->xdp_pass  += ctx->xdp_pass;
 	rec->xdp_drop  += ctx->xdp_drop;
 	rec->xdp_redirect  += ctx->xdp_redirect;

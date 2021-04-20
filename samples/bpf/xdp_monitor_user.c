@@ -432,11 +432,11 @@ static void stats_print(struct stats_record *stats_rec,
 
 	/* cpumap kthread stats */
 	{
-		char *fmt1 = "%-15s %-7d %'-12.0f %'-12.0f %'-10.0f %s\n";
-		char *fmt2 = "%-15s %-7s %'-12.0f %'-12.0f %'-10.0f %s\n";
+		char *fmt1 = "%-15s %-7d %'-12.0f %-12s %'-10.0f %s\n";
+		char *fmt2 = "%-15s %-7s %'-12.0f %-12s %'-10.0f %s\n";
 		struct record *rec, *prev;
-		double drop, info;
 		char *i_str = "";
+		double info;
 
 		rec  =  &stats_rec->xdp_cpumap_kthread;
 		prev = &stats_prev->xdp_cpumap_kthread;
@@ -446,20 +446,18 @@ static void stats_print(struct stats_record *stats_rec,
 			struct datarec *p = &prev->cpu[i];
 
 			pps  = calc_pps(r, p, t);
-			drop = calc_drop(r, p, t);
 			info = calc_info(r, p, t);
 			if (info > 0)
 				i_str = "sched";
-			if (pps > 0 || drop > 0)
+			if (pps > 0)
 				printf(fmt1, "cpumap-kthread",
-				       i, pps, drop, info, i_str);
+				       i, pps, "-", info, i_str);
 		}
 		pps = calc_pps(&rec->total, &prev->total, t);
-		drop = calc_drop(&rec->total, &prev->total, t);
 		info = calc_info(&rec->total, &prev->total, t);
 		if (info > 0)
 			i_str = "sched-sum";
-		printf(fmt2, "cpumap-kthread", "total", pps, drop, info, i_str);
+		printf(fmt2, "cpumap-kthread", "total", pps, "-", info, i_str);
 	}
 
 	/* devmap ndo_xdp_xmit stats */

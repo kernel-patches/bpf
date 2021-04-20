@@ -184,16 +184,15 @@ DEFINE_EVENT(xdp_redirect_template, xdp_redirect_map_err,
 
 TRACE_EVENT(xdp_cpumap_kthread,
 
-	TP_PROTO(int map_id, unsigned int processed,  unsigned int drops,
-		 int sched, struct xdp_cpumap_stats *xdp_stats),
+	TP_PROTO(int map_id, unsigned int processed, int sched,
+		 struct xdp_cpumap_stats *xdp_stats),
 
-	TP_ARGS(map_id, processed, drops, sched, xdp_stats),
+	TP_ARGS(map_id, processed, sched, xdp_stats),
 
 	TP_STRUCT__entry(
 		__field(int, map_id)
 		__field(u32, act)
 		__field(int, cpu)
-		__field(unsigned int, drops)
 		__field(unsigned int, processed)
 		__field(int, sched)
 		__field(unsigned int, xdp_pass)
@@ -205,7 +204,6 @@ TRACE_EVENT(xdp_cpumap_kthread,
 		__entry->map_id		= map_id;
 		__entry->act		= XDP_REDIRECT;
 		__entry->cpu		= smp_processor_id();
-		__entry->drops		= drops;
 		__entry->processed	= processed;
 		__entry->sched	= sched;
 		__entry->xdp_pass	= xdp_stats->pass;
@@ -215,13 +213,11 @@ TRACE_EVENT(xdp_cpumap_kthread,
 
 	TP_printk("kthread"
 		  " cpu=%d map_id=%d action=%s"
-		  " processed=%u drops=%u"
-		  " sched=%d"
+		  " processed=%u sched=%u"
 		  " xdp_pass=%u xdp_drop=%u xdp_redirect=%u",
 		  __entry->cpu, __entry->map_id,
 		  __print_symbolic(__entry->act, __XDP_ACT_SYM_TAB),
-		  __entry->processed, __entry->drops,
-		  __entry->sched,
+		  __entry->processed, __entry->sched,
 		  __entry->xdp_pass, __entry->xdp_drop, __entry->xdp_redirect)
 );
 

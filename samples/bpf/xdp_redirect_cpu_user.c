@@ -436,8 +436,8 @@ static void stats_print(struct stats_record *stats_rec,
 
 	/* cpumap kthread stats */
 	{
-		char *fmt_k = "%-15s %-7d %'-14.0f %'-11.0f %'-10.0f %s\n";
-		char *fm2_k = "%-15s %-7s %'-14.0f %'-11.0f %'-10.0f %s\n";
+		char *fmt_k = "%-15s %-7d %'-14.0f %-11s %'-10.0f %s\n";
+		char *fm2_k = "%-15s %-7s %'-14.0f %-11s %'-10.0f %s\n";
 		char *e_str = "";
 
 		rec  = &stats_rec->kthread;
@@ -448,20 +448,18 @@ static void stats_print(struct stats_record *stats_rec,
 			struct datarec *p = &prev->cpu[i];
 
 			pps  = calc_pps(r, p, t);
-			drop = calc_drop_pps(r, p, t);
 			err  = calc_errs_pps(r, p, t);
 			if (err > 0)
 				e_str = "sched";
 			if (pps > 0)
 				printf(fmt_k, "cpumap_kthread",
-				       i, pps, drop, err, e_str);
+				       i, pps, "-", err, e_str);
 		}
 		pps = calc_pps(&rec->total, &prev->total, t);
-		drop = calc_drop_pps(&rec->total, &prev->total, t);
 		err  = calc_errs_pps(&rec->total, &prev->total, t);
 		if (err > 0)
 			e_str = "sched-sum";
-		printf(fm2_k, "cpumap_kthread", "total", pps, drop, err, e_str);
+		printf(fm2_k, "cpumap_kthread", "total", pps, "-", err, e_str);
 	}
 
 	/* XDP redirect err tracepoints (very unlikely) */

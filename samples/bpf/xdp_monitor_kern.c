@@ -186,9 +186,8 @@ struct cpumap_kthread_ctx {
 	int map_id;		//	offset:8;  size:4; signed:1;
 	u32 act;		//	offset:12; size:4; signed:0;
 	int cpu;		//	offset:16; size:4; signed:1;
-	unsigned int drops;	//	offset:20; size:4; signed:0;
-	unsigned int processed;	//	offset:24; size:4; signed:0;
-	int sched;		//	offset:28; size:4; signed:1;
+	unsigned int processed;	//	offset:20; size:4; signed:0;
+	int sched;		//	offset:24; size:4; signed:1;
 };
 
 SEC("tracepoint/xdp/xdp_cpumap_kthread")
@@ -201,7 +200,6 @@ int trace_xdp_cpumap_kthread(struct cpumap_kthread_ctx *ctx)
 	if (!rec)
 		return 0;
 	rec->processed += ctx->processed;
-	rec->dropped   += ctx->drops;
 
 	/* Count times kthread yielded CPU via schedule call */
 	if (ctx->sched)
