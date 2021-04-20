@@ -643,12 +643,12 @@ static struct core_reloc_test_case test_cases[] = {
 		.output_len = sizeof(struct core_reloc_existence_output),
 	},
 
-	FIELD_EXISTS_ERR_CASE(existence__err_int_sz),
-	FIELD_EXISTS_ERR_CASE(existence__err_int_type),
-	FIELD_EXISTS_ERR_CASE(existence__err_int_kind),
-	FIELD_EXISTS_ERR_CASE(existence__err_arr_kind),
-	FIELD_EXISTS_ERR_CASE(existence__err_arr_value_type),
-	FIELD_EXISTS_ERR_CASE(existence__err_struct_type),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_int_sz),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_int_type),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_int_kind),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_arr_kind),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_arr_value_type),
+	FIELD_EXISTS_ERR_CASE(existence___err_wrong_struct_type),
 
 	/* bitfield relocation checks */
 	BITFIELDS_CASE(bitfields, {
@@ -863,7 +863,7 @@ void test_core_reloc(void)
 		err = bpf_object__load_xattr(&load_attr);
 		if (err) {
 			if (!test_case->fails)
-				CHECK(false, "obj_load", "failed to load prog '%s': %d\n", probe_name, err);
+				CHECK(true, "obj_load", "failed to load prog '%s': %d\n", probe_name, err);
 			goto cleanup;
 		}
 
@@ -903,7 +903,7 @@ void test_core_reloc(void)
 		}
 
 		if (test_case->fails) {
-			CHECK(false, "obj_load_fail", "should fail to load prog '%s'\n", probe_name);
+			CHECK(true, "obj_load_fail", "should fail to load prog '%s'\n", probe_name);
 			goto cleanup;
 		}
 
