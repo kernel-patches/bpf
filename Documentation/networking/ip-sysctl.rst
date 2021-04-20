@@ -732,6 +732,26 @@ tcp_syncookies - INTEGER
 	network connections you can set this knob to 2 to enable
 	unconditionally generation of syncookies.
 
+tcp_migrate_req - INTEGER
+	The incoming connection is tied to a specific listening socket when
+	the initial SYN packet is received during the three-way handshake.
+	When a listener is closed, in-flight request sockets during the
+	handshake and established sockets in the accept queue are aborted.
+
+	If the listener has SO_REUSEPORT enabled, other listeners on the
+	same port should have been able to accept such connections. This
+	option makes it possible to migrate such child sockets to another
+	listener after close() or shutdown().
+
+	Default: 0
+
+	Note that the source and destination listeners MUST have the same
+	settings at the socket API level. If different applications listen
+	on the same port, disable this option or attach the
+	BPF_SK_REUSEPORT_SELECT_OR_MIGRATE type of eBPF program to select
+	the correct socket by bpf_sk_select_reuseport() or to cancel
+	migration by returning SK_DROP.
+
 tcp_fastopen - INTEGER
 	Enable TCP Fast Open (RFC7413) to send and accept data in the opening
 	SYN packet.
