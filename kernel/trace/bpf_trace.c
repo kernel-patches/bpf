@@ -412,9 +412,6 @@ static __printf(1, 0) int bpf_do_trace_printk(const char *fmt, ...)
 	va_start(ap, fmt);
 	ret = vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	/* vsnprintf() will not append null for zero-length strings */
-	if (ret == 0)
-		buf[0] = '\0';
 	trace_bpf_trace_printk(buf);
 	raw_spin_unlock_irqrestore(&trace_printk_lock, flags);
 
