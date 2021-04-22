@@ -645,10 +645,10 @@ when:
 
 .. Links
 .. _Documentation/process/: https://www.kernel.org/doc/html/latest/process/
-.. _MAINTAINERS: ../../MAINTAINERS
+.. _MAINTAINERS: https://github.com/torvalds/linux/blob/master/MAINTAINERS
 .. _netdev-FAQ: ../networking/netdev-FAQ.rst
-.. _samples/bpf/: ../../samples/bpf/
-.. _selftests: ../../tools/testing/selftests/bpf/
+.. _samples/bpf/: https://github.com/torvalds/linux/tree/master/samples/bpf
+.. _selftests: https://github.com/torvalds/linux/tree/master/tools/testing/selftests/bpf
 .. _Documentation/dev-tools/kselftest.rst:
    https://www.kernel.org/doc/html/latest/dev-tools/kselftest.html
 .. _Documentation/bpf/btf.rst: btf.rst
