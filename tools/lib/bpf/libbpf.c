@@ -175,6 +175,8 @@ enum kern_feature_id {
 	FEAT_MODULE_BTF,
 	/* BTF_KIND_FLOAT support */
 	FEAT_BTF_FLOAT,
+	/* Kernel support for FD_IDX */
+	FEAT_FD_IDX,
 	__FEAT_CNT,
 };
 
@@ -288,6 +290,7 @@ struct bpf_program {
 	__u32 line_info_rec_size;
 	__u32 line_info_cnt;
 	__u32 prog_flags;
+	int *fd_array;
 };
 
 struct bpf_struct_ops {
@@ -4238,6 +4241,24 @@ static int probe_module_btf(void)
 	return !err;
 }
 
+static int probe_kern_fd_idx(void)
+{
+	struct bpf_load_program_attr attr;
+	struct bpf_insn insns[] = {
+		BPF_LD_IMM64_RAW(BPF_REG_0, BPF_PSEUDO_MAP_IDX, 0),
+		BPF_EXIT_INSN(),
+	};
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	attr.insns = insns;
+	attr.insns_cnt = ARRAY_SIZE(insns);
+	attr.license = "GPL";
+
+	probe_fd(bpf_load_program_xattr(&attr, NULL, 0));
+	return errno == EPROTO;
+}
+
 enum kern_feature_result {
 	FEAT_UNKNOWN = 0,
 	FEAT_SUPPORTED = 1,
@@ -4287,6 +4308,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_FLOAT] = {
 		"BTF_KIND_FLOAT support", probe_kern_btf_float,
+	},
+	[FEAT_FD_IDX] = {
+		"prog_load with fd_idx", probe_kern_fd_idx,
 	},
 };
 
@@ -6366,19 +6390,34 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 
 		switch (relo->type) {
 		case RELO_LD64:
-			insn[0].src_reg = BPF_PSEUDO_MAP_FD;
-			insn[0].imm = obj->maps[relo->map_idx].fd;
+			if (kernel_supports(FEAT_FD_IDX)) {
+				insn[0].src_reg = BPF_PSEUDO_MAP_IDX;
+				insn[0].imm = relo->map_idx;
+			} else {
+				insn[0].src_reg = BPF_PSEUDO_MAP_FD;
+				insn[0].imm = obj->maps[relo->map_idx].fd;
+			}
 			break;
 		case RELO_DATA:
-			insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
 			insn[1].imm = insn[0].imm + relo->sym_off;
-			insn[0].imm = obj->maps[relo->map_idx].fd;
+			if (kernel_supports(FEAT_FD_IDX)) {
+				insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
+				insn[0].imm = relo->map_idx;
+			} else {
+				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+				insn[0].imm = obj->maps[relo->map_idx].fd;
+			}
 			break;
 		case RELO_EXTERN_VAR:
 			ext = &obj->externs[relo->sym_off];
 			if (ext->type == EXT_KCFG) {
-				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
-				insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
+				if (kernel_supports(FEAT_FD_IDX)) {
+					insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
+					insn[0].imm = obj->kconfig_map_idx;
+				} else {
+					insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+					insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
+				}
 				insn[1].imm = ext->kcfg.data_off;
 			} else /* EXT_KSYM */ {
 				if (ext->ksym.type_id) { /* typed ksyms */
@@ -7104,6 +7143,7 @@ load_program(struct bpf_program *prog, struct bpf_insn *insns, int insns_cnt,
 	load_attr.attach_btf_id = prog->attach_btf_id;
 	load_attr.kern_version = kern_version;
 	load_attr.prog_ifindex = prog->prog_ifindex;
+	load_attr.fd_array = prog->fd_array;
 
 	/* specify func_info/line_info only if kernel supports them */
 	btf_fd = bpf_object__btf_fd(prog->obj);
@@ -7296,12 +7336,24 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 	struct bpf_program *prog;
 	size_t i;
 	int err;
+	struct bpf_map *map;
+	int *fd_array = NULL;
 
 	for (i = 0; i < obj->nr_programs; i++) {
 		prog = &obj->programs[i];
 		err = bpf_object__sanitize_prog(obj, prog);
 		if (err)
 			return err;
+	}
+
+	if (kernel_supports(FEAT_FD_IDX) && obj->nr_maps) {
+		fd_array = malloc(sizeof(int) * obj->nr_maps);
+		if (!fd_array)
+			return -ENOMEM;
+		for (i = 0; i < obj->nr_maps; i++) {
+			map = &obj->maps[i];
+			fd_array[i] = map->fd;
+		}
 	}
 
 	for (i = 0; i < obj->nr_programs; i++) {
@@ -7313,10 +7365,14 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 			continue;
 		}
 		prog->log_level |= log_level;
+		prog->fd_array = fd_array;
 		err = bpf_program__load(prog, obj->license, obj->kern_version);
-		if (err)
+		if (err) {
+			free(fd_array);
 			return err;
+		}
 	}
+	free(fd_array);
 	return 0;
 }
 

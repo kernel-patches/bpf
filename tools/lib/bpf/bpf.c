@@ -252,6 +252,7 @@ int libbpf__bpf_prog_load(const struct bpf_prog_load_params *load_attr)
 
 	attr.prog_btf_fd = load_attr->prog_btf_fd;
 	attr.prog_flags = load_attr->prog_flags;
+	attr.fd_array = ptr_to_u64(load_attr->fd_array);
 
 	attr.func_info_rec_size = load_attr->func_info_rec_size;
 	attr.func_info_cnt = load_attr->func_info_cnt;
