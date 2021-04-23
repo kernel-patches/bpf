@@ -5,8 +5,8 @@
 #include <bpf/bpf_helpers.h>
 
 /* 8-byte aligned .bss */
-static volatile long static_var1;
-static volatile int static_var11;
+static volatile long static_var;
+static volatile int static_var1;
 int var1 = 0;
 /* 4-byte aligned .rodata */
 const volatile int rovar1;
@@ -21,7 +21,7 @@ static __noinline int subprog(int x)
 SEC("raw_tp/sys_enter")
 int handler1(const void *ctx)
 {
-	var1 = subprog(rovar1) + static_var1 + static_var11;
+	var1 = subprog(rovar1) + static_var + static_var1;
 
 	return 0;
 }

@@ -4,6 +4,8 @@
  *
  * Copyright (c) 2021 Facebook
  */
+#define _GNU_SOURCE
+#include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -47,6 +49,16 @@ struct src_sec {
 	int sec_type_id;
 };
 
+#define MAX_OBJ_NAME_LEN 64
+
+/* According to C standard, only first 63 characters of C identifiers are
+ * guaranteed to be significant. So for transformed static variables of the most
+ * verbose form ('<obj_name>..<func_name>.<var_name>') we need to reserve extra
+ * 64 (function name and dot) + 63 (variable name) + 2 (for .. separator)
+ * characters.
+ */
+#define MAX_VAR_NAME_LEN (MAX_OBJ_NAME_LEN + 2 + 63 + 1 + 63)
+
 struct src_obj {
 	const char *filename;
 	int fd;
@@ -67,6 +79,10 @@ struct src_obj {
 	int *sym_map;
 	/* mapping from the src BTF type IDs to dst ones */
 	int *btf_type_map;
+
+	/* BPF object name used for static variable prefixing */
+	char obj_name[MAX_OBJ_NAME_LEN];
+	size_t obj_name_len;
 };
 
 /* single .BTF.ext data section */
@@ -158,7 +174,9 @@ struct bpf_linker {
 
 static int init_output_elf(struct bpf_linker *linker, const char *file);
 
-static int linker_load_obj_file(struct bpf_linker *linker, const char *filename, struct src_obj *obj);
+static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
+				const struct bpf_linker_file_opts *opts,
+				struct src_obj *obj);
 static int linker_sanity_check_elf(struct src_obj *obj);
 static int linker_sanity_check_elf_symtab(struct src_obj *obj, struct src_sec *sec);
 static int linker_sanity_check_elf_relos(struct src_obj *obj, struct src_sec *sec);
@@ -435,15 +453,19 @@ static int init_output_elf(struct bpf_linker *linker, const char *file)
 	return 0;
 }
 
-int bpf_linker__add_file(struct bpf_linker *linker, const char *filename)
+int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
+			 const struct bpf_linker_file_opts *opts)
 {
 	struct src_obj obj = {};
 	int err = 0;
 
+	if (!OPTS_VALID(opts, bpf_linker_file_opts))
+		return -EINVAL;
+
 	if (!linker->elf)
 		return -EINVAL;
 
-	err = err ?: linker_load_obj_file(linker, filename, &obj);
+	err = err ?: linker_load_obj_file(linker, filename, opts, &obj);
 	err = err ?: linker_append_sec_data(linker, &obj);
 	err = err ?: linker_append_elf_syms(linker, &obj);
 	err = err ?: linker_append_elf_relos(linker, &obj);
@@ -529,7 +551,49 @@ static struct src_sec *add_src_sec(struct src_obj *obj, const char *sec_name)
 	return sec;
 }
 
-static int linker_load_obj_file(struct bpf_linker *linker, const char *filename, struct src_obj *obj)
+static void sanitize_obj_name(char *name)
+{
+	int i;
+
+	for (i = 0; name[i]; i++) {
+		if (name[i] == '_')
+			continue;
+		if (i == 0 && isalpha(name[i]))
+			continue;
+		if (i > 0 && isalnum(name[i]))
+			continue;
+
+		name[i] = '_';
+	}
+}
+
+static bool str_has_suffix(const char *str, const char *suffix)
+{
+	size_t n1 = strlen(str), n2 = strlen(suffix);
+
+	if (n1 < n2)
+		return false;
+
+	return strcmp(str + n1 - n2, suffix) == 0;
+}
+
+static void get_obj_name(char *name, const char *file)
+{
+	/* Using basename() GNU version which doesn't modify arg. */
+	strncpy(name, basename(file), MAX_OBJ_NAME_LEN - 1);
+	name[MAX_OBJ_NAME_LEN - 1] = '\0';
+
+	if (str_has_suffix(name, ".bpf.o"))
+		name[strlen(name) - sizeof(".bpf.o") + 1] = '\0';
+	else if (str_has_suffix(name, ".o"))
+		name[strlen(name) - sizeof(".o") + 1] = '\0';
+
+	sanitize_obj_name(name);
+}
+
+static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
+				const struct bpf_linker_file_opts *opts,
+				struct src_obj *obj)
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 	const int host_endianness = ELFDATA2LSB;
@@ -548,6 +612,14 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 	pr_debug("linker: adding object file '%s'...\n", filename);
 
 	obj->filename = filename;
+
+	if (OPTS_GET(opts, object_name, NULL)) {
+		strncpy(obj->obj_name, opts->object_name, MAX_OBJ_NAME_LEN);
+		obj->obj_name[MAX_OBJ_NAME_LEN - 1] = '\0';
+	} else {
+		get_obj_name(obj->obj_name, filename);
+	}
+	obj->obj_name_len = strlen(obj->obj_name);
 
 	obj->fd = open(filename, O_RDONLY);
 	if (obj->fd < 0) {
@@ -2263,6 +2335,47 @@ static int linker_append_btf(struct bpf_linker *linker, struct src_obj *obj)
 				/* reuse existing BTF type for global var/func */
 				obj->btf_type_map[i] = glob_sym->btf_id;
 				continue;
+			}
+		} else if (btf_is_var(t) && btf_var(t)->linkage == BTF_VAR_STATIC) {
+			/* Static variables are renamed to include
+			 * "<obj_name>.." prefix (note double dots), similarly
+			 * to how static variables inside functions are named
+			 * "<func_name>.<var_name>" by compiler. This allows to
+			 * have  unique identifiers for static variables across
+			 * all linked object files (assuming unique filenames,
+			 * of course), which BPF skeleton relies on.
+			 *
+			 * So worst case static variable inside the function
+			 * will have the form "<obj_name>..<func_name>.<var_name"
+			 * and will get sanitized by BPF skeleton generation
+			 * logic to a field with <obj_name>__<func_name>_<var_name>
+			 * name. Typical static variable will have a
+			 * <obj_name>__<var_name> name, implying arguably nice
+			 * per-file scoping.
+			 *
+			 * If static var name already contains '..', though,
+			 * don't rename it, because it was already renamed by
+			 * previous linker passes.
+			 */
+			name = btf__str_by_offset(obj->btf, t->name_off);
+			if (!strstr(name, "..")) {
+				char new_name[MAX_VAR_NAME_LEN];
+
+				memcpy(new_name, obj->obj_name, obj->obj_name_len);
+				new_name[obj->obj_name_len] = '.';
+				new_name[obj->obj_name_len + 1] = '.';
+				new_name[obj->obj_name_len + 2] = '\0';
+				/* -3 is for '..' separator and terminating '\0' */
+				strncat(new_name, name, MAX_VAR_NAME_LEN - obj->obj_name_len - 3);
+
+				id = btf__add_str(obj->btf, new_name);
+				if (id < 0)
+					return id;
+
+				/* btf__add_str() might invalidate t, so re-fetch */
+				t = btf__type_by_id(obj->btf, i);
+
+				((struct btf_type *)t)->name_off = id;
 			}
 		}
 
