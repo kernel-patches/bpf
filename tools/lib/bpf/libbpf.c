@@ -3633,6 +3633,8 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 
 	/* generic map reference relocation */
 	if (type == LIBBPF_MAP_UNSPEC) {
+		size_t map_offset = sym->st_value + insn->imm;
+
 		if (!bpf_object__shndx_is_maps(obj, shdr_idx)) {
 			pr_warn("prog '%s': bad map relo against '%s' in section '%s'\n",
 				prog->name, sym_name, sym_sec_name);
@@ -3642,7 +3644,7 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 			map = &obj->maps[map_idx];
 			if (map->libbpf_type != type ||
 			    map->sec_idx != sym->st_shndx ||
-			    map->sec_offset != sym->st_value)
+			    map->sec_offset != map_offset)
 				continue;
 			pr_debug("prog '%s': found map %zd (%s, sec %d, off %zu) for insn #%u\n",
 				 prog->name, map_idx, map->name, map->sec_idx,
@@ -3657,7 +3659,8 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 		reloc_desc->type = RELO_LD64;
 		reloc_desc->insn_idx = insn_idx;
 		reloc_desc->map_idx = map_idx;
-		reloc_desc->sym_off = 0; /* sym->st_value determines map_idx */
+		/* sym->st_value + insn->imm determines map_idx */
+		reloc_desc->sym_off = 0;
 		return 0;
 	}
 
