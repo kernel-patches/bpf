@@ -10,6 +10,8 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 extern bool CONFIG_BPF_SYSCALL __kconfig;
 extern const void __start_BTF __ksym;
 
+static volatile int input_bss_static;
+
 int input_bss2;
 int input_data2 = 2;
 const volatile int input_rodata2 = 22;
@@ -38,7 +40,7 @@ static __noinline int get_data_res(void)
 SEC("raw_tp/sys_enter")
 int BPF_PROG(handler2)
 {
-	output_bss2 = input_bss1 + input_bss2 + input_bss_weak;
+	output_bss2 = input_bss_static + input_bss1 + input_bss2 + input_bss_weak;
 	output_data2 = get_data_res();
 	output_rodata2 = input_rodata1 + input_rodata2 + input_rodata_weak;
 

@@ -10,6 +10,8 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 extern bool CONFIG_BPF_SYSCALL __kconfig __weak;
 extern const void bpf_link_fops __ksym __weak;
 
+static volatile int input_bss_static;
+
 int input_bss1;
 int input_data1 = 1;
 const volatile int input_rodata1 = 11;
@@ -32,7 +34,7 @@ long output_sink1;
 static __noinline int get_bss_res(void)
 {
 	/* just make sure all the relocations work against .text as well */
-	return input_bss1 + input_bss2 + input_bss_weak;
+	return input_bss_static + input_bss1 + input_bss2 + input_bss_weak;
 }
 
 SEC("raw_tp/sys_enter")
