@@ -23,6 +23,7 @@
 #include "main.h"
 
 #define MAX_OBJ_NAME_LEN 64
+#define MAX_MAP_NAME_LEN (2 * MAX_OBJ_NAME_LEN + 1)
 
 static void sanitize_identifier(char *name)
 {
@@ -67,23 +68,29 @@ static void get_header_guard(char *guard, const char *obj_name)
 		guard[i] = toupper(guard[i]);
 }
 
-static const char *get_map_ident(const struct bpf_map *map)
+static const char *get_map_ident(char *name, const struct bpf_map *map)
 {
-	const char *name = bpf_map__name(map);
+	const char *orig_name = bpf_map__name(map);
 
-	if (!bpf_map__is_internal(map))
+	if (!bpf_map__is_internal(map)) {
+		strncpy(name, orig_name, MAX_MAP_NAME_LEN);
+		name[MAX_MAP_NAME_LEN - 1] = '\0';
+		sanitize_identifier(name);
 		return name;
+	}
 
-	if (str_has_suffix(name, ".data"))
-		return "data";
-	else if (str_has_suffix(name, ".rodata"))
-		return "rodata";
-	else if (str_has_suffix(name, ".bss"))
-		return "bss";
-	else if (str_has_suffix(name, ".kconfig"))
-		return "kconfig";
+	if (str_has_suffix(orig_name, ".data"))
+		strcpy(name, "data");
+	else if (str_has_suffix(orig_name, ".rodata"))
+		strcpy(name, "rodata");
+	else if (str_has_suffix(orig_name, ".bss"))
+		strcpy(name, "bss");
+	else if (str_has_suffix(orig_name, ".kconfig"))
+		strcpy(name, "kconfig");
 	else
 		return NULL;
+
+	return name;
 }
 
 static void codegen_btf_dump_printf(void *ctx, const char *fmt, va_list args)
@@ -273,6 +280,7 @@ static void codegen(const char *template, ...)
 static int do_skeleton(int argc, char **argv)
 {
 	char header_guard[MAX_OBJ_NAME_LEN + sizeof("__SKEL_H__")];
+	char map_ident[MAX_MAP_NAME_LEN];
 	size_t i, map_cnt = 0, prog_cnt = 0, file_sz, mmap_sz;
 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);
 	char obj_name[MAX_OBJ_NAME_LEN] = "", *obj_data;
@@ -348,7 +356,7 @@ static int do_skeleton(int argc, char **argv)
 	}
 
 	bpf_object__for_each_map(map, obj) {
-		ident = get_map_ident(map);
+		ident = get_map_ident(map_ident, map);
 		if (!ident) {
 			p_err("ignoring unrecognized internal map '%s'...",
 			      bpf_map__name(map));
@@ -382,7 +390,7 @@ static int do_skeleton(int argc, char **argv)
 	if (map_cnt) {
 		printf("\tstruct {\n");
 		bpf_object__for_each_map(map, obj) {
-			ident = get_map_ident(map);
+			ident = get_map_ident(map_ident, map);
 			if (!ident)
 				continue;
 			printf("\t\tstruct bpf_map *%s;\n", ident);
@@ -524,7 +532,7 @@ static int do_skeleton(int argc, char **argv)
 		);
 		i = 0;
 		bpf_object__for_each_map(map, obj) {
-			ident = get_map_ident(map);
+			ident = get_map_ident(map_ident, map);
 
 			if (!ident)
 				continue;
