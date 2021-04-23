@@ -31,9 +31,22 @@ struct {
 	__uint(max_entries, 16);
 } map_weak __weak SEC(".maps");
 
+static struct {
+	/* different type */
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	/* key and value are kept int for convenience, they don't have to
+	 * match with map_static in linked_maps1
+	 */
+	__type(key, int);
+	__type(value, int);
+	/* different max_entries */
+	__uint(max_entries, 20);
+} map_static SEC(".maps");
+
 int output_first2;
 int output_second2;
 int output_weak2;
+int output_static2;
 
 SEC("raw_tp/sys_enter")
 int BPF_PROG(handler_enter2)
@@ -46,6 +59,7 @@ int BPF_PROG(handler_enter2)
 	bpf_map_update_elem(&map1, &key_struct, &val_struct, 0);
 	bpf_map_update_elem(&map2, &key, &val, 0);
 	bpf_map_update_elem(&map_weak, &key, &val, 0);
+	bpf_map_update_elem(&map_static, &key, &val, 0);
 
 	return 0;
 }
@@ -69,6 +83,10 @@ int BPF_PROG(handler_exit2)
 	val = bpf_map_lookup_elem(&map_weak, &key);
 	if (val)
 		output_weak2 = *val;
+
+	val = bpf_map_lookup_elem(&map_static, &key);
+	if (val)
+		output_static2 = *val;
 
 	return 0;
 }
