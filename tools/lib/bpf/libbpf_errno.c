@@ -13,6 +13,9 @@
 
 #include "libbpf.h"
 
+/* This errno is internal to the kernel but leaks in the bpf() syscall. */
+#define ENOTSUPP 524
+
 /* make sure libbpf doesn't use kernel-only integer typedefs */
 #pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
 
@@ -42,6 +45,12 @@ int libbpf_strerror(int err, char *buf, size_t size)
 		return -1;
 
 	err = err > 0 ? err : -err;
+
+	if (err == ENOTSUPP) {
+		snprintf(buf, size, "Operation not supported");
+		buf[size - 1] = '\0';
+		return 0;
+	}
 
 	if (err < __LIBBPF_ERRNO__START) {
 		int ret;
