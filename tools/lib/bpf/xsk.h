@@ -111,15 +111,15 @@ DEFINE_XSK_RING(xsk_ring_cons);
 struct xsk_umem;
 struct xsk_socket;
 
-static inline __u64 *xsk_ring_prod__fill_addr(struct xsk_ring_prod *fill,
-					      __u32 idx)
+LIBBPF_API __always_inline __u64 *
+xsk_ring_prod__fill_addr(struct xsk_ring_prod *fill, __u32 idx)
 {
 	__u64 *addrs = (__u64 *)fill->ring;
 
 	return &addrs[idx & fill->mask];
 }
 
-static inline const __u64 *
+LIBBPF_API __always_inline const __u64 *
 xsk_ring_cons__comp_addr(const struct xsk_ring_cons *comp, __u32 idx)
 {
 	const __u64 *addrs = (const __u64 *)comp->ring;
@@ -127,15 +127,15 @@ xsk_ring_cons__comp_addr(const struct xsk_ring_cons *comp, __u32 idx)
 	return &addrs[idx & comp->mask];
 }
 
-static inline struct xdp_desc *xsk_ring_prod__tx_desc(struct xsk_ring_prod *tx,
-						      __u32 idx)
+LIBBPF_API __always_inline struct xdp_desc *
+xsk_ring_prod__tx_desc(struct xsk_ring_prod *tx, __u32 idx)
 {
 	struct xdp_desc *descs = (struct xdp_desc *)tx->ring;
 
 	return &descs[idx & tx->mask];
 }
 
-static inline const struct xdp_desc *
+LIBBPF_API __always_inline const struct xdp_desc *
 xsk_ring_cons__rx_desc(const struct xsk_ring_cons *rx, __u32 idx)
 {
 	const struct xdp_desc *descs = (const struct xdp_desc *)rx->ring;
@@ -143,12 +143,14 @@ xsk_ring_cons__rx_desc(const struct xsk_ring_cons *rx, __u32 idx)
 	return &descs[idx & rx->mask];
 }
 
-static inline int xsk_ring_prod__needs_wakeup(const struct xsk_ring_prod *r)
+LIBBPF_API __always_inline int
+xsk_ring_prod__needs_wakeup(const struct xsk_ring_prod *r)
 {
 	return *r->flags & XDP_RING_NEED_WAKEUP;
 }
 
-static inline __u32 xsk_prod_nb_free(struct xsk_ring_prod *r, __u32 nb)
+LIBBPF_API __always_inline __u32 xsk_prod_nb_free(struct xsk_ring_prod *r,
+						  __u32 nb)
 {
 	__u32 free_entries = r->cached_cons - r->cached_prod;
 
@@ -168,7 +170,8 @@ static inline __u32 xsk_prod_nb_free(struct xsk_ring_prod *r, __u32 nb)
 	return r->cached_cons - r->cached_prod;
 }
 
-static inline __u32 xsk_cons_nb_avail(struct xsk_ring_cons *r, __u32 nb)
+LIBBPF_API __always_inline __u32 xsk_cons_nb_avail(struct xsk_ring_cons *r,
+						   __u32 nb)
 {
 	__u32 entries = r->cached_prod - r->cached_cons;
 
@@ -180,7 +183,8 @@ static inline __u32 xsk_cons_nb_avail(struct xsk_ring_cons *r, __u32 nb)
 	return (entries > nb) ? nb : entries;
 }
 
-static inline __u32 xsk_ring_prod__reserve(struct xsk_ring_prod *prod, __u32 nb, __u32 *idx)
+LIBBPF_API __always_inline __u32
+xsk_ring_prod__reserve(struct xsk_ring_prod *prod, __u32 nb, __u32 *idx)
 {
 	if (xsk_prod_nb_free(prod, nb) < nb)
 		return 0;
@@ -191,7 +195,8 @@ static inline __u32 xsk_ring_prod__reserve(struct xsk_ring_prod *prod, __u32 nb,
 	return nb;
 }
 
-static inline void xsk_ring_prod__submit(struct xsk_ring_prod *prod, __u32 nb)
+LIBBPF_API __always_inline void
+xsk_ring_prod__submit(struct xsk_ring_prod *prod, __u32 nb)
 {
 	/* Make sure everything has been written to the ring before indicating
 	 * this to the kernel by writing the producer pointer.
@@ -199,7 +204,8 @@ static inline void xsk_ring_prod__submit(struct xsk_ring_prod *prod, __u32 nb)
 	libbpf_smp_store_release(prod->producer, *prod->producer + nb);
 }
 
-static inline __u32 xsk_ring_cons__peek(struct xsk_ring_cons *cons, __u32 nb, __u32 *idx)
+LIBBPF_API __always_inline __u32 xsk_ring_cons__peek(struct xsk_ring_cons *cons,
+						     __u32 nb, __u32 *idx)
 {
 	__u32 entries = xsk_cons_nb_avail(cons, nb);
 
@@ -211,36 +217,37 @@ static inline __u32 xsk_ring_cons__peek(struct xsk_ring_cons *cons, __u32 nb, __
 	return entries;
 }
 
-static inline void xsk_ring_cons__cancel(struct xsk_ring_cons *cons, __u32 nb)
+LIBBPF_API __always_inline void
+xsk_ring_cons__cancel(struct xsk_ring_cons *cons, __u32 nb)
 {
 	cons->cached_cons -= nb;
 }
 
-static inline void xsk_ring_cons__release(struct xsk_ring_cons *cons, __u32 nb)
+LIBBPF_API __always_inline void
+xsk_ring_cons__release(struct xsk_ring_cons *cons, __u32 nb)
 {
 	/* Make sure data has been read before indicating we are done
 	 * with the entries by updating the consumer pointer.
 	 */
 	libbpf_smp_store_release(cons->consumer, *cons->consumer + nb);
-
 }
 
-static inline void *xsk_umem__get_data(void *umem_area, __u64 addr)
+LIBBPF_API __always_inline void *xsk_umem__get_data(void *umem_area, __u64 addr)
 {
 	return &((char *)umem_area)[addr];
 }
 
-static inline __u64 xsk_umem__extract_addr(__u64 addr)
+LIBBPF_API __always_inline __u64 xsk_umem__extract_addr(__u64 addr)
 {
 	return addr & XSK_UNALIGNED_BUF_ADDR_MASK;
 }
 
-static inline __u64 xsk_umem__extract_offset(__u64 addr)
+LIBBPF_API __always_inline __u64 xsk_umem__extract_offset(__u64 addr)
 {
 	return addr >> XSK_UNALIGNED_BUF_OFFSET_SHIFT;
 }
 
-static inline __u64 xsk_umem__add_offset_to_addr(__u64 addr)
+LIBBPF_API __always_inline __u64 xsk_umem__add_offset_to_addr(__u64 addr)
 {
 	return xsk_umem__extract_addr(addr) + xsk_umem__extract_offset(addr);
 }
