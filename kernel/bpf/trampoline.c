@@ -558,12 +558,12 @@ static void notrace inc_misses_counter(struct bpf_prog *prog)
 u64 notrace __bpf_prog_enter(struct bpf_prog *prog)
 	__acquires(RCU)
 {
-	rcu_read_lock();
-	migrate_disable();
 	if (unlikely(__this_cpu_inc_return(*(prog->active)) != 1)) {
 		inc_misses_counter(prog);
 		return 0;
 	}
+	rcu_read_lock();
+	migrate_disable();
 	return bpf_prog_start_time();
 }
 
@@ -590,10 +590,12 @@ static void notrace update_prog_stats(struct bpf_prog *prog,
 void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start)
 	__releases(RCU)
 {
-	update_prog_stats(prog, start);
+	if (start) {
+		update_prog_stats(prog, start);
+		migrate_enable();
+		rcu_read_unlock();
+	}
 	__this_cpu_dec(*(prog->active));
-	migrate_enable();
-	rcu_read_unlock();
 }
 
 u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog)
