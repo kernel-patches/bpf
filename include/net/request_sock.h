@@ -190,6 +190,8 @@ void reqsk_queue_alloc(struct request_sock_queue *queue);
 void reqsk_fastopen_remove(struct sock *sk, struct request_sock *req,
 			   bool reset);
 
+struct request_sock *reqsk_clone(struct request_sock *req, struct sock *sk);
+
 static inline bool reqsk_queue_empty(const struct request_sock_queue *queue)
 {
 	return READ_ONCE(queue->rskq_accept_head) == NULL;
