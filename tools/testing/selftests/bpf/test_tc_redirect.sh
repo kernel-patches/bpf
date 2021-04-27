@@ -50,15 +50,32 @@ readonly IP4_DST="172.16.2.100"
 readonly IP6_SRC="::1:dead:beef:cafe"
 readonly IP6_DST="::2:dead:beef:cafe"
 
+readonly IP4_TUN_SRC="172.17.1.100"
+readonly IP4_TUN_FWD="172.17.1.200"
+
+readonly IP6_TUN_SRC="1::dead:beef:0"
+readonly IP6_TUN_FWD="1::dead:beef:1"
+
 readonly IP4_SLL="169.254.0.1"
 readonly IP4_DLL="169.254.0.2"
 readonly IP4_NET="169.254.0.0"
+
+readonly MAC_DST_FWD="00:11:22:33:44:55"
+readonly MAC_DST="00:22:33:44:55:66"
+
+TEST_TC_PEER_USER_PID=""
+NC4_PID=""
+NC6_PID=""
 
 netns_cleanup()
 {
 	ip netns del ${NS_SRC}
 	ip netns del ${NS_FWD}
 	ip netns del ${NS_DST}
+
+	[ -n "$TEST_TC_PEER_USER_PID" ] && kill ${TEST_TC_PEER_USER_PID} || true
+	[ -n "${NC4_PID}" ] && kill ${NC4_PID} || true
+	[ -n "${NC6_PID}" ] && kill ${NC6_PID} || true
 }
 
 netns_setup()
@@ -69,6 +86,9 @@ netns_setup()
 
 	ip link add veth_src type veth peer name veth_src_fwd
 	ip link add veth_dst type veth peer name veth_dst_fwd
+
+	ip link set veth_dst_fwd address ${MAC_DST_FWD}
+	ip link set veth_dst address ${MAC_DST}
 
 	ip link set veth_src netns ${NS_SRC}
 	ip link set veth_src_fwd netns ${NS_FWD}
@@ -117,14 +137,20 @@ netns_setup()
 
 	ip -netns ${NS_SRC} neigh add ${IP6_DST} dev veth_src lladdr $fmac_src
 	ip -netns ${NS_DST} neigh add ${IP6_SRC} dev veth_dst lladdr $fmac_dst
+
+	ip -netns ${NS_DST} neigh add ${IP4_TUN_SRC} dev veth_dst lladdr $fmac_dst
+	ip -netns ${NS_DST} neigh add ${IP6_TUN_SRC} dev veth_dst lladdr $fmac_dst
+	ip -netns ${NS_DST} neigh add ${IP6_TUN_FWD} dev veth_dst lladdr $fmac_dst
 }
 
 netns_test_connectivity()
 {
 	set +e
 
-	ip netns exec ${NS_DST} bash -c "nc -4 -l -p 9004 &"
-	ip netns exec ${NS_DST} bash -c "nc -6 -l -p 9006 &"
+	ip netns exec ${NS_DST} nc -4 -l -p 9004 &
+	NC4_PID=$!
+	ip netns exec ${NS_DST} nc -6 -l -p 9006 &
+	NC6_PID=$!
 
 	TEST="TCPv4 connectivity test"
 	ip netns exec ${NS_SRC} bash -c "timeout ${TIMEOUT} dd if=/dev/zero bs=1000 count=100 > /dev/tcp/${IP4_DST}/9004"
@@ -170,14 +196,52 @@ netns_setup_bpf()
 {
 	local obj=$1
 	local use_forwarding=${2:-0}
+	local use_tuntap=${3:-0}
 
-	ip netns exec ${NS_FWD} tc qdisc add dev veth_src_fwd clsact
-	ip netns exec ${NS_FWD} tc filter add dev veth_src_fwd ingress bpf da obj $obj sec src_ingress
-	ip netns exec ${NS_FWD} tc filter add dev veth_src_fwd egress  bpf da obj $obj sec chk_egress
+	if [ "$use_tuntap" -eq "1" ]; then
+		# Set up tuntap based tunnel between src and fwd namespaces.
+		./test_tc_peer_user ${NS_SRC} tun_src ${NS_FWD} tun_fwd &
+		TEST_TC_PEER_USER_PID=$!
 
-	ip netns exec ${NS_FWD} tc qdisc add dev veth_dst_fwd clsact
-	ip netns exec ${NS_FWD} tc filter add dev veth_dst_fwd ingress bpf da obj $obj sec dst_ingress
-	ip netns exec ${NS_FWD} tc filter add dev veth_dst_fwd egress  bpf da obj $obj sec chk_egress
+		while ! ip -netns ${NS_SRC} link show tun_src; do echo "Waiting for tun_src to appear..."; sleep 0.5; done
+		while ! ip -netns ${NS_FWD} link show tun_fwd; do echo "Waiting for tun_fwd to appoar..."; sleep 0.5; done
+
+		ip -netns ${NS_SRC} addr add dev tun_src ${IP4_TUN_SRC}/24
+		ip -netns ${NS_FWD} addr add dev tun_fwd ${IP4_TUN_FWD}/24
+
+		ip -netns ${NS_SRC} addr add dev tun_src ${IP6_TUN_SRC}/64 nodad
+		ip -netns ${NS_FWD} addr add dev tun_fwd ${IP6_TUN_FWD}/64 nodad
+
+		ip -netns ${NS_SRC} route del ${IP4_DST}/32 dev veth_src scope global
+		ip -netns ${NS_SRC} route add ${IP4_DST}/32 via ${IP4_TUN_FWD} dev tun_src scope global
+		ip -netns ${NS_DST} route add ${IP4_TUN_SRC}/32 dev veth_dst scope global
+
+		ip -netns ${NS_SRC} route del ${IP6_DST}/128 dev veth_src scope global
+		ip -netns ${NS_SRC} route add ${IP6_DST}/128 via ${IP6_TUN_FWD} dev tun_src scope global
+		ip -netns ${NS_DST} route add ${IP6_TUN_SRC}/128 dev veth_dst scope global
+		ip -netns ${NS_DST} route add ${IP6_TUN_FWD}/128 dev veth_dst scope global
+
+		ip netns exec ${NS_FWD} tc qdisc add dev tun_fwd clsact
+		ip netns exec ${NS_FWD} tc filter add dev tun_fwd ingress bpf da obj $obj sec src_ingress_l3
+
+		# Enable forwarding back towards src, but not for packets coming from the tunnel.
+		ip netns exec ${NS_FWD} sysctl -w net.ipv4.ip_forward=1
+		ip netns exec ${NS_FWD} sysctl -w net.ipv6.conf.all.forwarding=1
+		ip netns exec ${NS_FWD} sysctl -w net.ipv4.conf.veth_dst_fwd.forwarding=1
+		ip netns exec ${NS_FWD} sysctl -w net.ipv4.conf.veth_src_fwd.forwarding=0
+		ip netns exec ${NS_FWD} sysctl -w net.ipv4.conf.tun_fwd.forwarding=0
+		ip netns exec ${NS_FWD} sysctl -w net.ipv6.conf.veth_src_fwd.forwarding=0
+		ip netns exec ${NS_FWD} sysctl -w net.ipv6.conf.veth_dst_fwd.forwarding=1
+		ip netns exec ${NS_FWD} sysctl -w net.ipv6.conf.tun_fwd.forwarding=0
+	else
+		ip netns exec ${NS_FWD} tc qdisc add dev veth_src_fwd clsact
+		ip netns exec ${NS_FWD} tc filter add dev veth_src_fwd ingress bpf da obj $obj sec src_ingress
+		ip netns exec ${NS_FWD} tc filter add dev veth_src_fwd egress  bpf da obj $obj sec chk_egress
+
+		ip netns exec ${NS_FWD} tc qdisc add dev veth_dst_fwd clsact
+		ip netns exec ${NS_FWD} tc filter add dev veth_dst_fwd ingress bpf da obj $obj sec dst_ingress
+		ip netns exec ${NS_FWD} tc filter add dev veth_dst_fwd egress  bpf da obj $obj sec chk_egress
+	fi
 
 	if [ "$use_forwarding" -eq "1" ]; then
 		# bpf_fib_lookup() checks if forwarding is enabled
@@ -190,13 +254,10 @@ netns_setup_bpf()
 	veth_src=$(ip netns exec ${NS_FWD} cat /sys/class/net/veth_src_fwd/ifindex)
 	veth_dst=$(ip netns exec ${NS_FWD} cat /sys/class/net/veth_dst_fwd/ifindex)
 
-	progs=$(ip netns exec ${NS_FWD} bpftool net --json | jq -r '.[] | .tc | map(.id) | .[]')
-	for prog in $progs; do
-		map=$(bpftool prog show id $prog --json | jq -r '.map_ids | .? | .[]')
-		if [ ! -z "$map" ]; then
-			bpftool map update id $map key hex $(hex_mem_str 0) value hex $(hex_mem_str $veth_src)
-			bpftool map update id $map key hex $(hex_mem_str 1) value hex $(hex_mem_str $veth_dst)
-		fi
+ 	maps=$(bpftool map list --json | jq -r '.[] | select(.name == "ifindex_map") | .id')
+	for map in $maps; do
+		bpftool map update id $map key hex $(hex_mem_str 0) value hex $(hex_mem_str $veth_src)
+		bpftool map update id $map key hex $(hex_mem_str 1) value hex $(hex_mem_str $veth_dst)
 	done
 }
 
@@ -213,4 +274,8 @@ netns_test_connectivity
 netns_cleanup
 netns_setup
 netns_setup_bpf test_tc_peer.o
+netns_test_connectivity
+netns_cleanup
+netns_setup
+netns_setup_bpf test_tc_peer.o 0 1
 netns_test_connectivity
