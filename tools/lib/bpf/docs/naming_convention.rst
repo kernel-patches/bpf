@@ -1,6 +1,8 @@
 .. SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
-libbpf API naming convention
+.. _naming_convention:
+
+API naming convention
 ============================
 
 libbpf API provides access to a few logically separated groups of
@@ -76,7 +78,7 @@ Please take a look at Documentation/networking/af_xdp.rst in the Linux
 kernel source tree on how to use XDP sockets and for some common
 mistakes in case you do not get any traffic up to user space.
 
-libbpf ABI
+ABI
 ==========
 
 libbpf can be both linked statically or used as DSO. To avoid possible
@@ -116,7 +118,8 @@ This bump in ABI version is at most once per kernel development cycle.
 
 For example, if current state of ``libbpf.map`` is:
 
-.. code-block::
+.. code-block:: c
+
         LIBBPF_0.0.1 {
         	global:
                         bpf_func_a;
@@ -128,7 +131,8 @@ For example, if current state of ``libbpf.map`` is:
 , and a new symbol ``bpf_func_c`` is being introduced, then
 ``libbpf.map`` should be changed like this:
 
-.. code-block::
+.. code-block:: c
+
         LIBBPF_0.0.1 {
         	global:
                         bpf_func_a;
@@ -148,7 +152,7 @@ Format of version script and ways to handle ABI changes, including
 incompatible ones, described in details in [1].
 
 Stand-alone build
-=================
+-------------------
 
 Under https://github.com/libbpf/libbpf there is a (semi-)automated
 mirror of the mainline's version of libbpf for a stand-alone build.
@@ -157,12 +161,12 @@ However, all changes to libbpf's code base must be upstreamed through
 the mainline kernel tree.
 
 License
-=======
+-------------------
 
 libbpf is dual-licensed under LGPL 2.1 and BSD 2-Clause.
 
 Links
-=====
+-------------------
 
 [1] https://www.akkadia.org/drepper/dsohowto.pdf
     (Chapter 3. Maintaining APIs and ABIs).

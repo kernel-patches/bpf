@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
+
 libbpf documentation
 =======================================
 
@@ -13,3 +15,7 @@ be that this was already addressed or answered before.
 
 .. toctree::
    :caption: Documentation:
+
+   api
+   naming_convention
+   build
