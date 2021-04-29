@@ -5213,6 +5213,11 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 				tname, i, btf_kind_str[BTF_INFO_KIND(t->info)]);
 			return -EINVAL;
 		}
+		/* void at the end of args means '...' argument, skip it */
+		if (!ret && (i + 1 == nargs)) {
+			nargs--;
+			break;
+		}
 		m->arg_size[i] = ret;
 	}
 	m->nr_args = nargs;
