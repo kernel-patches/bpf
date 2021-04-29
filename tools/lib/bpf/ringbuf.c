@@ -204,7 +204,9 @@ static inline int roundup_len(__u32 len)
 
 static int ringbuf_process_ring(struct ring* r)
 {
-	int *len_ptr, len, err, cnt = 0;
+	int *len_ptr, len, err;
+	/* 64-bit to avoid overflow in case of extreme application behavior */
+	int64_t cnt = 0;
 	unsigned long cons_pos, prod_pos;
 	bool got_new_data;
 	void *sample;
@@ -240,7 +242,7 @@ static int ringbuf_process_ring(struct ring* r)
 		}
 	} while (got_new_data);
 done:
-	return cnt;
+	return min(cnt, INT_MAX);
 }
 
 /* Consume available ring buffer(s) data without event polling.
@@ -263,8 +265,8 @@ int ring_buffer__consume(struct ring_buffer *rb)
 }
 
 /* Poll for available data and consume records, if any are available.
- * Returns number of records consumed, or negative number, if any of the
- * registered callbacks returned error.
+ * Returns number of records consumed (or INT_MAX, whichever is less), or
+ * negative number, if any of the registered callbacks returned error.
  */
 int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms)
 {
