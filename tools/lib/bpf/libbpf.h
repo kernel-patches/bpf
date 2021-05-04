@@ -775,6 +775,48 @@ LIBBPF_API int bpf_linker__add_file(struct bpf_linker *linker, const char *filen
 LIBBPF_API int bpf_linker__finalize(struct bpf_linker *linker);
 LIBBPF_API void bpf_linker__free(struct bpf_linker *linker);
 
+enum bpf_tc_attach_point {
+	BPF_TC_INGRESS = 1 << 0,
+	BPF_TC_EGRESS  = 1 << 1,
+	BPF_TC_CUSTOM  = 1 << 2,
+};
+
+enum bpf_tc_flags {
+	BPF_TC_F_REPLACE = 1 << 0,
+};
+
+struct bpf_tc_hook {
+	size_t sz;
+	int ifindex;
+	int flags;
+	enum bpf_tc_attach_point attach_point;
+	__u32 parent;
+	size_t :0;
+};
+
+#define bpf_tc_hook__last_field parent
+
+struct bpf_tc_opts {
+	size_t sz;
+	int prog_fd;
+	int flags;
+	__u32 prog_id;
+	__u32 handle;
+	__u32 priority;
+	size_t :0;
+};
+
+#define bpf_tc_opts__last_field priority
+
+LIBBPF_API int bpf_tc_hook_create(struct bpf_tc_hook *hook);
+LIBBPF_API int bpf_tc_hook_destroy(struct bpf_tc_hook *hook);
+LIBBPF_API int bpf_tc_attach(const struct bpf_tc_hook *hook,
+			     struct bpf_tc_opts *opts);
+LIBBPF_API int bpf_tc_detach(const struct bpf_tc_hook *hook,
+			     const struct bpf_tc_opts *opts);
+LIBBPF_API int bpf_tc_query(const struct bpf_tc_hook *hook,
+			    struct bpf_tc_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
