@@ -709,7 +709,7 @@ static int try_get_fmt_tmp_buf(char **tmp_buf)
 
 	preempt_disable();
 	used = this_cpu_inc_return(bpf_printf_buf_used);
-	if (WARN_ON_ONCE(used > 1)) {
+	if (used > 1) {
 		this_cpu_dec(bpf_printf_buf_used);
 		preempt_enable();
 		return -EBUSY;
