@@ -175,6 +175,7 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 static int linker_append_btf(struct bpf_linker *linker, struct src_obj *obj);
 static int linker_append_btf_ext(struct bpf_linker *linker, struct src_obj *obj);
 
+static void finalize_elf_syms(struct bpf_linker *linker);
 static int finalize_btf(struct bpf_linker *linker);
 static int finalize_btf_ext(struct bpf_linker *linker);
 
@@ -809,7 +810,7 @@ static int linker_sanity_check_elf_symtab(struct src_obj *obj, struct src_sec *s
 				i, sec->sec_idx, sym_bind);
 			return -EINVAL;
 		}
-		if (sym_vis != STV_DEFAULT && sym_vis != STV_HIDDEN) {
+		if (sym_vis != STV_DEFAULT && sym_vis != STV_HIDDEN && sym_vis != STV_INTERNAL) {
 			pr_warn("ELF sym #%d in section #%zu has unsupported symbol visibility %d\n",
 				i, sec->sec_idx, sym_vis);
 			return -EINVAL;
@@ -1783,6 +1784,15 @@ static void sym_update_type(Elf64_Sym *sym, int sym_type)
 	sym->st_info = ELF64_ST_INFO(ELF64_ST_BIND(sym->st_info), sym_type);
 }
 
+static bool sym_visibility_is_stricter(int src_vis, int dst_vis)
+{
+	if (src_vis == STV_INTERNAL)
+		return dst_vis != STV_INTERNAL;
+	if (src_vis == STV_HIDDEN)
+		return dst_vis == STV_DEFAULT;
+	return false;
+}
+
 static void sym_update_visibility(Elf64_Sym *sym, int sym_vis)
 {
 	/* libelf doesn't provide setters for ST_VISIBILITY,
@@ -1798,7 +1808,7 @@ static int linker_append_elf_sym(struct bpf_linker *linker, struct src_obj *obj,
 	struct src_sec *src_sec = NULL;
 	struct dst_sec *dst_sec = NULL;
 	struct glob_sym *glob_sym = NULL;
-	int name_off, sym_type, sym_bind, sym_vis, err;
+	int name_off, sym_type, sym_bind, sym_vis, dst_vis, err;
 	int btf_sec_id = 0, btf_id = 0;
 	size_t dst_sym_idx;
 	Elf64_Sym *dst_sym;
@@ -1877,10 +1887,16 @@ static int linker_append_elf_sym(struct bpf_linker *linker, struct src_obj *obj,
 			return -EINVAL;
 		}
 
+		dst_sym = get_sym_by_idx(linker, glob_sym->sym_idx);
+		dst_vis = ELF64_ST_VISIBILITY(dst_sym->st_other);
+		if (sym_vis == STV_INTERNAL || dst_vis == STV_INTERNAL) {
+			pr_warn("conflicting non-resolvable symbol #%d (%s) definition in '%s'\n",
+				src_sym_idx, sym_name, obj->filename);
+			return -EINVAL;
+		}
+
 		if (!glob_syms_match(sym_name, linker, glob_sym, obj, sym, src_sym_idx, btf_id))
 			return -EINVAL;
-
-		dst_sym = get_sym_by_idx(linker, glob_sym->sym_idx);
 
 		/* If new symbol is strong, then force dst_sym to be strong as
 		 * well; this way a mix of weak and non-weak extern
@@ -1898,10 +1914,10 @@ static int linker_append_elf_sym(struct bpf_linker *linker, struct src_obj *obj,
 		/* Non-default visibility is "contaminating", with stricter
 		 * visibility overwriting more permissive ones, even if more
 		 * permissive visibility comes from just an extern definition.
-		 * Currently only STV_DEFAULT and STV_HIDDEN are allowed and
-		 * ensured by ELF symbol sanity checks above.
+		 * Currently only STV_DEFAULT, STV_HIDDEN, and STV_INTERNAL
+		 * are allowed and ensured by ELF symbol sanity checks above.
 		 */
-		if (sym_vis > ELF64_ST_VISIBILITY(dst_sym->st_other))
+		if (sym_visibility_is_stricter(sym_vis, ELF64_ST_VISIBILITY(dst_sym->st_other)))
 			sym_update_visibility(dst_sym, sym_vis);
 
 		/* If the new symbol is extern, then regardless if
@@ -2549,6 +2565,8 @@ int bpf_linker__finalize(struct bpf_linker *linker)
 	if (!linker->elf)
 		return -EINVAL;
 
+	finalize_elf_syms(linker);
+
 	err = finalize_btf(linker);
 	if (err)
 		return err;
@@ -2600,6 +2618,18 @@ int bpf_linker__finalize(struct bpf_linker *linker)
 	linker->fd = -1;
 
 	return 0;
+}
+
+static void finalize_elf_syms(struct bpf_linker *linker)
+{
+	struct dst_sec *symtab = &linker->secs[linker->symtab_sec_idx];
+	Elf64_Sym *sym = symtab->raw_data;
+	int i, n = symtab->shdr->sh_size / symtab->shdr->sh_entsize;
+
+	for (i = 0; i < n; i++, sym++) {
+		if (ELF64_ST_VISIBILITY(sym->st_other) == STV_HIDDEN)
+			sym_update_visibility(sym, STV_INTERNAL);
+	}
 }
 
 static int emit_elf_data_sec(struct bpf_linker *linker, const char *sec_name,
