@@ -2598,6 +2598,12 @@ int security_locked_down(enum lockdown_reason what)
 }
 EXPORT_SYMBOL(security_locked_down);
 
+int security_locked_down_globally(enum lockdown_reason what)
+{
+	return call_int_hook(locked_down_globally, 0, what);
+}
+EXPORT_SYMBOL(security_locked_down_globally);
+
 #ifdef CONFIG_PERF_EVENTS
 int security_perf_event_open(struct perf_event_attr *attr, int type)
 {
