@@ -919,6 +919,23 @@ static const char *redir_mode_str(enum redir_mode mode)
 	}
 }
 
+static int add_to_sockmap(int sock_mapfd, int fd1, int fd2)
+{
+	u64 value;
+	u32 key;
+	int err;
+
+	key = 0;
+	value = fd1;
+	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
+	if (err)
+		return err;
+
+	key = 1;
+	value = fd2;
+	return xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
+}
+
 static void redir_to_connected(int family, int sotype, int sock_mapfd,
 			       int verd_mapfd, enum redir_mode mode)
 {
@@ -928,7 +945,6 @@ static void redir_to_connected(int family, int sotype, int sock_mapfd,
 	unsigned int pass;
 	socklen_t len;
 	int err, n;
-	u64 value;
 	u32 key;
 	char b;
 
@@ -965,15 +981,7 @@ static void redir_to_connected(int family, int sotype, int sock_mapfd,
 	if (p1 < 0)
 		goto close_cli1;
 
-	key = 0;
-	value = p0;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
-	if (err)
-		goto close_peer1;
-
-	key = 1;
-	value = p1;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
+	err = add_to_sockmap(sock_mapfd, p0, p1);
 	if (err)
 		goto close_peer1;
 
@@ -1061,7 +1069,6 @@ static void redir_to_listening(int family, int sotype, int sock_mapfd,
 	int s, c, p, err, n;
 	unsigned int drop;
 	socklen_t len;
-	u64 value;
 	u32 key;
 
 	zero_verdict_count(verd_mapfd);
@@ -1086,15 +1093,7 @@ static void redir_to_listening(int family, int sotype, int sock_mapfd,
 	if (p < 0)
 		goto close_cli;
 
-	key = 0;
-	value = s;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
-	if (err)
-		goto close_peer;
-
-	key = 1;
-	value = p;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
+	err = add_to_sockmap(sock_mapfd, s, p);
 	if (err)
 		goto close_peer;
 
@@ -1346,7 +1345,6 @@ static void test_reuseport_mixed_groups(int family, int sotype, int sock_map,
 	int s1, s2, c, err;
 	unsigned int drop;
 	socklen_t len;
-	u64 value;
 	u32 key;
 
 	zero_verdict_count(verd_map);
@@ -1360,15 +1358,9 @@ static void test_reuseport_mixed_groups(int family, int sotype, int sock_map,
 	if (s2 < 0)
 		goto close_srv1;
 
-	key = 0;
-	value = s1;
-	err = xbpf_map_update_elem(sock_map, &key, &value, BPF_NOEXIST);
+	err = add_to_sockmap(sock_map, s1, s2);
 	if (err)
 		goto close_srv2;
-
-	key = 1;
-	value = s2;
-	err = xbpf_map_update_elem(sock_map, &key, &value, BPF_NOEXIST);
 
 	/* Connect to s2, reuseport BPF selects s1 via sock_map[0] */
 	len = sizeof(addr);
@@ -1652,7 +1644,6 @@ static void udp_redir_to_connected(int family, int sock_mapfd, int verd_mapfd,
 	int c0, c1, p0, p1;
 	unsigned int pass;
 	int err, n;
-	u64 value;
 	u32 key;
 	char b;
 
@@ -1665,15 +1656,7 @@ static void udp_redir_to_connected(int family, int sock_mapfd, int verd_mapfd,
 	if (err)
 		goto close_cli0;
 
-	key = 0;
-	value = p0;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
-	if (err)
-		goto close_cli1;
-
-	key = 1;
-	value = p1;
-	err = xbpf_map_update_elem(sock_mapfd, &key, &value, BPF_NOEXIST);
+	err = add_to_sockmap(sock_mapfd, p0, p1);
 	if (err)
 		goto close_cli1;
 
