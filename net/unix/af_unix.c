@@ -487,6 +487,8 @@ static void unix_dgram_disconnected(struct sock *sk, struct sock *other)
 			other->sk_error_report(other);
 		}
 	}
+	sk->sk_prot->unhash(sk);
+	other->sk_prot->unhash(other);
 	sk->sk_state = other->sk_state = TCP_CLOSE;
 }
 
@@ -773,10 +775,23 @@ static const struct proto_ops unix_seqpacket_ops = {
 	.show_fdinfo =	unix_show_fdinfo,
 };
 
+/* Nothing to do here, unix socket is not unhashed when disconnecting,
+ * and does not need a ->close(). These are merely for sockmap.
+ */
+static void unix_unhash(struct sock *sk)
+{
+}
+
+static void unix_close(struct sock *sk, long timeout)
+{
+}
+
 static struct proto unix_proto = {
 	.name			= "UNIX",
 	.owner			= THIS_MODULE,
 	.obj_size		= sizeof(struct unix_sock),
+	.unhash			= unix_unhash,
+	.close			= unix_close,
 };
 
 static struct sock *unix_create1(struct net *net, struct socket *sock, int kern)
@@ -860,6 +875,7 @@ static int unix_release(struct socket *sock)
 	if (!sk)
 		return 0;
 
+	sk->sk_prot->close(sk, 0);
 	unix_release_sock(sk, 0);
 	sock->sk = NULL;
 
