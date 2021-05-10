@@ -224,19 +224,19 @@ out:
 	return err;
 }
 
-BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
-	   task, void *, value, u64, flags)
+static void *_bpf_task_storage_get(struct bpf_map *map, struct task_struct *task,
+				   void *value, u64 flags)
 {
 	struct bpf_local_storage_data *sdata;
 
 	if (flags & ~(BPF_LOCAL_STORAGE_GET_F_CREATE))
-		return (unsigned long)NULL;
+		return NULL;
 
 	if (!task)
-		return (unsigned long)NULL;
+		return NULL;
 
 	if (!bpf_task_storage_trylock())
-		return (unsigned long)NULL;
+		return NULL;
 
 	sdata = task_storage_lookup(task, map, true);
 	if (sdata)
@@ -251,12 +251,24 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 
 unlock:
 	bpf_task_storage_unlock();
-	return IS_ERR_OR_NULL(sdata) ? (unsigned long)NULL :
-		(unsigned long)sdata->data;
+	return IS_ERR_OR_NULL(sdata) ? NULL : sdata->data;
 }
 
-BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
-	   task)
+BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
+	   task, void *, value, u64, flags)
+{
+	return (unsigned long)_bpf_task_storage_get(map, task, value, flags);
+}
+
+BPF_CALL_4(bpf_task_storage_get_default_leader, struct bpf_map *, map,
+	   struct task_struct *, task, void *, value, u64, flags)
+{
+	if (!task)
+		task = current->group_leader;
+	return (unsigned long)_bpf_task_storage_get(map, task, value, flags);
+}
+
+static int _bpf_task_storage_delete(struct bpf_map *map, struct task_struct *task)
 {
 	int ret;
 
@@ -273,6 +285,20 @@ BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
 	ret = task_storage_delete(task, map);
 	bpf_task_storage_unlock();
 	return ret;
+}
+
+BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
+	   task)
+{
+	return _bpf_task_storage_delete(map, task);
+}
+
+BPF_CALL_2(bpf_task_storage_delete_default_leader, struct bpf_map *, map,
+	   struct task_struct *, task)
+{
+	if (!task)
+		task = current->group_leader;
+	return _bpf_task_storage_delete(map, task);
 }
 
 static int notsupp_get_next_key(struct bpf_map *map, void *key, void *next_key)
@@ -330,11 +356,31 @@ const struct bpf_func_proto bpf_task_storage_get_proto = {
 	.arg4_type = ARG_ANYTHING,
 };
 
+const struct bpf_func_proto bpf_task_storage_get_default_leader_proto = {
+	.func = bpf_task_storage_get_default_leader,
+	.gpl_only = false,
+	.ret_type = RET_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID_OR_NULL,
+	.arg2_btf_id = &bpf_task_storage_btf_ids[0],
+	.arg3_type = ARG_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg4_type = ARG_ANYTHING,
+};
+
 const struct bpf_func_proto bpf_task_storage_delete_proto = {
 	.func = bpf_task_storage_delete,
 	.gpl_only = false,
 	.ret_type = RET_INTEGER,
 	.arg1_type = ARG_CONST_MAP_PTR,
 	.arg2_type = ARG_PTR_TO_BTF_ID,
+	.arg2_btf_id = &bpf_task_storage_btf_ids[0],
+};
+
+const struct bpf_func_proto bpf_task_storage_delete_default_leader_proto = {
+	.func = bpf_task_storage_delete_default_leader,
+	.gpl_only = false,
+	.ret_type = RET_INTEGER,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID_OR_NULL,
 	.arg2_btf_id = &bpf_task_storage_btf_ids[0],
 };
