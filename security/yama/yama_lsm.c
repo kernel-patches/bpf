@@ -421,9 +421,39 @@ static int yama_ptrace_traceme(struct task_struct *parent)
 	return rc;
 }
 
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+static int yama_seccomp_extended(void)
+{
+	int rc = 0;
+
+	/* seccomp filter attach can only affect itself and children */
+	switch (ptrace_scope) {
+	case YAMA_SCOPE_DISABLED:
+	case YAMA_SCOPE_RELATIONAL:
+		/* No additional restrictions. */
+		break;
+	case YAMA_SCOPE_CAPABILITY:
+		rcu_read_lock();
+		if (!ns_capable(current_user_ns(), CAP_SYS_PTRACE))
+			rc = -EPERM;
+		rcu_read_unlock();
+		break;
+	case YAMA_SCOPE_NO_ATTACH:
+	default:
+		rc = -EPERM;
+		break;
+	}
+
+	return rc;
+}
+#endif /* CONFIG_SECCOMP_FILTER_EXTENDED */
+
 static struct security_hook_list yama_hooks[] __lsm_ro_after_init = {
 	LSM_HOOK_INIT(ptrace_access_check, yama_ptrace_access_check),
 	LSM_HOOK_INIT(ptrace_traceme, yama_ptrace_traceme),
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+	LSM_HOOK_INIT(seccomp_extended, yama_seccomp_extended),
+#endif
 	LSM_HOOK_INIT(task_prctl, yama_task_prctl),
 	LSM_HOOK_INIT(task_free, yama_task_free),
 };
