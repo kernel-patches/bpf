@@ -645,16 +645,6 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 
 	BUG_ON(INT_MAX / fprog->len < sizeof(struct sock_filter));
 
-	/*
-	 * Installing a seccomp filter requires that the task has
-	 * CAP_SYS_ADMIN in its namespace or be running with no_new_privs.
-	 * This avoids scenarios where unprivileged tasks can affect the
-	 * behavior of privileged children.
-	 */
-	if (!task_no_new_privs(current) &&
-			!ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
-		return ERR_PTR(-EACCES);
-
 	/* Allocate a new seccomp_filter */
 	sfilter = kzalloc(sizeof(*sfilter), GFP_KERNEL | __GFP_NOWARN);
 	if (!sfilter)
@@ -1811,6 +1801,22 @@ static long seccomp_set_mode_filter(unsigned int flags,
 	prepared = seccomp_prepare_user_filter(filter);
 	if (IS_ERR(prepared))
 		return PTR_ERR(prepared);
+
+	/*
+	 * Installing a seccomp filter requires that the task has
+	 * CAP_SYS_ADMIN in its namespace or be running with no_new_privs.
+	 * This avoids scenarios where unprivileged tasks can affect the
+	 * behavior of privileged children.
+	 *
+	 * This is checked after filter preparation because the user
+	 * will get an EINVAL if their filter is invalid prior to the
+	 * EACCES.
+	 */
+	if (!task_no_new_privs(current) &&
+	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN)) {
+		ret = -EACCES;
+		goto out_free;
+	}
 
 	if (flags & SECCOMP_FILTER_FLAG_NEW_LISTENER) {
 		listener = get_unused_fd_flags(O_CLOEXEC);
