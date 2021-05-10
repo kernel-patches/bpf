@@ -1964,6 +1964,11 @@ extern int security_bpf_map_alloc(struct bpf_map *map);
 extern void security_bpf_map_free(struct bpf_map *map);
 extern int security_bpf_prog_alloc(struct bpf_prog_aux *aux);
 extern void security_bpf_prog_free(struct bpf_prog_aux *aux);
+
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+extern int security_seccomp_extended(void);
+#endif /* CONFIG_SECCOMP_FILTER_EXTENDED */
+
 #else
 static inline int security_bpf(int cmd, union bpf_attr *attr,
 					     unsigned int size)
@@ -1996,6 +2001,14 @@ static inline int security_bpf_prog_alloc(struct bpf_prog_aux *aux)
 
 static inline void security_bpf_prog_free(struct bpf_prog_aux *aux)
 { }
+
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+static inline int security_seccomp_extended(void)
+{
+	return 0;
+}
+#endif /* CONFIG_SECCOMP_FILTER_EXTENDED */
+
 #endif /* CONFIG_SECURITY */
 #endif /* CONFIG_BPF_SYSCALL */
 

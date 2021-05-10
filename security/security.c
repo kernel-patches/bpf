@@ -2590,6 +2590,14 @@ void security_bpf_prog_free(struct bpf_prog_aux *aux)
 {
 	call_void_hook(bpf_prog_free_security, aux);
 }
+
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+int security_seccomp_extended(void)
+{
+	return call_int_hook(seccomp_extended, 0);
+}
+#endif
+
 #endif /* CONFIG_BPF_SYSCALL */
 
 int security_locked_down(enum lockdown_reason what)

@@ -392,6 +392,10 @@ LSM_HOOK(int, 0, bpf_map_alloc_security, struct bpf_map *map)
 LSM_HOOK(void, LSM_RET_VOID, bpf_map_free_security, struct bpf_map *map)
 LSM_HOOK(int, 0, bpf_prog_alloc_security, struct bpf_prog_aux *aux)
 LSM_HOOK(void, LSM_RET_VOID, bpf_prog_free_security, struct bpf_prog_aux *aux)
+
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+LSM_HOOK(int, 0, seccomp_extended, void)
+#endif /* CONFIG_SECCOMP_FILTER_EXTENDED */
 #endif /* CONFIG_BPF_SYSCALL */
 
 LSM_HOOK(int, 0, locked_down, enum lockdown_reason what)
