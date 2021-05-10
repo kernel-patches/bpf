@@ -78,6 +78,10 @@ BPF_PROG_TYPE(BPF_PROG_TYPE_LSM, lsm,
 #endif /* CONFIG_BPF_LSM */
 #endif
 
+#ifdef CONFIG_SECCOMP_FILTER_EXTENDED
+BPF_PROG_TYPE(BPF_PROG_TYPE_SECCOMP, seccomp, void *, void *)
+#endif
+
 BPF_MAP_TYPE(BPF_MAP_TYPE_ARRAY, array_map_ops)
 BPF_MAP_TYPE(BPF_MAP_TYPE_PERCPU_ARRAY, percpu_array_map_ops)
 BPF_MAP_TYPE(BPF_MAP_TYPE_PROG_ARRAY, prog_array_map_ops)

@@ -519,6 +519,13 @@ config SECCOMP_CACHE_DEBUG
 
 	  If unsure, say N.
 
+config SECCOMP_FILTER_EXTENDED
+	bool "Extended BPF seccomp filters"
+	depends on SECCOMP_FILTER && BPF_SYSCALL
+	help
+	  Enables seccomp filters to be written in eBPF, as opposed
+	  to just cBPF filters.
+
 config HAVE_ARCH_STACKLEAK
 	bool
 	help
