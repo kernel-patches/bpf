@@ -484,6 +484,7 @@ struct bpf_verifier_ops {
 				 enum bpf_access_type atype,
 				 u32 *next_btf_id);
 	bool (*check_kfunc_call)(u32 kfunc_btf_id);
+	bool (*map_access)(enum bpf_access_type type);
 };
 
 struct bpf_prog_offload_ops {

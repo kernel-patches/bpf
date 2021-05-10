@@ -3100,6 +3100,9 @@ static int check_map_access_type(struct bpf_verifier_env *env, u32 regno,
 	struct bpf_map *map = regs[regno].map_ptr;
 	u32 cap = bpf_map_flags_to_cap(map);
 
+	if (env->ops->map_access && !env->ops->map_access(type))
+		cap = 0;
+
 	if (type == BPF_WRITE && !(cap & BPF_MAP_CAN_WRITE)) {
 		verbose(env, "write into map forbidden, value_size=%d off=%d size=%d\n",
 			map->value_size, off, size);
