@@ -8958,6 +8958,7 @@ static const struct bpf_sec_def section_defs[] = {
 	BPF_PROG_SEC("struct_ops",		BPF_PROG_TYPE_STRUCT_OPS),
 	BPF_EAPROG_SEC("sk_lookup/",		BPF_PROG_TYPE_SK_LOOKUP,
 						BPF_SK_LOOKUP),
+	BPF_PROG_SEC("seccomp",			BPF_PROG_TYPE_SECCOMP),
 };
 
 #undef BPF_PROG_SEC_IMPL
