@@ -2448,6 +2448,9 @@ static bool seccomp_is_valid_access(int off, int size,
 static const struct bpf_func_proto *
 seccomp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	if (security_seccomp_extended())
+		return NULL;
+
 	switch (func_id) {
 	case BPF_FUNC_get_current_uid_gid:
 		return &bpf_get_current_uid_gid_proto;
@@ -2466,9 +2469,15 @@ seccomp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 const struct bpf_prog_ops seccomp_prog_ops = {
 };
 
+static bool seccomp_map_access(enum bpf_access_type type)
+{
+	return !security_seccomp_extended();
+}
+
 const struct bpf_verifier_ops seccomp_verifier_ops = {
 	.get_func_proto		= seccomp_func_proto,
 	.is_valid_access	= seccomp_is_valid_access,
+	.map_access		= seccomp_map_access,
 };
 #endif /* CONFIG_SECCOMP_FILTER_EXTENDED */
 
