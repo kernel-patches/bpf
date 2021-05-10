@@ -2456,6 +2456,14 @@ seccomp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_current_uid_gid_proto;
 	case BPF_FUNC_get_current_pid_tgid:
 		return &bpf_get_current_pid_tgid_proto;
+	case BPF_FUNC_probe_read_user:
+		return ns_capable(current_user_ns(), CAP_SYS_PTRACE) ?
+			&bpf_probe_read_user_proto :
+			&bpf_probe_read_user_dumpable_proto;
+	case BPF_FUNC_probe_read_user_str:
+		return ns_capable(current_user_ns(), CAP_SYS_PTRACE) ?
+			&bpf_probe_read_user_str_proto :
+			&bpf_probe_read_user_dumpable_str_proto;
 	default:
 		break;
 	}

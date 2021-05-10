@@ -175,6 +175,27 @@ const struct bpf_func_proto bpf_probe_read_user_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_3(bpf_probe_read_user_dumpable, void *, dst, u32, size,
+	   const void __user *, unsafe_ptr)
+{
+	int ret = -EPERM;
+
+	if (get_dumpable(current->mm))
+		ret = copy_from_user_nofault(dst, unsafe_ptr, size);
+	if (unlikely(ret < 0))
+		memset(dst, 0, size);
+	return ret;
+}
+
+const struct bpf_func_proto bpf_probe_read_user_dumpable_proto = {
+	.func		= bpf_probe_read_user_dumpable,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+};
+
 static __always_inline int
 bpf_probe_read_user_str_common(void *dst, u32 size,
 			       const void __user *unsafe_ptr)
@@ -205,6 +226,27 @@ BPF_CALL_3(bpf_probe_read_user_str, void *, dst, u32, size,
 
 const struct bpf_func_proto bpf_probe_read_user_str_proto = {
 	.func		= bpf_probe_read_user_str,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_probe_read_user_dumpable_str, void *, dst, u32, size,
+	   const void __user *, unsafe_ptr)
+{
+	int ret = -EPERM;
+
+	if (get_dumpable(current->mm))
+		ret = strncpy_from_user_nofault(dst, unsafe_ptr, size);
+	if (unlikely(ret < 0))
+		memset(dst, 0, size);
+	return ret;
+}
+
+const struct bpf_func_proto bpf_probe_read_user_dumpable_str_proto = {
+	.func		= bpf_probe_read_user_dumpable_str,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
