@@ -4735,6 +4735,18 @@ union bpf_attr {
  *		be zero-terminated except when **str_size** is 0.
  *
  *		Or **-EBUSY** if the per-CPU memory copy buffer is busy.
+ *
+ * int bpf_get_current_cpuset_cgroup_path(char *buf, u32 buf_len)
+ *	Description
+ *		Get the cpuset cgroup path of current task from kernel memory,
+ *		this path can be used to identify in which container is the
+ *		current task running.
+ *		*buf* memory is pre-allocated, and *buf_len* indicates the size
+ *		of this memory.
+ *
+ *	Return
+ *		The cpuset cgroup path is copied into *buf* on success,
+ *		or a negative integer error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4903,6 +4915,7 @@ union bpf_attr {
 	FN(check_mtu),			\
 	FN(for_each_map_elem),		\
 	FN(snprintf),			\
+	FN(get_current_cpuset_cgroup_path),     \
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

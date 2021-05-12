@@ -99,6 +99,30 @@ static const struct bpf_func_proto bpf_ima_inode_hash_proto = {
 	.allowed	= bpf_ima_inode_hash_allowed,
 };
 
+#ifdef CONFIG_CGROUPS
+BPF_CALL_2(bpf_get_current_cpuset_cgroup_path, char *, buf, u32, buf_len)
+{
+	struct cgroup_subsys_state *css;
+	int retval;
+
+	css = task_get_css(current, cpuset_cgrp_id);
+	retval = cgroup_path_ns(css->cgroup, buf, buf_len, &init_cgroup_ns);
+	css_put(css);
+	if (retval >= buf_len)
+		retval = -ENAMETOOLONG;
+	return retval;
+}
+
+static const struct bpf_func_proto bpf_get_current_cpuset_cgroup_path_proto = {
+	.func           = bpf_get_current_cpuset_cgroup_path,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type      = ARG_CONST_SIZE,
+	.allowed        = bpf_ima_inode_hash_allowed,
+};
+#endif
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -119,6 +143,10 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_bprm_opts_set_proto;
 	case BPF_FUNC_ima_inode_hash:
 		return prog->aux->sleepable ? &bpf_ima_inode_hash_proto : NULL;
+#ifdef CONFIG_CGROUPS
+	case BPF_FUNC_get_current_cpuset_cgroup_path:
+		return prog->aux->sleepable ? &bpf_get_current_cpuset_cgroup_path_proto : NULL;
+#endif
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
