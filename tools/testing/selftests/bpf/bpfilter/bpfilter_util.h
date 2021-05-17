@@ -7,6 +7,7 @@
 #include <linux/netfilter/x_tables.h>
 
 #include <stdio.h>
+#include <string.h>
 
 static inline void init_standard_target(struct xt_standard_target *ipt_target, int revision,
 					int verdict)
@@ -26,6 +27,13 @@ static inline void init_error_target(struct xt_error_target *ipt_target, int rev
 	ipt_target->target.u.user.revision = revision;
 	ipt_target->target.u.user.target_size = sizeof(*ipt_target);
 	snprintf(ipt_target->errorname, sizeof(ipt_target->errorname), "%s", error_name);
+}
+
+static inline void init_standard_entry(struct ipt_entry *entry, __u16 matches_size)
+{
+	memset(entry, 0, sizeof(*entry));
+	entry->target_offset = sizeof(*entry) + matches_size;
+	entry->next_offset = sizeof(*entry) + matches_size + sizeof(struct xt_standard_target);
 }
 
 #endif // BPFILTER_UTIL_H

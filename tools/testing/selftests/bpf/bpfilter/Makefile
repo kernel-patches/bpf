@@ -12,6 +12,7 @@ TEST_GEN_PROGS += test_io
 TEST_GEN_PROGS += test_map
 TEST_GEN_PROGS += test_match
 TEST_GEN_PROGS += test_target
+TEST_GEN_PROGS += test_rule
 
 KSFT_KHDR_INSTALL := 1
 
@@ -23,3 +24,6 @@ $(OUTPUT)/test_match: test_match.c $(BPFILTERSRCDIR)/match.c $(BPFILTERSRCDIR)/m
 	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/target.c
 $(OUTPUT)/test_target: test_target.c $(BPFILTERSRCDIR)/target.c $(BPFILTERSRCDIR)/map-common.c \
 	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/match.c
+$(OUTPUT)/test_rule: test_rule.c $(BPFILTERSRCDIR)/rule.c $(BPFILTERSRCDIR)/bflog.c 		\
+	$(BPFILTERSRCDIR)/map-common.c $(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/match.c	\
+	$(BPFILTERSRCDIR)/target.c
