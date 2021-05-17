@@ -1,64 +1,71 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (c) 2021 Telegram FZ-LLC
+ */
+
 #define _GNU_SOURCE
-#include <sys/uio.h>
-#include <errno.h>
-#include <stdio.h>
-#include <sys/socket.h>
-#include <fcntl.h>
+
 #include <unistd.h>
-#include "../../include/uapi/linux/bpf.h"
-#include <asm/unistd.h>
+#include <errno.h>
+
+#include <stdio.h>
+#include <string.h>
+
+#include "bflog.h"
+#include "context.h"
+#include "io.h"
 #include "msgfmt.h"
+#include "sockopt.h"
 
-FILE *debug_f;
-
-static int handle_get_cmd(struct mbox_request *cmd)
+static int setup_context(struct context *ctx)
 {
-	switch (cmd->cmd) {
-	case 0:
-		return 0;
-	default:
-		break;
-	}
-	return -ENOPROTOOPT;
+	ctx->log_file = fopen("/dev/kmsg", "w");
+	if (!ctx->log_file)
+		return -errno;
+
+	setvbuf(ctx->log_file, 0, _IOLBF, 0);
+	ctx->log_level = BFLOG_LEVEL_NOTICE;
+
+	return 0;
 }
 
-static int handle_set_cmd(struct mbox_request *cmd)
+static void loop(struct context *ctx)
 {
-	return -ENOPROTOOPT;
-}
+	struct mbox_request req;
+	struct mbox_reply reply;
+	int err;
 
-static void loop(void)
-{
-	while (1) {
-		struct mbox_request req;
-		struct mbox_reply reply;
-		int n;
+	for (;;) {
+		err = read_exact(STDIN_FILENO, &req, sizeof(req));
+		if (err)
+			BFLOG_FATAL(ctx, "cannot read request: %s\n", strerror(-err));
 
-		n = read(0, &req, sizeof(req));
-		if (n != sizeof(req)) {
-			fprintf(debug_f, "invalid request %d\n", n);
-			return;
-		}
+		reply.status = handle_sockopt_request(ctx, &req);
 
-		reply.status = req.is_set ?
-			handle_set_cmd(&req) :
-			handle_get_cmd(&req);
-
-		n = write(1, &reply, sizeof(reply));
-		if (n != sizeof(reply)) {
-			fprintf(debug_f, "reply failed %d\n", n);
-			return;
-		}
+		err = write_exact(STDOUT_FILENO, &reply, sizeof(reply));
+		if (err)
+			BFLOG_FATAL(ctx, "cannot write reply: %s\n", strerror(-err));
 	}
 }
 
 int main(void)
 {
-	debug_f = fopen("/dev/kmsg", "w");
-	setvbuf(debug_f, 0, _IOLBF, 0);
-	fprintf(debug_f, "Started bpfilter\n");
-	loop();
-	fclose(debug_f);
+	struct context ctx;
+	int err;
+
+	err = create_context(&ctx);
+	if (err)
+		return err;
+
+	err = setup_context(&ctx);
+	if (err) {
+		free_context(&ctx);
+		return err;
+	}
+
+	BFLOG_NOTICE(&ctx, "started\n");
+
+	loop(&ctx);
+
 	return 0;
 }
