@@ -1539,10 +1539,11 @@
  * @bpf_prog_free_security:
  *	Clean up the security information stored inside bpf prog.
  *
- * @locked_down:
+ * @cred_locked_down:
  *     Determine whether a kernel feature that potentially enables arbitrary
  *     code execution in kernel space should be permitted.
  *
+ *     @cred: credential asociated with the operation, or NULL if not applicable
  *     @what: kernel feature being accessed
  *
  * Security hooks for perf events

@@ -55,7 +55,8 @@ early_param("lockdown", lockdown_param);
  * lockdown_is_locked_down - Find out if the kernel is locked down
  * @what: Tag to use in notice generated if lockdown is in effect
  */
-static int lockdown_is_locked_down(enum lockdown_reason what)
+static int lockdown_is_locked_down(const struct cred *cred,
+				   enum lockdown_reason what)
 {
 	if (WARN(what >= LOCKDOWN_CONFIDENTIALITY_MAX,
 		 "Invalid lockdown reason"))
@@ -72,7 +73,7 @@ static int lockdown_is_locked_down(enum lockdown_reason what)
 }
 
 static struct security_hook_list lockdown_hooks[] __lsm_ro_after_init = {
-	LSM_HOOK_INIT(locked_down, lockdown_is_locked_down),
+	LSM_HOOK_INIT(cred_locked_down, lockdown_is_locked_down),
 };
 
 static int __init lockdown_lsm_init(void)
