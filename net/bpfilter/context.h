@@ -9,11 +9,13 @@
 #include <stdio.h>
 
 #include "match-ops-map.h"
+#include "target-ops-map.h"
 
 struct context {
 	FILE *log_file;
 	int log_level;
 	struct match_ops_map match_ops_map;
+	struct target_ops_map target_ops_map;
 };
 
 int create_context(struct context *ctx);

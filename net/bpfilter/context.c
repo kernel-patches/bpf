@@ -11,6 +11,7 @@
 #include <linux/list.h>
 
 #include "match.h"
+#include "target.h"
 
 static int init_match_ops_map(struct context *ctx)
 {
@@ -30,12 +31,43 @@ static int init_match_ops_map(struct context *ctx)
 	return 0;
 }
 
+static int init_target_ops_map(struct context *ctx)
+{
+	const struct target_ops *target_ops[] = { &standard_target_ops, &error_target_ops };
+	int i, err;
+
+	err = create_target_ops_map(&ctx->target_ops_map, ARRAY_SIZE(target_ops));
+	if (err)
+		return err;
+
+	for (i = 0; i < ARRAY_SIZE(target_ops); ++i) {
+		err = target_ops_map_insert(&ctx->target_ops_map, target_ops[i]);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 int create_context(struct context *ctx)
 {
-	return init_match_ops_map(ctx);
+	int err;
+
+	err = init_match_ops_map(ctx);
+	if (err)
+		return err;
+
+	err = init_target_ops_map(ctx);
+	if (err) {
+		free_match_ops_map(&ctx->match_ops_map);
+		return err;
+	}
+
+	return 0;
 }
 
 void free_context(struct context *ctx)
 {
+	free_target_ops_map(&ctx->target_ops_map);
 	free_match_ops_map(&ctx->match_ops_map);
 }
