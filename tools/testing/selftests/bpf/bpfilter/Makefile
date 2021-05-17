@@ -21,9 +21,11 @@ include ../../lib.mk
 $(OUTPUT)/test_io: test_io.c $(BPFILTERSRCDIR)/io.c
 $(OUTPUT)/test_map: test_map.c $(BPFILTERSRCDIR)/map-common.c
 $(OUTPUT)/test_match: test_match.c $(BPFILTERSRCDIR)/match.c $(BPFILTERSRCDIR)/map-common.c \
-	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/target.c
-$(OUTPUT)/test_target: test_target.c $(BPFILTERSRCDIR)/target.c $(BPFILTERSRCDIR)/map-common.c \
-	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/match.c
+	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/target.c 		\
+	$(BPFILTERSRCDIR)/table.c $(BPFILTERSRCDIR)/rule.c
+$(OUTPUT)/test_target: test_target.c $(BPFILTERSRCDIR)/target.c $(BPFILTERSRCDIR)/map-common.c 	\
+	$(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/bflog.c $(BPFILTERSRCDIR)/match.c				\
+	$(BPFILTERSRCDIR)/table.c $(BPFILTERSRCDIR)/rule.c
 $(OUTPUT)/test_rule: test_rule.c $(BPFILTERSRCDIR)/rule.c $(BPFILTERSRCDIR)/bflog.c 		\
 	$(BPFILTERSRCDIR)/map-common.c $(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/match.c	\
-	$(BPFILTERSRCDIR)/target.c
+	$(BPFILTERSRCDIR)/target.c $(BPFILTERSRCDIR)/table.c $(BPFILTERSRCDIR)/rule.c
