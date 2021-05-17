@@ -26,6 +26,7 @@
 #include <linux/kernel_read_file.h>
 #include <linux/key.h>
 #include <linux/capability.h>
+#include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/err.h>
@@ -33,7 +34,6 @@
 #include <linux/mm.h>
 
 struct linux_binprm;
-struct cred;
 struct rlimit;
 struct kernel_siginfo;
 struct sembuf;
@@ -470,7 +470,7 @@ void security_inode_invalidate_secctx(struct inode *inode);
 int security_inode_notifysecctx(struct inode *inode, void *ctx, u32 ctxlen);
 int security_inode_setsecctx(struct dentry *dentry, void *ctx, u32 ctxlen);
 int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen);
-int security_locked_down(enum lockdown_reason what);
+int security_cred_locked_down(const struct cred *cred, enum lockdown_reason what);
 #else /* CONFIG_SECURITY */
 
 static inline int call_blocking_lsm_notifier(enum lsm_event event, void *data)
@@ -1343,11 +1343,16 @@ static inline int security_inode_getsecctx(struct inode *inode, void **ctx, u32 
 {
 	return -EOPNOTSUPP;
 }
-static inline int security_locked_down(enum lockdown_reason what)
+static inline int security_cred_locked_down(struct cred *cred, enum lockdown_reason what)
 {
 	return 0;
 }
 #endif	/* CONFIG_SECURITY */
+
+static inline int security_locked_down(enum lockdown_reason what)
+{
+	return security_cred_locked_down(current_cred(), what);
+}
 
 #if defined(CONFIG_SECURITY) && defined(CONFIG_WATCH_QUEUE)
 int security_post_notification(const struct cred *w_cred,

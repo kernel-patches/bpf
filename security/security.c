@@ -2592,11 +2592,11 @@ void security_bpf_prog_free(struct bpf_prog_aux *aux)
 }
 #endif /* CONFIG_BPF_SYSCALL */
 
-int security_locked_down(enum lockdown_reason what)
+int security_cred_locked_down(const struct cred *cred, enum lockdown_reason what)
 {
-	return call_int_hook(locked_down, 0, what);
+	return call_int_hook(cred_locked_down, 0, cred, what);
 }
-EXPORT_SYMBOL(security_locked_down);
+EXPORT_SYMBOL(security_cred_locked_down);
 
 #ifdef CONFIG_PERF_EVENTS
 int security_perf_event_open(struct perf_event_attr *attr, int type)

@@ -7017,10 +7017,10 @@ static void selinux_bpf_prog_free(struct bpf_prog_aux *aux)
 }
 #endif
 
-static int selinux_lockdown(enum lockdown_reason what)
+static int selinux_lockdown(const struct cred *cred, enum lockdown_reason what)
 {
 	struct common_audit_data ad;
-	u32 sid = current_sid();
+	u32 sid;
 	int invalid_reason = (what <= LOCKDOWN_NONE) ||
 			     (what == LOCKDOWN_INTEGRITY_MAX) ||
 			     (what >= LOCKDOWN_CONFIDENTIALITY_MAX);
@@ -7031,6 +7031,12 @@ static int selinux_lockdown(enum lockdown_reason what)
 			  "lockdown_reason=invalid");
 		return -EINVAL;
 	}
+
+	/* Ignore if there is no relevant cred to check against */
+	if (!cred)
+		return 0;
+
+	sid = cred_sid(cred);
 
 	ad.type = LSM_AUDIT_DATA_LOCKDOWN;
 	ad.u.reason = what;
@@ -7353,7 +7359,7 @@ static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
 	LSM_HOOK_INIT(perf_event_write, selinux_perf_event_write),
 #endif
 
-	LSM_HOOK_INIT(locked_down, selinux_lockdown),
+	LSM_HOOK_INIT(cred_locked_down, selinux_lockdown),
 
 	/*
 	 * PUT "CLONING" (ACCESSING + ALLOCATING) HOOKS HERE
