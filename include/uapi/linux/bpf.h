@@ -4761,6 +4761,24 @@ union bpf_attr {
  * 		Execute close syscall for given FD.
  * 	Return
  * 		A syscall result.
+ *
+ * long bpf_timer_init(struct bpf_timer *timer, void *callback, int flags)
+ *	Description
+ *		Initialize the timer to call given static function.
+ *	Return
+ *		zero
+ *
+ * long bpf_timer_mod(struct bpf_timer *timer, u64 msecs)
+ *	Description
+ *		Set the timer expiration N msecs from the current time.
+ *	Return
+ *		zero
+ *
+ * long bpf_timer_del(struct bpf_timer *timer)
+ *	Description
+ *		Deactivate the timer.
+ *	Return
+ *		zero
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4932,6 +4950,9 @@ union bpf_attr {
 	FN(sys_bpf),			\
 	FN(btf_find_by_name_kind),	\
 	FN(sys_close),			\
+	FN(timer_init),			\
+	FN(timer_mod),			\
+	FN(timer_del),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -6036,6 +6057,10 @@ struct bpf_line_info {
 
 struct bpf_spin_lock {
 	__u32	val;
+};
+
+struct bpf_timer {
+	__u64 opaque;
 };
 
 struct bpf_sysctl {

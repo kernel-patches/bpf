@@ -985,6 +985,106 @@ const struct bpf_func_proto bpf_snprintf_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
+struct bpf_timer_list {
+	struct timer_list tl;
+	struct bpf_map *map;
+	struct bpf_prog *prog;
+	void *callback_fn;
+	void *key;
+	void *value;
+};
+
+static void timer_cb(struct timer_list *timer)
+{
+	struct bpf_timer_list *tl = from_timer(tl, timer, tl);
+	struct bpf_map *map;
+	int ret;
+
+	ret = BPF_CAST_CALL(tl->callback_fn)((u64)(long)tl->map,
+					     (u64)(long)tl->key,
+					     (u64)(long)tl->value, 0, 0);
+	WARN_ON(ret != 0); /* todo: define 0 vs 1 or disallow 1 in the verifier */
+	bpf_prog_put(tl->prog);
+}
+
+BPF_CALL_5(bpf_timer_init, struct bpf_timer *, timer, void *, cb, int, flags,
+	   struct bpf_map *, map, struct bpf_prog *, prog)
+{
+	struct bpf_timer_list *tl;
+
+	if (timer->opaque)
+		return -EBUSY;
+	tl = kcalloc(1, sizeof(*tl), GFP_ATOMIC);
+	if (!tl)
+		return -ENOMEM;
+	tl->callback_fn = cb;
+	tl->value = (void *)timer /* - offset of bpf_timer inside elem */;
+	tl->key = tl->value - round_up(map->key_size, 8);
+	tl->map = map;
+	tl->prog = prog;
+	timer_setup(&tl->tl, timer_cb, 0);
+	timer->opaque = (long)tl;
+	return 0;
+}
+
+const struct bpf_func_proto bpf_timer_init_proto = {
+	.func		= bpf_timer_init,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_PTR_TO_FUNC,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_timer_mod, struct bpf_timer *, timer, u64, msecs)
+{
+	struct bpf_timer_list *tl;
+
+	tl = (struct bpf_timer_list *)timer->opaque;
+	if (!tl)
+		return -EINVAL;
+	/* keep the prog alive until callback is invoked */
+	if (!mod_timer(&tl->tl, jiffies + msecs_to_jiffies(msecs))) {
+		/* The timer was inactive.
+		 * Keep the prog alive until callback is invoked
+		 */
+		bpf_prog_inc(tl->prog);
+	}
+	return 0;
+}
+
+const struct bpf_func_proto bpf_timer_mod_proto = {
+	.func		= bpf_timer_mod,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_timer_del, struct bpf_timer *, timer)
+{
+	struct bpf_timer_list *tl;
+
+	tl = (struct bpf_timer_list *)timer->opaque;
+	if (!tl)
+		return -EINVAL;
+	if (del_timer(&tl->tl)) {
+		/* The timer was active,
+		 * drop the prog refcnt, since callback
+		 * will not be invoked.
+		 */
+		bpf_prog_put(tl->prog);
+	}
+	return 0;
+}
+
+const struct bpf_func_proto bpf_timer_del_proto = {
+	.func		= bpf_timer_del,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_str_proto __weak;
@@ -1033,6 +1133,12 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_ringbuf_query_proto;
 	case BPF_FUNC_for_each_map_elem:
 		return &bpf_for_each_map_elem_proto;
+	case BPF_FUNC_timer_init:
+		return &bpf_timer_init_proto;
+	case BPF_FUNC_timer_mod:
+		return &bpf_timer_mod_proto;
+	case BPF_FUNC_timer_del:
+		return &bpf_timer_del_proto;
 	default:
 		break;
 	}
