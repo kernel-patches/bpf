@@ -71,7 +71,7 @@ struct bpf_local_storage_elem {
 	struct bpf_local_storage __rcu *local_storage;
 	struct rcu_head rcu;
 	/* 8 bytes hole */
-	/* The data is stored in aother cacheline to minimize
+	/* The data is stored in another cacheline to minimize
 	 * the number of cachelines access during a cache hit.
 	 */
 	struct bpf_local_storage_data sdata ____cacheline_aligned;
