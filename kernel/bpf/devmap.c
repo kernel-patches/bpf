@@ -388,8 +388,6 @@ static void bq_xmit_all(struct xdp_dev_bulk_queue *bq, u32 flags)
 		to_send = dev_map_bpf_prog_run(bq->xdp_prog, bq->q, cnt, dev);
 		if (!to_send)
 			goto out;
-
-		drops = cnt - to_send;
 	}
 
 	sent = dev->netdev_ops->ndo_xdp_xmit(dev, to_send, bq->q, flags);
