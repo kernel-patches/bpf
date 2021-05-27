@@ -985,6 +985,160 @@ const struct bpf_func_proto bpf_snprintf_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
+struct bpf_hrtimer {
+	struct hrtimer timer;
+	spinlock_t lock;
+	struct bpf_map *map;
+	struct bpf_prog *prog;
+	void *callback_fn;
+	void *key;
+	void *value;
+};
+
+/* the actual struct hidden inside uapi struct bpf_timer */
+struct bpf_timer_kern {
+	struct bpf_hrtimer *timer;
+};
+
+static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
+
+static enum hrtimer_restart timer_cb(struct hrtimer *timer)
+{
+	struct bpf_hrtimer *t = container_of(timer, struct bpf_hrtimer, timer);
+	unsigned long flags;
+	int ret;
+
+	/* timer_cb() runs in hrtimer_run_softirq and doesn't migrate.
+	 * Remember the timer this callback is servicing to prevent
+	 * deadlock if callback_fn() calls bpf_timer_cancel() on the same timer.
+	 */
+	this_cpu_write(hrtimer_running, t);
+	ret = BPF_CAST_CALL(t->callback_fn)((u64)(long)t->map,
+					    (u64)(long)t->key,
+					    (u64)(long)t->value, 0, 0);
+	WARN_ON(ret != 0); /* todo: define 0 vs 1 or disallow 1 in the verifier */
+	spin_lock_irqsave(&t->lock, flags);
+	if (!hrtimer_is_queued(timer))
+		bpf_prog_put(t->prog);
+	spin_unlock_irqrestore(&t->lock, flags);
+	this_cpu_write(hrtimer_running, NULL);
+	return HRTIMER_NORESTART;
+}
+
+BPF_CALL_5(bpf_timer_init, struct bpf_timer_kern *, timer, void *, cb, int, flags,
+	   struct bpf_map *, map, struct bpf_prog *, prog)
+{
+	struct bpf_hrtimer *t;
+
+	if (flags)
+		return -EINVAL;
+	if (READ_ONCE(timer->timer))
+		return -EBUSY;
+	/* allocate hrtimer via map_kmalloc to use memcg accounting */
+	t = bpf_map_kmalloc_node(map, sizeof(*t), GFP_ATOMIC, NUMA_NO_NODE);
+	if (!t)
+		return -ENOMEM;
+	t->callback_fn = cb;
+	t->value = (void *)timer /* - offset of bpf_timer inside elem */;
+	t->key = t->value - round_up(map->key_size, 8);
+	t->map = map;
+	t->prog = prog;
+	spin_lock_init(&t->lock);
+	hrtimer_init(&t->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	t->timer.function = timer_cb;
+	if (cmpxchg(&timer->timer, NULL, t)) {
+		/* Parallel bpf_timer_init() calls raced. */
+		kfree(t);
+		return -EBUSY;
+	}
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_timer_init_proto = {
+	.func		= bpf_timer_init,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_PTR_TO_FUNC,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs)
+{
+	struct bpf_hrtimer *t;
+	unsigned long flags;
+
+	t = READ_ONCE(timer->timer);
+	if (!t)
+		return -EINVAL;
+	spin_lock_irqsave(&t->lock, flags);
+	/* Keep the prog alive until callback is invoked */
+	if (!hrtimer_active(&t->timer))
+		bpf_prog_inc(t->prog);
+	hrtimer_start(&t->timer, ns_to_ktime(nsecs), HRTIMER_MODE_REL_SOFT);
+	spin_unlock_irqrestore(&t->lock, flags);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_timer_start_proto = {
+	.func		= bpf_timer_start,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_timer_cancel, struct bpf_timer_kern *, timer)
+{
+	struct bpf_hrtimer *t;
+	unsigned long flags;
+
+	t = READ_ONCE(timer->timer);
+	if (!t)
+		return -EINVAL;
+	if (this_cpu_read(hrtimer_running) == t)
+		/* If bpf callback_fn is trying to bpf_timer_cancel()
+		 * its own timer the hrtimer_cancel() will deadlock
+		 * since it waits for callback_fn to finish
+		 */
+		return -EBUSY;
+	spin_lock_irqsave(&t->lock, flags);
+	/* Cancel the timer and wait for associated callback to finish
+	 * if it was running.
+	 */
+	if (hrtimer_cancel(&t->timer) == 1)
+		/* If the timer was active then drop the prog refcnt,
+		 * since callback will not be invoked.
+		 */
+		bpf_prog_put(t->prog);
+	spin_unlock_irqrestore(&t->lock, flags);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_timer_cancel_proto = {
+	.func		= bpf_timer_cancel,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+};
+
+void bpf_timer_cancel_and_free(void *val)
+{
+	struct bpf_timer_kern *timer = val;
+	struct bpf_hrtimer *t;
+
+	t = READ_ONCE(timer->timer);
+	if (!t)
+		return;
+	/* Cancel the timer and wait for callback to complete
+	 * if it was running
+	 */
+	if (hrtimer_cancel(&t->timer) == 1)
+		bpf_prog_put(t->prog);
+	kfree(t);
+	WRITE_ONCE(timer->timer, NULL);
+}
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_str_proto __weak;
@@ -1051,6 +1205,12 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_per_cpu_ptr_proto;
 	case BPF_FUNC_this_cpu_ptr:
 		return &bpf_this_cpu_ptr_proto;
+	case BPF_FUNC_timer_init:
+		return &bpf_timer_init_proto;
+	case BPF_FUNC_timer_start:
+		return &bpf_timer_start_proto;
+	case BPF_FUNC_timer_cancel:
+		return &bpf_timer_cancel_proto;
 	default:
 		break;
 	}
