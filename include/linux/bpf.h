@@ -168,6 +168,7 @@ struct bpf_map {
 	u32 max_entries;
 	u32 map_flags;
 	int spin_lock_off; /* >=0 valid offset, <0 error */
+	int timer_off; /* >=0 valid offset, <0 error */
 	u32 id;
 	int numa_node;
 	u32 btf_key_type_id;
@@ -197,24 +198,41 @@ static inline bool map_value_has_spin_lock(const struct bpf_map *map)
 	return map->spin_lock_off >= 0;
 }
 
-static inline void check_and_init_map_lock(struct bpf_map *map, void *dst)
+static inline bool map_value_has_timer(const struct bpf_map *map)
 {
-	if (likely(!map_value_has_spin_lock(map)))
-		return;
-	*(struct bpf_spin_lock *)(dst + map->spin_lock_off) =
-		(struct bpf_spin_lock){};
+	return map->timer_off >= 0;
+}
+
+void bpf_timer_cancel_and_free(void *timer);
+
+static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
+{
+	if (unlikely(map_value_has_spin_lock(map)))
+		*(struct bpf_spin_lock *)(dst + map->spin_lock_off) =
+			(struct bpf_spin_lock){};
+	if (unlikely(map_value_has_timer(map)))
+		*(struct bpf_timer *)(dst + map->timer_off) =
+			(struct bpf_timer){};
 }
 
 /* copy everything but bpf_spin_lock */
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 {
-	if (unlikely(map_value_has_spin_lock(map))) {
-		u32 off = map->spin_lock_off;
+	u32 off = 0, size = 0;
 
+	if (unlikely(map_value_has_spin_lock(map))) {
+		off = map->spin_lock_off;
+		size = sizeof(struct bpf_spin_lock);
+	} else if (unlikely(map_value_has_timer(map))) {
+		off = map->timer_off;
+		size = sizeof(struct bpf_timer);
+	}
+
+	if (unlikely(size)) {
 		memcpy(dst, src, off);
-		memcpy(dst + off + sizeof(struct bpf_spin_lock),
-		       src + off + sizeof(struct bpf_spin_lock),
-		       map->value_size - off - sizeof(struct bpf_spin_lock));
+		memcpy(dst + off + size,
+		       src + off + size,
+		       map->value_size - off - size);
 	} else {
 		memcpy(dst, src, map->value_size);
 	}

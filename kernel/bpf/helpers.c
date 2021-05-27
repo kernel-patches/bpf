@@ -1039,7 +1039,7 @@ BPF_CALL_5(bpf_timer_init, struct bpf_timer_kern *, timer, void *, cb, int, flag
 	if (!t)
 		return -ENOMEM;
 	t->callback_fn = cb;
-	t->value = (void *)timer /* - offset of bpf_timer inside elem */;
+	t->value = (void *)timer - map->timer_off;
 	t->key = t->value - round_up(map->key_size, 8);
 	t->map = map;
 	t->prog = prog;
