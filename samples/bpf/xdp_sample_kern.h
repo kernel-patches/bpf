@@ -7,6 +7,11 @@
 
 #define MAX_CPUS 64
 
+#define EINVAL 22
+#define ENETDOWN 100
+#define EMSGSIZE 90
+#define EOPNOTSUPP 95
+
 /* Common stats data record to keep userspace more simple */
 struct datarec {
 	__u64 processed;
@@ -35,8 +40,11 @@ struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, struct datarec);
-	__uint(max_entries, 2);
-	/* TODO: have entries for all possible errno's */
+	__uint(max_entries, 2
+			    + 1 /* EINVAL */
+			    + 1 /* ENETDOWN */
+			    + 1 /* EMSGSIZE */
+			    + 1 /* EOPNOTSUPP */);
 } redirect_err_cnt SEC(".maps");
 
 /* Used by trace point */
@@ -92,19 +100,40 @@ enum {
 };
 
 static __always_inline
+__u32 xdp_get_err_key(int err)
+{
+	switch (err) {
+	case 0:
+		return 0;
+	case -EINVAL:
+		return 2;
+	case -ENETDOWN:
+		return 3;
+	case -EMSGSIZE:
+		return 4;
+	case -EOPNOTSUPP:
+		return 5;
+	default:
+		return 1;
+	}
+}
+
+static __always_inline
 int xdp_redirect_collect_stat(struct xdp_redirect_ctx *ctx)
 {
 	u32 key = XDP_REDIRECT_ERROR;
 	struct datarec *rec;
 	int err = ctx->err;
 
-	if (!err)
-		key = XDP_REDIRECT_SUCCESS;
+	key = xdp_get_err_key(err);
 
 	rec = bpf_map_lookup_elem(&redirect_err_cnt, &key);
 	if (!rec)
 		return 0;
-	rec->dropped += 1;
+	if (key)
+		rec->dropped++;
+	else
+		rec->processed++;
 
 	return 0; /* Indicate event was filtered (no further processing)*/
 	/*
@@ -123,6 +152,20 @@ int trace_xdp_redirect_err(struct xdp_redirect_ctx *ctx)
 
 SEC("tracepoint/xdp/xdp_redirect_map_err")
 int trace_xdp_redirect_map_err(struct xdp_redirect_ctx *ctx)
+{
+	return xdp_redirect_collect_stat(ctx);
+}
+
+/* Likely unloaded when prog starts */
+SEC("tracepoint/xdp/xdp_redirect")
+int trace_xdp_redirect(struct xdp_redirect_ctx *ctx)
+{
+	return xdp_redirect_collect_stat(ctx);
+}
+
+/* Likely unloaded when prog starts */
+SEC("tracepoint/xdp/xdp_redirect_map")
+int trace_xdp_redirect_map(struct xdp_redirect_ctx *ctx)
 {
 	return xdp_redirect_collect_stat(ctx);
 }

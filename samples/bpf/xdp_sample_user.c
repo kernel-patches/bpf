@@ -121,7 +121,8 @@ struct stats_record *alloc_stats_record(void)
 	}
 	memset(rec, 0, size);
 	rec->rx_cnt.cpu    = alloc_record_per_cpu();
-	rec->redir_err.cpu = alloc_record_per_cpu();
+	rec->redir_err[0].cpu = alloc_record_per_cpu();
+	rec->redir_err[1].cpu = alloc_record_per_cpu();
 	rec->kthread.cpu   = alloc_record_per_cpu();
 	rec->exception.cpu = alloc_record_per_cpu();
 	rec->devmap_xmit.cpu = alloc_record_per_cpu();
@@ -140,7 +141,8 @@ void free_stats_record(struct stats_record *r)
 	free(r->devmap_xmit.cpu);
 	free(r->exception.cpu);
 	free(r->kthread.cpu);
-	free(r->redir_err.cpu);
+	free(r->redir_err[1].cpu);
+	free(r->redir_err[0].cpu);
 	free(r->rx_cnt.cpu);
 	free(r);
 }
@@ -332,31 +334,54 @@ static void stats_print_cpumap_kthread(struct stats_record *stats_rec,
 	printf(fm2_k, "cpumap_kthread", "total", pps, drop, err, e_str);
 }
 
-static void stats_print_redirect_err_cnt(struct stats_record *stats_rec,
-					 struct stats_record *stats_prev,
-					 unsigned int nr_cpus)
+static void stats_print_redirect_cnt(struct stats_record *stats_rec,
+				     struct stats_record *stats_prev,
+				     unsigned int nr_cpus)
 {
-	char *fmt_err = "%-15s %-7d %'-14.0f %'-11.0f\n";
-	char *fm2_err = "%-15s %-7s %'-14.0f %'-11.0f\n";
+	char *fmt1 = "%-15s %-7d %'-14.0f %'-11.0f %s\n";
+	char *fmt2 = "%-15s %-7s %'-14.0f %'-11.0f %s\n";
 	struct record *rec, *prev;
-	double t, pps, drop;
+	double t, pps;
 	int i;
 
-	rec = &stats_rec->redir_err;
-	prev = &stats_prev->redir_err;
+	rec = &stats_rec->redir_err[0];
+	prev = &stats_prev->redir_err[0];
 	t = calc_period(rec, prev);
 	for (i = 0; i < nr_cpus; i++) {
 		struct datarec *r = &rec->cpu[i];
 		struct datarec *p = &prev->cpu[i];
 
 		pps = calc_pps(r, p, t);
-		drop = calc_drop_pps(r, p, t);
 		if (pps > 0)
-			printf(fmt_err, "redirect_err", i, pps, drop);
+			printf(fmt1, "redirect", i, pps, 0.0, "Success");
 	}
 	pps = calc_pps(&rec->total, &prev->total, t);
+	printf(fmt2, "redirect", "total", pps, 0.0, "Success");
+}
+
+static void stats_print_redirect_err_cnt(struct stats_record *stats_rec,
+					 struct stats_record *stats_prev,
+					 unsigned int nr_cpus)
+{
+	char *fmt1 = "%-15s %-7d %'-14.0f %'-11.0f %s\n";
+	char *fmt2 = "%-15s %-7s %'-14.0f %'-11.0f %s\n";
+	struct record *rec, *prev;
+	double t, drop;
+	int i;
+
+	rec = &stats_rec->redir_err[1];
+	prev = &stats_prev->redir_err[1];
+	t = calc_period(rec, prev);
+	for (i = 0; i < nr_cpus; i++) {
+		struct datarec *r = &rec->cpu[i];
+		struct datarec *p = &prev->cpu[i];
+
+		drop = calc_drop_pps(r, p, t);
+		if (drop > 0)
+			printf(fmt1, "redirect", i, 0.0, drop, "Error");
+	}
 	drop = calc_drop_pps(&rec->total, &prev->total, t);
-	printf(fm2_err, "redirect_err", "total", pps, drop);
+	printf(fmt2, "redirect", "total", 0.0, drop, "Error");
 }
 
 static void stats_print_exception_cnt(struct stats_record *stats_rec,
@@ -522,8 +547,14 @@ void sample_stats_collect(int mask, struct stats_record *rec)
 	if (mask & SAMPLE_RX_CNT)
 		map_collect_percpu(map_fds[RX_CNT], 0, &rec->rx_cnt);
 
-	if (mask & SAMPLE_REDIRECT_ERR_CNT)
-		map_collect_percpu(map_fds[REDIRECT_ERR_CNT], 1, &rec->redir_err);
+	/* Success case */
+	if (mask & SAMPLE_REDIRECT_CNT)
+		map_collect_percpu(map_fds[REDIRECT_ERR_CNT], 0, &rec->redir_err[0]);
+
+	if (mask & SAMPLE_REDIRECT_ERR_CNT) {
+		for (i = 1; i < XDP_REDIRECT_ERR_MAX; i++)
+			map_collect_percpu(map_fds[REDIRECT_ERR_CNT], i, &rec->redir_err[i]);
+	}
 
 	if (mask & SAMPLE_CPUMAP_ENQUEUE_CNT)
 		for (i = 0; i < n_cpus; i++)
@@ -550,6 +581,9 @@ void sample_stats_print(int mask, struct stats_record *cur,
 
 	if (mask & SAMPLE_RX_CNT)
 		stats_print_rx_cnt(cur, prev, nr_cpus);
+
+	if (mask & SAMPLE_REDIRECT_CNT)
+		stats_print_redirect_cnt(cur, prev, nr_cpus);
 
 	if (mask & SAMPLE_REDIRECT_ERR_CNT)
 		stats_print_redirect_err_cnt(cur, prev, nr_cpus);

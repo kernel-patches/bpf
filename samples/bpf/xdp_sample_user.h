@@ -14,6 +14,8 @@ enum map_type {
 };
 
 enum tp_type {
+	TP_REDIRECT_CNT,
+	TP_REDIRECT_MAP_CNT,
 	TP_REDIRECT_ERR_CNT,
 	TP_REDIRECT_MAP_ERR_CNT,
 	TP_CPUMAP_ENQUEUE_CNT,
@@ -30,6 +32,7 @@ enum stats_mask {
 	SAMPLE_CPUMAP_KTHREAD_CNT  = 1U << 4,
 	SAMPLE_EXCEPTION_CNT	= 1U << 5,
 	SAMPLE_DEVMAP_XMIT_CNT  = 1U << 6,
+	SAMPLE_REDIRECT_CNT	= 1U << 7,
 };
 
 static const char *const map_type_strings[] = {
@@ -54,6 +57,14 @@ extern int tp_cnt;
 #define EXIT_FAIL_BPF		4
 #define EXIT_FAIL_MEM		5
 
+#define XDP_REDIRECT_ERR_MAX 6
+
+static const char *xdp_redirect_err_names[XDP_REDIRECT_ERR_MAX] = {
+	/* Key=1 keeps unknown errors */
+	"Success", "Unknown", "EINVAL", "ENETDOWN", "EMSGSIZE",
+	"EOPNOTSUPP",
+};
+
 /* Common stats data record shared with _kern.c */
 struct datarec {
 	__u64 processed;
@@ -75,7 +86,7 @@ struct record {
 
 struct stats_record {
 	struct record rx_cnt;
-	struct record redir_err;
+	struct record redir_err[XDP_REDIRECT_ERR_MAX];
 	struct record kthread;
 	struct record exception;
 	struct record devmap_xmit;
