@@ -12,7 +12,10 @@ struct datarec {
 	__u64 processed;
 	__u64 dropped;
 	__u64 issue;
-	__u64 xdp_pass;
+	union {
+		__u64 xdp_pass;
+		__u64 info;
+	};
 	__u64 xdp_drop;
 	__u64 xdp_redirect;
 };
@@ -59,6 +62,13 @@ struct {
 	__type(value, struct datarec);
 	__uint(max_entries, 1);
 } exception_cnt SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, u32);
+	__type(value, struct datarec);
+	__uint(max_entries, 1);
+} devmap_xmit_cnt SEC(".maps");
 
 /*** Trace point code ***/
 
@@ -217,4 +227,43 @@ int trace_xdp_cpumap_kthread(struct cpumap_kthread_ctx *ctx)
 		rec->issue++;
 
 	return 0;
+}
+
+/* Tracepoint: /sys/kernel/debug/tracing/events/xdp/xdp_devmap_xmit/format
+ * Code in:         kernel/include/trace/events/xdp.h
+ */
+struct devmap_xmit_ctx {
+	u64 __pad;		// First 8 bytes are not accessible by bpf code
+	int from_ifindex;	//	offset:8;  size:4; signed:1;
+	u32 act;		//	offset:12; size:4; signed:0;
+	int to_ifindex;		//	offset:16; size:4; signed:1;
+	int drops;		//	offset:20; size:4; signed:1;
+	int sent;		//	offset:24; size:4; signed:1;
+	int err;		//	offset:28; size:4; signed:1;
+};
+
+SEC("tracepoint/xdp/xdp_devmap_xmit")
+int trace_xdp_devmap_xmit(struct devmap_xmit_ctx *ctx)
+{
+	struct datarec *rec;
+	u32 key = 0;
+
+	rec = bpf_map_lookup_elem(&devmap_xmit_cnt, &key);
+	if (!rec)
+		return 0;
+	rec->processed += ctx->sent;
+	rec->dropped   += ctx->drops;
+
+	/* Record bulk events, then userspace can calc average bulk size */
+	rec->info += 1;
+
+	/* Record error cases, where no frame were sent */
+	if (ctx->err)
+		rec->issue++;
+
+	/* Catch API error of drv ndo_xdp_xmit sent more than count */
+	if (ctx->drops < 0)
+		rec->issue++;
+
+	return 1;
 }

@@ -76,7 +76,7 @@ static void usage(const char *prog)
 int main(int argc, char **argv)
 {
 	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_CNT |
-		   SAMPLE_EXCEPTION_CNT;
+		   SAMPLE_EXCEPTION_CNT | SAMPLE_DEVMAP_XMIT_CNT;
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_UNSPEC,
 	};
@@ -148,6 +148,7 @@ int main(int argc, char **argv)
 	if (xdp_flags & XDP_FLAGS_SKB_MODE) {
 		prog = bpf_object__find_program_by_name(obj, "xdp_redirect_map_general");
 		tx_port_map_fd = bpf_object__find_map_fd_by_name(obj, "tx_port_general");
+		mask &= ~SAMPLE_DEVMAP_XMIT_CNT;
 	} else {
 		prog = bpf_object__find_program_by_name(obj, "xdp_redirect_map_native");
 		tx_port_map_fd = bpf_object__find_map_fd_by_name(obj, "tx_port_native");

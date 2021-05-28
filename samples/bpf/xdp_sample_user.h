@@ -9,6 +9,7 @@ enum map_type {
 	CPUMAP_ENQUEUE_CNT,
 	CPUMAP_KTHREAD_CNT,
 	EXCEPTION_CNT,
+	DEVMAP_XMIT_CNT,
 	NUM_MAP,
 };
 
@@ -18,6 +19,7 @@ enum tp_type {
 	TP_CPUMAP_ENQUEUE_CNT,
 	TP_CPUMAP_KTHREAD_CNT,
 	TP_EXCEPTION_CNT,
+	TP_DEVMAP_XMIT_CNT,
 	NUM_TP,
 };
 
@@ -27,6 +29,7 @@ enum stats_mask {
 	SAMPLE_CPUMAP_ENQUEUE_CNT  = 1U << 3,
 	SAMPLE_CPUMAP_KTHREAD_CNT  = 1U << 4,
 	SAMPLE_EXCEPTION_CNT	= 1U << 5,
+	SAMPLE_DEVMAP_XMIT_CNT  = 1U << 6,
 };
 
 static const char *const map_type_strings[] = {
@@ -35,6 +38,7 @@ static const char *const map_type_strings[] = {
 	[CPUMAP_ENQUEUE_CNT] = "cpumap_enqueue_cnt",
 	[CPUMAP_KTHREAD_CNT] = "cpumap_kthread_cnt",
 	[EXCEPTION_CNT] = "exception_cnt",
+	[DEVMAP_XMIT_CNT] = "devmap_xmit_cnt",
 };
 
 extern struct bpf_link *tp_links[NUM_TP];
@@ -55,7 +59,10 @@ struct datarec {
 	__u64 processed;
 	__u64 dropped;
 	__u64 issue;
-	__u64 xdp_pass;
+	union {
+		__u64 xdp_pass;
+		__u64 info;
+	};
 	__u64 xdp_drop;
 	__u64 xdp_redirect;
 };
@@ -71,6 +78,7 @@ struct stats_record {
 	struct record redir_err;
 	struct record kthread;
 	struct record exception;
+	struct record devmap_xmit;
 	struct record enq[];
 };
 

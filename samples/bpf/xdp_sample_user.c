@@ -124,6 +124,7 @@ struct stats_record *alloc_stats_record(void)
 	rec->redir_err.cpu = alloc_record_per_cpu();
 	rec->kthread.cpu   = alloc_record_per_cpu();
 	rec->exception.cpu = alloc_record_per_cpu();
+	rec->devmap_xmit.cpu = alloc_record_per_cpu();
 	for (i = 0; i < n_cpus; i++)
 		rec->enq[i].cpu = alloc_record_per_cpu();
 
@@ -136,6 +137,7 @@ void free_stats_record(struct stats_record *r)
 
 	for (i = 0; i < n_cpus; i++)
 		free(r->enq[i].cpu);
+	free(r->devmap_xmit.cpu);
 	free(r->exception.cpu);
 	free(r->kthread.cpu);
 	free(r->redir_err.cpu);
@@ -187,6 +189,19 @@ static __u64 calc_errs_pps(struct datarec *r,
 
 	if (period_ > 0) {
 		packets = r->issue - p->issue;
+		pps = packets / period_;
+	}
+	return pps;
+}
+
+static __u64 calc_info_pps(struct datarec *r,
+			   struct datarec *p, double period_)
+{
+	__u64 packets = 0;
+	__u64 pps = 0;
+
+	if (period_ > 0) {
+		packets = r->info - p->info;
 		pps = packets / period_;
 	}
 	return pps;
@@ -404,6 +419,53 @@ void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,
 	       xdp_redirect);
 }
 
+static void stats_print_devmap_xmit(struct stats_record *stats_rec,
+				    struct stats_record *stats_prev,
+				    unsigned int nr_cpus)
+{
+	char *fmt1 = "%-15s %-7d %'-14.0f %'-11.0f %'-10.0f %s %s\n";
+	char *fmt2 = "%-15s %-7s %'-14.0f %'-11.0f %'-10.0f %s %s\n";
+	double pps, drop, info, err;
+	struct record *rec, *prev;
+	char *err_str = "";
+	char *i_str = "";
+	double t;
+	int i;
+
+	rec = &stats_rec->devmap_xmit;
+	prev = &stats_prev->devmap_xmit;
+	t = calc_period(rec, prev);
+	for (i = 0; i < nr_cpus; i++) {
+		struct datarec *r = &rec->cpu[i];
+		struct datarec *p = &prev->cpu[i];
+
+		pps = calc_pps(r, p, t);
+		drop = calc_drop_pps(r, p, t);
+		info = calc_info_pps(r, p, t);
+		err = calc_errs_pps(r, p, t);
+		if (info > 0) {
+			i_str = "bulk-average";
+			info = (pps + drop) / info; /* calc avg bulk */
+		}
+		if (err > 0)
+			err_str = "drv-err";
+		if (pps > 0 || drop > 0)
+			printf(fmt1, "devmap-xmit", i, pps, drop, info, i_str,
+			       err_str);
+	}
+	pps = calc_pps(&rec->total, &prev->total, t);
+	drop = calc_drop_pps(&rec->total, &prev->total, t);
+	info = calc_info_pps(&rec->total, &prev->total, t);
+	err = calc_errs_pps(&rec->total, &prev->total, t);
+	if (info > 0) {
+		i_str = "bulk-average";
+		info = (pps + drop) / info; /* calc avg bulk */
+	}
+	if (err > 0)
+		err_str = "drv-err";
+	printf(fmt2, "devmap-xmit", "total", pps, drop, info, i_str, err_str);
+}
+
 static int init_tracepoints(struct bpf_object *obj)
 {
 	struct bpf_program *prog;
@@ -472,6 +534,9 @@ void sample_stats_collect(int mask, struct stats_record *rec)
 
 	if (mask & SAMPLE_EXCEPTION_CNT)
 		map_collect_percpu(map_fds[EXCEPTION_CNT], 0, &rec->exception);
+
+	if (mask & SAMPLE_DEVMAP_XMIT_CNT)
+		map_collect_percpu(map_fds[DEVMAP_XMIT_CNT], 0, &rec->devmap_xmit);
 }
 
 void sample_stats_print(int mask, struct stats_record *cur,
@@ -497,6 +562,9 @@ void sample_stats_print(int mask, struct stats_record *cur,
 
 	if (mask & SAMPLE_EXCEPTION_CNT)
 		stats_print_exception_cnt(cur, prev, nr_cpus);
+
+	if (mask & SAMPLE_DEVMAP_XMIT_CNT)
+		stats_print_devmap_xmit(cur, prev, nr_cpus);
 }
 
 void sample_stats_poll(int interval, int mask, char *prog_name, int use_separators)
