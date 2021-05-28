@@ -2263,6 +2263,7 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	prefetch(data);
 	xdp_prepare_buff(xdp, data, pp->rx_offset_correction + MVNETA_MH_SIZE,
 			 data_len, false);
+	xdp->flags = mvneta_rx_csum(pp, rx_desc->status);
 
 	sinfo = xdp_get_shared_info_from_buff(xdp);
 	sinfo->nr_frags = 0;
@@ -2317,7 +2318,7 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 
 static struct sk_buff *
 mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
-		      struct xdp_buff *xdp, u32 desc_status)
+		      struct xdp_buff *xdp)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
 	int i, num_frags = sinfo->nr_frags;
@@ -2331,7 +2332,7 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
 	skb_put(skb, xdp->data_end - xdp->data);
-	skb->ip_summed = mvneta_rx_csum(pp, desc_status);
+	xdp_buff_get_csum(xdp, skb);
 
 	for (i = 0; i < num_frags; i++) {
 		skb_frag_t *frag = &sinfo->frags[i];
@@ -2355,8 +2356,8 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 	struct skb_shared_info sinfo;
 	struct mvneta_stats ps = {};
 	struct bpf_prog *xdp_prog;
-	u32 desc_status, frame_sz;
 	struct xdp_buff xdp_buf;
+	u32 frame_sz;
 
 	xdp_init_buff(&xdp_buf, PAGE_SIZE, &rxq->xdp_rxq);
 	xdp_buf.data_hard_start = NULL;
@@ -2392,7 +2393,6 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 
 			size = rx_desc->data_size;
 			frame_sz = size - ETH_FCS_LEN;
-			desc_status = rx_status;
 
 			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
 					     &size, page);
@@ -2421,7 +2421,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 		    mvneta_run_xdp(pp, rxq, xdp_prog, &xdp_buf, frame_sz, &ps))
 			goto next;
 
-		skb = mvneta_swbm_build_skb(pp, rxq, &xdp_buf, desc_status);
+		skb = mvneta_swbm_build_skb(pp, rxq, &xdp_buf);
 		if (IS_ERR(skb)) {
 			struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
 
