@@ -55,6 +55,7 @@
 #include "libbpf_internal.h"
 #include "hashmap.h"
 #include "bpf_gen_internal.h"
+#include "netlink.h"
 
 #ifndef BPF_FS_MAGIC
 #define BPF_FS_MAGIC		0xcafe4a11
@@ -7185,7 +7186,7 @@ static int bpf_object__collect_relos(struct bpf_object *obj)
 
 	for (i = 0; i < obj->nr_programs; i++) {
 		struct bpf_program *p = &obj->programs[i];
-		
+
 		if (!p->nr_reloc)
 			continue;
 
@@ -10005,7 +10006,7 @@ struct bpf_link {
 int bpf_link__update_program(struct bpf_link *link, struct bpf_program *prog)
 {
 	int ret;
-	
+
 	ret = bpf_link_update(bpf_link__fd(link), bpf_program__fd(prog), NULL);
 	return libbpf_err_errno(ret);
 }
@@ -10611,6 +10612,60 @@ struct bpf_link *bpf_program__attach_xdp(struct bpf_program *prog, int ifindex)
 {
 	/* target_fd/target_ifindex use the same field in LINK_CREATE */
 	return bpf_program__attach_fd(prog, ifindex, 0, "xdp");
+}
+
+struct bpf_link *bpf_program__attach_tc(struct bpf_program *prog,
+					const struct bpf_tc_hook *hook,
+					const struct bpf_tc_link_opts *opts)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, lopts, 0);
+	char errmsg[STRERR_BUFSIZE];
+	int prog_fd, link_fd, ret;
+	struct bpf_link *link;
+	__u32 parent;
+
+	if (!hook || !OPTS_VALID(hook, bpf_tc_hook) ||
+	    !OPTS_VALID(opts, bpf_tc_link_opts))
+		return ERR_PTR(-EINVAL);
+
+	if (OPTS_GET(hook, ifindex, 0) <= 0 ||
+	    OPTS_GET(opts, priority, 0) > UINT16_MAX)
+		return ERR_PTR(-EINVAL);
+
+	parent = OPTS_GET(hook, parent, 0);
+
+	ret = tc_get_tcm_parent(OPTS_GET(hook, attach_point, 0),
+				&parent);
+	if (ret < 0)
+		return ERR_PTR(ret);
+
+	lopts.tc.parent = parent;
+	lopts.tc.handle = OPTS_GET(opts, handle, 0);
+	lopts.tc.priority = OPTS_GET(opts, priority, 0);
+	lopts.tc.gen_flags = OPTS_GET(opts, gen_flags, 0);
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return ERR_PTR(-ENOMEM);
+	link->detach = &bpf_link__detach_fd;
+
+	link_fd = bpf_link_create(prog_fd, OPTS_GET(hook, ifindex, 0), BPF_TC, &lopts);
+	if (link_fd < 0) {
+		link_fd = -errno;
+		free(link);
+		pr_warn("prog '%s': failed to attach tc filter: %s\n",
+			prog->name, libbpf_strerror_r(link_fd, errmsg, sizeof(errmsg)));
+		return ERR_PTR(link_fd);
+	}
+	link->fd = link_fd;
+
+	return link;
 }
 
 struct bpf_link *bpf_program__attach_freplace(struct bpf_program *prog,

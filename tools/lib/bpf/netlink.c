@@ -17,6 +17,7 @@
 #include "libbpf.h"
 #include "libbpf_internal.h"
 #include "nlattr.h"
+#include "netlink.h"
 
 #ifndef SOL_NETLINK
 #define SOL_NETLINK 270
@@ -405,8 +406,8 @@ static int attach_point_to_config(struct bpf_tc_hook *hook,
 	}
 }
 
-static int tc_get_tcm_parent(enum bpf_tc_attach_point attach_point,
-			     __u32 *parent)
+int tc_get_tcm_parent(enum bpf_tc_attach_point attach_point,
+		      __u32 *parent)
 {
 	switch (attach_point) {
 	case BPF_TC_INGRESS:

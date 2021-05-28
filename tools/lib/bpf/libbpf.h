@@ -282,6 +282,23 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_iter(struct bpf_program *prog,
 			 const struct bpf_iter_attach_opts *opts);
 
+/* TC bpf_link related API */
+struct bpf_tc_hook;
+
+struct bpf_tc_link_opts {
+	size_t sz;
+	__u32 handle;
+	__u32 priority;
+	__u32 gen_flags;
+	size_t :0;
+};
+#define bpf_tc_link_opts__last_field gen_flags
+
+LIBBPF_API struct bpf_link *
+bpf_program__attach_tc(struct bpf_program *prog,
+		       const struct bpf_tc_hook *hook,
+		       const struct bpf_tc_link_opts *opts);
+
 struct bpf_insn;
 
 /*
