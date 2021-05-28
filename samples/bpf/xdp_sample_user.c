@@ -805,7 +805,7 @@ static int init_tracepoints(struct bpf_object *obj)
 	struct bpf_program *prog;
 
 	bpf_object__for_each_program(prog, obj) {
-		if (bpf_program__is_tracepoint(prog) != true)
+		if (!bpf_program__is_raw_tracepoint(prog))
 			continue;
 
 		tp_links[tp_cnt] = bpf_program__attach(prog);

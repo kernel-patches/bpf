@@ -3,6 +3,9 @@
 #pragma once
 
 #include <uapi/linux/bpf.h>
+#include <net/xdp.h>
+#include <bpf/bpf_core_read.h>
+#include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 
 #ifndef NR_CPUS
@@ -85,20 +88,6 @@ struct {
 
 /*** Trace point code ***/
 
-/* Tracepoint format: /sys/kernel/debug/tracing/events/xdp/xdp_redirect/format
- * Code in:                kernel/include/trace/events/xdp.h
- */
-struct xdp_redirect_ctx {
-	u64 __pad;	// First 8 bytes are not accessible by bpf code
-	int prog_id;	//	offset:8;  size:4; signed:1;
-	u32 act;	//	offset:12  size:4; signed:0;
-	int ifindex;	//	offset:16  size:4; signed:1;
-	int err;	//	offset:20  size:4; signed:1;
-	int to_ifindex;	//	offset:24  size:4; signed:1;
-	u32 map_id;	//	offset:28  size:4; signed:0;
-	int map_index;	//	offset:32  size:4; signed:1;
-};			//	offset:36
-
 enum {
 	XDP_REDIRECT_SUCCESS = 0,
 	XDP_REDIRECT_ERROR = 1
@@ -124,11 +113,11 @@ __u32 xdp_get_err_key(int err)
 }
 
 static __always_inline
-int xdp_redirect_collect_stat(struct xdp_redirect_ctx *ctx)
+int xdp_redirect_collect_stat(struct bpf_raw_tracepoint_args *ctx)
 {
 	u32 key = XDP_REDIRECT_ERROR;
+	int err = ctx->args[3];
 	struct datarec *rec;
-	int err = ctx->err;
 
 	key = xdp_get_err_key(err);
 
@@ -149,47 +138,35 @@ int xdp_redirect_collect_stat(struct xdp_redirect_ctx *ctx)
 	 */
 }
 
-SEC("tracepoint/xdp/xdp_redirect_err")
-int trace_xdp_redirect_err(struct xdp_redirect_ctx *ctx)
+SEC("raw_tracepoint/xdp_redirect_err")
+int trace_xdp_redirect_err(struct bpf_raw_tracepoint_args *ctx)
 {
 	return xdp_redirect_collect_stat(ctx);
 }
 
-SEC("tracepoint/xdp/xdp_redirect_map_err")
-int trace_xdp_redirect_map_err(struct xdp_redirect_ctx *ctx)
+SEC("raw_tracepoint/xdp_redirect_map_err")
+int trace_xdp_redirect_map_err(struct bpf_raw_tracepoint_args *ctx)
 {
 	return xdp_redirect_collect_stat(ctx);
 }
 
-/* Likely unloaded when prog starts */
-SEC("tracepoint/xdp/xdp_redirect")
-int trace_xdp_redirect(struct xdp_redirect_ctx *ctx)
+SEC("raw_tracepoint/xdp_redirect")
+int trace_xdp_redirect(struct bpf_raw_tracepoint_args *ctx)
 {
 	return xdp_redirect_collect_stat(ctx);
 }
 
-/* Likely unloaded when prog starts */
-SEC("tracepoint/xdp/xdp_redirect_map")
-int trace_xdp_redirect_map(struct xdp_redirect_ctx *ctx)
+SEC("raw_tracepoint/xdp_redirect_map")
+int trace_xdp_redirect_map(struct bpf_raw_tracepoint_args *ctx)
 {
 	return xdp_redirect_collect_stat(ctx);
 }
 
-/* Tracepoint format: /sys/kernel/debug/tracing/events/xdp/xdp_exception/format
- * Code in:                kernel/include/trace/events/xdp.h
- */
-struct xdp_exception_ctx {
-	u64 __pad;	// First 8 bytes are not accessible by bpf code
-	int prog_id;	//	offset:8;  size:4; signed:1;
-	u32 act;	//	offset:12; size:4; signed:0;
-	int ifindex;	//	offset:16; size:4; signed:1;
-};
-
-SEC("tracepoint/xdp/xdp_exception")
-int trace_xdp_exception(struct xdp_exception_ctx *ctx)
+SEC("raw_tracepoint/xdp_exception")
+int trace_xdp_exception(struct bpf_raw_tracepoint_args *ctx)
 {
+	u32 key = ctx->args[2];
 	struct datarec *rec;
-	u32 key = ctx->act;
 
 	if (key > XDP_REDIRECT)
 		key = XDP_UNKNOWN;
@@ -202,23 +179,10 @@ int trace_xdp_exception(struct xdp_exception_ctx *ctx)
 	return 0;
 }
 
-/* Tracepoint: /sys/kernel/debug/tracing/events/xdp/xdp_cpumap_enqueue/format
- * Code in:         kernel/include/trace/events/xdp.h
- */
-struct cpumap_enqueue_ctx {
-	u64 __pad;		// First 8 bytes are not accessible by bpf code
-	int map_id;		//	offset:8;  size:4; signed:1;
-	u32 act;		//	offset:12; size:4; signed:0;
-	int cpu;		//	offset:16; size:4; signed:1;
-	unsigned int drops;	//	offset:20; size:4; signed:0;
-	unsigned int processed;	//	offset:24; size:4; signed:0;
-	int to_cpu;		//	offset:28; size:4; signed:1;
-};
-
-SEC("tracepoint/xdp/xdp_cpumap_enqueue")
-int trace_xdp_cpumap_enqueue(struct cpumap_enqueue_ctx *ctx)
+SEC("raw_tracepoint/xdp_cpumap_enqueue")
+int trace_xdp_cpumap_enqueue(struct bpf_raw_tracepoint_args *ctx)
 {
-	u32 to_cpu = ctx->to_cpu;
+	u32 to_cpu = ctx->args[3];
 	struct datarec *rec;
 
 	if (to_cpu >= MAX_CPUS)
@@ -227,11 +191,11 @@ int trace_xdp_cpumap_enqueue(struct cpumap_enqueue_ctx *ctx)
 	rec = bpf_map_lookup_elem(&cpumap_enqueue_cnt, &to_cpu);
 	if (!rec)
 		return 0;
-	rec->processed += ctx->processed;
-	rec->dropped   += ctx->drops;
+	rec->processed += ctx->args[1];
+	rec->dropped   += ctx->args[2];
 
 	/* Record bulk events, then userspace can calc average bulk size */
-	if (ctx->processed > 0)
+	if (ctx->args[1] > 0)
 		rec->issue += 1;
 
 	/* Inception: It's possible to detect overload situations, via
@@ -242,78 +206,57 @@ int trace_xdp_cpumap_enqueue(struct cpumap_enqueue_ctx *ctx)
 	return 0;
 }
 
-/* Tracepoint: /sys/kernel/debug/tracing/events/xdp/xdp_cpumap_kthread/format
- * Code in:         kernel/include/trace/events/xdp.h
- */
-struct cpumap_kthread_ctx {
-	u64 __pad;			// First 8 bytes are not accessible
-	int map_id;			//	offset:8;  size:4; signed:1;
-	u32 act;			//	offset:12; size:4; signed:0;
-	int cpu;			//	offset:16; size:4; signed:1;
-	unsigned int drops;		//	offset:20; size:4; signed:0;
-	unsigned int processed;		//	offset:24; size:4; signed:0;
-	int sched;			//	offset:28; size:4; signed:1;
-	unsigned int xdp_pass;		//	offset:32; size:4; signed:0;
-	unsigned int xdp_drop;		//	offset:36; size:4; signed:0;
-	unsigned int xdp_redirect;	//	offset:40; size:4; signed:0;
-};
-
-SEC("tracepoint/xdp/xdp_cpumap_kthread")
-int trace_xdp_cpumap_kthread(struct cpumap_kthread_ctx *ctx)
+SEC("raw_tracepoint/xdp_cpumap_kthread")
+int trace_xdp_cpumap_kthread(struct bpf_raw_tracepoint_args *ctx)
 {
+	struct xdp_cpumap_stats *stats;
 	struct datarec *rec;
 	u32 key = 0;
+
+	stats = (struct xdp_cpumap_stats *) ctx->args[4];
+	if (!stats)
+		return 0;
 
 	rec = bpf_map_lookup_elem(&cpumap_kthread_cnt, &key);
 	if (!rec)
 		return 0;
-	rec->processed += ctx->processed;
-	rec->dropped   += ctx->drops;
-	rec->xdp_pass  += ctx->xdp_pass;
-	rec->xdp_drop  += ctx->xdp_drop;
-	rec->xdp_redirect  += ctx->xdp_redirect;
+	rec->processed += ctx->args[1];
+	rec->dropped   += ctx->args[2];
+
+	rec->xdp_pass  += BPF_CORE_READ(stats, pass);
+	rec->xdp_drop  += BPF_CORE_READ(stats, drop);
+	rec->xdp_redirect  += BPF_CORE_READ(stats, redirect);
 
 	/* Count times kthread yielded CPU via schedule call */
-	if (ctx->sched)
+	if (ctx->args[3])
 		rec->issue++;
 
 	return 0;
 }
 
-/* Tracepoint: /sys/kernel/debug/tracing/events/xdp/xdp_devmap_xmit/format
- * Code in:         kernel/include/trace/events/xdp.h
- */
-struct devmap_xmit_ctx {
-	u64 __pad;		// First 8 bytes are not accessible by bpf code
-	int from_ifindex;	//	offset:8;  size:4; signed:1;
-	u32 act;		//	offset:12; size:4; signed:0;
-	int to_ifindex;		//	offset:16; size:4; signed:1;
-	int drops;		//	offset:20; size:4; signed:1;
-	int sent;		//	offset:24; size:4; signed:1;
-	int err;		//	offset:28; size:4; signed:1;
-};
-
-SEC("tracepoint/xdp/xdp_devmap_xmit")
-int trace_xdp_devmap_xmit(struct devmap_xmit_ctx *ctx)
+SEC("raw_tracepoint/xdp_devmap_xmit")
+int trace_xdp_devmap_xmit(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct datarec *rec;
 	u32 key = 0;
+	int drops;
 
 	rec = bpf_map_lookup_elem(&devmap_xmit_cnt, &key);
 	if (!rec)
 		return 0;
-	rec->processed += ctx->sent;
-	rec->dropped   += ctx->drops;
+	rec->processed += ctx->args[2];
+	rec->dropped   += ctx->args[3];
 
 	/* Record bulk events, then userspace can calc average bulk size */
 	rec->info += 1;
 
 	/* Record error cases, where no frame were sent */
-	if (ctx->err)
+	if (ctx->args[4])
 		rec->issue++;
 
+	drops = ctx->args[3];
 	/* Catch API error of drv ndo_xdp_xmit sent more than count */
-	if (ctx->drops < 0)
+	if (drops < 0)
 		rec->issue++;
 
 	return 1;
