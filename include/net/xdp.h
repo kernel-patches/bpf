@@ -66,6 +66,13 @@ struct xdp_txq_info {
 	struct net_device *dev;
 };
 
+/* xdp metadata bitmask */
+#define XDP_CSUM_MASK		GENMASK(1, 0)
+enum xdp_flags {
+	XDP_CSUM_UNNECESSARY	= BIT(0),
+	XDP_CSUM_COMPLETE	= BIT(1),
+};
+
 struct xdp_buff {
 	void *data;
 	void *data_end;
@@ -74,6 +81,7 @@ struct xdp_buff {
 	struct xdp_rxq_info *rxq;
 	struct xdp_txq_info *txq;
 	u32 frame_sz; /* frame size to deduce data_hard_end/reserved tailroom*/
+	u16 flags; /* xdp_flags */
 };
 
 static __always_inline void
@@ -81,6 +89,7 @@ xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 {
 	xdp->frame_sz = frame_sz;
 	xdp->rxq = rxq;
+	xdp->flags = 0;
 }
 
 static __always_inline void
@@ -93,6 +102,18 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data = data;
 	xdp->data_end = data + data_len;
 	xdp->data_meta = meta_valid ? data : data + 1;
+}
+
+static __always_inline void
+xdp_buff_get_csum(struct xdp_buff *xdp, struct sk_buff *skb)
+{
+	switch (xdp->flags & XDP_CSUM_MASK) {
+	case XDP_CSUM_UNNECESSARY:
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		break;
+	default:
+		break;
+	}
 }
 
 /* Reserve memory area at end-of data area.
@@ -122,7 +143,20 @@ struct xdp_frame {
 	 */
 	struct xdp_mem_info mem;
 	struct net_device *dev_rx; /* used by cpumap */
+	u16 flags; /* xdp_flags */
 };
+
+static __always_inline void
+xdp_frame_get_csum(struct xdp_frame *xdpf, struct sk_buff *skb)
+{
+	switch (xdpf->flags & XDP_CSUM_MASK) {
+	case XDP_CSUM_UNNECESSARY:
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		break;
+	default:
+		break;
+	}
+}
 
 #define XDP_BULK_QUEUE_SIZE	16
 struct xdp_frame_bulk {
@@ -180,6 +214,7 @@ void xdp_convert_frame_to_buff(struct xdp_frame *frame, struct xdp_buff *xdp)
 	xdp->data_end = frame->data + frame->len;
 	xdp->data_meta = frame->data - frame->metasize;
 	xdp->frame_sz = frame->frame_sz;
+	xdp->flags = frame->flags;
 }
 
 static inline
@@ -206,6 +241,7 @@ int xdp_update_frame_from_buff(struct xdp_buff *xdp,
 	xdp_frame->headroom = headroom - sizeof(*xdp_frame);
 	xdp_frame->metasize = metasize;
 	xdp_frame->frame_sz = xdp->frame_sz;
+	xdp_frame->flags = xdp->flags;
 
 	return 0;
 }
