@@ -169,8 +169,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (optind == argc) {
-		printf("usage: %s <IFNAME|IFINDEX>_IN <IFNAME|IFINDEX>_OUT\n", argv[0]);
+	if (argc <= optind + 1) {
+		usage(basename(argv[0]));
 		return 1;
 	}
 
