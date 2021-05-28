@@ -5,7 +5,11 @@
 #include <uapi/linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
-#define MAX_CPUS 64
+#ifndef NR_CPUS
+#define NR_CPUS 64
+#endif
+
+#define MAX_CPUS NR_CPUS
 
 #define EINVAL 22
 #define ENETDOWN 100
