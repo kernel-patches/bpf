@@ -38,9 +38,10 @@ struct bpf_object *obj;
 static const struct option long_options[] = {
 	{"help",	no_argument,		NULL, 'h' },
 	{"debug",	no_argument,		NULL, 'D' },
-	{"stats",	no_argument,		NULL, 'S' },
-	{"sec", 	required_argument,	NULL, 's' },
-	{0, 0, NULL,  0 }
+	{"stats",	no_argument,		NULL, 's' },
+	{"interval",	required_argument,	NULL, 'i' },
+	{"verbose",	no_argument,		NULL, 'v' },
+	{}
 };
 
 static void int_exit(int sig)
@@ -121,17 +122,20 @@ int main(int argc, char **argv)
 	int interval = 2;
 
 	/* Parse commands line args */
-	while ((opt = getopt_long(argc, argv, "hDSs:",
+	while ((opt = getopt_long(argc, argv, "hDi:vs",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 'D':
 			debug = true;
 			break;
-		case 'S':
+		case 's':
 			errors_only = false;
 			break;
-		case 's':
+		case 'i':
 			interval = atoi(optarg);
+			break;
+		case 'v':
+			sample_log_level ^= LL_DEBUG - 1;
 			break;
 		case 'h':
 		default:

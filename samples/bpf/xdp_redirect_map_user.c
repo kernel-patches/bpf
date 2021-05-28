@@ -13,6 +13,7 @@
 #include <net/if.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <getopt.h>
 
 #include "bpf_util.h"
 #include <bpf/bpf.h>
@@ -27,6 +28,18 @@ static __u32 prog_id;
 static __u32 dummy_prog_id;
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
+
+static const struct option long_options[] = {
+	{"help",	no_argument,		NULL, 'h' },
+	{"skb-mode",	no_argument,		NULL, 'S' },
+	{"native-mode", no_argument,		NULL, 'N' },
+	{"force",	no_argument,		NULL, 'F' },
+	{"load-egress", no_argument,		NULL, 'X' },
+	{"stats",	no_argument,		NULL, 's' },
+	{"interval",	required_argument,	NULL, 'i' },
+	{"verbose",	no_argument,		NULL, 'v' },
+	{}
+};
 
 static void int_exit(int sig)
 {
@@ -61,16 +74,25 @@ static void int_exit(int sig)
 	sample_exit(EXIT_OK);
 }
 
-static void usage(const char *prog)
+static void usage(char *argv[])
 {
-	fprintf(stderr,
-		"usage: %s [OPTS] <IFNAME|IFINDEX>_IN <IFNAME|IFINDEX>_OUT\n\n"
-		"OPTS:\n"
-		"    -S    use skb-mode\n"
-		"    -N    enforce native mode\n"
-		"    -F    force loading prog\n"
-		"    -X    load xdp program on egress\n",
-		prog);
+	int i;
+
+	printf("\n");
+	printf(" Usage: %s (options-see-below)\n",
+	       argv[0]);
+	printf(" Listing options:\n");
+	for (i = 0; long_options[i].name != 0; i++) {
+		printf(" --%-15s", long_options[i].name);
+		if (long_options[i].flag != NULL)
+			printf(" flag (internal value:%d)",
+			       *long_options[i].flag);
+		else
+			printf("short-option: -%c",
+			       long_options[i].val);
+		printf("\n");
+	}
+	printf("\n");
 }
 
 int main(int argc, char **argv)
@@ -88,13 +110,14 @@ int main(int argc, char **argv)
 	char str[2 * IF_NAMESIZE + 1];
 	__u32 info_len = sizeof(info);
 	char ifname_out[IF_NAMESIZE];
-	const char *optstr = "FSNX";
 	char ifname_in[IF_NAMESIZE];
 	struct bpf_object *obj;
 	int ret, opt, key = 0;
 	char filename[256];
+	int interval = 2;
 
-	while ((opt = getopt(argc, argv, optstr)) != -1) {
+	while ((opt = getopt_long(argc, argv, "FSNXi:vs",
+				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
 			xdp_flags |= XDP_FLAGS_SKB_MODE;
@@ -108,8 +131,17 @@ int main(int argc, char **argv)
 		case 'X':
 			xdp_devmap_attached = true;
 			break;
+		case 'i':
+			interval = atoi(optarg);
+			break;
+		case 'v':
+			sample_log_level ^= LL_DEBUG - 1;
+			break;
+		case 's':
+			mask |= SAMPLE_REDIRECT_MAP_CNT;
+			break;
 		default:
-			usage(basename(argv[0]));
+			usage(argv);
 			return 1;
 		}
 	}
@@ -122,7 +154,7 @@ int main(int argc, char **argv)
 	}
 
 	if (argc <= optind + 1) {
-		usage(basename(argv[0]));
+		usage(argv);
 		return 1;
 	}
 
@@ -252,9 +284,20 @@ int main(int argc, char **argv)
 	       ifname_in, ifindex_in, str, ifname_out, ifindex_out,
 	       get_driver_name(ifindex_out) ?: "(err)");
 
+	if ((mask & SAMPLE_REDIRECT_CNT) == 0) {
+		/* The bpf_link[i] depend on the order of
+		 * the functions was defined in _kern.c
+		 */
+		bpf_link__destroy(tp_links[2]);	/* tracepoint/xdp/xdp_redirect */
+		tp_links[2] = NULL;
+
+		bpf_link__destroy(tp_links[3]);	/* tracepoint/xdp/xdp_redirect_map */
+		tp_links[3] = NULL;
+	}
+
 	snprintf(str, sizeof(str), "%s->%s", ifname_in, ifname_out);
 
-	sample_stats_poll(1, mask, str, true);
+	sample_stats_poll(interval, mask, str, true);
 
 	return 0;
 

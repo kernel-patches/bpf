@@ -42,19 +42,20 @@ static const struct option long_options[] = {
 	{"help",	no_argument,		NULL, 'h' },
 	{"dev",		required_argument,	NULL, 'd' },
 	{"skb-mode",	no_argument,		NULL, 'S' },
-	{"sec",		required_argument,	NULL, 's' },
 	{"progname",	required_argument,	NULL, 'p' },
 	{"qsize",	required_argument,	NULL, 'q' },
 	{"cpu",		required_argument,	NULL, 'c' },
 	{"stress-mode", no_argument,		NULL, 'x' },
-	{"no-separators", no_argument,		NULL, 'z' },
 	{"force",	no_argument,		NULL, 'F' },
 	{"mprog-disable", no_argument,		NULL, 'n' },
 	{"mprog-name",	required_argument,	NULL, 'e' },
 	{"mprog-filename", required_argument,	NULL, 'f' },
 	{"redirect-device", required_argument,	NULL, 'r' },
 	{"redirect-map", required_argument,	NULL, 'm' },
-	{0, 0, NULL,  0 }
+	{"interval", required_argument,		NULL, 'i' },
+	{"verbose", no_argument,		NULL, 'v' },
+	{"stats", no_argument,			NULL, 's' },
+	{}
 };
 
 static void int_exit(int sig)
@@ -196,7 +197,7 @@ static void stress_cpumap(struct bpf_cpumap_val *value)
 	create_cpu_entry(1, value, 0, false);
 }
 
-static void __stats_poll(int interval, bool use_separators, char *prog_name,
+static void __stats_poll(int interval, bool redir_suc, char *prog_name,
 			 char *mprog_name, struct bpf_cpumap_val *value,
 			 bool stress_mode)
 {
@@ -210,8 +211,10 @@ static void __stats_poll(int interval, bool use_separators, char *prog_name,
 	sample_stats_collect(mask, record);
 
 	/* Trick to pretty printf with thousands separators use %' */
-	if (use_separators)
-		setlocale(LC_NUMERIC, "en_US");
+	setlocale(LC_NUMERIC, "en_US");
+
+	if (redir_suc)
+		mask |= SAMPLE_REDIRECT_CNT;
 
 	for (;;) {
 		struct timespec ots, nts;
@@ -298,12 +301,12 @@ int main(int argc, char **argv)
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
 	struct bpf_cpumap_val value;
-	bool use_separators = true;
 	bool stress_mode = false;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	int err = EXIT_FAIL;
 	char filename[256];
+	bool redir = false;
 	int added_cpus = 0;
 	int longindex = 0;
 	int interval = 2;
@@ -356,7 +359,7 @@ int main(int argc, char **argv)
 	memset(cpu, 0, n_cpus * sizeof(int));
 
 	/* Parse commands line args */
-	while ((opt = getopt_long(argc, argv, "hSd:s:p:q:c:xzFf:e:r:m:",
+	while ((opt = getopt_long(argc, argv, "hSd:sp:q:c:xi:vFf:e:r:m:",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 'd':
@@ -375,6 +378,9 @@ int main(int argc, char **argv)
 			}
 			break;
 		case 's':
+			redir = true;
+			break;
+		case 'i':
 			interval = atoi(optarg);
 			break;
 		case 'S':
@@ -382,9 +388,6 @@ int main(int argc, char **argv)
 			break;
 		case 'x':
 			stress_mode = true;
-			break;
-		case 'z':
-			use_separators = false;
 			break;
 		case 'p':
 			/* Selecting eBPF prog to load */
@@ -421,6 +424,9 @@ int main(int argc, char **argv)
 			break;
 		case 'F':
 			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
+			break;
+		case 'v':
+			sample_log_level ^= LL_DEBUG - 1;
 			break;
 		case 'h':
 		error:
@@ -492,7 +498,18 @@ int main(int argc, char **argv)
 	}
 	prog_id = info.id;
 
-	__stats_poll(interval, use_separators, prog_name, mprog_name,
+	if (!redir) {
+		/* The bpf_link[i] depend on the order of
+		 * the functions was defined in _kern.c
+		 */
+		bpf_link__destroy(tp_links[2]);	/* tracepoint/xdp/xdp_redirect */
+		tp_links[2] = NULL;
+
+		bpf_link__destroy(tp_links[3]);	/* tracepoint/xdp/xdp_redirect_map */
+		tp_links[3] = NULL;
+	}
+
+	__stats_poll(interval, redir, prog_name, mprog_name,
 		     &value, stress_mode);
 
 	err = EXIT_OK;
