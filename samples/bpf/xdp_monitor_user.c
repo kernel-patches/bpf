@@ -35,6 +35,10 @@ static const char *__doc_err_only__=
 static bool debug = false;
 struct bpf_object *obj;
 
+static int mask = SAMPLE_REDIRECT_ERR_CNT | SAMPLE_CPUMAP_ENQUEUE_CNT |
+		  SAMPLE_CPUMAP_KTHREAD_CNT | SAMPLE_EXCEPTION_CNT |
+		  SAMPLE_DEVMAP_XMIT_CNT;
+
 static const struct option long_options[] = {
 	{"help",	no_argument,		NULL, 'h' },
 	{"debug",	no_argument,		NULL, 'D' },
@@ -56,6 +60,9 @@ static void int_exit(int sig)
 static void usage(char *argv[])
 {
 	int i;
+
+	sample_print_help(mask);
+
 	printf("\nDOCUMENTATION:\n%s\n", __doc__);
 	printf("\n");
 	printf(" Usage: %s (options-see-below)\n",
@@ -110,9 +117,6 @@ static void print_bpf_prog_info(void)
 
 int main(int argc, char **argv)
 {
-	int mask = SAMPLE_REDIRECT_ERR_CNT | SAMPLE_CPUMAP_ENQUEUE_CNT |
-		   SAMPLE_CPUMAP_KTHREAD_CNT | SAMPLE_EXCEPTION_CNT |
-		   SAMPLE_DEVMAP_XMIT_CNT;
 	int longindex = 0, opt;
 	int ret = EXIT_FAILURE;
 	char filename[256];

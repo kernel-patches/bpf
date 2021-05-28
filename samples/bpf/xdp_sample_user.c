@@ -77,6 +77,58 @@ static bool err_exp;
 #define PASS(pass) pass, "pass/s"
 #define REDIR(redir) redir, "redir/s"
 
+void sample_print_help(int mask)
+{
+	printf("Output format description\n\n"
+	       "By default, redirect success statistics are disabled, use -s to enable.\n"
+	       "The terse output mode is default, verbose mode can be activated using -v\n"
+	       "Use SIGQUIT (Ctrl + \\) to switch the mode dynamically at runtime\n\n"
+	       "Terse mode displays at most the following fields:\n"
+	       "  rx/s     Number of packets received per second\n"
+	       "  redir/s  Number of packets successfully redirected per second\n"
+	       "  error/s  Aggregated count of errors per second (including dropped packets)\n"
+	       "  xmit/s   Number of packets transmitted on the output device per second\n\n"
+	       "Output description for verbose mode:\n"
+	       "  FIELD         DESCRIPTION\n");
+	if (mask & SAMPLE_RX_CNT) {
+		printf("  receive\tDisplays the number of packets received & errors encountered\n"
+		       " \t\tWhenever an error or packet drop occurs, details of per CPU error\n"
+		       " \t\tand drop statistics will be expanded inline in terse mode.\n"
+		       " \t\t\tpkt/s     - Packets received per second\n"
+		       " \t\t\tdrop/s    - Packets dropped per second\n"
+		       " \t\t\terror/s   - Errors encountered per second\n\n");
+	}
+	if (mask & (SAMPLE_REDIRECT_CNT|SAMPLE_REDIRECT_ERR_CNT)) {
+		printf("  redirect\tDisplays the number of packets successfully redirected\n"
+		       "  \t\tErrors encountered are expanded under redirect_err field\n"
+		       "  \t\tNote that passing -s to enable it has a per packet overhead\n"
+		       "  \t\t\tredir/s   - Packets redirected successfully per second\n\n"
+		       "  redirect_err\tDisplays the number of packets that failed redirection\n"
+		       "  \t\tThe errno is expanded under this field with per CPU count\n"
+		       "  \t\tThe recognized errors are EOPNOTSUPP, EINVAL, ENETDOWN and EMSGSIZE\n"
+		       "  \t\t\terror/s   - Packets that failed redirection per second\n\n");
+	}
+
+	if (mask & SAMPLE_EXCEPTION_CNT) {
+		printf("  xdp_exception\tDisplays xdp_exception tracepoint events\n"
+		       "  \t\tThis can occur due to internal driver errors, unrecognized\n"
+		       "  \t\tXDP actions and due to explicit user trigger by use of XDP_ABORTED\n"
+		       "  \t\tEach action is expanded below this field with its count\n"
+		       "  \t\t\thit/s     - Number of times the tracepoint was hit per second\n\n");
+	}
+
+	if (mask & SAMPLE_DEVMAP_XMIT_CNT) {
+		printf("  devmap_xmit\tDisplays devmap_xmit tracepoint events\n"
+		       "  \t\tThis tracepoint is invoked for successful transmissions on output\n"
+		       "  \t\tdevice but these statistics are not available for generic XDP mode,\n"
+		       "  \t\thence they will be omitted from the output when using SKB mode\n"
+		       "  \t\t\txmit/s    - Number of packets that were transmitted per second\n"
+		       "  \t\t\tdrop/s    - Number of packets that failed transmissions per second\n"
+		       "  \t\t\tdrv_err/s - Number of internal driver errors per second\n"
+		       "  \t\t\tbulk_avg  - Average number of packets processed for each event\n\n");
+	}
+}
+
 static const char *elixir_search[NUM_TP] = {
 	[TP_REDIRECT_CNT] = "_trace_xdp_redirect",
 	[TP_REDIRECT_MAP_CNT] = "_trace_xdp_redirect_map",

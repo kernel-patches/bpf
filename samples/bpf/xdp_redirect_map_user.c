@@ -28,6 +28,8 @@ static __u32 prog_id;
 static __u32 dummy_prog_id;
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
+static int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_MAP_CNT |
+		  SAMPLE_EXCEPTION_CNT | SAMPLE_DEVMAP_XMIT_CNT;
 
 static const struct option long_options[] = {
 	{"help",	no_argument,		NULL, 'h' },
@@ -78,6 +80,8 @@ static void usage(char *argv[])
 {
 	int i;
 
+	sample_print_help(mask);
+
 	printf("\n");
 	printf(" Usage: %s (options-see-below)\n",
 	       argv[0]);
@@ -97,8 +101,6 @@ static void usage(char *argv[])
 
 int main(int argc, char **argv)
 {
-	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_MAP_CNT |
-		   SAMPLE_EXCEPTION_CNT | SAMPLE_DEVMAP_XMIT_CNT;
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_UNSPEC,
 	};

@@ -37,6 +37,9 @@ static int avail_fd;
 static int count_fd;
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
+static int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_CNT |
+		  SAMPLE_CPUMAP_ENQUEUE_CNT | SAMPLE_CPUMAP_KTHREAD_CNT |
+		  SAMPLE_EXCEPTION_CNT;
 
 static const struct option long_options[] = {
 	{"help",	no_argument,		NULL, 'h' },
@@ -95,6 +98,8 @@ static void print_avail_progs(struct bpf_object *obj)
 static void usage(char *argv[], struct bpf_object *obj)
 {
 	int i;
+
+	sample_print_help(mask);
 
 	printf("\nDOCUMENTATION:\n%s\n", __doc__);
 	printf("\n");
@@ -201,9 +206,6 @@ static void __stats_poll(int interval, bool redir_suc, char *prog_name,
 			 char *mprog_name, struct bpf_cpumap_val *value,
 			 bool stress_mode)
 {
-	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_CNT |
-		   SAMPLE_CPUMAP_ENQUEUE_CNT | SAMPLE_CPUMAP_KTHREAD_CNT |
-		   SAMPLE_EXCEPTION_CNT;
 	struct stats_record *record, *prev;
 
 	record = alloc_stats_record();

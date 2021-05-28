@@ -169,6 +169,7 @@ void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,
 				      struct stats_record *stats_prev,
 				      unsigned int nr_cpus, char *mprog_name);
 void sample_reset_mode(void);
+void sample_print_help(int mask);
 
 const char *get_driver_name(int ifindex);
 int get_mac_addr(int ifindex, void *mac_addr);
