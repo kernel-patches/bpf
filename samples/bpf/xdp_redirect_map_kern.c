@@ -19,6 +19,8 @@
 #include <linux/ipv6.h>
 #include <bpf/bpf_helpers.h>
 
+#include "xdp_sample_kern.h"
+
 /* The 2nd xdp prog on egress does not support skb mode, so we define two
  * maps, tx_port_general and tx_port_native.
  */
@@ -35,16 +37,6 @@ struct {
 	__uint(value_size, sizeof(struct bpf_devmap_val));
 	__uint(max_entries, 100);
 } tx_port_native SEC(".maps");
-
-/* Count RX packets, as XDP bpf_prog doesn't get direct TX-success
- * feedback.  Redirect TX errors can be caught via a tracepoint.
- */
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, u32);
-	__type(value, long);
-	__uint(max_entries, 1);
-} rxcnt SEC(".maps");
 
 /* map to store egress interface mac address */
 struct {
@@ -75,7 +67,7 @@ static __always_inline int xdp_redirect_map(struct xdp_md *ctx, void *redirect_m
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *eth = data;
-	int rc = XDP_DROP;
+	struct datarec *rec;
 	long *value;
 	u32 key = 0;
 	u64 nh_off;
@@ -83,15 +75,16 @@ static __always_inline int xdp_redirect_map(struct xdp_md *ctx, void *redirect_m
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
-		return rc;
+		return XDP_DROP;
 
 	/* constant virtual port */
 	vport = 0;
 
 	/* count packet in global counter */
-	value = bpf_map_lookup_elem(&rxcnt, &key);
-	if (value)
-		*value += 1;
+	rec = bpf_map_lookup_elem(&rx_cnt, &key);
+	if (!rec)
+		return XDP_ABORTED;
+	rec->processed++;
 
 	swap_src_dst_mac(data);
 

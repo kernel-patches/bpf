@@ -13,15 +13,11 @@
 #include <net/if.h>
 #include <unistd.h>
 #include <libgen.h>
-#include <sys/resource.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 
 #include "bpf_util.h"
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include "xdp_sample_user.h"
 
 static int ifindex_in;
 static int ifindex_out;
@@ -31,7 +27,6 @@ static __u32 prog_id;
 static __u32 dummy_prog_id;
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
-static int rxcnt_map_fd;
 
 static void int_exit(int sig)
 {
@@ -62,56 +57,8 @@ static void int_exit(int sig)
 		else
 			printf("program on iface OUT changed, not removing\n");
 	}
-	exit(0);
-}
 
-static void poll_stats(int interval, int ifindex)
-{
-	unsigned int nr_cpus = bpf_num_possible_cpus();
-	__u64 values[nr_cpus], prev[nr_cpus];
-
-	memset(prev, 0, sizeof(prev));
-
-	while (1) {
-		__u64 sum = 0;
-		__u32 key = 0;
-		int i;
-
-		sleep(interval);
-		assert(bpf_map_lookup_elem(rxcnt_map_fd, &key, values) == 0);
-		for (i = 0; i < nr_cpus; i++)
-			sum += (values[i] - prev[i]);
-		if (sum)
-			printf("ifindex %i: %10llu pkt/s\n",
-			       ifindex, sum / interval);
-		memcpy(prev, values, sizeof(values));
-	}
-}
-
-static int get_mac_addr(unsigned int ifindex_out, void *mac_addr)
-{
-	char ifname[IF_NAMESIZE];
-	struct ifreq ifr;
-	int fd, ret = -1;
-
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd < 0)
-		return ret;
-
-	if (!if_indextoname(ifindex_out, ifname))
-		goto err_out;
-
-	strcpy(ifr.ifr_name, ifname);
-
-	if (ioctl(fd, SIOCGIFHWADDR, &ifr) != 0)
-		goto err_out;
-
-	memcpy(mac_addr, ifr.ifr_hwaddr.sa_data, 6 * sizeof(char));
-	ret = 0;
-
-err_out:
-	close(fd);
-	return ret;
+	sample_exit(EXIT_OK);
 }
 
 static void usage(const char *prog)
@@ -128,6 +75,8 @@ static void usage(const char *prog)
 
 int main(int argc, char **argv)
 {
+	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_CNT |
+		   SAMPLE_EXCEPTION_CNT;
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_UNSPEC,
 	};
@@ -136,8 +85,11 @@ int main(int argc, char **argv)
 	int tx_port_map_fd, tx_mac_map_fd;
 	struct bpf_devmap_val devmap_val;
 	struct bpf_prog_info info = {};
+	char str[2 * IF_NAMESIZE + 1];
 	__u32 info_len = sizeof(info);
+	char ifname_out[IF_NAMESIZE];
 	const char *optstr = "FSNX";
+	char ifname_in[IF_NAMESIZE];
 	struct bpf_object *obj;
 	int ret, opt, key = 0;
 	char filename[256];
@@ -182,13 +134,16 @@ int main(int argc, char **argv)
 	if (!ifindex_out)
 		ifindex_out = strtoul(argv[optind + 1], NULL, 0);
 
-	printf("input: %d output: %d\n", ifindex_in, ifindex_out);
-
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 	prog_load_attr.file = filename;
 
 	if (bpf_prog_load_xattr(&prog_load_attr, &obj, &prog_fd))
 		return 1;
+
+	if (sample_init(obj) < 0) {
+		fprintf(stderr, "Failed to initialize sample\n");
+		return 1;
+	}
 
 	if (xdp_flags & XDP_FLAGS_SKB_MODE) {
 		prog = bpf_object__find_program_by_name(obj, "xdp_redirect_map_general");
@@ -210,8 +165,7 @@ int main(int argc, char **argv)
 	}
 
 	tx_mac_map_fd = bpf_object__find_map_fd_by_name(obj, "tx_mac");
-	rxcnt_map_fd = bpf_object__find_map_fd_by_name(obj, "rxcnt");
-	if (tx_mac_map_fd < 0 || rxcnt_map_fd < 0) {
+	if (tx_mac_map_fd < 0) {
 		printf("bpf_object__find_map_fd_by_name failed\n");
 		return 1;
 	}
@@ -281,8 +235,28 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	poll_stats(2, ifindex_out);
+	if (!if_indextoname(ifindex_in, ifname_in)) {
+		perror("if_nametoindex");
+		goto out;
+	}
+
+	if (!if_indextoname(ifindex_out, ifname_out)) {
+		perror("if_nametoindex");
+		goto out;
+	}
+
+	strncpy(str, get_driver_name(ifindex_in) ?: "(err)", sizeof(str));
+
+	printf("Redirecting from %s (ifindex %d; driver %s) to %s (ifindex %d; driver %s)\n",
+	       ifname_in, ifindex_in, str, ifname_out, ifindex_out,
+	       get_driver_name(ifindex_out) ?: "(err)");
+
+	snprintf(str, sizeof(str), "%s->%s", ifname_in, ifname_out);
+
+	sample_stats_poll(1, mask, str, true);
+
+	return 0;
 
 out:
-	return 0;
+	return 1;
 }
