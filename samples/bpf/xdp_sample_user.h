@@ -44,10 +44,17 @@ static const char *const map_type_strings[] = {
 	[DEVMAP_XMIT_CNT] = "devmap_xmit_cnt",
 };
 
+enum log_level {
+	LL_DEFAULT = 1U << 0,
+	LL_SIMPLE  = 1U << 1,
+	LL_DEBUG   = 1U << 2,
+};
+
 extern struct bpf_link *tp_links[NUM_TP];
 extern int map_fds[NUM_MAP];
 extern int n_cpus;
 extern int tp_cnt;
+extern enum log_level sample_log_level;
 
 /* Exit return codes */
 #define EXIT_OK			0
@@ -113,6 +120,34 @@ struct stats_record {
 	struct record enq[];
 };
 
+struct sample_output {
+	struct {
+		__u64 rx;
+		__u64 redir;
+		__u64 drop;
+		__u64 err;
+		__u64 xmit;
+	} totals;
+	struct {
+		__u64 pps;
+		__u64 drop;
+		__u64 err;
+	} rx_cnt;
+	struct {
+		__u64 suc;
+		__u64 err;
+	} redir_cnt;
+	struct {
+		__u64 hits;
+	} except_cnt;
+	struct {
+		__u64 pps;
+		__u64 drop;
+		__u64 err;
+		double bavg;
+	} xmit_cnt;
+};
+
 int sample_init(struct bpf_object *obj);
 void sample_exit(int status);
 struct stats_record *alloc_stats_record(void);
@@ -125,6 +160,7 @@ void sample_stats_poll(int interval, int mask, char *prog_name,
 void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,
 				      struct stats_record *stats_prev,
 				      unsigned int nr_cpus, char *mprog_name);
+void sample_reset_mode(void);
 
 const char *get_driver_name(int ifindex);
 int get_mac_addr(int ifindex, void *mac_addr);

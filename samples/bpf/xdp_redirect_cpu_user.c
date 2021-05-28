@@ -216,16 +216,18 @@ static void __stats_poll(int interval, bool use_separators, char *prog_name,
 	for (;;) {
 		swap(&prev, &record);
 		sample_stats_collect(mask, record);
-		sample_stats_print(mask, record, prev, prog_name);
+		sample_stats_print(mask, record, prev, NULL);
 		/* Depends on SAMPLE_CPUMAP_KTHREAD_CNT */
 		sample_stats_print_cpumap_remote(record, prev,
 						 bpf_num_possible_cpus(),
 						 mprog_name);
-		printf("\n");
+		if (sample_log_level & LL_DEFAULT)
+			printf("\n");
 		fflush(stdout);
 		sleep(interval);
 		if (stress_mode)
 			stress_cpumap(value);
+		sample_reset_mode();
 	}
 
 	free_stats_record(record);

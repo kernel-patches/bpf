@@ -184,7 +184,7 @@ int main(int argc, char **argv)
 		mask |= SAMPLE_REDIRECT_CNT;
 	}
 
-	sample_stats_poll(interval, mask, "xdp_monitor", true);
+	sample_stats_poll(interval, mask, NULL, true);
 
 cleanup:
 	bpf_object__close(obj);
