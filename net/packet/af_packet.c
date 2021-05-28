@@ -303,10 +303,14 @@ static void __register_prot_hook(struct sock *sk)
 	struct packet_sock *po = pkt_sk(sk);
 
 	if (!po->running) {
-		if (po->fanout)
+		if (po->fanout) {
 			__fanout_link(sk, po);
-		else
+		} else {
 			dev_add_pack(&po->prot_hook);
+#ifdef CONFIG_XDP_SOCKETS
+			xsk_add_pack(&po->xsk_pt);
+#endif
+		}
 
 		sock_hold(sk);
 		po->running = 1;
@@ -333,10 +337,14 @@ static void __unregister_prot_hook(struct sock *sk, bool sync)
 
 	po->running = 0;
 
-	if (po->fanout)
+	if (po->fanout) {
 		__fanout_unlink(sk, po);
-	else
+	} else {
 		__dev_remove_pack(&po->prot_hook);
+#ifdef CONFIG_XDP_SOCKETS
+		__xsk_remove_pack(&po->xsk_pt);
+#endif
+	}
 
 	__sock_put(sk);
 
@@ -1483,8 +1491,12 @@ static void __fanout_link(struct sock *sk, struct packet_sock *po)
 	rcu_assign_pointer(f->arr[f->num_members], sk);
 	smp_wmb();
 	f->num_members++;
-	if (f->num_members == 1)
+	if (f->num_members == 1) {
 		dev_add_pack(&f->prot_hook);
+#ifdef CONFIG_XDP_SOCKETS
+		xsk_add_pack(&f->xsk_pt);
+#endif
+	}
 	spin_unlock(&f->lock);
 }
 
@@ -1504,8 +1516,12 @@ static void __fanout_unlink(struct sock *sk, struct packet_sock *po)
 			   rcu_dereference_protected(f->arr[f->num_members - 1],
 						     lockdep_is_held(&f->lock)));
 	f->num_members--;
-	if (f->num_members == 0)
+	if (f->num_members == 0) {
 		__dev_remove_pack(&f->prot_hook);
+#ifdef CONFIG_XDP_SOCKETS
+		__xsk_remove_pack(&po->xsk_pt);
+#endif
+	}
 	spin_unlock(&f->lock);
 }
 
@@ -1737,6 +1753,10 @@ static int fanout_add(struct sock *sk, struct fanout_args *args)
 		match->prot_hook.af_packet_priv = match;
 		match->prot_hook.id_match = match_fanout_group;
 		match->max_num_members = args->max_num_members;
+#ifdef CONFIG_XDP_SOCKETS
+		match->xsk_pt.pt = &match->prot_hook;
+#endif
+
 		list_add(&match->list, &fanout_list);
 	}
 	err = -EINVAL;
@@ -3315,6 +3335,9 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 		po->prot_hook.func = packet_rcv_spkt;
 
 	po->prot_hook.af_packet_priv = sk;
+#ifdef CONFIG_XDP_SOCKETS
+	po->xsk_pt.pt = &po->prot_hook;
+#endif
 
 	if (proto) {
 		po->prot_hook.type = proto;

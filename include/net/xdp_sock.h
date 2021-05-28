@@ -17,6 +17,11 @@ struct net_device;
 struct xsk_queue;
 struct xdp_buff;
 
+struct xsk_packet {
+	struct list_head list;
+	struct packet_type *pt;
+};
+
 struct xdp_umem {
 	void *addrs;
 	u64 size;
@@ -79,6 +84,8 @@ struct xdp_sock {
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp);
 int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp);
 void __xsk_map_flush(void);
+void xsk_add_pack(struct xsk_packet *xpt);
+void __xsk_remove_pack(struct xsk_packet *xpt);
 
 #else
 
@@ -93,6 +100,14 @@ static inline int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
 }
 
 static inline void __xsk_map_flush(void)
+{
+}
+
+void xsk_add_pack(struct xsk_packet *xpt)
+{
+}
+
+void __xsk_remove_pack(struct xsk_packet *xpt)
 {
 }
 

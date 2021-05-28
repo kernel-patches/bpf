@@ -28,6 +28,7 @@
 
 #include "xsk_queue.h"
 #include "xdp_umem.h"
+#include "xsk_packet.h"
 #include "xsk.h"
 
 #define TX_BATCH_SIZE 32
@@ -156,6 +157,7 @@ static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 	int err;
 
 	addr = xp_get_handle(xskb);
+	xsk_rx_packet_deliver(xs, addr, len);
 	err = xskq_prod_reserve_desc(xs->rx, addr, len);
 	if (err) {
 		xs->rx_queue_full++;
@@ -346,6 +348,8 @@ bool xsk_tx_peek_desc(struct xsk_buff_pool *pool, struct xdp_desc *desc)
 		 */
 		if (xskq_prod_reserve_addr(pool->cq, desc->addr))
 			goto out;
+
+		xsk_tx_zc_packet_deliver(xs, desc);
 
 		xskq_cons_release(xs->tx);
 		rcu_read_unlock();
@@ -575,6 +579,8 @@ static int xsk_generic_xmit(struct sock *sk)
 			goto out;
 		}
 		spin_unlock_irqrestore(&xs->pool->cq_lock, flags);
+
+		xsk_tx_packet_deliver(xs, &desc, skb);
 
 		err = __dev_direct_xmit(skb, xs->queue_id);
 		if  (err == NETDEV_TX_BUSY) {
@@ -1467,6 +1473,9 @@ static int __init xsk_init(void)
 
 	for_each_possible_cpu(cpu)
 		INIT_LIST_HEAD(&per_cpu(xskmap_flush_list, cpu));
+
+	INIT_LIST_HEAD(&xsk_pt);
+
 	return 0;
 
 out_pernet:
