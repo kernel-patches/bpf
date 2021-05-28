@@ -555,10 +555,10 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	skb->protocol = eth_type_trans(skb, dev);
 
 	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
 	 * - HW RX hash			(skb_set_hash)
 	 * - RX ring dev queue index	(skb_record_rx_queue)
 	 */
+	xdp_frame_get_csum(xdpf, skb);
 
 	/* Until page_pool get SKB return path, release DMA here */
 	xdp_release_frame(xdpf);
