@@ -161,6 +161,8 @@ void sample_stats_print(int mask, struct stats_record *cur,
 void sample_stats_collect(int mask, struct stats_record *rec);
 void sample_summary_update(struct sample_output *out, int interval);
 void sample_summary_print(void);
+void sample_calc_timediff(struct timespec *cur, const struct timespec *prev,
+			  int interval);
 void sample_stats_poll(int interval, int mask, char *prog_name,
 		       int use_separators);
 void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,

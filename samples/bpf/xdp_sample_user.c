@@ -923,6 +923,26 @@ void sample_stats_print(int mask, struct stats_record *cur,
 	stats_print(prog_name, mask, cur, prev, &out);
 }
 
+static void calc_timediff(struct timespec *cur, const struct timespec *prev)
+{
+	if (cur->tv_nsec - prev->tv_nsec < 0) {
+		cur->tv_sec = cur->tv_sec - prev->tv_sec - 1;
+		cur->tv_nsec = cur->tv_nsec - prev->tv_nsec + NANOSEC_PER_SEC;
+	} else {
+		cur->tv_sec -= prev->tv_sec;
+		cur->tv_nsec -= prev->tv_nsec;
+	}
+}
+
+void sample_calc_timediff(struct timespec *cur, const struct timespec *prev, int interval)
+{
+	struct timespec ts = { .tv_sec = interval };
+
+	calc_timediff(cur, prev);
+	calc_timediff(&ts, cur);
+	*cur = ts;
+}
+
 void sample_stats_poll(int interval, int mask, char *prog_name, int use_separators)
 {
 	struct stats_record *record, *prev;
@@ -936,11 +956,16 @@ void sample_stats_poll(int interval, int mask, char *prog_name, int use_separato
 		setlocale(LC_NUMERIC, "en_US");
 
 	for (;;) {
+		struct timespec ots, nts;
+
+		clock_gettime(CLOCK_MONOTONIC, &ots);
 		swap(&prev, &record);
 		sample_stats_collect(mask, record);
 		sample_stats_print(mask, record, prev, prog_name, interval);
 		fflush(stdout);
-		sleep(interval);
+		clock_gettime(CLOCK_MONOTONIC, &nts);
+		sample_calc_timediff(&nts, &ots, interval);
+		nanosleep(&nts, NULL);
 		sample_reset_mode();
 	}
 

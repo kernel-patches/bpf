@@ -214,6 +214,9 @@ static void __stats_poll(int interval, bool use_separators, char *prog_name,
 		setlocale(LC_NUMERIC, "en_US");
 
 	for (;;) {
+		struct timespec ots, nts;
+
+		clock_gettime(CLOCK_MONOTONIC, &ots);
 		swap(&prev, &record);
 		sample_stats_collect(mask, record);
 		sample_stats_print(mask, record, prev, NULL, interval);
@@ -224,7 +227,9 @@ static void __stats_poll(int interval, bool use_separators, char *prog_name,
 		if (sample_log_level & LL_DEFAULT)
 			printf("\n");
 		fflush(stdout);
-		sleep(interval);
+		clock_gettime(CLOCK_MONOTONIC, &nts);
+		sample_calc_timediff(&nts, &ots, interval);
+		nanosleep(&nts, NULL);
 		if (stress_mode)
 			stress_cpumap(value);
 		sample_reset_mode();
