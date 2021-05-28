@@ -75,7 +75,7 @@ static void usage(const char *prog)
 
 int main(int argc, char **argv)
 {
-	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_CNT |
+	int mask = SAMPLE_RX_CNT | SAMPLE_REDIRECT_ERR_MAP_CNT |
 		   SAMPLE_EXCEPTION_CNT | SAMPLE_DEVMAP_XMIT_CNT;
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_UNSPEC,

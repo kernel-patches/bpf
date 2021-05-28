@@ -216,7 +216,7 @@ static void __stats_poll(int interval, bool use_separators, char *prog_name,
 	for (;;) {
 		swap(&prev, &record);
 		sample_stats_collect(mask, record);
-		sample_stats_print(mask, record, prev, NULL);
+		sample_stats_print(mask, record, prev, NULL, interval);
 		/* Depends on SAMPLE_CPUMAP_KTHREAD_CNT */
 		sample_stats_print_cpumap_remote(record, prev,
 						 bpf_num_possible_cpus(),

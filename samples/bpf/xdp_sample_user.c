@@ -26,8 +26,10 @@
 #define SIOCETHTOOL 0x8946
 #endif
 
+#include <fcntl.h>
 #include <arpa/inet.h>
 #include <linux/if_link.h>
+#include <sys/utsname.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -39,6 +41,7 @@ struct bpf_link *tp_links[NUM_TP] = {};
 int map_fds[NUM_MAP], tp_cnt, n_cpus;
 static int sample_sig_fd;
 enum log_level sample_log_level = LL_SIMPLE;
+static struct sample_output sum_out;
 static bool err_exp;
 
 #define __sample_print(fmt, cond, printer, ...)                                \
@@ -58,6 +61,9 @@ static bool err_exp;
 	})
 #define print_err(err, fmt, ...) __print_err(err, fmt, printf, ##__VA_ARGS__)
 
+#define print_link_err(err, str, width, type)                                  \
+	__print_err(err, str, print_link, width, type)
+
 #define __COLUMN(x) "%'10" x " %-13s"
 #define FMT_COLUMNf __COLUMN(".0f")
 #define FMT_COLUMNd __COLUMN("d")
@@ -70,6 +76,66 @@ static bool err_exp;
 #define XMIT(xmit) xmit, "xmit/s"
 #define PASS(pass) pass, "pass/s"
 #define REDIR(redir) redir, "redir/s"
+
+static const char *elixir_search[NUM_TP] = {
+	[TP_REDIRECT_CNT] = "_trace_xdp_redirect",
+	[TP_REDIRECT_MAP_CNT] = "_trace_xdp_redirect_map",
+	[TP_REDIRECT_ERR_CNT] = "_trace_xdp_redirect_err",
+	[TP_REDIRECT_MAP_ERR_CNT] = "_trace_xdp_redirect_map_err",
+	[TP_CPUMAP_ENQUEUE_CNT] = "trace_xdp_cpumap_enqueue",
+	[TP_CPUMAP_KTHREAD_CNT] = "trace_xdp_cpumap_kthread",
+	[TP_EXCEPTION_CNT] = "trace_xdp_exception",
+	[TP_DEVMAP_XMIT_CNT] = "trace_xdp_devmap_xmit",
+};
+
+static const char *make_url(enum tp_type i)
+{
+	const char *key = elixir_search[i];
+	static struct utsname uts = {};
+	static char url[128];
+	static bool uts_init;
+	int maj, min;
+	char c[2];
+
+	if (!uts_init) {
+		if (uname(&uts) < 0)
+			return NULL;
+		uts_init = true;
+	}
+
+	if (!key || sscanf(uts.release, "%d.%d%1s", &maj, &min, c) != 3)
+		return NULL;
+
+	snprintf(url, sizeof(url), "https://elixir.bootlin.com/linux/v%d.%d/C/ident/%s",
+		 maj, min, key);
+
+	return url;
+}
+
+static void print_link(const char *str, int width, enum tp_type i)
+{
+	static int t = -1;
+	const char *s;
+	int fd, l;
+
+	if (t < 0) {
+		fd = open("/proc/self/fd/1", O_RDONLY);
+		if (fd < 0)
+			return;
+		t = isatty(fd);
+		close(fd);
+	}
+
+	s = make_url(i);
+	if (!s || !t) {
+		printf("  %-*s", width, str);
+		return;
+	}
+
+	l = strlen(str);
+	width = width - l > 0 ? width - l : 0;
+	printf("  \x1B]8;;%s\a%s\x1B]8;;\a%*c", s, str, width, ' ');
+}
 
 #define NANOSEC_PER_SEC 1000000000 /* 10^9 */
 static __u64 gettime(void)
@@ -333,8 +399,11 @@ static void stats_get_cpumap_enqueue(struct stats_record *stats_rec,
 
 			if (err > 0)
 				err = pps / err; /* calc average bulk size */
-			print_default("  %-20s " FMT_COLUMNf FMT_COLUMNf __COLUMN(".2f") "\n",
-				      str, PPS(pps), DROP(drop), err, "bulk_avg");
+
+			print_link_err(drop, str, 20, TP_CPUMAP_ENQUEUE_CNT);
+			print_err(drop,
+				  " " FMT_COLUMNf FMT_COLUMNf __COLUMN(".2f") "\n",
+				  PPS(pps), DROP(drop), err, "bulk_avg");
 		}
 
 		for (i = 0; i < nr_cpus; i++) {
@@ -375,8 +444,9 @@ static void stats_get_cpumap_kthread(struct stats_record *stats_rec,
 	drop = calc_drop_pps(&rec->total, &prev->total, t);
 	err = calc_errs_pps(&rec->total, &prev->total, t);
 
-	print_default("  %-20s " FMT_COLUMNf FMT_COLUMNf FMT_COLUMNf "\n", "kthread total",
-		      PPS(pps), DROP(drop), err, "sched");
+	print_link_err(drop, pps ? "kthread total" : "kthread", 20, TP_CPUMAP_KTHREAD_CNT);
+	print_err(drop, " " FMT_COLUMNf FMT_COLUMNf FMT_COLUMNf "\n",
+			  PPS(pps), DROP(drop), err, "sched");
 
 	for (i = 0; i < nr_cpus; i++) {
 		struct datarec *r = &rec->cpu[i];
@@ -632,7 +702,9 @@ static void stats_print(const char *prefix, int mask, struct stats_record *r,
 
 	if (mask & SAMPLE_REDIRECT_CNT) {
 		str = out->redir_cnt.suc ? "redirect total" : "redirect";
-		print_default("  %-20s " FMT_COLUMNl "\n", str, REDIR(out->redir_cnt.suc));
+		print_link_err(0, str, 20, mask & _SAMPLE_REDIRECT_MAP ?
+				TP_REDIRECT_MAP_CNT : TP_REDIRECT_CNT);
+		print_default(" " FMT_COLUMNl "\n", REDIR(out->redir_cnt.suc));
 
 		stats_get_redirect_cnt(r, p, nr_cpus, NULL);
 	}
@@ -640,6 +712,8 @@ static void stats_print(const char *prefix, int mask, struct stats_record *r,
 	if (mask & SAMPLE_REDIRECT_ERR_CNT) {
 		str = (sample_log_level & LL_DEFAULT) && out->redir_cnt.err ?
 			"redirect_err total" : "redirect_err";
+		print_link_err(out->redir_cnt.err, str, 20, mask & _SAMPLE_REDIRECT_MAP ?
+			       TP_REDIRECT_MAP_ERR_CNT : TP_REDIRECT_ERR_CNT);
 		print_err(out->redir_cnt.err, "  %-20s " FMT_COLUMNl "\n", str,
 			  ERR(out->redir_cnt.err));
 
@@ -648,8 +722,9 @@ static void stats_print(const char *prefix, int mask, struct stats_record *r,
 
 	if (mask & SAMPLE_EXCEPTION_CNT) {
 		str = out->except_cnt.hits ? "xdp_exception total" : "xdp_exception";
-		print_err(out->except_cnt.hits, "  %-20s " FMT_COLUMNl "\n",
-			  str, HITS(out->except_cnt.hits));
+
+		print_link_err(out->except_cnt.hits, str, 20, TP_EXCEPTION_CNT);
+		print_err(out->except_cnt.hits, " " FMT_COLUMNl "\n", HITS(out->except_cnt.hits));
 
 		stats_get_exception_cnt(r, p, nr_cpus, NULL);
 	}
@@ -657,9 +732,11 @@ static void stats_print(const char *prefix, int mask, struct stats_record *r,
 	if (mask & SAMPLE_DEVMAP_XMIT_CNT) {
 		str = (sample_log_level & LL_DEFAULT) && out->xmit_cnt.pps ?
 			"devmap_xmit total" : "devmap_xmit";
+
+		print_link_err(out->xmit_cnt.err, str, 20, TP_DEVMAP_XMIT_CNT);
 		print_err(out->xmit_cnt.err,
-			  "  %-20s " FMT_COLUMNl FMT_COLUMNl FMT_COLUMNl __COLUMN(".2f") "\n",
-			  str, XMIT(out->xmit_cnt.pps), DROP(out->xmit_cnt.drop),
+			  " " FMT_COLUMNl FMT_COLUMNl FMT_COLUMNl __COLUMN(".2f") "\n",
+			  XMIT(out->xmit_cnt.pps), DROP(out->xmit_cnt.drop),
 			  out->xmit_cnt.err, "drv_err/s", out->xmit_cnt.bavg, "bulk_avg");
 
 		stats_get_devmap_xmit(r, p, nr_cpus, NULL);
@@ -747,7 +824,7 @@ void sample_exit(int status)
 {
 	while (tp_cnt)
 		bpf_link__destroy(tp_links[--tp_cnt]);
-
+	sample_summary_print();
 	close(sample_sig_fd);
 	exit(status);
 }
@@ -783,8 +860,46 @@ void sample_stats_collect(int mask, struct stats_record *rec)
 		map_collect_percpu(map_fds[DEVMAP_XMIT_CNT], 0, &rec->devmap_xmit);
 }
 
+void sample_summary_update(struct sample_output *out, int interval)
+{
+	sum_out.totals.rx += out->totals.rx;
+	sum_out.totals.redir += out->totals.redir;
+	sum_out.totals.drop += out->totals.drop;
+	sum_out.totals.err += out->totals.err;
+	sum_out.totals.xmit += out->totals.xmit;
+	sum_out.rx_cnt.pps += interval;
+}
+
+void sample_summary_print(void)
+{
+	double period = sum_out.rx_cnt.pps;
+
+	print_always("\nTotals\n");
+	if (sum_out.totals.rx) {
+		double pkts = sum_out.totals.rx;
+
+		print_always("  Packets received    : %'-10llu\n", sum_out.totals.rx);
+		print_always("  Average packets/s   : %'-10.0f\n", sample_round(pkts/period));
+	}
+	if (sum_out.totals.redir) {
+		double pkts = sum_out.totals.redir;
+
+		print_always("  Packets redirected  : %'-10llu\n", sum_out.totals.redir);
+		print_always("  Average redir/s     : %'-10.0f\n", sample_round(pkts/period));
+	}
+	print_always("  Packets dropped     : %'-10llu\n", sum_out.totals.drop);
+	print_always("  Errors recorded     : %'-10llu\n", sum_out.totals.err);
+	if (sum_out.totals.xmit) {
+		double pkts = sum_out.totals.xmit;
+
+		print_always("  Packets transmitted : %'-10llu\n", sum_out.totals.xmit);
+		print_always("  Average transmit/s  : %'-10.0f\n", sample_round(pkts/period));
+	}
+}
+
 void sample_stats_print(int mask, struct stats_record *cur,
-			struct stats_record *prev, char *prog_name)
+			struct stats_record *prev, char *prog_name,
+			int interval)
 {
 	struct sample_output out = {};
 
@@ -802,6 +917,8 @@ void sample_stats_print(int mask, struct stats_record *cur,
 
 	if (mask & SAMPLE_DEVMAP_XMIT_CNT)
 		stats_get_devmap_xmit(cur, prev, 0, &out);
+
+	sample_summary_update(&out, interval);
 
 	stats_print(prog_name, mask, cur, prev, &out);
 }
@@ -821,7 +938,7 @@ void sample_stats_poll(int interval, int mask, char *prog_name, int use_separato
 	for (;;) {
 		swap(&prev, &record);
 		sample_stats_collect(mask, record);
-		sample_stats_print(mask, record, prev, prog_name);
+		sample_stats_print(mask, record, prev, prog_name, interval);
 		fflush(stdout);
 		sleep(interval);
 		sample_reset_mode();

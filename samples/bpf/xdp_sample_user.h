@@ -26,13 +26,16 @@ enum tp_type {
 };
 
 enum stats_mask {
-	SAMPLE_RX_CNT	        = 1U << 1,
-	SAMPLE_REDIRECT_ERR_CNT	= 1U << 2,
-	SAMPLE_CPUMAP_ENQUEUE_CNT  = 1U << 3,
-	SAMPLE_CPUMAP_KTHREAD_CNT  = 1U << 4,
-	SAMPLE_EXCEPTION_CNT	= 1U << 5,
-	SAMPLE_DEVMAP_XMIT_CNT  = 1U << 6,
-	SAMPLE_REDIRECT_CNT	= 1U << 7,
+	_SAMPLE_REDIRECT_MAP        = 1U << 0,
+	SAMPLE_RX_CNT               = 1U << 1,
+	SAMPLE_REDIRECT_ERR_CNT     = 1U << 2,
+	SAMPLE_CPUMAP_ENQUEUE_CNT   = 1U << 3,
+	SAMPLE_CPUMAP_KTHREAD_CNT   = 1U << 4,
+	SAMPLE_EXCEPTION_CNT        = 1U << 5,
+	SAMPLE_DEVMAP_XMIT_CNT      = 1U << 6,
+	SAMPLE_REDIRECT_CNT         = 1U << 7,
+	SAMPLE_REDIRECT_MAP_CNT     = SAMPLE_REDIRECT_CNT | _SAMPLE_REDIRECT_MAP,
+	SAMPLE_REDIRECT_ERR_MAP_CNT = SAMPLE_REDIRECT_ERR_CNT | _SAMPLE_REDIRECT_MAP,
 };
 
 static const char *const map_type_strings[] = {
@@ -153,8 +156,11 @@ void sample_exit(int status);
 struct stats_record *alloc_stats_record(void);
 void free_stats_record(struct stats_record *rec);
 void sample_stats_print(int mask, struct stats_record *cur,
-			struct stats_record *prev, char *prog_name);
+			struct stats_record *prev, char *prog_name,
+			int interval);
 void sample_stats_collect(int mask, struct stats_record *rec);
+void sample_summary_update(struct sample_output *out, int interval);
+void sample_summary_print(void);
 void sample_stats_poll(int interval, int mask, char *prog_name,
 		       int use_separators);
 void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,
