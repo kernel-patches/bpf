@@ -63,12 +63,13 @@ struct {
 	__uint(max_entries, 1);
 } cpumap_kthread_cnt SEC(".maps");
 
+#define XDP_UNKNOWN (XDP_REDIRECT + 1)
 /* Used by trace point */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, struct datarec);
-	__uint(max_entries, 1);
+	__uint(max_entries, XDP_UNKNOWN + 1);
 } exception_cnt SEC(".maps");
 
 struct {
@@ -184,7 +185,10 @@ SEC("tracepoint/xdp/xdp_exception")
 int trace_xdp_exception(struct xdp_exception_ctx *ctx)
 {
 	struct datarec *rec;
-	u32 key = 0;
+	u32 key = ctx->act;
+
+	if (key > XDP_REDIRECT)
+		key = XDP_UNKNOWN;
 
 	rec = bpf_map_lookup_elem(&exception_cnt, &key);
 	if (!rec)

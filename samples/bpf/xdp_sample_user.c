@@ -124,7 +124,8 @@ struct stats_record *alloc_stats_record(void)
 	rec->redir_err[0].cpu = alloc_record_per_cpu();
 	rec->redir_err[1].cpu = alloc_record_per_cpu();
 	rec->kthread.cpu   = alloc_record_per_cpu();
-	rec->exception.cpu = alloc_record_per_cpu();
+	for (i = 0; i < XDP_ACTION_MAX; i++)
+		rec->exception[i].cpu = alloc_record_per_cpu();
 	rec->devmap_xmit.cpu = alloc_record_per_cpu();
 	for (i = 0; i < n_cpus; i++)
 		rec->enq[i].cpu = alloc_record_per_cpu();
@@ -139,7 +140,8 @@ void free_stats_record(struct stats_record *r)
 	for (i = 0; i < n_cpus; i++)
 		free(r->enq[i].cpu);
 	free(r->devmap_xmit.cpu);
-	free(r->exception.cpu);
+	for (i = 0; i < XDP_ACTION_MAX; i++)
+		free(r->exception[i].cpu);
 	free(r->kthread.cpu);
 	free(r->redir_err[1].cpu);
 	free(r->redir_err[0].cpu);
@@ -388,27 +390,31 @@ static void stats_print_exception_cnt(struct stats_record *stats_rec,
 				      struct stats_record *stats_prev,
 				      unsigned int nr_cpus)
 {
-	char *fmt_err = "%-15s %-7d %'-14.0f %'-11.0f\n";
-	char *fm2_err = "%-15s %-7s %'-14.0f %'-11.0f\n";
+	char *fmt1 = "%-15s %-7d %'-12.0f %'-12.0f %s\n";
+	char *fmt2 = "%-15s %-7s %'-12.0f %'-12.0f %s\n";
 	struct record *rec, *prev;
-	double t, pps, drop;
-	int i;
+	double t, drop;
+	int rec_i, i;
 
-	rec = &stats_rec->exception;
-	prev = &stats_prev->exception;
-	t = calc_period(rec, prev);
-	for (i = 0; i < nr_cpus; i++) {
-		struct datarec *r = &rec->cpu[i];
-		struct datarec *p = &prev->cpu[i];
+	for (rec_i = 0; rec_i < XDP_ACTION_MAX; rec_i++) {
+		rec  = &stats_rec->exception[rec_i];
+		prev = &stats_prev->exception[rec_i];
+		t = calc_period(rec, prev);
 
-		pps = calc_pps(r, p, t);
-		drop = calc_drop_pps(r, p, t);
-		if (pps > 0)
-			printf(fmt_err, "xdp_exception", i, pps, drop);
+		for (i = 0; i < nr_cpus; i++) {
+			struct datarec *r = &rec->cpu[i];
+			struct datarec *p = &prev->cpu[i];
+
+			drop = calc_drop_pps(r, p, t);
+			if (drop > 0)
+				printf(fmt1, "xdp_exception", i,
+				       0.0, drop, action2str(rec_i));
+		}
+		drop = calc_drop_pps(&rec->total, &prev->total, t);
+		if (drop > 0)
+			printf(fmt2, "xdp_exception", "total",
+			       0.0, drop, action2str(rec_i));
 	}
-	pps = calc_pps(&rec->total, &prev->total, t);
-	drop = calc_drop_pps(&rec->total, &prev->total, t);
-	printf(fm2_err, "xdp_exception", "total", pps, drop);
 }
 
 void sample_stats_print_cpumap_remote(struct stats_record *stats_rec,
@@ -564,7 +570,8 @@ void sample_stats_collect(int mask, struct stats_record *rec)
 		map_collect_percpu(map_fds[CPUMAP_KTHREAD_CNT], 0, &rec->kthread);
 
 	if (mask & SAMPLE_EXCEPTION_CNT)
-		map_collect_percpu(map_fds[EXCEPTION_CNT], 0, &rec->exception);
+		for (i = 0; i < XDP_ACTION_MAX; i++)
+			map_collect_percpu(map_fds[EXCEPTION_CNT], i, &rec->exception[i]);
 
 	if (mask & SAMPLE_DEVMAP_XMIT_CNT)
 		map_collect_percpu(map_fds[DEVMAP_XMIT_CNT], 0, &rec->devmap_xmit);

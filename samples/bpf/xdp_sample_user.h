@@ -59,11 +59,31 @@ extern int tp_cnt;
 
 #define XDP_REDIRECT_ERR_MAX 6
 
-static const char *xdp_redirect_err_names[XDP_REDIRECT_ERR_MAX] = {
+__attribute__((unused)) static const char *xdp_redirect_err_names[XDP_REDIRECT_ERR_MAX] = {
 	/* Key=1 keeps unknown errors */
 	"Success", "Unknown", "EINVAL", "ENETDOWN", "EMSGSIZE",
 	"EOPNOTSUPP",
 };
+
+/* enum xdp_action */
+#define XDP_UNKNOWN (XDP_REDIRECT + 1)
+#define XDP_ACTION_MAX (XDP_UNKNOWN + 1)
+
+static const char *xdp_action_names[XDP_ACTION_MAX] = {
+	[XDP_ABORTED]	= "XDP_ABORTED",
+	[XDP_DROP]	= "XDP_DROP",
+	[XDP_PASS]	= "XDP_PASS",
+	[XDP_TX]	= "XDP_TX",
+	[XDP_REDIRECT]	= "XDP_REDIRECT",
+	[XDP_UNKNOWN]	= "XDP_UNKNOWN",
+};
+
+__attribute__((unused)) static inline const char *action2str(int action)
+{
+	if (action < XDP_ACTION_MAX)
+		return xdp_action_names[action];
+	return NULL;
+}
 
 /* Common stats data record shared with _kern.c */
 struct datarec {
@@ -88,7 +108,7 @@ struct stats_record {
 	struct record rx_cnt;
 	struct record redir_err[XDP_REDIRECT_ERR_MAX];
 	struct record kthread;
-	struct record exception;
+	struct record exception[XDP_ACTION_MAX];
 	struct record devmap_xmit;
 	struct record enq[];
 };
