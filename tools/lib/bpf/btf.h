@@ -184,6 +184,28 @@ LIBBPF_API int
 btf_dump__emit_type_decl(struct btf_dump *d, __u32 id,
 			 const struct btf_dump_emit_type_decl_opts *opts);
 
+
+/* indent string length; one indent string is added for each indent level */
+#define BTF_DATA_INDENT_STR_LEN			4
+
+struct btf_dump_type_data_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+	int indent_level;
+	char indent_str[BTF_DATA_INDENT_STR_LEN + 1];
+	/* below match "show" flags for bpf_show_snprintf() */
+	bool compact;		/* no newlines/tabs */
+	bool skip_names;	/* skip member/type names */
+	bool emit_zeroes;	/* show 0-valued fields */
+	size_t :0;
+};
+#define btf_dump_type_data_opts__last_field emit_zeroes
+
+LIBBPF_API int
+btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
+			 const void *data, size_t data_sz,
+			 const struct btf_dump_type_data_opts *opts);
+
 /*
  * A set of helpers for easier BTF types handling
  */
