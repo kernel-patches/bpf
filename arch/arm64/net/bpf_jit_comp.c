@@ -967,7 +967,7 @@ static int validate_code(struct jit_ctx *ctx)
 
 static inline void bpf_flush_icache(void *start, void *end)
 {
-	flush_icache_range((unsigned long)start, (unsigned long)end);
+	__flush_icache_range((unsigned long)start, (unsigned long)end);
 }
 
 struct arm64_jit_data {
