@@ -7876,13 +7876,25 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			return -EINVAL;
 		}
 
-		if ((opcode == BPF_LSH || opcode == BPF_RSH ||
-		     opcode == BPF_ARSH) && BPF_SRC(insn->code) == BPF_K) {
+		if (opcode == BPF_LSH || opcode == BPF_RSH ||
+		     opcode == BPF_ARSH) {
 			int size = BPF_CLASS(insn->code) == BPF_ALU64 ? 64 : 32;
 
-			if (insn->imm < 0 || insn->imm >= size) {
-				verbose(env, "invalid shift %d\n", insn->imm);
-				return -EINVAL;
+			if (BPF_SRC(insn->code) == BPF_K) {
+				if (insn->imm < 0 || insn->imm >= size) {
+					verbose(env, "invalid shift %d\n", insn->imm);
+					return -EINVAL;
+				}
+			}
+			if (BPF_SRC(insn->code) == BPF_X) {
+				struct bpf_reg_state *src_reg;
+
+				src_reg = &regs[insn->src_reg];
+				if (src_reg->umax_value >= size) {
+					verbose(env, "invalid shift %lld\n",
+							src_reg->umax_value);
+					return -EINVAL;
+				}
 			}
 		}
 
