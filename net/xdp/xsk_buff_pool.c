@@ -135,7 +135,7 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 		return -EINVAL;
 
 	if (xsk_get_pool_from_qid(netdev, queue_id))
-		return -EBUSY;
+		return -EINVAL;
 
 	pool->netdev = netdev;
 	pool->queue_id = queue_id;
