@@ -1,64 +1,103 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (c) 2021 Telegram FZ-LLC
+ */
+
 #define _GNU_SOURCE
-#include <sys/uio.h>
+
+#include <unistd.h>
+#include <errno.h>
+
 #include <errno.h>
 #include <stdio.h>
-#include <sys/socket.h>
-#include <fcntl.h>
+#include <string.h>
 #include <unistd.h>
-#include "../../include/uapi/linux/bpf.h"
-#include <asm/unistd.h>
+
+#include "context.h"
 #include "msgfmt.h"
+#include "sockopt.h"
 
-FILE *debug_f;
+#define do_exact(fd, op, buffer, count)                                                            \
+	({                                                                                         \
+		size_t total = 0;                                                                  \
+		int err = 0;                                                                       \
+												   \
+		do {                                                                               \
+			const ssize_t part = op(fd, (buffer) + total, (count) - total);            \
+			if (part > 0) {                                                            \
+				total += part;                                                     \
+			} else if (part == 0 && (count) > 0) {                                     \
+				err = -EIO;                                                        \
+				break;                                                             \
+			} else if (part == -1) {                                                   \
+				if (errno == EINTR)                                                \
+					continue;                                                  \
+				err = -errno;                                                      \
+				break;                                                             \
+			}                                                                          \
+		} while (total < (count));                                                         \
+												   \
+		err;                                                                               \
+	})
 
-static int handle_get_cmd(struct mbox_request *cmd)
+static int read_exact(int fd, void *buffer, size_t count)
 {
-	switch (cmd->cmd) {
-	case 0:
-		return 0;
-	default:
-		break;
-	}
-	return -ENOPROTOOPT;
+	return do_exact(fd, read, buffer, count);
 }
 
-static int handle_set_cmd(struct mbox_request *cmd)
+static int write_exact(int fd, const void *buffer, size_t count)
 {
-	return -ENOPROTOOPT;
+	return do_exact(fd, write, buffer, count);
 }
 
-static void loop(void)
+static int setup_context(struct context *ctx)
 {
-	while (1) {
-		struct mbox_request req;
-		struct mbox_reply reply;
-		int n;
+	ctx->log_file = fopen("/dev/kmsg", "w");
+	if (!ctx->log_file)
+		return -errno;
 
-		n = read(0, &req, sizeof(req));
-		if (n != sizeof(req)) {
-			fprintf(debug_f, "invalid request %d\n", n);
-			return;
-		}
+	setvbuf(ctx->log_file, 0, _IOLBF, 0);
 
-		reply.status = req.is_set ?
-			handle_set_cmd(&req) :
-			handle_get_cmd(&req);
+	return 0;
+}
 
-		n = write(1, &reply, sizeof(reply));
-		if (n != sizeof(reply)) {
-			fprintf(debug_f, "reply failed %d\n", n);
-			return;
-		}
+static void loop(struct context *ctx)
+{
+	struct mbox_request req;
+	struct mbox_reply reply;
+	int err;
+
+	for (;;) {
+		err = read_exact(STDIN_FILENO, &req, sizeof(req));
+		if (err)
+			BFLOG_EMERG(ctx, "cannot read request: %s\n", strerror(-err));
+
+		reply.status = handle_sockopt_request(ctx, &req);
+
+		err = write_exact(STDOUT_FILENO, &reply, sizeof(reply));
+		if (err)
+			BFLOG_EMERG(ctx, "cannot write reply: %s\n", strerror(-err));
 	}
 }
 
 int main(void)
 {
-	debug_f = fopen("/dev/kmsg", "w");
-	setvbuf(debug_f, 0, _IOLBF, 0);
-	fprintf(debug_f, "Started bpfilter\n");
-	loop();
-	fclose(debug_f);
+	struct context ctx;
+	int err;
+
+	err = create_context(&ctx);
+	if (err)
+		return err;
+
+	err = setup_context(&ctx);
+	if (err) {
+		free_context(&ctx);
+		return err;
+	}
+
+	BFLOG_NOTICE(&ctx, "started\n");
+
+	loop(&ctx);
+
 	return 0;
 }
