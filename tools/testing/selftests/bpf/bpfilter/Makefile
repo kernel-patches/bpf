@@ -9,9 +9,16 @@ BPFILTERSRCDIR := $(top_srcdir)/net/bpfilter
 CFLAGS += -Wall -g -pthread -I$(TOOLSINCDIR) -I$(APIDIR) -I$(BPFILTERSRCDIR)
 
 TEST_GEN_PROGS += test_map
+TEST_GEN_PROGS += test_match
 
 KSFT_KHDR_INSTALL := 1
 
 include ../../lib.mk
 
+BPFILTER_MATCH_SRCS := $(BPFILTERSRCDIR)/match.c $(BPFILTERSRCDIR)/xt_udp.c
+
+BPFILTER_COMMON_SRCS := $(BPFILTERSRCDIR)/map-common.c $(BPFILTERSRCDIR)/context.c
+BPFILTER_COMMON_SRCS += $(BPFILTER_MATCH_SRCS)
+
 $(OUTPUT)/test_map: test_map.c $(BPFILTERSRCDIR)/map-common.c
+$(OUTPUT)/test_match: test_match.c $(BPFILTER_COMMON_SRCS) $(BPFILTER_MATCH_SRCS)
