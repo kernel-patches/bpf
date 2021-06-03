@@ -8,14 +8,17 @@
 
 #include <sys/syslog.h>
 
+#include <search.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <search.h>
+
+#include "table.h"
 
 struct context {
 	FILE *log_file;
 	struct hsearch_data match_ops_map;
 	struct hsearch_data target_ops_map;
+	struct table_index table_index;
 };
 
 #define BFLOG_IMPL(ctx, level, fmt, ...)                                                           \
