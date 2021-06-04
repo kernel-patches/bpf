@@ -687,6 +687,38 @@ out:
 	return ret;
 }
 
+static int xdp_convert_md_to_buff(struct xdp_buff *xdp, struct xdp_md *xdp_md)
+{
+	void *data;
+
+	if (!xdp_md)
+		return 0;
+
+	if (xdp_md->egress_ifindex != 0)
+		return -EINVAL;
+
+	if (xdp_md->data > xdp_md->data_end)
+		return -EINVAL;
+
+	xdp->data = xdp->data_meta + xdp_md->data;
+
+	if (xdp_md->ingress_ifindex != 0 || xdp_md->rx_queue_index != 0)
+		return -EINVAL;
+
+	return 0;
+}
+
+static void xdp_convert_buff_to_md(struct xdp_buff *xdp, struct xdp_md *xdp_md)
+{
+	if (!xdp_md)
+		return;
+
+	/* xdp_md->data_meta must always point to the start of the out buffer */
+	xdp_md->data_meta = 0;
+	xdp_md->data = xdp->data - xdp->data_meta;
+	xdp_md->data_end = xdp->data_end - xdp->data_meta;
+}
+
 int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
@@ -696,36 +728,68 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct xdp_buff xdp = {};
+	struct xdp_md *ctx;
 	u32 retval, duration;
 	u32 max_data_sz;
 	void *data;
 	int ret;
 
-	if (kattr->test.ctx_in || kattr->test.ctx_out)
-		return -EINVAL;
+	ctx = bpf_ctx_init(kattr, sizeof(struct xdp_md));
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
+
+	/* There can't be user provided data before the metadata */
+	if (ctx) {
+		if (ctx->data_meta)
+			return -EINVAL;
+		if (ctx->data_end != size)
+			return -EINVAL;
+		if (unlikely((ctx->data & (sizeof(__u32) - 1)) ||
+			     ctx->data > 32))
+			return -EINVAL;
+		/* Metadata is allocated from the headroom */
+		headroom -= ctx->data;
+	}
 
 	/* XDP have extra tailroom as (most) drivers use full page */
 	max_data_sz = 4096 - headroom - tailroom;
 
 	data = bpf_test_init(kattr, max_data_sz, headroom, tailroom);
-	if (IS_ERR(data))
+	if (IS_ERR(data)) {
+		kfree(ctx);
 		return PTR_ERR(data);
+	}
 
 	rxqueue = __netif_get_rx_queue(current->nsproxy->net_ns->loopback_dev, 0);
 	xdp_init_buff(&xdp, headroom + max_data_sz + tailroom,
 		      &rxqueue->xdp_rxq);
 	xdp_prepare_buff(&xdp, data, headroom, size, true);
 
+	ret = xdp_convert_md_to_buff(&xdp, ctx);
+	if (ret) {
+		kfree(data);
+		kfree(ctx);
+		return ret;
+	}
+
 	bpf_prog_change_xdp(NULL, prog);
 	ret = bpf_test_run(prog, &xdp, repeat, &retval, &duration, true);
 	if (ret)
 		goto out;
-	if (xdp.data != data + headroom || xdp.data_end != xdp.data + size)
-		size = xdp.data_end - xdp.data;
-	ret = bpf_test_finish(kattr, uattr, xdp.data, size, retval, duration);
+
+	if (xdp.data_meta != data + headroom || xdp.data_end != xdp.data_meta + size)
+		size = xdp.data_end - xdp.data_meta;
+
+	xdp_convert_buff_to_md(&xdp, ctx);
+
+	ret = bpf_test_finish(kattr, uattr, xdp.data_meta, size, retval, duration);
+	if (!ret)
+		ret = bpf_ctx_finish(kattr, uattr, ctx,
+				     sizeof(struct xdp_md));
 out:
 	bpf_prog_change_xdp(prog, NULL);
 	kfree(data);
+	kfree(ctx);
 	return ret;
 }
 
@@ -809,7 +873,6 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	if (!ret)
 		ret = bpf_ctx_finish(kattr, uattr, user_ctx,
 				     sizeof(struct bpf_flow_keys));
-
 out:
 	kfree(user_ctx);
 	kfree(data);
