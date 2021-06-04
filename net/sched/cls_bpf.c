@@ -455,6 +455,57 @@ static int cls_bpf_set_parms(struct net *net, struct tcf_proto *tp,
 	return 0;
 }
 
+static int __cls_bpf_alloc_idr(struct cls_bpf_head *head, u32 handle,
+			       struct cls_bpf_prog *prog,
+			       struct cls_bpf_prog *oldprog)
+{
+	int ret = 0;
+
+	if (oldprog) {
+		if (handle && oldprog->handle != handle)
+			return -EINVAL;
+	}
+
+	if (handle == 0) {
+		handle = 1;
+		ret = idr_alloc_u32(&head->handle_idr, prog, &handle, INT_MAX,
+				    GFP_KERNEL);
+	} else if (!oldprog) {
+		ret = idr_alloc_u32(&head->handle_idr, prog, &handle, handle,
+				    GFP_KERNEL);
+	}
+
+	prog->handle = handle;
+	return ret;
+}
+
+static int __cls_bpf_change(struct cls_bpf_head *head, struct tcf_proto *tp,
+			    struct cls_bpf_prog *prog,
+			    struct cls_bpf_prog *oldprog,
+			    struct netlink_ext_ack *extack)
+{
+	int ret;
+
+	ret = cls_bpf_offload(tp, prog, oldprog, extack);
+	if (ret)
+		return ret;
+
+	if (!tc_in_hw(prog->gen_flags))
+		prog->gen_flags |= TCA_CLS_FLAGS_NOT_IN_HW;
+
+	if (oldprog) {
+		idr_replace(&head->handle_idr, prog, prog->handle);
+		list_replace_rcu(&oldprog->link, &prog->link);
+		tcf_unbind_filter(tp, &oldprog->res);
+		tcf_exts_get_net(&oldprog->exts);
+		tcf_queue_work(&oldprog->rwork, cls_bpf_delete_prog_work);
+	} else {
+		list_add_rcu(&prog->link, &head->plist);
+	}
+
+	return 0;
+}
+
 static int cls_bpf_change(struct net *net, struct sk_buff *in_skb,
 			  struct tcf_proto *tp, unsigned long base,
 			  u32 handle, struct nlattr **tca,
@@ -483,47 +534,18 @@ static int cls_bpf_change(struct net *net, struct sk_buff *in_skb,
 	if (ret < 0)
 		goto errout;
 
-	if (oldprog) {
-		if (handle && oldprog->handle != handle) {
-			ret = -EINVAL;
-			goto errout;
-		}
-	}
-
-	if (handle == 0) {
-		handle = 1;
-		ret = idr_alloc_u32(&head->handle_idr, prog, &handle,
-				    INT_MAX, GFP_KERNEL);
-	} else if (!oldprog) {
-		ret = idr_alloc_u32(&head->handle_idr, prog, &handle,
-				    handle, GFP_KERNEL);
-	}
-
+	ret = __cls_bpf_alloc_idr(head, handle, prog, oldprog);
 	if (ret)
 		goto errout;
-	prog->handle = handle;
 
 	ret = cls_bpf_set_parms(net, tp, prog, base, tb, tca[TCA_RATE], ovr,
 				extack);
 	if (ret < 0)
 		goto errout_idr;
 
-	ret = cls_bpf_offload(tp, prog, oldprog, extack);
+	ret = __cls_bpf_change(head, tp, prog, oldprog, extack);
 	if (ret)
 		goto errout_parms;
-
-	if (!tc_in_hw(prog->gen_flags))
-		prog->gen_flags |= TCA_CLS_FLAGS_NOT_IN_HW;
-
-	if (oldprog) {
-		idr_replace(&head->handle_idr, prog, handle);
-		list_replace_rcu(&oldprog->link, &prog->link);
-		tcf_unbind_filter(tp, &oldprog->res);
-		tcf_exts_get_net(&oldprog->exts);
-		tcf_queue_work(&oldprog->rwork, cls_bpf_delete_prog_work);
-	} else {
-		list_add_rcu(&prog->link, &head->plist);
-	}
 
 	*arg = prog;
 	return 0;
