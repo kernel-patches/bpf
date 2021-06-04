@@ -690,6 +690,8 @@ out:
 static int xdp_convert_md_to_buff(struct xdp_buff *xdp, struct xdp_md *xdp_md)
 {
 	void *data;
+	struct net_device *device;
+	struct netdev_rx_queue *rxqueue;
 
 	if (!xdp_md)
 		return 0;
@@ -702,8 +704,20 @@ static int xdp_convert_md_to_buff(struct xdp_buff *xdp, struct xdp_md *xdp_md)
 
 	xdp->data = xdp->data_meta + xdp_md->data;
 
-	if (xdp_md->ingress_ifindex != 0 || xdp_md->rx_queue_index != 0)
+	if (!xdp_md->ingress_ifindex && xdp_md->rx_queue_index)
 		return -EINVAL;
+
+	if (xdp_md->ingress_ifindex) {
+		device = dev_get_by_index(current->nsproxy->net_ns, xdp_md->ingress_ifindex);
+		if (!device)
+			return -EINVAL;
+
+		if (xdp_md->rx_queue_index >= device->real_num_rx_queues)
+			return -EINVAL;
+
+		rxqueue = __netif_get_rx_queue(device, xdp_md->rx_queue_index);
+		xdp->rxq = &rxqueue->xdp_rxq;
+	}
 
 	return 0;
 }
