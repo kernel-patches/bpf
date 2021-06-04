@@ -28,6 +28,7 @@
 #include <asm/unistd.h>
 #include <errno.h>
 #include <linux/bpf.h>
+#include <arpa/inet.h>
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
@@ -693,7 +694,12 @@ int bpf_link_create(int prog_fd, int target_fd,
 	attr.link_create.attach_type = attach_type;
 	attr.link_create.flags = OPTS_GET(opts, flags, 0);
 
-	if (iter_info_len) {
+	if (attach_type == BPF_TC) {
+		attr.link_create.tc.parent = OPTS_GET(opts, tc.parent, 0);
+		attr.link_create.tc.handle = OPTS_GET(opts, tc.handle, 0);
+		attr.link_create.tc.priority = OPTS_GET(opts, tc.priority, 0);
+		attr.link_create.tc.gen_flags = OPTS_GET(opts, tc.gen_flags, 0);
+	} else if (iter_info_len) {
 		attr.link_create.iter_info =
 			ptr_to_u64(OPTS_GET(opts, iter_info, (void *)0));
 		attr.link_create.iter_info_len = iter_info_len;
