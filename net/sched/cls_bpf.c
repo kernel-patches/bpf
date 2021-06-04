@@ -9,6 +9,7 @@
  * (C) 2013 Daniel Borkmann <dborkman@redhat.com>
  */
 
+#include <linux/atomic.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/skbuff.h>
@@ -104,11 +105,11 @@ static int cls_bpf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 			/* It is safe to push/pull even if skb_shared() */
 			__skb_push(skb, skb->mac_len);
 			bpf_compute_data_pointers(skb);
-			filter_res = BPF_PROG_RUN(prog->filter, skb);
+			filter_res = BPF_PROG_RUN(READ_ONCE(prog->filter), skb);
 			__skb_pull(skb, skb->mac_len);
 		} else {
 			bpf_compute_data_pointers(skb);
-			filter_res = BPF_PROG_RUN(prog->filter, skb);
+			filter_res = BPF_PROG_RUN(READ_ONCE(prog->filter), skb);
 		}
 
 		if (prog->exts_integrated) {
@@ -775,6 +776,55 @@ static int cls_bpf_link_detach(struct bpf_link *link)
 	return 0;
 }
 
+static int cls_bpf_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
+			       struct bpf_prog *old_prog)
+{
+	struct cls_bpf_link *cls_link;
+	struct cls_bpf_prog cls_prog;
+	struct cls_bpf_prog *prog;
+	int ret;
+
+	rtnl_lock();
+
+	cls_link = container_of(link, struct cls_bpf_link, link);
+	if (!cls_link->prog) {
+		ret = -ENOLINK;
+		goto out;
+	}
+
+	prog = cls_link->prog;
+
+	/* BPF_F_REPLACEing? */
+	if (old_prog && prog->filter != old_prog) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	old_prog = prog->filter;
+
+	if (new_prog == old_prog) {
+		ret = 0;
+		goto out;
+	}
+
+	cls_prog = *prog;
+	cls_prog.filter = new_prog;
+
+	ret = cls_bpf_offload(prog->tp, &cls_prog, prog, NULL);
+	if (ret < 0)
+		goto out;
+
+	WRITE_ONCE(prog->filter, new_prog);
+
+	bpf_prog_inc(new_prog);
+	/* release our reference */
+	bpf_prog_put(old_prog);
+
+out:
+	rtnl_unlock();
+	return ret;
+}
+
 static void __bpf_fill_link_info(struct cls_bpf_link *link,
 				 struct bpf_link_info *info)
 {
@@ -859,6 +909,7 @@ static const struct bpf_link_ops cls_bpf_link_ops = {
 	.show_fdinfo = cls_bpf_link_show_fdinfo,
 #endif
 	.fill_link_info = cls_bpf_link_fill_link_info,
+	.update_prog = cls_bpf_link_update,
 };
 
 static inline char *cls_bpf_link_name(u32 prog_id, const char *name)
