@@ -341,7 +341,11 @@ struct tcf_proto_ops {
 	int			(*tmplt_dump)(struct sk_buff *skb,
 					      struct net *net,
 					      void *tmplt_priv);
-
+#if IS_ENABLED(CONFIG_NET_CLS_BPF)
+	int			(*bpf_link_change)(struct net *net, struct tcf_proto *tp,
+						   struct bpf_prog *filter, void **arg, u32 handle,
+						   u32 gen_flags);
+#endif
 	struct module		*owner;
 	int			flags;
 };

@@ -9,6 +9,7 @@
  * Eduardo J. Blanco <ejbs@netlabs.com.uy> :990222: kmod support
  */
 
+#include <linux/bpf.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -1720,9 +1721,9 @@ static struct tcf_proto *tcf_chain_tp_insert_unique(struct tcf_chain *chain,
 	return tp_new;
 }
 
-static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
-				      struct tcf_proto *tp, bool rtnl_held,
-				      struct netlink_ext_ack *extack)
+void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
+			       struct tcf_proto *tp, bool rtnl_held,
+			       struct netlink_ext_ack *extack)
 {
 	struct tcf_chain_info chain_info;
 	struct tcf_proto *tp_iter;
@@ -1760,6 +1761,7 @@ static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
 
 	tcf_proto_put(tp, rtnl_held, extack);
 }
+EXPORT_SYMBOL_GPL(tcf_chain_tp_delete_empty);
 
 static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 					   struct tcf_chain_info *chain_info,
@@ -3917,3 +3919,134 @@ err_register_pernet_subsys:
 }
 
 subsys_initcall(tc_filter_init);
+
+#if IS_ENABLED(CONFIG_NET_CLS_BPF)
+
+int bpf_tc_link_attach(union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct net *net = current->nsproxy->net_ns;
+	struct tcf_chain_info chain_info;
+	u32 chain_index, prio, parent;
+	struct tcf_block *block;
+	struct tcf_chain *chain;
+	struct tcf_proto *tp;
+	int err, tp_created;
+	unsigned long cl;
+	struct Qdisc *q;
+	__be16 protocol;
+	void *fh;
+
+	/* Caller already checks bpf_capable */
+	if (!ns_capable(current->nsproxy->net_ns->user_ns, CAP_NET_ADMIN))
+		return -EPERM;
+
+	if (attr->link_create.flags ||
+	    !attr->link_create.target_ifindex ||
+	    !tc_flags_valid(attr->link_create.tc.gen_flags))
+		return -EINVAL;
+
+replay:
+	parent = attr->link_create.tc.parent;
+	prio = attr->link_create.tc.priority;
+	protocol = htons(ETH_P_ALL);
+	chain_index = 0;
+	tp_created = 0;
+	prio <<= 16;
+	cl = 0;
+
+	/* Address this when cls_bpf switches to RTNL_FLAG_DOIT_UNLOCKED */
+	rtnl_lock();
+
+	block = tcf_block_find(net, &q, &parent, &cl,
+			       attr->link_create.target_ifindex, parent, NULL);
+	if (IS_ERR(block)) {
+		err = PTR_ERR(block);
+		goto out_unlock;
+	}
+	block->classid = parent;
+
+	chain = tcf_chain_get(block, chain_index, true);
+	if (!chain) {
+		err = -ENOMEM;
+		goto out_block;
+	}
+
+	mutex_lock(&chain->filter_chain_lock);
+
+	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
+			       prio ?: TC_H_MAKE(0x80000000U, 0U),
+			       !prio);
+	if (IS_ERR(tp)) {
+		err = PTR_ERR(tp);
+		goto out_chain_unlock;
+	}
+
+	if (!tp) {
+		struct tcf_proto *tp_new = NULL;
+
+		if (chain->flushing) {
+			err = -EAGAIN;
+			goto out_chain_unlock;
+		}
+
+		if (!prio)
+			prio = tcf_auto_prio(tcf_chain_tp_prev(chain,
+							       &chain_info));
+
+		mutex_unlock(&chain->filter_chain_lock);
+
+		tp_new = tcf_proto_create("bpf", protocol, prio, chain, true,
+					  NULL);
+		if (IS_ERR(tp_new)) {
+			err = PTR_ERR(tp_new);
+			goto out_chain;
+		}
+
+		tp_created = 1;
+		tp = tcf_chain_tp_insert_unique(chain, tp_new, protocol, prio,
+						true);
+		if (IS_ERR(tp)) {
+			err = PTR_ERR(tp);
+			goto out_chain;
+		}
+	} else {
+		mutex_unlock(&chain->filter_chain_lock);
+	}
+
+	fh = tp->ops->get(tp, attr->link_create.tc.handle);
+
+	if (!tp->ops->bpf_link_change)
+		err = -EDEADLK;
+	else
+		err = tp->ops->bpf_link_change(net, tp, prog, &fh,
+					       attr->link_create.tc.handle,
+					       attr->link_create.tc.gen_flags);
+	if (err >= 0 && q)
+		q->flags &= ~TCQ_F_CAN_BYPASS;
+
+out:
+	if (err < 0 && tp_created)
+		tcf_chain_tp_delete_empty(chain, tp, true, NULL);
+out_chain:
+	if (chain) {
+		if (!IS_ERR_OR_NULL(tp))
+			tcf_proto_put(tp, true, NULL);
+		/* Chain reference only kept for tp creation
+		 * to pair with tcf_chain_put from tcf_proto_destroy
+		 */
+		if (!tp_created)
+			tcf_chain_put(chain);
+	}
+out_block:
+	tcf_block_release(q, block, true);
+out_unlock:
+	rtnl_unlock();
+	if (err == -EAGAIN)
+		goto replay;
+	return err;
+out_chain_unlock:
+	mutex_unlock(&chain->filter_chain_lock);
+	goto out;
+}
+
+#endif

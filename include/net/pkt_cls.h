@@ -2,6 +2,7 @@
 #ifndef __NET_PKT_CLS_H
 #define __NET_PKT_CLS_H
 
+#include <linux/bpf.h>
 #include <linux/pkt_cls.h>
 #include <linux/workqueue.h>
 #include <net/sch_generic.h>
@@ -45,6 +46,9 @@ bool tcf_queue_work(struct rcu_work *rwork, work_func_t func);
 struct tcf_chain *tcf_chain_get_by_act(struct tcf_block *block,
 				       u32 chain_index);
 void tcf_chain_put_by_act(struct tcf_chain *chain);
+void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
+			       struct tcf_proto *tp, bool rtnl_held,
+			       struct netlink_ext_ack *extack);
 struct tcf_chain *tcf_get_next_chain(struct tcf_block *block,
 				     struct tcf_chain *chain);
 struct tcf_proto *tcf_get_next_proto(struct tcf_chain *chain,
@@ -1003,5 +1007,14 @@ struct tc_fifo_qopt_offload {
 		struct tc_qopt_offload_stats stats;
 	};
 };
+
+#if IS_ENABLED(CONFIG_NET_CLS_BPF)
+int bpf_tc_link_attach(union bpf_attr *attr, struct bpf_prog *prog);
+#else
+static inline int bpf_tc_link_attach(union bpf_attr *attr, struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 #endif
