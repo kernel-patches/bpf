@@ -2338,6 +2338,7 @@ void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
 	link->ops = ops;
 	link->prog = prog;
 }
+EXPORT_SYMBOL_GPL(bpf_link_init);
 
 static void bpf_link_free_id(int id)
 {
@@ -2363,6 +2364,7 @@ void bpf_link_cleanup(struct bpf_link_primer *primer)
 	fput(primer->file);
 	put_unused_fd(primer->fd);
 }
+EXPORT_SYMBOL_GPL(bpf_link_cleanup);
 
 void bpf_link_inc(struct bpf_link *link)
 {
@@ -2510,6 +2512,7 @@ int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer)
 	primer->id = id;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_link_prime);
 
 int bpf_link_settle(struct bpf_link_primer *primer)
 {
@@ -2522,6 +2525,7 @@ int bpf_link_settle(struct bpf_link_primer *primer)
 	/* pass through installed FD */
 	return primer->fd;
 }
+EXPORT_SYMBOL_GPL(bpf_link_settle);
 
 int bpf_link_new_fd(struct bpf_link *link)
 {
