@@ -559,6 +559,11 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_ORIG_STACK		BIT(3)
 
+/* First argument is IP address of the caller. Makes sense for fentry/fexit
+ * programs only.
+ */
+#define BPF_TRAMP_F_IP_ARG		BIT(4)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.  Pick a number to fit into BPF_IMAGE_SIZE / 2
  */
