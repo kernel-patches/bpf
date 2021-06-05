@@ -6,6 +6,8 @@
 
 char _license[] SEC("license") = "GPL";
 
+MULTI_ARG_CHECK(fentry)
+
 unsigned long long bpf_fentry_test[8];
 
 __u64 test_result = 0;
@@ -13,6 +15,6 @@ __u64 test_result = 0;
 SEC("fentry.multi/bpf_fentry_test*")
 int BPF_PROG(test, unsigned long ip, __u64 a, __u64 b, __u64 c, __u64 d, __u64 e, __u64 f)
 {
-	multi_arg_check(ip, a, b, c, d, e, f, &test_result);
+	fentry_multi_arg_check(ip, a, b, c, d, e, f, &test_result);
 	return 0;
 }
