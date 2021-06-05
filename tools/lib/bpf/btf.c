@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2018 Facebook */
 
+#define _GNU_SOURCE
 #include <byteswap.h>
 #include <endian.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <gelf.h>
+#include <regex.h>
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"
@@ -709,6 +711,72 @@ __s32 btf__find_by_name_kind(const struct btf *btf, const char *type_name,
 	}
 
 	return libbpf_err(-ENOENT);
+}
+
+static bool is_wildcard(char c)
+{
+	static const char *wildchars = "*?[|";
+
+	return strchr(wildchars, c);
+}
+
+int btf__find_by_pattern_kind(const struct btf *btf,
+			      const char *type_pattern, __u32 kind,
+			      __s32 **__ids)
+{
+	__u32 i, nr_types = btf__get_nr_types(btf);
+	__s32 *ids = NULL;
+	int cnt = 0, alloc = 0, ret;
+	regex_t regex;
+	char *pattern;
+
+	if (kind == BTF_KIND_UNKN || !strcmp(type_pattern, "void"))
+		return 0;
+
+	/* When the pattern does not start with wildcard, treat it as
+	 * if we'd want to match it from the beginning of the string.
+	 */
+	asprintf(&pattern, "%s%s",
+		 is_wildcard(type_pattern[0]) ? "^" : "",
+		 type_pattern);
+
+	ret = regcomp(&regex, pattern, REG_EXTENDED);
+	if (ret) {
+		pr_warn("failed to compile regex\n");
+		free(pattern);
+		return -EINVAL;
+	}
+
+	free(pattern);
+
+	for (i = 1; i <= nr_types; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const char *name;
+		__s32 *p;
+
+		if (btf_kind(t) != kind)
+			continue;
+		name = btf__name_by_offset(btf, t->name_off);
+		if (name && regexec(&regex, name, 0, NULL, 0))
+			continue;
+		if (cnt == alloc) {
+			alloc = max(100, alloc * 3 / 2);
+			p = realloc(ids, alloc * sizeof(__u32));
+			if (!p) {
+				free(ids);
+				regfree(&regex);
+				return -ENOMEM;
+			}
+			ids = p;
+		}
+
+		ids[cnt] = i;
+		cnt++;
+	}
+
+	regfree(&regex);
+	*__ids = ids;
+	return cnt ?: -ENOENT;
 }
 
 static bool btf_is_modifiable(const struct btf *btf)
