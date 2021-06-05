@@ -32,6 +32,7 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/btf_ids.h>
+#include <linux/ftrace.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -2810,6 +2811,184 @@ out_put_prog:
 	return err;
 }
 
+struct bpf_tracing_multi_link {
+	struct bpf_link link;
+	enum bpf_attach_type attach_type;
+	struct ftrace_ops ops;
+	struct bpf_trampoline *tr;
+};
+
+static void bpf_tracing_multi_link_release(struct bpf_link *link)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+	const struct bpf_prog_aux *aux;
+	int kind;
+
+	unregister_ftrace_direct_multi(&tr_link->ops);
+
+	for (kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+		hlist_for_each_entry(aux, &tr_link->tr->progs_hlist[kind], tramp_hlist)
+			bpf_prog_put(aux->prog);
+	}
+}
+
+static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	bpf_trampoline_multi_free(tr_link->tr);
+	kfree(tr_link);
+}
+
+static void bpf_tracing_multi_link_show_fdinfo(const struct bpf_link *link,
+					       struct seq_file *seq)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	seq_printf(seq, "attach_type:\t%d\n", tr_link->attach_type);
+}
+
+static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
+						 struct bpf_link_info *info)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	info->tracing.attach_type = tr_link->attach_type;
+	return 0;
+}
+
+static int check_multi_prog_type(struct bpf_prog *prog)
+{
+	if (!prog->aux->multi_func &&
+	    prog->type != BPF_PROG_TYPE_TRACING)
+		return -EINVAL;
+	if (prog->expected_attach_type != BPF_TRACE_FENTRY &&
+	    prog->expected_attach_type != BPF_TRACE_FEXIT)
+		return -EINVAL;
+	return 0;
+}
+
+static int bpf_tracing_multi_link_update(struct bpf_link *link,
+					 struct bpf_prog *new_prog,
+					 struct bpf_prog *old_prog __maybe_unused)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+	int err;
+
+	if (check_multi_prog_type(new_prog))
+		return -EINVAL;
+
+	err = bpf_trampoline_link_prog(new_prog, tr_link->tr);
+	if (err)
+		return err;
+
+	err = modify_ftrace_direct_multi(&tr_link->ops,
+					 (unsigned long) tr_link->tr->cur_image->image);
+	return WARN_ON(err);
+}
+
+static const struct bpf_link_ops bpf_tracing_multi_link_lops = {
+	.release = bpf_tracing_multi_link_release,
+	.dealloc = bpf_tracing_multi_link_dealloc,
+	.show_fdinfo = bpf_tracing_multi_link_show_fdinfo,
+	.fill_link_info = bpf_tracing_multi_link_fill_link_info,
+	.update_prog = bpf_tracing_multi_link_update,
+};
+
+static void bpf_func_model_nargs(struct btf_func_model *m, int nr_args)
+{
+	int i;
+
+	for (i = 0; i < nr_args; i++)
+		m->arg_size[i] = 8;
+	m->ret_size = 8;
+	m->nr_args = nr_args;
+}
+
+static int bpf_tracing_multi_attach(struct bpf_prog *prog,
+				    const union bpf_attr *attr)
+{
+	void __user *ubtf_ids = u64_to_user_ptr(attr->link_create.multi_btf_ids);
+	u32 size, i, cnt = attr->link_create.multi_btf_ids_cnt;
+	struct bpf_tracing_multi_link *link = NULL;
+	struct bpf_link_primer link_primer;
+	struct bpf_trampoline *tr = NULL;
+	int err = -EINVAL;
+	u8 nr_args = 0;
+	u32 *btf_ids;
+
+	if (check_multi_prog_type(prog))
+		return -EINVAL;
+
+	size = cnt * sizeof(*btf_ids);
+	btf_ids = kmalloc(size, GFP_USER | __GFP_NOWARN);
+	if (!btf_ids)
+		return -ENOMEM;
+
+	err = -EFAULT;
+	if (ubtf_ids && copy_from_user(btf_ids, ubtf_ids, size))
+		goto out_free;
+
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link)
+		goto out_free;
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_attach_target_info tgt_info = {};
+
+		err = bpf_check_attach_target(NULL, prog, NULL, btf_ids[i],
+					      &tgt_info);
+		if (err)
+			goto out_free;
+
+		if (ftrace_set_filter_ip(&link->ops, tgt_info.tgt_addr, 0, 0))
+			goto out_free;
+
+		if (nr_args < tgt_info.fmodel.nr_args)
+			nr_args = tgt_info.fmodel.nr_args;
+	}
+
+	tr = bpf_trampoline_multi_alloc();
+	if (!tr)
+		goto out_free;
+
+	bpf_func_model_nargs(&tr->func.model, nr_args);
+
+	err = bpf_trampoline_link_prog(prog, tr);
+	if (err)
+		goto out_free;
+
+	err = register_ftrace_direct_multi(&link->ops, (unsigned long) tr->cur_image->image);
+	if (err)
+		goto out_free;
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_TRACING_MULTI,
+		      &bpf_tracing_multi_link_lops, prog);
+	link->attach_type = prog->expected_attach_type;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err)
+		goto out_unlink;
+
+	link->tr = tr;
+	/* Take extra ref so we are even with progs added by link_update. */
+	bpf_prog_inc(prog);
+	return bpf_link_settle(&link_primer);
+
+out_unlink:
+	unregister_ftrace_direct_multi(&link->ops);
+out_free:
+	kfree(tr);
+	kfree(btf_ids);
+	kfree(link);
+	return err;
+}
+
 struct bpf_raw_tp_link {
 	struct bpf_link link;
 	struct bpf_raw_event_map *btp;
@@ -3043,6 +3222,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_CGROUP_SETSOCKOPT:
 		return BPF_PROG_TYPE_CGROUP_SOCKOPT;
 	case BPF_TRACE_ITER:
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_SK_LOOKUP:
 		return BPF_PROG_TYPE_SK_LOOKUP;
@@ -4099,6 +4280,8 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 
 	if (prog->expected_attach_type == BPF_TRACE_ITER)
 		return bpf_iter_link_attach(attr, uattr, prog);
+	else if (prog->aux->multi_func)
+		return bpf_tracing_multi_attach(prog, attr);
 	else if (prog->type == BPF_PROG_TYPE_EXT)
 		return bpf_tracing_prog_attach(prog,
 					       attr->link_create.target_fd,
@@ -4106,7 +4289,7 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 	return -EINVAL;
 }
 
-#define BPF_LINK_CREATE_LAST_FIELD link_create.iter_info_len
+#define BPF_LINK_CREATE_LAST_FIELD link_create.multi_btf_ids_cnt
 static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 {
 	enum bpf_prog_type ptype;

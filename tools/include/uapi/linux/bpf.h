@@ -1007,6 +1007,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_ITER = 4,
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
+	BPF_LINK_TYPE_TRACING_MULTI = 7,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1453,6 +1454,10 @@ union bpf_attr {
 			struct {
 				__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 				__u32		iter_info_len;	/* iter_info length */
+			};
+			struct {
+				__aligned_u64	multi_btf_ids;		/* addresses to attach */
+				__u32		multi_btf_ids_cnt;	/* addresses count */
 			};
 		};
 	} link_create;

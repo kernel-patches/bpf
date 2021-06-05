@@ -661,6 +661,7 @@ struct bpf_trampoline {
 	struct bpf_tramp_image *cur_image;
 	u64 selector;
 	struct module *mod;
+	bool multi;
 };
 
 struct bpf_attach_target_info {
@@ -746,6 +747,8 @@ void bpf_ksym_add(struct bpf_ksym *ksym);
 void bpf_ksym_del(struct bpf_ksym *ksym);
 int bpf_jit_charge_modmem(u32 pages);
 void bpf_jit_uncharge_modmem(u32 pages);
+struct bpf_trampoline *bpf_trampoline_multi_alloc(void);
+void bpf_trampoline_multi_free(struct bpf_trampoline *tr);
 #else
 static inline int bpf_trampoline_link_prog(struct bpf_prog *prog,
 					   struct bpf_trampoline *tr)
