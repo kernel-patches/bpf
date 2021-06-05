@@ -614,6 +614,12 @@ void ftrace_modify_all_code(int command);
 extern void ftrace_graph_caller(void);
 extern int ftrace_enable_ftrace_graph_caller(void);
 extern int ftrace_disable_ftrace_graph_caller(void);
+#ifndef ftrace_graph_func
+#define ftrace_graph_func ftrace_stub
+#define FTRACE_OPS_GRAPH_STUB | FTRACE_OPS_FL_STUB
+#else
+#define FTRACE_OPS_GRAPH_STUB
+#endif
 #else
 static inline int ftrace_enable_ftrace_graph_caller(void) { return 0; }
 static inline int ftrace_disable_ftrace_graph_caller(void) { return 0; }
