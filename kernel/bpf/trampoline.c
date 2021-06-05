@@ -58,11 +58,27 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
 			   PAGE_SIZE, true, ksym->name);
 }
 
+static struct bpf_trampoline *bpf_trampoline_alloc(void)
+{
+	struct bpf_trampoline *tr;
+	int i;
+
+	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
+	if (!tr)
+		return NULL;
+
+	INIT_HLIST_NODE(&tr->hlist);
+	refcount_set(&tr->refcnt, 1);
+	mutex_init(&tr->mutex);
+	for (i = 0; i < BPF_TRAMP_MAX; i++)
+		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
+	return tr;
+}
+
 static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
-	int i;
 
 	mutex_lock(&trampoline_mutex);
 	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
@@ -72,17 +88,11 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 			goto out;
 		}
 	}
-	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
-	if (!tr)
-		goto out;
-
-	tr->key = key;
-	INIT_HLIST_NODE(&tr->hlist);
-	hlist_add_head(&tr->hlist, head);
-	refcount_set(&tr->refcnt, 1);
-	mutex_init(&tr->mutex);
-	for (i = 0; i < BPF_TRAMP_MAX; i++)
-		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
+	tr = bpf_trampoline_alloc();
+	if (tr) {
+		tr->key = key;
+		hlist_add_head(&tr->hlist, head);
+	}
 out:
 	mutex_unlock(&trampoline_mutex);
 	return tr;
