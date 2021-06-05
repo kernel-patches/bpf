@@ -228,6 +228,7 @@ struct bpf_sec_def {
 	bool is_attachable;
 	bool is_attach_btf;
 	bool is_sleepable;
+	bool is_multi_func;
 	attach_fn_t attach_fn;
 };
 
@@ -7609,6 +7610,8 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 
 		if (prog->sec_def->is_sleepable)
 			prog->prog_flags |= BPF_F_SLEEPABLE;
+		if (prog->sec_def->is_multi_func)
+			prog->prog_flags |= BPF_F_MULTI_FUNC;
 		bpf_program__set_type(prog, prog->sec_def->prog_type);
 		bpf_program__set_expected_attach_type(prog,
 				prog->sec_def->expected_attach_type);
@@ -9070,6 +9073,8 @@ static struct bpf_link *attach_raw_tp(const struct bpf_sec_def *sec,
 				      struct bpf_program *prog);
 static struct bpf_link *attach_trace(const struct bpf_sec_def *sec,
 				     struct bpf_program *prog);
+static struct bpf_link *attach_trace_multi(const struct bpf_sec_def *sec,
+					   struct bpf_program *prog);
 static struct bpf_link *attach_lsm(const struct bpf_sec_def *sec,
 				   struct bpf_program *prog);
 static struct bpf_link *attach_iter(const struct bpf_sec_def *sec,
@@ -9143,6 +9148,14 @@ static const struct bpf_sec_def section_defs[] = {
 		.attach_fn = attach_iter),
 	SEC_DEF("syscall", SYSCALL,
 		.is_sleepable = true),
+	SEC_DEF("fentry.multi/", TRACING,
+		.expected_attach_type = BPF_TRACE_FENTRY,
+		.is_multi_func = true,
+		.attach_fn = attach_trace_multi),
+	SEC_DEF("fexit.multi/", TRACING,
+		.expected_attach_type = BPF_TRACE_FEXIT,
+		.is_multi_func = true,
+		.attach_fn = attach_trace_multi),
 	BPF_EAPROG_SEC("xdp_devmap/",		BPF_PROG_TYPE_XDP,
 						BPF_XDP_DEVMAP),
 	BPF_EAPROG_SEC("xdp_cpumap/",		BPF_PROG_TYPE_XDP,
@@ -9583,6 +9596,9 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, int *btf_obj_fd, 
 
 	if (!name)
 		return -EINVAL;
+
+	if (prog->prog_flags & BPF_F_MULTI_FUNC)
+		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(section_defs); i++) {
 		if (!section_defs[i].is_attach_btf)
@@ -10535,6 +10551,62 @@ static struct bpf_link *bpf_program__attach_btf_id(struct bpf_program *prog)
 	}
 	link->fd = pfd;
 	return (struct bpf_link *)link;
+}
+
+static struct bpf_link *bpf_program__attach_multi(struct bpf_program *prog)
+{
+	char *pattern = prog->sec_name + prog->sec_def->len;
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	enum bpf_attach_type attach_type;
+	int prog_fd, link_fd, cnt, err;
+	struct bpf_link *link = NULL;
+	__s32 *ids = NULL;
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	err = bpf_object__load_vmlinux_btf(prog->obj, true);
+	if (err)
+		return ERR_PTR(err);
+
+	cnt = btf__find_by_pattern_kind(prog->obj->btf_vmlinux, pattern,
+					BTF_KIND_FUNC, &ids);
+	if (cnt <= 0)
+		return ERR_PTR(-EINVAL);
+
+	link = calloc(1, sizeof(*link));
+	if (!link) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+	link->detach = &bpf_link__detach_fd;
+
+	opts.multi_btf_ids = ids;
+	opts.multi_btf_ids_cnt = cnt;
+
+	attach_type = bpf_program__get_expected_attach_type(prog);
+	link_fd = bpf_link_create(prog_fd, 0, attach_type, &opts);
+	if (link_fd < 0) {
+		err = -errno;
+		goto out_err;
+	}
+	link->fd = link_fd;
+	free(ids);
+	return link;
+
+out_err:
+	free(link);
+	free(ids);
+	return ERR_PTR(err);
+}
+
+static struct bpf_link *attach_trace_multi(const struct bpf_sec_def *sec,
+					   struct bpf_program *prog)
+{
+	return bpf_program__attach_multi(prog);
 }
 
 struct bpf_link *bpf_program__attach_trace(struct bpf_program *prog)
