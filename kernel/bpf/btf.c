@@ -4679,6 +4679,11 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		args++;
 		nr_args--;
 	}
+	if (prog->aux->multi_func) {
+		if (arg == 0)
+			return true;
+		arg--;
+	}
 
 	if (arg > nr_args) {
 		bpf_log(log, "func '%s' doesn't have %d-th argument\n",
