@@ -3,6 +3,13 @@
 #include <bpf/bpf_helpers.h>
 
 struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} nop_table SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
 	__uint(max_entries, 3);
 	__uint(key_size, sizeof(__u32));
@@ -12,8 +19,18 @@ struct {
 static volatile int count;
 
 __noinline
+int subprog_noise(struct __sk_buff *skb)
+{
+	__u32 key = 0;
+
+	bpf_map_lookup_elem(&nop_table, &key);
+	return 0;
+}
+
+__noinline
 int subprog_tail_2(struct __sk_buff *skb)
 {
+	subprog_noise(skb);
 	bpf_tail_call_static(skb, &jmp_table, 2);
 	return skb->len * 3;
 }
