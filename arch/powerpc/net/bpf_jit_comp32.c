@@ -195,8 +195,8 @@ void bpf_jit_emit_func_call_rel(u32 *image, struct codegen_context *ctx, u64 fun
 		/* Load function address into r0 */
 		EMIT(PPC_RAW_LIS(__REG_R0, IMM_H(func)));
 		EMIT(PPC_RAW_ORI(__REG_R0, __REG_R0, IMM_L(func)));
-		EMIT(PPC_RAW_MTLR(__REG_R0));
-		EMIT(PPC_RAW_BLRL());
+		EMIT(PPC_RAW_MTCTR(__REG_R0));
+		EMIT(PPC_RAW_BCTRL());
 	}
 }
 
