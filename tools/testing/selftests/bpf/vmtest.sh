@@ -106,17 +106,6 @@ download_rootfs()
 		zstd -d | sudo tar -C "$dir" -x
 }
 
-recompile_kernel()
-{
-	local kernel_checkout="$1"
-	local make_command="$2"
-
-	cd "${kernel_checkout}"
-
-	${make_command} olddefconfig
-	${make_command}
-}
-
 mount_image()
 {
 	local rootfs_img="${OUTPUT_DIR}/${ROOTFS_IMAGE}"
@@ -130,6 +119,23 @@ unmount_image()
 	local mount_dir="${OUTPUT_DIR}/${MOUNT_DIR}"
 
 	sudo umount "${mount_dir}" &> /dev/null
+}
+
+recompile_kernel()
+{
+	local kernel_checkout="$1"
+	local make_command="$2"
+	local kernel_config="$3"
+
+	cd "${kernel_checkout}"
+
+	${make_command} olddefconfig
+	scripts/config --file ${kernel_config} --module CONFIG_BONDING
+	${make_command}
+	${make_command} modules
+	mount_image
+	sudo ${make_command} INSTALL_MOD_PATH=${OUTPUT_DIR}/${MOUNT_DIR} modules_install
+	unmount_image
 }
 
 update_selftests()
@@ -358,7 +364,7 @@ main()
 	mkdir -p "${mount_dir}"
 	update_kconfig "${kconfig_file}"
 
-	recompile_kernel "${kernel_checkout}" "${make_command}"
+	recompile_kernel "${kernel_checkout}" "${make_command}" "${kconfig_file}"
 
 	if [[ "${update_image}" == "no" && ! -f "${rootfs_img}" ]]; then
 		echo "rootfs image not found in ${rootfs_img}"
