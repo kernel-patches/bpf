@@ -514,9 +514,11 @@ int dev_map_enqueue(struct bpf_dtab_netdev *dst, struct xdp_buff *xdp,
 }
 
 static bool is_valid_dst(struct bpf_dtab_netdev *obj, struct xdp_buff *xdp,
-			 int exclude_ifindex)
+			 int exclude_ifindex, int exclude_ifindex_master)
 {
-	if (!obj || obj->dev->ifindex == exclude_ifindex ||
+	if (!obj ||
+	    obj->dev->ifindex == exclude_ifindex ||
+	    obj->dev->ifindex == exclude_ifindex_master ||
 	    !obj->dev->netdev_ops->ndo_xdp_xmit)
 		return false;
 
@@ -546,11 +548,18 @@ int dev_map_enqueue_multi(struct xdp_buff *xdp, struct net_device *dev_rx,
 {
 	struct bpf_dtab *dtab = container_of(map, struct bpf_dtab, map);
 	int exclude_ifindex = exclude_ingress ? dev_rx->ifindex : 0;
+	int exclude_ifindex_master = 0;
 	struct bpf_dtab_netdev *dst, *last_dst = NULL;
 	struct hlist_head *head;
 	struct xdp_frame *xdpf;
 	unsigned int i;
 	int err;
+
+	if (static_branch_unlikely(&bpf_bond_redirect_enabled_key)) {
+		struct net_device *master = netdev_master_upper_dev_get_rcu(dev_rx);
+
+		exclude_ifindex_master = (master && exclude_ingress) ? master->ifindex : 0;
+	}
 
 	xdpf = xdp_convert_buff_to_frame(xdp);
 	if (unlikely(!xdpf))
@@ -559,7 +568,7 @@ int dev_map_enqueue_multi(struct xdp_buff *xdp, struct net_device *dev_rx,
 	if (map->map_type == BPF_MAP_TYPE_DEVMAP) {
 		for (i = 0; i < map->max_entries; i++) {
 			dst = READ_ONCE(dtab->netdev_map[i]);
-			if (!is_valid_dst(dst, xdp, exclude_ifindex))
+			if (!is_valid_dst(dst, xdp, exclude_ifindex, exclude_ifindex_master))
 				continue;
 
 			/* we only need n-1 clones; last_dst enqueued below */
@@ -579,7 +588,9 @@ int dev_map_enqueue_multi(struct xdp_buff *xdp, struct net_device *dev_rx,
 			head = dev_map_index_hash(dtab, i);
 			hlist_for_each_entry_rcu(dst, head, index_hlist,
 						 lockdep_is_held(&dtab->index_lock)) {
-				if (!is_valid_dst(dst, xdp, exclude_ifindex))
+				if (!is_valid_dst(dst, xdp,
+						  exclude_ifindex,
+						  exclude_ifindex_master))
 					continue;
 
 				/* we only need n-1 clones; last_dst enqueued below */
@@ -646,16 +657,25 @@ int dev_map_redirect_multi(struct net_device *dev, struct sk_buff *skb,
 {
 	struct bpf_dtab *dtab = container_of(map, struct bpf_dtab, map);
 	int exclude_ifindex = exclude_ingress ? dev->ifindex : 0;
+	int exclude_ifindex_master = 0;
 	struct bpf_dtab_netdev *dst, *last_dst = NULL;
 	struct hlist_head *head;
 	struct hlist_node *next;
 	unsigned int i;
 	int err;
 
+	if (static_branch_unlikely(&bpf_bond_redirect_enabled_key)) {
+		struct net_device *master = netdev_master_upper_dev_get_rcu(dev);
+
+		exclude_ifindex_master = (master && exclude_ingress) ? master->ifindex : 0;
+	}
+
 	if (map->map_type == BPF_MAP_TYPE_DEVMAP) {
 		for (i = 0; i < map->max_entries; i++) {
 			dst = READ_ONCE(dtab->netdev_map[i]);
-			if (!dst || dst->dev->ifindex == exclude_ifindex)
+			if (!dst ||
+			    dst->dev->ifindex == exclude_ifindex ||
+			    dst->dev->ifindex == exclude_ifindex_master)
 				continue;
 
 			/* we only need n-1 clones; last_dst enqueued below */
@@ -674,7 +694,9 @@ int dev_map_redirect_multi(struct net_device *dev, struct sk_buff *skb,
 		for (i = 0; i < dtab->n_buckets; i++) {
 			head = dev_map_index_hash(dtab, i);
 			hlist_for_each_entry_safe(dst, next, head, index_hlist) {
-				if (!dst || dst->dev->ifindex == exclude_ifindex)
+				if (!dst ||
+				    dst->dev->ifindex == exclude_ifindex ||
+				    dst->dev->ifindex == exclude_ifindex_master)
 					continue;
 
 				/* we only need n-1 clones; last_dst enqueued below */
