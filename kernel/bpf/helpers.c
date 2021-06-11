@@ -1072,7 +1072,7 @@ BPF_CALL_5(bpf_timer_init, struct bpf_timer_kern *, timer, void *, cb, int, flag
 		goto out;
 	}
 	t->callback_fn = cb;
-	t->value = (void *)timer /* - offset of bpf_timer inside elem */;
+	t->value = (void *)timer - map->timer_off;
 	t->map = map;
 	t->prog = prog;
 	hrtimer_init(&t->timer, clockid, HRTIMER_MODE_REL_SOFT);

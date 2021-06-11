@@ -287,6 +287,12 @@ static int array_map_get_next_key(struct bpf_map *map, void *key, void *next_key
 	return 0;
 }
 
+static void check_and_free_timer_in_array(struct bpf_array *arr, void *val)
+{
+	if (unlikely(map_value_has_timer(&arr->map)))
+		bpf_timer_cancel_and_free(val + arr->map.timer_off);
+}
+
 /* Called from syscall or from eBPF program */
 static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 				 u64 map_flags)
@@ -321,6 +327,7 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 			copy_map_value_locked(map, val, value, false);
 		else
 			copy_map_value(map, val, value);
+		check_and_free_timer_in_array(array, val);
 	}
 	return 0;
 }
@@ -378,9 +385,16 @@ static void *array_map_vmalloc_addr(struct bpf_array *array)
 static void array_map_free(struct bpf_map *map)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	int i;
 
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
 		bpf_array_free_percpu(array);
+
+	if (unlikely(map_value_has_timer(map)))
+		for (i = 0; i < array->map.max_entries; i++)
+			bpf_timer_cancel_and_free(array->value +
+						  array->elem_size * i +
+						  map->timer_off);
 
 	if (array->map.map_flags & BPF_F_MMAPABLE)
 		bpf_map_area_free(array_map_vmalloc_addr(array));
