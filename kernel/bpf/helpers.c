@@ -985,6 +985,227 @@ const struct bpf_func_proto bpf_snprintf_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
+struct bpf_hrtimer {
+	struct hrtimer timer;
+	struct bpf_map *map;
+	struct bpf_prog *prog;
+	void *callback_fn;
+	void *value;
+};
+
+/* the actual struct hidden inside uapi struct bpf_timer */
+struct bpf_timer_kern {
+	struct bpf_hrtimer *timer;
+	struct bpf_spin_lock lock;
+};
+
+static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
+
+static enum hrtimer_restart bpf_timer_cb(struct hrtimer *timer)
+{
+	struct bpf_hrtimer *t = container_of(timer, struct bpf_hrtimer, timer);
+	struct bpf_prog *prog = t->prog;
+	struct bpf_map *map = t->map;
+	void *key;
+	u32 idx;
+	int ret;
+
+	/* bpf_timer_cb() runs in hrtimer_run_softirq. It doesn't migrate and
+	 * cannot be preempted by another bpf_timer_cb() on the same cpu.
+	 * Remember the timer this callback is servicing to prevent
+	 * deadlock if callback_fn() calls bpf_timer_cancel() on the same timer.
+	 */
+	this_cpu_write(hrtimer_running, t);
+	if (map->map_type == BPF_MAP_TYPE_ARRAY) {
+		struct bpf_array *array = container_of(map, struct bpf_array, map);
+
+		/* compute the key */
+		idx = ((char *)t->value - array->value) / array->elem_size;
+		key = &idx;
+	} else { /* hash or lru */
+		key = t->value - round_up(map->key_size, 8);
+	}
+
+	ret = BPF_CAST_CALL(t->callback_fn)((u64)(long)map,
+					    (u64)(long)key,
+					    (u64)(long)t->value, 0, 0);
+	WARN_ON(ret != 0); /* Next patch disallows 1 in the verifier */
+
+	/* The bpf function finished executed. Drop the prog refcnt.
+	 * It could reach zero here and trigger free of bpf_prog
+	 * and subsequent free of the maps that were holding timers.
+	 * If callback_fn called bpf_timer_start on this timer
+	 * the prog refcnt will be > 0.
+	 *
+	 * If callback_fn deleted map element the 't' could have been freed,
+	 * hence t->prog deref is done earlier.
+	 */
+	bpf_prog_put(prog);
+	this_cpu_write(hrtimer_running, NULL);
+	return HRTIMER_NORESTART;
+}
+
+BPF_CALL_5(bpf_timer_init, struct bpf_timer_kern *, timer, void *, cb, int, flags,
+	   struct bpf_map *, map, struct bpf_prog *, prog)
+{
+	clockid_t clockid = flags & (MAX_CLOCKS - 1);
+	struct bpf_hrtimer *t;
+	int ret = 0;
+
+	BUILD_BUG_ON(MAX_CLOCKS != 16);
+	if (flags >= MAX_CLOCKS ||
+	    /* similar to timerfd except _ALARM variants are not supported */
+            (clockid != CLOCK_MONOTONIC &&
+             clockid != CLOCK_REALTIME &&
+             clockid != CLOCK_BOOTTIME))
+		return -EINVAL;
+	____bpf_spin_lock(&timer->lock);
+	t = timer->timer;
+	if (t) {
+		ret = -EBUSY;
+		goto out;
+	}
+	/* allocate hrtimer via map_kmalloc to use memcg accounting */
+	t = bpf_map_kmalloc_node(map, sizeof(*t), GFP_ATOMIC, NUMA_NO_NODE);
+	if (!t) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	t->callback_fn = cb;
+	t->value = (void *)timer /* - offset of bpf_timer inside elem */;
+	t->map = map;
+	t->prog = prog;
+	hrtimer_init(&t->timer, clockid, HRTIMER_MODE_REL_SOFT);
+	t->timer.function = bpf_timer_cb;
+	timer->timer = t;
+out:
+	____bpf_spin_unlock(&timer->lock);
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_timer_init_proto = {
+	.func		= bpf_timer_init,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_PTR_TO_FUNC,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs)
+{
+	struct bpf_hrtimer *t;
+	int ret = 0;
+
+	____bpf_spin_lock(&timer->lock);
+	t = timer->timer;
+	if (!t) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (!hrtimer_active(&t->timer) || hrtimer_callback_running(&t->timer))
+		/* If the timer wasn't active or callback already executing
+		 * bump the prog refcnt to keep it alive until
+		 * callback is invoked (again).
+		 */
+		bpf_prog_inc(t->prog);
+	hrtimer_start(&t->timer, ns_to_ktime(nsecs), HRTIMER_MODE_REL_SOFT);
+out:
+	____bpf_spin_unlock(&timer->lock);
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_timer_start_proto = {
+	.func		= bpf_timer_start,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_timer_cancel, struct bpf_timer_kern *, timer)
+{
+	struct bpf_hrtimer *t;
+	int ret = 0;
+
+	____bpf_spin_lock(&timer->lock);
+	t = timer->timer;
+	if (!t) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (this_cpu_read(hrtimer_running) == t) {
+		/* If bpf callback_fn is trying to bpf_timer_cancel()
+		 * its own timer the hrtimer_cancel() will deadlock
+		 * since it waits for callback_fn to finish
+		 */
+		ret = -EDEADLK;
+		goto out;
+	}
+	/* Cancel the timer and wait for associated callback to finish
+	 * if it was running.
+	 */
+	if (hrtimer_cancel(&t->timer) == 1) {
+		/* If the timer was active then drop the prog refcnt,
+		 * since callback will not be invoked.
+		 */
+		bpf_prog_put(t->prog);
+		ret = 1;
+	}
+out:
+	____bpf_spin_unlock(&timer->lock);
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_timer_cancel_proto = {
+	.func		= bpf_timer_cancel,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_TIMER,
+};
+
+/* This function is called by delete_element in htab and lru maps
+ * and by map_free for array, lru, htab maps.
+ */
+void bpf_timer_cancel_and_free(void *val)
+{
+	struct bpf_timer_kern *timer = val;
+	struct bpf_hrtimer *t;
+
+	____bpf_spin_lock(&timer->lock);
+	t = timer->timer;
+	if (!t)
+		goto out;
+	/* Cancel the timer and wait for callback to complete if it was
+	 * running. Only individual delete_element in htab or lru maps can
+	 * return 1 from hrtimer_cancel.
+	 * The whole map is destroyed when its refcnt reaches zero.
+	 * That happens after bpf prog refcnt reaches zero.
+	 * bpf prog refcnt will not reach zero until all timers are executed.
+	 * So when maps are destroyed hrtimer_cancel will surely return 0.
+	 * In such case t->prog is a pointer to freed memory.
+	 *
+	 * When htab or lru is deleting individual element check that
+	 * bpf_map_delete_elem() isn't trying to delete elem with running timer.
+	 * In such case don't call hrtimer_cancel() (since it will deadlock)
+	 * and don't call hrtimer_try_to_cancel() (since it will just return -1).
+	 * Instead free the timer and set timer->timer = NULL.
+	 * The subsequent bpf_timer_start/cancel() helpers won't be able to use it.
+	 * In preallocated maps it's safe to do timer->timer = NULL.
+	 * The memory could be reused for another element while current timer
+	 * callback can still do bpf_timer_init() on it.
+	 * In non-preallocated maps timer->timer = NULL will happen after
+	 * callback completes, since prog execution is an RCU critical section.
+	 */
+	if (this_cpu_read(hrtimer_running) != t &&
+	    hrtimer_cancel(&t->timer) == 1)
+		bpf_prog_put(t->prog);
+	kfree(t);
+	timer->timer = NULL;
+out:
+	____bpf_spin_unlock(&timer->lock);
+}
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_str_proto __weak;
@@ -1051,6 +1272,12 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_per_cpu_ptr_proto;
 	case BPF_FUNC_this_cpu_ptr:
 		return &bpf_this_cpu_ptr_proto;
+	case BPF_FUNC_timer_init:
+		return &bpf_timer_init_proto;
+	case BPF_FUNC_timer_start:
+		return &bpf_timer_start_proto;
+	case BPF_FUNC_timer_cancel:
+		return &bpf_timer_cancel_proto;
 	default:
 		break;
 	}
