@@ -958,7 +958,6 @@ static int netsec_process_rx(struct netsec_priv *priv, int budget)
 
 	xdp_init_buff(&xdp, PAGE_SIZE, &dring->xdp_rxq);
 
-	rcu_read_lock();
 	xdp_prog = READ_ONCE(priv->xdp_prog);
 	dma_dir = page_pool_get_dma_dir(dring->page_pool);
 
@@ -1019,6 +1018,10 @@ static int netsec_process_rx(struct netsec_priv *priv, int budget)
 				 pkt_len, false);
 
 		if (xdp_prog) {
+			/* This code is invoked within a single NAPI poll cycle
+			 * and thus under local_bh_disable(), which provides the
+			 * needed RCU protection.
+			 */
 			xdp_result = netsec_run_xdp(priv, xdp_prog, &xdp);
 			if (xdp_result != NETSEC_XDP_PASS) {
 				xdp_act |= xdp_result;
@@ -1068,8 +1071,6 @@ next:
 		dring->tail = (dring->tail + 1) % DESC_NUM;
 	}
 	netsec_finalize_xdp_rx(priv, xdp_act, xdp_xmit);
-
-	rcu_read_unlock();
 
 	return done;
 }
