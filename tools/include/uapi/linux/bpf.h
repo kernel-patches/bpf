@@ -6056,6 +6056,8 @@ struct bpf_flow_keys {
 	};
 	__u32	flags;
 	__be32	flow_label;
+	__bpf_md_ptr(const struct virtio_net_hdr *, vhdr);
+	__u8	vhdr_is_little_endian;
 };
 
 struct bpf_func_info {

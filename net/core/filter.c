@@ -8361,6 +8361,36 @@ static bool sk_msg_is_valid_access(int off, int size,
 	return true;
 }
 
+BTF_ID_LIST_SINGLE(bpf_flow_dissector_btf_ids, struct, virtio_net_hdr);
+
+int check_flow_keys_access(int off, int size, enum bpf_access_type t,
+			   struct bpf_insn_access_aux *info)
+{
+	if (size < 0 || off < 0 ||
+	    (u64)off + size > sizeof(struct bpf_flow_keys))
+		return -EACCES;
+
+	switch (off) {
+	case bpf_ctx_range_ptr(struct bpf_flow_keys, vhdr):
+		if (t == BPF_WRITE || off % size != 0 || size != sizeof(__u64))
+			return -EACCES;
+
+		if (!bpf_flow_dissector_btf_ids[0])
+			return -EINVAL;
+
+		info->btf_id = bpf_flow_dissector_btf_ids[0];
+
+		break;
+	case offsetof(struct bpf_flow_keys, vhdr_is_little_endian):
+		if (t == BPF_WRITE)
+			return -EACCES;
+
+		break;
+	}
+
+	return 0;
+}
+
 static bool flow_dissector_is_valid_access(int off, int size,
 					   enum bpf_access_type type,
 					   const struct bpf_prog *prog,
@@ -8390,6 +8420,8 @@ static bool flow_dissector_is_valid_access(int off, int size,
 			return false;
 		info->reg_type = PTR_TO_FLOW_KEYS;
 		return true;
+	case bpf_ctx_range(struct __sk_buff, len):
+		return size == size_default;
 	default:
 		return false;
 	}
@@ -8421,6 +8453,30 @@ static u32 flow_dissector_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_flow_dissector, flow_keys),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct bpf_flow_dissector, flow_keys));
+		break;
+
+	case offsetof(struct __sk_buff, len):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_flow_dissector, skb),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_flow_dissector, skb));
+		*insn++ = BPF_JMP_IMM(BPF_JNE, si->dst_reg, 0, 4);
+		/* bpf_flow_dissector->skb == NULL */
+		/* dst_reg = bpf_flow_dissector->data_end */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_flow_dissector, data_end),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_flow_dissector, data_end));
+		/* AX = bpf_flow_dissector->data */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_flow_dissector, data),
+				      BPF_REG_AX, si->src_reg,
+				      offsetof(struct bpf_flow_dissector, data));
+		/* dst_reg -= bpf_flow_dissector->data */
+		*insn++ = BPF_ALU64_REG(BPF_SUB, si->dst_reg, BPF_REG_AX);
+		*insn++ = BPF_JMP_A(1);
+		/* bpf_flow_dissector->skb != NULL */
+		/* bpf_flow_dissector->skb->len */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct sk_buff, len),
+				      si->dst_reg, si->dst_reg,
+				      offsetof(struct sk_buff, len));
 		break;
 	}
 
