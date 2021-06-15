@@ -1515,6 +1515,9 @@ static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
 		attr->numa_node : NUMA_NO_NODE;
 }
 
+int check_flow_keys_access(int off, int size, enum bpf_access_type t,
+			   struct bpf_insn_access_aux *info);
+
 struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type);
 int array_map_alloc_check(union bpf_attr *attr);
 
