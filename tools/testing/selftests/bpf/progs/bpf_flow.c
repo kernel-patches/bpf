@@ -13,6 +13,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/if_packet.h>
+#include <linux/virtio_net.h>
 #include <sys/socket.h>
 #include <linux/if_tunnel.h>
 #include <linux/mpls.h>
@@ -71,15 +72,140 @@ struct {
 	__type(value, struct bpf_flow_keys);
 } last_dissection SEC(".maps");
 
-static __always_inline int export_flow_keys(struct bpf_flow_keys *keys,
-					    int ret)
+static __always_inline __u16 __virtio16_to_cpu(bool little_endian,
+					       __virtio16 val)
 {
+	if (little_endian)
+		return __le16_to_cpu((__le16)val);
+	else
+		return __be16_to_cpu((__be16)val);
+}
+
+/* Drops invalid virtio-net headers */
+static __always_inline int validate_vnet_hdr(const struct bpf_flow_keys *keys,
+					     __u32 skb_len)
+{
+	__u16 gso_type, hdr_len, gso_size, csum_start, csum_offset;
+	const struct virtio_net_hdr *vhdr = keys->vhdr;
+
+	if (!vhdr)
+		return BPF_OK;
+
+	gso_type = __virtio16_to_cpu(keys->vhdr_is_little_endian,
+				     vhdr->gso_type);
+	hdr_len = __virtio16_to_cpu(keys->vhdr_is_little_endian,
+				    vhdr->hdr_len);
+	gso_size = __virtio16_to_cpu(keys->vhdr_is_little_endian,
+				     vhdr->gso_size);
+	csum_start = __virtio16_to_cpu(keys->vhdr_is_little_endian,
+				       vhdr->csum_start);
+	csum_offset = __virtio16_to_cpu(keys->vhdr_is_little_endian,
+					vhdr->csum_offset);
+
+	/* Check gso */
+	if (gso_type != VIRTIO_NET_HDR_GSO_NONE) {
+		if (!(vhdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM))
+			return BPF_DROP;
+
+		if (keys->is_encap)
+			return BPF_DROP;
+
+		switch (gso_type & ~VIRTIO_NET_HDR_GSO_ECN) {
+		case VIRTIO_NET_HDR_GSO_TCPV4:
+			if (keys->addr_proto != ETH_P_IP ||
+			    keys->ip_proto != IPPROTO_TCP)
+				return BPF_DROP;
+
+			if (gso_size >= skb_len - keys->thoff -
+					sizeof(struct tcphdr))
+				return BPF_DROP;
+
+			break;
+		case VIRTIO_NET_HDR_GSO_TCPV6:
+			if (keys->addr_proto != ETH_P_IPV6 ||
+			    keys->ip_proto != IPPROTO_TCP)
+				return BPF_DROP;
+
+			if (gso_size >= skb_len - keys->thoff -
+					sizeof(struct tcphdr))
+				return BPF_DROP;
+
+			break;
+		case VIRTIO_NET_HDR_GSO_UDP:
+			if (keys->ip_proto != IPPROTO_UDP)
+				return BPF_DROP;
+
+			if (gso_size >= skb_len - keys->thoff -
+					sizeof(struct udphdr))
+				return BPF_DROP;
+
+			break;
+		default:
+			return BPF_DROP;
+		}
+	}
+
+	/* Check hdr_len */
+	if (hdr_len) {
+		switch (keys->ip_proto) {
+		case IPPROTO_TCP:
+			if (hdr_len != keys->thoff + sizeof(struct tcphdr))
+				return BPF_DROP;
+
+			break;
+		case IPPROTO_UDP:
+			if (hdr_len != keys->thoff + sizeof(struct udphdr))
+				return BPF_DROP;
+
+			break;
+		}
+	}
+
+	/* Check csum */
+	if (vhdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) {
+		if (keys->addr_proto != ETH_P_IP &&
+		    keys->addr_proto != ETH_P_IPV6)
+			return BPF_DROP;
+
+		if (csum_start != keys->thoff)
+			return BPF_DROP;
+
+		switch (keys->ip_proto) {
+		case IPPROTO_TCP:
+			if (csum_offset != offsetof(struct tcphdr, check))
+				return BPF_DROP;
+
+			break;
+		case IPPROTO_UDP:
+			if (csum_offset != offsetof(struct udphdr, check))
+				return BPF_DROP;
+
+			break;
+		default:
+			return BPF_DROP;
+		}
+	}
+
+	return BPF_OK;
+}
+
+/* Common steps to perform regardless of where protocol parsing finishes:
+ * 1. store flow keys in map
+ * 2. if parse result is BPF_OK, parse the vnet hdr if present
+ * 3. return the parse result
+ */
+static __always_inline int parse_epilogue(struct __sk_buff *skb, int ret)
+{
+	const struct bpf_flow_keys *keys = skb->flow_keys;
 	__u32 key = (__u32)(keys->sport) << 16 | keys->dport;
 	struct bpf_flow_keys val;
 
 	memcpy(&val, keys, sizeof(val));
 	bpf_map_update_elem(&last_dissection, &key, &val, BPF_ANY);
-	return ret;
+
+	if (ret != BPF_OK)
+		return ret;
+	return validate_vnet_hdr(keys, skb->len);
 }
 
 #define IPV6_FLOWLABEL_MASK		__bpf_constant_htonl(0x000FFFFF)
@@ -114,8 +240,6 @@ static __always_inline void *bpf_flow_dissect_get_header(struct __sk_buff *skb,
 /* Dispatches on ETHERTYPE */
 static __always_inline int parse_eth_proto(struct __sk_buff *skb, __be16 proto)
 {
-	struct bpf_flow_keys *keys = skb->flow_keys;
-
 	switch (proto) {
 	case bpf_htons(ETH_P_IP):
 		bpf_tail_call_static(skb, &jmp_table, IP);
@@ -131,12 +255,10 @@ static __always_inline int parse_eth_proto(struct __sk_buff *skb, __be16 proto)
 	case bpf_htons(ETH_P_8021AD):
 		bpf_tail_call_static(skb, &jmp_table, VLAN);
 		break;
-	default:
-		/* Protocol not supported */
-		return export_flow_keys(keys, BPF_DROP);
 	}
 
-	return export_flow_keys(keys, BPF_DROP);
+	/* Protocol not supported */
+	return parse_epilogue(skb, BPF_DROP);
 }
 
 SEC("flow_dissector")
@@ -162,28 +284,28 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 	case IPPROTO_ICMP:
 		icmp = bpf_flow_dissect_get_header(skb, sizeof(*icmp), &_icmp);
 		if (!icmp)
-			return export_flow_keys(keys, BPF_DROP);
-		return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_DROP);
+		return parse_epilogue(skb, BPF_OK);
 	case IPPROTO_IPIP:
 		keys->is_encap = true;
 		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
-			return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_OK);
 
 		return parse_eth_proto(skb, bpf_htons(ETH_P_IP));
 	case IPPROTO_IPV6:
 		keys->is_encap = true;
 		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
-			return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_OK);
 
 		return parse_eth_proto(skb, bpf_htons(ETH_P_IPV6));
 	case IPPROTO_GRE:
 		gre = bpf_flow_dissect_get_header(skb, sizeof(*gre), &_gre);
 		if (!gre)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		if (bpf_htons(gre->flags & GRE_VERSION))
 			/* Only inspect standard GRE packets with version 0 */
-			return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_OK);
 
 		keys->thoff += sizeof(*gre); /* Step over GRE Flags and Proto */
 		if (GRE_IS_CSUM(gre->flags))
@@ -195,13 +317,13 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 
 		keys->is_encap = true;
 		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
-			return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_OK);
 
 		if (gre->proto == bpf_htons(ETH_P_TEB)) {
 			eth = bpf_flow_dissect_get_header(skb, sizeof(*eth),
 							  &_eth);
 			if (!eth)
-				return export_flow_keys(keys, BPF_DROP);
+				return parse_epilogue(skb, BPF_DROP);
 
 			keys->thoff += sizeof(*eth);
 
@@ -212,37 +334,35 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 	case IPPROTO_TCP:
 		tcp = bpf_flow_dissect_get_header(skb, sizeof(*tcp), &_tcp);
 		if (!tcp)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		if (tcp->doff < 5)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		if ((__u8 *)tcp + (tcp->doff << 2) > data_end)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		keys->sport = tcp->source;
 		keys->dport = tcp->dest;
-		return export_flow_keys(keys, BPF_OK);
+		return parse_epilogue(skb, BPF_OK);
 	case IPPROTO_UDP:
 	case IPPROTO_UDPLITE:
 		udp = bpf_flow_dissect_get_header(skb, sizeof(*udp), &_udp);
 		if (!udp)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		keys->sport = udp->source;
 		keys->dport = udp->dest;
-		return export_flow_keys(keys, BPF_OK);
+		return parse_epilogue(skb, BPF_OK);
 	default:
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 	}
 
-	return export_flow_keys(keys, BPF_DROP);
+	return parse_epilogue(skb, BPF_DROP);
 }
 
 static __always_inline int parse_ipv6_proto(struct __sk_buff *skb, __u8 nexthdr)
 {
-	struct bpf_flow_keys *keys = skb->flow_keys;
-
 	switch (nexthdr) {
 	case IPPROTO_HOPOPTS:
 	case IPPROTO_DSTOPTS:
@@ -255,7 +375,7 @@ static __always_inline int parse_ipv6_proto(struct __sk_buff *skb, __u8 nexthdr)
 		return parse_ip_proto(skb, nexthdr);
 	}
 
-	return export_flow_keys(keys, BPF_DROP);
+	return parse_epilogue(skb, BPF_DROP);
 }
 
 PROG(IP)(struct __sk_buff *skb)
@@ -268,11 +388,11 @@ PROG(IP)(struct __sk_buff *skb)
 
 	iph = bpf_flow_dissect_get_header(skb, sizeof(*iph), &_iph);
 	if (!iph)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	/* IP header cannot be smaller than 20 bytes */
 	if (iph->ihl < 5)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	keys->addr_proto = ETH_P_IP;
 	keys->ipv4_src = iph->saddr;
@@ -281,7 +401,7 @@ PROG(IP)(struct __sk_buff *skb)
 
 	keys->thoff += iph->ihl << 2;
 	if (data + keys->thoff > data_end)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	if (iph->frag_off & bpf_htons(IP_MF | IP_OFFSET)) {
 		keys->is_frag = true;
@@ -302,7 +422,7 @@ PROG(IP)(struct __sk_buff *skb)
 	}
 
 	if (done)
-		return export_flow_keys(keys, BPF_OK);
+		return parse_epilogue(skb, BPF_OK);
 
 	return parse_ip_proto(skb, iph->protocol);
 }
@@ -314,7 +434,7 @@ PROG(IPV6)(struct __sk_buff *skb)
 
 	ip6h = bpf_flow_dissect_get_header(skb, sizeof(*ip6h), &_ip6h);
 	if (!ip6h)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	keys->addr_proto = ETH_P_IPV6;
 	memcpy(&keys->ipv6_src, &ip6h->saddr, 2*sizeof(ip6h->saddr));
@@ -324,7 +444,7 @@ PROG(IPV6)(struct __sk_buff *skb)
 	keys->flow_label = ip6_flowlabel(ip6h);
 
 	if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL)
-		return export_flow_keys(keys, BPF_OK);
+		return parse_epilogue(skb, BPF_OK);
 
 	return parse_ipv6_proto(skb, ip6h->nexthdr);
 }
@@ -336,7 +456,7 @@ PROG(IPV6OP)(struct __sk_buff *skb)
 
 	ip6h = bpf_flow_dissect_get_header(skb, sizeof(*ip6h), &_ip6h);
 	if (!ip6h)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	/* hlen is in 8-octets and does not include the first 8 bytes
 	 * of the header
@@ -354,7 +474,7 @@ PROG(IPV6FR)(struct __sk_buff *skb)
 
 	fragh = bpf_flow_dissect_get_header(skb, sizeof(*fragh), &_fragh);
 	if (!fragh)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	keys->thoff += sizeof(*fragh);
 	keys->is_frag = true;
@@ -367,9 +487,9 @@ PROG(IPV6FR)(struct __sk_buff *skb)
 		 * explicitly asked for.
 		 */
 		if (!(keys->flags & BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG))
-			return export_flow_keys(keys, BPF_OK);
+			return parse_epilogue(skb, BPF_OK);
 	} else {
-		return export_flow_keys(keys, BPF_OK);
+		return parse_epilogue(skb, BPF_OK);
 	}
 
 	return parse_ipv6_proto(skb, fragh->nexthdr);
@@ -377,14 +497,13 @@ PROG(IPV6FR)(struct __sk_buff *skb)
 
 PROG(MPLS)(struct __sk_buff *skb)
 {
-	struct bpf_flow_keys *keys = skb->flow_keys;
 	struct mpls_label *mpls, _mpls;
 
 	mpls = bpf_flow_dissect_get_header(skb, sizeof(*mpls), &_mpls);
 	if (!mpls)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
-	return export_flow_keys(keys, BPF_OK);
+	return parse_epilogue(skb, BPF_OK);
 }
 
 PROG(VLAN)(struct __sk_buff *skb)
@@ -396,10 +515,10 @@ PROG(VLAN)(struct __sk_buff *skb)
 	if (keys->n_proto == bpf_htons(ETH_P_8021AD)) {
 		vlan = bpf_flow_dissect_get_header(skb, sizeof(*vlan), &_vlan);
 		if (!vlan)
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		if (vlan->h_vlan_encapsulated_proto != bpf_htons(ETH_P_8021Q))
-			return export_flow_keys(keys, BPF_DROP);
+			return parse_epilogue(skb, BPF_DROP);
 
 		keys->nhoff += sizeof(*vlan);
 		keys->thoff += sizeof(*vlan);
@@ -407,14 +526,14 @@ PROG(VLAN)(struct __sk_buff *skb)
 
 	vlan = bpf_flow_dissect_get_header(skb, sizeof(*vlan), &_vlan);
 	if (!vlan)
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	keys->nhoff += sizeof(*vlan);
 	keys->thoff += sizeof(*vlan);
 	/* Only allow 8021AD + 8021Q double tagging and no triple tagging.*/
 	if (vlan->h_vlan_encapsulated_proto == bpf_htons(ETH_P_8021AD) ||
 	    vlan->h_vlan_encapsulated_proto == bpf_htons(ETH_P_8021Q))
-		return export_flow_keys(keys, BPF_DROP);
+		return parse_epilogue(skb, BPF_DROP);
 
 	keys->n_proto = vlan->h_vlan_encapsulated_proto;
 	return parse_eth_proto(skb, vlan->h_vlan_encapsulated_proto);

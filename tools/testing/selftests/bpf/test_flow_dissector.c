@@ -17,6 +17,8 @@
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
 #include <linux/ipv6.h>
+#include <linux/virtio_net.h>
+#include <net/if.h>
 #include <netinet/ip.h>
 #include <netinet/in.h>
 #include <netinet/udp.h>
@@ -65,7 +67,8 @@ struct guehdr {
 static uint8_t	cfg_dsfield_inner;
 static uint8_t	cfg_dsfield_outer;
 static uint8_t	cfg_encap_proto;
-static bool	cfg_expect_failure = false;
+static bool	cfg_expect_norx;
+static bool	cfg_expect_snd_failure;
 static int	cfg_l3_extra = AF_UNSPEC;	/* optional SIT prefix */
 static int	cfg_l3_inner = AF_UNSPEC;
 static int	cfg_l3_outer = AF_UNSPEC;
@@ -77,8 +80,14 @@ static int	cfg_port_gue = 6080;
 static bool	cfg_only_rx;
 static bool	cfg_only_tx;
 static int	cfg_src_port = 9;
+static bool	cfg_tx_pf_packet;
+static bool	cfg_use_vnet;
+static bool	cfg_vnet_use_hdr_len_bad;
+static bool	cfg_vnet_use_gso;
+static bool	cfg_vnet_use_csum_off;
+static bool	cfg_partial_udp_hdr;
 
-static char	buf[ETH_DATA_LEN];
+static char	buf[ETH_MAX_MTU];
 
 #define INIT_ADDR4(name, addr4, port)				\
 	static struct sockaddr_in name = {			\
@@ -273,8 +282,48 @@ static int l3_length(int family)
 		return sizeof(struct ipv6hdr);
 }
 
+static int build_vnet_header(void *header, int il3_len)
+{
+	struct virtio_net_hdr *vh = header;
+
+	vh->hdr_len = ETH_HLEN + il3_len + sizeof(struct udphdr);
+
+	if (cfg_partial_udp_hdr) {
+		vh->hdr_len -= (sizeof(struct udphdr) >> 1);
+		return sizeof(*vh);
+	}
+
+	/* Alteration must increase hdr_len; if not, kernel overwrites it */
+	if (cfg_vnet_use_hdr_len_bad)
+		vh->hdr_len++;
+
+	if (cfg_vnet_use_csum_off) {
+		vh->flags |= VIRTIO_NET_HDR_F_NEEDS_CSUM;
+		vh->csum_start = ETH_HLEN + il3_len;
+		vh->csum_offset = __builtin_offsetof(struct udphdr, check);
+	}
+
+	if (cfg_vnet_use_gso) {
+		vh->gso_type = VIRTIO_NET_HDR_GSO_UDP;
+		vh->gso_size = ETH_DATA_LEN - il3_len;
+	}
+
+	return sizeof(*vh);
+}
+
+static int build_eth_header(void *header)
+{
+	struct ethhdr *eth = header;
+	uint16_t proto = cfg_l3_inner == PF_INET ? ETH_P_IP : ETH_P_IPV6;
+
+	eth->h_proto = htons(proto);
+
+	return ETH_HLEN;
+}
+
 static int build_packet(void)
 {
+	int l2_len = 0;
 	int ol3_len = 0, ol4_len = 0, il3_len = 0, il4_len = 0;
 	int el3_len = 0;
 
@@ -294,23 +343,29 @@ static int build_packet(void)
 	il3_len = l3_length(cfg_l3_inner);
 	il4_len = sizeof(struct udphdr);
 
-	if (el3_len + ol3_len + ol4_len + il3_len + il4_len + cfg_payload_len >=
-	    sizeof(buf))
+	if (cfg_use_vnet)
+		l2_len += build_vnet_header(buf, il3_len);
+	if (cfg_tx_pf_packet)
+		l2_len += build_eth_header(buf + l2_len);
+
+	if (l2_len + el3_len + ol3_len + ol4_len + il3_len + il4_len +
+	    cfg_payload_len >= sizeof(buf))
 		error(1, 0, "packet too large\n");
 
 	/*
 	 * Fill packet from inside out, to calculate correct checksums.
 	 * But create ip before udp headers, as udp uses ip for pseudo-sum.
 	 */
-	memset(buf + el3_len + ol3_len + ol4_len + il3_len + il4_len,
+	memset(buf + l2_len + el3_len + ol3_len + ol4_len + il3_len + il4_len,
 	       cfg_payload_char, cfg_payload_len);
 
 	/* add zero byte for udp csum padding */
-	buf[el3_len + ol3_len + ol4_len + il3_len + il4_len + cfg_payload_len] = 0;
+	buf[l2_len + el3_len + ol3_len + ol4_len + il3_len + il4_len +
+	    cfg_payload_len] = 0;
 
 	switch (cfg_l3_inner) {
 	case PF_INET:
-		build_ipv4_header(buf + el3_len + ol3_len + ol4_len,
+		build_ipv4_header(buf + l2_len + el3_len + ol3_len + ol4_len,
 				  IPPROTO_UDP,
 				  in_saddr4.sin_addr.s_addr,
 				  in_daddr4.sin_addr.s_addr,
@@ -318,7 +373,7 @@ static int build_packet(void)
 				  cfg_dsfield_inner);
 		break;
 	case PF_INET6:
-		build_ipv6_header(buf + el3_len + ol3_len + ol4_len,
+		build_ipv6_header(buf + l2_len + el3_len + ol3_len + ol4_len,
 				  IPPROTO_UDP,
 				  &in_saddr6, &in_daddr6,
 				  il4_len + cfg_payload_len,
@@ -326,22 +381,25 @@ static int build_packet(void)
 		break;
 	}
 
-	build_udp_header(buf + el3_len + ol3_len + ol4_len + il3_len,
+	build_udp_header(buf + l2_len + el3_len + ol3_len + ol4_len + il3_len,
 			 cfg_payload_len, CFG_PORT_INNER, cfg_l3_inner);
 
+	if (cfg_partial_udp_hdr)
+		return l2_len + il3_len + (il4_len >> 1);
+
 	if (!cfg_encap_proto)
-		return il3_len + il4_len + cfg_payload_len;
+		return l2_len + il3_len + il4_len + cfg_payload_len;
 
 	switch (cfg_l3_outer) {
 	case PF_INET:
-		build_ipv4_header(buf + el3_len, cfg_encap_proto,
+		build_ipv4_header(buf + l2_len + el3_len, cfg_encap_proto,
 				  out_saddr4.sin_addr.s_addr,
 				  out_daddr4.sin_addr.s_addr,
 				  ol4_len + il3_len + il4_len + cfg_payload_len,
 				  cfg_dsfield_outer);
 		break;
 	case PF_INET6:
-		build_ipv6_header(buf + el3_len, cfg_encap_proto,
+		build_ipv6_header(buf + l2_len + el3_len, cfg_encap_proto,
 				  &out_saddr6, &out_daddr6,
 				  ol4_len + il3_len + il4_len + cfg_payload_len,
 				  cfg_dsfield_outer);
@@ -350,17 +408,17 @@ static int build_packet(void)
 
 	switch (cfg_encap_proto) {
 	case IPPROTO_UDP:
-		build_gue_header(buf + el3_len + ol3_len + ol4_len -
+		build_gue_header(buf + l2_len + el3_len + ol3_len + ol4_len -
 				 sizeof(struct guehdr),
 				 cfg_l3_inner == PF_INET ? IPPROTO_IPIP
 							 : IPPROTO_IPV6);
-		build_udp_header(buf + el3_len + ol3_len,
+		build_udp_header(buf + l2_len + el3_len + ol3_len,
 				 sizeof(struct guehdr) + il3_len + il4_len +
 				 cfg_payload_len,
 				 cfg_port_gue, cfg_l3_outer);
 		break;
 	case IPPROTO_GRE:
-		build_gre_header(buf + el3_len + ol3_len,
+		build_gre_header(buf + l2_len + el3_len + ol3_len,
 				 cfg_l3_inner == PF_INET ? ETH_P_IP
 							 : ETH_P_IPV6);
 		break;
@@ -368,7 +426,7 @@ static int build_packet(void)
 
 	switch (cfg_l3_extra) {
 	case PF_INET:
-		build_ipv4_header(buf,
+		build_ipv4_header(buf + l2_len,
 				  cfg_l3_outer == PF_INET ? IPPROTO_IPIP
 							  : IPPROTO_IPV6,
 				  extra_saddr4.sin_addr.s_addr,
@@ -377,7 +435,7 @@ static int build_packet(void)
 				  cfg_payload_len, 0);
 		break;
 	case PF_INET6:
-		build_ipv6_header(buf,
+		build_ipv6_header(buf + l2_len,
 				  cfg_l3_outer == PF_INET ? IPPROTO_IPIP
 							  : IPPROTO_IPV6,
 				  &extra_saddr6, &extra_daddr6,
@@ -386,14 +444,45 @@ static int build_packet(void)
 		break;
 	}
 
-	return el3_len + ol3_len + ol4_len + il3_len + il4_len +
+	return l2_len + el3_len + ol3_len + ol4_len + il3_len + il4_len +
 	       cfg_payload_len;
+}
+
+static int setup_tx_pfpacket(void)
+{
+	struct sockaddr_ll laddr = {0};
+	const int one = 1;
+	uint16_t proto;
+	int fd;
+
+	fd = socket(PF_PACKET, SOCK_RAW, 0);
+	if (fd == -1)
+		error(1, errno, "socket tx");
+
+	if (cfg_use_vnet &&
+	    setsockopt(fd, SOL_PACKET, PACKET_VNET_HDR, &one, sizeof(one)))
+		error(1, errno, "setsockopt vnet");
+
+	proto = cfg_l3_inner == PF_INET ? ETH_P_IP : ETH_P_IPV6;
+	laddr.sll_family = AF_PACKET;
+	laddr.sll_protocol = htons(proto);
+	laddr.sll_ifindex = if_nametoindex("lo");
+	if (!laddr.sll_ifindex)
+		error(1, errno, "if_nametoindex");
+
+	if (bind(fd, (void *)&laddr, sizeof(laddr)))
+		error(1, errno, "bind");
+
+	return fd;
 }
 
 /* sender transmits encapsulated over RAW or unencap'd over UDP */
 static int setup_tx(void)
 {
 	int family, fd, ret;
+
+	if (cfg_tx_pf_packet)
+		return setup_tx_pfpacket();
 
 	if (cfg_l3_extra)
 		family = cfg_l3_extra;
@@ -464,6 +553,13 @@ static int do_tx(int fd, const char *pkt, int len)
 	int ret;
 
 	ret = write(fd, pkt, len);
+
+	if (cfg_expect_snd_failure) {
+		if (ret == -1)
+			return 0;
+		error(1, 0, "expected tx to fail but it did not");
+	}
+
 	if (ret == -1)
 		error(1, errno, "send");
 	if (ret != len)
@@ -571,7 +667,7 @@ static int do_main(void)
 	 * success (== 0) only if received all packets
 	 * unless failure is expected, in which case none must arrive.
 	 */
-	if (cfg_expect_failure)
+	if (cfg_expect_norx || cfg_expect_snd_failure)
 		return rx != 0;
 	else
 		return rx != tx;
@@ -623,8 +719,12 @@ static void parse_opts(int argc, char **argv)
 {
 	int c;
 
-	while ((c = getopt(argc, argv, "d:D:e:f:Fhi:l:n:o:O:Rs:S:t:Tx:X:")) != -1) {
+	while ((c = getopt(argc, argv,
+			   "cd:D:e:Ef:FGghi:l:Ln:o:O:pRs:S:t:TUvx:X:")) != -1) {
 		switch (c) {
+		case 'c':
+			cfg_vnet_use_csum_off = true;
+			break;
 		case 'd':
 			if (cfg_l3_outer == AF_UNSPEC)
 				error(1, 0, "-d must be preceded by -o");
@@ -653,11 +753,17 @@ static void parse_opts(int argc, char **argv)
 			else
 				usage(argv[0]);
 			break;
+		case 'E':
+			cfg_expect_snd_failure = true;
+			break;
 		case 'f':
 			cfg_src_port = strtol(optarg, NULL, 0);
 			break;
 		case 'F':
-			cfg_expect_failure = true;
+			cfg_expect_norx = true;
+			break;
+		case 'g':
+			cfg_vnet_use_gso = true;
 			break;
 		case 'h':
 			usage(argv[0]);
@@ -673,6 +779,9 @@ static void parse_opts(int argc, char **argv)
 		case 'l':
 			cfg_payload_len = strtol(optarg, NULL, 0);
 			break;
+		case 'L':
+			cfg_vnet_use_hdr_len_bad = true;
+			break;
 		case 'n':
 			cfg_num_pkt = strtol(optarg, NULL, 0);
 			break;
@@ -681,6 +790,9 @@ static void parse_opts(int argc, char **argv)
 			break;
 		case 'O':
 			cfg_l3_extra = parse_protocol_family(argv[0], optarg);
+			break;
+		case 'p':
+			cfg_tx_pf_packet = true;
 			break;
 		case 'R':
 			cfg_only_rx = true;
@@ -702,6 +814,12 @@ static void parse_opts(int argc, char **argv)
 			break;
 		case 'T':
 			cfg_only_tx = true;
+			break;
+		case 'U':
+			cfg_partial_udp_hdr = true;
+			break;
+		case 'v':
+			cfg_use_vnet = true;
 			break;
 		case 'x':
 			cfg_dsfield_outer = strtol(optarg, NULL, 0);
@@ -733,7 +851,26 @@ static void parse_opts(int argc, char **argv)
 	 */
 	if (((cfg_dsfield_outer & 0x3) == 0x3) &&
 	    ((cfg_dsfield_inner & 0x3) == 0x0))
-		cfg_expect_failure = true;
+		cfg_expect_norx = true;
+
+	/* Don't wait around for packets that we expect to fail to send */
+	if (cfg_expect_snd_failure && !cfg_num_secs)
+		cfg_num_secs = 3;
+
+	if (cfg_partial_udp_hdr && cfg_encap_proto)
+		error(1, 0,
+		      "ops: can't specify partial UDP hdr (-U) and encap (-e)");
+
+	if (cfg_use_vnet && cfg_encap_proto)
+		error(1, 0, "options: cannot specify encap (-e) with vnet (-v)");
+	if (cfg_use_vnet && !cfg_tx_pf_packet)
+		error(1, 0, "options: vnet (-v) requires psock for tx (-p)");
+	if (cfg_vnet_use_gso && !cfg_use_vnet)
+		error(1, 0, "options: gso (-g) requires vnet (-v)");
+	if (cfg_vnet_use_csum_off && !cfg_use_vnet)
+		error(1, 0, "options: vnet csum (-c) requires vnet (-v)");
+	if (cfg_vnet_use_hdr_len_bad && !cfg_use_vnet)
+		error(1, 0, "options: bad vnet hdrlen (-L) requires vnet (-v)");
 }
 
 static void print_opts(void)

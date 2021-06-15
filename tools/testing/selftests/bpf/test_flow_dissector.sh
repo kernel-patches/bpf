@@ -51,6 +51,9 @@ if [[ -z $(ip netns identify $$) ]]; then
 		echo "Skipping root flow dissector test, bpftool not found" >&2
 	fi
 
+	orig_flow_dissect_sysctl=$(</proc/sys/net/core/flow_dissect_vnet_hdr)
+	sysctl net.core.flow_dissect_vnet_hdr=1
+
 	# Run the rest of the tests in a net namespace.
 	../net/in_netns.sh "$0" "$@"
 	err=$(( $err + $? ))
@@ -61,6 +64,7 @@ if [[ -z $(ip netns identify $$) ]]; then
 		echo "selftests: $TESTNAME [FAILED]";
 	fi
 
+	sysctl net.core.flow_dissect_vnet_hdr=$orig_flow_dissect_sysctl
 	exit $err
 fi
 
@@ -164,5 +168,20 @@ tc filter add dev lo parent ffff: protocol ipv6 pref 1337 flower ip_proto \
 ./test_flow_dissector -i 6 -f 9 -F
 # Send 10 IPv6/UDP packets from port 10. Filter should not drop any.
 ./test_flow_dissector -i 6 -f 10
+
+
+echo "Testing virtio-net header validation..."
+echo "Testing valid vnet headers. Should *not* be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v
+echo "Testing partial transport header. Should be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v -U -E
+echo "Testing valid vnet gso spec. Should *not* be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v -g -c -l 8000
+echo "Testing invalid vnet gso size. Should be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v -g -c -l 100 -E
+echo "Testing invalid vnet header len. Should be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v -L -E
+echo "Testing vnet gso without csum. Should be dropped."
+./with_addr.sh ./test_flow_dissector -i 4 -D 192.168.0.1 -S 1.1.1.1 -p -v -g -l 8000 -E
 
 exit 0
