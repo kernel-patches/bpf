@@ -7531,7 +7531,6 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	u64 umin_val, umax_val;
 	s32 s32_min_val, s32_max_val;
 	u32 u32_min_val, u32_max_val;
-	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	int ret;
 
@@ -7627,39 +7626,18 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		scalar_min_max_xor(dst_reg, &src_reg);
 		break;
 	case BPF_LSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_lsh(dst_reg, &src_reg);
 		else
 			scalar_min_max_lsh(dst_reg, &src_reg);
 		break;
 	case BPF_RSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_rsh(dst_reg, &src_reg);
 		else
 			scalar_min_max_rsh(dst_reg, &src_reg);
 		break;
 	case BPF_ARSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_arsh(dst_reg, &src_reg);
 		else
@@ -12395,6 +12373,37 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				      ARRAY_SIZE(chk_and_mod) - (is64 ? 2 : 0);
 
 			new_prog = bpf_patch_insn_data(env, i + delta, patchlet, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			continue;
+		}
+
+		/* Make shift-out-of-bounds exceptions impossible. */
+		if (insn->code == (BPF_ALU64 | BPF_LSH | BPF_X) ||
+		    insn->code == (BPF_ALU64 | BPF_RSH | BPF_X) ||
+		    insn->code == (BPF_ALU64 | BPF_ARSH | BPF_X) ||
+		    insn->code == (BPF_ALU | BPF_LSH | BPF_X) ||
+		    insn->code == (BPF_ALU | BPF_RSH | BPF_X) ||
+		    insn->code == (BPF_ALU | BPF_ARSH | BPF_X)) {
+			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+			u8 insn_bitness = is64 ? 64 : 32;
+			struct bpf_insn chk_and_shift[] = {
+				/* [R,W]x shift >= 32||64 -> 0 */
+				BPF_RAW_INSN((is64 ? BPF_JMP : BPF_JMP32) |
+					     BPF_JLT | BPF_K, insn->src_reg,
+					     insn_bitness, 2, 0),
+				BPF_ALU32_REG(BPF_XOR, insn->dst_reg, insn->dst_reg),
+				BPF_JMP_IMM(BPF_JA, 0, 0, 1),
+				*insn,
+			};
+
+			cnt = ARRAY_SIZE(chk_and_shift);
+
+			new_prog = bpf_patch_insn_data(env, i + delta, chk_and_shift, cnt);
 			if (!new_prog)
 				return -ENOMEM;
 
