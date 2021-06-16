@@ -12126,8 +12126,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			}
 
 			func[i]->insnsi[insn_idx - subprog_start].imm = ret + 1;
+		}
 
-			map_ptr = func[i]->aux->poke_tab[ret].tail_call.map;
+		for (j = 0; j < func[i]->aux->size_poke_tab; j++) {
+			int ret;
+
+			map_ptr = func[i]->aux->poke_tab[j].tail_call.map;
 			ret = map_ptr->ops->map_poke_track(map_ptr, func[i]->aux);
 			if (ret < 0) {
 				verbose(env, "tracking tail call prog failed\n");
