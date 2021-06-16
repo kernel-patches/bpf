@@ -2167,7 +2167,7 @@ void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 	}
 }
 
-static void bpf_free_used_maps(struct bpf_prog_aux *aux)
+void bpf_free_used_maps(struct bpf_prog_aux *aux)
 {
 	__bpf_free_used_maps(aux, aux->used_maps, aux->used_map_cnt);
 	kfree(aux->used_maps);
@@ -2211,8 +2211,10 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 #endif
 	if (aux->dst_trampoline)
 		bpf_trampoline_put(aux->dst_trampoline);
-	for (i = 0; i < aux->func_cnt; i++)
+	for (i = 0; i < aux->func_cnt; i++) {
+		bpf_free_used_maps(aux->func[i]->aux);
 		bpf_jit_free(aux->func[i]);
+	}
 	if (aux->func_cnt) {
 		kfree(aux->func);
 		bpf_prog_unlock_free(aux->prog);

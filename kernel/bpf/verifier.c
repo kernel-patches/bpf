@@ -12128,14 +12128,32 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			func[i]->insnsi[insn_idx - subprog_start].imm = ret + 1;
 		}
 
-		for (j = 0; j < func[i]->aux->size_poke_tab; j++) {
-			int ret;
+		/* overapproximate the number of map slots. Untrack will just skip
+		 * the lookup anyways and we avoid an extra layer of accounting.
+		 */
+		if (func[i]->aux->size_poke_tab) {
+			struct bpf_map **used_maps;
 
-			map_ptr = func[i]->aux->poke_tab[j].tail_call.map;
-			ret = map_ptr->ops->map_poke_track(map_ptr, func[i]->aux);
-			if (ret < 0) {
-				verbose(env, "tracking tail call prog failed\n");
+			used_maps = kmalloc_array(func[i]->aux->size_poke_tab,
+						  sizeof(struct bpf_map *),
+						  GFP_KERNEL);
+			if (!used_maps)
 				goto out_free;
+
+			func[i]->aux->used_maps = used_maps;
+
+			for (j = 0; j < func[i]->aux->size_poke_tab; j++) {
+				int ret;
+
+				map_ptr = func[i]->aux->poke_tab[j].tail_call.map;
+				ret = map_ptr->ops->map_poke_track(map_ptr, func[i]->aux);
+				if (ret < 0) {
+					verbose(env, "tracking tail call prog failed\n");
+					goto out_free;
+				}
+				bpf_map_inc(map_ptr);
+				func[i]->aux->used_map_cnt++;
+				func[i]->aux->used_maps[j] = map_ptr;
 			}
 		}
 
@@ -12259,11 +12277,7 @@ out_free:
 	for (i = 0; i < env->subprog_cnt; i++) {
 		if (!func[i])
 			continue;
-
-		for (j = 0; j < func[i]->aux->size_poke_tab; j++) {
-			map_ptr = func[i]->aux->poke_tab[j].tail_call.map;
-			map_ptr->ops->map_poke_untrack(map_ptr, func[i]->aux);
-		}
+		bpf_free_used_maps(func[i]->aux);
 		bpf_jit_free(func[i]);
 	}
 	kfree(func);
