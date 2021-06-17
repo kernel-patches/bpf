@@ -95,6 +95,36 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data_meta = meta_valid ? data : data + 1;
 }
 
+static __always_inline struct sk_buff *
+xdp_construct_skb(struct xdp_buff *xdp, struct napi_struct *napi)
+{
+	unsigned int metasize;
+	unsigned int datasize;
+	unsigned int headroom;
+	struct sk_buff *skb;
+	unsigned int len;
+
+	/* this include metasize */
+	datasize = xdp->data_end  - xdp->data_meta;
+	metasize = xdp->data      - xdp->data_meta;
+	headroom = xdp->data_meta - xdp->data_hard_start;
+	len      = xdp->data_end  - xdp->data_hard_start;
+
+	/* allocate a skb to store the frags */
+	skb = __napi_alloc_skb(napi, len, GFP_ATOMIC | __GFP_NOWARN);
+	if (unlikely(!skb))
+		return NULL;
+
+	skb_reserve(skb, headroom);
+	memcpy(__skb_put(skb, datasize), xdp->data_meta, datasize);
+	if (metasize) {
+		__skb_pull(skb, metasize);
+		skb_metadata_set(skb, metasize);
+	}
+
+	return skb;
+}
+
 /* Reserve memory area at end-of data area.
  *
  * This macro reserves tailroom in the XDP buffer by limiting the
