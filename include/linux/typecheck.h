@@ -22,4 +22,14 @@
 	(void)__tmp; \
 })
 
+/*
+ * Check at compile that something is a pointer type.
+ * Always evaluates to 1 so you may use it easily in comparisons.
+ */
+#define typecheck_pointer(x) \
+({	typeof(x) __dummy; \
+	(void)sizeof(*__dummy); \
+	1; \
+})
+
 #endif		/* TYPECHECK_H_INCLUDED */
