@@ -509,6 +509,8 @@ struct bpf_object {
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
 
+	char *custom_btf_path;
+
 	char path[];
 };
 #define obj_elf_valid(o)	((o)->efile.elf)
@@ -2679,8 +2681,15 @@ static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
 	if (!force && !obj_needs_vmlinux_btf(obj))
 		return 0;
 
-	obj->btf_vmlinux = libbpf_find_kernel_btf();
-	err = libbpf_get_error(obj->btf_vmlinux);
+	if (obj->custom_btf_path) {
+		obj->btf_vmlinux = btf__parse(obj->custom_btf_path, NULL);
+		err = libbpf_get_error(obj->btf_vmlinux);
+		pr_debug("loading custom vmlinux BTF '%s': %d\n", obj->custom_btf_path, err);
+	} else {
+		obj->btf_vmlinux = libbpf_find_kernel_btf();
+		err = libbpf_get_error(obj->btf_vmlinux);
+	}
+
 	if (err) {
 		pr_warn("Error loading vmlinux BTF: %d\n", err);
 		obj->btf_vmlinux = NULL;
@@ -7554,7 +7563,7 @@ static struct bpf_object *
 __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 		   const struct bpf_object_open_opts *opts)
 {
-	const char *obj_name, *kconfig;
+	const char *obj_name, *kconfig, *tmp_btf_path;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	char tmp_name[64];
@@ -7584,6 +7593,13 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 	obj = bpf_object__new(path, obj_buf, obj_buf_sz, obj_name);
 	if (IS_ERR(obj))
 		return obj;
+
+	tmp_btf_path = OPTS_GET(opts, custom_btf_path, NULL);
+	if (tmp_btf_path && strlen(tmp_btf_path) < PATH_MAX) {
+		obj->custom_btf_path = strdup(tmp_btf_path);
+		if (!obj->custom_btf_path)
+			return ERR_PTR(-ENOMEM);
+	}
 
 	kconfig = OPTS_GET(opts, kconfig, NULL);
 	if (kconfig) {
@@ -8702,6 +8718,7 @@ void bpf_object__close(struct bpf_object *obj)
 	for (i = 0; i < obj->nr_maps; i++)
 		bpf_map__destroy(&obj->maps[i]);
 
+	zfree(&obj->custom_btf_path);
 	zfree(&obj->kconfig);
 	zfree(&obj->externs);
 	obj->nr_extern = 0;

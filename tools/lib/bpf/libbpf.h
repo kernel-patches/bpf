@@ -94,8 +94,12 @@ struct bpf_object_open_opts {
 	 * system Kconfig for CONFIG_xxx externs.
 	 */
 	const char *kconfig;
+	/* Specify the path of vmlinux btf to facilitate the use of CO-RE features
+	 * in the old kernel.
+	 */
+	char *custom_btf_path;
 };
-#define bpf_object_open_opts__last_field kconfig
+#define bpf_object_open_opts__last_field custom_btf_path
 
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 LIBBPF_API struct bpf_object *
