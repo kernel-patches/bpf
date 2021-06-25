@@ -5,6 +5,10 @@
 #define AF_INET			2
 #define AF_INET6		10
 
+#define SOL_TCP			6
+#define TCP_CONGESTION		13
+#define TCP_CA_NAME_MAX		16
+
 #define ICSK_TIME_RETRANS	1
 #define ICSK_TIME_PROBE0	3
 #define ICSK_TIME_LOSS_PROBE	5
