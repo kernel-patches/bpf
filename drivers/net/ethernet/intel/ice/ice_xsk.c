@@ -430,21 +430,11 @@ static void ice_bump_ntc(struct ice_ring *rx_ring)
 static struct sk_buff *
 ice_construct_skb_zc(struct ice_ring *rx_ring, struct ice_rx_buf *rx_buf)
 {
-	unsigned int metasize = rx_buf->xdp->data - rx_buf->xdp->data_meta;
-	unsigned int datasize = rx_buf->xdp->data_end - rx_buf->xdp->data;
-	unsigned int datasize_hard = rx_buf->xdp->data_end -
-				     rx_buf->xdp->data_hard_start;
 	struct sk_buff *skb;
 
-	skb = __napi_alloc_skb(&rx_ring->q_vector->napi, datasize_hard,
-			       GFP_ATOMIC | __GFP_NOWARN);
+	skb = xdp_construct_skb(rx_buf->xdp, &rx_ring->q_vector->napi);
 	if (unlikely(!skb))
 		return NULL;
-
-	skb_reserve(skb, rx_buf->xdp->data - rx_buf->xdp->data_hard_start);
-	memcpy(__skb_put(skb, datasize), rx_buf->xdp->data, datasize);
-	if (metasize)
-		skb_metadata_set(skb, metasize);
 
 	xsk_buff_free(rx_buf->xdp);
 	rx_buf->xdp = NULL;
