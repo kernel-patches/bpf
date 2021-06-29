@@ -74,6 +74,7 @@ TEST_PROGS := test_kmod.sh \
 	test_bpftool_build.sh \
 	test_bpftool.sh \
 	test_bpftool_metadata.sh \
+	test_bpf_fib_lookup.sh \
 	test_doc_build.sh \
 	test_xsk.sh
 
