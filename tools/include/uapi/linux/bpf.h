@@ -5993,8 +5993,20 @@ struct bpf_fib_lookup {
 	/* output */
 	__be16	h_vlan_proto;
 	__be16	h_vlan_TCI;
-	__u8	smac[6];     /* ETH_ALEN */
-	__u8	dmac[6];     /* ETH_ALEN */
+
+	union {
+		/* input */
+		struct {
+			__u32	mark;   /* fwmark for policy routing */
+			/* 2 4-byte holes for input */
+		};
+
+		/* output: source and dest mac */
+		struct {
+			__u8	smac[6];	/* ETH_ALEN */
+			__u8	dmac[6];	/* ETH_ALEN */
+		};
+	};
 };
 
 struct bpf_redir_neigh {
