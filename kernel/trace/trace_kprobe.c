@@ -1570,6 +1570,18 @@ static int kretprobe_event_define_fields(struct trace_event_call *event_call)
 }
 
 #ifdef CONFIG_PERF_EVENTS
+/* Used by bpf get_func_ip helper */
+DEFINE_PER_CPU(u64, current_kprobe_addr) = 0;
+
+u64 trace_current_kprobe_addr(void)
+{
+	return *this_cpu_ptr(&current_kprobe_addr);
+}
+
+static void trace_current_kprobe_set(struct trace_kprobe *tk)
+{
+	__this_cpu_write(current_kprobe_addr, (u64) tk->rp.kp.addr);
+}
 
 /* Kprobe profile handler */
 static int
@@ -1585,6 +1597,7 @@ kprobe_perf_func(struct trace_kprobe *tk, struct pt_regs *regs)
 		unsigned long orig_ip = instruction_pointer(regs);
 		int ret;
 
+		trace_current_kprobe_set(tk);
 		ret = trace_call_bpf(call, regs);
 
 		/*
@@ -1631,8 +1644,11 @@ kretprobe_perf_func(struct trace_kprobe *tk, struct kretprobe_instance *ri,
 	int size, __size, dsize;
 	int rctx;
 
-	if (bpf_prog_array_valid(call) && !trace_call_bpf(call, regs))
-		return;
+	if (bpf_prog_array_valid(call)) {
+		trace_current_kprobe_set(tk);
+		if (!trace_call_bpf(call, regs))
+			return;
+	}
 
 	head = this_cpu_ptr(call->perf_events);
 	if (hlist_empty(head))

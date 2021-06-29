@@ -199,6 +199,7 @@ DECLARE_BASIC_PRINT_TYPE_FUNC(symbol);
 #ifdef CONFIG_KPROBE_EVENTS
 bool trace_kprobe_on_func_entry(struct trace_event_call *call);
 bool trace_kprobe_error_injectable(struct trace_event_call *call);
+u64 trace_current_kprobe_addr(void);
 #else
 static inline bool trace_kprobe_on_func_entry(struct trace_event_call *call)
 {
@@ -208,6 +209,10 @@ static inline bool trace_kprobe_on_func_entry(struct trace_event_call *call)
 static inline bool trace_kprobe_error_injectable(struct trace_event_call *call)
 {
 	return false;
+}
+static inline u64 trace_current_kprobe_addr(void)
+{
+	return 0;
 }
 #endif /* CONFIG_KPROBE_EVENTS */
 
