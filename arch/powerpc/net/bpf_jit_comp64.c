@@ -753,6 +753,14 @@ emit_clear:
 		/* dst = *(u8 *)(ul) (src + off) */
 		case BPF_LDX | BPF_MEM | BPF_B:
 		case BPF_LDX | BPF_PROBE_MEM | BPF_B:
+			if (BPF_MODE(code) == BPF_PROBE_MEM) {
+				EMIT(PPC_RAW_ADDI(b2p[TMP_REG_1], src_reg, off));
+				PPC_LI64(b2p[TMP_REG_2], TASK_SIZE_MAX);
+				EMIT(PPC_RAW_CMPLD(b2p[TMP_REG_1], b2p[TMP_REG_2]));
+				PPC_BCC(COND_GT, (ctx->idx + 4) * 4);
+				EMIT(PPC_RAW_XOR(dst_reg, dst_reg, dst_reg));
+				PPC_JMP((ctx->idx + 2) * 4);
+			}
 			EMIT(PPC_RAW_LBZ(dst_reg, src_reg, off));
 			if (insn_is_zext(&insn[i + 1]))
 				addrs[++i] = ctx->idx * 4;
@@ -763,6 +771,14 @@ emit_clear:
 		/* dst = *(u16 *)(ul) (src + off) */
 		case BPF_LDX | BPF_MEM | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEM | BPF_H:
+			if (BPF_MODE(code) == BPF_PROBE_MEM) {
+				EMIT(PPC_RAW_ADDI(b2p[TMP_REG_1], src_reg, off));
+				PPC_LI64(b2p[TMP_REG_2], TASK_SIZE_MAX);
+				EMIT(PPC_RAW_CMPLD(b2p[TMP_REG_1], b2p[TMP_REG_2]));
+				PPC_BCC(COND_GT, (ctx->idx + 4) * 4);
+				EMIT(PPC_RAW_XOR(dst_reg, dst_reg, dst_reg));
+				PPC_JMP((ctx->idx + 2) * 4);
+			}
 			EMIT(PPC_RAW_LHZ(dst_reg, src_reg, off));
 			if (insn_is_zext(&insn[i + 1]))
 				addrs[++i] = ctx->idx * 4;
@@ -773,6 +789,14 @@ emit_clear:
 		/* dst = *(u32 *)(ul) (src + off) */
 		case BPF_LDX | BPF_MEM | BPF_W:
 		case BPF_LDX | BPF_PROBE_MEM | BPF_W:
+			if (BPF_MODE(code) == BPF_PROBE_MEM) {
+				EMIT(PPC_RAW_ADDI(b2p[TMP_REG_1], src_reg, off));
+				PPC_LI64(b2p[TMP_REG_2], TASK_SIZE_MAX);
+				EMIT(PPC_RAW_CMPLD(b2p[TMP_REG_1], b2p[TMP_REG_2]));
+				PPC_BCC(COND_GT, (ctx->idx + 4) * 4);
+				EMIT(PPC_RAW_XOR(dst_reg, dst_reg, dst_reg));
+				PPC_JMP((ctx->idx + 2) * 4);
+			}
 			EMIT(PPC_RAW_LWZ(dst_reg, src_reg, off));
 			if (insn_is_zext(&insn[i + 1]))
 				addrs[++i] = ctx->idx * 4;
@@ -783,6 +807,20 @@ emit_clear:
 		/* dst = *(u64 *)(ul) (src + off) */
 		case BPF_LDX | BPF_MEM | BPF_DW:
 		case BPF_LDX | BPF_PROBE_MEM | BPF_DW:
+			if (BPF_MODE(code) == BPF_PROBE_MEM) {
+				EMIT(PPC_RAW_ADDI(b2p[TMP_REG_1], src_reg, off));
+				PPC_LI64(b2p[TMP_REG_2], TASK_SIZE_MAX);
+				EMIT(PPC_RAW_CMPLD(b2p[TMP_REG_1], b2p[TMP_REG_2]));
+				if (off % 4)
+					PPC_BCC(COND_GT, (ctx->idx + 5) * 4);
+				else
+					PPC_BCC(COND_GT, (ctx->idx + 4) * 4);
+				EMIT(PPC_RAW_XOR(dst_reg, dst_reg, dst_reg));
+				if (off % 4)
+					PPC_JMP((ctx->idx + 3) * 4);
+				else
+					PPC_JMP((ctx->idx + 2) * 4);
+			}
 			PPC_BPF_LL(dst_reg, src_reg, off);
 			ret = add_extable_entry(fp, image, pass, code, ctx, dst_reg);
 			if (ret)
