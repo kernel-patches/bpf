@@ -185,10 +185,19 @@ static void sock_map_unref(struct sock *sk, void *link_raw)
 
 static int sock_map_init_proto(struct sock *sk, struct sk_psock *psock)
 {
+	int err;
+#ifdef CONFIG_PROC_FS
+	int idx = sk->sk_prot->inuse_idx;
+#endif
 	if (!sk->sk_prot->psock_update_sk_prot)
 		return -EINVAL;
 	psock->psock_update_sk_prot = sk->sk_prot->psock_update_sk_prot;
-	return sk->sk_prot->psock_update_sk_prot(sk, psock, false);
+	err = sk->sk_prot->psock_update_sk_prot(sk, psock, false);
+#ifdef CONFIG_PROC_FS
+	if (!err)
+		sk->sk_prot->inuse_idx = idx;
+#endif
+	return err;
 }
 
 static struct sk_psock *sock_map_psock_get_checked(struct sock *sk)
