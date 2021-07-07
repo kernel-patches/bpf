@@ -1269,7 +1269,7 @@ static struct bpf_prog *bpf_migrate_filter(struct bpf_prog *fp)
 
 	/* Expand fp for appending the new filter representation. */
 	old_fp = fp;
-	fp = bpf_prog_realloc(old_fp, bpf_prog_size(new_len), 0);
+	fp = bpf_prog_realloc(old_fp, bpf_prog_size(new_len), 0, true);
 	if (!fp) {
 		/* The old_fp is still around in case we couldn't
 		 * allocate new memory, so uncharge on that one.

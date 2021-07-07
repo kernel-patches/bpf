@@ -11855,7 +11855,10 @@ apply_patch_buffer:
 		new_prog = bpf_patch_insn_data(env, adj_idx, patch, patch_len);
 		if (!new_prog)
 			return -ENOMEM;
-		env->prog = new_prog;
+		if (new_prog != env->prog) {
+			bpf_prog_clone_free(env->prog);
+			env->prog = new_prog;
+		}
 		insns = new_prog->insnsi;
 		aux = env->insn_aux_data;
 		delta += patch_len - 1;
@@ -11895,7 +11898,10 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			if (!new_prog)
 				return -ENOMEM;
 
-			env->prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = new_prog;
+			}
 			delta += cnt - 1;
 		}
 	}
@@ -11944,7 +11950,10 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
@@ -12042,9 +12051,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			return -ENOMEM;
 
 		delta += cnt - 1;
-
-		/* keep walking new program and skip insns we just inserted */
-		env->prog = new_prog;
+		if (new_prog != env->prog) {
+			bpf_prog_clone_free(env->prog);
+			/* keep walking new program and skip insns we just inserted */
+			env->prog = new_prog;
+		}
 		insn      = new_prog->insnsi + i + delta;
 	}
 
@@ -12419,7 +12430,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
@@ -12439,7 +12453,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
@@ -12492,7 +12509,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
@@ -12584,7 +12604,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
@@ -12623,7 +12646,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 					return -ENOMEM;
 
 				delta    += cnt - 1;
-				env->prog = prog = new_prog;
+				if (new_prog != env->prog) {
+					bpf_prog_clone_free(env->prog);
+					env->prog = prog = new_prog;
+				}
 				insn      = new_prog->insnsi + i + delta;
 				continue;
 			}
@@ -12700,7 +12726,10 @@ patch_map_ops_generic:
 				return -ENOMEM;
 
 			delta    += cnt - 1;
-			env->prog = prog = new_prog;
+			if (new_prog != env->prog) {
+				bpf_prog_clone_free(env->prog);
+				env->prog = prog = new_prog;
+			}
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}

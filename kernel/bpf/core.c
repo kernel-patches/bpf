@@ -218,7 +218,7 @@ void bpf_prog_fill_jited_linfo(struct bpf_prog *prog,
 }
 
 struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
-				  gfp_t gfp_extra_flags)
+				  gfp_t gfp_extra_flags, bool free_old)
 {
 	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | gfp_extra_flags;
 	struct bpf_prog *fp;
@@ -238,7 +238,8 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		/* We keep fp->aux from fp_old around in the new
 		 * reallocated structure.
 		 */
-		bpf_prog_clone_free(fp_old);
+		if (free_old)
+			bpf_prog_clone_free(fp_old);
 	}
 
 	return fp;
@@ -456,7 +457,7 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	 * last page could have large enough tailroom.
 	 */
 	prog_adj = bpf_prog_realloc(prog, bpf_prog_size(insn_adj_cnt),
-				    GFP_USER);
+				    GFP_USER, false);
 	if (!prog_adj)
 		return ERR_PTR(-ENOMEM);
 
@@ -1150,6 +1151,8 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 			return tmp;
 		}
 
+		if (tmp != clone)
+			bpf_prog_clone_free(clone);
 		clone = tmp;
 		insn_delta = rewritten - 1;
 

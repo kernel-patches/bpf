@@ -881,7 +881,7 @@ void bpf_prog_jit_attempt_done(struct bpf_prog *prog);
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags);
 struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flags);
 struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
-				  gfp_t gfp_extra_flags);
+				  gfp_t gfp_extra_flags, bool free_old);
 void __bpf_prog_free(struct bpf_prog *fp);
 
 static inline void bpf_prog_clone_free(struct bpf_prog *fp)
