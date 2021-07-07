@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 include ../../scripts/Makefile.include
 
+prefix ?= /usr/local
+
 OUTPUT ?= $(abspath .output)/
 
 BPFTOOL_OUTPUT := $(OUTPUT)bpftool/
@@ -31,9 +33,11 @@ MAKEFLAGS += --no-print-directory
 submake_extras := feature_display=0
 endif
 
+INSTALL ?= install
+
 .DELETE_ON_ERROR:
 
-.PHONY: all clean runqslower
+.PHONY: all clean runqslower install
 all: runqslower
 
 runqslower: $(OUTPUT)/runqslower
@@ -45,6 +49,11 @@ clean:
 	$(Q)$(RM) $(OUTPUT)*.skel.h $(OUTPUT)vmlinux.h
 	$(Q)$(RM) $(OUTPUT)runqslower
 	$(Q)$(RM) -r .output
+
+install: $(OUTPUT)/runqslower
+	$(call QUIET_INSTALL, runqslower)
+	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(prefix)/sbin
+	$(Q)$(INSTALL) $(OUTPUT)runqslower $(DESTDIR)$(prefix)/sbin/runqslower
 
 $(OUTPUT)/runqslower: $(OUTPUT)/runqslower.o $(BPFOBJ)
 	$(QUIET_LINK)$(CC) $(CFLAGS) $^ -lelf -lz -o $@
