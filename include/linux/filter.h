@@ -884,6 +884,21 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 				  gfp_t gfp_extra_flags);
 void __bpf_prog_free(struct bpf_prog *fp);
 
+static inline void bpf_prog_clone_free(struct bpf_prog *fp)
+{
+	/* aux was stolen by the other clone, so we cannot free
+	 * it from this path! It will be freed eventually by the
+	 * other program on release.
+	 *
+	 * At this point, we don't need a deferred release since
+	 * clone is guaranteed to not be locked.
+	 */
+	fp->aux = NULL;
+	fp->stats = NULL;
+	fp->active = NULL;
+	__bpf_prog_free(fp);
+}
+
 static inline void bpf_prog_unlock_free(struct bpf_prog *fp)
 {
 	__bpf_prog_free(fp);

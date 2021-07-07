@@ -238,10 +238,7 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		/* We keep fp->aux from fp_old around in the new
 		 * reallocated structure.
 		 */
-		fp_old->aux = NULL;
-		fp_old->stats = NULL;
-		fp_old->active = NULL;
-		__bpf_prog_free(fp_old);
+		bpf_prog_clone_free(fp_old);
 	}
 
 	return fp;
@@ -1100,21 +1097,6 @@ static struct bpf_prog *bpf_prog_clone_create(struct bpf_prog *fp_other,
 	}
 
 	return fp;
-}
-
-static void bpf_prog_clone_free(struct bpf_prog *fp)
-{
-	/* aux was stolen by the other clone, so we cannot free
-	 * it from this path! It will be freed eventually by the
-	 * other program on release.
-	 *
-	 * At this point, we don't need a deferred release since
-	 * clone is guaranteed to not be locked.
-	 */
-	fp->aux = NULL;
-	fp->stats = NULL;
-	fp->active = NULL;
-	__bpf_prog_free(fp);
 }
 
 void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
