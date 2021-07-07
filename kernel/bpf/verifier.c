@@ -11501,8 +11501,11 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 				env->insn_aux_data[off].orig_idx);
 		return NULL;
 	}
-	if (adjust_insn_aux_data(env, new_prog, off, len))
+	if (adjust_insn_aux_data(env, new_prog, off, len)) {
+		if (new_prog != env->prog)
+			bpf_prog_clone_free(new_prog);
 		return NULL;
+	}
 	adjust_subprog_starts(env, off, len);
 	adjust_poke_descs(new_prog, off, len);
 	return new_prog;
