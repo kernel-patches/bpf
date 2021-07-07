@@ -10309,11 +10309,25 @@ struct bpf_link *bpf_program__attach_kprobe(struct bpf_program *prog,
 					    const char *func_name)
 {
 	char errmsg[STRERR_BUFSIZE];
+	char func[BPF_OBJ_NAME_LEN];
+	unsigned long offset = 0;
 	struct bpf_link *link;
-	int pfd, err;
+	int pfd, err, n;
 
-	pfd = perf_event_open_probe(false /* uprobe */, retprobe, func_name,
-				    0 /* offset */, -1 /* pid */);
+	n = sscanf(func_name, "%[a-zA-Z0-9_.]+%lx", func, &offset);
+	if (n < 1) {
+		err = -EINVAL;
+		pr_warn("kprobe name is invalid: %s\n", func_name);
+		return libbpf_err_ptr(err);
+	}
+	if (retprobe && offset != 0) {
+		err = -EINVAL;
+		pr_warn("kretprobes do not support offset specification\n");
+		return libbpf_err_ptr(err);
+	}
+
+	pfd = perf_event_open_probe(false /* uprobe */, retprobe, func,
+				    offset, -1 /* pid */);
 	if (pfd < 0) {
 		pr_warn("prog '%s': failed to create %s '%s' perf event: %s\n",
 			prog->name, retprobe ? "kretprobe" : "kprobe", func_name,
