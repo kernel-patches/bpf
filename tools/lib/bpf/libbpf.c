@@ -494,6 +494,10 @@ struct bpf_object {
 	struct btf *btf;
 	struct btf_ext *btf_ext;
 
+	/* custom BTF is in addition to vmlinux BTF (i.e., Use the CO-RE
+	 * feature in the old kernel).
+	 */
+	char *btf_custom_path;
 	/* Parse and load BTF vmlinux if any of the programs in the object need
 	 * it at load time.
 	 */
@@ -2679,8 +2683,15 @@ static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
 	if (!force && !obj_needs_vmlinux_btf(obj))
 		return 0;
 
-	obj->btf_vmlinux = libbpf_find_kernel_btf();
-	err = libbpf_get_error(obj->btf_vmlinux);
+	if (obj->btf_custom_path) {
+		obj->btf_vmlinux = btf__parse(obj->btf_custom_path, NULL);
+		err = libbpf_get_error(obj->btf_vmlinux);
+		pr_debug("loading custom vmlinux BTF '%s': %d\n", obj->btf_custom_path, err);
+	} else {
+		obj->btf_vmlinux = libbpf_find_kernel_btf();
+		err = libbpf_get_error(obj->btf_vmlinux);
+	}
+
 	if (err) {
 		pr_warn("Error loading vmlinux BTF: %d\n", err);
 		obj->btf_vmlinux = NULL;
@@ -7554,7 +7565,7 @@ static struct bpf_object *
 __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 		   const struct bpf_object_open_opts *opts)
 {
-	const char *obj_name, *kconfig;
+	const char *obj_name, *kconfig, *btf_tmp_path;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	char tmp_name[64];
@@ -7584,6 +7595,15 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 	obj = bpf_object__new(path, obj_buf, obj_buf_sz, obj_name);
 	if (IS_ERR(obj))
 		return obj;
+
+	btf_tmp_path = OPTS_GET(opts, btf_custom_path, NULL);
+	if (btf_tmp_path) {
+		if (strlen(btf_tmp_path) >= PATH_MAX)
+			return ERR_PTR(-ENAMETOOLONG);
+		obj->btf_custom_path = strdup(btf_tmp_path);
+		if (!obj->btf_custom_path)
+			return ERR_PTR(-ENOMEM);
+	}
 
 	kconfig = OPTS_GET(opts, kconfig, NULL);
 	if (kconfig) {
@@ -8702,6 +8722,7 @@ void bpf_object__close(struct bpf_object *obj)
 	for (i = 0; i < obj->nr_maps; i++)
 		bpf_map__destroy(&obj->maps[i]);
 
+	zfree(&obj->btf_custom_path);
 	zfree(&obj->kconfig);
 	zfree(&obj->externs);
 	obj->nr_extern = 0;
