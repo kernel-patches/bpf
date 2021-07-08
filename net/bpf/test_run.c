@@ -701,6 +701,12 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	void *data;
 	int ret;
 
+	if (prog->expected_attach_type == BPF_XDP_DEVMAP)
+		return -EINVAL;
+
+	if (prog->expected_attach_type == BPF_XDP_CPUMAP)
+		return -EINVAL;
+
 	if (kattr->test.ctx_in || kattr->test.ctx_out)
 		return -EINVAL;
 
