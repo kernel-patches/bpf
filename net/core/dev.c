@@ -9547,6 +9547,10 @@ static int dev_xdp_attach_link(struct net_device *dev,
 			       struct netlink_ext_ack *extack,
 			       struct bpf_xdp_link *link)
 {
+	/* ensure the dev state is ok */
+	if (dev->reg_state != NETREG_REGISTERED)
+		return -EINVAL;
+
 	return dev_xdp_attach(dev, extack, link, NULL, NULL, link->flags);
 }
 
