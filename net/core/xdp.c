@@ -527,6 +527,33 @@ int xdp_alloc_skb_bulk(void **skbs, int n_skb, gfp_t gfp)
 }
 EXPORT_SYMBOL_GPL(xdp_alloc_skb_bulk);
 
+void xdp_update_skb_shared_info(struct sk_buff *skb, int nr_frags,
+				int size, int truesize,
+				struct skb_shared_info *sinfo)
+{
+	int i;
+
+	skb_shinfo(skb)->nr_frags = nr_frags;
+
+	skb->len += size;
+	skb->data_len += size;
+	skb->truesize += truesize;
+
+	if (skb->pfmemalloc)
+		return;
+
+	for (i = 0; i < nr_frags; i++) {
+		struct page *page = skb_frag_page(&sinfo->frags[i]);
+
+		page = compound_head(page);
+		if (page_is_pfmemalloc(page)) {
+			skb->pfmemalloc = true;
+			break;
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(xdp_update_skb_shared_info);
+
 struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct sk_buff *skb,
 					   struct net_device *dev)
