@@ -522,6 +522,7 @@ struct skb_shared_info {
 	unsigned short	gso_segs;
 	struct sk_buff	*frag_list;
 	struct skb_shared_hwtstamps hwtstamps;
+	/* used for xdp_{buff,frame} paged size */
 	unsigned int	gso_type;
 	u32		tskey;
 
@@ -529,6 +530,7 @@ struct skb_shared_info {
 	 * Warning : all fields before dataref are cleared in __alloc_skb()
 	 */
 	atomic_t	dataref;
+	unsigned int	xdp_frags_tsize;
 
 	/* Intermediate layers must ensure that destructor_arg
 	 * remains valid until skb destructor */
