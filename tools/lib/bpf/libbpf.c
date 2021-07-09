@@ -498,6 +498,10 @@ struct bpf_object {
 	 * it at load time.
 	 */
 	struct btf *btf_vmlinux;
+	/* custom BTF is in addition to vmlinux BTF (i.e., Use the CO-RE
+	 * feature in the old kernel).
+	 */
+	char *btf_custom_path;
 	/* vmlinux BTF override for CO-RE relocations */
 	struct btf *btf_vmlinux_override;
 	/* Lazily initialized kernel module BTFs */
@@ -2666,6 +2670,27 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 	}
 
 	return false;
+}
+
+static int bpf_object__load_override_btf(struct bpf_object *obj)
+{
+	int err;
+
+	if (obj->btf_vmlinux_override)
+		return 0;
+
+	if (!obj->btf_custom_path)
+		return 0;
+
+	obj->btf_vmlinux_override = btf__parse(obj->btf_custom_path, NULL);
+	err = libbpf_get_error(obj->btf_vmlinux_override);
+	pr_debug("loading custom BTF '%s': %d\n", obj->btf_custom_path, err);
+	if (err) {
+		pr_warn("failed to parse custom BTF\n");
+		obj->btf_vmlinux_override = NULL;
+	}
+
+	return err;
 }
 
 static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
@@ -7554,7 +7579,7 @@ static struct bpf_object *
 __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 		   const struct bpf_object_open_opts *opts)
 {
-	const char *obj_name, *kconfig;
+	const char *obj_name, *kconfig, *btf_tmp_path;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	char tmp_name[64];
@@ -7584,6 +7609,19 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 	obj = bpf_object__new(path, obj_buf, obj_buf_sz, obj_name);
 	if (IS_ERR(obj))
 		return obj;
+
+	btf_tmp_path = OPTS_GET(opts, btf_custom_path, NULL);
+	if (btf_tmp_path) {
+		if (strlen(btf_tmp_path) >= PATH_MAX) {
+			err = -ENAMETOOLONG;
+			goto out;
+		}
+		obj->btf_custom_path = strdup(btf_tmp_path);
+		if (!obj->btf_custom_path) {
+			err = -ENOMEM;
+			goto out;
+		}
+	}
 
 	kconfig = OPTS_GET(opts, kconfig, NULL);
 	if (kconfig) {
@@ -8049,6 +8087,7 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 		bpf_gen__init(obj->gen_loader, attr->log_level);
 
 	err = bpf_object__probe_loading(obj);
+	err = err ? : bpf_object__load_override_btf(obj);
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
@@ -8075,9 +8114,11 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 	}
 	free(obj->btf_modules);
 
-	/* clean up vmlinux BTF */
+	/* clean up vmlinux BTF and custom BTF*/
 	btf__free(obj->btf_vmlinux);
 	obj->btf_vmlinux = NULL;
+	btf__free(obj->btf_vmlinux_override);
+	obj->btf_vmlinux_override = NULL;
 
 	obj->loaded = true; /* doesn't matter if successfully or not */
 
@@ -8702,6 +8743,7 @@ void bpf_object__close(struct bpf_object *obj)
 	for (i = 0; i < obj->nr_maps; i++)
 		bpf_map__destroy(&obj->maps[i]);
 
+	zfree(&obj->btf_custom_path);
 	zfree(&obj->kconfig);
 	zfree(&obj->externs);
 	obj->nr_extern = 0;
