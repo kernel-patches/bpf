@@ -22,6 +22,29 @@
 #define SOL_NETLINK 270
 #endif
 
+#ifndef TC_H_CLSACT
+#define TC_H_CLSACT TC_H_INGRESS
+#endif
+
+#ifndef TC_H_MIN_INGRESS
+#define TC_H_MIN_INGRESS 0xFFF2U
+#endif
+
+#ifndef TC_H_MIN_EGRESS
+#define TC_H_MIN_EGRESS 0xFFF3U
+#endif
+
+/* TCA_BPF_ID is an enumerator value in uapi/linux/pkt_cls.h.
+ * Declare it as a macro here so old system can still work
+ * without TCA_BPF_ID defined in pkt_cls.h.
+ */
+#define TCA_BPF_ID 11
+
+#ifdef TCA_BPF_MAX
+#undef TCA_BPF_MAX
+#endif
+#define TCA_BPF_MAX 11
+
 typedef int (*libbpf_dump_nlmsg_t)(void *cookie, void *msg, struct nlattr **tb);
 
 typedef int (*__dump_nlmsg_t)(struct nlmsghdr *nlmsg, libbpf_dump_nlmsg_t,
