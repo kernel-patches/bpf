@@ -637,9 +637,9 @@ skb pointer). All constraints and restrictions from bpf_check_classic() apply
 before a conversion to the new layout is being done behind the scenes!
 
 Currently, the classic BPF format is being used for JITing on most
-32-bit architectures, whereas x86-64, aarch64, s390x, powerpc64,
-sparc64, arm32, riscv64, riscv32 perform JIT compilation from eBPF
-instruction set.
+32-bit architectures, whereas x86-64, aarch64, s390x, powerpc64, sparc64,
+mips64, riscv64, arm32, riscv32, and mips32 perform JIT compilation from
+eBPF instruction set.
 
 Some core changes of the new internal format:
 

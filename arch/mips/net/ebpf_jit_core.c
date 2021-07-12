@@ -633,7 +633,8 @@ static int build_int_body(struct jit_ctx *ctx)
 
 	for (i = 0; i < prog->len; ) {
 		insn = prog->insnsi + i;
-		if ((ctx->reg_val_types[i] & RVT_VISITED_MASK) == 0) {
+		if (is64bit() && (ctx->reg_val_types[i] &
+				  RVT_VISITED_MASK) == 0) {
 			/* dead instruction, don't emit it. */
 			i++;
 			continue;
@@ -1019,14 +1020,19 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	if (ctx.offsets == NULL)
 		goto out_err;
 
-	ctx.reg_val_types = kcalloc(prog->len + 1, sizeof(*ctx.reg_val_types), GFP_KERNEL);
-	if (ctx.reg_val_types == NULL)
-		goto out_err;
-
 	ctx.skf = prog;
 
-	if (reg_val_propagate(&ctx))
-		goto out_err;
+	/* Static analysis only used for MIPS64. */
+	if (is64bit()) {
+		ctx.reg_val_types = kcalloc(prog->len + 1,
+					    sizeof(*ctx.reg_val_types),
+					    GFP_KERNEL);
+		if (ctx.reg_val_types == NULL)
+			goto out_err;
+
+		if (reg_val_propagate(&ctx))
+			goto out_err;
+	}
 
 	/*
 	 * First pass discovers used resources and instruction offsets
