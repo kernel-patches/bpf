@@ -177,11 +177,11 @@ static u32 b_imm(unsigned int tgt, struct jit_ctx *ctx)
 		(ctx->idx * 4) - 4;
 }
 
-enum which_ebpf_reg {
-	src_reg,
-	src_reg_no_fp,
-	dst_reg,
-	dst_reg_fp_ok
+enum reg_usage {
+	REG_SRC_FP_OK,
+	REG_SRC_NO_FP,
+	REG_DST_FP_OK,
+	REG_DST_NO_FP
 };
 
 /*
@@ -192,9 +192,9 @@ enum which_ebpf_reg {
  */
 static int ebpf_to_mips_reg(struct jit_ctx *ctx,
 			    const struct bpf_insn *insn,
-			    enum which_ebpf_reg w)
+			    enum reg_usage u)
 {
-	int ebpf_reg = (w == src_reg || w == src_reg_no_fp) ?
+	int ebpf_reg = (u == REG_SRC_FP_OK || u == REG_SRC_NO_FP) ?
 		insn->src_reg : insn->dst_reg;
 
 	switch (ebpf_reg) {
@@ -223,7 +223,7 @@ static int ebpf_to_mips_reg(struct jit_ctx *ctx,
 		ctx->flags |= EBPF_SAVE_S3;
 		return MIPS_R_S3;
 	case BPF_REG_10:
-		if (w == dst_reg || w == src_reg_no_fp)
+		if (u == REG_DST_NO_FP || u == REG_SRC_NO_FP)
 			goto bad_reg;
 		ctx->flags |= EBPF_SEEN_FP;
 		/*
@@ -423,7 +423,7 @@ static int gen_imm_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 			int idx)
 {
 	int upper_bound, lower_bound;
-	int dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+	int dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 
 	if (dst < 0)
 		return dst;
@@ -696,7 +696,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 			return r;
 		break;
 	case BPF_ALU64 | BPF_MUL | BPF_K: /* ALU64_IMM */
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		if (get_reg_val_type(ctx, this_idx, insn->dst_reg) == REG_32BIT)
@@ -712,7 +712,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 		}
 		break;
 	case BPF_ALU64 | BPF_NEG | BPF_K: /* ALU64_IMM */
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		if (get_reg_val_type(ctx, this_idx, insn->dst_reg) == REG_32BIT)
@@ -720,7 +720,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 		emit_instr(ctx, dsubu, dst, MIPS_R_ZERO, dst);
 		break;
 	case BPF_ALU | BPF_MUL | BPF_K: /* ALU_IMM */
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -739,7 +739,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 		}
 		break;
 	case BPF_ALU | BPF_NEG | BPF_K: /* ALU_IMM */
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -753,7 +753,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_ALU | BPF_MOD | BPF_K: /* ALU_IMM */
 		if (insn->imm == 0)
 			return -EINVAL;
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -784,7 +784,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_ALU64 | BPF_MOD | BPF_K: /* ALU_IMM */
 		if (insn->imm == 0)
 			return -EINVAL;
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		if (get_reg_val_type(ctx, this_idx, insn->dst_reg) == REG_32BIT)
@@ -821,8 +821,8 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_ALU64 | BPF_LSH | BPF_X: /* ALU64_REG */
 	case BPF_ALU64 | BPF_RSH | BPF_X: /* ALU64_REG */
 	case BPF_ALU64 | BPF_ARSH | BPF_X: /* ALU64_REG */
-		src = ebpf_to_mips_reg(ctx, insn, src_reg);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		src = ebpf_to_mips_reg(ctx, insn, REG_SRC_FP_OK);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (src < 0 || dst < 0)
 			return -EINVAL;
 		if (get_reg_val_type(ctx, this_idx, insn->dst_reg) == REG_32BIT)
@@ -917,8 +917,8 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_ALU | BPF_LSH | BPF_X: /* ALU_REG */
 	case BPF_ALU | BPF_RSH | BPF_X: /* ALU_REG */
 	case BPF_ALU | BPF_ARSH | BPF_X: /* ALU_REG */
-		src = ebpf_to_mips_reg(ctx, insn, src_reg_no_fp);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		src = ebpf_to_mips_reg(ctx, insn, REG_SRC_NO_FP);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (src < 0 || dst < 0)
 			return -EINVAL;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -1008,7 +1008,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_JMP | BPF_JEQ | BPF_K: /* JMP_IMM */
 	case BPF_JMP | BPF_JNE | BPF_K: /* JMP_IMM */
 		cmp_eq = (bpf_op == BPF_JEQ);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg_fp_ok);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
 		if (dst < 0)
 			return dst;
 		if (insn->imm == 0) {
@@ -1029,8 +1029,8 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	case BPF_JMP | BPF_JGT | BPF_X:
 	case BPF_JMP | BPF_JGE | BPF_X:
 	case BPF_JMP | BPF_JSET | BPF_X:
-		src = ebpf_to_mips_reg(ctx, insn, src_reg_no_fp);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		src = ebpf_to_mips_reg(ctx, insn, REG_SRC_NO_FP);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (src < 0 || dst < 0)
 			return -EINVAL;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -1160,7 +1160,7 @@ jeq_common:
 	case BPF_JMP | BPF_JSLT | BPF_K: /* JMP_IMM */
 	case BPF_JMP | BPF_JSLE | BPF_K: /* JMP_IMM */
 		cmp_eq = (bpf_op == BPF_JSGE);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg_fp_ok);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
 		if (dst < 0)
 			return dst;
 
@@ -1235,7 +1235,7 @@ jeq_common:
 	case BPF_JMP | BPF_JLT | BPF_K:
 	case BPF_JMP | BPF_JLE | BPF_K:
 		cmp_eq = (bpf_op == BPF_JGE);
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg_fp_ok);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
 		if (dst < 0)
 			return dst;
 		/*
@@ -1258,7 +1258,7 @@ jeq_common:
 		goto jeq_common;
 
 	case BPF_JMP | BPF_JSET | BPF_K: /* JMP_IMM */
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg_fp_ok);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
 		if (dst < 0)
 			return dst;
 
@@ -1303,7 +1303,7 @@ jeq_common:
 		emit_instr(ctx, nop);
 		break;
 	case BPF_LD | BPF_DW | BPF_IMM:
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		t64 = ((u64)(u32)insn->imm) | ((u64)(insn + 1)->imm << 32);
@@ -1326,7 +1326,7 @@ jeq_common:
 
 	case BPF_ALU | BPF_END | BPF_FROM_BE:
 	case BPF_ALU | BPF_END | BPF_FROM_LE:
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		td = get_reg_val_type(ctx, this_idx, insn->dst_reg);
@@ -1369,7 +1369,7 @@ jeq_common:
 			dst = MIPS_R_SP;
 			mem_off = insn->off + MAX_BPF_STACK;
 		} else {
-			dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+			dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 			if (dst < 0)
 				return dst;
 			mem_off = insn->off;
@@ -1400,12 +1400,12 @@ jeq_common:
 			src = MIPS_R_SP;
 			mem_off = insn->off + MAX_BPF_STACK;
 		} else {
-			src = ebpf_to_mips_reg(ctx, insn, src_reg_no_fp);
+			src = ebpf_to_mips_reg(ctx, insn, REG_SRC_NO_FP);
 			if (src < 0)
 				return src;
 			mem_off = insn->off;
 		}
-		dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 		if (dst < 0)
 			return dst;
 		switch (BPF_SIZE(insn->code)) {
@@ -1435,12 +1435,12 @@ jeq_common:
 			dst = MIPS_R_SP;
 			mem_off = insn->off + MAX_BPF_STACK;
 		} else {
-			dst = ebpf_to_mips_reg(ctx, insn, dst_reg);
+			dst = ebpf_to_mips_reg(ctx, insn, REG_DST_NO_FP);
 			if (dst < 0)
 				return dst;
 			mem_off = insn->off;
 		}
-		src = ebpf_to_mips_reg(ctx, insn, src_reg_no_fp);
+		src = ebpf_to_mips_reg(ctx, insn, REG_SRC_NO_FP);
 		if (src < 0)
 			return src;
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
