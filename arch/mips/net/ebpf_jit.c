@@ -1690,6 +1690,10 @@ static int reg_val_propagate_range(struct jit_ctx *ctx, u64 initial_rvt,
 				rvt[prog->len] = exit_rvt;
 				return idx;
 			case BPF_JA:
+			{
+				int tgt = idx + 1 + insn->off;
+				bool visited = (rvt[tgt] & RVT_FALL_THROUGH);
+
 				rvt[idx] |= RVT_DONE;
 				/*
 				 * Verifier dead code patching can use
@@ -1699,8 +1703,16 @@ static int reg_val_propagate_range(struct jit_ctx *ctx, u64 initial_rvt,
 				 */
 				if (insn->off == -1)
 					break;
+				/*
+				 * Bounded loops cause the same issues in
+				 * fallthrough mode; follow only if jump
+				 * target is unvisited to mitigate.
+				 */
+				if (insn->off < 0 && !follow_taken && visited)
+					break;
 				idx += insn->off;
 				break;
+			}
 			case BPF_JEQ:
 			case BPF_JGT:
 			case BPF_JGE:
