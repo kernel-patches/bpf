@@ -800,7 +800,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 			if (bpf_op == BPF_DIV)
 				emit_instr(ctx, ddivu_r6, dst, dst, MIPS_R_AT);
 			else
-				emit_instr(ctx, modu, dst, dst, MIPS_R_AT);
+				emit_instr(ctx, dmodu, dst, dst, MIPS_R_AT);
 			break;
 		}
 		emit_instr(ctx, ddivu, dst, MIPS_R_AT);
@@ -882,7 +882,7 @@ static int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 					emit_instr(ctx, ddivu_r6,
 							dst, dst, src);
 				else
-					emit_instr(ctx, modu, dst, dst, src);
+					emit_instr(ctx, dmodu, dst, dst, src);
 				break;
 			}
 			emit_instr(ctx, ddivu, dst, src);
