@@ -611,6 +611,8 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx, int this_idx)
 	 * if (index >= array->map.max_entries)
 	 *     goto out;
 	 */
+	/* Mask index as 32-bit */
+	emit_instr(ctx, dinsu, MIPS_R_A2, MIPS_R_ZERO, 32, 32);
 	off = offsetof(struct bpf_array, map.max_entries);
 	emit_instr(ctx, lwu, MIPS_R_T5, off, MIPS_R_A1);
 	emit_instr(ctx, sltu, MIPS_R_AT, MIPS_R_T5, MIPS_R_A2);
