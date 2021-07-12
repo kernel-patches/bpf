@@ -1691,6 +1691,14 @@ static int reg_val_propagate_range(struct jit_ctx *ctx, u64 initial_rvt,
 				return idx;
 			case BPF_JA:
 				rvt[idx] |= RVT_DONE;
+				/*
+				 * Verifier dead code patching can use
+				 * infinite-loop traps, causing hangs and
+				 * RCU stalls here. Treat traps as nops
+				 * if detected and fall through.
+				 */
+				if (insn->off == -1)
+					break;
 				idx += insn->off;
 				break;
 			case BPF_JEQ:
