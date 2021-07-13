@@ -195,6 +195,7 @@ typedef void (*bpf_program_clear_priv_t)(struct bpf_program *, void *);
 LIBBPF_API int bpf_program__set_priv(struct bpf_program *prog, void *priv,
 				     bpf_program_clear_priv_t clear_priv);
 
+LIBBPF_API struct bpf_insn *bpf_program__insns(const struct bpf_program *prog);
 LIBBPF_API void *bpf_program__priv(const struct bpf_program *prog);
 LIBBPF_API void bpf_program__set_ifindex(struct bpf_program *prog,
 					 __u32 ifindex);

@@ -8908,6 +8908,11 @@ void *bpf_program__priv(const struct bpf_program *prog)
 	return prog ? prog->priv : libbpf_err_ptr(-EINVAL);
 }
 
+struct bpf_insn *bpf_program__insns(const struct bpf_program *prog)
+{
+	return prog ? prog->insns : libbpf_err_ptr(-EINVAL);
+}
+
 void bpf_program__set_ifindex(struct bpf_program *prog, __u32 ifindex)
 {
 	prog->prog_ifindex = ifindex;
