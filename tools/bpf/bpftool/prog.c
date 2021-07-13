@@ -537,7 +537,7 @@ static int do_show_subset(int argc, char **argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = prog_parse_fds(&argc, &argv, &fds);
+	nb_fds = prog_parse_fds(&argc, &argv, &fds, NULL);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -787,7 +787,10 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 static int do_dump(int argc, char **argv)
 {
 	struct bpf_prog_info_linear *info_linear;
+	struct bpf_object *obj;
+	struct bpf_program *prog;
 	char *filepath = NULL;
+	char *elf_filepath = NULL;
 	bool opcodes = false;
 	bool visual = false;
 	enum dump_mode mode;
@@ -817,7 +820,8 @@ static int do_dump(int argc, char **argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = prog_parse_fds(&argc, &argv, &fds);
+	elf_filepath = malloc(sizeof(char) * PATH_MAX);
+	nb_fds = prog_parse_fds(&argc, &argv, &fds, &elf_filepath);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -849,7 +853,6 @@ static int do_dump(int argc, char **argv)
 		linum = true;
 		NEXT_ARG();
 	}
-
 	if (argc) {
 		usage();
 		goto exit_close;
@@ -866,9 +869,26 @@ static int do_dump(int argc, char **argv)
 	arrays |= 1UL << BPF_PROG_INFO_LINE_INFO;
 	arrays |= 1UL << BPF_PROG_INFO_JITED_LINE_INFO;
 
+	if (elf_filepath != NULL) {
+		obj = bpf_object__open(elf_filepath); 
+		if (libbpf_get_error(obj)) {
+			p_err("ERROR: opening BPF object file failed");
+			return 0;
+		}
+
+		bpf_object__for_each_program(prog, obj) {
+			struct bpf_prog_info pinfo;
+			pinfo.xlated_prog_insns = ptr_to_u64(bpf_program__insns(prog));
+			pinfo.xlated_prog_len = bpf_program__size(prog);
+			err = prog_dump(&pinfo, mode, filepath, opcodes, visual, linum);
+		}
+		return 0;
+	}
+
 	if (json_output && nb_fds > 1)
 		jsonw_start_array(json_wtr);	/* root array */
 	for (i = 0; i < nb_fds; i++) {
+		printf("uno\n");
 		info_linear = bpf_program__get_prog_info_linear(fds[i], arrays);
 		if (IS_ERR_OR_NULL(info_linear)) {
 			p_err("can't get prog info: %s", strerror(errno));

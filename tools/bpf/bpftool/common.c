@@ -703,7 +703,7 @@ err_close_fds:
 	return -1;
 }
 
-int prog_parse_fds(int *argc, char ***argv, int **fds)
+int prog_parse_fds(int *argc, char ***argv, int **fds, char **elf_filepath)
 {
 	if (is_prefix(**argv, "id")) {
 		unsigned int id;
@@ -763,9 +763,18 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		if ((*fds)[0] < 0)
 			return -1;
 		return 1;
+	} else if (is_prefix(**argv, "elf")) {
+		NEXT_ARGP();
+		if (!argc) {
+			p_err("expected ELF file path");
+			return -1;
+		}
+		*elf_filepath = **argv;
+		NEXT_ARGP();
+		return 1;
 	}
 
-	p_err("expected 'id', 'tag', 'name' or 'pinned', got: '%s'?", **argv);
+	p_err("expected 'id', 'tag', 'name', 'elf' or 'pinned', got: '%s'?", **argv);
 	return -1;
 }
 
@@ -779,7 +788,7 @@ int prog_parse_fd(int *argc, char ***argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = prog_parse_fds(argc, argv, &fds);
+	nb_fds = prog_parse_fds(argc, argv, &fds, NULL);
 	if (nb_fds != 1) {
 		if (nb_fds > 1) {
 			p_err("several programs match this handle");
