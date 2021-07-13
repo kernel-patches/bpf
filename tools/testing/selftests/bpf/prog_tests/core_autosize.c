@@ -54,7 +54,7 @@ void test_core_autosize(void)
 	int err, fd = -1, zero = 0;
 	int char_id, short_id, int_id, long_long_id, void_ptr_id, id;
 	struct test_core_autosize* skel = NULL;
-	struct bpf_object_load_attr load_attr = {};
+	struct bpf_object_open_opts open_opts = {};
 	struct bpf_program *prog;
 	struct bpf_map *bss_map;
 	struct btf *btf = NULL;
@@ -125,9 +125,11 @@ void test_core_autosize(void)
 	fd = -1;
 
 	/* open and load BPF program with custom BTF as the kernel BTF */
-	skel = test_core_autosize__open();
+	open_opts.btf_custom_path = btf_file;
+	open_opts.sz = sizeof(struct bpf_object_open_opts);
+	skel = test_core_autosize__open_opts(&open_opts);
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
-		return;
+		goto cleanup;
 
 	/* disable handle_signed() for now */
 	prog = bpf_object__find_program_by_name(skel->obj, "handle_signed");
@@ -135,9 +137,7 @@ void test_core_autosize(void)
 		goto cleanup;
 	bpf_program__set_autoload(prog, false);
 
-	load_attr.obj = skel->obj;
-	load_attr.target_btf_path = btf_file;
-	err = bpf_object__load_xattr(&load_attr);
+	err = bpf_object__load(skel->obj);
 	if (!ASSERT_OK(err, "prog_load"))
 		goto cleanup;
 
@@ -204,13 +204,13 @@ void test_core_autosize(void)
 	skel = NULL;
 
 	/* now re-load with handle_signed() enabled, it should fail loading */
-	skel = test_core_autosize__open();
+	open_opts.btf_custom_path = btf_file;
+	open_opts.sz = sizeof(struct bpf_object_open_opts);
+	skel = test_core_autosize__open_opts(&opts);
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
-		return;
+		goto cleanup;
 
-	load_attr.obj = skel->obj;
-	load_attr.target_btf_path = btf_file;
-	err = bpf_object__load_xattr(&load_attr);
+	err = bpf_object__load(skel);
 	if (!ASSERT_ERR(err, "bad_prog_load"))
 		goto cleanup;
 
