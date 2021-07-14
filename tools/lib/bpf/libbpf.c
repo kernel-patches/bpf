@@ -4479,6 +4479,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 {
 	struct bpf_create_map_attr create_attr;
 	struct bpf_map_def *def = &map->def;
+	int ret = 0;
 
 	memset(&create_attr, 0, sizeof(create_attr));
 
@@ -4561,7 +4562,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	}
 
 	if (map->fd < 0)
-		return -errno;
+		ret = -errno;
 
 	if (bpf_map_type__is_map_in_map(def->type) && map->inner_map) {
 		if (obj->gen_loader)
@@ -4570,7 +4571,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		zfree(&map->inner_map);
 	}
 
-	return 0;
+	return ret;
 }
 
 static int init_map_slots(struct bpf_object *obj, struct bpf_map *map)
