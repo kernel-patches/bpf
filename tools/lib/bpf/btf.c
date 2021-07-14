@@ -1383,7 +1383,7 @@ exit_free:
 	return btf;
 }
 
-int btf__get_from_id(__u32 id, struct btf **btf)
+int btf__load_from_kernel_by_id(__u32 id, struct btf **btf)
 {
 	struct btf *res;
 	int err, btf_fd;
@@ -1404,6 +1404,8 @@ int btf__get_from_id(__u32 id, struct btf **btf)
 	*btf = res;
 	return 0;
 }
+int btf__get_from_id(__u32, struct btf **)
+	__attribute__((alias("btf__load_from_kernel_by_id")));
 
 int btf__get_map_kv_tids(const struct btf *btf, const char *map_name,
 			 __u32 expected_key_size, __u32 expected_value_size,

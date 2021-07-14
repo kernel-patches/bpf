@@ -378,5 +378,6 @@ LIBBPF_0.5.0 {
 
 LIBBPF_0.6.0 {
 	global:
+		btf__load_from_kernel_by_id;
 		btf__load_into_kernel;
 } LIBBPF_0.5.0;

@@ -9571,7 +9571,7 @@ static int libbpf_find_prog_btf_id(const char *name, __u32 attach_prog_fd)
 		pr_warn("The target program doesn't have BTF\n");
 		goto out;
 	}
-	if (btf__get_from_id(info->btf_id, &btf)) {
+	if (btf__load_from_kernel_by_id(info->btf_id, &btf)) {
 		pr_warn("Failed to get BTF of the program\n");
 		goto out;
 	}
