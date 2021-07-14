@@ -1383,7 +1383,8 @@ exit_free:
 	return btf;
 }
 
-int btf__load_from_kernel_by_id(__u32 id, struct btf **btf)
+int btf__load_from_kernel_by_id_split(__u32 id, struct btf **btf,
+				      struct btf *base_btf)
 {
 	struct btf *res;
 	int err, btf_fd;
@@ -1393,7 +1394,7 @@ int btf__load_from_kernel_by_id(__u32 id, struct btf **btf)
 	if (btf_fd < 0)
 		return libbpf_err(-errno);
 
-	res = btf_get_from_fd(btf_fd, NULL);
+	res = btf_get_from_fd(btf_fd, base_btf);
 	err = libbpf_get_error(res);
 
 	close(btf_fd);
@@ -1406,6 +1407,11 @@ int btf__load_from_kernel_by_id(__u32 id, struct btf **btf)
 }
 int btf__get_from_id(__u32, struct btf **)
 	__attribute__((alias("btf__load_from_kernel_by_id")));
+
+int btf__load_from_kernel_by_id(__u32 id, struct btf **btf)
+{
+	return btf__load_from_kernel_by_id_split(id, btf, NULL);
+}
 
 int btf__get_map_kv_tids(const struct btf *btf, const char *map_name,
 			 __u32 expected_key_size, __u32 expected_value_size,
