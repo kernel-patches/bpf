@@ -807,7 +807,7 @@ static struct btf *get_map_kv_btf(const struct bpf_map_info *info)
 	} else if (info->btf_value_type_id) {
 		int err;
 
-		err = btf__get_from_id(info->btf_id, &btf);
+		err = btf__load_from_kernel_by_id(info->btf_id, &btf);
 		if (err || !btf) {
 			p_err("failed to get btf");
 			btf = err ? ERR_PTR(err) : ERR_PTR(-ESRCH);
@@ -1042,7 +1042,7 @@ static void print_key_value(struct bpf_map_info *info, void *key,
 	struct btf *btf = NULL;
 	int err;
 
-	err = btf__get_from_id(info->btf_id, &btf);
+	err = btf__load_from_kernel_by_id(info->btf_id, &btf);
 	if (err) {
 		p_err("failed to get btf");
 		return;

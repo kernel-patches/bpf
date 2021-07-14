@@ -85,7 +85,7 @@ static char *bpf_target_prog_name(int tgt_fd)
 	}
 
 	if (info_linear->info.btf_id == 0 ||
-	    btf__get_from_id(info_linear->info.btf_id, &btf)) {
+	    btf__load_from_kernel_by_id(info_linear->info.btf_id, &btf)) {
 		pr_debug("prog FD %d doesn't have valid btf\n", tgt_fd);
 		goto out;
 	}

@@ -263,7 +263,7 @@ static void show_prog_metadata(int fd, __u32 num_maps)
 	if (!value)
 		return;
 
-	err = btf__get_from_id(map_info.btf_id, &btf);
+	err = btf__load_from_kernel_by_id(map_info.btf_id, &btf);
 	if (err || !btf)
 		goto out_free;
 
@@ -646,7 +646,7 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 		member_len = info->xlated_prog_len;
 	}
 
-	if (info->btf_id && btf__get_from_id(info->btf_id, &btf)) {
+	if (info->btf_id && btf__load_from_kernel_by_id(info->btf_id, &btf)) {
 		p_err("failed to get btf");
 		return -1;
 	}
@@ -2013,7 +2013,7 @@ static char *profile_target_name(int tgt_fd)
 	}
 
 	if (info_linear->info.btf_id == 0 ||
-	    btf__get_from_id(info_linear->info.btf_id, &btf)) {
+	    btf__load_from_kernel_by_id(info_linear->info.btf_id, &btf)) {
 		p_err("prog FD %d doesn't have valid btf", tgt_fd);
 		goto out;
 	}
