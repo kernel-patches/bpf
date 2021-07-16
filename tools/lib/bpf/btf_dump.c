@@ -2240,6 +2240,7 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 			     const void *data, size_t data_sz,
 			     const struct btf_dump_type_data_opts *opts)
 {
+	struct btf_dump_data typed_dump = {};
 	const struct btf_type *t;
 	int ret;
 
@@ -2250,7 +2251,7 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 	if (!t)
 		return libbpf_err(-ENOENT);
 
-	d->typed_dump = calloc(1, sizeof(struct btf_dump_data));
+	d->typed_dump = &typed_dump;
 	if (!d->typed_dump)
 		return libbpf_err(-ENOMEM);
 
@@ -2268,8 +2269,6 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 	d->typed_dump->emit_zeroes = OPTS_GET(opts, emit_zeroes, false);
 
 	ret = btf_dump_dump_type_data(d, NULL, t, id, data, 0, 0);
-
-	free(d->typed_dump);
 
 	return libbpf_err(ret);
 }
