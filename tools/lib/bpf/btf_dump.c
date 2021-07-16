@@ -1654,6 +1654,8 @@ static int btf_dump_base_type_check_zero(struct btf_dump *d,
 	return 0;
 }
 
+#define data_is_unaligned(data, data_sz)	(((uintptr_t)data) % data_sz)
+
 static int btf_dump_int_data(struct btf_dump *d,
 			     const struct btf_type *t,
 			     __u32 type_id,
@@ -1672,7 +1674,7 @@ static int btf_dump_int_data(struct btf_dump *d,
 	/* handle packed int data - accesses of integers not aligned on
 	 * int boundaries can cause problems on some platforms.
 	 */
-	if (((uintptr_t)data) % sz)
+	if (data_is_unaligned(data, sz))
 		return btf_dump_bitfield_data(d, t, data, 0, 0);
 
 	switch (sz) {
@@ -1739,7 +1741,7 @@ static int btf_dump_float_data(struct btf_dump *d,
 	int sz = t->size;
 
 	/* handle unaligned data; copy to local union */
-	if (((uintptr_t)data) % sz) {
+	if (data_is_unaligned(data, sz)) {
 		memcpy(&fl, data, sz);
 		flp = &fl;
 	}
@@ -1897,7 +1899,10 @@ static int btf_dump_ptr_data(struct btf_dump *d,
 			      __u32 id,
 			      const void *data)
 {
-	btf_dump_type_values(d, "%p", *(void **)data);
+	void *ptrval;
+
+	memcpy(&ptrval, data, d->ptr_sz);
+	btf_dump_type_values(d, "%p", ptrval);
 	return 0;
 }
 
@@ -1910,7 +1915,7 @@ static int btf_dump_get_enum_value(struct btf_dump *d,
 	int sz = t->size;
 
 	/* handle unaligned enum value */
-	if (((uintptr_t)data) % sz) {
+	if (data_is_unaligned(data, sz)) {
 		*value = (__s64)btf_dump_bitfield_get_data(d, t, data, 0, 0);
 		return 0;
 	}
