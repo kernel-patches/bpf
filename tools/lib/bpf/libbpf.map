@@ -38,7 +38,6 @@ LIBBPF_0.0.1 {
 		bpf_object__btf_fd;
 		bpf_object__close;
 		bpf_object__find_map_by_name;
-		bpf_object__find_map_by_offset;
 		bpf_object__find_program_by_title;
 		bpf_object__kversion;
 		bpf_object__load;
