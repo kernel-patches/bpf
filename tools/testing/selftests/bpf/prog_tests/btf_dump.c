@@ -681,6 +681,45 @@ static void test_btf_dump_struct_data(struct btf *btf, struct btf_dump *d,
 "}",
 			   { .cb = { 0, 0, 1, 0, 0},});
 
+	/* multidimensional array; because pahole and llvm collapse arrays
+	 * with multiple dimensions into a single dimension, we add a
+	 * multidimensional array explicitly.
+	 */
+	type_id = btf__find_by_name(btf, "char");
+	if (ASSERT_GT(type_id, 0, "find char")) {
+		__s32 index_id, array1_id, array2_id;
+		char strs[2][4] = { "one", "two" };
+
+		index_id = btf__find_by_name(btf, "int");
+		ASSERT_GT(index_id, 0, "find int");
+
+		array2_id = btf__add_array(btf, index_id, type_id, 4);
+		ASSERT_GT(array2_id, 0, "add multidim 2");
+
+		array1_id = btf__add_array(btf, index_id, array2_id, 2);
+		ASSERT_GT(array1_id, 0, "add multidim 1");
+
+		str[0] = '\0';
+		ret = btf_dump__dump_type_data(d, array1_id, &strs, sizeof(strs), &opts);
+		ASSERT_GT(ret, 0, "dump multidimensional array");
+
+		ASSERT_STREQ(str,
+"(char[2][4])[\n"
+"	[\n"
+"		'o',\n"
+"		'n',\n"
+"		'e',\n"
+"	],\n"
+"	[\n"
+"		't',\n"
+"		'w',\n"
+"		'o',\n"
+"	],\n"
+"]",
+			     "multidimensional char array matches");
+	}
+
+
 	/* struct with bitfields */
 	TEST_BTF_DUMP_DATA_C(btf, d, "struct", str, struct bpf_insn, BTF_F_COMPACT,
 		{.code = (__u8)1,.dst_reg = (__u8)0x2,.src_reg = (__u8)0x3,.off = (__s16)4,.imm = (__s32)5,});
