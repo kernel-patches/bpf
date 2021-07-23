@@ -19,6 +19,13 @@ the CI. It builds the kernel (without overwriting your existing Kconfig), recomp
 bpf selftests, runs them (by default ``tools/testing/selftests/bpf/test_progs``) and
 saves the resulting output (by default in ``~/.bpf_selftests``).
 
+Script dependencies:
+- clang
+- qemu
+- pahole
+- docutils (for ``rst2man``)
+- libcap-devel
+
 For more information on about using the script, run:
 
 .. code-block:: console
