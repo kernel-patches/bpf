@@ -762,6 +762,7 @@ struct perf_event {
 #ifdef CONFIG_BPF_SYSCALL
 	perf_overflow_handler_t		orig_overflow_handler;
 	struct bpf_prog			*prog;
+	u64				user_ctx;
 #endif
 
 #ifdef CONFIG_EVENT_TRACING
