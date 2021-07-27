@@ -252,6 +252,7 @@ static void gen_eth_frame(struct xsk_umem_info *umem, u64 addr)
 
 static void xsk_configure_umem(struct ifobject *data, void *buffer, int idx)
 {
+	const struct rlimit _rlim = { RLIM_INFINITY, RLIM_INFINITY };
 	struct xsk_umem_config cfg = {
 		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
 		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
@@ -262,6 +263,10 @@ static void xsk_configure_umem(struct ifobject *data, void *buffer, int idx)
 	int size = num_frames * XSK_UMEM__DEFAULT_FRAME_SIZE;
 	struct xsk_umem_info *umem;
 	int ret;
+
+	ret = XSK_UMEM__DEFAULT_FRAME_SIZE;
+	if (setrlimit(RLIMIT_MEMLOCK, &_rlim))
+		exit_with_error(errno);
 
 	umem = calloc(1, sizeof(struct xsk_umem_info));
 	if (!umem)
@@ -1088,12 +1093,8 @@ static void run_pkt_test(int mode, int type)
 
 int main(int argc, char **argv)
 {
-	struct rlimit _rlim = { RLIM_INFINITY, RLIM_INFINITY };
 	bool failure = false;
 	int i, j;
-
-	if (setrlimit(RLIMIT_MEMLOCK, &_rlim))
-		exit_with_error(errno);
 
 	for (int i = 0; i < MAX_INTERFACES; i++) {
 		ifdict[i] = malloc(sizeof(struct ifobject));
