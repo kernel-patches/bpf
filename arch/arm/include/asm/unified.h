@@ -11,7 +11,9 @@
 #if defined(__ASSEMBLY__)
 	.syntax unified
 #else
-__asm__(".syntax unified");
+
+#ifndef __clang__
+	__asm__(".syntax unified");
 #endif
 
 #ifdef CONFIG_CPU_V7M
