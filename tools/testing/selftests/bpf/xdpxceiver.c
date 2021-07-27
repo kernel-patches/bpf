@@ -1045,25 +1045,21 @@ static void run_pkt_test(int mode, int type)
 
 int main(int argc, char **argv)
 {
-	bool failure = false;
 	int i, j;
 
-	for (int i = 0; i < MAX_INTERFACES; i++) {
+	for (i = 0; i < MAX_INTERFACES; i++) {
 		ifdict[i] = malloc(sizeof(struct ifobject));
 		if (!ifdict[i])
 			exit_with_error(errno);
 
 		ifdict[i]->ifdict_index = i;
 		ifdict[i]->xsk_arr = calloc(2, sizeof(struct xsk_socket_info *));
-		if (!ifdict[i]->xsk_arr) {
-			failure = true;
-			goto cleanup;
-		}
+		if (!ifdict[i]->xsk_arr)
+			exit_with_error(errno);
+
 		ifdict[i]->umem_arr = calloc(2, sizeof(struct xsk_umem_info *));
-		if (!ifdict[i]->umem_arr) {
-			failure = true;
-			goto cleanup;
-		}
+		if (!ifdict[i]->umem_arr)
+			exit_with_error(errno);
 	}
 
 	setlocale(LC_ALL, "");
@@ -1082,19 +1078,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-cleanup:
-	for (int i = 0; i < MAX_INTERFACES; i++) {
-		if (ifdict[i]->ns_fd != -1)
-			close(ifdict[i]->ns_fd);
-		free(ifdict[i]->xsk_arr);
-		free(ifdict[i]->umem_arr);
-		free(ifdict[i]);
-	}
-
-	if (failure)
-		exit_with_error(errno);
-
 	ksft_exit_pass();
-
 	return 0;
 }
