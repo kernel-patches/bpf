@@ -90,6 +90,8 @@ LIBBPF_API __u32 btf_ext__func_info_rec_size(const struct btf_ext *btf_ext);
 LIBBPF_API __u32 btf_ext__line_info_rec_size(const struct btf_ext *btf_ext);
 
 LIBBPF_API struct btf *libbpf_find_kernel_btf(void);
+LIBBPF_API struct btf *libbpf_load_vmlinux_btf(void);
+LIBBPF_API struct btf *libbpf_load_module_btf(const char *module_name, struct btf *vmlinux_btf);
 
 LIBBPF_API int btf__find_str(struct btf *btf, const char *s);
 LIBBPF_API int btf__add_str(struct btf *btf, const char *s);
