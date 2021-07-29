@@ -517,9 +517,15 @@ static bool sk_is_tcp(const struct sock *sk)
 	       sk->sk_protocol == IPPROTO_TCP;
 }
 
+static bool sk_is_unix_stream(const struct sock *sk)
+{
+	return sk->sk_type == SOCK_STREAM &&
+	       sk->sk_protocol == PF_UNIX;
+}
+
 static bool sock_map_redirect_allowed(const struct sock *sk)
 {
-	if (sk_is_tcp(sk))
+	if (sk_is_tcp(sk) || sk_is_unix_stream(sk))
 		return sk->sk_state != TCP_LISTEN;
 	else
 		return sk->sk_state == TCP_ESTABLISHED;
