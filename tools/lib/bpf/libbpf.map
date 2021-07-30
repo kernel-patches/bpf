@@ -380,4 +380,6 @@ LIBBPF_0.5.0 {
 		btf__load_into_kernel;
 		btf_dump__dump_type_data;
 		libbpf_set_strict_mode;
+		btf__load_vmlinux_btf;
+		btf__load_module_btf;
 } LIBBPF_0.4.0;
