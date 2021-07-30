@@ -8743,6 +8743,16 @@ const char *bpf_object__name(const struct bpf_object *obj)
 	return obj ? obj->name : libbpf_err_ptr(-EINVAL);
 }
 
+int bpf_object__set_name(struct bpf_object *obj, const char *name)
+{
+	if (!obj || !name)
+		return libbpf_err(-EINVAL);
+
+	strncpy(obj->name, name, sizeof(obj->name) - 1);
+
+	return 0;
+}
+
 unsigned int bpf_object__kversion(const struct bpf_object *obj)
 {
 	return obj ? obj->kern_version : 0;

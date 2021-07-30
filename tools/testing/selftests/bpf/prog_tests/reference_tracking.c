@@ -5,6 +5,7 @@ void test_reference_tracking(void)
 {
 	const char *file = "test_sk_lookup_kern.o";
 	const char *obj_name = "ref_track";
+	const char *obj_name2 = "ref_track2";
 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, open_opts,
 		.object_name = obj_name,
 		.relaxed_maps = true,
@@ -21,6 +22,12 @@ void test_reference_tracking(void)
 	if (CHECK(strcmp(bpf_object__name(obj), obj_name), "obj_name",
 		  "wrong obj name '%s', expected '%s'\n",
 		  bpf_object__name(obj), obj_name))
+		goto cleanup;
+
+	bpf_object__set_name(obj, obj_name2);
+	if (CHECK(strcmp(bpf_object__name(obj), obj_name2), "obj_name",
+		  "wrong obj name '%s', expected '%s'\n",
+		  bpf_object__name(obj), obj_name2))
 		goto cleanup;
 
 	bpf_object__for_each_program(prog, obj) {

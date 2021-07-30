@@ -374,4 +374,5 @@ LIBBPF_0.5.0 {
 		bpf_map_lookup_and_delete_elem_flags;
 		bpf_object__gen_loader;
 		libbpf_set_strict_mode;
+		bpf_object__set_name;
 } LIBBPF_0.4.0;
