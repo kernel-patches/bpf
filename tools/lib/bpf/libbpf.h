@@ -161,6 +161,7 @@ LIBBPF_API int bpf_object__load_xattr(struct bpf_object_load_attr *attr);
 LIBBPF_API int bpf_object__unload(struct bpf_object *obj);
 
 LIBBPF_API const char *bpf_object__name(const struct bpf_object *obj);
+LIBBPF_API int bpf_object__set_name(struct bpf_object *obj, const char *name);
 LIBBPF_API unsigned int bpf_object__kversion(const struct bpf_object *obj);
 LIBBPF_API int bpf_object__set_kversion(struct bpf_object *obj, __u32 kern_version);
 
