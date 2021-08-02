@@ -1,0 +1,23 @@
+name: bpf-ci
+
+on:
+  pull_request:
+
+concurrency: 
+  group: ci-test-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  VM_Test:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_NAME: 'libbpf'
+      AUTHOR_EMAIL: "$(git log -1 --pretty=\"%aE\")"
+      KERNEL: LATEST
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: install
+        run: sudo apt-get update && sudo apt-get install aptitude qemu-kvm zstd binutils-dev elfutils libcap-dev libelf-dev libdw-dev python3-docutils
+      - name: Kernel LATEST + selftests
+        run: export REPO_ROOT=$GITHUB_WORKSPACE; export CI_ROOT=$REPO_ROOT/travis-ci; export VMTEST_ROOT=$CI_ROOT/vmtest; ${CI_ROOT}/vmtest/run_vmtest.sh || exit 1
