@@ -6,6 +6,7 @@
 #include <bpf/btf.h>
 #include "test_ksyms_btf.skel.h"
 #include "test_ksyms_btf_null_check.skel.h"
+#include "test_ksyms_weak.skel.h"
 
 static int duration;
 
@@ -81,6 +82,44 @@ static void test_null_check(void)
 	test_ksyms_btf_null_check__destroy(skel);
 }
 
+static void test_weak_syms(void)
+{
+	struct test_ksyms_weak *skel;
+	struct test_ksyms_weak__data *data;
+
+	skel = test_ksyms_weak__open_and_load();
+	if (CHECK(skel, "skel_open_and_load",
+		  "unexpected load of a prog referencing non-existing ksyms\n")) {
+		test_ksyms_weak__destroy(skel);
+		return;
+	}
+
+	skel = test_ksyms_weak__open();
+	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
+		return;
+
+	bpf_program__set_autoload(skel->progs.fail_handler, false);
+	if (CHECK(test_ksyms_weak__load(skel), "skel_load", "failed to load skeleton\n"))
+		goto cleanup;
+
+	if (CHECK(test_ksyms_weak__attach(skel), "skel_attach", "failed to attach skeleton\n"))
+		goto cleanup;
+
+	/* trigger tracepoint */
+	usleep(1);
+
+	data = skel->data;
+	CHECK(data->out__existing_typed != 0, "existing_typed",
+	      "failed to reference an existing typed symbol\n");
+	CHECK(data->out__existing_typeless == -1, "existing_typeless",
+	      "failed to get the address of an existing typeless symbol\n");
+	CHECK(data->out__non_existing_typeless != 0, "non_existing_typeless",
+	      "non-existing typeless symbol does not default to zero\n");
+
+cleanup:
+	test_ksyms_weak__destroy(skel);
+}
+
 void test_ksyms_btf(void)
 {
 	int percpu_datasec;
@@ -105,4 +144,7 @@ void test_ksyms_btf(void)
 
 	if (test__start_subtest("null_check"))
 		test_null_check();
+
+	if (test__start_subtest("weak_ksyms"))
+		test_weak_syms();
 }
