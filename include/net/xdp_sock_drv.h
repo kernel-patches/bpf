@@ -95,6 +95,11 @@ static inline dma_addr_t xsk_buff_raw_get_dma(struct xsk_buff_pool *pool,
 	return xp_raw_get_dma(pool, addr);
 }
 
+static inline s64 xsk_buff_get_txtime(struct xsk_buff_pool *pool, struct xdp_desc *desc)
+{
+	return xp_raw_get_txtime(pool, desc);
+}
+
 static inline void *xsk_buff_raw_get_data(struct xsk_buff_pool *pool, u64 addr)
 {
 	return xp_raw_get_data(pool, addr);
@@ -230,6 +235,11 @@ static inline dma_addr_t xsk_buff_raw_get_dma(struct xsk_buff_pool *pool,
 static inline void *xsk_buff_raw_get_data(struct xsk_buff_pool *pool, u64 addr)
 {
 	return NULL;
+}
+
+static inline s64 xsk_buff_get_txtime(struct xsk_buff_pool *pool, u64 addr)
+{
+	return -1;
 }
 
 static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_buff_pool *pool)

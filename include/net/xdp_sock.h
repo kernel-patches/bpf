@@ -58,6 +58,7 @@ struct xdp_sock {
 
 	struct xsk_queue *tx ____cacheline_aligned_in_smp;
 	struct list_head tx_list;
+	u32 so_txtime_mask;
 	/* Protects generic receive. */
 	spinlock_t rx_lock;
 

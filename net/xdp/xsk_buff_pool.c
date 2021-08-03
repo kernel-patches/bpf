@@ -3,6 +3,7 @@
 #include <net/xsk_buff_pool.h>
 #include <net/xdp_sock.h>
 #include <net/xdp_sock_drv.h>
+#include <linux/xdp_md_std.h>
 
 #include "xsk_queue.h"
 #include "xdp_umem.h"
@@ -521,6 +522,28 @@ void xp_free(struct xdp_buff_xsk *xskb)
 	list_add(&xskb->free_list_node, &xskb->pool->free_list);
 }
 EXPORT_SYMBOL(xp_free);
+
+s64 xp_raw_get_txtime(struct xsk_buff_pool *pool, struct xdp_desc *desc)
+{
+	struct xdp_user_tx_metadata *md;
+
+	if ((desc->addr % pool->chunk_size) <
+	    sizeof(struct xdp_user_tx_metadata))
+		return -1;
+
+	if (!(desc->options & XDP_SOL_OPTION_SO_TXTIME) ||
+	    !(desc->options & XDP_DESC_OPTION_METADATA))
+		return -1;
+
+	md = (xp_raw_get_data(pool, desc->addr) -
+	      sizeof(struct xdp_user_tx_metadata));
+
+	if (!(md->md_valid & XDP_METADATA_USER_TX_TIMESTAMP))
+		return -1;
+
+	return md->timestamp;
+}
+EXPORT_SYMBOL(xp_raw_get_txtime);
 
 void *xp_raw_get_data(struct xsk_buff_pool *pool, u64 addr)
 {

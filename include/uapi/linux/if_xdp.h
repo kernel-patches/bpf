@@ -106,6 +106,8 @@ struct xdp_desc {
 	__u32 options;
 };
 
+#define XDP_DESC_OPTION_METADATA (1 << 0)
+
 /* UMEM descriptor is __u64 */
 
 #endif /* _LINUX_IF_XDP_H */

@@ -107,6 +107,7 @@ void xp_dma_unmap(struct xsk_buff_pool *pool, unsigned long attrs);
 struct xdp_buff *xp_alloc(struct xsk_buff_pool *pool);
 bool xp_can_alloc(struct xsk_buff_pool *pool, u32 count);
 void *xp_raw_get_data(struct xsk_buff_pool *pool, u64 addr);
+s64 xp_raw_get_txtime(struct xsk_buff_pool *pool, struct xdp_desc *desc);
 dma_addr_t xp_raw_get_dma(struct xsk_buff_pool *pool, u64 addr);
 static inline dma_addr_t xp_get_dma(struct xdp_buff_xsk *xskb)
 {

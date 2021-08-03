@@ -140,7 +140,7 @@ static inline bool xp_aligned_validate_desc(struct xsk_buff_pool *pool,
 	if (chunk >= pool->addrs_cnt)
 		return false;
 
-	if (desc->options)
+	if (desc->options & ~XDP_DESC_OPTION_METADATA)
 		return false;
 	return true;
 }
@@ -160,7 +160,7 @@ static inline bool xp_unaligned_validate_desc(struct xsk_buff_pool *pool,
 	    xp_desc_crosses_non_contig_pg(pool, addr, desc->len))
 		return false;
 
-	if (desc->options)
+	if (desc->options & ~XDP_DESC_OPTION_METADATA)
 		return false;
 	return true;
 }

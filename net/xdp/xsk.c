@@ -339,6 +339,7 @@ bool xsk_tx_peek_desc(struct xsk_buff_pool *pool, struct xdp_desc *desc)
 			continue;
 		}
 
+		desc->options |= xs->so_txtime_mask;
 		/* This is the backpressure mechanism for the Tx path.
 		 * Reserve space in the completion queue and only proceed
 		 * if there is space in it. This avoids having to implement
@@ -374,7 +375,7 @@ u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, struct xdp_desc *
 				   u32 max_entries)
 {
 	struct xdp_sock *xs;
-	u32 nb_pkts;
+	u32 nb_pkts, i;
 
 	rcu_read_lock();
 	if (!list_is_singular(&pool->xsk_tx_list)) {
@@ -394,6 +395,9 @@ u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, struct xdp_desc *
 		xs->tx->queue_empty_descs++;
 		goto out;
 	}
+
+	for (i = 0; i < nb_pkts; i++)
+		descs[i].options |= xs->so_txtime_mask;
 
 	/* This is the backpressure mechanism for the Tx path. Try to
 	 * reserve space in the completion queue for all packets, but
@@ -445,6 +449,19 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 	sock_wfree(skb);
 }
 
+static void xsk_process_so_txtime(struct xsk_buff_pool *pool,
+				  struct xdp_desc *desc,
+				  struct sk_buff *skb)
+{
+	if ((desc->options & (XDP_DESC_OPTION_METADATA | XDP_SOL_OPTION_SO_TXTIME))
+	    == (XDP_DESC_OPTION_METADATA | XDP_SOL_OPTION_SO_TXTIME)) {
+		s64 tstamp = xsk_buff_get_txtime(pool, desc);
+
+		if (tstamp != -1)
+			skb->tstamp = tstamp;
+	}
+}
+
 static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 					      struct xdp_desc *desc)
 {
@@ -469,6 +486,7 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 	ts = pool->unaligned ? len : pool->chunk_size;
 
 	buffer = xsk_buff_raw_get_data(pool, addr);
+	xsk_process_so_txtime(pool, desc, skb);
 	offset = offset_in_page(buffer);
 	addr = buffer - pool->addrs;
 
@@ -520,6 +538,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 		skb_put(skb, len);
 
 		buffer = xsk_buff_raw_get_data(xs->pool, desc->addr);
+		xsk_process_so_txtime(xs->pool, desc, skb);
 		err = skb_store_bits(skb, 0, buffer, len);
 		if (unlikely(err)) {
 			kfree_skb(skb);
@@ -557,6 +576,7 @@ static int xsk_generic_xmit(struct sock *sk)
 			goto out;
 		}
 
+		desc.options |= xs->so_txtime_mask;
 		skb = xsk_build_skb(xs, &desc);
 		if (IS_ERR(skb)) {
 			err = PTR_ERR(skb);
@@ -1098,6 +1118,23 @@ static int xsk_setsockopt(struct socket *sock, int level, int optname,
 		mutex_unlock(&xs->mutex);
 		return err;
 	}
+	case SO_TXTIME:
+	{
+		u32 option;
+
+		if (optlen != sizeof(u32))
+			return -EINVAL;
+
+		if (copy_from_sockptr(&option, optval, sizeof(option)))
+			return -EFAULT;
+
+		if (option)
+			xs->so_txtime_mask |= XDP_SOL_OPTION_SO_TXTIME;
+		else
+			xs->so_txtime_mask &= ~XDP_SOL_OPTION_SO_TXTIME;
+
+		return 0;
+	}
 	default:
 		break;
 	}
@@ -1245,6 +1282,18 @@ static int xsk_getsockopt(struct socket *sock, int level, int optname,
 		if (copy_to_user(optval, &opts, len))
 			return -EFAULT;
 		if (put_user(len, optlen))
+			return -EFAULT;
+
+		return 0;
+	}
+	case SO_TXTIME:
+	{
+		u32 option = 0;
+
+		if (xs->so_txtime_mask & XDP_SOL_OPTION_SO_TXTIME)
+			option = 1;
+
+		if (copy_to_user(optval, &option, sizeof(option)))
 			return -EFAULT;
 
 		return 0;
