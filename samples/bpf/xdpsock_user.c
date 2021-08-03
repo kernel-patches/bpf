@@ -159,11 +159,11 @@ static int num_socks;
 struct xsk_socket_info *xsks[MAX_SOCKS];
 int sock;
 
-static unsigned long get_nsecs(void)
+static unsigned long get_nsecs(int clockid)
 {
 	struct timespec ts;
 
-	clock_gettime(CLOCK_MONOTONIC, &ts);
+	clock_gettime(clockid, &ts);
 	return ts.tv_sec * 1000000000UL + ts.tv_nsec;
 }
 
@@ -354,7 +354,7 @@ static void dump_driver_stats(long dt)
 
 static void dump_stats(void)
 {
-	unsigned long now = get_nsecs();
+	unsigned long now = get_nsecs(CLOCK_MONOTONIC);
 	long dt = now - prev_time;
 	int i;
 
@@ -443,7 +443,7 @@ static void dump_stats(void)
 static bool is_benchmark_done(void)
 {
 	if (opt_duration > 0) {
-		unsigned long dt = (get_nsecs() - start_time);
+		unsigned long dt = (get_nsecs(CLOCK_MONOTONIC) - start_time);
 
 		if (dt >= opt_duration)
 			benchmark_done = true;
@@ -1683,7 +1683,7 @@ int main(int argc, char **argv)
 			exit_with_error(ret);
 	}
 
-	prev_time = get_nsecs();
+	prev_time = get_nsecs(CLOCK_MONOTONIC);
 	start_time = prev_time;
 
 	if (opt_bench == BENCH_RXDROP)
