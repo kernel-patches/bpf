@@ -2582,6 +2582,35 @@ static void igc_update_tx_stats(struct igc_q_vector *q_vector,
 	q_vector->tx.total_packets += packets;
 }
 
+static void igc_launchtm_ctxtdesc(struct igc_ring *tx_ring,
+				  ktime_t txtime)
+{
+	struct igc_adapter *adapter = netdev_priv(tx_ring->netdev);
+	struct igc_adv_tx_context_desc *context_desc;
+	u16 i = tx_ring->next_to_use;
+	u32 mss_l4len_idx = 0;
+	u32 type_tucmd = 0;
+
+	context_desc = IGC_TX_CTXTDESC(tx_ring, i);
+
+	i++;
+	tx_ring->next_to_use = (i < tx_ring->count) ? i : 0;
+
+	/* set bits to identify this as an advanced context descriptor */
+	type_tucmd |= IGC_TXD_CMD_DEXT | IGC_ADVTXD_DTYP_CTXT;
+
+	/* For i225, context index must be unique per ring. */
+	if (test_bit(IGC_RING_FLAG_TX_CTX_IDX, &tx_ring->flags))
+		mss_l4len_idx |= tx_ring->reg_idx << 4;
+
+	context_desc->vlan_macip_lens	= 0;
+	context_desc->type_tucmd_mlhl	= cpu_to_le32(type_tucmd);
+	context_desc->mss_l4len_idx	= cpu_to_le32(mss_l4len_idx);
+
+	context_desc->launch_time = igc_tx_launchtime(adapter,
+						      txtime);
+}
+
 static void igc_xdp_xmit_zc(struct igc_ring *ring)
 {
 	struct xsk_buff_pool *pool = ring->xsk_pool;
@@ -2599,10 +2628,24 @@ static void igc_xdp_xmit_zc(struct igc_ring *ring)
 
 	budget = igc_desc_unused(ring);
 
-	while (xsk_tx_peek_desc(pool, &xdp_desc) && budget--) {
+	while (xsk_tx_peek_desc(pool, &xdp_desc) && budget > 2) {
 		u32 cmd_type, olinfo_status;
 		struct igc_tx_buffer *bi;
+		s64 launch_tm = 0;
 		dma_addr_t dma;
+
+		bi = &ring->tx_buffer_info[ring->next_to_use];
+
+		if (ring->launchtime_enable && (xdp_desc.options & XDP_DESC_OPTION_SO_TXTIME)) {
+			launch_tm = xsk_buff_get_txtime(pool, &xdp_desc);
+			if (launch_tm != -1) {
+				budget--;
+				igc_launchtm_ctxtdesc(ring, (ktime_t)launch_tm);
+			}
+		}
+
+		/* re-read ntu as igc_launchtm_ctxtdesc() updates it */
+		ntu = ring->next_to_use;
 
 		cmd_type = IGC_ADVTXD_DTYP_DATA | IGC_ADVTXD_DCMD_DEXT |
 			   IGC_ADVTXD_DCMD_IFCS | IGC_TXD_DCMD |
@@ -2612,12 +2655,12 @@ static void igc_xdp_xmit_zc(struct igc_ring *ring)
 		dma = xsk_buff_raw_get_dma(pool, xdp_desc.addr);
 		xsk_buff_raw_dma_sync_for_device(pool, dma, xdp_desc.len);
 
+		budget--;
 		tx_desc = IGC_TX_DESC(ring, ntu);
 		tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type);
 		tx_desc->read.olinfo_status = cpu_to_le32(olinfo_status);
 		tx_desc->read.buffer_addr = cpu_to_le64(dma);
 
-		bi = &ring->tx_buffer_info[ntu];
 		bi->type = IGC_TX_BUFFER_TYPE_XSK;
 		bi->protocol = 0;
 		bi->bytecount = xdp_desc.len;
@@ -2630,9 +2673,9 @@ static void igc_xdp_xmit_zc(struct igc_ring *ring)
 		ntu++;
 		if (ntu == ring->count)
 			ntu = 0;
+		ring->next_to_use = ntu;
 	}
 
-	ring->next_to_use = ntu;
 	if (tx_desc) {
 		igc_flush_tx_descriptors(ring);
 		xsk_tx_release(pool);
