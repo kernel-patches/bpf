@@ -76,6 +76,7 @@ static void print_bpf_output(void *ctx, int cpu, void *data, __u32 size)
 	struct {
 		__u16 cookie;
 		__u16 pkt_len;
+		__u64 rx_timestamp;
 		__u8  pkt_data[SAMPLE_SIZE];
 	} __packed *e = data;
 	int i;
@@ -85,7 +86,8 @@ static void print_bpf_output(void *ctx, int cpu, void *data, __u32 size)
 		return;
 	}
 
-	printf("Pkt len: %-5d bytes. Ethernet hdr: ", e->pkt_len);
+	printf("Pkt len: %-5d bytes. RX timestamp: %llu Ethernet hdr: ", e->pkt_len,
+	       e->rx_timestamp);
 	for (i = 0; i < 14 && i < e->pkt_len; i++)
 		printf("%02x ", e->pkt_data[i]);
 	printf("\n");

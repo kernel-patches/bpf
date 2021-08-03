@@ -3,6 +3,7 @@
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 
 #define SAMPLE_SIZE 64ul
 
@@ -12,16 +13,23 @@ struct {
 	__uint(value_size, sizeof(u32));
 } my_map SEC(".maps");
 
+struct xdp_hints {
+	u64 rx_timestamp;
+};
+
 SEC("xdp_sample")
 int xdp_sample_prog(struct xdp_md *ctx)
 {
+	void *meta_data = (void *)(long)ctx->data_meta;
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
+	struct xdp_hints *hints;
 
 	/* Metadata will be in the perf event before the packet data. */
 	struct S {
 		u16 cookie;
 		u16 pkt_len;
+		u64 rx_timestamp;
 	} __packed metadata;
 
 	if (data < data_end) {
@@ -41,8 +49,21 @@ int xdp_sample_prog(struct xdp_md *ctx)
 
 		metadata.cookie = 0xdead;
 		metadata.pkt_len = (u16)(data_end - data);
+		metadata.rx_timestamp = 0;
 		sample_size = min(metadata.pkt_len, SAMPLE_SIZE);
 		flags |= (u64)sample_size << 32;
+
+		if (meta_data < data) {
+			hints = meta_data;
+			/* bpf_core_field_exists doesn't work from samples/bpf,
+			 * as it is only available for "clang -target bpf", which
+			 * is not used on samples/bpf. A program that can use
+			 * the "vmlinux.h" and "clang -target btf" could use this
+			 * call to check the existence of a given field in runtime
+			 */
+			/*if (bpf_core_field_exists(hints->rx_timestamp))*/
+				metadata.rx_timestamp = BPF_CORE_READ(hints, rx_timestamp);
+		}
 
 		ret = bpf_perf_event_output(ctx, &my_map, flags,
 					    &metadata, sizeof(metadata));
