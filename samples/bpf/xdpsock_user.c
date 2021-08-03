@@ -55,6 +55,9 @@
 
 #define DEBUG_HEXDUMP 0
 
+#define LAUNCH_TIME_ADVANCE_NS (500000)
+#define CLOCK_SYNC_DELAY (60)
+
 typedef __u64 u64;
 typedef __u32 u32;
 typedef __u16 u16;
@@ -99,6 +102,7 @@ static u32 opt_num_xsks = 1;
 static u32 prog_id;
 static bool opt_busy_poll;
 static bool opt_reduced_cap;
+static bool opt_launch_time;
 
 struct xsk_ring_stats {
 	unsigned long rx_npkts;
@@ -741,6 +745,8 @@ static inline u16 udp_csum(u32 saddr, u32 daddr, u32 len,
 
 #define ETH_FCS_SIZE 4
 
+#define MD_SIZE (sizeof(struct xdp_user_tx_metadata))
+
 #define PKT_HDR_SIZE (sizeof(struct ethhdr) + sizeof(struct iphdr) + \
 		      sizeof(struct udphdr))
 
@@ -798,8 +804,10 @@ static void gen_eth_hdr_data(void)
 
 static void gen_eth_frame(struct xsk_umem_info *umem, u64 addr)
 {
-	memcpy(xsk_umem__get_data(umem->buffer, addr), pkt_data,
-	       PKT_SIZE);
+	if (opt_launch_time)
+		memcpy(xsk_umem__get_data(umem->buffer, addr) + MD_SIZE, pkt_data, PKT_SIZE);
+	else
+		memcpy(xsk_umem__get_data(umem->buffer, addr), pkt_data, PKT_SIZE);
 }
 
 static struct xsk_umem_info *xsk_configure_umem(void *buffer, u64 size)
@@ -927,6 +935,7 @@ static struct option long_options[] = {
 	{"irq-string", no_argument, 0, 'I'},
 	{"busy-poll", no_argument, 0, 'B'},
 	{"reduce-cap", no_argument, 0, 'R'},
+	{"launch-time", no_argument, 0, 'L'},
 	{0, 0, 0, 0}
 };
 
@@ -967,6 +976,7 @@ static void usage(const char *prog)
 		"  -I, --irq-string	Display driver interrupt statistics for interface associated with irq-string.\n"
 		"  -B, --busy-poll      Busy poll.\n"
 		"  -R, --reduce-cap	Use reduced capabilities (cannot be used with -M)\n"
+		"  -L, --launch-time	Toy example of launchtime using XDP\n"
 		"\n";
 	fprintf(stderr, str, prog, XSK_UMEM__DEFAULT_FRAME_SIZE,
 		opt_batch_size, MIN_PKT_SIZE, MIN_PKT_SIZE,
@@ -982,7 +992,7 @@ static void parse_command_line(int argc, char **argv)
 	opterr = 0;
 
 	for (;;) {
-		c = getopt_long(argc, argv, "Frtli:q:pSNn:czf:muMd:b:C:s:P:xQaI:BR",
+		c = getopt_long(argc, argv, "Frtli:q:pSNn:czf:muMd:b:C:s:P:xQaI:BRL",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -1086,6 +1096,9 @@ static void parse_command_line(int argc, char **argv)
 			break;
 		case 'R':
 			opt_reduced_cap = true;
+			break;
+		case 'L':
+			opt_launch_time = true;
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -1272,6 +1285,7 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
 {
 	u32 idx;
 	unsigned int i;
+	u64 cur_ts, launch_time;
 
 	while (xsk_ring_prod__reserve(&xsk->tx, batch_size, &idx) <
 				      batch_size) {
@@ -1280,10 +1294,28 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
 			return;
 	}
 
+	cur_ts = get_nsecs(CLOCK_TAI);
+
 	for (i = 0; i < batch_size; i++) {
 		struct xdp_desc *tx_desc = xsk_ring_prod__tx_desc(&xsk->tx,
 								  idx + i);
-		tx_desc->addr = (*frame_nb + i) * opt_xsk_frame_size;
+		if (opt_launch_time) {
+			/*
+			 * Direct the NIC to launch "batch_size" packets each spaced 1us apart.
+			 * The below calculation specifies that the first packet in the batch
+			 * is to be launched "LAUNCH_TIME_ADVANCE_NS" into the future and the
+			 * remaining packets in the batch should be spaced 1us apart.
+			 */
+			launch_time = cur_ts + LAUNCH_TIME_ADVANCE_NS + (1000 * i);
+			xsk_umem__set_md_txtime(xsk->umem->buffer,
+						((*frame_nb + i) * opt_xsk_frame_size),
+						launch_time);
+			tx_desc->addr = (*frame_nb + i) * opt_xsk_frame_size + MD_SIZE;
+			tx_desc->options = XDP_DESC_OPTION_METADATA;
+		} else {
+			tx_desc->addr = (*frame_nb + i) * opt_xsk_frame_size;
+		}
+
 		tx_desc->len = PKT_SIZE;
 	}
 
@@ -1293,6 +1325,16 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
 	*frame_nb += batch_size;
 	*frame_nb %= NUM_FRAMES;
 	complete_tx_only(xsk, batch_size);
+	if (opt_launch_time) {
+		/*
+		 * Hold the Tx loop until all the frames from this batch has been
+		 * transmitted by the driver. This also ensures that all packets from
+		 * this batch reach the driver ASAP before the proposed future launchtime
+		 * becomes stale
+		 */
+		while (xsk->outstanding_tx)
+			complete_tx_only(xsk, opt_batch_size);
+	}
 }
 
 static inline int get_batch_size(int pkt_cnt)
@@ -1332,6 +1374,20 @@ static void tx_only_all(void)
 	for (i = 0; i < num_socks; i++) {
 		fds[0].fd = xsk_socket__fd(xsks[i]->xsk);
 		fds[0].events = POLLOUT;
+	}
+
+	if (opt_launch_time) {
+		/*
+		 * For launch-time to be meaningful, the system clock and NIC h/w clock
+		 * needs to be synchronized. Many NIC driver implementations resets the NIC
+		 * during the bind operation in the XDP initialization flow path.
+		 * The delay below is intended as a best case approach to hold off packet
+		 * transmission till the syncronization is acheived.
+		 */
+		xsk_socket__enable_so_txtime(xsks[0]->xsk, true);
+		printf("Waiting for %ds for the NIC clock to synchronize with the system clock\n",
+		       CLOCK_SYNC_DELAY);
+		sleep(CLOCK_SYNC_DELAY);
 	}
 
 	while ((opt_pkt_count && pkt_cnt < opt_pkt_count) || !opt_pkt_count) {
