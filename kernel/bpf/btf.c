@@ -1509,11 +1509,31 @@ static void btf_free_id(struct btf *btf)
 	spin_unlock_irqrestore(&btf_idr_lock, flags);
 }
 
+static struct btf *btf_alloc(u32 data_size)
+{
+	struct btf *btf;
+
+	btf = kzalloc(sizeof(*btf), GFP_KERNEL | __GFP_NOWARN);
+	if (!btf)
+		return NULL;
+
+	btf->data = kvmalloc(data_size, GFP_KERNEL | __GFP_NOWARN);
+	if (!btf->data) {
+		kfree(btf);
+		return NULL;
+	}
+
+	btf->data_size = data_size;
+	return btf;
+}
+
 static void btf_free(struct btf *btf)
 {
 	kvfree(btf->types);
 	kvfree(btf->resolved_sizes);
 	kvfree(btf->resolved_ids);
+
+	/* stuff allocated via btf_alloc */
 	kvfree(btf->data);
 	kfree(btf);
 }
@@ -1572,6 +1592,13 @@ nomem:
 	kvfree(resolved_ids);
 	kvfree(visit_states);
 	return -ENOMEM;
+}
+
+static struct btf_verifier_env *btf_verifier_env_alloc(void)
+{
+	gfp_t flags = GFP_KERNEL | __GFP_NOWARN;
+
+	return kzalloc(sizeof(struct btf_verifier_env), flags);
 }
 
 static void btf_verifier_env_free(struct btf_verifier_env *env)
@@ -4306,19 +4333,37 @@ static int btf_parse_hdr(struct btf_verifier_env *env)
 	return 0;
 }
 
-static struct btf *btf_parse(bpfptr_t btf_data, u32 btf_data_size,
-			     u32 log_level, char __user *log_ubuf, u32 log_size)
+static int btf_parse(struct btf_verifier_env *env)
+{
+	struct btf *btf = env->btf;
+	int err;
+
+	err = btf_parse_hdr(env);
+	if (err)
+		return err;
+
+	btf->nohdr_data = btf->data + btf->hdr.hdr_len;
+
+	err = btf_parse_str_sec(env);
+	if (err)
+		return err;
+
+	return btf_parse_type_sec(env);
+}
+
+static struct btf *
+btf_parse_user(bpfptr_t btf_data, u32 btf_data_size,
+	       u32 log_level, char __user *log_ubuf, u32 log_size)
 {
 	struct btf_verifier_env *env = NULL;
 	struct bpf_verifier_log *log;
 	struct btf *btf = NULL;
-	u8 *data;
 	int err;
 
 	if (btf_data_size > BTF_MAX_SIZE)
 		return ERR_PTR(-E2BIG);
 
-	env = kzalloc(sizeof(*env), GFP_KERNEL | __GFP_NOWARN);
+	env = btf_verifier_env_alloc();
 	if (!env)
 		return ERR_PTR(-ENOMEM);
 
@@ -4339,38 +4384,19 @@ static struct btf *btf_parse(bpfptr_t btf_data, u32 btf_data_size,
 		}
 	}
 
-	btf = kzalloc(sizeof(*btf), GFP_KERNEL | __GFP_NOWARN);
+	btf = btf_alloc(btf_data_size);
 	if (!btf) {
 		err = -ENOMEM;
 		goto errout;
 	}
-	env->btf = btf;
 
-	data = kvmalloc(btf_data_size, GFP_KERNEL | __GFP_NOWARN);
-	if (!data) {
-		err = -ENOMEM;
-		goto errout;
-	}
-
-	btf->data = data;
-	btf->data_size = btf_data_size;
-
-	if (copy_from_bpfptr(data, btf_data, btf_data_size)) {
+	if (copy_from_bpfptr(btf->data, btf_data, btf_data_size)) {
 		err = -EFAULT;
 		goto errout;
 	}
 
-	err = btf_parse_hdr(env);
-	if (err)
-		goto errout;
-
-	btf->nohdr_data = btf->data + btf->hdr.hdr_len;
-
-	err = btf_parse_str_sec(env);
-	if (err)
-		goto errout;
-
-	err = btf_parse_type_sec(env);
+	env->btf = btf;
+	err = btf_parse(env);
 	if (err)
 		goto errout;
 
@@ -4388,6 +4414,47 @@ errout:
 	if (btf)
 		btf_free(btf);
 	return ERR_PTR(err);
+}
+
+static struct btf *btf_parse_raw(void *btf_data, u32 btf_data_size)
+{
+	struct btf_verifier_env *env = NULL;
+	struct btf *btf = NULL;
+	int err;
+
+	if (btf_data_size > BTF_MAX_SIZE)
+		return ERR_PTR(-E2BIG);
+
+	env = btf_verifier_env_alloc();
+	if (!env)
+		return ERR_PTR(-ENOMEM);
+
+	/* force log to go to kernel trace buffer */
+	env->log.level = BPF_LOG_KERNEL;
+
+	btf = btf_alloc(btf_data_size);
+	if (!btf) {
+		err = -ENOMEM;
+		goto errout;
+	}
+	memcpy(btf->data, btf_data, btf_data_size);
+
+	env->btf = btf;
+
+	err = btf_parse(env);
+	if (err)
+		goto errout;
+
+	btf_verifier_env_free(env);
+	refcount_set(&btf->refcnt, 1);
+	return btf;
+
+errout:
+	btf_verifier_env_free(env);
+	if (btf)
+		btf_free(btf);
+	return ERR_PTR(err);
+
 }
 
 extern char __weak __start_BTF[];
@@ -5851,10 +5918,10 @@ int btf_new_fd(const union bpf_attr *attr, bpfptr_t uattr)
 	struct btf *btf;
 	int ret;
 
-	btf = btf_parse(make_bpfptr(attr->btf, uattr.is_kernel),
-			attr->btf_size, attr->btf_log_level,
-			u64_to_user_ptr(attr->btf_log_buf),
-			attr->btf_log_size);
+	btf = btf_parse_user(make_bpfptr(attr->btf, uattr.is_kernel),
+			     attr->btf_size, attr->btf_log_level,
+			     u64_to_user_ptr(attr->btf_log_buf),
+			     attr->btf_log_size);
 	if (IS_ERR(btf))
 		return PTR_ERR(btf);
 
@@ -5876,6 +5943,35 @@ int btf_new_fd(const union bpf_attr *attr, bpfptr_t uattr)
 
 	return ret;
 }
+
+struct btf *btf_register(void *data, u32 data_size)
+{
+	struct btf *btf;
+	int ret;
+
+	btf = btf_parse_raw(data, data_size);
+	if (IS_ERR(btf))
+		return btf;
+
+	ret = btf_alloc_id(btf);
+	if (ret) {
+		btf_free(btf);
+		return ERR_PTR(ret);
+	}
+
+	return btf;
+}
+EXPORT_SYMBOL(btf_register);
+
+void btf_unregister(struct btf *btf)
+{
+	if (IS_ERR(btf))
+		return;
+
+	/* btf_put since btf might be held by user */
+	btf_put(btf);
+}
+EXPORT_SYMBOL(btf_unregister);
 
 struct btf *btf_get_by_fd(int fd)
 {
@@ -5984,6 +6080,7 @@ u32 btf_obj_id(const struct btf *btf)
 {
 	return btf->id;
 }
+EXPORT_SYMBOL(btf_obj_id);
 
 bool btf_is_kernel(const struct btf *btf)
 {
