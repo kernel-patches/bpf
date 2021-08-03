@@ -16,7 +16,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <linux/if_xdp.h>
-
+#include <linux/xdp_md_std.h>
+#include <errno.h>
 #include "libbpf.h"
 
 #ifdef __cplusplus
@@ -247,6 +248,30 @@ static inline __u64 xsk_umem__add_offset_to_addr(__u64 addr)
 
 LIBBPF_API int xsk_umem__fd(const struct xsk_umem *umem);
 LIBBPF_API int xsk_socket__fd(const struct xsk_socket *xsk);
+
+/* Helpers for SO_TXTIME */
+
+static inline void xsk_umem__set_md_txtime(void *umem_area, __u64 addr, __s64 txtime)
+{
+	struct xdp_user_tx_metadata *md;
+
+	md = (struct xdp_user_tx_metadata *)&((char *)umem_area)[addr];
+
+	md->timestamp = txtime;
+	md->md_valid |= XDP_METADATA_USER_TX_TIMESTAMP;
+}
+
+static inline int xsk_socket__enable_so_txtime(struct xsk_socket *xsk, bool enable)
+{
+	unsigned int val = (enable) ? 1 : 0;
+	int err;
+
+	err = setsockopt(xsk_socket__fd(xsk), SOL_XDP, SO_TXTIME, &val, sizeof(val));
+
+	if (err)
+		return -errno;
+	return 0;
+}
 
 #define XSK_RING_CONS__DEFAULT_NUM_DESCS      2048
 #define XSK_RING_PROD__DEFAULT_NUM_DESCS      2048
