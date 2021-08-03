@@ -42,12 +42,12 @@ endif
 
 .DELETE_ON_ERROR:
 
-.PHONY: all clean ksnoop
+.PHONY: all clean ksnoop doc doc-clean doc-install
 all: ksnoop
 
-ksnoop: $(OUTPUT)/ksnoop
+ksnoop: $(OUTPUT)/ksnoop doc
 
-clean:
+clean: doc-clean
 	$(call QUIET_CLEAN, ksnoop)
 	$(Q)$(RM) -r $(BPFOBJ_OUTPUT) $(BPFTOOL_OUTPUT)
 	$(Q)$(RM) $(OUTPUT)*.o $(OUTPUT)*.d
@@ -55,10 +55,19 @@ clean:
 	$(Q)$(RM) $(OUTPUT)ksnoop
 	$(Q)$(RM) -r .output
 
-install: ksnoop
+install: ksnoop doc-install
 	$(call QUIET_INSTALL, ksnoop)
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(prefix)/sbin
 	$(Q)$(INSTALL) $(OUTPUT)/ksnoop $(DESTDIR)$(prefix)/sbin/ksnoop
+
+doc:
+	$(call descend,Documentation)
+
+doc-clean:
+	$(call descend,Documentation,clean)
+
+doc-install:
+	$(call descend,Documentation,install)
 
 $(OUTPUT)/ksnoop: $(OUTPUT)/ksnoop.o $(BPFOBJ)
 	$(QUIET_LINK)$(CC) $(CFLAGS) $^ -lelf -lz -o $@
