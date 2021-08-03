@@ -119,6 +119,30 @@ int xsk_socket__fd(const struct xsk_socket *xsk)
 	return xsk ? xsk->fd : -EINVAL;
 }
 
+void *xsk_umem__adjust_prod_data(void *umem_data, const struct xsk_umem *umem)
+{
+	return umem_data + umem->config.frame_headroom + umem->config.xdp_headroom;
+}
+
+void *xsk_umem__adjust_prod_data_meta(void *umem_data, const struct xsk_umem *umem)
+{
+	if (!umem->config.xdp_headroom)
+		return NULL;
+	return umem_data;
+}
+
+void *xsk_umem__adjust_cons_data(void *umem_data, const struct xsk_umem *umem)
+{
+	return umem_data;
+}
+
+void *xsk_umem__adjust_cons_data_meta(void *umem_data, const struct xsk_umem *umem)
+{
+	if (!umem->config.xdp_headroom)
+		return NULL;
+	return umem_data;
+}
+
 static bool xsk_page_aligned(void *buffer)
 {
 	unsigned long addr = (unsigned long)buffer;
@@ -135,6 +159,7 @@ static void xsk_set_umem_config(struct xsk_umem_config *cfg,
 		cfg->frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
 		cfg->frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 		cfg->flags = XSK_UMEM__DEFAULT_FLAGS;
+		cfg->xdp_headroom = XSK_UMEM__DEFAULT_XDP_HEADROOM;
 		return;
 	}
 
@@ -143,6 +168,7 @@ static void xsk_set_umem_config(struct xsk_umem_config *cfg,
 	cfg->frame_size = usr_cfg->frame_size;
 	cfg->frame_headroom = usr_cfg->frame_headroom;
 	cfg->flags = usr_cfg->flags;
+	cfg->xdp_headroom = usr_cfg->xdp_headroom;
 }
 
 static int xsk_set_xdp_socket_config(struct xsk_socket_config *cfg,
