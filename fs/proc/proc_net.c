@@ -91,6 +91,7 @@ int bpf_iter_init_seq_net(void *priv_data, struct bpf_iter_aux_info *aux)
 #endif
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_iter_init_seq_net);
 
 void bpf_iter_fini_seq_net(void *priv_data)
 {
@@ -100,6 +101,7 @@ void bpf_iter_fini_seq_net(void *priv_data)
 	put_net(p->net);
 #endif
 }
+EXPORT_SYMBOL_GPL(bpf_iter_fini_seq_net);
 
 struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct seq_operations *ops,

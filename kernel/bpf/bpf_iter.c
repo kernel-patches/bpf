@@ -300,6 +300,7 @@ int bpf_iter_reg_target(const struct bpf_iter_reg *reg_info)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_iter_reg_target);
 
 void bpf_iter_unreg_target(const struct bpf_iter_reg *reg_info)
 {
@@ -679,6 +680,7 @@ struct bpf_prog *bpf_iter_get_info(struct bpf_iter_meta *meta, bool in_stop)
 
 	return iter_priv->prog;
 }
+EXPORT_SYMBOL_GPL(bpf_iter_get_info);
 
 int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 {
@@ -698,6 +700,7 @@ int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 	 */
 	return ret == 0 ? 0 : -EAGAIN;
 }
+EXPORT_SYMBOL_GPL(bpf_iter_run_prog);
 
 BPF_CALL_4(bpf_for_each_map_elem, struct bpf_map *, map, void *, callback_fn,
 	   void *, callback_ctx, u64, flags)

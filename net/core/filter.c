@@ -10549,6 +10549,7 @@ BTF_SOCK_TYPE_xxx
 #else
 u32 btf_sock_ids[MAX_BTF_SOCK_TYPE];
 #endif
+EXPORT_SYMBOL_GPL(btf_sock_ids);
 
 BPF_CALL_1(bpf_skc_to_tcp6_sock, struct sock *, sk)
 {
