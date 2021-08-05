@@ -12,6 +12,10 @@
 SEC("struct_ops/"#name) \
 BPF_PROG(name, args)
 
+#ifndef SOL_TCP
+#define SOL_TCP 6
+#endif
+
 #define tcp_jiffies32 ((__u32)bpf_jiffies64())
 
 struct sock_common {
