@@ -754,10 +754,12 @@ int main(int argc, char **argv)
 
 	save_netns();
 	stdio_hijack();
-	env.has_testmod = true;
-	if (load_bpf_testmod()) {
-		fprintf(env.stderr, "WARNING! Selftests relying on bpf_testmod.ko will be skipped.\n");
-		env.has_testmod = false;
+	if (!env.list_test_names) {
+		env.has_testmod = true;
+		if (load_bpf_testmod()) {
+			fprintf(env.stderr, "WARNING! Selftests relying on bpf_testmod.ko will be skipped.\n");
+			env.has_testmod = false;
+		}
 	}
 	for (i = 0; i < prog_test_cnt; i++) {
 		struct prog_test_def *test = &prog_test_defs[i];
