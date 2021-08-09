@@ -353,7 +353,11 @@ const struct bpf_func_proto bpf_jiffies64_proto = {
 #ifdef CONFIG_CGROUPS
 BPF_CALL_0(bpf_get_current_cgroup_id)
 {
-	struct cgroup *cgrp = task_dfl_cgroup(current);
+	struct cgroup *cgrp;
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(current);
+	rcu_read_unlock();
 
 	return cgroup_id(cgrp);
 }
@@ -366,8 +370,12 @@ const struct bpf_func_proto bpf_get_current_cgroup_id_proto = {
 
 BPF_CALL_1(bpf_get_current_ancestor_cgroup_id, int, ancestor_level)
 {
-	struct cgroup *cgrp = task_dfl_cgroup(current);
+	struct cgroup *cgrp;
 	struct cgroup *ancestor;
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(current);
+	rcu_read_unlock();
 
 	ancestor = cgroup_ancestor(cgrp, ancestor_level);
 	if (!ancestor)
