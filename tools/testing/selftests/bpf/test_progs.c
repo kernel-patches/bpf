@@ -867,7 +867,8 @@ int main(int argc, char **argv)
 		}
 
 		if (env.list_test_names) {
-			fprintf(env.stdout, "%s\n", test->test_name);
+			fprintf(env.stdout, "# %d %s\n",
+				test->test_num, test->test_name);
 			env.succ_cnt++;
 			continue;
 		}
