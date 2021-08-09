@@ -1180,12 +1180,12 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 
 	/* tmp2[0] = array, tmp2[1] = index */
 
-	/* if (tail_call_cnt > MAX_TAIL_CALL_CNT)
+	/* if (tail_call_cnt >= MAX_TAIL_CALL_CNT)
 	 *	goto out;
 	 * tail_call_cnt++;
 	 */
-	lo = (u32)MAX_TAIL_CALL_CNT;
-	hi = (u32)((u64)MAX_TAIL_CALL_CNT >> 32);
+	lo = (u32)(MAX_TAIL_CALL_CNT - 1);
+	hi = (u32)((u64)(MAX_TAIL_CALL_CNT - 1) >> 32);
 	tc = arm_bpf_get_reg64(tcc, tmp, ctx);
 	emit(ARM_CMP_I(tc[0], hi), ctx);
 	_emit(ARM_COND_EQ, ARM_CMP_I(tc[1], lo), ctx);
