@@ -13,6 +13,96 @@
 #include <execinfo.h> /* backtrace */
 #include <linux/membarrier.h>
 
+// Copied from perf/util/string.c
+
+/* Character class matching */
+static bool __match_charclass(const char *pat, char c, const char **npat)
+{
+	bool complement = false, ret = true;
+
+	if (*pat == '!') {
+		complement = true;
+		pat++;
+	}
+	if (*pat++ == c) /* First character is special */
+		goto end;
+
+	while (*pat && *pat != ']') { /* Matching */
+		if (*pat == '-' && *(pat + 1) != ']') { /* Range */
+			if (*(pat - 1) <= c && c <= *(pat + 1))
+				goto end;
+			if (*(pat - 1) > *(pat + 1))
+				goto error;
+			pat += 2;
+		} else if (*pat++ == c)
+			goto end;
+	}
+	if (!*pat)
+		goto error;
+	ret = false;
+
+end:
+	while (*pat && *pat != ']') /* Searching closing */
+		pat++;
+	if (!*pat)
+		goto error;
+	*npat = pat + 1;
+	return complement ? !ret : ret;
+
+error:
+	return false;
+}
+
+// Copied from perf/util/string.c
+/* Glob/lazy pattern matching */
+static bool __match_glob(const char *str, const char *pat, bool ignore_space,
+			 bool case_ins)
+{
+	while (*str && *pat && *pat != '*') {
+		if (ignore_space) {
+			/* Ignore spaces for lazy matching */
+			if (isspace(*str)) {
+				str++;
+				continue;
+			}
+			if (isspace(*pat)) {
+				pat++;
+				continue;
+			}
+		}
+		if (*pat == '?') { /* Matches any single character */
+			str++;
+			pat++;
+			continue;
+		} else if (*pat == '[') /* Character classes/Ranges */
+			if (__match_charclass(pat + 1, *str, &pat)) {
+				str++;
+				continue;
+			} else
+				return false;
+		else if (*pat == '\\') /* Escaped char match as normal char */
+			pat++;
+		if (case_ins) {
+			if (tolower(*str) != tolower(*pat))
+				return false;
+		} else if (*str != *pat)
+			return false;
+		str++;
+		pat++;
+	}
+	/* Check wild card */
+	if (*pat == '*') {
+		while (*pat == '*')
+			pat++;
+		if (!*pat) /* Tail wild card matches all */
+			return true;
+		while (*str)
+			if (__match_glob(str++, pat, ignore_space, case_ins))
+				return true;
+	}
+	return !*str && !*pat;
+}
+
 #define EXIT_NO_TEST		2
 #define EXIT_ERR_SETUP_INFRA	3
 
@@ -55,12 +145,12 @@ static bool should_run(struct test_selector *sel, int num, const char *name)
 	int i;
 
 	for (i = 0; i < sel->blacklist.cnt; i++) {
-		if (strstr(name, sel->blacklist.strs[i]))
+		if (__match_glob(name, sel->blacklist.strs[i], false, false))
 			return false;
 	}
 
 	for (i = 0; i < sel->whitelist.cnt; i++) {
-		if (strstr(name, sel->whitelist.strs[i]))
+		if (__match_glob(name, sel->whitelist.strs[i], false, false))
 			return true;
 	}
 
