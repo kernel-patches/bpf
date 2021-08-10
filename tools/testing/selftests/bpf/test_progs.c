@@ -244,6 +244,11 @@ void test__end_subtest()
 	       test->test_num, test->subtest_num, test->subtest_name,
 	       sub_error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
 
+	if (sub_error_cnt) {
+		fprintf(env.summary_errors, "#%d/%d %s: FAIL\n",
+			test->test_num, test->subtest_num, test->subtest_name);
+	}
+
 	if (sub_error_cnt)
 		env.fail_cnt++;
 	else if (test->skip_cnt == 0)
@@ -816,12 +821,19 @@ int main(int argc, char **argv)
 		.sa_flags = SA_RESETHAND,
 	};
 	int err, i;
+	/* record errors to print after summary line */
+	char *summary_errors_buf;
+	size_t summary_errors_cnt;
+
 
 	sigaction(SIGSEGV, &sigact, NULL);
 
 	err = argp_parse(&argp, argc, argv, 0, NULL, &env);
 	if (err)
 		return err;
+
+	env.summary_errors = open_memstream(
+		&summary_errors_buf, &summary_errors_cnt);
 
 	err = cd_flavor_subdir(argv[0]);
 	if (err)
@@ -891,6 +903,11 @@ int main(int argc, char **argv)
 			test->test_num, test->test_name,
 			test->error_cnt ? "FAIL" : "OK");
 
+		if(test->error_cnt) {
+			fprintf(env.summary_errors, "#%d %s: FAIL\n",
+				test->test_num, test->test_name);
+		}
+
 		reset_affinity();
 		restore_netns();
 		if (test->need_cgroup_cleanup)
@@ -908,8 +925,13 @@ int main(int argc, char **argv)
 	if (env.list_test_names)
 		goto out;
 
-	fprintf(stdout, "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n",
+	fprintf(stdout, "\nSummary: %d/%d PASSED, %d SKIPPED, %d FAILED\n\n",
 		env.succ_cnt, env.sub_succ_cnt, env.skip_cnt, env.fail_cnt);
+
+	fclose(env.summary_errors);
+	if(env.fail_cnt) {
+		fprintf(stdout, "%s", summary_errors_buf);
+	}
 
 out:
 	free_str_set(&env.test_selector.blacklist);
@@ -919,6 +941,7 @@ out:
 	free_str_set(&env.subtest_selector.whitelist);
 	free(env.subtest_selector.num_set);
 	close(env.saved_netns_fd);
+	free(summary_errors_buf);
 
 	if (env.succ_cnt + env.fail_cnt + env.skip_cnt == 0)
 		return EXIT_NO_TEST;
