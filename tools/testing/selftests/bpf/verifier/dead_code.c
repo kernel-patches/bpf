@@ -159,3 +159,16 @@
 	.result = ACCEPT,
 	.retval = 2,
 },
+{
+	"dead code: zero extension",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_JMP_IMM(BPF_JGE, BPF_REG_0, 0, 1),
+	BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_10, 0),
+	BPF_EXIT_INSN(),
+	},
+	.errstr_unpriv = "invalid read from stack R10 off=0 size=4",
+	.result_unpriv = REJECT,
+	.result = ACCEPT,
+	.retval = 0,
+},
