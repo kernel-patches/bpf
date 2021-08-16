@@ -1334,11 +1334,16 @@ static void test_map_stress(void)
 static int map_update_retriable(int map_fd, const void *key, const void *value,
 				int flags, int attempts)
 {
+	int delay = 1;
+
 	while (bpf_map_update_elem(map_fd, key, value, flags)) {
 		if (!attempts || (errno != EAGAIN && errno != EBUSY))
 			return -errno;
 
-		usleep(1);
+		if (delay < 50)
+			delay *= 2;
+
+		usleep(delay);
 		attempts--;
 	}
 
