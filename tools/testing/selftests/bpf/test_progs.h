@@ -49,6 +49,7 @@ enum verbosity {
 struct str_set {
 	const char **strs;
 	int cnt;
+	bool is_glob_pattern;
 };
 
 struct test_selector {

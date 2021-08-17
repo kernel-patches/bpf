@@ -13,6 +13,28 @@
 #include <execinfo.h> /* backtrace */
 #include <linux/membarrier.h>
 
+/* Adapted from perf/util/string.c */
+static bool glob_match(const char *str, const char *pat)
+{
+	while (*str && *pat && *pat != '*') {
+		if (*str != *pat)
+			return false;
+		str++;
+		pat++;
+	}
+	/* Check wild card */
+	if (*pat == '*') {
+		while (*pat == '*')
+			pat++;
+		if (!*pat) /* Tail wild card matches all */
+			return true;
+		while (*str)
+			if (glob_match(str++, pat))
+				return true;
+	}
+	return !*str && !*pat;
+}
+
 #define EXIT_NO_TEST		2
 #define EXIT_ERR_SETUP_INFRA	3
 
@@ -55,12 +77,12 @@ static bool should_run(struct test_selector *sel, int num, const char *name)
 	int i;
 
 	for (i = 0; i < sel->blacklist.cnt; i++) {
-		if (strstr(name, sel->blacklist.strs[i]))
+		if (glob_match(name, sel->blacklist.strs[i]))
 			return false;
 	}
 
 	for (i = 0; i < sel->whitelist.cnt; i++) {
-		if (strstr(name, sel->whitelist.strs[i]))
+		if (glob_match(name, sel->whitelist.strs[i]))
 			return true;
 	}
 
@@ -450,6 +472,8 @@ enum ARG_KEYS {
 	ARG_VERBOSE = 'v',
 	ARG_GET_TEST_CNT = 'c',
 	ARG_LIST_TEST_NAMES = 'l',
+	ARG_TEST_NAME_GLOB_ALLOWLIST = 'a',
+	ARG_TEST_NAME_GLOB_DENYLIST = 'd',
 };
 
 static const struct argp_option opts[] = {
@@ -467,6 +491,10 @@ static const struct argp_option opts[] = {
 	  "Get number of selected top-level tests " },
 	{ "list", ARG_LIST_TEST_NAMES, NULL, 0,
 	  "List test names that would run (without running them) " },
+	{ "allow", ARG_TEST_NAME_GLOB_ALLOWLIST, "NAMES", 0,
+	  "Run tests with name matching the pattern (support *)." },
+	{ "deny", ARG_TEST_NAME_GLOB_DENYLIST, "NAMES", 0,
+	  "Don't run tests with name matching the pattern (support *)." },
 	{},
 };
 
@@ -491,7 +519,7 @@ static void free_str_set(const struct str_set *set)
 	free(set->strs);
 }
 
-static int parse_str_list(const char *s, struct str_set *set)
+static int parse_str_list(const char *s, struct str_set *set, bool is_glob_pattern)
 {
 	char *input, *state = NULL, *next, **tmp, **strs = NULL;
 	int cnt = 0;
@@ -508,8 +536,14 @@ static int parse_str_list(const char *s, struct str_set *set)
 		if (!tmp)
 			goto err;
 		strs = tmp;
+		if (is_glob_pattern)
+			strs[cnt] = strdup(next);
+		else {
+			char* pat = malloc(strlen(next) + 2 + 1);
+			sprintf(pat, "*%s*", next);
+			strs[cnt] = pat;
+		}
 
-		strs[cnt] = strdup(next);
 		if (!strs[cnt])
 			goto err;
 
@@ -553,29 +587,43 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		}
 		break;
 	}
+	case ARG_TEST_NAME_GLOB_ALLOWLIST:
 	case ARG_TEST_NAME: {
+		if (env->test_selector.whitelist.cnt || env->subtest_selector.whitelist.cnt) {
+			fprintf(stderr, "-a and -t are mutually exclusive, you can only specify one.\n");
+			return -EINVAL;
+		}
 		char *subtest_str = strchr(arg, '/');
 
 		if (subtest_str) {
 			*subtest_str = '\0';
 			if (parse_str_list(subtest_str + 1,
-					   &env->subtest_selector.whitelist))
+					   &env->subtest_selector.whitelist,
+					   key == ARG_TEST_NAME_GLOB_ALLOWLIST))
 				return -ENOMEM;
 		}
-		if (parse_str_list(arg, &env->test_selector.whitelist))
+		if (parse_str_list(arg, &env->test_selector.whitelist,
+				   key == ARG_TEST_NAME_GLOB_ALLOWLIST))
 			return -ENOMEM;
 		break;
 	}
+	case ARG_TEST_NAME_GLOB_DENYLIST:
 	case ARG_TEST_NAME_BLACKLIST: {
+		if (env->test_selector.blacklist.cnt || env->subtest_selector.blacklist.cnt) {
+			fprintf(stderr, "-d and -b are mutually exclusive, you can only specify one.\n");
+			return -EINVAL;
+		}
 		char *subtest_str = strchr(arg, '/');
 
 		if (subtest_str) {
 			*subtest_str = '\0';
 			if (parse_str_list(subtest_str + 1,
-					   &env->subtest_selector.blacklist))
+					   &env->subtest_selector.blacklist,
+					   key == ARG_TEST_NAME_GLOB_DENYLIST))
 				return -ENOMEM;
 		}
-		if (parse_str_list(arg, &env->test_selector.blacklist))
+		if (parse_str_list(arg, &env->test_selector.blacklist,
+				   key == ARG_TEST_NAME_GLOB_DENYLIST))
 			return -ENOMEM;
 		break;
 	}
