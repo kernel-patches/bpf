@@ -13434,3 +13434,8 @@ struct cgroup_subsys perf_event_cgrp_subsys = {
 	.threaded	= true,
 };
 #endif /* CONFIG_CGROUP_PERF */
+
+int __weak  bpf_branch_record_read(void)
+{
+	return -EOPNOTSUPP;
+}

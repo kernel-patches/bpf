@@ -116,6 +116,8 @@ struct perf_branch_stack {
 	struct perf_branch_entry	entries[];
 };
 
+int bpf_branch_record_read(void);
+
 struct task_struct;
 
 /*

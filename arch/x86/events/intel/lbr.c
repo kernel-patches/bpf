@@ -1862,3 +1862,19 @@ EXPORT_SYMBOL_GPL(x86_perf_get_lbr);
 struct event_constraint vlbr_constraint =
 	__EVENT_CONSTRAINT(INTEL_FIXED_VLBR_EVENT, (1ULL << INTEL_PMC_IDX_FIXED_VLBR),
 			  FIXED_EVENT_FLAGS, 1, 0, PERF_X86_EVENT_LBR_SELECT);
+
+DEFINE_PER_CPU(struct perf_branch_entry, bpf_lbr_entries[MAX_LBR_ENTRIES]);
+DEFINE_PER_CPU(int, bpf_lbr_cnt);
+
+int bpf_branch_record_read(void)
+{
+	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+
+	intel_pmu_lbr_disable_all();
+	intel_pmu_lbr_read();
+	memcpy(this_cpu_ptr(&bpf_lbr_entries), cpuc->lbr_entries,
+	       sizeof(struct perf_branch_entry) * x86_pmu.lbr_nr);
+	*this_cpu_ptr(&bpf_lbr_cnt) = x86_pmu.lbr_nr;
+	intel_pmu_lbr_enable_all(false);
+	return 0;
+}

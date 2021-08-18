@@ -1002,6 +1002,29 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto_pe = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+#ifndef MAX_LBR_ENTRIES
+#define MAX_LBR_ENTRIES		32
+#endif
+
+DECLARE_PER_CPU(struct perf_branch_entry, bpf_lbr_entries[MAX_LBR_ENTRIES]);
+DECLARE_PER_CPU(int, bpf_lbr_cnt);
+BPF_CALL_3(bpf_get_branch_trace, void *, buf, u32, size, u64, flags)
+{
+	memcpy(buf, *this_cpu_ptr(&bpf_lbr_entries),
+	       min_t(u32, size,
+		     sizeof(struct perf_branch_entry) * MAX_LBR_ENTRIES));
+	return *this_cpu_ptr(&bpf_lbr_cnt);
+}
+
+static const struct bpf_func_proto bpf_get_branch_trace_proto = {
+	.func		= bpf_get_branch_trace,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1115,6 +1138,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_snprintf_proto;
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_tracing;
+	case BPF_FUNC_get_branch_trace:
+		return &bpf_get_branch_trace_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -1851,6 +1876,8 @@ void __bpf_trace_run(struct bpf_prog *prog, u64 *args)
 {
 	cant_sleep();
 	rcu_read_lock();
+	if (prog->call_get_branch)
+		bpf_branch_record_read();
 	(void) bpf_prog_run(prog, args);
 	rcu_read_unlock();
 }

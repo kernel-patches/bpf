@@ -566,6 +566,9 @@ u64 notrace __bpf_prog_enter(struct bpf_prog *prog)
 {
 	rcu_read_lock();
 	migrate_disable();
+	if (prog->call_get_branch)
+		bpf_branch_record_read();
+
 	if (unlikely(__this_cpu_inc_return(*(prog->active)) != 1)) {
 		inc_misses_counter(prog);
 		return 0;
