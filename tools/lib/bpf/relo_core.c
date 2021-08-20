@@ -417,13 +417,6 @@ static int bpf_core_match_member(const struct btf *local_btf,
 				return found;
 		} else if (strcmp(local_name, targ_name) == 0) {
 			/* matching named field */
-			struct bpf_core_accessor *targ_acc;
-
-			targ_acc = &spec->spec[spec->len++];
-			targ_acc->type_id = targ_id;
-			targ_acc->idx = i;
-			targ_acc->name = targ_name;
-
 			*next_targ_id = m->type;
 			found = bpf_core_fields_are_compat(local_btf,
 							   local_member->type,
