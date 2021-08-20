@@ -361,7 +361,7 @@ get_var_kill_data(struct pt_regs* ctx, int spid, int tpid, int sig)
 	int zero = 0;
 	struct var_kill_data_t* kill_data = bpf_map_lookup_elem(&data_heap, &zero);
 
-	if (kill_data == NULL)
+	if (!kill_dat)
 		return NULL;
 	struct task_struct* task = (struct task_struct*)bpf_get_current_task();
 
@@ -534,14 +534,14 @@ static INLINE bool is_dentry_allowed_for_filemod(struct dentry* file_dentry,
 	*device_id = dev_id;
 	bool* allowed_device = bpf_map_lookup_elem(&allowed_devices, &dev_id);
 
-	if (allowed_device == NULL)
+	if (!allowed_device)
 		return false;
 
 	u64 ino = BPF_CORE_READ(file_dentry, d_inode, i_ino);
 	*file_ino = ino;
 	bool* allowed_file = bpf_map_lookup_elem(&allowed_file_inodes, &ino);
 
-	if (allowed_file == NULL)
+	if (!allowed_fil)
 		if (!is_ancestor_in_allowed_inodes(BPF_CORE_READ(file_dentry, d_parent)))
 			return false;
 	return true;
@@ -689,7 +689,7 @@ int raw_tracepoint__sched_process_exec(struct bpf_raw_tracepoint_args* ctx)
 	u64 inode = BPF_CORE_READ(bprm, file, f_inode, i_ino);
 
 	bool* should_filter_binprm = bpf_map_lookup_elem(&disallowed_exec_inodes, &inode);
-	if (should_filter_binprm != NULL)
+	if (should_filter_binprm)
 		goto out;
 
 	int zero = 0;
