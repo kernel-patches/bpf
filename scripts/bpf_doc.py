@@ -32,12 +32,14 @@ class APIElement(object):
     An object representing the description of an aspect of the eBPF API.
     @proto: prototype of the API symbol
     @desc: textual description of the symbol
+    @gpl: determine if this API element is GPL only
     @ret: (optional) description of any associated return value
     """
-    def __init__(self, proto='', desc='', ret=''):
+    def __init__(self, proto='', desc='', ret='', gpl=''):
         self.proto = proto
         self.desc = desc
         self.ret = ret
+        self.gpl = gpl
 
 
 class Helper(APIElement):
@@ -98,7 +100,8 @@ class HeaderParser(object):
         proto    = self.parse_proto()
         desc     = self.parse_desc()
         ret      = self.parse_ret()
-        return Helper(proto=proto, desc=desc, ret=ret)
+        gpl      = self.parse_gpl()
+        return Helper(proto=proto, desc=desc, ret=ret, gpl=gpl)
 
     def parse_symbol(self):
         p = re.compile(' \* ?(.+)$')
@@ -172,6 +175,29 @@ class HeaderParser(object):
                 else:
                     break
         return ret
+    
+    def parse_gpl(self):
+        p = re.compile(' \* ?(?:\t| {5,8})GPL Compatibility$')
+        capture = p.match(self.line)
+        if not capture:
+            # Helper can have empty GPL Compatilibity and we might be parsing another
+            # attribute: return but do not consume.
+            return ''
+        # GPL Compatibility can be several lines, some of them possibly empty, and it
+        # stops when another subsection title is met.
+        desc = ''
+        while True:
+            self.line = self.reader.readline()
+            if self.line == ' *\n':
+                desc += '\n'
+            else:
+                p = re.compile(' \* ?(?:\t| {5,8})(?:\t| {8})(.*)')
+                capture = p.match(self.line)
+                if capture:
+                    desc += capture.group(1) + '\n'
+                else:
+                    break
+        return desc
 
     def seek_to(self, target, help_message):
         self.reader.seek(0)
@@ -293,6 +319,10 @@ class PrinterRST(Printer):
             for line in elem.ret.rstrip().split('\n'):
                 print('{}{}'.format('\t\t' if line else '', line))
 
+        if (elem.gpl):
+            print('\tGPL Compatibility')
+            for line in elem.gpl.rstrip().split('\n'):
+                print('{}{}'.format('\t\t' if line else '', line))
         print('')
 
 
