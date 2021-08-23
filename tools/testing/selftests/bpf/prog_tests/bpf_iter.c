@@ -943,7 +943,7 @@ static void test_bpf_sk_storage_delete(void)
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	struct bpf_iter_bpf_sk_storage_helpers *skel;
 	union bpf_iter_link_info linfo;
-	int err, len, map_fd, iter_fd;
+	int err, len, map_fd, dummy_map_fd, iter_fd;
 	struct bpf_link *link;
 	int sock_fd = -1;
 	__u32 val = 42;
@@ -955,12 +955,17 @@ static void test_bpf_sk_storage_delete(void)
 		return;
 
 	map_fd = bpf_map__fd(skel->maps.sk_stg_map);
+	dummy_map_fd = bpf_map__fd(skel->maps.dummy_sk_stg_map);
 
 	sock_fd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (CHECK(sock_fd < 0, "socket", "errno: %d\n", errno))
 		goto out;
 	err = bpf_map_update_elem(map_fd, &sock_fd, &val, BPF_NOEXIST);
 	if (CHECK(err, "map_update", "map_update failed\n"))
+		goto out;
+	err = bpf_map_update_elem(dummy_map_fd, &sock_fd, &val, BPF_NOEXIST);
+	if (CHECK(err, "(shared local storage) map_update",
+		  "map_update failed\n"))
 		goto out;
 
 	memset(&linfo, 0, sizeof(linfo));
@@ -987,6 +992,12 @@ static void test_bpf_sk_storage_delete(void)
 	if (CHECK(!err || errno != ENOENT, "bpf_map_lookup_elem",
 		  "map value wasn't deleted (err=%d, errno=%d)\n", err, errno))
 		goto close_iter;
+	err = bpf_map_lookup_elem(dummy_map_fd, &sock_fd, &val);
+	if (CHECK(
+	    err || val != 0, "(shared local storage) bpf_map_lookup_elem",
+	    "map value wasn't deleted (expected val=0, got val=%d, err=%d)\n",
+	    val, err))
+		goto close_iter;
 
 close_iter:
 	close(iter_fd);
@@ -1007,7 +1018,7 @@ out:
 static void test_bpf_sk_storage_get(void)
 {
 	struct bpf_iter_bpf_sk_storage_helpers *skel;
-	int err, map_fd, val = -1;
+	int err, map_fd, dummy_map_fd, val = -1;
 	int sock_fd = -1;
 
 	skel = bpf_iter_bpf_sk_storage_helpers__open_and_load();
@@ -1024,9 +1035,14 @@ static void test_bpf_sk_storage_get(void)
 		goto close_socket;
 
 	map_fd = bpf_map__fd(skel->maps.sk_stg_map);
+	dummy_map_fd = bpf_map__fd(skel->maps.dummy_sk_stg_map);
 
 	err = bpf_map_update_elem(map_fd, &sock_fd, &val, BPF_NOEXIST);
 	if (CHECK(err, "bpf_map_update_elem", "map_update_failed\n"))
+		goto close_socket;
+	err = bpf_map_update_elem(dummy_map_fd, &sock_fd, &val, BPF_NOEXIST);
+	if (CHECK(err, "(shared socket storage) bpf_map_update_elem",
+		  "map_update_failed\n"))
 		goto close_socket;
 
 	do_dummy_read(skel->progs.fill_socket_owner);
@@ -1036,11 +1052,22 @@ static void test_bpf_sk_storage_get(void)
 	    "map value wasn't set correctly (expected %d, got %d, err=%d)\n",
 	    getpid(), val, err))
 		goto close_socket;
+	err = bpf_map_lookup_elem(dummy_map_fd, &sock_fd, &val);
+	if (CHECK(err || val != getpid(),
+	    "(shared local storage) bpf_map_lookup_elem",
+	    "map value wasn't set correctly (expected %d, got %d, err=%d)\n",
+	    getpid(), val, err))
+		goto close_socket;
 
 	do_dummy_read(skel->progs.negate_socket_local_storage);
 
 	err = bpf_map_lookup_elem(map_fd, &sock_fd, &val);
 	CHECK(err || val != -getpid(), "bpf_map_lookup_elem",
+	      "map value wasn't set correctly (expected %d, got %d, err=%d)\n",
+	      -getpid(), val, err);
+	err = bpf_map_lookup_elem(dummy_map_fd, &sock_fd, &val);
+	CHECK(err || val != -getpid(),
+	      "(shared local storage) bpf_map_lookup_elem",
 	      "map value wasn't set correctly (expected %d, got %d, err=%d)\n",
 	      -getpid(), val, err);
 

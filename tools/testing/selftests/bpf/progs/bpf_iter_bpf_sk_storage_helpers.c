@@ -13,11 +13,22 @@ struct {
 	__type(value, int);
 } sk_stg_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC | BPF_F_SHARED_LOCAL_STORAGE);
+	__type(key, int);
+	__type(value, int);
+} dummy_sk_stg_map SEC(".maps");
+
 SEC("iter/bpf_sk_storage_map")
 int delete_bpf_sk_storage_map(struct bpf_iter__bpf_sk_storage_map *ctx)
 {
-	if (ctx->sk)
-		bpf_sk_storage_delete(&sk_stg_map, ctx->sk);
+	struct sock *sk = ctx->sk;
+
+	if (sk) {
+		bpf_sk_storage_delete(&sk_stg_map, sk);
+		bpf_sk_storage_delete(&dummy_sk_stg_map, sk);
+	}
 
 	return 0;
 }
@@ -43,6 +54,12 @@ int fill_socket_owner(struct bpf_iter__task_file *ctx)
 
 	*sock_tgid = task->tgid;
 
+	sock_tgid = bpf_sk_storage_get(&dummy_sk_stg_map, sock->sk, 0, 0);
+	if (!sock_tgid)
+		return 0;
+
+	*sock_tgid = task->tgid;
+
 	return 0;
 }
 
@@ -56,6 +73,12 @@ int negate_socket_local_storage(struct bpf_iter__tcp *ctx)
 		return 0;
 
 	sock_tgid = bpf_sk_storage_get(&sk_stg_map, sk_common, 0, 0);
+	if (!sock_tgid)
+		return 0;
+
+	*sock_tgid = -*sock_tgid;
+
+	sock_tgid = bpf_sk_storage_get(&dummy_sk_stg_map, sk_common, 0, 0);
 	if (!sock_tgid)
 		return 0;
 

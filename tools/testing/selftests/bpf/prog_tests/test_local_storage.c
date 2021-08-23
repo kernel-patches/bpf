@@ -189,6 +189,9 @@ void test_test_local_storage(void)
 				      serv_sk))
 		goto close_prog_rmdir;
 
+	CHECK(skel->data->fast_sk_storage_result != 0, "fast_sk_storage_result",
+	      "fast_sk_local_storage not set\n");
+
 close_prog_rmdir:
 	snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir_path);
 	system(cmd);

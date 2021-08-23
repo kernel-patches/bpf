@@ -16,11 +16,16 @@ char _license[] SEC("license") = "GPL";
 int monitored_pid = 0;
 int inode_storage_result = -1;
 int sk_storage_result = -1;
+int fast_sk_storage_result = -1;
 
 struct local_storage {
 	struct inode *exec_inode;
 	__u32 value;
 	struct bpf_spin_lock lock;
+};
+
+struct fast_storage {
+	__u32 value;
 };
 
 struct {
@@ -36,6 +41,14 @@ struct {
 	__type(key, int);
 	__type(value, struct local_storage);
 } sk_storage_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC | BPF_F_CLONE |
+			  BPF_F_SHARED_LOCAL_STORAGE);
+	__type(key, int);
+	__type(value, struct fast_storage);
+} dummy_sk_storage_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
@@ -107,6 +120,7 @@ int BPF_PROG(socket_bind, struct socket *sock, struct sockaddr *address,
 {
 	__u32 pid = bpf_get_current_pid_tgid() >> 32;
 	struct local_storage *storage;
+	struct fast_storage *fast_storage;
 	int err;
 
 	if (pid != monitored_pid)
@@ -126,6 +140,14 @@ int BPF_PROG(socket_bind, struct socket *sock, struct sockaddr *address,
 	if (!err)
 		sk_storage_result = err;
 
+	fast_storage =
+		bpf_sk_storage_get(&dummy_sk_storage_map, sock->sk, 0, 0);
+	if (!fast_storage)
+		return 0;
+
+	fast_sk_storage_result =
+		fast_storage->value == DUMMY_STORAGE_VALUE ? 0 : -1;
+
 	return 0;
 }
 
@@ -135,6 +157,7 @@ int BPF_PROG(socket_post_create, struct socket *sock, int family, int type,
 {
 	__u32 pid = bpf_get_current_pid_tgid() >> 32;
 	struct local_storage *storage;
+	struct fast_storage *fast_storage;
 
 	if (pid != monitored_pid)
 		return 0;
@@ -147,6 +170,13 @@ int BPF_PROG(socket_post_create, struct socket *sock, int family, int type,
 	bpf_spin_lock(&storage->lock);
 	storage->value = DUMMY_STORAGE_VALUE;
 	bpf_spin_unlock(&storage->lock);
+
+	fast_storage =
+		bpf_sk_storage_get(&dummy_sk_storage_map, sock->sk, 0, 0);
+	if (!fast_storage || fast_storage != sock->sk->bpf_shared_local_storage)
+		return 0;
+
+	fast_storage->value = DUMMY_STORAGE_VALUE;
 
 	return 0;
 }
