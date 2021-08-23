@@ -92,6 +92,16 @@ static void bpf_sk_storage_map_free(struct bpf_map *map)
 	bpf_local_storage_map_free(smap, NULL);
 }
 
+static int bpf_sk_storage_map_alloc_check(union bpf_attr *attr)
+{
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+	if (attr->map_flags & BPF_F_SHARED_LOCAL_STORAGE &&
+	    attr->value_size > CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE)
+		return -E2BIG;
+#endif
+	return bpf_local_storage_map_alloc_check(attr);
+}
+
 static struct bpf_map *bpf_sk_storage_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_local_storage_map *smap;
@@ -119,6 +129,10 @@ static void *bpf_fd_sk_storage_lookup_elem(struct bpf_map *map, void *key)
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
 	if (sock) {
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+		if (map->map_flags & BPF_F_SHARED_LOCAL_STORAGE)
+			return sock->sk->bpf_shared_local_storage;
+#endif
 		sdata = bpf_sk_storage_lookup(sock->sk, map, true);
 		sockfd_put(sock);
 		return sdata ? sdata->data : NULL;
@@ -137,6 +151,13 @@ static int bpf_fd_sk_storage_update_elem(struct bpf_map *map, void *key,
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
 	if (sock) {
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+		if (map_flags & BPF_F_SHARED_LOCAL_STORAGE) {
+			memcpy(sock->sk->bpf_shared_local_storage, value,
+			       sizeof(sock->sk->bpf_shared_local_storage));
+			return 0;
+		}
+#endif
 		sdata = bpf_local_storage_update(
 			sock->sk, (struct bpf_local_storage_map *)map, value,
 			map_flags);
@@ -155,6 +176,13 @@ static int bpf_fd_sk_storage_delete_elem(struct bpf_map *map, void *key)
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
 	if (sock) {
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+		if (map->map_flags & BPF_F_SHARED_LOCAL_STORAGE) {
+			memset(sock->sk->bpf_shared_local_storage, 0,
+			       sizeof(sock->sk->bpf_shared_local_storage));
+			return 0;
+		}
+#endif
 		err = bpf_sk_storage_del(sock->sk, map);
 		sockfd_put(sock);
 		return err;
@@ -261,6 +289,15 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	if (!sk || !sk_fullsock(sk) || flags > BPF_SK_STORAGE_GET_F_CREATE)
 		return (unsigned long)NULL;
 
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+	if (map->map_flags & BPF_F_SHARED_LOCAL_STORAGE) {
+		if (unlikely(value || flags & BPF_SK_STORAGE_GET_F_CREATE))
+			return (unsigned long)NULL;
+
+		return (unsigned long)sk->bpf_shared_local_storage;
+	}
+#endif
+
 	sdata = bpf_sk_storage_lookup(sk, map, true);
 	if (sdata)
 		return (unsigned long)sdata->data;
@@ -290,6 +327,14 @@ BPF_CALL_2(bpf_sk_storage_delete, struct bpf_map *, map, struct sock *, sk)
 {
 	if (!sk || !sk_fullsock(sk))
 		return -EINVAL;
+
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+	if (map->map_flags & BPF_F_SHARED_LOCAL_STORAGE) {
+		memset(sk->bpf_shared_local_storage, 0,
+		       sizeof(sk->bpf_shared_local_storage));
+		return 0;
+	}
+#endif
 
 	if (refcount_inc_not_zero(&sk->sk_refcnt)) {
 		int err;
@@ -336,7 +381,7 @@ bpf_sk_storage_ptr(void *owner)
 static int sk_storage_map_btf_id;
 const struct bpf_map_ops sk_storage_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
-	.map_alloc_check = bpf_local_storage_map_alloc_check,
+	.map_alloc_check = bpf_sk_storage_map_alloc_check,
 	.map_alloc = bpf_sk_storage_map_alloc,
 	.map_free = bpf_sk_storage_map_free,
 	.map_get_next_key = notsupp_get_next_key,

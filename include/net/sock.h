@@ -528,6 +528,9 @@ struct sock {
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 #ifdef CONFIG_BPF_SYSCALL
 	struct bpf_local_storage __rcu	*sk_bpf_storage;
+#if CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE > 0
+	u8 bpf_shared_local_storage[CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE];
+#endif
 #endif
 	struct rcu_head		sk_rcu;
 };

@@ -1210,6 +1210,12 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Instead of accessing local storage via map lookup, the local storage API
+ * will use the CONFIG_BPF_SHARED_LOCAL_STORAGE_SIZE bytes inlined directly
+ * into struct sock. This flag is ignored for non-SK_STORAGE maps.
+ */
+	BPF_F_SHARED_LOCAL_STORAGE = (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */

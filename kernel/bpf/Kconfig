@@ -35,6 +35,17 @@ config BPF_SYSCALL
 	  Enable the bpf() system call that allows to manipulate BPF programs
 	  and maps via file descriptors.
 
+config BPF_SHARED_LOCAL_STORAGE_SIZE
+	int "BPF Socket Local Storage Optimization Buffer Size"
+	depends on BPF_SYSCALL
+	default 0
+	help
+	  Enable shared socket storage mode where the data is inlined directly
+	  into the socket. Provides fast and persistent storage, see
+	  BPF_F_SHARED_LOCAL_STORAGE. This option controls how many bytes to
+	  pre-allocate in each socket.
+
+
 config BPF_JIT
 	bool "Enable BPF Just In Time compiler"
 	depends on BPF

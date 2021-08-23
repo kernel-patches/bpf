@@ -12,7 +12,8 @@
 #include <uapi/linux/sock_diag.h>
 #include <uapi/linux/btf.h>
 
-#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE)
+#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK \
+	(BPF_F_NO_PREALLOC | BPF_F_CLONE | BPF_F_SHARED_LOCAL_STORAGE)
 
 static struct bpf_local_storage_map_bucket *
 select_bucket(struct bpf_local_storage_map *smap,
