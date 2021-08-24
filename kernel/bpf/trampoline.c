@@ -10,6 +10,7 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/module.h>
+#include <linux/static_call.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -564,6 +565,20 @@ static void notrace inc_misses_counter(struct bpf_prog *prog)
 u64 notrace __bpf_prog_enter(struct bpf_prog *prog)
 	__acquires(RCU)
 {
+	/* Calling migrate_disable costs two entries in the LBR. To save
+	 * some entries, we call perf_snapshot_branch_stack before
+	 * migrate_disable to save some entries. This is OK because we
+	 * care about the branch trace before entering the BPF program.
+	 * If migrate happens exactly here, there isn't much we can do to
+	 * preserve the data.
+	 */
+	if (prog->call_get_branch) {
+#ifdef CONFIG_HAVE_STATIC_CALL
+		static_call(perf_snapshot_branch_stack)();
+#else
+		perf_snapshot_branch_stack();
+#endif
+	}
 	rcu_read_lock();
 	migrate_disable();
 	if (unlikely(__this_cpu_inc_return(*(prog->active)) != 1)) {
