@@ -8627,9 +8627,10 @@ static int __run_one(const struct bpf_prog *fp, const void *data,
 	return ret;
 }
 
-static int run_one(const struct bpf_prog *fp, struct bpf_test *test)
+static int run_one(const struct bpf_prog *fp, struct bpf_test *test, u64 *run_one_time)
 {
 	int err_cnt = 0, i, runs = MAX_TESTRUNS;
+	u64 time = 0;
 
 	for (i = 0; i < MAX_SUBTESTS; i++) {
 		void *data;
@@ -8663,7 +8664,11 @@ static int run_one(const struct bpf_prog *fp, struct bpf_test *test)
 				test->test[i].result);
 			err_cnt++;
 		}
+
+		time += duration;
 	}
+
+	*run_one_time = time;
 
 	return err_cnt;
 }
@@ -8944,9 +8949,11 @@ static __init int test_bpf(void)
 {
 	int i, err_cnt = 0, pass_cnt = 0;
 	int jit_cnt = 0, run_cnt = 0;
+	u64 total_time = 0;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		struct bpf_prog *fp;
+		u64 run_one_time;
 		int err;
 
 		cond_resched();
@@ -8971,7 +8978,7 @@ static __init int test_bpf(void)
 		if (fp->jited)
 			jit_cnt++;
 
-		err = run_one(fp, &tests[i]);
+		err = run_one(fp, &tests[i], &run_one_time);
 		release_filter(fp, i);
 
 		if (err) {
@@ -8981,10 +8988,12 @@ static __init int test_bpf(void)
 			pr_cont("PASS\n");
 			pass_cnt++;
 		}
+
+		total_time += run_one_time;
 	}
 
-	pr_info("Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed]\n",
-		pass_cnt, err_cnt, jit_cnt, run_cnt);
+	pr_info("Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed] in %llu nsec\n",
+		pass_cnt, err_cnt, jit_cnt, run_cnt, total_time);
 
 	return err_cnt ? -EINVAL : 0;
 }
@@ -9192,6 +9201,7 @@ static __init int test_tail_calls(struct bpf_array *progs)
 {
 	int i, err_cnt = 0, pass_cnt = 0;
 	int jit_cnt = 0, run_cnt = 0;
+	u64 total_time = 0;
 
 	for (i = 0; i < ARRAY_SIZE(tail_call_tests); i++) {
 		struct tail_call_test *test = &tail_call_tests[i];
@@ -9220,10 +9230,12 @@ static __init int test_tail_calls(struct bpf_array *progs)
 			pr_cont("ret %d != %d FAIL", ret, test->result);
 			err_cnt++;
 		}
+
+		total_time += duration;
 	}
 
-	pr_info("%s: Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed]\n",
-		__func__, pass_cnt, err_cnt, jit_cnt, run_cnt);
+	pr_info("%s: Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed] in %llu nsec\n",
+		__func__, pass_cnt, err_cnt, jit_cnt, run_cnt, total_time);
 
 	return err_cnt ? -EINVAL : 0;
 }
