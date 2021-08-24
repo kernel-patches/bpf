@@ -1531,7 +1531,7 @@ static int set_kcfg_value_tri(struct extern_desc *ext, void *ext_val,
 				ext->name, value);
 			return -EINVAL;
 		}
-		*(bool *)ext_val = value == 'y' ? true : false;
+		*(bool *)ext_val = (value == 'y');
 		break;
 	case KCFG_TRISTATE:
 		if (value == 'y')
