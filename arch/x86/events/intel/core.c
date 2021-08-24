@@ -6283,8 +6283,11 @@ __init int intel_pmu_init(void)
 			x86_pmu.lbr_nr = 0;
 	}
 
-	if (x86_pmu.lbr_nr)
+	if (x86_pmu.lbr_nr) {
 		pr_cont("%d-deep LBR, ", x86_pmu.lbr_nr);
+		static_call_update(perf_snapshot_branch_stack,
+				   intel_pmu_snapshot_branch_stack);
+	}
 
 	intel_pmu_check_extra_regs(x86_pmu.extra_regs);
 

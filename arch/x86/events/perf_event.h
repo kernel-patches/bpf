@@ -1379,6 +1379,8 @@ void intel_pmu_pebs_data_source_skl(bool pmem);
 
 int intel_pmu_setup_lbr_filter(struct perf_event *event);
 
+void intel_pmu_snapshot_branch_stack(void);
+
 void intel_pt_interrupt(void);
 
 int intel_bts_interrupt(void);

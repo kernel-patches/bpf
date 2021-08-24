@@ -13437,3 +13437,31 @@ struct cgroup_subsys perf_event_cgrp_subsys = {
 	.threaded	= true,
 };
 #endif /* CONFIG_CGROUP_PERF */
+
+DEFINE_PER_CPU(struct perf_branch_entry,
+	       perf_branch_snapshot_entries[MAX_BRANCH_SNAPSHOT]);
+DEFINE_PER_CPU(int, perf_branch_snapshot_size);
+
+void perf_default_snapshot_branch_stack(void)
+{
+	*this_cpu_ptr(&perf_branch_snapshot_size) = 0;
+}
+
+#ifdef CONFIG_HAVE_STATIC_CALL
+DEFINE_STATIC_CALL(perf_snapshot_branch_stack,
+		   perf_default_snapshot_branch_stack);
+#else
+void (*perf_snapshot_branch_stack)(void) = perf_default_snapshot_branch_stack;
+#endif
+
+int perf_read_branch_snapshot(void *buf, size_t len)
+{
+	int cnt;
+
+	memcpy(buf, *this_cpu_ptr(&perf_branch_snapshot_entries),
+	       min_t(u32, (u32)len,
+		     sizeof(struct perf_branch_entry) * MAX_BRANCH_SNAPSHOT));
+	cnt =  *this_cpu_ptr(&perf_branch_snapshot_size);
+
+	return (cnt > 0) ? cnt : -EOPNOTSUPP;
+}
