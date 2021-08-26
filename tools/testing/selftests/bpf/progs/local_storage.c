@@ -44,6 +44,13 @@ struct {
 	__type(value, struct local_storage);
 } task_storage_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_FILE_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct local_storage);
+} file_storage_map SEC(".maps");
+
 SEC("lsm/inode_unlink")
 int BPF_PROG(unlink_hook, struct inode *dir, struct dentry *victim)
 {
@@ -180,4 +187,40 @@ void BPF_PROG(exec, struct linux_binprm *bprm)
 	bpf_spin_lock(&storage->lock);
 	storage->value = DUMMY_STORAGE_VALUE;
 	bpf_spin_unlock(&storage->lock);
+}
+
+SEC("lsm/file_open")
+int BPF_PROG(file_open, struct file *file)
+{
+	__u32 pid = bpf_get_current_pid_tgid() >> 32;
+	struct local_storage *storage;
+
+	if (pid != monitored_pid)
+		return 0;
+
+	storage = bpf_file_storage_get(&file_storage_map, file, 0,
+				       BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!storage)
+		return 0;
+	bpf_spin_lock(&storage->lock);
+	storage->value = DUMMY_STORAGE_VALUE;
+	bpf_spin_unlock(&storage->lock);
+
+	return 0;
+}
+
+SEC("lsm/file_fcntl")
+int BPF_PROG(file_fcntl, struct file *file, unsigned int cmd, unsigned long arg)
+{
+	__u32 pid = bpf_get_current_pid_tgid() >> 32;
+	struct local_storage *storage;
+
+	if (pid != monitored_pid)
+		return 0;
+
+	storage = bpf_file_storage_get(&file_storage_map, file, 0,
+				       BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (storage)
+		return -EPERM;
+	return 0;
 }

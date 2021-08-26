@@ -24,6 +24,7 @@ static inline int sys_pidfd_open(pid_t pid, unsigned int flags)
 static unsigned int duration;
 
 #define TEST_STORAGE_VALUE 0xbeefdead
+#define DUMMY_STORAGE_VALUE 0xdeadbeef
 
 struct storage {
 	void *inode;
@@ -111,6 +112,55 @@ static bool check_syscall_operations(int map_fd, int obj_fd)
 	return true;
 }
 
+int test_file_local_storage(struct bpf_map *map)
+{
+	struct storage ls;
+	int fd, ret;
+
+	fd = open("/dev/null", O_RDONLY);
+	if (!ASSERT_GE(fd, 0, "open(/dev/null)"))
+		return -errno;
+
+	ret = fcntl(fd, F_DUPFD, 42);
+	if (!ASSERT_EQ(errno, EPERM, "fcntl should return EPERM"))
+		goto end;
+
+	ret = bpf_map_lookup_elem_flags(bpf_map__fd(map), &fd, &ls, BPF_F_LOCK);
+	if (!ASSERT_OK(ret, "bpf_map_lookup_elem for file local storage"))
+		goto end;
+
+	ASSERT_EQ(ls.value, DUMMY_STORAGE_VALUE, "file local value match");
+
+	ret = bpf_map_delete_elem(bpf_map__fd(map), &fd);
+	if (!ASSERT_OK(ret, "bpf_map_delete_elem for file local storage"))
+		goto end;
+
+	ret = bpf_map_lookup_elem_flags(bpf_map__fd(map), &fd, &ls, BPF_F_LOCK);
+	if (!ASSERT_EQ(ret, -ENOENT, "bpf_map_lookup_elem should fail"))
+		goto end;
+
+	memset(&ls, 0, sizeof(ls));
+	ls.value = DUMMY_STORAGE_VALUE;
+	ret = bpf_map_update_elem(bpf_map__fd(map), &fd, &ls, BPF_NOEXIST | BPF_F_LOCK);
+	if (!ASSERT_OK(ret, "bpf_map_update_elem for file local storage"))
+		goto end;
+
+	ret = bpf_map_lookup_elem_flags(bpf_map__fd(map), &fd, &ls, BPF_F_LOCK);
+	if (!ASSERT_OK(ret, "bpf_map_lookup_elem for file local storage"))
+		goto end;
+
+	close(fd);
+
+	ret = bpf_map_lookup_elem_flags(bpf_map__fd(map), &fd, &ls, BPF_F_LOCK);
+	if (!ASSERT_EQ(ret, -EBADF, "bpf_map_lookup_elem should fail"))
+		return -EINVAL;
+
+	return 0;
+end:
+	close(fd);
+	return ret;
+}
+
 void test_test_local_storage(void)
 {
 	char tmp_dir_path[] = "/tmp/local_storageXXXXXX";
@@ -166,6 +216,11 @@ void test_test_local_storage(void)
 
 	/* Set the process being monitored to be the current process */
 	skel->bss->monitored_pid = getpid();
+
+	/* Test file local storage */
+	err = test_file_local_storage(skel->maps.file_storage_map);
+	if (!ASSERT_OK(err, "test_file_local_storage"))
+		goto close_prog_rmdir;
 
 	/* Move copy_of_rm to a new location so that it triggers the
 	 * inode_rename LSM hook with a new_dentry that has a NULL inode ptr.
