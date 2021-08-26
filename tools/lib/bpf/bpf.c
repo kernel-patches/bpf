@@ -713,12 +713,20 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+		attr.link_create.multi_btf_ids = (__u64) OPTS_GET(opts, multi.btf_ids, 0);
+		attr.link_create.multi_btf_ids_cnt = OPTS_GET(opts, multi.btf_ids_cnt, 0);
+		if (!OPTS_ZEROED(opts, multi))
+			return libbpf_err(-EINVAL);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
 		break;
 	}
 proceed:
+
 	fd = sys_bpf(BPF_LINK_CREATE, &attr, sizeof(attr));
 	return libbpf_err_errno(fd);
 }
