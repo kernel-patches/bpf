@@ -42,6 +42,18 @@ extern const struct bpf_func_proto bpf_inode_storage_get_proto;
 extern const struct bpf_func_proto bpf_inode_storage_delete_proto;
 void bpf_inode_storage_free(struct inode *inode);
 
+static inline struct bpf_storage_blob *bpf_file(const struct file *file)
+{
+	if (unlikely(!file->f_security))
+		return NULL;
+
+	return file->f_security + bpf_lsm_blob_sizes.lbs_file;
+}
+
+extern const struct bpf_func_proto bpf_file_storage_get_proto;
+extern const struct bpf_func_proto bpf_file_storage_delete_proto;
+void bpf_file_storage_free(struct file *file);
+
 #else /* !CONFIG_BPF_LSM */
 
 static inline bool bpf_lsm_is_sleepable_hook(u32 btf_id)
@@ -62,6 +74,15 @@ static inline struct bpf_storage_blob *bpf_inode(
 }
 
 static inline void bpf_inode_storage_free(struct inode *inode)
+{
+}
+
+static inline struct bpf_storage_blob *bpf_file(const struct file *file)
+{
+	return NULL;
+}
+
+static inline void bpf_file_storage_free(struct file *file)
 {
 }
 
