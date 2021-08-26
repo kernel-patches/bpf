@@ -691,6 +691,18 @@ struct bpf_trampoline {
 	struct bpf_tramp_image *cur_image;
 	u64 selector;
 	struct module *mod;
+	struct {
+		struct bpf_trampoline *tr;
+	} multi;
+};
+
+struct bpf_trampoline_multi {
+	struct bpf_trampoline main;
+	struct list_head list;
+	u32 *ids;
+	u32 ids_cnt;
+	int tr_cnt;
+	struct bpf_trampoline *tr[];
 };
 
 struct bpf_attach_target_info {
@@ -732,6 +744,9 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampolin
 struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
+struct bpf_trampoline_multi *bpf_trampoline_multi_get(struct bpf_prog *prog, u32 *ids,
+						      u32 ids_cnt);
+void bpf_trampoline_multi_put(struct bpf_trampoline_multi *multi);
 #define BPF_DISPATCHER_INIT(_name) {				\
 	.mutex = __MUTEX_INITIALIZER(_name.mutex),		\
 	.func = &_name##_func,					\

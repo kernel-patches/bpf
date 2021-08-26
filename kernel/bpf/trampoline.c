@@ -10,6 +10,9 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/module.h>
+#include <linux/bsearch.h>
+#include <linux/bpf_verifier.h>
+#include <linux/sort.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -22,6 +25,7 @@ const struct bpf_prog_ops bpf_extension_prog_ops = {
 #define TRAMPOLINE_TABLE_SIZE (1 << TRAMPOLINE_HASH_BITS)
 
 static struct hlist_head trampoline_table[TRAMPOLINE_TABLE_SIZE];
+static LIST_HEAD(trampoline_multi);
 
 /* serializes access to trampoline_table */
 static DEFINE_MUTEX(trampoline_mutex);
@@ -85,12 +89,41 @@ static struct bpf_trampoline *__bpf_trampoline_lookup(u64 key)
 	return NULL;
 }
 
+static int btf_ids_cmp(const void *a, const void *b)
+{
+	const u32 *x = a;
+	const u32 *y = b;
+
+	if (*x == *y)
+		return 0;
+	return *x < *y ? -1 : 1;
+}
+
+static bool is_in_multi(u64 key)
+{
+	struct bpf_trampoline_multi *multi;
+	u32 id;
+
+	bpf_trampoline_unpack_key(key, NULL, &id);
+
+	list_for_each_entry(multi, &trampoline_multi, list) {
+		if (bsearch(&id, multi->ids, multi->ids_cnt,
+			    sizeof(u32), btf_ids_cmp))
+			return true;
+	}
+	return false;
+}
+
 static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
 
 	mutex_lock(&trampoline_mutex);
+	if (is_in_multi(key)) {
+		tr = ERR_PTR(-EBUSY);
+		goto out;
+	}
 	tr = __bpf_trampoline_lookup(key);
 	if (tr) {
 		refcount_inc(&tr->refcnt);
@@ -550,6 +583,152 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 		return;
 	mutex_lock(&trampoline_mutex);
 	__bpf_trampoline_put(tr);
+	mutex_unlock(&trampoline_mutex);
+}
+
+static void bpf_func_model_nargs(struct btf_func_model *m, int nr_args)
+{
+	int i;
+
+	for (i = 0; i < nr_args; i++)
+		m->arg_size[i] = 8;
+	m->ret_size = 8;
+	m->nr_args = nr_args;
+}
+
+static struct bpf_trampoline *lookup_trampoline(struct bpf_prog *prog, u32 id)
+{
+	u64 key = bpf_trampoline_compute_key(NULL, prog->aux->attach_btf, id);
+
+	return __bpf_trampoline_lookup(key);
+}
+
+struct bpf_trampoline_multi *bpf_trampoline_multi_get(struct bpf_prog *prog,
+						      u32 *ids, u32 ids_cnt)
+{
+	int i, j, tr_cnt = 0, err = 0;
+	struct bpf_trampoline_multi *multi;
+	struct bpf_trampoline *tr;
+	u8 nr_args = 0;
+	size_t size;
+
+	/* Sort user provided BTF ids, so we can use memcpy
+	 * and bsearch below.
+	 */
+	sort(ids, ids_cnt, sizeof(u32), btf_ids_cmp, NULL);
+
+	mutex_lock(&trampoline_mutex);
+	/* Check if the requested multi trampoline already exists. */
+	list_for_each_entry(multi, &trampoline_multi, list) {
+		if (ids_cnt == multi->ids_cnt && !memcmp(ids, multi->ids, ids_cnt)) {
+			refcount_inc(&multi->main.refcnt);
+			kfree(ids);
+			goto out;
+		}
+		for (i = 0; i < ids_cnt; i++) {
+			if (bsearch(&ids[i], multi->ids, multi->ids_cnt,
+				    sizeof(u32), btf_ids_cmp)) {
+				multi = ERR_PTR(-EINVAL);
+				goto out;
+			}
+		}
+	}
+
+	/* Check if any of the requested functions have already standard
+	 * trampoline attached.
+	 */
+	for (i = 0; i < ids_cnt; i++) {
+		tr = lookup_trampoline(prog, ids[i]);
+		if (!tr)
+			continue;
+		if (tr->multi.tr) {
+			multi = ERR_PTR(-EBUSY);
+			goto out;
+		}
+		tr_cnt++;
+	}
+
+	/* Create new multi trampoline ... */
+	size = sizeof(*multi) + tr_cnt * sizeof(multi->tr[0]);
+	multi = kzalloc(size, GFP_KERNEL);
+	if (!multi) {
+		multi = ERR_PTR(-ENOMEM);
+		goto out;
+	}
+
+	bpf_trampoline_init(&multi->main, 0);
+	multi->tr_cnt = tr_cnt;
+	multi->ids = ids;
+	multi->ids_cnt = ids_cnt;
+	list_add_tail(&multi->list, &trampoline_multi);
+
+	for (i = 0; i < ids_cnt; i++) {
+		struct bpf_attach_target_info tgt_info = {};
+
+		tr = lookup_trampoline(prog, ids[i]);
+		if (tr)
+			continue;
+
+		err = bpf_check_attach_target(NULL, prog, NULL, ids[i], &tgt_info);
+		if (err)
+			goto out_free;
+
+		err = -EINVAL;
+		if (!is_ftrace_location((void *) tgt_info.tgt_addr))
+			goto out_free;
+
+		if (nr_args < tgt_info.fmodel.nr_args)
+			nr_args = tgt_info.fmodel.nr_args;
+	}
+
+	bpf_func_model_nargs(&multi->main.func.model, nr_args);
+
+	/* ... and attach already existing standard trampolines. */
+	for (i = 0, j = 0; i < ids_cnt && j < tr_cnt; i++) {
+		tr = lookup_trampoline(prog, ids[i]);
+		if (tr) {
+			refcount_inc(&tr->refcnt);
+			tr->multi.tr = &multi->main;
+			multi->tr[j++] = tr;
+		}
+	}
+
+out_free:
+	if (err) {
+		list_del(&multi->list);
+		kfree(multi);
+		multi = ERR_PTR(err);
+	}
+out:
+	mutex_unlock(&trampoline_mutex);
+	return multi;
+}
+
+void bpf_trampoline_multi_put(struct bpf_trampoline_multi *multi)
+{
+	int i;
+
+	if (!multi)
+		return;
+
+	mutex_lock(&trampoline_mutex);
+	if (!refcount_dec_and_test(&multi->main.refcnt))
+		goto out;
+
+	if (WARN_ON_ONCE(!hlist_empty(&multi->main.progs_hlist[BPF_TRAMP_FENTRY])))
+		goto out;
+	if (WARN_ON_ONCE(!hlist_empty(&multi->main.progs_hlist[BPF_TRAMP_FEXIT])))
+		goto out;
+
+	list_del(&multi->list);
+
+	for (i = 0; i < multi->tr_cnt; i++) {
+		multi->tr[i]->multi.tr = NULL;
+		__bpf_trampoline_put(multi->tr[i]);
+	}
+	kfree(multi->ids);
+	kfree(multi);
+out:
 	mutex_unlock(&trampoline_mutex);
 }
 
