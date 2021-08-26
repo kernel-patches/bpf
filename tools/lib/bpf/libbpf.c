@@ -2909,7 +2909,8 @@ static Elf_Data *elf_sec_data(const struct bpf_object *obj, Elf_Scn *scn)
 static bool is_sec_name_dwarf(const char *name)
 {
 	/* approximation, but the actual list is too long */
-	return strncmp(name, ".debug_", sizeof(".debug_") - 1) == 0;
+	return (strncmp(name, ".debug_", sizeof(".debug_") - 1) == 0 ||
+		strncmp(name, ".eh_frame", sizeof(".eh_frame") - 1) == 0);
 }
 
 static bool ignore_elf_section(GElf_Shdr *hdr, const char *name)
