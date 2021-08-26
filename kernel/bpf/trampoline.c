@@ -70,23 +70,37 @@ static void bpf_trampoline_init(struct bpf_trampoline *tr, u64 key)
 		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
 }
 
+static struct bpf_trampoline *__bpf_trampoline_lookup(u64 key)
+{
+	struct bpf_trampoline *tr;
+	struct hlist_head *head;
+
+	lockdep_assert_held(&trampoline_mutex);
+
+	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
+	hlist_for_each_entry(tr, head, hlist) {
+		if (tr->key == key)
+			return tr;
+	}
+	return NULL;
+}
+
 static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
 
 	mutex_lock(&trampoline_mutex);
-	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
-	hlist_for_each_entry(tr, head, hlist) {
-		if (tr->key == key) {
-			refcount_inc(&tr->refcnt);
-			goto out;
-		}
+	tr = __bpf_trampoline_lookup(key);
+	if (tr) {
+		refcount_inc(&tr->refcnt);
+		goto out;
 	}
 	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
 	if (!tr)
 		goto out;
 	bpf_trampoline_init(tr, key);
+	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
 	hlist_add_head(&tr->hlist, head);
 out:
 	mutex_unlock(&trampoline_mutex);
