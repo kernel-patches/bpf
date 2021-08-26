@@ -30,6 +30,11 @@ static LIST_HEAD(trampoline_multi);
 /* serializes access to trampoline_table */
 static DEFINE_MUTEX(trampoline_mutex);
 
+static bool is_multi_trampoline(struct bpf_trampoline *tr)
+{
+	return tr->key == 0;
+}
+
 void *bpf_jit_alloc_exec_page(void)
 {
 	void *image;
@@ -384,8 +389,21 @@ out:
 	return ERR_PTR(err);
 }
 
+static bool needs_multi_model(struct bpf_trampoline *tr, struct btf_func_model *new)
+{
+	struct bpf_trampoline *multi = tr->multi.tr;
+
+	if (!tr->multi.count || !multi)
+		return false;
+	if (tr->func.model.nr_args >= multi->func.model.nr_args)
+		return false;
+	memcpy(new, &multi->func.model, sizeof(*new));
+	return true;
+}
+
 static int bpf_trampoline_update(struct bpf_trampoline *tr)
 {
+	struct btf_func_model model_multi, *model = &tr->func.model;
 	struct bpf_tramp_image *im;
 	struct bpf_tramp_progs *tprogs;
 	u32 flags = BPF_TRAMP_F_RESTORE_REGS;
@@ -411,15 +429,19 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 	}
 
 	if (tprogs[BPF_TRAMP_FEXIT].nr_progs ||
-	    tprogs[BPF_TRAMP_MODIFY_RETURN].nr_progs)
+	    tprogs[BPF_TRAMP_MODIFY_RETURN].nr_progs) {
 		flags = BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_SKIP_FRAME;
+		if (is_multi_trampoline(tr))
+			flags |= BPF_TRAMP_F_ORIG_STACK;
+		if (needs_multi_model(tr, &model_multi))
+			model = &model_multi;
+	}
 
 	if (ip_arg)
 		flags |= BPF_TRAMP_F_IP_ARG;
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + PAGE_SIZE,
-					  &tr->func.model, flags, tprogs,
-					  tr->func.addr);
+					  model, flags, tprogs, tr->func.addr);
 	if (err < 0)
 		goto out;
 
@@ -507,7 +529,8 @@ int bpf_trampoline_link_prog(struct bpf_tramp_node *node, struct bpf_trampoline 
 	if (err) {
 		hlist_del_init(&node->hlist);
 		tr->progs_cnt[kind]--;
-	}
+	} else if (prog->aux->multi_func)
+		tr->multi.count++;
 out:
 	mutex_unlock(&tr->mutex);
 	return err;
@@ -531,6 +554,8 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampolin
 	}
 	hlist_del_init(&node->hlist);
 	tr->progs_cnt[kind]--;
+	if (prog->aux->multi_func)
+		tr->multi.count--;
 	err = bpf_trampoline_update(tr);
 out:
 	mutex_unlock(&tr->mutex);
@@ -730,6 +755,60 @@ void bpf_trampoline_multi_put(struct bpf_trampoline_multi *multi)
 	kfree(multi);
 out:
 	mutex_unlock(&trampoline_mutex);
+}
+
+int bpf_trampoline_multi_link_prog(struct bpf_prog *prog, struct bpf_trampoline_multi *multi)
+{
+	struct bpf_tramp_node *multi_node = NULL;
+	int i, j, err = 0;
+
+	multi_node = kzalloc(sizeof(*multi_node) * multi->tr_cnt, GFP_KERNEL);
+	if (!multi_node)
+		return -ENOMEM;
+
+	mutex_lock(&prog->aux->multi_node_mutex);
+	if (prog->aux->multi_node)
+		err = -EBUSY;
+	else
+		prog->aux->multi_node = multi_node;
+	mutex_unlock(&prog->aux->multi_node_mutex);
+	if (err)
+		goto out_free;
+
+	for (i = 0; i < multi->tr_cnt; i++) {
+		multi_node[i].prog = prog;
+		err = bpf_trampoline_link_prog(&multi_node[i], multi->tr[i]);
+		if (err)
+			goto out_unlink;
+	}
+
+	err = bpf_trampoline_link_prog(&prog->aux->tramp_node, &multi->main);
+	if (!err)
+		return 0;
+
+out_unlink:
+	for (j = 0; j < i; j++)
+		WARN_ON_ONCE(bpf_trampoline_unlink_prog(&multi_node[j], multi->tr[j]));
+
+out_free:
+	kfree(multi_node);
+	return err;
+}
+
+int bpf_trampoline_multi_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline_multi *multi)
+{
+	struct bpf_tramp_node *multi_node = prog->aux->multi_node;
+	int i;
+
+	for (i = 0; i < multi->tr_cnt; i++)
+		WARN_ON_ONCE(bpf_trampoline_unlink_prog(&multi_node[i], multi->tr[i]));
+
+	mutex_lock(&prog->aux->multi_node_mutex);
+	prog->aux->multi_node = NULL;
+	mutex_unlock(&prog->aux->multi_node_mutex);
+
+	kfree(multi_node);
+	return bpf_trampoline_unlink_prog(&prog->aux->tramp_node, &multi->main);
 }
 
 #define NO_START_TIME 1

@@ -693,6 +693,7 @@ struct bpf_trampoline {
 	struct module *mod;
 	struct {
 		struct bpf_trampoline *tr;
+		int count;
 	} multi;
 };
 
@@ -747,6 +748,8 @@ void bpf_trampoline_put(struct bpf_trampoline *tr);
 struct bpf_trampoline_multi *bpf_trampoline_multi_get(struct bpf_prog *prog, u32 *ids,
 						      u32 ids_cnt);
 void bpf_trampoline_multi_put(struct bpf_trampoline_multi *multi);
+int bpf_trampoline_multi_link_prog(struct bpf_prog *prog, struct bpf_trampoline_multi *tr);
+int bpf_trampoline_multi_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline_multi *tr);
 #define BPF_DISPATCHER_INIT(_name) {				\
 	.mutex = __MUTEX_INITIALIZER(_name.mutex),		\
 	.func = &_name##_func,					\
@@ -892,6 +895,8 @@ struct bpf_prog_aux {
 	bool tail_call_reachable;
 	bool multi_func;
 	struct bpf_tramp_node tramp_node;
+	struct bpf_tramp_node *multi_node;
+	struct mutex multi_node_mutex;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
 	/* function name for valid attach_btf_id */
