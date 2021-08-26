@@ -398,6 +398,7 @@ static bool needs_multi_model(struct bpf_trampoline *tr, struct btf_func_model *
 	if (tr->func.model.nr_args >= multi->func.model.nr_args)
 		return false;
 	memcpy(new, &multi->func.model, sizeof(*new));
+	new->nr_args_orig = tr->func.model.nr_args;
 	return true;
 }
 

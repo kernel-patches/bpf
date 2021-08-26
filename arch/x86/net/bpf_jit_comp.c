@@ -1744,7 +1744,7 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
 }
 
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
-			   struct bpf_prog *p, int stack_size, bool mod_ret)
+			   struct bpf_prog *p, int stack_size, bool mod_ret, int args_off)
 {
 	u8 *prog = *pprog;
 	u8 *jmp_insn;
@@ -1780,9 +1780,14 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 	/* BPF_TRAMP_MODIFY_RETURN trampolines can modify the return
 	 * of the previous call which is then passed on the stack to
 	 * the next BPF program.
+	 * Store the return value also to original args' end in case
+	 * we have multi func programs in trampoline.
 	 */
-	if (mod_ret)
+	if (mod_ret) {
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
+		if (args_off)
+			emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -args_off);
+	}
 
 	/* replace 2 nops with JE insn, since jmp target is known */
 	jmp_insn[0] = X86_JE;
@@ -1834,7 +1839,7 @@ static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 	u8 *prog = *pprog;
 
 	for (i = 0; i < tp->nr_progs; i++) {
-		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size, false))
+		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size, false, 0))
 			return -EINVAL;
 	}
 	*pprog = prog;
@@ -1843,7 +1848,7 @@ static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 
 static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 			      struct bpf_tramp_progs *tp, int stack_size,
-			      u8 **branches)
+			      u8 **branches, int args_off)
 {
 	u8 *prog = *pprog;
 	int i;
@@ -1853,8 +1858,15 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	 */
 	emit_mov_imm32(&prog, false, BPF_REG_0, 0);
 	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
+
+	/* Store the return value also to original args' end in case
+	 * we have multi func programs in trampoline.
+	 */
+	if (args_off)
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -args_off);
+
 	for (i = 0; i < tp->nr_progs; i++) {
-		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size, true))
+		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size, true, args_off))
 			return -EINVAL;
 
 		/* mod_ret prog stored return value into [rbp - 8]. Emit:
@@ -1942,7 +1954,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 				struct bpf_tramp_progs *tprogs,
 				void *orig_call)
 {
-	int ret, i, nr_args = m->nr_args;
+	int ret, i, args_off = 0, nr_args = m->nr_args;
 	int stack_size = nr_args * 8;
 	struct bpf_tramp_progs *fentry = &tprogs[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_progs *fexit = &tprogs[BPF_TRAMP_FEXIT];
@@ -1957,6 +1969,13 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	if ((flags & BPF_TRAMP_F_RESTORE_REGS) &&
 	    (flags & BPF_TRAMP_F_SKIP_FRAME))
 		return -EINVAL;
+
+	/* if m->nr_args_orig != 0, then we have multi prog model and
+	 * we need to also store return value at the end of standard
+	 * trampoline's arguments
+	 */
+	if (m->nr_args_orig && m->nr_args > m->nr_args_orig)
+		args_off = (m->nr_args - m->nr_args_orig) * 8 + 8;
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG)
 		stack_size += 8; /* room for return value of orig_call */
@@ -2015,7 +2034,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 			return -ENOMEM;
 
 		if (invoke_bpf_mod_ret(m, &prog, fmod_ret, stack_size,
-				       branches)) {
+				       branches, args_off)) {
 			ret = -EINVAL;
 			goto cleanup;
 		}
@@ -2036,6 +2055,13 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		}
 		/* remember return value in a stack for bpf prog to access */
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
+
+		/* store return value also to original args' end in case we have
+		 * multi func programs in trampoline
+		 */
+		if (args_off)
+			emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -args_off);
+
 		im->ip_after_call = prog;
 		memcpy(prog, x86_nops[5], X86_PATCH_SIZE);
 		prog += X86_PATCH_SIZE;
