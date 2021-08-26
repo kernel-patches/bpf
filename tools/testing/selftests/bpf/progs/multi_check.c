@@ -61,3 +61,25 @@ void multi_arg_check(__u64 *ctx, __u64 *test_result)
 		*test_result += 1;
 	}
 }
+
+void multi_ret_check(void *ctx, int ret, __u64 *test_result)
+{
+	void *ip = (void *) bpf_get_func_ip(ctx);
+
+	if (ip == &bpf_fentry_test1)
+		*test_result += ret == 2;
+	else if (ip == &bpf_fentry_test2)
+		*test_result += ret == 5;
+	else if (ip == &bpf_fentry_test3)
+		*test_result += ret == 15;
+	else if (ip == &bpf_fentry_test4)
+		*test_result += ret == 34;
+	else if (ip == &bpf_fentry_test5)
+		*test_result += ret == 65;
+	else if (ip == &bpf_fentry_test6)
+		*test_result += ret == 111;
+	else if (ip == &bpf_fentry_test7)
+		*test_result += ret == 0;
+	else if (ip == &bpf_fentry_test8)
+		*test_result += ret == 0;
+}
