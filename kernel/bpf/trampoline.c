@@ -522,18 +522,16 @@ out:
 	return tr;
 }
 
-void bpf_trampoline_put(struct bpf_trampoline *tr)
+static void __bpf_trampoline_put(struct bpf_trampoline *tr)
 {
-	if (!tr)
-		return;
-	mutex_lock(&trampoline_mutex);
+	lockdep_assert_held(&trampoline_mutex);
 	if (!refcount_dec_and_test(&tr->refcnt))
-		goto out;
+		return;
 	WARN_ON_ONCE(mutex_is_locked(&tr->mutex));
 	if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[BPF_TRAMP_FENTRY])))
-		goto out;
+		return;
 	if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[BPF_TRAMP_FEXIT])))
-		goto out;
+		return;
 	/* This code will be executed even when the last bpf_tramp_image
 	 * is alive. All progs are detached from the trampoline and the
 	 * trampoline image is patched with jmp into epilogue to skip
@@ -542,7 +540,14 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 */
 	hlist_del(&tr->hlist);
 	kfree(tr);
-out:
+}
+
+void bpf_trampoline_put(struct bpf_trampoline *tr)
+{
+	if (!tr)
+		return;
+	mutex_lock(&trampoline_mutex);
+	__bpf_trampoline_put(tr);
 	mutex_unlock(&trampoline_mutex);
 }
 
