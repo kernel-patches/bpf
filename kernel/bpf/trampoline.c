@@ -97,8 +97,10 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 		goto out;
 	}
 	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
-	if (!tr)
+	if (!tr) {
+		tr = ERR_PTR(-ENOMEM);
 		goto out;
+	}
 	bpf_trampoline_init(tr, key);
 	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
 	hlist_add_head(&tr->hlist, head);
@@ -508,8 +510,8 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 	struct bpf_trampoline *tr;
 
 	tr = bpf_trampoline_lookup(key);
-	if (!tr)
-		return NULL;
+	if (IS_ERR(tr))
+		return tr;
 
 	mutex_lock(&tr->mutex);
 	if (tr->func.addr)

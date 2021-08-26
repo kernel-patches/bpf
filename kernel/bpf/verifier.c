@@ -13642,8 +13642,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	key = bpf_trampoline_compute_key(tgt_prog, prog->aux->attach_btf, btf_id);
 	tr = bpf_trampoline_get(key, &tgt_info);
-	if (!tr)
-		return -ENOMEM;
+	if (IS_ERR(tr))
+		return PTR_ERR(tr);
 
 	prog->aux->dst_trampoline = tr;
 	return 0;

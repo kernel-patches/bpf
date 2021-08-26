@@ -2793,8 +2793,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_unlock;
 
 		tr = bpf_trampoline_get(key, &tgt_info);
-		if (!tr) {
-			err = -ENOMEM;
+		if (IS_ERR(tr)) {
+			err = PTR_ERR(tr);
 			goto out_unlock;
 		}
 	} else {
