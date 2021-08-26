@@ -179,10 +179,37 @@ static int is_ftrace_location(void *ip)
 	return 1;
 }
 
+static int register_ftrace_multi(struct bpf_trampoline *tr, void *new_addr)
+{
+	struct bpf_trampoline_multi *multi;
+
+	multi = container_of(tr, struct bpf_trampoline_multi, main);
+	return register_ftrace_direct_multi(&multi->ops, (long)new_addr);
+}
+
+static int unregister_ftrace_multi(struct bpf_trampoline *tr, void *old_addr)
+{
+	struct bpf_trampoline_multi *multi;
+
+	multi = container_of(tr, struct bpf_trampoline_multi, main);
+	return unregister_ftrace_direct_multi(&multi->ops);
+}
+
+static int modify_ftrace_multi(struct bpf_trampoline *tr, void *new_addr)
+{
+	struct bpf_trampoline_multi *multi;
+
+	multi = container_of(tr, struct bpf_trampoline_multi, main);
+	return modify_ftrace_direct_multi(&multi->ops, (long)new_addr);
+}
+
 static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 {
 	void *ip = tr->func.addr;
 	int ret;
+
+	if (is_multi_trampoline(tr))
+		return unregister_ftrace_multi(tr, old_addr);
 
 	if (tr->func.ftrace_managed)
 		ret = unregister_ftrace_direct((long)ip, (long)old_addr);
@@ -199,6 +226,9 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 	void *ip = tr->func.addr;
 	int ret;
 
+	if (is_multi_trampoline(tr))
+		return modify_ftrace_multi(tr, new_addr);
+
 	if (tr->func.ftrace_managed)
 		ret = modify_ftrace_direct((long)ip, (long)old_addr, (long)new_addr);
 	else
@@ -211,6 +241,9 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 {
 	void *ip = tr->func.addr;
 	int ret;
+
+	if (is_multi_trampoline(tr))
+		return register_ftrace_multi(tr, new_addr);
 
 	ret = is_ftrace_location(ip);
 	if (ret < 0)
@@ -701,6 +734,10 @@ struct bpf_trampoline_multi *bpf_trampoline_multi_get(struct bpf_prog *prog,
 
 		err = -EINVAL;
 		if (!is_ftrace_location((void *) tgt_info.tgt_addr))
+			goto out_free;
+
+		err = ftrace_set_filter_ip(&multi->ops, tgt_info.tgt_addr, 0, 0);
+		if (err)
 			goto out_free;
 
 		if (nr_args < tgt_info.fmodel.nr_args)

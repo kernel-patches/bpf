@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/bpfptr.h>
+#include <linux/ftrace.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -703,6 +704,7 @@ struct bpf_trampoline_multi {
 	struct list_head list;
 	u32 *ids;
 	u32 ids_cnt;
+	struct ftrace_ops ops;
 	int tr_cnt;
 	struct bpf_trampoline *tr[];
 };

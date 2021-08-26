@@ -34,6 +34,9 @@ REALMODE_CFLAGS += -fno-stack-protector
 REALMODE_CFLAGS += $(call __cc-option, $(CC), $(REALMODE_CFLAGS), -Wno-address-of-packed-member)
 REALMODE_CFLAGS += $(call __cc-option, $(CC), $(REALMODE_CFLAGS), $(cc_stack_align4))
 REALMODE_CFLAGS += $(CLANG_FLAGS)
+ifdef CONFIG_DYNAMIC_FTRACE
+     REALMODE_CFLAGS += -DCC_USING_FENTRY
+endif
 export REALMODE_CFLAGS
 
 # BITS is used as extension for files which are available in a 32 bit
@@ -53,6 +56,10 @@ KBUILD_CFLAGS += $(call cc-option,-mno-avx,)
 
 # Intel CET isn't enabled in the kernel
 KBUILD_CFLAGS += $(call cc-option,-fcf-protection=none)
+
+ifdef CONFIG_DYNAMIC_FTRACE
+     KBUILD_CFLAGS += -DCC_USING_FENTRY
+endif
 
 ifeq ($(CONFIG_X86_32),y)
         BITS := 32

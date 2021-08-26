@@ -49,6 +49,10 @@ KBUILD_CFLAGS += $(call as-option,-Wa$(comma)-mrelax-relocations=no)
 KBUILD_CFLAGS += -include $(srctree)/include/linux/hidden.h
 KBUILD_CFLAGS += $(CLANG_FLAGS)
 
+ifdef CONFIG_DYNAMIC_FTRACE
+     KBUILD_CFLAGS += -DCC_USING_FENTRY
+endif
+
 # sev.c indirectly inludes inat-table.h which is generated during
 # compilation and stored in $(objtree). Add the directory to the includes so
 # that the compiler finds it even with out-of-tree builds (make O=/some/path).
