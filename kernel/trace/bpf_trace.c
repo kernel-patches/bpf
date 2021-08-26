@@ -1017,6 +1017,29 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto_pe = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_2(bpf_get_branch_snapshot, void *, buf, u32, size)
+{
+	u32 max_size;
+
+	if (this_cpu_ptr(&bpf_perf_branch_snapshot)->nr == 0)
+		return -EOPNOTSUPP;
+
+	max_size = this_cpu_ptr(&bpf_perf_branch_snapshot)->nr *
+		sizeof(struct perf_branch_entry);
+	memcpy(buf, this_cpu_ptr(&bpf_perf_branch_snapshot)->entries,
+	       min_t(u32, size, max_size));
+
+	return this_cpu_ptr(&bpf_perf_branch_snapshot)->nr;
+}
+
+static const struct bpf_func_proto bpf_get_branch_snapshot_proto = {
+	.func		= bpf_get_branch_snapshot,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1132,6 +1155,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_snprintf_proto;
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_tracing;
+	case BPF_FUNC_get_branch_snapshot:
+		return &bpf_get_branch_snapshot_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -1863,9 +1888,22 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 	preempt_enable();
 }
 
+DEFINE_PER_CPU(struct perf_branch_snapshot, bpf_perf_branch_snapshot);
+
 static __always_inline
 void __bpf_trace_run(struct bpf_prog *prog, u64 *args)
 {
+	/* Calling migrate_disable costs two entries in the LBR. To save
+	 * some entries, we call perf_snapshot_branch_stack before
+	 * migrate_disable to save some entries. This is OK because we
+	 * care about the branch trace before entering the BPF program.
+	 * If migrate happens exactly here, there isn't much we can do to
+	 * preserve the data.
+	 */
+	if (prog->call_get_branch)
+		static_call_cond(perf_snapshot_branch_stack)(
+			this_cpu_ptr(&bpf_perf_branch_snapshot));
+
 	cant_sleep();
 	rcu_read_lock();
 	(void) bpf_prog_run(prog, args);
