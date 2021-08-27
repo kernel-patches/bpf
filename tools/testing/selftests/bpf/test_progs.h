@@ -82,6 +82,9 @@ struct test_env {
 	int skip_cnt; /* skipped tests */
 
 	int saved_netns_fd;
+	int workers; /* number of worker process */
+	__pid_t *worker_pids; /* array of worker pids */
+	int worker_index;
 };
 
 extern struct test_env env;

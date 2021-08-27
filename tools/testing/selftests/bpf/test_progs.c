@@ -474,6 +474,7 @@ enum ARG_KEYS {
 	ARG_LIST_TEST_NAMES = 'l',
 	ARG_TEST_NAME_GLOB_ALLOWLIST = 'a',
 	ARG_TEST_NAME_GLOB_DENYLIST = 'd',
+	ARG_NUM_WORKERS = 'p',
 };
 
 static const struct argp_option opts[] = {
@@ -494,7 +495,9 @@ static const struct argp_option opts[] = {
 	{ "allow", ARG_TEST_NAME_GLOB_ALLOWLIST, "NAMES", 0,
 	  "Run tests with name matching the pattern (supports '*' wildcard)." },
 	{ "deny", ARG_TEST_NAME_GLOB_DENYLIST, "NAMES", 0,
-	  "Don't run tests with name matching the pattern (supports '*' wildcard)." },
+	    "Don't run tests with name matching the pattern (supports '*' wildcard)." },
+	{ "workers", ARG_NUM_WORKERS, "WORKERS", 0,
+	  "Number of workers to run in parallel, default to 1." },
 	{},
 };
 
@@ -661,6 +664,13 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case ARG_LIST_TEST_NAMES:
 		env->list_test_names = true;
 		break;
+	case ARG_NUM_WORKERS:
+		env->workers = atoi(arg);
+		if (!env->workers) {
+			fprintf(stderr, "Invalid worker number, must be bigger than 1.");
+			return -1;
+		}
+		break;
 	case ARGP_KEY_ARG:
 		argp_usage(state);
 		break;
@@ -694,6 +704,10 @@ static void stdio_hijack(void)
 	}
 
 	stderr = stdout;
+
+	/* force line buffering on stdio, so they interleave naturally. */
+	setvbuf(stdout, NULL, _IOLBF, 8192);
+	setvbuf(stderr, NULL, _IOLBF, 8192);
 #endif
 }
 
@@ -798,14 +812,74 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	save_netns();
-	stdio_hijack();
 	env.has_testmod = true;
 	if (!env.list_test_names && load_bpf_testmod()) {
 		fprintf(env.stderr, "WARNING! Selftests relying on bpf_testmod.ko will be skipped.\n");
 		env.has_testmod = false;
 	}
+
+	/* launch workers if requested */
+	env.worker_index = -1; /* main process */
+	if (env.workers) {
+		env.worker_pids = calloc(sizeof(__pid_t), env.workers);
+		fprintf(stdout, "Launching %d workers.\n", env.workers);
+		for(int i = 0; i < env.workers; i++) {
+			__pid_t pid = fork();
+			if (pid < 0) {
+				perror("Failed to fork worker");
+				return -1;
+			} else if (pid != 0) {
+				env.worker_pids[i] = pid;
+			} else {
+				env.worker_index = i;
+				fprintf(stdout, "[%d] worker launched with pid %d.\n", i, getpid());
+				break;
+			}
+		}
+	}
+
+	/* If we have worker, here is the rest of the main process */
+	if (env.workers && env.worker_index == -1)  {
+		int abnormal_exit_cnt = 0;
+		for(int i = 0; i < env.workers; i++) {
+			int status;
+			assert(waitpid(env.worker_pids[i], &status, 0) == env.worker_pids[i]);
+			if (WIFEXITED(status)) {
+				switch (WEXITSTATUS(status)) {
+				case EXIT_SUCCESS:
+					env.succ_cnt++;
+					break;
+					case EXIT_FAILURE:
+					env.fail_cnt++;
+					break;
+					case EXIT_NO_TEST:
+					env.skip_cnt++;
+					break;
+				}
+			} else {
+				abnormal_exit_cnt++;
+				env.fail_cnt++;
+			}
+		}
+		fprintf(stdout, "Worker Summary: %d SUCCESS, %d FAILED, %d IDLE",
+			env.succ_cnt, env.fail_cnt, env.skip_cnt);
+		fprintf(stdout, "\n");
+
+		goto main_out;
+	}
+
+	/* no worker, or inside each worker process */
+	// sigaction(SIGSEGV, &sigact, NULL); /* set crash handler again */
+
+	save_netns();
+	stdio_hijack();
+
 	for (i = 0; i < prog_test_cnt; i++) {
+		/* skip tests not assigned to this worker */
+		if (env.workers) {
+			if (i % env.workers != env.worker_index)
+				continue;
+		}
 		struct prog_test_def *test = &prog_test_defs[i];
 
 		env.test = test;
@@ -821,6 +895,8 @@ int main(int argc, char **argv)
 		}
 
 		if (env.list_test_names) {
+			if (env.worker_index != -1)
+				fprintf(env.stdout, "[%d] ", env.worker_index);
 			fprintf(env.stdout, "%s\n", test->test_name);
 			env.succ_cnt++;
 			continue;
@@ -835,6 +911,8 @@ int main(int argc, char **argv)
 
 		dump_test_log(test, test->error_cnt);
 
+		if (env.worker_index != -1)
+			fprintf(env.stdout, "[%d] ", env.worker_index);
 		fprintf(env.stdout, "#%d %s:%s\n",
 			test->test_num, test->test_name,
 			test->error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
@@ -850,8 +928,6 @@ int main(int argc, char **argv)
 		if (test->need_cgroup_cleanup)
 			cleanup_cgroup_environment();
 	}
-	if (!env.list_test_names && env.has_testmod)
-		unload_bpf_testmod();
 	stdio_restore();
 
 	if (env.get_test_cnt) {
@@ -862,17 +938,23 @@ int main(int argc, char **argv)
 	if (env.list_test_names)
 		goto out;
 
+	if (env.worker_index != -1)
+		fprintf(env.stdout, "[%d] ", env.worker_index);
 	fprintf(stdout, "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n",
 		env.succ_cnt, env.sub_succ_cnt, env.skip_cnt, env.fail_cnt);
 
 out:
+	close(env.saved_netns_fd);
+main_out:
+	if (env.worker_index == -1)
+		if (!env.list_test_names && env.has_testmod)
+			unload_bpf_testmod();
 	free_str_set(&env.test_selector.blacklist);
 	free_str_set(&env.test_selector.whitelist);
 	free(env.test_selector.num_set);
 	free_str_set(&env.subtest_selector.blacklist);
 	free_str_set(&env.subtest_selector.whitelist);
 	free(env.subtest_selector.num_set);
-	close(env.saved_netns_fd);
 
 	if (env.succ_cnt + env.fail_cnt + env.skip_cnt == 0)
 		return EXIT_NO_TEST;
