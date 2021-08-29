@@ -3,13 +3,18 @@
 #ifndef BPFILTER_UTIL_H
 #define BPFILTER_UTIL_H
 
+#include <linux/bpf.h>
 #include <linux/bpfilter.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 
+#include <unistd.h>
+#include <sys/syscall.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 static inline void init_entry_match(struct xt_entry_match *match, uint16_t size, uint8_t revision,
 				    const char *name)
@@ -45,6 +50,30 @@ static inline void init_standard_entry(struct ipt_entry *entry, __u16 matches_si
 	memset(entry, 0, sizeof(*entry));
 	entry->target_offset = sizeof(*entry) + matches_size;
 	entry->next_offset = sizeof(*entry) + matches_size + sizeof(struct xt_standard_target);
+}
+
+static inline int sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
+{
+	return syscall(SYS_bpf, cmd, attr, size);
+}
+
+static inline int bpf_prog_test_run(int fd, const void *data, unsigned int data_size,
+				    uint32_t *retval)
+{
+	union bpf_attr attr = {};
+	int rc;
+
+	attr.test.prog_fd = fd;
+	attr.test.data_in = (uintptr_t)data;
+	attr.test.data_size_in = data_size;
+	attr.test.repeat = 1000000;
+
+	rc = sys_bpf(BPF_PROG_TEST_RUN, &attr, sizeof(attr));
+
+	if (retval)
+		*retval = attr.test.retval;
+
+	return rc;
 }
 
 #endif // BPFILTER_UTIL_H

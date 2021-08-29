@@ -12,10 +12,10 @@
 
 #include <string.h>
 
+#include "filter-table.h"
 #include "map-common.h"
 #include "match.h"
 #include "rule.h"
-#include "table.h"
 #include "target.h"
 
 static int init_match_ops_map(struct context *ctx)
@@ -58,16 +58,32 @@ static int init_target_ops_map(struct context *ctx)
 	return 0;
 }
 
+static const struct table_ops *table_ops[] = { &filter_table_ops };
+
 static int init_table_ops_map(struct context *ctx)
 {
-	return create_map(&ctx->table_ops_map, 1);
+	int i, err;
+
+	err = create_map(&ctx->table_ops_map, ARRAY_SIZE(table_ops));
+	if (err)
+		return err;
+
+	for (i = 0; i < ARRAY_SIZE(table_ops); ++i) {
+		const struct table_ops *t = table_ops[i];
+
+		err = map_upsert(&ctx->table_ops_map, t->name, (void *)t);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int init_table_index(struct context *ctx)
 {
 	INIT_LIST_HEAD(&ctx->table_index.list);
 
-	return create_map(&ctx->table_index.map, 1);
+	return create_map(&ctx->table_index.map, ARRAY_SIZE(table_ops));
 }
 
 int create_context(struct context *ctx)
