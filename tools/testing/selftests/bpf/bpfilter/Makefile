@@ -11,6 +11,8 @@ BPFILTERSRCDIR := $(top_srcdir)/net/bpfilter
 CFLAGS += -Wall -g -pthread -I$(TOOLSINCDIR) -I$(APIDIR) -I$(BPFILTERSRCDIR) -I$(LIBDIR)
 
 TEST_GEN_PROGS += test_map
+TEST_GEN_PROGS += test_match
+TEST_GEN_PROGS += test_xt_udp
 
 KSFT_KHDR_INSTALL := 1
 
@@ -35,5 +37,11 @@ $(BPFOBJ): $(wildcard $(BPFDIR)/*.[ch] $(BPFDIR)/Makefile)		       		\
 
 BPFILTER_MAP_SRCS := $(BPFILTERSRCDIR)/map-common.c
 BPFILTER_CODEGEN_SRCS := $(BPFILTERSRCDIR)/codegen.c $(BPFOBJ) -lelf -lz
+BPFILTER_MATCH_SRCS := $(BPFILTERSRCDIR)/match.c $(BPFILTERSRCDIR)/xt_udp.c
+
+BPFILTER_COMMON_SRCS := $(BPFILTERSRCDIR)/context.c
+BPFILTER_COMMON_SRCS += $(BPFILTER_MAP_SRCS) $(BPFILTER_CODEGEN_SRCS) $(BPFILTER_MATCH_SRCS)
 
 $(OUTPUT)/test_map: test_map.c $(BPFILTER_MAP_SRCS)
+$(OUTPUT)/test_match: test_match.c $(BPFILTER_COMMON_SRCS)
+$(OUTPUT)/test_xt_udp: test_xt_udp.c $(BPFILTER_COMMON_SRCS)

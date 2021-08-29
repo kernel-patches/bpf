@@ -8,11 +8,13 @@
 
 #include <sys/syslog.h>
 
+#include <search.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 struct context {
 	FILE *log_file;
+	struct hsearch_data match_ops_map;
 };
 
 #define BFLOG_IMPL(ctx, level, fmt, ...)                                                           \
@@ -33,5 +35,8 @@ struct context {
 #else
 #define BFLOG_DEBUG(ctx, fmt, ...)
 #endif
+
+int create_context(struct context *ctx);
+void free_context(struct context *ctx);
 
 #endif // NET_BPFILTER_CONTEXT_H

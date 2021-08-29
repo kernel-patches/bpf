@@ -11,7 +11,8 @@ $(LIBBPF_A):
 	$(Q)$(MAKE) -C $(LIBBPF_SRCS) O=$(LIBBPF_OUT)/ OUTPUT=$(LIBBPF_OUT)/ $(LIBBPF_OUT)/libbpf.a
 
 userprogs := bpfilter_umh
-bpfilter_umh-objs := main.o map-common.o codegen.o
+bpfilter_umh-objs := main.o map-common.o codegen.o match.o context.o
+bpfilter_umh-objs += xt_udp.o
 bpfilter_umh-userldlibs := $(LIBBPF_A) -lelf -lz
 userccflags += -I $(srctree)/tools/include/ -I $(srctree)/tools/include/uapi -I $(srctree)/tools/lib
 
