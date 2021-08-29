@@ -15,6 +15,7 @@
 struct context {
 	FILE *log_file;
 	struct hsearch_data match_ops_map;
+	struct hsearch_data target_ops_map;
 };
 
 #define BFLOG_IMPL(ctx, level, fmt, ...)                                                           \
