@@ -3,9 +3,19 @@
 # Makefile for the Linux BPFILTER layer.
 #
 
+LIBBPF_SRCS = $(srctree)/tools/lib/bpf/
+LIBBPF_A = $(obj)/libbpf.a
+LIBBPF_OUT = $(abspath $(obj))
+
+$(LIBBPF_A):
+	$(Q)$(MAKE) -C $(LIBBPF_SRCS) O=$(LIBBPF_OUT)/ OUTPUT=$(LIBBPF_OUT)/ $(LIBBPF_OUT)/libbpf.a
+
 userprogs := bpfilter_umh
-bpfilter_umh-objs := main.o map-common.o
-userccflags += -I $(srctree)/tools/include/ -I $(srctree)/tools/include/uapi
+bpfilter_umh-objs := main.o map-common.o codegen.o
+bpfilter_umh-userldlibs := $(LIBBPF_A) -lelf -lz
+userccflags += -I $(srctree)/tools/include/ -I $(srctree)/tools/include/uapi -I $(srctree)/tools/lib
+
+$(obj)/bpfilter_umh: $(LIBBPF_A)
 
 ifeq ($(CONFIG_BPFILTER_UMH), y)
 # builtin bpfilter_umh should be linked with -static
