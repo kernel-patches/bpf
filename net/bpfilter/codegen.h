@@ -181,6 +181,7 @@ int codegen_push_awaiting_subprog(struct codegen *codegen, struct codegen_subpro
 int codegen_fixup(struct codegen *codegen, enum codegen_fixup_type fixup_type);
 int emit_fixup(struct codegen *codegen, enum codegen_fixup_type fixup_type, struct bpf_insn insn);
 int emit_add_counter(struct codegen *codegen);
+int try_codegen(struct codegen *codegen, const struct table *table, int hook);
 int load_img(struct codegen *codegen);
 void unload_img(struct codegen *codegen);
 void free_codegen(struct codegen *codegen);

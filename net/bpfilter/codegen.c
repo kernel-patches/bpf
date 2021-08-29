@@ -24,6 +24,8 @@
 #include <bpf/libbpf.h>
 
 #include "context.h"
+#include "rule.h"
+#include "table.h"
 
 enum fixup_insn_type { FIXUP_INSN_OFF, FIXUP_INSN_IMM, __MAX_FIXUP_INSN_TYPE };
 
@@ -51,6 +53,31 @@ static int subprog_desc_comparator(const void *x, const void *y)
 	BUG_ON(1);
 
 	return -1;
+}
+
+static int codegen_push_subprog(struct codegen *codegen, struct codegen_subprog_desc *subprog)
+{
+	// TODO (merge this with codegen_fixup_push
+	if (codegen->subprogs_cur == codegen->subprogs_max) {
+		struct codegen_subprog_desc **subprogs;
+		uint16_t subprogs_max;
+
+		subprogs_max = codegen->subprogs_cur ? 2 * codegen->subprogs_cur : 1;
+		subprogs =
+			reallocarray(codegen->subprogs, subprogs_max, sizeof(codegen->subprogs[0]));
+		if (!subprogs)
+			return -ENOMEM;
+
+		codegen->subprogs_max = subprogs_max;
+		codegen->subprogs = subprogs;
+	}
+
+	codegen->subprogs[codegen->subprogs_cur++] = subprog;
+
+	qsort(codegen->subprogs, codegen->subprogs_cur, sizeof(codegen->subprogs[0]),
+	      subprog_desc_comparator);
+
+	return 0;
 }
 
 static const struct codegen_subprog_desc *
@@ -654,6 +681,150 @@ err_free:
 	free(codegen->img);
 
 	return err;
+}
+
+static int try_codegen_rules(struct codegen *codegen, struct rule *rule_front,
+			     struct rule *rule_last)
+{
+	int err;
+
+	for (; rule_front <= rule_last; ++rule_front, ++codegen->rule_index) {
+		err = gen_inline_rule(codegen, rule_front);
+		if (err)
+			return err;
+
+		err = codegen_fixup(codegen, CODEGEN_FIXUP_NEXT_RULE);
+		if (err)
+			return err;
+
+		err = codegen_fixup(codegen, CODEGEN_FIXUP_COUNTERS_INDEX);
+		if (err)
+			return err;
+	}
+
+	err = codegen_fixup(codegen, CODEGEN_FIXUP_END_OF_CHAIN);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static struct rule *table_find_last_rule(const struct table *table, struct rule *rule_front)
+{
+	for (; rule_front; ++rule_front) {
+		if (!is_rule_unconditional(rule_front))
+			continue;
+
+		if (!rule_has_standard_target(rule_front))
+			continue;
+
+		if (standard_target_verdict(rule_front->target.ipt_target) >= 0)
+			continue;
+
+		return rule_front;
+	}
+
+	return rule_front;
+}
+
+static int try_codegen_user_chain_subprog(struct codegen *codegen, const struct table *table,
+					  struct codegen_subprog_desc *subprog)
+{
+	struct rule *rule_front, *rule_last;
+	int err;
+
+	rule_front = table_find_rule_by_offset(table, subprog->offset);
+	if (!rule_front)
+		return -EINVAL;
+
+	rule_last = table_find_last_rule(table, rule_front);
+	if (!rule_last)
+		return -EINVAL;
+
+	subprog->insn = codegen->len_cur;
+	codegen->rule_index = rule_front - table->rules;
+	err = try_codegen_rules(codegen, rule_front, rule_last);
+	if (err)
+		return err;
+
+	return codegen_push_subprog(codegen, subprog);
+}
+
+static int try_codegen_subprogs(struct codegen *codegen, const struct table *table)
+{
+	while (!list_empty(&codegen->awaiting_subprogs)) {
+		struct codegen_subprog_desc *subprog;
+		int err = -EINVAL;
+
+		subprog = list_entry(codegen->awaiting_subprogs.next, struct codegen_subprog_desc,
+				     list);
+
+		if (subprog->type == CODEGEN_SUBPROG_USER_CHAIN)
+			err = try_codegen_user_chain_subprog(codegen, table, subprog);
+
+		if (err)
+			return err;
+
+		list_del(&subprog->list);
+	}
+
+	return 0;
+}
+
+int try_codegen(struct codegen *codegen, const struct table *table, int hook)
+{
+	struct rule *rule_front, *rule_last;
+	int err;
+
+	err = codegen->codegen_ops->gen_inline_prologue(codegen);
+	if (err)
+		return err;
+
+	err = codegen->codegen_ops->load_packet_data(codegen, CODEGEN_REG_L3);
+	if (err)
+		return err;
+
+	err = codegen->codegen_ops->load_packet_data_end(codegen, CODEGEN_REG_DATA_END);
+	if (err)
+		return err;
+
+	// save packet size once
+	EMIT(codegen, BPF_MOV64_REG(CODEGEN_REG_SCRATCH2, CODEGEN_REG_DATA_END));
+	EMIT(codegen, BPF_ALU64_REG(BPF_SUB, CODEGEN_REG_SCRATCH2, CODEGEN_REG_L3));
+	EMIT(codegen, BPF_STX_MEM(BPF_W, CODEGEN_REG_RUNTIME_CTX, CODEGEN_REG_SCRATCH2,
+				  STACK_RUNTIME_CONTEXT_OFFSET(data_size)));
+
+	EMIT(codegen, BPF_ALU64_IMM(BPF_ADD, CODEGEN_REG_L3, ETH_HLEN));
+	EMIT_FIXUP(codegen, CODEGEN_FIXUP_END_OF_CHAIN,
+		   BPF_JMP_REG(BPF_JGT, CODEGEN_REG_L3, CODEGEN_REG_DATA_END, 0));
+	EMIT(codegen, BPF_MOV64_REG(CODEGEN_REG_SCRATCH1, CODEGEN_REG_L3));
+	EMIT(codegen, BPF_ALU64_IMM(BPF_ADD, CODEGEN_REG_SCRATCH1, sizeof(struct iphdr)));
+	EMIT_FIXUP(codegen, CODEGEN_FIXUP_END_OF_CHAIN,
+		   BPF_JMP_REG(BPF_JGT, CODEGEN_REG_SCRATCH1, CODEGEN_REG_DATA_END, 0));
+
+	rule_front = &table->rules[table->hook_entry[hook]];
+	rule_last = &table->rules[table->underflow[hook]];
+
+	codegen->rule_index = rule_front - table->rules;
+	err = try_codegen_rules(codegen, rule_front, rule_last);
+	if (err)
+		return err;
+
+	err = codegen->codegen_ops->gen_inline_epilogue(codegen);
+	if (err)
+		return err;
+
+	err = try_codegen_subprogs(codegen, table);
+	if (err)
+		return err;
+
+	err = codegen_fixup(codegen, CODEGEN_FIXUP_JUMP_TO_CHAIN);
+	if (err)
+		return err;
+
+	codegen->shared_codegen->maps[CODEGEN_RELOC_MAP].max_entries = table->num_rules;
+
+	return 0;
 }
 
 int load_img(struct codegen *codegen)
