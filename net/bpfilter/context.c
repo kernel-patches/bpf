@@ -10,8 +10,12 @@
 #include <linux/err.h>
 #include <linux/list.h>
 
+#include <string.h>
+
 #include "map-common.h"
 #include "match.h"
+#include "rule.h"
+#include "table.h"
 #include "target.h"
 
 static int init_match_ops_map(struct context *ctx)
@@ -54,6 +58,18 @@ static int init_target_ops_map(struct context *ctx)
 	return 0;
 }
 
+static int init_table_ops_map(struct context *ctx)
+{
+	return create_map(&ctx->table_ops_map, 1);
+}
+
+static int init_table_index(struct context *ctx)
+{
+	INIT_LIST_HEAD(&ctx->table_index.list);
+
+	return create_map(&ctx->table_index.map, 1);
+}
+
 int create_context(struct context *ctx)
 {
 	int err;
@@ -66,7 +82,21 @@ int create_context(struct context *ctx)
 	if (err)
 		goto err_free_match_ops_map;
 
+	err = init_table_ops_map(ctx);
+	if (err)
+		goto err_free_target_ops_map;
+
+	err = init_table_index(ctx);
+	if (err)
+		goto err_free_table_ops_map;
+
 	return 0;
+
+err_free_table_ops_map:
+	free_map(&ctx->table_ops_map);
+
+err_free_target_ops_map:
+	free_map(&ctx->target_ops_map);
 
 err_free_match_ops_map:
 	free_map(&ctx->match_ops_map);
@@ -76,6 +106,17 @@ err_free_match_ops_map:
 
 void free_context(struct context *ctx)
 {
-	free_map(&ctx->match_ops_map);
+	struct list_head *t, *n;
+
+	list_for_each_safe(t, n, &ctx->table_index.list) {
+		struct table *table;
+
+		table = list_entry(t, struct table, list);
+		table->table_ops->uninstall(ctx, table);
+		table->table_ops->free(table);
+	}
+	free_map(&ctx->table_index.map);
+	free_map(&ctx->table_ops_map);
 	free_map(&ctx->target_ops_map);
+	free_map(&ctx->match_ops_map);
 }
