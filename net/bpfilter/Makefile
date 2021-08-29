@@ -12,6 +12,7 @@ $(LIBBPF_A):
 
 userprogs := bpfilter_umh
 bpfilter_umh-objs := main.o map-common.o codegen.o context.o match.o target.o rule.o table.o
+bpfilter_umh-objs += sockopt.o
 bpfilter_umh-objs += xt_udp.o
 bpfilter_umh-userldlibs := $(LIBBPF_A) -lelf -lz
 userccflags += -I $(srctree)/tools/include/ -I $(srctree)/tools/include/uapi -I $(srctree)/tools/lib
