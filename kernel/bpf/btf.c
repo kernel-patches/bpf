@@ -6215,3 +6215,37 @@ const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 };
 
 BTF_ID_LIST_GLOBAL_SINGLE(btf_task_struct_ids, struct, task_struct)
+
+/* Typesafe helpers to register BTF ID sets for modules */
+#define DEFINE_KFUNC_BTF_SET_REG(type)                                         \
+	static DEFINE_MUTEX(type##_kfunc_btf_set_mutex);                       \
+	static LIST_HEAD(type##_kfunc_btf_set_list);                           \
+	void register_##type##_kfunc_btf_set(struct kfunc_btf_set *s)          \
+	{                                                                      \
+		mutex_lock(&type##_kfunc_btf_set_mutex);                       \
+		list_add(&s->list, &type##_kfunc_btf_set_list);                \
+		mutex_unlock(&type##_kfunc_btf_set_mutex);                     \
+	}                                                                      \
+	EXPORT_SYMBOL_GPL(register_##type##_kfunc_btf_set);                    \
+	bool __bpf_check_##type##_kfunc_call(u32 kfunc_id)                     \
+	{                                                                      \
+		struct kfunc_btf_set *s;                                       \
+		mutex_lock(&type##_kfunc_btf_set_mutex);                       \
+		list_for_each_entry(s, &type##_kfunc_btf_set_list, list) {     \
+			if (btf_id_set_contains(s->set, kfunc_id)) {           \
+				mutex_unlock(&type##_kfunc_btf_set_mutex);     \
+				return true;                                   \
+			}                                                      \
+		}                                                              \
+		mutex_unlock(&type##_kfunc_btf_set_mutex);                     \
+		return false;                                                  \
+	}                                                                      \
+	void unregister_##type##_kfunc_btf_set(struct kfunc_btf_set *s)        \
+	{                                                                      \
+		if (!s)                                                        \
+			return;                                                \
+		mutex_lock(&type##_kfunc_btf_set_mutex);                       \
+		list_del_init(&s->list);                                       \
+		mutex_unlock(&type##_kfunc_btf_set_mutex);                     \
+	}                                                                      \
+	EXPORT_SYMBOL_GPL(unregister_##type##_kfunc_btf_set)

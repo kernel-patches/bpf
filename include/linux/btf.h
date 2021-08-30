@@ -5,6 +5,7 @@
 #define _LINUX_BTF_H 1
 
 #include <linux/types.h>
+#include <linux/bpfptr.h>
 #include <uapi/linux/btf.h>
 #include <uapi/linux/bpf.h>
 
@@ -237,5 +238,19 @@ static inline const char *btf_name_by_offset(const struct btf *btf,
 	return NULL;
 }
 #endif
+
+struct kfunc_btf_set {
+	struct list_head list;
+	struct btf_id_set *set;
+};
+
+/* Register set of BTF ids */
+#define DECLARE_KFUNC_BTF_SET_REG(type)                                        \
+	void register_##type##_kfunc_btf_set(struct kfunc_btf_set *s);         \
+	bool __bpf_check_##type##_kfunc_call(u32 kfunc_id);                    \
+	void unregister_##type##_kfunc_btf_set(struct kfunc_btf_set *s)
+
+#define DEFINE_KFUNC_BTF_SET(set, name)                                        \
+	struct kfunc_btf_set name = { LIST_HEAD_INIT(name.list), (set) }
 
 #endif
