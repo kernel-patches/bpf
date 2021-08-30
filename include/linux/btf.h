@@ -254,5 +254,6 @@ struct kfunc_btf_set {
 	struct kfunc_btf_set name = { LIST_HEAD_INIT(name.list), (set) }
 
 DECLARE_KFUNC_BTF_SET_REG(bpf_tcp_ca);
+DECLARE_KFUNC_BTF_SET_REG(raw_tp);
 
 #endif

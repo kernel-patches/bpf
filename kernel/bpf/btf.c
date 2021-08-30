@@ -6251,3 +6251,4 @@ BTF_ID_LIST_GLOBAL_SINGLE(btf_task_struct_ids, struct, task_struct)
 	EXPORT_SYMBOL_GPL(unregister_##type##_kfunc_btf_set)
 
 DEFINE_KFUNC_BTF_SET_REG(bpf_tcp_ca);
+DEFINE_KFUNC_BTF_SET_REG(raw_tp);
