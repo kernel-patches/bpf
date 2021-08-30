@@ -6736,9 +6736,14 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	kfunc_id = find_ksym_btf_id(obj, ext->name, BTF_KIND_FUNC,
 				    &kern_btf, &kern_btf_fd);
 	if (kfunc_id < 0) {
-		pr_warn("extern (func ksym) '%s': not found in kernel BTF\n",
+		pr_warn("extern (func ksym) '%s': not found in kernel BTF, encoding btf_id as 0\n",
 			ext->name);
-		return kfunc_id;
+		/* keep invalid kfuncs, so that verifier can load the program if
+		 * they get removed during DCE pass in the verifier.
+		 * The encoding must be insn->imm = 0, insn->off = 0.
+		 */
+		kfunc_id = kern_btf_fd = 0;
+		goto resolve;
 	}
 
 	if (kern_btf != obj->btf_vmlinux) {
@@ -6798,11 +6803,18 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 		return -EINVAL;
 	}
 
+resolve:
 	ext->is_set = true;
 	ext->ksym.kernel_btf_obj_fd = kern_btf_fd;
 	ext->ksym.kernel_btf_id = kfunc_id;
-	pr_debug("extern (func ksym) '%s': resolved to kernel [%d]\n",
-		 ext->name, kfunc_id);
+	if (kfunc_id) {
+		pr_debug("extern (func ksym) '%s': resolved to kernel [%d]\n",
+			 ext->name, kfunc_id);
+	} else {
+		ext->ksym.offset = 0;
+		pr_debug("extern (func ksym) '%s': added special invalid kfunc with imm = 0\n",
+			 ext->name);
+	}
 
 	return 0;
 }
