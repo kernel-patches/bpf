@@ -265,6 +265,9 @@ int libbpf__bpf_prog_load(const struct bpf_prog_load_params *load_attr)
 	attr.line_info_cnt = load_attr->line_info_cnt;
 	attr.line_info = ptr_to_u64(load_attr->line_info);
 
+	attr.kfunc_btf_fds = ptr_to_u64(load_attr->kfunc_btf_fds);
+	attr.kfunc_btf_fds_cnt = load_attr->kfunc_btf_fds_cnt;
+
 	if (load_attr->name)
 		memcpy(attr.prog_name, load_attr->name,
 		       min(strlen(load_attr->name), (size_t)BPF_OBJ_NAME_LEN - 1));

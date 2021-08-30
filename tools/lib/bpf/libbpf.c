@@ -419,6 +419,12 @@ struct extern_desc {
 
 			/* local btf_id of the ksym extern's type. */
 			__u32 type_id;
+			/* offset to be patched in for insn->off,
+			 * this is 0 for btf_vmlinux, and index + 1
+			 * for module BTF, where index is BTF index in
+			 * obj->kfunc_btf_fds.fds array
+			 */
+			__u32 offset;
 		} ksym;
 	};
 };
@@ -514,6 +520,13 @@ struct bpf_object {
 
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
+
+	struct {
+		struct hashmap *map;
+		int *fds;
+		size_t cap_cnt;
+		__u32 n_fds;
+	} kfunc_btf_fds;
 
 	char path[];
 };
@@ -5327,6 +5340,7 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 			ext = &obj->externs[relo->sym_off];
 			insn[0].src_reg = BPF_PSEUDO_KFUNC_CALL;
 			insn[0].imm = ext->ksym.kernel_btf_id;
+			insn[0].off = ext->ksym.offset;
 			break;
 		case RELO_SUBPROG_ADDR:
 			if (insn[0].src_reg != BPF_PSEUDO_FUNC) {
@@ -6122,6 +6136,11 @@ load_program(struct bpf_program *prog, struct bpf_insn *insns, int insns_cnt,
 	load_attr.log_level = prog->log_level;
 	load_attr.prog_flags = prog->prog_flags;
 
+	if (prog->obj->kfunc_btf_fds.n_fds) {
+		load_attr.kfunc_btf_fds = prog->obj->kfunc_btf_fds.fds;
+		load_attr.kfunc_btf_fds_cnt = prog->obj->kfunc_btf_fds.n_fds;
+	}
+
 	if (prog->obj->gen_loader) {
 		bpf_gen__prog_load(prog->obj->gen_loader, &load_attr,
 				   prog - prog->obj->programs);
@@ -6723,9 +6742,49 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	}
 
 	if (kern_btf != obj->btf_vmlinux) {
-		pr_warn("extern (func ksym) '%s': function in kernel module is not supported\n",
-			ext->name);
-		return -ENOTSUP;
+		size_t index;
+		void *value;
+
+		/* Lazy initialize btf->fd index map */
+		if (!obj->kfunc_btf_fds.map) {
+			obj->kfunc_btf_fds.map = hashmap__new(bpf_core_hash_fn, bpf_core_equal_fn,
+							      NULL);
+			if (!obj->kfunc_btf_fds.map)
+				return -ENOMEM;
+
+			obj->kfunc_btf_fds.fds = calloc(8, sizeof(*obj->kfunc_btf_fds.fds));
+			if (!obj->kfunc_btf_fds.fds) {
+				hashmap__free(obj->kfunc_btf_fds.map);
+				return -ENOMEM;
+			}
+			obj->kfunc_btf_fds.cap_cnt = 8;
+		}
+
+		if (!hashmap__find(obj->kfunc_btf_fds.map, kern_btf, &value)) {
+			size_t *cap_cnt = &obj->kfunc_btf_fds.cap_cnt;
+			/* Not found, insert BTF fd into slot, and grab next
+			 * index from the fd array.
+			 */
+			ret = libbpf_ensure_mem((void **)&obj->kfunc_btf_fds.fds,
+						cap_cnt, sizeof(int), obj->kfunc_btf_fds.n_fds + 1);
+			if (ret)
+				return ret;
+			index = obj->kfunc_btf_fds.n_fds++;
+			obj->kfunc_btf_fds.fds[index] = kern_btf_fd;
+			value = (void *)index;
+			ret = hashmap__add(obj->kfunc_btf_fds.map, kern_btf, &value);
+			if (ret)
+				return ret;
+
+		} else {
+			index = (size_t)value;
+		}
+		/* index starts from 0, so shift offset by 1 as offset == 0 is reserved
+		 * for btf_vmlinux in the kernel
+		 */
+		ext->ksym.offset = index + 1;
+	} else {
+		ext->ksym.offset = 0;
 	}
 
 	kern_func = btf__type_by_id(kern_btf, kfunc_id);
@@ -6900,6 +6959,12 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 		if (!err)
 			err = bpf_gen__finish(obj->gen_loader);
 	}
+
+	/* clean up kfunc_btf */
+	hashmap__free(obj->kfunc_btf_fds.map);
+	obj->kfunc_btf_fds.map = NULL;
+	zfree(&obj->kfunc_btf_fds.fds);
+	obj->kfunc_btf_fds.cap_cnt = obj->kfunc_btf_fds.n_fds = 0;
 
 	/* clean up module BTFs */
 	for (i = 0; i < obj->btf_module_cnt; i++) {
