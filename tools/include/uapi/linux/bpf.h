@@ -1334,8 +1334,9 @@ union bpf_attr {
 			/* or valid module BTF object fd or 0 to attach to vmlinux */
 			__u32		attach_btf_obj_fd;
 		};
-		__u32		:32;		/* pad */
+		__u32		kfunc_btf_fds_cnt; /* reuse hole for count of BTF fds below */
 		__aligned_u64	fd_array;	/* array of FDs */
+		__aligned_u64   kfunc_btf_fds;  /* array of BTF FDs for module kfunc support */
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */

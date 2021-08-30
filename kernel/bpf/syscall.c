@@ -2156,16 +2156,16 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define	BPF_PROG_LOAD_LAST_FIELD fd_array
+#define	BPF_PROG_LOAD_LAST_FIELD kfunc_btf_fds
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 {
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
-	int err;
 	char license[128];
 	bool is_gpl;
+	int err;
 
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
@@ -2204,6 +2204,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 		return -EPERM;
 	if (is_perfmon_prog_type(type) && !perfmon_capable())
 		return -EPERM;
+	if (attr->kfunc_btf_fds_cnt > MAX_KFUNC_DESCS)
+		return -E2BIG;
 
 	/* attach_prog_fd/attach_btf_obj_fd can specify fd of either bpf_prog
 	 * or btf, we need to check which one it is
@@ -2252,6 +2254,55 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 		if (attach_btf)
 			btf_put(attach_btf);
 		return -ENOMEM;
+	}
+
+	if (attr->kfunc_btf_fds_cnt) {
+		struct bpf_kfunc_btf_tab *tab;
+		int fds[MAX_KFUNC_DESCS], i;
+		bpfptr_t kfunc_btf_fds;
+		u32 kfunc_btf_size, n;
+
+		kfunc_btf_size = min_t(u32, MAX_KFUNC_DESCS, attr->kfunc_btf_fds_cnt);
+		kfunc_btf_fds = make_bpfptr(attr->kfunc_btf_fds, uattr.is_kernel);
+
+		err = -EFAULT;
+		if (copy_from_bpfptr(fds, kfunc_btf_fds, kfunc_btf_size * sizeof(int)))
+			goto free_prog;
+
+		err = -ENOMEM;
+
+		n = kfunc_btf_size;
+		kfunc_btf_size *= sizeof(prog->aux->kfunc_btf_tab->btfs[0]);
+		kfunc_btf_size += sizeof(*prog->aux->kfunc_btf_tab);
+		prog->aux->kfunc_btf_tab = kzalloc(kfunc_btf_size, GFP_KERNEL);
+		if (!prog->aux->kfunc_btf_tab)
+			goto free_prog;
+
+		tab = prog->aux->kfunc_btf_tab;
+		for (i = 0; i < n; i++) {
+			struct btf_mod_pair *p;
+			struct btf *mod_btf;
+
+			mod_btf = btf_get_by_fd(fds[i]);
+			if (IS_ERR(mod_btf)) {
+				err = PTR_ERR(mod_btf);
+				goto free_prog;
+			}
+			if (!btf_is_module(mod_btf)) {
+				err = -EINVAL;
+				btf_put(mod_btf);
+				goto free_prog;
+			}
+
+			p = &tab->btfs[tab->nr_btfs];
+			p->module = btf_try_get_module(mod_btf);
+			if (!p->module) {
+				btf_put(mod_btf);
+				goto free_prog;
+			}
+			p->btf = mod_btf;
+			tab->nr_btfs++;
+		}
 	}
 
 	prog->expected_attach_type = attr->expected_attach_type;

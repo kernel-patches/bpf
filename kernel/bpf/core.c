@@ -2249,12 +2249,26 @@ static void bpf_free_used_btfs(struct bpf_prog_aux *aux)
 	kfree(aux->used_btfs);
 }
 
+static void bpf_free_kfunc_btf_tab(struct bpf_prog_aux *aux)
+{
+	struct bpf_kfunc_btf_tab *tab = aux->kfunc_btf_tab;
+
+	if (tab) {
+		while (tab->nr_btfs--) {
+			module_put(tab->btfs[tab->nr_btfs].module);
+			btf_put(tab->btfs[tab->nr_btfs].btf);
+		}
+		kfree(tab);
+	}
+}
+
 static void bpf_prog_free_deferred(struct work_struct *work)
 {
 	struct bpf_prog_aux *aux;
 	int i;
 
 	aux = container_of(work, struct bpf_prog_aux, work);
+	bpf_free_kfunc_btf_tab(aux);
 	bpf_free_used_maps(aux);
 	bpf_free_used_btfs(aux);
 	if (bpf_prog_is_dev_bound(aux))

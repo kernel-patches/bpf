@@ -592,6 +592,15 @@ struct bpf_prog {
 	struct bpf_insn		insnsi[];
 };
 
+#define MAX_KFUNC_DESCS 256
+/* There can only be at most MAX_KFUNC_DESCS module BTFs for kernel module
+ * function calls.
+ */
+struct bpf_kfunc_btf_tab {
+	u32 nr_btfs;
+	struct btf_mod_pair btfs[];
+};
+
 struct sk_filter {
 	refcount_t	refcnt;
 	struct rcu_head	rcu;
