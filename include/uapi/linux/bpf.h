@@ -906,6 +906,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_RINGBUF,
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
+	BPF_MAP_TYPE_BLOOM_FILTER,
 };
 
 /* Note that tracing related programs such as
@@ -1274,6 +1275,7 @@ union bpf_attr {
 						   * struct stored as the
 						   * map value
 						   */
+		__u32	nr_hashes;      /* used for configuring bloom filter maps */
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
@@ -5594,6 +5596,7 @@ struct bpf_map_info {
 	__u32 btf_id;
 	__u32 btf_key_type_id;
 	__u32 btf_value_type_id;
+	__u32 nr_hashes; /* used for bloom filter maps */
 } __attribute__((aligned(8)));
 
 struct bpf_btf_info {
