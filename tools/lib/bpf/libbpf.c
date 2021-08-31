@@ -377,6 +377,7 @@ struct bpf_map {
 	char *pin_path;
 	bool pinned;
 	bool reused;
+	__u32 nr_hashes; /* used for bloom filter maps */
 };
 
 enum extern_type {
@@ -1290,6 +1291,11 @@ static bool bpf_map_type__is_map_in_map(enum bpf_map_type type)
 	return false;
 }
 
+static bool bpf_map_type__is_bloom_filter(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_BLOOM_FILTER;
+}
+
 int bpf_object__section_size(const struct bpf_object *obj, const char *name,
 			     __u32 *size)
 {
@@ -2080,6 +2086,10 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 			if (!get_map_field_int(map_name, btf, m, &map_def->map_flags))
 				return -EINVAL;
 			map_def->parts |= MAP_DEF_MAP_FLAGS;
+		} else if (strcmp(name, "nr_hashes") == 0) {
+			if (!get_map_field_int(map_name, btf, m, &map_def->nr_hashes))
+				return -EINVAL;
+			map_def->parts |= MAP_DEF_NR_HASHES;
 		} else if (strcmp(name, "numa_node") == 0) {
 			if (!get_map_field_int(map_name, btf, m, &map_def->numa_node))
 				return -EINVAL;
@@ -2264,6 +2274,7 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 	map->numa_node = def->numa_node;
 	map->btf_key_type_id = def->key_type_id;
 	map->btf_value_type_id = def->value_type_id;
+	map->nr_hashes = def->nr_hashes;
 
 	if (def->parts & MAP_DEF_MAP_TYPE)
 		pr_debug("map '%s': found type = %u.\n", map->name, def->map_type);
@@ -2288,6 +2299,8 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 		pr_debug("map '%s': found pinning = %u.\n", map->name, def->pinning);
 	if (def->parts & MAP_DEF_NUMA_NODE)
 		pr_debug("map '%s': found numa_node = %u.\n", map->name, def->numa_node);
+	if (def->parts & MAP_DEF_NR_HASHES)
+		pr_debug("map '%s': found nr_hashes = %u.\n", map->name, def->nr_hashes);
 
 	if (def->parts & MAP_DEF_INNER_MAP)
 		pr_debug("map '%s': found inner map definition.\n", map->name);
@@ -3979,6 +3992,7 @@ int bpf_map__reuse_fd(struct bpf_map *map, int fd)
 	map->btf_key_type_id = info.btf_key_type_id;
 	map->btf_value_type_id = info.btf_value_type_id;
 	map->reused = true;
+	map->nr_hashes = info.nr_hashes;
 
 	return 0;
 
@@ -4473,7 +4487,8 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		map_info.key_size == map->def.key_size &&
 		map_info.value_size == map->def.value_size &&
 		map_info.max_entries == map->def.max_entries &&
-		map_info.map_flags == map->def.map_flags);
+		map_info.map_flags == map->def.map_flags &&
+		map_info.nr_hashes == map->nr_hashes);
 }
 
 static int
@@ -4611,6 +4626,8 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		}
 		if (map->inner_map_fd >= 0)
 			create_attr.inner_map_fd = map->inner_map_fd;
+	} else if (bpf_map_type__is_bloom_filter(def->type)) {
+		create_attr.nr_hashes = map->nr_hashes;
 	}
 
 	if (obj->gen_loader) {
@@ -8557,6 +8574,19 @@ int bpf_map__set_numa_node(struct bpf_map *map, __u32 numa_node)
 	if (map->fd >= 0)
 		return libbpf_err(-EBUSY);
 	map->numa_node = numa_node;
+	return 0;
+}
+
+__u32 bpf_map__nr_hashes(const struct bpf_map *map)
+{
+	return map->nr_hashes;
+}
+
+int bpf_map__set_nr_hashes(struct bpf_map *map, __u32 nr_hashes)
+{
+	if (map->fd >= 0)
+		return libbpf_err(-EBUSY);
+	map->nr_hashes = nr_hashes;
 	return 0;
 }
 
