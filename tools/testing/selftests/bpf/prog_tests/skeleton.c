@@ -18,6 +18,9 @@ void test_skeleton(void)
 	struct test_skeleton__data *data;
 	struct test_skeleton__rodata *rodata;
 	struct test_skeleton__kconfig *kcfg;
+	const void *eb;
+	size_t ebs_val = 0;
+	size_t *ebs = &ebs_val;
 
 	skel = test_skeleton__open();
 	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
@@ -90,6 +93,10 @@ void test_skeleton(void)
 	      "got %d != exp %d\n", bss->bpf_syscall, kcfg->CONFIG_BPF_SYSCALL);
 	CHECK(bss->kern_ver != kcfg->LINUX_KERNEL_VERSION, "ext2",
 	      "got %d != exp %d\n", bss->kern_ver, kcfg->LINUX_KERNEL_VERSION);
+
+	eb = test_skeleton__elf_bytes(ebs);
+	ASSERT_OK_PTR(eb, "elf_bytes_not_null");
+	ASSERT_NEQ(*ebs, 0, "elf_bytes_size_not_zero");
 
 cleanup:
 	test_skeleton__destroy(skel);
