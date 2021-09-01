@@ -238,8 +238,8 @@ static void codegen(const char *template, ...)
 		} else if (c == '\n') {
 			break;
 		} else {
-			p_err("unrecognized character at pos %td in template '%s'",
-			      src - template - 1, template);
+			p_err("unrecognized character at pos %td in template '%s': '%c'",
+			      src - template - 1, template, c);
 			free(s);
 			exit(-1);
 		}
@@ -406,7 +406,7 @@ static void codegen_destroy(struct bpf_object *obj, const char *obj_name)
 	}
 
 	bpf_object__for_each_map(map, obj) {
-		const char * ident;
+		const char *ident;
 
 		ident = get_map_ident(map);
 		if (!ident)
@@ -787,6 +787,9 @@ static int do_skeleton(int argc, char **argv)
 			free(obj);					    \n\
 		}							    \n\
 									    \n\
+		static inline const void *		\n\
+		%1$s__elf_bytes(size_t *sz);	\n\
+										\n\
 		static inline int					    \n\
 		%1$s__create_skeleton(struct %1$s *obj);		    \n\
 									    \n\
@@ -943,25 +946,31 @@ static int do_skeleton(int argc, char **argv)
 	codegen("\
 		\n\
 									    \n\
-			s->data_sz = %d;				    \n\
-			s->data = (void *)\"\\				    \n\
-		",
-		file_sz);
-
-	/* embed contents of BPF object file */
-	print_hex(obj_data, file_sz);
-
-	codegen("\
+			s->data = (void *)%2$s__elf_bytes(&s->data_sz);			    \n\
 		\n\
-		\";							    \n\
 									    \n\
 			return 0;					    \n\
 		err:							    \n\
 			bpf_object__destroy_skeleton(s);		    \n\
 			return -ENOMEM;					    \n\
 		}							    \n\
-									    \n\
-		#endif /* %s */						    \n\
+										\n\
+		static inline const void *		\n\
+		%2$s__elf_bytes(size_t *sz)		\n\
+		{								\n\
+			*sz = %1$d;					\n\
+			return (const void *)\"\\	\n\
+		"
+		, file_sz, obj_name);
+
+	/* embed contents of BPF object file */
+	print_hex(obj_data, file_sz);
+
+	codegen("\
+		\n\
+		\";								\n\
+		}								\n\
+		#endif /* %s */					\n\
 		",
 		header_guard);
 	err = 0;
