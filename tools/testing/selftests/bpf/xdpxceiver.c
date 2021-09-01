@@ -48,6 +48,7 @@
  *    g. unaligned mode
  *    h. tests for invalid and corner case Tx descriptors so that the correct ones
  *       are discarded and let through, respectively.
+ *    i. 2K frame size tests
  *
  * Total tests: 12
  *
@@ -1203,6 +1204,8 @@ static void testapp_inv_desc(struct test_spec *test)
 			     {UMEM_SIZE - PKT_SIZE / 2, PKT_SIZE, 0, false},
 		/* Straddle a page boundrary */
 			     {0x3000 - PKT_SIZE / 2, PKT_SIZE, 0, false},
+		/* Straddle a 2K boundrary */
+			     {0x3800 - PKT_SIZE / 2, PKT_SIZE, 0, true},
 		/* Valid packet for synch so that something is received */
 			     {0x4000, PKT_SIZE, 0, true}};
 
@@ -1210,6 +1213,11 @@ static void testapp_inv_desc(struct test_spec *test)
 		/* Crossing a page boundrary allowed */
 		pkts[6].valid = true;
 	}
+	if (test->ifobj_tx->umem->frame_size == XSK_UMEM__DEFAULT_FRAME_SIZE / 2) {
+		/* Crossing a 2K frame size boundrary not allowed */
+		pkts[7].valid = false;
+	}
+
 	pkt_stream_set(test, pkts, ARRAY_SIZE(pkts));
 	testapp_validate_traffic(test);
 	pkt_stream_restore_default(test);
@@ -1260,6 +1268,15 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		test_spec_set_name(test, "RUN_TO_COMPLETION");
 		testapp_validate_traffic(test);
 		break;
+	case TEST_TYPE_RUN_TO_COMPLETION_2K_FRAME:
+		test_spec_set_name(test, "RUN_TO_COMPLETION_2K_FRAME_SIZE");
+		test->ifobj_tx->umem->frame_size = 2048;
+		test->ifobj_rx->umem->frame_size = 2048;
+		pkt_stream_replace(test, DEFAULT_PKT_CNT, MIN_PKT_SIZE);
+		testapp_validate_traffic(test);
+
+		pkt_stream_restore_default(test);
+		break;
 	case TEST_TYPE_POLL:
 		test->ifobj_tx->use_poll = true;
 		test->ifobj_rx->use_poll = true;
@@ -1268,6 +1285,12 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		break;
 	case TEST_TYPE_ALIGNED_INV_DESC:
 		test_spec_set_name(test, "ALIGNED_INV_DESC");
+		testapp_inv_desc(test);
+		break;
+	case TEST_TYPE_ALIGNED_INV_DESC_2K_FRAME:
+		test_spec_set_name(test, "ALIGNED_INV_DESC_2K_FRAME_SIZE");
+		test->ifobj_tx->umem->frame_size = 2048;
+		test->ifobj_rx->umem->frame_size = 2048;
 		testapp_inv_desc(test);
 		break;
 	case TEST_TYPE_UNALIGNED_INV_DESC:
