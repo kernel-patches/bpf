@@ -23,3 +23,10 @@ int sys_enter(void *ctx)
 		one, 2, three, 4, five, 6, seven, 8, nine, 10, ++trace_vprintk_ran);
 	return 0;
 }
+
+SEC("fentry/__x64_sys_nanosleep")
+int zero_fmt_args(void *ctx)
+{
+	bpf_printk("\t"); // runner doesn't search for this, just ensure it compiles
+	return 0;
+}
