@@ -1240,6 +1240,14 @@ static inline bool intel_pmu_has_bts(struct perf_event *event)
 	return intel_pmu_has_bts_period(event, hwc->sample_period);
 }
 
+static __always_inline void intel_pmu_pebs_disable_all(void)
+{
+	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+
+	if (cpuc->pebs_enabled)
+		wrmsrl(MSR_IA32_PEBS_ENABLE, 0);
+}
+
 int intel_pmu_save_and_restart(struct perf_event *event);
 
 struct event_constraint *
@@ -1313,8 +1321,6 @@ void intel_pmu_pebs_enable(struct perf_event *event);
 void intel_pmu_pebs_disable(struct perf_event *event);
 
 void intel_pmu_pebs_enable_all(void);
-
-void intel_pmu_pebs_disable_all(void);
 
 void intel_pmu_pebs_sched_task(struct perf_event_context *ctx, bool sched_in);
 
