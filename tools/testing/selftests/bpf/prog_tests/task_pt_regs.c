@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include <test_progs.h>
 #include <linux/ptrace.h>
+#include "bpf_pt_regs_helpers.h"
 #include "test_task_pt_regs.skel.h"
 
 void test_task_pt_regs(void)

@@ -5,8 +5,10 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-struct pt_regs current_regs = {};
-struct pt_regs ctx_regs = {};
+#include "bpf_pt_regs_helpers.h"
+
+struct bpf_pt_regs current_regs = {};
+struct bpf_pt_regs ctx_regs = {};
 int uprobe_res = 0;
 
 SEC("uprobe/trigger_func")
@@ -17,8 +19,8 @@ int handle_uprobe(struct pt_regs *ctx)
 
 	current = bpf_get_current_task_btf();
 	regs = (struct pt_regs *) bpf_task_pt_regs(current);
-	__builtin_memcpy(&current_regs, regs, sizeof(*regs));
-	__builtin_memcpy(&ctx_regs, ctx, sizeof(*ctx));
+	bpf_copy_pt_regs(&current_regs, regs);
+	bpf_copy_pt_regs(&ctx_regs, ctx);
 
 	/* Prove that uprobe was run */
 	uprobe_res = 1;
