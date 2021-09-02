@@ -12258,6 +12258,20 @@ static struct tail_call_test tail_call_tests[] = {
 		.result = MAX_TAIL_CALL_CNT + 1,
 	},
 	{
+		"Tail call count preserved across function calls",
+		.insns = {
+			BPF_ALU64_IMM(BPF_ADD, R1, 1),
+			BPF_STX_MEM(BPF_DW, R10, R1, -8),
+			BPF_CALL_REL(0),
+			BPF_LDX_MEM(BPF_DW, R1, R10, -8),
+			BPF_ALU32_REG(BPF_MOV, R0, R1),
+			TAIL_CALL(0),
+			BPF_EXIT_INSN(),
+		},
+		.stack_depth = 8,
+		.result = MAX_TAIL_CALL_CNT + 1,
+	},
+	{
 		"Tail call error path, NULL target",
 		.insns = {
 			BPF_ALU64_IMM(BPF_MOV, R0, -1),
@@ -12278,6 +12292,29 @@ static struct tail_call_test tail_call_tests[] = {
 		.result = 1,
 	},
 };
+
+/*
+ * A test function to be called from a BPF program, clobbering a lot of
+ * CPU registers in the process. A JITed BPF program calling this function
+ * must save and restore any caller-saved registers it uses for internal
+ * state, for example the current tail call count.
+ */
+BPF_CALL_1(test_bpf_func, u64, arg)
+{
+	char buf[64];
+	long a = 0;
+	long b = 1;
+	long c = 2;
+	long d = 3;
+	long e = 4;
+	long f = 5;
+	long g = 6;
+	long h = 7;
+
+	return snprintf(buf, sizeof(buf),
+			"%ld %lu %lx %ld %lu %lx %ld %lu %x",
+			a, b, c, d, e, f, g, h, (int)arg);
+}
 
 static void __init destroy_tail_call_tests(struct bpf_array *progs)
 {
@@ -12332,16 +12369,17 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 		for (i = 0; i < len; i++) {
 			struct bpf_insn *insn = &fp->insnsi[i];
 
-			if (insn->imm != TAIL_CALL_MARKER)
-				continue;
-
 			switch (insn->code) {
 			case BPF_LD | BPF_DW | BPF_IMM:
+				if (insn->imm != TAIL_CALL_MARKER)
+					break;
 				insn[0].imm = (u32)(long)progs;
 				insn[1].imm = ((u64)(long)progs) >> 32;
 				break;
 
 			case BPF_ALU | BPF_MOV | BPF_K:
+				if (insn->imm != TAIL_CALL_MARKER)
+					break;
 				if (insn->off == TAIL_CALL_NULL)
 					insn->imm = ntests;
 				else if (insn->off == TAIL_CALL_INVALID)
@@ -12349,6 +12387,13 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 				else
 					insn->imm = which + insn->off;
 				insn->off = 0;
+				break;
+
+			case BPF_JMP | BPF_CALL:
+				if (insn->src_reg != BPF_PSEUDO_CALL)
+					break;
+				*insn = BPF_EMIT_CALL(test_bpf_func);
+				break;
 			}
 		}
 
