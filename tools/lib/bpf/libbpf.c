@@ -4619,6 +4619,26 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 			create_attr.inner_map_fd = map->inner_map_fd;
 	}
 
+	if (def->type == BPF_MAP_TYPE_PERF_EVENT_ARRAY ||
+	    def->type == BPF_MAP_TYPE_STACK_TRACE ||
+	    def->type == BPF_MAP_TYPE_CGROUP_ARRAY ||
+	    def->type == BPF_MAP_TYPE_ARRAY_OF_MAPS ||
+	    def->type == BPF_MAP_TYPE_HASH_OF_MAPS ||
+	    def->type == BPF_MAP_TYPE_DEVMAP ||
+	    def->type == BPF_MAP_TYPE_SOCKMAP ||
+	    def->type == BPF_MAP_TYPE_CPUMAP ||
+	    def->type == BPF_MAP_TYPE_XSKMAP ||
+	    def->type == BPF_MAP_TYPE_SOCKHASH ||
+	    def->type == BPF_MAP_TYPE_QUEUE ||
+	    def->type == BPF_MAP_TYPE_STACK ||
+	    def->type == BPF_MAP_TYPE_DEVMAP_HASH) {
+		create_attr.btf_fd = 0;
+		create_attr.btf_key_type_id = 0;
+		create_attr.btf_value_type_id = 0;
+		map->btf_key_type_id = 0;
+		map->btf_value_type_id = 0;
+	}
+
 	if (obj->gen_loader) {
 		bpf_gen__map_create(obj->gen_loader, &create_attr, is_inner ? -1 : map - obj->maps);
 		/* Pretend to have valid FD to pass various fd >= 0 checks.
@@ -4626,21 +4646,6 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		 */
 		map->fd = 0;
 	} else {
-		map->fd = bpf_create_map_xattr(&create_attr);
-	}
-	if (map->fd < 0 && (create_attr.btf_key_type_id ||
-			    create_attr.btf_value_type_id)) {
-		char *cp, errmsg[STRERR_BUFSIZE];
-
-		err = -errno;
-		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
-		pr_warn("Error in bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
-			map->name, cp, err);
-		create_attr.btf_fd = 0;
-		create_attr.btf_key_type_id = 0;
-		create_attr.btf_value_type_id = 0;
-		map->btf_key_type_id = 0;
-		map->btf_value_type_id = 0;
 		map->fd = bpf_create_map_xattr(&create_attr);
 	}
 
