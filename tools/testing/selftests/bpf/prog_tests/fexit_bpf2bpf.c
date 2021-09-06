@@ -288,7 +288,7 @@ static void test_fmod_ret_freplace(void)
 	if (CHECK(err, "freplace_obj_load", "err %d\n", err))
 		goto out;
 
-	prog = bpf_program__next(NULL, freplace_obj);
+	prog = bpf_object__next_program(NULL, freplace_obj);
 	freplace_link = bpf_program__attach_trace(prog);
 	if (!ASSERT_OK_PTR(freplace_link, "freplace_attach_trace"))
 		goto out;
