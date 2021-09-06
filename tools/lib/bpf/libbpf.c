@@ -7353,7 +7353,7 @@ int bpf_object__pin_maps(struct bpf_object *obj, const char *path)
 	return 0;
 
 err_unpin_maps:
-	while ((map = bpf_map__prev(map, obj))) {
+	while ((map = bpf_object__prev_map(map, obj))) {
 		if (!map->pin_path)
 			continue;
 
@@ -7433,7 +7433,7 @@ int bpf_object__pin_programs(struct bpf_object *obj, const char *path)
 	return 0;
 
 err_unpin_programs:
-	while ((prog = bpf_program__prev(prog, obj))) {
+	while ((prog = bpf_object__prev_program(prog, obj))) {
 		char buf[PATH_MAX];
 		int len;
 
@@ -7672,8 +7672,11 @@ __bpf_program__iter(const struct bpf_program *p, const struct bpf_object *obj,
 	return &obj->programs[idx];
 }
 
+__attribute__((alias("bpf_object__next_program")))
+struct bpf_program *bpf_program__next(struct bpf_program *prev, const struct bpf_object *obj);
+
 struct bpf_program *
-bpf_program__next(struct bpf_program *prev, const struct bpf_object *obj)
+bpf_object__next_program(struct bpf_program *prev, const struct bpf_object *obj)
 {
 	struct bpf_program *prog = prev;
 
@@ -7684,8 +7687,11 @@ bpf_program__next(struct bpf_program *prev, const struct bpf_object *obj)
 	return prog;
 }
 
+__attribute__((alias("bpf_object__prev_program")))
+struct bpf_program *bpf_program__prev(struct bpf_program *next, const struct bpf_object *obj);
+
 struct bpf_program *
-bpf_program__prev(struct bpf_program *next, const struct bpf_object *obj)
+bpf_object__prev_program(struct bpf_program *next, const struct bpf_object *obj)
 {
 	struct bpf_program *prog = next;
 
@@ -8704,8 +8710,11 @@ __bpf_map__iter(const struct bpf_map *m, const struct bpf_object *obj, int i)
 	return &obj->maps[idx];
 }
 
+__attribute__((alias("bpf_object__next_map")))
+struct bpf_map *bpf_map__next(const struct bpf_map *prev, const struct bpf_object *obj);
+
 struct bpf_map *
-bpf_map__next(const struct bpf_map *prev, const struct bpf_object *obj)
+bpf_object__next_map(const struct bpf_map *prev, const struct bpf_object *obj)
 {
 	if (prev == NULL)
 		return obj->maps;
@@ -8713,8 +8722,11 @@ bpf_map__next(const struct bpf_map *prev, const struct bpf_object *obj)
 	return __bpf_map__iter(prev, obj, 1);
 }
 
+__attribute__((alias("bpf_object__prev_map")))
+struct bpf_map *bpf_map__prev(const struct bpf_map *next, const struct bpf_object *obj);
+
 struct bpf_map *
-bpf_map__prev(const struct bpf_map *next, const struct bpf_object *obj)
+bpf_object__prev_map(const struct bpf_map *next, const struct bpf_object *obj)
 {
 	if (next == NULL) {
 		if (!obj->nr_maps)

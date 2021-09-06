@@ -378,6 +378,10 @@ LIBBPF_0.5.0 {
 		bpf_program__attach_tracepoint_opts;
 		bpf_program__attach_uprobe_opts;
 		bpf_object__gen_loader;
+		bpf_object__next_map;
+		bpf_object__next_program;
+		bpf_object__prev_map;
+		bpf_object__prev_program;
 		btf__load_from_kernel_by_id;
 		btf__load_from_kernel_by_id_split;
 		btf__load_into_kernel;

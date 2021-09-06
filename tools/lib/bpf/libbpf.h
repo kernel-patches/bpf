@@ -186,16 +186,22 @@ LIBBPF_API int libbpf_find_vmlinux_btf_id(const char *name,
 
 /* Accessors of bpf_program */
 struct bpf_program;
-LIBBPF_API struct bpf_program *bpf_program__next(struct bpf_program *prog,
+LIBBPF_API LIBBPF_DEPRECATED("bpf_program__next() is deprecated, use bpf_object__next_program() instead")
+struct bpf_program *bpf_program__next(struct bpf_program *prog,
 						 const struct bpf_object *obj);
+LIBBPF_API struct bpf_program *bpf_object__next_program(struct bpf_program *prog,
+							const struct bpf_object *obj);
 
-#define bpf_object__for_each_program(pos, obj)		\
-	for ((pos) = bpf_program__next(NULL, (obj));	\
-	     (pos) != NULL;				\
-	     (pos) = bpf_program__next((pos), (obj)))
+#define bpf_object__for_each_program(pos, obj)			\
+	for ((pos) = bpf_object__next_program(NULL, (obj));	\
+	     (pos) != NULL;					\
+	     (pos) = bpf_object__next_program((pos), (obj)))
 
-LIBBPF_API struct bpf_program *bpf_program__prev(struct bpf_program *prog,
+LIBBPF_API LIBBPF_DEPRECATED("bpf_program__prev() is deprecated, use bpf_object__prev_program() instead")
+struct bpf_program *bpf_program__prev(struct bpf_program *prog,
 						 const struct bpf_object *obj);
+LIBBPF_API struct bpf_program *bpf_object__prev_program(struct bpf_program *prog,
+							const struct bpf_object *obj);
 
 typedef void (*bpf_program_clear_priv_t)(struct bpf_program *, void *);
 
@@ -495,16 +501,20 @@ bpf_object__find_map_fd_by_name(const struct bpf_object *obj, const char *name);
 LIBBPF_API struct bpf_map *
 bpf_object__find_map_by_offset(struct bpf_object *obj, size_t offset);
 
+LIBBPF_API LIBBPF_DEPRECATED("bpf_map__next() is deprecated, use bpf_object__next_map() instead")
+struct bpf_map *bpf_map__next(const struct bpf_map *map, const struct bpf_object *obj);
 LIBBPF_API struct bpf_map *
-bpf_map__next(const struct bpf_map *map, const struct bpf_object *obj);
+bpf_object__next_map(const struct bpf_map *map, const struct bpf_object *obj);
 #define bpf_object__for_each_map(pos, obj)		\
-	for ((pos) = bpf_map__next(NULL, (obj));	\
+	for ((pos) = bpf_object__next_map(NULL, (obj));	\
 	     (pos) != NULL;				\
-	     (pos) = bpf_map__next((pos), (obj)))
+	     (pos) = bpf_object__next_map((pos), (obj)))
 #define bpf_map__for_each bpf_object__for_each_map
 
+LIBBPF_API LIBBPF_DEPRECATED("bpf_map__prev() is deprecated, use bpf_object__prev_map() instead")
+struct bpf_map *bpf_map__prev(const struct bpf_map *map, const struct bpf_object *obj);
 LIBBPF_API struct bpf_map *
-bpf_map__prev(const struct bpf_map *map, const struct bpf_object *obj);
+bpf_object__prev_map(const struct bpf_map *map, const struct bpf_object *obj);
 
 /* get/set map FD */
 LIBBPF_API int bpf_map__fd(const struct bpf_map *map);
