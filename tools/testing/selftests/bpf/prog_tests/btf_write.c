@@ -281,5 +281,28 @@ void test_btf_write() {
 		     "[17] DATASEC 'datasec1' size=12 vlen=1\n"
 		     "\ttype_id=1 offset=4 size=8", "raw_dump");
 
+	/* TAG */
+	id = btf__add_tag(btf, "tag1", -1, 16);
+	ASSERT_EQ(id, 18, "tag_id");
+	t = btf__type_by_id(btf, 18);
+	ASSERT_STREQ(btf__str_by_offset(btf, t->name_off), "tag1", "tag_name");
+	ASSERT_EQ(btf_kind(t), BTF_KIND_TAG, "tag_kind");
+	ASSERT_EQ(btf_kflag(t), true, "tag_kflag");
+	ASSERT_EQ(t->type, 16, "tag_type");
+	ASSERT_EQ(btf_tag(t)->comp_id, 0, "tag_comp_id");
+	ASSERT_STREQ(btf_type_raw_dump(btf, 18),
+		     "[18] TAG 'tag1' type_id=16, comp_id=-1", "raw_dump");
+
+	id = btf__add_tag(btf, "tag2", 1, 14);
+	ASSERT_EQ(id, 19, "tag_id");
+	t = btf__type_by_id(btf, 19);
+	ASSERT_STREQ(btf__str_by_offset(btf, t->name_off), "tag2", "tag_name");
+	ASSERT_EQ(btf_kind(t), BTF_KIND_TAG, "tag_kind");
+	ASSERT_EQ(btf_kflag(t), false, "tag_kflag");
+	ASSERT_EQ(t->type, 14, "tag_type");
+	ASSERT_EQ(btf_tag(t)->comp_id, 1, "tag_comp_id");
+	ASSERT_STREQ(btf_type_raw_dump(btf, 19),
+		     "[19] TAG 'tag2' type_id=14, comp_id=1", "raw_dump");
+
 	btf__free(btf);
 }
