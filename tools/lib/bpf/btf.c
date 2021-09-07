@@ -304,6 +304,8 @@ static int btf_type_size(const struct btf_type *t)
 		return base_size + sizeof(struct btf_var);
 	case BTF_KIND_DATASEC:
 		return base_size + vlen * sizeof(struct btf_var_secinfo);
+	case BTF_KIND_TAG:
+		return base_size + sizeof(struct btf_tag);
 	default:
 		pr_debug("Unsupported BTF_KIND:%u\n", btf_kind(t));
 		return -EINVAL;
@@ -375,6 +377,9 @@ static int btf_bswap_type_rest(struct btf_type *t)
 			v->offset = bswap_32(v->offset);
 			v->size = bswap_32(v->size);
 		}
+		return 0;
+	case BTF_KIND_TAG:
+		btf_tag(t)->comp_id = bswap_32(btf_tag(t)->comp_id);
 		return 0;
 	default:
 		pr_debug("Unsupported BTF_KIND:%u\n", btf_kind(t));
@@ -586,6 +591,7 @@ __s64 btf__resolve_size(const struct btf *btf, __u32 type_id)
 		case BTF_KIND_CONST:
 		case BTF_KIND_RESTRICT:
 		case BTF_KIND_VAR:
+		case BTF_KIND_TAG:
 			type_id = t->type;
 			break;
 		case BTF_KIND_ARRAY:
@@ -2440,6 +2446,41 @@ int btf__add_datasec_var_info(struct btf *btf, int var_type_id, __u32 offset, __
 	return 0;
 }
 
+int btf__add_tag(struct btf *btf, const char *name, int comp_id, int ref_type_id)
+{
+	bool for_ref_type = false;
+	struct btf_type *t;
+	int sz, name_off;
+
+	if (!name || !name[0] || comp_id < -1)
+		return libbpf_err(-EINVAL);
+
+	if (validate_type_id(ref_type_id))
+		return libbpf_err(-EINVAL);
+
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	sz = sizeof(struct btf_type) + sizeof(struct btf_tag);
+	t = btf_add_type_mem(btf, sz);
+	if (!t)
+		return libbpf_err(-ENOMEM);
+
+	name_off = btf__add_str(btf, name);
+	if (name_off < 0)
+		return name_off;
+
+	t->name_off = name_off;
+	t->type = ref_type_id;
+
+	if (comp_id == -1)
+		for_ref_type = true;
+	t->info = btf_type_info(BTF_KIND_TAG, 0, for_ref_type);
+	((struct btf_tag *)(t + 1))->comp_id = for_ref_type ? 0 : comp_id;
+
+	return btf_commit_type(btf, sz);
+}
+
 struct btf_ext_sec_setup_param {
 	__u32 off;
 	__u32 len;
@@ -3535,6 +3576,7 @@ static int btf_dedup_prep(struct btf_dedup *d)
 			h = btf_hash_common(t);
 			break;
 		case BTF_KIND_INT:
+		case BTF_KIND_TAG:
 			h = btf_hash_int_tag(t);
 			break;
 		case BTF_KIND_ENUM:
@@ -3590,6 +3632,7 @@ static int btf_dedup_prim_type(struct btf_dedup *d, __u32 type_id)
 	case BTF_KIND_FUNC_PROTO:
 	case BTF_KIND_VAR:
 	case BTF_KIND_DATASEC:
+	case BTF_KIND_TAG:
 		return 0;
 
 	case BTF_KIND_INT:
@@ -4210,6 +4253,23 @@ static int btf_dedup_ref_type(struct btf_dedup *d, __u32 type_id)
 		}
 		break;
 
+	case BTF_KIND_TAG:
+		ref_type_id = btf_dedup_ref_type(d, t->type);
+		if (ref_type_id < 0)
+			return ref_type_id;
+		t->type = ref_type_id;
+
+		h = btf_hash_int_tag(t);
+		for_each_dedup_cand(d, hash_entry, h) {
+			cand_id = (__u32)(long)hash_entry->value;
+			cand = btf_type_by_id(d->btf, cand_id);
+			if (btf_equal_int_tag(t, cand)) {
+				new_id = cand_id;
+				break;
+			}
+		}
+		break;
+
 	case BTF_KIND_ARRAY: {
 		struct btf_array *info = btf_array(t);
 
@@ -4482,6 +4542,7 @@ int btf_type_visit_type_ids(struct btf_type *t, type_id_visit_fn visit, void *ct
 	case BTF_KIND_TYPEDEF:
 	case BTF_KIND_FUNC:
 	case BTF_KIND_VAR:
+	case BTF_KIND_TAG:
 		return visit(&t->type, ctx);
 
 	case BTF_KIND_ARRAY: {

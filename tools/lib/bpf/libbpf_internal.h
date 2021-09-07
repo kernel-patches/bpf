@@ -69,6 +69,8 @@
 #define BTF_VAR_SECINFO_ENC(type, offset, size) (type), (offset), (size)
 #define BTF_TYPE_FLOAT_ENC(name, sz) \
 	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), sz)
+#define BTF_TYPE_TAG_KIND_ENC(name, type) \
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_TAG, 1, 0), type), (0)
 
 #ifndef likely
 #define likely(x) __builtin_expect(!!(x), 1)
