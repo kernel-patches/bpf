@@ -36,14 +36,14 @@ struct btf_type {
 	 * bits 24-27: kind (e.g. int, ptr, array...etc)
 	 * bits 28-30: unused
 	 * bit     31: kind_flag, currently used by
-	 *             struct, union and fwd
+	 *             struct, union, fwd and tag
 	 */
 	__u32 info;
 	/* "size" is used by INT, ENUM, STRUCT, UNION and DATASEC.
 	 * "size" tells the size of the type it is describing.
 	 *
 	 * "type" is used by PTR, TYPEDEF, VOLATILE, CONST, RESTRICT,
-	 * FUNC, FUNC_PROTO and VAR.
+	 * FUNC, FUNC_PROTO, VAR and TAG.
 	 * "type" is a type_id referring to another type.
 	 */
 	union {
@@ -73,7 +73,8 @@ struct btf_type {
 #define BTF_KIND_VAR		14	/* Variable	*/
 #define BTF_KIND_DATASEC	15	/* Section	*/
 #define BTF_KIND_FLOAT		16	/* Floating point	*/
-#define BTF_KIND_MAX		BTF_KIND_FLOAT
+#define BTF_KIND_TAG		17	/* Tag */
+#define BTF_KIND_MAX		BTF_KIND_TAG
 #define NR_BTF_KINDS		(BTF_KIND_MAX + 1)
 
 /* For some specific BTF_KIND, "struct btf_type" is immediately
@@ -168,6 +169,14 @@ struct btf_var_secinfo {
 	__u32	type;
 	__u32	offset;
 	__u32	size;
+};
+
+/* BTF_KIND_TAG is followed by a single "struct btf_tag" to describe
+ * additional information related to the tag such as which field of
+ * a struct or union or which argument of a function.
+ */
+struct btf_tag {
+       __u32   comp_id;
 };
 
 #endif /* _UAPI__LINUX_BTF_H__ */
