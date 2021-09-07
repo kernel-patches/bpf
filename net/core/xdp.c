@@ -531,8 +531,20 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct sk_buff *skb,
 					   struct net_device *dev)
 {
+	unsigned int frag_size, frag_tsize;
 	unsigned int headroom, frame_size;
 	void *hard_start;
+	u8 nr_frags;
+
+	/* xdp multi-buff frame */
+	if (unlikely(xdp_frame_is_mb(xdpf))) {
+		struct skb_shared_info *sinfo;
+
+		sinfo = xdp_get_shared_info_from_frame(xdpf);
+		frag_tsize = sinfo->xdp_frags_tsize;
+		frag_size = sinfo->xdp_frags_size;
+		nr_frags = sinfo->nr_frags;
+	}
 
 	/* Part of headroom was reserved to xdpf */
 	headroom = sizeof(*xdpf) + xdpf->headroom;
@@ -551,6 +563,11 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	__skb_put(skb, xdpf->len);
 	if (xdpf->metasize)
 		skb_metadata_set(skb, xdpf->metasize);
+
+	if (unlikely(xdp_frame_is_mb(xdpf)))
+		xdp_update_skb_shared_info(skb, nr_frags,
+					   frag_size, frag_tsize,
+					   xdp_frame_is_frag_pfmemalloc(xdpf));
 
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
