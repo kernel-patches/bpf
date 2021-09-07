@@ -85,6 +85,7 @@ sequentially and type id is assigned to each recognized type starting from id
     #define BTF_KIND_VAR            14      /* Variable     */
     #define BTF_KIND_DATASEC        15      /* Section      */
     #define BTF_KIND_FLOAT          16      /* Floating point       */
+    #define BTF_KIND_TAG            17      /* Tag          */
 
 Note that the type section encodes debug info, not just pure types.
 ``BTF_KIND_FUNC`` is not a type, and it represents a defined subprogram.
@@ -99,14 +100,14 @@ Each type contains the following common data::
          * bits 24-28: kind (e.g. int, ptr, array...etc)
          * bits 29-30: unused
          * bit     31: kind_flag, currently used by
-         *             struct, union and fwd
+         *             struct, union, fwd and tag
          */
         __u32 info;
         /* "size" is used by INT, ENUM, STRUCT and UNION.
          * "size" tells the size of the type it is describing.
          *
          * "type" is used by PTR, TYPEDEF, VOLATILE, CONST, RESTRICT,
-         * FUNC and FUNC_PROTO.
+         * FUNC, FUNC_PROTO and TAG.
          * "type" is a type_id referring to another type.
          */
         union {
@@ -464,6 +465,31 @@ map definition.
  * ``size``: the size of the float type in bytes: 2, 4, 8, 12 or 16.
 
 No additional type data follow ``btf_type``.
+
+2.2.17 BTF_KIND_TAG
+~~~~~~~~~~~~~~~~~~~
+
+``struct btf_type`` encoding requirement:
+ * ``name_off``: offset to a non-empty string
+ * ``info.kind_flag``: 0 for tagging ``type``, 1 for tagging member/argument of the ``type``
+ * ``info.kind``: BTF_KIND_TAG
+ * ``info.vlen``: 0
+ * ``type``: ``struct``, ``union``, ``func`` or ``var``
+
+``btf_type`` is followed by ``struct btf_tag``.::
+
+    struct btf_tag {
+        __u32   comp_id;
+    };
+
+The ``name_off`` encodes btf_tag attribute string.
+If ``info.kind_flag`` is 1, the attribute is attached to the ``type``.
+If ``info.kind_flag`` is 0, the attribute is attached to either a
+``struct``/``union`` member or a ``func`` argument.
+Hence the ``type`` should be ``struct``, ``union`` or
+``func``, and ``btf_tag.comp_id``, starting from 0,
+indicates which member or argument is attached with
+the attribute.
 
 3. BTF Kernel API
 *****************
