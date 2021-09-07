@@ -69,4 +69,10 @@
 #define BTF_TYPE_FLOAT_ENC(name, sz) \
 	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_FLOAT, 0, 0), sz)
 
+#define BTF_TAG_KIND_ENC(name, type)	\
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_TAG, 1, 0), type), (0)
+
+#define BTF_TAG_COMP_ID_ENC(name, type, comp_id)	\
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_TAG, 0, 0), type), (comp_id)
+
 #endif /* _TEST_BTF_H */
