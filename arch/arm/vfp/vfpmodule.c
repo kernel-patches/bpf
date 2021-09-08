@@ -458,16 +458,16 @@ static int vfp_pm_suspend(void)
 
 		/* disable, just in case */
 		fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_EN);
-	} else if (vfp_current_hw_state[ti->cpu]) {
+	} else if (vfp_current_hw_state[smp_processor_id()]) {
 #ifndef CONFIG_SMP
 		fmxr(FPEXC, fpexc | FPEXC_EN);
-		vfp_save_state(vfp_current_hw_state[ti->cpu], fpexc);
+		vfp_save_state(vfp_current_hw_state[smp_processor_id()], fpexc);
 		fmxr(FPEXC, fpexc);
 #endif
 	}
 
 	/* clear any information we had about last context state */
-	vfp_current_hw_state[ti->cpu] = NULL;
+	vfp_current_hw_state[smp_processor_id()] = NULL;
 
 	return 0;
 }
