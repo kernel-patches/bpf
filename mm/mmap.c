@@ -2292,7 +2292,7 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 EXPORT_SYMBOL(get_unmapped_area);
 
 /* Look up the first VMA which satisfies  addr < vm_end,  NULL if none. */
-struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
+struct vm_area_struct *find_vma_no_check(struct mm_struct *mm, unsigned long addr)
 {
 	struct rb_node *rb_node;
 	struct vm_area_struct *vma;
@@ -2321,6 +2321,12 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 	if (vma)
 		vmacache_update(addr, vma);
 	return vma;
+}
+
+struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
+{
+	mmap_assert_locked(mm);
+	return find_vma_no_check(mm, addr);
 }
 
 EXPORT_SYMBOL(find_vma);
