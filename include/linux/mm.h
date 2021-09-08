@@ -2672,6 +2672,8 @@ extern int expand_upwards(struct vm_area_struct *vma, unsigned long address);
 extern struct vm_area_struct * find_vma(struct mm_struct * mm, unsigned long addr);
 extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned long addr,
 					     struct vm_area_struct **pprev);
+extern struct vm_area_struct * find_vma_non_owner(struct mm_struct * mm,
+						  unsigned long addr);
 
 /**
  * find_vma_intersection() - Look up the first VMA which intersects the interval
