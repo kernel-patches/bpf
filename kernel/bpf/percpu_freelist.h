@@ -3,6 +3,7 @@
  */
 #ifndef __PERCPU_FREELIST_H__
 #define __PERCPU_FREELIST_H__
+#include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
 

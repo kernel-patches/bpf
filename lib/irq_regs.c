@@ -5,6 +5,7 @@
  * Written by David Howells (dhowells@redhat.com)
  */
 #include <linux/export.h>
+#include <linux/sched.h>
 #include <linux/percpu.h>
 #include <asm/irq_regs.h>
 

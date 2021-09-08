@@ -2,6 +2,7 @@
 #ifndef _VHOST_H
 #define _VHOST_H
 
+#include <linux/sched.h>
 #include <linux/eventfd.h>
 #include <linux/vhost.h>
 #include <linux/mm.h>

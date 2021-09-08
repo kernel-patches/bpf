@@ -10,6 +10,7 @@
  * Generic code for virtio server in host kernel.
  */
 
+#include <linux/sched.h>
 #include <linux/eventfd.h>
 #include <linux/vhost.h>
 #include <linux/uio.h>

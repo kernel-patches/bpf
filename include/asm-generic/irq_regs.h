@@ -8,6 +8,7 @@
 #ifndef _ASM_GENERIC_IRQ_REGS_H
 #define _ASM_GENERIC_IRQ_REGS_H
 
+#include <linux/sched.h>
 #include <linux/percpu.h>
 
 /*

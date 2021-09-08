@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __OF_ADDRESS_H
 #define __OF_ADDRESS_H
+#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/errno.h>
 #include <linux/of.h>

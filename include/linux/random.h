@@ -7,6 +7,7 @@
 #ifndef _LINUX_RANDOM_H
 #define _LINUX_RANDOM_H
 
+#include <linux/sched.h>
 #include <linux/bug.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
