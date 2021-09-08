@@ -762,8 +762,12 @@ ENTRY(__switch_to)
 #endif
 	switch_tls r1, r4, r5, r3, r7
 #ifdef CONFIG_CURRENT_POINTER_IN_TPIDRPRW
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+	set_current r2
+#else
 	ldr	r7, [r2, #TI_TASK]
 	set_current r7
+#endif
 #endif
 #if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_SMP)
 	ldr	r7, [r2, #TI_TASK]

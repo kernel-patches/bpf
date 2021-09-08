@@ -203,10 +203,14 @@
  * Get current thread_info.
  */
 	.macro	get_thread_info, rd
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+	mrc	p15, 0, \rd, c13, c0, 4
+#else
  ARM(	mov	\rd, sp, lsr #THREAD_SIZE_ORDER + PAGE_SHIFT	)
  THUMB(	mov	\rd, sp			)
  THUMB(	lsr	\rd, \rd, #THREAD_SIZE_ORDER + PAGE_SHIFT	)
 	mov	\rd, \rd, lsl #THREAD_SIZE_ORDER + PAGE_SHIFT
+#endif
 	.endm
 
 /*

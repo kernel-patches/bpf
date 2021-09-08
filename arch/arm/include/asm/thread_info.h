@@ -55,8 +55,10 @@ struct thread_info {
 	unsigned long		flags;		/* low level flags */
 	int			preempt_count;	/* 0 => preemptable, <0 => bug */
 	mm_segment_t		addr_limit;	/* address limit */
+#ifndef CONFIG_THREAD_INFO_IN_TASK
 	struct task_struct	*task;		/* main task structure */
 	__u32			cpu;		/* cpu */
+#endif
 	__u32			cpu_domain;	/* cpu domain */
 #ifdef CONFIG_STACKPROTECTOR_PER_TASK
 	unsigned long		stack_canary;
@@ -75,14 +77,21 @@ struct thread_info {
 #endif
 };
 
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+#define INIT_THREAD_INFO_TASK(tsk)
+#else
+#define INIT_THREAD_INFO_TASK(tsk) .task = &tsk,
+#endif
+
 #define INIT_THREAD_INFO(tsk)						\
 {									\
-	.task		= &tsk,						\
+	INIT_THREAD_INFO_TASK(tsk)					\
 	.flags		= 0,						\
 	.preempt_count	= INIT_PREEMPT_COUNT,				\
 	.addr_limit	= KERNEL_DS,					\
 }
 
+#ifndef CONFIG_THREAD_INFO_IN_TASK
 /*
  * how to get the thread information struct from C
  */
@@ -93,6 +102,7 @@ static inline struct thread_info *current_thread_info(void)
 	return (struct thread_info *)
 		(current_stack_pointer & ~(THREAD_SIZE - 1));
 }
+#endif
 
 #define thread_saved_pc(tsk)	\
 	((unsigned long)(task_thread_info(tsk)->cpu_context.pc))

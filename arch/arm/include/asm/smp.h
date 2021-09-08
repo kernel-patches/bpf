@@ -15,7 +15,11 @@
 # error "<asm/smp.h> included in non-SMP build"
 #endif
 
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+#define raw_smp_processor_id() (current->cpu)
+#else
 #define raw_smp_processor_id() (current_thread_info()->cpu)
+#endif
 
 struct seq_file;
 

@@ -127,6 +127,7 @@ config ARM
 	select RTC_LIB
 	select SET_FS
 	select SYS_SUPPORTS_APM_EMULATION
+	select THREAD_INFO_IN_TASK if CURRENT_POINTER_IN_TPIDRPRW
 	# Above selects are sorted alphabetically; please add new ones
 	# according to that.  Thanks.
 	help

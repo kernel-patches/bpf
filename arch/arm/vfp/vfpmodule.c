@@ -158,7 +158,12 @@ static void vfp_thread_copy(struct thread_info *thread)
  */
 static int vfp_notifier(struct notifier_block *self, unsigned long cmd, void *v)
 {
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+	struct task_struct *tsk = v;
+	struct thread_info *thread = &tsk->thread_info;
+#else
 	struct thread_info *thread = v;
+#endif
 	u32 fpexc;
 #ifdef CONFIG_SMP
 	unsigned int cpu;
@@ -169,7 +174,11 @@ static int vfp_notifier(struct notifier_block *self, unsigned long cmd, void *v)
 		fpexc = fmrx(FPEXC);
 
 #ifdef CONFIG_SMP
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+		cpu = tsk->cpu;
+#else
 		cpu = thread->cpu;
+#endif
 
 		/*
 		 * On SMP, if VFP is enabled, save the old state in
