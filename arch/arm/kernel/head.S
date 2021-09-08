@@ -425,6 +425,7 @@ ENDPROC(secondary_startup_arm)
 
 ENTRY(__secondary_switched)
 	ldr_l	r7, secondary_data + 12		@ get secondary_data.stack
+	ldr_l	r0, secondary_data + 16		@ get secondary_data.cpu
 	mov	sp, r7
 	mov	fp, #0
 	b	secondary_start_kernel

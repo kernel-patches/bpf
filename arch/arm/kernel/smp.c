@@ -153,6 +153,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 	secondary_data.pgdir = virt_to_phys(idmap_pgd);
 	secondary_data.swapper_pg_dir = get_arch_pgd(swapper_pg_dir);
 #endif
+	secondary_data.cpu = cpu;
 	sync_cache_w(&secondary_data);
 
 	/*
@@ -373,11 +374,14 @@ void arch_cpu_idle_dead(void)
 	 * cpu initialisation.  There's some initialisation which needs
 	 * to be repeated to undo the effects of taking the CPU offline.
 	 */
-	__asm__("mov	sp, %0\n"
+	__asm__("mov	r0, %1\n"
+	"	mov	sp, %0\n"
 	"	mov	fp, #0\n"
 	"	b	secondary_start_kernel"
 		:
-		: "r" (task_stack_page(current) + THREAD_SIZE - 8));
+		: "r" (task_stack_page(current) + THREAD_SIZE - 8),
+		  "r" (cpu)
+		: "r0");
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
@@ -400,10 +404,11 @@ static void smp_store_cpu_info(unsigned int cpuid)
  * This is the secondary CPU boot entry.  We're using this CPUs
  * idle thread stack, but a set of temporary page tables.
  */
-asmlinkage void secondary_start_kernel(void)
+asmlinkage void secondary_start_kernel(unsigned int cpu)
 {
 	struct mm_struct *mm = &init_mm;
-	unsigned int cpu;
+
+	set_my_cpu_offset(per_cpu_offset(cpu));
 
 	secondary_biglittle_init();
 
@@ -420,7 +425,6 @@ asmlinkage void secondary_start_kernel(void)
 	 * All kernel threads share the same mm context; grab a
 	 * reference and switch to it.
 	 */
-	cpu = smp_processor_id();
 	mmgrab(mm);
 	current->active_mm = mm;
 	cpumask_set_cpu(cpu, mm_cpumask(mm));

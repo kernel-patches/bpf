@@ -532,12 +532,6 @@ void notrace cpu_init(void)
 		BUG();
 	}
 
-	/*
-	 * This only works on resume and secondary cores. For booting on the
-	 * boot cpu, smp_prepare_boot_cpu is called after percpu area setup.
-	 */
-	set_my_cpu_offset(per_cpu_offset(cpu));
-
 	cpu_proc_init();
 
 	/*
