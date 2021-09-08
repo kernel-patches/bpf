@@ -154,6 +154,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 	secondary_data.swapper_pg_dir = get_arch_pgd(swapper_pg_dir);
 #endif
 	secondary_data.cpu = cpu;
+	secondary_data.task = idle;
 	sync_cache_w(&secondary_data);
 
 	/*
@@ -375,13 +376,14 @@ void arch_cpu_idle_dead(void)
 	 * to be repeated to undo the effects of taking the CPU offline.
 	 */
 	__asm__("mov	r0, %1\n"
+	"	mov	r1, %2\n"
 	"	mov	sp, %0\n"
 	"	mov	fp, #0\n"
 	"	b	secondary_start_kernel"
 		:
 		: "r" (task_stack_page(current) + THREAD_SIZE - 8),
-		  "r" (cpu)
-		: "r0");
+		  "r" (cpu), "r" (current)
+		: "r0", "r1");
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
@@ -404,7 +406,7 @@ static void smp_store_cpu_info(unsigned int cpuid)
  * This is the secondary CPU boot entry.  We're using this CPUs
  * idle thread stack, but a set of temporary page tables.
  */
-asmlinkage void secondary_start_kernel(unsigned int cpu)
+asmlinkage void secondary_start_kernel(unsigned int cpu, struct task_struct *task)
 {
 	struct mm_struct *mm = &init_mm;
 
