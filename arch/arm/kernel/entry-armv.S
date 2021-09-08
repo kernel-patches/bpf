@@ -761,6 +761,10 @@ ENTRY(__switch_to)
 	ldr	r6, [r2, #TI_CPU_DOMAIN]
 #endif
 	switch_tls r1, r4, r5, r3, r7
+#ifdef CONFIG_CURRENT_POINTER_IN_TPIDRPRW
+	ldr	r7, [r2, #TI_TASK]
+	set_current r7
+#endif
 #if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_SMP)
 	ldr	r7, [r2, #TI_TASK]
 	ldr	r8, =__stack_chk_guard

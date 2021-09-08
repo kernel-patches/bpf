@@ -210,6 +210,14 @@
 	.endm
 
 /*
+ * Set current task_info
+ * @src: Source register containing task_struct pointer
+ */
+	.macro	set_current src : req
+	mcr	p15, 0, \src, c13, c0, 4
+	.endm
+
+/*
  * Increment/decrement the preempt count.
  */
 #ifdef CONFIG_PREEMPT_COUNT
