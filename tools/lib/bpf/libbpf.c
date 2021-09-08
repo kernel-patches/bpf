@@ -6931,7 +6931,6 @@ out:
 		if (obj->maps[i].pinned && !obj->maps[i].reused)
 			bpf_map__unpin(&obj->maps[i], NULL);
 
-	bpf_object__unload(obj);
 	pr_warn("failed to load object '%s'\n", obj->path);
 	return libbpf_err(err);
 }
@@ -7540,12 +7539,15 @@ void bpf_object__close(struct bpf_object *obj)
 
 	bpf_gen__free(obj->gen_loader);
 	bpf_object__elf_finish(obj);
-	bpf_object__unload(obj);
 	btf__free(obj->btf);
 	btf_ext__free(obj->btf_ext);
 
-	for (i = 0; i < obj->nr_maps; i++)
+	for (i = 0; i < obj->nr_maps; i++) {
+		zclose(obj->maps[i].fd);
+		if (obj->maps[i].st_ops)
+			zfree(&obj->maps[i].st_ops->kern_vdata);
 		bpf_map__destroy(&obj->maps[i]);
+	}
 
 	zfree(&obj->btf_custom_path);
 	zfree(&obj->kconfig);
