@@ -123,6 +123,11 @@ const char *btf_type_str(const struct btf_type *t);
 	     i < btf_type_vlen(datasec_type);			\
 	     i++, member++)
 
+static inline __u16 btf_kind(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info);
+}
+
 static inline bool btf_type_is_ptr(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_PTR;
@@ -168,6 +173,34 @@ static inline bool btf_type_is_var(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_VAR;
 }
 
+static inline bool btf_type_is_array(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_ARRAY;
+}
+
+static inline bool btf_type_is_modifier(const struct btf_type *t)
+{
+	/* Some of them is not strictly a C modifier
+	 * but they are grouped into the same bucket
+	 * for BTF concern:
+	 *   A type (t) that refers to another
+	 *   type through t->type AND its size cannot
+	 *   be determined without following the t->type.
+	 *
+	 * ptr does not fall into this bucket
+	 * because its size is always sizeof(void *).
+	 */
+	switch (BTF_INFO_KIND(t->info)) {
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_CONST:
+	case BTF_KIND_RESTRICT:
+		return true;
+	}
+
+	return false;
+}
+
 /* union is only a special case of struct:
  * all its offsetof(member) == 0
  */
@@ -207,6 +240,21 @@ static inline u32 btf_member_bitfield_size(const struct btf_type *struct_type,
 					   : 0;
 }
 
+static inline __u8 btf_member_int_offset(const struct btf_type *t)
+{
+	return BTF_INT_OFFSET(*(__u32 *)(t + 1));
+}
+
+static inline __u8 btf_int_encoding(const struct btf_type *t)
+{
+	return BTF_INT_ENCODING(*(__u32 *)(t + 1));
+}
+
+static inline struct btf_param *btf_type_params(const struct btf_type *t)
+{
+	return (struct btf_param *)(t + 1);
+}
+
 static inline const struct btf_member *btf_type_member(const struct btf_type *t)
 {
 	return (const struct btf_member *)(t + 1);
@@ -217,6 +265,23 @@ static inline const struct btf_var_secinfo *btf_type_var_secinfo(
 {
 	return (const struct btf_var_secinfo *)(t + 1);
 }
+
+static inline const struct btf_enum *btf_type_enum(const struct btf_type *t)
+{
+	return (const struct btf_enum *)(t + 1);
+}
+
+static inline const struct btf_array *btf_type_array(const struct btf_type *t)
+{
+	return (const struct btf_array *)(t + 1);
+}
+
+static inline bool is_ldimm64_insn(struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LD | BPF_IMM | BPF_DW);
+}
+
+const struct btf_type *btf__type_by_id(const struct btf *btf, __u32 type_id);
 
 #ifdef CONFIG_BPF_SYSCALL
 struct bpf_prog;

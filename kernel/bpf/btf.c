@@ -400,29 +400,6 @@ static struct btf_type btf_void;
 static int btf_resolve(struct btf_verifier_env *env,
 		       const struct btf_type *t, u32 type_id);
 
-static bool btf_type_is_modifier(const struct btf_type *t)
-{
-	/* Some of them is not strictly a C modifier
-	 * but they are grouped into the same bucket
-	 * for BTF concern:
-	 *   A type (t) that refers to another
-	 *   type through t->type AND its size cannot
-	 *   be determined without following the t->type.
-	 *
-	 * ptr does not fall into this bucket
-	 * because its size is always sizeof(void *).
-	 */
-	switch (BTF_INFO_KIND(t->info)) {
-	case BTF_KIND_TYPEDEF:
-	case BTF_KIND_VOLATILE:
-	case BTF_KIND_CONST:
-	case BTF_KIND_RESTRICT:
-		return true;
-	}
-
-	return false;
-}
-
 bool btf_type_is_void(const struct btf_type *t)
 {
 	return t == &btf_void;
@@ -447,11 +424,6 @@ static bool btf_type_nosize_or_null(const struct btf_type *t)
 static bool __btf_type_is_struct(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_STRUCT;
-}
-
-static bool btf_type_is_array(const struct btf_type *t)
-{
-	return BTF_INFO_KIND(t->info) == BTF_KIND_ARRAY;
 }
 
 static bool btf_type_is_datasec(const struct btf_type *t)
@@ -599,16 +571,6 @@ static const char *btf_int_encoding_str(u8 encoding)
 static u32 btf_type_int(const struct btf_type *t)
 {
 	return *(u32 *)(t + 1);
-}
-
-static const struct btf_array *btf_type_array(const struct btf_type *t)
-{
-	return (const struct btf_array *)(t + 1);
-}
-
-static const struct btf_enum *btf_type_enum(const struct btf_type *t)
-{
-	return (const struct btf_enum *)(t + 1);
 }
 
 static const struct btf_var *btf_type_var(const struct btf_type *t)
@@ -6005,6 +5967,13 @@ static int btf_id_cmp_func(const void *a, const void *b)
 bool btf_id_set_contains(const struct btf_id_set *set, u32 id)
 {
 	return bsearch(&id, set->ids, set->cnt, sizeof(u32), btf_id_cmp_func) != NULL;
+}
+
+const struct btf_type *btf__type_by_id(const struct btf *btf, __u32 type_id)
+{
+	if (type_id >= btf->start_id + btf->nr_types)
+		return NULL;
+	return btf_type_by_id((struct btf *)btf, type_id);
 }
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
