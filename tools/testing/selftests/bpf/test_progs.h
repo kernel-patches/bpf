@@ -69,7 +69,8 @@ struct test_env {
 	bool get_test_cnt;
 	bool list_test_names;
 
-	struct prog_test_def *test;
+	struct prog_test_def *test; /* current running tests */
+
 	FILE *stdout;
 	FILE *stderr;
 	char *log_buf;
@@ -82,6 +83,39 @@ struct test_env {
 	int skip_cnt; /* skipped tests */
 
 	int saved_netns_fd;
+	int workers; /* number of worker process */
+	int worker_index; /* index number of current worker, main process is -1 */
+	__pid_t *worker_pids; /* array of worker pids */
+	int *worker_socks; /* array of worker socks */
+	int *worker_current_test; /* array of current running test for each worker */
+};
+
+#define MAX_LOG_TRUNK_SIZE 8192
+enum message_type {
+	MSG_DO_TEST = 0,
+	MSG_TEST_DONE = 1,
+	MSG_TEST_LOG = 2,
+	MSG_EXIT = 255,
+};
+struct message {
+	enum message_type type;
+	union {
+		struct {
+			int num;
+		} message_do_test;
+		struct {
+			int num;
+
+			int sub_succ_cnt;
+			int error_cnt;
+			int skip_cnt;
+			bool have_log;
+		} message_test_done;
+		struct {
+			char log_buf[MAX_LOG_TRUNK_SIZE + 1];
+			bool is_last;
+		} message_test_log;
+	} u;
 };
 
 extern struct test_env env;
