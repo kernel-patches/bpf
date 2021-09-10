@@ -522,13 +522,17 @@ struct skb_shared_info {
 	unsigned short	gso_segs;
 	struct sk_buff	*frag_list;
 	struct skb_shared_hwtstamps hwtstamps;
-	unsigned int	gso_type;
+	union {
+		unsigned int	gso_type;
+		unsigned int	xdp_frags_size;
+	};
 	u32		tskey;
 
 	/*
 	 * Warning : all fields before dataref are cleared in __alloc_skb()
 	 */
 	atomic_t	dataref;
+	unsigned int	xdp_frags_truesize;
 
 	/* Intermediate layers must ensure that destructor_arg
 	 * remains valid until skb destructor */
