@@ -9915,6 +9915,9 @@ static int check_btf_line(struct bpf_verifier_env *env,
 	if (nr_linfo > INT_MAX / sizeof(struct bpf_line_info))
 		return -EINVAL;
 
+	if (nr_linfo > INT_MAX/sizeof(struct bpf_line_info))
+		return -EINVAL;
+
 	rec_size = attr->line_info_rec_size;
 	if (rec_size < MIN_BPF_LINEINFO_SIZE ||
 	    rec_size > MAX_LINEINFO_REC_SIZE ||
