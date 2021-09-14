@@ -8997,7 +8997,7 @@ static int poke_kprobe_events(bool add, const char *name, bool retprobe, uint64_
 {
 	int fd, ret = 0;
 	pid_t p = getpid();
-	char cmd[192], probename[128], probefunc[128];
+	char cmd[288] = "\0", probename[128] = "\0", probefunc[128] = "\0";
 	const char *file = "/sys/kernel/debug/tracing/kprobe_events";
 
 	if (retprobe)
