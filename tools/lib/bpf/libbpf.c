@@ -420,6 +420,12 @@ struct extern_desc {
 
 			/* local btf_id of the ksym extern's type. */
 			__u32 type_id;
+			/* offset to be patched in for insn->off,
+			 * this is 0 for btf_vmlinux, and index + 1
+			 * for module BTF, where index is BTF index in
+			 * obj->fd_array
+			 */
+			__s16 offset;
 		} ksym;
 	};
 };
@@ -515,6 +521,10 @@ struct bpf_object {
 
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
+
+	int *fd_array;
+	size_t fd_cap_cnt;
+	int nr_fds;
 
 	char path[];
 };
@@ -5357,6 +5367,7 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 			ext = &obj->externs[relo->sym_off];
 			insn[0].src_reg = BPF_PSEUDO_KFUNC_CALL;
 			insn[0].imm = ext->ksym.kernel_btf_id;
+			insn[0].off = ext->ksym.offset;
 			break;
 		case RELO_SUBPROG_ADDR:
 			if (insn[0].src_reg != BPF_PSEUDO_FUNC) {
@@ -6151,6 +6162,7 @@ load_program(struct bpf_program *prog, struct bpf_insn *insns, int insns_cnt,
 	}
 	load_attr.log_level = prog->log_level;
 	load_attr.prog_flags = prog->prog_flags;
+	load_attr.fd_array = prog->obj->fd_array;
 
 	if (prog->obj->gen_loader) {
 		bpf_gen__prog_load(prog->obj->gen_loader, &load_attr,
@@ -6760,9 +6772,44 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	}
 
 	if (kern_btf != obj->btf_vmlinux) {
-		pr_warn("extern (func ksym) '%s': function in kernel module is not supported\n",
-			ext->name);
-		return -ENOTSUP;
+		int index = -1;
+
+		if (!obj->fd_array) {
+			obj->fd_array = calloc(8, sizeof(*obj->fd_array));
+			if (!obj->fd_array)
+				return -ENOMEM;
+			obj->fd_cap_cnt = 8;
+		}
+
+		for (int i = 0; i < obj->nr_fds; i++) {
+			if (obj->fd_array[i] == kern_btf_fd) {
+				index = i;
+				break;
+			}
+		}
+
+		if (index == -1) {
+			if (obj->nr_fds == obj->fd_cap_cnt) {
+				ret = libbpf_ensure_mem((void **)&obj->fd_array,
+							&obj->fd_cap_cnt, sizeof(int),
+							obj->fd_cap_cnt + 1);
+				if (ret)
+					return ret;
+			}
+
+			index = obj->nr_fds;
+			obj->fd_array[obj->nr_fds++] = kern_btf_fd;
+		}
+
+		if (index >= INT16_MAX) {
+			/* insn->off is s16 */
+			pr_warn("extern (func ksym) '%s': module btf fd index too big\n",
+				ext->name);
+			return -E2BIG;
+		}
+		ext->ksym.offset = index + 1;
+	} else {
+		ext->ksym.offset = 0;
 	}
 
 	kern_func = btf__type_by_id(kern_btf, kfunc_id);
@@ -6937,6 +6984,9 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 		if (!err)
 			err = bpf_gen__finish(obj->gen_loader);
 	}
+
+	/* clean up fd_array */
+	zfree(&obj->fd_array);
 
 	/* clean up module BTFs */
 	for (i = 0; i < obj->btf_module_cnt; i++) {
