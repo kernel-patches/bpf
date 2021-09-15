@@ -6,19 +6,22 @@
 #include <bpf/btf.h>
 #include "test_ksyms_module.lskel.h"
 
-static int duration;
-
 void test_ksyms_module(void)
 {
-	struct test_ksyms_module* skel;
+	struct test_ksyms_module *skel;
 	int err;
 
+	if (!env.has_testmod) {
+		test__skip();
+		return;
+	}
+
 	skel = test_ksyms_module__open_and_load();
-	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
+	if (!ASSERT_OK_PTR(skel, "test_ksyms_module__open_and_load"))
 		return;
 
 	err = test_ksyms_module__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "test_ksyms_module__attach"))
 		goto cleanup;
 
 	usleep(1);

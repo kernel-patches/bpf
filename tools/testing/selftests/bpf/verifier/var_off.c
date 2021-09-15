@@ -196,8 +196,8 @@
 	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0),
 	/* Make it small and 4-byte aligned */
 	BPF_ALU64_IMM(BPF_AND, BPF_REG_2, 4),
-	BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 516),
-	/* add it to fp.  We now have either fp-516 or fp-512, but
+	BPF_ALU64_IMM(BPF_SUB, BPF_REG_2, 772),
+	/* add it to fp.  We now have either fp-772 or fp-768, but
 	 * we don't know which
 	 */
 	BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_10),

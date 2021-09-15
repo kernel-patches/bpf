@@ -271,7 +271,9 @@ static inline void unregister_kfunc_btf_id_set(struct kfunc_btf_id_list *l,
 					 THIS_MODULE }
 
 extern struct kfunc_btf_id_list bpf_tcp_ca_kfunc_list;
+extern struct kfunc_btf_id_list raw_tp_kfunc_list;
 
 DECLARE_CHECK_KFUNC_CALLBACK(bpf_tcp_ca);
+DECLARE_CHECK_KFUNC_CALLBACK(raw_tp);
 
 #endif

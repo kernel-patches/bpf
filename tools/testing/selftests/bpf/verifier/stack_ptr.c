@@ -165,7 +165,7 @@
 	"PTR_TO_STACK check low 2",
 	.insns = {
 	BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -513),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -769),
 	BPF_ST_MEM(BPF_B, BPF_REG_1, 1, 42),
 	BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1, 1),
 	BPF_EXIT_INSN(),
@@ -179,13 +179,13 @@
 	"PTR_TO_STACK check low 3",
 	.insns = {
 	BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -513),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -769),
 	BPF_ST_MEM(BPF_B, BPF_REG_1, 0, 42),
 	BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_1, 0),
 	BPF_EXIT_INSN(),
 	},
 	.errstr_unpriv = "R1 stack pointer arithmetic goes out of range",
-	.errstr = "invalid write to stack R1 off=-513 size=1",
+	.errstr = "invalid write to stack R1 off=-769 size=1",
 	.result = REJECT,
 },
 {

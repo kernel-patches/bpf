@@ -197,7 +197,7 @@
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_2, 4),
 	BPF_ALU64_REG(BPF_MOV, BPF_REG_6, BPF_REG_10),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_6, -513),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_6, -769),
 	BPF_MOV64_REG(BPF_REG_3, BPF_REG_6),
 	BPF_MOV64_IMM(BPF_REG_4, 8),
 	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_skb_load_bytes),
@@ -205,7 +205,7 @@
 	BPF_EXIT_INSN(),
 	},
 	.result = REJECT,
-	.errstr = "invalid indirect access to stack R3 off=-513 size=8",
+	.errstr = "invalid indirect access to stack R3 off=-769 size=8",
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 },
 {
