@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <linux/filter.h>
+#include <linux/kernel.h>
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"
@@ -13,6 +14,7 @@
 #include "bpf_gen_internal.h"
 #include "skel_internal.h"
 
+/* MAX_BPF_STACK is 768 bytes, so (64 + 32 + 94 (MAX_KFUNC_DESCS) + 2) * 4 */
 #define MAX_USED_MAPS 64
 #define MAX_USED_PROGS 32
 
@@ -31,6 +33,8 @@ struct loader_stack {
 	__u32 btf_fd;
 	__u32 map_fd[MAX_USED_MAPS];
 	__u32 prog_fd[MAX_USED_PROGS];
+	/* Update insn->off store when reordering kfunc_btf_fd */
+	__u32 kfunc_btf_fd[MAX_KFUNC_DESCS];
 	__u32 inner_map_fd;
 };
 
@@ -506,8 +510,8 @@ static void emit_find_attach_target(struct bpf_gen *gen)
 	 */
 }
 
-void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind,
-			    int insn_idx)
+void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, bool is_weak,
+			    int kind, int insn_idx)
 {
 	struct ksym_relo_desc *relo;
 
@@ -519,14 +523,39 @@ void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind,
 	gen->relos = relo;
 	relo += gen->relo_cnt;
 	relo->name = name;
+	relo->is_weak = is_weak;
 	relo->kind = kind;
 	relo->insn_idx = insn_idx;
 	gen->relo_cnt++;
 }
 
+static struct kfunc_desc *find_kfunc_desc(struct bpf_gen *gen, const char *name)
+{
+	/* Try to reuse BTF fd index for repeating symbol */
+	for (int i = 0; i < gen->nr_kfuncs; i++) {
+		if (!strcmp(gen->kfunc_descs[i].name, name))
+			return &gen->kfunc_descs[i];
+	}
+	return NULL;
+}
+
+static struct kfunc_desc *add_kfunc_desc(struct bpf_gen *gen, const char *name)
+{
+	struct kfunc_desc *kdesc;
+
+	if (gen->nr_kfuncs == ARRAY_SIZE(gen->kfunc_descs))
+		return NULL;
+	kdesc = &gen->kfunc_descs[gen->nr_kfuncs];
+	kdesc->name = name;
+	kdesc->index = gen->nr_kfuncs++;
+	return kdesc;
+}
+
 static void emit_relo(struct bpf_gen *gen, struct ksym_relo_desc *relo, int insns)
 {
 	int name, insn, len = strlen(relo->name) + 1;
+	int off = MAX_USED_MAPS + MAX_USED_PROGS;
+	struct kfunc_desc *kdesc;
 
 	pr_debug("gen: emit_relo: %s at %d\n", relo->name, relo->insn_idx);
 	name = add_data(gen, relo->name, len);
@@ -539,18 +568,64 @@ static void emit_relo(struct bpf_gen *gen, struct ksym_relo_desc *relo, int insn
 	emit(gen, BPF_EMIT_CALL(BPF_FUNC_btf_find_by_name_kind));
 	emit(gen, BPF_MOV64_REG(BPF_REG_7, BPF_REG_0));
 	debug_ret(gen, "find_by_name_kind(%s,%d)", relo->name, relo->kind);
-	emit_check_err(gen);
+	/* if not weak kfunc, emit err check */
+	if (relo->kind != BTF_KIND_FUNC || !relo->is_weak)
+		emit_check_err(gen);
+	insn = insns + sizeof(struct bpf_insn) * relo->insn_idx;
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE, 0, 0, 0, insn));
+	/* set a default value */
+	emit(gen, BPF_ST_MEM(BPF_W, BPF_REG_0, offsetof(struct bpf_insn, imm), 0));
+	/* skip success case store if ret < 0 */
+	emit(gen, BPF_JMP_IMM(BPF_JSLT, BPF_REG_7, 0, 1));
 	/* store btf_id into insn[insn_idx].imm */
-	insn = insns + sizeof(struct bpf_insn) * relo->insn_idx +
-		offsetof(struct bpf_insn, imm);
-	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE,
-					 0, 0, 0, insn));
-	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7, 0));
+	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7, offsetof(struct bpf_insn, imm)));
 	if (relo->kind == BTF_KIND_VAR) {
 		/* store btf_obj_fd into insn[insn_idx + 1].imm */
 		emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_7, 32));
 		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
-				      sizeof(struct bpf_insn)));
+				      sizeof(struct bpf_insn) + offsetof(struct bpf_insn, imm)));
+	} else if (relo->kind == BTF_KIND_FUNC) {
+		kdesc = find_kfunc_desc(gen, relo->name);
+		if (!kdesc)
+			kdesc = add_kfunc_desc(gen, relo->name);
+		if (kdesc) {
+			/* store btf_obj_fd in index in kfunc_btf_fd array
+			 * but skip storing fd if ret < 0
+			 */
+			emit(gen, BPF_ST_MEM(BPF_W, BPF_REG_10,
+			     stack_off(kfunc_btf_fd[kdesc->index]), 0));
+			emit(gen, BPF_MOV64_REG(BPF_REG_8, BPF_REG_7));
+			emit(gen, BPF_JMP_IMM(BPF_JSLT, BPF_REG_7, 0, 4));
+			emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_7, 32));
+			/* if vmlinux BTF, skip store */
+			emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 1));
+			emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_7,
+			     stack_off(kfunc_btf_fd[kdesc->index])));
+			emit(gen, BPF_MOV64_REG(BPF_REG_7, BPF_REG_8));
+			/* remember BTF obj fd */
+			emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_8, 32));
+		} else {
+			pr_warn("Out of BTF fd slots (total: %u), skipping for %s\n",
+				gen->nr_kfuncs, relo->name);
+			emit(gen, BPF_MOV64_REG(BPF_REG_1, BPF_REG_7));
+			emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_1, 32));
+			__emit_sys_close(gen);
+		}
+		/* store index + 1 into insn[insn_idx].off */
+		off = kdesc ? off + kdesc->index + 1 : 0;
+		off = off > INT16_MAX ? 0 : off;
+		/* set a default value */
+		emit(gen, BPF_ST_MEM(BPF_H, BPF_REG_0, offsetof(struct bpf_insn, off), 0));
+		/* skip success case store if ret < 0 */
+		emit(gen, BPF_JMP_IMM(BPF_JSLT, BPF_REG_7, 0, 2));
+		/* skip if vmlinux BTF */
+		emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_8, 0, 1));
+		/* store offset */
+		emit(gen, BPF_ST_MEM(BPF_H, BPF_REG_0, offsetof(struct bpf_insn, off), off));
+		/* log relocation */
+		emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_0, offsetof(struct bpf_insn, imm)));
+		emit(gen, BPF_LDX_MEM(BPF_H, BPF_REG_8, BPF_REG_0, offsetof(struct bpf_insn, off)));
+		debug_regs(gen, BPF_REG_7, BPF_REG_8, "sym (%s): imm: %%d, off: %%d", relo->name);
 	}
 }
 
