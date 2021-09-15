@@ -86,4 +86,11 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_DUMMY_STRUCT_OPS
+	bool "Enable dummy struct ops"
+	depends on BPF_SYSCALL && BPF_JIT
+	help
+	  Enables dummy struct ops to test the basic functionalities of
+	  BPF STRUCT_OPS.
+
 endmenu # "BPF subsystem"

@@ -2,6 +2,10 @@
 /* internal file - do not include directly */
 
 #ifdef CONFIG_BPF_JIT
+#ifdef CONFIG_BPF_DUMMY_STRUCT_OPS
+#include <linux/bpf_dummy_ops.h>
+BPF_STRUCT_OPS_TYPE(bpf_dummy_ops)
+#endif
 #ifdef CONFIG_INET
 #include <net/tcp.h>
 BPF_STRUCT_OPS_TYPE(tcp_congestion_ops)
