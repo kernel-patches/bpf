@@ -73,6 +73,7 @@ const char * const attach_type_name[__MAX_BPF_ATTACH_TYPE] = {
 	[BPF_XDP]			= "xdp",
 	[BPF_SK_REUSEPORT_SELECT]	= "sk_skb_reuseport_select",
 	[BPF_SK_REUSEPORT_SELECT_OR_MIGRATE]	= "sk_skb_reuseport_select_or_migrate",
+	[BPF_SCHED]			= "sched",
 };
 
 void p_err(const char *fmt, ...)
