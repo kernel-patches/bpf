@@ -6,6 +6,8 @@
 #include <linux/btf_ids.h>
 #include "sched.h"
 
+DEFINE_STATIC_KEY_FALSE(bpf_sched_enabled_key);
+
 /*
  * For every hook declare a nop function where a BPF program can be attached.
  */
