@@ -339,6 +339,8 @@ bpf_program__attach_xdp(struct bpf_program *prog, int ifindex);
 LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
+LIBBPF_API struct bpf_link *
+bpf_program__attach_sched(struct bpf_program *prog);
 
 struct bpf_map;
 
@@ -435,6 +437,7 @@ LIBBPF_API int bpf_program__set_tracing(struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_struct_ops(struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_extension(struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_sk_lookup(struct bpf_program *prog);
+LIBBPF_API int bpf_program__set_sched(struct bpf_program *prog);
 
 LIBBPF_API enum bpf_prog_type bpf_program__get_type(const struct bpf_program *prog);
 LIBBPF_API void bpf_program__set_type(struct bpf_program *prog,
@@ -463,6 +466,7 @@ LIBBPF_API bool bpf_program__is_tracing(const struct bpf_program *prog);
 LIBBPF_API bool bpf_program__is_struct_ops(const struct bpf_program *prog);
 LIBBPF_API bool bpf_program__is_extension(const struct bpf_program *prog);
 LIBBPF_API bool bpf_program__is_sk_lookup(const struct bpf_program *prog);
+LIBBPF_API bool bpf_program__is_sched(const struct bpf_program *prog);
 
 /*
  * No need for __attribute__((packed)), all members of 'bpf_map_def'

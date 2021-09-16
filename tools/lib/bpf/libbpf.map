@@ -390,4 +390,7 @@ LIBBPF_0.5.0 {
 LIBBPF_0.6.0 {
 	global:
 		btf__add_tag;
+		bpf_program__attach_sched;
+		bpf_program__is_sched;
+		bpf_program__set_sched;
 } LIBBPF_0.5.0;
