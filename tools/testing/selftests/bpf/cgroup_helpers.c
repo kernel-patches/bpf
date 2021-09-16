@@ -29,9 +29,10 @@
 #define WALK_FD_LIMIT			16
 #define CGROUP_MOUNT_PATH		"/mnt"
 #define CGROUP_WORK_DIR			"/cgroup-test-work-dir"
+const char *CGROUP_WORK_DIR_SUFFIX = "";
 #define format_cgroup_path(buf, path) \
-	snprintf(buf, sizeof(buf), "%s%s%s", CGROUP_MOUNT_PATH, \
-		 CGROUP_WORK_DIR, path)
+	snprintf(buf, sizeof(buf), "%s%s%s%s", CGROUP_MOUNT_PATH, \
+	CGROUP_WORK_DIR, CGROUP_WORK_DIR_SUFFIX, path)
 
 /**
  * enable_all_controllers() - Enable all available cgroup v2 controllers

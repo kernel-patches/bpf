@@ -1157,6 +1157,11 @@ static int server_main(void)
 
 static int worker_main(int sock)
 {
+	static char suffix[16];
+
+	sprintf(suffix, "%d", env.worker_id);
+	CGROUP_WORK_DIR_SUFFIX = suffix;
+
 	save_netns();
 
 	while (true) {

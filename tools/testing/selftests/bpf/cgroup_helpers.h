@@ -16,4 +16,5 @@ int setup_cgroup_environment(void);
 void cleanup_cgroup_environment(void);
 unsigned long long get_cgroup_id(const char *path);
 
+extern const char *CGROUP_WORK_DIR_SUFFIX;
 #endif
