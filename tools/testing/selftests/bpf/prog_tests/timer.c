@@ -39,7 +39,7 @@ static int timer(struct timer *timer_skel)
 	return 0;
 }
 
-void test_timer(void)
+void serial_test_timer(void)
 {
 	struct timer *timer_skel = NULL;
 	int err;

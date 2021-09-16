@@ -50,6 +50,7 @@ struct prog_test_def {
 	const char *test_name;
 	int test_num;
 	void (*run_test)(void);
+	void (*run_serial_test)(void);
 	bool force_log;
 	int error_cnt;
 	int skip_cnt;
@@ -457,14 +458,17 @@ static int load_bpf_testmod(void)
 }
 
 /* extern declarations for test funcs */
-#define DEFINE_TEST(name) extern void test_##name(void);
+#define DEFINE_TEST(name)				\
+	extern void test_##name(void) __weak;		\
+	extern void serial_test_##name(void) __weak;
 #include <prog_tests/tests.h>
 #undef DEFINE_TEST
 
 static struct prog_test_def prog_test_defs[] = {
-#define DEFINE_TEST(name) {		\
-	.test_name = #name,		\
-	.run_test = &test_##name,	\
+#define DEFINE_TEST(name) {			\
+	.test_name = #name,			\
+	.run_test = &test_##name,		\
+	.run_serial_test = &serial_test_##name,	\
 },
 #include <prog_tests/tests.h>
 #undef DEFINE_TEST
@@ -835,6 +839,7 @@ void sigint_handler(int signum) {
 static int current_test_idx = 0;
 static pthread_mutex_t current_test_lock;
 static pthread_mutex_t stdout_output_lock;
+static pthread_cond_t wait_for_worker0 = PTHREAD_COND_INITIALIZER;
 
 struct test_result {
 	int error_cnt;
@@ -901,7 +906,10 @@ static void run_one_test(int test_num) {
 
 	env.test = test;
 
-	test->run_test();
+	if (test->run_test)
+		test->run_test();
+	else if (test->run_serial_test)
+		test->run_serial_test();
 
 	/* ensure last sub-test is finalized properly */
 	if (test->subtest_name)
@@ -925,6 +933,11 @@ static const char *get_test_name(int idx)
 	return test->test_name;
 }
 
+static inline bool is_serial_test(int idx)
+{
+	return prog_test_defs[idx].run_serial_test != NULL;
+}
+
 struct dispatch_data {
 	int worker_id;
 	int sock_fd;
@@ -943,6 +956,8 @@ void *dispatch_thread(void *ctx)
 		struct prog_test_def *test;
 		struct test_result *result;
 
+		env.worker_current_test[data->worker_id] = -1;
+
 		/* grab a test */
 		{
 			pthread_mutex_lock(&current_test_lock);
@@ -954,15 +969,42 @@ void *dispatch_thread(void *ctx)
 
 			test = &prog_test_defs[current_test_idx];
 			test_to_run = current_test_idx;
-			current_test_idx++;
+
+			test = &prog_test_defs[test_to_run];
+
+			if (!test->should_run) {
+				current_test_idx++;
+				pthread_mutex_unlock(&current_test_lock);
+				goto next;
+			}
+
+			if (is_serial_test(current_test_idx)) {
+				if (data->worker_id != 0) {
+					if (env.debug)
+						fprintf(stderr, "[%d]: Waiting for thread 0 to finish serialized test: %d.\n",
+							data->worker_id, current_test_idx + 1);
+					/* wait for worker 0 to pick this job up and finish */
+					pthread_cond_wait(&wait_for_worker0, &current_test_lock);
+					pthread_mutex_unlock(&current_test_lock);
+					goto next;
+				} else {
+					/* wait until all other worker has parked */
+					for (int i = 1; i < env.workers; i++) {
+						if (env.worker_current_test[i] != -1) {
+							if (env.debug)
+								fprintf(stderr, "[%d]: Waiting for other threads to finish current test...\n", data->worker_id);
+							pthread_mutex_unlock(&current_test_lock);
+							usleep(1 * 1000 * 1000);
+							goto next;
+						}
+					}
+				}
+			} else {
+				current_test_idx++;
+			}
 
 			pthread_mutex_unlock(&current_test_lock);
 		}
-
-		if (!test->should_run) {
-			continue;
-		}
-
 
 		/* run test through worker */
 		{
@@ -1035,6 +1077,14 @@ void *dispatch_thread(void *ctx)
 			}
 
 		} /* wait for test done */
+
+		/* unblock all other dispatcher threads */
+		if (is_serial_test(test_to_run) && data->worker_id == 0) {
+			current_test_idx++;
+			pthread_cond_broadcast(&wait_for_worker0);
+		}
+next:
+	continue;
 	} /* while (true) */
 error:
 	if (env.debug)
@@ -1060,16 +1110,19 @@ static int server_main(void)
 {
 	pthread_t *dispatcher_threads;
 	struct dispatch_data *data;
+	int all_finished = false;
 
 	dispatcher_threads = calloc(sizeof(pthread_t), env.workers);
 	data = calloc(sizeof(struct dispatch_data), env.workers);
 
 	env.worker_current_test = calloc(sizeof(int), env.workers);
+
 	for (int i = 0; i < env.workers; i++) {
 		int rc;
 
 		data[i].worker_id = i;
 		data[i].sock_fd = env.worker_socks[i];
+		env.worker_current_test[i] = -1;
 		rc = pthread_create(&dispatcher_threads[i], NULL, dispatch_thread, &data[i]);
 		if (rc < 0) {
 			perror("Failed to launch dispatcher thread");
@@ -1078,19 +1131,28 @@ static int server_main(void)
 	}
 
 	/* wait for all dispatcher to finish */
-	for (int i = 0; i < env.workers; i++) {
-		while (true) {
-			struct timespec timeout = {
-				.tv_sec = time(NULL) + 5,
-				.tv_nsec = 0
-			};
-			if (pthread_timedjoin_np(dispatcher_threads[i], NULL, &timeout) != ETIMEDOUT)
-				break;
-			if (env.debug)
-				fprintf(stderr, "Still waiting for thread %d (test %d).\n",
-					i,  env.worker_current_test[i] + 1);
+	while (!all_finished) {
+		all_finished = true;
+		for (int i = 0; i < env.workers; i++) {
+			if (!dispatcher_threads[i])
+				continue;
+
+			if (pthread_tryjoin_np(dispatcher_threads[i], NULL) == EBUSY) {
+				all_finished = false;
+				if (!env.debug) continue;
+				if (env.worker_current_test[i] == -1)
+					fprintf(stderr, "Still waiting for thread %d (blocked by thread 0).\n", i);
+				else
+					fprintf(stderr, "Still waiting for thread %d (test #%d:%s).\n",
+						i, env.worker_current_test[i] + 1,
+						get_test_name(env.worker_current_test[i]));
+			} else {
+				dispatcher_threads[i] = 0;
+			}
 		}
+		usleep(10 * 1000 * 1000);
 	}
+
 	free(dispatcher_threads);
 	free(env.worker_current_test);
 	free(data);
@@ -1326,6 +1388,12 @@ int main(int argc, char **argv)
 			test->should_run = true;
 		else
 			test->should_run = false;
+
+		if (test->run_test == NULL && test->run_serial_test == NULL) {
+			fprintf(stderr, "Test %d:%s must have either test_%s() or serial_test_%sl() defined.\n",
+				test->test_num, test->test_name, test->test_name, test->test_name);
+			exit(EXIT_ERR_SETUP_INFRA);
+		}
 	}
 
 	/* ignore workers if we are just listing */
