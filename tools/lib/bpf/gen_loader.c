@@ -524,6 +524,23 @@ void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind,
 	gen->relo_cnt++;
 }
 
+void bpf_gen__record_relo_core(struct bpf_gen *gen, const struct bpf_core_relo *core_relo,
+			       int insn_idx)
+{
+	struct core_relo_desc *relo;
+
+	relo = libbpf_reallocarray(gen->core_relos, gen->core_relo_cnt + 1, sizeof(*relo));
+	if (!relo) {
+		gen->error = -ENOMEM;
+		return;
+	}
+	gen->core_relos = relo;
+	relo += gen->core_relo_cnt;
+	memcpy(relo, core_relo, sizeof(*relo));
+	relo->insn_idx = insn_idx;
+	gen->core_relo_cnt++;
+}
+
 static void emit_relo(struct bpf_gen *gen, struct ksym_relo_desc *relo, int insns)
 {
 	int name, insn, len = strlen(relo->name) + 1;
@@ -554,12 +571,37 @@ static void emit_relo(struct bpf_gen *gen, struct ksym_relo_desc *relo, int insn
 	}
 }
 
+static void emit_core_relo(struct bpf_gen *gen, struct core_relo_desc *relo, int insns)
+{
+	int relo_off, insn, len = sizeof(*relo) - 4;
+
+	pr_debug("gen: relo_core: local_btf_id %d kind %d at %d\n",
+		 relo->type_id, relo->kind, relo->insn_idx);
+	relo_off = add_data(gen, &relo->type_id, len);
+
+	emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_10, stack_off(btf_fd)));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_2, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, relo_off));
+	emit(gen, BPF_MOV64_IMM(BPF_REG_3, len));
+	insn = insns + sizeof(struct bpf_insn) * relo->insn_idx;
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_4, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, insn));
+	emit(gen, BPF_MOV64_IMM(BPF_REG_5, 0));
+	emit(gen, BPF_EMIT_CALL(BPF_FUNC_core_apply_relo));
+	emit(gen, BPF_MOV64_REG(BPF_REG_7, BPF_REG_0));
+	debug_ret(gen, "core_apply_relo(btf_id=%d,kind=%d,insn=%d)",
+		  relo->type_id, relo->kind, relo->insn_idx);
+	emit_check_err(gen);
+}
+
 static void emit_relos(struct bpf_gen *gen, int insns)
 {
 	int i;
 
 	for (i = 0; i < gen->relo_cnt; i++)
 		emit_relo(gen, gen->relos + i, insns);
+	for (i = 0; i < gen->core_relo_cnt; i++)
+		emit_core_relo(gen, gen->core_relos + i, insns);
 }
 
 static void cleanup_relos(struct bpf_gen *gen, int insns)
@@ -579,6 +621,11 @@ static void cleanup_relos(struct bpf_gen *gen, int insns)
 		free(gen->relos);
 		gen->relo_cnt = 0;
 		gen->relos = NULL;
+	}
+	if (gen->core_relo_cnt) {
+		free(gen->core_relos);
+		gen->core_relo_cnt = 0;
+		gen->core_relos = NULL;
 	}
 }
 

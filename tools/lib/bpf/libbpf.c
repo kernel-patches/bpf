@@ -5175,10 +5175,17 @@ static int bpf_core_apply_relo(struct bpf_program *prog,
 		return -EINVAL;
 
 	if (prog->obj->gen_loader) {
-		pr_warn("// TODO core_relo: prog %td insn[%d] %s kind %d\n",
+		const char *spec_str = btf__name_by_offset(local_btf, relo->access_str_off);
+
+		/* Adjust relo_core's insn_idx since final subprog offset in
+		 * the main prog is known.
+		 */
+		insn_idx += prog->sub_insn_off;
+		pr_debug("record_relo_core: prog %td insn[%d] %s %s %s final insn_idx %d\n",
 			prog - prog->obj->programs, relo->insn_off / 8,
-			local_name, relo->kind);
-		return -ENOTSUP;
+			btf_kind_str(local_type), local_name, spec_str, insn_idx);
+		bpf_gen__record_relo_core(prog->obj->gen_loader, relo, insn_idx);
+		return 0;
 	}
 
 	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
@@ -5813,7 +5820,7 @@ bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
 	size_t i, j;
 	int err;
 
-	if (obj->btf_ext) {
+	if (obj->btf_ext && !obj->gen_loader) {
 		err = bpf_object__relocate_core(obj, targ_btf_path);
 		if (err) {
 			pr_warn("failed to perform CO-RE relocations: %d\n",
@@ -5860,6 +5867,18 @@ bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
 		if (err) {
 			pr_warn("prog '%s': failed to relocate calls: %d\n",
 				prog->name, err);
+			return err;
+		}
+	}
+
+	/* Let gen_loader record CO-RE relocations after subprogs were appended
+	 * to make sure that insn_idx is calculated as the offset in main progs.
+	 */
+	if (obj->btf_ext && obj->gen_loader) {
+		err = bpf_object__relocate_core(obj, targ_btf_path);
+		if (err) {
+			pr_warn("failed to perform CO-RE relocations: %d\n",
+				err);
 			return err;
 		}
 	}

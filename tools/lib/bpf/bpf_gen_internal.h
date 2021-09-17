@@ -9,6 +9,13 @@ struct ksym_relo_desc {
 	int insn_idx;
 };
 
+struct core_relo_desc {
+	__u32   insn_idx;
+	__u32   type_id;
+	__u32   access_str_off;
+	__u32	kind;
+};
+
 struct bpf_gen {
 	struct gen_loader_opts *opts;
 	void *data_start;
@@ -22,6 +29,8 @@ struct bpf_gen {
 	int error;
 	struct ksym_relo_desc *relos;
 	int relo_cnt;
+	struct core_relo_desc *core_relos;
+	int core_relo_cnt;
 	char attach_target[128];
 	int attach_kind;
 };
@@ -37,5 +46,8 @@ void bpf_gen__map_update_elem(struct bpf_gen *gen, int map_idx, void *value, __u
 void bpf_gen__map_freeze(struct bpf_gen *gen, int map_idx);
 void bpf_gen__record_attach_target(struct bpf_gen *gen, const char *name, enum bpf_attach_type type);
 void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind, int insn_idx);
+struct bpf_core_relo;
+void bpf_gen__record_relo_core(struct bpf_gen *gen, const struct bpf_core_relo *core_relo,
+			       int insn_idx);
 
 #endif
