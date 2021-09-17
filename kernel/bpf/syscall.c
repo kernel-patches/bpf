@@ -4763,6 +4763,8 @@ syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_btf_find_by_name_kind_proto;
 	case BPF_FUNC_sys_close:
 		return &bpf_sys_close_proto;
+	case BPF_FUNC_core_apply_relo:
+		return &bpf_core_apply_relo_proto;
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}

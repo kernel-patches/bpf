@@ -6369,3 +6369,25 @@ size_t bpf_core_essential_name_len(const char *name)
 	}
 	return n;
 }
+
+BPF_CALL_5(bpf_core_apply_relo, int, btf_fd, struct bpf_core_relo_desc *, relo,
+	   int, relo_sz, void *, insn, int, flags)
+{
+	struct btf *btf;
+	long ret;
+
+	if (flags)
+		return -EINVAL;
+	return -EOPNOTSUPP;
+}
+
+const struct bpf_func_proto bpf_core_apply_relo_proto = {
+	.func		= bpf_core_apply_relo,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_PTR_TO_LONG,
+	.arg5_type	= ARG_ANYTHING,
+};
