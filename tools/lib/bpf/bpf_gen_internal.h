@@ -49,5 +49,6 @@ void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind, int
 struct bpf_core_relo;
 void bpf_gen__record_relo_core(struct bpf_gen *gen, const struct bpf_core_relo *core_relo,
 			       int insn_idx);
+void bpf_gen__populate_outer_map(struct bpf_gen *gen, int outer_map_idx, int key, int inner_map_idx);
 
 #endif
