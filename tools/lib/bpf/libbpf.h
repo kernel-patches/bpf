@@ -481,9 +481,14 @@ struct bpf_map_def {
 	unsigned int map_flags;
 };
 
-/*
- * The 'struct bpf_map' in include/linux/bpf.h is internal to the kernel,
- * so no need to worry about a name clash.
+/**
+ * @brief **bpf_object__find_map_by_name()** returns a pointer to the
+ * specified bpf map in the bpf object if that map exists, and returns
+ * NULL if not. It sets errno in case of error.
+ * @param obj bpf object
+ * @param name name of the bpf map
+ * @return the address of the map within the bpf object, or NULL if it
+ * does not exist
  */
 LIBBPF_API struct bpf_map *
 bpf_object__find_map_by_name(const struct bpf_object *obj, const char *name);
@@ -509,7 +514,15 @@ bpf_map__next(const struct bpf_map *map, const struct bpf_object *obj);
 LIBBPF_API struct bpf_map *
 bpf_map__prev(const struct bpf_map *map, const struct bpf_object *obj);
 
-/* get/set map FD */
+/**
+ * @brief **bpf_map__fd()** gets the file descriptor of the passed
+ * bpf map
+ * @param map the bpf map instance
+ * @return the file descriptor or in case of an error, EINVAL
+ *
+ * errno should be checked after this call, it will be EINVAL in
+ * case of error.
+ */
 LIBBPF_API int bpf_map__fd(const struct bpf_map *map);
 LIBBPF_API int bpf_map__reuse_fd(struct bpf_map *map, int fd);
 /* get map definition */
@@ -550,6 +563,15 @@ LIBBPF_API int bpf_map__set_initial_value(struct bpf_map *map,
 					  const void *data, size_t size);
 LIBBPF_API const void *bpf_map__initial_value(struct bpf_map *map, size_t *psize);
 LIBBPF_API bool bpf_map__is_offload_neutral(const struct bpf_map *map);
+
+/**
+ * @brief **bpf_map__is_internal()** tells the caller whether or not
+ * the passed map is a special internal map
+ * @param map reference to the bpf_map
+ * @return true if the map is an internal map, false if not
+ *
+ * See the enum `libbpf_map_type` for listing of the types
+ */
 LIBBPF_API bool bpf_map__is_internal(const struct bpf_map *map);
 LIBBPF_API int bpf_map__set_pin_path(struct bpf_map *map, const char *path);
 LIBBPF_API const char *bpf_map__get_pin_path(const struct bpf_map *map);
@@ -561,6 +583,24 @@ LIBBPF_API int bpf_map__unpin(struct bpf_map *map, const char *path);
 LIBBPF_API int bpf_map__set_inner_map_fd(struct bpf_map *map, int fd);
 LIBBPF_API struct bpf_map *bpf_map__inner_map(struct bpf_map *map);
 
+/**
+ * @brief **libbpf_get_error()** extracts the error code from the passed
+ * pointer
+ * @param ptr pointer returned from libbpf API function
+ * @return error code
+ *
+ * Many libbpf API functions which return pointers have logic to encode error
+ * codes as pointers, and do not return NULL. Meaning **libbpf_get_error()**
+ * should be used on the return value from these functions. Consult the
+ * individual functions documentation to verify if this logic applies.
+ *
+ * For these API functions, if `libbpf_set_strict_mode(LIBBPF_STRICT_CLEAN_PTRS)`
+ * is enabled, NULL is returned on error instead.
+ *
+ * If ptr == NULL, then errno should be already set by the failing
+ * API, because libbpf never returns NULL on success and it now always
+ * sets errno on error.
+ */
 LIBBPF_API long libbpf_get_error(const void *ptr);
 
 struct bpf_prog_load_attr {
@@ -825,9 +865,12 @@ bpf_program__bpil_addr_to_offs(struct bpf_prog_info_linear *info_linear);
 LIBBPF_API void
 bpf_program__bpil_offs_to_addr(struct bpf_prog_info_linear *info_linear);
 
-/*
- * A helper function to get the number of possible CPUs before looking up
- * per-CPU maps. Negative errno is returned on failure.
+/**
+ * @brief **libbpf_num_possible_cpus()** is helper function to get the
+ * number of possible CPUs before looking up per-CPU maps.
+ * @return number of possible CPUs
+ *
+ * Negative errno is returned on failure.
  *
  * Example usage:
  *
@@ -837,7 +880,6 @@ bpf_program__bpil_offs_to_addr(struct bpf_prog_info_linear *info_linear);
  *     }
  *     long values[ncpus];
  *     bpf_map_lookup_elem(per_cpu_map_fd, key, values);
- *
  */
 LIBBPF_API int libbpf_num_possible_cpus(void);
 
