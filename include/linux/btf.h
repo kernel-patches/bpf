@@ -143,6 +143,53 @@ static inline bool btf_type_is_enum(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_ENUM;
 }
 
+static inline bool str_is_empty(const char *s)
+{
+	return !s || !s[0];
+}
+
+static inline u16 btf_kind(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info);
+}
+
+static inline bool btf_is_enum(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_ENUM;
+}
+
+static inline bool btf_is_composite(const struct btf_type *t)
+{
+	u16 kind = btf_kind(t);
+
+	return kind == BTF_KIND_STRUCT || kind == BTF_KIND_UNION;
+}
+
+static inline bool btf_is_array(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_ARRAY;
+}
+
+static inline bool btf_is_int(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_INT;
+}
+
+static inline bool btf_is_ptr(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_PTR;
+}
+
+static inline u8 btf_int_offset(const struct btf_type *t)
+{
+	return BTF_INT_OFFSET(*(u32 *)(t + 1));
+}
+
+static inline u8 btf_int_encoding(const struct btf_type *t)
+{
+	return BTF_INT_ENCODING(*(u32 *)(t + 1));
+}
+
 static inline bool btf_type_is_scalar(const struct btf_type *t)
 {
 	return btf_type_is_int(t) || btf_type_is_enum(t);
@@ -183,6 +230,11 @@ static inline u16 btf_type_vlen(const struct btf_type *t)
 	return BTF_INFO_VLEN(t->info);
 }
 
+static inline u16 btf_vlen(const struct btf_type *t)
+{
+	return btf_type_vlen(t);
+}
+
 static inline u16 btf_func_linkage(const struct btf_type *t)
 {
 	return BTF_INFO_VLEN(t->info);
@@ -193,6 +245,27 @@ static inline bool btf_type_kflag(const struct btf_type *t)
 	return BTF_INFO_KFLAG(t->info);
 }
 
+static inline struct btf_member *btf_members(const struct btf_type *t)
+{
+	return (struct btf_member *)(t + 1);
+}
+#ifdef RELO_CORE
+static inline u32 btf_member_bit_offset(const struct btf_type *t, u32 member_idx)
+{
+	const struct btf_member *m = btf_members(t) + member_idx;
+	bool kflag = btf_type_kflag(t);
+
+	return kflag ? BTF_MEMBER_BIT_OFFSET(m->offset) : m->offset;
+}
+
+static inline u32 btf_member_bitfield_size(const struct btf_type *t, u32 member_idx)
+{
+	const struct btf_member *m = btf_members(t) + member_idx;
+	bool kflag = btf_type_kflag(t);
+
+	return kflag ? BTF_MEMBER_BITFIELD_SIZE(m->offset) : 0;
+}
+#else
 static inline u32 btf_member_bit_offset(const struct btf_type *struct_type,
 					const struct btf_member *member)
 {
@@ -206,10 +279,22 @@ static inline u32 btf_member_bitfield_size(const struct btf_type *struct_type,
 	return btf_type_kflag(struct_type) ? BTF_MEMBER_BITFIELD_SIZE(member->offset)
 					   : 0;
 }
+#endif
 
 static inline const struct btf_member *btf_type_member(const struct btf_type *t)
 {
 	return (const struct btf_member *)(t + 1);
+}
+
+
+static inline struct btf_array *btf_array(const struct btf_type *t)
+{
+	return (struct btf_array *)(t + 1);
+}
+
+static inline struct btf_enum *btf_enum(const struct btf_type *t)
+{
+	return (struct btf_enum *)(t + 1);
 }
 
 static inline const struct btf_var_secinfo *btf_type_var_secinfo(
@@ -222,6 +307,10 @@ static inline const struct btf_var_secinfo *btf_type_var_secinfo(
 struct bpf_prog;
 
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
+static inline const struct btf_type *btf__type_by_id(const struct btf *btf, u32 type_id)
+{
+	return btf_type_by_id(btf, type_id);
+}
 const char *btf_name_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);

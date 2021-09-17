@@ -6343,3 +6343,29 @@ const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 };
 
 BTF_ID_LIST_GLOBAL_SINGLE(btf_task_struct_ids, struct, task_struct)
+
+int bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,
+			      const struct btf *targ_btf, __u32 targ_id)
+{
+	return -EOPNOTSUPP;
+}
+
+static bool bpf_core_is_flavor_sep(const char *s)
+{
+	/* check X___Y name pattern, where X and Y are not underscores */
+	return s[0] != '_' &&				      /* X */
+	       s[1] == '_' && s[2] == '_' && s[3] == '_' &&   /* ___ */
+	       s[4] != '_';				      /* Y */
+}
+
+size_t bpf_core_essential_name_len(const char *name)
+{
+	size_t n = strlen(name);
+	int i;
+
+	for (i = n - 5; i >= 0; i--) {
+		if (bpf_core_is_flavor_sep(name + i))
+			return i + 1;
+	}
+	return n;
+}

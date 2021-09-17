@@ -1,6 +1,73 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2019 Facebook */
 
+#ifdef __KERNEL__
+#define RELO_CORE
+#include <linux/bpf.h>
+#include <linux/btf.h>
+#include <linux/string.h>
+#include "relo_core.h"
+
+static const char *btf_kind_str(const struct btf_type *t)
+{
+	return btf_type_str(t);
+}
+
+static bool is_ldimm64_insn(struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LD | BPF_IMM | BPF_DW);
+}
+
+static const struct btf_type *
+skip_mods_and_typedefs(const struct btf *btf, u32 id, u32 *res_id)
+{
+	return btf_type_skip_modifiers(btf, id, res_id);
+}
+
+static const char *btf__name_by_offset(const struct btf *btf, u32 offset)
+{
+	return btf_name_by_offset(btf, offset);
+}
+
+static s64 btf__resolve_size(const struct btf *btf, u32 type_id)
+{
+	const struct btf_type *t;
+	int size;
+
+	t = btf_type_by_id(btf, type_id);
+	t = btf_resolve_size(btf, t, &size);
+	if (IS_ERR(t))
+		return PTR_ERR(t);
+	return size;
+}
+
+enum libbpf_print_level {
+        LIBBPF_WARN,
+        LIBBPF_INFO,
+        LIBBPF_DEBUG,
+};
+__attribute__((format(printf, 2, 3)))
+void libbpf_print(enum libbpf_print_level level,
+		  const char *format, ...)
+{
+	va_list args;
+
+	va_start(args, format);
+	vprintk(format, args);
+	va_end(args);
+}
+#define __pr(level, fmt, ...)	\
+do {				\
+	libbpf_print(level, "libbpf: " fmt, ##__VA_ARGS__);	\
+} while (0)
+
+#undef pr_warn
+#undef pr_info
+#undef pr_debug
+#define pr_warn(fmt, ...)	__pr(LIBBPF_WARN, fmt, ##__VA_ARGS__)
+#define pr_info(fmt, ...)	__pr(LIBBPF_INFO, fmt, ##__VA_ARGS__)
+#define pr_debug(fmt, ...)	__pr(LIBBPF_DEBUG, fmt, ##__VA_ARGS__)
+#else
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -12,8 +79,9 @@
 #include "btf.h"
 #include "str_error.h"
 #include "libbpf_internal.h"
+#endif
 
-#define BPF_CORE_SPEC_MAX_LEN 64
+#define BPF_CORE_SPEC_MAX_LEN 32
 
 /* represents BPF CO-RE field or array element accessor */
 struct bpf_core_accessor {
@@ -662,7 +730,7 @@ static int bpf_core_calc_field_relo(const char *prog_name,
 			*validate = true; /* signedness is never ambiguous */
 		break;
 	case BPF_FIELD_LSHIFT_U64:
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 		*val = 64 - (bit_off + bit_sz - byte_off  * 8);
 #else
 		*val = (8 - byte_sz) * 8 + (bit_off - byte_off * 8);
