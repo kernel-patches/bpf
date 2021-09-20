@@ -5576,6 +5576,15 @@ struct sk_reuseport_md {
 
 #define BPF_TAG_SIZE	8
 
+struct bpf_prog_verif_stats {
+	__u64 verification_time;
+	__u32 insn_processed;
+	__u32 max_states_per_insn;
+	__u32 total_states;
+	__u32 peak_states;
+	__u32 longest_mark_read_walk;
+};
+
 struct bpf_prog_info {
 	__u32 type;
 	__u32 id;
@@ -5613,6 +5622,7 @@ struct bpf_prog_info {
 	__u64 run_time_ns;
 	__u64 run_cnt;
 	__u64 recursion_misses;
+	struct bpf_prog_verif_stats verif_stats;
 } __attribute__((aligned(8)));
 
 struct bpf_map_info {

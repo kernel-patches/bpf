@@ -1836,9 +1836,11 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 {
 	const struct bpf_prog *prog = filp->private_data;
 	char prog_tag[sizeof(prog->tag) * 2 + 1] = { };
+	struct bpf_prog_verif_stats *verif_stats;
 	struct bpf_prog_stats stats;
 
 	bpf_prog_get_stats(prog, &stats);
+	verif_stats = &prog->aux->verif_stats;
 	bin2hex(prog_tag, prog->tag, sizeof(prog->tag));
 	seq_printf(m,
 		   "prog_type:\t%u\n"
@@ -1848,7 +1850,13 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "prog_id:\t%u\n"
 		   "run_time_ns:\t%llu\n"
 		   "run_cnt:\t%llu\n"
-		   "recursion_misses:\t%llu\n",
+		   "recursion_misses:\t%llu\n"
+		   "verification_time:\t%llu\n"
+		   "verif_insn_processed:\t%u\n"
+		   "verif_max_states_per_insn:\t%u\n"
+		   "verif_total_states:\t%u\n"
+		   "verif_peak_states:\t%u\n"
+		   "verif_longest_mark_read_walk:\t%u\n",
 		   prog->type,
 		   prog->jited,
 		   prog_tag,
@@ -1856,7 +1864,13 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   prog->aux->id,
 		   stats.nsecs,
 		   stats.cnt,
-		   stats.misses);
+		   stats.misses,
+		   verif_stats->verification_time,
+		   verif_stats->insn_processed,
+		   verif_stats->max_states_per_insn,
+		   verif_stats->total_states,
+		   verif_stats->peak_states,
+		   verif_stats->longest_mark_read_walk);
 }
 #endif
 
@@ -3624,6 +3638,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 	info.run_time_ns = stats.nsecs;
 	info.run_cnt = stats.cnt;
 	info.recursion_misses = stats.misses;
+
+	info.verif_stats = prog->aux->verif_stats;
 
 	if (!bpf_capable()) {
 		info.jited_prog_len = 0;

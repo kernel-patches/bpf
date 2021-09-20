@@ -13245,6 +13245,18 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		env->peak_states, env->longest_mark_read_walk);
 }
 
+static void populate_aux_verif_stats(struct bpf_verifier_env *env)
+{
+	struct bpf_prog_verif_stats *verif_stats = &env->prog->aux->verif_stats;
+
+	verif_stats->verification_time = env->verification_time;
+	verif_stats->insn_processed = env->insn_processed;
+	verif_stats->max_states_per_insn = env->max_states_per_insn;
+	verif_stats->total_states = env->total_states;
+	verif_stats->peak_states = env->peak_states;
+	verif_stats->longest_mark_read_walk = env->longest_mark_read_walk;
+}
+
 static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 {
 	const struct btf_type *t, *func_proto;
@@ -13826,6 +13838,7 @@ skip_full_check:
 
 	env->verification_time = ktime_get_ns() - start_time;
 	print_verification_stats(env);
+	populate_aux_verif_stats(env);
 
 	if (log->level && bpf_verifier_log_full(log))
 		ret = -ENOSPC;
