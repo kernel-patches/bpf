@@ -9036,7 +9036,7 @@ static int poke_kprobe_events(bool add, const char *name, bool retprobe, uint64_
 	}
 
 	fd = open(file, O_WRONLY | O_APPEND, 0);
-	if (!fd)
+	if (fd < 0)
 		return -errno;
 	ret = write(fd, cmd, strlen(cmd));
 	if (ret < 0)
