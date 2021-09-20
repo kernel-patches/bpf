@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (c) 2021 Facebook */
 
 #include "vmlinux.h"
 
@@ -26,6 +25,29 @@ int handler(struct __sk_buff *skb)
 	}
 	bpf_testmod_test_mod_kfunc(42);
 	out_bpf_testmod_ksym = *(int *)bpf_this_cpu_ptr(&bpf_testmod_ksym_percpu);
+	return 0;
+}
+
+SEC("classifier")
+int load_fail1(struct __sk_buff *skb)
+{
+	/* This should be preserved by clang, but not DCE'd by verifier,
+	 * hence fail loading
+	 */
+	if (!x) {
+		bpf_testmod_invalid_mod_kfunc();
+		return -1;
+	}
+	bpf_testmod_test_mod_kfunc(42);
+	out_bpf_testmod_ksym = *(int *)bpf_this_cpu_ptr(&bpf_testmod_ksym_percpu);
+	return 0;
+}
+
+SEC("classifier")
+int load_fail2(struct __sk_buff *skb)
+{
+	KFUNC_VALID_DISTINCT_256;
+	KFUNC_VALID_SAME_ONE;
 	return 0;
 }
 
