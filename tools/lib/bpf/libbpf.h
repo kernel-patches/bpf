@@ -934,6 +934,7 @@ struct gen_loader_opts {
 	const char *insns;
 	__u32 data_sz;
 	__u32 insns_sz;
+	__u32 fd_array_sz;
 };
 
 #define gen_loader_opts__last_field insns_sz

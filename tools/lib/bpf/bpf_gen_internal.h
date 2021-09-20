@@ -7,6 +7,16 @@ struct ksym_relo_desc {
 	const char *name;
 	int kind;
 	int insn_idx;
+	bool is_weak;
+};
+
+/* maximum distinct calls */
+#define MAX_KFUNC_DESCS 256
+
+struct kfunc_desc {
+	const char *name;
+	int ref;
+	int off;
 };
 
 struct bpf_gen {
@@ -23,7 +33,10 @@ struct bpf_gen {
 	struct ksym_relo_desc *relos;
 	int relo_cnt;
 	char attach_target[128];
+	struct kfunc_desc kdescs[MAX_KFUNC_DESCS];
 	int attach_kind;
+	__u32 nr_kfuncs;
+	int fd_array_sz;
 };
 
 void bpf_gen__init(struct bpf_gen *gen, int log_level);
@@ -36,6 +49,7 @@ void bpf_gen__prog_load(struct bpf_gen *gen, struct bpf_prog_load_params *load_a
 void bpf_gen__map_update_elem(struct bpf_gen *gen, int map_idx, void *value, __u32 value_size);
 void bpf_gen__map_freeze(struct bpf_gen *gen, int map_idx);
 void bpf_gen__record_attach_target(struct bpf_gen *gen, const char *name, enum bpf_attach_type type);
-void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, int kind, int insn_idx);
+void bpf_gen__record_extern(struct bpf_gen *gen, const char *name, bool is_weak, int kind,
+			    int insn_idx);
 
 #endif

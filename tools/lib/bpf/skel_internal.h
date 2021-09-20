@@ -44,6 +44,7 @@ struct bpf_load_and_run_opts {
 	const void *insns;
 	__u32 data_sz;
 	__u32 insns_sz;
+	__u32 fd_array_sz;
 	const char *errstr;
 };
 
@@ -62,22 +63,32 @@ static inline int skel_closenz(int fd)
 
 static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 {
-	int map_fd = -1, prog_fd = -1, key = 0, err;
+	int map_fd[2] = {-1, -1}, prog_fd = -1, key = 0, err;
 	union bpf_attr attr;
 
-	map_fd = bpf_create_map_name(BPF_MAP_TYPE_ARRAY, "__loader.map", 4,
+	map_fd[0] = bpf_create_map_name(BPF_MAP_TYPE_ARRAY, "__loader.map", 4,
 				     opts->data_sz, 1, 0);
-	if (map_fd < 0) {
+	if (map_fd[0] < 0) {
 		opts->errstr = "failed to create loader map";
 		err = -errno;
 		goto out;
 	}
 
-	err = bpf_map_update_elem(map_fd, &key, opts->data, 0);
+	err = bpf_map_update_elem(map_fd[0], &key, opts->data, 0);
 	if (err < 0) {
 		opts->errstr = "failed to update loader map";
 		err = -errno;
 		goto out;
+	}
+
+	if (opts->fd_array_sz) {
+		map_fd[1] = bpf_create_map_name(BPF_MAP_TYPE_ARRAY, "__loader.fd.map", 4,
+						opts->fd_array_sz, 1, 0);
+		if (map_fd[1] < 0) {
+			opts->errstr = "failed to create loader fd map";
+			err = -errno;
+			goto out;
+		}
 	}
 
 	memset(&attr, 0, sizeof(attr));
@@ -86,7 +97,7 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	attr.insn_cnt = opts->insns_sz / sizeof(struct bpf_insn);
 	attr.license = (long) "Dual BSD/GPL";
 	memcpy(attr.prog_name, "__loader.prog", sizeof("__loader.prog"));
-	attr.fd_array = (long) &map_fd;
+	attr.fd_array = (long) map_fd;
 	attr.log_level = opts->ctx->log_level;
 	attr.log_size = opts->ctx->log_size;
 	attr.log_buf = opts->ctx->log_buf;
@@ -113,8 +124,10 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	}
 	err = 0;
 out:
-	if (map_fd >= 0)
-		close(map_fd);
+	if (map_fd[0] >= 0)
+		close(map_fd[0]);
+	if (map_fd[1] >= 0)
+		close(map_fd[1]);
 	if (prog_fd >= 0)
 		close(prog_fd);
 	return err;
