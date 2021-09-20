@@ -1693,6 +1693,7 @@ static int try_loader(struct gen_loader_opts *gen)
 	opts.data_sz = gen->data_sz;
 	opts.insns = gen->insns;
 	opts.insns_sz = gen->insns_sz;
+	opts.fd_array_sz = gen->fd_array_sz;
 	fds_before = count_open_fds();
 	err = bpf_load_and_run(&opts);
 	fd_delta = count_open_fds() - fds_before;

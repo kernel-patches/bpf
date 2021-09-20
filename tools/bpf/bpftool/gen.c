@@ -532,10 +532,11 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 
 	codegen("\
 		\n\
+			opts.fd_array_sz = %d;				    \n\
 			opts.insns_sz = %d;				    \n\
 			opts.insns = (void *)\"\\			    \n\
 		",
-		opts.insns_sz);
+		opts.fd_array_sz, opts.insns_sz);
 	print_hex(opts.insns, opts.insns_sz);
 	codegen("\
 		\n\
