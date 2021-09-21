@@ -10619,25 +10619,15 @@ int parse_cpu_mask_file(const char *fcpu, bool **mask, int *mask_sz)
 
 int libbpf_num_possible_cpus(void)
 {
-	static const char *fcpu = "/sys/devices/system/cpu/possible";
 	static int cpus;
-	int err, n, i, tmp_cpus;
-	bool *mask;
+	int tmp_cpus;
 
 	tmp_cpus = READ_ONCE(cpus);
 	if (tmp_cpus > 0)
 		return tmp_cpus;
 
-	err = parse_cpu_mask_file(fcpu, &mask, &n);
-	if (err)
-		return libbpf_err(err);
-
-	tmp_cpus = 0;
-	for (i = 0; i < n; i++) {
-		if (mask[i])
-			tmp_cpus++;
-	}
-	free(mask);
+	tmp_cpus = sysconf(_SC_NPROCESSORS_CONF);
+	/* sysconf sets errno; no need to use libbpf_err */
 
 	WRITE_ONCE(cpus, tmp_cpus);
 	return tmp_cpus;
