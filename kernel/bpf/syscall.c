@@ -199,7 +199,8 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 		err = bpf_fd_reuseport_array_update_elem(map, key, value,
 							 flags);
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
-		   map->map_type == BPF_MAP_TYPE_STACK) {
+		   map->map_type == BPF_MAP_TYPE_STACK ||
+		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
 		err = map->ops->map_push_elem(map, value, flags);
 	} else {
 		rcu_read_lock();
@@ -238,7 +239,8 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	} else if (map->map_type == BPF_MAP_TYPE_REUSEPORT_SOCKARRAY) {
 		err = bpf_fd_reuseport_array_lookup_elem(map, key, value);
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
-		   map->map_type == BPF_MAP_TYPE_STACK) {
+		   map->map_type == BPF_MAP_TYPE_STACK ||
+		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
 		err = map->ops->map_peek_elem(map, value);
 	} else if (map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
 		/* struct_ops map requires directly updating "value" */
@@ -1079,6 +1081,14 @@ static int map_lookup_elem(union bpf_attr *attr)
 	value = kvmalloc(value_size, GFP_USER | __GFP_NOWARN);
 	if (!value)
 		goto free_key;
+
+	if (map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
+		if (copy_from_user(value, uvalue, value_size))
+			err = -EFAULT;
+		else
+			err = bpf_map_copy_value(map, key, value, attr->flags);
+		goto free_value;
+	}
 
 	err = bpf_map_copy_value(map, key, value, attr->flags);
 	if (err)
