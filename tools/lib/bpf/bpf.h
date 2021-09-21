@@ -49,6 +49,7 @@ struct bpf_create_map_attr {
 	union {
 		__u32 inner_map_fd;
 		__u32 btf_vmlinux_value_type_id;
+		__u32 nr_hash_funcs;
 	};
 };
 

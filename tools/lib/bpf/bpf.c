@@ -100,6 +100,8 @@ int bpf_create_map_xattr(const struct bpf_create_map_attr *create_attr)
 	if (attr.map_type == BPF_MAP_TYPE_STRUCT_OPS)
 		attr.btf_vmlinux_value_type_id =
 			create_attr->btf_vmlinux_value_type_id;
+	else if (attr.map_type == BPF_MAP_TYPE_BLOOM_FILTER)
+		attr.nr_hash_funcs = create_attr->nr_hash_funcs;
 	else
 		attr.inner_map_fd = create_attr->inner_map_fd;
 

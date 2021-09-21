@@ -1262,7 +1262,10 @@ union bpf_attr {
 		__u32	map_flags;	/* BPF_MAP_CREATE related
 					 * flags defined above.
 					 */
-		__u32	inner_map_fd;	/* fd pointing to the inner map */
+		union {
+			__u32	inner_map_fd;	/* fd pointing to the inner map */
+			__u32	nr_hash_funcs;  /* or number of hash functions */
+		};
 		__u32	numa_node;	/* numa node (effective only if
 					 * BPF_F_NUMA_NODE is set).
 					 */

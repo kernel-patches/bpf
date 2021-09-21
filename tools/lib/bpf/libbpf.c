@@ -378,6 +378,7 @@ struct bpf_map {
 	char *pin_path;
 	bool pinned;
 	bool reused;
+	__u32 nr_hash_funcs;
 };
 
 enum extern_type {
@@ -1289,6 +1290,11 @@ static bool bpf_map_type__is_map_in_map(enum bpf_map_type type)
 	    type == BPF_MAP_TYPE_HASH_OF_MAPS)
 		return true;
 	return false;
+}
+
+static inline bool bpf_map__is_bloom_filter(const struct bpf_map *map)
+{
+	return map->def.type == BPF_MAP_TYPE_BLOOM_FILTER;
 }
 
 int bpf_object__section_size(const struct bpf_object *obj, const char *name,
@@ -2238,6 +2244,10 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 			}
 			map_def->pinning = val;
 			map_def->parts |= MAP_DEF_PINNING;
+		} else if (strcmp(name, "nr_hash_funcs") == 0) {
+			if (!get_map_field_int(map_name, btf, m, &map_def->nr_hash_funcs))
+				return -EINVAL;
+			map_def->parts |= MAP_DEF_NR_HASH_FUNCS;
 		} else {
 			if (strict) {
 				pr_warn("map '%s': unknown field '%s'.\n", map_name, name);
@@ -2266,6 +2276,7 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 	map->numa_node = def->numa_node;
 	map->btf_key_type_id = def->key_type_id;
 	map->btf_value_type_id = def->value_type_id;
+	map->nr_hash_funcs = def->nr_hash_funcs;
 
 	if (def->parts & MAP_DEF_MAP_TYPE)
 		pr_debug("map '%s': found type = %u.\n", map->name, def->map_type);
@@ -2290,6 +2301,8 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 		pr_debug("map '%s': found pinning = %u.\n", map->name, def->pinning);
 	if (def->parts & MAP_DEF_NUMA_NODE)
 		pr_debug("map '%s': found numa_node = %u.\n", map->name, def->numa_node);
+	if (def->parts & MAP_DEF_NR_HASH_FUNCS)
+		pr_debug("map '%s': found nr_hash_funcs = %u.\n", map->name, def->nr_hash_funcs);
 
 	if (def->parts & MAP_DEF_INNER_MAP)
 		pr_debug("map '%s': found inner map definition.\n", map->name);
@@ -4616,10 +4629,6 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		create_attr.max_entries = def->max_entries;
 	}
 
-	if (bpf_map__is_struct_ops(map))
-		create_attr.btf_vmlinux_value_type_id =
-			map->btf_vmlinux_value_type_id;
-
 	create_attr.btf_fd = 0;
 	create_attr.btf_key_type_id = 0;
 	create_attr.btf_value_type_id = 0;
@@ -4629,7 +4638,12 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		create_attr.btf_value_type_id = map->btf_value_type_id;
 	}
 
-	if (bpf_map_type__is_map_in_map(def->type)) {
+	if (bpf_map__is_struct_ops(map)) {
+		create_attr.btf_vmlinux_value_type_id =
+			map->btf_vmlinux_value_type_id;
+	} else if (bpf_map__is_bloom_filter(map)) {
+		create_attr.nr_hash_funcs = map->nr_hash_funcs;
+	} else if (bpf_map_type__is_map_in_map(def->type)) {
 		if (map->inner_map) {
 			err = bpf_object__create_map(obj, map->inner_map, true);
 			if (err) {
@@ -8607,6 +8621,14 @@ int bpf_map__set_value_size(struct bpf_map *map, __u32 size)
 	if (map->fd >= 0)
 		return libbpf_err(-EBUSY);
 	map->def.value_size = size;
+	return 0;
+}
+
+int bpf_map__set_nr_hash_funcs(struct bpf_map *map, __u32 nr_hash_funcs)
+{
+	if (map->fd >= 0)
+		return libbpf_err(-EBUSY);
+	map->nr_hash_funcs = nr_hash_funcs;
 	return 0;
 }
 

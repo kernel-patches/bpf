@@ -550,6 +550,8 @@ LIBBPF_API __u32 bpf_map__btf_value_type_id(const struct bpf_map *map);
 /* get/set map if_index */
 LIBBPF_API __u32 bpf_map__ifindex(const struct bpf_map *map);
 LIBBPF_API int bpf_map__set_ifindex(struct bpf_map *map, __u32 ifindex);
+/* set nr_hash_funcs */
+LIBBPF_API int bpf_map__set_nr_hash_funcs(struct bpf_map *map, __u32 nr_hash_funcs);
 
 typedef void (*bpf_map_clear_priv_t)(struct bpf_map *, void *);
 LIBBPF_API int bpf_map__set_priv(struct bpf_map *map, void *priv,
