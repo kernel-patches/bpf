@@ -242,6 +242,23 @@ static void hashmap_lookup_setup(void)
 	}
 }
 
+static void hashmap_no_bloom_filter_setup(void)
+{
+	struct bpf_link *link;
+
+	ctx.skel = setup_skeleton();
+
+	ctx.skel->data->hashmap_use_bloom_filter = false;
+
+	populate_maps();
+
+	link = bpf_program__attach(ctx.skel->progs.prog_bloom_filter_hashmap_lookup);
+	if (!link) {
+		fprintf(stderr, "failed to attach program!\n");
+		exit(1);
+	}
+}
+
 static void measure(struct bench_res *res)
 {
 	long total_hits = 0, total_drops = 0, total_false_hits = 0;
@@ -342,4 +359,26 @@ const struct bench bench_bloom_filter_false_positive = {
 	.measure = measure,
 	.report_progress = false_hits_report_progress,
 	.report_final = false_hits_report_final,
+};
+
+const struct bench bench_hashmap_without_bloom_filter = {
+	.name = "hashmap-without-bloom-filter",
+	.validate = validate,
+	.setup = hashmap_no_bloom_filter_setup,
+	.producer_thread = producer,
+	.consumer_thread = consumer,
+	.measure = measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_hashmap_with_bloom_filter = {
+	.name = "hashmap-with-bloom-filter",
+	.validate = validate,
+	.setup = hashmap_lookup_setup,
+	.producer_thread = producer,
+	.consumer_thread = consumer,
+	.measure = measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
 };

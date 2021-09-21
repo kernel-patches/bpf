@@ -92,20 +92,21 @@ void hits_drops_report_progress(int iter, struct bench_res *res, long delta_ns)
 	printf("Iter %3d (%7.3lfus): ",
 	       iter, (delta_ns - 1000000000) / 1000.0);
 
-	printf("hits %8.3lfM/s (%7.3lfM/prod), drops %8.3lfM/s\n",
-	       hits_per_sec, hits_per_prod, drops_per_sec);
+	printf("hits %8.3lfM/s (%7.3lfM/prod), drops %8.3lfM/s, total operations %8.3lfM/s\n",
+	       hits_per_sec, hits_per_prod, drops_per_sec, hits_per_sec + drops_per_sec);
 }
 
 void hits_drops_report_final(struct bench_res res[], int res_cnt)
 {
 	int i;
-	double hits_mean = 0.0, drops_mean = 0.0;
-	double hits_stddev = 0.0, drops_stddev = 0.0;
+	double hits_mean = 0.0, drops_mean = 0.0, total_ops_mean = 0.0;
+	double hits_stddev = 0.0, drops_stddev = 0.0, total_ops_stddev = 0.0;
 
 	for (i = 0; i < res_cnt; i++) {
 		hits_mean += res[i].hits / 1000000.0 / (0.0 + res_cnt);
 		drops_mean += res[i].drops / 1000000.0 / (0.0 + res_cnt);
 	}
+	total_ops_mean = hits_mean + drops_mean;
 
 	if (res_cnt > 1)  {
 		for (i = 0; i < res_cnt; i++) {
@@ -115,14 +116,21 @@ void hits_drops_report_final(struct bench_res res[], int res_cnt)
 			drops_stddev += (drops_mean - res[i].drops / 1000000.0) *
 					(drops_mean - res[i].drops / 1000000.0) /
 					(res_cnt - 1.0);
+			total_ops_stddev += (total_ops_mean -
+					(res[i].hits + res[i].drops) / 1000000.0) *
+					(total_ops_mean - (res[i].hits + res[i].drops) / 1000000.0)
+					/ (res_cnt - 1.0);
 		}
 		hits_stddev = sqrt(hits_stddev);
 		drops_stddev = sqrt(drops_stddev);
+		total_ops_stddev = sqrt(total_ops_stddev);
 	}
 	printf("Summary: hits %8.3lf \u00B1 %5.3lfM/s (%7.3lfM/prod), ",
 	       hits_mean, hits_stddev, hits_mean / env.producer_cnt);
-	printf("drops %8.3lf \u00B1 %5.3lfM/s\n",
+	printf("drops %8.3lf \u00B1 %5.3lfM/s, ",
 	       drops_mean, drops_stddev);
+	printf("total operations %8.3lf \u00B1 %5.3lfM/s\n",
+	       total_ops_mean, total_ops_stddev);
 }
 
 const char *argp_program_version = "benchmark";
@@ -356,6 +364,8 @@ extern const struct bench bench_pb_libbpf;
 extern const struct bench bench_pb_custom;
 extern const struct bench bench_bloom_filter_map;
 extern const struct bench bench_bloom_filter_false_positive;
+extern const struct bench bench_hashmap_without_bloom_filter;
+extern const struct bench bench_hashmap_with_bloom_filter;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -379,6 +389,8 @@ static const struct bench *benchs[] = {
 	&bench_pb_custom,
 	&bench_bloom_filter_map,
 	&bench_bloom_filter_false_positive,
+	&bench_hashmap_without_bloom_filter,
+	&bench_hashmap_with_bloom_filter,
 };
 
 static void setup_benchmark()
