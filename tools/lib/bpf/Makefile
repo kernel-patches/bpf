@@ -152,6 +152,15 @@ $(BPF_IN_SHARED): force $(BPF_HELPER_DEFS)
 	@(test -f ../../include/uapi/linux/if_xdp.h -a -f ../../../include/uapi/linux/if_xdp.h && ( \
 	(diff -B ../../include/uapi/linux/if_xdp.h ../../../include/uapi/linux/if_xdp.h >/dev/null) || \
 	echo "Warning: Kernel ABI header at 'tools/include/uapi/linux/if_xdp.h' differs from latest version at 'include/uapi/linux/if_xdp.h'" >&2 )) || true
+	@(test -f ../../include/uapi/linux/rtnetlink.h -a -f ../../../include/uapi/linux/rtnetlink.h && ( \
+	(diff -B ../../include/uapi/linux/rtnetlink.h ../../../include/uapi/linux/rtnetlink.h >/dev/null) || \
+	echo "Warning: Kernel ABI header at 'tools/include/uapi/linux/rtnetlink.h' differs from latest version at 'include/uapi/linux/rtnetlink.h'" >&2 )) || true
+	@(test -f ../../include/uapi/linux/if_addr.h -a -f ../../../include/uapi/linux/if_addr.h && ( \
+	(diff -B ../../include/uapi/linux/if_addr.h ../../../include/uapi/linux/if_addr.h >/dev/null) || \
+	echo "Warning: Kernel ABI header at 'tools/include/uapi/linux/if_addr.h' differs from latest version at 'include/uapi/linux/if_addr.h'" >&2 )) || true
+	@(test -f ../../include/uapi/linux/neighbour.h -a -f ../../../include/uapi/linux/neighbour.h && ( \
+	(diff -B ../../include/uapi/linux/neighbour.h ../../../include/uapi/linux/neighbour.h >/dev/null) || \
+	echo "Warning: Kernel ABI header at 'tools/include/uapi/linux/neighbour.h' differs from latest version at 'include/uapi/linux/neighbour.h'" >&2 )) || true
 	$(Q)$(MAKE) $(build)=libbpf OUTPUT=$(SHARED_OBJDIR) CFLAGS="$(CFLAGS) $(SHLIB_FLAGS)"
 
 $(BPF_IN_STATIC): force $(BPF_HELPER_DEFS)
