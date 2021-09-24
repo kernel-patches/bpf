@@ -421,6 +421,13 @@ static struct ctl_table net_core_table[] = {
 		.extra1		= &long_one,
 		.extra2		= &bpf_jit_limit_max,
 	},
+	{
+		.procname	= "bpf_jit_current",
+		.data		= &bpf_jit_current,
+		.maxlen		= sizeof(long),
+		.mode		= 0400,
+		.proc_handler	= proc_dolongvec_minmax_bpf_restricted,
+	},
 #endif
 	{
 		.procname	= "netdev_tstamp_prequeue",
