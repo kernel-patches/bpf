@@ -6,8 +6,8 @@
 #include "xdp_sample_shared.h"
 
 enum {
-	BPF_F_BROADCAST		= (1ULL << 3),
-	BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
+	__BPF_F_BROADCAST	= (1ULL << 3),
+	__BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
 };
 
 struct {
@@ -43,7 +43,8 @@ static int xdp_redirect_map(struct xdp_md *ctx, void *forward_map)
 	NO_TEAR_INC(rec->processed);
 
 	return bpf_redirect_map(forward_map, 0,
-				BPF_F_BROADCAST | BPF_F_EXCLUDE_INGRESS);
+				__BPF_F_BROADCAST |
+				__BPF_F_EXCLUDE_INGRESS);
 }
 
 SEC("xdp")
