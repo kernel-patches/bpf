@@ -295,3 +295,43 @@ map_put:
 	return err;
 }
 
+static void bpf_map_trace_run_progs(struct bpf_map *map,
+				    enum bpf_map_trace_type trace_type,
+				    void *ctx)
+{
+	struct bpf_map_trace_prog *prog;
+
+	if (!map->trace_progs)
+		return;
+
+	rcu_read_lock();
+	migrate_disable();
+	list_for_each_entry_rcu(prog,
+				&map->trace_progs->progs[trace_type].list,
+				list) {
+		bpf_prog_run(prog->prog, ctx);  /* return code is ignored */
+	}
+	migrate_enable();
+	rcu_read_unlock();
+}
+
+void bpf_trace_map_update_elem(struct bpf_map *map,
+			       void *key, void *value, u64 flags)
+{
+	struct bpf_map_trace_ctx__update_elem ctx;
+
+	ctx.key = key;
+	ctx.value = value;
+	ctx.flags = flags;
+	bpf_map_trace_run_progs(map, BPF_MAP_TRACE_UPDATE_ELEM, &ctx);
+}
+
+void bpf_trace_map_delete_elem(struct bpf_map *map,
+			       void *key)
+{
+	struct bpf_map_trace_ctx__delete_elem ctx;
+
+	ctx.key = key;
+	bpf_map_trace_run_progs(map, BPF_MAP_TRACE_DELETE_ELEM, &ctx);
+}
+

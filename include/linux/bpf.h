@@ -1532,6 +1532,16 @@ struct bpf_map_trace_progs {
 	struct mutex mutex; /* protects writes to progs, length */
 };
 
+struct bpf_map_trace_ctx__update_elem {
+	__bpf_md_ptr(void *, key);
+	__bpf_md_ptr(void *, value);
+	u64 flags;
+};
+
+struct bpf_map_trace_ctx__delete_elem {
+	__bpf_md_ptr(void *, key);
+};
+
 struct bpf_map_trace_reg {
 	const char *target;
 	enum bpf_map_trace_type trace_type;
@@ -1560,6 +1570,9 @@ int bpf_map_trace_reg_target(const struct bpf_map_trace_reg *reg_info);
 int bpf_map_trace_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 			      struct bpf_prog *prog);
 int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr, struct bpf_prog *prog);
+void bpf_trace_map_update_elem(struct bpf_map *map, void *key, void *value,
+			       u64 flags);
+void bpf_trace_map_delete_elem(struct bpf_map *map, void *key);
 int bpf_iter_new_fd(struct bpf_link *link);
 bool bpf_link_is_iter(struct bpf_link *link);
 struct bpf_prog *bpf_iter_get_info(struct bpf_iter_meta *meta, bool in_stop);
