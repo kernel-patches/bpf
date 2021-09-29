@@ -1510,6 +1510,17 @@ struct bpf_iter_reg {
 	const struct bpf_iter_seq_info *seq_info;
 };
 
+#define BPF_MAP_TRACE_FUNC_SYM(trace_type) bpf_map_trace__ ## trace_type
+#define DEFINE_BPF_MAP_TRACE_FUNC(trace_type, args...)	\
+	extern int BPF_MAP_TRACE_FUNC_SYM(trace_type)(args);	\
+	int __init BPF_MAP_TRACE_FUNC_SYM(trace_type)(args)	\
+	{ return 0; }
+
+struct bpf_map_trace_reg {
+	const char *target;
+	enum bpf_map_trace_type trace_type;
+};
+
 struct bpf_iter_meta {
 	__bpf_md_ptr(struct seq_file *, seq);
 	u64 session_id;
@@ -1528,6 +1539,7 @@ void bpf_iter_unreg_target(const struct bpf_iter_reg *reg_info);
 bool bpf_iter_prog_supported(struct bpf_prog *prog);
 const struct bpf_func_proto *
 bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
+int bpf_map_trace_reg_target(const struct bpf_map_trace_reg *reg_info);
 int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr, struct bpf_prog *prog);
 int bpf_iter_new_fd(struct bpf_link *link);
 bool bpf_link_is_iter(struct bpf_link *link);

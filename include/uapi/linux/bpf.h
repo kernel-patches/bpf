@@ -93,6 +93,15 @@ union bpf_iter_link_info {
 	} map;
 };
 
+enum bpf_map_trace_type {
+	BPF_MAP_TRACE_UPDATE_ELEM = 0,
+	BPF_MAP_TRACE_DELETE_ELEM = 1,
+
+	MAX_BPF_MAP_TRACE_TYPE,
+};
+
+#define BPF_MAP_TRACE_FUNC(trace_type) "bpf_map_trace__" #trace_type
+
 /* BPF syscall commands, see bpf(2) man-page for more details. */
 /**
  * DOC: eBPF Syscall Preamble
