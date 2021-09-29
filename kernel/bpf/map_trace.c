@@ -335,3 +335,26 @@ void bpf_trace_map_delete_elem(struct bpf_map *map,
 	bpf_map_trace_run_progs(map, BPF_MAP_TRACE_DELETE_ELEM, &ctx);
 }
 
+DEFINE_BPF_MAP_TRACE_FUNC(BPF_MAP_TRACE_UPDATE_ELEM, void *key, void *value, u64 flags);
+DEFINE_BPF_MAP_TRACE_FUNC(BPF_MAP_TRACE_DELETE_ELEM, void *key);
+
+static struct bpf_map_trace_reg map_trace_update_elem_reg_info = {
+	.target = BPF_MAP_TRACE_FUNC(BPF_MAP_TRACE_UPDATE_ELEM),
+	.trace_type = BPF_MAP_TRACE_UPDATE_ELEM,
+};
+static struct bpf_map_trace_reg map_trace_delete_elem_reg_info = {
+	.target = BPF_MAP_TRACE_FUNC(BPF_MAP_TRACE_DELETE_ELEM),
+	.trace_type = BPF_MAP_TRACE_DELETE_ELEM,
+};
+
+static int __init bpf_map_trace_init(void)
+{
+	int err = bpf_map_trace_reg_target(&map_trace_update_elem_reg_info);
+
+	err = (err ? err :
+	       bpf_map_trace_reg_target(&map_trace_delete_elem_reg_info));
+	return err;
+}
+
+late_initcall(bpf_map_trace_init);
+
