@@ -460,6 +460,7 @@ static void bpf_map_free_deferred(struct work_struct *work)
 
 	security_bpf_map_free(map);
 	bpf_map_release_memcg(map);
+	kfree(map->trace_progs);
 	/* implementation dependent freeing */
 	map->ops->map_free(map);
 }
@@ -912,6 +913,9 @@ static int map_create(union bpf_attr *attr)
 		bpf_map_put_with_uref(map);
 		return err;
 	}
+
+	/* tracing programs lists are allocated when attached */
+	map->trace_progs = NULL;
 
 	return err;
 

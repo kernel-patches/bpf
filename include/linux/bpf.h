@@ -43,6 +43,7 @@ struct kobject;
 struct mem_cgroup;
 struct module;
 struct bpf_func_state;
+struct bpf_map_trace_progs;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
@@ -180,10 +181,11 @@ struct bpf_map {
 	struct mem_cgroup *memcg;
 #endif
 	char name[BPF_OBJ_NAME_LEN];
+	struct bpf_map_trace_progs *trace_progs;
 	u32 btf_vmlinux_value_type_id;
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	/* 22 bytes hole */
+	/* 14 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -1510,11 +1512,25 @@ struct bpf_iter_reg {
 	const struct bpf_iter_seq_info *seq_info;
 };
 
+/* Maximum number of tracing programs that may be attached to one map */
+#define BPF_MAP_TRACE_MAX_PROGS 16
 #define BPF_MAP_TRACE_FUNC_SYM(trace_type) bpf_map_trace__ ## trace_type
 #define DEFINE_BPF_MAP_TRACE_FUNC(trace_type, args...)	\
 	extern int BPF_MAP_TRACE_FUNC_SYM(trace_type)(args);	\
 	int __init BPF_MAP_TRACE_FUNC_SYM(trace_type)(args)	\
 	{ return 0; }
+
+struct bpf_map_trace_prog {
+	struct list_head list;
+	struct bpf_prog *prog;
+	struct rcu_head rcu;
+};
+
+struct bpf_map_trace_progs {
+	struct bpf_map_trace_prog __rcu progs[MAX_BPF_MAP_TRACE_TYPE];
+	u32 length[MAX_BPF_MAP_TRACE_TYPE];
+	struct mutex mutex; /* protects writes to progs, length */
+};
 
 struct bpf_map_trace_reg {
 	const char *target;

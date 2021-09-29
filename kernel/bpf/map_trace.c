@@ -3,6 +3,7 @@
 
 #include <linux/filter.h>
 #include <linux/bpf.h>
+#include <linux/rcupdate.h>
 
 struct bpf_map_trace_target_info {
 	struct list_head list;
@@ -54,5 +55,25 @@ bool bpf_map_trace_prog_supported(struct bpf_prog *prog)
 	mutex_unlock(&targets_mutex);
 
 	return supported;
+}
+
+int bpf_map_initialize_trace_progs(struct bpf_map *map)
+{
+	struct bpf_map_trace_progs *new_trace_progs;
+	int i;
+
+	if (!READ_ONCE(map->trace_progs)) {
+		new_trace_progs = kzalloc(sizeof(struct bpf_map_trace_progs),
+					  GFP_KERNEL);
+		if (!new_trace_progs)
+			return -ENOMEM;
+		mutex_init(&new_trace_progs->mutex);
+		for (i = 0; i < MAX_BPF_MAP_TRACE_TYPE; i++)
+			INIT_LIST_HEAD(&new_trace_progs->progs[i].list);
+		if (cmpxchg(&map->trace_progs, NULL, new_trace_progs))
+			kfree(new_trace_progs);
+	}
+
+	return 0;
 }
 
