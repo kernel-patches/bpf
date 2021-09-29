@@ -674,7 +674,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 		    enum bpf_attach_type attach_type,
 		    const struct bpf_link_create_opts *opts)
 {
-	__u32 target_btf_id, iter_info_len;
+	__u32 target_btf_id, iter_info_len, map_trace_info_len;
 	union bpf_attr attr;
 	int fd;
 
@@ -682,13 +682,12 @@ int bpf_link_create(int prog_fd, int target_fd,
 		return libbpf_err(-EINVAL);
 
 	iter_info_len = OPTS_GET(opts, iter_info_len, 0);
+	map_trace_info_len = OPTS_GET(opts, map_trace_info_len, 0);
 	target_btf_id = OPTS_GET(opts, target_btf_id, 0);
 
 	/* validate we don't have unexpected combinations of non-zero fields */
-	if (iter_info_len || target_btf_id) {
-		if (iter_info_len && target_btf_id)
-			return libbpf_err(-EINVAL);
-		if (!OPTS_ZEROED(opts, target_btf_id))
+	if (iter_info_len || map_trace_info_len || target_btf_id) {
+		if ((iter_info_len || map_trace_info_len) && target_btf_id)
 			return libbpf_err(-EINVAL);
 	}
 
@@ -712,6 +711,10 @@ int bpf_link_create(int prog_fd, int target_fd,
 		attr.link_create.perf_event.bpf_cookie = OPTS_GET(opts, perf_event.bpf_cookie, 0);
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
+		break;
+	case BPF_TRACE_MAP:
+		attr.link_create.map_trace_info = ptr_to_u64(OPTS_GET(opts, map_trace_info, (void *)0));
+		attr.link_create.map_trace_info_len = map_trace_info_len;
 		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))

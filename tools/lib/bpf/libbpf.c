@@ -7989,6 +7989,7 @@ static struct bpf_link *attach_raw_tp(const struct bpf_program *prog, long cooki
 static struct bpf_link *attach_trace(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_lsm(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_iter(const struct bpf_program *prog, long cookie);
+static struct bpf_link *attach_map_trace(const struct bpf_program *prog, long cookie);
 
 static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("socket",		SOCKET_FILTER, 0, SEC_NONE | SEC_SLOPPY_PFX),
@@ -8016,6 +8017,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("lsm/",			LSM, BPF_LSM_MAC, SEC_ATTACH_BTF, attach_lsm),
 	SEC_DEF("lsm.s/",		LSM, BPF_LSM_MAC, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_lsm),
 	SEC_DEF("iter/",		TRACING, BPF_TRACE_ITER, SEC_ATTACH_BTF, attach_iter),
+	SEC_DEF("map_trace/",		TRACING, BPF_TRACE_MAP, SEC_ATTACH_BTF, attach_map_trace),
 	SEC_DEF("syscall",		SYSCALL, 0, SEC_SLEEPABLE),
 	SEC_DEF("xdp_devmap/",		XDP, BPF_XDP_DEVMAP, SEC_ATTACHABLE),
 	SEC_DEF("xdp_cpumap/",		XDP, BPF_XDP_CPUMAP, SEC_ATTACHABLE),
@@ -8313,6 +8315,7 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 #define BTF_TRACE_PREFIX "btf_trace_"
 #define BTF_LSM_PREFIX "bpf_lsm_"
 #define BTF_ITER_PREFIX "bpf_iter_"
+#define BTF_MAP_TRACE_PREFIX "bpf_map_trace__BPF_MAP_TRACE_"
 #define BTF_MAX_NAME_SIZE 128
 
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
@@ -8329,6 +8332,10 @@ void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 		break;
 	case BPF_TRACE_ITER:
 		*prefix = BTF_ITER_PREFIX;
+		*kind = BTF_KIND_FUNC;
+		break;
+	case BPF_TRACE_MAP:
+		*prefix = BTF_MAP_TRACE_PREFIX;
 		*kind = BTF_KIND_FUNC;
 		break;
 	default:
@@ -8465,6 +8472,15 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, const char *attac
 	enum bpf_attach_type attach_type = prog->expected_attach_type;
 	__u32 attach_prog_fd = prog->attach_prog_fd;
 	int err = 0;
+
+	if (attach_type == BPF_TRACE_MAP) {
+		while (*attach_name && *attach_name != '/')
+			++attach_name;
+		if (!*attach_name || !*(++attach_name)) {
+			pr_warn("failed to parse trace type from ELF section name '%s'\n", prog->sec_name);
+			return -EINVAL;
+		}
+	}
 
 	/* BPF program's BTF ID */
 	if (attach_prog_fd) {
@@ -9951,6 +9967,108 @@ bpf_program__attach_iter(const struct bpf_program *prog,
 static struct bpf_link *attach_iter(const struct bpf_program *prog, long cookie)
 {
 	return bpf_program__attach_iter(prog, NULL);
+}
+
+struct bpf_link *
+bpf_program__attach_map_trace(const struct bpf_program *prog,
+			      const struct bpf_map_trace_attach_opts *opts)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, link_create_opts);
+	char errmsg[STRERR_BUFSIZE];
+	struct bpf_link *link;
+	int prog_fd, link_fd;
+	__u32 target_fd = 0;
+
+	if (!OPTS_VALID(opts, bpf_map_trace_attach_opts))
+		return ERR_PTR(-EINVAL);
+
+	link_create_opts.map_trace_info = OPTS_GET(opts, link_info, (void *)0);
+	link_create_opts.map_trace_info_len = OPTS_GET(opts, link_info_len, 0);
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return ERR_PTR(-ENOMEM);
+	link->detach = &bpf_link__detach_fd;
+
+	link_fd = bpf_link_create(prog_fd, target_fd, BPF_TRACE_MAP,
+				  &link_create_opts);
+	if (link_fd < 0) {
+		link_fd = -errno;
+		free(link);
+		pr_warn("prog '%s': failed to attach to map: %s\n",
+			prog->name, libbpf_strerror_r(link_fd, errmsg, sizeof(errmsg)));
+		return ERR_PTR(link_fd);
+	}
+	link->fd = link_fd;
+	return link;
+}
+
+static struct bpf_link *attach_map_trace(const struct bpf_program *prog,
+					 long cookie)
+{
+	struct bpf_map_trace_attach_opts map_trace_opts;
+	struct bpf_map_trace_link_info link_info;
+	enum bpf_map_trace_type trace_type;
+	const char *trace_name = prog->sec_name;
+	const char *map_name = prog->sec_name;
+	char *map_name_cstr;
+	size_t map_name_len;
+	struct bpf_map *map;
+	int slash_seen = 0;
+
+	/*
+	 * Map tracing sections are named like this:
+	 *   map_trace/map_name/trace_type
+	 * Assign trace_name and map_name to the beginning of their names.
+	 */
+	while (*map_name && *trace_name && slash_seen < 2) {
+		if (slash_seen < 1)
+			map_name++;
+		if (slash_seen < 2)
+			trace_name++;
+		if (*trace_name == '/')
+			slash_seen++;
+	}
+	if (*map_name)
+		++map_name;
+	if (*trace_name)
+		++trace_name;
+	if (!*map_name || !*trace_name || slash_seen < 2)
+		return ERR_PTR(-EINVAL);
+
+	if (!strcmp(trace_name, "UPDATE_ELEM"))
+		trace_type = BPF_MAP_TRACE_UPDATE_ELEM;
+	else if (!strcmp(trace_name, "DELETE_ELEM"))
+		trace_type = BPF_MAP_TRACE_DELETE_ELEM;
+	else
+		return ERR_PTR(-EINVAL);
+
+	map_name_len = (trace_name - map_name) - 1;
+	map_name_cstr = malloc(map_name_len + 1);
+	if (!map_name_cstr)
+		return ERR_PTR(-ENOMEM);
+	map_name_cstr[map_name_len] = 0;
+	strncpy(map_name_cstr, map_name, map_name_len);
+	pr_warn("map name cstr: %s\n", map_name_cstr);
+	map = bpf_object__find_map_by_name(prog->obj, map_name_cstr);
+	free(map_name_cstr);
+	if (!map)
+		return ERR_PTR(-EINVAL);
+
+	memset(&link_info, 0, sizeof(link_info));
+	link_info.map_fd = bpf_map__fd(map);
+	link_info.trace_type = trace_type;
+	memset(&map_trace_opts, 0, sizeof(map_trace_opts));
+	map_trace_opts.sz = sizeof(map_trace_opts);
+	map_trace_opts.link_info = &link_info;
+	map_trace_opts.link_info_len = sizeof(link_info);
+	return bpf_program__attach_map_trace(prog, &map_trace_opts);
 }
 
 struct bpf_link *bpf_program__attach(const struct bpf_program *prog)

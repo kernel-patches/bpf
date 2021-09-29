@@ -384,6 +384,7 @@ LIBBPF_0.5.0 {
 		btf__load_module_btf;
 		btf__load_vmlinux_btf;
 		btf_dump__dump_type_data;
+		bpf_program__attach_map_trace;
 		libbpf_set_strict_mode;
 } LIBBPF_0.4.0;
 

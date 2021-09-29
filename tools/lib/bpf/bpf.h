@@ -183,8 +183,10 @@ struct bpf_link_create_opts {
 		} perf_event;
 	};
 	size_t :0;
+	struct bpf_map_trace_link_info *map_trace_info;
+	__u32 map_trace_info_len;
 };
-#define bpf_link_create_opts__last_field perf_event
+#define bpf_link_create_opts__last_field map_trace_info_len
 
 LIBBPF_API int bpf_link_create(int prog_fd, int target_fd,
 			       enum bpf_attach_type attach_type,

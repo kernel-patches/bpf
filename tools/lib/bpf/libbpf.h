@@ -358,6 +358,17 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_iter(const struct bpf_program *prog,
 			 const struct bpf_iter_attach_opts *opts);
 
+struct bpf_map_trace_attach_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	struct bpf_map_trace_link_info *link_info;
+	__u32 link_info_len;
+};
+#define bpf_map_trace_attach_opts__last_field link_info_len
+
+LIBBPF_API struct bpf_link *
+bpf_program__attach_map_trace(const struct bpf_program *prog,
+			      const struct bpf_map_trace_attach_opts *opts);
+
 struct bpf_insn;
 
 /*
