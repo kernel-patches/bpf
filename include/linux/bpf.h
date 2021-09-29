@@ -1557,6 +1557,8 @@ const struct bpf_func_proto *
 bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
 bool bpf_map_trace_prog_supported(struct bpf_prog *prog);
 int bpf_map_trace_reg_target(const struct bpf_map_trace_reg *reg_info);
+int bpf_map_trace_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
+			      struct bpf_prog *prog);
 int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr, struct bpf_prog *prog);
 int bpf_iter_new_fd(struct bpf_link *link);
 bool bpf_link_is_iter(struct bpf_link *link);

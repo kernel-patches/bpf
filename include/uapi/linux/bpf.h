@@ -100,6 +100,11 @@ enum bpf_map_trace_type {
 	MAX_BPF_MAP_TRACE_TYPE,
 };
 
+struct bpf_map_trace_link_info {
+	__u32   map_fd;
+	enum bpf_map_trace_type trace_type;
+};
+
 #define BPF_MAP_TRACE_FUNC(trace_type) "bpf_map_trace__" #trace_type
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */
@@ -1018,6 +1023,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
 	BPF_LINK_TYPE_PERF_EVENT = 7,
+	BPF_LINK_TYPE_MAP_TRACE = 8,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1465,6 +1471,12 @@ union bpf_attr {
 				 */
 				__u64		bpf_cookie;
 			} perf_event;
+			struct {
+				/* extra bpf_map_trace_link_info */
+				__aligned_u64	map_trace_info;
+				/* map_trace_info length */
+				__u32		map_trace_info_len;
+			};
 		};
 	} link_create;
 
