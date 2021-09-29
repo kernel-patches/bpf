@@ -1328,6 +1328,35 @@ out:
 	kfree(t);
 }
 
+BPF_CALL_4(bpf_map_trace_update_elem, struct bpf_map *, map,
+	   void *, key, void *, value, u64, flags)
+{
+	bpf_trace_map_update_elem(map, key, value, flags);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_map_trace_update_elem_proto = {
+	.func		= bpf_map_trace_update_elem,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_CONST_MAP_PTR,
+	.arg2_type	= ARG_PTR_TO_MAP_KEY,
+	.arg3_type	= ARG_PTR_TO_MAP_VALUE,
+	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_map_trace_delete_elem, struct bpf_map *, map, void *, key)
+{
+	bpf_trace_map_delete_elem(map, key);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_map_trace_delete_elem_proto = {
+	.func		= bpf_map_trace_delete_elem,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_CONST_MAP_PTR,
+	.arg2_type	= ARG_PTR_TO_MAP_KEY,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_get_current_task_btf_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
