@@ -148,6 +148,48 @@ static const struct bpf_link_ops bpf_map_trace_link_ops = {
 	.update_prog = bpf_map_trace_link_replace,
 };
 
+/* Determine whether attaching "prog" to "map" would create an infinite loop.
+ * If "prog" updates "map", then running "prog" again on a map update would
+ * loop.
+ */
+static int bpf_map_trace_would_loop(struct bpf_prog *prog,
+				    struct bpf_map *map)
+{
+	struct bpf_map_trace_prog *item;
+	struct bpf_prog_aux *aux;
+	struct bpf_map *aux_map;
+	int i, j, err = 0;
+
+	aux = prog->aux;
+	if (!aux)
+		return 0;
+	mutex_lock(&aux->used_maps_mutex);
+	for (i = 0; i < aux->used_map_cnt && !err; i++) {
+		aux_map = aux->used_maps[i];
+		if (aux_map == map) {
+			err = -EINVAL;
+			break;
+		}
+		for (j = 0; j < MAX_BPF_MAP_TRACE_TYPE && !err; j++) {
+			if (!aux_map->trace_progs)
+				continue;
+			rcu_read_lock();
+			list_for_each_entry_rcu(item,
+						&aux_map->trace_progs->progs[i].list,
+						list) {
+				err = bpf_map_trace_would_loop(
+						item->prog, map);
+				if (err)
+					break;
+			}
+			rcu_read_unlock();
+		}
+	}
+	mutex_unlock(&prog->aux->used_maps_mutex);
+	return err;
+}
+
+
 int bpf_map_attach_trace(struct bpf_prog *prog,
 			 struct bpf_map *map,
 			 struct bpf_map_trace_link_info *linfo)
@@ -179,6 +221,10 @@ int bpf_map_attach_trace(struct bpf_prog *prog,
 		err = -EACCES;
 		goto put_map;
 	}
+
+	err = bpf_map_trace_would_loop(prog, map);
+	if (err)
+		goto put_map;
 
 	trace_prog = kmalloc(sizeof(*trace_prog), GFP_KERNEL);
 	if (!trace_prog) {
