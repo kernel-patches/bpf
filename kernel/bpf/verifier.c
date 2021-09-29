@@ -12678,6 +12678,48 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env,
 	return 0;
 }
 
+int get_map_tracing_patchlet(
+		void *map_func,
+		void *map_trace_func,
+		const int nregs,
+		struct bpf_prog *prog,
+		struct bpf_insn *insn_buf,
+		int *extra_stack)
+{
+	const int stack_offset = -1 * (int16_t) prog->aux->stack_depth;
+	const int reg_size_bytes = 8;
+	int cnt = 0, i;
+
+	/* push args onto the stack so that we can invoke the tracer after */
+	for (i = 0; i < nregs; i++)
+		insn_buf[cnt++] = BPF_STX_MEM(
+				BPF_DW, BPF_REG_FP,
+				BPF_REG_1 + i,
+				stack_offset - (i + 1) * reg_size_bytes);
+
+	insn_buf[cnt++] = BPF_EMIT_CALL(map_func);
+
+	for (i = 0; i < nregs; i++)
+		insn_buf[cnt++] = BPF_LDX_MEM(
+				BPF_DW, BPF_REG_1 + i,
+				BPF_REG_FP,
+				stack_offset - (i + 1) * reg_size_bytes);
+
+	/* save return code from map update */
+	insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_0,
+				      stack_offset - reg_size_bytes);
+
+	/* invoke tracing helper */
+	insn_buf[cnt++] = BPF_EMIT_CALL(map_trace_func);
+
+	/* restore return code from map update */
+	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_FP,
+				      stack_offset - reg_size_bytes);
+
+	*extra_stack = max_t(int, *extra_stack, nregs * reg_size_bytes);
+	return cnt;
+}
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -12694,7 +12736,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_insn insn_buf[16];
 	struct bpf_prog *new_prog;
 	struct bpf_map *map_ptr;
-	int i, ret, cnt, delta = 0;
+	int i, ret, cnt, delta = 0, extra_stack = 0;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		/* Make divide-by-zero exceptions impossible. */
@@ -12998,11 +13040,23 @@ patch_map_ops_generic:
 				insn->imm = BPF_CALL_IMM(ops->map_lookup_elem);
 				continue;
 			case BPF_FUNC_map_update_elem:
-				insn->imm = BPF_CALL_IMM(ops->map_update_elem);
-				continue;
+				cnt = get_map_tracing_patchlet(
+						ops->map_update_elem,
+						bpf_trace_map_update_elem,
+						/*nregs=*/4, prog, insn_buf,
+						&extra_stack);
+				if (cnt < 0)
+					return cnt;
+				goto patch_map_ops_tracing;
 			case BPF_FUNC_map_delete_elem:
-				insn->imm = BPF_CALL_IMM(ops->map_delete_elem);
-				continue;
+				cnt = get_map_tracing_patchlet(
+						ops->map_delete_elem,
+						bpf_trace_map_delete_elem,
+						/*nregs=*/2, prog, insn_buf,
+						&extra_stack);
+				if (cnt < 0)
+					return cnt;
+				goto patch_map_ops_tracing;
 			case BPF_FUNC_map_push_elem:
 				insn->imm = BPF_CALL_IMM(ops->map_push_elem);
 				continue;
@@ -13018,6 +13072,16 @@ patch_map_ops_generic:
 			}
 
 			goto patch_call_imm;
+patch_map_ops_tracing:
+			new_prog = bpf_patch_insn_data(env, i + delta,
+						       insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			continue;
 		}
 
 		/* Implement bpf_jiffies64 inline. */
@@ -13092,6 +13156,7 @@ patch_call_imm:
 	}
 
 	sort_kfunc_descs_by_imm(env->prog);
+	prog->aux->stack_depth += extra_stack;
 
 	return 0;
 }
