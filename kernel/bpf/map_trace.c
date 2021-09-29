@@ -14,6 +14,14 @@ struct bpf_map_trace_target_info {
 static struct list_head targets = LIST_HEAD_INIT(targets);
 static DEFINE_MUTEX(targets_mutex);
 
+struct bpf_map_trace_link {
+	struct bpf_link link;
+	struct bpf_map *map;
+	struct bpf_map_trace_target_info *tinfo;
+};
+
+static DEFINE_MUTEX(link_mutex);
+
 int bpf_map_trace_reg_target(const struct bpf_map_trace_reg *reg_info)
 {
 	struct bpf_map_trace_target_info *tinfo;
@@ -76,4 +84,67 @@ int bpf_map_initialize_trace_progs(struct bpf_map *map)
 
 	return 0;
 }
+
+static void bpf_map_trace_link_release(struct bpf_link *link)
+{
+	struct bpf_map_trace_link *map_trace_link =
+			container_of(link, struct bpf_map_trace_link, link);
+	enum bpf_map_trace_type trace_type =
+			map_trace_link->tinfo->reg_info->trace_type;
+	struct bpf_map_trace_prog *cur_prog;
+	struct bpf_map_trace_progs *progs;
+
+	progs = map_trace_link->map->trace_progs;
+	mutex_lock(&progs->mutex);
+	list_for_each_entry(cur_prog, &progs->progs[trace_type].list, list) {
+		if (cur_prog->prog == link->prog) {
+			progs->length[trace_type] -= 1;
+			list_del_rcu(&cur_prog->list);
+			kfree_rcu(cur_prog, rcu);
+		}
+	}
+	mutex_unlock(&progs->mutex);
+	bpf_map_put_with_uref(map_trace_link->map);
+}
+
+static void bpf_map_trace_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_map_trace_link *map_trace_link =
+			container_of(link, struct bpf_map_trace_link, link);
+
+	kfree(map_trace_link);
+}
+
+static int bpf_map_trace_link_replace(struct bpf_link *link,
+				      struct bpf_prog *new_prog,
+				      struct bpf_prog *old_prog)
+{
+	int ret = 0;
+
+	mutex_lock(&link_mutex);
+	if (old_prog && link->prog != old_prog) {
+		ret = -EPERM;
+		goto out_unlock;
+	}
+
+	if (link->prog->type != new_prog->type ||
+	    link->prog->expected_attach_type != new_prog->expected_attach_type ||
+	    link->prog->aux->attach_btf_id != new_prog->aux->attach_btf_id) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	old_prog = xchg(&link->prog, new_prog);
+	bpf_prog_put(old_prog);
+
+out_unlock:
+	mutex_unlock(&link_mutex);
+	return ret;
+}
+
+static const struct bpf_link_ops bpf_map_trace_link_ops = {
+	.release = bpf_map_trace_link_release,
+	.dealloc = bpf_map_trace_link_dealloc,
+	.update_prog = bpf_map_trace_link_replace,
+};
 
