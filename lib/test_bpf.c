@@ -14205,6 +14205,9 @@ module_param(test_id, int, 0);
 static int test_range[2] = { 0, ARRAY_SIZE(tests) - 1 };
 module_param_array(test_range, int, NULL, 0);
 
+static char test_type[32];
+module_param_string(test_type, test_type, sizeof(test_type), 0);
+
 static __init int find_test_index(const char *test_name)
 {
 	int i;
@@ -14857,24 +14860,39 @@ static int __init test_bpf_init(void)
 	struct bpf_array *progs = NULL;
 	int ret;
 
-	ret = prepare_bpf_tests();
-	if (ret < 0)
-		return ret;
+	if (strlen(test_type) &&
+	    strcmp(test_type, "test_bpf") &&
+	    strcmp(test_type, "test_tail_calls") &&
+	    strcmp(test_type, "test_skb_segment")) {
+		pr_err("test_bpf: invalid test_type '%s' specified.\n", test_type);
+		return -EINVAL;
+	}
 
-	ret = test_bpf();
-	destroy_bpf_tests();
-	if (ret)
-		return ret;
+	if (!strlen(test_type) || !strcmp(test_type, "test_bpf")) {
+		ret = prepare_bpf_tests();
+		if (ret < 0)
+			return ret;
 
-	ret = prepare_tail_call_tests(&progs);
-	if (ret)
-		return ret;
-	ret = test_tail_calls(progs);
-	destroy_tail_call_tests(progs);
-	if (ret)
-		return ret;
+		ret = test_bpf();
+		destroy_bpf_tests();
+		if (ret)
+			return ret;
+	}
 
-	return test_skb_segment();
+	if (!strlen(test_type) || !strcmp(test_type, "test_tail_calls")) {
+		ret = prepare_tail_call_tests(&progs);
+		if (ret)
+			return ret;
+		ret = test_tail_calls(progs);
+		destroy_tail_call_tests(progs);
+		if (ret)
+			return ret;
+	}
+
+	if (!strlen(test_type) || !strcmp(test_type, "test_skb_segment"))
+		return test_skb_segment();
+
+	return 0;
 }
 
 static void __exit test_bpf_exit(void)
