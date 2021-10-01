@@ -12,8 +12,8 @@
 #include "cgroup_helpers.h"
 #include "network_helpers.h"
 #include "test_tcp_hdr_options.h"
-#include "test_tcp_hdr_options.skel.h"
-#include "test_misc_tcp_hdr_options.skel.h"
+#include "test_sockops_tcp_hdr_options.skel.h"
+#include "test_sockops_misc_tcp_hdr_options.skel.h"
 
 #define LO_ADDR6 "::1"
 #define CG_NAME "/tcpbpf-hdr-opt-test"
@@ -25,8 +25,8 @@ static struct bpf_test_option exp_active_fin_in;
 static struct hdr_stg exp_passive_hdr_stg;
 static struct hdr_stg exp_active_hdr_stg = { .active = true, };
 
-static struct test_misc_tcp_hdr_options *misc_skel;
-static struct test_tcp_hdr_options *skel;
+static struct test_sockops_misc_tcp_hdr_options *misc_skel;
+static struct test_sockops_tcp_hdr_options *skel;
 static int lport_linum_map_fd;
 static int hdr_stg_map_fd;
 static __u32 duration;
@@ -570,15 +570,15 @@ static struct test tests[] = {
 	DEF_TEST(misc),
 };
 
-void test_tcp_hdr_options(void)
+void test_sockops_tcp_hdr_options(void)
 {
 	int i;
 
-	skel = test_tcp_hdr_options__open_and_load();
+	skel = test_sockops_tcp_hdr_options__open_and_load();
 	if (CHECK(!skel, "open and load skel", "failed"))
 		return;
 
-	misc_skel = test_misc_tcp_hdr_options__open_and_load();
+	misc_skel = test_sockops_misc_tcp_hdr_options__open_and_load();
 	if (CHECK(!misc_skel, "open and load misc test skel", "failed"))
 		goto skel_destroy;
 
@@ -600,6 +600,6 @@ void test_tcp_hdr_options(void)
 
 	close(cg_fd);
 skel_destroy:
-	test_misc_tcp_hdr_options__destroy(misc_skel);
-	test_tcp_hdr_options__destroy(skel);
+	test_sockops_misc_tcp_hdr_options__destroy(misc_skel);
+	test_sockops_tcp_hdr_options__destroy(skel);
 }
