@@ -761,7 +761,7 @@ emit_clear:
 			 * we'll just fall through to the epilogue.
 			 */
 			if (i != flen - 1)
-				PPC_JMP(exit_addr);
+				bpf_jit_emit_exit_insn(image, ctx, b2p[TMP_REG_1], exit_addr);
 			/* else fall through to the epilogue */
 			break;
 

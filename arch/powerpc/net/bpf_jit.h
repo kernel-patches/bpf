@@ -126,6 +126,7 @@
 
 #define SEEN_FUNC	0x20000000 /* might call external helpers */
 #define SEEN_TAILCALL	0x40000000 /* uses tail calls */
+#define SEEN_BIG_PROG	0x80000000 /* large prog, >32MB */
 
 #define SEEN_VREG_MASK	0x1ff80000 /* Volatile registers r3-r12 */
 #define SEEN_NVREG_MASK	0x0003ffff /* Non volatile registers r14-r31 */
@@ -179,6 +180,8 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *
 void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx);
 void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx);
 void bpf_jit_realloc_regs(struct codegen_context *ctx);
+int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx,
+					int tmp_reg, unsigned long exit_addr);
 
 #endif
 
