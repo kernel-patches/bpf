@@ -6904,19 +6904,19 @@ static const u8 *bpf_search_tcp_opt(const u8 *op, const u8 *opend,
 	return ERR_PTR(-ENOMSG);
 }
 
-BPF_CALL_4(bpf_sock_ops_load_hdr_opt, struct bpf_sock_ops_kern *, bpf_sock,
-	   void *, search_res, u32, len, u64, flags)
+static int bpf_load_hdr_opt(const u8 *op, const u8 *opend, void *search_res,
+			    u32 len)
 {
-	bool eol, load_syn = flags & BPF_LOAD_HDR_OPT_TCP_SYN;
-	const u8 *op, *opend, *magic, *search = search_res;
 	u8 search_kind, search_len, copy_len, magic_len;
+	const u8 *magic, *search = search_res;
+	bool eol;
 	int ret;
 
 	/* 2 byte is the minimal option len except TCPOPT_NOP and
 	 * TCPOPT_EOL which are useless for the bpf prog to learn
 	 * and this helper disallow loading them also.
 	 */
-	if (len < 2 || flags & ~BPF_LOAD_HDR_OPT_TCP_SYN)
+	if (len < 2)
 		return -EINVAL;
 
 	search_kind = search[0];
@@ -6939,6 +6939,67 @@ BPF_CALL_4(bpf_sock_ops_load_hdr_opt, struct bpf_sock_ops_kern *, bpf_sock,
 		magic_len = 0;
 	}
 
+	op = bpf_search_tcp_opt(op, opend, search_kind, magic, magic_len,
+				&eol);
+
+	if (IS_ERR(op))
+		return PTR_ERR(op);
+
+	copy_len = op[1];
+	ret = copy_len;
+	if (copy_len > len) {
+		ret = -ENOSPC;
+		copy_len = len;
+	}
+
+	memcpy(search_res, op, copy_len);
+	return ret;
+}
+
+BPF_CALL_4(bpf_xdp_load_hdr_opt, struct xdp_buff *, xdp,
+	   void *, search_res, u32, len, u64, flags)
+{
+	const void *op, *opend;
+	struct tcphdr *th;
+
+	/* The upper 16 bits of flags contain the offset to the tcp header.
+	 * No other bits should be set.
+	 */
+	if (flags & 0xffffffffffff)
+		return -EINVAL;
+
+	th = xdp->data + (flags >> BPF_LOAD_HDR_OPT_TCP_OFFSET_SHIFT);
+	op = (void *)th + sizeof(struct tcphdr);
+	if (unlikely(op > xdp->data_end))
+		return -EINVAL;
+
+	opend = (void *)th + th->doff * 4;
+	if (unlikely(opend > xdp->data_end))
+		return -EINVAL;
+
+	return bpf_load_hdr_opt(op, opend, search_res, len);
+}
+
+static const struct bpf_func_proto bpf_xdp_load_hdr_opt_proto = {
+	.func		= bpf_xdp_load_hdr_opt,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_sock_ops_load_hdr_opt, struct bpf_sock_ops_kern *, bpf_sock,
+	   void *, search_res, u32, len, u64, flags)
+{
+	bool load_syn = flags & BPF_LOAD_HDR_OPT_TCP_SYN;
+	const u8 *op, *opend;
+	int ret;
+
+	if (flags & ~BPF_LOAD_HDR_OPT_TCP_SYN)
+		return -EINVAL;
+
 	if (load_syn) {
 		ret = bpf_sock_ops_get_syn(bpf_sock, TCP_BPF_SYN, &op);
 		if (ret < 0)
@@ -6956,20 +7017,7 @@ BPF_CALL_4(bpf_sock_ops_load_hdr_opt, struct bpf_sock_ops_kern *, bpf_sock,
 		op = bpf_sock->skb->data + sizeof(struct tcphdr);
 	}
 
-	op = bpf_search_tcp_opt(op, opend, search_kind, magic, magic_len,
-				&eol);
-	if (IS_ERR(op))
-		return PTR_ERR(op);
-
-	copy_len = op[1];
-	ret = copy_len;
-	if (copy_len > len) {
-		ret = -ENOSPC;
-		copy_len = len;
-	}
-
-	memcpy(search_res, op, copy_len);
-	return ret;
+	return bpf_load_hdr_opt(op, opend, search_res, len);
 }
 
 static const struct bpf_func_proto bpf_sock_ops_load_hdr_opt_proto = {
@@ -7488,6 +7536,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_tcp_check_syncookie_proto;
 	case BPF_FUNC_tcp_gen_syncookie:
 		return &bpf_tcp_gen_syncookie_proto;
+	case BPF_FUNC_load_hdr_opt:
+		return &bpf_xdp_load_hdr_opt_proto;
 #endif
 	default:
 		return bpf_sk_base_func_proto(func_id);

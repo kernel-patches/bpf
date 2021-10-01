@@ -4272,21 +4272,28 @@ union bpf_attr {
  *		A non-negative value equal to or less than *size* on success,
  *		or a negative error in case of failure.
  *
- * long bpf_load_hdr_opt(struct bpf_sock_ops *skops, void *searchby_res, u32 len, u64 flags)
+ * long bpf_load_hdr_opt(void *ctx, void *searchby_res, u32 len, u64 flags)
  *	Description
- *		Load header option.  Support reading a particular TCP header
- *		option for bpf program (**BPF_PROG_TYPE_SOCK_OPS**).
+ *		Load header option. Support reading a particular TCP header
+ *		option for bpf programs (**BPF_PROG_TYPE_SOCK_OPS** and
+ *		**BPF_PROG_TYPE_XDP**).
  *
- *		If *flags* is 0, it will search the option from the
- *		*skops*\ **->skb_data**.  The comment in **struct bpf_sock_ops**
- *		has details on what skb_data contains under different
- *		*skops*\ **->op**.
+ *		*ctx* is either **struct bpf_sock_ops** for SOCK_OPS programs or
+ *		**struct xdp_md** for XDP programs.
+ *
+ *		For SOCK_OPS programs, if *flags* is 0, it will search the option
+ *		from the *skops*\ **->skb_data**.  The comment in
+ *		**struct bpf_sock_ops** has details on what skb_data contains
+ *		under different *skops*\ **->op**.
+ *
+ *		For XDP programs, the upper 16 bits of **flags** should contain
+ *		the offset to the tcp header.
  *
  *		The first byte of the *searchby_res* specifies the
  *		kind that it wants to search.
  *
  *		If the searching kind is an experimental kind
- *		(i.e. 253 or 254 according to RFC6994).  It also
+ *		(i.e. 253 or 254 according to RFC6994), it also
  *		needs to specify the "magic" which is either
  *		2 bytes or 4 bytes.  It then also needs to
  *		specify the size of the magic by using
@@ -4309,7 +4316,7 @@ union bpf_attr {
  *		*len* must be at least 2 bytes which is the minimal size
  *		of a header option.
  *
- *		Supported flags:
+ *		Supported flags for **SOCK_OPS** programs:
  *
  *		* **BPF_LOAD_HDR_OPT_TCP_SYN** to search from the
  *		  saved_syn packet or the just-received syn packet.
@@ -6018,6 +6025,7 @@ enum {
 
 enum {
 	BPF_LOAD_HDR_OPT_TCP_SYN = (1ULL << 0),
+	BPF_LOAD_HDR_OPT_TCP_OFFSET_SHIFT = 48,
 };
 
 /* args[0] value during BPF_SOCK_OPS_HDR_OPT_LEN_CB and
