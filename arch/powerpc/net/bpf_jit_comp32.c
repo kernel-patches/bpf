@@ -852,7 +852,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *
 			 * we'll just fall through to the epilogue.
 			 */
 			if (i != flen - 1)
-				PPC_JMP(exit_addr);
+				bpf_jit_emit_exit_insn(image, ctx, tmp_reg, exit_addr);
 			/* else fall through to the epilogue */
 			break;
 

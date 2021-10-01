@@ -72,6 +72,21 @@ static int bpf_jit_fixup_subprog_calls(struct bpf_prog *fp, u32 *image,
 	return 0;
 }
 
+int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx,
+					int tmp_reg, unsigned long exit_addr)
+{
+	if (!(ctx->seen & SEEN_BIG_PROG) && is_offset_in_branch_range(exit_addr)) {
+		PPC_JMP(exit_addr);
+	} else {
+		ctx->seen |= SEEN_BIG_PROG;
+		PPC_FUNC_ADDR(tmp_reg, (unsigned long)image + exit_addr);
+		EMIT(PPC_RAW_MTCTR(tmp_reg));
+		EMIT(PPC_RAW_BCTR());
+	}
+
+	return 0;
+}
+
 struct powerpc64_jit_data {
 	struct bpf_binary_header *header;
 	u32 *addrs;
@@ -155,12 +170,17 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 		goto out_addrs;
 	}
 
+	if (!is_offset_in_branch_range((long)cgctx.idx * 4))
+		cgctx.seen |= SEEN_BIG_PROG;
+
 	/*
 	 * If we have seen a tail call, we need a second pass.
 	 * This is because bpf_jit_emit_common_epilogue() is called
 	 * from bpf_jit_emit_tail_call() with a not yet stable ctx->seen.
+	 * We also need a second pass if we ended up with too large
+	 * a program so as to fix branches.
 	 */
-	if (cgctx.seen & SEEN_TAILCALL) {
+	if (cgctx.seen & (SEEN_TAILCALL | SEEN_BIG_PROG)) {
 		cgctx.idx = 0;
 		if (bpf_jit_build_body(fp, 0, &cgctx, addrs, false)) {
 			fp = org_fp;
