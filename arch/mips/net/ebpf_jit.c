@@ -2416,3 +2416,9 @@ out_err:
 		bpf_jit_binary_free(header);
 	goto out_ctx;
 }
+
+/* Indicate the JIT backend supports mixing bpf2bpf and tailcalls. */
+bool bpf_jit_supports_subprog_tailcalls(void)
+{
+	return true;
+}
