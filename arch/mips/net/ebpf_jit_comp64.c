@@ -167,7 +167,15 @@ static int gen_imm_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 int build_one_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 		   int this_idx, int exit_idx)
 {
+	/*
+	 * Since CMPXCHG uses R0 implicitly, outside of a passed
+	 * bpf_insn, we fake a lookup to get the MIPS base reg.
+	 */
+	const struct bpf_insn r0_insn = {.src_reg = BPF_REG_0};
+	const int r0 = ebpf_to_mips_reg(ctx, &r0_insn,
+					REG_SRC_NO_FP);
 	const int bpf_class = BPF_CLASS(insn->code);
+	const int bpf_size = BPF_SIZE(insn->code);
 	const int bpf_op = BPF_OP(insn->code);
 	bool need_swap, did_move, cmp_eq;
 	unsigned int target = 0;
@@ -944,6 +952,32 @@ jeq_common:
 	case BPF_STX | BPF_H | BPF_MEM:
 	case BPF_STX | BPF_W | BPF_MEM:
 	case BPF_STX | BPF_DW | BPF_MEM:
+		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
+		src = ebpf_to_mips_reg(ctx, insn, REG_SRC_FP_OK);
+		if (src < 0 || dst < 0)
+			return -EINVAL;
+		mem_off = insn->off;
+		switch (BPF_SIZE(insn->code)) {
+		case BPF_B:
+			emit_instr(ctx, sb, src, mem_off, dst);
+			break;
+		case BPF_H:
+			emit_instr(ctx, sh, src, mem_off, dst);
+			break;
+		case BPF_W:
+			emit_instr(ctx, sw, src, mem_off, dst);
+			break;
+		case BPF_DW:
+			if (get_reg_val_type(ctx, this_idx, insn->src_reg) == REG_32BIT) {
+				emit_instr(ctx, daddu, MIPS_R_AT, src, MIPS_R_ZERO);
+				emit_instr(ctx, dinsu, MIPS_R_AT, MIPS_R_ZERO, 32, 32);
+				src = MIPS_R_AT;
+			}
+			emit_instr(ctx, sd, src, mem_off, dst);
+			break;
+		}
+		break;
+
 	case BPF_STX | BPF_W | BPF_ATOMIC:
 	case BPF_STX | BPF_DW | BPF_ATOMIC:
 		dst = ebpf_to_mips_reg(ctx, insn, REG_DST_FP_OK);
@@ -951,71 +985,94 @@ jeq_common:
 		if (src < 0 || dst < 0)
 			return -EINVAL;
 		mem_off = insn->off;
-		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
-			if (insn->imm != BPF_ADD) {
-				pr_err("ATOMIC OP %02x NOT HANDLED\n", insn->imm);
-				return -EINVAL;
+		/*
+		 * If mem_off does not fit within the 9 bit ll/sc
+		 * instruction immediate field, use a temp reg.
+		 */
+		if (MIPS_ISA_REV >= 6 &&
+		    (mem_off >= BIT(8) || mem_off < -BIT(8))) {
+			emit_instr(ctx, daddiu, MIPS_R_T6, dst, mem_off);
+			mem_off = 0;
+			dst = MIPS_R_T6;
+		}
+		/* Copy or adjust 32-bit src regs based on BPF op size. */
+		ts = get_reg_val_type(ctx, this_idx, insn->src_reg);
+		if (bpf_size == BPF_W) {
+			if (ts == REG_32BIT) {
+				emit_instr(ctx, sll, MIPS_R_T9, src, 0);
+				src = MIPS_R_T9;
 			}
+			/* Ensure proper old == new comparison .*/
+			if (insn->imm == BPF_CMPXCHG)
+				emit_instr(ctx, sll, r0, r0, 0);
+		}
+		if (bpf_size == BPF_DW && ts == REG_32BIT) {
+			emit_instr(ctx, move, MIPS_R_T9, src);
+			emit_instr(ctx, dinsu, MIPS_R_T9, MIPS_R_ZERO, 32, 32);
+			src = MIPS_R_T9;
+		}
+
+/* Helper to simplify using BPF_DW/BPF_W atomic opcodes. */
+#define emit_instr_size(ctx, func64, func32, ...)                              \
+do {                                                                           \
+	if (bpf_size == BPF_DW)                                                \
+		emit_instr(ctx, func64, ##__VA_ARGS__);                        \
+	else                                                                   \
+		emit_instr(ctx, func32, ##__VA_ARGS__);                        \
+} while (0)
+
+		/* Track variable branch offset due to CMPXCHG. */
+		b_off = ctx->idx;
+		emit_instr_size(ctx, lld, ll, MIPS_R_AT, mem_off, dst);
+		switch (insn->imm) {
+		case BPF_AND | BPF_FETCH:
+		case BPF_AND:
+			emit_instr(ctx, and, MIPS_R_T8, MIPS_R_AT, src);
+			break;
+		case BPF_OR | BPF_FETCH:
+		case BPF_OR:
+			emit_instr(ctx, or, MIPS_R_T8, MIPS_R_AT, src);
+			break;
+		case BPF_XOR | BPF_FETCH:
+		case BPF_XOR:
+			emit_instr(ctx, xor, MIPS_R_T8, MIPS_R_AT, src);
+			break;
+		case BPF_ADD | BPF_FETCH:
+		case BPF_ADD:
+			emit_instr_size(ctx, daddu, addu, MIPS_R_T8, MIPS_R_AT, src);
+			break;
+		case BPF_XCHG:
+			emit_instr_size(ctx, daddu, addu, MIPS_R_T8, MIPS_R_ZERO, src);
+			break;
+		case BPF_CMPXCHG:
 			/*
-			 * If mem_off does not fit within the 9 bit ll/sc
-			 * instruction immediate field, use a temp reg.
+			 * If R0 != old_val then break out of LL/SC loop
 			 */
-			if (MIPS_ISA_REV >= 6 &&
-			    (mem_off >= BIT(8) || mem_off < -BIT(8))) {
-				emit_instr(ctx, daddiu, MIPS_R_T6,
-						dst, mem_off);
-				mem_off = 0;
-				dst = MIPS_R_T6;
-			}
-			switch (BPF_SIZE(insn->code)) {
-			case BPF_W:
-				if (get_reg_val_type(ctx, this_idx, insn->src_reg) == REG_32BIT) {
-					emit_instr(ctx, sll, MIPS_R_AT, src, 0);
-					src = MIPS_R_AT;
-				}
-				emit_instr(ctx, ll, MIPS_R_T8, mem_off, dst);
-				emit_instr(ctx, addu, MIPS_R_T8, MIPS_R_T8, src);
-				emit_instr(ctx, sc, MIPS_R_T8, mem_off, dst);
-				/*
-				 * On failure back up to LL (-4
-				 * instructions of 4 bytes each
-				 */
-				emit_instr(ctx, beq, MIPS_R_T8, MIPS_R_ZERO, -4 * 4);
-				emit_instr(ctx, nop);
-				break;
-			case BPF_DW:
-				if (get_reg_val_type(ctx, this_idx, insn->src_reg) == REG_32BIT) {
-					emit_instr(ctx, daddu, MIPS_R_AT, src, MIPS_R_ZERO);
-					emit_instr(ctx, dinsu, MIPS_R_AT, MIPS_R_ZERO, 32, 32);
-					src = MIPS_R_AT;
-				}
-				emit_instr(ctx, lld, MIPS_R_T8, mem_off, dst);
-				emit_instr(ctx, daddu, MIPS_R_T8, MIPS_R_T8, src);
-				emit_instr(ctx, scd, MIPS_R_T8, mem_off, dst);
-				emit_instr(ctx, beq, MIPS_R_T8, MIPS_R_ZERO, -4 * 4);
-				emit_instr(ctx, nop);
-				break;
-			}
-		} else { /* BPF_MEM */
-			switch (BPF_SIZE(insn->code)) {
-			case BPF_B:
-				emit_instr(ctx, sb, src, mem_off, dst);
-				break;
-			case BPF_H:
-				emit_instr(ctx, sh, src, mem_off, dst);
-				break;
-			case BPF_W:
-				emit_instr(ctx, sw, src, mem_off, dst);
-				break;
-			case BPF_DW:
-				if (get_reg_val_type(ctx, this_idx, insn->src_reg) == REG_32BIT) {
-					emit_instr(ctx, daddu, MIPS_R_AT, src, MIPS_R_ZERO);
-					emit_instr(ctx, dinsu, MIPS_R_AT, MIPS_R_ZERO, 32, 32);
-					src = MIPS_R_AT;
-				}
-				emit_instr(ctx, sd, src, mem_off, dst);
-				break;
-			}
+			emit_instr(ctx, bne, r0, MIPS_R_AT, 4 * 4);
+			/* Delay slot */
+			emit_instr_size(ctx, daddu, addu, MIPS_R_T8, MIPS_R_ZERO, src);
+			/* Return old_val in R0 */
+			src = r0;
+			break;
+		default:
+			pr_err("ATOMIC OP %02x NOT HANDLED\n", insn->imm);
+			return -EINVAL;
+		}
+		emit_instr_size(ctx, scd, sc, MIPS_R_T8, mem_off, dst);
+#undef emit_instr_size
+		/*
+		 * On failure back up to LL (calculate # insns)
+		 */
+		b_off = (b_off - ctx->idx - 1) * 4;
+		emit_instr(ctx, beqz, MIPS_R_T8, b_off);
+		emit_instr(ctx, nop);
+		/*
+		 * Using fetch returns old value in src or R0
+		 */
+		if (insn->imm & BPF_FETCH) {
+			if (bpf_size == BPF_W)
+				emit_instr(ctx, dinsu, MIPS_R_AT, MIPS_R_ZERO, 32, 32);
+			emit_instr(ctx, move, src, MIPS_R_AT);
 		}
 		break;
 
