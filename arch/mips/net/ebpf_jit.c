@@ -1590,6 +1590,7 @@ static int reg_val_propagate_range(struct jit_ctx *ctx, u64 initial_rvt,
 			case BPF_AND:
 			case BPF_LSH:
 			case BPF_RSH:
+			case BPF_ARSH:
 			case BPF_NEG:
 			case BPF_MOD:
 			case BPF_XOR:
