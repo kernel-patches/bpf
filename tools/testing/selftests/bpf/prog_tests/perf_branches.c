@@ -16,7 +16,7 @@ static void check_good_sample(struct test_perf_branches *skel)
 	int duration = 0;
 
 	if (CHECK(!skel->bss->valid, "output not valid",
-		 "no valid sample from prog"))
+		 "no valid sample from prog\n"))
 		return;
 
 	/*
@@ -46,7 +46,7 @@ static void check_bad_sample(struct test_perf_branches *skel)
 	int duration = 0;
 
 	if (CHECK(!skel->bss->valid, "output not valid",
-		 "no valid sample from prog"))
+		 "no valid sample from prog\n"))
 		return;
 
 	CHECK((required_size != -EINVAL && required_size != -ENOENT),
@@ -84,7 +84,7 @@ static void test_perf_branches_common(int perf_fd,
 	if (CHECK(err, "set_affinity", "cpu #0, err %d\n", err))
 		goto out_destroy;
 	/* spin the loop for a while (random high number) */
-	for (i = 0; i < 1000000; ++i)
+	for (i = 0; i < 100000000; ++i)
 		++j;
 
 	test_perf_branches__detach(skel);
