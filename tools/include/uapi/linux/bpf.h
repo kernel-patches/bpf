@@ -4909,6 +4909,19 @@ union bpf_attr {
  *	Return
  *		The number of bytes written to the buffer, or a negative error
  *		in case of failure.
+ *
+ * int bpf_export_errno(int errno_val)
+ *	Description
+ *		If *errno_val* is positive, set the syscall's return error code;
+ *		if *errno_val* is zero, retrieve the previously set code.
+ *
+ *		This helper is currently supported by cgroup programs only.
+ *	Return
+ *		Zero if set is successful, or the previously set error code on
+ *		retrieval. Previously set code may be zero if it was never set.
+ *		On error, a negative value.
+ *
+ *		**-EINVAL** if *errno_val* not between zero and MAX_ERRNO inclusive.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5089,6 +5102,7 @@ union bpf_attr {
 	FN(task_pt_regs),		\
 	FN(get_branch_snapshot),	\
 	FN(trace_vprintk),		\
+	FN(export_errno),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

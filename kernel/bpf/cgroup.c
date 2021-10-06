@@ -1169,6 +1169,28 @@ int __cgroup_bpf_check_dev_permission(short dev_type, u32 major, u32 minor,
 	return ret;
 }
 
+BPF_CALL_1(bpf_export_errno, int, errno_val)
+{
+	struct bpf_cg_run_ctx *ctx =
+		container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+
+	if (errno_val < 0 || errno_val > MAX_ERRNO)
+		return -EINVAL;
+
+	if (!errno_val)
+		return ctx->errno_val;
+
+	ctx->errno_val = errno_val;
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_export_errno_proto = {
+	.func		= bpf_export_errno,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 cgroup_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1181,6 +1203,8 @@ cgroup_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_current_cgroup_id_proto;
 	case BPF_FUNC_perf_event_output:
 		return &bpf_event_output_data_proto;
+	case BPF_FUNC_export_errno:
+		return &bpf_export_errno_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
