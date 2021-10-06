@@ -97,6 +97,7 @@ int bpf_create_map_xattr(const struct bpf_create_map_attr *create_attr)
 	attr.btf_key_type_id = create_attr->btf_key_type_id;
 	attr.btf_value_type_id = create_attr->btf_value_type_id;
 	attr.map_ifindex = create_attr->map_ifindex;
+	attr.map_extra = create_attr->map_extra;
 	if (attr.map_type == BPF_MAP_TYPE_STRUCT_OPS)
 		attr.btf_vmlinux_value_type_id =
 			create_attr->btf_vmlinux_value_type_id;

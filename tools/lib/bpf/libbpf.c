@@ -2274,6 +2274,10 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 			}
 			map_def->pinning = val;
 			map_def->parts |= MAP_DEF_PINNING;
+		} else if (strcmp(name, "map_extra") == 0) {
+			if (!get_map_field_int(map_name, btf, m, &map_def->map_extra))
+				return -EINVAL;
+			map_def->parts |= MAP_DEF_MAP_EXTRA;
 		} else {
 			if (strict) {
 				pr_warn("map '%s': unknown field '%s'.\n", map_name, name);
@@ -2298,6 +2302,7 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 	map->def.value_size = def->value_size;
 	map->def.max_entries = def->max_entries;
 	map->def.map_flags = def->map_flags;
+	map->def.map_extra = def->map_extra;
 
 	map->numa_node = def->numa_node;
 	map->btf_key_type_id = def->key_type_id;
@@ -2322,6 +2327,8 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 		pr_debug("map '%s': found max_entries = %u.\n", map->name, def->max_entries);
 	if (def->parts & MAP_DEF_MAP_FLAGS)
 		pr_debug("map '%s': found map_flags = %u.\n", map->name, def->map_flags);
+	if (def->parts & MAP_DEF_MAP_EXTRA)
+		pr_debug("map '%s': found map_extra = %u.\n", map->name, def->map_extra);
 	if (def->parts & MAP_DEF_PINNING)
 		pr_debug("map '%s': found pinning = %u.\n", map->name, def->pinning);
 	if (def->parts & MAP_DEF_NUMA_NODE)
@@ -4017,6 +4024,7 @@ int bpf_map__reuse_fd(struct bpf_map *map, int fd)
 	map->def.value_size = info.value_size;
 	map->def.max_entries = info.max_entries;
 	map->def.map_flags = info.map_flags;
+	map->def.map_extra = info.map_extra;
 	map->btf_key_type_id = info.btf_key_type_id;
 	map->btf_value_type_id = info.btf_value_type_id;
 	map->reused = true;
@@ -4534,7 +4542,8 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		map_info.key_size == map->def.key_size &&
 		map_info.value_size == map->def.value_size &&
 		map_info.max_entries == map->def.max_entries &&
-		map_info.map_flags == map->def.map_flags);
+		map_info.map_flags == map->def.map_flags &&
+		map_info.map_extra == map->def.map_extra);
 }
 
 static int
@@ -4631,6 +4640,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	create_attr.key_size = def->key_size;
 	create_attr.value_size = def->value_size;
 	create_attr.numa_node = map->numa_node;
+	create_attr.map_extra = def->map_extra;
 
 	if (def->type == BPF_MAP_TYPE_PERF_EVENT_ARRAY && !def->max_entries) {
 		int nr_cpus;
@@ -8636,6 +8646,19 @@ int bpf_map__set_map_flags(struct bpf_map *map, __u32 flags)
 	if (map->fd >= 0)
 		return libbpf_err(-EBUSY);
 	map->def.map_flags = flags;
+	return 0;
+}
+
+__u32 bpf_map__map_extra(const struct bpf_map *map)
+{
+	return map->def.map_extra;
+}
+
+int bpf_map__set_map_extra(struct bpf_map *map, __u32 map_extra)
+{
+	if (map->fd >= 0)
+		return libbpf_err(-EBUSY);
+	map->def.map_extra = map_extra;
 	return 0;
 }
 

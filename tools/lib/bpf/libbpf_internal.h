@@ -193,8 +193,9 @@ enum map_def_parts {
 	MAP_DEF_NUMA_NODE	= 0x080,
 	MAP_DEF_PINNING		= 0x100,
 	MAP_DEF_INNER_MAP	= 0x200,
+	MAP_DEF_MAP_EXTRA	= 0x400,
 
-	MAP_DEF_ALL		= 0x3ff, /* combination of all above */
+	MAP_DEF_ALL		= 0x7ff, /* combination of all above */
 };
 
 struct btf_map_def {
@@ -208,6 +209,7 @@ struct btf_map_def {
 	__u32 map_flags;
 	__u32 numa_node;
 	__u32 pinning;
+	__u32 map_extra;
 };
 
 int parse_btf_map_def(const char *map_name, struct btf *btf,
