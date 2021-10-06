@@ -1376,6 +1376,8 @@ int main(int argc, char **argv)
 		}
 	}
 
+	system("echo 0 > /proc/sys/kernel/perf_cpu_time_max_percent");
+
 	/* ignore workers if we are just listing */
 	if (env.get_test_cnt || env.list_test_names)
 		env.workers = 0;
