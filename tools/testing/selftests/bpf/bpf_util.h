@@ -40,4 +40,15 @@ static inline unsigned int bpf_num_possible_cpus(void)
 	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
 #endif
 
+/* Helper macro for computing the optimal number of bits for a
+ * bloom filter map.
+ *
+ * Mathematically, the optimal bitset size that minimizes the
+ * false positive probability is n * k / ln(2) where n is the expected
+ * number of unique entries in the bloom filter and k is the number of
+ * hash functions. We use 7 / 5 to approximate 1 / ln(2).
+ */
+#define BPF_BLOOM_FILTER_BITSET_SZ(nr_uniq_entries, nr_hash_funcs) \
+	((nr_uniq_entries) * (nr_hash_funcs) / 5 * 7)
+
 #endif /* __BPF_UTIL__ */
