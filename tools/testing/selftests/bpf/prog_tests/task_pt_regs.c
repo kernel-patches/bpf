@@ -3,6 +3,10 @@
 #include <test_progs.h>
 #include "test_task_pt_regs.skel.h"
 
+static int method() {
+	return get_base_addr();
+}
+
 void test_task_pt_regs(void)
 {
 	struct test_task_pt_regs *skel;
@@ -14,7 +18,7 @@ void test_task_pt_regs(void)
 	base_addr = get_base_addr();
 	if (!ASSERT_GT(base_addr, 0, "get_base_addr"))
 		return;
-	uprobe_offset = get_uprobe_offset(&get_base_addr, base_addr);
+	uprobe_offset = get_uprobe_offset(&method, base_addr);
 
 	skel = test_task_pt_regs__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
@@ -32,7 +36,7 @@ void test_task_pt_regs(void)
 	skel->links.handle_uprobe = uprobe_link;
 
 	/* trigger & validate uprobe */
-	get_base_addr();
+	method();
 
 	if (!ASSERT_EQ(skel->bss->uprobe_res, 1, "check_uprobe_res"))
 		goto cleanup;
