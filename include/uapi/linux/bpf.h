@@ -906,6 +906,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_RINGBUF,
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
+	BPF_MAP_TYPE_BITSET,
 };
 
 /* Note that tracing related programs such as
@@ -1252,6 +1253,13 @@ struct bpf_stack_build_id {
 
 #define BPF_OBJ_NAME_LEN 16U
 
+/* map_extra flags for bitset maps
+ *
+ * The lowest 4 bits are reserved for indicating the number of hash functions.
+ * If the number of hash functions is greater than 0, the bitset map will
+ * be used as a bloom filter.
+ */
+
 union bpf_attr {
 	struct { /* anonymous struct used by BPF_MAP_CREATE command */
 		__u32	map_type;	/* one of enum bpf_map_type */
@@ -1274,6 +1282,7 @@ union bpf_attr {
 						   * struct stored as the
 						   * map value
 						   */
+		__u32	map_extra;	/* any per-map-type extra fields */
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */

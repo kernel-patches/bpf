@@ -199,7 +199,8 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 		err = bpf_fd_reuseport_array_update_elem(map, key, value,
 							 flags);
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
-		   map->map_type == BPF_MAP_TYPE_STACK) {
+		   map->map_type == BPF_MAP_TYPE_STACK ||
+		   map->map_type == BPF_MAP_TYPE_BITSET) {
 		err = map->ops->map_push_elem(map, value, flags);
 	} else {
 		rcu_read_lock();
@@ -238,7 +239,8 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	} else if (map->map_type == BPF_MAP_TYPE_REUSEPORT_SOCKARRAY) {
 		err = bpf_fd_reuseport_array_lookup_elem(map, key, value);
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
-		   map->map_type == BPF_MAP_TYPE_STACK) {
+		   map->map_type == BPF_MAP_TYPE_STACK ||
+		   map->map_type == BPF_MAP_TYPE_BITSET) {
 		err = map->ops->map_peek_elem(map, value);
 	} else if (map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
 		/* struct_ops map requires directly updating "value" */
@@ -348,6 +350,7 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->max_entries = attr->max_entries;
 	map->map_flags = bpf_map_flags_retain_permanent(attr->map_flags);
 	map->numa_node = bpf_map_attr_numa_node(attr);
+	map->map_extra = attr->map_extra;
 }
 
 static int bpf_map_alloc_id(struct bpf_map *map)
@@ -553,6 +556,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "value_size:\t%u\n"
 		   "max_entries:\t%u\n"
 		   "map_flags:\t%#x\n"
+		   "map_extra:\t%#x\n"
 		   "memlock:\t%lu\n"
 		   "map_id:\t%u\n"
 		   "frozen:\t%u\n",
@@ -561,6 +565,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   map->value_size,
 		   map->max_entries,
 		   map->map_flags,
+		   map->map_extra,
 		   bpf_map_memory_footprint(map),
 		   map->id,
 		   READ_ONCE(map->frozen));
@@ -810,7 +815,7 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	return ret;
 }
 
-#define BPF_MAP_CREATE_LAST_FIELD btf_vmlinux_value_type_id
+#define BPF_MAP_CREATE_LAST_FIELD map_extra
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
 {
@@ -1079,6 +1084,14 @@ static int map_lookup_elem(union bpf_attr *attr)
 	value = kvmalloc(value_size, GFP_USER | __GFP_NOWARN);
 	if (!value)
 		goto free_key;
+
+	if (map->map_type == BPF_MAP_TYPE_BITSET) {
+		if (copy_from_user(value, uvalue, value_size))
+			err = -EFAULT;
+		else
+			err = bpf_map_copy_value(map, key, value, attr->flags);
+		goto free_value;
+	}
 
 	err = bpf_map_copy_value(map, key, value, attr->flags);
 	if (err)
@@ -1549,6 +1562,12 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 	    map->map_type == BPF_MAP_TYPE_STACK) {
 		err = map->ops->map_pop_elem(map, value);
+	} else if (map->map_type == BPF_MAP_TYPE_BITSET) {
+		if (copy_from_user(value, uvalue, value_size))
+			err = -EFAULT;
+		else
+			err = map->ops->map_pop_elem(map, value);
+		goto free_value;
 	} else if (map->map_type == BPF_MAP_TYPE_HASH ||
 		   map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 		   map->map_type == BPF_MAP_TYPE_LRU_HASH ||

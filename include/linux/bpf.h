@@ -193,6 +193,8 @@ struct bpf_map {
 	struct work_struct work;
 	struct mutex freeze_mutex;
 	u64 writecnt; /* writable mmap cnt; protected by freeze_mutex */
+
+	u32 map_extra; /* any per-map-type extra fields */
 };
 
 static inline bool map_value_has_spin_lock(const struct bpf_map *map)
