@@ -19,6 +19,7 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 	int err = -1, pmu_fd = -1;
 	char buf[256];
 	pid_t pid;
+	int attempts = 100;
 
 	if (!ASSERT_OK(pipe(pipe_c2p), "pipe_c2p"))
 		return;
@@ -63,7 +64,10 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 		ASSERT_EQ(read(pipe_p2c[0], buf, 1), 1, "pipe_read");
 
 		/* wait a little for signal handler */
-		sleep(1);
+		while (attempts > 0 && !sigusr1_received) {
+			attempts--;
+			usleep(500 + rand() % 500);
+		}
 
 		buf[0] = sigusr1_received ? '2' : '0';
 		ASSERT_EQ(write(pipe_c2p[1], buf, 1), 1, "pipe_write");
