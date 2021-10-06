@@ -1500,3 +1500,18 @@ out:
 
 	return env.fail_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+
+__u64 read_perf_max_sample_freq(void)
+{
+	__u64 sample_freq = 1000; /* fallback to 1000 on error */
+	FILE *f;
+	__u32 duration = 0;
+
+	f = fopen("/proc/sys/kernel/perf_event_max_sample_rate", "r");
+	if (f == NULL)
+		return sample_freq;
+	CHECK(fscanf(f, "%llu", &sample_freq) != 1, "Get max sample rate",
+	      "return default value: 5000,err %d\n", -errno);
+	fclose(f);
+	return sample_freq;
+}
