@@ -1665,6 +1665,8 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 			if (used <= 0) {
 				if (!copied)
 					copied = used;
+				if (used == -EAGAIN)
+					continue;
 				break;
 			} else if (used <= len) {
 				seq += used;
