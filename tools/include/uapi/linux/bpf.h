@@ -4037,6 +4037,13 @@ union bpf_attr {
  * 	Return
  * 		Current *ktime*.
  *
+ * u64 bpf_read_raw_cpu_clock(void)
+ * 	Description
+ * 		Return the architecture specific CPU clock value.
+ * 		For x86, this is the TSC clock.
+ * 	Return
+ * 		*CPU clock value*
+ *
  * long bpf_seq_printf(struct seq_file *m, const char *fmt, u32 fmt_size, const void *data, u32 data_len)
  * 	Description
  * 		**bpf_seq_printf**\ () uses seq_file **seq_printf**\ () to print
@@ -5089,6 +5096,7 @@ union bpf_attr {
 	FN(task_pt_regs),		\
 	FN(get_branch_snapshot),	\
 	FN(trace_vprintk),		\
+	FN(read_raw_cpu_clock),         \
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

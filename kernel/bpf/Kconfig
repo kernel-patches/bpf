@@ -21,6 +21,10 @@ config HAVE_EBPF_JIT
 config ARCH_WANT_DEFAULT_BPF_JIT
 	bool
 
+# Used by archs to tell they support reading raw CPU clock
+config ARCH_HAS_BPF_RAW_CPU_CLOCK
+	bool
+
 menu "BPF subsystem"
 
 config BPF_SYSCALL

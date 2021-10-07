@@ -18,6 +18,10 @@
 
 #include "../../lib/kstrtox.h"
 
+#ifdef CONFIG_ARCH_HAS_BPF_RAW_CPU_CLOCK
+#include <asm/bpf_raw_cpu_clock.h>
+#endif
+
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
  * bpf_map_lookup_elem_proto, so that verifier can properly check the arguments
@@ -164,6 +168,21 @@ BPF_CALL_0(bpf_ktime_get_boot_ns)
 
 const struct bpf_func_proto bpf_ktime_get_boot_ns_proto = {
 	.func		= bpf_ktime_get_boot_ns,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+};
+
+BPF_CALL_0(bpf_read_raw_cpu_clock)
+{
+#ifdef CONFIG_ARCH_HAS_BPF_RAW_CPU_CLOCK
+	return read_raw_cpu_clock();
+#else
+	return sched_clock();
+#endif
+}
+
+const struct bpf_func_proto bpf_read_raw_cpu_clock_proto = {
+	.func		= bpf_read_raw_cpu_clock,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 };
@@ -1366,6 +1385,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_ktime_get_boot_ns_proto;
 	case BPF_FUNC_ktime_get_coarse_ns:
 		return &bpf_ktime_get_coarse_ns_proto;
+	case BPF_FUNC_read_raw_cpu_clock:
+		return &bpf_read_raw_cpu_clock_proto;
 	case BPF_FUNC_ringbuf_output:
 		return &bpf_ringbuf_output_proto;
 	case BPF_FUNC_ringbuf_reserve:
