@@ -40,9 +40,16 @@ int kern_ver = 0;
 
 struct s out5 = {};
 
+const volatile int in_dynarr_sz SEC(".rodata.dyn");
+const volatile int in_dynarr[4] SEC(".rodata.dyn") = { -1, -2, -3, -4 };
+
+int out_dynarr[4] SEC(".data.dyn") = { 1, 2, 3, 4 };
+
 SEC("raw_tp/sys_enter")
 int handler(const void *ctx)
 {
+	int i;
+
 	out1 = in1;
 	out2 = in2;
 	out3 = in3;
@@ -52,6 +59,9 @@ int handler(const void *ctx)
 
 	bpf_syscall = CONFIG_BPF_SYSCALL;
 	kern_ver = LINUX_KERNEL_VERSION;
+
+	for (i = 0; i < in_dynarr_sz; i++)
+		out_dynarr[i] = in_dynarr[i];
 
 	return 0;
 }
