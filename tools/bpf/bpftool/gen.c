@@ -192,7 +192,7 @@ static int codegen_datasec_def(struct bpf_object *obj,
 static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 {
 	struct btf *btf = bpf_object__btf(obj);
-	int n = btf__get_nr_types(btf);
+	int n = btf__type_cnt(btf);
 	struct btf_dump *d;
 	int i, err = 0;
 
@@ -200,7 +200,7 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 	if (IS_ERR(d))
 		return PTR_ERR(d);
 
-	for (i = 1; i <= n; i++) {
+	for (i = 1; i < n; i++) {
 		const struct btf_type *t = btf__type_by_id(btf, i);
 
 		if (!btf_is_datasec(t))
