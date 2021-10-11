@@ -97,6 +97,72 @@ static enum bpf_attach_type parse_attach_type(const char *str)
 	return __MAX_BPF_ATTACH_TYPE;
 }
 
+#define holder_prep_needed_rec_sz(nr, rec_size)\
+({						\
+	holder.nr = info->nr;			\
+	needed += holder.nr * rec_size;		\
+})
+
+#define holder_prep_needed(nr, rec_size)	\
+({						\
+	holder.nr = info->nr;			\
+	holder.rec_size = info->rec_size;	\
+	needed += holder.nr * holder.rec_size;	\
+})
+
+#define holder_set_ptr(field, nr, rec_size)	\
+({						\
+	holder.field = ptr_to_u64(ptr);		\
+	ptr += nr * rec_size;			\
+})
+
+static int prep_prog_info(struct bpf_prog_info *const info, enum dump_mode mode,
+			  void **info_data, size_t *const info_data_sz)
+{
+	struct bpf_prog_info holder = {};
+	size_t needed = 0;
+	void *ptr;
+
+	if (mode == DUMP_JITED)
+		holder_prep_needed_rec_sz(jited_prog_len, 1);
+	else
+		holder_prep_needed_rec_sz(xlated_prog_len, 1);
+
+	holder_prep_needed_rec_sz(nr_jited_ksyms, sizeof(__u64));
+	holder_prep_needed_rec_sz(nr_jited_func_lens, sizeof(__u32));
+	holder_prep_needed(nr_func_info, func_info_rec_size);
+	holder_prep_needed(nr_line_info, line_info_rec_size);
+	holder_prep_needed(nr_jited_line_info, jited_line_info_rec_size);
+
+	if (needed > *info_data_sz) {
+		*info_data = realloc(*info_data, needed);
+		if (!*info_data)
+			return -1;
+		*info_data_sz = needed;
+	}
+
+	ptr = *info_data;
+
+	if (mode == DUMP_JITED)
+		holder_set_ptr(jited_prog_insns, holder.jited_prog_len, 1);
+	else
+		holder_set_ptr(xlated_prog_insns, holder.xlated_prog_len, 1);
+
+	holder_set_ptr(jited_ksyms, holder.nr_jited_ksyms, sizeof(__u64));
+	holder_set_ptr(jited_func_lens, holder.nr_jited_func_lens, sizeof(__u32));
+	holder_set_ptr(func_info, holder.nr_func_info, holder.func_info_rec_size);
+	holder_set_ptr(line_info, holder.nr_line_info, holder.line_info_rec_size);
+	holder_set_ptr(jited_line_info, holder.nr_jited_line_info,
+		       holder.jited_line_info_rec_size);
+
+	*info = holder;
+	return 0;
+}
+
+#undef holder_prep_needed
+#undef holder_prep_needed_rec_sz
+#undef holder_set_ptr
+
 static void print_boot_time(__u64 nsecs, char *buf, unsigned int size)
 {
 	struct timespec real_time_ts, boot_time_ts;
@@ -790,16 +856,18 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 
 static int do_dump(int argc, char **argv)
 {
-	struct bpf_prog_info_linear *info_linear;
+	struct bpf_prog_info info = {};
+	__u32 info_len = sizeof(info);
+	size_t info_data_sz = 0;
+	void *info_data = NULL;
 	char *filepath = NULL;
 	bool opcodes = false;
 	bool visual = false;
 	enum dump_mode mode;
 	bool linum = false;
-	int *fds = NULL;
 	int nb_fds, i = 0;
+	int *fds = NULL;
 	int err = -1;
-	__u64 arrays;
 
 	if (is_prefix(*argv, "jited")) {
 		if (disasm_init())
@@ -859,46 +927,46 @@ static int do_dump(int argc, char **argv)
 		goto exit_close;
 	}
 
-	if (mode == DUMP_JITED)
-		arrays = 1UL << BPF_PROG_INFO_JITED_INSNS;
-	else
-		arrays = 1UL << BPF_PROG_INFO_XLATED_INSNS;
-
-	arrays |= 1UL << BPF_PROG_INFO_JITED_KSYMS;
-	arrays |= 1UL << BPF_PROG_INFO_JITED_FUNC_LENS;
-	arrays |= 1UL << BPF_PROG_INFO_FUNC_INFO;
-	arrays |= 1UL << BPF_PROG_INFO_LINE_INFO;
-	arrays |= 1UL << BPF_PROG_INFO_JITED_LINE_INFO;
-
 	if (json_output && nb_fds > 1)
 		jsonw_start_array(json_wtr);	/* root array */
 	for (i = 0; i < nb_fds; i++) {
-		info_linear = bpf_program__get_prog_info_linear(fds[i], arrays);
-		if (IS_ERR_OR_NULL(info_linear)) {
+		err = bpf_obj_get_info_by_fd(fds[i], &info, &info_len);
+		if (err) {
+			p_err("can't get prog info: %s", strerror(errno));
+			break;
+		}
+
+		err = prep_prog_info(&info, mode, &info_data, &info_data_sz);
+		if (err) {
+			p_err("can't grow prog info_data");
+			break;
+		}
+
+		err = bpf_obj_get_info_by_fd(fds[i], &info, &info_len);
+		if (err) {
 			p_err("can't get prog info: %s", strerror(errno));
 			break;
 		}
 
 		if (json_output && nb_fds > 1) {
 			jsonw_start_object(json_wtr);	/* prog object */
-			print_prog_header_json(&info_linear->info);
+			print_prog_header_json(&info);
 			jsonw_name(json_wtr, "insns");
 		} else if (nb_fds > 1) {
-			print_prog_header_plain(&info_linear->info);
+			print_prog_header_plain(&info);
 		}
 
-		err = prog_dump(&info_linear->info, mode, filepath, opcodes,
-				visual, linum);
+		err = prog_dump(&info, mode, filepath, opcodes, visual, linum);
 
 		if (json_output && nb_fds > 1)
 			jsonw_end_object(json_wtr);	/* prog object */
 		else if (i != nb_fds - 1 && nb_fds > 1)
 			printf("\n");
 
-		free(info_linear);
 		if (err)
 			break;
 		close(fds[i]);
+		memset(&info, 0, sizeof(info));
 	}
 	if (json_output && nb_fds > 1)
 		jsonw_end_array(json_wtr);	/* root array */
@@ -907,6 +975,7 @@ exit_close:
 	for (; i < nb_fds; i++)
 		close(fds[i]);
 exit_free:
+	free(info_data);
 	free(fds);
 	return err;
 }
@@ -2003,41 +2072,58 @@ static void profile_print_readings(void)
 
 static char *profile_target_name(int tgt_fd)
 {
-	struct bpf_prog_info_linear *info_linear;
-	struct bpf_func_info *func_info;
+	struct bpf_func_info func_info;
+	struct bpf_prog_info info = {};
+	__u32 info_len = sizeof(info);
 	const struct btf_type *t;
+	__u32 func_info_rec_size;
 	struct btf *btf = NULL;
 	char *name = NULL;
+	int err;
 
-	info_linear = bpf_program__get_prog_info_linear(
-		tgt_fd, 1UL << BPF_PROG_INFO_FUNC_INFO);
-	if (IS_ERR_OR_NULL(info_linear)) {
-		p_err("failed to get info_linear for prog FD %d", tgt_fd);
-		return NULL;
+	err = bpf_obj_get_info_by_fd(tgt_fd, &info, &info_len);
+	if (err) {
+		p_err("failed to bpf_obj_get_info_by_fd for prog FD %d", tgt_fd);
+		goto out;
 	}
 
-	if (info_linear->info.btf_id == 0) {
+	if (info.btf_id == 0) {
 		p_err("prog FD %d doesn't have valid btf", tgt_fd);
 		goto out;
 	}
 
-	btf = btf__load_from_kernel_by_id(info_linear->info.btf_id);
+	func_info_rec_size = info.func_info_rec_size;
+	if (info.nr_func_info == 0) {
+		p_err("bpf_obj_get_info_by_fd for prog FD %d found 0 func_info", tgt_fd);
+		goto out;
+	}
+
+	memset(&info, 0, sizeof(info));
+	info.nr_func_info = 1;
+	info.func_info_rec_size = func_info_rec_size;
+	info.func_info = ptr_to_u64(&func_info);
+
+	err = bpf_obj_get_info_by_fd(tgt_fd, &info, &info_len);
+	if (err) {
+		p_err("failed to get func_info for prog FD %d", tgt_fd);
+		goto out;
+	}
+
+	btf = btf__load_from_kernel_by_id(info.btf_id);
 	if (libbpf_get_error(btf)) {
 		p_err("failed to load btf for prog FD %d", tgt_fd);
 		goto out;
 	}
 
-	func_info = u64_to_ptr(info_linear->info.func_info);
-	t = btf__type_by_id(btf, func_info[0].type_id);
+	t = btf__type_by_id(btf, func_info.type_id);
 	if (!t) {
 		p_err("btf %d doesn't have type %d",
-		      info_linear->info.btf_id, func_info[0].type_id);
+		      info.btf_id, func_info.type_id);
 		goto out;
 	}
 	name = strdup(btf__name_by_offset(btf, t->name_off));
 out:
 	btf__free(btf);
-	free(info_linear);
 	return name;
 }
 
