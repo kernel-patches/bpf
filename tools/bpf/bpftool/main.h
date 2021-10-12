@@ -90,6 +90,10 @@ extern bool block_mount;
 extern bool verifier_logs;
 extern bool relaxed_maps;
 extern bool use_loader;
+extern bool sign_bpf;
+extern const char *sign_hash;
+extern const char *sign_cert;
+extern const char *sign_key;
 extern struct btf *base_btf;
 extern struct pinned_obj_table prog_table;
 extern struct pinned_obj_table map_table;
@@ -259,4 +263,7 @@ int do_filter_dump(struct tcmsg *ifinfo, struct nlattr **tb, const char *kind,
 
 int print_all_levels(__maybe_unused enum libbpf_print_level level,
 		     const char *format, va_list args);
+
+int sign(const char *hash_algo, const char *key_path, const char *x509_path,
+	 const char *indata, int indatalen, unsigned char **outdata);
 #endif
