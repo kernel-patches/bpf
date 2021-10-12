@@ -1336,6 +1336,8 @@ union bpf_attr {
 		};
 		__u32		:32;		/* pad */
 		__aligned_u64	fd_array;	/* array of FDs */
+		__aligned_u64	signature;	/* instruction's signature */
+		__u32		sig_len;	/* signature size */
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
