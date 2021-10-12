@@ -31,6 +31,8 @@
 #include <linux/bpf-netns.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
+#include <linux/verification.h>
+#include <linux/module_signature.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -2156,7 +2158,7 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define	BPF_PROG_LOAD_LAST_FIELD fd_array
+#define	BPF_PROG_LOAD_LAST_FIELD sig_len
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 {
@@ -2273,6 +2275,35 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 			     make_bpfptr(attr->insns, uattr.is_kernel),
 			     bpf_prog_insn_size(prog)) != 0)
 		goto free_prog_sec;
+
+	if (attr->sig_len) {
+		char *signature;
+
+		signature = kmalloc(attr->sig_len, GFP_USER);
+		if (!signature) {
+			err = -ENOMEM;
+			goto free_prog_sec;
+		}
+
+		if (copy_from_user(signature, (char *)attr->signature, attr->sig_len)) {
+			err = -EFAULT;
+			kfree(signature);
+			goto free_prog_sec;
+		}
+
+		err = verify_pkcs7_signature(prog->insns,
+					     prog->len * sizeof(struct bpf_insn),
+					     signature, attr->sig_len,
+					     VERIFY_USE_SECONDARY_KEYRING,
+					     VERIFYING_MODULE_SIGNATURE,
+					     NULL, NULL);
+		kfree(signature);
+
+		if (err) {
+			printk("verify_pkcs7_signature(): %pe\n", (void*)(uintptr_t)err);
+			goto free_prog_sec;
+		}
+	}
 
 	prog->orig_prog = NULL;
 	prog->jited = 0;
