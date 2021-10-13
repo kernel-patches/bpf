@@ -1657,9 +1657,9 @@ static int btf_dump_base_type_check_zero(struct btf_dump *d,
 	return 0;
 }
 
-static bool ptr_is_aligned(const void *data, int data_sz)
+static bool ptr_is_aligned(const void *data, int alignment)
 {
-	return ((uintptr_t)data) % data_sz == 0;
+	return ((uintptr_t)data) % alignment == 0;
 }
 
 static int btf_dump_int_data(struct btf_dump *d,
@@ -1681,7 +1681,7 @@ static int btf_dump_int_data(struct btf_dump *d,
 	/* handle packed int data - accesses of integers not aligned on
 	 * int boundaries can cause problems on some platforms.
 	 */
-	if (!ptr_is_aligned(data, sz)) {
+	if (!ptr_is_aligned(data, btf__align_of(d->btf, type_id))) {
 		memcpy(buf, data, sz);
 		data = buf;
 	}
@@ -1770,7 +1770,7 @@ static int btf_dump_float_data(struct btf_dump *d,
 	int sz = t->size;
 
 	/* handle unaligned data; copy to local union */
-	if (!ptr_is_aligned(data, sz)) {
+	if (!ptr_is_aligned(data, btf__align_of(d->btf, type_id))) {
 		memcpy(&fl, data, sz);
 		flp = &fl;
 	}
@@ -1953,10 +1953,8 @@ static int btf_dump_get_enum_value(struct btf_dump *d,
 				   __u32 id,
 				   __s64 *value)
 {
-	int sz = t->size;
-
 	/* handle unaligned enum value */
-	if (!ptr_is_aligned(data, sz)) {
+	if (!ptr_is_aligned(data, btf__align_of(d->btf, id))) {
 		__u64 val;
 		int err;
 
