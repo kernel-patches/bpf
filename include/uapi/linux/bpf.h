@@ -1271,29 +1271,31 @@ enum {
 	BPF_OBJ_NAME_LEN = 16U,
 };
 
+struct bpf_map_create_attr {
+	__u32	map_type;	/* one of enum bpf_map_type */
+	__u32	key_size;	/* size of key in bytes */
+	__u32	value_size;	/* size of value in bytes */
+	__u32	max_entries;	/* max number of entries in a map */
+	__u32	map_flags;	/* BPF_MAP_CREATE related
+				 * flags defined above.
+				 */
+	__u32	inner_map_fd;	/* fd pointing to the inner map */
+	__u32	numa_node;	/* numa node (effective only if
+				 * BPF_F_NUMA_NODE is set).
+				 */
+	char	map_name[BPF_OBJ_NAME_LEN];
+	__u32	map_ifindex;	/* ifindex of netdev to create on */
+	__u32	btf_fd;		/* fd pointing to a BTF type data */
+	__u32	btf_key_type_id;	/* BTF type_id of the key */
+	__u32	btf_value_type_id;	/* BTF type_id of the value */
+	__u32	btf_vmlinux_value_type_id;	/* BTF type_id of a kernel-
+						 * struct stored as the
+						 * map value
+						 */
+};
+
 union bpf_attr {
-	struct { /* anonymous struct used by BPF_MAP_CREATE command */
-		__u32	map_type;	/* one of enum bpf_map_type */
-		__u32	key_size;	/* size of key in bytes */
-		__u32	value_size;	/* size of value in bytes */
-		__u32	max_entries;	/* max number of entries in a map */
-		__u32	map_flags;	/* BPF_MAP_CREATE related
-					 * flags defined above.
-					 */
-		__u32	inner_map_fd;	/* fd pointing to the inner map */
-		__u32	numa_node;	/* numa node (effective only if
-					 * BPF_F_NUMA_NODE is set).
-					 */
-		char	map_name[BPF_OBJ_NAME_LEN];
-		__u32	map_ifindex;	/* ifindex of netdev to create on */
-		__u32	btf_fd;		/* fd pointing to a BTF type data */
-		__u32	btf_key_type_id;	/* BTF type_id of the key */
-		__u32	btf_value_type_id;	/* BTF type_id of the value */
-		__u32	btf_vmlinux_value_type_id;/* BTF type_id of a kernel-
-						   * struct stored as the
-						   * map value
-						   */
-	};
+	struct bpf_map_create_attr map_create;
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
 		__u32		map_fd;
@@ -1506,6 +1508,22 @@ union bpf_attr {
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
 
+	/* DEPRECATED: these are kept for compatibility purposes. */
+	struct { /* anonymous struct used by BPF_MAP_CREATE command */
+		__u32	map_type;
+		__u32	key_size;
+		__u32	value_size;
+		__u32	max_entries;
+		__u32	map_flags;
+		__u32	inner_map_fd;
+		__u32	numa_node;
+		char	map_name[BPF_OBJ_NAME_LEN];
+		__u32	map_ifindex;
+		__u32	btf_fd;
+		__u32	btf_key_type_id;
+		__u32	btf_value_type_id;
+		__u32	btf_vmlinux_value_type_id;
+	};
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF

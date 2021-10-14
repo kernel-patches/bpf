@@ -1617,8 +1617,8 @@ int cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
 /* Return map's numa specified by userspace */
 static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
 {
-	return (attr->map_flags & BPF_F_NUMA_NODE) ?
-		attr->numa_node : NUMA_NO_NODE;
+	return (attr->map_create.map_flags & BPF_F_NUMA_NODE) ?
+		attr->map_create.numa_node : NUMA_NO_NODE;
 }
 
 struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type);
