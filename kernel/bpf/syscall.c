@@ -3367,7 +3367,7 @@ again:
 	return prog;
 }
 
-#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD prog_id
+#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD prog_get_fd_by_id.id
 
 struct bpf_prog *bpf_prog_by_id(u32 id)
 {
@@ -3389,7 +3389,7 @@ struct bpf_prog *bpf_prog_by_id(u32 id)
 static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 {
 	struct bpf_prog *prog;
-	u32 id = attr->prog_id;
+	u32 id = attr->prog_get_fd_by_id.id;
 	int fd;
 
 	if (CHECK_ATTR(BPF_PROG_GET_FD_BY_ID))
@@ -3409,12 +3409,12 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 	return fd;
 }
 
-#define BPF_MAP_GET_FD_BY_ID_LAST_FIELD open_flags
+#define BPF_MAP_GET_FD_BY_ID_LAST_FIELD map_get_fd_by_id.open_flags
 
 static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 {
 	struct bpf_map *map;
-	u32 id = attr->map_id;
+	u32 id = attr->map_get_fd_by_id.id;
 	int f_flags;
 	int fd;
 
@@ -3425,7 +3425,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	f_flags = bpf_get_file_flag(attr->open_flags);
+	f_flags = bpf_get_file_flag(attr->map_get_fd_by_id.open_flags);
 	if (f_flags < 0)
 		return f_flags;
 
@@ -3984,7 +3984,7 @@ static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr)
 	return btf_new_fd(attr, uattr);
 }
 
-#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD btf_id
+#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD btf_get_fd_by_id.id
 
 static int bpf_btf_get_fd_by_id(const union bpf_attr *attr)
 {
@@ -3994,7 +3994,7 @@ static int bpf_btf_get_fd_by_id(const union bpf_attr *attr)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	return btf_get_fd_by_id(attr->btf_id);
+	return btf_get_fd_by_id(attr->btf_get_fd_by_id.id);
 }
 
 static int bpf_task_fd_query_copy(const union bpf_attr *attr,
@@ -4369,12 +4369,12 @@ struct bpf_link *bpf_link_by_id(u32 id)
 	return link;
 }
 
-#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD link_id
+#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD link_get_fd_by_id.id
 
 static int bpf_link_get_fd_by_id(const union bpf_attr *attr)
 {
 	struct bpf_link *link;
-	u32 id = attr->link_id;
+	u32 id = attr->link_get_fd_by_id.id;
 	int fd;
 
 	if (CHECK_ATTR(BPF_LINK_GET_FD_BY_ID))
