@@ -1422,17 +1422,43 @@ union bpf_attr {
 		__u32		cpu;
 	} test;
 
-	struct { /* anonymous struct used by BPF_*_GET_*_ID */
-		union {
-			__u32		start_id;
-			__u32		prog_id;
-			__u32		map_id;
-			__u32		btf_id;
-			__u32		link_id;
-		};
-		__u32		next_id;
-		__u32		open_flags;
-	};
+	struct { /* used by BPF_PROG_GET_FD_BY_ID command */
+		__u32 id;
+	} prog_get_fd_by_id;
+
+	struct { /* used by BPF_MAP_GET_FD_BY_ID command */
+		__u32 id;
+		__u32 ingnored;
+		__u32 open_flags;
+	} map_get_fd_by_id;
+
+	struct { /* used by BPF_BTF_GET_FD_BY_ID command */
+		__u32 id;
+	} btf_get_fd_by_id;
+
+	struct { /* used by BPF_LINK_GET_FD_BY_ID command */
+		__u32 id;
+	} link_get_fd_by_id;
+
+	struct { /* used by BPF_PROG_GET_NEXT_ID command */
+		__u32 start_id;
+		__u32 next_id;
+	} prog_get_next_id;
+
+	struct { /* used by BPF_MAP_GET_NEXT_ID command */
+		__u32 start_id;
+		__u32 next_id;
+	} map_get_next_id;
+
+	struct { /* used by BPF_BTF_GET_NEXT_ID command */
+		__u32 start_id;
+		__u32 next_id;
+	} btf_get_next_id;
+
+	struct { /* used by BPF_LINK_GET_NEXT_ID command */
+		__u32 start_id;
+		__u32 next_id;
+	} link_get_next_id;
 
 	struct { /* anonymous struct used by BPF_OBJ_GET_INFO_BY_FD */
 		__u32		bpf_fd;
@@ -1556,6 +1582,18 @@ union bpf_attr {
 			__aligned_u64 next_key;
 		};
 		__u64		flags;
+	};
+
+	struct { /* anonymous struct used by BPF_*_GET_*_ID */
+		union {
+			__u32		start_id;
+			__u32		prog_id;
+			__u32		map_id;
+			__u32		btf_id;
+			__u32		link_id;
+		};
+		__u32		next_id;
+		__u32		open_flags;
 	};
 } __attribute__((aligned(8)));
 
