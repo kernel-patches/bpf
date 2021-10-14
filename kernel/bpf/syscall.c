@@ -728,6 +728,11 @@ int bpf_get_file_flag(int flags)
 		__tmp; \
 	})
 
+#define CHECK_ATTR_TAIL(attr, field) \
+	(memchr_inv((void *)(attr) + offsetofend(typeof(*attr), field), 0, \
+		    sizeof(*(attr)) - offsetofend(typeof(*attr), field)) != NULL ? -EINVAL : 0)
+
+
 /* dst and src must have at least "size" number of bytes.
  * Return strlen on success and < 0 on error.
  */
@@ -1041,22 +1046,16 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 	return NULL;
 }
 
-/* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
-
-static int map_lookup_elem(union bpf_attr *attr)
+static int map_lookup_elem(struct bpf_map_lookup_elem_attr *attr)
 {
-	void __user *ukey = u64_to_user_ptr(attr->key);
-	void __user *uvalue = u64_to_user_ptr(attr->value);
-	int ufd = attr->map_fd;
+	void __user *ukey = u64_to_user_ptr(attr->key_u64);
+	void __user *uvalue = u64_to_user_ptr(attr->value_u64);
+	int ufd = attr->fd;
 	struct bpf_map *map;
 	void *key, *value;
 	u32 value_size;
 	struct fd f;
 	int err;
-
-	if (CHECK_ATTR(BPF_MAP_LOOKUP_ELEM))
-		return -EINVAL;
 
 	if (attr->flags & ~BPF_F_LOCK)
 		return -EINVAL;
@@ -1108,22 +1107,16 @@ err_put:
 	return err;
 }
 
-
-#define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
-
-static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
+static int map_update_elem(struct bpf_map_update_elem_attr *attr, bpfptr_t uattr)
 {
-	bpfptr_t ukey = make_bpfptr(attr->key, uattr.is_kernel);
-	bpfptr_t uvalue = make_bpfptr(attr->value, uattr.is_kernel);
-	int ufd = attr->map_fd;
+	bpfptr_t ukey = make_bpfptr(attr->key_u64, uattr.is_kernel);
+	bpfptr_t uvalue = make_bpfptr(attr->value_u64, uattr.is_kernel);
+	int ufd = attr->fd;
 	struct bpf_map *map;
 	void *key, *value;
 	u32 value_size;
 	struct fd f;
 	int err;
-
-	if (CHECK_ATTR(BPF_MAP_UPDATE_ELEM))
-		return -EINVAL;
 
 	f = fdget(ufd);
 	map = __bpf_map_get(f);
@@ -1168,19 +1161,14 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_DELETE_ELEM_LAST_FIELD key
-
-static int map_delete_elem(union bpf_attr *attr)
+static int map_delete_elem(struct bpf_map_delete_elem_attr *attr)
 {
-	void __user *ukey = u64_to_user_ptr(attr->key);
-	int ufd = attr->map_fd;
+	void __user *ukey = u64_to_user_ptr(attr->key_u64);
+	int ufd = attr->fd;
 	struct bpf_map *map;
 	struct fd f;
 	void *key;
 	int err;
-
-	if (CHECK_ATTR(BPF_MAP_DELETE_ELEM))
-		return -EINVAL;
 
 	f = fdget(ufd);
 	map = __bpf_map_get(f);
@@ -1220,21 +1208,15 @@ err_put:
 	return err;
 }
 
-/* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD next_key
-
-static int map_get_next_key(union bpf_attr *attr)
+static int map_get_next_key(struct bpf_map_get_next_key_attr *attr)
 {
-	void __user *ukey = u64_to_user_ptr(attr->key);
-	void __user *unext_key = u64_to_user_ptr(attr->next_key);
-	int ufd = attr->map_fd;
+	void __user *ukey = u64_to_user_ptr(attr->key_u64);
+	void __user *unext_key = u64_to_user_ptr(attr->next_key_u64);
+	int ufd = attr->fd;
 	struct bpf_map *map;
 	void *key, *next_key;
 	struct fd f;
 	int err;
-
-	if (CHECK_ATTR(BPF_MAP_GET_NEXT_KEY))
-		return -EINVAL;
 
 	f = fdget(ufd);
 	map = __bpf_map_get(f);
@@ -4578,16 +4560,20 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		err = map_create(ATTR_FIELD(&attr, map_create));
 		break;
 	case BPF_MAP_LOOKUP_ELEM:
-		err = map_lookup_elem(&attr);
+		err = CHECK_ATTR_TAIL(&attr, map_lookup_elem);
+		err = err ?: map_lookup_elem(&attr.map_lookup_elem);
 		break;
 	case BPF_MAP_UPDATE_ELEM:
-		err = map_update_elem(&attr, uattr);
+		err = CHECK_ATTR_TAIL(&attr, map_update_elem);
+		err = err ?: map_update_elem(&attr.map_update_elem, uattr);
 		break;
 	case BPF_MAP_DELETE_ELEM:
-		err = map_delete_elem(&attr);
+		err = CHECK_ATTR_TAIL(&attr, map_delete_elem);
+		err = err ?: map_delete_elem(&attr.map_delete_elem);
 		break;
 	case BPF_MAP_GET_NEXT_KEY:
-		err = map_get_next_key(&attr);
+		err = CHECK_ATTR_TAIL(&attr, map_get_next_key);
+		err = err ?: map_get_next_key(&attr.map_get_next_key);
 		break;
 	case BPF_MAP_FREEZE:
 		err = map_freeze(&attr);
