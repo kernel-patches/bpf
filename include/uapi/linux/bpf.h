@@ -50,7 +50,7 @@
 #define BPF_CMPXCHG	(0xf0 | BPF_FETCH)	/* atomic compare-and-write */
 
 /* Register numbers */
-enum {
+enum bpf_reg {
 	BPF_REG_0 = 0,
 	BPF_REG_1,
 	BPF_REG_2,
@@ -1056,16 +1056,19 @@ enum bpf_link_type {
  * All eligible programs are executed regardless of return code from
  * earlier programs.
  */
-#define BPF_F_ALLOW_OVERRIDE	(1U << 0)
-#define BPF_F_ALLOW_MULTI	(1U << 1)
-#define BPF_F_REPLACE		(1U << 2)
+enum bpf_prog_attach_flag {
+	BPF_F_ALLOW_OVERRIDE	= (1U << 0),
+	BPF_F_ALLOW_MULTI	= (1U << 1),
+	BPF_F_REPLACE		= (1U << 2),
+};
 
+enum bpf_prog_load_flag {
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will perform strict alignment checking as if the kernel
  * has been built with CONFIG_EFFICIENT_UNALIGNED_ACCESS not set,
  * and NET_IP_ALIGN defined to 2.
  */
-#define BPF_F_STRICT_ALIGNMENT	(1U << 0)
+	BPF_F_STRICT_ALIGNMENT = (1U << 0),
 
 /* If BPF_F_ANY_ALIGNMENT is used in BPF_PROF_LOAD command, the
  * verifier will allow any alignment whatsoever.  On platforms
@@ -1079,7 +1082,7 @@ enum bpf_link_type {
  * of an unaligned access the alignment check would trigger before
  * the one we are interested in.
  */
-#define BPF_F_ANY_ALIGNMENT	(1U << 1)
+	BPF_F_ANY_ALIGNMENT = (1U << 1),
 
 /* BPF_F_TEST_RND_HI32 is used in BPF_PROG_LOAD command for testing purpose.
  * Verifier does sub-register def/use analysis and identifies instructions whose
@@ -1097,10 +1100,10 @@ enum bpf_link_type {
  * Then, if verifier is not doing correct analysis, such randomization will
  * regress tests to expose bugs.
  */
-#define BPF_F_TEST_RND_HI32	(1U << 2)
+	BPF_F_TEST_RND_HI32 = (1U << 2),
 
 /* The verifier internal test flag. Behavior is undefined */
-#define BPF_F_TEST_STATE_FREQ	(1U << 3)
+	BPF_F_TEST_STATE_FREQ = (1U << 3),
 
 /* If BPF_F_SLEEPABLE is used in BPF_PROG_LOAD command, the verifier will
  * restrict map and helper usage for such programs. Sleepable BPF programs can
@@ -1108,8 +1111,10 @@ enum bpf_link_type {
  * Such programs are allowed to use helpers that may sleep like
  * bpf_copy_from_user().
  */
-#define BPF_F_SLEEPABLE		(1U << 4)
+	BPF_F_SLEEPABLE = (1U << 4),
+};
 
+enum bpf_pseudo_src_reg {
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
  *
@@ -1121,8 +1126,8 @@ enum bpf_link_type {
  * ldimm64 rewrite:  address of map
  * verifier type:    CONST_PTR_TO_MAP
  */
-#define BPF_PSEUDO_MAP_FD	1
-#define BPF_PSEUDO_MAP_IDX	5
+	BPF_PSEUDO_MAP_FD  = 1,
+	BPF_PSEUDO_MAP_IDX = 5,
 
 /* insn[0].src_reg:  BPF_PSEUDO_MAP_[IDX_]VALUE
  * insn[0].imm:      map fd or fd_idx
@@ -1132,8 +1137,8 @@ enum bpf_link_type {
  * ldimm64 rewrite:  address of map[0]+offset
  * verifier type:    PTR_TO_MAP_VALUE
  */
-#define BPF_PSEUDO_MAP_VALUE		2
-#define BPF_PSEUDO_MAP_IDX_VALUE	6
+	BPF_PSEUDO_MAP_VALUE     = 2,
+	BPF_PSEUDO_MAP_IDX_VALUE = 6,
 
 /* insn[0].src_reg:  BPF_PSEUDO_BTF_ID
  * insn[0].imm:      kernel btd id of VAR
@@ -1144,7 +1149,7 @@ enum bpf_link_type {
  * verifier type:    PTR_TO_BTF_ID or PTR_TO_MEM, depending on whether the var
  *                   is struct/union.
  */
-#define BPF_PSEUDO_BTF_ID	3
+	BPF_PSEUDO_BTF_ID = 3,
 /* insn[0].src_reg:  BPF_PSEUDO_FUNC
  * insn[0].imm:      insn offset to the func
  * insn[1].imm:      0
@@ -1153,19 +1158,20 @@ enum bpf_link_type {
  * ldimm64 rewrite:  address of the function
  * verifier type:    PTR_TO_FUNC.
  */
-#define BPF_PSEUDO_FUNC		4
+	BPF_PSEUDO_FUNC = 4,
 
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
  */
-#define BPF_PSEUDO_CALL		1
+	BPF_PSEUDO_CALL = 1,
 /* when bpf_call->src_reg == BPF_PSEUDO_KFUNC_CALL,
  * bpf_call->imm == btf_id of a BTF_KIND_FUNC in the running kernel
  */
-#define BPF_PSEUDO_KFUNC_CALL	2
+	BPF_PSEUDO_KFUNC_CALL = 2,
+};
 
 /* flags for BPF_MAP_UPDATE_ELEM command */
-enum {
+enum bpf_map_update_elem_flag {
 	BPF_ANY		= 0, /* create new element or update existing */
 	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
 	BPF_EXIST	= 2, /* update existing element */
@@ -1173,7 +1179,7 @@ enum {
 };
 
 /* flags for BPF_MAP_CREATE command */
-enum {
+enum bpf_map_create_flag {
 	BPF_F_NO_PREALLOC	= (1U << 0),
 /* Instead of having one common LRU list in the
  * BPF_MAP_TYPE_LRU_[PERCPU_]HASH map, use a percpu LRU list
@@ -1213,17 +1219,19 @@ enum {
 };
 
 /* Flags for BPF_PROG_QUERY. */
-
+enum bpf_prog_query_flag {
 /* Query effective (directly attached + inherited from ancestor cgroups)
  * programs that will be executed for events within a cgroup.
  * attach_flags with this flag are returned only for directly attached programs.
  */
-#define BPF_F_QUERY_EFFECTIVE	(1U << 0)
+	BPF_F_QUERY_EFFECTIVE = (1U << 0),
+};
 
-/* Flags for BPF_PROG_TEST_RUN */
-
+/* Flags for BPF_PROG_RUN */
+enum bpf_prog_run_flag {
 /* If set, run the test on the cpu specified by bpf_attr.test.cpu */
-#define BPF_F_TEST_RUN_ON_CPU	(1U << 0)
+	BPF_F_TEST_RUN_ON_CPU = (1U << 0),
+};
 
 /* type for BPF_ENABLE_STATS */
 enum bpf_stats_type {
@@ -5230,7 +5238,7 @@ enum {
 };
 
 /* BPF ring buffer constants */
-enum {
+enum bpf_ringbuf_const {
 	BPF_RINGBUF_BUSY_BIT		= (1U << 31),
 	BPF_RINGBUF_DISCARD_BIT		= (1U << 30),
 	BPF_RINGBUF_HDR_SZ		= 8,
