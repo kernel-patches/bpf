@@ -103,7 +103,7 @@ const struct bpf_map_ops bpf_map_offload_ops = {
 	.map_check_btf = map_check_no_btf,
 };
 
-static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
+static struct bpf_map *find_and_alloc_map(struct bpf_map_create_attr *attr)
 {
 	const struct bpf_map_ops *ops;
 	u32 type = attr->map_type;
@@ -118,13 +118,13 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 		return ERR_PTR(-EINVAL);
 
 	if (ops->map_alloc_check) {
-		err = ops->map_alloc_check(attr);
+		err = ops->map_alloc_check((union bpf_attr *)attr); /* XXX: Dodgy cast */
 		if (err)
 			return ERR_PTR(err);
 	}
 	if (attr->map_ifindex)
 		ops = &bpf_map_offload_ops;
-	map = ops->map_alloc(attr);
+	map = ops->map_alloc((union bpf_attr *)attr); /* XXX: Dodgy cast */
 	if (IS_ERR(map))
 		return map;
 	map->ops = ops;
@@ -719,6 +719,15 @@ int bpf_get_file_flag(int flags)
 		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
 		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
 
+/* helper macro to extract a field from union bpf_attr while checking that the tail is zero. */
+#define ATTR_FIELD(attr, field) ({ \
+		typeof(&((attr)->field)) __tmp = &((attr)->field); \
+		if (memchr_inv((void *)__tmp + sizeof((attr)->field), 0, sizeof(*(attr)) - sizeof((attr)->field))) { \
+			__tmp = NULL; \
+		} \
+		__tmp; \
+	})
+
 /* dst and src must have at least "size" number of bytes.
  * Return strlen on success and < 0 on error.
  */
@@ -810,18 +819,18 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	return ret;
 }
 
-#define BPF_MAP_CREATE_LAST_FIELD btf_vmlinux_value_type_id
 /* called via syscall */
-static int map_create(union bpf_attr *attr)
+static int map_create(struct bpf_map_create_attr *attr)
 {
-	int numa_node = bpf_map_attr_numa_node(attr);
+	int numa_node;
 	struct bpf_map *map;
 	int f_flags;
 	int err;
 
-	err = CHECK_ATTR(BPF_MAP_CREATE);
-	if (err)
+	if (!attr)
 		return -EINVAL;
+
+	numa_node = bpf_map_attr_numa_node((union bpf_attr *)attr); /* Dodgy cast */
 
 	if (attr->btf_vmlinux_value_type_id) {
 		if (attr->map_type != BPF_MAP_TYPE_STRUCT_OPS ||
@@ -4566,7 +4575,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 
 	switch (cmd) {
 	case BPF_MAP_CREATE:
-		err = map_create(&attr);
+		err = map_create(ATTR_FIELD(&attr, map_create));
 		break;
 	case BPF_MAP_LOOKUP_ELEM:
 		err = map_lookup_elem(&attr);
