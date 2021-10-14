@@ -506,15 +506,14 @@ int bpf_map_delete_elem(int fd, const void *key)
 
 int bpf_map_get_next_key(int fd, const void *key, void *next_key)
 {
-	union bpf_attr attr;
-	int ret;
+	struct bpf_map_get_next_key_attr attr = {
+		.map_fd		= fd,
+		.key		= key,
+		.next_key	= next_key,
+	};
 
-	memset(&attr, 0, sizeof(attr));
-	attr.map_fd = fd;
-	attr.key = ptr_to_u64(key);
-	attr.next_key = ptr_to_u64(next_key);
+	int ret = sys_bpf(BPF_MAP_GET_NEXT_KEY, (union bpf_attr *)&attr, sizeof(attr));
 
-	ret = sys_bpf(BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
 	return libbpf_err_errno(ret);
 }
 
