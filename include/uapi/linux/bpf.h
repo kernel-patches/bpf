@@ -1248,7 +1248,10 @@ enum bpf_stack_build_id_status {
 	BPF_STACK_BUILD_ID_IP = 2,
 };
 
-#define BPF_BUILD_ID_SIZE 20
+enum {
+	BPF_BUILD_ID_SIZE = 20,
+};
+
 struct bpf_stack_build_id {
 	__s32		status;
 	unsigned char	build_id[BPF_BUILD_ID_SIZE];
@@ -1258,7 +1261,9 @@ struct bpf_stack_build_id {
 	};
 };
 
-#define BPF_OBJ_NAME_LEN 16U
+enum {
+	BPF_OBJ_NAME_LEN = 16U,
+};
 
 union bpf_attr {
 	struct { /* anonymous struct used by BPF_MAP_CREATE command */
@@ -5428,7 +5433,9 @@ struct bpf_xdp_sock {
 	__u32 queue_id;
 };
 
-#define XDP_PACKET_HEADROOM 256
+enum {
+	XDP_PACKET_HEADROOM = 256,
+};
 
 /* User return codes for XDP prog type.
  * A valid XDP program must return one of these defined values. All other
@@ -5546,7 +5553,9 @@ struct sk_reuseport_md {
 	__bpf_md_ptr(struct bpf_sock *, migrating_sk);
 };
 
-#define BPF_TAG_SIZE	8
+enum {
+	BPF_TAG_SIZE = 8,
+};
 
 struct bpf_prog_info {
 	__u32 type;
