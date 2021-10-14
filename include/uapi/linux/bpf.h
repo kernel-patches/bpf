@@ -52,7 +52,7 @@
 #define __bpf_md_ptr(type, name)	\
 union {					\
 	type name;			\
-	__u64 :64;			\
+	__u64 name##_u64;		\
 } __attribute__((aligned(8)))
 
 /* Register numbers */
