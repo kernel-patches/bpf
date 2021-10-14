@@ -1294,18 +1294,41 @@ struct bpf_map_create_attr {
 						 */
 };
 
+struct bpf_map_lookup_elem_attr {
+	__u32 map_fd;
+	__bpf_md_ptr(const void *, key);
+	__bpf_md_ptr(void *, value);
+	__u64 flags;
+};
+
+struct bpf_map_update_elem_attr {
+	__u32 map_fd;
+	__bpf_md_ptr(const void *, key);
+	__bpf_md_ptr(void *, value);
+	__u64 flags;
+};
+
+struct bpf_map_delete_elem_attr {
+	__u32 map_fd;
+	__bpf_md_ptr(const void *, key);
+};
+
+struct bpf_map_get_next_key_attr {
+	__u32 map_fd;
+	__bpf_md_ptr(const void *, key);
+	__bpf_md_ptr(void *, next_key);
+};
+
 union bpf_attr {
 	struct bpf_map_create_attr map_create;
 
-	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
-		__u32		map_fd;
-		__aligned_u64	key;
-		union {
-			__aligned_u64 value;
-			__aligned_u64 next_key;
-		};
-		__u64		flags;
-	};
+	struct bpf_map_lookup_elem_attr map_lookup_elem;
+
+	struct bpf_map_update_elem_attr map_update_elem;
+
+	struct bpf_map_delete_elem_attr map_delete_elem;
+
+	struct bpf_map_get_next_key_attr map_get_next_key;
 
 	struct { /* struct used by BPF_MAP_*_BATCH commands */
 		__aligned_u64	in_batch;	/* start batch,
@@ -1523,6 +1546,16 @@ union bpf_attr {
 		__u32	btf_key_type_id;
 		__u32	btf_value_type_id;
 		__u32	btf_vmlinux_value_type_id;
+	};
+
+	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
+		__u32		map_fd;
+		__aligned_u64	key;
+		union {
+			__aligned_u64 value;
+			__aligned_u64 next_key;
+		};
+		__u64		flags;
 	};
 } __attribute__((aligned(8)));
 
