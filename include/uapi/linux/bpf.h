@@ -49,6 +49,12 @@
 #define BPF_XCHG	(0xe0 | BPF_FETCH)	/* atomic exchange */
 #define BPF_CMPXCHG	(0xf0 | BPF_FETCH)	/* atomic compare-and-write */
 
+#define __bpf_md_ptr(type, name)	\
+union {					\
+	type name;			\
+	__u64 :64;			\
+} __attribute__((aligned(8)))
+
 /* Register numbers */
 enum bpf_reg {
 	BPF_REG_0 = 0,
@@ -5284,12 +5290,6 @@ enum {
 	BPF_F_BROADCAST		= (1ULL << 3),
 	BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
 };
-
-#define __bpf_md_ptr(type, name)	\
-union {					\
-	type name;			\
-	__u64 :64;			\
-} __attribute__((aligned(8)))
 
 /* user accessible mirror of in-kernel sk_buff.
  * new fields can only be added to the end of this structure
