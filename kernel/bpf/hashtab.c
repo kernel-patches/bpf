@@ -855,12 +855,12 @@ static void htab_put_fd_value(struct bpf_htab *htab, struct htab_elem *l)
 static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 {
 	htab_put_fd_value(htab, l);
+	atomic_dec(&htab->count);
 
 	if (htab_is_prealloc(htab)) {
 		check_and_free_timer(htab, l);
 		__pcpu_freelist_push(&htab->freelist, &l->fnode);
 	} else {
-		atomic_dec(&htab->count);
 		l->htab = htab;
 		call_rcu(&l->rcu, htab_elem_free_rcu);
 	}
@@ -937,6 +937,11 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 			*pl_new = old_elem;
 		} else {
 			struct pcpu_freelist_node *l;
+
+			if (atomic_inc_return(&htab->count) > htab->map.max_entries) {
+				l_new = ERR_PTR(-E2BIG);
+				goto dec_count;
+			}
 
 			l = __pcpu_freelist_pop(&htab->freelist);
 			if (!l)
