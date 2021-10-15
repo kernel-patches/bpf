@@ -71,6 +71,7 @@ struct rv_jit_context {
 	int ninsns;
 	int epilogue_offset;
 	int *offset;		/* BPF to RV */
+	int exentry_idx;
 	unsigned long flags;
 	int stack_size;
 };
