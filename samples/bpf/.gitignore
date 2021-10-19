@@ -61,3 +61,4 @@ iperf.*
 /vmlinux.h
 /bpftool/
 /libbpf/
+syncookie
