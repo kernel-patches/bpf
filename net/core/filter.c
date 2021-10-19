@@ -78,6 +78,7 @@
 #include <linux/btf_ids.h>
 #include <net/tls.h>
 #include <net/xdp.h>
+#include <net/netfilter/nf_conntrack.h>
 
 static const struct bpf_func_proto *
 bpf_sk_base_func_proto(enum bpf_func_id func_id);
@@ -8002,6 +8003,24 @@ bool bpf_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 	return size == size_default;
 }
 
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+bool bpf_ct_is_valid_access(int off, int size, enum bpf_access_type type,
+			    struct bpf_insn_access_aux *info)
+{
+	if (off < 0 || off > sizeof(struct bpf_nf_conn))
+		return false;
+	if (off % size != 0)
+		return false;
+
+	switch (off) {
+	case offsetof(struct bpf_nf_conn, status):
+		return size == sizeof_field(struct bpf_nf_conn, status);
+	}
+
+	return false;
+}
+#endif
+
 static bool sock_filter_is_valid_access(int off, int size,
 					enum bpf_access_type type,
 					const struct bpf_prog *prog,
@@ -9093,6 +9112,28 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 
 	return insn - insn_buf;
 }
+
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+u32 bpf_ct_convert_ctx_access(enum bpf_access_type type,
+			      const struct bpf_insn *si,
+			      struct bpf_insn *insn_buf,
+			      struct bpf_prog *prog, u32 *target_size)
+{
+	struct bpf_insn *insn = insn_buf;
+
+	switch (si->off) {
+	case offsetof(struct bpf_nf_conn, status):
+		BUILD_BUG_ON(sizeof_field(struct nf_conn, status) >
+			     sizeof_field(struct bpf_nf_conn, status));
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct nf_conn, status),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct nf_conn, status));
+		break;
+	}
+
+	return insn - insn_buf;
+}
+#endif
 
 static u32 tc_cls_act_convert_ctx_access(enum bpf_access_type type,
 					 const struct bpf_insn *si,

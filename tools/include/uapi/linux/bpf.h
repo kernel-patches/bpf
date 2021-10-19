@@ -5472,6 +5472,10 @@ struct bpf_xdp_sock {
 	__u32 queue_id;
 };
 
+struct bpf_nf_conn {
+	__u64 status;
+};
+
 #define XDP_PACKET_HEADROOM 256
 
 /* User return codes for XDP prog type.

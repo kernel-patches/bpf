@@ -341,6 +341,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK_OR_NULL,	/* pointer to stack or NULL */
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
+	ARG_PTR_TO_NF_CONN,	/* pointer to nf_conn */
 	__BPF_ARG_TYPE_MAX,
 };
 
@@ -358,6 +359,7 @@ enum bpf_return_type {
 	RET_PTR_TO_MEM_OR_BTF_ID_OR_NULL, /* returns a pointer to a valid memory or a btf_id or NULL */
 	RET_PTR_TO_MEM_OR_BTF_ID,	/* returns a pointer to a valid memory or a btf_id */
 	RET_PTR_TO_BTF_ID,		/* returns a pointer to a btf_id */
+	RET_PTR_TO_NF_CONN_OR_NULL,	/* returns a pointer to a nf_conn or NULL */
 };
 
 /* eBPF function prototype used by verifier to allow BPF_CALLs from eBPF programs
@@ -459,6 +461,8 @@ enum bpf_reg_type {
 	PTR_TO_PERCPU_BTF_ID,	 /* reg points to a percpu kernel variable */
 	PTR_TO_FUNC,		 /* reg points to a bpf program function */
 	PTR_TO_MAP_KEY,		 /* reg points to a map element key */
+	PTR_TO_NF_CONN,		 /* reg points to struct nf_conn */
+	PTR_TO_NF_CONN_OR_NULL,	 /* reg points to struct nf_conn or NULL */
 	__BPF_REG_TYPE_MAX,
 };
 
@@ -2127,6 +2131,32 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 				struct bpf_insn *insn_buf,
 				struct bpf_prog *prog,
 				u32 *target_size);
+
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+bool bpf_ct_is_valid_access(int off, int size, enum bpf_access_type type,
+			    struct bpf_insn_access_aux *info);
+u32 bpf_ct_convert_ctx_access(enum bpf_access_type type,
+			      const struct bpf_insn *si,
+			      struct bpf_insn *insn_buf,
+			      struct bpf_prog *prog, u32 *target_size);
+#else
+static inline bool bpf_ct_is_valid_access(int off, int size,
+					  enum bpf_access_type type,
+					  struct bpf_insn_access_aux *info)
+{
+	return false;
+}
+
+static inline u32 bpf_ct_convert_ctx_access(enum bpf_access_type type,
+					    const struct bpf_insn *si,
+					    struct bpf_insn *insn_buf,
+					    struct bpf_prog *prog,
+					    u32 *target_size)
+{
+	return 0;
+}
+#endif
+
 #else
 static inline bool bpf_sock_common_is_valid_access(int off, int size,
 						   enum bpf_access_type type,
@@ -2145,6 +2175,22 @@ static inline u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 					      struct bpf_insn *insn_buf,
 					      struct bpf_prog *prog,
 					      u32 *target_size)
+{
+	return 0;
+}
+
+static inline bool bpf_ct_is_valid_access(int off, int size,
+					  enum bpf_access_type type,
+					  struct bpf_insn_access_aux *info)
+{
+	return false;
+}
+
+static inline u32 bpf_ct_convert_ctx_access(enum bpf_access_type type,
+					    const struct bpf_insn *si,
+					    struct bpf_insn *insn_buf,
+					    struct bpf_prog *prog,
+					    u32 *target_size)
 {
 	return 0;
 }

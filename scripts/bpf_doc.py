@@ -596,6 +596,7 @@ class PrinterHelpers(Printer):
             'struct socket',
             'struct file',
             'struct bpf_timer',
+            'struct bpf_nf_conn',
     }
     mapped_types = {
             'u8': '__u8',
