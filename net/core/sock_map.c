@@ -1451,6 +1451,87 @@ static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
 	return 0;
 }
 
+static int sock_map_prog_lookup(struct bpf_map *map, struct bpf_prog **prog,
+				u32 which)
+{
+	struct sk_psock_progs *progs = sock_map_progs(map);
+
+	if (!progs)
+		return -EOPNOTSUPP;
+
+	switch (which) {
+	case BPF_SK_MSG_VERDICT:
+		*prog = READ_ONCE(progs->msg_parser);
+		break;
+#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
+	case BPF_SK_SKB_STREAM_PARSER:
+		*prog = READ_ONCE(progs->skb_parser);
+		break;
+#endif
+	case BPF_SK_SKB_STREAM_VERDICT:
+		*prog = READ_ONCE(progs->skb_verdict);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+int sockmap_bpf_prog_query(const union bpf_attr *attr,
+			   union bpf_attr __user *uattr)
+{
+	__u32 __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+	u32 prog_cnt = 0, flags = 0;
+	u32 ufd = attr->target_fd;
+	struct bpf_map *map;
+	struct bpf_prog *prog;
+	struct fd f;
+	int ret;
+
+	if (attr->query.query_flags)
+		return -EINVAL;
+
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags)))
+		return -EFAULT;
+
+	f = fdget(ufd);
+	map = __bpf_map_get(f);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	rcu_read_lock();
+
+	ret = sock_map_prog_lookup(map, &prog, attr->query.attach_type);
+	if (ret)
+		goto end;
+
+	prog_cnt = (!prog) ? 0 : 1;
+	if (copy_to_user(&uattr->query.prog_cnt, &prog_cnt, sizeof(prog_cnt))) {
+		ret = -EFAULT;
+		goto end;
+	}
+
+	if (!attr->query.prog_cnt || !prog_ids || !prog_cnt)
+		goto end;
+
+	prog = bpf_prog_inc_not_zero(prog);
+	if (IS_ERR(prog)) {
+		ret = PTR_ERR(prog);
+		goto end;
+	}
+
+	if (copy_to_user(prog_ids, &prog->aux->id, sizeof(u32)))
+		ret = -EFAULT;
+
+	bpf_prog_put(prog);
+
+end:
+	rcu_read_unlock();
+	fdput(f);
+	return ret;
+}
+
 static void sock_map_unlink(struct sock *sk, struct sk_psock_link *link)
 {
 	switch (link->map->map_type) {
