@@ -4925,6 +4925,79 @@ union bpf_attr {
  *	Return
  *		The number of bytes written to the buffer, or a negative error
  *		in case of failure.
+ *
+ * struct bpf_nf_conn *bpf_ct_lookup_tcp(void *ctx, struct bpf_sock_tuple *tuple, u32 tuple_size, u64 netns, u64 *flags_err)
+ *	Description
+ *		Look for conntrack info for a TCP connection matching *tuple*,
+ *		optionally in a child network namespace *netns*.
+ *
+ *		The *flags_err* argument is used as an input parameter for flags
+ *		and output parameter for the error code. The flags can be a
+ *		combination of one or more of the following values:
+ *
+ *		**BPF_F_CT_DIR_REPLY**
+ *			When set, the conntrack direction is IP_CT_DIR_REPLY,
+ *			otherwise IP_CT_DIR_ORIGINAL.
+ *
+ *		If the function returns **NULL**, *flags_err* will indicate the
+ *		error code:
+ *
+ *		**EAFNOSUPPORT**
+ *			*tuple_size* doesn't match supported address families
+ *			(AF_INET; AF_INET6 when CONFIG_IPV6 is enabled).
+ *
+ *		**EINVAL**
+ *			Input arguments are not valid.
+ *
+ *		**ENOENT**
+ *			Connection tracking entry for *tuple* wasn't found.
+ *
+ *		This helper is available only if the kernel was compiled with
+ *		**CONFIG_NF_CONNTRACK** configuration option as built-in.
+ *	Return
+ *		Connection tracking status (see **enum ip_conntrack_status**),
+ *		or **NULL** in case of failure or if there is no conntrack entry
+ *		for this tuple.
+ *
+ * struct bpf_nf_conn *bpf_ct_lookup_udp(void *ctx, struct bpf_sock_tuple *tuple, u32 tuple_size, u64 netns, u64 *flags_err)
+ *	Description
+ *		Look for conntrack info for a UDP connection matching *tuple*,
+ *		optionally in a child network namespace *netns*.
+ *
+ *		The *flags_err* argument is used as an input parameter for flags
+ *		and output parameter for the error code. The flags can be a
+ *		combination of one or more of the following values:
+ *
+ *		**BPF_F_CT_DIR_REPLY**
+ *			When set, the conntrack direction is IP_CT_DIR_REPLY,
+ *			otherwise IP_CT_DIR_ORIGINAL.
+ *
+ *		If the function returns **NULL**, *flags_err* will indicate the
+ *		error code:
+ *
+ *		**EAFNOSUPPORT**
+ *			*tuple_size* doesn't match supported address families
+ *			(AF_INET; AF_INET6 when CONFIG_IPV6 is enabled).
+ *
+ *		**EINVAL**
+ *			Input arguments are not valid.
+ *
+ *		**ENOENT**
+ *			Connection tracking entry for *tuple* wasn't found.
+ *
+ *		This helper is available only if the kernel was compiled with
+ *		**CONFIG_NF_CONNTRACK** configuration option as built-in.
+ *	Return
+ *		Connection tracking status (see **enum ip_conntrack_status**),
+ *		or **NULL** in case of failure or if there is no conntrack entry
+ *		for this tuple.
+ *
+ * long bpf_ct_release(void *ct)
+ *	Description
+ *		Release the reference held by *ct*. *ct* must be a non-**NULL**
+ *		pointer that was returned from **bpf_ct_lookup_xxx**\ ().
+ *	Return
+ *		0 on success, or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5105,6 +5178,9 @@ union bpf_attr {
 	FN(task_pt_regs),		\
 	FN(get_branch_snapshot),	\
 	FN(trace_vprintk),		\
+	FN(ct_lookup_tcp),		\
+	FN(ct_lookup_udp),		\
+	FN(ct_release),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -5286,6 +5362,11 @@ enum {
 enum {
 	BPF_F_BROADCAST		= (1ULL << 3),
 	BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
+};
+
+/* Flags for bpf_ct_lookup_{tcp,udp} helpers. */
+enum {
+	BPF_F_CT_DIR_REPLY	= (1ULL << 0),
 };
 
 #define __bpf_md_ptr(type, name)	\

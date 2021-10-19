@@ -79,6 +79,7 @@
 #include <net/tls.h>
 #include <net/xdp.h>
 #include <net/netfilter/nf_conntrack.h>
+#include <net/netfilter/nf_conntrack_core.h>
 
 static const struct bpf_func_proto *
 bpf_sk_base_func_proto(enum bpf_func_id func_id);
@@ -7096,6 +7097,194 @@ static const struct bpf_func_proto bpf_sock_ops_reserve_hdr_opt_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+static struct nf_conn *bpf_ct_lookup(struct net *caller_net,
+				     struct bpf_sock_tuple *tuple,
+				     u32 tuple_len,
+				     u8 protonum,
+				     u64 netns_id,
+				     u64 flags)
+{
+	struct nf_conntrack_tuple ct_tuple = {};
+	struct nf_conntrack_tuple_hash *found;
+	struct net *net;
+	u8 direction;
+
+	direction = flags & BPF_F_CT_DIR_REPLY ? IP_CT_DIR_REPLY :
+						 IP_CT_DIR_ORIGINAL;
+
+	if (flags & ~BPF_F_CT_DIR_REPLY)
+		return ERR_PTR(-EINVAL);
+
+	if (tuple_len == sizeof(tuple->ipv4)) {
+		ct_tuple.src.l3num = AF_INET;
+		ct_tuple.src.u3.ip = tuple->ipv4.saddr;
+		ct_tuple.src.u.tcp.port = tuple->ipv4.sport;
+		ct_tuple.dst.u3.ip = tuple->ipv4.daddr;
+		ct_tuple.dst.u.tcp.port = tuple->ipv4.dport;
+#if IS_ENABLED(CONFIG_IPV6)
+	} else if (tuple_len == sizeof(tuple->ipv6)) {
+		ct_tuple.src.l3num = AF_INET6;
+		memcpy(ct_tuple.src.u3.ip6, tuple->ipv6.saddr,
+		       sizeof(tuple->ipv6.saddr));
+		ct_tuple.src.u.tcp.port = tuple->ipv6.sport;
+		memcpy(ct_tuple.dst.u3.ip6, tuple->ipv6.daddr,
+		       sizeof(tuple->ipv6.daddr));
+		ct_tuple.dst.u.tcp.port = tuple->ipv6.dport;
+#endif
+	} else {
+		return ERR_PTR(-EAFNOSUPPORT);
+	}
+
+	ct_tuple.dst.protonum = protonum;
+	ct_tuple.dst.dir = direction;
+
+	net = caller_net;
+	if ((s32)netns_id >= 0) {
+		if (unlikely(netns_id > S32_MAX))
+			return ERR_PTR(-EINVAL);
+		net = get_net_ns_by_id(net, netns_id);
+		if (!net)
+			return ERR_PTR(-EINVAL);
+	}
+
+	found = nf_conntrack_find_get(net, &nf_ct_zone_dflt, &ct_tuple);
+
+	if ((s32)netns_id >= 0)
+		put_net(net);
+
+	if (!found)
+		return ERR_PTR(-ENOENT);
+	return nf_ct_tuplehash_to_ctrack(found);
+}
+
+BPF_CALL_5(bpf_xdp_ct_lookup_tcp, struct xdp_buff *, ctx,
+	   struct bpf_sock_tuple *, tuple, u32, tuple_len,
+	   u64, netns_id, u64 *, flags_err)
+{
+	struct nf_conn *ct;
+
+	ct = bpf_ct_lookup(dev_net(ctx->rxq->dev), tuple, tuple_len,
+			   IPPROTO_TCP, netns_id, *flags_err);
+	if (IS_ERR(ct)) {
+		*flags_err = PTR_ERR(ct);
+		return (unsigned long)NULL;
+	}
+	return (unsigned long)ct;
+}
+
+static const struct bpf_func_proto bpf_xdp_ct_lookup_tcp_proto = {
+	.func		= bpf_xdp_ct_lookup_tcp,
+	.gpl_only	= true, /* nf_conntrack_find_get is GPL */
+	.pkt_access	= true,
+	.ret_type	= RET_PTR_TO_NF_CONN_OR_NULL,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_LONG,
+};
+
+BPF_CALL_5(bpf_xdp_ct_lookup_udp, struct xdp_buff *, ctx,
+	   struct bpf_sock_tuple *, tuple, u32, tuple_len,
+	   u64, netns_id, u64 *, flags_err)
+{
+	struct nf_conn *ct;
+
+	ct = bpf_ct_lookup(dev_net(ctx->rxq->dev), tuple, tuple_len,
+			   IPPROTO_UDP, netns_id, *flags_err);
+	if (IS_ERR(ct)) {
+		*flags_err = PTR_ERR(ct);
+		return (unsigned long)NULL;
+	}
+	return (unsigned long)ct;
+}
+
+static const struct bpf_func_proto bpf_xdp_ct_lookup_udp_proto = {
+	.func		= bpf_xdp_ct_lookup_udp,
+	.gpl_only	= true, /* nf_conntrack_find_get is GPL */
+	.pkt_access	= true,
+	.ret_type	= RET_PTR_TO_NF_CONN_OR_NULL,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_LONG,
+};
+
+BPF_CALL_5(bpf_skb_ct_lookup_tcp, struct sk_buff *, skb,
+	   struct bpf_sock_tuple *, tuple, u32, tuple_len,
+	   u64, netns_id, u64 *, flags_err)
+{
+	struct net *caller_net;
+	struct nf_conn *ct;
+
+	caller_net = skb->dev ? dev_net(skb->dev) : sock_net(skb->sk);
+	ct = bpf_ct_lookup(caller_net, tuple, tuple_len, IPPROTO_TCP,
+			   netns_id, *flags_err);
+	if (IS_ERR(ct)) {
+		*flags_err = PTR_ERR(ct);
+		return (unsigned long)NULL;
+	}
+	return (unsigned long)ct;
+}
+
+static const struct bpf_func_proto bpf_skb_ct_lookup_tcp_proto = {
+	.func		= bpf_skb_ct_lookup_tcp,
+	.gpl_only	= true, /* nf_conntrack_find_get is GPL */
+	.pkt_access	= true,
+	.ret_type	= RET_PTR_TO_NF_CONN_OR_NULL,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_LONG,
+};
+
+BPF_CALL_5(bpf_skb_ct_lookup_udp, struct sk_buff *, skb,
+	   struct bpf_sock_tuple *, tuple, u32, tuple_len,
+	   u64, netns_id, u64 *, flags_err)
+{
+	struct net *caller_net;
+	struct nf_conn *ct;
+
+	caller_net = skb->dev ? dev_net(skb->dev) : sock_net(skb->sk);
+	ct = bpf_ct_lookup(caller_net, tuple, tuple_len, IPPROTO_UDP,
+			   netns_id, *flags_err);
+	if (IS_ERR(ct)) {
+		*flags_err = PTR_ERR(ct);
+		return (unsigned long)NULL;
+	}
+	return (unsigned long)ct;
+}
+
+static const struct bpf_func_proto bpf_skb_ct_lookup_udp_proto = {
+	.func		= bpf_skb_ct_lookup_udp,
+	.gpl_only	= true, /* nf_conntrack_find_get is GPL */
+	.pkt_access	= true,
+	.ret_type	= RET_PTR_TO_NF_CONN_OR_NULL,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_LONG,
+};
+
+BPF_CALL_1(bpf_ct_release, struct nf_conn *, ct)
+{
+	nf_ct_put(ct);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_ct_release_proto = {
+	.func		= bpf_ct_release,
+	.gpl_only	= false,
+	.pkt_access	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_NF_CONN,
+};
+#endif
+
 #endif /* CONFIG_INET */
 
 bool bpf_helper_changes_pkt_data(void *func)
@@ -7455,6 +7644,14 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_tcp_gen_syncookie_proto;
 	case BPF_FUNC_sk_assign:
 		return &bpf_sk_assign_proto;
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+	case BPF_FUNC_ct_lookup_tcp:
+		return &bpf_skb_ct_lookup_tcp_proto;
+	case BPF_FUNC_ct_lookup_udp:
+		return &bpf_skb_ct_lookup_udp_proto;
+	case BPF_FUNC_ct_release:
+		return &bpf_ct_release_proto;
+#endif
 #endif
 	default:
 		return bpf_sk_base_func_proto(func_id);
@@ -7498,6 +7695,14 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_tcp_check_syncookie_proto;
 	case BPF_FUNC_tcp_gen_syncookie:
 		return &bpf_tcp_gen_syncookie_proto;
+#if IS_BUILTIN(CONFIG_NF_CONNTRACK)
+	case BPF_FUNC_ct_lookup_tcp:
+		return &bpf_xdp_ct_lookup_tcp_proto;
+	case BPF_FUNC_ct_lookup_udp:
+		return &bpf_xdp_ct_lookup_udp_proto;
+	case BPF_FUNC_ct_release:
+		return &bpf_ct_release_proto;
+#endif
 #endif
 	default:
 		return bpf_sk_base_func_proto(func_id);
