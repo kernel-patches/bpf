@@ -6754,7 +6754,7 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 
 	return -ENOENT;
 #else
-	return -ENOTSUPP;
+	return -EOPNOTSUPP;
 #endif
 }
 
