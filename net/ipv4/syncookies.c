@@ -85,6 +85,66 @@ u64 cookie_init_timestamp(struct request_sock *req, u64 now)
 	return (u64)ts * (NSEC_PER_SEC / TCP_TS_HZ);
 }
 
+bool cookie_init_timestamp_raw(struct tcphdr *th, __be32 *tsval, __be32 *tsecr)
+{
+	int length = (th->doff * 4) - sizeof(*th);
+	u8 wscale = TS_OPT_WSCALE_MASK;
+	bool option_timestamp = false;
+	bool option_sack = false;
+	u32 cookie;
+	u8 *ptr;
+
+	ptr = (u8 *)(th + 1);
+
+	while (length > 0) {
+		u8 opcode = *ptr++;
+		u8 opsize;
+
+		if (opcode == TCPOPT_EOL)
+			break;
+		if (opcode == TCPOPT_NOP) {
+			length--;
+			continue;
+		}
+
+		if (length < 2)
+			break;
+		opsize = *ptr++;
+		if (opsize < 2)
+			break;
+		if (opsize > length)
+			break;
+
+		switch (opcode) {
+		case TCPOPT_WINDOW:
+			wscale = min_t(u8, *ptr, TCP_MAX_WSCALE);
+			break;
+		case TCPOPT_TIMESTAMP:
+			option_timestamp = true;
+			/* Client's tsval becomes our tsecr. */
+			*tsecr = cpu_to_be32(get_unaligned_be32(ptr));
+			break;
+		case TCPOPT_SACK_PERM:
+			option_sack = true;
+			break;
+		}
+
+		ptr += opsize - 2;
+		length -= opsize;
+	}
+
+	if (!option_timestamp)
+		return false;
+
+	cookie = tcp_time_stamp_raw() & ~TSMASK;
+	cookie |= wscale & TS_OPT_WSCALE_MASK;
+	if (option_sack)
+		cookie |= TS_OPT_SACK;
+	if (th->ece && th->cwr)
+		cookie |= TS_OPT_ECN;
+	*tsval = cpu_to_be32(cookie);
+	return true;
+}
 
 static __u32 secure_tcp_syn_cookie(__be32 saddr, __be32 daddr, __be16 sport,
 				   __be16 dport, __u32 sseq, __u32 data)

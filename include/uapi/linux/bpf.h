@@ -5053,6 +5053,32 @@ union bpf_attr {
  *
  *		**-EPROTONOSUPPORT** if the IP version is not 4 or 6 (or 6, but
  *		CONFIG_IPV6 is disabled).
+ *
+ * int bpf_tcp_raw_gen_tscookie(struct tcphdr *th, u32 th_len, __be32 *tsopt, u32 tsopt_len)
+ *	Description
+ *		Try to generate a timestamp cookie which encodes some of the
+ *		flags sent by the client in the SYN packet: SACK support, ECN
+ *		support, window scale. To be used with SYN cookies.
+ *
+ *		*th* points to the start of the TCP header of the client's SYN
+ *		packet, while *th_len* contains the length of the TCP header (at
+ *		least **sizeof**\ (**struct tcphdr**)).
+ *
+ *		*tsopt* points to the output location where to put the resulting
+ *		timestamp values: tsval and tsecr, in the format of the TCP
+ *		timestamp option.
+ *
+ *	Return
+ *		On success, 0.
+ *
+ *		On failure, the returned value is one of the following:
+ *
+ *		**-EINVAL** if the input arguments are invalid.
+ *
+ *		**-ENOENT** if the TCP header doesn't have the timestamp option.
+ *
+ *		**-EOPNOTSUPP** if the kernel configuration does not enable SYN
+ *		cookies (CONFIG_SYN_COOKIES is off).
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5238,6 +5264,7 @@ union bpf_attr {
 	FN(ct_release),			\
 	FN(tcp_raw_gen_syncookie),	\
 	FN(tcp_raw_check_syncookie),	\
+	FN(tcp_raw_gen_tscookie),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
