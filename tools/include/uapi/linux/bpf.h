@@ -3543,7 +3543,8 @@ union bpf_attr {
  * 		**sizeof**\ (**struct ip6hdr**).
  *
  * 		*th* points to the start of the TCP header, while *th_len*
- * 		contains **sizeof**\ (**struct tcphdr**).
+ *		contains the length of the TCP header (at least
+ *		**sizeof**\ (**struct tcphdr**)).
  * 	Return
  *		0 if *iph* and *th* are a valid SYN cookie ACK.
  *
@@ -3743,7 +3744,8 @@ union bpf_attr {
  *		**sizeof**\ (**struct ip6hdr**).
  *
  *		*th* points to the start of the TCP header, while *th_len*
- *		contains the length of the TCP header.
+ *		contains the length of the TCP header (at least
+ *		**sizeof**\ (**struct tcphdr**)).
  *	Return
  *		On success, lower 32 bits hold the generated SYN cookie in
  *		followed by 16 bits which hold the MSS value for that cookie,
