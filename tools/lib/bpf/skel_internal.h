@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 
 /* This file is a base header for auto-generated *.lskel.h files.
  * Its contents will change and may become part of auto-generation in the future.
@@ -60,10 +61,38 @@ static inline int skel_closenz(int fd)
 	return -EINVAL;
 }
 
+static inline int skel_reserve_bad_fds(struct bpf_load_and_run_opts *opts, int *fds)
+{
+	int fd, err, i;
+
+	for (i = 0; i < 3; i++) {
+		fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+		if (fd < 0) {
+			opts->errstr = "failed to reserve fd 0, 1, and 2";
+			err = -errno;
+			return err;
+		}
+		if (__builtin_expect(fd >= 3, 1)) {
+			close(fd);
+			break;
+		}
+		fds[i] = fd;
+	}
+	return 0;
+}
+
 static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 {
-	int map_fd = -1, prog_fd = -1, key = 0, err;
+	int map_fd = -1, prog_fd = -1, key = 0, err, i;
+	int res_fds[3] = { -1, -1, -1 };
 	union bpf_attr attr;
+
+	/* ensures that we don't open fd 0, 1, or 2 from here on out */
+	err = skel_reserve_bad_fds(opts, res_fds);
+	if (err < 0) {
+		errno = -err;
+		goto out;
+	}
 
 	map_fd = bpf_create_map_name(BPF_MAP_TYPE_ARRAY, "__loader.map", 4,
 				     opts->data_sz, 1, 0);
@@ -115,6 +144,10 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	}
 	err = 0;
 out:
+	for (i = 0; i < 3; i++) {
+		if (res_fds[i] >= 0)
+			close(res_fds[i]);
+	}
 	if (map_fd >= 0)
 		close(map_fd);
 	if (prog_fd >= 0)

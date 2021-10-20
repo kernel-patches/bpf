@@ -74,7 +74,7 @@ static inline int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size)
 		fd = sys_bpf(BPF_PROG_LOAD, attr, size);
 	} while (fd < 0 && errno == EAGAIN && retries-- > 0);
 
-	return fd;
+	return ensure_good_fd(fd);
 }
 
 int bpf_create_map_xattr(const struct bpf_create_map_attr *create_attr)
@@ -104,7 +104,7 @@ int bpf_create_map_xattr(const struct bpf_create_map_attr *create_attr)
 		attr.inner_map_fd = create_attr->inner_map_fd;
 
 	fd = sys_bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_create_map_node(enum bpf_map_type map_type, const char *name,
@@ -182,7 +182,7 @@ int bpf_create_map_in_map_node(enum bpf_map_type map_type, const char *name,
 	}
 
 	fd = sys_bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_create_map_in_map(enum bpf_map_type map_type, const char *name,
@@ -330,7 +330,7 @@ done:
 	/* free() doesn't affect errno, so we don't need to restore it */
 	free(finfo);
 	free(linfo);
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_load_program_xattr(const struct bpf_load_program_attr *load_attr,
@@ -610,7 +610,7 @@ int bpf_obj_get(const char *pathname)
 	attr.pathname = ptr_to_u64((void *)pathname);
 
 	fd = sys_bpf(BPF_OBJ_GET, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_prog_attach(int prog_fd, int target_fd, enum bpf_attach_type type,
@@ -721,7 +721,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 	}
 proceed:
 	fd = sys_bpf(BPF_LINK_CREATE, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_link_detach(int link_fd)
@@ -764,7 +764,7 @@ int bpf_iter_create(int link_fd)
 	attr.iter_create.link_fd = link_fd;
 
 	fd = sys_bpf(BPF_ITER_CREATE, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_prog_query(int target_fd, enum bpf_attach_type type, __u32 query_flags,
@@ -922,7 +922,7 @@ int bpf_prog_get_fd_by_id(__u32 id)
 	attr.prog_id = id;
 
 	fd = sys_bpf(BPF_PROG_GET_FD_BY_ID, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_map_get_fd_by_id(__u32 id)
@@ -934,7 +934,7 @@ int bpf_map_get_fd_by_id(__u32 id)
 	attr.map_id = id;
 
 	fd = sys_bpf(BPF_MAP_GET_FD_BY_ID, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_btf_get_fd_by_id(__u32 id)
@@ -946,7 +946,7 @@ int bpf_btf_get_fd_by_id(__u32 id)
 	attr.btf_id = id;
 
 	fd = sys_bpf(BPF_BTF_GET_FD_BY_ID, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_link_get_fd_by_id(__u32 id)
@@ -958,7 +958,7 @@ int bpf_link_get_fd_by_id(__u32 id)
 	attr.link_id = id;
 
 	fd = sys_bpf(BPF_LINK_GET_FD_BY_ID, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_obj_get_info_by_fd(int bpf_fd, void *info, __u32 *info_len)
@@ -989,7 +989,7 @@ int bpf_raw_tracepoint_open(const char *name, int prog_fd)
 	attr.raw_tracepoint.prog_fd = prog_fd;
 
 	fd = sys_bpf(BPF_RAW_TRACEPOINT_OPEN, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_load_btf(const void *btf, __u32 btf_size, char *log_buf, __u32 log_buf_size,
@@ -1015,7 +1015,7 @@ retry:
 		goto retry;
 	}
 
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf, __u32 *buf_len,
@@ -1051,7 +1051,7 @@ int bpf_enable_stats(enum bpf_stats_type type)
 	attr.enable_stats.type = type;
 
 	fd = sys_bpf(BPF_ENABLE_STATS, &attr, sizeof(attr));
-	return libbpf_err_errno(fd);
+	return libbpf_err_errno(ensure_good_fd(fd));
 }
 
 int bpf_prog_bind_map(int prog_fd, int map_fd,

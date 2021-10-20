@@ -173,7 +173,7 @@ ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx,
 
 	rb->page_size = getpagesize();
 
-	rb->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+	rb->epoll_fd = ensure_good_fd(epoll_create1(EPOLL_CLOEXEC));
 	if (rb->epoll_fd < 0) {
 		err = -errno;
 		pr_warn("ringbuf: failed to create epoll instance: %d\n", err);

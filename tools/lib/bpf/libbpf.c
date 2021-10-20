@@ -1223,7 +1223,7 @@ static int bpf_object__elf_init(struct bpf_object *obj)
 		obj->efile.elf = elf_memory((char *)obj->efile.obj_buf,
 					    obj->efile.obj_buf_sz);
 	} else {
-		obj->efile.fd = open(obj->path, O_RDONLY);
+		obj->efile.fd = ensure_good_fd(open(obj->path, O_RDONLY));
 		if (obj->efile.fd < 0) {
 			char errmsg[STRERR_BUFSIZE], *cp;
 
@@ -9310,10 +9310,10 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 	attr.config2 = offset;		 /* kprobe_addr or probe_offset */
 
 	/* pid filter is meaningful only for uprobes */
-	pfd = syscall(__NR_perf_event_open, &attr,
-		      pid < 0 ? -1 : pid /* pid */,
-		      pid == -1 ? 0 : -1 /* cpu */,
-		      -1 /* group_fd */, PERF_FLAG_FD_CLOEXEC);
+	pfd = ensure_good_fd(syscall(__NR_perf_event_open, &attr,
+			     pid < 0 ? -1 : pid /* pid */,
+			     pid == -1 ? 0 : -1 /* cpu */,
+			     -1 /* group_fd */, PERF_FLAG_FD_CLOEXEC));
 	if (pfd < 0) {
 		err = -errno;
 		pr_warn("%s perf_event_open() failed: %s\n",
@@ -9404,10 +9404,10 @@ static int perf_event_kprobe_open_legacy(const char *probe_name, bool retprobe,
 	attr.config = type;
 	attr.type = PERF_TYPE_TRACEPOINT;
 
-	pfd = syscall(__NR_perf_event_open, &attr,
-		      pid < 0 ? -1 : pid, /* pid */
-		      pid == -1 ? 0 : -1, /* cpu */
-		      -1 /* group_fd */,  PERF_FLAG_FD_CLOEXEC);
+	pfd = ensure_good_fd(syscall(__NR_perf_event_open, &attr,
+			     pid < 0 ? -1 : pid, /* pid */
+			     pid == -1 ? 0 : -1, /* cpu */
+			     -1 /* group_fd */,  PERF_FLAG_FD_CLOEXEC));
 	if (pfd < 0) {
 		err = -errno;
 		pr_warn("legacy kprobe perf_event_open() failed: %s\n",
@@ -9599,10 +9599,10 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	attr.config = type;
 	attr.type = PERF_TYPE_TRACEPOINT;
 
-	pfd = syscall(__NR_perf_event_open, &attr,
-		      pid < 0 ? -1 : pid, /* pid */
-		      pid == -1 ? 0 : -1, /* cpu */
-		      -1 /* group_fd */,  PERF_FLAG_FD_CLOEXEC);
+	pfd = ensure_good_fd(syscall(__NR_perf_event_open, &attr,
+			     pid < 0 ? -1 : pid, /* pid */
+			     pid == -1 ? 0 : -1, /* cpu */
+			     -1 /* group_fd */,  PERF_FLAG_FD_CLOEXEC));
 	if (pfd < 0) {
 		err = -errno;
 		pr_warn("legacy uprobe perf_event_open() failed: %d\n", err);
@@ -9731,8 +9731,8 @@ static int perf_event_open_tracepoint(const char *tp_category,
 	attr.size = sizeof(attr);
 	attr.config = tp_id;
 
-	pfd = syscall(__NR_perf_event_open, &attr, -1 /* pid */, 0 /* cpu */,
-		      -1 /* group_fd */, PERF_FLAG_FD_CLOEXEC);
+	pfd = ensure_good_fd(syscall(__NR_perf_event_open, &attr, -1 /* pid */, 0 /* cpu */,
+			     -1 /* group_fd */, PERF_FLAG_FD_CLOEXEC));
 	if (pfd < 0) {
 		err = -errno;
 		pr_warn("tracepoint '%s/%s' perf_event_open() failed: %s\n",
@@ -10251,8 +10251,8 @@ perf_buffer__open_cpu_buf(struct perf_buffer *pb, struct perf_event_attr *attr,
 	cpu_buf->cpu = cpu;
 	cpu_buf->map_key = map_key;
 
-	cpu_buf->fd = syscall(__NR_perf_event_open, attr, -1 /* pid */, cpu,
-			      -1, PERF_FLAG_FD_CLOEXEC);
+	cpu_buf->fd = ensure_good_fd(syscall(__NR_perf_event_open, attr, -1 /* pid */, cpu,
+				     -1, PERF_FLAG_FD_CLOEXEC));
 	if (cpu_buf->fd < 0) {
 		err = -errno;
 		pr_warn("failed to open perf buffer event on cpu #%d: %s\n",
@@ -10378,7 +10378,7 @@ static struct perf_buffer *__perf_buffer__new(int map_fd, size_t page_cnt,
 	pb->mmap_size = pb->page_size * page_cnt;
 	pb->map_fd = map_fd;
 
-	pb->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+	pb->epoll_fd = ensure_good_fd(epoll_create1(EPOLL_CLOEXEC));
 	if (pb->epoll_fd < 0) {
 		err = -errno;
 		pr_warn("failed to create epoll instance: %s\n",
