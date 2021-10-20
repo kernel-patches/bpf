@@ -598,7 +598,7 @@ close:
 
 static void run_lookup_prog(const struct test *t)
 {
-	int server_fds[MAX_SERVERS] = { -1 };
+	int server_fds[] = { [0 ... MAX_SERVERS - 1] = -1 };
 	int client_fd, reuse_conn_fd = -1;
 	struct bpf_link *lookup_link;
 	int i, err;
@@ -663,8 +663,9 @@ close:
 	if (reuse_conn_fd != -1)
 		close(reuse_conn_fd);
 	for (i = 0; i < ARRAY_SIZE(server_fds); i++) {
-		if (server_fds[i] != -1)
-			close(server_fds[i]);
+		if (server_fds[i] == -1)
+			break;
+		close(server_fds[i]);
 	}
 	bpf_link__destroy(lookup_link);
 }
@@ -1053,7 +1054,7 @@ static void run_sk_assign(struct test_sk_lookup *skel,
 			  struct bpf_program *lookup_prog,
 			  const char *remote_ip, const char *local_ip)
 {
-	int server_fds[MAX_SERVERS] = { -1 };
+	int server_fds[] = { [0 ... MAX_SERVERS - 1] = -1 };
 	struct bpf_sk_lookup ctx;
 	__u64 server_cookie;
 	int i, err;
@@ -1097,8 +1098,9 @@ static void run_sk_assign(struct test_sk_lookup *skel,
 
 close_servers:
 	for (i = 0; i < ARRAY_SIZE(server_fds); i++) {
-		if (server_fds[i] != -1)
-			close(server_fds[i]);
+		if (server_fds[i] == -1)
+			break;
+		close(server_fds[i]);
 	}
 }
 
