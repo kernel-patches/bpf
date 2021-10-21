@@ -661,13 +661,18 @@ static int bpf_core_calc_field_relo(const char *prog_name,
 		if (validate)
 			*validate = true; /* signedness is never ambiguous */
 		break;
-	case BPF_FIELD_LSHIFT_U64:
+	case BPF_FIELD_LSHIFT_U64: {
+		__u32 bits_offset = bit_off - byte_off * 8;
+		__u8 nr_copy_bits;
+
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-		*val = 64 - (bit_off + bit_sz - byte_off  * 8);
+		nr_copy_bits = bit_sz + bits_offset;
 #else
-		*val = (8 - byte_sz) * 8 + (bit_off - byte_off * 8);
+		nr_copy_bits = byte_sz * 8 - bits_offset;
 #endif
+		*val = 64 - nr_copy_bits;
 		break;
+	}
 	case BPF_FIELD_RSHIFT_U64:
 		*val = 64 - bit_sz;
 		if (validate)
