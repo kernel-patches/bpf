@@ -6,6 +6,7 @@
 #include <linux/types.h>
 #include <linux/limits.h>
 #include <linux/bpf.h>
+#include <linux/sched/task.h>
 #include <sys/types.h> /* pid_t */
 
 #define event_contains(obj, mem) ((obj).header.size > offsetof(typeof(obj), mem))
@@ -47,7 +48,7 @@ struct perf_record_mmap2 {
 struct perf_record_comm {
 	struct perf_event_header header;
 	__u32			 pid, tid;
-	char			 comm[16];
+	char			 comm[TASK_COMM_LEN_16];
 };
 
 struct perf_record_namespaces {
@@ -291,7 +292,7 @@ struct perf_record_itrace_start {
 
 struct perf_record_thread_map_entry {
 	__u64			 pid;
-	char			 comm[16];
+	char			 comm[TASK_COMM_LEN_16];
 };
 
 struct perf_record_thread_map {
