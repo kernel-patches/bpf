@@ -7,6 +7,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/version.h>
+#include <linux/sched.h>
 #include <uapi/linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
@@ -65,7 +66,7 @@ static unsigned int log2l(unsigned long v)
 }
 
 struct hist_key {
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 	u64 pid_tgid;
 	u64 uid_gid;
 	u64 index;

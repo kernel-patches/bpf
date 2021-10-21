@@ -23,8 +23,8 @@
 #define MAX_ENTRIES	10000
 
 struct key_t {
-	char waker[TASK_COMM_LEN];
-	char target[TASK_COMM_LEN];
+	char waker[TASK_COMM_LEN_16];
+	char target[TASK_COMM_LEN_16];
 	u32 wret;
 	u32 tret;
 };
@@ -44,7 +44,7 @@ struct {
 } start SEC(".maps");
 
 struct wokeby_t {
-	char name[TASK_COMM_LEN];
+	char name[TASK_COMM_LEN_16];
 	u32 ret;
 };
 
@@ -113,11 +113,11 @@ static inline int update_counts(void *ctx, u32 pid, u64 delta)
 /* taken from /sys/kernel/debug/tracing/events/sched/sched_switch/format */
 struct sched_switch_args {
 	unsigned long long pad;
-	char prev_comm[16];
+	char prev_comm[TASK_COMM_LEN_16];
 	int prev_pid;
 	int prev_prio;
 	long long prev_state;
-	char next_comm[16];
+	char next_comm[TASK_COMM_LEN_16];
 	int next_pid;
 	int next_prio;
 };
