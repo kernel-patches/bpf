@@ -2,5 +2,6 @@
 #define _TOOLS_PERF_LINUX_SCHED_TASK_H
 
 #define TASK_COMM_LEN_16 16
+#define TASK_COMM_LEN_24 24
 
 #endif  /* _TOOLS_PERF_LINUX_SCHED_TASK_H */
