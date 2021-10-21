@@ -3,10 +3,12 @@
 #ifndef __PID_ITER_H
 #define __PID_ITER_H
 
+#include <linux/sched/task.h>
+
 struct pid_iter_entry {
 	__u32 id;
 	int pid;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 #endif

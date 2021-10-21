@@ -12,6 +12,7 @@
 #include <linux/compiler.h>
 #include <linux/kernel.h>
 #include <linux/hashtable.h>
+#include <linux/sched/task.h>
 #include <tools/libc_compat.h>
 
 #include <bpf/libbpf.h>
@@ -124,7 +125,7 @@ struct obj_refs_table {
 
 struct obj_ref {
 	int pid;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 struct obj_refs {
