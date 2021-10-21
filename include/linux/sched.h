@@ -274,6 +274,8 @@ struct task_group;
 
 #define get_current_state()	READ_ONCE(current->__state)
 
+/* To replace the old hard-coded 16 */
+#define TASK_COMM_LEN_16		16
 /* Task command name length: */
 #define TASK_COMM_LEN			16
 
