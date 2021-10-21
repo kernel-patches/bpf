@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "vmlinux.h"
+#include <linux/sched/task.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-
-#define TEST_COMM_LEN 16
 
 struct {
 	__uint(type, BPF_MAP_TYPE_CGROUP_ARRAY);
@@ -18,7 +17,7 @@ SEC("classifier/test_skb_helpers")
 int test_skb_helpers(struct __sk_buff *skb)
 {
 	struct task_struct *task;
-	char comm[TEST_COMM_LEN];
+	char comm[TASK_COMM_LEN_16];
 	__u32 tpid;
 
 	task = (struct task_struct *)bpf_get_current_task();

@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <linux/sched/task.h>
 #include "test_progs.h"
 #include "network_helpers.h"
 #include "test_sk_storage_trace_itself.skel.h"
@@ -15,7 +16,7 @@
 struct sk_stg {
 	__u32 pid;
 	__u32 last_notclose_state;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 static struct test_sk_storage_tracing *skel;

@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include <test_progs.h>
 #include <sys/epoll.h>
+#include <linux/sched/task.h>
 #include "test_ringbuf_multi.skel.h"
 
 static int duration = 0;
@@ -10,7 +11,7 @@ struct sample {
 	int pid;
 	int seq;
 	long value;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 static int process_sample(void *ctx, void *data, size_t len)

@@ -6,11 +6,11 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <linux/bpf.h>
+#include <linux/sched/task.h>
 #include <bpf/bpf_helpers.h>
 
 #define FUNCTION_NAME_LEN 64
 #define FILE_NAME_LEN 128
-#define TASK_COMM_LEN 16
 
 typedef struct {
 	int PyThreadState_frame;
@@ -43,7 +43,7 @@ typedef struct {
 typedef struct {
 	uint32_t pid;
 	uint32_t tid;
-	char comm[TASK_COMM_LEN];
+	char comm[TASK_COMM_LEN_16];
 	int32_t kernel_stack_id;
 	int32_t user_stack_id;
 	bool thread_current;

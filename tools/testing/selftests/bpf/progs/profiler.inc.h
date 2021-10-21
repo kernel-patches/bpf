@@ -344,9 +344,9 @@ static INLINE void* populate_var_metadata(struct var_metadata_t* metadata,
 	metadata->start_time = BPF_CORE_READ(task, start_time);
 	metadata->comm_length = 0;
 
-	size_t comm_length = bpf_core_read_str(payload, TASK_COMM_LEN, &task->comm);
+	size_t comm_length = bpf_core_read_str(payload, TASK_COMM_LEN_16, &task->comm);
 	barrier_var(comm_length);
-	if (comm_length <= TASK_COMM_LEN) {
+	if (comm_length <= TASK_COMM_LEN_16) {
 		barrier_var(comm_length);
 		metadata->comm_length = comm_length;
 		payload += comm_length;
@@ -648,9 +648,9 @@ int raw_tracepoint__sched_process_exit(void* ctx)
 			kill_data->kill_target_name_length = 0;
 			kill_data->kill_target_cgroup_proc_length = 0;
 
-			size_t comm_length = bpf_core_read_str(payload, TASK_COMM_LEN, &task->comm);
+			size_t comm_length = bpf_core_read_str(payload, TASK_COMM_LEN_16, &task->comm);
 			barrier_var(comm_length);
-			if (comm_length <= TASK_COMM_LEN) {
+			if (comm_length <= TASK_COMM_LEN_16) {
 				barrier_var(comm_length);
 				kill_data->kill_target_name_length = comm_length;
 				payload += comm_length;

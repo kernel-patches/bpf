@@ -2,6 +2,7 @@
 /* Copyright (c) 2020 Facebook */
 
 #include <vmlinux.h>
+#include <linux/sched/task.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
@@ -9,7 +10,7 @@
 struct sk_stg {
 	__u32 pid;
 	__u32 last_notclose_state;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 struct {
@@ -27,7 +28,7 @@ struct {
 	__type(value, int);
 } del_sk_stg_map SEC(".maps");
 
-char task_comm[16] = "";
+char task_comm[TASK_COMM_LEN_16] = "";
 
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(trace_inet_sock_set_state, struct sock *sk, int oldstate,

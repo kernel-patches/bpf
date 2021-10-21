@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <linux/sched/task.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 
@@ -26,7 +27,7 @@ struct core_reloc_kernel_output {
 struct task_struct {
 	int pid;
 	int tgid;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 	struct task_struct *group_leader;
 };
 

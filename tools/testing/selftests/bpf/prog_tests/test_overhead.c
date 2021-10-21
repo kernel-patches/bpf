@@ -4,6 +4,7 @@
 #include <sched.h>
 #include <sys/prctl.h>
 #include <test_progs.h>
+#include <linux/sched/task.h>
 
 #define MAX_CNT 100000
 
@@ -67,7 +68,7 @@ void test_test_overhead(void)
 	struct bpf_object *obj;
 	struct bpf_link *link;
 	int err, duration = 0;
-	char comm[16] = {};
+	char comm[TASK_COMM_LEN_16] = {};
 
 	if (CHECK_FAIL(prctl(PR_GET_NAME, comm, 0L, 0L, 0L)))
 		return;

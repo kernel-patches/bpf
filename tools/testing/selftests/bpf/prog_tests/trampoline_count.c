@@ -3,6 +3,7 @@
 #include <sched.h>
 #include <sys/prctl.h>
 #include <test_progs.h>
+#include <linux/sched/task.h>
 
 #define MAX_TRAMP_PROGS 38
 
@@ -50,7 +51,7 @@ void test_trampoline_count(void)
 	int err, i = 0, duration = 0;
 	struct bpf_object *obj;
 	struct bpf_link *link;
-	char comm[16] = {};
+	char comm[TASK_COMM_LEN_16] = {};
 
 	/* attach 'allowed' trampoline programs */
 	for (i = 0; i < MAX_TRAMP_PROGS; i++) {

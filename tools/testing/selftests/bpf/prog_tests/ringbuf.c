@@ -12,6 +12,7 @@
 #include <sys/sysinfo.h>
 #include <linux/perf_event.h>
 #include <linux/ring_buffer.h>
+#include <linux/sched/task.h>
 #include "test_ringbuf.lskel.h"
 
 #define EDONE 7777
@@ -22,7 +23,7 @@ struct sample {
 	int pid;
 	int seq;
 	long value;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 static int sample_cnt;

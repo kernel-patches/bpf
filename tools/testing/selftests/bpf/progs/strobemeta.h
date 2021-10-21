@@ -8,12 +8,12 @@
 #include <linux/ptrace.h>
 #include <linux/sched.h>
 #include <linux/types.h>
+#include <linux/sched/task.h>
 #include <bpf/bpf_helpers.h>
 
 typedef uint32_t pid_t;
 struct task_struct {};
 
-#define TASK_COMM_LEN 16
 #define PERF_MAX_STACK_DEPTH 127
 
 #define STROBE_TYPE_INVALID 0
@@ -189,7 +189,7 @@ struct strobemeta_payload {
 
 struct strobelight_bpf_sample {
 	uint64_t ktime;
-	char comm[TASK_COMM_LEN];
+	char comm[TASK_COMM_LEN_16];
 	pid_t pid;
 	int user_stack_id;
 	int kernel_stack_id;
@@ -520,7 +520,7 @@ int on_event(struct pt_regs *ctx) {
 		return 0; /* this will never happen */
 
 	sample->pid = pid;
-	bpf_get_current_comm(&sample->comm, TASK_COMM_LEN);
+	bpf_get_current_comm(&sample->comm, TASK_COMM_LEN_16);
 	ktime_ns = bpf_ktime_get_ns();
 	sample->ktime = ktime_ns;
 

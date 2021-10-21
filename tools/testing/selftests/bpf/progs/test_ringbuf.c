@@ -2,6 +2,7 @@
 // Copyright (c) 2020 Facebook
 
 #include <linux/bpf.h>
+#include <linux/sched/task.h>
 #include <bpf/bpf_helpers.h>
 
 char _license[] SEC("license") = "GPL";
@@ -10,7 +11,7 @@ struct sample {
 	int pid;
 	int seq;
 	long value;
-	char comm[16];
+	char comm[TASK_COMM_LEN_16];
 };
 
 struct {
