@@ -1823,20 +1823,29 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 bool bpf_prog_array_compatible(struct bpf_array *array,
 			       const struct bpf_prog *fp)
 {
+	u32 map_type, prog_type = fp->type;
+
 	if (fp->kprobe_override)
 		return false;
 
-	if (!array->aux->type) {
-		/* There's no owner yet where we could check for
-		 * compatibility.
+	/* Encode the jited status in the top-most bit of the aux->type field so
+	 * we have a single value we can atomically swap in below
+	 */
+	if (fp->jited)
+		prog_type |= BPF_MAP_JITED_FLAG;
+
+	map_type = READ_ONCE(array->aux->type);
+	if (!map_type) {
+		/* There's no owner yet where we could check for compatibility.
+		 * Do an atomic swap to prevent racing with another invocation
+		 * of this branch (via simultaneous map_update syscalls).
 		 */
-		array->aux->type  = fp->type;
-		array->aux->jited = fp->jited;
+		if (cmpxchg(&array->aux->type, 0, prog_type))
+			return false;
 		return true;
 	}
 
-	return array->aux->type  == fp->type &&
-	       array->aux->jited == fp->jited;
+	return map_type == prog_type;
 }
 
 static int bpf_check_tail_call(const struct bpf_prog *fp)

@@ -543,8 +543,8 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 
 	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY) {
 		array = container_of(map, struct bpf_array, map);
-		type  = array->aux->type;
-		jited = array->aux->jited;
+		type  = array->aux->type & ~BPF_MAP_JITED_FLAG;
+		jited = !!(array->aux->type & BPF_MAP_JITED_FLAG);
 	}
 
 	seq_printf(m,

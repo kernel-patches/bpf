@@ -923,14 +923,19 @@ struct bpf_prog_aux {
 	};
 };
 
+#define BPF_MAP_JITED_FLAG (1 << 31)
+
 struct bpf_array_aux {
 	/* 'Ownership' of prog array is claimed by the first program that
 	 * is going to use this map or by the first program which FD is
 	 * stored in the map to make sure that all callers and callees have
 	 * the same prog type and JITed flag.
+	 *
+	 * We store the type as a u32 and encode the jited state in the
+	 * most-significant bit (BPF_MAP_JITED_FLAG). This allows setting the
+	 * type atomically without locking.
 	 */
-	enum bpf_prog_type type;
-	bool jited;
+	u32 type;
 	/* Programs with direct jumps into programs part of this array. */
 	struct list_head poke_progs;
 	struct bpf_map *map;
