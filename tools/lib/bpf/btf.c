@@ -3936,8 +3936,16 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 		 * types within a single CU. So work around that by explicitly
 		 * allowing identical array types here.
 		 */
-		return hypot_type_id == cand_id ||
-		       btf_dedup_identical_arrays(d, hypot_type_id, cand_id);
+		struct btf_type *t;
+
+		if (hypot_type_id == cand_id)
+			return 1;
+		t = btf_type_by_id(d->btf, hypot_type_id);
+		if (btf_is_array(t))
+			return btf_dedup_identical_arrays(d, hypot_type_id, cand_id);
+		if (btf_is_struct(t))
+			return btf_dedup_is_equiv(d, hypot_type_id, cand_id);
+		return 0;
 	}
 
 	if (btf_dedup_hypot_map_add(d, canon_id, cand_id))
