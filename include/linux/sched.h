@@ -279,7 +279,7 @@ struct task_group;
  * BPF programs.
  */
 enum {
-	TASK_COMM_LEN = 16,
+	TASK_COMM_LEN = 24,
 };
 
 extern void scheduler_tick(void);
