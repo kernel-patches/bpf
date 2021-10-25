@@ -341,6 +341,15 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK_OR_NULL,	/* pointer to stack or NULL */
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
+	ARG_PTR_TO_WRITABLE_MEM,	/* pointer to valid memory. Compared to
+					 * ARG_PTR_TO_MEM, this arg_type is not
+					 * compatible with RDONLY memory. If the
+					 * argument may be updated by the helper,
+					 * use this type.
+					 */
+	ARG_PTR_TO_WRITABLE_MEM_OR_NULL,   /* pointer to memory or null, similar to
+					    * ARG_PTR_TO_WRITABLE_MEM.
+					    */
 	__BPF_ARG_TYPE_MAX,
 };
 
