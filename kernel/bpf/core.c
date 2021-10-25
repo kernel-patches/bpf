@@ -2222,6 +2222,23 @@ void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 	}
 }
 
+struct bpf_prog *bpf_map_get_xdp_prog(struct bpf_map *map, int fd,
+				      enum bpf_attach_type attach_type)
+{
+	struct bpf_prog *prog;
+
+	prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_XDP);
+	if (IS_ERR(prog))
+		return prog;
+
+	if (prog->expected_attach_type != attach_type) {
+		bpf_prog_put(prog);
+		return ERR_PTR(-EINVAL);
+	}
+
+	return prog;
+}
+
 static void bpf_free_used_maps(struct bpf_prog_aux *aux)
 {
 	__bpf_free_used_maps(aux, aux->used_maps, aux->used_map_cnt);

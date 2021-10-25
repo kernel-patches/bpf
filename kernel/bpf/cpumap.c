@@ -397,18 +397,14 @@ static int cpu_map_kthread_run(void *data)
 	return 0;
 }
 
-static int __cpu_map_load_bpf_program(struct bpf_cpu_map_entry *rcpu, int fd)
+static int __cpu_map_load_bpf_program(struct bpf_cpu_map_entry *rcpu,
+				      struct bpf_map *map, int fd)
 {
 	struct bpf_prog *prog;
 
-	prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_XDP);
+	prog = bpf_map_get_xdp_prog(map, fd, BPF_XDP_CPUMAP);
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
-
-	if (prog->expected_attach_type != BPF_XDP_CPUMAP) {
-		bpf_prog_put(prog);
-		return -EINVAL;
-	}
 
 	rcpu->value.bpf_prog.id = prog->aux->id;
 	rcpu->prog = prog;
@@ -457,7 +453,7 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 	rcpu->map_id = map->id;
 	rcpu->value.qsize  = value->qsize;
 
-	if (fd > 0 && __cpu_map_load_bpf_program(rcpu, fd))
+	if (fd > 0 && __cpu_map_load_bpf_program(rcpu, map, fd))
 		goto free_ptr_ring;
 
 	/* Setup kthread */

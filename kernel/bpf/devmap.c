@@ -864,12 +864,12 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 		goto err_out;
 
 	if (val->bpf_prog.fd > 0) {
-		prog = bpf_prog_get_type_dev(val->bpf_prog.fd,
-					     BPF_PROG_TYPE_XDP, false);
-		if (IS_ERR(prog))
-			goto err_put_dev;
-		if (prog->expected_attach_type != BPF_XDP_DEVMAP)
-			goto err_put_prog;
+		prog = bpf_map_get_xdp_prog(&dtab->map, val->bpf_prog.fd,
+					    BPF_XDP_DEVMAP);
+		if (IS_ERR(prog)) {
+			dev_put(dev->dev);
+			goto err_out;
+		}
 	}
 
 	dev->idx = idx;
@@ -884,10 +884,6 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 	dev->val.ifindex = val->ifindex;
 
 	return dev;
-err_put_prog:
-	bpf_prog_put(prog);
-err_put_dev:
-	dev_put(dev->dev);
 err_out:
 	kfree(dev);
 	return ERR_PTR(-EINVAL);

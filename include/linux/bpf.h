@@ -1953,6 +1953,8 @@ static inline struct bpf_prog *bpf_prog_get_type(u32 ufd,
 	return bpf_prog_get_type_dev(ufd, type, false);
 }
 
+struct bpf_prog *bpf_map_get_xdp_prog(struct bpf_map *map, int fd,
+				      enum bpf_attach_type attach_type);
 void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 			  struct bpf_map **used_maps, u32 len);
 
