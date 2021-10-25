@@ -5,6 +5,7 @@
 #include <linux/elf.h>
 #include <linux/elfcore.h>
 #include <linux/compat.h>
+#include <linux/sched.h>
 
 /*
  * Make sure these layouts match the linux/elfcore.h native definitions.
@@ -43,7 +44,7 @@ struct compat_elf_prpsinfo
 	__compat_uid_t			pr_uid;
 	__compat_gid_t			pr_gid;
 	compat_pid_t			pr_pid, pr_ppid, pr_pgrp, pr_sid;
-	char				pr_fname[16];
+	char				pr_fname[TASK_COMM_LEN];
 	char				pr_psargs[ELF_PRARGSZ];
 };
 
