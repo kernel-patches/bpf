@@ -100,6 +100,18 @@ static bool should_run(struct test_selector *sel, int num, const char *name)
 	return num < sel->num_set_len && sel->num_set[num];
 }
 
+static void dump_subtest_status(bool display) {
+	fflush(env.subtest_status_fd);
+	if (display) {
+		if (env.subtest_status_cnt) {
+			env.subtest_status_buf[env.subtest_status_cnt] = '\0';
+			fputs(env.subtest_status_buf, stdout);
+		}
+	}
+	rewind(env.subtest_status_fd);
+	fflush(env.subtest_status_fd);
+}
+
 static void dump_test_log(const struct prog_test_def *test, bool failed)
 {
 	if (stdout == env.stdout)
@@ -112,12 +124,17 @@ static void dump_test_log(const struct prog_test_def *test, bool failed)
 	fflush(stdout); /* exports env.log_buf & env.log_cnt */
 
 	if (env.verbosity > VERBOSE_NONE || test->force_log || failed) {
-		if (env.log_cnt) {
-			env.log_buf[env.log_cnt] = '\0';
-			fprintf(env.stdout, "%s", env.log_buf);
-			if (env.log_buf[env.log_cnt - 1] != '\n')
-				fprintf(env.stdout, "\n");
-		}
+		dump_subtest_status(false);
+	} else {
+		rewind(stdout);
+		dump_subtest_status(true);
+		fflush(stdout);
+	}
+	if (env.log_cnt) {
+		env.log_buf[env.log_cnt] = '\0';
+		fprintf(env.stdout, "%s", env.log_buf);
+		if (env.log_buf[env.log_cnt - 1] != '\n')
+			fprintf(env.stdout, "\n");
 	}
 }
 
@@ -183,7 +200,12 @@ void test__end_subtest(void)
 
 	dump_test_log(test, sub_error_cnt);
 
+	// Print two copies here, one as part of full logs, another one will
+	// only be used if there is no need to show full logs.
 	fprintf(stdout, "#%d/%d %s/%s:%s\n",
+		test->test_num, test->subtest_num, test->test_name, test->subtest_name,
+		sub_error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
+	fprintf(env.subtest_status_fd, "#%d/%d %s/%s:%s\n",
 	       test->test_num, test->subtest_num, test->test_name, test->subtest_name,
 	       sub_error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
 
@@ -1250,6 +1272,15 @@ static int worker_main(int sock)
 
 			run_one_test(test_to_run);
 
+			// discard logs if we don't need them
+			if (env.verbosity > VERBOSE_NONE || test->force_log || test->error_cnt) {
+				dump_subtest_status(false);
+			} else {
+				rewind(stdout);
+				dump_subtest_status(true);
+				fflush(stdout);
+			}
+
 			stdio_restore();
 
 			memset(&msg_done, 0, sizeof(msg_done));
@@ -1260,10 +1291,9 @@ static int worker_main(int sock)
 			msg_done.test_done.sub_succ_cnt = test->sub_succ_cnt;
 			msg_done.test_done.have_log = false;
 
-			if (env.verbosity > VERBOSE_NONE || test->force_log || test->error_cnt) {
-				if (env.log_cnt)
-					msg_done.test_done.have_log = true;
-			}
+			if (env.log_cnt)
+				msg_done.test_done.have_log = true;
+
 			if (send_message(sock, &msg_done) < 0) {
 				perror("Fail to send message done");
 				goto out;
@@ -1357,6 +1387,12 @@ int main(int argc, char **argv)
 
 	env.stdout = stdout;
 	env.stderr = stderr;
+	env.subtest_status_fd = open_memstream(
+		&env.subtest_status_buf, &env.subtest_status_cnt);
+	if (!env.subtest_status_fd) {
+		perror("Failed to setup env.subtest_status_fd");
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
 
 	env.has_testmod = true;
 	if (!env.list_test_names && load_bpf_testmod()) {

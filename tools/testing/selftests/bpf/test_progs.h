@@ -89,6 +89,10 @@ struct test_env {
 	pid_t *worker_pids; /* array of worker pids */
 	int *worker_socks; /* array of worker socks */
 	int *worker_current_test; /* array of current running test for each worker */
+
+	FILE* subtest_status_fd; /* fd for printing status line for subtests */
+	char *subtest_status_buf; /* buffer for subtests status */
+	size_t subtest_status_cnt;
 };
 
 #define MAX_LOG_TRUNK_SIZE 8192
