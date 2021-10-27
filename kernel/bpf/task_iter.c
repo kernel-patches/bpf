@@ -8,6 +8,7 @@
 #include <linux/fdtable.h>
 #include <linux/filter.h>
 #include <linux/btf_ids.h>
+#include <linux/irq_work.h>
 
 struct bpf_iter_seq_task_common {
 	struct pid_namespace *ns;
@@ -20,6 +21,25 @@ struct bpf_iter_seq_task_info {
 	struct bpf_iter_seq_task_common common;
 	u32 tid;
 };
+
+/* irq_work to run mmap_read_unlock() */
+struct task_iter_irq_work {
+	struct irq_work irq_work;
+	struct mm_struct *mm;
+};
+
+static DEFINE_PER_CPU(struct task_iter_irq_work, mmap_unlock_work);
+
+static void do_mmap_read_unlock(struct irq_work *entry)
+{
+	struct task_iter_irq_work *work;
+
+	if (WARN_ON_ONCE(IS_ENABLED(CONFIG_PREEMPT_RT)))
+		return;
+
+	work = container_of(entry, struct task_iter_irq_work, irq_work);
+	mmap_read_unlock_non_owner(work->mm);
+}
 
 static struct task_struct *task_seq_get_next(struct pid_namespace *ns,
 					     u32 *tid,
@@ -586,9 +606,89 @@ static struct bpf_iter_reg task_vma_reg_info = {
 	.seq_info		= &task_vma_seq_info,
 };
 
+BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
+	   bpf_callback_t, callback_fn, void *, callback_ctx, u64, flags)
+{
+	struct task_iter_irq_work *work = NULL;
+	struct mm_struct *mm = task->mm;
+	struct vm_area_struct *vma;
+	bool irq_work_busy = false;
+	int ret = -ENOENT;
+
+	if (flags)
+		return -EINVAL;
+
+	if (!mm)
+		return -ENOENT;
+
+	/*
+	 * Similar to stackmap with build_id support, we cannot simply do
+	 * mmap_read_unlock when the irq is disabled. Instead, we need do
+	 * the unlock in the irq_work.
+	 */
+	if (irqs_disabled()) {
+		if (!IS_ENABLED(CONFIG_PREEMPT_RT)) {
+			work = this_cpu_ptr(&mmap_unlock_work);
+			if (irq_work_is_busy(&work->irq_work)) {
+				/* cannot queue more mmap_unlock, abort. */
+				irq_work_busy = true;
+			}
+		} else {
+			/*
+			 * PREEMPT_RT does not allow to trylock mmap sem in
+			 * interrupt disabled context, abort.
+			 */
+			irq_work_busy = true;
+		}
+	}
+
+	if (irq_work_busy || !mmap_read_trylock(mm))
+		return -EBUSY;
+
+	vma = find_vma(mm, start);
+
+	if (vma && vma->vm_start <= start && vma->vm_end > start) {
+		callback_fn((u64)(long)task, (u64)(long)vma,
+			    (u64)(long)callback_ctx, 0, 0);
+		ret = 0;
+	}
+	if (!work) {
+		mmap_read_unlock(current->mm);
+	} else {
+		work->mm = current->mm;
+
+		/* The lock will be released once we're out of interrupt
+		 * context. Tell lockdep that we've released it now so
+		 * it doesn't complain that we forgot to release it.
+		 */
+		rwsem_release(&current->mm->mmap_lock.dep_map, _RET_IP_);
+		irq_work_queue(&work->irq_work);
+	}
+	return ret;
+}
+
+BTF_ID_LIST_SINGLE(btf_find_vma_ids, struct, task_struct)
+
+const struct bpf_func_proto bpf_find_vma_proto = {
+	.func		= bpf_find_vma,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_find_vma_ids[0],
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_FUNC,
+	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
+	.arg5_type	= ARG_ANYTHING,
+};
+
 static int __init task_iter_init(void)
 {
-	int ret;
+	struct task_iter_irq_work *work;
+	int ret, cpu;
+
+	for_each_possible_cpu(cpu) {
+		work = per_cpu_ptr(&mmap_unlock_work, cpu);
+		init_irq_work(&work->irq_work, do_mmap_read_unlock);
+	}
 
 	task_reg_info.ctx_arg_info[0].btf_id = btf_task_struct_ids[0];
 	ret = bpf_iter_reg_target(&task_reg_info);
