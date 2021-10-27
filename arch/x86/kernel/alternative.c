@@ -389,6 +389,7 @@ static int emit_indirect(int op, int reg, u8 *bytes)
  *
  *   CALL *%\reg
  *
+ * It also tries to inline spectre_v2=retpoline,amd when size permits.
  */
 static int patch_retpoline(void *addr, struct insn *insn, u8 *bytes)
 {
@@ -405,7 +406,8 @@ static int patch_retpoline(void *addr, struct insn *insn, u8 *bytes)
 	/* If anyone ever does: CALL/JMP *%rsp, we're in deep trouble. */
 	BUG_ON(reg == 4);
 
-	if (cpu_feature_enabled(X86_FEATURE_RETPOLINE))
+	if (cpu_feature_enabled(X86_FEATURE_RETPOLINE) &&
+	    !cpu_feature_enabled(X86_FEATURE_RETPOLINE_AMD))
 		return -1;
 
 	op = insn->opcode.bytes[0];
@@ -418,8 +420,9 @@ static int patch_retpoline(void *addr, struct insn *insn, u8 *bytes)
 	 * into:
 	 *
 	 *   Jncc.d8 1f
+	 *   [ LFENCE ]
 	 *   JMP *%\reg
-	 *   NOP
+	 *   [ NOP ]
 	 * 1:
 	 */
 	if (op == 0x0f && (insn->opcode.bytes[1] & 0xf0) == 0x80) {
@@ -430,6 +433,15 @@ static int patch_retpoline(void *addr, struct insn *insn, u8 *bytes)
 		bytes[i++] = insn->length - 2;
 
 		op = JMP32_INSN_OPCODE;
+	}
+
+	/*
+	 * For RETPOLINE_AMD: prepend the indirect CALL/JMP with an LFENCE.
+	 */
+	if (cpu_feature_enabled(X86_FEATURE_RETPOLINE_AMD)) {
+		bytes[i++] = 0x0f;
+		bytes[i++] = 0xae;
+		bytes[i++] = 0xe8; /* LFENCE */
 	}
 
 	ret = emit_indirect(op, reg, bytes + i);
