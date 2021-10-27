@@ -19,6 +19,7 @@
 
 #include "libbpf_common.h"
 #include "libbpf_legacy.h"
+#include "relo_core.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1019,6 +1020,9 @@ LIBBPF_API int bpf_linker__add_file(struct bpf_linker *linker,
 				    const struct bpf_linker_file_opts *opts);
 LIBBPF_API int bpf_linker__finalize(struct bpf_linker *linker);
 LIBBPF_API void bpf_linker__free(struct bpf_linker *linker);
+
+LIBBPF_API int bpf_object__reloc_info_gen(struct btf_reloc_info *info,
+					  struct bpf_object *obj);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -88,11 +88,20 @@ struct bpf_core_cand_list {
 	int len;
 };
 
+struct btf_reloc_info;
+
+LIBBPF_API struct btf_reloc_info *bpf_reloc_info__new(const char *targ_btf_path);
+LIBBPF_API void bpf_reloc_info__free(struct btf_reloc_info *info);
+LIBBPF_API struct btf *bpf_reloc_info__get_btf(struct btf_reloc_info *info);
+
+struct btf *bpf_reloc_info_get_src_btf(struct btf_reloc_info *info);
+
 int bpf_core_apply_relo_insn(const char *prog_name,
 			     struct bpf_insn *insn, int insn_idx,
 			     const struct bpf_core_relo *relo, int relo_idx,
 			     const struct btf *local_btf,
-			     struct bpf_core_cand_list *cands);
+			     struct bpf_core_cand_list *cands,
+			     struct btf_reloc_info *reloc_info);
 int bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,
 			      const struct btf *targ_btf, __u32 targ_id);
 

@@ -546,6 +546,9 @@ struct bpf_object {
 	size_t btf_module_cnt;
 	size_t btf_module_cap;
 
+	/* Relocation info when using bpf_object__reloc_info_gen() */
+	struct btf_reloc_info *reloc_info;
+
 	void *priv;
 	bpf_object_clear_priv_t clear_priv;
 
@@ -5403,7 +5406,8 @@ static int bpf_core_apply_relo(struct bpf_program *prog,
 			       const struct bpf_core_relo *relo,
 			       int relo_idx,
 			       const struct btf *local_btf,
-			       struct hashmap *cand_cache)
+			       struct hashmap *cand_cache,
+			       struct btf_reloc_info *reloc_info)
 {
 	const void *type_key = u32_as_hash_key(relo->type_id);
 	struct bpf_core_cand_list *cands = NULL;
@@ -5457,7 +5461,8 @@ static int bpf_core_apply_relo(struct bpf_program *prog,
 		}
 	}
 
-	return bpf_core_apply_relo_insn(prog_name, insn, insn_idx, relo, relo_idx, local_btf, cands);
+	return bpf_core_apply_relo_insn(prog_name, insn, insn_idx, relo, relo_idx, local_btf, cands,
+					reloc_info);
 }
 
 static int
@@ -5482,6 +5487,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			pr_warn("failed to parse target BTF: %d\n", err);
 			return err;
 		}
+	} else if (obj->reloc_info && bpf_reloc_info_get_src_btf(obj->reloc_info)) {
+		obj->btf_vmlinux_override = bpf_reloc_info_get_src_btf(obj->reloc_info);
 	}
 
 	cand_cache = hashmap__new(bpf_core_hash_fn, bpf_core_equal_fn, NULL);
@@ -5533,7 +5540,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			if (!prog->load)
 				continue;
 
-			err = bpf_core_apply_relo(prog, rec, i, obj->btf, cand_cache);
+			err = bpf_core_apply_relo(prog, rec, i, obj->btf, cand_cache,
+						  obj->reloc_info);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to relocate: %d\n",
 					prog->name, i, err);
@@ -5543,9 +5551,11 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 	}
 
 out:
-	/* obj->btf_vmlinux and module BTFs are freed after object load */
-	btf__free(obj->btf_vmlinux_override);
-	obj->btf_vmlinux_override = NULL;
+	if (!obj->reloc_info) {
+		/* obj->btf_vmlinux and module BTFs are freed after object load */
+		btf__free(obj->btf_vmlinux_override);
+		obj->btf_vmlinux_override = NULL;
+	}
 
 	if (!IS_ERR_OR_NULL(cand_cache)) {
 		hashmap__for_each_entry(cand_cache, entry, i) {
@@ -7239,6 +7249,12 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 	}
 
 	return 0;
+}
+
+int bpf_object__reloc_info_gen(struct btf_reloc_info *info, struct bpf_object *obj)
+{
+	obj->reloc_info = info;
+	return bpf_object__relocate_core(obj, NULL);
 }
 
 int bpf_object__load_xattr(struct bpf_object_load_attr *attr)

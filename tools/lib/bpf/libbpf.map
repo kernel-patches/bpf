@@ -402,4 +402,9 @@ LIBBPF_0.6.0 {
 		btf__raw_data;
 		btf__type_cnt;
 		btf__save_to_file;
+		bpf_reloc_info__new;
+		bpf_reloc_info__free;
+		bpf_object__reloc_info_gen;
+		bpf_reloc_info__get_btf;
+
 } LIBBPF_0.5.0;
