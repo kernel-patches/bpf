@@ -922,6 +922,9 @@ BTF_ID(func, vfs_fallocate)
 BTF_ID(func, dentry_open)
 BTF_ID(func, vfs_getattr)
 BTF_ID(func, filp_close)
+#ifdef CONFIG_PERF_EVENTS
+BTF_ID(func, perf_event_mmap)
+#endif
 BTF_SET_END(btf_allowlist_d_path)
 
 static bool bpf_d_path_allowed(const struct bpf_prog *prog)
