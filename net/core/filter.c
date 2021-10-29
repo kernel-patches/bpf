@@ -2107,9 +2107,19 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 		return -ENETDOWN;
 	}
 
-	skb->dev = dev;
+	/* The target netdevice (e.g. ifb) may use the:
+	 * - skb_iif
+	 * - redirected
+	 * - from_ingress
+	 */
+	skb->skb_iif = skb->dev->ifindex;
+#ifdef CONFIG_NET_CLS_ACT
+	skb_set_redirected(skb, skb->tc_at_ingress);
+#else
 	skb->tstamp = 0;
+#endif
 
+	skb->dev = dev;
 	dev_xmit_recursion_inc();
 	ret = dev_queue_xmit(skb);
 	dev_xmit_recursion_dec();
