@@ -6713,8 +6713,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	}
 
 	/* Check the arguments */
-	err = btf_check_kfunc_arg_match(env, desc_btf, func_id, regs);
-	if (err)
+	err = btf_check_kfunc_arg_match(env, desc_btf, func_id, regs, btf_mod);
+	if (err < 0)
 		return err;
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
