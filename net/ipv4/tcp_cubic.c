@@ -497,7 +497,10 @@ BTF_ID(func, cubictcp_acked)
 #endif
 BTF_SET_END(tcp_cubic_kfunc_ids)
 
-static DEFINE_KFUNC_BTF_ID_SET(&tcp_cubic_kfunc_ids, tcp_cubic_kfunc_btf_set);
+static struct kfunc_btf_id_set tcp_cubic_kfunc_btf_set = {
+	.owner = THIS_MODULE,
+	.set   = &tcp_cubic_kfunc_ids,
+};
 
 static int __init cubictcp_register(void)
 {

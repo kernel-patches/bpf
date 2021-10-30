@@ -251,7 +251,10 @@ BTF_ID(func, dctcp_state)
 #endif
 BTF_SET_END(tcp_dctcp_kfunc_ids)
 
-static DEFINE_KFUNC_BTF_ID_SET(&tcp_dctcp_kfunc_ids, tcp_dctcp_kfunc_btf_set);
+static struct kfunc_btf_id_set tcp_dctcp_kfunc_btf_set = {
+	.owner = THIS_MODULE,
+	.set   = &tcp_dctcp_kfunc_ids,
+};
 
 static int __init dctcp_register(void)
 {

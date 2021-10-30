@@ -6356,6 +6356,7 @@ struct kfunc_btf_id_list {
 void register_kfunc_btf_id_set(struct kfunc_btf_id_list *l,
 			       struct kfunc_btf_id_set *s)
 {
+	INIT_LIST_HEAD(&s->list);
 	mutex_lock(&l->mutex);
 	list_add(&s->list, &l->list);
 	mutex_unlock(&l->mutex);

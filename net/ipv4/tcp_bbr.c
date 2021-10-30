@@ -1169,7 +1169,10 @@ BTF_ID(func, bbr_set_state)
 #endif
 BTF_SET_END(tcp_bbr_kfunc_ids)
 
-static DEFINE_KFUNC_BTF_ID_SET(&tcp_bbr_kfunc_ids, tcp_bbr_kfunc_btf_set);
+static struct kfunc_btf_id_set tcp_bbr_kfunc_btf_set = {
+	.owner = THIS_MODULE,
+	.set   = &tcp_bbr_kfunc_ids,
+};
 
 static int __init bbr_register(void)
 {

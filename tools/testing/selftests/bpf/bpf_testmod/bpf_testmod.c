@@ -93,7 +93,10 @@ BTF_SET_START(bpf_testmod_kfunc_ids)
 BTF_ID(func, bpf_testmod_test_mod_kfunc)
 BTF_SET_END(bpf_testmod_kfunc_ids)
 
-static DEFINE_KFUNC_BTF_ID_SET(&bpf_testmod_kfunc_ids, bpf_testmod_kfunc_btf_set);
+static struct kfunc_btf_id_set bpf_testmod_kfunc_btf_set = {
+	.owner = THIS_MODULE,
+	.set   = &bpf_testmod_kfunc_ids,
+};
 
 static int bpf_testmod_init(void)
 {
