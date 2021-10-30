@@ -6371,22 +6371,35 @@ void unregister_kfunc_btf_id_set(struct kfunc_btf_id_list *l,
 }
 EXPORT_SYMBOL_GPL(unregister_kfunc_btf_id_set);
 
+/* Caller must hold reference to module 'owner' */
+struct kfunc_btf_id_set *__get_kfunc_btf_id_set(struct kfunc_btf_id_list *klist,
+						struct module *owner)
+{
+	struct kfunc_btf_id_set *s, *ret = NULL;
+
+	if (!owner)
+		return NULL;
+	mutex_lock(&klist->mutex);
+	list_for_each_entry(s, &klist->list, list) {
+		if (s->owner == owner) {
+			ret = s;
+			break;
+		}
+	}
+	mutex_unlock(&klist->mutex);
+	return ret;
+}
+
 bool bpf_check_mod_kfunc_call(struct kfunc_btf_id_list *klist, u32 kfunc_id,
 			      struct module *owner)
 {
 	struct kfunc_btf_id_set *s;
+	bool ret = false;
 
-	if (!owner)
-		return false;
-	mutex_lock(&klist->mutex);
-	list_for_each_entry(s, &klist->list, list) {
-		if (s->owner == owner && btf_id_set_contains(s->set, kfunc_id)) {
-			mutex_unlock(&klist->mutex);
-			return true;
-		}
-	}
-	mutex_unlock(&klist->mutex);
-	return false;
+	s = __get_kfunc_btf_id_set(klist, owner);
+	if (s)
+		ret = btf_id_set_contains(s->set, kfunc_id);
+	return ret;
 }
 
 #endif
