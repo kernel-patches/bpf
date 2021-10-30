@@ -1647,6 +1647,10 @@ int bpf_prog_test_run_sk_lookup(struct bpf_prog *prog,
 				const union bpf_attr *kattr,
 				union bpf_attr __user *uattr);
 bool bpf_prog_test_check_kfunc_call(u32 kfunc_id, struct module *owner);
+bool bpf_prog_test_is_acquire_kfunc(u32 kfunc_id, struct module *owner);
+bool bpf_prog_test_is_release_kfunc(u32 kfunc_id, struct module *owner);
+enum bpf_return_type bpf_prog_test_get_kfunc_return_type(u32 kfunc_id,
+							 struct module *owner);
 bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		    const struct bpf_prog *prog,
 		    struct bpf_insn_access_aux *info);
@@ -1872,6 +1876,24 @@ static inline bool bpf_prog_test_check_kfunc_call(u32 kfunc_id,
 						  struct module *owner)
 {
 	return false;
+}
+
+static inline bool bpf_prog_test_is_acquire_kfunc(u32 kfunc_id,
+						  struct module *owner)
+{
+	return false;
+}
+
+static inline bool bpf_prog_test_is_release_kfunc(u32 kfunc_id,
+						  struct module *owner)
+{
+	return false;
+}
+
+static inline enum bpf_return_type
+bpf_prog_test_get_kfunc_return_type(u32 kfunc_id, struct module *owner)
+{
+	return __BPF_RET_TYPE_MAX;
 }
 
 static inline void bpf_map_put(struct bpf_map *map)

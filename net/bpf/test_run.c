@@ -232,6 +232,28 @@ struct sock * noinline bpf_kfunc_call_test3(struct sock *sk)
 	return sk;
 }
 
+struct prog_test_ref_kfunc {
+	int a;
+	int b;
+};
+
+static struct prog_test_ref_kfunc prog_test_struct;
+
+noinline struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(char *ptr)
+{
+	/* randomly return NULL */
+	if (get_jiffies_64() % 2)
+		return NULL;
+	prog_test_struct.a = 42;
+	prog_test_struct.b = 108;
+	return &prog_test_struct;
+}
+
+noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
+{
+	return;
+}
+
 __diag_pop();
 
 ALLOW_ERROR_INJECTION(bpf_modify_return_test, ERRNO);
@@ -240,13 +262,46 @@ BTF_SET_START(test_sk_kfunc_ids)
 BTF_ID(func, bpf_kfunc_call_test1)
 BTF_ID(func, bpf_kfunc_call_test2)
 BTF_ID(func, bpf_kfunc_call_test3)
+BTF_ID(func, bpf_kfunc_call_test_acquire)
+BTF_ID(func, bpf_kfunc_call_test_release)
 BTF_SET_END(test_sk_kfunc_ids)
+
+BTF_ID_LIST(test_sk_acq_rel)
+BTF_ID(func, bpf_kfunc_call_test_acquire)
+BTF_ID(func, bpf_kfunc_call_test_release)
 
 bool bpf_prog_test_check_kfunc_call(u32 kfunc_id, struct module *owner)
 {
 	if (btf_id_set_contains(&test_sk_kfunc_ids, kfunc_id))
 		return true;
 	return bpf_check_mod_kfunc_call(&prog_test_kfunc_list, kfunc_id, owner);
+}
+
+bool bpf_prog_test_is_acquire_kfunc(u32 kfunc_id, struct module *owner)
+{
+	if (!owner) /* bpf_kfunc_call_test_acquire */
+		return kfunc_id == test_sk_acq_rel[0];
+	return bpf_is_mod_acquire_kfunc(&prog_test_kfunc_list, kfunc_id, owner);
+}
+
+bool bpf_prog_test_is_release_kfunc(u32 kfunc_id, struct module *owner)
+{
+	if (!owner) /* bpf_kfunc_call_test_release */
+		return kfunc_id == test_sk_acq_rel[1];
+	return bpf_is_mod_release_kfunc(&prog_test_kfunc_list, kfunc_id, owner);
+}
+
+enum bpf_return_type bpf_prog_test_get_kfunc_return_type(u32 kfunc_id,
+							 struct module *owner)
+{
+	if (!owner) {
+		if (kfunc_id == test_sk_acq_rel[0])
+			return RET_PTR_TO_BTF_ID_OR_NULL;
+		else
+			return __BPF_RET_TYPE_MAX;
+	}
+	return bpf_get_mod_kfunc_return_type(&prog_test_kfunc_list, kfunc_id,
+					     owner);
 }
 
 static void *bpf_test_init(const union bpf_attr *kattr, u32 size,

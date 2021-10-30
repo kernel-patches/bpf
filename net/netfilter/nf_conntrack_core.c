@@ -11,6 +11,9 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/bpf.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>
 #include <linux/module.h>
@@ -2451,6 +2454,252 @@ static int kill_all(struct nf_conn *i, void *data)
 	return net_eq(nf_ct_net(i), data);
 }
 
+/* Unstable Kernel Helpers for XDP hook */
+static struct nf_conn *__bpf_nf_ct_lookup(struct net *net,
+					  struct bpf_sock_tuple *bpf_tuple,
+					  u32 tuple_len, u8 protonum,
+					  u64 netns_id, u64 flags)
+{
+	struct nf_conntrack_tuple_hash *hash;
+	struct nf_conntrack_tuple tuple;
+
+	if (flags != IP_CT_DIR_ORIGINAL && flags != IP_CT_DIR_REPLY)
+		return ERR_PTR(-EINVAL);
+
+	memset(&tuple, 0, sizeof(tuple));
+
+	switch (tuple_len) {
+	case sizeof(bpf_tuple->ipv4):
+		tuple.src.l3num = AF_INET;
+		tuple.src.u3.ip = bpf_tuple->ipv4.saddr;
+		tuple.src.u.tcp.port = bpf_tuple->ipv4.sport;
+		tuple.dst.u3.ip = bpf_tuple->ipv4.daddr;
+		tuple.dst.u.tcp.port = bpf_tuple->ipv4.dport;
+		break;
+	case sizeof(bpf_tuple->ipv6):
+		tuple.src.l3num = AF_INET6;
+		memcpy(tuple.src.u3.ip6, bpf_tuple->ipv6.saddr, sizeof(bpf_tuple->ipv6.saddr));
+		tuple.src.u.tcp.port = bpf_tuple->ipv6.sport;
+		memcpy(tuple.dst.u3.ip6, bpf_tuple->ipv6.daddr, sizeof(bpf_tuple->ipv6.daddr));
+		tuple.dst.u.tcp.port = bpf_tuple->ipv6.dport;
+		break;
+	default:
+		return ERR_PTR(-EAFNOSUPPORT);
+	}
+
+	tuple.dst.protonum = protonum;
+	tuple.dst.dir = flags;
+
+	if ((s32)netns_id >= 0) {
+		if ((s32)netns_id > S32_MAX)
+			return ERR_PTR(-EINVAL);
+		net = get_net_ns_by_id(net, netns_id);
+		if (!net)
+			return ERR_PTR(-EINVAL);
+	}
+
+	hash = nf_conntrack_find_get(net, &nf_ct_zone_dflt, &tuple);
+	if ((s32)netns_id >= 0)
+		put_net(net);
+	if (!hash)
+		return ERR_PTR(-ENOENT);
+	return nf_ct_tuplehash_to_ctrack(hash);
+}
+
+static struct nf_conn *bpf_xdp_ct_lookup(struct xdp_md *xdp_ctx,
+					 struct bpf_sock_tuple *bpf_tuple,
+					 u32 tuple_len, u8 protonum,
+					 u64 netns_id, u64 *flags_err)
+{
+	struct xdp_buff *ctx = (struct xdp_buff *)xdp_ctx;
+	struct net *caller_net;
+	struct nf_conn *nfct;
+
+	if (!flags_err)
+		return NULL;
+	if (!bpf_tuple) {
+		*flags_err = -EINVAL;
+		return NULL;
+	}
+	caller_net = dev_net(ctx->rxq->dev);
+	nfct = __bpf_nf_ct_lookup(caller_net, bpf_tuple, tuple_len, protonum,
+				  netns_id, *flags_err);
+	if (IS_ERR(nfct)) {
+		*flags_err = PTR_ERR(nfct);
+		return NULL;
+	}
+	return nfct;
+}
+
+static struct nf_conn *bpf_skb_ct_lookup(struct __sk_buff *skb_ctx,
+					 struct bpf_sock_tuple *bpf_tuple,
+					 u32 tuple_len, u8 protonum,
+					 u64 netns_id, u64 *flags_err)
+{
+	struct sk_buff *skb = (struct sk_buff *)skb_ctx;
+	struct net *caller_net;
+	struct nf_conn *nfct;
+
+	if (!flags_err)
+		return NULL;
+	if (!bpf_tuple) {
+		*flags_err = -EINVAL;
+		return NULL;
+	}
+	caller_net = skb->dev ? dev_net(skb->dev) : sock_net(skb->sk);
+	nfct = __bpf_nf_ct_lookup(caller_net, bpf_tuple, tuple_len, protonum,
+				  netns_id, *flags_err);
+	if (IS_ERR(nfct)) {
+		*flags_err = PTR_ERR(nfct);
+		return NULL;
+	}
+	return nfct;
+}
+
+struct nf_conn *bpf_xdp_ct_lookup_tcp(struct xdp_md *xdp_ctx,
+				      struct bpf_sock_tuple *bpf_tuple,
+				      u32 tuple_len, u64 netns_id,
+				      u64 *flags_err)
+{
+	return bpf_xdp_ct_lookup(xdp_ctx, bpf_tuple, tuple_len, IPPROTO_TCP,
+				 netns_id, flags_err);
+}
+
+struct nf_conn *bpf_xdp_ct_lookup_udp(struct xdp_md *xdp_ctx,
+				      struct bpf_sock_tuple *bpf_tuple,
+				      u32 tuple_len, u64 netns_id,
+				      u64 *flags_err)
+{
+	return bpf_xdp_ct_lookup(xdp_ctx, bpf_tuple, tuple_len, IPPROTO_UDP,
+				 netns_id, flags_err);
+}
+
+struct nf_conn *bpf_skb_ct_lookup_tcp(struct __sk_buff *skb_ctx,
+				      struct bpf_sock_tuple *bpf_tuple,
+				      u32 tuple_len, u64 netns_id,
+				      u64 *flags_err)
+{
+	return bpf_skb_ct_lookup(skb_ctx, bpf_tuple, tuple_len, IPPROTO_TCP,
+				 netns_id, flags_err);
+}
+
+struct nf_conn *bpf_skb_ct_lookup_udp(struct __sk_buff *skb_ctx,
+				      struct bpf_sock_tuple *bpf_tuple,
+				      u32 tuple_len, u64 netns_id,
+				      u64 *flags_err)
+{
+	return bpf_skb_ct_lookup(skb_ctx, bpf_tuple, tuple_len, IPPROTO_UDP,
+				 netns_id, flags_err);
+}
+
+void bpf_ct_release(struct nf_conn *nfct)
+{
+	if (!nfct)
+		return;
+	nf_ct_put(nfct);
+}
+
+BTF_SET_START(nf_conntrack_xdp_ids)
+BTF_ID(func, bpf_xdp_ct_lookup_tcp)
+BTF_ID(func, bpf_xdp_ct_lookup_udp)
+BTF_ID(func, bpf_ct_release)
+BTF_SET_END(nf_conntrack_xdp_ids)
+
+BTF_SET_START(nf_conntrack_skb_ids)
+BTF_ID(func, bpf_skb_ct_lookup_tcp)
+BTF_ID(func, bpf_skb_ct_lookup_udp)
+BTF_ID(func, bpf_ct_release)
+BTF_SET_END(nf_conntrack_skb_ids)
+
+BTF_ID_LIST(nf_conntrack_ids)
+BTF_ID(func, bpf_xdp_ct_lookup_tcp)
+BTF_ID(func, bpf_xdp_ct_lookup_udp)
+BTF_ID(func, bpf_skb_ct_lookup_tcp)
+BTF_ID(func, bpf_skb_ct_lookup_udp)
+BTF_ID(func, bpf_ct_release)
+BTF_ID(struct, nf_conn)
+
+bool nf_is_acquire_kfunc(u32 kfunc_id)
+{
+	return kfunc_id == nf_conntrack_ids[0] ||
+	       kfunc_id == nf_conntrack_ids[1] ||
+	       kfunc_id == nf_conntrack_ids[2] ||
+	       kfunc_id == nf_conntrack_ids[3];
+}
+
+bool nf_is_release_kfunc(u32 kfunc_id)
+{
+	return kfunc_id == nf_conntrack_ids[4];
+}
+
+enum bpf_return_type nf_get_kfunc_return_type(u32 kfunc_id)
+{
+	if (kfunc_id == nf_conntrack_ids[0] ||
+	    kfunc_id == nf_conntrack_ids[1] ||
+	    kfunc_id == nf_conntrack_ids[2] ||
+	    kfunc_id == nf_conntrack_ids[3])
+		return RET_PTR_TO_BTF_ID_OR_NULL;
+	return __BPF_RET_TYPE_MAX;
+}
+
+static int nf_btf_struct_access(struct bpf_verifier_log *log,
+				const struct btf *btf,
+				const struct btf_type *t, int off,
+				int size, enum bpf_access_type atype,
+				u32 *next_btf_id)
+{
+	const struct btf_type *nf_conn_type;
+	size_t end;
+
+	nf_conn_type = btf_type_by_id(btf, nf_conntrack_ids[5]);
+	if (!nf_conn_type)
+		return -EACCES;
+	/* This won't work (not even with btf_struct_ids_match for off == 0),
+	 * see below for the reason:
+	 * https://lore.kernel.org/bpf/20211028014428.rsuq6rkfvqzq23tg@apollo.localdomain
+	 */
+	if (t != nf_conn_type) /* skip */
+		return __BPF_REG_TYPE_MAX;
+
+	if (atype != BPF_READ)
+		return -EACCES;
+
+	switch (off) {
+	case offsetof(struct nf_conn, status):
+		end = offsetofend(struct nf_conn, status);
+		break;
+	/* TODO(v2): We should do it per field offset */
+	case bpf_ctx_range(struct nf_conn, proto):
+		end = offsetofend(struct nf_conn, proto);
+		break;
+	default:
+		return -EACCES;
+	}
+
+	if (off + size > end)
+		return -EACCES;
+
+	return NOT_INIT;
+}
+
+static struct kfunc_btf_id_set nf_ct_xdp_kfunc_set = {
+	.owner                 = THIS_MODULE,
+	.set                   = &nf_conntrack_xdp_ids,
+	.is_acquire_kfunc      = nf_is_acquire_kfunc,
+	.is_release_kfunc      = nf_is_release_kfunc,
+	.get_kfunc_return_type = nf_get_kfunc_return_type,
+	.btf_struct_access     = nf_btf_struct_access,
+};
+
+static struct kfunc_btf_id_set nf_ct_skb_kfunc_set = {
+	.owner                 = THIS_MODULE,
+	.set                   = &nf_conntrack_skb_ids,
+	.is_acquire_kfunc      = nf_is_acquire_kfunc,
+	.is_release_kfunc      = nf_is_release_kfunc,
+	.get_kfunc_return_type = nf_get_kfunc_return_type,
+	.btf_struct_access     = nf_btf_struct_access,
+};
+
 void nf_conntrack_cleanup_start(void)
 {
 	conntrack_gc_work.exiting = true;
@@ -2459,6 +2708,9 @@ void nf_conntrack_cleanup_start(void)
 
 void nf_conntrack_cleanup_end(void)
 {
+	unregister_kfunc_btf_id_set(&xdp_kfunc_list, &nf_ct_xdp_kfunc_set);
+	unregister_kfunc_btf_id_set(&prog_test_kfunc_list, &nf_ct_skb_kfunc_set);
+
 	RCU_INIT_POINTER(nf_ct_hook, NULL);
 	cancel_delayed_work_sync(&conntrack_gc_work.dwork);
 	kvfree(nf_conntrack_hash);
@@ -2744,6 +2996,9 @@ int nf_conntrack_init_start(void)
 
 	conntrack_gc_work_init(&conntrack_gc_work);
 	queue_delayed_work(system_power_efficient_wq, &conntrack_gc_work.dwork, HZ);
+
+	register_kfunc_btf_id_set(&prog_test_kfunc_list, &nf_ct_skb_kfunc_set);
+	register_kfunc_btf_id_set(&xdp_kfunc_list, &nf_ct_xdp_kfunc_set);
 
 	return 0;
 

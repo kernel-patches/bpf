@@ -9948,6 +9948,12 @@ const struct bpf_prog_ops sk_filter_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
 };
 
+static int xdp_btf_struct_access(struct bpf_verifier_log *log,
+				 const struct btf *btf,
+				 const struct btf_type *t, int off,
+				 int size, enum bpf_access_type atype,
+				 u32 *next_btf_id);
+
 const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 	.get_func_proto		= tc_cls_act_func_proto,
 	.is_valid_access	= tc_cls_act_is_valid_access,
@@ -9955,17 +9961,67 @@ const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 	.gen_prologue		= tc_cls_act_prologue,
 	.gen_ld_abs		= bpf_gen_ld_abs,
 	.check_kfunc_call	= bpf_prog_test_check_kfunc_call,
+	.is_acquire_kfunc	= bpf_prog_test_is_acquire_kfunc,
+	.is_release_kfunc	= bpf_prog_test_is_release_kfunc,
+	.get_kfunc_return_type  = bpf_prog_test_get_kfunc_return_type,
+	/* resuse the callback, there is nothing xdp specific in it */
+	.btf_struct_access      = xdp_btf_struct_access,
 };
 
 const struct bpf_prog_ops tc_cls_act_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
 };
 
+static bool xdp_is_acquire_kfunc(u32 kfunc_id, struct module *owner)
+{
+	return bpf_is_mod_acquire_kfunc(&xdp_kfunc_list, kfunc_id, owner);
+}
+
+static bool xdp_is_release_kfunc(u32 kfunc_id, struct module *owner)
+{
+	return bpf_is_mod_release_kfunc(&xdp_kfunc_list, kfunc_id, owner);
+}
+
+static enum bpf_return_type xdp_get_kfunc_return_type(u32 kfunc_id,
+						      struct module *owner)
+{
+	return bpf_get_mod_kfunc_return_type(&xdp_kfunc_list, kfunc_id, owner);
+}
+
+static int xdp_btf_struct_access(struct bpf_verifier_log *log,
+				 const struct btf *btf,
+				 const struct btf_type *t, int off,
+				 int size, enum bpf_access_type atype,
+				 u32 *next_btf_id)
+{
+	int ret = __BPF_REG_TYPE_MAX;
+	struct module *mod;
+
+	if (atype != BPF_READ)
+		return -EACCES;
+
+	if (btf_is_module(btf)) {
+		mod = btf_try_get_module(btf);
+		if (!mod)
+			return -ENXIO;
+		ret = bpf_btf_mod_struct_access(&xdp_kfunc_list, mod, log, btf, t, off, size,
+						atype, next_btf_id);
+		module_put(mod);
+	}
+	if (ret == __BPF_REG_TYPE_MAX)
+		return btf_struct_access(log, btf, t, off, size, atype, next_btf_id);
+	return ret;
+}
+
 const struct bpf_verifier_ops xdp_verifier_ops = {
 	.get_func_proto		= xdp_func_proto,
 	.is_valid_access	= xdp_is_valid_access,
 	.convert_ctx_access	= xdp_convert_ctx_access,
 	.gen_prologue		= bpf_noop_prologue,
+	.is_acquire_kfunc	= xdp_is_acquire_kfunc,
+	.is_release_kfunc	= xdp_is_release_kfunc,
+	.get_kfunc_return_type  = xdp_get_kfunc_return_type,
+	.btf_struct_access	= xdp_btf_struct_access,
 };
 
 const struct bpf_prog_ops xdp_prog_ops = {

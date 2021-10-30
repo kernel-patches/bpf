@@ -321,5 +321,6 @@ static inline int bpf_btf_mod_struct_access(struct kfunc_btf_id_list *klist,
 
 extern struct kfunc_btf_id_list bpf_tcp_ca_kfunc_list;
 extern struct kfunc_btf_id_list prog_test_kfunc_list;
+extern struct kfunc_btf_id_list xdp_kfunc_list;
 
 #endif
