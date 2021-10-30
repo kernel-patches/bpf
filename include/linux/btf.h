@@ -4,6 +4,7 @@
 #ifndef _LINUX_BTF_H
 #define _LINUX_BTF_H 1
 
+#include <linux/bpf.h>
 #include <linux/types.h>
 #include <linux/bpfptr.h>
 #include <uapi/linux/btf.h>
@@ -243,6 +244,15 @@ struct kfunc_btf_id_set {
 	struct list_head list;
 	struct btf_id_set *set;
 	struct module *owner;
+
+	bool (*is_acquire_kfunc)(u32 kfunc_id);
+	bool (*is_release_kfunc)(u32 kfunc_id);
+	enum bpf_return_type (*get_kfunc_return_type)(u32 kfunc_id);
+	int  (*btf_struct_access)(struct bpf_verifier_log *log,
+				  const struct btf *btf,
+				  const struct btf_type *t, int off,
+				  int size, enum bpf_access_type atype,
+				  u32 *next_btf_id);
 };
 
 struct kfunc_btf_id_list;
@@ -254,6 +264,19 @@ void unregister_kfunc_btf_id_set(struct kfunc_btf_id_list *l,
 				 struct kfunc_btf_id_set *s);
 bool bpf_check_mod_kfunc_call(struct kfunc_btf_id_list *klist, u32 kfunc_id,
 			      struct module *owner);
+bool bpf_is_mod_acquire_kfunc(struct kfunc_btf_id_list *klist, u32 kfunc_id,
+			      struct module *owner);
+bool bpf_is_mod_release_kfunc(struct kfunc_btf_id_list *klist, u32 kfunc_id,
+			      struct module *owner);
+enum bpf_return_type bpf_get_mod_kfunc_return_type(struct kfunc_btf_id_list *klist,
+						   u32 kfunc_btf_id, struct module *owner);
+int bpf_btf_mod_struct_access(struct kfunc_btf_id_list *klist,
+			      struct module *owner,
+			      struct bpf_verifier_log *log,
+			      const struct btf *btf,
+			      const struct btf_type *t, int off,
+			      int size, enum bpf_access_type atype,
+			      u32 *next_btf_id);
 #else
 static inline void register_kfunc_btf_id_set(struct kfunc_btf_id_list *l,
 					     struct kfunc_btf_id_set *s)
@@ -267,6 +290,32 @@ static inline bool bpf_check_mod_kfunc_call(struct kfunc_btf_id_list *klist,
 					    u32 kfunc_id, struct module *owner)
 {
 	return false;
+}
+static inline bool bpf_is_mod_acquire_kfunc(struct kfunc_btf_id_list *klist,
+					    u32 kfunc_id, struct module *owner)
+{
+	return false;
+}
+static inline bool bpf_is_mod_release_kfunc(struct kfunc_btf_id_list *klist,
+					    u32 kfunc_id, struct module *owner)
+{
+	return false;
+}
+static inline enum bpf_return_type
+bpf_get_mod_kfunc_return_type(struct kfunc_btf_id_list *klist, u32 kfunc_btf_id,
+			      struct module *owner);
+{
+	return __BPF_RET_TYPE_MAX;
+}
+static inline int bpf_btf_mod_struct_access(struct kfunc_btf_id_list *klist,
+					    struct module *owner,
+					    struct bpf_verifier_log *log,
+					    const struct btf *btf,
+					    const struct btf_type *t, int off,
+					    int size, enum bpf_access_type atype,
+					    u32 *next_btf_id)
+{
+	return __BPF_REG_TYPE_MAX;
 }
 #endif
 

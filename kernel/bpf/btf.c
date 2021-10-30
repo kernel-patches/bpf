@@ -5570,10 +5570,12 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    struct module *btf_mod)
 {
 	struct bpf_verifier_log *log = &env->log;
+	u32 i, nargs, ref_id, ref_obj_id = 0;
 	const char *func_name, *ref_tname;
 	const struct btf_type *t, *ref_t;
 	const struct btf_param *args;
-	u32 i, nargs, ref_id;
+	int ref_regno = 0;
+	bool rel = false;
 
 	t = btf_type_by_id(btf, func_id);
 	if (!t || !btf_type_is_func(t)) {
@@ -5646,6 +5648,17 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 			if (reg->type == PTR_TO_BTF_ID) {
 				reg_btf = reg->btf;
 				reg_ref_id = reg->btf_id;
+				/* Ensure only one argument is referenced PTR_TO_BTF_ID */
+				if (reg->ref_obj_id) {
+					if (ref_obj_id) {
+						bpf_log(log, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
+							regno, reg->ref_obj_id, ref_obj_id);
+						return -EFAULT;
+					}
+					/* Allow passing referenced PTR_TO_BTF_ID to acquire function */
+					ref_regno = regno;
+					ref_obj_id = reg->ref_obj_id;
+				}
 			} else if (reg2btf_ids[reg->type]) {
 				reg_btf = btf_vmlinux;
 				reg_ref_id = *reg2btf_ids[reg->type];
@@ -5691,7 +5704,24 @@ ptr_to_mem:
 		}
 	}
 
-	return 0;
+	if (btf_is_kernel(btf)) {
+		rel = env->ops->is_release_kfunc &&
+			env->ops->is_release_kfunc(func_id, btf_mod);
+
+		/* We make sure ref_obj_id is only set if only one reg->type == PTR_TO_BTF_ID */
+		if (rel && !ref_obj_id) {
+			bpf_log(log, "release kernel function %s expects refcounted PTR_TO_BTF_ID\n",
+				func_name);
+			return -EINVAL;
+		}
+		if (!rel && ref_obj_id) {
+			bpf_log(log, "refcounted PTR_TO_BTF_ID passed to non-release kernel function %s\n",
+				func_name);
+			return -EINVAL;
+		}
+	}
+	/* returns argument register number > 0 in case of reference release kfunc */
+	return ref_regno;
 }
 
 /* Compare BTF of a function with given bpf_reg_state.
@@ -6400,6 +6430,67 @@ bool bpf_check_mod_kfunc_call(struct kfunc_btf_id_list *klist, u32 kfunc_id,
 	if (s)
 		ret = btf_id_set_contains(s->set, kfunc_id);
 	return ret;
+}
+
+bool bpf_is_mod_acquire_kfunc(struct kfunc_btf_id_list *klist, u32 kfunc_id,
+			      struct module *owner)
+{
+	struct kfunc_btf_id_set *s;
+	bool ret = false;
+
+	s = __get_kfunc_btf_id_set(klist, owner);
+	if (s) {
+		ret = s->is_acquire_kfunc &&
+		      s->is_acquire_kfunc(kfunc_id);
+	}
+	return ret;
+}
+
+bool bpf_is_mod_release_kfunc(struct kfunc_btf_id_list *klist, u32 kfunc_id,
+			      struct module *owner)
+{
+	struct kfunc_btf_id_set *s;
+	bool ret = false;
+
+	s = __get_kfunc_btf_id_set(klist, owner);
+	if (s) {
+		ret = s->is_release_kfunc &&
+		      s->is_release_kfunc(kfunc_id);
+	}
+	return ret;
+}
+
+enum bpf_return_type bpf_get_mod_kfunc_return_type(struct kfunc_btf_id_list *klist,
+						   u32 kfunc_id, struct module *owner)
+{
+	enum bpf_return_type ret_type = __BPF_RET_TYPE_MAX;
+	struct kfunc_btf_id_set *s;
+
+	s = __get_kfunc_btf_id_set(klist, owner);
+	if (s) {
+		if (s->get_kfunc_return_type)
+			ret_type = s->get_kfunc_return_type(kfunc_id);
+	}
+	return ret_type;
+}
+
+int bpf_btf_mod_struct_access(struct kfunc_btf_id_list *klist,
+			      struct module *owner,
+			      struct bpf_verifier_log *log,
+			      const struct btf *btf,
+			      const struct btf_type *t, int off,
+			      int size, enum bpf_access_type atype,
+			      u32 *next_btf_id)
+{
+	struct kfunc_btf_id_set *s;
+
+	s = __get_kfunc_btf_id_set(klist, owner);
+	if (s) {
+		if (s->btf_struct_access)
+			return s->btf_struct_access(log, btf, t, off, size, atype,
+						    next_btf_id);
+	}
+	return __BPF_REG_TYPE_MAX;
 }
 
 #endif

@@ -5789,6 +5789,28 @@ static int check_func_proto(const struct bpf_func_proto *fn, int func_id)
 	       check_refcount_ok(fn, func_id) ? 0 : -EINVAL;
 }
 
+static int check_kfunc_proto(struct bpf_verifier_env *env,
+			     enum bpf_return_type ret_type, u32 kfunc_id,
+			     bool acquire)
+{
+	switch (ret_type) {
+	case RET_VOID:
+	case RET_INTEGER:
+	case RET_PTR_TO_BTF_ID:
+	case RET_PTR_TO_BTF_ID_OR_NULL:
+	case __BPF_RET_TYPE_MAX:
+		break;
+	default:
+		verbose(env, "kfunc %u unsupported return type %d\n", kfunc_id,
+			ret_type);
+		return -EINVAL;
+	}
+	/* refcount_ok check is done later in bpf_check_kfunc_arg_match,
+	 * as only PTR_TO_BTF_ID can be refcounted
+	 */
+	return 0;
+}
+
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
  * are now invalid, so turn them into unknown SCALAR_VALUE.
  */
@@ -6681,16 +6703,19 @@ static void mark_btf_func_reg_size(struct bpf_verifier_env *env, u32 regno,
 	}
 }
 
-static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn)
+static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			    int *insn_idx_p)
 {
 	const struct btf_type *t, *func, *func_proto, *ptr_type;
+	enum bpf_return_type ret_type = __BPF_RET_TYPE_MAX;
 	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
 	u32 i, nargs, func_id, ptr_type_id;
+	int err, insn_idx = *insn_idx_p;
 	struct module *btf_mod = NULL;
 	const struct btf_param *args;
+	bool acq, ret = false;
 	struct btf *desc_btf;
-	int err;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
@@ -6712,17 +6737,51 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		return -EACCES;
 	}
 
+	acq = env->ops->is_acquire_kfunc &&
+		env->ops->is_acquire_kfunc(func_id, btf_mod);
+
+	if (env->ops->get_kfunc_return_type) {
+		ret_type = env->ops->get_kfunc_return_type(func_id, btf_mod);
+		err = check_kfunc_proto(env, ret_type, func_id, acq);
+		if (err)
+			return err;
+		/* Skip check if not specified */
+		ret = ret_type != __BPF_RET_TYPE_MAX;
+	}
+
 	/* Check the arguments */
 	err = btf_check_kfunc_arg_match(env, desc_btf, func_id, regs, btf_mod);
 	if (err < 0)
 		return err;
+	/* In case of release function, we get register number of refcounted
+	 * PTR_TO_BTF_ID back from kfunc_arg_match, do the release now
+	 */
+	if (err > 0) {
+		err = release_reference(env, regs[err].ref_obj_id);
+		if (err) {
+			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
+				func_name, func_id);
+			return err;
+		}
+	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
 		mark_reg_not_init(env, regs, caller_saved[i]);
 
 	/* Check return type */
 	t = btf_type_skip_modifiers(desc_btf, func_proto->type, NULL);
+	/* allow helper to return refcounted PTR_TO_BTF_ID */
+	if (acq && !btf_type_is_ptr(t)) {
+		verbose(env, "acquire kernel function returns non-PTR_TO_BTF_ID\n");
+		return -EINVAL;
+	}
+
 	if (btf_type_is_scalar(t)) {
+		if (ret && ret_type != RET_INTEGER) {
+			verbose(env, "kfunc %s#%d func_proto ret type mismatch\n",
+				func_name, func_id);
+			return -EINVAL;
+		}
 		mark_reg_unknown(env, regs, BPF_REG_0);
 		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
 	} else if (btf_type_is_ptr(t)) {
@@ -6736,12 +6795,40 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				ptr_type_name);
 			return -EINVAL;
 		}
+		if (ret && ret_type != RET_PTR_TO_BTF_ID_OR_NULL &&
+		    ret_type != RET_PTR_TO_BTF_ID) {
+			verbose(env, "kfunc %s#%d func_proto ret type mismatch\n",
+				func_name, func_id);
+			return -EINVAL;
+		}
+
+		if (ret && ret_type == RET_PTR_TO_BTF_ID_OR_NULL) {
+			regs[BPF_REG_0].type = PTR_TO_BTF_ID_OR_NULL;
+			/* When more return types support _OR_NULL, move this
+			 * under a generic reg_type_may_be_null check.
+			 */
+			regs[BPF_REG_0].id = ++env->id_gen;
+		} else {
+			regs[BPF_REG_0].type = PTR_TO_BTF_ID;
+		}
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].btf = desc_btf;
-		regs[BPF_REG_0].type = PTR_TO_BTF_ID;
 		regs[BPF_REG_0].btf_id = ptr_type_id;
 		mark_btf_func_reg_size(env, BPF_REG_0, sizeof(void *));
-	} /* else { add_kfunc_call() ensures it is btf_type_is_void(t) } */
+		if (acq) {
+			int id = acquire_reference_state(env, insn_idx);
+
+			if (id < 0)
+				return id;
+			regs[BPF_REG_0].id = id;
+			regs[BPF_REG_0].ref_obj_id = id;
+		}
+	} else if (ret && ret_type != RET_VOID) {
+		/* add_kfunc_call() ensures it is btf_type_is_void(t) */
+		verbose(env, "kfunc %s#%d func_proto ret type mismatch\n",
+			func_name, func_id);
+		return -EINVAL;
+	}
 
 	nargs = btf_type_vlen(func_proto);
 	args = (const struct btf_param *)(func_proto + 1);
@@ -11308,7 +11395,7 @@ static int do_check(struct bpf_verifier_env *env)
 				if (insn->src_reg == BPF_PSEUDO_CALL)
 					err = check_func_call(env, insn, &env->insn_idx);
 				else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
-					err = check_kfunc_call(env, insn);
+					err = check_kfunc_call(env, insn, &env->insn_idx);
 				else
 					err = check_helper_call(env, insn, &env->insn_idx);
 				if (err)
