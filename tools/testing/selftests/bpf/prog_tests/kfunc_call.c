@@ -2,31 +2,37 @@
 /* Copyright (c) 2021 Facebook */
 #include <test_progs.h>
 #include <network_helpers.h>
-#include "kfunc_call_test.lskel.h"
+#include "kfunc_call_test.skel.h"
 #include "kfunc_call_test_subprog.skel.h"
 
 static void test_main(void)
 {
-	struct kfunc_call_test_lskel *skel;
+	struct kfunc_call_test *skel;
 	int prog_fd, retval, err;
 
-	skel = kfunc_call_test_lskel__open_and_load();
+	skel = kfunc_call_test__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel"))
 		return;
 
-	prog_fd = skel->progs.kfunc_call_test1.prog_fd;
+	prog_fd = bpf_program__fd(skel->progs.kfunc_call_test1);
 	err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
 				NULL, NULL, (__u32 *)&retval, NULL);
 	ASSERT_OK(err, "bpf_prog_test_run(test1)");
 	ASSERT_EQ(retval, 12, "test1-retval");
 
-	prog_fd = skel->progs.kfunc_call_test2.prog_fd;
+	prog_fd = bpf_program__fd(skel->progs.kfunc_call_test2);
 	err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
 				NULL, NULL, (__u32 *)&retval, NULL);
 	ASSERT_OK(err, "bpf_prog_test_run(test2)");
 	ASSERT_EQ(retval, 3, "test2-retval");
 
-	kfunc_call_test_lskel__destroy(skel);
+	prog_fd = bpf_program__fd(skel->progs.kfunc_call_test_ref_btf_id);
+	err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
+				NULL, NULL, (__u32 *)&retval, NULL);
+	ASSERT_OK(err, "bpf_prog_test_run(test_ref_btf_id)");
+	ASSERT_EQ(retval, 0, "test_ref_btf_id-retval");
+
+	kfunc_call_test__destroy(skel);
 }
 
 static void test_subprog(void)

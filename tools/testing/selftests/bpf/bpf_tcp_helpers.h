@@ -185,6 +185,11 @@ struct tcp_congestion_ops {
 	void *owner;
 };
 
+struct prog_test_ref_kfunc {
+	int a;
+	int b;
+} __attribute__((preserve_access_index));
+
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min_not_zero(x, y) ({			\
