@@ -276,10 +276,11 @@ struct task_group;
 
 /*
  * Define the task command name length as enum, then it can be visible to
- * BPF programs.
+ * BPF programs. The TASK_COMM_LEN_16 is kept for backward-compitability.
  */
 enum {
-	TASK_COMM_LEN = 16,
+	TASK_COMM_LEN_16 = 16,
+	TASK_COMM_LEN = 24,
 };
 
 extern void scheduler_tick(void);
