@@ -13,6 +13,7 @@
 #include <linux/rcupdate_trace.h>
 
 #include "map_in_map.h"
+#include "map_trace.h"
 
 #define ARRAY_CREATE_FLAG_MASK \
 	(BPF_F_NUMA_NODE | BPF_F_MMAPABLE | BPF_F_ACCESS_MASK | \
@@ -300,6 +301,7 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	char *val;
+	int err;
 
 	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
 		/* unknown flags */
@@ -316,6 +318,10 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 	if (unlikely((map_flags & BPF_F_LOCK) &&
 		     !map_value_has_spin_lock(map)))
 		return -EINVAL;
+
+	err = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(err))
+		return err;
 
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 		memcpy(this_cpu_ptr(array->pptrs[index & array->index_mask]),

@@ -13,6 +13,7 @@
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
+#include "map_trace.h"
 
 #define HTAB_CREATE_FLAG_MASK						\
 	(BPF_F_NO_PREALLOC | BPF_F_NO_COMMON_LRU | BPF_F_NUMA_NODE |	\
@@ -1041,6 +1042,10 @@ static int htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 	b = __select_bucket(htab, hash);
 	head = &b->head;
 
+	ret = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(ret))
+		return ret;
+
 	if (unlikely(map_flags & BPF_F_LOCK)) {
 		if (unlikely(!map_value_has_spin_lock(map)))
 			return -EINVAL;
@@ -1133,6 +1138,10 @@ static int htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value,
 		/* unknown flags */
 		return -EINVAL;
 
+	ret = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(ret))
+		return ret;
+
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
 
@@ -1201,6 +1210,10 @@ static int __htab_percpu_map_update_elem(struct bpf_map *map, void *key,
 		/* unknown flags */
 		return -EINVAL;
 
+	ret = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(ret))
+		return ret;
+
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
 
@@ -1255,6 +1268,10 @@ static int __htab_lru_percpu_map_update_elem(struct bpf_map *map, void *key,
 	if (unlikely(map_flags > BPF_EXIST))
 		/* unknown flags */
 		return -EINVAL;
+
+	ret = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(ret))
+		return ret;
 
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
@@ -1334,6 +1351,10 @@ static int htab_map_delete_elem(struct bpf_map *map, void *key)
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
 
+	ret = bpf_map_trace_delete_elem(map, key);
+	if (unlikely(ret))
+		return ret;
+
 	key_size = map->key_size;
 
 	hash = htab_map_hash(key, key_size, htab->hashrnd);
@@ -1369,6 +1390,10 @@ static int htab_lru_map_delete_elem(struct bpf_map *map, void *key)
 
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
+
+	ret = bpf_map_trace_delete_elem(map, key);
+	if (unlikely(ret))
+		return ret;
 
 	key_size = map->key_size;
 
