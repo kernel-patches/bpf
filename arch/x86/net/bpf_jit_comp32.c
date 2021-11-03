@@ -1271,7 +1271,6 @@ static void emit_epilogue(u8 **pprog, u32 stack_depth)
 static int emit_jmp_edx(u8 **pprog, u8 *ip)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 #ifdef CONFIG_RETPOLINE
 	EMIT1_off32(0xE9, (u8 *)__x86_indirect_thunk_edx - (ip + 5));
@@ -1280,7 +1279,7 @@ static int emit_jmp_edx(u8 **pprog, u8 *ip)
 #endif
 	*pprog = prog;
 
-	return cnt;
+	return 0;
 }
 
 /*
