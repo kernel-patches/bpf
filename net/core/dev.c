@@ -3940,6 +3940,9 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	if (!miniq)
 		return skb;
 
+	if (skb_skip_tc_classify(skb))
+		return skb;
+
 	/* qdisc_skb_cb(skb)->pkt_len was already set by the caller. */
 	qdisc_skb_cb(skb)->mru = 0;
 	qdisc_skb_cb(skb)->post_ct = false;
