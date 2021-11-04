@@ -20,3 +20,9 @@
 	  Print all logs available, even debug-level information. This includes
 	  logs from libbpf as well as from the verifier, when attempting to
 	  load programs.
+
+-S, --strict
+	  Use strict (aka v1.0) libbpf mode which has more stringent section
+	  name requirements.
+	  See https://github.com/libbpf/libbpf/wiki/Libbpf:-the-road-to-v1.0#pinning-path-differences
+	  for details.
