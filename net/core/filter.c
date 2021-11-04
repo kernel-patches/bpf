@@ -3797,6 +3797,15 @@ static const struct bpf_func_proto bpf_xdp_get_buff_len_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BTF_ID_LIST_SINGLE(bpf_xdp_get_buff_len_bpf_ids, struct, xdp_buff)
+
+const struct bpf_func_proto bpf_xdp_get_buff_len_trace_proto = {
+	.func		= bpf_xdp_get_buff_len,
+	.gpl_only	= false,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &bpf_xdp_get_buff_len_bpf_ids[0],
+};
+
 static unsigned long xdp_get_metalen(const struct xdp_buff *xdp)
 {
 	return xdp_data_meta_unsupported(xdp) ? 0 :
@@ -4615,10 +4624,52 @@ static const struct bpf_func_proto bpf_sk_ancestor_cgroup_id_proto = {
 };
 #endif
 
-static unsigned long bpf_xdp_copy(void *dst_buff, const void *src_buff,
+static unsigned long bpf_xdp_copy(void *dst_buff, const void *ctx,
 				  unsigned long off, unsigned long len)
 {
-	memcpy(dst_buff, src_buff + off, len);
+	unsigned long base_len, copy_len, frag_off_total;
+	struct xdp_buff *xdp = (struct xdp_buff *)ctx;
+	struct skb_shared_info *sinfo;
+	int i;
+
+	if (likely(!xdp_buff_is_mb(xdp))) {
+		memcpy(dst_buff, xdp->data + off, len);
+		return 0;
+	}
+
+	base_len = xdp->data_end - xdp->data;
+	frag_off_total = base_len;
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+
+	/* If we need to copy data from the base buffer do it */
+	if (off < base_len) {
+		copy_len = min(len, base_len - off);
+		memcpy(dst_buff, xdp->data + off, copy_len);
+
+		off += copy_len;
+		len -= copy_len;
+		dst_buff += copy_len;
+	}
+
+	/* Copy any remaining data from the fragments */
+	for (i = 0; len && i < sinfo->nr_frags; i++) {
+		skb_frag_t *frag = &sinfo->frags[i];
+		unsigned long frag_len, frag_off;
+
+		frag_len = skb_frag_size(frag);
+		frag_off = off - frag_off_total;
+		if (frag_off < frag_len) {
+			copy_len = min(len, frag_len - frag_off);
+			memcpy(dst_buff,
+			       skb_frag_address(frag) + frag_off, copy_len);
+
+			off += copy_len;
+			len -= copy_len;
+			dst_buff += copy_len;
+		}
+		frag_off_total += frag_len;
+	}
+
 	return 0;
 }
 
@@ -4629,11 +4680,11 @@ BPF_CALL_5(bpf_xdp_event_output, struct xdp_buff *, xdp, struct bpf_map *, map,
 
 	if (unlikely(flags & ~(BPF_F_CTXLEN_MASK | BPF_F_INDEX_MASK)))
 		return -EINVAL;
-	if (unlikely(!xdp ||
-		     xdp_size > (unsigned long)(xdp->data_end - xdp->data)))
+
+	if (unlikely(!xdp || xdp_size > xdp_get_buff_len(xdp)))
 		return -EFAULT;
 
-	return bpf_event_output(map, flags, meta, meta_size, xdp->data,
+	return bpf_event_output(map, flags, meta, meta_size, xdp,
 				xdp_size, bpf_xdp_copy);
 }
 
