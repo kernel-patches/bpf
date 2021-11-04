@@ -6296,6 +6296,7 @@ struct bpf_sk_lookup {
 	__u32 local_ip4;	/* Network byte order */
 	__u32 local_ip6[4];	/* Network byte order */
 	__u32 local_port;	/* Host byte order */
+	__u32 ifindex;		/* The arriving interface. Determined by inet_iif. */
 };
 
 /*
