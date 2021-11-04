@@ -3300,8 +3300,8 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				obj->efile.st_ops_data = data;
 				obj->efile.st_ops_shndx = idx;
 			} else {
-				pr_info("elf: skipping unrecognized data section(%d) %s\n",
-					idx, name);
+				pr_debug("elf: skipping unrecognized data section(%d) %s\n",
+					 idx, name);
 			}
 		} else if (sh->sh_type == SHT_REL) {
 			int targ_sec_idx = sh->sh_info; /* points to other section */
