@@ -126,11 +126,11 @@ void hits_drops_report_final(struct bench_res res[], int res_cnt)
 		drops_stddev = sqrt(drops_stddev);
 		total_ops_stddev = sqrt(total_ops_stddev);
 	}
-	printf("Summary: hits %8.3lf \u00B1 %5.3lfM/s (%7.3lfM/prod), ",
+	printf("Summary: hits %8.3lf +/- %5.3lfM/s (%7.3lfM/prod), ",
 	       hits_mean, hits_stddev, hits_mean / env.producer_cnt);
-	printf("drops %8.3lf \u00B1 %5.3lfM/s, ",
+	printf("drops %8.3lf +/- %5.3lfM/s, ",
 	       drops_mean, drops_stddev);
-	printf("total operations %8.3lf \u00B1 %5.3lfM/s\n",
+	printf("total operations %8.3lf +/- %5.3lfM/s\n",
 	       total_ops_mean, total_ops_stddev);
 }
 
