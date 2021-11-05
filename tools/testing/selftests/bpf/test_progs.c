@@ -1146,7 +1146,7 @@ static int server_main(void)
 	/* run serial tests */
 	save_netns();
 
-	for (int i = 0; i < prog_test_cnt; i++) {
+	for (i = 0; i < prog_test_cnt; i++) {
 		struct prog_test_def *test = &prog_test_defs[i];
 		struct test_result *result = &test_results[i];
 

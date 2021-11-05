@@ -6,9 +6,9 @@
 
 static int timer_mim(struct timer_mim *timer_skel)
 {
+	int err, prog_fd, key1 = 1, i;
 	__u32 duration = 0, retval;
 	__u64 cnt1, cnt2;
-	int err, prog_fd, key1 = 1;
 
 	err = timer_mim__attach(timer_skel);
 	if (!ASSERT_OK(err, "timer_attach"))
@@ -23,7 +23,7 @@ static int timer_mim(struct timer_mim *timer_skel)
 
 	/* check that timer_cb[12] are incrementing 'cnt' */
 	cnt1 = READ_ONCE(timer_skel->bss->cnt);
-	for (int i = 0; i < 100; i++) {
+	for (i = 0; i < 100; i++) {
 		cnt2 = READ_ONCE(timer_skel->bss->cnt);
 		if (cnt2 != cnt1)
 			break;
@@ -41,7 +41,7 @@ static int timer_mim(struct timer_mim *timer_skel)
 
 	/* check that timer_cb[12] are no longer running */
 	cnt1 = READ_ONCE(timer_skel->bss->cnt);
-	for (int i = 0; i < 100; i++) {
+	for (i = 0; i < 100; i++) {
 		usleep(200); /* 100 times more than interval */
 		cnt2 = READ_ONCE(timer_skel->bss->cnt);
 		if (cnt2 == cnt1)

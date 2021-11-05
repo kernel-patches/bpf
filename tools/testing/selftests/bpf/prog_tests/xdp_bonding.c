@@ -335,7 +335,7 @@ static void test_xdp_bonding_redirect_multi(struct skeletons *skeletons)
 {
 	static const char * const ifaces[] = {"bond2", "veth2_1", "veth2_2"};
 	int veth1_1_rx, veth1_2_rx;
-	int err;
+	int err, i;
 
 	if (bonding_setup(skeletons, BOND_MODE_ROUNDROBIN, BOND_XMIT_POLICY_LAYER23,
 			  BOND_ONE_NO_ATTACH))
@@ -346,7 +346,7 @@ static void test_xdp_bonding_redirect_multi(struct skeletons *skeletons)
 		goto out;
 
 	/* populate the devmap with the relevant interfaces */
-	for (int i = 0; i < ARRAY_SIZE(ifaces); i++) {
+	for (i = 0; i < ARRAY_SIZE(ifaces); i++) {
 		int ifindex = if_nametoindex(ifaces[i]);
 		int map_fd = bpf_map__fd(skeletons->xdp_redirect_multi_kern->maps.map_all);
 

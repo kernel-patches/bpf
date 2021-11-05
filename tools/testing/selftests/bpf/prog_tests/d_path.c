@@ -103,7 +103,7 @@ void test_d_path(void)
 {
 	struct test_d_path__bss *bss;
 	struct test_d_path *skel;
-	int err;
+	int err, i;
 
 	skel = test_d_path__open_and_load();
 	if (CHECK(!skel, "setup", "d_path skeleton failed\n"))
@@ -130,7 +130,7 @@ void test_d_path(void)
 		  "trampoline for filp_close was not called\n"))
 		goto cleanup;
 
-	for (int i = 0; i < MAX_FILES; i++) {
+	for (i = 0; i < MAX_FILES; i++) {
 		CHECK(strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
 		      "check",
 		      "failed to get stat path[%d]: %s vs %s\n",
