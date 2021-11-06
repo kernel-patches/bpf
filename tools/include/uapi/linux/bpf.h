@@ -4938,6 +4938,16 @@ union bpf_attr {
  *		**-ENOENT** if symbol is not found.
  *
  *		**-EPERM** if caller does not have permission to obtain kernel address.
+ *
+ * long bpf_strncmp(const char *s1, const char *s2, u32 s2_sz)
+ *	Description
+ *		Do strncmp() between **s1** and **s2**. **s1** must be a
+ *		read-only string. **s2_sz** is the maximum storage size	of
+ *		**s2**.
+ *	Return
+ *		Return an integer less than, equal to, or greater than zero
+ *		if the first **s2_sz** bytes of **s2** is found to be
+ *		less than, to match, or be greater than **s1**.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5120,6 +5130,7 @@ union bpf_attr {
 	FN(trace_vprintk),		\
 	FN(skc_to_unix_sock),		\
 	FN(kallsyms_lookup_name),	\
+	FN(strncmp),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
