@@ -18,6 +18,19 @@
 
 #include "../../lib/kstrtox.h"
 
+static bool is_tracing_prog_type(enum bpf_prog_type type)
+{
+	switch (type) {
+	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_TRACEPOINT:
+	case BPF_PROG_TYPE_PERF_EVENT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+		return true;
+	default:
+		return false;
+	}
+}
+
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
  * bpf_map_lookup_elem_proto, so that verifier can properly check the arguments
@@ -173,10 +186,18 @@ BPF_CALL_0(bpf_ktime_get_coarse_ns)
 	return ktime_get_coarse_ns();
 }
 
+static bool bpf_ktime_get_coarse_ns_allowed(const struct bpf_prog *prog)
+{
+	// Forbid prog types that might be non-safe for non-fast variants of time accessors
+
+	return !is_tracing_prog_type(prog->type);
+}
+
 const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto = {
 	.func		= bpf_ktime_get_coarse_ns,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
+	.allowed	= bpf_ktime_get_coarse_ns_allowed,
 };
 
 BPF_CALL_0(bpf_get_current_pid_tgid)
@@ -1140,6 +1161,11 @@ out:
 	return ret;
 }
 
+static bool bpf_timer_allowed(const struct bpf_prog *prog)
+{
+	return !is_tracing_prog_type(prog->type);
+}
+
 static const struct bpf_func_proto bpf_timer_init_proto = {
 	.func		= bpf_timer_init,
 	.gpl_only	= true,
@@ -1147,6 +1173,7 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg1_type	= ARG_PTR_TO_TIMER,
 	.arg2_type	= ARG_CONST_MAP_PTR,
 	.arg3_type	= ARG_ANYTHING,
+	.allowed	= bpf_timer_allowed,
 };
 
 BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callback_fn,
@@ -1200,6 +1227,7 @@ static const struct bpf_func_proto bpf_timer_set_callback_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_TIMER,
 	.arg2_type	= ARG_PTR_TO_FUNC,
+	.allowed	= bpf_timer_allowed,
 };
 
 BPF_CALL_3(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs, u64, flags)
@@ -1230,6 +1258,7 @@ static const struct bpf_func_proto bpf_timer_start_proto = {
 	.arg1_type	= ARG_PTR_TO_TIMER,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
+	.allowed	= bpf_timer_allowed,
 };
 
 static void drop_prog_refcnt(struct bpf_hrtimer *t)
@@ -1279,6 +1308,7 @@ static const struct bpf_func_proto bpf_timer_cancel_proto = {
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_TIMER,
+	.allowed	= bpf_timer_allowed,
 };
 
 /* This function is called by map_delete/update_elem for individual element and
