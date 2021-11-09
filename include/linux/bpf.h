@@ -356,8 +356,8 @@ enum bpf_return_type {
 	RET_PTR_TO_SOCK_COMMON_OR_NULL,	/* returns a pointer to a sock_common or NULL */
 	RET_PTR_TO_ALLOC_MEM_OR_NULL,	/* returns a pointer to dynamically allocated memory or NULL */
 	RET_PTR_TO_BTF_ID_OR_NULL,	/* returns a pointer to a btf_id or NULL */
-	RET_PTR_TO_MEM_OR_BTF_ID_OR_NULL, /* returns a pointer to a valid memory or a btf_id or NULL */
-	RET_PTR_TO_MEM_OR_BTF_ID,	/* returns a pointer to a valid memory or a btf_id */
+	RET_PTR_TO_RDONLY_MEM_OR_BTF_ID_OR_NULL, /* returns a pointer to a readonly memory or a btf_id or NULL */
+	RET_PTR_TO_RDONLY_MEM_OR_BTF_ID, /* returns a pointer to a readonly memory or a btf_id */
 	RET_PTR_TO_BTF_ID,		/* returns a pointer to a btf_id */
 };
 
@@ -460,6 +460,8 @@ enum bpf_reg_type {
 	PTR_TO_PERCPU_BTF_ID,	 /* reg points to a percpu kernel variable */
 	PTR_TO_FUNC,		 /* reg points to a bpf program function */
 	PTR_TO_MAP_KEY,		 /* reg points to a map element key */
+	PTR_TO_RDONLY_MEM,	 /* reg points to valid readonly memory region */
+	PTR_TO_RDONLY_MEM_OR_NULL, /* reg points to valid readonly memory region or null */
 	__BPF_REG_TYPE_MAX,
 };
 

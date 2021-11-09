@@ -453,6 +453,7 @@ static bool reg_type_may_be_null(enum bpf_reg_type type)
 	       type == PTR_TO_TCP_SOCK_OR_NULL ||
 	       type == PTR_TO_BTF_ID_OR_NULL ||
 	       type == PTR_TO_MEM_OR_NULL ||
+	       type == PTR_TO_RDONLY_MEM_OR_NULL ||
 	       type == PTR_TO_RDONLY_BUF_OR_NULL ||
 	       type == PTR_TO_RDWR_BUF_OR_NULL;
 }
@@ -571,6 +572,8 @@ static const char * const reg_type_str[] = {
 	[PTR_TO_PERCPU_BTF_ID]	= "percpu_ptr_",
 	[PTR_TO_MEM]		= "mem",
 	[PTR_TO_MEM_OR_NULL]	= "mem_or_null",
+	[PTR_TO_RDONLY_MEM]	= "rdonly_mem",
+	[PTR_TO_RDONLY_MEM_OR_NULL] = "rdonly_mem_or_null",
 	[PTR_TO_RDONLY_BUF]	= "rdonly_buf",
 	[PTR_TO_RDONLY_BUF_OR_NULL] = "rdonly_buf_or_null",
 	[PTR_TO_RDWR_BUF]	= "rdwr_buf",
@@ -1182,6 +1185,9 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 		break;
 	case PTR_TO_MEM_OR_NULL:
 		reg->type = PTR_TO_MEM;
+		break;
+	case PTR_TO_RDONLY_MEM_OR_NULL:
+		reg->type = PTR_TO_RDONLY_MEM;
 		break;
 	case PTR_TO_RDONLY_BUF_OR_NULL:
 		reg->type = PTR_TO_RDONLY_BUF;
@@ -2741,6 +2747,8 @@ static bool is_spillable_regtype(enum bpf_reg_type type)
 	case PTR_TO_PERCPU_BTF_ID:
 	case PTR_TO_MEM:
 	case PTR_TO_MEM_OR_NULL:
+	case PTR_TO_RDONLY_MEM:
+	case PTR_TO_RDONLY_MEM_OR_NULL:
 	case PTR_TO_FUNC:
 	case PTR_TO_MAP_KEY:
 		return true;
@@ -3367,6 +3375,7 @@ static int __check_mem_access(struct bpf_verifier_env *env, int regno,
 			off, size, regno, reg->id, off, mem_size);
 		break;
 	case PTR_TO_MEM:
+	case PTR_TO_RDONLY_MEM:
 	default:
 		verbose(env, "invalid access to memory, mem_size=%u off=%d size=%d\n",
 			mem_size, off, size);
@@ -4376,6 +4385,16 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_mem_region_access(env, regno, off, size,
 					      reg->mem_size, false);
 		if (!err && t == BPF_READ && value_regno >= 0)
+			mark_reg_unknown(env, regs, value_regno);
+	} else if (reg->type == PTR_TO_RDONLY_MEM) {
+		if (t == BPF_WRITE) {
+			verbose(env, "R%d cannot write into %s\n",
+				regno, reg_type_str[reg->type]);
+			return -EACCES;
+		}
+		err = check_mem_region_access(env, regno, off, size,
+					      reg->mem_size, false);
+		if (!err && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_CTX) {
 		enum bpf_reg_type reg_type = SCALAR_VALUE;
@@ -6579,8 +6598,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_MEM_OR_NULL;
 		regs[BPF_REG_0].mem_size = meta.mem_size;
-	} else if (fn->ret_type == RET_PTR_TO_MEM_OR_BTF_ID_OR_NULL ||
-		   fn->ret_type == RET_PTR_TO_MEM_OR_BTF_ID) {
+	} else if (fn->ret_type == RET_PTR_TO_RDONLY_MEM_OR_BTF_ID_OR_NULL ||
+		   fn->ret_type == RET_PTR_TO_RDONLY_MEM_OR_BTF_ID) {
 		const struct btf_type *t;
 
 		mark_reg_known_zero(env, regs, BPF_REG_0);
@@ -6599,12 +6618,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 				return -EINVAL;
 			}
 			regs[BPF_REG_0].type =
-				fn->ret_type == RET_PTR_TO_MEM_OR_BTF_ID ?
-				PTR_TO_MEM : PTR_TO_MEM_OR_NULL;
+				fn->ret_type == RET_PTR_TO_RDONLY_MEM_OR_BTF_ID ?
+				PTR_TO_RDONLY_MEM : PTR_TO_RDONLY_MEM_OR_NULL;
 			regs[BPF_REG_0].mem_size = tsize;
 		} else {
 			regs[BPF_REG_0].type =
-				fn->ret_type == RET_PTR_TO_MEM_OR_BTF_ID ?
+				fn->ret_type == RET_PTR_TO_RDONLY_MEM_OR_BTF_ID ?
 				PTR_TO_BTF_ID : PTR_TO_BTF_ID_OR_NULL;
 			regs[BPF_REG_0].btf = meta.ret_btf;
 			regs[BPF_REG_0].btf_id = meta.ret_btf_id;
@@ -9410,7 +9429,7 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 
 		dst_reg->type = aux->btf_var.reg_type;
 		switch (dst_reg->type) {
-		case PTR_TO_MEM:
+		case PTR_TO_RDONLY_MEM:
 			dst_reg->mem_size = aux->btf_var.mem_size;
 			break;
 		case PTR_TO_BTF_ID:
@@ -11557,7 +11576,7 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 			err = -EINVAL;
 			goto err_put;
 		}
-		aux->btf_var.reg_type = PTR_TO_MEM;
+		aux->btf_var.reg_type = PTR_TO_RDONLY_MEM;
 		aux->btf_var.mem_size = tsize;
 	} else {
 		aux->btf_var.reg_type = PTR_TO_BTF_ID;
@@ -13379,7 +13398,8 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 				mark_reg_known_zero(env, regs, i);
 			else if (regs[i].type == SCALAR_VALUE)
 				mark_reg_unknown(env, regs, i);
-			else if (regs[i].type == PTR_TO_MEM_OR_NULL) {
+			else if (regs[i].type == PTR_TO_MEM_OR_NULL ||
+				 regs[i].type == PTR_TO_RDONLY_MEM_OR_NULL) {
 				const u32 mem_size = regs[i].mem_size;
 
 				mark_reg_known_zero(env, regs, i);

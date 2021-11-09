@@ -1142,8 +1142,8 @@ enum bpf_link_type {
  * insn[0].off:      0
  * insn[1].off:      0
  * ldimm64 rewrite:  address of the kernel variable
- * verifier type:    PTR_TO_BTF_ID or PTR_TO_MEM, depending on whether the var
- *                   is struct/union.
+ * verifier type:    PTR_TO_BTF_ID or PTR_TO_RDONLY_MEM, depending on whether
+ *                   the var is struct/union.
  */
 #define BPF_PSEUDO_BTF_ID	3
 /* insn[0].src_reg:  BPF_PSEUDO_FUNC
