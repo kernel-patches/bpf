@@ -486,7 +486,8 @@ static bool arg_type_may_be_null(enum bpf_arg_type type)
 	       type == ARG_PTR_TO_CTX_OR_NULL ||
 	       type == ARG_PTR_TO_SOCKET_OR_NULL ||
 	       type == ARG_PTR_TO_ALLOC_MEM_OR_NULL ||
-	       type == ARG_PTR_TO_STACK_OR_NULL;
+	       type == ARG_PTR_TO_STACK_OR_NULL ||
+	       type == ARG_CONST_PTR_TO_MEM_OR_NULL;
 }
 
 /* Determine whether the function releases some resources allocated by another
@@ -4971,6 +4972,8 @@ static bool arg_type_is_mem_ptr(enum bpf_arg_type type)
 {
 	return type == ARG_PTR_TO_MEM ||
 	       type == ARG_PTR_TO_MEM_OR_NULL ||
+	       type == ARG_CONST_PTR_TO_MEM ||
+	       type == ARG_CONST_PTR_TO_MEM_OR_NULL ||
 	       type == ARG_PTR_TO_UNINIT_MEM;
 }
 
@@ -5078,6 +5081,19 @@ static const struct bpf_reg_types mem_types = {
 		PTR_TO_MEM,
 		PTR_TO_RDONLY_BUF,
 		PTR_TO_RDWR_BUF,
+		PTR_TO_RDONLY_MEM,
+	},
+};
+
+static const struct bpf_reg_types writable_mem_types = {
+	.types = {
+		PTR_TO_STACK,
+		PTR_TO_PACKET,
+		PTR_TO_PACKET_META,
+		PTR_TO_MAP_KEY,
+		PTR_TO_MAP_VALUE,
+		PTR_TO_MEM,
+		PTR_TO_RDWR_BUF,
 	},
 };
 
@@ -5123,11 +5139,13 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_SOCKET_OR_NULL]	= &fullsock_types,
 	[ARG_PTR_TO_BTF_ID]		= &btf_ptr_types,
 	[ARG_PTR_TO_SPIN_LOCK]		= &spin_lock_types,
-	[ARG_PTR_TO_MEM]		= &mem_types,
-	[ARG_PTR_TO_MEM_OR_NULL]	= &mem_types,
+	[ARG_PTR_TO_MEM]		= &writable_mem_types,
+	[ARG_PTR_TO_MEM_OR_NULL]	= &writable_mem_types,
 	[ARG_PTR_TO_UNINIT_MEM]		= &mem_types,
 	[ARG_PTR_TO_ALLOC_MEM]		= &alloc_mem_types,
 	[ARG_PTR_TO_ALLOC_MEM_OR_NULL]	= &alloc_mem_types,
+	[ARG_CONST_PTR_TO_MEM]		= &mem_types,
+	[ARG_CONST_PTR_TO_MEM_OR_NULL]	= &mem_types,
 	[ARG_PTR_TO_INT]		= &int_ptr_types,
 	[ARG_PTR_TO_LONG]		= &int_ptr_types,
 	[ARG_PTR_TO_PERCPU_BTF_ID]	= &percpu_btf_ptr_types,

@@ -313,7 +313,13 @@ enum bpf_arg_type {
 	/* the following constraints used to prototype bpf_memcmp() and other
 	 * functions that access data on eBPF program stack
 	 */
-	ARG_PTR_TO_MEM,		/* pointer to valid memory (stack, packet, map value) */
+	ARG_PTR_TO_MEM,		/* pointer to valid memory (stack, packet, map value).
+				 * This arg_type isn't compatible with read-only
+				 * memory. It marks that the helper may modify
+				 * the memory this arg points to. If the helper doesn't
+				 * modify its memory and expects to take a read-only
+				 * memory, use ARG_CONST_PTR_TO_MEM instead.
+				 */
 	ARG_PTR_TO_MEM_OR_NULL, /* pointer to valid memory or NULL */
 	ARG_PTR_TO_UNINIT_MEM,	/* pointer to memory does not need to be initialized,
 				 * helper function must fill all bytes or clear
@@ -342,6 +348,12 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK_OR_NULL,	/* pointer to stack or NULL */
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
+	ARG_CONST_PTR_TO_MEM,	/* pointer to valid memory. CONST means the helper won't
+				 * write into the memory.
+				 */
+	ARG_CONST_PTR_TO_MEM_OR_NULL,   /* pointer to memory or null, similar to
+					 * ARG_CONST_PTR_TO_MEM.
+					 */
 	__BPF_ARG_TYPE_MAX,
 };
 
