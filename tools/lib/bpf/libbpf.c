@@ -211,6 +211,7 @@ enum reloc_type {
 	RELO_EXTERN_VAR,
 	RELO_EXTERN_FUNC,
 	RELO_SUBPROG_ADDR,
+	RELO_CORE,
 };
 
 struct reloc_desc {
@@ -218,6 +219,9 @@ struct reloc_desc {
 	int insn_idx;
 	int map_idx;
 	int sym_off;
+	int access_str_off;
+	int type_id;
+	enum bpf_core_relo_kind kind;
 };
 
 struct bpf_sec_def;
@@ -5398,6 +5402,26 @@ static void *u32_as_hash_key(__u32 x)
 	return (void *)(uintptr_t)x;
 }
 
+static int record_relo_core(struct bpf_program *prog,
+			    const struct bpf_core_relo *core_relo, int insn_idx)
+{
+	struct reloc_desc *relos, *relo;
+
+	relos = libbpf_reallocarray(prog->reloc_desc,
+				    prog->nr_reloc + 1, sizeof(*relos));
+	if (!relos)
+		return -ENOMEM;
+	relo = &relos[prog->nr_reloc];
+	relo->type = RELO_CORE;
+	relo->insn_idx = insn_idx;
+	relo->access_str_off = core_relo->access_str_off;
+	relo->type_id = core_relo->type_id;
+	relo->kind = core_relo->kind;
+	prog->reloc_desc = relos;
+	prog->nr_reloc++;
+	return 0;
+}
+
 static int bpf_core_apply_relo(struct bpf_program *prog,
 			       const struct bpf_core_relo *relo,
 			       int relo_idx,
@@ -5434,10 +5458,16 @@ static int bpf_core_apply_relo(struct bpf_program *prog,
 		return -EINVAL;
 
 	if (prog->obj->gen_loader) {
-		pr_warn("// TODO core_relo: prog %td insn[%d] %s kind %d\n",
+		const char *spec_str = btf__name_by_offset(local_btf, relo->access_str_off);
+
+		/* Adjust relo_core's insn_idx since final subprog offset in
+		 * the main prog is known.
+		 */
+		insn_idx += prog->sub_insn_off;
+		pr_debug("record_relo_core: prog %td insn[%d] %s %s %s final insn_idx %d\n",
 			prog - prog->obj->programs, relo->insn_off / 8,
-			local_name, relo->kind);
-		return -ENOTSUP;
+			btf_kind_str(local_type), local_name, spec_str, insn_idx);
+		return record_relo_core(prog, relo, insn_idx);
 	}
 
 	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
@@ -5632,6 +5662,9 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 			/* handled already */
 			break;
 		case RELO_CALL:
+			/* handled already */
+			break;
+		case RELO_CORE:
 			/* handled already */
 			break;
 		default:
@@ -6071,6 +6104,35 @@ bpf_object__free_relocs(struct bpf_object *obj)
 	}
 }
 
+static int cmp_relocs(const void *_a, const void *_b)
+{
+	const struct reloc_desc *a = _a;
+	const struct reloc_desc *b = _b;
+
+	if (a->insn_idx != b->insn_idx)
+		return a->insn_idx < b->insn_idx ? -1 : 1;
+
+	/* no two relocations should have the same insn_idx, but ... */
+	if (a->type != b->type)
+		return a->type < b->type ? -1 : 1;
+
+	return 0;
+}
+
+static void bpf_object__sort_relos(struct bpf_object *obj)
+{
+	int i;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		struct bpf_program *p = &obj->programs[i];
+
+		if (!p->nr_reloc)
+			continue;
+
+		qsort(p->reloc_desc, p->nr_reloc, sizeof(*p->reloc_desc), cmp_relocs);
+	}
+}
+
 static int
 bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
 {
@@ -6085,6 +6147,8 @@ bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
 				err);
 			return err;
 		}
+		if (obj->gen_loader)
+			bpf_object__sort_relos(obj);
 	}
 
 	/* Before relocating calls pre-process relocations and mark
@@ -6262,21 +6326,6 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 	return 0;
 }
 
-static int cmp_relocs(const void *_a, const void *_b)
-{
-	const struct reloc_desc *a = _a;
-	const struct reloc_desc *b = _b;
-
-	if (a->insn_idx != b->insn_idx)
-		return a->insn_idx < b->insn_idx ? -1 : 1;
-
-	/* no two relocations should have the same insn_idx, but ... */
-	if (a->type != b->type)
-		return a->type < b->type ? -1 : 1;
-
-	return 0;
-}
-
 static int bpf_object__collect_relos(struct bpf_object *obj)
 {
 	int i, err;
@@ -6309,14 +6358,7 @@ static int bpf_object__collect_relos(struct bpf_object *obj)
 			return err;
 	}
 
-	for (i = 0; i < obj->nr_programs; i++) {
-		struct bpf_program *p = &obj->programs[i];
-
-		if (!p->nr_reloc)
-			continue;
-
-		qsort(p->reloc_desc, p->nr_reloc, sizeof(*p->reloc_desc), cmp_relocs);
-	}
+	bpf_object__sort_relos(obj);
 	return 0;
 }
 
@@ -6581,6 +6623,16 @@ static int bpf_program__record_externs(struct bpf_program *prog)
 					       ext->is_weak, false, BTF_KIND_FUNC,
 					       relo->insn_idx);
 			break;
+		case RELO_CORE: {
+			struct bpf_core_relo cr = {
+				.insn_off = relo->insn_idx * 8,
+				.type_id = relo->type_id,
+				.access_str_off = relo->access_str_off,
+				.kind = relo->kind,
+			};
+			bpf_gen__record_relo_core(obj->gen_loader, &cr);
+			break;
+		}
 		default:
 			continue;
 		}
