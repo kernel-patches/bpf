@@ -3,7 +3,7 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include "kfunc_call_test.lskel.h"
-#include "kfunc_call_test_subprog.skel.h"
+#include "kfunc_call_test_subprog.lskel.h"
 
 static void test_main(void)
 {
@@ -31,14 +31,14 @@ static void test_main(void)
 
 static void test_subprog(void)
 {
-	struct kfunc_call_test_subprog *skel;
+	struct kfunc_call_test_subprog_lskel *skel;
 	int prog_fd, retval, err;
 
-	skel = kfunc_call_test_subprog__open_and_load();
+	skel = kfunc_call_test_subprog_lskel__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel"))
 		return;
 
-	prog_fd = bpf_program__fd(skel->progs.kfunc_call_test1);
+	prog_fd = skel->progs.kfunc_call_test1.prog_fd;
 	err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
 				NULL, NULL, (__u32 *)&retval, NULL);
 	ASSERT_OK(err, "bpf_prog_test_run(test1)");
@@ -46,7 +46,7 @@ static void test_subprog(void)
 	ASSERT_NEQ(skel->data->active_res, -1, "active_res");
 	ASSERT_EQ(skel->data->sk_state_res, BPF_TCP_CLOSE, "sk_state_res");
 
-	kfunc_call_test_subprog__destroy(skel);
+	kfunc_call_test_subprog_lskel__destroy(skel);
 }
 
 void test_kfunc_call(void)
