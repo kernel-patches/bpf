@@ -64,6 +64,7 @@ struct test_env {
 	bool verifier_stats;
 	bool debug;
 	enum verbosity verbosity;
+	bool timing;
 
 	bool jit_enabled;
 	bool has_testmod;
@@ -109,6 +110,7 @@ struct msg {
 			int sub_succ_cnt;
 			int error_cnt;
 			int skip_cnt;
+			__u32 duration_ms;
 			bool have_log;
 		} test_done;
 		struct {

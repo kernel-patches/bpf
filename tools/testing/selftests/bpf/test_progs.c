@@ -491,6 +491,7 @@ enum ARG_KEYS {
 	ARG_TEST_NAME_GLOB_DENYLIST = 'd',
 	ARG_NUM_WORKERS = 'j',
 	ARG_DEBUG = -1,
+	ARG_TIMING = -2,
 };
 
 static const struct argp_option opts[] = {
@@ -516,6 +517,8 @@ static const struct argp_option opts[] = {
 	  "Number of workers to run in parallel, default to number of cpus." },
 	{ "debug", ARG_DEBUG, NULL, 0,
 	  "print extra debug information for test_progs." },
+	{ "timing", ARG_TIMING, NULL, 0,
+	  "track and print timing information for each test." },
 	{},
 };
 
@@ -696,6 +699,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case ARG_DEBUG:
 		env->debug = true;
 		break;
+	case ARG_TIMING:
+		env->timing = true;
+		break;
 	case ARGP_KEY_ARG:
 		argp_usage(state);
 		break;
@@ -848,6 +854,7 @@ struct test_result {
 	int error_cnt;
 	int skip_cnt;
 	int sub_succ_cnt;
+	__u32 duration_ms;
 
 	size_t log_cnt;
 	char *log_buf;
@@ -905,9 +912,29 @@ static int recv_message(int sock, struct msg *msg)
 	return ret;
 }
 
-static void run_one_test(int test_num)
+static __u32 timespec_diff_ms(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+
+	if ((end.tv_nsec - start.tv_nsec) < 0) {
+		temp.tv_sec = end.tv_sec - start.tv_sec - 1;
+		temp.tv_nsec = 1000000000 + end.tv_nsec - start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec - start.tv_sec;
+		temp.tv_nsec = end.tv_nsec - start.tv_nsec;
+	}
+	return (temp.tv_sec * 1000) + (temp.tv_nsec / 1000000);
+}
+
+
+static double run_one_test(int test_num)
 {
 	struct prog_test_def *test = &prog_test_defs[test_num];
+	struct timespec start = {}, end = {};
+	__u32 duration_ms = 0;
+
+	if (env.timing)
+		clock_gettime(CLOCK_MONOTONIC, &start);
 
 	env.test = test;
 
@@ -928,6 +955,13 @@ static void run_one_test(int test_num)
 	restore_netns();
 	if (test->need_cgroup_cleanup)
 		cleanup_cgroup_environment();
+
+	if (env.timing) {
+		clock_gettime(CLOCK_MONOTONIC, &end);
+		duration_ms = timespec_diff_ms(start, end);
+	}
+
+	return duration_ms;
 }
 
 struct dispatch_data {
@@ -999,6 +1033,7 @@ static void *dispatch_thread(void *ctx)
 			result->error_cnt = msg_test_done.test_done.error_cnt;
 			result->skip_cnt = msg_test_done.test_done.skip_cnt;
 			result->sub_succ_cnt = msg_test_done.test_done.sub_succ_cnt;
+			result->duration_ms = msg_test_done.test_done.duration_ms;
 
 			/* collect all logs */
 			if (msg_test_done.test_done.have_log) {
@@ -1023,6 +1058,8 @@ static void *dispatch_thread(void *ctx)
 			}
 			/* output log */
 			{
+				char buf[255] = {};
+
 				pthread_mutex_lock(&stdout_output_lock);
 
 				if (result->log_cnt) {
@@ -1032,9 +1069,15 @@ static void *dispatch_thread(void *ctx)
 						fprintf(stdout, "\n");
 				}
 
-				fprintf(stdout, "#%d %s:%s\n",
+				if (env.timing) {
+					snprintf(buf, sizeof(buf), " (%u ms)", result->duration_ms);
+					buf[sizeof(buf) - 1] = '\0';
+				}
+
+				fprintf(stdout, "#%d %s:%s%s\n",
 					test->test_num, test->test_name,
-					result->error_cnt ? "FAIL" : (result->skip_cnt ? "SKIP" : "OK"));
+					result->error_cnt ? "FAIL" : (result->skip_cnt ? "SKIP" : "OK"),
+					buf);
 
 				pthread_mutex_unlock(&stdout_output_lock);
 			}
@@ -1091,6 +1134,57 @@ static void print_all_error_logs(void)
 		}
 	}
 }
+
+struct item {
+	int id;
+	__u32 duration_ms;
+};
+
+static int rcompitem(const void *a, const void *b)
+{
+	__u32 val_a = ((struct item *)a)->duration_ms;
+	__u32 val_b = ((struct item *)b)->duration_ms;
+
+	if (val_a > val_b)
+		return -1;
+	if (val_a < val_b)
+		return 1;
+	return 0;
+}
+
+static void print_slow_tests(void)
+{
+	int i;
+	struct item items[ARRAY_SIZE(prog_test_defs)] = {};
+
+	for (i = 0; i < prog_test_cnt; i++) {
+		struct prog_test_def *test = &prog_test_defs[i];
+		struct test_result *result = &test_results[i];
+
+		if (!test->tested || !result->duration_ms)
+			continue;
+
+		items[i].id = i;
+		items[i].duration_ms = result->duration_ms;
+	}
+	qsort(&items[0], ARRAY_SIZE(items), sizeof(items[0]), rcompitem);
+
+	fprintf(stdout, "\nTop 10 Slowest tests:\n");
+
+	for (i = 0; i < 10; i++) {
+		struct item *v = &items[i];
+		struct prog_test_def *test;
+
+		if (!v->duration_ms)
+			break;
+
+		test = &prog_test_defs[v->id];
+		fprintf(stdout, "#%d %s: %u ms%s\n",
+			test->test_num, test->test_name, v->duration_ms,
+			test->run_serial_test != NULL ? " (serial)" : "");
+	}
+}
+
 
 static int server_main(void)
 {
@@ -1149,13 +1243,15 @@ static int server_main(void)
 	for (int i = 0; i < prog_test_cnt; i++) {
 		struct prog_test_def *test = &prog_test_defs[i];
 		struct test_result *result = &test_results[i];
+		char buf[255] = {};
+		__u32 duration_ms = 0;
 
 		if (!test->should_run || !test->run_serial_test)
 			continue;
 
 		stdio_hijack();
 
-		run_one_test(i);
+		duration_ms = run_one_test(i);
 
 		stdio_restore();
 		if (env.log_buf) {
@@ -1168,13 +1264,20 @@ static int server_main(void)
 		}
 		restore_netns();
 
-		fprintf(stdout, "#%d %s:%s\n",
+		if (env.timing) {
+			snprintf(buf, sizeof(buf), " (%u ms)", duration_ms);
+			buf[sizeof(buf) - 1] = '\0';
+		}
+
+		fprintf(stdout, "#%d %s:%s%s\n",
 			test->test_num, test->test_name,
-			test->error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
+			test->error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"),
+			buf);
 
 		result->error_cnt = test->error_cnt;
 		result->skip_cnt = test->skip_cnt;
 		result->sub_succ_cnt = test->sub_succ_cnt;
+		result->duration_ms = duration_ms;
 	}
 
 	/* generate summary */
@@ -1199,6 +1302,9 @@ static int server_main(void)
 	}
 
 	print_all_error_logs();
+
+	if (env.timing)
+		print_slow_tests();
 
 	fprintf(stdout, "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n",
 		env.succ_cnt, env.sub_succ_cnt, env.skip_cnt, env.fail_cnt);
@@ -1236,6 +1342,7 @@ static int worker_main(int sock)
 			int test_to_run;
 			struct prog_test_def *test;
 			struct msg msg_done;
+			__u32 duration_ms = 0;
 
 			test_to_run = msg.do_test.test_num;
 			test = &prog_test_defs[test_to_run];
@@ -1248,7 +1355,7 @@ static int worker_main(int sock)
 
 			stdio_hijack();
 
-			run_one_test(test_to_run);
+			duration_ms = run_one_test(test_to_run);
 
 			stdio_restore();
 
@@ -1258,6 +1365,7 @@ static int worker_main(int sock)
 			msg_done.test_done.error_cnt = test->error_cnt;
 			msg_done.test_done.skip_cnt = test->skip_cnt;
 			msg_done.test_done.sub_succ_cnt = test->sub_succ_cnt;
+			msg_done.test_done.duration_ms = duration_ms;
 			msg_done.test_done.have_log = false;
 
 			if (env.verbosity > VERBOSE_NONE || test->force_log || test->error_cnt) {
@@ -1485,6 +1593,9 @@ int main(int argc, char **argv)
 		goto out;
 
 	print_all_error_logs();
+
+	if (env.timing)
+		print_slow_tests();
 
 	fprintf(stdout, "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n",
 		env.succ_cnt, env.sub_succ_cnt, env.skip_cnt, env.fail_cnt);
