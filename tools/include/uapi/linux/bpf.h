@@ -4632,6 +4632,9 @@ union bpf_attr {
  * 		system boot, in nanoseconds. Does not include time the system
  * 		was suspended.
  *
+ *		Tracing programs cannot use **bpf_ktime_get_coarse_ns**\() (but
+ *		this may change in the future).
+ *
  * 		See: **clock_gettime**\ (**CLOCK_MONOTONIC_COARSE**)
  * 	Return
  * 		Current *ktime*.
@@ -4804,6 +4807,9 @@ union bpf_attr {
  *		All other bits of *flags* are reserved.
  *		The verifier will reject the program if *timer* is not from
  *		the same *map*.
+ *
+ *		Tracing programs cannot use **bpf_timer_init**\() (but this may
+ *		change in the future).
  *	Return
  *		0 on success.
  *		**-EBUSY** if *timer* is already initialized.
