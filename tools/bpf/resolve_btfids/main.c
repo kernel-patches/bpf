@@ -569,7 +569,7 @@ static int id_patch(struct object *obj, struct btf_id *id)
 	int i;
 
 	if (!id->id) {
-		pr_err("WARN: resolve_btfids: unresolved symbol %s\n", id->name);
+		pr_debug("WARN: resolve_btfids: unresolved symbol %s\n", id->name);
 	}
 
 	for (i = 0; i < id->addr_cnt; i++) {
