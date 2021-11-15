@@ -3,7 +3,7 @@
  * bpf_jit_comp.c: BPF JIT compiler
  *
  * Copyright (C) 2011-2013 Eric Dumazet (eric.dumazet@gmail.com)
- * Internal BPF Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
+ * eBPF Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
  */
 #include <linux/netdevice.h>
 #include <linux/filter.h>
