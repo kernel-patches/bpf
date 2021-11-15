@@ -2,6 +2,7 @@
 /* Copyright (c) 2020 Facebook */
 #include "bench.h"
 #include "trigger_bench.skel.h"
+#include "trace_helpers.h"
 
 /* BPF triggering benchmarks */
 static struct trigger_ctx {
@@ -107,6 +108,69 @@ static void *trigger_consumer(void *input)
 	return NULL;
 }
 
+/* make sure call is not inlined and not avoided by compiler, so __weak and
+ * inline asm volatile in the body of the function
+ */
+__weak void uprobe_target(void)
+{
+	asm volatile ("");
+}
+
+static void *uprobe_base_producer(void *input)
+{
+	while (true) {
+		uprobe_target();
+		atomic_inc(&base_hits.value);
+	}
+	return NULL;
+}
+
+static void *uprobe_producer(void *input)
+{
+	while (true)
+		uprobe_target();
+	return NULL;
+}
+
+static void usetup(bool use_retprobe)
+{
+	size_t uprobe_offset;
+	ssize_t base_addr;
+	struct bpf_link *link;
+
+	setup_libbpf();
+
+	ctx.skel = trigger_bench__open_and_load();
+	if (!ctx.skel) {
+		fprintf(stderr, "failed to open skeleton\n");
+		exit(1);
+	}
+
+	base_addr = get_base_addr();
+	uprobe_offset = get_uprobe_offset(&uprobe_target, base_addr);
+
+	link = bpf_program__attach_uprobe(ctx.skel->progs.bench_trigger_uprobe,
+					  use_retprobe,
+					  -1 /* all PIDs */,
+					  "/proc/self/exe",
+					  uprobe_offset);
+	if (!link) {
+		fprintf(stderr, "failed to attach uprobe!\n");
+		exit(1);
+	}
+	ctx.skel->links.bench_trigger_uprobe = link;
+}
+
+static void uprobe_setup()
+{
+	usetup(false);
+}
+
+static void uretprobe_setup()
+{
+	usetup(true);
+}
+
 const struct bench bench_trig_base = {
 	.name = "trig-base",
 	.validate = trigger_validate,
@@ -177,6 +241,36 @@ const struct bench bench_trig_fmodret = {
 	.validate = trigger_validate,
 	.setup = trigger_fmodret_setup,
 	.producer_thread = trigger_producer,
+	.consumer_thread = trigger_consumer,
+	.measure = trigger_measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_trig_uprobe_base = {
+	.name = "trig-uprobe-base",
+	.setup = NULL, /* no uprobe/uretprobe is attached */
+	.producer_thread = uprobe_base_producer,
+	.consumer_thread = trigger_consumer,
+	.measure = trigger_base_measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_trig_uprobe = {
+	.name = "trig-uprobe",
+	.setup = uprobe_setup,
+	.producer_thread = uprobe_producer,
+	.consumer_thread = trigger_consumer,
+	.measure = trigger_measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_trig_uretprobe = {
+	.name = "trig-uretprobe",
+	.setup = uretprobe_setup,
+	.producer_thread = uprobe_producer,
 	.consumer_thread = trigger_consumer,
 	.measure = trigger_measure,
 	.report_progress = hits_drops_report_progress,
