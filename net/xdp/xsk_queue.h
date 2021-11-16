@@ -338,6 +338,11 @@ static inline bool xskq_prod_is_full(struct xsk_queue *q)
 	return xskq_prod_nb_free(q, 1) ? false : true;
 }
 
+static inline bool xskq_prod_is_full_n(struct xsk_queue *q, u32 n)
+{
+	return xskq_prod_nb_free(q, n) ? false : true;
+}
+
 static inline void xskq_prod_cancel(struct xsk_queue *q)
 {
 	q->cached_prod--;
@@ -395,6 +400,32 @@ static inline int xskq_prod_reserve_desc(struct xsk_queue *q,
 	idx = q->cached_prod++ & q->ring_mask;
 	ring->desc[idx].addr = addr;
 	ring->desc[idx].len = len;
+
+	return 0;
+}
+
+static inline int xskq_prod_reserve_desc_batch(struct xsk_queue *q, struct xdp_buff **bufs,
+					       int batch_size)
+{
+	struct xdp_rxtx_ring *ring = (struct xdp_rxtx_ring *)q->ring;
+	struct xdp_buff_xsk *xskb;
+	u64 addr;
+	u32 len;
+	u32 i;
+
+	if (xskq_prod_is_full_n(q, batch_size))
+		return -ENOSPC;
+
+	/* A, matches D */
+	for (i = 0; i < batch_size; i++) {
+		len = (*(bufs + i))->data_end - (*(bufs + i))->data;
+		xskb = container_of(*(bufs + i), struct xdp_buff_xsk, xdp);
+		addr = xp_get_handle(xskb);
+		ring->desc[(q->cached_prod + i) & q->ring_mask].addr = addr;
+		ring->desc[(q->cached_prod + i) & q->ring_mask].len = len;
+	}
+
+	q->cached_prod += batch_size;
 
 	return 0;
 }

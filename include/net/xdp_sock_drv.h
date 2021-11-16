@@ -23,6 +23,7 @@ void xsk_clear_rx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool);
 bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool);
 int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp);
+int xsk_rcv_batch(struct xdp_sock *xs, struct xdp_buff **bufs, int batch_size);
 void xsk_flush(struct xdp_sock *xs);
 
 static inline u32 xsk_pool_get_headroom(struct xsk_buff_pool *pool)
@@ -125,6 +126,22 @@ static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_bu
 	xp_dma_sync_for_cpu(xskb);
 }
 
+static inline void xsk_buff_dma_sync_for_cpu_batch(struct xdp_buff **bufs,
+						   struct xsk_buff_pool *pool,
+						   int batch_size)
+{
+	struct xdp_buff_xsk *xskb;
+	int i;
+
+	if (!pool->dma_need_sync)
+		return;
+
+	for (i = 0; i < batch_size; i++) {
+		xskb = container_of(*(bufs + i), struct xdp_buff_xsk, xdp);
+		xp_dma_sync_for_cpu(xskb);
+	}
+}
+
 static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 						    dma_addr_t dma,
 						    size_t size)
@@ -187,6 +204,11 @@ static inline bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool)
 }
 
 static inline int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+{
+	return 0;
+}
+
+static inline int xsk_rcv_batch(struct xdp_sock *xs, struct xdp_buff **bufs, int batch_size)
 {
 	return 0;
 }
@@ -271,6 +293,12 @@ static inline void *xsk_buff_raw_get_data(struct xsk_buff_pool *pool, u64 addr)
 }
 
 static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_buff_pool *pool)
+{
+}
+
+static inline void xsk_buff_dma_sync_for_cpu_batch(struct xdp_buff **bufs,
+						   struct xsk_buff_pool *pool,
+						   int batch_size)
 {
 }
 

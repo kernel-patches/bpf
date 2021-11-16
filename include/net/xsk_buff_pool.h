@@ -214,6 +214,28 @@ static inline void xp_release(struct xdp_buff_xsk *xskb)
 		xskb->pool->free_heads[xskb->pool->free_heads_cnt++] = xskb;
 }
 
+/* Release a batch of xdp_buffs back to an xdp_buff_pool.
+ * The batch of buffs must all come from the same xdp_buff_pool. This way
+ * it is safe to push the batch to the top of the free_heads stack, because
+ * at least the same amount will have been popped from the stack earlier in
+ * the datapath.
+ */
+static inline void xp_release_batch(struct xdp_buff **bufs, int batch_size)
+{
+	struct xdp_buff_xsk *xskb = container_of(*bufs, struct xdp_buff_xsk, xdp);
+	struct xsk_buff_pool *pool = xskb->pool;
+	u32 tail = pool->free_heads_cnt;
+	u32 i;
+
+	if (pool->unaligned) {
+		for (i = 0; i < batch_size; i++) {
+			xskb = container_of(*(bufs + i), struct xdp_buff_xsk, xdp);
+			pool->free_heads[tail + i] = xskb;
+		}
+		pool->free_heads_cnt += batch_size;
+	}
+}
+
 static inline u64 xp_get_handle(struct xdp_buff_xsk *xskb)
 {
 	u64 offset = xskb->xdp.data - xskb->xdp.data_hard_start;

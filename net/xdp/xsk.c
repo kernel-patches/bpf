@@ -151,6 +151,20 @@ static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 	return 0;
 }
 
+static int __xsk_rcv_zc_batch(struct xdp_sock *xs, struct xdp_buff **bufs, int batch_size)
+{
+	int err;
+
+	err = xskq_prod_reserve_desc_batch(xs->rx, bufs, batch_size);
+	if (err) {
+		xs->rx_queue_full++;
+		return -1;
+	}
+
+	xp_release_batch(bufs, batch_size);
+	return 0;
+}
+
 static void xsk_copy_xdp(struct xdp_buff *to, struct xdp_buff *from, u32 len)
 {
 	void *from_buf, *to_buf;
@@ -268,6 +282,21 @@ int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	return err;
 }
 EXPORT_SYMBOL(xsk_rcv);
+
+int xsk_rcv_batch(struct xdp_sock *xs, struct xdp_buff **bufs, int batch_size)
+{
+	int err;
+
+	err = xsk_rcv_check(xs, *bufs);
+	if (err)
+		return err;
+
+	if ((*bufs)->rxq->mem.type != MEM_TYPE_XSK_BUFF_POOL)
+		return -1;
+
+	return __xsk_rcv_zc_batch(xs, bufs, batch_size);
+}
+EXPORT_SYMBOL(xsk_rcv_batch);
 
 int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
