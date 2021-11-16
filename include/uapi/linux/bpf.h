@@ -94,6 +94,9 @@ union bpf_iter_link_info {
 	struct {
 		__u32   io_uring_fd;
 	} io_uring;
+	struct {
+		__u32   epoll_fd;
+	} epoll;
 };
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */

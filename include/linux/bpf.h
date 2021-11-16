@@ -1512,7 +1512,10 @@ int bpf_obj_get_user(const char __user *pathname, int flags);
 struct io_ring_ctx;
 struct bpf_iter_aux_info {
 	struct bpf_map *map;
-	struct io_ring_ctx *ctx;
+	union {
+		struct io_ring_ctx *ctx;
+		struct file *ep;
+	};
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,

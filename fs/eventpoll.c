@@ -37,6 +37,7 @@
 #include <linux/seq_file.h>
 #include <linux/compat.h>
 #include <linux/rculist.h>
+#include <linux/btf_ids.h>
 #include <net/busy_poll.h>
 
 /*
@@ -985,7 +986,6 @@ static struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 	return epir;
 }
 
-#ifdef CONFIG_KCMP
 static struct epitem *ep_find_tfd(struct eventpoll *ep, int tfd, unsigned long toff)
 {
 	struct rb_node *rbp;
@@ -1005,6 +1005,7 @@ static struct epitem *ep_find_tfd(struct eventpoll *ep, int tfd, unsigned long t
 	return NULL;
 }
 
+#ifdef CONFIG_KCMP
 struct file *get_epoll_tfile_raw_ptr(struct file *file, int tfd,
 				     unsigned long toff)
 {
@@ -2385,3 +2386,196 @@ static int __init eventpoll_init(void)
 	return 0;
 }
 fs_initcall(eventpoll_init);
+
+#ifdef CONFIG_BPF_SYSCALL
+
+BTF_ID_LIST(btf_epoll_ids)
+BTF_ID(struct, eventpoll)
+BTF_ID(struct, epitem)
+
+struct bpf_epoll_iter_seq_info {
+	struct eventpoll *ep;
+	struct rb_node *rbp;
+	int tfd;
+};
+
+static int bpf_epoll_init_seq(void *priv_data, struct bpf_iter_aux_info *aux)
+{
+	struct bpf_epoll_iter_seq_info *info = priv_data;
+
+	info->ep = aux->ep->private_data;
+	info->tfd = -1;
+	return 0;
+}
+
+static int bpf_epoll_iter_attach(struct bpf_prog *prog,
+				 union bpf_iter_link_info *linfo,
+				 struct bpf_iter_aux_info *aux)
+{
+	struct file *file;
+	int ret;
+
+	file = fget(linfo->epoll.epoll_fd);
+	if (!file)
+		return -EBADF;
+
+	ret = -EOPNOTSUPP;
+	if (unlikely(!is_file_epoll(file)))
+		goto out_fput;
+
+	aux->ep = file;
+	return 0;
+out_fput:
+	fput(file);
+	return ret;
+}
+
+static void bpf_epoll_iter_detach(struct bpf_iter_aux_info *aux)
+{
+	fput(aux->ep);
+}
+
+struct bpf_iter__epoll {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct eventpoll *, ep);
+	__bpf_md_ptr(struct epitem *, epi);
+};
+
+static void *bpf_epoll_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	struct bpf_epoll_iter_seq_info *info = seq->private;
+	struct epitem *epi;
+
+	mutex_lock(&info->ep->mtx);
+	/* already iterated? */
+	if (info->tfd == -2)
+		return NULL;
+	/* partially iterated */
+	if (info->tfd >= 0) {
+		epi = ep_find_tfd(info->ep, info->tfd, 0);
+		if (!epi)
+			return NULL;
+		info->rbp = &epi->rbn;
+		return epi;
+	}
+	WARN_ON(info->tfd != -1);
+	/* first iteration */
+	info->rbp = rb_first_cached(&info->ep->rbr);
+	if (!info->rbp)
+		return NULL;
+	if (*pos == 0)
+		++*pos;
+	return rb_entry(info->rbp, struct epitem, rbn);
+}
+
+static void *bpf_epoll_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	struct bpf_epoll_iter_seq_info *info = seq->private;
+
+	++*pos;
+	info->rbp = rb_next(info->rbp);
+	return info->rbp ? rb_entry(info->rbp, struct epitem, rbn) : NULL;
+}
+
+DEFINE_BPF_ITER_FUNC(epoll, struct bpf_iter_meta *meta, struct eventpoll *ep,
+		     struct epitem *epi)
+
+static int __bpf_epoll_seq_show(struct seq_file *seq, void *v, bool in_stop)
+{
+	struct bpf_epoll_iter_seq_info *info = seq->private;
+	struct bpf_iter__epoll ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+	int ret;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, in_stop);
+	if (!prog)
+		return 0;
+
+	ctx.meta = &meta;
+	ctx.ep = info->ep;
+	ctx.epi = v;
+	if (ctx.epi) {
+		/* The file we are going to pass to prog may already have its f_count as
+		 * 0, hence before invoking the prog, we always try to get the reference
+		 * if it isn't zero, failing which we skip the file. This is usually the
+		 * case for files that are closed before calling EPOLL_CTL_DEL for them,
+		 * which would wait for us to release ep->mtx before doing ep_remove.
+		 */
+		rcu_read_lock();
+		ret = get_file_rcu(ctx.epi->ffd.file);
+		rcu_read_unlock();
+		if (!ret)
+			return 0;
+	}
+	ret = bpf_iter_run_prog(prog, &ctx);
+	/* fput queues work asynchronously, so in our case, either task_work
+	 * for non-exiting task, and otherwise delayed_fput, so holding
+	 * ep->mtx and calling fput (which will take the same lock) in
+	 * this context will not deadlock us, in case f_count is 1 at this
+	 * point.
+	 */
+	if (ctx.epi)
+		fput(ctx.epi->ffd.file);
+	return ret;
+}
+
+static int bpf_epoll_seq_show(struct seq_file *seq, void *v)
+{
+	return __bpf_epoll_seq_show(seq, v, false);
+}
+
+static void bpf_epoll_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bpf_epoll_iter_seq_info *info = seq->private;
+	struct epitem *epi;
+
+	if (!v) {
+		__bpf_epoll_seq_show(seq, v, true);
+		/* done iterating */
+		info->tfd = -2;
+	} else {
+		epi = rb_entry(info->rbp, struct epitem, rbn);
+		info->tfd = epi->ffd.fd;
+	}
+	mutex_unlock(&info->ep->mtx);
+}
+
+static const struct seq_operations bpf_epoll_seq_ops = {
+	.start = bpf_epoll_seq_start,
+	.next  = bpf_epoll_seq_next,
+	.stop  = bpf_epoll_seq_stop,
+	.show  = bpf_epoll_seq_show,
+};
+
+static const struct bpf_iter_seq_info bpf_epoll_seq_info = {
+	.seq_ops          = &bpf_epoll_seq_ops,
+	.init_seq_private = bpf_epoll_init_seq,
+	.seq_priv_size    = sizeof(struct bpf_epoll_iter_seq_info),
+};
+
+static struct bpf_iter_reg epoll_reg_info = {
+	.target            = "epoll",
+	.feature           = BPF_ITER_RESCHED,
+	.attach_target     = bpf_epoll_iter_attach,
+	.detach_target     = bpf_epoll_iter_detach,
+	.ctx_arg_info_size = 2,
+	.ctx_arg_info = {
+		{ offsetof(struct bpf_iter__epoll, ep),
+		  PTR_TO_BTF_ID },
+		{ offsetof(struct bpf_iter__epoll, epi),
+		  PTR_TO_BTF_ID_OR_NULL },
+	},
+	.seq_info	   = &bpf_epoll_seq_info,
+};
+
+static int __init epoll_iter_init(void)
+{
+	epoll_reg_info.ctx_arg_info[0].btf_id = btf_epoll_ids[0];
+	epoll_reg_info.ctx_arg_info[1].btf_id = btf_epoll_ids[1];
+	return bpf_iter_reg_target(&epoll_reg_info);
+}
+late_initcall(epoll_iter_init);
+
+#endif
