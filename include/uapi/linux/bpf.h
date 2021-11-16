@@ -4960,6 +4960,14 @@ union bpf_attr {
  *		**-ENOENT** if *task->mm* is NULL, or no vma contains *addr*.
  *		**-EBUSY** if failed to try lock mmap_lock.
  *		**-EINVAL** for invalid **flags**.
+ *
+ * long bpf_page_to_pfn(struct page *page)
+ *	Description
+ *		Obtain the page frame number (PFN) for the given *struct page*
+ *		pointer.
+ *	Return
+ *		Page Frame Number corresponding to the page pointed to by the
+ *		*struct page* pointer, or U64_MAX if pointer is NULL.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5143,6 +5151,7 @@ union bpf_attr {
 	FN(skc_to_unix_sock),		\
 	FN(kallsyms_lookup_name),	\
 	FN(find_vma),			\
+	FN(page_to_pfn),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

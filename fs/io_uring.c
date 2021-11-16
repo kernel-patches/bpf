@@ -11295,6 +11295,23 @@ static struct bpf_iter_reg io_uring_buf_reg_info = {
 	.seq_info	   = &bpf_io_uring_buf_seq_info,
 };
 
+BPF_CALL_1(bpf_page_to_pfn, struct page *, page)
+{
+	/* PTR_TO_BTF_ID can be NULL */
+	if (!page)
+		return U64_MAX;
+	return page_to_pfn(page);
+}
+
+BTF_ID_LIST_SINGLE(btf_page_to_pfn_ids, struct, page)
+
+const struct bpf_func_proto bpf_page_to_pfn_proto = {
+	.func		= bpf_page_to_pfn,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_page_to_pfn_ids[0],
+};
+
 static int __init io_uring_iter_init(void)
 {
 	io_uring_buf_reg_info.ctx_arg_info[0].btf_id = btf_io_uring_ids[0];

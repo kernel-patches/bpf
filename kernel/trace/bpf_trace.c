@@ -1212,6 +1212,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_find_vma_proto;
 	case BPF_FUNC_trace_vprintk:
 		return bpf_get_trace_vprintk_proto();
+	case BPF_FUNC_page_to_pfn:
+		return &bpf_page_to_pfn_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
