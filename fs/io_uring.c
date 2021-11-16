@@ -11132,6 +11132,7 @@ __initcall(io_uring_init);
 BTF_ID_LIST(btf_io_uring_ids)
 BTF_ID(struct, io_ring_ctx)
 BTF_ID(struct, io_mapped_ubuf)
+BTF_ID(struct, file)
 
 struct bpf_io_uring_seq_info {
 	struct io_ring_ctx *ctx;
@@ -11312,11 +11313,148 @@ const struct bpf_func_proto bpf_page_to_pfn_proto = {
 	.arg1_btf_id	= &btf_page_to_pfn_ids[0],
 };
 
+/* io_uring iterator for registered files */
+
+struct bpf_iter__io_uring_file {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct io_ring_ctx *, ctx);
+	__bpf_md_ptr(struct file *, file);
+	unsigned long index;
+};
+
+static void *__bpf_io_uring_file_seq_get_next(struct bpf_io_uring_seq_info *info)
+{
+	struct file *file = NULL;
+
+	if (info->index < info->ctx->nr_user_files) {
+		/* file set can be sparse */
+		file = io_file_from_index(info->ctx, info->index++);
+		/* use info as a distinct pointer to distinguish between empty
+		 * slot and valid file, since we cannot return NULL for this
+		 * case if we want iter prog to still be invoked with file ==
+		 * NULL.
+		 */
+		if (!file)
+			return info;
+	}
+
+	return file;
+}
+
+static void *bpf_io_uring_file_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	struct bpf_io_uring_seq_info *info = seq->private;
+	struct file *file;
+
+	/* Indicate to userspace that the uring lock is contended */
+	if (!mutex_trylock(&info->ctx->uring_lock))
+		return ERR_PTR(-EDEADLK);
+
+	file = __bpf_io_uring_file_seq_get_next(info);
+	if (!file)
+		return NULL;
+
+	if (*pos == 0)
+		++*pos;
+	return file;
+}
+
+static void *bpf_io_uring_file_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	struct bpf_io_uring_seq_info *info = seq->private;
+
+	++*pos;
+	return __bpf_io_uring_file_seq_get_next(info);
+}
+
+DEFINE_BPF_ITER_FUNC(io_uring_file, struct bpf_iter_meta *meta,
+		     struct io_ring_ctx *ctx, struct file *file,
+		     unsigned long index)
+
+static int __bpf_io_uring_file_seq_show(struct seq_file *seq, void *v, bool in_stop)
+{
+	struct bpf_io_uring_seq_info *info = seq->private;
+	struct bpf_iter__io_uring_file ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, in_stop);
+	if (!prog)
+		return 0;
+
+	ctx.meta = &meta;
+	ctx.ctx = info->ctx;
+	/* when we encounter empty slot, v will point to info */
+	ctx.file = v == info ? NULL : v;
+	ctx.index = info->index ? info->index - !in_stop : 0;
+
+	return bpf_iter_run_prog(prog, &ctx);
+}
+
+static int bpf_io_uring_file_seq_show(struct seq_file *seq, void *v)
+{
+	return __bpf_io_uring_file_seq_show(seq, v, false);
+}
+
+static void bpf_io_uring_file_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bpf_io_uring_seq_info *info = seq->private;
+
+	/* If IS_ERR(v) is true, then ctx->uring_lock wasn't taken */
+	if (IS_ERR(v))
+		return;
+	if (!v)
+		__bpf_io_uring_file_seq_show(seq, v, true);
+	else if (info->index) /* restart from index */
+		info->index--;
+	mutex_unlock(&info->ctx->uring_lock);
+}
+
+static const struct seq_operations bpf_io_uring_file_seq_ops = {
+	.start = bpf_io_uring_file_seq_start,
+	.next  = bpf_io_uring_file_seq_next,
+	.stop  = bpf_io_uring_file_seq_stop,
+	.show  = bpf_io_uring_file_seq_show,
+};
+
+static const struct bpf_iter_seq_info bpf_io_uring_file_seq_info = {
+	.seq_ops          = &bpf_io_uring_file_seq_ops,
+	.init_seq_private = bpf_io_uring_init_seq,
+	.fini_seq_private = NULL,
+	.seq_priv_size    = sizeof(struct bpf_io_uring_seq_info),
+};
+
+static struct bpf_iter_reg io_uring_file_reg_info = {
+	.target            = "io_uring_file",
+	.feature           = BPF_ITER_RESCHED,
+	.attach_target     = bpf_io_uring_iter_attach,
+	.detach_target     = bpf_io_uring_iter_detach,
+	.ctx_arg_info_size = 2,
+	.ctx_arg_info = {
+		{ offsetof(struct bpf_iter__io_uring_file, ctx),
+		  PTR_TO_BTF_ID },
+		{ offsetof(struct bpf_iter__io_uring_file, file),
+		  PTR_TO_BTF_ID_OR_NULL },
+	},
+	.seq_info	   = &bpf_io_uring_file_seq_info,
+};
+
 static int __init io_uring_iter_init(void)
 {
+	int ret;
+
 	io_uring_buf_reg_info.ctx_arg_info[0].btf_id = btf_io_uring_ids[0];
 	io_uring_buf_reg_info.ctx_arg_info[1].btf_id = btf_io_uring_ids[1];
-	return bpf_iter_reg_target(&io_uring_buf_reg_info);
+	io_uring_file_reg_info.ctx_arg_info[0].btf_id = btf_io_uring_ids[0];
+	io_uring_file_reg_info.ctx_arg_info[1].btf_id = btf_io_uring_ids[2];
+	ret = bpf_iter_reg_target(&io_uring_buf_reg_info);
+	if (ret)
+		return ret;
+	ret = bpf_iter_reg_target(&io_uring_file_reg_info);
+	if (ret)
+		bpf_iter_unreg_target(&io_uring_buf_reg_info);
+	return ret;
 }
 late_initcall(io_uring_iter_init);
 
