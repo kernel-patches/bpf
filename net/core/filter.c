@@ -8203,7 +8203,11 @@ static bool xdp_is_valid_access(int off, int size,
 
 void bpf_warn_invalid_xdp_action(u32 act)
 {
+#ifdef CONFIG_XDP_SOCKETS
+	const u32 act_max = XDP_REDIRECT_XSK;
+#else
 	const u32 act_max = XDP_REDIRECT;
+#endif
 
 	WARN_ONCE(1, "%s XDP return value %u, expect packet loss!\n",
 		  act > act_max ? "Illegal" : "Driver unsupported",

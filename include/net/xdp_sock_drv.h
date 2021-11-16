@@ -22,6 +22,8 @@ void xsk_set_tx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_rx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool);
 bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool);
+int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp);
+void xsk_flush(struct xdp_sock *xs);
 
 static inline u32 xsk_pool_get_headroom(struct xsk_buff_pool *pool)
 {
@@ -130,6 +132,11 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 	xp_dma_sync_for_device(pool, dma, size);
 }
 
+static inline struct xdp_sock *xsk_get_redirect_xsk(struct netdev_rx_queue *q)
+{
+	return READ_ONCE(q->xsk);
+}
+
 #else
 
 static inline void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries)
@@ -177,6 +184,15 @@ static inline void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool)
 static inline bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool)
 {
 	return false;
+}
+
+static inline int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+{
+	return 0;
+}
+
+static inline void xsk_flush(struct xdp_sock *xs)
+{
 }
 
 static inline u32 xsk_pool_get_headroom(struct xsk_buff_pool *pool)
@@ -262,6 +278,11 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 						    dma_addr_t dma,
 						    size_t size)
 {
+}
+
+static inline struct xdp_sock *xsk_get_redirect_xsk(struct netdev_rx_queue *q)
+{
+	return NULL;
 }
 
 #endif /* CONFIG_XDP_SOCKETS */

@@ -226,12 +226,13 @@ static int xsk_rcv_check(struct xdp_sock *xs, struct xdp_buff *xdp)
 	return 0;
 }
 
-static void xsk_flush(struct xdp_sock *xs)
+void xsk_flush(struct xdp_sock *xs)
 {
 	xskq_prod_submit(xs->rx);
 	__xskq_cons_release(xs->pool->fq);
 	sock_def_readable(&xs->sk);
 }
+EXPORT_SYMBOL(xsk_flush);
 
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
@@ -247,7 +248,7 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	return err;
 }
 
-static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	int err;
 	u32 len;
@@ -266,6 +267,7 @@ static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 		xdp_return_buff(xdp);
 	return err;
 }
+EXPORT_SYMBOL(xsk_rcv);
 
 int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
 {

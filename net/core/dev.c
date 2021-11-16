@@ -106,6 +106,7 @@
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/checksum.h>
+#include <net/xdp_sock.h>
 #include <net/xfrm.h>
 #include <linux/highmem.h>
 #include <linux/init.h>
@@ -4771,6 +4772,7 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	 * kfree_skb in response to actions it cannot handle/XDP_DROP).
 	 */
 	switch (act) {
+	case XDP_REDIRECT_XSK:
 	case XDP_REDIRECT:
 	case XDP_TX:
 		__skb_push(skb, mac_len);
@@ -4819,6 +4821,7 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 
 	act = bpf_prog_run_generic_xdp(skb, xdp, xdp_prog);
 	switch (act) {
+	case XDP_REDIRECT_XSK:
 	case XDP_REDIRECT:
 	case XDP_TX:
 	case XDP_PASS:
@@ -4875,6 +4878,17 @@ int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff *skb)
 		act = netif_receive_generic_xdp(skb, &xdp, xdp_prog);
 		if (act != XDP_PASS) {
 			switch (act) {
+#ifdef CONFIG_XDP_SOCKETS
+			case XDP_REDIRECT_XSK:
+				struct xdp_sock *xs =
+					READ_ONCE(skb->dev->_rx[xdp.rxq->queue_index].xsk);
+
+				err = xsk_generic_rcv(xs, &xdp);
+				if (err)
+					goto out_redir;
+				consume_skb(skb);
+				break;
+#endif
 			case XDP_REDIRECT:
 				err = xdp_do_generic_redirect(skb->dev, skb,
 							      &xdp, xdp_prog);
