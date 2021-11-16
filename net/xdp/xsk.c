@@ -728,6 +728,30 @@ static void xsk_unbind_dev(struct xdp_sock *xs)
 
 	/* Wait for driver to stop using the xdp socket. */
 	xp_del_xsk(xs->pool, xs);
+	if (xs->rx) {
+		if (refcount_read(&dev->_rx[xs->queue_id].xsk_refcnt) == 1) {
+			refcount_set(&dev->_rx[xs->queue_id].xsk_refcnt, 0);
+			WRITE_ONCE(xs->dev->_rx[xs->queue_id].xsk, NULL);
+		} else {
+			refcount_dec(&dev->_rx[xs->queue_id].xsk_refcnt);
+			/* If the refcnt returns to one again store the reference to the
+			 * remaining socket in the netdev_rx_queue.
+			 */
+			if (refcount_read(&dev->_rx[xs->queue_id].xsk_refcnt) == 1) {
+				struct net *net = dev_net(dev);
+				struct xdp_sock *xsk;
+				struct sock *sk;
+
+				mutex_lock(&net->xdp.lock);
+				sk = sk_head(&net->xdp.list);
+				xsk = xdp_sk(sk);
+				mutex_lock(&xsk->mutex);
+				WRITE_ONCE(xs->dev->_rx[xs->queue_id].xsk, xsk);
+				mutex_unlock(&xsk->mutex);
+				mutex_unlock(&net->xdp.lock);
+			}
+		}
+	}
 	xs->dev = NULL;
 	synchronize_net();
 	dev_put(dev);
@@ -971,6 +995,16 @@ static int xsk_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 	xs->zc = xs->umem->zc;
 	xs->queue_id = qid;
 	xp_add_xsk(xs->pool, xs);
+
+	if (xs->rx) {
+		if (refcount_read(&dev->_rx[xs->queue_id].xsk_refcnt) == 0) {
+			WRITE_ONCE(dev->_rx[qid].xsk, xs);
+			refcount_set(&dev->_rx[qid].xsk_refcnt, 1);
+		} else {
+			refcount_inc(&dev->_rx[qid].xsk_refcnt);
+			WRITE_ONCE(dev->_rx[qid].xsk, NULL);
+		}
+	}
 
 out_unlock:
 	if (err) {
