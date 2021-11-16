@@ -415,4 +415,5 @@ LIBBPF_0.6.0 {
 		perf_buffer__new_raw;
 		perf_buffer__new_raw_deprecated;
 		btf__save_raw;
+		bpf_object__prepare;
 } LIBBPF_0.5.0;

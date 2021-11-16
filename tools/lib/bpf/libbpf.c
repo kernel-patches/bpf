@@ -514,6 +514,7 @@ struct bpf_object {
 	int nr_extern;
 	int kconfig_map_idx;
 
+	bool prepared;
 	bool loaded;
 	bool has_subcalls;
 	bool has_rodata;
@@ -5576,34 +5577,19 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 
 		switch (relo->type) {
 		case RELO_LD64:
-			if (obj->gen_loader) {
-				insn[0].src_reg = BPF_PSEUDO_MAP_IDX;
-				insn[0].imm = relo->map_idx;
-			} else {
-				insn[0].src_reg = BPF_PSEUDO_MAP_FD;
-				insn[0].imm = obj->maps[relo->map_idx].fd;
-			}
+			insn[0].src_reg = BPF_PSEUDO_MAP_IDX;
+			insn[0].imm = relo->map_idx;
 			break;
 		case RELO_DATA:
 			insn[1].imm = insn[0].imm + relo->sym_off;
-			if (obj->gen_loader) {
-				insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
-				insn[0].imm = relo->map_idx;
-			} else {
-				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
-				insn[0].imm = obj->maps[relo->map_idx].fd;
-			}
+			insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
+			insn[0].imm = relo->map_idx;
 			break;
 		case RELO_EXTERN_VAR:
 			ext = &obj->externs[relo->sym_off];
 			if (ext->type == EXT_KCFG) {
-				if (obj->gen_loader) {
-					insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
-					insn[0].imm = obj->kconfig_map_idx;
-				} else {
-					insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
-					insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
-				}
+				insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
+				insn[0].imm = obj->kconfig_map_idx;
 				insn[1].imm = ext->kcfg.data_off;
 			} else /* EXT_KSYM */ {
 				if (ext->ksym.type_id && ext->is_set) { /* typed ksyms */
@@ -6144,8 +6130,50 @@ bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_path)
 			return err;
 		}
 	}
-	if (!obj->gen_loader)
-		bpf_object__free_relocs(obj);
+
+	return 0;
+}
+
+/* relocate instructions that refer to map fds */
+static int
+bpf_object__finish_relocate(struct bpf_object *obj)
+{
+	int i, j;
+
+	if (obj->gen_loader)
+		return 0;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		struct bpf_program *prog = &obj->programs[i];
+
+		if (prog_is_subprog(obj, prog))
+			continue;
+		for (j = 0; j < prog->nr_reloc; j++) {
+			struct reloc_desc *relo = &prog->reloc_desc[j];
+			struct bpf_insn *insn = &prog->insns[relo->insn_idx];
+			struct extern_desc *ext;
+
+			switch (relo->type) {
+			case RELO_LD64:
+				insn[0].src_reg = BPF_PSEUDO_MAP_FD;
+				insn[0].imm = obj->maps[relo->map_idx].fd;
+				break;
+			case RELO_DATA:
+				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+				insn[0].imm = obj->maps[relo->map_idx].fd;
+				break;
+			case RELO_EXTERN_VAR:
+				ext = &obj->externs[relo->sym_off];
+				if (ext->type == EXT_KCFG) {
+					insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+					insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
+				}
+			default:
+				break;
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -6706,8 +6734,8 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 		if (err)
 			return err;
 	}
-	if (obj->gen_loader)
-		bpf_object__free_relocs(obj);
+
+	bpf_object__free_relocs(obj);
 	return 0;
 }
 
@@ -7258,6 +7286,39 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 	return 0;
 }
 
+static int __bpf_object__prepare(struct bpf_object *obj, int log_level,
+				 const char *target_btf_path)
+{
+	int err;
+
+	if (obj->prepared) {
+		pr_warn("object '%s': prepare can't be attempted twice\n", obj->name);
+		return libbpf_err(-EINVAL);
+	}
+
+	if (obj->gen_loader)
+		bpf_gen__init(obj->gen_loader, log_level);
+
+	err = bpf_object__probe_loading(obj);
+	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
+	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
+	err = err ? : bpf_object__sanitize_and_load_btf(obj);
+	err = err ? : bpf_object__sanitize_maps(obj);
+	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
+	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : target_btf_path);
+
+	obj->prepared = true;
+
+	return err;
+}
+
+LIBBPF_API int bpf_object__prepare(struct bpf_object *obj)
+{
+	if (!obj)
+		return libbpf_err(-EINVAL);
+	return __bpf_object__prepare(obj, 0, NULL);
+}
+
 int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 {
 	struct bpf_object *obj;
@@ -7274,17 +7335,14 @@ int bpf_object__load_xattr(struct bpf_object_load_attr *attr)
 		return libbpf_err(-EINVAL);
 	}
 
-	if (obj->gen_loader)
-		bpf_gen__init(obj->gen_loader, attr->log_level);
+	if (!obj->prepared) {
+		err = __bpf_object__prepare(obj, attr->log_level, attr->target_btf_path);
+		if (err)
+			return err;
+	}
 
-	err = bpf_object__probe_loading(obj);
-	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
-	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
-	err = err ? : bpf_object__sanitize_and_load_btf(obj);
-	err = err ? : bpf_object__sanitize_maps(obj);
-	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
-	err = err ? : bpf_object__create_maps(obj);
-	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : attr->target_btf_path);
+	err = bpf_object__create_maps(obj);
+	err = err ? : bpf_object__finish_relocate(obj);
 	err = err ? : bpf_object__load_progs(obj, attr->log_level);
 
 	if (obj->gen_loader) {
@@ -7940,6 +7998,8 @@ void bpf_object__close(struct bpf_object *obj)
 	bpf_object__elf_finish(obj);
 	bpf_object_unload(obj);
 	btf__free(obj->btf);
+	if (!obj->user_provided_btf_vmlinux)
+		btf__free(obj->btf_vmlinux_override);
 	btf_ext__free(obj->btf_ext);
 
 	for (i = 0; i < obj->nr_maps; i++)
