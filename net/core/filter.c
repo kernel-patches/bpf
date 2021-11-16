@@ -4140,6 +4140,26 @@ static const struct bpf_func_proto bpf_xdp_redirect_map_proto = {
 	.arg3_type      = ARG_ANYTHING,
 };
 
+BPF_CALL_4(bpf_xdp_redirect_xsk, struct xdp_buff *, xdp, struct bpf_map *, map,
+	   u32, ifindex, u64, flags)
+{
+#ifdef CONFIG_XDP_SOCKETS
+	if (likely(refcount_read(&xdp->rxq->dev->_rx[xdp->rxq->queue_index].xsk_refcnt) == 1))
+		return XDP_REDIRECT_XSK;
+#endif
+	return map->ops->map_redirect(map, ifindex, flags);
+}
+
+static const struct bpf_func_proto bpf_xdp_redirect_xsk_proto = {
+	.func           = bpf_xdp_redirect_xsk,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_CONST_MAP_PTR,
+	.arg3_type      = ARG_ANYTHING,
+	.arg4_type      = ARG_ANYTHING,
+};
+
 static unsigned long bpf_skb_copy(void *dst_buff, const void *skb,
 				  unsigned long off, unsigned long len)
 {
@@ -7469,6 +7489,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_redirect_proto;
 	case BPF_FUNC_redirect_map:
 		return &bpf_xdp_redirect_map_proto;
+	case BPF_FUNC_redirect_xsk:
+		return &bpf_xdp_redirect_xsk_proto;
 	case BPF_FUNC_xdp_adjust_tail:
 		return &bpf_xdp_adjust_tail_proto;
 	case BPF_FUNC_fib_lookup:

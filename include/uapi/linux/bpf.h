@@ -4957,6 +4957,17 @@ union bpf_attr {
  *		**-ENOENT** if *task->mm* is NULL, or no vma contains *addr*.
  *		**-EBUSY** if failed to try lock mmap_lock.
  *		**-EINVAL** for invalid **flags**.
+ *
+ * long bpf_redirect_xsk(void *ctx, struct bpf_map *map, u32 key, u64 flags)
+ *	Description
+ *		Redirect the packet to the XDP socket associated with the netdev queue if
+ *		the socket has an rx ring configured and is the only socket attached to the
+ *		queue. Fall back to bpf_redirect_map behavior if either condition is not met.
+ *	Return
+ *		**XDP_REDIRECT_XSK** if successful.
+ *
+ *		**XDP_REDIRECT** if the fall back was successful, or the value of the
+ *		two lower bits of the *flags* argument on error
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5140,6 +5151,7 @@ union bpf_attr {
 	FN(skc_to_unix_sock),		\
 	FN(kallsyms_lookup_name),	\
 	FN(find_vma),			\
+	FN(redirect_xsk),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -5520,6 +5532,7 @@ enum xdp_action {
 	XDP_PASS,
 	XDP_TX,
 	XDP_REDIRECT,
+	XDP_REDIRECT_XSK,
 };
 
 /* user accessible metadata for XDP packet hook
