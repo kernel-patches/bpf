@@ -323,28 +323,23 @@ static void i40e_handle_xdp_result_zc(struct i40e_ring *rx_ring,
 	WARN_ON_ONCE(1);
 }
 
-/**
- * i40e_clean_rx_irq_zc - Consumes Rx packets from the hardware ring
- * @rx_ring: Rx ring
- * @budget: NAPI budget
- *
- * Returns amount of work completed
- **/
-int i40e_clean_rx_irq_zc(struct i40e_ring *rx_ring, int budget)
+static inline void i40e_clean_rx_desc_zc(struct i40e_ring *rx_ring,
+					 unsigned int *stat_rx_packets,
+					 unsigned int *stat_rx_bytes,
+					 unsigned int *xmit,
+					 int budget)
 {
-	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
-	u16 cleaned_count = I40E_DESC_UNUSED(rx_ring);
+	unsigned int total_rx_packets = *stat_rx_packets, total_rx_bytes = *stat_rx_bytes;
 	u16 next_to_clean = rx_ring->next_to_clean;
 	u16 count_mask = rx_ring->count - 1;
-	unsigned int xdp_res, xdp_xmit = 0;
-	bool failure = false;
+	unsigned int xdp_xmit = *xmit;
 
 	while (likely(total_rx_packets < (unsigned int)budget)) {
 		union i40e_rx_desc *rx_desc;
+		unsigned int size, xdp_res;
 		unsigned int rx_packets;
 		unsigned int rx_bytes;
 		struct xdp_buff *bi;
-		unsigned int size;
 		u64 qword;
 
 		rx_desc = I40E_RX_DESC(rx_ring, next_to_clean);
@@ -385,7 +380,33 @@ int i40e_clean_rx_irq_zc(struct i40e_ring *rx_ring, int budget)
 	}
 
 	rx_ring->next_to_clean = next_to_clean;
-	cleaned_count = (next_to_clean - rx_ring->next_to_use - 1) & count_mask;
+	*stat_rx_packets = total_rx_packets;
+	*stat_rx_bytes = total_rx_bytes;
+	*xmit = xdp_xmit;
+}
+
+/**
+ * i40e_clean_rx_irq_zc - Consumes Rx packets from the hardware ring
+ * @rx_ring: Rx ring
+ * @budget: NAPI budget
+ *
+ * Returns amount of work completed
+ **/
+int i40e_clean_rx_irq_zc(struct i40e_ring *rx_ring, int budget)
+{
+	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
+	u16 count_mask = rx_ring->count - 1;
+	unsigned int xdp_xmit = 0;
+	bool failure = false;
+	u16 cleaned_count;
+
+	i40e_clean_rx_desc_zc(rx_ring,
+			      &total_rx_packets,
+			      &total_rx_bytes,
+			      &xdp_xmit,
+			      budget);
+
+	cleaned_count = (rx_ring->next_to_clean - rx_ring->next_to_use - 1) & count_mask;
 
 	if (cleaned_count >= I40E_RX_BUFFER_WRITE)
 		failure = !i40e_alloc_rx_buffers_zc(rx_ring, cleaned_count);
@@ -394,7 +415,7 @@ int i40e_clean_rx_irq_zc(struct i40e_ring *rx_ring, int budget)
 	i40e_update_rx_stats(rx_ring, total_rx_bytes, total_rx_packets);
 
 	if (xsk_uses_need_wakeup(rx_ring->xsk_pool)) {
-		if (failure || next_to_clean == rx_ring->next_to_use)
+		if (failure ||  rx_ring->next_to_clean == rx_ring->next_to_use)
 			xsk_set_rx_need_wakeup(rx_ring->xsk_pool);
 		else
 			xsk_clear_rx_need_wakeup(rx_ring->xsk_pool);
