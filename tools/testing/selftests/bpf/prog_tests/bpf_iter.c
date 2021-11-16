@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2020 Facebook */
 #include <sys/mman.h>
+#include <sys/epoll.h>
 #include <test_progs.h>
 #include <linux/io_uring.h>
 
@@ -30,6 +31,7 @@
 #include "bpf_iter_test_kern5.skel.h"
 #include "bpf_iter_test_kern6.skel.h"
 #include "bpf_iter_io_uring.skel.h"
+#include "bpf_iter_epoll.skel.h"
 
 static int duration;
 
@@ -1461,6 +1463,123 @@ end:
 	bpf_iter_io_uring__destroy(skel);
 }
 
+void test_epoll(void)
+{
+	const char *fmt = "B\npipe:%d\nsocket:%d\npipe:%d\nsocket:%d\nE\n";
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	char buf[4096] = {}, rbuf[4096] = {};
+	union bpf_iter_link_info linfo;
+	int fds[2], sk[2], epfd, ret;
+	struct bpf_iter_epoll *skel;
+	struct epoll_event ev = {};
+	int iter_fd, set[4];
+	char *s, *t;
+
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	skel = bpf_iter_epoll__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_epoll__open_and_load"))
+		return;
+
+	epfd = epoll_create1(EPOLL_CLOEXEC);
+	if (!ASSERT_GE(epfd, 0, "epoll_create1"))
+		goto end;
+
+	ret = pipe(fds);
+	if (!ASSERT_OK(ret, "pipe(fds)"))
+		goto end_epfd;
+
+	ret = socketpair(AF_UNIX, SOCK_STREAM, 0, sk);
+	if (!ASSERT_OK(ret, "socketpair"))
+		goto end_pipe;
+
+	ev.events = EPOLLIN;
+
+	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, fds[0], &ev);
+	if (!ASSERT_OK(ret, "epoll_ctl"))
+		goto end_sk;
+
+	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, sk[0], &ev);
+	if (!ASSERT_OK(ret, "epoll_ctl"))
+		goto end_sk;
+
+	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, fds[1], &ev);
+	if (!ASSERT_OK(ret, "epoll_ctl"))
+		goto end_sk;
+
+	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, sk[1], &ev);
+	if (!ASSERT_OK(ret, "epoll_ctl"))
+		goto end_sk;
+
+	linfo.epoll.epoll_fd = epfd;
+	skel->links.dump_epoll = bpf_program__attach_iter(skel->progs.dump_epoll, &opts);
+	if (!ASSERT_OK_PTR(skel->links.dump_epoll, "bpf_program__attach_iter"))
+		goto end_sk;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(skel->links.dump_epoll));
+	if (!ASSERT_GE(iter_fd, 0, "bpf_iter_create"))
+		goto end_sk;
+
+	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, iter_fd, &ev);
+	if (!ASSERT_EQ(ret, -1, "epoll_ctl add for iter_fd"))
+		goto end_iter_fd;
+
+	ret = snprintf(buf, sizeof(buf), fmt, fds[0], sk[0], fds[1], sk[1]);
+	if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf), "snprintf"))
+		goto end_iter_fd;
+
+	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer"))
+		goto end_iter_fd;
+
+	puts("=== Expected Output ===");
+	printf("%s", buf);
+	puts("==== Actual Output ====");
+	printf("%s", rbuf);
+	puts("=======================");
+
+	s = rbuf;
+	while ((s = strtok_r(s, "\n", &t))) {
+		int fd = -1;
+
+		if (s[0] == 'B' || s[0] == 'E')
+			goto next;
+		ASSERT_EQ(sscanf(s, s[0] == 'p' ? "pipe:%d" : "socket:%d", &fd), 1, s);
+		if (fd == fds[0]) {
+			ASSERT_NEQ(set[0], 1, "pipe[0]");
+			set[0] = 1;
+		} else if (fd == fds[1]) {
+			ASSERT_NEQ(set[1], 1, "pipe[1]");
+			set[1] = 1;
+		} else if (fd == sk[0]) {
+			ASSERT_NEQ(set[2], 1, "sk[0]");
+			set[2] = 1;
+		} else if (fd == sk[1]) {
+			ASSERT_NEQ(set[3], 1, "sk[1]");
+			set[3] = 1;
+		} else {
+			ASSERT_TRUE(0, "Incorrect fd in iterator output");
+		}
+next:
+		s = NULL;
+	}
+	for (int i = 0; i < ARRAY_SIZE(set); i++)
+		ASSERT_EQ(set[i], 1, "fd found");
+end_iter_fd:
+	close(iter_fd);
+end_sk:
+	close(sk[1]);
+	close(sk[0]);
+end_pipe:
+	close(fds[1]);
+	close(fds[0]);
+end_epfd:
+	close(epfd);
+end:
+	bpf_iter_epoll__destroy(skel);
+}
+
 void test_bpf_iter(void)
 {
 	if (test__start_subtest("btf_id_or_null"))
@@ -1525,4 +1644,6 @@ void test_bpf_iter(void)
 		test_io_uring_buf();
 	if (test__start_subtest("io_uring_file"))
 		test_io_uring_file();
+	if (test__start_subtest("epoll"))
+		test_epoll();
 }
