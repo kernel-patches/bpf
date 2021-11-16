@@ -542,6 +542,8 @@ struct bpf_object {
 	char *btf_custom_path;
 	/* vmlinux BTF override for CO-RE relocations */
 	struct btf *btf_vmlinux_override;
+	/* true when the user provided the btf structure with the btf_custom opt */
+	bool user_provided_btf_vmlinux;
 	/* Lazily initialized kernel module BTFs */
 	struct module_btf *btf_modules;
 	bool btf_modules_loaded;
@@ -2886,7 +2888,7 @@ static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
 	int err;
 
 	/* btf_vmlinux could be loaded earlier */
-	if (obj->btf_vmlinux || obj->gen_loader)
+	if (obj->btf_vmlinux || obj->btf_vmlinux_override || obj->gen_loader)
 		return 0;
 
 	if (!force && !obj_needs_vmlinux_btf(obj))
@@ -5474,7 +5476,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 	if (obj->btf_ext->core_relo_info.len == 0)
 		return 0;
 
-	if (targ_btf_path) {
+	if (!obj->user_provided_btf_vmlinux && targ_btf_path) {
 		obj->btf_vmlinux_override = btf__parse(targ_btf_path, NULL);
 		err = libbpf_get_error(obj->btf_vmlinux_override);
 		if (err) {
@@ -5543,8 +5545,10 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 
 out:
 	/* obj->btf_vmlinux and module BTFs are freed after object load */
-	btf__free(obj->btf_vmlinux_override);
-	obj->btf_vmlinux_override = NULL;
+	if (!obj->user_provided_btf_vmlinux) {
+		btf__free(obj->btf_vmlinux_override);
+		obj->btf_vmlinux_override = NULL;
+	}
 
 	if (!IS_ERR_OR_NULL(cand_cache)) {
 		hashmap__for_each_entry(cand_cache, entry, i) {
@@ -6767,6 +6771,10 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 	if (!OPTS_VALID(opts, bpf_object_open_opts))
 		return ERR_PTR(-EINVAL);
 
+	/* btf_custom_path and btf_custom can't be used together */
+	if (OPTS_GET(opts, btf_custom_path, NULL) && OPTS_GET(opts, btf_custom, NULL))
+		return ERR_PTR(-EINVAL);
+
 	obj_name = OPTS_GET(opts, object_name, NULL);
 	if (obj_buf) {
 		if (!obj_name) {
@@ -6795,6 +6803,10 @@ __bpf_object__open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 			goto out;
 		}
 	}
+
+	obj->btf_vmlinux_override = OPTS_GET(opts, btf_custom, NULL);
+	if (obj->btf_vmlinux_override)
+		obj->user_provided_btf_vmlinux = true;
 
 	kconfig = OPTS_GET(opts, kconfig, NULL);
 	if (kconfig) {
