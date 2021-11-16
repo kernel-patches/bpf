@@ -72,13 +72,13 @@ free_link:
 	bpf_link__destroy(link);
 }
 
-static int read_fd_into_buffer(int fd, char *buf, int size)
+static int __read_fd_into_buffer(int fd, char *buf, int size, size_t chunks)
 {
 	int bufleft = size;
 	int len;
 
 	do {
-		len = read(fd, buf, bufleft);
+		len = read(fd, buf, chunks ?: bufleft);
 		if (len > 0) {
 			buf += len;
 			bufleft -= len;
@@ -86,6 +86,11 @@ static int read_fd_into_buffer(int fd, char *buf, int size)
 	} while (len > 0);
 
 	return len < 0 ? len : size - bufleft;
+}
+
+static int read_fd_into_buffer(int fd, char *buf, int size)
+{
+	return __read_fd_into_buffer(fd, buf, size, 0);
 }
 
 static void test_ipv6_route(void)
@@ -1281,7 +1286,7 @@ static unsigned long long page_addr_to_pfn(unsigned long addr)
 	return pfn & 0x7fffffffffffff;
 }
 
-void test_io_uring_buf(void)
+void test_io_uring_buf(bool partial)
 {
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	char rbuf[4096], buf[4096] = "B\n";
@@ -1352,7 +1357,7 @@ void test_io_uring_buf(void)
 	if (!ASSERT_GE(iter_fd, 0, "bpf_iter_create"))
 		goto end_close_fd;
 
-	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	ret = __read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf), partial);
 	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer"))
 		goto end_close_iter;
 
@@ -1374,7 +1379,7 @@ end:
 	bpf_iter_io_uring__destroy(skel);
 }
 
-void test_io_uring_file(void)
+void test_io_uring_file(bool partial)
 {
 	int reg_files[] = { [0 ... 7] = -1 };
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
@@ -1439,7 +1444,7 @@ void test_io_uring_file(void)
 	if (!ASSERT_OK(ret, "io_uring_register_files"))
 		goto end_iter_fd;
 
-	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	ret = __read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf), partial);
 	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer(iterator_fd, buf)"))
 		goto end_iter_fd;
 
@@ -1463,7 +1468,7 @@ end:
 	bpf_iter_io_uring__destroy(skel);
 }
 
-void test_epoll(void)
+void test_epoll(bool partial)
 {
 	const char *fmt = "B\npipe:%d\nsocket:%d\npipe:%d\nsocket:%d\nE\n";
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
@@ -1529,7 +1534,7 @@ void test_epoll(void)
 	if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf), "snprintf"))
 		goto end_iter_fd;
 
-	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	ret = __read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf), partial);
 	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer"))
 		goto end_iter_fd;
 
@@ -1641,9 +1646,15 @@ void test_bpf_iter(void)
 	if (test__start_subtest("buf-neg-offset"))
 		test_buf_neg_offset();
 	if (test__start_subtest("io_uring_buf"))
-		test_io_uring_buf();
+		test_io_uring_buf(false);
 	if (test__start_subtest("io_uring_file"))
-		test_io_uring_file();
+		test_io_uring_file(false);
 	if (test__start_subtest("epoll"))
-		test_epoll();
+		test_epoll(false);
+	if (test__start_subtest("io_uring_buf-partial"))
+		test_io_uring_buf(true);
+	if (test__start_subtest("io_uring_file-partial"))
+		test_io_uring_file(true);
+	if (test__start_subtest("epoll-partial"))
+		test_epoll(true);
 }
