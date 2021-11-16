@@ -1509,8 +1509,10 @@ int bpf_obj_get_user(const char __user *pathname, int flags);
 	extern int bpf_iter_ ## target(args);			\
 	int __init bpf_iter_ ## target(args) { return 0; }
 
+struct io_ring_ctx;
 struct bpf_iter_aux_info {
 	struct bpf_map *map;
+	struct io_ring_ctx *ctx;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
