@@ -144,13 +144,14 @@ int i40e_xsk_pool_setup(struct i40e_vsi *vsi, struct xsk_buff_pool *pool,
  * @rx_ring: Rx ring
  * @xdp: xdp_buff used as input to the XDP program
  *
- * Returns any of I40E_XDP_{PASS, CONSUMED, TX, REDIR}
+ * Returns any of I40E_XDP_{PASS, CONSUMED, TX, REDIR, REDIR_XSK}
  **/
 static int i40e_run_xdp_zc(struct i40e_ring *rx_ring, struct xdp_buff *xdp)
 {
 	int err, result = I40E_XDP_PASS;
 	struct i40e_ring *xdp_ring;
 	struct bpf_prog *xdp_prog;
+	struct xdp_sock *xs;
 	u32 act;
 
 	/* NB! xdp_prog will always be !NULL, due to the fact that
@@ -159,14 +160,21 @@ static int i40e_run_xdp_zc(struct i40e_ring *rx_ring, struct xdp_buff *xdp)
 	xdp_prog = READ_ONCE(rx_ring->xdp_prog);
 	act = bpf_prog_run_xdp(xdp_prog, xdp);
 
-	if (likely(act == XDP_REDIRECT)) {
-		err = xdp_do_redirect(rx_ring->netdev, xdp, xdp_prog);
+	if (likely(act == XDP_REDIRECT_XSK)) {
+		xs = xsk_get_redirect_xsk(&rx_ring->netdev->_rx[xdp->rxq->queue_index]);
+		err = xsk_rcv(xs, xdp);
 		if (err)
 			goto out_failure;
-		return I40E_XDP_REDIR;
+		return I40E_XDP_REDIR_XSK;
 	}
 
 	switch (act) {
+	case XDP_REDIRECT:
+		err = xdp_do_redirect(rx_ring->netdev, xdp, xdp_prog);
+		if (err)
+			goto out_failure;
+		result = I40E_XDP_REDIR;
+		break;
 	case XDP_PASS:
 		break;
 	case XDP_TX:
@@ -275,7 +283,8 @@ static void i40e_handle_xdp_result_zc(struct i40e_ring *rx_ring,
 	*rx_packets = 1;
 	*rx_bytes = size;
 
-	if (likely(xdp_res == I40E_XDP_REDIR) || xdp_res == I40E_XDP_TX)
+	if (likely(xdp_res == I40E_XDP_REDIR_XSK) || xdp_res == I40E_XDP_REDIR ||
+	    xdp_res == I40E_XDP_TX)
 		return;
 
 	if (xdp_res == I40E_XDP_CONSUMED) {
@@ -371,7 +380,7 @@ int i40e_clean_rx_irq_zc(struct i40e_ring *rx_ring, int budget)
 					  &rx_bytes, size, xdp_res);
 		total_rx_packets += rx_packets;
 		total_rx_bytes += rx_bytes;
-		xdp_xmit |= xdp_res & (I40E_XDP_TX | I40E_XDP_REDIR);
+		xdp_xmit |= xdp_res & (I40E_XDP_TX | I40E_XDP_REDIR | I40E_XDP_REDIR_XSK);
 		next_to_clean = (next_to_clean + 1) & count_mask;
 	}
 

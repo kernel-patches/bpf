@@ -4,6 +4,7 @@
 #include <linux/prefetch.h>
 #include <linux/bpf_trace.h>
 #include <net/xdp.h>
+#include <net/xdp_sock_drv.h>
 #include "i40e.h"
 #include "i40e_trace.h"
 #include "i40e_prototype.h"
@@ -2296,6 +2297,7 @@ static int i40e_run_xdp(struct i40e_ring *rx_ring, struct xdp_buff *xdp)
 	int err, result = I40E_XDP_PASS;
 	struct i40e_ring *xdp_ring;
 	struct bpf_prog *xdp_prog;
+	struct xdp_sock *xs;
 	u32 act;
 
 	xdp_prog = READ_ONCE(rx_ring->xdp_prog);
@@ -2315,6 +2317,12 @@ static int i40e_run_xdp(struct i40e_ring *rx_ring, struct xdp_buff *xdp)
 		if (result == I40E_XDP_CONSUMED)
 			goto out_failure;
 		break;
+	case XDP_REDIRECT_XSK:
+		xs = xsk_get_redirect_xsk(&rx_ring->netdev->_rx[xdp->rxq->queue_index]);
+		err = xsk_rcv(xs, xdp);
+		if (err)
+			goto out_failure;
+		return I40E_XDP_REDIR_XSK;
 	case XDP_REDIRECT:
 		err = xdp_do_redirect(rx_ring->netdev, xdp, xdp_prog);
 		if (err)
@@ -2401,6 +2409,9 @@ void i40e_update_rx_stats(struct i40e_ring *rx_ring,
  **/
 void i40e_finalize_xdp_rx(struct i40e_ring *rx_ring, unsigned int xdp_res)
 {
+	if (xdp_res & I40E_XDP_REDIR_XSK)
+		xsk_flush(xsk_get_redirect_xsk(&rx_ring->netdev->_rx[rx_ring->queue_index]));
+
 	if (xdp_res & I40E_XDP_REDIR)
 		xdp_do_flush_map();
 
@@ -2516,7 +2527,7 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 		}
 
 		if (xdp_res) {
-			if (xdp_res & (I40E_XDP_TX | I40E_XDP_REDIR)) {
+			if (xdp_res & (I40E_XDP_TX | I40E_XDP_REDIR | I40E_XDP_REDIR_XSK)) {
 				xdp_xmit |= xdp_res;
 				i40e_rx_buffer_flip(rx_ring, rx_buffer, size);
 			} else {
