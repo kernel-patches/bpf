@@ -111,8 +111,12 @@ struct bpf_object_open_opts {
 	 * struct_ops, etc) will need actual kernel BTF at /sys/kernel/btf/vmlinux.
 	 */
 	struct btf *btf_custom;
+	/* Keep track of CO-RE relocation results. This information can be retrieved
+	 * with bpf_program__core_relos() after the object is prepared.
+	 */
+	bool record_core_relos;
 };
-#define bpf_object_open_opts__last_field btf_custom
+#define bpf_object_open_opts__last_field record_core_relos
 
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 LIBBPF_API struct bpf_object *
@@ -285,6 +289,49 @@ LIBBPF_API int bpf_program__unpin_instance(struct bpf_program *prog,
 LIBBPF_API int bpf_program__pin(struct bpf_program *prog, const char *path);
 LIBBPF_API int bpf_program__unpin(struct bpf_program *prog, const char *path);
 LIBBPF_API void bpf_program__unload(struct bpf_program *prog);
+
+/* bpf_core_relo_kind encodes which aspect of captured field/type/enum value
+ * has to be adjusted by relocations.
+ */
+enum bpf_core_relo_kind {
+	BPF_FIELD_BYTE_OFFSET = 0,	/* field byte offset */
+	BPF_FIELD_BYTE_SIZE = 1,	/* field size in bytes */
+	BPF_FIELD_EXISTS = 2,		/* field existence in target kernel */
+	BPF_FIELD_SIGNED = 3,		/* field signedness (0 - unsigned, 1 - signed) */
+	BPF_FIELD_LSHIFT_U64 = 4,	/* bitfield-specific left bitshift */
+	BPF_FIELD_RSHIFT_U64 = 5,	/* bitfield-specific right bitshift */
+	BPF_TYPE_ID_LOCAL = 6,		/* type ID in local BPF object */
+	BPF_TYPE_ID_TARGET = 7,		/* type ID in target kernel */
+	BPF_TYPE_EXISTS = 8,		/* type existence in target kernel */
+	BPF_TYPE_SIZE = 9,		/* type size in bytes */
+	BPF_ENUMVAL_EXISTS = 10,	/* enum value existence in target kernel */
+	BPF_ENUMVAL_VALUE = 11,		/* enum value integer value */
+};
+
+#define BPF_CORE_SPEC_MAX_LEN 64
+
+struct bpf_core_relo_spec {
+	const struct btf *btf;
+	__u32 root_type_id;
+	/* accessor spec */
+	int spec[BPF_CORE_SPEC_MAX_LEN];
+	int spec_len;
+};
+
+struct bpf_core_relo_result {
+	struct bpf_core_relo_spec local_spec, targ_spec;
+	int insn_idx;
+	enum bpf_core_relo_kind relo_kind;
+	/* true if libbpf wasn't able to perform the relocation */
+	bool poison;
+	/* original value in the instruction */
+	__u32 orig_val;
+	/* new value that the instruction needs to be patched up to */
+	__u32 new_val;
+};
+
+LIBBPF_API const struct bpf_core_relo_result *bpf_program__core_relos(struct bpf_program *prog);
+LIBBPF_API int bpf_program__core_relos_cnt(struct bpf_program *prog);
 
 struct bpf_link;
 

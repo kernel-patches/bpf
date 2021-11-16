@@ -13,8 +13,6 @@
 #include "str_error.h"
 #include "libbpf_internal.h"
 
-#define BPF_CORE_SPEC_MAX_LEN 64
-
 /* represents BPF CO-RE field or array element accessor */
 struct bpf_core_accessor {
 	__u32 type_id;		/* struct/union type or array element type */
@@ -1092,6 +1090,18 @@ static void bpf_core_dump_spec(int level, const struct bpf_core_spec *spec)
 	}
 }
 
+static void copy_core_spec(const struct bpf_core_spec *src, struct bpf_core_relo_spec *dst)
+{
+	int i;
+
+	dst->root_type_id = src->root_type_id;
+	dst->btf = src->btf;
+	dst->spec_len = src->raw_len;
+
+	for (i = 0; i < src->raw_len; i++)
+		dst->spec[i] = src->raw_spec[i];
+}
+
 /*
  * CO-RE relocate single instruction.
  *
@@ -1147,7 +1157,8 @@ int bpf_core_apply_relo_insn(const char *prog_name, struct bpf_insn *insn,
 			     const struct bpf_core_relo *relo,
 			     int relo_idx,
 			     const struct btf *local_btf,
-			     struct bpf_core_cand_list *cands)
+			     struct bpf_core_cand_list *cands,
+			     struct bpf_core_relo_result *core_relo)
 {
 	struct bpf_core_spec local_spec, cand_spec, targ_spec = {};
 	struct bpf_core_relo_res cand_res, targ_res;
@@ -1289,6 +1300,17 @@ patch_insn:
 		pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %d\n",
 			prog_name, relo_idx, relo->insn_off / 8, err);
 		return -EINVAL;
+	}
+
+	if (core_relo) {
+		copy_core_spec(&local_spec, &core_relo->local_spec);
+		copy_core_spec(&targ_spec, &core_relo->targ_spec);
+
+		core_relo->insn_idx = insn_idx;
+		core_relo->poison = targ_res.poison;
+		core_relo->relo_kind = targ_spec.relo_kind;
+		core_relo->orig_val = targ_res.orig_val;
+		core_relo->new_val = targ_res.new_val;
 	}
 
 	return 0;

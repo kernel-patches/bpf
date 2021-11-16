@@ -4,23 +4,7 @@
 #ifndef __RELO_CORE_H
 #define __RELO_CORE_H
 
-/* bpf_core_relo_kind encodes which aspect of captured field/type/enum value
- * has to be adjusted by relocations.
- */
-enum bpf_core_relo_kind {
-	BPF_FIELD_BYTE_OFFSET = 0,	/* field byte offset */
-	BPF_FIELD_BYTE_SIZE = 1,	/* field size in bytes */
-	BPF_FIELD_EXISTS = 2,		/* field existence in target kernel */
-	BPF_FIELD_SIGNED = 3,		/* field signedness (0 - unsigned, 1 - signed) */
-	BPF_FIELD_LSHIFT_U64 = 4,	/* bitfield-specific left bitshift */
-	BPF_FIELD_RSHIFT_U64 = 5,	/* bitfield-specific right bitshift */
-	BPF_TYPE_ID_LOCAL = 6,		/* type ID in local BPF object */
-	BPF_TYPE_ID_TARGET = 7,		/* type ID in target kernel */
-	BPF_TYPE_EXISTS = 8,		/* type existence in target kernel */
-	BPF_TYPE_SIZE = 9,		/* type size in bytes */
-	BPF_ENUMVAL_EXISTS = 10,	/* enum value existence in target kernel */
-	BPF_ENUMVAL_VALUE = 11,		/* enum value integer value */
-};
+#include "libbpf.h"
 
 /* The minimum bpf_core_relo checked by the loader
  *
@@ -92,7 +76,8 @@ int bpf_core_apply_relo_insn(const char *prog_name,
 			     struct bpf_insn *insn, int insn_idx,
 			     const struct bpf_core_relo *relo, int relo_idx,
 			     const struct btf *local_btf,
-			     struct bpf_core_cand_list *cands);
+			     struct bpf_core_cand_list *cands,
+			     struct bpf_core_relo_result *core_relo);
 int bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,
 			      const struct btf *targ_btf, __u32 targ_id);
 
