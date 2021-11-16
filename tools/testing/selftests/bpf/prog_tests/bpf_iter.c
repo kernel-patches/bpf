@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2020 Facebook */
+#include <sys/mman.h>
 #include <test_progs.h>
+#include <linux/io_uring.h>
+
 #include "bpf_iter_ipv6_route.skel.h"
 #include "bpf_iter_netlink.skel.h"
 #include "bpf_iter_bpf_map.skel.h"
@@ -26,6 +29,7 @@
 #include "bpf_iter_bpf_sk_storage_map.skel.h"
 #include "bpf_iter_test_kern5.skel.h"
 #include "bpf_iter_test_kern6.skel.h"
+#include "bpf_iter_io_uring.skel.h"
 
 static int duration;
 
@@ -1239,6 +1243,224 @@ out:
 	bpf_iter_task_vma__destroy(skel);
 }
 
+static int sys_io_uring_setup(u32 entries, struct io_uring_params *p)
+{
+	return syscall(__NR_io_uring_setup, entries, p);
+}
+
+static int io_uring_register_bufs(int io_uring_fd, struct iovec *iovs, unsigned int nr)
+{
+	return syscall(__NR_io_uring_register, io_uring_fd,
+		       IORING_REGISTER_BUFFERS, iovs, nr);
+}
+
+static int io_uring_register_files(int io_uring_fd, int *fds, unsigned int nr)
+{
+	return syscall(__NR_io_uring_register, io_uring_fd,
+		       IORING_REGISTER_FILES, fds, nr);
+}
+
+static unsigned long long page_addr_to_pfn(unsigned long addr)
+{
+	int page_size = sysconf(_SC_PAGE_SIZE), fd, ret;
+	unsigned long long pfn;
+
+	if (page_size < 0)
+		return 0;
+	fd = open("/proc/self/pagemap", O_RDONLY);
+	if (fd < 0)
+		return 0;
+
+	ret = pread(fd, &pfn, sizeof(pfn), (addr / page_size) * 8);
+	close(fd);
+	if (ret < 0)
+		return 0;
+	/* Bits 0-54 have PFN for non-swapped page */
+	return pfn & 0x7fffffffffffff;
+}
+
+void test_io_uring_buf(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	char rbuf[4096], buf[4096] = "B\n";
+	union bpf_iter_link_info linfo;
+	struct bpf_iter_io_uring *skel;
+	int ret, fd, i, len = 128;
+	struct io_uring_params p;
+	struct iovec iovs[8];
+	int iter_fd;
+	char *str;
+
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	skel = bpf_iter_io_uring__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_io_uring__open_and_load"))
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(iovs); i++) {
+		iovs[i].iov_len	 = len;
+		iovs[i].iov_base = mmap(NULL, len, PROT_READ | PROT_WRITE,
+					MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+		if (iovs[i].iov_base == MAP_FAILED)
+			goto end;
+		len *= 2;
+	}
+
+	memset(&p, 0, sizeof(p));
+	fd = sys_io_uring_setup(1, &p);
+	if (!ASSERT_GE(fd, 0, "io_uring_setup"))
+		goto end;
+
+	linfo.io_uring.io_uring_fd = fd;
+	skel->links.dump_io_uring_buf = bpf_program__attach_iter(skel->progs.dump_io_uring_buf,
+								 &opts);
+	if (!ASSERT_OK_PTR(skel->links.dump_io_uring_buf, "bpf_program__attach_iter"))
+		goto end_close_fd;
+
+	ret = io_uring_register_bufs(fd, iovs, ARRAY_SIZE(iovs));
+	if (!ASSERT_OK(ret, "io_uring_register_bufs"))
+		goto end_close_fd;
+
+	/* "B\n" */
+	len = 2;
+	str = buf + len;
+	for (int j = 0; j < ARRAY_SIZE(iovs); j++) {
+		ret = snprintf(str, sizeof(buf) - len, "%d:0x%lx:%zu\n", j,
+			       (unsigned long)iovs[j].iov_base,
+			       iovs[j].iov_len);
+		if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf) - len, "snprintf"))
+			goto end_close_fd;
+		len += ret;
+		str += ret;
+
+		ret = snprintf(str, sizeof(buf) - len, "`-PFN for bvec[0]=%llu\n",
+			       page_addr_to_pfn((unsigned long)iovs[j].iov_base));
+		if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf) - len, "snprintf"))
+			goto end_close_fd;
+		len += ret;
+		str += ret;
+	}
+
+	ret = snprintf(str, sizeof(buf) - len, "E:%zu\n", ARRAY_SIZE(iovs));
+	if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf) - len, "snprintf"))
+		goto end_close_fd;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(skel->links.dump_io_uring_buf));
+	if (!ASSERT_GE(iter_fd, 0, "bpf_iter_create"))
+		goto end_close_fd;
+
+	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer"))
+		goto end_close_iter;
+
+	ASSERT_OK(strcmp(rbuf, buf), "compare iterator output");
+
+	puts("=== Expected Output ===");
+	printf("%s", buf);
+	puts("==== Actual Output ====");
+	printf("%s", rbuf);
+	puts("=======================");
+
+end_close_iter:
+	close(iter_fd);
+end_close_fd:
+	close(fd);
+end:
+	while (i--)
+		munmap(iovs[i].iov_base, iovs[i].iov_len);
+	bpf_iter_io_uring__destroy(skel);
+}
+
+void test_io_uring_file(void)
+{
+	int reg_files[] = { [0 ... 7] = -1 };
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	char buf[4096] = "B\n", rbuf[4096] = {}, *str;
+	union bpf_iter_link_info linfo = {};
+	struct bpf_iter_io_uring *skel;
+	int iter_fd, fd, len = 0, ret;
+	struct io_uring_params p;
+
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	skel = bpf_iter_io_uring__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_io_uring__open_and_load"))
+		return;
+
+	/* "B\n" */
+	len = 2;
+	str = buf + len;
+	ret = snprintf(str, sizeof(buf) - len, "B\n");
+	for (int i = 0; i < ARRAY_SIZE(reg_files); i++) {
+		char templ[] = "/tmp/io_uringXXXXXX";
+		const char *name, *def = "<none>";
+
+		/* create sparse set */
+		if (i & 1) {
+			name = def;
+		} else {
+			reg_files[i] = mkstemp(templ);
+			if (!ASSERT_GE(reg_files[i], 0, templ))
+				goto end_close_reg_files;
+			name = templ;
+			ASSERT_OK(unlink(name), "unlink");
+		}
+		ret = snprintf(str, sizeof(buf) - len, "%d:%s%s\n", i, name, name != def ? " (deleted)" : "");
+		if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf) - len, "snprintf"))
+			goto end_close_reg_files;
+		len += ret;
+		str += ret;
+	}
+
+	ret = snprintf(str, sizeof(buf) - len, "E:%zu\n", ARRAY_SIZE(reg_files));
+	if (!ASSERT_GE(ret, 0, "snprintf") || !ASSERT_LT(ret, sizeof(buf) - len, "snprintf"))
+		goto end_close_reg_files;
+
+	memset(&p, 0, sizeof(p));
+	fd = sys_io_uring_setup(1, &p);
+	if (!ASSERT_GE(fd, 0, "io_uring_setup"))
+		goto end_close_reg_files;
+
+	linfo.io_uring.io_uring_fd = fd;
+	skel->links.dump_io_uring_file = bpf_program__attach_iter(skel->progs.dump_io_uring_file,
+								  &opts);
+	if (!ASSERT_OK_PTR(skel->links.dump_io_uring_file, "bpf_program__attach_iter"))
+		goto end_close_fd;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(skel->links.dump_io_uring_file));
+	if (!ASSERT_GE(iter_fd, 0, "bpf_iter_create"))
+		goto end;
+
+	ret = io_uring_register_files(fd, reg_files, ARRAY_SIZE(reg_files));
+	if (!ASSERT_OK(ret, "io_uring_register_files"))
+		goto end_iter_fd;
+
+	ret = read_fd_into_buffer(iter_fd, rbuf, sizeof(rbuf));
+	if (!ASSERT_GT(ret, 0, "read_fd_into_buffer(iterator_fd, buf)"))
+		goto end_iter_fd;
+
+	ASSERT_OK(strcmp(rbuf, buf), "compare iterator output");
+
+	puts("=== Expected Output ===");
+	printf("%s", buf);
+	puts("==== Actual Output ====");
+	printf("%s", rbuf);
+	puts("=======================");
+end_iter_fd:
+	close(iter_fd);
+end_close_fd:
+	close(fd);
+end_close_reg_files:
+	for (int i = 0; i < ARRAY_SIZE(reg_files); i++) {
+		if (reg_files[i] != -1)
+			close(reg_files[i]);
+	}
+end:
+	bpf_iter_io_uring__destroy(skel);
+}
+
 void test_bpf_iter(void)
 {
 	if (test__start_subtest("btf_id_or_null"))
@@ -1299,4 +1521,8 @@ void test_bpf_iter(void)
 		test_rdonly_buf_out_of_bound();
 	if (test__start_subtest("buf-neg-offset"))
 		test_buf_neg_offset();
+	if (test__start_subtest("io_uring_buf"))
+		test_io_uring_buf();
+	if (test__start_subtest("io_uring_file"))
+		test_io_uring_file();
 }
