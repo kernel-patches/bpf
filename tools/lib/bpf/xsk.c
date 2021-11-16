@@ -50,6 +50,7 @@
 enum xsk_prog {
 	XSK_PROG_FALLBACK,
 	XSK_PROG_REDIRECT_FLAGS,
+	XSK_PROG_REDIRECT_XSK_FLAGS,
 };
 
 struct xsk_umem {
@@ -374,7 +375,15 @@ static enum xsk_prog get_xsk_prog(void)
 		BPF_EMIT_CALL(BPF_FUNC_redirect_map),
 		BPF_EXIT_INSN(),
 	};
-	int prog_fd, map_fd, ret, insn_cnt = ARRAY_SIZE(insns);
+	struct bpf_insn insns_xsk[] = {
+		BPF_MOV64_REG(BPF_REG_CTX, BPF_REG_ARG1),
+		BPF_LD_MAP_FD(BPF_REG_2, 0),
+		BPF_MOV64_IMM(BPF_REG_3, 0),
+		BPF_MOV64_IMM(BPF_REG_4, XDP_PASS),
+		BPF_EMIT_CALL(BPF_FUNC_redirect_xsk),
+		BPF_EXIT_INSN(),
+	};
+	int prog_fd, map_fd, ret;
 
 	memset(&map_attr, 0, sizeof(map_attr));
 	map_attr.map_type = BPF_MAP_TYPE_XSKMAP;
@@ -386,9 +395,25 @@ static enum xsk_prog get_xsk_prog(void)
 	if (map_fd < 0)
 		return detected;
 
+	insns_xsk[1].imm = map_fd;
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns_xsk, ARRAY_SIZE(insns_xsk),
+				NULL);
+	if (prog_fd < 0)
+		goto prog_redirect;
+
+	ret = bpf_prog_test_run(prog_fd, 0, &data_in, 1, &data_out, &size_out, &retval, &duration);
+	if (!ret && retval == XDP_PASS) {
+		detected = XSK_PROG_REDIRECT_XSK_FLAGS;
+		close(map_fd);
+		close(prog_fd);
+		return detected;
+	}
+
+prog_redirect:
 	insns[0].imm = map_fd;
 
-	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns, insn_cnt, NULL);
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns, ARRAY_SIZE(insns), NULL);
 	if (prog_fd < 0) {
 		close(map_fd);
 		return detected;
@@ -483,10 +508,29 @@ static int xsk_load_xdp_prog(struct xsk_socket *xsk)
 		BPF_EMIT_CALL(BPF_FUNC_redirect_map),
 		BPF_EXIT_INSN(),
 	};
+
+	/* This is the post-5.13 kernel C-program:
+	 * SEC("xdp_sock") int xdp_sock_prog(struct xdp_md *ctx)
+	 * {
+	 *     return bpf_redirect_xsk(ctx, &xsks_map, ctx->rx_queue_index, XDP_PASS);
+	 * }
+	 */
+	struct bpf_insn prog_redirect_xsk_flags[] = {
+		/* r3 = *(u32 *)(r1 + 16) */
+		BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1, 16),
+		/* r2 = xskmap[] */
+		BPF_LD_MAP_FD(BPF_REG_2, ctx->xsks_map_fd),
+		/* r4 = XDP_PASS */
+		BPF_MOV64_IMM(BPF_REG_4, 2),
+		/* call bpf_redirect_xsk */
+		BPF_EMIT_CALL(BPF_FUNC_redirect_xsk),
+		BPF_EXIT_INSN(),
+	};
 	size_t insns_cnt[] = {sizeof(prog) / sizeof(struct bpf_insn),
 			      sizeof(prog_redirect_flags) / sizeof(struct bpf_insn),
+			      sizeof(prog_redirect_xsk_flags) / sizeof(struct bpf_insn),
 	};
-	struct bpf_insn *progs[] = {prog, prog_redirect_flags};
+	struct bpf_insn *progs[] = {prog, prog_redirect_flags, prog_redirect_xsk_flags};
 	enum xsk_prog option = get_xsk_prog();
 	LIBBPF_OPTS(bpf_prog_load_opts, opts,
 		.log_buf = log_buf,
