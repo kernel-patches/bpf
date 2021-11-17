@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <linux/kernel.h>
 #include <test_progs.h>
 
 #include "cgroup_helpers.h"
@@ -16,10 +17,9 @@ static int prog_load(int verdict)
 		BPF_MOV64_IMM(BPF_REG_0, verdict), /* r0 = verdict */
 		BPF_EXIT_INSN(),
 	};
-	size_t insns_cnt = sizeof(prog) / sizeof(struct bpf_insn);
 
 	return bpf_test_load_program(BPF_PROG_TYPE_CGROUP_SKB,
-			       prog, insns_cnt, "GPL", 0,
+			       prog, ARRAY_SIZE(prog), "GPL", 0,
 			       bpf_log_buf, BPF_LOG_BUF_SIZE);
 }
 
