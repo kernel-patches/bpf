@@ -2623,15 +2623,28 @@ struct bpf_tracing_link {
 	struct bpf_prog *tgt_prog;
 };
 
+static struct bpf_trampoline *link_trampoline(struct bpf_tracing_link *link)
+{
+	struct bpf_prog *prog = link->link.prog;
+
+	if (prog->type == BPF_PROG_TYPE_EXT)
+		return link->trampoline;
+	else
+		return prog->aux->trampoline;
+}
+
 static void bpf_tracing_link_release(struct bpf_link *link)
 {
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link);
+	struct bpf_trampoline *tr = link_trampoline(tr_link);
+	struct bpf_prog *prog = link->prog;
 
-	WARN_ON_ONCE(bpf_trampoline_unlink_prog(link->prog,
-						tr_link->trampoline));
+	WARN_ON_ONCE(bpf_trampoline_unlink_prog(link->prog, tr));
 
-	bpf_trampoline_put(tr_link->trampoline);
+	if (prog->type != BPF_PROG_TYPE_EXT)
+		prog->aux->trampoline = NULL;
+	bpf_trampoline_put(tr);
 
 	/* tgt_prog is NULL if target is a kernel function */
 	if (tr_link->tgt_prog)
@@ -2662,9 +2675,10 @@ static int bpf_tracing_link_fill_link_info(const struct bpf_link *link,
 {
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link);
+	struct bpf_trampoline *tr = link_trampoline(tr_link);
 
 	info->tracing.attach_type = tr_link->attach_type;
-	bpf_trampoline_unpack_key(tr_link->trampoline->key,
+	bpf_trampoline_unpack_key(tr->key,
 				  &info->tracing.target_obj_id,
 				  &info->tracing.target_btf_id);
 
@@ -2682,6 +2696,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id)
 {
+	bool prog_extension = prog->type == BPF_PROG_TYPE_EXT;
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
 	struct bpf_trampoline *tr = NULL;
@@ -2747,6 +2762,11 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	link->attach_type = prog->expected_attach_type;
 
 	mutex_lock(&prog->aux->dst_mutex);
+
+	if (!prog_extension && prog->aux->trampoline) {
+		err = -EBUSY;
+		goto out_unlock;
+	}
 
 	/* There are a few possible cases here:
 	 *
@@ -2824,7 +2844,11 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	}
 
 	link->tgt_prog = tgt_prog;
-	link->trampoline = tr;
+
+	if (prog_extension)
+		link->trampoline = tr;
+	else
+		prog->aux->trampoline = tr;
 
 	/* Always clear the trampoline and target prog from prog->aux to make
 	 * sure the original attach destination is not kept alive after a
