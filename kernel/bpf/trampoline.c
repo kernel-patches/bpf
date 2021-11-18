@@ -104,16 +104,21 @@ struct bpf_tramp_id *bpf_tramp_id_alloc(u32 max)
 	return id;
 }
 
-void bpf_tramp_id_init(struct bpf_tramp_id *id,
-		       const struct bpf_prog *tgt_prog,
-		       struct btf *btf, u32 btf_id)
+struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,
+					 struct btf *btf, u32 btf_id)
 {
+	struct bpf_tramp_id *id;
+
+	id = bpf_tramp_id_alloc(1);
+	if (!id)
+		return NULL;
 	if (tgt_prog)
 		id->obj_id = tgt_prog->aux->id;
 	else
 		id->obj_id = btf_obj_id(btf);
 	id->id[0] = btf_id;
 	id->cnt = 1;
+	return id;
 }
 
 void bpf_tramp_id_free(struct bpf_tramp_id *id)

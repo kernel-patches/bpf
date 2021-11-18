@@ -2766,12 +2766,6 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
-		id = bpf_tramp_id_alloc(1);
-		if (!id) {
-			err = -ENOMEM;
-			goto out_put_prog;
-		}
-
 		tgt_prog = bpf_prog_get(tgt_prog_fd);
 		if (IS_ERR(tgt_prog)) {
 			err = PTR_ERR(tgt_prog);
@@ -2779,7 +2773,11 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
-		bpf_tramp_id_init(id, tgt_prog, NULL, btf_id);
+		id = bpf_tramp_id_single(tgt_prog, NULL, btf_id);
+		if (!id) {
+			err = -ENOMEM;
+			goto out_put_prog;
+		}
 	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
@@ -2829,14 +2827,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_unlock;
 		}
 
-		id = bpf_tramp_id_alloc(1);
+		btf_id = prog->aux->attach_btf_id;
+		id = bpf_tramp_id_single(NULL, prog->aux->attach_btf, btf_id);
 		if (!id) {
 			err = -ENOMEM;
 			goto out_unlock;
 		}
-
-		btf_id = prog->aux->attach_btf_id;
-		bpf_tramp_id_init(id, NULL, prog->aux->attach_btf, btf_id);
 	}
 
 	if (!prog->aux->dst_attach ||

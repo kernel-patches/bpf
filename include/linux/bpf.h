@@ -755,9 +755,8 @@ struct bpf_tramp_id *bpf_tramp_id_alloc(u32 cnt);
 void bpf_tramp_id_free(struct bpf_tramp_id *id);
 bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id);
 int bpf_tramp_id_is_equal(struct bpf_tramp_id *a, struct bpf_tramp_id *b);
-void bpf_tramp_id_init(struct bpf_tramp_id *id,
-		       const struct bpf_prog *tgt_prog,
-		       struct btf *btf, u32 btf_id);
+struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,
+					 struct btf *btf, u32 btf_id);
 int bpf_trampoline_link_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
 int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
