@@ -24,6 +24,13 @@
 #include <linux/percpu-refcount.h>
 #include <linux/bpfptr.h>
 #include <linux/refcount.h>
+#ifdef CONFIG_FUNCTION_TRACER
+#ifndef CC_USING_FENTRY
+#define CC_USING_FENTRY
+#endif
+#endif
+#include <linux/ftrace.h>
+#include <linux/types.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -703,6 +710,9 @@ struct bpf_trampoline {
 	struct {
 		struct btf_func_model model;
 		bool ftrace_managed;
+#ifdef CONFIG_FUNCTION_TRACER
+		struct ftrace_ops ops;
+#endif
 	} func;
 	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF
 	 * program by replacing one of its functions. id->addr is the address
@@ -763,7 +773,6 @@ struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,
 					 struct bpf_attach_target_info *tgt_info);
 int bpf_trampoline_link_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
 int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
-void bpf_trampoline_put(struct bpf_trampoline *tr);
 
 struct bpf_tramp_attach *bpf_tramp_attach(struct bpf_tramp_id *id,
 					  struct bpf_prog *tgt_prog,
@@ -831,7 +840,6 @@ static inline struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }
-static inline void bpf_trampoline_put(struct bpf_trampoline *tr) {}
 #define DEFINE_BPF_DISPATCHER(name)
 #define DECLARE_BPF_DISPATCHER(name)
 #define BPF_DISPATCHER_FUNC(name) bpf_dispatcher_nop_func
