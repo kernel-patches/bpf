@@ -4999,6 +4999,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	info->btf = btf;
 	info->btf_id = t->type;
 	t = btf_type_by_id(btf, t->type);
+
+	if (btf_type_is_type_tag(t)) {
+		const char *tag_value = __btf_name_by_offset(btf, t->name_off);
+
+		if (strcmp(tag_value, "user") == 0)
+			info->is_user = true;
+	}
+
 	/* skip modifiers */
 	while (btf_type_is_modifier(t)) {
 		info->btf_id = t->type;
@@ -5010,8 +5018,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			tname, arg, btf_kind_str[BTF_INFO_KIND(t->info)]);
 		return false;
 	}
-	bpf_log(log, "func '%s' arg%d has btf_id %d type %s '%s'\n",
-		tname, arg, info->btf_id, btf_kind_str[BTF_INFO_KIND(t->info)],
+	bpf_log(log, "func '%s' arg%d has btf_id %d is_user %d type %s '%s'\n",
+		tname, arg, info->btf_id, info->is_user,
+		btf_kind_str[BTF_INFO_KIND(t->info)],
 		__btf_name_by_offset(btf, t->name_off));
 	return true;
 }

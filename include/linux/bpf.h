@@ -473,6 +473,7 @@ struct bpf_insn_access_aux {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
+			bool is_user;
 		};
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
