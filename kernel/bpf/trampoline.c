@@ -105,18 +105,30 @@ struct bpf_tramp_id *bpf_tramp_id_alloc(u32 max)
 }
 
 struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,
-					 struct btf *btf, u32 btf_id)
+					 struct bpf_prog *prog, u32 btf_id,
+					 struct bpf_attach_target_info *tgt_info)
 {
 	struct bpf_tramp_id *id;
 
+	if (!tgt_info) {
+		struct bpf_attach_target_info __tgt_info = {};
+		int err;
+
+		tgt_info = &__tgt_info;
+		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
+					     tgt_info);
+		if (err)
+			return ERR_PTR(err);
+	}
 	id = bpf_tramp_id_alloc(1);
 	if (!id)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	if (tgt_prog)
 		id->obj_id = tgt_prog->aux->id;
 	else
-		id->obj_id = btf_obj_id(btf);
+		id->obj_id = btf_obj_id(prog->aux->attach_btf);
 	id->id[0] = btf_id;
+	id->addr[0] = (void *) tgt_info->tgt_addr;
 	id->cnt = 1;
 	return id;
 }

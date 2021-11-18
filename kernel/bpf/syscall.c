@@ -2773,9 +2773,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
-		id = bpf_tramp_id_single(tgt_prog, NULL, btf_id);
-		if (!id) {
-			err = -ENOMEM;
+		id = bpf_tramp_id_single(tgt_prog, prog, btf_id, NULL);
+		if (IS_ERR(id)) {
+			err = PTR_ERR(id);
 			goto out_put_prog;
 		}
 	}
@@ -2828,9 +2828,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		}
 
 		btf_id = prog->aux->attach_btf_id;
-		id = bpf_tramp_id_single(NULL, prog->aux->attach_btf, btf_id);
-		if (!id) {
-			err = -ENOMEM;
+		id = bpf_tramp_id_single(NULL, prog, btf_id, NULL);
+		if (IS_ERR(id)) {
+			err = PTR_ERR(id);
 			goto out_unlock;
 		}
 	}
@@ -2842,15 +2842,6 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 * different from the destination specified at load time, we
 		 * need a new trampoline and a check for compatibility
 		 */
-		struct bpf_attach_target_info tgt_info = {};
-
-		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
-					      &tgt_info);
-		if (err)
-			goto out_unlock;
-
-		id->addr[0] = (void *) tgt_info.tgt_addr;
-
 		attach = bpf_tramp_attach(id, tgt_prog, prog);
 		if (IS_ERR(attach)) {
 			err = PTR_ERR(attach);
