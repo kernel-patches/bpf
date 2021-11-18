@@ -21,6 +21,19 @@
 #include <net/pkt_cls.h>
 #include <net/act_api.h>
 #include <net/netlink.h>
+#include <net/tc_act/tc_pedit.h>
+#include <net/tc_act/tc_mirred.h>
+#include <net/tc_act/tc_vlan.h>
+#include <net/tc_act/tc_tunnel_key.h>
+#include <net/tc_act/tc_csum.h>
+#include <net/tc_act/tc_gact.h>
+#include <net/tc_act/tc_police.h>
+#include <net/tc_act/tc_sample.h>
+#include <net/tc_act/tc_skbedit.h>
+#include <net/tc_act/tc_ct.h>
+#include <net/tc_act/tc_mpls.h>
+#include <net/tc_act/tc_gate.h>
+#include <net/flow_offload.h>
 
 #ifdef CONFIG_INET
 DEFINE_STATIC_KEY_FALSE(tcf_frag_xmit_count);
@@ -129,8 +142,157 @@ static void free_tcf(struct tc_action *p)
 	kfree(p);
 }
 
+static int flow_action_init(struct flow_offload_action *fl_action,
+			    struct tc_action *act,
+			    enum flow_act_command cmd,
+			    struct netlink_ext_ack *extack)
+{
+	if (!fl_action)
+		return -EINVAL;
+
+	fl_action->extack = extack;
+	fl_action->command = cmd;
+	fl_action->index = act->tcfa_index;
+
+	if (is_tcf_gact_ok(act)) {
+		fl_action->id = FLOW_ACTION_ACCEPT;
+	} else if (is_tcf_gact_shot(act)) {
+		fl_action->id = FLOW_ACTION_DROP;
+	} else if (is_tcf_gact_trap(act)) {
+		fl_action->id = FLOW_ACTION_TRAP;
+	} else if (is_tcf_gact_goto_chain(act)) {
+		fl_action->id = FLOW_ACTION_GOTO;
+	} else if (is_tcf_mirred_egress_redirect(act)) {
+		fl_action->id = FLOW_ACTION_REDIRECT;
+	} else if (is_tcf_mirred_egress_mirror(act)) {
+		fl_action->id = FLOW_ACTION_MIRRED;
+	} else if (is_tcf_mirred_ingress_redirect(act)) {
+		fl_action->id = FLOW_ACTION_REDIRECT_INGRESS;
+	} else if (is_tcf_mirred_ingress_mirror(act)) {
+		fl_action->id = FLOW_ACTION_MIRRED_INGRESS;
+	} else if (is_tcf_vlan(act)) {
+		switch (tcf_vlan_action(act)) {
+		case TCA_VLAN_ACT_PUSH:
+			fl_action->id = FLOW_ACTION_VLAN_PUSH;
+			break;
+		case TCA_VLAN_ACT_POP:
+			fl_action->id = FLOW_ACTION_VLAN_POP;
+			break;
+		case TCA_VLAN_ACT_MODIFY:
+			fl_action->id = FLOW_ACTION_VLAN_MANGLE;
+			break;
+		default:
+			return -EOPNOTSUPP;
+		}
+	} else if (is_tcf_tunnel_set(act)) {
+		fl_action->id = FLOW_ACTION_TUNNEL_ENCAP;
+	} else if (is_tcf_tunnel_release(act)) {
+		fl_action->id = FLOW_ACTION_TUNNEL_DECAP;
+	} else if (is_tcf_csum(act)) {
+		fl_action->id = FLOW_ACTION_CSUM;
+	} else if (is_tcf_skbedit_mark(act)) {
+		fl_action->id = FLOW_ACTION_MARK;
+	} else if (is_tcf_sample(act)) {
+		fl_action->id = FLOW_ACTION_SAMPLE;
+	} else if (is_tcf_police(act)) {
+		fl_action->id = FLOW_ACTION_POLICE;
+	} else if (is_tcf_ct(act)) {
+		fl_action->id = FLOW_ACTION_CT;
+	} else if (is_tcf_mpls(act)) {
+		switch (tcf_mpls_action(act)) {
+		case TCA_MPLS_ACT_PUSH:
+			fl_action->id = FLOW_ACTION_MPLS_PUSH;
+			break;
+		case TCA_MPLS_ACT_POP:
+			fl_action->id = FLOW_ACTION_MPLS_POP;
+			break;
+		case TCA_MPLS_ACT_MODIFY:
+			fl_action->id = FLOW_ACTION_MPLS_MANGLE;
+			break;
+		default:
+			return -EOPNOTSUPP;
+		}
+	} else if (is_tcf_skbedit_ptype(act)) {
+		fl_action->id = FLOW_ACTION_PTYPE;
+	} else if (is_tcf_skbedit_priority(act)) {
+		fl_action->id = FLOW_ACTION_PRIORITY;
+	} else if (is_tcf_gate(act)) {
+		fl_action->id = FLOW_ACTION_GATE;
+	} else {
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int tcf_action_offload_cmd(struct flow_offload_action *fl_act,
+				  struct netlink_ext_ack *extack)
+{
+	int err;
+
+	if (IS_ERR(fl_act))
+		return PTR_ERR(fl_act);
+
+	err = flow_indr_dev_setup_offload(NULL, NULL, TC_SETUP_ACT,
+					  fl_act, NULL, NULL);
+	if (err < 0)
+		return err;
+
+	return 0;
+}
+
+/* offload the tc command after inserted */
+static int tcf_action_offload_add(struct tc_action *action,
+				  struct netlink_ext_ack *extack)
+{
+	struct tc_action *actions[TCA_ACT_MAX_PRIO] = {
+		[0] = action,
+	};
+	struct flow_offload_action *fl_action;
+	int err = 0;
+
+	fl_action = flow_action_alloc(tcf_act_num_actions_single(action));
+	if (!fl_action)
+		return -ENOMEM;
+
+	err = flow_action_init(fl_action, action, FLOW_ACT_REPLACE, extack);
+	if (err)
+		goto fl_err;
+
+	err = tc_setup_action(&fl_action->action, actions);
+	if (err) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Failed to setup tc actions for offload\n");
+		goto fl_err;
+	}
+
+	err = tcf_action_offload_cmd(fl_action, extack);
+	tc_cleanup_flow_action(&fl_action->action);
+
+fl_err:
+	kfree(fl_action);
+
+	return err;
+}
+
+static int tcf_action_offload_del(struct tc_action *action)
+{
+	struct flow_offload_action fl_act;
+	int err = 0;
+
+	if (!action)
+		return -EINVAL;
+
+	err = flow_action_init(&fl_act, action, FLOW_ACT_DESTROY, NULL);
+	if (err)
+		return err;
+
+	return tcf_action_offload_cmd(&fl_act, NULL);
+}
+
 static void tcf_action_cleanup(struct tc_action *p)
 {
+	tcf_action_offload_del(p);
 	if (p->ops->cleanup)
 		p->ops->cleanup(p);
 
@@ -1103,6 +1265,8 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 		sz += tcf_action_fill_size(act);
 		/* Start from index 0 */
 		actions[i - 1] = act;
+		if (!tc_act_bind(flags))
+			tcf_action_offload_add(act, extack);
 	}
 
 	/* We have to commit them all together, because if any error happened in
