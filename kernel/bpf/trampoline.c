@@ -92,7 +92,10 @@ struct bpf_tramp_id *bpf_tramp_id_alloc(u32 max)
 	id = kzalloc(sizeof(*id), GFP_KERNEL);
 	if (id) {
 		id->id = kzalloc(sizeof(u32) * max, GFP_KERNEL);
-		if (!id->id) {
+		id->addr = kzalloc(sizeof(*id->addr) * max, GFP_KERNEL);
+		if (!id->id || !id->addr) {
+			kfree(id->id);
+			kfree(id->addr);
 			kfree(id);
 			return NULL;
 		}
@@ -117,6 +120,7 @@ void bpf_tramp_id_free(struct bpf_tramp_id *id)
 {
 	if (!id)
 		return;
+	kfree(id->addr);
 	kfree(id->id);
 	kfree(id);
 }
@@ -159,7 +163,7 @@ static int bpf_trampoline_module_get(struct bpf_trampoline *tr)
 	int err = 0;
 
 	preempt_disable();
-	mod = __module_text_address((unsigned long) tr->id->addr);
+	mod = __module_text_address((unsigned long) tr->id->addr[0]);
 	if (mod && !try_module_get(mod))
 		err = -ENOENT;
 	preempt_enable();
@@ -187,7 +191,7 @@ static int is_ftrace_location(void *ip)
 
 static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 {
-	void *ip = tr->id->addr;
+	void *ip = tr->id->addr[0];
 	int ret;
 
 	if (tr->func.ftrace_managed)
@@ -202,7 +206,7 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 
 static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_addr)
 {
-	void *ip = tr->id->addr;
+	void *ip = tr->id->addr[0];
 	int ret;
 
 	if (tr->func.ftrace_managed)
@@ -215,7 +219,7 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 /* first time registering */
 static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 {
-	void *ip = tr->id->addr;
+	void *ip = tr->id->addr[0];
 	int ret;
 
 	ret = is_ftrace_location(ip);
@@ -434,7 +438,7 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + PAGE_SIZE,
 					  &tr->func.model, flags, tprogs,
-					  tr->id->addr);
+					  tr->id->addr[0]);
 	if (err < 0)
 		goto out;
 
@@ -503,7 +507,7 @@ int bpf_trampoline_link_prog(struct bpf_tramp_node *node, struct bpf_trampoline 
 			goto out;
 		}
 		tr->extension_prog = prog;
-		err = bpf_arch_text_poke(tr->id->addr, BPF_MOD_JUMP, NULL,
+		err = bpf_arch_text_poke(tr->id->addr[0], BPF_MOD_JUMP, NULL,
 					 prog->bpf_func);
 		goto out;
 	}
@@ -539,7 +543,7 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampolin
 	mutex_lock(&tr->mutex);
 	if (kind == BPF_TRAMP_REPLACE) {
 		WARN_ON_ONCE(!tr->extension_prog);
-		err = bpf_arch_text_poke(tr->id->addr, BPF_MOD_JUMP,
+		err = bpf_arch_text_poke(tr->id->addr[0], BPF_MOD_JUMP,
 					 tr->extension_prog->bpf_func, NULL);
 		tr->extension_prog = NULL;
 		goto out;

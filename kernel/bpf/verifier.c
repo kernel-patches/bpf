@@ -14000,7 +14000,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return -ENOMEM;
 
 	bpf_tramp_id_init(id, tgt_prog, prog->aux->attach_btf, btf_id);
-	id->addr = (void *) tgt_info.tgt_addr;
+	id->addr[0] = (void *) tgt_info.tgt_addr;
 
 	attach = bpf_tramp_attach(id, tgt_prog, prog);
 	if (IS_ERR(attach)) {

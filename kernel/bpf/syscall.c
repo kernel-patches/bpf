@@ -2853,7 +2853,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		if (err)
 			goto out_unlock;
 
-		id->addr = (void *) tgt_info.tgt_addr;
+		id->addr[0] = (void *) tgt_info.tgt_addr;
 
 		attach = bpf_tramp_attach(id, tgt_prog, prog);
 		if (IS_ERR(attach)) {
