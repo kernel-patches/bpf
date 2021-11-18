@@ -13568,20 +13568,26 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
-int bpf_check_attach_target(struct bpf_verifier_log *log,
-			    const struct bpf_prog *prog,
-			    const struct bpf_prog *tgt_prog,
-			    u32 btf_id,
-			    struct bpf_attach_target_info *tgt_info)
+struct attach_target {
+	const struct btf_type *t;
+	const char *tname;
+	int subprog;
+	struct btf *btf;
+};
+
+static int __bpf_check_attach_target(struct bpf_verifier_log *log,
+				     const struct bpf_prog *prog,
+				     const struct bpf_prog *tgt_prog,
+				     u32 btf_id,
+				     struct attach_target *target)
 {
 	bool prog_extension = prog->type == BPF_PROG_TYPE_EXT;
 	const char prefix[] = "btf_trace_";
-	int ret = 0, subprog = -1, i;
+	int subprog = -1, i;
 	const struct btf_type *t;
 	bool conservative = true;
 	const char *tname;
 	struct btf *btf;
-	long addr = 0;
 
 	if (!btf_id) {
 		bpf_log(log, "Tracing programs must provide btf_id\n");
@@ -13706,9 +13712,6 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		t = btf_type_by_id(btf, t->type);
 		if (!btf_type_is_func_proto(t))
 			return -EINVAL;
-		ret = btf_distill_func_proto(log, btf, t, tname, &tgt_info->fmodel);
-		if (ret)
-			return ret;
 		break;
 	default:
 		if (!prog_extension)
@@ -13737,22 +13740,57 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		if (tgt_prog && conservative)
 			t = NULL;
+	}
 
-		ret = btf_distill_func_proto(log, btf, t, tname, &tgt_info->fmodel);
+	target->t = t;
+	target->tname = tname;
+	target->subprog = subprog;
+	target->btf = btf;
+	return 0;
+}
+
+int bpf_check_attach_target(struct bpf_verifier_log *log,
+			    const struct bpf_prog *prog,
+			    const struct bpf_prog *tgt_prog,
+			    u32 btf_id,
+			    struct bpf_attach_target_info *tgt_info)
+{
+	struct attach_target target = { };
+	long addr = 0;
+	int ret;
+
+	ret = __bpf_check_attach_target(log, prog, tgt_prog, btf_id, &target);
+	if (ret)
+		return ret;
+
+	switch (prog->expected_attach_type) {
+	case BPF_TRACE_RAW_TP:
+		break;
+	case BPF_TRACE_ITER:
+		ret = btf_distill_func_proto(log, target.btf, target.t, target.tname, &tgt_info->fmodel);
+		if (ret)
+			return ret;
+		break;
+	default:
+	case BPF_MODIFY_RETURN:
+	case BPF_LSM_MAC:
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+		ret = btf_distill_func_proto(log, target.btf, target.t, target.tname, &tgt_info->fmodel);
 		if (ret < 0)
 			return ret;
 
 		if (tgt_prog) {
-			if (subprog == 0)
+			if (target.subprog == 0)
 				addr = (long) tgt_prog->bpf_func;
 			else
-				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
+				addr = (long) tgt_prog->aux->func[target.subprog]->bpf_func;
 		} else {
-			addr = kallsyms_lookup_name(tname);
+			addr = kallsyms_lookup_name(target.tname);
 			if (!addr) {
 				bpf_log(log,
 					"The address of function %s cannot be found\n",
-					tname);
+					target.tname);
 				return -ENOENT;
 			}
 		}
@@ -13779,7 +13817,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				break;
 			}
 			if (ret) {
-				bpf_log(log, "%s is not sleepable\n", tname);
+				bpf_log(log, "%s is not sleepable\n", target.tname);
 				return ret;
 			}
 		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN) {
@@ -13787,18 +13825,19 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				bpf_log(log, "can't modify return codes of BPF programs\n");
 				return -EINVAL;
 			}
-			ret = check_attach_modify_return(addr, tname);
+			ret = check_attach_modify_return(addr, target.tname);
 			if (ret) {
-				bpf_log(log, "%s() is not modifiable\n", tname);
+				bpf_log(log, "%s() is not modifiable\n", target.tname);
 				return ret;
 			}
 		}
 
 		break;
 	}
+
 	tgt_info->tgt_addr = addr;
-	tgt_info->tgt_name = tname;
-	tgt_info->tgt_type = t;
+	tgt_info->tgt_name = target.tname;
+	tgt_info->tgt_type = target.t;
 	return 0;
 }
 
