@@ -44,6 +44,7 @@ struct tc_action {
 	u8			hw_stats;
 	u8			used_hw_stats;
 	bool			used_hw_stats_valid;
+	u32			in_hw_count;
 };
 #define tcf_index	common.tcfa_index
 #define tcf_refcnt	common.tcfa_refcnt
@@ -234,6 +235,12 @@ static inline void tcf_action_inc_overlimit_qstats(struct tc_action *a)
 	spin_lock(&a->tcfa_lock);
 	qstats_overlimit_inc(&a->tcfa_qstats);
 	spin_unlock(&a->tcfa_lock);
+}
+
+static inline void flow_action_hw_count_set(struct tc_action *act,
+					    u32 hw_count)
+{
+	act->in_hw_count = hw_count;
 }
 
 void tcf_action_update_stats(struct tc_action *a, u64 bytes, u64 packets,
