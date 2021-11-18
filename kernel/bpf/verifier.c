@@ -14001,7 +14001,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	attach = bpf_tramp_attach(id, tgt_prog, prog);
 	if (IS_ERR(attach)) {
-		bpf_tramp_id_free(id);
+		bpf_tramp_id_put(id);
 		return PTR_ERR(attach);
 	}
 

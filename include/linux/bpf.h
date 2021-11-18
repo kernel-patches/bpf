@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/bpfptr.h>
+#include <linux/refcount.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -677,6 +678,7 @@ struct bpf_tramp_id {
 	u32 obj_id;
 	u32 *id;
 	void **addr;
+	refcount_t refcnt;
 };
 
 struct bpf_tramp_node {
@@ -753,6 +755,7 @@ static __always_inline __nocfi unsigned int bpf_dispatcher_nop_func(
 #ifdef CONFIG_BPF_JIT
 struct bpf_tramp_id *bpf_tramp_id_alloc(u32 cnt);
 void bpf_tramp_id_free(struct bpf_tramp_id *id);
+void bpf_tramp_id_put(struct bpf_tramp_id *id);
 bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id);
 int bpf_tramp_id_is_equal(struct bpf_tramp_id *a, struct bpf_tramp_id *b);
 struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,

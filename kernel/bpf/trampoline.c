@@ -100,6 +100,7 @@ struct bpf_tramp_id *bpf_tramp_id_alloc(u32 max)
 			return NULL;
 		}
 		id->max = max;
+		refcount_set(&id->refcnt, 1);
 	}
 	return id;
 }
@@ -133,9 +134,17 @@ struct bpf_tramp_id *bpf_tramp_id_single(const struct bpf_prog *tgt_prog,
 	return id;
 }
 
-void bpf_tramp_id_free(struct bpf_tramp_id *id)
+static struct bpf_tramp_id *bpf_tramp_id_get(struct bpf_tramp_id *id)
+{
+	refcount_inc(&id->refcnt);
+	return id;
+}
+
+void bpf_tramp_id_put(struct bpf_tramp_id *id)
 {
 	if (!id)
+		return;
+	if (!refcount_dec_and_test(&id->refcnt))
 		return;
 	kfree(id->addr);
 	kfree(id->id);
@@ -162,7 +171,7 @@ static struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id)
 	if (!tr)
 		goto out;
 
-	tr->id = id;
+	tr->id = bpf_tramp_id_get(id);
 	INIT_HLIST_NODE(&tr->hlist);
 	hlist_add_head(&tr->hlist, head);
 	refcount_set(&tr->refcnt, 1);
@@ -592,6 +601,7 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 * multiple rcu callbacks.
 	 */
 	hlist_del(&tr->hlist);
+	bpf_tramp_id_put(tr->id);
 	kfree(tr);
 out:
 	mutex_unlock(&trampoline_mutex);
@@ -663,7 +673,7 @@ void bpf_tramp_detach(struct bpf_tramp_attach *attach)
 	hlist_for_each_entry_safe(node, n, &attach->nodes, hlist_attach)
 		node_free(node);
 
-	bpf_tramp_id_free(attach->id);
+	bpf_tramp_id_put(attach->id);
 	kfree(attach);
 }
 

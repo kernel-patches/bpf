@@ -2901,7 +2901,7 @@ out_unlock:
 out_put_prog:
 	if (tgt_prog_fd && tgt_prog)
 		bpf_prog_put(tgt_prog);
-	bpf_tramp_id_free(id);
+	bpf_tramp_id_put(id);
 	return err;
 }
 
