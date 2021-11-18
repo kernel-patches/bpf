@@ -13749,6 +13749,35 @@ static int __bpf_check_attach_target(struct bpf_verifier_log *log,
 	return 0;
 }
 
+int bpf_check_attach_model(const struct bpf_prog *prog,
+			   const struct bpf_prog *tgt_prog,
+			   u32 btf_id,
+			   struct btf_func_model *fmodel)
+{
+	struct attach_target target = { };
+	int ret;
+
+	ret = __bpf_check_attach_target(NULL, prog, tgt_prog, btf_id, &target);
+	if (ret)
+		return ret;
+
+	switch (prog->expected_attach_type) {
+	case BPF_TRACE_RAW_TP:
+		break;
+	case BPF_TRACE_ITER:
+		ret = btf_distill_func_proto(NULL, target.btf, target.t, target.tname, fmodel);
+		break;
+	default:
+	case BPF_MODIFY_RETURN:
+	case BPF_LSM_MAC:
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+		ret = btf_distill_func_proto(NULL, target.btf, target.t, target.tname, fmodel);
+	}
+
+	return ret;
+}
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
