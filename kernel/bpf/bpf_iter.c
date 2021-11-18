@@ -714,3 +714,35 @@ const struct bpf_func_proto bpf_for_each_map_elem_proto = {
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
 };
+
+BPF_CALL_4(bpf_for_each, u32, nr_iterations, void *, callback_fn, void *, callback_ctx,
+	   u64, flags)
+{
+	bpf_callback_t callback = (bpf_callback_t)callback_fn;
+	u64 err;
+	u32 i;
+
+	if (flags)
+		return -EINVAL;
+
+	for (i = 0; i < nr_iterations; i++) {
+		err = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
+		/* return value: 0 - continue, 1 - stop and return */
+		if (err) {
+			i++;
+			break;
+		}
+	}
+
+	return i;
+}
+
+const struct bpf_func_proto bpf_for_each_proto = {
+	.func		= bpf_for_each,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_FUNC,
+	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
+	.arg4_type	= ARG_ANYTHING,
+};

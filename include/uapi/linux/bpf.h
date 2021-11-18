@@ -4750,6 +4750,28 @@ union bpf_attr {
  *		The number of traversed map elements for success, **-EINVAL** for
  *		invalid **flags**.
  *
+ * long bpf_for_each(u32 nr_iterations, void *callback_fn, void *callback_ctx, u64 flags)
+ *	Description
+ *		For **nr_iterations**, call **callback_fn** function with
+ *		**callback_ctx** as the context parameter.
+ *		The **callback_fn** should be a static function and
+ *		the **callback_ctx** should be a pointer to the stack.
+ *		The **flags** is used to control certain aspects of the helper.
+ *		Currently, the **flags** must be 0.
+ *
+ *		long (\*callback_fn)(u32 index, void \*ctx);
+ *
+ *		where **index** is the current index in the iteration. The index
+ *		is zero-indexed.
+ *
+ *		If **callback_fn** returns 0, the helper will continue to the next
+ *		iteration. If return value is 1, the helper will skip the rest of
+ *		the iterations and return. Other return values are not used now.
+ *
+ *	Return
+ *		The number of iterations performed, **-EINVAL** for invalid **flags**
+ *		or a null **callback_fn**.
+ *
  * long bpf_snprintf(char *str, u32 str_size, const char *fmt, u64 *data, u32 data_len)
  *	Description
  *		Outputs a string into the **str** buffer of size **str_size**
@@ -5124,6 +5146,7 @@ union bpf_attr {
 	FN(sock_from_file),		\
 	FN(check_mtu),			\
 	FN(for_each_map_elem),		\
+	FN(for_each),			\
 	FN(snprintf),			\
 	FN(sys_bpf),			\
 	FN(btf_find_by_name_kind),	\
