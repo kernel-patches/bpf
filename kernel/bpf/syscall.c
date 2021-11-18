@@ -2644,32 +2644,32 @@ struct bpf_link *bpf_link_get_from_fd(u32 ufd)
 struct bpf_tracing_link {
 	struct bpf_link link;
 	enum bpf_attach_type attach_type;
-	struct bpf_trampoline *trampoline;
+	struct bpf_tramp_attach *attach;
 	struct bpf_prog *tgt_prog;
 };
 
-static struct bpf_trampoline *link_trampoline(struct bpf_tracing_link *link)
+static struct bpf_tramp_attach *link_attach(struct bpf_tracing_link *link)
 {
 	struct bpf_prog *prog = link->link.prog;
 
 	if (prog->type == BPF_PROG_TYPE_EXT)
-		return link->trampoline;
+		return link->attach;
 	else
-		return prog->aux->trampoline;
+		return prog->aux->attach;
 }
 
 static void bpf_tracing_link_release(struct bpf_link *link)
 {
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link);
-	struct bpf_trampoline *tr = link_trampoline(tr_link);
+	struct bpf_tramp_attach *attach = link_attach(tr_link);
 	struct bpf_prog *prog = link->prog;
 
-	WARN_ON_ONCE(bpf_trampoline_unlink_prog(&link->prog->aux->tramp_node, tr));
+	WARN_ON_ONCE(bpf_tramp_attach_unlink(attach));
 
 	if (prog->type != BPF_PROG_TYPE_EXT)
-		prog->aux->trampoline = NULL;
-	bpf_trampoline_put(tr);
+		prog->aux->attach = NULL;
+	bpf_tramp_detach(attach);
 
 	/* tgt_prog is NULL if target is a kernel function */
 	if (tr_link->tgt_prog)
@@ -2700,11 +2700,11 @@ static int bpf_tracing_link_fill_link_info(const struct bpf_link *link,
 {
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link);
-	struct bpf_trampoline *tr = link_trampoline(tr_link);
+	struct bpf_tramp_attach *attach = link_attach(tr_link);
 
 	info->tracing.attach_type = tr_link->attach_type;
-	info->tracing.target_obj_id = tr->id->obj_id;
-	info->tracing.target_btf_id = tr->id->btf_id;
+	info->tracing.target_obj_id = attach->id->obj_id;
+	info->tracing.target_btf_id = attach->id->btf_id;
 
 	return 0;
 }
@@ -2721,9 +2721,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   u32 btf_id)
 {
 	bool prog_extension = prog->type == BPF_PROG_TYPE_EXT;
+	struct bpf_tramp_attach *attach = NULL;
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
-	struct bpf_trampoline *tr = NULL;
 	struct bpf_tracing_link *link;
 	struct bpf_tramp_id *id = NULL;
 	int err;
@@ -2793,7 +2793,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 
 	mutex_lock(&prog->aux->dst_mutex);
 
-	if (!prog_extension && prog->aux->trampoline) {
+	if (!prog_extension && prog->aux->attach) {
 		err = -EBUSY;
 		goto out_unlock;
 	}
@@ -2816,7 +2816,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	 * - if prog->aux->dst_trampoline and tgt_prog is NULL, the program
 	 *   was detached and is going for re-attachment.
 	 */
-	if (!prog->aux->dst_trampoline && !tgt_prog) {
+	if (!prog->aux->dst_attach && !tgt_prog) {
 		/*
 		 * Allow re-attach for TRACING and LSM programs. If it's
 		 * currently linked, bpf_trampoline_link_prog will fail.
@@ -2839,9 +2839,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		bpf_tramp_id_init(id, NULL, prog->aux->attach_btf, btf_id);
 	}
 
-	if (!prog->aux->dst_trampoline ||
+	if (!prog->aux->dst_attach ||
 	    (!bpf_tramp_id_is_empty(id) &&
-	      bpf_tramp_id_is_equal(id, prog->aux->dst_trampoline->id))) {
+	      bpf_tramp_id_is_equal(id, prog->aux->dst_attach->id))) {
 		/* If there is no saved target, or the specified target is
 		 * different from the destination specified at load time, we
 		 * need a new trampoline and a check for compatibility
@@ -2853,9 +2853,11 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		if (err)
 			goto out_unlock;
 
-		tr = bpf_trampoline_get(id, &tgt_info);
-		if (!tr) {
-			err = -ENOMEM;
+		id->addr = (void *) tgt_info.tgt_addr;
+
+		attach = bpf_tramp_attach(id, tgt_prog, prog);
+		if (IS_ERR(attach)) {
+			err = PTR_ERR(attach);
 			goto out_unlock;
 		}
 	} else {
@@ -2866,7 +2868,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 * can only happen once for any program, as the saved values in
 		 * prog->aux are cleared below.
 		 */
-		tr = prog->aux->dst_trampoline;
+		attach = prog->aux->dst_attach;
 		tgt_prog = prog->aux->dst_prog;
 	}
 
@@ -2874,7 +2876,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (err)
 		goto out_unlock;
 
-	err = bpf_trampoline_link_prog(&prog->aux->tramp_node, tr);
+	err = bpf_tramp_attach_link(attach);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
@@ -2882,32 +2884,31 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	}
 
 	link->tgt_prog = tgt_prog;
-
 	if (prog_extension)
-		link->trampoline = tr;
+		link->attach = attach;
 	else
-		prog->aux->trampoline = tr;
+		prog->aux->attach = attach;
 
 	/* Always clear the trampoline and target prog from prog->aux to make
 	 * sure the original attach destination is not kept alive after a
 	 * program is (re-)attached to another target.
 	 */
 	if (prog->aux->dst_prog &&
-	    (tgt_prog_fd || tr != prog->aux->dst_trampoline))
+	    (tgt_prog_fd || attach != prog->aux->dst_attach))
 		/* got extra prog ref from syscall, or attaching to different prog */
 		bpf_prog_put(prog->aux->dst_prog);
-	if (prog->aux->dst_trampoline && tr != prog->aux->dst_trampoline)
+	if (prog->aux->dst_attach && attach != prog->aux->dst_attach)
 		/* we allocated a new trampoline, so free the old one */
-		bpf_trampoline_put(prog->aux->dst_trampoline);
+		bpf_tramp_detach(prog->aux->dst_attach);
 
 	prog->aux->dst_prog = NULL;
-	prog->aux->dst_trampoline = NULL;
+	prog->aux->dst_attach = NULL;
 	mutex_unlock(&prog->aux->dst_mutex);
 
 	return bpf_link_settle(&link_primer);
 out_unlock:
-	if (tr && tr != prog->aux->dst_trampoline)
-		bpf_trampoline_put(tr);
+	if (attach && attach != prog->aux->dst_attach)
+		bpf_tramp_detach(attach);
 	mutex_unlock(&prog->aux->dst_mutex);
 	kfree(link);
 out_put_prog:

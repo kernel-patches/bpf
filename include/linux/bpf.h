@@ -679,7 +679,14 @@ struct bpf_tramp_id {
 
 struct bpf_tramp_node {
 	struct hlist_node hlist_tramp;
+	struct hlist_node hlist_attach;
 	struct bpf_prog *prog;
+	struct bpf_trampoline *tr;
+};
+
+struct bpf_tramp_attach {
+	struct bpf_tramp_id *id;
+	struct hlist_head nodes;
 };
 
 struct bpf_trampoline {
@@ -751,9 +758,14 @@ void bpf_tramp_id_init(struct bpf_tramp_id *id,
 		       struct btf *btf, u32 btf_id);
 int bpf_trampoline_link_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
 int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node, struct bpf_trampoline *tr);
-struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
-					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
+
+struct bpf_tramp_attach *bpf_tramp_attach(struct bpf_tramp_id *id,
+					  struct bpf_prog *tgt_prog,
+					  struct bpf_prog *prog);
+void bpf_tramp_detach(struct bpf_tramp_attach *attach);
+int bpf_tramp_attach_link(struct bpf_tramp_attach *attach);
+int bpf_tramp_attach_unlink(struct bpf_tramp_attach *attach);
 #define BPF_DISPATCHER_INIT(_name) {				\
 	.mutex = __MUTEX_INITIALIZER(_name.mutex),		\
 	.func = &_name##_func,					\
@@ -888,8 +900,8 @@ struct bpf_prog_aux {
 	const struct bpf_ctx_arg_aux *ctx_arg_info;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
 	struct bpf_prog *dst_prog;
-	struct bpf_trampoline *dst_trampoline;
-	struct bpf_trampoline *trampoline;
+	struct bpf_tramp_attach *dst_attach;
+	struct bpf_tramp_attach *attach;
 	enum bpf_prog_type saved_dst_prog_type;
 	enum bpf_attach_type saved_dst_attach_type;
 	bool verifier_zext; /* Zero extensions has been inserted by verifier. */
@@ -899,7 +911,6 @@ struct bpf_prog_aux {
 	bool sleepable;
 	bool tail_call_reachable;
 	bool multi_func;
-	struct bpf_tramp_node tramp_node;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
 	/* function name for valid attach_btf_id */

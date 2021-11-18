@@ -13928,7 +13928,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
 	struct bpf_attach_target_info tgt_info = {};
 	u32 btf_id = prog->aux->attach_btf_id;
-	struct bpf_trampoline *tr;
+	struct bpf_tramp_attach *attach;
 	struct bpf_tramp_id *id;
 	int ret;
 
@@ -14000,13 +14000,15 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return -ENOMEM;
 
 	bpf_tramp_id_init(id, tgt_prog, prog->aux->attach_btf, btf_id);
-	tr = bpf_trampoline_get(id, &tgt_info);
-	if (!tr) {
+	id->addr = (void *) tgt_info.tgt_addr;
+
+	attach = bpf_tramp_attach(id, tgt_prog, prog);
+	if (IS_ERR(attach)) {
 		bpf_tramp_id_free(id);
-		return -ENOMEM;
+		return PTR_ERR(attach);
 	}
 
-	prog->aux->dst_trampoline = tr;
+	prog->aux->dst_attach = attach;
 	return 0;
 }
 

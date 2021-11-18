@@ -11,6 +11,7 @@
 #include <linux/rcupdate_wait.h>
 #include <linux/module.h>
 #include <linux/static_call.h>
+#include <linux/bpf_verifier.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -98,7 +99,7 @@ void bpf_tramp_id_free(struct bpf_tramp_id *id)
 	kfree(id);
 }
 
-static struct bpf_trampoline *bpf_trampoline_lookup(struct bpf_tramp_id *id)
+static struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
@@ -528,26 +529,6 @@ out:
 	return err;
 }
 
-struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
-					  struct bpf_attach_target_info *tgt_info)
-{
-	struct bpf_trampoline *tr;
-
-	tr = bpf_trampoline_lookup(id);
-	if (!tr)
-		return NULL;
-
-	mutex_lock(&tr->mutex);
-	if (tr->id->addr)
-		goto out;
-
-	memcpy(&tr->func.model, &tgt_info->fmodel, sizeof(tgt_info->fmodel));
-	tr->id->addr = (void *)tgt_info->tgt_addr;
-out:
-	mutex_unlock(&tr->mutex);
-	return tr;
-}
-
 void bpf_trampoline_put(struct bpf_trampoline *tr)
 {
 	if (!tr)
@@ -567,10 +548,107 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 * multiple rcu callbacks.
 	 */
 	hlist_del(&tr->hlist);
-	bpf_tramp_id_free(tr->id);
 	kfree(tr);
 out:
 	mutex_unlock(&trampoline_mutex);
+}
+
+static struct bpf_tramp_node *node_alloc(struct bpf_trampoline *tr, struct bpf_prog *prog)
+{
+	struct bpf_tramp_node *node;
+
+	node = kzalloc(sizeof(*node), GFP_KERNEL);
+	if (!node)
+		return NULL;
+
+	INIT_HLIST_NODE(&node->hlist_tramp);
+	INIT_HLIST_NODE(&node->hlist_attach);
+	node->prog = prog;
+	node->tr = tr;
+	return node;
+}
+
+static void node_free(struct bpf_tramp_node *node)
+{
+	bpf_trampoline_put(node->tr);
+	kfree(node);
+}
+
+struct bpf_tramp_attach *bpf_tramp_attach(struct bpf_tramp_id *id,
+					  struct bpf_prog *tgt_prog,
+					  struct bpf_prog *prog)
+{
+	struct bpf_trampoline *tr = NULL;
+	struct bpf_tramp_attach *attach;
+	struct bpf_tramp_node *node;
+	int err;
+
+	attach = kzalloc(sizeof(*attach), GFP_KERNEL);
+	if (!attach)
+		return ERR_PTR(-ENOMEM);
+
+	tr = bpf_trampoline_get(id);
+	if (!tr) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	node = node_alloc(tr, prog);
+	if (!node)
+		goto out;
+
+	err = bpf_check_attach_model(prog, tgt_prog, id->btf_id, &tr->func.model);
+	if (err)
+		goto out;
+
+	attach->id = id;
+	hlist_add_head(&node->hlist_attach, &attach->nodes);
+	return attach;
+
+out:
+	bpf_trampoline_put(tr);
+	kfree(attach);
+	return ERR_PTR(err);
+}
+
+void bpf_tramp_detach(struct bpf_tramp_attach *attach)
+{
+	struct bpf_tramp_node *node;
+	struct hlist_node *n;
+
+	hlist_for_each_entry_safe(node, n, &attach->nodes, hlist_attach)
+		node_free(node);
+
+	bpf_tramp_id_free(attach->id);
+	kfree(attach);
+}
+
+int bpf_tramp_attach_link(struct bpf_tramp_attach *attach)
+{
+	struct bpf_tramp_node *node;
+	int err;
+
+	hlist_for_each_entry(node, &attach->nodes, hlist_attach) {
+		err = bpf_trampoline_link_prog(node, node->tr);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+int bpf_tramp_attach_unlink(struct bpf_tramp_attach *attach)
+{
+	struct bpf_tramp_node *node;
+	int err;
+
+	hlist_for_each_entry(node, &attach->nodes, hlist_attach) {
+		err = bpf_trampoline_unlink_prog(node, node->tr);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 #define NO_START_TIME 1
