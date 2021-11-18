@@ -674,6 +674,7 @@ struct bpf_tramp_image {
 struct bpf_tramp_id {
 	u32 obj_id;
 	u32 btf_id;
+	void *addr;
 };
 
 struct bpf_trampoline {
@@ -685,11 +686,10 @@ struct bpf_trampoline {
 	struct bpf_tramp_id *id;
 	struct {
 		struct btf_func_model model;
-		void *addr;
 		bool ftrace_managed;
 	} func;
 	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF
-	 * program by replacing one of its functions. func.addr is the address
+	 * program by replacing one of its functions. id->addr is the address
 	 * of the function it replaced.
 	 */
 	struct bpf_prog *extension_prog;
