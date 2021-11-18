@@ -171,10 +171,12 @@ static const struct argp_option opts[] = {
 
 extern struct argp bench_ringbufs_argp;
 extern struct argp bench_bloom_map_argp;
+extern struct argp bench_for_each_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
 	{ &bench_bloom_map_argp, 0, "Bloom filter map benchmark", 0 },
+	{ &bench_for_each_argp, 0, "bpf_for_each helper benchmark", 0 },
 	{},
 };
 
@@ -373,6 +375,7 @@ extern const struct bench bench_bloom_update;
 extern const struct bench bench_bloom_false_positive;
 extern const struct bench bench_hashmap_without_bloom;
 extern const struct bench bench_hashmap_with_bloom;
+extern const struct bench bench_for_each_helper;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -404,6 +407,7 @@ static const struct bench *benchs[] = {
 	&bench_bloom_false_positive,
 	&bench_hashmap_without_bloom,
 	&bench_hashmap_with_bloom,
+	&bench_for_each_helper,
 };
 
 static void setup_benchmark()

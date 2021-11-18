@@ -14,6 +14,8 @@ struct callback_ctx {
 u32 nr_iterations;
 u32 stop_index = -1;
 
+long hits;
+
 /* Making these global variables so that the userspace program
  * can verify the output through the skeleton
  */
@@ -65,5 +67,16 @@ int prog_invalid_flags(struct __sk_buff *skb)
 
 	err = bpf_for_each(nr_iterations, callback_fn, &data, 1);
 
+	return 0;
+}
+
+SEC("fentry/__x64_sys_getpgid")
+int benchmark(void *ctx)
+{
+	for (int i = 0; i < 1000; i++) {
+		bpf_for_each(nr_iterations, empty_callback_fn, NULL, 0);
+
+		__sync_add_and_fetch(&hits, nr_iterations);
+	}
 	return 0;
 }
