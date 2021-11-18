@@ -32,6 +32,9 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/btf_ids.h>
+#include <linux/ftrace.h>
+#include <linux/sort.h>
+#include <linux/bsearch.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -2905,6 +2908,251 @@ out_put_prog:
 	return err;
 }
 
+struct bpf_tracing_multi_link {
+	struct bpf_link link;
+	enum bpf_attach_type attach_type;
+	struct bpf_tramp_attach *attach;
+};
+
+static void bpf_tracing_multi_link_release(struct bpf_link *link)
+{
+	struct bpf_prog *prog = link->prog;
+	struct bpf_tramp_attach *attach = prog->aux->attach;
+
+	WARN_ON_ONCE(bpf_tramp_attach_unlink(attach));
+
+	if (prog->type != BPF_PROG_TYPE_EXT)
+		prog->aux->attach = NULL;
+	bpf_tramp_detach(attach);
+}
+
+static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	kfree(tr_link);
+}
+
+static void bpf_tracing_multi_link_show_fdinfo(const struct bpf_link *link,
+					       struct seq_file *seq)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	seq_printf(seq, "attach_type:\t%d\n", tr_link->attach_type);
+}
+
+static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
+						 struct bpf_link_info *info)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link);
+
+	info->tracing.attach_type = tr_link->attach_type;
+	return 0;
+}
+
+static const struct bpf_link_ops bpf_tracing_multi_link_lops = {
+	.release = bpf_tracing_multi_link_release,
+	.dealloc = bpf_tracing_multi_link_dealloc,
+	.show_fdinfo = bpf_tracing_multi_link_show_fdinfo,
+	.fill_link_info = bpf_tracing_multi_link_fill_link_info,
+};
+
+static int check_multi_prog_type(struct bpf_prog *prog)
+{
+	if (prog->expected_attach_type != BPF_TRACE_FENTRY &&
+	    prog->expected_attach_type != BPF_TRACE_FEXIT)
+		return -EINVAL;
+	return 0;
+}
+
+static int btf_ids_cmp(const void *a, const void *b)
+{
+	const u32 *x = a;
+	const u32 *y = b;
+
+	if (*x == *y)
+		return 0;
+	return *x < *y ? -1 : 1;
+}
+
+struct resolve_id {
+	const char *name;
+	void *addr;
+	u32 id;
+};
+
+static int rid_name_cmp(const void *a, const void *b)
+{
+	const struct resolve_id *x = a;
+	const struct resolve_id *y = b;
+
+	return strcmp(x->name, y->name);
+}
+
+static int rid_id_cmp(const void *a, const void *b)
+{
+	const struct resolve_id *x = a;
+	const struct resolve_id *y = b;
+
+	if (x->id == y->id)
+		return 0;
+	return x->id < y->id ? -1 : 1;
+}
+
+struct kallsyms_data {
+	struct resolve_id *rid;
+	u32 cnt;
+	u32 found;
+};
+
+static int kallsyms_callback(void *data, const char *name,
+			     struct module *mod, unsigned long addr)
+{
+	struct kallsyms_data *args = data;
+	struct resolve_id *rid, id = {
+		.name = name,
+	};
+
+	rid = bsearch(&id, args->rid, args->cnt, sizeof(*rid), rid_name_cmp);
+	if (rid && !rid->addr) {
+		rid->addr = (void *) addr;
+		args->found++;
+	}
+	return args->found == args->cnt ? 1 : 0;
+}
+
+static int bpf_tramp_id_resolve(struct bpf_tramp_id *id, struct bpf_prog *prog)
+{
+	struct kallsyms_data args;
+	const struct btf_type *t;
+	struct resolve_id *rid;
+	const char *name;
+	struct btf *btf;
+	int err = 0;
+	u32 i;
+
+	btf = prog->aux->attach_btf;
+	if (!btf)
+		return -EINVAL;
+
+	rid = kzalloc(id->cnt * sizeof(*rid), GFP_KERNEL);
+	if (!rid)
+		return -ENOMEM;
+
+	err = -EINVAL;
+	for (i = 0; i < id->cnt; i++) {
+		t = btf_type_by_id(btf, id->id[i]);
+		if (!t)
+			goto out_free;
+
+		name = btf_name_by_offset(btf, t->name_off);
+		if (!name)
+			goto out_free;
+
+		rid[i].name = name;
+		rid[i].id = id->id[i];
+	}
+
+	sort(rid, id->cnt, sizeof(*rid), rid_name_cmp, NULL);
+
+	args.rid = rid;
+	args.cnt = id->cnt;
+	args.found = 0;
+	kallsyms_on_each_symbol(kallsyms_callback, &args);
+
+	sort(rid, id->cnt, sizeof(*rid), rid_id_cmp, NULL);
+
+	for (i = 0; i < id->cnt; i++) {
+		if (!rid[i].addr) {
+			err = -EINVAL;
+			goto out_free;
+		}
+		id->addr[i] = rid[i].addr;
+	}
+	err = 0;
+out_free:
+	kfree(rid);
+	return err;
+}
+
+static int bpf_tracing_multi_attach(struct bpf_prog *prog,
+				    const union bpf_attr *attr)
+{
+	void __user *uids = u64_to_user_ptr(attr->link_create.multi.btf_ids);
+	u32 cnt_size, cnt = attr->link_create.multi.btf_ids_cnt;
+	struct bpf_tracing_multi_link *link = NULL;
+	struct bpf_link_primer link_primer;
+	struct bpf_tramp_attach *attach;
+	struct bpf_tramp_id *id = NULL;
+	int err = -EINVAL;
+
+	if (check_multi_prog_type(prog))
+		return -EINVAL;
+	if (!cnt || !uids)
+		return -EINVAL;
+
+	id = bpf_tramp_id_alloc(cnt);
+	if (!id)
+		return -ENOMEM;
+
+	err = -EFAULT;
+	cnt_size = cnt * sizeof(id->id[0]);
+	if (copy_from_user(id->id, uids, cnt_size))
+		goto out_free_id;
+
+	id->cnt = cnt;
+	id->obj_id = btf_obj_id(prog->aux->attach_btf);
+
+	/* Sort user provided BTF ids, so we can use memcmp
+	 * and bsearch on top of it later.
+	 */
+	sort(id->id, cnt, sizeof(u32), btf_ids_cmp, NULL);
+
+	err = bpf_tramp_id_resolve(id, prog);
+	if (err)
+		goto out_free_id;
+
+	attach = bpf_tramp_attach(id, NULL, prog);
+	if (IS_ERR(attach)) {
+		err = PTR_ERR(attach);
+		goto out_free_id;
+	}
+
+	link = kzalloc(sizeof(*link), GFP_KERNEL);
+	if (!link) {
+		err = -ENOMEM;
+		goto out_detach;
+	}
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_TRACING_MULTI,
+		      &bpf_tracing_multi_link_lops, prog);
+	link->attach_type = prog->expected_attach_type;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		kfree(link);
+		goto out_detach;
+	}
+
+	err = bpf_tramp_attach_link(attach);
+	if (err) {
+		bpf_link_cleanup(&link_primer);
+		goto out_detach;
+	}
+	prog->aux->attach = attach;
+	return bpf_link_settle(&link_primer);
+
+out_detach:
+	bpf_tramp_detach(attach);
+	return err;
+out_free_id:
+	bpf_tramp_id_put(id);
+	return err;
+}
+
 struct bpf_raw_tp_link {
 	struct bpf_link link;
 	struct bpf_raw_event_map *btp;
@@ -3211,6 +3459,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_CGROUP_SETSOCKOPT:
 		return BPF_PROG_TYPE_CGROUP_SOCKOPT;
 	case BPF_TRACE_ITER:
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_SK_LOOKUP:
 		return BPF_PROG_TYPE_SK_LOOKUP;
@@ -4270,6 +4520,8 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 
 	if (prog->expected_attach_type == BPF_TRACE_ITER)
 		return bpf_iter_link_attach(attr, uattr, prog);
+	else if (prog->aux->multi_func)
+		return bpf_tracing_multi_attach(prog, attr);
 	else if (prog->type == BPF_PROG_TYPE_EXT)
 		return bpf_tracing_prog_attach(prog,
 					       attr->link_create.target_fd,

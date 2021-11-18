@@ -1009,6 +1009,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
 	BPF_LINK_TYPE_PERF_EVENT = 7,
+	BPF_LINK_TYPE_TRACING_MULTI = 8,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1470,6 +1471,10 @@ union bpf_attr {
 				 */
 				__u64		bpf_cookie;
 			} perf_event;
+			struct {
+				__aligned_u64	btf_ids;	/* addresses to attach */
+				__u32		btf_ids_cnt;	/* addresses count */
+			} multi;
 		};
 	} link_create;
 
