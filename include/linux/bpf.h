@@ -671,13 +671,18 @@ struct bpf_tramp_image {
 	};
 };
 
+struct bpf_tramp_id {
+	u32 obj_id;
+	u32 btf_id;
+};
+
 struct bpf_trampoline {
 	/* hlist for trampoline_table */
 	struct hlist_node hlist;
 	/* serializes access to fields of this trampoline */
 	struct mutex mutex;
 	refcount_t refcnt;
-	u64 key;
+	struct bpf_tramp_id *id;
 	struct {
 		struct btf_func_model model;
 		void *addr;
@@ -732,9 +737,16 @@ static __always_inline __nocfi unsigned int bpf_dispatcher_nop_func(
 	return bpf_func(ctx, insnsi);
 }
 #ifdef CONFIG_BPF_JIT
+struct bpf_tramp_id *bpf_tramp_id_alloc(void);
+void bpf_tramp_id_free(struct bpf_tramp_id *id);
+bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id);
+int bpf_tramp_id_is_equal(struct bpf_tramp_id *a, struct bpf_tramp_id *b);
+void bpf_tramp_id_init(struct bpf_tramp_id *id,
+		       const struct bpf_prog *tgt_prog,
+		       struct btf *btf, u32 btf_id);
 int bpf_trampoline_link_prog(struct bpf_prog *prog, struct bpf_trampoline *tr);
 int bpf_trampoline_unlink_prog(struct bpf_prog *prog, struct bpf_trampoline *tr);
-struct bpf_trampoline *bpf_trampoline_get(u64 key,
+struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
 #define BPF_DISPATCHER_INIT(_name) {				\
@@ -792,7 +804,7 @@ static inline int bpf_trampoline_unlink_prog(struct bpf_prog *prog,
 {
 	return -ENOTSUPP;
 }
-static inline struct bpf_trampoline *bpf_trampoline_get(u64 key,
+static inline struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
 							struct bpf_attach_target_info *tgt_info)
 {
 	return ERR_PTR(-EOPNOTSUPP);

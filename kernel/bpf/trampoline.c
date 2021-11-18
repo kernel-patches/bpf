@@ -59,16 +59,57 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
 			   PAGE_SIZE, true, ksym->name);
 }
 
-static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
+static u64 bpf_tramp_id_key(struct bpf_tramp_id *id)
+{
+	return ((u64) id->obj_id << 32) | id->btf_id;
+}
+
+bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id)
+{
+	return !id || (!id->obj_id && !id->btf_id);
+}
+
+int bpf_tramp_id_is_equal(struct bpf_tramp_id *a,
+			  struct bpf_tramp_id *b)
+{
+	return !memcmp(a, b, sizeof(*a));
+}
+
+struct bpf_tramp_id *bpf_tramp_id_alloc(void)
+{
+	struct bpf_tramp_id *id;
+
+	return kzalloc(sizeof(*id), GFP_KERNEL);
+}
+
+void bpf_tramp_id_init(struct bpf_tramp_id *id,
+		       const struct bpf_prog *tgt_prog,
+		       struct btf *btf, u32 btf_id)
+{
+	if (tgt_prog)
+		id->obj_id = tgt_prog->aux->id;
+	else
+		id->obj_id = btf_obj_id(btf);
+	id->btf_id = btf_id;
+}
+
+void bpf_tramp_id_free(struct bpf_tramp_id *id)
+{
+	kfree(id);
+}
+
+static struct bpf_trampoline *bpf_trampoline_lookup(struct bpf_tramp_id *id)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
+	u64 key;
 	int i;
 
+	key = bpf_tramp_id_key(id);
 	mutex_lock(&trampoline_mutex);
 	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
 	hlist_for_each_entry(tr, head, hlist) {
-		if (tr->key == key) {
+		if (bpf_tramp_id_is_equal(tr->id, id)) {
 			refcount_inc(&tr->refcnt);
 			goto out;
 		}
@@ -77,7 +118,7 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 	if (!tr)
 		goto out;
 
-	tr->key = key;
+	tr->id = id;
 	INIT_HLIST_NODE(&tr->hlist);
 	hlist_add_head(&tr->hlist, head);
 	refcount_set(&tr->refcnt, 1);
@@ -291,12 +332,14 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, u32 idx)
+static struct bpf_tramp_image*
+bpf_tramp_image_alloc(struct bpf_tramp_id *id, u32 idx)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
 	void *image;
 	int err = -ENOMEM;
+	u64 key;
 
 	im = kzalloc(sizeof(*im), GFP_KERNEL);
 	if (!im)
@@ -317,6 +360,7 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, u32 idx)
 
 	ksym = &im->ksym;
 	INIT_LIST_HEAD_RCU(&ksym->lnode);
+	key = bpf_tramp_id_key(id);
 	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu_%u", key, idx);
 	bpf_image_ksym_add(image, ksym);
 	return im;
@@ -351,7 +395,7 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 		goto out;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, tr->selector);
+	im = bpf_tramp_image_alloc(tr->id, tr->selector);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);
 		goto out;
@@ -482,12 +526,12 @@ out:
 	return err;
 }
 
-struct bpf_trampoline *bpf_trampoline_get(u64 key,
+struct bpf_trampoline *bpf_trampoline_get(struct bpf_tramp_id *id,
 					  struct bpf_attach_target_info *tgt_info)
 {
 	struct bpf_trampoline *tr;
 
-	tr = bpf_trampoline_lookup(key);
+	tr = bpf_trampoline_lookup(id);
 	if (!tr)
 		return NULL;
 
@@ -521,6 +565,7 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 * multiple rcu callbacks.
 	 */
 	hlist_del(&tr->hlist);
+	bpf_tramp_id_free(tr->id);
 	kfree(tr);
 out:
 	mutex_unlock(&trampoline_mutex);

@@ -2703,9 +2703,8 @@ static int bpf_tracing_link_fill_link_info(const struct bpf_link *link,
 	struct bpf_trampoline *tr = link_trampoline(tr_link);
 
 	info->tracing.attach_type = tr_link->attach_type;
-	bpf_trampoline_unpack_key(tr->key,
-				  &info->tracing.target_obj_id,
-				  &info->tracing.target_btf_id);
+	info->tracing.target_obj_id = tr->id->obj_id;
+	info->tracing.target_btf_id = tr->id->btf_id;
 
 	return 0;
 }
@@ -2726,7 +2725,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	struct bpf_prog *tgt_prog = NULL;
 	struct bpf_trampoline *tr = NULL;
 	struct bpf_tracing_link *link;
-	u64 key = 0;
+	struct bpf_tramp_id *id = NULL;
 	int err;
 
 	switch (prog->type) {
@@ -2767,6 +2766,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
+		id = bpf_tramp_id_alloc();
+		if (!id) {
+			err = -ENOMEM;
+			goto out_put_prog;
+		}
+
 		tgt_prog = bpf_prog_get(tgt_prog_fd);
 		if (IS_ERR(tgt_prog)) {
 			err = PTR_ERR(tgt_prog);
@@ -2774,7 +2779,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
-		key = bpf_trampoline_compute_key(tgt_prog, NULL, btf_id);
+		bpf_tramp_id_init(id, tgt_prog, NULL, btf_id);
 	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
@@ -2823,12 +2828,20 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			err = -EINVAL;
 			goto out_unlock;
 		}
+
+		id = bpf_tramp_id_alloc();
+		if (!id) {
+			err = -ENOMEM;
+			goto out_unlock;
+		}
+
 		btf_id = prog->aux->attach_btf_id;
-		key = bpf_trampoline_compute_key(NULL, prog->aux->attach_btf, btf_id);
+		bpf_tramp_id_init(id, NULL, prog->aux->attach_btf, btf_id);
 	}
 
 	if (!prog->aux->dst_trampoline ||
-	    (key && key != prog->aux->dst_trampoline->key)) {
+	    (!bpf_tramp_id_is_empty(id) &&
+	      bpf_tramp_id_is_equal(id, prog->aux->dst_trampoline->id))) {
 		/* If there is no saved target, or the specified target is
 		 * different from the destination specified at load time, we
 		 * need a new trampoline and a check for compatibility
@@ -2840,7 +2853,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		if (err)
 			goto out_unlock;
 
-		tr = bpf_trampoline_get(key, &tgt_info);
+		tr = bpf_trampoline_get(id, &tgt_info);
 		if (!tr) {
 			err = -ENOMEM;
 			goto out_unlock;
@@ -2900,6 +2913,7 @@ out_unlock:
 out_put_prog:
 	if (tgt_prog_fd && tgt_prog)
 		bpf_prog_put(tgt_prog);
+	bpf_tramp_id_free(id);
 	return err;
 }
 
