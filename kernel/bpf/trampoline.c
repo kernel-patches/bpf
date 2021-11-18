@@ -60,27 +60,45 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
 			   PAGE_SIZE, true, ksym->name);
 }
 
+static bool bpf_tramp_id_is_multi(struct bpf_tramp_id *id)
+{
+	return id->cnt > 1;
+}
+
 static u64 bpf_tramp_id_key(struct bpf_tramp_id *id)
 {
-	return ((u64) id->obj_id << 32) | id->btf_id;
+	if (bpf_tramp_id_is_multi(id))
+		return (u64) &id;
+	else
+		return ((u64) id->obj_id << 32) | id->id[0];
 }
 
 bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id)
 {
-	return !id || (!id->obj_id && !id->btf_id);
+	return !id || id->cnt == 0;
 }
 
 int bpf_tramp_id_is_equal(struct bpf_tramp_id *a,
 			  struct bpf_tramp_id *b)
 {
-	return !memcmp(a, b, sizeof(*a));
+	return a->obj_id == b->obj_id && a->cnt == b->cnt &&
+	       !memcmp(a->id, b->id, a->cnt * sizeof(*a->id));
 }
 
-struct bpf_tramp_id *bpf_tramp_id_alloc(void)
+struct bpf_tramp_id *bpf_tramp_id_alloc(u32 max)
 {
 	struct bpf_tramp_id *id;
 
-	return kzalloc(sizeof(*id), GFP_KERNEL);
+	id = kzalloc(sizeof(*id), GFP_KERNEL);
+	if (id) {
+		id->id = kzalloc(sizeof(u32) * max, GFP_KERNEL);
+		if (!id->id) {
+			kfree(id);
+			return NULL;
+		}
+		id->max = max;
+	}
+	return id;
 }
 
 void bpf_tramp_id_init(struct bpf_tramp_id *id,
@@ -91,11 +109,15 @@ void bpf_tramp_id_init(struct bpf_tramp_id *id,
 		id->obj_id = tgt_prog->aux->id;
 	else
 		id->obj_id = btf_obj_id(btf);
-	id->btf_id = btf_id;
+	id->id[0] = btf_id;
+	id->cnt = 1;
 }
 
 void bpf_tramp_id_free(struct bpf_tramp_id *id)
 {
+	if (!id)
+		return;
+	kfree(id->id);
 	kfree(id);
 }
 
@@ -362,7 +384,8 @@ bpf_tramp_image_alloc(struct bpf_tramp_id *id, u32 idx)
 	ksym = &im->ksym;
 	INIT_LIST_HEAD_RCU(&ksym->lnode);
 	key = bpf_tramp_id_key(id);
-	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu_%u", key, idx);
+	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu_%u%s", key, idx,
+		 bpf_tramp_id_is_multi(id) ? "_multi" : "");
 	bpf_image_ksym_add(image, ksym);
 	return im;
 
@@ -597,7 +620,7 @@ struct bpf_tramp_attach *bpf_tramp_attach(struct bpf_tramp_id *id,
 	if (!node)
 		goto out;
 
-	err = bpf_check_attach_model(prog, tgt_prog, id->btf_id, &tr->func.model);
+	err = bpf_check_attach_model(prog, tgt_prog, id->id[0], &tr->func.model);
 	if (err)
 		goto out;
 

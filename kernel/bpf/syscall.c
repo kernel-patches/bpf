@@ -2704,7 +2704,7 @@ static int bpf_tracing_link_fill_link_info(const struct bpf_link *link,
 
 	info->tracing.attach_type = tr_link->attach_type;
 	info->tracing.target_obj_id = attach->id->obj_id;
-	info->tracing.target_btf_id = attach->id->btf_id;
+	info->tracing.target_btf_id = attach->id->id[0];
 
 	return 0;
 }
@@ -2766,7 +2766,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
-		id = bpf_tramp_id_alloc();
+		id = bpf_tramp_id_alloc(1);
 		if (!id) {
 			err = -ENOMEM;
 			goto out_put_prog;
@@ -2829,7 +2829,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_unlock;
 		}
 
-		id = bpf_tramp_id_alloc();
+		id = bpf_tramp_id_alloc(1);
 		if (!id) {
 			err = -ENOMEM;
 			goto out_unlock;

@@ -672,8 +672,10 @@ struct bpf_tramp_image {
 };
 
 struct bpf_tramp_id {
+	u32 max;
+	u32 cnt;
 	u32 obj_id;
-	u32 btf_id;
+	u32 *id;
 	void *addr;
 };
 
@@ -749,7 +751,7 @@ static __always_inline __nocfi unsigned int bpf_dispatcher_nop_func(
 	return bpf_func(ctx, insnsi);
 }
 #ifdef CONFIG_BPF_JIT
-struct bpf_tramp_id *bpf_tramp_id_alloc(void);
+struct bpf_tramp_id *bpf_tramp_id_alloc(u32 cnt);
 void bpf_tramp_id_free(struct bpf_tramp_id *id);
 bool bpf_tramp_id_is_empty(struct bpf_tramp_id *id);
 int bpf_tramp_id_is_equal(struct bpf_tramp_id *a, struct bpf_tramp_id *b);

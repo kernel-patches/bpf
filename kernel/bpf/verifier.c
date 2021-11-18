@@ -13995,7 +13995,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return -EINVAL;
 	}
 
-	id = bpf_tramp_id_alloc();
+	id = bpf_tramp_id_alloc(1);
 	if (!id)
 		return -ENOMEM;
 
