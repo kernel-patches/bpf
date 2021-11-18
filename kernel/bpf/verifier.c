@@ -4372,6 +4372,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		enum bpf_reg_type reg_type = SCALAR_VALUE;
 		struct btf *btf = NULL;
 		u32 btf_id = 0;
+		bool is_user;
 
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {

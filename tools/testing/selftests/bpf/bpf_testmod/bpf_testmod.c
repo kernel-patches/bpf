@@ -21,6 +21,15 @@ bpf_testmod_test_mod_kfunc(int i)
 	*(int *)this_cpu_ptr(&bpf_testmod_ksym_percpu) = i;
 }
 
+struct bpf_testmod_btf_type_tag {
+	int a;
+};
+
+noinline int
+bpf_testmod_test_btf_type_tag_user(struct bpf_testmod_btf_type_tag __user *arg) {
+	return arg->a;
+}
+
 noinline int bpf_testmod_loop_test(int n)
 {
 	int i, sum = 0;

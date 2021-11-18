@@ -8,6 +8,7 @@ struct btf_type_tag_test {
         int **p;
 };
 #include "btf_type_tag.skel.h"
+#include "btf_type_tag_user.skel.h"
 
 static void test_btf_decl_tag(void)
 {
@@ -41,10 +42,32 @@ static void test_btf_type_tag(void)
 	btf_type_tag__destroy(skel);
 }
 
+static void test_btf_type_tag_user(void)
+{
+	struct btf_type_tag_user *skel;
+	int err;
+
+	skel = btf_type_tag_user__open();
+	if (!ASSERT_OK_PTR(skel, "btf_type_tag_user"))
+		return;
+
+	if (skel->rodata->skip_tests) {
+		printf("%s:SKIP: btf_type_tag attribute not supported", __func__);
+		test__skip();
+	} else {
+		err = btf_type_tag_user__load(skel);
+		ASSERT_ERR(err, "btf_type_tag_user");
+	}
+
+	btf_type_tag_user__destroy(skel);
+}
+
 void test_btf_tag(void)
 {
 	if (test__start_subtest("btf_decl_tag"))
 		test_btf_decl_tag();
 	if (test__start_subtest("btf_type_tag"))
 		test_btf_type_tag();
+	if (test__start_subtest("btf_type_tag_user"))
+		test_btf_type_tag_user();
 }
