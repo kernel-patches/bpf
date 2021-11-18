@@ -1941,7 +1941,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 				void *orig_call)
 {
 	int ret, i, nr_args = m->nr_args;
-	int stack_size = nr_args * 8;
+	int stack_size = nr_args * 8 + 8 /* nr_args */;
 	struct bpf_tramp_progs *fentry = &tprogs[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_progs *fexit = &tprogs[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_progs *fmod_ret = &tprogs[BPF_TRAMP_MODIFY_RETURN];
@@ -1987,11 +1987,21 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		EMIT4(0x48, 0x83, 0xe8, X86_PATCH_SIZE);
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -stack_size);
 
-		/* Continue with stack_size for regs storage, stack will
-		 * be correctly restored with 'leave' instruction.
-		 */
+		/* Continue with stack_size for 'nr_args' storage */
 		stack_size -= 8;
 	}
+
+	/* Store number of arguments of the traced function:
+	 *   mov rax, nr_args
+	 *   mov QWORD PTR [rbp - stack_size], rax
+	 */
+	emit_mov_imm64(&prog, BPF_REG_0, 0, (u32) nr_args);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -stack_size);
+
+	/* Continue with stack_size for regs storage, stack will
+	 * be correctly restored with 'leave' instruction.
+	 */
+	stack_size -= 8;
 
 	save_regs(m, &prog, nr_args, stack_size);
 

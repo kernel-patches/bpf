@@ -1012,7 +1012,7 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 BPF_CALL_1(bpf_get_func_ip_tracing, void *, ctx)
 {
 	/* This helper call is inlined by verifier. */
-	return ((u64 *)ctx)[-1];
+	return ((u64 *)ctx)[-2];
 }
 
 static const struct bpf_func_proto bpf_get_func_ip_proto_tracing = {
@@ -1089,6 +1089,38 @@ static const struct bpf_func_proto bpf_get_branch_snapshot_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
+BPF_CALL_2(bpf_arg, void *, ctx, int, n)
+{
+	/* This helper call is inlined by verifier. */
+	u64 nr_args = ((u64 *)ctx)[-1];
+
+	if ((u64) n >= nr_args)
+		return 0;
+	return ((u64 *)ctx)[n];
+}
+
+static const struct bpf_func_proto bpf_arg_proto = {
+	.func		= bpf_arg,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg1_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_ret_value, void *, ctx)
+{
+	/* This helper call is inlined by verifier. */
+	u64 nr_args = ((u64 *)ctx)[-1];
+
+	return ((u64 *)ctx)[nr_args];
+}
+
+static const struct bpf_func_proto bpf_ret_value_proto = {
+	.func		= bpf_ret_value,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
 };
 
 static const struct bpf_func_proto *
@@ -1212,6 +1244,10 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_find_vma_proto;
 	case BPF_FUNC_trace_vprintk:
 		return bpf_get_trace_vprintk_proto();
+	case BPF_FUNC_arg:
+		return &bpf_arg_proto;
+	case BPF_FUNC_ret_value:
+		return &bpf_ret_value_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

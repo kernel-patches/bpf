@@ -4957,6 +4957,18 @@ union bpf_attr {
  *		**-ENOENT** if *task->mm* is NULL, or no vma contains *addr*.
  *		**-EBUSY** if failed to try lock mmap_lock.
  *		**-EINVAL** for invalid **flags**.
+ *
+ * long bpf_arg(void *ctx, int n)
+ *	Description
+ *		Get n-th argument of the traced function (for tracing programs).
+ *	Return
+ *		Value of the argument.
+ *
+ * long bpf_ret_value(void *ctx)
+ *	Description
+ *		Get return value of the traced function (for tracing programs).
+ *	Return
+ *		Return value of the traced function.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5140,6 +5152,8 @@ union bpf_attr {
 	FN(skc_to_unix_sock),		\
 	FN(kallsyms_lookup_name),	\
 	FN(find_vma),			\
+	FN(arg),			\
+	FN(ret_value),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
