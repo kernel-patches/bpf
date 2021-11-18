@@ -8305,6 +8305,15 @@ int bpf_program__set_extra_flags(struct bpf_program *prog, __u32 extra_flags)
 	return 0;
 }
 
+int bpf_program__clear_flags(struct bpf_program *prog, __u32 flags)
+{
+	if (prog->obj->loaded)
+		return libbpf_err(-EBUSY);
+
+	prog->prog_flags &= ~flags;
+	return 0;
+}
+
 #define SEC_DEF(sec_pfx, ptype, atype, flags, ...) {			    \
 	.sec = sec_pfx,							    \
 	.prog_type = BPF_PROG_TYPE_##ptype,				    \
