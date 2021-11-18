@@ -2665,7 +2665,7 @@ static void bpf_tracing_link_release(struct bpf_link *link)
 	struct bpf_trampoline *tr = link_trampoline(tr_link);
 	struct bpf_prog *prog = link->prog;
 
-	WARN_ON_ONCE(bpf_trampoline_unlink_prog(link->prog, tr));
+	WARN_ON_ONCE(bpf_trampoline_unlink_prog(&link->prog->aux->tramp_node, tr));
 
 	if (prog->type != BPF_PROG_TYPE_EXT)
 		prog->aux->trampoline = NULL;
@@ -2874,7 +2874,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (err)
 		goto out_unlock;
 
-	err = bpf_trampoline_link_prog(prog, tr);
+	err = bpf_trampoline_link_prog(&prog->aux->tramp_node, tr);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
