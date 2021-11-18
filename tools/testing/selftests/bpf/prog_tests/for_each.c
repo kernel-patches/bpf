@@ -4,6 +4,7 @@
 #include <network_helpers.h>
 #include "for_each_hash_map_elem.skel.h"
 #include "for_each_array_map_elem.skel.h"
+#include "for_each_helper.skel.h"
 
 static unsigned int duration;
 
@@ -121,10 +122,70 @@ out:
 	for_each_array_map_elem__destroy(skel);
 }
 
+static void test_for_each_helper(void)
+{
+	struct for_each_helper *skel;
+	__u32 retval;
+	int err;
+
+	skel = for_each_helper__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "for_each_helper__open_and_load"))
+		return;
+
+	skel->bss->nr_iterations = 100;
+	err = bpf_prog_test_run(bpf_program__fd(skel->progs.test_prog),
+				1, &pkt_v4, sizeof(pkt_v4), NULL, NULL,
+				&retval, &duration);
+	if (CHECK(err || retval, "bpf_for_each helper test_prog",
+		  "err %d errno %d retval %d\n", err, errno, retval))
+		goto out;
+	ASSERT_EQ(skel->bss->nr_iterations_completed, skel->bss->nr_iterations,
+		  "nr_iterations mismatch");
+	ASSERT_EQ(skel->bss->g_output, (100 * 99) / 2, "wrong output");
+
+	/* test callback_fn returning 1 to stop iteration */
+	skel->bss->nr_iterations = 400;
+	skel->data->stop_index = 50;
+	err = bpf_prog_test_run(bpf_program__fd(skel->progs.test_prog),
+				1, &pkt_v4, sizeof(pkt_v4), NULL, NULL,
+				&retval, &duration);
+	if (CHECK(err || retval, "bpf_for_each helper test_prog",
+		  "err %d errno %d retval %d\n", err, errno, retval))
+		goto out;
+	ASSERT_EQ(skel->bss->nr_iterations_completed, skel->data->stop_index + 1,
+		  "stop_index not followed");
+	ASSERT_EQ(skel->bss->g_output, (50 * 49) / 2, "wrong output");
+
+	/* test passing in a null ctx */
+	skel->bss->nr_iterations = 10;
+	err = bpf_prog_test_run(bpf_program__fd(skel->progs.prog_null_ctx),
+				1, &pkt_v4, sizeof(pkt_v4), NULL, NULL,
+				&retval, &duration);
+	if (CHECK(err || retval, "bpf_for_each helper prog_null_ctx",
+		  "err %d errno %d retval %d\n", err, errno, retval))
+		goto out;
+	ASSERT_EQ(skel->bss->nr_iterations_completed, skel->bss->nr_iterations,
+		  "nr_iterations mismatch");
+
+	/* test invalid flags */
+	err = bpf_prog_test_run(bpf_program__fd(skel->progs.prog_invalid_flags),
+				1, &pkt_v4, sizeof(pkt_v4), NULL, NULL,
+				&retval, &duration);
+	if (CHECK(err || retval, "bpf_for_each helper prog_invalid_flags",
+		  "err %d errno %d retval %d\n", err, errno, retval))
+		goto out;
+	ASSERT_EQ(skel->bss->err, -EINVAL, "invalid_flags");
+
+out:
+	for_each_helper__destroy(skel);
+}
+
 void test_for_each(void)
 {
 	if (test__start_subtest("hash_map"))
 		test_hash_map();
 	if (test__start_subtest("array_map"))
 		test_array_map();
+	if (test__start_subtest("for_each_helper"))
+		test_for_each_helper();
 }

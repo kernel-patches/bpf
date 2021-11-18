@@ -115,6 +115,12 @@ void test_verif_scale_pyperf600()
 	scale_test("pyperf600.o", BPF_PROG_TYPE_RAW_TRACEPOINT, false);
 }
 
+void test_verif_scale_pyperf600_foreach(void)
+{
+	/* use the bpf_for_each helper*/
+	scale_test("pyperf600_foreach.o", BPF_PROG_TYPE_RAW_TRACEPOINT, false);
+}
+
 void test_verif_scale_pyperf600_nounroll()
 {
 	/* no unroll at all.
@@ -163,6 +169,12 @@ void test_verif_scale_strobemeta()
 	 * ~350k processed_insns
 	 */
 	scale_test("strobemeta.o", BPF_PROG_TYPE_RAW_TRACEPOINT, false);
+}
+
+void test_verif_scale_strobemeta_foreach(void)
+{
+	/* use the bpf_for_each helper*/
+	scale_test("strobemeta_foreach.o", BPF_PROG_TYPE_RAW_TRACEPOINT, false);
 }
 
 void test_verif_scale_strobemeta_nounroll1()
