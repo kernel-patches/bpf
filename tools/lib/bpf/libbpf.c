@@ -265,6 +265,8 @@ enum sec_def_flags {
 	SEC_SLEEPABLE = 8,
 	/* allow non-strict prefix matching */
 	SEC_SLOPPY_PFX = 16,
+	/* BPF program type allows multiple functions attachment */
+	SEC_MULTI_FUNC = 32,
 };
 
 struct bpf_sec_def {
@@ -6742,6 +6744,9 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 			continue;
 		}
 
+		if (prog->sec_def->cookie & SEC_MULTI_FUNC)
+			prog->prog_flags |= BPF_F_MULTI_FUNC;
+
 		bpf_program__set_type(prog, prog->sec_def->prog_type);
 		bpf_program__set_expected_attach_type(prog, prog->sec_def->expected_attach_type);
 
@@ -8337,6 +8342,7 @@ static struct bpf_link *attach_kprobe(const struct bpf_program *prog, long cooki
 static struct bpf_link *attach_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_raw_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_trace(const struct bpf_program *prog, long cookie);
+static struct bpf_link *attach_trace_multi(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_lsm(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_iter(const struct bpf_program *prog, long cookie);
 
@@ -8364,6 +8370,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("fentry.s/",		TRACING, BPF_TRACE_FENTRY, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
 	SEC_DEF("fmod_ret.s/",		TRACING, BPF_MODIFY_RETURN, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
 	SEC_DEF("fexit.s/",		TRACING, BPF_TRACE_FEXIT, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
+	SEC_DEF("fentry.multi/",	TRACING, BPF_TRACE_FENTRY, SEC_MULTI_FUNC, attach_trace_multi),
+	SEC_DEF("fexit.multi/",		TRACING, BPF_TRACE_FEXIT, SEC_MULTI_FUNC, attach_trace_multi),
 	SEC_DEF("freplace/",		EXT, 0, SEC_ATTACH_BTF, attach_trace),
 	SEC_DEF("lsm/",			LSM, BPF_LSM_MAC, SEC_ATTACH_BTF, attach_lsm),
 	SEC_DEF("lsm.s/",		LSM, BPF_LSM_MAC, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_lsm),
@@ -8815,6 +8823,9 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, const char *attac
 	enum bpf_attach_type attach_type = prog->expected_attach_type;
 	__u32 attach_prog_fd = prog->attach_prog_fd;
 	int err = 0;
+
+	if (prog->prog_flags & BPF_F_MULTI_FUNC)
+		return 0;
 
 	/* BPF program's BTF ID */
 	if (attach_prog_fd) {
@@ -10233,6 +10244,61 @@ static struct bpf_link *bpf_program__attach_btf_id(const struct bpf_program *pro
 	}
 	link->fd = pfd;
 	return (struct bpf_link *)link;
+}
+
+static struct bpf_link *bpf_program__attach_multi(const struct bpf_program *prog)
+{
+	char *pattern = prog->sec_name + strlen(prog->sec_def->sec);
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	enum bpf_attach_type attach_type;
+	int prog_fd, link_fd, cnt, err;
+	struct bpf_link *link = NULL;
+	__u32 *ids = NULL;
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return ERR_PTR(-EINVAL);
+	}
+
+	err = bpf_object__load_vmlinux_btf(prog->obj, true);
+	if (err)
+		return ERR_PTR(err);
+
+	cnt = btf__find_by_glob_kind(prog->obj->btf_vmlinux, BTF_KIND_FUNC,
+				     pattern, NULL, &ids);
+	if (cnt <= 0)
+		return ERR_PTR(-EINVAL);
+
+	link = calloc(1, sizeof(*link));
+	if (!link) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+	link->detach = &bpf_link__detach_fd;
+
+	opts.multi.btf_ids = ids;
+	opts.multi.btf_ids_cnt = cnt;
+
+	attach_type = bpf_program__get_expected_attach_type(prog);
+	link_fd = bpf_link_create(prog_fd, 0, attach_type, &opts);
+	if (link_fd < 0) {
+		err = -errno;
+		goto out_err;
+	}
+	link->fd = link_fd;
+	free(ids);
+	return link;
+
+out_err:
+	free(link);
+	free(ids);
+	return ERR_PTR(err);
+}
+
+static struct bpf_link *attach_trace_multi(const struct bpf_program *prog, long cookie)
+{
+	return bpf_program__attach_multi(prog);
 }
 
 struct bpf_link *bpf_program__attach_trace(const struct bpf_program *prog)
