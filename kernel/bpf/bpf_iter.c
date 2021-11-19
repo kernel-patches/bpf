@@ -5,6 +5,7 @@
 #include <linux/anon_inodes.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
+#include <linux/bpf-link.h>
 
 struct bpf_iter_target_info {
 	struct list_head list;

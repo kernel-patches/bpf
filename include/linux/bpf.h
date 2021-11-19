@@ -23,12 +23,12 @@
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/bpf-cgroup-types.h>
-#include <linux/bpf-link.h>
 #include <linux/bpfptr.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
+struct bpf_link;
 struct bpf_prog;
 struct bpf_prog_aux;
 struct bpf_map;

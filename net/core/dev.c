@@ -93,6 +93,7 @@
 #include <linux/skbuff.h>
 #include <linux/kthread.h>
 #include <linux/bpf.h>
+#include <linux/bpf-link.h>
 #include <linux/bpf_trace.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
