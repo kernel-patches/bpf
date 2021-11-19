@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/bpf-cgroup-types.h>
+#include <linux/bpf-link.h>
 #include <linux/bpfptr.h>
 
 struct bpf_verifier_env;
@@ -942,15 +943,6 @@ struct bpf_array_aux {
 	struct list_head poke_progs;
 	struct bpf_map *map;
 	struct mutex poke_mutex;
-	struct work_struct work;
-};
-
-struct bpf_link {
-	atomic64_t refcnt;
-	u32 id;
-	enum bpf_link_type type;
-	const struct bpf_link_ops *ops;
-	struct bpf_prog *prog;
 	struct work_struct work;
 };
 
