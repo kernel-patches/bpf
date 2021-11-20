@@ -903,6 +903,8 @@ BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
 	} else {
 		len = buf + sz - p;
 		memmove(buf, p, len);
+		/* Clear the noisy tail buffer before return */
+		memset(buf + len, 0, sz - len);
 	}
 
 	return len;
