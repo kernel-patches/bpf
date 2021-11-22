@@ -1519,10 +1519,13 @@ struct bpf_iter_aux_info {
 	 * to skip this check for non-map iterator cheaply.
 	 */
 	struct bpf_map *map;
-	struct {
-		struct io_ring_ctx *ctx;
-		ino_t inode;
-	} io_uring;
+	union {
+		struct {
+			struct io_ring_ctx *ctx;
+			ino_t inode;
+		} io_uring;
+		struct file *ep;
+	};
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
