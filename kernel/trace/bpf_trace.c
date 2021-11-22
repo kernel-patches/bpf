@@ -1091,6 +1091,23 @@ static const struct bpf_func_proto bpf_get_branch_snapshot_proto = {
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
+BPF_CALL_1(bpf_page_to_pfn, struct page *, page)
+{
+	/* PTR_TO_BTF_ID can be NULL */
+	if (!page)
+		return U64_MAX;
+	return page_to_pfn(page);
+}
+
+BTF_ID_LIST_SINGLE(btf_page_to_pfn_ids, struct, page)
+
+const struct bpf_func_proto bpf_page_to_pfn_proto = {
+	.func		= bpf_page_to_pfn,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_page_to_pfn_ids[0],
+};
+
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1212,6 +1229,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_find_vma_proto;
 	case BPF_FUNC_trace_vprintk:
 		return bpf_get_trace_vprintk_proto();
+	case BPF_FUNC_page_to_pfn:
+		return &bpf_page_to_pfn_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
