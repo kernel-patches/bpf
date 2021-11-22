@@ -1509,8 +1509,20 @@ int bpf_obj_get_user(const char __user *pathname, int flags);
 	extern int bpf_iter_ ## target(args);			\
 	int __init bpf_iter_ ## target(args) { return 0; }
 
+struct io_ring_ctx;
+
 struct bpf_iter_aux_info {
+	/* Map member must not alias any other members, due to the check in
+	 * bpf_trace.c:__get_seq_info, since in case of map the seq_ops for
+	 * iterator is different from others. The seq_ops is not from main
+	 * iter registration but from map_ops. Nullability of 'map' allows
+	 * to skip this check for non-map iterator cheaply.
+	 */
 	struct bpf_map *map;
+	struct {
+		struct io_ring_ctx *ctx;
+		ino_t inode;
+	} io_uring;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
