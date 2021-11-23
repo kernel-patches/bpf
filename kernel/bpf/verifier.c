@@ -3473,6 +3473,11 @@ static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 
 	switch (prog_type) {
+	case BPF_PROG_TYPE_SOCKET_FILTER:
+		if (meta || !capable(CAP_NET_ADMIN))
+			return false;
+		fallthrough;
+
 	/* Program types only with direct read access go here! */
 	case BPF_PROG_TYPE_LWT_IN:
 	case BPF_PROG_TYPE_LWT_OUT:
