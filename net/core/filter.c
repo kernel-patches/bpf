@@ -3218,9 +3218,8 @@ static int bpf_skb_net_hdr_pop(struct sk_buff *skb, u32 off, u32 len)
 	return ret;
 }
 
-static int bpf_skb_proto_4_to_6(struct sk_buff *skb)
+static int bpf_skb_proto_4_to_6(struct sk_buff *skb, u32 len_diff)
 {
-	const u32 len_diff = sizeof(struct ipv6hdr) - sizeof(struct iphdr);
 	u32 off = skb_mac_header_len(skb);
 	int ret;
 
@@ -3248,9 +3247,8 @@ static int bpf_skb_proto_4_to_6(struct sk_buff *skb)
 	return 0;
 }
 
-static int bpf_skb_proto_6_to_4(struct sk_buff *skb)
+static int bpf_skb_proto_6_to_4(struct sk_buff *skb, u32 len_diff)
 {
-	const u32 len_diff = sizeof(struct ipv6hdr) - sizeof(struct iphdr);
 	u32 off = skb_mac_header_len(skb);
 	int ret;
 
@@ -3278,17 +3276,17 @@ static int bpf_skb_proto_6_to_4(struct sk_buff *skb)
 	return 0;
 }
 
-static int bpf_skb_proto_xlat(struct sk_buff *skb, __be16 to_proto)
+static int bpf_skb_proto_xlat(struct sk_buff *skb, __be16 to_proto, u32 len_diff)
 {
 	__be16 from_proto = skb->protocol;
 
 	if (from_proto == htons(ETH_P_IP) &&
 	      to_proto == htons(ETH_P_IPV6))
-		return bpf_skb_proto_4_to_6(skb);
+		return bpf_skb_proto_4_to_6(skb, len_diff);
 
 	if (from_proto == htons(ETH_P_IPV6) &&
 	      to_proto == htons(ETH_P_IP))
-		return bpf_skb_proto_6_to_4(skb);
+		return bpf_skb_proto_6_to_4(skb, len_diff);
 
 	return -ENOTSUPP;
 }
@@ -3296,9 +3294,10 @@ static int bpf_skb_proto_xlat(struct sk_buff *skb, __be16 to_proto)
 BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	   u64, flags)
 {
+	u32 len_diff;
 	int ret;
 
-	if (unlikely(flags))
+	if (unlikely(flags & ~(BPF_F_IPV6_FRAGMENT)))
 		return -EINVAL;
 
 	/* General idea is that this helper does the basic groundwork
@@ -3318,7 +3317,9 @@ BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	 * that. For offloads, we mark packet as dodgy, so that headers
 	 * need to be verified first.
 	 */
-	ret = bpf_skb_proto_xlat(skb, proto);
+	len_diff = sizeof(struct ipv6hdr) - sizeof(struct iphdr)
+		   + ((flags & BPF_F_IPV6_FRAGMENT) ? sizeof(struct frag_hdr) : 0);
+	ret = bpf_skb_proto_xlat(skb, proto, len_diff);
 	bpf_compute_data_pointers(skb);
 	return ret;
 }

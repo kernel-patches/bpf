@@ -2190,8 +2190,10 @@ union bpf_attr {
  * 		checked and segments are recalculated by the GSO/GRO engine.
  * 		The size for GSO target is adapted as well.
  *
- * 		All values for *flags* are reserved for future usage, and must
- * 		be left at zero.
+ * 		*flags* may be set to **BPF_F_IPV6_FRAGMENT** to treat ipv6 as
+ * 		a 48 byte header instead of the normal 40 (this leaves 8 bytes
+ * 		of space for the IPv6 Fragmentation Header). All other bits in
+ * 		*flags* are reserved for future usage, and must be left at zero.
  *
  * 		A call to this helper is susceptible to change the underlying
  * 		packet buffer. Therefore, at load time, all checks on pointers
@@ -5209,6 +5211,24 @@ enum {
 /* BPF_FUNC_skb_set_tunnel_key and BPF_FUNC_skb_get_tunnel_key flags. */
 enum {
 	BPF_F_TUNINFO_IPV6		= (1ULL << 0),
+};
+
+/* BPF_FUNC_skb_change_proto flags. */
+enum {
+	/* Bits 0-15 are reserved for possible future expansion into
+	 * a potential signed 8 bit field, which allows for corrections
+	 * to account for ipv4 options and/or additional ipv6 expansion headers,
+	 * but for now we support *only* the 8 byte ipv6 frag header.
+	 *
+	 * This is most useful, because ipv4 without options supports fragments,
+	 * while ipv6 does not, so the 20 byte ipv4-frag <-> 48 byte ipv6
+	 * conversion is not a terribly rare case (UDP DNS queries for example).
+	 *
+	 * Only use bits <16 for other purposes if we run out of >15 bits first.
+	 *
+	 * 1ULL << 3 is equal to +8 and is the ipv6 frag header size.
+	 */
+	BPF_F_IPV6_FRAGMENT		= (1ULL << 3),
 };
 
 /* flags for both BPF_FUNC_get_stackid and BPF_FUNC_get_stack. */
