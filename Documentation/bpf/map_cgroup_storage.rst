@@ -5,6 +5,8 @@
 BPF_MAP_TYPE_CGROUP_STORAGE
 ===========================
 
+.. note:: Introduced in Kernel version 4.19
+
 The ``BPF_MAP_TYPE_CGROUP_STORAGE`` map type represents a local fix-sized
 storage. It is only available with ``CONFIG_CGROUP_BPF``, and to programs that
 attach to cgroups; the programs are made available by the same Kconfig. The
