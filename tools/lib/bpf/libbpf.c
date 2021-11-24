@@ -8374,6 +8374,7 @@ int bpf_program__set_flags(struct bpf_program *prog, __u32 flags)
 }
 
 static struct bpf_link *attach_kprobe(const struct bpf_program *prog, long cookie);
+static struct bpf_link *attach_kprobe_multi(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_raw_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_trace(const struct bpf_program *prog, long cookie);
@@ -8388,6 +8389,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("uprobe/",		KPROBE,	0, SEC_NONE),
 	SEC_DEF("kretprobe/",		KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe/",		KPROBE, 0, SEC_NONE),
+	SEC_DEF("kprobe.multi/",	KPROBE,	0, SEC_NONE, attach_kprobe_multi),
+	SEC_DEF("kretprobe.multi/",	KPROBE, 0, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("tc",			SCHED_CLS, 0, SEC_NONE),
 	SEC_DEF("classifier",		SCHED_CLS, 0, SEC_NONE | SEC_SLOPPY_PFX),
 	SEC_DEF("action",		SCHED_ACT, 0, SEC_NONE | SEC_SLOPPY_PFX),
@@ -9941,6 +9944,108 @@ static struct bpf_link *attach_kprobe(const struct bpf_program *prog, long cooki
 	opts.offset = offset;
 	link = bpf_program__attach_kprobe_opts(prog, func, &opts);
 	free(func);
+	return link;
+}
+
+struct kprobe_resolve_multi {
+	const char *name;
+	char **funcs;
+	__u32 alloc;
+	__u32 cnt;
+};
+
+static bool glob_matches(const char *glob, const char *s)
+{
+	int n = strlen(glob);
+
+	if (n == 1 && glob[0] == '*')
+		return true;
+
+	if (glob[0] == '*' && glob[n - 1] == '*') {
+		const char *subs;
+		/* substring match */
+
+		/* this is hacky, but we don't want to allocate
+		 * for no good reason
+		 */
+		((char *)glob)[n - 1] = '\0';
+		subs = strstr(s, glob + 1);
+		((char *)glob)[n - 1] = '*';
+
+		return subs != NULL;
+	} else if (glob[0] == '*') {
+		size_t nn = strlen(s);
+		/* suffix match */
+
+		/* too short for a given suffix */
+		if (nn < n - 1)
+			return false;
+		return strcmp(s + nn - (n - 1), glob + 1) == 0;
+	} else if (glob[n - 1] == '*') {
+		/* prefix match */
+		return strncmp(s, glob, n - 1) == 0;
+	} else {
+		/* exact match */
+		return strcmp(glob, s) == 0;
+	}
+}
+
+static int kprobe_resolve_multi_cb(void *arg, unsigned long long sym_addr,
+				   char sym_type, const char *sym_name)
+{
+	struct kprobe_resolve_multi *res = arg;
+	char **p, *sym;
+
+	if (!glob_matches(res->name, sym_name))
+		return 0;
+
+	if (res->cnt == res->alloc) {
+		res->alloc = max((__u32) 16, res->alloc * 3 / 2);
+		p = libbpf_reallocarray(res->funcs, res->alloc, sizeof(__u32));
+		if (!p)
+			return -ENOMEM;
+		res->funcs = p;
+	}
+	sym = strdup(sym_name);
+	if (!sym)
+		return -ENOMEM;
+	res->funcs[res->cnt++] = sym;
+	return 0;
+}
+
+static void free_str_array(char **func, __u32 cnt)
+{
+	__u32 i;
+
+	for (i = 0; i < cnt; i++)
+		free(func[i]);
+	free(func);
+}
+
+static struct bpf_link *attach_kprobe_multi(const struct bpf_program *prog, long cookie)
+{
+	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, opts);
+	struct kprobe_resolve_multi res = { };
+	struct bpf_link *link;
+	int err;
+
+	opts.retprobe = str_has_pfx(prog->sec_name, "kretprobe.multi/");
+	if (opts.retprobe)
+		res.name = prog->sec_name + sizeof("kretprobe.multi/") - 1;
+	else
+		res.name = prog->sec_name + sizeof("kprobe.multi/") - 1;
+
+	err = libbpf__kallsyms_parse(&res, kprobe_resolve_multi_cb);
+	if (err) {
+		free_str_array(res.funcs, res.cnt);
+		return libbpf_err_ptr(err);
+	}
+	if (!res.cnt)
+		return libbpf_err_ptr(-ENOENT);
+	opts.multi.cnt = res.cnt;
+	opts.multi.funcs = res.funcs;
+	link = bpf_program__attach_kprobe_opts(prog, NULL, &opts);
+	free_str_array(res.funcs, res.cnt);
 	return link;
 }
 
