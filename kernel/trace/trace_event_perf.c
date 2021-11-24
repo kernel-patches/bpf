@@ -379,33 +379,113 @@ void perf_kprobe_destroy(struct perf_event *p_event)
 #endif /* CONFIG_KPROBE_EVENTS */
 
 #ifdef CONFIG_UPROBE_EVENTS
-int perf_uprobe_init(struct perf_event *p_event,
-		     unsigned long ref_ctr_offset, bool is_retprobe)
+static struct trace_event_call*
+uprobe_init(u64 uprobe_path, u64 probe_offset, unsigned long ref_ctr_offset,
+	    bool is_retprobe, struct trace_event_call *old)
 {
 	int ret;
 	char *path = NULL;
 	struct trace_event_call *tp_event;
 
-	if (!p_event->attr.uprobe_path)
-		return -EINVAL;
+	if (!uprobe_path)
+		return ERR_PTR(-EINVAL);
 
-	path = strndup_user(u64_to_user_ptr(p_event->attr.uprobe_path),
+	path = strndup_user(u64_to_user_ptr(uprobe_path),
 			    PATH_MAX);
 	if (IS_ERR(path)) {
 		ret = PTR_ERR(path);
-		return (ret == -EINVAL) ? -E2BIG : ret;
+		return ERR_PTR((ret == -EINVAL) ? -E2BIG : ret);
 	}
 	if (path[0] == '\0') {
-		ret = -EINVAL;
-		goto out;
+		kfree(path);
+		return ERR_PTR(-EINVAL);
 	}
 
-	tp_event = create_local_trace_uprobe(path, p_event->attr.probe_offset,
-					     ref_ctr_offset, is_retprobe);
-	if (IS_ERR(tp_event)) {
-		ret = PTR_ERR(tp_event);
-		goto out;
+	tp_event = create_local_trace_uprobe(path, probe_offset,
+				ref_ctr_offset, is_retprobe, old);
+	kfree(path);
+	return tp_event;
+}
+
+static struct trace_event_call*
+uprobe_init_multi(struct perf_event *p_event, unsigned long ref_ctr_offset,
+		  bool is_retprobe)
+{
+	void __user *probe_offset = u64_to_user_ptr(p_event->attr.probe_offset);
+	void __user *uprobe_path = u64_to_user_ptr(p_event->attr.uprobe_path);
+	struct trace_event_call *tp_event, *tp_old = NULL;
+	u32 i, cnt = p_event->attr.probe_cnt;
+	u64 *paths = NULL, *offs = NULL;
+	int ret = -EINVAL;
+	size_t size;
+
+	if (!cnt)
+		return ERR_PTR(-EINVAL);
+
+	size = cnt * sizeof(u64);
+	if (uprobe_path) {
+		ret = -ENOMEM;
+		paths = kmalloc(size, GFP_KERNEL);
+		if (!paths)
+			goto out;
+		ret = -EFAULT;
+		if (copy_from_user(paths, uprobe_path, size))
+			goto out;
 	}
+
+	if (probe_offset) {
+		ret = -ENOMEM;
+		offs = kmalloc(size, GFP_KERNEL);
+		if (!offs)
+			goto out;
+		ret = -EFAULT;
+		if (copy_from_user(offs, probe_offset, size))
+			goto out;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		tp_event = uprobe_init(paths ? paths[i] : 0, offs ? offs[i] : 0,
+				       ref_ctr_offset, is_retprobe, tp_old);
+		if (IS_ERR(tp_event)) {
+			if (tp_old)
+				destroy_local_trace_uprobe(tp_old);
+			ret = PTR_ERR(tp_event);
+			goto out;
+		}
+		if (!tp_old)
+			tp_old = tp_event;
+	}
+	ret = 0;
+
+out:
+	kfree(paths);
+	kfree(offs);
+	return ret ? ERR_PTR(ret) : tp_old;
+}
+
+static struct trace_event_call*
+uprobe_init_single(struct perf_event *p_event, unsigned long ref_ctr_offset,
+		   bool is_retprobe)
+{
+	struct perf_event_attr *attr = &p_event->attr;
+
+	return uprobe_init(attr->uprobe_path, attr->probe_offset,
+			   ref_ctr_offset, is_retprobe, NULL);
+}
+
+int perf_uprobe_init(struct perf_event *p_event,
+		     unsigned long ref_ctr_offset, bool is_retprobe)
+{
+	struct trace_event_call *tp_event;
+	int ret;
+
+	if (p_event->attr.probe_cnt)
+		tp_event = uprobe_init_multi(p_event, ref_ctr_offset, is_retprobe);
+	else
+		tp_event = uprobe_init_single(p_event, ref_ctr_offset, is_retprobe);
+
+	if (IS_ERR(tp_event))
+		return PTR_ERR(tp_event);
 
 	/*
 	 * local trace_uprobe need to hold event_mutex to call
@@ -417,8 +497,6 @@ int perf_uprobe_init(struct perf_event *p_event,
 	if (ret)
 		destroy_local_trace_uprobe(tp_event);
 	mutex_unlock(&event_mutex);
-out:
-	kfree(path);
 	return ret;
 }
 
