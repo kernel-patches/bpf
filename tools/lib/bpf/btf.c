@@ -3127,6 +3127,7 @@ struct btf_dedup {
 	struct strset *strs_set;
 };
 
+__attribute__((no_sanitize("signed-integer-overflow")))
 static long hash_combine(long h, long value)
 {
 	return h * 31 + value;
