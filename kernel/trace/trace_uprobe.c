@@ -358,15 +358,20 @@ error:
 	return ERR_PTR(ret);
 }
 
+static void __free_trace_uprobe(struct trace_uprobe *tu)
+{
+	path_put(&tu->path);
+	kfree(tu->filename);
+	kfree(tu);
+}
+
 static void free_trace_uprobe(struct trace_uprobe *tu)
 {
 	if (!tu)
 		return;
 
-	path_put(&tu->path);
 	trace_probe_cleanup(&tu->tp);
-	kfree(tu->filename);
-	kfree(tu);
+	__free_trace_uprobe(tu);
 }
 
 static struct trace_uprobe *find_probe_event(const char *event, const char *group)
@@ -1583,7 +1588,8 @@ static int unregister_uprobe_event(struct trace_uprobe *tu)
 #ifdef CONFIG_PERF_EVENTS
 struct trace_event_call *
 create_local_trace_uprobe(char *name, unsigned long offs,
-			  unsigned long ref_ctr_offset, bool is_return)
+			  unsigned long ref_ctr_offset, bool is_return,
+			  struct trace_event_call *old)
 {
 	enum probe_print_type ptype;
 	struct trace_uprobe *tu;
@@ -1618,6 +1624,24 @@ create_local_trace_uprobe(char *name, unsigned long offs,
 	tu->path = path;
 	tu->ref_ctr_offset = ref_ctr_offset;
 	tu->filename = kstrdup(name, GFP_KERNEL);
+
+	if (old) {
+		struct trace_uprobe *tu_old;
+
+		tu_old = trace_uprobe_primary_from_call(old);
+		if (!tu_old) {
+			ret = -EINVAL;
+			goto error;
+		}
+
+		/* Append to existing event */
+		ret = trace_probe_append(&tu->tp, &tu_old->tp);
+		if (ret)
+			goto error;
+
+		return trace_probe_event_call(&tu->tp);
+	}
+
 	init_trace_event_call(tu);
 
 	ptype = is_ret_probe(tu) ? PROBE_PRINT_RETURN : PROBE_PRINT_NORMAL;
@@ -1634,11 +1658,20 @@ error:
 
 void destroy_local_trace_uprobe(struct trace_event_call *event_call)
 {
+	struct trace_probe_event *event;
+	struct trace_probe *pos, *tmp;
 	struct trace_uprobe *tu;
 
 	tu = trace_uprobe_primary_from_call(event_call);
 
-	free_trace_uprobe(tu);
+	event = tu->tp.event;
+	list_for_each_entry_safe(pos, tmp, &event->probes, list) {
+		tu = container_of(pos, struct trace_uprobe, tp);
+		list_del_init(&pos->list);
+		__free_trace_uprobe(tu);
+	}
+
+	trace_probe_event_free(event);
 }
 #endif /* CONFIG_PERF_EVENTS */
 
