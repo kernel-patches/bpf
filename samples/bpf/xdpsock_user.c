@@ -1413,6 +1413,7 @@ static inline int get_batch_size(int pkt_cnt)
 
 static void complete_tx_only_all(void)
 {
+	u32 retries = 3;
 	bool pending;
 	int i;
 
@@ -1424,7 +1425,8 @@ static void complete_tx_only_all(void)
 				pending = !!xsks[i]->outstanding_tx;
 			}
 		}
-	} while (pending);
+		sleep(opt_interval);
+	} while (pending && retries-- > 0);
 }
 
 static void tx_only_all(void)
