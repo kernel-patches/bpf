@@ -9580,6 +9580,11 @@ struct perf_event_open_args {
 	uint64_t offset;
 	int pid;
 	size_t ref_ctr_off;
+	struct {
+		__u32 probe_cnt;
+		__u64 config1;
+		__u64 config2;
+	} multi;
 };
 
 static int perf_event_open_probe(bool uprobe, struct perf_event_open_args *args)
@@ -9616,8 +9621,15 @@ static int perf_event_open_probe(bool uprobe, struct perf_event_open_args *args)
 	attr.size = sizeof(attr);
 	attr.type = type;
 	attr.config |= (__u64)ref_ctr_off << PERF_UPROBE_REF_CTR_OFFSET_SHIFT;
-	attr.config1 = ptr_to_u64(args->name); /* kprobe_func or uprobe_path */
-	attr.config2 = args->offset;		 /* kprobe_addr or probe_offset */
+
+	if (args->multi.probe_cnt) {
+		attr.probe_cnt = args->multi.probe_cnt;
+		attr.config1 = args->multi.config1;
+		attr.config2 = args->multi.config2;
+	} else {
+		attr.config1 = ptr_to_u64(args->name); /* kprobe_func or uprobe_path */
+		attr.config2 = args->offset;	       /* kprobe_addr or probe_offset */
+	}
 
 	/* pid filter is meaningful only for uprobes */
 	pfd = syscall(__NR_perf_event_open, &attr,
@@ -9756,7 +9768,14 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 			.pid = -1,
 			.ref_ctr_off = 0,
 		};
+		__u32 probe_cnt = OPTS_GET(opts, multi.cnt, false);
 
+		if (probe_cnt) {
+			args.multi.probe_cnt = probe_cnt;
+			args.multi.config1 = ptr_to_u64(OPTS_GET(opts, multi.funcs, false));
+			/* multi.addrs and multi.offs share the same array */
+			args.multi.config2 = ptr_to_u64(OPTS_GET(opts, multi.addrs, false));
+		}
 		pfd = perf_event_open_probe(false /* uprobe */, &args);
 	} else {
 		char probe_name[256];
@@ -9955,6 +9974,13 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 			.pid = pid,
 			.ref_ctr_off = ref_ctr_off,
 		};
+		__u32 probe_cnt = OPTS_GET(opts, multi.cnt, false);
+
+		if (probe_cnt) {
+			args.multi.probe_cnt = probe_cnt;
+			args.multi.config1 = ptr_to_u64(OPTS_GET(opts, multi.paths, false));
+			args.multi.config2 = ptr_to_u64(OPTS_GET(opts, multi.offs, false));
+		}
 
 		pfd = perf_event_open_probe(true /* uprobe */, &args);
 	} else {

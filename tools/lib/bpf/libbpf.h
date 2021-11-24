@@ -317,9 +317,21 @@ struct bpf_kprobe_opts {
 	size_t offset;
 	/* kprobe is return probe */
 	bool retprobe;
+	/* multi kprobe values */
+	struct {
+		/* probes count */
+		__u32 cnt;
+		/* function names array */
+		char **funcs;
+		/* address/offset values array */
+		union {
+			__u64 *addrs;
+			__u64 *offs;
+		};
+	} multi;
 	size_t :0;
 };
-#define bpf_kprobe_opts__last_field retprobe
+#define bpf_kprobe_opts__last_field multi.addrs
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_kprobe(const struct bpf_program *prog, bool retprobe,
@@ -340,9 +352,18 @@ struct bpf_uprobe_opts {
 	__u64 bpf_cookie;
 	/* uprobe is return probe, invoked at function return time */
 	bool retprobe;
+	/* multi uprobe values */
+	struct {
+		/* probes count */
+		__u32 cnt;
+		/* paths names array */
+		const char **paths;
+		/* offsets values array */
+		__u64 *offs;
+	} multi;
 	size_t :0;
 };
-#define bpf_uprobe_opts__last_field retprobe
+#define bpf_uprobe_opts__last_field multi.offs
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_uprobe(const struct bpf_program *prog, bool retprobe,
