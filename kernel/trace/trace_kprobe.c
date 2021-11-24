@@ -237,13 +237,18 @@ static int kprobe_dispatcher(struct kprobe *kp, struct pt_regs *regs);
 static int kretprobe_dispatcher(struct kretprobe_instance *ri,
 				struct pt_regs *regs);
 
+static void __free_trace_kprobe(struct trace_kprobe *tk)
+{
+	kfree(tk->symbol);
+	free_percpu(tk->nhit);
+	kfree(tk);
+}
+
 static void free_trace_kprobe(struct trace_kprobe *tk)
 {
 	if (tk) {
 		trace_probe_cleanup(&tk->tp);
-		kfree(tk->symbol);
-		free_percpu(tk->nhit);
-		kfree(tk);
+		__free_trace_kprobe(tk);
 	}
 }
 
@@ -1796,7 +1801,7 @@ static int unregister_kprobe_event(struct trace_kprobe *tk)
 /* create a trace_kprobe, but don't add it to global lists */
 struct trace_event_call *
 create_local_trace_kprobe(char *func, void *addr, unsigned long offs,
-			  bool is_return)
+			  bool is_return, struct trace_event_call *old)
 {
 	enum probe_print_type ptype;
 	struct trace_kprobe *tk;
@@ -1820,6 +1825,28 @@ create_local_trace_kprobe(char *func, void *addr, unsigned long offs,
 		return ERR_CAST(tk);
 	}
 
+	if (old) {
+		struct trace_kprobe *tk_old;
+
+		tk_old = trace_kprobe_primary_from_call(old);
+		if (!tk_old) {
+			ret = -EINVAL;
+			goto error;
+		}
+
+		/* Append to existing event */
+		ret = trace_probe_append(&tk->tp, &tk_old->tp);
+		if (ret)
+			goto error;
+
+		/* Register k*probe */
+		ret = __register_trace_kprobe(tk);
+		if (ret)
+			goto error;
+
+		return trace_probe_event_call(&tk->tp);
+	}
+
 	init_trace_event_call(tk);
 
 	ptype = trace_kprobe_is_return(tk) ?
@@ -1841,6 +1868,8 @@ error:
 
 void destroy_local_trace_kprobe(struct trace_event_call *event_call)
 {
+	struct trace_probe_event *event;
+	struct trace_probe *pos, *tmp;
 	struct trace_kprobe *tk;
 
 	tk = trace_kprobe_primary_from_call(event_call);
@@ -1852,9 +1881,15 @@ void destroy_local_trace_kprobe(struct trace_event_call *event_call)
 		return;
 	}
 
-	__unregister_trace_kprobe(tk);
+	event = tk->tp.event;
+	list_for_each_entry_safe(pos, tmp, &event->probes, list) {
+		tk = container_of(pos, struct trace_kprobe, tp);
+		list_del_init(&pos->list);
+		__unregister_trace_kprobe(tk);
+		__free_trace_kprobe(tk);
+	}
 
-	free_trace_kprobe(tk);
+	trace_probe_event_free(event);
 }
 #endif /* CONFIG_PERF_EVENTS */
 

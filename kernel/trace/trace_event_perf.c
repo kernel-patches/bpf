@@ -245,23 +245,27 @@ void perf_trace_destroy(struct perf_event *p_event)
 }
 
 #ifdef CONFIG_KPROBE_EVENTS
-int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
+static struct trace_event_call*
+kprobe_init(bool is_retprobe, u64 kprobe_func, u64 kprobe_addr,
+	    u64 probe_offset, struct trace_event_call *old)
 {
 	int ret;
 	char *func = NULL;
 	struct trace_event_call *tp_event;
 
-	if (p_event->attr.kprobe_func) {
+	if (kprobe_func) {
 		func = kzalloc(KSYM_NAME_LEN, GFP_KERNEL);
 		if (!func)
-			return -ENOMEM;
+			return ERR_PTR(-ENOMEM);
 		ret = strncpy_from_user(
-			func, u64_to_user_ptr(p_event->attr.kprobe_func),
+			func, u64_to_user_ptr(kprobe_func),
 			KSYM_NAME_LEN);
 		if (ret == KSYM_NAME_LEN)
 			ret = -E2BIG;
-		if (ret < 0)
-			goto out;
+		if (ret < 0) {
+			kfree(func);
+			return ERR_PTR(ret);
+		}
 
 		if (func[0] == '\0') {
 			kfree(func);
@@ -270,20 +274,96 @@ int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
 	}
 
 	tp_event = create_local_trace_kprobe(
-		func, (void *)(unsigned long)(p_event->attr.kprobe_addr),
-		p_event->attr.probe_offset, is_retprobe);
-	if (IS_ERR(tp_event)) {
-		ret = PTR_ERR(tp_event);
-		goto out;
+		func, (void *)(unsigned long)(kprobe_addr),
+		probe_offset, is_retprobe, old);
+	kfree(func);
+	return tp_event;
+}
+
+static struct trace_event_call*
+kprobe_init_multi(struct perf_event *p_event, bool is_retprobe)
+{
+	void __user *kprobe_func = u64_to_user_ptr(p_event->attr.kprobe_func);
+	void __user *kprobe_addr = u64_to_user_ptr(p_event->attr.kprobe_addr);
+	u64 *funcs = NULL, *addrs = NULL, *offs = NULL;
+	struct trace_event_call *tp_event, *tp_old = NULL;
+	u32 i, cnt = p_event->attr.probe_cnt;
+	int ret = -EINVAL;
+	size_t size;
+
+	if (!cnt)
+		return ERR_PTR(-EINVAL);
+
+	size = cnt * sizeof(u64);
+	if (kprobe_func) {
+		ret = -ENOMEM;
+		funcs = kmalloc(size, GFP_KERNEL);
+		if (!funcs)
+			goto out;
+		ret = -EFAULT;
+		if (copy_from_user(funcs, kprobe_func, size))
+			goto out;
 	}
+
+	if (kprobe_addr) {
+		ret = -ENOMEM;
+		addrs = kmalloc(size, GFP_KERNEL);
+		if (!addrs)
+			goto out;
+		ret = -EFAULT;
+		if (copy_from_user(addrs, kprobe_addr, size))
+			goto out;
+		/* addresses and ofsets share the same array */
+		offs = addrs;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		tp_event = kprobe_init(is_retprobe, funcs ? funcs[i] : 0,
+				       addrs ? addrs[i] : 0, offs ? offs[i] : 0,
+				       tp_old);
+		if (IS_ERR(tp_event)) {
+			if (tp_old)
+				destroy_local_trace_kprobe(tp_old);
+			ret = PTR_ERR(tp_event);
+			goto out;
+		}
+		if (!tp_old)
+			tp_old = tp_event;
+	}
+	ret = 0;
+out:
+	kfree(funcs);
+	kfree(addrs);
+	return ret ? ERR_PTR(ret) : tp_old;
+}
+
+static struct trace_event_call*
+kprobe_init_single(struct perf_event *p_event, bool is_retprobe)
+{
+	struct perf_event_attr *attr = &p_event->attr;
+
+	return kprobe_init(is_retprobe, attr->kprobe_func, attr->kprobe_addr,
+			   attr->probe_offset, NULL);
+}
+
+int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
+{
+	struct trace_event_call *tp_event;
+	int ret;
+
+	if (p_event->attr.probe_cnt)
+		tp_event = kprobe_init_multi(p_event, is_retprobe);
+	else
+		tp_event = kprobe_init_single(p_event, is_retprobe);
+
+	if (IS_ERR(tp_event))
+		return PTR_ERR(tp_event);
 
 	mutex_lock(&event_mutex);
 	ret = perf_trace_event_init(tp_event, p_event);
 	if (ret)
 		destroy_local_trace_kprobe(tp_event);
 	mutex_unlock(&event_mutex);
-out:
-	kfree(func);
 	return ret;
 }
 
