@@ -974,7 +974,7 @@ int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	return 0;
 }
 
-static void trace_probe_event_free(struct trace_probe_event *tpe)
+void trace_probe_event_free(struct trace_probe_event *tpe)
 {
 	kfree(tpe->class.system);
 	kfree(tpe->call.name);

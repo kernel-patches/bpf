@@ -333,6 +333,7 @@ int trace_probe_init(struct trace_probe *tp, const char *event,
 		     const char *group, bool alloc_filter);
 void trace_probe_cleanup(struct trace_probe *tp);
 int trace_probe_append(struct trace_probe *tp, struct trace_probe *to);
+void trace_probe_event_free(struct trace_probe_event *tpe);
 void trace_probe_unlink(struct trace_probe *tp);
 int trace_probe_register_event_call(struct trace_probe *tp);
 int trace_probe_add_file(struct trace_probe *tp, struct trace_event_file *file);
@@ -377,7 +378,7 @@ extern int traceprobe_set_print_fmt(struct trace_probe *tp, enum probe_print_typ
 #ifdef CONFIG_PERF_EVENTS
 extern struct trace_event_call *
 create_local_trace_kprobe(char *func, void *addr, unsigned long offs,
-			  bool is_return);
+			  bool is_return, struct trace_event_call *old);
 extern void destroy_local_trace_kprobe(struct trace_event_call *event_call);
 
 extern struct trace_event_call *
