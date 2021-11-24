@@ -414,6 +414,7 @@ struct perf_event_attr {
 	union {
 		__u32		wakeup_events;	  /* wakeup every n events */
 		__u32		wakeup_watermark; /* bytes before wakeup   */
+		__u32		probe_cnt;	  /* number of [k,u] probes */
 	};
 
 	__u32			bp_type;
