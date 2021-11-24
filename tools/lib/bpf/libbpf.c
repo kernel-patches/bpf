@@ -9651,11 +9651,20 @@ static int determine_uprobe_retprobe_bit(void)
 #define PERF_UPROBE_REF_CTR_OFFSET_BITS 32
 #define PERF_UPROBE_REF_CTR_OFFSET_SHIFT 32
 
-static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
-				 uint64_t offset, int pid, size_t ref_ctr_off)
+struct perf_event_open_args {
+	bool retprobe;
+	const char *name;
+	uint64_t offset;
+	int pid;
+	size_t ref_ctr_off;
+};
+
+static int perf_event_open_probe(bool uprobe, struct perf_event_open_args *args)
 {
+	size_t ref_ctr_off = args->ref_ctr_off;
 	struct perf_event_attr attr = {};
 	char errmsg[STRERR_BUFSIZE];
+	int pid = args->pid;
 	int type, pfd, err;
 
 	if (ref_ctr_off >= (1ULL << PERF_UPROBE_REF_CTR_OFFSET_BITS))
@@ -9669,7 +9678,7 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 			libbpf_strerror_r(type, errmsg, sizeof(errmsg)));
 		return type;
 	}
-	if (retprobe) {
+	if (args->retprobe) {
 		int bit = uprobe ? determine_uprobe_retprobe_bit()
 				 : determine_kprobe_retprobe_bit();
 
@@ -9684,8 +9693,8 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 	attr.size = sizeof(attr);
 	attr.type = type;
 	attr.config |= (__u64)ref_ctr_off << PERF_UPROBE_REF_CTR_OFFSET_SHIFT;
-	attr.config1 = ptr_to_u64(name); /* kprobe_func or uprobe_path */
-	attr.config2 = offset;		 /* kprobe_addr or probe_offset */
+	attr.config1 = ptr_to_u64(args->name); /* kprobe_func or uprobe_path */
+	attr.config2 = args->offset;		 /* kprobe_addr or probe_offset */
 
 	/* pid filter is meaningful only for uprobes */
 	pfd = syscall(__NR_perf_event_open, &attr,
@@ -9817,9 +9826,15 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 
 	legacy = determine_kprobe_perf_type() < 0;
 	if (!legacy) {
-		pfd = perf_event_open_probe(false /* uprobe */, retprobe,
-					    func_name, offset,
-					    -1 /* pid */, 0 /* ref_ctr_off */);
+		struct perf_event_open_args args = {
+			.retprobe = retprobe,
+			.name = func_name,
+			.offset = offset,
+			.pid = -1,
+			.ref_ctr_off = 0,
+		};
+
+		pfd = perf_event_open_probe(false /* uprobe */, &args);
 	} else {
 		char probe_name[256];
 
@@ -10010,8 +10025,15 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 
 	legacy = determine_uprobe_perf_type() < 0;
 	if (!legacy) {
-		pfd = perf_event_open_probe(true /* uprobe */, retprobe, binary_path,
-					    func_offset, pid, ref_ctr_off);
+		struct perf_event_open_args args = {
+			.retprobe = retprobe,
+			.name = binary_path,
+			.offset = func_offset,
+			.pid = pid,
+			.ref_ctr_off = ref_ctr_off,
+		};
+
+		pfd = perf_event_open_probe(true /* uprobe */, &args);
 	} else {
 		char probe_name[512];
 
