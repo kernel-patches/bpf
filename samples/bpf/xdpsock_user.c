@@ -114,6 +114,7 @@ static u32 opt_num_xsks = 1;
 static u32 prog_id;
 static bool opt_busy_poll;
 static bool opt_reduced_cap;
+static unsigned long opt_cycle_time;
 
 struct vlan_ethhdr {
 	unsigned char h_dest[6];
@@ -176,6 +177,8 @@ struct xsk_socket_info {
 	struct xsk_app_stats app_stats;
 	struct xsk_driver_stats drv_stats;
 	u32 outstanding_tx;
+	unsigned long prev_tx_time;
+	unsigned long tx_cycle_time;
 };
 
 static int num_socks;
@@ -975,6 +978,7 @@ static struct option long_options[] = {
 	{"tx-vlan-pri", required_argument, 0, 'K'},
 	{"tx-dmac", required_argument, 0, 'G'},
 	{"tx-smac", required_argument, 0, 'H'},
+	{"tx-cycle", required_argument, 0, 'T'},
 	{"extra-stats", no_argument, 0, 'x'},
 	{"quiet", no_argument, 0, 'Q'},
 	{"app-stats", no_argument, 0, 'a'},
@@ -1020,6 +1024,7 @@ static void usage(const char *prog)
 		"  -K, --tx-vlan-pri=n  Tx VLAN Priority [0-7]. Default: %d (For -V|--tx-vlan)\n"
 		"  -G, --tx-dmac=<MAC>  Dest MAC addr of TX frame in aa:bb:cc:dd:ee:ff format (For -V|--tx-vlan)\n"
 		"  -H, --tx-smac=<MAC>  Src MAC addr of TX frame in aa:bb:cc:dd:ee:ff format (For -V|--tx-vlan)\n"
+		"  -T, --tx-cycle=n     Tx cycle time in micro-seconds (For -t|--txonly).\n"
 		"  -x, --extra-stats	Display extra statistics.\n"
 		"  -Q, --quiet          Do not display any stats.\n"
 		"  -a, --app-stats	Display application (syscall) statistics.\n"
@@ -1042,7 +1047,7 @@ static void parse_command_line(int argc, char **argv)
 	opterr = 0;
 
 	for (;;) {
-		c = getopt_long(argc, argv, "Frtli:q:pSNn:czf:muMd:b:C:s:P:VJ:K:G:H:xQaI:BR",
+		c = getopt_long(argc, argv, "Frtli:q:pSNn:czf:muMd:b:C:s:P:VJ:K:G:H:T:xQaI:BR",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -1147,6 +1152,10 @@ static void parse_command_line(int argc, char **argv)
 					optarg);
 				usage(basename(argv[0]));
 			}
+			break;
+		case 'T':
+			opt_cycle_time = atoi(optarg);
+			opt_cycle_time *= 1000;
 			break;
 		case 'x':
 			opt_extra_stats = 1;
@@ -1353,16 +1362,25 @@ static void rx_drop_all(void)
 	}
 }
 
-static void tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
+static int tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
 {
 	u32 idx;
 	unsigned int i;
+
+	if (xsk->tx_cycle_time) {
+		unsigned long now = get_nsecs();
+
+		if ((now - xsk->prev_tx_time) < xsk->tx_cycle_time)
+			return 0;
+
+		xsk->prev_tx_time = now;
+	}
 
 	while (xsk_ring_prod__reserve(&xsk->tx, batch_size, &idx) <
 				      batch_size) {
 		complete_tx_only(xsk, batch_size);
 		if (benchmark_done)
-			return;
+			return 0;
 	}
 
 	for (i = 0; i < batch_size; i++) {
@@ -1378,6 +1396,8 @@ static void tx_only(struct xsk_socket_info *xsk, u32 *frame_nb, int batch_size)
 	*frame_nb += batch_size;
 	*frame_nb %= NUM_FRAMES;
 	complete_tx_only(xsk, batch_size);
+
+	return batch_size;
 }
 
 static inline int get_batch_size(int pkt_cnt)
@@ -1410,6 +1430,7 @@ static void complete_tx_only_all(void)
 static void tx_only_all(void)
 {
 	struct pollfd fds[MAX_SOCKS] = {};
+	unsigned long now = get_nsecs();
 	u32 frame_nb[MAX_SOCKS] = {};
 	int pkt_cnt = 0;
 	int i, ret;
@@ -1417,10 +1438,15 @@ static void tx_only_all(void)
 	for (i = 0; i < num_socks; i++) {
 		fds[0].fd = xsk_socket__fd(xsks[i]->xsk);
 		fds[0].events = POLLOUT;
+		if (opt_cycle_time) {
+			xsks[i]->prev_tx_time = now;
+			xsks[i]->tx_cycle_time = opt_cycle_time;
+		}
 	}
 
 	while ((opt_pkt_count && pkt_cnt < opt_pkt_count) || !opt_pkt_count) {
 		int batch_size = get_batch_size(pkt_cnt);
+		int tx_cnt = 0;
 
 		if (opt_poll) {
 			for (i = 0; i < num_socks; i++)
@@ -1434,9 +1460,9 @@ static void tx_only_all(void)
 		}
 
 		for (i = 0; i < num_socks; i++)
-			tx_only(xsks[i], &frame_nb[i], batch_size);
+			tx_cnt += tx_only(xsks[i], &frame_nb[i], batch_size);
 
-		pkt_cnt += batch_size;
+		pkt_cnt += tx_cnt;
 
 		if (benchmark_done)
 			break;
