@@ -1094,6 +1094,10 @@ static int map_lookup_elem(union bpf_attr *attr)
 	}
 
 	value_size = bpf_map_value_size(map);
+	if (value_size > INT_MAX) {
+		err = -EINVAL;
+		goto err_put;
+	}
 
 	err = -ENOMEM;
 	value = kvmalloc(value_size, GFP_USER | __GFP_NOWARN);
