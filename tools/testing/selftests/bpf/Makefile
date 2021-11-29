@@ -192,22 +192,22 @@ TEST_GEN_PROGS_EXTENDED += $(DEFAULT_BPFTOOL)
 
 $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED): $(BPFOBJ)
 
-$(OUTPUT)/test_dev_cgroup: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_skb_cgroup_id_user: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_sock: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_sock_addr: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_sockmap: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_tcpnotify_user: cgroup_helpers.c trace_helpers.c testing_helpers.o
-$(OUTPUT)/get_cgroup_id_user: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_cgroup_storage: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_sock_fields: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_sysctl: cgroup_helpers.c testing_helpers.o
-$(OUTPUT)/test_tag: testing_helpers.o
-$(OUTPUT)/test_lirc_mode2_user: testing_helpers.o
-$(OUTPUT)/xdping: testing_helpers.o
-$(OUTPUT)/flow_dissector_load: testing_helpers.o
-$(OUTPUT)/test_maps: testing_helpers.o
-$(OUTPUT)/test_verifier: testing_helpers.o
+$(OUTPUT)/test_dev_cgroup: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_skb_cgroup_id_user: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_sock: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_sock_addr: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_sockmap: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_tcpnotify_user: cgroup_helpers.c trace_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/get_cgroup_id_user: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_cgroup_storage: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_sock_fields: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_sysctl: cgroup_helpers.c $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_tag: $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_lirc_mode2_user: $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/xdping: $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/flow_dissector_load: $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_maps: $(OUTPUT)/testing_helpers.o
+$(OUTPUT)/test_verifier: $(OUTPUT)/testing_helpers.o
 
 BPFTOOL ?= $(DEFAULT_BPFTOOL)
 $(DEFAULT_BPFTOOL): $(wildcard $(BPFTOOLDIR)/*.[ch] $(BPFTOOLDIR)/Makefile)    \
