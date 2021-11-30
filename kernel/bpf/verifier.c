@@ -4976,9 +4976,15 @@ static int resolve_map_arg_type(struct bpf_verifier_env *env,
 	return 0;
 }
 
+
 struct bpf_reg_types {
 	const enum bpf_reg_type types[10];
 	u32 *btf_id;
+
+	/* Certain types require customized type matching function. */
+	bool (*type_match_fn)(enum bpf_arg_type arg_type,
+			      enum bpf_reg_type type,
+			      enum bpf_reg_type expected);
 };
 
 static const struct bpf_reg_types map_key_value_types = {
@@ -5013,6 +5019,19 @@ static const struct bpf_reg_types btf_id_sock_common_types = {
 };
 #endif
 
+static bool mem_type_match(enum bpf_arg_type arg_type,
+			   enum bpf_reg_type type, enum bpf_reg_type expected)
+{
+	/* If arg_type is tagged with MEM_RDONLY, type is compatible with both
+	 * RDONLY and RDWR mem, fold the MEM_RDONLY flag in 'type' before
+	 * comparison.
+	 */
+	if ((arg_type & MEM_RDONLY) != 0)
+		type &= ~MEM_RDONLY;
+
+	return type == expected;
+}
+
 static const struct bpf_reg_types mem_types = {
 	.types = {
 		PTR_TO_STACK,
@@ -5022,8 +5041,8 @@ static const struct bpf_reg_types mem_types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_MEM,
 		PTR_TO_BUF,
-		PTR_TO_BUF | MEM_RDONLY,
 	},
+	.type_match_fn = mem_type_match,
 };
 
 static const struct bpf_reg_types int_ptr_types = {
@@ -5096,6 +5115,13 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 		expected = compatible->types[i];
 		if (expected == NOT_INIT)
 			break;
+
+		if (compatible->type_match_fn) {
+			if (compatible->type_match_fn(arg_type, type, expected))
+				goto found;
+
+			continue;
+		}
 
 		if (type == expected)
 			goto found;
