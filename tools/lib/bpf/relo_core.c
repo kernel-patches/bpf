@@ -294,6 +294,7 @@ static int bpf_core_parse_spec(const struct btf *btf,
  *   - any two FLOATs are always compatible;
  *   - for ARRAY, dimensionality is ignored, element types are checked for
  *     compatibility recursively;
+ *   - any two INT/UNION are compatible, if their names and sizes match;
  *   - everything else shouldn't be ever a target of relocation.
  * These rules are not set in stone and probably will be adjusted as we get
  * more experience with using BPF CO-RE relocations.
@@ -313,8 +314,14 @@ recur:
 
 	if (btf_is_composite(local_type) && btf_is_composite(targ_type))
 		return 1;
-	if (btf_kind(local_type) != btf_kind(targ_type))
-		return 0;
+	if (btf_kind(local_type) != btf_kind(targ_type)) {
+		if (local_type->size == targ_type->size &&
+		    (btf_is_union(local_type) || btf_is_union(targ_type)) &&
+		    (btf_is_int(local_type) || btf_is_int(targ_type)))
+			return 1;
+		else
+			return 0;
+	}
 
 	switch (btf_kind(local_type)) {
 	case BTF_KIND_PTR:
@@ -384,11 +391,17 @@ static int bpf_core_match_member(const struct btf *local_btf,
 	targ_type = skip_mods_and_typedefs(targ_btf, targ_id, &targ_id);
 	if (!targ_type)
 		return -EINVAL;
-	if (!btf_is_composite(targ_type))
-		return 0;
 
 	local_id = local_acc->type_id;
 	local_type = btf__type_by_id(local_btf, local_id);
+	if (!btf_is_composite(targ_type)) {
+		if (local_type->size == targ_type->size &&
+		    btf_is_union(local_type) && btf_is_int(targ_type))
+			return 1;
+		else
+			return 0;
+	}
+
 	local_member = btf_members(local_type) + local_acc->idx;
 	local_name = btf__name_by_offset(local_btf, local_member->name_off);
 
