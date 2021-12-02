@@ -10826,7 +10826,7 @@ struct perf_buffer *perf_buffer__new_deprecated(int map_fd, size_t page_cnt,
 				       opts ? opts->sample_cb : NULL,
 				       opts ? opts->lost_cb : NULL,
 				       opts ? opts->ctx : NULL,
-				       NULL);
+				       opts);
 }
 
 DEFAULT_VERSION(perf_buffer__new_raw_v0_6_0, perf_buffer__new_raw, LIBBPF_0.6.0)
