@@ -76,7 +76,7 @@ $(tprog-cobjs): $(obj)/%.o: $(src)/%.c FORCE
 
 # Override includes for xdp_sample_user.o because $(srctree)/usr/include in
 # TPROGS_CFLAGS causes conflicts
-XDP_SAMPLE_CFLAGS += -Wall -O2 -lm \
+XDP_SAMPLE_CFLAGS += -Wall -O2 \
 		     -I./tools/include \
 		     -I./tools/include/uapi \
 		     -I./tools/lib \
