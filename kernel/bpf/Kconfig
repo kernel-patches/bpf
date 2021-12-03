@@ -79,6 +79,14 @@ config BPF_UNPRIV_DEFAULT_OFF
 
 	  If you are unsure how to answer this question, answer Y.
 
+config BPF_SIG
+	bool "BPF signature verification"
+	select SYSTEM_DATA_VERIFICATION
+	depends on BPF_SYSCALL
+	help
+	  Check BPF programs for valid signatures upon load: the signature
+	  is passed via the bpf() syscall together with the instructions.
+
 source "kernel/bpf/preload/Kconfig"
 
 config BPF_LSM

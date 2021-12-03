@@ -411,12 +411,15 @@ int pkcs7_verify(struct pkcs7_message *pkcs7,
 
 	switch (usage) {
 	case VERIFYING_MODULE_SIGNATURE:
+	case VERIFYING_BPF_SIGNATURE:
 		if (pkcs7->data_type != OID_data) {
-			pr_warn("Invalid module sig (not pkcs7-data)\n");
+			pr_warn("Invalid %s (not pkcs7-data)\n",
+				key_being_used_for[usage]);
 			return -EKEYREJECTED;
 		}
 		if (pkcs7->have_authattrs) {
-			pr_warn("Invalid module sig (has authattrs)\n");
+			pr_warn("Invalid %s (has authattrs)\n",
+				key_being_used_for[usage]);
 			return -EKEYREJECTED;
 		}
 		break;
