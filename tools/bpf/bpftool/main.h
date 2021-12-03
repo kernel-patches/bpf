@@ -91,6 +91,10 @@ extern bool verifier_logs;
 extern bool relaxed_maps;
 extern bool use_loader;
 extern bool legacy_libbpf;
+extern bool sign_bpf;
+extern const char *sign_hash;
+extern const char *sign_cert;
+extern const char *sign_key;
 extern struct btf *base_btf;
 extern struct hashmap *refs_table;
 
@@ -259,5 +263,8 @@ static inline bool hashmap__empty(struct hashmap *map)
 {
 	return map ? hashmap__size(map) == 0 : true;
 }
+
+int sign(const char *hash_algo, const char *key_path, const char *x509_path,
+	 const char *indata, int indatalen, unsigned char **outdata);
 
 #endif

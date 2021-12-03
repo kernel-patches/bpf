@@ -52,8 +52,10 @@ struct bpf_load_and_run_opts {
 	struct bpf_loader_ctx *ctx;
 	const void *data;
 	const void *insns;
+	const void *signature;
 	__u32 data_sz;
 	__u32 insns_sz;
+	__u32 sig_sz;
 	const char *errstr;
 };
 
@@ -93,6 +95,8 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
 	attr.insns = (long) opts->insns;
 	attr.insn_cnt = opts->insns_sz / sizeof(struct bpf_insn);
+	attr.signature = (long) opts->signature;
+	attr.sig_len = opts->sig_sz;
 	attr.license = (long) "Dual BSD/GPL";
 	memcpy(attr.prog_name, "__loader.prog", sizeof("__loader.prog"));
 	attr.fd_array = (long) &map_fd;

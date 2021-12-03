@@ -31,6 +31,10 @@ bool block_mount;
 bool verifier_logs;
 bool relaxed_maps;
 bool use_loader;
+bool sign_bpf;
+const char *sign_hash;
+const char *sign_cert;
+const char *sign_key;
 bool legacy_libbpf;
 struct btf *base_btf;
 struct hashmap *refs_table;
@@ -403,6 +407,12 @@ int main(int argc, char **argv)
 		{ "use-loader",	no_argument,	NULL,	'L' },
 		{ "base-btf",	required_argument, NULL, 'B' },
 		{ "legacy",	no_argument,	NULL,	'l' },
+#ifdef USE_SIGN
+		{ "sign",	no_argument,	NULL,	's' },
+		{ "hash",	required_argument, NULL, 'H' },
+		{ "cert",	required_argument, NULL, 'c' },
+		{ "key",	required_argument, NULL, 'k' },
+#endif
 		{ 0 }
 	};
 	bool version_requested = false;
@@ -416,7 +426,11 @@ int main(int argc, char **argv)
 	bin_name = argv[0];
 
 	opterr = 0;
+#ifdef USE_SIGN
+	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:lsH:c:k:",
+#else
 	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:l",
+#endif
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -466,6 +480,20 @@ int main(int argc, char **argv)
 		case 'l':
 			legacy_libbpf = true;
 			break;
+#ifdef USE_SIGN
+		case 's':
+			sign_bpf = true;
+			break;
+		case 'H':
+			sign_hash = optarg;
+			break;
+		case 'c':
+			sign_cert = optarg;
+			break;
+		case 'k':
+			sign_key = optarg;
+			break;
+#endif
 		default:
 			p_err("unrecognized option '%s'", argv[optind - 1]);
 			if (json_output)
