@@ -87,6 +87,12 @@ config BPF_SIG
 	  Check BPF programs for valid signatures upon load: the signature
 	  is passed via the bpf() syscall together with the instructions.
 
+config BPF_SIG_FORCE
+	bool "Require BPF to be validly signed"
+	depends on BPF_SIG
+	help
+	  Reject unsigned BPF or signed BPF for which we don't have a key.
+
 source "kernel/bpf/preload/Kconfig"
 
 config BPF_LSM

@@ -2340,6 +2340,10 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 				prog->aux->name, ERR_PTR(err));
 			goto free_prog_sec;
 		}
+	} else if (IS_ENABLED(CONFIG_BPF_SIG_FORCE) && !uattr.is_kernel) {
+		pr_warn("Rejecting BPF '%s' with no signature\n", prog->aux->name);
+		err = -EKEYREJECTED;
+		goto free_prog_sec;
 	}
 #endif
 
