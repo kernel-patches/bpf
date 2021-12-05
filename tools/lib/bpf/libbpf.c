@@ -8291,6 +8291,11 @@ void bpf_program__set_ifindex(struct bpf_program *prog, __u32 ifindex)
 	prog->prog_ifindex = ifindex;
 }
 
+void bpf_program__set_pinname(struct bpf_program *prog, char *name)
+{
+	prog->pin_name = name;
+}
+
 const char *bpf_program__name(const struct bpf_program *prog)
 {
 	return prog->name;

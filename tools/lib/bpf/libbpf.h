@@ -220,6 +220,8 @@ LIBBPF_API int bpf_program__set_priv(struct bpf_program *prog, void *priv,
 LIBBPF_API void *bpf_program__priv(const struct bpf_program *prog);
 LIBBPF_API void bpf_program__set_ifindex(struct bpf_program *prog,
 					 __u32 ifindex);
+LIBBPF_API void bpf_program__set_pinname(struct bpf_program *prog,
+					 char *name);
 
 LIBBPF_API const char *bpf_program__name(const struct bpf_program *prog);
 LIBBPF_API const char *bpf_program__section_name(const struct bpf_program *prog);

@@ -1471,6 +1471,7 @@ static int load_with_options(int argc, char **argv, bool first_prog_only)
 	unsigned int old_map_fds = 0;
 	const char *pinmaps = NULL;
 	struct bpf_object *obj;
+	bool pinbyname = false;
 	struct bpf_map *map;
 	const char *pinfile;
 	unsigned int i, j;
@@ -1589,6 +1590,9 @@ static int load_with_options(int argc, char **argv, bool first_prog_only)
 				goto err_free_reuse_maps;
 
 			pinmaps = GET_ARG();
+		} else if (is_prefix(*argv, "pinbyname")) {
+			pinbyname = true;
+			NEXT_ARG();
 		} else {
 			p_err("expected no more arguments, 'type', 'map' or 'dev', got: '%s'?",
 			      *argv);
@@ -1616,6 +1620,9 @@ static int load_with_options(int argc, char **argv, bool first_prog_only)
 				goto err_close_obj;
 		}
 
+		if (pinbyname)
+			bpf_program__set_pinname(pos,
+						 (char *)bpf_program__name(pos));
 		bpf_program__set_ifindex(pos, ifindex);
 		bpf_program__set_type(pos, prog_type);
 		bpf_program__set_expected_attach_type(pos, expected_attach_type);
