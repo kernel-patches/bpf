@@ -17,6 +17,7 @@
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/fdtable.h>
+#include <linux/rcupdate_trace.h>
 
 DEFINE_BPF_STORAGE_CACHE(task_cache);
 
@@ -59,7 +60,8 @@ task_storage_lookup(struct task_struct *task, struct bpf_map *map,
 	struct bpf_local_storage *task_storage;
 	struct bpf_local_storage_map *smap;
 
-	task_storage = rcu_dereference(task->bpf_storage);
+	task_storage =
+		rcu_dereference_check(task->bpf_storage, bpf_rcu_lock_held());
 	if (!task_storage)
 		return NULL;
 
@@ -77,7 +79,8 @@ void bpf_task_storage_free(struct task_struct *task)
 
 	rcu_read_lock();
 
-	local_storage = rcu_dereference(task->bpf_storage);
+	local_storage =
+		rcu_dereference_check(task->bpf_storage, bpf_rcu_lock_held());
 	if (!local_storage) {
 		rcu_read_unlock();
 		return;
@@ -229,6 +232,7 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 {
 	struct bpf_local_storage_data *sdata;
 
+	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (flags & ~(BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return (unsigned long)NULL;
 
@@ -260,6 +264,7 @@ BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
 {
 	int ret;
 
+	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!task)
 		return -EINVAL;
 

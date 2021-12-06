@@ -16,6 +16,9 @@
 
 #define BPF_LOCAL_STORAGE_CACHE_SIZE	16
 
+#define bpf_rcu_lock_held()                                                    \
+	(rcu_read_lock_held() || rcu_read_lock_trace_held() ||                 \
+	 rcu_read_lock_bh_held())
 struct bpf_local_storage_map_bucket {
 	struct hlist_head list;
 	raw_spinlock_t lock;
@@ -160,5 +163,7 @@ bpf_local_storage_alloc(void *owner,
 struct bpf_local_storage_data *
 bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 			 void *value, u64 map_flags);
+
+void bpf_local_storage_free_rcu(struct rcu_head *rcu);
 
 #endif /* _BPF_LOCAL_STORAGE_H */
