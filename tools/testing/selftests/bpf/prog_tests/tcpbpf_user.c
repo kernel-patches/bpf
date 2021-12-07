@@ -12,6 +12,8 @@ static __u32 duration;
 
 static void verify_result(struct tcpbpf_globals *result)
 {
+	__u32 non_existing_flag = (BPF_SOCK_OPS_ALL_CB_FLAGS << 1) &
+				  ~BPF_SOCK_OPS_ALL_CB_FLAGS;
 	__u32 expected_events = ((1 << BPF_SOCK_OPS_TIMEOUT_INIT) |
 				 (1 << BPF_SOCK_OPS_RWND_INIT) |
 				 (1 << BPF_SOCK_OPS_TCP_CONNECT_CB) |
@@ -30,7 +32,7 @@ static void verify_result(struct tcpbpf_globals *result)
 	ASSERT_EQ(result->bytes_acked, 1002, "bytes_acked");
 	ASSERT_EQ(result->data_segs_in, 1, "data_segs_in");
 	ASSERT_EQ(result->data_segs_out, 1, "data_segs_out");
-	ASSERT_EQ(result->bad_cb_test_rv, 0x80, "bad_cb_test_rv");
+	ASSERT_EQ(result->bad_cb_test_rv, non_existing_flag, "bad_cb_test_rv");
 	ASSERT_EQ(result->good_cb_test_rv, 0, "good_cb_test_rv");
 	ASSERT_EQ(result->num_listen, 1, "num_listen");
 

@@ -43,6 +43,8 @@ SEC("sockops")
 int bpf_testcb(struct bpf_sock_ops *skops)
 {
 	char header[sizeof(struct ipv6hdr) + sizeof(struct tcphdr)];
+	__u32 non_existing_flag = (BPF_SOCK_OPS_ALL_CB_FLAGS << 1) &
+				  ~BPF_SOCK_OPS_ALL_CB_FLAGS;
 	struct bpf_sock_ops *reuse = skops;
 	struct tcphdr *thdr;
 	int window_clamp = 9216;
@@ -104,8 +106,11 @@ int bpf_testcb(struct bpf_sock_ops *skops)
 		global.window_clamp_client = get_tp_window_clamp(skops);
 		break;
 	case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-		/* Test failure to set largest cb flag (assumes not defined) */
-		global.bad_cb_test_rv = bpf_sock_ops_cb_flags_set(skops, 0x80);
+		/* Test failure to set largest cb flag
+		 * (assumes that BPF_SOCK_OPS_ALL_CB_FLAGS masks all cb flags)
+		 */
+		global.bad_cb_test_rv = bpf_sock_ops_cb_flags_set(skops,
+							  non_existing_flag);
 		/* Set callback */
 		global.good_cb_test_rv = bpf_sock_ops_cb_flags_set(skops,
 						 BPF_SOCK_OPS_STATE_CB_FLAG);
