@@ -1471,7 +1471,7 @@ int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	struct ipv6_pinfo *np = tcp_inet6_sk(sk);
 	struct sk_buff *opt_skb = NULL;
-	struct tcp_sock *tp;
+	struct tcp_sock *tp = tcp_sk(sk);
 
 	/* Imagine: socket is IPv6. IPv4 packet arrives,
 	   goes to IPv4 receive handler and backlogged.
@@ -1517,6 +1517,29 @@ int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 				dst_release(dst);
 				sk->sk_rx_dst = NULL;
 			}
+		}
+
+		/* Call ebpf on packets with extension headers */
+		if (BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_PARSE_IPV6_HDR_CB_FLAG) &&
+		    ipv6_hdr(skb)->nexthdr != IPPROTO_TCP) {
+			struct bpf_sock_ops_kern sock_ops;
+			void *old_data_ptr;
+
+			memset(&sock_ops, 0,
+			       offsetof(struct bpf_sock_ops_kern, temp));
+			if (sk_fullsock(sk)) {
+				sock_ops.is_fullsock = 1;
+				sock_owned_by_me(sk);
+			}
+			sock_ops.op = BPF_SOCK_OPS_PARSE_IPV6_HDR_CB;
+			sock_ops.sk = sk;
+			sock_ops.skb = skb;
+			/* Temporary use the network header as skb data */
+			sock_ops.skb_data_end = skb_transport_header(skb);
+			old_data_ptr = skb->data;
+			skb->data = skb_network_header(skb);
+			BPF_CGROUP_RUN_PROG_SOCK_OPS(&sock_ops);
+			skb->data = old_data_ptr;
 		}
 
 		tcp_rcv_established(sk, skb);
@@ -1572,7 +1595,6 @@ ipv6_pktoptions:
 	   3. socket is not in passive state.
 	   4. Finally, it really contains options, which user wants to receive.
 	 */
-	tp = tcp_sk(sk);
 	if (TCP_SKB_CB(opt_skb)->end_seq == tp->rcv_nxt &&
 	    !((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))) {
 		if (np->rxopt.bits.rxinfo || np->rxopt.bits.rxoinfo)

@@ -5888,6 +5888,10 @@ struct bpf_sock_ops {
 	 *					the 3WHS.
 	 *
 	 * bpf_load_hdr_opt() can also be used to read a particular option.
+	 *
+	 * Under sock_ops->op ==  BPF_SOCK_OPS_PARSE_IP6_HDR_CB,
+	 * [skb_data, skb_data_end] covers the whole IPv6 header
+	 * with its extension headers.
 	 */
 	__bpf_md_ptr(void *, skb_data);
 	__bpf_md_ptr(void *, skb_data_end);
@@ -5956,8 +5960,15 @@ enum {
 	 * options first before the BPF program does.
 	 */
 	BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG = (1<<6),
+	/* Call bpf for all received IPv6 extension headers.  The bpf prog will
+	 * be called under sock_ops->op == BPF_SOCK_OPS_PARSE_IPV6_HDR_CB and
+	 * will be able to parse the IPv6 header and its extension headers.
+	 *
+	 * The bpf prog will usually turn this off in the common cases.
+	 */
+	BPF_SOCK_OPS_PARSE_IPV6_HDR_CB_FLAG = (1<<7),
 /* Mask of all currently supported cb flags */
-	BPF_SOCK_OPS_ALL_CB_FLAGS       = 0x7F,
+	BPF_SOCK_OPS_ALL_CB_FLAGS       = 0xFF,
 };
 
 /* List of known BPF sock_ops operators.
@@ -6069,6 +6080,19 @@ enum {
 					 * has already been written
 					 * by the kernel or the
 					 * earlier bpf-progs.
+					 */
+	BPF_SOCK_OPS_PARSE_IPV6_HDR_CB,	/* Parse the IPv6 extension
+					 * header option.
+					 * It will be called to handle
+					 * the packets received at
+					 * an already established
+					 * connection with an extension
+					 * header.
+					 *
+					 * sock_ops->skb_data:
+					 * Referring to the received skb.
+					 * It covers the IPv6 header and
+					 * its extension headers only.
 					 */
 };
 
