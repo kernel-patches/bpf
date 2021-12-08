@@ -292,6 +292,26 @@ void memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,
 })
 
 /**
+ * memset_range - Set a value ranging from member1 to member2, boundary included.
+ *
+ * @obj: Address of target struct instance
+ * @v: Byte value to repeatedly write
+ * @member1: struct member to start writing at
+ * @member2: struct member where writing should stop
+ *
+ */
+#define memset_range(obj, v, member_1, member_2)			\
+({									\
+	u8 *__ptr = (u8 *)(obj);					\
+	typeof(v) __val = (v);						\
+	BUILD_BUG_ON(offsetof(typeof(*(obj)), member_1) >		\
+		     offsetof(typeof(*(obj)), member_2));		\
+	memset(__ptr + offsetof(typeof(*(obj)), member_1), __val,	\
+	       offsetofend(typeof(*(obj)), member_2) -			\
+	       offsetof(typeof(*(obj)), member_1));			\
+})
+
+/**
  * str_has_prefix - Test if a string has a given prefix
  * @str: The string to test
  * @prefix: The string to see if @str starts with
