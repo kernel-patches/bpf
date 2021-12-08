@@ -65,6 +65,7 @@ TEST_PROGS := test_kmod.sh \
 	test_xdp_vlan_mode_native.sh \
 	test_lwt_ip_encap.sh \
 	test_tcp_check_syncookie.sh \
+	test_bpf_redirect_ifb.sh \
 	test_tc_tunnel.sh \
 	test_tc_edt.sh \
 	test_xdping.sh \
