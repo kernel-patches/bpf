@@ -1931,7 +1931,7 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 		fp = bpf_int_jit_compile(fp);
 		bpf_prog_jit_attempt_done(fp);
 		if (!fp->jited && jit_needed) {
-			*err = -ENOTSUPP;
+			*err = -EOPNOTSUPP;
 			return fp;
 		}
 	} else {
