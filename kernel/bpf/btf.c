@@ -4848,6 +4848,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const char *tname = prog->aux->attach_func_name;
 	struct bpf_verifier_log *log = info->log;
 	const struct btf_param *args;
+	const char *tag_value;
 	u32 nr_args, arg;
 	int i, ret;
 
@@ -4997,7 +4998,15 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 	info->btf = btf;
 	info->btf_id = t->type;
+	info->addr_space = BTF_ADDRSPACE_UNSPEC;
 	t = btf_type_by_id(btf, t->type);
+
+	if (btf_type_is_type_tag(t)) {
+		tag_value = __btf_name_by_offset(btf, t->name_off);
+		if (strcmp(tag_value, "user") == 0)
+			info->addr_space = BTF_ADDRSPACE_USER;
+	}
+
 	/* skip modifiers */
 	while (btf_type_is_modifier(t)) {
 		info->btf_id = t->type;
@@ -5009,8 +5018,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			tname, arg, btf_kind_str[BTF_INFO_KIND(t->info)]);
 		return false;
 	}
-	bpf_log(log, "func '%s' arg%d has btf_id %d type %s '%s'\n",
-		tname, arg, info->btf_id, btf_kind_str[BTF_INFO_KIND(t->info)],
+	bpf_log(log, "func '%s' arg%d has btf_id %d addr_space %d type %s '%s'\n",
+		tname, arg, info->btf_id, info->addr_space,
+		btf_kind_str[BTF_INFO_KIND(t->info)],
 		__btf_name_by_offset(btf, t->name_off));
 	return true;
 }
@@ -5024,12 +5034,12 @@ enum bpf_struct_walk_result {
 
 static int btf_struct_walk(struct bpf_verifier_log *log, const struct btf *btf,
 			   const struct btf_type *t, int off, int size,
-			   u32 *next_btf_id)
+			   u32 *next_btf_id, enum btf_addr_space *addr_space)
 {
 	u32 i, moff, mtrue_end, msize = 0, total_nelems = 0;
 	const struct btf_type *mtype, *elem_type = NULL;
 	const struct btf_member *member;
-	const char *tname, *mname;
+	const char *tname, *mname, *tag_value;
 	u32 vlen, elem_id, mid;
 
 again:
@@ -5213,7 +5223,8 @@ error:
 		}
 
 		if (btf_type_is_ptr(mtype)) {
-			const struct btf_type *stype;
+			enum btf_addr_space tmp_addr_space = BTF_ADDRSPACE_UNSPEC;
+			const struct btf_type *stype, *t;
 			u32 id;
 
 			if (msize != size || off != moff) {
@@ -5222,9 +5233,19 @@ error:
 					mname, moff, tname, off, size);
 				return -EACCES;
 			}
+
+			/* check __user tag */
+			t = btf_type_by_id(btf, mtype->type);
+			if (btf_type_is_type_tag(t)) {
+				tag_value = __btf_name_by_offset(btf, t->name_off);
+				if (strcmp(tag_value, "user") == 0)
+					tmp_addr_space = BTF_ADDRSPACE_USER;
+			}
+
 			stype = btf_type_skip_modifiers(btf, mtype->type, &id);
 			if (btf_type_is_struct(stype)) {
 				*next_btf_id = id;
+				*addr_space = tmp_addr_space;
 				return WALK_PTR;
 			}
 		}
@@ -5251,13 +5272,14 @@ error:
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 		      const struct btf_type *t, int off, int size,
 		      enum bpf_access_type atype __maybe_unused,
-		      u32 *next_btf_id)
+		      u32 *next_btf_id, enum btf_addr_space *addr_space)
 {
+	enum btf_addr_space tmp_addr_space;
 	int err;
 	u32 id;
 
 	do {
-		err = btf_struct_walk(log, btf, t, off, size, &id);
+		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_addr_space);
 
 		switch (err) {
 		case WALK_PTR:
@@ -5265,6 +5287,7 @@ int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 			 * we're done.
 			 */
 			*next_btf_id = id;
+			*addr_space = tmp_addr_space;
 			return PTR_TO_BTF_ID;
 		case WALK_SCALAR:
 			return SCALAR_VALUE;
@@ -5308,6 +5331,7 @@ bool btf_struct_ids_match(struct bpf_verifier_log *log,
 			  const struct btf *btf, u32 id, int off,
 			  const struct btf *need_btf, u32 need_type_id)
 {
+	enum btf_addr_space addr_space;
 	const struct btf_type *type;
 	int err;
 
@@ -5319,7 +5343,7 @@ again:
 	type = btf_type_by_id(btf, id);
 	if (!type)
 		return false;
-	err = btf_struct_walk(log, btf, type, off, 1, &id);
+	err = btf_struct_walk(log, btf, type, off, 1, &id, &addr_space);
 	if (err != WALK_STRUCT)
 		return false;
 

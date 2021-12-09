@@ -463,6 +463,12 @@ enum bpf_reg_type {
 	__BPF_REG_TYPE_MAX,
 };
 
+/* The pointee address space encoded in BTF. */
+enum btf_addr_space {
+	BTF_ADDRSPACE_UNSPEC	= 0,
+	BTF_ADDRSPACE_USER	= 1,
+};
+
 /* The information passed from prog-specific *_is_valid_access
  * back to the verifier.
  */
@@ -473,6 +479,7 @@ struct bpf_insn_access_aux {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
+			enum btf_addr_space addr_space;
 		};
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
@@ -519,7 +526,8 @@ struct bpf_verifier_ops {
 				 const struct btf *btf,
 				 const struct btf_type *t, int off, int size,
 				 enum bpf_access_type atype,
-				 u32 *next_btf_id);
+				 u32 *next_btf_id,
+				 enum btf_addr_space *addr_space);
 	bool (*check_kfunc_call)(u32 kfunc_btf_id, struct module *owner);
 };
 
@@ -1696,7 +1704,7 @@ static inline bool bpf_tracing_btf_ctx_access(int off, int size,
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 		      const struct btf_type *t, int off, int size,
 		      enum bpf_access_type atype,
-		      u32 *next_btf_id);
+		      u32 *next_btf_id, enum btf_addr_space *addr_space);
 bool btf_struct_ids_match(struct bpf_verifier_log *log,
 			  const struct btf *btf, u32 id, int off,
 			  const struct btf *need_btf, u32 need_type_id);
