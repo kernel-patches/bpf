@@ -944,6 +944,7 @@ static struct xsk_ctx *xsk_create_ctx(struct xsk_socket *xsk,
 {
 	struct xsk_ctx *ctx;
 	int err;
+	size_t ifnamlen;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (!ctx)
@@ -965,8 +966,10 @@ static struct xsk_ctx *xsk_create_ctx(struct xsk_socket *xsk,
 	ctx->refcount = 1;
 	ctx->umem = umem;
 	ctx->queue_id = queue_id;
-	memcpy(ctx->ifname, ifname, IFNAMSIZ - 1);
-	ctx->ifname[IFNAMSIZ - 1] = '\0';
+
+	ifnamlen = strnlen(ifname, IFNAMSIZ);
+	memcpy(ctx->ifname, ifname, ifnamlen);
+	ctx->ifname[IFNAMSIZ - 1] = 0;
 
 	ctx->fill = fill;
 	ctx->comp = comp;
