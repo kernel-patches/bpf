@@ -4870,6 +4870,14 @@ static int _bpf_setsockopt(struct sock *sk, int level, int optname,
 			name[TCP_CA_NAME_MAX-1] = 0;
 			return tcp_set_congestion_control(sk, name, false, true);
 		}
+		case TCP_ULP: {
+			char name[TCP_ULP_NAME_MAX];
+
+			strncpy(name, optval, min_t(long, optlen,
+						    TCP_ULP_NAME_MAX - 1));
+			name[TCP_ULP_NAME_MAX - 1] = 0;
+			return tcp_set_ulp(sk, name);
+		}
 		default:
 			break;
 		}
@@ -4998,6 +5006,14 @@ static int _bpf_getsockopt(struct sock *sk, int level, int optname,
 			if (!icsk->icsk_ca_ops || optlen <= 1)
 				goto err_clear;
 			strncpy(optval, icsk->icsk_ca_ops->name, optlen);
+			optval[optlen - 1] = 0;
+			break;
+		case TCP_ULP:
+			icsk = inet_csk(sk);
+
+			if (!icsk->icsk_ulp_ops || optlen <= 1)
+				goto err_clear;
+			strncpy(optval, icsk->icsk_ulp_ops->name, optlen);
 			optval[optlen - 1] = 0;
 			break;
 		case TCP_SAVED_SYN:
