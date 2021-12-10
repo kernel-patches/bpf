@@ -615,55 +615,68 @@ int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring, int budget)
 /**
  * ice_xmit_zc - Completes AF_XDP entries, and cleans XDP entries
  * @xdp_ring: XDP Tx ring
- * @budget: max number of frames to xmit
  *
  * Returns true if cleanup/transmission is done.
  */
-static bool ice_xmit_zc(struct ice_tx_ring *xdp_ring, int budget)
+static bool ice_xmit_zc(struct ice_tx_ring *xdp_ring)
 {
+	int total_packets = 0, total_bytes = 0;
 	struct ice_tx_desc *tx_desc = NULL;
-	bool work_done = true;
+	u16 ntu = xdp_ring->next_to_use;
 	struct xdp_desc desc;
 	dma_addr_t dma;
+	u16 budget = 0;
 
-	while (likely(budget-- > 0)) {
-		struct ice_tx_buf *tx_buf;
+	budget = ICE_DESC_UNUSED(xdp_ring);
+	if (unlikely(!budget)) {
+		xdp_ring->tx_stats.tx_busy++;
+		return false;
+	}
 
-		if (unlikely(!ICE_DESC_UNUSED(xdp_ring))) {
-			xdp_ring->tx_stats.tx_busy++;
-			work_done = false;
-			break;
-		}
-
-		tx_buf = &xdp_ring->tx_buf[xdp_ring->next_to_use];
-
+	while (budget-- > 0) {
 		if (!xsk_tx_peek_desc(xdp_ring->xsk_pool, &desc))
 			break;
 
+		total_packets++;
 		dma = xsk_buff_raw_get_dma(xdp_ring->xsk_pool, desc.addr);
 		xsk_buff_raw_dma_sync_for_device(xdp_ring->xsk_pool, dma,
 						 desc.len);
 
-		tx_buf->bytecount = desc.len;
+		total_bytes += desc.len;
 
-		tx_desc = ICE_TX_DESC(xdp_ring, xdp_ring->next_to_use);
+		tx_desc = ICE_TX_DESC(xdp_ring, ntu);
 		tx_desc->buf_addr = cpu_to_le64(dma);
 		tx_desc->cmd_type_offset_bsz =
-			ice_build_ctob(ICE_TXD_LAST_DESC_CMD, 0, desc.len, 0);
+			ice_build_ctob(ICE_TX_DESC_CMD_EOP, 0, desc.len, 0);
 
-		xdp_ring->next_to_use++;
-		if (xdp_ring->next_to_use == xdp_ring->count)
-			xdp_ring->next_to_use = 0;
+		ntu++;
+		if (ntu == xdp_ring->count) {
+			ntu = 0;
+			tx_desc = ICE_TX_DESC(xdp_ring, xdp_ring->next_rs);
+			tx_desc->cmd_type_offset_bsz |=
+				cpu_to_le64(ICE_TX_DESC_CMD_RS << ICE_TXD_QW1_CMD_S);
+			xdp_ring->next_rs = ICE_TX_THRESH - 1;
+		}
+		if (ntu > xdp_ring->next_rs) {
+			tx_desc = ICE_TX_DESC(xdp_ring, xdp_ring->next_rs);
+			tx_desc->cmd_type_offset_bsz |=
+				cpu_to_le64(ICE_TX_DESC_CMD_RS << ICE_TXD_QW1_CMD_S);
+			xdp_ring->next_rs += ICE_TX_THRESH;
+		}
 	}
 
+	xdp_ring->next_to_use = ntu;
 	if (tx_desc) {
 		ice_xdp_ring_update_tail(xdp_ring);
 		xsk_tx_release(xdp_ring->xsk_pool);
 	}
 
-	return budget > 0 && work_done;
-}
+	if (xsk_uses_need_wakeup(xdp_ring->xsk_pool))
+		xsk_set_tx_need_wakeup(xdp_ring->xsk_pool);
+	ice_update_tx_ring_stats(xdp_ring, total_packets, total_bytes);
 
+	return budget > 0;
+}
 /**
  * ice_clean_xdp_tx_buf - Free and unmap XDP Tx buffer
  * @xdp_ring: XDP Tx ring
@@ -681,30 +694,31 @@ ice_clean_xdp_tx_buf(struct ice_tx_ring *xdp_ring, struct ice_tx_buf *tx_buf)
 /**
  * ice_clean_tx_irq_zc - Completes AF_XDP entries, and cleans XDP entries
  * @xdp_ring: XDP Tx ring
- * @budget: NAPI budget
  *
  * Returns true if cleanup/tranmission is done.
  */
-bool ice_clean_tx_irq_zc(struct ice_tx_ring *xdp_ring, int budget)
+bool ice_clean_tx_irq_zc(struct ice_tx_ring *xdp_ring)
 {
-	int total_packets = 0, total_bytes = 0;
-	s16 ntc = xdp_ring->next_to_clean;
+	u16 next_dd = xdp_ring->next_dd;
+	u16 desc_cnt = xdp_ring->count;
 	struct ice_tx_desc *tx_desc;
 	struct ice_tx_buf *tx_buf;
-	u32 xsk_frames = 0;
-	bool xmit_done;
+	u32 xsk_frames;
+	u16 ntc;
+	int i;
 
-	tx_desc = ICE_TX_DESC(xdp_ring, ntc);
-	tx_buf = &xdp_ring->tx_buf[ntc];
-	ntc -= xdp_ring->count;
+	tx_desc = ICE_TX_DESC(xdp_ring, next_dd);
 
-	do {
-		if (!(tx_desc->cmd_type_offset_bsz &
-		      cpu_to_le64(ICE_TX_DESC_DTYPE_DESC_DONE)))
-			break;
+	if (!(tx_desc->cmd_type_offset_bsz &
+	      cpu_to_le64(ICE_TX_DESC_DTYPE_DESC_DONE)))
+		return ice_xmit_zc(xdp_ring);
 
-		total_bytes += tx_buf->bytecount;
-		total_packets++;
+again:
+	xsk_frames = 0;
+	ntc = xdp_ring->next_to_clean;
+
+	for (i = 0; i < ICE_TX_THRESH; i++) {
+		tx_buf = &xdp_ring->tx_buf[ntc];
 
 		if (tx_buf->raw_buf) {
 			ice_clean_xdp_tx_buf(xdp_ring, tx_buf);
@@ -713,34 +727,27 @@ bool ice_clean_tx_irq_zc(struct ice_tx_ring *xdp_ring, int budget)
 			xsk_frames++;
 		}
 
-		tx_desc->cmd_type_offset_bsz = 0;
-		tx_buf++;
-		tx_desc++;
 		ntc++;
-
-		if (unlikely(!ntc)) {
-			ntc -= xdp_ring->count;
-			tx_buf = xdp_ring->tx_buf;
-			tx_desc = ICE_TX_DESC(xdp_ring, 0);
-		}
-
-		prefetch(tx_desc);
-
-	} while (likely(--budget));
-
-	ntc += xdp_ring->count;
-	xdp_ring->next_to_clean = ntc;
-
+		if (ntc >= xdp_ring->count)
+			ntc = 0;
+	}
+	xdp_ring->next_to_clean += ICE_TX_THRESH;
+	if (xdp_ring->next_to_clean >= desc_cnt)
+		xdp_ring->next_to_clean -= desc_cnt;
 	if (xsk_frames)
 		xsk_tx_completed(xdp_ring->xsk_pool, xsk_frames);
+	tx_desc->cmd_type_offset_bsz = 0;
+	next_dd += ICE_TX_THRESH;
+	if (next_dd > desc_cnt)
+		next_dd = ICE_TX_THRESH - 1;
 
-	if (xsk_uses_need_wakeup(xdp_ring->xsk_pool))
-		xsk_set_tx_need_wakeup(xdp_ring->xsk_pool);
+	tx_desc = ICE_TX_DESC(xdp_ring, next_dd);
+	if ((tx_desc->cmd_type_offset_bsz &
+	    cpu_to_le64(ICE_TX_DESC_DTYPE_DESC_DONE)))
+		goto again;
+	xdp_ring->next_dd = next_dd;
 
-	ice_update_tx_ring_stats(xdp_ring, total_packets, total_bytes);
-	xmit_done = ice_xmit_zc(xdp_ring, ICE_DFLT_IRQ_WORK);
-
-	return budget > 0 && xmit_done;
+	return ice_xmit_zc(xdp_ring);
 }
 
 /**
