@@ -4,6 +4,7 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_util.h>
 
 #include "profiler.h"
 
@@ -131,10 +132,6 @@ struct {
 	__type(value, bool);
 	__uint(max_entries, 16);
 } disallowed_exec_inodes SEC(".maps");
-
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
-#endif
 
 static INLINE bool IS_ERR(const void* ptr)
 {
