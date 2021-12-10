@@ -101,15 +101,11 @@ static void test_fexit_bpf2bpf_common(const char *obj_file,
 
 	for (i = 0; i < prog_cnt; i++) {
 		struct bpf_link_info link_info;
-		char *tgt_name;
 		__s32 btf_id;
 
-		tgt_name = strstr(prog_name[i], "/");
-		if (!ASSERT_OK_PTR(tgt_name, "tgt_name"))
-			goto close_prog;
-		btf_id = btf__find_by_name_kind(btf, tgt_name + 1, BTF_KIND_FUNC);
+		btf_id = btf__find_by_name_kind(btf, prog_name[i], BTF_KIND_FUNC);
 
-		prog[i] = bpf_object__find_program_by_title(obj, prog_name[i]);
+		prog[i] = bpf_object__find_program_by_name(obj, prog_name[i]);
 		if (!ASSERT_OK_PTR(prog[i], prog_name[i]))
 			goto close_prog;
 
@@ -158,7 +154,7 @@ close_prog:
 static void test_target_no_callees(void)
 {
 	const char *prog_name[] = {
-		"fexit/test_pkt_md_access",
+		"test_main2"
 	};
 	test_fexit_bpf2bpf_common("./fexit_bpf2bpf_simple.o",
 				  "./test_pkt_md_access.o",
@@ -169,10 +165,10 @@ static void test_target_no_callees(void)
 static void test_target_yes_callees(void)
 {
 	const char *prog_name[] = {
-		"fexit/test_pkt_access",
-		"fexit/test_pkt_access_subprog1",
-		"fexit/test_pkt_access_subprog2",
-		"fexit/test_pkt_access_subprog3",
+		"test_main",
+		"test_subprog1",
+		"test_subprog2",
+		"test_subprog3",
 	};
 	test_fexit_bpf2bpf_common("./fexit_bpf2bpf.o",
 				  "./test_pkt_access.o",
@@ -183,14 +179,14 @@ static void test_target_yes_callees(void)
 static void test_func_replace(void)
 {
 	const char *prog_name[] = {
-		"fexit/test_pkt_access",
-		"fexit/test_pkt_access_subprog1",
-		"fexit/test_pkt_access_subprog2",
-		"fexit/test_pkt_access_subprog3",
-		"freplace/get_skb_len",
-		"freplace/get_skb_ifindex",
-		"freplace/get_constant",
-		"freplace/test_pkt_write_access_subprog",
+		"test_main",
+		"test_subprog1",
+		"test_subprog2",
+		"test_subprog3",
+		"new_get_skb_len",
+		"new_get_skb_ifindex",
+		"new_get_constant",
+		"new_test_pkt_write_access_subprog",
 	};
 	test_fexit_bpf2bpf_common("./fexit_bpf2bpf.o",
 				  "./test_pkt_access.o",
@@ -201,7 +197,7 @@ static void test_func_replace(void)
 static void test_func_replace_verify(void)
 {
 	const char *prog_name[] = {
-		"freplace/do_bind",
+		"new_do_bind",
 	};
 	test_fexit_bpf2bpf_common("./freplace_connect4.o",
 				  "./connect4_prog.o",
@@ -211,8 +207,8 @@ static void test_func_replace_verify(void)
 
 static int test_second_attach(struct bpf_object *obj)
 {
-	const char *prog_name = "freplace/get_constant";
-	const char *tgt_name = prog_name + 9; /* cut off freplace/ */
+	const char *prog_name = "security_new_get_constant";
+	const char *tgt_name = "get_constant";
 	const char *tgt_obj_file = "./test_pkt_access.o";
 	struct bpf_program *prog = NULL;
 	struct bpf_object *tgt_obj;
@@ -220,7 +216,7 @@ static int test_second_attach(struct bpf_object *obj)
 	struct bpf_link *link;
 	int err = 0, tgt_fd;
 
-	prog = bpf_object__find_program_by_title(obj, prog_name);
+	prog = bpf_object__find_program_by_name(obj, prog_name);
 	if (CHECK(!prog, "find_prog", "prog %s not found\n", prog_name))
 		return -ENOENT;
 
@@ -254,7 +250,7 @@ out:
 static void test_func_replace_multi(void)
 {
 	const char *prog_name[] = {
-		"freplace/get_constant",
+		"security_new_get_constant",
 	};
 	test_fexit_bpf2bpf_common("./freplace_get_constant.o",
 				  "./test_pkt_access.o",
@@ -321,7 +317,7 @@ out:
 static void test_func_sockmap_update(void)
 {
 	const char *prog_name[] = {
-		"freplace/cls_redirect",
+		"freplace_cls_redirect_test",
 	};
 	test_fexit_bpf2bpf_common("./freplace_cls_redirect.o",
 				  "./test_cls_redirect.o",
