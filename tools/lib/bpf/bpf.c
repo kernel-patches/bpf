@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <linux/bpf.h>
 #include <limits.h>
+#include <sys/resource.h>
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
@@ -94,6 +95,118 @@ static inline int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int
 	return fd;
 }
 
+/* Probe whether kernel switched from memlock-based (RLIMIT_MEMLOCK) to
+ * memcg-based memory accounting for BPF maps and progs. This was done in [0],
+ * but it's not straightforward to detect those changes from the user-space.
+ * So instead we'll try to detect whether [1] is in the kernel, which follows
+ * [0] almost immediately and made it into the upstream kernel in the same
+ * release.
+ *
+ * For this, we'll upload a trivial BTF into the kernel and will try to load
+ * a trivial BPF program with attach_btf_obj_fd pointing to our BTF. If it
+ * returns anything but -ENOTSUPP, we'll assume we still need RLIMIT_MEMLOCK.
+ *
+ *   [0] https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
+ *   [1] Fixes: 8bdd8e275ede ("bpf: Return -ENOTSUPP when attaching to non-kernel BTF")
+ */
+int probe_memcg_account(void)
+{
+	const size_t bpf_load_attr_sz = offsetofend(union bpf_attr, attach_btf_obj_fd);
+	const size_t btf_load_attr_sz = offsetofend(union bpf_attr, btf_log_level);
+	int prog_fd = -1, btf_fd = -1, err;
+	struct bpf_insn insns[1] = {}; /* instructions don't matter */
+	const void *btf_data;
+	union bpf_attr attr;
+	__u32 btf_data_sz;
+	struct btf *btf;
+
+	/* create the simplest BTF object and upload it into the kernel */
+	btf = btf__new_empty();
+	err = libbpf_get_error(btf);
+	if (err)
+		return err;
+	err = btf__add_int(btf, "int", 4, 0);
+	btf_data = btf__raw_data(btf, &btf_data_sz);
+	if (!btf_data) {
+		err = -ENOMEM;
+		goto cleanup;
+	}
+
+	/* we won't use bpf_btf_load() or bpf_prog_load() because they will
+	 * be trying to detect this feature and will cause an infinite loop
+	 */
+	memset(&attr, 0, btf_load_attr_sz);
+	attr.btf = ptr_to_u64(btf_data);
+	attr.btf_size = btf_data_sz;
+	btf_fd = sys_bpf_fd(BPF_BTF_LOAD, &attr, btf_load_attr_sz);
+	if (btf_fd < 0) {
+		err = -errno;
+		goto cleanup;
+	}
+
+	/* attempt loading freplace trying to use custom BTF */
+	memset(&attr, 0, bpf_load_attr_sz);
+	attr.prog_type = BPF_PROG_TYPE_TRACING;
+	attr.expected_attach_type = BPF_TRACE_FENTRY;
+	attr.insns = ptr_to_u64(insns);
+	attr.insn_cnt = sizeof(insns) / sizeof(insns[0]);
+	attr.license = ptr_to_u64("GPL");
+	attr.attach_btf_obj_fd = btf_fd;
+
+	prog_fd = sys_bpf_fd(BPF_PROG_LOAD, &attr, bpf_load_attr_sz);
+	if (prog_fd >= 0)
+		/* bug? we shouldn't be able to successfully load program */
+		err = -EFAULT;
+	else
+		/* assume memcg accounting is supported if we get -ENOTSUPP */
+		err = errno == 524 /* ENOTSUPP */ ? 1 : 0;
+
+cleanup:
+	btf__free(btf);
+	if (btf_fd >= 0)
+		close(btf_fd);
+	if (prog_fd >= 0)
+		close(prog_fd);
+	return err;
+}
+
+static bool memlock_bumped;
+static rlim_t memlock_rlim_max = RLIM_INFINITY;
+
+int libbpf_set_memlock_rlim_max(size_t memlock_max)
+{
+	if (memlock_bumped)
+		return libbpf_err(-EBUSY);
+
+	memlock_rlim_max = memlock_max;
+	return 0;
+}
+
+int bump_rlimit_memlock(void)
+{
+	struct rlimit rlim;
+
+	/* this the default in libbpf 1.0, but for now user has to opt-in explicitly */
+	if (!(libbpf_mode & LIBBPF_STRICT_AUTO_RLIMIT_MEMLOCK))
+		return 0;
+
+	/* if kernel supports memcg-based accounting, skip bumping RLIMIT_MEMLOCK */
+	if (memlock_bumped || kernel_supports(NULL, FEAT_MEMCG_ACCOUNT))
+		return 0;
+
+	memlock_bumped = true;
+
+	/* zero memlock_rlim_max disables auto-bumping RLIMIT_MEMLOCK */
+	if (memlock_rlim_max == 0)
+		return 0;
+
+	rlim.rlim_cur = rlim.rlim_max = memlock_rlim_max;
+	if (setrlimit(RLIMIT_MEMLOCK, &rlim))
+		return -errno;
+
+	return 0;
+}
+
 int bpf_map_create(enum bpf_map_type map_type,
 		   const char *map_name,
 		   __u32 key_size,
@@ -104,6 +217,8 @@ int bpf_map_create(enum bpf_map_type map_type,
 	const size_t attr_sz = offsetofend(union bpf_attr, map_extra);
 	union bpf_attr attr;
 	int fd;
+
+	bump_rlimit_memlock();
 
 	memset(&attr, 0, attr_sz);
 
@@ -250,6 +365,8 @@ int bpf_prog_load_v0_6_0(enum bpf_prog_type prog_type,
 	int fd, attempts;
 	union bpf_attr attr;
 	char *log_buf;
+
+	bump_rlimit_memlock();
 
 	if (!OPTS_VALID(opts, bpf_prog_load_opts))
 		return libbpf_err(-EINVAL);
@@ -455,6 +572,8 @@ int bpf_verify_program(enum bpf_prog_type type, const struct bpf_insn *insns,
 {
 	union bpf_attr attr;
 	int fd;
+
+	bump_rlimit_memlock();
 
 	memset(&attr, 0, sizeof(attr));
 	attr.prog_type = type;
@@ -1055,6 +1174,8 @@ int bpf_btf_load(const void *btf_data, size_t btf_size, const struct bpf_btf_loa
 	size_t log_size;
 	__u32 log_level;
 	int fd;
+
+	bump_rlimit_memlock();
 
 	memset(&attr, 0, attr_sz);
 
