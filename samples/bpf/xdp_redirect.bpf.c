@@ -39,6 +39,40 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	return bpf_redirect(ifindex_out, 0);
 }
 
+SEC("xdp")
+int xdp_redirect_notouch(struct xdp_md *ctx)
+{
+	return bpf_redirect(ifindex_out, 0);
+}
+
+const volatile __u16 port_start;
+const volatile __u16 port_range;
+volatile __u16 next_port = 0;
+
+SEC("xdp")
+int xdp_redirect_update_port(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	__u16 cur_port, cksum_diff;
+	struct udphdr *hdr;
+
+	hdr = data + (sizeof(struct ethhdr) + sizeof(struct ipv6hdr));
+	if (hdr + 1 > data_end)
+		return XDP_ABORTED;
+
+	cur_port = bpf_ntohs(hdr->dest);
+	cksum_diff = next_port - cur_port;
+	if (cksum_diff) {
+		hdr->check = bpf_htons(~(~bpf_ntohs(hdr->check) + cksum_diff));
+		hdr->dest = bpf_htons(next_port);
+	}
+	if (next_port++ >= port_start + port_range - 1)
+		next_port = port_start;
+
+	return bpf_redirect(ifindex_out, 0);
+}
+
 /* Redirect require an XDP bpf_prog loaded on the TX device */
 SEC("xdp")
 int xdp_redirect_dummy_prog(struct xdp_md *ctx)
