@@ -14,6 +14,7 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <net/net_namespace.h>
+#include <net/page_pool.h>
 #include <linux/error-injection.h>
 #include <linux/smp.h>
 #include <linux/sock_diag.h>
@@ -23,19 +24,34 @@
 #include <trace/events/bpf_test_run.h>
 
 struct bpf_test_timer {
-	enum { NO_PREEMPT, NO_MIGRATE } mode;
+	enum { NO_PREEMPT, NO_MIGRATE, XDP } mode;
 	u32 i;
 	u64 time_start, time_spent;
+	struct {
+		struct xdp_buff *orig_ctx;
+		struct xdp_rxq_info rxq;
+		struct page_pool *pp;
+		u16 frame_cnt;
+	} xdp;
 };
 
 static void bpf_test_timer_enter(struct bpf_test_timer *t)
 	__acquires(rcu)
 {
 	rcu_read_lock();
-	if (t->mode == NO_PREEMPT)
+	switch (t->mode) {
+	case NO_PREEMPT:
 		preempt_disable();
-	else
+		break;
+	case XDP:
 		migrate_disable();
+		xdp_set_return_frame_no_direct();
+		t->xdp.frame_cnt = 0;
+		break;
+	case NO_MIGRATE:
+		migrate_disable();
+		break;
+	}
 
 	t->time_start = ktime_get_ns();
 }
@@ -45,10 +61,18 @@ static void bpf_test_timer_leave(struct bpf_test_timer *t)
 {
 	t->time_start = 0;
 
-	if (t->mode == NO_PREEMPT)
+	switch (t->mode) {
+	case NO_PREEMPT:
 		preempt_enable();
-	else
+		break;
+	case XDP:
+		xdp_do_flush();
+		xdp_clear_return_frame_no_direct();
+		fallthrough;
+	case NO_MIGRATE:
 		migrate_enable();
+		break;
+	}
 	rcu_read_unlock();
 }
 
@@ -87,13 +111,161 @@ reset:
 	return false;
 }
 
+/* We put this struct at the head of each page with a context and frame
+ * initialised when the page is allocated, so we don't have to do this on each
+ * repetition of the test run.
+ */
+struct xdp_page_head {
+	struct xdp_buff orig_ctx;
+	struct xdp_buff ctx;
+	struct xdp_frame frm;
+	u8 data[];
+};
+
+#define TEST_XDP_FRAME_SIZE (PAGE_SIZE - sizeof(struct xdp_page_head)	\
+			     - sizeof(struct skb_shared_info))
+
+static void bpf_test_run_xdp_init_page(struct page *page, void *arg)
+{
+	struct xdp_page_head *head = phys_to_virt(page_to_phys(page));
+	struct xdp_buff *new_ctx, *orig_ctx;
+	u32 headroom = XDP_PACKET_HEADROOM;
+	struct bpf_test_timer *t = arg;
+	size_t frm_len, meta_len;
+	struct xdp_frame *frm;
+	void *data;
+
+	orig_ctx = t->xdp.orig_ctx;
+	frm_len = orig_ctx->data_end - orig_ctx->data_meta;
+	meta_len = orig_ctx->data - orig_ctx->data_meta;
+	headroom -= meta_len;
+
+	new_ctx = &head->ctx;
+	frm = &head->frm;
+	data = &head->data;
+	memcpy(data + headroom, orig_ctx->data_meta, frm_len);
+
+	xdp_init_buff(new_ctx, TEST_XDP_FRAME_SIZE, &t->xdp.rxq);
+	xdp_prepare_buff(new_ctx, data, headroom, frm_len, true);
+	new_ctx->data_meta = new_ctx->data + meta_len;
+
+	xdp_update_frame_from_buff(new_ctx, frm);
+	frm->mem = new_ctx->rxq->mem;
+
+	memcpy(&head->orig_ctx, new_ctx, sizeof(head->orig_ctx));
+}
+
+static int bpf_test_run_xdp_setup(struct bpf_test_timer *t, struct xdp_buff *orig_ctx)
+{
+	struct xdp_mem_info mem = {};
+	struct page_pool *pp;
+	int err;
+	struct page_pool_params pp_params = {
+		.order = 0,
+		.flags = 0,
+		.pool_size = NAPI_POLL_WEIGHT * 2,
+		.nid = NUMA_NO_NODE,
+		.max_len = TEST_XDP_FRAME_SIZE,
+		.init_callback = bpf_test_run_xdp_init_page,
+		.init_arg = t,
+	};
+
+	pp = page_pool_create(&pp_params);
+	if (IS_ERR(pp))
+		return PTR_ERR(pp);
+
+	/* will copy 'mem->id' into pp->xdp_mem_id */
+	err = xdp_reg_mem_model(&mem, MEM_TYPE_PAGE_POOL, pp);
+	if (err) {
+		page_pool_destroy(pp);
+		return err;
+	}
+	t->xdp.pp = pp;
+
+	/* We create a 'fake' RXQ referencing the original dev, but with an
+	 * xdp_mem_info pointing to our page_pool
+	 */
+	xdp_rxq_info_reg(&t->xdp.rxq, orig_ctx->rxq->dev, 0, 0);
+	t->xdp.rxq.mem.type = MEM_TYPE_PAGE_POOL;
+	t->xdp.rxq.mem.id = pp->xdp_mem_id;
+	t->xdp.orig_ctx = orig_ctx;
+
+	return 0;
+}
+
+static void bpf_test_run_xdp_teardown(struct bpf_test_timer *t)
+{
+	struct xdp_mem_info mem = {
+		.id = t->xdp.pp->xdp_mem_id,
+		.type = MEM_TYPE_PAGE_POOL,
+	};
+	xdp_unreg_mem_model(&mem);
+}
+
+static bool ctx_was_changed(struct xdp_page_head *head)
+{
+	return (head->orig_ctx.data != head->ctx.data ||
+		head->orig_ctx.data_meta != head->ctx.data_meta ||
+		head->orig_ctx.data_end != head->ctx.data_end);
+}
+
+static void reset_ctx(struct xdp_page_head *head)
+{
+	if (likely(!ctx_was_changed(head)))
+		return;
+
+	head->ctx.data = head->orig_ctx.data;
+	head->ctx.data_meta = head->orig_ctx.data_meta;
+	head->ctx.data_end = head->orig_ctx.data_end;
+	xdp_update_frame_from_buff(&head->ctx, &head->frm);
+}
+
+static int bpf_test_run_xdp_redirect(struct bpf_test_timer *t,
+				     struct bpf_prog *prog, struct xdp_buff *orig_ctx)
+{
+	struct xdp_page_head *head;
+	struct xdp_buff *ctx;
+	struct page *page;
+	int ret, err = 0;
+
+	page = page_pool_dev_alloc_pages(t->xdp.pp);
+	if (!page)
+		return -ENOMEM;
+
+	head = phys_to_virt(page_to_phys(page));
+	reset_ctx(head);
+	ctx = &head->ctx;
+
+	ret = bpf_prog_run_xdp(prog, ctx);
+	if (ret == XDP_REDIRECT) {
+		struct xdp_frame *frm = &head->frm;
+
+		/* if program changed pkt bounds we need to update the xdp_frame */
+		if (unlikely(ctx_was_changed(head)))
+			xdp_update_frame_from_buff(ctx, frm);
+
+		err = xdp_do_redirect_frame(ctx->rxq->dev, ctx, frm, prog);
+		if (err)
+			ret = err;
+	}
+	if (ret != XDP_REDIRECT)
+		xdp_return_buff(ctx);
+
+	if (++t->xdp.frame_cnt >= NAPI_POLL_WEIGHT) {
+		xdp_do_flush();
+		t->xdp.frame_cnt = 0;
+	}
+
+	return ret;
+}
+
 static int bpf_test_run(struct bpf_prog *prog, void *ctx, u32 repeat,
-			u32 *retval, u32 *time, bool xdp)
+			u32 *retval, u32 *time, bool xdp, bool xdp_redirect)
 {
 	struct bpf_prog_array_item item = {.prog = prog};
 	struct bpf_run_ctx *old_ctx;
 	struct bpf_cg_run_ctx run_ctx;
-	struct bpf_test_timer t = { NO_MIGRATE };
+	struct bpf_test_timer t = { .mode = (xdp && xdp_redirect) ? XDP : NO_MIGRATE };
 	enum bpf_cgroup_storage_type stype;
 	int ret;
 
@@ -110,20 +282,35 @@ static int bpf_test_run(struct bpf_prog *prog, void *ctx, u32 repeat,
 	if (!repeat)
 		repeat = 1;
 
+	if (t.mode == XDP) {
+		ret = bpf_test_run_xdp_setup(&t, ctx);
+		if (ret)
+			return ret;
+	}
+
 	bpf_test_timer_enter(&t);
 	old_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	do {
 		run_ctx.prog_item = &item;
-		if (xdp)
+		if (xdp && xdp_redirect) {
+			ret = bpf_test_run_xdp_redirect(&t, prog, ctx);
+			if (unlikely(ret < 0))
+				break;
+			*retval = ret;
+		} else if (xdp) {
 			*retval = bpf_prog_run_xdp(prog, ctx);
-		else
+		} else {
 			*retval = bpf_prog_run(prog, ctx);
+		}
 	} while (bpf_test_timer_continue(&t, repeat, &ret, time));
 	bpf_reset_run_ctx(old_ctx);
 	bpf_test_timer_leave(&t);
 
 	for_each_cgroup_storage_type(stype)
 		bpf_cgroup_storage_free(item.cgroup_storage[stype]);
+
+	if (t.mode == XDP)
+		bpf_test_run_xdp_teardown(&t);
 
 	return ret;
 }
@@ -663,7 +850,7 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	ret = convert___skb_to_skb(skb, ctx);
 	if (ret)
 		goto out;
-	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false);
+	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false, false);
 	if (ret)
 		goto out;
 	if (!is_l2) {
@@ -757,6 +944,7 @@ static void xdp_convert_buff_to_md(struct xdp_buff *xdp, struct xdp_md *xdp_md)
 int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
+	bool do_redirect = (kattr->test.flags & BPF_F_TEST_XDP_DO_REDIRECT);
 	u32 tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	u32 headroom = XDP_PACKET_HEADROOM;
 	u32 size = kattr->test.data_size_in;
@@ -773,6 +961,9 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	    prog->expected_attach_type == BPF_XDP_CPUMAP)
 		return -EINVAL;
 
+	if (kattr->test.flags & ~BPF_F_TEST_XDP_DO_REDIRECT)
+		return -EINVAL;
+
 	ctx = bpf_ctx_init(kattr, sizeof(struct xdp_md));
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
@@ -781,7 +972,8 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 		/* There can't be user provided data before the meta data */
 		if (ctx->data_meta || ctx->data_end != size ||
 		    ctx->data > ctx->data_end ||
-		    unlikely(xdp_metalen_invalid(ctx->data)))
+		    unlikely(xdp_metalen_invalid(ctx->data)) ||
+		    (do_redirect && (kattr->test.data_out || kattr->test.ctx_out)))
 			goto free_ctx;
 		/* Meta data is allocated from the headroom */
 		headroom -= ctx->data;
@@ -807,7 +999,8 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 
 	if (repeat > 1)
 		bpf_prog_change_xdp(NULL, prog);
-	ret = bpf_test_run(prog, &xdp, repeat, &retval, &duration, true);
+	ret = bpf_test_run(prog, &xdp, repeat, &retval, &duration,
+			   true, do_redirect);
 	/* We convert the xdp_buff back to an xdp_md before checking the return
 	 * code so the reference count of any held netdevice will be decremented
 	 * even if the test run failed.
