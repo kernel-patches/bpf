@@ -1,0 +1,35 @@
+name: bpf-ci
+
+on:
+  pull_request:
+
+concurrency: 
+  group: ci-test-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  VM_Test:
+    timeout-minutes: 100
+    runs-on: ubuntu-latest
+    env:
+      AUTHOR_EMAIL: "$(git log -1 --pretty=\"%aE\")"
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+    steps:
+      - uses: actions/checkout@v2
+      - if: ${{ github.repository != 'kernel-patches/bpf' }}
+        name: Download bpf-next tree
+        uses: libbpf/ci/get-linux-source@master
+        with:
+          dest: '.kernel'
+      - if: ${{ github.repository != 'kernel-patches/bpf' }}
+        name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .kernel/.git
+          cp -rf .kernel/. .
+          rm -rf .kernel
+      - uses: ./.github/actions/patch-kernel
+      - uses: ./.github/actions/vmtest
+
