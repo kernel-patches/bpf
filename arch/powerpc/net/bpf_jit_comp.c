@@ -201,8 +201,7 @@ skip_init_ctx:
 		 */
 		bpf_jit_fixup_subprog_calls(fp, code_base, &cgctx, addrs);
 
-		/* There is no need to perform the usual passes. */
-		goto skip_codegen_passes;
+		/* Due to pseudo_btf_id resolving, regenerate */
 	}
 
 	/* Code generation passes 1-2 */
@@ -222,7 +221,6 @@ skip_init_ctx:
 				proglen - (cgctx.idx * 4), cgctx.seen);
 	}
 
-skip_codegen_passes:
 	if (bpf_jit_enable > 1)
 		/*
 		 * Note that we output the base address of the code_base
