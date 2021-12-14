@@ -12,6 +12,7 @@ that goes into great technical depth about the BPF Architecture.
 .. toctree::
    :maxdepth: 1
 
+   intro
    instruction-set
    verifier
    libbpf/index
