@@ -392,7 +392,8 @@ u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, struct xdp_desc *
 
 	xskq_cons_release_n(xs->tx, nb_pkts);
 	__xskq_cons_release(xs->tx);
-	xs->sk.sk_write_space(&xs->sk);
+	if (xsk_tx_writeable(xs))
+		xs->sk.sk_write_space(&xs->sk);
 
 out:
 	rcu_read_unlock();
