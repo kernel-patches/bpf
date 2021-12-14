@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include <linux/ptrace.h>
-#include <stddef.h>
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
@@ -24,12 +22,6 @@ char _license[] SEC("license") = "GPL";
 
 #define SG_CHAIN	0x01UL
 #define SG_END		0x02UL
-
-struct scatterlist {
-	unsigned long   page_link;
-	unsigned int    offset;
-	unsigned int    length;
-};
 
 #define sg_is_chain(sg)		((sg)->page_link & SG_CHAIN)
 #define sg_is_last(sg)		((sg)->page_link & SG_END)
@@ -61,8 +53,8 @@ static inline struct scatterlist *get_sgp(struct scatterlist **sgs, int i)
 	return sgp;
 }
 
-int config = 0;
-int result = 0;
+int g_config = 0;
+int g_result = 0;
 
 SEC("kprobe/virtqueue_add_sgs")
 int BPF_KPROBE(trace_virtqueue_add_sgs, void *unused, struct scatterlist **sgs,
@@ -72,7 +64,7 @@ int BPF_KPROBE(trace_virtqueue_add_sgs, void *unused, struct scatterlist **sgs,
 	__u64 length1 = 0, length2 = 0;
 	unsigned int i, n, len;
 
-	if (config != 0)
+	if (g_config != 0)
 		return 0;
 
 	for (i = 0; (i < VIRTIO_MAX_SGS) && (i < out_sgs); i++) {
@@ -93,7 +85,7 @@ int BPF_KPROBE(trace_virtqueue_add_sgs, void *unused, struct scatterlist **sgs,
 		}
 	}
 
-	config = 1;
-	result = length2 - length1;
+	g_config = 1;
+	g_result = length2 - length1;
 	return 0;
 }
