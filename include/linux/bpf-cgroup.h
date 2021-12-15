@@ -165,11 +165,28 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *map, void *key, void *value);
 int bpf_percpu_cgroup_storage_update(struct bpf_map *map, void *key,
 				     void *value, u64 flags);
 
+static inline bool
+__cgroup_bpf_prog_array_is_empty(struct cgroup_bpf *cgrp_bpf,
+				 enum cgroup_bpf_attach_type type)
+{
+	struct bpf_prog_array *array = rcu_access_pointer(cgrp_bpf->effective[type]);
+
+	return array == &bpf_empty_prog_array.hdr;
+}
+
+#define CGROUP_BPF_TYPE_ENABLED(sk, atype)				       \
+({									       \
+	struct cgroup *__cgrp = sock_cgroup_ptr(&(sk)->sk_cgrp_data);	       \
+									       \
+	!__cgroup_bpf_prog_array_is_empty(&__cgrp->bpf, (atype));	       \
+})
+
 /* Wrappers for __cgroup_bpf_run_filter_skb() guarded by cgroup_bpf_enabled. */
 #define BPF_CGROUP_RUN_PROG_INET_INGRESS(sk, skb)			      \
 ({									      \
 	int __ret = 0;							      \
-	if (cgroup_bpf_enabled(CGROUP_INET_INGRESS))		      \
+	if (cgroup_bpf_enabled(CGROUP_INET_INGRESS) && sk &&		      \
+	    CGROUP_BPF_TYPE_ENABLED((sk), CGROUP_INET_INGRESS)) 	      \
 		__ret = __cgroup_bpf_run_filter_skb(sk, skb,		      \
 						    CGROUP_INET_INGRESS); \
 									      \
@@ -181,9 +198,10 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *map, void *key,
 	int __ret = 0;							       \
 	if (cgroup_bpf_enabled(CGROUP_INET_EGRESS) && sk && sk == skb->sk) { \
 		typeof(sk) __sk = sk_to_full_sk(sk);			       \
-		if (sk_fullsock(__sk))					       \
+		if (sk_fullsock(__sk) &&				       \
+		    CGROUP_BPF_TYPE_ENABLED(__sk, CGROUP_INET_EGRESS))	       \
 			__ret = __cgroup_bpf_run_filter_skb(__sk, skb,	       \
-						      CGROUP_INET_EGRESS); \
+						      CGROUP_INET_EGRESS);     \
 	}								       \
 	__ret;								       \
 })
