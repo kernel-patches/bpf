@@ -2304,6 +2304,7 @@ out_image:
 			if (header)
 				bpf_jit_binary_free(header);
 			prog = orig_prog;
+			header = NULL;
 			goto out_addrs;
 		}
 		if (image) {
@@ -2371,6 +2372,7 @@ out:
 	if (tmp_blinded)
 		bpf_jit_prog_release_other(prog, prog == orig_prog ?
 					   tmp : orig_prog);
+	prog->hdr = header;
 	return prog;
 }
 
