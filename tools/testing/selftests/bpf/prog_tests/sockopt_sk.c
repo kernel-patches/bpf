@@ -177,7 +177,7 @@ static int getsetsockopt(void)
 	optlen = sizeof(buf.zc);
 	errno = 0;
 	err = getsockopt(fd, SOL_TCP, TCP_ZEROCOPY_RECEIVE, &buf, &optlen);
-	if (errno != EPERM) {
+	if (errno != EINVAL) {
 		log_err("Unexpected getsockopt(TCP_ZEROCOPY_RECEIVE) err=%d errno=%d",
 			err, errno);
 		goto err;
