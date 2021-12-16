@@ -1447,7 +1447,7 @@ int ice_napi_poll(struct napi_struct *napi, int budget)
 		bool wd;
 
 		if (tx_ring->xsk_pool)
-			wd = ice_clean_tx_irq_zc(tx_ring, budget);
+			wd = ice_xmit_zc(tx_ring, ICE_DESC_UNUSED(tx_ring));
 		else if (ice_ring_is_xdp(tx_ring))
 			wd = true;
 		else
