@@ -621,6 +621,7 @@ static void
 ice_clean_xdp_tx_buf(struct ice_tx_ring *xdp_ring, struct ice_tx_buf *tx_buf)
 {
 	xdp_return_frame((struct xdp_frame *)tx_buf->raw_buf);
+	xdp_ring->xdp_tx_active--;
 	dma_unmap_single(xdp_ring->dev, dma_unmap_addr(tx_buf, dma),
 			 dma_unmap_len(tx_buf, len), DMA_TO_DEVICE);
 	dma_unmap_len_set(tx_buf, len, 0);
@@ -649,6 +650,11 @@ static u16 ice_clean_xdp_irq_zc(struct ice_tx_ring *xdp_ring)
 
 again:
 	cleared_dds++;
+	xsk_frames = 0;
+	if (likely(!xdp_ring->xdp_tx_active)) {
+		xsk_frames = ICE_TX_THRESH;
+		goto skip;
+	}
 
 	ntc = xdp_ring->next_to_clean;
 
@@ -666,7 +672,7 @@ again:
 		if (ntc >= xdp_ring->count)
 			ntc = 0;
 	}
-
+skip:
 	xdp_ring->next_to_clean += ICE_TX_THRESH;
 	if (xdp_ring->next_to_clean >= desc_cnt)
 		xdp_ring->next_to_clean -= desc_cnt;
