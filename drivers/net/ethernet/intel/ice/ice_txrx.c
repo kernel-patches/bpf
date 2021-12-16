@@ -172,6 +172,8 @@ tx_skip_free:
 
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
+	tx_ring->next_dd = ICE_TX_THRESH - 1;
+	tx_ring->next_rs = ICE_TX_THRESH - 1;
 
 	if (!tx_ring->netdev)
 		return;
