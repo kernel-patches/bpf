@@ -53,6 +53,7 @@ typedef int (*bpf_prog_iter_callback_t)(const char *group, const char *event,
 
 #ifdef HAVE_LIBBPF_SUPPORT
 struct bpf_object *bpf__prepare_load(const char *filename, bool source);
+struct bpf_perf_object *bpf_perf_object__next(struct bpf_perf_object *prev);
 int bpf__strerror_prepare_load(const char *filename, bool source,
 			       int err, char *buf, size_t size);
 
