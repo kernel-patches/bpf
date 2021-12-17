@@ -1,0 +1,8 @@
+name: 'patch kernel tree'
+description: 'patch kernel'
+runs:
+  using: "composite"
+  steps:
+    - name: apply temporary patches
+      shell: bash
+      run: ${GITHUB_ACTION_PATH}/patch_kernel.sh
