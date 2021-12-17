@@ -1279,10 +1279,18 @@ static int map_get_next_key(union bpf_attr *attr)
 		key = NULL;
 	}
 
+	if (!map->key_size) {
+		err = -EINVAL;
+		goto err_put;
+	}
+
 	err = -ENOMEM;
 	next_key = kvmalloc(map->key_size, GFP_USER);
-	if (!next_key)
-		goto free_key;
+	if (!next_key) {
+		if (key)
+			goto free_key;
+		goto err_put;
+	}
 
 	if (bpf_map_is_dev_bound(map)) {
 		err = bpf_map_offload_get_next_key(map, key, next_key);
@@ -1332,6 +1340,8 @@ int generic_map_delete_batch(struct bpf_map *map,
 	if (!max_count)
 		return 0;
 
+	if (!map->key_size)
+		return -EINVAL;
 	key = kvmalloc(map->key_size, GFP_USER | __GFP_NOWARN);
 	if (!key)
 		return -ENOMEM;
@@ -1389,6 +1399,8 @@ int generic_map_update_batch(struct bpf_map *map,
 	if (!max_count)
 		return 0;
 
+	if (!map->key_size)
+		return -EINVAL;
 	key = kvmalloc(map->key_size, GFP_USER | __GFP_NOWARN);
 	if (!key)
 		return -ENOMEM;
@@ -1453,6 +1465,8 @@ int generic_map_lookup_batch(struct bpf_map *map,
 	if (put_user(0, &uattr->batch.count))
 		return -EFAULT;
 
+	if (!map->key_size)
+		return -EINVAL;
 	buf_prevkey = kvmalloc(map->key_size, GFP_USER | __GFP_NOWARN);
 	if (!buf_prevkey)
 		return -ENOMEM;
