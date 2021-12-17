@@ -158,6 +158,7 @@ int do_tracelog(int argc, char **argv)
 			jsonw_string(json_wtr, buff);
 		else
 			printf("%s", buff);
+		fflush(stdout);
 	}
 
 	fclose(trace_pipe_fd);
