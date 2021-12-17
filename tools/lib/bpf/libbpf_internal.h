@@ -524,4 +524,26 @@ static inline int ensure_good_fd(int fd)
 	return fd;
 }
 
+struct hashmap;
+
+int bpf_core_calc_relo_res(struct bpf_program *prog,
+			   const struct bpf_core_relo *relo,
+			   int relo_idx,
+			   const struct btf *local_btf,
+			   struct hashmap *cand_cache,
+			   struct bpf_core_relo_res *targ_res,
+			   struct bpf_core_spec *targ_spec);
+void bpf_object_set_vmlinux_override(struct bpf_object *obj, struct btf *btf);
+struct hashmap *bpf_core_create_cand_cache(void);
+void bpf_core_free_cand_cache(struct hashmap *cand_cache);
+
+struct bpf_program *find_prog_by_sec_insn(const struct bpf_object *obj,
+					  size_t sec_idx, size_t insn_idx);
+
+size_t bpf_object__get_nr_programs(const struct bpf_object *obj);
+
+struct bpf_program *
+bpf_object__get_program(const struct bpf_object *obj, unsigned int n);
+
+
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

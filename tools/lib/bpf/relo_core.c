@@ -102,7 +102,7 @@ static const char *core_relo_kind_str(enum bpf_core_relo_kind kind)
 	}
 }
 
-static bool core_relo_is_field_based(enum bpf_core_relo_kind kind)
+bool core_relo_is_field_based(enum bpf_core_relo_kind kind)
 {
 	switch (kind) {
 	case BPF_CORE_FIELD_BYTE_OFFSET:
@@ -117,7 +117,7 @@ static bool core_relo_is_field_based(enum bpf_core_relo_kind kind)
 	}
 }
 
-static bool core_relo_is_type_based(enum bpf_core_relo_kind kind)
+bool core_relo_is_type_based(enum bpf_core_relo_kind kind)
 {
 	switch (kind) {
 	case BPF_CORE_TYPE_ID_LOCAL:
@@ -130,7 +130,7 @@ static bool core_relo_is_type_based(enum bpf_core_relo_kind kind)
 	}
 }
 
-static bool core_relo_is_enumval_based(enum bpf_core_relo_kind kind)
+bool core_relo_is_enumval_based(enum bpf_core_relo_kind kind)
 {
 	switch (kind) {
 	case BPF_CORE_ENUMVAL_EXISTS:

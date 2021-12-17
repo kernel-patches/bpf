@@ -392,6 +392,7 @@ LIBBPF_0.6.0 {
 		bpf_map__map_extra;
 		bpf_map__set_map_extra;
 		bpf_map_create;
+		bpf_object__btf_ext;
 		bpf_object__next_map;
 		bpf_object__next_program;
 		bpf_object__prev_map;
@@ -401,6 +402,7 @@ LIBBPF_0.6.0 {
 		bpf_program__flags;
 		bpf_program__insn_cnt;
 		bpf_program__insns;
+		bpf_program__sec_idx;
 		bpf_program__set_flags;
 		btf__add_btf;
 		btf__add_decl_tag;

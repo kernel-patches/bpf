@@ -84,4 +84,8 @@ int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
 			int insn_idx, const struct bpf_core_relo *relo,
 			int relo_idx, const struct bpf_core_relo_res *res);
 
+bool core_relo_is_field_based(enum bpf_core_relo_kind kind);
+bool core_relo_is_type_based(enum bpf_core_relo_kind kind);
+bool core_relo_is_enumval_based(enum bpf_core_relo_kind kind);
+
 #endif
