@@ -356,3 +356,23 @@ bool bpf_probe_large_insn_limit(__u32 ifindex)
 
 	return errno != E2BIG && errno != EINVAL;
 }
+
+/*
+ * Probe for bounded loop support introduced in commit 2589726d12a1
+ * ("bpf: introduce bounded loops").
+ */
+bool bpf_probe_bounded_loops(__u32 ifindex)
+{
+	struct bpf_insn insns[4] = {
+		BPF_MOV64_IMM(BPF_REG_0, 10),
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_0, 1),
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, -2),
+		BPF_EXIT_INSN()
+	};
+
+	errno = 0;
+	probe_load(BPF_PROG_TYPE_SOCKET_FILTER, insns, ARRAY_SIZE(insns), NULL,
+		   0, ifindex);
+
+	return !errno;
+}
