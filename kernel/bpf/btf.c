@@ -6734,6 +6734,7 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 {
 	bool need_cands = relo->kind != BPF_CORE_TYPE_ID_LOCAL;
 	struct bpf_core_cand_list cands = {};
+	struct bpf_core_relo_res targ_res;
 	struct bpf_core_spec *specs;
 	int err;
 
@@ -6778,8 +6779,14 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 		 */
 	}
 
-	err = bpf_core_apply_relo_insn((void *)ctx->log, insn, relo->insn_off / 8,
-				       relo, relo_idx, ctx->btf, &cands, specs);
+	err = bpf_core_calc_relo_insn((void *)ctx->log, relo, relo_idx, ctx->btf, &cands, specs,
+				      &targ_res);
+	if (err)
+		goto out;
+
+	err = bpf_core_patch_insn((void *)ctx->log, insn, relo->insn_off / 8, relo, relo_idx,
+				  &targ_res);
+
 out:
 	kfree(specs);
 	if (need_cands) {
