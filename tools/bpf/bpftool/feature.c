@@ -655,6 +655,18 @@ probe_large_insn_limit(const char *define_prefix, __u32 ifindex)
 }
 
 static void
+probe_bounded_loops(const char *define_prefix, __u32 ifindex)
+{
+	bool res;
+
+	res = bpf_probe_bounded_loops(ifindex);
+	print_bool_feature("have_bounded_loops",
+			   "Bounded loop support",
+			   "BOUNDED_LOOPS",
+			   res, define_prefix);
+}
+
+static void
 section_system_config(enum probe_component target, const char *define_prefix)
 {
 	switch (target) {
@@ -768,6 +780,7 @@ static void section_misc(const char *define_prefix, __u32 ifindex)
 			    "/*** eBPF misc features ***/",
 			    define_prefix);
 	probe_large_insn_limit(define_prefix, ifindex);
+	probe_bounded_loops(define_prefix, ifindex);
 	print_end_section();
 }
 
