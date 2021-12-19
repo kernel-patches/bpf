@@ -1211,6 +1211,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Flag for hash map, the key is string instead of fixed-size bytes */
+	BPF_F_STR_KEY		= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */
