@@ -67,10 +67,15 @@
 #if defined(__KERNEL__) || defined(__VMLINUX_H__)
 
 #define PT_REGS_PARM1(x) ((x)->di)
+#define PT_REGS_PARM1_SYSCALL(x) PT_REGS_PARM1(x)
 #define PT_REGS_PARM2(x) ((x)->si)
+#define PT_REGS_PARM2_SYSCALL(x) PT_REGS_PARM2(x)
 #define PT_REGS_PARM3(x) ((x)->dx)
+#define PT_REGS_PARM3_SYSCALL(x) PT_REGS_PARM3(x)
 #define PT_REGS_PARM4(x) ((x)->cx)
+#define PT_REGS_PARM4_SYSCALL(x) ((x)->r10) /* syscall uses r10 */
 #define PT_REGS_PARM5(x) ((x)->r8)
+#define PT_REGS_PARM5_SYSCALL(x) PT_REGS_PARM5(x)
 #define PT_REGS_RET(x) ((x)->sp)
 #define PT_REGS_FP(x) ((x)->bp)
 #define PT_REGS_RC(x) ((x)->ax)
@@ -78,10 +83,15 @@
 #define PT_REGS_IP(x) ((x)->ip)
 
 #define PT_REGS_PARM1_CORE(x) BPF_CORE_READ((x), di)
+#define PT_REGS_PARM1_CORE_SYSCALL(x) PT_REGS_PARM1_CORE(x)
 #define PT_REGS_PARM2_CORE(x) BPF_CORE_READ((x), si)
+#define PT_REGS_PARM2_CORE_SYSCALL(x) PT_REGS_PARM2_CORE(x)
 #define PT_REGS_PARM3_CORE(x) BPF_CORE_READ((x), dx)
+#define PT_REGS_PARM3_CORE_SYSCALL(x) PT_REGS_PARM3_CORE(x)
 #define PT_REGS_PARM4_CORE(x) BPF_CORE_READ((x), cx)
+#define PT_REGS_PARM4_CORE_SYSCALL(x) BPF_CORE_READ((x), r10) /* syscall uses r10 */
 #define PT_REGS_PARM5_CORE(x) BPF_CORE_READ((x), r8)
+#define PT_REGS_PARM5_CORE_SYSCALL(x) PT_REGS_PARM5_CORE(x)
 #define PT_REGS_RET_CORE(x) BPF_CORE_READ((x), sp)
 #define PT_REGS_FP_CORE(x) BPF_CORE_READ((x), bp)
 #define PT_REGS_RC_CORE(x) BPF_CORE_READ((x), ax)
@@ -117,10 +127,15 @@
 #else
 
 #define PT_REGS_PARM1(x) ((x)->rdi)
+#define PT_REGS_PARM1_SYSCALL(x) PT_REGS_PARM1(x)
 #define PT_REGS_PARM2(x) ((x)->rsi)
+#define PT_REGS_PARM2_SYSCALL(x) PT_REGS_PARM2(x)
 #define PT_REGS_PARM3(x) ((x)->rdx)
+#define PT_REGS_PARM3_SYSCALL(x) PT_REGS_PARM3(x)
 #define PT_REGS_PARM4(x) ((x)->rcx)
+#define PT_REGS_PARM4_SYSCALL(x) ((x)->r10) /* syscall uses r10 */
 #define PT_REGS_PARM5(x) ((x)->r8)
+#define PT_REGS_PARM5(x) PT_REGS_PARM5(x)
 #define PT_REGS_RET(x) ((x)->rsp)
 #define PT_REGS_FP(x) ((x)->rbp)
 #define PT_REGS_RC(x) ((x)->rax)
@@ -128,10 +143,15 @@
 #define PT_REGS_IP(x) ((x)->rip)
 
 #define PT_REGS_PARM1_CORE(x) BPF_CORE_READ((x), rdi)
+#define PT_REGS_PARM1_CORE_SYSCALL(x) PT_REGS_PARM1_CORE(x)
 #define PT_REGS_PARM2_CORE(x) BPF_CORE_READ((x), rsi)
+#define PT_REGS_PARM2_CORE_SYSCALL(x) PT_REGS_PARM2_CORE(x)
 #define PT_REGS_PARM3_CORE(x) BPF_CORE_READ((x), rdx)
+#define PT_REGS_PARM3_CORE_SYSCALL(x) PT_REGS_PARM3_CORE(x)
 #define PT_REGS_PARM4_CORE(x) BPF_CORE_READ((x), rcx)
+#define PT_REGS_PARM4_CORE_SYSCALL(x) BPF_CORE_READ((x), r10) /* syscall uses r10 */
 #define PT_REGS_PARM5_CORE(x) BPF_CORE_READ((x), r8)
+#define PT_REGS_PARM5_CORE_SYSCALL(x) PT_REGS_PARM5_CORE(x)
 #define PT_REGS_RET_CORE(x) BPF_CORE_READ((x), rsp)
 #define PT_REGS_FP_CORE(x) BPF_CORE_READ((x), rbp)
 #define PT_REGS_RC_CORE(x) BPF_CORE_READ((x), rax)
