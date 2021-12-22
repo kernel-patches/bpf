@@ -5389,14 +5389,16 @@ static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	u32 mtu = 0;
 	int err;
 
-	dev = dev_get_by_index_rcu(net, params->ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
+	if (flags & BPF_FIB_LOOKUP_DIRECT) {
+		dev = dev_get_by_index_rcu(net, params->ifindex);
+		if (unlikely(!dev))
+			return -ENODEV;
 
-	/* verify forwarding is enabled on this interface */
-	in_dev = __in_dev_get_rcu(dev);
-	if (unlikely(!in_dev || !IN_DEV_FORWARD(in_dev)))
-		return BPF_FIB_LKUP_RET_FWD_DISABLED;
+		/* verify forwarding is enabled on this interface */
+		in_dev = __in_dev_get_rcu(dev);
+		if (unlikely(!in_dev || !IN_DEV_FORWARD(in_dev)))
+			return BPF_FIB_LKUP_RET_FWD_DISABLED;
+	}
 
 	if (flags & BPF_FIB_LOOKUP_OUTPUT) {
 		fl4.flowi4_iif = 1;
@@ -5514,13 +5516,15 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	if (rt6_need_strict(dst) || rt6_need_strict(src))
 		return BPF_FIB_LKUP_RET_NOT_FWDED;
 
-	dev = dev_get_by_index_rcu(net, params->ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
+	if (flags & BPF_FIB_LOOKUP_DIRECT) {
+		dev = dev_get_by_index_rcu(net, params->ifindex);
+		if (unlikely(!dev))
+			return -ENODEV;
 
-	idev = __in6_dev_get_safely(dev);
-	if (unlikely(!idev || !idev->cnf.forwarding))
-		return BPF_FIB_LKUP_RET_FWD_DISABLED;
+		idev = __in6_dev_get_safely(dev);
+		if (unlikely(!idev || !idev->cnf.forwarding))
+			return BPF_FIB_LKUP_RET_FWD_DISABLED;
+	}
 
 	if (flags & BPF_FIB_LOOKUP_OUTPUT) {
 		fl6.flowi6_iif = 1;
