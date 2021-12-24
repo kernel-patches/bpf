@@ -950,6 +950,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
+	BPF_PROG_TYPE_SCHED_QDISC,
 };
 
 enum bpf_attach_type {
@@ -6487,6 +6488,20 @@ struct bpf_core_relo {
 	__u32 type_id;
 	__u32 access_str_off;
 	enum bpf_core_relo_kind kind;
+};
+
+struct sch_bpf_ctx {
+	struct __sk_buff *skb;
+	__u32 classid;
+	__u64 delay;
+};
+
+enum {
+	SCH_BPF_OK,
+	SCH_BPF_QUEUED,
+	SCH_BPF_DROP,
+	SCH_BPF_THROTTLE,
+	SCH_BPF_CONTINUE,
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */
