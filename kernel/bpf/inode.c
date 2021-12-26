@@ -648,12 +648,26 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	int opt;
 
 	opt = fs_parse(fc, bpf_fs_parameters, param, &result);
-	if (opt < 0)
+	if (opt < 0) {
 		/* We might like to report bad mount options here, but
 		 * traditionally we've ignored all mount options, so we'd
 		 * better continue to ignore non-existing options for bpf.
 		 */
-		return opt == -ENOPARAM ? 0 : opt;
+		if (opt == -ENOPARAM) {
+			if (strcmp(param->key, "source") == 0) {
+				if (param->type != fs_value_is_string)
+					return 0;
+				if (fc->source)
+					return 0;
+				fc->source = param->string;
+				param->string = NULL;
+			}
+
+			return 0;
+		}
+
+		return opt;
+	}
 
 	switch (opt) {
 	case OPT_MODE:
