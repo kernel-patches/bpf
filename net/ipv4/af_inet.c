@@ -530,7 +530,14 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		if (!(flags & BIND_FROM_BPF)) {
 			err = BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk);
 			if (err) {
+				if (sk->sk_prot == &udp_prot)
+					sk->sk_prot->unhash(sk);
+				else if (sk->sk_prot == &tcp_prot)
+					inet_put_port(sk);
+
 				inet->inet_saddr = inet->inet_rcv_saddr = 0;
+				err = -EPERM;
+
 				goto out_release_sock;
 			}
 		}
