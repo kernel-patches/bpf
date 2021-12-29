@@ -10676,8 +10676,8 @@ struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
 	return link;
 }
 
-enum bpf_perf_event_ret
-bpf_perf_event_read_simple(void *mmap_mem, size_t mmap_size, size_t page_size,
+static enum bpf_perf_event_ret
+perf_event_read_simple(void *mmap_mem, size_t mmap_size, size_t page_size,
 			   void **copy_mem, size_t *copy_size,
 			   bpf_perf_event_print_t fn, void *private_data)
 {
@@ -10722,6 +10722,15 @@ bpf_perf_event_read_simple(void *mmap_mem, size_t mmap_size, size_t page_size,
 
 	ring_buffer_write_tail(header, data_tail);
 	return libbpf_err(ret);
+}
+
+enum bpf_perf_event_ret
+bpf_perf_event_read_simple(void *mmap_mem, size_t mmap_size, size_t page_size,
+			   void **copy_mem, size_t *copy_size,
+			   bpf_perf_event_print_t fn, void *private_data)
+{
+	return perf_event_read_simple(mmap_mem, mmap_size, page_size, copy_mem,
+				      copy_size, fn, private_data);
 }
 
 struct perf_buffer;
@@ -11132,7 +11141,7 @@ static int perf_buffer__process_records(struct perf_buffer *pb,
 {
 	enum bpf_perf_event_ret ret;
 
-	ret = bpf_perf_event_read_simple(cpu_buf->base, pb->mmap_size,
+	ret = perf_event_read_simple(cpu_buf->base, pb->mmap_size,
 					 pb->page_size, &cpu_buf->buf,
 					 &cpu_buf->buf_size,
 					 perf_buffer__process_record, cpu_buf);
