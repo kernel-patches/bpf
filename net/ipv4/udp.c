@@ -134,6 +134,7 @@ static int udp_lib_lport_inuse(struct net *net, __u16 num,
 			       struct sock *sk, unsigned int log)
 {
 	struct sock *sk2;
+	int res = 0;
 	kuid_t uid = sock_i_uid(sk);
 
 	sk_for_each(sk2, &hslot->head) {
@@ -148,16 +149,21 @@ static int udp_lib_lport_inuse(struct net *net, __u16 num,
 			    !rcu_access_pointer(sk->sk_reuseport_cb) &&
 			    uid_eq(uid, sock_i_uid(sk2))) {
 				if (!bitmap)
-					return 0;
+					break;
 			} else {
-				if (!bitmap)
-					return 1;
+				if (!bitmap) {
+					res = 1;
+					break;
+				}
 				__set_bit(udp_sk(sk2)->udp_port_hash >> log,
 					  bitmap);
 			}
 		}
 	}
-	return 0;
+
+	if (!res)
+		res = inet_bind_conflict(sk, num);
+	return res;
 }
 
 /*
@@ -192,6 +198,11 @@ static int udp_lib_lport_inuse2(struct net *net, __u16 num,
 		}
 	}
 	spin_unlock(&hslot2->lock);
+	if (!res) {
+		sk->sk_num = num;
+		res = BPF_CGROUP_RUN_PROG_INET_LPORT_INUSE(sk);
+		sk->sk_num = 0;
+	}
 	return res;
 }
 

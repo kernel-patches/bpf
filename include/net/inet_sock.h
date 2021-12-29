@@ -298,6 +298,17 @@ static inline void __inet_sk_copy_descendant(struct sock *sk_to,
 
 int inet_sk_rebuild_header(struct sock *sk);
 
+static inline int inet_bind_conflict(struct sock *sk, int port)
+{
+	int res;
+	int old = sk->sk_num;
+
+	sk->sk_num = port;
+	res = BPF_CGROUP_RUN_PROG_INET_LPORT_INUSE(sk);
+	sk->sk_num = old;
+	return res;
+}
+
 /**
  * inet_sk_state_load - read sk->sk_state for lockless contexts
  * @sk: socket pointer

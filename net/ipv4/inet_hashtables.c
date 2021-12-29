@@ -476,6 +476,9 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 		}
 	}
 
+	if (inet_bind_conflict(sk, lport))
+		goto not_unique;
+
 	/* Must record num and sport now. Otherwise we will see
 	 * in hash table socket with a funny identity.
 	 */
@@ -744,6 +747,8 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		tb = inet_csk(sk)->icsk_bind_hash;
 		spin_lock_bh(&head->lock);
 		if (sk_head(&tb->owners) == sk && !sk->sk_bind_node.next) {
+			if (inet_bind_conflict(sk, port))
+				return -EPERM;
 			inet_ehash_nolisten(sk, NULL, NULL);
 			spin_unlock_bh(&head->lock);
 			return 0;
@@ -798,6 +803,9 @@ other_parity_scan:
 				goto next_port;
 			}
 		}
+
+		if (inet_bind_conflict(sk, port))
+			goto next_port;
 
 		tb = inet_bind_bucket_create(hinfo->bind_bucket_cachep,
 					     net, head, port, l3mdev);

@@ -130,10 +130,11 @@ void inet_get_local_port_range(struct net *net, int *low, int *high)
 }
 EXPORT_SYMBOL(inet_get_local_port_range);
 
-static int inet_csk_bind_conflict(const struct sock *sk,
+static int inet_csk_bind_conflict(struct sock *sk,
 				  const struct inet_bind_bucket *tb,
 				  bool relax, bool reuseport_ok)
 {
+	int res;
 	struct sock *sk2;
 	bool reuseport_cb_ok;
 	bool reuse = sk->sk_reuse;
@@ -179,7 +180,10 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 			}
 		}
 	}
-	return sk2 != NULL;
+	res = !!sk2;
+	if (!res)
+		res = inet_bind_conflict(sk, tb->port);
+	return res;
 }
 
 /*
@@ -401,6 +405,8 @@ tb_found:
 			goto success;
 		if (inet_csk_bind_conflict(sk, tb, true, true))
 			goto fail_unlock;
+	} else if (inet_bind_conflict(sk, port)) {
+		goto fail_unlock;
 	}
 success:
 	inet_csk_update_fastreuse(tb, sk);
