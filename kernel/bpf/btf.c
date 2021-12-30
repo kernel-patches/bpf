@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2018 Facebook */
 
+#include <linux/kallsyms.h>
+#include <linux/module.h>
 #include <uapi/linux/btf.h>
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/bpf_perf_event.h>
@@ -198,6 +200,8 @@
 DEFINE_IDR(btf_idr);
 DEFINE_SPINLOCK(btf_idr_lock);
 
+struct btf_kfunc_set_tab;
+
 struct btf {
 	void *data;
 	struct btf_type **types;
@@ -212,6 +216,7 @@ struct btf {
 	refcount_t refcnt;
 	u32 id;
 	struct rcu_head rcu;
+	struct btf_kfunc_set_tab *kfunc_set_tab;
 
 	/* split BTF support */
 	struct btf *base_btf;
@@ -219,6 +224,31 @@ struct btf {
 	u32 start_str_off; /* first string offset (0 for base BTF) */
 	char name[MODULE_NAME_LEN];
 	bool kernel_btf;
+};
+
+#define BTF_KFUNC_SET_PREFIX "btf_kfunc_set_"
+
+BTF_ID_LIST_SINGLE(btf_id_set_id, struct, btf_id_set)
+
+static const char *kfunc_hook_str[_BTF_KFUNC_HOOK_MAX] = {
+	[BTF_KFUNC_HOOK_XDP]        = "xdp_",
+	[BTF_KFUNC_HOOK_TC]         = "tc_",
+	[BTF_KFUNC_HOOK_STRUCT_OPS] = "struct_ops_",
+};
+
+static const char *kfunc_type_str[_BTF_KFUNC_TYPE_MAX] = {
+	[BTF_KFUNC_TYPE_CHECK]    = "check_",
+	[BTF_KFUNC_TYPE_ACQUIRE]  = "acquire_",
+	[BTF_KFUNC_TYPE_RELEASE]  = "release_",
+	[BTF_KFUNC_TYPE_RET_NULL] = "ret_null_",
+};
+
+enum {
+	BTF_KFUNC_SET_MAX_CNT = 32,
+};
+
+struct btf_kfunc_set_tab {
+	struct btf_id_set *sets[_BTF_KFUNC_HOOK_MAX][_BTF_KFUNC_TYPE_MAX];
 };
 
 enum verifier_phase {
@@ -1531,8 +1561,21 @@ static void btf_free_id(struct btf *btf)
 	spin_unlock_irqrestore(&btf_idr_lock, flags);
 }
 
+static void btf_free_kfunc_set_tab(struct btf_kfunc_set_tab *tab)
+{
+	int hook, type;
+
+	if (!tab)
+		return;
+	for (hook = 0; hook < ARRAY_SIZE(tab->sets); hook++) {
+		for (type = 0; type < ARRAY_SIZE(tab->sets[0]); type++)
+			kfree(tab->sets[hook][type]);
+	}
+}
+
 static void btf_free(struct btf *btf)
 {
+	btf_free_kfunc_set_tab(btf->kfunc_set_tab);
 	kvfree(btf->types);
 	kvfree(btf->resolved_sizes);
 	kvfree(btf->resolved_ids);
@@ -4675,6 +4718,223 @@ static int btf_translate_to_vmlinux(struct bpf_verifier_log *log,
 BTF_ID_LIST(bpf_ctx_convert_btf_id)
 BTF_ID(struct, bpf_ctx_convert)
 
+struct btf_parse_kfunc_data {
+	struct btf *btf;
+	struct bpf_verifier_log *log;
+};
+
+static int btf_populate_kfunc_sets(struct btf *btf,
+				   struct bpf_verifier_log *log,
+				   enum btf_kfunc_hook hook,
+				   enum btf_kfunc_type type,
+				   struct btf_id_set *add_set)
+{
+	struct btf_id_set *set, *tmp_set;
+	struct btf_kfunc_set_tab *tab;
+	u32 set_cnt;
+	int ret;
+
+	if (WARN_ON_ONCE(hook >= _BTF_KFUNC_HOOK_MAX || type >= _BTF_KFUNC_TYPE_MAX))
+		return -EINVAL;
+	if (!add_set->cnt)
+		return 0;
+
+	tab = btf->kfunc_set_tab;
+	if (!tab) {
+		tab = kzalloc(sizeof(*tab), GFP_KERNEL | __GFP_NOWARN);
+		if (!tab)
+			return -ENOMEM;
+		btf->kfunc_set_tab = tab;
+	}
+
+	set = tab->sets[hook][type];
+	set_cnt = set ? set->cnt : 0;
+
+	if (set_cnt > U32_MAX - add_set->cnt) {
+		ret = -EOVERFLOW;
+		goto end;
+	}
+
+	if (set_cnt + add_set->cnt > BTF_KFUNC_SET_MAX_CNT) {
+		bpf_log(log, "max kfunc (%d) for hook '%s' type '%s' exceeded\n",
+			BTF_KFUNC_SET_MAX_CNT, kfunc_hook_str[hook], kfunc_type_str[type]);
+		ret = -E2BIG;
+		goto end;
+	}
+
+	/* Grow set */
+	tmp_set = krealloc(set, offsetof(struct btf_id_set, ids[set_cnt + add_set->cnt]),
+			   GFP_KERNEL | __GFP_NOWARN);
+	if (!tmp_set) {
+		ret = -ENOMEM;
+		goto end;
+	}
+
+	/* For newly allocated set, initialize set->cnt to 0 */
+	if (!set)
+		tmp_set->cnt = 0;
+
+	tab->sets[hook][type] = tmp_set;
+	set = tmp_set;
+
+	/* Concatenate the two sets */
+	memcpy(set->ids + set->cnt, add_set->ids, add_set->cnt * sizeof(set->ids[0]));
+	set->cnt += add_set->cnt;
+
+	return 0;
+end:
+	btf_free_kfunc_set_tab(tab);
+	btf->kfunc_set_tab = NULL;
+	return ret;
+}
+
+static int btf_kfunc_ids_cmp(const void *a, const void *b)
+{
+	const u32 *id1 = a;
+	const u32 *id2 = b;
+
+	if (*id1 < *id2)
+		return -1;
+	if (*id1 > *id2)
+		return 1;
+	return 0;
+}
+
+static int btf_parse_kfunc_sets_cb(void *data, const char *symbol_name,
+				   struct module *mod,
+				   unsigned long symbol_value)
+{
+	int pfx_size = sizeof(BTF_KFUNC_SET_PREFIX) - 1;
+	struct btf_id_set *set = (void *)symbol_value;
+	struct btf_parse_kfunc_data *bdata = data;
+	const char *orig_name = symbol_name;
+	int i, hook, type;
+
+	BUILD_BUG_ON(ARRAY_SIZE(kfunc_hook_str) != _BTF_KFUNC_HOOK_MAX);
+	BUILD_BUG_ON(ARRAY_SIZE(kfunc_type_str) != _BTF_KFUNC_TYPE_MAX);
+
+	if (strncmp(symbol_name, BTF_KFUNC_SET_PREFIX, pfx_size))
+		return 0;
+
+	/* Identify hook */
+	symbol_name += pfx_size;
+	if (!*symbol_name) {
+		bpf_log(bdata->log, "incomplete kfunc btf_id_set specification: %s\n", orig_name);
+		return -EINVAL;
+	}
+	for (i = 0; i < ARRAY_SIZE(kfunc_hook_str); i++) {
+		pfx_size = strlen(kfunc_hook_str[i]);
+		if (strncmp(symbol_name, kfunc_hook_str[i], pfx_size))
+			continue;
+		break;
+	}
+	if (i == ARRAY_SIZE(kfunc_hook_str)) {
+		bpf_log(bdata->log, "invalid hook '%s' for kfunc_btf_id_set %s\n", symbol_name,
+			orig_name);
+		return -EINVAL;
+	}
+	hook = i;
+
+	/* Identify type */
+	symbol_name += pfx_size;
+	if (!*symbol_name) {
+		bpf_log(bdata->log, "incomplete kfunc btf_id_set specification: %s\n", orig_name);
+		return -EINVAL;
+	}
+	for (i = 0; i < ARRAY_SIZE(kfunc_type_str); i++) {
+		pfx_size = strlen(kfunc_type_str[i]);
+		if (strncmp(symbol_name, kfunc_type_str[i], pfx_size))
+			continue;
+		break;
+	}
+	if (i == ARRAY_SIZE(kfunc_type_str)) {
+		bpf_log(bdata->log, "invalid type '%s' for kfunc_btf_id_set %s\n", symbol_name,
+			orig_name);
+		return -EINVAL;
+	}
+	type = i;
+
+	return btf_populate_kfunc_sets(bdata->btf, bdata->log, hook, type, set);
+}
+
+static int btf_parse_kfunc_sets(struct btf *btf, struct module *mod,
+				struct bpf_verifier_log *log)
+{
+	struct btf_parse_kfunc_data data = { .btf = btf, .log = log, };
+	struct btf_kfunc_set_tab *tab;
+	int hook, type, ret;
+
+	if (!btf_is_kernel(btf))
+		return -EINVAL;
+	if (WARN_ON_ONCE(btf_is_module(btf) && !mod)) {
+		bpf_log(log, "btf internal error: no module for module BTF %s\n", btf->name);
+		return -EFAULT;
+	}
+	if (mod)
+		ret = module_kallsyms_on_each_symbol(mod, btf_parse_kfunc_sets_cb, &data);
+	else
+		ret = kallsyms_on_each_symbol(btf_parse_kfunc_sets_cb, &data);
+
+	tab = btf->kfunc_set_tab;
+	if (!ret && tab) {
+		/* Sort all populated sets */
+		for (hook = 0; hook < ARRAY_SIZE(tab->sets); hook++) {
+			for (type = 0; type < ARRAY_SIZE(tab->sets[0]); type++) {
+				struct btf_id_set *set = tab->sets[hook][type];
+
+				/* Not all sets may be populated */
+				if (!set)
+					continue;
+				sort(set->ids, set->cnt, sizeof(set->ids[0]), btf_kfunc_ids_cmp,
+				     NULL);
+			}
+		}
+	}
+
+	return 0;
+}
+
+static bool __btf_kfunc_id_set_contains(const struct btf *btf,
+					enum btf_kfunc_hook hook,
+					enum btf_kfunc_type type,
+					u32 kfunc_btf_id)
+{
+	struct btf_id_set *set;
+
+	if (WARN_ON_ONCE(hook >= _BTF_KFUNC_HOOK_MAX || type >= _BTF_KFUNC_TYPE_MAX))
+		return false;
+	if (!btf->kfunc_set_tab)
+		return false;
+	set = btf->kfunc_set_tab->sets[hook][type];
+	if (!set)
+		return false;
+	return btf_id_set_contains(set, kfunc_btf_id);
+}
+
+bool btf_kfunc_id_set_contains(const struct btf *btf,
+			       enum bpf_prog_type prog_type,
+			       enum btf_kfunc_type type,
+			       u32 kfunc_btf_id)
+{
+	enum btf_kfunc_hook hook;
+
+	switch (prog_type) {
+	case BPF_PROG_TYPE_XDP:
+		hook = BTF_KFUNC_HOOK_XDP;
+		break;
+	case BPF_PROG_TYPE_SCHED_CLS:
+		hook = BTF_KFUNC_HOOK_TC;
+		break;
+	case BPF_PROG_TYPE_STRUCT_OPS:
+		hook = BTF_KFUNC_HOOK_STRUCT_OPS;
+		break;
+	default:
+		return false;
+	}
+
+	return __btf_kfunc_id_set_contains(btf, hook, type, kfunc_btf_id);
+}
+
 struct btf *btf_parse_vmlinux(void)
 {
 	struct btf_verifier_env *env = NULL;
@@ -4725,6 +4985,10 @@ struct btf *btf_parse_vmlinux(void)
 
 	bpf_struct_ops_init(btf, log);
 
+	err = btf_parse_kfunc_sets(btf, NULL, log);
+	if (err < 0)
+		goto errout;
+
 	refcount_set(&btf->refcnt, 1);
 
 	err = btf_alloc_id(btf);
@@ -4737,6 +5001,7 @@ struct btf *btf_parse_vmlinux(void)
 errout:
 	btf_verifier_env_free(env);
 	if (btf) {
+		btf_free_kfunc_set_tab(btf->kfunc_set_tab);
 		kvfree(btf->types);
 		kfree(btf);
 	}
@@ -4745,7 +5010,8 @@ errout:
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 
-static struct btf *btf_parse_module(const char *module_name, const void *data, unsigned int data_size)
+static struct btf *btf_parse_module(struct module *mod, const char *module_name,
+				    const void *data, unsigned int data_size)
 {
 	struct btf_verifier_env *env = NULL;
 	struct bpf_verifier_log *log;
@@ -4800,6 +5066,10 @@ static struct btf *btf_parse_module(const char *module_name, const void *data, u
 	if (err)
 		goto errout;
 
+	err = btf_parse_kfunc_sets(btf, mod, log);
+	if (err)
+		goto errout;
+
 	btf_verifier_env_free(env);
 	refcount_set(&btf->refcnt, 1);
 	return btf;
@@ -4807,6 +5077,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data, u
 errout:
 	btf_verifier_env_free(env);
 	if (btf) {
+		btf_free_kfunc_set_tab(btf->kfunc_set_tab);
 		kvfree(btf->data);
 		kvfree(btf->types);
 		kfree(btf);
@@ -6243,7 +6514,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			err = -ENOMEM;
 			goto out;
 		}
-		btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size);
+		btf = btf_parse_module(mod, mod->name, mod->btf_data, mod->btf_data_size);
 		if (IS_ERR(btf)) {
 			pr_warn("failed to validate module [%s] BTF: %ld\n",
 				mod->name, PTR_ERR(btf));
