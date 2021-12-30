@@ -72,6 +72,9 @@ bpf__prepare_load_buffer(void *obj_buf, size_t obj_buf_sz, const char *name)
 
 struct bpf_object *bpf__prepare_load(const char *filename, bool source)
 {
+	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts,
+		.object_name = filename
+	);
 	struct bpf_object *obj;
 
 	if (!libbpf_initialized) {
@@ -94,7 +97,7 @@ struct bpf_object *bpf__prepare_load(const char *filename, bool source)
 				return ERR_PTR(-BPF_LOADER_ERRNO__COMPILE);
 		} else
 			pr_debug("bpf: successful builtin compilation\n");
-		obj = bpf_object__open_buffer(obj_buf, obj_buf_sz, filename);
+		obj = bpf_object__open_mem(obj_buf, obj_buf_sz, &opts);
 
 		if (!IS_ERR_OR_NULL(obj) && llvm_param.dump_obj)
 			llvm__dump_obj(filename, obj_buf, obj_buf_sz);
