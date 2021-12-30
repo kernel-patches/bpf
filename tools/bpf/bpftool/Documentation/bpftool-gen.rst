@@ -46,7 +46,7 @@ DESCRIPTION
 		  individually compiled files that are then linked into
 		  a single resulting BPF object file, which can be used to
 		  generated BPF skeleton (with **gen skeleton** command) or
-		  passed directly into **libbpf** (using **bpf_object__open()**
+		  passed directly into **libbpf** (using **bpf_object__open_file()**
 		  family of APIs).
 
 	**bpftool gen skeleton** *FILE*

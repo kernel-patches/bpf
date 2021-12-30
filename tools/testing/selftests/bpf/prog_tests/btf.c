@@ -4560,7 +4560,7 @@ static void do_test_file(unsigned int test_num)
 	has_btf_ext = btf_ext != NULL;
 	btf_ext__free(btf_ext);
 
-	obj = bpf_object__open(test->file);
+	obj = bpf_object__open_file(test->file, NULL);
 	err = libbpf_get_error(obj);
 	if (CHECK(err, "obj: %d", err))
 		return;

@@ -45,7 +45,7 @@ static int do_pin(int argc, char **argv)
 		}
 	}
 
-	obj = bpf_object__open(objfile);
+	obj = bpf_object__open_file(objfile, NULL);
 	err = libbpf_get_error(obj);
 	if (err) {
 		p_err("can't open objfile %s", objfile);

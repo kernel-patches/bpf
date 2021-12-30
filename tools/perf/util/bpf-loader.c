@@ -101,7 +101,7 @@ struct bpf_object *bpf__prepare_load(const char *filename, bool source)
 
 		free(obj_buf);
 	} else
-		obj = bpf_object__open(filename);
+		obj = bpf_object__open_file(filename, NULL);
 
 	if (IS_ERR_OR_NULL(obj)) {
 		pr_debug("bpf: failed to load %s\n", filename);

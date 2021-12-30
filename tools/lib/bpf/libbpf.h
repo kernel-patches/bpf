@@ -150,6 +150,7 @@ struct bpf_object_open_opts {
 };
 #define bpf_object_open_opts__last_field kernel_log_level
 
+LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_object__open_file() instead")
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 
 /**
@@ -807,10 +808,10 @@ struct bpf_prog_load_attr {
 	int prog_flags;
 };
 
-LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_object__open() and bpf_object__load() instead")
+LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_object__open_file() and bpf_object__load() instead")
 LIBBPF_API int bpf_prog_load_xattr(const struct bpf_prog_load_attr *attr,
 				   struct bpf_object **pobj, int *prog_fd);
-LIBBPF_DEPRECATED_SINCE(0, 7, "use bpf_object__open() and bpf_object__load() instead")
+LIBBPF_DEPRECATED_SINCE(0, 7, "use bpf_object__open_file() and bpf_object__load() instead")
 LIBBPF_API int bpf_prog_load_deprecated(const char *file, enum bpf_prog_type type,
 					struct bpf_object **pobj, int *prog_fd);
 

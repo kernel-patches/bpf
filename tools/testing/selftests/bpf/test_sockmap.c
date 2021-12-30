@@ -1761,7 +1761,7 @@ static int populate_progs(char *bpf_file)
 	int i = 0;
 	long err;
 
-	obj = bpf_object__open(bpf_file);
+	obj = bpf_object__open_file(bpf_file, NULL);
 	err = libbpf_get_error(obj);
 	if (err) {
 		char err_buf[256];

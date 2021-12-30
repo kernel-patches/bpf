@@ -1156,7 +1156,7 @@ static void test_map_in_map(void)
 	__u32 id = 0;
 	libbpf_print_fn_t old_print_fn;
 
-	obj = bpf_object__open(MAPINMAP_PROG);
+	obj = bpf_object__open_file(MAPINMAP_PROG, NULL);
 
 	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(int), sizeof(int), 2, NULL);
 	if (fd < 0) {
@@ -1227,7 +1227,7 @@ static void test_map_in_map(void)
 	bpf_object__close(obj);
 
 	/* Test that failing bpf_object__create_map() destroys the inner map */
-	obj = bpf_object__open(MAPINMAP_INVALID_PROG);
+	obj = bpf_object__open_file(MAPINMAP_INVALID_PROG, NULL);
 	err = libbpf_get_error(obj);
 	if (err) {
 		printf("Failed to load %s program: %d %d",

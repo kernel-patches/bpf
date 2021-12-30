@@ -3,5 +3,5 @@
 
 int main(void)
 {
-	return bpf_object__open("test") ? 0 : -1;
+	return bpf_object__open_file("test", NULL) ? 0 : -1;
 }
