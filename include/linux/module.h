@@ -867,8 +867,43 @@ static inline bool module_sig_ok(struct module *module)
 }
 #endif	/* CONFIG_MODULE_SIG */
 
-int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
+#if defined(CONFIG_MODULES) && defined(CONFIG_KALLSYMS)
+
+#ifdef CONFIG_LIVEPATCH
+
+int module_kallsyms_on_each_symbol_all(int (*fn)(void *, const char *,
+						 struct module *,
+						 unsigned long),
+				       void *data);
+
+#else /* !CONFIG_LIVEPATCH */
+
+static inline int module_kallsyms_on_each_symbol_all(int (*fn)(void *, const char *,
+							   struct module *,
+							   unsigned long),
+						     void *data)
+{
+	return 0;
+}
+
+#endif /* CONFIG_LIVEPATCH */
+
+int module_kallsyms_on_each_symbol(struct module *mod,
+				   int (*fn)(void *, const char *,
 					     struct module *, unsigned long),
 				   void *data);
+
+#else /* !(CONFIG_MODULES && CONFIG_KALLSYMS) */
+
+static inline int module_kallsyms_on_each_symbol(struct module *mod,
+						 int (*fn)(void *, const char *,
+							   struct module *,
+							   unsigned long),
+						 void *data)
+{
+	return 0;
+}
+
+#endif /* CONFIG_MODULES && CONFIG_KALLSYMS */
 
 #endif /* _LINUX_MODULE_H */

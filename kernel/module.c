@@ -4473,13 +4473,54 @@ unsigned long module_kallsyms_lookup_name(const char *name)
 	return ret;
 }
 
-#ifdef CONFIG_LIVEPATCH
-int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
+static int __module_kallsyms_on_each_symbol(struct mod_kallsyms *kallsyms,
+					    struct module *mod,
+					    int (*fn)(void *, const char *,
+						      struct module *, unsigned long),
+					    void *data)
+{
+	unsigned long i;
+	int ret = 0;
+
+	for (i = 0; i < kallsyms->num_symtab; i++) {
+		const Elf_Sym *sym = &kallsyms->symtab[i];
+
+		if (sym->st_shndx == SHN_UNDEF)
+			continue;
+
+		ret = fn(data, kallsyms_symbol_name(kallsyms, i),
+			 mod, kallsyms_symbol_value(sym));
+		if (ret != 0)
+			break;
+	}
+
+	return ret;
+}
+
+int module_kallsyms_on_each_symbol(struct module *mod,
+				   int (*fn)(void *, const char *,
 					     struct module *, unsigned long),
 				   void *data)
 {
+	struct mod_kallsyms *kallsyms;
+	int ret = 0;
+
+	mutex_lock(&module_mutex);
+	/* We hold module_mutex: no need for rcu_dereference_sched */
+	kallsyms = mod->kallsyms;
+	if (mod->state != MODULE_STATE_UNFORMED)
+		ret = __module_kallsyms_on_each_symbol(kallsyms, mod, fn, data);
+	mutex_unlock(&module_mutex);
+
+	return ret;
+}
+
+#ifdef CONFIG_LIVEPATCH
+int module_kallsyms_on_each_symbol_all(int (*fn)(void *, const char *,
+						 struct module *, unsigned long),
+				       void *data)
+{
 	struct module *mod;
-	unsigned int i;
 	int ret = 0;
 
 	mutex_lock(&module_mutex);
@@ -4489,19 +4530,10 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 
 		if (mod->state == MODULE_STATE_UNFORMED)
 			continue;
-		for (i = 0; i < kallsyms->num_symtab; i++) {
-			const Elf_Sym *sym = &kallsyms->symtab[i];
-
-			if (sym->st_shndx == SHN_UNDEF)
-				continue;
-
-			ret = fn(data, kallsyms_symbol_name(kallsyms, i),
-				 mod, kallsyms_symbol_value(sym));
-			if (ret != 0)
-				goto out;
-		}
+		ret = __module_kallsyms_on_each_symbol(kallsyms, mod, fn, data);
+		if (ret != 0)
+			break;
 	}
-out:
 	mutex_unlock(&module_mutex);
 	return ret;
 }
