@@ -1783,6 +1783,7 @@ static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 
 		mod = btf_try_get_module(btf);
 		if (!mod) {
+			verbose(env, "failed to get reference for BTF's module\n");
 			btf_put(btf);
 			return ERR_PTR(-ENXIO);
 		}
