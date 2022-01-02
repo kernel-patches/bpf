@@ -6338,7 +6338,10 @@ struct module *btf_try_get_module(const struct btf *btf)
 		if (btf_mod->btf != btf)
 			continue;
 
-		if (try_module_get(btf_mod->module))
+		/* We must only consider module whose __init routine has
+		 * finished, hence use try_module_get_live.
+		 */
+		if (try_module_get_live(btf_mod->module))
 			res = btf_mod->module;
 
 		break;
