@@ -318,12 +318,7 @@ EXPORT_SYMBOL(unregister_module_notifier);
 static inline int strong_try_module_get(struct module *mod)
 {
 	BUG_ON(mod && mod->state == MODULE_STATE_UNFORMED);
-	if (mod && mod->state == MODULE_STATE_COMING)
-		return -EBUSY;
-	if (try_module_get(mod))
-		return 0;
-	else
-		return -ENOENT;
+	return __try_module_get(mod, true);
 }
 
 static inline void add_taint_module(struct module *mod, unsigned flag,
@@ -1066,24 +1061,25 @@ void __module_get(struct module *module)
 }
 EXPORT_SYMBOL(__module_get);
 
-bool try_module_get(struct module *module)
+int __try_module_get(struct module *module, bool strong)
 {
-	bool ret = true;
+	int ret = 0;
 
 	if (module) {
 		preempt_disable();
+		if (strong && module->state == MODULE_STATE_COMING)
+			ret = -EBUSY;
 		/* Note: here, we can fail to get a reference */
-		if (likely(module_is_live(module) &&
+		else if (likely(module_is_live(module) &&
 			   atomic_inc_not_zero(&module->refcnt) != 0))
 			trace_module_get(module, _RET_IP_);
 		else
-			ret = false;
-
+			ret = -ENOENT;
 		preempt_enable();
 	}
 	return ret;
 }
-EXPORT_SYMBOL(try_module_get);
+EXPORT_SYMBOL(__try_module_get);
 
 void module_put(struct module *module)
 {

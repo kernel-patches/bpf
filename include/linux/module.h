@@ -608,17 +608,17 @@ void symbol_put_addr(void *addr);
 /* Sometimes we know we already have a refcount, and it's easier not
    to handle the error case (which only happens with rmmod --wait). */
 extern void __module_get(struct module *module);
-
-/* This is the Right Way to get a module: if it fails, it's being removed,
- * so pretend it's not there. */
-extern bool try_module_get(struct module *module);
-
+extern int __try_module_get(struct module *module, bool strong);
 extern void module_put(struct module *module);
 
 #else /*!CONFIG_MODULE_UNLOAD*/
-static inline bool try_module_get(struct module *module)
+static inline int __try_module_get(struct module *module, bool strong)
 {
-	return !module || module_is_live(module);
+	if (module && !module_is_live(module))
+		return -ENOENT;
+	if (strong && module && module->state == MODULE_STATE_COMING)
+		return -EBUSY;
+	return 0;
 }
 static inline void module_put(struct module *module)
 {
@@ -630,6 +630,18 @@ static inline void __module_get(struct module *module)
 #define symbol_put_addr(p) do { } while (0)
 
 #endif /* CONFIG_MODULE_UNLOAD */
+
+/* This is the Right Way to get a module: if it fails, it's being removed,
+ * so pretend it's not there. */
+static inline bool try_module_get(struct module *module)
+{
+	return !__try_module_get(module, false);
+}
+/* Only take reference for modules which have fully initialized */
+static inline bool try_module_get_live(struct module *module)
+{
+	return !__try_module_get(module, true);
+}
 
 /* This is a #define so the string doesn't get put in every .o file */
 #define module_name(mod)			\
