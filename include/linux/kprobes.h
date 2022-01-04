@@ -191,6 +191,7 @@ struct kretprobe_instance {
 	struct kretprobe_holder *rph;
 	kprobe_opcode_t *ret_addr;
 	void *fp;
+	unsigned long ftrace_multi_addr;
 	char data[];
 };
 
@@ -387,15 +388,36 @@ static inline void wait_for_kprobe_optimizer(void) { }
 #endif /* CONFIG_OPTPROBES */
 
 #ifdef CONFIG_KPROBES_ON_FTRACE
+DECLARE_PER_CPU(unsigned long, current_ftrace_multi_addr);
 extern void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 				  struct ftrace_ops *ops, struct ftrace_regs *fregs);
 extern void kprobe_ftrace_multi_handler(unsigned long ip, unsigned long parent_ip,
 					struct ftrace_ops *ops, struct ftrace_regs *fregs);
 extern int arch_prepare_kprobe_ftrace(struct kprobe *p);
+
+static inline unsigned long kprobe_ftrace_multi_addr(void)
+{
+	return __this_cpu_read(current_ftrace_multi_addr);
+}
+static inline unsigned long kprobe_ftrace_multi_addr_set(unsigned long addr)
+{
+	unsigned long old = __this_cpu_read(current_ftrace_multi_addr);
+
+	__this_cpu_write(current_ftrace_multi_addr, addr);
+	return old;
+}
 #else
 static inline int arch_prepare_kprobe_ftrace(struct kprobe *p)
 {
 	return -EINVAL;
+}
+static inline unsigned long kprobe_ftrace_multi_addr_set(unsigned long addr)
+{
+	return 0;
+}
+static inline unsigned long kprobe_ftrace_multi_addr(void)
+{
+	return 0;
 }
 #endif /* CONFIG_KPROBES_ON_FTRACE */
 
@@ -513,6 +535,10 @@ static inline int kprobe_get_kallsym(unsigned int symnum, unsigned long *value,
 				     char *type, char *sym)
 {
 	return -ERANGE;
+}
+static inline unsigned long kprobe_ftrace_multi_addr(void)
+{
+	return 0;
 }
 #endif /* CONFIG_KPROBES */
 

@@ -72,6 +72,7 @@ NOKPROBE_SYMBOL(kprobe_ftrace_handler);
 void kprobe_ftrace_multi_handler(unsigned long ip, unsigned long parent_ip,
 				 struct ftrace_ops *ops, struct ftrace_regs *fregs)
 {
+	unsigned long old;
 	struct kprobe *p;
 	int bit;
 
@@ -79,8 +80,10 @@ void kprobe_ftrace_multi_handler(unsigned long ip, unsigned long parent_ip,
 	if (bit < 0)
 		return;
 
+	old = kprobe_ftrace_multi_addr_set(ip);
 	p = container_of(ops, struct kprobe, multi.ops);
 	ftrace_handler(p, ip, fregs);
+	kprobe_ftrace_multi_addr_set(old);
 
 	ftrace_test_recursion_unlock(bit);
 }

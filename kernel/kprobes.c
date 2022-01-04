@@ -1079,6 +1079,8 @@ static bool in_kretprobe_blacklist(void *addr)
 }
 
 #ifdef CONFIG_KPROBES_ON_FTRACE
+DEFINE_PER_CPU(unsigned long, current_ftrace_multi_addr);
+
 static struct ftrace_ops kprobe_ftrace_ops __read_mostly = {
 	.func = kprobe_ftrace_handler,
 	.flags = FTRACE_OPS_FL_SAVE_REGS,
@@ -2126,11 +2128,14 @@ unsigned long __kretprobe_trampoline_handler(struct pt_regs *regs,
 		rp = get_kretprobe(ri);
 		if (rp && rp->handler) {
 			struct kprobe *prev = kprobe_running();
+			unsigned long prev_func_addr;
 
+			prev_func_addr = kprobe_ftrace_multi_addr_set(ri->ftrace_multi_addr);
 			__this_cpu_write(current_kprobe, &rp->kp);
 			ri->ret_addr = correct_ret_addr;
 			rp->handler(ri, regs);
 			__this_cpu_write(current_kprobe, prev);
+			kprobe_ftrace_multi_addr_set(prev_func_addr);
 		}
 		if (first == node)
 			break;
@@ -2181,6 +2186,7 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 	}
 
 	arch_prepare_kretprobe(ri, regs);
+	ri->ftrace_multi_addr = kprobe_ftrace_multi_addr();
 
 	__llist_add(&ri->llist, &current->kretprobe_instances);
 

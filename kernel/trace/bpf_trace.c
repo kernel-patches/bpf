@@ -1026,7 +1026,12 @@ BPF_CALL_1(bpf_get_func_ip_kprobe, struct pt_regs *, regs)
 {
 	struct kprobe *kp = kprobe_running();
 
-	return kp ? (uintptr_t)kp->func_addr : 0;
+	if (!kp)
+		return 0;
+	if (kprobe_ftrace_multi(kp))
+		return (uintptr_t) kprobe_ftrace_multi_addr();
+	else
+		return (uintptr_t) kp->func_addr;
 }
 
 static const struct bpf_func_proto bpf_get_func_ip_proto_kprobe = {
