@@ -75,6 +75,7 @@ struct kprobe {
 		kprobe_opcode_t **addrs;
 		unsigned int cnt;
 		struct ftrace_ops ops;
+		bool check_kretprobe;
 	} multi;
 #endif
 

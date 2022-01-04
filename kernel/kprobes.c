@@ -1067,6 +1067,17 @@ static int check_ftrace_location(unsigned long addr, struct kprobe *p)
 	return 0;
 }
 
+static bool in_kretprobe_blacklist(void *addr)
+{
+	int i;
+
+	for (i = 0; kretprobe_blacklist[i].name != NULL; i++) {
+		if (kretprobe_blacklist[i].addr == addr)
+			return true;
+	}
+	return false;
+}
+
 #ifdef CONFIG_KPROBES_ON_FTRACE
 static struct ftrace_ops kprobe_ftrace_ops __read_mostly = {
 	.func = kprobe_ftrace_handler,
@@ -1170,7 +1181,8 @@ static int disarm_kprobe_ftrace(struct kprobe *p)
  * - ftrace managed function entry address
  * - kernel core only address
  */
-static unsigned long check_ftrace_addr(unsigned long addr)
+static unsigned long check_ftrace_addr(unsigned long addr,
+				       bool check_kretprobe)
 {
 	int err;
 
@@ -1182,6 +1194,8 @@ static unsigned long check_ftrace_addr(unsigned long addr)
 	if (check_kprobe_address(addr))
 		return -EINVAL;
 	if (__module_text_address(addr))
+		return -EINVAL;
+	if (check_kretprobe && in_kretprobe_blacklist((void *) addr))
 		return -EINVAL;
 	return 0;
 }
@@ -1217,7 +1231,7 @@ static int check_ftrace_multi(struct kprobe *p)
 	preempt_disable();
 
 	for (i = 0; i < cnt; i++) {
-		err = check_ftrace_addr(ips[i]);
+		err = check_ftrace_addr(ips[i], p->multi.check_kretprobe);
 		if (err)
 			break;
 	}
@@ -2208,13 +2222,17 @@ int kprobe_on_func_entry(kprobe_opcode_t *addr, const char *sym, unsigned long o
 	return 0;
 }
 
-int register_kretprobe(struct kretprobe *rp)
+static int check_kretprobe_address(struct kretprobe *rp)
 {
 	int ret;
-	struct kretprobe_instance *inst;
-	int i;
 	void *addr;
 
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (rp->kp.multi.cnt) {
+		rp->kp.multi.check_kretprobe = !!kretprobe_blacklist_size;
+		return 0;
+	}
+#endif
 	ret = kprobe_on_func_entry(rp->kp.addr, rp->kp.symbol_name, rp->kp.offset);
 	if (ret)
 		return ret;
@@ -2227,12 +2245,20 @@ int register_kretprobe(struct kretprobe *rp)
 		addr = kprobe_addr(&rp->kp);
 		if (IS_ERR(addr))
 			return PTR_ERR(addr);
-
-		for (i = 0; kretprobe_blacklist[i].name != NULL; i++) {
-			if (kretprobe_blacklist[i].addr == addr)
-				return -EINVAL;
-		}
+		if (in_kretprobe_blacklist(addr))
+			return -EINVAL;
 	}
+	return 0;
+}
+
+int register_kretprobe(struct kretprobe *rp)
+{
+	struct kretprobe_instance *inst;
+	int i, ret = 0;
+
+	ret = check_kretprobe_address(rp);
+	if (ret)
+		return ret;
 
 	if (rp->data_size > KRETPROBE_MAX_DATA_SIZE)
 		return -E2BIG;
