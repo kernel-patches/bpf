@@ -57,6 +57,46 @@ cleanup:
 	bpf_link__destroy(retlink2);
 }
 
+static void rawkprobe_subtest(struct test_bpf_cookie *skel)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	int err, prog_fd, link1_fd = -1, link2_fd = -1;
+	__u32 duration = 0, retval;
+	__u64 addr;
+
+	kallsyms_find("bpf_fentry_test1", &addr);
+
+	opts.kprobe.addrs = (__u64) &addr;
+	opts.kprobe.cnt = 1;
+	opts.kprobe.bpf_cookie = 0x1;
+	prog_fd = bpf_program__fd(skel->progs.handle_raw_kprobe);
+
+	link1_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_RAW_KPROBE, &opts);
+	if (!ASSERT_GE(link1_fd, 0, "link1_fd"))
+		return;
+
+	opts.flags = BPF_F_KPROBE_RETURN;
+	opts.kprobe.bpf_cookie = 0x2;
+	prog_fd = bpf_program__fd(skel->progs.handle_raw_kretprobe);
+
+	link2_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_RAW_KPROBE, &opts);
+	if (!ASSERT_GE(link2_fd, 0, "link2_fd"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.raw_trigger);
+	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
+				NULL, NULL, &retval, &duration);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(retval, 0, "test_run");
+
+	ASSERT_EQ(skel->bss->raw_kprobe_res, 0x1, "raw_kprobe_res");
+	ASSERT_EQ(skel->bss->raw_kretprobe_res, 0x2, "raw_kretprobe_res");
+
+cleanup:
+	close(link1_fd);
+	close(link2_fd);
+}
+
 static void uprobe_subtest(struct test_bpf_cookie *skel)
 {
 	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, opts);
@@ -243,6 +283,8 @@ void test_bpf_cookie(void)
 
 	if (test__start_subtest("kprobe"))
 		kprobe_subtest(skel);
+	if (test__start_subtest("rawkprobe"))
+		rawkprobe_subtest(skel);
 	if (test__start_subtest("uprobe"))
 		uprobe_subtest(skel);
 	if (test__start_subtest("tracepoint"))

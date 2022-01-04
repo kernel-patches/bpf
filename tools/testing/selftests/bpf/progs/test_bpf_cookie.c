@@ -8,8 +8,9 @@
 int my_tid;
 
 int kprobe_res;
-int kprobe_multi_res;
 int kretprobe_res;
+int raw_kprobe_res;
+int raw_kretprobe_res;
 int uprobe_res;
 int uretprobe_res;
 int tp_res;
@@ -34,6 +35,27 @@ SEC("kretprobe/sys_nanosleep")
 int handle_kretprobe(struct pt_regs *ctx)
 {
 	update(ctx, &kretprobe_res);
+	return 0;
+}
+
+SEC("kprobe/bpf_fentry_test1")
+int handle_raw_kprobe(struct pt_regs *ctx)
+{
+	update(ctx, &raw_kprobe_res);
+	return 0;
+}
+
+SEC("kretprobe/bpf_fentry_test1")
+int handle_raw_kretprobe(struct pt_regs *ctx)
+{
+	update(ctx, &raw_kretprobe_res);
+	return 0;
+}
+
+/* just to trigger bpf_fentry_test1 through tracing test_run */
+SEC("fentry/bpf_modify_return_test")
+int BPF_PROG(raw_trigger)
+{
 	return 0;
 }
 
