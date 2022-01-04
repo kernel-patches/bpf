@@ -25,6 +25,8 @@
 #include <linux/ktime.h>
 #include <linux/limits.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 
 static char func_name[NAME_MAX] = "kernel_clone";
 module_param_string(func, func_name, NAME_MAX, S_IRUGO);
@@ -80,17 +82,54 @@ static struct kretprobe my_kretprobe = {
 
 static int __init kretprobe_init(void)
 {
+	char **symbols = NULL;
 	int ret;
 
 	my_kretprobe.kp.symbol_name = func_name;
+
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (strchr(func_name, ',')) {
+		char *p, *tmp;
+		int cnt;
+
+		tmp = kstrdup(func_name, GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		p = strchr(tmp, ',');
+		while (p) {
+			*p = ' ';
+			p = strchr(p + 1, ',');
+		}
+
+		symbols = argv_split(GFP_KERNEL, tmp, &cnt);
+		kfree(tmp);
+		if (!symbols) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		my_kretprobe.kp.multi.symbols = (const char **) symbols;
+		my_kretprobe.kp.multi.cnt = cnt;
+	}
+#endif
 	ret = register_kretprobe(&my_kretprobe);
 	if (ret < 0) {
 		pr_err("register_kretprobe failed, returned %d\n", ret);
 		return ret;
 	}
-	pr_info("Planted return probe at %s: %p\n",
+
+	if (symbols) {
+		pr_info("Planted multi return kprobe to %s\n", func_name);
+	} else {
+		pr_info("Planted return probe at %s: %p\n",
 			my_kretprobe.kp.symbol_name, my_kretprobe.kp.addr);
-	return 0;
+	}
+
+out:
+	if (symbols)
+		argv_free(symbols);
+	return ret;
 }
 
 static void __exit kretprobe_exit(void)
