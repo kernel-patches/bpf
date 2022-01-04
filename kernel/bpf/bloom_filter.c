@@ -87,6 +87,12 @@ static int bloom_map_get_next_key(struct bpf_map *map, void *key, void *next_key
 	return -EOPNOTSUPP;
 }
 
+static int bloom_get_next_key(struct bpf_map *map, void *key,
+			      void *next_key)
+{
+	return -ENOTSUPP;
+}
+
 static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 {
 	u32 bitset_bytes, bitset_mask, nr_hash_funcs, nr_bits;
@@ -207,4 +213,5 @@ const struct bpf_map_ops bloom_filter_map_ops = {
 	.map_check_btf = bloom_map_check_btf,
 	.map_btf_name = "bpf_bloom_filter",
 	.map_btf_id = &bpf_bloom_map_btf_id,
+	.map_get_next_key = bloom_get_next_key,
 };
