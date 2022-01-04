@@ -74,6 +74,9 @@ struct kprobe {
 	/* Offset into the symbol */
 	unsigned int offset;
 
+	/* traced function address */
+	unsigned long func_addr;
+
 	/* Called before addr is executed. */
 	kprobe_pre_handler_t pre_handler;
 

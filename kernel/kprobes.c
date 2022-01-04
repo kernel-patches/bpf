@@ -1330,6 +1330,7 @@ static void init_aggr_kprobe(struct kprobe *ap, struct kprobe *p)
 	copy_kprobe(p, ap);
 	flush_insn_slot(ap);
 	ap->addr = p->addr;
+	ap->func_addr = p->func_addr;
 	ap->flags = p->flags & ~KPROBE_FLAG_OPTIMIZED;
 	ap->pre_handler = aggr_pre_handler;
 	/* We don't care the kprobe which has gone. */
@@ -1608,6 +1609,16 @@ out:
 	return ret;
 }
 
+static unsigned long resolve_func_addr(kprobe_opcode_t *addr)
+{
+	char str[KSYM_SYMBOL_LEN];
+	unsigned long offset;
+
+	if (kallsyms_lookup((unsigned long) addr, NULL, &offset, NULL, str))
+		return (unsigned long) addr - offset;
+	return 0;
+}
+
 int register_kprobe(struct kprobe *p)
 {
 	int ret;
@@ -1620,6 +1631,7 @@ int register_kprobe(struct kprobe *p)
 	if (IS_ERR(addr))
 		return PTR_ERR(addr);
 	p->addr = addr;
+	p->func_addr = resolve_func_addr(addr);
 
 	ret = warn_kprobe_rereg(p);
 	if (ret)
