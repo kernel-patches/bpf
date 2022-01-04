@@ -15,8 +15,10 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/kprobes.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 
-#define MAX_SYMBOL_LEN	64
+#define MAX_SYMBOL_LEN	4096
 static char symbol[MAX_SYMBOL_LEN] = "kernel_clone";
 module_param_string(symbol, symbol, sizeof(symbol), 0644);
 
@@ -97,17 +99,54 @@ static void __kprobes handler_post(struct kprobe *p, struct pt_regs *regs,
 
 static int __init kprobe_init(void)
 {
+	char **symbols = NULL;
 	int ret;
+
 	kp.pre_handler = handler_pre;
 	kp.post_handler = handler_post;
+
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (strchr(symbol, ',')) {
+		char *p, *tmp;
+		int cnt;
+
+		tmp = kstrdup(symbol, GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		p = strchr(tmp, ',');
+		while (p) {
+			*p = ' ';
+			p = strchr(p + 1, ',');
+		}
+
+		symbols = argv_split(GFP_KERNEL, tmp, &cnt);
+		kfree(tmp);
+		if (!symbols) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		kp.multi.symbols = (const char **) symbols;
+		kp.multi.cnt = cnt;
+	}
+#endif
 
 	ret = register_kprobe(&kp);
 	if (ret < 0) {
 		pr_err("register_kprobe failed, returned %d\n", ret);
-		return ret;
+		goto out;
 	}
-	pr_info("Planted kprobe at %p\n", kp.addr);
-	return 0;
+
+	if (symbols)
+		pr_info("Planted multi kprobe to %s\n", symbol);
+	else
+		pr_info("Planted kprobe at %p\n", kp.addr);
+
+out:
+	if (symbols)
+		argv_free(symbols);
+	return ret;
 }
 
 static void __exit kprobe_exit(void)
