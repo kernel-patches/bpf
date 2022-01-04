@@ -848,6 +848,11 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_TRACE_RAW_KPROBE:
+		attr.link_create.kprobe.addrs = OPTS_GET(opts, kprobe.addrs, 0);
+		attr.link_create.kprobe.cnt = OPTS_GET(opts, kprobe.cnt, 0);
+		attr.link_create.kprobe.bpf_cookie = OPTS_GET(opts, kprobe.bpf_cookie, 0);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
