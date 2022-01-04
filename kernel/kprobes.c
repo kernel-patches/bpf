@@ -44,6 +44,7 @@
 #include <asm/cacheflush.h>
 #include <asm/errno.h>
 #include <linux/uaccess.h>
+#include <linux/ftrace.h>
 
 #define KPROBE_HASH_BITS 6
 #define KPROBE_TABLE_SIZE (1 << KPROBE_HASH_BITS)
@@ -1037,6 +1038,35 @@ static struct kprobe *alloc_aggr_kprobe(struct kprobe *p)
 }
 #endif /* CONFIG_OPTPROBES */
 
+static int check_kprobe_address(unsigned long addr)
+{
+	/* Ensure it is not in reserved area nor out of text */
+	return !kernel_text_address(addr) ||
+		within_kprobe_blacklist(addr) ||
+		jump_label_text_reserved((void *) addr, (void *) addr) ||
+		static_call_text_reserved((void *) addr, (void *) addr) ||
+		find_bug(addr);
+}
+
+static int check_ftrace_location(unsigned long addr, struct kprobe *p)
+{
+	unsigned long ftrace_addr;
+
+	ftrace_addr = ftrace_location(addr);
+	if (ftrace_addr) {
+#ifdef CONFIG_KPROBES_ON_FTRACE
+		/* Given address is not on the instruction boundary */
+		if (addr != ftrace_addr)
+			return -EILSEQ;
+		if (p)
+			p->flags |= KPROBE_FLAG_FTRACE;
+#else	/* !CONFIG_KPROBES_ON_FTRACE */
+		return -EINVAL;
+#endif
+	}
+	return 0;
+}
+
 #ifdef CONFIG_KPROBES_ON_FTRACE
 static struct ftrace_ops kprobe_ftrace_ops __read_mostly = {
 	.func = kprobe_ftrace_handler,
@@ -1058,6 +1088,13 @@ static int __arm_kprobe_ftrace(struct kprobe *p, struct ftrace_ops *ops,
 
 	lockdep_assert_held(&kprobe_mutex);
 
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (kprobe_ftrace_multi(p)) {
+		ret = register_ftrace_function(&p->multi.ops);
+		WARN(ret < 0, "Failed to register kprobe-multi-ftrace (error %d)\n", ret);
+		return ret;
+	}
+#endif
 	ret = ftrace_set_filter_ip(ops, (unsigned long)p->addr, 0, 0);
 	if (WARN_ONCE(ret < 0, "Failed to arm kprobe-ftrace at %pS (error %d)\n", p->addr, ret))
 		return ret;
@@ -1096,6 +1133,13 @@ static int __disarm_kprobe_ftrace(struct kprobe *p, struct ftrace_ops *ops,
 
 	lockdep_assert_held(&kprobe_mutex);
 
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (kprobe_ftrace_multi(p)) {
+		ret = unregister_ftrace_function(&p->multi.ops);
+		WARN(ret < 0, "Failed to unregister kprobe-ftrace (error %d)\n", ret);
+		return ret;
+	}
+#endif
 	if (*cnt == 1) {
 		ret = unregister_ftrace_function(ops);
 		if (WARN(ret < 0, "Failed to unregister kprobe-ftrace (error %d)\n", ret))
@@ -1118,6 +1162,94 @@ static int disarm_kprobe_ftrace(struct kprobe *p)
 		ipmodify ? &kprobe_ipmodify_ops : &kprobe_ftrace_ops,
 		ipmodify ? &kprobe_ipmodify_enabled : &kprobe_ftrace_enabled);
 }
+
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+/*
+ * In addition to standard kprobe address check for multi
+ * ftrace kprobes we also allow only:
+ * - ftrace managed function entry address
+ * - kernel core only address
+ */
+static unsigned long check_ftrace_addr(unsigned long addr)
+{
+	int err;
+
+	if (!addr)
+		return -EINVAL;
+	err = check_ftrace_location(addr, NULL);
+	if (err)
+		return err;
+	if (check_kprobe_address(addr))
+		return -EINVAL;
+	if (__module_text_address(addr))
+		return -EINVAL;
+	return 0;
+}
+
+static int check_ftrace_multi(struct kprobe *p)
+{
+	kprobe_opcode_t **addrs = p->multi.addrs;
+	const char **symbols = p->multi.symbols;
+	unsigned int i, cnt = p->multi.cnt;
+	unsigned long addr, *ips;
+	int err;
+
+	if ((symbols && addrs) || (!symbols && !addrs))
+		return -EINVAL;
+
+	/* do we want sysctl for this? */
+	if (cnt >= 20000)
+		return -E2BIG;
+
+	ips = kmalloc(sizeof(*ips) * cnt, GFP_KERNEL);
+	if (!ips)
+		return -ENOMEM;
+
+	for (i = 0; i < cnt; i++) {
+		if (symbols)
+			addr = (unsigned long) kprobe_lookup_name(symbols[i], 0);
+		else
+			addr = (unsigned long) addrs[i];
+		ips[i] = addr;
+	}
+
+	jump_label_lock();
+	preempt_disable();
+
+	for (i = 0; i < cnt; i++) {
+		err = check_ftrace_addr(ips[i]);
+		if (err)
+			break;
+	}
+
+	preempt_enable();
+	jump_label_unlock();
+
+	if (err)
+		goto out;
+
+	err = ftrace_set_filter_ips(&p->multi.ops, ips, cnt, 0, 0);
+	if (err)
+		goto out;
+
+	p->multi.ops.func = kprobe_ftrace_multi_handler;
+	p->multi.ops.flags = FTRACE_OPS_FL_SAVE_REGS|FTRACE_OPS_FL_DYNAMIC;
+
+	p->flags |= KPROBE_FLAG_MULTI|KPROBE_FLAG_FTRACE;
+	if (p->post_handler)
+		p->multi.ops.flags |= FTRACE_OPS_FL_IPMODIFY;
+
+out:
+	kfree(ips);
+	return err;
+}
+
+static void free_ftrace_multi(struct kprobe *p)
+{
+	ftrace_free_filter(&p->multi.ops);
+}
+#endif
+
 #else	/* !CONFIG_KPROBES_ON_FTRACE */
 static inline int arm_kprobe_ftrace(struct kprobe *p)
 {
@@ -1509,6 +1641,9 @@ static struct kprobe *__get_valid_kprobe(struct kprobe *p)
 
 	lockdep_assert_held(&kprobe_mutex);
 
+	if (kprobe_ftrace_multi(p))
+		return p;
+
 	ap = get_kprobe(p->addr);
 	if (unlikely(!ap))
 		return NULL;
@@ -1540,41 +1675,18 @@ static inline int warn_kprobe_rereg(struct kprobe *p)
 	return ret;
 }
 
-static int check_ftrace_location(struct kprobe *p)
-{
-	unsigned long ftrace_addr;
-
-	ftrace_addr = ftrace_location((unsigned long)p->addr);
-	if (ftrace_addr) {
-#ifdef CONFIG_KPROBES_ON_FTRACE
-		/* Given address is not on the instruction boundary */
-		if ((unsigned long)p->addr != ftrace_addr)
-			return -EILSEQ;
-		p->flags |= KPROBE_FLAG_FTRACE;
-#else	/* !CONFIG_KPROBES_ON_FTRACE */
-		return -EINVAL;
-#endif
-	}
-	return 0;
-}
-
 static int check_kprobe_address_safe(struct kprobe *p,
 				     struct module **probed_mod)
 {
 	int ret;
 
-	ret = check_ftrace_location(p);
+	ret = check_ftrace_location((unsigned long) p->addr, p);
 	if (ret)
 		return ret;
 	jump_label_lock();
 	preempt_disable();
 
-	/* Ensure it is not in reserved area nor out of text */
-	if (!kernel_text_address((unsigned long) p->addr) ||
-	    within_kprobe_blacklist((unsigned long) p->addr) ||
-	    jump_label_text_reserved(p->addr, p->addr) ||
-	    static_call_text_reserved(p->addr, p->addr) ||
-	    find_bug((unsigned long)p->addr)) {
+	if (check_kprobe_address((unsigned long) p->addr)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1619,12 +1731,15 @@ static unsigned long resolve_func_addr(kprobe_opcode_t *addr)
 	return 0;
 }
 
-int register_kprobe(struct kprobe *p)
+static int check_addr(struct kprobe *p, struct module **probed_mod)
 {
 	int ret;
-	struct kprobe *old_p;
-	struct module *probed_mod;
 	kprobe_opcode_t *addr;
+
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (p->multi.cnt)
+		return check_ftrace_multi(p);
+#endif
 
 	/* Adjust probe address from symbol */
 	addr = kprobe_addr(p);
@@ -1636,13 +1751,21 @@ int register_kprobe(struct kprobe *p)
 	ret = warn_kprobe_rereg(p);
 	if (ret)
 		return ret;
+	return check_kprobe_address_safe(p, probed_mod);
+}
+
+int register_kprobe(struct kprobe *p)
+{
+	struct module *probed_mod = NULL;
+	struct kprobe *old_p;
+	int ret;
 
 	/* User can pass only KPROBE_FLAG_DISABLED to register_kprobe */
 	p->flags &= KPROBE_FLAG_DISABLED;
 	p->nmissed = 0;
 	INIT_LIST_HEAD(&p->list);
 
-	ret = check_kprobe_address_safe(p, &probed_mod);
+	ret = check_addr(p, &probed_mod);
 	if (ret)
 		return ret;
 
@@ -1664,14 +1787,21 @@ int register_kprobe(struct kprobe *p)
 	if (ret)
 		goto out;
 
-	INIT_HLIST_NODE(&p->hlist);
-	hlist_add_head_rcu(&p->hlist,
-		       &kprobe_table[hash_ptr(p->addr, KPROBE_HASH_BITS)]);
+	/*
+	 * Multi ftrace kprobes do not have single address,
+	 * so they are not stored in the kprobe_table hash.
+	 */
+	if (kprobe_single(p)) {
+		INIT_HLIST_NODE(&p->hlist);
+		hlist_add_head_rcu(&p->hlist,
+			       &kprobe_table[hash_ptr(p->addr, KPROBE_HASH_BITS)]);
+	}
 
 	if (!kprobes_all_disarmed && !kprobe_disabled(p)) {
 		ret = arm_kprobe(p);
 		if (ret) {
-			hlist_del_rcu(&p->hlist);
+			if (kprobe_single(p))
+				hlist_del_rcu(&p->hlist);
 			synchronize_rcu();
 			goto out;
 		}
@@ -1798,7 +1928,13 @@ noclean:
 	return 0;
 
 disarmed:
-	hlist_del_rcu(&ap->hlist);
+	if (kprobe_single(ap))
+		hlist_del_rcu(&ap->hlist);
+
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	if (kprobe_ftrace_multi(ap))
+		free_ftrace_multi(ap);
+#endif
 	return 0;
 }
 

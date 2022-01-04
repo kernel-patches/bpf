@@ -68,6 +68,16 @@ struct kprobe {
 	/* location of the probe point */
 	kprobe_opcode_t *addr;
 
+#ifdef CONFIG_HAVE_KPROBES_MULTI_ON_FTRACE
+	/* location of the multi probe points */
+	struct {
+		const char **symbols;
+		kprobe_opcode_t **addrs;
+		unsigned int cnt;
+		struct ftrace_ops ops;
+	} multi;
+#endif
+
 	/* Allow user to indicate symbol name of the probe point */
 	const char *symbol_name;
 
@@ -105,6 +115,7 @@ struct kprobe {
 				   * this flag is only for optimized_kprobe.
 				   */
 #define KPROBE_FLAG_FTRACE	8 /* probe is using ftrace */
+#define KPROBE_FLAG_MULTI      16 /* probe multi addresses */
 
 /* Has this kprobe gone ? */
 static inline bool kprobe_gone(struct kprobe *p)
@@ -128,6 +139,18 @@ static inline bool kprobe_optimized(struct kprobe *p)
 static inline bool kprobe_ftrace(struct kprobe *p)
 {
 	return p->flags & KPROBE_FLAG_FTRACE;
+}
+
+/* Is this ftrace multi kprobe ? */
+static inline bool kprobe_ftrace_multi(struct kprobe *p)
+{
+	return kprobe_ftrace(p) && (p->flags & KPROBE_FLAG_MULTI);
+}
+
+/* Is this single kprobe ? */
+static inline bool kprobe_single(struct kprobe *p)
+{
+	return !(p->flags & KPROBE_FLAG_MULTI);
 }
 
 /*
@@ -365,6 +388,8 @@ static inline void wait_for_kprobe_optimizer(void) { }
 #ifdef CONFIG_KPROBES_ON_FTRACE
 extern void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 				  struct ftrace_ops *ops, struct ftrace_regs *fregs);
+extern void kprobe_ftrace_multi_handler(unsigned long ip, unsigned long parent_ip,
+					struct ftrace_ops *ops, struct ftrace_regs *fregs);
 extern int arch_prepare_kprobe_ftrace(struct kprobe *p);
 #else
 static inline int arch_prepare_kprobe_ftrace(struct kprobe *p)

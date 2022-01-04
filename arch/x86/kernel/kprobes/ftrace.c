@@ -12,22 +12,14 @@
 
 #include "common.h"
 
-/* Ftrace callback handler for kprobes -- called under preempt disabled */
-void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
-			   struct ftrace_ops *ops, struct ftrace_regs *fregs)
+static void ftrace_handler(struct kprobe *p, unsigned long ip,
+			   struct ftrace_regs *fregs)
 {
 	struct pt_regs *regs = ftrace_get_regs(fregs);
-	struct kprobe *p;
 	struct kprobe_ctlblk *kcb;
-	int bit;
 
-	bit = ftrace_test_recursion_trylock(ip, parent_ip);
-	if (bit < 0)
-		return;
-
-	p = get_kprobe((kprobe_opcode_t *)ip);
 	if (unlikely(!p) || kprobe_disabled(p))
-		goto out;
+		return;
 
 	kcb = get_kprobe_ctlblk();
 	if (kprobe_running()) {
@@ -57,10 +49,42 @@ void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 		 */
 		__this_cpu_write(current_kprobe, NULL);
 	}
-out:
+}
+
+/* Ftrace callback handler for kprobes -- called under preempt disabled */
+void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
+			   struct ftrace_ops *ops, struct ftrace_regs *fregs)
+{
+	struct kprobe *p;
+	int bit;
+
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
+	if (bit < 0)
+		return;
+
+	p = get_kprobe((kprobe_opcode_t *)ip);
+	ftrace_handler(p, ip, fregs);
+
 	ftrace_test_recursion_unlock(bit);
 }
 NOKPROBE_SYMBOL(kprobe_ftrace_handler);
+
+void kprobe_ftrace_multi_handler(unsigned long ip, unsigned long parent_ip,
+				 struct ftrace_ops *ops, struct ftrace_regs *fregs)
+{
+	struct kprobe *p;
+	int bit;
+
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
+	if (bit < 0)
+		return;
+
+	p = container_of(ops, struct kprobe, multi.ops);
+	ftrace_handler(p, ip, fregs);
+
+	ftrace_test_recursion_unlock(bit);
+}
+NOKPROBE_SYMBOL(kprobe_ftrace_multi_handler);
 
 int arch_prepare_kprobe_ftrace(struct kprobe *p)
 {
