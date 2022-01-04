@@ -22,6 +22,8 @@
 
 #include "bpf_jit.h"
 
+#define INSN_SZ (sizeof(u32))
+
 #define TMP_REG_1 (MAX_BPF_JIT_REG + 0)
 #define TMP_REG_2 (MAX_BPF_JIT_REG + 1)
 #define TCALL_CNT (MAX_BPF_JIT_REG + 2)
@@ -152,10 +154,11 @@ static inline int bpf2a64_offset(int bpf_insn, int off,
 	bpf_insn++;
 	/*
 	 * Whereas arm64 branch instructions encode the offset
-	 * from the branch itself, so we must subtract 1 from the
+	 * from the branch itself, so we must subtract 4 from the
 	 * instruction offset.
 	 */
-	return ctx->offset[bpf_insn + off] - (ctx->offset[bpf_insn] - 1);
+	return (ctx->offset[bpf_insn + off] -
+		(ctx->offset[bpf_insn] - INSN_SZ)) / INSN_SZ;
 }
 
 static void jit_fill_hole(void *area, unsigned int size)
@@ -942,13 +945,14 @@ static int build_body(struct jit_ctx *ctx, bool extra_pass)
 		const struct bpf_insn *insn = &prog->insnsi[i];
 		int ret;
 
+		/* BPF line info needs byte-offset instead of insn-offset */
 		if (ctx->image == NULL)
-			ctx->offset[i] = ctx->idx;
+			ctx->offset[i] = ctx->idx * INSN_SZ;
 		ret = build_insn(insn, ctx, extra_pass);
 		if (ret > 0) {
 			i++;
 			if (ctx->image == NULL)
-				ctx->offset[i] = ctx->idx;
+				ctx->offset[i] = ctx->idx * INSN_SZ;
 			continue;
 		}
 		if (ret)
@@ -960,7 +964,7 @@ static int build_body(struct jit_ctx *ctx, bool extra_pass)
 	 * instruction (end of program)
 	 */
 	if (ctx->image == NULL)
-		ctx->offset[i] = ctx->idx;
+		ctx->offset[i] = ctx->idx * INSN_SZ;
 
 	return 0;
 }
@@ -1045,15 +1049,18 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		goto out_off;
 	}
 
-	/* 1. Initial fake pass to compute ctx->idx. */
-
-	/* Fake pass to fill in ctx->offset. */
-	if (build_body(&ctx, extra_pass)) {
+	/*
+	 * 1. Initial fake pass to compute ctx->idx and ctx->offset.
+	 *
+	 * BPF line info needs ctx->offset[i] to be the byte offset
+	 * of instruction[i] in jited image, so build prologue first.
+	 */
+	if (build_prologue(&ctx, was_classic)) {
 		prog = orig_prog;
 		goto out_off;
 	}
 
-	if (build_prologue(&ctx, was_classic)) {
+	if (build_body(&ctx, extra_pass)) {
 		prog = orig_prog;
 		goto out_off;
 	}
