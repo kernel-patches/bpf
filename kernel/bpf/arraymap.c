@@ -13,6 +13,7 @@
 #include <linux/rcupdate_trace.h>
 
 #include "map_in_map.h"
+#include "map_trace.h"
 
 #define ARRAY_CREATE_FLAG_MASK \
 	(BPF_F_NUMA_NODE | BPF_F_MMAPABLE | BPF_F_ACCESS_MASK | \
@@ -329,7 +330,8 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 			copy_map_value(map, val, value);
 		check_and_free_timer_in_array(array, val);
 	}
-	return 0;
+
+	return bpf_map_trace_update_elem(map, key, value, map_flags);
 }
 
 int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,

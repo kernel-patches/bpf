@@ -13,6 +13,7 @@
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
+#include "map_trace.h"
 
 #define HTAB_CREATE_FLAG_MASK						\
 	(BPF_F_NO_PREALLOC | BPF_F_NO_COMMON_LRU | BPF_F_NUMA_NODE |	\
@@ -1055,7 +1056,8 @@ static int htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 			copy_map_value_locked(map,
 					      l_old->key + round_up(key_size, 8),
 					      value, false);
-			return 0;
+			return bpf_map_trace_update_elem(map, key, value,
+							 map_flags);
 		}
 		/* fall through, grab the bucket lock and lookup again.
 		 * 99.9% chance that the element won't be found,
@@ -1109,6 +1111,8 @@ static int htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 	ret = 0;
 err:
 	htab_unlock_bucket(htab, b, hash, flags);
+	if (!ret)
+		ret = bpf_map_trace_update_elem(map, key, value, map_flags);
 	return ret;
 }
 
@@ -1132,6 +1136,10 @@ static int htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value,
 	if (unlikely(map_flags > BPF_EXIST))
 		/* unknown flags */
 		return -EINVAL;
+
+	ret = bpf_map_trace_update_elem(map, key, value, map_flags);
+	if (unlikely(ret))
+		return ret;
 
 	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_trace_held() &&
 		     !rcu_read_lock_bh_held());
@@ -1182,6 +1190,8 @@ err:
 	else if (l_old)
 		htab_lru_push_free(htab, l_old);
 
+	if (!ret)
+		ret = bpf_map_trace_update_elem(map, key, value, map_flags);
 	return ret;
 }
 
@@ -1237,6 +1247,8 @@ static int __htab_percpu_map_update_elem(struct bpf_map *map, void *key,
 	ret = 0;
 err:
 	htab_unlock_bucket(htab, b, hash, flags);
+	if (!ret)
+		ret = bpf_map_trace_update_elem(map, key, value, map_flags);
 	return ret;
 }
 
@@ -1304,6 +1316,8 @@ err:
 	htab_unlock_bucket(htab, b, hash, flags);
 	if (l_new)
 		bpf_lru_push_free(&htab->lru, &l_new->lru_node);
+	if (!ret)
+		ret = bpf_map_trace_update_elem(map, key, value, map_flags);
 	return ret;
 }
 
@@ -1354,6 +1368,8 @@ static int htab_map_delete_elem(struct bpf_map *map, void *key)
 	}
 
 	htab_unlock_bucket(htab, b, hash, flags);
+	if (!ret)
+		ret = bpf_map_trace_delete_elem(map, key);
 	return ret;
 }
 
@@ -1390,6 +1406,8 @@ static int htab_lru_map_delete_elem(struct bpf_map *map, void *key)
 	htab_unlock_bucket(htab, b, hash, flags);
 	if (l)
 		htab_lru_push_free(htab, l);
+	if (!ret)
+		ret = bpf_map_trace_delete_elem(map, key);
 	return ret;
 }
 
