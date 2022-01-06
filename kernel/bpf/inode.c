@@ -16,18 +16,13 @@
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
+#include <linux/fsnotify_backend.h>
 #include <linux/kdev_t.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include "preload/bpf_preload.h"
-
-enum bpf_type {
-	BPF_TYPE_UNSPEC	= 0,
-	BPF_TYPE_PROG,
-	BPF_TYPE_MAP,
-	BPF_TYPE_LINK,
-};
+#include "inode.h"
 
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
@@ -66,6 +61,95 @@ static void bpf_any_put(void *raw, enum bpf_type type)
 		break;
 	}
 }
+
+#ifdef CONFIG_FSNOTIFY
+/* Notification mechanism based on fsnotify, used in bpf to watch the
+ * destruction of an inode. This inode could an inode in bpffs or any
+ * other file system.
+ */
+
+struct notify_mark {
+	struct fsnotify_mark fsn_mark;
+	const struct notify_ops *ops;
+	void *object;
+	enum bpf_type type;
+	void *priv;
+};
+
+struct fsnotify_group *bpf_notify_group;
+struct kmem_cache *bpf_notify_mark_cachep __read_mostly;
+
+/* Handler for any inode event. */
+int handle_inode_event(struct fsnotify_mark *mark, u32 mask,
+		       struct inode *inode, struct inode *dir,
+		       const struct qstr *file_name, u32 cookie)
+{
+	return 0;
+}
+
+/* Handler for freeing marks. This is called when the watched inode is being
+ * freed.
+ */
+static void notify_freeing_mark(struct fsnotify_mark *mark, struct fsnotify_group *group)
+{
+	struct notify_mark *b_mark;
+
+	b_mark = container_of(mark, struct notify_mark, fsn_mark);
+
+	if (b_mark->ops && b_mark->ops->free_inode)
+		b_mark->ops->free_inode(b_mark->object, b_mark->type, b_mark->priv);
+}
+
+static void notify_free_mark(struct fsnotify_mark *mark)
+{
+	struct notify_mark *b_mark;
+
+	b_mark = container_of(mark, struct notify_mark, fsn_mark);
+
+	kmem_cache_free(bpf_notify_mark_cachep, b_mark);
+}
+
+struct fsnotify_ops bpf_notify_ops = {
+	.handle_inode_event = handle_inode_event,
+	.freeing_mark = notify_freeing_mark,
+	.free_mark = notify_free_mark,
+};
+
+static int bpf_inode_type(const struct inode *inode, enum bpf_type *type);
+
+/* Watch the destruction of an inode and calls the callbacks in the given
+ * notify_ops.
+ */
+int bpf_watch_inode(struct inode *inode, const struct notify_ops *ops, void *priv)
+{
+	enum bpf_type type;
+	struct notify_mark *b_mark;
+	int ret;
+
+	if (IS_ERR(bpf_notify_group) || unlikely(!bpf_notify_mark_cachep))
+		return -ENOMEM;
+
+	b_mark = kmem_cache_alloc(bpf_notify_mark_cachep, GFP_KERNEL_ACCOUNT);
+	if (unlikely(!b_mark))
+		return -ENOMEM;
+
+	fsnotify_init_mark(&b_mark->fsn_mark, bpf_notify_group);
+	b_mark->ops = ops;
+	b_mark->priv = priv;
+	b_mark->object = inode->i_private;
+	bpf_inode_type(inode, &type);
+	b_mark->type = type;
+
+	ret = fsnotify_add_inode_mark(&b_mark->fsn_mark, inode,
+				      /*allow_dups=*/1);
+
+	fsnotify_put_mark(&b_mark->fsn_mark); /* match get in fsnotify_init_mark */
+
+	return ret;
+}
+#endif
+
+/* bpffs */
 
 static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
 {
@@ -435,11 +519,15 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 	return ret;
 }
 
+static bool dentry_is_bpf_dir(struct dentry *dentry)
+{
+	return d_inode(dentry)->i_op == &bpf_dir_iops;
+}
+
 static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 			  enum bpf_type type)
 {
 	struct dentry *dentry;
-	struct inode *dir;
 	struct path path;
 	umode_t mode;
 	int ret;
@@ -454,8 +542,7 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	if (ret)
 		goto out;
 
-	dir = d_inode(path.dentry);
-	if (dir->i_op != &bpf_dir_iops) {
+	if (!dentry_is_bpf_dir(path.dentry)) {
 		ret = -EPERM;
 		goto out;
 	}
@@ -821,8 +908,17 @@ static int __init bpf_init(void)
 		return ret;
 
 	ret = register_filesystem(&bpf_fs_type);
-	if (ret)
+	if (ret) {
 		sysfs_remove_mount_point(fs_kobj, "bpf");
+		return ret;
+	}
+
+#ifdef CONFIG_FSNOTIFY
+	bpf_notify_mark_cachep = KMEM_CACHE(notify_mark, 0);
+	bpf_notify_group = fsnotify_alloc_group(&bpf_notify_ops);
+	if (IS_ERR(bpf_notify_group) || !bpf_notify_mark_cachep)
+		pr_warn("Failed to initialize bpf_notify system, user can not pin objects outside bpffs.\n");
+#endif
 
 	return ret;
 }
