@@ -580,6 +580,21 @@ static bool dentry_is_bpf_dir(struct dentry *dentry)
 	return d_inode(dentry)->i_op == &bpf_dir_iops;
 }
 
+static int bpf_obj_do_pin_generic(struct dentry *dentry, umode_t mode,
+				  void *obj, enum bpf_type type)
+{
+	switch (type) {
+	case BPF_TYPE_PROG:
+		return vfs_mkobj(dentry, mode, bpf_mkprog, obj);
+	case BPF_TYPE_MAP:
+		return vfs_mkobj(dentry, mode, bpf_mkmap, obj);
+	case BPF_TYPE_LINK:
+		return vfs_mkobj(dentry, mode, bpf_mklink, obj);
+	default:
+		return -EPERM;
+	}
+}
+
 static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 			  enum bpf_type type)
 {
@@ -598,22 +613,20 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	if (ret)
 		goto out;
 
-	if (!dentry_is_bpf_dir(path.dentry)) {
-		ret = -EPERM;
-		goto out;
-	}
+	if (dentry_is_kernfs_dir(path.dentry)) {
+		ret = bpf_obj_do_pin_kernfs(dentry, mode, raw, type);
 
-	switch (type) {
-	case BPF_TYPE_PROG:
-		ret = vfs_mkobj(dentry, mode, bpf_mkprog, raw);
-		break;
-	case BPF_TYPE_MAP:
-		ret = vfs_mkobj(dentry, mode, bpf_mkmap, raw);
-		break;
-	case BPF_TYPE_LINK:
-		ret = vfs_mkobj(dentry, mode, bpf_mklink, raw);
-		break;
-	default:
+		/* Match bpf_fd_probe_obj(). bpf objects exposed to kernfs
+		 * do not hold an active reference. The lifetime of the
+		 * created kernfs node is tied to an inode in bpffs. So the
+		 * kernfs node gets destroyed automatically when the object
+		 * is unpinned from bpffs.
+		 */
+		if (ret == 0)
+			bpf_any_put(raw, type);
+	} else if (dentry_is_bpf_dir(path.dentry)) {
+		ret = bpf_obj_do_pin_generic(dentry, mode, raw, type);
+	} else {
 		ret = -EPERM;
 	}
 out:

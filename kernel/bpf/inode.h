@@ -4,8 +4,10 @@
 #ifndef __BPF_INODE_H_
 #define __BPF_INODE_H_
 
+#include <linux/fs.h>
+
 enum bpf_type {
-	BPF_TYPE_UNSPEC = 0,
+	BPF_TYPE_UNSPEC	= 0,
 	BPF_TYPE_PROG,
 	BPF_TYPE_MAP,
 	BPF_TYPE_LINK,
@@ -38,5 +40,12 @@ int bpf_watch_inode(struct inode *inode, const struct notify_ops *ops,
  * On failure, NULL is returned.
  */
 struct inode *get_backing_inode(void *obj, enum bpf_type);
+
+/* Test whether a given dentry is a kernfs entry. */
+bool dentry_is_kernfs_dir(struct dentry *dentry);
+
+/* Expose bpf object to kernfs. Requires dentry to be in kernfs. */
+int bpf_obj_do_pin_kernfs(struct dentry *dentry, umode_t mode, void *obj,
+			  enum bpf_type type);
 
 #endif  // __BPF_INODE_H_
