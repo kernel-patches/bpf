@@ -35,12 +35,15 @@ struct sock_test {
 	/* Endpoint to bind() to */
 	const char *ip;
 	unsigned short port;
+	unsigned short port_retry;
 	/* Expected test result */
 	enum {
 		LOAD_REJECT,
 		ATTACH_REJECT,
 		BIND_REJECT,
 		SUCCESS,
+		RETRY_SUCCESS,
+		RETRY_REJECT
 	} result;
 };
 
@@ -60,6 +63,7 @@ static struct sock_test tests[] = {
 		0,
 		NULL,
 		0,
+		0,
 		LOAD_REJECT,
 	},
 	{
@@ -76,6 +80,7 @@ static struct sock_test tests[] = {
 		0,
 		0,
 		NULL,
+		0,
 		0,
 		LOAD_REJECT,
 	},
@@ -94,6 +99,7 @@ static struct sock_test tests[] = {
 		0,
 		NULL,
 		0,
+		0,
 		LOAD_REJECT,
 	},
 	{
@@ -111,6 +117,7 @@ static struct sock_test tests[] = {
 		0,
 		NULL,
 		0,
+		0,
 		LOAD_REJECT,
 	},
 	{
@@ -125,6 +132,7 @@ static struct sock_test tests[] = {
 		SOCK_STREAM,
 		"127.0.0.1",
 		8097,
+		0,
 		SUCCESS,
 	},
 	{
@@ -139,6 +147,7 @@ static struct sock_test tests[] = {
 		SOCK_STREAM,
 		"127.0.0.1",
 		8097,
+		0,
 		SUCCESS,
 	},
 	{
@@ -152,6 +161,7 @@ static struct sock_test tests[] = {
 		0,
 		0,
 		NULL,
+		0,
 		0,
 		ATTACH_REJECT,
 	},
@@ -167,6 +177,7 @@ static struct sock_test tests[] = {
 		0,
 		NULL,
 		0,
+		0,
 		ATTACH_REJECT,
 	},
 	{
@@ -180,6 +191,7 @@ static struct sock_test tests[] = {
 		0,
 		0,
 		NULL,
+		0,
 		0,
 		ATTACH_REJECT,
 	},
@@ -195,6 +207,7 @@ static struct sock_test tests[] = {
 		0,
 		NULL,
 		0,
+		0,
 		ATTACH_REJECT,
 	},
 	{
@@ -209,6 +222,7 @@ static struct sock_test tests[] = {
 		SOCK_STREAM,
 		"0.0.0.0",
 		0,
+		0,
 		BIND_REJECT,
 	},
 	{
@@ -222,6 +236,7 @@ static struct sock_test tests[] = {
 		AF_INET6,
 		SOCK_STREAM,
 		"::",
+		0,
 		0,
 		BIND_REJECT,
 	},
@@ -253,6 +268,7 @@ static struct sock_test tests[] = {
 		SOCK_STREAM,
 		"::1",
 		8193,
+		0,
 		BIND_REJECT,
 	},
 	{
@@ -283,7 +299,101 @@ static struct sock_test tests[] = {
 		SOCK_STREAM,
 		"127.0.0.1",
 		4098,
+		0,
 		SUCCESS,
+	},
+	{
+		"bind4 deny specific IP & port of TCP, and retry",
+		.insns = {
+			BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+
+			/* if (ip == expected && port == expected) */
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_ip4)),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7,
+				    __bpf_constant_ntohl(0x7F000001), 4),
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_port)),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7, 0x1002, 2),
+
+			/* return DENY; */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_JMP_A(1),
+
+			/* else return ALLOW; */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_EXIT_INSN(),
+		},
+		BPF_CGROUP_INET4_POST_BIND,
+		BPF_CGROUP_INET4_POST_BIND,
+		AF_INET,
+		SOCK_STREAM,
+		"127.0.0.1",
+		4098,
+		5000,
+		RETRY_SUCCESS,
+	},
+	{
+		"bind4 deny specific IP & port of UDP, and retry",
+		.insns = {
+			BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+
+			/* if (ip == expected && port == expected) */
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_ip4)),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7,
+				    __bpf_constant_ntohl(0x7F000001), 4),
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_port)),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7, 0x1002, 2),
+
+			/* return DENY; */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_JMP_A(1),
+
+			/* else return ALLOW; */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_EXIT_INSN(),
+		},
+		BPF_CGROUP_INET4_POST_BIND,
+		BPF_CGROUP_INET4_POST_BIND,
+		AF_INET,
+		SOCK_DGRAM,
+		"127.0.0.1",
+		4098,
+		5000,
+		RETRY_SUCCESS,
+	},
+	{
+		"bind6 deny specific IP & port, and retry",
+		.insns = {
+			BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+
+			/* if (ip == expected && port == expected) */
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_ip6[3])),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7,
+				    __bpf_constant_ntohl(0x00000001), 4),
+			BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6,
+				    offsetof(struct bpf_sock, src_port)),
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_7, 0x2001, 2),
+
+			/* return DENY; */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_JMP_A(1),
+
+			/* else return ALLOW; */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_EXIT_INSN(),
+		},
+		BPF_CGROUP_INET6_POST_BIND,
+		BPF_CGROUP_INET6_POST_BIND,
+		AF_INET6,
+		SOCK_STREAM,
+		"::1",
+		8193,
+		9000,
+		RETRY_SUCCESS,
 	},
 	{
 		"bind4 allow all",
@@ -296,6 +406,7 @@ static struct sock_test tests[] = {
 		AF_INET,
 		SOCK_STREAM,
 		"0.0.0.0",
+		0,
 		0,
 		SUCCESS,
 	},
@@ -310,6 +421,7 @@ static struct sock_test tests[] = {
 		AF_INET6,
 		SOCK_STREAM,
 		"::",
+		0,
 		0,
 		SUCCESS,
 	},
@@ -351,14 +463,15 @@ static int attach_sock_prog(int cgfd, int progfd,
 	return bpf_prog_attach(progfd, cgfd, attach_type, BPF_F_ALLOW_OVERRIDE);
 }
 
-static int bind_sock(int domain, int type, const char *ip, unsigned short port)
+static int bind_sock(int domain, int type, const char *ip,
+		     unsigned short port, unsigned short port_retry)
 {
 	struct sockaddr_storage addr;
 	struct sockaddr_in6 *addr6;
 	struct sockaddr_in *addr4;
 	int sockfd = -1;
 	socklen_t len;
-	int err = 0;
+	int res = SUCCESS;
 
 	sockfd = socket(domain, type, 0);
 	if (sockfd < 0)
@@ -384,21 +497,44 @@ static int bind_sock(int domain, int type, const char *ip, unsigned short port)
 		goto err;
 	}
 
-	if (bind(sockfd, (const struct sockaddr *)&addr, len) == -1)
-		goto err;
+	if (bind(sockfd, (const struct sockaddr *)&addr, len) == -1) {
+		/* sys_bind() may fail for different reasons, errno has to be
+		 * checked to confirm that BPF program rejected it.
+		 */
+		if (errno != EPERM)
+			goto err;
+		if (port_retry)
+			goto retry;
+		res = BIND_REJECT;
+		goto out;
+	}
 
 	goto out;
+retry:
+	if (domain == AF_INET)
+		addr4->sin_port = htons(port_retry);
+	else
+		addr6->sin6_port = htons(port_retry);
+	if (bind(sockfd, (const struct sockaddr *)&addr, len) == -1) {
+		if (errno != EPERM)
+			goto err;
+		res = RETRY_REJECT;
+	} else {
+		res = RETRY_SUCCESS;
+	}
+	goto out;
 err:
-	err = -1;
+	res = -1;
 out:
 	close(sockfd);
-	return err;
+	return res;
 }
 
 static int run_test_case(int cgfd, const struct sock_test *test)
 {
 	int progfd = -1;
 	int err = 0;
+	int res;
 
 	printf("Test case: %s .. ", test->descr);
 	progfd = load_sock_prog(test->insns, test->expected_attach_type);
@@ -416,21 +552,11 @@ static int run_test_case(int cgfd, const struct sock_test *test)
 			goto err;
 	}
 
-	if (bind_sock(test->domain, test->type, test->ip, test->port) == -1) {
-		/* sys_bind() may fail for different reasons, errno has to be
-		 * checked to confirm that BPF program rejected it.
-		 */
-		if (test->result == BIND_REJECT && errno == EPERM)
-			goto out;
-		else
-			goto err;
-	}
+	res = bind_sock(test->domain, test->type, test->ip, test->port,
+			test->port_retry);
+	if (res > 0 && test->result == res)
+		goto out;
 
-
-	if (test->result != SUCCESS)
-		goto err;
-
-	goto out;
 err:
 	err = -1;
 out:
