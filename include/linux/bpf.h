@@ -1622,6 +1622,10 @@ void bpf_iter_map_show_fdinfo(const struct bpf_iter_aux_info *aux,
 int bpf_iter_map_fill_link_info(const struct bpf_iter_aux_info *aux,
 				struct bpf_link_info *info);
 
+bool bpf_view_prog_supported(struct bpf_prog *prog);
+int bpf_view_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
+			 struct bpf_prog *prog);
+
 int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee);
