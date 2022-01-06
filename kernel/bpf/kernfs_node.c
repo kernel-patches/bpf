@@ -3,14 +3,32 @@
  * Expose eBPF objects in kernfs file system.
  */
 
+#include <linux/bpf.h>
 #include <linux/fs.h>
 #include <linux/kernfs.h>
+#include <linux/btf_ids.h>
+#include <linux/magic.h>
+#include <linux/seq_file.h>
 #include "inode.h"
+#include "bpf_view.h"
 
 /* file_operations for kernfs file system */
 
 /* Command for removing a kernfs entry */
 #define REMOVE_CMD "rm"
+
+static const struct kernfs_ops bpf_generic_ops;
+static const struct kernfs_ops bpf_cgroup_ops;
+
+/* Choose the right kernfs_ops for different kernfs. */
+static const struct kernfs_ops *bpf_kernfs_ops(struct super_block *sb)
+{
+	if (sb->s_magic == CGROUP_SUPER_MAGIC ||
+	    sb->s_magic == CGROUP2_SUPER_MAGIC)
+		return &bpf_cgroup_ops;
+
+	return &bpf_generic_ops;
+}
 
 /* Handler when the watched inode is freed. */
 static void kn_watch_free_inode(void *obj, enum bpf_type type, void *kn)
@@ -80,7 +98,7 @@ int bpf_obj_do_pin_kernfs(struct dentry *dentry, umode_t mode, void *obj,
 	if (!inode)
 		return -ENXIO;
 
-	ops = &bpf_generic_ops;
+	ops = bpf_kernfs_ops(sb);
 	kn = __kernfs_create_file(parent_kn, dentry->d_iname, mode,
 				  GLOBAL_ROOT_UID, GLOBAL_ROOT_GID,
 				  0, ops, inode, NULL, NULL);
@@ -107,3 +125,41 @@ int bpf_obj_do_pin_kernfs(struct dentry *dentry, umode_t mode, void *obj,
 	iput(inode);
 	return 0;
 }
+
+/* file_operations for cgroup file system */
+static int bpf_cgroup_seq_show(struct seq_file *seq, void *v)
+{
+	struct bpf_view_cgroup_ctx ctx;
+	struct kernfs_open_file *of;
+	struct kernfs_node *kn;
+	struct cgroup *cgroup;
+	struct inode *inode;
+	struct bpf_link *link;
+	enum bpf_type type;
+
+	of = seq->private;
+	kn = of->kn;
+	cgroup = kn->parent->priv;
+
+	inode = kn->priv;
+	if (bpf_inode_type(inode, &type))
+		return -ENXIO;
+
+	if (type != BPF_TYPE_LINK)
+		return -EACCES;
+
+	link = inode->i_private;
+	if (!bpf_link_is_cgroup_view(link))
+		return -EACCES;
+
+	ctx.seq = seq;
+	ctx.cgroup = cgroup;
+
+	return run_view_prog(link->prog, &ctx);
+}
+
+static const struct kernfs_ops bpf_cgroup_ops = {
+	.seq_show	= bpf_cgroup_seq_show,
+	.write          = bpf_generic_write,
+	.read           = bpf_generic_read,
+};

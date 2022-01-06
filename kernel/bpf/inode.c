@@ -115,8 +115,6 @@ struct fsnotify_ops bpf_notify_ops = {
 	.free_mark = notify_free_mark,
 };
 
-static int bpf_inode_type(const struct inode *inode, enum bpf_type *type);
-
 /* Watch the destruction of an inode and calls the callbacks in the given
  * notify_ops.
  */
@@ -211,7 +209,7 @@ static struct inode *bpf_get_inode(struct super_block *sb,
 	return inode;
 }
 
-static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
+int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
 {
 	*type = BPF_TYPE_UNSPEC;
 	if (inode->i_op == &bpf_prog_iops)

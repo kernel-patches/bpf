@@ -17,6 +17,9 @@ struct notify_ops {
 	void (*free_inode)(void *object, enum bpf_type type, void *priv);
 };
 
+/* Get the type of bpf object from bpffs inode. */
+int bpf_inode_type(const struct inode *inode, enum bpf_type *type);
+
 #ifdef CONFIG_FSNOTIFY
 /* Watch the destruction of an inode and calls the callbacks in the given
  * notify_ops.
