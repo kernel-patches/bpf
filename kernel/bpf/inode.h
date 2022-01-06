@@ -30,4 +30,13 @@ int bpf_watch_inode(struct inode *inode, const struct notify_ops *ops,
 }
 #endif  // CONFIG_FSNOTIFY
 
+/* Get the backing inode of a bpf object. When an object is pinned in bpf
+ * file system, an inode is associated with the object. This function returns
+ * that inode.
+ *
+ * On success, the inode is returned with refcnt incremented.
+ * On failure, NULL is returned.
+ */
+struct inode *get_backing_inode(void *obj, enum bpf_type);
+
 #endif  // __BPF_INODE_H_

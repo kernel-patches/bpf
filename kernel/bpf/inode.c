@@ -226,6 +226,57 @@ static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
 	return 0;
 }
 
+/* Conditionally set an object's backing inode. */
+static void cond_set_backing_inode(void *obj, enum bpf_type type,
+				   struct inode *old, struct inode *new)
+{
+	struct inode **ptr;
+
+	if (type == BPF_TYPE_PROG) {
+		struct bpf_prog *prog = obj;
+		ptr = &prog->aux->backing_inode;
+	} else if (type == BPF_TYPE_MAP) {
+		struct bpf_map *map = obj;
+		ptr = &map->backing_inode;
+	} else if (type == BPF_TYPE_LINK) {
+		struct bpf_link *link = obj;
+		ptr = &link->backing_inode;
+	} else {
+		return;
+	}
+
+	if (*ptr == old)
+		*ptr = new;
+}
+
+struct inode *get_backing_inode(void *obj, enum bpf_type type)
+{
+	struct inode *inode = NULL;
+
+	if (type == BPF_TYPE_PROG) {
+		struct bpf_prog *prog = obj;
+		inode = prog->aux->backing_inode;
+	} else if (type == BPF_TYPE_MAP) {
+		struct bpf_map *map = obj;
+		inode = map->backing_inode;
+	} else if (type == BPF_TYPE_LINK) {
+		struct bpf_link *link = obj;
+		inode = link->backing_inode;
+	}
+
+	if (!inode)
+		return NULL;
+
+	spin_lock(&inode->i_lock);
+	if (inode->i_state & (I_FREEING | I_WILL_FREE | I_NEW)) {
+		spin_unlock(&inode->i_lock);
+		return NULL;
+	}
+	__iget(inode);
+	spin_unlock(&inode->i_lock);
+	return inode;
+}
+
 static void bpf_dentry_finalize(struct dentry *dentry, struct inode *inode,
 				struct inode *dir)
 {
@@ -418,12 +469,17 @@ static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 {
 	struct inode *dir = dentry->d_parent->d_inode;
 	struct inode *inode = bpf_get_inode(dir->i_sb, dir, mode);
+	enum bpf_type type;
+
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
 	inode->i_op = iops;
 	inode->i_fop = fops;
 	inode->i_private = raw;
+
+	if (!bpf_inode_type(inode, &type))
+		cond_set_backing_inode(raw, type, NULL, inode);
 
 	bpf_dentry_finalize(dentry, inode, dir);
 	return 0;
@@ -703,8 +759,10 @@ static void bpf_free_inode(struct inode *inode)
 
 	if (S_ISLNK(inode->i_mode))
 		kfree(inode->i_link);
-	if (!bpf_inode_type(inode, &type))
+	if (!bpf_inode_type(inode, &type)) {
+		cond_set_backing_inode(inode->i_private, type, inode, NULL);
 		bpf_any_put(inode->i_private, type);
+	}
 	free_inode_nonrcu(inode);
 }
 
