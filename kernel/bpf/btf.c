@@ -3708,7 +3708,7 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (vsi->size < type_size) {
+		if (vsi->size > type_size) {
 			btf_verifier_log_vsi(env, v->t, vsi, "Invalid size");
 			return -EINVAL;
 		}
