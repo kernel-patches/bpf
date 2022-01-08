@@ -59,6 +59,9 @@
 #define CTX	regs[BPF_REG_CTX]
 #define IMM	insn->imm
 
+static u64 (*interpreters_args[])(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5,
+				  const struct bpf_insn *insn);
+
 /* No hurry in this branch
  *
  * Exported for the bpf jit load helper.
@@ -1560,10 +1563,10 @@ select_insn:
 		CONT;
 
 	JMP_CALL_ARGS:
-		BPF_R0 = (__bpf_call_base_args + insn->imm)(BPF_R1, BPF_R2,
-							    BPF_R3, BPF_R4,
-							    BPF_R5,
-							    insn + insn->off + 1);
+		BPF_R0 = (interpreters_args[insn->off])(BPF_R1, BPF_R2,
+							BPF_R3, BPF_R4,
+							BPF_R5,
+							insn + insn->imm + 1);
 		CONT;
 
 	JMP_TAIL_CALL: {
@@ -1811,9 +1814,7 @@ EVAL4(PROG_NAME_LIST, 416, 448, 480, 512)
 void bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth)
 {
 	stack_depth = max_t(u32, stack_depth, 1);
-	insn->off = (s16) insn->imm;
-	insn->imm = interpreters_args[(round_up(stack_depth, 32) / 32) - 1] -
-		__bpf_call_base_args;
+	insn->off = (round_up(stack_depth, 32) / 32) - 1;
 	insn->code = BPF_JMP | BPF_CALL_ARGS;
 }
 
