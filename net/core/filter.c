@@ -4958,6 +4958,12 @@ static int _bpf_setsockopt(struct sock *sk, int level, int optname,
 					return -EINVAL;
 				inet_csk(sk)->icsk_rto_min = timeout;
 				break;
+			case TCP_BPF_RCV_SSTHRESH:
+				if (val <= 0)
+					ret = -EINVAL;
+				else
+					tp->rcv_ssthresh = min_t(u32, val, tp->window_clamp);
+				break;
 			case TCP_SAVE_SYN:
 				if (val < 0 || val > 1)
 					ret = -EINVAL;
