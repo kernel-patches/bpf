@@ -1630,6 +1630,12 @@ raw_tp_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+static inline bool prog_support_seq_helpers(const struct bpf_prog *prog)
+{
+	return prog->expected_attach_type == BPF_TRACE_ITER ||
+		prog->expected_attach_type == BPF_TRACE_VIEW;
+}
+
 const struct bpf_func_proto *
 tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1663,15 +1669,15 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_socket_ptr_cookie_proto;
 #endif
 	case BPF_FUNC_seq_printf:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return prog_support_seq_helpers(prog) ?
 		       &bpf_seq_printf_proto :
 		       NULL;
 	case BPF_FUNC_seq_write:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return prog_support_seq_helpers(prog) ?
 		       &bpf_seq_write_proto :
 		       NULL;
 	case BPF_FUNC_seq_printf_btf:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return prog_support_seq_helpers(prog) ?
 		       &bpf_seq_printf_btf_proto :
 		       NULL;
 	case BPF_FUNC_d_path:

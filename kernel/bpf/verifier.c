@@ -9770,6 +9770,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 		case BPF_MODIFY_RETURN:
 			return 0;
 		case BPF_TRACE_ITER:
+		case BPF_TRACE_VIEW:
 			break;
 		default:
 			return -ENOTSUPP;
@@ -13971,6 +13972,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		break;
 	case BPF_TRACE_ITER:
+	case BPF_TRACE_VIEW:
 		if (!btf_type_is_func(t)) {
 			bpf_log(log, "attach_btf_id %u is not a function\n",
 				btf_id);
@@ -14145,6 +14147,10 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return 0;
 	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
 		if (!bpf_iter_prog_supported(prog))
+			return -EINVAL;
+		return 0;
+	} else if (prog->expected_attach_type == BPF_TRACE_VIEW) {
+		if (!bpf_view_prog_supported(prog))
 			return -EINVAL;
 		return 0;
 	}
