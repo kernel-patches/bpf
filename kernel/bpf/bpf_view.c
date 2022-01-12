@@ -166,6 +166,17 @@ static struct bpf_view_target_info cgroup_view_tinfo = {
 	.btf_id			= 0,
 };
 
+bool bpf_link_is_cgroup_view(struct bpf_link *link)
+{
+	struct bpf_view_link *view_link;
+
+	if (!bpf_link_is_view(link))
+		return false;
+
+	view_link = container_of(link, struct bpf_view_link, link);
+	return view_link->tinfo == &cgroup_view_tinfo;
+}
+
 static int __init bpf_view_init(void)
 {
 	int cgroup_view_idx[BPF_VIEW_CTX_ARG_MAX] = {

@@ -17,6 +17,7 @@ struct bpf_view_cgroup_ctx {
 };
 
 bool bpf_link_is_view(struct bpf_link *link);
+bool bpf_link_is_cgroup_view(struct bpf_link *link);
 
 /* Run a bpf_view program */
 int run_view_prog(struct bpf_prog *prog, void *ctx);
