@@ -10183,6 +10183,126 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	return pfd;
 }
 
+/* uprobes deal in relative offsets; subtract the base address associated with
+ * the mapped binary.  See Documentation/trace/uprobetracer.rst for more
+ * details.
+ */
+static ssize_t get_rel_offset(pid_t pid, uintptr_t addr)
+{
+	size_t start, end, offset;
+	char msg[STRERR_BUFSIZE];
+	char maps[64];
+	char buf[256];
+	FILE *f;
+	int err;
+
+	/* pid 0 implies "this process" */
+	snprintf(maps, sizeof(maps), "/proc/%d/maps", pid ? pid : getpid());
+	f = fopen(maps, "r");
+	if (!f) {
+		err = -errno;
+		pr_warn("could not open %s: %s\n",
+			maps, libbpf_strerror_r(err, msg, sizeof(msg)));
+		return err;
+	}
+
+	while (fscanf(f, "%zx-%zx %s %zx %*[^\n]\n", &start, &end, buf, &offset) == 4) {
+		if (addr >= start && addr < end) {
+			fclose(f);
+			return (size_t)addr - start + offset;
+		}
+	}
+	fclose(f);
+	return -ENOENT;
+}
+
+/* find next ELF section of sh_type, returning fd and setting elfp and scnp to
+ * point at Elf and next Elf_Scn.
+ */
+static Elf_Scn *find_elfscn(Elf *elf, int sh_type, Elf_Scn *scn)
+{
+	Elf64_Shdr *sh;
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		sh = elf64_getshdr(scn);
+		if (sh && sh->sh_type == sh_type)
+			break;
+	}
+	return scn;
+}
+
+/* Find offset of function name in object specified by path.  "name" matches
+ * symbol name or name@@LIB for library functions.
+ */
+static ssize_t find_elf_func_offset(Elf *elf, const char *name)
+{
+	size_t si, strtabidx, nr_syms;
+	Elf_Data *symbols = NULL;
+	ssize_t ret = -ENOENT;
+	Elf_Scn *scn = NULL;
+	const char *sname;
+	Elf64_Shdr *sh;
+	int bind;
+
+	scn = find_elfscn(elf, SHT_SYMTAB, NULL);
+	if (!scn) {
+		pr_debug("elf: failed to find symbol table ELF section\n");
+		return -ENOENT;
+	}
+
+	sh = elf64_getshdr(scn);
+	strtabidx = sh->sh_link;
+	symbols = elf_getdata(scn, 0);
+	if (!symbols) {
+		pr_debug("elf: failed to get symtab section: %s\n", elf_errmsg(-1));
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+
+	nr_syms = symbols->d_size / sizeof(Elf64_Sym);
+	for (si = 0; si < nr_syms; si++) {
+		Elf64_Sym *sym = (Elf64_Sym *)symbols->d_buf + si;
+		size_t matchlen;
+		int currbind;
+
+		if (ELF64_ST_TYPE(sym->st_info) != STT_FUNC)
+			continue;
+
+		sname = elf_strptr(elf, strtabidx, sym->st_name);
+		if (!sname) {
+			pr_debug("failed to get sym name string for var %s\n", name);
+			return -EIO;
+		}
+		currbind = ELF64_ST_BIND(sym->st_info);
+
+		/* If matching on func@@LIB, match on everything prior to
+		 * the '@@'; otherwise match on full string.
+		 */
+		matchlen = strstr(sname, "@@") ? strstr(sname, "@@") - sname :
+						 strlen(sname);
+
+		if (strlen(name) == matchlen &&
+		    strncmp(sname, name, matchlen) == 0) {
+			if (ret >= 0) {
+				/* handle multiple matches */
+				if (bind != STB_WEAK && currbind != STB_WEAK) {
+					/* Only accept one non-weak bind. */
+					pr_debug("got additional match for symbol %s: %s\n",
+						 sname, name);
+					return -LIBBPF_ERRNO__FORMAT;
+				} else if (currbind == STB_WEAK) {
+					/* already have a non-weak bind, and
+					 * this is a weak bind, so ignore.
+					 */
+					continue;
+				}
+			}
+			ret = sym->st_value;
+			bind = currbind;
+		}
+	}
+	return ret;
+}
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 				const char *binary_path, size_t func_offset,
@@ -10194,6 +10314,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	size_t ref_ctr_off;
 	int pfd, err;
 	bool retprobe, legacy;
+	const char *func_name;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -10201,6 +10322,57 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+
+	func_name = OPTS_GET(opts, func_name, NULL);
+	if (func_name) {
+		ssize_t sym_off, rel_off;
+		Elf *elf;
+		int fd;
+
+		if (pid == -1) {
+			/* system-wide probing is not supported; we need
+			 * a running process to determine offsets.
+			 */
+			pr_warn("name-based attach does not work for pid -1 (all processes)\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+		if (!binary_path) {
+			pr_warn("name-based attach requires binary_path\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+		if (elf_version(EV_CURRENT) == EV_NONE) {
+			pr_debug("failed to init libelf for %s\n", binary_path);
+			return libbpf_err_ptr(-LIBBPF_ERRNO__LIBELF);
+		}
+		fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+		if (fd < 0) {
+			err = -errno;
+			pr_debug("failed to open %s: %s\n", binary_path,
+				 libbpf_strerror_r(err, errmsg, sizeof(errmsg)));
+			return libbpf_err_ptr(err);
+		}
+		elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+		if (!elf) {
+			pr_debug("could not read elf from %s: %s\n",
+				 binary_path, elf_errmsg(-1));
+			close(fd);
+			return libbpf_err_ptr(-LIBBPF_ERRNO__FORMAT);
+		}
+		sym_off = find_elf_func_offset(elf, func_name);
+		close(fd);
+		elf_end(elf);
+		if (sym_off < 0) {
+			pr_debug("could not find sym offset for %s\n", func_name);
+			return libbpf_err_ptr(sym_off);
+		}
+		rel_off = get_rel_offset(pid, sym_off);
+		if (rel_off < 0) {
+			pr_debug("could not find relative offset for %s at 0x%lx\n",
+				 func_name, sym_off);
+			return libbpf_err_ptr(rel_off);
+		}
+		func_offset += (size_t)rel_off;
+	}
 
 	legacy = determine_uprobe_perf_type() < 0;
 	if (!legacy) {
