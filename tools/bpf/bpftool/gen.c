@@ -1126,6 +1126,81 @@ out:
 	return err;
 }
 
+struct btfgen_type {
+	struct btf_type *type;
+	unsigned int id;
+};
+
+struct btfgen_info {
+	struct hashmap *types;
+	struct btf *src_btf;
+};
+
+static size_t btfgen_hash_fn(const void *key, void *ctx)
+{
+	return (size_t)key;
+}
+
+static bool btfgen_equal_fn(const void *k1, const void *k2, void *ctx)
+{
+	return k1 == k2;
+}
+
+static void *uint_as_hash_key(int x)
+{
+	return (void *)(uintptr_t)x;
+}
+
+static void btfgen_free_type(struct btfgen_type *type)
+{
+	free(type);
+}
+
+static void btfgen_free_info(struct btfgen_info *info)
+{
+	struct hashmap_entry *entry;
+	size_t bkt;
+
+	if (!info)
+		return;
+
+	if (!IS_ERR_OR_NULL(info->types)) {
+		hashmap__for_each_entry(info->types, entry, bkt) {
+			btfgen_free_type(entry->value);
+		}
+		hashmap__free(info->types);
+	}
+
+	btf__free(info->src_btf);
+
+	free(info);
+}
+
+static struct btfgen_info *
+btfgen_new_info(const char *targ_btf_path)
+{
+	struct btfgen_info *info;
+
+	info = calloc(1, sizeof(*info));
+	if (!info)
+		return NULL;
+
+	info->src_btf = btf__parse(targ_btf_path, NULL);
+	if (libbpf_get_error(info->src_btf)) {
+		btfgen_free_info(info);
+		return NULL;
+	}
+
+	info->types = hashmap__new(btfgen_hash_fn, btfgen_equal_fn, NULL);
+	if (IS_ERR(info->types)) {
+		errno = -PTR_ERR(info->types);
+		btfgen_free_info(info);
+		return NULL;
+	}
+
+	return info;
+}
+
 /* Create BTF file for a set of BPF objects */
 static int btfgen(const char *src_btf, const char *dst_btf, const char *objspaths[])
 {
