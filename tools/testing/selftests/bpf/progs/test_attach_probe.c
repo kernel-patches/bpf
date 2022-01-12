@@ -12,6 +12,7 @@ int uprobe_res = 0;
 int uretprobe_res = 0;
 int uprobe_byname_res = 0;
 int uretprobe_byname_res = 0;
+int usdtprobe_byname_res = 0;
 
 SEC("kprobe/sys_nanosleep")
 int handle_kprobe(struct pt_regs *ctx)
@@ -52,6 +53,13 @@ SEC("uretprobe/trigger_func_byname")
 int handle_uretprobe_byname(struct pt_regs *ctx)
 {
 	uretprobe_byname_res = 6;
+	return 0;
+}
+
+SEC("uprobe/trigger_usdt_byname")
+int handle_usdtprobe_byname(struct pt_regs *ctx)
+{
+	usdtprobe_byname_res = 7;
 	return 0;
 }
 

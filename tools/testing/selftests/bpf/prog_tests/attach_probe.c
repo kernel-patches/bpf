@@ -2,6 +2,17 @@
 #include <test_progs.h>
 #include "test_attach_probe.skel.h"
 
+#if defined(HAVE_SDT_EVENT)
+#include <sys/sdt.h>
+
+static void usdt_method(void)
+{
+	DTRACE_PROBE(bpftest, probe1);
+	return;
+}
+
+#endif /* HAVE_SDT_EVENT */
+
 /* this is how USDT semaphore is actually defined, except volatile modifier */
 volatile unsigned short uprobe_ref_ctr __attribute__((unused)) __attribute((section(".probes")));
 
@@ -22,6 +33,7 @@ void test_attach_probe(void)
 	struct bpf_link *kprobe_link, *kretprobe_link;
 	struct bpf_link *uprobe_link, *uretprobe_link;
 	struct bpf_link *uprobe_byname_link, *uretprobe_byname_link;
+	struct bpf_link *usdtprobe_byname_link;
 	struct test_attach_probe* skel;
 	size_t uprobe_offset;
 	ssize_t base_addr, ref_ctr_offset;
@@ -120,6 +132,27 @@ void test_attach_probe(void)
 	if (!ASSERT_OK_PTR(uretprobe_byname_link, "attach_uretprobe_byname"))
 		goto cleanup;
 	skel->links.handle_uretprobe_byname = uretprobe_byname_link;
+
+#if defined(HAVE_SDT_EVENT)
+	uprobe_opts.usdt_provider = "bpftest";
+	uprobe_opts.usdt_name = "probe1";
+	uprobe_opts.func_name = NULL;
+	uprobe_opts.retprobe = false;
+	usdtprobe_byname_link = bpf_program__attach_uprobe_opts(skel->progs.handle_usdtprobe_byname,
+								0 /* this pid */,
+								"/proc/self/exe",
+								0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(usdtprobe_byname_link, "attach_usdtprobe_byname"))
+		goto cleanup;
+	skel->links.handle_usdtprobe_byname = usdtprobe_byname_link;
+
+	/* trigger and validate usdt probe */
+	usdt_method();
+
+	if (CHECK(skel->bss->usdtprobe_byname_res != 7, "check_usdtprobe_byname_res",
+		  "wrong usdtprobe_byname res: %d\n", skel->bss->usdtprobe_byname_res))
+		goto cleanup;
+#endif /* HAVE_SDT_EVENT */
 
 	/* trigger & validate kprobe && kretprobe && uretprobe by name */
 	usleep(1);

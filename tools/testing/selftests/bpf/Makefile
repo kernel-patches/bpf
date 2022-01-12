@@ -3,6 +3,14 @@ include ../../../build/Build.include
 include ../../../scripts/Makefile.arch
 include ../../../scripts/Makefile.include
 
+# needed for Makile.feature
+ifeq ($(srctree),)
+srctree := $(patsubst %/,%,$(dir $(CURDIR)))
+srctree := $(patsubst %/,%,$(dir $(srctree)))
+srctree := $(patsubst %/,%,$(dir $(srctree)))
+srctree := $(patsubst %/,%,$(dir $(srctree)))
+endif
+
 CXX ?= $(CROSS_COMPILE)g++
 
 CURDIR := $(abspath .)
@@ -30,6 +38,26 @@ LDLIBS += -lcap -lelf -lz -lrt -lpthread
 # Silence some warnings when compiled with clang
 ifneq ($(LLVM),)
 CFLAGS += -Wno-unused-command-line-argument
+endif
+
+FEATURE_USER = .bpftest
+FEATURE_TESTS = sdt
+FEATURE_DISPLAY = sdt
+
+check_feat := 1
+NON_CHECK_FEAT_TARGETS := clean docs docs-clean
+ifdef MAKECMDGOALS
+ifeq ($(filter-out $(NON_CHECK_FEAT_TARGETS),$(MAKECMDGOALS)),)
+  check_feat := 0
+endif
+endif
+
+ifeq ($(check_feat),1)
+ifeq ($(FEATURES_DUMP),)
+include $(srctree)/tools/build/Makefile.feature
+else
+include $(FEATURES_DUMP)
+endif
 endif
 
 # Order correspond to 'make run_tests' order
@@ -108,6 +136,7 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_PROGS)
 	$(Q)$(RM) -r $(TEST_GEN_PROGS_EXTENDED)
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
+	$(Q)$(RM) -r $(OUTPUT)FEATURE-DUMP.bpf
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
 	$(Q)$(MAKE) -C bpf_testmod clean
 	$(Q)$(MAKE) docs-clean
@@ -432,6 +461,11 @@ $(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c
 		  sed -n -E 's/^void (serial_)?test_([a-zA-Z0-9_]+)\((void)?\).*/DEFINE_TEST(\2)/p'	\
 			$(TRUNNER_TESTS_DIR)/*.c | sort ;	\
 		 ) > $$@)
+endif
+
+# support for adding USDT probes?
+ifeq ($(feature-sdt), 1)
+CFLAGS += -DHAVE_SDT_EVENT
 endif
 
 # compile individual test files
