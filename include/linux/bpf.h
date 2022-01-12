@@ -184,7 +184,8 @@ struct bpf_map {
 	char name[BPF_OBJ_NAME_LEN];
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	/* 14 bytes hole */
+	struct inode *backing_inode; /* back pointer to the inode in bpffs */
+	/* 6 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -991,6 +992,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	struct inode *backing_inode; /* back pointer to the inode in bpffs */
 };
 
 struct bpf_array_aux {
@@ -1018,6 +1020,7 @@ struct bpf_link {
 	const struct bpf_link_ops *ops;
 	struct bpf_prog *prog;
 	struct work_struct work;
+	struct inode *backing_inode; /* back pointer to the inode in bpffs */
 };
 
 struct bpf_link_ops {
