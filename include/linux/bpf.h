@@ -308,6 +308,8 @@ extern const struct bpf_map_ops bpf_map_offload_ops;
 #define BPF_BASE_TYPE_BITS	8
 
 enum bpf_type_flag {
+	FLAG_DONTCARE		= 0,
+
 	/* PTR may be NULL. */
 	PTR_MAYBE_NULL		= BIT(0 + BPF_BASE_TYPE_BITS),
 
@@ -316,7 +318,10 @@ enum bpf_type_flag {
 	 */
 	MEM_RDONLY		= BIT(1 + BPF_BASE_TYPE_BITS),
 
-	__BPF_TYPE_LAST_FLAG	= MEM_RDONLY,
+	/* MEM is in user address space. */
+	MEM_USER		= BIT(2 + BPF_BASE_TYPE_BITS),
+
+	__BPF_TYPE_LAST_FLAG	= MEM_USER,
 };
 
 /* Max number of base types. */
@@ -572,7 +577,7 @@ struct bpf_verifier_ops {
 				 const struct btf *btf,
 				 const struct btf_type *t, int off, int size,
 				 enum bpf_access_type atype,
-				 u32 *next_btf_id);
+				 u32 *next_btf_id, enum bpf_type_flag *flag);
 	bool (*check_kfunc_call)(u32 kfunc_btf_id, struct module *owner);
 };
 
@@ -1749,7 +1754,7 @@ static inline bool bpf_tracing_btf_ctx_access(int off, int size,
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 		      const struct btf_type *t, int off, int size,
 		      enum bpf_access_type atype,
-		      u32 *next_btf_id);
+		      u32 *next_btf_id, enum bpf_type_flag *flag);
 bool btf_struct_ids_match(struct bpf_verifier_log *log,
 			  const struct btf *btf, u32 id, int off,
 			  const struct btf *need_btf, u32 need_type_id);
