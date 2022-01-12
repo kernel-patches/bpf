@@ -10,12 +10,18 @@ static void method(void) {
 	return ;
 }
 
+/* attach point for byname uprobe */
+static void method2(void) {
+	return;
+}
+
 void test_attach_probe(void)
 {
 	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
 	int duration = 0;
 	struct bpf_link *kprobe_link, *kretprobe_link;
 	struct bpf_link *uprobe_link, *uretprobe_link;
+	struct bpf_link *uprobe_byname_link, *uretprobe_byname_link;
 	struct test_attach_probe* skel;
 	size_t uprobe_offset;
 	ssize_t base_addr, ref_ctr_offset;
@@ -92,7 +98,30 @@ void test_attach_probe(void)
 		goto cleanup;
 	skel->links.handle_uretprobe = uretprobe_link;
 
-	/* trigger & validate kprobe && kretprobe */
+	uprobe_opts.func_name = "method2";
+	uprobe_opts.retprobe = false;
+	uprobe_opts.ref_ctr_offset = 0;
+	uprobe_byname_link = bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe_byname,
+							     0 /* this pid */,
+							     "/proc/self/exe",
+							     0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(uprobe_byname_link, "attach_uprobe_byname"))
+		goto cleanup;
+	skel->links.handle_uprobe_byname = uprobe_byname_link;
+
+	/* test attach by name for a library function */
+	uprobe_opts.func_name = "usleep";
+	uprobe_opts.retprobe = true;
+	uprobe_opts.ref_ctr_offset = 0;
+	uretprobe_byname_link = bpf_program__attach_uprobe_opts(skel->progs.handle_uretprobe_byname,
+								0 /* this pid */,
+								"/proc/self/exe",
+								0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(uretprobe_byname_link, "attach_uretprobe_byname"))
+		goto cleanup;
+	skel->links.handle_uretprobe_byname = uretprobe_byname_link;
+
+	/* trigger & validate kprobe && kretprobe && uretprobe by name */
 	usleep(1);
 
 	if (CHECK(skel->bss->kprobe_res != 1, "check_kprobe_res",
@@ -105,11 +134,21 @@ void test_attach_probe(void)
 	/* trigger & validate uprobe & uretprobe */
 	method();
 
+	/* trigger & validate uprobe attached by name */
+	method2();
+
 	if (CHECK(skel->bss->uprobe_res != 3, "check_uprobe_res",
 		  "wrong uprobe res: %d\n", skel->bss->uprobe_res))
 		goto cleanup;
 	if (CHECK(skel->bss->uretprobe_res != 4, "check_uretprobe_res",
 		  "wrong uretprobe res: %d\n", skel->bss->uretprobe_res))
+		goto cleanup;
+
+	if (CHECK(skel->bss->uprobe_byname_res != 5, "check_uprobe_byname_res",
+		  "wrong uprobe byname res: %d\n", skel->bss->uprobe_byname_res))
+		goto cleanup;
+	if (CHECK(skel->bss->uretprobe_byname_res != 6, "check_uretprobe_byname_res",
+		  "wrong uretprobe byname res: %d\n", skel->bss->uretprobe_byname_res))
 		goto cleanup;
 
 cleanup:
