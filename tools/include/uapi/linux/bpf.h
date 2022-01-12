@@ -995,6 +995,7 @@ enum bpf_attach_type {
 	BPF_SK_REUSEPORT_SELECT,
 	BPF_SK_REUSEPORT_SELECT_OR_MIGRATE,
 	BPF_PERF_EVENT,
+	BPF_TRACE_RAW_KPROBE,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1009,6 +1010,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
 	BPF_LINK_TYPE_PERF_EVENT = 7,
+	BPF_LINK_TYPE_KPROBE = 8,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1110,6 +1112,11 @@ enum bpf_link_type {
  * bpf_copy_from_user().
  */
 #define BPF_F_SLEEPABLE		(1U << 4)
+
+/* link_create flags used in LINK_CREATE command for BPF_TRACE_RAW_KPROBE
+ * attach type.
+ */
+#define BPF_F_KPROBE_RETURN	(1U << 0)
 
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
@@ -1465,6 +1472,11 @@ union bpf_attr {
 				 */
 				__u64		bpf_cookie;
 			} perf_event;
+			struct {
+				__aligned_u64	addrs;
+				__u32		cnt;
+				__u64		bpf_cookie;
+			} kprobe;
 		};
 	} link_create;
 
