@@ -439,9 +439,16 @@ struct bpf_uprobe_opts {
 	 * argument to specify argument _within_ the function.
 	 */
 	const char *func_name;
+	/* name of USDT (Userland Static-Defined Tracing) provider/probe.
+	 * Offsets of USDT probe and associated semaphore (if any) are found
+	 * in ELF notes.  Note that if usdt_name is specified, func_offset
+	 * argument and ref_ctr_offset values should be zero.
+	 */
+	const char *usdt_provider;
+	const char *usdt_name;
 	size_t :0;
 };
-#define bpf_uprobe_opts__last_field func_name
+#define bpf_uprobe_opts__last_field usdt_name
 
 /**
  * @brief **bpf_program__attach_uprobe()** attaches a BPF program

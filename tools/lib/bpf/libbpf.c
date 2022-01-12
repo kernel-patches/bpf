@@ -10303,6 +10303,52 @@ static ssize_t find_elf_func_offset(Elf *elf, const char *name)
 	return ret;
 }
 
+struct sdt_note {
+	uint64_t	pc;
+	uint64_t	base_addr;
+	uint64_t	semaphore;
+	const char	provider_probe[256];
+};
+
+/* Find offset of USDT probe in object specified in ELF notes.
+ * Note may also specify semaphore offset, record value in *semaphore_offp.
+ */
+static ssize_t find_elf_usdt_offset(Elf *elf, const char *provider,
+				    const char *name, ssize_t *semaphore_offp)
+{
+	Elf_Data *data = NULL;
+	Elf_Scn *scn = NULL;
+
+	while ((scn = find_elfscn(elf, SHT_NOTE, scn)) > 0) {
+		while ((data = elf_getdata(scn, data)) != 0) {
+			size_t name_off, desc_off, off;
+			GElf_Nhdr nhdr;
+
+			while ((off = gelf_getnote(data, off, &nhdr,
+						   &name_off, &desc_off)) != 0) {
+				struct sdt_note *sdt_note;
+				const char *probe;
+
+				if (nhdr.n_namesz != 8 ||
+				    memcmp((char *)data->d_buf + name_off, "stapsdt", 8) != 0)
+					continue;
+				sdt_note = (struct sdt_note *)(data->d_buf + desc_off);
+				if (strcmp(provider, sdt_note->provider_probe) != 0)
+					continue;
+				/* probe is after null-terminated provider */
+				probe = sdt_note->provider_probe +
+					strlen(sdt_note->provider_probe) + 1;
+				if (strcmp(probe, name) != 0)
+					continue;
+
+				*semaphore_offp = (ssize_t)sdt_note->semaphore;
+				return (ssize_t)sdt_note->pc;
+			}
+		}
+	}
+	return -ENOENT;
+}
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 				const char *binary_path, size_t func_offset,
@@ -10314,7 +10360,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	size_t ref_ctr_off;
 	int pfd, err;
 	bool retprobe, legacy;
-	const char *func_name;
+	const char *func_name, *usdt_name, *usdt_provider;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -10324,11 +10370,25 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
 
 	func_name = OPTS_GET(opts, func_name, NULL);
-	if (func_name) {
-		ssize_t sym_off, rel_off;
+	usdt_provider = OPTS_GET(opts, usdt_provider, NULL);
+	usdt_name = OPTS_GET(opts, usdt_name, NULL);
+	if (func_name || usdt_name) {
+		ssize_t sym_off, rel_off, semaphore_off = 0;
 		Elf *elf;
 		int fd;
 
+		if (func_name && usdt_name) {
+			pr_warn("both func_name and usdt_name cannot be specified\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+		if (usdt_name && (func_offset || ref_ctr_off)) {
+			pr_warn("func_offset argument, ref_ctr_off option should be 0 when usdt_name is used\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+		if (usdt_name && !usdt_provider) {
+			pr_warn("usdt_provider and usdt_name must be supplied\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
 		if (pid == -1) {
 			/* system-wide probing is not supported; we need
 			 * a running process to determine offsets.
@@ -10358,20 +10418,32 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 			close(fd);
 			return libbpf_err_ptr(-LIBBPF_ERRNO__FORMAT);
 		}
-		sym_off = find_elf_func_offset(elf, func_name);
+		if (func_name)
+			sym_off = find_elf_func_offset(elf, func_name);
+		else
+			sym_off = find_elf_usdt_offset(elf, usdt_provider, usdt_name,
+						       &semaphore_off);
 		close(fd);
 		elf_end(elf);
 		if (sym_off < 0) {
-			pr_debug("could not find sym offset for %s\n", func_name);
+			pr_debug("could not find sym offset for %s\n", func_name ?: usdt_name);
 			return libbpf_err_ptr(sym_off);
 		}
 		rel_off = get_rel_offset(pid, sym_off);
 		if (rel_off < 0) {
 			pr_debug("could not find relative offset for %s at 0x%lx\n",
-				 func_name, sym_off);
+				 func_name ?: usdt_name, sym_off);
 			return libbpf_err_ptr(rel_off);
 		}
 		func_offset += (size_t)rel_off;
+		if (semaphore_off) {
+			ref_ctr_off = get_rel_offset(pid, semaphore_off);
+			if (ref_ctr_off < 0) {
+				pr_debug("could not find relative offset for semaphore for %s at 0x%lx\n",
+					 usdt_name, semaphore_off);
+				return libbpf_err_ptr(ref_ctr_off);
+			}
+		}
 	}
 
 	legacy = determine_uprobe_perf_type() < 0;
