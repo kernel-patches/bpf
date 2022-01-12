@@ -238,6 +238,7 @@ config FPROBE
 	bool "Kernel Function Probe (fprobe)"
 	depends on FUNCTION_TRACER
 	depends on DYNAMIC_FTRACE_WITH_REGS
+	select RETHOOK
 	default n
 	help
 	  This option enables kernel function probe feature, which is
