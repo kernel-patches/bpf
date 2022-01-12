@@ -8570,6 +8570,7 @@ static struct bpf_link *attach_raw_tp(const struct bpf_program *prog, long cooki
 static struct bpf_link *attach_trace(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_lsm(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_iter(const struct bpf_program *prog, long cookie);
+static struct bpf_link *attach_view(const struct bpf_program *prog, long cookie);
 
 static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("socket",		SOCKET_FILTER, 0, SEC_NONE | SEC_SLOPPY_PFX),
@@ -8599,6 +8600,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("lsm/",			LSM, BPF_LSM_MAC, SEC_ATTACH_BTF, attach_lsm),
 	SEC_DEF("lsm.s/",		LSM, BPF_LSM_MAC, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_lsm),
 	SEC_DEF("iter/",		TRACING, BPF_TRACE_ITER, SEC_ATTACH_BTF, attach_iter),
+	SEC_DEF("view/",		TRACING, BPF_TRACE_VIEW, SEC_ATTACH_BTF, attach_view),
 	SEC_DEF("syscall",		SYSCALL, 0, SEC_SLEEPABLE),
 	SEC_DEF("xdp_devmap/",		XDP, BPF_XDP_DEVMAP, SEC_ATTACHABLE),
 	SEC_DEF("xdp_cpumap/",		XDP, BPF_XDP_CPUMAP, SEC_ATTACHABLE),
@@ -8896,6 +8898,7 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 #define BTF_TRACE_PREFIX "btf_trace_"
 #define BTF_LSM_PREFIX "bpf_lsm_"
 #define BTF_ITER_PREFIX "bpf_iter_"
+#define BTF_VIEW_PREFIX "bpf_view_"
 #define BTF_MAX_NAME_SIZE 128
 
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
@@ -8912,6 +8915,10 @@ void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 		break;
 	case BPF_TRACE_ITER:
 		*prefix = BTF_ITER_PREFIX;
+		*kind = BTF_KIND_FUNC;
+		break;
+	case BPF_TRACE_VIEW:
+		*prefix = BTF_VIEW_PREFIX;
 		*kind = BTF_KIND_FUNC;
 		break;
 	default:
@@ -10573,6 +10580,20 @@ struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 		 */
 		return bpf_program__attach_trace(prog);
 	}
+}
+
+static struct bpf_link *attach_view(const struct bpf_program *prog, long cookie)
+{
+	const char *target_name;
+	const char *prefix = "view/";
+	int btf_id;
+
+	target_name = prog->sec_name + strlen(prefix);
+	btf_id = libbpf_find_vmlinux_btf_id(target_name, BPF_TRACE_VIEW);
+	if (btf_id < 0)
+		return libbpf_err_ptr(btf_id);
+
+	return bpf_program__attach_fd(prog, 0, btf_id, "view");
 }
 
 struct bpf_link *
