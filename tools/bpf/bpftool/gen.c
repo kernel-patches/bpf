@@ -1127,9 +1127,17 @@ out:
 	return err;
 }
 
+struct btfgen_member {
+	struct btf_member *member;
+	int idx;
+};
+
 struct btfgen_type {
 	struct btf_type *type;
 	unsigned int id;
+	bool all_members;
+
+	struct hashmap *members;
 };
 
 struct btfgen_info {
@@ -1159,6 +1167,19 @@ static void *u32_as_hash_key(__u32 x)
 
 static void btfgen_free_type(struct btfgen_type *type)
 {
+	struct hashmap_entry *entry;
+	size_t bkt;
+
+	if (!type)
+		return;
+
+	if (!IS_ERR_OR_NULL(type->members)) {
+		hashmap__for_each_entry(type->members, entry, bkt) {
+			free(entry->value);
+		}
+		hashmap__free(type->members);
+	}
+
 	free(type);
 }
 
@@ -1207,19 +1228,252 @@ btfgen_new_info(const char *targ_btf_path)
 	return info;
 }
 
+static int btfgen_add_member(struct btfgen_type *btfgen_type,
+			     struct btf_member *btf_member, int idx)
+{
+	struct btfgen_member *btfgen_member;
+	int err;
+
+	/* create new members hashmap for this btfgen type if needed */
+	if (!btfgen_type->members) {
+		btfgen_type->members = hashmap__new(btfgen_hash_fn, btfgen_equal_fn, NULL);
+		if (IS_ERR(btfgen_type->members))
+			return PTR_ERR(btfgen_type->members);
+	}
+
+	btfgen_member = calloc(1, sizeof(*btfgen_member));
+	if (!btfgen_member)
+		return -ENOMEM;
+	btfgen_member->member = btf_member;
+	btfgen_member->idx = idx;
+	/* add btf_member as member to given btfgen_type */
+	err = hashmap__add(btfgen_type->members, uint_as_hash_key(btfgen_member->idx),
+			   btfgen_member);
+	if (err) {
+		free(btfgen_member);
+		if (err != -EEXIST)
+			return err;
+	}
+
+	return 0;
+}
+
+static struct btfgen_type *btfgen_get_type(struct btfgen_info *info, int id)
+{
+	struct btfgen_type *type = NULL;
+
+	hashmap__find(info->types, uint_as_hash_key(id), (void **)&type);
+
+	return type;
+}
+
+static struct btfgen_type *
+_btfgen_put_type(struct btf *btf, struct btfgen_info *info, struct btf_type *btf_type,
+		 unsigned int id, bool all_members)
+{
+	struct btfgen_type *btfgen_type, *tmp;
+	struct btf_array *array;
+	unsigned int child_id;
+	struct btf_member *m;
+	int err, i, n;
+
+	/* check if we already have this type */
+	if (hashmap__find(info->types, uint_as_hash_key(id), (void **) &btfgen_type)) {
+		if (!all_members || btfgen_type->all_members)
+			return btfgen_type;
+	} else {
+		btfgen_type = calloc(1, sizeof(*btfgen_type));
+		if (!btfgen_type)
+			return NULL;
+
+		btfgen_type->type = btf_type;
+		btfgen_type->id = id;
+
+		/* append this type to the types list before anything else */
+		err = hashmap__add(info->types, uint_as_hash_key(btfgen_type->id), btfgen_type);
+		if (err) {
+			free(btfgen_type);
+			return NULL;
+		}
+	}
+
+	/* avoid infinite recursion and yet be able to add all
+	 * fields/members for types also managed by this function
+	 */
+	btfgen_type->all_members = all_members;
+
+
+	/* recursively add other types needed by it */
+	switch (btf_kind(btfgen_type->type)) {
+	case BTF_KIND_UNKN:
+	case BTF_KIND_INT:
+	case BTF_KIND_FLOAT:
+	case BTF_KIND_ENUM:
+		break;
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION:
+		/* doesn't need resolution if not adding all members */
+		if (!all_members)
+			break;
+
+		n = btf_vlen(btf_type);
+		m = btf_members(btf_type);
+		for (i = 0; i < n; i++, m++) {
+			btf_type = (struct btf_type *) btf__type_by_id(btf, m->type);
+
+			/* add all member types */
+			tmp = _btfgen_put_type(btf, info, btf_type, m->type, all_members);
+			if (!tmp)
+				return NULL;
+
+			/* add all members */
+			err = btfgen_add_member(btfgen_type, m, i);
+			if (err)
+				return NULL;
+		}
+		break;
+	case BTF_KIND_PTR:
+		if (!all_members)
+			break;
+	/* fall through */
+	/* Also add the type it's pointing to when adding all members */
+	case BTF_KIND_CONST:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_TYPEDEF:
+		child_id = btf_type->type;
+		btf_type = (struct btf_type *) btf__type_by_id(btf, child_id);
+
+		tmp = _btfgen_put_type(btf, info, btf_type, child_id, all_members);
+		if (!tmp)
+			return NULL;
+		break;
+	case BTF_KIND_ARRAY:
+		array = btf_array(btfgen_type->type);
+
+		/* add type for array type */
+		btf_type = (struct btf_type *) btf__type_by_id(btf, array->type);
+		tmp = _btfgen_put_type(btf, info, btf_type, array->type, all_members);
+		if (!tmp)
+			return NULL;
+
+		/* add type for array's index type */
+		btf_type = (struct btf_type *) btf__type_by_id(btf, array->index_type);
+		tmp = _btfgen_put_type(btf, info, btf_type, array->index_type, all_members);
+		if (!tmp)
+			return NULL;
+		break;
+	/* tells if some other type needs to be handled */
+	default:
+		p_err("unsupported kind: %s (%d)",
+		      btf_kind_str(btfgen_type->type), btfgen_type->id);
+		errno = EINVAL;
+		return NULL;
+	}
+
+	return btfgen_type;
+}
+
+/* Put type in the list. If the type already exists it's returned, otherwise a
+ * new one is created and added to the list. This is called recursively adding
+ * all the types that are needed for the current one.
+ */
+static struct btfgen_type *
+btfgen_put_type(struct btf *btf, struct btfgen_info *info, struct btf_type *btf_type,
+		unsigned int id)
+{
+	return _btfgen_put_type(btf, info, btf_type, id, false);
+}
+
+/* Same as btfgen_put_type, but adding all members, from given complex type, recursively */
+static struct btfgen_type *
+btfgen_put_type_all(struct btf *btf, struct btfgen_info *info,
+		    struct btf_type *btf_type, unsigned int id)
+{
+	return _btfgen_put_type(btf, info, btf_type, id, true);
+}
+
 static int btfgen_record_field_relo(struct btfgen_info *info, struct bpf_core_spec *targ_spec)
 {
-	return -EOPNOTSUPP;
+	struct btf *btf = (struct btf *) info->src_btf;
+	struct btfgen_type *btfgen_type;
+	struct btf_member *btf_member;
+	struct btf_type *btf_type;
+	struct btf_array *array;
+	unsigned int id;
+	int idx, err;
+
+	btf_type = (struct btf_type *) btf__type_by_id(btf, targ_spec->root_type_id);
+
+	/* create btfgen_type for root type */
+	btfgen_type = btfgen_put_type(btf, info, btf_type, targ_spec->root_type_id);
+	if (!btfgen_type)
+		return -errno;
+
+	/* add types for complex types (arrays, unions, structures) */
+	for (int i = 1; i < targ_spec->raw_len; i++) {
+		/* skip typedefs and mods */
+		while (btf_is_mod(btf_type) || btf_is_typedef(btf_type)) {
+			id = btf_type->type;
+			btfgen_type = btfgen_get_type(info, id);
+			if (!btfgen_type)
+				return -ENOENT;
+			btf_type = (struct btf_type *) btf__type_by_id(btf, id);
+		}
+
+		switch (btf_kind(btf_type)) {
+		case BTF_KIND_STRUCT:
+		case BTF_KIND_UNION:
+			idx = targ_spec->raw_spec[i];
+			btf_member = btf_members(btf_type) + idx;
+			btf_type = (struct btf_type *) btf__type_by_id(btf, btf_member->type);
+
+			/* add member to relocation type */
+			err = btfgen_add_member(btfgen_type, btf_member, idx);
+			if (err)
+				return err;
+			/* put btfgen type */
+			btfgen_type = btfgen_put_type(btf, info, btf_type, btf_member->type);
+			if (!btfgen_type)
+				return -errno;
+			break;
+		case BTF_KIND_ARRAY:
+			array = btf_array(btf_type);
+			btfgen_type = btfgen_get_type(info, array->type);
+			if (!btfgen_type)
+				return -ENOENT;
+			btf_type = (struct btf_type *) btf__type_by_id(btf, array->type);
+			break;
+		default:
+			p_err("spec type wasn't handled");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
 }
 
 static int btfgen_record_type_relo(struct btfgen_info *info, struct bpf_core_spec *targ_spec)
 {
-	return -EOPNOTSUPP;
+	struct btf *btf = (struct btf *) info->src_btf;
+	struct btfgen_type *btfgen_type;
+	struct btf_type *btf_type;
+
+	btf_type = (struct btf_type *) btf__type_by_id(btf, targ_spec->root_type_id);
+
+	btfgen_type = btfgen_put_type_all(btf, info, btf_type, targ_spec->root_type_id);
+	return btfgen_type ?  0 : -errno;
 }
 
 static int btfgen_record_enumval_relo(struct btfgen_info *info, struct bpf_core_spec *targ_spec)
 {
-	return -EOPNOTSUPP;
+	struct btf *btf = (struct btf *) info->src_btf;
+	struct btfgen_type *btfgen_type;
+	struct btf_type *btf_type;
+
+	btf_type = (struct btf_type *) btf__type_by_id(btf, targ_spec->root_type_id);
+
+	btfgen_type = btfgen_put_type_all(btf, info, btf_type, targ_spec->root_type_id);
+	return btfgen_type ?  0 : -errno;
 }
 
 static int btfgen_record_reloc(struct btfgen_info *info, struct bpf_core_spec *res)
