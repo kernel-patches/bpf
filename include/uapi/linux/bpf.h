@@ -5533,7 +5533,11 @@ struct bpf_sock {
 	__u32 src_ip4;
 	__u32 src_ip6[4];
 	__u32 src_port;		/* host byte order */
-	__u32 dst_port;		/* network byte order */
+	__u32 dst_port;		/* low 16-bits are in network byte order,
+				 * and high 16-bits are filled by 0.
+				 * So the real port in host byte order is
+				 * bpf_ntohs((__u16)dst_port).
+				 */
 	__u32 dst_ip4;
 	__u32 dst_ip6[4];
 	__u32 state;
