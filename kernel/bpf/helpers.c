@@ -16,6 +16,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/proc_ns.h>
 #include <linux/security.h>
+#include <linux/btf_ids.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -669,6 +670,24 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_5(bpf_access_process_vm, struct task_struct *, tsk,
+	   unsigned long, addr, void *, buf, int, len, unsigned int, gup_flags)
+{
+	return access_process_vm(tsk, addr, buf, len, gup_flags);
+}
+
+const struct bpf_func_proto bpf_access_process_vm_proto = {
+	.func		= bpf_access_process_vm,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg5_type	= ARG_ANYTHING,
 };
 
 BPF_CALL_2(bpf_per_cpu_ptr, const void *, ptr, u32, cpu)
