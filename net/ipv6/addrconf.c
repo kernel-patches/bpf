@@ -61,7 +61,7 @@
 #include <linux/delay.h>
 #include <linux/notifier.h>
 #include <linux/string.h>
-#include <linux/hash.h>
+#include <crypto/blake2s.h>
 
 #include <net/net_namespace.h>
 #include <net/sock.h>
@@ -3224,61 +3224,33 @@ static int ipv6_generate_stable_address(struct in6_addr *address,
 					u8 dad_count,
 					const struct inet6_dev *idev)
 {
-	static DEFINE_SPINLOCK(lock);
-	static __u32 digest[SHA1_DIGEST_WORDS];
-	static __u32 workspace[SHA1_WORKSPACE_WORDS];
-
-	static union {
-		char __data[SHA1_BLOCK_SIZE];
-		struct {
-			struct in6_addr secret;
-			__be32 prefix[2];
-			unsigned char hwaddr[MAX_ADDR_LEN];
-			u8 dad_count;
-		} __packed;
-	} data;
-
-	struct in6_addr secret;
-	struct in6_addr temp;
 	struct net *net = dev_net(idev->dev);
-
-	BUILD_BUG_ON(sizeof(data.__data) != sizeof(data));
+	const struct in6_addr *secret;
+	struct blake2s_state hash;
+	struct in6_addr proposal;
 
 	if (idev->cnf.stable_secret.initialized)
-		secret = idev->cnf.stable_secret.secret;
+		secret = &idev->cnf.stable_secret.secret;
 	else if (net->ipv6.devconf_dflt->stable_secret.initialized)
-		secret = net->ipv6.devconf_dflt->stable_secret.secret;
+		secret = &net->ipv6.devconf_dflt->stable_secret.secret;
 	else
 		return -1;
 
 retry:
-	spin_lock_bh(&lock);
+	blake2s_init_key(&hash, sizeof(proposal.s6_addr32[2]) * 2, secret, sizeof(*secret));
+	blake2s_update(&hash, (u8 *)&address->s6_addr32[0], sizeof(address->s6_addr32[0]) * 2);
+	blake2s_update(&hash, idev->dev->perm_addr, idev->dev->addr_len);
+	blake2s_update(&hash, (u8 *)&dad_count, sizeof(dad_count));
+	blake2s_final(&hash, (u8 *)&proposal.s6_addr32[2]);
 
-	sha1_init(digest);
-	memset(&data, 0, sizeof(data));
-	memset(workspace, 0, sizeof(workspace));
-	memcpy(data.hwaddr, idev->dev->perm_addr, idev->dev->addr_len);
-	data.prefix[0] = address->s6_addr32[0];
-	data.prefix[1] = address->s6_addr32[1];
-	data.secret = secret;
-	data.dad_count = dad_count;
-
-	sha1_transform(digest, data.__data, workspace);
-
-	temp = *address;
-	temp.s6_addr32[2] = (__force __be32)digest[0];
-	temp.s6_addr32[3] = (__force __be32)digest[1];
-
-	spin_unlock_bh(&lock);
-
-	if (ipv6_reserved_interfaceid(temp)) {
+	if (ipv6_reserved_interfaceid(proposal)) {
 		dad_count++;
-		if (dad_count > dev_net(idev->dev)->ipv6.sysctl.idgen_retries)
+		if (dad_count > net->ipv6.sysctl.idgen_retries)
 			return -1;
 		goto retry;
 	}
 
-	*address = temp;
+	*address = proposal;
 	return 0;
 }
 
