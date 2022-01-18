@@ -177,3 +177,21 @@ int BPF_PROG(test_sys_setdomainname, struct pt_regs *regs)
 		copy_test++;
 	return 0;
 }
+
+int copy_remote_test = 0;
+
+SEC("fentry.s/__x64_sys_open")
+int BPF_PROG(test_sys_open, struct pt_regs *regs)
+{
+	void *ptr = (void *)PT_REGS_PARM1(regs);
+	pid_t pid = (pid_t)PT_REGS_PARM2(regs);
+	char path[4];
+	long ret;
+
+	ret = bpf_copy_from_user_remote(&path, sizeof(path), pid, ptr);
+
+	if (ret == sizeof(path) && !__builtin_memcmp("/dev", path, 4))
+		copy_remote_test++;
+
+	return 0;
+}

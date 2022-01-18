@@ -56,6 +56,7 @@ static int test_lsm(struct lsm *skel)
 	struct bpf_link *link;
 	int buf = 1234;
 	int err;
+	int fd;
 
 	err = lsm__attach(skel);
 	if (!ASSERT_OK(err, "attach"))
@@ -85,6 +86,12 @@ static int test_lsm(struct lsm *skel)
 	syscall(__NR_setdomainname, ~0L, -4L);
 
 	ASSERT_EQ(skel->bss->copy_test, 3, "copy_test");
+
+	fd = syscall(__NR_open, "/dev/null", syscall(__NR_getpid));
+	if (fd >= 0)
+		syscall(__NR_close, fd);
+
+	ASSERT_EQ(skel->bss->copy_remote_test, 1, "copy_remote_test");
 
 	lsm__detach(skel);
 

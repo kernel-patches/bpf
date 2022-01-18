@@ -16,6 +16,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/proc_ns.h>
 #include <linux/security.h>
+#include <linux/mm.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -669,6 +670,31 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_copy_from_user_remote, void *, dst, u32, size,
+	   pid_t, pid, const void __user *, user_ptr)
+{
+	struct task_struct *task;
+
+	if (unlikely(size == 0))
+		return 0;
+
+	task = find_get_task_by_vpid(pid);
+	if (!task)
+		return -ESRCH;
+
+	return access_process_vm(task, (unsigned long)user_ptr, dst, size, 0);
+}
+
+const struct bpf_func_proto bpf_copy_from_user_remote_proto = {
+	.func		= bpf_copy_from_user_remote,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_ANYTHING,
 };
 
 BPF_CALL_2(bpf_per_cpu_ptr, const void *, ptr, u32, cpu)

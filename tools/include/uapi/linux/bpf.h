@@ -5033,6 +5033,14 @@ union bpf_attr {
  *
  *	Return
  *		The number of arguments of the traced function.
+ *
+ * long bpf_copy_from_user_remote(void *dst, u32 size, pid_t pid, const void *user_ptr)
+ *	Description
+ *		Read *size* bytes from user space address *user_ptr* of the prodess
+ *		*pid* and store the data in *dst*. This is essentially a wrapper of
+ *		**access_process_vm**\ ().
+ *	Return
+ *		The number of bytes read on success, or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5221,6 +5229,7 @@ union bpf_attr {
 	FN(get_func_arg),		\
 	FN(get_func_ret),		\
 	FN(get_func_arg_cnt),		\
+	FN(copy_from_user_remote),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
