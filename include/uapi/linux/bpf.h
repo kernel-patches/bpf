@@ -330,6 +330,8 @@ union bpf_iter_link_info {
  *			*ctx_out*, *data_in* and *data_out* must be NULL.
  *			*repeat* must be zero.
  *
+ *		BPF_PROG_RUN is an alias for BPF_PROG_TEST_RUN.
+ *
  *	Return
  *		Returns zero on success. On error, -1 is returned and *errno*
  *		is set appropriately.
