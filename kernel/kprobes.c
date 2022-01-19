@@ -1216,26 +1216,6 @@ void kprobes_inc_nmissed_count(struct kprobe *p)
 }
 NOKPROBE_SYMBOL(kprobes_inc_nmissed_count);
 
-static void free_rp_inst_rcu(struct rcu_head *head)
-{
-	struct kretprobe_instance *ri = container_of(head, struct kretprobe_instance, rcu);
-
-	if (refcount_dec_and_test(&ri->rph->ref))
-		kfree(ri->rph);
-	kfree(ri);
-}
-NOKPROBE_SYMBOL(free_rp_inst_rcu);
-
-static void recycle_rp_inst(struct kretprobe_instance *ri)
-{
-	struct kretprobe *rp = get_kretprobe(ri);
-
-	if (likely(rp))
-		freelist_add(&ri->freelist, &rp->freelist);
-	else
-		call_rcu(&ri->rcu, free_rp_inst_rcu);
-}
-NOKPROBE_SYMBOL(recycle_rp_inst);
 
 static struct kprobe kprobe_busy = {
 	.addr = (void *) get_kprobe,
@@ -1255,56 +1235,6 @@ void kprobe_busy_end(void)
 {
 	__this_cpu_write(current_kprobe, NULL);
 	preempt_enable();
-}
-
-/*
- * This function is called from delayed_put_task_struct() when a task is
- * dead and cleaned up to recycle any kretprobe instances associated with
- * this task. These left over instances represent probed functions that
- * have been called but will never return.
- */
-void kprobe_flush_task(struct task_struct *tk)
-{
-	struct kretprobe_instance *ri;
-	struct llist_node *node;
-
-	/* Early boot, not yet initialized. */
-	if (unlikely(!kprobes_initialized))
-		return;
-
-	kprobe_busy_begin();
-
-	node = __llist_del_all(&tk->kretprobe_instances);
-	while (node) {
-		ri = container_of(node, struct kretprobe_instance, llist);
-		node = node->next;
-
-		recycle_rp_inst(ri);
-	}
-
-	kprobe_busy_end();
-}
-NOKPROBE_SYMBOL(kprobe_flush_task);
-
-static inline void free_rp_inst(struct kretprobe *rp)
-{
-	struct kretprobe_instance *ri;
-	struct freelist_node *node;
-	int count = 0;
-
-	node = rp->freelist.head;
-	while (node) {
-		ri = container_of(node, struct kretprobe_instance, freelist);
-		node = node->next;
-
-		kfree(ri);
-		count++;
-	}
-
-	if (refcount_sub_and_test(count, &rp->rph->ref)) {
-		kfree(rp->rph);
-		rp->rph = NULL;
-	}
 }
 
 /* Add the new probe to 'ap->list'. */
@@ -1862,139 +1792,6 @@ static struct notifier_block kprobe_exceptions_nb = {
 };
 
 #ifdef CONFIG_KRETPROBES
-
-/* This assumes the 'tsk' is the current task or the is not running. */
-static kprobe_opcode_t *__kretprobe_find_ret_addr(struct task_struct *tsk,
-						  struct llist_node **cur)
-{
-	struct kretprobe_instance *ri = NULL;
-	struct llist_node *node = *cur;
-
-	if (!node)
-		node = tsk->kretprobe_instances.first;
-	else
-		node = node->next;
-
-	while (node) {
-		ri = container_of(node, struct kretprobe_instance, llist);
-		if (ri->ret_addr != kretprobe_trampoline_addr()) {
-			*cur = node;
-			return ri->ret_addr;
-		}
-		node = node->next;
-	}
-	return NULL;
-}
-NOKPROBE_SYMBOL(__kretprobe_find_ret_addr);
-
-/**
- * kretprobe_find_ret_addr -- Find correct return address modified by kretprobe
- * @tsk: Target task
- * @fp: A frame pointer
- * @cur: a storage of the loop cursor llist_node pointer for next call
- *
- * Find the correct return address modified by a kretprobe on @tsk in unsigned
- * long type. If it finds the return address, this returns that address value,
- * or this returns 0.
- * The @tsk must be 'current' or a task which is not running. @fp is a hint
- * to get the currect return address - which is compared with the
- * kretprobe_instance::fp field. The @cur is a loop cursor for searching the
- * kretprobe return addresses on the @tsk. The '*@cur' should be NULL at the
- * first call, but '@cur' itself must NOT NULL.
- */
-unsigned long kretprobe_find_ret_addr(struct task_struct *tsk, void *fp,
-				      struct llist_node **cur)
-{
-	struct kretprobe_instance *ri = NULL;
-	kprobe_opcode_t *ret;
-
-	if (WARN_ON_ONCE(!cur))
-		return 0;
-
-	do {
-		ret = __kretprobe_find_ret_addr(tsk, cur);
-		if (!ret)
-			break;
-		ri = container_of(*cur, struct kretprobe_instance, llist);
-	} while (ri->fp != fp);
-
-	return (unsigned long)ret;
-}
-NOKPROBE_SYMBOL(kretprobe_find_ret_addr);
-
-void __weak arch_kretprobe_fixup_return(struct pt_regs *regs,
-					kprobe_opcode_t *correct_ret_addr)
-{
-	/*
-	 * Do nothing by default. Please fill this to update the fake return
-	 * address on the stack with the correct one on each arch if possible.
-	 */
-}
-
-unsigned long __kretprobe_trampoline_handler(struct pt_regs *regs,
-					     void *frame_pointer)
-{
-	kprobe_opcode_t *correct_ret_addr = NULL;
-	struct kretprobe_instance *ri = NULL;
-	struct llist_node *first, *node = NULL;
-	struct kretprobe *rp;
-
-	/* Find correct address and all nodes for this frame. */
-	correct_ret_addr = __kretprobe_find_ret_addr(current, &node);
-	if (!correct_ret_addr) {
-		pr_err("kretprobe: Return address not found, not execute handler. Maybe there is a bug in the kernel.\n");
-		BUG_ON(1);
-	}
-
-	/*
-	 * Set the return address as the instruction pointer, because if the
-	 * user handler calls stack_trace_save_regs() with this 'regs',
-	 * the stack trace will start from the instruction pointer.
-	 */
-	instruction_pointer_set(regs, (unsigned long)correct_ret_addr);
-
-	/* Run the user handler of the nodes. */
-	first = current->kretprobe_instances.first;
-	while (first) {
-		ri = container_of(first, struct kretprobe_instance, llist);
-
-		if (WARN_ON_ONCE(ri->fp != frame_pointer))
-			break;
-
-		rp = get_kretprobe(ri);
-		if (rp && rp->handler) {
-			struct kprobe *prev = kprobe_running();
-
-			__this_cpu_write(current_kprobe, &rp->kp);
-			ri->ret_addr = correct_ret_addr;
-			rp->handler(ri, regs);
-			__this_cpu_write(current_kprobe, prev);
-		}
-		if (first == node)
-			break;
-
-		first = first->next;
-	}
-
-	arch_kretprobe_fixup_return(regs, correct_ret_addr);
-
-	/* Unlink all nodes for this frame. */
-	first = current->kretprobe_instances.first;
-	current->kretprobe_instances.first = node->next;
-	node->next = NULL;
-
-	/* Recycle free instances. */
-	while (first) {
-		ri = container_of(first, struct kretprobe_instance, llist);
-		first = first->next;
-
-		recycle_rp_inst(ri);
-	}
-
-	return (unsigned long)correct_ret_addr;
-}
-NOKPROBE_SYMBOL(__kretprobe_trampoline_handler)
-
 /*
  * This kprobe pre_handler is registered with every kretprobe. When probe
  * hits it will set up the return probe.
@@ -2003,28 +1800,46 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kretprobe *rp = container_of(p, struct kretprobe, kp);
 	struct kretprobe_instance *ri;
-	struct freelist_node *fn;
+	struct rethook_node *rhn;
 
-	fn = freelist_try_get(&rp->freelist);
-	if (!fn) {
+	rhn = rethook_try_get(rp->rh);
+	if (!rhn) {
 		rp->nmissed++;
 		return 0;
 	}
 
-	ri = container_of(fn, struct kretprobe_instance, freelist);
+	ri = container_of(rhn, struct kretprobe_instance, node);
 
 	if (rp->entry_handler && rp->entry_handler(ri, regs)) {
-		freelist_add(&ri->freelist, &rp->freelist);
+		rethook_recycle(rhn);
 		return 0;
 	}
 
-	arch_prepare_kretprobe(ri, regs);
-
-	__llist_add(&ri->llist, &current->kretprobe_instances);
+	rethook_hook(rhn, regs);
 
 	return 0;
 }
 NOKPROBE_SYMBOL(pre_handler_kretprobe);
+
+static void kretprobe_rethook_handler(struct rethook_node *rh, void *data,
+				      struct pt_regs *regs)
+{
+	struct kretprobe *rp = (struct kretprobe *)data;
+	struct kretprobe_instance *ri;
+	struct kprobe_ctlblk *kcb;
+
+	if (!data)
+		return;
+
+	__this_cpu_write(current_kprobe, &rp->kp);
+	kcb = get_kprobe_ctlblk();
+	kcb->kprobe_status = KPROBE_HIT_ACTIVE;
+
+	ri = container_of(rh, struct kretprobe_instance, node);
+	rp->handler(ri, regs);
+
+	__this_cpu_write(current_kprobe, NULL);
+}
 
 bool __weak arch_kprobe_on_func_entry(unsigned long offset)
 {
@@ -2100,30 +1915,28 @@ int register_kretprobe(struct kretprobe *rp)
 		rp->maxactive = num_possible_cpus();
 #endif
 	}
-	rp->freelist.head = NULL;
-	rp->rph = kzalloc(sizeof(struct kretprobe_holder), GFP_KERNEL);
-	if (!rp->rph)
+	rp->rh = rethook_alloc((void *)rp, kretprobe_rethook_handler);
+	if (!rp->rh)
 		return -ENOMEM;
 
-	rp->rph->rp = rp;
 	for (i = 0; i < rp->maxactive; i++) {
 		inst = kzalloc(sizeof(struct kretprobe_instance) +
 			       rp->data_size, GFP_KERNEL);
 		if (inst == NULL) {
-			refcount_set(&rp->rph->ref, i);
-			free_rp_inst(rp);
+			rethook_free(rp->rh);
+			rp->rh = NULL;
 			return -ENOMEM;
 		}
-		inst->rph = rp->rph;
-		freelist_add(&inst->freelist, &rp->freelist);
+		rethook_add_node(rp->rh, &inst->node);
 	}
-	refcount_set(&rp->rph->ref, i);
 
 	rp->nmissed = 0;
 	/* Establish function entry probe point */
 	ret = register_kprobe(&rp->kp);
-	if (ret != 0)
-		free_rp_inst(rp);
+	if (ret != 0) {
+		rethook_free(rp->rh);
+		rp->rh = NULL;
+	}
 	return ret;
 }
 EXPORT_SYMBOL_GPL(register_kretprobe);
@@ -2162,16 +1975,16 @@ void unregister_kretprobes(struct kretprobe **rps, int num)
 	for (i = 0; i < num; i++) {
 		if (__unregister_kprobe_top(&rps[i]->kp) < 0)
 			rps[i]->kp.addr = NULL;
-		rps[i]->rph->rp = NULL;
+		rcu_assign_pointer(rps[i]->rh->data, NULL);
+		barrier();
+		rethook_free(rps[i]->rh);
 	}
 	mutex_unlock(&kprobe_mutex);
 
 	synchronize_rcu();
 	for (i = 0; i < num; i++) {
-		if (rps[i]->kp.addr) {
+		if (rps[i]->kp.addr)
 			__unregister_kprobe_bottom(&rps[i]->kp);
-			free_rp_inst(rps[i]);
-		}
 	}
 }
 EXPORT_SYMBOL_GPL(unregister_kretprobes);

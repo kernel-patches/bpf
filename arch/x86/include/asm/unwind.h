@@ -4,7 +4,7 @@
 
 #include <linux/sched.h>
 #include <linux/ftrace.h>
-#include <linux/kprobes.h>
+#include <linux/rethook.h>
 #include <asm/ptrace.h>
 #include <asm/stacktrace.h>
 
@@ -107,9 +107,9 @@ static inline
 unsigned long unwind_recover_kretprobe(struct unwind_state *state,
 				       unsigned long addr, unsigned long *addr_p)
 {
-#ifdef CONFIG_KRETPROBES
-	return is_kretprobe_trampoline(addr) ?
-		kretprobe_find_ret_addr(state->task, addr_p, &state->kr_cur) :
+#ifdef CONFIG_RETHOOK
+	return is_rethook_trampoline(addr) ?
+		rethook_find_ret_addr(state->task, (unsigned long)addr_p, &state->kr_cur) :
 		addr;
 #else
 	return addr;

@@ -26,8 +26,7 @@
 #include <linux/rcupdate.h>
 #include <linux/mutex.h>
 #include <linux/ftrace.h>
-#include <linux/refcount.h>
-#include <linux/freelist.h>
+#include <linux/rethook.h>
 #include <asm/kprobes.h>
 
 #ifdef CONFIG_KPROBES
@@ -137,10 +136,6 @@ static inline bool kprobe_ftrace(struct kprobe *p)
  * ignored, due to maxactive being too low.
  *
  */
-struct kretprobe_holder {
-	struct kretprobe	*rp;
-	refcount_t		ref;
-};
 
 struct kretprobe {
 	struct kprobe kp;
@@ -149,21 +144,13 @@ struct kretprobe {
 	int maxactive;
 	int nmissed;
 	size_t data_size;
-	struct freelist_head freelist;
-	struct kretprobe_holder *rph;
+	struct rethook *rh;
 };
 
 #define KRETPROBE_MAX_DATA_SIZE	4096
 
 struct kretprobe_instance {
-	union {
-		struct freelist_node freelist;
-		struct rcu_head rcu;
-	};
-	struct llist_node llist;
-	struct kretprobe_holder *rph;
-	kprobe_opcode_t *ret_addr;
-	void *fp;
+	struct rethook_node node;
 	char data[];
 };
 
@@ -186,57 +173,17 @@ extern void kprobe_busy_begin(void);
 extern void kprobe_busy_end(void);
 
 #ifdef CONFIG_KRETPROBES
-extern void arch_prepare_kretprobe(struct kretprobe_instance *ri,
-				   struct pt_regs *regs);
 extern int arch_trampoline_kprobe(struct kprobe *p);
-
-void arch_kretprobe_fixup_return(struct pt_regs *regs,
-				 kprobe_opcode_t *correct_ret_addr);
-
-void __kretprobe_trampoline(void);
-/*
- * Since some architecture uses structured function pointer,
- * use dereference_function_descriptor() to get real function address.
- */
-static nokprobe_inline void *kretprobe_trampoline_addr(void)
-{
-	return dereference_kernel_function_descriptor(__kretprobe_trampoline);
-}
-
-/* If the trampoline handler called from a kprobe, use this version */
-unsigned long __kretprobe_trampoline_handler(struct pt_regs *regs,
-					     void *frame_pointer);
-
-static nokprobe_inline
-unsigned long kretprobe_trampoline_handler(struct pt_regs *regs,
-					   void *frame_pointer)
-{
-	unsigned long ret;
-	/*
-	 * Set a dummy kprobe for avoiding kretprobe recursion.
-	 * Since kretprobe never runs in kprobe handler, no kprobe must
-	 * be running at this point.
-	 */
-	kprobe_busy_begin();
-	ret = __kretprobe_trampoline_handler(regs, frame_pointer);
-	kprobe_busy_end();
-
-	return ret;
-}
 
 static nokprobe_inline struct kretprobe *get_kretprobe(struct kretprobe_instance *ri)
 {
 	RCU_LOCKDEP_WARN(!rcu_read_lock_any_held(),
 		"Kretprobe is accessed from instance under preemptive context");
 
-	return READ_ONCE(ri->rph->rp);
+	return (struct kretprobe *)READ_ONCE(ri->node.rethook->data);
 }
 
 #else /* !CONFIG_KRETPROBES */
-static inline void arch_prepare_kretprobe(struct kretprobe *rp,
-					struct pt_regs *regs)
-{
-}
 static inline int arch_trampoline_kprobe(struct kprobe *p)
 {
 	return 0;
@@ -400,8 +347,6 @@ void unregister_kretprobe(struct kretprobe *rp);
 int register_kretprobes(struct kretprobe **rps, int num);
 void unregister_kretprobes(struct kretprobe **rps, int num);
 
-void kprobe_flush_task(struct task_struct *tk);
-
 void kprobe_free_init_mem(void);
 
 int disable_kprobe(struct kprobe *kp);
@@ -509,28 +454,6 @@ static inline bool is_kprobe_optinsn_slot(unsigned long addr)
 	return false;
 }
 #endif /* !CONFIG_OPTPROBES */
-
-#ifdef CONFIG_KRETPROBES
-static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
-{
-	return (void *)addr == kretprobe_trampoline_addr();
-}
-
-unsigned long kretprobe_find_ret_addr(struct task_struct *tsk, void *fp,
-				      struct llist_node **cur);
-#else
-static nokprobe_inline bool is_kretprobe_trampoline(unsigned long addr)
-{
-	return false;
-}
-
-static nokprobe_inline
-unsigned long kretprobe_find_ret_addr(struct task_struct *tsk, void *fp,
-				      struct llist_node **cur)
-{
-	return 0;
-}
-#endif
 
 /* Returns true if kprobes handled the fault */
 static nokprobe_inline bool kprobe_page_fault(struct pt_regs *regs,

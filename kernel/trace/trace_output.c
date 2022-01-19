@@ -349,7 +349,7 @@ EXPORT_SYMBOL_GPL(trace_output_call);
 
 static inline const char *kretprobed(const char *name, unsigned long addr)
 {
-	if (is_kretprobe_trampoline(addr))
+	if (is_rethook_trampoline(addr))
 		return "[unknown/kretprobe'd]";
 	return name;
 }
