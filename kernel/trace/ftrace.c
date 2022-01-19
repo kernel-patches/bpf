@@ -1580,6 +1580,7 @@ unsigned long ftrace_location(unsigned long ip)
 {
 	return ftrace_location_range(ip, ip);
 }
+EXPORT_SYMBOL_GPL(ftrace_location);
 
 /**
  * ftrace_text_reserved - return true if range contains an ftrace location

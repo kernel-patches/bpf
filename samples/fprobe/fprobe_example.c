@@ -12,6 +12,7 @@
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
+#include <linux/glob.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fprobe.h>
@@ -37,16 +38,51 @@ static void sample_exit_handler(struct fprobe *fp, unsigned long ip, struct pt_r
 
 static char *symbuf;
 
+struct sym_search_param {
+	unsigned long *addrs;
+	const char *pat;
+	int cnt;
+};
+
+#define MAX_FPROBE_ENTS	(16 * 1024)
+
+static int wildcard_match(void *data, const char *symbol, struct module *mod,
+			  unsigned long addr)
+{
+	struct sym_search_param *param = (struct sym_search_param *)data;
+
+	if (glob_match(param->pat, symbol)) {
+		if (!ftrace_location(addr))
+			return 0;
+
+		if (param->addrs)
+			param->addrs[param->cnt] = addr;
+		param->cnt++;
+		if (param->cnt >= MAX_FPROBE_ENTS)
+			return -E2BIG;
+	}
+	return 0;
+}
+
 static int __init fprobe_init(void)
 {
-	const char **syms;
+	struct sym_search_param param = {.pat = symbol, .addrs = NULL, .cnt = 0};
+	unsigned long *addrs = NULL;
+	const char **syms = NULL;
 	char *p;
 	int ret, count, i;
+	bool wildcard = false;
 
 	sample_probe.entry_handler = sample_entry_handler;
 	sample_probe.exit_handler = sample_exit_handler;
 
-	if (strchr(symbol, ',')) {
+	if (strchr(symbol, '*')) {
+		kallsyms_on_each_symbol(wildcard_match, &param);
+		count = param.cnt;
+		if (!count)
+			return -ENOENT;
+		wildcard = true;
+	} else if (strchr(symbol, ',')) {
 		symbuf = kstrdup(symbol, GFP_KERNEL);
 		if (!symbuf)
 			return -ENOMEM;
@@ -58,19 +94,31 @@ static int __init fprobe_init(void)
 		count = 1;
 		symbuf = symbol;
 	}
-	pr_info("%d symbols found\n", count);
 
-	syms = kcalloc(count, sizeof(char *), GFP_KERNEL);
-	if (!syms) {
+	if (wildcard)
+		addrs = kcalloc(count, sizeof(unsigned long), GFP_KERNEL);
+	else
+		syms = kcalloc(count, sizeof(char *), GFP_KERNEL);
+	if (!syms && !addrs) {
 		ret = -ENOMEM;
 		goto error;
 	}
 
-	p = symbuf;
-	for (i = 0; i < count; i++)
-		syms[i] = strsep(&p, ",");
+	if (wildcard) {
+		param.addrs = addrs;
+		param.cnt = 0;
 
-	sample_probe.syms = syms;
+		kallsyms_on_each_symbol(wildcard_match, &param);
+		count = param.cnt;
+		sample_probe.addrs = addrs;
+	} else {
+		p = symbuf;
+		for (i = 0; i < count; i++)
+			syms[i] = strsep(&p, ",");
+		sample_probe.syms = syms;
+	}
+	pr_info("%d symbols found\n", count);
+
 	sample_probe.nentry = count;
 
 	ret = register_fprobe(&sample_probe);
@@ -82,6 +130,8 @@ static int __init fprobe_init(void)
 	return 0;
 
 error:
+	kfree(addrs);
+	kfree(syms);
 	if (symbuf != symbol)
 		kfree(symbuf);
 	return ret;
@@ -92,6 +142,7 @@ static void __exit fprobe_exit(void)
 	unregister_fprobe(&sample_probe);
 
 	kfree(sample_probe.syms);
+	kfree(sample_probe.addrs);
 	if (symbuf != symbol)
 		kfree(symbuf);
 
