@@ -10183,6 +10183,191 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	return pfd;
 }
 
+/* uprobes deal in relative offsets; subtract the base address associated with
+ * the mapped binary.  See Documentation/trace/uprobetracer.rst for more
+ * details.
+ */
+static ssize_t find_elf_relative_offset(Elf *elf,  ssize_t addr)
+{
+	size_t n;
+	int i;
+
+	if (elf_getphdrnum(elf, &n)) {
+		pr_warn("elf: failed to find program headers: %s\n",
+			elf_errmsg(-1));
+		return -ENOENT;
+	}
+
+	for (i = 0; i < n; i++) {
+		int seg_start, seg_end, seg_offset;
+		GElf_Phdr phdr;
+
+		if (!gelf_getphdr(elf, i, &phdr)) {
+			pr_warn("elf: failed to get program header %d: %s\n",
+				i, elf_errmsg(-1));
+			return -ENOENT;
+		}
+		if (phdr.p_type != PT_LOAD ||  !(phdr.p_flags & PF_X))
+			continue;
+
+		seg_start = phdr.p_vaddr;
+		seg_end = seg_start + phdr.p_memsz;
+		seg_offset = phdr.p_offset;
+		if (addr >= seg_start && addr < seg_end)
+			return (ssize_t)addr -  seg_start + seg_offset;
+	}
+	pr_warn("elf: failed to find prog header containing 0x%lx\n", addr);
+	return -ENOENT;
+}
+
+/* Return next ELF section of sh_type after scn, or first of that type
+ * if scn is NULL.
+ */
+static Elf_Scn *find_elfscn(Elf *elf, int sh_type, Elf_Scn *scn)
+{
+	Elf64_Shdr *sh;
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		sh = elf64_getshdr(scn);
+		if (sh && sh->sh_type == sh_type)
+			break;
+	}
+	return scn;
+}
+
+/* Find offset of function name in object specified by path.  "name" matches
+ * symbol name or name@@LIB for library functions.
+ */
+static ssize_t find_elf_func_offset(const char *binary_path, const char *name)
+{
+	size_t si, strtabidx, nr_syms;
+	bool dynamic, is_shared_lib;
+	char errmsg[STRERR_BUFSIZE];
+	Elf_Data *symbols = NULL;
+	int lastbind = -1, fd;
+	ssize_t ret = -ENOENT;
+	Elf_Scn *scn = NULL;
+	const char *sname;
+	Elf64_Shdr *sh;
+	GElf_Ehdr ehdr;
+	Elf *elf;
+
+	if (!binary_path) {
+		pr_warn("name-based attach requires binary_path\n");
+		return -EINVAL;
+	}
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_warn("elf: failed to init libelf for %s\n", binary_path);
+		return -LIBBPF_ERRNO__LIBELF;
+	}
+	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		pr_warn("failed to open %s: %s\n", binary_path,
+			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+		return ret;
+	}
+	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+	if (!elf) {
+		pr_warn("elf: could not read elf from %s: %s\n",
+			binary_path, elf_errmsg(-1));
+		close(fd);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	if (!gelf_getehdr(elf, &ehdr)) {
+		pr_warn("elf: failed to get ehdr from %s: %s\n",
+			binary_path, elf_errmsg(-1));
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+	is_shared_lib = ehdr.e_type == ET_DYN;
+	dynamic = is_shared_lib;
+retry:
+	scn = find_elfscn(elf, dynamic ? SHT_DYNSYM : SHT_SYMTAB, NULL);
+	if (!scn) {
+		pr_warn("elf: failed to find symbol table ELF section in %s\n",
+			binary_path);
+		ret = -ENOENT;
+		goto out;
+	}
+
+	sh = elf64_getshdr(scn);
+	strtabidx = sh->sh_link;
+	symbols = elf_getdata(scn, 0);
+	if (!symbols) {
+		pr_warn("elf: failed to get symtab section in %s: %s\n",
+			binary_path, elf_errmsg(-1));
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+
+	lastbind = -1;
+	nr_syms = symbols->d_size / sizeof(Elf64_Sym);
+	for (si = 0; si < nr_syms; si++) {
+		Elf64_Sym *sym = (Elf64_Sym *)symbols->d_buf + si;
+		size_t matchlen;
+		int currbind;
+
+		if (ELF64_ST_TYPE(sym->st_info) != STT_FUNC)
+			continue;
+
+		sname = elf_strptr(elf, strtabidx, sym->st_name);
+		if (!sname) {
+			pr_warn("elf: failed to get sym name string in %s\n",
+				binary_path);
+			ret = -EIO;
+			goto out;
+		}
+		currbind = ELF64_ST_BIND(sym->st_info);
+
+		/* If matching on func@@LIB, match on everything prior to
+		 * the '@@'; otherwise match on full string.
+		 */
+		matchlen = strstr(sname, "@@") ? strstr(sname, "@@") - sname :
+						 strlen(sname);
+
+		if (strlen(name) == matchlen &&
+		    strncmp(sname, name, matchlen) == 0) {
+			if (ret >= 0 && lastbind != -1) {
+				/* handle multiple matches */
+				if (lastbind != STB_WEAK && currbind != STB_WEAK) {
+					/* Only accept one non-weak bind. */
+					pr_warn("elf: additional match for '%s': %s\n",
+						sname, name);
+					ret = -LIBBPF_ERRNO__FORMAT;
+					goto out;
+				} else if (currbind == STB_WEAK) {
+					/* already have a non-weak bind, and
+					 * this is a weak bind, so ignore.
+					 */
+					continue;
+				}
+			}
+			ret = sym->st_value;
+			lastbind = currbind;
+		}
+	}
+	if (ret == 0) {
+		if (!dynamic) {
+			dynamic = true;
+			goto retry;
+		}
+		pr_warn("elf: '%s' is 0 in symbol table; try using shared library path instead of '%s'\n",
+			 name, binary_path);
+		ret = -ENOENT;
+	}
+	if (ret > 0) {
+		pr_debug("elf: symbol table match for '%s': 0x%lx\n",
+			 name, ret);
+		if (!is_shared_lib)
+			ret = find_elf_relative_offset(elf, ret);
+	}
+out:
+	elf_end(elf);
+	close(fd);
+	return ret;
+}
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 				const char *binary_path, size_t func_offset,
@@ -10194,6 +10379,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	size_t ref_ctr_off;
 	int pfd, err;
 	bool retprobe, legacy;
+	const char *func_name;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -10201,6 +10387,19 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+
+	func_name = OPTS_GET(opts, func_name, NULL);
+	if (func_name) {
+		ssize_t sym_off;
+
+		sym_off = find_elf_func_offset(binary_path, func_name);
+		if (sym_off < 0) {
+			pr_debug("could not find sym offset for %s in %s\n",
+				 func_name, binary_path);
+			return libbpf_err_ptr(sym_off);
+		}
+		func_offset += (size_t)sym_off;
+	}
 
 	legacy = determine_uprobe_perf_type() < 0;
 	if (!legacy) {

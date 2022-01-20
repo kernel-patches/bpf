@@ -431,9 +431,17 @@ struct bpf_uprobe_opts {
 	__u64 bpf_cookie;
 	/* uprobe is return probe, invoked at function return time */
 	bool retprobe;
+	/* name of function name or function@@LIBRARY.  Partial matches
+	 * work for library name, such as printf, printf@@GLIBC.
+	 * To specify function entry, func_offset argument should be 0 and
+	 * func_name should specify function to trace.  To trace an offset
+	 * within the function, specify func_name and use func_offset
+	 * argument to specify argument _within_ the function.
+	 */
+	const char *func_name;
 	size_t :0;
 };
-#define bpf_uprobe_opts__last_field retprobe
+#define bpf_uprobe_opts__last_field func_name
 
 /**
  * @brief **bpf_program__attach_uprobe()** attaches a BPF program
