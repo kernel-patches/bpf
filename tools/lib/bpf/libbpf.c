@@ -8565,6 +8565,7 @@ int bpf_program__set_log_buf(struct bpf_program *prog, char *log_buf, size_t log
 }
 
 static struct bpf_link *attach_kprobe(const struct bpf_program *prog, long cookie);
+static struct bpf_link *attach_uprobe(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_raw_tp(const struct bpf_program *prog, long cookie);
 static struct bpf_link *attach_trace(const struct bpf_program *prog, long cookie);
@@ -8576,9 +8577,9 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("sk_reuseport/migrate",	SK_REUSEPORT, BPF_SK_REUSEPORT_SELECT_OR_MIGRATE, SEC_ATTACHABLE | SEC_SLOPPY_PFX),
 	SEC_DEF("sk_reuseport",		SK_REUSEPORT, BPF_SK_REUSEPORT_SELECT, SEC_ATTACHABLE | SEC_SLOPPY_PFX),
 	SEC_DEF("kprobe/",		KPROBE,	0, SEC_NONE, attach_kprobe),
-	SEC_DEF("uprobe/",		KPROBE,	0, SEC_NONE),
+	SEC_DEF("uprobe/",		KPROBE, 0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kretprobe/",		KPROBE, 0, SEC_NONE, attach_kprobe),
-	SEC_DEF("uretprobe/",		KPROBE, 0, SEC_NONE),
+	SEC_DEF("uretprobe/",		KPROBE, 0, SEC_NONE, attach_uprobe),
 	SEC_DEF("tc",			SCHED_CLS, 0, SEC_NONE),
 	SEC_DEF("classifier",		SCHED_CLS, 0, SEC_NONE | SEC_SLOPPY_PFX),
 	SEC_DEF("action",		SCHED_ACT, 0, SEC_NONE | SEC_SLOPPY_PFX),
@@ -10452,6 +10453,61 @@ err_out:
 	free(legacy_probe);
 	return libbpf_err_ptr(err);
 
+}
+
+/* Format of u[ret]probe section definition supporting auto-attach:
+ * u[ret]probe[/]/path/to/prog/function[+offset]
+ *
+ * Many uprobe programs do not avail of auto-attach, so we need to handle the
+ * case where the format is uprobe/myfunc by returning NULL rather than an
+ * error.
+ */
+static struct bpf_link *attach_uprobe(const struct bpf_program *prog, long cookie)
+{
+	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, opts);
+	char *func_name, binary_path[512];
+	char *func, *probe_name;
+	struct bpf_link *link;
+	size_t offset = 0;
+	int n, err;
+
+	opts.retprobe = str_has_pfx(prog->sec_name, "uretprobe/");
+	if (opts.retprobe)
+		probe_name = prog->sec_name + sizeof("uretprobe/") - 1;
+	else
+		probe_name = prog->sec_name + sizeof("uprobe/") - 1;
+
+	/* First char in binary_path is a '/'; this allows us to support
+	 * uprobe/path/2/prog and uprobe//path/2/prog, while also
+	 * distinguishing between old-style uprobe/something definitions.
+	 */
+	snprintf(binary_path, sizeof(binary_path) - 1, "/%s", probe_name);
+	/* last '/' should be prior to function+offset */
+	func_name = strrchr(binary_path + 1, '/');
+	if (!func_name) {
+		pr_debug("section '%s' is old-style u[ret]probe/function, cannot auto-attach\n",
+			 prog->sec_name);
+		return NULL;
+	}
+	func_name[0] = '\0';
+	func_name++;
+	n = sscanf(func_name, "%m[a-zA-Z0-9_.]+%li", &func, &offset);
+	if (n < 1) {
+		err = -EINVAL;
+		pr_warn("uprobe name is invalid: %s\n", func_name);
+		return libbpf_err_ptr(err);
+	}
+	if (opts.retprobe && offset != 0) {
+		free(func);
+		err = -EINVAL;
+		pr_warn("uretprobes do not support offset specification\n");
+		return libbpf_err_ptr(err);
+	}
+	opts.func_name = func;
+
+	link = bpf_program__attach_uprobe_opts(prog, -1, binary_path, offset, &opts);
+	free(func);
+	return link;
 }
 
 struct bpf_link *bpf_program__attach_uprobe(const struct bpf_program *prog,
