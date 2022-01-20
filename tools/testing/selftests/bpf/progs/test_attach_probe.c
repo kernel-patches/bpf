@@ -10,6 +10,10 @@ int kprobe_res = 0;
 int kretprobe_res = 0;
 int uprobe_res = 0;
 int uretprobe_res = 0;
+int uprobe_byname_res = 0;
+int uretprobe_byname_res = 0;
+int uprobe_byname2_res = 0;
+int uretprobe_byname2_res = 0;
 
 SEC("kprobe/sys_nanosleep")
 int handle_kprobe(struct pt_regs *ctx)
@@ -36,6 +40,35 @@ SEC("uretprobe/trigger_func")
 int handle_uretprobe(struct pt_regs *ctx)
 {
 	uretprobe_res = 4;
+	return 0;
+}
+
+SEC("uprobe/trigger_func_byname")
+int handle_uprobe_byname(struct pt_regs *ctx)
+{
+	uprobe_byname_res = 5;
+	return 0;
+}
+
+/* use auto-attach format for section definition. */
+SEC("uretprobe/proc/self/exe/method2")
+int handle_uretprobe_byname(struct pt_regs *ctx)
+{
+	uretprobe_byname_res = 6;
+	return 0;
+}
+
+SEC("uprobe/trigger_func_byname2")
+int handle_uprobe_byname2(struct pt_regs *ctx)
+{
+	uprobe_byname2_res = 7;
+	return 0;
+}
+
+SEC("uretprobe/trigger_func_byname2")
+int handle_uretprobe_byname2(struct pt_regs *ctx)
+{
+	uretprobe_byname2_res = 8;
 	return 0;
 }
 
