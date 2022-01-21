@@ -334,6 +334,7 @@ struct ice_tx_ring {
 	spinlock_t tx_lock;
 	u16 tx_thresh;
 	u32 txq_teid;			/* Added Tx queue TEID */
+	u16 xdp_tx_active;
 #define ICE_TX_FLAGS_RING_XDP		BIT(0)
 	u8 flags;
 	u8 dcb_tc;			/* Traffic class of ring */
