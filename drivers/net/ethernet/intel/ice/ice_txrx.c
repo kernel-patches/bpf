@@ -173,6 +173,9 @@ tx_skip_free:
 
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
+	tx_ring->tx_thresh = ice_get_tx_threshold(tx_ring);
+	tx_ring->next_dd = tx_ring->tx_thresh - 1;
+	tx_ring->next_rs = tx_ring->tx_thresh - 1;
 
 	if (!tx_ring->netdev)
 		return;
