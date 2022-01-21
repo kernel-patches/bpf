@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2020 Facebook */
+#include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/error-injection.h>
@@ -120,11 +121,29 @@ static const struct btf_kfunc_id_set bpf_testmod_kfunc_set = {
 
 extern int bpf_fentry_test1(int a);
 
+int bpf_helper_print_add(int *input1, int *input2)
+{
+	printk(KERN_INFO "input numbers for module helper %d %d\n", *input1, *input2);
+	return *input1 + *input2;
+}
+
+struct bpf_func_proto bpf_helper_print_add_proto = {
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_INT,
+	.arg2_type      = ARG_PTR_TO_INT,
+};
+
+DEFINE_MOD_HELPER(mod_helper, THIS_MODULE, bpf_helper_print_add, bpf_helper_print_add_proto);
+
 static int bpf_testmod_init(void)
 {
 	int ret;
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_testmod_kfunc_set);
+	if (ret < 0)
+		return ret;
+	ret = register_mod_helper(&mod_helper);
 	if (ret < 0)
 		return ret;
 	if (bpf_fentry_test1(0) < 0)
@@ -134,6 +153,8 @@ static int bpf_testmod_init(void)
 
 static void bpf_testmod_exit(void)
 {
+	unregister_mod_helper(&mod_helper);
+
 	return sysfs_remove_bin_file(kernel_kobj, &bin_attr_bpf_testmod_file);
 }
 
