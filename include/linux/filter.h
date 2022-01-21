@@ -1074,6 +1074,13 @@ void *bpf_jit_alloc_exec(unsigned long size);
 void bpf_jit_free_exec(void *addr);
 void bpf_jit_free(struct bpf_prog *fp);
 
+struct bpf_binary_header *
+bpf_jit_binary_alloc_pack(unsigned int proglen, u8 **image_r_ptr,
+			  unsigned int alignment,
+			  bpf_jit_fill_hole_t bpf_fill_ill_insns);
+void bpf_jit_binary_free_pack(struct bpf_binary_header *hdr);
+int bpf_prog_pack_max_size(void);
+
 int bpf_jit_add_poke_descriptor(struct bpf_prog *prog,
 				struct bpf_jit_poke_descriptor *poke);
 

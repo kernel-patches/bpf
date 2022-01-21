@@ -808,6 +808,116 @@ int bpf_jit_add_poke_descriptor(struct bpf_prog *prog,
 	return slot;
 }
 
+/*
+ * BPF program pack allocator.
+ *
+ * Most BPF programs are pretty small. Allocating a hole page for each
+ * program is sometime a waste. Many small bpf program also adds pressure
+ * to instruction TLB. To solve this issue, we introduce a BPF program pack
+ * allocator. The prog_pack allocator uses HPAGE_PMD_SIZE page (2MB on x86)
+ * to host BPF programs.
+ */
+#define BPF_PROG_PACK_SIZE	HPAGE_PMD_SIZE
+#define BPF_PROG_CHUNK_SHIFT	6
+#define BPF_PROG_CHUNK_SIZE	(1 << BPF_PROG_CHUNK_SHIFT)
+#define BPF_PROG_CHUNK_COUNT	(BPF_PROG_PACK_SIZE / BPF_PROG_CHUNK_SIZE)
+
+struct bpf_prog_pack {
+	struct list_head list;
+	void *ptr;
+	unsigned long bitmap[BITS_TO_LONGS(BPF_PROG_CHUNK_COUNT)];
+};
+
+#define BPF_PROG_MAX_PACK_PROG_SIZE	HPAGE_PMD_SIZE
+#define BPF_PROG_SIZE_TO_NBITS(size)	(round_up(size, BPF_PROG_CHUNK_SIZE) / BPF_PROG_CHUNK_SIZE)
+
+static DEFINE_MUTEX(pack_mutex);
+static LIST_HEAD(pack_list);
+
+static struct bpf_prog_pack *alloc_new_pack(void)
+{
+	struct bpf_prog_pack *pack;
+
+	pack = kzalloc(sizeof(*pack), GFP_KERNEL);
+	if (!pack)
+		return NULL;
+	pack->ptr = module_alloc(BPF_PROG_PACK_SIZE);
+	if (!pack->ptr) {
+		kfree(pack);
+		return NULL;
+	}
+	bitmap_zero(pack->bitmap, BPF_PROG_PACK_SIZE / BPF_PROG_CHUNK_SIZE);
+	list_add_tail(&pack->list, &pack_list);
+
+	set_vm_flush_reset_perms(pack);
+	set_memory_ro((unsigned long)pack->ptr, BPF_PROG_PACK_SIZE / PAGE_SIZE);
+	set_memory_x((unsigned long)pack->ptr, BPF_PROG_PACK_SIZE / PAGE_SIZE);
+	return pack;
+}
+
+static void *bpf_prog_pack_alloc(u32 size)
+{
+	unsigned int nbits = BPF_PROG_SIZE_TO_NBITS(size);
+	struct bpf_prog_pack *pack;
+	unsigned long pos;
+	void *ptr = NULL;
+
+	mutex_lock(&pack_mutex);
+	list_for_each_entry(pack, &pack_list, list) {
+		pos = bitmap_find_next_zero_area(pack->bitmap, BPF_PROG_CHUNK_COUNT, 0,
+						 nbits, 0);
+		if (pos < BPF_PROG_CHUNK_COUNT)
+			goto found_free_area;
+	}
+
+	pack = alloc_new_pack();
+	if (!pack)
+		goto out;
+
+	pos = 0;
+
+found_free_area:
+	bitmap_set(pack->bitmap, pos, nbits);
+	ptr = (void *)(pack->ptr) + (pos << BPF_PROG_CHUNK_SHIFT);
+
+out:
+	mutex_unlock(&pack_mutex);
+	return ptr;
+}
+
+static void bpf_prog_pack_free(struct bpf_binary_header *hdr)
+{
+	void *pack_ptr = (void *)((unsigned long)hdr & ~(BPF_PROG_PACK_SIZE - 1));
+	struct bpf_prog_pack *pack = NULL, *tmp;
+	unsigned int nbits;
+	unsigned long pos;
+
+	mutex_lock(&pack_mutex);
+
+	list_for_each_entry(tmp, &pack_list, list) {
+		if (tmp->ptr == pack_ptr) {
+			pack = tmp;
+			break;
+		}
+	}
+
+	if (WARN_ONCE(!pack, "bpf_prog_pack bug\n"))
+		goto out;
+
+	nbits = BPF_PROG_SIZE_TO_NBITS(hdr->size);
+	pos = ((unsigned long)hdr - (unsigned long)pack_ptr) >> BPF_PROG_CHUNK_SHIFT;
+
+	bitmap_clear(pack->bitmap, pos, nbits);
+	if (bitmap_find_next_zero_area(pack->bitmap, BPF_PROG_CHUNK_COUNT, 0,
+				       BPF_PROG_CHUNK_COUNT, 0) == 0) {
+		list_del(&pack->list);
+		module_memfree(pack->ptr);
+		kfree(pack);
+	}
+out:
+	mutex_unlock(&pack_mutex);
+}
+
 static atomic_long_t bpf_jit_current;
 
 /* Can be overridden by an arch's JIT compiler if it has a custom,
@@ -860,10 +970,11 @@ void __weak bpf_jit_free_exec(void *addr)
 	module_memfree(addr);
 }
 
-struct bpf_binary_header *
-bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
-		     unsigned int alignment,
-		     bpf_jit_fill_hole_t bpf_fill_ill_insns)
+static struct bpf_binary_header *
+__bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
+		       unsigned int alignment,
+		       bpf_jit_fill_hole_t bpf_fill_ill_insns,
+		       u32 round_up_to)
 {
 	struct bpf_binary_header *hdr;
 	u32 size, hole, start;
@@ -875,7 +986,7 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 	 * fill a page, allow at least 128 extra bytes to insert a
 	 * random section of illegal instructions.
 	 */
-	size = round_up(proglen + sizeof(*hdr) + 128, PAGE_SIZE);
+	size = round_up(proglen + sizeof(*hdr) + 128, round_up_to);
 
 	if (bpf_jit_charge_modmem(size))
 		return NULL;
@@ -899,12 +1010,77 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 	return hdr;
 }
 
+struct bpf_binary_header *
+bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
+		     unsigned int alignment,
+		     bpf_jit_fill_hole_t bpf_fill_ill_insns)
+{
+	return __bpf_jit_binary_alloc(proglen, image_ptr, alignment,
+				      bpf_fill_ill_insns, PAGE_SIZE);
+}
+
+struct bpf_binary_header *
+bpf_jit_binary_alloc_pack(unsigned int proglen, u8 **image_ptr,
+			  unsigned int alignment,
+			  bpf_jit_fill_hole_t bpf_fill_ill_insns)
+{
+	struct bpf_binary_header *hdr;
+	u32 size, hole, start;
+
+	WARN_ON_ONCE(!is_power_of_2(alignment) ||
+		     alignment > BPF_IMAGE_ALIGNMENT);
+
+	/* Most of BPF filters are really small, but if some of them
+	 * fill a page, allow at least 128 extra bytes to insert a
+	 * random section of illegal instructions.
+	 */
+	size = round_up(proglen + sizeof(*hdr) + 128, BPF_PROG_CHUNK_SIZE);
+
+	/* for too big program, use __bpf_jit_binary_alloc. */
+	if (size > BPF_PROG_MAX_PACK_PROG_SIZE)
+		return __bpf_jit_binary_alloc(proglen, image_ptr, alignment,
+					      bpf_fill_ill_insns, PAGE_SIZE);
+
+	if (bpf_jit_charge_modmem(size))
+		return NULL;
+	hdr = bpf_prog_pack_alloc(size);
+	if (!hdr) {
+		bpf_jit_uncharge_modmem(size);
+		return NULL;
+	}
+
+	/* Fill space with illegal/arch-dep instructions. */
+	bpf_fill_ill_insns(hdr, size);
+
+	hole = min_t(unsigned int, size - (proglen + sizeof(*hdr)),
+		     BPF_PROG_CHUNK_SIZE - sizeof(*hdr));
+	start = (get_random_int() % hole) & ~(alignment - 1);
+
+	/* Leave a random number of instructions before BPF code. */
+	*image_ptr = &hdr->image[start];
+
+	return hdr;
+}
+
 void bpf_jit_binary_free(struct bpf_binary_header *hdr)
 {
 	u32 size = hdr->size;
 
 	bpf_jit_free_exec(hdr);
 	bpf_jit_uncharge_modmem(size);
+}
+
+void bpf_jit_binary_free_pack(struct bpf_binary_header *hdr)
+{
+	u32 size = hdr->size;
+
+	bpf_prog_pack_free(hdr);
+	bpf_jit_uncharge_modmem(size);
+}
+
+int bpf_prog_pack_max_size(void)
+{
+	return BPF_PROG_MAX_PACK_PROG_SIZE;
 }
 
 /* This symbol is only overridden by archs that have different
