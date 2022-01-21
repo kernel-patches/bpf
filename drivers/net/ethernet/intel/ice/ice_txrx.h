@@ -13,7 +13,6 @@
 #define ICE_MAX_CHAINED_RX_BUFS	5
 #define ICE_MAX_BUF_TXD		8
 #define ICE_MIN_TX_LEN		17
-#define ICE_TX_THRESH		32
 
 /* The size limit for a transmit buffer in a descriptor is (16K - 1).
  * In order to align with the read requests we will align the value to
@@ -333,6 +332,7 @@ struct ice_tx_ring {
 	struct ice_channel *ch;
 	struct ice_ptp_tx *tx_tstamps;
 	spinlock_t tx_lock;
+	u16 tx_thresh;
 	u32 txq_teid;			/* Added Tx queue TEID */
 #define ICE_TX_FLAGS_RING_XDP		BIT(0)
 	u8 flags;
@@ -353,6 +353,11 @@ static inline void ice_set_ring_build_skb_ena(struct ice_rx_ring *ring)
 static inline void ice_clear_ring_build_skb_ena(struct ice_rx_ring *ring)
 {
 	ring->flags &= ~ICE_RX_FLAGS_RING_BUILD_SKB;
+}
+
+static inline u16 ice_get_tx_threshold(struct ice_tx_ring *tx_ring)
+{
+	return ICE_RING_QUARTER(tx_ring);
 }
 
 static inline bool ice_ring_ch_enabled(struct ice_tx_ring *ring)
