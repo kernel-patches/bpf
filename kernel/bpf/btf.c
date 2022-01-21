@@ -228,6 +228,7 @@ struct btf {
 	u32 id;
 	struct rcu_head rcu;
 	struct btf_kfunc_set_tab *kfunc_set_tab;
+	struct btf_mod_helper_list *mod_helper_list;
 
 	/* split BTF support */
 	struct btf *base_btf;
@@ -6751,6 +6752,93 @@ int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(register_btf_kfunc_id_set);
+
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+int register_mod_helper(struct btf_mod_helper *mod_helper)
+{
+	struct btf_mod_helper *s;
+	struct btf *btf;
+	struct btf_mod_helper_list *mod_helper_list;
+
+	btf = btf_get_module_btf(mod_helper->owner);
+	if (!btf_is_module(btf)) {
+		pr_err("%s can only be called from kernel module", __func__);
+		return -EINVAL;
+	}
+
+	if (IS_ERR_OR_NULL(btf))
+		return btf ? PTR_ERR(btf) : -ENOENT;
+
+	mod_helper_list = btf->mod_helper_list;
+	if (!mod_helper_list) {
+		mod_helper_list = kzalloc(sizeof(*mod_helper_list), GFP_KERNEL | __GFP_NOWARN);
+		if (!mod_helper_list)
+			return -ENOMEM;
+		INIT_LIST_HEAD(&mod_helper_list->list);
+		mutex_init(&mod_helper_list->mutex);
+		btf->mod_helper_list = mod_helper_list;
+	}
+
+	// Check if btf id is already registered
+	mutex_lock(&mod_helper_list->mutex);
+	list_for_each_entry(s, &mod_helper_list->list, list) {
+		if (mod_helper->set->ids[0] == s->set->ids[0]) {
+			pr_warn("Dynamic helper %u is already registered\n", s->set->ids[0]);
+			mutex_unlock(&mod_helper_list->mutex);
+			return -EINVAL;
+		}
+	}
+	list_add(&mod_helper->list, &mod_helper_list->list);
+	mutex_unlock(&mod_helper_list->mutex);
+	btf_put(btf);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(register_mod_helper);
+
+int unregister_mod_helper(struct btf_mod_helper *mod_helper)
+{
+	struct btf *btf;
+	struct btf_mod_helper_list *mod_helper_list;
+
+	btf = btf_get_module_btf(mod_helper->owner);
+	if (!btf_is_module(btf)) {
+		pr_err("%s can only be called from kernel module", __func__);
+		return -EINVAL;
+	}
+
+	if (IS_ERR_OR_NULL(btf))
+		return btf ? PTR_ERR(btf) : -ENOENT;
+
+	mod_helper_list = btf->mod_helper_list;
+	mutex_lock(&mod_helper_list->mutex);
+	list_del(&mod_helper->list);
+	mutex_unlock(&mod_helper_list->mutex);
+	btf_put(btf);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(unregister_mod_helper);
+const struct bpf_func_proto *get_mod_helper_proto(const struct btf *btf, const u32 kfunc_btf_id)
+{
+	struct btf_mod_helper *s;
+	struct btf_mod_helper_list *mod_helper_list;
+
+	mod_helper_list = btf->mod_helper_list;
+	if (!mod_helper_list)
+		return NULL;
+
+	mutex_lock(&mod_helper_list->mutex);
+	list_for_each_entry(s, &mod_helper_list->list, list) {
+		if (s->set->ids[0] == kfunc_btf_id) {
+			mutex_unlock(&mod_helper_list->mutex);
+			return s->func_proto;
+		}
+	}
+	mutex_unlock(&mod_helper_list->mutex);
+	return NULL;
+}
+#endif /* CONFIG_DEBUG_INFO_BTF_MODULES */
 
 int bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,
 			      const struct btf *targ_btf, __u32 targ_id)

@@ -40,6 +40,18 @@ struct btf_kfunc_id_set {
 	};
 };
 
+struct btf_mod_helper {
+	struct list_head list;
+	struct module *owner;
+	struct btf_id_set *set;
+	struct bpf_func_proto *func_proto;
+};
+
+struct btf_mod_helper_list {
+	struct list_head list;
+	struct mutex mutex;
+};
+
 extern const struct file_operations btf_fops;
 
 void btf_get(struct btf *btf);
@@ -356,6 +368,38 @@ static inline int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 					    const struct btf_kfunc_id_set *s)
 {
 	return 0;
+}
+#endif
+
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+int register_mod_helper(struct btf_mod_helper *mod_helper);
+int unregister_mod_helper(struct btf_mod_helper *mod_helper);
+const struct bpf_func_proto *get_mod_helper_proto(const struct btf *btf,
+	const u32 kfunc_btf_id);
+
+#define DEFINE_MOD_HELPER(mod_helper, owner, helper_func, func_proto) \
+BTF_SET_START(helper_func##__id_set) \
+BTF_ID(func, helper_func) \
+BTF_SET_END(helper_func##__id_set) \
+struct btf_mod_helper mod_helper = { \
+	LIST_HEAD_INIT(mod_helper.list), \
+	(owner), \
+	(&(helper_func##__id_set)), \
+	(&(func_proto)) \
+}
+#else
+int register_mod_helper(struct btf_mod_helper *mod_helper)
+{
+	return -EPERM;
+}
+int unregister_mod_helper(struct btf_mod_helper *mod_helper)
+{
+	return -EPERM;
+}
+const struct bpf_func_proto *get_mod_helper_proto(const struct btf *btf,
+	const u32 kfunc_btf_id)
+{
+	return NULL;
 }
 #endif
 
