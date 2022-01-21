@@ -6532,19 +6532,39 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	int insn_idx = *insn_idx_p;
 	bool changes_data;
 	int i, err, func_id;
+	const struct btf_type *func;
+	const char *func_name;
+	struct btf *desc_btf;
 
 	/* find function prototype */
 	func_id = insn->imm;
-	if (func_id < 0 || func_id >= __BPF_FUNC_MAX_ID) {
-		verbose(env, "invalid func %s#%d\n", func_id_name(func_id),
-			func_id);
-		return -EINVAL;
-	}
 
 	if (env->ops->get_func_proto)
 		fn = env->ops->get_func_proto(func_id, env->prog);
-	if (!fn) {
-		verbose(env, "unknown func %s#%d\n", func_id_name(func_id),
+
+	if (func_id >= __BPF_FUNC_MAX_ID) {
+		desc_btf = find_kfunc_desc_btf(env, insn->imm, insn->off);
+		if (IS_ERR(desc_btf))
+			return PTR_ERR(desc_btf);
+
+		fn = get_mod_helper_proto(desc_btf, func_id);
+		if (!fn) {
+			func = btf_type_by_id(desc_btf, func_id);
+			func_name = btf_name_by_offset(desc_btf, func->name_off);
+			verbose(env, "unknown module helper func %s#%d\n", func_name,
+				func_id);
+			return -EACCES;
+		}
+	} else if (func_id >= 0) {
+		if (env->ops->get_func_proto)
+			fn = env->ops->get_func_proto(func_id, env->prog);
+		if (!fn) {
+			verbose(env, "unknown in-kernel helper func %s#%d\n", func_id_name(func_id),
+				func_id);
+			return -EINVAL;
+		}
+	} else {
+		verbose(env, "invalid func %s#%d\n", func_id_name(func_id),
 			func_id);
 		return -EINVAL;
 	}
@@ -11351,6 +11371,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	bool do_print_state = false;
 	int prev_insn_idx = -1;
+	struct btf *desc_btf;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -11579,10 +11600,17 @@ static int do_check(struct bpf_verifier_env *env)
 				}
 				if (insn->src_reg == BPF_PSEUDO_CALL)
 					err = check_func_call(env, insn, &env->insn_idx);
-				else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
-					err = check_kfunc_call(env, insn, &env->insn_idx);
-				else
-					err = check_helper_call(env, insn, &env->insn_idx);
+				else {
+					desc_btf = find_kfunc_desc_btf(env, insn->imm, insn->off);
+					if (IS_ERR(desc_btf))
+						return PTR_ERR(desc_btf);
+
+					if (insn->src_reg == BPF_K ||
+					   get_mod_helper_proto(desc_btf, insn->imm))
+						err = check_helper_call(env, insn, &env->insn_idx);
+					else
+						err = check_kfunc_call(env, insn, &env->insn_idx);
+				}
 				if (err)
 					return err;
 			} else if (opcode == BPF_JA) {
