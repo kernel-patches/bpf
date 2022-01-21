@@ -584,6 +584,7 @@ struct bpf_prog {
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	struct bpf_binary_header *hdr;
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
@@ -893,9 +894,14 @@ static inline void bpf_jit_binary_lock_ro(struct bpf_binary_header *hdr)
 static inline struct bpf_binary_header *
 bpf_jit_binary_hdr(const struct bpf_prog *fp)
 {
-	unsigned long real_start = (unsigned long)fp->bpf_func;
-	unsigned long addr = real_start & PAGE_MASK;
+	unsigned long real_start;
+	unsigned long addr;
 
+	if (fp->hdr)
+		return fp->hdr;
+
+	real_start = (unsigned long)fp->bpf_func;
+	addr = real_start & PAGE_MASK;
 	return (void *)addr;
 }
 
