@@ -18,6 +18,7 @@
 #include <linux/if_vlan.h>
 #include <linux/rhashtable.h>
 #include <linux/refcount.h>
+#include <linux/bpf.h>
 
 #define BR_HASH_BITS 8
 #define BR_HASH_SIZE (1 << BR_HASH_BITS)
@@ -2094,4 +2095,15 @@ void br_do_proxy_suppress_arp(struct sk_buff *skb, struct net_bridge *br,
 void br_do_suppress_nd(struct sk_buff *skb, struct net_bridge *br,
 		       u16 vid, struct net_bridge_port *p, struct nd_msg *msg);
 struct nd_msg *br_is_nd_neigh_msg(struct sk_buff *skb, struct nd_msg *m);
+
+#define NF_BPF_FDB_OPTS_SZ	12
+struct bpf_fdb_lookup {
+	u8	addr[ETH_ALEN]; /* ETH_ALEN */
+	u16	vid;
+	u32	ifindex;
+};
+
+int br_fdb_find_port_from_ifindex(struct xdp_md *xdp_ctx,
+				  struct bpf_fdb_lookup *opt,
+				  u32 opt__sz);
 #endif

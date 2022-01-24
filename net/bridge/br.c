@@ -16,6 +16,8 @@
 #include <net/llc.h>
 #include <net/stp.h>
 #include <net/switchdev.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 #include "br_private.h"
 
@@ -365,6 +367,17 @@ static const struct stp_proto br_stp_proto = {
 	.rcv	= br_stp_rcv,
 };
 
+#if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF) || IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
+BTF_SET_START(br_xdp_fdb_check_kfunc_ids)
+BTF_ID(func, br_fdb_find_port_from_ifindex)
+BTF_SET_END(br_xdp_fdb_check_kfunc_ids)
+
+static const struct btf_kfunc_id_set br_xdp_fdb_kfunc_set = {
+	.owner     = THIS_MODULE,
+	.check_set = &br_xdp_fdb_check_kfunc_ids,
+};
+#endif
+
 static int __init br_init(void)
 {
 	int err;
@@ -415,6 +428,14 @@ static int __init br_init(void)
 	pr_info("bridge: filtering via arp/ip/ip6tables is no longer available "
 		"by default. Update your scripts to load br_netfilter if you "
 		"need this.\n");
+#endif
+
+#if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF) || IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
+	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &br_xdp_fdb_kfunc_set);
+	if (err < 0) {
+		br_netlink_fini();
+		goto err_out6;
+	}
 #endif
 
 	return 0;

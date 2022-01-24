@@ -235,29 +235,78 @@ static struct net_bridge_fdb_entry *br_fdb_find(struct net_bridge *br,
 	return fdb;
 }
 
-struct net_device *br_fdb_find_port(const struct net_device *br_dev,
-				    const unsigned char *addr,
-				    __u16 vid)
+static struct net_device *
+__br_fdb_find_port(const struct net_device *br_dev,
+		   const unsigned char *addr,
+		   __u16 vid, bool ts_update)
 {
 	struct net_bridge_fdb_entry *f;
-	struct net_device *dev = NULL;
 	struct net_bridge *br;
-
-	ASSERT_RTNL();
 
 	if (!netif_is_bridge_master(br_dev))
 		return NULL;
 
 	br = netdev_priv(br_dev);
-	rcu_read_lock();
 	f = br_fdb_find_rcu(br, addr, vid);
-	if (f && f->dst)
-		dev = f->dst->dev;
+
+	if (f && f->dst) {
+		f->updated = jiffies;
+		f->used = f->updated;
+		return f->dst->dev;
+	}
+	return NULL;
+}
+
+struct net_device *br_fdb_find_port(const struct net_device *br_dev,
+				    const unsigned char *addr,
+				    __u16 vid)
+{
+	struct net_device *dev;
+
+	ASSERT_RTNL();
+
+	rcu_read_lock();
+	dev = __br_fdb_find_port(br_dev, addr, vid, false);
 	rcu_read_unlock();
 
 	return dev;
 }
 EXPORT_SYMBOL_GPL(br_fdb_find_port);
+
+int br_fdb_find_port_from_ifindex(struct xdp_md *xdp_ctx,
+				  struct bpf_fdb_lookup *opt,
+				  u32 opt__sz)
+{
+	struct xdp_buff *ctx = (struct xdp_buff *)xdp_ctx;
+	struct net_bridge_port *port;
+	struct net_device *dev;
+	int ret = -ENODEV;
+
+	BUILD_BUG_ON(sizeof(struct bpf_fdb_lookup) != NF_BPF_FDB_OPTS_SZ);
+	if (!opt || opt__sz != sizeof(struct bpf_fdb_lookup))
+		return -ENODEV;
+
+	rcu_read_lock();
+
+	dev = dev_get_by_index_rcu(dev_net(ctx->rxq->dev), opt->ifindex);
+	if (!dev)
+		goto out;
+
+	if (unlikely(!netif_is_bridge_port(dev)))
+		goto out;
+
+	port = br_port_get_check_rcu(dev);
+	if (unlikely(!port || !port->br))
+		goto out;
+
+	dev = __br_fdb_find_port(port->br->dev, opt->addr, opt->vid, true);
+	if (dev)
+		ret = dev->ifindex;
+out:
+	rcu_read_unlock();
+
+	return ret;
+}
 
 struct net_bridge_fdb_entry *br_fdb_find_rcu(struct net_bridge *br,
 					     const unsigned char *addr,
