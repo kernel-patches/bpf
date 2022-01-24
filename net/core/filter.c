@@ -6998,10 +6998,10 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 		return -EINVAL;
 
 	if (!sock_net(sk)->ipv4.sysctl_tcp_syncookies)
-		return -EINVAL;
+		return -ENOENT;
 
 	if (!th->ack || th->rst || th->syn)
-		return -ENOENT;
+		return -EINVAL;
 
 	if (tcp_synq_no_recent_overflow(sk))
 		return -ENOENT;
@@ -7032,7 +7032,7 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 	if (ret > 0)
 		return 0;
 
-	return -ENOENT;
+	return -EACCES;
 #else
 	return -ENOTSUPP;
 #endif
