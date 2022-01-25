@@ -51,6 +51,16 @@ bpf_object__next_map(const struct bpf_object *obj, const struct bpf_map *prev)
 #pragma GCC diagnostic pop
 }
 
+struct bpf_object * __weak
+bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
+		     const struct bpf_object_open_opts *opts)
+{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+	return bpf_object__open_buffer(obj_buf, obj_buf_sz, opts->object_name);
+#pragma GCC diagnostic pop
+}
+
 const void * __weak
 btf__raw_data(const struct btf *btf_ro, __u32 *size)
 {
