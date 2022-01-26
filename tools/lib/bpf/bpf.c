@@ -1131,6 +1131,20 @@ int bpf_raw_tracepoint_open(const char *name, int prog_fd)
 	return libbpf_err_errno(fd);
 }
 
+int bpf_raw_tracepoint_cookie_open(const char *name, int prog_fd, __u64 bpf_cookie)
+{
+	union bpf_attr attr;
+	int fd;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.raw_tracepoint.name = ptr_to_u64(name);
+	attr.raw_tracepoint.prog_fd = prog_fd;
+	attr.raw_tracepoint.bpf_cookie = bpf_cookie;
+
+	fd = sys_bpf_fd(BPF_RAW_TRACEPOINT_OPEN, &attr, sizeof(attr));
+	return libbpf_err_errno(fd);
+}
+
 int bpf_btf_load(const void *btf_data, size_t btf_size, const struct bpf_btf_load_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, btf_log_level);

@@ -2696,7 +2696,8 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
-				   u32 btf_id)
+				   u32 btf_id,
+				   u64 bpf_cookie)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
@@ -2831,6 +2832,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
 		goto out_unlock;
+
+	prog->aux->cookie = bpf_cookie;
 
 	err = bpf_trampoline_link_prog(prog, tr);
 	if (err) {
@@ -3017,7 +3020,7 @@ out_put_file:
 }
 #endif /* CONFIG_PERF_EVENTS */
 
-#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.prog_fd
+#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.bpf_cookie
 
 static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 {
@@ -3052,7 +3055,7 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 			tp_name = prog->aux->attach_func_name;
 			break;
 		}
-		err = bpf_tracing_prog_attach(prog, 0, 0);
+		err = bpf_tracing_prog_attach(prog, 0, 0, attr->raw_tracepoint.bpf_cookie);
 		if (err >= 0)
 			return err;
 		goto out_put_prog;
@@ -4244,7 +4247,8 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 	else if (prog->type == BPF_PROG_TYPE_EXT)
 		return bpf_tracing_prog_attach(prog,
 					       attr->link_create.target_fd,
-					       attr->link_create.target_btf_id);
+					       attr->link_create.target_btf_id,
+					       0);
 	return -EINVAL;
 }
 

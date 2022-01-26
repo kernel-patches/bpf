@@ -1009,6 +1009,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	u64 cookie;
 };
 
 struct bpf_array_aux {
