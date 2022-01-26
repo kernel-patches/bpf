@@ -231,6 +231,61 @@ cleanup:
 	bpf_link__destroy(link);
 }
 
+static void tracing_subtest(struct test_bpf_cookie *skel)
+{
+	__u64 cookie;
+	__u32 duration = 0, retval;
+	int prog_fd;
+	int fentry_fd = -1, fexit_fd = -1, fmod_ret_fd = -1;
+
+	skel->bss->fentry_res = 0;
+	skel->bss->fexit_res = 0;
+
+	cookie = 0x100000;
+	prog_fd = bpf_program__fd(skel->progs.fentry_test1);
+	if (!ASSERT_GE(prog_fd, 0, "fentry.prog_fd"))
+		return;
+	fentry_fd = bpf_raw_tracepoint_cookie_open(NULL, prog_fd, cookie);
+	if (!ASSERT_GE(fentry_fd, 0, "fentry.open"))
+		return;
+
+	cookie = 0x200000;
+	prog_fd = bpf_program__fd(skel->progs.fexit_test1);
+	if (!ASSERT_GE(prog_fd, 0, "fexit.prog_fd"))
+		goto cleanup;
+	fexit_fd = bpf_raw_tracepoint_cookie_open(NULL, prog_fd, cookie);
+	if (!ASSERT_GE(fexit_fd, 0, "fexit.open"))
+		goto cleanup;
+
+	cookie = 0x300000;
+	prog_fd = bpf_program__fd(skel->progs.fmod_ret_test);
+	if (!ASSERT_GE(prog_fd, 0, "fmod_ret.prog_fd"))
+		goto cleanup;
+	fmod_ret_fd = bpf_raw_tracepoint_cookie_open(NULL, prog_fd, cookie);
+	if (!ASSERT_GE(fmod_ret_fd, 0, "fmod_ret.opoen"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.fentry_test1);
+	bpf_prog_test_run(prog_fd, 1, NULL, 0,
+			  NULL, NULL, &retval, &duration);
+
+	prog_fd = bpf_program__fd(skel->progs.fmod_ret_test);
+	bpf_prog_test_run(prog_fd, 1, NULL, 0,
+			  NULL, NULL, &retval, &duration);
+
+	ASSERT_EQ(skel->bss->fentry_res, 0x100000, "fentry_res");
+	ASSERT_EQ(skel->bss->fexit_res, 0x200000, "fexit_res");
+	ASSERT_EQ(skel->bss->fmod_ret_res, 0x300000, "fmod_ret_res");
+
+cleanup:
+	if (fentry_fd >= 0)
+		close(fentry_fd);
+	if (fexit_fd >= 0)
+		close(fexit_fd);
+	if (fmod_ret_fd >= 0)
+		close(fmod_ret_fd);
+}
+
 void test_bpf_cookie(void)
 {
 	struct test_bpf_cookie *skel;
@@ -249,6 +304,8 @@ void test_bpf_cookie(void)
 		tp_subtest(skel);
 	if (test__start_subtest("perf_event"))
 		pe_subtest(skel);
+	if (test__start_subtest("tracing"))
+		tracing_subtest(skel);
 
 	test_bpf_cookie__destroy(skel);
 }
