@@ -1009,10 +1009,31 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+static int get_trampo_var_off(void *ctx, u32 flag)
+{
+	int off = 2;            /* All variables are placed before flags */
+	u32 flags = (u32)((u64 *)ctx)[-2];
+
+	if (!(flags & flag))
+		return -1;      /* The variable is not there */
+	if (flag & (flag - 1))
+		return -1;      /* 2 or more bits are set */
+
+	for (; flags & flag; flags &= flags - 1)
+		off++;
+
+	return off;
+}
+
 BPF_CALL_1(bpf_get_func_ip_tracing, void *, ctx)
 {
 	/* This helper call is inlined by verifier. */
-	return ((u64 *)ctx)[-2];
+	int off = get_trampo_var_off(ctx, BPF_TRAMP_F_IP_ARG);
+
+	if (off < 0)
+		return 0;
+
+	return ((u64 *)ctx)[-off];
 }
 
 static const struct bpf_func_proto bpf_get_func_ip_proto_tracing = {
