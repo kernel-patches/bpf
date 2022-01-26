@@ -661,6 +661,8 @@ struct btf_func_model {
 #define BPF_TRAMP_F_IP_ARG		BIT(3)
 /* Return the return value of fentry prog. Only used by bpf_struct_ops. */
 #define BPF_TRAMP_F_RET_FENTRY_RET	BIT(4)
+/* Store BPF program ID on the trampoline stack. */
+#define BPF_TRAMP_F_PROG_ID		BIT(5)
 
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.  Pick a number to fit into BPF_IMAGE_SIZE / 2

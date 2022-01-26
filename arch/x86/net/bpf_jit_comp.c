@@ -1754,13 +1754,21 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
 }
 
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
-			   struct bpf_prog *p, int stack_size, bool save_ret)
+			   struct bpf_prog *p, int stack_size,
+			   int pgid_off, bool save_ret)
 {
 	u8 *prog = *pprog;
 	u8 *jmp_insn;
 
 	/* arg1: mov rdi, progs[i] */
 	emit_mov_imm64(&prog, BPF_REG_1, (long) p >> 32, (u32) (long) p);
+
+	/* Store BPF program ID
+	 * mov QWORD PTR [rbp - pgid_off], rdi
+	 */
+	if (pgid_off > 0)
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_1, -pgid_off);
+
 	if (emit_call(&prog,
 		      p->aux->sleepable ? __bpf_prog_enter_sleepable :
 		      __bpf_prog_enter, prog))
@@ -1843,14 +1851,14 @@ static int emit_cond_near_jump(u8 **pprog, void *func, void *ip, u8 jmp_cond)
 
 static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 		      struct bpf_tramp_progs *tp, int stack_size,
-		      bool save_ret)
+		      int pgid_off, bool save_ret)
 {
 	int i;
 	u8 *prog = *pprog;
 
 	for (i = 0; i < tp->nr_progs; i++) {
 		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size,
-				    save_ret))
+				    pgid_off, save_ret))
 			return -EINVAL;
 	}
 	*pprog = prog;
@@ -1859,7 +1867,7 @@ static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 
 static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 			      struct bpf_tramp_progs *tp, int stack_size,
-			      u8 **branches)
+			      int pgid_off, u8 **branches)
 {
 	u8 *prog = *pprog;
 	int i;
@@ -1870,7 +1878,8 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	emit_mov_imm32(&prog, false, BPF_REG_0, 0);
 	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 	for (i = 0; i < tp->nr_progs; i++) {
-		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size, true))
+		if (invoke_bpf_prog(m, &prog, tp->progs[i], stack_size,
+				    pgid_off, true))
 			return -EINVAL;
 
 		/* mod_ret prog stored return value into [rbp - 8]. Emit:
@@ -1976,7 +1985,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 				void *orig_call)
 {
 	int ret, i, nr_args = m->nr_args;
-	int regs_off, flags_off, ip_off, args_off, stack_size = nr_args * 8;
+	int regs_off, flags_off, pgid_off = 0, ip_off, args_off, stack_size = nr_args * 8;
 	struct bpf_tramp_progs *fentry = &tprogs[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_progs *fexit = &tprogs[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_progs *fmod_ret = &tprogs[BPF_TRAMP_MODIFY_RETURN];
@@ -2005,7 +2014,12 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	 *
 	 * RBP - args_off  [ args count      ]  always
 	 *
+	 * RBP - flags_off [ flags           ]  BPF_TRAMP_F_IP_ARG or
+	 *                                      BPF_TRAMP_F_PROG_ID flags.
+	 *
 	 * RBP - ip_off    [ traced function ]  BPF_TRAMP_F_IP_ARG flag
+	 *
+	 * RBP - pgid_off  [ program ID      ]  BPF_TRAMP_F_PROG_ID flags.
 	 */
 
 	/* room for return value of orig_call or fentry prog */
@@ -2019,7 +2033,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	stack_size += 8;
 	args_off = stack_size;
 
-	if (flags & BPF_TRAMP_F_IP_ARG)
+	if (flags & (BPF_TRAMP_F_IP_ARG | BPF_TRAMP_F_PROG_ID))
 		stack_size += 8; /* room for flags */
 
 	flags_off = stack_size;
@@ -2028,6 +2042,12 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		stack_size += 8; /* room for IP address argument */
 
 	ip_off = stack_size;
+
+	/* room for program ID */
+	if (flags & BPF_TRAMP_F_PROG_ID) {
+		stack_size += 8;
+		pgid_off = stack_size;
+	}
 
 	if (flags & BPF_TRAMP_F_SKIP_FRAME)
 		/* skip patched call instruction and point orig_call to actual
@@ -2049,13 +2069,13 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	emit_mov_imm64(&prog, BPF_REG_0, 0, (u32) nr_args);
 	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -args_off);
 
-	if (flags & BPF_TRAMP_F_IP_ARG) {
+	if (flags & (BPF_TRAMP_F_IP_ARG | BPF_TRAMP_F_PROG_ID)) {
 		/* Store flags
 		 * move rax, flags
 		 * mov QWORD PTR [rbp - flags_off], rax
 		 */
 		emit_mov_imm64(&prog, BPF_REG_0, 0,
-			       (u32) (flags & BPF_TRAMP_F_IP_ARG));
+			       (u32) (flags & (BPF_TRAMP_F_IP_ARG | BPF_TRAMP_F_PROG_ID)));
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -flags_off);
 	}
 
@@ -2082,7 +2102,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	}
 
 	if (fentry->nr_progs)
-		if (invoke_bpf(m, &prog, fentry, regs_off,
+		if (invoke_bpf(m, &prog, fentry, regs_off, pgid_off,
 			       flags & BPF_TRAMP_F_RET_FENTRY_RET))
 			return -EINVAL;
 
@@ -2092,7 +2112,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		if (!branches)
 			return -ENOMEM;
 
-		if (invoke_bpf_mod_ret(m, &prog, fmod_ret, regs_off,
+		if (invoke_bpf_mod_ret(m, &prog, fmod_ret, regs_off, pgid_off,
 				       branches)) {
 			ret = -EINVAL;
 			goto cleanup;
@@ -2130,7 +2150,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	}
 
 	if (fexit->nr_progs)
-		if (invoke_bpf(m, &prog, fexit, regs_off, false)) {
+		if (invoke_bpf(m, &prog, fexit, regs_off, pgid_off, false)) {
 			ret = -EINVAL;
 			goto cleanup;
 		}
