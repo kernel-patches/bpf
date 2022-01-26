@@ -6840,6 +6840,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		env->prog->call_get_func_ip = true;
 	}
 
+	if (func_id == BPF_FUNC_get_attach_cookie)
+		env->prog->need_prog_id = true;
+
 	if (changes_data)
 		clear_all_pkt_pointers(env);
 	return 0;
