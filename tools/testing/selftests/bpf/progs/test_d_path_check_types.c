@@ -8,7 +8,6 @@ extern const int bpf_prog_active __ksym;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 12);
 } ringbuf SEC(".maps");
 
 SEC("fentry/security_inode_getattr")

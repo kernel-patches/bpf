@@ -48,11 +48,19 @@ void test_test_ima(void)
 	char cmd[256];
 
 	int err, duration = 0;
-	struct ima *skel = NULL;
+	struct ima *skel;
 
-	skel = ima__open_and_load();
-	if (CHECK(!skel, "skel_load", "skeleton failed\n"))
-		goto close_prog;
+	skel = ima__open();
+	if (!ASSERT_OK_PTR(skel, "skel open"))
+		return;
+
+	err = bpf_map__set_max_entries(skel->maps.ringbuf, getpagesize());
+	if (!ASSERT_OK(err, "set max entries"))
+		goto destroy_skel;
+
+	err = ima__load(skel);
+	if (!ASSERT_OK(err, "skel load"))
+		goto destroy_skel;
 
 	ringbuf = ring_buffer__new(bpf_map__fd(skel->maps.ringbuf),
 				   process_sample, NULL, NULL);
@@ -86,5 +94,6 @@ close_clean:
 	CHECK(err, "failed to run command", "%s, errno = %d\n", cmd, errno);
 close_prog:
 	ring_buffer__free(ringbuf);
+destroy_skel:
 	ima__destroy(skel);
 }

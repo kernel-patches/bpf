@@ -171,10 +171,20 @@ static void test_d_path_check_rdonly_mem(void)
 static void test_d_path_check_types(void)
 {
 	struct test_d_path_check_types *skel;
+	int err;
 
-	skel = test_d_path_check_types__open_and_load();
-	ASSERT_ERR_PTR(skel, "unexpected_load_passing_wrong_type");
+	skel = test_d_path_check_types__open();
+	if (!ASSERT_OK_PTR(skel, "d_path_check_types open failed"))
+		return;
 
+	err = bpf_map__set_max_entries(skel->maps.ringbuf, getpagesize());
+	if (!ASSERT_OK(err, "set max entries"))
+		goto cleanup;
+
+	err = test_d_path_check_types__load(skel);
+	ASSERT_EQ(err, -EACCES, "unexpected_load_passing_wrong_type");
+
+cleanup:
 	test_d_path_check_types__destroy(skel);
 }
 

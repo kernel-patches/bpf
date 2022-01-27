@@ -13,7 +13,6 @@ u32 monitored_pid = 0;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 12);
 } ringbuf SEC(".maps");
 
 char _license[] SEC("license") = "GPL";
