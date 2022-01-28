@@ -20,6 +20,9 @@ static void check_run_cnt(int prog_fd, __u64 run_cnt)
 	      "incorrect number of repetitions, want %llu have %llu\n", run_cnt, info.run_cnt);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 void test_prog_run_xattr(void)
 {
 	struct test_pkt_access *skel;
@@ -81,3 +84,5 @@ cleanup:
 	if (stats_fd >= 0)
 		close(stats_fd);
 }
+
+#pragma GCC diagnostic pop

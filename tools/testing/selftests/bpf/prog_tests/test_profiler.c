@@ -8,19 +8,19 @@
 
 static int sanity_run(struct bpf_program *prog)
 {
-	struct bpf_prog_test_run_attr test_attr = {};
 	__u64 args[] = {1, 2, 3};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.ctx_in = args,
+		.ctx_size_in = sizeof(args),
+	);
 	__u32 duration = 0;
 	int err, prog_fd;
 
 	prog_fd = bpf_program__fd(prog);
-	test_attr.prog_fd = prog_fd;
-	test_attr.ctx_in = args;
-	test_attr.ctx_size_in = sizeof(args);
-	err = bpf_prog_test_run_xattr(&test_attr);
-	if (CHECK(err || test_attr.retval, "test_run",
-		  "err %d errno %d retval %d duration %d\n",
-		  err, errno, test_attr.retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK(err || topts.retval, "test_run",
+		  "err %d errno %d retval %d duration %d\n", err, errno,
+		  topts.retval, duration))
 		return -1;
 	return 0;
 }

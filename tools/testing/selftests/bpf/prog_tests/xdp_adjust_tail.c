@@ -78,30 +78,30 @@ static void test_xdp_adjust_tail_grow2(void)
 	int tailroom = 320; /* SKB_DATA_ALIGN(sizeof(struct skb_shared_info))*/;
 	struct bpf_object *obj;
 	int err, cnt, i;
-	int max_grow;
+	int max_grow, prog_fd;
 
-	struct bpf_prog_test_run_attr tattr = {
-		.repeat		= 1,
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
 		.data_in	= &buf,
 		.data_out	= &buf,
 		.data_size_in	= 0, /* Per test */
 		.data_size_out	= 0, /* Per test */
-	};
+		.repeat		= 1,
+	);
 
-	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &tattr.prog_fd);
+	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
 	if (ASSERT_OK(err, "test_xdp_adjust_tail_grow"))
 		return;
 
 	/* Test case-64 */
 	memset(buf, 1, sizeof(buf));
-	tattr.data_size_in  =  64; /* Determine test case via pkt size */
-	tattr.data_size_out = 128; /* Limit copy_size */
+	topts.data_size_in  =  64; /* Determine test case via pkt size */
+	topts.data_size_out = 128; /* Limit copy_size */
 	/* Kernel side alloc packet memory area that is zero init */
-	err = bpf_prog_test_run_xattr(&tattr);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
 
 	ASSERT_EQ(errno, ENOSPC, "case-64 errno"); /* Due limit copy_size in bpf_test_finish */
-	ASSERT_EQ(tattr.retval, XDP_TX, "case-64 retval");
-	ASSERT_EQ(tattr.data_size_out, 192, "case-64 data_size_out"); /* Expected grow size */
+	ASSERT_EQ(topts.retval, XDP_TX, "case-64 retval");
+	ASSERT_EQ(topts.data_size_out, 192, "case-64 data_size_out"); /* Expected grow size */
 
 	/* Extra checks for data contents */
 	ASSERT_EQ(buf[0], 1, "case-64-data buf[0]"); /*  0-63  memset to 1 */
@@ -113,22 +113,22 @@ static void test_xdp_adjust_tail_grow2(void)
 
 	/* Test case-128 */
 	memset(buf, 2, sizeof(buf));
-	tattr.data_size_in  = 128; /* Determine test case via pkt size */
-	tattr.data_size_out = sizeof(buf);   /* Copy everything */
-	err = bpf_prog_test_run_xattr(&tattr);
+	topts.data_size_in  = 128; /* Determine test case via pkt size */
+	topts.data_size_out = sizeof(buf);   /* Copy everything */
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
 
 	max_grow = 4096 - XDP_PACKET_HEADROOM -	tailroom; /* 3520 */
 	ASSERT_OK(err, "case-128");
-	ASSERT_EQ(tattr.retval, XDP_TX, "case-128 retval");
-	ASSERT_EQ(tattr.data_size_out, max_grow, "case-128 data_size_out"); /* Expect max grow */
+	ASSERT_EQ(topts.retval, XDP_TX, "case-128 retval");
+	ASSERT_EQ(topts.data_size_out, max_grow, "case-128 data_size_out"); /* Expect max grow */
 
 	/* Extra checks for data content: Count grow size, will contain zeros */
 	for (i = 0, cnt = 0; i < sizeof(buf); i++) {
 		if (buf[i] == 0)
 			cnt++;
 	}
-	ASSERT_EQ(cnt, max_grow - tattr.data_size_in, "case-128-data cnt"); /* Grow increase */
-	ASSERT_EQ(tattr.data_size_out, max_grow, "case-128-data data_size_out"); /* Total grow */
+	ASSERT_EQ(cnt, max_grow - topts.data_size_in, "case-128-data cnt"); /* Grow increase */
+	ASSERT_EQ(topts.data_size_out, max_grow, "case-128-data data_size_out"); /* Total grow */
 
 	bpf_object__close(obj);
 }
