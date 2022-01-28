@@ -1272,12 +1272,12 @@ static int do_run(int argc, char **argv)
 {
 	char *data_fname_in = NULL, *data_fname_out = NULL;
 	char *ctx_fname_in = NULL, *ctx_fname_out = NULL;
-	struct bpf_prog_test_run_attr test_attr = {0};
 	const unsigned int default_size = SZ_32K;
 	void *data_in = NULL, *data_out = NULL;
 	void *ctx_in = NULL, *ctx_out = NULL;
 	unsigned int repeat = 1;
 	int fd, err;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
 	if (!REQ_ARGS(4))
 		return -1;
@@ -1315,7 +1315,7 @@ static int do_run(int argc, char **argv)
 			if (!REQ_ARGS(1))
 				return -1;
 
-			test_attr.data_size_out = strtoul(*argv, &endptr, 0);
+			topts.data_size_out = strtoul(*argv, &endptr, 0);
 			if (*endptr) {
 				p_err("can't parse %s as output data size",
 				      *argv);
@@ -1343,7 +1343,7 @@ static int do_run(int argc, char **argv)
 			if (!REQ_ARGS(1))
 				return -1;
 
-			test_attr.ctx_size_out = strtoul(*argv, &endptr, 0);
+			topts.ctx_size_out = strtoul(*argv, &endptr, 0);
 			if (*endptr) {
 				p_err("can't parse %s as output context size",
 				      *argv);
@@ -1371,38 +1371,37 @@ static int do_run(int argc, char **argv)
 		}
 	}
 
-	err = get_run_data(data_fname_in, &data_in, &test_attr.data_size_in);
+	err = get_run_data(data_fname_in, &data_in, &topts.data_size_in);
 	if (err)
 		return -1;
 
 	if (data_in) {
-		if (!test_attr.data_size_out)
-			test_attr.data_size_out = default_size;
-		err = alloc_run_data(&data_out, test_attr.data_size_out);
+		if (!topts.data_size_out)
+			topts.data_size_out = default_size;
+		err = alloc_run_data(&data_out, topts.data_size_out);
 		if (err)
 			goto free_data_in;
 	}
 
-	err = get_run_data(ctx_fname_in, &ctx_in, &test_attr.ctx_size_in);
+	err = get_run_data(ctx_fname_in, &ctx_in, &topts.ctx_size_in);
 	if (err)
 		goto free_data_out;
 
 	if (ctx_in) {
-		if (!test_attr.ctx_size_out)
-			test_attr.ctx_size_out = default_size;
-		err = alloc_run_data(&ctx_out, test_attr.ctx_size_out);
+		if (!topts.ctx_size_out)
+			topts.ctx_size_out = default_size;
+		err = alloc_run_data(&ctx_out, topts.ctx_size_out);
 		if (err)
 			goto free_ctx_in;
 	}
 
-	test_attr.prog_fd	= fd;
-	test_attr.repeat	= repeat;
-	test_attr.data_in	= data_in;
-	test_attr.data_out	= data_out;
-	test_attr.ctx_in	= ctx_in;
-	test_attr.ctx_out	= ctx_out;
+	topts.repeat	= repeat;
+	topts.data_in	= data_in;
+	topts.data_out	= data_out;
+	topts.ctx_in	= ctx_in;
+	topts.ctx_out	= ctx_out;
 
-	err = bpf_prog_test_run_xattr(&test_attr);
+	err = bpf_prog_test_run_opts(fd, &topts);
 	if (err) {
 		p_err("failed to run program: %s", strerror(errno));
 		goto free_ctx_out;
@@ -1416,23 +1415,23 @@ static int do_run(int argc, char **argv)
 	/* Do not exit on errors occurring when printing output data/context,
 	 * we still want to print return value and duration for program run.
 	 */
-	if (test_attr.data_size_out)
-		err += print_run_output(test_attr.data_out,
-					test_attr.data_size_out,
+	if (topts.data_size_out)
+		err += print_run_output(topts.data_out,
+					topts.data_size_out,
 					data_fname_out, "data_out");
-	if (test_attr.ctx_size_out)
-		err += print_run_output(test_attr.ctx_out,
-					test_attr.ctx_size_out,
+	if (topts.ctx_size_out)
+		err += print_run_output(topts.ctx_out,
+					topts.ctx_size_out,
 					ctx_fname_out, "ctx_out");
 
 	if (json_output) {
-		jsonw_uint_field(json_wtr, "retval", test_attr.retval);
-		jsonw_uint_field(json_wtr, "duration", test_attr.duration);
+		jsonw_uint_field(json_wtr, "retval", topts.retval);
+		jsonw_uint_field(json_wtr, "duration", topts.duration);
 		jsonw_end_object(json_wtr);	/* root */
 	} else {
 		fprintf(stdout, "Return value: %u, duration%s: %uns\n",
-			test_attr.retval,
-			repeat > 1 ? " (average)" : "", test_attr.duration);
+			topts.retval,
+			repeat > 1 ? " (average)" : "", topts.duration);
 	}
 
 free_ctx_out:
