@@ -163,6 +163,8 @@ extern int test__join_cgroup(const char *path);
 	_CHECK(condition, tag, duration, format)
 #define CHECK_ATTR(condition, tag, format...) \
 	_CHECK(condition, tag, tattr.duration, format)
+#define CHECK_OPTS(condition, tag, format...) \
+	_CHECK(condition, tag, topts.duration, format)
 
 #define ASSERT_TRUE(actual, name) ({					\
 	static int duration = 0;					\

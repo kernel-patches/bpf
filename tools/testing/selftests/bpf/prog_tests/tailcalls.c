@@ -12,9 +12,13 @@ static void test_tailcall_1(void)
 	struct bpf_map *prog_array;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char prog_name[32];
 	char buff[128] = {};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall1.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
@@ -54,20 +58,19 @@ static void test_tailcall_1(void)
 	}
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != i, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != i, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 
 		err = bpf_map_delete_elem(map_fd, &i);
 		if (CHECK_FAIL(err))
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 3, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 3, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
@@ -85,10 +88,9 @@ static void test_tailcall_1(void)
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 0, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 0, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		j = bpf_map__max_entries(prog_array) - 1 - i;
@@ -110,30 +112,29 @@ static void test_tailcall_1(void)
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		j = bpf_map__max_entries(prog_array) - 1 - i;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != j, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != j, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 
 		err = bpf_map_delete_elem(map_fd, &i);
 		if (CHECK_FAIL(err))
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 3, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 3, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_delete_elem(map_fd, &i);
 		if (CHECK_FAIL(err >= 0 || errno != ENOENT))
 			goto out;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != 3, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != 3, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 	}
 
 out:
@@ -150,9 +151,13 @@ static void test_tailcall_2(void)
 	struct bpf_map *prog_array;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char prog_name[32];
 	char buff[128] = {};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall2.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
@@ -191,30 +196,27 @@ static void test_tailcall_2(void)
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 2, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 2, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	i = 2;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 1, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 1, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 3, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 3, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 out:
 	bpf_object__close(obj);
 }
@@ -225,8 +227,12 @@ static void test_tailcall_count(const char *which)
 	struct bpf_map *prog_array, *data_map;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char buff[128] = {};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load(which, BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
@@ -262,10 +268,9 @@ static void test_tailcall_count(const char *which)
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 1, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 1, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
 	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
@@ -277,18 +282,17 @@ static void test_tailcall_count(const char *which)
 
 	i = 0;
 	err = bpf_map_lookup_elem(data_fd, &i, &val);
-	CHECK(err || val != 33, "tailcall count", "err %d errno %d count %d\n",
-	      err, errno, val);
+	CHECK_OPTS(err || val != 33, "tailcall count",
+		   "err %d errno %d count %d\n", err, errno, val);
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 0, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 0, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 out:
 	bpf_object__close(obj);
 }
@@ -319,10 +323,14 @@ static void test_tailcall_4(void)
 	struct bpf_map *prog_array, *data_map;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	static const int zero = 0;
 	char buff[128] = {};
 	char prog_name[32];
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall4.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
@@ -374,10 +382,10 @@ static void test_tailcall_4(void)
 		if (CHECK_FAIL(err))
 			goto out;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != i, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != i, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 	}
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
@@ -389,10 +397,10 @@ static void test_tailcall_4(void)
 		if (CHECK_FAIL(err))
 			goto out;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != 3, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != 3, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 	}
 out:
 	bpf_object__close(obj);
@@ -407,10 +415,14 @@ static void test_tailcall_5(void)
 	struct bpf_map *prog_array, *data_map;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	static const int zero = 0;
 	char buff[128] = {};
 	char prog_name[32];
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall5.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
@@ -462,10 +474,10 @@ static void test_tailcall_5(void)
 		if (CHECK_FAIL(err))
 			goto out;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != i, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != i, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 	}
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
@@ -477,10 +489,10 @@ static void test_tailcall_5(void)
 		if (CHECK_FAIL(err))
 			goto out;
 
-		err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-					&duration, &retval, NULL);
-		CHECK(err || retval != 3, "tailcall",
-		      "err %d errno %d retval %d\n", err, errno, retval);
+		err = bpf_prog_test_run_opts(main_fd, &topts);
+		CHECK_OPTS(err || topts.retval != 3, "tailcall",
+			   "err %d errno %d retval %d\n", err, errno,
+			   topts.retval);
 	}
 out:
 	bpf_object__close(obj);
@@ -495,8 +507,12 @@ static void test_tailcall_bpf2bpf_1(void)
 	struct bpf_map *prog_array;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char prog_name[32];
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf1.o", BPF_PROG_TYPE_SCHED_CLS,
 			    &obj, &prog_fd);
@@ -536,10 +552,9 @@ static void test_tailcall_bpf2bpf_1(void)
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				0, &retval, &duration);
-	CHECK(err || retval != 1, "tailcall",
-	      "err %d errno %d retval %d\n", err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 1, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	/* jmp -> nop, call subprog that will do tailcall */
 	i = 1;
@@ -547,10 +562,9 @@ static void test_tailcall_bpf2bpf_1(void)
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				0, &retval, &duration);
-	CHECK(err || retval != 0, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 0, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	/* make sure that subprog can access ctx and entry prog that
 	 * called this subprog can properly return
@@ -560,11 +574,9 @@ static void test_tailcall_bpf2bpf_1(void)
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				0, &retval, &duration);
-	CHECK(err || retval != sizeof(pkt_v4) * 2,
-	      "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != sizeof(pkt_v4) * 2, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 out:
 	bpf_object__close(obj);
 }
@@ -579,8 +591,12 @@ static void test_tailcall_bpf2bpf_2(void)
 	struct bpf_map *prog_array, *data_map;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char buff[128] = {};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf2.o", BPF_PROG_TYPE_SCHED_CLS,
 			    &obj, &prog_fd);
@@ -616,10 +632,9 @@ static void test_tailcall_bpf2bpf_2(void)
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 1, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 1, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
 	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
@@ -631,18 +646,17 @@ static void test_tailcall_bpf2bpf_2(void)
 
 	i = 0;
 	err = bpf_map_lookup_elem(data_fd, &i, &val);
-	CHECK(err || val != 33, "tailcall count", "err %d errno %d count %d\n",
-	      err, errno, val);
+	CHECK_OPTS(err || val != 33, "tailcall count",
+		   "err %d errno %d count %d\n", err, errno, val);
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, buff, sizeof(buff), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != 0, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 0, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 out:
 	bpf_object__close(obj);
 }
@@ -657,8 +671,12 @@ static void test_tailcall_bpf2bpf_3(void)
 	struct bpf_map *prog_array;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char prog_name[32];
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf3.o", BPF_PROG_TYPE_SCHED_CLS,
 			    &obj, &prog_fd);
@@ -697,33 +715,27 @@ static void test_tailcall_bpf2bpf_3(void)
 			goto out;
 	}
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != sizeof(pkt_v4) * 3,
-	      "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != sizeof(pkt_v4) * 3, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	i = 1;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != sizeof(pkt_v4),
-	      "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != sizeof(pkt_v4), "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != sizeof(pkt_v4) * 2,
-	      "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != sizeof(pkt_v4) * 2, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 out:
 	bpf_object__close(obj);
 }
@@ -754,8 +766,12 @@ static void test_tailcall_bpf2bpf_4(bool noise)
 	struct bpf_map *prog_array, *data_map;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	__u32 retval, duration;
 	char prog_name[32];
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf4.o", BPF_PROG_TYPE_SCHED_CLS,
 			    &obj, &prog_fd);
@@ -809,15 +825,14 @@ static void test_tailcall_bpf2bpf_4(bool noise)
 	if (CHECK_FAIL(err))
 		goto out;
 
-	err = bpf_prog_test_run(main_fd, 1, &pkt_v4, sizeof(pkt_v4), 0,
-				&duration, &retval, NULL);
-	CHECK(err || retval != sizeof(pkt_v4) * 3, "tailcall", "err %d errno %d retval %d\n",
-	      err, errno, retval);
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	CHECK_OPTS(err || topts.retval != sizeof(pkt_v4) * 3, "tailcall",
+		   "err %d errno %d retval %d\n", err, errno, topts.retval);
 
 	i = 0;
 	err = bpf_map_lookup_elem(data_fd, &i, &val);
-	CHECK(err || val.count != 31, "tailcall count", "err %d errno %d count %d\n",
-	      err, errno, val.count);
+	CHECK_OPTS(err || val.count != 31, "tailcall count",
+		   "err %d errno %d count %d\n", err, errno, val.count);
 
 out:
 	bpf_object__close(obj);

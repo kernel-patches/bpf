@@ -10,11 +10,18 @@ enum {
 static void test_queue_stack_map_by_type(int type)
 {
 	const int MAP_SIZE = 32;
-	__u32 vals[MAP_SIZE], duration, retval, size, val;
+	__u32 vals[MAP_SIZE], val;
 	int i, err, prog_fd, map_in_fd, map_out_fd;
 	char file[32], buf[128];
 	struct bpf_object *obj;
 	struct iphdr iph;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.data_out = buf,
+		.data_size_out = sizeof(buf),
+		.repeat = 1,
+	);
 
 	/* Fill test values to be used */
 	for (i = 0; i < MAP_SIZE; i++)
@@ -58,27 +65,31 @@ static void test_queue_stack_map_by_type(int type)
 			pkt_v4.iph.saddr = vals[MAP_SIZE - 1 - i] * 5;
 		}
 
-		err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
-					buf, &size, &retval, &duration);
-		if (err || retval || size != sizeof(pkt_v4))
+		topts.data_size_out = sizeof(buf);
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (err || topts.retval ||
+		    topts.data_size_out != sizeof(pkt_v4))
 			break;
 		memcpy(&iph, buf + sizeof(struct ethhdr), sizeof(iph));
 		if (iph.daddr != val)
 			break;
 	}
 
-	CHECK(err || retval || size != sizeof(pkt_v4) || iph.daddr != val,
-	      "bpf_map_pop_elem",
-	      "err %d errno %d retval %d size %d iph->daddr %u\n",
-	      err, errno, retval, size, iph.daddr);
+	CHECK_OPTS(err || topts.retval ||
+		   topts.data_size_out != sizeof(pkt_v4) ||
+		   iph.daddr != val,
+		   "bpf_map_pop_elem",
+		   "err %d errno %d retval %d size %d iph->daddr %u\n", err,
+		   errno, topts.retval, topts.data_size_out, iph.daddr);
 
 	/* Queue is empty, program should return TC_ACT_SHOT */
-	err = bpf_prog_test_run(prog_fd, 1, &pkt_v4, sizeof(pkt_v4),
-				buf, &size, &retval, &duration);
-	CHECK(err || retval != 2 /* TC_ACT_SHOT */|| size != sizeof(pkt_v4),
-	      "check-queue-stack-map-empty",
-	      "err %d errno %d retval %d size %d\n",
-	      err, errno, retval, size);
+	topts.data_size_out = sizeof(buf);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	CHECK_OPTS(err || topts.retval != 2 /* TC_ACT_SHOT */ ||
+			   topts.data_size_out != sizeof(pkt_v4),
+		   "check-queue-stack-map-empty",
+		   "err %d errno %d retval %d size %d\n", err, errno,
+		   topts.retval, topts.data_size_out);
 
 	/* Check that the program pushed elements correctly */
 	for (i = 0; i < MAP_SIZE; i++) {
@@ -87,8 +98,8 @@ static void test_queue_stack_map_by_type(int type)
 			break;
 	}
 
-	CHECK(i != MAP_SIZE && (err || val != vals[i] * 5),
-	      "bpf_map_push_elem", "err %d value %u\n", err, val);
+	CHECK_OPTS(i != MAP_SIZE && (err || val != vals[i] * 5),
+		   "bpf_map_push_elem", "err %d value %u\n", err, val);
 
 out:
 	pkt_v4.iph.saddr = 0;

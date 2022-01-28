@@ -7,18 +7,20 @@
 static void test_add(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__add__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(add)"))
 		return;
 
 	prog_fd = skel->progs.add.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run add",
-		  "err %d errno %d retval %d duration %d\n", err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run add",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->add64_value, 3, "add64_value");
@@ -39,19 +41,20 @@ cleanup:
 static void test_sub(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__sub__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(sub)"))
 		return;
 
 	prog_fd = skel->progs.sub.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run sub",
-		  "err %d errno %d retval %d duration %d\n",
-		  err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run sub",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->sub64_value, -1, "sub64_value");
@@ -72,18 +75,20 @@ cleanup:
 static void test_and(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__and__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(and)"))
 		return;
 
 	prog_fd = skel->progs.and.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run and",
-		  "err %d errno %d retval %d duration %d\n", err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run and",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->and64_value, 0x010ull << 32, "and64_value");
@@ -100,19 +105,20 @@ cleanup:
 static void test_or(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__or__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(or)"))
 		return;
 
 	prog_fd = skel->progs.or.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run or",
-		  "err %d errno %d retval %d duration %d\n",
-		  err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run or",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->or64_value, 0x111ull << 32, "or64_value");
@@ -129,18 +135,20 @@ cleanup:
 static void test_xor(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__xor__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(xor)"))
 		return;
 
 	prog_fd = skel->progs.xor.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run xor",
-		  "err %d errno %d retval %d duration %d\n", err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run xor",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->xor64_value, 0x101ull << 32, "xor64_value");
@@ -157,18 +165,20 @@ cleanup:
 static void test_cmpxchg(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__cmpxchg__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(cmpxchg)"))
 		return;
 
 	prog_fd = skel->progs.cmpxchg.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run cmpxchg",
-		  "err %d errno %d retval %d duration %d\n", err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run cmpxchg",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->cmpxchg64_value, 2, "cmpxchg64_value");
@@ -186,18 +196,20 @@ cleanup:
 static void test_xchg(struct atomics_lskel *skel)
 {
 	int err, prog_fd;
-	__u32 duration = 0, retval;
 	int link_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.repeat = 1,
+	);
 
 	link_fd = atomics_lskel__xchg__attach(skel);
 	if (!ASSERT_GT(link_fd, 0, "attach(xchg)"))
 		return;
 
 	prog_fd = skel->progs.xchg.prog_fd;
-	err = bpf_prog_test_run(prog_fd, 1, NULL, 0,
-				NULL, NULL, &retval, &duration);
-	if (CHECK(err || retval, "test_run xchg",
-		  "err %d errno %d retval %d duration %d\n", err, errno, retval, duration))
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (CHECK_OPTS(err || topts.retval, "test_run xchg",
+		       "err %d errno %d retval %d duration %d\n", err, errno,
+		       topts.retval, topts.duration))
 		goto cleanup;
 
 	ASSERT_EQ(skel->data->xchg64_value, 2, "xchg64_value");
