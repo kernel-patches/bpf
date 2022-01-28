@@ -369,8 +369,7 @@ int xsk_umem__create_v0_0_2(struct xsk_umem **umem_ptr, void *umem_area,
 static enum xsk_prog get_xsk_prog(void)
 {
 	enum xsk_prog detected = XSK_PROG_FALLBACK;
-	__u32 size_out, retval, duration;
-	char data_in = 0, data_out;
+	char data_in = 0;
 	struct bpf_insn insns[] = {
 		BPF_LD_MAP_FD(BPF_REG_1, 0),
 		BPF_MOV64_IMM(BPF_REG_2, 0),
@@ -378,6 +377,10 @@ static enum xsk_prog get_xsk_prog(void)
 		BPF_EMIT_CALL(BPF_FUNC_redirect_map),
 		BPF_EXIT_INSN(),
 	};
+	LIBBPF_OPTS(bpf_test_run_opts, test_opts,
+		.data_in = &data_in,
+		.data_size_in = 1,
+	);
 	int prog_fd, map_fd, ret, insn_cnt = ARRAY_SIZE(insns);
 
 	map_fd = bpf_map_create(BPF_MAP_TYPE_XSKMAP, NULL, sizeof(int), sizeof(int), 1, NULL);
@@ -392,8 +395,8 @@ static enum xsk_prog get_xsk_prog(void)
 		return detected;
 	}
 
-	ret = bpf_prog_test_run(prog_fd, 0, &data_in, 1, &data_out, &size_out, &retval, &duration);
-	if (!ret && retval == XDP_PASS)
+	ret = bpf_prog_test_run_opts(prog_fd, &test_opts);
+	if (!ret && test_opts.retval == XDP_PASS)
 		detected = XSK_PROG_REDIRECT_FLAGS;
 	close(prog_fd);
 	close(map_fd);
