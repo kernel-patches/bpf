@@ -102,9 +102,3 @@ void test_xdp_update_frags(void)
 out:
 	bpf_object__close(obj);
 }
-
-void test_xdp_adjust_frags(void)
-{
-	if (test__start_subtest("xdp_adjust_frags"))
-		test_xdp_update_frags();
-}
