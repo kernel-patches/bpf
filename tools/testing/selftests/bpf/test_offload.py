@@ -769,7 +769,11 @@ skip(ret != 0, "bpftool not installed")
 base_progs = progs
 _, base_maps = bpftool("map")
 base_map_names = [
-    'pid_iter.rodata' # created on each bpftool invocation
+    # created on each bpftool invocation
+    'pid_iter.rodata',
+    'bind_map_detect',
+    'global_data',
+    'array_mmap',
 ]
 
 # Check netdevsim
