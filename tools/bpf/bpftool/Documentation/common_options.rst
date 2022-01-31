@@ -4,7 +4,8 @@
 	  Print short help message (similar to **bpftool help**).
 
 -V, --version
-	  Print version number (similar to **bpftool version**), and optional
+	  Print bpftool's version number (similar to **bpftool version**), the
+	  version of libbpf that was used to compile the binary, and optional
 	  features that were included when bpftool was compiled. Optional
 	  features include linking against libbfd to provide the disassembler
 	  for JIT-ted programs (**bpftool prog dump jited**) and usage of BPF
