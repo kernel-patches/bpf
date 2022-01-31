@@ -108,6 +108,9 @@ MAKEOVERRIDES=
 
 all:
 
+libbpfversion:
+	@echo $(LIBBPF_VERSION)
+
 export srctree OUTPUT CC LD CFLAGS V
 include $(srctree)/tools/build/Makefile.include
 
