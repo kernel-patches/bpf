@@ -216,3 +216,20 @@ ssize_t get_rel_offset(uintptr_t addr)
 	fclose(f);
 	return -EINVAL;
 }
+
+char *get_lib_path(const char *path_substr)
+{
+	char *found = NULL;
+	char lib_path[512];
+	FILE *f;
+
+	f = fopen("/proc/self/maps", "r");
+	while (fscanf(f, "%*s %*s %*s %*s %*s %[^\n]", lib_path) == 1) {
+		if (strstr(lib_path, path_substr) == NULL)
+			continue;
+		found = strdup(lib_path);
+		break;
+	}
+	fclose(f);
+	return found;
+}

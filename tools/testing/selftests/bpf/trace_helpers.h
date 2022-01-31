@@ -20,5 +20,7 @@ void read_trace_pipe(void);
 
 ssize_t get_uprobe_offset(const void *addr);
 ssize_t get_rel_offset(uintptr_t addr);
+/* Return allocated string path to library that contains path_substr. */
+char *get_lib_path(const char *path_substr);
 
 #endif
