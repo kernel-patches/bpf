@@ -24,13 +24,6 @@
 #include "preload/bpf_preload.h"
 #include "inode.h"
 
-enum bpf_type {
-	BPF_TYPE_UNSPEC	= 0,
-	BPF_TYPE_PROG,
-	BPF_TYPE_MAP,
-	BPF_TYPE_LINK,
-};
-
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
 	switch (type) {
@@ -69,6 +62,20 @@ static void bpf_any_put(void *raw, enum bpf_type type)
 	}
 }
 
+static void free_obj_list(struct kref *kref)
+{
+	struct obj_list *list;
+	struct bpf_inherit_entry *e;
+
+	list = container_of(kref, struct obj_list, refcnt);
+	list_for_each_entry(e, &list->list, list) {
+		list_del_rcu(&e->list);
+		bpf_any_put(e->obj, e->type);
+		kfree(e);
+	}
+	kfree(list);
+}
+
 static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
 {
 	void *raw;
@@ -99,6 +106,10 @@ static const struct inode_operations bpf_dir_iops;
 static const struct inode_operations bpf_prog_iops = { };
 static const struct inode_operations bpf_map_iops  = { };
 static const struct inode_operations bpf_link_iops  = { };
+
+static int bpf_mkprog(struct dentry *dentry, umode_t mode, void *arg);
+static int bpf_mkmap(struct dentry *dentry, umode_t mode, void *arg);
+static int bpf_mklink(struct dentry *dentry, umode_t mode, void *arg);
 
 static struct inode *bpf_get_inode(struct super_block *sb,
 				   const struct inode *dir,
@@ -184,10 +195,60 @@ static int tag_dir_inode(const struct bpf_dir_tag *tag,
 	}
 
 	t->type = tag->type;
+	t->inherit_objects = tag->inherit_objects;
+	kref_get(&t->inherit_objects->refcnt);
 	t->private = kn;
 
 	inode->i_private = t;
 	return 0;
+}
+
+/* populate_dir - populate directory with bpf objects in a tag's
+ * inherit_objects.
+ * @dir: dentry of the directory.
+ * @inode: inode of the direcotry.
+ *
+ * Called from mkdir. Must be called after dentry has been finalized.
+ */
+static int populate_dir(struct dentry *dir, struct inode *inode)
+{
+	struct bpf_dir_tag *tag = inode_tag(inode);
+	struct bpf_inherit_entry *e;
+	struct dentry *child;
+	int ret;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(e, &tag->inherit_objects->list, list) {
+		child = lookup_one_len_unlocked(e->name.name, dir,
+						strlen(e->name.name));
+		if (unlikely(IS_ERR(child))) {
+			ret = PTR_ERR(child);
+			break;
+		}
+
+		switch (e->type) {
+		case BPF_TYPE_PROG:
+			ret = bpf_mkprog(child, e->mode, e->obj);
+			break;
+		case BPF_TYPE_MAP:
+			ret = bpf_mkmap(child, e->mode, e->obj);
+			break;
+		case BPF_TYPE_LINK:
+			ret = bpf_mklink(child, e->mode, e->obj);
+			break;
+		default:
+			ret = -EPERM;
+			break;
+		}
+		dput(child);
+		if (ret)
+			break;
+
+		/* To match bpf_any_put in bpf_free_inode. */
+		bpf_any_get(e->obj, e->type);
+	}
+	rcu_read_unlock();
+	return ret;
 }
 
 static void bpf_dentry_finalize(struct dentry *dentry, struct inode *inode,
@@ -227,6 +288,12 @@ static int bpf_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 	inc_nlink(dir);
 
 	bpf_dentry_finalize(dentry, inode, dir);
+
+	if (tag) {
+		err = populate_dir(dentry, inode);
+		if (err)
+			return err;
+	}
 	return 0;
 }
 
@@ -463,6 +530,30 @@ static int bpf_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 	return 0;
 }
 
+/* unpopulate_dir - remove pre-populated entries from directory.
+ * @dentry: dentry of directory
+ * @inode: inode of directory
+ *
+ * Called from rmdir.
+ */
+static void unpopulate_dir(struct dentry *dentry, struct inode *inode)
+{
+	struct bpf_dir_tag *tag = inode_tag(inode);
+	struct bpf_inherit_entry *e;
+	struct dentry *child;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(e, &tag->inherit_objects->list, list) {
+		child = d_hash_and_lookup(dentry, &e->name);
+		if (unlikely(IS_ERR(child)))
+			continue;
+
+		simple_unlink(inode, child);
+		dput(child);
+	}
+	rcu_read_unlock();
+}
+
 static void untag_dir_inode(struct inode *dir)
 {
 	struct bpf_dir_tag *tag = inode_tag(dir);
@@ -471,13 +562,16 @@ static void untag_dir_inode(struct inode *dir)
 
 	dir->i_private = NULL;
 	kernfs_put(tag->private);
+	kref_put(&tag->inherit_objects->refcnt, free_obj_list);
 	kfree(tag);
 }
 
 static int bpf_rmdir(struct inode *dir, struct dentry *dentry)
 {
-	if (inode_tag(dir))
+	if (inode_tag(dir)) {
+		unpopulate_dir(dentry, dir);
 		untag_dir_inode(dir);
+	}
 
 	return simple_rmdir(dir, dentry);
 }
