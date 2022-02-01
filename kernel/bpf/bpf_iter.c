@@ -496,6 +496,17 @@ bool bpf_link_is_iter(struct bpf_link *link)
 	return link->ops == &bpf_iter_link_lops;
 }
 
+bool bpf_link_support_inherit(struct bpf_link *link)
+{
+	struct bpf_iter_link *iter_link;
+
+	if (!bpf_link_is_iter(link))
+		return false;
+
+	iter_link = container_of(link, struct bpf_iter_link, link);
+	return iter_link->tinfo->reg_info->feature & BPF_ITER_INHERIT;
+}
+
 int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 			 struct bpf_prog *prog)
 {

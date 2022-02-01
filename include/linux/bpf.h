@@ -1610,6 +1610,7 @@ typedef const struct bpf_func_proto *
 
 enum bpf_iter_feature {
 	BPF_ITER_RESCHED	= BIT(0),
+	BPF_ITER_INHERIT	= BIT(1),
 };
 
 #define BPF_ITER_CTX_ARG_MAX 2
@@ -1647,6 +1648,7 @@ bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
 int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr, struct bpf_prog *prog);
 int bpf_iter_new_fd(struct bpf_link *link);
 bool bpf_link_is_iter(struct bpf_link *link);
+bool bpf_link_support_inherit(struct bpf_link *link);
 struct bpf_prog *bpf_iter_get_info(struct bpf_iter_meta *meta, bool in_stop);
 int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx);
 void bpf_iter_map_show_fdinfo(const struct bpf_iter_aux_info *aux,
