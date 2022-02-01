@@ -16,11 +16,13 @@
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
+#include <linux/kernfs.h>
 #include <linux/kdev_t.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include "preload/bpf_preload.h"
+#include "inode.h"
 
 enum bpf_type {
 	BPF_TYPE_UNSPEC	= 0,
@@ -142,6 +144,52 @@ static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
 	return 0;
 }
 
+static struct bpf_dir_tag *inode_tag(const struct inode *inode)
+{
+	if (unlikely(!S_ISDIR(inode->i_mode)))
+		return NULL;
+
+	return inode->i_private;
+}
+
+/* tag_dir_inode - tag a newly created directory.
+ * @tag: tag of parent directory
+ * @dentry: dentry of the new directory
+ * @inode: inode of the new directory
+ *
+ * Called from bpf_mkdir.
+ */
+static int tag_dir_inode(const struct bpf_dir_tag *tag,
+			 const struct dentry *dentry, struct inode *inode)
+{
+	struct bpf_dir_tag *t;
+	struct kernfs_node *kn;
+
+	WARN_ON(tag->type != BPF_DIR_KERNFS_REP);
+
+	/* kn is put at tag deallocation. */
+	kn = kernfs_find_and_get_ns(tag->private, dentry->d_name.name, NULL);
+	if (unlikely(!kn))
+		return -ENOENT;
+
+	if (unlikely(kernfs_type(kn) != KERNFS_DIR)) {
+		kernfs_put(kn);
+		return -EPERM;
+	}
+
+	t = kzalloc(sizeof(struct bpf_dir_tag), GFP_KERNEL | __GFP_NOWARN);
+	if (unlikely(!t)) {
+		kernfs_put(kn);
+		return -ENOMEM;
+	}
+
+	t->type = tag->type;
+	t->private = kn;
+
+	inode->i_private = t;
+	return 0;
+}
+
 static void bpf_dentry_finalize(struct dentry *dentry, struct inode *inode,
 				struct inode *dir)
 {
@@ -156,6 +204,8 @@ static int bpf_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 		     struct dentry *dentry, umode_t mode)
 {
 	struct inode *inode;
+	struct bpf_dir_tag *tag;
+	int err;
 
 	inode = bpf_get_inode(dir->i_sb, dir, mode | S_IFDIR);
 	if (IS_ERR(inode))
@@ -163,6 +213,15 @@ static int bpf_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 
 	inode->i_op = &bpf_dir_iops;
 	inode->i_fop = &simple_dir_operations;
+
+	tag = inode_tag(dir);
+	if (tag) {
+		err = tag_dir_inode(tag, dentry, inode);
+		if (err) {
+			iput(inode);
+			return err;
+		}
+	}
 
 	inc_nlink(inode);
 	inc_nlink(dir);
@@ -404,11 +463,30 @@ static int bpf_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 	return 0;
 }
 
+static void untag_dir_inode(struct inode *dir)
+{
+	struct bpf_dir_tag *tag = inode_tag(dir);
+
+	WARN_ON(tag->type != BPF_DIR_KERNFS_REP);
+
+	dir->i_private = NULL;
+	kernfs_put(tag->private);
+	kfree(tag);
+}
+
+static int bpf_rmdir(struct inode *dir, struct dentry *dentry)
+{
+	if (inode_tag(dir))
+		untag_dir_inode(dir);
+
+	return simple_rmdir(dir, dentry);
+}
+
 static const struct inode_operations bpf_dir_iops = {
 	.lookup		= bpf_lookup,
 	.mkdir		= bpf_mkdir,
 	.symlink	= bpf_symlink,
-	.rmdir		= simple_rmdir,
+	.rmdir		= bpf_rmdir,
 	.rename		= simple_rename,
 	.link		= simple_link,
 	.unlink		= simple_unlink,
