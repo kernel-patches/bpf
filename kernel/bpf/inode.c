@@ -71,6 +71,7 @@ static void free_obj_list(struct kref *kref)
 	list_for_each_entry(e, &list->list, list) {
 		list_del_rcu(&e->list);
 		bpf_any_put(e->obj, e->type);
+		kfree(e->name.name);
 		kfree(e);
 	}
 	kfree(list);
@@ -486,9 +487,20 @@ static int bpf_mkmap(struct dentry *dentry, umode_t mode, void *arg)
 			     &bpffs_map_fops : &bpffs_obj_fops);
 }
 
+static int
+bpf_inherit_object(struct dentry *dentry, umode_t mode, void *obj,
+		   enum bpf_type type);
+
 static int bpf_mklink(struct dentry *dentry, umode_t mode, void *arg)
 {
 	struct bpf_link *link = arg;
+	int err;
+
+	if (bpf_link_support_inherit(link)) {
+		err = bpf_inherit_object(dentry, mode, link, BPF_TYPE_LINK);
+		if (err)
+			return err;
+	}
 
 	return bpf_mkobj_ops(dentry, mode, arg, &bpf_link_iops,
 			     bpf_link_is_iter(link) ?
@@ -585,6 +597,78 @@ static const struct inode_operations bpf_dir_iops = {
 	.link		= simple_link,
 	.unlink		= simple_unlink,
 };
+
+/* bpf_inherit_object - register an object in a diretory tag's inherit list
+ * @dentry: dentry of the location to pin
+ * @mode: mode of created file entry
+ * @obj: bpf object
+ * @type: type of bpf object
+ *
+ * Could be called from bpf_obj_do_pin() or from mkdir().
+ */
+static int bpf_inherit_object(struct dentry *dentry, umode_t mode,
+			      void *obj, enum bpf_type type)
+{
+	struct inode *dir = d_inode(dentry->d_parent);
+	struct obj_list *inherits;
+	struct bpf_inherit_entry *e;
+	struct bpf_dir_tag *tag;
+	const char *name;
+	bool queued = false, new_tag = false;
+
+	/* allocate bpf_dir_tag */
+	tag = inode_tag(dir);
+	if (!tag) {
+		new_tag = true;
+		tag = kzalloc(sizeof(struct bpf_dir_tag), GFP_KERNEL);
+		if (unlikely(!tag))
+			return -ENOMEM;
+
+		tag->type = BPF_DIR_KERNFS_REP;
+		inherits = kzalloc(sizeof(struct obj_list), GFP_KERNEL);
+		if (unlikely(!inherits)) {
+			kfree(tag);
+			return -ENOMEM;
+		}
+
+		kref_init(&inherits->refcnt);
+		INIT_LIST_HEAD(&inherits->list);
+		tag->inherit_objects = inherits;
+		/* initial tag points to the default root cgroup. */
+		tag->private = cgrp_dfl_root.kf_root->kn;
+		dir->i_private = tag;
+	} else {
+		inherits = tag->inherit_objects;
+	}
+
+	list_for_each_entry_rcu(e, &inherits->list, list) {
+		if (!strcmp(dentry->d_name.name, e->name.name)) {
+			queued = true;
+			break;
+		}
+	}
+
+	/* queue in tag's inherit_list. */
+	if (!queued) {
+		e = kzalloc(sizeof(struct bpf_inherit_entry), GFP_KERNEL);
+		if (!e) {
+			if (new_tag) {
+				kfree(tag);
+				kfree(inherits);
+			}
+			return -ENOMEM;
+		}
+
+		INIT_LIST_HEAD(&e->list);
+		e->mode = mode;
+		e->obj = obj;
+		e->type = type;
+		name = kstrdup(dentry->d_name.name, GFP_USER | __GFP_NOWARN);
+		e->name = (struct qstr)QSTR_INIT(name, strlen(name));
+		list_add_rcu(&e->list, &inherits->list);
+	}
+	return 0;
+}
 
 /* pin iterator link into bpffs */
 static int bpf_iter_link_pin_kernel(struct dentry *parent,
