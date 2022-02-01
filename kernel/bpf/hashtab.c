@@ -780,7 +780,7 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 	key_size = map->key_size;
 
 	if (!key)
-		goto find_first_elem;
+		goto find_first_elem_this_bucket;
 
 	hash = htab_map_hash(key, key_size, htab->hashrnd);
 
@@ -790,7 +790,7 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 	l = lookup_nulls_elem_raw(head, hash, key, key_size, htab->n_buckets);
 
 	if (!l)
-		goto find_first_elem;
+		goto find_first_elem_next_bucket;
 
 	/* key was found, get next key in the same bucket */
 	next_l = hlist_nulls_entry_safe(rcu_dereference_raw(hlist_nulls_next_rcu(&l->hash_node)),
@@ -802,11 +802,12 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 		return 0;
 	}
 
+find_first_elem_next_bucket:
 	/* no more elements in this hash list, go to the next bucket */
 	i = hash & (htab->n_buckets - 1);
 	i++;
 
-find_first_elem:
+find_first_elem_this_bucket:
 	/* iterate over buckets */
 	for (; i < htab->n_buckets; i++) {
 		head = select_bucket(htab, i);
