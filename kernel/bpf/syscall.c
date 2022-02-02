@@ -32,6 +32,7 @@
 #include <linux/bpf-netns.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
+#include <linux/fprobe.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -3015,7 +3016,234 @@ out_put_file:
 	fput(perf_file);
 	return err;
 }
+#else
+static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
 #endif /* CONFIG_PERF_EVENTS */
+
+#ifdef CONFIG_FPROBE
+
+struct bpf_fprobe_link {
+	struct bpf_link link;
+	struct fprobe fp;
+	unsigned long *addrs;
+};
+
+static void bpf_fprobe_link_release(struct bpf_link *link)
+{
+	struct bpf_fprobe_link *fprobe_link;
+
+	fprobe_link = container_of(link, struct bpf_fprobe_link, link);
+	unregister_fprobe(&fprobe_link->fp);
+}
+
+static void bpf_fprobe_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_fprobe_link *fprobe_link;
+
+	fprobe_link = container_of(link, struct bpf_fprobe_link, link);
+	kfree(fprobe_link->addrs);
+	kfree(fprobe_link);
+}
+
+static const struct bpf_link_ops bpf_fprobe_link_lops = {
+	.release = bpf_fprobe_link_release,
+	.dealloc = bpf_fprobe_link_dealloc,
+};
+
+static int fprobe_link_prog_run(struct bpf_fprobe_link *fprobe_link,
+				struct pt_regs *regs)
+{
+	int err;
+
+	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
+		err = 0;
+		goto out;
+	}
+
+	rcu_read_lock();
+	migrate_disable();
+	err = bpf_prog_run(fprobe_link->link.prog, regs);
+	migrate_enable();
+	rcu_read_unlock();
+
+ out:
+	__this_cpu_dec(bpf_prog_active);
+	return err;
+}
+
+static void fprobe_link_entry_handler(struct fprobe *fp, unsigned long entry_ip,
+				      struct pt_regs *regs)
+{
+	unsigned long saved_ip = instruction_pointer(regs);
+	struct bpf_fprobe_link *fprobe_link;
+
+	/*
+	 * Because fprobe's regs->ip is set to the next instruction of
+	 * dynamic-ftrace insturction, correct entry ip must be set, so
+	 * that the bpf program can access entry address via regs as same
+	 * as kprobes.
+	 */
+	instruction_pointer_set(regs, entry_ip);
+
+	fprobe_link = container_of(fp, struct bpf_fprobe_link, fp);
+	fprobe_link_prog_run(fprobe_link, regs);
+
+	instruction_pointer_set(regs, saved_ip);
+}
+
+static void fprobe_link_exit_handler(struct fprobe *fp, unsigned long entry_ip,
+				     struct pt_regs *regs)
+{
+	unsigned long saved_ip = instruction_pointer(regs);
+	struct bpf_fprobe_link *fprobe_link;
+
+	instruction_pointer_set(regs, entry_ip);
+
+	fprobe_link = container_of(fp, struct bpf_fprobe_link, fp);
+	fprobe_link_prog_run(fprobe_link, regs);
+
+	instruction_pointer_set(regs, saved_ip);
+}
+
+static int fprobe_resolve_syms(const void *usyms, u32 cnt,
+			       unsigned long *addrs)
+{
+	unsigned long addr, size;
+	const char **syms;
+	int err = -ENOMEM;
+	unsigned int i;
+	char *func;
+
+	size = cnt * sizeof(*syms);
+	syms = kzalloc(size, GFP_KERNEL);
+	if (!syms)
+		return -ENOMEM;
+
+	func = kzalloc(KSYM_NAME_LEN, GFP_KERNEL);
+	if (!func)
+		goto error;
+
+	if (copy_from_user(syms, usyms, size)) {
+		err = -EFAULT;
+		goto error;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		err = strncpy_from_user(func, syms[i], KSYM_NAME_LEN);
+		if (err == KSYM_NAME_LEN)
+			err = -E2BIG;
+		if (err < 0)
+			goto error;
+
+		err = -EINVAL;
+		if (func[0] == '\0')
+			goto error;
+		addr = kallsyms_lookup_name(func);
+		if (!addr)
+			goto error;
+		if (!kallsyms_lookup_size_offset(addr, &size, NULL))
+			size = MCOUNT_INSN_SIZE;
+		addr = ftrace_location_range(addr, addr + size - 1);
+		if (!addr)
+			goto error;
+		addrs[i] = addr;
+	}
+
+	err = 0;
+error:
+	kfree(syms);
+	kfree(func);
+	return err;
+}
+
+static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_fprobe_link *link = NULL;
+	struct bpf_link_primer link_primer;
+	unsigned long *addrs;
+	u32 flags, cnt, size;
+	void __user *uaddrs;
+	void __user *usyms;
+	int err;
+
+	/* no support for 32bit archs yet */
+	if (sizeof(u64) != sizeof(void *))
+		return -EINVAL;
+
+	if (prog->expected_attach_type != BPF_TRACE_FPROBE)
+		return -EINVAL;
+
+	flags = attr->link_create.fprobe.flags;
+	if (flags & ~BPF_F_FPROBE_RETURN)
+		return -EINVAL;
+
+	uaddrs = u64_to_user_ptr(attr->link_create.fprobe.addrs);
+	usyms = u64_to_user_ptr(attr->link_create.fprobe.syms);
+	if ((!uaddrs && !usyms) || (uaddrs && usyms))
+		return -EINVAL;
+
+	cnt = attr->link_create.fprobe.cnt;
+	if (!cnt)
+		return -EINVAL;
+
+	size = cnt * sizeof(*addrs);
+	addrs = kzalloc(size, GFP_KERNEL);
+	if (!addrs)
+		return -ENOMEM;
+
+	if (uaddrs) {
+		if (copy_from_user(addrs, uaddrs, size)) {
+			err = -EFAULT;
+			goto error;
+		}
+	} else {
+		err = fprobe_resolve_syms(usyms, cnt, addrs);
+		if (err)
+			goto error;
+	}
+
+	link = kzalloc(sizeof(*link), GFP_KERNEL);
+	if (!link) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_FPROBE,
+		      &bpf_fprobe_link_lops, prog);
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err)
+		goto error;
+
+	if (flags & BPF_F_FPROBE_RETURN)
+		link->fp.exit_handler = fprobe_link_exit_handler;
+	else
+		link->fp.entry_handler = fprobe_link_entry_handler;
+
+	link->addrs = addrs;
+
+	err = register_fprobe_ips(&link->fp, addrs, cnt);
+	if (err) {
+		bpf_link_cleanup(&link_primer);
+		return err;
+	}
+
+	return bpf_link_settle(&link_primer);
+
+error:
+	kfree(link);
+	kfree(addrs);
+	return err;
+}
+#else /* !CONFIG_FPROBE */
+static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 #define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.prog_fd
 
@@ -4248,7 +4476,7 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 	return -EINVAL;
 }
 
-#define BPF_LINK_CREATE_LAST_FIELD link_create.iter_info_len
+#define BPF_LINK_CREATE_LAST_FIELD link_create.fprobe.flags
 static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 {
 	enum bpf_prog_type ptype;
@@ -4272,9 +4500,16 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = tracing_bpf_link_attach(attr, uattr, prog);
 		goto out;
 	case BPF_PROG_TYPE_PERF_EVENT:
-	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 		if (attr->link_create.attach_type != BPF_PERF_EVENT) {
+			ret = -EINVAL;
+			goto out;
+		}
+		ptype = prog->type;
+		break;
+	case BPF_PROG_TYPE_KPROBE:
+		if (attr->link_create.attach_type != BPF_PERF_EVENT &&
+		    attr->link_create.attach_type != BPF_TRACE_FPROBE) {
 			ret = -EINVAL;
 			goto out;
 		}
@@ -4311,13 +4546,16 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = bpf_xdp_link_attach(attr, prog);
 		break;
 #endif
-#ifdef CONFIG_PERF_EVENTS
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_TRACEPOINT:
-	case BPF_PROG_TYPE_KPROBE:
 		ret = bpf_perf_link_attach(attr, prog);
 		break;
-#endif
+	case BPF_PROG_TYPE_KPROBE:
+		if (attr->link_create.attach_type == BPF_PERF_EVENT)
+			ret = bpf_perf_link_attach(attr, prog);
+		else
+			ret = bpf_fprobe_link_attach(attr, prog);
+		break;
 	default:
 		ret = -EINVAL;
 	}
