@@ -1484,6 +1484,7 @@ union bpf_attr {
 				__aligned_u64	addrs;
 				__u32		cnt;
 				__u32		flags;
+				__aligned_u64	bpf_cookies;
 			} fprobe;
 		};
 	} link_create;

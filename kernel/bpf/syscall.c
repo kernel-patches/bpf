@@ -33,6 +33,8 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/fprobe.h>
+#include <linux/bsearch.h>
+#include <linux/sort.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -3025,10 +3027,18 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 
 #ifdef CONFIG_FPROBE
 
+struct bpf_fprobe_cookie {
+	unsigned long addr;
+	u64 bpf_cookie;
+};
+
 struct bpf_fprobe_link {
 	struct bpf_link link;
 	struct fprobe fp;
 	unsigned long *addrs;
+	struct bpf_run_ctx run_ctx;
+	struct bpf_fprobe_cookie *bpf_cookies;
+	u32 cnt;
 };
 
 static void bpf_fprobe_link_release(struct bpf_link *link)
@@ -3045,6 +3055,7 @@ static void bpf_fprobe_link_dealloc(struct bpf_link *link)
 
 	fprobe_link = container_of(link, struct bpf_fprobe_link, link);
 	kfree(fprobe_link->addrs);
+	kfree(fprobe_link->bpf_cookies);
 	kfree(fprobe_link);
 }
 
@@ -3053,9 +3064,37 @@ static const struct bpf_link_ops bpf_fprobe_link_lops = {
 	.dealloc = bpf_fprobe_link_dealloc,
 };
 
+static int bpf_fprobe_cookie_cmp(const void *_a, const void *_b)
+{
+	const struct bpf_fprobe_cookie *a = _a;
+	const struct bpf_fprobe_cookie *b = _b;
+
+	if (a->addr == b->addr)
+		return 0;
+	return a->addr < b->addr ? -1 : 1;
+}
+
+u64 bpf_fprobe_cookie(struct bpf_run_ctx *ctx, u64 ip)
+{
+	struct bpf_fprobe_link *fprobe_link;
+	struct bpf_fprobe_cookie *val, key = {
+		.addr = (unsigned long) ip,
+	};
+
+	if (!ctx)
+		return 0;
+	fprobe_link = container_of(ctx, struct bpf_fprobe_link, run_ctx);
+	if (!fprobe_link->bpf_cookies)
+		return 0;
+	val = bsearch(&key, fprobe_link->bpf_cookies, fprobe_link->cnt,
+		      sizeof(key), bpf_fprobe_cookie_cmp);
+	return val ? val->bpf_cookie : 0;
+}
+
 static int fprobe_link_prog_run(struct bpf_fprobe_link *fprobe_link,
 				struct pt_regs *regs)
 {
+	struct bpf_run_ctx *old_run_ctx;
 	int err;
 
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
@@ -3063,11 +3102,15 @@ static int fprobe_link_prog_run(struct bpf_fprobe_link *fprobe_link,
 		goto out;
 	}
 
+	old_run_ctx = bpf_set_run_ctx(&fprobe_link->run_ctx);
+
 	rcu_read_lock();
 	migrate_disable();
 	err = bpf_prog_run(fprobe_link->link.prog, regs);
 	migrate_enable();
 	rcu_read_unlock();
+
+	bpf_reset_run_ctx(old_run_ctx);
 
  out:
 	__this_cpu_dec(bpf_prog_active);
@@ -3161,10 +3204,12 @@ error:
 
 static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
+	struct bpf_fprobe_cookie *bpf_cookies = NULL;
 	struct bpf_fprobe_link *link = NULL;
 	struct bpf_link_primer link_primer;
+	void __user *ubpf_cookies;
+	u32 flags, cnt, i, size;
 	unsigned long *addrs;
-	u32 flags, cnt, size;
 	void __user *uaddrs;
 	void __user *usyms;
 	int err;
@@ -3205,6 +3250,37 @@ static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *p
 			goto error;
 	}
 
+	ubpf_cookies = u64_to_user_ptr(attr->link_create.fprobe.bpf_cookies);
+	if (ubpf_cookies) {
+		u64 *tmp;
+
+		err = -ENOMEM;
+		tmp = kzalloc(size, GFP_KERNEL);
+		if (!tmp)
+			goto error;
+
+		if (copy_from_user(tmp, ubpf_cookies, size)) {
+			kfree(tmp);
+			err = -EFAULT;
+			goto error;
+		}
+
+		size = cnt * sizeof(*bpf_cookies);
+		bpf_cookies = kzalloc(size, GFP_KERNEL);
+		if (!bpf_cookies) {
+			kfree(tmp);
+			goto error;
+		}
+
+		for (i = 0; i < cnt; i++) {
+			bpf_cookies[i].addr = addrs[i];
+			bpf_cookies[i].bpf_cookie = tmp[i];
+		}
+
+		sort(bpf_cookies, cnt, sizeof(*bpf_cookies), bpf_fprobe_cookie_cmp, NULL);
+		kfree(tmp);
+	}
+
 	link = kzalloc(sizeof(*link), GFP_KERNEL);
 	if (!link) {
 		err = -ENOMEM;
@@ -3224,6 +3300,8 @@ static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *p
 		link->fp.entry_handler = fprobe_link_entry_handler;
 
 	link->addrs = addrs;
+	link->bpf_cookies = bpf_cookies;
+	link->cnt = cnt;
 
 	err = register_fprobe_ips(&link->fp, addrs, cnt);
 	if (err) {
@@ -3236,6 +3314,7 @@ static int bpf_fprobe_link_attach(const union bpf_attr *attr, struct bpf_prog *p
 error:
 	kfree(link);
 	kfree(addrs);
+	kfree(bpf_cookies);
 	return err;
 }
 #else /* !CONFIG_FPROBE */
@@ -4476,7 +4555,7 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 	return -EINVAL;
 }
 
-#define BPF_LINK_CREATE_LAST_FIELD link_create.fprobe.flags
+#define BPF_LINK_CREATE_LAST_FIELD link_create.fprobe.bpf_cookies
 static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 {
 	enum bpf_prog_type ptype;
