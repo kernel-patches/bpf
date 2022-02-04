@@ -183,9 +183,9 @@ struct pt_regs {
 			u64 sp;
 			u64 pc;
 			u64 pstate;
+			u64 orig_x0;
 		};
 	};
-	u64 orig_x0;
 #ifdef __AARCH64EB__
 	u32 unused2;
 	s32 syscallno;
