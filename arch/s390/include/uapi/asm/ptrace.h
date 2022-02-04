@@ -295,6 +295,7 @@ typedef struct {
 	unsigned long args[1];
 	psw_t psw;
 	unsigned long gprs[NUM_GPRS];
+	unsigned long orig_gpr2;
 } user_pt_regs;
 
 /*
