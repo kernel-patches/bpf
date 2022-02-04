@@ -101,4 +101,18 @@ int balancer_ingress(struct __sk_buff *ctx)
 	return 0;
 }
 
+typedef int (*func_proto_typedef___match)(long);
+typedef void (*func_proto_typedef___doesnt_match)(char*);
+
+int proto_out[2];
+
+SEC("raw_tracepoint/sys_enter")
+int core_relo_proto(void *ctx)
+{
+	proto_out[0] = bpf_core_type_exists(func_proto_typedef___match);
+	proto_out[1] = bpf_core_type_exists(func_proto_typedef___doesnt_match);
+
+	return 0;
+}
+
 char LICENSE[] SEC("license") = "GPL";

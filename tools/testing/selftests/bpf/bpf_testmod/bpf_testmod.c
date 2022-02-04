@@ -13,6 +13,11 @@
 #define CREATE_TRACE_POINTS
 #include "bpf_testmod-events.h"
 
+typedef int (*func_proto_typedef___match)(long);
+typedef int (*func_proto_typedef___overflow)(func_proto_typedef___match);
+func_proto_typedef___match funcp = NULL;
+func_proto_typedef___overflow funcp_of = NULL;
+
 DEFINE_PER_CPU(int, bpf_testmod_ksym_percpu) = 123;
 
 noinline void
