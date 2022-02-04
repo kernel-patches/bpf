@@ -483,8 +483,12 @@ int main(int argc, char **argv)
 		/* Allow legacy map definitions for skeleton generation.
 		 * It will still be rejected if users use LIBBPF_STRICT_ALL
 		 * mode for loading generated skeleton.
+		 *
+		 * __LIBBPF_STRICT_LAST is the last power-of-2 value used + 1, so to
+		 * get all possible values we compensate last +1, and then (2*x - 1)
+		 * to get the bit mask
 		 */
-		mode = (__LIBBPF_STRICT_LAST - 1) & ~LIBBPF_STRICT_MAP_DEFINITIONS;
+		mode = ((__LIBBPF_STRICT_LAST - 1) * 2 - 1) & ~LIBBPF_STRICT_MAP_DEFINITIONS;
 		ret = libbpf_set_strict_mode(mode);
 		if (ret)
 			p_err("failed to enable libbpf strict mode: %d", ret);

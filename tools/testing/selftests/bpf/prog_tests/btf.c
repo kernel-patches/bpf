@@ -4552,6 +4552,7 @@ static void do_test_file(unsigned int test_num)
 	struct btf_ext *btf_ext = NULL;
 	struct bpf_prog_info info = {};
 	struct bpf_object *obj = NULL;
+	enum libbpf_strict_mode mode;
 	struct bpf_func_info *finfo;
 	struct bpf_program *prog;
 	__u32 info_len, rec_size;
@@ -4579,8 +4580,13 @@ static void do_test_file(unsigned int test_num)
 	has_btf_ext = btf_ext != NULL;
 	btf_ext__free(btf_ext);
 
-	/* temporary disable LIBBPF_STRICT_MAP_DEFINITIONS to test legacy maps */
-	libbpf_set_strict_mode((__LIBBPF_STRICT_LAST - 1) & ~LIBBPF_STRICT_MAP_DEFINITIONS);
+	/* temporary disable LIBBPF_STRICT_MAP_DEFINITIONS to test legacy maps
+	 * __LIBBPF_STRICT_LAST is the last power-of-2 value used + 1, so to
+	 * get all possible values we compensate last +1, and then (2*x - 1)
+	 * to get the bit mask
+	 */
+	mode = ((__LIBBPF_STRICT_LAST - 1) * 2 - 1) & ~LIBBPF_STRICT_MAP_DEFINITIONS
+	libbpf_set_strict_mode(mode);
 	obj = bpf_object__open(test->file);
 	err = libbpf_get_error(obj);
 	if (CHECK(err, "obj: %d", err))
