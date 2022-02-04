@@ -862,6 +862,7 @@ map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 	prev_key = NULL;
 
 	if (wtr) {
+		errno = 0;
 		btf = get_map_kv_btf(info);
 		err = libbpf_get_error(btf);
 		if (err) {
