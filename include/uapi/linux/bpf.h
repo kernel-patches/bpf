@@ -5851,6 +5851,9 @@ struct bpf_link_info {
 			__u32 target_btf_id; /* BTF type id inside the object */
 		} tracing;
 		struct {
+			__u64 bpf_cookie;
+		} perf;
+		struct {
 			__u64 cgroup_id;
 			__u32 attach_type;
 		} cgroup;

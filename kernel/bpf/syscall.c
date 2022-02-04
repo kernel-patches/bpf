@@ -2948,6 +2948,7 @@ static const struct bpf_link_ops bpf_raw_tp_link_lops = {
 struct bpf_perf_link {
 	struct bpf_link link;
 	struct file *perf_file;
+	u64 bpf_cookie;
 };
 
 static void bpf_perf_link_release(struct bpf_link *link)
@@ -2966,9 +2967,20 @@ static void bpf_perf_link_dealloc(struct bpf_link *link)
 	kfree(perf_link);
 }
 
+static int bpf_perf_link_fill_link_info(const struct bpf_link *link,
+					  struct bpf_link_info *info)
+{
+	struct bpf_perf_link *perf_link =
+		container_of(link, struct bpf_perf_link, link);
+
+	info->perf.bpf_cookie = perf_link->bpf_cookie;
+	return 0;
+}
+
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
 	.dealloc = bpf_perf_link_dealloc,
+	.fill_link_info = bpf_perf_link_fill_link_info,
 };
 
 static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
@@ -2993,6 +3005,7 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 	}
 	bpf_link_init(&link->link, BPF_LINK_TYPE_PERF_EVENT, &bpf_perf_link_lops, prog);
 	link->perf_file = perf_file;
+	link->bpf_cookie = attr->link_create.perf_event.bpf_cookie;
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err) {

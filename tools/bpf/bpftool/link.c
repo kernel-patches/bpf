@@ -243,6 +243,8 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 		printf("\n\tnetns_ino %u  ", info->netns.netns_ino);
 		show_link_attach_type_plain(info->netns.attach_type);
 		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		printf("\n\tbpf_cookie %llu  ", info->perf.bpf_cookie);
 	default:
 		break;
 	}
