@@ -32,7 +32,11 @@ int BPF_KPROBE(handle_sys_prctl)
 	if (pid != filter_pid)
 		return 0;
 
+#if SYSCALL_WRAPPER == 1
 	real_regs = (struct pt_regs *)PT_REGS_PARM1(ctx);
+#else
+	real_regs = (struct pt_regs *)ctx;
+#endif
 
 	/* test for PT_REGS_PARM */
 	bpf_probe_read_kernel(&arg1, sizeof(arg1), &PT_REGS_PARM1_SYSCALL(real_regs));
