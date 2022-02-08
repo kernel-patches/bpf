@@ -2380,7 +2380,11 @@ out_image:
 			 *
 			 * Both cases are serious bugs that we should not continue.
 			 */
-			BUG_ON(bpf_jit_binary_pack_finalize(prog, header, rw_header));
+			if (WARN_ON(bpf_jit_binary_pack_finalize(prog, header, rw_header))) {
+				prog = orig_prog;
+				goto out_addrs;
+			}
+
 			bpf_tail_call_direct_fixup(prog);
 		} else {
 			jit_data->addrs = addrs;
