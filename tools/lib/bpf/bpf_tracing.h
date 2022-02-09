@@ -114,9 +114,19 @@
 
 #elif defined(bpf_target_s390)
 
+struct pt_regs___s390 {
+	unsigned long orig_gpr2;
+} __attribute__((preserve_access_index));
+
 /* s390 provides user_pt_regs instead of struct pt_regs to userspace */
 #define __PT_REGS_CAST(x) ((const user_pt_regs *)(x))
 #define __PT_PARM1_REG gprs[2]
+#define PT_REGS_PARM1_SYSCALL(x) ({ \
+	_Pragma("GCC error \"PT_REGS_PARM1_SYSCALL() is not supported on s390, use PT_REGS_PARM1_CORE_SYSCALL() instead\""); \
+	0l; \
+})
+#define PT_REGS_PARM1_CORE_SYSCALL(x) \
+	BPF_CORE_READ((const struct pt_regs___s390 *)(x), orig_gpr2)
 #define __PT_PARM2_REG gprs[3]
 #define __PT_PARM3_REG gprs[4]
 #define __PT_PARM4_REG gprs[5]
