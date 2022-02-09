@@ -2,6 +2,7 @@
 #include <test_progs.h>
 #include "progs/core_reloc_types.h"
 #include "bpf_testmod/bpf_testmod.h"
+#include <linux/limits.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <bpf/btf.h>
@@ -353,6 +354,8 @@ static int duration = 0;
 	ENUMVAL_CASE_COMMON(name),					\
 	.fails = true,							\
 }
+
+#define BTFGEN_BTF_PATH "/tmp/btfgen.btf"
 
 struct core_reloc_test_case;
 
@@ -836,7 +839,21 @@ static size_t roundup_page(size_t sz)
 	return (sz + page_size - 1) / page_size * page_size;
 }
 
-void test_core_reloc(void)
+static int run_btfgen(const char *src_btf, const char *dst_btf, const char *objpath)
+{
+	char command[4096];
+	int n;
+
+	n = snprintf(command, sizeof(command),
+		     "./tools/build/bpftool/bpftool gen min_core_btf %s %s %s",
+		     src_btf, dst_btf, objpath);
+	if (n < 0 || n >= sizeof(command))
+		return -1;
+
+	return system(command);
+}
+
+static void _test_core_reloc(bool btfgen)
 {
 	const size_t mmap_sz = roundup_page(sizeof(struct data));
 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, open_opts);
@@ -861,6 +878,22 @@ void test_core_reloc(void)
 		if (test_case->needs_testmod && !env.has_testmod) {
 			test__skip();
 			continue;
+		}
+
+		/* generate a "minimal" BTF file and use it as source */
+		if (btfgen) {
+			if (!test_case->btf_src_file || test_case->fails) {
+				test__skip();
+				continue;
+			}
+
+			unlink(BTFGEN_BTF_PATH);
+			err = run_btfgen(test_case->btf_src_file, BTFGEN_BTF_PATH,
+					 test_case->bpf_obj_file);
+			if (!ASSERT_OK(err, "run_btfgen"))
+				goto cleanup;
+
+			test_case->btf_src_file = BTFGEN_BTF_PATH;
 		}
 
 		if (test_case->setup) {
@@ -954,8 +987,19 @@ cleanup:
 			CHECK_FAIL(munmap(mmap_data, mmap_sz));
 			mmap_data = NULL;
 		}
+		unlink(BTFGEN_BTF_PATH);
 		bpf_link__destroy(link);
 		link = NULL;
 		bpf_object__close(obj);
 	}
+}
+
+void test_core_reloc(void)
+{
+	_test_core_reloc(false);
+}
+
+void test_core_btfgen(void)
+{
+	_test_core_reloc(true);
 }
