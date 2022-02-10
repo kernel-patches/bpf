@@ -97,6 +97,9 @@ void test_skeleton(void)
 
 	skel->data_read_mostly->read_mostly_var = 123;
 
+	/* validate apparent 64-bit value is actually 32-bit */
+	skel->data->intest64 = (typeof(skel->data->intest64)) 0xdeadbeefdeadbeefULL;
+
 	err = test_skeleton__attach(skel);
 	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
 		goto cleanup;
@@ -125,6 +128,9 @@ void test_skeleton(void)
 	elf_bytes = test_skeleton__elf_bytes(&elf_bytes_sz);
 	ASSERT_OK_PTR(elf_bytes, "elf_bytes");
 	ASSERT_GE(elf_bytes_sz, 0, "elf_bytes_sz");
+
+	ASSERT_EQ(skel->data->outtest64, skel->data->intest64, "writes and reads match size");
+	ASSERT_EQ(sizeof(skel->data->intest64), sizeof(u32), "skeleton uses underlying type");
 
 cleanup:
 	test_skeleton__destroy(skel);

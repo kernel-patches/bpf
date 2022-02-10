@@ -16,6 +16,13 @@ struct s {
 int in1 = -1;
 long long in2 = -1;
 
+/* declare the int64_t type to actually be 32-bit to ensure the skeleton
+ * uses actual sizes and doesn't just copy the type name
+ */
+typedef __s32 int64_t;
+int64_t intest64 = -1;
+int64_t outtest64 = -1;
+
 /* .bss section */
 char in3 = '\0';
 long long in4 __attribute__((aligned(64))) = 0;
@@ -62,6 +69,7 @@ int handler(const void *ctx)
 	out4 = in4;
 	out5 = in5;
 	out6 = in.in6;
+	outtest64 = intest64;
 
 	bpf_syscall = CONFIG_BPF_SYSCALL;
 	kern_ver = LINUX_KERNEL_VERSION;
