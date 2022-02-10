@@ -146,6 +146,7 @@ static int codegen_datasec_def(struct bpf_object *obj,
 			.field_name = var_ident,
 			.indent_level = 2,
 			.strip_mods = strip_mods,
+			.sizedints = true,
 		);
 		int need_off = sec_var->offset, align_off, align;
 		__u32 var_type_id = var->type;
@@ -751,6 +752,7 @@ static int do_skeleton(int argc, char **argv)
 		#ifndef %2$s						    \n\
 		#define %2$s						    \n\
 									    \n\
+		#include <inttypes.h>					    \n\
 		#include <stdlib.h>					    \n\
 		#include <bpf/bpf.h>					    \n\
 		#include <bpf/skel_internal.h>				    \n\
@@ -770,6 +772,7 @@ static int do_skeleton(int argc, char **argv)
 		#define %2$s						    \n\
 									    \n\
 		#include <errno.h>					    \n\
+		#include <inttypes.h>					    \n\
 		#include <stdlib.h>					    \n\
 		#include <bpf/libbpf.h>					    \n\
 									    \n\
