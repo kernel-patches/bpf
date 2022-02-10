@@ -347,9 +347,11 @@ struct btf_dump_emit_type_decl_opts {
 	int indent_level;
 	/* strip all the const/volatile/restrict mods */
 	bool strip_mods;
+	/* normalize int fields to (u)?int(16|32|64)_t types */
+	bool sizedints;
 	size_t :0;
 };
-#define btf_dump_emit_type_decl_opts__last_field strip_mods
+#define btf_dump_emit_type_decl_opts__last_field sizedints
 
 LIBBPF_API int
 btf_dump__emit_type_decl(struct btf_dump *d, __u32 id,

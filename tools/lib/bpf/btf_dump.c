@@ -81,6 +81,7 @@ struct btf_dump {
 	void *cb_ctx;
 	int ptr_sz;
 	bool strip_mods;
+	bool sizedints;
 	bool skip_anon_defs;
 	int last_id;
 
@@ -1130,7 +1131,9 @@ int btf_dump__emit_type_decl(struct btf_dump *d, __u32 id,
 	fname = OPTS_GET(opts, field_name, "");
 	lvl = OPTS_GET(opts, indent_level, 0);
 	d->strip_mods = OPTS_GET(opts, strip_mods, false);
+	d->sizedints = OPTS_GET(opts, sizedints, false);
 	btf_dump_emit_type_decl(d, id, fname, lvl);
+	d->sizedints = false;
 	d->strip_mods = false;
 	return 0;
 }
@@ -1263,6 +1266,34 @@ static void btf_dump_emit_name(const struct btf_dump *d,
 	btf_dump_printf(d, "%s%s", separate ? " " : "", name);
 }
 
+/* Encode custom heurstics to find char types since BTF_INT_CHAR is never set. */
+static bool btf_is_char(const struct btf_dump *d, const struct btf_type *t)
+{
+	return btf_is_int(t) &&
+	       t->size == 1 &&
+	       strcmp(btf_name_of(d, t->name_off), "char") == 0;
+}
+
+static bool btf_is_bool(const struct btf_type *t)
+{
+	return btf_is_int(t) && (btf_int_encoding(t) & BTF_INT_BOOL);
+}
+
+/* returns true if type is of the '__[su](8|16|32|64)' type */
+static bool btf_is_kernel_sizedint(const struct btf_dump *d, const struct btf_type *t)
+{
+	const char *name = btf_name_of(d, t->name_off);
+
+	return strcmp(name, "__s8") == 0 ||
+	       strcmp(name, "__u8") == 0 ||
+	       strcmp(name, "__s16") == 0 ||
+	       strcmp(name, "__u16") == 0 ||
+	       strcmp(name, "__s32") == 0 ||
+	       strcmp(name, "__u32") == 0 ||
+	       strcmp(name, "__s64") == 0 ||
+	       strcmp(name, "__u64") == 0;
+}
+
 static void btf_dump_emit_type_chain(struct btf_dump *d,
 				     struct id_stack *decls,
 				     const char *fname, int lvl)
@@ -1277,10 +1308,12 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 	 * don't want to prepend space for that last pointer.
 	 */
 	bool last_was_ptr = true;
-	const struct btf_type *t;
+	const struct btf_type *t, *rest;
 	const char *name;
 	__u16 kind;
 	__u32 id;
+	__u8 intenc;
+	int restypeid;
 
 	while (decls->cnt) {
 		id = decls->ids[--decls->cnt];
@@ -1295,8 +1328,51 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 		t = btf__type_by_id(d->btf, id);
 		kind = btf_kind(t);
 
+		/* If we're asked to produce stdint declarations, we need
+		 * to only do that in the following cases:
+		 *  - int types other than char and _Bool
+		 *  - typedefs to int types (including char and _Bool) except
+		 *    kernel types like __s16/__u32/etc.
+		 *
+		 * If a typedef resolves to char or _Bool, we do want to use
+		 * the resolved type instead of the stdint types (i.e. char
+		 * instead of int8_t) because the stdint types are explicitly
+		 * signed/unsigned, which affects pointer casts.
+		 *
+		 * If the typedef is of the __s32 variety, we leave it as-is
+		 * due to incompatibilities in e.g. s64 vs int64_t definitions
+		 * (one is `long long` on x86_64 and the other is not).
+		 *
+		 * Unfortunately, the BTF type info never includes BTF_INT_CHAR,
+		 * so we use a size comparison to avoid chars and
+		 * BTF_INT_BOOL to avoid bools.
+		 */
+		if (d->sizedints && kind == BTF_KIND_TYPEDEF &&
+		    !btf_is_kernel_sizedint(d, t)) {
+			restypeid = btf__resolve_type(d->btf, id);
+			if (restypeid >= 0) {
+				rest = btf__type_by_id(d->btf, restypeid);
+				if (rest && btf_is_int(rest)) {
+					t = rest;
+					kind = btf_kind(rest);
+				}
+			}
+		}
+
 		switch (kind) {
 		case BTF_KIND_INT:
+			btf_dump_emit_mods(d, decls);
+			if (d->sizedints && !btf_is_bool(t) && !btf_is_char(d, t)) {
+				intenc = btf_int_encoding(t);
+				btf_dump_printf(d,
+						intenc & BTF_INT_SIGNED ?
+						"int%d_t" : "uint%d_t",
+						t->size * 8);
+			} else {
+				name = btf_name_of(d, t->name_off);
+				btf_dump_printf(d, "%s", name);
+			}
+			break;
 		case BTF_KIND_FLOAT:
 			btf_dump_emit_mods(d, decls);
 			name = btf_name_of(d, t->name_off);
@@ -1469,7 +1545,9 @@ static void btf_dump_emit_type_cast(struct btf_dump *d, __u32 id,
 
 	d->skip_anon_defs = true;
 	d->strip_mods = true;
+	d->sizedints = true;
 	btf_dump_emit_type_decl(d, id, "", 0);
+	d->sizedints = false;
 	d->strip_mods = false;
 	d->skip_anon_defs = false;
 
