@@ -1498,7 +1498,6 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 	struct veth_priv *priv = netdev_priv(dev);
 	struct bpf_prog *old_prog;
 	struct net_device *peer;
-	unsigned int max_mtu;
 	int err;
 
 	old_prog = priv->_xdp_prog;
@@ -1506,6 +1505,8 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 	peer = rtnl_dereference(priv->peer);
 
 	if (prog) {
+		unsigned int max_mtu;
+
 		if (!peer) {
 			NL_SET_ERR_MSG_MOD(extack, "Cannot set XDP when peer is detached");
 			err = -ENOTCONN;
@@ -1515,9 +1516,9 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 		max_mtu = PAGE_SIZE - VETH_XDP_HEADROOM -
 			  peer->hard_header_len -
 			  SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-		if (peer->mtu > max_mtu) {
-			NL_SET_ERR_MSG_MOD(extack, "Peer MTU is too large to set XDP");
-			err = -ERANGE;
+		if (!prog->aux->xdp_has_frags && peer->mtu > max_mtu) {
+			NL_SET_ERR_MSG_MOD(extack, "prog does not support XDP frags");
+			err = -EOPNOTSUPP;
 			goto err;
 		}
 
@@ -1535,10 +1536,8 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			}
 		}
 
-		if (!old_prog) {
-			peer->hw_features &= ~NETIF_F_GSO_SOFTWARE;
-			peer->max_mtu = max_mtu;
-		}
+		if (!old_prog)
+			peer->hw_features &= ~NETIF_F_GSO_FRAGLIST;
 	}
 
 	if (old_prog) {
@@ -1546,10 +1545,8 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			if (dev->flags & IFF_UP)
 				veth_disable_xdp(dev);
 
-			if (peer) {
-				peer->hw_features |= NETIF_F_GSO_SOFTWARE;
-				peer->max_mtu = ETH_MAX_MTU;
-			}
+			if (peer)
+				peer->hw_features |= NETIF_F_GSO_FRAGLIST;
 		}
 		bpf_prog_put(old_prog);
 	}
