@@ -1252,6 +1252,7 @@ struct bpf_stack_build_id {
 };
 
 #define BPF_OBJ_NAME_LEN 16U
+#define BPF_PIN_NAME_LEN 64U
 
 union bpf_attr {
 	struct { /* anonymous struct used by BPF_MAP_CREATE command */

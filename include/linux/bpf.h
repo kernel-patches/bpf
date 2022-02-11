@@ -996,6 +996,8 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+
+	char pin_name[BPF_PIN_NAME_LEN];
 };
 
 struct bpf_array_aux {

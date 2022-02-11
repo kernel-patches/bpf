@@ -438,6 +438,8 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 			  enum bpf_type type)
 {
+	struct bpf_prog_aux *aux;
+	struct bpf_prog *prog;
 	struct dentry *dentry;
 	struct inode *dir;
 	struct path path;
@@ -462,6 +464,10 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 
 	switch (type) {
 	case BPF_TYPE_PROG:
+		prog = raw;
+		aux = prog->aux;
+		(void) strncpy_from_user(aux->pin_name, pathname, BPF_PIN_NAME_LEN);
+		aux->pin_name[BPF_PIN_NAME_LEN - 1] = '\0';
 		ret = vfs_mkobj(dentry, mode, bpf_mkprog, raw);
 		break;
 	case BPF_TYPE_MAP:
@@ -612,12 +618,24 @@ static int bpf_show_options(struct seq_file *m, struct dentry *root)
 
 static void bpf_free_inode(struct inode *inode)
 {
+	struct bpf_prog_aux *aux;
+	struct bpf_prog *prog;
 	enum bpf_type type;
 
 	if (S_ISLNK(inode->i_mode))
 		kfree(inode->i_link);
-	if (!bpf_inode_type(inode, &type))
+	if (!bpf_inode_type(inode, &type)) {
+		switch (type) {
+		case BPF_TYPE_PROG:
+			prog = inode->i_private;
+			aux = prog->aux;
+			aux->pin_name[0] = '\0';
+			break;
+		default:
+			break;
+		}
 		bpf_any_put(inode->i_private, type);
+	}
 	free_inode_nonrcu(inode);
 }
 
