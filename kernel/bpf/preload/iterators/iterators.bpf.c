@@ -46,6 +46,8 @@ struct bpf_prog_aux {
 	struct bpf_func_info *func_info;
 	struct btf *btf;
 	char pin_name[64];
+	__u32 used_map_cnt;
+	struct bpf_map **used_maps;
 };
 
 struct bpf_prog {
@@ -101,6 +103,9 @@ int dump_bpf_prog(struct bpf_iter__bpf_prog *ctx)
 	__u64 seq_num = ctx->meta->seq_num;
 	struct bpf_prog *prog = ctx->prog;
 	struct bpf_prog_aux *aux;
+	struct bpf_map *map;
+	__u32 id;
+	__u32 i;
 
 	if (!prog)
 		return 0;
@@ -114,6 +119,18 @@ int dump_bpf_prog(struct bpf_iter__bpf_prog *ctx)
 		       get_name(aux->btf, aux->func_info[0].type_id, aux->name),
 		       aux->attach_func_name, aux->pin_name,
 			   aux->dst_prog->aux->name);
+
+	if (!aux->used_map_cnt)
+		return 0;
+
+	BPF_SEQ_PRINTF(seq, "    maps:");
+	for (i = 0; i < aux->used_map_cnt && i < 64; i++) {
+		bpf_probe_read_kernel(&map, sizeof(map), aux->used_maps + i);
+		id = BPF_CORE_READ(map, id);
+		BPF_SEQ_PRINTF(seq, " %u", id);
+	}
+	BPF_SEQ_PRINTF(seq, "\n");
+
 	return 0;
 }
 char LICENSE[] SEC("license") = "GPL";
