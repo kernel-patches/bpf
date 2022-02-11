@@ -26,6 +26,7 @@
 #include <linux/ima.h>
 #include <linux/iversion.h>
 #include <linux/fs.h>
+#include <linux/fs_struct.h>
 
 #include "ima.h"
 
@@ -521,15 +522,43 @@ EXPORT_SYMBOL_GPL(ima_file_check);
 
 static int __ima_inode_hash(struct inode *inode, char *buf, size_t buf_size)
 {
-	struct integrity_iint_cache *iint;
-	int hash_algo;
+	struct integrity_iint_cache *iint = NULL, tmp_iint;
+	struct file *file;
+	struct path root, path;
+	int rc, hash_algo;
 
-	if (!ima_policy_flag)
-		return -EOPNOTSUPP;
+	if (ima_policy_flag)
+		iint = integrity_iint_find(inode);
 
-	iint = integrity_iint_find(inode);
-	if (!iint)
-		return -EOPNOTSUPP;
+	if (!iint) {
+		memset(&tmp_iint, 0, sizeof(tmp_iint));
+		tmp_iint.inode = inode;
+		iint = &tmp_iint;
+
+		path.dentry = d_find_alias(inode);
+		if (!path.dentry)
+			return -EOPNOTSUPP;
+
+		get_fs_root(current->fs, &root);
+		path.mnt = root.mnt;
+
+		file = dentry_open(&path, O_RDONLY, current_cred());
+		if (IS_ERR(file)) {
+			dput(path.dentry);
+			path_put(&root);
+			return -EOPNOTSUPP;
+		}
+
+		rc = ima_collect_measurement(iint, file, NULL, 0, ima_hash_algo,
+					     NULL);
+
+		fput(file);
+		dput(path.dentry);
+		path_put(&root);
+
+		if (rc != 0)
+			return -EOPNOTSUPP;
+	}
 
 	mutex_lock(&iint->mutex);
 
@@ -550,6 +579,9 @@ static int __ima_inode_hash(struct inode *inode, char *buf, size_t buf_size)
 	}
 	hash_algo = iint->ima_hash->algo;
 	mutex_unlock(&iint->mutex);
+
+	if (iint == &tmp_iint)
+		kfree(iint->ima_hash);
 
 	return hash_algo;
 }
