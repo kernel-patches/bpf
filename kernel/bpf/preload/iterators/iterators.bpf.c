@@ -16,6 +16,7 @@ struct bpf_map {
 	__u32 id;
 	char name[16];
 	__u32 max_entries;
+	char pin_name[64];
 };
 
 struct bpf_iter__bpf_map {
@@ -44,6 +45,7 @@ struct bpf_prog_aux {
 	struct bpf_prog *dst_prog;
 	struct bpf_func_info *func_info;
 	struct btf *btf;
+	char pin_name[64];
 };
 
 struct bpf_prog {
@@ -84,9 +86,11 @@ int dump_bpf_map(struct bpf_iter__bpf_map *ctx)
 		return 0;
 
 	if (seq_num == 0)
-		BPF_SEQ_PRINTF(seq, "  id name             max_entries\n");
+		BPF_SEQ_PRINTF(seq, "%4s %-16s %-12s %s\n",
+						"id", "name", "max_entries", "pinned");
 
-	BPF_SEQ_PRINTF(seq, "%4u %-16s%6d\n", map->id, map->name, map->max_entries);
+	BPF_SEQ_PRINTF(seq, "%4u %-16s %-12d %s\n",
+					map->id, map->name, map->max_entries, map->pin_name);
 	return 0;
 }
 
@@ -103,11 +107,13 @@ int dump_bpf_prog(struct bpf_iter__bpf_prog *ctx)
 
 	aux = prog->aux;
 	if (seq_num == 0)
-		BPF_SEQ_PRINTF(seq, "  id name             attached\n");
+		BPF_SEQ_PRINTF(seq, "%4s %-16s %-16s %s\n",
+						"id", "name", "attached", "pinned");
 
-	BPF_SEQ_PRINTF(seq, "%4u %-16s %s %s\n", aux->id,
+	BPF_SEQ_PRINTF(seq, "%4u %-16s %-16s %s %s\n", aux->id,
 		       get_name(aux->btf, aux->func_info[0].type_id, aux->name),
-		       aux->attach_func_name, aux->dst_prog->aux->name);
+		       aux->attach_func_name, aux->pin_name,
+			   aux->dst_prog->aux->name);
 	return 0;
 }
 char LICENSE[] SEC("license") = "GPL";
