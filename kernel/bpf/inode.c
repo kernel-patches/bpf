@@ -441,6 +441,7 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	struct bpf_prog_aux *aux;
 	struct bpf_prog *prog;
 	struct dentry *dentry;
+	struct bpf_map *map;
 	struct inode *dir;
 	struct path path;
 	umode_t mode;
@@ -471,6 +472,9 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 		ret = vfs_mkobj(dentry, mode, bpf_mkprog, raw);
 		break;
 	case BPF_TYPE_MAP:
+		map = raw;
+		(void) strncpy_from_user(map->pin_name, pathname, BPF_PIN_NAME_LEN);
+		map->pin_name[BPF_PIN_NAME_LEN - 1] = '\0';
 		ret = vfs_mkobj(dentry, mode, bpf_mkmap, raw);
 		break;
 	case BPF_TYPE_LINK:
@@ -620,6 +624,7 @@ static void bpf_free_inode(struct inode *inode)
 {
 	struct bpf_prog_aux *aux;
 	struct bpf_prog *prog;
+	struct bpf_map *map;
 	enum bpf_type type;
 
 	if (S_ISLNK(inode->i_mode))
@@ -630,6 +635,10 @@ static void bpf_free_inode(struct inode *inode)
 			prog = inode->i_private;
 			aux = prog->aux;
 			aux->pin_name[0] = '\0';
+			break;
+		case BPF_TYPE_MAP:
+			map = inode->i_private;
+			map->pin_name[0] = '\0';
 			break;
 		default:
 			break;
