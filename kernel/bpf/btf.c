@@ -3187,6 +3187,16 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 	return -EINVAL;
 }
 
+int btf_find_str_key_stor(const struct btf *btf, const struct btf_type *t)
+{
+	if (!__btf_type_is_struct(t))
+		return -EINVAL;
+
+	return btf_find_struct_field(btf, t, "bpf_str_key_stor",
+				     sizeof(struct bpf_str_key_stor),
+				     __alignof__(struct bpf_str_key_stor));
+}
+
 /* find 'struct bpf_spin_lock' in map value.
  * return >= 0 offset if found
  * and < 0 in case of error
@@ -7280,4 +7290,33 @@ out:
 			print_cand_cache(ctx->log);
 	}
 	return err;
+}
+
+int btf_find_array_at(const struct btf *btf, const struct btf_type *t,
+		      unsigned int at, unsigned int nelems)
+{
+	const struct btf_member *member;
+	u32 i, off;
+
+	for_each_member(i, t, member) {
+		const struct btf_type *member_type = btf_type_by_id(btf, member->type);
+		const struct btf_array *array;
+
+		if (!btf_type_is_array(member_type))
+			continue;
+
+		off = __btf_member_bit_offset(t, member);
+		if (off % 8)
+			return -EINVAL;
+		off /= 8;
+		if (off != at)
+			continue;
+
+		array = btf_type_array(member_type);
+		if (array->nelems == nelems)
+			return off;
+		break;
+	}
+
+	return -ENOENT;
 }

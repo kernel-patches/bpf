@@ -1218,6 +1218,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Flag for hash_map, there is string in hash key */
+	BPF_F_STR_IN_KEY	= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -6563,6 +6566,22 @@ struct bpf_core_relo {
 	__u32 type_id;
 	__u32 access_str_off;
 	enum bpf_core_relo_kind kind;
+};
+
+struct bpf_str_key_desc {
+	/* the relative offset of string */
+	__u32 offset;
+	/* the length of string (include the trailing zero) */
+	__u32 len;
+};
+
+struct bpf_str_key_stor {
+	/* the total length of string */
+	__u32 len;
+	/* the hash of string */
+	__u32 hash;
+	/* the content of string */
+	unsigned char raw[0];
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */
