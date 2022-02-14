@@ -190,12 +190,14 @@ extern struct argp bench_ringbufs_argp;
 extern struct argp bench_bloom_map_argp;
 extern struct argp bench_bpf_loop_argp;
 extern struct argp bench_strncmp_argp;
+extern struct argp bench_str_htab_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
 	{ &bench_bloom_map_argp, 0, "Bloom filter map benchmark", 0 },
 	{ &bench_bpf_loop_argp, 0, "bpf_loop helper benchmark", 0 },
 	{ &bench_strncmp_argp, 0, "bpf_strncmp helper benchmark", 0 },
+	{ &bench_str_htab_argp, 0, "string htab benchmark", 0 },
 	{},
 };
 
@@ -397,6 +399,12 @@ extern const struct bench bench_hashmap_with_bloom;
 extern const struct bench bench_bpf_loop;
 extern const struct bench bench_strncmp_no_helper;
 extern const struct bench bench_strncmp_helper;
+extern const struct bench bench_htab_byte_lookup;
+extern const struct bench bench_htab_str_lookup;
+extern const struct bench bench_htab_int_byte_lookup;
+extern const struct bench bench_htab_int_str_lookup;
+extern const struct bench bench_htab_int_bytes_lookup;
+extern const struct bench bench_htab_int_strs_lookup;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -431,6 +439,12 @@ static const struct bench *benchs[] = {
 	&bench_bpf_loop,
 	&bench_strncmp_no_helper,
 	&bench_strncmp_helper,
+	&bench_htab_byte_lookup,
+	&bench_htab_str_lookup,
+	&bench_htab_int_byte_lookup,
+	&bench_htab_int_str_lookup,
+	&bench_htab_int_bytes_lookup,
+	&bench_htab_int_strs_lookup,
 };
 
 static void setup_benchmark()
