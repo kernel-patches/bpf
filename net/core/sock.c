@@ -923,8 +923,6 @@ static void __sock_set_rcvbuf(struct sock *sk, int val)
 	 * as a negative value.
 	 */
 	val = min_t(int, val, INT_MAX / 2);
-	sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
-
 	/* We double it on the way in to account for "struct sk_buff" etc.
 	 * overhead.   Applications assume that the SO_RCVBUF setting they make
 	 * will allow that much actual data to be received on that socket.
@@ -935,7 +933,11 @@ static void __sock_set_rcvbuf(struct sock *sk, int val)
 	 * And after considering the possible alternatives, returning the value
 	 * we actually used in getsockopt is the most desirable behavior.
 	 */
-	WRITE_ONCE(sk->sk_rcvbuf, max_t(int, val * 2, SOCK_MIN_RCVBUF));
+	val = max_t(int, val * 2, SOCK_MIN_RCVBUF);
+	if (val < sock_net(sk)->ipv4.sysctl_tcp_rmem[1])
+		sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
+
+	WRITE_ONCE(sk->sk_rcvbuf, val);
 }
 
 void sock_set_rcvbuf(struct sock *sk, int val)
