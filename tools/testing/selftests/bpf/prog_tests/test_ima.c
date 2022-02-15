@@ -97,8 +97,9 @@ void test_test_ima(void)
 	/*
 	 * 1 sample with use_ima_file_hash = false
 	 * 2 samples with use_ima_file_hash = true (./ima_setup.sh, /bin/true)
+	 * 1 sample with use_ima_file_hash = true (IMA policy)
 	 */
-	ASSERT_EQ(err, 3, "num_samples_or_err");
+	ASSERT_EQ(err, 4, "num_samples_or_err");
 	ASSERT_NEQ(ima_hash_from_bpf, 0, "ima_hash");
 
 close_clean:

@@ -20,8 +20,7 @@ char _license[] SEC("license") = "GPL";
 
 bool use_ima_file_hash;
 
-SEC("lsm.s/bprm_committed_creds")
-void BPF_PROG(ima, struct linux_binprm *bprm)
+static void ima_test_common(struct file *file)
 {
 	u64 ima_hash = 0;
 	u64 *sample;
@@ -31,10 +30,10 @@ void BPF_PROG(ima, struct linux_binprm *bprm)
 	pid = bpf_get_current_pid_tgid() >> 32;
 	if (pid == monitored_pid) {
 		if (!use_ima_file_hash)
-			ret = bpf_ima_inode_hash(bprm->file->f_inode, &ima_hash,
+			ret = bpf_ima_inode_hash(file->f_inode, &ima_hash,
 						 sizeof(ima_hash));
 		else
-			ret = bpf_ima_file_hash(bprm->file, &ima_hash,
+			ret = bpf_ima_file_hash(file, &ima_hash,
 						sizeof(ima_hash));
 		if (ret < 0 || ima_hash == 0)
 			return;
@@ -48,4 +47,25 @@ void BPF_PROG(ima, struct linux_binprm *bprm)
 	}
 
 	return;
+}
+
+SEC("lsm.s/bprm_committed_creds")
+void BPF_PROG(ima, struct linux_binprm *bprm)
+{
+	ima_test_common(bprm->file);
+}
+
+SEC("lsm.s/kernel_read_file")
+int BPF_PROG(kernel_read_file, struct file *file, enum kernel_read_file_id id,
+	     bool contents)
+{
+	if (!contents)
+		return 0;
+
+	if (id != READING_POLICY)
+		return 0;
+
+	ima_test_common(file);
+
+	return 0;
 }

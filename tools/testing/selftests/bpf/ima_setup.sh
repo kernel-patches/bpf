@@ -51,6 +51,7 @@ setup()
 
 	ensure_mount_securityfs
 	echo "measure func=BPRM_CHECK fsuuid=${mount_uuid}" > ${IMA_POLICY_FILE}
+	echo "measure func=BPRM_CHECK fsuuid=${mount_uuid}" > ${mount_dir}/policy_test
 }
 
 cleanup() {
@@ -74,6 +75,7 @@ run()
 	local mount_dir="${tmp_dir}/mnt"
 	local copied_bin_path="${mount_dir}/$(basename ${TEST_BINARY})"
 
+	echo ${mount_dir}/policy_test > ${IMA_POLICY_FILE}
 	exec "${copied_bin_path}"
 }
 
