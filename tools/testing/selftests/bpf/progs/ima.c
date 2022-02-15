@@ -18,6 +18,8 @@ struct {
 
 char _license[] SEC("license") = "GPL";
 
+bool use_ima_file_hash;
+
 SEC("lsm.s/bprm_committed_creds")
 void BPF_PROG(ima, struct linux_binprm *bprm)
 {
@@ -28,8 +30,12 @@ void BPF_PROG(ima, struct linux_binprm *bprm)
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	if (pid == monitored_pid) {
-		ret = bpf_ima_inode_hash(bprm->file->f_inode, &ima_hash,
-					 sizeof(ima_hash));
+		if (!use_ima_file_hash)
+			ret = bpf_ima_inode_hash(bprm->file->f_inode, &ima_hash,
+						 sizeof(ima_hash));
+		else
+			ret = bpf_ima_file_hash(bprm->file, &ima_hash,
+						sizeof(ima_hash));
 		if (ret < 0 || ima_hash == 0)
 			return;
 

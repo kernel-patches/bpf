@@ -13,13 +13,29 @@
 
 #include "ima.skel.h"
 
-static int run_measured_process(const char *measured_dir, u32 *monitored_pid)
+static int run_measured_process(const char *measured_dir, u32 *monitored_pid,
+				bool *use_ima_file_hash)
 {
-	int child_pid, child_status;
+	int err, child_pid, child_status;
 
 	child_pid = fork();
 	if (child_pid == 0) {
 		*monitored_pid = getpid();
+		execlp("./ima_setup.sh", "./ima_setup.sh", "run", measured_dir,
+		       NULL);
+		exit(errno);
+
+	} else if (child_pid > 0) {
+		waitpid(child_pid, &child_status, 0);
+		err = WEXITSTATUS(child_status);
+		if (err)
+			return err;
+	}
+
+	child_pid = fork();
+	if (child_pid == 0) {
+		*monitored_pid = getpid();
+		*use_ima_file_hash = true;
 		execlp("./ima_setup.sh", "./ima_setup.sh", "run", measured_dir,
 		       NULL);
 		exit(errno);
@@ -72,12 +88,17 @@ void test_test_ima(void)
 	if (CHECK(err, "failed to run command", "%s, errno = %d\n", cmd, errno))
 		goto close_clean;
 
-	err = run_measured_process(measured_dir, &skel->bss->monitored_pid);
+	err = run_measured_process(measured_dir, &skel->bss->monitored_pid,
+				   &skel->bss->use_ima_file_hash);
 	if (CHECK(err, "run_measured_process", "err = %d\n", err))
 		goto close_clean;
 
 	err = ring_buffer__consume(ringbuf);
-	ASSERT_EQ(err, 1, "num_samples_or_err");
+	/*
+	 * 1 sample with use_ima_file_hash = false
+	 * 2 samples with use_ima_file_hash = true (./ima_setup.sh, /bin/true)
+	 */
+	ASSERT_EQ(err, 3, "num_samples_or_err");
 	ASSERT_NEQ(ima_hash_from_bpf, 0, "ima_hash");
 
 close_clean:
