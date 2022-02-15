@@ -4668,6 +4668,16 @@ union bpf_attr {
  *		**-EOPNOTSUP** if IMA is disabled or **-EINVAL** if
  *		invalid arguments are passed.
  *
+ * long bpf_ima_file_hash(struct file *file, void *dst, u32 size)
+ *	Description
+ *		Returns a calculated IMA hash of the *file*.
+ *		If the hash is larger than *size*, then only *size*
+ *		bytes will be copied to *dst*
+ *	Return
+ *		The **hash_algo** is returned on success,
+ *		**-EOPNOTSUP** if the hash calculation failed or **-EINVAL** if
+ *		invalid arguments are passed.
+ *
  * struct socket *bpf_sock_from_file(struct file *file)
  *	Description
  *		If the given file represents a socket, returns the associated
@@ -5250,6 +5260,7 @@ union bpf_attr {
 	FN(bprm_opts_set),		\
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
+	FN(ima_file_hash),		\
 	FN(sock_from_file),		\
 	FN(check_mtu),			\
 	FN(for_each_map_elem),		\
