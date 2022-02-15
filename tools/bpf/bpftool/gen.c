@@ -205,6 +205,29 @@ static int codegen_datasec_def(struct bpf_object *obj,
 		off = sec_var->offset + sec_var->size;
 	}
 	printf("	} *%s;\n", sec_ident);
+
+	/* Walk through the section again to emit size asserts */
+	sec_var = btf_var_secinfos(sec);
+	for (i = 0; i < vlen; i++, sec_var++) {
+		const struct btf_type *var = btf__type_by_id(btf, sec_var->type);
+		const char *var_name = btf__name_by_offset(btf, var->name_off);
+		__u32 var_type_id = var->type;
+		__s64 var_size = btf__resolve_size(btf, var_type_id);
+
+		/* static variables are not exposed through BPF skeleton */
+		if (btf_var(var)->linkage == BTF_VAR_STATIC)
+			continue;
+
+		var_ident[0] = '\0';
+		strncat(var_ident, var_name, sizeof(var_ident) - 1);
+		sanitize_identifier(var_ident);
+
+		printf("\tBPF_STATIC_ASSERT(");
+		printf("sizeof(((struct %s__%s*)0)->%s) == %lld, ",
+		       obj_name, sec_ident, var_ident, var_size);
+		printf("\"unexpected size of field %s\");\n", var_ident);
+	}
+
 	return 0;
 }
 
@@ -756,6 +779,12 @@ static int do_skeleton(int argc, char **argv)
 									    \n\
 		#include <bpf/skel_internal.h>				    \n\
 									    \n\
+		#ifdef __cplusplus					    \n\
+		#define	BPF_STATIC_ASSERT static_assert			    \n\
+		#else							    \n\
+		#define	BPF_STATIC_ASSERT _Static_assert		    \n\
+		#endif							    \n\
+									    \n\
 		struct %1$s {						    \n\
 			struct bpf_loader_ctx ctx;			    \n\
 		",
@@ -773,6 +802,12 @@ static int do_skeleton(int argc, char **argv)
 		#include <errno.h>					    \n\
 		#include <stdlib.h>					    \n\
 		#include <bpf/libbpf.h>					    \n\
+									    \n\
+		#ifdef __cplusplus					    \n\
+		#define	BPF_STATIC_ASSERT static_assert			    \n\
+		#else							    \n\
+		#define	BPF_STATIC_ASSERT _Static_assert		    \n\
+		#endif							    \n\
 									    \n\
 		struct %1$s {						    \n\
 			struct bpf_object_skeleton *skeleton;		    \n\
