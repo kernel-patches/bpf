@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 
-extra_paholeopt=
+extra_paholeopt=-j
 
 if ! [ -x "$(command -v ${PAHOLE})" ]; then
 	exit 0
