@@ -2724,7 +2724,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		}
 		break;
 	case BPF_PROG_TYPE_LSM:
-		if (prog->expected_attach_type != BPF_LSM_MAC) {
+		if (prog->expected_attach_type != BPF_LSM_MAC &&
+		    prog->expected_attach_type != BPF_LSM_CGROUP_SOCK) {
 			err = -EINVAL;
 			goto out_put_prog;
 		}
@@ -3184,6 +3185,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_LSM_CGROUP_SOCK:
+		return BPF_PROG_TYPE_LSM;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -3237,6 +3240,7 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_SOCK_OPS:
+	case BPF_PROG_TYPE_LSM:
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
 	default:

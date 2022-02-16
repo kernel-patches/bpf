@@ -1742,6 +1742,8 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
 			 -(stack_size - i * 8));
 }
 
+extern int __cgroup_bpf_run_lsm_sock(u64 *, const struct bpf_prog *);
+
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 			   struct bpf_prog *p, int stack_size, bool save_ret)
 {
@@ -1767,14 +1769,23 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 
 	/* arg1: lea rdi, [rbp - stack_size] */
 	EMIT4(0x48, 0x8D, 0x7D, -stack_size);
-	/* arg2: progs[i]->insnsi for interpreter */
-	if (!p->jited)
-		emit_mov_imm64(&prog, BPF_REG_2,
-			       (long) p->insnsi >> 32,
-			       (u32) (long) p->insnsi);
-	/* call JITed bpf program or interpreter */
-	if (emit_call(&prog, p->bpf_func, prog))
-		return -EINVAL;
+
+	if (p->expected_attach_type == BPF_LSM_CGROUP_SOCK) {
+		/* arg2: progs[i] */
+		emit_mov_imm64(&prog, BPF_REG_2, (long) p >> 32, (u32) (long) p);
+		if (emit_call(&prog, __cgroup_bpf_run_lsm_sock, prog))
+			return -EINVAL;
+	} else {
+		/* arg2: progs[i]->insnsi for interpreter */
+		if (!p->jited)
+			emit_mov_imm64(&prog, BPF_REG_2,
+				       (long) p->insnsi >> 32,
+				       (u32) (long) p->insnsi);
+
+		/* call JITed bpf program or interpreter */
+		if (emit_call(&prog, p->bpf_func, prog))
+			return -EINVAL;
+	}
 
 	/*
 	 * BPF_TRAMP_MODIFY_RETURN trampolines can modify the return

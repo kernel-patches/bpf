@@ -14,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/btf_ids.h>
 #include <net/sock.h>
 #include <net/bpf_sk_storage.h>
 
@@ -417,6 +418,11 @@ static struct bpf_prog_list *find_attach_entry(struct list_head *progs,
 	return NULL;
 }
 
+BTF_SET_START(lsm_cgroup_sock)
+BTF_ID(func, bpf_lsm_socket_post_create)
+BTF_ID(func, bpf_lsm_socket_bind)
+BTF_SET_END(lsm_cgroup_sock)
+
 /**
  * __cgroup_bpf_attach() - Attach the program or the link to a cgroup, and
  *                         propagate the change to descendants
@@ -455,9 +461,24 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 		/* replace_prog implies BPF_F_REPLACE, and vice versa */
 		return -EINVAL;
 
-	atype = to_cgroup_bpf_attach_type(type);
-	if (atype < 0)
-		return -EINVAL;
+	if (prog->type == BPF_PROG_TYPE_LSM &&
+	    prog->expected_attach_type == BPF_LSM_CGROUP_SOCK) {
+		int idx;
+
+		BUG_ON(lsm_cgroup_sock.cnt != CGROUP_LSM_SOCK_NUM);
+
+		idx = btf_id_set_index(&lsm_cgroup_sock, prog->aux->attach_btf_id);
+		if (idx < 0)
+			return -EINVAL;
+
+		atype = CGROUP_LSM_SOCK_START + idx;
+
+		prog->aux->cgroup_atype = atype;
+	} else {
+		atype = to_cgroup_bpf_attach_type(type);
+		if (atype < 0)
+			return -EINVAL;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 
@@ -1090,6 +1111,22 @@ int __cgroup_bpf_run_filter_skb(struct sock *sk,
 	return ret;
 }
 EXPORT_SYMBOL(__cgroup_bpf_run_filter_skb);
+
+int __cgroup_bpf_run_lsm_sock(u64 *regs, const struct bpf_prog *prog)
+{
+	struct socket *sock = (void *)regs[BPF_REG_0];
+	struct cgroup *cgrp;
+	struct sock *sk;
+
+	sk = sock->sk;
+	if (!sk)
+		return 0;
+
+	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
+
+	return BPF_PROG_RUN_ARRAY_CG(cgrp->bpf.effective[prog->aux->cgroup_atype],
+				     regs, bpf_prog_run, 0);
+}
 
 /**
  * __cgroup_bpf_run_filter_sk() - Run a program on a sock
