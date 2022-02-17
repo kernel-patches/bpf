@@ -1510,6 +1510,7 @@ ftrace_ops_test(struct ftrace_ops *ops, unsigned long ip, void *regs)
 	}
 
 
+#ifndef ftrace_cmp_recs
 static int ftrace_cmp_recs(const void *a, const void *b)
 {
 	const struct dyn_ftrace *key = a;
@@ -1521,6 +1522,7 @@ static int ftrace_cmp_recs(const void *a, const void *b)
 		return 1;
 	return 0;
 }
+#endif
 
 static struct dyn_ftrace *lookup_rec(unsigned long start, unsigned long end)
 {

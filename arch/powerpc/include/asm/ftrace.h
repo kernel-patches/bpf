@@ -59,6 +59,21 @@ static inline unsigned long ftrace_call_adjust(unsigned long addr)
 struct dyn_arch_ftrace {
 	struct module *mod;
 };
+
+struct dyn_ftrace;
+struct module *ftrace_mod_addr_get(struct dyn_ftrace *rec);
+void ftrace_mod_addr_set(struct dyn_ftrace *rec, struct module *mod);
+
+#ifdef CONFIG_MPROFILE_KERNEL
+int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec);
+#define ftrace_init_nop ftrace_init_nop
+#endif
+
+#if defined(CONFIG_MPROFILE_KERNEL) || defined(CONFIG_PPC32)
+int ftrace_cmp_recs(const void *a, const void *b);
+#define ftrace_cmp_recs ftrace_cmp_recs
+#endif
+
 #endif /* __ASSEMBLY__ */
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS

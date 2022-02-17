@@ -428,21 +428,21 @@ int ftrace_make_nop(struct module *mod,
 	 * We should either already have a pointer to the module
 	 * or it has been passed in.
 	 */
-	if (!rec->arch.mod) {
+	if (!ftrace_mod_addr_get(rec)) {
 		if (!mod) {
 			pr_err("No module loaded addr=%lx\n", addr);
 			return -EFAULT;
 		}
-		rec->arch.mod = mod;
+		ftrace_mod_addr_set(rec, mod);
 	} else if (mod) {
-		if (mod != rec->arch.mod) {
+		if (mod != ftrace_mod_addr_get(rec)) {
 			pr_err("Record mod %p not equal to passed in mod %p\n",
-			       rec->arch.mod, mod);
+			       ftrace_mod_addr_get(rec), mod);
 			return -EINVAL;
 		}
 		/* nothing to do if mod == rec->arch.mod */
 	} else
-		mod = rec->arch.mod;
+		mod = ftrace_mod_addr_get(rec);
 
 	return __ftrace_make_nop(mod, rec, addr);
 #else
@@ -450,6 +450,96 @@ int ftrace_make_nop(struct module *mod,
 	return -EINVAL;
 #endif /* CONFIG_MODULES */
 }
+
+#define FUNC_MCOUNT_OFFSET_PPC32	8
+#define FUNC_MCOUNT_OFFSET_PPC64_LEP	4
+#define FUNC_MCOUNT_OFFSET_PPC64_GEP	12
+
+#ifdef CONFIG_MPROFILE_KERNEL
+struct module *ftrace_mod_addr_get(struct dyn_ftrace *rec)
+{
+	return (struct module *)((unsigned long)rec->arch.mod & ~0x1);
+}
+
+void ftrace_mod_addr_set(struct dyn_ftrace *rec, struct module *mod)
+{
+	rec->arch.mod = (struct module *)(((unsigned long)rec->arch.mod & 0x1) | (unsigned long)mod);
+}
+
+int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec)
+{
+	unsigned long offset, ip = rec->ip;
+	ppc_inst_t op1, op2;
+	int ret;
+
+	if (!kallsyms_lookup_size_offset(rec->ip, NULL, &offset) ||
+	    (offset != FUNC_MCOUNT_OFFSET_PPC64_GEP && offset != FUNC_MCOUNT_OFFSET_PPC64_LEP)) {
+		ip -= FUNC_MCOUNT_OFFSET_PPC64_GEP;
+		ret = copy_inst_from_kernel_nofault(&op1, (void *)ip);
+		ret |= copy_inst_from_kernel_nofault(&op2, (void *)(ip + MCOUNT_INSN_SIZE));
+		if (!ret &&
+		    ((ppc_inst_val(op1) & 0xffff0000) == PPC_RAW_LIS(_R2, 0) ||
+		     (ppc_inst_val(op1) & 0xffff0000) == PPC_RAW_ADDIS(_R2, _R12, 0)) &&
+		    (ppc_inst_val(op2) & 0xffff0000) == PPC_RAW_ADDI(_R2, _R2, 0))
+			ftrace_mod_addr_set(rec, (struct module *)1);
+	} else if (offset == FUNC_MCOUNT_OFFSET_PPC64_GEP) {
+		ftrace_mod_addr_set(rec, (struct module *)1);
+	}
+
+	return ftrace_make_nop(mod, rec, MCOUNT_ADDR);
+}
+#else
+struct module *ftrace_mod_addr_get(struct dyn_ftrace *rec)
+{
+	return rec->arch.mod;
+}
+
+void ftrace_mod_addr_set(struct dyn_ftrace *rec, struct module *mod)
+{
+	rec->arch.mod = mod;
+}
+#endif /* CONFIG_MPROFILE_KERNEL */
+
+#if defined(CONFIG_MPROFILE_KERNEL) || defined(CONFIG_PPC32)
+int ftrace_location_get_offset(const struct dyn_ftrace *rec)
+{
+	if (IS_ENABLED(CONFIG_MPROFILE_KERNEL))
+		/*
+		 * On ppc64le with -mprofile-kernel, function entry can have:
+		 *   addis r2, r12, M
+		 *   addi  r2, r2, N
+		 *   mflr  r0
+		 *   bl    _mcount
+		 *
+		 * The first two instructions are for TOC setup and represent the global entry
+		 * point for cross-module calls, and may be missing if the function is never called
+		 * from other modules.
+		 */
+		return ((unsigned long)rec->arch.mod & 0x1) ? FUNC_MCOUNT_OFFSET_PPC64_GEP :
+							      FUNC_MCOUNT_OFFSET_PPC64_LEP;
+	else
+		/*
+		 * On ppc32, function entry always has:
+		 *   mflr r0
+		 *   stw  r0, 4(r1)
+		 *   bl   _mcount
+		 */
+		return FUNC_MCOUNT_OFFSET_PPC32;
+}
+
+int ftrace_cmp_recs(const void *a, const void *b)
+{
+	const struct dyn_ftrace *key = a;
+	const struct dyn_ftrace *rec = b;
+	int offset = ftrace_location_get_offset(rec);
+
+	if (key->flags < rec->ip - offset)
+		return -1;
+	if (key->ip >= rec->ip + MCOUNT_INSN_SIZE)
+		return 1;
+	return 0;
+}
+#endif
 
 #ifdef CONFIG_MODULES
 #ifdef CONFIG_PPC64
@@ -494,7 +584,7 @@ __ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 	ppc_inst_t instr;
 	void *ip = (void *)rec->ip;
 	unsigned long entry, ptr, tramp;
-	struct module *mod = rec->arch.mod;
+	struct module *mod = ftrace_mod_addr_get(rec);
 
 	/* read where this goes */
 	if (copy_inst_from_kernel_nofault(op, ip))
@@ -561,7 +651,7 @@ __ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 	int err;
 	ppc_inst_t op;
 	u32 *ip = (u32 *)rec->ip;
-	struct module *mod = rec->arch.mod;
+	struct module *mod = ftrace_mod_addr_get(rec);
 	unsigned long tramp;
 
 	/* read where this goes */
@@ -678,7 +768,7 @@ int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 	 * Being that we are converting from nop, it had better
 	 * already have a module defined.
 	 */
-	if (!rec->arch.mod) {
+	if (!ftrace_mod_addr_get(rec)) {
 		pr_err("No module loaded\n");
 		return -EINVAL;
 	}
@@ -699,7 +789,7 @@ __ftrace_modify_call(struct dyn_ftrace *rec, unsigned long old_addr,
 	ppc_inst_t op;
 	unsigned long ip = rec->ip;
 	unsigned long entry, ptr, tramp;
-	struct module *mod = rec->arch.mod;
+	struct module *mod = ftrace_mod_addr_get(rec);
 
 	/* If we never set up ftrace trampolines, then bail */
 	if (!mod->arch.tramp || !mod->arch.tramp_regs) {
@@ -814,7 +904,7 @@ int ftrace_modify_call(struct dyn_ftrace *rec, unsigned long old_addr,
 	/*
 	 * Out of range jumps are called from modules.
 	 */
-	if (!rec->arch.mod) {
+	if (!ftrace_mod_addr_get(rec)) {
 		pr_err("No module loaded\n");
 		return -EINVAL;
 	}
