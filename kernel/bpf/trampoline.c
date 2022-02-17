@@ -124,8 +124,6 @@ static int is_ftrace_location(void *ip)
 	addr = ftrace_location((long)ip);
 	if (!addr)
 		return 0;
-	if (WARN_ON_ONCE(addr != (long)ip))
-		return -EFAULT;
 	return 1;
 }
 
