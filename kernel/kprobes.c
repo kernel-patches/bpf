@@ -1497,6 +1497,10 @@ bool within_kprobe_blacklist(unsigned long addr)
 static kprobe_opcode_t *_kprobe_addr(kprobe_opcode_t *addr,
 			const char *symbol_name, unsigned int offset)
 {
+#ifdef CONFIG_KPROBES_ON_FTRACE
+	unsigned long ftrace_addr = 0;
+#endif
+
 	if ((symbol_name && addr) || (!symbol_name && !addr))
 		goto invalid;
 
@@ -1507,6 +1511,14 @@ static kprobe_opcode_t *_kprobe_addr(kprobe_opcode_t *addr,
 	}
 
 	addr = (kprobe_opcode_t *)(((char *)addr) + offset);
+
+#ifdef CONFIG_KPROBES_ON_FTRACE
+	if (addr)
+		ftrace_addr = ftrace_location((unsigned long)addr);
+	if (ftrace_addr)
+		return (kprobe_opcode_t *)ftrace_addr;
+#endif
+
 	if (addr)
 		return addr;
 
