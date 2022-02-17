@@ -13,6 +13,10 @@ else
   Q = @
 endif
 
+ifeq ($(STATIC),1)
+	CFLAGS += --static
+endif
+
 BPF_DIR = $(srctree)/tools/lib/bpf
 
 ifneq ($(OUTPUT),)
