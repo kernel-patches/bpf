@@ -861,7 +861,7 @@ static void run_core_reloc_tests(bool use_btfgen)
 	struct bpf_link *link = NULL;
 	struct bpf_map *data_map;
 	struct bpf_program *prog;
-	struct bpf_object *obj;
+	struct bpf_object *obj = NULL;
 	uint64_t my_pid_tgid;
 	struct data *data;
 	void *mmap_data = NULL;
@@ -992,7 +992,8 @@ cleanup:
 		remove(btf_file);
 		bpf_link__destroy(link);
 		link = NULL;
-		bpf_object__close(obj);
+		if (obj)
+			bpf_object__close(obj);
 	}
 }
 
