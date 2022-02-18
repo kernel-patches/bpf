@@ -46,7 +46,7 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 
 	if (!btf_id_set_contains(&bpf_lsm_hooks, prog->aux->attach_btf_id)) {
 		bpf_log(vlog, "attach_btf_id %u points to wrong type name %s\n",
-			prog->aux->attach_btf_id, prog->aux->attach_func_name);
+			prog->aux->attach_btf_id, prog->aux->attach_name);
 		return -EINVAL;
 	}
 

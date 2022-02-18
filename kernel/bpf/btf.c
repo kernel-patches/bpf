@@ -4845,7 +4845,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const struct btf_type *t = prog->aux->attach_func_proto;
 	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
 	struct btf *btf = bpf_prog_get_target_btf(prog);
-	const char *tname = prog->aux->attach_func_name;
+	const char *tname = prog->aux->attach_name;
 	struct bpf_verifier_log *log = info->log;
 	const struct btf_param *args;
 	u32 nr_args, arg;

@@ -3051,7 +3051,7 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 		}
 		if (prog->type == BPF_PROG_TYPE_TRACING &&
 		    prog->expected_attach_type == BPF_TRACE_RAW_TP) {
-			tp_name = prog->aux->attach_func_name;
+			tp_name = prog->aux->attach_name;
 			break;
 		}
 		err = bpf_tracing_prog_attach(prog, 0, 0);

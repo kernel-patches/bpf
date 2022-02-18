@@ -328,7 +328,7 @@ static void cache_btf_id(struct bpf_iter_target_info *tinfo,
 
 bool bpf_iter_prog_supported(struct bpf_prog *prog)
 {
-	const char *attach_fname = prog->aux->attach_func_name;
+	const char *attach_fname = prog->aux->attach_name;
 	u32 prog_btf_id = prog->aux->attach_btf_id;
 	const char *prefix = BPF_ITER_FUNC_PREFIX;
 	struct bpf_iter_target_info *tinfo;

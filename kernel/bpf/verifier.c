@@ -13839,7 +13839,7 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 	}
 
 	prog->aux->attach_func_proto = func_proto;
-	prog->aux->attach_func_name = mname;
+	prog->aux->attach_name = mname;
 	env->ops = st_ops->verifier_ops;
 
 	return 0;
@@ -14164,7 +14164,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	/* store info about the attachment target that will be used later */
 	prog->aux->attach_func_proto = tgt_info.tgt_type;
-	prog->aux->attach_func_name = tgt_info.tgt_name;
+	prog->aux->attach_name = tgt_info.tgt_name;
 
 	if (tgt_prog) {
 		prog->aux->saved_dst_prog_type = tgt_prog->type;

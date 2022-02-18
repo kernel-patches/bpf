@@ -941,8 +941,7 @@ struct bpf_prog_aux {
 	struct hlist_node tramp_hlist;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
-	/* function name for valid attach_btf_id */
-	const char *attach_func_name;
+	const char *attach_name;
 	struct bpf_prog **func;
 	void *jit_data; /* JIT specific data. arch dependent */
 	struct bpf_jit_poke_descriptor *poke_tab;
