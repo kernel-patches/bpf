@@ -1421,6 +1421,7 @@ static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
 {
 	struct sk_psock_progs *progs = sock_map_progs(map);
 	struct bpf_prog **pprog;
+	char sockmap_info[16];
 
 	if (!progs)
 		return -EOPNOTSUPP;
@@ -1448,8 +1449,13 @@ static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
 		return -EOPNOTSUPP;
 	}
 
-	if (old)
+	if (old) {
+		kfree(prog->aux->attach_name);
 		return psock_replace_prog(pprog, prog, old);
+	}
+
+	snprintf(sockmap_info, 16, "sockmap:%d", map->id);
+	prog->aux->attach_name = kstrdup(sockmap_info, GFP_KERNEL);
 
 	psock_set_prog(pprog, prog);
 	return 0;
