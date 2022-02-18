@@ -7,6 +7,7 @@ struct pid_iter_entry {
 	__u32 id;
 	int pid;
 	char comm[16];
+	__u64 bpf_cookie;
 };
 
 #endif
