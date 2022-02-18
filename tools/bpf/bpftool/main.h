@@ -8,10 +8,10 @@
 #undef GCC_VERSION
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <linux/bpf.h>
 #include <linux/compiler.h>
 #include <linux/kernel.h>
-#include <tools/libc_compat.h>
 
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h>
@@ -20,6 +20,9 @@
 
 /* Make sure we do not use kernel-only integer typedefs */
 #pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
+
+/* prevent accidental re-addition of reallocarray() */
+#pragma GCC poison reallocarray
 
 static inline __u64 ptr_to_u64(const void *ptr)
 {
@@ -262,6 +265,35 @@ static inline __u32 hash_field_as_u32(const void *x)
 static inline bool hashmap__empty(struct hashmap *map)
 {
 	return map ? hashmap__size(map) == 0 : true;
+}
+
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
+/*
+ * Re-implement glibc's reallocarray() for bpftool internal-only use.
+ * reallocarray(), unfortunately, is not available in all versions of glibc,
+ * so requires extra feature detection and using reallocarray() stub from
+ * <tools/libc_compat.h> and COMPAT_NEED_REALLOCARRAY. All this complicates
+ * build of bpftool unnecessarily and is just a maintenance burden. Instead,
+ * it's trivial to implement bpftool-specific internal version and use it
+ * throughout bpftool.
+ * Copied from tools/lib/bpf/libbpf_internal.h
+ */
+static inline void *bpftool_reallocarray(void *ptr, size_t nmemb, size_t size)
+{
+	size_t total;
+
+#if __has_builtin(__builtin_mul_overflow)
+	if (unlikely(__builtin_mul_overflow(nmemb, size, &total)))
+		return NULL;
+#else
+	if (size == 0 || nmemb > ULONG_MAX / size)
+		return NULL;
+	total = nmemb * size;
+#endif
+	return realloc(ptr, total);
 }
 
 #endif
