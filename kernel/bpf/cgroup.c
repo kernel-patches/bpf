@@ -440,6 +440,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_cgroup_storage *new_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	enum cgroup_bpf_attach_type atype;
+	char cgrp_path[64] = "cgroup:";
 	struct bpf_prog_list *pl;
 	struct list_head *progs;
 	int err;
@@ -508,6 +509,11 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	else
 		static_branch_inc(&cgroup_bpf_enabled_key[atype]);
 	bpf_cgroup_storages_link(new_storage, cgrp, type);
+
+	cgroup_name(cgrp, cgrp_path + strlen("cgroup:"), 64);
+	cgrp_path[63] = '\0';
+	prog->aux->attach_name = kstrdup(cgrp_path, GFP_KERNEL);
+
 	return 0;
 
 cleanup:
@@ -735,6 +741,8 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	if (old_prog)
 		bpf_prog_put(old_prog);
 	static_branch_dec(&cgroup_bpf_enabled_key[atype]);
+	kfree(prog->aux->attach_name);
+
 	return 0;
 
 cleanup:
