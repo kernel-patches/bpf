@@ -539,7 +539,7 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 	char postfix[16] = {0}, prefix[32] = {0};
 	static const char * const str[] = {
 		[NOT_INIT]		= "?",
-		[SCALAR_VALUE]		= "inv",
+		[SCALAR_VALUE]		= "",
 		[PTR_TO_CTX]		= "ctx",
 		[CONST_PTR_TO_MAP]	= "map_ptr",
 		[PTR_TO_MAP_VALUE]	= "map_value",
@@ -666,6 +666,15 @@ static void scrub_spilled_slot(u8 *stype)
 		*stype = STACK_MISC;
 }
 
+#define verbose_append(fmt, ...) \
+({ \
+	if (is_first_item) \
+		is_first_item = false; \
+	else \
+		verbose(env, ","); \
+	verbose(env, fmt, __VA_ARGS__); \
+})
+
 static void print_verifier_state(struct bpf_verifier_env *env,
 				 const struct bpf_func_state *state,
 				 bool print_all)
@@ -693,65 +702,74 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 			/* reg->off should be 0 for SCALAR_VALUE */
 			verbose(env, "%lld", reg->var_off.value + reg->off);
 		} else {
+			bool is_first_item = true;
+
 			if (base_type(t) == PTR_TO_BTF_ID ||
 			    base_type(t) == PTR_TO_PERCPU_BTF_ID)
 				verbose(env, "%s", kernel_type_name(reg->btf, reg->btf_id));
-			verbose(env, "(id=%d", reg->id);
-			if (reg_type_may_be_refcounted_or_null(t))
-				verbose(env, ",ref_obj_id=%d", reg->ref_obj_id);
+
+			verbose(env, "(");
+
+			if (reg->id) {
+				verbose(env, "id=%d", reg->id);
+				is_first_item = false;
+			}
+
+			if (reg_type_may_be_refcounted_or_null(t) && reg->ref_obj_id)
+				verbose_append("ref_obj_id=%d", reg->ref_obj_id);
 			if (t != SCALAR_VALUE)
-				verbose(env, ",off=%d", reg->off);
+				verbose_append("off=%d", reg->off);
 			if (type_is_pkt_pointer(t))
-				verbose(env, ",r=%d", reg->range);
+				verbose_append("r=%d", reg->range);
 			else if (base_type(t) == CONST_PTR_TO_MAP ||
 				 base_type(t) == PTR_TO_MAP_KEY ||
 				 base_type(t) == PTR_TO_MAP_VALUE)
-				verbose(env, ",ks=%d,vs=%d",
-					reg->map_ptr->key_size,
-					reg->map_ptr->value_size);
+				verbose_append("ks=%d,vs=%d",
+					       reg->map_ptr->key_size,
+					       reg->map_ptr->value_size);
 			if (tnum_is_const(reg->var_off)) {
 				/* Typically an immediate SCALAR_VALUE, but
 				 * could be a pointer whose offset is too big
 				 * for reg->off
 				 */
-				verbose(env, ",imm=%llx", reg->var_off.value);
+				verbose_append("imm=%llx", reg->var_off.value);
 			} else {
 				if (reg->smin_value != reg->umin_value &&
 				    reg->smin_value != S64_MIN)
-					verbose(env, ",smin_value=%lld",
-						(long long)reg->smin_value);
+					verbose_append("smin=%lld",
+						       (long long)reg->smin_value);
 				if (reg->smax_value != reg->umax_value &&
 				    reg->smax_value != S64_MAX)
-					verbose(env, ",smax_value=%lld",
-						(long long)reg->smax_value);
+					verbose_append("smax=%lld",
+						       (long long)reg->smax_value);
 				if (reg->umin_value != 0)
-					verbose(env, ",umin_value=%llu",
-						(unsigned long long)reg->umin_value);
+					verbose_append("umin=%llu",
+						       (unsigned long long)reg->umin_value);
 				if (reg->umax_value != U64_MAX)
-					verbose(env, ",umax_value=%llu",
-						(unsigned long long)reg->umax_value);
+					verbose_append("umax=%llu",
+						       (unsigned long long)reg->umax_value);
 				if (!tnum_is_unknown(reg->var_off)) {
 					char tn_buf[48];
 
 					tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-					verbose(env, ",var_off=%s", tn_buf);
+					verbose_append("var_off=%s", tn_buf);
 				}
 				if (reg->s32_min_value != reg->smin_value &&
 				    reg->s32_min_value != S32_MIN)
-					verbose(env, ",s32_min_value=%d",
-						(int)(reg->s32_min_value));
+					verbose_append("s32_min=%d",
+						       (int)(reg->s32_min_value));
 				if (reg->s32_max_value != reg->smax_value &&
 				    reg->s32_max_value != S32_MAX)
-					verbose(env, ",s32_max_value=%d",
-						(int)(reg->s32_max_value));
+					verbose_append("s32_max=%d",
+						       (int)(reg->s32_max_value));
 				if (reg->u32_min_value != reg->umin_value &&
 				    reg->u32_min_value != U32_MIN)
-					verbose(env, ",u32_min_value=%d",
-						(int)(reg->u32_min_value));
+					verbose_append("u32_min=%d",
+						       (int)(reg->u32_min_value));
 				if (reg->u32_max_value != reg->umax_value &&
 				    reg->u32_max_value != U32_MAX)
-					verbose(env, ",u32_max_value=%d",
-						(int)(reg->u32_max_value));
+					verbose_append("u32_max=%d",
+						       (int)(reg->u32_max_value));
 			}
 			verbose(env, ")");
 		}
