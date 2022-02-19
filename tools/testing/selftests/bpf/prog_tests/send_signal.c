@@ -4,11 +4,12 @@
 #include <sys/resource.h>
 #include "test_send_signal_kern.skel.h"
 
-int sigusr1_received = 0;
+int sigusr1_received;
+volatile int volatile_variable;
 
 static void sigusr1_handler(int signum)
 {
-	sigusr1_received++;
+	sigusr1_received = 1;
 }
 
 static void test_send_signal_common(struct perf_event_attr *attr,
@@ -42,7 +43,9 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 		int old_prio;
 
 		/* install signal handler and notify parent */
+		errno = 0;
 		signal(SIGUSR1, sigusr1_handler);
+		ASSERT_OK(errno, "signal");
 
 		close(pipe_c2p[0]); /* close read */
 		close(pipe_p2c[1]); /* close write */
@@ -63,9 +66,12 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 		ASSERT_EQ(read(pipe_p2c[0], buf, 1), 1, "pipe_read");
 
 		/* wait a little for signal handler */
-		sleep(1);
+		for (int i = 0; i < 1000000000; i++)
+			volatile_variable++;
 
 		buf[0] = sigusr1_received ? '2' : '0';
+		ASSERT_EQ(sigusr1_received, 1, "sigusr1_received");
+
 		ASSERT_EQ(write(pipe_c2p[1], buf, 1), 1, "pipe_write");
 
 		/* wait for parent notification and exit */
@@ -110,9 +116,9 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 	ASSERT_EQ(read(pipe_c2p[0], buf, 1), 1, "pipe_read");
 
 	/* trigger the bpf send_signal */
+	skel->bss->signal_thread = signal_thread;
 	skel->bss->pid = pid;
 	skel->bss->sig = SIGUSR1;
-	skel->bss->signal_thread = signal_thread;
 
 	/* notify child that bpf program can send_signal now */
 	ASSERT_EQ(write(pipe_p2c[1], buf, 1), 1, "pipe_write");
