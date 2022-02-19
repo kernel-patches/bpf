@@ -183,7 +183,7 @@ BPF_CALL_4(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
 	 * bpf_local_storage_update expects the owner to have a
 	 * valid storage pointer.
 	 */
-	if (!inode || !inode_storage_ptr(inode))
+	if (bpf_ptr_is_invalid(inode) || !inode_storage_ptr(inode))
 		return (unsigned long)NULL;
 
 	sdata = inode_storage_lookup(inode, map, true);
@@ -208,7 +208,7 @@ BPF_CALL_2(bpf_inode_storage_delete,
 	   struct bpf_map *, map, struct inode *, inode)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (!inode)
+	if (bpf_ptr_is_invalid(inode))
 		return -EINVAL;
 
 	/* This helper must only called from where the inode is guaranteed

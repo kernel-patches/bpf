@@ -474,6 +474,9 @@ BPF_CALL_4(bpf_get_task_stack, struct task_struct *, task, void *, buf,
 	struct pt_regs *regs;
 	long res = -EINVAL;
 
+	if (bpf_ptr_is_invalid(task))
+		return -EINVAL;
+
 	if (!try_get_task_stack(task))
 		return -EFAULT;
 

@@ -261,7 +261,8 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	struct bpf_local_storage_data *sdata;
 
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (!sk || !sk_fullsock(sk) || flags > BPF_SK_STORAGE_GET_F_CREATE)
+	if (bpf_ptr_is_invalid(sk) ||
+	    !sk_fullsock(sk) || flags > BPF_SK_STORAGE_GET_F_CREATE)
 		return (unsigned long)NULL;
 
 	sdata = bpf_sk_storage_lookup(sk, map, true);
@@ -292,7 +293,7 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 BPF_CALL_2(bpf_sk_storage_delete, struct bpf_map *, map, struct sock *, sk)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (!sk || !sk_fullsock(sk))
+	if (bpf_ptr_is_invalid(sk) || !sk_fullsock(sk))
 		return -EINVAL;
 
 	if (refcount_inc_not_zero(&sk->sk_refcnt)) {
@@ -421,7 +422,7 @@ BPF_CALL_4(bpf_sk_storage_get_tracing, struct bpf_map *, map, struct sock *, sk,
 	   void *, value, u64, flags)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (in_hardirq() || in_nmi())
+	if (bpf_ptr_is_invalid(sk) || in_hardirq() || in_nmi())
 		return (unsigned long)NULL;
 
 	return (unsigned long)____bpf_sk_storage_get(map, sk, value, flags);
@@ -431,7 +432,7 @@ BPF_CALL_2(bpf_sk_storage_delete_tracing, struct bpf_map *, map,
 	   struct sock *, sk)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (in_hardirq() || in_nmi())
+	if (bpf_ptr_is_invalid(sk) || in_hardirq() || in_nmi())
 		return -EPERM;
 
 	return ____bpf_sk_storage_delete(map, sk);

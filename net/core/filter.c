@@ -4516,7 +4516,7 @@ static inline u64 __bpf_sk_cgroup_id(struct sock *sk)
 	struct cgroup *cgrp;
 
 	sk = sk_to_full_sk(sk);
-	if (!sk || !sk_fullsock(sk))
+	if (bpf_ptr_is_invalid(sk) || !sk_fullsock(sk))
 		return 0;
 
 	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
@@ -4542,7 +4542,7 @@ static inline u64 __bpf_sk_ancestor_cgroup_id(struct sock *sk,
 	struct cgroup *cgrp;
 
 	sk = sk_to_full_sk(sk);
-	if (!sk || !sk_fullsock(sk))
+	if (bpf_ptr_is_invalid(sk) || !sk_fullsock(sk))
 		return 0;
 
 	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
@@ -4569,6 +4569,7 @@ static const struct bpf_func_proto bpf_skb_ancestor_cgroup_id_proto = {
 
 BPF_CALL_1(bpf_sk_cgroup_id, struct sock *, sk)
 {
+	/* __bpf_sk_cgroup_id does bpf_ptr_is_invalid check */
 	return __bpf_sk_cgroup_id(sk);
 }
 
@@ -4581,6 +4582,7 @@ static const struct bpf_func_proto bpf_sk_cgroup_id_proto = {
 
 BPF_CALL_2(bpf_sk_ancestor_cgroup_id, struct sock *, sk, int, ancestor_level)
 {
+	/* __bpf_sk_ancestor_cgroup_id does bpf_ptr_is_invalid check */
 	return __bpf_sk_ancestor_cgroup_id(sk, ancestor_level);
 }
 
@@ -4607,7 +4609,7 @@ BPF_CALL_5(bpf_xdp_event_output, struct xdp_buff *, xdp, struct bpf_map *, map,
 
 	if (unlikely(flags & ~(BPF_F_CTXLEN_MASK | BPF_F_INDEX_MASK)))
 		return -EINVAL;
-	if (unlikely(!xdp ||
+	if (unlikely(bpf_ptr_is_invalid(xdp) ||
 		     xdp_size > (unsigned long)(xdp->data_end - xdp->data)))
 		return -EFAULT;
 
@@ -4678,7 +4680,7 @@ static const struct bpf_func_proto bpf_get_socket_cookie_sock_proto = {
 
 BPF_CALL_1(bpf_get_socket_ptr_cookie, struct sock *, sk)
 {
-	return sk ? sock_gen_cookie(sk) : 0;
+	return !bpf_ptr_is_invalid(sk) ? sock_gen_cookie(sk) : 0;
 }
 
 const struct bpf_func_proto bpf_get_socket_ptr_cookie_proto = {
@@ -5015,7 +5017,7 @@ static int _bpf_setsockopt(struct sock *sk, int level, int optname,
 static int _bpf_getsockopt(struct sock *sk, int level, int optname,
 			   char *optval, int optlen)
 {
-	if (!sk_fullsock(sk))
+	if (bpf_ptr_is_invalid(sk) || !sk_fullsock(sk))
 		goto err_clear;
 
 	sock_owned_by_me(sk);
@@ -5114,6 +5116,9 @@ err_clear:
 BPF_CALL_5(bpf_sk_setsockopt, struct sock *, sk, int, level,
 	   int, optname, char *, optval, int, optlen)
 {
+	if (bpf_ptr_is_invalid(sk))
+		return -EINVAL;
+
 	if (level == SOL_TCP && optname == TCP_CONGESTION) {
 		if (optlen >= sizeof("cdg") - 1 &&
 		    !strncmp("cdg", optval, optlen))
@@ -5137,6 +5142,7 @@ const struct bpf_func_proto bpf_sk_setsockopt_proto = {
 BPF_CALL_5(bpf_sk_getsockopt, struct sock *, sk, int, level,
 	   int, optname, char *, optval, int, optlen)
 {
+	/* _bpf_getsockopt does bpf_ptr_is_invalid check */
 	return _bpf_getsockopt(sk, level, optname, optval, optlen);
 }
 
@@ -6373,7 +6379,7 @@ static const struct bpf_func_proto bpf_sk_lookup_udp_proto = {
 
 BPF_CALL_1(bpf_sk_release, struct sock *, sk)
 {
-	if (sk && sk_is_refcounted(sk))
+	if (!bpf_ptr_is_invalid(sk) && sk_is_refcounted(sk))
 		sock_gen_put(sk);
 	return 0;
 }
@@ -6764,7 +6770,7 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 	u32 cookie;
 	int ret;
 
-	if (unlikely(!sk || th_len < sizeof(*th)))
+	if (unlikely(bpf_ptr_is_invalid(sk) || th_len < sizeof(*th)))
 		return -EINVAL;
 
 	/* sk_listener() allows TCP_NEW_SYN_RECV, which makes no sense here. */
@@ -6831,7 +6837,8 @@ BPF_CALL_5(bpf_tcp_gen_syncookie, struct sock *, sk, void *, iph, u32, iph_len,
 	u32 cookie;
 	u16 mss;
 
-	if (unlikely(!sk || th_len < sizeof(*th) || th_len != th->doff * 4))
+	if (unlikely(bpf_ptr_is_invalid(sk) || th_len < sizeof(*th) ||
+		     th_len != th->doff * 4))
 		return -EINVAL;
 
 	if (sk->sk_protocol != IPPROTO_TCP || sk->sk_state != TCP_LISTEN)
@@ -6895,7 +6902,7 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
-	if (!sk || flags != 0)
+	if (bpf_ptr_is_invalid(sk) || flags != 0)
 		return -EINVAL;
 	if (!skb_at_tc_ingress(skb))
 		return -EOPNOTSUPP;
@@ -10737,8 +10744,8 @@ BPF_CALL_1(bpf_skc_to_tcp6_sock, struct sock *, sk)
 	 * trigger an explicit type generation here.
 	 */
 	BTF_TYPE_EMIT(struct tcp6_sock);
-	if (sk && sk_fullsock(sk) && sk->sk_protocol == IPPROTO_TCP &&
-	    sk->sk_family == AF_INET6)
+	if (!bpf_ptr_is_invalid(sk) && sk_fullsock(sk) &&
+	    sk->sk_protocol == IPPROTO_TCP && sk->sk_family == AF_INET6)
 		return (unsigned long)sk;
 
 	return (unsigned long)NULL;
@@ -10754,7 +10761,7 @@ const struct bpf_func_proto bpf_skc_to_tcp6_sock_proto = {
 
 BPF_CALL_1(bpf_skc_to_tcp_sock, struct sock *, sk)
 {
-	if (sk && sk_fullsock(sk) && sk->sk_protocol == IPPROTO_TCP)
+	if (!bpf_ptr_is_invalid(sk) && sk_fullsock(sk) && sk->sk_protocol == IPPROTO_TCP)
 		return (unsigned long)sk;
 
 	return (unsigned long)NULL;
@@ -10776,13 +10783,15 @@ BPF_CALL_1(bpf_skc_to_tcp_timewait_sock, struct sock *, sk)
 	BTF_TYPE_EMIT(struct inet_timewait_sock);
 	BTF_TYPE_EMIT(struct tcp_timewait_sock);
 
+	if (bpf_ptr_is_invalid(sk))
+		return (unsigned long)NULL;
 #ifdef CONFIG_INET
-	if (sk && sk->sk_prot == &tcp_prot && sk->sk_state == TCP_TIME_WAIT)
+	if (sk->sk_prot == &tcp_prot && sk->sk_state == TCP_TIME_WAIT)
 		return (unsigned long)sk;
 #endif
 
 #if IS_BUILTIN(CONFIG_IPV6)
-	if (sk && sk->sk_prot == &tcpv6_prot && sk->sk_state == TCP_TIME_WAIT)
+	if (sk->sk_prot == &tcpv6_prot && sk->sk_state == TCP_TIME_WAIT)
 		return (unsigned long)sk;
 #endif
 
@@ -10799,13 +10808,15 @@ const struct bpf_func_proto bpf_skc_to_tcp_timewait_sock_proto = {
 
 BPF_CALL_1(bpf_skc_to_tcp_request_sock, struct sock *, sk)
 {
+	if (bpf_ptr_is_invalid(sk))
+		return (unsigned long)NULL;
 #ifdef CONFIG_INET
-	if (sk && sk->sk_prot == &tcp_prot && sk->sk_state == TCP_NEW_SYN_RECV)
+	if (sk->sk_prot == &tcp_prot && sk->sk_state == TCP_NEW_SYN_RECV)
 		return (unsigned long)sk;
 #endif
 
 #if IS_BUILTIN(CONFIG_IPV6)
-	if (sk && sk->sk_prot == &tcpv6_prot && sk->sk_state == TCP_NEW_SYN_RECV)
+	if (sk->sk_prot == &tcpv6_prot && sk->sk_state == TCP_NEW_SYN_RECV)
 		return (unsigned long)sk;
 #endif
 
@@ -10826,8 +10837,9 @@ BPF_CALL_1(bpf_skc_to_udp6_sock, struct sock *, sk)
 	 * trigger an explicit type generation here.
 	 */
 	BTF_TYPE_EMIT(struct udp6_sock);
-	if (sk && sk_fullsock(sk) && sk->sk_protocol == IPPROTO_UDP &&
-	    sk->sk_type == SOCK_DGRAM && sk->sk_family == AF_INET6)
+	if (!bpf_ptr_is_invalid(sk) && sk_fullsock(sk) &&
+	    sk->sk_protocol == IPPROTO_UDP && sk->sk_type == SOCK_DGRAM &&
+	    sk->sk_family == AF_INET6)
 		return (unsigned long)sk;
 
 	return (unsigned long)NULL;
@@ -10847,7 +10859,7 @@ BPF_CALL_1(bpf_skc_to_unix_sock, struct sock *, sk)
 	 * trigger an explicit type generation here.
 	 */
 	BTF_TYPE_EMIT(struct unix_sock);
-	if (sk && sk_fullsock(sk) && sk->sk_family == AF_UNIX)
+	if (!bpf_ptr_is_invalid(sk) && sk_fullsock(sk) && sk->sk_family == AF_UNIX)
 		return (unsigned long)sk;
 
 	return (unsigned long)NULL;
@@ -10863,6 +10875,8 @@ const struct bpf_func_proto bpf_skc_to_unix_sock_proto = {
 
 BPF_CALL_1(bpf_sock_from_file, struct file *, file)
 {
+	if (bpf_ptr_is_invalid(file))
+		return (unsigned long)NULL;
 	return (unsigned long)sock_from_file(file);
 }
 

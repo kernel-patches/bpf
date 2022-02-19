@@ -235,7 +235,7 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 	if (flags & ~(BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return (unsigned long)NULL;
 
-	if (!task)
+	if (bpf_ptr_is_invalid(task))
 		return (unsigned long)NULL;
 
 	if (!bpf_task_storage_trylock())
@@ -264,7 +264,7 @@ BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
 	int ret;
 
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-	if (!task)
+	if (bpf_ptr_is_invalid(task))
 		return -EINVAL;
 
 	if (!bpf_task_storage_trylock())

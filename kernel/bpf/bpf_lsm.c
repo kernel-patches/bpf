@@ -58,7 +58,7 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 
 BPF_CALL_2(bpf_bprm_opts_set, struct linux_binprm *, bprm, u64, flags)
 {
-	if (flags & ~BPF_F_BRPM_OPTS_MASK)
+	if (bpf_ptr_is_invalid(bprm) || flags & ~BPF_F_BRPM_OPTS_MASK)
 		return -EINVAL;
 
 	bprm->secureexec = (flags & BPF_F_BPRM_SECUREEXEC);
@@ -78,6 +78,8 @@ static const struct bpf_func_proto bpf_bprm_opts_set_proto = {
 
 BPF_CALL_3(bpf_ima_inode_hash, struct inode *, inode, void *, dst, u32, size)
 {
+	if (bpf_ptr_is_invalid(inode))
+		return -EINVAL;
 	return ima_inode_hash(inode, dst, size);
 }
 

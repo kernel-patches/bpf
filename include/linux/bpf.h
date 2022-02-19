@@ -495,12 +495,12 @@ enum bpf_reg_type {
 	 * Further, when passed into helpers the helpers can not, without
 	 * additional context, assume the value is non-null.
 	 *
-	 * All BPF helpers must use IS_PTR_TO_BTF_ID_ERR_OR_NULL when accepting
-	 * a PTR_TO_BTF_ID or PTR_TO_BTF_ID_OR_NULL from a BPF program.
-	 * Likewise, unstable kfuncs must do the same. This is because while
-	 * PTR_TO_BTF_ID may be NULL at runtime, a pointer to the embedded
-	 * object can be formed by adding the offset to the member, and then
-	 * passing verifier checks because verifier thinks that:
+	 * All BPF helpers must use 'bpf_ptr_is_invalid' when accepting a
+	 * PTR_TO_BTF_ID or PTR_TO_BTF_ID_OR_NULL from a BPF program. Likewise,
+	 * unstable kfuncs must do the same. This is because while PTR_TO_BTF_ID
+	 * may be NULL at runtime, a pointer to the embedded object can be
+	 * formed by adding the offset to the member, and then passing verifier
+	 * checks because verifier thinks that:
 	 *
 	 * (struct file *)ptr + offsetof(struct file, f_path) == (struct path *)
 	 *
@@ -509,8 +509,8 @@ enum bpf_reg_type {
 	 * pointer case for PTR_TO_BTF_ID reg state, it will allow passing
 	 * NULL + offset, which won't be rejected because it is not NULL.
 	 *
-	 * Hence, the IS_PTR_TO_BTF_ID_ERR_OR_NULL macro is needed to provide
-	 * safety for both NULL and this 'non-NULL but invalid pointer case'.
+	 * Hence, the 'bpf_ptr_is_invalid' macro is needed to provide safety for
+	 * both NULL and this 'non-NULL but invalid pointer case'.
 	 */
 	PTR_TO_BTF_ID,
 	/* PTR_TO_BTF_ID_OR_NULL points to a kernel struct that has not
@@ -537,7 +537,7 @@ enum bpf_reg_type {
 };
 static_assert(__BPF_REG_TYPE_MAX <= BPF_BASE_TYPE_LIMIT);
 
-#define IS_PTR_TO_BTF_ID_ERR_OR_NULL(p) ((unsigned long)(p) < PAGE_SIZE)
+#define bpf_ptr_is_invalid(p) (unlikely((unsigned long)(p) < PAGE_SIZE))
 
 /* The information passed from prog-specific *_is_valid_access
  * back to the verifier.

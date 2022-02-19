@@ -595,7 +595,7 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	if (flags)
 		return -EINVAL;
 
-	if (!task)
+	if (bpf_ptr_is_invalid(task))
 		return -ENOENT;
 
 	mm = task->mm;

@@ -468,6 +468,9 @@ BPF_CALL_5(bpf_seq_printf, struct seq_file *, m, char *, fmt, u32, fmt_size,
 	int err, num_args;
 	u32 *bin_args;
 
+	if (bpf_ptr_is_invalid(m))
+		return -EINVAL;
+
 	if (data_len & 7 || data_len > MAX_BPRINTF_VARARGS * 8 ||
 	    (data_len && !data))
 		return -EINVAL;
@@ -500,6 +503,8 @@ static const struct bpf_func_proto bpf_seq_printf_proto = {
 
 BPF_CALL_3(bpf_seq_write, struct seq_file *, m, const void *, data, u32, len)
 {
+	if (bpf_ptr_is_invalid(m))
+		return -EINVAL;
 	return seq_write(m, data, len) ? -EOVERFLOW : 0;
 }
 
@@ -519,6 +524,9 @@ BPF_CALL_4(bpf_seq_printf_btf, struct seq_file *, m, struct btf_ptr *, ptr,
 	const struct btf *btf;
 	s32 btf_id;
 	int ret;
+
+	if (bpf_ptr_is_invalid(m))
+		return -EINVAL;
 
 	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
 	if (ret)
@@ -769,6 +777,8 @@ const struct bpf_func_proto bpf_get_current_task_btf_proto = {
 
 BPF_CALL_1(bpf_task_pt_regs, struct task_struct *, task)
 {
+	if (bpf_ptr_is_invalid(task))
+		return -EINVAL;
 	return (unsigned long) task_pt_regs(task);
 }
 
@@ -894,6 +904,8 @@ BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
 	long len;
 	char *p;
 
+	if (bpf_ptr_is_invalid(path))
+		return -EINVAL;
 	if (!sz)
 		return 0;
 

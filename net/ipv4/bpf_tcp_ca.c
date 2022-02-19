@@ -144,7 +144,8 @@ static int bpf_tcp_ca_btf_struct_access(struct bpf_verifier_log *log,
 
 BPF_CALL_2(bpf_tcp_send_ack, struct tcp_sock *, tp, u32, rcv_nxt)
 {
-	/* bpf_tcp_ca prog cannot have NULL tp */
+	if (bpf_ptr_is_invalid(tp))
+		return -EINVAL;
 	__tcp_send_ack((struct sock *)tp, rcv_nxt);
 	return 0;
 }
@@ -152,7 +153,6 @@ BPF_CALL_2(bpf_tcp_send_ack, struct tcp_sock *, tp, u32, rcv_nxt)
 static const struct bpf_func_proto bpf_tcp_send_ack_proto = {
 	.func		= bpf_tcp_send_ack,
 	.gpl_only	= false,
-	/* In case we want to report error later */
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_BTF_ID,
 	.arg1_btf_id	= &tcp_sock_id,
