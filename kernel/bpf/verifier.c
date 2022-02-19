@@ -3979,6 +3979,12 @@ static int __check_ptr_off_reg(struct bpf_verifier_env *env,
 	 * is only allowed in its original, unmodified form.
 	 */
 
+	if (reg->off < 0) {
+		verbose(env, "negative offset %s ptr R%d off=%d disallowed\n",
+			reg_type_str(env, reg->type), regno, reg->off);
+		return -EACCES;
+	}
+
 	if (!fixed_off_ok && reg->off) {
 		verbose(env, "dereference of modified %s ptr R%d off=%d disallowed\n",
 			reg_type_str(env, reg->type), regno, reg->off);
@@ -4880,6 +4886,8 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		   u32 regno, u32 mem_size)
 {
+	int rv;
+
 	if (register_is_null(reg))
 		return 0;
 
@@ -4889,15 +4897,16 @@ int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		 * the conversion shouldn't be visible to a caller.
 		 */
 		const struct bpf_reg_state saved_reg = *reg;
-		int rv;
 
 		mark_ptr_not_null_reg(reg);
-		rv = check_helper_mem_access(env, regno, mem_size, true, NULL);
+		rv = check_func_arg_reg_off(env, reg, regno, false);
+		rv = rv ?: check_helper_mem_access(env, regno, mem_size, true, NULL);
 		*reg = saved_reg;
 		return rv;
 	}
 
-	return check_helper_mem_access(env, regno, mem_size, true, NULL);
+	rv = check_func_arg_reg_off(env, reg, regno, false);
+	return rv ?: check_helper_mem_access(env, regno, mem_size, true, NULL);
 }
 
 /* Implementation details:
@@ -5255,8 +5264,51 @@ found:
 				kernel_type_name(btf_vmlinux, *arg_btf_id));
 			return -EACCES;
 		}
+
+		/* var_off check happens later in check_func_arg_reg_off */
 	}
 
+	return 0;
+}
+
+/* Caller ensures reg->type does not have PTR_MAYBE_NULL */
+int check_func_arg_reg_off(struct bpf_verifier_env *env,
+			   const struct bpf_reg_state *reg, int regno,
+			   bool arg_alloc_mem)
+{
+	enum bpf_reg_type type = reg->type;
+	int err;
+
+	WARN_ON_ONCE(type & PTR_MAYBE_NULL);
+
+	switch ((u32)type) {
+	case SCALAR_VALUE:
+	/* Pointer types where reg offset is explicitly allowed: */
+	case PTR_TO_PACKET:
+	case PTR_TO_PACKET_META:
+	case PTR_TO_MAP_KEY:
+	case PTR_TO_MAP_VALUE:
+	case PTR_TO_MEM:
+	case PTR_TO_MEM | MEM_RDONLY:
+	case PTR_TO_MEM | MEM_ALLOC:
+	case PTR_TO_BUF:
+	case PTR_TO_BUF | MEM_RDONLY:
+	case PTR_TO_STACK:
+		/* Some of the argument types nevertheless require a
+		 * zero register offset.
+		 */
+		if (arg_alloc_mem)
+			goto force_off_check;
+		break;
+	/* All the rest must be rejected: */
+	default:
+force_off_check:
+		err = __check_ptr_off_reg(env, reg, regno,
+					  type == PTR_TO_BTF_ID);
+		if (err < 0)
+			return err;
+		break;
+	}
 	return 0;
 }
 
@@ -5309,34 +5361,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	if (err)
 		return err;
 
-	switch ((u32)type) {
-	case SCALAR_VALUE:
-	/* Pointer types where reg offset is explicitly allowed: */
-	case PTR_TO_PACKET:
-	case PTR_TO_PACKET_META:
-	case PTR_TO_MAP_KEY:
-	case PTR_TO_MAP_VALUE:
-	case PTR_TO_MEM:
-	case PTR_TO_MEM | MEM_RDONLY:
-	case PTR_TO_MEM | MEM_ALLOC:
-	case PTR_TO_BUF:
-	case PTR_TO_BUF | MEM_RDONLY:
-	case PTR_TO_STACK:
-		/* Some of the argument types nevertheless require a
-		 * zero register offset.
-		 */
-		if (arg_type == ARG_PTR_TO_ALLOC_MEM)
-			goto force_off_check;
-		break;
-	/* All the rest must be rejected: */
-	default:
-force_off_check:
-		err = __check_ptr_off_reg(env, reg, regno,
-					  type == PTR_TO_BTF_ID);
-		if (err < 0)
-			return err;
-		break;
-	}
+	err = check_func_arg_reg_off(env, reg, regno, arg_type == ARG_PTR_TO_ALLOC_MEM);
+	if (err < 0)
+		return err;
 
 skip_type_check:
 	if (reg->ref_obj_id) {

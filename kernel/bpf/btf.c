@@ -5686,7 +5686,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 					i, btf_type_str(t));
 				return -EINVAL;
 			}
-			if (check_ptr_off_reg(env, reg, regno))
+			if (check_func_arg_reg_off(env, reg, regno, false))
 				return -EINVAL;
 		} else if (is_kfunc && (reg->type == PTR_TO_BTF_ID ||
 			   (reg2btf_ids[base_type(reg->type)] && !type_flag(reg->type)))) {
@@ -5714,6 +5714,16 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 							    &reg_ref_id);
 			reg_ref_tname = btf_name_by_offset(reg_btf,
 							   reg_ref_t->name_off);
+			/* In case of PTR_TO_SOCKET, PTR_TO_SOCK_COMMON,
+			 * PTR_TO_TCP_SOCK, we do type check using BTF IDs of
+			 * in-kernel types they point to, but
+			 * check_func_arg_reg_off using original register type,
+			 * as for them fixed offset case must be disallowed.
+			 * In case of PTR_TO_BTF_ID, check_func_arg_reg_off will
+			 * allow having a reg->off >= 0 fixed offset.
+			 */
+			if (check_func_arg_reg_off(env, reg, regno, false))
+				return -EINVAL;
 			if (!btf_struct_ids_match(log, reg_btf, reg_ref_id,
 						  reg->off, btf, ref_id)) {
 				bpf_log(log, "kernel function %s args#%d expected pointer to %s %s but R%d has a pointer to %s %s\n",
@@ -5724,6 +5734,10 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				return -EINVAL;
 			}
 		} else if (ptr_to_mem_ok) {
+			/* All check_func_arg_reg_off checks happen inside
+			 * check_mem_reg, because the reg->type needs to be
+			 * cleared of PTR_MAYBE_NULL before the check is done.
+			 */
 			const struct btf_type *resolve_ret;
 			u32 type_size;
 
@@ -5750,6 +5764,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				return -EINVAL;
 			}
 
+			/* This does the check_func_arg_reg_off call */
 			if (check_mem_reg(env, reg, regno, type_size))
 				return -EINVAL;
 		} else {
