@@ -5714,6 +5714,13 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 							    &reg_ref_id);
 			reg_ref_tname = btf_name_by_offset(reg_btf,
 							   reg_ref_t->name_off);
+
+			if (reg->type == PTR_TO_BTF_ID && (reg->off < 0 || reg->off >= PAGE_SIZE)) {
+				bpf_log(log,
+					"R%d type=ptr_%s off=%d must be in range [0, %lu) when passing into kfunc\n",
+					regno, reg_ref_tname, reg->off, PAGE_SIZE);
+			}
+
 			/* In case of PTR_TO_SOCKET, PTR_TO_SOCK_COMMON,
 			 * PTR_TO_TCP_SOCK, we do type check using BTF IDs of
 			 * in-kernel types they point to, but

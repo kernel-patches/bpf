@@ -5257,6 +5257,16 @@ found:
 			arg_btf_id = compatible->btf_id;
 		}
 
+		/* reg->off may be < 0 here, as check_func_arg_reg_off is
+		 * called later.
+		 */
+		if (reg->off < 0 || reg->off >= PAGE_SIZE) {
+			verbose(env,
+				"R%d type=%s%s off=%d must be in range [0, %lu) when passing into helper\n",
+				regno, reg_type_str(env, reg->type), kernel_type_name(reg->btf, reg->btf_id),
+				reg->off, PAGE_SIZE);
+		}
+
 		if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 					  btf_vmlinux, *arg_btf_id)) {
 			verbose(env, "R%d is of type %s but %s is expected\n",
