@@ -364,6 +364,13 @@ enum bpf_type_flag {
 	/* MEM is in user address space. */
 	MEM_USER		= BIT(3 + BPF_BASE_TYPE_BITS),
 
+	/* PTR is not trusted. This is only used with PTR_TO_BTF_ID, to mark
+	 * unrefcounted pointers loaded from map value, so that they can only
+	 * be dereferenced but not escape the BPF program into the kernel (i.e.
+	 * cannot be passed as arguments to kfunc or bpf helpers).
+	 */
+	PTR_UNTRUSTED		= BIT(4 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_LAST_FLAG	= MEM_USER,
 };
 
