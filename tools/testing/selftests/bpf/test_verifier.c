@@ -54,7 +54,7 @@
 #define MAX_INSNS	BPF_MAXINSNS
 #define MAX_TEST_INSNS	1000000
 #define MAX_FIXUPS	8
-#define MAX_NR_MAPS	22
+#define MAX_NR_MAPS	23
 #define MAX_TEST_RUNS	8
 #define POINTER_VALUE	0xcafe4all
 #define TEST_DATA_LEN	64
@@ -98,6 +98,7 @@ struct bpf_test {
 	int fixup_map_reuseport_array[MAX_FIXUPS];
 	int fixup_map_ringbuf[MAX_FIXUPS];
 	int fixup_map_timer[MAX_FIXUPS];
+	int fixup_map_btf_ptr[MAX_FIXUPS];
 	struct kfunc_btf_id_pair fixup_kfunc_btf_id[MAX_FIXUPS];
 	/* Expected verifier log output for result REJECT or VERBOSE_ACCEPT.
 	 * Can be a tab-separated sequence of expected strings. An empty string
@@ -618,8 +619,13 @@ static int create_cgroup_storage(bool percpu)
  * struct timer {
  *   struct bpf_timer t;
  * };
+ * struct btf_ptr {
+ *   struct prog_test_ref_kfunc __btf_id *ptr;
+ * }
  */
-static const char btf_str_sec[] = "\0bpf_spin_lock\0val\0cnt\0l\0bpf_timer\0timer\0t";
+static const char btf_str_sec[] = "\0bpf_spin_lock\0val\0cnt\0l\0bpf_timer\0timer\0t"
+				  "\0btf_ptr\0prog_test_ref_kfunc\0ptr\0kernel.bpf.btf_id"
+				  "\0kernel.bpf.ref\0kernel.bpf.percpu\0kernel.bpf.user";
 static __u32 btf_raw_types[] = {
 	/* int */
 	BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),  /* [1] */
@@ -635,6 +641,26 @@ static __u32 btf_raw_types[] = {
 	/* struct timer */                              /* [5] */
 	BTF_TYPE_ENC(35, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 1), 16),
 	BTF_MEMBER_ENC(41, 4, 0), /* struct bpf_timer t; */
+	/* struct prog_test_ref_kfunc */		/* [6] */
+	BTF_STRUCT_ENC(51, 0, 0),
+	/* type tag "kernel.bpf.btf_id" */
+	BTF_TYPE_TAG_ENC(75, 6),			/* [7] */
+	/* type tag "kernel.bpf.ref" */
+	BTF_TYPE_TAG_ENC(93, 7),			/* [8] */
+	/* type tag "kernel.bpf.percpu" */
+	BTF_TYPE_TAG_ENC(108, 7),			/* [9] */
+	/* type tag "kernel.bpf.user" */
+	BTF_TYPE_TAG_ENC(126, 7),			/* [10] */
+	BTF_PTR_ENC(7),					/* [11] */
+	BTF_PTR_ENC(8),					/* [12] */
+	BTF_PTR_ENC(9),					/* [13] */
+	BTF_PTR_ENC(10),				/* [14] */
+	/* struct btf_ptr */				/* [15] */
+	BTF_STRUCT_ENC(43, 4, 32),
+	BTF_MEMBER_ENC(71, 11, 0), /* struct prog_test_ref_kfunc __kptr *ptr; */
+	BTF_MEMBER_ENC(71, 12, 64), /* struct prog_test_ref_kfunc __kptr_ref *ptr; */
+	BTF_MEMBER_ENC(71, 13, 128), /* struct prog_test_ref_kfunc __kptr_percpu *ptr; */
+	BTF_MEMBER_ENC(71, 14, 192), /* struct prog_test_ref_kfunc __kptr_user *ptr; */
 };
 
 static int load_btf(void)
@@ -724,6 +750,25 @@ static int create_map_timer(void)
 	return fd;
 }
 
+static int create_map_btf_ptr(void)
+{
+	LIBBPF_OPTS(bpf_map_create_opts, opts,
+		.btf_key_type_id = 1,
+		.btf_value_type_id = 15,
+	);
+	int fd, btf_fd;
+
+	btf_fd = load_btf();
+	if (btf_fd < 0)
+		return -1;
+
+	opts.btf_fd = btf_fd;
+	fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, "test_map", 4, 32, 1, &opts);
+	if (fd < 0)
+		printf("Failed to create map with btf_id pointer\n");
+	return fd;
+}
+
 static char bpf_vlog[UINT_MAX >> 8];
 
 static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
@@ -751,6 +796,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	int *fixup_map_reuseport_array = test->fixup_map_reuseport_array;
 	int *fixup_map_ringbuf = test->fixup_map_ringbuf;
 	int *fixup_map_timer = test->fixup_map_timer;
+	int *fixup_map_btf_ptr = test->fixup_map_btf_ptr;
 	struct kfunc_btf_id_pair *fixup_kfunc_btf_id = test->fixup_kfunc_btf_id;
 
 	if (test->fill_helper) {
@@ -943,6 +989,13 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 			prog[*fixup_map_timer].imm = map_fds[21];
 			fixup_map_timer++;
 		} while (*fixup_map_timer);
+	}
+	if (*fixup_map_btf_ptr) {
+		map_fds[22] = create_map_btf_ptr();
+		do {
+			prog[*fixup_map_btf_ptr].imm = map_fds[22];
+			fixup_map_btf_ptr++;
+		} while (*fixup_map_btf_ptr);
 	}
 
 	/* Patch in kfunc BTF IDs */
