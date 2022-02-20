@@ -3482,7 +3482,11 @@ static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 	enum bpf_reg_type reg_type;
 	const char *reg_name = "";
 
-	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_USER) {
+		if (reg->type != (PTR_TO_BTF_ID | MEM_USER) &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_USER))
+			goto end;
+	} else if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
 		if (reg->type != PTR_TO_PERCPU_BTF_ID &&
 		    reg->type != (PTR_TO_PERCPU_BTF_ID | PTR_MAYBE_NULL))
 			goto end;
@@ -3536,7 +3540,9 @@ static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 
 	return 0;
 end:
-	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_USER)
+		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_USER;
+	else if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
 		reg_type = PTR_TO_PERCPU_BTF_ID | PTR_MAYBE_NULL;
 	else
 		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL;
@@ -3556,14 +3562,14 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 				   struct bpf_reg_state *atomic_load_reg)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
+	bool ref_ptr = false, percpu_ptr = false, user_ptr = false;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	enum bpf_reg_type reg_type = PTR_TO_BTF_ID;
-	bool ref_ptr = false, percpu_ptr = false;
 	struct bpf_map_value_off_desc *off_desc;
 	int insn_class = BPF_CLASS(insn->code);
+	int ret, reg_flags = PTR_MAYBE_NULL;
 	struct bpf_map *map = reg->map_ptr;
 	u32 ref_obj_id = 0;
-	int ret;
 
 	/* Things we already checked for in check_map_access:
 	 *  - Reject cases where variable offset may touch BTF ID pointer
@@ -3590,8 +3596,11 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 
 	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
 	percpu_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU;
+	user_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_USER;
 	if (percpu_ptr)
 		reg_type = PTR_TO_PERCPU_BTF_ID;
+	else if (user_ptr)
+		reg_flags |= MEM_USER;
 
 	if (is_xchg_insn(insn)) {
 		/* We do checks and updates during register fill call for fetch case */
@@ -3623,7 +3632,7 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		}
 		/* val_reg might be NULL at this point */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, reg_type, off_desc->btf,
-				off_desc->btf_id, PTR_MAYBE_NULL);
+				off_desc->btf_id, reg_flags);
 		/* __mark_ptr_or_null_regs needs ref_obj_id == id to clear
 		 * reference state for ptr == NULL branch.
 		 */
@@ -3641,7 +3650,7 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, reg_type, off_desc->btf,
-				off_desc->btf_id, PTR_MAYBE_NULL);
+				off_desc->btf_id, reg_flags);
 		val_reg->id = ++env->id_gen;
 	} else if (insn_class == BPF_STX) {
 		if (WARN_ON_ONCE(value_regno < 0))
