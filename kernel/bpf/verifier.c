@@ -1559,12 +1559,13 @@ static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 			    struct btf *btf, u32 btf_id,
 			    enum bpf_type_flag flag)
 {
-	if (reg_type == SCALAR_VALUE) {
+	if (reg_type == SCALAR_VALUE ||
+	    WARN_ON_ONCE(reg_type != PTR_TO_BTF_ID && reg_type != PTR_TO_PERCPU_BTF_ID)) {
 		mark_reg_unknown(env, regs, regno);
 		return;
 	}
 	mark_reg_known_zero(env, regs, regno);
-	regs[regno].type = PTR_TO_BTF_ID | flag;
+	regs[regno].type = reg_type | flag;
 	regs[regno].btf = btf;
 	regs[regno].btf_id = btf_id;
 }
@@ -3478,10 +3479,18 @@ static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 					bool ref_ptr)
 {
 	const char *targ_name = kernel_type_name(off_desc->btf, off_desc->btf_id);
+	enum bpf_reg_type reg_type;
 	const char *reg_name = "";
 
-	if (reg->type != PTR_TO_BTF_ID && reg->type != PTR_TO_BTF_ID_OR_NULL)
-		goto end;
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
+		if (reg->type != PTR_TO_PERCPU_BTF_ID &&
+		    reg->type != (PTR_TO_PERCPU_BTF_ID | PTR_MAYBE_NULL))
+			goto end;
+	} else { /* referenced and unreferenced case */
+		if (reg->type != PTR_TO_BTF_ID &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL))
+			goto end;
+	}
 
 	if (!btf_is_kernel(reg->btf)) {
 		verbose(env, "R%d must point to kernel BTF\n", regno);
@@ -3524,11 +3533,16 @@ static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 				  off_desc->btf, off_desc->btf_id))
 		goto end;
+
 	return 0;
 end:
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
+		reg_type = PTR_TO_PERCPU_BTF_ID | PTR_MAYBE_NULL;
+	else
+		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL;
 	verbose(env, "invalid btf_id pointer access, R%d type=%s%s ", regno,
 		reg_type_str(env, reg->type), reg_name);
-	verbose(env, "expected=%s%s\n", reg_type_str(env, PTR_TO_BTF_ID), targ_name);
+	verbose(env, "expected=%s%s\n", reg_type_str(env, reg_type), targ_name);
 	return -EINVAL;
 }
 
@@ -3543,10 +3557,11 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 {
 	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	enum bpf_reg_type reg_type = PTR_TO_BTF_ID;
+	bool ref_ptr = false, percpu_ptr = false;
 	struct bpf_map_value_off_desc *off_desc;
 	int insn_class = BPF_CLASS(insn->code);
 	struct bpf_map *map = reg->map_ptr;
-	bool ref_ptr = false;
 	u32 ref_obj_id = 0;
 	int ret;
 
@@ -3561,7 +3576,6 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 	off_desc = bpf_map_ptr_off_contains(map, off + reg->var_off.value);
 	if (!off_desc)
 		return 0;
-	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
 
 	if (WARN_ON_ONCE(size != bpf_size_to_bytes(BPF_DW)))
 		return -EACCES;
@@ -3573,6 +3587,11 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		verbose(env, "btf_id pointer in map only allowed for CAP_BPF and CAP_SYS_ADMIN\n");
 		return -EPERM;
 	}
+
+	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
+	percpu_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU;
+	if (percpu_ptr)
+		reg_type = PTR_TO_PERCPU_BTF_ID;
 
 	if (is_xchg_insn(insn)) {
 		/* We do checks and updates during register fill call for fetch case */
@@ -3603,7 +3622,7 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 			ref_obj_id = ret;
 		}
 		/* val_reg might be NULL at this point */
-		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
+		mark_btf_ld_reg(env, cur_regs(env), value_regno, reg_type, off_desc->btf,
 				off_desc->btf_id, PTR_MAYBE_NULL);
 		/* __mark_ptr_or_null_regs needs ref_obj_id == id to clear
 		 * reference state for ptr == NULL branch.
@@ -3621,7 +3640,7 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
-		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
+		mark_btf_ld_reg(env, cur_regs(env), value_regno, reg_type, off_desc->btf,
 				off_desc->btf_id, PTR_MAYBE_NULL);
 		val_reg->id = ++env->id_gen;
 	} else if (insn_class == BPF_STX) {
