@@ -843,7 +843,7 @@ static int run_btfgen(const char *src_btf, const char *dst_btf, const char *objp
 	int n;
 
 	n = snprintf(command, sizeof(command),
-		     "./tools/build/bpftool/bpftool gen min_core_btf %s %s %s",
+		     "./tools/build/bpftool/bootstrap/bpftool gen min_core_btf %s %s %s",
 		     src_btf, dst_btf, objpath);
 	if (n < 0 || n >= sizeof(command))
 		return -1;
