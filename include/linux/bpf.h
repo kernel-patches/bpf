@@ -253,12 +253,22 @@ static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 		memset(dst + map->spin_lock_off, 0, sizeof(struct bpf_spin_lock));
 	if (unlikely(map_value_has_timer(map)))
 		memset(dst + map->timer_off, 0, sizeof(struct bpf_timer));
+	if (unlikely(map_value_has_ptr_to_btf_id(map))) {
+		struct bpf_map_value_off *tab = map->ptr_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++)
+			*(u64 *)(dst + tab->off[i].offset) = 0;
+	}
 }
+
+void copy_map_value_slow(struct bpf_map *map, void *dst, void *src, u32 s_off,
+			 u32 s_sz, u32 t_off, u32 t_sz);
 
 /* copy everything but bpf_spin_lock and bpf_timer. There could be one of each. */
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 {
-	u32 s_off = 0, s_sz = 0, t_off = 0, t_sz = 0;
+	u32 s_off = 0, s_sz = 0, t_off = 0, t_sz = 0, p_off = 0, p_sz = 0;
 
 	if (unlikely(map_value_has_spin_lock(map))) {
 		s_off = map->spin_lock_off;
@@ -268,13 +278,40 @@ static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 		t_off = map->timer_off;
 		t_sz = sizeof(struct bpf_timer);
 	}
+	/* Multiple offset case is slow, offload to function */
+	if (unlikely(map_value_has_ptr_to_btf_id(map))) {
+		struct bpf_map_value_off *tab = map->ptr_off_tab;
 
-	if (unlikely(s_sz || t_sz)) {
+		/* Inline the likely common case */
+		if (likely(tab->nr_off == 1)) {
+			p_off = tab->off[0].offset;
+			p_sz = sizeof(u64);
+		} else {
+			copy_map_value_slow(map, dst, src, s_off, s_sz, t_off, t_sz);
+			return;
+		}
+	}
+
+	if (unlikely(s_sz || t_sz || p_sz)) {
+		/* The order is p_off, t_off, s_off, use insertion sort */
+
+		if (t_off < p_off || !t_sz) {
+			swap(t_off, p_off);
+			swap(t_sz, p_sz);
+		}
 		if (s_off < t_off || !s_sz) {
 			swap(s_off, t_off);
 			swap(s_sz, t_sz);
+			if (t_off < p_off || !t_sz) {
+				swap(t_off, p_off);
+				swap(t_sz, p_sz);
+			}
 		}
-		memcpy(dst, src, t_off);
+
+		memcpy(dst, src, p_off);
+		memcpy(dst + p_off + p_sz,
+		       src + p_off + p_sz,
+		       t_off - p_off - p_sz);
 		memcpy(dst + t_off + t_sz,
 		       src + t_off + t_sz,
 		       s_off - t_off - t_sz);

@@ -30,6 +30,7 @@
 #include <linux/pgtable.h>
 #include <linux/bpf_lsm.h>
 #include <linux/poll.h>
+#include <linux/sort.h>
 #include <linux/bpf-netns.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
@@ -228,6 +229,60 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 	maybe_wait_bpf_programs(map);
 
 	return err;
+}
+
+static int copy_map_value_cmp(const void *_a, const void *_b)
+{
+	const u32 a = *(const u32 *)_a;
+	const u32 b = *(const u32 *)_b;
+
+	/* We only need to sort based on offset */
+	if (a < b)
+		return -1;
+	else if (a > b)
+		return 1;
+	return 0;
+}
+
+void copy_map_value_slow(struct bpf_map *map, void *dst, void *src, u32 s_off,
+			 u32 s_sz, u32 t_off, u32 t_sz)
+{
+	struct bpf_map_value_off *tab = map->ptr_off_tab; /* already set to non-NULL */
+	/* 3 = 2 for bpf_timer, bpf_spin_lock, 1 for map->value_size sentinel */
+	struct {
+		u32 off;
+		u32 sz;
+	} off_arr[BPF_MAP_VALUE_OFF_MAX + 3];
+	int i, cnt = 0;
+
+	/* Reconsider stack usage when bumping BPF_MAP_VALUE_OFF_MAX */
+	BUILD_BUG_ON(sizeof(off_arr) != 88);
+
+	for (i = 0; i < tab->nr_off; i++) {
+		off_arr[cnt].off = tab->off[i].offset;
+		off_arr[cnt++].sz = sizeof(u64);
+	}
+	if (s_sz) {
+		off_arr[cnt].off = s_off;
+		off_arr[cnt++].sz = s_sz;
+	}
+	if (t_sz) {
+		off_arr[cnt].off = t_off;
+		off_arr[cnt++].sz = t_sz;
+	}
+	off_arr[cnt].off = map->value_size;
+
+	sort(off_arr, cnt, sizeof(off_arr[0]), copy_map_value_cmp, NULL);
+
+	/* There is always at least one element */
+	memcpy(dst, src, off_arr[0].off);
+	/* Copy the rest, while skipping other regions */
+	for (i = 1; i < cnt; i++) {
+		u32 curr_off = off_arr[i - 1].off + off_arr[i - 1].sz;
+		u32 next_off = off_arr[i].off;
+
+		memcpy(dst + curr_off, src + curr_off, next_off - curr_off);
+	}
 }
 
 static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
