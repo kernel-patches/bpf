@@ -3657,11 +3657,12 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 	} else if (insn_class == BPF_LDX) {
 		if (WARN_ON_ONCE(value_regno < 0))
 			return -EFAULT;
+		/* We allow loading referenced pointer, but mark it as
+		 * untrusted. User needs to use a kptr_get helper to obtain a
+		 * trusted refcounted PTR_TO_BTF_ID by passing in the map
+		 * value pointing to the referenced pointer.
+		 */
 		val_reg = reg_state(env, value_regno);
-		if (ref_ptr) {
-			verbose(env, "referenced btf_id pointer can only be accessed using BPF_XCHG\n");
-			return -EACCES;
-		}
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
