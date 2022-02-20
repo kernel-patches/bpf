@@ -711,23 +711,6 @@ bool nf_ct_delete(struct nf_conn *ct, u32 portid, int report)
 EXPORT_SYMBOL_GPL(nf_ct_delete);
 
 static inline bool
-nf_ct_key_equal(struct nf_conntrack_tuple_hash *h,
-		const struct nf_conntrack_tuple *tuple,
-		const struct nf_conntrack_zone *zone,
-		const struct net *net)
-{
-	struct nf_conn *ct = nf_ct_tuplehash_to_ctrack(h);
-
-	/* A conntrack can be recreated with the equal tuple,
-	 * so we need to check that the conntrack is confirmed
-	 */
-	return nf_ct_tuple_equal(tuple, &h->tuple) &&
-	       nf_ct_zone_equal(ct, zone, NF_CT_DIRECTION(h)) &&
-	       nf_ct_is_confirmed(ct) &&
-	       net_eq(net, nf_ct_net(ct));
-}
-
-static inline bool
 nf_ct_match(const struct nf_conn *ct1, const struct nf_conn *ct2)
 {
 	return nf_ct_tuple_equal(&ct1->tuplehash[IP_CT_DIR_ORIGINAL].tuple,
