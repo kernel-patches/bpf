@@ -30,7 +30,20 @@ struct nf_conn *bpf_xdp_ct_lookup(struct xdp_md *, struct bpf_sock_tuple *, u32,
 				  struct bpf_ct_opts___local *, u32) __ksym;
 struct nf_conn *bpf_skb_ct_lookup(struct __sk_buff *, struct bpf_sock_tuple *, u32,
 				  struct bpf_ct_opts___local *, u32) __ksym;
+struct nf_conn *bpf_ct_kptr_get(struct nf_conn **, struct bpf_sock_tuple *, u32,
+				u8, u8) __ksym;
 void bpf_ct_release(struct nf_conn *) __ksym;
+
+struct nf_map_value {
+	struct nf_conn __kptr_ref *ct;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, int);
+	__type(value, struct nf_map_value);
+	__uint(max_entries, 1);
+} array_map SEC(".maps");
 
 static __always_inline void
 nf_ct_test(struct nf_conn *(*func)(void *, struct bpf_sock_tuple *, u32,
@@ -101,10 +114,27 @@ nf_ct_test(struct nf_conn *(*func)(void *, struct bpf_sock_tuple *, u32,
 		test_eafnosupport = opts_def.error;
 }
 
+static __always_inline void
+nf_ct_test_kptr(void)
+{
+	struct bpf_sock_tuple tuple = {};
+	struct nf_map_value *v;
+	struct nf_conn *ct;
+
+	v = bpf_map_lookup_elem(&array_map, &(int){0});
+	if (!v)
+		return;
+	ct = bpf_ct_kptr_get(&v->ct, &tuple, sizeof(tuple.ipv4), IPPROTO_TCP, IP_CT_DIR_ORIGINAL);
+	if (!ct)
+		return;
+	bpf_ct_release(ct);
+}
+
 SEC("xdp")
 int nf_xdp_ct_test(struct xdp_md *ctx)
 {
 	nf_ct_test((void *)bpf_xdp_ct_lookup, ctx);
+	nf_ct_test_kptr();
 	return 0;
 }
 
@@ -112,6 +142,7 @@ SEC("tc")
 int nf_skb_ct_test(struct __sk_buff *ctx)
 {
 	nf_ct_test((void *)bpf_skb_ct_lookup, ctx);
+	nf_ct_test_kptr();
 	return 0;
 }
 
