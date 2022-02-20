@@ -6545,16 +6545,10 @@ static struct btf *btf_get_module_btf(const struct module *module)
 	return btf;
 }
 
-BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int, flags)
+static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **btfp)
 {
 	struct btf *btf;
-	long ret;
-
-	if (flags)
-		return -EINVAL;
-
-	if (name_sz <= 1 || name[name_sz - 1])
-		return -EINVAL;
+	s32 ret;
 
 	btf = bpf_get_btf_vmlinux();
 	if (IS_ERR(btf))
@@ -6580,19 +6574,40 @@ BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int
 			spin_unlock_bh(&btf_idr_lock);
 			ret = btf_find_by_name_kind(mod_btf, name, kind);
 			if (ret > 0) {
-				int btf_obj_fd;
-
-				btf_obj_fd = __btf_new_fd(mod_btf);
-				if (btf_obj_fd < 0) {
-					btf_put(mod_btf);
-					return btf_obj_fd;
-				}
-				return ret | (((u64)btf_obj_fd) << 32);
+				*btfp = mod_btf;
+				return ret;
 			}
 			spin_lock_bh(&btf_idr_lock);
 			btf_put(mod_btf);
 		}
 		spin_unlock_bh(&btf_idr_lock);
+	} else {
+		*btfp = btf;
+	}
+	return ret;
+}
+
+BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int, flags)
+{
+	struct btf *btf = NULL;
+	int btf_obj_fd = 0;
+	long ret;
+
+	if (flags)
+		return -EINVAL;
+
+	if (name_sz <= 1 || name[name_sz - 1])
+		return -EINVAL;
+
+	ret = btf_find_by_name_kind_all(name, kind, &btf);
+	if (ret > 0 && btf_is_module(btf)) {
+		/* reference for btf is only raised if module BTF */
+		btf_obj_fd = __btf_new_fd(btf);
+		if (btf_obj_fd < 0) {
+			btf_put(btf);
+			return btf_obj_fd;
+		}
+		return ret | (((u64)btf_obj_fd) << 32);
 	}
 	return ret;
 }
