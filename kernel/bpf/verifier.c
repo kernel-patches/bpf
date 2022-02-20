@@ -521,6 +521,13 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_skc_to_tcp_request_sock;
 }
 
+static bool is_xchg_insn(const struct bpf_insn *insn)
+{
+	return BPF_CLASS(insn->code) == BPF_STX &&
+	       BPF_MODE(insn->code) == BPF_ATOMIC &&
+	       insn->imm == BPF_XCHG;
+}
+
 static bool is_cmpxchg_insn(const struct bpf_insn *insn)
 {
 	return BPF_CLASS(insn->code) == BPF_STX &&
@@ -3467,7 +3474,8 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 
 static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 					struct bpf_map_value_off_desc *off_desc,
-					struct bpf_reg_state *reg, u32 regno)
+					struct bpf_reg_state *reg, u32 regno,
+					bool ref_ptr)
 {
 	const char *targ_name = kernel_type_name(off_desc->btf, off_desc->btf_id);
 	const char *reg_name = "";
@@ -3498,6 +3506,20 @@ static int map_ptr_to_btf_id_match_type(struct bpf_verifier_env *env,
 			regno, reg_name, reg->off, tn_buf);
 		return -EINVAL;
 	}
+	/* reg->off can be used to store pointer to a certain type formed by
+	 * incrementing pointer of a parent structure the object is embedded in,
+	 * e.g. map may expect unreferenced struct path *, and user should be
+	 * allowed a store using &file->f_path. However, in the case of
+	 * referenced pointer, we cannot do this, because the reference is only
+	 * for the parent structure, not its embedded object(s), and because
+	 * the transfer of ownership happens for the original pointer to and
+	 * from the map (before its eventual release).
+	 */
+	if (reg->off && ref_ptr) {
+		verbose(env, "R%d stored to referenced btf_id pointer cannot have non-zero offset\n",
+			regno);
+		return -EINVAL;
+	}
 
 	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 				  off_desc->btf, off_desc->btf_id))
@@ -3510,17 +3532,23 @@ end:
 	return -EINVAL;
 }
 
+static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
+
 /* Returns an error, or 0 if ignoring the access, or 1 if register state was
  * updated, in which case later updates must be skipped.
  */
 static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int off, int size,
-				   int value_regno, enum bpf_access_type t, int insn_idx)
+				   int value_regno, enum bpf_access_type t, int insn_idx,
+				   struct bpf_reg_state *atomic_load_reg)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	struct bpf_map_value_off_desc *off_desc;
 	int insn_class = BPF_CLASS(insn->code);
 	struct bpf_map *map = reg->map_ptr;
+	bool ref_ptr = false;
+	u32 ref_obj_id = 0;
+	int ret;
 
 	/* Things we already checked for in check_map_access:
 	 *  - Reject cases where variable offset may touch BTF ID pointer
@@ -3533,11 +3561,12 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 	off_desc = bpf_map_ptr_off_contains(map, off + reg->var_off.value);
 	if (!off_desc)
 		return 0;
+	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
 
 	if (WARN_ON_ONCE(size != bpf_size_to_bytes(BPF_DW)))
 		return -EACCES;
 
-	if (BPF_MODE(insn->code) != BPF_MEM)
+	if (BPF_MODE(insn->code) != BPF_MEM && BPF_MODE(insn->code) != BPF_ATOMIC)
 		goto end;
 
 	if (!env->bpf_capable) {
@@ -3545,10 +3574,50 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		return -EPERM;
 	}
 
-	if (insn_class == BPF_LDX) {
+	if (is_xchg_insn(insn)) {
+		/* We do checks and updates during register fill call for fetch case */
+		if (t != BPF_READ || value_regno < 0)
+			return 1;
+		val_reg = reg_state(env, value_regno);
+		if (!register_is_null(atomic_load_reg) &&
+		    map_ptr_to_btf_id_match_type(env, off_desc, atomic_load_reg, value_regno, ref_ptr))
+			return -EACCES;
+		/* Acquire new reference state for old pointer, and release
+		 * current reference state for exchanged pointer.
+		 */
+		if (ref_ptr) {
+			if (!register_is_null(atomic_load_reg)) {
+				if (!atomic_load_reg->ref_obj_id) {
+					verbose(env, "R%d type=%s%s must be referenced\n",
+						value_regno, reg_type_str(env, atomic_load_reg->type),
+						kernel_type_name(reg->btf, reg->btf_id));
+					return -EACCES;
+				}
+				ret = release_reference(env, atomic_load_reg->ref_obj_id);
+				if (ret < 0)
+					return ret;
+			}
+			ret = acquire_reference_state(env, insn_idx);
+			if (ret < 0)
+				return ret;
+			ref_obj_id = ret;
+		}
+		/* val_reg might be NULL at this point */
+		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
+				off_desc->btf_id, PTR_MAYBE_NULL);
+		/* __mark_ptr_or_null_regs needs ref_obj_id == id to clear
+		 * reference state for ptr == NULL branch.
+		 */
+		val_reg->id = ref_obj_id ?: ++env->id_gen;
+		val_reg->ref_obj_id = ref_obj_id;
+	} else if (insn_class == BPF_LDX) {
 		if (WARN_ON_ONCE(value_regno < 0))
 			return -EFAULT;
 		val_reg = reg_state(env, value_regno);
+		if (ref_ptr) {
+			verbose(env, "referenced btf_id pointer can only be accessed using BPF_XCHG\n");
+			return -EACCES;
+		}
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
@@ -3559,10 +3628,18 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 		if (WARN_ON_ONCE(value_regno < 0))
 			return -EFAULT;
 		val_reg = reg_state(env, value_regno);
+		if (ref_ptr) {
+			verbose(env, "referenced btf_id pointer can only be accessed using BPF_XCHG\n");
+			return -EACCES;
+		}
 		if (!register_is_null(val_reg) &&
-		    map_ptr_to_btf_id_match_type(env, off_desc, val_reg, value_regno))
+		    map_ptr_to_btf_id_match_type(env, off_desc, val_reg, value_regno, false))
 			return -EACCES;
 	} else if (insn_class == BPF_ST) {
+		if (ref_ptr) {
+			verbose(env, "referenced btf_id pointer can only be accessed using BPF_XCHG\n");
+			return -EACCES;
+		}
 		if (insn->imm) {
 			verbose(env, "BPF_ST imm must be 0 when writing to btf_id pointer at off=%u\n",
 				off_desc->offset);
@@ -3573,7 +3650,7 @@ static int check_map_ptr_to_btf_id(struct bpf_verifier_env *env, u32 regno, int 
 	}
 	return 1;
 end:
-	verbose(env, "btf_id pointer in map can only be accessed using BPF_LDX/BPF_STX/BPF_ST\n");
+	verbose(env, "btf_id pointer in map can only be accessed using BPF_LDX, BPF_STX, BPF_ST, BPF_XCHG\n");
 	return -EACCES;
 }
 
@@ -4505,7 +4582,8 @@ static int check_stack_access_within_bounds(
  */
 static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regno,
 			    int off, int bpf_size, enum bpf_access_type t,
-			    int value_regno, bool strict_alignment_once)
+			    int value_regno, bool strict_alignment_once,
+			    struct bpf_reg_state *atomic_load_reg)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = regs + regno;
@@ -4548,7 +4626,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_map_access(env, regno, off, size, false);
 		if (!err)
 			err = check_map_ptr_to_btf_id(env, regno, off, size, value_regno,
-						      t, insn_idx);
+						      t, insn_idx, atomic_load_reg);
 		/* if err == 0, check_map_ptr_to_btf_id ignored the access */
 		if (!err && t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
@@ -4743,8 +4821,11 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 
 static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_insn *insn)
 {
+	struct bpf_reg_state atomic_load_reg;
 	int load_reg;
 	int err;
+
+	__mark_reg_unknown(env, &atomic_load_reg);
 
 	switch (insn->imm) {
 	case BPF_ADD:
@@ -4813,6 +4894,7 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 		else
 			load_reg = insn->src_reg;
 
+		atomic_load_reg = *reg_state(env, load_reg);
 		/* check and record load of old value */
 		err = check_reg_arg(env, load_reg, DST_OP);
 		if (err)
@@ -4825,20 +4907,21 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	}
 
 	/* Check whether we can read the memory, with second call for fetch
-	 * case to simulate the register fill.
+	 * case to simulate the register fill, which also triggers checks
+	 * for manipulation of BTF ID pointers embedded in BPF maps.
 	 */
 	err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-			       BPF_SIZE(insn->code), BPF_READ, -1, true);
+			       BPF_SIZE(insn->code), BPF_READ, -1, true, NULL);
 	if (!err && load_reg >= 0)
 		err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
 				       BPF_SIZE(insn->code), BPF_READ, load_reg,
-				       true);
+				       true, load_reg >= 0 ? &atomic_load_reg : NULL);
 	if (err)
 		return err;
 
 	/* Check whether we can write into the same memory. */
 	err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-			       BPF_SIZE(insn->code), BPF_WRITE, -1, true);
+			       BPF_SIZE(insn->code), BPF_WRITE, -1, true, NULL);
 	if (err)
 		return err;
 
@@ -6797,7 +6880,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	 */
 	for (i = 0; i < meta.access_size; i++) {
 		err = check_mem_access(env, insn_idx, meta.regno, i, BPF_B,
-				       BPF_WRITE, -1, false);
+				       BPF_WRITE, -1, false, NULL);
 		if (err)
 			return err;
 	}
@@ -11662,7 +11745,8 @@ static int do_check(struct bpf_verifier_env *env)
 			 */
 			err = check_mem_access(env, env->insn_idx, insn->src_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_READ, insn->dst_reg, false);
+					       BPF_READ, insn->dst_reg, false,
+					       NULL);
 			if (err)
 				return err;
 
@@ -11717,7 +11801,8 @@ static int do_check(struct bpf_verifier_env *env)
 			/* check that memory (dst_reg + off) is writeable */
 			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_WRITE, insn->src_reg, false);
+					       BPF_WRITE, insn->src_reg, false,
+					       NULL);
 			if (err)
 				return err;
 
@@ -11751,7 +11836,7 @@ static int do_check(struct bpf_verifier_env *env)
 			/* check that memory (dst_reg + off) is writeable */
 			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_WRITE, -1, false);
+					       BPF_WRITE, -1, false, NULL);
 			if (err)
 				return err;
 

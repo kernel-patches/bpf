@@ -3146,10 +3146,10 @@ static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **bt
 static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 			       u32 off, int sz, void *data)
 {
+	bool btf_id_tag = false, ref_tag = false;
 	struct bpf_map_value_off *tab;
 	struct bpf_map *map = data;
 	struct module *mod = NULL;
-	bool btf_id_tag = false;
 	struct btf *kernel_btf;
 	int nr_off, ret;
 	s32 id;
@@ -3167,6 +3167,13 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 				goto end;
 			}
 			btf_id_tag = true;
+		} else if (!strcmp("kernel.bpf.ref", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (ref_tag) {
+				ret = -EINVAL;
+				goto end;
+			}
+			ref_tag = true;
 		} else if (!strncmp("kernel.", __btf_name_by_offset(btf, t->name_off),
 			   sizeof("kernel.") - 1)) {
 			/* TODO: Should we reject these when loading BTF? */
@@ -3177,8 +3184,14 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 		/* Look for next tag */
 		t = btf_type_by_id(btf, t->type);
 	}
-	if (!btf_id_tag)
+	if (!btf_id_tag) {
+		/* 'ref' tag must be specified together with 'btf_id' tag */
+		if (ref_tag) {
+			ret = -EINVAL;
+			goto end;
+		}
 		return 0;
+	}
 
 	/* Get the base type */
 	if (btf_type_is_modifier(t))
@@ -3215,6 +3228,10 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 
 	/* We take reference to make sure valid pointers into module data don't
 	 * become invalid across program invocation.
+	 *
+	 * We also need to hold a reference to the module, which corresponds to
+	 * the referenced type, as it has the destructor function we need to
+	 * call when map goes away and a live pointer exists at offset.
 	 */
 	if (btf_is_module(kernel_btf)) {
 		mod = btf_try_get_module(kernel_btf);
@@ -3228,6 +3245,7 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 	tab->off[nr_off].btf_id = id;
 	tab->off[nr_off].btf    = kernel_btf;
 	tab->off[nr_off].module = mod;
+	tab->off[nr_off].flags  = ref_tag ? BPF_MAP_VALUE_OFF_F_REF : 0;
 	tab->nr_off++;
 
 	return 0;
