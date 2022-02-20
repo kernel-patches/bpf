@@ -3122,6 +3122,7 @@ static void btf_struct_log(struct btf_verifier_env *env,
 enum {
 	BTF_FIELD_SPIN_LOCK,
 	BTF_FIELD_TIMER,
+	BTF_FIELD_KPTR,
 };
 
 static int btf_find_field_struct(const struct btf *btf, const struct btf_type *t,
@@ -3138,6 +3139,106 @@ static int btf_find_field_struct(const struct btf *btf, const struct btf_type *t
 		return -E2BIG;
 	*offp = off;
 	return 0;
+}
+
+static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **btfp);
+
+static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
+			       u32 off, int sz, void *data)
+{
+	struct bpf_map_value_off *tab;
+	struct bpf_map *map = data;
+	struct module *mod = NULL;
+	bool btf_id_tag = false;
+	struct btf *kernel_btf;
+	int nr_off, ret;
+	s32 id;
+
+	/* For PTR, sz is always == 8 */
+	if (!btf_type_is_ptr(t))
+		return 0;
+	t = btf_type_by_id(btf, t->type);
+
+	while (btf_type_is_type_tag(t)) {
+		if (!strcmp("kernel.bpf.btf_id", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (btf_id_tag) {
+				ret = -EINVAL;
+				goto end;
+			}
+			btf_id_tag = true;
+		} else if (!strncmp("kernel.", __btf_name_by_offset(btf, t->name_off),
+			   sizeof("kernel.") - 1)) {
+			/* TODO: Should we reject these when loading BTF? */
+			/* Unavailable tag in reserved tag namespace */
+			ret = -EACCES;
+			goto end;
+		}
+		/* Look for next tag */
+		t = btf_type_by_id(btf, t->type);
+	}
+	if (!btf_id_tag)
+		return 0;
+
+	/* Get the base type */
+	if (btf_type_is_modifier(t))
+		t = btf_type_skip_modifiers(btf, t->type, NULL);
+	/* Only pointer to struct is allowed */
+	if (!__btf_type_is_struct(t)) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	id = btf_find_by_name_kind_all(__btf_name_by_offset(btf, t->name_off),
+				       BTF_INFO_KIND(t->info), &kernel_btf);
+	if (id < 0) {
+		ret = id;
+		goto end;
+	}
+
+	nr_off = map->ptr_off_tab ? map->ptr_off_tab->nr_off : 0;
+	if (nr_off == BPF_MAP_VALUE_OFF_MAX) {
+		ret = -E2BIG;
+		goto end_btf;
+	}
+
+	tab = krealloc(map->ptr_off_tab, offsetof(struct bpf_map_value_off, off[nr_off + 1]),
+		       GFP_KERNEL | __GFP_NOWARN);
+	if (!tab) {
+		ret = -ENOMEM;
+		goto end_btf;
+	}
+	/* Initialize nr_off for newly allocated ptr_off_tab */
+	if (!map->ptr_off_tab)
+		tab->nr_off = 0;
+	map->ptr_off_tab = tab;
+
+	/* We take reference to make sure valid pointers into module data don't
+	 * become invalid across program invocation.
+	 */
+	if (btf_is_module(kernel_btf)) {
+		mod = btf_try_get_module(kernel_btf);
+		if (!mod) {
+			ret = -ENXIO;
+			goto end_btf;
+		}
+	}
+
+	tab->off[nr_off].offset = off;
+	tab->off[nr_off].btf_id = id;
+	tab->off[nr_off].btf    = kernel_btf;
+	tab->off[nr_off].module = mod;
+	tab->nr_off++;
+
+	return 0;
+end_btf:
+	/* Reference is only raised for module BTF */
+	if (btf_is_module(kernel_btf))
+		btf_put(kernel_btf);
+end:
+	bpf_map_free_ptr_off_tab(map);
+	map->ptr_off_tab = ERR_PTR(ret);
+	return ret;
 }
 
 static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t,
@@ -3167,6 +3268,11 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
 			ret = btf_find_field_struct(btf, member_type, off, sz, data);
+			if (ret < 0)
+				return ret;
+			break;
+		case BTF_FIELD_KPTR:
+			ret = btf_find_field_kptr(btf, member_type, off, sz, data);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3203,6 +3309,11 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
 			ret = btf_find_field_struct(btf, var_type, off, sz, data);
+			if (ret < 0)
+				return ret;
+			break;
+		case BTF_FIELD_KPTR:
+			ret = btf_find_field_kptr(btf, var_type, off, sz, data);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3254,6 +3365,22 @@ int btf_find_timer(const struct btf *btf, const struct btf_type *t)
 	if (ret < 0)
 		return ret;
 	return off;
+}
+
+int btf_find_ptr_to_btf_id(const struct btf *btf, const struct btf_type *t,
+			   struct bpf_map *map)
+{
+	int ret;
+
+	ret = btf_find_field(btf, t, NULL, sizeof(u64), __alignof__(u64),
+			     BTF_FIELD_KPTR, map);
+	/* While btf_find_field_kptr cleans up after itself, later iterations
+	 * can still return error without calling it, so call free function
+	 * again.
+	 */
+	if (ret < 0)
+		bpf_map_free_ptr_off_tab(map);
+	return ret;
 }
 
 static void __btf_struct_show(const struct btf *btf, const struct btf_type *t,
