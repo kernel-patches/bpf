@@ -638,15 +638,48 @@ bool bpf_map_equal_ptr_off_tab(const struct bpf_map *map_a, const struct bpf_map
 	return !memcmp(tab_a, tab_b, size);
 }
 
+/* Caller must ensure map_value_has_ptr_to_btf_id is true. Note that this
+ * function can be called on a map value while the map_value is visible to BPF
+ * programs, as it ensures the correct synchronization, and we already enforce
+ * the same using the verifier on the BPF program side, esp. for referenced
+ * pointers.
+ */
+void bpf_map_free_ptr_to_btf_id(struct bpf_map *map, void *map_value)
+{
+	struct bpf_map_value_off *tab = map->ptr_off_tab;
+	u64 *btf_id_ptr;
+	int i;
+
+	for (i = 0; i < tab->nr_off; i++) {
+		struct bpf_map_value_off_desc *off_desc = &tab->off[i];
+		u64 old_ptr;
+
+		btf_id_ptr = map_value + off_desc->offset;
+		if (!(off_desc->flags & BPF_MAP_VALUE_OFF_F_REF)) {
+			/* On 32-bit platforms, WRITE_ONCE 64-bit store tearing
+			 * into two 32-bit stores is fine for us, as we only
+			 * permit pointer values to be stored at this address,
+			 * which are word sized, so the other half of 64-bit
+			 * value will always be zeroed.
+			 */
+			WRITE_ONCE(*btf_id_ptr, 0);
+			continue;
+		}
+		old_ptr = xchg(btf_id_ptr, 0);
+		off_desc->dtor((void *)old_ptr);
+	}
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {
 	struct bpf_map *map = container_of(work, struct bpf_map, work);
 
 	security_bpf_map_free(map);
-	bpf_map_free_ptr_off_tab(map);
 	bpf_map_release_memcg(map);
-	/* implementation dependent freeing */
+	/* implementation dependent freeing, map_free callback also does
+	 * bpf_map_free_ptr_off_tab, if needed.
+	 */
 	map->ops->map_free(map);
 }
 

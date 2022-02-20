@@ -3170,7 +3170,7 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 	int nr_off, ret, flags = 0;
 	struct module *mod = NULL;
 	struct btf *kernel_btf;
-	s32 id;
+	s32 id, dtor_btf_id;
 
 	/* For PTR, sz is always == 8 */
 	if (!btf_type_is_ptr(t))
@@ -3291,9 +3291,79 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 	tab->off[nr_off].btf    = kernel_btf;
 	tab->off[nr_off].module = mod;
 	tab->off[nr_off].flags  = flags;
+
+	/* Find and stash the function pointer for the destruction function that
+	 * needs to be eventually invoked from the map free path.
+	 *
+	 * Note that we already took module reference, and the map free path
+	 * always invoked the destructor for BTF ID before freeing ptr_off_tab,
+	 * so calling the function should be safe in that context.
+	 */
+	if (ref_tag) {
+		const struct btf_type *dtor_func, *dtor_func_proto, *t;
+		const struct btf_param *args;
+		const char *dtor_func_name;
+		unsigned long addr;
+		u32 nr_args;
+
+		/* This call also serves as a whitelist of allowed objects that
+		 * can be used as a referenced pointer and be stored in a map at
+		 * the same time.
+		 */
+		dtor_btf_id = btf_find_dtor_kfunc(kernel_btf, id);
+		if (dtor_btf_id < 0) {
+			ret = dtor_btf_id;
+			goto end_mod;
+		}
+
+		dtor_func = btf_type_by_id(kernel_btf, dtor_btf_id);
+		if (!dtor_func || !btf_type_is_func(dtor_func)) {
+			ret = -EINVAL;
+			goto end_mod;
+		}
+
+		dtor_func_proto = btf_type_by_id(kernel_btf, dtor_func->type);
+		if (!dtor_func_proto || !btf_type_is_func_proto(dtor_func_proto)) {
+			ret = -EINVAL;
+			goto end_mod;
+		}
+
+		/* Make sure the prototype of the destructor kfunc is 'void func(type *)' */
+		t = btf_type_by_id(kernel_btf, dtor_func_proto->type);
+		if (!t || !btf_type_is_void(t)) {
+			ret = -EINVAL;
+			goto end_mod;
+		}
+
+		nr_args = btf_type_vlen(dtor_func_proto);
+		args = btf_params(dtor_func_proto);
+
+		t = NULL;
+		if (nr_args)
+			t = btf_type_by_id(kernel_btf, args[0].type);
+		/* Allow any pointer type, as width on targets Linux supports
+		 * will be same for all pointer types (i.e. sizeof(void *))
+		 */
+		if (nr_args != 1 || !t || !btf_type_is_ptr(t)) {
+			ret = -EINVAL;
+			goto end_mod;
+		}
+
+		dtor_func_name = __btf_name_by_offset(kernel_btf, dtor_func->name_off);
+		addr = kallsyms_lookup_name(dtor_func_name);
+		if (!addr) {
+			ret = -EINVAL;
+			goto end_mod;
+		}
+		tab->off[nr_off].dtor = (void *)addr;
+	}
+
 	tab->nr_off++;
 
 	return 0;
+end_mod:
+	if (mod)
+		module_put(mod);
 end_btf:
 	/* Reference is only raised for module BTF */
 	if (btf_is_module(kernel_btf))

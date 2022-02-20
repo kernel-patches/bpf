@@ -725,12 +725,15 @@ static int htab_lru_map_gen_lookup(struct bpf_map *map,
 	return insn - insn_buf;
 }
 
-static void check_and_free_timer(struct bpf_htab *htab, struct htab_elem *elem)
+static void check_and_free_timer_and_ptr(struct bpf_htab *htab,
+					 struct htab_elem *elem, bool free_ptr)
 {
+	void *map_value = elem->key + round_up(htab->map.key_size, 8);
+
 	if (unlikely(map_value_has_timer(&htab->map)))
-		bpf_timer_cancel_and_free(elem->key +
-					  round_up(htab->map.key_size, 8) +
-					  htab->map.timer_off);
+		bpf_timer_cancel_and_free(map_value + htab->map.timer_off);
+	if (unlikely(map_value_has_ptr_to_btf_id(&htab->map)) && free_ptr)
+		bpf_map_free_ptr_to_btf_id(&htab->map, map_value);
 }
 
 /* It is called from the bpf_lru_list when the LRU needs to delete
@@ -757,7 +760,7 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
 		if (l == tgt_l) {
 			hlist_nulls_del_rcu(&l->hash_node);
-			check_and_free_timer(htab, l);
+			check_and_free_timer_and_ptr(htab, l, true);
 			break;
 		}
 
@@ -829,7 +832,7 @@ static void htab_elem_free(struct bpf_htab *htab, struct htab_elem *l)
 {
 	if (htab->map.map_type == BPF_MAP_TYPE_PERCPU_HASH)
 		free_percpu(htab_elem_get_ptr(l, htab->map.key_size));
-	check_and_free_timer(htab, l);
+	check_and_free_timer_and_ptr(htab, l, true);
 	kfree(l);
 }
 
@@ -857,7 +860,7 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 	htab_put_fd_value(htab, l);
 
 	if (htab_is_prealloc(htab)) {
-		check_and_free_timer(htab, l);
+		check_and_free_timer_and_ptr(htab, l, true);
 		__pcpu_freelist_push(&htab->freelist, &l->fnode);
 	} else {
 		atomic_dec(&htab->count);
@@ -1104,7 +1107,7 @@ static int htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 		if (!htab_is_prealloc(htab))
 			free_htab_elem(htab, l_old);
 		else
-			check_and_free_timer(htab, l_old);
+			check_and_free_timer_and_ptr(htab, l_old, true);
 	}
 	ret = 0;
 err:
@@ -1114,7 +1117,7 @@ err:
 
 static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
 {
-	check_and_free_timer(htab, elem);
+	check_and_free_timer_and_ptr(htab, elem, true);
 	bpf_lru_push_free(&htab->lru, &elem->lru_node);
 }
 
@@ -1420,7 +1423,10 @@ static void htab_free_malloced_timers(struct bpf_htab *htab)
 		struct htab_elem *l;
 
 		hlist_nulls_for_each_entry(l, n, head, hash_node)
-			check_and_free_timer(htab, l);
+			/* We are called from map_release_uref, so we don't free
+			 * ref'd pointers.
+			 */
+			check_and_free_timer_and_ptr(htab, l, false);
 		cond_resched_rcu();
 	}
 	rcu_read_unlock();
@@ -1458,6 +1464,7 @@ static void htab_map_free(struct bpf_map *map)
 	else
 		prealloc_destroy(htab);
 
+	bpf_map_free_ptr_off_tab(map);
 	free_percpu(htab->extra_elems);
 	bpf_map_area_free(htab->buckets);
 	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
