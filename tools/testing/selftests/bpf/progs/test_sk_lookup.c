@@ -65,6 +65,7 @@ static const __u32 KEY_SERVER_A = SERVER_A;
 static const __u32 KEY_SERVER_B = SERVER_B;
 
 static const __u16 SRC_PORT = bpf_htons(8008);
+static const __u32 SRC_PORT_U32 = bpf_htonl(8008U << 16);
 static const __u32 SRC_IP4 = IP4(127, 0, 0, 2);
 static const __u32 SRC_IP6[] = IP6(0xfd000000, 0x0, 0x0, 0x00000002);
 
@@ -421,7 +422,7 @@ int ctx_narrow_access(struct bpf_sk_lookup *ctx)
 
 	/* Load from remote_port field with zero padding (backward compatibility) */
 	val_u32 = *(__u32 *)&ctx->remote_port;
-	if (val_u32 != bpf_htonl(bpf_ntohs(SRC_PORT) << 16))
+	if (val_u32 != SRC_PORT_U32)
 		return SK_DROP;
 
 	/* Narrow loads from local_port field. Expect DST_PORT. */
