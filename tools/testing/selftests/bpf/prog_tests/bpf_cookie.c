@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <test_progs.h>
 #include "test_bpf_cookie.skel.h"
+#include "kprobe_multi_bpf_cookie.skel.h"
 
 /* uprobe attach point */
 static void trigger_func(void)
@@ -61,6 +62,75 @@ cleanup:
 	bpf_link__destroy(link2);
 	bpf_link__destroy(retlink1);
 	bpf_link__destroy(retlink2);
+}
+
+static void kprobe_multi_subtest(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	int err, prog_fd, link1_fd = -1, link2_fd = -1;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct kprobe_multi_bpf_cookie *skel = NULL;
+	__u64 addrs[8], cookies[8];
+
+	skel = kprobe_multi_bpf_cookie__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "fentry_raw_skel_load"))
+		goto cleanup;
+
+	kallsyms_find("bpf_fentry_test1", &addrs[0]);
+	kallsyms_find("bpf_fentry_test2", &addrs[1]);
+	kallsyms_find("bpf_fentry_test3", &addrs[2]);
+	kallsyms_find("bpf_fentry_test4", &addrs[3]);
+	kallsyms_find("bpf_fentry_test5", &addrs[4]);
+	kallsyms_find("bpf_fentry_test6", &addrs[5]);
+	kallsyms_find("bpf_fentry_test7", &addrs[6]);
+	kallsyms_find("bpf_fentry_test8", &addrs[7]);
+
+	cookies[0] = 1;
+	cookies[1] = 2;
+	cookies[2] = 3;
+	cookies[3] = 4;
+	cookies[4] = 5;
+	cookies[5] = 6;
+	cookies[6] = 7;
+	cookies[7] = 8;
+
+	opts.kprobe_multi.addrs = ptr_to_u64(&addrs);
+	opts.kprobe_multi.cnt = 8;
+	opts.kprobe_multi.cookies = ptr_to_u64(&cookies);
+	prog_fd = bpf_program__fd(skel->progs.test2);
+
+	link1_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_KPROBE_MULTI, &opts);
+	if (!ASSERT_GE(link1_fd, 0, "link1_fd"))
+		return;
+
+	cookies[0] = 8;
+	cookies[1] = 7;
+	cookies[2] = 6;
+	cookies[3] = 5;
+	cookies[4] = 4;
+	cookies[5] = 3;
+	cookies[6] = 2;
+	cookies[7] = 1;
+
+	opts.flags = BPF_F_KPROBE_MULTI_RETURN;
+	prog_fd = bpf_program__fd(skel->progs.test3);
+
+	link2_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_KPROBE_MULTI, &opts);
+	if (!ASSERT_GE(link2_fd, 0, "link2_fd"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.test1);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	ASSERT_EQ(skel->bss->test2_result, 8, "test2_result");
+	ASSERT_EQ(skel->bss->test3_result, 8, "test3_result");
+
+cleanup:
+	close(link1_fd);
+	close(link2_fd);
+	kprobe_multi_bpf_cookie__destroy(skel);
 }
 
 static void uprobe_subtest(struct test_bpf_cookie *skel)
@@ -249,6 +319,8 @@ void test_bpf_cookie(void)
 
 	if (test__start_subtest("kprobe"))
 		kprobe_subtest(skel);
+	if (test__start_subtest("multi_kprobe"))
+		kprobe_multi_subtest();
 	if (test__start_subtest("uprobe"))
 		uprobe_subtest(skel);
 	if (test__start_subtest("tracepoint"))
