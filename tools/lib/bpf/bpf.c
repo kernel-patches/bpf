@@ -853,6 +853,13 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_TRACE_KPROBE_MULTI:
+		attr.link_create.kprobe_multi.syms = OPTS_GET(opts, kprobe_multi.syms, 0);
+		attr.link_create.kprobe_multi.addrs = OPTS_GET(opts, kprobe_multi.addrs, 0);
+		attr.link_create.kprobe_multi.cookies = OPTS_GET(opts, kprobe_multi.cookies, 0);
+		attr.link_create.kprobe_multi.cnt = OPTS_GET(opts, kprobe_multi.cnt, 0);
+		attr.link_create.kprobe_multi.flags = OPTS_GET(opts, kprobe_multi.flags, 0);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
