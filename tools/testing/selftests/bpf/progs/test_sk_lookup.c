@@ -392,7 +392,7 @@ int ctx_narrow_access(struct bpf_sk_lookup *ctx)
 {
 	struct bpf_sock *sk;
 	int err, family;
-	__u32 val_u32;
+	__u32 *ptr_u32;
 	bool v4;
 
 	v4 = (ctx->family == AF_INET);
@@ -413,15 +413,20 @@ int ctx_narrow_access(struct bpf_sk_lookup *ctx)
 
 	/* Narrow loads from remote_port field. Expect SRC_PORT. */
 	if (LSB(ctx->remote_port, 0) != ((SRC_PORT >> 0) & 0xff) ||
-	    LSB(ctx->remote_port, 1) != ((SRC_PORT >> 8) & 0xff) ||
-	    LSB(ctx->remote_port, 2) != 0 || LSB(ctx->remote_port, 3) != 0)
+	    LSB(ctx->remote_port, 1) != ((SRC_PORT >> 8) & 0xff))
 		return SK_DROP;
-	if (LSW(ctx->remote_port, 0) != SRC_PORT)
+	if (ctx->remote_port != SRC_PORT)
 		return SK_DROP;
 
 	/* Load from remote_port field with zero padding (backward compatibility) */
-	val_u32 = *(__u32 *)&ctx->remote_port;
-	if (val_u32 != bpf_htonl(bpf_ntohs(SRC_PORT) << 16))
+	ptr_u32 = &ctx->remote_port_compat;
+	if (LSB(*ptr_u32, 0) != ((SRC_PORT >> 0) & 0xff) ||
+	    LSB(*ptr_u32, 1) != ((SRC_PORT >> 8) & 0xff) ||
+	    LSB(*ptr_u32, 2) != 0 || LSB(*ptr_u32, 3) != 0)
+		return SK_DROP;
+	if (LSW(*ptr_u32, 0) != SRC_PORT || LSW(*ptr_u32, 1) != 0)
+		return SK_DROP;
+	if (*ptr_u32 != SRC_PORT)
 		return SK_DROP;
 
 	/* Narrow loads from local_port field. Expect DST_PORT. */
