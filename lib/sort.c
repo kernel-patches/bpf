@@ -80,7 +80,7 @@ static void swap_words_32(void *a, void *b, size_t n)
  * but it's possible to have 64-bit loads without 64-bit pointers (e.g.
  * x32 ABI).  Are there any cases the kernel needs to worry about?
  */
-static void swap_words_64(void *a, void *b, size_t n)
+void swap_words_64(void *a, void *b, size_t n)
 {
 	do {
 #ifdef CONFIG_64BIT

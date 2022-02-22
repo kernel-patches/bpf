@@ -13,4 +13,6 @@ void sort(void *base, size_t num, size_t size,
 	  cmp_func_t cmp_func,
 	  swap_func_t swap_func);
 
+void swap_words_64(void *a, void *b, size_t n);
+
 #endif

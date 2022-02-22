@@ -1482,6 +1482,7 @@ union bpf_attr {
 			struct {
 				__aligned_u64	syms;
 				__aligned_u64	addrs;
+				__aligned_u64	cookies;
 				__u32		cnt;
 				__u32		flags;
 			} kprobe_multi;
