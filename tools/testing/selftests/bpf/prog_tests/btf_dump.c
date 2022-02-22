@@ -150,6 +150,8 @@ static void test_btf_dump_incremental(void)
 	 *
 	 * enum { VAL = 1 };
 	 *
+	 * struct s;
+	 *
 	 * struct s { int x; };
 	 *
 	 */
@@ -161,8 +163,11 @@ static void test_btf_dump_incremental(void)
 	id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
 	ASSERT_EQ(id, 2, "int_id");
 
+	id = btf__add_fwd(btf, "s", BTF_FWD_STRUCT);
+	ASSERT_EQ(id, 3, "fwd_id");
+
 	id = btf__add_struct(btf, "s", 4);
-	ASSERT_EQ(id, 3, "struct_id");
+	ASSERT_EQ(id, 4, "struct_id");
 	err = btf__add_field(btf, "x", 2, 0, 0);
 	ASSERT_OK(err, "field_ok");
 
@@ -177,6 +182,8 @@ static void test_btf_dump_incremental(void)
 "enum {\n"
 "	VAL = 1,\n"
 "};\n"
+"\n"
+"struct s;\n"
 "\n"
 "struct s {\n"
 "	int x;\n"
@@ -199,7 +206,7 @@ static void test_btf_dump_incremental(void)
 	fseek(dump_buf_file, 0, SEEK_SET);
 
 	id = btf__add_struct(btf, "s", 4);
-	ASSERT_EQ(id, 4, "struct_id");
+	ASSERT_EQ(id, 5, "struct_id");
 	err = btf__add_field(btf, "x", 1, 0, 0);
 	ASSERT_OK(err, "field_ok");
 	err = btf__add_field(btf, "s", 3, 32, 0);
