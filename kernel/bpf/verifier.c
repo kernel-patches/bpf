@@ -12848,7 +12848,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			return -EINVAL;
 		}
 
-		if (is_narrower_load && size < target_size) {
+		if (is_narrower_load) {
 			u8 shift = bpf_ctx_narrow_access_offset(
 				off, size, size_default) * 8;
 			if (shift && cnt + 1 >= ARRAY_SIZE(insn_buf)) {
@@ -12860,15 +12860,19 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 					insn_buf[cnt++] = BPF_ALU32_IMM(BPF_RSH,
 									insn->dst_reg,
 									shift);
-				insn_buf[cnt++] = BPF_ALU32_IMM(BPF_AND, insn->dst_reg,
-								(1 << size * 8) - 1);
+				if (size < target_size)
+					insn_buf[cnt++] = BPF_ALU32_IMM(
+						BPF_AND, insn->dst_reg,
+						(1 << size * 8) - 1);
 			} else {
 				if (shift)
 					insn_buf[cnt++] = BPF_ALU64_IMM(BPF_RSH,
 									insn->dst_reg,
 									shift);
-				insn_buf[cnt++] = BPF_ALU64_IMM(BPF_AND, insn->dst_reg,
-								(1ULL << size * 8) - 1);
+				if (size < target_size)
+					insn_buf[cnt++] = BPF_ALU64_IMM(
+						BPF_AND, insn->dst_reg,
+						(1ULL << size * 8) - 1);
 			}
 		}
 
