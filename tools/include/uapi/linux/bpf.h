@@ -10,6 +10,7 @@
 
 #include <linux/types.h>
 #include <linux/bpf_common.h>
+#include <asm/byteorder.h>
 
 /* Extended instruction set based on top of classic BPF */
 
@@ -6453,8 +6454,20 @@ struct bpf_sk_lookup {
 	__u32 protocol;		/* IP protocol (IPPROTO_TCP, IPPROTO_UDP) */
 	__u32 remote_ip4;	/* Network byte order */
 	__u32 remote_ip6[4];	/* Network byte order */
-	__be16 remote_port;	/* Network byte order */
-	__u16 :16;		/* Zero padding */
+	union {
+		struct {
+#if defined(__BYTE_ORDER) ? __BYTE_ORDER == __LITTLE_ENDIAN : defined(__LITTLE_ENDIAN)
+			__be16 remote_port;	/* Network byte order */
+			__u16 :16;		/* Zero padding */
+#elif defined(__BYTE_ORDER) ? __BYTE_ORDER == __BIG_ENDIAN : defined(__BIG_ENDIAN)
+			__u16 :16;		/* Zero padding */
+			__be16 remote_port;	/* Network byte order */
+#else
+#error unspecified endianness
+#endif
+		};
+		__u32 remote_port_compat;
+	};
 	__u32 local_ip4;	/* Network byte order */
 	__u32 local_ip6[4];	/* Network byte order */
 	__u32 local_port;	/* Host byte order */
