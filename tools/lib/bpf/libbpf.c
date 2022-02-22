@@ -8620,6 +8620,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("uprobe/",		KPROBE,	0, SEC_NONE),
 	SEC_DEF("kretprobe/",		KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe/",		KPROBE, 0, SEC_NONE),
+	SEC_DEF("kprobe.multi/",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe),
+	SEC_DEF("kretprobe.multi/",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe),
 	SEC_DEF("tc",			SCHED_CLS, 0, SEC_NONE),
 	SEC_DEF("classifier",		SCHED_CLS, 0, SEC_NONE | SEC_SLOPPY_PFX | SEC_DEPRECATED),
 	SEC_DEF("action",		SCHED_ACT, 0, SEC_NONE | SEC_SLOPPY_PFX),
@@ -10036,6 +10038,113 @@ static int perf_event_kprobe_open_legacy(const char *probe_name, bool retprobe,
 	return pfd;
 }
 
+/* Adapted from perf/util/string.c */
+static bool glob_match(const char *str, const char *pat)
+{
+	while (*str && *pat && *pat != '*') {
+		if (*pat == '?') {      /* Matches any single character */
+			str++;
+			pat++;
+			continue;
+		}
+		if (*str != *pat)
+			return false;
+		str++;
+		pat++;
+	}
+	/* Check wild card */
+	if (*pat == '*') {
+		while (*pat == '*')
+			pat++;
+		if (!*pat) /* Tail wild card matches all */
+			return true;
+		while (*str)
+			if (glob_match(str++, pat))
+				return true;
+	}
+	return !*str && !*pat;
+}
+
+struct kprobe_multi_resolve {
+	const char *name;
+	__u64 *addrs;
+	size_t cap;
+	size_t cnt;
+};
+
+static int
+resolve_kprobe_multi_cb(unsigned long long sym_addr, char sym_type,
+			const char *sym_name, void *ctx)
+{
+	struct kprobe_multi_resolve *res = ctx;
+	int err;
+
+	if (!glob_match(sym_name, res->name))
+		return 0;
+
+	err = libbpf_ensure_mem((void **)&res->addrs, &res->cap, sizeof(__u64),
+				res->cnt + 1);
+	if (err)
+		return err;
+
+	res->addrs[res->cnt++] = sym_addr;
+	return 0;
+}
+
+static struct bpf_link *
+attach_kprobe_multi_opts(const struct bpf_program *prog,
+		   const char *func_pattern,
+		   const struct bpf_kprobe_opts *kopts)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	struct kprobe_multi_resolve res = {
+		.name = func_pattern,
+	};
+	struct bpf_link *link = NULL;
+	char errmsg[STRERR_BUFSIZE];
+	int err, link_fd, prog_fd;
+	bool retprobe;
+
+	err = libbpf_kallsyms_parse(resolve_kprobe_multi_cb, &res);
+	if (err)
+		goto error;
+	if (!res.cnt) {
+		err = -ENOENT;
+		goto error;
+	}
+
+	retprobe = OPTS_GET(kopts, retprobe, false);
+
+	opts.kprobe_multi.addrs = ptr_to_u64(res.addrs);
+	opts.kprobe_multi.cnt = res.cnt;
+	opts.flags = retprobe ? BPF_F_KPROBE_MULTI_RETURN : 0;
+
+	link = calloc(1, sizeof(*link));
+	if (!link) {
+		err = -ENOMEM;
+		goto error;
+	}
+	link->detach = &bpf_link__detach_fd;
+
+	prog_fd = bpf_program__fd(prog);
+	link_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_KPROBE_MULTI, &opts);
+	if (link_fd < 0) {
+		err = -errno;
+		pr_warn("prog '%s': failed to attach to %s: %s\n",
+			prog->name, res.name,
+			libbpf_strerror_r(err, errmsg, sizeof(errmsg)));
+		goto error;
+	}
+	link->fd = link_fd;
+	free(res.addrs);
+	return link;
+
+error:
+	free(link);
+	free(res.addrs);
+	return libbpf_err_ptr(err);
+}
+
 struct bpf_link *
 bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 				const char *func_name,
@@ -10051,6 +10160,9 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 
 	if (!OPTS_VALID(opts, bpf_kprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
+
+	if (prog->expected_attach_type == BPF_TRACE_KPROBE_MULTI)
+		return attach_kprobe_multi_opts(prog, func_name, opts);
 
 	retprobe = OPTS_GET(opts, retprobe, false);
 	offset = OPTS_GET(opts, offset, 0);
@@ -10120,19 +10232,27 @@ struct bpf_link *bpf_program__attach_kprobe(const struct bpf_program *prog,
 static struct bpf_link *attach_kprobe(const struct bpf_program *prog, long cookie)
 {
 	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, opts);
+	const char *func_name = NULL;
 	unsigned long offset = 0;
 	struct bpf_link *link;
-	const char *func_name;
 	char *func;
 	int n, err;
 
-	opts.retprobe = str_has_pfx(prog->sec_name, "kretprobe/");
-	if (opts.retprobe)
-		func_name = prog->sec_name + sizeof("kretprobe/") - 1;
-	else
-		func_name = prog->sec_name + sizeof("kprobe/") - 1;
+	opts.retprobe = str_has_pfx(prog->sec_name, "kretprobe");
 
-	n = sscanf(func_name, "%m[a-zA-Z0-9_.]+%li", &func, &offset);
+	if (str_has_pfx(prog->sec_name, "kretprobe/"))
+		func_name = prog->sec_name + sizeof("kretprobe/") - 1;
+	else if (str_has_pfx(prog->sec_name, "kprobe/"))
+		func_name = prog->sec_name + sizeof("kprobe/") - 1;
+	else if (str_has_pfx(prog->sec_name, "kretprobe.multi/"))
+		func_name = prog->sec_name + sizeof("kretprobe.multi/") - 1;
+	else if (str_has_pfx(prog->sec_name, "kprobe.multi/"))
+		func_name = prog->sec_name + sizeof("kprobe.multi/") - 1;
+
+	if (!func_name)
+		return libbpf_err_ptr(-EINVAL);
+
+	n = sscanf(func_name, "%m[a-zA-Z0-9_.*?]+%li", &func, &offset);
 	if (n < 1) {
 		err = -EINVAL;
 		pr_warn("kprobe name is invalid: %s\n", func_name);
