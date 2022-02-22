@@ -54,6 +54,7 @@ config BPF_JIT
 config BPF_JIT_ALWAYS_ON
 	bool "Permanently enable BPF JIT and remove BPF interpreter"
 	depends on BPF_SYSCALL && HAVE_EBPF_JIT && BPF_JIT
+	select BPF_JIT_DEFAULT_ON
 	help
 	  Enables BPF JIT and removes BPF interpreter to avoid speculative
 	  execution of BPF instructions by the interpreter.
@@ -63,8 +64,16 @@ config BPF_JIT_ALWAYS_ON
 	  failure.
 
 config BPF_JIT_DEFAULT_ON
-	def_bool ARCH_WANT_DEFAULT_BPF_JIT || BPF_JIT_ALWAYS_ON
-	depends on HAVE_EBPF_JIT && BPF_JIT
+	bool "Enable BPF JIT by default"
+	default y if ARCH_WANT_DEFAULT_BPF_JIT
+	depends on BPF_SYSCALL && HAVE_EBPF_JIT && BPF_JIT
+	help
+	  Enables BPF JIT by default to avoid speculative execution of BPF
+	  instructions by the interpreter.
+
+	  When CONFIG_BPF_JIT_DEFAULT_ON is enabled but CONFIG_BPF_JIT_ALWAYS_ON
+	  is disabled, /proc/sys/net/core/bpf_jit_enable is set to 1 by default
+	  and can be changed to 0 or 2.
 
 config BPF_UNPRIV_DEFAULT_OFF
 	bool "Disable unprivileged BPF by default"
