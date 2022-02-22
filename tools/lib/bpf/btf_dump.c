@@ -1505,13 +1505,15 @@ static const char *btf_dump_resolve_name(struct btf_dump *d, __u32 id,
 	if (s->name_resolved)
 		return *cached_name ? *cached_name : orig_name;
 
-	dup_cnt = btf_dump_name_dups(d, name_map, orig_name);
-	if (dup_cnt > 1) {
-		const size_t max_len = 256;
-		char new_name[max_len];
+	if (!btf_is_fwd(t)) {
+		dup_cnt = btf_dump_name_dups(d, name_map, orig_name);
+		if (dup_cnt > 1) {
+			const size_t max_len = 256;
+			char new_name[max_len];
 
-		snprintf(new_name, max_len, "%s___%zu", orig_name, dup_cnt);
-		*cached_name = strdup(new_name);
+			snprintf(new_name, max_len, "%s___%zu", orig_name, dup_cnt);
+			*cached_name = strdup(new_name);
+		}
 	}
 
 	s->name_resolved = 1;
