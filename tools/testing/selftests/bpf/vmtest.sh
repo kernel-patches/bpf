@@ -184,6 +184,10 @@ EOF
 	fi
 
 	sudo bash -c "echo '#!/bin/bash' > ${init_script}"
+	sudo bash -c "cat >>${init_script}" <<EOF
+# Force rebinding stdout/stderr to /dev/ttyS0, to workaround a mysterious issue
+exec 1>/dev/ttyS0 2>/dev/ttyS0
+EOF
 
 	if [[ "${command}" != "" ]]; then
 		sudo bash -c "cat >>${init_script}" <<EOF
