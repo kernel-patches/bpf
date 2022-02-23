@@ -763,7 +763,7 @@ static int bpf_fill_super(struct super_block *sb, struct fs_context *fc)
 
 static int bpf_get_tree(struct fs_context *fc)
 {
-	return get_tree_nodev(fc, bpf_fill_super);
+	return get_tree_single(fc, bpf_fill_super);
 }
 
 static void bpf_free_fc(struct fs_context *fc)
