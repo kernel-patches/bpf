@@ -52,6 +52,9 @@ BPF_CALL_3(bpf_hid_get_data, void*, ctx, u64, offset, u8, n)
 	case HID_BPF_RDESC_FIXUP:
 		buf = bpf_ctx->u.rdesc.data;
 		break;
+	case HID_BPF_USER_EVENT:
+		buf = bpf_ctx->u.user.data;
+		break;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -82,6 +85,9 @@ BPF_CALL_4(bpf_hid_set_data, void*, ctx, u64, offset, u8, n, u32, data)
 		break;
 	case HID_BPF_RDESC_FIXUP:
 		buf = bpf_ctx->u.rdesc.data;
+		break;
+	case HID_BPF_USER_EVENT:
+		buf = bpf_ctx->u.user.data;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -385,6 +391,8 @@ static int bpf_hid_max_progs(enum bpf_hid_attach_type type)
 		return 64;
 	case BPF_HID_ATTACH_RDESC_FIXUP:
 		return 1;
+	case BPF_HID_ATTACH_USER_EVENT:
+		return 64;
 	default:
 		return 0;
 	}
@@ -479,7 +487,116 @@ int bpf_hid_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
 	return bpf_link_settle(&link_primer);
 }
 
+static int hid_bpf_prog_test_run(struct bpf_prog *prog,
+				 const union bpf_attr *attr,
+				 union bpf_attr __user *uattr)
+{
+	struct hid_device *hdev = NULL;
+	struct bpf_prog_array *progs;
+	struct hid_bpf_ctx *ctx = NULL;
+	bool valid_prog = false;
+	int i;
+	int target_fd, ret;
+	void __user *data_out = u64_to_user_ptr(attr->test.data_out);
+	void __user *data_in = u64_to_user_ptr(attr->test.data_in);
+	u32 user_size = attr->test.data_size_in;
+
+	if (!hid_hooks.hdev_from_fd)
+		return -EOPNOTSUPP;
+
+	if (attr->test.ctx_size_in != sizeof(int))
+		return -EINVAL;
+
+	if (copy_from_user(&target_fd, (void *)attr->test.ctx_in, attr->test.ctx_size_in))
+		return -EFAULT;
+
+	hdev = hid_hooks.hdev_from_fd(target_fd);
+	if (IS_ERR(hdev))
+		return PTR_ERR(hdev);
+
+	ret = mutex_lock_interruptible(&bpf_hid_mutex);
+	if (ret)
+		return ret;
+
+	/* check if the given program is of correct type and registered */
+	progs = rcu_dereference_protected(hdev->bpf.run_array[BPF_HID_ATTACH_USER_EVENT],
+					  lockdep_is_held(&bpf_hid_mutex));
+	if (!progs) {
+		ret = -EFAULT;
+		goto unlock;
+	}
+
+	for (i = 0; i < bpf_prog_array_length(progs); i++) {
+		if (progs->items[i].prog == prog) {
+			valid_prog = true;
+			break;
+		}
+	}
+
+	if (!valid_prog) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx) {
+		ret = -ENOMEM;
+		goto unlock;
+	}
+
+	ctx->hdev = hdev;
+	ctx->type = HID_BPF_USER_EVENT;
+
+	/* copy data_in from userspace */
+	if (user_size) {
+		if (user_size > HID_BPF_MAX_BUFFER_SIZE)
+			user_size = HID_BPF_MAX_BUFFER_SIZE;
+
+		if (copy_from_user(ctx->u.user.data, data_in, user_size)) {
+			ret = -EFAULT;
+			goto unlock;
+		}
+
+		ctx->u.user.size = user_size;
+	}
+
+	migrate_disable();
+
+	ret = bpf_prog_run(prog, ctx);
+
+	migrate_enable();
+
+	user_size = attr->test.data_size_out;
+
+	if (user_size && data_out) {
+		if (user_size > ctx->u.user.size)
+			user_size = ctx->u.user.size;
+
+		if (copy_to_user(data_out, ctx->u.user.data, user_size)) {
+			ret = -EFAULT;
+			goto unlock;
+		}
+
+		if (copy_to_user(&uattr->test.data_size_out, &user_size, sizeof(user_size))) {
+			ret = -EFAULT;
+			goto unlock;
+		}
+	}
+
+	if (copy_to_user(&uattr->test.retval, &ctx->u.user.retval, sizeof(ctx->u.user.retval))) {
+		ret = -EFAULT;
+		goto unlock;
+	}
+
+unlock:
+	kfree(ctx);
+
+	mutex_unlock(&bpf_hid_mutex);
+	return ret;
+}
+
 const struct bpf_prog_ops hid_prog_ops = {
+	.test_run = hid_bpf_prog_test_run,
 };
 
 int bpf_hid_init(struct hid_device *hdev)

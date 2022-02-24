@@ -337,6 +337,59 @@ cleanup:
 }
 
 /*
+ * Attach hid_user to the given uhid device,
+ * call the bpf program from userspace
+ * check that the program is called and does the expected.
+ */
+static int test_hid_user_call(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
+{
+	int err, prog_fd;
+	u8 buf[10] = {0};
+	int ret = -1;
+
+	LIBBPF_OPTS(bpf_test_run_opts, run_attrs,
+		    .repeat = 1,
+		    .ctx_in = &sysfs_fd,
+		    .ctx_size_in = sizeof(sysfs_fd),
+		    .data_in = buf,
+		    .data_size_in = sizeof(buf),
+		    .data_out = buf,
+		    .data_size_out = sizeof(buf),
+	);
+
+	/* attach hid_user program */
+	hid_skel->links.hid_user = bpf_program__attach_hid(hid_skel->progs.hid_user, sysfs_fd);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_user,
+			   "attach_hid(hid_user)"))
+		return PTR_ERR(hid_skel->links.hid_user);
+
+	buf[0] = 39;
+
+	prog_fd = bpf_program__fd(hid_skel->progs.hid_user);
+
+	err = bpf_prog_test_run_opts(prog_fd, &run_attrs);
+	if (!ASSERT_EQ(err, 0, "bpf_prog_test_run_xattr"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(run_attrs.retval, 72, "bpf_prog_test_run_xattr_retval"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[1], 42, "hid_user_check_in"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[2], 4, "hid_user_check_static_out"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+
+	hid__detach(hid_skel);
+
+	return ret;
+}
+
+/*
  * Attach hid_rdesc_fixup to the given uhid device,
  * retrieve and open the matching hidraw node,
  * check that the hidraw report descriptor has been updated.
@@ -436,6 +489,9 @@ void serial_test_hid_bpf(void)
 
 	err = test_hid_set_get_data(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_set_get_data");
+
+	err = test_hid_user_call(hid_skel, uhid_fd, sysfs_fd);
+	ASSERT_OK(err, "hid_user");
 
 	err = test_rdesc_fixup(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_rdesc_fixup");

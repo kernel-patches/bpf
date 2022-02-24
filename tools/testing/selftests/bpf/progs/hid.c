@@ -80,3 +80,13 @@ int hid_set_get_data(struct hid_bpf_ctx *ctx)
 
 	return 0;
 }
+
+SEC("hid/user_event")
+int hid_user(struct hid_bpf_ctx *ctx)
+{
+	ctx->u.user.data[1] = ctx->u.user.data[0] + 3;
+	ctx->u.user.data[2] = 4;
+	ctx->u.user.retval = 72;
+
+	return 0;
+}

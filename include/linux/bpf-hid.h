@@ -15,6 +15,7 @@ enum bpf_hid_attach_type {
 	BPF_HID_ATTACH_INVALID = -1,
 	BPF_HID_ATTACH_DEVICE_EVENT = 0,
 	BPF_HID_ATTACH_RDESC_FIXUP,
+	BPF_HID_ATTACH_USER_EVENT,
 	MAX_BPF_HID_ATTACH_TYPE
 };
 
@@ -34,6 +35,8 @@ to_bpf_hid_attach_type(enum bpf_attach_type attach_type)
 		return BPF_HID_ATTACH_DEVICE_EVENT;
 	case BPF_HID_RDESC_FIXUP:
 		return BPF_HID_ATTACH_RDESC_FIXUP;
+	case BPF_HID_USER_EVENT:
+		return BPF_HID_ATTACH_USER_EVENT;
 	default:
 		return BPF_HID_ATTACH_INVALID;
 	}
