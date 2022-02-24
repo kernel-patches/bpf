@@ -37,10 +37,78 @@ void bpf_hid_set_hooks(struct bpf_hid_hooks *hooks)
 }
 EXPORT_SYMBOL_GPL(bpf_hid_set_hooks);
 
+BPF_CALL_3(bpf_hid_get_data, void*, ctx, u64, offset, u8, n)
+{
+	struct hid_bpf_ctx *bpf_ctx = ctx;
+	u8 *buf;
+
+	if (!hid_hooks.hid_get_data)
+		return -EOPNOTSUPP;
+
+	switch (bpf_ctx->type) {
+	case HID_BPF_DEVICE_EVENT:
+		buf = bpf_ctx->u.device.data;
+		break;
+	case HID_BPF_RDESC_FIXUP:
+		buf = bpf_ctx->u.rdesc.data;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return hid_hooks.hid_get_data(bpf_ctx->hdev, buf, offset, n);
+}
+
+static const struct bpf_func_proto bpf_hid_get_data_proto = {
+	.func      = bpf_hid_get_data,
+	.gpl_only  = true,
+	.ret_type  = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_CTX,
+	.arg2_type = ARG_ANYTHING,
+	.arg3_type = ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_hid_set_data, void*, ctx, u64, offset, u8, n, u32, data)
+{
+	struct hid_bpf_ctx *bpf_ctx = ctx;
+	u8 *buf;
+
+	if (!hid_hooks.hid_set_data)
+		return -EOPNOTSUPP;
+
+	switch (bpf_ctx->type) {
+	case HID_BPF_DEVICE_EVENT:
+		buf = bpf_ctx->u.device.data;
+		break;
+	case HID_BPF_RDESC_FIXUP:
+		buf = bpf_ctx->u.rdesc.data;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	hid_hooks.hid_set_data(bpf_ctx->hdev, buf, offset, n, data);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_hid_set_data_proto = {
+	.func      = bpf_hid_set_data,
+	.gpl_only  = true,
+	.ret_type  = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_CTX,
+	.arg2_type = ARG_ANYTHING,
+	.arg3_type = ARG_ANYTHING,
+	.arg4_type = ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 hid_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	switch (func_id) {
+	case BPF_FUNC_hid_get_data:
+		return &bpf_hid_get_data_proto;
+	case BPF_FUNC_hid_set_data:
+		return &bpf_hid_set_data_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

@@ -944,6 +944,8 @@ bool hid_compare_device_paths(struct hid_device *hdev_a,
 s32 hid_snto32(__u32 value, unsigned n);
 __u32 hid_field_extract(const struct hid_device *hid, __u8 *report,
 		     unsigned offset, unsigned n);
+void implement(const struct hid_device *hid, u8 *report, unsigned int offset, unsigned int n,
+	       u32 value);
 
 #ifdef CONFIG_PM
 int hid_driver_suspend(struct hid_device *hdev, pm_message_t state);

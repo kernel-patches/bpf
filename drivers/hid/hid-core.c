@@ -1416,8 +1416,8 @@ static void __implement(u8 *report, unsigned offset, int n, u32 value)
 	}
 }
 
-static void implement(const struct hid_device *hid, u8 *report,
-		      unsigned offset, unsigned n, u32 value)
+void implement(const struct hid_device *hid, u8 *report, unsigned int offset, unsigned int n,
+	       u32 value)
 {
 	if (unlikely(n > 32)) {
 		hid_warn(hid, "%s() called with n (%d) > 32! (%s)\n",

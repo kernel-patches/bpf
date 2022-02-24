@@ -5090,6 +5090,20 @@ union bpf_attr {
  *	Return
  *		0 on success, or a negative error in case of failure. On error
  *		*dst* buffer is zeroed out.
+ *
+ * u32 bpf_hid_get_data(void *ctx, u64 offset, u8 n)
+ *	Description
+ *		Get the data of size n at the given offset in the
+ *		ctx->event.data field
+ *	Return
+ *		The value at offset. In case of error: 0.
+ *
+ * int bpf_hid_set_data(void *ctx, u64 offset, u8 n, u32 data)
+ *	Description
+ *		Set the data of size n at the given offset in the
+ *		ctx->event.data field
+ *	Return
+ *		0 on success, a negative error on failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5284,6 +5298,8 @@ union bpf_attr {
 	FN(xdp_load_bytes),		\
 	FN(xdp_store_bytes),		\
 	FN(copy_from_user_task),	\
+	FN(hid_get_data),		\
+	FN(hid_set_data),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

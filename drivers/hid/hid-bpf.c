@@ -118,6 +118,26 @@ static void hid_bpf_array_detached(struct hid_device *hdev, enum bpf_hid_attach_
 	}
 }
 
+int hid_bpf_get_data(struct hid_device *hdev, u8 *buf, u64 offset, u8 n)
+{
+	if (n > 32 ||
+	    ((offset + n) >> 3) >= HID_BPF_MAX_BUFFER_SIZE)
+		return 0;
+
+	return hid_field_extract(hdev, buf, offset, n);
+}
+
+int hid_bpf_set_data(struct hid_device *hdev, u8 *buf, u64 offset, u8 n, u32 data)
+{
+	if (n > 32 ||
+	    ((offset + n) >> 3) >= HID_BPF_MAX_BUFFER_SIZE)
+		return -EINVAL;
+
+	implement(hdev, buf, offset, n, data);
+
+	return 0;
+}
+
 static int hid_bpf_run_progs(struct hid_device *hdev, enum bpf_hid_attach_type type,
 			     struct hid_bpf_ctx *ctx, u8 *data, int size)
 {
@@ -229,6 +249,8 @@ int __init hid_bpf_module_init(void)
 		.link_attach = hid_bpf_link_attach,
 		.link_attached = hid_bpf_link_attached,
 		.array_detached = hid_bpf_array_detached,
+		.hid_get_data = hid_bpf_get_data,
+		.hid_set_data = hid_bpf_set_data,
 	};
 
 	bpf_hid_set_hooks(&hooks);

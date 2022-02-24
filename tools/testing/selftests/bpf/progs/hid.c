@@ -66,3 +66,17 @@ int hid_rdesc_fixup(struct hid_bpf_ctx *ctx)
 
 	return 0;
 }
+
+SEC("hid/device_event")
+int hid_set_get_data(struct hid_bpf_ctx *ctx)
+{
+	__u32 x;
+
+	/* extract data at bit offset 10 of size 4 (half a byte) */
+	x = bpf_hid_get_data(ctx, 10, 4);
+
+	/* reinject it */
+	bpf_hid_set_data(ctx, 16, 4, x);
+
+	return 0;
+}
