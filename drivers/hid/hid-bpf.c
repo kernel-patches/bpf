@@ -138,6 +138,68 @@ int hid_bpf_set_data(struct hid_device *hdev, u8 *buf, u64 offset, u8 n, u32 dat
 	return 0;
 }
 
+int hid_bpf_raw_request(struct hid_device *hdev, u8 *buf, size_t size,
+			u8 rtype, u8 reqtype)
+{
+	struct hid_report *report;
+	struct hid_report_enum *report_enum;
+	u8 *dma_data;
+	u32 report_len;
+	int ret;
+
+	/* check arguments */
+	switch (rtype) {
+	case HID_INPUT_REPORT:
+	case HID_OUTPUT_REPORT:
+	case HID_FEATURE_REPORT:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch (reqtype) {
+	case HID_REQ_GET_REPORT:
+	case HID_REQ_GET_IDLE:
+	case HID_REQ_GET_PROTOCOL:
+	case HID_REQ_SET_REPORT:
+	case HID_REQ_SET_IDLE:
+	case HID_REQ_SET_PROTOCOL:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (size < 1)
+		return -EINVAL;
+
+	report_enum = hdev->report_enum + rtype;
+	report = hid_get_report(report_enum, buf);
+	if (!report)
+		return -EINVAL;
+
+	report_len = hid_report_len(report);
+
+	if (size > report_len)
+		size = report_len;
+
+	dma_data = kmemdup(buf, size, GFP_KERNEL);
+	if (!dma_data)
+		return -ENOMEM;
+
+	ret = hid_hw_raw_request(hdev,
+				 dma_data[0],
+				 dma_data,
+				 size,
+				 rtype,
+				 reqtype);
+
+	if (ret > 0)
+		memcpy(buf, dma_data, ret);
+
+	kfree(dma_data);
+	return ret;
+}
+
 static int hid_bpf_run_progs(struct hid_device *hdev, enum bpf_hid_attach_type type,
 			     struct hid_bpf_ctx *ctx, u8 *data, int size)
 {
@@ -251,6 +313,7 @@ int __init hid_bpf_module_init(void)
 		.array_detached = hid_bpf_array_detached,
 		.hid_get_data = hid_bpf_get_data,
 		.hid_set_data = hid_bpf_set_data,
+		.hid_raw_request  = hid_bpf_raw_request,
 	};
 
 	bpf_hid_set_hooks(&hooks);

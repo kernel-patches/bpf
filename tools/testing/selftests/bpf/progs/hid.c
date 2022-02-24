@@ -9,6 +9,11 @@ char _license[] SEC("license") = "GPL";
 __u64 callback_check = 52;
 __u64 callback2_check = 52;
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096 * 64);
+} ringbuf SEC(".maps");
+
 SEC("hid/device_event")
 int hid_first_event(struct hid_bpf_ctx *ctx)
 {
@@ -89,4 +94,56 @@ int hid_user(struct hid_bpf_ctx *ctx)
 	ctx->u.user.retval = 72;
 
 	return 0;
+}
+
+SEC("hid/user_event")
+int hid_user_raw_request(struct hid_bpf_ctx *ctx)
+{
+	const unsigned int buflen = 256;
+	const unsigned int _buflen = buflen * sizeof(__u8);
+	__u8 *buf;
+	int ret;
+	__u32 size;
+	__u8 rtype, reqtype;
+
+	buf = bpf_ringbuf_reserve(&ringbuf, _buflen, 0);
+	if (!buf)
+		return -12; /* -ENOMEM */
+
+	__builtin_memcpy(buf, ctx->u.user.data, _buflen);
+
+	/*
+	 * build up a custom API for our needs:
+	 * offset 0, size 1: report type
+	 * offset 1, size 1: request type
+	 * offset 2+: data
+	 */
+	rtype = buf[0];
+	reqtype = buf[1];
+	size = ctx->u.user.size - 2;
+
+	if (size < _buflen - 2) {
+		ret = bpf_hid_raw_request(ctx,
+					  &buf[2],
+					  size,
+					  rtype,
+					  reqtype);
+		if (ret < 0)
+			goto discard;
+	} else {
+		ret = -7; /* -E2BIG */
+		goto discard;
+	}
+
+	__builtin_memcpy(&ctx->u.user.data[2], &buf[2], _buflen - 2);
+
+	ctx->u.user.size = ret + 2;
+	ctx->u.user.retval = ret;
+
+	ret = 0;
+
+ discard:
+	bpf_ringbuf_discard(buf, 0);
+
+	return ret;
 }
