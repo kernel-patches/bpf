@@ -18,10 +18,17 @@ struct hid_device;
 enum hid_bpf_event {
 	HID_BPF_UNDEF = 0,
 	HID_BPF_DEVICE_EVENT,
+	HID_BPF_RDESC_FIXUP,
 };
 
 /* type is HID_BPF_DEVICE_EVENT */
 struct hid_bpf_ctx_device_event {
+	__u8 data[HID_BPF_MAX_BUFFER_SIZE];
+	unsigned long size;
+};
+
+/* type is HID_BPF_RDESC_FIXUP */
+struct hid_bpf_ctx_rdesc_fixup {
 	__u8 data[HID_BPF_MAX_BUFFER_SIZE];
 	unsigned long size;
 };
@@ -32,6 +39,7 @@ struct hid_bpf_ctx {
 
 	union {
 		struct hid_bpf_ctx_device_event device;
+		struct hid_bpf_ctx_rdesc_fixup rdesc;
 	} u;
 };
 

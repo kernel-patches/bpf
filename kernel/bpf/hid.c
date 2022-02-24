@@ -315,6 +315,8 @@ static int bpf_hid_max_progs(enum bpf_hid_attach_type type)
 	switch (type) {
 	case BPF_HID_ATTACH_DEVICE_EVENT:
 		return 64;
+	case BPF_HID_ATTACH_RDESC_FIXUP:
+		return 1;
 	default:
 		return 0;
 	}
@@ -354,6 +356,9 @@ static int bpf_hid_link_attach(struct hid_device *hdev, struct bpf_link *link,
 	run_array = rcu_replace_pointer(hdev->bpf.run_array[type], run_array,
 					lockdep_is_held(&bpf_hid_mutex));
 	bpf_prog_array_free(run_array);
+
+	if (hid_hooks.link_attached)
+		hid_hooks.link_attached(hdev, type);
 
 out_unlock:
 	mutex_unlock(&bpf_hid_mutex);
