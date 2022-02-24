@@ -15,6 +15,7 @@
 
 
 #include <linux/bitops.h>
+#include <linux/bpf-hid.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/list.h>
@@ -26,6 +27,7 @@
 #include <linux/mutex.h>
 #include <linux/power_supply.h>
 #include <uapi/linux/hid.h>
+#include <uapi/linux/bpf_hid.h>
 
 /*
  * We parse each description item into this structure. Short items data
@@ -639,6 +641,10 @@ struct hid_device {							/* device report descriptor */
 	struct list_head debug_list;
 	spinlock_t  debug_list_lock;
 	wait_queue_head_t debug_wait;
+
+#ifdef CONFIG_BPF
+	struct bpf_hid bpf;
+#endif
 };
 
 #define to_hid_device(pdev) \
@@ -1204,5 +1210,15 @@ do {									\
 	dev_info_once(&(hid)->dev, fmt, ##__VA_ARGS__)
 #define hid_dbg_once(hid, fmt, ...)			\
 	dev_dbg_once(&(hid)->dev, fmt, ##__VA_ARGS__)
+
+#ifdef CONFIG_BPF
+u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size);
+int hid_bpf_module_init(void);
+void hid_bpf_module_exit(void);
+#else
+static inline u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size) { return rd; }
+static inline int hid_bpf_module_init(void) { return 0; }
+static inline void hid_bpf_module_exit(void) {}
+#endif
 
 #endif

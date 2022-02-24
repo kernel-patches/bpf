@@ -1748,12 +1748,20 @@ int hid_report_raw_event(struct hid_device *hid, int type, u8 *data, u32 size,
 	struct hid_driver *hdrv;
 	unsigned int a;
 	u32 rsize, csize = size;
-	u8 *cdata = data;
+	u8 *cdata;
 	int ret = 0;
+
+	data = hid_bpf_raw_event(hid, data, &size);
+	if (IS_ERR(data)) {
+		ret = PTR_ERR(data);
+		goto out;
+	}
 
 	report = hid_get_report(report_enum, data);
 	if (!report)
 		goto out;
+
+	cdata = data;
 
 	if (report_enum->numbered) {
 		cdata++;
@@ -2528,10 +2536,12 @@ int hid_add_device(struct hid_device *hdev)
 
 	hid_debug_register(hdev, dev_name(&hdev->dev));
 	ret = device_add(&hdev->dev);
-	if (!ret)
+	if (!ret) {
 		hdev->status |= HID_STAT_ADDED;
-	else
+	} else {
 		hid_debug_unregister(hdev);
+		bpf_hid_exit(hdev);
+	}
 
 	return ret;
 }
@@ -2567,6 +2577,7 @@ struct hid_device *hid_allocate_device(void)
 	spin_lock_init(&hdev->debug_list_lock);
 	sema_init(&hdev->driver_input_lock, 1);
 	mutex_init(&hdev->ll_open_lock);
+	bpf_hid_init(hdev);
 
 	return hdev;
 }
@@ -2574,6 +2585,7 @@ EXPORT_SYMBOL_GPL(hid_allocate_device);
 
 static void hid_remove_device(struct hid_device *hdev)
 {
+	bpf_hid_exit(hdev);
 	if (hdev->status & HID_STAT_ADDED) {
 		device_del(&hdev->dev);
 		hid_debug_unregister(hdev);
@@ -2700,6 +2712,8 @@ static int __init hid_init(void)
 
 	hid_debug_init();
 
+	hid_bpf_module_init();
+
 	return 0;
 err_bus:
 	bus_unregister(&hid_bus_type);
@@ -2709,6 +2723,7 @@ err:
 
 static void __exit hid_exit(void)
 {
+	hid_bpf_module_exit();
 	hid_debug_exit();
 	hidraw_exit();
 	bus_unregister(&hid_bus_type);
