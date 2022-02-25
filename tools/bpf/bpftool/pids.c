@@ -55,6 +55,8 @@ static void add_ref(struct hashmap *map, struct pid_iter_entry *e)
 		ref->pid = e->pid;
 		memcpy(ref->comm, e->comm, sizeof(ref->comm));
 		refs->ref_cnt++;
+		refs->bpf_cookie_set = e->bpf_cookie_set;
+		refs->bpf_cookie = e->bpf_cookie;
 
 		return;
 	}
@@ -78,6 +80,8 @@ static void add_ref(struct hashmap *map, struct pid_iter_entry *e)
 	ref->pid = e->pid;
 	memcpy(ref->comm, e->comm, sizeof(ref->comm));
 	refs->ref_cnt = 1;
+	refs->bpf_cookie_set = e->bpf_cookie_set;
+	refs->bpf_cookie = e->bpf_cookie;
 
 	err = hashmap__append(map, u32_as_hash_field(e->id), refs);
 	if (err)
@@ -205,6 +209,9 @@ void emit_obj_refs_json(struct hashmap *map, __u32 id,
 		if (refs->ref_cnt == 0)
 			break;
 
+		if (refs->bpf_cookie_set)
+			jsonw_lluint_field(json_writer, "bpf_cookie", refs->bpf_cookie);
+
 		jsonw_name(json_writer, "pids");
 		jsonw_start_array(json_writer);
 		for (i = 0; i < refs->ref_cnt; i++) {
@@ -233,6 +240,9 @@ void emit_obj_refs_plain(struct hashmap *map, __u32 id, const char *prefix)
 
 		if (refs->ref_cnt == 0)
 			break;
+
+		if (refs->bpf_cookie_set)
+			printf("\n\tbpf_cookie %llu", refs->bpf_cookie);
 
 		printf("%s", prefix);
 		for (i = 0; i < refs->ref_cnt; i++) {
