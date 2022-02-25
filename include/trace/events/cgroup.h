@@ -204,6 +204,51 @@ DEFINE_EVENT(cgroup_event, cgroup_notify_frozen,
 	TP_ARGS(cgrp, path, val)
 );
 
+/*
+ * The following tracepoints are supposed to be called in a sleepable context.
+ */
+DECLARE_EVENT_CLASS(cgroup_sleepable_tp,
+
+	TP_PROTO(struct cgroup *cgrp),
+
+	TP_ARGS(cgrp),
+
+	TP_STRUCT__entry(
+		__field(	int,		root			)
+		__field(	int,		level			)
+		__field(	u64,		id			)
+	),
+
+	TP_fast_assign(
+		__entry->root = cgrp->root->hierarchy_id;
+		__entry->id = cgroup_id(cgrp);
+		__entry->level = cgrp->level;
+	),
+
+	TP_printk("root=%d id=%llu level=%d",
+		  __entry->root, __entry->id, __entry->level)
+);
+
+#ifdef DEFINE_EVENT_SLEEPABLE
+#undef DEFINE_EVENT
+#define DEFINE_EVENT(template, call, proto, args)		\
+	DEFINE_EVENT_SLEEPABLE(template, call, PARAMS(proto), PARAMS(args))
+#endif
+
+DEFINE_EVENT(cgroup_sleepable_tp, cgroup_mkdir_s,
+
+	TP_PROTO(struct cgroup *cgrp),
+
+	TP_ARGS(cgrp)
+);
+
+DEFINE_EVENT(cgroup_sleepable_tp, cgroup_rmdir_s,
+
+	TP_PROTO(struct cgroup *cgrp),
+
+	TP_ARGS(cgrp)
+);
+
 #endif /* _TRACE_CGROUP_H */
 
 /* This part must be outside protection */

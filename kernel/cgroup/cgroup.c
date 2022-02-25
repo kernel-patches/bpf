@@ -5535,6 +5535,8 @@ out_destroy:
 	cgroup_destroy_locked(cgrp);
 out_unlock:
 	cgroup_kn_unlock(parent_kn);
+	if (!ret)
+		trace_cgroup_mkdir_s(cgrp);
 	return ret;
 }
 
@@ -5725,6 +5727,9 @@ int cgroup_rmdir(struct kernfs_node *kn)
 		TRACE_CGROUP_PATH(rmdir, cgrp);
 
 	cgroup_kn_unlock(kn);
+
+	if (!ret)
+		trace_cgroup_rmdir_s(cgrp);
 	return ret;
 }
 
