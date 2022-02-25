@@ -1595,6 +1595,7 @@ int bpf_obj_get_path(bpfptr_t pathname, int flags);
 
 struct bpf_iter_aux_info {
 	struct bpf_map *map;
+	u64 cgroup_id;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
