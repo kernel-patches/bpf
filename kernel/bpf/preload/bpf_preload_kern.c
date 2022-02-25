@@ -54,6 +54,16 @@ static int load_skel(void)
 		err = PTR_ERR(progs_link);
 		goto out;
 	}
+	/* Avoid taking over stdin/stdout/stderr of init process. This also
+	   makes skel_closenz() no-op later in free_links_and_skel(). */
+	if (skel->links.dump_bpf_map_fd < 3) {
+		close_fd(skel->links.dump_bpf_map_fd);
+		skel->links.dump_bpf_map_fd = 0;
+	}
+	if (skel->links.dump_bpf_prog_fd < 3) {
+		close_fd(skel->links.dump_bpf_prog_fd);
+		skel->links.dump_bpf_prog_fd = 0;
+	}
 	return 0;
 out:
 	free_links_and_skel();
