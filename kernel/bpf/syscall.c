@@ -4827,12 +4827,6 @@ static const struct bpf_func_proto bpf_sys_bpf_proto = {
 	.arg3_type	= ARG_CONST_SIZE,
 };
 
-const struct bpf_func_proto * __weak
-tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
-{
-	return bpf_base_func_proto(func_id);
-}
-
 BPF_CALL_1(bpf_sys_close, u32, fd)
 {
 	/* When bpf program calls this helper there should not be
@@ -5045,24 +5039,47 @@ const struct bpf_func_proto bpf_unlink_proto = {
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
-static const struct bpf_func_proto *
-syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+/* Syscall helpers that are also allowed in sleepable tracing prog. */
+const struct bpf_func_proto *
+tracing_prog_syscall_func_proto(enum bpf_func_id func_id,
+				const struct bpf_prog *prog)
 {
 	switch (func_id) {
 	case BPF_FUNC_sys_bpf:
 		return &bpf_sys_bpf_proto;
-	case BPF_FUNC_btf_find_by_name_kind:
-		return &bpf_btf_find_by_name_kind_proto;
 	case BPF_FUNC_sys_close:
 		return &bpf_sys_close_proto;
-	case BPF_FUNC_kallsyms_lookup_name:
-		return &bpf_kallsyms_lookup_name_proto;
 	case BPF_FUNC_mkdir:
 		return &bpf_mkdir_proto;
 	case BPF_FUNC_rmdir:
 		return &bpf_rmdir_proto;
 	case BPF_FUNC_unlink:
 		return &bpf_unlink_proto;
+	default:
+		return NULL;
+	}
+}
+
+const struct bpf_func_proto * __weak
+tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	const struct bpf_func_proto *fn;
+
+	fn = tracing_prog_syscall_func_proto(func_id, prog);
+	if (fn)
+		return fn;
+
+	return bpf_base_func_proto(func_id);
+}
+
+static const struct bpf_func_proto *
+syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	switch (func_id) {
+	case BPF_FUNC_btf_find_by_name_kind:
+		return &bpf_btf_find_by_name_kind_proto;
+	case BPF_FUNC_kallsyms_lookup_name:
+		return &bpf_kallsyms_lookup_name_proto;
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}

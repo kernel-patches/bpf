@@ -1810,6 +1810,9 @@ struct bpf_prog *bpf_prog_by_id(u32 id);
 struct bpf_link *bpf_link_by_id(u32 id);
 
 const struct bpf_func_proto *bpf_base_func_proto(enum bpf_func_id func_id);
+const struct bpf_func_proto *
+tracing_prog_syscall_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
+
 void bpf_task_storage_free(struct task_struct *task);
 bool bpf_prog_has_kfunc_call(const struct bpf_prog *prog);
 const struct btf_func_model *
@@ -1822,7 +1825,6 @@ struct bpf_core_ctx {
 
 int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 		   int relo_idx, void *insn);
-
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -2007,6 +2009,12 @@ static inline struct bpf_prog *bpf_prog_by_id(u32 id)
 
 static inline const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
+{
+	return NULL;
+}
+
+static inline struct bpf_func_proto *
+tracing_prog_syscall_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	return NULL;
 }

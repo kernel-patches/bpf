@@ -1691,6 +1691,8 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		fn = raw_tp_prog_func_proto(func_id, prog);
 		if (!fn && prog->expected_attach_type == BPF_TRACE_ITER)
 			fn = bpf_iter_get_func_proto(func_id, prog);
+		if (!fn && prog->aux->sleepable)
+			fn = tracing_prog_syscall_func_proto(func_id, prog);
 		return fn;
 	}
 }
@@ -2052,6 +2054,9 @@ static int __bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *
 
 	if (prog->aux->max_tp_access > btp->writable_size)
 		return -EINVAL;
+
+	if (prog->aux->sleepable && !btp->sleepable)
+		return -EPERM;
 
 	return tracepoint_probe_register_may_exist(tp, (void *)btp->bpf_func,
 						   prog);

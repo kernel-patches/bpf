@@ -51,6 +51,7 @@ struct bpf_raw_event_map {
 	void			*bpf_func;
 	u32			num_args;
 	u32			writable_size;
+	u32			sleepable;
 } __aligned(32);
 
 /*

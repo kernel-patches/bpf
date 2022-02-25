@@ -88,7 +88,7 @@ __bpf_trace_##call(void *__data, proto)					\
  * to make sure that if the tracepoint handling changes, the
  * bpf probe will fail to compile unless it too is updated.
  */
-#define __DEFINE_EVENT(template, call, proto, args, size)		\
+#define __DEFINE_EVENT(template, call, proto, args, size, sleep)	\
 static inline void bpf_test_probe_##call(void)				\
 {									\
 	check_trace_callback_type_##call(__bpf_trace_##template);	\
@@ -104,6 +104,7 @@ __section("__bpf_raw_tp_map") = {					\
 		.bpf_func	= __bpf_trace_##template,		\
 		.num_args	= COUNT_ARGS(args),			\
 		.writable_size	= size,					\
+		.sleepable	= sleep,				\
 	},								\
 };
 
@@ -123,11 +124,15 @@ static inline void bpf_test_buffer_##call(void)				\
 #undef DEFINE_EVENT_WRITABLE
 #define DEFINE_EVENT_WRITABLE(template, call, proto, args, size) \
 	__CHECK_WRITABLE_BUF_SIZE(call, PARAMS(proto), PARAMS(args), size) \
-	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), size)
+	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), size, 0)
+
+#undef DEFINE_EVENT_SLEEPABLE
+#define DEFINE_EVENT_SLEEPABLE(template, call, proto, args)	\
+	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), 0, 1)
 
 #undef DEFINE_EVENT
 #define DEFINE_EVENT(template, call, proto, args)			\
-	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), 0)
+	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), 0, 0)
 
 #undef DEFINE_EVENT_PRINT
 #define DEFINE_EVENT_PRINT(template, name, proto, args, print)	\
@@ -136,19 +141,26 @@ static inline void bpf_test_buffer_##call(void)				\
 #undef DECLARE_TRACE
 #define DECLARE_TRACE(call, proto, args)				\
 	__BPF_DECLARE_TRACE(call, PARAMS(proto), PARAMS(args))		\
-	__DEFINE_EVENT(call, call, PARAMS(proto), PARAMS(args), 0)
+	__DEFINE_EVENT(call, call, PARAMS(proto), PARAMS(args), 0, 0)
 
 #undef DECLARE_TRACE_WRITABLE
 #define DECLARE_TRACE_WRITABLE(call, proto, args, size) \
 	__CHECK_WRITABLE_BUF_SIZE(call, PARAMS(proto), PARAMS(args), size) \
 	__BPF_DECLARE_TRACE(call, PARAMS(proto), PARAMS(args)) \
-	__DEFINE_EVENT(call, call, PARAMS(proto), PARAMS(args), size)
+	__DEFINE_EVENT(call, call, PARAMS(proto), PARAMS(args), size, 0)
+
+#undef DECLARE_TRACE_SLEEPABLE
+#define DECLARE_TRACE_SLEEPABLE(call, proto, args)			\
+	__BPF_DECLARE_TRACE(call, PARAMS(proto), PARAMS(args))		\
+	__DEFINE_EVENT(call, call, PARAMS(proto), PARAMS(args), 0, 1)
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
 #undef DECLARE_TRACE_WRITABLE
 #undef DEFINE_EVENT_WRITABLE
 #undef __CHECK_WRITABLE_BUF_SIZE
+#undef DECLARE_TRACE_SLEEPABLE
+#undef DEFINE_EVENT_SLEEPABLE
 #undef __DEFINE_EVENT
 #undef FIRST
 
