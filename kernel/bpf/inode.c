@@ -440,7 +440,7 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 	return ret;
 }
 
-static int bpf_obj_do_pin(const char __user *pathname, void *raw,
+static int bpf_obj_do_pin(bpfptr_t pathname, void *raw,
 			  enum bpf_type type)
 {
 	struct dentry *dentry;
@@ -448,7 +448,13 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	umode_t mode;
 	int ret;
 
-	dentry = user_path_create(AT_FDCWD, pathname, &path, 0);
+	if (bpfptr_is_null(pathname))
+		return -EINVAL;
+
+	if (bpfptr_is_kernel(pathname))
+		dentry = kern_path_create(AT_FDCWD, pathname.kernel, &path, 0);
+	else
+		dentry = user_path_create(AT_FDCWD, pathname.user, &path, 0);
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
@@ -481,7 +487,7 @@ out:
 	return ret;
 }
 
-int bpf_obj_pin_user(u32 ufd, const char __user *pathname)
+int bpf_obj_pin_path(u32 ufd, bpfptr_t pathname)
 {
 	enum bpf_type type;
 	void *raw;
@@ -498,7 +504,7 @@ int bpf_obj_pin_user(u32 ufd, const char __user *pathname)
 	return ret;
 }
 
-static void *bpf_obj_do_get(const char __user *pathname,
+static void *bpf_obj_do_get(bpfptr_t pathname,
 			    enum bpf_type *type, int flags)
 {
 	struct inode *inode;
@@ -506,7 +512,13 @@ static void *bpf_obj_do_get(const char __user *pathname,
 	void *raw;
 	int ret;
 
-	ret = user_path_at(AT_FDCWD, pathname, LOOKUP_FOLLOW, &path);
+	if (bpfptr_is_null(pathname))
+		return ERR_PTR(-EINVAL);
+
+	if (bpfptr_is_kernel(pathname))
+		ret = kern_path(pathname.kernel, LOOKUP_FOLLOW, &path);
+	else
+		ret = user_path_at(AT_FDCWD, pathname.user, LOOKUP_FOLLOW, &path);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -530,7 +542,7 @@ out:
 	return ERR_PTR(ret);
 }
 
-int bpf_obj_get_user(const char __user *pathname, int flags)
+int bpf_obj_get_path(bpfptr_t pathname, int flags)
 {
 	enum bpf_type type = BPF_TYPE_UNSPEC;
 	int f_flags;

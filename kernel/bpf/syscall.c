@@ -2402,22 +2402,27 @@ free_prog:
 
 #define BPF_OBJ_LAST_FIELD file_flags
 
-static int bpf_obj_pin(const union bpf_attr *attr)
+static int bpf_obj_pin(const union bpf_attr *attr, bpfptr_t uattr)
 {
+	bpfptr_t pathname;
+
 	if (CHECK_ATTR(BPF_OBJ) || attr->file_flags != 0)
 		return -EINVAL;
 
-	return bpf_obj_pin_user(attr->bpf_fd, u64_to_user_ptr(attr->pathname));
+	pathname = make_bpfptr(attr->pathname, bpfptr_is_kernel(uattr));
+	return bpf_obj_pin_path(attr->bpf_fd, pathname);
 }
 
-static int bpf_obj_get(const union bpf_attr *attr)
+static int bpf_obj_get(const union bpf_attr *attr, bpfptr_t uattr)
 {
+	bpfptr_t pathname;
+
 	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0 ||
 	    attr->file_flags & ~BPF_OBJ_FLAG_MASK)
 		return -EINVAL;
 
-	return bpf_obj_get_user(u64_to_user_ptr(attr->pathname),
-				attr->file_flags);
+	pathname = make_bpfptr(attr->pathname, bpfptr_is_kernel(uattr));
+	return bpf_obj_get_path(pathname, attr->file_flags);
 }
 
 void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
@@ -4648,10 +4653,10 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		err = bpf_prog_load(&attr, uattr);
 		break;
 	case BPF_OBJ_PIN:
-		err = bpf_obj_pin(&attr);
+		err = bpf_obj_pin(&attr, uattr);
 		break;
 	case BPF_OBJ_GET:
-		err = bpf_obj_get(&attr);
+		err = bpf_obj_get(&attr, uattr);
 		break;
 	case BPF_PROG_ATTACH:
 		err = bpf_prog_attach(&attr);
@@ -4776,6 +4781,8 @@ BPF_CALL_3(bpf_sys_bpf, int, cmd, union bpf_attr *, attr, u32, attr_size)
 	case BPF_BTF_LOAD:
 	case BPF_LINK_CREATE:
 	case BPF_RAW_TRACEPOINT_OPEN:
+	case BPF_OBJ_PIN:
+	case BPF_OBJ_GET:
 		break;
 #ifdef CONFIG_BPF_JIT /* __bpf_prog_enter_sleepable used by trampoline and JIT */
 	case BPF_PROG_TEST_RUN:
