@@ -414,6 +414,11 @@ static const struct inode_operations bpf_dir_iops = {
 	.unlink		= simple_unlink,
 };
 
+bool bpf_path_is_bpf_dir(const struct path *path)
+{
+	return d_inode(path->dentry)->i_op == &bpf_dir_iops;
+}
+
 /* pin iterator link into bpffs */
 static int bpf_iter_link_pin_kernel(struct dentry *parent,
 				    const char *name, struct bpf_link *link)
@@ -439,7 +444,6 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 			  enum bpf_type type)
 {
 	struct dentry *dentry;
-	struct inode *dir;
 	struct path path;
 	umode_t mode;
 	int ret;
@@ -454,8 +458,7 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	if (ret)
 		goto out;
 
-	dir = d_inode(path.dentry);
-	if (dir->i_op != &bpf_dir_iops) {
+	if (!bpf_path_is_bpf_dir(&path)) {
 		ret = -EPERM;
 		goto out;
 	}

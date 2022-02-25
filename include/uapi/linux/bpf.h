@@ -5086,6 +5086,29 @@ union bpf_attr {
  *	Return
  *		0 on success, or a negative error in case of failure. On error
  *		*dst* buffer is zeroed out.
+ *
+ * long bpf_mkdir(const char *pathname, int pathname_sz, u32 mode)
+ *	Description
+ *		Attempts to create a directory name *pathname*. The argument
+ *		*pathname_sz* specifies the length of the string *pathname*.
+ *		The argument *mode* specifies the mode for the new directory. It
+ *		is modified by the process's umask. It has the same semantic as
+ *		the syscall mkdir(2).
+ *	Return
+ *		0 on success, or a negative error in case of failure.
+ *
+ * long bpf_rmdir(const char *pathname, int pathname_sz)
+ *	Description
+ *		Deletes a directory, which must be empty.
+ *	Return
+ *		0 on sucess, or a negative error in case of failure.
+ *
+ * long bpf_unlink(const char *pathname, int pathname_sz)
+ *	Description
+ *		Deletes a name and possibly the file it refers to. It has the
+ *		same semantic as the syscall unlink(2).
+ *	Return
+ *		0 on success, or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5280,6 +5303,9 @@ union bpf_attr {
 	FN(xdp_load_bytes),		\
 	FN(xdp_store_bytes),		\
 	FN(copy_from_user_task),	\
+	FN(mkdir),			\
+	FN(rmdir),			\
+	FN(unlink),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

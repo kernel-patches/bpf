@@ -12,6 +12,7 @@
 #include <linux/sched/signal.h>
 #include <linux/vmalloc.h>
 #include <linux/mmzone.h>
+#include <linux/namei.h>
 #include <linux/anon_inodes.h>
 #include <linux/fdtable.h>
 #include <linux/file.h>
@@ -4867,6 +4868,176 @@ const struct bpf_func_proto bpf_kallsyms_lookup_name_proto = {
 	.arg4_type	= ARG_PTR_TO_LONG,
 };
 
+BPF_CALL_3(bpf_mkdir, const char *, pathname, int, pathname_sz, u32, raw_mode)
+{
+	struct user_namespace *mnt_userns;
+	struct dentry *dentry;
+	struct path path;
+	umode_t mode;
+	int err;
+
+	if (pathname_sz <= 1 || pathname[pathname_sz - 1])
+		return -EINVAL;
+
+	dentry = kern_path_create(AT_FDCWD, pathname, &path, LOOKUP_DIRECTORY);
+	if (IS_ERR(dentry))
+		return PTR_ERR(dentry);
+
+	if (!bpf_path_is_bpf_dir(&path)) {
+		err = -EPERM;
+		goto err_exit;
+	}
+
+	mode = raw_mode;
+	if (!IS_POSIXACL(path.dentry->d_inode))
+		mode &= ~current_umask();
+	err = security_path_mkdir(&path, dentry, mode);
+	if (err)
+		goto err_exit;
+
+	mnt_userns = mnt_user_ns(path.mnt);
+	err = vfs_mkdir(mnt_userns, d_inode(path.dentry), dentry, mode);
+
+err_exit:
+	done_path_create(&path, dentry);
+	return err;
+}
+
+const struct bpf_func_proto bpf_mkdir_proto = {
+	.func		= bpf_mkdir,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_rmdir, const char *, pathname, int, pathname_sz)
+{
+	struct user_namespace *mnt_userns;
+	struct path parent;
+	struct dentry *dentry;
+	int err;
+
+	if (pathname_sz <= 1 || pathname[pathname_sz - 1])
+		return -EINVAL;
+
+	err = kern_path(pathname, 0, &parent);
+	if (err)
+		return err;
+
+	if (!bpf_path_is_bpf_dir(&parent)) {
+		err = -EPERM;
+		goto exit1;
+	}
+
+	err = mnt_want_write(parent.mnt);
+	if (err)
+		goto exit1;
+
+	dentry = kern_path_locked(pathname, &parent);
+	if (IS_ERR(dentry)) {
+		err = PTR_ERR(dentry);
+		goto exit2;
+	}
+
+	if (d_really_is_negative(dentry)) {
+		err = -ENOENT;
+		goto exit3;
+	}
+
+	err = security_path_rmdir(&parent, dentry);
+	if (err)
+		goto exit3;
+
+	mnt_userns = mnt_user_ns(parent.mnt);
+	err = vfs_rmdir(mnt_userns, d_inode(parent.dentry), dentry);
+exit3:
+	dput(dentry);
+	inode_unlock(d_inode(parent.dentry));
+exit2:
+	mnt_drop_write(parent.mnt);
+exit1:
+	path_put(&parent);
+	return err;
+}
+
+const struct bpf_func_proto bpf_rmdir_proto = {
+	.func		= bpf_rmdir,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
+BPF_CALL_2(bpf_unlink, const char *, pathname, int, pathname_sz)
+{
+	struct user_namespace *mnt_userns;
+	struct path parent;
+	struct dentry *dentry;
+	struct inode *inode = NULL;
+	int err;
+
+	if (pathname_sz <= 1 || pathname[pathname_sz - 1])
+		return -EINVAL;
+
+	err = kern_path(pathname, 0, &parent);
+	if (err)
+		return err;
+
+	err = mnt_want_write(parent.mnt);
+	if (err)
+		goto exit1;
+
+	dentry = kern_path_locked(pathname, &parent);
+	if (IS_ERR(dentry)) {
+		err = PTR_ERR(dentry);
+		goto exit2;
+	}
+
+	if (!bpf_path_is_bpf_dir(&parent)) {
+		err = -EPERM;
+		goto exit3;
+	}
+
+	if (d_is_negative(dentry)) {
+		err = -ENOENT;
+		goto exit3;
+	}
+
+	if (d_is_dir(dentry)) {
+		err = -EISDIR;
+		goto exit3;
+	}
+
+	inode = dentry->d_inode;
+	ihold(inode);
+	err = security_path_unlink(&parent, dentry);
+	if (err)
+		goto exit3;
+
+	mnt_userns = mnt_user_ns(parent.mnt);
+	err = vfs_unlink(mnt_userns, d_inode(parent.dentry), dentry, NULL);
+exit3:
+	dput(dentry);
+	inode_unlock(d_inode(parent.dentry));
+	if (inode)
+		iput(inode);
+exit2:
+	mnt_drop_write(parent.mnt);
+exit1:
+	path_put(&parent);
+	return err;
+}
+
+const struct bpf_func_proto bpf_unlink_proto = {
+	.func		= bpf_unlink,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
 static const struct bpf_func_proto *
 syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -4879,6 +5050,12 @@ syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_sys_close_proto;
 	case BPF_FUNC_kallsyms_lookup_name:
 		return &bpf_kallsyms_lookup_name_proto;
+	case BPF_FUNC_mkdir:
+		return &bpf_mkdir_proto;
+	case BPF_FUNC_rmdir:
+		return &bpf_rmdir_proto;
+	case BPF_FUNC_unlink:
+		return &bpf_unlink_proto;
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
