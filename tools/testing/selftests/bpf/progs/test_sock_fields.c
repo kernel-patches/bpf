@@ -42,6 +42,11 @@ struct {
 	__type(value, struct bpf_spinlock_cnt);
 } sk_pkt_out_cnt10 SEC(".maps");
 
+enum {
+	TCP_SYN_SENT = 2,
+	TCP_LISTEN = 10,
+};
+
 struct bpf_tcp_sock listen_tp = {};
 struct sockaddr_in6 srv_sa6 = {};
 struct bpf_tcp_sock cli_tp = {};
@@ -138,7 +143,7 @@ int egress_read_sock_fields(struct __sk_buff *skb)
 	 * TCP_LISTEN (10) socket will be copied at the ingress side.
 	 */
 	if (sk->family != AF_INET6 || !is_loopback6(sk->src_ip6) ||
-	    sk->state == 10)
+	    sk->state == TCP_LISTEN)
 		return CG_OK;
 
 	if (sk->src_port == bpf_ntohs(srv_sa6.sin6_port)) {
@@ -233,7 +238,7 @@ int ingress_read_sock_fields(struct __sk_buff *skb)
 		return CG_OK;
 
 	/* Only interested in TCP_LISTEN */
-	if (sk->state != 10)
+	if (sk->state != TCP_LISTEN)
 		return CG_OK;
 
 	/* It must be a fullsock for cgroup_skb/ingress prog */
@@ -280,6 +285,10 @@ int read_sk_dst_port(struct __sk_buff *skb)
 	sk = skb->sk;
 	if (!sk)
 		RET_LOG();
+
+	/* Ignore everything but the SYN from the client socket */
+	if (sk->state != TCP_SYN_SENT)
+		return CG_OK;
 
 	if (!sk_dst_port__load_word(sk))
 		RET_LOG();
