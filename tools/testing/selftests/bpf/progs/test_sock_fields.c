@@ -256,10 +256,23 @@ int ingress_read_sock_fields(struct __sk_buff *skb)
 	return CG_OK;
 }
 
+/*
+ * NOTE: 4-byte load from bpf_sock at dst_port offset is quirky. The
+ * result is left shifted on little-endian architectures because the
+ * access is converted to a 2-byte load. The quirky behavior is kept
+ * for backward compatibility.
+ */
 static __noinline bool sk_dst_port__load_word(struct bpf_sock *sk)
 {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	const __u8 SHIFT = 16;
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	const __u8 SHIFT = 0;
+#else
+#error "Unrecognized __BYTE_ORDER__"
+#endif
 	__u32 *word = (__u32 *)&sk->dst_port;
-	return word[0] == bpf_htonl(0xcafe0000);
+	return word[0] == bpf_htonl(0xcafe << SHIFT);
 }
 
 static __noinline bool sk_dst_port__load_half(struct bpf_sock *sk)
