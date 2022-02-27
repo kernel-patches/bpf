@@ -896,8 +896,8 @@ static void bpf_cgroup_link_release(struct bpf_link *link)
 		return;
 	}
 
-	WARN_ON(__cgroup_bpf_detach(cg_link->cgroup, NULL, cg_link,
-				    cg_link->type));
+	__cgroup_bpf_detach(cg_link->cgroup, NULL, cg_link,
+				    cg_link->type);
 
 	cg = cg_link->cgroup;
 	cg_link->cgroup = NULL;
