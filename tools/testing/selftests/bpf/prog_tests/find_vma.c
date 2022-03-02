@@ -30,10 +30,18 @@ static int open_pe(void)
 	attr.type = PERF_TYPE_HARDWARE;
 	attr.config = PERF_COUNT_HW_CPU_CYCLES;
 	attr.freq = 1;
-	attr.sample_freq = 4000;
+	attr.sample_freq = 1000;
 	pfd = syscall(__NR_perf_event_open, &attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
 
 	return pfd >= 0 ? pfd : -errno;
+}
+
+static bool find_vma_pe_condition(struct find_vma *skel)
+{
+	return skel->bss->found_vm_exec == 0 ||
+		skel->data->find_addr_ret != 0 ||
+		skel->data->find_zero_ret == -1 ||
+		strcmp(skel->bss->d_iname, "test_progs") != 0;
 }
 
 static void test_find_vma_pe(struct find_vma *skel)
@@ -57,7 +65,7 @@ static void test_find_vma_pe(struct find_vma *skel)
 	if (!ASSERT_OK_PTR(link, "attach_perf_event"))
 		goto cleanup;
 
-	for (i = 0; i < 1000000; ++i)
+	for (i = 0; i < 1000000000 && find_vma_pe_condition(skel); ++i)
 		++j;
 
 	test_and_reset_skel(skel, -EBUSY /* in nmi, irq_work is busy */);
@@ -108,7 +116,6 @@ void serial_test_find_vma(void)
 	skel->bss->addr = (__u64)(uintptr_t)test_find_vma_pe;
 
 	test_find_vma_pe(skel);
-	usleep(100000); /* allow the irq_work to finish */
 	test_find_vma_kprobe(skel);
 
 	find_vma__destroy(skel);
