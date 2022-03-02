@@ -11748,6 +11748,82 @@ int bpf_object__open_skeleton(struct bpf_object_skeleton *s,
 	return 0;
 }
 
+int bpf_object__open_subskeleton(struct bpf_object_subskeleton *s)
+{
+	int i, len, map_type_id, sym_idx;
+	const char *var_name;
+	struct bpf_map *map;
+	struct btf *btf;
+	const struct btf_type *map_type, *var_type;
+	const struct bpf_sym_skeleton *sym;
+	struct btf_var_secinfo *var;
+	struct bpf_map *last_map = NULL;
+	const struct btf_type *last_map_type = NULL;
+
+	if (!s->obj)
+		return libbpf_err(-EINVAL);
+
+	btf = bpf_object__btf(s->obj);
+	if (!btf)
+		return libbpf_err(errno);
+
+	for (sym_idx = 0; sym_idx < s->sym_cnt; sym_idx++) {
+		sym = &s->syms[sym_idx];
+		if (last_map && (strcmp(sym->section, bpf_map__section_name(last_map)) == 0)) {
+			map = last_map;
+			map_type = last_map_type;
+		} else {
+			map = bpf_object__find_map_by_name(s->obj, sym->section);
+			if (!map) {
+				pr_warn("Could not find map for section %1$s, symbol %2$s",
+					sym->section, s->syms[i].name);
+				return libbpf_err(-EINVAL);
+			}
+			map_type_id = btf__find_by_name_kind(btf, sym->section, BTF_KIND_DATASEC);
+			if (map_type_id < 0) {
+				pr_warn("Could not find map type in btf for section %1$s (due to symbol %2$s)",
+					sym->section, sym->name);
+				return libbpf_err(-EINVAL);
+			}
+			map_type = btf__type_by_id(btf, map_type_id);
+		}
+
+		/* We have a section and a corresponding type, now find the
+		 * symbol in the loaded map. This is clearly quadratic in the
+		 * number of symbols in the section, but that's easy to optimize
+		 * once the need arises.
+		 */
+
+		len = btf_vlen(map_type);
+		for (i = 0, var = btf_var_secinfos(map_type); i < len; i++, var++) {
+			var_type = btf__type_by_id(btf, var->type);
+			if (!var_type) {
+				pr_warn("Could not find var type for item %1$d in section %2$s",
+					i, sym->section);
+				return libbpf_err(-EINVAL);
+			}
+			var_name = btf__name_by_offset(btf, var_type->name_off);
+			if (strcmp(var_name, sym->name) == 0) {
+				*sym->addr = (char *) map->mmaped + var->offset;
+				break;
+			}
+		}
+
+		last_map = map;
+		last_map_type = map_type;
+	}
+	return 0;
+}
+
+void bpf_object__destroy_subskeleton(struct bpf_object_subskeleton *s)
+{
+	if (!s)
+		return;
+	if (s->syms)
+		free(s->syms);
+	free(s);
+}
+
 int bpf_object__load_skeleton(struct bpf_object_skeleton *s)
 {
 	int i, err;

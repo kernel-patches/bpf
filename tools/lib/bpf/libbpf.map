@@ -443,4 +443,6 @@ LIBBPF_0.7.0 {
 LIBBPF_0.8.0 {
 	global:
     bpf_map__section_name;
+    bpf_object__open_subskeleton;
+    bpf_object__destroy_subskeleton;
 } LIBBPF_0.7.0;
