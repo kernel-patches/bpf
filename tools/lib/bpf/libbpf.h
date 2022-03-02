@@ -741,6 +741,8 @@ LIBBPF_API LIBBPF_DEPRECATED_SINCE(0, 8, "use appropriate getters or setters ins
 const struct bpf_map_def *bpf_map__def(const struct bpf_map *map);
 /* get map name */
 LIBBPF_API const char *bpf_map__name(const struct bpf_map *map);
+/* get map ELF section name */
+LIBBPF_API const char *bpf_map__section_name(const struct bpf_map *map);
 /* get/set map type */
 LIBBPF_API enum bpf_map_type bpf_map__type(const struct bpf_map *map);
 LIBBPF_API int bpf_map__set_type(struct bpf_map *map, enum bpf_map_type type);

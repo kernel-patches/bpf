@@ -9180,6 +9180,14 @@ const char *bpf_map__name(const struct bpf_map *map)
 	return map->name;
 }
 
+const char *bpf_map__section_name(const struct bpf_map *map)
+{
+	if (!map)
+		return NULL;
+
+	return map->real_name;
+}
+
 enum bpf_map_type bpf_map__type(const struct bpf_map *map)
 {
 	return map->def.type;
