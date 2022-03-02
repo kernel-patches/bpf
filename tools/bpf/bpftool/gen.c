@@ -125,14 +125,14 @@ static int codegen_datasec_def(struct bpf_object *obj,
 			       struct btf *btf,
 			       struct btf_dump *d,
 			       const struct btf_type *sec,
-			       const char *obj_name)
+			       const char *obj_name,
+			       bool subskel)
 {
 	const char *sec_name = btf__name_by_offset(btf, sec->name_off);
 	const struct btf_var_secinfo *sec_var = btf_var_secinfos(sec);
 	int i, err, off = 0, pad_cnt = 0, vlen = btf_vlen(sec);
 	char var_ident[256], sec_ident[256];
 	bool strip_mods = false;
-
 	if (!get_datasec_ident(sec_name, sec_ident, sizeof(sec_ident)))
 		return 0;
 
@@ -183,7 +183,7 @@ static int codegen_datasec_def(struct bpf_object *obj,
 			align = 4;
 
 		align_off = (off + align - 1) / align * align;
-		if (align_off != need_off) {
+		if (align_off != need_off && !subskel) {
 			printf("\t\tchar __pad%d[%d];\n",
 			       pad_cnt, need_off - off);
 			pad_cnt++;
@@ -197,6 +197,15 @@ static int codegen_datasec_def(struct bpf_object *obj,
 		strncat(var_ident, var_name, sizeof(var_ident) - 1);
 		sanitize_identifier(var_ident);
 
+		/* to emit a pointer to the type in the map, we need to
+		 * make sure our btf has that pointer type first.
+		 */
+		if (subskel) {
+			var_type_id = btf__add_ptr(btf, var_type_id);
+			if (var_type_id < 0)
+				return var_type_id;
+		}
+
 		printf("\t\t");
 		err = btf_dump__emit_type_decl(d, var_type_id, &opts);
 		if (err)
@@ -205,7 +214,10 @@ static int codegen_datasec_def(struct bpf_object *obj,
 
 		off = sec_var->offset + sec_var->size;
 	}
-	printf("	} *%s;\n", sec_ident);
+	if (subskel)
+		printf("	} %s;\n", sec_ident);
+	else
+		printf("	} *%s;\n", sec_ident);
 	return 0;
 }
 
@@ -231,7 +243,7 @@ static const struct btf_type *find_type_for_map(struct btf *btf, const char *map
 	return NULL;
 }
 
-static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
+static int codegen_datasecs(struct bpf_object *obj, const char *obj_name, bool subskel)
 {
 	struct btf *btf = bpf_object__btf(obj);
 	struct btf_dump *d;
@@ -239,6 +251,13 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 	const struct btf_type *sec;
 	char map_ident[256];
 	int err = 0;
+
+	/* When generating a subskeleton, we need to emit _pointers_
+	 * to the types in the maps. Use a new btf object as storage for these
+	 * new types as they're not guaranteed to already exist.
+	 */
+	if (subskel)
+		btf = btf__new_empty_split(btf);
 
 	d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
 	err = libbpf_get_error(d);
@@ -264,11 +283,11 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 		 * map. It will still be memory-mapped and its contents
 		 * accessible from user-space through BPF skeleton.
 		 */
-		if (!sec) {
+		if (!sec && !subskel) {
 			printf("	struct %s__%s {\n", obj_name, map_ident);
 			printf("	} *%s;\n", map_ident);
-		} else {
-			err = codegen_datasec_def(obj, btf, d, sec, obj_name);
+		} else if (sec) {
+			err = codegen_datasec_def(obj, btf, d, sec, obj_name, subskel);
 			if (err)
 				goto out;
 		}
@@ -276,6 +295,8 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 
 
 out:
+	if (subskel)
+		btf__free(btf);
 	btf_dump__free(d);
 	return err;
 }
@@ -896,7 +917,7 @@ static int do_skeleton(int argc, char **argv)
 
 	btf = bpf_object__btf(obj);
 	if (btf) {
-		err = codegen_datasecs(obj, obj_name);
+		err = codegen_datasecs(obj, obj_name, false);
 		if (err)
 			goto out;
 	}
@@ -1141,6 +1162,287 @@ out:
 	return err;
 }
 
+/* Subskeletons are like skeletons, except they don't own the bpf_object,
+ * associated maps, links, etc. Instead, they know about the existence of
+ * a certain number of datasec fields and are able to find their locations
+ * _at runtime_ from an already loaded bpf_object.
+ *
+ * This allows for library-like BPF objects to have userspace counterparts
+ * with access to their globals without having to know anything about the
+ * final BPF object that the library was linked into.
+ */
+static int do_subskeleton(int argc, char **argv)
+{
+	char header_guard[MAX_OBJ_NAME_LEN + sizeof("__SKEL_H__")];
+	size_t i, len, file_sz, mmap_sz, sym_sz = 0, sym_idx = 0;
+	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);
+	char obj_name[MAX_OBJ_NAME_LEN] = "", *obj_data;
+	struct bpf_object *obj = NULL;
+	const char *file, *var_name;
+	char ident[256], var_ident[256];
+	int fd, err = -1, map_type_id;
+	const struct bpf_map *map;
+	struct btf *btf;
+	const struct btf_type *map_type, *var_type;
+	const struct btf_var_secinfo *var;
+	struct stat st;
+
+	if (!REQ_ARGS(1)) {
+		usage();
+		return -1;
+	}
+	file = GET_ARG();
+
+	while (argc) {
+		if (!REQ_ARGS(2))
+			return -1;
+
+		if (is_prefix(*argv, "name")) {
+			NEXT_ARG();
+
+			if (obj_name[0] != '\0') {
+				p_err("object name already specified");
+				return -1;
+			}
+
+			strncpy(obj_name, *argv, MAX_OBJ_NAME_LEN - 1);
+			obj_name[MAX_OBJ_NAME_LEN - 1] = '\0';
+		} else {
+			p_err("unknown arg %s", *argv);
+			return -1;
+		}
+
+		NEXT_ARG();
+	}
+
+	if (argc) {
+		p_err("extra unknown arguments");
+		return -1;
+	}
+
+	if (use_loader) {
+		p_err("cannot use loader for subskeletons");
+		return -1;
+	}
+
+	if (stat(file, &st)) {
+		p_err("failed to stat() %s: %s", file, strerror(errno));
+		return -1;
+	}
+	file_sz = st.st_size;
+	mmap_sz = roundup(file_sz, sysconf(_SC_PAGE_SIZE));
+	fd = open(file, O_RDONLY);
+	if (fd < 0) {
+		p_err("failed to open() %s: %s", file, strerror(errno));
+		return -1;
+	}
+	obj_data = mmap(NULL, mmap_sz, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (obj_data == MAP_FAILED) {
+		obj_data = NULL;
+		p_err("failed to mmap() %s: %s", file, strerror(errno));
+		goto out;
+	}
+	if (obj_name[0] == '\0')
+		get_obj_name(obj_name, file);
+	opts.object_name = obj_name;
+	if (verifier_logs)
+		/* log_level1 + log_level2 + stats, but not stable UAPI */
+		opts.kernel_log_level = 1 + 2 + 4;
+	obj = bpf_object__open_mem(obj_data, file_sz, &opts);
+	err = libbpf_get_error(obj);
+	if (err) {
+		char err_buf[256];
+
+		libbpf_strerror(err, err_buf, sizeof(err_buf));
+		p_err("failed to open BPF object file: %s", err_buf);
+		obj = NULL;
+		goto out;
+	}
+
+	btf = bpf_object__btf(obj);
+	err = libbpf_get_error(btf);
+	if (err) {
+		err = -1;
+		p_err("need btf type information for %s", obj_name);
+		goto out;
+	}
+
+	/* First, count how many symbols we have to link. */
+	bpf_object__for_each_map(map, obj) {
+		if (!bpf_map__is_internal(map))
+			continue;
+
+		if (!(bpf_map__map_flags(map) & BPF_F_MMAPABLE))
+			continue;
+
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		map_type_id = btf__find_by_name_kind(btf, bpf_map__section_name(map), BTF_KIND_DATASEC);
+		if (map_type_id < 0) {
+			err = map_type_id;
+			goto out;
+		}
+		map_type = btf__type_by_id(btf, map_type_id);
+
+		for (i = 0, var = btf_var_secinfos(map_type), len = btf_vlen(map_type);
+		     i < len;
+		     i++, var++) {
+			sym_sz++;
+		}
+	}
+
+	get_header_guard(header_guard, obj_name);
+	codegen("\
+	\n\
+	/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */   \n\
+								    \n\
+	/* THIS FILE IS AUTOGENERATED! */			    \n\
+	#ifndef %2$s						    \n\
+	#define %2$s						    \n\
+								    \n\
+	#include <errno.h>					    \n\
+	#include <stdlib.h>					    \n\
+	#include <bpf/libbpf.h>					    \n\
+								    \n\
+	struct %1$s {						    \n\
+		struct bpf_object *obj;				    \n\
+		struct bpf_object_subskeleton *subskel;		    \n\
+	", obj_name, header_guard);
+
+	err = codegen_datasecs(obj, obj_name, true);
+	if (err)
+		goto out;
+
+	/* emit code that will allocate enough storage for all symbols */
+	codegen("\
+		\n\
+									    \n\
+		#ifdef __cplusplus					    \n\
+			static inline struct %1$s *open(const struct bpf_object *src);\n\
+			static inline void %1$s::destroy(struct %1$s *skel);\n\
+		#endif /* __cplusplus */				    \n\
+		};							    \n\
+									    \n\
+		static inline void					    \n\
+		%1$s__destroy(struct %1$s *skel)			    \n\
+		{							    \n\
+			if (!skel)					    \n\
+				return;					    \n\
+			if (skel->subskel)				    \n\
+				bpf_object__destroy_subskeleton(skel->subskel);\n\
+			free(skel);					    \n\
+		}							    \n\
+									    \n\
+		static inline struct %1$s *				    \n\
+		%1$s__open(const struct bpf_object *src)		    \n\
+		{							    \n\
+			struct %1$s *obj;				    \n\
+			struct bpf_object_subskeleton *subskel;		    \n\
+			struct bpf_sym_skeleton *syms;			    \n\
+			int err;					    \n\
+									    \n\
+			obj = (struct %1$s *)calloc(1, sizeof(*obj));	    \n\
+			if (!obj) {					    \n\
+				errno = ENOMEM;				    \n\
+				return NULL;				    \n\
+			}						    \n\
+			subskel = (struct bpf_object_subskeleton *)calloc(1, sizeof(*subskel));\n\
+			if (!subskel) {					    \n\
+				errno = ENOMEM;				    \n\
+				return NULL;				    \n\
+			}						    \n\
+			subskel->sz = sizeof(*subskel);			    \n\
+			subskel->obj = src;				    \n\
+			subskel->sym_skel_sz = sizeof(struct bpf_sym_skeleton); \n\
+			subskel->sym_cnt = %2$d;			    \n\
+			obj->subskel = subskel;				    \n\
+									    \n\
+			syms = (struct bpf_sym_skeleton *)calloc(%2$d, sizeof(*syms));\n\
+			if (!syms) {					    \n\
+				free(subskel);				    \n\
+				errno = ENOMEM;				    \n\
+				return NULL;				    \n\
+			}						    \n\
+			subskel->syms = syms;				    \n\
+									    \n\
+		",
+		obj_name, sym_sz
+	);
+
+	/* walk through each symbol and emit the runtime representation
+	 */
+	bpf_object__for_each_map(map, obj) {
+		if (!bpf_map__is_internal(map))
+			continue;
+
+		if (!(bpf_map__map_flags(map) & BPF_F_MMAPABLE))
+			continue;
+
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		map_type_id = btf__find_by_name_kind(btf, bpf_map__section_name(map), BTF_KIND_DATASEC);
+		if (map_type_id < 0) {
+			err = map_type_id;
+			goto out;
+		}
+		map_type = btf__type_by_id(btf, map_type_id);
+
+		for (i = 0, var = btf_var_secinfos(map_type), len = btf_vlen(map_type);
+		     i < len;
+		     i++, var++, sym_idx++) {
+			var_type = btf__type_by_id(btf, var->type);
+			var_name = btf__name_by_offset(btf, var_type->name_off);
+
+			var_ident[0] = '\0';
+			strncat(var_ident, var_name, sizeof(var_ident) - 1);
+			sanitize_identifier(var_ident);
+
+			codegen("\
+			\n\
+				syms[%4$d].name = \"%1$s\";		    \n\
+				syms[%4$d].section = \"%3$s\";		    \n\
+				syms[%4$d].addr = (void**) &obj->%2$s.%1$s; \n\
+			", var_ident, ident, bpf_map__section_name(map), sym_idx);
+		}
+	}
+
+	codegen("\
+		\n\
+									    \n\
+			err = bpf_object__open_subskeleton(subskel);	    \n\
+			if (err) {					    \n\
+				%1$s__destroy(obj);			    \n\
+				errno = err;				    \n\
+				return NULL;				    \n\
+			}						    \n\
+									    \n\
+			return obj;					    \n\
+		}							    \n\
+		",
+		obj_name);
+
+	codegen("\
+		\n\
+									    \n\
+		#ifdef __cplusplus					    \n\
+		struct %1$s *%1$s::open(const struct bpf_object *src) { return %1$s__open(src); }\n\
+		void %1$s::destroy(struct %1$s *skel) { %1$s__destroy(skel); }\n\
+		#endif /* __cplusplus */				    \n\
+									    \n\
+		#endif /* %2$s */					    \n\
+		",
+		obj_name, header_guard);
+	err = 0;
+out:
+	bpf_object__close(obj);
+	if (obj_data)
+		munmap(obj_data, mmap_sz);
+	close(fd);
+	return err;
+}
+
 static int do_object(int argc, char **argv)
 {
 	struct bpf_linker *linker;
@@ -1192,6 +1494,7 @@ static int do_help(int argc, char **argv)
 	fprintf(stderr,
 		"Usage: %1$s %2$s object OUTPUT_FILE INPUT_FILE [INPUT_FILE...]\n"
 		"       %1$s %2$s skeleton FILE [name OBJECT_NAME]\n"
+		"       %1$s %2$s subskeleton FILE [name OBJECT_NAME]\n"
 		"       %1$s %2$s min_core_btf INPUT OUTPUT OBJECT [OBJECT...]\n"
 		"       %1$s %2$s help\n"
 		"\n"
@@ -1788,6 +2091,7 @@ static int do_min_core_btf(int argc, char **argv)
 static const struct cmd cmds[] = {
 	{ "object",		do_object },
 	{ "skeleton",		do_skeleton },
+	{ "subskeleton",	do_subskeleton },
 	{ "min_core_btf",	do_min_core_btf},
 	{ "help",		do_help },
 	{ 0 }
