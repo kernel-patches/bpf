@@ -5367,10 +5367,27 @@ found:
 
 int check_func_arg_reg_off(struct bpf_verifier_env *env,
 			   const struct bpf_reg_state *reg, int regno,
-			   enum bpf_arg_type arg_type)
+			   enum bpf_arg_type arg_type,
+			   bool is_release_func)
 {
 	enum bpf_reg_type type = reg->type;
+	bool fixed_off_ok = false;
 	int err;
+
+	/* When referenced PTR_TO_BTF_ID is passed to release function, it's
+	 * fixed offset must be 0. We rely on the property that only one
+	 * referenced register can be passed to BPF helpers and kfuncs.
+	 */
+	if (type == PTR_TO_BTF_ID) {
+		bool release_reg = is_release_func && reg->ref_obj_id;
+
+		if (release_reg && reg->off) {
+			verbose(env, "R%d must have zero offset when passed to release func\n",
+				regno);
+			return -EINVAL;
+		}
+		fixed_off_ok = release_reg ? false : true;
+	}
 
 	switch ((u32)type) {
 	case SCALAR_VALUE:
@@ -5394,8 +5411,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	/* All the rest must be rejected: */
 	default:
 force_off_check:
-		err = __check_ptr_off_reg(env, reg, regno,
-					  type == PTR_TO_BTF_ID);
+		err = __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
 		if (err < 0)
 			return err;
 		break;
@@ -5452,11 +5468,14 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	if (err)
 		return err;
 
-	err = check_func_arg_reg_off(env, reg, regno, arg_type);
+	err = check_func_arg_reg_off(env, reg, regno, arg_type, is_release_function(meta->func_id));
 	if (err)
 		return err;
 
 skip_type_check:
+	/* check_func_arg_reg_off relies on only one referenced register being
+	 * allowed for BPF helpers.
+	 */
 	if (reg->ref_obj_id) {
 		if (meta->ref_obj_id) {
 			verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
