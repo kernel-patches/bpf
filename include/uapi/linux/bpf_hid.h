@@ -25,12 +25,22 @@ enum hid_bpf_event {
 	HID_BPF_UNDEF = 0,
 	HID_BPF_DEVICE_EVENT,		/* when attach type is BPF_HID_DEVICE_EVENT */
 	HID_BPF_RDESC_FIXUP,		/* ................... BPF_HID_RDESC_FIXUP */
+	HID_BPF_USER_EVENT,		/* ................... BPF_HID_USER_EVENT */
+};
+
+/* type is HID_BPF_USER_EVENT */
+struct hid_bpf_ctx_user_event {
+	__s32 retval;
 };
 
 struct hid_bpf_ctx {
 	enum hid_bpf_event type;	/* read-only */
 	__u16 allocated_size;		/* the allocated size of data below (RO) */
 	struct hid_device *hdev;	/* read-only */
+
+	union {
+		struct hid_bpf_ctx_user_event user;	/* read-write */
+	} u;
 
 	__u16 size;			/* used size in data (RW) */
 	__u8 data[];			/* data buffer (RW) */
