@@ -1751,10 +1751,13 @@ int hid_report_raw_event(struct hid_device *hid, int type, u8 *data, u32 size,
 	u8 *cdata;
 	int ret = 0;
 
-	data = hid_bpf_raw_event(hid, data, &size);
-	if (IS_ERR(data)) {
-		ret = PTR_ERR(data);
-		goto out;
+	/* we pre-test if ctx is available here to cut the calls at the earliest */
+	if (hid->bpf.ctx) {
+		data = hid_bpf_raw_event(hid, data, &size);
+		if (IS_ERR(data)) {
+			ret = PTR_ERR(data);
+			goto out;
+		}
 	}
 
 	report = hid_get_report(report_enum, data);
