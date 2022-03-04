@@ -1213,7 +1213,8 @@ int hid_open_report(struct hid_device *device)
 		return -ENODEV;
 	size = device->dev_rsize;
 
-	buf = kmemdup(start, size, GFP_KERNEL);
+	/* hid_bpf_report_fixup() ensures we work on a copy of rdesc */
+	buf = hid_bpf_report_fixup(device, start, &size);
 	if (buf == NULL)
 		return -ENOMEM;
 

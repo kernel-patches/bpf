@@ -50,6 +50,14 @@ static struct hid_device *hid_bpf_fd_to_hdev(int fd)
 	return hdev;
 }
 
+static int hid_reconnect(struct hid_device *hdev)
+{
+	if (!test_and_set_bit(ffs(HID_STAT_REPROBED), &hdev->status))
+		return device_reprobe(&hdev->dev);
+
+	return 0;
+}
+
 static int hid_bpf_link_attach(struct hid_device *hdev, enum bpf_hid_attach_type type)
 {
 	int err = 0;
@@ -71,12 +79,26 @@ static int hid_bpf_link_attach(struct hid_device *hdev, enum bpf_hid_attach_type
 	return err;
 }
 
+static void hid_bpf_link_attached(struct hid_device *hdev, enum bpf_hid_attach_type type)
+{
+	switch (type) {
+	case BPF_HID_ATTACH_RDESC_FIXUP:
+		hid_reconnect(hdev);
+		break;
+	default:
+		/* do nothing */
+	}
+}
+
 static void hid_bpf_array_detached(struct hid_device *hdev, enum bpf_hid_attach_type type)
 {
 	switch (type) {
 	case BPF_HID_ATTACH_DEVICE_EVENT:
 		kfree(hdev->bpf.ctx);
 		hdev->bpf.ctx = NULL;
+		break;
+	case BPF_HID_ATTACH_RDESC_FIXUP:
+		hid_reconnect(hdev);
 		break;
 	default:
 		/* do nothing */
@@ -97,6 +119,9 @@ static int hid_bpf_run_progs(struct hid_device *hdev, enum bpf_hid_attach_type t
 	switch (type) {
 	case BPF_HID_ATTACH_DEVICE_EVENT:
 		event = HID_BPF_DEVICE_EVENT;
+		break;
+	case BPF_HID_ATTACH_RDESC_FIXUP:
+		event = HID_BPF_RDESC_FIXUP;
 		break;
 	default:
 		return -EINVAL;
@@ -138,11 +163,46 @@ u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *data, int *size)
 	return hdev->bpf.ctx->data;
 }
 
+u8 *hid_bpf_report_fixup(struct hid_device *hdev, u8 *rdesc, unsigned int *size)
+{
+	struct hid_bpf_ctx *ctx = NULL;
+	int ret;
+
+	if (bpf_hid_link_empty(&hdev->bpf, BPF_HID_ATTACH_RDESC_FIXUP))
+		goto ignore_bpf;
+
+	ctx = bpf_hid_allocate_ctx(hdev, HID_MAX_DESCRIPTOR_SIZE);
+	if (IS_ERR(ctx))
+		goto ignore_bpf;
+
+	ret = hid_bpf_run_progs(hdev, BPF_HID_ATTACH_RDESC_FIXUP, ctx, rdesc, *size);
+	if (ret)
+		goto ignore_bpf;
+
+	*size = ctx->size;
+
+	if (!*size) {
+		rdesc = NULL;
+		goto unlock;
+	}
+
+	rdesc = kmemdup(ctx->data, *size, GFP_KERNEL);
+
+ unlock:
+	kfree(ctx);
+	return rdesc;
+
+ ignore_bpf:
+	kfree(ctx);
+	return kmemdup(rdesc, *size, GFP_KERNEL);
+}
+
 int __init hid_bpf_module_init(void)
 {
 	struct bpf_hid_hooks hooks = {
 		.hdev_from_fd = hid_bpf_fd_to_hdev,
 		.link_attach = hid_bpf_link_attach,
+		.link_attached = hid_bpf_link_attached,
 		.array_detached = hid_bpf_array_detached,
 	};
 

@@ -1213,10 +1213,16 @@ do {									\
 
 #ifdef CONFIG_BPF
 u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size);
+u8 *hid_bpf_report_fixup(struct hid_device *hdev, u8 *rdesc, unsigned int *size);
 int hid_bpf_module_init(void);
 void hid_bpf_module_exit(void);
 #else
 static inline u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size) { return rd; }
+static inline u8 *hid_bpf_report_fixup(struct hid_device *hdev, u8 *rdesc,
+				       unsigned int *size)
+{
+	return kmemdup(rdesc, *size, GFP_KERNEL);
+}
 static inline int hid_bpf_module_init(void) { return 0; }
 static inline void hid_bpf_module_exit(void) {}
 #endif
