@@ -178,3 +178,39 @@ int hid_user_raw_request(struct hid_bpf_ctx *ctx)
 
 	return ret;
 }
+
+SEC("hid/device_event")
+int hid_test_insert1(struct hid_bpf_ctx *ctx)
+{
+	/* we need to be run first */
+	if (ctx->data[2] || ctx->data[3])
+		return -1;
+
+	ctx->data[1] = 1;
+
+	return 0;
+}
+
+SEC("hid/device_event")
+int hid_test_insert2(struct hid_bpf_ctx *ctx)
+{
+	/* after insert0 and before insert2 */
+	if (!ctx->data[1] || ctx->data[3])
+		return -1;
+
+	ctx->data[2] = 2;
+
+	return 0;
+}
+
+SEC("hid/device_event")
+int hid_test_insert3(struct hid_bpf_ctx *ctx)
+{
+	/* at the end */
+	if (!ctx->data[1] || !ctx->data[2])
+		return -1;
+
+	ctx->data[3] = 3;
+
+	return 0;
+}

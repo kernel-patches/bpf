@@ -353,7 +353,7 @@ static int test_hid_raw_event(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
 
 	/* attach the first program */
 	hid_skel->links.hid_first_event =
-		bpf_program__attach_hid(hid_skel->progs.hid_first_event, sysfs_fd);
+		bpf_program__attach_hid(hid_skel->progs.hid_first_event, sysfs_fd, 0);
 	if (!ASSERT_OK_PTR(hid_skel->links.hid_first_event,
 			   "attach_hid(hid_first_event)"))
 		return PTR_ERR(hid_skel->links.hid_first_event);
@@ -429,7 +429,7 @@ static int test_hid_set_get_data(struct hid *hid_skel, int uhid_fd, int sysfs_fd
 
 	/* attach hid_set_get_data program */
 	hid_skel->links.hid_set_get_data =
-		bpf_program__attach_hid(hid_skel->progs.hid_set_get_data, sysfs_fd);
+		bpf_program__attach_hid(hid_skel->progs.hid_set_get_data, sysfs_fd, 0);
 	if (!ASSERT_OK_PTR(hid_skel->links.hid_set_get_data,
 			   "attach_hid(hid_set_get_data)"))
 		return PTR_ERR(hid_skel->links.hid_set_get_data);
@@ -498,7 +498,7 @@ static int test_hid_user_call(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
 	);
 
 	/* attach hid_user program */
-	hid_skel->links.hid_user = bpf_program__attach_hid(hid_skel->progs.hid_user, sysfs_fd);
+	hid_skel->links.hid_user = bpf_program__attach_hid(hid_skel->progs.hid_user, sysfs_fd, 0);
 	if (!ASSERT_OK_PTR(hid_skel->links.hid_user,
 			   "attach_hid(hid_user)"))
 		return PTR_ERR(hid_skel->links.hid_user);
@@ -552,7 +552,7 @@ static int test_hid_user_raw_request_call(struct hid *hid_skel, int uhid_fd, int
 
 	/* attach hid_user_raw_request program */
 	hid_skel->links.hid_user_raw_request =
-		bpf_program__attach_hid(hid_skel->progs.hid_user_raw_request, sysfs_fd);
+		bpf_program__attach_hid(hid_skel->progs.hid_user_raw_request, sysfs_fd, 0);
 	if (!ASSERT_OK_PTR(hid_skel->links.hid_user_raw_request,
 			   "attach_hid(hid_user_raw_request)"))
 		return PTR_ERR(hid_skel->links.hid_user_raw_request);
@@ -583,6 +583,83 @@ cleanup:
 }
 
 /*
+ * Attach hid_insert{0,1,2} to the given uhid device,
+ * retrieve and open the matching hidraw node,
+ * inject one event in the uhid device,
+ * check that the programs have been inserted in the correct order.
+ */
+static int test_hid_attach_flags(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
+{
+	int err, hidraw_ino, hidraw_fd = -1;
+	char hidraw_path[64] = {0};
+	u8 buf[10] = {0};
+	int ret = -1;
+
+	/* attach hid_test_insert2 program */
+	hid_skel->links.hid_test_insert2 =
+		bpf_program__attach_hid(hid_skel->progs.hid_test_insert2, sysfs_fd, 0);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_test_insert2,
+			   "attach_hid(hid_test_insert2)"))
+		return PTR_ERR(hid_skel->links.hid_test_insert2);
+
+	/* then attach hid_test_insert1 program before the previous*/
+	hid_skel->links.hid_test_insert1 =
+		bpf_program__attach_hid(hid_skel->progs.hid_test_insert1,
+					sysfs_fd,
+					BPF_F_INSERT_HEAD);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_test_insert1,
+			   "attach_hid(hid_test_insert1)"))
+		return PTR_ERR(hid_skel->links.hid_test_insert1);
+
+	/* finally attach hid_test_insert3 at the end */
+	hid_skel->links.hid_test_insert3 =
+		bpf_program__attach_hid(hid_skel->progs.hid_test_insert3, sysfs_fd, 0);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_test_insert3,
+			   "attach_hid(hid_test_insert3)"))
+		return PTR_ERR(hid_skel->links.hid_test_insert3);
+
+	hidraw_ino = get_hidraw(hid_skel->links.hid_test_insert1);
+	if (!ASSERT_GE(hidraw_ino, 0, "get_hidraw"))
+		goto cleanup;
+
+	/* open hidraw node to check the other side of the pipe */
+	sprintf(hidraw_path, "/dev/hidraw%d", hidraw_ino);
+	hidraw_fd = open(hidraw_path, O_RDWR | O_NONBLOCK);
+
+	if (!ASSERT_GE(hidraw_fd, 0, "open_hidraw"))
+		goto cleanup;
+
+	/* inject one event */
+	buf[0] = 1;
+	send_event(uhid_fd, buf, 6);
+
+	/* read the data from hidraw */
+	memset(buf, 0, sizeof(buf));
+	err = read(hidraw_fd, buf, sizeof(buf));
+	if (!ASSERT_EQ(err, 6, "read_hidraw"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[1], 1, "hid_test_insert1"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[2], 2, "hid_test_insert2"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[3], 3, "hid_test_insert3"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+	if (hidraw_fd >= 0)
+		close(hidraw_fd);
+
+	hid__detach(hid_skel);
+
+	return ret;
+}
+
+/*
  * Attach hid_rdesc_fixup to the given uhid device,
  * retrieve and open the matching hidraw node,
  * check that the hidraw report descriptor has been updated.
@@ -598,7 +675,7 @@ static int test_rdesc_fixup(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
 
 	/* attach the program */
 	hid_skel->links.hid_rdesc_fixup =
-		bpf_program__attach_hid(hid_skel->progs.hid_rdesc_fixup, sysfs_fd);
+		bpf_program__attach_hid(hid_skel->progs.hid_rdesc_fixup, sysfs_fd, 0);
 	if (!ASSERT_OK_PTR(hid_skel->links.hid_rdesc_fixup,
 			   "attach_hid(hid_rdesc_fixup)"))
 		return PTR_ERR(hid_skel->links.hid_rdesc_fixup);
@@ -693,6 +770,9 @@ void serial_test_hid_bpf(void)
 	ASSERT_OK(err, "hid_user");
 
 	err = test_hid_user_raw_request_call(hid_skel, uhid_fd, sysfs_fd);
+	ASSERT_OK(err, "hid_user_raw_request");
+
+	err = test_hid_attach_flags(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_user_raw_request");
 
 	err = test_rdesc_fixup(hid_skel, uhid_fd, sysfs_fd);
