@@ -530,7 +530,7 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_iter(const struct bpf_program *prog,
 			 const struct bpf_iter_attach_opts *opts);
 LIBBPF_API struct bpf_link *
-bpf_program__attach_hid(const struct bpf_program *prog, int hid_fd);
+bpf_program__attach_hid(const struct bpf_program *prog, int hid_fd, __u32 flags);
 
 /*
  * Libbpf allows callers to adjust BPF programs before being loaded

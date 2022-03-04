@@ -1123,6 +1123,16 @@ enum bpf_link_type {
  */
 #define BPF_F_XDP_HAS_FRAGS	(1U << 5)
 
+/* HID flag used in BPF_LINK_CREATE command
+ *
+ * NONE(default): The bpf program will be added at the tail of the list
+ * of existing bpf program for this type.
+ *
+ * BPF_F_INSERT_HEAD: The bpf program will be added at the beginning
+ * of the list of existing bpf program for this type..
+ */
+#define BPF_F_INSERT_HEAD	(1U << 0)
+
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
  *
