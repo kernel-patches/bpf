@@ -24,6 +24,7 @@ struct hid_device;
 enum hid_bpf_event {
 	HID_BPF_UNDEF = 0,
 	HID_BPF_DEVICE_EVENT,		/* when attach type is BPF_HID_DEVICE_EVENT */
+	HID_BPF_RDESC_FIXUP,		/* ................... BPF_HID_RDESC_FIXUP */
 };
 
 struct hid_bpf_ctx {

@@ -15,6 +15,7 @@ struct hid_device;
 enum bpf_hid_attach_type {
 	BPF_HID_ATTACH_INVALID = -1,
 	BPF_HID_ATTACH_DEVICE_EVENT = 0,
+	BPF_HID_ATTACH_RDESC_FIXUP,
 	MAX_BPF_HID_ATTACH_TYPE
 };
 
@@ -32,6 +33,8 @@ to_bpf_hid_attach_type(enum bpf_attach_type attach_type)
 	switch (attach_type) {
 	case BPF_HID_DEVICE_EVENT:
 		return BPF_HID_ATTACH_DEVICE_EVENT;
+	case BPF_HID_RDESC_FIXUP:
+		return BPF_HID_ATTACH_RDESC_FIXUP;
 	default:
 		return BPF_HID_ATTACH_INVALID;
 	}
@@ -88,6 +91,7 @@ static inline bool bpf_hid_link_empty(struct bpf_hid *bpf,
 struct bpf_hid_hooks {
 	struct hid_device *(*hdev_from_fd)(int fd);
 	int (*link_attach)(struct hid_device *hdev, enum bpf_hid_attach_type type);
+	void (*link_attached)(struct hid_device *hdev, enum bpf_hid_attach_type type);
 	void (*array_detached)(struct hid_device *hdev, enum bpf_hid_attach_type type);
 };
 
