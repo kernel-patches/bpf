@@ -67,6 +67,12 @@ static unsigned char rdesc[] = {
 	0xc0,			/* END_COLLECTION */
 };
 
+static pthread_mutex_t uhid_started_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t uhid_started = PTHREAD_COND_INITIALIZER;
+
+/* no need to protect uhid_stopped, only one thread accesses it */
+static bool uhid_stopped;
+
 static int uhid_write(int fd, const struct uhid_event *ev)
 {
 	ssize_t ret;
@@ -116,6 +122,104 @@ static void destroy(int fd)
 	ev.type = UHID_DESTROY;
 
 	uhid_write(fd, &ev);
+}
+
+static int event(int fd)
+{
+	struct uhid_event ev;
+	ssize_t ret;
+
+	memset(&ev, 0, sizeof(ev));
+	ret = read(fd, &ev, sizeof(ev));
+	if (ret == 0) {
+		fprintf(stderr, "Read HUP on uhid-cdev\n");
+		return -EFAULT;
+	} else if (ret < 0) {
+		fprintf(stderr, "Cannot read uhid-cdev: %m\n");
+		return -errno;
+	} else if (ret != sizeof(ev)) {
+		fprintf(stderr, "Invalid size read from uhid-dev: %zd != %zu\n",
+			ret, sizeof(ev));
+		return -EFAULT;
+	}
+
+	switch (ev.type) {
+	case UHID_START:
+		pthread_mutex_lock(&uhid_started_mtx);
+		pthread_cond_signal(&uhid_started);
+		pthread_mutex_unlock(&uhid_started_mtx);
+
+		fprintf(stderr, "UHID_START from uhid-dev\n");
+		break;
+	case UHID_STOP:
+		uhid_stopped = true;
+
+		fprintf(stderr, "UHID_STOP from uhid-dev\n");
+		break;
+	case UHID_OPEN:
+		fprintf(stderr, "UHID_OPEN from uhid-dev\n");
+		break;
+	case UHID_CLOSE:
+		fprintf(stderr, "UHID_CLOSE from uhid-dev\n");
+		break;
+	case UHID_OUTPUT:
+		fprintf(stderr, "UHID_OUTPUT from uhid-dev\n");
+		break;
+	case UHID_GET_REPORT:
+		fprintf(stderr, "UHID_GET_REPORT from uhid-dev\n");
+		break;
+	case UHID_SET_REPORT:
+		fprintf(stderr, "UHID_SET_REPORT from uhid-dev\n");
+		break;
+	default:
+		fprintf(stderr, "Invalid event from uhid-dev: %u\n", ev.type);
+	}
+
+	return 0;
+}
+
+static void *read_uhid_events_thread(void *arg)
+{
+	int fd = *(int *)arg;
+	struct pollfd pfds[1];
+	int ret = 0;
+
+	pfds[0].fd = fd;
+	pfds[0].events = POLLIN;
+
+	uhid_stopped = false;
+
+	while (!uhid_stopped) {
+		ret = poll(pfds, 1, 100);
+		if (ret < 0) {
+			fprintf(stderr, "Cannot poll for fds: %m\n");
+			break;
+		}
+		if (pfds[0].revents & POLLIN) {
+			ret = event(fd);
+			if (ret)
+				break;
+		}
+	}
+
+	return (void *)(long)ret;
+}
+
+static int uhid_start_listener(pthread_t *tid, int uhid_fd)
+{
+	int fd = uhid_fd;
+
+	pthread_mutex_lock(&uhid_started_mtx);
+	if (CHECK_FAIL(pthread_create(tid, NULL, read_uhid_events_thread,
+				      (void *)&fd))) {
+		pthread_mutex_unlock(&uhid_started_mtx);
+		close(fd);
+		return -EIO;
+	}
+	pthread_cond_wait(&uhid_started, &uhid_started_mtx);
+	pthread_mutex_unlock(&uhid_started_mtx);
+
+	return 0;
 }
 
 static int send_event(int fd, u8 *buf, size_t size)
@@ -422,7 +526,9 @@ static int test_rdesc_fixup(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
 	struct hidraw_report_descriptor rpt_desc = {0};
 	int err, desc_size, hidraw_ino, hidraw_fd = -1;
 	char hidraw_path[64] = {0};
+	void *uhid_err;
 	int ret = -1;
+	pthread_t tid;
 
 	/* attach the program */
 	hid_skel->links.hid_rdesc_fixup =
@@ -431,9 +537,8 @@ static int test_rdesc_fixup(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
 			   "attach_hid(hid_rdesc_fixup)"))
 		return PTR_ERR(hid_skel->links.hid_rdesc_fixup);
 
-	/* give a little bit of time for the device to appear */
-	/* TODO: check on uhid events */
-	usleep(1000);
+	err = uhid_start_listener(&tid, uhid_fd);
+	ASSERT_OK(err, "uhid_start_listener");
 
 	hidraw_ino = get_hidraw(hid_skel->links.hid_rdesc_fixup);
 	if (!ASSERT_GE(hidraw_ino, 0, "get_hidraw"))
@@ -474,6 +579,10 @@ cleanup:
 
 	hid__detach(hid_skel);
 
+	pthread_join(tid, &uhid_err);
+	err = (int)(long)uhid_err;
+	CHECK_FAIL(err);
+
 	return ret;
 }
 
@@ -481,7 +590,9 @@ void serial_test_hid_bpf(void)
 {
 	struct hid *hid_skel = NULL;
 	int err, uhid_fd, sysfs_fd;
+	void *uhid_err;
 	time_t t;
+	pthread_t tid;
 	int rand_nb;
 
 	/* initialize random number generator */
@@ -493,9 +604,8 @@ void serial_test_hid_bpf(void)
 	if (!ASSERT_GE(uhid_fd, 0, "setup uhid"))
 		return;
 
-	/* give a little bit of time for the device to appear */
-	/* TODO: check on uhid events */
-	usleep(1000);
+	err = uhid_start_listener(&tid, uhid_fd);
+	ASSERT_OK(err, "uhid_start_listener");
 
 	/* locate the uevent file of the created device */
 	sysfs_fd = get_sysfs_fd(rand_nb);
@@ -522,4 +632,8 @@ void serial_test_hid_bpf(void)
 cleanup:
 	hid__destroy(hid_skel);
 	destroy(uhid_fd);
+
+	pthread_join(tid, &uhid_err);
+	err = (int)(long)uhid_err;
+	CHECK_FAIL(err);
 }
