@@ -100,6 +100,8 @@ struct bpf_hid_hooks {
 			    u64 offset, u32 n, u8 *data, u64 data_size);
 	int (*hid_set_data)(struct hid_device *hdev, u8 *buf, size_t buf_size,
 			    u64 offset, u32 n, u8 *data, u64 data_size);
+	int (*hid_raw_request)(struct hid_device *hdev, u8 *buf, size_t size,
+			       u8 rtype, u8 reqtype);
 };
 
 #ifdef CONFIG_BPF

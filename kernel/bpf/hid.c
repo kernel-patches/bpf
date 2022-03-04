@@ -86,6 +86,28 @@ static const struct bpf_func_proto bpf_hid_set_data_proto = {
 	.arg5_type = ARG_CONST_SIZE_OR_ZERO,
 };
 
+BPF_CALL_5(bpf_hid_raw_request, void*, ctx, void*, buf, u64, size,
+	   u8, rtype, u8, reqtype)
+{
+	struct hid_bpf_ctx *bpf_ctx = ctx;
+
+	if (!hid_hooks.hid_raw_request)
+		return -EOPNOTSUPP;
+
+	return hid_hooks.hid_raw_request(bpf_ctx->hdev, buf, size, rtype, reqtype);
+}
+
+static const struct bpf_func_proto bpf_hid_raw_request_proto = {
+	.func      = bpf_hid_raw_request,
+	.gpl_only  = true, /* hid_raw_request is EXPORT_SYMBOL_GPL */
+	.ret_type  = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_CTX,
+	.arg2_type = ARG_PTR_TO_MEM,
+	.arg3_type = ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type = ARG_ANYTHING,
+	.arg5_type = ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 hid_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -94,6 +116,10 @@ hid_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_hid_get_data_proto;
 	case BPF_FUNC_hid_set_data:
 		return &bpf_hid_set_data_proto;
+	case BPF_FUNC_hid_raw_request:
+		if (prog->expected_attach_type != BPF_HID_DEVICE_EVENT)
+			return &bpf_hid_raw_request_proto;
+		return NULL;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

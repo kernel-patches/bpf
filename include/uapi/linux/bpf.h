@@ -5121,6 +5121,13 @@ union bpf_attr {
  *	Return
  *		The length of data copied into ctx->event.data. On error, a negative
  *		value is returned.
+ *
+ * int bpf_hid_raw_request(void *ctx, void *buf, u64 size, u8 rtype, u8 reqtype)
+ *	Description
+ *		communicate with the HID device
+ *	Return
+ *		0 on success.
+ *		negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5317,6 +5324,7 @@ union bpf_attr {
 	FN(copy_from_user_task),	\
 	FN(hid_get_data),		\
 	FN(hid_set_data),		\
+	FN(hid_raw_request),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
