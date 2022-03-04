@@ -67,6 +67,8 @@ static unsigned char rdesc[] = {
 	0xc0,			/* END_COLLECTION */
 };
 
+static u8 feature_data[] = { 1, 2 };
+
 static pthread_mutex_t uhid_started_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t uhid_started = PTHREAD_COND_INITIALIZER;
 
@@ -126,7 +128,7 @@ static void destroy(int fd)
 
 static int event(int fd)
 {
-	struct uhid_event ev;
+	struct uhid_event ev, answer;
 	ssize_t ret;
 
 	memset(&ev, 0, sizeof(ev));
@@ -142,6 +144,8 @@ static int event(int fd)
 			ret, sizeof(ev));
 		return -EFAULT;
 	}
+
+	memset(&answer, 0, sizeof(answer));
 
 	switch (ev.type) {
 	case UHID_START:
@@ -167,6 +171,15 @@ static int event(int fd)
 		break;
 	case UHID_GET_REPORT:
 		fprintf(stderr, "UHID_GET_REPORT from uhid-dev\n");
+
+		answer.type = UHID_GET_REPORT_REPLY;
+		answer.u.get_report_reply.id = ev.u.get_report.id;
+		answer.u.get_report_reply.err = ev.u.get_report.rnum == 1 ? 0 : -EIO;
+		answer.u.get_report_reply.size = sizeof(feature_data);
+		memcpy(answer.u.get_report_reply.data, feature_data, sizeof(feature_data));
+
+		uhid_write(fd, &answer);
+
 		break;
 	case UHID_SET_REPORT:
 		fprintf(stderr, "UHID_SET_REPORT from uhid-dev\n");
@@ -517,6 +530,59 @@ cleanup:
 }
 
 /*
+ * Attach hid_user_raw_request to the given uhid device,
+ * call the bpf program from userspace
+ * check that the program is called and does the expected.
+ */
+static int test_hid_user_raw_request_call(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
+{
+	int err, prog_fd;
+	u8 buf[10] = {0};
+	int ret = -1;
+
+	LIBBPF_OPTS(bpf_test_run_opts, run_attrs,
+		    .repeat = 1,
+		    .ctx_in = &sysfs_fd,
+		    .ctx_size_in = sizeof(sysfs_fd),
+		    .data_in = buf,
+		    .data_size_in = sizeof(buf),
+		    .data_out = buf,
+		    .data_size_out = sizeof(buf),
+	);
+
+	/* attach hid_user_raw_request program */
+	hid_skel->links.hid_user_raw_request =
+		bpf_program__attach_hid(hid_skel->progs.hid_user_raw_request, sysfs_fd);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_user_raw_request,
+			   "attach_hid(hid_user_raw_request)"))
+		return PTR_ERR(hid_skel->links.hid_user_raw_request);
+
+	buf[0] = 2; /* HID_FEATURE_REPORT */
+	buf[1] = 1; /* HID_REQ_GET_REPORT */
+	buf[2] = 1; /* report ID */
+
+	prog_fd = bpf_program__fd(hid_skel->progs.hid_user_raw_request);
+
+	err = bpf_prog_test_run_opts(prog_fd, &run_attrs);
+	if (!ASSERT_EQ(err, 0, "bpf_prog_test_run_xattr"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(run_attrs.retval, 2, "bpf_prog_test_run_xattr_retval"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[3], 2, "hid_user_raw_request_check_in"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+
+	hid__detach(hid_skel);
+
+	return ret;
+}
+
+/*
  * Attach hid_rdesc_fixup to the given uhid device,
  * retrieve and open the matching hidraw node,
  * check that the hidraw report descriptor has been updated.
@@ -625,6 +691,9 @@ void serial_test_hid_bpf(void)
 
 	err = test_hid_user_call(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_user");
+
+	err = test_hid_user_raw_request_call(hid_skel, uhid_fd, sysfs_fd);
+	ASSERT_OK(err, "hid_user_raw_request");
 
 	err = test_rdesc_fixup(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_rdesc_fixup");
