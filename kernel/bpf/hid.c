@@ -37,6 +37,18 @@ void bpf_hid_set_hooks(struct bpf_hid_hooks *hooks)
 }
 EXPORT_SYMBOL_GPL(bpf_hid_set_hooks);
 
+int bpf_hid_verify_prog(struct bpf_verifier_log *vlog,
+			const struct bpf_prog *prog)
+{
+	if (!prog->gpl_compatible) {
+		bpf_log(vlog,
+			"HID programs must have a GPL compatible license\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 BPF_CALL_5(bpf_hid_get_data, void*, ctx, u64, offset, u32, n, void*, data, u64, size)
 {
 	struct hid_bpf_ctx *bpf_ctx = ctx;

@@ -2,6 +2,7 @@
 #ifndef _BPF_HID_H
 #define _BPF_HID_H
 
+#include <linux/bpf_verifier.h>
 #include <linux/mutex.h>
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/bpf_hid.h>
@@ -71,6 +72,8 @@ int bpf_hid_prog_query(const union bpf_attr *attr,
 		       union bpf_attr __user *uattr);
 int bpf_hid_link_create(const union bpf_attr *attr,
 			struct bpf_prog *prog);
+int bpf_hid_verify_prog(struct bpf_verifier_log *vlog,
+			const struct bpf_prog *prog);
 #else
 static inline int bpf_hid_prog_query(const union bpf_attr *attr,
 				     union bpf_attr __user *uattr)
@@ -80,6 +83,11 @@ static inline int bpf_hid_prog_query(const union bpf_attr *attr,
 
 static inline int bpf_hid_link_create(const union bpf_attr *attr,
 				      struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_hid_verify_prog(struct bpf_verifier_log *vlog,
+				      const struct bpf_prog *prog)
 {
 	return -EOPNOTSUPP;
 }

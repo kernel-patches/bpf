@@ -21,6 +21,7 @@
 #include <linux/perf_event.h>
 #include <linux/ctype.h>
 #include <linux/error-injection.h>
+#include <linux/bpf-hid.h>
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
 
@@ -14234,6 +14235,12 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	if (prog->type == BPF_PROG_TYPE_STRUCT_OPS)
 		return check_struct_ops_btf_id(env);
+
+	if (prog->type == BPF_PROG_TYPE_HID) {
+		ret = bpf_hid_verify_prog(&env->log, prog);
+		if (ret < 0)
+			return ret;
+	}
 
 	if (prog->type != BPF_PROG_TYPE_TRACING &&
 	    prog->type != BPF_PROG_TYPE_LSM &&
