@@ -37,6 +37,7 @@ NUM_COMPILE_JOBS="$(nproc)"
 LOG_FILE_BASE="$(date +"bpf_selftests.%Y-%m-%d_%H-%M-%S")"
 LOG_FILE="${LOG_FILE_BASE}.log"
 EXIT_STATUS_FILE="${LOG_FILE_BASE}.exit_status"
+TRUNNER_LDFLAGS="${TRUNNER_LDFLAGS:=""}"
 
 usage()
 {
@@ -155,7 +156,7 @@ update_selftests()
 	local selftests_dir="${kernel_checkout}/tools/testing/selftests/bpf"
 
 	cd "${selftests_dir}"
-	${make_command}
+	${make_command} TRUNNER_LDFLAGS="${TRUNNER_LDFLAGS}"
 
 	# Mount the image and copy the selftests to the image.
 	mount_image
