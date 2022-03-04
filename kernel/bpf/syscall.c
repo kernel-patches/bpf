@@ -3,6 +3,7 @@
  */
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/bpf-hid.h>
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
 #include <linux/bpf_verifier.h>
@@ -2205,6 +2206,7 @@ static bool is_sys_admin_prog_type(enum bpf_prog_type prog_type)
 {
 	switch (prog_type) {
 	case BPF_PROG_TYPE_LIRC_MODE2:
+	case BPF_PROG_TYPE_HID:
 	case BPF_PROG_TYPE_EXT: /* extends any prog */
 		return true;
 	default:
@@ -3200,6 +3202,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_HID_DEVICE_EVENT:
+		return BPF_PROG_TYPE_HID;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -3343,6 +3347,8 @@ static int bpf_prog_query(const union bpf_attr *attr,
 	case BPF_SK_MSG_VERDICT:
 	case BPF_SK_SKB_VERDICT:
 		return sock_map_bpf_prog_query(attr, uattr);
+	case BPF_HID_DEVICE_EVENT:
+		return bpf_hid_prog_query(attr, uattr);
 	default:
 		return -EINVAL;
 	}
@@ -4337,6 +4343,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = bpf_perf_link_attach(attr, prog);
 		break;
 #endif
+	case BPF_PROG_TYPE_HID:
+		return bpf_hid_link_create(attr, prog);
 	default:
 		ret = -EINVAL;
 	}

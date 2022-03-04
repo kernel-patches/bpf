@@ -15,6 +15,7 @@
 
 
 #include <linux/bitops.h>
+#include <linux/bpf-hid.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/list.h>
@@ -639,6 +640,10 @@ struct hid_device {							/* device report descriptor */
 	struct list_head debug_list;
 	spinlock_t  debug_list_lock;
 	wait_queue_head_t debug_wait;
+
+#ifdef CONFIG_BPF
+	struct bpf_hid bpf;
+#endif
 };
 
 #define to_hid_device(pdev) \
