@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <linux/hidraw.h>
 #include <linux/uhid.h>
 
 static unsigned char rdesc[] = {
@@ -296,6 +297,71 @@ cleanup:
 	return ret;
 }
 
+/*
+ * Attach hid_rdesc_fixup to the given uhid device,
+ * retrieve and open the matching hidraw node,
+ * check that the hidraw report descriptor has been updated.
+ */
+static int test_rdesc_fixup(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
+{
+	struct hidraw_report_descriptor rpt_desc = {0};
+	int err, desc_size, hidraw_ino, hidraw_fd = -1;
+	char hidraw_path[64] = {0};
+	int ret = -1;
+
+	/* attach the program */
+	hid_skel->links.hid_rdesc_fixup =
+		bpf_program__attach_hid(hid_skel->progs.hid_rdesc_fixup, sysfs_fd);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_rdesc_fixup,
+			   "attach_hid(hid_rdesc_fixup)"))
+		return PTR_ERR(hid_skel->links.hid_rdesc_fixup);
+
+	/* give a little bit of time for the device to appear */
+	/* TODO: check on uhid events */
+	usleep(1000);
+
+	hidraw_ino = get_hidraw(hid_skel->links.hid_rdesc_fixup);
+	if (!ASSERT_GE(hidraw_ino, 0, "get_hidraw"))
+		goto cleanup;
+
+	/* open hidraw node to check the other side of the pipe */
+	sprintf(hidraw_path, "/dev/hidraw%d", hidraw_ino);
+	hidraw_fd = open(hidraw_path, O_RDWR | O_NONBLOCK);
+
+	if (!ASSERT_GE(hidraw_fd, 0, "open_hidraw"))
+		goto cleanup;
+
+	/* check that hid_rdesc_fixup() was executed */
+	ASSERT_EQ(hid_skel->data->callback2_check, 0x21, "callback_check2");
+
+	/* read the exposed report descriptor from hidraw */
+	err = ioctl(hidraw_fd, HIDIOCGRDESCSIZE, &desc_size);
+	if (!ASSERT_GE(err, 0, "HIDIOCGRDESCSIZE"))
+		goto cleanup;
+
+	/* ensure the new size of the rdesc is bigger than the old one */
+	if (!ASSERT_GT(desc_size, sizeof(rdesc), "new_rdesc_size"))
+		goto cleanup;
+
+	rpt_desc.size = desc_size;
+	err = ioctl(hidraw_fd, HIDIOCGRDESC, &rpt_desc);
+	if (!ASSERT_GE(err, 0, "HIDIOCGRDESC"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(rpt_desc.value[4], 0x42, "hid_rdesc_fixup"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+	if (hidraw_fd >= 0)
+		close(hidraw_fd);
+
+	hid__detach(hid_skel);
+
+	return ret;
+}
+
 void serial_test_hid_bpf(void)
 {
 	struct hid *hid_skel = NULL;
@@ -328,6 +394,9 @@ void serial_test_hid_bpf(void)
 	/* start the tests! */
 	err = test_hid_raw_event(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid");
+
+	err = test_rdesc_fixup(hid_skel, uhid_fd, sysfs_fd);
+	ASSERT_OK(err, "hid_rdesc_fixup");
 
 cleanup:
 	hid__destroy(hid_skel);
