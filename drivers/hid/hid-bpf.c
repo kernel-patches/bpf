@@ -105,6 +105,72 @@ static void hid_bpf_array_detached(struct hid_device *hdev, enum bpf_hid_attach_
 	}
 }
 
+int hid_bpf_get_data(struct hid_device *hdev, u8 *buf, size_t buf_size, u64 offset, u32 n,
+		     u8 *data, u64 data_size)
+{
+	u32 *value = (u32 *)data;
+
+	if (((offset + n) >> 3) >= buf_size)
+		return -E2BIG;
+
+	if (n <= 32) {
+		/* data must be a pointer to a u32 */
+		if (data_size != 4)
+			return -EINVAL;
+
+		*value = hid_field_extract(hdev, buf, offset, n);
+		return 4;
+	}
+
+	/* if n > 32, use memcpy, but ensure we are dealing with full bytes */
+	if ((n | offset) & 0x7)
+		return -EINVAL;
+
+	/* work on bytes now */
+	offset = offset >> 3;
+	n = n >> 3;
+
+	if (n > data_size)
+		return -EINVAL;
+
+	memcpy(data, buf + offset, n);
+
+	return n;
+}
+
+int hid_bpf_set_data(struct hid_device *hdev, u8 *buf, size_t buf_size, u64 offset, u32 n,
+		     u8 *data, u64 data_size)
+{
+	u32 *value = (u32 *)data;
+
+	if (((offset + n) >> 3) >= buf_size)
+		return -E2BIG;
+
+	if (n <= 32) {
+		/* data must be a pointer to a u32 */
+		if (data_size != 4)
+			return -EINVAL;
+
+		implement(hdev, buf, offset, n, *value);
+		return 4;
+	}
+
+	/* if n > 32, use memcpy, but ensure we are dealing with full bytes */
+	if ((n | offset) & 0x7)
+		return -EINVAL;
+
+	/* work on bytes now */
+	offset = offset >> 3;
+	n = n >> 3;
+
+	if (n > data_size)
+		return -EINVAL;
+
+	memcpy(buf + offset, data, n);
+
+	return n;
+}
+
 static int hid_bpf_run_progs(struct hid_device *hdev, enum bpf_hid_attach_type type,
 			     struct hid_bpf_ctx *ctx, u8 *data, int size)
 {
@@ -204,6 +270,8 @@ int __init hid_bpf_module_init(void)
 		.link_attach = hid_bpf_link_attach,
 		.link_attached = hid_bpf_link_attached,
 		.array_detached = hid_bpf_array_detached,
+		.hid_get_data = hid_bpf_get_data,
+		.hid_set_data = hid_bpf_set_data,
 	};
 
 	bpf_hid_set_hooks(&hooks);
