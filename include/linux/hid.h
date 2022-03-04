@@ -946,6 +946,7 @@ __u32 hid_field_extract(const struct hid_device *hid, __u8 *report,
 		     unsigned offset, unsigned n);
 void implement(const struct hid_device *hid, u8 *report, unsigned int offset, unsigned int n,
 	       u32 value);
+struct hid_report *hid_get_report(struct hid_report_enum *report_enum, const u8 *data);
 
 #ifdef CONFIG_PM
 int hid_driver_suspend(struct hid_device *hdev, pm_message_t state);
