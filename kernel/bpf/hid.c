@@ -416,7 +416,7 @@ static int bpf_hid_max_progs(enum bpf_hid_attach_type type)
 }
 
 static int bpf_hid_link_attach(struct hid_device *hdev, struct bpf_link *link,
-			       enum bpf_hid_attach_type type)
+			       enum bpf_hid_attach_type type, u32 flags)
 {
 	struct bpf_hid_link *hid_link =
 		container_of(link, struct bpf_hid_link, link);
@@ -443,7 +443,10 @@ static int bpf_hid_link_attach(struct hid_device *hdev, struct bpf_link *link,
 		goto out_unlock;
 	}
 
-	list_add_tail(&hid_link->node, &hdev->bpf.links[type]);
+	if (flags & BPF_F_INSERT_HEAD)
+		list_add(&hid_link->node, &hdev->bpf.links[type]);
+	else
+		list_add_tail(&hid_link->node, &hdev->bpf.links[type]);
 
 	fill_prog_array(hdev, type, run_array);
 	run_array = rcu_replace_pointer(hdev->bpf.run_array[type], run_array,
@@ -467,7 +470,7 @@ int bpf_hid_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct hid_device *hdev;
 	int err;
 
-	if (attr->link_create.flags || !hid_hooks.hdev_from_fd)
+	if ((attr->link_create.flags & ~BPF_F_INSERT_HEAD) || !hid_hooks.hdev_from_fd)
 		return -EINVAL;
 
 	type = attr->link_create.attach_type;
@@ -495,7 +498,7 @@ int bpf_hid_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
 		return err;
 	}
 
-	err = bpf_hid_link_attach(hdev, &hid_link->link, hid_type);
+	err = bpf_hid_link_attach(hdev, &hid_link->link, hid_type, attr->link_create.flags);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		return err;
