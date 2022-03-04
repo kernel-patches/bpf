@@ -61,11 +61,24 @@ static int hid_reconnect(struct hid_device *hdev)
 static int hid_bpf_link_attach(struct hid_device *hdev, enum bpf_hid_attach_type type)
 {
 	int err = 0;
+	unsigned int i, j, max_report_len = 0;
+
+	/* compute the maximum report length for this device */
+	for (i = 0; i < HID_REPORT_TYPES; i++) {
+		struct hid_report_enum *report_enum = hdev->report_enum + i;
+
+		for (j = 0; j < HID_MAX_IDS; j++) {
+			struct hid_report *report = report_enum->report_id_hash[j];
+
+			if (report)
+				max_report_len = max(max_report_len, hid_report_len(report));
+		}
+	}
 
 	switch (type) {
 	case BPF_HID_ATTACH_DEVICE_EVENT:
 		if (!hdev->bpf.ctx) {
-			hdev->bpf.ctx = bpf_hid_allocate_ctx(hdev, HID_BPF_MAX_BUFFER_SIZE);
+			hdev->bpf.ctx = bpf_hid_allocate_ctx(hdev, max_report_len);
 			if (IS_ERR(hdev->bpf.ctx)) {
 				err = PTR_ERR(hdev->bpf.ctx);
 				hdev->bpf.ctx = NULL;
