@@ -37,10 +37,63 @@ void bpf_hid_set_hooks(struct bpf_hid_hooks *hooks)
 }
 EXPORT_SYMBOL_GPL(bpf_hid_set_hooks);
 
+BPF_CALL_5(bpf_hid_get_data, void*, ctx, u64, offset, u32, n, void*, data, u64, size)
+{
+	struct hid_bpf_ctx *bpf_ctx = ctx;
+
+	if (!hid_hooks.hid_get_data)
+		return -EOPNOTSUPP;
+
+	return hid_hooks.hid_get_data(bpf_ctx->hdev,
+				      bpf_ctx->data, bpf_ctx->allocated_size,
+				      offset, n,
+				      data, size);
+}
+
+static const struct bpf_func_proto bpf_hid_get_data_proto = {
+	.func      = bpf_hid_get_data,
+	.gpl_only  = true,
+	.ret_type  = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_CTX,
+	.arg2_type = ARG_ANYTHING,
+	.arg3_type = ARG_ANYTHING,
+	.arg4_type = ARG_PTR_TO_MEM,
+	.arg5_type = ARG_CONST_SIZE_OR_ZERO,
+};
+
+BPF_CALL_5(bpf_hid_set_data, void*, ctx, u64, offset, u32, n, void*, data, u64, size)
+{
+	struct hid_bpf_ctx *bpf_ctx = ctx;
+
+	if (!hid_hooks.hid_set_data)
+		return -EOPNOTSUPP;
+
+	hid_hooks.hid_set_data(bpf_ctx->hdev,
+			       bpf_ctx->data, bpf_ctx->allocated_size,
+			       offset, n,
+			       data, size);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_hid_set_data_proto = {
+	.func      = bpf_hid_set_data,
+	.gpl_only  = true,
+	.ret_type  = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_CTX,
+	.arg2_type = ARG_ANYTHING,
+	.arg3_type = ARG_ANYTHING,
+	.arg4_type = ARG_PTR_TO_MEM,
+	.arg5_type = ARG_CONST_SIZE_OR_ZERO,
+};
+
 static const struct bpf_func_proto *
 hid_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	switch (func_id) {
+	case BPF_FUNC_hid_get_data:
+		return &bpf_hid_get_data_proto;
+	case BPF_FUNC_hid_set_data:
+		return &bpf_hid_set_data_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

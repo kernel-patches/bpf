@@ -5090,6 +5090,36 @@ union bpf_attr {
  *	Return
  *		0 on success, or a negative error in case of failure. On error
  *		*dst* buffer is zeroed out.
+ *
+ * int bpf_hid_get_data(void *ctx, u64 offset, u32 n, u8 *data, u64 size)
+ *	Description
+ *		Get the data of size n (in bits) at the given offset (bits) in the
+ *		ctx->event.data field and store it into data.
+ *
+ *		if n is less or equal than 32, we can address with bit precision,
+ *		the value in the buffer. However, data must be a pointer to a u32
+ *		and size must be 4.
+ *
+ *		if n is greater than 32, offset and n must be a multiple of 8
+ *		and the result is working with a memcpy internally.
+ *	Return
+ *		The length of data copied into data. On error, a negative value
+ *		is returned.
+ *
+ * int bpf_hid_set_data(void *ctx, u64 offset, u32 n, u8 *data, u64 size)
+ *	Description
+ *		Set the data of size n (in bits) at the given offset (bits) in the
+ *		ctx->event.data field.
+ *
+ *		if n is less or equal than 32, we can address with bit precision,
+ *		the value in the buffer. However, data must be a pointer to a u32
+ *		and size must be 4.
+ *
+ *		if n is greater than 32, offset and n must be a multiple of 8
+ *		and the result is working with a memcpy internally.
+ *	Return
+ *		The length of data copied into ctx->event.data. On error, a negative
+ *		value is returned.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5284,6 +5314,8 @@ union bpf_attr {
 	FN(xdp_load_bytes),		\
 	FN(xdp_store_bytes),		\
 	FN(copy_from_user_task),	\
+	FN(hid_get_data),		\
+	FN(hid_set_data),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

@@ -93,6 +93,10 @@ struct bpf_hid_hooks {
 	int (*link_attach)(struct hid_device *hdev, enum bpf_hid_attach_type type);
 	void (*link_attached)(struct hid_device *hdev, enum bpf_hid_attach_type type);
 	void (*array_detached)(struct hid_device *hdev, enum bpf_hid_attach_type type);
+	int (*hid_get_data)(struct hid_device *hdev, u8 *buf, size_t buf_size,
+			    u64 offset, u32 n, u8 *data, u64 data_size);
+	int (*hid_set_data)(struct hid_device *hdev, u8 *buf, size_t buf_size,
+			    u64 offset, u32 n, u8 *data, u64 data_size);
 };
 
 #ifdef CONFIG_BPF
