@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 	bpf_object__for_each_program(prog, obj) {
 		progs[prog_count].fd = bpf_program__fd(prog);
 		progs[prog_count].type = bpf_program__get_expected_attach_type(prog);
-		progs[prog_count].link = bpf_program__attach_hid(prog, sysfs_fd);
+		progs[prog_count].link = bpf_program__attach_hid(prog, sysfs_fd, 0);
 		if (libbpf_get_error(progs[prog_count].link)) {
 			fprintf(stderr, "bpf_prog_attach: err=%m\n");
 			progs[prog_count].fd = 0;
