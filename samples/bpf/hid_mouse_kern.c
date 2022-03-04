@@ -62,5 +62,30 @@ int hid_x_event(struct hid_bpf_ctx *ctx)
 	return 0;
 }
 
+SEC("hid/rdesc_fixup")
+int hid_rdesc_fixup(struct hid_bpf_ctx *ctx)
+{
+	if (ctx->type != HID_BPF_RDESC_FIXUP)
+		return 0;
+
+	bpf_printk("rdesc: %02x %02x %02x",
+		   ctx->data[0],
+		   ctx->data[1],
+		   ctx->data[2]);
+	bpf_printk("       %02x %02x %02x",
+		   ctx->data[3],
+		   ctx->data[4],
+		   ctx->data[5]);
+	bpf_printk("       %02x %02x %02x ...",
+		   ctx->data[6],
+		   ctx->data[7],
+		   ctx->data[8]);
+
+	ctx->data[39] = 0x31;
+	ctx->data[41] = 0x30;
+
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
 u32 _version SEC("version") = LINUX_VERSION_CODE;
