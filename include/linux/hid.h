@@ -27,6 +27,7 @@
 #include <linux/mutex.h>
 #include <linux/power_supply.h>
 #include <uapi/linux/hid.h>
+#include <uapi/linux/bpf_hid.h>
 
 /*
  * We parse each description item into this structure. Short items data
@@ -1209,5 +1210,15 @@ do {									\
 	dev_info_once(&(hid)->dev, fmt, ##__VA_ARGS__)
 #define hid_dbg_once(hid, fmt, ...)			\
 	dev_dbg_once(&(hid)->dev, fmt, ##__VA_ARGS__)
+
+#ifdef CONFIG_BPF
+u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size);
+int hid_bpf_module_init(void);
+void hid_bpf_module_exit(void);
+#else
+static inline u8 *hid_bpf_raw_event(struct hid_device *hdev, u8 *rd, int *size) { return rd; }
+static inline int hid_bpf_module_init(void) { return 0; }
+static inline void hid_bpf_module_exit(void) {}
+#endif
 
 #endif
