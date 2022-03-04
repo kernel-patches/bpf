@@ -298,6 +298,68 @@ cleanup:
 }
 
 /*
+ * Attach hid_set_get_data to the given uhid device,
+ * retrieve and open the matching hidraw node,
+ * inject one event in the uhid device,
+ * check that the program makes correct use of bpf_hid_{set|get}_data.
+ */
+static int test_hid_set_get_data(struct hid *hid_skel, int uhid_fd, int sysfs_fd)
+{
+	int err, hidraw_ino, hidraw_fd = -1;
+	char hidraw_path[64] = {0};
+	u8 buf[10] = {0};
+	int ret = -1;
+
+	/* attach hid_set_get_data program */
+	hid_skel->links.hid_set_get_data =
+		bpf_program__attach_hid(hid_skel->progs.hid_set_get_data, sysfs_fd);
+	if (!ASSERT_OK_PTR(hid_skel->links.hid_set_get_data,
+			   "attach_hid(hid_set_get_data)"))
+		return PTR_ERR(hid_skel->links.hid_set_get_data);
+
+	hidraw_ino = get_hidraw(hid_skel->links.hid_set_get_data);
+	if (!ASSERT_GE(hidraw_ino, 0, "get_hidraw"))
+		goto cleanup;
+
+	/* open hidraw node to check the other side of the pipe */
+	sprintf(hidraw_path, "/dev/hidraw%d", hidraw_ino);
+	hidraw_fd = open(hidraw_path, O_RDWR | O_NONBLOCK);
+
+	if (!ASSERT_GE(hidraw_fd, 0, "open_hidraw"))
+		goto cleanup;
+
+	/* inject one event */
+	buf[0] = 1;
+	buf[1] = 42;
+	send_event(uhid_fd, buf, 6);
+
+	/* read the data from hidraw */
+	memset(buf, 0, sizeof(buf));
+	err = read(hidraw_fd, buf, sizeof(buf));
+	if (!ASSERT_EQ(err, 6, "read_hidraw"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[2], (42 >> 2), "hid_set_get_data"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[3], 1, "hid_set_get_data"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(buf[4], 42, "hid_set_get_data"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+	if (hidraw_fd >= 0)
+		close(hidraw_fd);
+
+	hid__detach(hid_skel);
+
+	return ret;
+}
+
+/*
  * Attach hid_rdesc_fixup to the given uhid device,
  * retrieve and open the matching hidraw node,
  * check that the hidraw report descriptor has been updated.
@@ -394,6 +456,9 @@ void serial_test_hid_bpf(void)
 	/* start the tests! */
 	err = test_hid_raw_event(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid");
+
+	err = test_hid_set_get_data(hid_skel, uhid_fd, sysfs_fd);
+	ASSERT_OK(err, "hid_set_get_data");
 
 	err = test_rdesc_fixup(hid_skel, uhid_fd, sysfs_fd);
 	ASSERT_OK(err, "hid_rdesc_fixup");

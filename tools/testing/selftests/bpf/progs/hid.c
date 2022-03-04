@@ -66,3 +66,48 @@ int hid_rdesc_fixup(struct hid_bpf_ctx *ctx)
 
 	return 0;
 }
+
+SEC("hid/device_event")
+int hid_set_get_data(struct hid_bpf_ctx *ctx)
+{
+	int ret;
+	__u8 *buf;
+
+	buf = bpf_ringbuf_reserve(&ringbuf, 8, 0);
+	if (!buf)
+		return -12; /* -ENOMEM */
+
+	/* first try read/write with n > 32 */
+	ret = bpf_hid_get_data(ctx, 0, 64, buf, 8);
+	if (ret < 0)
+		goto discard;
+
+	/* reinject it */
+	ret = bpf_hid_set_data(ctx, 24, 64, buf, 8);
+	if (ret < 0)
+		goto discard;
+
+	/* extract data at bit offset 10 of size 4 (half a byte) */
+	ret = bpf_hid_get_data(ctx, 10, 4, buf, 8);  /* expected to fail */
+	if (ret > 0) {
+		ret = -1;
+		goto discard;
+	}
+
+	ret = bpf_hid_get_data(ctx, 10, 4, buf, 4);
+	if (ret < 0)
+		goto discard;
+
+	/* reinject it */
+	ret = bpf_hid_set_data(ctx, 16, 4, buf, 4);
+	if (ret < 0)
+		goto discard;
+
+	ret = 0;
+
+ discard:
+
+	bpf_ringbuf_discard(buf, 0);
+
+	return ret;
+}
