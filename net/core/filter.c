@@ -3889,18 +3889,15 @@ static void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 	}
 }
 
-static void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len)
+BPF_CALL_3(bpf_xdp_pointer, struct xdp_buff *, xdp, u32, offset, u32, len)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
 	u32 size = xdp->data_end - xdp->data;
 	void *addr = xdp->data;
 	int i;
 
-	if (unlikely(offset > 0xffff || len > 0xffff))
-		return ERR_PTR(-EFAULT);
-
 	if (offset + len > xdp_get_buff_len(xdp))
-		return ERR_PTR(-EINVAL);
+		return (unsigned long)NULL;
 
 	if (offset < size) /* linear area */
 		goto out;
@@ -3917,23 +3914,28 @@ static void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len)
 		offset -= frag_size;
 	}
 out:
-	return offset + len < size ? addr + offset : NULL;
+	return offset + len < size ? (unsigned long)addr + offset : (unsigned long)NULL;
 }
+
+static const struct bpf_func_proto bpf_xdp_pointer_proto = {
+	.func		= bpf_xdp_pointer,
+	.gpl_only	= false,
+	.ret_type	= RET_PTR_TO_PACKET_OR_NULL,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_SCALAR,
+	.arg3_type	= ARG_CONSTANT,
+};
 
 BPF_CALL_4(bpf_xdp_load_bytes, struct xdp_buff *, xdp, u32, offset,
 	   void *, buf, u32, len)
 {
-	void *ptr;
+	if (unlikely(offset > 0xffff || len > 0xffff))
+		return -EFAULT;
 
-	ptr = bpf_xdp_pointer(xdp, offset, len);
-	if (IS_ERR(ptr))
-		return PTR_ERR(ptr);
+	if (offset + len > xdp_get_buff_len(xdp))
+		return -EINVAL;
 
-	if (!ptr)
-		bpf_xdp_copy_buf(xdp, offset, buf, len, false);
-	else
-		memcpy(buf, ptr, len);
-
+	bpf_xdp_copy_buf(xdp, offset, buf, len, false);
 	return 0;
 }
 
@@ -3950,17 +3952,13 @@ static const struct bpf_func_proto bpf_xdp_load_bytes_proto = {
 BPF_CALL_4(bpf_xdp_store_bytes, struct xdp_buff *, xdp, u32, offset,
 	   void *, buf, u32, len)
 {
-	void *ptr;
+	if (unlikely(offset > 0xffff || len > 0xffff))
+		return -EFAULT;
 
-	ptr = bpf_xdp_pointer(xdp, offset, len);
-	if (IS_ERR(ptr))
-		return PTR_ERR(ptr);
+	if (offset + len > xdp_get_buff_len(xdp))
+		return -EINVAL;
 
-	if (!ptr)
-		bpf_xdp_copy_buf(xdp, offset, buf, len, true);
-	else
-		memcpy(ptr, buf, len);
-
+	bpf_xdp_copy_buf(xdp, offset, buf, len, true);
 	return 0;
 }
 
@@ -7820,6 +7818,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_load_bytes_proto;
 	case BPF_FUNC_xdp_store_bytes:
 		return &bpf_xdp_store_bytes_proto;
+	case BPF_FUNC_packet_pointer:
+		return &bpf_xdp_pointer_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
 	case BPF_FUNC_check_mtu:

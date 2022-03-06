@@ -5117,6 +5117,17 @@ union bpf_attr {
  *		0 on success.
  *		**-EINVAL** for invalid input
  *		**-EOPNOTSUPP** for unsupported delivery_time_type and protocol
+ *
+ * void *bpf_packet_pointer(void *ctx, u32 offset, u32 len)
+ *	Description
+ *		Return a pointer to linear area in packet at *offset* of length
+ *		*len*. The returned packet pointer cannot be compared to any
+ *		other packet pointers.
+ *
+ *		This helper is only available to XDP programs.
+ *	Return
+ *		Pointer to packet on success that can be accessed for *len*
+ *		bytes, or NULL when it fails.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5312,6 +5323,7 @@ union bpf_attr {
 	FN(xdp_store_bytes),		\
 	FN(copy_from_user_task),	\
 	FN(skb_set_delivery_time),      \
+	FN(packet_pointer),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

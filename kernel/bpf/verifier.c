@@ -257,6 +257,7 @@ struct bpf_call_arg_meta {
 	struct btf *ret_btf;
 	u32 ret_btf_id;
 	u32 subprogno;
+	int ret_pkt_len;
 };
 
 struct btf *btf_vmlinux;
@@ -5648,6 +5649,32 @@ skip_type_check:
 			verbose(env, "R%d is not a known constant\n", regno);
 			return -EACCES;
 		}
+
+		if (meta->func_id == BPF_FUNC_packet_pointer) {
+			struct tnum range;
+
+			switch (arg + 1) {
+			case 2:
+				/* arg2 = offset, enforce that the range is [0, 0xffff] */
+				range = tnum_range(0, 0xffff);
+				if (!tnum_in(range, reg->var_off)) {
+					verbose(env, "R%d must be in range [0, 0xffff]\n", regno);
+					return -EINVAL;
+				}
+				break;
+			case 3:
+				/* arg3 = len, already checked to be constant */
+				if (!reg->var_off.value || reg->var_off.value > 0xffff) {
+					verbose(env, "R%d must be in range [1, 0xffff]\n", regno);
+					return -EINVAL;
+				}
+				meta->ret_pkt_len = reg->var_off.value;
+				break;
+			default:
+				verbose(env, "verifier internal error: bpf_xdp_pointer unknown arg\n");
+				return -EFAULT;
+			}
+		}
 	}
 
 	return err;
@@ -6867,6 +6894,16 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		 */
 		regs[BPF_REG_0].btf = btf_vmlinux;
 		regs[BPF_REG_0].btf_id = ret_btf_id;
+	} else if (base_type(ret_type) == RET_PTR_TO_PACKET) {
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_PACKET | ret_flag;
+		regs[BPF_REG_0].pkt_uid = ++env->id_gen;
+		if (!meta.ret_pkt_len) {
+			verbose(env, "verifier internal error: ret_pkt_len unset\n");
+			return -EFAULT;
+		}
+		/* Already checked to be in range [1, 0xffff] */
+		regs[BPF_REG_0].range = meta.ret_pkt_len;
 	} else {
 		verbose(env, "unknown return type %u of func %s#%d\n",
 			base_type(ret_type), func_id_name(func_id), func_id);
