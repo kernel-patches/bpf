@@ -2,26 +2,24 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 
-static void test_xdp_update_frags(void)
+#include "test_xdp_update_frags.skel.h"
+
+static void test_xdp_update_frags(bool force_helper)
 {
-	const char *file = "./test_xdp_update_frags.o";
 	int err, prog_fd, max_skb_frags, buf_size, num;
-	struct bpf_program *prog;
-	struct bpf_object *obj;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct test_xdp_update_frags *skel;
 	__u32 *offset;
 	__u8 *buf;
 	FILE *f;
-	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
-	obj = bpf_object__open(file);
-	if (libbpf_get_error(obj))
+	skel = test_xdp_update_frags__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_xdp_update_frags__open_and_load"))
 		return;
 
-	prog = bpf_object__next_program(obj, NULL);
-	if (bpf_object__load(obj))
-		return;
+	skel->bss->force_helper = force_helper;
 
-	prog_fd = bpf_program__fd(prog);
+	prog_fd = bpf_program__fd(skel->progs.xdp_adjust_frags);
 
 	buf = malloc(128);
 	if (!ASSERT_OK_PTR(buf, "alloc buf 128b"))
@@ -45,6 +43,13 @@ static void test_xdp_update_frags(void)
 	ASSERT_EQ(topts.retval, XDP_PASS, "xdp_update_frag retval");
 	ASSERT_EQ(buf[16], 0xbb, "xdp_update_frag buf[16]");
 	ASSERT_EQ(buf[31], 0xbb, "xdp_update_frag buf[31]");
+	if (force_helper) {
+		ASSERT_EQ(skel->bss->used_dpa, false, "did not use DPA");
+		ASSERT_EQ(skel->bss->used_helper, true, "used helper");
+	} else {
+		ASSERT_EQ(skel->bss->used_dpa, true, "used DPA");
+		ASSERT_EQ(skel->bss->used_helper, false, "did not use helper");
+	}
 
 	free(buf);
 
@@ -70,6 +75,13 @@ static void test_xdp_update_frags(void)
 	ASSERT_EQ(topts.retval, XDP_PASS, "xdp_update_frag retval");
 	ASSERT_EQ(buf[5000], 0xbb, "xdp_update_frag buf[5000]");
 	ASSERT_EQ(buf[5015], 0xbb, "xdp_update_frag buf[5015]");
+	if (force_helper) {
+		ASSERT_EQ(skel->bss->used_dpa, false, "did not use DPA");
+		ASSERT_EQ(skel->bss->used_helper, true, "used helper");
+	} else {
+		ASSERT_EQ(skel->bss->used_dpa, true, "used DPA");
+		ASSERT_EQ(skel->bss->used_helper, false, "did not use helper");
+	}
 
 	memset(buf, 0, 9000);
 	offset = (__u32 *)buf;
@@ -84,6 +96,8 @@ static void test_xdp_update_frags(void)
 	ASSERT_EQ(topts.retval, XDP_PASS, "xdp_update_frag retval");
 	ASSERT_EQ(buf[3510], 0xbb, "xdp_update_frag buf[3510]");
 	ASSERT_EQ(buf[3525], 0xbb, "xdp_update_frag buf[3525]");
+	ASSERT_EQ(skel->bss->used_dpa, false, "did not use DPA");
+	ASSERT_EQ(skel->bss->used_helper, true, "used helper");
 
 	memset(buf, 0, 9000);
 	offset = (__u32 *)buf;
@@ -98,6 +112,8 @@ static void test_xdp_update_frags(void)
 	ASSERT_EQ(topts.retval, XDP_PASS, "xdp_update_frag retval");
 	ASSERT_EQ(buf[7606], 0xbb, "xdp_update_frag buf[7606]");
 	ASSERT_EQ(buf[7621], 0xbb, "xdp_update_frag buf[7621]");
+	ASSERT_EQ(skel->bss->used_dpa, false, "did not use DPA");
+	ASSERT_EQ(skel->bss->used_helper, true, "used helper");
 
 	free(buf);
 
@@ -136,11 +152,13 @@ static void test_xdp_update_frags(void)
 		  "unsupported buf size, possible non-default /proc/sys/net/core/max_skb_flags?");
 	free(buf);
 out:
-	bpf_object__close(obj);
+	test_xdp_update_frags__destroy(skel);
 }
 
 void test_xdp_adjust_frags(void)
 {
-	if (test__start_subtest("xdp_adjust_frags"))
-		test_xdp_update_frags();
+	if (test__start_subtest("xdp_adjust_frags-force-nodpa"))
+		test_xdp_update_frags(true);
+	if (test__start_subtest("xdp_adjust_frags-dpa+memcpy"))
+		test_xdp_update_frags(false);
 }
