@@ -391,6 +391,8 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK,	/* pointer to stack */
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
+	ARG_SCALAR,		/* a scalar with any value(s) */
+	ARG_CONSTANT,		/* a scalar with constant value */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */

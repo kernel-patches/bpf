@@ -5157,6 +5157,12 @@ static bool arg_type_is_int_ptr(enum bpf_arg_type type)
 	       type == ARG_PTR_TO_LONG;
 }
 
+static bool arg_type_is_scalar(enum bpf_arg_type type)
+{
+	return type == ARG_SCALAR ||
+	       type == ARG_CONSTANT;
+}
+
 static int int_ptr_type_to_size(enum bpf_arg_type type)
 {
 	if (type == ARG_PTR_TO_INT)
@@ -5296,6 +5302,8 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_STACK]		= &stack_ptr_types,
 	[ARG_PTR_TO_CONST_STR]		= &const_str_ptr_types,
 	[ARG_PTR_TO_TIMER]		= &timer_types,
+	[ARG_SCALAR]			= &scalar_types,
+	[ARG_CONSTANT]			= &scalar_types,
 };
 
 static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
@@ -5628,6 +5636,11 @@ skip_type_check:
 		if (!strnchr(str_ptr + map_off, map->value_size - map_off, 0)) {
 			verbose(env, "string is not zero-terminated\n");
 			return -EINVAL;
+		}
+	} else if (arg_type_is_scalar(arg_type)) {
+		if (arg_type == ARG_CONSTANT && !tnum_is_const(reg->var_off)) {
+			verbose(env, "R%d is not a known constant\n", regno);
+			return -EACCES;
 		}
 	}
 
