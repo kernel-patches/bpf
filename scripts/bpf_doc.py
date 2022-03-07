@@ -715,6 +715,10 @@ class PrinterHelpers(Printer):
         for fwd in self.type_fwds:
             print('%s;' % fwd)
         print('')
+        print('#ifndef BPF_HELPER')
+        print('#define BPF_HELPER(return_type, name, args, id) static return_type(*name) args = (void*) id')
+        print('#endif')
+        print('')
 
     def print_footer(self):
         footer = ''
@@ -754,7 +758,7 @@ class PrinterHelpers(Printer):
                 print(' *{}{}'.format(' \t' if line else '', line))
 
         print(' */')
-        print('static %s %s(*%s)(' % (self.map_type(proto['ret_type']),
+        print('BPF_HELPER(%s%s, %s, (' % (self.map_type(proto['ret_type']),
                                       proto['ret_star'], proto['name']), end='')
         comma = ''
         for i, a in enumerate(proto['args']):
@@ -773,7 +777,7 @@ class PrinterHelpers(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % len(self.seen_helpers))
+        print('), %d);' % len(self.seen_helpers))
         print('')
 
 ###############################################################################
