@@ -2309,6 +2309,56 @@ void free_percpu(void __percpu *ptr)
 }
 EXPORT_SYMBOL_GPL(free_percpu);
 
+void charge_percpu(void __percpu *ptr, bool charge)
+{
+	int bit_off, off, bits, size, end;
+	struct obj_cgroup *objcg;
+	struct pcpu_chunk *chunk;
+	unsigned long flags;
+	void *addr;
+
+	WARN_ON(!in_task());
+
+	if (!ptr)
+		return;
+
+	addr = __pcpu_ptr_to_addr(ptr);
+	spin_lock_irqsave(&pcpu_lock, flags);
+	chunk = pcpu_chunk_addr_search(addr);
+	off = addr - chunk->base_addr;
+	objcg = chunk->obj_cgroups[off >> PCPU_MIN_ALLOC_SHIFT];
+	if (!objcg) {
+		spin_unlock_irqrestore(&pcpu_lock, flags);
+		return;
+	}
+
+	bit_off = off / PCPU_MIN_ALLOC_SIZE;
+	/* find end index */
+	end = find_next_bit(chunk->bound_map, pcpu_chunk_map_bits(chunk),
+			bit_off + 1);
+	bits = end - bit_off;
+	size = bits * PCPU_MIN_ALLOC_SIZE;
+
+	if (charge) {
+		obj_cgroup_get(objcg);
+		obj_cgroup_charge(objcg, GFP_KERNEL, size * num_possible_cpus());
+		rcu_read_lock();
+		mod_memcg_state(obj_cgroup_memcg(objcg), MEMCG_PERCPU_B,
+			(size * num_possible_cpus()));
+		rcu_read_unlock();
+	} else {
+		obj_cgroup_uncharge(objcg, size * num_possible_cpus());
+		rcu_read_lock();
+		mod_memcg_state(obj_cgroup_memcg(objcg), MEMCG_PERCPU_B,
+			-(size * num_possible_cpus()));
+		rcu_read_unlock();
+		obj_cgroup_put(objcg);
+	}
+
+	spin_unlock_irqrestore(&pcpu_lock, flags);
+}
+EXPORT_SYMBOL(charge_percpu);
+
 bool __is_kernel_percpu_address(unsigned long addr, unsigned long *can_addr)
 {
 #ifdef CONFIG_SMP
