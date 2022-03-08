@@ -3474,6 +3474,21 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 	return fd;
 }
 
+static struct bpf_map *bpf_map_idr_find(unsigned long id)
+{
+	void *map;
+
+	spin_lock_bh(&map_idr_lock);
+	map = idr_find(&map_idr, id);
+	if (map)
+		map = __bpf_map_inc_not_zero(map, true);
+	else
+		map = ERR_PTR(-ENOENT);
+	spin_unlock_bh(&map_idr_lock);
+
+	return map;
+}
+
 #define BPF_MAP_GET_FD_BY_ID_LAST_FIELD open_flags
 
 static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
@@ -3494,14 +3509,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	if (f_flags < 0)
 		return f_flags;
 
-	spin_lock_bh(&map_idr_lock);
-	map = idr_find(&map_idr, id);
-	if (map)
-		map = __bpf_map_inc_not_zero(map, true);
-	else
-		map = ERR_PTR(-ENOENT);
-	spin_unlock_bh(&map_idr_lock);
-
+	map = bpf_map_idr_find(id);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 
