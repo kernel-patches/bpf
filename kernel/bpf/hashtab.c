@@ -10,6 +10,7 @@
 #include <linux/random.h>
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/memcontrol.h>
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
@@ -1466,6 +1467,36 @@ static void htab_map_free(struct bpf_map *map)
 	kfree(htab);
 }
 
+static bool htab_map_recharge_memcg(struct bpf_map *map)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	struct mem_cgroup *old = map->memcg;
+	int i;
+
+	if (!old)
+		return false;
+
+	/* Only process offline memcg */
+	if (old == root_mem_cgroup || old->kmemcg_id >= 0)
+		return false;
+
+	bpf_map_release_memcg(map);
+	kcharge(htab, false);
+	kvcharge(htab->buckets, false);
+	charge_percpu(htab->extra_elems, false);
+	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
+		charge_percpu(htab->map_locked[i], false);
+
+	kcharge(htab, true);
+	kvcharge(htab->buckets, true);
+	charge_percpu(htab->extra_elems, true);
+	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
+		charge_percpu(htab->map_locked[i], true);
+	bpf_map_save_memcg(map);
+
+	return true;
+}
+
 static void htab_map_seq_show_elem(struct bpf_map *map, void *key,
 				   struct seq_file *m)
 {
@@ -2111,6 +2142,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_recharge_memcg = htab_map_recharge_memcg,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_release_uref = htab_map_free_timers,
 	.map_lookup_elem = htab_map_lookup_elem,
@@ -2133,6 +2165,7 @@ const struct bpf_map_ops htab_lru_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_recharge_memcg = htab_map_recharge_memcg,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_release_uref = htab_map_free_timers,
 	.map_lookup_elem = htab_lru_map_lookup_elem,
@@ -2258,6 +2291,7 @@ const struct bpf_map_ops htab_percpu_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_recharge_memcg = htab_map_recharge_memcg,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_lookup_elem = htab_percpu_map_lookup_elem,
 	.map_lookup_and_delete_elem = htab_percpu_map_lookup_and_delete_elem,
@@ -2278,6 +2312,7 @@ const struct bpf_map_ops htab_lru_percpu_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_recharge_memcg = htab_map_recharge_memcg,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_lookup_elem = htab_lru_percpu_map_lookup_elem,
 	.map_lookup_and_delete_elem = htab_lru_percpu_map_lookup_and_delete_elem,
