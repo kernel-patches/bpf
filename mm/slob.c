@@ -569,6 +569,12 @@ void kfree(const void *block)
 }
 EXPORT_SYMBOL(kfree);
 
+void kcharge(const void *block, bool charge)
+{
+	/* not implemented yet. */
+}
+EXPORT_SYMBOL(kcharge);
+
 /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
 size_t __ksize(const void *block)
 {

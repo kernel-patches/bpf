@@ -4563,6 +4563,38 @@ void kfree(const void *x)
 }
 EXPORT_SYMBOL(kfree);
 
+void kcharge(const void *x, bool charge)
+{
+	void *object = (void *)x;
+	struct folio *folio;
+	struct slab *slab;
+
+	WARN_ON(!in_task());
+
+	if (unlikely(ZERO_OR_NULL_PTR(x)))
+		return;
+
+	folio = virt_to_folio(x);
+	if (unlikely(!folio_test_slab(folio))) {
+		unsigned int order = folio_order(folio);
+		int sign = charge ? 1 : -1;
+
+		mod_lruvec_page_state(folio_page(folio, 0), NR_SLAB_UNRECLAIMABLE_B,
+			sign * (PAGE_SIZE << order));
+
+		return;
+	}
+
+	slab = folio_slab(folio);
+	if (charge)
+		memcg_slab_post_alloc_hook(slab->slab_cache,
+			get_obj_cgroup_from_current(), GFP_KERNEL, 1, &object);
+	else
+		memcg_slab_free_hook(slab->slab_cache, &object, 1);
+
+}
+EXPORT_SYMBOL(kcharge);
+
 #define SHRINK_PROMOTE_MAX 32
 
 /*

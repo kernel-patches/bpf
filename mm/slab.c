@@ -3796,6 +3796,12 @@ void kfree(const void *objp)
 }
 EXPORT_SYMBOL(kfree);
 
+void kcharge(const void *objp, bool charge)
+{
+	/* Not implemented yet */
+}
+EXPORT_SYMBOL(kfree);
+
 /*
  * This initializes kmem_cache_node or resizes various caches for all nodes.
  */
