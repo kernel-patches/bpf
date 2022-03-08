@@ -414,16 +414,6 @@ void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock)
 }
 
 #ifdef CONFIG_MEMCG_KMEM
-static void bpf_map_save_memcg(struct bpf_map *map)
-{
-	map->memcg = get_mem_cgroup_from_mm(current->mm);
-}
-
-static void bpf_map_release_memcg(struct bpf_map *map)
-{
-	mem_cgroup_put(map->memcg);
-}
-
 void *bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
 			   int node)
 {
@@ -460,15 +450,6 @@ void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 	set_active_memcg(old_memcg);
 
 	return ptr;
-}
-
-#else
-static void bpf_map_save_memcg(struct bpf_map *map)
-{
-}
-
-static void bpf_map_release_memcg(struct bpf_map *map)
-{
 }
 #endif
 

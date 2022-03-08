@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/bpfptr.h>
+#include <linux/memcontrol.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -208,6 +209,26 @@ struct bpf_map {
 		bool xdp_has_frags;
 	} owner;
 };
+
+#ifdef CONFIG_MEMCG_KMEM
+static inline void bpf_map_save_memcg(struct bpf_map *map)
+{
+	map->memcg = get_mem_cgroup_from_mm(current->mm);
+}
+
+static inline void bpf_map_release_memcg(struct bpf_map *map)
+{
+	mem_cgroup_put(map->memcg);
+}
+#else
+static inline void bpf_map_save_memcg(struct bpf_map *map)
+{
+}
+
+static inline void bpf_map_release_memcg(struct bpf_map *map)
+{
+}
+#endif
 
 static inline bool map_value_has_spin_lock(const struct bpf_map *map)
 {
