@@ -3939,6 +3939,17 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	}
 	info.btf_vmlinux_value_type_id = map->btf_vmlinux_value_type_id;
 
+#ifdef CONFIG_MEMCG_KMEM
+	if (map->memcg) {
+		struct mem_cgroup *memcg = map->memcg;
+
+		if (memcg == root_mem_cgroup)
+			info.memcg_state = 0;
+		else
+			info.memcg_state = memcg->kmemcg_id < 0 ? -1 : 1;
+	}
+#endif
+
 	if (bpf_map_is_dev_bound(map)) {
 		err = bpf_map_offload_info_fill(&info, map);
 		if (err)

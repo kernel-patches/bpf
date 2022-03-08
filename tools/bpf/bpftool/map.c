@@ -550,6 +550,7 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 		jsonw_end_array(json_wtr);
 	}
 
+	jsonw_int_field(json_wtr, "memcg_state", info->memcg_state);
 	emit_obj_refs_json(refs_table, info->id, json_wtr);
 
 	jsonw_end_object(json_wtr);
@@ -635,6 +636,7 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 	if (frozen)
 		printf("%sfrozen", info->btf_id ? "  " : "");
 
+	printf("\n\tmemcg_state %d", info->memcg_state);
 	emit_obj_refs_plain(refs_table, info->id, "\n\tpids ");
 
 	printf("\n");
