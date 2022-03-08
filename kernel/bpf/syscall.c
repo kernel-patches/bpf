@@ -1128,7 +1128,6 @@ err_put:
 	return err;
 }
 
-
 #define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
 
 static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
@@ -4621,6 +4620,21 @@ out_prog_put:
 	return ret;
 }
 
+static int map_recharge_elem(union bpf_attr *attr)
+{
+	int id = attr->map_id;
+	struct bpf_map *map;
+
+	map = bpf_map_idr_find(id);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	if (map->ops->map_recharge_memcg)
+		map->ops->map_recharge_memcg(map);
+
+	return 0;
+}
+
 static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -4756,6 +4770,9 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_PROG_BIND_MAP:
 		err = bpf_prog_bind_map(&attr);
+		break;
+	case BPF_MAP_RECHARGE:
+		err = map_recharge_elem(&attr);
 		break;
 	default:
 		err = -EINVAL;
