@@ -2715,6 +2715,35 @@ void vfree(const void *addr)
 }
 EXPORT_SYMBOL(vfree);
 
+void vcharge(const void *addr, bool charge)
+{
+	unsigned int page_order;
+	struct vm_struct *area;
+	int i;
+
+	WARN_ON(!in_task());
+
+	if (!addr)
+		return;
+
+	area = find_vm_area(addr);
+	if (unlikely(!area))
+		return;
+
+	page_order = vm_area_page_order(area);
+	for (i = 0; i < area->nr_pages; i += 1U << page_order) {
+		struct page *page = area->pages[i];
+
+		WARN_ON(!page);
+		if (charge)
+			memcg_kmem_charge_page(page, GFP_KERNEL, page_order);
+		else
+			memcg_kmem_uncharge_page(page, page_order);
+		cond_resched();
+	}
+}
+EXPORT_SYMBOL(vcharge);
+
 /**
  * vunmap - release virtual mapping obtained by vmap()
  * @addr:   memory base address
