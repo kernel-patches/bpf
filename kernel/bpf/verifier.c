@@ -13085,6 +13085,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		if (tmp != func[i] || func[i]->bpf_func != old_bpf_func) {
 			verbose(env, "JIT doesn't support bpf-to-bpf calls\n");
 			err = -ENOTSUPP;
+			/* Abort extra pass for the remaining subprogs */
+			while (++i < env->subprog_cnt)
+				bpf_int_jit_abort(func[i]);
 			goto out_free;
 		}
 		cond_resched();

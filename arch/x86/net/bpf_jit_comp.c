@@ -2244,6 +2244,30 @@ struct x64_jit_data {
 	struct jit_context ctx;
 };
 
+void bpf_int_jit_abort(struct bpf_prog *prog)
+{
+	struct x64_jit_data *jit_data = prog->aux->jit_data;
+	struct bpf_binary_header *header, *rw_header;
+
+	if (!jit_data)
+		return;
+
+	prog->bpf_func = NULL;
+	prog->jited = 0;
+	prog->jited_len = 0;
+
+	header = jit_data->header;
+	rw_header = jit_data->rw_header;
+	bpf_arch_text_copy(&header->size, &rw_header->size,
+			   sizeof(rw_header->size));
+	bpf_jit_binary_pack_free(header, rw_header);
+
+	kvfree(jit_data->addrs);
+	kfree(jit_data);
+
+	prog->aux->jit_data = NULL;
+}
+
 #define MAX_PASSES 20
 #define PADDING_PASSES (MAX_PASSES - 5)
 

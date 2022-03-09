@@ -2636,6 +2636,15 @@ struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_prog *prog)
 	return prog;
 }
 
+/*
+ * If arch JIT uses aux->jit_data to save temporary allocated status and
+ * supports subprog, it needs to override the function to free allocated
+ * memories and fall back to interpreter mode for passed prog.
+ */
+void __weak bpf_int_jit_abort(struct bpf_prog *prog)
+{
+}
+
 /* Stub for JITs that support eBPF. All cBPF code gets transformed into
  * eBPF by the kernel and is later compiled by bpf_int_jit_compile().
  */
