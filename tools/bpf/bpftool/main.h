@@ -114,6 +114,8 @@ struct obj_ref {
 struct obj_refs {
 	int ref_cnt;
 	struct obj_ref *refs;
+	bool has_bpf_cookie;
+	__u64 bpf_cookie;
 };
 
 struct btf;
