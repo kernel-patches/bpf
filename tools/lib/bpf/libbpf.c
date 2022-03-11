@@ -10320,6 +10320,45 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	return pfd;
 }
 
+/* Get full path to program/shared library. */
+static int resolve_full_path(const char *file, char *result, size_t result_sz)
+{
+	char *search_paths[2];
+	int i;
+
+	if (strstr(file, ".so")) {
+		search_paths[0] = getenv("LD_LIBRARY_PATH");
+		search_paths[1] = (char *)"/usr/lib64:/usr/lib";
+	} else {
+		search_paths[0] = getenv("PATH");
+		search_paths[1] = (char *)"/usr/bin:/usr/sbin";
+	}
+
+	for (i = 0; i < ARRAY_SIZE(search_paths); i++) {
+		char *s, *search_path, *currpath, *saveptr = NULL;
+
+		if (!search_paths[i])
+			continue;
+		search_path = strdup(search_paths[i]);
+		s = search_path;
+		while ((currpath = strtok_r(s, ":", &saveptr)) != NULL) {
+			struct stat sb;
+
+			s = NULL;
+			snprintf(result, result_sz, "%s/%s", currpath, file);
+			/* ensure it is an executable file/link */
+			if (stat(result, &sb) == 0 && (sb.st_mode & (S_IFREG | S_IFLNK)) &&
+			    (sb.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
+				pr_debug("resolved '%s' to '%s'\n", file, result);
+				free(search_path);
+				return 0;
+			}
+		}
+		free(search_path);
+	}
+	return -ENOENT;
+}
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 				const char *binary_path, size_t func_offset,
@@ -10327,6 +10366,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 {
 	DECLARE_LIBBPF_OPTS(bpf_perf_event_opts, pe_opts);
 	char errmsg[STRERR_BUFSIZE], *legacy_probe = NULL;
+	char full_binary_path[PATH_MAX];
 	struct bpf_link *link;
 	size_t ref_ctr_off;
 	int pfd, err;
@@ -10338,13 +10378,22 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+	if (binary_path && !strchr(binary_path, '/')) {
+		err = resolve_full_path(binary_path, full_binary_path,
+					sizeof(full_binary_path));
+		if (err) {
+			pr_warn("could not find full path for %s\n", binary_path);
+			return libbpf_err_ptr(err);
+		}
+		binary_path = full_binary_path;
+	}
 
 	legacy = determine_uprobe_perf_type() < 0;
 	if (!legacy) {
 		pfd = perf_event_open_probe(true /* uprobe */, retprobe, binary_path,
 					    func_offset, pid, ref_ctr_off);
 	} else {
-		char probe_name[512];
+		char probe_name[PATH_MAX + 64];
 
 		if (ref_ctr_off)
 			return libbpf_err_ptr(-EINVAL);
