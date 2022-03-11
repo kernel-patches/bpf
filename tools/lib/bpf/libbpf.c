@@ -10320,6 +10320,302 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	return pfd;
 }
 
+/* uprobes deal in relative offsets; subtract the base address associated with
+ * the mapped binary.  See Documentation/trace/uprobetracer.rst for more
+ * details.
+ */
+static long elf_find_relative_offset(Elf *elf, long addr)
+{
+	size_t n;
+	int i;
+
+	if (elf_getphdrnum(elf, &n)) {
+		pr_warn("elf: failed to find program headers: %s\n",
+			elf_errmsg(-1));
+		return -ENOENT;
+	}
+
+	for (i = 0; i < n; i++) {
+		int seg_start, seg_end, seg_offset;
+		GElf_Phdr phdr;
+
+		if (!gelf_getphdr(elf, i, &phdr)) {
+			pr_warn("elf: failed to get program header %d: %s\n",
+				i, elf_errmsg(-1));
+			return -ENOENT;
+		}
+		if (phdr.p_type != PT_LOAD || !(phdr.p_flags & PF_X))
+			continue;
+
+		seg_start = phdr.p_vaddr;
+		seg_end = seg_start + phdr.p_memsz;
+		seg_offset = phdr.p_offset;
+		if (addr >= seg_start && addr < seg_end)
+			return addr - seg_start + seg_offset;
+	}
+	pr_warn("elf: failed to find prog header containing 0x%lx\n", addr);
+	return -ENOENT;
+}
+
+/* Return next ELF section of sh_type after scn, or first of that type
+ * if scn is NULL, and if name is non-NULL, both name and type must match.
+ */
+static Elf_Scn *elf_find_next_scn_by_type_name(Elf *elf, int sh_type, const char *name,
+					       Elf_Scn *scn)
+{
+	size_t shstrndx;
+
+	if (name && elf_getshdrstrndx(elf, &shstrndx)) {
+		pr_debug("elf: failed to get section names section index: %s\n",
+			 elf_errmsg(-1));
+		return NULL;
+	}
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		const char *sname;
+		GElf_Shdr sh;
+
+		if (!gelf_getshdr(scn, &sh))
+			continue;
+		if (sh.sh_type != sh_type)
+			continue;
+
+		if (!name)
+			return scn;
+
+		sname = elf_strptr(elf, shstrndx, sh.sh_name);
+		if (sname && strcmp(sname, name) == 0)
+			return scn;
+	}
+	return NULL;
+}
+
+/* For Position-Independent Code-based libraries, a table of trampolines (Procedure Linking Table)
+ * is used to support resolution of symbol names at linking time.  The goal here is to find the
+ * offset associated with the jump to the actual library function, since consumers of the
+ * library function within the binary will jump to the plt table entry (malloc@plt) first.
+ * If we can instrument that .plt entry locally in the specific binary (rather than instrumenting
+ * glibc say), overheads are greatly reduced.
+ *
+ * However, we need to find the index into the .plt table.  There are two parts to this.
+ *
+ * First, we have to find the index that the .plt entry (malloc@plt) lives at.  To do that,
+ * we use the .rela.plt table, which consists of entries in the same order as the .plt,
+ * but crucially each entry contains the symbol index from the symbol table.  This allows
+ * us to match the index of the .plt entry to the desired library function.
+ *
+ * Second, we need to find the address associated with that indexed .plt entry.
+ * The .plt section provides section information about the overall section size and the
+ * size of each .plt entry.  However prior to the entries themselves, there is code
+ * that carries out the dynamic linking, and this code may not be the same size as the
+ * .plt entry size (it happens to be on x86_64, but not on aarch64).  So we have to
+ * determine that initial code size so we can index into the .plt entries that follow it.
+ * To do this, we simply subtract the .plt table size (nr_plt_entries * entry_size)
+ * from the overall section size, and then use that offset as the base into the array
+ * of .plt entries.
+ */
+static ssize_t elf_find_plt_offset(Elf *elf, size_t sym_idx)
+{
+	long plt_entry_sz, plt_sz, plt_base;
+	Elf_Scn *rela_plt_scn, *plt_scn;
+	size_t plt_idx, nr_plt_entries;
+	Elf_Data *rela_data;
+	GElf_Shdr sh;
+
+	/* First get .plt index and table size via .rela.plt */
+	rela_plt_scn = elf_find_next_scn_by_type_name(elf, SHT_RELA, ".rela.plt", NULL);
+	if (!rela_plt_scn) {
+		pr_debug("elf: failed to find .rela.plt section\n");
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	if (!gelf_getshdr(rela_plt_scn, &sh)) {
+		pr_debug("elf: failed to get shdr for .rela.plt section\n");
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	rela_data = elf_getdata(rela_plt_scn, 0);
+	if (!rela_data) {
+		pr_debug("elf: failed to get data for .rela.plt section\n");
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	nr_plt_entries = sh.sh_size / sh.sh_entsize;
+	for (plt_idx = 0; plt_idx < nr_plt_entries; plt_idx++) {
+		GElf_Rela rela;
+
+		if (!gelf_getrela(rela_data, plt_idx, &rela))
+			continue;
+		if (GELF_R_SYM(rela.r_info) == sym_idx)
+			break;
+	}
+	if (plt_idx == nr_plt_entries) {
+		pr_debug("elf: could not find sym index %ld in .rela.plt section\n",
+			 sym_idx);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+
+	/* Now determine base of .plt table and calculate where entry for function is */
+	plt_scn = elf_find_next_scn_by_type_name(elf, SHT_PROGBITS, ".plt", NULL);
+	if (!plt_scn || !gelf_getshdr(plt_scn, &sh)) {
+		pr_debug("elf: failed to find .plt section\n");
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	plt_base = sh.sh_addr;
+	plt_entry_sz = sh.sh_entsize;
+	plt_sz = sh.sh_size;
+	if (nr_plt_entries * plt_entry_sz >= plt_sz) {
+		pr_debug("elf: failed to calculate base .plt entry size with %ld plt entries\n",
+			 nr_plt_entries);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	plt_base += plt_sz - (nr_plt_entries * plt_entry_sz);
+
+	return plt_base + (plt_idx * plt_entry_sz);
+}
+
+/* Find offset of function name in object specified by path.  "name" matches
+ * symbol name or name@@LIB for library functions.
+ */
+static long elf_find_func_offset(const char *binary_path, const char *name)
+{
+	int fd, i, sh_types[2] = { SHT_DYNSYM, SHT_SYMTAB };
+	bool is_shared_lib, is_name_qualified;
+	size_t name_len, sym_idx = 0;
+	char errmsg[STRERR_BUFSIZE];
+	long ret = -ENOENT;
+	GElf_Ehdr ehdr;
+	Elf *elf;
+
+	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		pr_warn("failed to open %s: %s\n", binary_path,
+			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+		return ret;
+	}
+	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+	if (!elf) {
+		pr_warn("elf: could not read elf from %s: %s\n", binary_path, elf_errmsg(-1));
+		close(fd);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	if (!gelf_getehdr(elf, &ehdr)) {
+		pr_warn("elf: failed to get ehdr from %s: %s\n", binary_path, elf_errmsg(-1));
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+	/* for shared lib case, we do not need to calculate relative offset */
+	is_shared_lib = ehdr.e_type == ET_DYN;
+
+	name_len = strlen(name);
+	/* Does name specify "@@LIB"? */
+	is_name_qualified = strstr(name, "@@") != NULL;
+
+	/* Search SHT_DYNSYM, SHT_SYMTAB for symbol.  This search order is used because if
+	 * the symbol is found in SHY_DYNSYM, the index in that table tells us which index
+	 * to use in the Procedure Linking Table to instrument calls to the shared library
+	 * function, but locally in the binary rather than in the shared library itself.
+	 * If a binary is stripped, it may also only have SHT_DYNSYM, and a fully-statically
+	 * linked binary may not have SHT_DYMSYM, so absence of a section should not be
+	 * reported as a warning/error.
+	 */
+	for (i = 0; i < ARRAY_SIZE(sh_types); i++) {
+		size_t nr_syms, strtabidx, idx;
+		Elf_Data *symbols = NULL;
+		Elf_Scn *scn = NULL;
+		int last_bind = -1;
+		const char *sname;
+		GElf_Shdr sh;
+
+		scn = elf_find_next_scn_by_type_name(elf, sh_types[i], NULL, NULL);
+		if (!scn) {
+			pr_debug("elf: failed to find symbol table ELF sections in '%s'\n",
+				 binary_path);
+			continue;
+		}
+		if (!gelf_getshdr(scn, &sh))
+			continue;
+		strtabidx = sh.sh_link;
+		symbols = elf_getdata(scn, 0);
+		if (!symbols) {
+			pr_warn("elf: failed to get symbols for symtab section in '%s': %s\n",
+				binary_path, elf_errmsg(-1));
+			ret = -LIBBPF_ERRNO__FORMAT;
+			goto out;
+		}
+		nr_syms = symbols->d_size / sh.sh_entsize;
+
+		for (idx = 0; idx < nr_syms; idx++) {
+			int curr_bind;
+			GElf_Sym sym;
+
+			if (!gelf_getsym(symbols, idx, &sym))
+				continue;
+
+			if (GELF_ST_TYPE(sym.st_info) != STT_FUNC)
+				continue;
+
+			sname = elf_strptr(elf, strtabidx, sym.st_name);
+			if (!sname)
+				continue;
+
+			curr_bind = GELF_ST_BIND(sym.st_info);
+
+			/* User can specify func, func@@LIB or func@@LIB_VERSION. */
+			if (strncmp(sname, name, name_len) != 0)
+				continue;
+			/* ...but we don't want a search for "foo" to match 'foo2" also, so any
+			 * additional characters in sname should be of the form "@@LIB".
+			 */
+			if (!is_name_qualified && strlen(sname) > name_len &&
+			    sname[name_len] != '@')
+				continue;
+
+			if (ret >= 0) {
+				/* handle multiple matches */
+				if (last_bind != STB_WEAK && curr_bind != STB_WEAK) {
+					/* Only accept one non-weak bind. */
+					pr_warn("elf: ambiguous match for '%s': %s\n",
+						sname, name);
+					ret = -LIBBPF_ERRNO__FORMAT;
+					goto out;
+				} else if (curr_bind == STB_WEAK) {
+					/* already have a non-weak bind, and
+					 * this is a weak bind, so ignore.
+					 */
+					continue;
+				}
+			}
+			ret = sym.st_value;
+			last_bind = curr_bind;
+			sym_idx = idx;
+		}
+		/* The index of the entry in SHT_DYNSYM helps find .plt entry */
+		if (ret == 0 && sh_types[i] == SHT_DYNSYM)
+			ret = elf_find_plt_offset(elf, sym_idx);
+		/* For binaries that are not shared libraries, we need relative offset */
+		if (ret > 0 && !is_shared_lib)
+			ret = elf_find_relative_offset(elf, ret);
+		if (ret > 0)
+			break;
+	}
+
+	if (ret > 0) {
+		pr_debug("elf: symbol address match for '%s': 0x%lx\n", name, ret);
+	} else {
+		if (ret == 0) {
+			pr_warn("elf: '%s' is 0 in symtab for '%s': %s\n", name, binary_path,
+				is_shared_lib ? "should not be 0 in a shared library" :
+						"try using shared library path instead");
+			ret = -ENOENT;
+		} else {
+			pr_warn("elf: failed to find symbol '%s' in '%s'\n", name, binary_path);
+		}
+	}
+out:
+	elf_end(elf);
+	close(fd);
+	return ret;
+}
+
 /* Get full path to program/shared library. */
 static int resolve_full_path(const char *file, char *result, size_t result_sz)
 {
@@ -10371,6 +10667,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	size_t ref_ctr_off;
 	int pfd, err;
 	bool retprobe, legacy;
+	const char *func_name;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -10386,6 +10683,19 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 			return libbpf_err_ptr(err);
 		}
 		binary_path = full_binary_path;
+	}
+	func_name = OPTS_GET(opts, func_name, NULL);
+	if (func_name) {
+		long sym_off;
+
+		if (!binary_path) {
+			pr_warn("name-based attach requires binary_path\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+		sym_off = elf_find_func_offset(binary_path, func_name);
+		if (sym_off < 0)
+			return libbpf_err_ptr(sym_off);
+		func_offset += (size_t)sym_off;
 	}
 
 	legacy = determine_uprobe_perf_type() < 0;
