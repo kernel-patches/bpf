@@ -2813,7 +2813,7 @@ struct btf_ext *btf_ext__new(const __u8 *data, __u32 size)
 	if (err)
 		goto done;
 
-	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, line_info_len)) {
+	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, core_relo_len)) {
 		err = -EINVAL;
 		goto done;
 	}
@@ -2825,11 +2825,6 @@ struct btf_ext *btf_ext__new(const __u8 *data, __u32 size)
 	err = btf_ext_setup_line_info(btf_ext);
 	if (err)
 		goto done;
-
-	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, core_relo_len)) {
-		err = -EINVAL;
-		goto done;
-	}
 
 	err = btf_ext_setup_core_relos(btf_ext);
 	if (err)
