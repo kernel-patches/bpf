@@ -425,6 +425,7 @@ static int dump_btf_c(const struct btf *btf,
 	if (err)
 		return err;
 
+	printf("/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */\n\n");
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
