@@ -2271,6 +2271,7 @@ struct net_device {
 	bool			proto_down;
 	unsigned		wol_enabled:1;
 	unsigned		threaded:1;
+	unsigned		xdp_small_headroom:1;
 
 	struct list_head	net_notifier_list;
 

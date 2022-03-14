@@ -4724,6 +4724,7 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 				     struct xdp_buff *xdp,
 				     struct bpf_prog *xdp_prog)
 {
+	int min_headroom = XDP_PACKET_HEADROOM;
 	u32 act = XDP_DROP;
 
 	/* Reinjected packets coming from act_mirred or similar should
@@ -4732,12 +4733,15 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 	if (skb_is_redirected(skb))
 		return XDP_PASS;
 
+	if (skb->dev->xdp_small_headroom)
+		min_headroom = XDP_PACKET_HEADROOM_SMALL;
+
 	/* XDP packets must be linear and must have sufficient headroom
 	 * of XDP_PACKET_HEADROOM bytes. This is the guarantee that also
 	 * native XDP provides, thus we need to do it here as well.
 	 */
 	if (skb_cloned(skb) || skb_is_nonlinear(skb) ||
-	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
+	    skb_headroom(skb) < min_headroom) {
 		int hroom = XDP_PACKET_HEADROOM - skb_headroom(skb);
 		int troom = skb->tail + skb->data_len - skb->end;
 
@@ -9136,6 +9140,9 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		if (err)
 			return err;
 	}
+
+	if (mode == XDP_MODE_SKB)
+		dev->xdp_small_headroom = !!(flags & XDP_FLAGS_SMALL_HEADROOM);
 
 	if (link)
 		dev_xdp_set_link(dev, mode, link);

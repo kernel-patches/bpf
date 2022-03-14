@@ -5704,6 +5704,7 @@ struct bpf_xdp_sock {
 };
 
 #define XDP_PACKET_HEADROOM 256
+#define XDP_PACKET_HEADROOM_SMALL 64
 
 /* User return codes for XDP prog type.
  * A valid XDP program must return one of these defined values. All other
