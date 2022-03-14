@@ -1218,6 +1218,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* This should only be used for bpf_map_delete_elem called by user. */
+	BPF_F_TCP_SOCKMAP	= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */

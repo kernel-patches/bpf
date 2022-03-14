@@ -1232,7 +1232,9 @@ static int map_delete_elem(union bpf_attr *attr)
 
 	bpf_disable_instrumentation();
 	rcu_read_lock();
+	map->map_flags |= BPF_F_TCP_SOCKMAP;
 	err = map->ops->map_delete_elem(map, key);
+	map->map_flags &= ~BPF_F_TCP_SOCKMAP;
 	rcu_read_unlock();
 	bpf_enable_instrumentation();
 	maybe_wait_bpf_programs(map);
