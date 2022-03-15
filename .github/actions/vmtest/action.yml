@@ -1,0 +1,30 @@
+name: 'vmtest'
+description: 'Build + run vmtest'
+runs:
+  using: "composite"
+  steps:
+    # 1. Setup environment
+    - name: Setup build environment
+      uses: libbpf/ci/setup-build-env@master
+    # 2. Build
+    - name: Build kernel image
+      shell: bash
+      run: ${GITHUB_ACTION_PATH}/build.sh
+    - name: Build selftests
+      shell: bash
+      run: ${GITHUB_ACTION_PATH}/build_selftests.sh
+      env:
+        VMLINUX_BTF: ${{ github.workspace }}/vmlinux
+    # 3. Test
+    - name: Prepare rootfs
+      uses: libbpf/ci/prepare-rootfs@master
+      with:
+        project-name: 'libbpf'
+        arch: 'x86_64'
+        kernel-root: '.'
+    - name: Run selftests
+      uses: libbpf/ci/run-qemu@master
+      with:
+        arch: 'x86_64'
+        img: '/tmp/root.img'
+        vmlinuz: '${{ github.workspace }}/vmlinuz'
