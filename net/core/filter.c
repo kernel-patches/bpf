@@ -1722,7 +1722,7 @@ BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
 {
 	void *ptr;
 
-	if (unlikely(offset > 0xffff))
+	if (unlikely(offset >= skb->len))
 		goto err_clear;
 
 	ptr = skb_header_pointer(skb, offset, len, to);
@@ -1753,10 +1753,10 @@ BPF_CALL_4(bpf_flow_dissector_load_bytes,
 {
 	void *ptr;
 
-	if (unlikely(offset > 0xffff))
+	if (unlikely(!ctx->skb))
 		goto err_clear;
 
-	if (unlikely(!ctx->skb))
+	if (unlikely(offset >= ctx->skb->len))
 		goto err_clear;
 
 	ptr = skb_header_pointer(ctx->skb, offset, len, to);
@@ -1787,7 +1787,7 @@ BPF_CALL_5(bpf_skb_load_bytes_relative, const struct sk_buff *, skb,
 	u8 *end = skb_tail_pointer(skb);
 	u8 *start, *ptr;
 
-	if (unlikely(offset > 0xffff))
+	if (unlikely(offset >= skb->len))
 		goto err_clear;
 
 	switch (start_header) {
