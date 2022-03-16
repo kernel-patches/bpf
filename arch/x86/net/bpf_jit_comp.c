@@ -1748,10 +1748,33 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 {
 	u8 *prog = *pprog;
 	u8 *jmp_insn;
+	int ctx_cookie_off = offsetof(struct bpf_trace_run_ctx, bpf_cookie);
 	struct bpf_prog *p = l->prog;
+
+	EMIT1(0x52);		 /* push rdx */
+
+	/* mov rdi, 0 */
+	emit_mov_imm64(&prog, BPF_REG_1, 0, 0);
+
+	/* Prepare struct bpf_trace_run_ctx.
+	 * sub rsp, sizeof(struct bpf_trace_run_ctx)
+	 * mov rax, rsp
+	 * mov QWORD PTR [rax + ctx_cookie_off], rdi
+	 */
+	EMIT4(0x48, 0x83, 0xEC, sizeof(struct bpf_trace_run_ctx));
+	EMIT3(0x48, 0x89, 0xE0);
+	EMIT4(0x48, 0x89, 0x78, ctx_cookie_off);
+
+	/* mov rdi, rsp */
+	EMIT3(0x48, 0x89, 0xE7);
+	/* mov QWORD PTR [rdi + sizeof(struct bpf_trace_run_ctx)], rax */
+	emit_stx(&prog, BPF_DW, BPF_REG_1, BPF_REG_0, sizeof(struct bpf_trace_run_ctx));
 
 	/* arg1: mov rdi, progs[i] */
 	emit_mov_imm64(&prog, BPF_REG_1, (long) p >> 32, (u32) (long) p);
+	/* arg2: mov rsi, rsp (struct bpf_run_ctx *) */
+	EMIT3(0x48, 0x89, 0xE6);
+
 	if (emit_call(&prog,
 		      p->aux->sleepable ? __bpf_prog_enter_sleepable :
 		      __bpf_prog_enter, prog))
@@ -1797,10 +1820,19 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 	emit_mov_imm64(&prog, BPF_REG_1, (long) p >> 32, (u32) (long) p);
 	/* arg2: mov rsi, rbx <- start time in nsec */
 	emit_mov_reg(&prog, true, BPF_REG_2, BPF_REG_6);
+	/* arg3: mov rdx, rsp (struct bpf_run_ctx *) */
+	EMIT3(0x48, 0x89, 0xE2);
 	if (emit_call(&prog,
 		      p->aux->sleepable ? __bpf_prog_exit_sleepable :
 		      __bpf_prog_exit, prog))
 			return -EINVAL;
+
+	/* pop struct bpf_trace_run_ctx
+	 * add rsp, sizeof(struct bpf_trace_run_ctx)
+	 */
+	EMIT4(0x48, 0x83, 0xC4, sizeof(struct bpf_trace_run_ctx));
+
+	EMIT1(0x5A); /* pop rdx */
 
 	*pprog = prog;
 	return 0;

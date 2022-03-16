@@ -580,9 +580,12 @@ static void notrace inc_misses_counter(struct bpf_prog *prog)
  * [2..MAX_U64] - execute bpf prog and record execution time.
  *     This is start time.
  */
-u64 notrace __bpf_prog_enter(struct bpf_prog *prog)
+u64 notrace __bpf_prog_enter(struct bpf_prog *prog, struct bpf_trace_run_ctx *run_ctx)
 	__acquires(RCU)
 {
+	if (run_ctx)
+		run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+
 	rcu_read_lock();
 	migrate_disable();
 	if (unlikely(__this_cpu_inc_return(*(prog->active)) != 1)) {
@@ -614,17 +617,23 @@ static void notrace update_prog_stats(struct bpf_prog *prog,
 	}
 }
 
-void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start)
+void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start, struct bpf_trace_run_ctx *run_ctx)
 	__releases(RCU)
 {
+	if (run_ctx)
+		bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+
 	update_prog_stats(prog, start);
 	__this_cpu_dec(*(prog->active));
 	migrate_enable();
 	rcu_read_unlock();
 }
 
-u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog)
+u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog, struct bpf_trace_run_ctx *run_ctx)
 {
+	if (run_ctx)
+		run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+
 	rcu_read_lock_trace();
 	migrate_disable();
 	might_fault();
@@ -635,8 +644,12 @@ u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog)
 	return bpf_prog_start_time();
 }
 
-void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start)
+void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start,
+				       struct bpf_trace_run_ctx *run_ctx)
 {
+	if (run_ctx)
+		bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+
 	update_prog_stats(prog, start);
 	__this_cpu_dec(*(prog->active));
 	migrate_enable();

@@ -4793,13 +4793,13 @@ BPF_CALL_3(bpf_sys_bpf, int, cmd, union bpf_attr *, attr, u32, attr_size)
 			return -EINVAL;
 		}
 
-		if (!__bpf_prog_enter_sleepable(prog)) {
+		if (!__bpf_prog_enter_sleepable(prog, NULL)) {
 			/* recursion detected */
 			bpf_prog_put(prog);
 			return -EBUSY;
 		}
 		attr->test.retval = bpf_prog_run(prog, (void *) (long) attr->test.ctx_in);
-		__bpf_prog_exit_sleepable(prog, 0 /* bpf_prog_run does runtime stats */);
+		__bpf_prog_exit_sleepable(prog, 0 /* bpf_prog_run does runtime stats */, NULL);
 		bpf_prog_put(prog);
 		return 0;
 #endif
