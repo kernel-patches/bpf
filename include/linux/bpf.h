@@ -1040,6 +1040,7 @@ struct bpf_link {
 	struct bpf_prog *prog;
 	struct work_struct work;
 	struct hlist_node tramp_hlist;
+	u64 cookie;
 };
 
 struct bpf_link_ops {

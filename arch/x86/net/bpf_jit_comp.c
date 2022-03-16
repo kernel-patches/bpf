@@ -1753,8 +1753,8 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 
 	EMIT1(0x52);		 /* push rdx */
 
-	/* mov rdi, 0 */
-	emit_mov_imm64(&prog, BPF_REG_1, 0, 0);
+	/* mov rdi, cookie */
+	emit_mov_imm64(&prog, BPF_REG_1, (long) l->cookie >> 32, (u32) (long) l->cookie);
 
 	/* Prepare struct bpf_trace_run_ctx.
 	 * sub rsp, sizeof(struct bpf_trace_run_ctx)
