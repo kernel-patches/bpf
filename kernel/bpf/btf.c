@@ -3197,7 +3197,7 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 			       u32 off, int sz, struct btf_field_info *info,
 			       int info_cnt, int idx)
 {
-	bool kptr_tag = false, kptr_ref_tag = false;
+	bool kptr_tag = false, kptr_ref_tag = false, kptr_percpu_tag = false;
 	int tags;
 
 	/* For PTR, sz is always == 8 */
@@ -3216,12 +3216,17 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 			if (kptr_ref_tag)
 				return -EEXIST;
 			kptr_ref_tag = true;
+		} else if (!strcmp("kptr_percpu", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (kptr_percpu_tag)
+				return -EEXIST;
+			kptr_percpu_tag = true;
 		}
 		/* Look for next tag */
 		t = btf_type_by_id(btf, t->type);
 	}
 
-	tags = kptr_tag + kptr_ref_tag;
+	tags = kptr_tag + kptr_ref_tag + kptr_percpu_tag;
 	if (!tags)
 		return BTF_FIELD_IGNORE;
 	else if (tags > 1)
@@ -3236,7 +3241,9 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 
 	if (idx >= info_cnt)
 		return -E2BIG;
-	if (kptr_ref_tag)
+	if (kptr_percpu_tag)
+		info[idx].flags = BPF_MAP_VALUE_OFF_F_PERCPU;
+	else if (kptr_ref_tag)
 		info[idx].flags = BPF_MAP_VALUE_OFF_F_REF;
 	else
 		info[idx].flags = 0;

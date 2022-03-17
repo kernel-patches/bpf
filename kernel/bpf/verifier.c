@@ -3517,11 +3517,19 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 			       bool ref_ptr)
 {
 	const char *targ_name = kernel_type_name(off_desc->btf, off_desc->btf_id);
+	enum bpf_reg_type reg_type;
 	const char *reg_name = "";
 	bool fixed_off_ok = true;
 
-	if (reg->type != PTR_TO_BTF_ID && reg->type != PTR_TO_BTF_ID_OR_NULL)
-		goto bad_type;
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
+		if (reg->type != (PTR_TO_BTF_ID | MEM_PERCPU) &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_PERCPU))
+			goto bad_type;
+	} else { /* referenced and unreferenced case */
+		if (reg->type != PTR_TO_BTF_ID &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL))
+			goto bad_type;
+	}
 
 	if (!btf_is_kernel(reg->btf)) {
 		verbose(env, "R%d must point to kernel BTF\n", regno);
@@ -3557,9 +3565,13 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 		goto bad_type;
 	return 0;
 bad_type:
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
+		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_PERCPU;
+	else
+		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL;
 	verbose(env, "invalid kptr access, R%d type=%s%s ", regno,
 		reg_type_str(env, reg->type), reg_name);
-	verbose(env, "expected=%s%s\n", reg_type_str(env, PTR_TO_BTF_ID), targ_name);
+	verbose(env, "expected=%s%s\n", reg_type_str(env, reg_type), targ_name);
 	return -EINVAL;
 }
 
@@ -3572,10 +3584,11 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 {
 	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	enum bpf_type_flag reg_flags = PTR_MAYBE_NULL;
+	bool ref_ptr = false, percpu_ptr = false;
 	struct bpf_map_value_off_desc *off_desc;
 	int insn_class = BPF_CLASS(insn->code);
 	struct bpf_map *map = reg->map_ptr;
-	bool ref_ptr = false;
 
 	/* Things we already checked for in check_map_access:
 	 *  - Reject cases where variable offset may touch BTF ID pointer
@@ -3601,6 +3614,9 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	}
 
 	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
+	percpu_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU;
+	if (percpu_ptr)
+		reg_flags |= MEM_PERCPU;
 
 	if (insn_class == BPF_LDX) {
 		if (WARN_ON_ONCE(value_regno < 0))
@@ -3614,7 +3630,7 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
-				off_desc->btf_id, PTR_MAYBE_NULL);
+				off_desc->btf_id, reg_flags);
 		val_reg->id = ++env->id_gen;
 	} else if (insn_class == BPF_STX) {
 		if (WARN_ON_ONCE(value_regno < 0))
