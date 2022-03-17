@@ -3175,6 +3175,7 @@ enum {
 struct btf_field_info {
 	const struct btf_type *type;
 	u32 off;
+	int flags;
 };
 
 static int btf_find_field_struct(const struct btf *btf, const struct btf_type *t,
@@ -3196,7 +3197,8 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 			       u32 off, int sz, struct btf_field_info *info,
 			       int info_cnt, int idx)
 {
-	bool kptr_tag = false;
+	bool kptr_tag = false, kptr_ref_tag = false;
+	int tags;
 
 	/* For PTR, sz is always == 8 */
 	if (!btf_type_is_ptr(t))
@@ -3209,12 +3211,21 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 			if (kptr_tag)
 				return -EEXIST;
 			kptr_tag = true;
+		} else if (!strcmp("kptr_ref", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (kptr_ref_tag)
+				return -EEXIST;
+			kptr_ref_tag = true;
 		}
 		/* Look for next tag */
 		t = btf_type_by_id(btf, t->type);
 	}
-	if (!kptr_tag)
+
+	tags = kptr_tag + kptr_ref_tag;
+	if (!tags)
 		return BTF_FIELD_IGNORE;
+	else if (tags > 1)
+		return -EINVAL;
 
 	/* Get the base type */
 	if (btf_type_is_modifier(t))
@@ -3225,6 +3236,10 @@ static int btf_find_field_kptr(const struct btf *btf, const struct btf_type *t,
 
 	if (idx >= info_cnt)
 		return -E2BIG;
+	if (kptr_ref_tag)
+		info[idx].flags = BPF_MAP_VALUE_OFF_F_REF;
+	else
+		info[idx].flags = 0;
 	info[idx].type = t;
 	info[idx].off = off;
 	return BTF_FIELD_FOUND;
@@ -3402,6 +3417,7 @@ struct bpf_map_value_off *btf_find_kptr(const struct btf *btf,
 		tab->off[i].offset = info_arr[i].off;
 		tab->off[i].btf_id = id;
 		tab->off[i].btf = off_btf;
+		tab->off[i].flags = info_arr[i].flags;
 		tab->nr_off = i + 1;
 	}
 	return tab;
