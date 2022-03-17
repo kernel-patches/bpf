@@ -149,6 +149,10 @@ enum libbpf_tristate {
 
 #define __kconfig __attribute__((section(".kconfig")))
 #define __ksym __attribute__((section(".ksyms")))
+#define __kptr __attribute__((btf_type_tag("kptr")))
+#define __kptr_ref __attribute__((btf_type_tag("kptr_ref")))
+#define __kptr_percpu __attribute__((btf_type_tag("kptr_percpu")))
+#define __kptr_user __attribute__((btf_type_tag("kptr_user")))
 
 #ifndef ___bpf_concat
 #define ___bpf_concat(a, b) a ## b
