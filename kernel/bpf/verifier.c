@@ -3521,7 +3521,11 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	const char *reg_name = "";
 	bool fixed_off_ok = true;
 
-	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_USER) {
+		if (reg->type != (PTR_TO_BTF_ID | MEM_USER) &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_USER))
+			goto bad_type;
+	} else if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU) {
 		if (reg->type != (PTR_TO_BTF_ID | MEM_PERCPU) &&
 		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_PERCPU))
 			goto bad_type;
@@ -3565,7 +3569,9 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 		goto bad_type;
 	return 0;
 bad_type:
-	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
+	if (off_desc->flags & BPF_MAP_VALUE_OFF_F_USER)
+		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_USER;
+	else if (off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU)
 		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_PERCPU;
 	else
 		reg_type = PTR_TO_BTF_ID | PTR_MAYBE_NULL;
@@ -3583,9 +3589,9 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 				 enum bpf_access_type t, int insn_idx)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
+	bool ref_ptr = false, percpu_ptr = false, user_ptr = false;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	enum bpf_type_flag reg_flags = PTR_MAYBE_NULL;
-	bool ref_ptr = false, percpu_ptr = false;
 	struct bpf_map_value_off_desc *off_desc;
 	int insn_class = BPF_CLASS(insn->code);
 	struct bpf_map *map = reg->map_ptr;
@@ -3615,8 +3621,11 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 
 	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
 	percpu_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU;
+	user_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_USER;
 	if (percpu_ptr)
 		reg_flags |= MEM_PERCPU;
+	else if (user_ptr)
+		reg_flags |= MEM_USER;
 
 	if (insn_class == BPF_LDX) {
 		if (WARN_ON_ONCE(value_regno < 0))

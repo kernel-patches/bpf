@@ -163,6 +163,7 @@ enum {
 enum {
 	BPF_MAP_VALUE_OFF_F_REF    = (1U << 0),
 	BPF_MAP_VALUE_OFF_F_PERCPU = (1U << 1),
+	BPF_MAP_VALUE_OFF_F_USER   = (1U << 2),
 };
 
 struct bpf_map_value_off_desc {
