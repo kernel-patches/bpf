@@ -4824,6 +4824,7 @@ bpf_object__reuse_map(struct bpf_map *map)
 		close(pin_fd);
 		return err;
 	}
+	close(pin_fd);
 	map->pinned = true;
 	pr_debug("reused pinned map at '%s'\n", map->pin_path);
 
