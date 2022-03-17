@@ -3469,6 +3469,143 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 	return 0;
 }
 
+static int __check_ptr_off_reg(struct bpf_verifier_env *env,
+			       const struct bpf_reg_state *reg, int regno,
+			       bool fixed_off_ok)
+{
+	/* Access to this pointer-typed register or passing it to a helper
+	 * is only allowed in its original, unmodified form.
+	 */
+
+	if (reg->off < 0) {
+		verbose(env, "negative offset %s ptr R%d off=%d disallowed\n",
+			reg_type_str(env, reg->type), regno, reg->off);
+		return -EACCES;
+	}
+
+	if (!fixed_off_ok && reg->off) {
+		verbose(env, "dereference of modified %s ptr R%d off=%d disallowed\n",
+			reg_type_str(env, reg->type), regno, reg->off);
+		return -EACCES;
+	}
+
+	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+		char tn_buf[48];
+
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		verbose(env, "variable %s access var_off=%s disallowed\n",
+			reg_type_str(env, reg->type), tn_buf);
+		return -EACCES;
+	}
+
+	return 0;
+}
+
+int check_ptr_off_reg(struct bpf_verifier_env *env,
+		      const struct bpf_reg_state *reg, int regno)
+{
+	return __check_ptr_off_reg(env, reg, regno, false);
+}
+
+static int map_kptr_match_type(struct bpf_verifier_env *env,
+			       struct bpf_map_value_off_desc *off_desc,
+			       struct bpf_reg_state *reg, u32 regno)
+{
+	const char *targ_name = kernel_type_name(off_desc->btf, off_desc->btf_id);
+	const char *reg_name = "";
+
+	if (reg->type != PTR_TO_BTF_ID && reg->type != PTR_TO_BTF_ID_OR_NULL)
+		goto bad_type;
+
+	if (!btf_is_kernel(reg->btf)) {
+		verbose(env, "R%d must point to kernel BTF\n", regno);
+		return -EINVAL;
+	}
+	/* We need to verify reg->type and reg->btf, before accessing reg->btf */
+	reg_name = kernel_type_name(reg->btf, reg->btf_id);
+
+	if (__check_ptr_off_reg(env, reg, regno, true))
+		return -EACCES;
+
+	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
+				  off_desc->btf, off_desc->btf_id))
+		goto bad_type;
+	return 0;
+bad_type:
+	verbose(env, "invalid kptr access, R%d type=%s%s ", regno,
+		reg_type_str(env, reg->type), reg_name);
+	verbose(env, "expected=%s%s\n", reg_type_str(env, PTR_TO_BTF_ID), targ_name);
+	return -EINVAL;
+}
+
+/* Returns an error, or 0 if ignoring the access, or 1 if register state was
+ * updated, in which case later updates must be skipped.
+ */
+static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
+				 int off, int size, int value_regno,
+				 enum bpf_access_type t, int insn_idx)
+{
+	struct bpf_reg_state *reg = reg_state(env, regno), *val_reg;
+	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	struct bpf_map_value_off_desc *off_desc;
+	int insn_class = BPF_CLASS(insn->code);
+	struct bpf_map *map = reg->map_ptr;
+
+	/* Things we already checked for in check_map_access:
+	 *  - Reject cases where variable offset may touch BTF ID pointer
+	 *  - size of access (must be BPF_DW)
+	 *  - off_desc->offset == off + reg->var_off.value
+	 */
+	if (!tnum_is_const(reg->var_off))
+		return 0;
+
+	off_desc = bpf_map_kptr_off_contains(map, off + reg->var_off.value);
+	if (!off_desc)
+		return 0;
+
+	if (WARN_ON_ONCE(size != bpf_size_to_bytes(BPF_DW)))
+		return -EACCES;
+
+	if (BPF_MODE(insn->code) != BPF_MEM)
+		goto end;
+
+	if (!env->bpf_capable) {
+		verbose(env, "kptr access only allowed for CAP_BPF and CAP_SYS_ADMIN\n");
+		return -EPERM;
+	}
+
+	if (insn_class == BPF_LDX) {
+		if (WARN_ON_ONCE(value_regno < 0))
+			return -EFAULT;
+		val_reg = reg_state(env, value_regno);
+		/* We can simply mark the value_regno receiving the pointer
+		 * value from map as PTR_TO_BTF_ID, with the correct type.
+		 */
+		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
+				off_desc->btf_id, PTR_MAYBE_NULL);
+		val_reg->id = ++env->id_gen;
+	} else if (insn_class == BPF_STX) {
+		if (WARN_ON_ONCE(value_regno < 0))
+			return -EFAULT;
+		val_reg = reg_state(env, value_regno);
+		if (!register_is_null(val_reg) &&
+		    map_kptr_match_type(env, off_desc, val_reg, value_regno))
+			return -EACCES;
+	} else if (insn_class == BPF_ST) {
+		if (insn->imm) {
+			verbose(env, "BPF_ST imm must be 0 when storing to kptr at off=%u\n",
+				off_desc->offset);
+			return -EACCES;
+		}
+	} else {
+		goto end;
+	}
+	return 1;
+end:
+	verbose(env, "kptr in map can only be accessed using BPF_LDX/BPF_STX/BPF_ST\n");
+	return -EACCES;
+}
+
 /* check read/write into a map element with possible variable offset */
 static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			    int off, int size, bool zero_size_allowed)
@@ -3505,6 +3642,32 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 		     t < reg->umax_value + off + size) {
 			verbose(env, "bpf_timer cannot be accessed directly by load/store\n");
 			return -EACCES;
+		}
+	}
+	if (map_value_has_kptr(map)) {
+		struct bpf_map_value_off *tab = map->kptr_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++) {
+			u32 p = tab->off[i].offset;
+
+			if (reg->smin_value + off < p + sizeof(u64) &&
+			    p < reg->umax_value + off + size) {
+				if (!tnum_is_const(reg->var_off)) {
+					verbose(env, "kptr access cannot have variable offset\n");
+					return -EACCES;
+				}
+				if (p != off + reg->var_off.value) {
+					verbose(env, "kptr access misaligned expected=%u off=%llu\n",
+						p, off + reg->var_off.value);
+					return -EACCES;
+				}
+				if (size != bpf_size_to_bytes(BPF_DW)) {
+					verbose(env, "kptr access size must be BPF_DW\n");
+					return -EACCES;
+				}
+				break;
+			}
 		}
 	}
 	return err;
@@ -3980,44 +4143,6 @@ static int get_callee_stack_depth(struct bpf_verifier_env *env,
 }
 #endif
 
-static int __check_ptr_off_reg(struct bpf_verifier_env *env,
-			       const struct bpf_reg_state *reg, int regno,
-			       bool fixed_off_ok)
-{
-	/* Access to this pointer-typed register or passing it to a helper
-	 * is only allowed in its original, unmodified form.
-	 */
-
-	if (reg->off < 0) {
-		verbose(env, "negative offset %s ptr R%d off=%d disallowed\n",
-			reg_type_str(env, reg->type), regno, reg->off);
-		return -EACCES;
-	}
-
-	if (!fixed_off_ok && reg->off) {
-		verbose(env, "dereference of modified %s ptr R%d off=%d disallowed\n",
-			reg_type_str(env, reg->type), regno, reg->off);
-		return -EACCES;
-	}
-
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
-		char tn_buf[48];
-
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-		verbose(env, "variable %s access var_off=%s disallowed\n",
-			reg_type_str(env, reg->type), tn_buf);
-		return -EACCES;
-	}
-
-	return 0;
-}
-
-int check_ptr_off_reg(struct bpf_verifier_env *env,
-		      const struct bpf_reg_state *reg, int regno)
-{
-	return __check_ptr_off_reg(env, reg, regno, false);
-}
-
 static int __check_buffer_access(struct bpf_verifier_env *env,
 				 const char *buf_info,
 				 const struct bpf_reg_state *reg,
@@ -4421,6 +4546,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (err)
 			return err;
 		err = check_map_access(env, regno, off, size, false);
+		err = err ?: check_map_kptr_access(env, regno, off, size, value_regno, t, insn_idx);
+		if (err < 0)
+			return err;
+		/* if err == 0, check_map_kptr_access ignored the access */
 		if (!err && t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
@@ -4442,6 +4571,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 				mark_reg_unknown(env, regs, value_regno);
 			}
 		}
+		/* clear err == 1 */
+		err = err < 0 ? err : 0;
 	} else if (base_type(reg->type) == PTR_TO_MEM) {
 		bool rdonly_mem = type_is_rdonly_mem(reg->type);
 
