@@ -579,6 +579,8 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		strncpy(prefix, "user_", 32);
 	if (type & MEM_PERCPU)
 		strncpy(prefix, "percpu_", 32);
+	if (type & PTR_UNTRUSTED)
+		strncpy(prefix, "untrusted_", 32);
 
 	snprintf(env->type_str_buf, TYPE_STR_BUF_LEN, "%s%s%s",
 		 prefix, str[base_type(type)], postfix);
@@ -3529,9 +3531,15 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 		if (reg->type != (PTR_TO_BTF_ID | MEM_PERCPU) &&
 		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | MEM_PERCPU))
 			goto bad_type;
-	} else { /* referenced and unreferenced case */
+	} else if (off_desc->flags & BPF_MAP_VALUE_OFF_F_REF) {
 		if (reg->type != PTR_TO_BTF_ID &&
 		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL))
+			goto bad_type;
+	} else { /* only unreferenced case accepts untrusted pointers */
+		if (reg->type != PTR_TO_BTF_ID &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL) &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_UNTRUSTED) &&
+		    reg->type != (PTR_TO_BTF_ID | PTR_MAYBE_NULL | PTR_UNTRUSTED))
 			goto bad_type;
 	}
 
@@ -3622,18 +3630,20 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	ref_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_REF;
 	percpu_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_PERCPU;
 	user_ptr = off_desc->flags & BPF_MAP_VALUE_OFF_F_USER;
+
 	if (percpu_ptr)
 		reg_flags |= MEM_PERCPU;
 	else if (user_ptr)
 		reg_flags |= MEM_USER;
+	else
+		reg_flags |= PTR_UNTRUSTED;
 
 	if (insn_class == BPF_LDX) {
 		if (WARN_ON_ONCE(value_regno < 0))
 			return -EFAULT;
-		if (ref_ptr) {
-			verbose(env, "accessing referenced kptr disallowed\n");
-			return -EACCES;
-		}
+		/* We allow loading referenced kptr, since it will be marked as
+		 * untrusted, similar to unreferenced kptr.
+		 */
 		val_reg = reg_state(env, value_regno);
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
@@ -4413,6 +4423,12 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 
 	if (ret < 0)
 		return ret;
+
+	/* If this is an untrusted pointer, all pointers formed by walking it
+	 * also inherit the untrusted flag.
+	 */
+	if (type_flag(reg->type) & PTR_UNTRUSTED)
+		flag |= PTR_UNTRUSTED;
 
 	if (atype == BPF_READ && value_regno >= 0)
 		mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
@@ -13109,7 +13125,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		if (!ctx_access)
 			continue;
 
-		switch (env->insn_aux_data[i + delta].ptr_type) {
+		switch ((int)env->insn_aux_data[i + delta].ptr_type) {
 		case PTR_TO_CTX:
 			if (!ops->convert_ctx_access)
 				continue;
@@ -13126,6 +13142,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			convert_ctx_access = bpf_xdp_sock_convert_ctx_access;
 			break;
 		case PTR_TO_BTF_ID:
+		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
 			if (type == BPF_READ) {
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);
