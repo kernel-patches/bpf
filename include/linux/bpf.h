@@ -158,6 +158,10 @@ struct bpf_map_ops {
 enum {
 	/* Support at most 8 pointers in a BPF map value */
 	BPF_MAP_VALUE_OFF_MAX = 8,
+	BPF_MAP_OFF_ARR_MAX   = BPF_MAP_VALUE_OFF_MAX +
+				1 + /* for bpf_spin_lock */
+				1 + /* for bpf_timer */
+				1,  /* for map->value_size sentinel */
 };
 
 enum {
@@ -208,7 +212,12 @@ struct bpf_map {
 	char name[BPF_OBJ_NAME_LEN];
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	/* 6 bytes hole */
+	/* 2 bytes hole */
+	struct {
+		u32 off[BPF_MAP_OFF_ARR_MAX];
+		u32 cnt;
+	} off_arr;
+	/* 20 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -252,36 +261,34 @@ static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 		memset(dst + map->spin_lock_off, 0, sizeof(struct bpf_spin_lock));
 	if (unlikely(map_value_has_timer(map)))
 		memset(dst + map->timer_off, 0, sizeof(struct bpf_timer));
+	if (unlikely(map_value_has_kptr(map))) {
+		struct bpf_map_value_off *tab = map->kptr_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++)
+			*(u64 *)(dst + tab->off[i].offset) = 0;
+	}
 }
 
 /* copy everything but bpf_spin_lock and bpf_timer. There could be one of each. */
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 {
-	u32 s_off = 0, s_sz = 0, t_off = 0, t_sz = 0;
+	int i;
 
-	if (unlikely(map_value_has_spin_lock(map))) {
-		s_off = map->spin_lock_off;
-		s_sz = sizeof(struct bpf_spin_lock);
-	}
-	if (unlikely(map_value_has_timer(map))) {
-		t_off = map->timer_off;
-		t_sz = sizeof(struct bpf_timer);
-	}
+	memcpy(dst, src, map->off_arr.off[0]);
+	for (i = 1; i < map->off_arr.cnt; i++) {
+		u32 curr_off = map->off_arr.off[i - 1];
+		u32 next_off = map->off_arr.off[i];
+		u32 curr_sz;
 
-	if (unlikely(s_sz || t_sz)) {
-		if (s_off < t_off || !s_sz) {
-			swap(s_off, t_off);
-			swap(s_sz, t_sz);
-		}
-		memcpy(dst, src, t_off);
-		memcpy(dst + t_off + t_sz,
-		       src + t_off + t_sz,
-		       s_off - t_off - t_sz);
-		memcpy(dst + s_off + s_sz,
-		       src + s_off + s_sz,
-		       map->value_size - s_off - s_sz);
-	} else {
-		memcpy(dst, src, map->value_size);
+		if (map_value_has_spin_lock(map) && map->spin_lock_off == curr_off)
+			curr_sz = sizeof(struct bpf_spin_lock);
+		else if (map_value_has_timer(map) && map->timer_off == curr_off)
+			curr_sz = sizeof(struct bpf_timer);
+		else
+			curr_sz = sizeof(u64);
+		curr_off += curr_sz;
+		memcpy(dst + curr_off, src + curr_off, next_off - curr_off);
 	}
 }
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
