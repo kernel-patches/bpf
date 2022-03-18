@@ -4737,7 +4737,7 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 	 * native XDP provides, thus we need to do it here as well.
 	 */
 	if (skb_cloned(skb) || skb_is_nonlinear(skb) ||
-	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
+	    skb_headroom(skb) < XDP_PACKET_HEADROOM_MIN) {
 		int hroom = XDP_PACKET_HEADROOM - skb_headroom(skb);
 		int troom = skb->tail + skb->data_len - skb->end;
 

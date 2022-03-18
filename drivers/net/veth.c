@@ -766,7 +766,7 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 
 		consume_skb(skb);
 		skb = nskb;
-	} else if (skb_headroom(skb) < XDP_PACKET_HEADROOM &&
+	} else if (skb_headroom(skb) < XDP_PACKET_HEADROOM_MIN &&
 		   pskb_expand_head(skb, VETH_XDP_HEADROOM, 0, GFP_ATOMIC)) {
 		goto drop;
 	}

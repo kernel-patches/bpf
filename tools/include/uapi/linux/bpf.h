@@ -5717,7 +5717,8 @@ struct bpf_xdp_sock {
 	__u32 queue_id;
 };
 
-#define XDP_PACKET_HEADROOM 256
+#define XDP_PACKET_HEADROOM	256
+#define XDP_PACKET_HEADROOM_MIN	192
 
 /* User return codes for XDP prog type.
  * A valid XDP program must return one of these defined values. All other
