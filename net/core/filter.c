@@ -1722,7 +1722,7 @@ BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
 {
 	void *ptr;
 
-	if (unlikely(offset > 0xffff))
+	if (unlikely(offset > 0x7fffffff || len > 0x7fffffff))
 		goto err_clear;
 
 	ptr = skb_header_pointer(skb, offset, len, to);
