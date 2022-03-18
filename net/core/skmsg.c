@@ -445,6 +445,7 @@ int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 				if (!msg_rx->skb)
 					sk_mem_uncharge(sk, copy);
 				msg_rx->sg.size -= copy;
+				atomic_sub(copy, &sk->sk_rmem_alloc);
 
 				if (!sge->length) {
 					sk_msg_iter_var_next(i);
@@ -754,6 +755,7 @@ static void __sk_psock_purge_ingress_msg(struct sk_psock *psock)
 
 	list_for_each_entry_safe(msg, tmp, &psock->ingress_msg, list) {
 		list_del(&msg->list);
+		atomic_sub(msg->sg.size, &psock->sk->sk_rmem_alloc);
 		sk_msg_free(psock->sk, msg);
 		kfree(msg);
 	}

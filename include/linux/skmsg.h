@@ -308,9 +308,10 @@ static inline void sk_psock_queue_msg(struct sk_psock *psock,
 				      struct sk_msg *msg)
 {
 	spin_lock_bh(&psock->ingress_lock);
-	if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+	if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED)) {
 		list_add_tail(&msg->list, &psock->ingress_msg);
-	else {
+		atomic_add(msg->sg.size, &psock->sk->sk_rmem_alloc);
+	} else {
 		sk_msg_free(psock->sk, msg);
 		kfree(msg);
 	}
@@ -323,8 +324,10 @@ static inline struct sk_msg *sk_psock_dequeue_msg(struct sk_psock *psock)
 
 	spin_lock_bh(&psock->ingress_lock);
 	msg = list_first_entry_or_null(&psock->ingress_msg, struct sk_msg, list);
-	if (msg)
+	if (msg) {
 		list_del(&msg->list);
+		atomic_sub(msg->sg.size, &psock->sk->sk_rmem_alloc);
+	}
 	spin_unlock_bh(&psock->ingress_lock);
 	return msg;
 }

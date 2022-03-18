@@ -24,6 +24,12 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 		return -ENOMEM;
 
 	lock_sock(sk);
+	if (atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf) {
+		release_sock(sk);
+		kfree(tmp);
+		return -EAGAIN;
+	}
+
 	tmp->sg.start = msg->sg.start;
 	i = msg->sg.start;
 	do {
