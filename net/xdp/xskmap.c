@@ -12,6 +12,9 @@
 
 #include "xsk.h"
 
+#define XSK_MAP_CREATE_FLAG_MASK	\
+		(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY | BPF_F_NO_CHARGE)
+
 static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
 					       struct xdp_sock __rcu **map_entry)
 {
@@ -68,7 +71,7 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 
 	if (attr->max_entries == 0 || attr->key_size != 4 ||
 	    attr->value_size != 4 ||
-	    attr->map_flags & ~(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY))
+	    attr->map_flags & ~XSK_MAP_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
 	numa_node = bpf_map_attr_numa_node(attr);

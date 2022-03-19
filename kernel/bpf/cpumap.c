@@ -39,6 +39,9 @@
  */
 
 #define CPU_MAP_BULK_SIZE 8  /* 8 == one cacheline on 64-bit archs */
+
+#define CPU_MAP_CREATE_FLAG_MASK (BPF_F_NUMA_NODE | BPF_F_NO_CHARGE)
+
 struct bpf_cpu_map_entry;
 struct bpf_cpu_map;
 
@@ -93,7 +96,7 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	if (attr->max_entries == 0 || attr->key_size != 4 ||
 	    (value_size != offsetofend(struct bpf_cpumap_val, qsize) &&
 	     value_size != offsetofend(struct bpf_cpumap_val, bpf_prog.fd)) ||
-	    attr->map_flags & ~BPF_F_NUMA_NODE)
+	    attr->map_flags & ~CPU_MAP_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
 	cmap = kzalloc(sizeof(*cmap), GFP_USER | __GFP_ACCOUNT);

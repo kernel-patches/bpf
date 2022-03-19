@@ -21,6 +21,8 @@ enum bpf_struct_ops_state {
 	refcount_t refcnt;				\
 	enum bpf_struct_ops_state state
 
+#define STRUCT_OPS_CREATE_FLAG_MASK (BPF_F_NO_CHARGE)
+
 struct bpf_struct_ops_value {
 	BPF_STRUCT_OPS_COMMON_VALUE;
 	char data[] ____cacheline_aligned_in_smp;
@@ -556,7 +558,8 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->key_size != sizeof(unsigned int) || attr->max_entries != 1 ||
-	    attr->map_flags || !attr->btf_vmlinux_value_type_id)
+		attr->map_flags & ~STRUCT_OPS_CREATE_FLAG_MASK ||
+		!attr->btf_vmlinux_value_type_id)
 		return -EINVAL;
 	return 0;
 }

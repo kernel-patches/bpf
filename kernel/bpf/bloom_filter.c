@@ -8,8 +8,8 @@
 #include <linux/jhash.h>
 #include <linux/random.h>
 
-#define BLOOM_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_ZERO_SEED | BPF_F_ACCESS_MASK)
+#define BLOOM_CREATE_FLAG_MASK	(BPF_F_NUMA_NODE |	\
+	BPF_F_ZERO_SEED | BPF_F_ACCESS_MASK | BPF_F_NO_CHARGE)
 
 struct bpf_bloom_filter {
 	struct bpf_map map;
