@@ -1363,7 +1363,7 @@ int bpf_prog_create(struct bpf_prog **pfp, struct sock_fprog_kern *fprog)
 	if (!bpf_check_basics_ok(fprog->filter, fprog->len))
 		return -EINVAL;
 
-	fp = bpf_prog_alloc(bpf_prog_size(fprog->len), 0);
+	fp = bpf_prog_alloc(bpf_prog_size(fprog->len), __GFP_ACCOUNT);
 	if (!fp)
 		return -ENOMEM;
 
@@ -1410,7 +1410,7 @@ int bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog,
 	if (!bpf_check_basics_ok(fprog->filter, fprog->len))
 		return -EINVAL;
 
-	fp = bpf_prog_alloc(bpf_prog_size(fprog->len), 0);
+	fp = bpf_prog_alloc(bpf_prog_size(fprog->len), __GFP_ACCOUNT);
 	if (!fp)
 		return -ENOMEM;
 
@@ -1488,7 +1488,7 @@ struct bpf_prog *__get_filter(struct sock_fprog *fprog, struct sock *sk)
 	if (!bpf_check_basics_ok(fprog->filter, fprog->len))
 		return ERR_PTR(-EINVAL);
 
-	prog = bpf_prog_alloc(bpf_prog_size(fprog->len), 0);
+	prog = bpf_prog_alloc(bpf_prog_size(fprog->len), __GFP_ACCOUNT);
 	if (!prog)
 		return ERR_PTR(-ENOMEM);
 

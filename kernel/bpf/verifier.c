@@ -12991,7 +12991,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 * subprogs don't have IDs and not reachable via prog_get_next_id
 		 * func[i]->stats will never be accessed and stays NULL
 		 */
-		func[i] = bpf_prog_alloc_no_stats(bpf_prog_size(len), GFP_USER);
+		func[i] = bpf_prog_alloc_no_stats(bpf_prog_size(len), GFP_USER | __GFP_ACCOUNT);
 		if (!func[i])
 			goto out_free;
 		memcpy(func[i]->insnsi, &prog->insnsi[subprog_start],

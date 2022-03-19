@@ -2305,7 +2305,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	}
 
 	/* plain bpf_prog allocation */
-	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
+	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER | __GFP_ACCOUNT);
 	if (!prog) {
 		if (dst_prog)
 			bpf_prog_put(dst_prog);
