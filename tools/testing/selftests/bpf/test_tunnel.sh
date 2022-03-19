@@ -67,6 +67,11 @@ add_second_ip()
   ip addr add dev veth1 172.16.1.20/24
 }
 
+add_second_ip6()
+{
+  ip addr add dev veth1 ::bb/96
+}
+
 add_gre_tunnel()
 {
 	# at_ns0 namespace
@@ -94,7 +99,7 @@ add_ip6gretap_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE seq flowlabel 0xbcdef key 2 \
-		local ::11 remote ::22
+		local ::11 remote $REMOTE_IP6
 
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip addr add dev $DEV_NS fc80::100/96
@@ -143,7 +148,7 @@ add_ip6erspan_tunnel()
 	if [ "$1" == "v1" ]; then
 		ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE seq key 2 \
-		local ::11 remote ::22 \
+		local ::11 remote $REMOTE_IP6 \
 		erspan_ver 1 erspan 123
 	else
 		ip netns exec at_ns0 \
@@ -196,7 +201,7 @@ add_ip6vxlan_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE id 22 dstport 4789 \
-		local ::11 remote ::22
+		local ::11 remote $REMOTE_IP6
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip link set dev $DEV_NS up
 
@@ -231,7 +236,7 @@ add_ip6geneve_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE id 22 \
-		remote ::22     # geneve has no local option
+		remote $REMOTE_IP6    # geneve has no local option
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip link set dev $DEV_NS up
 
@@ -266,7 +271,7 @@ add_ip6tnl_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE \
-		local ::11 remote ::22
+		local ::11 remote $REMOTE_IP6
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 1::11/96
 	ip netns exec at_ns0 ip link set dev $DEV_NS up
@@ -307,12 +312,13 @@ test_ip6gre()
 	TYPE=ip6gre
 	DEV_NS=ip6gre00
 	DEV=ip6gre11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
 	# reuse the ip6gretap function
-	add_ip6gretap_tunnel
+	add_ip6gretap_tunnel $REMOTE_IP6
 	attach_bpf $DEV ip6gretap_set_tunnel ip6gretap_get_tunnel
 	# underlay
 	ping6 $PING_ARG ::11
@@ -337,11 +343,12 @@ test_ip6gretap()
 	TYPE=ip6gretap
 	DEV_NS=ip6gretap00
 	DEV=ip6gretap11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6gretap_tunnel
+	add_ip6gretap_tunnel $REMOTE_IP6
 	attach_bpf $DEV ip6gretap_set_tunnel ip6gretap_get_tunnel
 	# underlay
 	ping6 $PING_ARG ::11
@@ -390,11 +397,12 @@ test_ip6erspan()
 	TYPE=ip6erspan
 	DEV_NS=ip6erspan00
 	DEV=ip6erspan11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6erspan_tunnel $1
+	add_ip6erspan_tunnel $1 $REMOTE_IP6
 	attach_bpf $DEV ip4ip6erspan_set_tunnel ip4ip6erspan_get_tunnel
 	ping6 $PING_ARG ::11
 	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
@@ -438,11 +446,12 @@ test_ip6vxlan()
 	TYPE=vxlan
 	DEV_NS=ip6vxlan00
 	DEV=ip6vxlan11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6vxlan_tunnel
+	add_ip6vxlan_tunnel $REMOTE_IP6
 	ip link set dev veth1 mtu 1500
 	attach_bpf $DEV ip6vxlan_set_tunnel ip6vxlan_get_tunnel
 	# underlay
@@ -490,11 +499,12 @@ test_ip6geneve()
 	TYPE=geneve
 	DEV_NS=ip6geneve00
 	DEV=ip6geneve11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6geneve_tunnel
+	add_ip6geneve_tunnel $REMOTE_IP6
 	attach_bpf $DEV ip6geneve_set_tunnel ip6geneve_get_tunnel
 	ping $PING_ARG 10.1.1.100
 	check_err $?
@@ -539,11 +549,12 @@ test_ipip6()
 	TYPE=ip6tnl
 	DEV_NS=ipip6tnl00
 	DEV=ipip6tnl11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6tnl_tunnel
+	add_ip6tnl_tunnel $REMOTE_IP6
 	ip link set dev veth1 mtu 1500
 	attach_bpf $DEV ipip6_set_tunnel ipip6_get_tunnel
 	# underlay
@@ -567,11 +578,12 @@ test_ip6ip6()
 	TYPE=ip6tnl
 	DEV_NS=ip6ip6tnl00
 	DEV=ip6ip6tnl11
+	REMOTE_IP6=::22
 	ret=0
 
 	check $TYPE
 	config_device
-	add_ip6tnl_tunnel
+	add_ip6tnl_tunnel $REMOTE_IP6
 	ip link set dev veth1 mtu 1500
 	attach_bpf $DEV ip6ip6_set_tunnel ip6ip6_get_tunnel
 	# underlay
@@ -691,6 +703,36 @@ test_vxlan_tunsrc()
                 return 1
         fi
         echo -e ${GREEN}"PASS: $TYPE"${NC}
+}
+
+test_ip6vxlan_tunsrc()
+{
+	TYPE=vxlan
+	DEV_NS=ip6vxlan00
+	DEV=ip6vxlan11
+	REMOTE_IP6=::bb
+	ret=0
+
+	check $TYPE
+	config_device
+	add_second_ip6
+	add_ip6vxlan_tunnel $REMOTE_IP6
+	ip link set dev veth1 mtu 1500
+	attach_bpf $DEV ip6vxlan_set_tunnel_src ip6vxlan_get_tunnel_src
+	# underlay
+	ping6 $PING_ARG ::11
+	# ip4 over ip6
+	ping $PING_ARG 10.1.1.100
+	check_err $?
+	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
+	check_err $?
+	cleanup
+
+	if [ $ret -ne 0 ]; then
+                echo -e ${RED}"FAIL: ip6$TYPE"${NC}
+                return 1
+        fi
+        echo -e ${GREEN}"PASS: ip6$TYPE"${NC}
 }
 
 attach_bpf()
@@ -816,6 +858,11 @@ bpf_tunnel_test()
 
 	echo "Testing VXLAN tunnel source..."
 	test_vxlan_tunsrc
+	errors=$(( $errors + $? ))
+
+
+	echo "Testing IP6VXLAN tunnel source..."
+	test_ip6vxlan_tunsrc
 	errors=$(( $errors + $? ))
 
 	return $errors
