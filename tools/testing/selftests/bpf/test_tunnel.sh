@@ -62,6 +62,11 @@ config_device()
 	ip addr add dev veth1 172.16.1.200/24
 }
 
+add_second_ip()
+{
+  ip addr add dev veth1 172.16.1.20/24
+}
+
 add_gre_tunnel()
 {
 	# at_ns0 namespace
@@ -164,7 +169,7 @@ add_vxlan_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE \
-		id 2 dstport 4789 gbp remote 172.16.1.200
+		id 2 dstport 4789 gbp remote $REMOTE_IP
 	ip netns exec at_ns0 \
 		ip link set dev $DEV_NS address 52:54:00:d9:01:00 up
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
@@ -408,6 +413,7 @@ test_vxlan()
 	TYPE=vxlan
 	DEV_NS=vxlan00
 	DEV=vxlan11
+	REMOTE_IP=172.16.1.200
 	ret=0
 
 	check $TYPE
@@ -661,6 +667,32 @@ test_xfrm_tunnel()
 	echo -e ${GREEN}"PASS: xfrm tunnel"${NC}
 }
 
+test_vxlan_tunsrc()
+{
+	TYPE=vxlan
+	DEV_NS=vxlan00
+	DEV=vxlan11
+	REMOTE_IP=172.16.1.20
+	ret=0
+
+	check $TYPE
+	config_device
+	add_second_ip
+	add_vxlan_tunnel
+	attach_bpf $DEV vxlan_set_tunnel_src vxlan_get_tunnel_src
+	ping $PING_ARG 10.1.1.100
+	check_err $?
+	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
+	check_err $?
+	cleanup
+
+	if [ $ret -ne 0 ]; then
+                echo -e ${RED}"FAIL: $TYPE"${NC}
+                return 1
+        fi
+        echo -e ${GREEN}"PASS: $TYPE"${NC}
+}
+
 attach_bpf()
 {
 	DEV=$1
@@ -780,6 +812,10 @@ bpf_tunnel_test()
 
 	echo "Testing IPSec tunnel..."
 	test_xfrm_tunnel
+	errors=$(( $errors + $? ))
+
+	echo "Testing VXLAN tunnel source..."
+	test_vxlan_tunsrc
 	errors=$(( $errors + $? ))
 
 	return $errors
