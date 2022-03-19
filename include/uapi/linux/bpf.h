@@ -1065,12 +1065,14 @@ enum bpf_link_type {
 #define BPF_F_ALLOW_MULTI	(1U << 1)
 #define BPF_F_REPLACE		(1U << 2)
 
+/* flags for BPF_PROG_LOAD command */
+enum {
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will perform strict alignment checking as if the kernel
  * has been built with CONFIG_EFFICIENT_UNALIGNED_ACCESS not set,
  * and NET_IP_ALIGN defined to 2.
  */
-#define BPF_F_STRICT_ALIGNMENT	(1U << 0)
+	BPF_F_STRICT_ALIGNMENT	= (1U << 0),
 
 /* If BPF_F_ANY_ALIGNMENT is used in BPF_PROF_LOAD command, the
  * verifier will allow any alignment whatsoever.  On platforms
@@ -1084,7 +1086,7 @@ enum bpf_link_type {
  * of an unaligned access the alignment check would trigger before
  * the one we are interested in.
  */
-#define BPF_F_ANY_ALIGNMENT	(1U << 1)
+	BPF_F_ANY_ALIGNMENT		= (1U << 1),
 
 /* BPF_F_TEST_RND_HI32 is used in BPF_PROG_LOAD command for testing purpose.
  * Verifier does sub-register def/use analysis and identifies instructions whose
@@ -1102,10 +1104,10 @@ enum bpf_link_type {
  * Then, if verifier is not doing correct analysis, such randomization will
  * regress tests to expose bugs.
  */
-#define BPF_F_TEST_RND_HI32	(1U << 2)
+	BPF_F_TEST_RND_HI32		= (1U << 2),
 
 /* The verifier internal test flag. Behavior is undefined */
-#define BPF_F_TEST_STATE_FREQ	(1U << 3)
+	BPF_F_TEST_STATE_FREQ	= (1U << 3),
 
 /* If BPF_F_SLEEPABLE is used in BPF_PROG_LOAD command, the verifier will
  * restrict map and helper usage for such programs. Sleepable BPF programs can
@@ -1113,12 +1115,13 @@ enum bpf_link_type {
  * Such programs are allowed to use helpers that may sleep like
  * bpf_copy_from_user().
  */
-#define BPF_F_SLEEPABLE		(1U << 4)
+	BPF_F_SLEEPABLE			= (1U << 4),
 
 /* If BPF_F_XDP_HAS_FRAGS is used in BPF_PROG_LOAD command, the loaded program
  * fully support xdp frags.
  */
-#define BPF_F_XDP_HAS_FRAGS	(1U << 5)
+	BPF_F_XDP_HAS_FRAGS		= (1U << 5),
+};
 
 /* link_create.kprobe_multi.flags used in LINK_CREATE command for
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
