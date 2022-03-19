@@ -252,7 +252,7 @@ parts::
   +----------------+--------+--------------------+
   (MSB)                                      (LSB)
 
-Three LSB bits store instruction class which is one of:
+The three least significant bits store instruction class which is one of:
 
   ===================     ===============
   Classic BPF classes     eBPF classes
@@ -284,7 +284,7 @@ The 4th bit encodes the source operand ...
 	BPF_SRC(code) == BPF_X - use 'src_reg' register as source operand
 	BPF_SRC(code) == BPF_K - use 32-bit immediate as source operand
 
-... and four MSB bits store operation code.
+... and the four most significant bits store operation code.
 
 If BPF_CLASS(code) == BPF_ALU or BPF_ALU64 [ in eBPF ], BPF_OP(code) is one of::
 

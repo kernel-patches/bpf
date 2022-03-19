@@ -42,7 +42,8 @@ Unused fields shall be cleared to zero.
 Instruction classes
 -------------------
 
-The three LSB bits of the 'opcode' field store the instruction class:
+The three least significant bits of the 'opcode' field store the instruction
+class:
 
   =========  =====  ===============================
   class      value  description
