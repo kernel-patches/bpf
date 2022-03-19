@@ -474,7 +474,7 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	struct bpf_htab *htab;
 	int err, i;
 
-	htab = kzalloc(sizeof(*htab), GFP_USER | __GFP_ACCOUNT);
+	htab = kzalloc(sizeof(*htab), map_flags_no_charge(GFP_USER, attr));
 	if (!htab)
 		return ERR_PTR(-ENOMEM);
 

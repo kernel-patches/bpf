@@ -557,7 +557,7 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 	    attr->value_size > LPM_VAL_SIZE_MAX)
 		return ERR_PTR(-EINVAL);
 
-	trie = kzalloc(sizeof(*trie), GFP_USER | __GFP_NOWARN | __GFP_ACCOUNT);
+	trie = kzalloc(sizeof(*trie), map_flags_no_charge(GFP_USER | __GFP_NOWARN, attr));
 	if (!trie)
 		return ERR_PTR(-ENOMEM);
 

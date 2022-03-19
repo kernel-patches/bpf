@@ -313,7 +313,7 @@ static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-EINVAL);
 
 	map = kmalloc_node(sizeof(struct bpf_cgroup_storage_map),
-			   __GFP_ZERO | GFP_USER | __GFP_ACCOUNT, numa_node);
+			   map_flags_no_charge(__GFP_ZERO | GFP_USER, attr), numa_node);
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 

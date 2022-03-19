@@ -1062,7 +1062,7 @@ static struct bpf_map *prog_array_map_alloc(union bpf_attr *attr)
 	struct bpf_array_aux *aux;
 	struct bpf_map *map;
 
-	aux = kzalloc(sizeof(*aux), GFP_KERNEL_ACCOUNT);
+	aux = kzalloc(sizeof(*aux), map_flags_no_charge(GFP_KERNEL, attr));
 	if (!aux)
 		return ERR_PTR(-ENOMEM);
 

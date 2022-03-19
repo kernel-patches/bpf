@@ -99,7 +99,7 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	    attr->map_flags & ~CPU_MAP_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
-	cmap = kzalloc(sizeof(*cmap), GFP_USER | __GFP_ACCOUNT);
+	cmap = kzalloc(sizeof(*cmap), map_flags_no_charge(GFP_USER, attr));
 	if (!cmap)
 		return ERR_PTR(-ENOMEM);
 
