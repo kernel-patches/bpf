@@ -2234,6 +2234,9 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 				 BPF_F_PROG_NO_CHARGE))
 		return -EINVAL;
 
+	if (attr->prog_flags & BPF_F_PROG_NO_CHARGE && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) &&
 	    (attr->prog_flags & BPF_F_ANY_ALIGNMENT) &&
 	    !bpf_capable())
