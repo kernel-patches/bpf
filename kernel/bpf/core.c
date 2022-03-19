@@ -144,12 +144,17 @@ EXPORT_SYMBOL_GPL(bpf_prog_alloc);
 
 int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 {
+	gfp_t gfp_flags = GFP_KERNEL | __GFP_NOWARN;
+
 	if (!prog->aux->nr_linfo || !prog->jit_requested)
 		return 0;
 
+	if (!prog->aux->no_charge)
+		gfp_flags |= __GFP_ACCOUNT;
+
 	prog->aux->jited_linfo = kvcalloc(prog->aux->nr_linfo,
 					  sizeof(*prog->aux->jited_linfo),
-					  GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+					  gfp_flags);
 	if (!prog->aux->jited_linfo)
 		return -ENOMEM;
 
@@ -224,7 +229,7 @@ void bpf_prog_fill_jited_linfo(struct bpf_prog *prog,
 struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 				  gfp_t gfp_extra_flags)
 {
-	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | gfp_extra_flags;
+	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO | gfp_extra_flags;
 	struct bpf_prog *fp;
 	u32 pages;
 
@@ -232,6 +237,9 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 	pages = size / PAGE_SIZE;
 	if (pages <= fp_old->pages)
 		return fp_old;
+
+	if (!fp_old->aux->no_charge)
+		gfp_flags |= __GFP_ACCOUNT;
 
 	fp = __vmalloc(size, gfp_flags);
 	if (fp) {

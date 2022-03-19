@@ -2218,9 +2218,10 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
-	int err;
+	gfp_t gfp_flags = GFP_USER;
 	char license[128];
 	bool is_gpl;
+	int err;
 
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
@@ -2305,7 +2306,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	}
 
 	/* plain bpf_prog allocation */
-	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER | __GFP_ACCOUNT);
+	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt),
+				prog_flags_no_charge(gfp_flags, attr));
 	if (!prog) {
 		if (dst_prog)
 			bpf_prog_put(dst_prog);
