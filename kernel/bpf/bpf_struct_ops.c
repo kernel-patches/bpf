@@ -591,17 +591,17 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		 */
 		(vt->size - sizeof(struct bpf_struct_ops_value));
 
-	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
+	attr->map_flags &= ~BPF_F_NUMA_NODE;
+	st_map = bpf_map_area_alloc(st_map_size, attr);
 	if (!st_map)
 		return ERR_PTR(-ENOMEM);
 
 	st_map->st_ops = st_ops;
 	map = &st_map->map;
 
-	st_map->uvalue = bpf_map_area_alloc(vt->size, NUMA_NO_NODE);
+	st_map->uvalue = bpf_map_area_alloc(vt->size, attr);
 	st_map->progs =
-		bpf_map_area_alloc(btf_type_vlen(t) * sizeof(struct bpf_prog *),
-				   NUMA_NO_NODE);
+		bpf_map_area_alloc(btf_type_vlen(t) * sizeof(struct bpf_prog *), attr);
 	st_map->image = bpf_jit_alloc_exec(PAGE_SIZE);
 	if (!st_map->uvalue || !st_map->progs || !st_map->image) {
 		bpf_struct_ops_map_free(map);

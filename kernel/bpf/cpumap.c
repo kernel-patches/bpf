@@ -113,8 +113,7 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 
 	/* Alloc array for possible remote "destination" CPUs */
 	cmap->cpu_map = bpf_map_area_alloc(cmap->map.max_entries *
-					   sizeof(struct bpf_cpu_map_entry *),
-					   cmap->map.numa_node);
+					   sizeof(struct bpf_cpu_map_entry *), attr);
 	if (!cmap->cpu_map)
 		goto free_cmap;
 

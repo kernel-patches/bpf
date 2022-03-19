@@ -63,7 +63,6 @@ static void xsk_map_sock_delete(struct xdp_sock *xs,
 static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 {
 	struct xsk_map *m;
-	int numa_node;
 	u64 size;
 
 	if (!capable(CAP_NET_ADMIN))
@@ -74,10 +73,9 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	    attr->map_flags & ~XSK_MAP_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
-	numa_node = bpf_map_attr_numa_node(attr);
 	size = struct_size(m, xsk_map, attr->max_entries);
 
-	m = bpf_map_area_alloc(size, numa_node);
+	m = bpf_map_area_alloc(size, attr);
 	if (!m)
 		return ERR_PTR(-ENOMEM);
 

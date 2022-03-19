@@ -49,8 +49,7 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	raw_spin_lock_init(&stab->lock);
 
 	stab->sks = bpf_map_area_alloc((u64) stab->map.max_entries *
-				       sizeof(struct sock *),
-				       stab->map.numa_node);
+					sizeof(struct sock *), attr);
 	if (!stab->sks) {
 		kfree(stab);
 		return ERR_PTR(-ENOMEM);
@@ -1093,8 +1092,7 @@ static struct bpf_map *sock_hash_alloc(union bpf_attr *attr)
 	}
 
 	htab->buckets = bpf_map_area_alloc(htab->buckets_num *
-					   sizeof(struct bpf_shtab_bucket),
-					   htab->map.numa_node);
+					   sizeof(struct bpf_shtab_bucket), attr);
 	if (!htab->buckets) {
 		err = -ENOMEM;
 		goto free_htab;

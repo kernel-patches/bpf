@@ -42,14 +42,15 @@ static inline int stack_map_data_size(struct bpf_map *map)
 		sizeof(struct bpf_stack_build_id) : sizeof(u64);
 }
 
-static int prealloc_elems_and_freelist(struct bpf_stack_map *smap)
+static int prealloc_elems_and_freelist(union bpf_attr *attr,
+				struct bpf_stack_map *smap)
 {
 	u64 elem_size = sizeof(struct stack_map_bucket) +
 			(u64)smap->map.value_size;
 	int err;
 
-	smap->elems = bpf_map_area_alloc(elem_size * smap->map.max_entries,
-					 smap->map.numa_node);
+	smap->elems = bpf_map_area_alloc(elem_size *
+					smap->map.max_entries, attr);
 	if (!smap->elems)
 		return -ENOMEM;
 
@@ -101,7 +102,7 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 
 	cost = n_buckets * sizeof(struct stack_map_bucket *) + sizeof(*smap);
 	cost += n_buckets * (value_size + sizeof(struct stack_map_bucket));
-	smap = bpf_map_area_alloc(cost, bpf_map_attr_numa_node(attr));
+	smap = bpf_map_area_alloc(cost, attr);
 	if (!smap)
 		return ERR_PTR(-ENOMEM);
 
@@ -113,7 +114,7 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 	if (err)
 		goto free_smap;
 
-	err = prealloc_elems_and_freelist(smap);
+	err = prealloc_elems_and_freelist(attr, smap);
 	if (err)
 		goto put_buffers;
 

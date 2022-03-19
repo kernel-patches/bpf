@@ -81,7 +81,6 @@ int array_map_alloc_check(union bpf_attr *attr)
 static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 {
 	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
-	int numa_node = bpf_map_attr_numa_node(attr);
 	u32 elem_size, index_mask, max_entries;
 	bool bypass_spec_v1 = bpf_bypass_spec_v1();
 	u64 array_size, mask64;
@@ -130,13 +129,13 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 		void *data;
 
 		/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
-		data = bpf_map_area_mmapable_alloc(array_size, numa_node);
+		data = bpf_map_area_mmapable_alloc(array_size, attr);
 		if (!data)
 			return ERR_PTR(-ENOMEM);
 		array = data + PAGE_ALIGN(sizeof(struct bpf_array))
 			- offsetof(struct bpf_array, value);
 	} else {
-		array = bpf_map_area_alloc(array_size, numa_node);
+		array = bpf_map_area_alloc(array_size, attr);
 	}
 	if (!array)
 		return ERR_PTR(-ENOMEM);

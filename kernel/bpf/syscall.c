@@ -295,7 +295,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
  * (e.g. in map update path) without taking care of setting the active
  * memory cgroup (see at bpf_map_kmalloc_node() for example).
  */
-static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
+static void *__bpf_map_area_alloc(u64 size, union bpf_attr *attr, bool mmapable)
 {
 	/* We really just want to fail instead of triggering OOM killer
 	 * under memory pressure, therefore we set __GFP_NORETRY to kmalloc,
@@ -308,8 +308,9 @@ static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
 	 */
 
 	const gfp_t gfp = __GFP_NOWARN | __GFP_ZERO | __GFP_ACCOUNT;
-	unsigned int flags = 0;
+	int numa_node = bpf_map_attr_numa_node(attr);
 	unsigned long align = 1;
+	unsigned int flags = 0;
 	void *area;
 
 	if (size >= SIZE_MAX)
@@ -332,14 +333,14 @@ static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
 			flags, numa_node, __builtin_return_address(0));
 }
 
-void *bpf_map_area_alloc(u64 size, int numa_node)
+void *bpf_map_area_alloc(u64 size, union bpf_attr *attr)
 {
-	return __bpf_map_area_alloc(size, numa_node, false);
+	return __bpf_map_area_alloc(size, attr, false);
 }
 
-void *bpf_map_area_mmapable_alloc(u64 size, int numa_node)
+void *bpf_map_area_mmapable_alloc(u64 size, union bpf_attr *attr)
 {
-	return __bpf_map_area_alloc(size, numa_node, true);
+	return __bpf_map_area_alloc(size, attr, true);
 }
 
 void bpf_map_area_free(void *area)
