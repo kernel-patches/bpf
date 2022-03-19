@@ -852,6 +852,9 @@ static int map_create(union bpf_attr *attr)
 	    attr->map_extra != 0)
 		return -EINVAL;
 
+	if (attr->map_flags & BPF_F_NO_CHARGE && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
 	f_flags = bpf_get_file_flag(attr->map_flags);
 	if (f_flags < 0)
 		return f_flags;
