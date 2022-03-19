@@ -1121,6 +1121,9 @@ enum {
  * fully support xdp frags.
  */
 	BPF_F_XDP_HAS_FRAGS		= (1U << 5),
+
+/* Don't charge memory to memcg */
+	BPF_F_PROG_NO_CHARGE	= (1U << 6),
 };
 
 /* link_create.kprobe_multi.flags used in LINK_CREATE command for

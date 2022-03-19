@@ -215,6 +215,13 @@ map_flags_no_charge(gfp_t flags, union bpf_attr *attr)
 }
 
 static inline gfp_t
+prog_flags_no_charge(gfp_t flags, union bpf_attr *attr)
+{
+	return flags |= (attr->prog_flags & BPF_F_PROG_NO_CHARGE) ?
+					0 : __GFP_ACCOUNT;
+}
+
+static inline gfp_t
 bpf_flags_no_charge(gfp_t flags, bool no_charge)
 {
 	return flags |= no_charge ? 0 : __GFP_ACCOUNT;
@@ -958,6 +965,7 @@ struct bpf_prog_aux {
 	u32 ctx_arg_info_size;
 	u32 max_rdonly_access;
 	u32 max_rdwr_access;
+	bool no_charge; /* dont' charge memory to memcg */
 	struct btf *attach_btf;
 	const struct bpf_ctx_arg_aux *ctx_arg_info;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
