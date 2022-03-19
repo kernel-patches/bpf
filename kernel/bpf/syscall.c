@@ -368,6 +368,7 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->map_flags = bpf_map_flags_retain_permanent(attr->map_flags);
 	map->numa_node = bpf_map_attr_numa_node(attr);
 	map->map_extra = attr->map_extra;
+	map->no_charge = attr->map_flags & BPF_F_NO_CHARGE;
 }
 
 static int bpf_map_alloc_id(struct bpf_map *map)

@@ -184,7 +184,8 @@ struct bpf_map {
 	char name[BPF_OBJ_NAME_LEN];
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	/* 14 bytes hole */
+	bool no_charge; /* Don't charge to memcg */
+	/* 13 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -206,6 +207,18 @@ struct bpf_map {
 		bool xdp_has_frags;
 	} owner;
 };
+
+static inline gfp_t
+map_flags_no_charge(gfp_t flags, union bpf_attr *attr)
+{
+	return flags |= (attr->map_flags & BPF_F_NO_CHARGE) ? 0 : __GFP_ACCOUNT;
+}
+
+static inline gfp_t
+bpf_flags_no_charge(gfp_t flags, bool no_charge)
+{
+	return flags |= no_charge ? 0 : __GFP_ACCOUNT;
+}
 
 static inline bool map_value_has_spin_lock(const struct bpf_map *map)
 {

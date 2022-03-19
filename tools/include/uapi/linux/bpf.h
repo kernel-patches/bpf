@@ -1225,6 +1225,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Don't charge memory to memcg */
+	BPF_F_NO_CHARGE		= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */
