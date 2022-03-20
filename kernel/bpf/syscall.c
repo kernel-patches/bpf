@@ -30,6 +30,7 @@
 #include <linux/pgtable.h>
 #include <linux/bpf_lsm.h>
 #include <linux/poll.h>
+#include <linux/sort.h>
 #include <linux/bpf-netns.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
@@ -851,6 +852,55 @@ int map_check_no_btf(const struct bpf_map *map,
 	return -ENOTSUPP;
 }
 
+static int map_off_arr_cmp(const void *_a, const void *_b)
+{
+	const u32 a = *(const u32 *)_a;
+	const u32 b = *(const u32 *)_b;
+
+	if (a < b)
+		return -1;
+	else if (a > b)
+		return 1;
+	return 0;
+}
+
+static void map_populate_off_arr(struct bpf_map *map)
+{
+	u32 i;
+
+	map->off_arr.cnt = 0;
+	if (map_value_has_spin_lock(map)) {
+		i = map->off_arr.cnt;
+
+		map->off_arr.field[i].off = map->spin_lock_off;
+		map->off_arr.field[i].sz = sizeof(struct bpf_spin_lock);
+		map->off_arr.cnt++;
+	}
+	if (map_value_has_timer(map)) {
+		i = map->off_arr.cnt;
+
+		map->off_arr.field[i].off = map->timer_off;
+		map->off_arr.field[i].sz = sizeof(struct bpf_timer);
+		map->off_arr.cnt++;
+	}
+	if (map_value_has_kptr(map)) {
+		struct bpf_map_value_off *tab = map->kptr_off_tab;
+		u32 j = map->off_arr.cnt;
+
+		for (i = 0; i < tab->nr_off; i++) {
+			map->off_arr.field[j + i].off = tab->off[i].offset;
+			map->off_arr.field[j + i].sz = sizeof(u64);
+		}
+		map->off_arr.cnt += tab->nr_off;
+	}
+
+	map->off_arr.field[map->off_arr.cnt++].off = map->value_size;
+	if (map->off_arr.cnt == 1)
+		return;
+	sort(map->off_arr.field, map->off_arr.cnt, sizeof(map->off_arr.field[0]),
+	     map_off_arr_cmp, NULL);
+}
+
 static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 			 u32 btf_key_id, u32 btf_value_id)
 {
@@ -1017,6 +1067,8 @@ static int map_create(union bpf_attr *attr)
 		map->btf_vmlinux_value_type_id =
 			attr->btf_vmlinux_value_type_id;
 	}
+
+	map_populate_off_arr(map);
 
 	err = security_bpf_map_alloc(map);
 	if (err)
