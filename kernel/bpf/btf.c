@@ -3410,6 +3410,7 @@ struct bpf_map_value_off *btf_find_kptr(const struct btf *btf,
 	/* btf_find_field requires array of size max + 1 */
 	struct btf_field_info info_arr[BPF_MAP_VALUE_OFF_MAX + 1];
 	struct bpf_map_value_off *tab;
+	struct module *mod = NULL;
 	int ret, i, nr_off;
 
 	/* Revisit stack usage when bumping BPF_MAP_VALUE_OFF_MAX */
@@ -3440,16 +3441,99 @@ struct bpf_map_value_off *btf_find_kptr(const struct btf *btf,
 			goto end;
 		}
 
+		/* Find and stash the function pointer for the destruction function that
+		 * needs to be eventually invoked from the map free path.
+		 */
+		if (info_arr[i].flags & BPF_MAP_VALUE_OFF_F_REF) {
+			const struct btf_type *dtor_func, *dtor_func_proto;
+			const struct btf_param *args;
+			const char *dtor_func_name;
+			unsigned long addr;
+			s32 dtor_btf_id;
+			u32 nr_args;
+
+			/* This call also serves as a whitelist of allowed objects that
+			 * can be used as a referenced pointer and be stored in a map at
+			 * the same time.
+			 */
+			dtor_btf_id = btf_find_dtor_kfunc(off_btf, id);
+			if (dtor_btf_id < 0) {
+				ret = dtor_btf_id;
+				btf_put(off_btf);
+				goto end;
+			}
+
+			dtor_func = btf_type_by_id(off_btf, dtor_btf_id);
+			if (!dtor_func || !btf_type_is_func(dtor_func)) {
+				ret = -EINVAL;
+				btf_put(off_btf);
+				goto end;
+			}
+
+			dtor_func_proto = btf_type_by_id(off_btf, dtor_func->type);
+			if (!dtor_func_proto || !btf_type_is_func_proto(dtor_func_proto)) {
+				ret = -EINVAL;
+				btf_put(off_btf);
+				goto end;
+			}
+
+			/* Make sure the prototype of the destructor kfunc is 'void func(type *)' */
+			t = btf_type_by_id(off_btf, dtor_func_proto->type);
+			if (!t || !btf_type_is_void(t)) {
+				ret = -EINVAL;
+				btf_put(off_btf);
+				goto end;
+			}
+
+			nr_args = btf_type_vlen(dtor_func_proto);
+			args = btf_params(dtor_func_proto);
+
+			t = NULL;
+			if (nr_args)
+				t = btf_type_by_id(off_btf, args[0].type);
+			/* Allow any pointer type, as width on targets Linux supports
+			 * will be same for all pointer types (i.e. sizeof(void *))
+			 */
+			if (nr_args != 1 || !t || !btf_type_is_ptr(t)) {
+				ret = -EINVAL;
+				btf_put(off_btf);
+				goto end;
+			}
+
+			if (btf_is_module(btf)) {
+				mod = btf_try_get_module(off_btf);
+				if (!mod) {
+					ret = -ENXIO;
+					btf_put(off_btf);
+					goto end;
+				}
+			}
+
+			dtor_func_name = __btf_name_by_offset(off_btf, dtor_func->name_off);
+			addr = kallsyms_lookup_name(dtor_func_name);
+			if (!addr) {
+				ret = -EINVAL;
+				module_put(mod);
+				btf_put(off_btf);
+				goto end;
+			}
+			tab->off[i].dtor = (void *)addr;
+		}
+
 		tab->off[i].offset = info_arr[i].off;
 		tab->off[i].btf_id = id;
 		tab->off[i].btf = off_btf;
+		tab->off[i].module = mod;
 		tab->off[i].flags = info_arr[i].flags;
 		tab->nr_off = i + 1;
 	}
 	return tab;
 end:
-	while (tab->nr_off--)
+	while (tab->nr_off--) {
 		btf_put(tab->off[tab->nr_off].btf);
+		if (tab->off[tab->nr_off].module)
+			module_put(tab->off[tab->nr_off].module);
+	}
 	kfree(tab);
 	return ERR_PTR(ret);
 }
