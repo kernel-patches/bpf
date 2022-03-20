@@ -487,6 +487,16 @@ struct bpf_func_proto {
 		};
 		u32 *arg_btf_id[5];
 	};
+	union {
+		struct {
+			bool arg1_release;
+			bool arg2_release;
+			bool arg3_release;
+			bool arg4_release;
+			bool arg5_release;
+		};
+		bool arg_release[5];
+	};
 	int *ret_btf_id; /* return value btf_id */
 	bool (*allowed)(const struct bpf_prog *prog);
 };
