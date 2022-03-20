@@ -14,7 +14,6 @@
 
 #include "cgroup_helpers.h"
 #include <bpf/bpf_endian.h>
-#include "bpf_rlimit.h"
 #include "bpf_util.h"
 
 #define CG_PATH		"/foo"

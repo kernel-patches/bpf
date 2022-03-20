@@ -20,7 +20,6 @@
 #include <bpf/bpf.h>
 
 #include "../../../include/linux/filter.h"
-#include "bpf_rlimit.h"
 #include "testing_helpers.h"
 
 static struct bpf_insn prog[BPF_MAXINSNS];

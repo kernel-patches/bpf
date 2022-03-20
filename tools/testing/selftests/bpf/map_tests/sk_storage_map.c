@@ -3,7 +3,6 @@
 #include <linux/compiler.h>
 #include <linux/err.h>
 
-#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <linux/btf.h>
@@ -395,24 +394,13 @@ static void stop_handler(int signum)
 
 static void test_sk_storage_map_stress_free(void)
 {
-	struct rlimit rlim_old, rlim_new = {};
 	int err;
-
-	getrlimit(RLIMIT_NOFILE, &rlim_old);
 
 	signal(SIGTERM, stop_handler);
 	signal(SIGINT, stop_handler);
 	if (runtime_s > 0) {
 		signal(SIGALRM, stop_handler);
 		alarm(runtime_s);
-	}
-
-	if (rlim_old.rlim_cur < nr_sk_threads * nr_sk_per_thread) {
-		rlim_new.rlim_cur = nr_sk_threads * nr_sk_per_thread + 128;
-		rlim_new.rlim_max = rlim_new.rlim_cur + 128;
-		err = setrlimit(RLIMIT_NOFILE, &rlim_new);
-		CHECK(err, "setrlimit(RLIMIT_NOFILE)", "rlim_new:%lu errno:%d",
-		      rlim_new.rlim_cur, errno);
 	}
 
 	err = do_sk_storage_map_stress_free();
@@ -423,9 +411,6 @@ static void test_sk_storage_map_stress_free(void)
 		signal(SIGALRM, SIG_DFL);
 		alarm(0);
 	}
-
-	if (rlim_new.rlim_cur)
-		setrlimit(RLIMIT_NOFILE, &rlim_old);
 
 	CHECK(err, "test_sk_storage_map_stress_free", "err:%d\n", err);
 }

@@ -11,8 +11,6 @@
 
 #include <bpf/bpf.h>
 
-#include "bpf_rlimit.h"
-
 #define LOG_SIZE (1 << 20)
 
 #define err(str...)	printf("ERROR: " str)

@@ -15,7 +15,6 @@
 
 #include "cgroup_helpers.h"
 #include "testing_helpers.h"
-#include "bpf_rlimit.h"
 
 #define DEV_CGROUP_PROG "./dev_cgroup.o"
 

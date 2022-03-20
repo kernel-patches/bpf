@@ -20,7 +20,6 @@
 
 #include "cgroup_helpers.h"
 #include "testing_helpers.h"
-#include "bpf_rlimit.h"
 
 #define CHECK(condition, tag, format...) ({		\
 	int __ret = !!(condition);			\

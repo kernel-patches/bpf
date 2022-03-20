@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <sys/sysinfo.h>
 
-#include "bpf_rlimit.h"
 #include "cgroup_helpers.h"
 #include "testing_helpers.h"
 
