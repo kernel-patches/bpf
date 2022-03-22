@@ -191,12 +191,15 @@ add_ip6vxlan_tunnel()
 	ip netns exec at_ns0 ip link set dev veth0 up
 	#ip -4 addr del 172.16.1.200 dev veth1
 	ip -6 addr add dev veth1 ::22/96
+	if [ "$2" == "2" ]; then
+		ip -6 addr add dev veth1 ::bb/96
+	fi
 	ip link set dev veth1 up
 
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE id 22 dstport 4789 \
-		local ::11 remote ::22
+		local ::11 remote $1
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip link set dev $DEV_NS up
 
@@ -231,7 +234,7 @@ add_ip6geneve_tunnel()
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE id 22 \
-		remote ::22     # geneve has no local option
+		remote ::22    # geneve has no local option
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
 	ip netns exec at_ns0 ip link set dev $DEV_NS up
 
@@ -394,7 +397,7 @@ test_ip6erspan()
 
 	check $TYPE
 	config_device
-	add_ip6erspan_tunnel $1
+	add_ip6erspan_tunnel
 	attach_bpf $DEV ip4ip6erspan_set_tunnel ip4ip6erspan_get_tunnel
 	ping6 $PING_ARG ::11
 	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
@@ -441,7 +444,7 @@ test_ip6vxlan()
 
 	check $TYPE
 	config_device
-	add_ip6vxlan_tunnel
+	add_ip6vxlan_tunnel ::22 1
 	ip link set dev veth1 mtu 1500
 	attach_bpf $DEV ip6vxlan_set_tunnel ip6vxlan_get_tunnel
 	# underlay
@@ -690,6 +693,34 @@ test_vxlan_tunsrc()
         echo -e ${GREEN}"PASS: ${TYPE}_tunsrc"${NC}
 }
 
+test_ip6vxlan_tunsrc()
+{
+	TYPE=vxlan
+	DEV_NS=ip6vxlan00
+	DEV=ip6vxlan11
+	ret=0
+
+	check $TYPE
+	config_device
+	add_ip6vxlan_tunnel ::bb 2
+	ip link set dev veth1 mtu 1500
+	attach_bpf $DEV ip6vxlan_set_tunnel_src ip6vxlan_get_tunnel_src
+	# underlay
+	ping6 $PING_ARG ::11
+	# ip4 over ip6
+	ping $PING_ARG 10.1.1.100
+	check_err $?
+	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
+	check_err $?
+	cleanup
+
+	if [ $ret -ne 0 ]; then
+                echo -e ${RED}"FAIL: ip6${TYPE}_tunsrc"${NC}
+                return 1
+        fi
+        echo -e ${GREEN}"PASS: ip6${TYPE}_tunsrc"${NC}
+}
+
 attach_bpf()
 {
 	DEV=$1
@@ -813,6 +844,10 @@ bpf_tunnel_test()
 
 	echo "Testing VXLAN tunnel source..."
 	test_vxlan_tunsrc
+	errors=$(( $errors + $? ))
+
+	echo "Testing IP6VXLAN tunnel source..."
+	test_ip6vxlan_tunsrc
 	errors=$(( $errors + $? ))
 
 	return $errors

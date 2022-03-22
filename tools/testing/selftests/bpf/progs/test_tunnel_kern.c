@@ -740,4 +740,55 @@ int _vxlan_get_tunnel_src(struct __sk_buff *skb)
 	return TC_ACT_OK;
 }
 
+SEC("ip6vxlan_set_tunnel_src")
+int _ip6vxlan_set_tunnel_src(struct __sk_buff *skb)
+{
+	struct bpf_tunnel_key key;
+	int ret;
+
+	__builtin_memset(&key, 0x0, sizeof(key));
+	key.local_ipv6[3] = bpf_htonl(0xbb); /* ::bb */
+	key.remote_ipv6[3] = bpf_htonl(0x11); /* ::11 */
+	key.tunnel_id = 22;
+	key.tunnel_tos = 0;
+	key.tunnel_ttl = 64;
+
+	ret = bpf_skb_set_tunnel_key(skb, &key, sizeof(key),
+				     BPF_F_TUNINFO_IPV6);
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	return TC_ACT_OK;
+}
+
+SEC("ip6vxlan_get_tunnel_src")
+int _ip6vxlan_get_tunnel_src(struct __sk_buff *skb)
+{
+	char fmt[] = "key %d remote ip6 ::%x source ip6 ::%x\n";
+	char fmt2[] = "label %x\n";
+	struct bpf_tunnel_key key;
+	int ret;
+
+	ret = bpf_skb_get_tunnel_key(skb, &key, sizeof(key),
+				     BPF_F_TUNINFO_IPV6);
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	bpf_trace_printk(fmt, sizeof(fmt),
+			 key.tunnel_id, key.remote_ipv6[3], key.local_ipv6[3]);
+	bpf_trace_printk(fmt2, sizeof(fmt2),
+			 key.tunnel_label);
+
+	if (bpf_ntohl(key.local_ipv6[3]) != 0xbb) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	return TC_ACT_OK;
+}
+
 char _license[] SEC("license") = "GPL";
