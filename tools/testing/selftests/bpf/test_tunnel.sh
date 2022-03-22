@@ -161,10 +161,15 @@ add_vxlan_tunnel()
 	# on L3 packet, as a result not applying to ARP packets,
 	# causing errors at get_tunnel_{key/opt}.
 
+	# add a secondary ip
+	if [ "$2" == "2" ]; then
+		ip addr add dev veth1 172.16.1.20/24
+	fi
+
 	# at_ns0 namespace
 	ip netns exec at_ns0 \
 		ip link add dev $DEV_NS type $TYPE \
-		id 2 dstport 4789 gbp remote 172.16.1.200
+		id 2 dstport 4789 gbp remote $1
 	ip netns exec at_ns0 \
 		ip link set dev $DEV_NS address 52:54:00:d9:01:00 up
 	ip netns exec at_ns0 ip addr add dev $DEV_NS 10.1.1.100/24
@@ -412,7 +417,7 @@ test_vxlan()
 
 	check $TYPE
 	config_device
-	add_vxlan_tunnel
+	add_vxlan_tunnel 172.16.1.200 1
 	attach_bpf $DEV vxlan_set_tunnel vxlan_get_tunnel
 	ping $PING_ARG 10.1.1.100
 	check_err $?
@@ -661,6 +666,30 @@ test_xfrm_tunnel()
 	echo -e ${GREEN}"PASS: xfrm tunnel"${NC}
 }
 
+test_vxlan_tunsrc()
+{
+	TYPE=vxlan
+	DEV_NS=vxlan00
+	DEV=vxlan11
+	ret=0
+
+	check $TYPE
+	config_device
+	add_vxlan_tunnel 172.16.1.20 2
+	attach_bpf $DEV vxlan_set_tunnel_src vxlan_get_tunnel_src
+	ping $PING_ARG 10.1.1.100
+	check_err $?
+	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
+	check_err $?
+	cleanup
+
+	if [ $ret -ne 0 ]; then
+                echo -e ${RED}"FAIL: ${TYPE}_tunsrc"${NC}
+                return 1
+        fi
+        echo -e ${GREEN}"PASS: ${TYPE}_tunsrc"${NC}
+}
+
 attach_bpf()
 {
 	DEV=$1
@@ -780,6 +809,10 @@ bpf_tunnel_test()
 
 	echo "Testing IPSec tunnel..."
 	test_xfrm_tunnel
+	errors=$(( $errors + $? ))
+
+	echo "Testing VXLAN tunnel source..."
+	test_vxlan_tunsrc
 	errors=$(( $errors + $? ))
 
 	return $errors

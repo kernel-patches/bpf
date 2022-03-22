@@ -676,4 +676,68 @@ int _xfrm_get_state(struct __sk_buff *skb)
 	return TC_ACT_OK;
 }
 
+SEC("vxlan_set_tunnel_src")
+int _vxlan_set_tunnel_src(struct __sk_buff *skb)
+{
+	int ret;
+	struct bpf_tunnel_key key;
+	struct vxlan_metadata md;
+
+	__builtin_memset(&key, 0x0, sizeof(key));
+	key.local_ipv4 = 0xac100114; /* 172.16.1.20 */
+	key.remote_ipv4 = 0xac100164; /* 172.16.1.100 */
+	key.tunnel_id = 2;
+	key.tunnel_tos = 0;
+	key.tunnel_ttl = 64;
+
+	ret = bpf_skb_set_tunnel_key(skb, &key, sizeof(key),
+				     BPF_F_ZERO_CSUM_TX);
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	md.gbp = 0x800FF; /* Set VXLAN Group Policy extension */
+	ret = bpf_skb_set_tunnel_opt(skb, &md, sizeof(md));
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	return TC_ACT_OK;
+}
+
+SEC("vxlan_get_tunnel_src")
+int _vxlan_get_tunnel_src(struct __sk_buff *skb)
+{
+	int ret;
+	struct bpf_tunnel_key key;
+	struct vxlan_metadata md;
+	char fmt[] = "key %d remote ip 0x%x source ip 0x%x\n";
+	char fmt2[] = "vxlan gbp 0x%x\n";
+
+	ret = bpf_skb_get_tunnel_key(skb, &key, sizeof(key), 0);
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	ret = bpf_skb_get_tunnel_opt(skb, &md, sizeof(md));
+	if (ret < 0) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+
+	bpf_trace_printk(fmt, sizeof(fmt),
+			 key.tunnel_id, key.remote_ipv4, key.local_ipv4);
+	bpf_trace_printk(fmt2, sizeof(fmt2),
+			 md.gbp);
+
+	if (key.local_ipv4 != 0xac100114) {
+		ERROR(ret);
+		return TC_ACT_SHOT;
+	}
+	return TC_ACT_OK;
+}
+
 char _license[] SEC("license") = "GPL";
