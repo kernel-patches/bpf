@@ -435,8 +435,12 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	if (old_sdata && (map_flags & BPF_F_LOCK)) {
 		copy_map_value_locked(&smap->map, old_sdata->data, value,
 				      false);
-		selem = SELEM(old_sdata);
-		goto unlock;
+		raw_spin_unlock_irqrestore(&local_storage->lock, flags);
+		if (selem) {
+			mem_uncharge(smap, owner, smap->elem_size);
+			kfree(selem);
+		}
+		return old_sdata;
 	}
 
 	if (gfp_flags != GFP_KERNEL) {
@@ -466,10 +470,9 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	if (old_sdata) {
 		bpf_selem_unlink_map(SELEM(old_sdata));
 		bpf_selem_unlink_storage_nolock(local_storage, SELEM(old_sdata),
-						false);
+						gfp_flags == GFP_KERNEL);
 	}
 
-unlock:
 	raw_spin_unlock_irqrestore(&local_storage->lock, flags);
 	return SDATA(selem);
 
