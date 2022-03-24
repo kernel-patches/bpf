@@ -1549,6 +1549,10 @@ bpf_map_alloc_percpu(const struct bpf_map *map, size_t size, size_t align,
 	return __alloc_percpu_gfp(size, align, flags);
 }
 #endif
+size_t bpf_map_mmapable_alloc_size(size_t size, size_t offset);
+void *bpf_map_mmapable_kzalloc(const struct bpf_map *map, size_t size,
+			       size_t offset, gfp_t flags);
+void bpf_map_mmapable_kfree(void *ptr);
 
 extern int sysctl_unprivileged_bpf_disabled;
 

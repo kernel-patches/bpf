@@ -473,6 +473,73 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 }
 #endif
 
+/* Given an address 'addr', return an address A such that A + offset is
+ * page aligned. The distance between 'addr' and that page boundary
+ * (i.e. A + offset) must be >= offset + sizeof(ptr).
+ */
+static unsigned long mmapable_alloc_ret_addr(void *addr, size_t offset)
+{
+	const size_t ptr_size = sizeof(void *);
+
+	return PAGE_ALIGN((unsigned long)addr + offset + ptr_size) - offset;
+}
+
+/* Given an offset and size, return the minimal allocation size, such that it's
+ * guaranteed to contains an address where address + offset is page aligned and
+ * [address + offset, address + offset + size] is covered in the allocated area
+ */
+size_t bpf_map_mmapable_alloc_size(size_t offset, size_t size)
+{
+	const size_t ptr_size = sizeof(void *);
+
+	return offset + ptr_size + PAGE_ALIGN(size) + PAGE_SIZE;
+}
+
+/* Allocate a chunk of memory and return an address in the allocated area, such
+ * that address + offset is page aligned and address + offset + PAGE_ALIGN(size)
+ * is within the allocated area.
+ */
+void *bpf_map_mmapable_kzalloc(const struct bpf_map *map, size_t offset,
+			       size_t size, gfp_t flags)
+{
+	const size_t ptr_size = sizeof(void *);
+	size_t alloc_size;
+	void *alloc_ptr;
+	unsigned long addr, ret_addr;
+
+	if (!IS_ALIGNED(offset, ptr_size)) {
+		pr_warn("bpf_map_mmapable_kzalloc: offset (%lx) is not aligned with ptr_size (%lu)\n",
+			offset, ptr_size);
+		return NULL;
+	}
+
+	alloc_size = bpf_map_mmapable_alloc_size(offset, size);
+	alloc_ptr = bpf_map_kzalloc(map, alloc_size, flags);
+	if (!alloc_ptr)
+		return NULL;
+
+	ret_addr = mmapable_alloc_ret_addr(alloc_ptr, offset);
+
+	/* Save the raw allocation address just below the address to be returned. */
+	addr = ret_addr - ptr_size;
+	*(void **)addr = alloc_ptr;
+
+	return (void *)ret_addr;
+}
+
+/* Free the memory allocated from bpf_map_mmapable_kzalloc() */
+void bpf_map_mmapable_kfree(void *ptr)
+{
+	const size_t ptr_size = sizeof(void *);
+	unsigned long addr;
+
+	if (!IS_ALIGNED((unsigned long)ptr, ptr_size))
+		return;
+
+	addr = (unsigned long)ptr - ptr_size;
+	kfree(*(void **)addr);
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {

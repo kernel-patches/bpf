@@ -74,7 +74,8 @@ struct bpf_local_storage_elem {
 	struct hlist_node snode;	/* Linked to bpf_local_storage */
 	struct bpf_local_storage __rcu *local_storage;
 	struct rcu_head rcu;
-	/* 8 bytes hole */
+	u32 map_flags;
+	/* 4 bytes hole */
 	/* The data is stored in another cacheline to minimize
 	 * the number of cachelines access during a cache hit.
 	 */
@@ -168,4 +169,6 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 void bpf_local_storage_free_rcu(struct rcu_head *rcu);
 
+int bpf_local_storage_mmap(struct bpf_local_storage_map *smap, void *data,
+			   struct vm_area_struct *vma);
 #endif /* _BPF_LOCAL_STORAGE_H */

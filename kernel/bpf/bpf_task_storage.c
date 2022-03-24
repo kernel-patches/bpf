@@ -307,6 +307,45 @@ static void task_storage_map_free(struct bpf_map *map)
 	bpf_local_storage_map_free(smap, &bpf_task_storage_busy);
 }
 
+static int task_storage_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
+{
+	struct bpf_local_storage_map *smap;
+	struct bpf_local_storage_data *sdata;
+	int err;
+
+	if (!(map->map_flags & BPF_F_MMAPABLE))
+		return -EINVAL;
+
+	rcu_read_lock();
+	if (!bpf_task_storage_trylock()) {
+		rcu_read_unlock();
+		return -EBUSY;
+	}
+
+	smap = (struct bpf_local_storage_map *)map;
+	sdata = task_storage_lookup(current, map, true);
+	if (sdata) {
+		err = bpf_local_storage_mmap(smap, sdata->data, vma);
+		goto unlock;
+	}
+
+	/* only allocate new storage, when the task is refcounted */
+	if (refcount_read(&current->usage)) {
+		sdata = bpf_local_storage_update(current, smap, NULL,
+						 BPF_NOEXIST, GFP_ATOMIC);
+		if (IS_ERR(sdata)) {
+			err = PTR_ERR(sdata);
+			goto unlock;
+		}
+	}
+
+	err = bpf_local_storage_mmap(smap, sdata->data, vma);
+unlock:
+	bpf_task_storage_unlock();
+	rcu_read_unlock();
+	return err;
+}
+
 static int task_storage_map_btf_id;
 const struct bpf_map_ops task_storage_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -321,6 +360,7 @@ const struct bpf_map_ops task_storage_map_ops = {
 	.map_btf_name = "bpf_local_storage_map",
 	.map_btf_id = &task_storage_map_btf_id,
 	.map_owner_storage_ptr = task_storage_ptr,
+	.map_mmap = &task_storage_map_mmap,
 };
 
 const struct bpf_func_proto bpf_task_storage_get_proto = {

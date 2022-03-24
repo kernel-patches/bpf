@@ -15,7 +15,7 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
 
-#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE)
+#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE | BPF_F_MMAPABLE)
 
 static struct bpf_local_storage_map_bucket *
 select_bucket(struct bpf_local_storage_map *smap,
@@ -66,13 +66,26 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 		void *value, bool charge_mem, gfp_t gfp_flags)
 {
 	struct bpf_local_storage_elem *selem;
+	struct bpf_map *map = &smap->map;
 
 	if (charge_mem && mem_charge(smap, owner, smap->elem_size))
 		return NULL;
 
-	selem = bpf_map_kzalloc(&smap->map, smap->elem_size,
-				gfp_flags | __GFP_NOWARN);
+	if (map->map_flags & BPF_F_MMAPABLE) {
+		size_t offset;
+
+		offset = offsetof(struct bpf_local_storage_elem, sdata) +
+			offsetof(struct bpf_local_storage_data, data);
+		selem = bpf_map_mmapable_kzalloc(&smap->map, offset,
+						 map->value_size,
+						 gfp_flags | __GFP_NOWARN);
+	} else {
+		selem = bpf_map_kzalloc(&smap->map, smap->elem_size,
+					gfp_flags | __GFP_NOWARN);
+	}
+
 	if (selem) {
+		selem->map_flags = map->map_flags;
 		if (value)
 			memcpy(SDATA(selem)->data, value, smap->map.value_size);
 		return selem;
@@ -92,12 +105,24 @@ void bpf_local_storage_free_rcu(struct rcu_head *rcu)
 	kfree_rcu(local_storage, rcu);
 }
 
+static void selem_mmapable_free_rcu(struct rcu_head *rcu)
+{
+	struct bpf_local_storage_elem *selem;
+
+	selem = container_of(rcu, struct bpf_local_storage_elem, rcu);
+	bpf_map_mmapable_kfree(selem);
+}
+
 static void bpf_selem_free_rcu(struct rcu_head *rcu)
 {
 	struct bpf_local_storage_elem *selem;
 
 	selem = container_of(rcu, struct bpf_local_storage_elem, rcu);
-	kfree_rcu(selem, rcu);
+	if (selem->map_flags & BPF_F_MMAPABLE) {
+		call_rcu(rcu, selem_mmapable_free_rcu);
+	} else {
+		kfree_rcu(selem, rcu);
+	}
 }
 
 /* local_storage->lock must be held and selem->local_storage == local_storage.
@@ -383,7 +408,10 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 		err = bpf_local_storage_alloc(owner, smap, selem, gfp_flags);
 		if (err) {
-			kfree(selem);
+			if (map_flags & BPF_F_MMAPABLE)
+				bpf_map_mmapable_kfree(selem);
+			else
+				kfree(selem);
 			mem_uncharge(smap, owner, smap->elem_size);
 			return ERR_PTR(err);
 		}
@@ -623,8 +651,17 @@ struct bpf_local_storage_map *bpf_local_storage_map_alloc(union bpf_attr *attr)
 		raw_spin_lock_init(&smap->buckets[i].lock);
 	}
 
-	smap->elem_size =
-		sizeof(struct bpf_local_storage_elem) + attr->value_size;
+	if (attr->map_flags & BPF_F_MMAPABLE) {
+		size_t offset;
+
+		offset = offsetof(struct bpf_local_storage_elem, sdata) +
+			offsetof(struct bpf_local_storage_data, data);
+		smap->elem_size = bpf_map_mmapable_alloc_size(offset,
+							      attr->value_size);
+	} else {
+		smap->elem_size =
+			sizeof(struct bpf_local_storage_elem) + attr->value_size;
+	}
 
 	return smap;
 }
@@ -644,4 +681,26 @@ int bpf_local_storage_map_check_btf(const struct bpf_map *map,
 		return -EINVAL;
 
 	return 0;
+}
+
+int bpf_local_storage_mmap(struct bpf_local_storage_map *smap, void *data,
+			   struct vm_area_struct *vma)
+{
+	struct bpf_map *map;
+	unsigned long pfn;
+	unsigned long count;
+	unsigned long size;
+
+	map = &smap->map;
+	size = PAGE_ALIGN(map->value_size);
+	if (vma->vm_pgoff * PAGE_SIZE + (vma->vm_end - vma->vm_start) > size)
+		return -EINVAL;
+
+	if (!IS_ALIGNED((unsigned long)data, PAGE_SIZE))
+		return -EINVAL;
+
+	pfn = virt_to_phys(data) >> PAGE_SHIFT;
+	count = size >> PAGE_SHIFT;
+	return remap_pfn_range(vma, vma->vm_start, pfn + vma->vm_pgoff,
+			       count << PAGE_SHIFT, vma->vm_page_prot);
 }
