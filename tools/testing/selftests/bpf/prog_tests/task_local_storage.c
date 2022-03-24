@@ -6,8 +6,10 @@
 #include <sys/syscall.h>   /* For SYS_xxx definitions */
 #include <sys/types.h>
 #include <test_progs.h>
+#include <sys/mman.h>
 #include "task_local_storage.skel.h"
 #include "task_local_storage_exit_creds.skel.h"
+#include "task_local_storage_mmapable.skel.h"
 #include "task_ls_recursion.skel.h"
 
 static void test_sys_enter_exit(void)
@@ -81,6 +83,40 @@ out:
 	task_ls_recursion__destroy(skel);
 }
 
+#define MAGIC_VALUE 0xabcd1234
+
+static void test_mmapable(void)
+{
+	struct task_local_storage_mmapable *skel;
+	const long page_size = sysconf(_SC_PAGE_SIZE);
+	int fd, err;
+	void *ptr;
+
+	skel = task_local_storage_mmapable__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+
+	fd = bpf_map__fd(skel->maps.mmapable_map);
+	ptr = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (!ASSERT_NEQ(ptr, MAP_FAILED, "mmap"))
+		goto out;
+
+	skel->bss->target_pid = syscall(SYS_gettid);
+
+	err = task_local_storage_mmapable__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		goto unmap;
+
+	syscall(SYS_gettid);
+
+	ASSERT_EQ(*(u64 *)ptr, MAGIC_VALUE, "value");
+
+unmap:
+	munmap(ptr, page_size);
+out:
+	task_local_storage_mmapable__destroy(skel);
+}
+
 void test_task_local_storage(void)
 {
 	if (test__start_subtest("sys_enter_exit"))
@@ -89,4 +125,6 @@ void test_task_local_storage(void)
 		test_exit_creds();
 	if (test__start_subtest("recursion"))
 		test_recursion();
+	if (test__start_subtest("mmapable"))
+		test_mmapable();
 }
