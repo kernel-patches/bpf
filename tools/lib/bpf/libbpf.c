@@ -10097,9 +10097,16 @@ static void gen_kprobe_legacy_event_name(char *buf, size_t buf_sz,
 					 const char *kfunc_name, size_t offset)
 {
 	static int index = 0;
+	int i;
 
 	snprintf(buf, buf_sz, "libbpf_%u_%s_0x%zx_%d", getpid(), kfunc_name, offset,
 		 __sync_fetch_and_add(&index, 1));
+
+	/* sanitize .isra.$n symbols */
+	for (i = 0; buf[i]; i++) {
+		if (!isalnum(buf[i]))
+			buf[i] = '_';
+	}
 }
 
 static int add_kprobe_event_legacy(const char *probe_name, bool retprobe,
@@ -10189,7 +10196,7 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	offset = OPTS_GET(opts, offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
 
-	legacy = determine_kprobe_perf_type() < 0;
+	legacy = OPTS_GET(opts, legacy, false) || determine_kprobe_perf_type() < 0;
 	if (!legacy) {
 		pfd = perf_event_open_probe(false /* uprobe */, retprobe,
 					    func_name, offset,
