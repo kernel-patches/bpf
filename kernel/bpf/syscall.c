@@ -2459,6 +2459,7 @@ void bpf_link_inc(struct bpf_link *link)
 {
 	atomic64_inc(&link->refcnt);
 }
+EXPORT_SYMBOL_GPL(bpf_link_inc);
 
 /* bpf_link_free is guaranteed to be called from process context */
 static void bpf_link_free(struct bpf_link *link)
