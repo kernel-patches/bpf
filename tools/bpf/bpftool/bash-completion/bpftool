@@ -1019,6 +1019,10 @@ _bpftool()
                     _filedir
                     return 0
                     ;;
+                module)
+                    _filedir
+                    return 0
+                    ;;
                 *)
                     [[ $prev == $object ]] && \
                         COMPREPLY=( $( compgen -W 'object skeleton subskeleton help min_core_btf' -- "$cur" ) )

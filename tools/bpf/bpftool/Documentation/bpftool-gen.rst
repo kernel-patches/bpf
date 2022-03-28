@@ -27,6 +27,7 @@ GEN COMMANDS
 |	**bpftool** **gen skeleton** *FILE* [**name** *OBJECT_NAME*]
 |	**bpftool** **gen subskeleton** *FILE* [**name** *OBJECT_NAME*]
 |	**bpftool** **gen min_core_btf** *INPUT* *OUTPUT* *OBJECT* [*OBJECT*...]
+|	**bpftool** **gen module** *FILE*
 |	**bpftool** **gen help**
 
 DESCRIPTION
@@ -194,6 +195,13 @@ DESCRIPTION
 		  application portable to different kernel versions.
 
 		  Check examples bellow for more information how to use it.
+
+	**bpftool** **gen module** *FILE*
+		  Generate the code of a kernel module including the light
+		  skeleton of an eBPF program to preload. The only variable part
+		  is the path of the light skeleton. All kernel modules call
+		  load_skel() and free_objs_and_skel() respectively in the init
+		  and fini module entrypoints.
 
 	**bpftool gen help**
 		  Print short help message.
