@@ -1,0 +1,97 @@
+--- gen_preload_methods.lskel.h	2022-03-28 13:40:22.042715754 +0200
++++ gen_preload_methods.preload.lskel.h	2022-03-28 13:40:22.530715750 +0200
+@@ -221,4 +221,94 @@ gen_preload_methods_lskel__assert(struct
+ #endif
+ }
+ 
++static struct bpf_link *dump_bpf_map_link;
++static struct bpf_map *ringbuf_map;
++static struct gen_preload_methods_lskel *skel;
++
++static void free_objs_and_skel(void)
++{
++	bpf_preload_set_ops("gen_preload_methods_lskel", THIS_MODULE, NULL);
++
++	if (!IS_ERR_OR_NULL(dump_bpf_map_link))
++		bpf_link_put(dump_bpf_map_link);
++	if (!IS_ERR_OR_NULL(ringbuf_map))
++		bpf_map_put(ringbuf_map);
++
++	gen_preload_methods_lskel__destroy(skel);
++}
++
++static int preload(struct dentry *parent)
++{
++	int err;
++
++	bpf_link_inc(dump_bpf_map_link);
++	bpf_map_inc(ringbuf_map);
++
++	err = bpf_obj_do_pin_kernel(parent, "dump_bpf_map",
++				    dump_bpf_map_link,
++				    BPF_TYPE_LINK);
++	if (err)
++		goto undo;
++
++	err = bpf_obj_do_pin_kernel(parent, "ringbuf",
++				    ringbuf_map,
++				    BPF_TYPE_MAP);
++	if (err)
++		goto undo;
++
++	return 0;
++undo:
++	bpf_link_put(dump_bpf_map_link);
++	bpf_map_put(ringbuf_map);
++	return err;
++}
++
++static struct bpf_preload_ops ops = {
++	.preload = preload,
++	.owner = THIS_MODULE,
++};
++
++static int load_skel(void)
++{
++	int err = -ENOMEM;
++
++	if (!bpf_preload_set_ops("gen_preload_methods_lskel", THIS_MODULE, &ops))
++		return 0;
++
++	skel = gen_preload_methods_lskel__open();
++	if (!skel)
++		goto out;
++
++	err = gen_preload_methods_lskel__load(skel);
++	if (err)
++		goto out;
++
++	err = gen_preload_methods_lskel__attach(skel);
++	if (err)
++		goto out;
++
++	dump_bpf_map_link = bpf_link_get_from_fd(skel->links.dump_bpf_map_fd);
++	if (IS_ERR(dump_bpf_map_link)) {
++		err = PTR_ERR(dump_bpf_map_link);
++		goto out;
++	}
++
++	ringbuf_map = bpf_map_get(skel->maps.ringbuf.map_fd);
++	if (IS_ERR(ringbuf_map)) {
++		err = PTR_ERR(ringbuf_map);
++		goto out;
++	}
++
++	/* Avoid taking over stdin/stdout/stderr of init process. Zeroing out
++	 * makes skel_closenz() a no-op later in iterators_bpf__destroy().
++	 */
++	close_fd(skel->links.dump_bpf_map_fd);
++	skel->links.dump_bpf_map_fd = 0;
++
++	return 0;
++out:
++	free_objs_and_skel();
++	return err;
++}
++
+ #endif /* __GEN_PRELOAD_METHODS_LSKEL_SKEL_H__ */
