@@ -655,6 +655,8 @@ static void codegen_destroy(struct bpf_object *obj, const char *obj_name)
 static void codegen_preload_vars(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
+	struct bpf_map *map;
+	char ident[256];
 
 	codegen("\
 		\n\
@@ -668,6 +670,19 @@ static void codegen_preload_vars(struct bpf_object *obj, const char *obj_name)
 			", bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+			static struct bpf_map *%s_map;			    \n\
+			", ident);
+	}
+
 	codegen("\
 		\n\
 		static struct %s *skel;					    \n\
@@ -677,6 +692,8 @@ static void codegen_preload_vars(struct bpf_object *obj, const char *obj_name)
 static void codegen_preload_free(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
+	struct bpf_map *map;
+	char ident[256];
 
 	codegen("\
 		\n\
@@ -693,6 +710,20 @@ static void codegen_preload_free(struct bpf_object *obj, const char *obj_name)
 			", bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+				if (!IS_ERR_OR_NULL(%1$s_map))		    \n\
+					bpf_map_put(%1$s_map);		    \n\
+			", ident);
+	}
+
 	codegen("\
 		\n\
 		\n\
@@ -705,6 +736,8 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
 	const char *link_name;
+	struct bpf_map *map;
+	char ident[256];
 
 	codegen("\
 		\n\
@@ -720,6 +753,19 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 			\n\
 				bpf_link_inc(%s_link);			    \n\
 			", bpf_program__name(prog));
+	}
+
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+				bpf_map_inc(%s_map);			    \n\
+			", ident);
 	}
 
 	bpf_object__for_each_program(prog, obj) {
@@ -743,6 +789,24 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 			", link_name, bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+			\n\
+				err = bpf_obj_do_pin_kernel(parent, \"%1$s\",	\n\
+							    %1$s_map,		\n\
+							    BPF_TYPE_MAP);	\n\
+				if (err)					\n\
+					goto undo;				\n\
+			", ident);
+	}
+
 	codegen("\
 		\n\
 		\n\
@@ -757,6 +821,19 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 			", bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+				bpf_map_put(%s_map);			    \n\
+			", ident);
+	}
+
 	codegen("\
 		\n\
 			return err;					    \n\
@@ -767,6 +844,8 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
+	struct bpf_map *map;
+	char ident[256];
 
 	codegen("\
 		\n\
@@ -798,6 +877,24 @@ static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
 					goto out;						\n\
 				}								\n\
 			", bpf_program__name(prog));
+	}
+
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+
+		if (bpf_map__is_internal(map))
+			continue;
+
+		codegen("\
+			\n\
+			\n\
+				%1$s_map = bpf_map_get(skel->maps.%1$s.map_fd);			\n\
+				if (IS_ERR(%1$s_map)) {						\n\
+					err = PTR_ERR(%1$s_map);				\n\
+					goto out;						\n\
+				}								\n\
+			", ident);
 	}
 
 	codegen("\
