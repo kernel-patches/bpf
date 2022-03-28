@@ -764,6 +764,69 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 		");
 }
 
+static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
+{
+	struct bpf_program *prog;
+
+	codegen("\
+		\n\
+		\n\
+		static int load_skel(void)				    \n\
+		{							    \n\
+			int err;					    \n\
+		\n\
+			skel = %1$s__open();				    \n\
+			if (!skel)					    \n\
+				return -ENOMEM;				    \n\
+		\n\
+			err = %1$s__load(skel);				    \n\
+			if (err)					    \n\
+				goto out;				    \n\
+		\n\
+			err = %1$s__attach(skel);			    \n\
+			if (err)					    \n\
+				goto out;				    \n\
+		", obj_name);
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+			\n\
+				%1$s_link = bpf_link_get_from_fd(skel->links.%1$s_fd);		\n\
+				if (IS_ERR(%1$s_link)) {					\n\
+					err = PTR_ERR(%1$s_link);				\n\
+					goto out;						\n\
+				}								\n\
+			", bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+		\n\
+			/* Avoid taking over stdin/stdout/stderr of init process. Zeroing out	\n\
+			 * makes skel_closenz() a no-op later in iterators_bpf__destroy().	\n\
+			 */									\n\
+		");
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+				close_fd(skel->links.%1$s_fd);		    \n\
+				skel->links.%1$s_fd = 0;		    \n\
+			", bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+		\n\
+			return 0;					    \n\
+		out:							    \n\
+			free_objs_and_skel();				    \n\
+			return err;					    \n\
+		}							    \n\
+		");
+}
+
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard)
 {
 	DECLARE_LIBBPF_OPTS(gen_loader_opts, opts);
@@ -916,6 +979,7 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		codegen_preload_vars(obj, obj_name);
 		codegen_preload_free(obj, obj_name);
 		codegen_preload(obj, obj_name);
+		codegen_preload_load(obj, obj_name);
 	}
 
 	codegen("\

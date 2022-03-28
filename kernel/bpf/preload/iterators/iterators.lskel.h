@@ -474,4 +474,46 @@ undo:
 	return err;
 }
 
+static int load_skel(void)
+{
+	int err;
+
+	skel = iterators_bpf__open();
+	if (!skel)
+		return -ENOMEM;
+
+	err = iterators_bpf__load(skel);
+	if (err)
+		goto out;
+
+	err = iterators_bpf__attach(skel);
+	if (err)
+		goto out;
+
+	dump_bpf_map_link = bpf_link_get_from_fd(skel->links.dump_bpf_map_fd);
+	if (IS_ERR(dump_bpf_map_link)) {
+		err = PTR_ERR(dump_bpf_map_link);
+		goto out;
+	}
+
+	dump_bpf_prog_link = bpf_link_get_from_fd(skel->links.dump_bpf_prog_fd);
+	if (IS_ERR(dump_bpf_prog_link)) {
+		err = PTR_ERR(dump_bpf_prog_link);
+		goto out;
+	}
+
+	/* Avoid taking over stdin/stdout/stderr of init process. Zeroing out
+	 * makes skel_closenz() a no-op later in iterators_bpf__destroy().
+	 */
+	close_fd(skel->links.dump_bpf_map_fd);
+	skel->links.dump_bpf_map_fd = 0;
+	close_fd(skel->links.dump_bpf_prog_fd);
+	skel->links.dump_bpf_prog_fd = 0;
+
+	return 0;
+out:
+	free_objs_and_skel();
+	return err;
+}
+
 #endif /* __ITERATORS_BPF_SKEL_H__ */
