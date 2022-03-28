@@ -4,7 +4,7 @@ config USERMODE_DRIVER
 	default n
 
 menuconfig BPF_PRELOAD
-	bool "Preload BPF file system with kernel specific program and map iterators"
+	bool "Preload eBPF programs"
 	depends on BPF
 	depends on BPF_SYSCALL
 	# The dependency on !COMPILE_TEST prevents it from being enabled
@@ -12,15 +12,26 @@ menuconfig BPF_PRELOAD
 	depends on !COMPILE_TEST
 	select USERMODE_DRIVER
 	help
-	  This builds kernel module with several embedded BPF programs that are
-	  pinned into BPF FS mount point as human readable files that are
-	  useful in debugging and introspection of BPF programs and maps.
+	  This enables preloading eBPF programs chosen from the kernel
+	  configuration or from the kernel option bpf_preload_list=.
 
 if BPF_PRELOAD
 config BPF_PRELOAD_UMD
-	tristate "bpf_preload kernel module"
+	tristate "Preload BPF file system with kernel specific program and map iterators"
 	default m
 	help
-	  This builds bpf_preload kernel module with embedded BPF programs for
-	  introspection in bpffs.
+	  This builds bpf_preload kernel module with several embedded BPF
+	  programs that are pinned into BPF FS mount point as human readable
+	  files that are useful in debugging and introspection of BPF programs
+	  and maps.
+
+config BPF_PRELOAD_LIST
+	string "Ordered list of eBPF programs to preload"
+	default "bpf_preload"
+	help
+	  A comma-separated list of eBPF programs to preload. Any eBPF program
+	  left off this list will be ignored. This can be controlled at boot
+	  with the "bpf_preload_list=" parameter.
+
+	  If unsure, leave this as the default.
 endif

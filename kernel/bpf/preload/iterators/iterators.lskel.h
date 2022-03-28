@@ -440,6 +440,8 @@ static struct iterators_bpf *skel;
 
 static void free_objs_and_skel(void)
 {
+	bpf_preload_set_ops("bpf_preload", THIS_MODULE, NULL);
+
 	if (!IS_ERR_OR_NULL(dump_bpf_map_link))
 		bpf_link_put(dump_bpf_map_link);
 	if (!IS_ERR_OR_NULL(dump_bpf_prog_link))
@@ -481,11 +483,14 @@ static struct bpf_preload_ops ops = {
 
 static int load_skel(void)
 {
-	int err;
+	int err = -ENOMEM;
+
+	if (!bpf_preload_set_ops("bpf_preload", THIS_MODULE, &ops))
+		return 0;
 
 	skel = iterators_bpf__open();
 	if (!skel)
-		return -ENOMEM;
+		goto out;
 
 	err = iterators_bpf__load(skel);
 	if (err)

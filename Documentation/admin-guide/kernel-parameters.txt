@@ -482,6 +482,14 @@
 	bgrt_disable	[ACPI][X86]
 			Disable BGRT to avoid flickering OEM logo.
 
+	bpf_preload_list= [BPF]
+			Specify a list of eBPF programs to preload.
+			Format: obj_name1,obj_name2,...
+			Default: bpf_preload
+
+			Specify the list of eBPF programs to preload when the
+			bpf filesystem is mounted.
+
 	bttv.card=	[HW,V4L] bttv (bt848 + bt878 based grabber cards)
 	bttv.radio=	Most important insmod options are available as
 			kernel args too.

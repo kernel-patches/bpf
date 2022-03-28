@@ -22,7 +22,14 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_preload.h>
 
-static char *bpf_preload_list_str;
+static char *bpf_preload_list_str = CONFIG_BPF_PRELOAD_LIST;
+
+static int __init bpf_preload_list_setup(char *str)
+{
+	bpf_preload_list_str = str;
+	return 1;
+}
+__setup("bpf_preload_list=", bpf_preload_list_setup);
 
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
@@ -732,7 +739,12 @@ static bool bpf_preload_list_mod_get(void)
 	struct bpf_preload_ops_item *cur;
 	bool ret = false;
 
-	ret |= bpf_preload_mod_get("bpf_preload", &bpf_preload_ops);
+	/*
+	 * Keep the legacy registration method, but do not attempt to load
+	 * bpf_preload.ko, as it switched to the new registration method.
+	 */
+	if (bpf_preload_ops)
+		ret |= bpf_preload_mod_get("bpf_preload", &bpf_preload_ops);
 
 	list_for_each_entry(cur, &preload_list, list)
 		ret |= bpf_preload_mod_get(cur->obj_name, &cur->ops);

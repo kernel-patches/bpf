@@ -700,7 +700,10 @@ static void codegen_preload_free(struct bpf_object *obj, const char *obj_name)
 		\n\
 		static void free_objs_and_skel(void)			    \n\
 		{							    \n\
-		");
+			bpf_preload_set_ops(\"%s\", THIS_MODULE, NULL);     \n\
+		\n\
+		", !strcmp(obj_name, "iterators_bpf") ?
+		   "bpf_preload" : obj_name);
 
 	bpf_object__for_each_program(prog, obj) {
 		codegen("\
@@ -864,11 +867,14 @@ static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
 		\n\
 		static int load_skel(void)				    \n\
 		{							    \n\
-			int err;					    \n\
+			int err = -ENOMEM;				    \n\
+		\n\
+			if (!bpf_preload_set_ops(\"%2$s\", THIS_MODULE, &ops))	\n\
+				return 0;				    \n\
 		\n\
 			skel = %1$s__open();				    \n\
 			if (!skel)					    \n\
-				return -ENOMEM;				    \n\
+				goto out;				    \n\
 		\n\
 			err = %1$s__load(skel);				    \n\
 			if (err)					    \n\
@@ -877,7 +883,8 @@ static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
 			err = %1$s__attach(skel);			    \n\
 			if (err)					    \n\
 				goto out;				    \n\
-		", obj_name);
+		", obj_name, !strcmp(obj_name, "iterators_bpf") ?
+			     "bpf_preload" : obj_name);
 
 	bpf_object__for_each_program(prog, obj) {
 		codegen("\
