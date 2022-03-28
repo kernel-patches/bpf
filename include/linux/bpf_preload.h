@@ -11,6 +11,10 @@ struct bpf_preload_ops {
 	int (*preload)(struct bpf_preload_info *);
 	struct module *owner;
 };
+
+#ifdef CONFIG_BPF_SYSCALL
 extern struct bpf_preload_ops *bpf_preload_ops;
+#endif /*CONFIG_BPF_SYSCALL*/
+
 #define BPF_PRELOAD_LINKS 2
 #endif

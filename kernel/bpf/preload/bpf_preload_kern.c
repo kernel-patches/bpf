@@ -2,7 +2,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/init.h>
 #include <linux/module.h>
-#include "bpf_preload.h"
+#include <linux/bpf_preload.h>
 #include "iterators/iterators.lskel.h"
 
 static struct bpf_link *maps_link, *progs_link;

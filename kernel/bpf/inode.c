@@ -20,7 +20,7 @@
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
-#include "preload/bpf_preload.h"
+#include <linux/bpf_preload.h>
 
 enum bpf_type {
 	BPF_TYPE_UNSPEC	= 0,
