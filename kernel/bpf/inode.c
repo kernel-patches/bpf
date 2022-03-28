@@ -22,13 +22,6 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_preload.h>
 
-enum bpf_type {
-	BPF_TYPE_UNSPEC	= 0,
-	BPF_TYPE_PROG,
-	BPF_TYPE_MAP,
-	BPF_TYPE_LINK,
-};
-
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
 	switch (type) {
@@ -415,9 +408,8 @@ static const struct inode_operations bpf_dir_iops = {
 };
 
 /* pin object into bpffs */
-static int bpf_obj_do_pin_kernel(struct dentry *parent,
-				 const char *name, void *raw,
-				 enum bpf_type type)
+int bpf_obj_do_pin_kernel(struct dentry *parent, const char *name, void *raw,
+			  enum bpf_type type)
 {
 	umode_t mode = S_IFREG | S_IRUSR;
 	struct dentry *dentry;
@@ -449,6 +441,7 @@ static int bpf_obj_do_pin_kernel(struct dentry *parent,
 	inode_unlock(parent->d_inode);
 	return ret;
 }
+EXPORT_SYMBOL(bpf_obj_do_pin_kernel);
 
 static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 			  enum bpf_type type)
@@ -724,8 +717,7 @@ static DEFINE_MUTEX(bpf_preload_lock);
 
 static int populate_bpffs(struct dentry *parent)
 {
-	struct bpf_preload_info objs[BPF_PRELOAD_LINKS] = {};
-	int err = 0, i;
+	int err = 0;
 
 	/* grab the mutex to make sure the kernel interactions with bpf_preload
 	 * are serialized
@@ -736,19 +728,7 @@ static int populate_bpffs(struct dentry *parent)
 	if (!bpf_preload_mod_get())
 		goto out;
 
-	err = bpf_preload_ops->preload(objs);
-	if (err)
-		goto out_put;
-	for (i = 0; i < BPF_PRELOAD_LINKS; i++) {
-		bpf_link_inc(objs[i].link);
-		err = bpf_obj_do_pin_kernel(parent, objs[i].link_name,
-					    objs[i].link, BPF_TYPE_LINK);
-		if (err) {
-			bpf_link_put(objs[i].link);
-			goto out_put;
-		}
-	}
-out_put:
+	err = bpf_preload_ops->preload(parent);
 	bpf_preload_mod_put();
 out:
 	mutex_unlock(&bpf_preload_lock);

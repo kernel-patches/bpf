@@ -17,13 +17,28 @@ static void free_links_and_skel(void)
 	iterators_bpf__destroy(skel);
 }
 
-static int preload(struct bpf_preload_info *obj)
+static int preload(struct dentry *parent)
 {
-	strlcpy(obj[0].link_name, "maps.debug", sizeof(obj[0].link_name));
-	obj[0].link = maps_link;
-	strlcpy(obj[1].link_name, "progs.debug", sizeof(obj[1].link_name));
-	obj[1].link = progs_link;
+	int err;
+
+	bpf_link_inc(maps_link);
+	bpf_link_inc(progs_link);
+
+	err = bpf_obj_do_pin_kernel(parent, "maps.debug", maps_link,
+				    BPF_TYPE_LINK);
+	if (err)
+		goto undo;
+
+	err = bpf_obj_do_pin_kernel(parent, "progs.debug", progs_link,
+				    BPF_TYPE_LINK);
+	if (err)
+		goto undo;
+
 	return 0;
+undo:
+	bpf_link_put(maps_link);
+	bpf_link_put(progs_link);
+	return err;
 }
 
 static struct bpf_preload_ops ops = {
