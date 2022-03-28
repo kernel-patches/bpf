@@ -414,9 +414,10 @@ static const struct inode_operations bpf_dir_iops = {
 	.unlink		= simple_unlink,
 };
 
-/* pin iterator link into bpffs */
-static int bpf_iter_link_pin_kernel(struct dentry *parent,
-				    const char *name, struct bpf_link *link)
+/* pin object into bpffs */
+static int bpf_obj_do_pin_kernel(struct dentry *parent,
+				 const char *name, void *raw,
+				 enum bpf_type type)
 {
 	umode_t mode = S_IFREG | S_IRUSR;
 	struct dentry *dentry;
@@ -428,8 +429,22 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 		inode_unlock(parent->d_inode);
 		return PTR_ERR(dentry);
 	}
-	ret = bpf_mkobj_ops(dentry, mode, link, &bpf_link_iops,
-			    &bpf_iter_fops);
+
+	switch (type) {
+	case BPF_TYPE_PROG:
+		ret = bpf_mkprog(dentry, mode, raw);
+		break;
+	case BPF_TYPE_MAP:
+		ret = bpf_mkmap(dentry, mode, raw);
+		break;
+	case BPF_TYPE_LINK:
+		ret = bpf_mklink(dentry, mode, raw);
+		break;
+	default:
+		ret = -EOPNOTSUPP;
+		break;
+	}
+
 	dput(dentry);
 	inode_unlock(parent->d_inode);
 	return ret;
@@ -726,8 +741,8 @@ static int populate_bpffs(struct dentry *parent)
 		goto out_put;
 	for (i = 0; i < BPF_PRELOAD_LINKS; i++) {
 		bpf_link_inc(objs[i].link);
-		err = bpf_iter_link_pin_kernel(parent,
-					       objs[i].link_name, objs[i].link);
+		err = bpf_obj_do_pin_kernel(parent, objs[i].link_name,
+					    objs[i].link, BPF_TYPE_LINK);
 		if (err) {
 			bpf_link_put(objs[i].link);
 			goto out_put;
