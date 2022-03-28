@@ -685,35 +685,91 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 struct bpf_preload_ops *bpf_preload_ops;
 EXPORT_SYMBOL_GPL(bpf_preload_ops);
 
-static bool bpf_preload_mod_get(void)
+struct bpf_preload_ops_item {
+	struct list_head list;
+	struct bpf_preload_ops *ops;
+	char *obj_name;
+};
+
+static LIST_HEAD(preload_list);
+static DEFINE_MUTEX(bpf_preload_lock);
+
+static bool bpf_preload_mod_get(const char *obj_name,
+				struct bpf_preload_ops **ops)
 {
-	/* If bpf_preload.ko wasn't loaded earlier then load it now.
-	 * When bpf_preload is built into vmlinux the module's __init
+	/* If the kernel preload module wasn't loaded earlier then load it now.
+	 * When the preload code is built into vmlinux the module's __init
 	 * function will populate it.
 	 */
-	if (!bpf_preload_ops) {
-		request_module("bpf_preload");
-		if (!bpf_preload_ops)
+	if (!*ops) {
+		mutex_unlock(&bpf_preload_lock);
+		request_module(obj_name);
+		mutex_lock(&bpf_preload_lock);
+		if (!*ops)
 			return false;
 	}
 	/* And grab the reference, so the module doesn't disappear while the
 	 * kernel is interacting with the kernel module and its UMD.
 	 */
-	if (!try_module_get(bpf_preload_ops->owner)) {
+	if (!try_module_get((*ops)->owner)) {
 		pr_err("bpf_preload module get failed.\n");
 		return false;
 	}
 	return true;
 }
 
-static void bpf_preload_mod_put(void)
+static void bpf_preload_mod_put(struct bpf_preload_ops *ops)
 {
-	if (bpf_preload_ops)
-		/* now user can "rmmod bpf_preload" if necessary */
-		module_put(bpf_preload_ops->owner);
+	if (ops)
+		/* now user can "rmmod <kernel module>" if necessary */
+		module_put(ops->owner);
 }
 
-static DEFINE_MUTEX(bpf_preload_lock);
+static bool bpf_preload_list_mod_get(void)
+{
+	struct bpf_preload_ops_item *cur;
+	bool ret = false;
+
+	ret |= bpf_preload_mod_get("bpf_preload", &bpf_preload_ops);
+
+	list_for_each_entry(cur, &preload_list, list)
+		ret |= bpf_preload_mod_get(cur->obj_name, &cur->ops);
+
+	return ret;
+}
+
+static int bpf_preload_list(struct dentry *parent)
+{
+	struct bpf_preload_ops_item *cur;
+	int err;
+
+	if (bpf_preload_ops) {
+		err = bpf_preload_ops->preload(parent);
+		if (err)
+			return err;
+	}
+
+	list_for_each_entry(cur, &preload_list, list) {
+		if (!cur->ops)
+			continue;
+
+		err = cur->ops->preload(parent);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static void bpf_preload_list_mod_put(void)
+{
+	struct bpf_preload_ops_item *cur;
+
+	list_for_each_entry(cur, &preload_list, list)
+		bpf_preload_mod_put(cur->ops);
+
+	bpf_preload_mod_put(bpf_preload_ops);
+}
 
 static int populate_bpffs(struct dentry *parent)
 {
@@ -724,12 +780,13 @@ static int populate_bpffs(struct dentry *parent)
 	 */
 	mutex_lock(&bpf_preload_lock);
 
-	/* if bpf_preload.ko wasn't built into vmlinux then load it */
-	if (!bpf_preload_mod_get())
+	/* if kernel preload mods weren't built into vmlinux then load them */
+	if (!bpf_preload_list_mod_get())
 		goto out;
 
-	err = bpf_preload_ops->preload(parent);
-	bpf_preload_mod_put();
+	err = bpf_preload_list(parent);
+	bpf_preload_list_mod_put();
+
 out:
 	mutex_unlock(&bpf_preload_lock);
 	return err;
