@@ -1,0 +1,7 @@
+*.mod
+*.mod.c
+*.o
+.ko
+/Module.symvers
+/modules.order
+bpf_testmod_preload.c

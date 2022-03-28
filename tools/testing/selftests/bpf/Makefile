@@ -82,7 +82,7 @@ TEST_PROGS_EXTENDED := with_addr.sh \
 TEST_GEN_PROGS_EXTENDED = test_sock_addr test_skb_cgroup_id_user \
 	flow_dissector_load test_flow_dissector test_tcp_check_syncookie_user \
 	test_lirc_mode2_user xdping test_cpp runqslower bench bpf_testmod.ko \
-	xdpxceiver xdp_redirect_multi
+	xdpxceiver xdp_redirect_multi bpf_testmod_preload.ko
 
 TEST_CUSTOM_PROGS = $(OUTPUT)/urandom_read
 
@@ -110,6 +110,7 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
 	$(Q)$(MAKE) -C bpf_testmod clean
+	$(Q)$(MAKE) -C bpf_testmod_preload clean
 	$(Q)$(MAKE) docs-clean
 endef
 
@@ -502,7 +503,7 @@ TRUNNER_EXTRA_SOURCES := test_progs.c cgroup_helpers.c trace_helpers.c	\
 			 btf_helpers.c flow_dissector_load.h		\
 			 cap_helpers.c
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
-		       ima_setup.sh					\
+		       ima_setup.sh $(OUTPUT)/bpf_testmod_preload.ko	\
 		       $(wildcard progs/btf_dump_test_case_*.c)
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
@@ -575,9 +576,19 @@ $(OUTPUT)/bench: $(OUTPUT)/bench.o \
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
 
+bpf_testmod_preload/bpf_testmod_preload.c: $(OUTPUT)/gen_preload_methods.preload.lskel.h $(BPFTOOL) $(TRUNNER_BPF_LSKELSP)
+	$(call msg,GEN-MOD,,$@)
+	$(BPFTOOL) gen module $< > $@
+
+$(OUTPUT)/bpf_testmod_preload.ko: bpf_testmod_preload/bpf_testmod_preload.c
+	$(call msg,MOD,,$@)
+	$(Q)$(RM) bpf_testmod_preload/bpf_testmod_preload.ko # force re-compilation
+	$(Q)$(MAKE) $(submake_extras) -C bpf_testmod_preload
+	$(Q)cp bpf_testmod_preload/bpf_testmod_preload.ko $@
+
 EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\
 	feature bpftool							\
-	$(addprefix $(OUTPUT)/,*.o *.skel.h *.lskel.h *.subskel.h no_alu32 bpf_gcc bpf_testmod.ko)
+	$(addprefix $(OUTPUT)/,*.o *.skel.h *.lskel.h *.subskel.h no_alu32 bpf_gcc bpf_testmod.ko bpf_testmod_preload.ko)
 
 .PHONY: docs docs-clean
