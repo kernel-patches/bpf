@@ -5,30 +5,6 @@
 #include <linux/bpf_preload.h>
 #include "iterators/iterators.lskel.h"
 
-static int preload(struct dentry *parent)
-{
-	int err;
-
-	bpf_link_inc(dump_bpf_map_link);
-	bpf_link_inc(dump_bpf_prog_link);
-
-	err = bpf_obj_do_pin_kernel(parent, "maps.debug", dump_bpf_map_link,
-				    BPF_TYPE_LINK);
-	if (err)
-		goto undo;
-
-	err = bpf_obj_do_pin_kernel(parent, "progs.debug", dump_bpf_prog_link,
-				    BPF_TYPE_LINK);
-	if (err)
-		goto undo;
-
-	return 0;
-undo:
-	bpf_link_put(dump_bpf_map_link);
-	bpf_link_put(dump_bpf_prog_link);
-	return err;
-}
-
 static struct bpf_preload_ops ops = {
 	.preload = preload,
 	.owner = THIS_MODULE,

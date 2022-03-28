@@ -701,6 +701,69 @@ static void codegen_preload_free(struct bpf_object *obj, const char *obj_name)
 		", obj_name);
 }
 
+static void codegen_preload(struct bpf_object *obj, const char *obj_name)
+{
+	struct bpf_program *prog;
+	const char *link_name;
+
+	codegen("\
+		\n\
+		\n\
+		static int preload(struct dentry *parent)		    \n\
+		{							    \n\
+			int err;					    \n\
+		\n\
+		");
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+				bpf_link_inc(%s_link);			    \n\
+			", bpf_program__name(prog));
+	}
+
+	bpf_object__for_each_program(prog, obj) {
+		link_name = bpf_program__name(prog);
+		/* These need to be hardcoded for compatibility reasons. */
+		if (!strcmp(obj_name, "iterators_bpf")) {
+			if (!strcmp(link_name, "dump_bpf_map"))
+				link_name = "maps.debug";
+			else if (!strcmp(link_name, "dump_bpf_prog"))
+				link_name = "progs.debug";
+		}
+
+		codegen("\
+			\n\
+			\n\
+				err = bpf_obj_do_pin_kernel(parent, \"%s\",	\n\
+							    %s_link,		\n\
+							    BPF_TYPE_LINK);	\n\
+				if (err)					\n\
+					goto undo;				\n\
+			", link_name, bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+		\n\
+			return 0;					    \n\
+		undo:							    \n\
+		");
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+				bpf_link_put(%s_link);			    \n\
+			", bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+			return err;					    \n\
+		}							    \n\
+		");
+}
+
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard)
 {
 	DECLARE_LIBBPF_OPTS(gen_loader_opts, opts);
@@ -852,6 +915,7 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 	if (gen_preload_methods) {
 		codegen_preload_vars(obj, obj_name);
 		codegen_preload_free(obj, obj_name);
+		codegen_preload(obj, obj_name);
 	}
 
 	codegen("\
