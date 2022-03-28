@@ -740,9 +740,30 @@ static bool bpf_preload_list_mod_get(void)
 	return ret;
 }
 
+static struct dentry *create_subdir(struct dentry *parent, const char *name)
+{
+	struct dentry *dentry;
+	int err;
+
+	inode_lock(parent->d_inode);
+	dentry = lookup_one_len(name, parent, strlen(name));
+	if (IS_ERR(dentry))
+		goto out;
+
+	err = vfs_mkdir(&init_user_ns, parent->d_inode, dentry, 0755);
+	if (err) {
+		dput(dentry);
+		dentry = ERR_PTR(err);
+	}
+out:
+	inode_unlock(parent->d_inode);
+	return dentry;
+}
+
 static int bpf_preload_list(struct dentry *parent)
 {
 	struct bpf_preload_ops_item *cur;
+	struct dentry *cur_parent;
 	int err;
 
 	if (bpf_preload_ops) {
@@ -755,7 +776,19 @@ static int bpf_preload_list(struct dentry *parent)
 		if (!cur->ops)
 			continue;
 
-		err = cur->ops->preload(parent);
+		cur_parent = parent;
+
+		if (strcmp(cur->obj_name, "bpf_preload")) {
+			cur_parent = create_subdir(parent, cur->obj_name);
+			if (IS_ERR(cur_parent))
+				cur_parent = parent;
+		}
+
+		err = cur->ops->preload(cur_parent);
+
+		if (cur_parent != parent)
+			dput(cur_parent);
+
 		if (err)
 			return err;
 	}
