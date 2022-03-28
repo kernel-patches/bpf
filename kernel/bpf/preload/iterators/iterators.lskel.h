@@ -438,4 +438,14 @@ static struct bpf_link *dump_bpf_map_link;
 static struct bpf_link *dump_bpf_prog_link;
 static struct iterators_bpf *skel;
 
+static void free_objs_and_skel(void)
+{
+	if (!IS_ERR_OR_NULL(dump_bpf_map_link))
+		bpf_link_put(dump_bpf_map_link);
+	if (!IS_ERR_OR_NULL(dump_bpf_prog_link))
+		bpf_link_put(dump_bpf_prog_link);
+
+	iterators_bpf__destroy(skel);
+}
+
 #endif /* __ITERATORS_BPF_SKEL_H__ */

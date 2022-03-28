@@ -674,6 +674,33 @@ static void codegen_preload_vars(struct bpf_object *obj, const char *obj_name)
 		", obj_name);
 }
 
+static void codegen_preload_free(struct bpf_object *obj, const char *obj_name)
+{
+	struct bpf_program *prog;
+
+	codegen("\
+		\n\
+		\n\
+		static void free_objs_and_skel(void)			    \n\
+		{							    \n\
+		");
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+				if (!IS_ERR_OR_NULL(%1$s_link))		    \n\
+					bpf_link_put(%1$s_link);	    \n\
+			", bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+		\n\
+			%s__destroy(skel);				    \n\
+		}							    \n\
+		", obj_name);
+}
+
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard)
 {
 	DECLARE_LIBBPF_OPTS(gen_loader_opts, opts);
@@ -824,6 +851,7 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 
 	if (gen_preload_methods) {
 		codegen_preload_vars(obj, obj_name);
+		codegen_preload_free(obj, obj_name);
 	}
 
 	codegen("\

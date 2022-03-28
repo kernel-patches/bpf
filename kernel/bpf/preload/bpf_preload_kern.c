@@ -5,15 +5,6 @@
 #include <linux/bpf_preload.h>
 #include "iterators/iterators.lskel.h"
 
-static void free_links_and_skel(void)
-{
-	if (!IS_ERR_OR_NULL(dump_bpf_map_link))
-		bpf_link_put(dump_bpf_map_link);
-	if (!IS_ERR_OR_NULL(dump_bpf_prog_link))
-		bpf_link_put(dump_bpf_prog_link);
-	iterators_bpf__destroy(skel);
-}
-
 static int preload(struct dentry *parent)
 {
 	int err;
@@ -75,7 +66,7 @@ static int load_skel(void)
 	skel->links.dump_bpf_prog_fd = 0;
 	return 0;
 out:
-	free_links_and_skel();
+	free_objs_and_skel();
 	return err;
 }
 
@@ -93,7 +84,7 @@ static int __init load(void)
 static void __exit fini(void)
 {
 	bpf_preload_ops = NULL;
-	free_links_and_skel();
+	free_objs_and_skel();
 }
 late_initcall(load);
 module_exit(fini);
