@@ -22,6 +22,8 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_preload.h>
 
+static char *bpf_preload_list_str;
+
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
 	switch (type) {
@@ -855,6 +857,100 @@ static struct file_system_type bpf_fs_type = {
 	.kill_sb	= kill_litter_super,
 };
 
+static struct bpf_preload_ops_item *
+bpf_preload_list_lookup_entry(const char *obj_name)
+{
+	struct bpf_preload_ops_item *cur;
+
+	list_for_each_entry(cur, &preload_list, list)
+		if (!strcmp(obj_name, cur->obj_name))
+			return cur;
+
+	return NULL;
+}
+
+static int bpf_preload_list_add_entry(const char *obj_name,
+				      struct bpf_preload_ops *ops)
+{
+	struct bpf_preload_ops_item *new;
+
+	if (!*obj_name)
+		return 0;
+
+	new = kzalloc(sizeof(*new), GFP_NOFS);
+	if (!new)
+		return -ENOMEM;
+
+	new->obj_name = kstrdup(obj_name, GFP_NOFS);
+	if (!new->obj_name) {
+		kfree(new);
+		return -ENOMEM;
+	}
+
+	new->ops = ops;
+
+	list_add(&new->list, &preload_list);
+	return 0;
+}
+
+bool bpf_preload_set_ops(const char *obj_name, struct module *owner,
+			 struct bpf_preload_ops *ops)
+{
+	struct bpf_preload_ops_item *found_item;
+	bool set = false;
+
+	mutex_lock(&bpf_preload_lock);
+
+	found_item = bpf_preload_list_lookup_entry(obj_name);
+	if (found_item) {
+		if (!found_item->ops ||
+		    (found_item->ops && found_item->ops->owner == owner)) {
+			found_item->ops = ops;
+			set = true;
+		}
+	}
+
+	mutex_unlock(&bpf_preload_lock);
+	return set;
+}
+EXPORT_SYMBOL_GPL(bpf_preload_set_ops);
+
+static int __init bpf_init_preload_list(void)
+{
+	char *str_ptr = bpf_preload_list_str, *str_end;
+	struct bpf_preload_ops_item *cur, *tmp;
+	char obj_name[NAME_MAX + 1];
+	int ret;
+
+	while (str_ptr && *str_ptr) {
+		str_end = strchrnul(str_ptr, ',');
+
+		snprintf(obj_name, sizeof(obj_name), "%.*s",
+			 (int)(str_end - str_ptr), str_ptr);
+
+		if (!bpf_preload_list_lookup_entry(obj_name)) {
+			ret = bpf_preload_list_add_entry(obj_name, NULL);
+			if (ret)
+				goto out;
+		}
+
+		if (!*str_end)
+			break;
+
+		str_ptr = str_end + 1;
+	}
+
+	return 0;
+out:
+	list_for_each_entry_safe(cur, tmp, &preload_list, list) {
+		list_del(&cur->list);
+		kfree(cur->obj_name);
+		kfree(cur);
+	}
+
+	return ret;
+}
+
 static int __init bpf_init(void)
 {
 	int ret;
@@ -864,8 +960,17 @@ static int __init bpf_init(void)
 		return ret;
 
 	ret = register_filesystem(&bpf_fs_type);
-	if (ret)
+	if (ret) {
 		sysfs_remove_mount_point(fs_kobj, "bpf");
+		return ret;
+	}
+
+	ret = bpf_init_preload_list();
+	if (ret) {
+		unregister_filesystem(&bpf_fs_type);
+		sysfs_remove_mount_point(fs_kobj, "bpf");
+		return ret;
+	}
 
 	return ret;
 }
