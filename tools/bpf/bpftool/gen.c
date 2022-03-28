@@ -652,6 +652,28 @@ static void codegen_destroy(struct bpf_object *obj, const char *obj_name)
 		obj_name);
 }
 
+static void codegen_preload_vars(struct bpf_object *obj, const char *obj_name)
+{
+	struct bpf_program *prog;
+
+	codegen("\
+		\n\
+		\n\
+		");
+
+	bpf_object__for_each_program(prog, obj) {
+		codegen("\
+			\n\
+			static struct bpf_link *%s_link;		    \n\
+			", bpf_program__name(prog));
+	}
+
+	codegen("\
+		\n\
+		static struct %s *skel;					    \n\
+		", obj_name);
+}
+
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard)
 {
 	DECLARE_LIBBPF_OPTS(gen_loader_opts, opts);
@@ -799,6 +821,10 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		", obj_name);
 
 	codegen_asserts(obj, obj_name);
+
+	if (gen_preload_methods) {
+		codegen_preload_vars(obj, obj_name);
+	}
 
 	codegen("\
 		\n\
@@ -1615,6 +1641,7 @@ static int do_help(int argc, char **argv)
 		"\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
 		"                    {-L|--use-loader} }\n"
+		"                    {-P|--gen-preload-methods} }\n"
 		"",
 		bin_name, "gen");
 

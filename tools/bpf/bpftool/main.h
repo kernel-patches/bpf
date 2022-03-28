@@ -90,6 +90,7 @@ extern bool block_mount;
 extern bool verifier_logs;
 extern bool relaxed_maps;
 extern bool use_loader;
+extern bool gen_preload_methods;
 extern bool legacy_libbpf;
 extern struct btf *base_btf;
 extern struct hashmap *refs_table;

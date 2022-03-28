@@ -5,15 +5,12 @@
 #include <linux/bpf_preload.h>
 #include "iterators/iterators.lskel.h"
 
-static struct bpf_link *maps_link, *progs_link;
-static struct iterators_bpf *skel;
-
 static void free_links_and_skel(void)
 {
-	if (!IS_ERR_OR_NULL(maps_link))
-		bpf_link_put(maps_link);
-	if (!IS_ERR_OR_NULL(progs_link))
-		bpf_link_put(progs_link);
+	if (!IS_ERR_OR_NULL(dump_bpf_map_link))
+		bpf_link_put(dump_bpf_map_link);
+	if (!IS_ERR_OR_NULL(dump_bpf_prog_link))
+		bpf_link_put(dump_bpf_prog_link);
 	iterators_bpf__destroy(skel);
 }
 
@@ -21,23 +18,23 @@ static int preload(struct dentry *parent)
 {
 	int err;
 
-	bpf_link_inc(maps_link);
-	bpf_link_inc(progs_link);
+	bpf_link_inc(dump_bpf_map_link);
+	bpf_link_inc(dump_bpf_prog_link);
 
-	err = bpf_obj_do_pin_kernel(parent, "maps.debug", maps_link,
+	err = bpf_obj_do_pin_kernel(parent, "maps.debug", dump_bpf_map_link,
 				    BPF_TYPE_LINK);
 	if (err)
 		goto undo;
 
-	err = bpf_obj_do_pin_kernel(parent, "progs.debug", progs_link,
+	err = bpf_obj_do_pin_kernel(parent, "progs.debug", dump_bpf_prog_link,
 				    BPF_TYPE_LINK);
 	if (err)
 		goto undo;
 
 	return 0;
 undo:
-	bpf_link_put(maps_link);
-	bpf_link_put(progs_link);
+	bpf_link_put(dump_bpf_map_link);
+	bpf_link_put(dump_bpf_prog_link);
 	return err;
 }
 
@@ -59,14 +56,14 @@ static int load_skel(void)
 	err = iterators_bpf__attach(skel);
 	if (err)
 		goto out;
-	maps_link = bpf_link_get_from_fd(skel->links.dump_bpf_map_fd);
-	if (IS_ERR(maps_link)) {
-		err = PTR_ERR(maps_link);
+	dump_bpf_map_link = bpf_link_get_from_fd(skel->links.dump_bpf_map_fd);
+	if (IS_ERR(dump_bpf_map_link)) {
+		err = PTR_ERR(dump_bpf_map_link);
 		goto out;
 	}
-	progs_link = bpf_link_get_from_fd(skel->links.dump_bpf_prog_fd);
-	if (IS_ERR(progs_link)) {
-		err = PTR_ERR(progs_link);
+	dump_bpf_prog_link = bpf_link_get_from_fd(skel->links.dump_bpf_prog_fd);
+	if (IS_ERR(dump_bpf_prog_link)) {
+		err = PTR_ERR(dump_bpf_prog_link);
 		goto out;
 	}
 	/* Avoid taking over stdin/stdout/stderr of init process. Zeroing out

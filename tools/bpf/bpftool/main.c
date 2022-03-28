@@ -31,6 +31,7 @@ bool block_mount;
 bool verifier_logs;
 bool relaxed_maps;
 bool use_loader;
+bool gen_preload_methods;
 bool legacy_libbpf;
 struct btf *base_btf;
 struct hashmap *refs_table;
@@ -426,6 +427,7 @@ int main(int argc, char **argv)
 		{ "nomount",	no_argument,	NULL,	'n' },
 		{ "debug",	no_argument,	NULL,	'd' },
 		{ "use-loader",	no_argument,	NULL,	'L' },
+		{ "gen-preload-methods",	no_argument,	NULL,	'P' },
 		{ "base-btf",	required_argument, NULL, 'B' },
 		{ "legacy",	no_argument,	NULL,	'l' },
 		{ 0 }
@@ -443,7 +445,7 @@ int main(int argc, char **argv)
 	bin_name = argv[0];
 
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:l",
+	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:lP",
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -492,6 +494,9 @@ int main(int argc, char **argv)
 			break;
 		case 'l':
 			legacy_libbpf = true;
+			break;
+		case 'P':
+			gen_preload_methods = true;
 			break;
 		default:
 			p_err("unrecognized option '%s'", argv[optind - 1]);

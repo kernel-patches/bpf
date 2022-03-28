@@ -43,7 +43,7 @@ clean:
 
 iterators.lskel.h: $(OUTPUT)/iterators.bpf.o | $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
-	$(Q)$(BPFTOOL) gen skeleton -L $< > $@
+	$(Q)$(BPFTOOL) gen skeleton -L -P $< > $@
 
 
 $(OUTPUT)/iterators.bpf.o: iterators.bpf.c $(BPFOBJ) | $(OUTPUT)

@@ -208,6 +208,11 @@ OPTIONS
 		  not use the majority of the libbpf infrastructure, and does not need
 		  libelf.
 
+	-P, --gen-preload-methods
+		  For light skeletons, generate the static variables and the methods
+		  required to preload an eBPF program and pin its objects to the bpf
+		  filesystem.
+
 EXAMPLES
 ========
 **$ cat example1.bpf.c**
