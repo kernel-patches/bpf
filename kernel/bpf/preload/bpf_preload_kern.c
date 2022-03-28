@@ -5,11 +5,6 @@
 #include <linux/bpf_preload.h>
 #include "iterators/iterators.lskel.h"
 
-static struct bpf_preload_ops ops = {
-	.preload = preload,
-	.owner = THIS_MODULE,
-};
-
 static int __init load(void)
 {
 	int err;

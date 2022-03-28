@@ -474,6 +474,11 @@ undo:
 	return err;
 }
 
+static struct bpf_preload_ops ops = {
+	.preload = preload,
+	.owner = THIS_MODULE,
+};
+
 static int load_skel(void)
 {
 	int err;

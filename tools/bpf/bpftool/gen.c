@@ -841,6 +841,18 @@ static void codegen_preload(struct bpf_object *obj, const char *obj_name)
 		");
 }
 
+static void codegen_preload_ops(void)
+{
+	codegen("\
+		\n\
+		\n\
+		static struct bpf_preload_ops ops = {			    \n\
+			.preload = preload,				    \n\
+			.owner = THIS_MODULE,				    \n\
+		};							    \n\
+		");
+}
+
 static void codegen_preload_load(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
@@ -1076,6 +1088,7 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		codegen_preload_vars(obj, obj_name);
 		codegen_preload_free(obj, obj_name);
 		codegen_preload(obj, obj_name);
+		codegen_preload_ops();
 		codegen_preload_load(obj, obj_name);
 	}
 
