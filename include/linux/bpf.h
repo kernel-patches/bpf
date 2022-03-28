@@ -1103,6 +1103,8 @@ static inline void bpf_module_put(const void *data, struct module *owner)
 		module_put(owner);
 }
 
+void __init mount_bpffs(void);
+
 #ifdef CONFIG_NET
 /* Define it here to avoid the use of forward declaration */
 struct bpf_dummy_ops_state {
@@ -1140,6 +1142,9 @@ static inline int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map,
 						     void *value)
 {
 	return -EINVAL;
+}
+static inline void __init mount_bpffs(void)
+{
 }
 #endif
 

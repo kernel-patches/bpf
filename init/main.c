@@ -99,6 +99,7 @@
 #include <linux/kcsan.h>
 #include <linux/init_syscalls.h>
 #include <linux/stackdepot.h>
+#include <linux/bpf.h>
 #include <net/net_namespace.h>
 
 #include <asm/io.h>
@@ -1636,4 +1637,5 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 
 	integrity_load_keys();
+	mount_bpffs();
 }
