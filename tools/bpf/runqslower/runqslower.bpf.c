@@ -2,6 +2,7 @@
 // Copyright (c) 2019 Facebook
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include "runqslower.h"
 
 #define TASK_RUNNING 0
@@ -43,31 +44,21 @@ static int trace_enqueue(struct task_struct *t)
 }
 
 SEC("tp_btf/sched_wakeup")
-int handle__sched_wakeup(u64 *ctx)
+int BPF_PROG(handle__sched_wakeup, struct task_struct *p)
 {
-	/* TP_PROTO(struct task_struct *p) */
-	struct task_struct *p = (void *)ctx[0];
-
 	return trace_enqueue(p);
 }
 
 SEC("tp_btf/sched_wakeup_new")
-int handle__sched_wakeup_new(u64 *ctx)
+int BPF_PROG(handle__sched_wakeup_new, struct task_struct *p)
 {
-	/* TP_PROTO(struct task_struct *p) */
-	struct task_struct *p = (void *)ctx[0];
-
 	return trace_enqueue(p);
 }
 
 SEC("tp_btf/sched_switch")
-int handle__sched_switch(u64 *ctx)
+int BPF_PROG(handle__sched_switch, bool preempt, unsigned long prev_state,
+	     struct task_struct *prev, struct task_struct *next)
 {
-	/* TP_PROTO(bool preempt, struct task_struct *prev,
-	 *	    struct task_struct *next)
-	 */
-	struct task_struct *prev = (struct task_struct *)ctx[1];
-	struct task_struct *next = (struct task_struct *)ctx[2];
 	struct runq_event event = {};
 	u64 *tsp, delta_us;
 	long state;
