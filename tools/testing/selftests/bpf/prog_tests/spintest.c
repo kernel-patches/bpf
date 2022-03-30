@@ -6,45 +6,34 @@
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include <test_progs.h>
 #include "trace_helpers.h"
+#include "test_spin.skel.h"
 
-int main(int ac, char **argv)
+void test_spin(void)
 {
-	char filename[256], symbol[256];
 	struct bpf_object *obj = NULL;
 	struct bpf_link *links[20];
 	long key, next_key, value;
 	struct bpf_program *prog;
+	struct test_spin *skel;
 	int map_fd, i, j = 0;
 	const char *section;
 	struct ksym *sym;
+	char symbol[256];
+	int err;
 
-	if (load_kallsyms()) {
-		printf("failed to process /proc/kallsyms\n");
-		return 2;
-	}
+	err = load_kallsyms();
+	if (!ASSERT_OK(err, "load_kallsyms"))
+		return;
+	skel = test_spin__open_and_load();
 
-	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-	obj = bpf_object__open_file(filename, NULL);
-	if (libbpf_get_error(obj)) {
-		fprintf(stderr, "ERROR: opening BPF object file failed\n");
-		obj = NULL;
-		goto cleanup;
-	}
+	if (!ASSERT_OK_PTR(skel, "test_spin__open_and_load"))
+		return;
 
-	/* load BPF program */
-	if (bpf_object__load(obj)) {
-		fprintf(stderr, "ERROR: loading BPF object file failed\n");
-		goto cleanup;
-	}
+	map_fd = bpf_map__fd(skel->maps.my_map);
 
-	map_fd = bpf_object__find_map_fd_by_name(obj, "my_map");
-	if (map_fd < 0) {
-		fprintf(stderr, "ERROR: finding a map in obj file failed\n");
-		goto cleanup;
-	}
-
-	bpf_object__for_each_program(prog, obj) {
+	bpf_object__for_each_program(prog, skel->obj) {
 		section = bpf_program__section_name(prog);
 		if (sscanf(section, "kprobe/%s", symbol) != 1)
 			continue;
@@ -52,7 +41,8 @@ int main(int ac, char **argv)
 		/* Attach prog only when symbol exists */
 		if (ksym_get_addr(symbol)) {
 			links[j] = bpf_program__attach(prog);
-			if (libbpf_get_error(links[j])) {
+			err = libbpf_get_error(links[j]);
+			if (!ASSERT_OK(err, "bpf_program__attach")) {
 				fprintf(stderr, "bpf_program__attach failed\n");
 				links[j] = NULL;
 				goto cleanup;
@@ -89,5 +79,4 @@ cleanup:
 		bpf_link__destroy(links[j]);
 
 	bpf_object__close(obj);
-	return 0;
 }

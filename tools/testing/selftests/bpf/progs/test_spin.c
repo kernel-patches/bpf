@@ -4,13 +4,13 @@
  * modify it under the terms of version 2 of the GNU General Public
  * License as published by the Free Software Foundation.
  */
-#include <linux/skbuff.h>
-#include <linux/netdevice.h>
-#include <linux/version.h>
-#include <uapi/linux/bpf.h>
-#include <uapi/linux/perf_event.h>
+#include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+
+#ifndef PERF_MAX_STACK_DEPTH
+#define PERF_MAX_STACK_DEPTH         127
+#endif
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -27,8 +27,8 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
-	__uint(key_size, sizeof(u32));
-	__uint(value_size, PERF_MAX_STACK_DEPTH * sizeof(u64));
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, PERF_MAX_STACK_DEPTH * sizeof(__u64));
 	__uint(max_entries, 10000);
 } stackmap SEC(".maps");
 
@@ -66,4 +66,3 @@ SEC("kprobe/__htab_percpu_map_update_elem")PROG(p16)
 SEC("kprobe/htab_map_alloc")PROG(p17)
 
 char _license[] SEC("license") = "GPL";
-u32 _version SEC("version") = LINUX_VERSION_CODE;
