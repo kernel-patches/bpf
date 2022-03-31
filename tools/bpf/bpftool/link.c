@@ -20,6 +20,8 @@ static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_CGROUP]			= "cgroup",
 	[BPF_LINK_TYPE_ITER]			= "iter",
 	[BPF_LINK_TYPE_NETNS]			= "netns",
+	[BPF_LINK_TYPE_XDP]				= "xdp",
+	[BPF_LINK_TYPE_PERF_EVENT]		= "perf_event",
 };
 
 static struct hashmap *link_table;
