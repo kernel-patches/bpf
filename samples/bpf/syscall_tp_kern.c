@@ -7,6 +7,7 @@
 struct syscalls_enter_open_args {
 	unsigned long long unused;
 	long syscall_nr;
+	long dfd_ptr;
 	long filename_ptr;
 	long flags;
 	long mode;
