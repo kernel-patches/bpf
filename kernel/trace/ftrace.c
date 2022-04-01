@@ -2467,6 +2467,20 @@ struct ftrace_ops direct_ops = {
 	 */
 	.trampoline	= FTRACE_REGS_ADDR,
 };
+
+struct ftrace_ops no_ipmodify_direct_ops = {
+	.func		= call_direct_funcs,
+	.flags		= FTRACE_OPS_FL_DIRECT | FTRACE_OPS_FL_SAVE_REGS
+			  | FTRACE_OPS_FL_PERMANENT,
+	/*
+	 * By declaring the main trampoline as this trampoline
+	 * it will never have one allocated for it. Allocated
+	 * trampolines should not call direct functions.
+	 * The direct_ops should only be called by the builtin
+	 * ftrace_regs_caller trampoline.
+	 */
+	.trampoline	= FTRACE_REGS_ADDR,
+};
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
 /**
@@ -5126,6 +5140,9 @@ static struct ftrace_direct_func *ftrace_alloc_direct_func(unsigned long addr)
 	return direct;
 }
 
+static int __register_ftrace_direct(unsigned long ip, unsigned long addr,
+				    struct ftrace_ops *ops);
+
 /**
  * register_ftrace_direct - Call a custom trampoline directly
  * @ip: The address of the nop at the beginning of a function
@@ -5144,6 +5161,12 @@ static struct ftrace_direct_func *ftrace_alloc_direct_func(unsigned long addr)
  *  -ENOMEM - There was an allocation failure.
  */
 int register_ftrace_direct(unsigned long ip, unsigned long addr)
+{
+	return __register_ftrace_direct(ip, addr, &direct_ops);
+}
+
+static int __register_ftrace_direct(unsigned long ip, unsigned long addr,
+				    struct ftrace_ops *ops)
 {
 	struct ftrace_direct_func *direct;
 	struct ftrace_func_entry *entry;
@@ -5194,14 +5217,14 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 	if (!entry)
 		goto out_unlock;
 
-	ret = ftrace_set_filter_ip(&direct_ops, ip, 0, 0);
+	ret = ftrace_set_filter_ip(ops, ip, 0, 0);
 	if (ret)
 		remove_hash_entry(direct_functions, entry);
 
-	if (!ret && !(direct_ops.flags & FTRACE_OPS_FL_ENABLED)) {
-		ret = register_ftrace_function(&direct_ops);
+	if (!ret && !(ops->flags & FTRACE_OPS_FL_ENABLED)) {
+		ret = register_ftrace_function(ops);
 		if (ret)
-			ftrace_set_filter_ip(&direct_ops, ip, 1, 0);
+			ftrace_set_filter_ip(ops, ip, 1, 0);
 	}
 
 	if (ret) {
@@ -5230,6 +5253,29 @@ int register_ftrace_direct(unsigned long ip, unsigned long addr)
 }
 EXPORT_SYMBOL_GPL(register_ftrace_direct);
 
+/**
+ * register_ftrace_direct_no_ipmodify - Call a custom trampoline directly.
+ * The custom trampoline should not use IP_MODIFY.
+ * @ip: The address of the nop at the beginning of a function
+ * @addr: The address of the trampoline to call at @ip
+ *
+ * This is used to connect a direct call from the nop location (@ip)
+ * at the start of ftrace traced functions. The location that it calls
+ * (@addr) must be able to handle a direct call, and save the parameters
+ * of the function being traced, and restore them (or inject new ones
+ * if needed), before returning.
+ *
+ * Returns:
+ *  0 on success
+ *  -EBUSY - Another direct function is already attached (there can be only one)
+ *  -ENODEV - @ip does not point to a ftrace nop location (or not supported)
+ *  -ENOMEM - There was an allocation failure.
+ */
+int register_ftrace_direct_no_ipmodify(unsigned long ip, unsigned long addr)
+{
+	return __register_ftrace_direct(ip, addr, &no_ipmodify_direct_ops);
+}
+
 static struct ftrace_func_entry *find_direct_entry(unsigned long *ip,
 						   struct dyn_ftrace **recp)
 {
@@ -5257,7 +5303,21 @@ static struct ftrace_func_entry *find_direct_entry(unsigned long *ip,
 	return entry;
 }
 
+static int __unregister_ftrace_direct(unsigned long ip, unsigned long addr,
+				      struct ftrace_ops *ops);
+
 int unregister_ftrace_direct(unsigned long ip, unsigned long addr)
+{
+	return __unregister_ftrace_direct(ip, addr, &direct_ops);
+}
+
+int unregister_ftrace_direct_no_ipmodify(unsigned long ip, unsigned long addr)
+{
+	return __unregister_ftrace_direct(ip, addr, &no_ipmodify_direct_ops);
+}
+
+static int __unregister_ftrace_direct(unsigned long ip, unsigned long addr,
+				      struct ftrace_ops *ops)
 {
 	struct ftrace_direct_func *direct;
 	struct ftrace_func_entry *entry;
@@ -5274,11 +5334,11 @@ int unregister_ftrace_direct(unsigned long ip, unsigned long addr)
 	if (!entry)
 		goto out_unlock;
 
-	hash = direct_ops.func_hash->filter_hash;
+	hash = ops->func_hash->filter_hash;
 	if (hash->count == 1)
-		unregister_ftrace_function(&direct_ops);
+		unregister_ftrace_function(ops);
 
-	ret = ftrace_set_filter_ip(&direct_ops, ip, 1, 0);
+	ret = ftrace_set_filter_ip(ops, ip, 1, 0);
 
 	WARN_ON(ret);
 
