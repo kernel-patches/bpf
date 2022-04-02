@@ -679,7 +679,7 @@ static void mark_verifier_state_scratched(struct bpf_verifier_env *env)
 
 static int arg_to_dynptr_type(enum bpf_arg_type arg_type, enum bpf_dynptr_type *dynptr_type)
 {
-	int type = arg_type & (DYNPTR_TYPE_LOCAL | DYNPTR_TYPE_MALLOC);
+	int type = arg_type & (DYNPTR_TYPE_LOCAL | DYNPTR_TYPE_MALLOC | DYNPTR_TYPE_RINGBUF);
 
 	switch (type) {
 	case DYNPTR_TYPE_LOCAL:
@@ -687,6 +687,9 @@ static int arg_to_dynptr_type(enum bpf_arg_type arg_type, enum bpf_dynptr_type *
 		break;
 	case DYNPTR_TYPE_MALLOC:
 		*dynptr_type = BPF_DYNPTR_TYPE_MALLOC;
+		break;
+	case DYNPTR_TYPE_RINGBUF:
+		*dynptr_type = BPF_DYNPTR_TYPE_RINGBUF;
 		break;
 	default:
 		/* Can't have more than one type set and can't have no
@@ -702,7 +705,7 @@ static bool dynptr_type_refcounted(struct bpf_func_state *state, int spi)
 {
 	enum bpf_dynptr_type type = state->stack[spi].spilled_ptr.dynptr_type;
 
-	return type == BPF_DYNPTR_TYPE_MALLOC;
+	return type == BPF_DYNPTR_TYPE_MALLOC || type == BPF_DYNPTR_TYPE_RINGBUF;
 }
 
 static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
@@ -5842,6 +5845,8 @@ skip_type_check:
 					err_extra = "local ";
 				else if (arg_type & DYNPTR_TYPE_MALLOC)
 					err_extra = "malloc ";
+				else if (arg_type & DYNPTR_TYPE_RINGBUF)
+					err_extra = "ringbuf ";
 				verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
 					err_extra, arg + 1);
 				return -EINVAL;
@@ -5966,7 +5971,10 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_MAP_TYPE_RINGBUF:
 		if (func_id != BPF_FUNC_ringbuf_output &&
 		    func_id != BPF_FUNC_ringbuf_reserve &&
-		    func_id != BPF_FUNC_ringbuf_query)
+		    func_id != BPF_FUNC_ringbuf_query &&
+		    func_id != BPF_FUNC_ringbuf_reserve_dynptr &&
+		    func_id != BPF_FUNC_ringbuf_submit_dynptr &&
+		    func_id != BPF_FUNC_ringbuf_discard_dynptr)
 			goto error;
 		break;
 	case BPF_MAP_TYPE_STACK_TRACE:
@@ -6082,6 +6090,9 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_FUNC_ringbuf_output:
 	case BPF_FUNC_ringbuf_reserve:
 	case BPF_FUNC_ringbuf_query:
+	case BPF_FUNC_ringbuf_reserve_dynptr:
+	case BPF_FUNC_ringbuf_submit_dynptr:
+	case BPF_FUNC_ringbuf_discard_dynptr:
 		if (map->map_type != BPF_MAP_TYPE_RINGBUF)
 			goto error;
 		break;
