@@ -465,6 +465,9 @@ https://fedorapeople.org/~acme/dwarves
 Some distros have pahole version 1.16 packaged already, e.g.
 Fedora, Gentoo.
 
+Some selftests rely on sys/sdt.h header defining USDT-related macros. You can
+get them by installing systemtap-sdt-devel package.
+
 Q: Which BPF kernel selftests version should I run my kernel against?
 ---------------------------------------------------------------------
 A: If you run a kernel ``xyz``, then always run the BPF kernel selftests
