@@ -5191,6 +5191,17 @@ union bpf_attr {
  *	Return
  *		0 on success, -EINVAL if *offset* + *len* exceeds the length
  *		of *dst*'s data or if *dst* is not writeable.
+ *
+ * void *bpf_dynptr_data(struct bpf_dynptr *ptr, u32 offset, u32 len)
+ *	Description
+ *		Get a pointer to the underlying dynptr data.
+ *
+ *		*len* must be a statically known value. The returned data slice
+ *		is invalidated whenever the dynptr is invalidated.
+ *	Return
+ *		Pointer to the underlying dynptr data, NULL if the ptr is
+ *		read-only, if the dynptr is invalid, or if the offset and length
+ *		is out of bounds.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5392,6 +5403,7 @@ union bpf_attr {
 	FN(free),			\
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
+	FN(dynptr_data),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

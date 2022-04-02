@@ -187,6 +187,11 @@ struct bpf_verifier_stack_elem {
 					  POISON_POINTER_DELTA))
 #define BPF_MAP_PTR(X)		((struct bpf_map *)((X) & ~BPF_MAP_PTR_UNPRIV))
 
+/* forward declarations */
+static void release_reg_references(struct bpf_verifier_env *env,
+				   struct bpf_func_state *state,
+				   int ref_obj_id);
+
 static bool bpf_map_ptr_poisoned(const struct bpf_insn_aux_data *aux)
 {
 	return BPF_MAP_PTR(aux->map_ptr_state) == BPF_MAP_PTR_POISON;
@@ -523,6 +528,11 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_skc_to_tcp_request_sock;
 }
 
+static inline bool is_dynptr_ref_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_dynptr_data;
+}
+
 static bool is_cmpxchg_insn(const struct bpf_insn *insn)
 {
 	return BPF_CLASS(insn->code) == BPF_STX &&
@@ -700,7 +710,7 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 {
 	struct bpf_func_state *state = cur_func(env);
 	enum bpf_dynptr_type type;
-	int spi, i, err;
+	int spi, id, i, err;
 
 	spi = get_spi(reg->off);
 
@@ -721,18 +731,35 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 
 	state->stack[spi].spilled_ptr.dynptr_first_slot = true;
 
+	/* Generate an id for the dynptr if the dynptr type can be
+	 * acquired/released.
+	 *
+	 * This is used to associated data slices with dynptrs, so that
+	 * if a dynptr gets invalidated, its data slices will also be
+	 * invalidated.
+	 */
+	if (dynptr_type_refcounted(state, spi)) {
+		id = ++env->id_gen;
+		state->stack[spi].spilled_ptr.id = id;
+		state->stack[spi - 1].spilled_ptr.id = id;
+	}
+
 	return 0;
 }
 
 static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
+	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = func(env, reg);
+	bool refcounted;
 	int spi, i;
 
 	spi = get_spi(reg->off);
 
 	if (!check_spi_bounds(state, spi, BPF_DYNPTR_NR_SLOTS))
 		return -EINVAL;
+
+	refcounted = dynptr_type_refcounted(state, spi);
 
 	for (i = 0; i < BPF_REG_SIZE; i++) {
 		state->stack[spi].slot_type[i] = STACK_INVALID;
@@ -742,6 +769,15 @@ static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_re
 	state->stack[spi].spilled_ptr.dynptr_type = 0;
 	state->stack[spi].spilled_ptr.dynptr_first_slot = 0;
 	state->stack[spi - 1].spilled_ptr.dynptr_type = 0;
+
+	/* Invalidate any slices associated with this dynptr */
+	if (refcounted) {
+		for (i = 0; i <= vstate->curframe; i++)
+			release_reg_references(env, vstate->frame[i],
+					       state->stack[spi].spilled_ptr.id);
+		state->stack[spi].spilled_ptr.id = 0;
+		state->stack[spi - 1].spilled_ptr.id = 0;
+	}
 
 	return 0;
 }
@@ -778,6 +814,19 @@ static bool check_dynptr_init(struct bpf_verifier_env *env, struct bpf_reg_state
 		return err;
 
 	return state->stack[spi].spilled_ptr.dynptr_type == expected_type;
+}
+
+static bool is_ref_obj_id_dynptr(struct bpf_func_state *state, u32 id)
+{
+	int i;
+
+	for (i = 0; i < state->allocated_stack / BPF_REG_SIZE; i++) {
+		if (state->stack[i].slot_type[0] == STACK_DYNPTR &&
+		    state->stack[i].spilled_ptr.id == id)
+			return true;
+	}
+
+	return false;
 }
 
 static bool stack_access_into_dynptr(struct bpf_func_state *state, int spi, int size)
@@ -5585,6 +5634,14 @@ static bool id_in_stack_slot(enum bpf_arg_type arg_type)
 	return arg_type_is_dynptr(arg_type);
 }
 
+static inline u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi = get_spi(reg->off);
+
+	return state->stack[spi].spilled_ptr.id;
+}
+
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
 			  const struct bpf_func_proto *fn)
@@ -7113,6 +7170,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		/* For mark_ptr_or_null_reg() */
 		regs[BPF_REG_0].id = id;
 		/* For release_reference() */
+		regs[BPF_REG_0].ref_obj_id = id;
+	} else if (is_dynptr_ref_function(func_id)) {
+		/* Retrieve the id of the associated dynptr. */
+		int id = stack_slot_get_id(env, &regs[BPF_REG_1]);
+
+		if (id < 0)
+			return id;
+		regs[BPF_REG_0].id = id;
 		regs[BPF_REG_0].ref_obj_id = id;
 	}
 
@@ -9545,7 +9610,8 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 	u32 id = regs[regno].id;
 	int i;
 
-	if (ref_obj_id && ref_obj_id == id && is_null)
+	if (ref_obj_id && ref_obj_id == id && is_null &&
+	    !is_ref_obj_id_dynptr(state, id))
 		/* regs[regno] is in the " == NULL" branch.
 		 * No one could have freed the reference state before
 		 * doing the NULL check.
