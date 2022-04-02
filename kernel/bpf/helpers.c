@@ -1374,6 +1374,88 @@ out:
 	kfree(t);
 }
 
+void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data, enum bpf_dynptr_type type,
+		     u32 offset, u32 size)
+{
+	ptr->data = data;
+	ptr->offset = offset;
+	ptr->size = size;
+	bpf_dynptr_set_type(ptr, type);
+}
+
+void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr)
+{
+	memset(ptr, 0, sizeof(*ptr));
+}
+
+BPF_CALL_3(bpf_dynptr_from_mem, void *, data, u32, size, struct bpf_dynptr_kern *, ptr)
+{
+	int err;
+
+	err = bpf_dynptr_check_size(size);
+	if (err) {
+		bpf_dynptr_set_null(ptr);
+		return err;
+	}
+
+	bpf_dynptr_init(ptr, data, BPF_DYNPTR_TYPE_LOCAL, 0, size);
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_dynptr_from_mem_proto = {
+	.func		= bpf_dynptr_from_mem,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL | MEM_UNINIT,
+};
+
+BPF_CALL_2(bpf_malloc, u32, size, struct bpf_dynptr_kern *, ptr)
+{
+	void *data;
+	int err;
+
+	err = bpf_dynptr_check_size(size);
+	if (err) {
+		bpf_dynptr_set_null(ptr);
+		return err;
+	}
+
+	data = kmalloc(size, GFP_ATOMIC);
+	if (!data) {
+		bpf_dynptr_set_null(ptr);
+		return -ENOMEM;
+	}
+
+	bpf_dynptr_init(ptr, data, BPF_DYNPTR_TYPE_MALLOC, 0, size);
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_malloc_proto = {
+	.func		= bpf_malloc,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_MALLOC | MEM_UNINIT,
+};
+
+BPF_CALL_1(bpf_free, struct bpf_dynptr_kern *, dynptr)
+{
+	kfree(dynptr->data);
+	bpf_dynptr_set_null(dynptr);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_free_proto = {
+	.func		= bpf_free,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_MALLOC | MEM_RELEASE,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_get_current_task_btf_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
@@ -1426,6 +1508,12 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_loop_proto;
 	case BPF_FUNC_strncmp:
 		return &bpf_strncmp_proto;
+	case BPF_FUNC_dynptr_from_mem:
+		return &bpf_dynptr_from_mem_proto;
+	case BPF_FUNC_malloc:
+		return &bpf_malloc_proto;
+	case BPF_FUNC_free:
+		return &bpf_free_proto;
 	default:
 		break;
 	}

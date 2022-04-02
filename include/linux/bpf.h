@@ -346,7 +346,13 @@ enum bpf_type_flag {
 
 	MEM_RELEASE		= BIT(6 + BPF_BASE_TYPE_BITS),
 
-	__BPF_TYPE_LAST_FLAG	= MEM_RELEASE,
+	/* DYNPTR points to a program's local memory (eg stack variable). */
+	DYNPTR_TYPE_LOCAL	= BIT(7 + BPF_BASE_TYPE_BITS),
+
+	/* DYNPTR points to dynamically allocated memory. */
+	DYNPTR_TYPE_MALLOC	= BIT(8 + BPF_BASE_TYPE_BITS),
+
+	__BPF_TYPE_LAST_FLAG	= DYNPTR_TYPE_MALLOC,
 };
 
 /* Max number of base types. */
@@ -390,6 +396,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK,	/* pointer to stack */
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
+	ARG_PTR_TO_DYNPTR,      /* pointer to bpf_dynptr. See bpf_type_flag for dynptr type */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */
@@ -2395,5 +2402,70 @@ bool btf_id_set_contains(const struct btf_id_set *set, u32 id);
 int bpf_bprintf_prepare(char *fmt, u32 fmt_size, const u64 *raw_args,
 			u32 **bin_buf, u32 num_args);
 void bpf_bprintf_cleanup(void);
+
+/* the implementation of the opaque uapi struct bpf_dynptr */
+struct bpf_dynptr_kern {
+	u8 *data;
+	/* The upper 4 bits are reserved. Bit 29 denotes whether the
+	 * dynptr is read-only. Bits 30 - 32 denote the dynptr type.
+	 */
+	u32 size;
+	u32 offset;
+} __aligned(8);
+
+enum bpf_dynptr_type {
+	/* Local memory used by the bpf program (eg stack variable) */
+	BPF_DYNPTR_TYPE_LOCAL,
+	/* Memory allocated dynamically by the kernel for the dynptr */
+	BPF_DYNPTR_TYPE_MALLOC,
+};
+
+/* The upper 4 bits of dynptr->size are reserved. Consequently, the
+ * maximum supported size is 2^28 - 1.
+ */
+#define DYNPTR_MAX_SIZE	((1UL << 28) - 1)
+#define DYNPTR_SIZE_MASK	0xFFFFFFF
+#define DYNPTR_TYPE_SHIFT	29
+
+static inline enum bpf_dynptr_type bpf_dynptr_get_type(struct bpf_dynptr_kern *ptr)
+{
+	return ptr->size >> DYNPTR_TYPE_SHIFT;
+}
+
+static inline void bpf_dynptr_set_type(struct bpf_dynptr_kern *ptr, enum bpf_dynptr_type type)
+{
+	ptr->size |= type << DYNPTR_TYPE_SHIFT;
+}
+
+static inline u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr)
+{
+	return ptr->size & DYNPTR_SIZE_MASK;
+}
+
+static inline int bpf_dynptr_check_size(u32 size)
+{
+	if (size == 0)
+		return -EINVAL;
+
+	if (size > DYNPTR_MAX_SIZE)
+		return -E2BIG;
+
+	return 0;
+}
+
+static inline int bpf_dynptr_check_off_len(struct bpf_dynptr_kern *ptr, u32 offset, u32 len)
+{
+	u32 capacity = bpf_dynptr_get_size(ptr) - ptr->offset;
+
+	if (len > capacity || offset > capacity - len)
+		return -EINVAL;
+
+	return 0;
+}
+
+void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data, enum bpf_dynptr_type type,
+		     u32 offset, u32 size);
+
+void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 
 #endif /* _LINUX_BPF_H */

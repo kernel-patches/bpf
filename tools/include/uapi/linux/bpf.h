@@ -5143,6 +5143,38 @@ union bpf_attr {
  *		The **hash_algo** is returned on success,
  *		**-EOPNOTSUP** if the hash calculation failed or **-EINVAL** if
  *		invalid arguments are passed.
+ *
+ * long bpf_dynptr_from_mem(void *data, u32 size, struct bpf_dynptr *ptr)
+ *	Description
+ *		Get a dynptr to local memory *data*.
+ *
+ *		For a dynptr to a dynamic memory allocation, please use bpf_malloc
+ *		instead.
+ *
+ *		The maximum *size* supported is DYNPTR_MAX_SIZE.
+ *	Return
+ *		0 on success or -EINVAL if the size is 0 or exceeds DYNPTR_MAX_SIZE.
+ *
+ * long bpf_malloc(u32 size, struct bpf_dynptr *ptr)
+ *	Description
+ *		Dynamically allocate memory of *size* bytes.
+ *
+ *		Every call to bpf_malloc must have a corresponding
+ *		bpf_free, regardless of whether the bpf_malloc
+ *		succeeded.
+ *
+ *		The maximum *size* supported is DYNPTR_MAX_SIZE.
+ *	Return
+ *		0 on success, -ENOMEM if there is not enough memory for the
+ *		allocation, -EINVAL if the size is 0 or exceeds DYNPTR_MAX_SIZE.
+ *
+ * void bpf_free(struct bpf_dynptr *ptr)
+ *	Description
+ *		Free memory allocated by bpf_malloc.
+ *
+ *		After this operation, *ptr* will be an invalidated dynptr.
+ *	Return
+ *		Void.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5339,6 +5371,9 @@ union bpf_attr {
 	FN(copy_from_user_task),	\
 	FN(skb_set_tstamp),		\
 	FN(ima_file_hash),		\
+	FN(dynptr_from_mem),		\
+	FN(malloc),			\
+	FN(free),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -6482,6 +6517,11 @@ struct bpf_spin_lock {
 };
 
 struct bpf_timer {
+	__u64 :64;
+	__u64 :64;
+} __attribute__((aligned(8)));
+
+struct bpf_dynptr {
 	__u64 :64;
 	__u64 :64;
 } __attribute__((aligned(8)));

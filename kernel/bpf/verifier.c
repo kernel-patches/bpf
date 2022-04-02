@@ -479,6 +479,11 @@ static bool type_is_release_mem(u32 type)
 	return type & MEM_RELEASE;
 }
 
+static bool type_is_uninit_mem(u32 type)
+{
+	return type & MEM_UNINIT;
+}
+
 static bool may_be_acquire_function(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_sk_lookup_tcp ||
@@ -583,6 +588,7 @@ static char slot_type_char[] = {
 	[STACK_SPILL]	= 'r',
 	[STACK_MISC]	= 'm',
 	[STACK_ZERO]	= '0',
+	[STACK_DYNPTR]	= 'd',
 };
 
 static void print_liveness(struct bpf_verifier_env *env,
@@ -596,6 +602,18 @@ static void print_liveness(struct bpf_verifier_env *env,
 		verbose(env, "w");
 	if (live & REG_LIVE_DONE)
 		verbose(env, "D");
+}
+
+static inline int get_spi(s32 off)
+{
+	return (-off - 1) / BPF_REG_SIZE;
+}
+
+static bool check_spi_bounds(struct bpf_func_state *state, int spi, u32 nr_slots)
+{
+	int allocated_slots = state->allocated_stack / BPF_REG_SIZE;
+
+	return allocated_slots > spi && nr_slots - 1 <= spi;
 }
 
 static struct bpf_func_state *func(struct bpf_verifier_env *env,
@@ -647,6 +665,133 @@ static void mark_verifier_state_scratched(struct bpf_verifier_env *env)
 {
 	env->scratched_regs = ~0U;
 	env->scratched_stack_slots = ~0ULL;
+}
+
+static int arg_to_dynptr_type(enum bpf_arg_type arg_type, enum bpf_dynptr_type *dynptr_type)
+{
+	int type = arg_type & (DYNPTR_TYPE_LOCAL | DYNPTR_TYPE_MALLOC);
+
+	switch (type) {
+	case DYNPTR_TYPE_LOCAL:
+		*dynptr_type = BPF_DYNPTR_TYPE_LOCAL;
+		break;
+	case DYNPTR_TYPE_MALLOC:
+		*dynptr_type = BPF_DYNPTR_TYPE_MALLOC;
+		break;
+	default:
+		/* Can't have more than one type set and can't have no
+		 * type set
+		 */
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static bool dynptr_type_refcounted(struct bpf_func_state *state, int spi)
+{
+	enum bpf_dynptr_type type = state->stack[spi].spilled_ptr.dynptr_type;
+
+	return type == BPF_DYNPTR_TYPE_MALLOC;
+}
+
+static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+				   enum bpf_arg_type arg_type)
+{
+	struct bpf_func_state *state = cur_func(env);
+	enum bpf_dynptr_type type;
+	int spi, i, err;
+
+	spi = get_spi(reg->off);
+
+	if (!check_spi_bounds(state, spi, BPF_DYNPTR_NR_SLOTS))
+		return -EINVAL;
+
+	err = arg_to_dynptr_type(arg_type, &type);
+	if (unlikely(err))
+		return err;
+
+	for (i = 0; i < BPF_REG_SIZE; i++) {
+		state->stack[spi].slot_type[i] = STACK_DYNPTR;
+		state->stack[spi - 1].slot_type[i] = STACK_DYNPTR;
+	}
+
+	state->stack[spi].spilled_ptr.dynptr_type = type;
+	state->stack[spi - 1].spilled_ptr.dynptr_type = type;
+
+	state->stack[spi].spilled_ptr.dynptr_first_slot = true;
+
+	return 0;
+}
+
+static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi, i;
+
+	spi = get_spi(reg->off);
+
+	if (!check_spi_bounds(state, spi, BPF_DYNPTR_NR_SLOTS))
+		return -EINVAL;
+
+	for (i = 0; i < BPF_REG_SIZE; i++) {
+		state->stack[spi].slot_type[i] = STACK_INVALID;
+		state->stack[spi - 1].slot_type[i] = STACK_INVALID;
+	}
+
+	state->stack[spi].spilled_ptr.dynptr_type = 0;
+	state->stack[spi].spilled_ptr.dynptr_first_slot = 0;
+	state->stack[spi - 1].spilled_ptr.dynptr_type = 0;
+
+	return 0;
+}
+
+/* Check if the dynptr argument is a proper initialized dynptr */
+static bool check_dynptr_init(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+			      enum bpf_arg_type arg_type)
+{
+	struct bpf_func_state *state = func(env, reg);
+	enum bpf_dynptr_type expected_type;
+	int spi, err;
+
+	/* Can't pass in a dynptr at a weird offset */
+	if (reg->off % BPF_REG_SIZE)
+		return false;
+
+	spi = get_spi(reg->off);
+
+	if (!check_spi_bounds(state, spi, BPF_DYNPTR_NR_SLOTS))
+		return false;
+
+	if (!state->stack[spi].spilled_ptr.dynptr_first_slot)
+		return false;
+
+	if (state->stack[spi].slot_type[0] != STACK_DYNPTR)
+		return false;
+
+	/* ARG_PTR_TO_DYNPTR takes any type of dynptr */
+	if (arg_type == ARG_PTR_TO_DYNPTR)
+		return true;
+
+	err = arg_to_dynptr_type(arg_type, &expected_type);
+	if (unlikely(err))
+		return err;
+
+	return state->stack[spi].spilled_ptr.dynptr_type == expected_type;
+}
+
+static bool stack_access_into_dynptr(struct bpf_func_state *state, int spi, int size)
+{
+	int nr_slots, i;
+
+	nr_slots = min(roundup(size, BPF_REG_SIZE) / BPF_REG_SIZE, spi + 1);
+
+	for (i = 0; i < nr_slots; i++) {
+		if (state->stack[spi - i].slot_type[0] == STACK_DYNPTR)
+			return true;
+	}
+
+	return false;
 }
 
 /* The reg state of a pointer or a bounded scalar was saved when
@@ -2885,6 +3030,12 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	}
 
 	mark_stack_slot_scratched(env, spi);
+
+	if (stack_access_into_dynptr(state, spi, size)) {
+		verbose(env, "direct write into dynptr is not permitted\n");
+		return -EINVAL;
+	}
+
 	if (reg && !(off % BPF_REG_SIZE) && register_is_bounded(reg) &&
 	    !register_is_null(reg) && env->bpf_capable) {
 		if (dst_reg != BPF_REG_FP) {
@@ -3006,6 +3157,12 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		slot = -i - 1;
 		spi = slot / BPF_REG_SIZE;
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
+
+		if (*stype == STACK_DYNPTR) {
+			verbose(env, "direct write into dynptr is not permitted\n");
+			return -EINVAL;
+		}
+
 		mark_stack_slot_scratched(env, spi);
 
 		if (!env->allow_ptr_leaks
@@ -5153,6 +5310,16 @@ static bool arg_type_is_int_ptr(enum bpf_arg_type type)
 	       type == ARG_PTR_TO_LONG;
 }
 
+static inline bool arg_type_is_dynptr(enum bpf_arg_type type)
+{
+	return base_type(type) == ARG_PTR_TO_DYNPTR;
+}
+
+static inline bool arg_type_is_dynptr_uninit(enum bpf_arg_type type)
+{
+	return arg_type_is_dynptr(type) && type & MEM_UNINIT;
+}
+
 static int int_ptr_type_to_size(enum bpf_arg_type type)
 {
 	if (type == ARG_PTR_TO_INT)
@@ -5290,6 +5457,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_STACK]		= &stack_ptr_types,
 	[ARG_PTR_TO_CONST_STR]		= &const_str_ptr_types,
 	[ARG_PTR_TO_TIMER]		= &timer_types,
+	[ARG_PTR_TO_DYNPTR]		= &stack_ptr_types,
 };
 
 static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
@@ -5408,6 +5576,15 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	return __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
 }
 
+/*
+ * Determines whether the id used for reference tracking is held in a stack slot
+ * or in a register
+ */
+static bool id_in_stack_slot(enum bpf_arg_type arg_type)
+{
+	return arg_type_is_dynptr(arg_type);
+}
+
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
 			  const struct bpf_func_proto *fn)
@@ -5458,10 +5635,19 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 	arg_release = type_is_release_mem(arg_type);
-	if (arg_release && !reg->ref_obj_id) {
-		verbose(env, "R%d arg #%d is an unacquired reference and hence cannot be released\n",
-			regno, arg + 1);
-		return -EINVAL;
+	if (arg_release) {
+		if (id_in_stack_slot(arg_type)) {
+			struct bpf_func_state *state = func(env, reg);
+			int spi = get_spi(reg->off);
+
+			if (!state->stack[spi].spilled_ptr.id)
+				goto unacquired_ref_err;
+		} else if (!reg->ref_obj_id)  {
+unacquired_ref_err:
+			verbose(env, "R%d arg #%d is an unacquired reference and hence cannot be released\n",
+				regno, arg + 1);
+			return -EINVAL;
+		}
 	}
 
 	err = check_func_arg_reg_off(env, reg, regno, arg_type, arg_release);
@@ -5572,6 +5758,40 @@ skip_type_check:
 		bool zero_size_allowed = (arg_type == ARG_CONST_SIZE_OR_ZERO);
 
 		err = check_mem_size_reg(env, reg, regno, zero_size_allowed, meta);
+	} else if (arg_type_is_dynptr(arg_type)) {
+		bool initialized = check_dynptr_init(env, reg, arg_type);
+
+		if (type_is_uninit_mem(arg_type)) {
+			if (initialized) {
+				verbose(env, "Arg #%d dynptr cannot be an initialized dynptr\n",
+					arg + 1);
+				return -EINVAL;
+			}
+			meta->raw_mode = true;
+			err = check_helper_mem_access(env, regno, BPF_DYNPTR_SIZE, false, meta);
+			/* For now, we do not allow dynptrs to point to existing
+			 * refcounted memory
+			 */
+			if (reg_type_may_be_refcounted_or_null(regs[BPF_REG_1].type)) {
+				verbose(env, "Arg #%d dynptr memory cannot be potentially refcounted\n",
+					arg + 1);
+				return -EINVAL;
+			}
+		} else {
+			if (!initialized) {
+				char *err_extra = "";
+
+				if (arg_type & DYNPTR_TYPE_LOCAL)
+					err_extra = "local ";
+				else if (arg_type & DYNPTR_TYPE_MALLOC)
+					err_extra = "malloc ";
+				verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
+					err_extra, arg + 1);
+				return -EINVAL;
+			}
+			if (type_is_release_mem(arg_type))
+				err = unmark_stack_slots_dynptr(env, reg);
+		}
 	} else if (arg_type_is_alloc_size(arg_type)) {
 		if (!tnum_is_const(reg->var_off)) {
 			verbose(env, "R%d is not a known constant'\n",
@@ -6552,6 +6772,25 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 	return state->acquired_refs ? -EINVAL : 0;
 }
 
+/* Called at BPF_EXIT to detect if there are any reference-tracked dynptrs that have
+ * not been released. Dynptrs to local memory do not need to be released.
+ */
+static int check_dynptr_unreleased(struct bpf_verifier_env *env)
+{
+	struct bpf_func_state *state = cur_func(env);
+	int i;
+
+	for (i = 0; i < state->allocated_stack / BPF_REG_SIZE; i++) {
+		if (state->stack[i].slot_type[0] == STACK_DYNPTR &&
+		    dynptr_type_refcounted(state, i)) {
+			verbose(env, "spi=%d is an unreleased dynptr\n", i);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *regs)
 {
@@ -6693,6 +6932,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			return err;
 	}
 
+	regs = cur_regs(env);
+
+	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
+		if (arg_type_is_dynptr_uninit(fn->arg_type[i]))
+			err = mark_stack_slots_dynptr(env, &regs[BPF_REG_1 + i],
+						      fn->arg_type[i]);
+	}
+
 	if (meta.ref_obj_id) {
 		err = release_reference(env, meta.ref_obj_id);
 		if (err) {
@@ -6702,13 +6949,16 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
-	regs = cur_regs(env);
-
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
 		err = check_reference_leak(env);
 		if (err) {
 			verbose(env, "tail_call would lead to reference leak\n");
+			return err;
+		}
+		err = check_dynptr_unreleased(env);
+		if (err) {
+			verbose(env, "tail_call would lead to dynptr memory leak\n");
 			return err;
 		}
 		break;
@@ -11702,6 +11952,10 @@ static int do_check(struct bpf_verifier_env *env)
 					verbose(env, "bpf_spin_unlock is missing\n");
 					return -EINVAL;
 				}
+
+				err = check_dynptr_unreleased(env);
+				if (err)
+					return err;
 
 				if (state->curframe) {
 					/* exit from nested function */
