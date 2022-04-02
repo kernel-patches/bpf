@@ -5175,6 +5175,22 @@ union bpf_attr {
  *		After this operation, *ptr* will be an invalidated dynptr.
  *	Return
  *		Void.
+ *
+ * long bpf_dynptr_read(void *dst, u32 len, struct bpf_dynptr *src, u32 offset)
+ *	Description
+ *		Read *len* bytes from *src* into *dst*, starting from *offset*
+ *		into *dst*.
+ *	Return
+ *		0 on success, -EINVAL if *offset* + *len* exceeds the length
+ *		of *src*'s data or if *src* is an invalid dynptr.
+ *
+ * long bpf_dynptr_write(struct bpf_dynptr *dst, u32 offset, void *src, u32 len)
+ *	Description
+ *		Write *len* bytes from *src* into *dst*, starting from *offset*
+ *		into *dst*.
+ *	Return
+ *		0 on success, -EINVAL if *offset* + *len* exceeds the length
+ *		of *dst*'s data or if *dst* is not writeable.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5374,6 +5390,8 @@ union bpf_attr {
 	FN(dynptr_from_mem),		\
 	FN(malloc),			\
 	FN(free),			\
+	FN(dynptr_read),		\
+	FN(dynptr_write),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
