@@ -5830,7 +5830,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
 		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 
-		ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE, rel);
+		ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE,
+					     rel && reg->ref_obj_id);
 		if (ret < 0)
 			return ret;
 

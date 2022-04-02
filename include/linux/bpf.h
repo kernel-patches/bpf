@@ -344,7 +344,9 @@ enum bpf_type_flag {
 
 	MEM_UNINIT		= BIT(5 + BPF_BASE_TYPE_BITS),
 
-	__BPF_TYPE_LAST_FLAG	= MEM_UNINIT,
+	MEM_RELEASE		= BIT(6 + BPF_BASE_TYPE_BITS),
+
+	__BPF_TYPE_LAST_FLAG	= MEM_RELEASE,
 };
 
 /* Max number of base types. */
