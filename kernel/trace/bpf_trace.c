@@ -175,7 +175,7 @@ const struct bpf_func_proto bpf_probe_read_user_proto = {
 	.func		= bpf_probe_read_user,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -212,7 +212,7 @@ const struct bpf_func_proto bpf_probe_read_user_str_proto = {
 	.func		= bpf_probe_read_user_str,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -238,7 +238,7 @@ const struct bpf_func_proto bpf_probe_read_kernel_proto = {
 	.func		= bpf_probe_read_kernel,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -273,7 +273,7 @@ const struct bpf_func_proto bpf_probe_read_kernel_str_proto = {
 	.func		= bpf_probe_read_kernel_str,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -293,7 +293,7 @@ static const struct bpf_func_proto bpf_probe_read_compat_proto = {
 	.func		= bpf_probe_read_compat,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -312,7 +312,7 @@ static const struct bpf_func_proto bpf_probe_read_compat_str_proto = {
 	.func		= bpf_probe_read_compat_str,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -610,7 +610,7 @@ static const struct bpf_func_proto bpf_perf_event_read_value_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -1112,7 +1112,7 @@ static const struct bpf_func_proto bpf_get_branch_snapshot_proto = {
 	.func		= bpf_get_branch_snapshot,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
@@ -1406,7 +1406,7 @@ static const struct bpf_func_proto bpf_get_stack_proto_tp = {
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg4_type	= ARG_ANYTHING,
 };
@@ -1473,7 +1473,7 @@ static const struct bpf_func_proto bpf_perf_prog_read_value_proto = {
          .gpl_only       = true,
          .ret_type       = RET_INTEGER,
          .arg1_type      = ARG_PTR_TO_CTX,
-         .arg2_type      = ARG_PTR_TO_UNINIT_MEM,
+	 .arg2_type      = ARG_PTR_TO_MEM_UNINIT,
          .arg3_type      = ARG_CONST_SIZE,
 };
 

@@ -103,7 +103,7 @@ const struct bpf_func_proto bpf_map_pop_elem_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
-	.arg2_type	= ARG_PTR_TO_UNINIT_MAP_VALUE,
+	.arg2_type	= ARG_PTR_TO_MAP_VALUE_UNINIT,
 };
 
 BPF_CALL_2(bpf_map_peek_elem, struct bpf_map *, map, void *, value)
@@ -116,7 +116,7 @@ const struct bpf_func_proto bpf_map_peek_elem_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
-	.arg2_type	= ARG_PTR_TO_UNINIT_MAP_VALUE,
+	.arg2_type	= ARG_PTR_TO_MAP_VALUE_UNINIT,
 };
 
 const struct bpf_func_proto bpf_get_prandom_u32_proto = {
@@ -237,7 +237,7 @@ const struct bpf_func_proto bpf_get_current_comm_proto = {
 	.func		= bpf_get_current_comm,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE,
 };
 
@@ -616,7 +616,7 @@ const struct bpf_func_proto bpf_get_ns_current_pid_tgid_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_ANYTHING,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type      = ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type      = ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type      = ARG_CONST_SIZE,
 };
 
@@ -663,7 +663,7 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.func		= bpf_copy_from_user,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 };
@@ -693,7 +693,7 @@ const struct bpf_func_proto bpf_copy_from_user_task_proto = {
 	.func		= bpf_copy_from_user_task,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg1_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
 	.arg3_type	= ARG_ANYTHING,
 	.arg4_type	= ARG_PTR_TO_BTF_ID,
