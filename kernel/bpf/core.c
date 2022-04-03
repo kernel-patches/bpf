@@ -2405,13 +2405,14 @@ int bpf_prog_array_update_at(struct bpf_prog_array *array, int index,
 int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			struct bpf_prog *exclude_prog,
 			struct bpf_prog *include_prog,
-			u64 bpf_cookie,
+			u64 bpf_cookie, u32 prio,
 			struct bpf_prog_array **new_array)
 {
 	int new_prog_cnt, carry_prog_cnt = 0;
 	struct bpf_prog_array_item *existing, *new;
 	struct bpf_prog_array *array;
 	bool found_exclude = false;
+	bool found_less_prio = false;
 
 	/* Figure out how many existing progs we need to carry over to
 	 * the new array.
@@ -2458,16 +2459,30 @@ int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			    existing->prog == &dummy_bpf_prog.prog)
 				continue;
 
+			if (include_prog && existing->prio <= prio) {
+				found_less_prio = true;
+
+				new->prog = include_prog;
+				new->prio = prio;
+				new->bpf_cookie = bpf_cookie;
+
+				new++;
+			}
+
 			new->prog = existing->prog;
 			new->bpf_cookie = existing->bpf_cookie;
+			new->prio = existing->prio;
 			new++;
 		}
 	}
-	if (include_prog) {
+
+	if (include_prog && !found_less_prio) {
 		new->prog = include_prog;
 		new->bpf_cookie = bpf_cookie;
+		new->prio = prio;
 		new++;
 	}
+
 	new->prog = NULL;
 	*new_array = array;
 	return 0;

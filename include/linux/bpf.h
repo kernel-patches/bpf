@@ -1235,6 +1235,7 @@ struct bpf_prog_array_item {
 	union {
 		struct bpf_cgroup_storage *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 		u64 bpf_cookie;
+		u32 prio;
 	};
 };
 
@@ -1274,7 +1275,7 @@ int bpf_prog_array_copy_info(struct bpf_prog_array *array,
 int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			struct bpf_prog *exclude_prog,
 			struct bpf_prog *include_prog,
-			u64 bpf_cookie,
+			u64 bpf_cookie, u32 prio,
 			struct bpf_prog_array **new_array);
 
 struct bpf_run_ctx {};

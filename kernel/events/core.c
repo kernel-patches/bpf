@@ -5753,7 +5753,7 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 		if (IS_ERR(prog))
 			return PTR_ERR(prog);
 
-		err = perf_event_set_bpf_prog(event, prog, 0);
+		err = perf_event_set_bpf_prog(event, prog, 0, 0);
 		if (err) {
 			bpf_prog_put(prog);
 			return err;
@@ -10172,7 +10172,7 @@ static inline bool perf_event_is_tracing(struct perf_event *event)
 }
 
 int perf_event_set_bpf_prog(struct perf_event *event, struct bpf_prog *prog,
-			    u64 bpf_cookie)
+			    u64 bpf_cookie, u32 prio)
 {
 	bool is_kprobe, is_tracepoint, is_syscall_tp;
 
@@ -10203,7 +10203,7 @@ int perf_event_set_bpf_prog(struct perf_event *event, struct bpf_prog *prog,
 			return -EACCES;
 	}
 
-	return perf_event_attach_bpf_prog(event, prog, bpf_cookie);
+	return perf_event_attach_bpf_prog(event, prog, bpf_cookie, prio);
 }
 
 void perf_event_free_bpf_prog(struct perf_event *event)
@@ -10226,7 +10226,7 @@ static void perf_event_free_filter(struct perf_event *event)
 }
 
 int perf_event_set_bpf_prog(struct perf_event *event, struct bpf_prog *prog,
-			    u64 bpf_cookie)
+			    u64 bpf_cookie, u32 prio)
 {
 	return -ENOENT;
 }

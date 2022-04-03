@@ -1877,7 +1877,7 @@ static DEFINE_MUTEX(bpf_event_mutex);
 
 int perf_event_attach_bpf_prog(struct perf_event *event,
 			       struct bpf_prog *prog,
-			       u64 bpf_cookie)
+			       u64 bpf_cookie, u32 prio)
 {
 	struct bpf_prog_array *old_array;
 	struct bpf_prog_array *new_array;
@@ -1904,7 +1904,9 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 		goto unlock;
 	}
 
-	ret = bpf_prog_array_copy(old_array, NULL, prog, bpf_cookie, &new_array);
+	ret = bpf_prog_array_copy(old_array, NULL, prog, bpf_cookie,
+										prio, &new_array);
+
 	if (ret < 0)
 		goto unlock;
 
@@ -1931,7 +1933,7 @@ void perf_event_detach_bpf_prog(struct perf_event *event)
 		goto unlock;
 
 	old_array = bpf_event_rcu_dereference(event->tp_event->prog_array);
-	ret = bpf_prog_array_copy(old_array, event->prog, NULL, 0, &new_array);
+	ret = bpf_prog_array_copy(old_array, event->prog, NULL, 0, 0, &new_array);
 	if (ret == -ENOENT)
 		goto unlock;
 	if (ret < 0) {

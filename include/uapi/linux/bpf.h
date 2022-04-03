@@ -1481,6 +1481,7 @@ union bpf_attr {
 				 * accessible through bpf_get_attach_cookie() BPF helper
 				 */
 				__u64		bpf_cookie;
+				__u32		prio;
 			} perf_event;
 			struct {
 				__u32		flags;
