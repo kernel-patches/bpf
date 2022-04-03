@@ -851,6 +851,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 		break;
 	case BPF_PERF_EVENT:
 		attr.link_create.perf_event.bpf_cookie = OPTS_GET(opts, perf_event.bpf_cookie, 0);
+		attr.link_create.perf_event.prio = OPTS_GET(opts, perf_event.prio, 0);
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
 		break;

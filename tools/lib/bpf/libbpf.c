@@ -9912,7 +9912,8 @@ struct bpf_link *bpf_program__attach_perf_event_opts(const struct bpf_program *p
 
 	if (kernel_supports(prog->obj, FEAT_PERF_LINK)) {
 		DECLARE_LIBBPF_OPTS(bpf_link_create_opts, link_opts,
-			.perf_event.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0));
+			.perf_event.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0),
+			.perf_event.prio = OPTS_GET(opts, prio, 0));
 
 		link_fd = bpf_link_create(prog_fd, pfd, BPF_PERF_EVENT, &link_opts);
 		if (link_fd < 0) {
@@ -10663,6 +10664,7 @@ struct bpf_link *bpf_program__attach_tracepoint_opts(const struct bpf_program *p
 		return libbpf_err_ptr(-EINVAL);
 
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+	pe_opts.prio = OPTS_GET(opts, prio, 0);
 
 	pfd = perf_event_open_tracepoint(tp_category, tp_name);
 	if (pfd < 0) {

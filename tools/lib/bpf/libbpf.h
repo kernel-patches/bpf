@@ -394,8 +394,9 @@ struct bpf_perf_event_opts {
 	size_t sz;
 	/* custom user-provided value fetchable through bpf_get_attach_cookie() */
 	__u64 bpf_cookie;
+	__u32 prio;
 };
-#define bpf_perf_event_opts__last_field bpf_cookie
+#define bpf_perf_event_opts__last_field prio
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_perf_event(const struct bpf_program *prog, int pfd);
@@ -508,8 +509,9 @@ struct bpf_tracepoint_opts {
 	size_t sz;
 	/* custom user-provided value fetchable through bpf_get_attach_cookie() */
 	__u64 bpf_cookie;
+	__u32 prio;
 };
-#define bpf_tracepoint_opts__last_field bpf_cookie
+#define bpf_tracepoint_opts__last_field prio
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_tracepoint(const struct bpf_program *prog,
