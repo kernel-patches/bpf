@@ -10707,21 +10707,61 @@ out:
 	return ret;
 }
 
+static void add_debian_library_paths(const char **search_paths, int *n)
+{
+	/*
+	 * Based on https://packages.debian.org/sid/libc6.
+	 *
+	 * Assume that the traced program is built for the same architecture
+	 * as libbpf, which should cover the vast majority of cases.
+	 */
+#if defined(__x86_64__)
+	search_paths[(*n)++] = "/lib/x86_64-linux-gnu";
+#elif defined(__i386__)
+	search_paths[(*n)++] = "/lib/i386-linux-gnu";
+#elif defined(__s390x__)
+	search_paths[(*n)++] = "/lib/s390x-linux-gnu";
+#elif defined(__s390__)
+	search_paths[(*n)++] = "/lib/s390-linux-gnu";
+#elif defined(__arm__)
+#if defined(__SOFTFP__)
+	search_paths[(*n)++] = "/lib/arm-linux-gnueabi";
+#else
+	search_paths[(*n)++] = "/lib/arm-linux-gnueabihf";
+#endif /* defined(__SOFTFP__) */
+#elif defined(__aarch64__)
+	search_paths[(*n)++] = "/lib/aarch64-linux-gnu";
+#elif defined(__mips__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#if _MIPS_SZLONG == 64
+	search_paths[(*n)++] = "/lib/mips64el-linux-gnuabi64";
+#elif _MIPS_SZLONG == 32
+	search_paths[(*n)++] = "/lib/mipsel-linux-gnu";
+#endif
+#elif defined(__powerpc__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+	search_paths[(*n)++] = "/lib/powerpc64le-linux-gnu";
+#elif defined(__sparc__)
+	search_paths[(*n)++] = "/lib/sparc64-linux-gnu";
+#elif defined(__riscv) && __riscv_xlen == 64
+	search_paths[(*n)++] = "/lib/riscv64-linux-gnu";
+#endif
+}
+
 /* Get full path to program/shared library. */
 static int resolve_full_path(const char *file, char *result, size_t result_sz)
 {
-	const char *search_paths[2];
-	int i;
+	const char *search_paths[3];
+	int i, n = 0;
 
 	if (strstr(file, ".so")) {
-		search_paths[0] = getenv("LD_LIBRARY_PATH");
-		search_paths[1] = "/usr/lib64:/usr/lib";
+		search_paths[n++] = getenv("LD_LIBRARY_PATH");
+		search_paths[n++] = "/usr/lib64:/usr/lib";
+		add_debian_library_paths(search_paths, &n);
 	} else {
-		search_paths[0] = getenv("PATH");
-		search_paths[1] = "/usr/bin:/usr/sbin";
+		search_paths[n++] = getenv("PATH");
+		search_paths[n++] = "/usr/bin:/usr/sbin";
 	}
 
-	for (i = 0; i < ARRAY_SIZE(search_paths); i++) {
+	for (i = 0; i < n; i++) {
 		const char *s;
 
 		if (!search_paths[i])
