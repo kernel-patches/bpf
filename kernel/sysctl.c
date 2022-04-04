@@ -184,6 +184,7 @@ void __weak unpriv_ebpf_notify(int new_state)
 {
 }
 
+#ifdef CONFIG_BPF_UNPRIV
 static int bpf_unpriv_handler(struct ctl_table *table, int write,
 			      void *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -206,6 +207,7 @@ static int bpf_unpriv_handler(struct ctl_table *table, int write,
 
 	return ret;
 }
+#endif /* CONFIG_BPF_UNPRIV */
 #endif /* CONFIG_BPF_SYSCALL && CONFIG_SYSCTL */
 
 /*
@@ -2300,6 +2302,7 @@ static struct ctl_table kern_table[] = {
 	},
 #endif
 #ifdef CONFIG_BPF_SYSCALL
+#ifdef CONFIG_BPF_UNPRIV
 	{
 		.procname	= "unprivileged_bpf_disabled",
 		.data		= &sysctl_unprivileged_bpf_disabled,
@@ -2309,6 +2312,7 @@ static struct ctl_table kern_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO,
 	},
+#endif
 	{
 		.procname	= "bpf_stats_enabled",
 		.data		= &bpf_stats_enabled_key.key,
