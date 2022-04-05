@@ -508,6 +508,8 @@ int main(int argc, char **argv)
 		 * mode for loading generated skeleton.
 		 */
 		libbpf_set_strict_mode(LIBBPF_STRICT_ALL & ~LIBBPF_STRICT_MAP_DEFINITIONS);
+	} else {
+		libbpf_set_strict_mode(LIBBPF_STRICT_AUTO_RLIMIT_MEMLOCK);
 	}
 
 	argc -= optind;
