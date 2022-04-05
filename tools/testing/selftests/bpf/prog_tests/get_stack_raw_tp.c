@@ -76,10 +76,8 @@ static void get_stack_print_output(void *ctx, int cpu, void *data, __u32 size)
 			good_user_stack = true;
 	}
 
-	if (!good_kern_stack)
-	    CHECK(!good_kern_stack, "kern_stack", "corrupted kernel stack\n");
-	if (!good_user_stack)
-	    CHECK(!good_user_stack, "user_stack", "corrupted user stack\n");
+	CHECK(!good_kern_stack, "kern_stack", "corrupted kernel stack\n");
+	CHECK(!good_user_stack, "user_stack", "corrupted user stack\n");
 }
 
 void test_get_stack_raw_tp(void)
