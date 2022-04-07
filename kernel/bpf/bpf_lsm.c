@@ -35,6 +35,98 @@ BTF_SET_START(bpf_lsm_hooks)
 #undef LSM_HOOK
 BTF_SET_END(bpf_lsm_hooks)
 
+static unsigned int __cgroup_bpf_run_lsm_socket(const void *ctx,
+						const struct bpf_insn *insn)
+{
+	const struct bpf_prog *prog;
+	struct socket *sock;
+	struct cgroup *cgrp;
+	struct sock *sk;
+	int ret = 0;
+	u64 *regs;
+
+	regs = (u64 *)ctx;
+	sock = (void *)(unsigned long)regs[BPF_REG_0];
+	/*prog = container_of(insn, struct bpf_prog, insnsi);*/
+	prog = (const struct bpf_prog *)((void *)insn - offsetof(struct bpf_prog, insnsi));
+
+	if (unlikely(!sock))
+		return 0;
+
+	sk = sock->sk;
+	if (unlikely(!sk))
+		return 0;
+
+	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
+	if (likely(cgrp))
+		ret = BPF_PROG_RUN_ARRAY_CG(cgrp->bpf.effective[prog->aux->cgroup_atype],
+					    ctx, bpf_prog_run, 0);
+	return ret;
+}
+
+static unsigned int __cgroup_bpf_run_lsm_current(const void *ctx,
+						 const struct bpf_insn *insn)
+{
+	const struct bpf_prog *prog;
+	struct cgroup *cgrp;
+	int ret = 0;
+
+	if (unlikely(!current))
+		return 0;
+
+	/*prog = container_of(insn, struct bpf_prog, insnsi);*/
+	prog = (const struct bpf_prog *)((void *)insn - offsetof(struct bpf_prog, insnsi));
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(current);
+	if (likely(cgrp))
+		ret = BPF_PROG_RUN_ARRAY_CG(cgrp->bpf.effective[prog->aux->cgroup_atype],
+					    ctx, bpf_prog_run, 0);
+	rcu_read_unlock();
+	return ret;
+}
+
+int bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
+			     bpf_func_t *bpf_func)
+{
+	const struct btf_type *first_arg_type;
+	const struct btf_type *sock_type;
+	const struct btf *btf_vmlinux;
+	const struct btf_param *args;
+	s32 type_id;
+
+	if (!prog->aux->attach_func_proto ||
+	    !btf_type_is_func_proto(prog->aux->attach_func_proto))
+		return -EINVAL;
+
+	if (btf_type_vlen(prog->aux->attach_func_proto) < 1)
+		return -EINVAL;
+
+	args = (const struct btf_param *)(prog->aux->attach_func_proto + 1);
+
+	btf_vmlinux = bpf_get_btf_vmlinux();
+	if (!btf_vmlinux)
+		return -EINVAL;
+
+	type_id = btf_find_by_name_kind(btf_vmlinux, "socket", BTF_KIND_STRUCT);
+	if (type_id < 0)
+		return -EINVAL;
+	sock_type = btf_type_by_id(btf_vmlinux, type_id);
+
+	first_arg_type = btf_type_resolve_ptr(btf_vmlinux, args[0].type, NULL);
+	if (first_arg_type == sock_type)
+		*bpf_func = __cgroup_bpf_run_lsm_socket;
+	else
+		*bpf_func = __cgroup_bpf_run_lsm_current;
+
+	return 0;
+}
+
+int bpf_lsm_hook_idx(u32 btf_id)
+{
+	return btf_id_set_index(&bpf_lsm_hooks, btf_id);
+}
+
 int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			const struct bpf_prog *prog)
 {

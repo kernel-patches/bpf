@@ -14,6 +14,9 @@
 #include <linux/string.h>
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/btf_ids.h>
+#include <linux/bpf_lsm.h>
+#include <linux/bpf_verifier.h>
 #include <net/sock.h>
 #include <net/bpf_sk_storage.h>
 
@@ -21,6 +24,18 @@
 
 DEFINE_STATIC_KEY_ARRAY_FALSE(cgroup_bpf_enabled_key, MAX_CGROUP_BPF_ATTACH_TYPE);
 EXPORT_SYMBOL(cgroup_bpf_enabled_key);
+
+#ifdef CONFIG_BPF_LSM
+static enum cgroup_bpf_attach_type bpf_lsm_attach_type_get(u32 attach_btf_id)
+{
+	return CGROUP_LSM_START + bpf_lsm_hook_idx(attach_btf_id);
+}
+#else
+static enum cgroup_bpf_attach_type bpf_lsm_attach_type_get(u32 attach_btf_id)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 void cgroup_bpf_offline(struct cgroup *cgrp)
 {
@@ -89,6 +104,14 @@ static void bpf_cgroup_storages_link(struct bpf_cgroup_storage *storages[],
 		bpf_cgroup_storage_link(storages[stype], cgrp, attach_type);
 }
 
+static void bpf_cgroup_storages_unlink(struct bpf_cgroup_storage *storages[])
+{
+	enum bpf_cgroup_storage_type stype;
+
+	for_each_cgroup_storage_type(stype)
+		bpf_cgroup_storage_unlink(storages[stype]);
+}
+
 /* Called when bpf_cgroup_link is auto-detached from dying cgroup.
  * It drops cgroup and bpf_prog refcounts, and marks bpf_link as defunct. It
  * doesn't free link memory, which will eventually be done by bpf_link's
@@ -98,6 +121,15 @@ static void bpf_cgroup_link_auto_detach(struct bpf_cgroup_link *link)
 {
 	cgroup_put(link->cgroup);
 	link->cgroup = NULL;
+}
+
+static void bpf_cgroup_lsm_shim_release(struct bpf_prog *prog,
+					enum cgroup_bpf_attach_type atype)
+{
+	if (!prog || atype != prog->aux->cgroup_atype)
+		return;
+
+	bpf_trampoline_unlink_cgroup_shim(prog);
 }
 
 /**
@@ -123,10 +155,16 @@ static void cgroup_bpf_release(struct work_struct *work)
 
 		list_for_each_entry_safe(pl, pltmp, progs, node) {
 			list_del(&pl->node);
-			if (pl->prog)
+			if (pl->prog) {
+				bpf_cgroup_lsm_shim_release(pl->prog,
+							    atype);
 				bpf_prog_put(pl->prog);
-			if (pl->link)
+			}
+			if (pl->link) {
+				bpf_cgroup_lsm_shim_release(pl->link->link.prog,
+							    atype);
 				bpf_cgroup_link_auto_detach(pl->link);
+			}
 			kfree(pl);
 			static_branch_dec(&cgroup_bpf_enabled_key[atype]);
 		}
@@ -439,6 +477,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	struct bpf_prog *old_prog = NULL;
 	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_cgroup_storage *new_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
+	struct bpf_attach_target_info tgt_info = {};
 	enum cgroup_bpf_attach_type atype;
 	struct bpf_prog_list *pl;
 	struct list_head *progs;
@@ -455,9 +494,31 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 		/* replace_prog implies BPF_F_REPLACE, and vice versa */
 		return -EINVAL;
 
-	atype = to_cgroup_bpf_attach_type(type);
-	if (atype < 0)
-		return -EINVAL;
+	if (type == BPF_LSM_CGROUP) {
+		struct bpf_prog *p = prog ? : link->link.prog;
+
+		if (replace_prog) {
+			/* Reusing shim from the original program.
+			 */
+			atype = replace_prog->aux->cgroup_atype;
+		} else {
+			err = bpf_check_attach_target(NULL, p, NULL,
+						      p->aux->attach_btf_id,
+						      &tgt_info);
+			if (err)
+				return -EINVAL;
+
+			atype = bpf_lsm_attach_type_get(p->aux->attach_btf_id);
+			if (atype < 0)
+				return atype;
+		}
+
+		p->aux->cgroup_atype = atype;
+	} else {
+		atype = to_cgroup_bpf_attach_type(type);
+		if (atype < 0)
+			return -EINVAL;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 
@@ -503,12 +564,26 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	if (err)
 		goto cleanup;
 
+	bpf_cgroup_storages_link(new_storage, cgrp, type);
+
+	if (type == BPF_LSM_CGROUP && !old_prog) {
+		struct bpf_prog *p = prog ? : link->link.prog;
+		int err;
+
+		err = bpf_trampoline_link_cgroup_shim(p, &tgt_info);
+		if (err)
+			goto cleanup_trampoline;
+	}
+
 	if (old_prog)
 		bpf_prog_put(old_prog);
 	else
 		static_branch_inc(&cgroup_bpf_enabled_key[atype]);
-	bpf_cgroup_storages_link(new_storage, cgrp, type);
+
 	return 0;
+
+cleanup_trampoline:
+	bpf_cgroup_storages_unlink(new_storage);
 
 cleanup:
 	if (old_prog) {
@@ -601,9 +676,13 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	struct list_head *progs;
 	bool found = false;
 
-	atype = to_cgroup_bpf_attach_type(link->type);
-	if (atype < 0)
-		return -EINVAL;
+	if (link->type == BPF_LSM_CGROUP) {
+		atype = link->link.prog->aux->cgroup_atype;
+	} else {
+		atype = to_cgroup_bpf_attach_type(link->type);
+		if (atype < 0)
+			return -EINVAL;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 
@@ -618,6 +697,9 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	}
 	if (!found)
 		return -ENOENT;
+
+	if (link->type == BPF_LSM_CGROUP)
+		new_prog->aux->cgroup_atype = atype;
 
 	old_prog = xchg(&link->link.prog, new_prog);
 	replace_effective_prog(cgrp, atype, link);
@@ -702,9 +784,15 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	u32 flags;
 	int err;
 
-	atype = to_cgroup_bpf_attach_type(type);
-	if (atype < 0)
-		return -EINVAL;
+	if (type == BPF_LSM_CGROUP) {
+		struct bpf_prog *p = prog ? : link->link.prog;
+
+		atype = p->aux->cgroup_atype;
+	} else {
+		atype = to_cgroup_bpf_attach_type(type);
+		if (atype < 0)
+			return -EINVAL;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 	flags = cgrp->bpf.flags[atype];
@@ -725,6 +813,10 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	err = update_effective_progs(cgrp, atype);
 	if (err)
 		goto cleanup;
+
+	if (type == BPF_LSM_CGROUP)
+		bpf_cgroup_lsm_shim_release(prog ? : link->link.prog,
+					    atype);
 
 	/* now can actually delete it from this cgroup list */
 	list_del(&pl->node);
