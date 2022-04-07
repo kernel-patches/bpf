@@ -996,7 +996,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 	link = calloc(1, sizeof(*link));
 	if (!link) {
 		err = -ENOMEM;
-		goto err_out;
+		goto link_err;
 	}
 
 	link->usdt_man = man;
@@ -1072,7 +1072,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 
 err_out:
 	bpf_link__destroy(&link->link);
-
+link_err:
 	free(targets);
 	hashmap__free(specs_hash);
 	if (elf)
