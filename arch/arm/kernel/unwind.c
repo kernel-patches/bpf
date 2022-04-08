@@ -404,6 +404,7 @@ int unwind_frame(struct stackframe *frame)
 	ctrl.vrs[SP] = frame->sp;
 	ctrl.vrs[LR] = frame->lr;
 	ctrl.vrs[PC] = 0;
+	ctrl.lr_addr = NULL;
 
 	if (idx->insn == 1)
 		/* can't unwind */
