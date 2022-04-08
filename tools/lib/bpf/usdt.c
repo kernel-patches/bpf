@@ -1170,6 +1170,31 @@ static int parse_usdt_spec(struct usdt_spec *spec, const struct usdt_note *note,
 
 /* Architecture-specific logic for parsing USDT argument location specs */
 
+#if defined(__x86_64__) || defined(__i386__) || defined(__s390x__)
+
+static int init_usdt_arg_spec(struct usdt_arg_spec *arg, enum usdt_arg_type arg_type, int arg_sz,
+			      __u64 val_off, int reg_off)
+{
+	if (reg_off < 0)
+		return reg_off;
+	arg->arg_type = arg_type;
+	arg->val_off = val_off;
+	arg->reg_off = reg_off;
+	arg->arg_signed = arg_sz < 0;
+	if (arg_sz < 0)
+		arg_sz = -arg_sz;
+
+	switch (arg_sz) {
+	case 1: case 2: case 4: case 8:
+		arg->arg_bitshift = 64 - arg_sz * 8;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+#endif
+
 #if defined(__x86_64__) || defined(__i386__)
 
 static int calc_pt_regs_off(const char *reg_name)
@@ -1220,52 +1245,32 @@ static int calc_pt_regs_off(const char *reg_name)
 static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec *arg)
 {
 	char *reg_name = NULL;
-	int arg_sz, len, reg_off;
+	int arg_sz, len, ret;
 	long off;
 
 	if (sscanf(arg_str, " %d @ %ld ( %%%m[^)] ) %n", &arg_sz, &off, &reg_name, &len) == 3) {
 		/* Memory dereference case, e.g., -4@-20(%rbp) */
-		arg->arg_type = USDT_ARG_REG_DEREF;
-		arg->val_off = off;
-		reg_off = calc_pt_regs_off(reg_name);
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG_DEREF, arg_sz, off,
+					 calc_pt_regs_off(reg_name));
 		free(reg_name);
-		if (reg_off < 0)
-			return reg_off;
-		arg->reg_off = reg_off;
 	} else if (sscanf(arg_str, " %d @ %%%ms %n", &arg_sz, &reg_name, &len) == 2) {
 		/* Register read case, e.g., -4@%eax */
-		arg->arg_type = USDT_ARG_REG;
-		arg->val_off = 0;
-
-		reg_off = calc_pt_regs_off(reg_name);
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG, arg_sz, 0,
+					 calc_pt_regs_off(reg_name));
 		free(reg_name);
-		if (reg_off < 0)
-			return reg_off;
-		arg->reg_off = reg_off;
 	} else if (sscanf(arg_str, " %d @ $%ld %n", &arg_sz, &off, &len) == 2) {
 		/* Constant value case, e.g., 4@$71 */
-		arg->arg_type = USDT_ARG_CONST;
-		arg->val_off = off;
-		arg->reg_off = 0;
+		ret = init_usdt_arg_spec(arg, USDT_ARG_CONST, arg_sz, off, 0);
 	} else {
 		pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
 		return -EINVAL;
 	}
 
-	arg->arg_signed = arg_sz < 0;
-	if (arg_sz < 0)
-		arg_sz = -arg_sz;
-
-	switch (arg_sz) {
-	case 1: case 2: case 4: case 8:
-		arg->arg_bitshift = 64 - arg_sz * 8;
-		break;
-	default:
+	if (ret < 0) {
 		pr_warn("usdt: unsupported arg #%d (spec '%s') size: %d\n",
 			arg_num, arg_str, arg_sz);
-		return -EINVAL;
+		return ret;
 	}
-
 	return len;
 }
 
@@ -1276,51 +1281,38 @@ static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec
 static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec *arg)
 {
 	unsigned int reg;
-	int arg_sz, len;
+	int arg_sz, len, ret;
 	long off;
 
 	if (sscanf(arg_str, " %d @ %ld ( %%r%u ) %n", &arg_sz, &off, &reg, &len) == 3) {
 		/* Memory dereference case, e.g., -2@-28(%r15) */
-		arg->arg_type = USDT_ARG_REG_DEREF;
-		arg->val_off = off;
 		if (reg > 15) {
 			pr_warn("usdt: unrecognized register '%%r%u'\n", reg);
 			return -EINVAL;
 		}
-		arg->reg_off = offsetof(user_pt_regs, gprs[reg]);
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG_DEREF, arg_sz, off,
+					 offsetof(user_pt_regs, gprs[reg]));
 	} else if (sscanf(arg_str, " %d @ %%r%u %n", &arg_sz, &reg, &len) == 2) {
 		/* Register read case, e.g., -8@%r0 */
-		arg->arg_type = USDT_ARG_REG;
-		arg->val_off = 0;
 		if (reg > 15) {
 			pr_warn("usdt: unrecognized register '%%r%u'\n", reg);
 			return -EINVAL;
 		}
-		arg->reg_off = offsetof(user_pt_regs, gprs[reg]);
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG, arg_sz, 0,
+					 offsetof(user_pt_regs, gprs[reg]));
 	} else if (sscanf(arg_str, " %d @ %ld %n", &arg_sz, &off, &len) == 2) {
 		/* Constant value case, e.g., 4@71 */
-		arg->arg_type = USDT_ARG_CONST;
-		arg->val_off = off;
-		arg->reg_off = 0;
+		ret = init_usdt_arg_spec(arg, USDT_ARG_CONST, arg_sz, off, 0);
 	} else {
 		pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
 		return -EINVAL;
 	}
 
-	arg->arg_signed = arg_sz < 0;
-	if (arg_sz < 0)
-		arg_sz = -arg_sz;
-
-	switch (arg_sz) {
-	case 1: case 2: case 4: case 8:
-		arg->arg_bitshift = 64 - arg_sz * 8;
-		break;
-	default:
+	if (ret < 0) {
 		pr_warn("usdt: unsupported arg #%d (spec '%s') size: %d\n",
 			arg_num, arg_str, arg_sz);
-		return -EINVAL;
+		return ret;
 	}
-
 	return len;
 }
 
