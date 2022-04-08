@@ -1170,7 +1170,7 @@ static int parse_usdt_spec(struct usdt_spec *spec, const struct usdt_note *note,
 
 /* Architecture-specific logic for parsing USDT argument location specs */
 
-#if defined(__x86_64__) || defined(__i386__) || defined(__s390x__)
+#if defined(__x86_64__) || defined(__i386__) || defined(__s390x__) || defined(__aarch64__)
 
 static int init_usdt_arg_spec(struct usdt_arg_spec *arg, enum usdt_arg_type arg_type, int arg_sz,
 			      __u64 val_off, int reg_off)
@@ -1303,6 +1303,54 @@ static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec
 	} else if (sscanf(arg_str, " %d @ %ld %n", &arg_sz, &off, &len) == 2) {
 		/* Constant value case, e.g., 4@71 */
 		ret = init_usdt_arg_spec(arg, USDT_ARG_CONST, arg_sz, off, 0);
+	} else {
+		pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
+		return -EINVAL;
+	}
+
+	if (ret < 0) {
+		pr_warn("usdt: unsupported arg #%d (spec '%s') size: %d\n",
+			arg_num, arg_str, arg_sz);
+		return ret;
+	}
+	return len;
+}
+
+#elif defined(__aarch64__)
+
+static int calc_pt_regs_off(const char *reg_name)
+{
+	int reg_num;
+
+	if (sscanf(reg_name, "x%d", &reg_num) == 1) {
+		if (reg_num >= 0 && reg_num < 31)
+			return offsetof(struct user_pt_regs, regs[reg_num]);
+	} else if (strcmp(reg_name, "sp") == 0) {
+		return offsetof(struct user_pt_regs, sp);
+	}
+	pr_warn("usdt: unrecognized register '%s'\n", reg_name);
+	return -ENOENT;
+}
+
+static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec *arg)
+{
+	char *reg_name = NULL;
+	int arg_sz, len, ret;
+	long off = 0;
+
+	if (sscanf(arg_str, " %d @ \[ %m[^,], %ld ] %n", &arg_sz, &reg_name, &off, &len) == 3 ||
+	    sscanf(arg_str, " %d @ \[ %m[a-z0-9] ] %n", &arg_sz, &reg_name, &len) == 2) {
+		/* Memory dereference case, e.g., -4@[sp, 96], -4@[sp] */
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG_DEREF, arg_sz, off,
+					 calc_pt_regs_off(reg_name));
+		free(reg_name);
+	} else if (sscanf(arg_str, " %d @ %ld %n", &arg_sz, &off, &len) == 2) {
+		/* Constant value case, e.g., 4@5 */
+		ret = init_usdt_arg_spec(arg, USDT_ARG_CONST, arg_sz, off, 0);
+	} else if (sscanf(arg_str, " %d @ %ms %n", &arg_sz, &reg_name, &len) == 2) {
+		/* Register read case, e.g., -8@x4 */
+		ret = init_usdt_arg_spec(arg, USDT_ARG_REG, arg_sz, 0, calc_pt_regs_off(reg_name));
+		free(reg_name);
 	} else {
 		pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
 		return -EINVAL;
