@@ -2109,10 +2109,12 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 
 	ri = container_of(rhn, struct kretprobe_instance, node);
 
-	if (rp->entry_handler && rp->entry_handler(ri, regs))
+	if (rp->entry_handler && rp->entry_handler(ri, regs)) {
 		rethook_recycle(rhn);
-	else
-		rethook_hook(rhn, regs, kprobe_ftrace(p));
+	} else if (rethook_hook(rhn, regs, kprobe_ftrace(p)) < 0) {
+		rethook_recycle(rhn);
+		rp->nmissed++;
+	}
 
 	return 0;
 }

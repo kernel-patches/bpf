@@ -174,11 +174,19 @@ NOKPROBE_SYMBOL(rethook_try_get);
  * from ftrace (mcount) callback, @mcount must be set true. If this is called
  * from the real function entry (e.g. kprobes) @mcount must be set false.
  * This is because the way to hook the function return depends on the context.
+ * This returns 0 if succeeded to hook the function return, or -errno if
+ * failed.
  */
-void rethook_hook(struct rethook_node *node, struct pt_regs *regs, bool mcount)
+int rethook_hook(struct rethook_node *node, struct pt_regs *regs, bool mcount)
 {
-	arch_rethook_prepare(node, regs, mcount);
+	int ret;
+
+	ret = arch_rethook_prepare(node, regs, mcount);
+	if (ret < 0)
+		return ret;
+
 	__llist_add(&node->llist, &current->rethooks);
+	return 0;
 }
 NOKPROBE_SYMBOL(rethook_hook);
 

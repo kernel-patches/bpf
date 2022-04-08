@@ -48,7 +48,10 @@ static void fprobe_handler(unsigned long ip, unsigned long parent_ip,
 		}
 		fpr = container_of(rh, struct fprobe_rethook_node, node);
 		fpr->entry_ip = ip;
-		rethook_hook(rh, ftrace_get_regs(fregs), true);
+		if (rethook_hook(rh, ftrace_get_regs(fregs), true) < 0) {
+			rethook_recycle(rh);
+			fp->nmissed++;
+		}
 	}
 
 out:
