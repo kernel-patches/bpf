@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * trampoline entry and return code for kretprobes.
+ * trampoline entry and return code for rethook.
+ * Renamed from arch/arm64/kernel/probes/kprobes_trampoline.S
  */
 
 #include <linux/linkage.h>
@@ -61,7 +62,7 @@
 	ldp x28, x29, [sp, #S_X28]
 	.endm
 
-SYM_CODE_START(__kretprobe_trampoline)
+SYM_CODE_START(arch_rethook_trampoline)
 	sub sp, sp, #PT_REGS_SIZE
 
 	save_all_base_regs
@@ -70,7 +71,7 @@ SYM_CODE_START(__kretprobe_trampoline)
 	add x29, sp, #S_FP
 
 	mov x0, sp
-	bl trampoline_probe_handler
+	bl arch_rethook_trampoline_callback
 	/*
 	 * Replace trampoline address in lr with actual orig_ret_addr return
 	 * address.
@@ -83,4 +84,4 @@ SYM_CODE_START(__kretprobe_trampoline)
 	add sp, sp, #PT_REGS_SIZE
 	ret
 
-SYM_CODE_END(__kretprobe_trampoline)
+SYM_CODE_END(arch_rethook_trampoline)
