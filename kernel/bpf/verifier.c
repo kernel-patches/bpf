@@ -3507,6 +3507,83 @@ int check_ptr_off_reg(struct bpf_verifier_env *env,
 	return __check_ptr_off_reg(env, reg, regno, false);
 }
 
+static int map_kptr_match_type(struct bpf_verifier_env *env,
+			       struct bpf_map_value_off_desc *off_desc,
+			       struct bpf_reg_state *reg, u32 regno)
+{
+	const char *targ_name = kernel_type_name(off_desc->btf, off_desc->btf_id);
+	const char *reg_name = "";
+
+	if (base_type(reg->type) != PTR_TO_BTF_ID || type_flag(reg->type) != PTR_MAYBE_NULL)
+		goto bad_type;
+
+	if (!btf_is_kernel(reg->btf)) {
+		verbose(env, "R%d must point to kernel BTF\n", regno);
+		return -EINVAL;
+	}
+	/* We need to verify reg->type and reg->btf, before accessing reg->btf */
+	reg_name = kernel_type_name(reg->btf, reg->btf_id);
+
+	if (__check_ptr_off_reg(env, reg, regno, true))
+		return -EACCES;
+
+	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
+				  off_desc->btf, off_desc->btf_id))
+		goto bad_type;
+	return 0;
+bad_type:
+	verbose(env, "invalid kptr access, R%d type=%s%s ", regno,
+		reg_type_str(env, reg->type), reg_name);
+	verbose(env, "expected=%s%s\n", reg_type_str(env, PTR_TO_BTF_ID), targ_name);
+	return -EINVAL;
+}
+
+static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
+				 int value_regno, int insn_idx,
+				 struct bpf_map_value_off_desc *off_desc)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	int class = BPF_CLASS(insn->code);
+	struct bpf_reg_state *val_reg;
+
+	/* Things we already checked for in check_map_access and caller:
+	 *  - Reject cases where variable offset may touch kptr
+	 *  - size of access (must be BPF_DW)
+	 *  - tnum_is_const(reg->var_off)
+	 *  - off_desc->offset == off + reg->var_off.value
+	 */
+	/* Only BPF_[LDX,STX,ST] | BPF_MEM | BPF_DW is supported */
+	if (BPF_MODE(insn->code) != BPF_MEM)
+		goto end;
+
+	if (class == BPF_LDX) {
+		val_reg = reg_state(env, value_regno);
+		/* We can simply mark the value_regno receiving the pointer
+		 * value from map as PTR_TO_BTF_ID, with the correct type.
+		 */
+		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->btf,
+				off_desc->btf_id, PTR_MAYBE_NULL);
+		val_reg->id = ++env->id_gen;
+	} else if (class == BPF_STX) {
+		val_reg = reg_state(env, value_regno);
+		if (!register_is_null(val_reg) &&
+		    map_kptr_match_type(env, off_desc, val_reg, value_regno))
+			return -EACCES;
+	} else if (class == BPF_ST) {
+		if (insn->imm) {
+			verbose(env, "BPF_ST imm must be 0 when storing to kptr at off=%u\n",
+				off_desc->offset);
+			return -EACCES;
+		}
+	} else {
+		goto end;
+	}
+	return 0;
+end:
+	verbose(env, "kptr in map can only be accessed using BPF_LDX/BPF_STX/BPF_ST\n");
+	return -EACCES;
+}
+
 /* check read/write into a map element with possible variable offset */
 static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			    int off, int size, bool zero_size_allowed)
@@ -3543,6 +3620,32 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 		     t < reg->umax_value + off + size) {
 			verbose(env, "bpf_timer cannot be accessed directly by load/store\n");
 			return -EACCES;
+		}
+	}
+	if (map_value_has_kptrs(map)) {
+		struct bpf_map_value_off *tab = map->kptr_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++) {
+			u32 p = tab->off[i].offset;
+
+			if (reg->smin_value + off < p + sizeof(u64) &&
+			    p < reg->umax_value + off + size) {
+				if (!tnum_is_const(reg->var_off)) {
+					verbose(env, "kptr access cannot have variable offset\n");
+					return -EACCES;
+				}
+				if (p != off + reg->var_off.value) {
+					verbose(env, "kptr access misaligned expected=%u off=%llu\n",
+						p, off + reg->var_off.value);
+					return -EACCES;
+				}
+				if (size != bpf_size_to_bytes(BPF_DW)) {
+					verbose(env, "kptr access size must be BPF_DW\n");
+					return -EACCES;
+				}
+				break;
+			}
 		}
 	}
 	return err;
@@ -4412,6 +4515,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_MAP_VALUE) {
+		struct bpf_map_value_off_desc *off_desc = NULL;
+
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
 			verbose(env, "R%d leaks addr into map\n", value_regno);
@@ -4421,7 +4526,16 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (err)
 			return err;
 		err = check_map_access(env, regno, off, size, false);
-		if (!err && t == BPF_READ && value_regno >= 0) {
+		if (err)
+			return err;
+		if (tnum_is_const(reg->var_off))
+			off_desc = bpf_map_kptr_off_contains(reg->map_ptr,
+							     off + reg->var_off.value);
+		if (off_desc) {
+			err = check_map_kptr_access(env, regno, value_regno, insn_idx, off_desc);
+			if (err)
+				return err;
+		} else if (t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
 			/* if map is read-only, track its contents as scalars */
