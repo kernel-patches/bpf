@@ -1619,7 +1619,7 @@ static void tcp_eat_recv_skb(struct sock *sk, struct sk_buff *skb)
 	__kfree_skb(skb);
 }
 
-static struct sk_buff *tcp_recv_skb(struct sock *sk, u32 seq, u32 *off)
+static struct sk_buff *tcp_recv_skb(struct sock *sk, u32 seq, u32 *off, bool unlink)
 {
 	struct sk_buff *skb;
 	u32 offset;
@@ -1632,6 +1632,8 @@ static struct sk_buff *tcp_recv_skb(struct sock *sk, u32 seq, u32 *off)
 		}
 		if (offset < skb->len || (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)) {
 			*off = offset;
+			if (unlink)
+				__skb_unlink(skb, &sk->sk_receive_queue);
 			return skb;
 		}
 		/* This looks weird, but this can happen if TCP collapsing
@@ -1665,7 +1667,7 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 
 	if (sk->sk_state == TCP_LISTEN)
 		return -ENOTCONN;
-	while ((skb = tcp_recv_skb(sk, seq, &offset)) != NULL) {
+	while ((skb = tcp_recv_skb(sk, seq, &offset, false)) != NULL) {
 		if (offset < skb->len) {
 			int used;
 			size_t len;
@@ -1696,7 +1698,7 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 			 * getting here: tcp_collapse might have deleted it
 			 * while aggregating skbs from the socket queue.
 			 */
-			skb = tcp_recv_skb(sk, seq - 1, &offset);
+			skb = tcp_recv_skb(sk, seq - 1, &offset, false);
 			if (!skb)
 				break;
 			/* TCP coalescing might have appended data to the skb.
@@ -1721,12 +1723,66 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 
 	/* Clean up data we have read: This will do ACK frames. */
 	if (copied > 0) {
-		tcp_recv_skb(sk, seq, &offset);
+		tcp_recv_skb(sk, seq, &offset, false);
 		tcp_cleanup_rbuf(sk, copied);
 	}
 	return copied;
 }
 EXPORT_SYMBOL(tcp_read_sock);
+
+int tcp_read_skb(struct sock *sk, read_descriptor_t *desc,
+		 sk_read_actor_t recv_actor)
+{
+	struct sk_buff *skb;
+	struct tcp_sock *tp = tcp_sk(sk);
+	u32 seq = tp->copied_seq;
+	u32 offset;
+	int copied = 0;
+
+	if (sk->sk_state == TCP_LISTEN)
+		return -ENOTCONN;
+	while ((skb = tcp_recv_skb(sk, seq, &offset, true)) != NULL) {
+		if (offset < skb->len) {
+			int used;
+			size_t len;
+
+			len = skb->len - offset;
+			used = recv_actor(desc, skb, offset, len);
+			if (used <= 0) {
+				if (!copied)
+					copied = used;
+				break;
+			}
+			if (WARN_ON_ONCE(used > len))
+				used = len;
+			seq += used;
+			copied += used;
+			offset += used;
+
+			if (offset != skb->len)
+				continue;
+		}
+		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) {
+			kfree_skb(skb);
+			++seq;
+			break;
+		}
+		kfree_skb(skb);
+		if (!desc->count)
+			break;
+		WRITE_ONCE(tp->copied_seq, seq);
+	}
+	WRITE_ONCE(tp->copied_seq, seq);
+
+	tcp_rcv_space_adjust(sk);
+
+	/* Clean up data we have read: This will do ACK frames. */
+	if (copied > 0)
+		tcp_cleanup_rbuf(sk, copied);
+
+	return copied;
+}
+EXPORT_SYMBOL(tcp_read_skb);
 
 int tcp_peek_len(struct socket *sock)
 {
@@ -1910,7 +1966,7 @@ static int receive_fallback_to_copy(struct sock *sk,
 		struct sk_buff *skb;
 		u32 offset;
 
-		skb = tcp_recv_skb(sk, tcp_sk(sk)->copied_seq, &offset);
+		skb = tcp_recv_skb(sk, tcp_sk(sk)->copied_seq, &offset, false);
 		if (skb)
 			tcp_zerocopy_set_hint_for_skb(sk, zc, skb, offset);
 	}
@@ -1957,7 +2013,7 @@ static int tcp_zc_handle_leftover(struct tcp_zerocopy_receive *zc,
 	if (skb) {
 		offset = *seq - TCP_SKB_CB(skb)->seq;
 	} else {
-		skb = tcp_recv_skb(sk, *seq, &offset);
+		skb = tcp_recv_skb(sk, *seq, &offset, false);
 		if (TCP_SKB_CB(skb)->has_rxtstamp) {
 			tcp_update_recv_tstamps(skb, tss);
 			zc->msg_flags |= TCP_CMSG_TS;
@@ -2150,7 +2206,7 @@ static int tcp_zerocopy_receive(struct sock *sk,
 				skb = skb->next;
 				offset = seq - TCP_SKB_CB(skb)->seq;
 			} else {
-				skb = tcp_recv_skb(sk, seq, &offset);
+				skb = tcp_recv_skb(sk, seq, &offset, false);
 			}
 
 			if (TCP_SKB_CB(skb)->has_rxtstamp) {
@@ -2206,7 +2262,7 @@ out:
 		tcp_rcv_space_adjust(sk);
 
 		/* Clean up data we have read: This will do ACK frames. */
-		tcp_recv_skb(sk, seq, &offset);
+		tcp_recv_skb(sk, seq, &offset, false);
 		tcp_cleanup_rbuf(sk, length + copylen);
 		ret = 0;
 		if (length == zc->length)
