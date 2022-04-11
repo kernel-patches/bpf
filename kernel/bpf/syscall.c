@@ -2695,9 +2695,10 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.fill_link_info = bpf_tracing_link_fill_link_info,
 };
 
-static int bpf_tracing_prog_attach(struct bpf_prog *prog,
-				   int tgt_prog_fd,
-				   u32 btf_id)
+static int bpf_tracing_prog_attach_cookie(struct bpf_prog *prog,
+					  int tgt_prog_fd,
+					  u32 btf_id,
+					  u64 bpf_cookie)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
@@ -2762,6 +2763,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	bpf_link_init(&link->link.link, BPF_LINK_TYPE_TRACING,
 		      &bpf_tracing_link_lops, prog);
 	link->attach_type = prog->expected_attach_type;
+	link->cookie = bpf_cookie;
 
 	mutex_lock(&prog->aux->dst_mutex);
 
@@ -2869,6 +2871,13 @@ out_put_prog:
 	if (tgt_prog_fd && tgt_prog)
 		bpf_prog_put(tgt_prog);
 	return err;
+}
+
+static int bpf_tracing_prog_attach(struct bpf_prog *prog,
+				   int tgt_prog_fd,
+				   u32 btf_id)
+{
+	return bpf_tracing_prog_attach_cookie(prog, tgt_prog_fd, btf_id, 0);
 }
 
 struct bpf_raw_tp_link {
@@ -3023,7 +3032,7 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 }
 #endif /* CONFIG_PERF_EVENTS */
 
-#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.prog_fd
+#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.bpf_cookie
 
 static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 {
@@ -3187,6 +3196,10 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN:
+		return BPF_PROG_TYPE_TRACING;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -4251,6 +4264,12 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 		return bpf_tracing_prog_attach(prog,
 					       attr->link_create.target_fd,
 					       attr->link_create.target_btf_id);
+	else if (prog->type == BPF_PROG_TYPE_TRACING)
+		return bpf_tracing_prog_attach_cookie(prog,
+						      0,
+						      0,
+						      attr->link_create.tracing.bpf_cookie);
+
 	return -EINVAL;
 }
 
