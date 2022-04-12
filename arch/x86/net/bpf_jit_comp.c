@@ -1764,13 +1764,20 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 			   struct bpf_tramp_link *l, int stack_size,
 			   bool save_ret)
 {
+	u64 cookie = 0;
 	u8 *prog = *pprog;
 	u8 *jmp_insn;
 	int ctx_cookie_off = offsetof(struct bpf_tramp_run_ctx, bpf_cookie);
 	struct bpf_prog *p = l->link.prog;
 
-	/* mov rdi, 0 */
-	emit_mov_imm64(&prog, BPF_REG_1, 0, 0);
+	if (l->link.type == BPF_LINK_TYPE_TRACING) {
+		struct bpf_tracing_link *tr_link =
+			container_of(l, struct bpf_tracing_link, link);
+		cookie = tr_link->cookie;
+	}
+
+	/* mov rdi, cookie */
+	emit_mov_imm64(&prog, BPF_REG_1, (long) cookie >> 32, (u32) (long) cookie);
 
 	/* Prepare struct bpf_tramp_run_ctx.
 	 *
