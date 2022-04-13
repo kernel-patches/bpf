@@ -85,7 +85,7 @@ static void setup(void)
 	}
 
 	link = bpf_program__attach(ctx.skel->progs.benchmark);
-	if (!link) {
+	if (IS_ERR(link)) {
 		fprintf(stderr, "failed to attach program!\n");
 		exit(1);
 	}
