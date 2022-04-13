@@ -86,9 +86,18 @@
 		AARCH64_INSN_VARIANT_64BIT, \
 		AARCH64_INSN_LDST_##ls##_PAIR_##type)
 /* Rn -= 16; Rn[0] = Rt; Rn[8] = Rt2; */
-#define A64_PUSH(Rt, Rt2, Rn) A64_LS_PAIR(Rt, Rt2, Rn, -16, STORE, PRE_INDEX)
+#define A64_PUSH(Rt, Rt2, Rn) \
+	A64_LS_PAIR(Rt, Rt2, Rn, -16, STORE, PRE_INDEX)
 /* Rt = Rn[0]; Rt2 = Rn[8]; Rn += 16; */
-#define A64_POP(Rt, Rt2, Rn)  A64_LS_PAIR(Rt, Rt2, Rn, 16, LOAD, POST_INDEX)
+#define A64_POP(Rt, Rt2, Rn) \
+	A64_LS_PAIR(Rt, Rt2, Rn, 16, LOAD, POST_INDEX)
+
+/* Rn[imm] = Xt1; Rn[imm + 8] = Xt2 */
+#define A64_STP(Xt1, Xt2, Xn, imm)  \
+	A64_LS_PAIR(Xt1, Xt2, Xn, imm, STORE, SIGNED_OFFSET)
+/* Xt1 = Rn[imm]; Xt2 = Rn[imm + 8] */
+#define A64_LDP(Xt1, Xt2, Xn, imm)  \
+	A64_LS_PAIR(Xt1, Xt2, Xn, imm, LOAD, SIGNED_OFFSET)
 
 /* Load/store exclusive */
 #define A64_SIZE(sf) \
@@ -270,6 +279,7 @@
 #define A64_BTI_C  A64_HINT(AARCH64_INSN_HINT_BTIC)
 #define A64_BTI_J  A64_HINT(AARCH64_INSN_HINT_BTIJ)
 #define A64_BTI_JC A64_HINT(AARCH64_INSN_HINT_BTIJC)
+#define A64_NOP    A64_HINT(AARCH64_INSN_HINT_NOP)
 
 /* DMB */
 #define A64_DMB_ISH aarch64_insn_gen_dmb(AARCH64_INSN_MB_ISH)
