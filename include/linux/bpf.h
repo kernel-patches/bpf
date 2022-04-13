@@ -706,6 +706,11 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *tr, void *image, void *i
 				const struct btf_func_model *m, u32 flags,
 				struct bpf_tramp_progs *tprogs,
 				void *orig_call);
+int bpf_prepare_trampoline(struct bpf_tramp_image *tr, void *image, void *image_end,
+			   const struct btf_func_model *m, u32 flags,
+			   struct bpf_tramp_progs *tprogs,
+			   void *orig_call);
+
 /* these two functions are called from generated trampoline */
 u64 notrace __bpf_prog_enter(struct bpf_prog *prog);
 void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start);
