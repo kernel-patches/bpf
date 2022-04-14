@@ -2952,12 +2952,12 @@ static const struct bpf_link_ops bpf_raw_tp_link_lops = {
 	.fill_link_info = bpf_raw_tp_link_fill_link_info,
 };
 
-#ifdef CONFIG_PERF_EVENTS
 struct bpf_perf_link {
 	struct bpf_link link;
 	struct file *perf_file;
 };
 
+#ifdef CONFIG_PERF_EVENTS
 static void bpf_perf_link_release(struct bpf_link *link)
 {
 	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
@@ -4333,6 +4333,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 #endif
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_TRACEPOINT:
+		BTF_TYPE_EMIT(struct bpf_perf_link);
 		ret = bpf_perf_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_KPROBE:
