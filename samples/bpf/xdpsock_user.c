@@ -1496,7 +1496,7 @@ static void rx_drop_all(void)
 static int tx_only(struct xsk_socket_info *xsk, u32 *frame_nb,
 		   int batch_size, unsigned long tx_ns)
 {
-	u32 idx, tv_sec, tv_usec;
+	u32 idx, tv_sec = 0, tv_usec = 0;
 	unsigned int i;
 
 	while (xsk_ring_prod__reserve(&xsk->tx, batch_size, &idx) <
