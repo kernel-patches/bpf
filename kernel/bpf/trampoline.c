@@ -360,9 +360,9 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 	if (ip_arg)
 		flags |= BPF_TRAMP_F_IP_ARG;
 
-	err = arch_prepare_bpf_trampoline(im, im->image, im->image + PAGE_SIZE,
-					  &tr->func.model, flags, tprogs,
-					  tr->func.addr);
+	err = bpf_prepare_trampoline(im, im->image, im->image + PAGE_SIZE,
+				     &tr->func.model, flags, tprogs,
+				     tr->func.addr);
 	if (err < 0)
 		goto out;
 
@@ -639,6 +639,35 @@ arch_prepare_bpf_trampoline(struct bpf_tramp_image *tr, void *image, void *image
 			    void *orig_call)
 {
 	return -ENOTSUPP;
+}
+
+static bool is_valid_bpf_tramp_flags(unsigned int flags)
+{
+	if ((flags & BPF_TRAMP_F_RESTORE_REGS) &&
+	    (flags & BPF_TRAMP_F_SKIP_FRAME))
+		return false;
+
+	/* BPF_TRAMP_F_RET_FENTRY_RET is only used by bpf_struct_ops,
+	 * and it must be used alone.
+	 */
+	if ((flags & BPF_TRAMP_F_RET_FENTRY_RET) &&
+	    (flags & ~BPF_TRAMP_F_RET_FENTRY_RET))
+		return false;
+
+	return true;
+}
+
+int
+bpf_prepare_trampoline(struct bpf_tramp_image *tr, void *image, void *image_end,
+		       const struct btf_func_model *m, u32 flags,
+		       struct bpf_tramp_progs *tprogs,
+		       void *orig_call)
+{
+	if (!is_valid_bpf_tramp_flags(flags))
+		return -EINVAL;
+
+	return arch_prepare_bpf_trampoline(tr, image, image_end, m, flags,
+					   tprogs, orig_call);
 }
 
 static int __init init_trampolines(void)
