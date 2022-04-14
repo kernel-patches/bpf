@@ -24,11 +24,18 @@
 		"-DLINUX_VERSION_CODE=$LINUX_VERSION_CODE "	\
 		"$CLANG_OPTIONS $PERF_BPF_INC_OPTIONS $KERNEL_INC_OPTIONS " \
 		"-Wno-unused-value -Wno-pointer-sign "		\
+		"-Wno-address-of-packed-member "		\
 		"-working-directory $WORKING_DIR "		\
-		"-c \"$CLANG_SOURCE\" -target bpf $CLANG_EMIT_LLVM -O2 -o - $LLVM_OPTIONS_PIPE"
+		"-c \"$CLANG_SOURCE\" "				      \
+		"-O2 -emit-llvm -Xclang -disable-llvm-passes -o - | " \
+		"$LLVM_OPT_EXEC -O2 -mtriple=bpf-pc-linux | "	      \
+		"$LLVM_DIS_EXEC | "				      \
+		"$LLC_EXEC -march=bpf -filetype=obj -o -"
 
 struct llvm_param llvm_param = {
 	.clang_path = "clang",
+	.llvm_opt_path = "opt",
+	.llvm_dis_path = "llvm-dis",
 	.llc_path = "llc",
 	.clang_bpf_cmd_template = CLANG_BPF_CMD_DEFAULT_TEMPLATE,
 	.clang_opt = NULL,
@@ -48,6 +55,12 @@ int perf_llvm_config(const char *var, const char *value)
 
 	if (!strcmp(var, "clang-path"))
 		llvm_param.clang_path = strdup(value);
+	else if (!strcmp(var, "llvm-opt-path"))
+		llvm_param.llvm_opt_path = strdup(value);
+	else if (!strcmp(var, "llvm-dis-path"))
+		llvm_param.llvm_dis_path = strdup(value);
+	else if (!strcmp(var, "llc-path"))
+		llvm_param.llc_path = strdup(value);
 	else if (!strcmp(var, "clang-bpf-cmd-template"))
 		llvm_param.clang_bpf_cmd_template = strdup(value);
 	else if (!strcmp(var, "clang-opt"))
@@ -456,6 +469,7 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 	char linux_version_code_str[64];
 	const char *clang_opt = llvm_param.clang_opt;
 	char clang_path[PATH_MAX], llc_path[PATH_MAX], abspath[PATH_MAX], nr_cpus_avail_str[64];
+	char llvm_opt_path[PATH_MAX], llvm_dis_path[PATH_MAX];
 	char serr[STRERR_BUFSIZE];
 	char *kbuild_dir = NULL, *kbuild_include_opts = NULL,
 	     *perf_bpf_include_opts = NULL;
@@ -475,9 +489,10 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 	if (!template)
 		template = CLANG_BPF_CMD_DEFAULT_TEMPLATE;
 
-	err = search_program_and_warn(llvm_param.clang_path,
-			     "clang", clang_path);
-	if (err)
+	if (search_program_and_warn(llvm_param.clang_path, "clang", clang_path) ||
+	    search_program_and_warn(llvm_param.llvm_opt_path, "opt", llvm_opt_path) ||
+	    search_program_and_warn(llvm_param.llvm_dis_path, "llvm-dis", llvm_dis_path) ||
+	    search_program_and_warn(llvm_param.llc_path, "llc", llc_path))
 		return -ENOENT;
 
 	/*
@@ -495,21 +510,23 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 
 	snprintf(linux_version_code_str, sizeof(linux_version_code_str),
 		 "0x%x", kernel_version);
-	if (asprintf(&perf_bpf_include_opts, "-I%s/bpf", perf_include_dir) < 0)
+	if (asprintf(&perf_bpf_include_opts, "-I%s/bpf", perf_include_dir) < 0) {
+		err = -ENOMEM;
 		goto errout;
+	}
+
 	force_set_env("NR_CPUS", nr_cpus_avail_str);
 	force_set_env("LINUX_VERSION_CODE", linux_version_code_str);
 	force_set_env("CLANG_EXEC", clang_path);
+	force_set_env("LLVM_OPT_EXEC", llvm_opt_path);
+	force_set_env("LLVM_DIS_EXEC", llvm_dis_path);
+	force_set_env("LLC_EXEC", llc_path);
 	force_set_env("CLANG_OPTIONS", clang_opt);
 	force_set_env("KERNEL_INC_OPTIONS", kbuild_include_opts);
 	force_set_env("PERF_BPF_INC_OPTIONS", perf_bpf_include_opts);
 	force_set_env("WORKING_DIR", kbuild_dir ? : ".");
 
 	if (opts) {
-		err = search_program_and_warn(llvm_param.llc_path, "llc", llc_path);
-		if (err)
-			goto errout;
-
 		err = -ENOMEM;
 		if (asprintf(&pipe_template, "%s -emit-llvm | %s -march=bpf %s -filetype=obj -o -",
 			      template, llc_path, opts) < 0) {

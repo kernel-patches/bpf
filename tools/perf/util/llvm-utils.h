@@ -11,6 +11,10 @@
 struct llvm_param {
 	/* Path of clang executable */
 	const char *clang_path;
+	/* Path of llvm opt executable */
+	const char *llvm_opt_path;
+	/* Path of llvm-dis executable */
+	const char *llvm_dis_path;
 	/* Path of llc executable */
 	const char *llc_path;
 	/*

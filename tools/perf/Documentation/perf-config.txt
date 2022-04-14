@@ -655,6 +655,15 @@ llvm.*::
 	llvm.clang-path::
 		Path to clang. If omit, search it from $PATH.
 
+	llvm.llvm-opt-path::
+		Path to llvm opt. If omit, search it from $PATH.
+
+	llvm.llvm-dis-path::
+		Path to llvm-dis. If omit, search it from $PATH.
+
+	llvm.llc-path::
+		Path to llc. If omit, search it from $PATH.
+
 	llvm.clang-bpf-cmd-template::
 		Cmdline template. Below lines show its default value. Environment
 		variable is used to pass options.
@@ -662,8 +671,13 @@ llvm.*::
 		"-DLINUX_VERSION_CODE=$LINUX_VERSION_CODE "	\
 		"$CLANG_OPTIONS $PERF_BPF_INC_OPTIONS $KERNEL_INC_OPTIONS " \
 		"-Wno-unused-value -Wno-pointer-sign "		\
+		"-Wno-address-of-packed-member "                \
 		"-working-directory $WORKING_DIR "		\
-		"-c \"$CLANG_SOURCE\" -target bpf $CLANG_EMIT_LLVM -O2 -o - $LLVM_OPTIONS_PIPE"
+		"-c \"$CLANG_SOURCE\" "                               \
+		"-O2 -emit-llvm -Xclang -disable-llvm-passes -o - | " \
+		"$LLVM_OPT_EXEC -O2 -mtriple=bpf-pc-linux | "         \
+		"$LLVM_DIS_EXEC | "                                   \
+		"$LLC_EXEC -march=bpf -filetype=obj -o -"
 
 	llvm.clang-opt::
 		Options passed to clang.
