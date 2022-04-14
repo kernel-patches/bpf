@@ -44,7 +44,7 @@ int main(int argc, char **argv)
 
 	while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
 		if (next_key >= MAX_INDEX) {
-			fprintf(stderr, "Key %lu out of bounds\n", next_key);
+			fprintf(stderr, "Key %llu out of bounds\n", next_key);
 			continue;
 		}
 
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
 
 	for (i = 1; i <= max_key + 1; i++) {
 		stars(starstr, data[i - 1], max_value, MAX_STARS);
-		printf("%8ld -> %-8ld : %-8ld |%-*s|\n",
+		printf("%8ld -> %-8ld : %-8lld |%-*s|\n",
 		       (1l << i) >> 1, (1l << i) - 1, data[i - 1],
 		       MAX_STARS, starstr);
 	}
