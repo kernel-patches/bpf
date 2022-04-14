@@ -785,7 +785,7 @@ static struct fgraph_ops fgraph_ops __initdata  = {
 };
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
-noinline __noclone static void trace_direct_tramp(void) { }
+void __weak trace_direct_tramp(void) { }
 #endif
 
 /*
@@ -867,6 +867,8 @@ trace_selftest_startup_function_graph(struct tracer *trace,
 				     (unsigned long) trace_direct_tramp);
 	if (ret)
 		goto out;
+
+	DYN_FTRACE_TEST_NAME();
 
 	ret = register_ftrace_graph(&fgraph_ops);
 	if (ret) {
