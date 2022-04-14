@@ -229,7 +229,8 @@ static int sched_next_online(int pid, int next_to_try)
 
 	while (next_to_try < nr_cpus) {
 		CPU_ZERO(&cpuset);
-		CPU_SET(next_to_try++, &cpuset);
+		CPU_SET(next_to_try, &cpuset);
+		next_to_try++;
 		if (!sched_setaffinity(pid, sizeof(cpuset), &cpuset))
 			break;
 	}
