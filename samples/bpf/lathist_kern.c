@@ -53,7 +53,7 @@ static unsigned int log2(unsigned int v)
 
 static unsigned int log2l(unsigned long v)
 {
-	unsigned int hi = v >> 32;
+	unsigned int hi = (v >> 16) >> 16;
 
 	if (hi)
 		return log2(hi) + 32;
