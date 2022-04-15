@@ -508,8 +508,11 @@ void bpf_map_free_kptr_off_tab(struct bpf_map *map)
 	if (!map_value_has_kptrs(map))
 		return;
 	for (i = 0; i < tab->nr_off; i++) {
+		struct module *mod = tab->off[i].kptr.module;
 		struct btf *btf = tab->off[i].kptr.btf;
 
+		if (mod)
+			module_put(mod);
 		btf_put(btf);
 	}
 	kfree(tab);
@@ -524,8 +527,16 @@ struct bpf_map_value_off *bpf_map_copy_kptr_off_tab(const struct bpf_map *map)
 	if (!map_value_has_kptrs(map))
 		return ERR_PTR(-ENOENT);
 	/* Do a deep copy of the kptr_off_tab */
-	for (i = 0; i < tab->nr_off; i++)
-		btf_get(tab->off[i].kptr.btf);
+	for (i = 0; i < tab->nr_off; i++) {
+		struct module *mod = tab->off[i].kptr.module;
+		struct btf *btf = tab->off[i].kptr.btf;
+
+		if (mod && !try_module_get(mod)) {
+			ret = -ENXIO;
+			goto end;
+		}
+		btf_get(btf);
+	}
 
 	size = offsetof(struct bpf_map_value_off, off[tab->nr_off]);
 	new_tab = kmemdup(tab, size, GFP_KERNEL | __GFP_NOWARN);
@@ -535,8 +546,14 @@ struct bpf_map_value_off *bpf_map_copy_kptr_off_tab(const struct bpf_map *map)
 	}
 	return new_tab;
 end:
-	while (i--)
-		btf_put(tab->off[i].kptr.btf);
+	while (i--) {
+		struct module *mod = tab->off[i].kptr.module;
+		struct btf *btf = tab->off[i].kptr.btf;
+
+		if (mod)
+			module_put(mod);
+		btf_put(btf);
+	}
 	return ERR_PTR(ret);
 }
 
@@ -556,6 +573,33 @@ bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_ma
 	return !memcmp(tab_a, tab_b, size);
 }
 
+/* Caller must ensure map_value_has_kptrs is true. Note that this function can
+ * be called on a map value while the map_value is visible to BPF programs, as
+ * it ensures the correct synchronization, and we already enforce the same using
+ * the bpf_kptr_xchg helper on the BPF program side for referenced kptrs.
+ */
+void bpf_map_free_kptrs(struct bpf_map *map, void *map_value)
+{
+	struct bpf_map_value_off *tab = map->kptr_off_tab;
+	unsigned long *btf_id_ptr;
+	int i;
+
+	for (i = 0; i < tab->nr_off; i++) {
+		struct bpf_map_value_off_desc *off_desc = &tab->off[i];
+		unsigned long old_ptr;
+
+		btf_id_ptr = map_value + off_desc->offset;
+		if (off_desc->type == BPF_MAP_OFF_DESC_TYPE_UNREF_KPTR) {
+			u64 *p = (u64 *)btf_id_ptr;
+
+			WRITE_ONCE(p, 0);
+			continue;
+		}
+		old_ptr = xchg(btf_id_ptr, 0);
+		off_desc->kptr.dtor((void *)old_ptr);
+	}
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {
@@ -563,9 +607,10 @@ static void bpf_map_free_deferred(struct work_struct *work)
 
 	security_bpf_map_free(map);
 	kfree(map->off_arr);
-	bpf_map_free_kptr_off_tab(map);
 	bpf_map_release_memcg(map);
-	/* implementation dependent freeing */
+	/* implementation dependent freeing, map_free callback also does
+	 * bpf_map_free_kptr_off_tab, if needed.
+	 */
 	map->ops->map_free(map);
 }
 
