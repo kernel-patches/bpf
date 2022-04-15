@@ -789,10 +789,8 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	pl->link = NULL;
 
 	err = update_effective_progs(cgrp, atype);
-	if (err)
-		goto cleanup;
 
-	/* now can actually delete it from this cgroup list */
+	/* now can delete it from this cgroup list */
 	list_del(&pl->node);
 	kfree(pl);
 	if (list_empty(progs))
@@ -801,12 +799,55 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	if (old_prog)
 		bpf_prog_put(old_prog);
 	static_branch_dec(&cgroup_bpf_enabled_key[atype]);
-	return 0;
+
+	if (!err)
+		return 0;
 
 cleanup:
-	/* restore back prog or link */
-	pl->prog = old_prog;
-	pl->link = link;
+	/*
+	 * If compute_effective_progs failed with -ENOMEM, i.e. alloc for
+	 * cgrp->bpf.inactive table failed, we can recover by removing
+	 * the detached prog from effective table and rearranging it.
+	 */
+	if (err == -ENOMEM) {
+		struct bpf_prog_array_item *item;
+		struct bpf_prog *prog_tmp, *prog_detach, *prog_last;
+		struct bpf_prog_array *array;
+		int index = 0, index_detach = -1;
+
+		array = cgrp->bpf.effective[atype];
+		item = &array->items[0];
+
+		if (prog)
+			prog_detach = prog;
+		else
+			prog_detach = link->link.prog;
+
+		if (!prog_detach)
+			return -EINVAL;
+
+		while ((prog_tmp = READ_ONCE(item->prog))) {
+			if (prog_tmp == prog_detach)
+				index_detach = index;
+			item++;
+			index++;
+			prog_last = prog_tmp;
+		}
+
+		/* Check if we found what's needed for removing the prog */
+		if (index_detach == -1 || index_detach == index-1)
+			return -EINVAL;
+
+		/* Remove the last program in the array */
+		if (bpf_prog_array_delete_safe_at(array, index-1))
+			return -EINVAL;
+
+		/* and update the detached with the last just removed */
+		if (bpf_prog_array_update_at(array, index_detach, prog_last))
+			return -EINVAL;
+
+		err = 0;
+	}
 	return err;
 }
 
