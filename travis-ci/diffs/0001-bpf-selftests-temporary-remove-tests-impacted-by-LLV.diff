@@ -1,0 +1,889 @@
+From 4d20285988055fbd1eadb683ca47280660fc6a5e Mon Sep 17 00:00:00 2001
+From: Mykola Lysenko <mykolal@fb.com>
+Date: Thu, 14 Apr 2022 12:05:37 -0700
+Subject: [PATCH bpf-next] bpf/selftests: temporary remove tests impacted by
+ LLVM crash
+
+Signed-off-by: Mykola Lysenko <mykolal@fb.com>
+---
+ tools/testing/selftests/bpf/Makefile          |   4 +-
+ .../selftests/bpf/prog_tests/test_profiler.c  |  72 ---
+ tools/testing/selftests/bpf/prog_tests/usdt.c | 421 ------------------
+ tools/testing/selftests/bpf/progs/profiler1.c |   6 -
+ tools/testing/selftests/bpf/progs/profiler2.c |   6 -
+ tools/testing/selftests/bpf/progs/profiler3.c |   6 -
+ .../bpf/progs/test_core_reloc_enumval.c       |  72 ---
+ .../selftests/bpf/progs/test_urandom_usdt.c   |  70 ---
+ tools/testing/selftests/bpf/progs/test_usdt.c |  96 ----
+ .../selftests/bpf/progs/test_usdt_multispec.c |  32 --
+ 10 files changed, 2 insertions(+), 783 deletions(-)
+ delete mode 100644 tools/testing/selftests/bpf/prog_tests/test_profiler.c
+ delete mode 100644 tools/testing/selftests/bpf/prog_tests/usdt.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/profiler1.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/profiler2.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/profiler3.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/test_core_reloc_enumval.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/test_urandom_usdt.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/test_usdt.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/test_usdt_multispec.c
+
+diff --git a/tools/testing/selftests/bpf/Makefile b/tools/testing/selftests/bpf/Makefile
+index bafdc5373a13..f9a8b251e0a0 100644
+--- a/tools/testing/selftests/bpf/Makefile
++++ b/tools/testing/selftests/bpf/Makefile
+@@ -334,7 +334,7 @@ SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
+ 
+ LINKED_SKELS := test_static_linked.skel.h linked_funcs.skel.h		\
+ 		linked_vars.skel.h linked_maps.skel.h 			\
+-		test_subskeleton.skel.h test_subskeleton_lib.skel.h	\
++		test_subskeleton.skel.h test_subskeleton_lib.skel.h	#\
+ 		test_usdt.skel.h
+ 
+ LSKELS := kfunc_call_test.c fentry_test.c fexit_test.c fexit_sleep.c \
+@@ -352,7 +352,7 @@ linked_maps.skel.h-deps := linked_maps1.o linked_maps2.o
+ # but that's created as a side-effect of the skel.h generation.
+ test_subskeleton.skel.h-deps := test_subskeleton_lib2.o test_subskeleton_lib.o test_subskeleton.o
+ test_subskeleton_lib.skel.h-deps := test_subskeleton_lib2.o test_subskeleton_lib.o
+-test_usdt.skel.h-deps := test_usdt.o test_usdt_multispec.o
++#test_usdt.skel.h-deps := test_usdt.o test_usdt_multispec.o
+ 
+ LINKED_BPF_SRCS := $(patsubst %.o,%.c,$(foreach skel,$(LINKED_SKELS),$($(skel)-deps)))
+ 
+diff --git a/tools/testing/selftests/bpf/prog_tests/test_profiler.c b/tools/testing/selftests/bpf/prog_tests/test_profiler.c
+deleted file mode 100644
+index de24e8f0e738..000000000000
+--- a/tools/testing/selftests/bpf/prog_tests/test_profiler.c
++++ /dev/null
+@@ -1,72 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2020 Facebook */
+-#include <test_progs.h>
+-#include "progs/profiler.h"
+-#include "profiler1.skel.h"
+-#include "profiler2.skel.h"
+-#include "profiler3.skel.h"
+-
+-static int sanity_run(struct bpf_program *prog)
+-{
+-	LIBBPF_OPTS(bpf_test_run_opts, test_attr);
+-	__u64 args[] = {1, 2, 3};
+-	int err, prog_fd;
+-
+-	prog_fd = bpf_program__fd(prog);
+-	test_attr.ctx_in = args;
+-	test_attr.ctx_size_in = sizeof(args);
+-	err = bpf_prog_test_run_opts(prog_fd, &test_attr);
+-	if (!ASSERT_OK(err, "test_run"))
+-		return -1;
+-
+-	if (!ASSERT_OK(test_attr.retval, "test_run retval"))
+-		return -1;
+-
+-	return 0;
+-}
+-
+-void test_test_profiler(void)
+-{
+-	struct profiler1 *profiler1_skel = NULL;
+-	struct profiler2 *profiler2_skel = NULL;
+-	struct profiler3 *profiler3_skel = NULL;
+-	__u32 duration = 0;
+-	int err;
+-
+-	profiler1_skel = profiler1__open_and_load();
+-	if (CHECK(!profiler1_skel, "profiler1_skel_load", "profiler1 skeleton failed\n"))
+-		goto cleanup;
+-
+-	err = profiler1__attach(profiler1_skel);
+-	if (CHECK(err, "profiler1_attach", "profiler1 attach failed: %d\n", err))
+-		goto cleanup;
+-
+-	if (sanity_run(profiler1_skel->progs.raw_tracepoint__sched_process_exec))
+-		goto cleanup;
+-
+-	profiler2_skel = profiler2__open_and_load();
+-	if (CHECK(!profiler2_skel, "profiler2_skel_load", "profiler2 skeleton failed\n"))
+-		goto cleanup;
+-
+-	err = profiler2__attach(profiler2_skel);
+-	if (CHECK(err, "profiler2_attach", "profiler2 attach failed: %d\n", err))
+-		goto cleanup;
+-
+-	if (sanity_run(profiler2_skel->progs.raw_tracepoint__sched_process_exec))
+-		goto cleanup;
+-
+-	profiler3_skel = profiler3__open_and_load();
+-	if (CHECK(!profiler3_skel, "profiler3_skel_load", "profiler3 skeleton failed\n"))
+-		goto cleanup;
+-
+-	err = profiler3__attach(profiler3_skel);
+-	if (CHECK(err, "profiler3_attach", "profiler3 attach failed: %d\n", err))
+-		goto cleanup;
+-
+-	if (sanity_run(profiler3_skel->progs.raw_tracepoint__sched_process_exec))
+-		goto cleanup;
+-cleanup:
+-	profiler1__destroy(profiler1_skel);
+-	profiler2__destroy(profiler2_skel);
+-	profiler3__destroy(profiler3_skel);
+-}
+diff --git a/tools/testing/selftests/bpf/prog_tests/usdt.c b/tools/testing/selftests/bpf/prog_tests/usdt.c
+deleted file mode 100644
+index a71f51bdc08d..000000000000
+--- a/tools/testing/selftests/bpf/prog_tests/usdt.c
++++ /dev/null
+@@ -1,421 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2022 Meta Platforms, Inc. and affiliates. */
+-#include <test_progs.h>
+-
+-#define _SDT_HAS_SEMAPHORES 1
+-#include "../sdt.h"
+-
+-#include "test_usdt.skel.h"
+-#include "test_urandom_usdt.skel.h"
+-
+-int lets_test_this(int);
+-
+-static volatile int idx = 2;
+-static volatile __u64 bla = 0xFEDCBA9876543210ULL;
+-static volatile short nums[] = {-1, -2, -3, };
+-
+-static volatile struct {
+-	int x;
+-	signed char y;
+-} t1 = { 1, -127 };
+-
+-#define SEC(name) __attribute__((section(name), used))
+-
+-unsigned short test_usdt0_semaphore SEC(".probes");
+-unsigned short test_usdt3_semaphore SEC(".probes");
+-unsigned short test_usdt12_semaphore SEC(".probes");
+-
+-static void __always_inline trigger_func(int x) {
+-	long y = 42;
+-
+-	if (test_usdt0_semaphore)
+-		STAP_PROBE(test, usdt0);
+-	if (test_usdt3_semaphore)
+-		STAP_PROBE3(test, usdt3, x, y, &bla);
+-	if (test_usdt12_semaphore) {
+-		STAP_PROBE12(test, usdt12,
+-			     x, x + 1, y, x + y, 5,
+-			     y / 7, bla, &bla, -9, nums[x],
+-			     nums[idx], t1.y);
+-	}
+-}
+-
+-static void subtest_basic_usdt(void)
+-{
+-	LIBBPF_OPTS(bpf_usdt_opts, opts);
+-	struct test_usdt *skel;
+-	struct test_usdt__bss *bss;
+-	int err;
+-
+-	skel = test_usdt__open_and_load();
+-	if (!ASSERT_OK_PTR(skel, "skel_open"))
+-		return;
+-
+-	bss = skel->bss;
+-	bss->my_pid = getpid();
+-
+-	err = test_usdt__attach(skel);
+-	if (!ASSERT_OK(err, "skel_attach"))
+-		goto cleanup;
+-
+-	/* usdt0 won't be auto-attached */
+-	opts.usdt_cookie = 0xcafedeadbeeffeed;
+-	skel->links.usdt0 = bpf_program__attach_usdt(skel->progs.usdt0,
+-						     0 /*self*/, "/proc/self/exe",
+-						     "test", "usdt0", &opts);
+-	if (!ASSERT_OK_PTR(skel->links.usdt0, "usdt0_link"))
+-		goto cleanup;
+-
+-	trigger_func(1);
+-
+-	ASSERT_EQ(bss->usdt0_called, 1, "usdt0_called");
+-	ASSERT_EQ(bss->usdt3_called, 1, "usdt3_called");
+-	ASSERT_EQ(bss->usdt12_called, 1, "usdt12_called");
+-
+-	ASSERT_EQ(bss->usdt0_cookie, 0xcafedeadbeeffeed, "usdt0_cookie");
+-	ASSERT_EQ(bss->usdt0_arg_cnt, 0, "usdt0_arg_cnt");
+-	ASSERT_EQ(bss->usdt0_arg_ret, -ENOENT, "usdt0_arg_ret");
+-
+-	/* auto-attached usdt3 gets default zero cookie value */
+-	ASSERT_EQ(bss->usdt3_cookie, 0, "usdt3_cookie");
+-	ASSERT_EQ(bss->usdt3_arg_cnt, 3, "usdt3_arg_cnt");
+-
+-	ASSERT_EQ(bss->usdt3_arg_rets[0], 0, "usdt3_arg1_ret");
+-	ASSERT_EQ(bss->usdt3_arg_rets[1], 0, "usdt3_arg2_ret");
+-	ASSERT_EQ(bss->usdt3_arg_rets[2], 0, "usdt3_arg3_ret");
+-	ASSERT_EQ(bss->usdt3_args[0], 1, "usdt3_arg1");
+-	ASSERT_EQ(bss->usdt3_args[1], 42, "usdt3_arg2");
+-	ASSERT_EQ(bss->usdt3_args[2], (uintptr_t)&bla, "usdt3_arg3");
+-
+-	/* auto-attached usdt12 gets default zero cookie value */
+-	ASSERT_EQ(bss->usdt12_cookie, 0, "usdt12_cookie");
+-	ASSERT_EQ(bss->usdt12_arg_cnt, 12, "usdt12_arg_cnt");
+-
+-	ASSERT_EQ(bss->usdt12_args[0], 1, "usdt12_arg1");
+-	ASSERT_EQ(bss->usdt12_args[1], 1 + 1, "usdt12_arg2");
+-	ASSERT_EQ(bss->usdt12_args[2], 42, "usdt12_arg3");
+-	ASSERT_EQ(bss->usdt12_args[3], 42 + 1, "usdt12_arg4");
+-	ASSERT_EQ(bss->usdt12_args[4], 5, "usdt12_arg5");
+-	ASSERT_EQ(bss->usdt12_args[5], 42 / 7, "usdt12_arg6");
+-	ASSERT_EQ(bss->usdt12_args[6], bla, "usdt12_arg7");
+-	ASSERT_EQ(bss->usdt12_args[7], (uintptr_t)&bla, "usdt12_arg8");
+-	ASSERT_EQ(bss->usdt12_args[8], -9, "usdt12_arg9");
+-	ASSERT_EQ(bss->usdt12_args[9], nums[1], "usdt12_arg10");
+-	ASSERT_EQ(bss->usdt12_args[10], nums[idx], "usdt12_arg11");
+-	ASSERT_EQ(bss->usdt12_args[11], t1.y, "usdt12_arg12");
+-
+-	/* trigger_func() is marked __always_inline, so USDT invocations will be
+-	 * inlined in two different places, meaning that each USDT will have
+-	 * at least 2 different places to be attached to. This verifies that
+-	 * bpf_program__attach_usdt() handles this properly and attaches to
+-	 * all possible places of USDT invocation.
+-	 */
+-	trigger_func(2);
+-
+-	ASSERT_EQ(bss->usdt0_called, 2, "usdt0_called");
+-	ASSERT_EQ(bss->usdt3_called, 2, "usdt3_called");
+-	ASSERT_EQ(bss->usdt12_called, 2, "usdt12_called");
+-
+-	/* only check values that depend on trigger_func()'s input value */
+-	ASSERT_EQ(bss->usdt3_args[0], 2, "usdt3_arg1");
+-
+-	ASSERT_EQ(bss->usdt12_args[0], 2, "usdt12_arg1");
+-	ASSERT_EQ(bss->usdt12_args[1], 2 + 1, "usdt12_arg2");
+-	ASSERT_EQ(bss->usdt12_args[3], 42 + 2, "usdt12_arg4");
+-	ASSERT_EQ(bss->usdt12_args[9], nums[2], "usdt12_arg10");
+-
+-	/* detach and re-attach usdt3 */
+-	bpf_link__destroy(skel->links.usdt3);
+-
+-	opts.usdt_cookie = 0xBADC00C51E;
+-	skel->links.usdt3 = bpf_program__attach_usdt(skel->progs.usdt3, -1 /* any pid */,
+-						     "/proc/self/exe", "test", "usdt3", &opts);
+-	if (!ASSERT_OK_PTR(skel->links.usdt3, "usdt3_reattach"))
+-		goto cleanup;
+-
+-	trigger_func(3);
+-
+-	ASSERT_EQ(bss->usdt3_called, 3, "usdt3_called");
+-	/* this time usdt3 has custom cookie */
+-	ASSERT_EQ(bss->usdt3_cookie, 0xBADC00C51E, "usdt3_cookie");
+-	ASSERT_EQ(bss->usdt3_arg_cnt, 3, "usdt3_arg_cnt");
+-
+-	ASSERT_EQ(bss->usdt3_arg_rets[0], 0, "usdt3_arg1_ret");
+-	ASSERT_EQ(bss->usdt3_arg_rets[1], 0, "usdt3_arg2_ret");
+-	ASSERT_EQ(bss->usdt3_arg_rets[2], 0, "usdt3_arg3_ret");
+-	ASSERT_EQ(bss->usdt3_args[0], 3, "usdt3_arg1");
+-	ASSERT_EQ(bss->usdt3_args[1], 42, "usdt3_arg2");
+-	ASSERT_EQ(bss->usdt3_args[2], (uintptr_t)&bla, "usdt3_arg3");
+-
+-cleanup:
+-	test_usdt__destroy(skel);
+-}
+-
+-unsigned short test_usdt_100_semaphore SEC(".probes");
+-unsigned short test_usdt_300_semaphore SEC(".probes");
+-unsigned short test_usdt_400_semaphore SEC(".probes");
+-
+-#define R10(F, X)  F(X+0); F(X+1);F(X+2); F(X+3); F(X+4); \
+-		   F(X+5); F(X+6); F(X+7); F(X+8); F(X+9);
+-#define R100(F, X) R10(F,X+ 0);R10(F,X+10);R10(F,X+20);R10(F,X+30);R10(F,X+40); \
+-		   R10(F,X+50);R10(F,X+60);R10(F,X+70);R10(F,X+80);R10(F,X+90);
+-
+-/* carefully control that we get exactly 100 inlines by preventing inlining */
+-static void __always_inline f100(int x)
+-{
+-	STAP_PROBE1(test, usdt_100, x);
+-}
+-
+-__weak void trigger_100_usdts(void)
+-{
+-	R100(f100, 0);
+-}
+-
+-/* we shouldn't be able to attach to test:usdt2_300 USDT as we don't have as
+- * many slots for specs. It's important that each STAP_PROBE2() invocation
+- * (after untolling) gets different arg spec due to compiler inlining i as
+- * a constant
+- */
+-static void __always_inline f300(int x)
+-{
+-	STAP_PROBE1(test, usdt_300, x);
+-}
+-
+-__weak void trigger_300_usdts(void)
+-{
+-	R100(f300, 0);
+-	R100(f300, 100);
+-	R100(f300, 200);
+-}
+-
+-static void __always_inline f400(int x __attribute__((unused)))
+-{
+-	static int y;
+-
+-	STAP_PROBE1(test, usdt_400, y++);
+-}
+-
+-/* this time we have 400 different USDT call sites, but they have uniform
+- * argument location, so libbpf's spec string deduplication logic should keep
+- * spec count use very small and so we should be able to attach to all 400
+- * call sites
+- */
+-__weak void trigger_400_usdts(void)
+-{
+-	R100(f400, 0);
+-	R100(f400, 100);
+-	R100(f400, 200);
+-	R100(f400, 300);
+-}
+-
+-static void subtest_multispec_usdt(void)
+-{
+-	LIBBPF_OPTS(bpf_usdt_opts, opts);
+-	struct test_usdt *skel;
+-	struct test_usdt__bss *bss;
+-	int err, i;
+-
+-	skel = test_usdt__open_and_load();
+-	if (!ASSERT_OK_PTR(skel, "skel_open"))
+-		return;
+-
+-	bss = skel->bss;
+-	bss->my_pid = getpid();
+-
+-	err = test_usdt__attach(skel);
+-	if (!ASSERT_OK(err, "skel_attach"))
+-		goto cleanup;
+-
+-	/* usdt_100 is auto-attached and there are 100 inlined call sites,
+-	 * let's validate that all of them are properly attached to and
+-	 * handled from BPF side
+-	 */
+-	trigger_100_usdts();
+-
+-	ASSERT_EQ(bss->usdt_100_called, 100, "usdt_100_called");
+-	ASSERT_EQ(bss->usdt_100_sum, 99 * 100 / 2, "usdt_100_sum");
+-
+-	/* Stress test free spec ID tracking. By default libbpf allows up to
+-	 * 256 specs to be used, so if we don't return free spec IDs back
+-	 * after few detachments and re-attachments we should run out of
+-	 * available spec IDs.
+-	 */
+-	for (i = 0; i < 2; i++) {
+-		bpf_link__destroy(skel->links.usdt_100);
+-
+-		skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1,
+-							        "/proc/self/exe",
+-								"test", "usdt_100", NULL);
+-		if (!ASSERT_OK_PTR(skel->links.usdt_100, "usdt_100_reattach"))
+-			goto cleanup;
+-
+-		bss->usdt_100_sum = 0;
+-		trigger_100_usdts();
+-
+-		ASSERT_EQ(bss->usdt_100_called, (i + 1) * 100 + 100, "usdt_100_called");
+-		ASSERT_EQ(bss->usdt_100_sum, 99 * 100 / 2, "usdt_100_sum");
+-	}
+-
+-	/* Now let's step it up and try to attach USDT that requires more than
+-	 * 256 attach points with different specs for each.
+-	 * Note that we need trigger_300_usdts() only to actually have 300
+-	 * USDT call sites, we are not going to actually trace them.
+-	 */
+-	trigger_300_usdts();
+-
+-	/* we'll reuse usdt_100 BPF program for usdt_300 test */
+-	bpf_link__destroy(skel->links.usdt_100);
+-	skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1, "/proc/self/exe",
+-							"test", "usdt_300", NULL);
+-	err = -errno;
+-	if (!ASSERT_ERR_PTR(skel->links.usdt_100, "usdt_300_bad_attach"))
+-		goto cleanup;
+-	ASSERT_EQ(err, -E2BIG, "usdt_300_attach_err");
+-
+-	/* let's check that there are no "dangling" BPF programs attached due
+-	 * to partial success of the above test:usdt_300 attachment
+-	 */
+-	bss->usdt_100_called = 0;
+-	bss->usdt_100_sum = 0;
+-
+-	f300(777); /* this is 301st instance of usdt_300 */
+-
+-	ASSERT_EQ(bss->usdt_100_called, 0, "usdt_301_called");
+-	ASSERT_EQ(bss->usdt_100_sum, 0, "usdt_301_sum");
+-
+-	/* This time we have USDT with 400 inlined invocations, but arg specs
+-	 * should be the same across all sites, so libbpf will only need to
+-	 * use one spec and thus we'll be able to attach 400 uprobes
+-	 * successfully.
+-	 *
+-	 * Again, we are reusing usdt_100 BPF program.
+-	 */
+-	skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1,
+-							"/proc/self/exe",
+-							"test", "usdt_400", NULL);
+-	if (!ASSERT_OK_PTR(skel->links.usdt_100, "usdt_400_attach"))
+-		goto cleanup;
+-
+-	trigger_400_usdts();
+-
+-	ASSERT_EQ(bss->usdt_100_called, 400, "usdt_400_called");
+-	ASSERT_EQ(bss->usdt_100_sum, 399 * 400 / 2, "usdt_400_sum");
+-
+-cleanup:
+-	test_usdt__destroy(skel);
+-}
+-
+-static FILE *urand_spawn(int *pid)
+-{
+-	FILE *f;
+-
+-	/* urandom_read's stdout is wired into f */
+-	f = popen("./urandom_read 1 report-pid", "r");
+-	if (!f)
+-		return NULL;
+-
+-	if (fscanf(f, "%d", pid) != 1) {
+-		pclose(f);
+-		return NULL;
+-	}
+-
+-	return f;
+-}
+-
+-static int urand_trigger(FILE **urand_pipe)
+-{
+-	int exit_code;
+-
+-	/* pclose() waits for child process to exit and returns their exit code */
+-	exit_code = pclose(*urand_pipe);
+-	*urand_pipe = NULL;
+-
+-	return exit_code;
+-}
+-
+-static void subtest_urandom_usdt(bool auto_attach)
+-{
+-	struct test_urandom_usdt *skel;
+-	struct test_urandom_usdt__bss *bss;
+-	struct bpf_link *l;
+-	FILE *urand_pipe = NULL;
+-	int err, urand_pid = 0;
+-
+-	skel = test_urandom_usdt__open_and_load();
+-	if (!ASSERT_OK_PTR(skel, "skel_open"))
+-		return;
+-
+-	urand_pipe = urand_spawn(&urand_pid);
+-	if (!ASSERT_OK_PTR(urand_pipe, "urand_spawn"))
+-		goto cleanup;
+-
+-	bss = skel->bss;
+-	bss->urand_pid = urand_pid;
+-
+-	if (auto_attach) {
+-		err = test_urandom_usdt__attach(skel);
+-		if (!ASSERT_OK(err, "skel_auto_attach"))
+-			goto cleanup;
+-	} else {
+-		l = bpf_program__attach_usdt(skel->progs.urand_read_without_sema,
+-					     urand_pid, "./urandom_read",
+-					     "urand", "read_without_sema", NULL);
+-		if (!ASSERT_OK_PTR(l, "urand_without_sema_attach"))
+-			goto cleanup;
+-		skel->links.urand_read_without_sema = l;
+-
+-		l = bpf_program__attach_usdt(skel->progs.urand_read_with_sema,
+-					     urand_pid, "./urandom_read",
+-					     "urand", "read_with_sema", NULL);
+-		if (!ASSERT_OK_PTR(l, "urand_with_sema_attach"))
+-			goto cleanup;
+-		skel->links.urand_read_with_sema = l;
+-
+-		l = bpf_program__attach_usdt(skel->progs.urandlib_read_without_sema,
+-					     urand_pid, "./liburandom_read.so",
+-					     "urandlib", "read_without_sema", NULL);
+-		if (!ASSERT_OK_PTR(l, "urandlib_without_sema_attach"))
+-			goto cleanup;
+-		skel->links.urandlib_read_without_sema = l;
+-
+-		l = bpf_program__attach_usdt(skel->progs.urandlib_read_with_sema,
+-					     urand_pid, "./liburandom_read.so",
+-					     "urandlib", "read_with_sema", NULL);
+-		if (!ASSERT_OK_PTR(l, "urandlib_with_sema_attach"))
+-			goto cleanup;
+-		skel->links.urandlib_read_with_sema = l;
+-
+-	}
+-
+-	/* trigger urandom_read USDTs */
+-	ASSERT_OK(urand_trigger(&urand_pipe), "urand_exit_code");
+-
+-	ASSERT_EQ(bss->urand_read_without_sema_call_cnt, 1, "urand_wo_sema_cnt");
+-	ASSERT_EQ(bss->urand_read_without_sema_buf_sz_sum, 256, "urand_wo_sema_sum");
+-
+-	ASSERT_EQ(bss->urand_read_with_sema_call_cnt, 1, "urand_w_sema_cnt");
+-	ASSERT_EQ(bss->urand_read_with_sema_buf_sz_sum, 256, "urand_w_sema_sum");
+-
+-	ASSERT_EQ(bss->urandlib_read_without_sema_call_cnt, 1, "urandlib_wo_sema_cnt");
+-	ASSERT_EQ(bss->urandlib_read_without_sema_buf_sz_sum, 256, "urandlib_wo_sema_sum");
+-
+-	ASSERT_EQ(bss->urandlib_read_with_sema_call_cnt, 1, "urandlib_w_sema_cnt");
+-	ASSERT_EQ(bss->urandlib_read_with_sema_buf_sz_sum, 256, "urandlib_w_sema_sum");
+-
+-cleanup:
+-	if (urand_pipe)
+-		pclose(urand_pipe);
+-	test_urandom_usdt__destroy(skel);
+-}
+-
+-void test_usdt(void)
+-{
+-	if (test__start_subtest("basic"))
+-		subtest_basic_usdt();
+-	if (test__start_subtest("multispec"))
+-		subtest_multispec_usdt();
+-	if (test__start_subtest("urand_auto_attach"))
+-		subtest_urandom_usdt(true /* auto_attach */);
+-	if (test__start_subtest("urand_pid_attach"))
+-		subtest_urandom_usdt(false /* auto_attach */);
+-}
+diff --git a/tools/testing/selftests/bpf/progs/profiler1.c b/tools/testing/selftests/bpf/progs/profiler1.c
+deleted file mode 100644
+index 4df9088bfc00..000000000000
+--- a/tools/testing/selftests/bpf/progs/profiler1.c
++++ /dev/null
+@@ -1,6 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2020 Facebook */
+-#define barrier_var(var) asm volatile("" : "=r"(var) : "0"(var))
+-#define UNROLL
+-#define INLINE __always_inline
+-#include "profiler.inc.h"
+diff --git a/tools/testing/selftests/bpf/progs/profiler2.c b/tools/testing/selftests/bpf/progs/profiler2.c
+deleted file mode 100644
+index 0f32a3cbf556..000000000000
+--- a/tools/testing/selftests/bpf/progs/profiler2.c
++++ /dev/null
+@@ -1,6 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2020 Facebook */
+-#define barrier_var(var) /**/
+-/* undef #define UNROLL */
+-#define INLINE /**/
+-#include "profiler.inc.h"
+diff --git a/tools/testing/selftests/bpf/progs/profiler3.c b/tools/testing/selftests/bpf/progs/profiler3.c
+deleted file mode 100644
+index 6249fc31ccb0..000000000000
+--- a/tools/testing/selftests/bpf/progs/profiler3.c
++++ /dev/null
+@@ -1,6 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2020 Facebook */
+-#define barrier_var(var) /**/
+-#define UNROLL
+-#define INLINE __noinline
+-#include "profiler.inc.h"
+diff --git a/tools/testing/selftests/bpf/progs/test_core_reloc_enumval.c b/tools/testing/selftests/bpf/progs/test_core_reloc_enumval.c
+deleted file mode 100644
+index e7ef3dada2bf..000000000000
+--- a/tools/testing/selftests/bpf/progs/test_core_reloc_enumval.c
++++ /dev/null
+@@ -1,72 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-// Copyright (c) 2020 Facebook
+-
+-#include <linux/bpf.h>
+-#include <stdint.h>
+-#include <stdbool.h>
+-#include <bpf/bpf_helpers.h>
+-#include <bpf/bpf_core_read.h>
+-
+-char _license[] SEC("license") = "GPL";
+-
+-struct {
+-	char in[256];
+-	char out[256];
+-	bool skip;
+-} data = {};
+-
+-enum named_enum {
+-	NAMED_ENUM_VAL1 = 1,
+-	NAMED_ENUM_VAL2 = 2,
+-	NAMED_ENUM_VAL3 = 3,
+-};
+-
+-typedef enum {
+-	ANON_ENUM_VAL1 = 0x10,
+-	ANON_ENUM_VAL2 = 0x20,
+-	ANON_ENUM_VAL3 = 0x30,
+-} anon_enum;
+-
+-struct core_reloc_enumval_output {
+-	bool named_val1_exists;
+-	bool named_val2_exists;
+-	bool named_val3_exists;
+-	bool anon_val1_exists;
+-	bool anon_val2_exists;
+-	bool anon_val3_exists;
+-
+-	int named_val1;
+-	int named_val2;
+-	int anon_val1;
+-	int anon_val2;
+-};
+-
+-SEC("raw_tracepoint/sys_enter")
+-int test_core_enumval(void *ctx)
+-{
+-#if __has_builtin(__builtin_preserve_enum_value)
+-	struct core_reloc_enumval_output *out = (void *)&data.out;
+-	enum named_enum named = 0;
+-	anon_enum anon = 0;
+-
+-	out->named_val1_exists = bpf_core_enum_value_exists(named, NAMED_ENUM_VAL1);
+-	out->named_val2_exists = bpf_core_enum_value_exists(enum named_enum, NAMED_ENUM_VAL2);
+-	out->named_val3_exists = bpf_core_enum_value_exists(enum named_enum, NAMED_ENUM_VAL3);
+-
+-	out->anon_val1_exists = bpf_core_enum_value_exists(anon, ANON_ENUM_VAL1);
+-	out->anon_val2_exists = bpf_core_enum_value_exists(anon_enum, ANON_ENUM_VAL2);
+-	out->anon_val3_exists = bpf_core_enum_value_exists(anon_enum, ANON_ENUM_VAL3);
+-
+-	out->named_val1 = bpf_core_enum_value(named, NAMED_ENUM_VAL1);
+-	out->named_val2 = bpf_core_enum_value(named, NAMED_ENUM_VAL2);
+-	/* NAMED_ENUM_VAL3 value is optional */
+-
+-	out->anon_val1 = bpf_core_enum_value(anon, ANON_ENUM_VAL1);
+-	out->anon_val2 = bpf_core_enum_value(anon, ANON_ENUM_VAL2);
+-	/* ANON_ENUM_VAL3 value is optional */
+-#else
+-	data.skip = true;
+-#endif
+-
+-	return 0;
+-}
+diff --git a/tools/testing/selftests/bpf/progs/test_urandom_usdt.c b/tools/testing/selftests/bpf/progs/test_urandom_usdt.c
+deleted file mode 100644
+index 3539b02bd5f7..000000000000
+--- a/tools/testing/selftests/bpf/progs/test_urandom_usdt.c
++++ /dev/null
+@@ -1,70 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2022 Meta Platforms, Inc. and affiliates. */
+-
+-#include "vmlinux.h"
+-#include <bpf/bpf_helpers.h>
+-#include <bpf/usdt.bpf.h>
+-
+-int urand_pid;
+-
+-int urand_read_without_sema_call_cnt;
+-int urand_read_without_sema_buf_sz_sum;
+-
+-SEC("usdt/./urandom_read:urand:read_without_sema")
+-int BPF_USDT(urand_read_without_sema, int iter_num, int iter_cnt, int buf_sz)
+-{
+-	if (urand_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&urand_read_without_sema_call_cnt, 1);
+-	__sync_fetch_and_add(&urand_read_without_sema_buf_sz_sum, buf_sz);
+-
+-	return 0;
+-}
+-
+-int urand_read_with_sema_call_cnt;
+-int urand_read_with_sema_buf_sz_sum;
+-
+-SEC("usdt/./urandom_read:urand:read_with_sema")
+-int BPF_USDT(urand_read_with_sema, int iter_num, int iter_cnt, int buf_sz)
+-{
+-	if (urand_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&urand_read_with_sema_call_cnt, 1);
+-	__sync_fetch_and_add(&urand_read_with_sema_buf_sz_sum, buf_sz);
+-
+-	return 0;
+-}
+-
+-int urandlib_read_without_sema_call_cnt;
+-int urandlib_read_without_sema_buf_sz_sum;
+-
+-SEC("usdt/./liburandom_read.so:urandlib:read_without_sema")
+-int BPF_USDT(urandlib_read_without_sema, int iter_num, int iter_cnt, int buf_sz)
+-{
+-	if (urand_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&urandlib_read_without_sema_call_cnt, 1);
+-	__sync_fetch_and_add(&urandlib_read_without_sema_buf_sz_sum, buf_sz);
+-
+-	return 0;
+-}
+-
+-int urandlib_read_with_sema_call_cnt;
+-int urandlib_read_with_sema_buf_sz_sum;
+-
+-SEC("usdt/./liburandom_read.so:urandlib:read_with_sema")
+-int BPF_USDT(urandlib_read_with_sema, int iter_num, int iter_cnt, int buf_sz)
+-{
+-	if (urand_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&urandlib_read_with_sema_call_cnt, 1);
+-	__sync_fetch_and_add(&urandlib_read_with_sema_buf_sz_sum, buf_sz);
+-
+-	return 0;
+-}
+-
+-char _license[] SEC("license") = "GPL";
+diff --git a/tools/testing/selftests/bpf/progs/test_usdt.c b/tools/testing/selftests/bpf/progs/test_usdt.c
+deleted file mode 100644
+index 505aab9a5234..000000000000
+--- a/tools/testing/selftests/bpf/progs/test_usdt.c
++++ /dev/null
+@@ -1,96 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2022 Meta Platforms, Inc. and affiliates. */
+-
+-#include "vmlinux.h"
+-#include <bpf/bpf_helpers.h>
+-#include <bpf/usdt.bpf.h>
+-
+-int my_pid;
+-
+-int usdt0_called;
+-u64 usdt0_cookie;
+-int usdt0_arg_cnt;
+-int usdt0_arg_ret;
+-
+-SEC("usdt")
+-int usdt0(struct pt_regs *ctx)
+-{
+-	long tmp;
+-
+-	if (my_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&usdt0_called, 1);
+-
+-	usdt0_cookie = bpf_usdt_cookie(ctx);
+-	usdt0_arg_cnt = bpf_usdt_arg_cnt(ctx);
+-	/* should return -ENOENT for any arg_num */
+-	usdt0_arg_ret = bpf_usdt_arg(ctx, bpf_get_prandom_u32(), &tmp);
+-	return 0;
+-}
+-
+-int usdt3_called;
+-u64 usdt3_cookie;
+-int usdt3_arg_cnt;
+-int usdt3_arg_rets[3];
+-u64 usdt3_args[3];
+-
+-SEC("usdt//proc/self/exe:test:usdt3")
+-int usdt3(struct pt_regs *ctx)
+-{
+-	long tmp;
+-
+-	if (my_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&usdt3_called, 1);
+-
+-	usdt3_cookie = bpf_usdt_cookie(ctx);
+-	usdt3_arg_cnt = bpf_usdt_arg_cnt(ctx);
+-
+-	usdt3_arg_rets[0] = bpf_usdt_arg(ctx, 0, &tmp);
+-	usdt3_args[0] = (int)tmp;
+-
+-	usdt3_arg_rets[1] = bpf_usdt_arg(ctx, 1, &tmp);
+-	usdt3_args[1] = (long)tmp;
+-
+-	usdt3_arg_rets[2] = bpf_usdt_arg(ctx, 2, &tmp);
+-	usdt3_args[2] = (uintptr_t)tmp;
+-
+-	return 0;
+-}
+-
+-int usdt12_called;
+-u64 usdt12_cookie;
+-int usdt12_arg_cnt;
+-u64 usdt12_args[12];
+-
+-SEC("usdt//proc/self/exe:test:usdt12")
+-int BPF_USDT(usdt12, int a1, int a2, long a3, long a4, unsigned a5,
+-		     long a6, __u64 a7, uintptr_t a8, int a9, short a10,
+-		     short a11, signed char a12)
+-{
+-	if (my_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&usdt12_called, 1);
+-
+-	usdt12_cookie = bpf_usdt_cookie(ctx);
+-	usdt12_arg_cnt = bpf_usdt_arg_cnt(ctx);
+-
+-	usdt12_args[0] = a1;
+-	usdt12_args[1] = a2;
+-	usdt12_args[2] = a3;
+-	usdt12_args[3] = a4;
+-	usdt12_args[4] = a5;
+-	usdt12_args[5] = a6;
+-	usdt12_args[6] = a7;
+-	usdt12_args[7] = a8;
+-	usdt12_args[8] = a9;
+-	usdt12_args[9] = a10;
+-	usdt12_args[10] = a11;
+-	usdt12_args[11] = a12;
+-	return 0;
+-}
+-
+-char _license[] SEC("license") = "GPL";
+diff --git a/tools/testing/selftests/bpf/progs/test_usdt_multispec.c b/tools/testing/selftests/bpf/progs/test_usdt_multispec.c
+deleted file mode 100644
+index aa6de32b50d1..000000000000
+--- a/tools/testing/selftests/bpf/progs/test_usdt_multispec.c
++++ /dev/null
+@@ -1,32 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/* Copyright (c) 2022 Meta Platforms, Inc. and affiliates. */
+-
+-#include "vmlinux.h"
+-#include <bpf/bpf_helpers.h>
+-#include <bpf/usdt.bpf.h>
+-
+-/* this file is linked together with test_usdt.c to validate that usdt.bpf.h
+- * can be included in multiple .bpf.c files forming single final BPF object
+- * file
+- */
+-
+-extern int my_pid;
+-
+-int usdt_100_called;
+-int usdt_100_sum;
+-
+-SEC("usdt//proc/self/exe:test:usdt_100")
+-int BPF_USDT(usdt_100, int x)
+-{
+-	long tmp;
+-
+-	if (my_pid != (bpf_get_current_pid_tgid() >> 32))
+-		return 0;
+-
+-	__sync_fetch_and_add(&usdt_100_called, 1);
+-	__sync_fetch_and_add(&usdt_100_sum, x);
+-
+-	return 0;
+-}
+-
+-char _license[] SEC("license") = "GPL";
+-- 
+2.30.2
+
