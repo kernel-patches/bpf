@@ -1060,6 +1060,7 @@ struct bpf_tracing_link {
 	enum bpf_attach_type attach_type;
 	struct bpf_trampoline *trampoline;
 	struct bpf_prog *tgt_prog;
+	u64 cookie;
 };
 
 struct bpf_link_primer {
