@@ -1743,7 +1743,7 @@ static const struct bpf_func_proto bpf_skb_load_bytes_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -1777,7 +1777,7 @@ static const struct bpf_func_proto bpf_flow_dissector_load_bytes_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -1821,7 +1821,7 @@ static const struct bpf_func_proto bpf_skb_load_bytes_relative_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 	.arg5_type	= ARG_ANYTHING,
 };
@@ -3943,7 +3943,7 @@ static const struct bpf_func_proto bpf_xdp_load_bytes_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -3970,7 +3970,7 @@ static const struct bpf_func_proto bpf_xdp_store_bytes_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -4544,7 +4544,7 @@ static const struct bpf_func_proto bpf_skb_get_tunnel_key_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg3_type	= ARG_CONST_SIZE,
 	.arg4_type	= ARG_ANYTHING,
 };
@@ -4579,7 +4579,7 @@ static const struct bpf_func_proto bpf_skb_get_tunnel_opt_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg3_type	= ARG_CONST_SIZE,
 };
 
@@ -5386,7 +5386,7 @@ const struct bpf_func_proto bpf_sk_getsockopt_proto = {
 	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
-	.arg4_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg5_type	= ARG_CONST_SIZE,
 };
 
@@ -5420,7 +5420,7 @@ static const struct bpf_func_proto bpf_sock_addr_getsockopt_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
-	.arg4_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg5_type	= ARG_CONST_SIZE,
 };
 
@@ -5544,7 +5544,7 @@ static const struct bpf_func_proto bpf_sock_ops_getsockopt_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
-	.arg4_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg5_type	= ARG_CONST_SIZE,
 };
 
@@ -5656,7 +5656,7 @@ static const struct bpf_func_proto bpf_skb_get_xfrm_state_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 	.arg5_type	= ARG_ANYTHING,
 };
@@ -10750,7 +10750,7 @@ static const struct bpf_func_proto sk_reuseport_load_bytes_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
@@ -10768,7 +10768,7 @@ static const struct bpf_func_proto sk_reuseport_load_bytes_relative_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_PTR_TO_MEM_UNINIT,
 	.arg4_type	= ARG_CONST_SIZE,
 	.arg5_type	= ARG_ANYTHING,
 };
