@@ -3189,6 +3189,10 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN:
+		return BPF_PROG_TYPE_TRACING;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -4254,6 +4258,11 @@ static int tracing_bpf_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 					       attr->link_create.target_fd,
 					       attr->link_create.target_btf_id,
 					       0);
+	else if (prog->type == BPF_PROG_TYPE_TRACING)
+		return bpf_tracing_prog_attach(prog,
+					       0,
+					       0,
+					       attr->link_create.tracing.cookie);
 
 	return -EINVAL;
 }
