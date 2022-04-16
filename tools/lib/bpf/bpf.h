@@ -411,6 +411,9 @@ struct bpf_link_create_opts {
 	__u32 target_btf_id;
 	union {
 		struct {
+			__u64 cookie;
+		} tracing;
+		struct {
 			__u64 bpf_cookie;
 		} perf_event;
 		struct {
