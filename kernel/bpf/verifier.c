@@ -257,6 +257,7 @@ struct bpf_call_arg_meta {
 	struct btf *ret_btf;
 	u32 ret_btf_id;
 	u32 subprogno;
+	bool release_ref;
 };
 
 struct btf *btf_vmlinux;
@@ -469,17 +470,6 @@ static bool arg_type_may_be_refcounted(enum bpf_arg_type type)
 static bool type_may_be_null(u32 type)
 {
 	return type & PTR_MAYBE_NULL;
-}
-
-/* Determine whether the function releases some resources allocated by another
- * function call. The first reference type argument will be assumed to be
- * released by release_reference().
- */
-static bool is_release_function(enum bpf_func_id func_id)
-{
-	return func_id == BPF_FUNC_sk_release ||
-	       func_id == BPF_FUNC_ringbuf_submit ||
-	       func_id == BPF_FUNC_ringbuf_discard;
 }
 
 static bool may_be_acquire_function(enum bpf_func_id func_id)
@@ -5388,11 +5378,10 @@ found:
 
 int check_func_arg_reg_off(struct bpf_verifier_env *env,
 			   const struct bpf_reg_state *reg, int regno,
-			   enum bpf_arg_type arg_type,
-			   bool is_release_func)
+			   enum bpf_arg_type arg_type, bool arg_release)
 {
-	bool fixed_off_ok = false, release_reg;
 	enum bpf_reg_type type = reg->type;
+	bool fixed_off_ok = false;
 
 	switch ((u32)type) {
 	case SCALAR_VALUE:
@@ -5417,18 +5406,15 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	 * fixed offset.
 	 */
 	case PTR_TO_BTF_ID:
-		/* When referenced PTR_TO_BTF_ID is passed to release function,
-		 * it's fixed offset must be 0. We rely on the property that
-		 * only one referenced register can be passed to BPF helpers and
-		 * kfuncs. In the other cases, fixed offset can be non-zero.
+		/* If a referenced PTR_TO_BTF_ID will be released, its fixed offset
+		 * must be 0.
 		 */
-		release_reg = is_release_func && reg->ref_obj_id;
-		if (release_reg && reg->off) {
+		if (arg_release && reg->off) {
 			verbose(env, "R%d must have zero offset when passed to release func\n",
 				regno);
 			return -EINVAL;
 		}
-		/* For release_reg == true, fixed_off_ok must be false, but we
+		/* For arg_release == true, fixed_off_ok must be false, but we
 		 * already checked and rejected reg->off != 0 above, so set to
 		 * true to allow fixed offset for all other cases.
 		 */
@@ -5488,7 +5474,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	if (err)
 		return err;
 
-	err = check_func_arg_reg_off(env, reg, regno, arg_type, is_release_function(meta->func_id));
+	err = check_func_arg_reg_off(env, reg, regno, arg_type, arg_type & OBJ_RELEASE);
 	if (err)
 		return err;
 
@@ -5504,6 +5490,18 @@ skip_type_check:
 			return -EFAULT;
 		}
 		meta->ref_obj_id = reg->ref_obj_id;
+	}
+	if (arg_type & OBJ_RELEASE) {
+		if (!reg->ref_obj_id) {
+			verbose(env, "arg %d is an unacquired reference\n", regno);
+			return -EINVAL;
+		}
+		if (meta->release_ref) {
+			verbose(env, "verifier internal error: more than one release_ref arg R%d\n",
+				regno);
+			return -EFAULT;
+		}
+		meta->release_ref = true;
 	}
 
 	if (arg_type == ARG_CONST_MAP_PTR) {
@@ -6717,7 +6715,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			return err;
 	}
 
-	if (is_release_function(func_id)) {
+	if (meta.release_ref) {
 		err = release_reference(env, meta.ref_obj_id);
 		if (err) {
 			verbose(env, "func %s#%d reference has not been acquired before\n",
