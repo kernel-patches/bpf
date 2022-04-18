@@ -72,6 +72,7 @@ int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
 #ifdef CONFIG_KALLSYMS
 /* Lookup the address for a symbol. Returns 0 if not found. */
 unsigned long kallsyms_lookup_name(const char *name);
+int kallsyms_lookup_names(const char **syms, size_t cnt, unsigned long *addrs);
 
 extern int kallsyms_lookup_size_offset(unsigned long addr,
 				  unsigned long *symbolsize,
@@ -101,6 +102,11 @@ extern bool kallsyms_show_value(const struct cred *cred);
 static inline unsigned long kallsyms_lookup_name(const char *name)
 {
 	return 0;
+}
+
+static inline int kallsyms_lookup_names(const char **syms, size_t cnt, unsigned long *addrs)
+{
+	return -ERANGE;
 }
 
 static inline int kallsyms_lookup_size_offset(unsigned long addr,
