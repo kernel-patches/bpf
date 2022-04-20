@@ -289,12 +289,21 @@ static int notsupp_get_next_key(struct bpf_map *map, void *key, void *next_key)
 static struct bpf_map *task_storage_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_local_storage_map *smap;
+	int cache_idx_or_err;
+
+	cache_idx_or_err = bpf_local_storage_cache_idx_get(&task_cache,
+							   attr->map_extra);
+	if (cache_idx_or_err < 0)
+		return ERR_PTR(cache_idx_or_err);
 
 	smap = bpf_local_storage_map_alloc(attr);
-	if (IS_ERR(smap))
+	if (IS_ERR(smap)) {
+		bpf_local_storage_cache_idx_free(&task_cache, (u16)cache_idx_or_err,
+						 attr->map_extra);
 		return ERR_CAST(smap);
+	}
 
-	smap->cache_idx = bpf_local_storage_cache_idx_get(&task_cache);
+	smap->cache_idx = (u16)cache_idx_or_err;
 	return &smap->map;
 }
 
@@ -303,7 +312,8 @@ static void task_storage_map_free(struct bpf_map *map)
 	struct bpf_local_storage_map *smap;
 
 	smap = (struct bpf_local_storage_map *)map;
-	bpf_local_storage_cache_idx_free(&task_cache, smap->cache_idx);
+	bpf_local_storage_cache_idx_free(&task_cache, smap->cache_idx,
+					 map->map_extra);
 	bpf_local_storage_map_free(smap, &bpf_task_storage_busy);
 }
 

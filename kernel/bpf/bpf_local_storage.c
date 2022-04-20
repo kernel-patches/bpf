@@ -240,12 +240,19 @@ bpf_local_storage_lookup(struct bpf_local_storage *local_storage,
 {
 	struct bpf_local_storage_data *sdata;
 	struct bpf_local_storage_elem *selem;
+	struct bpf_local_storage_map *cached;
+	bool cached_exclusive = false;
 
 	/* Fast path (cache hit) */
 	sdata = rcu_dereference_check(local_storage->cache[smap->cache_idx],
 				      bpf_rcu_lock_held());
-	if (sdata && rcu_access_pointer(sdata->smap) == smap)
-		return sdata;
+	if (sdata) {
+		if (rcu_access_pointer(sdata->smap) == smap)
+			return sdata;
+
+		cached = rcu_dereference_check(sdata->smap, bpf_rcu_lock_held());
+		cached_exclusive = cached->map.map_extra & BPF_LOCAL_STORAGE_FORCE_CACHE;
+	}
 
 	/* Slow path (cache miss) */
 	hlist_for_each_entry_rcu(selem, &local_storage->list, snode,
@@ -257,7 +264,7 @@ bpf_local_storage_lookup(struct bpf_local_storage *local_storage,
 		return NULL;
 
 	sdata = SDATA(selem);
-	if (cacheit_lockit) {
+	if (cacheit_lockit && !cached_exclusive) {
 		unsigned long flags;
 
 		/* spinlock is needed to avoid racing with the
@@ -491,15 +498,27 @@ unlock_err:
 	return ERR_PTR(err);
 }
 
-u16 bpf_local_storage_cache_idx_get(struct bpf_local_storage_cache *cache)
+int bpf_local_storage_cache_idx_get(struct bpf_local_storage_cache *cache,
+				    u64 flags)
 {
+	bool exclusive = flags & BPF_LOCAL_STORAGE_FORCE_CACHE;
+	bool adding_to_full = false;
 	u64 min_usage = U64_MAX;
-	u16 i, res = 0;
+	int res = 0;
+	u16 i;
 
 	spin_lock(&cache->idx_lock);
 
+	if (bitmap_full(cache->idx_exclusive, BPF_LOCAL_STORAGE_CACHE_SIZE)) {
+		res = -ENOMEM;
+		adding_to_full = true;
+		if (exclusive)
+			goto out;
+	}
+
 	for (i = 0; i < BPF_LOCAL_STORAGE_CACHE_SIZE; i++) {
-		if (cache->idx_usage_counts[i] < min_usage) {
+		if ((adding_to_full || !test_bit(i, cache->idx_exclusive)) &&
+		    cache->idx_usage_counts[i] < min_usage) {
 			min_usage = cache->idx_usage_counts[i];
 			res = i;
 
@@ -508,17 +527,23 @@ u16 bpf_local_storage_cache_idx_get(struct bpf_local_storage_cache *cache)
 				break;
 		}
 	}
+
+	if (exclusive)
+		set_bit(res, cache->idx_exclusive);
 	cache->idx_usage_counts[res]++;
 
+out:
 	spin_unlock(&cache->idx_lock);
 
 	return res;
 }
 
 void bpf_local_storage_cache_idx_free(struct bpf_local_storage_cache *cache,
-				      u16 idx)
+				      u16 idx, u64 flags)
 {
 	spin_lock(&cache->idx_lock);
+	if (flags & BPF_LOCAL_STORAGE_FORCE_CACHE)
+		clear_bit(idx, cache->idx_exclusive);
 	cache->idx_usage_counts[idx]--;
 	spin_unlock(&cache->idx_lock);
 }
@@ -592,7 +617,8 @@ int bpf_local_storage_map_alloc_check(union bpf_attr *attr)
 	    attr->max_entries ||
 	    attr->key_size != sizeof(int) || !attr->value_size ||
 	    /* Enforce BTF for userspace sk dumping */
-	    !attr->btf_key_type_id || !attr->btf_value_type_id)
+	    !attr->btf_key_type_id || !attr->btf_value_type_id ||
+	    attr->map_extra & ~BPF_LOCAL_STORAGE_FORCE_CACHE)
 		return -EINVAL;
 
 	if (!bpf_capable())

@@ -847,8 +847,11 @@ static int map_create(union bpf_attr *attr)
 		return -EINVAL;
 	}
 
-	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
-	    attr->map_extra != 0)
+	if (!(attr->map_type == BPF_MAP_TYPE_BLOOM_FILTER ||
+	      attr->map_type == BPF_MAP_TYPE_INODE_STORAGE ||
+	      attr->map_type == BPF_MAP_TYPE_TASK_STORAGE ||
+	      attr->map_type == BPF_MAP_TYPE_SK_STORAGE) &&
+	     attr->map_extra != 0)
 		return -EINVAL;
 
 	f_flags = bpf_get_file_flag(attr->map_flags);

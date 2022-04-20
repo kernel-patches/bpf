@@ -109,6 +109,7 @@ struct bpf_local_storage {
 struct bpf_local_storage_cache {
 	spinlock_t idx_lock;
 	u64 idx_usage_counts[BPF_LOCAL_STORAGE_CACHE_SIZE];
+	DECLARE_BITMAP(idx_exclusive, BPF_LOCAL_STORAGE_CACHE_SIZE);
 };
 
 #define DEFINE_BPF_STORAGE_CACHE(name)				\
@@ -116,9 +117,10 @@ static struct bpf_local_storage_cache name = {			\
 	.idx_lock = __SPIN_LOCK_UNLOCKED(name.idx_lock),	\
 }
 
-u16 bpf_local_storage_cache_idx_get(struct bpf_local_storage_cache *cache);
+int bpf_local_storage_cache_idx_get(struct bpf_local_storage_cache *cache,
+				    u64 flags);
 void bpf_local_storage_cache_idx_free(struct bpf_local_storage_cache *cache,
-				      u16 idx);
+				       u16 idx, u64 flags);
 
 /* Helper functions for bpf_local_storage */
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr);

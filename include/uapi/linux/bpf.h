@@ -1257,6 +1257,18 @@ enum bpf_stack_build_id_status {
 	BPF_STACK_BUILD_ID_IP = 2,
 };
 
+/* Flags passed in map_extra when creating local_storage maps
+ * of types: BPF_MAP_TYPE_INODE_STORAGE
+ *           BPF_MAP_TYPE_TASK_STORAGE
+ *           BPF_MAP_TYPE_SK_STORAGE
+ */
+enum bpf_local_storage_extra_flags {
+	/* Give the map exclusive use of a local_storage cache slot
+	 * or fail map alloc
+	 */
+	BPF_LOCAL_STORAGE_FORCE_CACHE = (1U << 0),
+};
+
 #define BPF_BUILD_ID_SIZE 20
 struct bpf_stack_build_id {
 	__s32		status;
@@ -1296,6 +1308,8 @@ union bpf_attr {
 		 * BPF_MAP_TYPE_BLOOM_FILTER - the lowest 4 bits indicate the
 		 * number of hash functions (if 0, the bloom filter will default
 		 * to using 5 hash functions).
+		 * BPF_MAP_TYPE_{INODE,TASK,SK}_STORAGE - local_storage specific
+		 * flags (see bpf_local_storage_extra_flags)
 		 */
 		__u64	map_extra;
 	};
