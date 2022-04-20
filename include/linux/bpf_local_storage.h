@@ -104,8 +104,6 @@ struct bpf_local_storage {
 	container_of((_SDATA), struct bpf_local_storage_elem, sdata)
 #define SDATA(_SELEM) (&(_SELEM)->sdata)
 
-#define BPF_LOCAL_STORAGE_CACHE_SIZE	16
-
 struct bpf_local_storage_cache {
 	spinlock_t idx_lock;
 	u64 idx_usage_counts[BPF_LOCAL_STORAGE_CACHE_SIZE];
