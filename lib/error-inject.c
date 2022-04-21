@@ -183,6 +183,8 @@ static const char *error_type_string(int etype)
 		return "ERRNO_NULL";
 	case EI_ETYPE_TRUE:
 		return "TRUE";
+	case EI_ETYPE_NS_ERRNO:
+		return "NS_ERRNO";
 	default:
 		return "(unknown)";
 	}

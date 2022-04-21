@@ -9,6 +9,7 @@ enum {
 	EI_ETYPE_ERRNO,		/* Return -ERRNO if failure */
 	EI_ETYPE_ERRNO_NULL,	/* Return -ERRNO or NULL if failure */
 	EI_ETYPE_TRUE,		/* Return true if failure */
+	EI_ETYPE_NS_ERRNO,	/* Return -ERRNO if failure and tag the function as non-sleepable */
 };
 
 struct error_injection_entry {

@@ -14085,6 +14085,11 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+static int is_non_sleepable_error_inject(unsigned long addr)
+{
+	return get_injectable_error_type(addr) == EI_ETYPE_NS_ERRNO;
+}
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
@@ -14281,8 +14286,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				/* fentry/fexit/fmod_ret progs can be sleepable only if they are
 				 * attached to ALLOW_ERROR_INJECTION and are not in denylist.
 				 */
-				if (!check_non_sleepable_error_inject(btf_id) &&
-				    within_error_injection_list(addr))
+				if (within_error_injection_list(addr) &&
+				    !check_non_sleepable_error_inject(btf_id) &&
+				    !is_non_sleepable_error_inject(addr))
 					ret = 0;
 				break;
 			case BPF_PROG_TYPE_LSM:
