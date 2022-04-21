@@ -7647,6 +7647,9 @@ static int make_parent_dir(const char *path)
 	char *dname, *dir;
 	int err = 0;
 
+	if (path == NULL)
+		return -EINVAL;
+
 	dname = strdup(path);
 	if (dname == NULL)
 		return -ENOMEM;
