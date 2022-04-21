@@ -5851,9 +5851,9 @@ static bool __btf_type_is_scalar_struct(struct bpf_verifier_log *log,
 	return true;
 }
 
-static bool is_kfunc_arg_mem_size(const struct btf *btf,
-				  const struct btf_param *arg,
-				  const struct bpf_reg_state *reg)
+bool btf_is_kfunc_arg_mem_size(const struct btf *btf,
+			       const struct btf_param *arg,
+			       const struct bpf_reg_state *reg)
 {
 	int len, sfx_len = sizeof("__sz") - 1;
 	const struct btf_type *t;
@@ -5976,7 +5976,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				reg_btf = reg->btf;
 				reg_ref_id = reg->btf_id;
 				/* Ensure only one argument is referenced
-				 * PTR_TO_BTF_ID, check_func_arg_reg_off relies
+				 * PTR_TO_BTF_ID or PTR_TO_MEM, check_func_arg_reg_off relies
 				 * on only one referenced register being allowed
 				 * for kfuncs.
 				 */
@@ -6012,7 +6012,10 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 			u32 type_size;
 
 			if (is_kfunc) {
-				bool arg_mem_size = i + 1 < nargs && is_kfunc_arg_mem_size(btf, &args[i + 1], &regs[regno + 1]);
+				bool arg_mem_size = i + 1 < nargs &&
+						    btf_is_kfunc_arg_mem_size(btf,
+									      &args[i + 1],
+									      &regs[regno + 1]);
 
 				/* Permit pointer to mem, but only when argument
 				 * type is pointer to scalar, or struct composed
@@ -6038,6 +6041,24 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 					}
 					i++;
 					continue;
+				}
+
+				if (rel && reg->ref_obj_id) {
+					/* Ensure only one argument is referenced
+					 * PTR_TO_BTF_ID or PTR_TO_MEM, check_func_arg_reg_off
+					 * relies on only one referenced register being allowed
+					 * for kfuncs.
+					 */
+					if (ref_obj_id) {
+						bpf_log(log,
+							"verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
+							regno,
+							reg->ref_obj_id,
+							ref_obj_id);
+						return -EFAULT;
+					}
+					ref_regno = regno;
+					ref_obj_id = reg->ref_obj_id;
 				}
 			}
 
