@@ -32,6 +32,9 @@
 #include <linux/hiddev.h>
 #include <linux/hid-debug.h>
 #include <linux/hidraw.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
+#include <linux/hid_bpf.h>
 
 #include "hid-ids.h"
 
@@ -2008,6 +2011,99 @@ out:
 }
 EXPORT_SYMBOL_GPL(hid_report_raw_event);
 
+struct hid_bpf_ctx_kern {
+	struct hid_device *hdev;
+	struct hid_bpf_ctx ctx;
+	u8 *data;
+	size_t size;
+};
+
+__weak int hid_bpf_device_event(struct hid_bpf_ctx *ctx, s64 type)
+{
+	return 0;
+}
+ALLOW_ERROR_INJECTION(hid_bpf_device_event, NS_ERRNO);
+
+noinline __u8 *
+hid_bpf_kfunc_get_data(struct hid_bpf_ctx *ctx, unsigned int offset, const size_t __sz)
+{
+	struct hid_bpf_ctx_kern *ctx_kern;
+
+	if (!ctx)
+		return NULL;
+
+	ctx_kern = container_of(ctx, struct hid_bpf_ctx_kern, ctx);
+
+	return ctx_kern->data;
+}
+
+noinline void
+hid_bpf_kfunc_data_release(__u8 *data)
+{
+}
+
+noinline int
+hid_bpf_kfunc_hw_request(struct hid_bpf_ctx *ctx)
+{
+	if (!ctx)
+		return -EINVAL;
+
+	pr_err("%s test ctx->bus: %04x %s:%d", __func__, ctx->bus, __FILE__, __LINE__);
+
+	return 0;
+}
+
+/*
+ * The following set contains all functions we agree BPF programs
+ * can use.
+ */
+BTF_SET_START(hid_bpf_kfunc_ids)
+BTF_ID(func, hid_bpf_kfunc_get_data)
+BTF_ID(func, hid_bpf_kfunc_data_release)
+BTF_ID(func, hid_bpf_kfunc_hw_request)
+BTF_SET_END(hid_bpf_kfunc_ids)
+
+/*
+ * The following set contains all functions to provide a kernel
+ * resource to the BPF program.
+ * We need to add a counterpart release function.
+ */
+BTF_SET_START(hid_bpf_kfunc_acquire_ids)
+BTF_ID(func, hid_bpf_kfunc_get_data)
+BTF_SET_END(hid_bpf_kfunc_acquire_ids)
+
+/*
+ * The following set is the release counterpart of the previous
+ * function set.
+ */
+BTF_SET_START(hid_bpf_kfunc_release_ids)
+BTF_ID(func, hid_bpf_kfunc_data_release)
+BTF_SET_END(hid_bpf_kfunc_release_ids)
+
+/*
+ * The following set tells which functions are sleepable.
+ */
+BTF_SET_START(hid_bpf_kfunc_sleepable_ids)
+BTF_ID(func, hid_bpf_kfunc_hw_request)
+BTF_SET_END(hid_bpf_kfunc_sleepable_ids)
+
+static const struct btf_kfunc_id_set hid_bpf_kfunc_set = {
+	.owner         = THIS_MODULE,
+	.check_set     = &hid_bpf_kfunc_ids,
+	.acquire_set   = &hid_bpf_kfunc_acquire_ids,
+	.release_set   = &hid_bpf_kfunc_release_ids,
+	.ret_null_set  = &hid_bpf_kfunc_acquire_ids, /* duplicated to force BPF programs to
+						      * check the validity of the returned pointer
+						      * in acquire function
+						      */
+	.sleepable_set = &hid_bpf_kfunc_sleepable_ids,
+};
+
+static int __init hid_bpf_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &hid_bpf_kfunc_set);
+}
+
 /**
  * hid_input_report - report data from lower layer (usb, bt...)
  *
@@ -2025,6 +2121,17 @@ int hid_input_report(struct hid_device *hid, int type, u8 *data, u32 size, int i
 	struct hid_driver *hdrv;
 	struct hid_report *report;
 	int ret = 0;
+	struct hid_bpf_ctx_kern ctx_kern = {
+		.hdev = hid,
+		.ctx = {
+			.bus = hid->bus,
+			.group = hid->group,
+			.vendor = hid->vendor,
+			.product = hid->product,
+		},
+		.data = data,
+		.size = size,
+	};
 
 	if (!hid)
 		return -ENODEV;
@@ -2038,6 +2145,10 @@ int hid_input_report(struct hid_device *hid, int type, u8 *data, u32 size, int i
 	}
 	report_enum = hid->report_enum + type;
 	hdrv = hid->driver;
+
+	ret = hid_bpf_device_event(&ctx_kern.ctx, type);
+	if (ret)
+		goto unlock;
 
 	if (!size) {
 		dbg_hid("empty report\n");
@@ -2913,6 +3024,10 @@ static int __init hid_init(void)
 		goto err_bus;
 
 	hid_debug_init();
+
+	ret = hid_bpf_init();
+	if (ret)
+		pr_err("%s error in bpf_init: %d %s:%d", __func__, ret, __FILE__, __LINE__);
 
 	return 0;
 err_bus:
