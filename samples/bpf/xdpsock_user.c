@@ -7,14 +7,15 @@
 #include <linux/bpf.h>
 #include <linux/if_link.h>
 #include <linux/if_xdp.h>
-#include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/limits.h>
+#include <linux/net.h>
 #include <linux/udp.h>
 #include <arpa/inet.h>
 #include <locale.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
+#include <linux/if_ether.h>
 #include <net/if.h>
 #include <poll.h>
 #include <pthread.h>
