@@ -207,9 +207,9 @@ static void print_table(void)
 			error(1, errno, "fail to get entry value of Key: %u\n",
 				curN);
 		} else {
-			printf("cookie: %u, uid: 0x%x, Packet Count: %lu,"
-				" Bytes Count: %lu\n", curN, curEntry.uid,
-				curEntry.packets, curEntry.bytes);
+			printf("cookie: %u, uid: 0x%x, Packet Count: %llu, Bytes Count: %llu\n",
+			       curN, curEntry.uid, (__u64)curEntry.packets,
+			       (__u64)curEntry.bytes);
 		}
 	}
 }
@@ -265,9 +265,9 @@ static void udp_client(void)
 		if (res < 0)
 			error(1, errno, "lookup sk stat failed, cookie: %lu\n",
 			      cookie);
-		printf("cookie: %lu, uid: 0x%x, Packet Count: %lu,"
-			" Bytes Count: %lu\n\n", cookie, dataEntry.uid,
-			dataEntry.packets, dataEntry.bytes);
+		printf("cookie: %llu, uid: 0x%x, Packet Count: %llu, Bytes Count: %llu\n\n",
+		       (__u64)cookie, dataEntry.uid, (__u64)dataEntry.packets,
+		       (__u64)dataEntry.bytes);
 	}
 	close(s_send);
 	close(s_rcv);
