@@ -3614,8 +3614,11 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 	}
 
 	err = reg->range < 0 ? -EINVAL :
-	      __check_mem_access(env, regno, off, size, reg->range,
-				 zero_size_allowed);
+	      __check_mem_access(env, regno, off + reg->smin_value, size,
+				 reg->range + reg->smin_value, zero_size_allowed);
+	err = err ? :
+	      __check_mem_access(env, regno, off + reg->umax_value, size,
+				 reg->range + reg->umax_value, zero_size_allowed);
 	if (err) {
 		verbose(env, "R%d offset is outside of the packet\n", regno);
 		return err;
