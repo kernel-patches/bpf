@@ -26,6 +26,7 @@
 #include "bpf_iter_bpf_sk_storage_map.skel.h"
 #include "bpf_iter_test_kern5.skel.h"
 #include "bpf_iter_test_kern6.skel.h"
+#include "bpf_iter_bpf_link.skel.h"
 
 static int duration;
 
@@ -1170,6 +1171,20 @@ static void test_buf_neg_offset(void)
 	if (CHECK(skel, "bpf_iter_test_kern6__open_and_load",
 		  "skeleton open_and_load unexpected success\n"))
 		bpf_iter_test_kern6__destroy(skel);
+}
+
+static void test_link_iter(void)
+{
+	struct bpf_iter_bpf_link *skel;
+
+	skel = bpf_iter_bpf_link__open_and_load();
+	if (CHECK(skel, "bpf_iter_bpf_link__open_and_load",
+		  "skeleton open_and_load unexpected success\n"))
+		return;
+
+	do_dummy_read(skel->progs.dump_bpf_link);
+
+	bpf_iter_bpf_link__destroy(skel);
 }
 
 #define CMP_BUFFER_SIZE 1024
