@@ -50,7 +50,7 @@ static void (*bpf_tail_call)(void *ctx, void *map, int index) = (void *)BPF_FUNC
 #define SEC(NAME) __attribute__((section(NAME),  used))
 
 #define probe(function, vars) \
-	SEC(#function "=" #function " " #vars) function
+	SEC("perfkprobe/" #function "=" #function " " #vars) function
 
 #define syscall_enter(name) \
 	SEC("syscalls:sys_enter_" #name) syscall_enter_ ## name
