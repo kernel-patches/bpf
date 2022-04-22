@@ -8457,6 +8457,14 @@ size_t bpf_program__insn_cnt(const struct bpf_program *prog)
 	return prog->insns_cnt;
 }
 
+void bpf_program__set_insns(struct bpf_program *prog,
+			    struct bpf_insn *insns, size_t insns_cnt)
+{
+	free(prog->insns);
+	prog->insns = insns;
+	prog->insns_cnt = insns_cnt;
+}
+
 int bpf_program__set_prep(struct bpf_program *prog, int nr_instances,
 			  bpf_program_prep_t prep)
 {
