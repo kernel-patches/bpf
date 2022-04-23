@@ -28,6 +28,8 @@ LIBBPF_API __u32 libbpf_major_version(void);
 LIBBPF_API __u32 libbpf_minor_version(void);
 LIBBPF_API const char *libbpf_version_string(void);
 
+#define DEFAULT_BPFFS "/sys/fs/bpf"
+
 enum libbpf_errno {
 	__LIBBPF_ERRNO__START = 4000,
 
@@ -91,7 +93,7 @@ struct bpf_object_open_opts {
 	bool relaxed_core_relocs;
 	/* maps that set the 'pinning' attribute in their definition will have
 	 * their pin_path attribute set to a file in this directory, and be
-	 * auto-pinned to that path on load; defaults to "/sys/fs/bpf".
+	 * auto-pinned to that path on load; defaults to DEFAULT_BPFFS.
 	 */
 	const char *pin_root_path;
 
@@ -190,7 +192,7 @@ bpf_object__open_xattr(struct bpf_object_open_attr *attr);
 
 enum libbpf_pin_type {
 	LIBBPF_PIN_NONE,
-	/* PIN_BY_NAME: pin maps by name (in /sys/fs/bpf by default) */
+	/* PIN_BY_NAME: pin maps by name (in DEFAULT_BPFFS by default) */
 	LIBBPF_PIN_BY_NAME,
 };
 

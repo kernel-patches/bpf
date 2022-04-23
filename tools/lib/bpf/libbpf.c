@@ -2180,7 +2180,7 @@ static int build_map_pin_path(struct bpf_map *map, const char *path)
 	int len;
 
 	if (!path)
-		path = "/sys/fs/bpf";
+		path = DEFAULT_BPFFS;
 
 	len = snprintf(buf, PATH_MAX, "%s/%s", path, bpf_map__name(map));
 	if (len < 0)
