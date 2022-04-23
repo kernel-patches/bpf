@@ -55,6 +55,8 @@ LIBBPF_0.0.1 {
 		bpf_object__unload;
 		bpf_object__unpin_maps;
 		bpf_object__unpin_programs;
+		bpf_object__pin_skeleton_prog;
+		bpf_object__unpin_skeleton_prog;
 		bpf_perf_event_read_simple;
 		bpf_prog_attach;
 		bpf_prog_detach;

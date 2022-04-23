@@ -12726,6 +12726,65 @@ void bpf_object__detach_skeleton(struct bpf_object_skeleton *s)
 	}
 }
 
+int bpf_object__pin_skeleton_prog(struct bpf_object_skeleton *s,
+				  const char *path)
+{
+	struct bpf_link *link;
+	int err;
+	int i;
+
+	if (!s->prog_cnt)
+		return libbpf_err(-EINVAL);
+
+	if (!path)
+		path = DEFAULT_BPFFS;
+
+	for (i = 0; i < s->prog_cnt; i++) {
+		char buf[PATH_MAX];
+		int len;
+
+		len = snprintf(buf, PATH_MAX, "%s/%s", path, s->progs[i].name);
+		if (len < 0) {
+			err = -EINVAL;
+			goto err_unpin_prog;
+		} else if (len >= PATH_MAX) {
+			err = -ENAMETOOLONG;
+			goto err_unpin_prog;
+		}
+
+		link = *s->progs[i].link;
+		if (!link) {
+			err = -EINVAL;
+			goto err_unpin_prog;
+		}
+
+		err = bpf_link__pin(link, buf);
+		if (err)
+			goto err_unpin_prog;
+	}
+
+	return 0;
+
+err_unpin_prog:
+	bpf_object__unpin_skeleton_prog(s);
+
+	return libbpf_err(err);
+}
+
+void bpf_object__unpin_skeleton_prog(struct bpf_object_skeleton *s)
+{
+	struct bpf_link *link;
+	int i;
+
+	for (i = 0; i < s->prog_cnt; i++) {
+		link = *s->progs[i].link;
+		if (!link || !link->pin_path)
+			continue;
+
+		bpf_link__unpin(link);
+	}
+}
+
 void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 {
 	if (!s)

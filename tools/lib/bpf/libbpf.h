@@ -1427,6 +1427,10 @@ bpf_object__open_skeleton(struct bpf_object_skeleton *s,
 LIBBPF_API int bpf_object__load_skeleton(struct bpf_object_skeleton *s);
 LIBBPF_API int bpf_object__attach_skeleton(struct bpf_object_skeleton *s);
 LIBBPF_API void bpf_object__detach_skeleton(struct bpf_object_skeleton *s);
+LIBBPF_API int
+bpf_object__pin_skeleton_prog(struct bpf_object_skeleton *s, const char *path);
+LIBBPF_API void
+bpf_object__unpin_skeleton_prog(struct bpf_object_skeleton *s);
 LIBBPF_API void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s);
 
 struct bpf_var_skeleton {
