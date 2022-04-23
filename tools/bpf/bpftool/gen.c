@@ -1087,6 +1087,8 @@ static int do_skeleton(int argc, char **argv)
 			static inline int load(struct %1$s *skel);	    \n\
 			static inline int attach(struct %1$s *skel);	    \n\
 			static inline void detach(struct %1$s *skel);	    \n\
+			static inline int pin_prog(struct %1$s *skel, const char *path);\n\
+			static inline void unpin_prog(struct %1$s *skel);   \n\
 			static inline void destroy(struct %1$s *skel);	    \n\
 			static inline const void *elf_bytes(size_t *sz);    \n\
 		#endif /* __cplusplus */				    \n\
@@ -1173,6 +1175,18 @@ static int do_skeleton(int argc, char **argv)
 		{							    \n\
 			bpf_object__detach_skeleton(obj->skeleton);	    \n\
 		}							    \n\
+									    \n\
+		static inline int					    \n\
+		%1$s__pin_prog(struct %1$s *obj, const char *path)	    \n\
+		{							    \n\
+			return bpf_object__pin_skeleton_prog(obj->skeleton, path);\n\
+		}							    \n\
+									    \n\
+		static inline void					    \n\
+		%1$s__unpin_prog(struct %1$s *obj)			    \n\
+		{							    \n\
+			bpf_object__unpin_skeleton_prog(obj->skeleton);	    \n\
+		}							    \n\
 		",
 		obj_name
 	);
@@ -1237,6 +1251,8 @@ static int do_skeleton(int argc, char **argv)
 		int %1$s::load(struct %1$s *skel) { return %1$s__load(skel); }		\n\
 		int %1$s::attach(struct %1$s *skel) { return %1$s__attach(skel); }	\n\
 		void %1$s::detach(struct %1$s *skel) { %1$s__detach(skel); }		\n\
+		int %1$s::pin_prog(struct %1$s *skel, const char *path) { return %1$s__pin_prog(skel, path); }\n\
+		void %1$s::unpin_prog(struct %1$s *skel) { %1$s__unpin_prog(skel); }	\n\
 		void %1$s::destroy(struct %1$s *skel) { %1$s__destroy(skel); }		\n\
 		const void *%1$s::elf_bytes(size_t *sz) { return %1$s__elf_bytes(sz); } \n\
 		#endif /* __cplusplus */				    \n\
