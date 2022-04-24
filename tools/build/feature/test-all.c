@@ -146,6 +146,10 @@
 # include "test-libcrypto.c"
 #undef main
 
+#define main main_test_libargp
+# include "test-libargp.c"
+#undef main
+
 #define main main_test_sdt
 # include "test-sdt.c"
 #undef main

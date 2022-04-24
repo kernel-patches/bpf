@@ -37,6 +37,7 @@ FILES=                                          \
          test-libtraceevent.bin                 \
          test-libtracefs.bin                    \
          test-libcrypto.bin                     \
+         test-libargp.bin                       \
          test-libunwind.bin                     \
          test-libunwind-debug-frame.bin         \
          test-libunwind-x86.bin                 \
@@ -204,6 +205,9 @@ $(OUTPUT)test-libtracefs.bin:
 
 $(OUTPUT)test-libcrypto.bin:
 	$(BUILD) -lcrypto
+
+$(OUTPUT)test-libargp.bin:
+	$(BUILD) -largp
 
 $(OUTPUT)test-gtk2.bin:
 	$(BUILD) $(shell $(PKG_CONFIG) --libs --cflags gtk+-2.0 2>/dev/null) -Wno-deprecated-declarations
