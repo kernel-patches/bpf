@@ -10,6 +10,7 @@
 #include <linux/random.h>
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/btf_ids.h>
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
@@ -2105,7 +2106,7 @@ out:
 	return num_elems;
 }
 
-static int htab_map_btf_id;
+BTF_ID_LIST_SINGLE(htab_map_btf_ids, struct, bpf_htab)
 const struct bpf_map_ops htab_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = htab_map_alloc_check,
@@ -2122,12 +2123,10 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
 	BATCH_OPS(htab),
-	.map_btf_name = "bpf_htab",
-	.map_btf_id = &htab_map_btf_id,
+	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
 };
 
-static int htab_lru_map_btf_id;
 const struct bpf_map_ops htab_lru_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = htab_map_alloc_check,
@@ -2145,8 +2144,7 @@ const struct bpf_map_ops htab_lru_map_ops = {
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
 	BATCH_OPS(htab_lru),
-	.map_btf_name = "bpf_htab",
-	.map_btf_id = &htab_lru_map_btf_id,
+	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
 };
 
@@ -2252,7 +2250,6 @@ static void htab_percpu_map_seq_show_elem(struct bpf_map *map, void *key,
 	rcu_read_unlock();
 }
 
-static int htab_percpu_map_btf_id;
 const struct bpf_map_ops htab_percpu_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = htab_map_alloc_check,
@@ -2267,12 +2264,10 @@ const struct bpf_map_ops htab_percpu_map_ops = {
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
 	BATCH_OPS(htab_percpu),
-	.map_btf_name = "bpf_htab",
-	.map_btf_id = &htab_percpu_map_btf_id,
+	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
 };
 
-static int htab_lru_percpu_map_btf_id;
 const struct bpf_map_ops htab_lru_percpu_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = htab_map_alloc_check,
@@ -2287,8 +2282,7 @@ const struct bpf_map_ops htab_lru_percpu_map_ops = {
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
 	BATCH_OPS(htab_lru_percpu),
-	.map_btf_name = "bpf_htab",
-	.map_btf_id = &htab_lru_percpu_map_btf_id,
+	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
 };
 
@@ -2412,7 +2406,6 @@ static void htab_of_map_free(struct bpf_map *map)
 	fd_htab_map_free(map);
 }
 
-static int htab_of_maps_map_btf_id;
 const struct bpf_map_ops htab_of_maps_map_ops = {
 	.map_alloc_check = fd_htab_map_alloc_check,
 	.map_alloc = htab_of_map_alloc,
@@ -2425,6 +2418,5 @@ const struct bpf_map_ops htab_of_maps_map_ops = {
 	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
 	.map_gen_lookup = htab_of_map_gen_lookup,
 	.map_check_btf = map_check_no_btf,
-	.map_btf_name = "bpf_htab",
-	.map_btf_id = &htab_of_maps_map_btf_id,
+	.map_btf_id = &htab_map_btf_ids[0],
 };
