@@ -303,7 +303,7 @@ int main(int argc, char **argv)
 		goto done;
 	}
 
-	ofd = open(ofile, O_WRONLY | O_CREAT | O_TRUNC, DEFFILEMODE);
+	ofd = open(ofile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	if (ofd < 0) {
 		fprintf(stderr, "Could not open file %s for writing: ", ofile);
 		perror(NULL);
