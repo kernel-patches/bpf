@@ -37,6 +37,14 @@
 #
 #       ping: SRC->[encap at veth2:ingress]->GRE:decap->DST
 #       ping replies go DST->SRC directly
+#
+#   2c. in an egress_md test, a bpf LWT_XMIT program is installed on a
+#	route towards a collect_md gre{,6} device and sets the tunnel key
+#	such that packets are encapsulated with an IP/GRE header to route
+#	to IPv*_GRE
+#
+#       ping: SRC->[encap at gre{,6}_md:xmit]->GRE:decap->DST
+#       ping replies go DST->SRC directly
 
 if [[ $EUID -ne 0 ]]; then
 	echo "This script must be run as root"
@@ -238,7 +246,7 @@ setup()
 	ip -netns ${NS3} -6 route add ${IPv6_6}/128 dev veth8 via ${IPv6_7}
 
 	# configure IPv4 GRE device in NS3, and a route to it via the "bottom" route
-	ip -netns ${NS3} tunnel add gre_dev mode gre remote ${IPv4_1} local ${IPv4_GRE} ttl 255
+	ip -netns ${NS3} tunnel add gre_dev mode gre remote ${IPv4_5} local ${IPv4_GRE} ttl 255 key 0
 	ip -netns ${NS3} link set gre_dev up
 	ip -netns ${NS3} addr add ${IPv4_GRE} dev gre_dev
 	ip -netns ${NS1} route add ${IPv4_GRE}/32 dev veth5 via ${IPv4_6} ${VRF}
@@ -246,7 +254,7 @@ setup()
 
 
 	# configure IPv6 GRE device in NS3, and a route to it via the "bottom" route
-	ip -netns ${NS3} -6 tunnel add name gre6_dev mode ip6gre remote ${IPv6_1} local ${IPv6_GRE} ttl 255
+	ip -netns ${NS3} -6 tunnel add name gre6_dev mode ip6gre remote ${IPv6_5} local ${IPv6_GRE} ttl 255 key 0
 	ip -netns ${NS3} link set gre6_dev up
 	ip -netns ${NS3} -6 addr add ${IPv6_GRE} nodad dev gre6_dev
 	ip -netns ${NS1} -6 route add ${IPv6_GRE}/128 dev veth5 via ${IPv6_6} ${VRF}
@@ -291,13 +299,16 @@ test_ping()
 {
 	local readonly PROTO=$1
 	local readonly EXPECTED=$2
+	local readonly NOBIND=$3
 	local RET=0
 
+	BINDTODEV=$([ -z ${NOBIND} ] && echo -I veth1)
+
 	if [ "${PROTO}" == "IPv4" ] ; then
-		ip netns exec ${NS1} ping  -c 1 -W 1 -I veth1 ${IPv4_DST} 2>&1 > /dev/null
+		ip netns exec ${NS1} ping  -c 1 -W 1 ${BINDTODEV} ${IPv4_DST} 2>&1 > /dev/null
 		RET=$?
 	elif [ "${PROTO}" == "IPv6" ] ; then
-		ip netns exec ${NS1} ping6 -c 1 -W 1 -I veth1 ${IPv6_DST} 2>&1 > /dev/null
+		ip netns exec ${NS1} ping6 -c 1 -W 1 ${BINDTODEV} ${IPv6_DST} 2>&1 > /dev/null
 		RET=$?
 	else
 		echo "    test_ping: unknown PROTO: ${PROTO}"
@@ -409,6 +420,70 @@ test_egress()
 	process_test_results
 }
 
+test_egress_md()
+{
+	local readonly ENCAP=$1
+	echo "starting egress_md ${ENCAP} encap test"
+	setup
+
+	# by default, pings work
+	test_ping IPv4 0
+	test_ping IPv6 0
+
+	# remove NS2->DST routes, ping fails
+	ip -netns ${NS2}    route del ${IPv4_DST}/32  dev veth3
+	ip -netns ${NS2} -6 route del ${IPv6_DST}/128 dev veth3
+	test_ping IPv4 1
+	test_ping IPv6 1
+
+	# install replacement routes (LWT/eBPF), pings succeed
+	if [ "${ENCAP}" == "IPv4" ] ; then
+		ip -net ${NS1} link add gre_md type gre external
+		ip -netns ${NS1}    addr add ${IPv4_1}/24  dev gre_md
+		ip -netns ${NS1} -6 addr add ${IPv6_1}/128 nodad dev gre_md
+		ip -netns ${NS1} link set gre_md up
+
+		ip -netns ${NS1} route add ${IPv4_DST} encap bpf xmit obj \
+			test_lwt_ip_encap.o sec encap_gre_md dev gre_md
+		ip -netns ${NS1} -6 route add ${IPv6_DST} encap bpf xmit obj \
+			test_lwt_ip_encap.o sec encap_gre_md dev gre_md
+	elif [ "${ENCAP}" == "IPv6" ] ; then
+		ip -net ${NS1} link add gre6_md type ip6gre external
+		ip -netns ${NS1}    addr add ${IPv4_1}/24  dev gre6_md
+		ip -netns ${NS1} -6 addr add ${IPv6_1}/128 nodad dev gre6_md
+		ip -netns ${NS1} link set gre6_md up
+
+		ip -netns ${NS1} route add ${IPv4_DST} encap bpf xmit obj \
+			test_lwt_ip_encap.o sec encap_gre6_md dev gre6_md
+		ip -netns ${NS1} -6 route add ${IPv6_DST} encap bpf xmit obj \
+			test_lwt_ip_encap.o sec encap_gre6_md dev gre6_md
+	else
+		echo "    unknown encap ${ENCAP}"
+		TEST_STATUS=1
+	fi
+
+	# Due to the asymmetry of the traffic flow we do not bind to device
+
+	test_ping IPv4 0 nobind
+	test_ping IPv6 0 nobind
+
+	test_gso IPv4
+	test_gso IPv6
+
+	# a negative test: remove routes to GRE devices: ping fails
+	remove_routes_to_gredev
+	test_ping IPv4 1 nobind
+	test_ping IPv6 1 nobind
+
+	# another negative test
+	add_unreachable_routes_to_gredev
+	test_ping IPv4 1 nobind
+	test_ping IPv6 1 nobind
+
+	cleanup
+	process_test_results
+}
+
 test_ingress()
 {
 	local readonly ENCAP=$1
@@ -465,6 +540,8 @@ test_egress IPv4
 test_egress IPv6
 test_ingress IPv4
 test_ingress IPv6
+test_egress_md IPv4
+test_egress_md IPv6
 
 VRF="vrf red"
 test_egress IPv4
