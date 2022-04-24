@@ -237,13 +237,22 @@ static bool is_lsi_offset(int offset, int scale)
 	return true;
 }
 
-/* Tail call offset to jump into */
-#if IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) || \
-	IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL)
-#define PROLOGUE_OFFSET 9
+#if IS_ENABLED(CONFIG_ARM64_BTI_KERNEL)
+#define BTI_INSNS	1
 #else
-#define PROLOGUE_OFFSET 8
+#define BTI_INSNS	0
 #endif
+
+#if IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL)
+#define PAC_INSNS	1
+#else
+#define PAC_INSNS	0
+#endif
+
+/* Tail call offset to jump into */
+#define PROLOGUE_OFFSET	(BTI_INSNS + 2 + PAC_INSNS + 8)
+/* Offset of nop instruction in bpf prog entry to be poked */
+#define POKE_OFFSET	(BTI_INSNS + 1)
 
 static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 {
@@ -281,12 +290,15 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 	 *
 	 */
 
+	if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL))
+		emit(A64_BTI_C, ctx);
+
+	emit(A64_MOV(1, A64_R(9), A64_LR), ctx);
+	emit(A64_NOP, ctx);
+
 	/* Sign lr */
 	if (IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL))
 		emit(A64_PACIASP, ctx);
-	/* BTI landing pad */
-	else if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL))
-		emit(A64_BTI_C, ctx);
 
 	/* Save FP and LR registers to stay align with ARM64 AAPCS */
 	emit(A64_PUSH(A64_FP, A64_LR, A64_SP), ctx);
@@ -1552,9 +1564,11 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
 	u32 old_insn;
 	u32 new_insn;
 	u32 replaced;
+	unsigned long offset = ~0UL;
 	enum aarch64_insn_branch_type branch_type;
+	char namebuf[KSYM_NAME_LEN];
 
-	if (!is_bpf_text_address((long)ip))
+	if (!__bpf_address_lookup((unsigned long)ip, NULL, &offset, namebuf))
 		/* Only poking bpf text is supported. Since kernel function
 		 * entry is set up by ftrace, we reply on ftrace to poke kernel
 		 * functions. For kernel funcitons, bpf_arch_text_poke() is only
@@ -1564,6 +1578,15 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
 		 * modify_fentry for details.
 		 */
 		return -EINVAL;
+
+	/* bpf entry */
+	if (offset == 0UL)
+		/* skip to the nop instruction in bpf prog entry:
+		 * bti c	// if BTI enabled
+		 * mov x9, x30
+		 * nop
+		 */
+		ip = (u32 *)ip + POKE_OFFSET;
 
 	if (poke_type == BPF_MOD_CALL)
 		branch_type = AARCH64_INSN_BRANCH_LINK;
