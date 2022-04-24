@@ -9,6 +9,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/memory.h>
 #include <linux/filter.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -18,6 +19,7 @@
 #include <asm/cacheflush.h>
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
+#include <asm/patching.h>
 #include <asm/set_memory.h>
 
 #include "bpf_jit.h"
@@ -1528,4 +1530,65 @@ void *bpf_jit_alloc_exec(unsigned long size)
 void bpf_jit_free_exec(void *addr)
 {
 	return vfree(addr);
+}
+
+static int gen_branch_or_nop(enum aarch64_insn_branch_type type, void *ip,
+			     void *addr, u32 *insn)
+{
+	if (!addr)
+		*insn = aarch64_insn_gen_nop();
+	else
+		*insn = aarch64_insn_gen_branch_imm((unsigned long)ip,
+						    (unsigned long)addr,
+						    type);
+
+	return *insn != AARCH64_BREAK_FAULT ? 0 : -EFAULT;
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
+		       void *old_addr, void *new_addr)
+{
+	int ret;
+	u32 old_insn;
+	u32 new_insn;
+	u32 replaced;
+	enum aarch64_insn_branch_type branch_type;
+
+	if (!is_bpf_text_address((long)ip))
+		/* Only poking bpf text is supported. Since kernel function
+		 * entry is set up by ftrace, we reply on ftrace to poke kernel
+		 * functions. For kernel funcitons, bpf_arch_text_poke() is only
+		 * called after a failed poke with ftrace. In this case, there
+		 * is probably something wrong with fentry, so there is nothing
+		 * we can do here. See register_fentry, unregister_fentry and
+		 * modify_fentry for details.
+		 */
+		return -EINVAL;
+
+	if (poke_type == BPF_MOD_CALL)
+		branch_type = AARCH64_INSN_BRANCH_LINK;
+	else
+		branch_type = AARCH64_INSN_BRANCH_NOLINK;
+
+	if (gen_branch_or_nop(branch_type, ip, old_addr, &old_insn) < 0)
+		return -EFAULT;
+
+	if (gen_branch_or_nop(branch_type, ip, new_addr, &new_insn) < 0)
+		return -EFAULT;
+
+	mutex_lock(&text_mutex);
+	if (aarch64_insn_read(ip, &replaced)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if (replaced != old_insn) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = aarch64_insn_patch_text_nosync((void *)ip, new_insn);
+out:
+	mutex_unlock(&text_mutex);
+	return ret;
 }
