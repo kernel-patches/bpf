@@ -785,7 +785,23 @@ static struct fgraph_ops fgraph_ops __initdata  = {
 };
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+#ifdef CONFIG_ARM64
+extern void trace_direct_tramp(void);
+
+asm (
+"	.pushsection	.text, \"ax\", @progbits\n"
+"	.type		trace_direct_tramp, %function\n"
+"	.global		trace_direct_tramp\n"
+"trace_direct_tramp:"
+"	mov	x10, x30\n"
+"	mov	x30, x9\n"
+"	ret	x10\n"
+"	.size		trace_direct_tramp, .-trace_direct_tramp\n"
+"	.popsection\n"
+);
+#else
 noinline __noclone static void trace_direct_tramp(void) { }
+#endif
 #endif
 
 /*
