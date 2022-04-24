@@ -90,6 +90,13 @@
 /* Rt = Rn[0]; Rt2 = Rn[8]; Rn += 16; */
 #define A64_POP(Rt, Rt2, Rn)  A64_LS_PAIR(Rt, Rt2, Rn, 16, LOAD, POST_INDEX)
 
+/* Rn[imm] = Xt1; Rn[imm + 8] = Xt2 */
+#define A64_STP(Xt1, Xt2, Xn, imm) \
+	A64_LS_PAIR(Xt1, Xt2, Xn, imm, STORE, SIGNED_OFFSET)
+/* Xt1 = Rn[imm]; Xt2 = Rn[imm + 8] */
+#define A64_LDP(Xt1, Xt2, Xn, imm) \
+	A64_LS_PAIR(Xt1, Xt2, Xn, imm, LOAD, SIGNED_OFFSET)
+
 /* Load/store exclusive */
 #define A64_SIZE(sf) \
 	((sf) ? AARCH64_INSN_SIZE_64 : AARCH64_INSN_SIZE_32)
