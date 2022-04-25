@@ -160,6 +160,7 @@ $(OBJS): $(LIBBPF) $(LIBBPF_INTERNAL_HDRS)
 VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux)				\
 		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux)	\
 		     ../../../vmlinux					\
+		     $(if $(EXTERNAL_PATH),$(EXTERNAL_PATH)/vmlinux)	\
 		     /sys/kernel/btf/vmlinux				\
 		     /boot/vmlinux-$(shell uname -r)
 VMLINUX_BTF ?= $(abspath $(firstword $(wildcard $(VMLINUX_BTF_PATHS))))
