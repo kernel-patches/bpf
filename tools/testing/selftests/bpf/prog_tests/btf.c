@@ -6550,8 +6550,8 @@ static int test_get_linfo(const struct prog_info_raw_test *test,
 		  info.nr_jited_line_info, jited_cnt,
 		  info.line_info_rec_size, rec_size,
 		  info.jited_line_info_rec_size, jited_rec_size,
-		  (void *)(long)info.line_info,
-		  (void *)(long)info.jited_line_info)) {
+		  (void *)(unsigned long)info.line_info,
+		  (void *)(unsigned long)info.jited_line_info)) {
 		err = -1;
 		goto done;
 	}
@@ -6599,8 +6599,8 @@ static int test_get_linfo(const struct prog_info_raw_test *test,
 	}
 
 	if (CHECK(jited_linfo[0] != jited_ksyms[0],
-		  "jited_linfo[0]:%lx != jited_ksyms[0]:%lx",
-		  (long)(jited_linfo[0]), (long)(jited_ksyms[0]))) {
+		  "jited_linfo[0]:%llx != jited_ksyms[0]:%llx",
+		  jited_linfo[0], jited_ksyms[0])) {
 		err = -1;
 		goto done;
 	}
@@ -6618,16 +6618,16 @@ static int test_get_linfo(const struct prog_info_raw_test *test,
 		}
 
 		if (CHECK(jited_linfo[i] <= jited_linfo[i - 1],
-			  "jited_linfo[%u]:%lx <= jited_linfo[%u]:%lx",
-			  i, (long)jited_linfo[i],
-			  i - 1, (long)(jited_linfo[i - 1]))) {
+			  "jited_linfo[%u]:%llx <= jited_linfo[%u]:%llx",
+			  i, jited_linfo[i],
+			  i - 1, (jited_linfo[i - 1]))) {
 			err = -1;
 			goto done;
 		}
 
 		if (CHECK(jited_linfo[i] - cur_func_ksyms > cur_func_len,
-			  "jited_linfo[%u]:%lx - %lx > %u",
-			  i, (long)jited_linfo[i], (long)cur_func_ksyms,
+			  "jited_linfo[%u]:%llx - %llx > %u",
+			  i, jited_linfo[i], cur_func_ksyms,
 			  cur_func_len)) {
 			err = -1;
 			goto done;
