@@ -922,6 +922,31 @@ LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_map__type() instead")
 LIBBPF_API bool bpf_map__is_offload_neutral(const struct bpf_map *map);
 
 /**
+ * @brief **bpf_map__get_percpu_value()** returns a pointer to an array
+ * of data stored in a per-cpu array or per-cpu hashmap at a specified
+ * key. Each element is padded to 8 bytes regardless of the value data
+ * type stored in the per-cpu map. The index of each element in the array
+ * corresponds with the cpu that the data was set from.
+ * @param map per-cpu array or per-cpu hashmap
+ * @param key the key or index in the map
+ * @return pointer to the array of data
+ *
+ * example usage:
+ *
+ *  values = bpf_map__get_percpu_value(bpfmap, (void*)&zero);
+ *  if (values == NULL) {
+ *     // error handling
+ *  }
+ *
+ *	void* ptr = values;
+ *  for (int i = 0; i < num_cpus; i++) {
+ *    printf("CPU %d: %ld\n", i, *(ulong*)ptr);
+ *    ptr += 8;
+ *  }
+ */
+LIBBPF_API void *bpf_map__get_percpu_value(const struct bpf_map *map, const void *key);
+
+/**
  * @brief **bpf_map__is_internal()** tells the caller whether or not the
  * passed map is a special map created by libbpf automatically for things like
  * global variables, __ksym externs, Kconfig values, etc

@@ -36,6 +36,7 @@
 #include <linux/perf_event.h>
 #include <linux/ring_buffer.h>
 #include <linux/version.h>
+#include <linux/math.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -4408,6 +4409,33 @@ int bpf_map__resize(struct bpf_map *map, __u32 max_entries)
 		return libbpf_err(-EINVAL);
 
 	return bpf_map__set_max_entries(map, max_entries);
+}
+
+void *bpf_map__get_percpu_value(const struct bpf_map *map, const void *key)
+{
+
+	if (!(bpf_map__type(map) == BPF_MAP_TYPE_PERCPU_ARRAY ||
+		bpf_map__type(map) == BPF_MAP_TYPE_PERCPU_HASH)) {
+		return libbpf_err_ptr(-EINVAL);
+	}
+
+	int num_cpus;
+	__u32 value_size;
+	num_cpus = libbpf_num_possible_cpus();
+
+	if (num_cpus < 0)
+		return libbpf_err_ptr(-EBUSY);
+
+	value_size = bpf_map__value_size(map);
+
+	void *data = malloc(roundup(value_size, 8) * num_cpus);
+	int err = bpf_map_lookup_elem(map->fd, key, data);
+	if (err) {
+		free(data);
+		return libbpf_err_ptr(err);
+	}
+
+	return data;
 }
 
 static int
