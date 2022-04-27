@@ -1060,7 +1060,7 @@ int bpf_core_format_spec(char *buf, size_t buf_sz, const struct bpf_core_spec *s
 	const struct btf_enum *e;
 	const char *s;
 	__u32 type_id;
-	int i, len = 0;
+	int i;
 
 #define append_buf(fmt, args...)				\
 	({							\
@@ -1082,7 +1082,7 @@ int bpf_core_format_spec(char *buf, size_t buf_sz, const struct bpf_core_spec *s
 		   type_id, btf_kind_str(t), str_is_empty(s) ? "<anon>" : s);
 
 	if (core_relo_is_type_based(spec->relo_kind))
-		return len;
+		return 0;
 
 	if (core_relo_is_enumval_based(spec->relo_kind)) {
 		t = skip_mods_and_typedefs(spec->btf, type_id, NULL);
@@ -1090,7 +1090,7 @@ int bpf_core_format_spec(char *buf, size_t buf_sz, const struct bpf_core_spec *s
 		s = btf__name_by_offset(spec->btf, e->name_off);
 
 		append_buf("::%s = %u", s, e->val);
-		return len;
+		return 0;
 	}
 
 	if (core_relo_is_field_based(spec->relo_kind)) {
@@ -1109,10 +1109,10 @@ int bpf_core_format_spec(char *buf, size_t buf_sz, const struct bpf_core_spec *s
 			append_buf(" @ offset %u.%u)", spec->bit_offset / 8, spec->bit_offset % 8);
 		else
 			append_buf(" @ offset %u)", spec->bit_offset / 8);
-		return len;
+		return 0;
 	}
 
-	return len;
+	return 0;
 #undef append_buf
 }
 
