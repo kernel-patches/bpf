@@ -394,7 +394,10 @@ enum bpf_type_flag {
 	/* DYNPTR points to dynamically allocated memory. */
 	DYNPTR_TYPE_MALLOC	= BIT(8 + BPF_BASE_TYPE_BITS),
 
-	__BPF_TYPE_LAST_FLAG	= DYNPTR_TYPE_MALLOC,
+	/* DYNPTR points to a ringbuf record. */
+	DYNPTR_TYPE_RINGBUF	= BIT(9 + BPF_BASE_TYPE_BITS),
+
+	__BPF_TYPE_LAST_FLAG	= DYNPTR_TYPE_RINGBUF,
 };
 
 /* Max number of base types. */
@@ -2203,6 +2206,9 @@ extern const struct bpf_func_proto bpf_ringbuf_reserve_proto;
 extern const struct bpf_func_proto bpf_ringbuf_submit_proto;
 extern const struct bpf_func_proto bpf_ringbuf_discard_proto;
 extern const struct bpf_func_proto bpf_ringbuf_query_proto;
+extern const struct bpf_func_proto bpf_ringbuf_reserve_dynptr_proto;
+extern const struct bpf_func_proto bpf_ringbuf_submit_dynptr_proto;
+extern const struct bpf_func_proto bpf_ringbuf_discard_dynptr_proto;
 extern const struct bpf_func_proto bpf_skc_to_tcp6_sock_proto;
 extern const struct bpf_func_proto bpf_skc_to_tcp_sock_proto;
 extern const struct bpf_func_proto bpf_skc_to_tcp_timewait_sock_proto;
@@ -2370,6 +2376,8 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_INVALID,
 	/* Memory allocated dynamically by the kernel for the dynptr */
 	BPF_DYNPTR_TYPE_MALLOC,
+	/* Underlying data is a ringbuf record */
+	BPF_DYNPTR_TYPE_RINGBUF,
 };
 
 /* Since the upper 8 bits of dynptr->size is reserved, the

@@ -672,13 +672,15 @@ static void mark_verifier_state_scratched(struct bpf_verifier_env *env)
 	env->scratched_stack_slots = ~0ULL;
 }
 
-#define DYNPTR_TYPE_FLAG_MASK		DYNPTR_TYPE_MALLOC
+#define DYNPTR_TYPE_FLAG_MASK (DYNPTR_TYPE_MALLOC | DYNPTR_TYPE_RINGBUF)
 
 static int arg_to_dynptr_type(enum bpf_arg_type arg_type)
 {
 	switch (arg_type & DYNPTR_TYPE_FLAG_MASK) {
 	case DYNPTR_TYPE_MALLOC:
 		return BPF_DYNPTR_TYPE_MALLOC;
+	case DYNPTR_TYPE_RINGBUF:
+		return BPF_DYNPTR_TYPE_RINGBUF;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -686,7 +688,7 @@ static int arg_to_dynptr_type(enum bpf_arg_type arg_type)
 
 static inline bool dynptr_type_refcounted(enum bpf_dynptr_type type)
 {
-	return type == BPF_DYNPTR_TYPE_MALLOC;
+	return type == BPF_DYNPTR_TYPE_MALLOC || type == BPF_DYNPTR_TYPE_RINGBUF;
 }
 
 static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
@@ -6033,9 +6035,13 @@ skip_type_check:
 			case DYNPTR_TYPE_MALLOC:
 				err_extra = "malloc ";
 				break;
+			case DYNPTR_TYPE_RINGBUF:
+				err_extra = "ringbuf ";
+				break;
 			default:
 				break;
 			}
+
 			verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
 				err_extra, arg + BPF_REG_1);
 			return -EINVAL;
@@ -6161,7 +6167,10 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_MAP_TYPE_RINGBUF:
 		if (func_id != BPF_FUNC_ringbuf_output &&
 		    func_id != BPF_FUNC_ringbuf_reserve &&
-		    func_id != BPF_FUNC_ringbuf_query)
+		    func_id != BPF_FUNC_ringbuf_query &&
+		    func_id != BPF_FUNC_ringbuf_reserve_dynptr &&
+		    func_id != BPF_FUNC_ringbuf_submit_dynptr &&
+		    func_id != BPF_FUNC_ringbuf_discard_dynptr)
 			goto error;
 		break;
 	case BPF_MAP_TYPE_STACK_TRACE:
@@ -6277,6 +6286,9 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_FUNC_ringbuf_output:
 	case BPF_FUNC_ringbuf_reserve:
 	case BPF_FUNC_ringbuf_query:
+	case BPF_FUNC_ringbuf_reserve_dynptr:
+	case BPF_FUNC_ringbuf_submit_dynptr:
+	case BPF_FUNC_ringbuf_discard_dynptr:
 		if (map->map_type != BPF_MAP_TYPE_RINGBUF)
 			goto error;
 		break;
