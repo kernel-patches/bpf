@@ -5209,6 +5209,23 @@ union bpf_attr {
  *		'bpf_ringbuf_discard'.
  *	Return
  *		Nothing. Always succeeds.
+ *
+ * long bpf_dynptr_read(void *dst, u32 len, struct bpf_dynptr *src, u32 offset)
+ *	Description
+ *		Read *len* bytes from *src* into *dst*, starting from *offset*
+ *		into *src*.
+ *	Return
+ *		0 on success, -EINVAL if *offset* + *len* exceeds the length
+ *		of *src*'s data or if *src* is an invalid dynptr.
+ *
+ * long bpf_dynptr_write(struct bpf_dynptr *dst, u32 offset, void *src, u32 len)
+ *	Description
+ *		Write *len* bytes from *src* into *dst*, starting from *offset*
+ *		into *dst*.
+ *	Return
+ *		0 on success, -EINVAL if *offset* + *len* exceeds the length
+ *		of *dst*'s data or if *dst* is an invalid dynptr or if *dst*
+ *		is a read-only dynptr.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5411,6 +5428,8 @@ union bpf_attr {
 	FN(ringbuf_reserve_dynptr),	\
 	FN(ringbuf_submit_dynptr),	\
 	FN(ringbuf_discard_dynptr),	\
+	FN(dynptr_read),		\
+	FN(dynptr_write),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
