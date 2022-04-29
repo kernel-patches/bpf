@@ -4095,13 +4095,16 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		info.nr_jited_line_info = 0;
 	if (info.nr_jited_line_info && ulen) {
 		if (bpf_dump_raw_ok(file->f_cred)) {
+			unsigned long jited_linfo_addr;
 			__u64 __user *user_linfo;
 			u32 i;
 
 			user_linfo = u64_to_user_ptr(info.jited_line_info);
 			ulen = min_t(u32, info.nr_jited_line_info, ulen);
 			for (i = 0; i < ulen; i++) {
-				if (put_user((__u64)(long)prog->aux->jited_linfo[i],
+				jited_linfo_addr = (unsigned long)
+					prog->aux->jited_linfo[i];
+				if (put_user((__u64) jited_linfo_addr,
 					     &user_linfo[i]))
 					return -EFAULT;
 			}
