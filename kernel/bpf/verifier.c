@@ -14454,6 +14454,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		fallthrough;
 	case BPF_MODIFY_RETURN:
 	case BPF_LSM_MAC:
+	case BPF_LSM_CGROUP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
 		if (!btf_type_is_func(t)) {
@@ -14629,6 +14630,33 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return -ENOMEM;
 
 	prog->aux->dst_trampoline = tr;
+	return 0;
+}
+
+static int check_used_maps(struct bpf_verifier_env *env)
+{
+	int i;
+
+	for (i = 0; i < env->used_map_cnt; i++) {
+		struct bpf_map *map = env->used_maps[i];
+
+		switch (env->prog->expected_attach_type) {
+		case BPF_LSM_CGROUP:
+			if (map->map_type != BPF_MAP_TYPE_CGROUP_STORAGE &&
+			    map->map_type != BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE)
+				break;
+
+			if (map->key_size != sizeof(__u64)) {
+				verbose(env, "only global cgroup local storage is supported for BPF_LSM_CGROUP\n");
+				return -EINVAL;
+			}
+
+			break;
+		default:
+			break;
+		}
+	}
+
 	return 0;
 }
 
@@ -14852,6 +14880,10 @@ skip_full_check:
 		 */
 		convert_pseudo_ld_imm64(env);
 	}
+
+	ret = check_used_maps(env);
+	if (ret < 0)
+		goto err_release_maps;
 
 	adjust_btf_func(env);
 
