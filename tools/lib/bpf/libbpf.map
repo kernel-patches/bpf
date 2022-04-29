@@ -450,4 +450,5 @@ LIBBPF_0.8.0 {
 		bpf_program__attach_usdt;
 		libbpf_register_prog_handler;
 		libbpf_unregister_prog_handler;
+		bpf_prog_query2;
 } LIBBPF_0.7.0;

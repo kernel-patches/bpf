@@ -1051,9 +1051,15 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 	int cnt, ret = 0, i;
 	u32 flags;
 
-	atype = to_cgroup_bpf_attach_type(type);
-	if (atype < 0)
-		return -EINVAL;
+	if (type == BPF_LSM_CGROUP) {
+		atype = bpf_lsm_attach_type_get(attr->query.attach_btf_id);
+		if (atype < 0)
+			return atype;
+	} else {
+		atype = to_cgroup_bpf_attach_type(type);
+		if (atype < 0)
+			return -EINVAL;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 	flags = cgrp->bpf.flags[atype];
@@ -1066,20 +1072,26 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 	else
 		cnt = prog_list_length(progs);
 
-	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags)))
-		return -EFAULT;
-	if (copy_to_user(&uattr->query.prog_cnt, &cnt, sizeof(cnt)))
-		return -EFAULT;
-	if (attr->query.prog_cnt == 0 || !prog_ids || !cnt)
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags))) {
+		ret = -EFAULT;
+		goto cleanup_attach_type;
+	}
+	if (copy_to_user(&uattr->query.prog_cnt, &cnt, sizeof(cnt))) {
+		ret = -EFAULT;
+		goto cleanup_attach_type;
+	}
+	if (attr->query.prog_cnt == 0 || !prog_ids || !cnt) {
 		/* return early if user requested only program count + flags */
-		return 0;
+		ret = 0;
+		goto cleanup_attach_type;
+	}
 	if (attr->query.prog_cnt < cnt) {
 		cnt = attr->query.prog_cnt;
 		ret = -ENOSPC;
 	}
 
 	if (attr->query.query_flags & BPF_F_QUERY_EFFECTIVE) {
-		return bpf_prog_array_copy_to_user(effective, prog_ids, cnt);
+		ret = bpf_prog_array_copy_to_user(effective, prog_ids, cnt);
 	} else {
 		struct bpf_prog_list *pl;
 		u32 id;
@@ -1088,12 +1100,19 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		hlist_for_each_entry(pl, progs, node) {
 			prog = prog_list_prog(pl);
 			id = prog->aux->id;
-			if (copy_to_user(prog_ids + i, &id, sizeof(id)))
-				return -EFAULT;
+			if (copy_to_user(prog_ids + i, &id, sizeof(id))) {
+				ret = -EFAULT;
+				goto cleanup_attach_type;
+			}
 			if (++i == cnt)
 				break;
 		}
 	}
+
+cleanup_attach_type:
+	if (type == BPF_LSM_CGROUP)
+		bpf_lsm_attach_type_put(attr->query.attach_btf_id);
+
 	return ret;
 }
 
