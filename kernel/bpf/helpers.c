@@ -1386,7 +1386,7 @@ BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
  */
 #define BPF_PTR_POISON ((void *)((0xeB9FUL << 2) + POISON_POINTER_DELTA))
 
-const struct bpf_func_proto bpf_kptr_xchg_proto = {
+static const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.func         = bpf_kptr_xchg,
 	.gpl_only     = false,
 	.ret_type     = RET_PTR_TO_BTF_ID_OR_NULL,
