@@ -36,6 +36,13 @@ config BPF_SYSCALL
 	  Enable the bpf() system call that allows to manipulate BPF programs
 	  and maps via file descriptors.
 
+config BPF_TNUM_TEST
+	tristate "Enable soundness tests for BPF tnums" if !KUNIT_ALL_TESTS
+	depends on BPF_SYSCALL && KUNIT=y
+	default KUNIT_ALL_TESTS
+	help
+	  Enable KUnit-based soundness tests for BPF tnums.
+
 config BPF_JIT
 	bool "Enable BPF Just In Time compiler"
 	depends on BPF
