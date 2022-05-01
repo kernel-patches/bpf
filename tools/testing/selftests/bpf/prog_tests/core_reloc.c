@@ -363,6 +363,25 @@ static int duration = 0;
 	.fails = true,							\
 }
 
+#define ENUM64VAL_CASE_COMMON(name)					\
+	.case_name = #name,						\
+	.bpf_obj_file = "test_core_reloc_enum64val.o",			\
+	.btf_src_file = "btf__core_reloc_" #name ".o",			\
+	.raw_tp_name = "sys_enter",					\
+	.prog_name = "test_core_enum64val"
+
+#define ENUM64VAL_CASE(name, ...) {					\
+	ENUM64VAL_CASE_COMMON(name),					\
+	.output = STRUCT_TO_CHAR_PTR(core_reloc_enum64val_output)	\
+			__VA_ARGS__,					\
+	.output_len = sizeof(struct core_reloc_enum64val_output),	\
+}
+
+#define ENUM64VAL_ERR_CASE(name) {					\
+	ENUM64VAL_CASE_COMMON(name),					\
+	.fails = true,							\
+}
+
 struct core_reloc_test_case;
 
 typedef int (*setup_test_fn)(struct core_reloc_test_case *test);
@@ -831,6 +850,30 @@ static const struct core_reloc_test_case test_cases[] = {
 		.anon_val2 = 0x222,
 	}),
 	ENUMVAL_ERR_CASE(enumval___err_missing),
+
+	/* 64bit enumerator value existence and value relocations */
+	ENUM64VAL_CASE(enum64val, {
+		.named_val1_exists = true,
+		.named_val2_exists = true,
+		.named_val3_exists = true,
+		.named_val1 = 0x1ffffffffULL,
+		.named_val2 = 0x2,
+	}),
+	ENUM64VAL_CASE(enum64val___diff, {
+		.named_val1_exists = true,
+		.named_val2_exists = true,
+		.named_val3_exists = true,
+		.named_val1 = 0x101ffffffffULL,
+		.named_val2 = 0x202ffffffffULL,
+	}),
+	ENUM64VAL_CASE(enum64val___val3_missing, {
+		.named_val1_exists = true,
+		.named_val2_exists = true,
+		.named_val3_exists = false,
+		.named_val1 = 0x111ffffffffULL,
+		.named_val2 = 0x222,
+	}),
+	ENUM64VAL_ERR_CASE(enum64val___err_missing),
 };
 
 struct data {
