@@ -1343,6 +1343,7 @@ recur:
 	case BTF_KIND_FWD:
 	case BTF_KIND_FUNC:
 	case BTF_KIND_VAR:
+	case BTF_KIND_ENUM64:
 		n1 = btf__str_by_offset(btf1, t1->name_off);
 		n2 = btf__str_by_offset(btf2, t2->name_off);
 		if (strcmp(n1, n2) != 0) {
@@ -1358,6 +1359,7 @@ recur:
 	switch (btf_kind(t1)) {
 	case BTF_KIND_UNKN: /* void */
 	case BTF_KIND_FWD:
+	case BTF_KIND_ENUM64:
 		return true;
 	case BTF_KIND_INT:
 	case BTF_KIND_FLOAT:

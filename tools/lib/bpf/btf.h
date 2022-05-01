@@ -213,8 +213,14 @@ LIBBPF_API int btf__add_field(struct btf *btf, const char *name, int field_type_
 			      __u32 bit_offset, __u32 bit_size);
 
 /* enum construction APIs */
+LIBBPF_DEPRECATED_SINCE(0, 8, "btf__add_enum is deprecated; use btf__add_enum32 or btf__add_enum64")
 LIBBPF_API int btf__add_enum(struct btf *btf, const char *name, __u32 bytes_sz);
+LIBBPF_DEPRECATED_SINCE(0, 8, "btf__add_enum_value is deprecated; use btf_add_enum32_value or btf_add_enum64_value")
 LIBBPF_API int btf__add_enum_value(struct btf *btf, const char *name, __s64 value);
+LIBBPF_API int btf__add_enum32(struct btf *btf, const char *name, bool is_unsigned);
+LIBBPF_API int btf__add_enum32_value(struct btf *btf, const char *name, __s32 value);
+LIBBPF_API int btf__add_enum64(struct btf *btf, const char *name, bool is_unsigned);
+LIBBPF_API int btf__add_enum64_value(struct btf *btf, const char *name, __u64 value);
 
 enum btf_fwd_kind {
 	BTF_FWD_STRUCT = 0,
@@ -454,6 +460,11 @@ static inline bool btf_is_enum(const struct btf_type *t)
 	return btf_kind(t) == BTF_KIND_ENUM;
 }
 
+static inline bool btf_is_enum64(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_ENUM64;
+}
+
 static inline bool btf_is_fwd(const struct btf_type *t)
 {
 	return btf_kind(t) == BTF_KIND_FWD;
@@ -547,6 +558,16 @@ static inline struct btf_array *btf_array(const struct btf_type *t)
 static inline struct btf_enum *btf_enum(const struct btf_type *t)
 {
 	return (struct btf_enum *)(t + 1);
+}
+
+static inline struct btf_enum64 *btf_enum64(const struct btf_type *t)
+{
+	return (struct btf_enum64 *)(t + 1);
+}
+
+static inline __u64 btf_enum64_value(const struct btf_enum64 *e)
+{
+	return (__u64)e->hi32 << 32 | e->lo32;
 }
 
 static inline struct btf_member *btf_members(const struct btf_type *t)

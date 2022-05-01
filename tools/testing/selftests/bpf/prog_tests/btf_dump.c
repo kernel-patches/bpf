@@ -159,16 +159,16 @@ static void test_btf_dump_incremental(void)
 	 * struct s { int x; };
 	 *
 	 */
-	id = btf__add_enum(btf, "x", 4);
+	id = btf__add_enum32(btf, "x", false);
 	ASSERT_EQ(id, 1, "enum_declaration_id");
-	id = btf__add_enum(btf, "x", 4);
+	id = btf__add_enum32(btf, "x", true);
 	ASSERT_EQ(id, 2, "named_enum_id");
-	err = btf__add_enum_value(btf, "X", 1);
+	err = btf__add_enum32_value(btf, "X", 1);
 	ASSERT_OK(err, "named_enum_val_ok");
 
-	id = btf__add_enum(btf, NULL, 4);
+	id = btf__add_enum32(btf, NULL, true);
 	ASSERT_EQ(id, 3, "anon_enum_id");
-	err = btf__add_enum_value(btf, "Y", 1);
+	err = btf__add_enum32_value(btf, "Y", 1);
 	ASSERT_OK(err, "anon_enum_val_ok");
 
 	id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);

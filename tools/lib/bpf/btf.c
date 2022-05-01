@@ -318,6 +318,8 @@ static int btf_type_size(const struct btf_type *t)
 		return base_size + vlen * sizeof(struct btf_var_secinfo);
 	case BTF_KIND_DECL_TAG:
 		return base_size + sizeof(struct btf_decl_tag);
+	case BTF_KIND_ENUM64:
+		return base_size + vlen * sizeof(struct btf_enum64);
 	default:
 		pr_debug("Unsupported BTF_KIND:%u\n", btf_kind(t));
 		return -EINVAL;
@@ -334,6 +336,7 @@ static void btf_bswap_type_base(struct btf_type *t)
 static int btf_bswap_type_rest(struct btf_type *t)
 {
 	struct btf_var_secinfo *v;
+	struct btf_enum64 *e64;
 	struct btf_member *m;
 	struct btf_array *a;
 	struct btf_param *p;
@@ -393,6 +396,13 @@ static int btf_bswap_type_rest(struct btf_type *t)
 		return 0;
 	case BTF_KIND_DECL_TAG:
 		btf_decl_tag(t)->component_idx = bswap_32(btf_decl_tag(t)->component_idx);
+		return 0;
+	case BTF_KIND_ENUM64:
+		for (i = 0, e64 = btf_enum64(t); i < vlen; i++, e64++) {
+			e64->name_off = bswap_32(e64->name_off);
+			e64->hi32 = bswap_32(e64->hi32);
+			e64->lo32 = bswap_32(e64->lo32);
+		}
 		return 0;
 	default:
 		pr_debug("Unsupported BTF_KIND:%u\n", btf_kind(t));
@@ -599,6 +609,7 @@ __s64 btf__resolve_size(const struct btf *btf, __u32 type_id)
 		case BTF_KIND_ENUM:
 		case BTF_KIND_DATASEC:
 		case BTF_KIND_FLOAT:
+		case BTF_KIND_ENUM64:
 			size = t->size;
 			goto done;
 		case BTF_KIND_PTR:
@@ -645,6 +656,7 @@ int btf__align_of(const struct btf *btf, __u32 id)
 	case BTF_KIND_INT:
 	case BTF_KIND_ENUM:
 	case BTF_KIND_FLOAT:
+	case BTF_KIND_ENUM64:
 		return min(btf_ptr_sz(btf), (size_t)t->size);
 	case BTF_KIND_PTR:
 		return btf_ptr_sz(btf);
@@ -2211,6 +2223,171 @@ int btf__add_enum_value(struct btf *btf, const char *name, __s64 value)
 	return 0;
 }
 
+static int btf_add_enum_common(struct btf *btf, const char *name,
+			       bool is_unsigned, __u8 kind, __u32 tsize)
+{
+	struct btf_type *t;
+	int sz, name_off = 0;
+
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	sz = sizeof(struct btf_type);
+	t = btf_add_type_mem(btf, sz);
+	if (!t)
+		return libbpf_err(-ENOMEM);
+
+	if (name && name[0]) {
+		name_off = btf__add_str(btf, name);
+		if (name_off < 0)
+			return name_off;
+	}
+
+	/* start out with vlen=0; it will be adjusted when adding enum values */
+	t->name_off = name_off;
+	t->info = btf_type_info(kind, 0, is_unsigned);
+	t->size = tsize;
+
+	return btf_commit_type(btf, sz);
+}
+
+/*
+ * Append new BTF_KIND_ENUM type with:
+ *   - *name* - name of the enum, can be NULL or empty for anonymous enums;
+ *   - *is_unsigned* - whether the enum values are unsigned or not;
+ *
+ * Enum initially has no enum values in it (and corresponds to enum forward
+ * declaration). Enumerator values can be added by btf__add_enum64_value()
+ * immediately after btf__add_enum() succeeds.
+ *
+ * Returns:
+ *   - >0, type ID of newly added BTF type;
+ *   - <0, on error.
+ */
+int btf__add_enum32(struct btf *btf, const char *name, bool is_unsigned)
+{
+	return btf_add_enum_common(btf, name, is_unsigned, BTF_KIND_ENUM, 4);
+}
+
+/*
+ * Append new enum value for the current ENUM type with:
+ *   - *name* - name of the enumerator value, can't be NULL or empty;
+ *   - *value* - integer value corresponding to enum value *name*;
+ * Returns:
+ *   -  0, on success;
+ *   - <0, on error.
+ */
+int btf__add_enum32_value(struct btf *btf, const char *name, __s32 value)
+{
+	struct btf_enum *v;
+	struct btf_type *t;
+	int sz, name_off;
+
+	/* last type should be BTF_KIND_ENUM */
+	if (btf->nr_types == 0)
+		return libbpf_err(-EINVAL);
+	t = btf_last_type(btf);
+	if (!btf_is_enum(t))
+		return libbpf_err(-EINVAL);
+
+	/* non-empty name */
+	if (!name || !name[0])
+		return libbpf_err(-EINVAL);
+
+	/* decompose and invalidate raw data */
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	sz = sizeof(struct btf_enum);
+	v = btf_add_type_mem(btf, sz);
+	if (!v)
+		return libbpf_err(-ENOMEM);
+
+	name_off = btf__add_str(btf, name);
+	if (name_off < 0)
+		return name_off;
+
+	v->name_off = name_off;
+	v->val = value;
+
+	/* update parent type's vlen */
+	t = btf_last_type(btf);
+	btf_type_inc_vlen(t);
+
+	btf->hdr->type_len += sz;
+	btf->hdr->str_off += sz;
+	return 0;
+}
+
+/*
+ * Append new BTF_KIND_ENUM64 type with:
+ *   - *name* - name of the enum, can be NULL or empty for anonymous enums;
+ *   - *is_unsigned* - whether the enum values are unsigned or not;
+ *
+ * Enum64 initially has no enum values in it (and corresponds to enum forward
+ * declaration). Enumerator values can be added by btf__add_enum64_value()
+ * immediately after btf__add_enum64() succeeds.
+ *
+ * Returns:
+ *   - >0, type ID of newly added BTF type;
+ *   - <0, on error.
+ */
+int btf__add_enum64(struct btf *btf, const char *name, bool is_unsigned)
+{
+	return btf_add_enum_common(btf, name, is_unsigned, BTF_KIND_ENUM64, 8);
+}
+
+/*
+ * Append new enum value for the current ENUM64 type with:
+ *   - *name* - name of the enumerator value, can't be NULL or empty;
+ *   - *value* - integer value corresponding to enum value *name*;
+ * Returns:
+ *   -  0, on success;
+ *   - <0, on error.
+ */
+int btf__add_enum64_value(struct btf *btf, const char *name, __u64 value)
+{
+	struct btf_enum64 *v;
+	struct btf_type *t;
+	int sz, name_off;
+
+	/* last type should be BTF_KIND_ENUM64 */
+	if (btf->nr_types == 0)
+		return libbpf_err(-EINVAL);
+	t = btf_last_type(btf);
+	if (!btf_is_enum64(t))
+		return libbpf_err(-EINVAL);
+
+	/* non-empty name */
+	if (!name || !name[0])
+		return libbpf_err(-EINVAL);
+
+	/* decompose and invalidate raw data */
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	sz = sizeof(struct btf_enum64);
+	v = btf_add_type_mem(btf, sz);
+	if (!v)
+		return libbpf_err(-ENOMEM);
+
+	name_off = btf__add_str(btf, name);
+	if (name_off < 0)
+		return name_off;
+
+	v->name_off = name_off;
+	v->hi32 = value >> 32;
+	v->lo32 = (__u32)value;
+
+	/* update parent type's vlen */
+	t = btf_last_type(btf);
+	btf_type_inc_vlen(t);
+
+	btf->hdr->type_len += sz;
+	btf->hdr->str_off += sz;
+	return 0;
+}
+
 /*
  * Append new BTF_KIND_FWD type with:
  *   - *name*, non-empty/non-NULL name;
@@ -2242,7 +2419,7 @@ int btf__add_fwd(struct btf *btf, const char *name, enum btf_fwd_kind fwd_kind)
 		/* enum forward in BTF currently is just an enum with no enum
 		 * values; we also assume a standard 4-byte size for it
 		 */
-		return btf__add_enum(btf, name, sizeof(int));
+		return btf__add_enum32(btf, name, false);
 	default:
 		return libbpf_err(-EINVAL);
 	}
@@ -3485,6 +3662,7 @@ static long btf_hash_enum(struct btf_type *t)
 /* Check structural equality of two ENUMs. */
 static bool btf_equal_enum(struct btf_type *t1, struct btf_type *t2)
 {
+	const struct btf_enum64 *n1, *n2;
 	const struct btf_enum *m1, *m2;
 	__u16 vlen;
 	int i;
@@ -3493,26 +3671,40 @@ static bool btf_equal_enum(struct btf_type *t1, struct btf_type *t2)
 		return false;
 
 	vlen = btf_vlen(t1);
-	m1 = btf_enum(t1);
-	m2 = btf_enum(t2);
-	for (i = 0; i < vlen; i++) {
-		if (m1->name_off != m2->name_off || m1->val != m2->val)
-			return false;
-		m1++;
-		m2++;
+	if (btf_is_enum(t1)) {
+		m1 = btf_enum(t1);
+		m2 = btf_enum(t2);
+		for (i = 0; i < vlen; i++) {
+			if (m1->name_off != m2->name_off || m1->val != m2->val)
+				return false;
+			m1++;
+			m2++;
+		}
+	} else {
+		n1 = btf_enum64(t1);
+		n2 = btf_enum64(t2);
+		for (i = 0; i < vlen; i++) {
+			if (n1->name_off != n2->name_off || n1->hi32 != n2->hi32 ||
+			    n1->lo32 != n2->lo32)
+				return false;
+			n1++;
+			n2++;
+		}
 	}
 	return true;
 }
 
 static inline bool btf_is_enum_fwd(struct btf_type *t)
 {
-	return btf_is_enum(t) && btf_vlen(t) == 0;
+	return (btf_is_enum(t) || btf_is_enum64(t)) && btf_vlen(t) == 0;
 }
 
 static bool btf_compat_enum(struct btf_type *t1, struct btf_type *t2)
 {
-	if (!btf_is_enum_fwd(t1) && !btf_is_enum_fwd(t2))
+	if (!btf_is_enum_fwd(t1) && !btf_is_enum_fwd(t2)) {
 		return btf_equal_enum(t1, t2);
+	}
+
 	/* ignore vlen when comparing */
 	return t1->name_off == t2->name_off &&
 	       (t1->info & ~0xffff) == (t2->info & ~0xffff) &&
@@ -3731,6 +3923,7 @@ static int btf_dedup_prep(struct btf_dedup *d)
 			h = btf_hash_int_decl_tag(t);
 			break;
 		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
 			h = btf_hash_enum(t);
 			break;
 		case BTF_KIND_STRUCT:
@@ -3800,6 +3993,7 @@ static int btf_dedup_prim_type(struct btf_dedup *d, __u32 type_id)
 		break;
 
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		h = btf_hash_enum(t);
 		for_each_dedup_cand(d, hash_entry, h) {
 			cand_id = (__u32)(long)hash_entry->value;
@@ -4113,6 +4307,7 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 		return btf_equal_int_tag(cand_type, canon_type);
 
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		return btf_compat_enum(cand_type, canon_type);
 
 	case BTF_KIND_FWD:
@@ -4717,6 +4912,7 @@ int btf_type_visit_type_ids(struct btf_type *t, type_id_visit_fn visit, void *ct
 	case BTF_KIND_INT:
 	case BTF_KIND_FLOAT:
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		return 0;
 
 	case BTF_KIND_FWD:
@@ -4803,6 +4999,16 @@ int btf_type_visit_str_offs(struct btf_type *t, str_off_visit_fn visit, void *ct
 	}
 	case BTF_KIND_ENUM: {
 		struct btf_enum *m = btf_enum(t);
+
+		for (i = 0, n = btf_vlen(t); i < n; i++, m++) {
+			err = visit(&m->name_off, ctx);
+			if (err)
+				return err;
+		}
+		break;
+	}
+	case BTF_KIND_ENUM64: {
+		struct btf_enum64 *m = btf_enum64(t);
 
 		for (i = 0, n = btf_vlen(t); i < n; i++, m++) {
 			err = visit(&m->name_off, ctx);

@@ -152,11 +152,11 @@ static void gen_btf(struct btf *btf)
 		     "\t'f1' type_id=1 bits_offset=0 bitfield_size=16", "raw_dump");
 
 	/* ENUM */
-	id = btf__add_enum(btf, "e1", 4);
+	id = btf__add_enum32(btf, "e1", true);
 	ASSERT_EQ(id, 9, "enum_id");
-	err = btf__add_enum_value(btf, "v1", 1);
+	err = btf__add_enum32_value(btf, "v1", 1);
 	ASSERT_OK(err, "v1_res");
-	err = btf__add_enum_value(btf, "v2", 2);
+	err = btf__add_enum32_value(btf, "v2", 2);
 	ASSERT_OK(err, "v2_res");
 
 	t = btf__type_by_id(btf, 9);
