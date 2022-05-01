@@ -26,11 +26,12 @@ static const char * const btf_kind_str_mapping[] = {
 	[BTF_KIND_FLOAT]	= "FLOAT",
 	[BTF_KIND_DECL_TAG]	= "DECL_TAG",
 	[BTF_KIND_TYPE_TAG]	= "TYPE_TAG",
+	[BTF_KIND_ENUM64]	= "ENUM64",
 };
 
 static const char *btf_kind_str(__u16 kind)
 {
-	if (kind > BTF_KIND_TYPE_TAG)
+	if (kind > BTF_KIND_ENUM64)
 		return "UNKNOWN";
 	return btf_kind_str_mapping[kind];
 }
@@ -139,11 +140,27 @@ int fprintf_btf_type_raw(FILE *out, const struct btf *btf, __u32 id)
 	}
 	case BTF_KIND_ENUM: {
 		const struct btf_enum *v = btf_enum(t);
+		const char *fmt_str;
+
+		fmt_str = btf_kflag(t) ? "\n\t'%s' val=%u" : "\n\t'%s' val=%d";
+		fprintf(out, " size=%u vlen=%u", t->size, vlen);
+		for (i = 0; i < vlen; i++, v++) {
+			fprintf(out, fmt_str,
+				btf_str(btf, v->name_off), v->val);
+		}
+		break;
+	}
+	case BTF_KIND_ENUM64: {
+		const struct btf_enum64 *v = btf_enum64(t);
+		const char *fmt_str;
+
+		fmt_str = btf_kflag(t) ? "\n\t'%s' val=%llu" : "\n\t'%s' val=%lld";
 
 		fprintf(out, " size=%u vlen=%u", t->size, vlen);
 		for (i = 0; i < vlen; i++, v++) {
-			fprintf(out, "\n\t'%s' val=%u",
-				btf_str(btf, v->name_off), v->val);
+			fprintf(out, fmt_str,
+				btf_str(btf, v->name_off),
+				(__u64)v->hi32 << 32 | v->lo32);
 		}
 		break;
 	}
