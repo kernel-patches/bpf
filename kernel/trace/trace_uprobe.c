@@ -1346,9 +1346,7 @@ static void __uprobe_perf_func(struct trace_uprobe *tu,
 	if (bpf_prog_array_valid(call)) {
 		u32 ret;
 
-		preempt_disable();
-		ret = trace_call_bpf(call, regs);
-		preempt_enable();
+		ret = uprobe_call_bpf(call, regs);
 		if (!ret)
 			return;
 	}
