@@ -8985,8 +8985,10 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("sk_reuseport",		SK_REUSEPORT, BPF_SK_REUSEPORT_SELECT, SEC_ATTACHABLE | SEC_SLOPPY_PFX),
 	SEC_DEF("kprobe+",		KPROBE,	0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uprobe+",		KPROBE,	0, SEC_NONE, attach_uprobe),
+	SEC_DEF("uprobe.s+",		KPROBE,	0, SEC_SLEEPABLE, attach_uprobe),
 	SEC_DEF("kretprobe+",		KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe+",		KPROBE, 0, SEC_NONE, attach_uprobe),
+	SEC_DEF("uretprobe.s+",		KPROBE, 0, SEC_SLEEPABLE, attach_uprobe),
 	SEC_DEF("kprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kretprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("usdt+",		KPROBE,	0, SEC_NONE, attach_usdt),
@@ -10737,6 +10739,7 @@ static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf
 	else
 		func_name = prog->sec_name + sizeof("kprobe/") - 1;
 
+
 	n = sscanf(func_name, "%m[a-zA-Z0-9_.]+%li", &func, &offset);
 	if (n < 1) {
 		pr_warn("kprobe name is invalid: %s\n", func_name);
@@ -11262,7 +11265,8 @@ static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf
 		break;
 	case 3:
 	case 4:
-		opts.retprobe = strcmp(probe_type, "uretprobe") == 0;
+		opts.retprobe = strcmp(probe_type, "uretprobe") == 0 ||
+				strcmp(probe_type, "uretprobe.s") == 0;
 		if (opts.retprobe && offset != 0) {
 			pr_warn("prog '%s': uretprobes do not support offset specification\n",
 				prog->name);
