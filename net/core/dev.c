@@ -9149,6 +9149,12 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		return -EBUSY;
 	}
 
+	/* no BPF XDP prog attached */
+	if (!new_prog && !(dev->xdp_state[mode].prog)) {
+		NL_SET_ERR_MSG(extack, "no BPF XDP prog attached");
+		return -ENOENT;
+	}
+
 	/* don't allow if an upper device already has a program */
 	netdev_for_each_upper_dev_rcu(dev, upper, iter) {
 		if (dev_xdp_prog_count(upper) > 0) {
