@@ -36,7 +36,7 @@ int bpf_map__fprintf(struct bpf_map *map, FILE *fp)
 		return fd;
 
 	if (!map)
-		return PTR_ERR(map);
+		return -EINVAL;
 
 	err = -ENOMEM;
 	key = malloc(bpf_map__key_size(map));
