@@ -459,6 +459,56 @@ done:
 	return err;
 }
 
+static const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
+
+static struct btf *get_vmlinux_btf_from_sysfs(void)
+{
+	struct btf *base;
+
+	base = btf__parse(sysfs_vmlinux, NULL);
+	if (libbpf_get_error(base)) {
+		p_err("failed to parse vmlinux BTF at '%s': %ld\n",
+		      sysfs_vmlinux, libbpf_get_error(base));
+		base = NULL;
+	}
+
+	return base;
+}
+
+static struct btf *btf_try_load_with_vmlinux(__u32 btf_id, struct btf **base)
+{
+	struct bpf_btf_info btf_info = {};
+	unsigned int len;
+	int btf_fd;
+	int err;
+
+	btf_fd = bpf_btf_get_fd_by_id(btf_id);
+	if (btf_fd < 0) {
+		p_err("can't get BTF object by id (%u): %s",
+		      btf_id, strerror(errno));
+		return ERR_PTR(btf_fd);
+	}
+
+	len = sizeof(btf_info);
+	err = bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len);
+	close(btf_fd);
+
+	if (err) {
+		p_err("can't get BTF (ID %u) object info: %s",
+		      btf_id, strerror(errno));
+		return ERR_PTR(err);
+	}
+
+	if (!btf_info.kernel_btf) {
+		p_err("BTF with ID %u is not a kernel module BTF, cannot use vmlinux as base",
+		      btf_id);
+		return ERR_PTR(-EINVAL);
+	}
+
+	*base = get_vmlinux_btf_from_sysfs();
+	return btf__load_from_kernel_by_id_split(btf_id, *base);
+}
+
 static int do_dump(int argc, char **argv)
 {
 	struct btf *btf = NULL, *base = NULL;
@@ -536,18 +586,11 @@ static int do_dump(int argc, char **argv)
 		NEXT_ARG();
 	} else if (is_prefix(src, "file")) {
 		const char sysfs_prefix[] = "/sys/kernel/btf/";
-		const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
 
 		if (!base_btf &&
 		    strncmp(*argv, sysfs_prefix, sizeof(sysfs_prefix) - 1) == 0 &&
-		    strcmp(*argv, sysfs_vmlinux) != 0) {
-			base = btf__parse(sysfs_vmlinux, NULL);
-			if (libbpf_get_error(base)) {
-				p_err("failed to parse vmlinux BTF at '%s': %ld\n",
-				      sysfs_vmlinux, libbpf_get_error(base));
-				base = NULL;
-			}
-		}
+		    strcmp(*argv, sysfs_vmlinux))
+			base = get_vmlinux_btf_from_sysfs();
 
 		btf = btf__parse_split(*argv, base ?: base_btf);
 		err = libbpf_get_error(btf);
@@ -593,6 +636,12 @@ static int do_dump(int argc, char **argv)
 	if (!btf) {
 		btf = btf__load_from_kernel_by_id_split(btf_id, base_btf);
 		err = libbpf_get_error(btf);
+		if (err == -EINVAL && !base_btf) {
+			p_info("Warning: valid base BTF was not specified with -B option, falling back on standard base BTF (sysfs vmlinux)");
+			btf = btf_try_load_with_vmlinux(btf_id, &base);
+			err = libbpf_get_error(btf);
+		}
+
 		if (err) {
 			p_err("get btf by id (%u): %s", btf_id, strerror(err));
 			goto done;
