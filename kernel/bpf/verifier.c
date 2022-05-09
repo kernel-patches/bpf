@@ -484,7 +484,8 @@ static bool may_be_acquire_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_sk_lookup_udp ||
 		func_id == BPF_FUNC_skc_lookup_tcp ||
 		func_id == BPF_FUNC_map_lookup_elem ||
-	        func_id == BPF_FUNC_ringbuf_reserve;
+		func_id == BPF_FUNC_ringbuf_reserve ||
+		func_id == BPF_FUNC_dynptr_data;
 }
 
 static bool is_acquire_function(enum bpf_func_id func_id,
@@ -496,7 +497,8 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 	    func_id == BPF_FUNC_sk_lookup_udp ||
 	    func_id == BPF_FUNC_skc_lookup_tcp ||
 	    func_id == BPF_FUNC_ringbuf_reserve ||
-	    func_id == BPF_FUNC_kptr_xchg)
+	    func_id == BPF_FUNC_kptr_xchg ||
+	    func_id == BPF_FUNC_dynptr_data)
 		return true;
 
 	if (func_id == BPF_FUNC_map_lookup_elem &&
@@ -516,6 +518,11 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_skc_to_udp6_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_timewait_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_request_sock;
+}
+
+static inline bool is_dynptr_ref_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_dynptr_data;
 }
 
 static bool is_cmpxchg_insn(const struct bpf_insn *insn)
@@ -568,6 +575,8 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		strncpy(prefix, "rdonly_", 32);
 	if (type & MEM_ALLOC)
 		strncpy(prefix, "alloc_", 32);
+	if (type & MEM_DYNPTR)
+		strncpy(prefix, "dynptr_", 32);
 	if (type & MEM_USER)
 		strncpy(prefix, "user_", 32);
 	if (type & MEM_PERCPU)
@@ -795,6 +804,20 @@ static bool is_dynptr_reg_valid_init(struct bpf_verifier_env *env, struct bpf_re
 		return true;
 
 	return state->stack[spi].spilled_ptr.dynptr.type == arg_to_dynptr_type(arg_type);
+}
+
+static bool is_ref_obj_id_dynptr(struct bpf_func_state *state, u32 id)
+{
+	int allocated_slots = state->allocated_stack / BPF_REG_SIZE;
+	int i;
+
+	for (i = 0; i < allocated_slots; i++) {
+		if (state->stack[i].slot_type[0] == STACK_DYNPTR &&
+		    state->stack[i].spilled_ptr.id == id)
+			return true;
+	}
+
+	return false;
 }
 
 /* The reg state of a pointer or a bounded scalar was saved when
@@ -5646,6 +5669,7 @@ static const struct bpf_reg_types mem_types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_MEM,
 		PTR_TO_MEM | MEM_ALLOC,
+		PTR_TO_MEM | MEM_DYNPTR,
 		PTR_TO_BUF,
 	},
 };
@@ -5798,6 +5822,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_MEM:
 	case PTR_TO_MEM | MEM_RDONLY:
 	case PTR_TO_MEM | MEM_ALLOC:
+	case PTR_TO_MEM | MEM_DYNPTR:
 	case PTR_TO_BUF:
 	case PTR_TO_BUF | MEM_RDONLY:
 	case PTR_TO_STACK:
@@ -5830,6 +5855,14 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		break;
 	}
 	return __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
+}
+
+static inline u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi = get_spi(reg->off);
+
+	return state->stack[spi].spilled_ptr.id;
 }
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
@@ -7370,10 +7403,31 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
 	} else if (is_acquire_function(func_id, meta.map_ptr)) {
-		int id = acquire_reference_state(env, insn_idx);
+		int id = 0;
 
-		if (id < 0)
-			return id;
+		if (is_dynptr_ref_function(func_id)) {
+			int i;
+
+			/* Find the id of the dynptr we're acquiring a reference to */
+			for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
+				if (arg_type_is_dynptr(fn->arg_type[i])) {
+					if (id) {
+						verbose(env, "verifier internal error: more than one dynptr arg in a dynptr ref func\n");
+						return -EFAULT;
+					}
+					id = stack_slot_get_id(env, &regs[BPF_REG_1 + i]);
+				}
+			}
+			if (!id) {
+				verbose(env, "verifier internal error: no dynptr args to a dynptr ref func\n");
+				return -EFAULT;
+			}
+		} else {
+			id = acquire_reference_state(env, insn_idx);
+			if (id < 0)
+				return id;
+		}
+
 		/* For mark_ptr_or_null_reg() */
 		regs[BPF_REG_0].id = id;
 		/* For release_reference() */
@@ -9809,7 +9863,8 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 	u32 id = regs[regno].id;
 	int i;
 
-	if (ref_obj_id && ref_obj_id == id && is_null)
+	if (ref_obj_id && ref_obj_id == id && is_null &&
+	    !is_ref_obj_id_dynptr(state, id))
 		/* regs[regno] is in the " == NULL" branch.
 		 * No one could have freed the reference state before
 		 * doing the NULL check.
