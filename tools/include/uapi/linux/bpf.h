@@ -5164,6 +5164,29 @@ union bpf_attr {
  *		if not NULL, is a reference which must be released using its
  *		corresponding release function, or moved into a BPF map before
  *		program exit.
+ *
+ * long bpf_dynptr_alloc(u32 size, u64 flags, struct bpf_dynptr *ptr)
+ *	Description
+ *		Allocate memory of *size* bytes.
+ *
+ *		Every call to bpf_dynptr_alloc must have a corresponding
+ *		bpf_dynptr_put, regardless of whether the bpf_dynptr_alloc
+ *		succeeded.
+ *
+ *		The maximum *size* supported is DYNPTR_MAX_SIZE.
+ *		Supported *flags* are __GFP_ZERO.
+ *	Return
+ *		0 on success, -ENOMEM if there is not enough memory for the
+ *		allocation, -E2BIG if the size exceeds DYNPTR_MAX_SIZE, -EINVAL
+ *		if the flags is not supported.
+ *
+ * void bpf_dynptr_put(struct bpf_dynptr *ptr)
+ *	Description
+ *		Free memory allocated by bpf_dynptr_alloc.
+ *
+ *		After this operation, *ptr* will be an invalidated dynptr.
+ *	Return
+ *		Void.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5361,6 +5384,8 @@ union bpf_attr {
 	FN(skb_set_tstamp),		\
 	FN(ima_file_hash),		\
 	FN(kptr_xchg),			\
+	FN(dynptr_alloc),		\
+	FN(dynptr_put),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -6508,6 +6533,11 @@ struct bpf_spin_lock {
 };
 
 struct bpf_timer {
+	__u64 :64;
+	__u64 :64;
+} __attribute__((aligned(8)));
+
+struct bpf_dynptr {
 	__u64 :64;
 	__u64 :64;
 } __attribute__((aligned(8)));

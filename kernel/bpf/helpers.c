@@ -1396,6 +1396,77 @@ const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.arg2_btf_id  = BPF_PTR_POISON,
 };
 
+void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data, enum bpf_dynptr_type type,
+		     u32 offset, u32 size)
+{
+	ptr->data = data;
+	ptr->offset = offset;
+	ptr->size = size;
+	bpf_dynptr_set_type(ptr, type);
+}
+
+void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr)
+{
+	memset(ptr, 0, sizeof(*ptr));
+}
+
+BPF_CALL_3(bpf_dynptr_alloc, u32, size, u64, flags, struct bpf_dynptr_kern *, ptr)
+{
+	gfp_t gfp_flags = GFP_ATOMIC;
+	void *data;
+	int err;
+
+	err = bpf_dynptr_check_size(size);
+	if (err)
+		goto error;
+
+	if (flags) {
+		if (flags == __GFP_ZERO) {
+			gfp_flags |= flags;
+		} else {
+			err = -EINVAL;
+			goto error;
+		}
+	}
+
+	data = kmalloc(size, gfp_flags);
+	if (!data) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+	bpf_dynptr_init(ptr, data, BPF_DYNPTR_TYPE_MALLOC, 0, size);
+
+	return 0;
+
+error:
+	bpf_dynptr_set_null(ptr);
+	return err;
+}
+
+const struct bpf_func_proto bpf_dynptr_alloc_proto = {
+	.func		= bpf_dynptr_alloc,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_MALLOC | MEM_UNINIT,
+};
+
+BPF_CALL_1(bpf_dynptr_put, struct bpf_dynptr_kern *, dynptr)
+{
+	kfree(dynptr->data);
+	bpf_dynptr_set_null(dynptr);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_dynptr_put_proto = {
+	.func		= bpf_dynptr_put,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_MALLOC | OBJ_RELEASE,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_get_current_task_btf_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
@@ -1448,6 +1519,10 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_loop_proto;
 	case BPF_FUNC_strncmp:
 		return &bpf_strncmp_proto;
+	case BPF_FUNC_dynptr_alloc:
+		return &bpf_dynptr_alloc_proto;
+	case BPF_FUNC_dynptr_put:
+		return &bpf_dynptr_put_proto;
 	default:
 		break;
 	}
