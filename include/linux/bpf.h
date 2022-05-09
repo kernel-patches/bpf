@@ -2415,6 +2415,12 @@ enum bpf_dynptr_type {
 #define DYNPTR_SIZE_MASK	0xFFFFFF
 #define DYNPTR_TYPE_SHIFT	28
 #define DYNPTR_TYPE_MASK	0x7
+#define DYNPTR_RDONLY_BIT	BIT(31)
+
+static inline bool bpf_dynptr_is_rdonly(struct bpf_dynptr_kern *ptr)
+{
+	return ptr->size & DYNPTR_RDONLY_BIT;
+}
 
 static inline enum bpf_dynptr_type bpf_dynptr_get_type(struct bpf_dynptr_kern *ptr)
 {
@@ -2434,6 +2440,16 @@ static inline u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr)
 static inline int bpf_dynptr_check_size(u32 size)
 {
 	return size > DYNPTR_MAX_SIZE ? -E2BIG : 0;
+}
+
+static inline int bpf_dynptr_check_off_len(struct bpf_dynptr_kern *ptr, u32 offset, u32 len)
+{
+	u32 size = bpf_dynptr_get_size(ptr);
+
+	if (len > size || offset > size - len)
+		return -E2BIG;
+
+	return 0;
 }
 
 void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data, enum bpf_dynptr_type type,
