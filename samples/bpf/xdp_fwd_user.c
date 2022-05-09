@@ -49,7 +49,18 @@ static int do_attach(int idx, int prog_fd, int map_fd, const char *name)
 
 static int do_detach(int idx, const char *name)
 {
-	int err;
+	int err = 1;
+	__u32 curr_prog_id;
+
+	if (bpf_xdp_query_id(idx, xdp_flags, &curr_prog_id)) {
+		printf("ERROR: bpf_xdp_query_id failed\n");
+		return err;
+	}
+
+	if (!curr_prog_id) {
+		printf("ERROR: flags(0x%x) xdp prog is not attached to %s\n", xdp_flags, name);
+		return err;
+	}
 
 	err = bpf_xdp_detach(idx, xdp_flags, NULL);
 	if (err < 0)
