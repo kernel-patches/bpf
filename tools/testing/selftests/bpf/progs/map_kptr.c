@@ -61,6 +61,7 @@ extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp
 extern struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **p, int a, int b) __ksym;
 extern void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p) __ksym;
+extern struct prog_test_ref_kfunc prog_test_struct __ksym;
 
 static void test_kptr_unref(struct map_value *v)
 {
@@ -141,7 +142,7 @@ SEC("tc")
 int test_map_kptr(struct __sk_buff *ctx)
 {
 	struct map_value *v;
-	int i, key = 0;
+	int key = 0;
 
 #define TEST(map)					\
 	v = bpf_map_lookup_elem(&map, &key);		\
@@ -162,7 +163,7 @@ SEC("tc")
 int test_map_in_map_kptr(struct __sk_buff *ctx)
 {
 	struct map_value *v;
-	int i, key = 0;
+	int key = 0;
 	void *map;
 
 #define TEST(map_in_map)                                \
@@ -184,6 +185,110 @@ int test_map_in_map_kptr(struct __sk_buff *ctx)
 	TEST(hash_of_lru_hash_maps);
 
 #undef TEST
+	return 0;
+}
+
+SEC("tc")
+int test_map_kptr_ref(struct __sk_buff *ctx)
+{
+	struct prog_test_ref_kfunc *volatile p, *p_cpu;
+	unsigned long arg = 0;
+	struct map_value *v;
+	int key = 0, ret;
+
+	p_cpu = bpf_this_cpu_ptr(&prog_test_struct);
+	if (p_cpu->cnt.refs.counter != 1)
+		return 1;
+
+	p = bpf_kfunc_call_test_acquire(&arg);
+	if (!p)
+		return 2;
+	if (p != p_cpu || p_cpu->cnt.refs.counter != 2) {
+		ret = 3;
+		goto end;
+	}
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v) {
+		ret = 4;
+		goto end;
+	}
+
+	p = bpf_kptr_xchg(&v->ref_ptr, p);
+	if (p) {
+		ret = 5;
+		goto end;
+	}
+	if (p_cpu->cnt.refs.counter != 2)
+		return 6;
+
+	p = bpf_kfunc_call_test_kptr_get(&v->ref_ptr, 0, 0);
+	if (!p)
+		return 7;
+	if (p_cpu->cnt.refs.counter != 3) {
+		ret = 8;
+		goto end;
+	}
+	bpf_kfunc_call_test_release(p);
+	if (p_cpu->cnt.refs.counter != 2)
+		return 9;
+
+	p = bpf_kptr_xchg(&v->ref_ptr, NULL);
+	if (!p)
+		return 10;
+	bpf_kfunc_call_test_release(p);
+	if (p_cpu->cnt.refs.counter != 1)
+		return 11;
+
+	p = bpf_kfunc_call_test_acquire(&arg);
+	if (!p)
+		return 12;
+	p = bpf_kptr_xchg(&v->ref_ptr, p);
+	if (p) {
+		ret = 13;
+		goto end;
+	}
+	if (p_cpu->cnt.refs.counter != 2)
+		return 14;
+	/* Leave in map */
+
+	return 0;
+end:
+	bpf_kfunc_call_test_release(p);
+	return ret;
+}
+
+SEC("tc")
+int test_map_kptr_ref2(struct __sk_buff *ctx)
+{
+	struct prog_test_ref_kfunc *volatile p, *p_cpu;
+	struct map_value *v;
+	int key = 0;
+
+	p_cpu = bpf_this_cpu_ptr(&prog_test_struct);
+	if (p_cpu->cnt.refs.counter != 2)
+		return 1;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 2;
+
+	p = bpf_kptr_xchg(&v->ref_ptr, NULL);
+	if (!p)
+		return 3;
+	if (p != p_cpu || p_cpu->cnt.refs.counter != 2) {
+		bpf_kfunc_call_test_release(p);
+		return 4;
+	}
+
+	p = bpf_kptr_xchg(&v->ref_ptr, p);
+	if (p) {
+		bpf_kfunc_call_test_release(p);
+		return 5;
+	}
+	if (p_cpu->cnt.refs.counter != 2)
+		return 6;
+
 	return 0;
 }
 
