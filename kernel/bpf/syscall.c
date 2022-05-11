@@ -1278,6 +1278,22 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 	return NULL;
 }
 
+static bool map_type_prevent_unprivileged_access(struct bpf_map *map)
+{
+#ifdef CONFIG_BPF_UNPRIV_MAP_ACCESS
+	return sysctl_unprivileged_bpf_disabled && !bpf_capable() &&
+	       map->map_type != BPF_MAP_TYPE_ARRAY &&
+	       map->map_type != BPF_MAP_TYPE_HASH &&
+	       map->map_type != BPF_MAP_TYPE_PERF_EVENT_ARRAY &&
+	       map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY &&
+	       map->map_type != BPF_MAP_TYPE_PERCPU_HASH &&
+	       map->map_type != BPF_MAP_TYPE_RINGBUF;
+#else
+	/* earlier checks prevent unprivileged access */
+	return false;
+#endif
+}
+
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
 
@@ -1310,6 +1326,11 @@ static int map_lookup_elem(union bpf_attr *attr)
 	if ((attr->flags & BPF_F_LOCK) &&
 	    !map_value_has_spin_lock(map)) {
 		err = -EINVAL;
+		goto err_put;
+	}
+
+	if (map_type_prevent_unprivileged_access(map)) {
+		err = -EPERM;
 		goto err_put;
 	}
 
@@ -1386,6 +1407,11 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
+	if (map_type_prevent_unprivileged_access(map)) {
+		err = -EPERM;
+		goto err_put;
+	}
+
 	key = ___bpf_copy_key(ukey, map->key_size);
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
@@ -1435,6 +1461,11 @@ static int map_delete_elem(union bpf_attr *attr)
 		return PTR_ERR(map);
 	bpf_map_write_active_inc(map);
 	if (!(map_get_sys_perms(map, f) & FMODE_CAN_WRITE)) {
+		err = -EPERM;
+		goto err_put;
+	}
+
+	if (map_type_prevent_unprivileged_access(map)) {
 		err = -EPERM;
 		goto err_put;
 	}
@@ -1490,6 +1521,11 @@ static int map_get_next_key(union bpf_attr *attr)
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 	if (!(map_get_sys_perms(map, f) & FMODE_CAN_READ)) {
+		err = -EPERM;
+		goto err_put;
+	}
+
+	if (map_type_prevent_unprivileged_access(map)) {
 		err = -EPERM;
 		goto err_put;
 	}
@@ -4863,10 +4899,29 @@ out_prog_put:
 static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
+	bool capable;
 	int err;
 
-	if (sysctl_unprivileged_bpf_disabled && !bpf_capable())
+	capable = bpf_capable() || !sysctl_unprivileged_bpf_disabled;
+
+#ifdef CONFIG_BPF_UNPRIV_MAP_ACCESS
+	/* A subset of cmds are allowed to unprivileged users, principally to allow
+	 * them to interact with pinned BPF maps to retrieve events, update map
+	 * values etc.  The pinning program can adjust pin path permissions
+	 * to prevent unwanted access by unprivileged users.
+	 */
+	if (!capable &&
+	    cmd != BPF_MAP_LOOKUP_ELEM &&
+	    cmd != BPF_MAP_UPDATE_ELEM &&
+	    cmd != BPF_MAP_DELETE_ELEM &&
+	    cmd != BPF_MAP_GET_NEXT_KEY &&
+	    cmd != BPF_OBJ_GET &&
+	    cmd != BPF_OBJ_GET_INFO_BY_FD)
 		return -EPERM;
+#else
+	if (!capable)
+		return -EPERM;
+#endif
 
 	err = bpf_check_uarg_tail_zero(uattr, sizeof(attr), size);
 	if (err)

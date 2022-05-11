@@ -84,6 +84,21 @@ config BPF_UNPRIV_DEFAULT_OFF
 
 	  If you are unsure how to answer this question, answer Y.
 
+config BPF_UNPRIV_MAP_ACCESS
+	bool "Allow unprivileged access to BPF map-related actions"
+	default n
+	depends on BPF_SYSCALL
+	help
+	   Allow unprivileged access to retrieve pinned objects, lookup,
+	   update and delete map elements.  Only specific BPF map types
+	   are permitted - (per-cpu) array maps, (per-cpu) hash maps,
+	   perf event and ring buffer maps.
+
+	   This allows limited use of the BPF syscall for unprivileged
+	   users; note however that this does not include loading or
+	   attaching BPF programs.  Pinned maps can also specify
+	   pin path permissions to prevent unwanted access.
+
 source "kernel/bpf/preload/Kconfig"
 
 config BPF_LSM
