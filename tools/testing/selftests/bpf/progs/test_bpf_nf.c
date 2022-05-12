@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
 #define EAFNOSUPPORT 97
 #define EPROTO 71
 #define ENONET 64
 #define EINVAL 22
 #define ENOENT 2
+
+extern unsigned long CONFIG_HZ __kconfig;
 
 int test_einval_bpf_tuple = 0;
 int test_einval_reserved = 0;
@@ -16,6 +19,8 @@ int test_eproto_l4proto = 0;
 int test_enonet_netns_id = 0;
 int test_enoent_lookup = 0;
 int test_eafnosupport = 0;
+int test_succ_lookup = 0;
+u32 test_delta_timeout = 0;
 
 struct nf_conn;
 
@@ -31,6 +36,7 @@ struct nf_conn *bpf_xdp_ct_lookup(struct xdp_md *, struct bpf_sock_tuple *, u32,
 struct nf_conn *bpf_skb_ct_lookup(struct __sk_buff *, struct bpf_sock_tuple *, u32,
 				  struct bpf_ct_opts___local *, u32) __ksym;
 void bpf_ct_release(struct nf_conn *) __ksym;
+void bpf_ct_refresh_timeout(struct nf_conn *, u32) __ksym;
 
 static __always_inline void
 nf_ct_test(struct nf_conn *(*func)(void *, struct bpf_sock_tuple *, u32,
@@ -99,6 +105,22 @@ nf_ct_test(struct nf_conn *(*func)(void *, struct bpf_sock_tuple *, u32,
 		bpf_ct_release(ct);
 	else
 		test_eafnosupport = opts_def.error;
+
+	bpf_tuple.ipv4.saddr = 0x01010101; /* src IP 1.1.1.1 */
+	bpf_tuple.ipv4.daddr = 0x02020202; /* dst IP 2.2.2.2 */
+	bpf_tuple.ipv4.sport = bpf_htons(12345); /* src port */
+	bpf_tuple.ipv4.dport = bpf_htons(1000);  /* dst port */
+	ct = func(ctx, &bpf_tuple, sizeof(bpf_tuple.ipv4), &opts_def,
+		  sizeof(opts_def));
+	if (ct) {
+		/* update ct entry timeout */
+		bpf_ct_refresh_timeout(ct, 10000);
+		test_delta_timeout = ct->timeout - bpf_jiffies64();
+		test_delta_timeout /= CONFIG_HZ;
+		bpf_ct_release(ct);
+	} else {
+		test_succ_lookup = opts_def.error;
+	}
 }
 
 SEC("xdp")

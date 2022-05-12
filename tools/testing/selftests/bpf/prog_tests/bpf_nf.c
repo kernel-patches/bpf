@@ -18,6 +18,13 @@ void test_bpf_nf_ct(int mode)
 		.repeat = 1,
 	);
 
+	/* Flush previous nft ct entries */
+	ASSERT_OK(system("conntrack -F"), "flush ct entries");
+	/* Let's create a nft ct entry to perform lookup */
+	ASSERT_OK(system("conntrack -I -s 1.1.1.1 -d 2.2.2.2 --protonum 6  \
+			  --state ESTABLISHED --timeout 3600 --sport 12345 \
+			  --dport 1000 --zone 0"), "create ct entry");
+
 	skel = test_bpf_nf__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "test_bpf_nf__open_and_load"))
 		return;
@@ -39,6 +46,9 @@ void test_bpf_nf_ct(int mode)
 	ASSERT_EQ(skel->bss->test_enonet_netns_id, -ENONET, "Test ENONET for bad but valid netns_id");
 	ASSERT_EQ(skel->bss->test_enoent_lookup, -ENOENT, "Test ENOENT for failed lookup");
 	ASSERT_EQ(skel->bss->test_eafnosupport, -EAFNOSUPPORT, "Test EAFNOSUPPORT for invalid len__tuple");
+	ASSERT_EQ(skel->bss->test_succ_lookup, 0, "Test for successful lookup");
+	ASSERT_EQ(skel->bss->test_delta_timeout, 10, "Test for ct timeout update");
+
 end:
 	test_bpf_nf__destroy(skel);
 }
