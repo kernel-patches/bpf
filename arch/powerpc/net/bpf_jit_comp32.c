@@ -829,6 +829,23 @@ atomic_ops:
 				/* we're done if this succeeded */
 				PPC_BCC_SHORT(COND_NE, tmp_idx);
 				break;
+			case BPF_CMPXCHG:
+				/* Compare with old value in BPF_REG_0 */
+				EMIT(PPC_RAW_CMPW(bpf_to_ppc(BPF_REG_0), _R0));
+				/* Don't set if different from old value */
+				PPC_BCC_SHORT(COND_NE, (ctx->idx + 3) * 4);
+				fallthrough;
+			case BPF_XCHG:
+				/* store new value */
+				EMIT(PPC_RAW_STWCX(src_reg, tmp_reg, dst_reg));
+				PPC_BCC_SHORT(COND_NE, tmp_idx);
+				/*
+				 * Return old value in src_reg for BPF_XCHG &
+				 * BPF_REG_0 for BPF_CMPXCHG.
+				 */
+				EMIT(PPC_RAW_MR(imm == BPF_XCHG ? src_reg : bpf_to_ppc(BPF_REG_0),
+						_R0));
+				break;
 			default:
 				pr_err_ratelimited("eBPF filter atomic op code %02x (@%d) unsupported\n",
 						   code, i);
