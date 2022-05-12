@@ -11,8 +11,8 @@ void test_libbpf_probe_prog_types(void)
 	const struct btf_enum *e;
 	int i, n, id;
 
-	btf = btf__parse("/sys/kernel/btf/vmlinux", NULL);
-	if (!ASSERT_OK_PTR(btf, "btf_parse"))
+	btf = libbpf_find_kernel_btf();
+	if (!ASSERT_OK_PTR(btf, "libbpf_find_kernel_btf"))
 		return;
 
 	/* find enum bpf_prog_type and enumerate each value */
@@ -49,8 +49,8 @@ void test_libbpf_probe_map_types(void)
 	const struct btf_enum *e;
 	int i, n, id;
 
-	btf = btf__parse("/sys/kernel/btf/vmlinux", NULL);
-	if (!ASSERT_OK_PTR(btf, "btf_parse"))
+	btf = libbpf_find_kernel_btf();
+	if (!ASSERT_OK_PTR(btf, "libbpf_find_kernel_btf"))
 		return;
 
 	/* find enum bpf_map_type and enumerate each value */
