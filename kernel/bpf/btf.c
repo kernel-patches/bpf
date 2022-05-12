@@ -901,10 +901,10 @@ static const struct btf_type *btf_type_skip_qualifiers(const struct btf *btf,
 static const char *btf_show_name(struct btf_show *show)
 {
 	/* BTF_MAX_ITER array suffixes "[]" */
-	const char *array_suffixes = "[][][][][][][][][][]";
+	static const char array_suffixes[] = "[][][][][][][][][][]";
 	const char *array_suffix = &array_suffixes[strlen(array_suffixes)];
 	/* BTF_MAX_ITER pointer suffixes "*" */
-	const char *ptr_suffixes = "**********";
+	static const char ptr_suffixes[] = "**********";
 	const char *ptr_suffix = &ptr_suffixes[strlen(ptr_suffixes)];
 	const char *name = NULL, *prefix = "", *parens = "";
 	const struct btf_member *m = show->state.member;
