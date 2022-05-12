@@ -20,6 +20,7 @@
 #include <linux/fprobe.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
+#include <linux/xattr.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1181,6 +1182,29 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_5(bpf_getxattr, struct user_namespace *, mnt_userns, struct dentry *,
+	   dentry, void *, name, void *, value, size_t, value_size)
+{
+	return vfs_getxattr(mnt_userns, dentry, name, value, value_size);
+}
+
+BTF_ID_LIST(bpf_getxattr_btf_ids)
+BTF_ID(struct, user_namespace)
+BTF_ID(struct, dentry)
+
+static const struct bpf_func_proto bpf_getxattr_proto = {
+	.func = bpf_getxattr,
+	.gpl_only = false,
+	.ret_type = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id = &bpf_getxattr_btf_ids[0],
+	.arg2_type = ARG_PTR_TO_BTF_ID,
+	.arg2_btf_id = &bpf_getxattr_btf_ids[1],
+	.arg3_type = ARG_PTR_TO_CONST_STR,
+	.arg4_type = ARG_PTR_TO_UNINIT_MEM,
+	.arg5_type = ARG_CONST_SIZE,
+};
+
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1304,6 +1328,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_find_vma_proto;
 	case BPF_FUNC_trace_vprintk:
 		return bpf_get_trace_vprintk_proto();
+	case BPF_FUNC_getxattr:
+		return prog->aux->sleepable ? &bpf_getxattr_proto : NULL;
 	default:
 		return bpf_base_func_proto(func_id);
 	}

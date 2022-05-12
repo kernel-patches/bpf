@@ -5172,6 +5172,13 @@ union bpf_attr {
  * 	Return
  * 		Map value associated to *key* on *cpu*, or **NULL** if no entry
  * 		was found or *cpu* is invalid.
+ *
+ * long bpf_getxattr(struct user_namespace *mnt_userns, struct dentry *dentry, const char *name, void *value, u64 value_size)
+ *	Description
+ *		Get the *value* of the xattr with the given *name*
+ *		where *value_size* is the size of the *value* buffer.
+ *	Return
+ *		The number of bytes copied into *value*.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5370,6 +5377,7 @@ union bpf_attr {
 	FN(ima_file_hash),		\
 	FN(kptr_xchg),			\
 	FN(map_lookup_percpu_elem),     \
+	FN(getxattr),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
