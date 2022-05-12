@@ -2466,11 +2466,9 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (!addrs)
 		return -ENOMEM;
 
-	if (uaddrs) {
-		if (copy_from_user(addrs, uaddrs, size)) {
-			err = -EFAULT;
-			goto error_addrs;
-		}
+	if (uaddrs && copy_from_user(addrs, uaddrs, size)) {
+		err = -EFAULT;
+		goto error_addrs;
 	} else {
 		struct user_syms us;
 
