@@ -217,16 +217,36 @@ void bpf_ct_release(struct nf_conn *nfct)
 	nf_ct_put(nfct);
 }
 
+/* bpf_ct_refresh_timeout - Refresh nf_conn object
+ *
+ * Refresh timeout associated to the provided connection tracking entry.
+ * This must be invoked for referenced PTR_TO_BTF_ID.
+ *
+ * Parameters:
+ * @nf_conn      - Pointer to referenced nf_conn object, obtained using
+ *		   bpf_xdp_ct_lookup or bpf_skb_ct_lookup.
+ * @timeout      - delta time in msecs used to increase the ct entry lifetime.
+ */
+void bpf_ct_refresh_timeout(struct nf_conn *nfct, u32 timeout)
+{
+	if (!nfct)
+		return;
+
+	nf_ct_refresh_timeout(nfct, msecs_to_jiffies(timeout));
+}
+
 __diag_pop()
 
 BTF_SET_START(nf_ct_xdp_check_kfunc_ids)
 BTF_ID(func, bpf_xdp_ct_lookup)
 BTF_ID(func, bpf_ct_release)
+BTF_ID(func, bpf_ct_refresh_timeout);
 BTF_SET_END(nf_ct_xdp_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_tc_check_kfunc_ids)
 BTF_ID(func, bpf_skb_ct_lookup)
 BTF_ID(func, bpf_ct_release)
+BTF_ID(func, bpf_ct_refresh_timeout);
 BTF_SET_END(nf_ct_tc_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_acquire_kfunc_ids)
