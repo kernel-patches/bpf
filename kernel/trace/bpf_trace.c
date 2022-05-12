@@ -2469,20 +2469,20 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (uaddrs) {
 		if (copy_from_user(addrs, uaddrs, size)) {
 			err = -EFAULT;
-			goto error;
+			goto error_addrs;
 		}
 	} else {
 		struct user_syms us;
 
 		err = copy_user_syms(&us, usyms, cnt);
 		if (err)
-			goto error;
+			goto error_addrs;
 
 		sort(us.syms, cnt, sizeof(*us.syms), symbols_cmp, NULL);
 		err = ftrace_lookup_symbols(us.syms, cnt, addrs);
 		free_user_syms(&us);
 		if (err)
-			goto error;
+			goto error_addrs;
 	}
 
 	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
@@ -2490,18 +2490,18 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		cookies = kvmalloc(size, GFP_KERNEL);
 		if (!cookies) {
 			err = -ENOMEM;
-			goto error;
+			goto error_addrs;
 		}
 		if (copy_from_user(cookies, ucookies, size)) {
 			err = -EFAULT;
-			goto error;
+			goto error_cookies;
 		}
 	}
 
 	link = kzalloc(sizeof(*link), GFP_KERNEL);
 	if (!link) {
 		err = -ENOMEM;
-		goto error;
+		goto error_cookies;
 	}
 
 	bpf_link_init(&link->link, BPF_LINK_TYPE_KPROBE_MULTI,
@@ -2509,7 +2509,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
-		goto error;
+		goto error_link;
 
 	if (flags & BPF_F_KPROBE_MULTI_RETURN)
 		link->fp.exit_handler = kprobe_multi_link_handler;
@@ -2541,10 +2541,12 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 
 	return bpf_link_settle(&link_primer);
 
-error:
+error_link:
 	kfree(link);
-	kvfree(addrs);
+error_cookies:
 	kvfree(cookies);
+error_addrs:
+	kvfree(addrs);
 	return err;
 }
 #else /* !CONFIG_FPROBE */
