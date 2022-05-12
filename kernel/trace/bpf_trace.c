@@ -2485,14 +2485,10 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 
 	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
 	if (ucookies) {
-		cookies = kvmalloc(size, GFP_KERNEL);
-		if (!cookies) {
-			err = -ENOMEM;
+		cookies = vmemdup_user(ucookies, size);
+		if (IS_ERR(cookies)) {
+			err = PTR_ERR(cookies);
 			goto error_addrs;
-		}
-		if (copy_from_user(cookies, ucookies, size)) {
-			err = -EFAULT;
-			goto error_cookies;
 		}
 	}
 
