@@ -3568,7 +3568,7 @@ static bool btf_equal_int_tag(struct btf_type *t1, struct btf_type *t2)
 	return info1 == info2;
 }
 
-/* Calculate type signature hash of ENUM. */
+/* Calculate type signature hash of ENUM/ENUM64. */
 static long btf_hash_enum(struct btf_type *t)
 {
 	long h;
@@ -3580,17 +3580,12 @@ static long btf_hash_enum(struct btf_type *t)
 	return h;
 }
 
-/* Check structural equality of two ENUMs. */
-static bool btf_equal_enum(struct btf_type *t1, struct btf_type *t2)
+static bool btf_equal_enum32_val(struct btf_type *t1, struct btf_type *t2)
 {
 	const struct btf_enum *m1, *m2;
-	__u16 vlen;
+	__u16 vlen = btf_vlen(t1);
 	int i;
 
-	if (!btf_equal_common(t1, t2))
-		return false;
-
-	vlen = btf_vlen(t1);
 	m1 = btf_enum(t1);
 	m2 = btf_enum(t2);
 	for (i = 0; i < vlen; i++) {
@@ -3602,15 +3597,44 @@ static bool btf_equal_enum(struct btf_type *t1, struct btf_type *t2)
 	return true;
 }
 
-static inline bool btf_is_enum_fwd(struct btf_type *t)
+static bool btf_equal_enum64_val(struct btf_type *t1, struct btf_type *t2)
 {
-	return btf_is_enum(t) && btf_vlen(t) == 0;
+	const struct btf_enum64 *m1, *m2;
+	__u16 vlen = btf_vlen(t1);
+	int i;
+
+	m1 = btf_enum64(t1);
+	m2 = btf_enum64(t2);
+	for (i = 0; i < vlen; i++) {
+		if (m1->name_off != m2->name_off || m1->val_lo32 != m2->val_lo32 ||
+		    m1->val_hi32 != m2->val_hi32)
+			return false;
+		m1++;
+		m2++;
+	}
+	return true;
 }
 
-static bool btf_compat_enum(struct btf_type *t1, struct btf_type *t2)
+/* Check structural equality of two ENUMs. */
+static bool btf_equal_enum_or_enum64(struct btf_type *t1, struct btf_type *t2)
+{
+	if (!btf_equal_common(t1, t2))
+		return false;
+
+	if (btf_is_enum(t1))
+		return btf_equal_enum32_val(t1, t2);
+	return btf_equal_enum64_val(t1, t2);
+}
+
+static inline bool btf_is_enum_fwd(struct btf_type *t)
+{
+	return btf_type_is_any_enum(t) && btf_vlen(t) == 0;
+}
+
+static bool btf_compat_enum_or_enum64(struct btf_type *t1, struct btf_type *t2)
 {
 	if (!btf_is_enum_fwd(t1) && !btf_is_enum_fwd(t2))
-		return btf_equal_enum(t1, t2);
+		return btf_equal_enum_or_enum64(t1, t2);
 	/* ignore vlen when comparing */
 	return t1->name_off == t2->name_off &&
 	       (t1->info & ~0xffff) == (t2->info & ~0xffff) &&
@@ -3829,6 +3853,7 @@ static int btf_dedup_prep(struct btf_dedup *d)
 			h = btf_hash_int_decl_tag(t);
 			break;
 		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
 			h = btf_hash_enum(t);
 			break;
 		case BTF_KIND_STRUCT:
@@ -3898,15 +3923,16 @@ static int btf_dedup_prim_type(struct btf_dedup *d, __u32 type_id)
 		break;
 
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		h = btf_hash_enum(t);
 		for_each_dedup_cand(d, hash_entry, h) {
 			cand_id = (__u32)(long)hash_entry->value;
 			cand = btf_type_by_id(d->btf, cand_id);
-			if (btf_equal_enum(t, cand)) {
+			if (btf_equal_enum_or_enum64(t, cand)) {
 				new_id = cand_id;
 				break;
 			}
-			if (btf_compat_enum(t, cand)) {
+			if (btf_compat_enum_or_enum64(t, cand)) {
 				if (btf_is_enum_fwd(t)) {
 					/* resolve fwd to full enum */
 					new_id = cand_id;
@@ -4211,7 +4237,8 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 		return btf_equal_int_tag(cand_type, canon_type);
 
 	case BTF_KIND_ENUM:
-		return btf_compat_enum(cand_type, canon_type);
+	case BTF_KIND_ENUM64:
+		return btf_compat_enum_or_enum64(cand_type, canon_type);
 
 	case BTF_KIND_FWD:
 	case BTF_KIND_FLOAT:
