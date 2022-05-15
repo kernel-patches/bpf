@@ -720,7 +720,7 @@ void arch_cpu_idle_dead(void)
 /*
  * Called from the generic idle code.
  */
-void arch_cpu_idle(void)
+void noinstr arch_cpu_idle(void)
 {
 	x86_idle();
 }
