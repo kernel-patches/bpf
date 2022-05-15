@@ -37,7 +37,7 @@ obj-${CONFIG_BPF_LSM} += bpf_lsm.o
 endif
 obj-$(CONFIG_BPF_PRELOAD) += preload/
 ifeq ($(CONFIG_CGROUPS),y)
-obj-$(CONFIG_BPF_SYSCALL) += rstat.o
+obj-$(CONFIG_BPF_SYSCALL) += rstat.o cgroup_iter.o
 endif
 
 obj-$(CONFIG_BPF_SYSCALL) += relo_core.o
