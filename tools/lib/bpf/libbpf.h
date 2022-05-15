@@ -662,6 +662,9 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_iter(const struct bpf_program *prog,
 			 const struct bpf_iter_attach_opts *opts);
 
+LIBBPF_API struct bpf_link *
+bpf_program__attach_rstat(const struct bpf_program *prog);
+
 /*
  * Libbpf allows callers to adjust BPF programs before being loaded
  * into kernel. One program in an object file can be transformed into
