@@ -3,6 +3,7 @@
  */
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/bpf-rstat.h>
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
 #include <linux/bpf_verifier.h>
@@ -3416,6 +3417,8 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_RSTAT_FLUSH:
+		return BPF_PROG_TYPE_RSTAT_FLUSH;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -4563,6 +4566,9 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			ret = bpf_perf_link_attach(attr, prog);
 		else
 			ret = bpf_kprobe_multi_link_attach(attr, prog);
+		break;
+	case BPF_PROG_TYPE_RSTAT_FLUSH:
+		ret = bpf_rstat_link_attach(attr, prog);
 		break;
 	default:
 		ret = -EINVAL;

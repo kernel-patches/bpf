@@ -77,6 +77,10 @@ BPF_PROG_TYPE(BPF_PROG_TYPE_LSM, lsm,
 	       void *, void *)
 #endif /* CONFIG_BPF_LSM */
 #endif
+#ifdef CONFIG_CGROUPS
+BPF_PROG_TYPE(BPF_PROG_TYPE_RSTAT_FLUSH, rstat_flush,
+	      struct bpf_rstat_flush_ctx, struct bpf_rstat_flush_ctx)
+#endif /* CONFIG_CGROUPS */
 BPF_PROG_TYPE(BPF_PROG_TYPE_SYSCALL, bpf_syscall,
 	      void *, void *)
 
