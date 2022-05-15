@@ -164,3 +164,24 @@ int bpf_rstat_link_attach(const union bpf_attr *attr,
 
 	return bpf_link_settle(&link_primer);
 }
+
+void bpf_rstat_flush(struct cgroup *cgrp, int cpu)
+{
+	struct bpf_rstat_flusher *flusher;
+	struct bpf_rstat_flush_ctx ctx = {
+		.cgrp = cgrp,
+		.parent = cgroup_parent(cgrp),
+		.cpu = cpu,
+	};
+
+	rcu_read_lock();
+	migrate_disable();
+	spin_lock(&bpf_rstat_flushers_lock);
+
+	list_for_each_entry(flusher, &bpf_rstat_flushers, list)
+		(void) bpf_prog_run(flusher->prog, &ctx);
+
+	spin_unlock(&bpf_rstat_flushers_lock);
+	migrate_enable();
+	rcu_read_unlock();
+}
