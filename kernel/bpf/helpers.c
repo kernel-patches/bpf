@@ -416,6 +416,36 @@ const struct bpf_func_proto bpf_get_current_ancestor_cgroup_id_proto = {
 	.arg1_type	= ARG_ANYTHING,
 };
 
+BTF_ID_LIST_SINGLE(bpf_cgroup_btf_ids, struct, cgroup)
+
+BPF_CALL_1(bpf_cgroup_rstat_updated, struct cgroup *, cgrp)
+{
+	cgroup_rstat_updated(cgrp, smp_processor_id());
+	return 0;
+}
+
+const struct bpf_func_proto bpf_cgroup_rstat_updated_proto = {
+	.func		= bpf_cgroup_rstat_updated,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &bpf_cgroup_btf_ids[0],
+};
+
+BPF_CALL_1(bpf_cgroup_rstat_flush, struct cgroup *, cgrp)
+{
+	cgroup_rstat_flush_irqsafe(cgrp);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_cgroup_rstat_flush_proto = {
+	.func		= bpf_cgroup_rstat_flush,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &bpf_cgroup_btf_ids[0],
+};
+
 #ifdef CONFIG_CGROUP_BPF
 
 BPF_CALL_2(bpf_get_local_storage, struct bpf_map *, map, u64, flags)
