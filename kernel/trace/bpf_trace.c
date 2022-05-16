@@ -2353,16 +2353,19 @@ kprobe_multi_resolve_syms(const void __user *usyms, u32 cnt,
 			  unsigned long *addrs)
 {
 	unsigned long addr, sym_size;
-	u32 size;
+	u32 size, elem_size;
 	const char __user **syms;
+	compat_uptr_t __user *compat_syms;
 	int err = -ENOMEM;
 	unsigned int i;
 	char *func;
 
-	if (check_mul_overflow(cnt, (u32)sizeof(*syms), &size))
+	elem_size = in_compat_syscall() ? sizeof(*compat_syms) : sizeof(*syms);
+	if (check_mul_overflow(cnt, elem_size, &size))
 		return -EOVERFLOW;
-	size = cnt * sizeof(*syms);
+	size = cnt * elem_size;
 	syms = kvzalloc(size, GFP_KERNEL);
+	compat_syms = (void *)syms;
 	if (!syms)
 		return -ENOMEM;
 
@@ -2376,7 +2379,10 @@ kprobe_multi_resolve_syms(const void __user *usyms, u32 cnt,
 	}
 
 	for (i = 0; i < cnt; i++) {
-		err = strncpy_from_user(func, syms[i], KSYM_NAME_LEN);
+		const char __user *ufunc = in_compat_syscall()
+					? (char __user *)(uintptr_t)compat_syms[i]
+					: syms[i];
+		err = strncpy_from_user(func, ufunc, KSYM_NAME_LEN);
 		if (err == KSYM_NAME_LEN)
 			err = -E2BIG;
 		if (err < 0)
