@@ -2406,15 +2406,11 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	struct bpf_link_primer link_primer;
 	void __user *ucookies;
 	unsigned long *addrs;
-	u32 flags, cnt, size;
+	u32 flags, cnt, size, cookies_size;
 	void __user *uaddrs;
 	u64 *cookies = NULL;
 	void __user *usyms;
 	int err;
-
-	/* no support for 32bit archs yet */
-	if (sizeof(u64) != sizeof(void *))
-		return -EOPNOTSUPP;
 
 	if (prog->expected_attach_type != BPF_TRACE_KPROBE_MULTI)
 		return -EINVAL;
@@ -2425,6 +2421,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 
 	uaddrs = u64_to_user_ptr(attr->link_create.kprobe_multi.addrs);
 	usyms = u64_to_user_ptr(attr->link_create.kprobe_multi.syms);
+	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
 	if (!!uaddrs == !!usyms)
 		return -EINVAL;
 
@@ -2432,8 +2429,11 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (!cnt)
 		return -EINVAL;
 
-	if (check_mul_overflow(cnt, (u32)sizeof(*addrs), &size))
+	if (check_mul_overflow(cnt, (u32)sizeof(*addrs), &size) ||
+	    (ucookies &&
+	     check_mul_overflow(cnt, (u32)sizeof(*cookies), &cookies_size))) {
 		return -EOVERFLOW;
+	}
 	size = cnt * sizeof(*addrs);
 	addrs = kvmalloc(size, GFP_KERNEL);
 	if (!addrs)
@@ -2450,14 +2450,14 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 			goto error;
 	}
 
-	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
 	if (ucookies) {
-		cookies = kvmalloc(size, GFP_KERNEL);
+		cookies_size = cnt * sizeof(*cookies);
+		cookies = kvmalloc(cookies_size, GFP_KERNEL);
 		if (!cookies) {
 			err = -ENOMEM;
 			goto error;
 		}
-		if (copy_from_user(cookies, ucookies, size)) {
+		if (copy_from_user(cookies, ucookies, cookies_size)) {
 			err = -EFAULT;
 			goto error;
 		}
