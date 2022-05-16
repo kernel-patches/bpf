@@ -2352,12 +2352,15 @@ static int
 kprobe_multi_resolve_syms(const void __user *usyms, u32 cnt,
 			  unsigned long *addrs)
 {
-	unsigned long addr, size;
+	unsigned long addr, sym_size;
+	u32 size;
 	const char __user **syms;
 	int err = -ENOMEM;
 	unsigned int i;
 	char *func;
 
+	if (check_mul_overflow(cnt, (u32)sizeof(*syms), &size))
+		return -EOVERFLOW;
 	size = cnt * sizeof(*syms);
 	syms = kvzalloc(size, GFP_KERNEL);
 	if (!syms)
@@ -2382,9 +2385,9 @@ kprobe_multi_resolve_syms(const void __user *usyms, u32 cnt,
 		addr = kallsyms_lookup_name(func);
 		if (!addr)
 			goto error;
-		if (!kallsyms_lookup_size_offset(addr, &size, NULL))
+		if (!kallsyms_lookup_size_offset(addr, &sym_size, NULL))
 			goto error;
-		addr = ftrace_location_range(addr, addr + size - 1);
+		addr = ftrace_location_range(addr, addr + sym_size - 1);
 		if (!addr)
 			goto error;
 		addrs[i] = addr;
@@ -2429,6 +2432,8 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (!cnt)
 		return -EINVAL;
 
+	if (check_mul_overflow(cnt, (u32)sizeof(*addrs), &size))
+		return -EOVERFLOW;
 	size = cnt * sizeof(*addrs);
 	addrs = kvmalloc(size, GFP_KERNEL);
 	if (!addrs)
