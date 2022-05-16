@@ -105,7 +105,7 @@ static void test_link_api_addrs(void)
 	GET_ADDR("bpf_fentry_test7", addrs[6]);
 	GET_ADDR("bpf_fentry_test8", addrs[7]);
 
-	opts.kprobe_multi.addrs = (const unsigned long*) addrs;
+	opts.kprobe_multi.addrs = (const __u64 *) addrs;
 	opts.kprobe_multi.cnt = ARRAY_SIZE(addrs);
 	test_link_api(&opts);
 }
@@ -183,7 +183,7 @@ static void test_attach_api_addrs(void)
 	GET_ADDR("bpf_fentry_test7", addrs[6]);
 	GET_ADDR("bpf_fentry_test8", addrs[7]);
 
-	opts.addrs = (const unsigned long *) addrs;
+	opts.addrs = (const __u64 *) addrs;
 	opts.cnt = ARRAY_SIZE(addrs);
 	test_attach_api(NULL, &opts);
 }
@@ -241,7 +241,7 @@ static void test_attach_api_fails(void)
 		goto cleanup;
 
 	/* fail_2 - both addrs and syms set */
-	opts.addrs = (const unsigned long *) addrs;
+	opts.addrs = (const __u64 *) addrs;
 	opts.syms = syms;
 	opts.cnt = ARRAY_SIZE(syms);
 	opts.cookies = NULL;
@@ -255,7 +255,7 @@ static void test_attach_api_fails(void)
 		goto cleanup;
 
 	/* fail_3 - pattern and addrs set */
-	opts.addrs = (const unsigned long *) addrs;
+	opts.addrs = (const __u64 *) addrs;
 	opts.syms = NULL;
 	opts.cnt = ARRAY_SIZE(syms);
 	opts.cookies = NULL;
