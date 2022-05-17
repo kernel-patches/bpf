@@ -2253,6 +2253,24 @@ struct user_syms {
 	char *buf;
 };
 
+static inline int get_arr_ptr(unsigned long *p,
+			      unsigned long __user *uaddr, u32 idx)
+{
+	if (unlikely(in_compat_syscall())) {
+		compat_uptr_t __user *compat_uaddr = (compat_uptr_t __user *)uaddr;
+		compat_uptr_t val;
+		int err;
+
+		err = __get_user(val, compat_uaddr + idx);
+		if (!err)
+			*p = val;
+
+		return err;
+	} else {
+		return __get_user(*p, uaddr + idx);
+	}
+}
+
 static int copy_user_syms(struct user_syms *us, unsigned long __user *usyms, u32 cnt)
 {
 	unsigned long __user usymbol;
@@ -2270,7 +2288,7 @@ static int copy_user_syms(struct user_syms *us, unsigned long __user *usyms, u32
 		goto error;
 
 	for (p = buf, i = 0; i < cnt; i++) {
-		if (__get_user(usymbol, usyms + i)) {
+		if (get_arr_ptr(&usymbol, usyms, i)) {
 			err = -EFAULT;
 			goto error;
 		}
