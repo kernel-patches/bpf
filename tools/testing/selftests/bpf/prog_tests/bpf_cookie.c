@@ -140,7 +140,7 @@ static void kprobe_multi_link_api_subtest(void)
 	cookies[6] = 7;
 	cookies[7] = 8;
 
-	opts.kprobe_multi.addrs = (const unsigned long *) &addrs;
+	opts.kprobe_multi.addrs = (const __u64 *) &addrs;
 	opts.kprobe_multi.cnt = ARRAY_SIZE(addrs);
 	opts.kprobe_multi.cookies = (const __u64 *) &cookies;
 	prog_fd = bpf_program__fd(skel->progs.test_kprobe);

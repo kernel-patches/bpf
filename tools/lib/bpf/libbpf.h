@@ -489,7 +489,7 @@ struct bpf_kprobe_multi_opts {
 	/* array of function symbols to attach */
 	const char **syms;
 	/* array of function addresses to attach */
-	const unsigned long *addrs;
+	const __u64 *addrs;
 	/* array of user-provided values fetchable through bpf_get_attach_cookie */
 	const __u64 *cookies;
 	/* number of elements in syms/addrs/cookies arrays */

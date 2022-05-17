@@ -2454,7 +2454,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	void __user *ucookies;
 	unsigned long *addrs;
 	u32 flags, cnt, size, cookies_size;
-	void __user *uaddrs;
+	u64 __user *uaddrs;
 	u64 *cookies = NULL;
 	void __user *usyms;
 	int err;
@@ -2486,9 +2486,26 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return -ENOMEM;
 
 	if (uaddrs) {
-		if (copy_from_user(addrs, uaddrs, size)) {
-			err = -EFAULT;
-			goto error;
+		if (sizeof(*addrs) == sizeof(*uaddrs)) {
+			if (copy_from_user(addrs, uaddrs, size)) {
+				err = -EFAULT;
+				goto error;
+			}
+		} else {
+			u32 i;
+			u64 addr;
+
+			for (i = 0; i < cnt; i++) {
+				if (get_user(addr, uaddrs + i)) {
+					err = -EFAULT;
+					goto error;
+				}
+				if (addr > ULONG_MAX) {
+					err = -EINVAL;
+					goto error;
+				}
+				addrs[i] = addr;
+			}
 		}
 	} else {
 		struct user_syms us;

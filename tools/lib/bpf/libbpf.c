@@ -10737,7 +10737,7 @@ static bool glob_match(const char *str, const char *pat)
 
 struct kprobe_multi_resolve {
 	const char *pattern;
-	unsigned long *addrs;
+	__u64 *addrs;
 	size_t cap;
 	size_t cnt;
 };
@@ -10752,12 +10752,12 @@ resolve_kprobe_multi_cb(unsigned long long sym_addr, char sym_type,
 	if (!glob_match(sym_name, res->pattern))
 		return 0;
 
-	err = libbpf_ensure_mem((void **) &res->addrs, &res->cap, sizeof(unsigned long),
+	err = libbpf_ensure_mem((void **) &res->addrs, &res->cap, sizeof(__u64),
 				res->cnt + 1);
 	if (err)
 		return err;
 
-	res->addrs[res->cnt++] = (unsigned long) sym_addr;
+	res->addrs[res->cnt++] = sym_addr;
 	return 0;
 }
 
@@ -10772,7 +10772,7 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	};
 	struct bpf_link *link = NULL;
 	char errmsg[STRERR_BUFSIZE];
-	const unsigned long *addrs;
+	const __u64 *addrs;
 	int err, link_fd, prog_fd;
 	const __u64 *cookies;
 	const char **syms;
