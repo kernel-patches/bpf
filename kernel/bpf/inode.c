@@ -334,6 +334,8 @@ static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 {
 	struct inode *dir = dentry->d_parent->d_inode;
 	struct inode *inode = bpf_get_inode(dir->i_sb, dir, mode);
+	struct bpf_map_inode *map_inode;
+	struct bpf_map *map;
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -341,6 +343,19 @@ static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 	inode->i_fop = fops;
 	inode->i_private = raw;
 
+	if (iops != &bpf_map_iops)
+		goto out;
+
+	map = raw;
+	map_inode = kmalloc(sizeof(*map_inode), GFP_KERNEL);
+	if (!map_inode) {
+		free_inode_nonrcu(inode);
+		return -ENOMEM;
+	}
+	map_inode->inode = inode;
+	list_add_rcu(&map_inode->list, &map->inode_list);
+
+out:
 	bpf_dentry_finalize(dentry, inode, dir);
 	return 0;
 }
@@ -542,14 +557,26 @@ int bpf_obj_get_user(const char __user *pathname, int flags)
 	if (IS_ERR(raw))
 		return PTR_ERR(raw);
 
-	if (type == BPF_TYPE_PROG)
+	if (type != BPF_TYPE_MAP && !bpf_capable())
+		return -EPERM;
+
+	switch (type) {
+	case BPF_TYPE_PROG:
 		ret = bpf_prog_new_fd(raw);
-	else if (type == BPF_TYPE_MAP)
+		break;
+	case BPF_TYPE_MAP:
+		if (bpf_map_permission(raw, f_flags)) {
+			bpf_any_put(raw, type);
+			return -EPERM;
+		}
 		ret = bpf_map_new_fd(raw, f_flags);
-	else if (type == BPF_TYPE_LINK)
+		break;
+	case BPF_TYPE_LINK:
 		ret = (f_flags != O_RDWR) ? -EINVAL : bpf_link_new_fd(raw);
-	else
+		break;
+	default:
 		return -ENOENT;
+	}
 
 	if (ret < 0)
 		bpf_any_put(raw, type);
@@ -610,6 +637,27 @@ static int bpf_show_options(struct seq_file *m, struct dentry *root)
 	return 0;
 }
 
+static void bpf_map_inode_remove(struct bpf_map *map, struct inode *inode)
+{
+	struct bpf_map_inode *map_inode;
+
+	if (!(map->map_flags & BPF_F_UMODE))
+		return;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(map_inode, &map->inode_list, list) {
+		if (map_inode->inode == inode)
+			goto found;
+	}
+	rcu_read_unlock();
+	return;
+found:
+	rcu_read_unlock();
+	list_del_rcu(&map_inode->list);
+	synchronize_rcu();
+	kfree(map_inode);
+}
+
 static void bpf_free_inode(struct inode *inode)
 {
 	enum bpf_type type;
@@ -618,6 +666,10 @@ static void bpf_free_inode(struct inode *inode)
 		kfree(inode->i_link);
 	if (!bpf_inode_type(inode, &type))
 		bpf_any_put(inode->i_private, type);
+
+	if (type == BPF_TYPE_MAP)
+		bpf_map_inode_remove(inode->i_private, inode);
+
 	free_inode_nonrcu(inode);
 }
 

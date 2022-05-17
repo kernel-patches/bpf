@@ -191,6 +191,11 @@ struct bpf_map_off_arr {
 	u8 field_sz[BPF_MAP_OFF_ARR_MAX];
 };
 
+struct bpf_map_inode {
+	struct list_head list;
+	struct inode *inode;
+};
+
 struct bpf_map {
 	/* The first two cachelines with read-mostly members of which some
 	 * are also accessed in fast-path (e.g. ops, max_entries).
@@ -206,6 +211,7 @@ struct bpf_map {
 	u32 max_entries;
 	u64 map_extra; /* any per-map-type extra fields */
 	u32 map_flags;
+	struct list_head inode_list;
 	int spin_lock_off; /* >=0 valid offset, <0 error */
 	struct bpf_map_value_off *kptr_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
@@ -2373,5 +2379,6 @@ bool btf_id_set_contains(const struct btf_id_set *set, u32 id);
 int bpf_bprintf_prepare(char *fmt, u32 fmt_size, const u64 *raw_args,
 			u32 **bin_buf, u32 num_args);
 void bpf_bprintf_cleanup(void);
+int bpf_map_permission(struct bpf_map *map, int flags);
 
 #endif /* _LINUX_BPF_H */

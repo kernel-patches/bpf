@@ -586,6 +586,16 @@ void bpf_map_free_kptrs(struct bpf_map *map, void *map_value)
 	}
 }
 
+static void bpf_map_inode_release(struct bpf_map *map)
+{
+	struct bpf_map_inode *cur, *prev;
+
+	list_for_each_entry_safe(cur, prev, &map->inode_list, list) {
+		list_del(&cur->list);
+		kfree(cur);
+	}
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {
@@ -594,6 +604,8 @@ static void bpf_map_free_deferred(struct work_struct *work)
 	security_bpf_map_free(map);
 	kfree(map->off_arr);
 	bpf_map_release_memcg(map);
+	bpf_map_inode_release(map);
+
 	/* implementation dependent freeing, map_free callback also does
 	 * bpf_map_free_kptr_off_tab, if needed.
 	 */
@@ -1092,6 +1104,7 @@ static int map_create(union bpf_attr *attr)
 	atomic64_set(&map->usercnt, 1);
 	mutex_init(&map->freeze_mutex);
 	spin_lock_init(&map->owner.lock);
+	INIT_LIST_HEAD(&map->inode_list);
 
 	map->spin_lock_off = -EINVAL;
 	map->timer_off = -EINVAL;
@@ -3702,6 +3715,30 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 	return fd;
 }
 
+int bpf_map_permission(struct bpf_map *map, int flags)
+{
+	struct bpf_map_inode *map_inode;
+	struct user_namespace *ns;
+
+	if (capable(CAP_SYS_ADMIN))
+		return 0;
+
+	if (!(map->map_flags & BPF_F_UMODE))
+		return -1;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(map_inode, &map->inode_list, list) {
+		ns = map_inode->inode->i_sb->s_user_ns;
+		if (ns == current_user_ns())
+			goto found;
+	}
+	rcu_read_unlock();
+	return -1;
+found:
+	rcu_read_unlock();
+	return inode_permission(ns, map_inode->inode, ACC_MODE(flags));
+}
+
 #define BPF_MAP_GET_FD_BY_ID_LAST_FIELD open_flags
 
 static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
@@ -3714,9 +3751,6 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_MAP_GET_FD_BY_ID) ||
 	    attr->open_flags & ~BPF_OBJ_FLAG_MASK)
 		return -EINVAL;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 
 	f_flags = bpf_get_file_flag(attr->open_flags);
 	if (f_flags < 0)
@@ -3732,6 +3766,11 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 
 	if (IS_ERR(map))
 		return PTR_ERR(map);
+
+	if (bpf_map_permission(map, f_flags)) {
+		bpf_map_put_with_uref(map);
+		return -EPERM;
+	}
 
 	fd = bpf_map_new_fd(map, f_flags);
 	if (fd < 0)
@@ -4860,12 +4899,34 @@ out_prog_put:
 	return ret;
 }
 
+static inline bool is_map_ops_cmd(int cmd)
+{
+	switch (cmd) {
+	case BPF_MAP_LOOKUP_ELEM:
+	case BPF_MAP_UPDATE_ELEM:
+	case BPF_MAP_DELETE_ELEM:
+	case BPF_MAP_GET_NEXT_KEY:
+	case BPF_MAP_FREEZE:
+	case BPF_OBJ_GET:
+	case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
+	case BPF_MAP_LOOKUP_BATCH:
+	case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
+	case BPF_MAP_UPDATE_BATCH:
+	case BPF_MAP_DELETE_BATCH:
+	case BPF_OBJ_GET_INFO_BY_FD:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
 	int err;
 
-	if (sysctl_unprivileged_bpf_disabled && !bpf_capable())
+	if (sysctl_unprivileged_bpf_disabled && !bpf_capable() &&
+	    !is_map_ops_cmd(cmd))
 		return -EPERM;
 
 	err = bpf_check_uarg_tail_zero(uattr, sizeof(attr), size);

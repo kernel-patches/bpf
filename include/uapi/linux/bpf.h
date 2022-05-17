@@ -1226,6 +1226,7 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+	BPF_F_UMODE		= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */
