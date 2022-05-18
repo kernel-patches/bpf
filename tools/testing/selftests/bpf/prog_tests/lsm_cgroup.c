@@ -270,8 +270,77 @@ close_skel:
 	lsm_cgroup__destroy(skel);
 }
 
+static int field_offset(const char *type, const char *field)
+{
+	const struct btf_member *memb;
+	const struct btf_type *tp;
+	const char *name;
+	struct btf *btf;
+	int btf_id;
+	int i;
+
+	btf = btf__load_vmlinux_btf();
+	if (!btf)
+		return -1;
+
+	btf_id = btf__find_by_name_kind(btf, type, BTF_KIND_STRUCT);
+	if (btf_id < 0)
+		return -1;
+
+	tp = btf__type_by_id(btf, btf_id);
+	memb = btf_members(tp);
+
+	for (i = 0; i < btf_vlen(tp); i++) {
+		name = btf__name_by_offset(btf,
+					   memb->name_off);
+		if (strcmp(field, name) == 0)
+			return memb->offset / 8;
+		memb++;
+	}
+
+	return -1;
+}
+
+static bool sk_writable_field(const char *type, const char *field, int size)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, opts,
+		    .expected_attach_type = BPF_LSM_CGROUP);
+	struct bpf_insn	insns[] = {
+		/* r1 = *(u64 *)(r1 + 0) */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0),
+		/* r1 = *(u64 *)(r1 + offsetof(struct socket, sk)) */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, field_offset("socket", "sk")),
+		/* r2 = *(u64 *)(r1 + offsetof(struct sock, <field>)) */
+		BPF_LDX_MEM(size, BPF_REG_2, BPF_REG_1, field_offset(type, field)),
+		/* *(u64 *)(r1 + offsetof(struct sock, <field>)) = r2 */
+		BPF_STX_MEM(size, BPF_REG_1, BPF_REG_2, field_offset(type, field)),
+		BPF_MOV64_IMM(BPF_REG_0, 1),
+		BPF_EXIT_INSN(),
+	};
+	int fd;
+
+	opts.attach_btf_id = libbpf_find_vmlinux_btf_id("socket_post_create",
+							opts.expected_attach_type);
+
+	fd = bpf_prog_load(BPF_PROG_TYPE_LSM, NULL, "GPL", insns, ARRAY_SIZE(insns), &opts);
+	if (fd >= 0)
+		close(fd);
+	return fd >= 0;
+}
+
+static void test_lsm_cgroup_access(void)
+{
+	ASSERT_FALSE(sk_writable_field("sock_common", "skc_family", BPF_H), "skc_family");
+	ASSERT_FALSE(sk_writable_field("sock", "sk_sndtimeo", BPF_DW), "sk_sndtimeo");
+	ASSERT_TRUE(sk_writable_field("sock", "sk_priority", BPF_W), "sk_priority");
+	ASSERT_TRUE(sk_writable_field("sock", "sk_mark", BPF_W), "sk_mark");
+	ASSERT_FALSE(sk_writable_field("sock", "sk_pacing_rate", BPF_DW), "sk_pacing_rate");
+}
+
 void test_lsm_cgroup(void)
 {
 	if (test__start_subtest("functional"))
 		test_lsm_cgroup_functional();
+	if (test__start_subtest("access"))
+		test_lsm_cgroup_access();
 }
