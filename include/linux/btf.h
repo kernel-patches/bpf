@@ -343,6 +343,13 @@ static inline struct btf_param *btf_params(const struct btf_type *t)
 	return (struct btf_param *)(t + 1);
 }
 
+struct bpf_reg_state;
+
+bool btf_is_kfunc_arg_mem_size(const struct btf *btf,
+			       const struct btf_param *arg,
+			       const struct bpf_reg_state *reg,
+			       const char *name);
+
 #ifdef CONFIG_BPF_SYSCALL
 struct bpf_prog;
 

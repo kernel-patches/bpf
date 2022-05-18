@@ -6049,6 +6049,31 @@ static bool is_kfunc_arg_mem_size(const struct btf *btf,
 	return true;
 }
 
+bool btf_is_kfunc_arg_mem_size(const struct btf *btf,
+			       const struct btf_param *arg,
+			       const struct bpf_reg_state *reg,
+			       const char *name)
+{
+	int len, target_len = strlen(name);
+	const struct btf_type *t;
+	const char *param_name;
+
+	t = btf_type_skip_modifiers(btf, arg->type, NULL);
+	if (!btf_type_is_scalar(t) || reg->type != SCALAR_VALUE)
+		return false;
+
+	param_name = btf_name_by_offset(btf, arg->name_off);
+	if (str_is_empty(param_name))
+		return false;
+	len = strlen(param_name);
+	if (len != target_len)
+		return false;
+	if (strncmp(param_name, name, target_len))
+		return false;
+
+	return true;
+}
+
 static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    const struct btf *btf, u32 func_id,
 				    struct bpf_reg_state *regs,
@@ -6198,7 +6223,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 			if (reg->type == PTR_TO_BTF_ID) {
 				reg_btf = reg->btf;
 				reg_ref_id = reg->btf_id;
-				/* Ensure only one argument is referenced PTR_TO_BTF_ID */
+				/* Ensure only one argument is reference PTR_TO_BTF_ID or PTR_TO_MEM */
 				if (reg->ref_obj_id) {
 					if (ref_obj_id) {
 						bpf_log(log, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
@@ -6257,6 +6282,20 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 					}
 					i++;
 					continue;
+				}
+
+				if (rel && reg->ref_obj_id) {
+					/* Ensure only one argument is referenced PTR_TO_BTF_ID or PTR_TO_MEM */
+					if (ref_obj_id) {
+						bpf_log(log,
+							"verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
+							regno,
+							reg->ref_obj_id,
+							ref_obj_id);
+						return -EFAULT;
+					}
+					ref_regno = regno;
+					ref_obj_id = reg->ref_obj_id;
 				}
 			}
 
