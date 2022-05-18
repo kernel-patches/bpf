@@ -37,6 +37,12 @@ int BPF_PROG(hid_device_event, struct hid_bpf_ctx *hctx)
 	return 0;
 }
 
+SEC("fmod_ret/hid_bpf_rdesc_fixup")
+int BPF_PROG(hid_rdesc_fixup, struct hid_bpf_ctx *hctx)
+{
+	return 0;
+}
+
 static void release_prog(u64 prog)
 {
 	u8 *value;

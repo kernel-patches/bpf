@@ -64,6 +64,8 @@ static int hid_bpf_max_programs(enum hid_bpf_prog_type type)
 	switch (type) {
 	case HID_BPF_PROG_TYPE_DEVICE_EVENT:
 		return HID_BPF_MAX_PROGS_PER_DEV;
+	case HID_BPF_PROG_TYPE_RDESC_FIXUP:
+		return 1;
 	default:
 		return -EINVAL;
 	}
@@ -233,6 +235,10 @@ static void hid_bpf_release_progs(struct work_struct *work)
 				if (next->hdev == hdev && next->type == type)
 					next->hdev = NULL;
 			}
+
+			/* if type was rdesc fixup, reconnect device */
+			if (type == HID_BPF_PROG_TYPE_RDESC_FIXUP)
+				hid_bpf_reconnect(hdev);
 		}
 	}
 
@@ -568,6 +574,8 @@ int hid_bpf_preload_skel(void)
 	}
 
 	FIND_AND_STORE_BTF_ID(hid_device_event, HID_BPF_PROG_TYPE_DEVICE_EVENT);
+	FIND_AND_STORE_BTF_ID(hid_rdesc_fixup, HID_BPF_PROG_TYPE_RDESC_FIXUP);
+
 	ATTACH_AND_STORE_LINK(hid_tail_call);
 	ATTACH_AND_STORE_LINK(hid_prog_release);
 	ATTACH_AND_STORE_LINK(hid_free_inode);
