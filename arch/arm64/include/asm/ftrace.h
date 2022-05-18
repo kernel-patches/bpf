@@ -126,6 +126,16 @@ static inline bool arch_syscall_match_sym_name(const char *sym,
 	 */
 	return !strcmp(sym + 8, name);
 }
+
+#ifdef CONFIG_FTRACE_SELFTEST
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+
+#define trace_direct_tramp trace_direct_tramp
+extern void trace_direct_tramp(void);
+
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+#endif /* CONFIG_FTRACE_SELFTEST */
+
 #endif /* ifndef __ASSEMBLY__ */
 
 #endif /* __ASM_FTRACE_H */

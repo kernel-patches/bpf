@@ -357,3 +357,13 @@ SYM_CODE_START(return_to_handler)
 	ret
 SYM_CODE_END(return_to_handler)
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */
+
+#ifdef CONFIG_FTRACE_SELFTEST
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+SYM_FUNC_START(trace_direct_tramp)
+	mov x10, x30
+	mov x30, x9
+	ret x10
+SYM_FUNC_END(trace_direct_tramp)
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+#endif /* CONFIG_FTRACE_SELFTEST */
