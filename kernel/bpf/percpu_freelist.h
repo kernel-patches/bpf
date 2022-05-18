@@ -9,6 +9,7 @@
 struct pcpu_freelist_head {
 	struct pcpu_freelist_node *first;
 	raw_spinlock_t lock;
+	bool is_empty;
 };
 
 struct pcpu_freelist {
