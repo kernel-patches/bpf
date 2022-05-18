@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <bpf/bpf.h>
+#include <bpf/btf.h>
 
 #include "main.h"
 
@@ -32,6 +33,7 @@
 	"                        sock_release }"
 
 static unsigned int query_flags;
+static struct btf *btf_vmlinux;
 
 static enum bpf_attach_type parse_attach_type(const char *str)
 {
@@ -51,6 +53,7 @@ static int show_bpf_prog(int id, enum bpf_attach_type attach_type,
 			 int level)
 {
 	char prog_name[MAX_PROG_FULL_NAME];
+	const char *attach_btf_name = NULL;
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
 	int prog_fd;
@@ -62,6 +65,18 @@ static int show_bpf_prog(int id, enum bpf_attach_type attach_type,
 	if (bpf_obj_get_info_by_fd(prog_fd, &info, &info_len)) {
 		close(prog_fd);
 		return -1;
+	}
+
+	if (btf_vmlinux &&
+	    info.attach_btf_func_id < btf__type_cnt(btf_vmlinux)) {
+		/* Note, we ignore info.btf_id for now. There
+		 * is no good way to resolve btf_id to vmlinux
+		 * or module btf.
+		 */
+		const struct btf_type *t = btf__type_by_id(btf_vmlinux,
+							   info.attach_btf_func_id);
+		attach_btf_name = btf__name_by_offset(btf_vmlinux,
+						      t->name_off);
 	}
 
 	get_prog_full_name(&info, prog_fd, prog_name, sizeof(prog_name));
@@ -76,6 +91,10 @@ static int show_bpf_prog(int id, enum bpf_attach_type attach_type,
 		jsonw_string_field(json_wtr, "attach_flags",
 				   attach_flags_str);
 		jsonw_string_field(json_wtr, "name", prog_name);
+		if (attach_btf_name)
+			jsonw_string_field(json_wtr, "attach_btf_name", attach_btf_name);
+		jsonw_uint_field(json_wtr, "btf_id", info.btf_id);
+		jsonw_uint_field(json_wtr, "attach_btf_func_id", info.attach_btf_func_id);
 		jsonw_end_object(json_wtr);
 	} else {
 		printf("%s%-8u ", level ? "    " : "", info.id);
@@ -83,7 +102,12 @@ static int show_bpf_prog(int id, enum bpf_attach_type attach_type,
 			printf("%-15s", attach_type_name[attach_type]);
 		else
 			printf("type %-10u", attach_type);
-		printf(" %-15s %-15s\n", attach_flags_str, prog_name);
+		printf(" %-15s %-15s", attach_flags_str, prog_name);
+		if (attach_btf_name)
+			printf(" %-15s", attach_btf_name);
+		else if (info.attach_btf_func_id)
+			printf(" btf_id=%d btf_func_id=%d", info.btf_id, info.attach_btf_func_id);
+		printf("\n");
 	}
 
 	close(prog_fd);
@@ -125,40 +149,48 @@ static int cgroup_has_attached_progs(int cgroup_fd)
 static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 				   int level)
 {
+	LIBBPF_OPTS(bpf_prog_query_opts, p);
 	const char *attach_flags_str;
 	__u32 prog_ids[1024] = {0};
-	__u32 prog_cnt, iter;
-	__u32 attach_flags;
+	__u32 attach_prog_flags[1024] = {0};
 	char buf[32];
+	__u32 iter;
 	int ret;
 
-	prog_cnt = ARRAY_SIZE(prog_ids);
-	ret = bpf_prog_query(cgroup_fd, type, query_flags, &attach_flags,
-			     prog_ids, &prog_cnt);
+	p.query_flags = query_flags;
+	p.prog_cnt = ARRAY_SIZE(prog_ids);
+	p.prog_ids = prog_ids;
+
+	ret = bpf_prog_query_opts(cgroup_fd, type, &p);
 	if (ret)
 		return ret;
 
-	if (prog_cnt == 0)
+	if (p.prog_cnt == 0)
 		return 0;
 
-	switch (attach_flags) {
-	case BPF_F_ALLOW_MULTI:
-		attach_flags_str = "multi";
-		break;
-	case BPF_F_ALLOW_OVERRIDE:
-		attach_flags_str = "override";
-		break;
-	case 0:
-		attach_flags_str = "";
-		break;
-	default:
-		snprintf(buf, sizeof(buf), "unknown(%x)", attach_flags);
-		attach_flags_str = buf;
-	}
+	for (iter = 0; iter < p.prog_cnt; iter++) {
+		__u32 attach_flags;
 
-	for (iter = 0; iter < prog_cnt; iter++)
+		attach_flags = attach_prog_flags[iter] ?: p.attach_flags;
+
+		switch (attach_flags) {
+		case BPF_F_ALLOW_MULTI:
+			attach_flags_str = "multi";
+			break;
+		case BPF_F_ALLOW_OVERRIDE:
+			attach_flags_str = "override";
+			break;
+		case 0:
+			attach_flags_str = "";
+			break;
+		default:
+			snprintf(buf, sizeof(buf), "unknown(%x)", attach_flags);
+			attach_flags_str = buf;
+		}
+
 		show_bpf_prog(prog_ids[iter], type,
 			      attach_flags_str, level);
+	}
 
 	return 0;
 }
@@ -523,5 +555,6 @@ static const struct cmd cmds[] = {
 
 int do_cgroup(int argc, char **argv)
 {
+	btf_vmlinux = libbpf_find_kernel_btf();
 	return cmd_select(cmds, argc, argv, do_help);
 }
