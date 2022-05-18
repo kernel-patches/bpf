@@ -39,6 +39,10 @@ void test_bpf_nf_ct(int mode)
 	ASSERT_EQ(skel->bss->test_enonet_netns_id, -ENONET, "Test ENONET for bad but valid netns_id");
 	ASSERT_EQ(skel->bss->test_enoent_lookup, -ENOENT, "Test ENOENT for failed lookup");
 	ASSERT_EQ(skel->bss->test_eafnosupport, -EAFNOSUPPORT, "Test EAFNOSUPPORT for invalid len__tuple");
+	ASSERT_EQ(skel->bss->test_add_entry, 0, "Test for adding new entry");
+	ASSERT_EQ(skel->bss->test_succ_lookup, 0, "Test for successful lookup");
+	ASSERT_TRUE(skel->bss->test_delta_timeout > 9 && skel->bss->test_delta_timeout <= 10,
+		    "Test for ct timeout update");
 end:
 	test_bpf_nf__destroy(skel);
 }
