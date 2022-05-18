@@ -20,6 +20,8 @@
 #define BPF_MAX_VAR_SIZ	(1 << 29)
 /* size of type_str_buf in bpf_verifier. */
 #define TYPE_STR_BUF_LEN 64
+/* Maximum number of loops for bpf_loop */
+#define BPF_MAX_LOOPS	BIT(23)
 
 /* Liveness marks, used for registers and spilled-regs (in stack slots).
  * Read marks propagate upwards until they find a write mark; they record that
@@ -344,6 +346,16 @@ struct bpf_verifier_state_list {
 	int miss_cnt, hit_cnt;
 };
 
+struct bpf_loop_inline_state {
+	u32 initialized:1; /* set to true upon first entry */
+	u32 callback_is_constant:1; /* true if callback function
+				     * is the same at each call
+				     */
+	u32 flags_is_zero:1; /* true if flags register is zero at each call */
+	u32 callback_subprogno; /* valid when callback_is_constant == 1 */
+	s32 stack_base; /* stack offset for loop vars */
+};
+
 /* Possible states for alu_state member. */
 #define BPF_ALU_SANITIZE_SRC		(1U << 0)
 #define BPF_ALU_SANITIZE_DST		(1U << 1)
@@ -380,6 +392,10 @@ struct bpf_insn_aux_data {
 	bool sanitize_stack_spill; /* subject to Spectre v4 sanitation */
 	bool zext_dst; /* this insn zero extends dst reg */
 	u8 alu_state; /* used in combination with alu_limit */
+	/* if instruction is a call to bpf_loop this field tracks
+	 * the state of the relevant registers to take decision about inlining
+	 */
+	struct bpf_loop_inline_state loop_inline_state;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
