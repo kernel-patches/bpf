@@ -28,8 +28,8 @@ void test_fentry_fexit(void)
 
 	prog_fd = fexit_skel->progs.test1.prog_fd;
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
-	ASSERT_OK(err, "ipv6 test_run");
-	ASSERT_OK(topts.retval, "ipv6 test retval");
+	ASSERT_OK(err, "fentry_fexit test_run");
+	ASSERT_OK(topts.retval, "fentry_fexit test retval");
 
 	fentry_res = (__u64 *)fentry_skel->bss;
 	fexit_res = (__u64 *)fexit_skel->bss;
