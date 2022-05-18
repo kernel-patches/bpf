@@ -132,14 +132,109 @@ unsigned int __cgroup_bpf_run_lsm_current(const void *ctx,
 }
 
 #ifdef CONFIG_BPF_LSM
+struct list_head unused_bpf_lsm_atypes;
+struct list_head used_bpf_lsm_atypes;
+
+struct bpf_lsm_attach_type {
+	int index;
+	u32 btf_id;
+	int usecnt;
+	struct list_head atypes;
+	struct rcu_head rcu_head;
+};
+
+static int __init bpf_lsm_attach_type_init(void)
+{
+	struct bpf_lsm_attach_type *atype;
+	int i;
+
+	INIT_LIST_HEAD_RCU(&unused_bpf_lsm_atypes);
+	INIT_LIST_HEAD_RCU(&used_bpf_lsm_atypes);
+
+	for (i = 0; i < CGROUP_LSM_NUM; i++) {
+		atype = kzalloc(sizeof(*atype), GFP_KERNEL);
+		if (!atype)
+			continue;
+
+		atype->index = i;
+		list_add_tail_rcu(&atype->atypes, &unused_bpf_lsm_atypes);
+	}
+
+	return 0;
+}
+late_initcall(bpf_lsm_attach_type_init);
+
 static enum cgroup_bpf_attach_type bpf_lsm_attach_type_get(u32 attach_btf_id)
 {
-	return CGROUP_LSM_START + bpf_lsm_hook_idx(attach_btf_id);
+	struct bpf_lsm_attach_type *atype;
+
+	lockdep_assert_held(&cgroup_mutex);
+
+	list_for_each_entry_rcu(atype, &used_bpf_lsm_atypes, atypes) {
+		if (atype->btf_id != attach_btf_id)
+			continue;
+
+		atype->usecnt++;
+		return CGROUP_LSM_START + atype->index;
+	}
+
+	atype = list_first_or_null_rcu(&unused_bpf_lsm_atypes, struct bpf_lsm_attach_type, atypes);
+	if (!atype)
+		return -E2BIG;
+
+	list_del_rcu(&atype->atypes);
+	atype->btf_id = attach_btf_id;
+	atype->usecnt = 1;
+	list_add_tail_rcu(&atype->atypes, &used_bpf_lsm_atypes);
+
+	return CGROUP_LSM_START + atype->index;
+}
+
+static void bpf_lsm_attach_type_reclaim(struct rcu_head *head)
+{
+	struct bpf_lsm_attach_type *atype =
+		container_of(head, struct bpf_lsm_attach_type, rcu_head);
+
+	atype->btf_id = 0;
+	atype->usecnt = 0;
+	list_add_tail_rcu(&atype->atypes, &unused_bpf_lsm_atypes);
+}
+
+static void bpf_lsm_attach_type_put(u32 attach_btf_id)
+{
+	struct bpf_lsm_attach_type *atype;
+
+	lockdep_assert_held(&cgroup_mutex);
+
+	list_for_each_entry_rcu(atype, &used_bpf_lsm_atypes, atypes) {
+		if (atype->btf_id != attach_btf_id)
+			continue;
+
+		if (--atype->usecnt <= 0) {
+			list_del_rcu(&atype->atypes);
+			WARN_ON_ONCE(atype->usecnt < 0);
+
+			/* call_rcu here prevents atype reuse within
+			 * the same rcu grace period.
+			 * shim programs use __bpf_prog_enter_lsm_cgroup
+			 * which starts RCU read section.
+			 */
+			call_rcu(&atype->rcu_head, bpf_lsm_attach_type_reclaim);
+		}
+
+		return;
+	}
+
+	WARN_ON_ONCE(1);
 }
 #else
 static enum cgroup_bpf_attach_type bpf_lsm_attach_type_get(u32 attach_btf_id)
 {
 	return -EOPNOTSUPP;
+}
+
+static void bpf_lsm_attach_type_put(u32 attach_btf_id)
+{
 }
 #endif /* CONFIG_BPF_LSM */
 
@@ -224,6 +319,7 @@ static void bpf_cgroup_link_auto_detach(struct bpf_cgroup_link *link)
 static void bpf_cgroup_lsm_shim_release(struct bpf_prog *prog)
 {
 	bpf_trampoline_unlink_cgroup_shim(prog);
+	bpf_lsm_attach_type_put(prog->aux->attach_btf_id);
 }
 
 /**
@@ -619,27 +715,37 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 
 	progs = &cgrp->bpf.progs[atype];
 
-	if (!hierarchy_allows_attach(cgrp, atype))
-		return -EPERM;
+	if (!hierarchy_allows_attach(cgrp, atype)) {
+		err = -EPERM;
+		goto cleanup_attach_type;
+	}
 
-	if (!hlist_empty(progs) && cgrp->bpf.flags[atype] != saved_flags)
+	if (!hlist_empty(progs) && cgrp->bpf.flags[atype] != saved_flags) {
 		/* Disallow attaching non-overridable on top
 		 * of existing overridable in this cgroup.
 		 * Disallow attaching multi-prog if overridable or none
 		 */
-		return -EPERM;
+		err = -EPERM;
+		goto cleanup_attach_type;
+	}
 
-	if (prog_list_length(progs) >= BPF_CGROUP_MAX_PROGS)
-		return -E2BIG;
+	if (prog_list_length(progs) >= BPF_CGROUP_MAX_PROGS) {
+		err = -E2BIG;
+		goto cleanup_attach_type;
+	}
 
 	pl = find_attach_entry(progs, prog, link, replace_prog,
 			       flags & BPF_F_ALLOW_MULTI);
-	if (IS_ERR(pl))
-		return PTR_ERR(pl);
+	if (IS_ERR(pl)) {
+		err = PTR_ERR(pl);
+		goto cleanup_attach_type;
+	}
 
 	if (bpf_cgroup_storages_alloc(storage, new_storage, type,
-				      prog ? : link->link.prog, cgrp))
-		return -ENOMEM;
+				      prog ? : link->link.prog, cgrp)) {
+		err = -ENOMEM;
+		goto cleanup_attach_type;
+	}
 
 	if (pl) {
 		old_prog = pl->prog;
@@ -649,7 +755,8 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 		pl = kmalloc(sizeof(*pl), GFP_KERNEL);
 		if (!pl) {
 			bpf_cgroup_storages_free(new_storage);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto cleanup_attach_type;
 		}
 		if (hlist_empty(progs))
 			hlist_add_head(&pl->node, progs);
@@ -698,6 +805,10 @@ cleanup:
 		hlist_del(&pl->node);
 		kfree(pl);
 	}
+
+cleanup_attach_type:
+	if (type == BPF_LSM_CGROUP)
+		bpf_lsm_attach_type_put(new_prog->aux->attach_btf_id);
 	return err;
 }
 
