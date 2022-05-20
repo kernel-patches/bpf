@@ -5744,6 +5744,12 @@ found:
 			return -EACCES;
 		}
 	}
+	if (base_type(arg_type) == ARG_PTR_TO_MEM && (arg_type & DYNPTR_TYPE_LOCAL))
+		if (reg->type != PTR_TO_MAP_VALUE) {
+			verbose(env, "Unsupported reg type %s for arg type ARG_PTR_TO_MEM with DYNPTR_TYPE_LOCAL set\n",
+				reg_type_str(env, reg->type));
+			return -EACCES;
+		}
 
 	return 0;
 }
