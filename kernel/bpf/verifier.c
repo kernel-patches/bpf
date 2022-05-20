@@ -9921,6 +9921,10 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	struct bpf_map *map;
 	int err;
 
+	/* checks that this is not the second part of BPF_LD_IMM64, which is
+	 * skipped over during opcode check, but a JMP with invalid offset may
+	 * cause check_ld_imm() to be called upon it.
+	 */
 	if (BPF_SIZE(insn->code) != BPF_DW) {
 		verbose(env, "invalid BPF_LD_IMM insn\n");
 		return -EINVAL;
