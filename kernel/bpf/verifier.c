@@ -12350,7 +12350,8 @@ static bool bpf_map_is_cgroup_storage(struct bpf_map *map)
 		map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE);
 }
 
-/* find and rewrite pseudo imm in ld_imm64 instructions:
+/* check the opcodes of all instructions, and find and rewrite pseudo imm in
+ * ld_imm64 instructions:
  *
  * 1. if it accesses map FD, replace it with actual map pointer.
  * 2. if it accesses btf_id of a VAR, replace it with pointer to the var.
