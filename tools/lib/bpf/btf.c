@@ -489,8 +489,18 @@ static int determine_ptr_size(const struct btf *btf)
 		if (!name)
 			continue;
 
-		if (strcmp(name, "long int") == 0 ||
-		    strcmp(name, "long unsigned int") == 0) {
+		if (
+			strcmp(name, "long int") == 0 ||
+			strcmp(name, "int long") == 0 ||
+			strcmp(name, "unsigned long") == 0 ||
+			strcmp(name, "long unsigned") == 0 ||
+			strcmp(name, "unsigned long int") == 0 ||
+			strcmp(name, "unsigned int long") == 0 ||
+			strcmp(name, "long unsigned int") == 0 ||
+			strcmp(name, "long int unsigned") == 0 ||
+			strcmp(name, "int unsigned long") == 0 ||
+			strcmp(name, "int long unsigned") == 0
+		) {
 			if (t->size != 4 && t->size != 8)
 				continue;
 			return t->size;
