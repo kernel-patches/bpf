@@ -242,10 +242,16 @@ static inline void set_vm_flush_reset_perms(void *addr)
 	if (vm)
 		vm->flags |= VM_FLUSH_RESET_PERMS;
 }
+bool huge_vmalloc_supported(void);
 
 #else
 static inline void set_vm_flush_reset_perms(void *addr)
 {
+}
+
+static inline bool huge_vmalloc_supported(void)
+{
+	return false;
 }
 #endif
 
