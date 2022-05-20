@@ -1,5 +1,6 @@
+/* Note: BPF_LD_IMM64 is composed of two instructions of class BPF_LD */
 {
-	"test1 ld_imm64",
+	"test1 ld_imm64: reject JMP to 2nd instruction of BPF_LD_IMM64",
 	.insns = {
 	BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1),
 	BPF_LD_IMM64(BPF_REG_0, 0),
@@ -14,7 +15,7 @@
 	.result = REJECT,
 },
 {
-	"test2 ld_imm64",
+	"test2 ld_imm64: reject JMP to 2nd instruction of BPF_LD_IMM64",
 	.insns = {
 	BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1),
 	BPF_LD_IMM64(BPF_REG_0, 0),
@@ -28,7 +29,7 @@
 	.result = REJECT,
 },
 {
-	"test3 ld_imm64",
+	"test3 ld_imm64: reject incomplete BPF_LD_IMM64 instruction",
 	.insns = {
 	BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1),
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
@@ -42,7 +43,7 @@
 	.result = REJECT,
 },
 {
-	"test4 ld_imm64",
+	"test4 ld_imm64: reject incomplete BPF_LD_IMM64 instruction",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
 	BPF_EXIT_INSN(),
@@ -70,7 +71,7 @@
 	.retval = 1,
 },
 {
-	"test8 ld_imm64",
+	"test8 ld_imm64: reject 1st off!=0",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 1, 1),
 	BPF_RAW_INSN(0, 0, 0, 0, 1),
@@ -80,7 +81,7 @@
 	.result = REJECT,
 },
 {
-	"test9 ld_imm64",
+	"test9 ld_imm64: reject 2nd off!=0",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, 0, 0, 1, 1),
@@ -90,7 +91,7 @@
 	.result = REJECT,
 },
 {
-	"test10 ld_imm64",
+	"test10 ld_imm64: reject 2nd dst_reg!=0",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, BPF_REG_1, 0, 0, 1),
@@ -100,7 +101,7 @@
 	.result = REJECT,
 },
 {
-	"test11 ld_imm64",
+	"test11 ld_imm64: reject 2nd src_reg!=0",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 1),
 	BPF_RAW_INSN(0, 0, BPF_REG_1, 0, 1),
@@ -113,6 +114,7 @@
 	"test12 ld_imm64",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_1, 0),
+	/* BPF_REG_1 is interpreted as BPF_PSEUDO_MAP_FD */
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, BPF_REG_1, 0, 1),
 	BPF_RAW_INSN(0, 0, 0, 0, 0),
 	BPF_EXIT_INSN(),
@@ -121,7 +123,7 @@
 	.result = REJECT,
 },
 {
-	"test13 ld_imm64",
+	"test13 ld_imm64: 2nd src_reg!=0",
 	.insns = {
 	BPF_MOV64_IMM(BPF_REG_1, 0),
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, BPF_REG_1, 0, 1),
