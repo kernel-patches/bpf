@@ -4797,11 +4797,6 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 		return -EINVAL;
 	}
 
-	if (BPF_SIZE(insn->code) != BPF_W && BPF_SIZE(insn->code) != BPF_DW) {
-		verbose(env, "invalid atomic operand size\n");
-		return -EINVAL;
-	}
-
 	/* check src1 operand */
 	err = check_reg_arg(env, insn->src_reg, SRC_OP);
 	if (err)
@@ -8793,8 +8788,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			}
 		} else {
 			if (insn->src_reg != BPF_REG_0 || insn->off != 0 ||
-			    (insn->imm != 16 && insn->imm != 32 && insn->imm != 64) ||
-			    BPF_CLASS(insn->code) == BPF_ALU64) {
+			    (insn->imm != 16 && insn->imm != 32 && insn->imm != 64)) {
 				verbose(env, "BPF_END uses reserved fields\n");
 				return -EINVAL;
 			}
@@ -11874,9 +11868,8 @@ static int do_check(struct bpf_verifier_env *env)
 					return err;
 				env->insn_idx++;
 				continue;
-			}
-
-			if (BPF_MODE(insn->code) != BPF_MEM || insn->imm != 0) {
+			} else if (insn->imm != 0) {
+				/* check for mode is already done, so mode can only be BPF_MEM */
 				verbose(env, "BPF_STX uses reserved fields\n");
 				return -EINVAL;
 			}
@@ -11909,8 +11902,7 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 
 		} else if (class == BPF_ST) {
-			if (BPF_MODE(insn->code) != BPF_MEM ||
-			    insn->src_reg != BPF_REG_0) {
+			if (insn->src_reg != BPF_REG_0) {
 				verbose(env, "BPF_ST uses reserved fields\n");
 				return -EINVAL;
 			}
@@ -11944,8 +11936,7 @@ static int do_check(struct bpf_verifier_env *env)
 				    (insn->src_reg != BPF_REG_0 &&
 				     insn->src_reg != BPF_PSEUDO_CALL &&
 				     insn->src_reg != BPF_PSEUDO_KFUNC_CALL) ||
-				    insn->dst_reg != BPF_REG_0 ||
-				    class == BPF_JMP32) {
+				    insn->dst_reg != BPF_REG_0) {
 					verbose(env, "BPF_CALL uses reserved fields\n");
 					return -EINVAL;
 				}
@@ -11968,8 +11959,7 @@ static int do_check(struct bpf_verifier_env *env)
 				if (BPF_SRC(insn->code) != BPF_K ||
 				    insn->imm != 0 ||
 				    insn->src_reg != BPF_REG_0 ||
-				    insn->dst_reg != BPF_REG_0 ||
-				    class == BPF_JMP32) {
+				    insn->dst_reg != BPF_REG_0) {
 					verbose(env, "BPF_JA uses reserved fields\n");
 					return -EINVAL;
 				}
@@ -11981,8 +11971,7 @@ static int do_check(struct bpf_verifier_env *env)
 				if (BPF_SRC(insn->code) != BPF_K ||
 				    insn->imm != 0 ||
 				    insn->src_reg != BPF_REG_0 ||
-				    insn->dst_reg != BPF_REG_0 ||
-				    class == BPF_JMP32) {
+				    insn->dst_reg != BPF_REG_0) {
 					verbose(env, "BPF_EXIT uses reserved fields\n");
 					return -EINVAL;
 				}
@@ -14751,6 +14740,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 	if (ret)
 		goto skip_full_check;
 
+	/* checks for validity of opcodes */
 	ret = resolve_pseudo_ldimm64(env);
 	if (ret < 0)
 		goto skip_full_check;
