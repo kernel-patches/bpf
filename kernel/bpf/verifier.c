@@ -567,6 +567,8 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		strncpy(prefix, "rdonly_", 32);
 	if (type & MEM_ALLOC)
 		strncpy(prefix, "alloc_", 32);
+	if (type & MEM_DYNPTR)
+		strncpy(prefix, "dynptr_", 32);
 	if (type & MEM_USER)
 		strncpy(prefix, "user_", 32);
 	if (type & MEM_PERCPU)
@@ -5640,6 +5642,7 @@ static const struct bpf_reg_types mem_types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_MEM,
 		PTR_TO_MEM | MEM_ALLOC,
+		PTR_TO_MEM | MEM_DYNPTR,
 		PTR_TO_BUF,
 	},
 };
@@ -5803,6 +5806,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_MEM:
 	case PTR_TO_MEM | MEM_RDONLY:
 	case PTR_TO_MEM | MEM_ALLOC:
+	case PTR_TO_MEM | MEM_DYNPTR:
 	case PTR_TO_BUF:
 	case PTR_TO_BUF | MEM_RDONLY:
 	case SCALAR_VALUE:
@@ -5835,6 +5839,14 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		break;
 	}
 	return __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
+}
+
+static u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi = get_spi(reg->off);
+
+	return state->stack[spi].spilled_ptr.id;
 }
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
@@ -7383,6 +7395,21 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		regs[BPF_REG_0].id = id;
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = id;
+	} else if (func_id == BPF_FUNC_dynptr_data) {
+		int dynptr_id = 0, i;
+
+		/* Find the id of the dynptr we're acquiring a reference to */
+		for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
+			if (arg_type_is_dynptr(fn->arg_type[i])) {
+				if (dynptr_id) {
+					verbose(env, "verifier internal error: multiple dynptr args in func\n");
+					return -EFAULT;
+				}
+				dynptr_id = stack_slot_get_id(env, &regs[BPF_REG_1 + i]);
+			}
+		}
+		/* For release_reference() */
+		regs[BPF_REG_0].ref_obj_id = dynptr_id;
 	}
 
 	do_refine_retval_range(regs, fn->ret_type, func_id, &meta);
