@@ -26,6 +26,11 @@ unsigned int arch_mod_section_prepend(struct module *mod, unsigned int section);
    sections.  Returns NULL on failure. */
 void *module_alloc(unsigned long size);
 
+/* Allocator used for allocating memory in module memory space. If size is
+ * greater than PMD_SIZE, allow using huge pages. Returns NULL on failure.
+ */
+void *module_alloc_huge(unsigned long size);
+
 /* Free memory returned from module_alloc. */
 void module_memfree(void *module_region);
 
