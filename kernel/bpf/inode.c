@@ -257,6 +257,9 @@ static int map_seq_show(struct seq_file *m, void *v)
 	if (unlikely(v == SEQ_START_TOKEN)) {
 		seq_puts(m, "# WARNING!! The output is for debug purpose only\n");
 		seq_puts(m, "# WARNING!! The output format will change\n");
+		seq_printf(m, "# type: %d, key_size: %d, value_size: %d, max_entries: %d, id: %d\n",
+			   map->map_type, map->key_size, map->value_size, map->max_entries,
+			   map->id);
 	} else {
 		map->ops->map_seq_show_elem(map, key, m);
 	}
