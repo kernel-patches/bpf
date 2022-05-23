@@ -850,7 +850,7 @@ codegen_maps_skeleton(struct bpf_object *obj, size_t map_cnt, bool mmaped)
 			i, bpf_map__name(map), i, ident);
 		/* memory-mapped internal maps */
 		if (mmaped && is_internal_mmapable_map(map, ident, sizeof(ident))) {
-			printf("\ts->maps[%zu].mmaped = (void **)&obj->%s;\n",
+			printf("\ts->maps[%zu].mmaped = (void **)&obj->maps.%s;\n",
 				i, ident);
 		}
 		i++;
