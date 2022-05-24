@@ -470,12 +470,25 @@ const struct btf_type *btf__type_by_id(const struct btf *btf, __u32 type_id)
 	return btf_type_by_id((struct btf *)btf, type_id);
 }
 
+static const char * const long_aliases[] = {
+	"long",
+	"long int",
+	"int long",
+	"unsigned long",
+	"long unsigned",
+	"unsigned long int",
+	"unsigned int long",
+	"long unsigned int",
+	"long int unsigned",
+	"int unsigned long",
+	"int long unsigned",
+};
+
 static int determine_ptr_size(const struct btf *btf)
 {
 	const struct btf_type *t;
 	const char *name;
-	int i, n;
-
+	int i, j, n;
 	if (btf->base_btf && btf->base_btf->ptr_sz > 0)
 		return btf->base_btf->ptr_sz;
 
@@ -489,12 +502,12 @@ static int determine_ptr_size(const struct btf *btf)
 		if (!name)
 			continue;
 
-		if (strcmp(name, "long int") == 0 ||
-		    strcmp(name, "long unsigned int") == 0) {
-			if (t->size != 4 && t->size != 8)
-				continue;
-			return t->size;
-		}
+		if (t->size != 4 && t->size != 8)
+			continue;
+
+		for (j = 0; j < ARRAY_SIZE(long_aliases); j++)
+			if (!strcmp(name, long_aliases[j]))
+				return t->size;
 	}
 
 	return -1;
