@@ -51,12 +51,17 @@
 #endif
 
 #define MAX_INSNS	BPF_MAXINSNS
+#define MAX_EXPECTED_INSNS	32
+#define MAX_UNEXPECTED_INSNS	32
 #define MAX_TEST_INSNS	1000000
 #define MAX_FIXUPS	8
 #define MAX_NR_MAPS	23
 #define MAX_TEST_RUNS	8
 #define POINTER_VALUE	0xcafe4all
 #define TEST_DATA_LEN	64
+
+#define INSN_OFF_MASK	((s16)0xFFFF)
+#define INSN_IMM_MASK	((s32)0xFFFFFFFF)
 
 #define F_NEEDS_EFFICIENT_UNALIGNED_ACCESS	(1 << 0)
 #define F_LOAD_WITH_STRICT_ALIGNMENT		(1 << 1)
@@ -79,6 +84,15 @@ struct bpf_test {
 	const char *descr;
 	struct bpf_insn	insns[MAX_INSNS];
 	struct bpf_insn	*fill_insns;
+	/* If specified, test engine looks for this sequence of
+	 * instructions in the BPF program after loading. Allows to
+	 * test rewrites applied by verifier.  Use values
+	 * INSN_OFF_MASK and INSN_IMM_MASK to mask `off` and `imm`
+	 * fields if content does not matter.  The test case fails if
+	 * specified instructions are not found.
+	 */
+	struct bpf_insn	expected_insns[MAX_EXPECTED_INSNS];
+	struct bpf_insn	unexpected_insns[MAX_UNEXPECTED_INSNS];
 	int fixup_map_hash_8b[MAX_FIXUPS];
 	int fixup_map_hash_48b[MAX_FIXUPS];
 	int fixup_map_hash_16b[MAX_FIXUPS];
@@ -1126,6 +1140,171 @@ static bool cmp_str_seq(const char *log, const char *exp)
 	return true;
 }
 
+static __u32 roundup_u32(__u32 number, __u32 divisor)
+{
+	if (number % divisor == 0)
+		return number / divisor;
+	else
+		return number / divisor + 1;
+}
+
+static int get_xlated_program(int fd_prog, struct bpf_insn **buf, int *cnt)
+{
+	struct bpf_prog_info info = {};
+	__u32 info_len = sizeof(info);
+	int err = 0;
+
+	if (bpf_obj_get_info_by_fd(fd_prog, &info, &info_len)) {
+		err = errno;
+		perror("bpf_obj_get_info_by_fd failed");
+		goto out;
+	}
+
+	__u32 xlated_prog_len = info.xlated_prog_len;
+	*cnt = roundup_u32(xlated_prog_len, sizeof(**buf));
+	*buf = calloc(*cnt, sizeof(**buf));
+	if (!buf) {
+		err = -ENOMEM;
+		perror("can't allocate xlated program buffer");
+		goto out;
+	}
+
+	bzero(&info, sizeof(info));
+	info.xlated_prog_len = xlated_prog_len;
+	info.xlated_prog_insns = (__u64)*buf;
+
+	if (bpf_obj_get_info_by_fd(fd_prog, &info, &info_len)) {
+		err = errno;
+		perror("second bpf_obj_get_info_by_fd failed");
+		goto out_free_buf;
+	}
+
+	goto out;
+
+ out_free_buf:
+	free(*buf);
+ out:
+	return err;
+}
+
+static bool is_null_insn(struct bpf_insn *insn)
+{
+	struct bpf_insn null_insn = {};
+
+	return memcmp(insn, &null_insn, sizeof(null_insn)) == 0;
+}
+
+static int null_terminated_insn_len(struct bpf_insn *seq, int max_len)
+{
+	for (int i = 0; i < max_len; ++i) {
+		if (is_null_insn(&seq[i]))
+			return i;
+	}
+	return max_len;
+}
+
+static bool compare_masked_insn(struct bpf_insn *orig, struct bpf_insn *masked)
+{
+	struct bpf_insn orig_masked;
+
+	memcpy(&orig_masked, orig, sizeof(orig_masked));
+	if (masked->imm == INSN_IMM_MASK)
+		orig_masked.imm = INSN_IMM_MASK;
+	if (masked->off == INSN_OFF_MASK)
+		orig_masked.off = INSN_OFF_MASK;
+
+	return memcmp(&orig_masked, masked, sizeof(orig_masked)) == 0;
+}
+
+static int find_insn_subseq(struct bpf_insn *seq, struct bpf_insn *subseq,
+			    int seq_len, int subseq_len)
+{
+	if (subseq_len > seq_len)
+		return -1;
+
+	for (int i = 0; i < seq_len - subseq_len + 1; ++i) {
+		bool found = true;
+
+		for (int j = 0; j < subseq_len; ++j) {
+			if (!compare_masked_insn(&seq[i + j], &subseq[j])) {
+				found = false;
+				break;
+			}
+		}
+		if (found)
+			return i;
+	}
+
+	return -1;
+}
+
+static void print_insn(struct bpf_insn *buf, int cnt,
+		       int mark_start, int mark_count)
+{
+	printf("  addr  op d s off  imm\n");
+	for (int i = 0; i < cnt; ++i) {
+		bool at_mark = (mark_start >= 0) &&
+			(i >= mark_start) &&
+			(i < mark_start + mark_count);
+		char *mark = at_mark ? "*" : " ";
+
+		struct bpf_insn *insn = &buf[i];
+
+		printf(" %s%04x: %02x %1x %x %04hx %08x\n",
+		       mark, i, insn->code, insn->dst_reg,
+		       insn->src_reg, insn->off, insn->imm);
+	}
+}
+
+static bool check_xlated_program(struct bpf_test *test, int fd_prog)
+{
+	struct bpf_insn *buf;
+	int cnt;
+	bool result = true;
+	int expected_insn_cnt =
+		null_terminated_insn_len(test->expected_insns,
+					 ARRAY_SIZE(test->expected_insns));
+	int unexpected_insn_cnt =
+		null_terminated_insn_len(test->unexpected_insns,
+					 ARRAY_SIZE(test->unexpected_insns));
+
+	if (expected_insn_cnt == 0 && unexpected_insn_cnt == 0)
+		goto out;
+
+	if (get_xlated_program(fd_prog, &buf, &cnt)) {
+		printf("FAIL: can't get xlated program\n");
+		result = false;
+		goto out;
+	}
+
+	int expected_idx = find_insn_subseq(buf, test->expected_insns,
+					    cnt, expected_insn_cnt);
+	int unexpected_idx = find_insn_subseq(buf, test->unexpected_insns,
+					      cnt, unexpected_insn_cnt);
+
+	if (expected_insn_cnt > 0 && expected_idx < 0) {
+		printf("FAIL: can't find expected subsequence of instructions\n");
+		result = false;
+		if (verbose) {
+			printf("Program:\n");
+			print_insn(buf, cnt, -1, -1);
+			printf("Expected subsequence:\n");
+			print_insn(test->expected_insns, expected_insn_cnt, -1, -1);
+		}
+	}
+
+	if (unexpected_insn_cnt > 0 && unexpected_idx >= 0) {
+		printf("FAIL: found unexpected subsequence of instructions\n");
+		result = false;
+		if (verbose)
+			print_insn(buf, cnt, unexpected_idx, unexpected_insn_cnt);
+	}
+
+	free(buf);
+ out:
+	return result;
+}
+
 static void do_test_single(struct bpf_test *test, bool unpriv,
 			   int *passes, int *errors)
 {
@@ -1261,6 +1440,9 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 
 	if (verbose)
 		printf(", verifier log:\n%s", bpf_vlog);
+
+	if (!check_xlated_program(test, fd_prog))
+		goto fail_log;
 
 	run_errs = 0;
 	run_successes = 0;
