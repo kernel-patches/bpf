@@ -16,9 +16,11 @@ int pcpu_freelist_init(struct pcpu_freelist *s)
 
 		raw_spin_lock_init(&head->lock);
 		head->first = NULL;
+		head->is_empty = true;
 	}
 	raw_spin_lock_init(&s->extralist.lock);
 	s->extralist.first = NULL;
+	s->extralist.is_empty = true;
 	return 0;
 }
 
@@ -32,6 +34,8 @@ static inline void pcpu_freelist_push_node(struct pcpu_freelist_head *head,
 {
 	node->next = head->first;
 	head->first = node;
+	if (head->is_empty)
+		head->is_empty = false;
 }
 
 static inline void ___pcpu_freelist_push(struct pcpu_freelist_head *head,
@@ -130,14 +134,19 @@ static struct pcpu_freelist_node *___pcpu_freelist_pop(struct pcpu_freelist *s)
 	orig_cpu = cpu = raw_smp_processor_id();
 	while (1) {
 		head = per_cpu_ptr(s->freelist, cpu);
+		if (head->is_empty)
+			goto next_cpu;
 		raw_spin_lock(&head->lock);
 		node = head->first;
 		if (node) {
 			head->first = node->next;
+			if (!head->first)
+				head->is_empty = true;
 			raw_spin_unlock(&head->lock);
 			return node;
 		}
 		raw_spin_unlock(&head->lock);
+next_cpu:
 		cpu = cpumask_next(cpu, cpu_possible_mask);
 		if (cpu >= nr_cpu_ids)
 			cpu = 0;
@@ -146,10 +155,15 @@ static struct pcpu_freelist_node *___pcpu_freelist_pop(struct pcpu_freelist *s)
 	}
 
 	/* per cpu lists are all empty, try extralist */
+	if (s->extralist.is_empty)
+		return NULL;
 	raw_spin_lock(&s->extralist.lock);
 	node = s->extralist.first;
-	if (node)
+	if (node) {
 		s->extralist.first = node->next;
+		if (!s->extralist.first)
+			s->extralist.is_empty = true;
+	}
 	raw_spin_unlock(&s->extralist.lock);
 	return node;
 }
@@ -164,15 +178,20 @@ ___pcpu_freelist_pop_nmi(struct pcpu_freelist *s)
 	orig_cpu = cpu = raw_smp_processor_id();
 	while (1) {
 		head = per_cpu_ptr(s->freelist, cpu);
+		if (head->is_empty)
+			goto next_cpu;
 		if (raw_spin_trylock(&head->lock)) {
 			node = head->first;
 			if (node) {
 				head->first = node->next;
+				if (!head->first)
+					head->is_empty = true;
 				raw_spin_unlock(&head->lock);
 				return node;
 			}
 			raw_spin_unlock(&head->lock);
 		}
+next_cpu:
 		cpu = cpumask_next(cpu, cpu_possible_mask);
 		if (cpu >= nr_cpu_ids)
 			cpu = 0;
@@ -181,11 +200,14 @@ ___pcpu_freelist_pop_nmi(struct pcpu_freelist *s)
 	}
 
 	/* cannot pop from per cpu lists, try extralist */
-	if (!raw_spin_trylock(&s->extralist.lock))
+	if (s->extralist.is_empty || !raw_spin_trylock(&s->extralist.lock))
 		return NULL;
 	node = s->extralist.first;
-	if (node)
+	if (node) {
 		s->extralist.first = node->next;
+		if (!s->extralist.first)
+			s->extralist.is_empty = true;
+	}
 	raw_spin_unlock(&s->extralist.lock);
 	return node;
 }
