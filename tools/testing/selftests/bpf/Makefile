@@ -23,7 +23,8 @@ BPF_GCC		?= $(shell command -v bpf-gcc;)
 SAN_CFLAGS	?=
 CFLAGS += -g -O0 -rdynamic -Wall -Werror $(GENFLAGS) $(SAN_CFLAGS)	\
 	  -I$(CURDIR) -I$(INCLUDE_DIR) -I$(GENDIR) -I$(LIBDIR)		\
-	  -I$(TOOLSINCDIR) -I$(APIDIR) -I$(OUTPUT)
+	  -I$(TOOLSINCDIR) -I$(APIDIR) -I$(OUTPUT) -fno-omit-frame-pointer
+
 LDFLAGS += $(SAN_CFLAGS)
 LDLIBS += -lelf -lz -lrt -lpthread
 

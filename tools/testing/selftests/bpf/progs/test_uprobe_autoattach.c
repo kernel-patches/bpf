@@ -27,11 +27,19 @@ int handle_uprobe_noautoattach(struct pt_regs *ctx)
 	return 0;
 }
 
+__u64 uprobe_stack[128];
+__u64 uretprobe_stack[128];
+int uprobe_stack_sz, uretprobe_stack_sz;
+
 SEC("uprobe//proc/self/exe:autoattach_trigger_func")
 int handle_uprobe_byname(struct pt_regs *ctx)
 {
 	uprobe_byname_parm1 = PT_REGS_PARM1_CORE(ctx);
 	uprobe_byname_ran = 1;
+
+	uprobe_stack_sz = bpf_get_stack(ctx,
+					uprobe_stack, sizeof(uprobe_stack),
+					BPF_F_USER_STACK);
 	return 0;
 }
 
@@ -40,6 +48,9 @@ int handle_uretprobe_byname(struct pt_regs *ctx)
 {
 	uretprobe_byname_rc = PT_REGS_RC_CORE(ctx);
 	uretprobe_byname_ran = 2;
+	uretprobe_stack_sz = bpf_get_stack(ctx,
+					   uretprobe_stack, sizeof(uretprobe_stack),
+					   BPF_F_USER_STACK);
 	return 0;
 }
 

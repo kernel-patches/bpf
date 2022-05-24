@@ -10,6 +10,7 @@ static noinline int autoattach_trigger_func(int arg)
 	asm volatile ("");
 	return arg + 1;
 }
+static noinline int autoattach_trigger_func_post(int arg) { return 0; }
 
 void test_uprobe_autoattach(void)
 {
@@ -17,6 +18,7 @@ void test_uprobe_autoattach(void)
 	int trigger_val = 100, trigger_ret;
 	size_t malloc_sz = 1;
 	char *mem;
+	int i;
 
 	skel = test_uprobe_autoattach__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
@@ -29,6 +31,18 @@ void test_uprobe_autoattach(void)
 
 	/* trigger & validate uprobe & uretprobe */
 	trigger_ret = autoattach_trigger_func(trigger_val);
+
+	printf("FN ADDR %p - %p\n", autoattach_trigger_func, autoattach_trigger_func_post);
+	printf("UPROBE SZ %d (CNT %d)      URETPROBE SZ %d (CNT %d)\n",
+		skel->bss->uprobe_stack_sz,
+		skel->bss->uprobe_stack_sz / 8,
+		skel->bss->uretprobe_stack_sz,
+		skel->bss->uretprobe_stack_sz / 8);
+	for (i = 0; i < skel->bss->uprobe_stack_sz / 8; i++) {
+		printf("UPROBE %-18p URETPROBE %-18p\n",
+			(void *)skel->bss->uprobe_stack[i],
+			(void *)skel->bss->uretprobe_stack[i]);
+	}
 
 	skel->bss->test_pid = getpid();
 
