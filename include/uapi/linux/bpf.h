@@ -1226,6 +1226,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Verify map value (fmt: ver data+sig size(be32), ver data, sig, unver data) */
+	BPF_F_VERIFY_ELEM	= (1U << 13)
 };
 
 /* Flags for BPF_PROG_QUERY. */

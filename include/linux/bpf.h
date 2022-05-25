@@ -1825,6 +1825,8 @@ static inline bool unprivileged_ebpf_enabled(void)
 	return !sysctl_unprivileged_bpf_disabled;
 }
 
+int bpf_map_verify_value_sig(const void *mod, size_t modlen, bool verify);
+
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -2034,6 +2036,11 @@ static inline bool unprivileged_ebpf_enabled(void)
 	return false;
 }
 
+static inline int bpf_map_verify_value_sig(const void *mod, size_t modlen,
+					   bool verify)
+{
+	return -EOPNOTSUPP;
+}
 #endif /* CONFIG_BPF_SYSCALL */
 
 void __bpf_free_used_btfs(struct bpf_prog_aux *aux,

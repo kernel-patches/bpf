@@ -35,6 +35,8 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
+#include <linux/verification.h>
+#include <linux/module_signature.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -179,6 +181,13 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 				void *value, __u64 flags)
 {
 	int err;
+
+	if (map->map_flags & BPF_F_VERIFY_ELEM) {
+		err = bpf_map_verify_value_sig(value, bpf_map_value_size(map),
+					       true);
+		if (err < 0)
+			return err;
+	}
 
 	/* Need to create a kthread, thus must support schedule */
 	if (bpf_map_is_dev_bound(map)) {
@@ -1057,6 +1066,11 @@ static int map_create(union bpf_attr *attr)
 	if (err)
 		return -EINVAL;
 
+	/* Allow signed data to go through update/push methods only. */
+	if ((attr->map_flags & BPF_F_VERIFY_ELEM) &&
+	    (attr->map_flags & BPF_F_MMAPABLE))
+		return -EINVAL;
+
 	if (attr->btf_vmlinux_value_type_id) {
 		if (attr->map_type != BPF_MAP_TYPE_STRUCT_OPS ||
 		    attr->btf_key_type_id || attr->btf_value_type_id)
@@ -1353,6 +1367,62 @@ err_put:
 	return err;
 }
 
+int bpf_map_verify_value_sig(const void *mod, size_t modlen, bool verify)
+{
+	const size_t marker_len = strlen(MODULE_SIG_STRING);
+	struct module_signature ms;
+	size_t sig_len;
+	u32 _modlen;
+	int ret;
+
+	/*
+	 * Format of mod:
+	 *
+	 * verified data+sig size (be32), verified data, sig, unverified data
+	 */
+	if (modlen <= sizeof(u32))
+		return -ENOENT;
+
+	_modlen = be32_to_cpu(*(u32 *)(mod));
+
+	if (_modlen > modlen - sizeof(u32))
+		return -EINVAL;
+
+	modlen = _modlen;
+	mod += sizeof(u32);
+
+	if (modlen <= marker_len)
+		return -ENOENT;
+
+	if (memcmp(mod + modlen - marker_len, MODULE_SIG_STRING, marker_len))
+		return -ENOENT;
+
+	modlen -= marker_len;
+
+	if (modlen <= sizeof(ms))
+		return -EBADMSG;
+
+	memcpy(&ms, mod + (modlen - sizeof(ms)), sizeof(ms));
+
+	ret = mod_check_sig(&ms, modlen, "bpf_map_value");
+	if (ret)
+		return ret;
+
+	sig_len = be32_to_cpu(ms.sig_len);
+	modlen -= sig_len + sizeof(ms);
+
+	if (verify) {
+		ret = verify_pkcs7_signature(mod, modlen, mod + modlen, sig_len,
+					     VERIFY_USE_SECONDARY_KEYRING,
+					     VERIFYING_UNSPECIFIED_SIGNATURE,
+					     NULL, NULL);
+		if (ret < 0)
+			return ret;
+	}
+
+	return modlen;
+}
+EXPORT_SYMBOL_GPL(bpf_map_verify_value_sig);
 
 #define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
 
