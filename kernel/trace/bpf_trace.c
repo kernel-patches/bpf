@@ -2385,8 +2385,8 @@ static u64 bpf_kprobe_multi_entry_ip(struct bpf_run_ctx *ctx)
 }
 
 static int
-kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
-			   unsigned long entry_ip, struct pt_regs *regs)
+__kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
+			     unsigned long entry_ip, struct pt_regs *regs)
 {
 	struct bpf_kprobe_multi_run_ctx run_ctx = {
 		.link = link,
@@ -2395,21 +2395,28 @@ kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
 	struct bpf_run_ctx *old_run_ctx;
 	int err;
 
-	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
-		err = 0;
-		goto out;
-	}
-
-	migrate_disable();
-	rcu_read_lock();
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	err = bpf_prog_run(link->link.prog, regs);
 	bpf_reset_run_ctx(old_run_ctx);
+	return err;
+}
+
+static int
+kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
+			   unsigned long entry_ip, struct pt_regs *regs)
+{
+	struct bpf_prog *prog = link->link.prog;
+	int err = 0;
+
+	migrate_disable();
+	rcu_read_lock();
+
+	if (likely(__this_cpu_inc_return(*(prog->active)) == 1))
+		err = __kprobe_multi_link_prog_run(link, entry_ip, regs);
+
+	__this_cpu_dec(*(prog->active));
 	rcu_read_unlock();
 	migrate_enable();
-
- out:
-	__this_cpu_dec(bpf_prog_active);
 	return err;
 }
 
