@@ -1575,6 +1575,19 @@ const struct bpf_func_proto bpf_dynptr_data_proto = {
 	.arg3_type	= ARG_CONST_ALLOC_SIZE_OR_ZERO,
 };
 
+BPF_CALL_2(bpf_map_verified_data_size, const void *, value, u32, value_size)
+{
+	return bpf_map_verify_value_sig(value, value_size, false);
+}
+
+const struct bpf_func_proto bpf_map_verified_data_size_proto = {
+	.func         = bpf_map_verified_data_size,
+	.gpl_only     = false,
+	.ret_type     = RET_INTEGER,
+	.arg1_type    = ARG_PTR_TO_MEM,
+	.arg2_type    = ARG_CONST_SIZE_OR_ZERO,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_get_current_task_btf_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
@@ -1643,6 +1656,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_dynptr_write_proto;
 	case BPF_FUNC_dynptr_data:
 		return &bpf_dynptr_data_proto;
+	case BPF_FUNC_bpf_map_verified_data_size:
+		return &bpf_map_verified_data_size_proto;
 	default:
 		break;
 	}

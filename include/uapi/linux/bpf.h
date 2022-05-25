@@ -5252,6 +5252,13 @@ union bpf_attr {
  *		Pointer to the underlying dynptr data, NULL if the dynptr is
  *		read-only, if the dynptr is invalid, or if the offset and length
  *		is out of bounds.
+ *
+ * long bpf_map_verified_data_size(const void *value, u32 value_size)
+ *	Description
+ *		Parse signed map value in *value* with size *value_size*.
+ *	Return
+ *		The size of verified data on success, or a negative error in
+ *		case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5458,6 +5465,7 @@ union bpf_attr {
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
+	FN(bpf_map_verified_data_size),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
