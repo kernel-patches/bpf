@@ -2055,16 +2055,11 @@ void nf_conntrack_alter_reply(struct nf_conn *ct,
 }
 EXPORT_SYMBOL_GPL(nf_conntrack_alter_reply);
 
-/* Refresh conntrack for this many jiffies and do accounting if do_acct is 1 */
-void __nf_ct_refresh_acct(struct nf_conn *ct,
-			  enum ip_conntrack_info ctinfo,
-			  const struct sk_buff *skb,
-			  u32 extra_jiffies,
-			  bool do_acct)
+void nf_ct_refresh_timeout(struct nf_conn *ct, u32 extra_jiffies)
 {
 	/* Only update if this is not a fixed timeout */
 	if (test_bit(IPS_FIXED_TIMEOUT_BIT, &ct->status))
-		goto acct;
+		return;
 
 	/* If not in hash table, timer will not be active yet */
 	if (nf_ct_is_confirmed(ct))
@@ -2072,7 +2067,17 @@ void __nf_ct_refresh_acct(struct nf_conn *ct,
 
 	if (READ_ONCE(ct->timeout) != extra_jiffies)
 		WRITE_ONCE(ct->timeout, extra_jiffies);
-acct:
+}
+
+/* Refresh conntrack for this many jiffies and do accounting if do_acct is 1 */
+void __nf_ct_refresh_acct(struct nf_conn *ct,
+			  enum ip_conntrack_info ctinfo,
+			  const struct sk_buff *skb,
+			  u32 extra_jiffies,
+			  bool do_acct)
+{
+	nf_ct_refresh_timeout(ct, extra_jiffies);
+
 	if (do_acct)
 		nf_ct_acct_update(ct, CTINFO2DIR(ctinfo), skb->len);
 }
