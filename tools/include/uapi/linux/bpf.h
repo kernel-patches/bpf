@@ -5154,7 +5154,7 @@ union bpf_attr {
  *		**-EOPNOTSUP** if the hash calculation failed or **-EINVAL** if
  *		invalid arguments are passed.
  *
- * void *bpf_kptr_xchg(void *map_value, void *ptr)
+ * void *bpf_kptr_xchg(void *map_value, const void *ptr)
  *	Description
  *		Exchange kptr at pointer *map_value* with *ptr*, and return the
  *		old value. *ptr* can be NULL, otherwise it must be a referenced

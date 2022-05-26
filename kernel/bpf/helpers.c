@@ -1390,7 +1390,7 @@ out:
 	kfree(t);
 }
 
-BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
+BPF_CALL_2(bpf_kptr_xchg, void *, map_value, const void *, ptr)
 {
 	unsigned long *kptr = map_value;
 
@@ -1408,7 +1408,7 @@ const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.ret_type     = RET_PTR_TO_BTF_ID_OR_NULL,
 	.ret_btf_id   = BPF_PTR_POISON,
 	.arg1_type    = ARG_PTR_TO_KPTR,
-	.arg2_type    = ARG_PTR_TO_BTF_ID_OR_NULL | OBJ_RELEASE,
+	.arg2_type    = ARG_PTR_TO_BTF_ID_OR_NULL | MEM_RDONLY | OBJ_RELEASE,
 	.arg2_btf_id  = BPF_PTR_POISON,
 };
 

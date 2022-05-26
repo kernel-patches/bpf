@@ -3174,6 +3174,7 @@ struct btf_field_info {
 	u32 type_id;
 	u32 off;
 	enum bpf_kptr_type type;
+	int flags;
 };
 
 static int btf_find_struct(const struct btf *btf, const struct btf_type *t,
@@ -3191,6 +3192,7 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 			 u32 off, int sz, struct btf_field_info *info)
 {
 	enum bpf_kptr_type type;
+	bool is_const = false;
 	u32 res_id;
 
 	/* For PTR, sz is always == 8 */
@@ -3211,7 +3213,13 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 		return -EINVAL;
 
 	/* Get the base type */
-	t = btf_type_skip_modifiers(btf, t->type, &res_id);
+	do {
+		res_id = t->type;
+		t = btf_type_by_id(btf, res_id);
+		if (btf_type_is_const(t))
+			is_const = true;
+	} while (btf_type_is_modifier(t));
+
 	/* Only pointer to struct is allowed */
 	if (!__btf_type_is_struct(t))
 		return -EINVAL;
@@ -3219,6 +3227,7 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 	info->type_id = res_id;
 	info->off = off;
 	info->type = type;
+	info->flags = is_const ? BPF_KPTR_F_RDONLY : 0;
 	return BTF_FIELD_FOUND;
 }
 
@@ -3473,6 +3482,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 		tab->off[i].kptr.btf_id = id;
 		tab->off[i].kptr.btf = kernel_btf;
 		tab->off[i].kptr.module = mod;
+		tab->off[i].kptr.flags = info_arr[i].flags;
 	}
 	tab->nr_off = nr_off;
 	return tab;
@@ -5597,7 +5607,14 @@ error:
 					tmp_flag = MEM_PERCPU;
 			}
 
-			stype = btf_type_skip_modifiers(btf, mtype->type, &id);
+			stype = mtype;
+			do {
+				id = stype->type;
+				stype = btf_type_by_id(btf, id);
+				if (btf_type_is_const(stype))
+					tmp_flag |= MEM_RDONLY;
+			} while (btf_type_is_modifier(stype));
+
 			if (btf_type_is_struct(stype)) {
 				*next_btf_id = id;
 				*flag = tmp_flag;

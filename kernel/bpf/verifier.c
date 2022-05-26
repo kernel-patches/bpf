@@ -3658,6 +3658,8 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	/* Only unreferenced case accepts untrusted pointers */
 	if (off_desc->type == BPF_KPTR_UNREF)
 		perm_flags |= PTR_UNTRUSTED;
+	if (off_desc->kptr.flags & BPF_KPTR_F_RDONLY)
+		perm_flags |= MEM_RDONLY;
 
 	if (base_type(reg->type) != PTR_TO_BTF_ID || (type_flag(reg->type) & ~perm_flags))
 		goto bad_type;
@@ -3756,6 +3758,8 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 				off_desc->kptr.btf_id, PTR_MAYBE_NULL | PTR_UNTRUSTED);
 		/* For mark_ptr_or_null_reg */
 		val_reg->id = ++env->id_gen;
+		if (off_desc->kptr.flags & BPF_KPTR_F_RDONLY)
+			val_reg->type |= MEM_RDONLY;
 	} else if (class == BPF_STX) {
 		val_reg = reg_state(env, value_regno);
 		if (!register_is_null(val_reg) &&
@@ -5732,20 +5736,13 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
 		if (expected == NOT_INIT)
-			break;
+			goto error;
 
 		if (type == expected)
-			goto found;
+			break;
 	}
 
-	verbose(env, "R%d type=%s expected=", regno, reg_type_str(env, reg->type));
-	for (j = 0; j + 1 < i; j++)
-		verbose(env, "%s, ", reg_type_str(env, compatible->types[j]));
-	verbose(env, "%s\n", reg_type_str(env, compatible->types[j]));
-	return -EACCES;
-
-found:
-	if (reg->type == PTR_TO_BTF_ID) {
+	if (base_type(reg->type) == PTR_TO_BTF_ID) {
 		/* For bpf_sk_release, it needs to match against first member
 		 * 'struct sock_common', hence make an exception for it. This
 		 * allows bpf_sk_release to work for multiple socket types.
@@ -5753,6 +5750,10 @@ found:
 		bool strict_type_match = arg_type_is_release(arg_type) &&
 					 meta->func_id != BPF_FUNC_sk_release;
 
+		if (type_flag(reg->type) & MEM_PERCPU)
+			goto done;
+		if (type_flag(reg->type) & ~(PTR_MAYBE_NULL | MEM_RDONLY))
+			goto error;
 		if (!arg_btf_id) {
 			if (!compatible->btf_id) {
 				verbose(env, "verifier internal error: missing arg compatible BTF ID\n");
@@ -5773,8 +5774,14 @@ found:
 			return -EACCES;
 		}
 	}
-
+done:
 	return 0;
+error:
+	verbose(env, "R%d type=%s expected=", regno, reg_type_str(env, reg->type));
+	for (j = 0; j + 1 < i; j++)
+		verbose(env, "%s, ", reg_type_str(env, compatible->types[j]));
+	verbose(env, "%s\n", reg_type_str(env, compatible->types[j]));
+	return -EACCES;
 }
 
 int check_func_arg_reg_off(struct bpf_verifier_env *env,
@@ -7364,6 +7371,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID | ret_flag;
 		if (func_id == BPF_FUNC_kptr_xchg) {
+			if (meta.kptr_off_desc->kptr.flags & BPF_KPTR_F_RDONLY)
+				regs[BPF_REG_0].type |= MEM_RDONLY;
 			ret_btf = meta.kptr_off_desc->kptr.btf;
 			ret_btf_id = meta.kptr_off_desc->kptr.btf_id;
 		} else {
@@ -13395,6 +13404,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		case PTR_TO_BTF_ID:
 		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
 		case PTR_TO_BTF_ID | MEM_RDONLY:
+		case PTR_TO_BTF_ID | PTR_UNTRUSTED | MEM_RDONLY:
 			if (type == BPF_READ) {
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);

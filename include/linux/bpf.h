@@ -169,6 +169,10 @@ enum bpf_kptr_type {
 	BPF_KPTR_REF,
 };
 
+enum bpf_kptr_flags {
+	BPF_KPTR_F_RDONLY = (1 << 0),
+};
+
 struct bpf_map_value_off_desc {
 	u32 offset;
 	enum bpf_kptr_type type;
@@ -177,6 +181,7 @@ struct bpf_map_value_off_desc {
 		struct module *module;
 		btf_dtor_kfunc_t dtor;
 		u32 btf_id;
+		int flags;
 	} kptr;
 };
 
