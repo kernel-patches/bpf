@@ -626,6 +626,8 @@ static int create_cgroup_storage(bool percpu)
  *   struct prog_test_ref_kfunc __kptr *ptr;
  *   struct prog_test_ref_kfunc __kptr_ref *ptr;
  *   struct prog_test_member __kptr_ref *ptr;
+ *   const struct prog_test_ref_kfunc __kptr *ptr;
+ *   const struct prog_test_ref_kfunc __kptr_ref *ptr;
  * }
  */
 static const char btf_str_sec[] = "\0bpf_spin_lock\0val\0cnt\0l\0bpf_timer\0timer\0t"
@@ -657,11 +659,18 @@ static __u32 btf_raw_types[] = {
 	BTF_PTR_ENC(8),					/* [11] */
 	BTF_PTR_ENC(9),					/* [12] */
 	BTF_PTR_ENC(10),				/* [13] */
-	/* struct btf_ptr */				/* [14] */
-	BTF_STRUCT_ENC(43, 3, 24),
+	BTF_CONST_ENC(6),				/* [14] */
+	BTF_TYPE_TAG_ENC(75, 14),			/* [15] */
+	BTF_TYPE_TAG_ENC(80, 14),			/* [16] */
+	BTF_PTR_ENC(15),				/* [17] */
+	BTF_PTR_ENC(16),				/* [18] */
+	/* struct btf_ptr */				/* [19] */
+	BTF_STRUCT_ENC(43, 5, 40),
 	BTF_MEMBER_ENC(71, 11, 0), /* struct prog_test_ref_kfunc __kptr *ptr; */
 	BTF_MEMBER_ENC(71, 12, 64), /* struct prog_test_ref_kfunc __kptr_ref *ptr; */
 	BTF_MEMBER_ENC(71, 13, 128), /* struct prog_test_member __kptr_ref *ptr; */
+	BTF_MEMBER_ENC(71, 17, 192), /* const struct prog_test_ref_kfunc __kptr *ptr; */
+	BTF_MEMBER_ENC(71, 18, 256), /* const struct prog_test_ref_kfunc __kptr_ref *ptr; */
 };
 
 static int load_btf(void)
@@ -755,7 +764,7 @@ static int create_map_kptr(void)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts,
 		.btf_key_type_id = 1,
-		.btf_value_type_id = 14,
+		.btf_value_type_id = 19,
 	);
 	int fd, btf_fd;
 
@@ -764,7 +773,7 @@ static int create_map_kptr(void)
 		return -1;
 
 	opts.btf_fd = btf_fd;
-	fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, "test_map", 4, 24, 1, &opts);
+	fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, "test_map", 4, 40, 1, &opts);
 	if (fd < 0)
 		printf("Failed to create map with btf_id pointer\n");
 	return fd;
