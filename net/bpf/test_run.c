@@ -582,6 +582,12 @@ bpf_kfunc_call_test_acquire(unsigned long *scalar_ptr)
 	return &prog_test_struct;
 }
 
+noinline const struct prog_test_ref_kfunc *
+bpf_kfunc_call_test_acquire_const(void)
+{
+	return bpf_kfunc_call_test_acquire(NULL);
+}
+
 noinline struct prog_test_member *
 bpf_kfunc_call_memb_acquire(void)
 {
@@ -589,12 +595,14 @@ bpf_kfunc_call_memb_acquire(void)
 	return NULL;
 }
 
-noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
+noinline void bpf_kfunc_call_test_release(const struct prog_test_ref_kfunc *p)
 {
+	struct prog_test_ref_kfunc *pp = (void *)p;
+
 	if (!p)
 		return;
 
-	refcount_dec(&p->cnt);
+	refcount_dec(&pp->cnt);
 }
 
 noinline void bpf_kfunc_call_memb_release(struct prog_test_member *p)
@@ -704,6 +712,7 @@ BTF_ID(func, bpf_kfunc_call_test1)
 BTF_ID(func, bpf_kfunc_call_test2)
 BTF_ID(func, bpf_kfunc_call_test3)
 BTF_ID(func, bpf_kfunc_call_test_acquire)
+BTF_ID(func, bpf_kfunc_call_test_acquire_const)
 BTF_ID(func, bpf_kfunc_call_memb_acquire)
 BTF_ID(func, bpf_kfunc_call_test_release)
 BTF_ID(func, bpf_kfunc_call_memb_release)
@@ -723,6 +732,7 @@ BTF_SET_END(test_sk_check_kfunc_ids)
 
 BTF_SET_START(test_sk_acquire_kfunc_ids)
 BTF_ID(func, bpf_kfunc_call_test_acquire)
+BTF_ID(func, bpf_kfunc_call_test_acquire_const)
 BTF_ID(func, bpf_kfunc_call_memb_acquire)
 BTF_ID(func, bpf_kfunc_call_test_kptr_get)
 BTF_SET_END(test_sk_acquire_kfunc_ids)
@@ -735,6 +745,7 @@ BTF_SET_END(test_sk_release_kfunc_ids)
 
 BTF_SET_START(test_sk_ret_null_kfunc_ids)
 BTF_ID(func, bpf_kfunc_call_test_acquire)
+BTF_ID(func, bpf_kfunc_call_test_acquire_const)
 BTF_ID(func, bpf_kfunc_call_memb_acquire)
 BTF_ID(func, bpf_kfunc_call_test_kptr_get)
 BTF_SET_END(test_sk_ret_null_kfunc_ids)

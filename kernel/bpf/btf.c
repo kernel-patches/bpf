@@ -431,30 +431,6 @@ static int btf_resolve(struct btf_verifier_env *env,
 static int btf_func_check(struct btf_verifier_env *env,
 			  const struct btf_type *t);
 
-static bool btf_type_is_modifier(const struct btf_type *t)
-{
-	/* Some of them is not strictly a C modifier
-	 * but they are grouped into the same bucket
-	 * for BTF concern:
-	 *   A type (t) that refers to another
-	 *   type through t->type AND its size cannot
-	 *   be determined without following the t->type.
-	 *
-	 * ptr does not fall into this bucket
-	 * because its size is always sizeof(void *).
-	 */
-	switch (BTF_INFO_KIND(t->info)) {
-	case BTF_KIND_TYPEDEF:
-	case BTF_KIND_VOLATILE:
-	case BTF_KIND_CONST:
-	case BTF_KIND_RESTRICT:
-	case BTF_KIND_TYPE_TAG:
-		return true;
-	}
-
-	return false;
-}
-
 bool btf_type_is_void(const struct btf_type *t)
 {
 	return t == &btf_void;

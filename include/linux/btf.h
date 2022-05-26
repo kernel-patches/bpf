@@ -234,6 +234,11 @@ static inline bool btf_type_is_typedef(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPEDEF;
 }
 
+static inline bool btf_type_is_const(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_CONST;
+}
+
 static inline bool btf_type_is_func(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_FUNC;
@@ -262,6 +267,30 @@ static inline bool btf_type_is_struct(const struct btf_type *t)
 	u8 kind = BTF_INFO_KIND(t->info);
 
 	return kind == BTF_KIND_STRUCT || kind == BTF_KIND_UNION;
+}
+
+static inline bool btf_type_is_modifier(const struct btf_type *t)
+{
+	/* Some of them is not strictly a C modifier
+	 * but they are grouped into the same bucket
+	 * for BTF concern:
+	 *   A type (t) that refers to another
+	 *   type through t->type AND its size cannot
+	 *   be determined without following the t->type.
+	 *
+	 * ptr does not fall into this bucket
+	 * because its size is always sizeof(void *).
+	 */
+	switch (BTF_INFO_KIND(t->info)) {
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_CONST:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_TYPE_TAG:
+		return true;
+	}
+
+	return false;
 }
 
 static inline u16 btf_type_vlen(const struct btf_type *t)
