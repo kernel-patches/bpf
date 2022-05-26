@@ -640,6 +640,12 @@ struct bpf_prog_ops {
 			union bpf_attr __user *uattr);
 };
 
+typedef int (*btf_struct_access_t)(struct bpf_verifier_log *log,
+				   const struct btf *btf,
+				   const struct btf_type *t, int off, int size,
+				   enum bpf_access_type atype, u32 *next_btf_id,
+				   enum bpf_type_flag *flag);
+
 struct bpf_verifier_ops {
 	/* return eBPF function prototype for verification */
 	const struct bpf_func_proto *
@@ -660,11 +666,7 @@ struct bpf_verifier_ops {
 				  const struct bpf_insn *src,
 				  struct bpf_insn *dst,
 				  struct bpf_prog *prog, u32 *target_size);
-	int (*btf_struct_access)(struct bpf_verifier_log *log,
-				 const struct btf *btf,
-				 const struct btf_type *t, int off, int size,
-				 enum bpf_access_type atype,
-				 u32 *next_btf_id, enum bpf_type_flag *flag);
+	btf_struct_access_t btf_struct_access;
 };
 
 struct bpf_prog_offload_ops {

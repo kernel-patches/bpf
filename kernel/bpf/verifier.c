@@ -13342,6 +13342,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		bpf_convert_ctx_access_t convert_ctx_access;
+		enum bpf_prog_type prog_type;
 		bool ctx_access;
 
 		if (insn->code == (BPF_LDX | BPF_MEM | BPF_B) ||
@@ -13385,6 +13386,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		if (!ctx_access)
 			continue;
 
+		prog_type = resolve_prog_type(env->prog);
 		switch ((int)env->insn_aux_data[i + delta].ptr_type) {
 		case PTR_TO_CTX:
 			if (!ops->convert_ctx_access)
@@ -13409,7 +13411,9 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);
 				env->prog->aux->num_exentries++;
-			} else if (resolve_prog_type(env->prog) != BPF_PROG_TYPE_STRUCT_OPS) {
+			} else if (prog_type != BPF_PROG_TYPE_STRUCT_OPS &&
+				   prog_type != BPF_PROG_TYPE_XDP &&
+				   prog_type != BPF_PROG_TYPE_SCHED_CLS) {
 				verbose(env, "Writes through BTF pointers are not allowed\n");
 				return -EINVAL;
 			}

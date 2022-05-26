@@ -10453,6 +10453,32 @@ static u32 sk_msg_convert_ctx_access(enum bpf_access_type type,
 	return insn - insn_buf;
 }
 
+btf_struct_access_t nf_conn_btf_struct_access;
+/* Protects nf_conn_btf_struct_access */
+DEFINE_MUTEX(nf_conn_btf_struct_access_mtx);
+
+static int xdp_tc_btf_struct_access(struct bpf_verifier_log *log,
+				    const struct btf *btf,
+				    const struct btf_type *t, int off, int size,
+				    enum bpf_access_type atype,
+				    u32 *next_btf_id, enum bpf_type_flag *flag)
+{
+	int ret;
+
+	if (atype == BPF_READ || !READ_ONCE(nf_conn_btf_struct_access))
+		goto end;
+	mutex_lock(&nf_conn_btf_struct_access_mtx);
+	if (!nf_conn_btf_struct_access)
+		goto end_unlock;
+	ret = nf_conn_btf_struct_access(log, btf, t, off, size, atype, next_btf_id, flag);
+	mutex_unlock(&nf_conn_btf_struct_access_mtx);
+	return ret;
+end_unlock:
+	mutex_unlock(&nf_conn_btf_struct_access_mtx);
+end:
+	return btf_struct_access(log, btf, t, off, size, atype, next_btf_id, flag);
+}
+
 const struct bpf_verifier_ops sk_filter_verifier_ops = {
 	.get_func_proto		= sk_filter_func_proto,
 	.is_valid_access	= sk_filter_is_valid_access,
@@ -10470,6 +10496,7 @@ const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 	.convert_ctx_access	= tc_cls_act_convert_ctx_access,
 	.gen_prologue		= tc_cls_act_prologue,
 	.gen_ld_abs		= bpf_gen_ld_abs,
+	.btf_struct_access	= xdp_tc_btf_struct_access,
 };
 
 const struct bpf_prog_ops tc_cls_act_prog_ops = {
@@ -10481,6 +10508,7 @@ const struct bpf_verifier_ops xdp_verifier_ops = {
 	.is_valid_access	= xdp_is_valid_access,
 	.convert_ctx_access	= xdp_convert_ctx_access,
 	.gen_prologue		= bpf_noop_prologue,
+	.btf_struct_access	= xdp_tc_btf_struct_access,
 };
 
 const struct bpf_prog_ops xdp_prog_ops = {

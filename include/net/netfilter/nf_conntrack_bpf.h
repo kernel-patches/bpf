@@ -10,12 +10,17 @@
     (IS_MODULE(CONFIG_NF_CONNTRACK) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
 
 extern int register_nf_conntrack_bpf(void);
+extern void unregister_nf_conntrack_bpf(void);
 
 #else
 
 static inline int register_nf_conntrack_bpf(void)
 {
 	return 0;
+}
+
+static inline void unregister_nf_conntrack_bpf(void)
+{
 }
 
 #endif

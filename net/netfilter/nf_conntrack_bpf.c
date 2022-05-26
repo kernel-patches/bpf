@@ -9,7 +9,9 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/types.h>
+#include <linux/filter.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf_verifier.h>
 #include <linux/net_namespace.h>
 #include <net/netfilter/nf_conntrack.h>
 #include <net/netfilter/nf_conntrack_bpf.h>
@@ -257,10 +259,62 @@ static const struct btf_kfunc_id_set nf_conntrack_tc_kfunc_set = {
 	.ret_null_set = &nf_ct_ret_null_kfunc_ids,
 };
 
+BTF_ID_LIST_SINGLE(nf_conn_btf_id, struct, nf_conn)
+
+static int nf_conn_bpf_btf_struct_access(struct bpf_verifier_log *log,
+					 const struct btf *btf,
+					 const struct btf_type *t, int off,
+					 int size, enum bpf_access_type atype,
+					 u32 *next_btf_id,
+					 enum bpf_type_flag *flag)
+{
+	const struct btf_type *nf_conn_t;
+	size_t end;
+
+	WARN_ON_ONCE(atype != BPF_WRITE);
+
+	nf_conn_t = btf_type_by_id(btf, nf_conn_btf_id[0]);
+	if (!nf_conn_t || nf_conn_t != t) {
+		bpf_log(log, "only read is supported");
+		return -EACCES;
+	}
+
+	switch (off) {
+	case offsetof(struct nf_conn, status):
+		end = offsetofend(struct nf_conn, status);
+		break;
+	default:
+		bpf_log(log, "no write support to nf_conn at off %d\n", off);
+		return -EACCES;
+	}
+
+	if (off + size > end) {
+		bpf_log(log,
+			"write access at off %d with size %d beyond the member of nf_conn ended at %zu\n",
+			off, size, end);
+		return -EACCES;
+	}
+
+	return NOT_INIT;
+}
+
 int register_nf_conntrack_bpf(void)
 {
 	int ret;
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &nf_conntrack_xdp_kfunc_set);
-	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &nf_conntrack_tc_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &nf_conntrack_tc_kfunc_set);
+	if (ret < 0)
+		return ret;
+	mutex_lock(&nf_conn_btf_struct_access_mtx);
+	nf_conn_btf_struct_access = nf_conn_bpf_btf_struct_access;
+	mutex_unlock(&nf_conn_btf_struct_access_mtx);
+	return 0;
+}
+
+void unregister_nf_conntrack_bpf(void)
+{
+	mutex_lock(&nf_conn_btf_struct_access_mtx);
+	nf_conn_btf_struct_access = NULL;
+	mutex_unlock(&nf_conn_btf_struct_access_mtx);
 }

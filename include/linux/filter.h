@@ -1389,6 +1389,9 @@ struct bpf_sk_lookup_kern {
 
 extern struct static_key_false bpf_sk_lookup_enabled;
 
+extern btf_struct_access_t nf_conn_btf_struct_access;
+extern struct mutex nf_conn_btf_struct_access_mtx;
+
 /* Runners for BPF_SK_LOOKUP programs to invoke on socket lookup.
  *
  * Allowed return values for a BPF SK_LOOKUP program are SK_PASS and
