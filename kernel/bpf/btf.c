@@ -214,6 +214,7 @@ enum {
 
 struct btf_kfunc_set_tab {
 	struct btf_id_set *sets[BTF_KFUNC_HOOK_MAX][BTF_KFUNC_TYPE_MAX];
+	struct btf_id_set *acq_rel_pairs[BTF_KFUNC_HOOK_MAX];
 };
 
 struct btf_id_dtor_kfunc_tab {
@@ -1595,6 +1596,7 @@ static void btf_free_kfunc_set_tab(struct btf *btf)
 	for (hook = 0; hook < ARRAY_SIZE(tab->sets); hook++) {
 		for (type = 0; type < ARRAY_SIZE(tab->sets[0]); type++)
 			kfree(tab->sets[hook][type]);
+		kfree(tab->acq_rel_pairs[hook]);
 	}
 free_tab:
 	kfree(tab);
@@ -6226,7 +6228,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 
 			if (base_type(reg->type) == PTR_TO_BTF_ID) {
 				if ((reg->type & MEM_RDONLY) && !is_ref_t_const) {
-					bpf_log(log, "cannot pass read only pointer to arg#%d", i);
+					bpf_log(log, "cannot pass read only pointer to arg#%d\n", i);
 					return -EINVAL;
 				}
 				reg_btf = reg->btf;
@@ -7119,6 +7121,55 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 	return ret;
 }
 
+static int btf_populate_kfunc_acq_rel_pairs(struct btf *btf, enum btf_kfunc_hook hook,
+					    const struct btf_kfunc_id_set *kset)
+{
+	struct btf_kfunc_set_tab *tab;
+	struct btf_id_set *pairs;
+	u32 cnt;
+	int ret;
+
+	if (hook >= BTF_KFUNC_HOOK_MAX || (kset->acq_rel_pairs_cnt & 1)) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	tab = btf->kfunc_set_tab;
+	pairs = tab->acq_rel_pairs[hook];
+	/* Only one call allowed for modules */
+	if (WARN_ON_ONCE(pairs && btf_is_module(btf))) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	cnt = pairs ? pairs->cnt : 0;
+	if (cnt > U32_MAX - kset->acq_rel_pairs_cnt) {
+		ret = -EOVERFLOW;
+		goto end;
+	}
+
+	pairs = krealloc(tab->acq_rel_pairs[hook],
+			 offsetof(struct btf_id_set, ids[cnt + kset->acq_rel_pairs_cnt]),
+			 GFP_KERNEL | __GFP_NOWARN);
+	if (!pairs) {
+		ret = -ENOMEM;
+		goto end;
+	}
+
+	if (!tab->acq_rel_pairs[hook])
+		pairs->cnt = 0;
+	tab->acq_rel_pairs[hook] = pairs;
+
+	memcpy(pairs->ids + pairs->cnt, kset->acq_rel_pairs,
+	       kset->acq_rel_pairs_cnt * sizeof(pairs->ids[0]));
+	pairs->cnt += kset->acq_rel_pairs_cnt;
+
+	return 0;
+end:
+	btf_free_kfunc_set_tab(btf);
+	return ret;
+}
+
 static bool __btf_kfunc_id_set_contains(const struct btf *btf,
 					enum btf_kfunc_hook hook,
 					enum btf_kfunc_type type,
@@ -7171,6 +7222,51 @@ bool btf_kfunc_id_set_contains(const struct btf *btf,
 	return __btf_kfunc_id_set_contains(btf, hook, type, kfunc_btf_id);
 }
 
+/* If no mapping exists, just rely on argument matching. Otherwise even if one
+ * mapping exists for acq_kfunc_btf_id, we fail on not finding a matching pair.
+ * Hence, an acquire kfunc either has 0 mappings, or N mappings. In case of 0
+ * mappings, only rely on the result of argument matches. In case of N mappings,
+ * always check for a mapping between the acquire and release function, and fail
+ * on not finding a match.
+ */
+int btf_kfunc_match_acq_rel_pair(const struct btf *btf,
+				 enum bpf_prog_type prog_type,
+				 u32 acq_kfunc_btf_id, u32 rel_kfunc_btf_id)
+{
+	struct btf_kfunc_set_tab *tab = btf->kfunc_set_tab;
+	enum btf_kfunc_hook hook;
+	struct btf_id_set *pairs;
+	bool was_seen = false;
+	u32 i;
+
+	if (!acq_kfunc_btf_id)
+		return 0;
+	hook = bpf_prog_type_to_kfunc_hook(prog_type);
+	if (hook >= BTF_KFUNC_HOOK_MAX)
+		return -EINVAL;
+	if (WARN_ON_ONCE(!tab))
+		return -EFAULT;
+	pairs = tab->acq_rel_pairs[hook];
+	if (!pairs)
+		return 0;
+	for (i = 0; i < pairs->cnt; i += 2) {
+		if (pairs->ids[i] == acq_kfunc_btf_id) {
+			was_seen = true;
+			if (pairs->ids[i + 1] == rel_kfunc_btf_id)
+				return 0;
+		}
+	}
+	/* There are some mappings for this acq_kfunc_btf_id, but none that
+	 * matched this pair.
+	 */
+	if (was_seen)
+		return -ENOENT;
+	/* There are no mappings for this acq_kfunc_btf_id, just rely on
+	 * argument matching.
+	 */
+	return 0;
+}
+
 /* This function must be invoked only from initcalls/module init functions */
 int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 			      const struct btf_kfunc_id_set *kset)
@@ -7196,6 +7292,7 @@ int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 
 	hook = bpf_prog_type_to_kfunc_hook(prog_type);
 	ret = btf_populate_kfunc_set(btf, hook, kset);
+	ret = ret ?: btf_populate_kfunc_acq_rel_pairs(btf, hook, kset);
 	btf_put(btf);
 	return ret;
 }

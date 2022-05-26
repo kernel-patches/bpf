@@ -243,20 +243,31 @@ BTF_SET_END(nf_ct_release_kfunc_ids)
 /* Both sets are identical */
 #define nf_ct_ret_null_kfunc_ids nf_ct_acquire_kfunc_ids
 
+BTF_ID_LIST(nf_ct_acq_rel_pairs)
+BTF_ID(func, bpf_xdp_ct_lookup)
+BTF_ID(func, bpf_ct_release)
+
+BTF_ID(func, bpf_skb_ct_lookup)
+BTF_ID(func, bpf_ct_release)
+
 static const struct btf_kfunc_id_set nf_conntrack_xdp_kfunc_set = {
-	.owner        = THIS_MODULE,
-	.check_set    = &nf_ct_xdp_check_kfunc_ids,
-	.acquire_set  = &nf_ct_acquire_kfunc_ids,
-	.release_set  = &nf_ct_release_kfunc_ids,
-	.ret_null_set = &nf_ct_ret_null_kfunc_ids,
+	.owner             = THIS_MODULE,
+	.check_set         = &nf_ct_xdp_check_kfunc_ids,
+	.acquire_set       = &nf_ct_acquire_kfunc_ids,
+	.release_set       = &nf_ct_release_kfunc_ids,
+	.ret_null_set      = &nf_ct_ret_null_kfunc_ids,
+	.acq_rel_pairs     = nf_ct_acq_rel_pairs,
+	.acq_rel_pairs_cnt = 10,
 };
 
 static const struct btf_kfunc_id_set nf_conntrack_tc_kfunc_set = {
-	.owner        = THIS_MODULE,
-	.check_set    = &nf_ct_tc_check_kfunc_ids,
-	.acquire_set  = &nf_ct_acquire_kfunc_ids,
-	.release_set  = &nf_ct_release_kfunc_ids,
-	.ret_null_set = &nf_ct_ret_null_kfunc_ids,
+	.owner             = THIS_MODULE,
+	.check_set         = &nf_ct_tc_check_kfunc_ids,
+	.acquire_set       = &nf_ct_acquire_kfunc_ids,
+	.release_set       = &nf_ct_release_kfunc_ids,
+	.ret_null_set      = &nf_ct_ret_null_kfunc_ids,
+	.acq_rel_pairs     = nf_ct_acq_rel_pairs,
+	.acq_rel_pairs_cnt = 10,
 };
 
 BTF_ID_LIST_SINGLE(nf_conn_btf_id, struct, nf_conn)

@@ -7532,7 +7532,21 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * PTR_TO_BTF_ID back from btf_check_kfunc_arg_match, do the release now
 	 */
 	if (err) {
-		err = release_reference(env, regs[err].ref_obj_id);
+		int regno = err;
+
+		if (regs[regno].acq_kfunc_btf_id && desc_btf != regs[regno].btf) {
+			verbose(env, "verifier internal error: acquire and release kfunc BTF must match");
+			return -EFAULT;
+		}
+		err = btf_kfunc_match_acq_rel_pair(desc_btf, resolve_prog_type(env->prog),
+						   regs[regno].acq_kfunc_btf_id, func_id);
+		if (err) {
+			if (err == -ENOENT)
+				verbose(env, "kfunc %s#%d not permitted to release reference\n",
+					func_name, func_id);
+			return err;
+		}
+		err = release_reference(env, regs[regno].ref_obj_id);
 		if (err) {
 			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
 				func_name, func_id);
@@ -7592,6 +7606,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				return id;
 			regs[BPF_REG_0].id = id;
 			regs[BPF_REG_0].ref_obj_id = id;
+			regs[BPF_REG_0].acq_kfunc_btf_id = func_id;
 		}
 	} /* else { add_kfunc_call() ensures it is btf_type_is_void(t) } */
 

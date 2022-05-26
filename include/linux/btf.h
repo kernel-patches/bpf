@@ -40,6 +40,8 @@ struct btf_kfunc_id_set {
 		};
 		struct btf_id_set *sets[BTF_KFUNC_TYPE_MAX];
 	};
+	u32 *acq_rel_pairs;
+	u32 acq_rel_pairs_cnt;
 };
 
 struct btf_id_dtor_kfunc {
@@ -382,6 +384,9 @@ struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 bool btf_kfunc_id_set_contains(const struct btf *btf,
 			       enum bpf_prog_type prog_type,
 			       enum btf_kfunc_type type, u32 kfunc_btf_id);
+int btf_kfunc_match_acq_rel_pair(const struct btf *btf,
+				 enum bpf_prog_type prog_type,
+				 u32 acq_kfunc_btf_id, u32 rel_kfunc_btf_id);
 int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 			      const struct btf_kfunc_id_set *s);
 s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id);
@@ -404,6 +409,12 @@ static inline bool btf_kfunc_id_set_contains(const struct btf *btf,
 					     u32 kfunc_btf_id)
 {
 	return false;
+}
+static inline int btf_kfunc_match_acq_rel_pair(const struct btf *btf,
+					       enum bpf_prog_type prog_type,
+					       u32 acq_kfunc_btf_id, u32 rel_kfunc_btf_id)
+{
+	return 0;
 }
 static inline int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 					    const struct btf_kfunc_id_set *s)
