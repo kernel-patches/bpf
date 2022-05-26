@@ -6109,6 +6109,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
 		u32 regno = i + 1;
 		struct bpf_reg_state *reg = &regs[regno];
+		bool is_ref_t_const = false;
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 		if (btf_type_is_scalar(t)) {
@@ -6132,7 +6133,14 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
+		ref_id = t->type;
+		ref_t = btf_type_by_id(btf, ref_id);
+		while (btf_type_is_modifier(ref_t)) {
+			if (btf_type_is_const(ref_t))
+				is_ref_t_const = true;
+			ref_id = ref_t->type;
+			ref_t = btf_type_by_id(btf, ref_id);
+		}
 		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 
 		if (rel && reg->ref_obj_id)
@@ -6163,6 +6171,11 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 			if (!off_desc || off_desc->type != BPF_KPTR_REF) {
 				bpf_log(log, "arg#0 no referenced kptr at map value offset=%llu\n",
 					reg->off + reg->var_off.value);
+				return -EINVAL;
+			}
+
+			if (off_desc->kptr.flags & BPF_KPTR_F_RDONLY) {
+				bpf_log(log, "arg#0 cannot raise reference for pointer to const\n");
 				return -EINVAL;
 			}
 
@@ -6197,6 +6210,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				return -EINVAL;
 			}
 		} else if (is_kfunc && (reg->type == PTR_TO_BTF_ID ||
+			   reg->type == (PTR_TO_BTF_ID | MEM_RDONLY) ||
 			   (reg2btf_ids[base_type(reg->type)] && !type_flag(reg->type)))) {
 			const struct btf_type *reg_ref_t;
 			const struct btf *reg_btf;
@@ -6210,7 +6224,11 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				return -EINVAL;
 			}
 
-			if (reg->type == PTR_TO_BTF_ID) {
+			if (base_type(reg->type) == PTR_TO_BTF_ID) {
+				if ((reg->type & MEM_RDONLY) && !is_ref_t_const) {
+					bpf_log(log, "cannot pass read only pointer to arg#%d", i);
+					return -EINVAL;
+				}
 				reg_btf = reg->btf;
 				reg_ref_id = reg->btf_id;
 				/* Ensure only one argument is referenced PTR_TO_BTF_ID */

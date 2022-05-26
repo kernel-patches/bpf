@@ -210,11 +210,11 @@ bpf_skb_ct_lookup(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
  * @nf_conn	 - Pointer to referenced nf_conn object, obtained using
  *		   bpf_xdp_ct_lookup or bpf_skb_ct_lookup.
  */
-void bpf_ct_release(struct nf_conn *nfct)
+void bpf_ct_release(const struct nf_conn *nfct)
 {
 	if (!nfct)
 		return;
-	nf_ct_put(nfct);
+	nf_ct_put((struct nf_conn *)nfct);
 }
 
 __diag_pop()
