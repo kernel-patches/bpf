@@ -2,13 +2,25 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include "test_bpf_nf.skel.h"
+#include "test_bpf_nf_fail.skel.h"
+
+static char log_buf[1024 * 1024];
+
+struct {
+	const char *prog_name;
+	const char *err_msg;
+} test_bpf_nf_fail_tests[] = {
+	{ "alloc_release", "not permitted to release reference" },
+	{ "write_after_insert", "pointer points to const object, only read is supported" },
+	{ "lookup_insert", "cannot pass read only pointer to arg#0" },
+};
 
 enum {
 	TEST_XDP,
 	TEST_TC_BPF,
 };
 
-void test_bpf_nf_ct(int mode)
+static void test_bpf_nf_ct(int mode)
 {
 	struct test_bpf_nf *skel;
 	int prog_fd, err;
@@ -49,10 +61,48 @@ end:
 	test_bpf_nf__destroy(skel);
 }
 
+static void test_bpf_nf_ct_fail(const char *prog_name, const char *err_msg)
+{
+	LIBBPF_OPTS(bpf_object_open_opts, opts, .kernel_log_buf = log_buf,
+						.kernel_log_size = sizeof(log_buf),
+						.kernel_log_level = 1);
+	struct test_bpf_nf_fail *skel;
+	struct bpf_program *prog;
+	int ret;
+
+	skel = test_bpf_nf_fail__open_opts(&opts);
+	if (!ASSERT_OK_PTR(skel, "test_bpf_nf_fail__open"))
+		return;
+
+	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto end;
+
+	bpf_program__set_autoload(prog, true);
+
+	ret = test_bpf_nf_fail__load(skel);
+	if (!ASSERT_ERR(ret, "test_bpf_nf_fail__load must fail"))
+		goto end;
+
+	if (!ASSERT_OK_PTR(strstr(log_buf, err_msg), "expected error message")) {
+		fprintf(stderr, "Expected: %s\n", err_msg);
+		fprintf(stderr, "Verifier: %s\n", log_buf);
+	}
+
+end:
+	test_bpf_nf_fail__destroy(skel);
+}
+
 void test_bpf_nf(void)
 {
+	int i;
 	if (test__start_subtest("xdp-ct"))
 		test_bpf_nf_ct(TEST_XDP);
 	if (test__start_subtest("tc-bpf-ct"))
 		test_bpf_nf_ct(TEST_TC_BPF);
+	for (i = 0; i < ARRAY_SIZE(test_bpf_nf_fail_tests); i++) {
+		if (test__start_subtest(test_bpf_nf_fail_tests[i].prog_name))
+			test_bpf_nf_ct_fail(test_bpf_nf_fail_tests[i].prog_name,
+					    test_bpf_nf_fail_tests[i].err_msg);
+	}
 }
