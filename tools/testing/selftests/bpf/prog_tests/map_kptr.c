@@ -36,6 +36,13 @@ struct {
 	{ "reject_indirect_global_func_access", "kptr cannot be accessed indirectly by helper" },
 	{ "kptr_xchg_ref_state", "Unreleased reference id=5 alloc_insn=" },
 	{ "kptr_get_ref_state", "Unreleased reference id=3 alloc_insn=" },
+	{ "kptr_const_to_non_const", "invalid kptr access, R0 type=rdonly_ptr_" },
+	{ "kptr_const_to_non_const_xchg", "invalid kptr access, R2 type=rdonly_ptr_" },
+	{ "kptr_const_or_null_to_non_const_xchg", "invalid kptr access, R2 type=rdonly_ptr_or_null_" },
+	{ "mark_rdonly", "R1 type=rdonly_untrusted_ptr_or_null_ expected=percpu_ptr_" },
+	{ "mark_ref_rdonly", "R1 type=rdonly_untrusted_ptr_or_null_ expected=percpu_ptr_" },
+	{ "mark_xchg_rdonly", "R1 type=rdonly_ptr_or_null_ expected=percpu_ptr_" },
+	{ "kptr_get_no_const", "arg#0 cannot raise reference for pointer to const" },
 };
 
 static void test_map_kptr_fail_prog(const char *prog_name, const char *err_msg)
@@ -91,7 +98,7 @@ static void test_map_kptr_success(bool test_run)
 	);
 	struct map_kptr *skel;
 	int key = 0, ret;
-	char buf[16];
+	char buf[32];
 
 	skel = map_kptr__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "map_kptr__open_and_load"))

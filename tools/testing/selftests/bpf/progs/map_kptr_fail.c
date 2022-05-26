@@ -9,6 +9,8 @@ struct map_value {
 	struct prog_test_ref_kfunc __kptr *unref_ptr;
 	struct prog_test_ref_kfunc __kptr_ref *ref_ptr;
 	struct prog_test_member __kptr_ref *ref_memb_ptr;
+	const struct prog_test_ref_kfunc __kptr *const_unref_ptr;
+	const struct prog_test_ref_kfunc __kptr_ref *const_ref_ptr;
 };
 
 struct array_map {
@@ -19,6 +21,7 @@ struct array_map {
 } array_map SEC(".maps");
 
 extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp) __ksym;
+extern const struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire_const(void) __ksym;
 extern struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **p, int a, int b) __ksym;
 
@@ -412,6 +415,117 @@ int kptr_get_ref_state(struct __sk_buff *ctx)
 		return 0;
 
 	bpf_kfunc_call_test_kptr_get(&v->ref_ptr, 0, 0);
+	return 0;
+}
+
+SEC("?tc")
+int kptr_const_to_non_const(struct __sk_buff *ctx)
+{
+	const struct prog_test_ref_kfunc *p;
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	p = bpf_kfunc_call_test_acquire_const();
+	if (!p)
+		return 0;
+
+	v->unref_ptr = (void *)p;
+	return 0;
+}
+
+SEC("?tc")
+int kptr_const_to_non_const_xchg(struct __sk_buff *ctx)
+{
+	const struct prog_test_ref_kfunc *p;
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	p = bpf_kfunc_call_test_acquire_const();
+	if (!p)
+		return 0;
+
+	bpf_kptr_xchg(&v->ref_ptr, p);
+	return 0;
+}
+
+SEC("?tc")
+int kptr_const_or_null_to_non_const_xchg(struct __sk_buff *ctx)
+{
+	const struct prog_test_ref_kfunc *p;
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	p = bpf_kfunc_call_test_acquire_const();
+
+	bpf_kptr_xchg(&v->ref_ptr, p);
+	return 0;
+}
+
+SEC("?tc")
+int mark_rdonly(struct __sk_buff *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	bpf_this_cpu_ptr(v->const_unref_ptr);
+	return 0;
+}
+
+SEC("?tc")
+int mark_ref_rdonly(struct __sk_buff *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	bpf_this_cpu_ptr(v->const_ref_ptr);
+	return 0;
+}
+
+SEC("?tc")
+int mark_xchg_rdonly(struct __sk_buff *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	bpf_this_cpu_ptr(bpf_kptr_xchg(&v->const_ref_ptr, NULL));
+	return 0;
+}
+
+SEC("?tc")
+int kptr_get_no_const(struct __sk_buff *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&array_map, &key);
+	if (!v)
+		return 0;
+
+	bpf_kfunc_call_test_kptr_get((void *)&v->const_ref_ptr, 0, 0);
 	return 0;
 }
 

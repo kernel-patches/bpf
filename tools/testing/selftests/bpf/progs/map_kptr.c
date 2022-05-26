@@ -6,6 +6,8 @@
 struct map_value {
 	struct prog_test_ref_kfunc __kptr *unref_ptr;
 	struct prog_test_ref_kfunc __kptr_ref *ref_ptr;
+	const struct prog_test_ref_kfunc __kptr *const_unref_ptr;
+	const struct prog_test_ref_kfunc __kptr_ref *const_ref_ptr;
 };
 
 struct array_map {
@@ -58,12 +60,14 @@ DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, hash_malloc_map, hash_of_hash_mallo
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, lru_hash_map, hash_of_lru_hash_maps);
 
 extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp) __ksym;
+extern const struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire_const(void) __ksym;
 extern struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **p, int a, int b) __ksym;
-extern void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p) __ksym;
+extern void bpf_kfunc_call_test_release(const struct prog_test_ref_kfunc *p) __ksym;
 
 static void test_kptr_unref(struct map_value *v)
 {
+	const struct prog_test_ref_kfunc *pc;
 	struct prog_test_ref_kfunc *p;
 
 	p = v->unref_ptr;
@@ -77,10 +81,21 @@ static void test_kptr_unref(struct map_value *v)
 	v->unref_ptr = p;
 	/* store NULL */
 	v->unref_ptr = NULL;
+
+	pc = v->const_ref_ptr;
+	/* store rdonly_untrusted_ptr_or_null_ */
+	v->const_unref_ptr = pc;
+	if (!pc)
+		return;
+	/* store rdonly_untrusted_ptr_ */
+	v->const_unref_ptr = pc;
+	/* store NULL */
+	v->const_unref_ptr = NULL;
 }
 
 static void test_kptr_ref(struct map_value *v)
 {
+	const struct prog_test_ref_kfunc *pc;
 	struct prog_test_ref_kfunc *p;
 
 	p = v->ref_ptr;
@@ -114,6 +129,20 @@ static void test_kptr_ref(struct map_value *v)
 		return;
 	}
 	bpf_kfunc_call_test_release(p);
+
+	pc = bpf_kptr_xchg(&v->const_ref_ptr, NULL);
+	if (!pc)
+		return;
+	/* store rdonly_ptr_ */
+	v->const_unref_ptr = pc;
+	bpf_kfunc_call_test_release(pc);
+
+	pc = bpf_kfunc_call_test_acquire_const();
+	if (!pc)
+		return;
+	v->const_unref_ptr = pc;
+	bpf_kfunc_call_test_release(pc);
+	v->const_unref_ptr = v->const_ref_ptr;
 }
 
 static void test_kptr_get(struct map_value *v)
