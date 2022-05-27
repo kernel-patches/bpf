@@ -2423,12 +2423,36 @@ kprobe_multi_link_handler(struct fprobe *fp, unsigned long entry_ip,
 	kprobe_multi_link_prog_run(link, entry_ip, regs);
 }
 
-static int symbols_cmp(const void *a, const void *b)
+struct multi_symbols_sort {
+	const char **funcs;
+	u64 *cookies;
+};
+
+static int symbols_cmp_r(const void *a, const void *b, const void *priv)
 {
 	const char **str_a = (const char **) a;
 	const char **str_b = (const char **) b;
 
 	return strcmp(*str_a, *str_b);
+}
+
+static void symbols_swap_r(void *a, void *b, int size, const void *priv)
+{
+	const struct multi_symbols_sort *data = priv;
+	const char **name_a = a, **name_b = b;
+	u64 *cookie_a, *cookie_b;
+
+	cookie_a = data->cookies + (name_a - data->funcs);
+	cookie_b = data->cookies + (name_b - data->funcs);
+
+	/* swap name_a/name_b and cookie_a/cookie_b values */
+	swap(*name_a, *name_b);
+	swap(*cookie_a, *cookie_b);
+}
+
+static int symbols_cmp(const void *a, const void *b)
+{
+	return symbols_cmp_r(a, b, NULL);
 }
 
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
@@ -2468,6 +2492,19 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (!addrs)
 		return -ENOMEM;
 
+	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
+	if (ucookies) {
+		cookies = kvmalloc(size, GFP_KERNEL);
+		if (!cookies) {
+			err = -ENOMEM;
+			goto error;
+		}
+		if (copy_from_user(cookies, ucookies, size)) {
+			err = -EFAULT;
+			goto error;
+		}
+	}
+
 	if (uaddrs) {
 		if (copy_from_user(addrs, uaddrs, size)) {
 			err = -EFAULT;
@@ -2480,24 +2517,22 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		if (err)
 			goto error;
 
-		sort(us.syms, cnt, sizeof(*us.syms), symbols_cmp, NULL);
+		if (cookies) {
+			struct multi_symbols_sort data = {
+				.cookies = cookies,
+				.funcs = us.syms,
+			};
+
+			sort_r(us.syms, cnt, sizeof(*us.syms), symbols_cmp_r,
+			       symbols_swap_r, &data);
+		} else {
+			sort(us.syms, cnt, sizeof(*us.syms), symbols_cmp, NULL);
+		}
+
 		err = ftrace_lookup_symbols(us.syms, cnt, addrs);
 		free_user_syms(&us);
 		if (err)
 			goto error;
-	}
-
-	ucookies = u64_to_user_ptr(attr->link_create.kprobe_multi.cookies);
-	if (ucookies) {
-		cookies = kvmalloc(size, GFP_KERNEL);
-		if (!cookies) {
-			err = -ENOMEM;
-			goto error;
-		}
-		if (copy_from_user(cookies, ucookies, size)) {
-			err = -EFAULT;
-			goto error;
-		}
 	}
 
 	link = kzalloc(sizeof(*link), GFP_KERNEL);
