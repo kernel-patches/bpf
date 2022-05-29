@@ -1363,6 +1363,7 @@ const struct bpf_verifier_ops kprobe_verifier_ops = {
 };
 
 const struct bpf_prog_ops kprobe_prog_ops = {
+	.test_run = bpf_prog_test_run_kprobe,
 };
 
 BPF_CALL_5(bpf_perf_event_output_tp, void *, tp_buff, struct bpf_map *, map,

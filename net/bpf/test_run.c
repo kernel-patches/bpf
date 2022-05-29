@@ -1622,6 +1622,42 @@ out:
 	return err;
 }
 
+int bpf_prog_test_run_kprobe(struct bpf_prog *prog,
+			     const union bpf_attr *kattr,
+			     union bpf_attr __user *uattr)
+{
+	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
+	__u32 ctx_size_in = kattr->test.ctx_size_in;
+	u32 repeat = kattr->test.repeat;
+	struct pt_regs *ctx = NULL;
+	u32 retval, duration;
+	int err = 0;
+
+	if (kattr->test.data_in || kattr->test.data_out ||
+	    kattr->test.ctx_out || kattr->test.flags ||
+	    kattr->test.cpu || kattr->test.batch_size)
+		return -EINVAL;
+
+	if (ctx_size_in != sizeof(struct pt_regs))
+		return -EINVAL;
+
+	ctx = memdup_user(ctx_in, ctx_size_in);
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
+
+	err = bpf_test_run(prog, ctx, repeat, &retval, &duration, false);
+	if (err)
+		goto out;
+
+	if (copy_to_user(&uattr->test.retval, &retval, sizeof(retval)) ||
+	    copy_to_user(&uattr->test.duration, &duration, sizeof(duration))) {
+		err = -EFAULT;
+	}
+out:
+	kfree(ctx);
+	return err;
+}
+
 static const struct btf_kfunc_id_set bpf_prog_test_kfunc_set = {
 	.owner        = THIS_MODULE,
 	.check_set        = &test_sk_check_kfunc_ids,
