@@ -1056,6 +1056,11 @@ int bpf_map_get_fd_by_id(__u32 id)
 	attr.map_id = id;
 
 	fd = sys_bpf_fd(BPF_MAP_GET_FD_BY_ID, &attr, sizeof(attr));
+	if (fd < 0) {
+		attr.open_flags = BPF_F_RDONLY;
+		fd = sys_bpf_fd(BPF_MAP_GET_FD_BY_ID, &attr, sizeof(attr));
+	}
+
 	return libbpf_err_errno(fd);
 }
 
