@@ -129,12 +129,46 @@ unsigned int __cgroup_bpf_run_lsm_current(const void *ctx,
 }
 
 #ifdef CONFIG_BPF_LSM
+u32 cgroup_lsm_atype_btf_id[CGROUP_LSM_NUM];
+
 static enum cgroup_bpf_attach_type
 bpf_cgroup_atype_find(enum bpf_attach_type attach_type, u32 attach_btf_id)
 {
+	int i;
+
+	lockdep_assert_held(&cgroup_mutex);
+
 	if (attach_type != BPF_LSM_CGROUP)
 		return to_cgroup_bpf_attach_type(attach_type);
-	return CGROUP_LSM_START + bpf_lsm_hook_idx(attach_btf_id);
+
+	for (i = 0; i < ARRAY_SIZE(cgroup_lsm_atype_btf_id); i++)
+		if (cgroup_lsm_atype_btf_id[i] == attach_btf_id)
+			return CGROUP_LSM_START + i;
+
+	for (i = 0; i < ARRAY_SIZE(cgroup_lsm_atype_btf_id); i++)
+		if (cgroup_lsm_atype_btf_id[i] == 0)
+			return CGROUP_LSM_START + i;
+
+	return -E2BIG;
+
+}
+
+static void bpf_cgroup_atype_alloc(u32 attach_btf_id, int cgroup_atype)
+{
+	int i = cgroup_atype - CGROUP_LSM_START;
+
+	lockdep_assert_held(&cgroup_mutex);
+
+	cgroup_lsm_atype_btf_id[i] = attach_btf_id;
+}
+
+void bpf_cgroup_atype_free(int cgroup_atype)
+{
+	int i = cgroup_atype - CGROUP_LSM_START;
+
+	mutex_lock(&cgroup_mutex);
+	cgroup_lsm_atype_btf_id[i] = 0;
+	mutex_unlock(&cgroup_mutex);
 }
 #else
 static enum cgroup_bpf_attach_type
@@ -143,6 +177,14 @@ bpf_cgroup_atype_find(enum bpf_attach_type attach_type, u32 attach_btf_id)
 	if (attach_type != BPF_LSM_CGROUP)
 		return to_cgroup_bpf_attach_type(attach_type);
 	return -EOPNOTSUPP;
+}
+
+static void bpf_cgroup_atype_alloc(u32 attach_btf_id, int cgroup_atype)
+{
+}
+
+void bpf_cgroup_atype_free(int cgroup_atype)
+{
 }
 #endif /* CONFIG_BPF_LSM */
 
@@ -659,6 +701,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 		err = bpf_trampoline_link_cgroup_shim(new_prog, &tgt_info, atype);
 		if (err)
 			goto cleanup;
+		bpf_cgroup_atype_alloc(new_prog->aux->attach_btf_id, atype);
 	}
 
 	err = update_effective_progs(cgrp, atype);

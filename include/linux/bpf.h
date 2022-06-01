@@ -2446,4 +2446,6 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 int bpf_dynptr_check_size(u32 size);
 
+void bpf_cgroup_atype_free(int cgroup_atype);
+
 #endif /* _LINUX_BPF_H */
