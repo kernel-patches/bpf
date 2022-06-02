@@ -103,8 +103,8 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 
 	bpf_map_init_from_attr(&cmap->map, attr);
 
-	/* Pre-limit array size based on NR_CPUS, not final CPU check */
-	if (cmap->map.max_entries > NR_CPUS) {
+	/* Pre-limit array size based on num_possible_cpus, not final CPU check */
+	if (cmap->map.max_entries > num_possible_cpus()) {
 		err = -E2BIG;
 		goto free_cmap;
 	}
@@ -228,7 +228,7 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 
 		rxq.dev = xdpf->dev_rx;
 		rxq.mem = xdpf->mem;
-		/* TODO: report queue_index to xdp_rxq_info */
+		rxq.queue_index = ++i;
 
 		xdp_convert_frame_to_buff(xdpf, &xdp);
 
