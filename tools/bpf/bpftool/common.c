@@ -799,7 +799,7 @@ exit_free:
 	return fd;
 }
 
-static int map_fd_by_name(char *name, int **fds)
+static int map_fd_by_name(char *name, int **fds, __u32 flags)
 {
 	unsigned int id = 0;
 	int fd, nb_fds = 0;
@@ -819,7 +819,7 @@ static int map_fd_by_name(char *name, int **fds)
 			return nb_fds;
 		}
 
-		fd = bpf_map_get_fd_by_id(id);
+		fd = bpf_map_get_fd_by_id_flags(id, BPF_F_RDONLY);
 		if (fd < 0) {
 			p_err("can't get map by id (%u): %s",
 			      id, strerror(errno));
@@ -836,6 +836,17 @@ static int map_fd_by_name(char *name, int **fds)
 		if (strncmp(name, info.name, BPF_OBJ_NAME_LEN)) {
 			close(fd);
 			continue;
+		}
+
+		if (flags != BPF_F_RDONLY) {
+			close(fd);
+
+			fd = bpf_map_get_fd_by_id_flags(id, flags);
+			if (fd < 0) {
+				p_err("can't get map by id (%u): %s",
+				      id, strerror(errno));
+				goto err_close_fds;
+			}
 		}
 
 		if (nb_fds > 0) {
@@ -857,7 +868,7 @@ err_close_fds:
 	return -1;
 }
 
-int map_parse_fds(int *argc, char ***argv, int **fds)
+int map_parse_fds(int *argc, char ***argv, int **fds, __u32 flags)
 {
 	if (is_prefix(**argv, "id")) {
 		unsigned int id;
@@ -872,7 +883,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		(*fds)[0] = bpf_map_get_fd_by_id(id);
+		(*fds)[0] = bpf_map_get_fd_by_id_flags(id, flags);
 		if ((*fds)[0] < 0) {
 			p_err("get map by id (%u): %s", id, strerror(errno));
 			return -1;
@@ -890,7 +901,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		return map_fd_by_name(name, fds);
+		return map_fd_by_name(name, fds, flags);
 	} else if (is_prefix(**argv, "pinned")) {
 		char *path;
 
@@ -899,7 +910,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		path = **argv;
 		NEXT_ARGP();
 
-		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_MAP, 0);
+		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_MAP, flags);
 		if ((*fds)[0] < 0)
 			return -1;
 		return 1;
@@ -919,7 +930,7 @@ int map_parse_fd(int *argc, char ***argv, __u32 flags)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(argc, argv, &fds);
+	nb_fds = map_parse_fds(argc, argv, &fds, flags);
 	if (nb_fds != 1) {
 		if (nb_fds > 1) {
 			p_err("several maps match this handle");
