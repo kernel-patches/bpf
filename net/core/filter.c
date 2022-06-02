@@ -7813,6 +7813,28 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+const struct bpf_func_proto bpf_skb_map_push_proto __weak;
+const struct bpf_func_proto bpf_skb_map_pop_proto __weak;
+const struct bpf_func_proto bpf_flow_map_push_proto __weak;
+const struct bpf_func_proto bpf_flow_map_pop_proto __weak;
+
+static const struct bpf_func_proto *
+tc_qdisc_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	switch (func_id) {
+	case BPF_FUNC_skb_map_push:
+		return &bpf_skb_map_push_proto;
+	case BPF_FUNC_skb_map_pop:
+		return &bpf_skb_map_pop_proto;
+	case BPF_FUNC_flow_map_push:
+		return &bpf_flow_map_push_proto;
+	case BPF_FUNC_flow_map_pop:
+		return &bpf_flow_map_pop_proto;
+	default:
+		return tc_cls_act_func_proto(func_id, prog);
+	}
+}
+
 static const struct bpf_func_proto *
 xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -10473,6 +10495,18 @@ const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 };
 
 const struct bpf_prog_ops tc_cls_act_prog_ops = {
+	.test_run		= bpf_prog_test_run_skb,
+};
+
+const struct bpf_verifier_ops tc_qdisc_verifier_ops = {
+	.get_func_proto		= tc_qdisc_func_proto,
+	.is_valid_access	= tc_cls_act_is_valid_access,
+	.convert_ctx_access	= tc_cls_act_convert_ctx_access,
+	.gen_prologue		= tc_cls_act_prologue,
+	.gen_ld_abs		= bpf_gen_ld_abs,
+};
+
+const struct bpf_prog_ops tc_qdisc_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
 };
 

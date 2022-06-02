@@ -2274,10 +2274,6 @@ extern const struct bpf_func_proto bpf_loop_proto;
 extern const struct bpf_func_proto bpf_strncmp_proto;
 extern const struct bpf_func_proto bpf_copy_from_user_task_proto;
 extern const struct bpf_func_proto bpf_kptr_xchg_proto;
-extern const struct bpf_func_proto bpf_skb_map_push_proto;
-extern const struct bpf_func_proto bpf_skb_map_pop_proto;
-extern const struct bpf_func_proto bpf_flow_map_push_proto;
-extern const struct bpf_func_proto bpf_flow_map_pop_proto;
 
 const struct bpf_func_proto *tracing_prog_func_proto(
   enum bpf_func_id func_id, const struct bpf_prog *prog);
