@@ -130,7 +130,8 @@ static struct bpf_map_info *map_info_alloc(__u32 *alloc_len)
  *    -1: Error and the caller should abort the iteration.
  */
 static int get_next_struct_ops_map(const char *name, int *res_fd,
-				   struct bpf_map_info *info, __u32 info_len)
+				   struct bpf_map_info *info, __u32 info_len,
+				   __u32 flags)
 {
 	__u32 id = info->id;
 	int err, fd;
@@ -144,7 +145,7 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 			return -1;
 		}
 
-		fd = bpf_map_get_fd_by_id(id);
+		fd = bpf_map_get_fd_by_id_flags(id, BPF_F_RDONLY);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;
@@ -162,6 +163,19 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 
 		if (info->type == BPF_MAP_TYPE_STRUCT_OPS &&
 		    (!name || !strcmp(name, info->name))) {
+			if (flags != BPF_F_RDONLY) {
+				close(fd);
+
+				fd = bpf_map_get_fd_by_id_flags(id, flags);
+				if (fd < 0) {
+					if (errno == ENOENT)
+						continue;
+					p_err("can't get map by id (%u): %s",
+					      id, strerror(errno));
+					return -1;
+				}
+			}
+
 			*res_fd = fd;
 			return 1;
 		}
@@ -186,7 +200,7 @@ typedef int (*work_func)(int fd, const struct bpf_map_info *info, void *data,
  * Then call "func(fd, info, data, wtr)" on each struct_ops map found.
  */
 static struct res do_search(const char *name, work_func func, void *data,
-			    struct json_writer *wtr)
+			    struct json_writer *wtr, __u32 flags)
 {
 	struct bpf_map_info *info;
 	struct res res = {};
@@ -201,7 +215,8 @@ static struct res do_search(const char *name, work_func func, void *data,
 
 	if (wtr)
 		jsonw_start_array(wtr);
-	while ((err = get_next_struct_ops_map(name, &fd, info, info_len)) == 1) {
+	while ((err = get_next_struct_ops_map(name, &fd, info, info_len,
+					      flags)) == 1) {
 		res.nr_maps++;
 		err = func(fd, info, data, wtr);
 		if (err)
@@ -235,7 +250,7 @@ static struct res do_search(const char *name, work_func func, void *data,
 }
 
 static struct res do_one_id(const char *id_str, work_func func, void *data,
-			    struct json_writer *wtr)
+			    struct json_writer *wtr, __u32 flags)
 {
 	struct bpf_map_info *info;
 	struct res res = {};
@@ -251,7 +266,7 @@ static struct res do_one_id(const char *id_str, work_func func, void *data,
 		return res;
 	}
 
-	fd = bpf_map_get_fd_by_id(id);
+	fd = bpf_map_get_fd_by_id_flags(id, flags);
 	if (fd < 0) {
 		p_err("can't get map by id (%lu): %s", id, strerror(errno));
 		res.nr_errs++;
@@ -300,16 +315,16 @@ done:
 static struct res do_work_on_struct_ops(const char *search_type,
 					const char *search_term,
 					work_func func, void *data,
-					struct json_writer *wtr)
+					struct json_writer *wtr, __u32 flags)
 {
 	if (search_type) {
 		if (is_prefix(search_type, "id"))
-			return do_one_id(search_term, func, data, wtr);
+			return do_one_id(search_term, func, data, wtr, flags);
 		else if (!is_prefix(search_type, "name"))
 			usage();
 	}
 
-	return do_search(search_term, func, data, wtr);
+	return do_search(search_term, func, data, wtr, flags);
 }
 
 static int __do_show(int fd, const struct bpf_map_info *info, void *data,
@@ -344,7 +359,7 @@ static int do_show(int argc, char **argv)
 	}
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_show,
-				    NULL, json_wtr);
+				    NULL, json_wtr, 0);
 
 	return cmd_retval(&res, !!search_term);
 }
@@ -433,7 +448,7 @@ static int do_dump(int argc, char **argv)
 	d.prog_id_as_func_ptr = true;
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_dump, &d,
-				    wtr);
+				    wtr, 0);
 
 	if (!json_output)
 		jsonw_destroy(&wtr);
@@ -472,7 +487,7 @@ static int do_unregister(int argc, char **argv)
 	search_term = GET_ARG();
 
 	res = do_work_on_struct_ops(search_type, search_term,
-				    __do_unregister, NULL, NULL);
+				    __do_unregister, NULL, NULL, 0);
 
 	return cmd_retval(&res, true);
 }
