@@ -670,16 +670,22 @@ int bpf_obj_pin(int fd, const char *pathname)
 	return libbpf_err_errno(ret);
 }
 
-int bpf_obj_get(const char *pathname)
+int bpf_obj_get_flags(const char *pathname, __u32 flags)
 {
 	union bpf_attr attr;
 	int fd;
 
 	memset(&attr, 0, sizeof(attr));
 	attr.pathname = ptr_to_u64((void *)pathname);
+	attr.file_flags = flags;
 
 	fd = sys_bpf_fd(BPF_OBJ_GET, &attr, sizeof(attr));
 	return libbpf_err_errno(fd);
+}
+
+int bpf_obj_get(const char *pathname)
+{
+	return bpf_obj_get_flags(pathname, 0);
 }
 
 int bpf_prog_attach(int prog_fd, int target_fd, enum bpf_attach_type type,

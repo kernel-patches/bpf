@@ -339,6 +339,7 @@ LIBBPF_API int bpf_map_update_batch(int fd, const void *keys, const void *values
 				    const struct bpf_map_batch_opts *opts);
 
 LIBBPF_API int bpf_obj_pin(int fd, const char *pathname);
+LIBBPF_API int bpf_obj_get_flags(const char *pathname, __u32 flags);
 LIBBPF_API int bpf_obj_get(const char *pathname);
 
 struct bpf_prog_attach_opts {
