@@ -22,6 +22,7 @@
 #include <linux/idr.h>
 #include <linux/jhash.h>
 #include <linux/rculist.h>
+#include <linux/filter.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/netlink.h>
@@ -1653,6 +1654,74 @@ int tcf_classify(struct sk_buff *skb,
 #endif
 }
 EXPORT_SYMBOL(tcf_classify);
+
+#ifdef CONFIG_BPF_SYSCALL
+BPF_CALL_3(bpf_skb_tc_classify, struct sk_buff *, skb, int, ifindex, u32, handle)
+{
+	struct net *net = dev_net(skb->dev);
+	const struct Qdisc_class_ops *cops;
+	struct tcf_result res = {};
+	struct tcf_block *block;
+	struct tcf_chain *chain;
+	struct net_device *dev;
+	unsigned long cl = 0;
+	struct Qdisc *q;
+	int result;
+
+	rcu_read_lock();
+	dev = dev_get_by_index_rcu(net, ifindex);
+	if (!dev)
+		goto out;
+	q = qdisc_lookup_rcu(dev, handle);
+	if (!q)
+		goto out;
+
+	cops = q->ops->cl_ops;
+	if (!cops)
+		goto out;
+	if (!cops->tcf_block)
+		goto out;
+	if (TC_H_MIN(handle)) {
+		cl = cops->find(q, handle);
+		if (cl == 0)
+			goto out;
+	}
+	block = cops->tcf_block(q, cl, NULL);
+	if (!block)
+		goto out;
+
+	for (chain = tcf_get_next_chain(block, NULL);
+	     chain;
+	     chain = tcf_get_next_chain(block, chain)) {
+		struct tcf_proto *tp;
+
+		result = tcf_classify(skb, NULL, tp, &res, false);
+		if (result  >= 0) {
+			switch (result) {
+			case TC_ACT_QUEUED:
+			case TC_ACT_STOLEN:
+			case TC_ACT_TRAP:
+				fallthrough;
+			case TC_ACT_SHOT:
+				rcu_read_unlock();
+				return 0;
+			}
+		}
+	}
+out:
+	rcu_read_unlock();
+	return res.class;
+}
+
+const struct bpf_func_proto bpf_skb_tc_classify_proto = {
+	.func		= bpf_skb_tc_classify,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
+#endif
 
 struct tcf_chain_info {
 	struct tcf_proto __rcu **pprev;

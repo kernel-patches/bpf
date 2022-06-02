@@ -7817,6 +7817,7 @@ const struct bpf_func_proto bpf_skb_map_push_proto __weak;
 const struct bpf_func_proto bpf_skb_map_pop_proto __weak;
 const struct bpf_func_proto bpf_flow_map_push_proto __weak;
 const struct bpf_func_proto bpf_flow_map_pop_proto __weak;
+const struct bpf_func_proto bpf_skb_tc_classify_proto __weak;
 
 static const struct bpf_func_proto *
 tc_qdisc_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
@@ -7830,6 +7831,10 @@ tc_qdisc_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_flow_map_push_proto;
 	case BPF_FUNC_flow_map_pop:
 		return &bpf_flow_map_pop_proto;
+#ifdef CONFIG_NET_CLS_ACT
+	case BPF_FUNC_skb_tc_classify:
+		return &bpf_skb_tc_classify_proto;
+#endif
 	default:
 		return tc_cls_act_func_proto(func_id, prog);
 	}
