@@ -34,7 +34,7 @@ static int do_pin(int argc, char **argv)
 				return -1;
 			}
 
-			map_fd = map_parse_fd(&argc, &argv);
+			map_fd = map_parse_fd(&argc, &argv, 0);
 			if (map_fd < 0)
 				return -1;
 

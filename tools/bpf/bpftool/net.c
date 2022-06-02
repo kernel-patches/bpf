@@ -571,7 +571,7 @@ static int do_attach(int argc, char **argv)
 	}
 	NEXT_ARG();
 
-	progfd = prog_parse_fd(&argc, &argv);
+	progfd = prog_parse_fd(&argc, &argv, 0);
 	if (progfd < 0)
 		return -EINVAL;
 

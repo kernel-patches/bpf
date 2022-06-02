@@ -381,7 +381,7 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 				return -1;
 			}
 
-			fd = map_parse_fd(&argc, &argv);
+			fd = map_parse_fd(&argc, &argv, 0);
 			if (fd < 0)
 				return -1;
 
@@ -402,7 +402,7 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 				p_info("Warning: updating program array via MAP_ID, make sure this map is kept open\n"
 				       "         by some process or pinned otherwise update will be lost");
 
-			fd = prog_parse_fd(&argc, &argv);
+			fd = prog_parse_fd(&argc, &argv, 0);
 			if (fd < 0)
 				return -1;
 
@@ -1397,7 +1397,7 @@ static int do_freeze(int argc, char **argv)
 	if (!REQ_ARGS(2))
 		return -1;
 
-	fd = map_parse_fd(&argc, &argv);
+	fd = map_parse_fd(&argc, &argv, 0);
 	if (fd < 0)
 		return -1;
 

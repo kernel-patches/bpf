@@ -559,7 +559,7 @@ static int do_dump(int argc, char **argv)
 			return -1;
 		}
 
-		fd = prog_parse_fd(&argc, &argv);
+		fd = prog_parse_fd(&argc, &argv, 0);
 		if (fd < 0)
 			return -1;
 
@@ -661,7 +661,7 @@ done:
 	return err;
 }
 
-static int btf_parse_fd(int *argc, char ***argv)
+static int btf_parse_fd(int *argc, char ***argv, __u32 flags)
 {
 	unsigned int id;
 	char *endptr;
@@ -931,7 +931,7 @@ static int do_show(int argc, char **argv)
 	__u32 id = 0;
 
 	if (argc == 2) {
-		fd = btf_parse_fd(&argc, &argv);
+		fd = btf_parse_fd(&argc, &argv, 0);
 		if (fd < 0)
 			return -1;
 	}

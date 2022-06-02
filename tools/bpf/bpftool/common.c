@@ -223,12 +223,12 @@ int do_pin_fd(int fd, const char *name)
 	return err;
 }
 
-int do_pin_any(int argc, char **argv, int (*get_fd)(int *, char ***))
+int do_pin_any(int argc, char **argv, int (*get_fd)(int *, char ***, __u32))
 {
 	int err;
 	int fd;
 
-	fd = get_fd(&argc, &argv);
+	fd = get_fd(&argc, &argv, 0);
 	if (fd < 0)
 		return fd;
 
@@ -772,7 +772,7 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 	return -1;
 }
 
-int prog_parse_fd(int *argc, char ***argv)
+int prog_parse_fd(int *argc, char ***argv, __u32 flags)
 {
 	int *fds = NULL;
 	int nb_fds, fd;
@@ -909,7 +909,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 	return -1;
 }
 
-int map_parse_fd(int *argc, char ***argv)
+int map_parse_fd(int *argc, char ***argv, __u32 flags)
 {
 	int *fds = NULL;
 	int nb_fds, fd;
@@ -941,7 +941,7 @@ int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len)
 	int err;
 	int fd;
 
-	fd = map_parse_fd(argc, argv);
+	fd = map_parse_fd(argc, argv, 0);
 	if (fd < 0)
 		return -1;
 

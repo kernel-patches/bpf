@@ -15,7 +15,7 @@
 
 static struct hashmap *link_table;
 
-static int link_parse_fd(int *argc, char ***argv)
+static int link_parse_fd(int *argc, char ***argv, __u32 flags)
 {
 	int fd;
 
@@ -44,6 +44,7 @@ static int link_parse_fd(int *argc, char ***argv)
 		path = **argv;
 		NEXT_ARGP();
 
+		/* WARNING: flags not passed for links (no security hook). */
 		return open_obj_pinned_any(path, BPF_OBJ_LINK, 0);
 	}
 
@@ -321,7 +322,7 @@ static int do_show(int argc, char **argv)
 	build_obj_refs_table(&refs_table, BPF_OBJ_LINK);
 
 	if (argc == 2) {
-		fd = link_parse_fd(&argc, &argv);
+		fd = link_parse_fd(&argc, &argv, 0);
 		if (fd < 0)
 			return fd;
 		return do_show_link(fd);
@@ -385,7 +386,7 @@ static int do_detach(int argc, char **argv)
 		return 1;
 	}
 
-	fd = link_parse_fd(&argc, &argv);
+	fd = link_parse_fd(&argc, &argv, 0);
 	if (fd < 0)
 		return 1;
 

@@ -1027,7 +1027,7 @@ static int parse_attach_detach_args(int argc, char **argv, int *progfd,
 	if (!REQ_ARGS(3))
 		return -EINVAL;
 
-	*progfd = prog_parse_fd(&argc, &argv);
+	*progfd = prog_parse_fd(&argc, &argv, 0);
 	if (*progfd < 0)
 		return *progfd;
 
@@ -1046,7 +1046,7 @@ static int parse_attach_detach_args(int argc, char **argv, int *progfd,
 	if (!REQ_ARGS(2))
 		return -EINVAL;
 
-	*mapfd = map_parse_fd(&argc, &argv);
+	*mapfd = map_parse_fd(&argc, &argv, 0);
 	if (*mapfd < 0)
 		return *mapfd;
 
@@ -1270,7 +1270,7 @@ static int do_run(int argc, char **argv)
 	if (!REQ_ARGS(4))
 		return -1;
 
-	fd = prog_parse_fd(&argc, &argv);
+	fd = prog_parse_fd(&argc, &argv, 0);
 	if (fd < 0)
 		return -1;
 
@@ -1542,7 +1542,7 @@ static int load_with_options(int argc, char **argv, bool first_prog_only)
 			}
 			NEXT_ARG();
 
-			fd = map_parse_fd(&argc, &argv);
+			fd = map_parse_fd(&argc, &argv, 0);
 			if (fd < 0)
 				goto err_free_reuse_maps;
 
@@ -2231,7 +2231,7 @@ static int do_profile(int argc, char **argv)
 		return -EINVAL;
 
 	/* parse target fd */
-	profile_tgt_fd = prog_parse_fd(&argc, &argv);
+	profile_tgt_fd = prog_parse_fd(&argc, &argv, 0);
 	if (profile_tgt_fd < 0) {
 		p_err("failed to parse fd");
 		return -1;
