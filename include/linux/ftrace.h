@@ -98,6 +98,18 @@ static inline int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *val
 }
 #endif
 
+/*
+ * FTRACE_OPS_CMD_* commands allow the ftrace core logic to request changes
+ * to a ftrace_ops.
+ *
+ * ENABLE_SHARE_IPMODIFY - enable FTRACE_OPS_FL_SHARE_IPMODIFY.
+ * DISABLE_SHARE_IPMODIFY - disable FTRACE_OPS_FL_SHARE_IPMODIFY.
+ */
+enum ftrace_ops_cmd {
+	FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY,
+	FTRACE_OPS_CMD_DISABLE_SHARE_IPMODIFY,
+};
+
 #ifdef CONFIG_FUNCTION_TRACER
 
 extern int ftrace_enabled;
@@ -189,6 +201,9 @@ ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops);
  *             ftrace_enabled.
  * DIRECT - Used by the direct ftrace_ops helper for direct functions
  *            (internal ftrace only, should not be used by others)
+ * SHARE_IPMODIFY - For direct ftrace_ops only. Set when the direct function
+ *            is ready to share same kernel function with IPMODIFY function
+ *            (live patch, etc.).
  */
 enum {
 	FTRACE_OPS_FL_ENABLED			= BIT(0),
@@ -209,7 +224,65 @@ enum {
 	FTRACE_OPS_FL_TRACE_ARRAY		= BIT(15),
 	FTRACE_OPS_FL_PERMANENT                 = BIT(16),
 	FTRACE_OPS_FL_DIRECT			= BIT(17),
+	FTRACE_OPS_FL_SHARE_IPMODIFY		= BIT(18),
 };
+
+/*
+ * IPMODIFY, DIRECT, and SHARE_IPMODIFY.
+ *
+ * ftrace provides IPMODIFY flag for users to replace existing kernel
+ * function with a different version. This is achieved by setting regs->ip.
+ * The top user of IPMODIFY is live patch.
+ *
+ * DIRECT allows user to load custom trampoline on top of ftrace. DIRECT
+ * ftrace does not overwrite regs->ip. Instead, the custom trampoline is
+ * saved separately (for example, orig_ax on x86). The top user of DIRECT
+ * is bpf trampoline.
+ *
+ * It is not super rare to have both live patch and bpf trampoline on the
+ * same kernel function. Therefore, it is necessary to allow the two work
+ * with each other. Given that IPMODIFY and DIRECT target addressese are
+ * saved separately, this is feasible, but we need to be careful.
+ *
+ * The policy between IPMODIFY and DIRECT is:
+ *
+ *  1. Each kernel function can only have one IPMODIFY ftrace_ops;
+ *  2. Each kernel function can only have one DIRECT ftrace_ops;
+ *  3. DIRECT ftrace_ops may have IPMODIFY or not;
+ *  4. Each kernel function may have one non-DIRECT IPMODIFY ftrace_ops,
+ *     and one non-IPMODIFY DIRECT ftrace_ops at the same time. This
+ *     requires support from the DIRECT ftrace_ops. Specifically, the
+ *     DIRECT trampoline should call the kernel function at regs->ip.
+ *     If the DIRECT ftrace_ops supports sharing a function with ftrace_ops
+ *     with IPMODIFY, it should set flag SHARE_IPMODIFY.
+ *
+ * Some DIRECT ftrace_ops has an option to enable SHARE_IPMODIFY or not.
+ * Usually, the non-SHARE_IPMODIFY option gives better performance. To take
+ * advantage of this performance benefit, is necessary to only enable
+ * SHARE_IPMODIFY only when it is on the same function as an IPMODIFY
+ * ftrace_ops. There are two cases to consider:
+ *
+ *  1. IPMODIFY ftrace_ops is registered first. When the (non-IPMODIFY, and
+ *     non-SHARE_IPMODIFY) DIRECT ftrace_ops is registered later,
+ *     register_ftrace_direct_multi() returns -EAGAIN. If the user of
+ *     the DIRECT ftrace_ops can support SHARE_IPMODIFY, it should enable
+ *     SHARE_IPMODIFY and retry.
+ *  2. (non-IPMODIFY, and non-SHARE_IPMODIFY) DIRECT ftrace_ops is
+ *     registered first. When the IPMODIFY ftrace_ops is registered later,
+ *     it is necessary to ask the direct ftrace_ops to enable
+ *     SHARE_IPMODIFY support. This is achieved via ftrace_ops->ops_func
+ *     cmd=FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY. For more details on this
+ *     condition, check out prepare_direct_functions_for_ipmodify().
+ */
+
+/*
+ * For most ftrace_ops_cmd,
+ * Returns:
+ *        0 - Success.
+ *        -EBUSY - The operation cannot process
+ *        -EAGAIN - The operation cannot process tempoorarily.
+ */
+typedef int (*ftrace_ops_func_t)(struct ftrace_ops *op, enum ftrace_ops_cmd cmd);
 
 #ifdef CONFIG_DYNAMIC_FTRACE
 /* The hash used to know what functions callbacks trace */
@@ -253,6 +326,7 @@ struct ftrace_ops {
 	unsigned long			trampoline;
 	unsigned long			trampoline_size;
 	struct list_head		list;
+	ftrace_ops_func_t		ops_func;
 #endif
 };
 
