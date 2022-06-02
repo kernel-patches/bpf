@@ -1047,16 +1047,22 @@ int bpf_prog_get_fd_by_id(__u32 id)
 	return libbpf_err_errno(fd);
 }
 
-int bpf_map_get_fd_by_id(__u32 id)
+int bpf_map_get_fd_by_id_flags(__u32 id, __u32 flags)
 {
 	union bpf_attr attr;
 	int fd;
 
 	memset(&attr, 0, sizeof(attr));
 	attr.map_id = id;
+	attr.open_flags = flags;
 
 	fd = sys_bpf_fd(BPF_MAP_GET_FD_BY_ID, &attr, sizeof(attr));
 	return libbpf_err_errno(fd);
+}
+
+int bpf_map_get_fd_by_id(__u32 id)
+{
+	return bpf_map_get_fd_by_id_flags(id, 0);
 }
 
 int bpf_btf_get_fd_by_id(__u32 id)
