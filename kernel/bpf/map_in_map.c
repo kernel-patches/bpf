@@ -5,8 +5,6 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 
-#include "map_in_map.h"
-
 struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 {
 	struct bpf_map *inner_map, *inner_map_meta;

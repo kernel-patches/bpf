@@ -341,6 +341,12 @@ int map_check_no_btf(const struct bpf_map *map,
 
 bool bpf_map_meta_equal(const struct bpf_map *meta0,
 			const struct bpf_map *meta1);
+struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd);
+void bpf_map_meta_free(struct bpf_map *map_meta);
+void *bpf_map_fd_get_ptr(struct bpf_map *map, struct file *map_file,
+			 int ufd);
+void bpf_map_fd_put_ptr(void *ptr);
+u32 bpf_map_fd_sys_lookup_elem(void *ptr);
 
 extern const struct bpf_map_ops bpf_map_offload_ops;
 
