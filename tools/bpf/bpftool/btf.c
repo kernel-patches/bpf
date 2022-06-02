@@ -529,7 +529,7 @@ static int do_dump(int argc, char **argv)
 			return -1;
 		}
 
-		fd = map_parse_fd_and_info(&argc, &argv, &info, &len);
+		fd = map_parse_fd_and_info(&argc, &argv, &info, &len, 0);
 		if (fd < 0)
 			return -1;
 

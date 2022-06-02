@@ -171,7 +171,8 @@ int prog_parse_fd(int *argc, char ***argv, __u32 flags);
 int prog_parse_fds(int *argc, char ***argv, int **fds);
 int map_parse_fd(int *argc, char ***argv, __u32 flags);
 int map_parse_fds(int *argc, char ***argv, int **fds, __u32 flags);
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len);
+int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len,
+			  __u32 flags);
 
 struct bpf_prog_linfo;
 #ifdef HAVE_LIBBFD_SUPPORT

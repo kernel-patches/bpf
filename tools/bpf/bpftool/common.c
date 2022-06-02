@@ -947,12 +947,13 @@ exit_free:
 	return fd;
 }
 
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len)
+int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len,
+			  __u32 flags)
 {
 	int err;
 	int fd;
 
-	fd = map_parse_fd(argc, argv, 0);
+	fd = map_parse_fd(argc, argv, flags);
 	if (fd < 0)
 		return -1;
 
