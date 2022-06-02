@@ -44,7 +44,7 @@ static int link_parse_fd(int *argc, char ***argv)
 		path = **argv;
 		NEXT_ARGP();
 
-		return open_obj_pinned_any(path, BPF_OBJ_LINK);
+		return open_obj_pinned_any(path, BPF_OBJ_LINK, 0);
 	}
 
 	p_err("expected 'id' or 'pinned', got: '%s'?", **argv);
