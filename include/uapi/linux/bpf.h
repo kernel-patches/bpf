@@ -909,6 +909,8 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
 	BPF_MAP_TYPE_BLOOM_FILTER,
+	BPF_MAP_TYPE_SKBMAP,
+	BPF_MAP_TYPE_FLOWMAP,
 };
 
 /* Note that tracing related programs such as
@@ -5455,6 +5457,10 @@ union bpf_attr {
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
+	FN(skb_map_push),		\
+	FN(skb_map_pop),		\
+	FN(flow_map_push),		\
+	FN(flow_map_pop),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

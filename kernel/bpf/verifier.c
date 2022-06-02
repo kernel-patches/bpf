@@ -6264,6 +6264,16 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_map_push_elem)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_SKBMAP:
+		if (func_id != BPF_FUNC_skb_map_push &&
+		    func_id != BPF_FUNC_skb_map_pop)
+			goto error;
+		break;
+	case BPF_MAP_TYPE_FLOWMAP:
+		if (func_id != BPF_FUNC_flow_map_push &&
+		    func_id != BPF_FUNC_flow_map_pop)
+			goto error;
+		break;
 	default:
 		break;
 	}

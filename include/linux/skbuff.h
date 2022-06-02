@@ -1017,7 +1017,9 @@ struct sk_buff {
 				unsigned long		dev_scratch;
 			};
 		};
-		struct rb_node		rbnode; /* used in netem, ip4 defrag, and tcp stack */
+		struct rb_node		rbnode; /* used in eBPF skb map, netem, ip4 defrag, and tcp
+						 * stack
+						 */
 		struct list_head	list;
 		struct llist_node	ll_node;
 	};
