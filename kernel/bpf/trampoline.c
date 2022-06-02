@@ -27,6 +27,44 @@ static struct hlist_head trampoline_table[TRAMPOLINE_TABLE_SIZE];
 /* serializes access to trampoline_table */
 static DEFINE_MUTEX(trampoline_mutex);
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex);
+
+static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, enum ftrace_ops_cmd cmd)
+{
+	struct bpf_trampoline *tr = ops->private;
+	int ret;
+
+	/*
+	 * The normal locking order is
+	 *    tr->mutex => direct_mutex (ftrace.c) => ftrace_lock (ftrace.c)
+	 *
+	 * This is called from prepare_direct_functions_for_ipmodify, with
+	 * direct_mutex locked. Use mutex_trylock() to avoid dead lock.
+	 * Also, bpf_trampoline_update here should not lock direct_mutex.
+	 */
+	if (!mutex_trylock(&tr->mutex))
+		return -EAGAIN;
+
+	switch (cmd) {
+	case FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY:
+		tr->indirect_call = true;
+		ret = bpf_trampoline_update(tr, false /* lock_direct_mutex */);
+		break;
+	case FTRACE_OPS_CMD_DISABLE_SHARE_IPMODIFY:
+		tr->indirect_call = false;
+		tr->fops->flags &= ~FTRACE_OPS_FL_SHARE_IPMODIFY;
+		ret = bpf_trampoline_update(tr, false /* lock_direct_mutex */);
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	};
+	mutex_unlock(&tr->mutex);
+	return ret;
+}
+#endif
+
 bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 {
 	enum bpf_attach_type eatype = prog->expected_attach_type;
@@ -87,7 +125,16 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
 	if (!tr)
 		goto out;
-
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	tr->fops = kzalloc(sizeof(struct ftrace_ops), GFP_KERNEL);
+	if (!tr->fops) {
+		kfree(tr);
+		tr = NULL;
+		goto out;
+	}
+	tr->fops->private = tr;
+	tr->fops->ops_func = bpf_tramp_ftrace_ops_func;
+#endif
 	tr->key = key;
 	INIT_HLIST_NODE(&tr->hlist);
 	hlist_add_head(&tr->hlist, head);
@@ -126,7 +173,7 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 	int ret;
 
 	if (tr->func.ftrace_managed)
-		ret = unregister_ftrace_direct((long)ip, (long)old_addr);
+		ret = unregister_ftrace_direct_multi(tr->fops, (long)old_addr);
 	else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
 
@@ -135,15 +182,20 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 	return ret;
 }
 
-static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_addr)
+static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_addr,
+			 bool lock_direct_mutex)
 {
 	void *ip = tr->func.addr;
 	int ret;
 
-	if (tr->func.ftrace_managed)
-		ret = modify_ftrace_direct((long)ip, (long)old_addr, (long)new_addr);
-	else
+	if (tr->func.ftrace_managed) {
+		if (lock_direct_mutex)
+			ret = modify_ftrace_direct_multi(tr->fops, (long)new_addr);
+		else
+			ret = modify_ftrace_direct_multi_nolock(tr->fops, (long)new_addr);
+	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
+	}
 	return ret;
 }
 
@@ -161,10 +213,15 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	if (bpf_trampoline_module_get(tr))
 		return -ENOENT;
 
-	if (tr->func.ftrace_managed)
-		ret = register_ftrace_direct((long)ip, (long)new_addr);
-	else
+	if (tr->func.ftrace_managed) {
+		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 0);
+		ret = register_ftrace_direct_multi(tr->fops, (long)new_addr);
+		if (ret)
+			ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 1, 0);
+
+	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
+	}
 
 	if (ret)
 		bpf_trampoline_module_put(tr);
@@ -330,7 +387,7 @@ out:
 	return ERR_PTR(err);
 }
 
-static int bpf_trampoline_update(struct bpf_trampoline *tr)
+static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_tramp_links *tlinks;
@@ -363,20 +420,45 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr)
 	if (ip_arg)
 		flags |= BPF_TRAMP_F_IP_ARG;
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+again:
+	if (tr->indirect_call)
+		flags |= BPF_TRAMP_F_ORIG_STACK;
+#endif
+
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + PAGE_SIZE,
 					  &tr->func.model, flags, tlinks,
 					  tr->func.addr);
 	if (err < 0)
 		goto out;
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	if (tr->indirect_call)
+		tr->fops->flags |= FTRACE_OPS_FL_SHARE_IPMODIFY;
+#endif
+
 	WARN_ON(tr->cur_image && tr->selector == 0);
 	WARN_ON(!tr->cur_image && tr->selector);
 	if (tr->cur_image)
 		/* progs already running at this address */
-		err = modify_fentry(tr, tr->cur_image->image, im->image);
+		err = modify_fentry(tr, tr->cur_image->image, im->image, lock_direct_mutex);
 	else
 		/* first time registering */
 		err = register_fentry(tr, im->image);
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	if (err == -EAGAIN) {
+		if (WARN_ON_ONCE(tr->indirect_call))
+			goto out;
+		/* should only retry on the first register */
+		if (WARN_ON_ONCE(tr->cur_image))
+			goto out;
+		tr->indirect_call = true;
+		tr->fops->func = NULL;
+		tr->fops->trampoline = 0;
+		goto again;
+	}
+#endif
 	if (err)
 		goto out;
 	if (tr->cur_image)
@@ -460,7 +542,7 @@ int bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_trampoline 
 
 	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
-	err = bpf_trampoline_update(tr);
+	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
 	if (err) {
 		hlist_del_init(&link->tramp_hlist);
 		tr->progs_cnt[kind]--;
@@ -487,7 +569,7 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_trampolin
 	}
 	hlist_del_init(&link->tramp_hlist);
 	tr->progs_cnt[kind]--;
-	err = bpf_trampoline_update(tr);
+	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
 out:
 	mutex_unlock(&tr->mutex);
 	return err;
@@ -535,6 +617,7 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 * multiple rcu callbacks.
 	 */
 	hlist_del(&tr->hlist);
+	kfree(tr->fops);
 	kfree(tr);
 out:
 	mutex_unlock(&trampoline_mutex);
