@@ -529,7 +529,8 @@ static int do_dump(int argc, char **argv)
 			return -1;
 		}
 
-		fd = map_parse_fd_and_info(&argc, &argv, &info, &len, 0);
+		fd = map_parse_fd_and_info(&argc, &argv, &info, &len,
+					   BPF_F_RDONLY);
 		if (fd < 0)
 			return -1;
 
@@ -730,7 +731,7 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 			fd = bpf_prog_get_fd_by_id(id);
 			break;
 		case BPF_OBJ_MAP:
-			fd = bpf_map_get_fd_by_id(id);
+			fd = bpf_map_get_fd_by_id_flags(id, BPF_F_RDONLY);
 			break;
 		default:
 			err = -1;

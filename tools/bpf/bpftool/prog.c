@@ -251,7 +251,7 @@ static void *find_metadata(int prog_fd, struct bpf_map_info *map_info)
 		goto free_map_ids;
 
 	for (i = 0; i < prog_info.nr_map_ids; i++) {
-		map_fd = bpf_map_get_fd_by_id(map_ids[i]);
+		map_fd = bpf_map_get_fd_by_id_flags(map_ids[i], BPF_F_RDONLY);
 		if (map_fd < 0)
 			goto free_map_ids;
 

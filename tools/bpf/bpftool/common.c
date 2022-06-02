@@ -228,7 +228,7 @@ int do_pin_any(int argc, char **argv, int (*get_fd)(int *, char ***, __u32))
 	int err;
 	int fd;
 
-	fd = get_fd(&argc, &argv, 0);
+	fd = get_fd(&argc, &argv, BPF_F_RDONLY);
 	if (fd < 0)
 		return fd;
 
@@ -401,7 +401,8 @@ static int do_build_table_cb(const char *fpath, const struct stat *sb,
 	if (typeflag != FTW_F)
 		goto out_ret;
 
-	fd = open_obj_pinned(fpath, true, 0);
+	/* WARNING: setting flags to BPF_F_RDONLY has effect only for maps. */
+	fd = open_obj_pinned(fpath, true, BPF_F_RDONLY);
 	if (fd < 0)
 		goto out_ret;
 

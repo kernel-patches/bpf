@@ -359,7 +359,7 @@ static int do_show(int argc, char **argv)
 	}
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_show,
-				    NULL, json_wtr, 0);
+				    NULL, json_wtr, BPF_F_RDONLY);
 
 	return cmd_retval(&res, !!search_term);
 }
@@ -448,7 +448,7 @@ static int do_dump(int argc, char **argv)
 	d.prog_id_as_func_ptr = true;
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_dump, &d,
-				    wtr, 0);
+				    wtr, BPF_F_RDONLY);
 
 	if (!json_output)
 		jsonw_destroy(&wtr);

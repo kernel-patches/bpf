@@ -634,7 +634,7 @@ static int do_show_subset(int argc, char **argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(&argc, &argv, &fds, 0);
+	nb_fds = map_parse_fds(&argc, &argv, &fds, BPF_F_RDONLY);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -702,7 +702,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_map_get_fd_by_id(id);
+		fd = bpf_map_get_fd_by_id_flags(id, BPF_F_RDONLY);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;
@@ -910,7 +910,7 @@ static int do_dump(int argc, char **argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(&argc, &argv, &fds, 0);
+	nb_fds = map_parse_fds(&argc, &argv, &fds, BPF_F_RDONLY);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -1077,7 +1077,7 @@ static int do_lookup(int argc, char **argv)
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, 0);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, BPF_F_RDONLY);
 	if (fd < 0)
 		return -1;
 
@@ -1128,7 +1128,7 @@ static int do_getnext(int argc, char **argv)
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, 0);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, BPF_F_RDONLY);
 	if (fd < 0)
 		return -1;
 
