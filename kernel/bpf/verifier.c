@@ -7103,6 +7103,78 @@ static int check_get_func_ip(struct bpf_verifier_env *env)
 	return -ENOTSUPP;
 }
 
+static struct bpf_insn_aux_data *cur_aux(struct bpf_verifier_env *env)
+{
+	return &env->insn_aux_data[env->insn_idx];
+}
+
+static bool fit_for_bpf_loop_inline(struct bpf_insn_aux_data *insn_aux)
+{
+	return insn_aux->loop_inline_state.initialized &&
+		insn_aux->loop_inline_state.flags_is_zero &&
+		insn_aux->loop_inline_state.callback_is_constant;
+}
+
+/* For all sub-programs in the program (including main) checks
+ * insn_aux_data to see if there are bpf_loop calls that require
+ * inlining. If such calls are found subprog stack_depth is increased
+ * by the size of 3 registers. Reserved space would be used in the
+ * do_misc_fixups to spill values of the R6, R7, R8 to use these
+ * registers for loop iteration.
+ */
+static void adjust_stack_depth_for_loop_inlining(struct bpf_verifier_env *env)
+{
+	int i, subprog_end, cur_subprog = 0;
+	struct bpf_subprog_info *subprogs = env->subprog_info;
+	int insn_cnt = env->prog->len;
+	bool subprog_updated = false;
+	s32 stack_base;
+
+	subprog_end = (env->subprog_cnt > 1
+		       ? subprogs[cur_subprog + 1].start
+		       : insn_cnt);
+	for (i = 0; i < insn_cnt; i++) {
+		struct bpf_insn_aux_data *aux = &env->insn_aux_data[i];
+
+		if (fit_for_bpf_loop_inline(aux)) {
+			if (!subprog_updated) {
+				subprog_updated = true;
+				subprogs[cur_subprog].stack_depth += BPF_REG_SIZE * 3;
+				stack_base = -subprogs[cur_subprog].stack_depth;
+			}
+			aux->loop_inline_state.stack_base = stack_base;
+		}
+		if (i == subprog_end - 1) {
+			subprog_updated = false;
+			cur_subprog++;
+			if (cur_subprog < env->subprog_cnt)
+				subprog_end = subprogs[cur_subprog + 1].start;
+		}
+	}
+
+	env->prog->aux->stack_depth = env->subprog_info[0].stack_depth;
+}
+
+static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno)
+{
+	struct bpf_loop_inline_state *state = &cur_aux(env)->loop_inline_state;
+	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state *flags_reg = &regs[BPF_REG_4];
+
+	int flags_is_zero =
+		register_is_const(flags_reg) && flags_reg->var_off.value == 0;
+
+	if (state->initialized) {
+		state->flags_is_zero &= flags_is_zero;
+		state->callback_is_constant &= state->callback_subprogno == subprogno;
+	} else {
+		state->initialized = 1;
+		state->callback_is_constant = 1;
+		state->flags_is_zero = flags_is_zero;
+		state->callback_subprogno = subprogno;
+	}
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -7255,6 +7327,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = check_bpf_snprintf_call(env, regs);
 		break;
 	case BPF_FUNC_loop:
+		update_loop_inline_state(env, meta.subprogno);
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_loop_callback_state);
 		break;
@@ -7659,11 +7732,6 @@ static bool check_reg_sane_offset(struct bpf_verifier_env *env,
 	}
 
 	return true;
-}
-
-static struct bpf_insn_aux_data *cur_aux(struct bpf_verifier_env *env)
-{
-	return &env->insn_aux_data[env->insn_idx];
 }
 
 enum {
@@ -12920,6 +12988,22 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 	return new_prog;
 }
 
+static void adjust_loop_inline_subprogno(struct bpf_verifier_env *env,
+					 u32 first_removed,
+					 u32 first_remaining)
+{
+	int delta = first_remaining - first_removed;
+
+	for (int i = 0; i < env->prog->len; ++i) {
+		struct bpf_loop_inline_state *state =
+			&env->insn_aux_data[i].loop_inline_state;
+
+		if (state->initialized &&
+		    state->callback_subprogno >= first_remaining)
+			state->callback_subprogno -= delta;
+	}
+}
+
 static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 					      u32 off, u32 cnt)
 {
@@ -12963,6 +13047,8 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 			 * in adjust_btf_func() - no need to adjust
 			 */
 		}
+
+		adjust_loop_inline_subprogno(env, i, j);
 	} else {
 		/* convert i from "first prog to remove" to "first to adjust" */
 		if (env->subprog_info[i].start == off)
@@ -13773,6 +13859,94 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
+					int position, u32 *cnt)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[position];
+	s32 stack_base = aux->loop_inline_state.stack_base;
+	s32 r6_offset = stack_base + 0 * BPF_REG_SIZE;
+	s32 r7_offset = stack_base + 1 * BPF_REG_SIZE;
+	s32 r8_offset = stack_base + 2 * BPF_REG_SIZE;
+	int reg_loop_max = BPF_REG_6;
+	int reg_loop_cnt = BPF_REG_7;
+	int reg_loop_ctx = BPF_REG_8;
+
+	struct bpf_prog *new_prog;
+	u32 callback_subprogno = aux->loop_inline_state.callback_subprogno;
+	u32 callback_start;
+	u32 call_insn_offset;
+	s32 callback_offset;
+	struct bpf_insn insn_buf[19];
+	struct bpf_insn *next = insn_buf;
+	struct bpf_insn *call, *jump_to_end, *loop_header;
+	struct bpf_insn *jump_to_header, *loop_exit;
+
+	/* Return error and jump to the end of the patch if
+	 * expected number of iterations is too big.  This
+	 * repeats the check done in bpf_loop helper function,
+	 * be careful to modify this code in sync.
+	 */
+	(*next++) = BPF_JMP_IMM(BPF_JLE, BPF_REG_1, BPF_MAX_LOOPS, 2);
+	(*next++) = BPF_MOV32_IMM(BPF_REG_0, -E2BIG);
+	jump_to_end = next;
+	(*next++) = BPF_JMP_IMM(BPF_JA, 0, 0, 0 /* set below */);
+	/* spill R6, R7, R8 to use these as loop vars */
+	(*next++) = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_6, r6_offset);
+	(*next++) = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_7, r7_offset);
+	(*next++) = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_8, r8_offset);
+	/* initialize loop vars */
+	(*next++) = BPF_MOV64_REG(reg_loop_max, BPF_REG_1);
+	(*next++) = BPF_MOV32_IMM(reg_loop_cnt, 0);
+	(*next++) = BPF_MOV64_REG(reg_loop_ctx, BPF_REG_3);
+	/* loop header;
+	 * if reg_loop_cnt >= reg_loop_max skip the loop body
+	 */
+	loop_header = next;
+	(*next++) = BPF_JMP_REG(BPF_JGE, reg_loop_cnt, reg_loop_max,
+				0 /* set below */);
+	/* callback call */
+	(*next++) = BPF_MOV64_REG(BPF_REG_1, reg_loop_cnt);
+	(*next++) = BPF_MOV64_REG(BPF_REG_2, reg_loop_ctx);
+	call = next;
+	(*next++) = BPF_CALL_REL(0 /* set below after patching */);
+	/* increment loop counter */
+	(*next++) = BPF_ALU64_IMM(BPF_ADD, reg_loop_cnt, 1);
+	/* jump to loop header if callback returned 0 */
+	jump_to_header = next;
+	(*next++) = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 0 /* set below */);
+	/* return value of bpf_loop;
+	 * set R0 to the number of iterations
+	 */
+	loop_exit = next;
+	(*next++) = BPF_MOV64_REG(BPF_REG_0, reg_loop_cnt);
+	/* restore original values of R6, R7, R8 */
+	(*next++) = BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, r6_offset);
+	(*next++) = BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_10, r7_offset);
+	(*next++) = BPF_LDX_MEM(BPF_DW, BPF_REG_8, BPF_REG_10, r8_offset);
+
+	*cnt = next - insn_buf;
+	if (*cnt > ARRAY_SIZE(insn_buf)) {
+		WARN_ONCE(1, "BUG %s: 'next' exceeds bounds for 'insn_buf'\n",
+			  __func__);
+		return NULL;
+	}
+	jump_to_end->off = next - jump_to_end - 1;
+	loop_header->off = loop_exit - loop_header - 1;
+	jump_to_header->off = loop_header - jump_to_header - 1;
+
+	new_prog = bpf_patch_insn_data(env, position, insn_buf, *cnt);
+	if (!new_prog)
+		return new_prog;
+
+	/* callback start is known only after patching */
+	callback_start = env->subprog_info[callback_subprogno].start;
+	call_insn_offset = position + (call - insn_buf);
+	callback_offset = callback_start - call_insn_offset - 1;
+	env->prog->insnsi[call_insn_offset].imm = callback_offset;
+
+	return new_prog;
+}
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -14253,6 +14427,18 @@ patch_map_ops_generic:
 			if (!new_prog)
 				return -ENOMEM;
 
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			continue;
+		}
+
+		if (insn->imm == BPF_FUNC_loop &&
+		    fit_for_bpf_loop_inline(&env->insn_aux_data[i + delta])) {
+			new_prog = inline_bpf_loop(env, i + delta, &cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
 			env->prog = prog = new_prog;
 			insn      = new_prog->insnsi + i + delta;
 			continue;
@@ -15029,6 +15215,9 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = check_max_stack_depth(env);
+
+	if (ret == 0)
+		adjust_stack_depth_for_loop_inlining(env);
 
 	/* instruction rewrites happen after this point */
 	if (is_priv) {
