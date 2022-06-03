@@ -5073,7 +5073,7 @@ static void bpf_map__destroy(struct bpf_map *map);
 
 static bool is_pow_of_2(size_t x)
 {
-	return x && (x & (x - 1));
+	return x && !(x & (x - 1));
 }
 
 static size_t adjust_ringbuf_sz(size_t sz)
