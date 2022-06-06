@@ -22,11 +22,13 @@
  * To allow use of SEC() with externs (e.g., for extern .maps declarations),
  * make sure __attribute__((unused)) doesn't trigger compilation warning.
  */
+#define __gcc_helpers_pragma(x) _Pragma(#x)
+#define __gcc_helpers_diag_pragma(x) __gcc_helpers_pragma("GCC diagnostic " #x)
 #define SEC(name) \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wignored-attributes\"")	    \
+	__gcc_helpers_diag_pragma(push)					    \
+	__gcc_helpers_diag_pragma(ignored "-Wignored-attributes")	    \
 	__attribute__((section(name), used))				    \
-	_Pragma("GCC diagnostic pop")					    \
+	__gcc_helpers_diag_pragma(pop)
 
 /* Avoid 'linux/stddef.h' definition of '__always_inline'. */
 #undef __always_inline
@@ -215,10 +217,10 @@ enum libbpf_tristate {
 	static const char ___fmt[] = fmt;			\
 	unsigned long long ___param[___bpf_narg(args)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
+	__gcc_helpers_diag_pragma(push)				\
+	__gcc_helpers_diag_pragma(ignored "-Wint-conversion")	\
 	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	__gcc_helpers_diag_pragma(pop)				\
 								\
 	bpf_seq_printf(seq, ___fmt, sizeof(___fmt),		\
 		       ___param, sizeof(___param));		\
@@ -233,10 +235,10 @@ enum libbpf_tristate {
 	static const char ___fmt[] = fmt;			\
 	unsigned long long ___param[___bpf_narg(args)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
+	__gcc_helpers_diag_pragma(push)				\
+	__gcc_helpers_diag_pragma(ignored "-Wint-conversion")	\
 	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	__gcc_helpers_diag_pragma(pop)				\
 								\
 	bpf_snprintf(out, out_size, ___fmt,			\
 		     ___param, sizeof(___param));		\
@@ -264,10 +266,10 @@ enum libbpf_tristate {
 	static const char ___fmt[] = fmt;			\
 	unsigned long long ___param[___bpf_narg(args)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
+	__gcc_helpers_diag_pragma(push)				\
+	__gcc_helpers_diag_pragma(ignored "-Wint-conversion")	\
 	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	__gcc_helpers_diag_pragma(pop)				\
 								\
 	bpf_trace_vprintk(___fmt, sizeof(___fmt),		\
 			  ___param, sizeof(___param));		\

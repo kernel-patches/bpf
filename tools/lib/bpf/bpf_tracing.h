@@ -422,16 +422,18 @@ struct pt_regs;
  * This is useful when using BPF helpers that expect original context
  * as one of the parameters (e.g., for bpf_perf_event_output()).
  */
+#define __gcc_tracing_pragma(x) _Pragma(#x)
+#define __gcc_tracing_diag_pragma(x) __gcc_tracing_pragma("GCC diagnostic " #x)
 #define BPF_PROG(name, args...)						    \
 name(unsigned long long *ctx);						    \
 static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(unsigned long long *ctx, ##args);				    \
 typeof(name(0)) name(unsigned long long *ctx)				    \
 {									    \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
+	__gcc_tracing_diag_pragma(push)					    \
+	__gcc_tracing_diag_pragma(ignored "-Wint-conversion")		    \
 	return ____##name(___bpf_ctx_cast(args));			    \
-	_Pragma("GCC diagnostic pop")					    \
+	__gcc_tracing_diag_pragma(pop)					    \
 }									    \
 static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(unsigned long long *ctx, ##args)
@@ -462,10 +464,10 @@ static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(struct pt_regs *ctx, ##args);				    \
 typeof(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
+	__gcc_tracing_diag_pragma(push)					    \
+	__gcc_tracing_diag_pragma(ignored "-Wint-conversion")		    \
 	return ____##name(___bpf_kprobe_args(args));			    \
-	_Pragma("GCC diagnostic pop")					    \
+	__gcc_tracing_diag_pragma(pop)					    \
 }									    \
 static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(struct pt_regs *ctx, ##args)
@@ -486,10 +488,10 @@ static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(struct pt_regs *ctx, ##args);				    \
 typeof(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
+	__gcc_tracing_diag_pragma(push)					    \
+	__gcc_tracing_diag_pragma(ignored "-Wint-conversion")		    \
 	return ____##name(___bpf_kretprobe_args(args));			    \
-	_Pragma("GCC diagnostic pop")					    \
+	__gcc_tracing_diag_pragma(pop)					    \
 }									    \
 static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
@@ -520,10 +522,10 @@ ____##name(struct pt_regs *ctx, ##args);				    \
 typeof(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
 	struct pt_regs *regs = PT_REGS_SYSCALL_REGS(ctx);		    \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
+	__gcc_tracing_diag_pragma(push)		    \
+	__gcc_tracing_diag_pragma(ignored "-Wint-conversion")		    \
 	return ____##name(___bpf_syscall_args(args));			    \
-	_Pragma("GCC diagnostic pop")					    \
+	__gcc_tracing_diag_pragma(pop)					    \
 }									    \
 static __attribute__((always_inline)) typeof(name(0))			    \
 ____##name(struct pt_regs *ctx, ##args)
