@@ -1742,17 +1742,22 @@ static void l2fwd_all(void)
 
 static void load_xdp_program(char **argv, struct bpf_object **obj)
 {
-	struct bpf_prog_load_attr prog_load_attr = {
-		.prog_type      = BPF_PROG_TYPE_XDP,
-	};
+	struct bpf_program *prog;
 	char xdp_filename[256];
 	int prog_fd;
 
 	snprintf(xdp_filename, sizeof(xdp_filename), "%s_kern.o", argv[0]);
-	prog_load_attr.file = xdp_filename;
-
-	if (bpf_prog_load_xattr(&prog_load_attr, obj, &prog_fd))
+	*obj = bpf_object__open_file(xdp_filename, NULL);
+	if (libbpf_get_error(*obj))
 		exit(EXIT_FAILURE);
+
+	prog = bpf_object__next_program(*obj, NULL);
+	bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
+
+	if (bpf_object__load(*obj))
+		exit(EXIT_FAILURE);
+
+	prog_fd = bpf_program__fd(prog);
 	if (prog_fd < 0) {
 		fprintf(stderr, "ERROR: no program found: %s\n",
 			strerror(prog_fd));
@@ -1885,10 +1890,10 @@ int main(int argc, char **argv)
 {
 	struct __user_cap_header_struct hdr = { _LINUX_CAPABILITY_VERSION_3, 0 };
 	struct __user_cap_data_struct data[2] = { { 0 } };
+	struct bpf_object *obj = NULL;
 	bool rx = false, tx = false;
 	struct sched_param schparam;
 	struct xsk_umem_info *umem;
-	struct bpf_object *obj;
 	int xsks_map_fd = 0;
 	pthread_t pt;
 	int i, ret;
