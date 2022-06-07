@@ -23,11 +23,8 @@
 #include <linux/if_xdp.h>
 
 #include <bpf/libbpf.h>
-#include <bpf/xsk.h>
+#include <xdp/xsk.h>
 #include <bpf/bpf.h>
-
-/* libbpf APIs for AF_XDP are deprecated starting from v0.7 */
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 

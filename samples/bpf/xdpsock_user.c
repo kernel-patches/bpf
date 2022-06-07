@@ -33,12 +33,9 @@
 #include <sched.h>
 
 #include <bpf/libbpf.h>
-#include <bpf/xsk.h>
+#include <xdp/xsk.h>
 #include <bpf/bpf.h>
 #include "xdpsock.h"
-
-/* libbpf APIs for AF_XDP are deprecated starting from v0.7 */
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #ifndef SOL_XDP
 #define SOL_XDP 283
