@@ -238,7 +238,8 @@ setup()
 	ip -netns ${NS3} -6 route add ${IPv6_6}/128 dev veth8 via ${IPv6_7}
 
 	# configure IPv4 GRE device in NS3, and a route to it via the "bottom" route
-	ip -netns ${NS3} tunnel add gre_dev mode gre remote ${IPv4_1} local ${IPv4_GRE} ttl 255
+	ip -netns ${NS3} tunnel add gre_dev mode gre remote ${IPv4_5} \
+		local ${IPv4_GRE} ttl 255 key 0
 	ip -netns ${NS3} link set gre_dev up
 	ip -netns ${NS3} addr add ${IPv4_GRE} dev gre_dev
 	ip -netns ${NS1} route add ${IPv4_GRE}/32 dev veth5 via ${IPv4_6} ${VRF}
@@ -246,7 +247,8 @@ setup()
 
 
 	# configure IPv6 GRE device in NS3, and a route to it via the "bottom" route
-	ip -netns ${NS3} -6 tunnel add name gre6_dev mode ip6gre remote ${IPv6_1} local ${IPv6_GRE} ttl 255
+	ip -netns ${NS3} -6 tunnel add name gre6_dev mode ip6gre remote ${IPv6_5} \
+		local ${IPv6_GRE} ttl 255 key 0
 	ip -netns ${NS3} link set gre6_dev up
 	ip -netns ${NS3} -6 addr add ${IPv6_GRE} nodad dev gre6_dev
 	ip -netns ${NS1} -6 route add ${IPv6_GRE}/128 dev veth5 via ${IPv6_6} ${VRF}
