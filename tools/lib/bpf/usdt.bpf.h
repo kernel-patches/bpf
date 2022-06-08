@@ -244,16 +244,16 @@ long bpf_usdt_cookie(struct pt_regs *ctx)
  */
 #define BPF_USDT(name, args...)						    \
 name(struct pt_regs *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args);				    \
-typeof(name(0)) name(struct pt_regs *ctx)				    \
+__typeof__(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
         _Pragma("GCC diagnostic push")					    \
         _Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
         return ____##name(___bpf_usdt_args(args));			    \
         _Pragma("GCC diagnostic pop")					    \
 }									    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args)
 
 #endif /* __USDT_BPF_H__ */

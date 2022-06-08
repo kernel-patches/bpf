@@ -138,7 +138,7 @@ static inline bool str_has_sfx(const char *str, const char *sfx)
 
 #define COMPAT_VERSION(internal_name, api_name, version)
 #define DEFAULT_VERSION(internal_name, api_name, version) \
-	extern typeof(internal_name) api_name \
+	extern __typeof__(internal_name) api_name \
 	__attribute__((alias(#internal_name)));
 
 #endif
@@ -300,7 +300,7 @@ static inline bool libbpf_validate_opts(const char *opts,
 						     type##__last_field),     \
 					 (opts)->sz, #type))
 #define OPTS_HAS(opts, field) \
-	((opts) && opts->sz >= offsetofend(typeof(*(opts)), field))
+	((opts) && opts->sz >= offsetofend(__typeof__(*(opts)), field))
 #define OPTS_GET(opts, field, fallback_value) \
 	(OPTS_HAS(opts, field) ? (opts)->field : fallback_value)
 #define OPTS_SET(opts, field, value)		\
@@ -311,7 +311,7 @@ static inline bool libbpf_validate_opts(const char *opts,
 
 #define OPTS_ZEROED(opts, last_nonzero_field)				      \
 ({									      \
-	ssize_t __off = offsetofend(typeof(*(opts)), last_nonzero_field);     \
+	ssize_t __off = offsetofend(__typeof__(*(opts)), last_nonzero_field); \
 	!(opts) || libbpf_is_mem_zeroed((const void *)opts + __off,	      \
 					(opts)->sz - __off);		      \
 })

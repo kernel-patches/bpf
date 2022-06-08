@@ -11,8 +11,8 @@
 #include "bpf_helper_defs.h"
 
 #define __uint(name, val) int (*name)[val]
-#define __type(name, val) typeof(val) *name
-#define __array(name, val) typeof(val) *name[]
+#define __type(name, val) __typeof__(val) *name
+#define __array(name, val) __typeof__(val) *name[]
 
 /*
  * Helper macro to place programs, maps, license in
