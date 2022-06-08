@@ -123,6 +123,9 @@ struct test_env {
 	pid_t *worker_pids; /* array of worker pids */
 	int *worker_socks; /* array of worker socks */
 	int *worker_current_test; /* array of current running test for each worker */
+
+	const char *sign_file_path; /* sign-file path */
+	const char *kernel_priv_cert_path; /* kernel priv key and cert path */
 };
 
 #define MAX_LOG_TRUNK_SIZE 8192

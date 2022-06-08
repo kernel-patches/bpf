@@ -707,6 +707,8 @@ enum ARG_KEYS {
 	ARG_TEST_NAME_GLOB_DENYLIST = 'd',
 	ARG_NUM_WORKERS = 'j',
 	ARG_DEBUG = -1,
+	ARG_SIGN_FILE = 'S',
+	ARG_KERNEL_PRIV_CERT = 'C',
 };
 
 static const struct argp_option opts[] = {
@@ -732,6 +734,10 @@ static const struct argp_option opts[] = {
 	  "Number of workers to run in parallel, default to number of cpus." },
 	{ "debug", ARG_DEBUG, NULL, 0,
 	  "print extra debug information for test_progs." },
+	{ "sign-file", ARG_SIGN_FILE, "PATH", 0,
+	  "sign-file path " },
+	{ "kernel-priv-cert", ARG_KERNEL_PRIV_CERT, "PATH", 0,
+	  "kernel private key and cert path " },
 	{},
 };
 
@@ -861,6 +867,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case ARG_DEBUG:
 		env->debug = true;
+		break;
+	case ARG_SIGN_FILE:
+		env->sign_file_path = arg;
+		break;
+	case ARG_KERNEL_PRIV_CERT:
+		env->kernel_priv_cert_path = arg;
 		break;
 	case ARGP_KEY_ARG:
 		argp_usage(state);
