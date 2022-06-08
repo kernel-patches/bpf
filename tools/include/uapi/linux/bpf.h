@@ -5249,6 +5249,13 @@ union bpf_attr {
  *		Pointer to the underlying dynptr data, NULL if the dynptr is
  *		read-only, if the dynptr is invalid, or if the offset and length
  *		is out of bounds.
+ *
+ * long bpf_verify_pkcs7_signature(u8 *data, u32 datalen, u8 *sig, u32 siglen, u64 keyring)
+ *	Description
+ *		Verify the PKCS#7 *sig* with length *siglen*, on *data* with
+ *		length *datalen*, with key in *keyring*.
+ *	Return
+ *		0 on success, a negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5455,6 +5462,7 @@ union bpf_attr {
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
+	FN(verify_pkcs7_signature),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
