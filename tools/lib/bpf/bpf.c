@@ -99,31 +99,44 @@ static inline int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int
 
 /* Probe whether kernel switched from memlock-based (RLIMIT_MEMLOCK) to
  * memcg-based memory accounting for BPF maps and progs. This was done in [0].
- * We use the support for bpf_ktime_get_coarse_ns() helper, which was added in
- * the same 5.11 Linux release ([1]), to detect memcg-based accounting for BPF.
+ * To do so, we lower the soft memlock rlimit to 0 and attempt to create a BPF
+ * object. If it succeeds, then memcg-based accounting for BPF is available.
  *
  *   [0] https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
- *   [1] d05512618056 ("bpf: Add bpf_ktime_get_coarse_ns helper")
  */
 int probe_memcg_account(void)
 {
 	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, attach_btf_obj_fd);
 	struct bpf_insn insns[] = {
-		BPF_EMIT_CALL(BPF_FUNC_ktime_get_coarse_ns),
 		BPF_EXIT_INSN(),
 	};
+	struct rlimit rlim_init, rlim_cur_zero = {};
 	size_t insn_cnt = ARRAY_SIZE(insns);
 	union bpf_attr attr;
 	int prog_fd;
 
-	/* attempt loading freplace trying to use custom BTF */
 	memset(&attr, 0, prog_load_attr_sz);
 	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
 	attr.insns = ptr_to_u64(insns);
 	attr.insn_cnt = insn_cnt;
 	attr.license = ptr_to_u64("GPL");
 
+	if (getrlimit(RLIMIT_MEMLOCK, &rlim_init))
+		return -1;
+
+	/* Drop the soft limit to zero. We maintain the hard limit to its
+	 * current value, because lowering it would be a permanent operation
+	 * for unprivileged users.
+	 */
+	rlim_cur_zero.rlim_max = rlim_init.rlim_max;
+	if (setrlimit(RLIMIT_MEMLOCK, &rlim_cur_zero))
+		return -1;
+
 	prog_fd = sys_bpf_fd(BPF_PROG_LOAD, &attr, prog_load_attr_sz);
+
+	/* reset soft rlimit as soon as possible */
+	setrlimit(RLIMIT_MEMLOCK, &rlim_init);
+
 	if (prog_fd >= 0) {
 		close(prog_fd);
 		return 1;
