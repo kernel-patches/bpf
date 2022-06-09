@@ -22,11 +22,12 @@
  * To allow use of SEC() with externs (e.g., for extern .maps declarations),
  * make sure __attribute__((unused)) doesn't trigger compilation warning.
  */
+#define DO_PRAGMA(x) _Pragma(#x)
 #define SEC(name) \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wignored-attributes\"")	    \
+	DO_PRAGMA("GCC diagnostic push")				    \
+	DO_PRAGMA("GCC diagnostic ignored \"-Wignored-attributes\"")	    \
 	__attribute__((section(name), used))				    \
-	_Pragma("GCC diagnostic pop")					    \
+	DO_PRAGMA("GCC diagnostic pop")					    \
 
 /* Avoid 'linux/stddef.h' definition of '__always_inline'. */
 #undef __always_inline
