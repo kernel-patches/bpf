@@ -424,16 +424,16 @@ struct pt_regs;
  */
 #define BPF_PROG(name, args...)						    \
 name(unsigned long long *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(unsigned long long *ctx, ##args);				    \
-typeof(name(0)) name(unsigned long long *ctx)				    \
+__typeof__(name(0)) name(unsigned long long *ctx)			    \
 {									    \
 	_Pragma("GCC diagnostic push")					    \
 	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
 	return ____##name(___bpf_ctx_cast(args));			    \
 	_Pragma("GCC diagnostic pop")					    \
 }									    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(unsigned long long *ctx, ##args)
 
 struct pt_regs;
@@ -458,16 +458,16 @@ struct pt_regs;
  */
 #define BPF_KPROBE(name, args...)					    \
 name(struct pt_regs *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args);				    \
-typeof(name(0)) name(struct pt_regs *ctx)				    \
+__typeof__(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
 	_Pragma("GCC diagnostic push")					    \
 	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
 	return ____##name(___bpf_kprobe_args(args));			    \
 	_Pragma("GCC diagnostic pop")					    \
 }									    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args)
 
 #define ___bpf_kretprobe_args0()       ctx
@@ -482,16 +482,16 @@ ____##name(struct pt_regs *ctx, ##args)
  */
 #define BPF_KRETPROBE(name, args...)					    \
 name(struct pt_regs *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args);				    \
-typeof(name(0)) name(struct pt_regs *ctx)				    \
+__typeof__(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
 	_Pragma("GCC diagnostic push")					    \
 	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")		    \
 	return ____##name(___bpf_kretprobe_args(args));			    \
 	_Pragma("GCC diagnostic pop")					    \
 }									    \
-static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
+static __always_inline __typeof__(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
 #define ___bpf_syscall_args0()           ctx
 #define ___bpf_syscall_args1(x)          ___bpf_syscall_args0(), (void *)PT_REGS_PARM1_CORE_SYSCALL(regs)
@@ -515,9 +515,9 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
  */
 #define BPF_KPROBE_SYSCALL(name, args...)				    \
 name(struct pt_regs *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args);				    \
-typeof(name(0)) name(struct pt_regs *ctx)				    \
+__typeof__(name(0)) name(struct pt_regs *ctx)				    \
 {									    \
 	struct pt_regs *regs = PT_REGS_SYSCALL_REGS(ctx);		    \
 	_Pragma("GCC diagnostic push")					    \
@@ -525,7 +525,7 @@ typeof(name(0)) name(struct pt_regs *ctx)				    \
 	return ____##name(___bpf_syscall_args(args));			    \
 	_Pragma("GCC diagnostic pop")					    \
 }									    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+static __attribute__((always_inline)) __typeof__(name(0))		    \
 ____##name(struct pt_regs *ctx, ##args)
 
 #endif

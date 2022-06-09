@@ -111,7 +111,7 @@ enum bpf_enum_value_kind {
 })
 
 #define ___bpf_field_ref1(field)	(field)
-#define ___bpf_field_ref2(type, field)	(((typeof(type) *)0)->field)
+#define ___bpf_field_ref2(type, field)	(((__typeof__(type) *)0)->field)
 #define ___bpf_field_ref(args...)					    \
 	___bpf_apply(___bpf_field_ref, ___bpf_narg(args))(args)
 
@@ -161,7 +161,7 @@ enum bpf_enum_value_kind {
  * BTF. Always succeeds.
  */
 #define bpf_core_type_id_local(type)					    \
-	__builtin_btf_type_id(*(typeof(type) *)0, BPF_TYPE_ID_LOCAL)
+	__builtin_btf_type_id(*(__typeof__(type) *)0, BPF_TYPE_ID_LOCAL)
 
 /*
  * Convenience macro to get BTF type ID of a target kernel's type that matches
@@ -171,7 +171,7 @@ enum bpf_enum_value_kind {
  *    - 0, if no matching type was found in a target kernel BTF.
  */
 #define bpf_core_type_id_kernel(type)					    \
-	__builtin_btf_type_id(*(typeof(type) *)0, BPF_TYPE_ID_TARGET)
+	__builtin_btf_type_id(*(__typeof__(type) *)0, BPF_TYPE_ID_TARGET)
 
 /*
  * Convenience macro to check that provided named type
@@ -181,7 +181,7 @@ enum bpf_enum_value_kind {
  *    0, if no matching type is found.
  */
 #define bpf_core_type_exists(type)					    \
-	__builtin_preserve_type_info(*(typeof(type) *)0, BPF_TYPE_EXISTS)
+	__builtin_preserve_type_info(*(__typeof__(type) *)0, BPF_TYPE_EXISTS)
 
 /*
  * Convenience macro to get the byte size of a provided named type
@@ -191,7 +191,7 @@ enum bpf_enum_value_kind {
  *    0, if no matching type is found.
  */
 #define bpf_core_type_size(type)					    \
-	__builtin_preserve_type_info(*(typeof(type) *)0, BPF_TYPE_SIZE)
+	__builtin_preserve_type_info(*(__typeof__(type) *)0, BPF_TYPE_SIZE)
 
 /*
  * Convenience macro to check that provided enumerator value is defined in
@@ -202,7 +202,7 @@ enum bpf_enum_value_kind {
  *    0, if no matching enum and/or enum value within that enum is found.
  */
 #define bpf_core_enum_value_exists(enum_type, enum_value)		    \
-	__builtin_preserve_enum_value(*(typeof(enum_type) *)enum_value, BPF_ENUMVAL_EXISTS)
+	__builtin_preserve_enum_value(*(__typeof__(enum_type) *)enum_value, BPF_ENUMVAL_EXISTS)
 
 /*
  * Convenience macro to get the integer value of an enumerator value in
@@ -213,7 +213,7 @@ enum bpf_enum_value_kind {
  *    0, if no matching enum and/or enum value within that enum is found.
  */
 #define bpf_core_enum_value(enum_type, enum_value)			    \
-	__builtin_preserve_enum_value(*(typeof(enum_type) *)enum_value, BPF_ENUMVAL_VALUE)
+	__builtin_preserve_enum_value(*(__typeof__(enum_type) *)enum_value, BPF_ENUMVAL_VALUE)
 
 /*
  * bpf_core_read() abstracts away bpf_probe_read_kernel() call and captures
@@ -300,7 +300,7 @@ enum bpf_enum_value_kind {
 #define ___arrow10(a, b, c, d, e, f, g, h, i, j) a->b->c->d->e->f->g->h->i->j
 #define ___arrow(...) ___apply(___arrow, ___narg(__VA_ARGS__))(__VA_ARGS__)
 
-#define ___type(...) typeof(___arrow(__VA_ARGS__))
+#define ___type(...) __typeof__(___arrow(__VA_ARGS__))
 
 #define ___read(read_fn, dst, src_type, src, accessor)			    \
 	read_fn((void *)(dst), sizeof(*(dst)), &((src_type)(src))->accessor)
