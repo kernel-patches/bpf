@@ -734,11 +734,16 @@ static int lsm_superblock_alloc(struct super_block *sb)
 
 #define call_int_hook(FUNC, IRC, ...) ({			\
 	int RC = IRC;						\
+	int THISRC;						\
+								\
 	do {							\
 		struct security_hook_list *P;			\
 								\
 		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
-			RC = P->hook.FUNC(__VA_ARGS__);		\
+			THISRC = P->hook.FUNC(__VA_ARGS__);	\
+			if (THISRC == LSM_HOOK_NO_EFFECT)	\
+				continue;			\
+			RC = THISRC;				\
 			if (RC != 0)				\
 				break;				\
 		}						\
@@ -831,7 +836,7 @@ int security_vm_enough_memory_mm(struct mm_struct *mm, long pages)
 {
 	struct security_hook_list *hp;
 	int cap_sys_admin = 1;
-	int rc;
+	int rc, thisrc;
 
 	/*
 	 * The module will respond with a positive value if
@@ -841,7 +846,11 @@ int security_vm_enough_memory_mm(struct mm_struct *mm, long pages)
 	 * thinks it should not be set it won't.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.vm_enough_memory, list) {
-		rc = hp->hook.vm_enough_memory(mm, pages);
+		thisrc = hp->hook.vm_enough_memory(mm, pages);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
+
 		if (rc <= 0) {
 			cap_sys_admin = 0;
 			break;
@@ -895,6 +904,8 @@ int security_fs_context_parse_param(struct fs_context *fc,
 	hlist_for_each_entry(hp, &security_hook_heads.fs_context_parse_param,
 			     list) {
 		trc = hp->hook.fs_context_parse_param(fc, param);
+		if (trc == LSM_HOOK_NO_EFFECT)
+			continue;
 		if (trc == 0)
 			rc = 0;
 		else if (trc != -ENOPARAM)
@@ -1063,14 +1074,17 @@ int security_dentry_init_security(struct dentry *dentry, int mode,
 				  u32 *ctxlen)
 {
 	struct security_hook_list *hp;
-	int rc;
+	int rc, thisrc;
 
 	/*
 	 * Only one module will provide a security context.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.dentry_init_security, list) {
-		rc = hp->hook.dentry_init_security(dentry, mode, name,
-						   xattr_name, ctx, ctxlen);
+		thisrc = hp->hook.dentry_init_security(dentry, mode, name,
+						       xattr_name, ctx, ctxlen);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
 		if (rc != LSM_RET_DEFAULT(dentry_init_security))
 			return rc;
 	}
@@ -1430,7 +1444,7 @@ int security_inode_getsecurity(struct user_namespace *mnt_userns,
 			       void **buffer, bool alloc)
 {
 	struct security_hook_list *hp;
-	int rc;
+	int rc, thisrc;
 
 	if (unlikely(IS_PRIVATE(inode)))
 		return LSM_RET_DEFAULT(inode_getsecurity);
@@ -1438,7 +1452,10 @@ int security_inode_getsecurity(struct user_namespace *mnt_userns,
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_getsecurity, list) {
-		rc = hp->hook.inode_getsecurity(mnt_userns, inode, name, buffer, alloc);
+		thisrc = hp->hook.inode_getsecurity(mnt_userns, inode, name, buffer, alloc);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
 		if (rc != LSM_RET_DEFAULT(inode_getsecurity))
 			return rc;
 	}
@@ -1448,7 +1465,7 @@ int security_inode_getsecurity(struct user_namespace *mnt_userns,
 int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)
 {
 	struct security_hook_list *hp;
-	int rc;
+	int rc, thisrc;
 
 	if (unlikely(IS_PRIVATE(inode)))
 		return LSM_RET_DEFAULT(inode_setsecurity);
@@ -1456,8 +1473,11 @@ int security_inode_setsecurity(struct inode *inode, const char *name, const void
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_setsecurity, list) {
-		rc = hp->hook.inode_setsecurity(inode, name, value, size,
-								flags);
+		thisrc = hp->hook.inode_setsecurity(inode, name, value, size,
+						    flags);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
 		if (rc != LSM_RET_DEFAULT(inode_setsecurity))
 			return rc;
 	}
@@ -1486,7 +1506,7 @@ EXPORT_SYMBOL(security_inode_copy_up);
 int security_inode_copy_up_xattr(const char *name)
 {
 	struct security_hook_list *hp;
-	int rc;
+	int rc, thisrc;
 
 	/*
 	 * The implementation can return 0 (accept the xattr), 1 (discard the
@@ -1495,7 +1515,10 @@ int security_inode_copy_up_xattr(const char *name)
 	 */
 	hlist_for_each_entry(hp,
 		&security_hook_heads.inode_copy_up_xattr, list) {
-		rc = hp->hook.inode_copy_up_xattr(name);
+		thisrc = hp->hook.inode_copy_up_xattr(name);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
 		if (rc != LSM_RET_DEFAULT(inode_copy_up_xattr))
 			return rc;
 	}
@@ -1889,6 +1912,8 @@ int security_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 
 	hlist_for_each_entry(hp, &security_hook_heads.task_prctl, list) {
 		thisrc = hp->hook.task_prctl(option, arg2, arg3, arg4, arg5);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
 		if (thisrc != LSM_RET_DEFAULT(task_prctl)) {
 			rc = thisrc;
 			if (thisrc != 0)
@@ -2055,11 +2080,16 @@ int security_getprocattr(struct task_struct *p, const char *lsm, char *name,
 				char **value)
 {
 	struct security_hook_list *hp;
+	int rc;
 
 	hlist_for_each_entry(hp, &security_hook_heads.getprocattr, list) {
 		if (lsm != NULL && strcmp(lsm, hp->lsm))
 			continue;
-		return hp->hook.getprocattr(p, name, value);
+		rc = hp->hook.getprocattr(p, name, value);
+		if (rc == LSM_HOOK_NO_EFFECT)
+			continue;
+		else
+			return rc;
 	}
 	return LSM_RET_DEFAULT(getprocattr);
 }
@@ -2068,11 +2098,16 @@ int security_setprocattr(const char *lsm, const char *name, void *value,
 			 size_t size)
 {
 	struct security_hook_list *hp;
+	int rc;
 
 	hlist_for_each_entry(hp, &security_hook_heads.setprocattr, list) {
 		if (lsm != NULL && strcmp(lsm, hp->lsm))
 			continue;
-		return hp->hook.setprocattr(name, value, size);
+		rc = hp->hook.setprocattr(name, value, size);
+		if (rc == LSM_HOOK_NO_EFFECT)
+			continue;
+		else
+			return rc;
 	}
 	return LSM_RET_DEFAULT(setprocattr);
 }
@@ -2091,14 +2126,17 @@ EXPORT_SYMBOL(security_ismaclabel);
 int security_secid_to_secctx(u32 secid, char **secdata, u32 *seclen)
 {
 	struct security_hook_list *hp;
-	int rc;
+	int rc, thisrc;
 
 	/*
 	 * Currently, only one LSM can implement secid_to_secctx (i.e this
 	 * LSM hook is not "stackable").
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.secid_to_secctx, list) {
-		rc = hp->hook.secid_to_secctx(secid, secdata, seclen);
+		thisrc = hp->hook.secid_to_secctx(secid, secdata, seclen);
+		if (thisrc == LSM_HOOK_NO_EFFECT)
+			continue;
+		rc = thisrc;
 		if (rc != LSM_RET_DEFAULT(secid_to_secctx))
 			return rc;
 	}
@@ -2509,9 +2547,11 @@ int security_xfrm_state_pol_flow_match(struct xfrm_state *x,
 	hlist_for_each_entry(hp, &security_hook_heads.xfrm_state_pol_flow_match,
 				list) {
 		rc = hp->hook.xfrm_state_pol_flow_match(x, xp, flic);
-		break;
+		if (rc == LSM_HOOK_NO_EFFECT)
+			continue;
+		return rc;
 	}
-	return rc;
+	return LSM_RET_DEFAULT(xfrm_state_pol_flow_match);
 }
 
 int security_xfrm_decode_session(struct sk_buff *skb, u32 *secid)

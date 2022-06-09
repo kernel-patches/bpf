@@ -1576,6 +1576,12 @@
  *      thread (IORING_SETUP_SQPOLL).
  *
  */
+
+/*
+ * If an LSM hook choses to make no decision. i.e. it's only for auditing or
+ * a default hook like the BPF LSM hooks, it can return LSM_HOOK_NO_EFFECT.
+ */
+ #define LSM_HOOK_NO_EFFECT -INT_MAX
 union security_list_options {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) RET (*NAME)(__VA_ARGS__);
 	#include "lsm_hook_defs.h"
