@@ -6514,13 +6514,17 @@ __bpf_sk_lookup(struct sk_buff *skb, struct bpf_sock_tuple *tuple, u32 len,
 {
 	struct sock *sk = __bpf_skc_lookup(skb, tuple, len, caller_net,
 					   ifindex, proto, netns_id, flags);
+	struct sock *sk1 = sk;
 
 	if (sk) {
 		sk = sk_to_full_sk(sk);
-		if (!sk_fullsock(sk)) {
-			sock_gen_put(sk);
+		/* sk_to_full_sk() may return (sk)->rsk_listener, so make sure the original sk1
+		 * sock refcnt is decremented to prevent a request_sock leak.
+		 */
+		if (!sk_fullsock(sk1))
+			sock_gen_put(sk1);
+		if (!sk_fullsock(sk))
 			return NULL;
-		}
 	}
 
 	return sk;
@@ -6551,13 +6555,17 @@ bpf_sk_lookup(struct sk_buff *skb, struct bpf_sock_tuple *tuple, u32 len,
 {
 	struct sock *sk = bpf_skc_lookup(skb, tuple, len, proto, netns_id,
 					 flags);
+	struct sock *sk1 = sk;
 
 	if (sk) {
 		sk = sk_to_full_sk(sk);
-		if (!sk_fullsock(sk)) {
-			sock_gen_put(sk);
+		/* sk_to_full_sk() may return (sk)->rsk_listener, so make sure the original sk1
+		 * sock refcnt is decremented to prevent a request_sock leak.
+		 */
+		if (!sk_fullsock(sk1))
+			sock_gen_put(sk1);
+		if (!sk_fullsock(sk))
 			return NULL;
-		}
 	}
 
 	return sk;
