@@ -5249,6 +5249,22 @@ union bpf_attr {
  *		Pointer to the underlying dynptr data, NULL if the dynptr is
  *		read-only, if the dynptr is invalid, or if the offset and length
  *		is out of bounds.
+ *
+ * long bpf_verify_signature(u8 *data, u32 datalen, u8 *sig, u32 siglen, u32 info)
+ *	Description
+ *		Verify a signature of length *siglen* against the supplied data
+ *		with length *datalen*. *info* contains the keyring identifier
+ *		(low 16 bits) and the signature type (high 16 bits). The keyring
+ *		identifier can have the following values (some defined in
+ *		verification.h): 0 for the primary keyring (immutable keyring of
+ *		system keys); 1 for both the primary and secondary keyring
+ *		(where keys can be added only if they are vouched for by
+ *		existing keys in those keyrings); 2 for the platform keyring
+ *		(primarily used by the integrity subsystem to verify a kexec'ed
+ *		kerned image and, possibly, the initramfs signature); 0xffff for
+ *		the session keyring (for testing purposes).
+ *	Return
+ *		0 on success, a negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5455,6 +5471,7 @@ union bpf_attr {
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
+	FN(verify_signature),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
