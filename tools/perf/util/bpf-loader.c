@@ -1253,19 +1253,20 @@ __bpf_map__config_event(struct bpf_map *map,
 			struct parse_events_term *term,
 			struct evlist *evlist)
 {
-	struct bpf_map_op *op;
 	const char *map_name = bpf_map__name(map);
-	struct evsel *evsel = evlist__find_evsel_by_str(evlist, term->val.str);
+	struct bpf_map_op *op;
+	struct evsel *evsel;
 
+	if (!map) {
+		pr_debug("Map '%s' is invalid\n", map_name);
+		return -BPF_LOADER_ERRNO__INTERNAL;
+	}
+
+	evsel = evlist__find_evsel_by_str(evlist, term->val.str);
 	if (!evsel) {
 		pr_debug("Event (for '%s') '%s' doesn't exist\n",
 			 map_name, term->val.str);
 		return -BPF_LOADER_ERRNO__OBJCONF_MAP_NOEVT;
-	}
-
-	if (!map) {
-		pr_debug("Map '%s' is invalid\n", map_name);
-		return PTR_ERR(map);
 	}
 
 	/*
