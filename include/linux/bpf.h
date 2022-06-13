@@ -1414,7 +1414,7 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
 	if (unlikely(!array))
 		return ret;
 
-	migrate_disable();
+	preempt_disable();
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	item = &array->items[0];
 	while ((prog = READ_ONCE(item->prog))) {
@@ -1423,7 +1423,7 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
 		item++;
 	}
 	bpf_reset_run_ctx(old_run_ctx);
-	migrate_enable();
+	preempt_enable();
 	return ret;
 }
 
