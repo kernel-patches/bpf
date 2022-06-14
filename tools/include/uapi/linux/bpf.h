@@ -5249,6 +5249,22 @@ union bpf_attr {
  *		Pointer to the underlying dynptr data, NULL if the dynptr is
  *		read-only, if the dynptr is invalid, or if the offset and length
  *		is out of bounds.
+ *
+ * struct key *bpf_request_key_by_id(unsigned long id)
+ *	Description
+ *		Request a keyring by *id*.
+ *
+ *		*id* can have the following values (some defined in
+ *		verification.h): 0 for the primary keyring (immutable keyring of
+ *		system keys); 1 for both the primary and secondary keyring
+ *		(where keys can be added only if they are vouched for by
+ *		existing keys in those keyrings); 2 for the platform keyring
+ *		(primarily used by the integrity subsystem to verify a kexec'ed
+ *		kerned image and, possibly, the initramfs signature); ULONG_MAX
+ *		for the session keyring (for testing purposes).
+ *	Return
+ *		A non-NULL pointer if *id* is valid and not 0, a NULL pointer
+ *		otherwise.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5455,6 +5471,7 @@ union bpf_attr {
 	FN(dynptr_read),		\
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
+	FN(request_key_by_id),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

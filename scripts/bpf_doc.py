@@ -635,6 +635,7 @@ class PrinterHelpers(Printer):
             'struct bpf_timer',
             'struct mptcp_sock',
             'struct bpf_dynptr',
+            'struct key',
     ]
     known_types = {
             '...',
@@ -686,6 +687,7 @@ class PrinterHelpers(Printer):
             'struct bpf_timer',
             'struct mptcp_sock',
             'struct bpf_dynptr',
+            'struct key',
     }
     mapped_types = {
             'u8': '__u8',

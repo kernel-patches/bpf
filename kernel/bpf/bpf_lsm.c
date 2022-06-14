@@ -16,6 +16,7 @@
 #include <linux/bpf_local_storage.h>
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
+#include <linux/verification.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
@@ -132,6 +133,31 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+#ifdef CONFIG_KEYS
+BTF_ID_LIST_SINGLE(bpf_request_key_by_id_btf_ids, struct, key)
+
+BPF_CALL_1(bpf_request_key_by_id, unsigned long, id)
+{
+	const struct cred *cred = current_cred();
+
+	if (id > (unsigned long)VERIFY_USE_PLATFORM_KEYRING && id != ULONG_MAX)
+		return (unsigned long)NULL;
+
+	if (id == ULONG_MAX)
+		return (unsigned long)cred->session_keyring;
+
+	return id;
+}
+
+static const struct bpf_func_proto bpf_request_key_by_id_proto = {
+	.func		= bpf_request_key_by_id,
+	.gpl_only	= false,
+	.ret_type	= RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id	= &bpf_request_key_by_id_btf_ids[0],
+	.arg1_type	= ARG_ANYTHING,
+};
+#endif /* CONFIG_KEYS */
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -158,6 +184,10 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return prog->aux->sleepable ? &bpf_ima_file_hash_proto : NULL;
 	case BPF_FUNC_get_attach_cookie:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto : NULL;
+#ifdef CONFIG_KEYS
+	case BPF_FUNC_request_key_by_id:
+		return &bpf_request_key_by_id_proto;
+#endif /* CONFIG_KEYS */
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
