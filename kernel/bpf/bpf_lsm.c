@@ -156,6 +156,31 @@ static const struct bpf_func_proto bpf_request_key_by_id_proto = {
 	.ret_btf_id	= &bpf_request_key_by_id_btf_ids[0],
 	.arg1_type	= ARG_ANYTHING,
 };
+
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+BPF_CALL_3(bpf_verify_pkcs7_signature, struct bpf_dynptr_kern *, data_ptr,
+	   struct bpf_dynptr_kern *, sig_ptr, struct key *, trusted_keys)
+{
+	return verify_pkcs7_signature(data_ptr->data,
+				      bpf_dynptr_get_size(data_ptr),
+				      sig_ptr->data,
+				      bpf_dynptr_get_size(sig_ptr),
+				      trusted_keys,
+				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
+				      NULL);
+}
+
+static const struct bpf_func_proto bpf_verify_pkcs7_signature_proto = {
+	.func		= bpf_verify_pkcs7_signature,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg2_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg3_type	= ARG_PTR_TO_BTF_ID_OR_NULL,
+	.arg3_btf_id	= &bpf_request_key_by_id_btf_ids[0],
+	.allowed	= bpf_ima_inode_hash_allowed,
+};
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 #endif /* CONFIG_KEYS */
 
 static const struct bpf_func_proto *
@@ -187,6 +212,11 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 #ifdef CONFIG_KEYS
 	case BPF_FUNC_request_key_by_id:
 		return &bpf_request_key_by_id_proto;
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+	case BPF_FUNC_verify_pkcs7_signature:
+		return prog->aux->sleepable ?
+		       &bpf_verify_pkcs7_signature_proto : NULL;
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 #endif /* CONFIG_KEYS */
 	default:
 		return tracing_prog_func_proto(func_id, prog);

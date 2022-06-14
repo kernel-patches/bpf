@@ -5265,6 +5265,13 @@ union bpf_attr {
  *	Return
  *		A non-NULL pointer if *id* is valid and not 0, a NULL pointer
  *		otherwise.
+ *
+ * long bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr, struct bpf_dynptr *sig_ptr, struct key *trusted_keys)
+ *	Description
+ *		Verify the PKCS#7 signature *sig* against the supplied *data*
+ *		with keys in *trusted_keys*.
+ *	Return
+ *		0 on success, a negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5472,6 +5479,7 @@ union bpf_attr {
 	FN(dynptr_write),		\
 	FN(dynptr_data),		\
 	FN(request_key_by_id),		\
+	FN(verify_pkcs7_signature),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
