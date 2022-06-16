@@ -170,6 +170,6 @@ pthread_barrier_t barr;
 pthread_mutex_t pacing_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t pacing_cond = PTHREAD_COND_INITIALIZER;
 
-int pkts_in_flight;
+volatile int pkts_in_flight;
 
 #endif				/* XDPXCEIVER_H */

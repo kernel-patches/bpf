@@ -965,7 +965,7 @@ static int __send_pkts(struct ifobject *ifobject, u32 *pkt_nb)
 
 static void wait_for_tx_completion(struct xsk_socket_info *xsk)
 {
-	while (xsk->outstanding_tx)
+	while (pkts_in_flight)
 		complete_pkts(xsk, BATCH_SIZE);
 }
 
@@ -1269,6 +1269,7 @@ static void *worker_testapp_validate_rx(void *arg)
 		pthread_mutex_unlock(&pacing_mutex);
 	}
 
+	pkts_in_flight = 0;
 	pthread_exit(NULL);
 }
 
