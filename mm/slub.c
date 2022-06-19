@@ -4556,6 +4556,131 @@ void kfree(const void *x)
 }
 EXPORT_SYMBOL(kfree);
 
+bool krecharge(const void *x, int step)
+{
+	void *object = (void *)x;
+	struct obj_cgroup *objcg_old;
+	struct obj_cgroup *objcg_new;
+	struct obj_cgroup **objcgs;
+	struct kmem_cache *s;
+	struct folio *folio;
+	struct slab *slab;
+	unsigned int off;
+
+	WARN_ON(!in_task());
+
+	if (!memcg_kmem_enabled())
+		return true;
+
+	if (unlikely(ZERO_OR_NULL_PTR(x)))
+		return true;
+
+	folio = virt_to_folio(x);
+	if (unlikely(!folio_test_slab(folio))) {
+		unsigned int order = folio_order(folio);
+		struct page *page;
+
+		switch (step) {
+		case MEMCG_KMEM_PRE_CHARGE:
+			objcg_new = get_obj_cgroup_from_current();
+			WARN_ON(!objcg_new);
+			/* Try charge current memcg */
+			if (obj_cgroup_charge_pages(objcg_new, GFP_KERNEL,
+						    1 << order)) {
+				obj_cgroup_put(objcg_new);
+				return false;
+			}
+			break;
+		case MEMCG_KMEM_UNCHARGE:
+			/* Uncharge folio memcg */
+			objcg_old = __folio_objcg(folio);
+			page = folio_page(folio, 0);
+			WARN_ON(!objcg_old);
+			obj_cgroup_uncharge_pages(objcg_old, 1 << order);
+			mod_lruvec_page_state(page, NR_SLAB_UNRECLAIMABLE_B,
+						-(PAGE_SIZE << order));
+			page->memcg_data = 0;
+			obj_cgroup_put(objcg_old);
+			break;
+		case MEMCG_KMEM_POST_CHARGE:
+			/* Set current memcg to folio page */
+			objcg_new = obj_cgroup_from_current();
+			page = folio_page(folio, 0);
+			page->memcg_data = (unsigned long)objcg_new | MEMCG_DATA_KMEM;
+			mod_lruvec_page_state(page, NR_SLAB_UNRECLAIMABLE_B,
+						-(PAGE_SIZE << order));
+			break;
+		case MEMCG_KMEM_CHARGE_ERR:
+			objcg_new = obj_cgroup_from_current();
+			obj_cgroup_uncharge_pages(objcg_new, 1 << order);
+			obj_cgroup_put(objcg_new);
+			break;
+		}
+		return true;
+	}
+
+	slab = folio_slab(folio);
+	if (!slab)
+		return true;
+
+	s = slab->slab_cache;
+	if (!(s->flags & SLAB_ACCOUNT))
+		return true;
+
+	objcgs = slab_objcgs(slab);
+	if (!objcgs)
+		return true;
+	off = obj_to_index(s, slab, object);
+	objcg_old = objcgs[off];
+	/* In step MEMCG_KMEM_UNCHARGE, the objcg will set to NULL. */
+	if (!objcg_old && step != MEMCG_KMEM_POST_CHARGE)
+		return true;
+
+	/*
+	 *  The recharge can be separated into three steps,
+	 *  1. Pre charge to the new memcg
+	 *  2. Uncharge from the old memcg
+	 *  3. Charge to the new memcg
+	 */
+	switch (step) {
+	case MEMCG_KMEM_PRE_CHARGE:
+		/*
+		 * Before uncharge from the old memcg, we must pre charge the new memcg
+		 * first, to make sure it always succeed to recharge to the new memcg
+		 * after uncharge from the old memcg.
+		 */
+		objcg_new = get_obj_cgroup_from_current();
+		WARN_ON(!objcg_new);
+		if (obj_cgroup_charge(objcg_new, GFP_KERNEL, obj_full_size(s))) {
+			obj_cgroup_put(objcg_new);
+			return false;
+		}
+		break;
+	case MEMCG_KMEM_UNCHARGE:
+		/* Uncharge from old memcg */
+		obj_cgroup_uncharge(objcg_old, obj_full_size(s));
+		objcgs[off] = NULL;
+		mod_objcg_state(objcg_old, slab_pgdat(slab), cache_vmstat_idx(s),
+				-obj_full_size(s));
+		obj_cgroup_put(objcg_old);
+		break;
+	case MEMCG_KMEM_POST_CHARGE:
+		/* Charge to the new memcg */
+		objcg_new = obj_cgroup_from_current();
+		objcgs[off] = objcg_new;
+		mod_objcg_state(objcg_new, slab_pgdat(slab), cache_vmstat_idx(s), obj_full_size(s));
+		break;
+	case MEMCG_KMEM_CHARGE_ERR:
+		objcg_new = obj_cgroup_from_current();
+		obj_cgroup_uncharge(objcg_new, obj_full_size(s));
+		obj_cgroup_put(objcg_new);
+		break;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL(krecharge);
+
 #define SHRINK_PROMOTE_MAX 32
 
 /*

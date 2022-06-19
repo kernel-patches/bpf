@@ -3798,6 +3798,91 @@ void kfree(const void *objp)
 }
 EXPORT_SYMBOL(kfree);
 
+bool krecharge(const void *objp, int step)
+{
+	void *object = (void *)objp;
+	struct obj_cgroup *objcg_old;
+	struct obj_cgroup *objcg_new;
+	struct obj_cgroup **objcgs;
+	struct kmem_cache *s;
+	struct slab *slab;
+	unsigned long flags;
+	unsigned int off;
+
+	WARN_ON(!in_task());
+
+	if (unlikely(ZERO_OR_NULL_PTR(objp)))
+		return true;
+
+	if (!memcg_kmem_enabled())
+		return true;
+
+	local_irq_save(flags);
+	s = virt_to_cache(objp);
+	if (!s)
+		goto out;
+
+	if (!(s->flags & SLAB_ACCOUNT))
+		goto out;
+
+	slab = virt_to_slab(object);
+	if (!slab)
+		goto out;
+
+	objcgs = slab_objcgs(slab);
+	if (!objcgs)
+		goto out;
+
+	off = obj_to_index(s, slab, object);
+	objcg_old = objcgs[off];
+	if (!objcg_old && step != MEMCG_KMEM_POST_CHARGE)
+		goto out;
+
+	/*
+	 *  The recharge can be separated into three steps,
+	 *  1. Pre charge to the new memcg
+	 *  2. Uncharge from the old memcg
+	 *  3. Charge to the new memcg
+	 */
+	switch (step) {
+	case MEMCG_KMEM_PRE_CHARGE:
+		/* Pre recharge */
+		objcg_new = get_obj_cgroup_from_current();
+		WARN_ON(!objcg_new);
+		if (obj_cgroup_charge(objcg_new, GFP_KERNEL, obj_full_size(s))) {
+			obj_cgroup_put(objcg_new);
+			local_irq_restore(flags);
+			return false;
+		}
+		break;
+	case MEMCG_KMEM_UNCHARGE:
+		/* Uncharge from the old memcg */
+		obj_cgroup_uncharge(objcg_old, obj_full_size(s));
+		objcgs[off] = NULL;
+		mod_objcg_state(objcg_old, slab_pgdat(slab), cache_vmstat_idx(s),
+				-obj_full_size(s));
+		obj_cgroup_put(objcg_old);
+		break;
+	case MEMCG_KMEM_POST_CHARGE:
+		/* Charge to the new memcg */
+		objcg_new = obj_cgroup_from_current();
+		objcgs[off] = objcg_new;
+		mod_objcg_state(objcg_new, slab_pgdat(slab), cache_vmstat_idx(s), obj_full_size(s));
+		break;
+	case MEMCG_KMEM_CHARGE_ERR:
+		objcg_new = obj_cgroup_from_current();
+		obj_cgroup_uncharge(objcg_new, obj_full_size(s));
+		obj_cgroup_put(objcg_new);
+		break;
+	}
+
+out:
+	local_irq_restore(flags);
+
+	return true;
+}
+EXPORT_SYMBOL(krecharge);
+
 /*
  * This initializes kmem_cache_node or resizes various caches for all nodes.
  */

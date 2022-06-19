@@ -195,6 +195,23 @@ void kmem_dump_obj(void *object);
 #endif
 
 /*
+ * The recharge will be separated into three steps:
+ *	MEMCG_KMEM_PRE_CHARGE  : pre charge to the new memcg
+ *	MEMCG_KMEM_UNCHARGE    : uncharge from the old memcg
+ *	MEMCG_KMEM_POST_CHARGE : post charge to the new memcg
+ * and an error handler:
+ *	MEMCG_KMEM_CHARGE_ERR  : in pre charge state, we may succeed to
+ *	                         charge some objp's but fail to charge
+ *	                         a new one, then in this case we should
+ *	                         uncharge the already charged objp's.
+ */
+#define MEMCG_KMEM_PRE_CHARGE	0
+#define MEMCG_KMEM_UNCHARGE	1
+#define MEMCG_KMEM_POST_CHARGE	2
+#define MEMCG_KMEM_CHARGE_ERR	3
+bool krecharge(const void *objp, int step);
+
+/*
  * Some archs want to perform DMA into kmalloc caches and need a guaranteed
  * alignment larger than the alignment of a 64-bit integer.
  * Setting ARCH_DMA_MINALIGN in arch headers allows that.

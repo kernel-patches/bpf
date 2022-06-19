@@ -574,6 +574,13 @@ void kfree(const void *block)
 }
 EXPORT_SYMBOL(kfree);
 
+/* kmemcg is no supported for SLOB */
+bool krecharge(const void *block, int step)
+{
+	return true;
+}
+EXPORT_SYMBOL(krecharge);
+
 /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
 size_t __ksize(const void *block)
 {
