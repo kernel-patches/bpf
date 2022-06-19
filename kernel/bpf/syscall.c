@@ -4170,12 +4170,22 @@ static int bpf_map_get_info_by_fd(struct file *file,
 
 #ifdef CONFIG_MEMCG_KMEM
 	if (map->memcg) {
+		size_t offset = offsetof(struct bpf_map_info, memcg_recharge);
 		struct mem_cgroup *memcg = map->memcg;
+		char recharge;
 
 		if (memcg == root_mem_cgroup)
 			info.memcg_state = 0;
 		else
 			info.memcg_state = memcg_need_recharge(memcg) ? -1 : 1;
+
+		if (copy_from_user(&recharge, (char __user *)uinfo + offset, sizeof(char)))
+			return -EFAULT;
+
+		if (recharge && memcg_need_recharge(memcg)) {
+			if (map->ops->map_memcg_recharge)
+				map->ops->map_memcg_recharge(map);
+		}
 	}
 #endif
 

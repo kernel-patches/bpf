@@ -4488,7 +4488,7 @@ int bpf_map__set_autocreate(struct bpf_map *map, bool autocreate)
 
 int bpf_map__reuse_fd(struct bpf_map *map, int fd)
 {
-	struct bpf_map_info info = {};
+	struct bpf_map_info info = {.memcg_recharge = 1};
 	__u32 len = sizeof(info);
 	int new_fd, err;
 	char *new_name;
