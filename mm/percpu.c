@@ -2310,6 +2310,104 @@ void free_percpu(void __percpu *ptr)
 }
 EXPORT_SYMBOL_GPL(free_percpu);
 
+#ifdef CONFIG_MEMCG_KMEM
+bool recharge_percpu(void __percpu *ptr, int step)
+{
+	int bit_off, off, bits, size, end;
+	struct obj_cgroup *objcg_old;
+	struct obj_cgroup *objcg_new;
+	struct pcpu_chunk *chunk;
+	unsigned long flags;
+	void *addr;
+
+	WARN_ON(!in_task());
+
+	if (!ptr)
+		return true;
+
+	addr = __pcpu_ptr_to_addr(ptr);
+	spin_lock_irqsave(&pcpu_lock, flags);
+	chunk = pcpu_chunk_addr_search(addr);
+	off = addr - chunk->base_addr;
+	objcg_old = chunk->obj_cgroups[off >> PCPU_MIN_ALLOC_SHIFT];
+	if (!objcg_old && step != MEMCG_KMEM_POST_CHARGE) {
+		spin_unlock_irqrestore(&pcpu_lock, flags);
+		return true;
+	}
+
+	bit_off = off / PCPU_MIN_ALLOC_SIZE;
+	/* find end index */
+	end = find_next_bit(chunk->bound_map, pcpu_chunk_map_bits(chunk),
+			bit_off + 1);
+	bits = end - bit_off;
+	size = bits * PCPU_MIN_ALLOC_SIZE;
+
+	switch (step) {
+	case MEMCG_KMEM_PRE_CHARGE:
+		objcg_new = get_obj_cgroup_from_current();
+		WARN_ON(!objcg_new);
+		if (obj_cgroup_charge(objcg_new, GFP_KERNEL,
+				      size * num_possible_cpus())) {
+			obj_cgroup_put(objcg_new);
+			spin_unlock_irqrestore(&pcpu_lock, flags);
+			return false;
+		}
+		break;
+	case MEMCG_KMEM_UNCHARGE:
+		obj_cgroup_uncharge(objcg_old, size * num_possible_cpus());
+		rcu_read_lock();
+		mod_memcg_state(obj_cgroup_memcg(objcg_old), MEMCG_PERCPU_B,
+			-(size * num_possible_cpus()));
+		rcu_read_unlock();
+		chunk->obj_cgroups[off >> PCPU_MIN_ALLOC_SHIFT] = NULL;
+		obj_cgroup_put(objcg_old);
+		break;
+	case MEMCG_KMEM_POST_CHARGE:
+		rcu_read_lock();
+		chunk->obj_cgroups[off >> PCPU_MIN_ALLOC_SHIFT] = obj_cgroup_from_current();
+		mod_memcg_state(mem_cgroup_from_task(current), MEMCG_PERCPU_B,
+			(size * num_possible_cpus()));
+		rcu_read_unlock();
+		break;
+	case MEMCG_KMEM_CHARGE_ERR:
+		/*
+		 * In case fail to charge to the new one in the pre charge state,
+		 * for example, we have pre-charged one memcg successfully but fail
+		 * to pre-charge the second memcg, then we should uncharge the first
+		 * memcg.
+		 */
+		objcg_new = obj_cgroup_from_current();
+		obj_cgroup_uncharge(objcg_new, size * num_possible_cpus());
+		obj_cgroup_put(objcg_new);
+		rcu_read_lock();
+		mod_memcg_state(obj_cgroup_memcg(objcg_new), MEMCG_PERCPU_B,
+			-(size * num_possible_cpus()));
+		rcu_read_unlock();
+
+		break;
+	}
+
+	spin_unlock_irqrestore(&pcpu_lock, flags);
+
+	return true;
+}
+EXPORT_SYMBOL(recharge_percpu);
+
+#else /* CONFIG_MEMCG_KMEM */
+
+bool charge_percpu(void __percpu *ptr, bool charge)
+{
+	return true;
+}
+EXPORT_SYMBOL(charge_percpu);
+
+void uncharge_percpu(void __percpu *ptr)
+{
+}
+EXPORT_SYMBOL(uncharge_percpu);
+
+#endif /* CONFIG_MEMCG_KMEM */
+
 bool __is_kernel_percpu_address(unsigned long addr, unsigned long *can_addr)
 {
 #ifdef CONFIG_SMP
