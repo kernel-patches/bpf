@@ -27,6 +27,7 @@
 #include <linux/bpfptr.h>
 #include <linux/btf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/memcontrol.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -247,6 +248,26 @@ struct bpf_map {
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
 };
+
+#ifdef CONFIG_MEMCG_KMEM
+static inline void bpf_map_save_memcg(struct bpf_map *map)
+{
+	map->memcg = get_mem_cgroup_from_mm(current->mm);
+}
+
+static inline void bpf_map_release_memcg(struct bpf_map *map)
+{
+	mem_cgroup_put(map->memcg);
+}
+#else
+static inline void bpf_map_save_memcg(struct bpf_map *map)
+{
+}
+
+static inline void bpf_map_release_memcg(struct bpf_map *map)
+{
+}
+#endif
 
 static inline bool map_value_has_spin_lock(const struct bpf_map *map)
 {
