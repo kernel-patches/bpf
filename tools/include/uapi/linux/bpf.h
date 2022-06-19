@@ -6092,7 +6092,9 @@ struct bpf_map_info {
 	__u32 btf_id;
 	__u32 btf_key_type_id;
 	__u32 btf_value_type_id;
-	__u32 :32;	/* alignment pad */
+	__s8  memcg_state;
+	__s8  :8;	/* alignment pad */
+	__u16 :16;	/* alignment pad */
 	__u64 map_extra;
 } __attribute__((aligned(8)));
 
