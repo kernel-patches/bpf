@@ -1755,6 +1755,18 @@ static inline void count_objcg_event(struct obj_cgroup *objcg,
 	rcu_read_unlock();
 }
 
+static inline bool memcg_need_recharge(struct mem_cgroup *memcg)
+{
+	if (!memcg || memcg == root_mem_cgroup)
+		return false;
+	/*
+	 * Currently we only recharge pages from an offline memcg,
+	 * in the future we may explicitly introduce a need_recharge
+	 * state for the memcg which should be recharged.
+	 */
+	return memcg->kmemcg_id == memcg->id.id ? false : true;
+}
+
 #else
 static inline bool mem_cgroup_kmem_disabled(void)
 {
@@ -1804,6 +1816,11 @@ static inline struct mem_cgroup *mem_cgroup_from_obj(void *p)
 static inline void count_objcg_event(struct obj_cgroup *objcg,
 				     enum vm_event_item idx)
 {
+}
+
+static inline bool memcg_need_recharge(struct mem_cgroup *memcg)
+{
+	return false;
 }
 
 #endif /* CONFIG_MEMCG_KMEM */
