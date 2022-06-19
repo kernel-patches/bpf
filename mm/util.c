@@ -656,6 +656,15 @@ void kvfree(const void *addr)
 }
 EXPORT_SYMBOL(kvfree);
 
+bool kvrecharge(const void *addr, int step)
+{
+	if (is_vmalloc_addr(addr))
+		return vrecharge(addr, step);
+
+	return krecharge(addr, step);
+}
+EXPORT_SYMBOL(kvrecharge);
+
 /**
  * kvfree_sensitive - Free a data object containing sensitive information.
  * @addr: address of the data object to be freed.

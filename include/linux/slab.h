@@ -794,6 +794,7 @@ extern void *kvrealloc(const void *p, size_t oldsize, size_t newsize, gfp_t flag
 		      __alloc_size(3);
 extern void kvfree(const void *addr);
 extern void kvfree_sensitive(const void *addr, size_t len);
+bool kvrecharge(const void *addr, int step);
 
 unsigned int kmem_cache_size(struct kmem_cache *s);
 void __init kmem_cache_init_late(void);

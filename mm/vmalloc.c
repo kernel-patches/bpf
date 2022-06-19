@@ -2745,6 +2745,93 @@ void vfree(const void *addr)
 }
 EXPORT_SYMBOL(vfree);
 
+bool vrecharge(const void *addr, int step)
+{
+	struct obj_cgroup *objcg_new;
+	unsigned int page_order;
+	struct vm_struct *area;
+	struct folio *folio;
+	int i;
+
+	WARN_ON(!in_task());
+
+	if (!addr)
+		return true;
+
+	area = find_vm_area(addr);
+	if (unlikely(!area))
+		return true;
+
+	page_order = vm_area_page_order(area);
+
+	switch (step) {
+	case MEMCG_KMEM_PRE_CHARGE:
+		for (i = 0; i < area->nr_pages; i += 1U << page_order) {
+			struct page *page = area->pages[i];
+
+			WARN_ON(!page);
+			objcg_new = get_obj_cgroup_from_current();
+			WARN_ON(!objcg_new);
+			if (obj_cgroup_charge_pages(objcg_new, GFP_KERNEL,
+						    1 << page_order))
+				goto out_pre;
+			cond_resched();
+		}
+		break;
+	case MEMCG_KMEM_UNCHARGE:
+		for (i = 0; i < area->nr_pages; i += 1U << page_order) {
+			struct page *page = area->pages[i];
+			struct obj_cgroup *objcg_old;
+
+			WARN_ON(!page);
+			folio = page_folio(page);
+			WARN_ON(!folio_memcg_kmem(folio));
+			objcg_old = __folio_objcg(folio);
+
+			obj_cgroup_uncharge_pages(objcg_old, 1 << page_order);
+			/* mod memcg from page */
+			mod_memcg_state(page_memcg(page), MEMCG_VMALLOC,
+					-(1U << page_order));
+			page->memcg_data = 0;
+			obj_cgroup_put(objcg_old);
+			cond_resched();
+		}
+		break;
+	case MEMCG_KMEM_POST_CHARGE:
+		objcg_new = obj_cgroup_from_current();
+		for (i = 0; i < area->nr_pages; i += 1U << page_order) {
+			struct page *page = area->pages[i];
+
+			page->memcg_data = (unsigned long)objcg_new | MEMCG_DATA_KMEM;
+			/* mod memcg from current */
+			mod_memcg_state(page_memcg(page), MEMCG_VMALLOC,
+					1U << page_order);
+
+		}
+		break;
+	case MEMCG_KMEM_CHARGE_ERR:
+		objcg_new = obj_cgroup_from_current();
+		for (i = 0; i < area->nr_pages; i += 1U << page_order) {
+			obj_cgroup_uncharge_pages(objcg_new, 1 << page_order);
+			obj_cgroup_put(objcg_new);
+			cond_resched();
+		}
+		break;
+	}
+
+	return true;
+
+out_pre:
+	for (; i > 0; i -= 1U << page_order) {
+		obj_cgroup_uncharge_pages(objcg_new, 1 << page_order);
+		obj_cgroup_put(objcg_new);
+		cond_resched();
+	}
+
+	return false;
+}
+EXPORT_SYMBOL(vrecharge);
+
 /**
  * vunmap - release virtual mapping obtained by vmap()
  * @addr:   memory base address
