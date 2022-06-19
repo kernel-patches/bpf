@@ -260,9 +260,6 @@ bool mem_cgroup_kmem_disabled(void)
 	return cgroup_memory_nokmem;
 }
 
-static void obj_cgroup_uncharge_pages(struct obj_cgroup *objcg,
-				      unsigned int nr_pages);
-
 static void obj_cgroup_release(struct percpu_ref *ref)
 {
 	struct obj_cgroup *objcg = container_of(ref, struct obj_cgroup, refcnt);
@@ -2991,8 +2988,8 @@ static void memcg_account_kmem(struct mem_cgroup *memcg, int nr_pages)
  * @objcg: object cgroup to uncharge
  * @nr_pages: number of pages to uncharge
  */
-static void obj_cgroup_uncharge_pages(struct obj_cgroup *objcg,
-				      unsigned int nr_pages)
+void obj_cgroup_uncharge_pages(struct obj_cgroup *objcg,
+				unsigned int nr_pages)
 {
 	struct mem_cgroup *memcg;
 
@@ -3012,8 +3009,8 @@ static void obj_cgroup_uncharge_pages(struct obj_cgroup *objcg,
  *
  * Returns 0 on success, an error code on failure.
  */
-static int obj_cgroup_charge_pages(struct obj_cgroup *objcg, gfp_t gfp,
-				   unsigned int nr_pages)
+int obj_cgroup_charge_pages(struct obj_cgroup *objcg, gfp_t gfp,
+			    unsigned int nr_pages)
 {
 	struct mem_cgroup *memcg;
 	int ret;

@@ -1709,6 +1709,10 @@ struct obj_cgroup *get_obj_cgroup_from_page(struct page *page);
 
 int obj_cgroup_charge(struct obj_cgroup *objcg, gfp_t gfp, size_t size);
 void obj_cgroup_uncharge(struct obj_cgroup *objcg, size_t size);
+int obj_cgroup_charge_pages(struct obj_cgroup *objcg, gfp_t gfp,
+			    unsigned int nr_pages);
+void obj_cgroup_uncharge_pages(struct obj_cgroup *objcg,
+			       unsigned int nr_pages);
 
 extern struct static_key_false memcg_kmem_enabled_key;
 
