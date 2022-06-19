@@ -11,6 +11,7 @@
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/btf_ids.h>
+#include <linux/memcontrol.h>
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
@@ -1499,6 +1500,75 @@ static void htab_map_free(struct bpf_map *map)
 	kfree(htab);
 }
 
+#ifdef CONFIG_MEMCG_KMEM
+static bool htab_map_memcg_recharge(struct bpf_map *map)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	struct mem_cgroup *old = map->memcg;
+	int i;
+
+	/*
+	 * Although the bpf map's offline memcg has been reparented, there
+	 * is still reference on it, so it is safe to be accessed.
+	 */
+	if (!old)
+		return false;
+
+	/* Pre charge to the new memcg */
+	if (!krecharge(htab, MEMCG_KMEM_PRE_CHARGE))
+		return false;
+
+	if (!kvrecharge(htab->buckets, MEMCG_KMEM_PRE_CHARGE))
+		goto out_k;
+
+	if (!recharge_percpu(htab->extra_elems, MEMCG_KMEM_PRE_CHARGE))
+		goto out_kv;
+
+	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++) {
+		if (!recharge_percpu(htab->map_locked[i], MEMCG_KMEM_PRE_CHARGE))
+			goto out_p;
+	}
+
+	/* Uncharge from the old memcg. */
+	krecharge(htab, MEMCG_KMEM_UNCHARGE);
+	kvrecharge(htab->buckets, MEMCG_KMEM_UNCHARGE);
+	recharge_percpu(htab->extra_elems, MEMCG_KMEM_UNCHARGE);
+	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
+		recharge_percpu(htab->map_locked[i], MEMCG_KMEM_UNCHARGE);
+
+	/* Release the old memcg */
+	bpf_map_release_memcg(map);
+
+	/* Post charge to the new memcg */
+	krecharge(htab, MEMCG_KMEM_POST_CHARGE);
+	kvrecharge(htab->buckets, MEMCG_KMEM_POST_CHARGE);
+	recharge_percpu(htab->extra_elems, MEMCG_KMEM_POST_CHARGE);
+	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
+		recharge_percpu(htab->map_locked[i], MEMCG_KMEM_POST_CHARGE);
+
+	/* Save the new memcg */
+	bpf_map_save_memcg(map);
+
+	return true;
+
+out_p:
+	for (; i > 0; i--)
+		recharge_percpu(htab->map_locked[i], MEMCG_KMEM_CHARGE_ERR);
+	recharge_percpu(htab->extra_elems, MEMCG_KMEM_CHARGE_ERR);
+out_kv:
+	kvrecharge(htab->buckets, MEMCG_KMEM_CHARGE_ERR);
+out_k:
+	krecharge(htab, MEMCG_KMEM_CHARGE_ERR);
+
+	return false;
+}
+#else
+static bool htab_map_memcg_recharge(struct bpf_map *map)
+{
+	return true;
+}
+#endif
+
 static void htab_map_seq_show_elem(struct bpf_map *map, void *key,
 				   struct seq_file *m)
 {
@@ -2152,6 +2222,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_memcg_recharge = htab_map_memcg_recharge,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_release_uref = htab_map_free_timers,
 	.map_lookup_elem = htab_map_lookup_elem,
@@ -2172,6 +2243,7 @@ const struct bpf_map_ops htab_lru_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_memcg_recharge = htab_map_memcg_recharge,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_release_uref = htab_map_free_timers,
 	.map_lookup_elem = htab_lru_map_lookup_elem,
@@ -2325,6 +2397,7 @@ const struct bpf_map_ops htab_percpu_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_memcg_recharge = htab_map_memcg_recharge,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_lookup_elem = htab_percpu_map_lookup_elem,
 	.map_lookup_and_delete_elem = htab_percpu_map_lookup_and_delete_elem,
@@ -2344,6 +2417,7 @@ const struct bpf_map_ops htab_lru_percpu_map_ops = {
 	.map_alloc_check = htab_map_alloc_check,
 	.map_alloc = htab_map_alloc,
 	.map_free = htab_map_free,
+	.map_memcg_recharge = htab_map_memcg_recharge,
 	.map_get_next_key = htab_map_get_next_key,
 	.map_lookup_elem = htab_lru_percpu_map_lookup_elem,
 	.map_lookup_and_delete_elem = htab_lru_percpu_map_lookup_and_delete_elem,
