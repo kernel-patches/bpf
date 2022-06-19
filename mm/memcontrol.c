@@ -2950,6 +2950,30 @@ struct obj_cgroup *get_obj_cgroup_from_page(struct page *page)
 	return objcg;
 }
 
+__always_inline struct obj_cgroup *obj_cgroup_from_current(void)
+{
+	struct obj_cgroup *objcg = NULL;
+	struct mem_cgroup *memcg;
+
+	if (memcg_kmem_bypass())
+		return NULL;
+
+	rcu_read_lock();
+	if (unlikely(active_memcg()))
+		memcg = active_memcg();
+	else
+		memcg = mem_cgroup_from_task(current);
+
+	for (; memcg != root_mem_cgroup; memcg = parent_mem_cgroup(memcg)) {
+		objcg = rcu_dereference(memcg->objcg);
+		if (objcg)
+			break;
+	}
+	rcu_read_unlock();
+
+	return objcg;
+}
+
 static void memcg_account_kmem(struct mem_cgroup *memcg, int nr_pages)
 {
 	mod_memcg_state(memcg, MEMCG_KMEM, nr_pages);
