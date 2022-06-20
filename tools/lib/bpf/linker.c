@@ -719,7 +719,7 @@ static int linker_sanity_check_elf(struct src_obj *obj)
 			return -EINVAL;
 		}
 
-		if (sec->shdr->sh_addralign && !is_pow_of_2(sec->shdr->sh_addralign))
+		if (sec->shdr->sh_addralign && !is_power_of_2(sec->shdr->sh_addralign))
 			return -EINVAL;
 		if (sec->shdr->sh_addralign != sec->data->d_align)
 			return -EINVAL;

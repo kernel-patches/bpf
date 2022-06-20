@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <linux/err.h>
+#include <linux/log2.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include "libbpf_legacy.h"
@@ -581,10 +582,5 @@ struct bpf_link * usdt_manager_attach_usdt(struct usdt_manager *man,
 					   pid_t pid, const char *path,
 					   const char *usdt_provider, const char *usdt_name,
 					   __u64 usdt_cookie);
-
-static inline bool is_pow_of_2(size_t x)
-{
-	return x && (x & (x - 1)) == 0;
-}
 
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

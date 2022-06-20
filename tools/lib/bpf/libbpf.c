@@ -5131,7 +5131,7 @@ static size_t adjust_ringbuf_sz(size_t sz)
 	 * a power-of-2 multiple of kernel's page size. If user diligently
 	 * satisified these conditions, pass the size through.
 	 */
-	if ((sz % page_sz) == 0 && is_pow_of_2(sz / page_sz))
+	if ((sz % page_sz) == 0 && is_power_of_2(sz / page_sz))
 		return sz;
 
 	/* Otherwise find closest (page_sz * power_of_2) product bigger than
