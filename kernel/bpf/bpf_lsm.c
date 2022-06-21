@@ -132,6 +132,46 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+#ifdef CONFIG_KEYS
+BTF_ID_LIST_SINGLE(btf_key_ids, struct, key)
+
+BPF_CALL_2(bpf_lookup_user_key, u32, serial, unsigned long, flags)
+{
+	key_ref_t key_ref;
+
+	key_ref = lookup_user_key(serial, flags, KEY_NEED_SEARCH);
+	if (IS_ERR(key_ref))
+		return (unsigned long)NULL;
+
+	return (unsigned long)key_ref_to_ptr(key_ref);
+}
+
+static const struct bpf_func_proto bpf_lookup_user_key_proto = {
+	.func		= bpf_lookup_user_key,
+	.gpl_only	= false,
+	.ret_type	= RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id	= &btf_key_ids[0],
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.allowed	= bpf_ima_inode_hash_allowed,
+};
+
+BPF_CALL_1(bpf_key_put, struct key *, key)
+{
+	key_put(key);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_key_put_proto = {
+	.func		= bpf_key_put,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_PTR_TO_BTF_ID | OBJ_RELEASE,
+	.arg1_btf_id	= &btf_key_ids[0],
+	.allowed	= bpf_ima_inode_hash_allowed,
+};
+#endif /* CONFIG_KEYS */
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -158,6 +198,12 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return prog->aux->sleepable ? &bpf_ima_file_hash_proto : NULL;
 	case BPF_FUNC_get_attach_cookie:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto : NULL;
+#ifdef CONFIG_KEYS
+	case BPF_FUNC_lookup_user_key:
+		return &bpf_lookup_user_key_proto;
+	case BPF_FUNC_key_put:
+		return &bpf_key_put_proto;
+#endif /* CONFIG_KEYS */
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
