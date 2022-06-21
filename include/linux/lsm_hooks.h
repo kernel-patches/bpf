@@ -799,6 +799,11 @@
  *	security attributes, e.g. for /proc/pid inodes.
  *	@p contains the task_struct for the task.
  *	@inode contains the inode structure for the inode.
+ * @create_user_ns:
+ *	Check permission prior to assigning the new namespace to @cred->user_ns.
+ *	@cred points to prepared creds.
+ *	@new_userns points to the newly created user namespace.
+ *	Return 0 if successful, otherwise < 0 error code.
  *
  * Security hooks for Netlink messaging.
  *

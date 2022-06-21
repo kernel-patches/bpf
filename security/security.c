@@ -1903,6 +1903,12 @@ void security_task_to_inode(struct task_struct *p, struct inode *inode)
 	call_void_hook(task_to_inode, p, inode);
 }
 
+int security_create_user_ns(const struct cred *cred,
+			    const struct user_namespace *new_userns)
+{
+	return call_int_hook(create_user_ns, 0, cred, new_userns);
+}
+
 int security_ipc_permission(struct kern_ipc_perm *ipcp, short flag)
 {
 	return call_int_hook(ipc_permission, 0, ipcp, flag);

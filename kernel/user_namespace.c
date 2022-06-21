@@ -9,6 +9,7 @@
 #include <linux/highuid.h>
 #include <linux/cred.h>
 #include <linux/securebits.h>
+#include <linux/security.h>
 #include <linux/keyctl.h>
 #include <linux/key-type.h>
 #include <keys/user-type.h>
@@ -151,6 +152,10 @@ int create_user_ns(struct cred *new)
 #endif
 	ret = -ENOMEM;
 	if (!setup_userns_sysctls(ns))
+		goto fail_keyring;
+
+	ret = security_create_user_ns(new, ns);
+	if (ret < 0)
 		goto fail_keyring;
 
 	set_cred_user_ns(new, ns);
