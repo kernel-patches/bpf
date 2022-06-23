@@ -364,6 +364,36 @@ void bpf_ct_release(struct nf_conn *nfct)
 	nf_ct_put(nfct);
 }
 
+/* bpf_ct_set_timeout - Set timeout of allocated nf_conn
+ *
+ * Sets the default timeout of newly allocated nf_conn before insertion.
+ * This helper must be invoked for refcounted pointer to nf_conn___init.
+ *
+ * Parameters:
+ * @nfct__ref    - Pointer to referenced nf_conn object, obtained using
+ *                 bpf_xdp_ct_alloc or bpf_skb_ct_alloc.
+ * @timeout      - Timeout in msecs.
+ */
+void bpf_ct_set_timeout(struct nf_conn___init *nfct__ref, u32 timeout)
+{
+	__nf_ct_set_timeout((struct nf_conn *)nfct__ref, msecs_to_jiffies(timeout));
+}
+
+/* bpf_ct_change_timeout - Change timeout of inserted nf_conn
+ *
+ * Change timeout associated of the inserted or looked up nf_conn.
+ * This helper must be invoked for refcounted pointer to nf_conn.
+ *
+ * Parameters:
+ * @nfct__ref    - Pointer to referenced nf_conn object, obtained using
+ *		   bpf_ct_insert_entry, bpf_xdp_ct_lookup, or bpf_skb_ct_lookup.
+ * @timeout      - New timeout in msecs.
+ */
+int bpf_ct_change_timeout(struct nf_conn *nfct__ref, u32 timeout)
+{
+	return __nf_ct_change_timeout(nfct__ref, msecs_to_jiffies(timeout));
+}
+
 __diag_pop()
 
 BTF_SET_START(nf_ct_xdp_check_kfunc_ids)
@@ -371,6 +401,8 @@ BTF_ID(func, bpf_xdp_ct_alloc)
 BTF_ID(func, bpf_xdp_ct_lookup)
 BTF_ID(func, bpf_ct_insert_entry)
 BTF_ID(func, bpf_ct_release)
+BTF_ID(func, bpf_ct_set_timeout);
+BTF_ID(func, bpf_ct_change_timeout);
 BTF_SET_END(nf_ct_xdp_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_tc_check_kfunc_ids)
@@ -378,6 +410,8 @@ BTF_ID(func, bpf_skb_ct_alloc)
 BTF_ID(func, bpf_skb_ct_lookup)
 BTF_ID(func, bpf_ct_insert_entry)
 BTF_ID(func, bpf_ct_release)
+BTF_ID(func, bpf_ct_set_timeout);
+BTF_ID(func, bpf_ct_change_timeout);
 BTF_SET_END(nf_ct_tc_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_acquire_kfunc_ids)
