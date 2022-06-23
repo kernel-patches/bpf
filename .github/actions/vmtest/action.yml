@@ -1,0 +1,39 @@
+name: 'vmtest'
+description: 'Build + run vmtest'
+inputs:
+  arch:
+    description: 'what arch to test'
+    required: true
+    default: 'x86_64'
+  toolchain:
+    description: 'what toolchain to use'
+    required: true
+    default: 'gcc'
+runs:
+  using: "composite"
+  steps:
+    # 1. Setup environment
+    - name: Setup build environment
+      uses: libbpf/ci/setup-build-env@master
+    # 2. Build
+    - name: Build kernel image
+      shell: bash
+      run: ${GITHUB_ACTION_PATH}/build.sh ${{ inputs.arch }} ${{ inputs.toolchain }}
+    - name: Build selftests
+      shell: bash
+      run: ${GITHUB_ACTION_PATH}/build_selftests.sh ${{ inputs.toolchain }}
+      env:
+        VMLINUX_BTF: ${{ github.workspace }}/vmlinux
+    # 3. Test
+    - name: Prepare rootfs
+      uses: libbpf/ci/prepare-rootfs@master
+      with:
+        project-name: 'libbpf'
+        arch: ${{ inputs.arch }}
+        kernel-root: '.'
+    - name: Run selftests
+      uses: libbpf/ci/run-qemu@master
+      with:
+        arch: ${{ inputs.arch}}
+        img: '/tmp/root.img'
+        vmlinuz: '${{ github.workspace }}/vmlinuz'
