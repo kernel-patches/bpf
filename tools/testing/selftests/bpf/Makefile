@@ -141,6 +141,8 @@ VMLINUX_BTF ?= $(abspath $(firstword $(wildcard $(VMLINUX_BTF_PATHS))))
 ifeq ($(VMLINUX_BTF),)
 $(error Cannot find a vmlinux for VMLINUX_BTF at any of "$(VMLINUX_BTF_PATHS)")
 endif
+# If nf_conntrack is a module, need BTF for it also
+NF_CONNTRACK_BTF ?= $(shell dirname $(VMLINUX_BTF))/nf_conntrack
 
 # Define simple and short `make test_progs`, `make test_sysctl`, etc targets
 # to build individual tests.
@@ -280,6 +282,14 @@ else
 	$(Q)cp "$(VMLINUX_H)" $@
 endif
 
+$(INCLUDE_DIR)/nf_conntrack.h: $(INCLUDE_DIR)/vmlinux.h
+ifneq ("$(wildcard $(NF_CONNTRACK_BTF))","")
+	$(call msg,GEN,,$@)
+	$(BPFTOOL) btf dump file $(NF_CONNTRACK_BTF) format c > $@
+else
+	$(Q)cp $(INCLUDE_DIR)/vmlinux.h $@
+endif
+
 $(RESOLVE_BTFIDS): $(HOST_BPFOBJ) | $(HOST_BUILD_DIR)/resolve_btfids	\
 		       $(TOOLSDIR)/bpf/resolve_btfids/main.c	\
 		       $(TOOLSDIR)/lib/rbtree.c			\
@@ -417,6 +427,7 @@ $(TRUNNER_BPF_OBJS): $(TRUNNER_OUTPUT)/%.o:				\
 		     $(TRUNNER_BPF_PROGS_DIR)/%.c			\
 		     $(TRUNNER_BPF_PROGS_DIR)/*.h			\
 		     $$(INCLUDE_DIR)/vmlinux.h				\
+		     $$(INCLUDE_DIR)/nf_conntrack.h			\
 		     $(wildcard $(BPFDIR)/bpf_*.h)			\
 		     $(wildcard $(BPFDIR)/*.bpf.h)			\
 		     | $(TRUNNER_OUTPUT) $$(BPFOBJ)
