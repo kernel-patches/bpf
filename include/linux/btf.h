@@ -242,6 +242,11 @@ static inline u8 btf_int_offset(const struct btf_type *t)
 	return BTF_INT_OFFSET(*(u32 *)(t + 1));
 }
 
+static inline u8 btf_int_bits(const struct btf_type *t)
+{
+	return BTF_INT_BITS(*(u32 *)(t + 1));
+}
+
 static inline u8 btf_int_encoding(const struct btf_type *t)
 {
 	return BTF_INT_ENCODING(*(u32 *)(t + 1));
