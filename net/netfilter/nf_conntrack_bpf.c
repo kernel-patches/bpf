@@ -394,6 +394,39 @@ int bpf_ct_change_timeout(struct nf_conn *nfct__ref, u32 timeout)
 	return __nf_ct_change_timeout(nfct__ref, msecs_to_jiffies(timeout));
 }
 
+/* bpf_ct_set_status - Set status field of allocated nf_conn
+ *
+ * Set the status field of the newly allocated nf_conn before insertion.
+ * This must be invoked for referenced PTR_TO_BTF_ID to nf_conn___init.
+ *
+ * Parameters:
+ * @nfct__ref    - Pointer to referenced nf_conn object, obtained using
+ *		   bpf_xdp_ct_alloc or bpf_skb_ct_alloc.
+ * @status       - New status value.
+ */
+int bpf_ct_set_status(const struct nf_conn___init *nfct__ref, u32 status)
+{
+	return nf_ct_change_status_common((struct nf_conn *)nfct__ref, status);
+}
+
+/* bpf_ct_change_status - Change status of inserted nf_conn
+ *
+ * Change the status field of the provided connection tracking entry.
+ * This must be invoked for referenced PTR_TO_BTF_ID to nf_conn.
+ *
+ * Parameters:
+ * @nfct__ref    - Pointer to referenced nf_conn object, obtained using
+ *		   bpf_ct_insert_entry, bpf_xdp_ct_lookup or bpf_skb_ct_lookup.
+ * @status       - New status value.
+ */
+int bpf_ct_change_status(struct nf_conn *nfct__ref, u32 status)
+{
+	/* We need a different kfunc because __ref suffix makes type matching
+	 * strict, so normal nf_conn cannot be passed to bpf_ct_set_status.
+	 */
+	return nf_ct_change_status_common(nfct__ref, status);
+}
+
 __diag_pop()
 
 BTF_SET_START(nf_ct_xdp_check_kfunc_ids)
@@ -403,6 +436,8 @@ BTF_ID(func, bpf_ct_insert_entry)
 BTF_ID(func, bpf_ct_release)
 BTF_ID(func, bpf_ct_set_timeout);
 BTF_ID(func, bpf_ct_change_timeout);
+BTF_ID(func, bpf_ct_set_status);
+BTF_ID(func, bpf_ct_change_status);
 BTF_SET_END(nf_ct_xdp_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_tc_check_kfunc_ids)
@@ -412,6 +447,8 @@ BTF_ID(func, bpf_ct_insert_entry)
 BTF_ID(func, bpf_ct_release)
 BTF_ID(func, bpf_ct_set_timeout);
 BTF_ID(func, bpf_ct_change_timeout);
+BTF_ID(func, bpf_ct_set_status);
+BTF_ID(func, bpf_ct_change_status);
 BTF_SET_END(nf_ct_tc_check_kfunc_ids)
 
 BTF_SET_START(nf_ct_acquire_kfunc_ids)
