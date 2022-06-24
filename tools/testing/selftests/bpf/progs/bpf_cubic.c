@@ -14,9 +14,12 @@
  *    "ca->ack_cnt / delta" operation.
  */
 
-#include <linux/bpf.h>
-#include <linux/stddef.h>
-#include <linux/tcp.h>
+#define bictcp bictcp___not_used
+#include "vmlinux.h"
+#undef bictcp
+
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include "bpf_tcp_helpers.h"
 
 char _license[] SEC("license") = "GPL";

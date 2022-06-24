@@ -6,14 +6,14 @@
  * the kernel BPF logic.
  */
 
-#include <stddef.h>
-#include <linux/bpf.h>
-#include <linux/types.h>
-#include <linux/stddef.h>
-#include <linux/tcp.h>
+#define dctcp dctcp___not_used
+#include "vmlinux.h"
+#undef dctcp
+
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include "bpf_tcp_helpers.h"
+#include "bpf_tracing_net.h"
 
 char _license[] SEC("license") = "GPL";
 

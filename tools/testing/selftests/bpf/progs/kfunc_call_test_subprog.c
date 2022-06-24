@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2021 Facebook */
-#include <linux/bpf.h>
+#include "vmlinux.h"
+
 #include <bpf/bpf_helpers.h>
-#include "bpf_tcp_helpers.h"
+#include "bpf_tracing_net.h"
 
 extern const int bpf_prog_active __ksym;
 extern __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,

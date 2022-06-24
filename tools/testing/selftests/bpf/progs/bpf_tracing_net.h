@@ -2,16 +2,24 @@
 #ifndef __BPF_TRACING_NET_H__
 #define __BPF_TRACING_NET_H__
 
+#define ETH_P_IPV6	0x86DD
+
 #define AF_INET			2
 #define AF_INET6		10
+
+#define SOL_IPV6	41
+#define IPV6_TCLASS		67
 
 #define SOL_SOCKET		1
 #define SO_SNDBUF		7
 #define __SO_ACCEPTCON		(1 << 16)
 
 #define SOL_TCP			6
+#define TCP_WINDOW_CLAMP	10
 #define TCP_CONGESTION		13
 #define TCP_CA_NAME_MAX		16
+#define TCP_SAVE_SYN		27
+#define TCP_SAVED_SYN		28
 
 #define ICSK_TIME_RETRANS	1
 #define ICSK_TIME_PROBE0	3

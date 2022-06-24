@@ -2,19 +2,14 @@
 
 #include "vmlinux.h"
 
+#include "bpf_tcp_helpers.h"
+
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
 char _license[] SEC("license") = "GPL";
 
 #define USEC_PER_SEC 1000000UL
-
-#define min(a, b) ((a) < (b) ? (a) : (b))
-
-static inline struct tcp_sock *tcp_sk(const struct sock *sk)
-{
-	return (struct tcp_sock *)sk;
-}
 
 SEC("struct_ops/write_sk_pacing_init")
 void BPF_PROG(write_sk_pacing_init, struct sock *sk)

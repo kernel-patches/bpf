@@ -1,29 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
-#include <stddef.h>
-#include <string.h>
-#include <netinet/in.h>
-#include <linux/bpf.h>
-#include <linux/if_ether.h>
-#include <linux/if_packet.h>
-#include <linux/ip.h>
-#include <linux/ipv6.h>
-#include <linux/types.h>
-#include <linux/socket.h>
-#include <linux/tcp.h>
+#include "vmlinux.h"
+
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include "bpf_tcp_helpers.h"
+#include "bpf_tracing_net.h"
 #include "test_tcpbpf.h"
 
 struct tcpbpf_globals global = {};
-
-/**
- * SOL_TCP is defined in <netinet/tcp.h> while
- * TCP_SAVED_SYN is defined in already included <linux/tcp.h>
- */
-#ifndef SOL_TCP
-#define SOL_TCP 6
-#endif
 
 static __always_inline int get_tp_window_clamp(struct bpf_sock_ops *skops)
 {

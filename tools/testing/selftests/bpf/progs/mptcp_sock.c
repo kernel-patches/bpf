@@ -2,9 +2,12 @@
 /* Copyright (c) 2020, Tessares SA. */
 /* Copyright (c) 2022, SUSE. */
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
+
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
-#include "bpf_tcp_helpers.h"
+#include <bpf/bpf_tracing.h>
+#include "bpf_tracing_net.h"
 
 char _license[] SEC("license") = "GPL";
 __u32 token = 0;
