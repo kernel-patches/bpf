@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/bsearch.h>
+#include <linux/btf_ids.h>
 
 /*
  * These will be re-linked against their real values
@@ -799,6 +800,95 @@ static const struct seq_operations kallsyms_op = {
 	.show = s_show
 };
 
+#ifdef CONFIG_BPF_SYSCALL
+
+struct bpf_iter__kallsyms {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct kallsym_iter *, kallsym_iter);
+};
+
+static int s_prog_seq_show(struct seq_file *m, bool in_stop)
+{
+	struct bpf_iter__kallsyms ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	meta.seq = m;
+	prog = bpf_iter_get_info(&meta, in_stop);
+	if (!prog)
+		return 0;
+
+	ctx.meta = &meta;
+	ctx.kallsym_iter = m ? m->private : NULL;
+	return bpf_iter_run_prog(prog, &ctx);
+}
+
+static int bpf_iter_s_seq_show(struct seq_file *m, void *p)
+{
+	return s_prog_seq_show(m, false);
+}
+
+static void bpf_iter_s_seq_stop(struct seq_file *m, void *p)
+{
+	if (!p)
+		(void) s_prog_seq_show(m, true);
+	else
+		s_stop(m, p);
+}
+
+static const struct seq_operations bpf_iter_kallsyms_ops = {
+	.start = s_start,
+	.next = s_next,
+	.stop = bpf_iter_s_seq_stop,
+	.show = bpf_iter_s_seq_show,
+};
+
+#if defined(CONFIG_PROC_FS)
+
+static int bpf_iter_s_init(void *priv_data, struct bpf_iter_aux_info *aux)
+{
+	struct kallsym_iter *iter = priv_data;
+
+	reset_iter(iter, 0);
+
+	iter->show_value = true;
+
+	return 0;
+}
+
+DEFINE_BPF_ITER_FUNC(kallsyms, struct bpf_iter_meta *meta, struct kallsym_iter *kallsym_iter)
+
+static const struct bpf_iter_seq_info kallsyms_iter_seq_info = {
+	.seq_ops		= &bpf_iter_kallsyms_ops,
+	.init_seq_private	= bpf_iter_s_init,
+	.fini_seq_private	= NULL,
+	.seq_priv_size		= sizeof(struct kallsym_iter),
+};
+
+static struct bpf_iter_reg kallsyms_iter_reg_info = {
+	.target                 = "kallsyms",
+	.ctx_arg_info_size	= 1,
+	.ctx_arg_info		= {
+		{ offsetof(struct bpf_iter__kallsyms, kallsym_iter),
+		  PTR_TO_BTF_ID_OR_NULL },
+	},
+	.seq_info		= &kallsyms_iter_seq_info,
+};
+
+BTF_ID_LIST(btf_kallsym_iter_id)
+BTF_ID(struct, kallsym_iter)
+
+static void __init bpf_kallsyms_iter_register(void)
+{
+	kallsyms_iter_reg_info.ctx_arg_info[0].btf_id = *btf_kallsym_iter_id;
+	if (bpf_iter_reg_target(&kallsyms_iter_reg_info))
+		pr_warn("Warning: could not register bpf kallsyms iterator\n");
+}
+
+#endif /* CONFIG_PROC_FS */
+
+#endif /* CONFIG_BPF_SYSCALL */
+
 static inline int kallsyms_for_perf(void)
 {
 #ifdef CONFIG_PERF_EVENTS
@@ -885,6 +975,9 @@ static const struct proc_ops kallsyms_proc_ops = {
 static int __init kallsyms_init(void)
 {
 	proc_create("kallsyms", 0444, NULL, &kallsyms_proc_ops);
+#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
+	bpf_kallsyms_iter_register();
+#endif
 	return 0;
 }
 device_initcall(kallsyms_init);
