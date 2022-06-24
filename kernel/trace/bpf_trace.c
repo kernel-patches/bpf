@@ -20,6 +20,7 @@
 #include <linux/fprobe.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
+#include <linux/xattr.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1180,6 +1181,47 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
+
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "kfuncs that are used in tracing/LSM BPF programs");
+
+ssize_t bpf_getxattr(struct dentry *dentry, struct inode *inode,
+		     const char *name, void *value, int value__sz)
+{
+	return __vfs_getxattr(dentry, inode, name, value, value__sz);
+}
+
+__diag_pop();
+
+BTF_SET_START(bpf_trace_kfunc_ids)
+BTF_ID(func, bpf_getxattr)
+BTF_SET_END(bpf_trace_kfunc_ids)
+
+BTF_SET_START(bpf_trace_sleepable_kfunc_ids)
+BTF_ID(func, bpf_getxattr)
+BTF_SET_END(bpf_trace_sleepable_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_trace_kfunc_set = {
+	.owner = THIS_MODULE,
+	.check_set = &bpf_trace_kfunc_ids,
+	.sleepable_set = &bpf_trace_sleepable_kfunc_ids,
+};
+
+static int __init bpf_trace_kfunc_init(void)
+{
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+					&bpf_trace_kfunc_set);
+	if (!ret)
+		return ret;
+
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
+					&bpf_trace_kfunc_set);
+
+}
+late_initcall(bpf_trace_kfunc_init);
 
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
