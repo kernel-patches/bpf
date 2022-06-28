@@ -77,23 +77,15 @@
 # error "Fix your compiler's __BYTE_ORDER__?!"
 #endif
 
-#define bpf_htons(x)				\
+#define __bpf_endop(op, x)			\
 	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_htons(x) : __bpf_htons(x))
-#define bpf_ntohs(x)				\
-	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_ntohs(x) : __bpf_ntohs(x))
-#define bpf_htonl(x)				\
-	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_htonl(x) : __bpf_htonl(x))
-#define bpf_ntohl(x)				\
-	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_ntohl(x) : __bpf_ntohl(x))
-#define bpf_cpu_to_be64(x)			\
-	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_cpu_to_be64(x) : __bpf_cpu_to_be64(x))
-#define bpf_be64_to_cpu(x)			\
-	(__builtin_constant_p(x) ?		\
-	 __bpf_constant_be64_to_cpu(x) : __bpf_be64_to_cpu(x))
+	 __bpf_constant_##op(x) : __bpf_##op(x))
+
+#define bpf_htons(x)			__bpf_endop(htons, x)
+#define bpf_ntohs(x)			__bpf_endop(ntohs, x)
+#define bpf_htonl(x)			__bpf_endop(htonl, x)
+#define bpf_ntohl(x)			__bpf_endop(ntohl, x)
+#define bpf_cpu_to_be64(x)		__bpf_endop(cpu_to_be64, x)
+#define bpf_be64_to_cpu(x)		__bpf_endop(be64_to_cpu, x)
 
 #endif /* __BPF_ENDIAN__ */
