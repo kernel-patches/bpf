@@ -37,6 +37,7 @@ static const struct option long_options[] = {
 	{ "stats", no_argument, NULL, 's' },
 	{ "interval", required_argument, NULL, 'i' },
 	{ "verbose", no_argument, NULL, 'v' },
+	{ "meta-thresh", optional_argument, NULL, 'M' },
 	{}
 };
 
@@ -58,7 +59,7 @@ int main(int argc, char **argv)
 	bool error = true;
 	int opt, key = 0;
 
-	while ((opt = getopt_long(argc, argv, "hSFXi:vs",
+	while ((opt = getopt_long(argc, argv, "hSFMXi:vs",
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
@@ -66,6 +67,10 @@ int main(int argc, char **argv)
 			/* devmap_xmit tracepoint not available */
 			mask &= ~(SAMPLE_DEVMAP_XMIT_CNT |
 				  SAMPLE_DEVMAP_XMIT_CNT_MULTI);
+			break;
+		case 'M':
+			opts.meta_thresh = optarg ? strtoul(optarg, NULL, 0) :
+					   1;
 			break;
 		case 'F':
 			opts.force = true;

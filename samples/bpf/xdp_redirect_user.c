@@ -36,6 +36,7 @@ static const struct option long_options[] = {
 	{"stats",	no_argument,		NULL, 's' },
 	{"interval",	required_argument,	NULL, 'i' },
 	{"verbose",	no_argument,		NULL, 'v' },
+	{"meta-thresh",	optional_argument,	NULL, 'M' },
 	{}
 };
 
@@ -51,7 +52,7 @@ int main(int argc, char **argv)
 	struct xdp_redirect *skel;
 	bool error = true;
 
-	while ((opt = getopt_long(argc, argv, "hSFi:vs",
+	while ((opt = getopt_long(argc, argv, "hSFMi:vs",
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
@@ -59,6 +60,9 @@ int main(int argc, char **argv)
 			mask &= ~(SAMPLE_DEVMAP_XMIT_CNT |
 				  SAMPLE_DEVMAP_XMIT_CNT_MULTI);
 			break;
+		case 'M':
+			opts.meta_thresh = optarg ? strtoul(optarg, NULL, 0) :
+					   1;
 		case 'F':
 			opts.force = true;
 			break;

@@ -53,6 +53,7 @@ static const struct option long_options[] = {
 	{ "interval", required_argument, NULL, 'i' },
 	{ "verbose", no_argument, NULL, 'v' },
 	{ "stats", no_argument, NULL, 's' },
+	{ "meta-thresh", optional_argument, NULL, 'M' },
 	{}
 };
 
@@ -593,7 +594,7 @@ int main(int argc, char **argv)
 		goto end_destroy;
 	}
 
-	while ((opt = getopt_long(argc, argv, "si:SFvh",
+	while ((opt = getopt_long(argc, argv, "si:SFMvh",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 's':
@@ -620,6 +621,10 @@ int main(int argc, char **argv)
 			sample_switch_mode();
 			total_ifindex--;
 			ifname_list++;
+			break;
+		case 'M':
+			opts.meta_thresh = optarg ? strtoul(optarg, NULL, 0) :
+					   1;
 			break;
 		case 'h':
 			error = false;

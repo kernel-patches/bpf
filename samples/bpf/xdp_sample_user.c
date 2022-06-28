@@ -1283,6 +1283,8 @@ static int __sample_remove_xdp(int ifindex, __u32 prog_id, int xdp_flags)
 int sample_install_xdp(struct bpf_program *xdp_prog,
 		       const struct sample_install_opts *opts)
 {
+	LIBBPF_OPTS(bpf_xdp_attach_opts, attach_opts,
+		    .meta_thresh = opts->meta_thresh);
 	__u32 ifindex = opts->ifindex;
 	int ret, xdp_flags = 0;
 	__u32 prog_id = 0;
@@ -1293,18 +1295,34 @@ int sample_install_xdp(struct bpf_program *xdp_prog,
 		return -ENOTSUP;
 	}
 
+	if (attach_opts.meta_thresh) {
+		ret = libbpf_get_type_btf_id("struct xdp_meta_generic",
+					     &attach_opts.btf_id);
+		if (ret) {
+			fprintf(stderr, "Failed to retrieve BTF ID: %s\n",
+				strerror(-ret));
+			return ret;
+		}
+	}
+
 	xdp_flags |= !opts->force ? XDP_FLAGS_UPDATE_IF_NOEXIST : 0;
 	xdp_flags |= opts->generic ? XDP_FLAGS_SKB_MODE : XDP_FLAGS_DRV_MODE;
-	ret = bpf_xdp_attach(ifindex, bpf_program__fd(xdp_prog), xdp_flags, NULL);
+	ret = bpf_xdp_attach(ifindex, bpf_program__fd(xdp_prog), xdp_flags,
+			     &attach_opts);
 	if (ret < 0) {
 		ret = -errno;
 		fprintf(stderr,
-			"Failed to install program \"%s\" on ifindex %d, mode = %s, "
-			"force = %s: %s\n",
+			"Failed to install program \"%s\" on ifindex %d, mode = %s, force = %s, metadata = ",
 			bpf_program__name(xdp_prog), ifindex,
 			opts->generic ? "skb" : "native",
-			opts->force ? "true" : "false",
-			strerror(-ret));
+			opts->force ? "true" : "false");
+		if (attach_opts.meta_thresh)
+			fprintf(stderr,
+				"true (from %u bytes, BTF ID is 0x%16llx)",
+				attach_opts.meta_thresh, attach_opts.btf_id);
+		else
+			fprintf(stderr, "false");
+		fprintf(stderr, ": %s\n", strerror(-ret));
 		return ret;
 	}
 

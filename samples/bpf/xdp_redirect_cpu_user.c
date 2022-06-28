@@ -60,6 +60,7 @@ static const struct option long_options[] = {
 	{ "mprog-filename", required_argument, NULL, 'f' },
 	{ "redirect-device", required_argument, NULL, 'r' },
 	{ "redirect-map", required_argument, NULL, 'm' },
+	{ "meta-thresh", optional_argument, NULL, 'M' },
 	{}
 };
 
@@ -382,7 +383,7 @@ int main(int argc, char **argv)
 	}
 
 	prog = skel->progs.xdp_prognum5_lb_hash_ip_pairs;
-	while ((opt = getopt_long(argc, argv, "d:si:Sxp:f:e:r:m:c:q:Fvh",
+	while ((opt = getopt_long(argc, argv, "d:si:Sxp:f:e:r:m:c:q:FMvh",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 'd':
@@ -460,6 +461,10 @@ int main(int argc, char **argv)
 			break;
 		case 'v':
 			sample_switch_mode();
+			break;
+		case 'M':
+			opts.meta_thresh = optarg ? strtoul(optarg, NULL, 0) :
+					   1;
 			break;
 		case 'h':
 			error = false;
