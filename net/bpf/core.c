@@ -620,9 +620,25 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct net_device *dev)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_frame(xdpf);
+	u32 dist, metasize = xdpf->metasize;
 	unsigned int headroom, frame_size;
+	void *data = xdpf->data;
 	void *hard_start;
 	u8 nr_frags;
+
+	/* Bring the headers to the current CPU, as well as the
+	 * metadata if present. This helps eth_type_trans() and
+	 * xdp_populate_skb_meta_generic().
+	 * The idea here is to prefetch no more than 2 cachelines:
+	 * one to the left from the data start and one to the right.
+	 */
+#define to_cl(ptr) PTR_ALIGN_DOWN(ptr, L1_CACHE_BYTES)
+	dist = min_t(typeof(dist), metasize, L1_CACHE_BYTES);
+	if (dist && to_cl(data - dist) != to_cl(data))
+		prefetch(data - dist);
+#undef to_cl
+
+	prefetch(data);
 
 	/* xdp frags frame */
 	if (unlikely(xdp_frame_has_frags(xdpf)))
@@ -636,15 +652,15 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	 */
 	frame_size = xdpf->frame_sz;
 
-	hard_start = xdpf->data - headroom;
+	hard_start = data - headroom;
 	skb = build_skb_around(skb, hard_start, frame_size);
 	if (unlikely(!skb))
 		return NULL;
 
 	skb_reserve(skb, headroom);
 	__skb_put(skb, xdpf->len);
-	if (xdpf->metasize)
-		skb_metadata_set(skb, xdpf->metasize);
+	if (metasize)
+		skb_metadata_set(skb, metasize);
 
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		xdp_update_skb_shared_info(skb, nr_frags,
