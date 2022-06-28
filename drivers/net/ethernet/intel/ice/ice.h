@@ -490,6 +490,14 @@ enum ice_pf_flags {
 	ICE_PF_FLAGS_NBITS		/* must be last */
 };
 
+enum {
+	ICE_MD_GENERIC,
+
+	/* Must be last */
+	ICE_MD_NONE,
+	__ICE_MD_NUM,
+};
+
 struct ice_switchdev_info {
 	struct ice_vsi *control_vsi;
 	struct ice_vsi *uplink_vsi;

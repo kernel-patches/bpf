@@ -588,16 +588,20 @@ out_failure:
 int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring, int budget)
 {
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
+	const struct xdp_attachment_info *rxi = rx_ring->xdp_info, xdp_info = {
+		.prog		= rcu_dereference(rxi->prog_rcu),
+		.btf_id_le	= cpu_to_le64(READ_ONCE(rxi->btf_id)),
+		.meta_thresh	= READ_ONCE(rxi->meta_thresh),
+		.drv_cookie	= READ_ONCE(rxi->drv_cookie),
+	};
 	struct ice_tx_ring *xdp_ring;
 	unsigned int xdp_xmit = 0;
-	struct bpf_prog *xdp_prog;
 	bool failure = false;
 	int entries_to_alloc;
 
 	/* ZC patch is enabled only when XDP program is set,
 	 * so here it can not be NULL
 	 */
-	xdp_prog = rcu_dereference(rx_ring->xdp_info->prog_rcu);
 	xdp_ring = rx_ring->xdp_ring;
 
 	while (likely(total_rx_packets < (unsigned int)budget)) {
@@ -638,7 +642,10 @@ int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring, int budget)
 		xsk_buff_set_size(xdp, size);
 		xsk_buff_dma_sync_for_cpu(xdp, rx_ring->xsk_pool);
 
-		xdp_res = ice_run_xdp_zc(rx_ring, xdp, xdp_prog, xdp_ring);
+		ice_xdp_handle_meta(xdp, &md, &xdp_info, rx_desc, rx_ring);
+
+		xdp_res = ice_run_xdp_zc(rx_ring, xdp, xdp_info.prog,
+					 xdp_ring);
 		if (likely(xdp_res & (ICE_XDP_TX | ICE_XDP_REDIR))) {
 			xdp_xmit |= xdp_res;
 		} else if (xdp_res == ICE_XDP_EXIT) {
@@ -674,8 +681,8 @@ construct_skb:
 		total_rx_bytes += skb->len;
 		total_rx_packets++;
 
-		ice_xdp_build_meta(&md, rx_desc, rx_ring, 0);
-		__xdp_populate_skb_meta_generic(skb, &md);
+		ice_xdp_meta_populate_skb(skb, &md, xdp->data, rx_desc,
+					  rx_ring);
 		ice_receive_skb(rx_ring, skb);
 	}
 

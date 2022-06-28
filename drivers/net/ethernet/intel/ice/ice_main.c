@@ -48,6 +48,11 @@ static DEFINE_IDA(ice_aux_ida);
 DEFINE_STATIC_KEY_FALSE(ice_xdp_locking_key);
 EXPORT_SYMBOL(ice_xdp_locking_key);
 
+/* List of XDP metadata formats supported by the driver */
+static const char * const ice_supported_md[__ICE_MD_NUM] = {
+	[ICE_MD_GENERIC]	= "struct xdp_meta_generic",
+};
+
 /**
  * ice_hw_to_dev - Get device pointer from the hardware structure
  * @hw: pointer to the device HW structure
@@ -2848,11 +2853,17 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 	int frame_size = vsi->netdev->mtu + ICE_ETH_PKT_HDR_PAD;
 	struct netlink_ext_ack *extack = xdp->extack;
 	bool restart = false, prog = !!xdp->prog;
-	int ret = 0, xdp_ring_err = 0;
+	int pos, ret = 0, xdp_ring_err = 0;
 
 	if (frame_size > vsi->rx_buf_len) {
 		NL_SET_ERR_MSG_MOD(extack, "MTU too large for loading XDP");
 		return -EOPNOTSUPP;
+	}
+
+	pos = xdp_meta_match_id(ice_supported_md, xdp->btf_id);
+	if (pos < 0) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid or unsupported BTF ID");
+		return pos;
 	}
 
 	/* need to stop netdev while setting up the program for Rx rings */
@@ -2866,6 +2877,9 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 
 		restart = true;
 	}
+
+	/* Paired with the READ_ONCE()'s in ice_clean_rx_irq{,_zc}() */
+	WRITE_ONCE(vsi->xdp_info.drv_cookie, ICE_MD_NONE);
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
 		xdp_ring_err = ice_vsi_determine_xdp_res(vsi);
@@ -2888,6 +2902,8 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 		 */
 		xdp_attachment_setup_rcu(&vsi->xdp_info, xdp);
 	}
+
+	WRITE_ONCE(vsi->xdp_info.drv_cookie, pos);
 
 	if (restart)
 		ret = ice_up(vsi);

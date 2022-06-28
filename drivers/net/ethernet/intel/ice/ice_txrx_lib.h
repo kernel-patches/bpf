@@ -98,7 +98,60 @@ void __ice_xdp_build_meta(struct xdp_meta_generic_rx *rx_md,
 			  const struct ice_rx_ring *rx_ring,
 			  __le64 full_id);
 
+static inline void
+__ice_xdp_handle_meta(struct xdp_buff *xdp, struct xdp_meta_generic_rx *rx_md,
+		      const struct xdp_attachment_info *info,
+		      const union ice_32b_rx_flex_desc *rx_desc,
+		      const struct ice_rx_ring *rx_ring)
+{
+	rx_md->rx_flags = 0;
+
+	if (xdp->data_end - xdp->data < info->meta_thresh)
+		return;
+
+	switch (info->drv_cookie) {
+	case ICE_MD_GENERIC:
+		__ice_xdp_build_meta(rx_md, rx_desc, rx_ring, info->btf_id_le);
+
+		xdp->data_meta = xdp_meta_generic_ptr(xdp->data);
+		memcpy(to_rx_md(xdp->data_meta), rx_md, sizeof(*rx_md));
+
+		/* Just zero Tx flags instead of zeroing the whole part */
+		to_gen_md(xdp->data_meta)->tx_flags = 0;
+		break;
+	default:
+		break;
+	}
+}
+
+static inline void
+__ice_xdp_meta_populate_skb(struct sk_buff *skb,
+			    struct xdp_meta_generic_rx *rx_md,
+			    const void *data,
+			    const union ice_32b_rx_flex_desc *rx_desc,
+			    const struct ice_rx_ring *rx_ring)
+{
+	/* __ice_xdp_build_meta() unconditionally sets Rx queue id. If it's
+	 * not here, it means that metadata for this frame hasn't been built
+	 * yet and we need to do this now. Otherwise, sync onstack metadata
+	 * copy and mark meta as nocomp to ignore it on GRO layer.
+	 */
+	if (rx_md->rx_flags && likely(xdp_meta_has_generic(data))) {
+		memcpy(rx_md, to_rx_md(xdp_meta_generic_ptr(data)),
+		       sizeof(*rx_md));
+		skb_metadata_nocomp_set(skb);
+	} else {
+		__ice_xdp_build_meta(rx_md, rx_desc, rx_ring, 0);
+	}
+
+	__xdp_populate_skb_meta_generic(skb, rx_md);
+}
+
 #define ice_xdp_build_meta(md, ...)					\
 	__ice_xdp_build_meta(to_rx_md(md), ##__VA_ARGS__)
+#define ice_xdp_handle_meta(xdp, md, ...)				\
+	__ice_xdp_handle_meta((xdp), to_rx_md(md), ##__VA_ARGS__)
+#define ice_xdp_meta_populate_skb(skb, md, ...)				\
+	__ice_xdp_meta_populate_skb((skb), to_rx_md(md), ##__VA_ARGS__)
 
 #endif /* !_ICE_TXRX_LIB_H_ */

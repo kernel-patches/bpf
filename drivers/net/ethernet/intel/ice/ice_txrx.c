@@ -1103,10 +1103,10 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 	unsigned int total_rx_bytes = 0, total_rx_pkts = 0, frame_sz = 0;
 	u16 cleaned_count = ICE_DESC_UNUSED(rx_ring);
 	unsigned int offset = rx_ring->rx_offset;
+	struct xdp_attachment_info xdp_info;
 	struct ice_tx_ring *xdp_ring = NULL;
 	unsigned int xdp_res, xdp_xmit = 0;
 	struct sk_buff *skb = rx_ring->skb;
-	struct bpf_prog *xdp_prog = NULL;
 	struct xdp_buff xdp;
 	bool failure;
 
@@ -1116,9 +1116,16 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 #endif
 	xdp_init_buff(&xdp, frame_sz, &rx_ring->xdp_rxq);
 
-	xdp_prog = rcu_dereference(rx_ring->xdp_info->prog_rcu);
-	if (xdp_prog)
+	xdp_info.prog = rcu_dereference(rx_ring->xdp_info->prog_rcu);
+	if (xdp_info.prog) {
+		const struct xdp_attachment_info *info = rx_ring->xdp_info;
+
+		xdp_info.btf_id_le = cpu_to_le64(READ_ONCE(info->btf_id));
+		xdp_info.meta_thresh = READ_ONCE(info->meta_thresh);
+		xdp_info.drv_cookie = READ_ONCE(info->drv_cookie);
+
 		xdp_ring = rx_ring->xdp_ring;
+	}
 
 	/* start the loop to process Rx packets bounded by 'budget' */
 	while (likely(total_rx_pkts < (unsigned int)budget)) {
@@ -1182,10 +1189,12 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 		xdp.frame_sz = ice_rx_frame_truesize(rx_ring, size);
 #endif
 
-		if (!xdp_prog)
+		if (!xdp_info.prog)
 			goto construct_skb;
 
-		xdp_res = ice_run_xdp(rx_ring, &xdp, xdp_prog, xdp_ring);
+		ice_xdp_handle_meta(&xdp, &md, &xdp_info, rx_desc, rx_ring);
+
+		xdp_res = ice_run_xdp(rx_ring, &xdp, xdp_info.prog, xdp_ring);
 		if (!xdp_res)
 			goto construct_skb;
 		if (xdp_res & (ICE_XDP_TX | ICE_XDP_REDIR)) {
@@ -1240,8 +1249,8 @@ construct_skb:
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
 
-		ice_xdp_build_meta(&md, rx_desc, rx_ring, 0);
-		__xdp_populate_skb_meta_generic(skb, &md);
+		ice_xdp_meta_populate_skb(skb, &md, xdp.data, rx_desc,
+					  rx_ring);
 
 		ice_trace(clean_rx_irq_indicate, rx_ring, rx_desc, skb);
 		ice_receive_skb(rx_ring, skb);
@@ -1254,7 +1263,7 @@ construct_skb:
 	/* return up to cleaned_count buffers to hardware */
 	failure = ice_alloc_rx_bufs(rx_ring, cleaned_count);
 
-	if (xdp_prog)
+	if (xdp_info.prog)
 		ice_finalize_xdp_rx(xdp_ring, xdp_xmit);
 	rx_ring->skb = skb;
 
