@@ -624,6 +624,18 @@ static gro_result_t gro_skb_finish(struct gro_node *gro, struct sk_buff *skb,
 	return ret;
 }
 
+void gro_receive_skb_list(struct gro_node *gro, struct list_head *list)
+{
+	struct sk_buff *skb, *tmp;
+
+	list_for_each_entry_safe(skb, tmp, list, list) {
+		skb_list_del_init(skb);
+
+		skb_gro_reset_offset(skb, 0);
+		gro_skb_finish(gro, skb, dev_gro_receive(gro, skb));
+	}
+}
+
 gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
 {
 	struct gro_node *gro = &napi->gro;
@@ -792,3 +804,48 @@ __sum16 __skb_gro_checksum_complete(struct sk_buff *skb)
 	return sum;
 }
 EXPORT_SYMBOL(__skb_gro_checksum_complete);
+
+void gro_init(struct gro_node *gro,
+	      enum hrtimer_restart (*timer_cb)(struct hrtimer *))
+{
+	u32 i;
+
+	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
+		INIT_LIST_HEAD(&gro->hash[i].list);
+		gro->hash[i].count = 0;
+	}
+
+	gro->bitmask = 0;
+
+	INIT_LIST_HEAD(&gro->rx_list);
+	gro->rx_count = 0;
+
+	if (!timer_cb)
+		return;
+
+	hrtimer_init(&gro->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
+	gro->timer.function = timer_cb;
+}
+
+void gro_cleanup(struct gro_node *gro)
+{
+	struct sk_buff *skb, *n;
+	u32 i;
+
+	gro_timer_cancel(gro);
+	memset(&gro->timer, 0, sizeof(gro->timer));
+
+	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
+		list_for_each_entry_safe(skb, n, &gro->hash[i].list, list)
+			kfree_skb(skb);
+
+		gro->hash[i].count = 0;
+	}
+
+	gro->bitmask = 0;
+
+	list_for_each_entry_safe(skb, n, &gro->rx_list, list)
+		kfree_skb(skb);
+
+	gro->rx_count = 0;
+}

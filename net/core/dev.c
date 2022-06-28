@@ -5812,9 +5812,8 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 		return false;
 	}
 
-	if (timeout)
-		hrtimer_start(&n->gro.timer, ns_to_ktime(timeout),
-			      HRTIMER_MODE_REL_PINNED);
+	gro_timer_start(&n->gro, timeout);
+
 	return ret;
 }
 EXPORT_SYMBOL(napi_complete_done);
@@ -5876,7 +5875,7 @@ static void busy_poll_stop(struct napi_struct *napi, void *have_poll_lock, bool 
 		napi->defer_hard_irqs_count = READ_ONCE(napi->dev->napi_defer_hard_irqs);
 		timeout = READ_ONCE(napi->dev->gro_flush_timeout);
 		if (napi->defer_hard_irqs_count && timeout) {
-			hrtimer_start(&napi->gro.timer, ns_to_ktime(timeout), HRTIMER_MODE_REL_PINNED);
+			gro_timer_start(&napi->gro, timeout);
 			skip_schedule = true;
 		}
 	}
@@ -6025,17 +6024,6 @@ static enum hrtimer_restart napi_watchdog(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-static void init_gro_hash(struct napi_struct *napi)
-{
-	int i;
-
-	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
-		INIT_LIST_HEAD(&napi->gro.hash[i].list);
-		napi->gro.hash[i].count = 0;
-	}
-	napi->gro.bitmask = 0;
-}
-
 int dev_set_threaded(struct net_device *dev, bool threaded)
 {
 	struct napi_struct *napi;
@@ -6105,12 +6093,8 @@ void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
 
 	INIT_LIST_HEAD(&napi->poll_list);
 	INIT_HLIST_NODE(&napi->napi_hash_node);
-	hrtimer_init(&napi->gro.timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
-	napi->gro.timer.function = napi_watchdog;
-	init_gro_hash(napi);
+	gro_init(&napi->gro, napi_watchdog);
 	napi->skb = NULL;
-	INIT_LIST_HEAD(&napi->gro.rx_list);
-	napi->gro.rx_count = 0;
 	napi->poll = poll;
 	if (weight > NAPI_POLL_WEIGHT)
 		netdev_err_once(dev, "%s() called with weight %d\n", __func__,
@@ -6155,8 +6139,7 @@ void napi_disable(struct napi_struct *n)
 			break;
 	}
 
-	hrtimer_cancel(&n->gro.timer);
-
+	gro_timer_cancel(&n->gro);
 	clear_bit(NAPI_STATE_DISABLE, &n->state);
 }
 EXPORT_SYMBOL(napi_disable);
@@ -6183,19 +6166,6 @@ void napi_enable(struct napi_struct *n)
 }
 EXPORT_SYMBOL(napi_enable);
 
-static void flush_gro_hash(struct napi_struct *napi)
-{
-	int i;
-
-	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
-		struct sk_buff *skb, *n;
-
-		list_for_each_entry_safe(skb, n, &napi->gro.hash[i].list, list)
-			kfree_skb(skb);
-		napi->gro.hash[i].count = 0;
-	}
-}
-
 /* Must be called in process context */
 void __netif_napi_del(struct napi_struct *napi)
 {
@@ -6206,8 +6176,7 @@ void __netif_napi_del(struct napi_struct *napi)
 	list_del_rcu(&napi->dev_list);
 	napi_free_frags(napi);
 
-	flush_gro_hash(napi);
-	napi->gro.bitmask = 0;
+	gro_cleanup(&napi->gro);
 
 	if (napi->thread) {
 		kthread_stop(napi->thread);
@@ -10627,7 +10596,7 @@ static int __init net_dev_init(void)
 		INIT_CSD(&sd->defer_csd, trigger_rx_softirq, sd);
 		spin_lock_init(&sd->defer_lock);
 
-		init_gro_hash(&sd->backlog);
+		gro_init(&sd->backlog.gro, NULL);
 		sd->backlog.poll = process_backlog;
 		sd->backlog.weight = weight_p;
 	}

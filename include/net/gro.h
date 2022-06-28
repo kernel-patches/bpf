@@ -421,6 +421,7 @@ static inline __wsum ip6_gro_compute_pseudo(struct sk_buff *skb, int proto)
 }
 
 int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb);
+void gro_receive_skb_list(struct gro_node *gro, struct list_head *list);
 void __gro_flush(struct gro_node *gro, bool flush_old);
 
 static inline void gro_flush(struct gro_node *gro, bool flush_old)
@@ -458,5 +459,22 @@ static inline void gro_normal_one(struct gro_node *gro, struct sk_buff *skb,
 		gro_normal_list(gro);
 }
 
+static inline void gro_timer_start(struct gro_node *gro, u64 timeout_ns)
+{
+	if (!timeout_ns)
+		return;
+
+	hrtimer_start(&gro->timer, ns_to_ktime(timeout_ns),
+		      HRTIMER_MODE_REL_PINNED);
+}
+
+static inline void gro_timer_cancel(struct gro_node *gro)
+{
+	hrtimer_cancel(&gro->timer);
+}
+
+void gro_init(struct gro_node *gro,
+	      enum hrtimer_restart (*timer_cb)(struct hrtimer *timer));
+void gro_cleanup(struct gro_node *gro);
 
 #endif /* _NET_IPV6_GRO_H */
