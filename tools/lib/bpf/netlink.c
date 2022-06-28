@@ -230,8 +230,15 @@ out:
 	return ret;
 }
 
-static int __bpf_set_link_xdp_fd_replace(int ifindex, int fd, int old_fd,
-					 __u32 flags)
+struct __bpf_set_link_xdp_fd_opts {
+	int ifindex;
+	int fd;
+	int old_fd;
+	__u32 flags;
+};
+
+static int
+__bpf_set_link_xdp_fd_replace(const struct __bpf_set_link_xdp_fd_opts *opts)
 {
 	struct nlattr *nla;
 	int ret;
@@ -242,22 +249,23 @@ static int __bpf_set_link_xdp_fd_replace(int ifindex, int fd, int old_fd,
 	req.nh.nlmsg_flags    = NLM_F_REQUEST | NLM_F_ACK;
 	req.nh.nlmsg_type     = RTM_SETLINK;
 	req.ifinfo.ifi_family = AF_UNSPEC;
-	req.ifinfo.ifi_index  = ifindex;
+	req.ifinfo.ifi_index  = opts->ifindex;
 
 	nla = nlattr_begin_nested(&req, IFLA_XDP);
 	if (!nla)
 		return -EMSGSIZE;
-	ret = nlattr_add(&req, IFLA_XDP_FD, &fd, sizeof(fd));
+	ret = nlattr_add(&req, IFLA_XDP_FD, &opts->fd, sizeof(opts->fd));
 	if (ret < 0)
 		return ret;
-	if (flags) {
-		ret = nlattr_add(&req, IFLA_XDP_FLAGS, &flags, sizeof(flags));
+	if (opts->flags) {
+		ret = nlattr_add(&req, IFLA_XDP_FLAGS, &opts->flags,
+				 sizeof(opts->flags));
 		if (ret < 0)
 			return ret;
 	}
-	if (flags & XDP_FLAGS_REPLACE) {
-		ret = nlattr_add(&req, IFLA_XDP_EXPECTED_FD, &old_fd,
-				 sizeof(old_fd));
+	if (opts->flags & XDP_FLAGS_REPLACE) {
+		ret = nlattr_add(&req, IFLA_XDP_EXPECTED_FD, &opts->old_fd,
+				 sizeof(opts->old_fd));
 		if (ret < 0)
 			return ret;
 	}
@@ -268,18 +276,23 @@ static int __bpf_set_link_xdp_fd_replace(int ifindex, int fd, int old_fd,
 
 int bpf_xdp_attach(int ifindex, int prog_fd, __u32 flags, const struct bpf_xdp_attach_opts *opts)
 {
-	int old_prog_fd, err;
+	struct __bpf_set_link_xdp_fd_opts sl_opts = {
+		.ifindex = ifindex,
+		.flags = flags,
+		.fd = prog_fd,
+	};
+	int err;
 
 	if (!OPTS_VALID(opts, bpf_xdp_attach_opts))
 		return libbpf_err(-EINVAL);
 
-	old_prog_fd = OPTS_GET(opts, old_prog_fd, 0);
-	if (old_prog_fd)
+	sl_opts.old_fd = OPTS_GET(opts, old_prog_fd, 0);
+	if (sl_opts.old_fd)
 		flags |= XDP_FLAGS_REPLACE;
 	else
-		old_prog_fd = -1;
+		sl_opts.old_fd = -1;
 
-	err = __bpf_set_link_xdp_fd_replace(ifindex, prog_fd, old_prog_fd, flags);
+	err = __bpf_set_link_xdp_fd_replace(&sl_opts);
 	return libbpf_err(err);
 }
 
@@ -291,25 +304,36 @@ int bpf_xdp_detach(int ifindex, __u32 flags, const struct bpf_xdp_attach_opts *o
 int bpf_set_link_xdp_fd_opts(int ifindex, int fd, __u32 flags,
 			     const struct bpf_xdp_set_link_opts *opts)
 {
-	int old_fd = -1, ret;
+	struct __bpf_set_link_xdp_fd_opts sl_opts = {
+		.ifindex = ifindex,
+		.flags = flags,
+		.old_fd = -1,
+		.fd = fd,
+	};
+	int ret;
 
 	if (!OPTS_VALID(opts, bpf_xdp_set_link_opts))
 		return libbpf_err(-EINVAL);
 
 	if (OPTS_HAS(opts, old_fd)) {
-		old_fd = OPTS_GET(opts, old_fd, -1);
+		sl_opts.old_fd = OPTS_GET(opts, old_fd, -1);
 		flags |= XDP_FLAGS_REPLACE;
 	}
 
-	ret = __bpf_set_link_xdp_fd_replace(ifindex, fd, old_fd, flags);
+	ret = __bpf_set_link_xdp_fd_replace(&sl_opts);
 	return libbpf_err(ret);
 }
 
 int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags)
 {
+	struct __bpf_set_link_xdp_fd_opts sl_opts = {
+		.ifindex = ifindex,
+		.flags = flags,
+		.fd = fd,
+	};
 	int ret;
 
-	ret = __bpf_set_link_xdp_fd_replace(ifindex, fd, 0, flags);
+	ret = __bpf_set_link_xdp_fd_replace(&sl_opts);
 	return libbpf_err(ret);
 }
 
