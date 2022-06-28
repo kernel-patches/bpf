@@ -659,8 +659,11 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 
 	skb_reserve(skb, headroom);
 	__skb_put(skb, xdpf->len);
-	if (metasize)
+	if (metasize) {
+		skb_reset_mac_header(skb);
 		skb_metadata_set(skb, metasize);
+		xdp_populate_skb_meta_generic(skb);
+	}
 
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		xdp_update_skb_shared_info(skb, nr_frags,
@@ -670,12 +673,6 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
-
-	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
-	 * - HW RX hash			(skb_set_hash)
-	 * - RX ring dev queue index	(skb_record_rx_queue)
-	 */
 
 	/* Until page_pool get SKB return path, release DMA here */
 	xdp_release_frame(xdpf);
