@@ -385,6 +385,8 @@ struct bpf_link_create_opts {
 		struct {
 			/* target metadata BTF + type ID */
 			__aligned_u64 btf_id;
+			/* frame size to start composing XDP metadata from */
+			__u32 meta_thresh;
 		} xdp;
 	};
 	size_t :0;
@@ -408,11 +410,15 @@ struct bpf_link_update_opts {
 		struct {
 			/* new target metadata BTF + type ID */
 			__aligned_u64 new_btf_id;
+			/* new frame size to start composing XDP
+			 * metadata from
+			 */
+			__u32 new_meta_thresh;
 		} xdp;
 	};
 	size_t :0;
 };
-#define bpf_link_update_opts__last_field xdp.new_btf_id
+#define bpf_link_update_opts__last_field xdp.new_meta_thresh
 
 LIBBPF_API int bpf_link_update(int link_fd, int new_prog_fd,
 			       const struct bpf_link_update_opts *opts);

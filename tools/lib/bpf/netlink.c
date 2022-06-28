@@ -236,6 +236,7 @@ struct __bpf_set_link_xdp_fd_opts {
 	int old_fd;
 	__u32 flags;
 	__u64 btf_id;
+	__u32 meta_thresh;
 };
 
 static int
@@ -276,6 +277,13 @@ __bpf_set_link_xdp_fd_replace(const struct __bpf_set_link_xdp_fd_opts *opts)
 		if (ret < 0)
 			return ret;
 	}
+	if (opts->meta_thresh) {
+		ret = nlattr_add(&req, IFLA_XDP_META_THRESH,
+				 &opts->meta_thresh,
+				 sizeof(opts->meta_thresh));
+		if (ret < 0)
+			return ret;
+	}
 	nlattr_end_nested(&req, nla);
 
 	return libbpf_netlink_send_recv(&req, NULL, NULL, NULL);
@@ -300,6 +308,7 @@ int bpf_xdp_attach(int ifindex, int prog_fd, __u32 flags, const struct bpf_xdp_a
 		sl_opts.old_fd = -1;
 
 	sl_opts.btf_id = OPTS_GET(opts, btf_id, 0);
+	sl_opts.meta_thresh = OPTS_GET(opts, meta_thresh, 0);
 
 	err = __bpf_set_link_xdp_fd_replace(&sl_opts);
 	return libbpf_err(err);
@@ -330,6 +339,7 @@ int bpf_set_link_xdp_fd_opts(int ifindex, int fd, __u32 flags,
 	}
 
 	sl_opts.btf_id = OPTS_GET(opts, btf_id, 0);
+	sl_opts.meta_thresh = OPTS_GET(opts, meta_thresh, 0);
 
 	ret = __bpf_set_link_xdp_fd_replace(&sl_opts);
 	return libbpf_err(ret);

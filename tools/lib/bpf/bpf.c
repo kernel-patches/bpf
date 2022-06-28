@@ -807,6 +807,9 @@ int bpf_link_create(int prog_fd, int target_fd,
 		break;
 	case BPF_XDP:
 		attr.link_create.xdp.btf_id = OPTS_GET(opts, xdp.btf_id, 0);
+		attr.link_create.xdp.meta_thresh = OPTS_GET(opts,
+							    xdp.meta_thresh,
+							    0);
 		if (!OPTS_ZEROED(opts, xdp))
 			return libbpf_err(-EINVAL);
 		break;

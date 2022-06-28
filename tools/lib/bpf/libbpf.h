@@ -1193,7 +1193,7 @@ struct xdp_link_info {
 struct bpf_xdp_set_link_opts {
 	size_t sz;
 	int old_fd;
-	__u32 :32;
+	__u32 meta_thresh;
 	__u64 btf_id;
 	size_t :0;
 };
@@ -1213,7 +1213,7 @@ LIBBPF_API int bpf_get_link_xdp_info(int ifindex, struct xdp_link_info *info,
 struct bpf_xdp_attach_opts {
 	size_t sz;
 	int old_prog_fd;
-	__u32 :32;
+	__u32 meta_thresh;
 	__u64 btf_id;
 	size_t :0;
 };
