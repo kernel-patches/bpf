@@ -464,6 +464,7 @@ LIBBPF_1.0.0 {
 	global:
 		btf__add_enum64;
 		btf__add_enum64_value;
+		bpf_program__attach_xdp_opts;
 		libbpf_bpf_attach_type_str;
 		libbpf_bpf_link_type_str;
 		libbpf_bpf_map_type_str;

@@ -12010,6 +12010,22 @@ struct bpf_link *bpf_program__attach_xdp(const struct bpf_program *prog, int ifi
 	return bpf_program__attach_fd(prog, ifindex, NULL, "xdp");
 }
 
+struct bpf_link *
+bpf_program__attach_xdp_opts(const struct bpf_program *prog, int ifindex,
+			     const struct bpf_xdp_attach_opts *opts)
+{
+	LIBBPF_OPTS(bpf_link_create_opts, lc_opts);
+
+	if (!OPTS_VALID(opts, bpf_xdp_attach_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	lc_opts.flags = OPTS_GET(opts, flags, 0);
+	lc_opts.xdp.btf_id = OPTS_GET(opts, btf_id, 0);
+	lc_opts.xdp.meta_thresh = OPTS_GET(opts, meta_thresh, 0);
+
+	return bpf_program__attach_fd(prog, ifindex, &lc_opts, "xdp");
+}
+
 struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 					      int target_fd,
 					      const char *attach_func_name)

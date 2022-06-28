@@ -678,8 +678,26 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_cgroup(const struct bpf_program *prog, int cgroup_fd);
 LIBBPF_API struct bpf_link *
 bpf_program__attach_netns(const struct bpf_program *prog, int netns_fd);
+
+struct bpf_xdp_attach_opts {
+	size_t sz;
+	union {
+		int old_prog_fd;
+		/* for bpf_program__attach_xdp_opts() */
+		__u32 flags;
+	};
+	__u32 meta_thresh;
+	__u64 btf_id;
+	size_t :0;
+};
+#define bpf_xdp_attach_opts__last_field btf_id
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_xdp(const struct bpf_program *prog, int ifindex);
+LIBBPF_API struct bpf_link *
+bpf_program__attach_xdp_opts(const struct bpf_program *prog, int ifindex,
+			     const struct bpf_xdp_attach_opts *opts);
+
 LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(const struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
@@ -1209,15 +1227,6 @@ LIBBPF_API int bpf_get_link_xdp_id(int ifindex, __u32 *prog_id, __u32 flags);
 LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_xdp_query() instead")
 LIBBPF_API int bpf_get_link_xdp_info(int ifindex, struct xdp_link_info *info,
 				     size_t info_size, __u32 flags);
-
-struct bpf_xdp_attach_opts {
-	size_t sz;
-	int old_prog_fd;
-	__u32 meta_thresh;
-	__u64 btf_id;
-	size_t :0;
-};
-#define bpf_xdp_attach_opts__last_field btf_id
 
 struct bpf_xdp_query_opts {
 	size_t sz;
