@@ -199,13 +199,21 @@ struct xdp_txq_info {
 };
 
 enum xdp_buff_flags {
-	XDP_FLAGS_HAS_FRAGS		= BIT(0), /* non-linear xdp buff */
-	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
+	XDP_FLAGS_HINTS_ORIGIN_BIT0	= BIT(0),/* enum xdp_hints_btf_origin */
+	XDP_FLAGS_HINTS_ORIGIN_BIT1	= BIT(1),
+#define	XDP_FLAGS_HINTS_COMPAT_COMMON_	  BIT(3) /* HINTS_BTF_COMPAT_COMMON */
+	XDP_FLAGS_HINTS_COMPAT_COMMON	= XDP_FLAGS_HINTS_COMPAT_COMMON_,
+
+	XDP_FLAGS_HAS_FRAGS		= BIT(4), /* non-linear xdp buff */
+	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(5), /* xdp paged memory is under
 						   * pressure
 						   */
-	XDP_FLAGS_HAS_HINTS		= BIT(2),
-	XDP_FLAGS_HINTS_COMPAT_COMMON	= BIT(3),
 };
+
+#define XDP_FLAGS_HINTS_ORIGIN_MASK	(XDP_FLAGS_HINTS_ORIGIN_BIT0 |	\
+					 XDP_FLAGS_HINTS_ORIGIN_BIT1)
+#define XDP_FLAGS_HINTS_RETURN_MASK	(XDP_FLAGS_HINTS_ORIGIN_MASK |	\
+					 XDP_FLAGS_HINTS_COMPAT_COMMON)
 
 struct xdp_buff {
 	void *data;
@@ -241,6 +249,32 @@ static __always_inline bool xdp_buff_is_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 {
 	xdp->flags |= XDP_FLAGS_FRAGS_PF_MEMALLOC;
+}
+
+static __always_inline bool xdp_buff_has_hints(struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_HINTS_ORIGIN_MASK);
+}
+
+static __always_inline bool xdp_buff_has_hints_compat(struct xdp_buff *xdp)
+{
+	u32 flags = xdp->flags;
+
+	if (!(flags & XDP_FLAGS_HINTS_COMPAT_COMMON))
+		return false;
+
+	return !!(flags & XDP_FLAGS_HINTS_ORIGIN_MASK);
+}
+
+static __always_inline void xdp_buff_set_hints(struct xdp_buff *xdp,
+					       u32 btf_origin,
+					       bool is_compat_common)
+{
+	u32 common = is_compat_common ? XDP_FLAGS_HINTS_COMPAT_COMMON : 0;
+
+	/* enum xdp_hints_btf_origin */
+	btf_origin &= XDP_FLAGS_HINTS_ORIGIN_MASK;
+	xdp->flags |= btf_origin | common;
 }
 
 static __always_inline void

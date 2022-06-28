@@ -5325,6 +5325,31 @@ union bpf_attr {
  *		**-EACCES** if the SYN cookie is not valid.
  *
  *		**-EPROTONOSUPPORT** if CONFIG_IPV6 is not builtin.
+ *
+ * long xdp_hints_btf(struct xdp_buff *xdp_md, u32 btf_origin, u64 flags)
+ *     Description
+ *             Update and get info on XDP hints BTF type and origin.
+ *
+ *             Drivers can provide XDP-hints information via the metadata area,
+ *             which defines the layout of this area via BTF. The BTF ID is
+ *             available as the last member. The BTF ID can originate from
+ *             different sources, e.g. vmlinux, module or local BTF-object.
+ *
+ *             In-case a BPF-prog want to redefine the layout of this area it
+ *             should update the BTF ID (last-member) and MUST call this helper
+ *             to specify the origin for the BTF ID.
+ *
+ *             If updating the BTF ID then caller can request that the layout
+ *             is compatible with kernels xdp_hints_common. This is then
+ *             validated (TODO HOW?!?) before kernel side trust this can be
+ *             used for e.g. populating SKB fields.
+ *
+ *             The **flags** are used to control the mode of the helper.
+ *
+ *     Return
+ *             Returns indications on whether XDP-hints were populated by
+ *             driver via an 'origin' value and whether this layout is
+ *             compatible with kernels xdp_hints_common.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5535,6 +5560,7 @@ union bpf_attr {
 	FN(tcp_raw_gen_syncookie_ipv6),	\
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
+	FN(xdp_hints_btf),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -5944,6 +5970,23 @@ struct xdp_md {
 	__u32 rx_queue_index;  /* rxq->queue_index  */
 
 	__u32 egress_ifindex;  /* txq->dev->ifindex */
+};
+
+/* Mode flags for BPF_FUNC_xdp_hints_btf helper. */
+enum xdp_hints_btf_mode_flags {
+	HINTS_BTF_QUERY_ONLY    = (1U << 0),
+	HINTS_BTF_UPDATE        = (1U << 1),
+	HINTS_BTF_DISABLE       = (1U << 2),
+	HINTS_BTF_COMPAT_COMMON = (1U << 3),
+};
+
+/* BTF can come from different sources e.g. vmlinux, module or local */
+enum xdp_hints_btf_origin {
+	BTF_ORIGIN_NONE    = 0,
+	BTF_ORIGIN_VMLINUX = 1,
+	BTF_ORIGIN_MODULE  = 2,
+	BTF_ORIGIN_LOCAL   = 3,
+	BTF_ORIGIN_MASK    = 0x3,
 };
 
 /* DEVMAP map-value layout
