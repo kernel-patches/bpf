@@ -3848,7 +3848,12 @@ struct sk_buff *validate_xmit_skb_list(struct sk_buff *skb, struct net_device *d
 struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 				    struct netdev_queue *txq, int *ret);
 
+DECLARE_STATIC_KEY_FALSE(generic_xdp_needed_key);
+
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
+		      int fd, int expected_fd, u32 flags);
+void dev_xdp_uninstall(struct net_device *dev);
 u8 dev_xdp_prog_count(struct net_device *dev);
 u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode);
 

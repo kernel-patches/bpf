@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* net/core/xdp.c
+/* net/bpf/core.c
  *
  * Copyright (c) 2017 Jesper Dangaard Brouer, Red Hat Inc.
  */

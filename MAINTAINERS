@@ -21726,7 +21726,9 @@ F:	include/net/xdp_priv.h
 F:	include/trace/events/xdp.h
 F:	kernel/bpf/cpumap.c
 F:	kernel/bpf/devmap.c
-F:	net/core/xdp.c
+F:	net/bpf/core.c
+F:	net/bpf/dev.c
+F:	net/bpf/prog_ops.c
 F:	samples/bpf/xdp*
 F:	tools/testing/selftests/bpf/*xdp*
 F:	tools/testing/selftests/bpf/*/*xdp*

@@ -78,10 +78,6 @@ int dev_change_proto_down(struct net_device *dev, bool proto_down);
 void dev_change_proto_down_reason(struct net_device *dev, unsigned long mask,
 				  u32 value);
 
-typedef int (*bpf_op_t)(struct net_device *dev, struct netdev_bpf *bpf);
-int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
-		      int fd, int expected_fd, u32 flags);
-
 int dev_change_tx_queue_len(struct net_device *dev, unsigned long new_len);
 void dev_set_group(struct net_device *dev, int new_group);
 int dev_change_carrier(struct net_device *dev, bool new_carrier);

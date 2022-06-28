@@ -992,6 +992,8 @@ void xdp_do_flush(void);
 #define xdp_do_flush_map xdp_do_flush
 
 void bpf_warn_invalid_xdp_action(struct net_device *dev, struct bpf_prog *prog, u32 act);
+const struct bpf_func_proto *xdp_inet_func_proto(enum bpf_func_id func_id);
+bool xdp_helper_changes_pkt_data(const void *func);
 
 #ifdef CONFIG_INET
 struct sock *bpf_run_sk_reuseport(struct sock_reuseport *reuse, struct sock *sk,
