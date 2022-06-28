@@ -557,6 +557,34 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 }
 EXPORT_SYMBOL_GPL(xdp_attachment_setup);
 
+/**
+ * xdp_attachment_setup_rcu - an RCU-powered version of xdp_attachment_setup()
+ * @info: pointer to the target container
+ * @bpf: pointer to the container passed to ::ndo_bpf()
+ *
+ * Protects sensitive values with RCU to allow program how-swaps without
+ * stopping an interface. Write side (this) must be called under the RTNL lock
+ * and reader sides must fetch any data only under the RCU read lock -- old BPF
+ * program will be freed only after a critical section is finished (see
+ * bpf_prog_put()).
+ */
+void xdp_attachment_setup_rcu(struct xdp_attachment_info *info,
+			      struct netdev_bpf *bpf)
+{
+	struct bpf_prog *old_prog;
+
+	ASSERT_RTNL();
+
+	old_prog = rcu_replace_pointer(info->prog_rcu, bpf->prog,
+				       lockdep_rtnl_is_held());
+	WRITE_ONCE(info->btf_id, bpf->btf_id);
+	WRITE_ONCE(info->meta_thresh, bpf->meta_thresh);
+
+	if (old_prog)
+		bpf_prog_put(old_prog);
+}
+EXPORT_SYMBOL_GPL(xdp_attachment_setup_rcu);
+
 struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 {
 	unsigned int metasize, totsize;

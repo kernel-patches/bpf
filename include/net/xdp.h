@@ -379,7 +379,10 @@ int xdp_reg_mem_model(struct xdp_mem_info *mem,
 void xdp_unreg_mem_model(struct xdp_mem_info *mem);
 
 struct xdp_attachment_info {
-	struct bpf_prog *prog;
+	union {
+		struct bpf_prog __rcu *prog_rcu;
+		struct bpf_prog *prog;
+	};
 	union {
 		__le64 btf_id_le;
 		u64 btf_id;
@@ -391,6 +394,8 @@ struct xdp_attachment_info {
 struct netdev_bpf;
 void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf);
+void xdp_attachment_setup_rcu(struct xdp_attachment_info *info,
+			      struct netdev_bpf *bpf);
 
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 
