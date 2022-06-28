@@ -358,18 +358,33 @@ static inline void rcu_preempt_sleep_check(void) { }
  * (e.g., __srcu), should this make sense in the future.
  */
 
+/*
+ * Unfortunately, GCC versions older than 10 don't look at the whole sentence
+ * and treat `typeof(*(p)) *` as dereferencing although it is not. This makes
+ * it impossible to use those helpers with pointers to incomplete structures.
+ * Plain `typeof(p)` is not the same, as `typeof(func)` returns the type of a
+ * function, not a pointer to it, as `typeof(*(func)) *` does.
+ * `typeof(<anything> ? (func) : (func))` is silly; however, it works just as
+ * the original definition.
+ */
+#if defined(CONFIG_CC_IS_GCC) && CONFIG_GCC_VERSION < 100000
+#define __rcutype(p, ...)	typeof(0 ? (p) : (p)) __VA_ARGS__
+#else
+#define __rcutype(p, ...)	typeof(*(p)) __VA_ARGS__ *
+#endif
+
 #ifdef __CHECKER__
 #define rcu_check_sparse(p, space) \
-	((void)(((typeof(*p) space *)p) == p))
+	((void)((__rcutype(p, space))(p) == (p)))
 #else /* #ifdef __CHECKER__ */
 #define rcu_check_sparse(p, space)
 #endif /* #else #ifdef __CHECKER__ */
 
 #define __unrcu_pointer(p, local)					\
 ({									\
-	typeof(*p) *local = (typeof(*p) *__force)(p);			\
+	__rcutype(p) local = (__rcutype(p, __force))(p);		\
 	rcu_check_sparse(p, __rcu);					\
-	((typeof(*p) __force __kernel *)(local)); 			\
+	((__rcutype(p, __force __kernel))(local)); 			\
 })
 /**
  * unrcu_pointer - mark a pointer as not being RCU protected
@@ -382,29 +397,29 @@ static inline void rcu_preempt_sleep_check(void) { }
 
 #define __rcu_access_pointer(p, local, space) \
 ({ \
-	typeof(*p) *local = (typeof(*p) *__force)READ_ONCE(p); \
+	__rcutype(p) local = (__rcutype(p, __force))READ_ONCE(p); \
 	rcu_check_sparse(p, space); \
-	((typeof(*p) __force __kernel *)(local)); \
+	((__rcutype(p, __force __kernel))(local)); \
 })
 #define __rcu_dereference_check(p, local, c, space) \
 ({ \
 	/* Dependency order vs. p above. */ \
-	typeof(*p) *local = (typeof(*p) *__force)READ_ONCE(p); \
+	__rcutype(p) local = (__rcutype(p, __force))READ_ONCE(p); \
 	RCU_LOCKDEP_WARN(!(c), "suspicious rcu_dereference_check() usage"); \
 	rcu_check_sparse(p, space); \
-	((typeof(*p) __force __kernel *)(local)); \
+	((__rcutype(p, __force __kernel))(local)); \
 })
 #define __rcu_dereference_protected(p, local, c, space) \
 ({ \
 	RCU_LOCKDEP_WARN(!(c), "suspicious rcu_dereference_protected() usage"); \
 	rcu_check_sparse(p, space); \
-	((typeof(*p) __force __kernel *)(p)); \
+	((__rcutype(p, __force __kernel))(p)); \
 })
 #define __rcu_dereference_raw(p, local) \
 ({ \
 	/* Dependency order vs. p above. */ \
-	typeof(p) local = READ_ONCE(p); \
-	((typeof(*p) __force __kernel *)(local)); \
+	__rcutype(p) local = READ_ONCE(p); \
+	((__rcutype(p, __force __kernel))(local)); \
 })
 #define rcu_dereference_raw(p) __rcu_dereference_raw(p, __UNIQUE_ID(rcu))
 
@@ -412,7 +427,7 @@ static inline void rcu_preempt_sleep_check(void) { }
  * RCU_INITIALIZER() - statically initialize an RCU-protected global variable
  * @v: The value to statically initialize with.
  */
-#define RCU_INITIALIZER(v) (typeof(*(v)) __force __rcu *)(v)
+#define RCU_INITIALIZER(v) (__rcutype(v, __force __rcu))(v)
 
 /**
  * rcu_assign_pointer() - assign to RCU-protected pointer
