@@ -228,8 +228,12 @@ struct ice_ptp {
 #define N_EXT_TS_E810_NO_SMA		2
 #define ETH_GLTSYN_ENA(_i)		(0x03000348 + ((_i) * 4))
 
-#if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
 struct ice_pf;
+struct ice_rx_ring;
+struct xdp_meta_generic;
+union ice_32b_rx_flex_desc;
+
+#if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
 int ice_ptp_set_ts_config(struct ice_pf *pf, struct ifreq *ifr);
 int ice_ptp_get_ts_config(struct ice_pf *pf, struct ifreq *ifr);
 void ice_ptp_cfg_timestamp(struct ice_pf *pf, bool ena);
@@ -238,9 +242,9 @@ int ice_get_ptp_clock_index(struct ice_pf *pf);
 s8 ice_ptp_request_ts(struct ice_ptp_tx *tx, struct sk_buff *skb);
 void ice_ptp_process_ts(struct ice_pf *pf);
 
-void
-ice_ptp_rx_hwtstamp(struct ice_rx_ring *rx_ring,
-		    union ice_32b_rx_flex_desc *rx_desc, struct sk_buff *skb);
+void ice_ptp_rx_hwtstamp(struct xdp_meta_generic *md,
+			 const union ice_32b_rx_flex_desc *rx_desc,
+			 const struct ice_rx_ring *rx_ring);
 void ice_ptp_reset(struct ice_pf *pf);
 void ice_ptp_prepare_for_reset(struct ice_pf *pf);
 void ice_ptp_init(struct ice_pf *pf);
@@ -271,8 +275,9 @@ ice_ptp_request_ts(struct ice_ptp_tx *tx, struct sk_buff *skb)
 
 static inline void ice_ptp_process_ts(struct ice_pf *pf) { }
 static inline void
-ice_ptp_rx_hwtstamp(struct ice_rx_ring *rx_ring,
-		    union ice_32b_rx_flex_desc *rx_desc, struct sk_buff *skb) { }
+ice_ptp_rx_hwtstamp(struct xdp_meta_generic *md,
+		    const union ice_32b_rx_flex_desc *rx_desc,
+		    const struct ice_rx_ring *rx_ring) { }
 static inline void ice_ptp_reset(struct ice_pf *pf) { }
 static inline void ice_ptp_prepare_for_reset(struct ice_pf *pf) { }
 static inline void ice_ptp_init(struct ice_pf *pf) { }

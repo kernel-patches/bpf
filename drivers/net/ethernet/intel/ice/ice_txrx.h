@@ -4,6 +4,7 @@
 #ifndef _ICE_TXRX_H_
 #define _ICE_TXRX_H_
 
+#include <net/xdp_meta.h>
 #include "ice_type.h"
 
 #define ICE_DFLT_IRQ_WORK	256

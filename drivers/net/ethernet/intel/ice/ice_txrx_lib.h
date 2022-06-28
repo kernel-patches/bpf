@@ -92,9 +92,13 @@ void ice_finalize_xdp_rx(struct ice_tx_ring *xdp_ring, unsigned int xdp_res);
 int ice_xmit_xdp_buff(struct xdp_buff *xdp, struct ice_tx_ring *xdp_ring);
 int ice_xmit_xdp_ring(void *data, u16 size, struct ice_tx_ring *xdp_ring);
 void ice_release_rx_desc(struct ice_rx_ring *rx_ring, u16 val);
-void
-ice_process_skb_fields(struct ice_rx_ring *rx_ring,
-		       union ice_32b_rx_flex_desc *rx_desc,
-		       struct sk_buff *skb);
+
+void __ice_xdp_build_meta(struct xdp_meta_generic_rx *rx_md,
+			  const union ice_32b_rx_flex_desc *rx_desc,
+			  const struct ice_rx_ring *rx_ring,
+			  __le64 full_id);
+
+#define ice_xdp_build_meta(md, ...)					\
+	__ice_xdp_build_meta(to_rx_md(md), ##__VA_ARGS__)
 
 #endif /* !_ICE_TXRX_LIB_H_ */

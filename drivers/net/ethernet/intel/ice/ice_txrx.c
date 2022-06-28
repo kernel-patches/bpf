@@ -1123,6 +1123,7 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 	/* start the loop to process Rx packets bounded by 'budget' */
 	while (likely(total_rx_pkts < (unsigned int)budget)) {
 		union ice_32b_rx_flex_desc *rx_desc;
+		struct xdp_meta_generic_rx md;
 		struct ice_rx_buf *rx_buf;
 		unsigned char *hard_start;
 		unsigned int size;
@@ -1239,7 +1240,8 @@ construct_skb:
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
 
-		ice_process_skb_fields(rx_ring, rx_desc, skb);
+		ice_xdp_build_meta(&md, rx_desc, rx_ring, 0);
+		__xdp_populate_skb_meta_generic(skb, &md);
 
 		ice_trace(clean_rx_irq_indicate, rx_ring, rx_desc, skb);
 		ice_receive_skb(rx_ring, skb);

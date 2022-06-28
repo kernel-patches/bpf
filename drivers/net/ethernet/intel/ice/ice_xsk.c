@@ -603,6 +603,7 @@ int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring, int budget)
 	while (likely(total_rx_packets < (unsigned int)budget)) {
 		union ice_32b_rx_flex_desc *rx_desc;
 		unsigned int size, xdp_res = 0;
+		struct xdp_meta_generic_rx md;
 		struct xdp_buff *xdp;
 		struct sk_buff *skb;
 		u16 stat_err_bits;
@@ -673,7 +674,8 @@ construct_skb:
 		total_rx_bytes += skb->len;
 		total_rx_packets++;
 
-		ice_process_skb_fields(rx_ring, rx_desc, skb);
+		ice_xdp_build_meta(&md, rx_desc, rx_ring, 0);
+		__xdp_populate_skb_meta_generic(skb, &md);
 		ice_receive_skb(rx_ring, skb);
 	}
 

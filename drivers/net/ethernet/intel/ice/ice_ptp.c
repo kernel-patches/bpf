@@ -1795,24 +1795,22 @@ int ice_ptp_set_ts_config(struct ice_pf *pf, struct ifreq *ifr)
 
 /**
  * ice_ptp_rx_hwtstamp - Check for an Rx timestamp
- * @rx_ring: Ring to get the VSI info
  * @rx_desc: Receive descriptor
- * @skb: Particular skb to send timestamp with
+ * @rx_ring: Ring to get the VSI info
+ * @md: Metadata to set timestamp in
  *
  * The driver receives a notification in the receive descriptor with timestamp.
  * The timestamp is in ns, so we must convert the result first.
  */
-void
-ice_ptp_rx_hwtstamp(struct ice_rx_ring *rx_ring,
-		    union ice_32b_rx_flex_desc *rx_desc, struct sk_buff *skb)
+void ice_ptp_rx_hwtstamp(struct xdp_meta_generic *md,
+			 const union ice_32b_rx_flex_desc *rx_desc,
+			 const struct ice_rx_ring *rx_ring)
 {
 	u32 ts_high;
 	u64 ts_ns;
 
-	/* Populate timesync data into skb */
+	/* Populate timesync data into md */
 	if (rx_desc->wb.time_stamp_low & ICE_PTP_TS_VALID) {
-		struct skb_shared_hwtstamps *hwtstamps;
-
 		/* Use ice_ptp_extend_32b_ts directly, using the ring-specific
 		 * cached PHC value, rather than accessing the PF. This also
 		 * allows us to simply pass the upper 32bits of nanoseconds
@@ -1822,9 +1820,8 @@ ice_ptp_rx_hwtstamp(struct ice_rx_ring *rx_ring,
 		ts_high = le32_to_cpu(rx_desc->wb.flex_ts.ts_high);
 		ts_ns = ice_ptp_extend_32b_ts(rx_ring->cached_phctime, ts_high);
 
-		hwtstamps = skb_hwtstamps(skb);
-		memset(hwtstamps, 0, sizeof(*hwtstamps));
-		hwtstamps->hwtstamp = ns_to_ktime(ts_ns);
+		xdp_meta_rx_tstamp_present_set(md, 1);
+		xdp_meta_rx_tstamp_set(md, ts_ns);
 	}
 }
 

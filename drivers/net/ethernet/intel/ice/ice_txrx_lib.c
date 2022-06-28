@@ -43,36 +43,37 @@ void ice_release_rx_desc(struct ice_rx_ring *rx_ring, u16 val)
  * @decoded: the decoded ptype value from the descriptor
  *
  * Returns appropriate hash type (such as PKT_HASH_TYPE_L2/L3/L4) to be used by
- * skb_set_hash based on PTYPE as parsed by HW Rx pipeline and is part of
- * Rx desc.
+ * xdp_meta_rx_hash_type_set() based on PTYPE as parsed by HW Rx pipeline and
+ * is part of Rx desc.
  */
-static enum pkt_hash_types
+static u32
 ice_ptype_to_htype(struct ice_rx_ptype_decoded decoded)
 {
 	if (!decoded.known)
-		return PKT_HASH_TYPE_NONE;
+		return XDP_META_RX_HASH_NONE;
 	if (decoded.payload_layer == ICE_RX_PTYPE_PAYLOAD_LAYER_PAY4)
-		return PKT_HASH_TYPE_L4;
+		return XDP_META_RX_HASH_L4;
 	if (decoded.payload_layer == ICE_RX_PTYPE_PAYLOAD_LAYER_PAY3)
-		return PKT_HASH_TYPE_L3;
+		return XDP_META_RX_HASH_L3;
 	if (decoded.outer_ip == ICE_RX_PTYPE_OUTER_L2)
-		return PKT_HASH_TYPE_L2;
+		return XDP_META_RX_HASH_L2;
 
-	return PKT_HASH_TYPE_NONE;
+	return XDP_META_RX_HASH_NONE;
 }
 
 /**
- * ice_rx_hash - set the hash value in the skb
+ * ice_rx_hash - set the hash value in the medatadata
+ * @md: pointer to current metadata
  * @rx_ring: descriptor ring
  * @rx_desc: specific descriptor
- * @skb: pointer to current skb
  * @decoded: the decoded ptype value from the descriptor
  */
-static void
-ice_rx_hash(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc,
-	    struct sk_buff *skb, struct ice_rx_ptype_decoded decoded)
+static void ice_rx_hash(struct xdp_meta_generic *md,
+			const struct ice_rx_ring *rx_ring,
+			const union ice_32b_rx_flex_desc *rx_desc,
+			struct ice_rx_ptype_decoded decoded)
 {
-	struct ice_32b_rx_flex_desc_nic *nic_mdid;
+	const struct ice_32b_rx_flex_desc_nic *nic_mdid;
 	u32 hash;
 
 	if (!(rx_ring->netdev->features & NETIF_F_RXHASH))
@@ -81,34 +82,30 @@ ice_rx_hash(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc,
 	if (rx_desc->wb.rxdid != ICE_RXDID_FLEX_NIC)
 		return;
 
-	nic_mdid = (struct ice_32b_rx_flex_desc_nic *)rx_desc;
+	nic_mdid = (typeof(nic_mdid))rx_desc;
 	hash = le32_to_cpu(nic_mdid->rss_hash);
-	skb_set_hash(skb, hash, ice_ptype_to_htype(decoded));
+
+	xdp_meta_rx_hash_type_set(md, ice_ptype_to_htype(decoded));
+	xdp_meta_rx_hash_set(md, hash);
 }
 
 /**
- * ice_rx_csum - Indicate in skb if checksum is good
+ * ice_rx_csum - Indicate in metadata if checksum is good
+ * @md: metadata currently being filled
  * @ring: the ring we care about
- * @skb: skb currently being received and modified
  * @rx_desc: the receive descriptor
  * @decoded: the decoded packet type parsed by hardware
- *
- * skb->protocol must be set before this function is called
  */
-static void
-ice_rx_csum(struct ice_rx_ring *ring, struct sk_buff *skb,
-	    union ice_32b_rx_flex_desc *rx_desc,
-	    struct ice_rx_ptype_decoded decoded)
+static void ice_rx_csum(struct xdp_meta_generic *md,
+			const struct ice_rx_ring *ring,
+			const union ice_32b_rx_flex_desc *rx_desc,
+			struct ice_rx_ptype_decoded decoded)
 {
 	u16 rx_status0, rx_status1;
 	bool ipv4, ipv6;
 
 	rx_status0 = le16_to_cpu(rx_desc->wb.status_error0);
 	rx_status1 = le16_to_cpu(rx_desc->wb.status_error1);
-
-	/* Start with CHECKSUM_NONE and by default csum_level = 0 */
-	skb->ip_summed = CHECKSUM_NONE;
-	skb_checksum_none_assert(skb);
 
 	/* check if Rx checksum is enabled */
 	if (!(ring->netdev->features & NETIF_F_RXCSUM))
@@ -149,14 +146,14 @@ ice_rx_csum(struct ice_rx_ring *ring, struct sk_buff *skb,
 	 * we are indicating we validated the inner checksum.
 	 */
 	if (decoded.tunnel_type >= ICE_RX_PTYPE_TUNNEL_IP_GRENAT)
-		skb->csum_level = 1;
+		xdp_meta_rx_csum_level_set(md, 1);
 
 	/* Only report checksum unnecessary for TCP, UDP, or SCTP */
 	switch (decoded.inner_prot) {
 	case ICE_RX_PTYPE_INNER_PROT_TCP:
 	case ICE_RX_PTYPE_INNER_PROT_UDP:
 	case ICE_RX_PTYPE_INNER_PROT_SCTP:
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		xdp_meta_rx_csum_status_set(md, XDP_META_RX_CSUM_OK);
 		break;
 	default:
 		break;
@@ -167,7 +164,13 @@ checksum_fail:
 	ring->vsi->back->hw_csum_rx_error++;
 }
 
-static void ice_rx_vlan(struct sk_buff *skb,
+#define xdp_meta_rx_vlan_from_feat(feat) ({			\
+	((feat) & NETIF_F_HW_VLAN_CTAG_RX) ? XDP_META_RX_CVID :	\
+	((feat) & NETIF_F_HW_VLAN_STAG_RX) ? XDP_META_RX_SVID :	\
+	XDP_META_RX_VLAN_NONE;					\
+})
+
+static void ice_rx_vlan(struct xdp_meta_generic *md,
 			const struct ice_rx_ring *rx_ring,
 			const union ice_32b_rx_flex_desc *rx_desc)
 {
@@ -181,42 +184,48 @@ static void ice_rx_vlan(struct sk_buff *skb,
 	if (!non_zero_vlan)
 		return;
 
-	if ((features & NETIF_F_HW_VLAN_CTAG_RX))
-		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), vlan_tag);
-	else if ((features & NETIF_F_HW_VLAN_STAG_RX))
-		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021AD), vlan_tag);
+	xdp_meta_rx_vlan_type_set(md, xdp_meta_rx_vlan_from_feat(features));
+	xdp_meta_rx_vid_set(md, vlan_tag);
 }
 
 /**
- * ice_process_skb_fields - Populate skb header fields from Rx descriptor
- * @rx_ring: Rx descriptor ring packet is being transacted on
+ * __ice_xdp_build_meta - Populate XDP generic metadata fields from Rx desc
+ * @rx_md: pointer to the metadata structure to be populated
  * @rx_desc: pointer to the EOP Rx descriptor
- * @skb: pointer to current skb being populated
+ * @rx_ring: Rx descriptor ring packet is being transacted on
+ * @full_id: full ID (BTF ID + type ID) to fill in
  *
  * This function checks the ring, descriptor, and packet information in
  * order to populate the hash, checksum, VLAN, protocol, and
- * other fields within the skb.
+ * other fields within the metadata.
  */
-void
-ice_process_skb_fields(struct ice_rx_ring *rx_ring,
-		       union ice_32b_rx_flex_desc *rx_desc,
-		       struct sk_buff *skb)
+void __ice_xdp_build_meta(struct xdp_meta_generic_rx *rx_md,
+			  const union ice_32b_rx_flex_desc *rx_desc,
+			  const struct ice_rx_ring *rx_ring,
+			  __le64 full_id)
 {
+	struct xdp_meta_generic *md = to_gen_md(rx_md);
 	struct ice_rx_ptype_decoded decoded;
 	u16 ptype;
 
-	skb_record_rx_queue(skb, rx_ring->q_index);
+	xdp_meta_init(&md->id, full_id);
+	md->rx_hash = 0;
+	md->rx_csum = 0;
+	md->rx_flags = 0;
+
+	xdp_meta_rx_qid_present_set(md, 1);
+	xdp_meta_rx_qid_set(md, rx_ring->q_index);
 
 	ptype = le16_to_cpu(rx_desc->wb.ptype_flex_flags0) &
 		ICE_RX_FLEX_DESC_PTYPE_M;
 	decoded = ice_decode_rx_desc_ptype(ptype);
 
-	ice_rx_hash(rx_ring, rx_desc, skb, decoded);
-	ice_rx_csum(rx_ring, skb, rx_desc, decoded);
-	ice_rx_vlan(skb, rx_ring, rx_desc);
+	ice_rx_hash(md, rx_ring, rx_desc, decoded);
+	ice_rx_csum(md, rx_ring, rx_desc, decoded);
+	ice_rx_vlan(md, rx_ring, rx_desc);
 
 	if (rx_ring->ptp_rx)
-		ice_ptp_rx_hwtstamp(rx_ring, rx_desc, skb);
+		ice_ptp_rx_hwtstamp(md, rx_desc, rx_ring);
 }
 
 /**
