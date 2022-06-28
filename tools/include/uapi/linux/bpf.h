@@ -8,6 +8,7 @@
 #ifndef _UAPI__LINUX_BPF_H__
 #define _UAPI__LINUX_BPF_H__
 
+#include <asm/byteorder.h>
 #include <linux/types.h>
 #include <linux/bpf_common.h>
 
@@ -6858,5 +6859,177 @@ struct bpf_core_relo {
 	__u32 access_str_off;
 	enum bpf_core_relo_kind kind;
 };
+
+/* Definitions being used to work with &xdp_meta_generic, declared as an enum
+ * so they are visible for BPF programs via vmlinux.h.
+ */
+enum xdp_meta_generic_defs {
+	/* xdp_meta_generic::tx_flags */
+
+	/* Mask of bits containing Tx timestamp action */
+	XDP_META_TX_TSTAMP_ACT		= (0x3 << 4),
+	/* No action is needed */
+	XDP_META_TX_TSTAMP_NONE		= 0x0,
+	/* %SO_TIMESTAMP command */
+	XDP_META_TX_TSTAMP_SOCK		= 0x1,
+	/* Set the value to the actual time when a packet is sent */
+	XDP_META_TX_TSTAMP_COMP		= 0x2,
+	/* Mask of bits containing Tx VLAN action */
+	XDP_META_TX_VLAN_TYPE		= (0x3 << 2),
+	/* No action is needed */
+	XDP_META_TX_VLAN_NONE		= 0x0,
+	/* NIC must push C-VLAN tag */
+	XDP_META_TX_CVID		= 0x1,
+	/* NIC must push S-VLAN tag */
+	XDP_META_TX_SVID		= 0x2,
+	/* Mask of bits containing Tx checksum action */
+	XDP_META_TX_CSUM_ACT		= (0x3 << 0),
+	/* No action for checksum */
+	XDP_META_TX_CSUM_ASIS		= 0x0,
+	/* NIC must compute checksum, no start/offset are provided */
+	XDP_META_TX_CSUM_AUTO		= 0x1,
+	/* NIC must compute checksum using the provided start and offset */
+	XDP_META_TX_CSUM_HELP		= 0x2,
+
+	/* xdp_meta_generic::rx_flags */
+
+	/* Metadata contains valid Rx queue ID */
+	XDP_META_RX_QID_PRESENT		= (0x1 << 9),
+	/* Metadata contains valid Rx timestamp */
+	XDP_META_RX_TSTAMP_PRESENT	= (0x1 << 8),
+	/* Mask of bits containing Rx VLAN status */
+	XDP_META_RX_VLAN_TYPE		= (0x3 << 6),
+	/* Metadata does not have any VLAN tags */
+	XDP_META_RX_VLAN_NONE		= 0x0,
+	/* Metadata carries valid C-VLAN tag */
+	XDP_META_RX_CVID		= 0x1,
+	/* Metadata carries valid S-VLAN tag */
+	XDP_META_RX_SVID		= 0x2,
+	/* Mask of bits containing Rx hash status */
+	XDP_META_RX_HASH_TYPE		= (0x3 << 4),
+	/* Metadata has no RSS hash */
+	XDP_META_RX_HASH_NONE		= 0x0,
+	/* Metadata has valid L2 hash */
+	XDP_META_RX_HASH_L2		= 0x1,
+	/* Metadata has valid L3 hash */
+	XDP_META_RX_HASH_L3		= 0x2,
+	/* Metadata has valid L4 hash */
+	XDP_META_RX_HASH_L4		= 0x3,
+	/* Mask of the field containing checksum level (if there's encap) */
+	XDP_META_RX_CSUM_LEVEL		= (0x3 << 2),
+	/* Mask of bits containing Rx checksum status */
+	XDP_META_RX_CSUM_STATUS		= (0x3 << 0),
+	/* Metadata has no checksum info */
+	XDP_META_RX_CSUM_NONE		= 0x0,
+	/* Checksum has been verified by NIC */
+	XDP_META_RX_CSUM_OK		= 0x1,
+	/* Metadata carries valid checksum */
+	XDP_META_RX_CSUM_COMP		= 0x2,
+
+	/* xdp_meta_generic::magic_id indicates that the metadata is either
+	 * struct xdp_meta_generic itself or contains it at the end -> can be
+	 * used to get/set HW hints.
+	 * Direct btf_id comparison is not enough here as a custom structure
+	 * caring xdp_meta_generic at the end will have a different ID.
+	 */
+	XDP_META_GENERIC_MAGIC	= 0xeda6,
+};
+
+/* Generic metadata can be composed directly by HW, plus it should always
+ * have the first field as __le16 to account the 2 bytes of "IP align", so
+ * we pack it to avoid unexpected paddings. Also, it should be aligned to
+ * sizeof(__be16) as any other Ethernet data, and to optimize access on the
+ * 32-bit platforms.
+ */
+#define __xdp_meta_generic_attrs			\
+	__attribute__((__packed__))			\
+	__attribute__((aligned(sizeof(__be16))))
+
+/* Depending on the field layout inside the structure, it might or might not
+ * emit a "packed attribute is unnecessary" warning (when enabled, e.g. in
+ * libbpf). To not add and remove the attributes on each field addition,
+ * just suppress it.
+ */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpacked"
+
+/* All fields have explicit endianness, as it might be composed by HW.
+ * Byteswaps are needed for the Big Endian architectures to access the
+ * fields.
+ */
+struct xdp_meta_generic {
+	/* Add new fields here */
+
+	/* Egress part */
+	__struct_group(/* no tag */, tx, __xdp_meta_generic_attrs,
+		/* Offset from the start of the frame to the L4 header
+		 * to compute checksum for
+		 */
+		__le16 tx_csum_start;
+		/* Offset inside the L4 header to the checksum field */
+		__le16 tx_csum_off;
+		/* ID for hardware VLAN push */
+		__le16 tx_vid;
+		/* Flags indicating which Tx metadata is used */
+		__le32 tx_flags;
+		/* Tx timestamp value */
+		__le64 tx_tstamp;
+	);
+
+	/* Shortcut for the half relevant on ingress: Rx + IDs */
+	__struct_group(xdp_meta_generic_rx, rx_full, __xdp_meta_generic_attrs,
+		/* Ingress part */
+		__struct_group(/* no tag */, rx, __xdp_meta_generic_attrs,
+			/* Rx timestamp value */
+			__le64 rx_tstamp;
+			/* Rx hash value */
+			__le32 rx_hash;
+			/* Rx checksum value */
+			__le32 rx_csum;
+			/* VLAN ID popped on Rx */
+			__le16 rx_vid;
+			/* Rx queue ID on which the frame has arrived */
+			__le16 rx_qid;
+			/* Flags indicating which Rx metadata is used */
+			__le32 rx_flags;
+		);
+
+		/* Unique metadata identifiers */
+		__struct_group(/* no tag */, id, __xdp_meta_generic_attrs,
+			union {
+				struct {
+#ifdef __BIG_ENDIAN_BITFIELD
+					/* Indicates the ID of the BTF which
+					 * the below type ID comes from, as
+					 * several kernel modules may have
+					 * identical type IDs
+					 */
+					__le32 btf_id;
+					/* Indicates the ID of the actual
+					 * structure passed as metadata,
+					 * within the above BTF ID
+					 */
+					__le32 type_id;
+#else /* __LITTLE_ENDIAN_BITFIELD */
+					__le32 type_id;
+					__le32 btf_id;
+#endif /* __LITTLE_ENDIAN_BITFIELD */
+				};
+				/* BPF program gets IDs coded as one __u64:
+				 * `btf_id << 32 | type_id`, allow direct
+				 * comparison
+				 */
+				__le64 full_id;
+			};
+			/* If set to the correct value, indicates that the
+			 * meta is generic-compatible and can be used by
+			 * the consumers of generic metadata
+			 */
+			__le16 magic_id;
+		);
+	);
+} __xdp_meta_generic_attrs;
+
+#pragma GCC diagnostic pop
 
 #endif /* _UAPI__LINUX_BPF_H__ */
