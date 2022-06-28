@@ -549,13 +549,14 @@ static void usage(char *argv[], const struct option *long_options,
 
 int main(int argc, char **argv)
 {
-	bool error = true, generic = false, force = false;
+	struct sample_install_opts opts = { };
 	int opt, ret = EXIT_FAIL_BPF;
 	struct xdp_router_ipv4 *skel;
 	int i, total_ifindex = argc - 1;
 	char **ifname_list = argv + 1;
 	pthread_t routes_thread;
 	int longindex = 0;
+	bool error = true;
 
 	if (libbpf_set_strict_mode(LIBBPF_STRICT_ALL) < 0) {
 		fprintf(stderr, "Failed to set libbpf strict mode: %s\n",
@@ -606,12 +607,12 @@ int main(int argc, char **argv)
 			ifname_list += 2;
 			break;
 		case 'S':
-			generic = true;
+			opts.generic = true;
 			total_ifindex--;
 			ifname_list++;
 			break;
 		case 'F':
-			force = true;
+			opts.force = true;
 			total_ifindex--;
 			ifname_list++;
 			break;
@@ -661,15 +662,15 @@ int main(int argc, char **argv)
 
 	ret = EXIT_FAIL_XDP;
 	for (i = 0; i < total_ifindex; i++) {
-		int index = if_nametoindex(ifname_list[i]);
+		opts.ifindex = if_nametoindex(ifname_list[i]);
 
-		if (!index) {
+		if (!opts.ifindex) {
 			fprintf(stderr, "Interface %s not found %s\n",
 				ifname_list[i], strerror(-tx_port_map_fd));
 			goto end_destroy;
 		}
 		if (sample_install_xdp(skel->progs.xdp_router_ipv4_prog,
-				       index, generic, force) < 0)
+				       &opts) < 0)
 			goto end_destroy;
 	}
 

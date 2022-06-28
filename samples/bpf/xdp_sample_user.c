@@ -1280,9 +1280,10 @@ static int __sample_remove_xdp(int ifindex, __u32 prog_id, int xdp_flags)
 	return bpf_xdp_detach(ifindex, xdp_flags, NULL);
 }
 
-int sample_install_xdp(struct bpf_program *xdp_prog, int ifindex, bool generic,
-		       bool force)
+int sample_install_xdp(struct bpf_program *xdp_prog,
+		       const struct sample_install_opts *opts)
 {
+	__u32 ifindex = opts->ifindex;
 	int ret, xdp_flags = 0;
 	__u32 prog_id = 0;
 
@@ -1292,8 +1293,8 @@ int sample_install_xdp(struct bpf_program *xdp_prog, int ifindex, bool generic,
 		return -ENOTSUP;
 	}
 
-	xdp_flags |= !force ? XDP_FLAGS_UPDATE_IF_NOEXIST : 0;
-	xdp_flags |= generic ? XDP_FLAGS_SKB_MODE : XDP_FLAGS_DRV_MODE;
+	xdp_flags |= !opts->force ? XDP_FLAGS_UPDATE_IF_NOEXIST : 0;
+	xdp_flags |= opts->generic ? XDP_FLAGS_SKB_MODE : XDP_FLAGS_DRV_MODE;
 	ret = bpf_xdp_attach(ifindex, bpf_program__fd(xdp_prog), xdp_flags, NULL);
 	if (ret < 0) {
 		ret = -errno;
@@ -1301,7 +1302,8 @@ int sample_install_xdp(struct bpf_program *xdp_prog, int ifindex, bool generic,
 			"Failed to install program \"%s\" on ifindex %d, mode = %s, "
 			"force = %s: %s\n",
 			bpf_program__name(xdp_prog), ifindex,
-			generic ? "skb" : "native", force ? "true" : "false",
+			opts->generic ? "skb" : "native",
+			opts->force ? "true" : "false",
 			strerror(-ret));
 		return ret;
 	}

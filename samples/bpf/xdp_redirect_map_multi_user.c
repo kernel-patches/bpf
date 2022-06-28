@@ -77,6 +77,7 @@ static int update_mac_map(struct bpf_map *map)
 int main(int argc, char **argv)
 {
 	struct bpf_devmap_val devmap_val = {};
+	struct sample_install_opts opts = { };
 	struct xdp_redirect_map_multi *skel;
 	struct bpf_program *ingress_prog;
 	bool xdp_devmap_attached = false;
@@ -84,9 +85,6 @@ int main(int argc, char **argv)
 	int ret = EXIT_FAIL_OPTION;
 	unsigned long interval = 2;
 	char ifname[IF_NAMESIZE];
-	unsigned int ifindex;
-	bool generic = false;
-	bool force = false;
 	bool tried = false;
 	bool error = true;
 	int i, opt;
@@ -95,13 +93,13 @@ int main(int argc, char **argv)
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
-			generic = true;
+			opts.generic = true;
 			/* devmap_xmit tracepoint not available */
 			mask &= ~(SAMPLE_DEVMAP_XMIT_CNT |
 				  SAMPLE_DEVMAP_XMIT_CNT_MULTI);
 			break;
 		case 'F':
-			force = true;
+			opts.force = true;
 			break;
 		case 'X':
 			xdp_devmap_attached = true;
@@ -186,13 +184,13 @@ int main(int argc, char **argv)
 	forward_map = skel->maps.forward_map_native;
 
 	for (i = 0; ifaces[i] > 0; i++) {
-		ifindex = ifaces[i];
+		opts.ifindex = ifaces[i];
 
 		ret = EXIT_FAIL_XDP;
 restart:
 		/* bind prog_fd to each interface */
-		if (sample_install_xdp(ingress_prog, ifindex, generic, force) < 0) {
-			if (generic && !tried) {
+		if (sample_install_xdp(ingress_prog, &opts) < 0) {
+			if (opts.generic && !tried) {
 				fprintf(stderr,
 					"Trying fallback to sizeof(int) as value_size for devmap in generic mode\n");
 				ingress_prog = skel->progs.xdp_redirect_map_general;
@@ -206,10 +204,11 @@ restart:
 		/* Add all the interfaces to forward group and attach
 		 * egress devmap program if exist
 		 */
-		devmap_val.ifindex = ifindex;
+		devmap_val.ifindex = opts.ifindex;
 		if (xdp_devmap_attached)
 			devmap_val.bpf_prog.fd = bpf_program__fd(skel->progs.xdp_devmap_prog);
-		ret = bpf_map_update_elem(bpf_map__fd(forward_map), &ifindex, &devmap_val, 0);
+		ret = bpf_map_update_elem(bpf_map__fd(forward_map),
+					  &opts.ifindex, &devmap_val, 0);
 		if (ret < 0) {
 			fprintf(stderr, "Failed to update devmap value: %s\n",
 				strerror(errno));

@@ -306,6 +306,9 @@ int main(int argc, char **argv)
 {
 	const char *redir_interface = NULL, *redir_map = NULL;
 	const char *mprog_filename = NULL, *mprog_name = NULL;
+	struct sample_install_opts opts = {
+		.ifindex = -1,
+	};
 	struct xdp_redirect_cpu *skel;
 	struct bpf_map_info info = {};
 	struct bpf_cpumap_val value;
@@ -315,13 +318,10 @@ int main(int argc, char **argv)
 	bool stress_mode = false;
 	struct bpf_program *prog;
 	const char *prog_name;
-	bool generic = false;
-	bool force = false;
 	int added_cpus = 0;
 	bool error = true;
 	int longindex = 0;
 	int add_cpu = -1;
-	int ifindex = -1;
 	int *cpu, i, opt;
 	__u32 qsize;
 	int n_cpus;
@@ -391,10 +391,10 @@ int main(int argc, char **argv)
 				usage(argv, long_options, __doc__, mask, true, skel->obj);
 				goto end_cpu;
 			}
-			ifindex = if_nametoindex(optarg);
-			if (!ifindex)
-				ifindex = strtoul(optarg, NULL, 0);
-			if (!ifindex) {
+			opts.ifindex = if_nametoindex(optarg);
+			if (!opts.ifindex)
+				opts.ifindex = strtoul(optarg, NULL, 0);
+			if (!opts.ifindex) {
 				fprintf(stderr, "Bad interface index or name (%d): %s\n",
 					errno, strerror(errno));
 				usage(argv, long_options, __doc__, mask, true, skel->obj);
@@ -408,7 +408,7 @@ int main(int argc, char **argv)
 			interval = strtoul(optarg, NULL, 0);
 			break;
 		case 'S':
-			generic = true;
+			opts.generic = true;
 			break;
 		case 'x':
 			stress_mode = true;
@@ -456,7 +456,7 @@ int main(int argc, char **argv)
 			qsize = strtoul(optarg, NULL, 0);
 			break;
 		case 'F':
-			force = true;
+			opts.force = true;
 			break;
 		case 'v':
 			sample_switch_mode();
@@ -470,7 +470,7 @@ int main(int argc, char **argv)
 	}
 
 	ret = EXIT_FAIL_OPTION;
-	if (ifindex == -1) {
+	if (opts.ifindex == -1) {
 		fprintf(stderr, "Required option --dev missing\n");
 		usage(argv, long_options, __doc__, mask, true, skel->obj);
 		goto end_cpu;
@@ -483,7 +483,7 @@ int main(int argc, char **argv)
 		goto end_cpu;
 	}
 
-	skel->rodata->from_match[0] = ifindex;
+	skel->rodata->from_match[0] = opts.ifindex;
 	if (redir_interface)
 		skel->rodata->to_match[0] = if_nametoindex(redir_interface);
 
@@ -540,7 +540,7 @@ int main(int argc, char **argv)
 	}
 
 	ret = EXIT_FAIL_XDP;
-	if (sample_install_xdp(prog, ifindex, generic, force) < 0)
+	if (sample_install_xdp(prog, &opts) < 0)
 		goto end_cpu;
 
 	ret = sample_run(interval, stress_mode ? stress_cpumap : NULL, &value);

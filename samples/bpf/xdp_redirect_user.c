@@ -41,6 +41,7 @@ static const struct option long_options[] = {
 
 int main(int argc, char **argv)
 {
+	struct sample_install_opts opts = { };
 	int ifindex_in, ifindex_out, opt;
 	char str[2 * IF_NAMESIZE + 1];
 	char ifname_out[IF_NAMESIZE];
@@ -48,20 +49,18 @@ int main(int argc, char **argv)
 	int ret = EXIT_FAIL_OPTION;
 	unsigned long interval = 2;
 	struct xdp_redirect *skel;
-	bool generic = false;
-	bool force = false;
 	bool error = true;
 
 	while ((opt = getopt_long(argc, argv, "hSFi:vs",
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
-			generic = true;
+			opts.generic = true;
 			mask &= ~(SAMPLE_DEVMAP_XMIT_CNT |
 				  SAMPLE_DEVMAP_XMIT_CNT_MULTI);
 			break;
 		case 'F':
-			force = true;
+			opts.force = true;
 			break;
 		case 'i':
 			interval = strtoul(optarg, NULL, 0);
@@ -132,13 +131,13 @@ int main(int argc, char **argv)
 	}
 
 	ret = EXIT_FAIL_XDP;
-	if (sample_install_xdp(skel->progs.xdp_redirect_prog, ifindex_in,
-			       generic, force) < 0)
+	opts.ifindex = ifindex_in;
+	if (sample_install_xdp(skel->progs.xdp_redirect_prog, &opts) < 0)
 		goto end_destroy;
 
 	/* Loading dummy XDP prog on out-device */
-	sample_install_xdp(skel->progs.xdp_redirect_dummy_prog, ifindex_out,
-			   generic, force);
+	opts.ifindex = ifindex_out;
+	sample_install_xdp(skel->progs.xdp_redirect_dummy_prog, &opts);
 
 	ret = EXIT_FAIL;
 	if (!if_indextoname(ifindex_in, ifname_in)) {

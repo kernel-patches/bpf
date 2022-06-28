@@ -30,14 +30,20 @@ enum stats_mask {
 #define EXIT_FAIL_BPF		4
 #define EXIT_FAIL_MEM		5
 
+struct sample_install_opts {
+	int ifindex;
+	__u32 force:1;
+	__u32 generic:1;
+};
+
 int sample_setup_maps(struct bpf_map **maps);
 int __sample_init(int mask);
 void sample_exit(int status);
 int sample_run(int interval, void (*post_cb)(void *), void *ctx);
 
 void sample_switch_mode(void);
-int sample_install_xdp(struct bpf_program *xdp_prog, int ifindex, bool generic,
-		       bool force);
+int sample_install_xdp(struct bpf_program *xdp_prog,
+		       const struct sample_install_opts *opts);
 void sample_usage(char *argv[], const struct option *long_options,
 		  const char *doc, int mask, bool error);
 

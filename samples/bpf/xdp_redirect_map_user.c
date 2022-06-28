@@ -43,6 +43,7 @@ static const struct option long_options[] = {
 int main(int argc, char **argv)
 {
 	struct bpf_devmap_val devmap_val = {};
+	struct sample_install_opts opts = { };
 	bool xdp_devmap_attached = false;
 	struct xdp_redirect_map *skel;
 	char str[2 * IF_NAMESIZE + 1];
@@ -53,8 +54,6 @@ int main(int argc, char **argv)
 	unsigned long interval = 2;
 	int ret = EXIT_FAIL_OPTION;
 	struct bpf_program *prog;
-	bool generic = false;
-	bool force = false;
 	bool tried = false;
 	bool error = true;
 	int opt, key = 0;
@@ -63,13 +62,13 @@ int main(int argc, char **argv)
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'S':
-			generic = true;
+			opts.generic = true;
 			/* devmap_xmit tracepoint not available */
 			mask &= ~(SAMPLE_DEVMAP_XMIT_CNT |
 				  SAMPLE_DEVMAP_XMIT_CNT_MULTI);
 			break;
 		case 'F':
-			force = true;
+			opts.force = true;
 			break;
 		case 'X':
 			xdp_devmap_attached = true;
@@ -157,13 +156,14 @@ int main(int argc, char **argv)
 	prog = skel->progs.xdp_redirect_map_native;
 	tx_port_map = skel->maps.tx_port_native;
 restart:
-	if (sample_install_xdp(prog, ifindex_in, generic, force) < 0) {
+	opts.ifindex = ifindex_in;
+	if (sample_install_xdp(prog, &opts) < 0) {
 		/* First try with struct bpf_devmap_val as value for generic
 		 * mode, then fallback to sizeof(int) for older kernels.
 		 */
 		fprintf(stderr,
 			"Trying fallback to sizeof(int) as value_size for devmap in generic mode\n");
-		if (generic && !tried) {
+		if (opts.generic && !tried) {
 			prog = skel->progs.xdp_redirect_map_general;
 			tx_port_map = skel->maps.tx_port_general;
 			tried = true;
@@ -174,7 +174,8 @@ restart:
 	}
 
 	/* Loading dummy XDP prog on out-device */
-	sample_install_xdp(skel->progs.xdp_redirect_dummy_prog, ifindex_out, generic, force);
+	opts.ifindex = ifindex_out;
+	sample_install_xdp(skel->progs.xdp_redirect_dummy_prog, &opts);
 
 	devmap_val.ifindex = ifindex_out;
 	if (xdp_devmap_attached)
