@@ -33,6 +33,11 @@ static int mem_id_next = MEM_ID_MIN;
 static bool mem_id_init; /* false */
 static struct rhashtable *mem_id_ht;
 
+/* Make xdp_hints part of core vmlinux BTF */
+struct xdp_hints_common  xdp_hints_common;
+enum xdp_hints_flags     xdp_hints_flags;
+enum xdp_hints_csum_type xdp_hints_csum_type;
+
 static u32 xdp_mem_id_hashfn(const void *data, u32 len, u32 seed)
 {
 	const u32 *k = data;

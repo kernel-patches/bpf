@@ -9,6 +9,137 @@
 #include <linux/skbuff.h> /* skb_shared_info */
 
 /**
+ * DOC: XDP hints
+ *
+ * Drivers should likely include &struct xdp_hints_common as part of the driver
+ * specific xdp_hints struct's, but at the end-of their struct given XDP
+ * metadata area grows backwards.
+ *
+ * The &enum xdp_hints_flags have reserved the first 16 bits for common flags
+ * and drivers can introduce use their own flags bits from BIT(16). For
+ * BPF-progs to find these flags (via BTF) drivers should define an enum
+ * xdp_hints_flags_driver.
+ */
+struct xdp_hints_common {
+	union {
+		__wsum		csum;
+		struct {
+			__u16	csum_start;
+			__u16	csum_offset;
+		};
+	};
+	u16 rx_queue;
+	u16 vlan_tci;
+	u32 rx_hash32;
+	u32 xdp_hints_flags;
+	u32 btf_id;
+} __attribute__((aligned(4))) __attribute__((packed));
+
+enum xdp_hints_flags {
+	HINT_FLAG_CSUM_TYPE_BIT0  = BIT(0),
+	HINT_FLAG_CSUM_TYPE_BIT1  = BIT(1),
+	HINT_FLAG_CSUM_TYPE_MASK  = 0x3,
+
+	HINT_FLAG_CSUM_LEVEL_BIT0 = BIT(2),
+	HINT_FLAG_CSUM_LEVEL_BIT1 = BIT(3),
+	HINT_FLAG_CSUM_LEVEL_MASK = 0xC,
+	HINT_FLAG_CSUM_LEVEL_SHIFT = 2,
+
+	HINT_FLAG_RX_HASH_TYPE_BIT0 = BIT(4),
+	HINT_FLAG_RX_HASH_TYPE_BIT1 = BIT(5),
+	HINT_FLAG_RX_HASH_TYPE_MASK = 0x30,
+	HINT_FLAG_RX_HASH_TYPE_SHIFT = 0x4,
+
+	HINT_FLAG_RX_QUEUE = BIT(7),
+
+	HINT_FLAG_VLAN_PRESENT            = BIT(8),
+	HINT_FLAG_VLAN_PROTO_ETH_P_8021Q  = BIT(9),
+	HINT_FLAG_VLAN_PROTO_ETH_P_8021AD = BIT(10),
+	/* Flags from BIT(16) can be used by drivers */
+};
+
+/** enum xdp_hints_csum_type - BTF exposing checksum defines
+ *
+ * This enum is primarily for BTF exposing ``CHECKSUM_*`` defines (as
+ * an enum) used by &struct skb->ip_summed.
+ *
+ * These values are stored in &enum xdp_hints_flags as bit locations
+ * ``HINT_FLAG_CSUM_TYPE_BIT*``
+
+Maps to skbuff.h skb->ipsummed values. Stored in xdp_hints_flags in
+ * HINT_FLAG_CSUM_TYPE_*
+ */
+enum xdp_hints_csum_type {
+	HINT_CHECKSUM_NONE        = CHECKSUM_NONE,
+	HINT_CHECKSUM_UNNECESSARY = CHECKSUM_UNNECESSARY,
+	HINT_CHECKSUM_COMPLETE    = CHECKSUM_COMPLETE,
+	HINT_CHECKSUM_PARTIAL     = CHECKSUM_PARTIAL,
+};
+
+/** DOC: XDP hints driver helpers
+ *
+ * Helpers for drivers updating struct xdp_hints_common.
+ *
+ * Avoid creating a data dependency on xdp_hints_flags via returning the flags
+ * that need to be set.  Drivers MUST update the xdp_hints_flags member
+ * themselves, which allows drivers to construct code with less data dependency
+ * between instructions by OR'ing the final flags together.
+ */
+
+/* Drivers please use this simple helper to ease changes across drives */
+static __always_inline void xdp_hints_set_flags(struct xdp_hints_common *hints,
+						u32 flags)
+{
+	hints->xdp_hints_flags = flags;
+}
+
+static __always_inline u32 xdp_hints_set_rx_csum(
+	struct xdp_hints_common *hints,
+	u16 type, u16 level)
+{
+	u32 flags;
+
+	flags = type & HINT_FLAG_CSUM_TYPE_MASK;
+	flags |= (level << HINT_FLAG_CSUM_LEVEL_SHIFT)
+		& HINT_FLAG_CSUM_LEVEL_MASK;
+
+	// TODO: handle CHECKSUM_PARTIAL and COMPLETE (needs updating *hints)
+	return flags;
+}
+
+/* @type	Must be &enum enum pkt_hash_types (PKT_HASH_TYPE_*) */
+static __always_inline u32 xdp_hints_set_rx_hash(
+	struct xdp_hints_common *hints,
+	u32 hash, u32 type)
+{
+	hints->rx_hash32 = hash;
+	return (type << HINT_FLAG_RX_HASH_TYPE_SHIFT) &
+		HINT_FLAG_RX_HASH_TYPE_MASK;
+}
+
+static __always_inline u32 xdp_hints_set_rxq(struct xdp_hints_common *hints,
+					     u16 q_idx)
+{
+	hints->rx_queue = q_idx;
+	return HINT_FLAG_RX_QUEUE;
+}
+
+/* @proto	Must be ETH_P_8021Q or ETH_P_8021AD in network order */
+static __always_inline u32 xdp_hints_set_vlan(struct xdp_hints_common *hints,
+					      u16 vlan_tag, const u16 proto)
+{
+	u32 flags = HINT_FLAG_VLAN_PRESENT;
+
+	hints->vlan_tci = vlan_tag;
+	if (proto == htons(ETH_P_8021Q))
+		flags |= HINT_FLAG_VLAN_PROTO_ETH_P_8021Q;
+	if (proto == htons(ETH_P_8021AD))
+		flags |= HINT_FLAG_VLAN_PROTO_ETH_P_8021AD;
+
+	return flags;
+}
+
+/**
  * DOC: XDP RX-queue information
  *
  * The XDP RX-queue info (xdp_rxq_info) is associated with the driver
@@ -72,6 +203,8 @@ enum xdp_buff_flags {
 	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
 						   * pressure
 						   */
+	XDP_FLAGS_HAS_HINTS		= BIT(2),
+	XDP_FLAGS_HINTS_COMPAT_COMMON	= BIT(3),
 };
 
 struct xdp_buff {
