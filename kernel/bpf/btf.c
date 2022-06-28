@@ -6162,6 +6162,27 @@ static bool is_kfunc_arg_mem_size(const struct btf *btf,
 	return true;
 }
 
+static bool btf_param_is_const_str_ptr(const struct btf *btf,
+				       const struct btf_param *param)
+{
+	const struct btf_type *t;
+	bool is_const = false;
+
+	t = btf_type_by_id(btf, param->type);
+	if (!btf_type_is_ptr(t))
+		return false;
+
+	t = btf_type_by_id(btf, t->type);
+	while (btf_type_is_modifier(t)) {
+		if (BTF_INFO_KIND(t->info) == BTF_KIND_CONST)
+			is_const = true;
+		t = btf_type_by_id(btf, t->type);
+	}
+
+	return (is_const &&
+		!strcmp(btf_name_by_offset(btf, t->name_off), "char"));
+}
+
 static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    const struct btf *btf, u32 func_id,
 				    struct bpf_reg_state *regs,
@@ -6344,9 +6365,18 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		} else if (ptr_to_mem_ok) {
 			const struct btf_type *resolve_ret;
 			u32 type_size;
+			int err;
 
 			if (is_kfunc) {
 				bool arg_mem_size = i + 1 < nargs && is_kfunc_arg_mem_size(btf, &args[i + 1], &regs[regno + 1]);
+
+
+				if (btf_param_is_const_str_ptr(btf, &args[i])) {
+					err = check_const_str(env, reg, regno);
+					if (err < 0)
+						return err;
+					continue;
+				}
 
 				/* Permit pointer to mem, but only when argument
 				 * type is pointer to scalar, or struct composed
