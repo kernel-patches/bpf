@@ -2168,7 +2168,7 @@ struct net_device {
 	unsigned int		num_rx_queues;
 	unsigned int		real_num_rx_queues;
 
-	struct bpf_prog __rcu	*xdp_prog;
+	struct xdp_attachment_info xdp_info;
 	unsigned long		gro_flush_timeout;
 	int			napi_defer_hard_irqs;
 #define GRO_LEGACY_MAX_SIZE	65536u
@@ -2343,9 +2343,8 @@ struct net_device {
 
 static inline bool netif_elide_gro(const struct net_device *dev)
 {
-	if (!(dev->features & NETIF_F_GRO) || dev->xdp_prog)
-		return true;
-	return false;
+	return !(dev->features & NETIF_F_GRO) ||
+	       rcu_access_pointer(dev->xdp_info.prog_rcu);
 }
 
 #define	NETDEV_ALIGN		32

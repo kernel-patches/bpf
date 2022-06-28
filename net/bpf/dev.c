@@ -242,19 +242,16 @@ static void dev_disable_gro_hw(struct net_device *dev)
 
 static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 {
-	struct bpf_prog *old = rtnl_dereference(dev->xdp_prog);
-	struct bpf_prog *new = xdp->prog;
+	bool old = !!rtnl_dereference(dev->xdp_info.prog_rcu);
 	int ret = 0;
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		rcu_assign_pointer(dev->xdp_prog, new);
-		if (old)
-			bpf_prog_put(old);
+		xdp_attachment_setup_rcu(&dev->xdp_info, xdp);
 
-		if (old && !new) {
+		if (old && !xdp->prog) {
 			static_branch_dec(&generic_xdp_needed_key);
-		} else if (new && !old) {
+		} else if (xdp->prog && !old) {
 			static_branch_inc(&generic_xdp_needed_key);
 			dev_disable_lro(dev);
 			dev_disable_gro_hw(dev);

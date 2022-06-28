@@ -5055,10 +5055,12 @@ another_round:
 	__this_cpu_inc(softnet_data.processed);
 
 	if (static_branch_unlikely(&generic_xdp_needed_key)) {
+		struct bpf_prog *prog;
 		int ret2;
 
 		migrate_disable();
-		ret2 = do_xdp_generic(rcu_dereference(skb->dev->xdp_prog), skb);
+		prog = rcu_dereference(skb->dev->xdp_info.prog_rcu);
+		ret2 = do_xdp_generic(prog, skb);
 		migrate_enable();
 
 		if (ret2 != XDP_PASS) {

@@ -1451,7 +1451,7 @@ static u32 rtnl_xdp_prog_skb(struct net_device *dev)
 
 	ASSERT_RTNL();
 
-	generic_xdp_prog = rtnl_dereference(dev->xdp_prog);
+	generic_xdp_prog = rtnl_dereference(dev->xdp_info.prog_rcu);
 	if (!generic_xdp_prog)
 		return 0;
 	return generic_xdp_prog->aux->id;
