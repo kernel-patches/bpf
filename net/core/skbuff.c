@@ -190,6 +190,49 @@ static struct sk_buff *napi_skb_cache_get(void)
 	return skb;
 }
 
+/**
+ * napi_skb_cache_get_bulk - obtain a number of zeroed skb heads from the cache
+ * @skbs: a pointer to an at least @n-sized array to fill with skb pointers
+ * @n: the number of entries to provide
+ *
+ * Tries to obtain @n &sk_buff entries from the NAPI percpu cache and writes
+ * the pointers into the provided array @skbs. If there are less entries
+ * available, bulk-allocates the diff from the MM layer.
+ * The heads are being zeroed with either memset() or %__GFP_ZERO, so they are
+ * ready for {,__}build_skb_around() and don't have any data buffers attached.
+ * Must be called *only* from the BH context.
+ *
+ * Returns the number of successfully allocated skbs (@n if
+ * kmem_cache_alloc_bulk() didn't fail).
+ */
+size_t napi_skb_cache_get_bulk(void **skbs, size_t n)
+{
+	struct napi_alloc_cache *nc = this_cpu_ptr(&napi_alloc_cache);
+	size_t total = n;
+
+	if (nc->skb_count < n)
+		n -= kmem_cache_alloc_bulk(skbuff_head_cache,
+					   GFP_ATOMIC | __GFP_ZERO,
+					   n - nc->skb_count,
+					   skbs + nc->skb_count);
+	if (unlikely(nc->skb_count < n)) {
+		total -= n - nc->skb_count;
+		n = nc->skb_count;
+	}
+
+	for (size_t i = 0; i < n; i++) {
+		skbs[i] = nc->skb_cache[nc->skb_count - n + i];
+
+		kasan_unpoison_object_data(skbuff_head_cache, skbs[i]);
+		memset(skbs[i], 0, offsetof(struct sk_buff, tail));
+	}
+
+	nc->skb_count -= n;
+
+	return total;
+}
+EXPORT_SYMBOL_GPL(napi_skb_cache_get_bulk);
+
 /* Caller must provide SKB that is memset cleared */
 static void __build_skb_around(struct sk_buff *skb, void *data,
 			       unsigned int frag_size)

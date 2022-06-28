@@ -1240,6 +1240,7 @@ struct sk_buff *build_skb_around(struct sk_buff *skb,
 void skb_attempt_defer_free(struct sk_buff *skb);
 
 struct sk_buff *napi_build_skb(void *data, unsigned int frag_size);
+size_t napi_skb_cache_get_bulk(void **skbs, size_t n);
 
 /**
  * alloc_skb - allocate a network buffer
