@@ -34,6 +34,8 @@ static const char *__doc__ =
 #include "xdp_sample_user.h"
 #include "xdp_redirect_cpu.skel.h"
 
+#define NSEC_PER_USEC		1000UL
+
 static int map_fd;
 static int avail_fd;
 static int count_fd;
@@ -61,6 +63,7 @@ static const struct option long_options[] = {
 	{ "redirect-device", required_argument, NULL, 'r' },
 	{ "redirect-map", required_argument, NULL, 'm' },
 	{ "meta-thresh", optional_argument, NULL, 'M' },
+	{ "timeout", required_argument, NULL, 't'},
 	{}
 };
 
@@ -128,9 +131,10 @@ static int create_cpu_entry(__u32 cpu, struct bpf_cpumap_val *value,
 		}
 	}
 
-	printf("%s CPU: %u as idx: %u qsize: %d cpumap_prog_fd: %d (cpus_count: %u)\n",
+	printf("%s CPU: %u as idx: %u qsize: %d timeout: %llu cpumap_prog_fd: %d (cpus_count: %u)\n",
 	       new ? "Add new" : "Replace", cpu, avail_idx,
-	       value->qsize, value->bpf_prog.fd, curr_cpus_count);
+	       value->qsize, value->timeout, value->bpf_prog.fd,
+	       curr_cpus_count);
 
 	return 0;
 }
@@ -346,6 +350,7 @@ int main(int argc, char **argv)
 	 *   tuned-adm profile network-latency
 	 */
 	qsize = 2048;
+	value.timeout = 0; /* Defaults to 0 to mimic the previous behaviour. */
 
 	skel = xdp_redirect_cpu__open();
 	if (!skel) {
@@ -383,7 +388,7 @@ int main(int argc, char **argv)
 	}
 
 	prog = skel->progs.xdp_prognum5_lb_hash_ip_pairs;
-	while ((opt = getopt_long(argc, argv, "d:si:Sxp:f:e:r:m:c:q:FMvh",
+	while ((opt = getopt_long(argc, argv, "d:si:Sxp:f:e:r:m:c:q:FMt:vh",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 'd':
@@ -465,6 +470,10 @@ int main(int argc, char **argv)
 		case 'M':
 			opts.meta_thresh = optarg ? strtoul(optarg, NULL, 0) :
 					   1;
+			break;
+		case 't':
+			value.timeout = strtoull(optarg, NULL, 0) *
+					NSEC_PER_USEC;
 			break;
 		case 'h':
 			error = false;
