@@ -739,13 +739,11 @@ static int sendmsg_test(struct sockmap_options *opt)
 
 	if (ktls) {
 		/* Redirecting into non-TLS socket which sends into a TLS
-		 * socket is not a valid test. So in this case lets not
-		 * enable kTLS but still run the test.
+		 * socket is not a valid test. So in this case just skip
+		 * the test.
 		 */
 		if (!txmsg_redir || txmsg_ingress) {
-			err = sockmap_init_ktls(opt->verbose, rx_fd);
-			if (err)
-				return err;
+			return 0;
 		}
 		err = sockmap_init_ktls(opt->verbose, c1);
 		if (err)

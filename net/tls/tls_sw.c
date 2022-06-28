@@ -1839,8 +1839,14 @@ leave_on_list:
 			if (bpf_strp_enabled) {
 				/* BPF may try to queue the skb */
 				__skb_unlink(skb, &ctx->rx_list);
+
 				err = sk_psock_tls_strp_read(psock, skb);
+
 				if (err != __SK_PASS) {
+                    if (err == __SK_REDIRECT) {
+                        skb->data += rxm->offset;
+                        skb->len = rxm->full_len;
+                    }
 					rxm->offset = rxm->offset + rxm->full_len;
 					rxm->full_len = 0;
 					if (err == __SK_DROP)
