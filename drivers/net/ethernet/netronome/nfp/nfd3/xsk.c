@@ -4,6 +4,7 @@
 
 #include <linux/bpf_trace.h>
 #include <linux/netdevice.h>
+#include <net/xdp_meta.h>
 
 #include "../nfp_app.h"
 #include "../nfp_net.h"

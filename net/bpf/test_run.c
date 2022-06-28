@@ -19,7 +19,7 @@
 #include <linux/error-injection.h>
 #include <linux/smp.h>
 #include <linux/sock_diag.h>
-#include <net/xdp.h>
+#include <net/xdp_meta.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/bpf_test_run.h>

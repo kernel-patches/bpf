@@ -3,6 +3,7 @@
 
 #include "rx.h"
 #include "en/xdp.h"
+#include <net/xdp_meta.h>
 #include <net/xdp_sock_drv.h>
 #include <linux/filter.h>
 

@@ -2,6 +2,7 @@
 
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+#include <net/xdp_meta.h>
 #include <net/xdp_sock.h>
 #include <trace/events/xdp.h>
 

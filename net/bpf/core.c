@@ -14,7 +14,7 @@
 #include <linux/bug.h>
 #include <net/page_pool.h>
 
-#include <net/xdp.h>
+#include <net/xdp_meta.h>
 #include <net/xdp_priv.h> /* struct xdp_mem_allocator */
 #include <trace/events/xdp.h>
 #include <net/xdp_sock_drv.h>

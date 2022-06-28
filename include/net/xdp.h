@@ -378,26 +378,6 @@ int xdp_reg_mem_model(struct xdp_mem_info *mem,
 		      enum xdp_mem_type type, void *allocator);
 void xdp_unreg_mem_model(struct xdp_mem_info *mem);
 
-/* Drivers not supporting XDP metadata can use this helper, which
- * rejects any room expansion for metadata as a result.
- */
-static __always_inline void
-xdp_set_data_meta_invalid(struct xdp_buff *xdp)
-{
-	xdp->data_meta = xdp->data + 1;
-}
-
-static __always_inline bool
-xdp_data_meta_unsupported(const struct xdp_buff *xdp)
-{
-	return unlikely(xdp->data_meta > xdp->data);
-}
-
-static inline bool xdp_metalen_invalid(unsigned long metalen)
-{
-	return (metalen & (sizeof(__u32) - 1)) || (metalen > 32);
-}
-
 struct xdp_attachment_info {
 	struct bpf_prog *prog;
 	u64 btf_id;
