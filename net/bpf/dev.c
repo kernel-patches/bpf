@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <net/xdp_meta.h>
 #include <trace/events/xdp.h>
+
+enum {
+	GENERIC_XDP_META_GEN,
+
+	/* Must be last */
+	GENERIC_XDP_META_NONE,
+	__GENERIC_XDP_META_NUM,
+};
+
+static const char * const generic_xdp_meta_types[__GENERIC_XDP_META_NUM] = {
+	[GENERIC_XDP_META_GEN]	= "struct xdp_meta_generic",
+};
 
 DEFINE_STATIC_KEY_FALSE(generic_xdp_needed_key);
 
@@ -27,17 +40,33 @@ static struct netdev_rx_queue *netif_get_rxqueue(struct sk_buff *skb)
 	return rxqueue;
 }
 
+static void generic_xdp_handle_meta(struct xdp_buff *xdp, struct sk_buff *skb,
+				    const struct xdp_attachment_info *info)
+{
+	if (xdp->data_end - xdp->data < READ_ONCE(info->meta_thresh))
+		return;
+
+	switch (READ_ONCE(info->drv_cookie)) {
+	case GENERIC_XDP_META_GEN:
+		xdp_build_meta_generic_from_skb(skb);
+		xdp->data_meta = skb_metadata_end(skb) - skb_metadata_len(skb);
+		break;
+	default:
+		break;
+	}
+}
+
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 			     struct bpf_prog *xdp_prog)
 {
 	void *orig_data, *orig_data_end, *hard_start;
 	struct net_device *dev = skb->dev;
 	struct netdev_rx_queue *rxqueue;
+	u32 metalen, orig_metalen, act;
 	bool orig_bcast, orig_host;
 	u32 mac_len, frame_sz;
 	__be16 orig_eth_type;
 	struct ethhdr *eth;
-	u32 metalen, act;
 	int off;
 
 	/* The XDP program wants to see the packet starting at the MAC
@@ -61,6 +90,9 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	orig_host = ether_addr_equal_64bits(eth->h_dest, dev->dev_addr);
 	orig_bcast = is_multicast_ether_addr_64bits(eth->h_dest);
 	orig_eth_type = eth->h_proto;
+
+	generic_xdp_handle_meta(xdp, skb, &dev->xdp_info);
+	orig_metalen = xdp->data - xdp->data_meta;
 
 	act = bpf_prog_run_xdp(xdp_prog, xdp);
 
@@ -105,11 +137,15 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	case XDP_REDIRECT:
 	case XDP_TX:
 		__skb_push(skb, mac_len);
-		break;
+		fallthrough;
 	case XDP_PASS:
 		metalen = xdp->data - xdp->data_meta;
-		if (metalen)
+		if (metalen != orig_metalen)
 			skb_metadata_set(skb, metalen);
+		if (metalen)
+			xdp_populate_skb_meta_generic(skb);
+		else if (orig_metalen)
+			skb_metadata_nocomp_clear(skb);
 		break;
 	}
 
@@ -244,10 +280,15 @@ static void dev_disable_gro_hw(struct net_device *dev)
 static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 {
 	bool old = !!rtnl_dereference(dev->xdp_info.prog_rcu);
-	int ret = 0;
+	int ret;
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
+		ret = xdp_meta_match_id(generic_xdp_meta_types, xdp->btf_id);
+		if (ret < 0)
+			return ret;
+
+		WRITE_ONCE(dev->xdp_info.drv_cookie, ret);
 		xdp_attachment_setup_rcu(&dev->xdp_info, xdp);
 
 		if (old && !xdp->prog) {
@@ -257,6 +298,8 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 			dev_disable_lro(dev);
 			dev_disable_gro_hw(dev);
 		}
+
+		ret = 0;
 		break;
 
 	default:
