@@ -10,6 +10,7 @@ void serial_test_xdp_link(void)
 {
 	struct test_xdp_link *skel1 = NULL, *skel2 = NULL;
 	__u32 id1, id2, id0 = 0, prog_fd1, prog_fd2;
+	LIBBPF_OPTS(bpf_link_update_opts, lu_opts);
 	LIBBPF_OPTS(bpf_xdp_attach_opts, opts);
 	struct bpf_link_info link_info;
 	struct bpf_prog_info prog_info;
@@ -103,8 +104,16 @@ void serial_test_xdp_link(void)
 	bpf_link__destroy(skel1->links.xdp_handler);
 	skel1->links.xdp_handler = NULL;
 
+	opts.old_prog_fd = 0;
+	opts.meta_thresh = 128;
+
+	err = libbpf_get_type_btf_id("struct xdp_meta_generic", &opts.btf_id);
+	if (!ASSERT_OK(err, "libbpf_get_type_btf_id"))
+		goto cleanup;
+
 	/* new link attach should succeed */
-	link = bpf_program__attach_xdp(skel2->progs.xdp_handler, IFINDEX_LO);
+	link = bpf_program__attach_xdp_opts(skel2->progs.xdp_handler,
+					    IFINDEX_LO, &opts);
 	if (!ASSERT_OK_PTR(link, "link_attach"))
 		goto cleanup;
 	skel2->links.xdp_handler = link;
@@ -113,9 +122,23 @@ void serial_test_xdp_link(void)
 	if (!ASSERT_OK(err, "id2_check_err") || !ASSERT_EQ(id0, id2, "id2_check_val"))
 		goto cleanup;
 
+	lu_opts.xdp.new_meta_thresh = 256;
+	lu_opts.xdp.new_btf_id = opts.btf_id;
+
 	/* updating program under active BPF link works as expected */
-	err = bpf_link__update_program(link, skel1->progs.xdp_handler);
+	err = bpf_link_update(bpf_link__fd(link),
+			      bpf_program__fd(skel1->progs.xdp_handler),
+			      &lu_opts);
 	if (!ASSERT_OK(err, "link_upd"))
+		goto cleanup;
+
+	lu_opts.xdp.new_btf_id = 0;
+
+	/* BTF ID can't be 0 when meta_thresh != 0, and vice versa */
+	err = bpf_link_update(bpf_link__fd(link),
+			      bpf_program__fd(skel1->progs.xdp_handler),
+			      &lu_opts);
+	if (!ASSERT_ERR(err, "link_upd_fail"))
 		goto cleanup;
 
 	memset(&link_info, 0, sizeof(link_info));
@@ -126,6 +149,9 @@ void serial_test_xdp_link(void)
 	ASSERT_EQ(link_info.type, BPF_LINK_TYPE_XDP, "link_type");
 	ASSERT_EQ(link_info.prog_id, id1, "link_prog_id");
 	ASSERT_EQ(link_info.xdp.ifindex, IFINDEX_LO, "link_ifindex");
+	ASSERT_EQ(link_info.xdp.btf_id, opts.btf_id, "btf_id");
+	ASSERT_EQ(link_info.xdp.meta_thresh, lu_opts.xdp.new_meta_thresh,
+		  "meta_thresh");
 
 	/* updating program under active BPF link with different type fails */
 	err = bpf_link__update_program(link, skel1->progs.tc_handler);
