@@ -273,6 +273,7 @@ struct bpf_xdp_link {
 	struct bpf_link link;
 	struct net_device *dev; /* protected by rtnl_lock, no refcnt held */
 	int flags;
+	u32 meta_thresh;
 	u64 btf_id;
 };
 
@@ -358,12 +359,20 @@ static int dev_xdp_install(const struct xdp_install_args *args,
 	struct netdev_bpf xdp;
 	int err;
 
-	/* BTF ID must not be set when uninstalling the program */
-	if (!prog && args->btf_id)
+	/* Neither BTF ID nor meta threshold can be set when uninstalling
+	 * the program
+	 */
+	if (!prog && (args->btf_id || args->meta_thresh))
+		return -EINVAL;
+
+	/* Both meta threshold and BTF ID must be either specified or not */
+	if (!args->btf_id != !args->meta_thresh)
 		return -EINVAL;
 
 	memset(&xdp, 0, sizeof(xdp));
 	xdp.command = mode == XDP_MODE_HW ? XDP_SETUP_PROG_HW : XDP_SETUP_PROG;
+	/* Convert 0 to "infitity" to allow plain >= comparison on hotpath */
+	xdp.meta_thresh = args->meta_thresh ? : ~args->meta_thresh;
 	xdp.btf_id = args->btf_id;
 	xdp.extack = args->extack;
 	xdp.flags = args->flags;
@@ -523,11 +532,13 @@ static int dev_xdp_attach(const struct xdp_install_args *args,
 		}
 	}
 
-	/* don't call drivers if the effective program or BTF ID didn't change.
-	 * If @link == %NULL, we don't know the old value, so the only thing we
-	 * can do is to call installing unconditionally
+	/* don't call drivers if the effective program or BTF ID / metadata
+	 * threshold didn't change. If @link == %NULL, we don't know the
+	 * old values, so the only thing we can do is to call installing
+	 * unconditionally
 	 */
-	if (new_prog != cur_prog || !link || args->btf_id != link->btf_id) {
+	if (new_prog != cur_prog || !link || args->btf_id != link->btf_id ||
+	    args->meta_thresh != link->meta_thresh) {
 		bpf_op = dev_xdp_bpf_op(dev, mode);
 		if (!bpf_op) {
 			NL_SET_ERR_MSG(extack, "Underlying driver does not support XDP in native mode");
@@ -555,6 +566,7 @@ static int dev_xdp_attach_link(struct bpf_xdp_link *link)
 		.dev		= link->dev,
 		.flags		= link->flags,
 		.btf_id		= link->btf_id,
+		.meta_thresh	= link->meta_thresh,
 	};
 
 	return dev_xdp_attach(&args, link, NULL, NULL);
@@ -615,16 +627,18 @@ static void bpf_xdp_link_show_fdinfo(const struct bpf_link *link,
 				     struct seq_file *seq)
 {
 	struct bpf_xdp_link *xdp_link = container_of(link, struct bpf_xdp_link, link);
-	u32 ifindex = 0;
+	u32 meta_thresh, ifindex = 0;
 	u64 btf_id;
 
 	rtnl_lock();
 	if (xdp_link->dev)
 		ifindex = xdp_link->dev->ifindex;
+	meta_thresh = xdp_link->meta_thresh;
 	btf_id = xdp_link->btf_id;
 	rtnl_unlock();
 
 	seq_printf(seq, "ifindex:\t%u\n", ifindex);
+	seq_printf(seq, "meta_thresh:\t%u\n", meta_thresh);
 	seq_printf(seq, "btf_id:\t0x%llx\n", btf_id);
 }
 
@@ -632,17 +646,19 @@ static int bpf_xdp_link_fill_link_info(const struct bpf_link *link,
 				       struct bpf_link_info *info)
 {
 	struct bpf_xdp_link *xdp_link = container_of(link, struct bpf_xdp_link, link);
-	u32 ifindex = 0;
+	u32 meta_thresh, ifindex = 0;
 	u64 btf_id;
 
 	rtnl_lock();
 	if (xdp_link->dev)
 		ifindex = xdp_link->dev->ifindex;
+	meta_thresh = xdp_link->meta_thresh;
 	btf_id = xdp_link->btf_id;
 	rtnl_unlock();
 
 	info->xdp.ifindex = ifindex;
 	info->xdp.btf_id = btf_id;
+	info->xdp.meta_thresh = meta_thresh;
 	return 0;
 }
 
@@ -656,6 +672,7 @@ static int bpf_xdp_link_update(struct bpf_link *link,
 		.dev		= xdp_link->dev,
 		.flags		= xdp_link->flags,
 		.btf_id		= attr->link_update.xdp.new_btf_id,
+		.meta_thresh	= attr->link_update.xdp.new_meta_thresh,
 	};
 	enum bpf_xdp_mode mode;
 	bpf_op_t bpf_op;
@@ -680,7 +697,8 @@ static int bpf_xdp_link_update(struct bpf_link *link,
 		goto out_unlock;
 	}
 
-	if (old_prog == new_prog && args.btf_id == xdp_link->btf_id) {
+	if (old_prog == new_prog && args.btf_id == xdp_link->btf_id &&
+	    args.meta_thresh == xdp_link->meta_thresh) {
 		/* no-op, don't disturb drivers */
 		bpf_prog_put(new_prog);
 		goto out_unlock;
@@ -696,6 +714,7 @@ static int bpf_xdp_link_update(struct bpf_link *link,
 	bpf_prog_put(old_prog);
 
 	xdp_link->btf_id = args.btf_id;
+	xdp_link->meta_thresh = args.meta_thresh;
 
 out_unlock:
 	rtnl_unlock();
@@ -736,6 +755,7 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	link->dev = dev;
 	link->flags = attr->link_create.flags;
 	link->btf_id = attr->link_create.xdp.btf_id;
+	link->meta_thresh = attr->link_create.xdp.meta_thresh;
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err) {

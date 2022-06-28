@@ -1502,6 +1502,10 @@ union bpf_attr {
 			struct {
 				/* target metadata BTF + type ID */
 				__aligned_u64	btf_id;
+				/* frame size to start composing XDP
+				 * metadata from
+				 */
+				__u32		meta_thresh;
 			} xdp;
 		};
 	} link_create;
@@ -1518,6 +1522,10 @@ union bpf_attr {
 			struct {
 				/* new target metadata BTF + type ID */
 				__aligned_u64	new_btf_id;
+				/* new frame size to start composing XDP
+				 * metadata from
+				 */
+				__u32		new_meta_thresh;
 			} xdp;
 		};
 	} link_update;
@@ -6148,7 +6156,7 @@ struct bpf_link_info {
 		} netns;
 		struct {
 			__u32 ifindex;
-			__u32 :32;
+			__u32 meta_thresh;
 			__aligned_u64 btf_id;
 		} xdp;
 	};

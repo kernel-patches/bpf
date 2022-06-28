@@ -553,6 +553,7 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 		bpf_prog_put(info->prog);
 	info->prog = bpf->prog;
 	info->btf_id = bpf->btf_id;
+	info->meta_thresh = bpf->meta_thresh;
 	info->flags = bpf->flags;
 }
 EXPORT_SYMBOL_GPL(xdp_attachment_setup);

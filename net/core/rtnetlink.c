@@ -1980,6 +1980,7 @@ static const struct nla_policy ifla_xdp_policy[IFLA_XDP_MAX + 1] = {
 	[IFLA_XDP_FLAGS]	= { .type = NLA_U32 },
 	[IFLA_XDP_PROG_ID]	= { .type = NLA_U32 },
 	[IFLA_XDP_BTF_ID]	= { .type = NLA_U64 },
+	[IFLA_XDP_META_THRESH]	= { .type = NLA_U32 },
 };
 
 static const struct rtnl_link_ops *linkinfo_to_kind_ops(const struct nlattr *nla)
@@ -2962,6 +2963,7 @@ static int do_setlink(const struct sk_buff *skb,
 
 	if (tb[IFLA_XDP]) {
 		struct nlattr *xdp[IFLA_XDP_MAX + 1];
+		u32 meta_thresh = 0;
 		u32 xdp_flags = 0;
 		u64 btf_id = 0;
 
@@ -2991,12 +2993,16 @@ static int do_setlink(const struct sk_buff *skb,
 		if (xdp[IFLA_XDP_BTF_ID])
 			btf_id = nla_get_u64(xdp[IFLA_XDP_BTF_ID]);
 
+		if (xdp[IFLA_XDP_META_THRESH])
+			meta_thresh = nla_get_u32(xdp[IFLA_XDP_META_THRESH]);
+
 		if (xdp[IFLA_XDP_FD]) {
 			struct xdp_install_args args = {
 				.dev		= dev,
 				.extack		= extack,
 				.btf_id		= btf_id,
 				.flags		= xdp_flags,
+				.meta_thresh	= meta_thresh,
 			};
 			int expected_fd = -1;
 

@@ -4575,7 +4575,7 @@ out:
 	return ret;
 }
 
-#define BPF_LINK_UPDATE_LAST_FIELD link_update.xdp.new_btf_id
+#define BPF_LINK_UPDATE_LAST_FIELD link_update.xdp.new_meta_thresh
 
 static int link_update(union bpf_attr *attr)
 {
