@@ -400,6 +400,7 @@ static inline bool xdp_metalen_invalid(unsigned long metalen)
 
 struct xdp_attachment_info {
 	struct bpf_prog *prog;
+	u64 btf_id;
 	u32 flags;
 };
 

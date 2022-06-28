@@ -1499,6 +1499,10 @@ union bpf_attr {
 				 */
 				__u64		cookie;
 			} tracing;
+			struct {
+				/* target metadata BTF + type ID */
+				__aligned_u64	btf_id;
+			} xdp;
 		};
 	} link_create;
 
@@ -1510,6 +1514,12 @@ union bpf_attr {
 		/* expected link's program fd; is specified only if
 		 * BPF_F_REPLACE flag is set in flags */
 		__u32		old_prog_fd;
+		union {
+			struct {
+				/* new target metadata BTF + type ID */
+				__aligned_u64	new_btf_id;
+			} xdp;
+		};
 	} link_update;
 
 	struct {
@@ -6138,6 +6148,8 @@ struct bpf_link_info {
 		} netns;
 		struct {
 			__u32 ifindex;
+			__u32 :32;
+			__aligned_u64 btf_id;
 		} xdp;
 	};
 } __attribute__((aligned(8)));

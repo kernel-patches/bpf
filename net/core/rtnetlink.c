@@ -1979,6 +1979,7 @@ static const struct nla_policy ifla_xdp_policy[IFLA_XDP_MAX + 1] = {
 	[IFLA_XDP_ATTACHED]	= { .type = NLA_U8 },
 	[IFLA_XDP_FLAGS]	= { .type = NLA_U32 },
 	[IFLA_XDP_PROG_ID]	= { .type = NLA_U32 },
+	[IFLA_XDP_BTF_ID]	= { .type = NLA_U64 },
 };
 
 static const struct rtnl_link_ops *linkinfo_to_kind_ops(const struct nlattr *nla)
@@ -2962,6 +2963,7 @@ static int do_setlink(const struct sk_buff *skb,
 	if (tb[IFLA_XDP]) {
 		struct nlattr *xdp[IFLA_XDP_MAX + 1];
 		u32 xdp_flags = 0;
+		u64 btf_id = 0;
 
 		err = nla_parse_nested_deprecated(xdp, IFLA_XDP_MAX,
 						  tb[IFLA_XDP],
@@ -2986,10 +2988,14 @@ static int do_setlink(const struct sk_buff *skb,
 			}
 		}
 
+		if (xdp[IFLA_XDP_BTF_ID])
+			btf_id = nla_get_u64(xdp[IFLA_XDP_BTF_ID]);
+
 		if (xdp[IFLA_XDP_FD]) {
 			struct xdp_install_args args = {
 				.dev		= dev,
 				.extack		= extack,
+				.btf_id		= btf_id,
 				.flags		= xdp_flags,
 			};
 			int expected_fd = -1;

@@ -985,6 +985,7 @@ struct netdev_bpf {
 		/* XDP_SETUP_PROG */
 		struct {
 			u32 flags;
+			u64 btf_id;
 			struct bpf_prog *prog;
 			struct netlink_ext_ack *extack;
 		};
@@ -3852,6 +3853,7 @@ struct xdp_install_args {
 	struct net_device	*dev;
 	struct netlink_ext_ack	*extack;
 	u32			flags;
+	u64			btf_id;
 };
 
 DECLARE_STATIC_KEY_FALSE(generic_xdp_needed_key);
