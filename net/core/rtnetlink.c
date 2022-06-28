@@ -2987,6 +2987,11 @@ static int do_setlink(const struct sk_buff *skb,
 		}
 
 		if (xdp[IFLA_XDP_FD]) {
+			struct xdp_install_args args = {
+				.dev		= dev,
+				.extack		= extack,
+				.flags		= xdp_flags,
+			};
 			int expected_fd = -1;
 
 			if (xdp_flags & XDP_FLAGS_REPLACE) {
@@ -2998,10 +3003,9 @@ static int do_setlink(const struct sk_buff *skb,
 					nla_get_s32(xdp[IFLA_XDP_EXPECTED_FD]);
 			}
 
-			err = dev_change_xdp_fd(dev, extack,
+			err = dev_change_xdp_fd(&args,
 						nla_get_s32(xdp[IFLA_XDP_FD]),
-						expected_fd,
-						xdp_flags);
+						expected_fd);
 			if (err)
 				goto errout;
 			status |= DO_SETLINK_NOTIFY;
