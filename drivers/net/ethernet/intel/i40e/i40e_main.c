@@ -5,6 +5,7 @@
 #include <linux/of_net.h>
 #include <linux/pci.h>
 #include <linux/bpf.h>
+#include <linux/btf.h>
 #include <generated/utsrelease.h>
 #include <linux/crash_dump.h>
 
@@ -26,6 +27,10 @@ static const char i40e_driver_string[] =
 			"Intel(R) Ethernet Connection XL710 Network Driver";
 
 static const char i40e_copyright[] = "Copyright (c) 2013 - 2019 Intel Corporation.";
+
+static struct btf *this_module_btf;
+extern s32 btf_id_xdp_hints_i40e;
+extern s32 btf_id_xdp_hints_i40e_timestamp;
 
 /* a bit of forward declarations */
 static void i40e_vsi_reinit_locked(struct i40e_vsi *vsi);
@@ -13589,6 +13594,7 @@ static int i40e_config_netdev(struct i40e_vsi *vsi)
 			  NETIF_F_SCTP_CRC		|
 			  NETIF_F_RXHASH		|
 			  NETIF_F_RXCSUM		|
+			  NETIF_F_XDP_HINTS		|
 			  0;
 
 	if (!(pf->hw_features & I40E_HW_OUTER_UDP_CSUM_CAPABLE))
@@ -13633,6 +13639,7 @@ static int i40e_config_netdev(struct i40e_vsi *vsi)
 	netdev->hw_features |= hw_features;
 
 	netdev->features |= hw_features | NETIF_F_HW_VLAN_CTAG_FILTER;
+	netdev->features |= NETIF_F_XDP_HINTS;
 	netdev->hw_enc_features |= NETIF_F_TSO_MANGLEID;
 
 	netdev->features &= ~NETIF_F_HW_TC;
@@ -16545,6 +16552,28 @@ static struct pci_driver i40e_driver = {
 	.sriov_configure = i40e_pci_sriov_configure,
 };
 
+static s32 find_btf_id(struct btf *btf, const char *name)
+{
+	s32 btf_id;
+
+	if (!btf)
+		return -EFAULT;
+
+	btf_id = btf_find_by_name_kind(btf, name, BTF_KIND_STRUCT);
+	if (btf_id < 0) {
+		pr_warn("%s: BTF cannot find struct %s", i40e_driver_name, name);
+		return 0;
+	}
+	pr_info("%s: BTF id %d for struct %s", i40e_driver_name, btf_id, name);
+	return btf_id;
+}
+
+static void i40e_this_module_btf_lookups(struct btf *btf)
+{
+	btf_id_xdp_hints_i40e = find_btf_id(btf, "xdp_hints_i40e");
+	btf_id_xdp_hints_i40e_timestamp = find_btf_id(btf, "xdp_hints_i40e_timestamp");
+}
+
 /**
  * i40e_init_module - Driver registration routine
  *
@@ -16553,6 +16582,10 @@ static struct pci_driver i40e_driver = {
  **/
 static int __init i40e_init_module(void)
 {
+	this_module_btf = btf_get_module_btf(THIS_MODULE);
+	if (this_module_btf)
+		i40e_this_module_btf_lookups(this_module_btf);
+
 	pr_info("%s: %s\n", i40e_driver_name, i40e_driver_string);
 	pr_info("%s: %s\n", i40e_driver_name, i40e_copyright);
 
@@ -16586,5 +16619,6 @@ static void __exit i40e_exit_module(void)
 	destroy_workqueue(i40e_wq);
 	ida_destroy(&i40e_client_ida);
 	i40e_dbg_exit();
+	btf_put_module_btf(this_module_btf);
 }
 module_exit(i40e_exit_module);
