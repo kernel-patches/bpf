@@ -285,4 +285,68 @@ enum libbpf_tristate {
 /* Helper macro to print out debug messages */
 #define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
 
+/* Max offset as per kernel verifier */
+#define MAX_PACKET_OFF		0xffff
+
+/**
+ * bpf_access_mem - sanitize memory access to a range
+ * @mem: start of the memory segment
+ * @mem_end: end of the memory segment
+ * @off: offset from the start of the memory segment
+ * @len: length of the range to give access to
+ *
+ * Verifies that the memory operations we want to perform are sane and within
+ * bounds and gives pointer to the requested range. The checks are done in Asm,
+ * so that it is safe to pass variable offset (verifier might reject such code
+ * written in plain C).
+ * The intended way of using it is as follows:
+ *
+ * iphdr = bpf_access_mem(ctx->data, ctx->data_end, ETH_HLEN, sizeof(*iphdr));
+ *
+ * Returns pointer to the beginning of the range or %NULL.
+ */
+static __always_inline void *
+bpf_access_mem(__u64 mem, __u64 mem_end, __u64 off, const __u64 len)
+{
+	void *ret;
+
+	asm volatile("r1 = %[start]\n\t"
+		     "r2 = %[end]\n\t"
+		     "r3 = %[offmax] - %[len]\n\t"
+		     "if %[off] > r3 goto +5\n\t"
+		     "r1 += %[off]\n\t"
+		     "%[ret] = r1\n\t"
+		     "r1 += %[len]\n\t"
+		     "if r1 > r2 goto +1\n\t"
+		     "goto +1\n\t"
+		     "%[ret] = %[null]\n\t"
+		     : [ret]"=r"(ret)
+		     : [start]"r"(mem), [end]"r"(mem_end), [off]"r"(off),
+		       [len]"ri"(len), [offmax]"i"(MAX_PACKET_OFF),
+		       [null]"i"(NULL)
+		     : "r1", "r2", "r3");
+
+	return ret;
+}
+
+/**
+ * bpf_access_mem_end - sanitize memory access to a range at the end of segment
+ * @mem: start of the memory segment
+ * @mem_end: end of the memory segment
+ * @offend: offset from the end of the memory segment
+ * @len: length of the range to give access to
+ *
+ * Version of bpf_access_mem() which performs all needed calculations to
+ * access a memory segment from the end. E.g., to access FCS (if provided):
+ *
+ * cp = bpf_access_mem_end(ctx->data, ctx->data_end, ETH_FCS_LEN, ETH_FCS_LEN);
+ *
+ * Returns pointer to the beginning of the range or %NULL.
+ */
+static __always_inline void *
+bpf_access_mem_end(__u64 mem, __u64 mem_end, __u64 offend, const __u64 len)
+{
+	return bpf_access_mem(mem, mem_end, mem_end - mem - offend, len);
+}
+
 #endif
