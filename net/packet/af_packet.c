@@ -449,10 +449,10 @@ static int __packet_get_status(const struct packet_sock *po, void *frame)
 	}
 }
 
-static __u32 tpacket_get_timestamp(struct sk_buff *skb, struct timespec64 *ts,
-				   unsigned int flags)
+static __u32 tpacket_get_timestamp(const struct sk_buff *skb,
+				   struct timespec64 *ts, unsigned int flags)
 {
-	struct skb_shared_hwtstamps *shhwtstamps = skb_hwtstamps(skb);
+	const struct skb_shared_hwtstamps *shhwtstamps = skb_hwtstamps(skb);
 
 	if (shhwtstamps &&
 	    (flags & SOF_TIMESTAMPING_RAW_HARDWARE) &&
@@ -467,7 +467,7 @@ static __u32 tpacket_get_timestamp(struct sk_buff *skb, struct timespec64 *ts,
 }
 
 static __u32 __packet_set_timestamp(struct packet_sock *po, void *frame,
-				    struct sk_buff *skb)
+				    const struct sk_buff *skb)
 {
 	union tpacket_uhdr h;
 	struct timespec64 ts;

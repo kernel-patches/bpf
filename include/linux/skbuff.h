@@ -1617,7 +1617,8 @@ int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
 /* Internal */
 #define skb_shinfo(SKB)	((struct skb_shared_info *)(skb_end_pointer(SKB)))
 
-static inline struct skb_shared_hwtstamps *skb_hwtstamps(struct sk_buff *skb)
+static inline struct skb_shared_hwtstamps *
+skb_hwtstamps(const struct sk_buff *skb)
 {
 	return &skb_shinfo(skb)->hwtstamps;
 }
