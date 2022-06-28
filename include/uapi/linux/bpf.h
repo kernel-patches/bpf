@@ -5989,6 +5989,7 @@ struct bpf_cpumap_val {
 		int   fd;	/* prog fd on map write */
 		__u32 id;	/* prog id on map read */
 	} bpf_prog;
+	__u64 timeout;		/* timeout to wait for new packets, in ns */
 };
 
 enum sk_action {
