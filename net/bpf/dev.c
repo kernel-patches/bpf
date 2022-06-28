@@ -534,17 +534,14 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 	return 0;
 }
 
-static int dev_xdp_attach_link(struct net_device *dev,
-			       struct netlink_ext_ack *extack,
-			       struct bpf_xdp_link *link)
+static int dev_xdp_attach_link(struct bpf_xdp_link *link)
 {
-	return dev_xdp_attach(dev, extack, link, NULL, NULL, link->flags);
+	return dev_xdp_attach(link->dev, NULL, link, NULL, NULL, link->flags);
 }
 
-static int dev_xdp_detach_link(struct net_device *dev,
-			       struct netlink_ext_ack *extack,
-			       struct bpf_xdp_link *link)
+static int dev_xdp_detach_link(struct bpf_xdp_link *link)
 {
+	struct net_device *dev = link->dev;
 	enum bpf_xdp_mode mode;
 	bpf_op_t bpf_op;
 
@@ -570,7 +567,7 @@ static void bpf_xdp_link_release(struct bpf_link *link)
 	 * already NULL, in which case link was already auto-detached
 	 */
 	if (xdp_link->dev) {
-		WARN_ON(dev_xdp_detach_link(xdp_link->dev, NULL, xdp_link));
+		WARN_ON(dev_xdp_detach_link(xdp_link));
 		xdp_link->dev = NULL;
 	}
 
@@ -709,7 +706,7 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		goto unlock;
 	}
 
-	err = dev_xdp_attach_link(dev, NULL, link);
+	err = dev_xdp_attach_link(link);
 	rtnl_unlock();
 
 	if (err) {
