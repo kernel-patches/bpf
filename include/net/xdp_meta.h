@@ -46,6 +46,17 @@ static inline bool xdp_metalen_invalid(unsigned long metalen)
 	return (metalen & (sizeof(u32) - 1)) || metalen > max;
 }
 
+/* We use direct assignments from &xdp_meta_generic to &sk_buff fields,
+ * thus they must match.
+ */
+static_assert((u32)XDP_META_RX_CSUM_NONE == (u32)CHECKSUM_NONE);
+static_assert((u32)XDP_META_RX_CSUM_OK == (u32)CHECKSUM_UNNECESSARY);
+static_assert((u32)XDP_META_RX_CSUM_COMP == (u32)CHECKSUM_COMPLETE);
+static_assert((u32)XDP_META_RX_HASH_NONE == (u32)PKT_HASH_TYPE_NONE);
+static_assert((u32)XDP_META_RX_HASH_L2 == (u32)PKT_HASH_TYPE_L2);
+static_assert((u32)XDP_META_RX_HASH_L3 == (u32)PKT_HASH_TYPE_L3);
+static_assert((u32)XDP_META_RX_HASH_L4 == (u32)PKT_HASH_TYPE_L4);
+
 /* This builds _get(), _set() and _rep() for each bitfield.
  * If you know for sure the field is empty (e.g. you zeroed the struct
  * previously), use faster _set() op to save several cycles, otherwise
@@ -282,5 +293,106 @@ static inline bool xdp_meta_skb_has_generic(const struct sk_buff *skb)
 {
 	return xdp_meta_has_generic(skb_metadata_end(skb));
 }
+
+/**
+ * xdp_meta_init - initialize a metadata structure
+ * @md: pointer to xdp_meta_generic or its ::rx_full or its ::id member
+ * @id: full BTF + type ID for the metadata type (can be u* or __le64)
+ *
+ * Zeroes the passed metadata struct (or part) and initializes its tail, so
+ * it becomes ready for further processing. If a driver is responsible for
+ * composing metadata, it is important to zero the space it occupies in each
+ * Rx buffer as `xdp->data - xdp->data_hard_start` doesn't get initialized
+ * by default.
+ */
+#define _xdp_meta_init(md, id, locmd, locid) ({				      \
+	typeof(md) locmd = (md);					      \
+	typeof(id) locid = (id);					      \
+									      \
+	if (offsetof(typeof(*locmd), full_id))				      \
+		memset(locmd, 0, offsetof(typeof(*locmd), full_id));	      \
+									      \
+	locmd->full_id = __same_type(locid, __le64) ? (__force __le64)locid : \
+			 cpu_to_le64((__force u64)locid);		      \
+	locmd->magic_id = cpu_to_le16(XDP_META_GENERIC_MAGIC);		      \
+})
+#define xdp_meta_init(md, id)						      \
+	_xdp_meta_init((md), (id), __UNIQUE_ID(md_), __UNIQUE_ID(id_))
+
+void ___xdp_build_meta_generic_from_skb(struct xdp_meta_generic_rx *rx_md,
+					const struct sk_buff *skb);
+void ___xdp_populate_skb_meta_generic(struct sk_buff *skb,
+				      const struct xdp_meta_generic_rx *rx_md);
+
+#define _xdp_build_meta_generic_from_skb(md, skb, locmd) ({		      \
+	typeof(md) locmd = (md);					      \
+									      \
+	if (offsetof(typeof(*locmd), rx))				      \
+		memset(locmd, 0, offsetof(typeof(*locmd), rx));		      \
+									      \
+	___xdp_build_meta_generic_from_skb(to_rx_md(locmd), skb);	      \
+})
+#define __xdp_build_meta_generic_from_skb(md, skb)			      \
+	_xdp_build_meta_generic_from_skb((md), (skb), __UNIQUE_ID(md_))
+
+#define __xdp_populate_skb_meta_generic(skb, md)			      \
+	___xdp_populate_skb_meta_generic((skb), to_rx_md(md))
+
+/**
+ * xdp_build_meta_generic_from_skb - build the generic meta before the skb data
+ * @skb: a pointer to the &sk_buff
+ *
+ * Builds an XDP generic metadata in front of the skb data from its fields.
+ * Note: skb->mac_header must be set and valid.
+ */
+static inline void xdp_build_meta_generic_from_skb(struct sk_buff *skb)
+{
+	struct xdp_meta_generic *md;
+	u32 needed;
+
+	/* skb_headroom() is `skb->data - skb->head`, i.e. it doesn't account
+	 * for the pulled headers, e.g. MAC header. Metadata resides in front
+	 * of the MAC header, so counting starts from there, not the current
+	 * data pointer position.
+	 * CoW won't happen in here when coming from Generic XDP path as it
+	 * ensures that an skb has at least %XDP_PACKET_HEADROOM beforehand.
+	 * It won't be happening also as long as `sizeof(*md) <= NET_SKB_PAD`.
+	 */
+	needed = (void *)skb->data - skb_metadata_end(skb) + sizeof(*md);
+	if (unlikely(skb_cow_head(skb, needed)))
+		return;
+
+	md = xdp_meta_generic_ptr(skb_metadata_end(skb));
+	__xdp_build_meta_generic_from_skb(md, skb);
+
+	skb_metadata_set(skb, sizeof(*md));
+	skb_metadata_nocomp_set(skb);
+}
+
+/**
+ * xdp_populate_skb_meta_generic - fill an skb from the metadata in front of it
+ * @skb: a pointer to the &sk_buff
+ *
+ * Fills the skb fields from the metadata in front of its MAC header and marks
+ * its metadata as "non-comparable".
+ * Note: skb->mac_header must be set and valid.
+ */
+static inline void xdp_populate_skb_meta_generic(struct sk_buff *skb)
+{
+	const struct xdp_meta_generic *md;
+
+	if (skb_metadata_len(skb) < sizeof(*md))
+		return;
+
+	md = xdp_meta_generic_ptr(skb_metadata_end(skb));
+	__xdp_populate_skb_meta_generic(skb, md);
+
+	/* We know at this point that skb metadata may contain
+	 * unique values, mark it as nocomp to not confuse GRO.
+	 */
+	skb_metadata_nocomp_set(skb);
+}
+
+int xdp_meta_match_id(const char * const *list, u64 id);
 
 #endif /* __LINUX_NET_XDP_META_H__ */

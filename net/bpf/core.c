@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2017 Jesper Dangaard Brouer, Red Hat Inc.
  */
-#include <linux/bpf.h>
+#include <linux/btf.h>
 #include <linux/filter.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -713,3 +713,149 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 
 	return nxdpf;
 }
+
+/**
+ * xdp_meta_match_id - find a type name corresponding to a given full ID
+ * @list: pointer to the %NULL-terminated list of type names
+ * @id: full ID (BTF ID + type ID) of the type to look
+ *
+ * Convenience wrapper over bpf_match_type_btf_id() for usage in drivers which
+ * takes care of zeroed ID and BPF syscall being not compiled in (to not break
+ * code flow and return "no meta").
+ *
+ * Returns a string array element index on success, an error code otherwise.
+ */
+int xdp_meta_match_id(const char * const *list, u64 id)
+{
+	int ret;
+
+	if (unlikely(!list || !*list))
+		return id ? -EINVAL : 0;
+
+	ret = bpf_match_type_btf_id(list, id);
+	if (ret == -ENOSYS || !id) {
+		for (ret = 0; list[ret]; ret++)
+			;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(xdp_meta_match_id);
+
+/* Used in __xdp_build_meta_generic_from_skb() to quickly get the ID
+ * on hotpath.
+ */
+static __le64 xdp_meta_generic_id __ro_after_init;
+
+static int __init xdp_meta_generic_id_init(void)
+{
+	int ret;
+	u64 id;
+
+	ret = bpf_get_type_btf_id("struct xdp_meta_generic", &id);
+	xdp_meta_generic_id = cpu_to_le64(id);
+
+	return ret;
+}
+late_initcall(xdp_meta_generic_id_init);
+
+#define _xdp_meta_rx_hash_type_from_skb(skb, locskb) ({		\
+	typeof(skb) locskb = (skb);				\
+								\
+	likely((locskb)->l4_hash) ? XDP_META_RX_HASH_L4 :	\
+	skb_get_hash_raw(locskb) ? XDP_META_RX_HASH_L3 :	\
+	XDP_META_RX_HASH_NONE;					\
+})
+#define xdp_meta_rx_hash_type_from_skb(skb)			\
+	_xdp_meta_rx_hash_type_from_skb((skb), __UNIQUE_ID(skb_))
+
+#define xdp_meta_rx_vlan_from_prot(skb) ({			\
+	(skb)->vlan_proto == htons(ETH_P_8021Q) ?		\
+	XDP_META_RX_CVID : XDP_META_RX_SVID;			\
+})
+
+#define xdp_meta_rx_vlan_to_prot(md) ({				\
+	xdp_meta_rx_vlan_type_get(md) == XDP_META_RX_CVID ?	\
+	htons(ETH_P_8021Q) : htons(ETH_P_8021AD);		\
+})
+
+/**
+ * ___xdp_build_meta_generic_from_skb - fill a generic metadata from an skb
+ * @rx_md: a pointer to the XDP generic metadata to be filled
+ * @skb: a pointer to the skb to take the info from
+ *
+ * Fills a given generic metadata struct with the info set previously in
+ * an skb. @md can point to anywhere and the function doesn't use the
+ * skb_metadata_{end,len}().
+ */
+void ___xdp_build_meta_generic_from_skb(struct xdp_meta_generic_rx *rx_md,
+					const struct sk_buff *skb)
+{
+	struct xdp_meta_generic *md = to_gen_md(rx_md);
+	ktime_t ts;
+
+	xdp_meta_init(rx_md, xdp_meta_generic_id);
+
+	xdp_meta_rx_csum_level_set(md, skb->csum_level);
+	xdp_meta_rx_csum_status_set(md, skb->ip_summed);
+	xdp_meta_rx_csum_set(md, skb->csum);
+
+	xdp_meta_rx_hash_set(md, skb_get_hash_raw(skb));
+	xdp_meta_rx_hash_type_set(md, xdp_meta_rx_hash_type_from_skb(skb));
+
+	if (likely(skb_rx_queue_recorded(skb))) {
+		xdp_meta_rx_qid_present_set(md, 1);
+		xdp_meta_rx_qid_set(md, skb_get_rx_queue(skb));
+	}
+
+	if (skb_vlan_tag_present(skb)) {
+		xdp_meta_rx_vlan_type_set(md, xdp_meta_rx_vlan_from_prot(skb));
+		xdp_meta_rx_vid_set(md, skb_vlan_tag_get(skb));
+	}
+
+	ts = skb_hwtstamps(skb)->hwtstamp;
+	if (ts) {
+		xdp_meta_rx_tstamp_present_set(md, 1);
+		xdp_meta_rx_tstamp_set(md, ktime_to_ns(ts));
+	}
+}
+EXPORT_SYMBOL_GPL(___xdp_build_meta_generic_from_skb);
+
+/**
+ * ___xdp_populate_skb_meta_generic - fill the skb fields from a generic meta
+ * @skb: a pointer to the skb to be filled
+ * @rx_md: a pointer to the generic metadata to take the values from
+ *
+ * Populates the &sk_buff fields from a given XDP generic metadata. A meta
+ * can be from anywhere, the function doesn't use skb_metadata_{end,len}().
+ * Checks whether the metadata is generic-compatible before accessing other
+ * fields.
+ */
+void ___xdp_populate_skb_meta_generic(struct sk_buff *skb,
+				      const struct xdp_meta_generic_rx *rx_md)
+{
+	const struct xdp_meta_generic *md = to_gen_md(rx_md);
+
+	if (unlikely(!xdp_meta_has_generic(md + 1)))
+		return;
+
+	skb->csum_level = xdp_meta_rx_csum_level_get(md);
+	skb->ip_summed = xdp_meta_rx_csum_status_get(md);
+	skb->csum = xdp_meta_rx_csum_get(md);
+
+	skb_set_hash(skb, xdp_meta_rx_hash_get(md),
+		     xdp_meta_rx_hash_type_get(md));
+
+	if (likely(xdp_meta_rx_qid_present_get(md)))
+		skb_record_rx_queue(skb, xdp_meta_rx_qid_get(md));
+
+	if (xdp_meta_rx_vlan_type_get(md))
+		__vlan_hwaccel_put_tag(skb, xdp_meta_rx_vlan_to_prot(md),
+				       xdp_meta_rx_vid_get(md));
+
+	if (xdp_meta_rx_tstamp_present_get(md))
+		*skb_hwtstamps(skb) = (struct skb_shared_hwtstamps){
+			.hwtstamp = ns_to_ktime(xdp_meta_rx_tstamp_get(md)),
+		};
+}
+EXPORT_SYMBOL_GPL(___xdp_populate_skb_meta_generic);
