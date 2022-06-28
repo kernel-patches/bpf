@@ -1193,9 +1193,11 @@ struct xdp_link_info {
 struct bpf_xdp_set_link_opts {
 	size_t sz;
 	int old_fd;
+	__u32 :32;
+	__u64 btf_id;
 	size_t :0;
 };
-#define bpf_xdp_set_link_opts__last_field old_fd
+#define bpf_xdp_set_link_opts__last_field btf_id
 
 LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_xdp_attach() instead")
 LIBBPF_API int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags);
@@ -1211,9 +1213,11 @@ LIBBPF_API int bpf_get_link_xdp_info(int ifindex, struct xdp_link_info *info,
 struct bpf_xdp_attach_opts {
 	size_t sz;
 	int old_prog_fd;
+	__u32 :32;
+	__u64 btf_id;
 	size_t :0;
 };
-#define bpf_xdp_attach_opts__last_field old_prog_fd
+#define bpf_xdp_attach_opts__last_field btf_id
 
 struct bpf_xdp_query_opts {
 	size_t sz;

@@ -382,6 +382,10 @@ struct bpf_link_create_opts {
 		struct {
 			__u64 cookie;
 		} tracing;
+		struct {
+			/* target metadata BTF + type ID */
+			__aligned_u64 btf_id;
+		} xdp;
 	};
 	size_t :0;
 };
@@ -397,8 +401,18 @@ struct bpf_link_update_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	__u32 flags;	   /* extra flags */
 	__u32 old_prog_fd; /* expected old program FD */
+	/* must have the same layout as the same union from
+	 * bpf_attr::link_update, uses direct memcpy() to there
+	 */
+	union {
+		struct {
+			/* new target metadata BTF + type ID */
+			__aligned_u64 new_btf_id;
+		} xdp;
+	};
+	size_t :0;
 };
-#define bpf_link_update_opts__last_field old_prog_fd
+#define bpf_link_update_opts__last_field xdp.new_btf_id
 
 LIBBPF_API int bpf_link_update(int link_fd, int new_prog_fd,
 			       const struct bpf_link_update_opts *opts);

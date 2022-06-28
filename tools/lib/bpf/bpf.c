@@ -805,6 +805,11 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_XDP:
+		attr.link_create.xdp.btf_id = OPTS_GET(opts, xdp.btf_id, 0);
+		if (!OPTS_ZEROED(opts, xdp))
+			return libbpf_err(-EINVAL);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
@@ -871,6 +876,20 @@ int bpf_link_update(int link_fd, int new_prog_fd,
 	attr.link_update.new_prog_fd = new_prog_fd;
 	attr.link_update.flags = OPTS_GET(opts, flags, 0);
 	attr.link_update.old_prog_fd = OPTS_GET(opts, old_prog_fd, 0);
+
+	/* As the union in both @attr and @opts is unnamed, just use a pointer
+	 * to any of its members to copy the whole rest of the union/opts
+	 */
+	if (opts && opts->sz > offsetof(typeof(*opts), xdp)) {
+		__u32 attr_left, opts_left;
+
+		attr_left = sizeof(attr.link_update) -
+			    offsetof(typeof(attr.link_update), xdp);
+		opts_left = opts->sz - offsetof(typeof(*opts), xdp);
+
+		memcpy(&attr.link_update.xdp, &opts->xdp,
+		       min(attr_left, opts_left));
+	}
 
 	ret = sys_bpf(BPF_LINK_UPDATE, &attr, sizeof(attr));
 	return libbpf_err_errno(ret);
