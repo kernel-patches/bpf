@@ -618,11 +618,60 @@ int xdp_alloc_skb_bulk(void **skbs, int n_skb, gfp_t gfp)
 }
 EXPORT_SYMBOL_GPL(xdp_alloc_skb_bulk);
 
+static void xdp_hint_skb_record_rx_queue(struct sk_buff *skb,
+					 struct xdp_hints_common *hints)
+{
+	if (hints->xdp_hints_flags & HINT_FLAG_RX_QUEUE)
+		skb_record_rx_queue(skb, hints->rx_queue);
+}
+
+static void xdp_hint_skb_set_hash(struct sk_buff *skb,
+				  struct xdp_hints_common *hints)
+{
+	u32 hash_type = hints->xdp_hints_flags & HINT_FLAG_RX_HASH_TYPE_MASK;
+
+	if (hash_type) {
+		hash_type = hash_type >> HINT_FLAG_RX_HASH_TYPE_SHIFT;
+		skb_set_hash(skb, hints->rx_hash32, hash_type);
+	}
+}
+
+static void xdp_hint_skb_checksum(struct sk_buff *skb,
+				  struct xdp_hints_common *hints)
+{
+	u32 csum_type = hints->xdp_hints_flags & HINT_FLAG_CSUM_TYPE_MASK;
+	u32 csum_level = hints->xdp_hints_flags & HINT_FLAG_CSUM_LEVEL_MASK;
+
+	if (csum_type == CHECKSUM_UNNECESSARY)
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	if (csum_level)
+		skb->csum_level = csum_level >> HINT_FLAG_CSUM_LEVEL_SHIFT;
+
+	/* TODO: First driver implementing CHECKSUM_PARTIAL or CHECKSUM_COMPLETE
+	 *  need to implement handling here.
+	 */
+}
+
+static void xdp_hint_skb_vlan_hw_tag(struct sk_buff *skb,
+				     struct xdp_hints_common *hints)
+{
+	u32 flags = hints->xdp_hints_flags;
+	__be16 proto = htons(ETH_P_8021Q);
+
+	if (flags & HINT_FLAG_VLAN_PROTO_ETH_P_8021AD)
+		proto = htons(ETH_P_8021AD);
+
+	if (flags & HINT_FLAG_VLAN_PRESENT)
+		__vlan_hwaccel_put_tag(skb, hints->vlan_tci, proto);
+}
+
 struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct sk_buff *skb,
 					   struct net_device *dev)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_frame(xdpf);
+	struct xdp_hints_common *xdp_hints = NULL;
 	unsigned int headroom, frame_size;
 	void *hard_start;
 	u8 nr_frags;
@@ -640,14 +689,17 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	frame_size = xdpf->frame_sz;
 
 	hard_start = xdpf->data - headroom;
+	prefetch(xdpf->data); /* cache-line for eth_type_trans */
 	skb = build_skb_around(skb, hard_start, frame_size);
 	if (unlikely(!skb))
 		return NULL;
 
 	skb_reserve(skb, headroom);
 	__skb_put(skb, xdpf->len);
-	if (xdpf->metasize)
+	if (xdpf->metasize) {
 		skb_metadata_set(skb, xdpf->metasize);
+		prefetch(xdpf->data - sizeof(*xdp_hints));
+	}
 
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		xdp_update_skb_shared_info(skb, nr_frags,
@@ -658,11 +710,15 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
 
-	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
-	 * - HW RX hash			(skb_set_hash)
-	 * - RX ring dev queue index	(skb_record_rx_queue)
-	 */
+	/* Populate (optional) HW offload hints in SKB via XDP-hints */
+	if (xdp_frame_has_hints_compat(xdpf)
+	    && xdpf->metasize >= sizeof(*xdp_hints)) {
+		xdp_hints = xdpf->data - sizeof(*xdp_hints);
+		xdp_hint_skb_record_rx_queue(skb, xdp_hints);
+		xdp_hint_skb_set_hash(skb, xdp_hints);
+		xdp_hint_skb_checksum(skb, xdp_hints);
+		xdp_hint_skb_vlan_hw_tag(skb, xdp_hints);
+	}
 
 	/* Until page_pool get SKB return path, release DMA here */
 	xdp_release_frame(xdpf);
