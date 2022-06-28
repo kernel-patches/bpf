@@ -534,6 +534,7 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 
 	return -ENOENT;
 }
+EXPORT_SYMBOL_GPL(btf_find_by_name_kind);
 
 static s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
 {
@@ -1673,6 +1674,15 @@ void btf_put(struct btf *btf)
 		call_rcu(&btf->rcu, btf_free_rcu);
 	}
 }
+
+void btf_put_module_btf(struct btf *btf)
+{
+	if (!btf_is_module(btf))
+		return;
+
+	btf_put(btf);
+}
+EXPORT_SYMBOL_GPL(btf_put_module_btf);
 
 static int env_resolve_init(struct btf_verifier_env *env)
 {
@@ -7022,7 +7032,7 @@ struct module *btf_try_get_module(const struct btf *btf)
 /* Returns struct btf corresponding to the struct module.
  * This function can return NULL or ERR_PTR.
  */
-static struct btf *btf_get_module_btf(const struct module *module)
+struct btf *btf_get_module_btf(const struct module *module)
 {
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	struct btf_module *btf_mod, *tmp;
@@ -7051,6 +7061,7 @@ static struct btf *btf_get_module_btf(const struct module *module)
 
 	return btf;
 }
+EXPORT_SYMBOL_GPL(btf_get_module_btf);
 
 BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int, flags)
 {
