@@ -16,6 +16,8 @@
 #include <linux/bpf_local_storage.h>
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
+#include <linux/verification.h>
+#include <linux/key.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
@@ -132,6 +134,62 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+BPF_CALL_5(bpf_verify_pkcs7_signature, struct bpf_dynptr_kern *, data_ptr,
+	   struct bpf_dynptr_kern *, sig_ptr, u32, trusted_keyring_serial,
+	   unsigned long, lookup_flags, unsigned long, trusted_keyring_id)
+{
+	key_ref_t trusted_keyring_ref;
+	struct key *trusted_keyring;
+	int ret;
+
+	/* Keep in sync with defs in include/linux/key.h. */
+	if (lookup_flags > KEY_LOOKUP_PARTIAL)
+		return -EINVAL;
+
+	/* Keep in sync with defs in include/linux/verification.h. */
+	if (trusted_keyring_id > (unsigned long)VERIFY_USE_PLATFORM_KEYRING)
+		return -EINVAL;
+
+	if (trusted_keyring_serial) {
+		trusted_keyring_ref = lookup_user_key(trusted_keyring_serial,
+						      lookup_flags,
+						      KEY_NEED_SEARCH);
+		if (IS_ERR(trusted_keyring_ref))
+			return PTR_ERR(trusted_keyring_ref);
+
+		trusted_keyring = key_ref_to_ptr(trusted_keyring_ref);
+		goto verify;
+	}
+
+	trusted_keyring = (struct key *)trusted_keyring_id;
+verify:
+	ret = verify_pkcs7_signature(data_ptr->data,
+				     bpf_dynptr_get_size(data_ptr),
+				     sig_ptr->data,
+				     bpf_dynptr_get_size(sig_ptr),
+				     trusted_keyring,
+				     VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
+				     NULL);
+	if (trusted_keyring_serial)
+		key_put(trusted_keyring);
+
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_verify_pkcs7_signature_proto = {
+	.func		= bpf_verify_pkcs7_signature,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg2_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg3_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_ANYTHING,
+	.allowed	= bpf_ima_inode_hash_allowed,
+};
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -158,6 +216,11 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return prog->aux->sleepable ? &bpf_ima_file_hash_proto : NULL;
 	case BPF_FUNC_get_attach_cookie:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto : NULL;
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+	case BPF_FUNC_verify_pkcs7_signature:
+		return prog->aux->sleepable ?
+		       &bpf_verify_pkcs7_signature_proto : NULL;
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}

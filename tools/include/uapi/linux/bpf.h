@@ -5325,6 +5325,29 @@ union bpf_attr {
  *		**-EACCES** if the SYN cookie is not valid.
  *
  *		**-EPROTONOSUPPORT** if CONFIG_IPV6 is not builtin.
+ *
+ * long bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr, struct bpf_dynptr *sig_ptr, u32 trusted_keyring_serial, unsigned long lookup_flags, unsigned long trusted_keyring_id)
+ *	Description
+ *		Verify the PKCS#7 signature *sig_ptr* against the supplied
+ *		*data_ptr* with keys in a keyring with serial
+ *		*trusted_keyring_serial*, searched with *lookup_flags*, if the
+ *		parameter value is positive, or alternatively in a keyring with
+ *		special ID *trusted_keyring_id* if *trusted_keyring_serial* is
+ *		zero.
+ *
+ *		*lookup_flags* are defined in include/linux/key.h and can be: 1,
+ *		to request that special keyrings be created if referred to
+ *		directly; 2 to permit partially constructed keys to be found.
+ *
+ *		Special IDs are defined in include/linux/verification.h and can
+ *		be: 0 for the primary keyring (immutable keyring of system
+ *		keys); 1 for both the primary and secondary keyring (where keys
+ *		can be added only if they are vouched for by existing keys in
+ *		those keyrings); 2 for the platform keyring (primarily used by
+ *		the integrity subsystem to verify a kexec'ed kerned image and,
+ *		possibly, the initramfs signature).
+ *	Return
+ *		0 on success, a negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5535,6 +5558,7 @@ union bpf_attr {
 	FN(tcp_raw_gen_syncookie_ipv6),	\
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
+	FN(verify_pkcs7_signature),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
