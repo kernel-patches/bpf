@@ -380,8 +380,12 @@ void xdp_unreg_mem_model(struct xdp_mem_info *mem);
 
 struct xdp_attachment_info {
 	struct bpf_prog *prog;
-	u64 btf_id;
+	union {
+		__le64 btf_id_le;
+		u64 btf_id;
+	};
 	u32 meta_thresh;
+	u32 drv_cookie;
 };
 
 struct netdev_bpf;
