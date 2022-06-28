@@ -317,6 +317,28 @@ const char *btf_type_str(const struct btf_type *t)
 	return btf_kind_str[BTF_INFO_KIND(t->info)];
 }
 
+static u32 btf_kind_from_str(const char **type)
+{
+	const char *pos, *orig = *type;
+	u32 kind;
+	int len;
+
+	pos = strchr(orig, ' ');
+	if (pos) {
+		len = pos - orig;
+		*type = pos + 1;
+	} else {
+		len = strlen(orig);
+	}
+
+	for (kind = BTF_KIND_UNKN; kind < NR_BTF_KINDS; kind++) {
+		if (!strncasecmp(orig, btf_kind_str[kind], len))
+			break;
+	}
+
+	return kind < NR_BTF_KINDS ? kind : BTF_KIND_UNKN;
+}
+
 /* Chunk size we use in safe copy of data to be shown. */
 #define BTF_SHOW_OBJ_SAFE_SIZE		32
 
@@ -576,6 +598,110 @@ static s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
 		btf_put(btf);
 	}
 	spin_unlock_bh(&btf_idr_lock);
+	return ret;
+}
+
+/**
+ * bpf_get_type_btf_id - get the pair BTF ID + type ID for a given type
+ * @type: pointer to the name of the type to look for
+ * @res_id: pointer to write the result to
+ *
+ * Tries to find the BTF corresponding to the provided type (full string) and
+ * write the pair of BTF ID << 32 | type ID. Such coded __u64 are being used
+ * in XDP generic-compatible metadata to distinguish between different
+ * metadata structures.
+ * @res_id can be %NULL to only check if a particular type exists within
+ * the BTF.
+ *
+ * Returns 0 in case of success, an error code otherwise.
+ */
+int bpf_get_type_btf_id(const char *type, u64 *res_id)
+{
+	struct btf *btf = NULL;
+	s32 type_id;
+	u32 kind;
+
+	if (res_id)
+		*res_id = 0;
+
+	if (!type || !*type)
+		return -EINVAL;
+
+	kind = btf_kind_from_str(&type);
+
+	type_id = bpf_find_btf_id(type, kind, &btf);
+	if (type_id > 0 && res_id)
+		*res_id = ((u64)btf_obj_id(btf) << 32) | type_id;
+
+	btf_put(btf);
+
+	return min(type_id, 0);
+}
+EXPORT_SYMBOL_GPL(bpf_get_type_btf_id);
+
+static struct btf *btf_get_by_id(u32 id)
+{
+	struct btf *btf;
+
+	rcu_read_lock();
+	btf = idr_find(&btf_idr, id);
+	if (!btf || !refcount_inc_not_zero(&btf->refcnt))
+		btf = ERR_PTR(-ENOENT);
+	rcu_read_unlock();
+
+	return btf;
+}
+
+/**
+ * bpf_match_type_btf_id - find a type name corresponding to a given full ID
+ * @list: pointer to the %NULL-terminated list of type names
+ * @id: full ID (BTF ID + type ID) of the type to look
+ *
+ * Do the opposite to what bpf_get_type_btf_id() does: looks over the
+ * candidates in %NULL-terminated @list and tries to find a match for
+ * the given ID. If found, returns its index.
+ *
+ * Returns a string array element index on success, an error code otherwise.
+ */
+int bpf_match_type_btf_id(const char * const *list, u64 id)
+{
+	const struct btf_type *t;
+	int ret = -ENOENT;
+	const char *name;
+	struct btf *btf;
+	u32 kind;
+
+	btf = btf_get_by_id(upper_32_bits(id));
+	if (IS_ERR(btf))
+		return PTR_ERR(btf);
+
+	t = btf_type_by_id(btf, lower_32_bits(id));
+	if (!t)
+		goto err_put;
+
+	name = btf_name_by_offset(btf, t->name_off);
+	if (!name) {
+		ret = -EINVAL;
+		goto err_put;
+	}
+
+	kind = BTF_INFO_KIND(t->info);
+
+	for (u32 i = 0; ; i++) {
+		const char *cand = list[i];
+
+		if (!cand)
+			break;
+
+		if (btf_kind_from_str(&cand) == kind && !strcmp(cand, name)) {
+			ret = i;
+			break;
+		}
+	}
+
+err_put:
+	btf_put(btf);
+
 	return ret;
 }
 
@@ -6804,12 +6930,7 @@ int btf_get_fd_by_id(u32 id)
 	struct btf *btf;
 	int fd;
 
-	rcu_read_lock();
-	btf = idr_find(&btf_idr, id);
-	if (!btf || !refcount_inc_not_zero(&btf->refcnt))
-		btf = ERR_PTR(-ENOENT);
-	rcu_read_unlock();
-
+	btf = btf_get_by_id(id);
 	if (IS_ERR(btf))
 		return PTR_ERR(btf);
 

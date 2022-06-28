@@ -386,6 +386,8 @@ int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id);
 int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
 				struct module *owner);
+int bpf_get_type_btf_id(const char *type, u64 *res_id);
+int bpf_match_type_btf_id(const char * const *list, u64 id);
 #else
 static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
 						    u32 type_id)
@@ -417,6 +419,17 @@ static inline int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dt
 					      u32 add_cnt, struct module *owner)
 {
 	return 0;
+}
+static inline int bpf_get_type_btf_id(const char *type, u64 *res_id)
+{
+	if (res_id)
+		*res_id = 0;
+
+	return -ENOSYS;
+}
+static inline int bpf_match_type_btf_id(const char * const *list, u64 id)
+{
+	return -ENOSYS;
 }
 #endif
 
