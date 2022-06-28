@@ -400,6 +400,7 @@ static void bpf_iter_link_dealloc(struct bpf_link *link)
 }
 
 static int bpf_iter_link_replace(struct bpf_link *link,
+				 const union bpf_attr *attr,
 				 struct bpf_prog *new_prog,
 				 struct bpf_prog *old_prog)
 {

@@ -1155,7 +1155,8 @@ struct bpf_link_ops {
 	void (*release)(struct bpf_link *link);
 	void (*dealloc)(struct bpf_link *link);
 	int (*detach)(struct bpf_link *link);
-	int (*update_prog)(struct bpf_link *link, struct bpf_prog *new_prog,
+	int (*update_prog)(struct bpf_link *link, const union bpf_attr *attr,
+			   struct bpf_prog *new_prog,
 			   struct bpf_prog *old_prog);
 	void (*show_fdinfo)(const struct bpf_link *link, struct seq_file *seq);
 	int (*fill_link_info)(const struct bpf_link *link,

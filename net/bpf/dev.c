@@ -619,7 +619,9 @@ static int bpf_xdp_link_fill_link_info(const struct bpf_link *link,
 	return 0;
 }
 
-static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
+static int bpf_xdp_link_update(struct bpf_link *link,
+			       const union bpf_attr *attr,
+			       struct bpf_prog *new_prog,
 			       struct bpf_prog *old_prog)
 {
 	struct bpf_xdp_link *xdp_link = container_of(link, struct bpf_xdp_link, link);
