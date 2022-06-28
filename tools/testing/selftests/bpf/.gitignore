@@ -44,3 +44,4 @@ test_cpp
 xdpxceiver
 xdp_redirect_multi
 xdp_synproxy
+/test_xdp_meta

@@ -5,6 +5,11 @@ readonly KSFT_SKIP=4
 readonly NS1="ns1-$(mktemp -u XXXXXX)"
 readonly NS2="ns2-$(mktemp -u XXXXXX)"
 
+# We need a persistent BPF FS mointpoint. `ip netns exec` prepares a different
+# temporary one on each invocation
+readonly FS="$(mktemp -d XXXXXX)"
+mount -t bpf bpffs ${FS}
+
 cleanup()
 {
 	if [ "$?" = "0" ]; then
@@ -14,9 +19,16 @@ cleanup()
 	fi
 
 	set +e
+
+	ip netns exec ${NS1} ./test_xdp_meta detach -d veth1 -f ${FS} -m skb 2> /dev/null
+	ip netns exec ${NS2} ./test_xdp_meta detach -d veth2 -f ${FS} -m skb 2> /dev/null
+
 	ip link del veth1 2> /dev/null
 	ip netns del ${NS1} 2> /dev/null
 	ip netns del ${NS2} 2> /dev/null
+
+	umount ${FS}
+	rm -fr ${FS}
 }
 
 ip link set dev lo xdp off 2>/dev/null > /dev/null
@@ -53,5 +65,44 @@ ip netns exec ${NS2} ip link set dev veth2 up
 
 ip netns exec ${NS1} ping -c 1 10.1.1.22
 ip netns exec ${NS2} ping -c 1 10.1.1.11
+
+#
+# Generic metadata part
+#
+
+# Cleanup
+ip netns exec ${NS1} ip link set dev veth1 xdp off
+ip netns exec ${NS2} ip link set dev veth2 xdp off
+
+ip netns exec ${NS1} tc filter del dev veth1 ingress
+ip netns exec ${NS2} tc filter del dev veth2 ingress
+
+# Enable metadata generation for every frame
+ip netns exec ${NS1} ./test_xdp_meta attach -d veth1 -f ${FS} -m skb -M
+ip netns exec ${NS2} ./test_xdp_meta attach -d veth2 -f ${FS} -m skb -M
+
+# Those two must fail: XDP prog drops packets < 128 bytes with metadata
+set +e
+
+ip netns exec ${NS1} ping -c 1 10.1.1.22 -W 0.2
+if [ "$?" = "0" ]; then
+	exit 1
+fi
+ip netns exec ${NS2} ping -c 1 10.1.1.11 -W 0.2
+if [ "$?" = "0" ]; then
+	exit 1
+fi
+
+set -e
+
+# Enable metadata only for frames >= 128 bytes
+ip netns exec ${NS1} ./test_xdp_meta update -d veth1 -f ${FS} -m skb -M 128
+ip netns exec ${NS2} ./test_xdp_meta update -d veth2 -f ${FS} -m skb -M 128
+
+# Must succeed
+ip netns exec ${NS1} ping -c 1 10.1.1.22
+ip netns exec ${NS2} ping -c 1 10.1.1.11
+ip netns exec ${NS1} ping -c 1 10.1.1.22 -s 128
+ip netns exec ${NS2} ping -c 1 10.1.1.11 -s 128
 
 exit 0
