@@ -1750,6 +1750,7 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	atomic_set(&skb_shinfo(skb)->dataref, 1);
 
 	skb_metadata_clear(skb);
+	skb_metadata_nocomp_clear(skb);
 
 	/* It is not generally safe to change skb->truesize.
 	 * For the moment, we really care of rx path, or

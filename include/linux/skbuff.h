@@ -509,6 +509,11 @@ enum {
 	 * charged to the kernel memory.
 	 */
 	SKBFL_PURE_ZEROCOPY = BIT(2),
+
+	/* skb metadata may contain unique values such as checksums
+	 * and we should not compare it against others.
+	 */
+	SKBFL_METADATA_NOCOMP = BIT(3),
 };
 
 #define SKBFL_ZEROCOPY_FRAG	(SKBFL_ZEROCOPY_ENABLE | SKBFL_SHARED_FRAG)
@@ -4137,6 +4142,9 @@ static inline bool skb_metadata_differs(const struct sk_buff *skb_a,
 
 	if (!(len_a | len_b))
 		return false;
+	if ((skb_shinfo(skb_a)->flags | skb_shinfo(skb_b)->flags) &
+	    SKBFL_METADATA_NOCOMP)
+		return false;
 
 	return len_a != len_b ?
 	       true : __skb_metadata_differs(skb_a, skb_b, len_a);
@@ -4150,6 +4158,16 @@ static inline void skb_metadata_set(struct sk_buff *skb, u8 meta_len)
 static inline void skb_metadata_clear(struct sk_buff *skb)
 {
 	skb_metadata_set(skb, 0);
+}
+
+static inline void skb_metadata_nocomp_set(struct sk_buff *skb)
+{
+	skb_shinfo(skb)->flags |= SKBFL_METADATA_NOCOMP;
+}
+
+static inline void skb_metadata_nocomp_clear(struct sk_buff *skb)
+{
+	skb_shinfo(skb)->flags &= ~SKBFL_METADATA_NOCOMP;
 }
 
 struct sk_buff *skb_clone_sk(struct sk_buff *skb);
