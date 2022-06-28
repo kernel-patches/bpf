@@ -382,7 +382,6 @@ struct xdp_attachment_info {
 	struct bpf_prog *prog;
 	u64 btf_id;
 	u32 meta_thresh;
-	u32 flags;
 };
 
 struct netdev_bpf;
