@@ -318,10 +318,18 @@ struct gro_list {
 };
 
 /*
- * size of gro hash buckets, must less than bit number of
- * napi_struct::gro_bitmask
+ * size of gro hash buckets, must be <= the number of bits in
+ * gro_node::bitmask
  */
 #define GRO_HASH_BUCKETS	8
+
+struct gro_node {
+	unsigned long		bitmask;	/* Mask of used buckets */
+	struct gro_list		hash[GRO_HASH_BUCKETS]; /* Pending GRO skbs */
+	struct list_head	rx_list;	/* Pending GRO_NORMAL skbs */
+	int			rx_count;	/* Length of rx_list */
+	struct hrtimer		timer;		/* Timer for deferred flush */
+};
 
 /*
  * Structure for NAPI scheduling similar to tasklet but with weighting
@@ -338,17 +346,13 @@ struct napi_struct {
 	unsigned long		state;
 	int			weight;
 	int			defer_hard_irqs_count;
-	unsigned long		gro_bitmask;
 	int			(*poll)(struct napi_struct *, int);
 #ifdef CONFIG_NETPOLL
 	int			poll_owner;
 #endif
 	struct net_device	*dev;
-	struct gro_list		gro_hash[GRO_HASH_BUCKETS];
+	struct gro_node		gro;
 	struct sk_buff		*skb;
-	struct list_head	rx_list; /* Pending GRO_NORMAL skbs */
-	int			rx_count; /* length of rx_list */
-	struct hrtimer		timer;
 	struct list_head	dev_list;
 	struct hlist_node	napi_hash_node;
 	unsigned int		napi_id;
@@ -3788,7 +3792,6 @@ int netif_receive_skb_core(struct sk_buff *skb);
 void netif_receive_skb_list_internal(struct list_head *head);
 void netif_receive_skb_list(struct list_head *head);
 gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb);
-void napi_gro_flush(struct napi_struct *napi, bool flush_old);
 struct sk_buff *napi_get_frags(struct napi_struct *napi);
 gro_result_t napi_gro_frags(struct napi_struct *napi);
 struct packet_offload *gro_find_receive_by_type(__be16 type);
