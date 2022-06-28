@@ -40,7 +40,7 @@ ice_build_ctob(u64 td_cmd, u64 td_offset, unsigned int size, u64 td_tag)
  * one is found return the tag, else return 0 to mean no VLAN tag was found.
  */
 static inline u16
-ice_get_vlan_tag_from_rx_desc(union ice_32b_rx_flex_desc *rx_desc)
+ice_get_vlan_tag_from_rx_desc(const union ice_32b_rx_flex_desc *rx_desc)
 {
 	u16 stat_err_bits;
 
@@ -53,6 +53,24 @@ ice_get_vlan_tag_from_rx_desc(union ice_32b_rx_flex_desc *rx_desc)
 		return le16_to_cpu(rx_desc->wb.l2tag2_2nd);
 
 	return 0;
+}
+
+/**
+ * ice_receive_skb - Send a completed packet up the stack
+ * @rx_ring: Rx ring in play
+ * @skb: packet to send up
+ *
+ * This function sends the completed packet (via. skb) up the stack using
+ * gro receive functions
+ */
+static inline void ice_receive_skb(const struct ice_rx_ring *rx_ring,
+				   struct sk_buff *skb)
+{
+	/* modifies the skb - consumes the enet header */
+	skb->protocol = eth_type_trans(skb, rx_ring->netdev);
+
+	/* send completed skb up the stack */
+	napi_gro_receive(&rx_ring->q_vector->napi, skb);
 }
 
 /**
@@ -77,7 +95,6 @@ void ice_release_rx_desc(struct ice_rx_ring *rx_ring, u16 val);
 void
 ice_process_skb_fields(struct ice_rx_ring *rx_ring,
 		       union ice_32b_rx_flex_desc *rx_desc,
-		       struct sk_buff *skb, u16 ptype);
-void
-ice_receive_skb(struct ice_rx_ring *rx_ring, struct sk_buff *skb, u16 vlan_tag);
+		       struct sk_buff *skb);
+
 #endif /* !_ICE_TXRX_LIB_H_ */

@@ -40,16 +40,15 @@ void ice_release_rx_desc(struct ice_rx_ring *rx_ring, u16 val)
 
 /**
  * ice_ptype_to_htype - get a hash type
- * @ptype: the ptype value from the descriptor
+ * @decoded: the decoded ptype value from the descriptor
  *
  * Returns appropriate hash type (such as PKT_HASH_TYPE_L2/L3/L4) to be used by
  * skb_set_hash based on PTYPE as parsed by HW Rx pipeline and is part of
  * Rx desc.
  */
-static enum pkt_hash_types ice_ptype_to_htype(u16 ptype)
+static enum pkt_hash_types
+ice_ptype_to_htype(struct ice_rx_ptype_decoded decoded)
 {
-	struct ice_rx_ptype_decoded decoded = ice_decode_rx_desc_ptype(ptype);
-
 	if (!decoded.known)
 		return PKT_HASH_TYPE_NONE;
 	if (decoded.payload_layer == ICE_RX_PTYPE_PAYLOAD_LAYER_PAY4)
@@ -67,11 +66,11 @@ static enum pkt_hash_types ice_ptype_to_htype(u16 ptype)
  * @rx_ring: descriptor ring
  * @rx_desc: specific descriptor
  * @skb: pointer to current skb
- * @rx_ptype: the ptype value from the descriptor
+ * @decoded: the decoded ptype value from the descriptor
  */
 static void
 ice_rx_hash(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc,
-	    struct sk_buff *skb, u16 rx_ptype)
+	    struct sk_buff *skb, struct ice_rx_ptype_decoded decoded)
 {
 	struct ice_32b_rx_flex_desc_nic *nic_mdid;
 	u32 hash;
@@ -84,7 +83,7 @@ ice_rx_hash(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc,
 
 	nic_mdid = (struct ice_32b_rx_flex_desc_nic *)rx_desc;
 	hash = le32_to_cpu(nic_mdid->rss_hash);
-	skb_set_hash(skb, hash, ice_ptype_to_htype(rx_ptype));
+	skb_set_hash(skb, hash, ice_ptype_to_htype(decoded));
 }
 
 /**
@@ -92,22 +91,20 @@ ice_rx_hash(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc,
  * @ring: the ring we care about
  * @skb: skb currently being received and modified
  * @rx_desc: the receive descriptor
- * @ptype: the packet type decoded by hardware
+ * @decoded: the decoded packet type parsed by hardware
  *
  * skb->protocol must be set before this function is called
  */
 static void
 ice_rx_csum(struct ice_rx_ring *ring, struct sk_buff *skb,
-	    union ice_32b_rx_flex_desc *rx_desc, u16 ptype)
+	    union ice_32b_rx_flex_desc *rx_desc,
+	    struct ice_rx_ptype_decoded decoded)
 {
-	struct ice_rx_ptype_decoded decoded;
 	u16 rx_status0, rx_status1;
 	bool ipv4, ipv6;
 
 	rx_status0 = le16_to_cpu(rx_desc->wb.status_error0);
 	rx_status1 = le16_to_cpu(rx_desc->wb.status_error1);
-
-	decoded = ice_decode_rx_desc_ptype(ptype);
 
 	/* Start with CHECKSUM_NONE and by default csum_level = 0 */
 	skb->ip_summed = CHECKSUM_NONE;
@@ -170,12 +167,31 @@ checksum_fail:
 	ring->vsi->back->hw_csum_rx_error++;
 }
 
+static void ice_rx_vlan(struct sk_buff *skb,
+			const struct ice_rx_ring *rx_ring,
+			const union ice_32b_rx_flex_desc *rx_desc)
+{
+	netdev_features_t features = rx_ring->netdev->features;
+	bool non_zero_vlan;
+	u16 vlan_tag;
+
+	vlan_tag = ice_get_vlan_tag_from_rx_desc(rx_desc);
+	non_zero_vlan = !!(vlan_tag & VLAN_VID_MASK);
+
+	if (!non_zero_vlan)
+		return;
+
+	if ((features & NETIF_F_HW_VLAN_CTAG_RX))
+		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), vlan_tag);
+	else if ((features & NETIF_F_HW_VLAN_STAG_RX))
+		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021AD), vlan_tag);
+}
+
 /**
  * ice_process_skb_fields - Populate skb header fields from Rx descriptor
  * @rx_ring: Rx descriptor ring packet is being transacted on
  * @rx_desc: pointer to the EOP Rx descriptor
  * @skb: pointer to current skb being populated
- * @ptype: the packet type decoded by hardware
  *
  * This function checks the ring, descriptor, and packet information in
  * order to populate the hash, checksum, VLAN, protocol, and
@@ -184,40 +200,23 @@ checksum_fail:
 void
 ice_process_skb_fields(struct ice_rx_ring *rx_ring,
 		       union ice_32b_rx_flex_desc *rx_desc,
-		       struct sk_buff *skb, u16 ptype)
+		       struct sk_buff *skb)
 {
-	ice_rx_hash(rx_ring, rx_desc, skb, ptype);
+	struct ice_rx_ptype_decoded decoded;
+	u16 ptype;
 
-	/* modifies the skb - consumes the enet header */
-	skb->protocol = eth_type_trans(skb, rx_ring->netdev);
+	skb_record_rx_queue(skb, rx_ring->q_index);
 
-	ice_rx_csum(rx_ring, skb, rx_desc, ptype);
+	ptype = le16_to_cpu(rx_desc->wb.ptype_flex_flags0) &
+		ICE_RX_FLEX_DESC_PTYPE_M;
+	decoded = ice_decode_rx_desc_ptype(ptype);
+
+	ice_rx_hash(rx_ring, rx_desc, skb, decoded);
+	ice_rx_csum(rx_ring, skb, rx_desc, decoded);
+	ice_rx_vlan(skb, rx_ring, rx_desc);
 
 	if (rx_ring->ptp_rx)
 		ice_ptp_rx_hwtstamp(rx_ring, rx_desc, skb);
-}
-
-/**
- * ice_receive_skb - Send a completed packet up the stack
- * @rx_ring: Rx ring in play
- * @skb: packet to send up
- * @vlan_tag: VLAN tag for packet
- *
- * This function sends the completed packet (via. skb) up the stack using
- * gro receive functions (with/without VLAN tag)
- */
-void
-ice_receive_skb(struct ice_rx_ring *rx_ring, struct sk_buff *skb, u16 vlan_tag)
-{
-	netdev_features_t features = rx_ring->netdev->features;
-	bool non_zero_vlan = !!(vlan_tag & VLAN_VID_MASK);
-
-	if ((features & NETIF_F_HW_VLAN_CTAG_RX) && non_zero_vlan)
-		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), vlan_tag);
-	else if ((features & NETIF_F_HW_VLAN_STAG_RX) && non_zero_vlan)
-		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021AD), vlan_tag);
-
-	napi_gro_receive(&rx_ring->q_vector->napi, skb);
 }
 
 /**
