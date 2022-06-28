@@ -295,6 +295,7 @@ LIBBPF_API int libbpf_attach_type_by_name(const char *name,
 					  enum bpf_attach_type *attach_type);
 LIBBPF_API int libbpf_find_vmlinux_btf_id(const char *name,
 					  enum bpf_attach_type attach_type);
+LIBBPF_API int libbpf_get_type_btf_id(const char *type, __u64 *id);
 
 /* Accessors of bpf_program */
 struct bpf_program;

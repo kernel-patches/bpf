@@ -2252,6 +2252,28 @@ const char *btf_kind_str(const struct btf_type *t)
 	return __btf_kind_str(btf_kind(t));
 }
 
+static __u32 btf_kind_from_str(const char **type)
+{
+	const char *pos, *orig = *type;
+	__u32 kind;
+	int len;
+
+	pos = strchr(orig, ' ');
+	if (pos) {
+		len = pos - orig;
+		*type = pos + 1;
+	} else {
+		len = strlen(orig);
+	}
+
+	for (kind = BTF_KIND_UNKN; kind < NR_BTF_KINDS; kind++) {
+		if (!strncmp(orig, __btf_kind_str(kind), len))
+			break;
+	}
+
+	return kind < NR_BTF_KINDS ? kind : BTF_KIND_UNKN;
+}
+
 /*
  * Fetch integer attribute of BTF map definition. Such attributes are
  * represented using a pointer to an array, in which dimensionality of array
@@ -9615,6 +9637,97 @@ int libbpf_find_vmlinux_btf_id(const char *name,
 
 	btf__free(btf);
 	return libbpf_err(err);
+}
+
+static __s32 libbpf_find_btf_id(const char *type, __u32 kind,
+				struct btf **res_btf)
+{
+	char name[BTF_NAME_BUF_LEN] = { };
+	struct btf *vmlinux_btf, *btf;
+	struct bpf_btf_info info;
+	__u32 id = 0;
+	__s32 ret;
+
+	if (res_btf)
+		*res_btf = NULL;
+
+	if (!type || !*type)
+		return -EINVAL;
+
+	vmlinux_btf = btf__load_vmlinux_btf();
+	ret = libbpf_get_error(vmlinux_btf);
+	if (ret < 0)
+		goto free_vmlinux;
+
+	ret = btf__find_by_name_kind(vmlinux_btf, type, kind);
+	if (ret > 0) {
+		btf = vmlinux_btf;
+		goto out;
+	}
+
+	while (true) {
+		memset(&info, 0, sizeof(info));
+		info.name = ptr_to_u64(name);
+		info.name_len = sizeof(name);
+
+		btf = btf_load_next_with_info(id, &info, vmlinux_btf, false);
+		ret = libbpf_get_error(btf);
+		if (ret)
+			break;
+
+		ret = btf__find_by_name_kind(btf, type, kind);
+		if (ret > 0)
+			break;
+
+		id = btf_obj_id(btf);
+		btf__free(btf);
+	}
+
+free_vmlinux:
+	btf__free(vmlinux_btf);
+
+out:
+	if (ret > 0 && res_btf)
+		*res_btf = btf;
+
+	return ret ? : -ESRCH;
+}
+
+/**
+ * libbpf_get_type_btf_id - get the pair BTF ID + type ID for a given type
+ * @type: pointer to the name of the type to look for
+ * @res_id: pointer to write the result to
+ *
+ * Tries to find the BTF corresponding to the provided type (full string) and
+ * write the pair of BTF ID << 32 | type ID. Such coded __u64 are being used
+ * in XDP generic-compatible metadata to distinguish between different
+ * metadata structures.
+ * @res_id can be %NULL to only check if a particular type exists within
+ * the BTF.
+ *
+ * Returns 0 in case of success, -errno otherwise.
+ */
+int libbpf_get_type_btf_id(const char *type, __u64 *res_id)
+{
+	struct btf *btf = NULL;
+	__s32 type_id;
+	__u32 kind;
+
+	if (res_id)
+		*res_id = 0;
+
+	if (!type || !*type)
+		return libbpf_err(-EINVAL);
+
+	kind = btf_kind_from_str(&type);
+
+	type_id = libbpf_find_btf_id(type, kind, &btf);
+	if (type_id > 0 && res_id)
+		*res_id = ((__u64)btf_obj_id(btf) << 32) | type_id;
+
+	btf__free(btf);
+
+	return libbpf_err(min(type_id, 0));
 }
 
 static int libbpf_find_prog_btf_id(const char *name, __u32 attach_prog_fd)
