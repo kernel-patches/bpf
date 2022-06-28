@@ -2604,31 +2604,13 @@ free_xdp_rings:
 }
 
 /**
- * ice_vsi_assign_bpf_prog - set or clear bpf prog pointer on VSI
- * @vsi: VSI to set the bpf prog on
- * @prog: the bpf prog pointer
- */
-static void ice_vsi_assign_bpf_prog(struct ice_vsi *vsi, struct bpf_prog *prog)
-{
-	struct bpf_prog *old_prog;
-	int i;
-
-	old_prog = xchg(&vsi->xdp_prog, prog);
-	if (old_prog)
-		bpf_prog_put(old_prog);
-
-	ice_for_each_rxq(vsi, i)
-		WRITE_ONCE(vsi->rx_rings[i]->xdp_prog, vsi->xdp_prog);
-}
-
-/**
  * ice_prepare_xdp_rings - Allocate, configure and setup Tx rings for XDP
  * @vsi: VSI to bring up Tx rings used by XDP
- * @prog: bpf program that will be assigned to VSI
+ * @xdp: &netdev_bpf with XDP program and additional data passed from the stack
  *
  * Return 0 on success and negative value on error
  */
-int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct bpf_prog *prog)
+int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 {
 	u16 max_txqs[ICE_MAX_TRAFFIC_CLASS] = { 0 };
 	int xdp_rings_rem = vsi->num_xdp_txq;
@@ -2713,8 +2695,8 @@ int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct bpf_prog *prog)
 	 * this is not harmful as dev_xdp_install bumps the refcount
 	 * before calling the op exposed by the driver;
 	 */
-	if (!ice_is_xdp_ena_vsi(vsi))
-		ice_vsi_assign_bpf_prog(vsi, prog);
+	if (xdp)
+		xdp_attachment_setup_rcu(&vsi->xdp_info, xdp);
 
 	return 0;
 clear_xdp_rings:
@@ -2739,11 +2721,12 @@ err_map_xdp:
 /**
  * ice_destroy_xdp_rings - undo the configuration made by ice_prepare_xdp_rings
  * @vsi: VSI to remove XDP rings
+ * @xdp: &netdev_bpf with XDP program and additional data passed from the stack
  *
  * Detach XDP rings from irq vectors, clean up the PF bitmap and free
  * resources
  */
-int ice_destroy_xdp_rings(struct ice_vsi *vsi)
+int ice_destroy_xdp_rings(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 {
 	u16 max_txqs[ICE_MAX_TRAFFIC_CLASS] = { 0 };
 	struct ice_pf *pf = vsi->back;
@@ -2796,7 +2779,11 @@ free_qmap:
 	if (ice_is_reset_in_progress(pf->state) || !vsi->q_vectors[0])
 		return 0;
 
-	ice_vsi_assign_bpf_prog(vsi, NULL);
+	/* Symmetrically to ice_prepare_xdp_rings(), touch XDP program only
+	 * when called from ::ndo_bpf().
+	 */
+	if (xdp)
+		xdp_attachment_setup_rcu(&vsi->xdp_info, xdp);
 
 	/* notify Tx scheduler that we destroyed XDP queues and bring
 	 * back the old number of child nodes
@@ -2853,15 +2840,14 @@ int ice_vsi_determine_xdp_res(struct ice_vsi *vsi)
 /**
  * ice_xdp_setup_prog - Add or remove XDP eBPF program
  * @vsi: VSI to setup XDP for
- * @prog: XDP program
- * @extack: netlink extended ack
+ * @xdp: &netdev_bpf with XDP program and additional data passed from the stack
  */
 static int
-ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
-		   struct netlink_ext_ack *extack)
+ice_xdp_setup_prog(struct ice_vsi *vsi, struct netdev_bpf *xdp)
 {
 	int frame_size = vsi->netdev->mtu + ICE_ETH_PKT_HDR_PAD;
-	bool if_running = netif_running(vsi->netdev);
+	struct netlink_ext_ack *extack = xdp->extack;
+	bool restart = false, prog = !!xdp->prog;
 	int ret = 0, xdp_ring_err = 0;
 
 	if (frame_size > vsi->rx_buf_len) {
@@ -2870,12 +2856,15 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 	}
 
 	/* need to stop netdev while setting up the program for Rx rings */
-	if (if_running && !test_and_set_bit(ICE_VSI_DOWN, vsi->state)) {
+	if (ice_is_xdp_ena_vsi(vsi) != prog && netif_running(vsi->netdev) &&
+	    !test_and_set_bit(ICE_VSI_DOWN, vsi->state)) {
 		ret = ice_down(vsi);
 		if (ret) {
 			NL_SET_ERR_MSG_MOD(extack, "Preparing device for XDP attach failed");
 			return ret;
 		}
+
+		restart = true;
 	}
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
@@ -2883,24 +2872,24 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 		if (xdp_ring_err) {
 			NL_SET_ERR_MSG_MOD(extack, "Not enough Tx resources for XDP");
 		} else {
-			xdp_ring_err = ice_prepare_xdp_rings(vsi, prog);
+			xdp_ring_err = ice_prepare_xdp_rings(vsi, xdp);
 			if (xdp_ring_err)
 				NL_SET_ERR_MSG_MOD(extack, "Setting up XDP Tx resources failed");
 		}
 	} else if (ice_is_xdp_ena_vsi(vsi) && !prog) {
-		xdp_ring_err = ice_destroy_xdp_rings(vsi);
+		xdp_ring_err = ice_destroy_xdp_rings(vsi, xdp);
 		if (xdp_ring_err)
 			NL_SET_ERR_MSG_MOD(extack, "Freeing XDP Tx resources failed");
 	} else {
-		/* safe to call even when prog == vsi->xdp_prog as
+		/* safe to call even when prog == vsi->xdp_info.prog as
 		 * dev_xdp_install in net/core/dev.c incremented prog's
 		 * refcount so corresponding bpf_prog_put won't cause
 		 * underflow
 		 */
-		ice_vsi_assign_bpf_prog(vsi, prog);
+		xdp_attachment_setup_rcu(&vsi->xdp_info, xdp);
 	}
 
-	if (if_running)
+	if (restart)
 		ret = ice_up(vsi);
 
 	if (!ret && prog)
@@ -2940,7 +2929,7 @@ static int ice_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		return ice_xdp_setup_prog(vsi, xdp->prog, xdp->extack);
+		return ice_xdp_setup_prog(vsi, xdp);
 	case XDP_SETUP_XSK_POOL:
 		return ice_xsk_pool_setup(vsi, xdp->xsk.pool,
 					  xdp->xsk.queue_id);

@@ -290,7 +290,7 @@ struct ice_rx_ring {
 	struct rcu_head rcu;		/* to avoid race on free */
 	/* CL4 - 3rd cacheline starts here */
 	struct ice_channel *ch;
-	struct bpf_prog *xdp_prog;
+	const struct xdp_attachment_info *xdp_info;
 	struct ice_tx_ring *xdp_ring;
 	struct xsk_buff_pool *xsk_pool;
 	struct sk_buff *skb;

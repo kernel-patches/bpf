@@ -454,7 +454,7 @@ void ice_free_rx_ring(struct ice_rx_ring *rx_ring)
 	if (rx_ring->vsi->type == ICE_VSI_PF)
 		if (xdp_rxq_info_is_reg(&rx_ring->xdp_rxq))
 			xdp_rxq_info_unreg(&rx_ring->xdp_rxq);
-	rx_ring->xdp_prog = NULL;
+
 	if (rx_ring->xsk_pool) {
 		kfree(rx_ring->xdp_buf);
 		rx_ring->xdp_buf = NULL;
@@ -507,8 +507,7 @@ int ice_setup_rx_ring(struct ice_rx_ring *rx_ring)
 	rx_ring->next_to_use = 0;
 	rx_ring->next_to_clean = 0;
 
-	if (ice_is_xdp_ena_vsi(rx_ring->vsi))
-		WRITE_ONCE(rx_ring->xdp_prog, rx_ring->vsi->xdp_prog);
+	rx_ring->xdp_info = &rx_ring->vsi->xdp_info;
 
 	if (rx_ring->vsi->type == ICE_VSI_PF &&
 	    !xdp_rxq_info_is_reg(&rx_ring->xdp_rxq))
@@ -1123,7 +1122,7 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 #endif
 	xdp_init_buff(&xdp, frame_sz, &rx_ring->xdp_rxq);
 
-	xdp_prog = READ_ONCE(rx_ring->xdp_prog);
+	xdp_prog = rcu_dereference(rx_ring->xdp_info->prog_rcu);
 	if (xdp_prog)
 		xdp_ring = rx_ring->xdp_ring;
 
@@ -1489,6 +1488,8 @@ int ice_napi_poll(struct napi_struct *napi, int budget)
 		/* Max of 1 Rx ring in this q_vector so give it the budget */
 		budget_per_ring = budget;
 
+	rcu_read_lock();
+
 	ice_for_each_rx_ring(rx_ring, q_vector->rx) {
 		int cleaned;
 
@@ -1504,6 +1505,8 @@ int ice_napi_poll(struct napi_struct *napi, int budget)
 		if (cleaned >= budget_per_ring)
 			clean_complete = false;
 	}
+
+	rcu_read_unlock();
 
 	/* If work not completed, return budget and polling will return */
 	if (!clean_complete) {

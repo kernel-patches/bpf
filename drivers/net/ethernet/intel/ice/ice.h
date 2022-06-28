@@ -386,7 +386,7 @@ struct ice_vsi {
 	u16 num_tx_desc;
 	u16 qset_handle[ICE_MAX_TRAFFIC_CLASS];
 	struct ice_tc_cfg tc_cfg;
-	struct bpf_prog *xdp_prog;
+	struct xdp_attachment_info xdp_info;
 	struct ice_tx_ring **xdp_rings;	 /* XDP ring array */
 	unsigned long *af_xdp_zc_qps;	 /* tracks AF_XDP ZC enabled qps */
 	u16 num_xdp_txq;		 /* Used XDP queues */
@@ -672,7 +672,7 @@ static inline struct ice_pf *ice_netdev_to_pf(struct net_device *netdev)
 
 static inline bool ice_is_xdp_ena_vsi(struct ice_vsi *vsi)
 {
-	return !!READ_ONCE(vsi->xdp_prog);
+	return !!rcu_access_pointer(vsi->xdp_info.prog_rcu);
 }
 
 static inline void ice_set_ring_xdp(struct ice_tx_ring *ring)
@@ -857,8 +857,8 @@ int ice_down(struct ice_vsi *vsi);
 int ice_vsi_cfg(struct ice_vsi *vsi);
 struct ice_vsi *ice_lb_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi);
 int ice_vsi_determine_xdp_res(struct ice_vsi *vsi);
-int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct bpf_prog *prog);
-int ice_destroy_xdp_rings(struct ice_vsi *vsi);
+int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct netdev_bpf *xdp);
+int ice_destroy_xdp_rings(struct ice_vsi *vsi, struct netdev_bpf *xdp);
 int
 ice_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames,
 	     u32 flags);

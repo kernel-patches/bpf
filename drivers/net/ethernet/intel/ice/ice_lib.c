@@ -3200,7 +3200,7 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 		/* return value check can be skipped here, it always returns
 		 * 0 if reset is in progress
 		 */
-		ice_destroy_xdp_rings(vsi);
+		ice_destroy_xdp_rings(vsi, NULL);
 	ice_vsi_put_qs(vsi);
 	ice_vsi_clear_rings(vsi);
 	ice_vsi_free_arrays(vsi);
@@ -3248,7 +3248,7 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 			ret = ice_vsi_determine_xdp_res(vsi);
 			if (ret)
 				goto err_vectors;
-			ret = ice_prepare_xdp_rings(vsi, vsi->xdp_prog);
+			ret = ice_prepare_xdp_rings(vsi, NULL);
 			if (ret)
 				goto err_vectors;
 		}
