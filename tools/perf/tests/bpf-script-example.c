@@ -24,13 +24,16 @@ struct bpf_map_def {
 	unsigned int max_entries;
 };
 
+#define __uint(name, val) int (*name)[val]
+#define __type(name, val) typeof(val) *name
+
 #define SEC(NAME) __attribute__((section(NAME), used))
-struct bpf_map_def SEC("maps") flip_table = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, int);
+} flip_table SEC(".maps");
 
 SEC("func=do_epoll_wait")
 int bpf_func__SyS_epoll_pwait(void *ctx)
