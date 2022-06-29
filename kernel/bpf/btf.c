@@ -5454,7 +5454,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 		if (ctx_arg_info->offset == off) {
 			if (!ctx_arg_info->btf_id) {
-				bpf_log(log,"invalid btf_id for context argument offset %u\n", off);
+				bpf_log(log,
+					"invalid btf_id for context argument offset %u\n",
+					off);
 				return false;
 			}
 
