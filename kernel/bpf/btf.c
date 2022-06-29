@@ -5057,8 +5057,10 @@ extern struct btf *btf_vmlinux;
 static union {
 	struct bpf_ctx_convert {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
-	prog_ctx_type _id##_prog; \
-	kern_ctx_type _id##_kern;
+		do { \
+			prog_ctx_type _id##_prog; \
+			kern_ctx_type _id##_kern; \
+		} while (0)
 #include <linux/bpf_types.h>
 #undef BPF_PROG_TYPE
 	} *__t;
