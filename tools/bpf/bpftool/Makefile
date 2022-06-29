@@ -93,8 +93,24 @@ INSTALL ?= install
 RM ?= rm -f
 
 FEATURE_USER = .bpftool
-FEATURE_TESTS = libbfd disassembler-four-args zlib libcap \
-	clang-bpf-co-re
+FEATURE_TESTS := disassembler-four-args zlib
+
+# Disable libbfd (for disassembling JIT-compiled programs) by setting
+# BPFTOOL_FEATURE_NO_LIBBFD
+ifeq ($(BPFTOOL_FEATURE_NO_LIBBFD),)
+  FEATURE_TESTS += libbfd
+endif
+# Disable libcap (for probing features available to unprivileged users) by
+# setting BPFTOOL_FEATURE_NO_LIBCAP
+ifeq ($(BPFTOOL_FEATURE_NO_LIBCAP),)
+  FEATURE_TESTS += libcap
+endif
+# Disable skeletons (e.g. for profiling programs or showing PIDs of processes
+# associated to BPF objects) by setting BPFTOOL_FEATURE_NO_SKELETONS
+ifeq ($(BPFTOOL_FEATURE_NO_SKELETONS),)
+  FEATURE_TESTS += clang-bpf-co-re
+endif
+
 FEATURE_DISPLAY = libbfd disassembler-four-args zlib libcap \
 	clang-bpf-co-re
 
