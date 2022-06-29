@@ -10249,9 +10249,10 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	}
 	type = determine_uprobe_perf_type_legacy(probe_name, retprobe);
 	if (type < 0) {
+		err = type;
 		pr_warn("failed to determine legacy uprobe event id for %s:0x%zx: %d\n",
-			binary_path, offset, type);
-		return type;
+			binary_path, offset, err);
+		goto err_clean_legacy;
 	}
 
 	memset(&attr, 0, sizeof(attr));
@@ -10266,9 +10267,14 @@ static int perf_event_uprobe_open_legacy(const char *probe_name, bool retprobe,
 	if (pfd < 0) {
 		err = -errno;
 		pr_warn("legacy uprobe perf_event_open() failed: %d\n", err);
-		return err;
+		goto err_clean_legacy;
 	}
 	return pfd;
+
+err_clean_legacy:
+	/* Clear the newly added legacy uprobe_event */
+	remove_uprobe_event_legacy(probe_name, retprobe);
+	return err;
 }
 
 /* Return next ELF section of sh_type after scn, or first of that type if scn is NULL. */
@@ -10602,7 +10608,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 			prog->name, retprobe ? "uretprobe" : "uprobe",
 			binary_path, func_offset,
 			libbpf_strerror_r(err, errmsg, sizeof(errmsg)));
-		goto err_out;
+		goto err_clean_legacy;
 	}
 	if (legacy) {
 		struct bpf_link_perf *perf_link = container_of(link, struct bpf_link_perf, link);
@@ -10612,10 +10618,14 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 		perf_link->legacy_is_retprobe = retprobe;
 	}
 	return link;
+
+err_clean_legacy:
+	if (legacy)
+		remove_uprobe_event_legacy(legacy_probe, retprobe);
+
 err_out:
 	free(legacy_probe);
 	return libbpf_err_ptr(err);
-
 }
 
 /* Format of u[ret]probe section definition supporting auto-attach:
