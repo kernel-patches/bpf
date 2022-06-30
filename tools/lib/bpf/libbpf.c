@@ -10686,7 +10686,19 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 		return libbpf_err_ptr(-EINVAL);
 	}
 
-	if (!strchr(binary_path, '/')) {
+	if (!binary_path) {
+		if (pid < 0) {
+			pr_warn("prog '%s': missing attach target, pid or binary path required\n",
+				prog->name);
+			return libbpf_err_ptr(-EINVAL);
+		}
+		if (!pid)
+			binary_path = "/proc/self/exe";
+		else {
+			snprintf(resolved_path, sizeof(resolved_path), "/proc/%d/exe", pid);
+			binary_path = resolved_path;
+		}
+	} else if (!strchr(binary_path, '/')) {
 		err = resolve_full_path(binary_path, resolved_path, sizeof(resolved_path));
 		if (err) {
 			pr_warn("prog '%s': failed to resolve full path for '%s': %d\n",
