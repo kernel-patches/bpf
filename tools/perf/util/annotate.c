@@ -41,6 +41,7 @@
 #include <linux/string.h>
 #include <subcmd/parse-options.h>
 #include <subcmd/run-command.h>
+#include <tools/dis-asm-compat.h>
 
 /* FIXME: For the HE_COLORSET */
 #include "ui/browser.h"
@@ -1762,9 +1763,9 @@ static int symbol__disassemble_bpf(struct symbol *sym,
 		ret = errno;
 		goto out;
 	}
-	init_disassemble_info(&info, s,
-			      (fprintf_ftype) fprintf);
-
+	init_disassemble_info_compat(&info, s,
+				     (fprintf_ftype) fprintf,
+				     fprintf_styled);
 	info.arch = bfd_get_arch(bfdf);
 	info.mach = bfd_get_mach(bfdf);
 
