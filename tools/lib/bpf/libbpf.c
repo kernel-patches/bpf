@@ -10711,6 +10711,12 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 		return libbpf_err_ptr(-EINVAL);
 	}
 
+	if (!binary_path) {
+		pr_warn("prog '%s': USDT attach requires binary_path\n",
+			prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+
 	if (!strchr(binary_path, '/')) {
 		err = resolve_full_path(binary_path, resolved_path, sizeof(resolved_path));
 		if (err) {
