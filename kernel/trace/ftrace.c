@@ -8033,8 +8033,7 @@ static int kallsyms_callback(void *data, const char *name,
 	if (!bsearch(&name, args->syms, args->cnt, sizeof(*args->syms), symbols_cmp))
 		return 0;
 
-	addr = ftrace_location(addr);
-	if (!addr)
+	if (!ftrace_location(addr))
 		return 0;
 
 	args->addrs[args->found++] = addr;
