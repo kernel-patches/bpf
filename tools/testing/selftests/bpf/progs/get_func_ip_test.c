@@ -2,6 +2,7 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <stdbool.h>
 
 char _license[] SEC("license") = "GPL";
 
@@ -12,6 +13,8 @@ extern const void bpf_fentry_test4 __ksym;
 extern const void bpf_modify_return_test __ksym;
 extern const void bpf_fentry_test6 __ksym;
 extern const void bpf_fentry_test7 __ksym;
+
+extern bool CONFIG_X86_KERNEL_IBT __kconfig __weak;
 
 __u64 test1_result = 0;
 SEC("fentry/bpf_fentry_test1")
@@ -37,7 +40,7 @@ __u64 test3_result = 0;
 SEC("kprobe/bpf_fentry_test3")
 int test3(struct pt_regs *ctx)
 {
-	__u64 addr = bpf_get_func_ip(ctx);
+	__u64 addr = bpf_get_func_ip(ctx) - (CONFIG_X86_KERNEL_IBT ? 4 : 0);
 
 	test3_result = (const void *) addr == &bpf_fentry_test3;
 	return 0;
@@ -47,7 +50,7 @@ __u64 test4_result = 0;
 SEC("kretprobe/bpf_fentry_test4")
 int BPF_KRETPROBE(test4)
 {
-	__u64 addr = bpf_get_func_ip(ctx);
+	__u64 addr = bpf_get_func_ip(ctx) - (CONFIG_X86_KERNEL_IBT ? 4 : 0);
 
 	test4_result = (const void *) addr == &bpf_fentry_test4;
 	return 0;
