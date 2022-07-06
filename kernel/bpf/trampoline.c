@@ -400,7 +400,7 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 	case BPF_TRACE_FEXIT:
 		return BPF_TRAMP_FEXIT;
 	case BPF_LSM_MAC:
-		if (!prog->aux->attach_func_proto->type)
+		if (btf_func_returns_void(prog->aux->attach_func_proto))
 			/* The function returns void, we cannot modify its
 			 * return value.
 			 */

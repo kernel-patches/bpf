@@ -302,6 +302,11 @@ static inline u16 btf_func_linkage(const struct btf_type *t)
 	return BTF_INFO_VLEN(t->info);
 }
 
+static inline bool btf_func_returns_void(const struct btf_type *t)
+{
+	return t && !t->type;
+}
+
 static inline bool btf_type_kflag(const struct btf_type *t)
 {
 	return BTF_INFO_KFLAG(t->info);

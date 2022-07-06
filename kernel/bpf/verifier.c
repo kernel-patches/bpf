@@ -7325,7 +7325,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		break;
 	case BPF_FUNC_set_retval:
 		if (env->prog->expected_attach_type == BPF_LSM_CGROUP) {
-			if (!env->prog->aux->attach_func_proto->type) {
+			if (btf_func_returns_void(env->prog->aux->attach_func_proto)) {
 				/* Make sure programs that attach to void
 				 * hooks don't try to modify return value.
 				 */
@@ -10447,7 +10447,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 	if (!is_subprog &&
 	    (prog_type == BPF_PROG_TYPE_STRUCT_OPS ||
 	     prog_type == BPF_PROG_TYPE_LSM) &&
-	    !prog->aux->attach_func_proto->type)
+	    btf_func_returns_void(prog->aux->attach_func_proto))
 		return 0;
 
 	/* eBPF calling convention is such that R0 is used
@@ -10547,7 +10547,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 			 */
 			return 0;
 		}
-		if (!env->prog->aux->attach_func_proto->type) {
+		if (btf_func_returns_void(env->prog->aux->attach_func_proto)) {
 			/* Make sure programs that attach to void
 			 * hooks don't try to modify return value.
 			 */
@@ -10572,7 +10572,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 	if (!tnum_in(range, reg->var_off)) {
 		verbose_invalid_scalar(env, reg, &range, "program exit", "R0");
 		if (prog->expected_attach_type == BPF_LSM_CGROUP &&
-		    !prog->aux->attach_func_proto->type)
+		    btf_func_returns_void(prog->aux->attach_func_proto))
 			verbose(env, "Note, BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
 		return -EINVAL;
 	}
