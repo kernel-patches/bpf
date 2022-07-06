@@ -165,7 +165,8 @@ static int cgroup_storage_update_elem(struct bpf_map *map, void *key,
 	}
 
 	new = bpf_map_kmalloc_node(map, struct_size(new, data, map->value_size),
-				   __GFP_ZERO | GFP_ATOMIC | __GFP_NOWARN,
+				   __GFP_ZERO | __GFP_ATOMIC | __GFP_NOWARN |
+				   __GFP_KSWAPD_RECLAIM,
 				   map->numa_node);
 	if (!new)
 		return -ENOMEM;
