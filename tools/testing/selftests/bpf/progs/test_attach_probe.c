@@ -31,8 +31,8 @@ int handle_kprobe(struct pt_regs *ctx)
 	return 0;
 }
 
-SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
-int BPF_KPROBE(handle_kprobe_auto)
+SEC("ksyscall/nanosleep")
+int BPF_KSYSCALL(handle_kprobe_auto)
 {
 	kprobe2_res = 11;
 	return 0;
@@ -56,7 +56,7 @@ int handle_kretprobe(struct pt_regs *ctx)
 	return 0;
 }
 
-SEC("kretprobe/" SYS_PREFIX "sys_nanosleep")
+SEC("kretsyscall/nanosleep")
 int BPF_KRETPROBE(handle_kretprobe_auto)
 {
 	kretprobe2_res = 22;
