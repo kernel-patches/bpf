@@ -11676,6 +11676,46 @@ static int perf_buffer__process_records(struct perf_buffer *pb,
 	return 0;
 }
 
+int perf_buffer__raw_ring_buf(const struct perf_buffer *pb, size_t buf_idx,
+			      void **base, size_t *buf_size, __u64 *head,
+			      __u64 *tail)
+{
+	struct perf_cpu_buf *cpu_buf;
+	struct perf_event_mmap_page *header;
+
+	if (buf_idx >= pb->cpu_cnt)
+		return libbpf_err(-EINVAL);
+
+	cpu_buf = pb->cpu_bufs[buf_idx];
+	if (!cpu_buf)
+		return libbpf_err(-ENOENT);
+
+	header = cpu_buf->base;
+	*head = ring_buffer_read_head(header);
+	*tail = header->data_tail;
+	*base = ((__u8 *)header) + pb->page_size;
+	*buf_size = pb->mmap_size;
+	return 0;
+}
+
+int perf_buffer__set_ring_buf_tail(const struct perf_buffer *pb, size_t buf_idx,
+				   __u64 tail)
+{
+	struct perf_cpu_buf *cpu_buf;
+	struct perf_event_mmap_page *header;
+
+	if (buf_idx >= pb->cpu_cnt)
+		return libbpf_err(-EINVAL);
+
+	cpu_buf = pb->cpu_bufs[buf_idx];
+	if (!cpu_buf)
+		return libbpf_err(-ENOENT);
+
+	header = cpu_buf->base;
+	ring_buffer_write_tail(header, tail);
+	return 0;
+}
+
 int perf_buffer__epoll_fd(const struct perf_buffer *pb)
 {
 	return pb->epoll_fd;

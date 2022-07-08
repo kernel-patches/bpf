@@ -1053,6 +1053,31 @@ LIBBPF_API int perf_buffer__consume(struct perf_buffer *pb);
 LIBBPF_API int perf_buffer__consume_buffer(struct perf_buffer *pb, size_t buf_idx);
 LIBBPF_API size_t perf_buffer__buffer_cnt(const struct perf_buffer *pb);
 LIBBPF_API int perf_buffer__buffer_fd(const struct perf_buffer *pb, size_t buf_idx);
+/** @brief **perf_buffer__raw_ring_buf()** gets the ring buffer information for
+ * a given CPU perf buffer.
+ * This API and **perf_buffer__set_ring_buf_tail()** allow low level access
+ * to the ring buffer in order to implement a custom ring buffer drain
+ * mechanisim.
+ *
+ * @param pb the perf_buffer instance
+ * @param buf_idx the index of the perf buffer
+ * @param base will get the base of the ring buffer mmap
+ * @param buf_size will get size of the ring buffer mmap
+ * @param head gets the ring buffer head pointer
+ * @param tail gets the ring buffer tail pointer
+ * @return 0, for success
+ */
+LIBBPF_API int perf_buffer__raw_ring_buf(const struct perf_buffer *pb,
+					 size_t buf_idx, void **base,
+					 size_t *buf_size, __u64 *head,
+					 __u64 *tail);
+/** @brief **perf_buffer__set_ring_buf_tail()** sets the ring buffer tail
+ * @param pb the perf_buffer instance
+ * @param buf_idx the index of the perf buffer
+ * @param tail sets the value up-until where messages were consumed.
+ */
+LIBBPF_API int perf_buffer__set_ring_buf_tail(const struct perf_buffer *pb,
+					      size_t buf_idx, __u64 tail);
 
 struct bpf_prog_linfo;
 struct bpf_prog_info;

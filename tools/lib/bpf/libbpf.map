@@ -351,6 +351,8 @@ LIBBPF_0.8.0 {
 		bpf_program__set_insns;
 		libbpf_register_prog_handler;
 		libbpf_unregister_prog_handler;
+		perf_buffer__raw_ring_buf;
+		perf_buffer__set_ring_buf_tail;
 } LIBBPF_0.7.0;
 
 LIBBPF_1.0.0 {
