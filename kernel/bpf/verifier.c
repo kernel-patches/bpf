@@ -12555,14 +12555,20 @@ static int check_map_prealloc(struct bpf_map *map)
 		!(map->map_flags & BPF_F_NO_PREALLOC);
 }
 
-static bool is_tracing_prog_type(enum bpf_prog_type type)
+static bool is_tracing_prog_type(enum bpf_prog_type prog_type,
+				 enum bpf_attach_type attach_type)
 {
-	switch (type) {
+	switch (prog_type) {
 	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
 		return true;
+	case BPF_PROG_TYPE_TRACING:
+		if (attach_type == BPF_TRACE_RAW_TP)
+			return true;
+		return false;
 	default:
 		return false;
 	}
@@ -12582,7 +12588,9 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 					struct bpf_prog *prog)
 
 {
+	enum bpf_attach_type attach_type = prog->expected_attach_type;
 	enum bpf_prog_type prog_type = resolve_prog_type(prog);
+
 	/*
 	 * Validate that trace type programs use preallocated hash maps.
 	 *
@@ -12600,7 +12608,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	 * now, but warnings are emitted so developers are made aware of
 	 * the unsafety and can fix their programs before this is enforced.
 	 */
-	if (is_tracing_prog_type(prog_type) && !is_preallocated_map(map)) {
+	if (is_tracing_prog_type(prog_type, attach_type) && !is_preallocated_map(map)) {
 		if (prog_type == BPF_PROG_TYPE_PERF_EVENT) {
 			verbose(env, "perf_event programs can only use preallocated hash map\n");
 			return -EINVAL;
@@ -12619,7 +12627,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog_type, attach_type)) {
 			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
@@ -12631,7 +12639,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	}
 
 	if (map_value_has_timer(map)) {
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog_type, attach_type)) {
 			verbose(env, "tracing progs cannot use bpf_timer yet\n");
 			return -EINVAL;
 		}
