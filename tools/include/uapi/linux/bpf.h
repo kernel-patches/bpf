@@ -5327,6 +5327,29 @@ union bpf_attr {
  *		**-EACCES** if the SYN cookie is not valid.
  *
  *		**-EPROTONOSUPPORT** if CONFIG_IPV6 is not builtin.
+ *
+ * struct key *bpf_lookup_user_key(u32 serial, u64 flags)
+ *	Description
+ *		Search a key with a given *serial* and the provided *flags*. The
+ *		returned key, if found, has the reference count incremented by
+ *		one, and must be passed to bpf_key_put() when done with it.
+ *		Permission checks are deferred to the time the key is used by
+ *		one of the available key-specific helpers.
+ *
+ *		Set *flags* with 1 to attempt creating a requested special
+ *		keyring (e.g. session keyring), if it doesn't yet exist. Set
+ *		*flags* to 2 to lookup a key without waiting for the key
+ *		construction, and to retrieve uninstantiated keys (keys without
+ *		data attached to them).
+ *	Return
+ *		A key pointer if the key is found, a NULL pointer otherwise.
+ *
+ * void bpf_key_put(struct key *key)
+ *	Description
+ *		Decrement the reference count of *key* obtained with the
+ *		bpf_lookup_user_key() helper.
+ *	Return
+ *		0
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5537,6 +5560,8 @@ union bpf_attr {
 	FN(tcp_raw_gen_syncookie_ipv6),	\
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
+	FN(lookup_user_key),		\
+	FN(key_put),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
