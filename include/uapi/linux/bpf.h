@@ -5350,6 +5350,27 @@ union bpf_attr {
  *		bpf_lookup_user_key() helper.
  *	Return
  *		0
+ *
+ * long bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr, struct bpf_dynptr *sig_ptr, struct key *user_keyring, u64 system_keyring)
+ *	Description
+ *		Verify the PKCS#7 signature *sig_ptr* against the supplied
+ *		*data_ptr* alternatively with keys in *user_keyring* or
+ *		*system_keyring*. Either one of the two must be provided.
+ *		Respectively, NULL or UINT64_MAX must be passed to signal to the
+ *		helper that the parameter is not used.
+ *
+ *		*user_keyring* is a key pointer obtained from
+ *		bpf_lookup_user_key(), while *system_keyring* is a
+ *		pre-determined ID with values defined in
+ *		include/linux/verification.h: 0 for the primary keyring
+ *		(immutable keyring of system keys); 1 for both the primary and
+ *		secondary keyring (where keys can be added only if they are
+ *		vouched for by existing keys in those keyrings); 2 for the
+ *		platform keyring (primarily used by the integrity subsystem to
+ *		verify a kexec'ed kerned image and, possibly, the initramfs
+ *		signature).
+ *	Return
+ *		0 on success, a negative value on error.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5562,6 +5583,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(lookup_user_key),		\
 	FN(key_put),			\
+	FN(verify_pkcs7_signature),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

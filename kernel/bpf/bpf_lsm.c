@@ -17,6 +17,7 @@
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/verification.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
@@ -227,6 +228,63 @@ static const struct bpf_func_proto bpf_key_put_proto = {
 	.arg1_btf_id	= &btf_key_ids[0],
 	.allowed	= bpf_ima_inode_hash_allowed,
 };
+
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+BPF_CALL_4(bpf_verify_pkcs7_signature, struct bpf_dynptr_kern *, data_ptr,
+	   struct bpf_dynptr_kern *, sig_ptr, struct key *, user_keyring,
+	   u64, system_keyring)
+{
+	struct key *trusted_keyring;
+	int ret;
+
+	/* Either user_keyring or system_keyring must be specified. */
+	if ((user_keyring && system_keyring != U64_MAX) ||
+	    (!user_keyring && system_keyring == U64_MAX))
+		return -EINVAL;
+
+	if (user_keyring) {
+		/*
+		 * Do the permission check deferred in bpf_lookup_user_key().
+		 *
+		 * A call to key_task_permission() here would be redundant, as
+		 * it is already done by keyring_search() called by
+		 * find_asymmetric_key().
+		 */
+		ret = key_validate(user_keyring);
+		if (ret < 0)
+			return ret;
+
+		trusted_keyring = user_keyring;
+		goto verify;
+	}
+
+	/* Keep in sync with defs in include/linux/verification.h. */
+	if (system_keyring > (unsigned long)VERIFY_USE_PLATFORM_KEYRING)
+		return -EINVAL;
+
+	trusted_keyring = (struct key *)(unsigned long)system_keyring;
+verify:
+	return verify_pkcs7_signature(data_ptr->data,
+				      bpf_dynptr_get_size(data_ptr),
+				      sig_ptr->data,
+				      bpf_dynptr_get_size(sig_ptr),
+				      trusted_keyring,
+				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
+				      NULL);
+}
+
+static const struct bpf_func_proto bpf_verify_pkcs7_signature_proto = {
+	.func		= bpf_verify_pkcs7_signature,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg2_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL,
+	.arg3_type	= ARG_PTR_TO_BTF_ID_OR_NULL,
+	.arg3_btf_id	= &btf_key_ids[0],
+	.arg4_type	= ARG_ANYTHING,
+	.allowed	= bpf_ima_inode_hash_allowed,
+};
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 #endif /* CONFIG_KEYS */
 
 static const struct bpf_func_proto *
@@ -291,6 +349,11 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_key_put:
 		return prog->aux->sleepable ?
 		       &bpf_key_put_proto : NULL;
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+	case BPF_FUNC_verify_pkcs7_signature:
+		return prog->aux->sleepable ?
+		       &bpf_verify_pkcs7_signature_proto : NULL;
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 #endif /* CONFIG_KEYS */
 	default:
 		return tracing_prog_func_proto(func_id, prog);
