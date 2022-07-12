@@ -6,10 +6,22 @@
 #include "kfunc_call_test_subprog.skel.h"
 #include "kfunc_call_test_subprog.lskel.h"
 
+struct syscall_test_args {
+	__u8 data[16];
+	size_t size;
+};
+
 static void test_main(void)
 {
 	struct kfunc_call_test_lskel *skel;
 	int prog_fd, err;
+	struct syscall_test_args args = {
+		.size = 10,
+	};
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, syscall_topts,
+		.ctx_in = &args,
+		.ctx_size_in = sizeof(args),
+	);
 	LIBBPF_OPTS(bpf_test_run_opts, topts,
 		.data_in = &pkt_v4,
 		.data_size_in = sizeof(pkt_v4),
@@ -34,6 +46,14 @@ static void test_main(void)
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 	ASSERT_OK(err, "bpf_prog_test_run(test_ref_btf_id)");
 	ASSERT_EQ(topts.retval, 0, "test_ref_btf_id-retval");
+
+	prog_fd = skel->progs.kfunc_syscall_test.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &syscall_topts);
+	ASSERT_OK(err, "bpf_prog_test_run(syscall_test)");
+
+	prog_fd = skel->progs.kfunc_syscall_test_fail.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &syscall_topts);
+	ASSERT_ERR(err, "bpf_prog_test_run(syscall_test_fail)");
 
 	kfunc_call_test_lskel__destroy(skel);
 }
