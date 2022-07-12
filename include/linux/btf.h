@@ -422,7 +422,9 @@ static inline int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dt
 
 static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type *t)
 {
-	/* t comes in already as a pointer */
+	if (!btf_type_is_ptr(t))
+		return false;
+
 	t = btf_type_by_id(btf, t->type);
 
 	/* allow const */
