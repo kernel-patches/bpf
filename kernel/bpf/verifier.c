@@ -248,6 +248,7 @@ struct bpf_call_arg_meta {
 	struct bpf_map *map_ptr;
 	bool raw_mode;
 	bool pkt_access;
+	bool is_kfunc;
 	u8 release_regno;
 	int regno;
 	int access_size;
@@ -5170,6 +5171,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				   struct bpf_call_arg_meta *meta)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	u32 *max_access;
 
 	switch (base_type(reg->type)) {
@@ -5223,6 +5225,19 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				env,
 				regno, reg->off, access_size,
 				zero_size_allowed, ACCESS_HELPER, meta);
+	case PTR_TO_CTX:
+		/* in case of a kfunc called in a program of type SYSCALL, the context is
+		 * user supplied, so not computed statically.
+		 * Dynamically check it now
+		 */
+		if (prog_type == BPF_PROG_TYPE_SYSCALL && meta && meta->is_kfunc) {
+			enum bpf_access_type access_t = meta->raw_mode ? BPF_WRITE : BPF_READ;
+
+			return check_mem_access(env, env->insn_idx, regno, access_size, BPF_B,
+						access_t, -1, false);
+		}
+
+		fallthrough;
 	default: /* scalar_value or invalid ptr */
 		/* Allow zero-byte read from NULL, regardless of pointer type */
 		if (zero_size_allowed && access_size == 0 &&
@@ -5335,6 +5350,7 @@ int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg_state 
 	WARN_ON_ONCE(regno < BPF_REG_2 || regno > BPF_REG_5);
 
 	memset(&meta, 0, sizeof(meta));
+	meta.is_kfunc = true;
 
 	if (may_be_null) {
 		saved_reg = *mem_reg;
