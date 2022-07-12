@@ -717,6 +717,16 @@ class PrinterHelpers(Printer):
         header = '''\
 /* This is auto-generated file. See bpf_doc.py for details. */
 
+/* Helper macro for GCC/Clang compatibility */
+#define NOARG
+#if __GNUC__ && !__clang__
+#define BPF_HELPER_DEF(num, ret_star, ret_type, name, ...) \\
+ret_type ret_star name(__VA_ARGS__) __attribute__((kernel_helper(num)));
+#else
+#define BPF_HELPER_DEF(num, ret_star, ret_type, name, ...) \\
+static ret_type ret_star(*name)(__VA_ARGS__) = (void *) num;
+#endif
+
 /* Forward declarations of BPF structs */'''
 
         print(header)
@@ -746,6 +756,11 @@ class PrinterHelpers(Printer):
             return
         self.seen_helpers.add(proto['name'])
 
+        if proto['ret_star']:
+            ret_star = proto['ret_star']
+        else:
+            ret_star = 'NOARG'
+
         print('/*')
         print(" * %s" % proto['name'])
         print(" *")
@@ -762,8 +777,8 @@ class PrinterHelpers(Printer):
                 print(' *{}{}'.format(' \t' if line else '', line))
 
         print(' */')
-        print('static %s %s(*%s)(' % (self.map_type(proto['ret_type']),
-                                      proto['ret_star'], proto['name']), end='')
+        print('BPF_HELPER_DEF(%d, %s, %s, %s, ' % (len(self.seen_helpers),
+            ret_star, self.map_type(proto['ret_type']), proto['name']), end='')
         comma = ''
         for i, a in enumerate(proto['args']):
             t = a['type']
@@ -781,7 +796,7 @@ class PrinterHelpers(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % len(self.seen_helpers))
+        print(')')
         print('')
 
 ###############################################################################
