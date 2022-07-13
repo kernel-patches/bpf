@@ -1838,7 +1838,7 @@ BPF_CALL_2(bpf_skb_pull_data, struct sk_buff *, skb, u32, len)
 	 * access case. By this we overcome limitations of only current
 	 * headroom being accessible.
 	 */
-	return bpf_try_make_writable(skb, len ? : skb_headlen(skb));
+	return bpf_try_make_writable(skb, len ? : skb->len);
 }
 
 static const struct bpf_func_proto bpf_skb_pull_data_proto = {
@@ -1878,7 +1878,7 @@ BPF_CALL_2(sk_skb_pull_data, struct sk_buff *, skb, u32, len)
 	 * access case. By this we overcome limitations of only current
 	 * headroom being accessible.
 	 */
-	return sk_skb_try_make_writable(skb, len ? : skb_headlen(skb));
+	return sk_skb_try_make_writable(skb, len ? : skb->len);
 }
 
 static const struct bpf_func_proto sk_skb_pull_data_proto = {
