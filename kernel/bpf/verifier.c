@@ -477,13 +477,30 @@ static bool type_may_be_null(u32 type)
 	return type & PTR_MAYBE_NULL;
 }
 
+/* These functions acquire a resource that must be later released
+ * regardless of their input
+ */
+static bool __check_function_always_acquires(enum bpf_func_id func_id)
+{
+	switch (func_id) {
+	case BPF_FUNC_sk_lookup_tcp:
+	case BPF_FUNC_sk_lookup_udp:
+	case BPF_FUNC_skc_lookup_tcp:
+	case BPF_FUNC_ringbuf_reserve:
+	case BPF_FUNC_kptr_xchg:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static bool may_be_acquire_function(enum bpf_func_id func_id)
 {
-	return func_id == BPF_FUNC_sk_lookup_tcp ||
-		func_id == BPF_FUNC_sk_lookup_udp ||
-		func_id == BPF_FUNC_skc_lookup_tcp ||
-		func_id == BPF_FUNC_map_lookup_elem ||
-	        func_id == BPF_FUNC_ringbuf_reserve;
+	/* See is_acquire_function for the conditions under which funcs
+	 * not in __check_function_always_acquires acquire a resource
+	 */
+	return __check_function_always_acquires(func_id) ||
+		func_id == BPF_FUNC_map_lookup_elem;
 }
 
 static bool is_acquire_function(enum bpf_func_id func_id,
@@ -491,11 +508,7 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 {
 	enum bpf_map_type map_type = map ? map->map_type : BPF_MAP_TYPE_UNSPEC;
 
-	if (func_id == BPF_FUNC_sk_lookup_tcp ||
-	    func_id == BPF_FUNC_sk_lookup_udp ||
-	    func_id == BPF_FUNC_skc_lookup_tcp ||
-	    func_id == BPF_FUNC_ringbuf_reserve ||
-	    func_id == BPF_FUNC_kptr_xchg)
+	if (__check_function_always_acquires(func_id))
 		return true;
 
 	if (func_id == BPF_FUNC_map_lookup_elem &&
