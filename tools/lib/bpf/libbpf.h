@@ -906,6 +906,7 @@ struct bpf_xdp_query_opts {
 	__u32 drv_prog_id;	/* output */
 	__u32 hw_prog_id;	/* output */
 	__u32 skb_prog_id;	/* output */
+	__u32 dequeue_prog_id;	/* output */
 	__u8 attach_mode;	/* output */
 	size_t :0;
 };

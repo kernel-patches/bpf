@@ -32,6 +32,7 @@ struct xdp_link_info {
 	__u32 drv_prog_id;
 	__u32 hw_prog_id;
 	__u32 skb_prog_id;
+	__u32 dequeue_prog_id;
 	__u8 attach_mode;
 };
 
@@ -354,6 +355,10 @@ static int get_xdp_info(void *cookie, void *msg, struct nlattr **tb)
 		xdp_id->info.hw_prog_id = libbpf_nla_getattr_u32(
 			xdp_tb[IFLA_XDP_HW_PROG_ID]);
 
+	if (xdp_tb[IFLA_XDP_DEQUEUE_PROG_ID])
+		xdp_id->info.dequeue_prog_id = libbpf_nla_getattr_u32(
+			xdp_tb[IFLA_XDP_DEQUEUE_PROG_ID]);
+
 	return 0;
 }
 
@@ -391,6 +396,7 @@ int bpf_xdp_query(int ifindex, int xdp_flags, struct bpf_xdp_query_opts *opts)
 	OPTS_SET(opts, drv_prog_id, xdp_id.info.drv_prog_id);
 	OPTS_SET(opts, hw_prog_id, xdp_id.info.hw_prog_id);
 	OPTS_SET(opts, skb_prog_id, xdp_id.info.skb_prog_id);
+	OPTS_SET(opts, dequeue_prog_id, xdp_id.info.dequeue_prog_id);
 	OPTS_SET(opts, attach_mode, xdp_id.info.attach_mode);
 
 	return 0;
@@ -415,6 +421,8 @@ int bpf_xdp_query_id(int ifindex, int flags, __u32 *prog_id)
 		*prog_id = opts.hw_prog_id;
 	else if (flags & XDP_FLAGS_SKB_MODE)
 		*prog_id = opts.skb_prog_id;
+	else if (flags & XDP_FLAGS_DEQUEUE_MODE)
+		*prog_id = opts.dequeue_prog_id;
 	else
 		*prog_id = 0;
 
