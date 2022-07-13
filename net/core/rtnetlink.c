@@ -1012,7 +1012,8 @@ static size_t rtnl_xdp_size(void)
 	size_t xdp_size = nla_total_size(0) +	/* nest IFLA_XDP */
 			  nla_total_size(1) +	/* XDP_ATTACHED */
 			  nla_total_size(4) +	/* XDP_PROG_ID (or 1st mode) */
-			  nla_total_size(4);	/* XDP_<mode>_PROG_ID */
+			  nla_total_size(4) +	/* XDP_<mode>_PROG_ID */
+			  nla_total_size(4);	/* XDP_DEQUEUE_PROG_ID */
 
 	return xdp_size;
 }
@@ -1467,6 +1468,11 @@ static u32 rtnl_xdp_prog_hw(struct net_device *dev)
 	return dev_xdp_prog_id(dev, XDP_MODE_HW);
 }
 
+static u32 rtnl_xdp_dequeue_prog(struct net_device *dev)
+{
+	return dev_xdp_dequeue_prog_id(dev);
+}
+
 static int rtnl_xdp_report_one(struct sk_buff *skb, struct net_device *dev,
 			       u32 *prog_id, u8 *mode, u8 tgt_mode, u32 attr,
 			       u32 (*get_prog_id)(struct net_device *dev))
@@ -1523,6 +1529,13 @@ static int rtnl_xdp_fill(struct sk_buff *skb, struct net_device *dev)
 
 	if (prog_id && mode != XDP_ATTACHED_MULTI) {
 		err = nla_put_u32(skb, IFLA_XDP_PROG_ID, prog_id);
+		if (err)
+			goto err_cancel;
+	}
+
+	prog_id = rtnl_xdp_dequeue_prog(dev);
+	if (prog_id) {
+		err = nla_put_u32(skb, IFLA_XDP_DEQUEUE_PROG_ID, prog_id);
 		if (err)
 			goto err_cancel;
 	}
@@ -1979,6 +1992,7 @@ static const struct nla_policy ifla_xdp_policy[IFLA_XDP_MAX + 1] = {
 	[IFLA_XDP_ATTACHED]	= { .type = NLA_U8 },
 	[IFLA_XDP_FLAGS]	= { .type = NLA_U32 },
 	[IFLA_XDP_PROG_ID]	= { .type = NLA_U32 },
+	[IFLA_XDP_DEQUEUE_PROG_ID]	= { .type = NLA_U32 },
 };
 
 static const struct rtnl_link_ops *linkinfo_to_kind_ops(const struct nlattr *nla)
@@ -2998,10 +3012,16 @@ static int do_setlink(const struct sk_buff *skb,
 					nla_get_s32(xdp[IFLA_XDP_EXPECTED_FD]);
 			}
 
-			err = dev_change_xdp_fd(dev, extack,
-						nla_get_s32(xdp[IFLA_XDP_FD]),
-						expected_fd,
-						xdp_flags);
+			if (xdp_flags & XDP_FLAGS_DEQUEUE_MODE)
+				err = dev_change_xdp_dequeue_fd(dev, extack,
+								nla_get_s32(xdp[IFLA_XDP_FD]),
+								expected_fd,
+								xdp_flags);
+			else
+				err = dev_change_xdp_fd(dev, extack,
+							nla_get_s32(xdp[IFLA_XDP_FD]),
+							expected_fd,
+							xdp_flags);
 			if (err)
 				goto errout;
 			status |= DO_SETLINK_NOTIFY;

@@ -59,6 +59,7 @@ struct xdp_dev_bulk_queue {
 	struct net_device *dev;
 	struct net_device *dev_rx;
 	struct bpf_prog *xdp_prog;
+	struct xdp_dequeue deq;
 	unsigned int count;
 };
 
@@ -362,16 +363,17 @@ static int dev_map_bpf_prog_run(struct bpf_prog *xdp_prog,
 	return nframes; /* sent frames count */
 }
 
-static void bq_xmit_all(struct xdp_dev_bulk_queue *bq, u32 flags)
+static bool bq_xmit_all(struct xdp_dev_bulk_queue *bq, u32 flags, bool keep)
 {
 	struct net_device *dev = bq->dev;
 	unsigned int cnt = bq->count;
 	int sent = 0, err = 0;
 	int to_send = cnt;
-	int i;
+	bool ret = true;
+	int i, kept = 0;
 
 	if (unlikely(!cnt))
-		return;
+		return true;
 
 	for (i = 0; i < cnt; i++) {
 		struct xdp_frame *xdpf = bq->q[i];
@@ -394,15 +396,29 @@ static void bq_xmit_all(struct xdp_dev_bulk_queue *bq, u32 flags)
 		sent = 0;
 	}
 
-	/* If not all frames have been transmitted, it is our
-	 * responsibility to free them
+	/* If not all frames have been transmitted, it is our responsibility to
+	 * free them, unless the caller asked for them to be kept, in which case
+	 * we'll move them to the head of the queue
 	 */
-	for (i = sent; unlikely(i < to_send); i++)
-		xdp_return_frame_rx_napi(bq->q[i]);
+	if (unlikely(sent < to_send)) {
+		ret = false;
+		if (keep) {
+			if (!sent) {
+				kept = to_send;
+				goto out;
+			}
+			for (i = sent; i < to_send; i++)
+				bq->q[kept++] = bq->q[i];
+		} else {
+			for (i = sent; i < to_send; i++)
+				xdp_return_frame_rx_napi(bq->q[i]);
+		}
+	}
 
 out:
-	bq->count = 0;
-	trace_xdp_devmap_xmit(bq->dev_rx, dev, sent, cnt - sent, err);
+	bq->count = kept;
+	trace_xdp_devmap_xmit(bq->dev_rx, dev, sent, cnt - sent - kept, err);
+	return ret;
 }
 
 /* __dev_flush is called from xdp_do_flush() which _must_ be signalled from the
@@ -415,10 +431,60 @@ void __dev_flush(void)
 	struct xdp_dev_bulk_queue *bq, *tmp;
 
 	list_for_each_entry_safe(bq, tmp, flush_list, flush_node) {
-		bq_xmit_all(bq, XDP_XMIT_FLUSH);
+		bq_xmit_all(bq, XDP_XMIT_FLUSH, false);
 		bq->dev_rx = NULL;
 		bq->xdp_prog = NULL;
 		__list_del_clearprev(&bq->flush_node);
+	}
+}
+
+void dev_schedule_xdp_dequeue(struct net_device *dev)
+{
+	struct xdp_dev_bulk_queue *bq = this_cpu_ptr(dev->xdp_bulkq);
+
+	netif_tx_schedule_xdp(&bq->deq);
+}
+
+void dev_run_xdp_dequeue(struct xdp_dequeue *deq)
+{
+	while (deq) {
+		struct xdp_dev_bulk_queue *bq = container_of(deq, struct xdp_dev_bulk_queue, deq);
+		struct xdp_txq_info txqi = { .dev = bq->dev };
+		struct dequeue_data ctx = { .txq = &txqi };
+		struct xdp_dequeue *nxt = deq->next;
+		int quota = dev_tx_weight;
+		struct xdp_frame *xdpf;
+		struct bpf_prog *prog;
+		bool ret = true;
+
+		local_bh_disable();
+
+		prog = rcu_dereference(bq->dev->xdp_dequeue_prog);
+		if (likely(prog)) {
+			do {
+				if (unlikely(bq->count == DEV_MAP_BULK_SIZE)) {
+					ret = bq_xmit_all(bq, 0, true);
+					if (!ret)
+						break;
+				}
+				xdpf = bpf_prog_run_xdp_dequeue(prog, &ctx);
+				if (xdpf)
+					bq->q[bq->count++] = xdpf;
+
+			} while (xdpf && --quota);
+
+			if (ret)
+				ret = bq_xmit_all(bq, XDP_XMIT_FLUSH, true);
+
+			if (!ret || !quota)
+				/* out of space, reschedule */
+				netif_tx_schedule_xdp(deq);
+		}
+
+		deq->next = NULL;
+		deq = nxt;
+
+		local_bh_enable();
 	}
 }
 
@@ -450,7 +516,7 @@ static void bq_enqueue(struct net_device *dev, struct xdp_frame *xdpf,
 	struct xdp_dev_bulk_queue *bq = this_cpu_ptr(dev->xdp_bulkq);
 
 	if (unlikely(bq->count == DEV_MAP_BULK_SIZE))
-		bq_xmit_all(bq, 0);
+		bq_xmit_all(bq, 0, false);
 
 	/* Ingress dev_rx will be the same for all xdp_frame's in
 	 * bulk_queue, because bq stored per-CPU and must be flushed

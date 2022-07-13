@@ -778,6 +778,23 @@ static __always_inline u64 bpf_prog_run_xdp(const struct bpf_prog *prog,
 
 void bpf_prog_change_xdp(struct bpf_prog *prev_prog, struct bpf_prog *prog);
 
+DECLARE_BPF_DISPATCHER(xdp_dequeue)
+
+static __always_inline struct xdp_frame *bpf_prog_run_xdp_dequeue(const struct bpf_prog *prog,
+								  struct dequeue_data *ctx)
+{
+	struct xdp_frame *frm = NULL;
+	u64 ret;
+
+	ret = __bpf_prog_run(prog, ctx, BPF_DISPATCHER_FUNC(xdp_dequeue));
+	if (ret)
+		frm = (struct xdp_frame *)(unsigned long)ret;
+
+	return frm;
+}
+
+void bpf_prog_change_xdp_dequeue(struct bpf_prog *prev_prog, struct bpf_prog *prog);
+
 static inline u32 bpf_prog_insn_size(const struct bpf_prog *prog)
 {
 	return prog->len * sizeof(struct bpf_insn);

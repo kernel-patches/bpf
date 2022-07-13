@@ -89,6 +89,13 @@ struct dequeue_data {
 	struct xdp_txq_info *txq;
 };
 
+struct xdp_dequeue {
+	struct xdp_dequeue *next;
+};
+
+void dev_run_xdp_dequeue(struct xdp_dequeue *deq);
+void dev_schedule_xdp_dequeue(struct net_device *dev);
+
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
 {
 	return !!(xdp->flags & XDP_FLAGS_HAS_FRAGS);

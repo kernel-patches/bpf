@@ -74,6 +74,7 @@ struct udp_tunnel_nic_info;
 struct udp_tunnel_nic;
 struct bpf_prog;
 struct xdp_buff;
+struct xdp_dequeue;
 
 void synchronize_net(void);
 void netdev_set_default_ethtool_ops(struct net_device *dev,
@@ -2326,6 +2327,7 @@ struct net_device {
 
 	/* protected by rtnl_lock */
 	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
+	struct bpf_prog __rcu	*xdp_dequeue_prog;
 
 	u8 dev_addr_shadow[MAX_ADDR_LEN];
 	netdevice_tracker	linkwatch_dev_tracker;
@@ -3109,6 +3111,7 @@ struct softnet_data {
 	struct Qdisc		*output_queue;
 	struct Qdisc		**output_queue_tailp;
 	struct sk_buff		*completion_queue;
+	struct xdp_dequeue	*xdp_dequeue;
 #ifdef CONFIG_XFRM_OFFLOAD
 	struct sk_buff_head	xfrm_backlog;
 #endif
@@ -3143,6 +3146,7 @@ struct softnet_data {
 	int			defer_ipi_scheduled;
 	struct sk_buff		*defer_list;
 	call_single_data_t	defer_csd;
+
 };
 
 static inline void input_queue_head_incr(struct softnet_data *sd)
@@ -3222,6 +3226,7 @@ static inline void netif_tx_start_all_queues(struct net_device *dev)
 }
 
 void netif_tx_wake_queue(struct netdev_queue *dev_queue);
+void netif_tx_schedule_xdp(struct xdp_dequeue *deq);
 
 /**
  *	netif_wake_queue - restart transmit
@@ -3851,6 +3856,7 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 u8 dev_xdp_prog_count(struct net_device *dev);
 u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode);
+u32 dev_xdp_dequeue_prog_id(struct net_device *dev);
 
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
