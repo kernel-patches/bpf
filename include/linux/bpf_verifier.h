@@ -532,8 +532,14 @@ __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
 				      const char *fmt, va_list args);
 __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_env *env,
 					   const char *fmt, ...);
+#ifdef CONFIG_BPF_SYSCALL
 __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 			    const char *fmt, ...);
+#else
+static inline void bpf_log(struct bpf_verifier_log *log, const char *fmt, ...)
+{
+}
+#endif
 
 static inline struct bpf_func_state *cur_func(struct bpf_verifier_env *env)
 {

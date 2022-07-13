@@ -79,6 +79,7 @@
 #include <net/tls.h>
 #include <net/xdp.h>
 #include <net/mptcp.h>
+#include <linux/bpf_verifier.h>
 
 static const struct bpf_func_proto *
 bpf_sk_base_func_proto(enum bpf_func_id func_id);
@@ -9918,6 +9919,146 @@ static u32 dequeue_convert_ctx_access(enum bpf_access_type type,
 	return insn - insn_buf;
 }
 
+static int dequeue_btf_struct_access(struct bpf_verifier_log *log,
+				     const struct btf *btf,
+				     const struct btf_type *t, int off, int size,
+				     enum bpf_access_type atype,
+				     u32 *next_btf_id, enum bpf_type_flag *flag)
+{
+	const struct btf_type *pkt_type;
+	enum bpf_reg_type reg_type;
+	struct btf *btf_vmlinux;
+
+	btf_vmlinux = bpf_get_btf_vmlinux();
+	if (IS_ERR_OR_NULL(btf_vmlinux) || btf != btf_vmlinux)
+		return -EINVAL;
+
+	if (atype != BPF_READ)
+		return -EACCES;
+
+	pkt_type = btf_type_by_id(btf_vmlinux, xdp_md_btf_ids[0]);
+	if (!pkt_type)
+		return -EINVAL;
+	if (t != pkt_type)
+		return btf_struct_access(log, btf, t, off, size, atype,
+					 next_btf_id, flag);
+
+	switch (off) {
+	case offsetof(struct xdp_md, data):
+		reg_type = PTR_TO_PACKET;
+		break;
+	case offsetof(struct xdp_md, data_meta):
+		reg_type = PTR_TO_PACKET_META;
+		break;
+	case offsetof(struct xdp_md, data_end):
+		reg_type = PTR_TO_PACKET_END;
+		break;
+	default:
+		bpf_log(log, "no read support for xdp_md at off %d\n", off);
+		return -EACCES;
+	}
+
+	if (!__is_valid_xdp_access(off, size))
+		return -EINVAL;
+	return reg_type;
+}
+
+static u32
+dequeue_convert_xdp_md_access(enum bpf_access_type type,
+			      const struct bpf_insn *si, struct bpf_insn *insn_buf,
+			      struct bpf_prog *prog, u32 *target_size)
+{
+	struct bpf_insn *insn = insn_buf;
+	int src_reg;
+
+	switch (si->off) {
+	case offsetof(struct xdp_md, data):
+		/* dst_reg = *(src_reg + off(xdp_frame, data)) */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_frame, data),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_frame, data));
+		break;
+	case offsetof(struct xdp_md, data_meta):
+		if (si->dst_reg == si->src_reg) {
+			src_reg = BPF_REG_9;
+			if (si->dst_reg == src_reg)
+				src_reg--;
+			*insn++ = BPF_STX_MEM(BPF_DW, si->src_reg, src_reg,
+					      offsetof(struct xdp_frame, next));
+			*insn++ = BPF_MOV64_REG(src_reg, si->src_reg);
+		} else {
+			src_reg = si->src_reg;
+		}
+		/* AX = src_reg
+		 * dst_reg = *(src_reg + off(xdp_frame, data))
+		 * src_reg = *(src_reg + off(xdp_frame, metasize))
+		 * dst_reg -= src_reg
+		 * src_reg = AX
+		 */
+		*insn++ = BPF_MOV64_REG(BPF_REG_AX, src_reg);
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_frame, data),
+				      si->dst_reg, src_reg,
+				      offsetof(struct xdp_frame, data));
+		*insn++ = BPF_LDX_MEM(BPF_B, /* metasize == 8 bits */
+				      src_reg, src_reg,
+#if defined(__LITTLE_ENDIAN_BITFIELD)
+				      offsetofend(struct xdp_frame, headroom) + 3);
+#elif defined(__BIG_ENDIAN_BITFIELD)
+				      offsetofend(struct xdp_frame, headroom));
+#endif
+		*insn++ = BPF_ALU64_REG(BPF_SUB, si->dst_reg, src_reg);
+		*insn++ = BPF_MOV64_REG(src_reg, BPF_REG_AX);
+		if (si->dst_reg == si->src_reg)
+			*insn++ = BPF_LDX_MEM(BPF_DW, src_reg, si->src_reg,
+					      offsetof(struct xdp_frame, next));
+		break;
+	case offsetof(struct xdp_md, data_end):
+		if (si->dst_reg == si->src_reg) {
+			src_reg = BPF_REG_9;
+			if (si->dst_reg == src_reg)
+				src_reg--;
+			*insn++ = BPF_STX_MEM(BPF_DW, si->src_reg, src_reg,
+					      offsetof(struct xdp_frame, next));
+			*insn++ = BPF_MOV64_REG(src_reg, si->src_reg);
+		} else {
+			src_reg = si->src_reg;
+		}
+		/* AX = src_reg
+		 * dst_reg = *(src_reg + off(xdp_frame, data))
+		 * src_reg = *(src_reg + off(xdp_frame, len))
+		 * dst_reg += src_reg
+		 * src_reg = AX
+		 */
+		*insn++ = BPF_MOV64_REG(BPF_REG_AX, src_reg);
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_frame, data),
+				      si->dst_reg, src_reg,
+				      offsetof(struct xdp_frame, data));
+		*insn++ = BPF_LDX_MEM(BPF_H, src_reg, src_reg,
+				      offsetof(struct xdp_frame, len));
+		*insn++ = BPF_ALU64_REG(BPF_ADD, si->dst_reg, src_reg);
+		*insn++ = BPF_MOV64_REG(src_reg, BPF_REG_AX);
+		if (si->dst_reg == si->src_reg)
+			*insn++ = BPF_LDX_MEM(BPF_DW, src_reg, si->src_reg,
+					      offsetof(struct xdp_frame, next));
+		break;
+	}
+	return insn - insn_buf;
+}
+
+static bpf_convert_ctx_access_t
+dequeue_get_convert_ctx_access(struct bpf_verifier_log *log,
+			       const struct btf *btf, u32 btf_id)
+{
+	struct btf *btf_vmlinux;
+
+	btf_vmlinux = bpf_get_btf_vmlinux();
+	if (IS_ERR_OR_NULL(btf_vmlinux) || btf != btf_vmlinux)
+		return NULL;
+	if (btf_id != xdp_md_btf_ids[0])
+		return NULL;
+	return dequeue_convert_xdp_md_access;
+}
+
 /* SOCK_ADDR_LOAD_NESTED_FIELD() loads Nested Field S.F.NF where S is type of
  * context Structure, F is Field in context structure that contains a pointer
  * to Nested Structure of type NS that has the field NF.
@@ -10775,6 +10916,8 @@ const struct bpf_verifier_ops dequeue_verifier_ops = {
 	.is_valid_access	= dequeue_is_valid_access,
 	.convert_ctx_access	= dequeue_convert_ctx_access,
 	.gen_prologue		= bpf_noop_prologue,
+	.btf_struct_access	= dequeue_btf_struct_access,
+	.get_convert_ctx_access = dequeue_get_convert_ctx_access,
 };
 
 const struct bpf_prog_ops dequeue_prog_ops = {

@@ -653,6 +653,12 @@ struct bpf_prog_ops {
 			union bpf_attr __user *uattr);
 };
 
+typedef u32 (*bpf_convert_ctx_access_t)(enum bpf_access_type type,
+					const struct bpf_insn *src,
+					struct bpf_insn *dst,
+					struct bpf_prog *prog,
+					u32 *target_size);
+
 struct bpf_verifier_ops {
 	/* return eBPF function prototype for verification */
 	const struct bpf_func_proto *
@@ -678,6 +684,9 @@ struct bpf_verifier_ops {
 				 const struct btf_type *t, int off, int size,
 				 enum bpf_access_type atype,
 				 u32 *next_btf_id, enum bpf_type_flag *flag);
+	bpf_convert_ctx_access_t (*get_convert_ctx_access)(struct bpf_verifier_log *log,
+							   const struct btf *btf,
+							   u32 btf_id);
 };
 
 struct bpf_prog_offload_ops {
@@ -1359,11 +1368,6 @@ const struct bpf_func_proto *bpf_get_trace_vprintk_proto(void);
 
 typedef unsigned long (*bpf_ctx_copy_t)(void *dst, const void *src,
 					unsigned long off, unsigned long len);
-typedef u32 (*bpf_convert_ctx_access_t)(enum bpf_access_type type,
-					const struct bpf_insn *src,
-					struct bpf_insn *dst,
-					struct bpf_prog *prog,
-					u32 *target_size);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy);
@@ -2179,6 +2183,18 @@ static inline bool unprivileged_ebpf_enabled(void)
 	return false;
 }
 
+static inline struct btf *bpf_get_btf_vmlinux(void)
+{
+	return ERR_PTR(-EINVAL);
+}
+
+static inline int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
+				    const struct btf_type *t, int off, int size,
+				    enum bpf_access_type atype __maybe_unused,
+				    u32 *next_btf_id, enum bpf_type_flag *flag)
+{
+	return -EINVAL;
+}
 #endif /* CONFIG_BPF_SYSCALL */
 
 void __bpf_free_used_btfs(struct bpf_prog_aux *aux,

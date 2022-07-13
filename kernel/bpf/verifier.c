@@ -1707,7 +1707,7 @@ static void mark_reg_not_init(struct bpf_verifier_env *env,
 static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 			    struct bpf_reg_state *regs, u32 regno,
 			    enum bpf_reg_type reg_type,
-			    struct btf *btf, u32 btf_id,
+			    struct btf *btf, u32 reg_id,
 			    enum bpf_type_flag flag)
 {
 	if (reg_type == SCALAR_VALUE) {
@@ -1715,9 +1715,14 @@ static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 		return;
 	}
 	mark_reg_known_zero(env, regs, regno);
-	regs[regno].type = PTR_TO_BTF_ID | flag;
+	regs[regno].type = (int)reg_type | flag;
+	if (type_is_pkt_pointer_any(reg_type)) {
+		regs[regno].pkt_uid = reg_id;
+		return;
+	}
+	WARN_ON_ONCE(base_type(reg_type) != PTR_TO_BTF_ID);
 	regs[regno].btf = btf;
-	regs[regno].btf_id = btf_id;
+	regs[regno].btf_id = reg_id;
 }
 
 #define DEF_NOT_SUBREG	(0)
@@ -4479,13 +4484,14 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *regs,
 				   int regno, int off, int size,
 				   enum bpf_access_type atype,
-				   int value_regno)
+				   int value_regno, int insn_idx)
 {
 	struct bpf_reg_state *reg = regs + regno;
 	const struct btf_type *t = btf_type_by_id(reg->btf, reg->btf_id);
 	const char *tname = btf_name_by_offset(reg->btf, t->name_off);
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	enum bpf_type_flag flag = 0;
-	u32 btf_id;
+	u32 reg_id;
 	int ret;
 
 	if (off < 0) {
@@ -4520,7 +4526,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 
 	if (env->ops->btf_struct_access) {
 		ret = env->ops->btf_struct_access(&env->log, reg->btf, t,
-						  off, size, atype, &btf_id, &flag);
+						  off, size, atype, &reg_id, &flag);
 	} else {
 		if (atype != BPF_READ) {
 			verbose(env, "only read is supported\n");
@@ -4528,7 +4534,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		}
 
 		ret = btf_struct_access(&env->log, reg->btf, t, off, size,
-					atype, &btf_id, &flag);
+					atype, &reg_id, &flag);
 	}
 
 	if (ret < 0)
@@ -4540,8 +4546,19 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	if (type_flag(reg->type) & PTR_UNTRUSTED)
 		flag |= PTR_UNTRUSTED;
 
-	if (atype == BPF_READ && value_regno >= 0)
-		mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
+	/* Remember the BTF ID for later use in convert_ctx_accesses */
+	aux->btf_var.btf_id = reg->btf_id;
+	aux->btf_var.btf = reg->btf;
+
+	if (atype == BPF_READ && value_regno >= 0) {
+		/* For pkt pointers, reg_id is set to pkt_uid, which must be the
+		 * ref_obj_id of the referenced register from which they are
+		 * obtained, denoting different packets e.g. in dequeue progs.
+		 */
+		if (type_is_pkt_pointer_any(ret))
+			reg_id = reg->ref_obj_id;
+		mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, reg_id, flag);
+	}
 
 	return 0;
 }
@@ -4896,7 +4913,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	} else if (base_type(reg->type) == PTR_TO_BTF_ID &&
 		   !type_may_be_null(reg->type)) {
 		err = check_ptr_to_btf_access(env, regs, regno, off, size, t,
-					      value_regno);
+					      value_regno, insn_idx);
 	} else if (reg->type == CONST_PTR_TO_MAP) {
 		err = check_ptr_to_map_access(env, regs, regno, off, size, t,
 					      value_regno);
@@ -13515,8 +13532,15 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		case PTR_TO_BTF_ID:
 		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
 			if (type == BPF_READ) {
-				insn->code = BPF_LDX | BPF_PROBE_MEM |
-					BPF_SIZE((insn)->code);
+				if (env->ops->get_convert_ctx_access) {
+					struct btf *btf = env->insn_aux_data[i + delta].btf_var.btf;
+					u32 btf_id = env->insn_aux_data[i + delta].btf_var.btf_id;
+
+					convert_ctx_access = env->ops->get_convert_ctx_access(&env->log, btf, btf_id);
+					if (convert_ctx_access)
+						break;
+				}
+				insn->code = BPF_LDX | BPF_PROBE_MEM | BPF_SIZE((insn)->code);
 				env->prog->aux->num_exentries++;
 			} else if (resolve_prog_type(env->prog) != BPF_PROG_TYPE_STRUCT_OPS) {
 				verbose(env, "Writes through BTF pointers are not allowed\n");
