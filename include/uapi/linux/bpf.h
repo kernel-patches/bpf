@@ -5341,6 +5341,23 @@ union bpf_attr {
  *		**-EACCES** if the SYN cookie is not valid.
  *
  *		**-EPROTONOSUPPORT** if CONFIG_IPV6 is not builtin.
+ *
+ * long bpf_packet_dequeue(void *ctx, struct bpf_map *map, u64 flags, u64 *rank)
+ *	Description
+ *		Dequeue the packet at the head of the PIFO in *map* and return a pointer
+ *		to the packet (or NULL if the PIFO is empty).
+ *	Return
+ *		On success, a pointer to the packet, or NULL if the PIFO is empty. The
+ *		packet pointer must be freed using *bpf_packet_drop()* or returning
+ *		the packet pointer. The *rank* pointer will be set to the rank of
+ *		the dequeued packet on success, or a negative error code on error.
+ *
+ * long bpf_packet_drop(void *ctx, void *pkt)
+ *	Description
+ *		Drop *pkt*, which must be a reference previously returned by
+ *		*bpf_packet_dequeue()* (and checked to not be NULL).
+ *	Return
+ *		This always succeeds and returns zero.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5551,6 +5568,8 @@ union bpf_attr {
 	FN(tcp_raw_gen_syncookie_ipv6),	\
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
+	FN(packet_dequeue),		\
+	FN(packet_drop),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

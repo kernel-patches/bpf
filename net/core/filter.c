@@ -4430,6 +4430,40 @@ static const struct bpf_func_proto bpf_xdp_redirect_map_proto = {
 	.arg3_type      = ARG_ANYTHING,
 };
 
+BTF_ID_LIST_SINGLE(xdp_md_btf_ids, struct, xdp_md)
+
+BPF_CALL_4(bpf_packet_dequeue, struct dequeue_data *, ctx, struct bpf_map *, map,
+	   u64, flags, u64 *, rank)
+{
+	return (unsigned long)pifo_map_dequeue(map, flags, rank);
+}
+
+static const struct bpf_func_proto bpf_packet_dequeue_proto = {
+	.func           = bpf_packet_dequeue,
+	.gpl_only       = false,
+	.ret_type       = RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id	= xdp_md_btf_ids,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_CONST_MAP_PTR,
+	.arg3_type      = ARG_ANYTHING,
+	.arg4_type      = ARG_PTR_TO_LONG,
+};
+
+BPF_CALL_2(bpf_packet_drop, struct dequeue_data *, ctx, struct xdp_frame *, pkt)
+{
+	xdp_return_frame(pkt);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_packet_drop_proto = {
+	.func           = bpf_packet_drop,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_PTR_TO_BTF_ID | OBJ_RELEASE,
+	.arg2_btf_id	= xdp_md_btf_ids,
+};
+
 static unsigned long bpf_skb_copy(void *dst_buff, const void *skb,
 				  unsigned long off, unsigned long len)
 {
@@ -8065,7 +8099,14 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 static const struct bpf_func_proto *
 dequeue_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
-	return bpf_base_func_proto(func_id);
+	switch (func_id) {
+	case BPF_FUNC_packet_dequeue:
+		return &bpf_packet_dequeue_proto;
+	case BPF_FUNC_packet_drop:
+		return &bpf_packet_drop_proto;
+	default:
+		return bpf_base_func_proto(func_id);
+	}
 }
 
 const struct bpf_func_proto bpf_sock_map_update_proto __weak;
