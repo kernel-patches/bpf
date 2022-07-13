@@ -10421,6 +10421,9 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return 0;
 }
 
+BTF_ID_LIST(dequeue_btf_ids)
+BTF_ID(struct, xdp_md)
+
 static int check_return_code(struct bpf_verifier_env *env)
 {
 	struct tnum enforce_attach_type_range = tnum_unknown;
@@ -10554,6 +10557,17 @@ static int check_return_code(struct bpf_verifier_env *env)
 		}
 		break;
 
+	case BPF_PROG_TYPE_DEQUEUE:
+		if (register_is_null(reg))
+			return 0;
+		if ((reg->type == PTR_TO_BTF_ID || reg->type == PTR_TO_BTF_ID_OR_NULL) &&
+		    reg->btf == btf_vmlinux && reg->btf_id == dequeue_btf_ids[0] &&
+		    reg->ref_obj_id != 0)
+			return release_reference(env, reg->ref_obj_id);
+		verbose(env, "At program exit the register R0 must be NULL or referenced %s%s\n",
+			reg_type_str(env, PTR_TO_BTF_ID),
+			kernel_type_name(btf_vmlinux, dequeue_btf_ids[0]));
+		return -EINVAL;
 	case BPF_PROG_TYPE_EXT:
 		/* freplace program can return anything as its return value
 		 * depends on the to-be-replaced kernel func or bpf program.
@@ -12339,11 +12353,11 @@ static int do_check(struct bpf_verifier_env *env)
 					continue;
 				}
 
-				err = check_reference_leak(env);
+				err = check_return_code(env);
 				if (err)
 					return err;
 
-				err = check_return_code(env);
+				err = check_reference_leak(env);
 				if (err)
 					return err;
 process_bpf_exit:
