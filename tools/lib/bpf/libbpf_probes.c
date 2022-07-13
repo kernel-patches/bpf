@@ -97,6 +97,7 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 	case BPF_PROG_TYPE_SK_REUSEPORT:
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
+	case BPF_PROG_TYPE_DEQUEUE:
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -243,6 +244,10 @@ static int probe_map_create(enum bpf_map_type map_type)
 	case BPF_MAP_TYPE_BLOOM_FILTER:
 		key_size = 0;
 		max_entries = 1;
+		break;
+	case BPF_MAP_TYPE_PIFO_GENERIC:
+	case BPF_MAP_TYPE_PIFO_XDP:
+		opts.map_extra = 8;
 		break;
 	case BPF_MAP_TYPE_HASH:
 	case BPF_MAP_TYPE_ARRAY:
