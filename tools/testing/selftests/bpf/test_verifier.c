@@ -55,7 +55,7 @@
 #define MAX_UNEXPECTED_INSNS	32
 #define MAX_TEST_INSNS	1000000
 #define MAX_FIXUPS	8
-#define MAX_NR_MAPS	23
+#define MAX_NR_MAPS	24
 #define MAX_TEST_RUNS	8
 #define POINTER_VALUE	0xcafe4all
 #define TEST_DATA_LEN	64
@@ -131,6 +131,7 @@ struct bpf_test {
 	int fixup_map_ringbuf[MAX_FIXUPS];
 	int fixup_map_timer[MAX_FIXUPS];
 	int fixup_map_kptr[MAX_FIXUPS];
+	int fixup_map_pifo[MAX_FIXUPS];
 	struct kfunc_btf_id_pair fixup_kfunc_btf_id[MAX_FIXUPS];
 	/* Expected verifier log output for result REJECT or VERBOSE_ACCEPT.
 	 * Can be a tab-separated sequence of expected strings. An empty string
@@ -145,6 +146,7 @@ struct bpf_test {
 		ACCEPT,
 		REJECT,
 		VERBOSE_ACCEPT,
+		VERBOSE_REJECT,
 	} result, result_unpriv;
 	enum bpf_prog_type prog_type;
 	uint8_t flags;
@@ -546,11 +548,12 @@ static bool skip_unsupported_map(enum bpf_map_type map_type)
 
 static int __create_map(uint32_t type, uint32_t size_key,
 			uint32_t size_value, uint32_t max_elem,
-			uint32_t extra_flags)
+			uint32_t extra_flags, uint64_t map_extra)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts);
 	int fd;
 
+	opts.map_extra = map_extra;
 	opts.map_flags = (type == BPF_MAP_TYPE_HASH ? BPF_F_NO_PREALLOC : 0) | extra_flags;
 	fd = bpf_map_create(type, NULL, size_key, size_value, max_elem, &opts);
 	if (fd < 0) {
@@ -565,7 +568,7 @@ static int __create_map(uint32_t type, uint32_t size_key,
 static int create_map(uint32_t type, uint32_t size_key,
 		      uint32_t size_value, uint32_t max_elem)
 {
-	return __create_map(type, size_key, size_value, max_elem, 0);
+	return __create_map(type, size_key, size_value, max_elem, 0, 0);
 }
 
 static void update_map(int fd, int index)
@@ -904,6 +907,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	int *fixup_map_ringbuf = test->fixup_map_ringbuf;
 	int *fixup_map_timer = test->fixup_map_timer;
 	int *fixup_map_kptr = test->fixup_map_kptr;
+	int *fixup_map_pifo = test->fixup_map_pifo;
 	struct kfunc_btf_id_pair *fixup_kfunc_btf_id = test->fixup_kfunc_btf_id;
 
 	if (test->fill_helper) {
@@ -1033,7 +1037,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	if (*fixup_map_array_ro) {
 		map_fds[14] = __create_map(BPF_MAP_TYPE_ARRAY, sizeof(int),
 					   sizeof(struct test_val), 1,
-					   BPF_F_RDONLY_PROG);
+					   BPF_F_RDONLY_PROG, 0);
 		update_map(map_fds[14], 0);
 		do {
 			prog[*fixup_map_array_ro].imm = map_fds[14];
@@ -1043,7 +1047,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	if (*fixup_map_array_wo) {
 		map_fds[15] = __create_map(BPF_MAP_TYPE_ARRAY, sizeof(int),
 					   sizeof(struct test_val), 1,
-					   BPF_F_WRONLY_PROG);
+					   BPF_F_WRONLY_PROG, 0);
 		update_map(map_fds[15], 0);
 		do {
 			prog[*fixup_map_array_wo].imm = map_fds[15];
@@ -1052,7 +1056,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	}
 	if (*fixup_map_array_small) {
 		map_fds[16] = __create_map(BPF_MAP_TYPE_ARRAY, sizeof(int),
-					   1, 1, 0);
+					   1, 1, 0, 0);
 		update_map(map_fds[16], 0);
 		do {
 			prog[*fixup_map_array_small].imm = map_fds[16];
@@ -1068,7 +1072,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	}
 	if (*fixup_map_event_output) {
 		map_fds[18] = __create_map(BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-					   sizeof(int), sizeof(int), 1, 0);
+					   sizeof(int), sizeof(int), 1, 0, 0);
 		do {
 			prog[*fixup_map_event_output].imm = map_fds[18];
 			fixup_map_event_output++;
@@ -1076,7 +1080,7 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 	}
 	if (*fixup_map_reuseport_array) {
 		map_fds[19] = __create_map(BPF_MAP_TYPE_REUSEPORT_SOCKARRAY,
-					   sizeof(u32), sizeof(u64), 1, 0);
+					   sizeof(u32), sizeof(u64), 1, 0, 0);
 		do {
 			prog[*fixup_map_reuseport_array].imm = map_fds[19];
 			fixup_map_reuseport_array++;
@@ -1103,6 +1107,13 @@ static void do_test_fixup(struct bpf_test *test, enum bpf_prog_type prog_type,
 			prog[*fixup_map_kptr].imm = map_fds[22];
 			fixup_map_kptr++;
 		} while (*fixup_map_kptr);
+	}
+	if (*fixup_map_pifo) {
+		map_fds[23] = __create_map(BPF_MAP_TYPE_PIFO_XDP, sizeof(u32), sizeof(u32), 1, 0, 8);
+		do {
+			prog[*fixup_map_pifo].imm = map_fds[23];
+			fixup_map_pifo++;
+		} while (*fixup_map_pifo);
 	}
 
 	/* Patch in kfunc BTF IDs */
@@ -1490,7 +1501,7 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 		       test->errstr_unpriv : test->errstr;
 
 	opts.expected_attach_type = test->expected_attach_type;
-	if (verbose)
+	if (verbose || expected_ret == VERBOSE_REJECT)
 		opts.log_level = VERBOSE_LIBBPF_LOG_LEVEL;
 	else if (expected_ret == VERBOSE_ACCEPT)
 		opts.log_level = 2;
