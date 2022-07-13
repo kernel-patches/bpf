@@ -8062,6 +8062,12 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+static const struct bpf_func_proto *
+dequeue_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return bpf_base_func_proto(func_id);
+}
+
 const struct bpf_func_proto bpf_sock_map_update_proto __weak;
 const struct bpf_func_proto bpf_sock_hash_update_proto __weak;
 
@@ -8775,6 +8781,20 @@ void bpf_warn_invalid_xdp_action(struct net_device *dev, struct bpf_prog *prog, 
 		     act, prog->aux->name, prog->aux->id, dev ? dev->name : "N/A");
 }
 EXPORT_SYMBOL_GPL(bpf_warn_invalid_xdp_action);
+
+static bool dequeue_is_valid_access(int off, int size,
+				    enum bpf_access_type type,
+				    const struct bpf_prog *prog,
+				    struct bpf_insn_access_aux *info)
+{
+	if (type == BPF_WRITE)
+		return false;
+	switch (off) {
+	case offsetof(struct dequeue_ctx, egress_ifindex):
+		return true;
+	}
+	return false;
+}
 
 static bool sock_addr_is_valid_access(int off, int size,
 				      enum bpf_access_type type,
@@ -9835,6 +9855,28 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 	return insn - insn_buf;
 }
 
+static u32 dequeue_convert_ctx_access(enum bpf_access_type type,
+				      const struct bpf_insn *si,
+				      struct bpf_insn *insn_buf,
+				      struct bpf_prog *prog, u32 *target_size)
+{
+	struct bpf_insn *insn = insn_buf;
+
+	switch (si->off) {
+	case offsetof(struct dequeue_ctx, egress_ifindex):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct dequeue_data, txq),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct dequeue_data, txq));
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_txq_info, dev),
+				      si->dst_reg, si->dst_reg,
+				      offsetof(struct xdp_txq_info, dev));
+		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
+				      offsetof(struct net_device, ifindex));
+		break;
+	}
+	return insn - insn_buf;
+}
+
 /* SOCK_ADDR_LOAD_NESTED_FIELD() loads Nested Field S.F.NF where S is type of
  * context Structure, F is Field in context structure that contains a pointer
  * to Nested Structure of type NS that has the field NF.
@@ -10685,6 +10727,17 @@ const struct bpf_verifier_ops xdp_verifier_ops = {
 
 const struct bpf_prog_ops xdp_prog_ops = {
 	.test_run		= bpf_prog_test_run_xdp,
+};
+
+const struct bpf_verifier_ops dequeue_verifier_ops = {
+	.get_func_proto		= dequeue_func_proto,
+	.is_valid_access	= dequeue_is_valid_access,
+	.convert_ctx_access	= dequeue_convert_ctx_access,
+	.gen_prologue		= bpf_noop_prologue,
+};
+
+const struct bpf_prog_ops dequeue_prog_ops = {
+	.test_run		= bpf_prog_test_run_dequeue,
 };
 
 const struct bpf_verifier_ops cg_skb_verifier_ops = {

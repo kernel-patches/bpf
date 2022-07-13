@@ -85,6 +85,10 @@ struct xdp_buff {
 	u32 flags; /* supported values defined in xdp_buff_flags */
 };
 
+struct dequeue_data {
+	struct xdp_txq_info *txq;
+};
+
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
 {
 	return !!(xdp->flags & XDP_FLAGS_HAS_FRAGS);
