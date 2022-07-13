@@ -5358,6 +5358,16 @@ union bpf_attr {
  *		*bpf_packet_dequeue()* (and checked to not be NULL).
  *	Return
  *		This always succeeds and returns zero.
+ *
+ * long bpf_schedule_iface_dequeue(void *ctx, int ifindex, int flags)
+ *	Description
+ *		Schedule the interface with index *ifindex* for transmission from
+ *		its dequeue program as soon as possible. The *flags* argument
+ *		must be zero.
+ *
+ *	Return
+ *		Returns zero on success, or -ENOENT if no dequeue program is
+ *		loaded on the interface.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5570,6 +5580,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(packet_dequeue),		\
 	FN(packet_drop),		\
+	FN(schedule_iface_dequeue),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

@@ -4431,6 +4431,54 @@ static const struct bpf_func_proto bpf_xdp_redirect_map_proto = {
 	.arg3_type      = ARG_ANYTHING,
 };
 
+static int bpf_schedule_iface_dequeue(struct net *net, int ifindex, int flags)
+{
+	struct net_device *dev;
+	struct bpf_prog *prog;
+
+	if (flags)
+		return -EINVAL;
+
+	dev = dev_get_by_index_rcu(net, ifindex);
+	if (!dev)
+		return -ENODEV;
+
+	prog = rcu_dereference(dev->xdp_dequeue_prog);
+	if (!prog)
+		return -ENOENT;
+
+	dev_schedule_xdp_dequeue(dev);
+	return 0;
+}
+
+BPF_CALL_3(bpf_xdp_schedule_iface_dequeue, struct xdp_buff *, ctx, int, ifindex, int, flags)
+{
+	return bpf_schedule_iface_dequeue(dev_net(ctx->rxq->dev), ifindex, flags);
+}
+
+static const struct bpf_func_proto bpf_xdp_schedule_iface_dequeue_proto = {
+	.func           = bpf_xdp_schedule_iface_dequeue,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_dequeue_schedule_iface_dequeue, struct dequeue_data *, ctx, int, ifindex, int, flags)
+{
+	return bpf_schedule_iface_dequeue(dev_net(ctx->txq->dev), ifindex, flags);
+}
+
+static const struct bpf_func_proto bpf_dequeue_schedule_iface_dequeue_proto = {
+	.func           = bpf_dequeue_schedule_iface_dequeue,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_ANYTHING,
+};
+
 BTF_ID_LIST_SINGLE(xdp_md_btf_ids, struct, xdp_md)
 
 BPF_CALL_4(bpf_packet_dequeue, struct dequeue_data *, ctx, struct bpf_map *, map,
@@ -8068,6 +8116,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_fib_lookup_proto;
 	case BPF_FUNC_check_mtu:
 		return &bpf_xdp_check_mtu_proto;
+	case BPF_FUNC_schedule_iface_dequeue:
+		return &bpf_xdp_schedule_iface_dequeue_proto;
 #ifdef CONFIG_INET
 	case BPF_FUNC_sk_lookup_udp:
 		return &bpf_xdp_sk_lookup_udp_proto;
@@ -8105,6 +8155,8 @@ dequeue_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_packet_dequeue_proto;
 	case BPF_FUNC_packet_drop:
 		return &bpf_packet_drop_proto;
+	case BPF_FUNC_schedule_iface_dequeue:
+		return &bpf_dequeue_schedule_iface_dequeue_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
