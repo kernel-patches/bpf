@@ -1848,6 +1848,9 @@ int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_frame *xdpf,
 int cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
 			     struct sk_buff *skb);
 
+int pifo_map_enqueue(struct bpf_map *map, struct xdp_frame *xdpf, u32 index);
+struct xdp_frame *pifo_map_dequeue(struct bpf_map *map, u64 flags, u64 *rank);
+
 /* Return map's numa specified by userspace */
 static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
 {
@@ -2078,6 +2081,16 @@ static inline int cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
 					   struct sk_buff *skb)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline int pifo_map_enqueue(struct bpf_map *map, struct xdp_frame *xdp, u32 index)
+{
+	return 0;
+}
+
+static inline struct xdp_frame *pifo_map_dequeue(struct bpf_map *map, u64 flags, u64 *rank)
+{
+	return NULL;
 }
 
 static inline struct bpf_prog *bpf_prog_get_type_path(const char *name,

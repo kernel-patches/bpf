@@ -909,6 +909,8 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_INODE_STORAGE,
 	BPF_MAP_TYPE_TASK_STORAGE,
 	BPF_MAP_TYPE_BLOOM_FILTER,
+	BPF_MAP_TYPE_PIFO_GENERIC,
+	BPF_MAP_TYPE_PIFO_XDP,
 };
 
 /* Note that tracing related programs such as
@@ -1244,6 +1246,13 @@ enum {
 /* If set, XDP frames will be transmitted after processing */
 #define BPF_F_TEST_XDP_LIVE_FRAMES	(1U << 1)
 
+/* Flags for BPF_MAP_TYPE_PIFO_* */
+
+/* Used for flags argument of bpf_map_push_elem(); reserve top four bits for
+ * actual flags, the rest is the enqueue priority
+ */
+#define BPF_PIFO_PRIO_MASK	(~0ULL >> 4)
+
 /* type for BPF_ENABLE_STATS */
 enum bpf_stats_type {
 	/* enabled run_time_ns and run_cnt */
@@ -1298,6 +1307,10 @@ union bpf_attr {
 		 * BPF_MAP_TYPE_BLOOM_FILTER - the lowest 4 bits indicate the
 		 * number of hash functions (if 0, the bloom filter will default
 		 * to using 5 hash functions).
+		 *
+		 * BPF_MAP_TYPE_PIFO_* - the lower 32 bits indicate the valid
+		 * range of priorities for entries enqueued in the map. Must be
+		 * a power of two.
 		 */
 		__u64	map_extra;
 	};

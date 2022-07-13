@@ -1086,6 +1086,8 @@ static int map_create(union bpf_attr *attr)
 	}
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
+	    attr->map_type != BPF_MAP_TYPE_PIFO_XDP &&
+	    attr->map_type != BPF_MAP_TYPE_PIFO_GENERIC &&
 	    attr->map_extra != 0)
 		return -EINVAL;
 
