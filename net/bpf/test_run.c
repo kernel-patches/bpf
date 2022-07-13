@@ -370,7 +370,7 @@ static int bpf_test_run_xdp_live(struct bpf_prog *prog, struct xdp_buff *ctx,
 }
 
 static int bpf_test_run(struct bpf_prog *prog, void *ctx, u32 repeat,
-			u32 *retval, u32 *time, bool xdp)
+			u64 *retval, u32 *time, bool xdp)
 {
 	struct bpf_prog_array_item item = {.prog = prog};
 	struct bpf_run_ctx *old_ctx;
@@ -769,7 +769,7 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 	struct bpf_fentry_test_t arg = {};
 	u16 side_effect = 0, ret = 0;
 	int b = 2, err = -EFAULT;
-	u32 retval = 0;
+	u64 retval = 0;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
@@ -809,7 +809,7 @@ out:
 struct bpf_raw_tp_test_run_info {
 	struct bpf_prog *prog;
 	void *ctx;
-	u32 retval;
+	u64 retval;
 };
 
 static void
@@ -1054,15 +1054,15 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
 	bool is_l2 = false, is_direct_pkt_access = false;
+	u32 size = kattr->test.data_size_in, duration;
 	struct net *net = current->nsproxy->net_ns;
 	struct net_device *dev = net->loopback_dev;
-	u32 size = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
 	struct __sk_buff *ctx = NULL;
-	u32 retval, duration;
 	int hh_len = ETH_HLEN;
 	struct sk_buff *skb;
 	struct sock *sk;
+	u64 retval;
 	void *data;
 	int ret;
 
@@ -1250,15 +1250,16 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	bool do_live = (kattr->test.flags & BPF_F_TEST_XDP_LIVE_FRAMES);
 	u32 tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	u32 batch_size = kattr->test.batch_size;
-	u32 retval = 0, duration, max_data_sz;
 	u32 size = kattr->test.data_size_in;
 	u32 headroom = XDP_PACKET_HEADROOM;
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct skb_shared_info *sinfo;
+	u32 duration, max_data_sz;
 	struct xdp_buff xdp = {};
 	int i, ret = -EINVAL;
 	struct xdp_md *ctx;
+	u64 retval = 0;
 	void *data;
 
 	if (prog->expected_attach_type == BPF_XDP_DEVMAP ||
@@ -1416,7 +1417,8 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	struct bpf_flow_keys flow_keys;
 	const struct ethhdr *eth;
 	unsigned int flags = 0;
-	u32 retval, duration;
+	u32 duration;
+	u64 retval;
 	void *data;
 	int ret;
 
@@ -1481,8 +1483,9 @@ int bpf_prog_test_run_sk_lookup(struct bpf_prog *prog, const union bpf_attr *kat
 	struct bpf_sk_lookup_kern ctx = {};
 	u32 repeat = kattr->test.repeat;
 	struct bpf_sk_lookup *user_ctx;
-	u32 retval, duration;
 	int ret = -EINVAL;
+	u32 duration;
+	u64 retval;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
@@ -1580,8 +1583,8 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
 	__u32 ctx_size_in = kattr->test.ctx_size_in;
 	void *ctx = NULL;
-	u32 retval;
 	int err = 0;
+	u64 retval;
 
 	/* doesn't support data_in/out, ctx_out, duration, or repeat or flags */
 	if (kattr->test.data_in || kattr->test.data_out ||
