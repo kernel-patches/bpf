@@ -50,7 +50,13 @@ struct bpf_reg_state {
 	s32 off;
 	union {
 		/* valid when type == PTR_TO_PACKET */
-		int range;
+		struct {
+			int range;
+			/* To distinguish packet pointers backed by different
+			 * packets, to prevent pkt pointer comparisons.
+			 */
+			u32 pkt_uid;
+		};
 
 		/* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
 		 *   PTR_TO_MAP_VALUE_OR_NULL
