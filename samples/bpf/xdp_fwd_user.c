@@ -11,6 +11,7 @@
  * General Public License for more details.
  */
 
+#include "linux/if_link.h"
 #include <linux/bpf.h>
 #include <linux/if_link.h>
 #include <linux/limits.h>
@@ -29,66 +30,122 @@
 
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
 
-static int do_attach(int idx, int prog_fd, int map_fd, const char *name)
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+
+const char *redir_prog_names[] = {
+	"xdp_fwd_prog",
+	"xdp_fwd_direct_", /* name truncated to BPF_OBJ_NAME_LEN */
+	"xdp_fwd_queue",
+};
+
+const char *dequeue_prog_names[] = {
+	"xdp_dequeue"
+};
+
+static int do_attach(int idx, int redir_prog_fd, int dequeue_prog_fd,
+		     int redir_map_fd, int pifos_map_fd, const char *name)
 {
 	int err;
 
-	err = bpf_xdp_attach(idx, prog_fd, xdp_flags, NULL);
+	if (pifos_map_fd > -1) {
+		LIBBPF_OPTS(bpf_map_create_opts, map_opts, .map_extra = 8192);
+		char map_name[BPF_OBJ_NAME_LEN];
+		int pifo_fd;
+
+		snprintf(map_name, sizeof(map_name), "pifo_%d", idx);
+		map_name[BPF_OBJ_NAME_LEN - 1] = '\0';
+
+		pifo_fd = bpf_map_create(BPF_MAP_TYPE_PIFO_XDP, map_name,
+					 sizeof(__u32), sizeof(__u32), 10240, &map_opts);
+		if (pifo_fd < 0) {
+			err = -errno;
+			printf("ERROR: Couldn't create PIFO map: %s\n", strerror(-err));
+			return err;
+		}
+
+		err = bpf_map_update_elem(pifos_map_fd, &idx, &pifo_fd, 0);
+		if (err)
+			printf("ERROR: failed adding PIFO map for device %s\n", name);
+	}
+
+	if (dequeue_prog_fd > -1) {
+		LIBBPF_OPTS(bpf_xdp_attach_opts, prog_opts, .old_prog_fd = -1);
+
+		err = bpf_xdp_attach(idx, dequeue_prog_fd,
+				     (XDP_FLAGS_DEQUEUE_MODE | XDP_FLAGS_REPLACE),
+				     &prog_opts);
+		if (err < 0) {
+			printf("ERROR: failed to attach dequeue program to %s\n", name);
+			return err;
+		}
+	}
+
+	err = bpf_xdp_attach(idx, redir_prog_fd, xdp_flags, NULL);
 	if (err < 0) {
-		printf("ERROR: failed to attach program to %s\n", name);
+		printf("ERROR: failed to attach redir program to %s\n", name);
 		return err;
 	}
 
 	/* Adding ifindex as a possible egress TX port */
-	err = bpf_map_update_elem(map_fd, &idx, &idx, 0);
+	err = bpf_map_update_elem(redir_map_fd, &idx, &idx, 0);
 	if (err)
 		printf("ERROR: failed using device %s as TX-port\n", name);
 
 	return err;
 }
 
+static bool should_detach(__u32 prog_fd, const char **prog_names, int num_prog_names)
+{
+	struct bpf_prog_info prog_info = {};
+	__u32 info_len = sizeof(prog_info);
+	int err, i;
+
+	err = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &info_len);
+	if (err) {
+		printf("ERROR: bpf_obj_get_info_by_fd failed (%s)\n",
+		       strerror(errno));
+		return false;
+	}
+
+	for (i = 0; i < num_prog_names; i++)
+		if (!strcmp(prog_info.name, prog_names[i]))
+			return true;
+
+	return false;
+}
+
 static int do_detach(int ifindex, const char *ifname, const char *app_name)
 {
 	LIBBPF_OPTS(bpf_xdp_attach_opts, opts);
-	struct bpf_prog_info prog_info = {};
-	char prog_name[BPF_OBJ_NAME_LEN];
-	__u32 info_len, curr_prog_id;
-	int prog_fd;
-	int err = 1;
+	LIBBPF_OPTS(bpf_xdp_query_opts, query_opts);
+	int prog_fd, err = 1;
+	__u32 curr_prog_id;
 
-	if (bpf_xdp_query_id(ifindex, xdp_flags, &curr_prog_id)) {
+	if (bpf_xdp_query(ifindex, xdp_flags, &query_opts)) {
 		printf("ERROR: bpf_xdp_query_id failed (%s)\n",
 		       strerror(errno));
 		return err;
 	}
 
+	curr_prog_id = (xdp_flags & XDP_FLAGS_SKB_MODE) ? query_opts.skb_prog_id
+								: query_opts.drv_prog_id;
 	if (!curr_prog_id) {
 		printf("ERROR: flags(0x%x) xdp prog is not attached to %s\n",
 		       xdp_flags, ifname);
 		return err;
 	}
 
-	info_len = sizeof(prog_info);
 	prog_fd = bpf_prog_get_fd_by_id(curr_prog_id);
 	if (prog_fd < 0) {
 		printf("ERROR: bpf_prog_get_fd_by_id failed (%s)\n",
 		       strerror(errno));
-		return prog_fd;
+		return err;
 	}
 
-	err = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &info_len);
-	if (err) {
-		printf("ERROR: bpf_obj_get_info_by_fd failed (%s)\n",
-		       strerror(errno));
-		goto close_out;
-	}
-	snprintf(prog_name, sizeof(prog_name), "%s_prog", app_name);
-	prog_name[BPF_OBJ_NAME_LEN - 1] = '\0';
-
-	if (strcmp(prog_info.name, prog_name)) {
+	if (!should_detach(prog_fd, redir_prog_names, ARRAY_SIZE(redir_prog_names))) {
 		printf("ERROR: %s isn't attached to %s\n", app_name, ifname);
-		err = 1;
-		goto close_out;
+		close(prog_fd);
+		return 1;
 	}
 
 	opts.old_prog_fd = prog_fd;
@@ -96,11 +153,34 @@ static int do_detach(int ifindex, const char *ifname, const char *app_name)
 	if (err < 0)
 		printf("ERROR: failed to detach program from %s (%s)\n",
 		       ifname, strerror(errno));
-	/* TODO: Remember to cleanup map, when adding use of shared map
+
+	close(prog_fd);
+
+	if (query_opts.dequeue_prog_id) {
+		prog_fd = bpf_prog_get_fd_by_id(query_opts.dequeue_prog_id);
+		if (prog_fd < 0) {
+			printf("ERROR: bpf_prog_get_fd_by_id failed (%s)\n",
+			       strerror(errno));
+			return err;
+		}
+
+		if (!should_detach(prog_fd, dequeue_prog_names, ARRAY_SIZE(dequeue_prog_names))) {
+			close(prog_fd);
+			return err;
+		}
+
+		opts.old_prog_fd = prog_fd;
+		err = bpf_xdp_detach(ifindex,
+				     (XDP_FLAGS_DEQUEUE_MODE | XDP_FLAGS_REPLACE),
+				     &opts);
+		if (err < 0)
+			printf("ERROR: failed to detach dequeue program from %s (%s)\n",
+			       ifname, strerror(errno));
+	}
+
+	/* todo: Remember to cleanup map, when adding use of shared map
 	 *  bpf_map_delete_elem((map_fd, &idx);
 	 */
-close_out:
-	close(prog_fd);
 	return err;
 }
 
@@ -112,24 +192,23 @@ static void usage(const char *prog)
 		"    -d    detach program\n"
 		"    -S    use skb-mode\n"
 		"    -F    force loading prog\n"
-		"    -D    direct table lookups (skip fib rules)\n",
+		"    -D    direct table lookups (skip fib rules)\n"
+		"    -Q    direct table lookups (skip fib rules)\n",
 		prog);
 }
 
 int main(int argc, char **argv)
 {
-	const char *prog_name = "xdp_fwd";
-	struct bpf_program *prog = NULL;
-	struct bpf_program *pos;
-	const char *sec_name;
-	int prog_fd = -1, map_fd = -1;
+	int redir_prog_fd = -1, dequeue_prog_fd = -1, redir_map_fd = -1, pifos_map_fd = -1;
+	const char *prog_name = "xdp_fwd_prog";
 	char filename[PATH_MAX];
 	struct bpf_object *obj;
 	int opt, i, idx, err;
+	bool queue = false;
 	int attach = 1;
 	int ret = 0;
 
-	while ((opt = getopt(argc, argv, ":dDSF")) != -1) {
+	while ((opt = getopt(argc, argv, ":dDQSF")) != -1) {
 		switch (opt) {
 		case 'd':
 			attach = 0;
@@ -141,7 +220,11 @@ int main(int argc, char **argv)
 			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
 			break;
 		case 'D':
-			prog_name = "xdp_fwd_direct";
+			prog_name = "xdp_fwd_direct_prog";
+			break;
+		case 'Q':
+			prog_name = "xdp_fwd_queue";
+			queue = true;
 			break;
 		default:
 			usage(basename(argv[0]));
@@ -170,9 +253,6 @@ int main(int argc, char **argv)
 		if (libbpf_get_error(obj))
 			return 1;
 
-		prog = bpf_object__next_program(obj, NULL);
-		bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
-
 		err = bpf_object__load(obj);
 		if (err) {
 			printf("Does kernel support devmap lookup?\n");
@@ -181,24 +261,33 @@ int main(int argc, char **argv)
 			 */
 			return 1;
 		}
+		redir_prog_fd = bpf_program__fd(bpf_object__find_program_by_name(obj,
+										 prog_name));
+		if (redir_prog_fd < 0) {
+			printf("program not found: %s\n", strerror(redir_prog_fd));
+			return 1;
+		}
 
-		bpf_object__for_each_program(pos, obj) {
-			sec_name = bpf_program__section_name(pos);
-			if (sec_name && !strcmp(sec_name, prog_name)) {
-				prog = pos;
-				break;
+		redir_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj,
+									"xdp_tx_ports"));
+		if (redir_map_fd < 0) {
+			printf("map not found: %s\n", strerror(redir_map_fd));
+			return 1;
+		}
+
+		if (queue) {
+			dequeue_prog_fd = bpf_program__fd(bpf_object__find_program_by_name(obj,
+											   "xdp_dequeue"));
+			if (dequeue_prog_fd < 0) {
+				printf("dequeue program not found: %s\n",
+				       strerror(-dequeue_prog_fd));
+				return 1;
 			}
-		}
-		prog_fd = bpf_program__fd(prog);
-		if (prog_fd < 0) {
-			printf("program not found: %s\n", strerror(prog_fd));
-			return 1;
-		}
-		map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj,
-							"xdp_tx_ports"));
-		if (map_fd < 0) {
-			printf("map not found: %s\n", strerror(map_fd));
-			return 1;
+			pifos_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "pifo_maps"));
+			if (pifos_map_fd < 0) {
+				printf("map not found: %s\n", strerror(-pifos_map_fd));
+				return 1;
+			}
 		}
 	}
 
@@ -212,11 +301,12 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		if (!attach) {
-			err = do_detach(idx, argv[i], prog_name);
+			err = do_detach(idx, argv[i], argv[0]);
 			if (err)
 				ret = err;
 		} else {
-			err = do_attach(idx, prog_fd, map_fd, argv[i]);
+			err = do_attach(idx, redir_prog_fd, dequeue_prog_fd,
+					redir_map_fd, pifos_map_fd, argv[i]);
 			if (err)
 				ret = err;
 		}

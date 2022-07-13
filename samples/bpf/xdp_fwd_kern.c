@@ -23,12 +23,27 @@
 
 #define IPV6_FLOWINFO_MASK              cpu_to_be32(0x0FFFFFFF)
 
+struct pifo_map {
+	__uint(type, BPF_MAP_TYPE_PIFO_XDP);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+	__uint(max_entries, 1024);
+	__uint(map_extra, 8192); /* range */
+} pmap SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_DEVMAP);
 	__uint(key_size, sizeof(int));
 	__uint(value_size, sizeof(int));
 	__uint(max_entries, 64);
 } xdp_tx_ports SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+	__uint(key_size, sizeof(__u32));
+	__uint(max_entries, 64);
+	__array(values, struct pifo_map);
+} pifo_maps SEC(".maps");
 
 /* from include/net/ip.h */
 static __always_inline int ip_decrease_ttl(struct iphdr *iph)
@@ -40,7 +55,7 @@ static __always_inline int ip_decrease_ttl(struct iphdr *iph)
 	return --iph->ttl;
 }
 
-static __always_inline int xdp_fwd_flags(struct xdp_md *ctx, u32 flags)
+static __always_inline int xdp_fwd_flags(struct xdp_md *ctx, u32 flags, bool queue)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
@@ -137,22 +152,62 @@ static __always_inline int xdp_fwd_flags(struct xdp_md *ctx, u32 flags)
 
 		memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
 		memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
+
+		if (queue) {
+			void *ptr;
+			int ret;
+
+			ptr = bpf_map_lookup_elem(&pifo_maps, &fib_params.ifindex);
+			if (!ptr)
+				return XDP_DROP;
+
+			ret = bpf_redirect_map(ptr, 0, 0);
+			if (ret == XDP_REDIRECT)
+				bpf_schedule_iface_dequeue(ctx, fib_params.ifindex, 0);
+			return ret;
+		}
+
 		return bpf_redirect_map(&xdp_tx_ports, fib_params.ifindex, 0);
 	}
 
 	return XDP_PASS;
 }
 
-SEC("xdp_fwd")
+SEC("xdp")
 int xdp_fwd_prog(struct xdp_md *ctx)
 {
-	return xdp_fwd_flags(ctx, 0);
+	return xdp_fwd_flags(ctx, 0, false);
 }
 
-SEC("xdp_fwd_direct")
+SEC("xdp")
 int xdp_fwd_direct_prog(struct xdp_md *ctx)
 {
-	return xdp_fwd_flags(ctx, BPF_FIB_LOOKUP_DIRECT);
+	return xdp_fwd_flags(ctx, BPF_FIB_LOOKUP_DIRECT, false);
+}
+
+SEC("xdp")
+int xdp_fwd_queue(struct xdp_md *ctx)
+{
+	return xdp_fwd_flags(ctx, 0, true);
+}
+
+SEC("dequeue")
+void *xdp_dequeue(struct dequeue_ctx *ctx)
+{
+	__u32 ifindex = ctx->egress_ifindex;
+	struct xdp_md *pkt;
+	__u64 prio = 0;
+	void *pifo_ptr;
+
+	pifo_ptr = bpf_map_lookup_elem(&pifo_maps, &ifindex);
+	if (!pifo_ptr)
+		return NULL;
+
+	pkt = (void *)bpf_packet_dequeue(ctx, pifo_ptr, 0, &prio);
+	if (!pkt)
+		return NULL;
+
+	return pkt;
 }
 
 char _license[] SEC("license") = "GPL";
