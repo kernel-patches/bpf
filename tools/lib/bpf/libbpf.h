@@ -731,8 +731,9 @@ LIBBPF_API bool bpf_map__autocreate(const struct bpf_map *map);
  */
 LIBBPF_API int bpf_map__fd(const struct bpf_map *map);
 LIBBPF_API int bpf_map__reuse_fd(struct bpf_map *map, int fd);
-/* get map name */
+/* get/set map name */
 LIBBPF_API const char *bpf_map__name(const struct bpf_map *map);
+LIBBPF_API int bpf_map__set_name(struct bpf_map *map, const char *name);
 /* get/set map type */
 LIBBPF_API enum bpf_map_type bpf_map__type(const struct bpf_map *map);
 LIBBPF_API int bpf_map__set_type(struct bpf_map *map, enum bpf_map_type type);

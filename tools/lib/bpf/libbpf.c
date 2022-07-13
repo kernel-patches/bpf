@@ -9089,6 +9089,28 @@ const char *bpf_map__name(const struct bpf_map *map)
 	return map->name;
 }
 
+int bpf_map__set_name(struct bpf_map *map, const char *name)
+{
+	char *new_name;
+
+	if (!map)
+		return libbpf_err(-EINVAL);
+
+	new_name = strdup(name);
+	if (!new_name)
+		return libbpf_err(-ENOMEM);
+
+	if (map_uses_real_name(map)) {
+		free(map->real_name);
+		map->real_name = new_name;
+	} else {
+		free(map->name);
+		map->name = new_name;
+	}
+
+	return 0;
+}
+
 enum bpf_map_type bpf_map__type(const struct bpf_map *map)
 {
 	return map->def.type;
