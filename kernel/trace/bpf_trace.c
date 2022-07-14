@@ -21,6 +21,7 @@
 #include <linux/bsearch.h>
 #include <linux/sort.h>
 #include <linux/key.h>
+#include <linux/verification.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1234,6 +1235,75 @@ noinline __weak void bpf_key_put(struct key *key)
 	key_put(key);
 }
 
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+/**
+ * bpf_verify_pkcs7_signature - verify a PKCS#7 signature
+ * @data_ptr: data to verify
+ * @sig_ptr: signature of the data
+ * @user_keyring__maybe_null: user-defined keyring for sig ver (alternative)
+ * @system_keyring: system-defined keyring for sig ver (alternative)
+ *
+ * Verify the PKCS#7 signature *sig_ptr* against the supplied *data_ptr*
+ * alternatively with keys in *user_keyring__maybe_null* or *system_keyring*.
+ * Either one of the two must be provided. Respectively, NULL or UINT64_MAX
+ * must be passed to signal to the kfunc that the parameter is not used.
+ *
+ * *user_keyring__maybe_null* is a key pointer obtained from
+ * bpf_lookup_user_key(), while *system_keyring* is a pre-determined ID with
+ * values defined in include/linux/verification.h: 0 for the primary keyring
+ * (immutable keyring of system keys); 1 for both the primary and secondary
+ * keyring (where keys can be added only if they are vouched for by existing
+ * keys in those keyrings); 2 for the platform keyring (primarily used by the
+ * integrity subsystem to verify a kexec'ed kerned image and, possibly,
+ * the initramfs signature).
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+noinline __weak int bpf_verify_pkcs7_signature(struct bpf_dynptr_kern *data_ptr,
+					struct bpf_dynptr_kern *sig_ptr,
+					struct key *user_keyring__maybe_null,
+					u64 system_keyring)
+{
+	struct key *trusted_keyring;
+	int ret;
+
+	/* Either user_keyring__maybe_null or system_keyring must be specified. */
+	if ((user_keyring__maybe_null && system_keyring != U64_MAX) ||
+	    (!user_keyring__maybe_null && system_keyring == U64_MAX))
+		return -EINVAL;
+
+	if (user_keyring__maybe_null) {
+		/*
+		 * Do the permission check deferred in bpf_lookup_user_key().
+		 *
+		 * A call to key_task_permission() here would be redundant, as
+		 * it is already done by keyring_search() called by
+		 * find_asymmetric_key().
+		 */
+		ret = key_validate(user_keyring__maybe_null);
+		if (ret < 0)
+			return ret;
+
+		trusted_keyring = user_keyring__maybe_null;
+		goto verify;
+	}
+
+	/* Keep in sync with defs in include/linux/verification.h. */
+	if (system_keyring > (unsigned long)VERIFY_USE_PLATFORM_KEYRING)
+		return -EINVAL;
+
+	trusted_keyring = (struct key *)(unsigned long)system_keyring;
+verify:
+	return verify_pkcs7_signature(data_ptr->data,
+				      bpf_dynptr_get_size(data_ptr),
+				      sig_ptr->data,
+				      bpf_dynptr_get_size(sig_ptr),
+				      trusted_keyring,
+				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
+				      NULL);
+}
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
+
 __diag_pop();
 
 BTF_SET_START(key_kfunc_ids)
@@ -1257,12 +1327,26 @@ static const struct btf_kfunc_id_set bpf_key_kfunc_set = {
 	.release_set = &key_put_kfunc_ids,
 	.ret_null_set = &key_lookup_kfunc_ids,
 };
-#endif /* CONFIG_KEYS */
 
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+BTF_SET_START(verify_sig_kfunc_ids)
+BTF_ID(func, bpf_verify_pkcs7_signature)
+BTF_SET_END(verify_sig_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_verify_sig_kfunc_set = {
+	.owner = THIS_MODULE,
+	.check_set = &verify_sig_kfunc_ids,
+	.sleepable_set = &verify_sig_kfunc_ids,
+};
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
+#endif /* CONFIG_KEYS */
 
 const struct btf_kfunc_id_set *kfunc_sets[] = {
 #ifdef CONFIG_KEYS
 	&bpf_key_kfunc_set,
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+	&bpf_verify_sig_kfunc_set,
+#endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 #endif /* CONFIG_KEYS */
 };
 
