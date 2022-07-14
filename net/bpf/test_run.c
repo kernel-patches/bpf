@@ -551,6 +551,11 @@ struct sock * noinline bpf_kfunc_call_test3(struct sock *sk)
 	return sk;
 }
 
+struct sock *noinline bpf_kfunc_call_test4(struct sock *sk__maybe_null)
+{
+	return sk__maybe_null;
+}
+
 struct prog_test_member1 {
 	int a;
 };
@@ -683,6 +688,10 @@ noinline void bpf_kfunc_call_test_mem_len_pass1(void *mem, int mem__sz)
 {
 }
 
+noinline void bpf_kfunc_call_test_mem_len_pass2(u64 *mem__maybe_null)
+{
+}
+
 noinline void bpf_kfunc_call_test_mem_len_fail1(void *mem, int len)
 {
 }
@@ -699,6 +708,7 @@ BTF_SET_START(test_sk_check_kfunc_ids)
 BTF_ID(func, bpf_kfunc_call_test1)
 BTF_ID(func, bpf_kfunc_call_test2)
 BTF_ID(func, bpf_kfunc_call_test3)
+BTF_ID(func, bpf_kfunc_call_test4)
 BTF_ID(func, bpf_kfunc_call_test_acquire)
 BTF_ID(func, bpf_kfunc_call_memb_acquire)
 BTF_ID(func, bpf_kfunc_call_test_release)
@@ -712,6 +722,7 @@ BTF_ID(func, bpf_kfunc_call_test_fail1)
 BTF_ID(func, bpf_kfunc_call_test_fail2)
 BTF_ID(func, bpf_kfunc_call_test_fail3)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_pass1)
+BTF_ID(func, bpf_kfunc_call_test_mem_len_pass2)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_fail1)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_fail2)
 BTF_SET_END(test_sk_check_kfunc_ids)

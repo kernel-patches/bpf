@@ -30,6 +30,10 @@ static void test_main(void)
 	ASSERT_OK(err, "bpf_prog_test_run(test2)");
 	ASSERT_EQ(topts.retval, 3, "test2-retval");
 
+	prog_fd = skel->progs.kfunc_call_test4.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "bpf_prog_test_run(test4)");
+
 	prog_fd = skel->progs.kfunc_call_test_ref_btf_id.prog_fd;
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 	ASSERT_OK(err, "bpf_prog_test_run(test_ref_btf_id)");
