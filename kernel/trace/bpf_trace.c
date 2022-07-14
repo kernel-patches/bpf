@@ -20,6 +20,7 @@
 #include <linux/fprobe.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
+#include <linux/key.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1180,6 +1181,111 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
+
+#ifdef CONFIG_KEYS
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "kfuncs which will be used in BPF programs");
+
+/**
+ * bpf_lookup_user_key - lookup a key by its serial
+ * @serial: key serial
+ * @flags: lookup-specific flags
+ *
+ * Search a key with a given *serial* and the provided *flags*. The
+ * returned key, if found, has the reference count incremented by
+ * one, and must be passed to bpf_key_put() when done with it.
+ * Permission checks are deferred to the time the key is used by
+ * one of the available key-specific kfunc.
+ *
+ * Set *flags* with 1 to attempt creating a requested special
+ * keyring (e.g. session keyring), if it doesn't yet exist. Set
+ * *flags* to 2 to lookup a key without waiting for the key
+ * construction, and to retrieve uninstantiated keys (keys without
+ * data attached to them).
+ *
+ * Return: a key pointer if the key is found, a NULL pointer otherwise.
+ */
+noinline __weak struct key *bpf_lookup_user_key(u32 serial, u64 flags)
+{
+	key_ref_t key_ref;
+
+	/* Keep in sync with include/linux/key.h. */
+	if (flags > (KEY_LOOKUP_PARTIAL << 1) - 1)
+		return NULL;
+
+	/* Permission check is deferred until actual kfunc using the key. */
+	key_ref = lookup_user_key(serial, flags, KEY_DEFER_PERM_CHECK);
+	if (IS_ERR(key_ref))
+		return NULL;
+
+	return key_ref_to_ptr(key_ref);
+}
+
+/**
+ * bpf_key_put - release a key reference
+ * @key: key whose reference is released
+ *
+ * Decrement the reference count of *key* obtained with the
+ * bpf_lookup_user_key() kfunc.
+ */
+noinline __weak void bpf_key_put(struct key *key)
+{
+	key_put(key);
+}
+
+__diag_pop();
+
+BTF_SET_START(key_kfunc_ids)
+BTF_ID(func, bpf_lookup_user_key)
+BTF_ID(func, bpf_key_put)
+BTF_SET_END(key_kfunc_ids)
+
+BTF_SET_START(key_lookup_kfunc_ids)
+BTF_ID(func, bpf_lookup_user_key)
+BTF_SET_END(key_lookup_kfunc_ids)
+
+BTF_SET_START(key_put_kfunc_ids)
+BTF_ID(func, bpf_key_put)
+BTF_SET_END(key_put_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_key_kfunc_set = {
+	.owner = THIS_MODULE,
+	.check_set = &key_kfunc_ids,
+	.sleepable_set = &key_lookup_kfunc_ids,
+	.acquire_set = &key_lookup_kfunc_ids,
+	.release_set = &key_put_kfunc_ids,
+	.ret_null_set = &key_lookup_kfunc_ids,
+};
+#endif /* CONFIG_KEYS */
+
+
+const struct btf_kfunc_id_set *kfunc_sets[] = {
+#ifdef CONFIG_KEYS
+	&bpf_key_kfunc_set,
+#endif /* CONFIG_KEYS */
+};
+
+static int __init bpf_kfuncs_init(void)
+{
+	int ret, i;
+
+	for (i = 0; i < ARRAY_SIZE(kfunc_sets); i++) {
+		ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+						kfunc_sets[i]);
+		if (!ret)
+			continue;
+
+		ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
+						kfunc_sets[i]);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+late_initcall(bpf_kfuncs_init);
 
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
