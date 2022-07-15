@@ -11735,6 +11735,32 @@ int perf_buffer__buffer_fd(const struct perf_buffer *pb, size_t buf_idx)
 }
 
 /*
+ * Return the memory region of a ring buffer in *buf_idx* slot of
+ * PERF_EVENT_ARRAY BPF map. This ring buffer can be used to implement
+ * a custom events consumer.
+ * The ring buffer starts with the *struct perf_event_mmap_page*, which
+ * holds the ring buffer managment fields, when accessing the header
+ * structure it's important to be SMP aware.
+ * You can refer to *perf_event_read_simple* for a simple example.
+ */
+int perf_buffer__buffer(struct perf_buffer *pb, int buf_idx, void **buf,
+			size_t *buf_size)
+{
+	struct perf_cpu_buf *cpu_buf;
+
+	if (buf_idx >= pb->cpu_cnt)
+		return libbpf_err(-EINVAL);
+
+	cpu_buf = pb->cpu_bufs[buf_idx];
+	if (!cpu_buf)
+		return libbpf_err(-ENOENT);
+
+	*buf = cpu_buf->base;
+	*buf_size = pb->mmap_size;
+	return 0;
+}
+
+/*
  * Consume data from perf ring buffer corresponding to slot *buf_idx* in
  * PERF_EVENT_ARRAY BPF map without waiting/polling. If there is no data to
  * consume, do nothing and return success.
