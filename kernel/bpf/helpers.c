@@ -903,7 +903,7 @@ int bpf_bprintf_prepare(char *fmt, u32 fmt_size, const u64 *raw_args,
 					err = snprintf(tmp_buf,
 						       (tmp_buf_end - tmp_buf),
 						       "%pB",
-						       (void *)(long)raw_args[num_spec]);
+						       (void *)(unsigned long)raw_args[num_spec]);
 					tmp_buf += (err + 1);
 				}
 
@@ -929,7 +929,7 @@ int bpf_bprintf_prepare(char *fmt, u32 fmt_size, const u64 *raw_args,
 				goto out;
 			}
 
-			unsafe_ptr = (char *)(long)raw_args[num_spec];
+			unsafe_ptr = (char *)(unsigned long)raw_args[num_spec];
 			err = copy_from_kernel_nofault(cur_ip, unsafe_ptr,
 						       sizeof_cur_ip);
 			if (err < 0)
@@ -966,7 +966,7 @@ fmt_str:
 				goto out;
 			}
 
-			unsafe_ptr = (char *)(long)raw_args[num_spec];
+			unsafe_ptr = (char *)(unsigned long)raw_args[num_spec];
 			err = bpf_trace_copy_string(tmp_buf, unsafe_ptr,
 						    fmt_ptype,
 						    tmp_buf_end - tmp_buf);

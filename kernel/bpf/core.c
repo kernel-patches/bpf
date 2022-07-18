@@ -1954,7 +1954,7 @@ out:
 		CONT;							\
 	LDX_PROBE_MEM_##SIZEOP:						\
 		bpf_probe_read_kernel(&DST, sizeof(SIZE),		\
-				      (const void *)(long) (SRC + insn->off));	\
+				      (const void *)(unsigned long) (SRC + insn->off));	\
 		DST = *((SIZE *)&DST);					\
 		CONT;
 

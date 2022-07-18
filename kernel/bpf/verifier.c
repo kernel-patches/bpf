@@ -4445,7 +4445,7 @@ static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val)
 	err = map->ops->map_direct_value_addr(map, &addr, off);
 	if (err)
 		return err;
-	ptr = (void *)(long)addr + off;
+	ptr = (void *)(unsigned long)addr + off;
 
 	switch (size) {
 	case sizeof(u8):
@@ -6113,7 +6113,7 @@ skip_type_check:
 			return err;
 		}
 
-		str_ptr = (char *)(long)(map_addr);
+		str_ptr = (char *)(unsigned long)(map_addr);
 		if (!strnchr(str_ptr + map_off, map->value_size - map_off, 0)) {
 			verbose(env, "string is not zero-terminated\n");
 			return -EINVAL;
@@ -7099,7 +7099,7 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 		verbose(env, "verifier bug\n");
 		return -EFAULT;
 	}
-	fmt = (char *)(long)fmt_addr + fmt_map_off;
+	fmt = (char *)(unsigned long)fmt_addr + fmt_map_off;
 
 	/* We are also guaranteed that fmt+fmt_map_off is NULL terminated, we
 	 * can focus on validating the format specifiers.
