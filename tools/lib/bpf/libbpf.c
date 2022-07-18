@@ -5796,11 +5796,48 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 				if (obj->gen_loader) {
 					insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
 					insn[0].imm = obj->kconfig_map_idx;
+					insn[1].imm = ext->kcfg.data_off;
 				} else {
-					insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
-					insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
+					bool is_set = ext->is_weak && ext->is_set;
+					bool is_ld_ldx = (BPF_CLASS(insn[0].code) == BPF_LD) &&
+						         insn[1].code == 0 &&
+							 (BPF_CLASS(insn[2].code) == BPF_LDX);
+
+					if (is_set && is_ld_ldx) {
+						__u32 dst_reg = insn[2].dst_reg; /* dst_reg is unchanged */
+						__s32 imm = 1; /* TODO: put real config value here */
+						int j;
+
+						/* Resolve dynamic kconfig lookups. */
+						insn[0] = BPF_JMP_A(0);
+						insn[1] = BPF_JMP_A(0);
+						insn[2] = BPF_ALU64_IMM(BPF_MOV, dst_reg, imm);
+
+						/* Look ahead at 7 insns. */
+						for (j = 3; j < 10; j++) {
+							/* SKETCHY?
+							 *
+							 * We can also replace conditional jump when it triggers with the opposite value.
+							 * Scan a bunch of insns and stop as long we hit a jump or some other
+							 * operation on the dst_reg.
+							 */
+							if (BPF_CLASS(insn[j].code) == BPF_JMP) {
+								/* next insn is jump */
+								if (insn[j].dst_reg == dst_reg && /* that operates on the same dst_reg */
+								    insn[j].imm == !imm) /* and the imm is the opposite */
+									insn[j] = BPF_JMP_A(0);
+								break;
+							} else {
+								if (insn[j].dst_reg == dst_reg)
+									break;
+							}
+						}
+					} else {
+						insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+						insn[0].imm = obj->maps[obj->kconfig_map_idx].fd;
+						insn[1].imm = ext->kcfg.data_off;
+					}
 				}
-				insn[1].imm = ext->kcfg.data_off;
 			} else /* EXT_KSYM */ {
 				if (ext->ksym.type_id && ext->is_set) { /* typed ksyms */
 					insn[0].src_reg = BPF_PSEUDO_BTF_ID;

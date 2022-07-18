@@ -1596,6 +1596,9 @@ static int load_with_options(int argc, char **argv, bool first_prog_only)
 		/* log_level1 + log_level2 + stats, but not stable UAPI */
 		open_opts.kernel_log_level = 1 + 2 + 4;
 
+	if (getenv("BPFTOOL_KCONFIG"))
+		open_opts.kconfig = getenv("BPFTOOL_KCONFIG");
+
 	obj = bpf_object__open_file(file, &open_opts);
 	if (libbpf_get_error(obj)) {
 		p_err("failed to open object file");
