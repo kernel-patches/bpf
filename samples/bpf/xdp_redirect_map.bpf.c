@@ -37,8 +37,8 @@ const volatile __u8 tx_mac_addr[ETH_ALEN];
 
 static __always_inline int xdp_redirect_map(struct xdp_md *ctx, void *redirect_map)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	struct datarec *rec;
@@ -71,8 +71,8 @@ int xdp_redirect_map_native(struct xdp_md *ctx)
 SEC("xdp/devmap")
 int xdp_redirect_map_egress(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	u8 *mac_addr = (u8 *) tx_mac_addr;
 	struct ethhdr *eth = data;
 	u64 nh_off;

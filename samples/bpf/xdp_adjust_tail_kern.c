@@ -73,8 +73,8 @@ static __always_inline int send_icmp4_too_big(struct xdp_md *xdp)
 
 	if (bpf_xdp_adjust_head(xdp, 0 - headroom))
 		return XDP_DROP;
-	void *data = (void *)(long)xdp->data;
-	void *data_end = (void *)(long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
 
 	if (data + (ICMP_TOOBIG_SIZE + headroom) > data_end)
 		return XDP_DROP;
@@ -119,8 +119,8 @@ static __always_inline int send_icmp4_too_big(struct xdp_md *xdp)
 
 static __always_inline int handle_ipv4(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	int pckt_size = data_end - data;
 	int offset;
 
@@ -136,8 +136,8 @@ static __always_inline int handle_ipv4(struct xdp_md *xdp)
 SEC("xdp_icmp")
 int _xdp_icmp(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	struct ethhdr *eth = data;
 	__u16 h_proto;
 

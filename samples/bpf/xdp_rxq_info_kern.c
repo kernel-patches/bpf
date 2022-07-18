@@ -74,8 +74,8 @@ void swap_src_dst_mac(void *data)
 SEC("xdp_prog0")
 int  xdp_prognum0(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct datarec *rec, *rxq_rec;
 	int ingress_ifindex;
 	struct config *config;

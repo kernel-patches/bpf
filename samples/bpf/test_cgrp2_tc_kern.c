@@ -41,10 +41,10 @@ struct bpf_elf_map SEC("maps") test_cgrp2_array_pin = {
 SEC("filter")
 int handle_egress(struct __sk_buff *skb)
 {
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
 	struct ipv6hdr *ip6h = data + sizeof(*eth);
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	char dont_care_msg[] = "dont care %04x %d\n";
 	char pass_msg[] = "pass\n";
 	char reject_msg[] = "reject\n";

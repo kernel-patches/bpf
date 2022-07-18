@@ -59,9 +59,9 @@ SEC("l2_to_iptun_ingress_forward")
 int _l2_to_iptun_ingress_forward(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key tkey = {};
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	int key = 0, *ifindex;
 
 	int ret;
@@ -110,9 +110,9 @@ SEC("l2_to_iptun_ingress_redirect")
 int _l2_to_iptun_ingress_redirect(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key tkey = {};
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	int key = 0, *ifindex;
 
 	int ret;
@@ -151,9 +151,9 @@ SEC("l2_to_ip6tun_ingress_redirect")
 int _l2_to_ip6tun_ingress_redirect(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key tkey = {};
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	int key = 0, *ifindex;
 
 	if (data + sizeof(*eth) > data_end)
@@ -206,9 +206,9 @@ SEC("drop_non_tun_vip")
 int _drop_non_tun_vip(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key tkey = {};
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 
 	if (data + sizeof(*eth) > data_end)
 		return TC_ACT_OK;

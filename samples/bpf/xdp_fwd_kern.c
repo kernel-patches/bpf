@@ -42,8 +42,8 @@ static __always_inline int ip_decrease_ttl(struct iphdr *iph)
 
 static __always_inline int xdp_fwd_flags(struct xdp_md *ctx, u32 flags)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct bpf_fib_lookup fib_params;
 	struct ethhdr *eth = data;
 	struct ipv6hdr *ip6h;

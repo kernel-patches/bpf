@@ -56,8 +56,8 @@ int xdp_redirect_map_native(struct xdp_md *ctx)
 SEC("xdp/devmap")
 int xdp_devmap_prog(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	u32 key = ctx->egress_ifindex;
 	struct ethhdr *eth = data;
 	__be64 *mac;

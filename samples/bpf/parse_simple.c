@@ -26,11 +26,11 @@ struct eth_hdr {
 SEC("simple")
 int handle_ingress(struct __sk_buff *skb)
 {
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct eth_hdr *eth = data;
 	struct iphdr *iph = data + sizeof(*eth);
 	struct udphdr *udp = data + sizeof(*eth) + sizeof(*iph);
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 
 	/* single length check */
 	if (data + sizeof(*eth) + sizeof(*iph) + sizeof(*udp) > data_end)

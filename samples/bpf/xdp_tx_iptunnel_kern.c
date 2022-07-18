@@ -76,8 +76,8 @@ static __always_inline void set_ethhdr(struct ethhdr *new_eth,
 
 static __always_inline int handle_ipv4(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	struct iptnl_info *tnl;
 	struct ethhdr *new_eth;
 	struct ethhdr *old_eth;
@@ -112,8 +112,8 @@ static __always_inline int handle_ipv4(struct xdp_md *xdp)
 	if (bpf_xdp_adjust_head(xdp, 0 - (int)sizeof(struct iphdr)))
 		return XDP_DROP;
 
-	data = (void *)(long)xdp->data;
-	data_end = (void *)(long)xdp->data_end;
+	data = (void *)(unsigned long)xdp->data;
+	data_end = (void *)(unsigned long)xdp->data_end;
 
 	new_eth = data;
 	iph = data + sizeof(*new_eth);
@@ -151,8 +151,8 @@ static __always_inline int handle_ipv4(struct xdp_md *xdp)
 
 static __always_inline int handle_ipv6(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	struct iptnl_info *tnl;
 	struct ethhdr *new_eth;
 	struct ethhdr *old_eth;
@@ -184,8 +184,8 @@ static __always_inline int handle_ipv6(struct xdp_md *xdp)
 	if (bpf_xdp_adjust_head(xdp, 0 - (int)sizeof(struct ipv6hdr)))
 		return XDP_DROP;
 
-	data = (void *)(long)xdp->data;
-	data_end = (void *)(long)xdp->data_end;
+	data = (void *)(unsigned long)xdp->data;
+	data_end = (void *)(unsigned long)xdp->data_end;
 
 	new_eth = data;
 	ip6h = data + sizeof(*new_eth);
@@ -215,8 +215,8 @@ static __always_inline int handle_ipv6(struct xdp_md *xdp)
 SEC("xdp.frags")
 int _xdp_tx_iptunnel(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	struct ethhdr *eth = data;
 	__u16 h_proto;
 

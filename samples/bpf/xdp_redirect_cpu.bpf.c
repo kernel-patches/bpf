@@ -96,8 +96,8 @@ bool parse_eth(struct ethhdr *eth, void *data_end,
 static __always_inline
 u16 get_dest_port_ipv4_udp(struct xdp_md *ctx, u64 nh_off)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct iphdr *iph = data + nh_off;
 	struct udphdr *udph;
 
@@ -116,8 +116,8 @@ u16 get_dest_port_ipv4_udp(struct xdp_md *ctx, u64 nh_off)
 static __always_inline
 int get_proto_ipv4(struct xdp_md *ctx, u64 nh_off)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct iphdr *iph = data + nh_off;
 
 	if (iph + 1 > data_end)
@@ -128,8 +128,8 @@ int get_proto_ipv4(struct xdp_md *ctx, u64 nh_off)
 static __always_inline
 int get_proto_ipv6(struct xdp_md *ctx, u64 nh_off)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct ipv6hdr *ip6h = data + nh_off;
 
 	if (ip6h + 1 > data_end)
@@ -167,8 +167,8 @@ int  xdp_prognum0_no_touch(struct xdp_md *ctx)
 SEC("xdp")
 int  xdp_prognum1_touch_data(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	struct datarec *rec;
@@ -209,8 +209,8 @@ int  xdp_prognum1_touch_data(struct xdp_md *ctx)
 SEC("xdp")
 int  xdp_prognum2_round_robin(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct datarec *rec;
 	u32 cpu_dest = 0;
@@ -254,8 +254,8 @@ int  xdp_prognum2_round_robin(struct xdp_md *ctx)
 SEC("xdp")
 int  xdp_prognum3_proto_separate(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	u8 ip_proto = IPPROTO_UDP;
@@ -320,8 +320,8 @@ int  xdp_prognum3_proto_separate(struct xdp_md *ctx)
 SEC("xdp")
 int  xdp_prognum4_ddos_filter_pktgen(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	u8 ip_proto = IPPROTO_UDP;
@@ -396,8 +396,8 @@ int  xdp_prognum4_ddos_filter_pktgen(struct xdp_md *ctx)
 static __always_inline
 u32 get_ipv4_hash_ip_pair(struct xdp_md *ctx, u64 nh_off)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct iphdr *iph = data + nh_off;
 	u32 cpu_hash;
 
@@ -413,8 +413,8 @@ u32 get_ipv4_hash_ip_pair(struct xdp_md *ctx, u64 nh_off)
 static __always_inline
 u32 get_ipv6_hash_ip_pair(struct xdp_md *ctx, u64 nh_off)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct ipv6hdr *ip6h = data + nh_off;
 	u32 cpu_hash;
 
@@ -437,8 +437,8 @@ u32 get_ipv6_hash_ip_pair(struct xdp_md *ctx, u64 nh_off)
 SEC("xdp")
 int  xdp_prognum5_lb_hash_ip_pairs(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	struct datarec *rec;
@@ -494,8 +494,8 @@ int  xdp_prognum5_lb_hash_ip_pairs(struct xdp_md *ctx)
 SEC("xdp/cpumap")
 int xdp_redirect_cpu_devmap(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct ethhdr *eth = data;
 	u64 nh_off;
 
@@ -522,8 +522,8 @@ int xdp_redirect_cpu_drop(struct xdp_md *ctx)
 SEC("xdp/devmap")
 int xdp_redirect_egress_prog(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct ethhdr *eth = data;
 	u64 nh_off;
 

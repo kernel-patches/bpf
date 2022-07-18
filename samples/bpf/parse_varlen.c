@@ -112,9 +112,9 @@ static int parse_ipv6(void *data, uint64_t nh_off, void *data_end)
 SEC("varlen")
 int handle_ingress(struct __sk_buff *skb)
 {
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct ethhdr *eth = data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	uint64_t h_proto, nh_off;
 
 	nh_off = sizeof(*eth);

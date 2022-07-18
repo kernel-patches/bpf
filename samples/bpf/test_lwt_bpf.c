@@ -67,8 +67,8 @@ int do_test_cb(struct __sk_buff *skb)
 SEC("test_data")
 int do_test_data(struct __sk_buff *skb)
 {
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	struct iphdr *iph = data;
 
 	if (data + sizeof(*iph) > data_end) {

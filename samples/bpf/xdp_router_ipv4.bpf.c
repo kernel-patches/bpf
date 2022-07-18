@@ -73,8 +73,8 @@ struct {
 SEC("xdp")
 int xdp_router_ipv4_prog(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct ethhdr *eth = data;
 	u64 nh_off = sizeof(*eth);
 	struct datarec *rec;
