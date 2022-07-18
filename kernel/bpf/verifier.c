@@ -1167,7 +1167,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return -ENOMEM;
 	dst_state->jmp_history_cnt = src->jmp_history_cnt;
 
-	/* if dst has more stack frames then src frame, free them */
+	/* if dst has more stack frames than src frame, free them */
 	for (i = src->curframe + 1; i <= dst_state->curframe; i++) {
 		free_func_state(dst_state->frame[i]);
 		dst_state->frame[i] = NULL;
