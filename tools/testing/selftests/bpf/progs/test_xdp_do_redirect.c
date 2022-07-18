@@ -15,9 +15,9 @@ volatile int retcode = XDP_REDIRECT;
 SEC("xdp")
 int xdp_redirect(struct xdp_md *xdp)
 {
-	__u32 *metadata = (void *)(long)xdp->data_meta;
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	__u32 *metadata = (void *)(unsigned long)xdp->data_meta;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 
 	__u8 *payload = data + HDR_SZ;
 	int ret = retcode;
@@ -72,8 +72,8 @@ static bool check_pkt(void *data, void *data_end)
 SEC("xdp")
 int xdp_count_pkts(struct xdp_md *xdp)
 {
-	void *data = (void *)(long)xdp->data;
-	void *data_end = (void *)(long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
 
 	if (check_pkt(data, data_end))
 		pkts_seen_xdp++;
@@ -88,8 +88,8 @@ int xdp_count_pkts(struct xdp_md *xdp)
 SEC("tc")
 int tc_count_pkts(struct __sk_buff *skb)
 {
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 
 	if (check_pkt(data, data_end))
 		pkts_seen_tc++;

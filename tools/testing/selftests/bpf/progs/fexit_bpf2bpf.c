@@ -116,8 +116,8 @@ __u64 test_get_skb_ifindex = 0;
 SEC("freplace/get_skb_ifindex")
 int new_get_skb_ifindex(int val, struct __sk_buff *skb, int var)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct ipv6hdr ip6, *ip6p;
 	int ifindex = skb->ifindex;
 	__u32 eth_proto;
@@ -159,8 +159,8 @@ SEC("freplace/test_pkt_write_access_subprog")
 int new_test_pkt_write_access_subprog(struct __sk_buff *skb, __u32 off)
 {
 
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	struct tcphdr *tcp;
 
 	if (off > sizeof(struct ethhdr) + sizeof(struct ipv6hdr))

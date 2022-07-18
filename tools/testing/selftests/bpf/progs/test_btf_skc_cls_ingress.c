@@ -32,7 +32,7 @@ static void test_syncookie_helper(struct ipv6hdr *ip6h, struct tcphdr *th,
 		__s64 mss_cookie;
 		void *data_end;
 
-		data_end = (void *)(long)(skb->data_end);
+		data_end = (void *)(unsigned long)(skb->data_end);
 
 		if (th->doff * 4 != 40) {
 			LOG();
@@ -74,7 +74,7 @@ static int handle_ip6_tcp(struct ipv6hdr *ip6h, struct __sk_buff *skb)
 	struct tcphdr *th;
 	void *data_end;
 
-	data_end = (void *)(long)(skb->data_end);
+	data_end = (void *)(unsigned long)(skb->data_end);
 
 	th = (struct tcphdr *)(ip6h + 1);
 	if (th + 1 > data_end)
@@ -152,9 +152,9 @@ int cls_ingress(struct __sk_buff *skb)
 	struct ethhdr *eth;
 	void *data_end;
 
-	data_end = (void *)(long)(skb->data_end);
+	data_end = (void *)(unsigned long)(skb->data_end);
 
-	eth = (struct ethhdr *)(long)(skb->data);
+	eth = (struct ethhdr *)(unsigned long)(skb->data);
 	if (eth + 1 > data_end)
 		return TC_ACT_OK;
 

@@ -5,8 +5,8 @@
 SEC("xdp")
 int _xdp_adjust_tail_grow(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	int data_len = bpf_xdp_get_buff_len(xdp);
 	int offset = 0;
 

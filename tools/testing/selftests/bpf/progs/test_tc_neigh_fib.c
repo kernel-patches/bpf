@@ -15,7 +15,7 @@
 #include <bpf/bpf_endian.h>
 
 #ifndef ctx_ptr
-# define ctx_ptr(field)		(void *)(long)(field)
+# define ctx_ptr(field)		(void *)(unsigned long)(field)
 #endif
 
 #define AF_INET 2

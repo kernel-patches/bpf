@@ -91,8 +91,8 @@ static __always_inline void *bpf_flow_dissect_get_header(struct __sk_buff *skb,
 							 __u16 hdr_size,
 							 void *buffer)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	__u16 thoff = skb->flow_keys->thoff;
 	__u8 *hdr;
 
@@ -150,7 +150,7 @@ int _dissect(struct __sk_buff *skb)
 static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 {
 	struct bpf_flow_keys *keys = skb->flow_keys;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	struct icmphdr *icmp, _icmp;
 	struct gre_hdr *gre, _gre;
 	struct ethhdr *eth, _eth;
@@ -259,9 +259,9 @@ static __always_inline int parse_ipv6_proto(struct __sk_buff *skb, __u8 nexthdr)
 
 PROG(IP)(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	struct bpf_flow_keys *keys = skb->flow_keys;
-	void *data = (void *)(long)skb->data;
+	void *data = (void *)(unsigned long)skb->data;
 	struct iphdr *iph, _iph;
 	bool done = false;
 

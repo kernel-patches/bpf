@@ -42,8 +42,8 @@ char _license[] SEC("license") = "GPL";
 static inline struct bpf_sock_tuple *
 get_tuple(struct __sk_buff *skb, bool *ipv4, bool *tcp)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct bpf_sock_tuple *result;
 	struct ethhdr *eth;
 	__u64 tuple_len;
@@ -96,7 +96,7 @@ handle_udp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 	int ret;
 
 	tuple_len = ipv4 ? sizeof(tuple->ipv4) : sizeof(tuple->ipv6);
-	if ((void *)tuple + tuple_len > (void *)(long)skb->data_end)
+	if ((void *)tuple + tuple_len > (void *)(unsigned long)skb->data_end)
 		return TC_ACT_SHOT;
 
 	sk = bpf_sk_lookup_udp(skb, tuple, tuple_len, BPF_F_CURRENT_NETNS, 0);
@@ -127,7 +127,7 @@ handle_tcp(struct __sk_buff *skb, struct bpf_sock_tuple *tuple, bool ipv4)
 	int ret;
 
 	tuple_len = ipv4 ? sizeof(tuple->ipv4) : sizeof(tuple->ipv6);
-	if ((void *)tuple + tuple_len > (void *)(long)skb->data_end)
+	if ((void *)tuple + tuple_len > (void *)(unsigned long)skb->data_end)
 		return TC_ACT_SHOT;
 
 	sk = bpf_skc_lookup_tcp(skb, tuple, tuple_len, BPF_F_CURRENT_NETNS, 0);

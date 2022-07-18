@@ -31,8 +31,8 @@ SEC("xdp/devmap")
 int xdp_dummy_dm(struct xdp_md *ctx)
 {
 	char fmt[] = "devmap redirect: dev %u -> dev %u len %u\n";
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	unsigned int len = data_end - data;
 
 	bpf_trace_printk(fmt, sizeof(fmt),

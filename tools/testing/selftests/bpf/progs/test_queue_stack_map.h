@@ -27,8 +27,8 @@ struct {
 SEC("tc")
 int _test(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct ethhdr *eth = (struct ethhdr *)(data);
 	__u32 value;
 	int err;

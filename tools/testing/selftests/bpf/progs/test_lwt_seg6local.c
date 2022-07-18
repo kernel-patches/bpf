@@ -57,8 +57,8 @@ static __always_inline struct ip6_srh_t *get_srh(struct __sk_buff *skb)
 	struct ip6_t *ip;
 	uint8_t *ipver;
 
-	data_end = (void *)(long)skb->data_end;
-	cursor = (void *)(long)skb->data;
+	data_end = (void *)(unsigned long)skb->data_end;
+	cursor = (void *)(unsigned long)skb->data;
 	ipver = (uint8_t *)cursor;
 
 	if ((void *)ipver + sizeof(*ipver) > data_end)
@@ -123,7 +123,7 @@ int is_valid_tlv_boundary(struct __sk_buff *skb, struct ip6_srh_t *srh,
 	int offset_valid = 0;
 	int err;
 
-	srh_off = (char *)srh - (char *)(long)skb->data;
+	srh_off = (char *)srh - (char *)(unsigned long)skb->data;
 	// cur_off = end of segments, start of possible TLVs
 	cur_off = srh_off + sizeof(*srh) +
 		sizeof(struct ip6_addr_t) * (srh->first_segment + 1);
@@ -177,7 +177,7 @@ static __always_inline
 int add_tlv(struct __sk_buff *skb, struct ip6_srh_t *srh, uint32_t tlv_off,
 	    struct sr6_tlv_t *itlv, uint8_t tlv_size)
 {
-	uint32_t srh_off = (char *)srh - (char *)(long)skb->data;
+	uint32_t srh_off = (char *)srh - (char *)(unsigned long)skb->data;
 	uint8_t len_remaining, new_pad;
 	uint32_t pad_off = 0;
 	uint32_t pad_size = 0;
@@ -221,7 +221,7 @@ static __always_inline
 int delete_tlv(struct __sk_buff *skb, struct ip6_srh_t *srh,
 	       uint32_t tlv_off)
 {
-	uint32_t srh_off = (char *)srh - (char *)(long)skb->data;
+	uint32_t srh_off = (char *)srh - (char *)(unsigned long)skb->data;
 	uint8_t len_remaining, new_pad;
 	uint32_t partial_srh_len;
 	uint32_t pad_off = 0;

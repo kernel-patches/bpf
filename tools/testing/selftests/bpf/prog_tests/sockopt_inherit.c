@@ -97,7 +97,7 @@ static void *server_thread(void *arg)
 
 	close(client_fd);
 
-	return (void *)(long)err;
+	return (void *)(unsigned long)err;
 }
 
 static int start_server(void)

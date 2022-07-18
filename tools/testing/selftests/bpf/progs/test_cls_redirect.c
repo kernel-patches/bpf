@@ -501,8 +501,8 @@ static INLINING ret_t forward_with_gre(struct __sk_buff *skb, encap_headers_t *e
 
 	buf_t pkt = {
 		.skb = skb,
-		.head = (uint8_t *)(long)skb->data,
-		.tail = (uint8_t *)(long)skb->data_end,
+		.head = (uint8_t *)(unsigned long)skb->data,
+		.tail = (uint8_t *)(unsigned long)skb->data_end,
 	};
 
 	encap_gre_t *encap_gre = buf_assign(&pkt, sizeof(encap_gre_t), NULL);
@@ -956,8 +956,8 @@ int cls_redirect(struct __sk_buff *skb)
 
 	buf_t pkt = {
 		.skb = skb,
-		.head = (uint8_t *)(long)skb->data,
-		.tail = (uint8_t *)(long)skb->data_end,
+		.head = (uint8_t *)(unsigned long)skb->data,
+		.tail = (uint8_t *)(unsigned long)skb->data_end,
 	};
 
 	encap = buf_assign(&pkt, sizeof(*encap), NULL);

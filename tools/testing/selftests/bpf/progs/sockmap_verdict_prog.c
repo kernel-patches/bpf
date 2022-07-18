@@ -33,8 +33,8 @@ struct {
 SEC("sk_skb2")
 int bpf_prog2(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long) skb->data_end;
-	void *data = (void *)(long) skb->data;
+	void *data_end = (void *)(unsigned long) skb->data_end;
+	void *data = (void *)(unsigned long) skb->data;
 	__u32 lport = skb->local_port;
 	__u32 rport = skb->remote_port;
 	__u8 *d = data;

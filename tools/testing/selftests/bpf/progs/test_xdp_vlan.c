@@ -105,8 +105,8 @@ bool parse_eth_frame(struct ethhdr *eth, void *data_end, struct parse_pkt *pkt)
 SEC("xdp_drop_vlan_4011")
 int  xdp_prognum0(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct parse_pkt pkt = { 0 };
 
 	if (!parse_eth_frame(data, data_end, &pkt))
@@ -147,8 +147,8 @@ Load prog with ip tool:
 SEC("xdp_vlan_change")
 int  xdp_prognum1(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct parse_pkt pkt = { 0 };
 
 	if (!parse_eth_frame(data, data_end, &pkt))
@@ -181,8 +181,8 @@ int  xdp_prognum1(struct xdp_md *ctx)
 SEC("xdp_vlan_remove_outer")
 int  xdp_prognum2(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct parse_pkt pkt = { 0 };
 	char *dest;
 
@@ -240,8 +240,8 @@ void shift_mac_4bytes_32bit(void *data)
 SEC("xdp_vlan_remove_outer2")
 int  xdp_prognum3(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data     = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data     = (void *)(unsigned long)ctx->data;
 	struct ethhdr *orig_eth = data;
 	struct parse_pkt pkt = { 0 };
 

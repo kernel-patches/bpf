@@ -44,8 +44,8 @@ __be16 server_port;
 SEC("xdp")
 int drop_ack(struct xdp_md *xdp)
 {
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 	struct ethhdr *eth = data;
 	struct tcphdr *tcp = NULL;
 

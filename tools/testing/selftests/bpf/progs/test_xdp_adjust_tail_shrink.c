@@ -12,8 +12,8 @@
 SEC("xdp")
 int _xdp_adjust_tail_shrink(struct xdp_md *xdp)
 {
-	__u8 *data_end = (void *)(long)xdp->data_end;
-	__u8 *data = (void *)(long)xdp->data;
+	__u8 *data_end = (void *)(unsigned long)xdp->data_end;
+	__u8 *data = (void *)(unsigned long)xdp->data;
 	int offset = 0;
 
 	switch (bpf_xdp_get_buff_len(xdp)) {

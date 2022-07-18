@@ -133,7 +133,7 @@ void serial_test_bpf_obj_id(void)
 			  load_time < now - 60 || load_time > now + 60 ||
 			  prog_infos[i].created_by_uid != my_uid ||
 			  prog_infos[i].nr_map_ids != 1 ||
-			  *(int *)(long)prog_infos[i].map_ids != map_infos[i].id ||
+			  *(int *)(unsigned long)prog_infos[i].map_ids != map_infos[i].id ||
 			  strcmp((char *)prog_infos[i].name, expected_prog_name),
 			  "get-prog-info(fd)",
 			  "err %d errno %d i %d type %d(%d) info_len %u(%zu) "
@@ -152,7 +152,7 @@ void serial_test_bpf_obj_id(void)
 			  load_time, now,
 			  prog_infos[i].created_by_uid, my_uid,
 			  prog_infos[i].nr_map_ids, 1,
-			  *(int *)(long)prog_infos[i].map_ids, map_infos[i].id,
+			  *(int *)(unsigned long)prog_infos[i].map_ids, map_infos[i].id,
 			  prog_infos[i].name, expected_prog_name))
 			goto done;
 
@@ -225,7 +225,7 @@ void serial_test_bpf_obj_id(void)
 		bzero(&prog_info, sizeof(prog_info));
 		info_len = sizeof(prog_info);
 
-		saved_map_id = *(int *)((long)prog_infos[i].map_ids);
+		saved_map_id = *(int *)((unsigned long)prog_infos[i].map_ids);
 		prog_info.map_ids = prog_infos[i].map_ids;
 		prog_info.nr_map_ids = 2;
 		err = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &info_len);
@@ -233,12 +233,12 @@ void serial_test_bpf_obj_id(void)
 		prog_infos[i].xlated_prog_insns = 0;
 		CHECK(err || info_len != sizeof(struct bpf_prog_info) ||
 		      memcmp(&prog_info, &prog_infos[i], info_len) ||
-		      *(int *)(long)prog_info.map_ids != saved_map_id,
+		      *(int *)(unsigned long)prog_info.map_ids != saved_map_id,
 		      "get-prog-info(next_id->fd)",
 		      "err %d errno %d info_len %u(%zu) memcmp %d map_id %u(%u)\n",
 		      err, errno, info_len, sizeof(struct bpf_prog_info),
 		      memcmp(&prog_info, &prog_infos[i], info_len),
-		      *(int *)(long)prog_info.map_ids, saved_map_id);
+		      *(int *)(unsigned long)prog_info.map_ids, saved_map_id);
 		close(prog_fd);
 	}
 	CHECK(nr_id_found != nr_iters,

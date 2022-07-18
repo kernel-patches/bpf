@@ -5,8 +5,8 @@
 SEC("sk_skb1")
 int bpf_prog1(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long) skb->data_end;
-	void *data = (void *)(long) skb->data;
+	void *data_end = (void *)(unsigned long) skb->data_end;
+	void *data = (void *)(unsigned long) skb->data;
 	__u8 *d = data;
 	int err;
 
@@ -15,8 +15,8 @@ int bpf_prog1(struct __sk_buff *skb)
 		if (err)
 			return SK_DROP;
 
-		data_end = (void *)(long)skb->data_end;
-		data = (void *)(long)skb->data;
+		data_end = (void *)(unsigned long)skb->data_end;
+		data = (void *)(unsigned long)skb->data;
 		if (data + 10 > data_end)
 			return SK_DROP;
 	}

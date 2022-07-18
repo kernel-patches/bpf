@@ -13,8 +13,8 @@ int _version SEC("version") = 1;
 SEC("xdp.frags")
 int xdp_adjust_frags(struct xdp_md *xdp)
 {
-	__u8 *data_end = (void *)(long)xdp->data_end;
-	__u8 *data = (void *)(long)xdp->data;
+	__u8 *data_end = (void *)(unsigned long)xdp->data_end;
+	__u8 *data = (void *)(unsigned long)xdp->data;
 	__u8 val[16] = {};
 	__u32 offset;
 	int err;

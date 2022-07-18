@@ -6,7 +6,7 @@
 
 #define INLINE __always_inline
 
-#define skb_shorter(skb, len) ((void *)(long)(skb)->data + (len) > (void *)(long)skb->data_end)
+#define skb_shorter(skb, len) ((void *)(unsigned long)(skb)->data + (len) > (void *)(unsigned long)skb->data_end)
 
 #define ETH_IPV4_TCP_SIZE (14 + sizeof(struct iphdr) + sizeof(struct tcphdr))
 
@@ -18,7 +18,7 @@ static INLINE struct iphdr *get_iphdr(struct __sk_buff *skb)
 	if (skb_shorter(skb, ETH_IPV4_TCP_SIZE))
 		goto out;
 
-	eth = (void *)(long)skb->data;
+	eth = (void *)(unsigned long)skb->data;
 	ip = (void *)(eth + 1);
 
 out:

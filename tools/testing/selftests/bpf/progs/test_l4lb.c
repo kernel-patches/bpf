@@ -322,7 +322,7 @@ static __always_inline bool parse_tcp(void *data, __u64 off, void *data_end,
 static __always_inline int process_packet(void *data, __u64 off, void *data_end,
 					  bool is_ipv6, struct __sk_buff *skb)
 {
-	void *pkt_start = (void *)(long)skb->data;
+	void *pkt_start = (void *)(unsigned long)skb->data;
 	struct packet_description pckt = {};
 	struct eth_hdr *eth = pkt_start;
 	struct bpf_tunnel_key tkey = {};
@@ -451,8 +451,8 @@ static __always_inline int process_packet(void *data, __u64 off, void *data_end,
 SEC("tc")
 int balancer_ingress(struct __sk_buff *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct eth_hdr *eth = data;
 	__u32 eth_proto;
 	__u32 nh_off;

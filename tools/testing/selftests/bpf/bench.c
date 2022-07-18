@@ -567,7 +567,7 @@ static void setup_benchmark()
 
 	for (i = 0; i < env.consumer_cnt; i++) {
 		err = pthread_create(&state.consumers[i], NULL,
-				     bench->consumer_thread, (void *)(long)i);
+				     bench->consumer_thread, (void *)(unsigned long)i);
 		if (err) {
 			fprintf(stderr, "failed to create consumer thread #%d: %d\n",
 				i, -errno);
@@ -586,7 +586,7 @@ static void setup_benchmark()
 
 	for (i = 0; i < env.producer_cnt; i++) {
 		err = pthread_create(&state.producers[i], NULL,
-				     bench->producer_thread, (void *)(long)i);
+				     bench->producer_thread, (void *)(unsigned long)i);
 		if (err) {
 			fprintf(stderr, "failed to create producer thread #%d: %d\n",
 				i, -errno);

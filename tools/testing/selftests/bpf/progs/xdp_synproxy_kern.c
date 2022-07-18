@@ -799,8 +799,8 @@ static __always_inline int syncookie_part2(void *ctx, void *data, void *data_end
 SEC("xdp")
 int syncookie_xdp(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	struct header_pointers hdr;
 	int ret;
 
@@ -808,8 +808,8 @@ int syncookie_xdp(struct xdp_md *ctx)
 	if (ret != XDP_TX)
 		return ret;
 
-	data_end = (void *)(long)ctx->data_end;
-	data = (void *)(long)ctx->data;
+	data_end = (void *)(unsigned long)ctx->data_end;
+	data = (void *)(unsigned long)ctx->data;
 
 	return syncookie_part2(ctx, data, data_end, &hdr, true);
 }
@@ -817,8 +817,8 @@ int syncookie_xdp(struct xdp_md *ctx)
 SEC("tc")
 int syncookie_tc(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct header_pointers hdr;
 	int ret;
 
@@ -826,8 +826,8 @@ int syncookie_tc(struct __sk_buff *skb)
 	if (ret != XDP_TX)
 		return ret == XDP_PASS ? TC_ACT_OK : TC_ACT_SHOT;
 
-	data_end = (void *)(long)skb->data_end;
-	data = (void *)(long)skb->data;
+	data_end = (void *)(unsigned long)skb->data_end;
+	data = (void *)(unsigned long)skb->data;
 
 	ret = syncookie_part2(skb, data, data_end, &hdr, false);
 	switch (ret) {

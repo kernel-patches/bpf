@@ -288,8 +288,8 @@ bool encap_v6(struct xdp_md *xdp, struct ctl_value *cval,
 
 	if (bpf_xdp_adjust_head(xdp, 0 - (int)sizeof(struct ipv6hdr)))
 		return false;
-	data = (void *)(long)xdp->data;
-	data_end = (void *)(long)xdp->data_end;
+	data = (void *)(unsigned long)xdp->data;
+	data_end = (void *)(unsigned long)xdp->data_end;
 	new_eth = data;
 	ip6h = data + sizeof(struct eth_hdr);
 	old_eth = data + sizeof(struct ipv6hdr);
@@ -336,8 +336,8 @@ bool encap_v4(struct xdp_md *xdp, struct ctl_value *cval,
 	ip_suffix ^= pckt->flow.src;
 	if (bpf_xdp_adjust_head(xdp, 0 - (int)sizeof(struct iphdr)))
 		return false;
-	data = (void *)(long)xdp->data;
-	data_end = (void *)(long)xdp->data_end;
+	data = (void *)(unsigned long)xdp->data;
+	data_end = (void *)(unsigned long)xdp->data_end;
 	new_eth = data;
 	iph = data + sizeof(struct eth_hdr);
 	old_eth = data + sizeof(struct iphdr);
@@ -387,8 +387,8 @@ bool decap_v6(struct xdp_md *xdp, void **data, void **data_end, bool inner_v4)
 		new_eth->eth_proto = 56710;
 	if (bpf_xdp_adjust_head(xdp, (int)sizeof(struct ipv6hdr)))
 		return false;
-	*data = (void *)(long)xdp->data;
-	*data_end = (void *)(long)xdp->data_end;
+	*data = (void *)(unsigned long)xdp->data;
+	*data_end = (void *)(unsigned long)xdp->data_end;
 	return true;
 }
 
@@ -405,8 +405,8 @@ bool decap_v4(struct xdp_md *xdp, void **data, void **data_end)
 	new_eth->eth_proto = 8;
 	if (bpf_xdp_adjust_head(xdp, (int)sizeof(struct iphdr)))
 		return false;
-	*data = (void *)(long)xdp->data;
-	*data_end = (void *)(long)xdp->data_end;
+	*data = (void *)(unsigned long)xdp->data;
+	*data_end = (void *)(unsigned long)xdp->data_end;
 	return true;
 }
 
@@ -789,8 +789,8 @@ out:
 	data_stats->v1 += 1;
 	data_stats->v2 += pkt_bytes;
 
-	data = (void *)(long)xdp->data;
-	data_end = (void *)(long)xdp->data_end;
+	data = (void *)(unsigned long)xdp->data;
+	data_end = (void *)(unsigned long)xdp->data_end;
 	if (data + 4 > data_end)
 		return XDP_DROP;
 	*(u32 *)data = dst->dst;
@@ -800,8 +800,8 @@ out:
 SEC("xdp")
 int balancer_ingress_v4(struct xdp_md *ctx)
 {
-	void *data = (void *)(long)ctx->data;
-	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
 	struct eth_hdr *eth = data;
 	__u32 eth_proto;
 	__u32 nh_off;
@@ -819,8 +819,8 @@ int balancer_ingress_v4(struct xdp_md *ctx)
 SEC("xdp")
 int balancer_ingress_v6(struct xdp_md *ctx)
 {
-	void *data = (void *)(long)ctx->data;
-	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
 	struct eth_hdr *eth = data;
 	__u32 eth_proto;
 	__u32 nh_off;

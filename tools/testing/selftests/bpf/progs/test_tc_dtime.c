@@ -25,7 +25,7 @@
  *            ns_fwd: Fowarding namespace
  */
 
-#define ctx_ptr(field)		(void *)(long)(field)
+#define ctx_ptr(field)		(void *)(unsigned long)(field)
 
 #define ip4_src			__bpf_htonl(0xac100164) /* 172.16.1.100 */
 #define ip4_dst			__bpf_htonl(0xac100264) /* 172.16.2.100 */

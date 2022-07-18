@@ -77,7 +77,7 @@ static void *get_thread_state(void *tls_base, PidData *pidData)
 	void* thread_state;
 	int key;
 
-	bpf_probe_read_user(&key, sizeof(key), (void*)(long)pidData->tls_key_addr);
+	bpf_probe_read_user(&key, sizeof(key), (void *)(unsigned long)pidData->tls_key_addr);
 	bpf_probe_read_user(&thread_state, sizeof(thread_state),
 			    tls_base + 0x310 + key * 0x10 + 0x08);
 	return thread_state;
@@ -241,7 +241,7 @@ int __on_event(struct bpf_raw_tracepoint_args *ctx)
 	void* thread_state_current = (void*)0;
 	bpf_probe_read_user(&thread_state_current,
 			    sizeof(thread_state_current),
-			    (void*)(long)pidData->current_state_addr);
+			    (void *)(unsigned long)pidData->current_state_addr);
 
 	struct task_struct* task = (struct task_struct*)bpf_get_current_task();
 	void* tls_base = (void*)task;

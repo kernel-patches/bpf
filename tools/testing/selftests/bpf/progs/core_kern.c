@@ -74,8 +74,8 @@ struct bpf_testmod_test_read_ctx /* it exists in bpf_testmod */ {
 SEC("tc")
 int balancer_ingress(struct __sk_buff *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	void *ptr;
 	int ret = 0, nh_off, i = 0;
 

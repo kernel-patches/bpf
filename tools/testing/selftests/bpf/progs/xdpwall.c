@@ -317,8 +317,8 @@ static __always_inline __u8 parse_ipv6_gue(struct pkt_info *info,
 SEC("xdp")
 int edgewall(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)(ctx->data_end);
-	void *data = (void *)(long)(ctx->data);
+	void *data_end = (void *)(unsigned long)(ctx->data_end);
+	void *data = (void *)(unsigned long)(ctx->data);
 	struct fw_match_info match_info = {};
 	struct pkt_info info = {};
 	__u8 parse_err = NO_ERR;

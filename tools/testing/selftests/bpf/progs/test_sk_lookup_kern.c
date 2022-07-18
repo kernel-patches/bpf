@@ -55,8 +55,8 @@ static struct bpf_sock_tuple *get_tuple(void *data, __u64 nh_off,
 SEC("?tc")
 int sk_lookup_success(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct ethhdr *eth = (struct ethhdr *)(data);
 	struct bpf_sock_tuple *tuple;
 	struct bpf_sock *sk;

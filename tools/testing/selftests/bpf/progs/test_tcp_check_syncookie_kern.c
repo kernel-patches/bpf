@@ -151,16 +151,16 @@ release:
 SEC("tc")
 int check_syncookie_clsact(struct __sk_buff *skb)
 {
-	check_syncookie(skb, (void *)(long)skb->data,
-			(void *)(long)skb->data_end);
+	check_syncookie(skb, (void *)(unsigned long)skb->data,
+			(void *)(unsigned long)skb->data_end);
 	return TC_ACT_OK;
 }
 
 SEC("xdp")
 int check_syncookie_xdp(struct xdp_md *ctx)
 {
-	check_syncookie(ctx, (void *)(long)ctx->data,
-			(void *)(long)ctx->data_end);
+	check_syncookie(ctx, (void *)(unsigned long)ctx->data,
+			(void *)(unsigned long)ctx->data_end);
 	return XDP_PASS;
 }
 

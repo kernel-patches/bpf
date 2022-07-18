@@ -58,8 +58,8 @@ out:
 SEC("xdp")
 int xdp_exceed_mtu(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	__u32 ifindex = GLOBAL_USER_IFINDEX;
 	__u32 data_len = data_end - data;
 	int retval = XDP_ABORTED; /* Fail */
@@ -85,8 +85,8 @@ SEC("xdp")
 int xdp_minus_delta(struct xdp_md *ctx)
 {
 	int retval = XDP_PASS; /* Expected retval on successful test */
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	__u32 ifindex = GLOBAL_USER_IFINDEX;
 	__u32 data_len = data_end - data;
 	__u32 mtu_len = 0;
@@ -109,8 +109,8 @@ SEC("xdp")
 int xdp_input_len(struct xdp_md *ctx)
 {
 	int retval = XDP_PASS; /* Expected retval on successful test */
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	__u32 ifindex = GLOBAL_USER_IFINDEX;
 	__u32 data_len = data_end - data;
 
@@ -200,8 +200,8 @@ SEC("tc")
 int tc_exceed_mtu_da(struct __sk_buff *ctx)
 {
 	/* SKB Direct-Access variant */
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
+	void *data = (void *)(unsigned long)ctx->data;
 	__u32 ifindex = GLOBAL_USER_IFINDEX;
 	__u32 data_len = data_end - data;
 	int retval = BPF_DROP; /* Fail */

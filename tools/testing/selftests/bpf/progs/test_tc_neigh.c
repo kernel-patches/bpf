@@ -15,7 +15,7 @@
 #include <bpf/bpf_endian.h>
 
 #ifndef ctx_ptr
-# define ctx_ptr(field)		(void *)(long)(field)
+# define ctx_ptr(field)		(void *)(unsigned long)(field)
 #endif
 
 #define ip4_src			0xac100164 /* 172.16.1.100 */

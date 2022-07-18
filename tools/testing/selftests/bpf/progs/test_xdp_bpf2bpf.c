@@ -45,8 +45,8 @@ SEC("fentry/FUNC")
 int BPF_PROG(trace_on_entry, struct xdp_buff *xdp)
 {
 	struct meta meta;
-	void *data_end = (void *)(long)xdp->data_end;
-	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(unsigned long)xdp->data_end;
+	void *data = (void *)(unsigned long)xdp->data;
 
 	meta.ifindex = xdp->rxq->dev->ifindex;
 	meta.pkt_len = bpf_xdp_get_buff_len((struct xdp_md *)xdp);

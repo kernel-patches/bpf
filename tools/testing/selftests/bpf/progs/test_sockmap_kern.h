@@ -140,8 +140,8 @@ static inline void bpf_write_pass(struct __sk_buff *skb, int offset)
 	if (err)
 		return;
 
-	c = (char *)(long)skb->data;
-	data_end = (void *)(long)skb->data_end;
+	c = (char *)(unsigned long)skb->data;
+	data_end = (void *)(unsigned long)skb->data_end;
 
 	if (c + 5 + offset < data_end)
 		memcpy(c + offset, "PASS", 4);
@@ -309,8 +309,8 @@ int bpf_prog6(struct sk_msg_md *msg)
 SEC("sk_msg3")
 int bpf_prog8(struct sk_msg_md *msg)
 {
-	void *data_end = (void *)(long) msg->data_end;
-	void *data = (void *)(long) msg->data;
+	void *data_end = (void *)(unsigned long) msg->data_end;
+	void *data = (void *)(unsigned long) msg->data;
 	int ret = 0, *bytes, zero = 0;
 
 	bytes = bpf_map_lookup_elem(&sock_apply_bytes, &zero);
@@ -326,8 +326,8 @@ int bpf_prog8(struct sk_msg_md *msg)
 SEC("sk_msg4")
 int bpf_prog9(struct sk_msg_md *msg)
 {
-	void *data_end = (void *)(long) msg->data_end;
-	void *data = (void *)(long) msg->data;
+	void *data_end = (void *)(unsigned long) msg->data_end;
+	void *data = (void *)(unsigned long) msg->data;
 	int ret = 0, *bytes, zero = 0;
 
 	bytes = bpf_map_lookup_elem(&sock_cork_bytes, &zero);

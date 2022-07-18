@@ -35,15 +35,15 @@ void test_core_read_macros(void)
 	bss->my_pid = getpid();
 
 	/* next pointers have to be set from the kernel side */
-	bss->k_probe_in.func = (void *)(long)0x1234;
-	bss->k_core_in.func = (void *)(long)0xabcd;
+	bss->k_probe_in.func = (void *)(unsigned long)0x1234;
+	bss->k_core_in.func = (void *)(unsigned long)0xabcd;
 
 	u_probe_in.next = &u_probe_in;
-	u_probe_in.func = (void *)(long)0x5678;
+	u_probe_in.func = (void *)(unsigned long)0x5678;
 	bss->u_probe_in = &u_probe_in;
 
 	u_core_in.next = &u_core_in;
-	u_core_in.func = (void *)(long)0xdbca;
+	u_core_in.func = (void *)(unsigned long)0xdbca;
 	bss->u_core_in = &u_core_in;
 
 	err = test_core_read_macros__attach(skel);

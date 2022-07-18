@@ -79,8 +79,8 @@ int get_skb_ifindex(int val, struct __sk_buff *skb, int var)
 __attribute__ ((noinline))
 int test_pkt_write_access_subprog(struct __sk_buff *skb, __u32 off)
 {
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 	struct tcphdr *tcp = NULL;
 
 	if (off > sizeof(struct ethhdr) + sizeof(struct ipv6hdr))
@@ -97,8 +97,8 @@ int test_pkt_write_access_subprog(struct __sk_buff *skb, __u32 off)
 SEC("tc")
 int test_pkt_access(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct ethhdr *eth = (struct ethhdr *)(data);
 	struct tcphdr *tcp = NULL;
 	__u8 proto = 255;

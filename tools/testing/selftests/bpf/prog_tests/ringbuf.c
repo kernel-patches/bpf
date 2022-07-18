@@ -78,7 +78,7 @@ static void *poll_thread(void *input)
 {
 	long timeout = (long)input;
 
-	return (void *)(long)ring_buffer__poll(ringbuf, timeout);
+	return (void *)(unsigned long)ring_buffer__poll(ringbuf, timeout);
 }
 
 void test_ringbuf(void)
@@ -208,7 +208,7 @@ void test_ringbuf(void)
 	CHECK(cnt != 2, "cnt", "exp %d samples, got %d\n", 2, cnt);
 
 	/* start poll in background w/ long timeout */
-	err = pthread_create(&thread, NULL, poll_thread, (void *)(long)10000);
+	err = pthread_create(&thread, NULL, poll_thread, (void *)(unsigned long)10000);
 	if (CHECK(err, "bg_poll", "pthread_create failed: %d\n", err))
 		goto cleanup;
 

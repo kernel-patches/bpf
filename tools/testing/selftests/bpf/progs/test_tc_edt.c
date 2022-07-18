@@ -64,7 +64,7 @@ static inline int throttle_flow(struct __sk_buff *skb)
 
 static inline int handle_tcp(struct __sk_buff *skb, struct tcphdr *tcp)
 {
-	void *data_end = (void *)(long)skb->data_end;
+	void *data_end = (void *)(unsigned long)skb->data_end;
 
 	/* drop malformed packets */
 	if ((void *)(tcp + 1) > data_end)
@@ -78,8 +78,8 @@ static inline int handle_tcp(struct __sk_buff *skb, struct tcphdr *tcp)
 
 static inline int handle_ipv4(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(long)skb->data_end;
-	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(unsigned long)skb->data_end;
+	void *data = (void *)(unsigned long)skb->data;
 	struct iphdr *iph;
 	uint32_t ihl;
 

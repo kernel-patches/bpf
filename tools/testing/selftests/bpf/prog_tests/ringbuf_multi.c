@@ -69,12 +69,12 @@ void test_ringbuf_multi(void)
 	skel->bss->pid = getpid();
 
 	ringbuf = ring_buffer__new(bpf_map__fd(skel->maps.ringbuf1),
-				   process_sample, (void *)(long)1, NULL);
+				   process_sample, (void *)(unsigned long)1, NULL);
 	if (CHECK(!ringbuf, "ringbuf_create", "failed to create ringbuf\n"))
 		goto cleanup;
 
 	err = ring_buffer__add(ringbuf, bpf_map__fd(skel->maps.ringbuf2),
-			      process_sample, (void *)(long)2);
+			      process_sample, (void *)(unsigned long)2);
 	if (CHECK(err, "ringbuf_add", "failed to add another ring\n"))
 		goto cleanup;
 

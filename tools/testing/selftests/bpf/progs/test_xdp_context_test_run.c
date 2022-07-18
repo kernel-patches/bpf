@@ -5,8 +5,8 @@
 SEC("xdp")
 int xdp_context(struct xdp_md *xdp)
 {
-	void *data = (void *)(long)xdp->data;
-	__u32 *metadata = (void *)(long)xdp->data_meta;
+	void *data = (void *)(unsigned long)xdp->data;
+	__u32 *metadata = (void *)(unsigned long)xdp->data_meta;
 	__u32 ret;
 
 	if (metadata + 1 > data)
