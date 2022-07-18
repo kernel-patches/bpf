@@ -424,6 +424,8 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 
 		ifobj->xsk = &ifobj->xsk_arr[0];
 		ifobj->use_poll = false;
+		ifobj->skip_rx = false;
+		ifobj->skip_tx = false;
 		ifobj->use_fill_ring = true;
 		ifobj->release_rx = true;
 		ifobj->pkt_stream = test->pkt_stream_default;
@@ -587,6 +589,19 @@ static struct pkt_stream *pkt_stream_clone(struct xsk_umem_info *umem,
 					   struct pkt_stream *pkt_stream)
 {
 	return pkt_stream_generate(umem, pkt_stream->nb_pkts, pkt_stream->pkts[0].len);
+}
+
+static void pkt_stream_invalid(struct test_spec *test, u32 nb_pkts, u32 pkt_len)
+{
+	struct pkt_stream *pkt_stream;
+	u32 i;
+
+	pkt_stream = pkt_stream_generate(test->ifobj_tx->umem, nb_pkts, pkt_len);
+	for (i = 0; i < nb_pkts; i++)
+		pkt_stream->pkts[i].valid = false;
+
+	test->ifobj_tx->pkt_stream = pkt_stream;
+	test->ifobj_rx->pkt_stream = pkt_stream;
 }
 
 static void pkt_stream_replace(struct test_spec *test, u32 nb_pkts, u32 pkt_len)
@@ -817,9 +832,9 @@ static int complete_pkts(struct xsk_socket_info *xsk, int batch_size)
 	return TEST_PASS;
 }
 
-static int receive_pkts(struct ifobject *ifobj, struct pollfd *fds)
+static int receive_pkts(struct ifobject *ifobj, struct pollfd *fds, bool skip_tx)
 {
-	struct timeval tv_end, tv_now, tv_timeout = {RECV_TMOUT, 0};
+	struct timeval tv_end, tv_now, tv_timeout = {THREAD_TMOUT, 0};
 	u32 idx_rx = 0, idx_fq = 0, rcvd, i, pkts_sent = 0;
 	struct pkt_stream *pkt_stream = ifobj->pkt_stream;
 	struct xsk_socket_info *xsk = ifobj->xsk;
@@ -843,16 +858,27 @@ static int receive_pkts(struct ifobject *ifobj, struct pollfd *fds)
 		}
 
 		kick_rx(xsk);
+		if (ifobj->use_poll) {
+			ret = poll(fds, 1, POLL_TMOUT);
+			if (ret < 0)
+				exit_with_error(-ret);
+
+			if (!ret) {
+				if (skip_tx)
+					return TEST_PASS;
+
+				ksft_print_msg("ERROR: [%s] Poll timed out\n", __func__);
+				return TEST_FAILURE;
+
+			}
+
+			if (!(fds->revents & POLLIN))
+				continue;
+		}
 
 		rcvd = xsk_ring_cons__peek(&xsk->rx, BATCH_SIZE, &idx_rx);
-		if (!rcvd) {
-			if (xsk_ring_prod__needs_wakeup(&umem->fq)) {
-				ret = poll(fds, 1, POLL_TMOUT);
-				if (ret < 0)
-					exit_with_error(-ret);
-			}
+		if (!rcvd)
 			continue;
-		}
 
 		if (ifobj->use_fill_ring) {
 			ret = xsk_ring_prod__reserve(&umem->fq, rcvd, &idx_fq);
@@ -863,6 +889,7 @@ static int receive_pkts(struct ifobject *ifobj, struct pollfd *fds)
 					ret = poll(fds, 1, POLL_TMOUT);
 					if (ret < 0)
 						exit_with_error(-ret);
+					continue;
 				}
 				ret = xsk_ring_prod__reserve(&umem->fq, rcvd, &idx_fq);
 			}
@@ -900,13 +927,34 @@ static int receive_pkts(struct ifobject *ifobj, struct pollfd *fds)
 	return TEST_PASS;
 }
 
-static int __send_pkts(struct ifobject *ifobject, u32 *pkt_nb)
+static int __send_pkts(struct ifobject *ifobject, u32 *pkt_nb, bool use_poll,
+		       struct pollfd *fds, bool timeout)
 {
 	struct xsk_socket_info *xsk = ifobject->xsk;
-	u32 i, idx, valid_pkts = 0;
+	u32 i, idx, ret, valid_pkts = 0;
 
-	while (xsk_ring_prod__reserve(&xsk->tx, BATCH_SIZE, &idx) < BATCH_SIZE)
+	while (xsk_ring_prod__reserve(&xsk->tx, BATCH_SIZE, &idx) < BATCH_SIZE) {
+		if (use_poll) {
+			ret = poll(fds, 1, POLL_TMOUT);
+			if (timeout) {
+				if (ret < 0) {
+					ksft_print_msg("DEBUG: [%s] Poll error %d\n",
+						       __func__, ret);
+					return TEST_FAILURE;
+				}
+				if (ret == 0)
+					return TEST_PASS;
+				break;
+			}
+			if (ret <= 0) {
+				ksft_print_msg("DEBUG: [%s] Poll error %d\n",
+					       __func__, ret);
+				return TEST_FAILURE;
+			}
+		}
+
 		complete_pkts(xsk, BATCH_SIZE);
+	}
 
 	for (i = 0; i < BATCH_SIZE; i++) {
 		struct xdp_desc *tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx + i);
@@ -933,11 +981,27 @@ static int __send_pkts(struct ifobject *ifobject, u32 *pkt_nb)
 
 	xsk_ring_prod__submit(&xsk->tx, i);
 	xsk->outstanding_tx += valid_pkts;
-	if (complete_pkts(xsk, i))
-		return TEST_FAILURE;
 
-	usleep(10);
-	return TEST_PASS;
+	if (use_poll) {
+		ret = poll(fds, 1, POLL_TMOUT);
+		if (ret <= 0) {
+			if (ret == 0 && timeout)
+				return TEST_PASS;
+
+			ksft_print_msg("DEBUG: [%s] Poll error %d\n", __func__, ret);
+			return TEST_FAILURE;
+		}
+	}
+
+	if (!timeout) {
+		if (complete_pkts(xsk, i))
+			return TEST_FAILURE;
+
+		usleep(10);
+		return TEST_PASS;
+	}
+
+	return TEST_CONTINUE;
 }
 
 static void wait_for_tx_completion(struct xsk_socket_info *xsk)
@@ -948,29 +1012,33 @@ static void wait_for_tx_completion(struct xsk_socket_info *xsk)
 
 static int send_pkts(struct test_spec *test, struct ifobject *ifobject)
 {
+	struct timeval tv_end, tv_now, tv_timeout = {THREAD_TMOUT, 0};
+	bool timeout = test->ifobj_rx->skip_rx;
 	struct pollfd fds = { };
-	u32 pkt_cnt = 0;
+	u32 pkt_cnt = 0, ret;
 
 	fds.fd = xsk_socket__fd(ifobject->xsk->xsk);
 	fds.events = POLLOUT;
 
+	ret = gettimeofday(&tv_now, NULL);
+	if (ret)
+		exit_with_error(errno);
+	timeradd(&tv_now, &tv_timeout, &tv_end);
+
 	while (pkt_cnt < ifobject->pkt_stream->nb_pkts) {
-		int err;
-
-		if (ifobject->use_poll) {
-			int ret;
-
-			ret = poll(&fds, 1, POLL_TMOUT);
-			if (ret <= 0)
-				continue;
-
-			if (!(fds.revents & POLLOUT))
-				continue;
+		ret = gettimeofday(&tv_now, NULL);
+		if (ret)
+			exit_with_error(errno);
+		if (timercmp(&tv_now, &tv_end, >)) {
+			ksft_print_msg("ERROR: [%s] Send loop timed out\n", __func__);
+			return TEST_FAILURE;
 		}
 
-		err = __send_pkts(ifobject, &pkt_cnt);
-		if (err || test->fail)
+		ret = __send_pkts(ifobject, &pkt_cnt, ifobject->use_poll, &fds, timeout);
+		if ((ret || test->fail) && !timeout)
 			return TEST_FAILURE;
+		else if (ret == TEST_PASS && timeout)
+			return ret;
 	}
 
 	wait_for_tx_completion(ifobject->xsk);
@@ -1235,8 +1303,7 @@ static void *worker_testapp_validate_rx(void *arg)
 
 	pthread_barrier_wait(&barr);
 
-	err = receive_pkts(ifobject, &fds);
-
+	err = receive_pkts(ifobject, &fds, test->ifobj_tx->skip_tx);
 	if (!err && ifobject->validation_func)
 		err = ifobject->validation_func(ifobject);
 	if (err) {
@@ -1265,17 +1332,21 @@ static int testapp_validate_traffic(struct test_spec *test)
 	pkts_in_flight = 0;
 
 	/*Spawn RX thread */
-	pthread_create(&t0, NULL, ifobj_rx->func_ptr, test);
-
-	pthread_barrier_wait(&barr);
-	if (pthread_barrier_destroy(&barr))
-		exit_with_error(errno);
+	if (!ifobj_rx->skip_rx) {
+		pthread_create(&t0, NULL, ifobj_rx->func_ptr, test);
+		pthread_barrier_wait(&barr);
+		if (pthread_barrier_destroy(&barr))
+			exit_with_error(errno);
+	}
 
 	/*Spawn TX thread */
-	pthread_create(&t1, NULL, ifobj_tx->func_ptr, test);
+	if (!ifobj_tx->skip_tx) {
+		pthread_create(&t1, NULL, ifobj_tx->func_ptr, test);
+		pthread_join(t1, NULL);
+	}
 
-	pthread_join(t1, NULL);
-	pthread_join(t0, NULL);
+	if (!ifobj_rx->skip_rx)
+		pthread_join(t0, NULL);
 
 	return !!test->fail;
 }
@@ -1548,10 +1619,28 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 
 		pkt_stream_restore_default(test);
 		break;
-	case TEST_TYPE_POLL:
-		test->ifobj_tx->use_poll = true;
+	case TEST_TYPE_RX_POLL:
 		test->ifobj_rx->use_poll = true;
-		test_spec_set_name(test, "POLL");
+		test_spec_set_name(test, "POLL_RX");
+		testapp_validate_traffic(test);
+		break;
+	case TEST_TYPE_TX_POLL:
+		test->ifobj_tx->use_poll = true;
+		test_spec_set_name(test, "POLL_TX");
+		testapp_validate_traffic(test);
+		break;
+	case TEST_TYPE_POLL_TXQ_TMOUT:
+		test_spec_set_name(test, "POLL_TXQ_FULL");
+		test->ifobj_rx->skip_rx = true;
+		test->ifobj_tx->use_poll = true;
+		pkt_stream_invalid(test, 2 * DEFAULT_PKT_CNT, PKT_SIZE);
+		testapp_validate_traffic(test);
+		pkt_stream_restore_default(test);
+		break;
+	case TEST_TYPE_POLL_RXQ_TMOUT:
+		test_spec_set_name(test, "POLL_RXQ_EMPTY");
+		test->ifobj_tx->skip_tx = true;
+		test->ifobj_rx->use_poll = true;
 		testapp_validate_traffic(test);
 		break;
 	case TEST_TYPE_ALIGNED_INV_DESC:
