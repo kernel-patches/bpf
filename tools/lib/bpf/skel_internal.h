@@ -146,7 +146,7 @@ static inline void *skel_finalize_map_data(__u64 *init_val, size_t mmap_sz, int 
 	struct bpf_map *map;
 	void *addr = NULL;
 
-	kvfree((void *) (long) *init_val);
+	kvfree((void *) (unsigned long) *init_val);
 	*init_val = ~0ULL;
 
 	/* At this point bpf_load_and_run() finished without error and
@@ -197,7 +197,7 @@ static inline void *skel_finalize_map_data(__u64 *init_val, size_t mmap_sz, int 
 {
 	void *addr;
 
-	addr = mmap((void *) (long) *init_val, mmap_sz, flags, MAP_SHARED | MAP_FIXED, fd, 0);
+	addr = mmap((void *) (unsigned long) *init_val, mmap_sz, flags, MAP_SHARED | MAP_FIXED, fd, 0);
 	if (addr == (void *) -1)
 		return NULL;
 	return addr;

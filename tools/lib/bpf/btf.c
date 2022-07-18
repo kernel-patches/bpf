@@ -1568,7 +1568,7 @@ static int btf_rewrite_str(__u32 *str_off, void *ctx)
 		return 0;
 
 	if (p->str_off_map &&
-	    hashmap__find(p->str_off_map, (void *)(long)*str_off, &mapped_off)) {
+	    hashmap__find(p->str_off_map, (void *)(unsigned long)*str_off, &mapped_off)) {
 		*str_off = (__u32)(long)mapped_off;
 		return 0;
 	}
@@ -1581,7 +1581,8 @@ static int btf_rewrite_str(__u32 *str_off, void *ctx)
 	 * performing expensive string comparisons.
 	 */
 	if (p->str_off_map) {
-		err = hashmap__append(p->str_off_map, (void *)(long)*str_off, (void *)(long)off);
+		err = hashmap__append(p->str_off_map, (void *)(unsigned long)*str_off,
+				      (void *)(unsigned long)off);
 		if (err)
 			return err;
 	}
@@ -3133,7 +3134,7 @@ static long hash_combine(long h, long value)
 static int btf_dedup_table_add(struct btf_dedup *d, long hash, __u32 type_id)
 {
 	return hashmap__append(d->dedup_table,
-			       (void *)hash, (void *)(long)type_id);
+			       (void *)hash, (void *)(unsigned long)type_id);
 }
 
 static int btf_dedup_hypot_map_add(struct btf_dedup *d,
