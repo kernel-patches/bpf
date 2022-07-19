@@ -93,8 +93,10 @@ INSTALL ?= install
 RM ?= rm -f
 
 FEATURE_USER = .bpftool
-FEATURE_TESTS = libbfd disassembler-four-args libcap clang-bpf-co-re
-FEATURE_DISPLAY = libbfd disassembler-four-args libcap clang-bpf-co-re
+FEATURE_TESTS = libbfd libbfd-liberty libbfd-liberty-z \
+		disassembler-four-args libcap clang-bpf-co-re
+FEATURE_DISPLAY = libbfd libbfd-liberty libbfd-liberty-z \
+		  disassembler-four-args libcap clang-bpf-co-re
 
 check_feat := 1
 NON_CHECK_FEAT_TARGETS := clean uninstall doc doc-clean doc-install doc-uninstall
