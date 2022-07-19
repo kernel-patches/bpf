@@ -63,6 +63,7 @@ BTF_ID(func, bpf_lsm_socket_post_create)
 BTF_ID(func, bpf_lsm_socket_socketpair)
 BTF_SET_END(bpf_lsm_unlocked_sockopt_hooks)
 
+#ifdef CONFIG_BPF_CGROUP
 void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 			     bpf_func_t *bpf_func)
 {
@@ -86,6 +87,7 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 #endif
 		*bpf_func = __cgroup_bpf_run_lsm_current;
 }
+#endif /* CONFIG_BPF_CGROUP */
 
 int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			const struct bpf_prog *prog)

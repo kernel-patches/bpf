@@ -42,8 +42,6 @@ extern const struct bpf_func_proto bpf_inode_storage_get_proto;
 extern const struct bpf_func_proto bpf_inode_storage_delete_proto;
 void bpf_inode_storage_free(struct inode *inode);
 
-void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func);
-
 #else /* !CONFIG_BPF_LSM */
 
 static inline bool bpf_lsm_is_sleepable_hook(u32 btf_id)
@@ -67,11 +65,15 @@ static inline void bpf_inode_storage_free(struct inode *inode)
 {
 }
 
+#endif /* CONFIG_BPF_LSM */
+
+#if defined(CONFIG_BPF_LSM) && defined(CONFIG_BPF_CGROUP)
+void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func);
+#else
 static inline void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 					   bpf_func_t *bpf_func)
 {
 }
-
-#endif /* CONFIG_BPF_LSM */
+#endif
 
 #endif /* _LINUX_BPF_LSM_H */

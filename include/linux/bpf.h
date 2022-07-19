@@ -1254,9 +1254,7 @@ struct bpf_dummy_ops {
 int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 			    union bpf_attr __user *uattr);
 #endif
-int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
-				    int cgroup_atype);
-void bpf_trampoline_unlink_cgroup_shim(struct bpf_prog *prog);
+
 #else
 static inline const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id)
 {
@@ -1280,6 +1278,14 @@ static inline int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map,
 {
 	return -EINVAL;
 }
+#endif
+
+#if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL) && \
+    defined(CONFIG_CGROUP_BPF)
+int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
+				    int cgroup_atype);
+void bpf_trampoline_unlink_cgroup_shim(struct bpf_prog *prog);
+#else
 static inline int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 						  int cgroup_atype)
 {

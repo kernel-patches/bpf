@@ -528,6 +528,7 @@ static const struct bpf_link_ops bpf_shim_tramp_link_lops = {
 	.dealloc = bpf_shim_tramp_link_dealloc,
 };
 
+#ifdef CONFIG_CGROUP_BPF
 static struct bpf_shim_tramp_link *cgroup_shim_alloc(const struct bpf_prog *prog,
 						     bpf_func_t bpf_func,
 						     int cgroup_atype)
@@ -671,6 +672,7 @@ void bpf_trampoline_unlink_cgroup_shim(struct bpf_prog *prog)
 
 	bpf_trampoline_put(tr); /* bpf_trampoline_lookup above */
 }
+#endif /* CONFIG_CGROUP_BPF */
 #endif
 
 struct bpf_trampoline *bpf_trampoline_get(u64 key,
