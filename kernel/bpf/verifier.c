@@ -7582,6 +7582,18 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EACCES;
 	}
 
+	if (btf_kfunc_id_set_contains(desc_btf, resolve_prog_type(env->prog),
+				      BTF_KFUNC_TYPE_DESTRUCTIVE, func_id)) {
+		if (!env->prog->aux->destructive) {
+			verbose(env, "destructive kfunc calls require BPF_F_DESTRUCTIVE flag\n");
+			return -EACCES;
+		}
+		if (!capable(CAP_SYS_BOOT)) {
+			verbose(env, "destructive kfunc calls require CAP_SYS_BOOT capabilities\n");
+			return -EACCES;
+		}
+	}
+
 	acq = btf_kfunc_id_set_contains(desc_btf, resolve_prog_type(env->prog),
 					BTF_KFUNC_TYPE_ACQUIRE, func_id);
 
