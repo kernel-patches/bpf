@@ -691,6 +691,10 @@ noinline void bpf_kfunc_call_test_mem_len_fail2(u64 *mem, int len)
 {
 }
 
+noinline void bpf_kfunc_call_test_destructive(void)
+{
+}
+
 __diag_pop();
 
 ALLOW_ERROR_INJECTION(bpf_modify_return_test, ERRNO);
@@ -714,6 +718,7 @@ BTF_ID(func, bpf_kfunc_call_test_fail3)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_pass1)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_fail1)
 BTF_ID(func, bpf_kfunc_call_test_mem_len_fail2)
+BTF_ID(func, bpf_kfunc_call_test_destructive)
 BTF_SET_END(test_sk_check_kfunc_ids)
 
 BTF_SET_START(test_sk_acquire_kfunc_ids)
@@ -737,6 +742,10 @@ BTF_SET_END(test_sk_ret_null_kfunc_ids)
 BTF_SET_START(test_sk_kptr_acquire_kfunc_ids)
 BTF_ID(func, bpf_kfunc_call_test_kptr_get)
 BTF_SET_END(test_sk_kptr_acquire_kfunc_ids)
+
+BTF_SET_START(test_sk_destructive_kfunc_ids)
+BTF_ID(func, bpf_kfunc_call_test_destructive)
+BTF_SET_END(test_sk_destructive_kfunc_ids)
 
 static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 			   u32 size, u32 headroom, u32 tailroom)
@@ -1625,7 +1634,8 @@ static const struct btf_kfunc_id_set bpf_prog_test_kfunc_set = {
 	.acquire_set      = &test_sk_acquire_kfunc_ids,
 	.release_set      = &test_sk_release_kfunc_ids,
 	.ret_null_set     = &test_sk_ret_null_kfunc_ids,
-	.kptr_acquire_set = &test_sk_kptr_acquire_kfunc_ids
+	.kptr_acquire_set = &test_sk_kptr_acquire_kfunc_ids,
+	.destructive_set  = &test_sk_destructive_kfunc_ids,
 };
 
 BTF_ID_LIST(bpf_prog_test_dtor_kfunc_ids)
