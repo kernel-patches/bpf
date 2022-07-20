@@ -39,6 +39,8 @@
 #include <linux/hugetlb.h>
 #include <linux/objtool.h>
 #include <linux/kmsg_dump.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -1238,3 +1240,23 @@ void __weak arch_kexec_protect_crashkres(void)
 
 void __weak arch_kexec_unprotect_crashkres(void)
 {}
+
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+BTF_SET_START(kexec_btf_ids)
+BTF_ID(func, crash_kexec)
+BTF_SET_END(kexec_btf_ids)
+
+static const struct btf_kfunc_id_set kexec_kfunc_set = {
+	.owner			= THIS_MODULE,
+	.check_set		= &kexec_btf_ids,
+	.destructive_set	= &kexec_btf_ids,
+};
+
+static int __init crash_kfunc_init(void)
+{
+	register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &kexec_kfunc_set);
+	return 0;
+}
+
+subsys_initcall(crash_kfunc_init);
+#endif
