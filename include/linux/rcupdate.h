@@ -661,7 +661,7 @@ do {									      \
  * CPUs exit their critical sections.  Similarly, if call_rcu() is invoked
  * on one CPU while other CPUs are within RCU read-side critical
  * sections, invocation of the corresponding RCU callback is deferred
- * until after the all the other CPUs exit their critical sections.
+ * until after all the other CPUs exit their critical sections.
  *
  * In v5.0 and later kernels, synchronize_rcu() and call_rcu() also
  * wait for regions of code with preemption disabled, including regions of
