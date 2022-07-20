@@ -55,7 +55,7 @@ int main(int argc, char **argv)
 	}
 
 	if (setup_cgroup_environment())
-		goto err;
+		goto err_cgroup;
 
 	cg2 = create_and_get_cgroup(CGROUP_PATH);
 
@@ -104,6 +104,7 @@ int main(int argc, char **argv)
 
 err:
 	close(cg2);
+err_cgroup:
 	cleanup_cgroup_environment();
 
 cleanup:
