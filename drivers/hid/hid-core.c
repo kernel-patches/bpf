@@ -2040,6 +2040,10 @@ int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data
 	report_enum = hid->report_enum + type;
 	hdrv = hid->driver;
 
+	ret = dispatch_hid_bpf_device_event(hid, type, data, size, interrupt);
+	if (ret)
+		goto unlock;
+
 	if (!size) {
 		dbg_hid("empty report\n");
 		ret = -1;
@@ -2789,6 +2793,8 @@ struct hid_device *hid_allocate_device(void)
 	sema_init(&hdev->driver_input_lock, 1);
 	mutex_init(&hdev->ll_open_lock);
 
+	hid_bpf_device_init(hdev);
+
 	return hdev;
 }
 EXPORT_SYMBOL_GPL(hid_allocate_device);
@@ -2815,6 +2821,7 @@ static void hid_remove_device(struct hid_device *hdev)
  */
 void hid_destroy_device(struct hid_device *hdev)
 {
+	hid_bpf_destroy_device(hdev);
 	hid_remove_device(hdev);
 	put_device(&hdev->dev);
 }
@@ -2901,6 +2908,11 @@ int hid_check_keys_pressed(struct hid_device *hid)
 }
 EXPORT_SYMBOL_GPL(hid_check_keys_pressed);
 
+static struct hid_bpf_ops hid_ops = {
+	.owner = THIS_MODULE,
+	.bus_type = &hid_bus_type,
+};
+
 static int __init hid_init(void)
 {
 	int ret;
@@ -2914,6 +2926,8 @@ static int __init hid_init(void)
 		pr_err("can't register hid bus\n");
 		goto err;
 	}
+
+	hid_bpf_ops = &hid_ops;
 
 	ret = hidraw_init();
 	if (ret)
@@ -2930,6 +2944,7 @@ err:
 
 static void __exit hid_exit(void)
 {
+	hid_bpf_ops = NULL;
 	hid_debug_exit();
 	hidraw_exit();
 	bus_unregister(&hid_bus_type);
