@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <linux/hidraw.h>
 #include <linux/uhid.h>
 
 static unsigned char rdesc[] = {
@@ -769,6 +770,73 @@ cleanup:
 	return ret;
 }
 
+/*
+ * Attach hid_rdesc_fixup to the given uhid device,
+ * retrieve and open the matching hidraw node,
+ * check that the hidraw report descriptor has been updated.
+ */
+static int test_rdesc_fixup(void)
+{
+	struct hidraw_report_descriptor rpt_desc = {0};
+	struct test_params params;
+	int err, uhid_fd, desc_size, hidraw_fd = -1, ret = -1;
+	int dev_id;
+	void *uhid_err;
+	pthread_t tid;
+	bool started = false;
+
+	dev_id = rand() % 1024;
+
+	uhid_fd = setup_uhid(dev_id);
+	if (!ASSERT_GE(uhid_fd, 0, "setup uhid"))
+		return uhid_fd;
+
+	err = prep_test(dev_id, "hid_rdesc_fixup", &params);
+	if (!ASSERT_EQ(err, 0, "prep_test(hid_rdesc_fixup)"))
+		goto cleanup;
+
+	err = uhid_start_listener(&tid, uhid_fd);
+	ASSERT_OK(err, "uhid_start_listener");
+
+	started = true;
+
+	hidraw_fd = params.hidraw_fd;
+
+	/* check that hid_rdesc_fixup() was executed */
+	ASSERT_EQ(params.skel->data->callback2_check, 0x21, "callback_check2");
+
+	/* read the exposed report descriptor from hidraw */
+	err = ioctl(hidraw_fd, HIDIOCGRDESCSIZE, &desc_size);
+	if (!ASSERT_GE(err, 0, "HIDIOCGRDESCSIZE"))
+		goto cleanup;
+
+	/* ensure the new size of the rdesc is bigger than the old one */
+	if (!ASSERT_GT(desc_size, sizeof(rdesc), "new_rdesc_size"))
+		goto cleanup;
+
+	rpt_desc.size = desc_size;
+	err = ioctl(hidraw_fd, HIDIOCGRDESC, &rpt_desc);
+	if (!ASSERT_GE(err, 0, "HIDIOCGRDESC"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(rpt_desc.value[4], 0x42, "hid_rdesc_fixup"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+	cleanup_test(&params);
+
+	if (started) {
+		destroy(uhid_fd);
+		pthread_join(tid, &uhid_err);
+		err = (int)(long)uhid_err;
+		CHECK_FAIL(err);
+	}
+
+	return ret;
+}
+
 void serial_test_hid_bpf(void)
 {
 	int err, uhid_fd;
@@ -798,6 +866,14 @@ void serial_test_hid_bpf(void)
 	ASSERT_OK(err, "hid_change_report");
 	err = test_hid_user_raw_request_call(uhid_fd, dev_id);
 	ASSERT_OK(err, "hid_user_raw_request");
+
+	/*
+	 * this test should be run last because we disconnect/reconnect
+	 * the device, meaning that it changes the overall uhid device
+	 * and messes up with the thread that reads uhid events.
+	 */
+	err = test_rdesc_fixup();
+	ASSERT_OK(err, "hid_rdesc_fixup");
 
 	destroy(uhid_fd);
 
