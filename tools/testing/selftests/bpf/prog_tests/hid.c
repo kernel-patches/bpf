@@ -77,10 +77,21 @@ static unsigned char rdesc[] = {
 	0xc0,			/* END_COLLECTION */
 };
 
+static u8 feature_data[] = { 1, 2 };
+
 struct attach_prog_args {
 	int prog_fd;
 	unsigned int hid;
 	int retval;
+};
+
+struct hid_hw_request_syscall_args {
+	__u8 data[10];
+	unsigned int hid;
+	int retval;
+	size_t size;
+	enum hid_report_type type;
+	__u8 request_type;
 };
 
 static pthread_mutex_t uhid_started_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -142,7 +153,7 @@ static void destroy(int fd)
 
 static int uhid_event(int fd)
 {
-	struct uhid_event ev;
+	struct uhid_event ev, answer;
 	ssize_t ret;
 
 	memset(&ev, 0, sizeof(ev));
@@ -183,6 +194,15 @@ static int uhid_event(int fd)
 		break;
 	case UHID_GET_REPORT:
 		fprintf(stderr, "UHID_GET_REPORT from uhid-dev\n");
+
+		answer.type = UHID_GET_REPORT_REPLY;
+		answer.u.get_report_reply.id = ev.u.get_report.id;
+		answer.u.get_report_reply.err = ev.u.get_report.rnum == 1 ? 0 : -EIO;
+		answer.u.get_report_reply.size = sizeof(feature_data);
+		memcpy(answer.u.get_report_reply.data, feature_data, sizeof(feature_data));
+
+		uhid_write(fd, &answer);
+
 		break;
 	case UHID_SET_REPORT:
 		fprintf(stderr, "UHID_SET_REPORT from uhid-dev\n");
@@ -391,6 +411,7 @@ static int open_hidraw(int dev_id)
 struct test_params {
 	struct hid *skel;
 	int hidraw_fd;
+	int hid_id;
 };
 
 static int prep_test(int dev_id, const char *prog_name, struct test_params *test_data)
@@ -419,27 +440,33 @@ static int prep_test(int dev_id, const char *prog_name, struct test_params *test
 	if (!ASSERT_OK_PTR(hid_skel, "hid_skel_open"))
 		goto cleanup;
 
-	prog = bpf_object__find_program_by_name(*hid_skel->skeleton->obj, prog_name);
-	if (!ASSERT_OK_PTR(prog, "find_prog_by_name"))
-		goto cleanup;
+	if (prog_name) {
+		prog = bpf_object__find_program_by_name(*hid_skel->skeleton->obj, prog_name);
+		if (!ASSERT_OK_PTR(prog, "find_prog_by_name"))
+			goto cleanup;
 
-	bpf_program__set_autoload(prog, true);
+		bpf_program__set_autoload(prog, true);
 
-	err = hid__load(hid_skel);
-	if (!ASSERT_OK(err, "hid_skel_load"))
-		goto cleanup;
+		err = hid__load(hid_skel);
+		if (!ASSERT_OK(err, "hid_skel_load"))
+			goto cleanup;
 
-	attach_fd = bpf_program__fd(hid_skel->progs.attach_prog);
-	if (!ASSERT_GE(attach_fd, 0, "locate attach_prog")) {
-		err = attach_fd;
-		goto cleanup;
+		attach_fd = bpf_program__fd(hid_skel->progs.attach_prog);
+		if (!ASSERT_GE(attach_fd, 0, "locate attach_prog")) {
+			err = attach_fd;
+			goto cleanup;
+		}
+
+		args.prog_fd = bpf_program__fd(prog);
+		err = bpf_prog_test_run_opts(attach_fd, &tattr);
+		snprintf(buf, sizeof(buf), "attach_hid(%s)", prog_name);
+		if (!ASSERT_EQ(args.retval, 0, buf))
+			goto cleanup;
+	} else {
+		err = hid__load(hid_skel);
+		if (!ASSERT_OK(err, "hid_skel_load"))
+			goto cleanup;
 	}
-
-	args.prog_fd = bpf_program__fd(prog);
-	err = bpf_prog_test_run_opts(attach_fd, &tattr);
-	snprintf(buf, sizeof(buf), "attach_hid(%s)", prog_name);
-	if (!ASSERT_EQ(args.retval, 0, buf))
-		goto cleanup;
 
 	hidraw_fd = open_hidraw(dev_id);
 	if (!ASSERT_GE(hidraw_fd, 0, "open_hidraw"))
@@ -447,6 +474,7 @@ static int prep_test(int dev_id, const char *prog_name, struct test_params *test
 
 	test_data->skel = hid_skel;
 	test_data->hidraw_fd = hidraw_fd;
+	test_data->hid_id = hid_id;
 
 	return 0;
 
@@ -693,6 +721,54 @@ cleanup:
 	return ret;
 }
 
+/*
+ * Attach hid_user_raw_request to the given uhid device,
+ * call the bpf program from userspace
+ * check that the program is called and does the expected.
+ */
+static int test_hid_user_raw_request_call(int uhid_fd, int dev_id)
+{
+	struct test_params params;
+	int err, prog_fd;
+	int ret = -1;
+	struct hid_hw_request_syscall_args args = {
+		.retval = -1,
+		.type = HID_FEATURE_REPORT,
+		.request_type = HID_REQ_GET_REPORT,
+		.size = 10,
+	};
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, tattrs,
+			    .ctx_in = &args,
+			    .ctx_size_in = sizeof(args),
+	);
+
+	err = prep_test(dev_id, NULL, &params);
+	if (!ASSERT_EQ(err, 0, "prep_test()"))
+		goto cleanup;
+
+	args.hid = params.hid_id;
+	args.data[0] = 1; /* report ID */
+
+	prog_fd = bpf_program__fd(params.skel->progs.hid_user_raw_request);
+
+	err = bpf_prog_test_run_opts(prog_fd, &tattrs);
+	if (!ASSERT_EQ(err, 0, "bpf_prog_test_run_opts"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(args.retval, 2, "bpf_prog_test_run_opts_retval"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(args.data[1], 2, "hid_user_raw_request_check_in"))
+		goto cleanup;
+
+	ret = 0;
+
+cleanup:
+	cleanup_test(&params);
+
+	return ret;
+}
+
 void serial_test_hid_bpf(void)
 {
 	int err, uhid_fd;
@@ -720,6 +796,8 @@ void serial_test_hid_bpf(void)
 	ASSERT_OK(err, "hid_attach_detach");
 	err = test_hid_change_report(uhid_fd, dev_id);
 	ASSERT_OK(err, "hid_change_report");
+	err = test_hid_user_raw_request_call(uhid_fd, dev_id);
+	ASSERT_OK(err, "hid_user_raw_request");
 
 	destroy(uhid_fd);
 
