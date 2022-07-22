@@ -279,6 +279,8 @@ struct bpf_get_fd_opts {
 };
 #define bpf_get_fd_opts__last_field flags
 
+LIBBPF_API int bpf_obj_get_opts(const char *pathname,
+				const struct bpf_get_fd_opts *opts);
 LIBBPF_API int bpf_obj_get(const char *pathname);
 
 struct bpf_prog_attach_opts {
