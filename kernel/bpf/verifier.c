@@ -5830,7 +5830,8 @@ static u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state 
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
-			  const struct bpf_func_proto *fn)
+			  const struct bpf_func_proto *fn,
+			  int func_id)
 {
 	u32 regno = BPF_REG_1 + arg;
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
@@ -6040,23 +6041,33 @@ skip_type_check:
 			}
 
 			meta->uninit_dynptr_regno = regno;
-		} else if (!is_dynptr_reg_valid_init(env, reg, arg_type)) {
-			const char *err_extra = "";
+		} else {
+			if (!is_dynptr_reg_valid_init(env, reg, arg_type)) {
+				const char *err_extra = "";
 
-			switch (arg_type & DYNPTR_TYPE_FLAG_MASK) {
-			case DYNPTR_TYPE_LOCAL:
-				err_extra = "local ";
-				break;
-			case DYNPTR_TYPE_RINGBUF:
-				err_extra = "ringbuf ";
-				break;
-			default:
-				break;
+				switch (arg_type & DYNPTR_TYPE_FLAG_MASK) {
+				case DYNPTR_TYPE_LOCAL:
+					err_extra = "local ";
+					break;
+				case DYNPTR_TYPE_RINGBUF:
+					err_extra = "ringbuf ";
+					break;
+				default:
+					break;
+				}
+
+				verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
+					err_extra, arg + 1);
+				return -EINVAL;
 			}
-
-			verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
-				err_extra, arg + 1);
-			return -EINVAL;
+			if (func_id == BPF_FUNC_dynptr_data) {
+				if (meta->ref_obj_id) {
+					verbose(env, "verifier internal error: multiple refcounted args in BPF_FUNC_dynptr_data");
+					return -EFAULT;
+				}
+				/* Find the id of the dynptr we're tracking the reference of */
+				meta->ref_obj_id = stack_slot_get_id(env, reg);
+			}
 		}
 		break;
 	case ARG_CONST_ALLOC_SIZE_OR_ZERO:
@@ -7228,7 +7239,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	meta.func_id = func_id;
 	/* check args */
 	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-		err = check_func_arg(env, i, &meta, fn);
+		err = check_func_arg(env, i, &meta, fn, func_id);
 		if (err)
 			return err;
 	}
@@ -7459,7 +7470,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (type_may_be_null(regs[BPF_REG_0].type))
 		regs[BPF_REG_0].id = ++env->id_gen;
 
-	if (is_ptr_cast_function(func_id)) {
+	if (is_ptr_cast_function(func_id) || func_id == BPF_FUNC_dynptr_data) {
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
 	} else if (is_acquire_function(func_id, meta.map_ptr)) {
@@ -7471,21 +7482,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		regs[BPF_REG_0].id = id;
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = id;
-	} else if (func_id == BPF_FUNC_dynptr_data) {
-		int dynptr_id = 0, i;
-
-		/* Find the id of the dynptr we're acquiring a reference to */
-		for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-			if (arg_type_is_dynptr(fn->arg_type[i])) {
-				if (dynptr_id) {
-					verbose(env, "verifier internal error: multiple dynptr args in func\n");
-					return -EFAULT;
-				}
-				dynptr_id = stack_slot_get_id(env, &regs[BPF_REG_1 + i]);
-			}
-		}
-		/* For release_reference() */
-		regs[BPF_REG_0].ref_obj_id = dynptr_id;
 	}
 
 	do_refine_retval_range(regs, fn->ret_type, func_id, &meta);
