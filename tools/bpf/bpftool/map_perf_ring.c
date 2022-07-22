@@ -125,6 +125,10 @@ int do_event_pipe(int argc, char **argv)
 	};
 	struct bpf_map_info map_info = {};
 	LIBBPF_OPTS(perf_buffer_raw_opts, opts);
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, map_opts,
+		.flags = BPF_F_WRONLY,
+	);
+
 	struct event_pipe_ctx ctx = {
 		.all_cpus = true,
 		.cpu = -1,
@@ -136,7 +140,7 @@ int do_event_pipe(int argc, char **argv)
 
 	map_info_len = sizeof(map_info);
 	map_fd = map_parse_fd_and_info(&argc, &argv, &map_info, &map_info_len,
-				       NULL);
+				       &map_opts);
 	if (map_fd < 0)
 		return -1;
 

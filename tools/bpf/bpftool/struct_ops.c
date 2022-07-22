@@ -10,6 +10,7 @@
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
+#include <bpf/libbpf_internal.h> /* OPTS_GET */
 
 #include "json_writer.h"
 #include "main.h"
@@ -136,6 +137,10 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 	__u32 id = info->id;
 	int err, fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, search_opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	while (true) {
 		err = bpf_map_get_next_id(id, &id);
 		if (err) {
@@ -145,7 +150,7 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 			return -1;
 		}
 
-		fd = bpf_map_get_fd_by_id_opts(id, opts);
+		fd = bpf_map_get_fd_by_id_opts(id, &search_opts);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;
@@ -163,6 +168,19 @@ static int get_next_struct_ops_map(const char *name, int *res_fd,
 
 		if (info->type == BPF_MAP_TYPE_STRUCT_OPS &&
 		    (!name || !strcmp(name, info->name))) {
+			if (OPTS_GET(opts, flags, 0) != BPF_F_RDONLY) {
+				close(fd);
+
+				fd = bpf_map_get_fd_by_id_opts(id, opts);
+				if (fd < 0) {
+					if (errno == ENOENT)
+						continue;
+					p_err("can't get map by id (%u): %s",
+					      id, strerror(errno));
+					return -1;
+				}
+			}
+
 			*res_fd = fd;
 			return 1;
 		}
@@ -340,6 +358,10 @@ static int do_show(int argc, char **argv)
 	const char *search_type = NULL, *search_term = NULL;
 	struct res res;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (argc && argc != 2)
 		usage();
 
@@ -349,7 +371,7 @@ static int do_show(int argc, char **argv)
 	}
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_show,
-				    NULL, json_wtr, NULL);
+				    NULL, json_wtr, &opts);
 
 	return cmd_retval(&res, !!search_term);
 }
@@ -411,6 +433,10 @@ static int do_dump(int argc, char **argv)
 	struct btf_dumper d = {};
 	struct res res;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (argc && argc != 2)
 		usage();
 
@@ -438,7 +464,7 @@ static int do_dump(int argc, char **argv)
 	d.prog_id_as_func_ptr = true;
 
 	res = do_work_on_struct_ops(search_type, search_term, __do_dump, &d,
-				    wtr, NULL);
+				    wtr, &opts);
 
 	if (!json_output)
 		jsonw_destroy(&wtr);

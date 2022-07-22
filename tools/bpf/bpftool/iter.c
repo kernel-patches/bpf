@@ -18,6 +18,10 @@ static int do_pin(int argc, char **argv)
 	struct bpf_link *link;
 	int err = -1, map_fd = -1;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (!REQ_ARGS(2))
 		usage();
 
@@ -34,7 +38,7 @@ static int do_pin(int argc, char **argv)
 				return -1;
 			}
 
-			map_fd = map_parse_fd(&argc, &argv, NULL);
+			map_fd = map_parse_fd(&argc, &argv, &opts);
 			if (map_fd < 0)
 				return -1;
 

@@ -566,6 +566,10 @@ static int do_dump(int argc, char **argv)
 	int fd = -1;
 	int err;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (!REQ_ARGS(2)) {
 		usage();
 		return -1;
@@ -580,7 +584,7 @@ static int do_dump(int argc, char **argv)
 			return -1;
 		}
 
-		fd = map_parse_fd_and_info(&argc, &argv, &info, &len, NULL);
+		fd = map_parse_fd_and_info(&argc, &argv, &info, &len, &opts);
 		if (fd < 0)
 			return -1;
 
@@ -753,6 +757,10 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 	int err;
 	int fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	while (true) {
 		switch (type) {
 		case BPF_OBJ_PROG:
@@ -782,7 +790,7 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 			fd = bpf_prog_get_fd_by_id_opts(id, NULL);
 			break;
 		case BPF_OBJ_MAP:
-			fd = bpf_map_get_fd_by_id_opts(id, NULL);
+			fd = bpf_map_get_fd_by_id_opts(id, &opts);
 			break;
 		default:
 			err = -1;

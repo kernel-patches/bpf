@@ -334,6 +334,10 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 		      void *key, void *value, __u32 key_size, __u32 value_size,
 		      __u32 *flags, __u32 **value_fd)
 {
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (!*argv) {
 		if (!key && !value)
 			return 0;
@@ -381,7 +385,7 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 				return -1;
 			}
 
-			fd = map_parse_fd(&argc, &argv, NULL);
+			fd = map_parse_fd(&argc, &argv, &opts);
 			if (fd < 0)
 				return -1;
 
@@ -629,12 +633,16 @@ static int do_show_subset(int argc, char **argv)
 	int nb_fds, i;
 	int err = -1;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	fds = malloc(sizeof(int));
 	if (!fds) {
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(&argc, &argv, &fds, NULL);
+	nb_fds = map_parse_fds(&argc, &argv, &fds, &opts);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -673,6 +681,10 @@ static int do_show(int argc, char **argv)
 	int err;
 	int fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (show_pinned) {
 		map_table = hashmap__new(hash_fn_for_key_as_id,
 					 equal_fn_for_key_as_id, NULL);
@@ -702,7 +714,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_map_get_fd_by_id_opts(id, NULL);
+		fd = bpf_map_get_fd_by_id_opts(id, &opts);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;
@@ -902,6 +914,10 @@ static int do_dump(int argc, char **argv)
 	int *fds = NULL;
 	int err = -1;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (argc != 2)
 		usage();
 
@@ -910,7 +926,7 @@ static int do_dump(int argc, char **argv)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(&argc, &argv, &fds, NULL);
+	nb_fds = map_parse_fds(&argc, &argv, &fds, &opts);
 	if (nb_fds < 1)
 		goto exit_free;
 
@@ -995,10 +1011,14 @@ static int do_update(int argc, char **argv)
 	void *key, *value;
 	int fd, err;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_WRONLY,
+	);
+
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, NULL);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, &opts);
 	if (fd < 0)
 		return -1;
 
@@ -1074,10 +1094,14 @@ static int do_lookup(int argc, char **argv)
 	int err;
 	int fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, NULL);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, &opts);
 	if (fd < 0)
 		return -1;
 
@@ -1125,10 +1149,14 @@ static int do_getnext(int argc, char **argv)
 	int err;
 	int fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, NULL);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, &opts);
 	if (fd < 0)
 		return -1;
 
@@ -1196,10 +1224,14 @@ static int do_delete(int argc, char **argv)
 	int err;
 	int fd;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_WRONLY,
+	);
+
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, NULL);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, &opts);
 	if (fd < 0)
 		return -1;
 

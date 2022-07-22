@@ -227,6 +227,10 @@ static void *find_metadata(int prog_fd, struct bpf_map_info *map_info)
 	int ret;
 	__u32 i;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	memset(&prog_info, 0, sizeof(prog_info));
 	prog_info_len = sizeof(prog_info);
 	ret = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &prog_info_len);
@@ -251,7 +255,7 @@ static void *find_metadata(int prog_fd, struct bpf_map_info *map_info)
 		goto free_map_ids;
 
 	for (i = 0; i < prog_info.nr_map_ids; i++) {
-		map_fd = bpf_map_get_fd_by_id_opts(map_ids[i], NULL);
+		map_fd = bpf_map_get_fd_by_id_opts(map_ids[i], &opts);
 		if (map_fd < 0)
 			goto free_map_ids;
 

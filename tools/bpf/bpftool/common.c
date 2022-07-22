@@ -28,6 +28,7 @@
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
 #include <bpf/btf.h>
+#include <bpf/libbpf_internal.h> /* OPTS_GET */
 
 #include "main.h"
 
@@ -303,7 +304,11 @@ int do_pin_any(int argc, char **argv,
 	int err;
 	int fd;
 
-	fd = get_fd(&argc, &argv, NULL);
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
+	fd = get_fd(&argc, &argv, &opts);
 	if (fd < 0)
 		return fd;
 
@@ -474,10 +479,14 @@ static int do_build_table_cb(const char *fpath, const struct stat *sb,
 	int fd, err = 0;
 	char *path;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	if (typeflag != FTW_F)
 		goto out_ret;
 
-	fd = open_obj_pinned(fpath, true, NULL);
+	fd = open_obj_pinned(fpath, true, &opts);
 	if (fd < 0)
 		goto out_ret;
 
@@ -886,6 +895,10 @@ static int map_fd_by_name(char *name, int **fds,
 	void *tmp;
 	int err;
 
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, search_opts,
+		.flags = BPF_F_RDONLY,
+	);
+
 	while (true) {
 		struct bpf_map_info info = {};
 		__u32 len = sizeof(info);
@@ -899,7 +912,7 @@ static int map_fd_by_name(char *name, int **fds,
 			return nb_fds;
 		}
 
-		fd = bpf_map_get_fd_by_id_opts(id, opts);
+		fd = bpf_map_get_fd_by_id_opts(id, &search_opts);
 		if (fd < 0) {
 			p_err("can't get map by id (%u): %s",
 			      id, strerror(errno));
@@ -916,6 +929,17 @@ static int map_fd_by_name(char *name, int **fds,
 		if (strncmp(name, info.name, BPF_OBJ_NAME_LEN)) {
 			close(fd);
 			continue;
+		}
+
+		if (OPTS_GET(opts, flags, 0) != BPF_F_RDONLY) {
+			close(fd);
+
+			fd = bpf_map_get_fd_by_id_opts(id, opts);
+			if (fd < 0) {
+				p_err("can't get map by id (%u): %s",
+				      id, strerror(errno));
+				goto err_close_fds;
+			}
 		}
 
 		if (nb_fds > 0) {
