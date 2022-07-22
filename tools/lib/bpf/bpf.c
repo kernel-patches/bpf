@@ -1002,16 +1002,27 @@ int bpf_btf_get_fd_by_id(__u32 id)
 	return bpf_btf_get_fd_by_id_opts(id, NULL);
 }
 
-int bpf_link_get_fd_by_id(__u32 id)
+int bpf_link_get_fd_by_id_opts(__u32 id,
+			       const struct bpf_get_fd_opts *opts)
 {
 	union bpf_attr attr;
 	int fd;
 
+	if (!OPTS_VALID(opts, bpf_get_fd_opts))
+		return libbpf_err(-EINVAL);
+
 	memset(&attr, 0, sizeof(attr));
 	attr.link_id = id;
+	if (kernel_supports(NULL, FEAT_GET_FD_BY_ID_OPEN_FLAGS))
+		attr.open_flags = OPTS_GET(opts, flags, 0);
 
 	fd = sys_bpf_fd(BPF_LINK_GET_FD_BY_ID, &attr, sizeof(attr));
 	return libbpf_err_errno(fd);
+}
+
+int bpf_link_get_fd_by_id(__u32 id)
+{
+	return bpf_link_get_fd_by_id_opts(id, NULL);
 }
 
 int bpf_obj_get_info_by_fd(int bpf_fd, void *info, __u32 *info_len)

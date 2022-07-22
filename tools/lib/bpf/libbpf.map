@@ -367,4 +367,5 @@ LIBBPF_1.0.0 {
 		bpf_prog_get_fd_by_id_opts;
 		bpf_map_get_fd_by_id_opts;
 		bpf_btf_get_fd_by_id_opts;
+		bpf_link_get_fd_by_id_opts;
 };
