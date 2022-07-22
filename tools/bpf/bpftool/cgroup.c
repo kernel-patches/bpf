@@ -490,7 +490,7 @@ static int do_attach(int argc, char **argv)
 
 	argc -= 2;
 	argv = &argv[2];
-	prog_fd = prog_parse_fd(&argc, &argv);
+	prog_fd = prog_parse_fd(&argc, &argv, NULL);
 	if (prog_fd < 0)
 		goto exit_cgroup;
 
@@ -548,7 +548,7 @@ static int do_detach(int argc, char **argv)
 
 	argc -= 2;
 	argv = &argv[2];
-	prog_fd = prog_parse_fd(&argc, &argv);
+	prog_fd = prog_parse_fd(&argc, &argv, NULL);
 	if (prog_fd < 0)
 		goto exit_cgroup;
 

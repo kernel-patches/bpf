@@ -15,7 +15,8 @@
 
 static struct hashmap *link_table;
 
-static int link_parse_fd(int *argc, char ***argv)
+static int link_parse_fd(int *argc, char ***argv,
+			 const struct bpf_get_fd_opts *opts)
 {
 	int fd;
 
@@ -32,7 +33,7 @@ static int link_parse_fd(int *argc, char ***argv)
 		}
 		NEXT_ARGP();
 
-		fd = bpf_link_get_fd_by_id(id);
+		fd = bpf_link_get_fd_by_id_opts(id, opts);
 		if (fd < 0)
 			p_err("failed to get link with ID %d: %s", id, strerror(errno));
 		return fd;
@@ -44,7 +45,7 @@ static int link_parse_fd(int *argc, char ***argv)
 		path = **argv;
 		NEXT_ARGP();
 
-		return open_obj_pinned_any(path, BPF_OBJ_LINK, NULL);
+		return open_obj_pinned_any(path, BPF_OBJ_LINK, opts);
 	}
 
 	p_err("expected 'id' or 'pinned', got: '%s'?", **argv);
@@ -321,7 +322,7 @@ static int do_show(int argc, char **argv)
 	build_obj_refs_table(&refs_table, BPF_OBJ_LINK);
 
 	if (argc == 2) {
-		fd = link_parse_fd(&argc, &argv);
+		fd = link_parse_fd(&argc, &argv, NULL);
 		if (fd < 0)
 			return fd;
 		return do_show_link(fd);
@@ -385,7 +386,7 @@ static int do_detach(int argc, char **argv)
 		return 1;
 	}
 
-	fd = link_parse_fd(&argc, &argv);
+	fd = link_parse_fd(&argc, &argv, NULL);
 	if (fd < 0)
 		return 1;
 
