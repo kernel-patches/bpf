@@ -171,10 +171,12 @@ int do_iter(int argc, char **argv) __weak;
 int parse_u32_arg(int *argc, char ***argv, __u32 *val, const char *what);
 int prog_parse_fd(int *argc, char ***argv,
 		  const struct bpf_get_fd_opts *opts);
-int prog_parse_fds(int *argc, char ***argv, int **fds);
+int prog_parse_fds(int *argc, char ***argv, int **fds,
+		   const struct bpf_get_fd_opts *opts);
 int map_parse_fd(int *argc, char ***argv,
 		 const struct bpf_get_fd_opts *opts);
-int map_parse_fds(int *argc, char ***argv, int **fds);
+int map_parse_fds(int *argc, char ***argv, int **fds,
+		  const struct bpf_get_fd_opts *opts);
 int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len);
 
 struct bpf_prog_linfo;

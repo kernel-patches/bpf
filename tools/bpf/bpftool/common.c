@@ -723,7 +723,8 @@ print_all_levels(__maybe_unused enum libbpf_print_level level,
 	return vfprintf(stderr, format, args);
 }
 
-static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
+static int prog_fd_by_nametag(void *nametag, int **fds, bool tag,
+			      const struct bpf_get_fd_opts *opts)
 {
 	unsigned int id = 0;
 	int fd, nb_fds = 0;
@@ -743,7 +744,7 @@ static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 			return nb_fds;
 		}
 
-		fd = bpf_prog_get_fd_by_id(id);
+		fd = bpf_prog_get_fd_by_id_opts(id, opts);
 		if (fd < 0) {
 			p_err("can't get prog by id (%u): %s",
 			      id, strerror(errno));
@@ -782,7 +783,8 @@ err_close_fds:
 	return -1;
 }
 
-int prog_parse_fds(int *argc, char ***argv, int **fds)
+int prog_parse_fds(int *argc, char ***argv, int **fds,
+		   const struct bpf_get_fd_opts *opts)
 {
 	if (is_prefix(**argv, "id")) {
 		unsigned int id;
@@ -797,7 +799,7 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		(*fds)[0] = bpf_prog_get_fd_by_id(id);
+		(*fds)[0] = bpf_prog_get_fd_by_id_opts(id, opts);
 		if ((*fds)[0] < 0) {
 			p_err("get by id (%u): %s", id, strerror(errno));
 			return -1;
@@ -816,7 +818,7 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		return prog_fd_by_nametag(tag, fds, true);
+		return prog_fd_by_nametag(tag, fds, true, opts);
 	} else if (is_prefix(**argv, "name")) {
 		char *name;
 
@@ -829,7 +831,7 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		return prog_fd_by_nametag(name, fds, false);
+		return prog_fd_by_nametag(name, fds, false, opts);
 	} else if (is_prefix(**argv, "pinned")) {
 		char *path;
 
@@ -838,7 +840,7 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		path = **argv;
 		NEXT_ARGP();
 
-		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_PROG, NULL);
+		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_PROG, opts);
 		if ((*fds)[0] < 0)
 			return -1;
 		return 1;
@@ -859,7 +861,7 @@ int prog_parse_fd(int *argc, char ***argv,
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = prog_parse_fds(argc, argv, &fds);
+	nb_fds = prog_parse_fds(argc, argv, &fds, opts);
 	if (nb_fds != 1) {
 		if (nb_fds > 1) {
 			p_err("several programs match this handle");
@@ -876,7 +878,8 @@ exit_free:
 	return fd;
 }
 
-static int map_fd_by_name(char *name, int **fds)
+static int map_fd_by_name(char *name, int **fds,
+			  const struct bpf_get_fd_opts *opts)
 {
 	unsigned int id = 0;
 	int fd, nb_fds = 0;
@@ -896,7 +899,7 @@ static int map_fd_by_name(char *name, int **fds)
 			return nb_fds;
 		}
 
-		fd = bpf_map_get_fd_by_id(id);
+		fd = bpf_map_get_fd_by_id_opts(id, opts);
 		if (fd < 0) {
 			p_err("can't get map by id (%u): %s",
 			      id, strerror(errno));
@@ -934,7 +937,8 @@ err_close_fds:
 	return -1;
 }
 
-int map_parse_fds(int *argc, char ***argv, int **fds)
+int map_parse_fds(int *argc, char ***argv, int **fds,
+		  const struct bpf_get_fd_opts *opts)
 {
 	if (is_prefix(**argv, "id")) {
 		unsigned int id;
@@ -949,7 +953,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		(*fds)[0] = bpf_map_get_fd_by_id(id);
+		(*fds)[0] = bpf_map_get_fd_by_id_opts(id, opts);
 		if ((*fds)[0] < 0) {
 			p_err("get map by id (%u): %s", id, strerror(errno));
 			return -1;
@@ -967,7 +971,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		}
 		NEXT_ARGP();
 
-		return map_fd_by_name(name, fds);
+		return map_fd_by_name(name, fds, opts);
 	} else if (is_prefix(**argv, "pinned")) {
 		char *path;
 
@@ -976,7 +980,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds)
 		path = **argv;
 		NEXT_ARGP();
 
-		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_MAP, NULL);
+		(*fds)[0] = open_obj_pinned_any(path, BPF_OBJ_MAP, opts);
 		if ((*fds)[0] < 0)
 			return -1;
 		return 1;
@@ -996,7 +1000,7 @@ int map_parse_fd(int *argc, char ***argv, const struct bpf_get_fd_opts *opts)
 		p_err("mem alloc failed");
 		return -1;
 	}
-	nb_fds = map_parse_fds(argc, argv, &fds);
+	nb_fds = map_parse_fds(argc, argv, &fds, opts);
 	if (nb_fds != 1) {
 		if (nb_fds > 1) {
 			p_err("several maps match this handle");

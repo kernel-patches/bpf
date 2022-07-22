@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <bpf/bpf.h>
 #include <bpf/btf.h>
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h>
