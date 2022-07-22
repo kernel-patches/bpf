@@ -702,7 +702,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_map_get_fd_by_id(id);
+		fd = bpf_map_get_fd_by_id_opts(id, NULL);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;

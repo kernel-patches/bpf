@@ -99,7 +99,7 @@ static int get_prog_info(int prog_id, struct bpf_prog_info *info)
 	__u32 len = sizeof(*info);
 	int err, prog_fd;
 
-	prog_fd = bpf_prog_get_fd_by_id(prog_id);
+	prog_fd = bpf_prog_get_fd_by_id_opts(prog_id, NULL);
 	if (prog_fd < 0)
 		return prog_fd;
 
@@ -343,7 +343,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_link_get_fd_by_id(id);
+		fd = bpf_link_get_fd_by_id_opts(id, NULL);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;

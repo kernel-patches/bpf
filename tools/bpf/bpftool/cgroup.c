@@ -78,7 +78,7 @@ static void guess_vmlinux_btf_id(__u32 attach_btf_obj_id)
 	btf_info.name = ptr_to_u64(name);
 	btf_info.name_len = sizeof(name);
 
-	fd = bpf_btf_get_fd_by_id(attach_btf_obj_id);
+	fd = bpf_btf_get_fd_by_id_opts(attach_btf_obj_id, NULL);
 	if (fd < 0)
 		return;
 
@@ -104,7 +104,7 @@ static int show_bpf_prog(int id, enum bpf_attach_type attach_type,
 	__u32 info_len = sizeof(info);
 	int prog_fd;
 
-	prog_fd = bpf_prog_get_fd_by_id(id);
+	prog_fd = bpf_prog_get_fd_by_id_opts(id, NULL);
 	if (prog_fd < 0)
 		return -1;
 

@@ -536,7 +536,7 @@ static bool btf_is_kernel_module(__u32 btf_id)
 	__u32 len;
 	int err;
 
-	btf_fd = bpf_btf_get_fd_by_id(btf_id);
+	btf_fd = bpf_btf_get_fd_by_id_opts(btf_id, NULL);
 	if (btf_fd < 0) {
 		p_err("can't get BTF object by id (%u): %s", btf_id, strerror(errno));
 		return false;
@@ -779,10 +779,10 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 
 		switch (type) {
 		case BPF_OBJ_PROG:
-			fd = bpf_prog_get_fd_by_id(id);
+			fd = bpf_prog_get_fd_by_id_opts(id, NULL);
 			break;
 		case BPF_OBJ_MAP:
-			fd = bpf_map_get_fd_by_id(id);
+			fd = bpf_map_get_fd_by_id_opts(id, NULL);
 			break;
 		default:
 			err = -1;
@@ -1037,7 +1037,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_btf_get_fd_by_id(id);
+		fd = bpf_btf_get_fd_by_id_opts(id, NULL);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;

@@ -251,7 +251,7 @@ static void *find_metadata(int prog_fd, struct bpf_map_info *map_info)
 		goto free_map_ids;
 
 	for (i = 0; i < prog_info.nr_map_ids; i++) {
-		map_fd = bpf_map_get_fd_by_id(map_ids[i]);
+		map_fd = bpf_map_get_fd_by_id_opts(map_ids[i], NULL);
 		if (map_fd < 0)
 			goto free_map_ids;
 
@@ -666,7 +666,7 @@ static int do_show(int argc, char **argv)
 			break;
 		}
 
-		fd = bpf_prog_get_fd_by_id(id);
+		fd = bpf_prog_get_fd_by_id_opts(id, NULL);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue;
