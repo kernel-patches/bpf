@@ -6575,6 +6575,51 @@ static void test_is_sorted(unsigned long *start, unsigned long count)
 }
 #endif
 
+struct noftrace_entry {
+	struct list_head list;
+	unsigned long addr;
+};
+
+static LIST_HEAD(noftrace);
+
+static int __init noftrace_add(unsigned long addr)
+{
+	struct noftrace_entry *ent;
+
+	ent = kmalloc(sizeof(*ent), GFP_KERNEL);
+	if (!ent)
+		return -ENOMEM;
+	ent->addr = addr;
+	INIT_LIST_HEAD(&ent->list);
+	list_add_tail(&ent->list, &noftrace);
+	return 0;
+}
+
+static int __init noftrace_init(void)
+{
+	extern unsigned long __start_noftrace[];
+	extern unsigned long __stop_noftrace[];
+	unsigned long *iter, entry;
+
+	for (iter = __start_noftrace; iter < __stop_noftrace; iter++) {
+		entry = (unsigned long) dereference_symbol_descriptor((void *)*iter);
+		if (noftrace_add(entry))
+			return -ENOMEM;
+	}
+	return 0;
+}
+
+static bool is_noftrace_function(unsigned long addr)
+{
+	struct noftrace_entry *ent;
+
+	list_for_each_entry(ent, &noftrace, list) {
+		if (ent->addr == addr)
+			return true;
+	}
+	return false;
+}
+
 static int ftrace_process_locs(struct module *mod,
 			       unsigned long *start,
 			       unsigned long *end)
@@ -6645,6 +6690,9 @@ static int ftrace_process_locs(struct module *mod,
 		 * Skip any NULL pointers.
 		 */
 		if (!addr)
+			continue;
+		/* applies only for kernel for now */
+		if (!mod && is_noftrace_function(addr))
 			continue;
 
 		end_offset = (pg->index+1) * sizeof(pg->records[0]);
@@ -7299,6 +7347,11 @@ void __init ftrace_init(void)
 
 	pr_info("ftrace: allocating %ld entries in %ld pages\n",
 		count, count / ENTRIES_PER_PAGE + 1);
+
+	if (noftrace_init()) {
+		pr_warn("ftrace: failed to allocate noftrace list\n");
+		goto failed;
+	}
 
 	ret = ftrace_process_locs(NULL,
 				  __start_mcount_loc,

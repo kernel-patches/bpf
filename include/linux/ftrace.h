@@ -1141,4 +1141,14 @@ unsigned long arch_syscall_addr(int nr);
 
 #endif /* CONFIG_FTRACE_SYSCALLS */
 
+#ifdef CONFIG_FUNCTION_TRACER
+#define __NOFTRACE_SYMBOL(fname)				\
+static unsigned long __used					\
+	__section("_no_ftrace")					\
+	_noftrace_addr_##fname = (unsigned long)fname;
+#define NOFTRACE_SYMBOL(fname) __NOFTRACE_SYMBOL(fname)
+#else
+#define NOFTRACE_SYMBOL(fname)
+#endif /* CONFIG_FUNCTION_TRACER */
+
 #endif /* _LINUX_FTRACE_H */

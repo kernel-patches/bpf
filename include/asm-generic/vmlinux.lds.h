@@ -210,6 +210,15 @@
 #define KPROBE_BLACKLIST()
 #endif
 
+#ifdef CONFIG_FTRACE
+#define NOFTRACE()	. = ALIGN(8);			      \
+			__start_noftrace = .;		      \
+			KEEP(*(_no_ftrace))		      \
+			__stop_noftrace = .;
+#else
+#define NOFTRACE()
+#endif
+
 #ifdef CONFIG_FUNCTION_ERROR_INJECTION
 #define ERROR_INJECT_WHITELIST()	STRUCT_ALIGN();			      \
 			__start_error_injection_whitelist = .;		      \
@@ -705,6 +714,7 @@
 	FTRACE_EVENTS()							\
 	TRACE_SYSCALLS()						\
 	KPROBE_BLACKLIST()						\
+	NOFTRACE()							\
 	ERROR_INJECT_WHITELIST()					\
 	MEM_DISCARD(init.rodata)					\
 	CLK_OF_TABLES()							\

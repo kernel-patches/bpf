@@ -27,6 +27,7 @@
 #include <linux/bpfptr.h>
 #include <linux/btf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/ftrace.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -919,6 +920,7 @@ int arch_prepare_bpf_dispatcher(void *image, s64 *funcs, int num_funcs);
 		return bpf_func(ctx, insnsi);				\
 	}								\
 	EXPORT_SYMBOL(bpf_dispatcher_##name##_func);			\
+	NOFTRACE_SYMBOL(bpf_dispatcher_##name##_func);			\
 	struct bpf_dispatcher bpf_dispatcher_##name =			\
 		BPF_DISPATCHER_INIT(bpf_dispatcher_##name);
 #define DECLARE_BPF_DISPATCHER(name)					\
