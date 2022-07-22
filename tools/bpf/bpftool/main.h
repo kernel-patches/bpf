@@ -177,7 +177,8 @@ int map_parse_fd(int *argc, char ***argv,
 		 const struct bpf_get_fd_opts *opts);
 int map_parse_fds(int *argc, char ***argv, int **fds,
 		  const struct bpf_get_fd_opts *opts);
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len);
+int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len,
+			  const struct bpf_get_fd_opts *opts);
 
 struct bpf_prog_linfo;
 #ifdef HAVE_LIBBFD_SUPPORT

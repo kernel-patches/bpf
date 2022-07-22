@@ -1017,12 +1017,13 @@ exit_free:
 	return fd;
 }
 
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len)
+int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len,
+			  const struct bpf_get_fd_opts *opts)
 {
 	int err;
 	int fd;
 
-	fd = map_parse_fd(argc, argv, NULL);
+	fd = map_parse_fd(argc, argv, opts);
 	if (fd < 0)
 		return -1;
 
