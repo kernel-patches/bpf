@@ -3689,7 +3689,7 @@ again:
 	return prog;
 }
 
-#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD prog_id
+#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD open_flags
 
 struct bpf_prog *bpf_prog_by_id(u32 id)
 {
@@ -4315,7 +4315,7 @@ static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr)
 	return btf_new_fd(attr, uattr);
 }
 
-#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD btf_id
+#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD open_flags
 
 static int bpf_btf_get_fd_by_id(const union bpf_attr *attr)
 {
@@ -4733,7 +4733,7 @@ again:
 	return link;
 }
 
-#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD link_id
+#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD open_flags
 
 static int bpf_link_get_fd_by_id(const union bpf_attr *attr)
 {
