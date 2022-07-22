@@ -96,6 +96,13 @@ FEATURE_USER = .bpftool
 FEATURE_TESTS = libbfd disassembler-four-args libcap clang-bpf-co-re
 FEATURE_DISPLAY = libbfd disassembler-four-args libcap clang-bpf-co-re
 
+ifeq ($(BPFTOOL_STATIC),1)
+FEATURE_CHECK_LDFLAGS-libbfd = -static
+FEATURE_CHECK_LDFLAGS-libbfd-liberty = -static
+FEATURE_CHECK_LDFLAGS-libbfd-liberty-z = -static
+FEATURE_CHECK_LDFLAGS-libcap = -static
+endif
+
 check_feat := 1
 NON_CHECK_FEAT_TARGETS := clean uninstall doc doc-clean doc-install doc-uninstall
 ifdef MAKECMDGOALS
@@ -120,7 +127,11 @@ LIBS = $(LIBBPF) -lelf -lz
 LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf -lz
 ifeq ($(feature-libcap), 1)
 CFLAGS += -DUSE_LIBCAP
+ifeq ($(BPFTOOL_STATIC),1)
+LIBS += -l:libcap.a
+else
 LIBS += -lcap
+endif
 endif
 
 include $(wildcard $(OUTPUT)*.d)
@@ -131,12 +142,23 @@ BFD_SRCS = jit_disasm.c
 
 SRCS = $(filter-out $(BFD_SRCS),$(wildcard *.c))
 
+ifeq ($(BPFTOOL_STATIC),1)
+ifeq ($(feature-libbfd),1)
+  LIBS += -l:libbfd.a -ldl -l:libopcodes.a
+else ifeq ($(feature-libbfd-liberty),1)
+  LIBS += -l:libbfd.a -ldl -l:libopcodes.a -l:libiberty.a
+else ifeq ($(feature-libbfd-liberty-z),1)
+  LIBS += -l:libbfd.a -ldl -l:libopcodes.a -l:libiberty.a -l:libz.a
+  LIBS := $(filter-out -lz, $(LIBS))
+endif
+else
 ifeq ($(feature-libbfd),1)
   LIBS += -lbfd -ldl -lopcodes
 else ifeq ($(feature-libbfd-liberty),1)
   LIBS += -lbfd -ldl -lopcodes -liberty
 else ifeq ($(feature-libbfd-liberty-z),1)
   LIBS += -lbfd -ldl -lopcodes -liberty -lz
+endif
 endif
 
 ifneq ($(filter -lbfd,$(LIBS)),)
