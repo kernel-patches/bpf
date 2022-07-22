@@ -501,6 +501,7 @@ $(OUTPUT)/$(TRUNNER_BINARY): $(TRUNNER_TEST_OBJS)			\
 	$(Q)$$(CC) $$(CFLAGS) $$(filter %.a %.o,$$^) $$(LDLIBS) -o $$@
 	$(Q)$(RESOLVE_BTFIDS) --btf $(TRUNNER_OUTPUT)/btf_data.o $$@
 	$(Q)ln -sf $(if $2,..,.)/tools/build/bpftool/bootstrap/bpftool $(if $2,$2/)bpftool
+	$(Q)ln -sf $(if $2,..,.)/tools/build/bpftool/bpftool $(if $2,$2/)bpftool_nobootstrap
 
 endef
 
@@ -595,7 +596,7 @@ $(OUTPUT)/bench: $(OUTPUT)/bench.o \
 
 EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\
-	feature bpftool							\
+	feature bpftool bpftool_nobootstrap				\
 	$(addprefix $(OUTPUT)/,*.o *.skel.h *.lskel.h *.subskel.h	\
 			       no_alu32 bpf_gcc bpf_testmod.ko		\
 			       liburandom_read.so)
