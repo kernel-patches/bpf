@@ -87,10 +87,30 @@ struct bpf_cgroup_storage_key {
 	__u32	attach_type;		/* program attach type (enum bpf_attach_type) */
 };
 
+enum bpf_iter_cgroup_traversal_order {
+	BPF_ITER_CGROUP_PRE = 0,	/* pre-order traversal */
+	BPF_ITER_CGROUP_POST,		/* post-order traversal */
+	BPF_ITER_CGROUP_PARENT_UP,	/* traversal of ancestors up to the root */
+};
+
 union bpf_iter_link_info {
 	struct {
 		__u32	map_fd;
 	} map;
+
+	/* cgroup_iter walks either the live descendants of a cgroup subtree, or the
+	 * ancestors of a given cgroup.
+	 */
+	struct {
+		/* Cgroup file descriptor. This is root of the subtree if walking
+		 * descendants; it's the starting cgroup if walking the ancestors.
+		 * If it is left 0, the traversal starts from the default cgroup v2
+		 * root. For walking v1 hierarchy, one should always explicitly
+		 * specify the cgroup_fd.
+		 */
+		__u32	cgroup_fd;
+		__u32	traversal_order;
+	} cgroup;
 };
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */
@@ -6136,6 +6156,16 @@ struct bpf_link_info {
 					__u32 map_id;
 				} map;
 			};
+			union {
+				struct {
+					__u64 cgroup_id;
+					__u32 traversal_order;
+				} cgroup;
+			};
+			/* For new iters, if the first field is larger than __u32,
+			 * the struct should be added in the second union. Otherwise,
+			 * it will create holes before map_id, breaking uapi.
+			 */
 		} iter;
 		struct  {
 			__u32 netns_ino;
