@@ -910,16 +910,51 @@ int bpf_link_get_next_id(__u32 start_id, __u32 *next_id)
 	return bpf_obj_get_next_id(start_id, next_id, BPF_LINK_GET_NEXT_ID);
 }
 
-int bpf_prog_get_fd_by_id(__u32 id)
+static int
+bpf_prog_get_fd_by_id_opts_check(__u32 id, const struct bpf_get_fd_opts *opts,
+				 bool check_support)
 {
 	union bpf_attr attr;
 	int fd;
 
+	if (!OPTS_VALID(opts, bpf_get_fd_opts))
+		return libbpf_err(-EINVAL);
+
 	memset(&attr, 0, sizeof(attr));
 	attr.prog_id = id;
+	if (!check_support ||
+	    kernel_supports(NULL, FEAT_GET_FD_BY_ID_OPEN_FLAGS))
+		attr.open_flags = OPTS_GET(opts, flags, 0);
 
 	fd = sys_bpf_fd(BPF_PROG_GET_FD_BY_ID, &attr, sizeof(attr));
 	return libbpf_err_errno(fd);
+}
+
+int bpf_prog_get_fd_by_id_opts(__u32 id, const struct bpf_get_fd_opts *opts)
+{
+	return bpf_prog_get_fd_by_id_opts_check(id, opts, true);
+}
+
+int probe_get_fd_by_id_open_flags(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, opts,
+		.flags = BPF_F_RDONLY,
+	);
+
+	int ret, fd;
+
+	fd = bpf_prog_get_fd_by_id_opts_check(0, &opts, false);
+	ret = (fd >= 0) || (errno == ENOENT);
+
+	if (fd >= 0)
+		close(fd);
+
+	return ret;
+}
+
+int bpf_prog_get_fd_by_id(__u32 id)
+{
+	return bpf_prog_get_fd_by_id_opts(id, NULL);
 }
 
 int bpf_map_get_fd_by_id(__u32 id)

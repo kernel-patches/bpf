@@ -354,10 +354,13 @@ enum kern_feature_id {
 	FEAT_BTF_ENUM64,
 	/* Kernel uses syscall wrapper (CONFIG_ARCH_HAS_SYSCALL_WRAPPER) */
 	FEAT_SYSCALL_WRAPPER,
+	/* open_flags accepted for bpf_*_get_fd_by_id() funcs */
+	FEAT_GET_FD_BY_ID_OPEN_FLAGS,
 	__FEAT_CNT,
 };
 
 int probe_memcg_account(void);
+int probe_get_fd_by_id_open_flags(void);
 bool kernel_supports(const struct bpf_object *obj, enum kern_feature_id feat_id);
 int bump_rlimit_memlock(void);
 

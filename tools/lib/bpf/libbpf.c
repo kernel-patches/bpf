@@ -4784,6 +4784,10 @@ static struct kern_feature_desc {
 	[FEAT_SYSCALL_WRAPPER] = {
 		"Kernel using syscall wrapper", probe_kern_syscall_wrapper,
 	},
+	[FEAT_GET_FD_BY_ID_OPEN_FLAGS] = {
+		"open_flags accepted for bpf_*_get_fd_by_id() funcs",
+		probe_get_fd_by_id_open_flags,
+	},
 };
 
 bool kernel_supports(const struct bpf_object *obj, enum kern_feature_id feat_id)

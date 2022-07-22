@@ -271,6 +271,14 @@ LIBBPF_API int bpf_map_update_batch(int fd, const void *keys, const void *values
 				    const struct bpf_map_batch_opts *opts);
 
 LIBBPF_API int bpf_obj_pin(int fd, const char *pathname);
+
+struct bpf_get_fd_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 flags; /* permissions requested for the operation on fd */
+	__u32 :0;
+};
+#define bpf_get_fd_opts__last_field flags
+
 LIBBPF_API int bpf_obj_get(const char *pathname);
 
 struct bpf_prog_attach_opts {
@@ -354,6 +362,9 @@ LIBBPF_API int bpf_prog_get_next_id(__u32 start_id, __u32 *next_id);
 LIBBPF_API int bpf_map_get_next_id(__u32 start_id, __u32 *next_id);
 LIBBPF_API int bpf_btf_get_next_id(__u32 start_id, __u32 *next_id);
 LIBBPF_API int bpf_link_get_next_id(__u32 start_id, __u32 *next_id);
+
+LIBBPF_API int bpf_prog_get_fd_by_id_opts(__u32 id,
+					  const struct bpf_get_fd_opts *opts);
 LIBBPF_API int bpf_prog_get_fd_by_id(__u32 id);
 LIBBPF_API int bpf_map_get_fd_by_id(__u32 id);
 LIBBPF_API int bpf_btf_get_fd_by_id(__u32 id);
