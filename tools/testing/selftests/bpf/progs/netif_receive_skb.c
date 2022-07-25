@@ -49,7 +49,7 @@ static int __strncmp(const void *m1, const void *m2, size_t len)
 }
 
 #if __has_builtin(__builtin_btf_type_id)
-#define	TEST_BTF(_str, _type, _flags, _expected, ...)			\
+#define	TEST_BTF_SIZE(_str, _size, _type, _flags, _expected, ...)			\
 	do {								\
 		static const char _expectedval[EXPECTED_STRSIZE] =	\
 							_expected;	\
@@ -69,10 +69,13 @@ static int __strncmp(const void *m1, const void *m2, size_t len)
 			ret = -EINVAL;					\
 			break;						\
 		}							\
-		ret = bpf_snprintf_btf(_str, STRSIZE,			\
+		ret = bpf_snprintf_btf(_str, _size,			\
 				       &_ptr, sizeof(_ptr), _hflags);	\
-		if (ret)						\
+		if (ret	< 0) {						\
+			bpf_printk("bpf_snprintf_btf_failed (%s): %d\n",\
+				   _str, _expectedval, ret);		\
 			break;						\
+		}							\
 		_cmp = __strncmp(_str, _expectedval, EXPECTED_STRSIZE);	\
 		if (_cmp != 0) {					\
 			bpf_printk("(%d) got %s", _cmp, _str);		\
@@ -82,6 +85,10 @@ static int __strncmp(const void *m1, const void *m2, size_t len)
 			break;						\
 		}							\
 	} while (0)
+
+#define TEST_BTF(_str, _type, _flags, _expected, ...)			\
+	TEST_BTF_SIZE(_str, STRSIZE, _type, _flags, _expected,		\
+		      __VA_ARGS__)
 #endif
 
 /* Use where expected data string matches its stringified declaration */
@@ -98,7 +105,9 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 	static __u64 flags[] = { 0, BTF_F_COMPACT, BTF_F_ZERO, BTF_F_PTR_RAW,
 				 BTF_F_NONAME, BTF_F_COMPACT | BTF_F_ZERO |
 				 BTF_F_PTR_RAW | BTF_F_NONAME };
+	static char _short_str[2] = {};
 	static struct btf_ptr p = { };
+	char *short_str = _short_str;
 	__u32 key = 0;
 	int i, __ret;
 	char *str;
@@ -140,6 +149,32 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 	TEST_BTF(str, int, BTF_F_NONAME | BTF_F_ZERO, "0", 0);
 	TEST_BTF_C(str, int, 0, -4567);
 	TEST_BTF(str, int, BTF_F_NONAME, "-4567", -4567);
+
+	/* overflow tests; first string + terminator fits, others do not. */
+	TEST_BTF_SIZE(short_str, sizeof(_short_str), int, BTF_F_NONAME, "1", 1);
+	if (ret != 1) {
+		bpf_printk("bpf_snprintf_btf() should return 1 for '%s'/2-byte array",
+			   short_str);
+		ret = -ERANGE;
+	}
+	/* not enough space to write "10", write "1", return 2 for number of bytes we
+	 * should have written.
+	 */
+	TEST_BTF_SIZE(short_str, sizeof(_short_str), int, BTF_F_NONAME, "1", 10);
+	if (ret != 2) {
+		bpf_printk("bpf_snprintf_btf() should return 2 for '%s'/2-byte array",
+			   short_str);
+		ret = -ERANGE;
+	}
+	/* not enough space to write "100", write "1", return 3 for number of bytes we
+	 * should have written.
+	 */
+	TEST_BTF_SIZE(short_str, sizeof(_short_str), int, BTF_F_NONAME, "1", 100);
+	if (ret != 3) {
+		bpf_printk("bpf_snprintf_btf() should return 3 for '%s'/3-byte array",
+			   short_str);
+		ret = -ERANGE;
+	}
 
 	/* simple char */
 	TEST_BTF_C(str, char, 0, 100);
