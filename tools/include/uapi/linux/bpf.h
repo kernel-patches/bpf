@@ -87,10 +87,33 @@ struct bpf_cgroup_storage_key {
 	__u32	attach_type;		/* program attach type (enum bpf_attach_type) */
 };
 
+enum bpf_task_iter_type {
+	BPF_TASK_ITER_ALL = 0,
+	BPF_TASK_ITER_TID,
+};
+
 union bpf_iter_link_info {
 	struct {
 		__u32	map_fd;
 	} map;
+	/*
+	 * Parameters of task iterators.
+	 */
+	struct {
+		__u32	tid;
+		/*
+		 * The type of the iterator.
+		 *
+		 * It can be one of enum bpf_task_iter_type.
+		 *
+		 * BPF_TASK_ITER_ALL (default)
+		 *	The iterator iterates over resources of everyprocess.
+		 *
+		 * BPF_TASK_ITER_TID
+		 *	You should also set *tid* to iterate over one task.
+		 */
+		__u8	type;	/* BPF_TASK_ITER_* */
+	} task;
 };
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */
