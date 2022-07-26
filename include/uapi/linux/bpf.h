@@ -6161,6 +6161,10 @@ struct bpf_link_info {
 				struct {
 					__u32 map_id;
 				} map;
+				struct {
+					__u32 tid;
+					__u8 type; /* one of enum bpf_task_iter_type */
+				} task;
 			};
 		} iter;
 		struct  {
