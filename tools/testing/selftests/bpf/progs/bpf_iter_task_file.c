@@ -7,6 +7,8 @@ char _license[] SEC("license") = "GPL";
 
 int count = 0;
 int tgid = 0;
+int last_tgid = -1;
+int unique_tgid_count = 0;
 
 SEC("iter/task_file")
 int dump_task_file(struct bpf_iter__task_file *ctx)
@@ -26,6 +28,11 @@ int dump_task_file(struct bpf_iter__task_file *ctx)
 
 	if (tgid == task->tgid && task->tgid != task->pid)
 		count++;
+
+	if (last_tgid != task->tgid) {
+		last_tgid = task->tgid;
+		unique_tgid_count++;
+	}
 
 	BPF_SEQ_PRINTF(seq, "%8d %8d %8d %lx\n", task->tgid, task->pid, fd,
 		       (long)file->f_op);
