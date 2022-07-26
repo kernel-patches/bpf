@@ -5339,7 +5339,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	struct bpf_verifier_log *log = info->log;
 	const struct btf_param *args;
 	const char *tag_value;
-	u32 nr_args, arg;
+	u32 nr_args, arg, curr_tid = 0;
 	int i, ret;
 
 	if (off % 8) {
@@ -5385,6 +5385,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			 */
 			if (!t)
 				return true;
+			curr_tid = t->type;
 			t = btf_type_by_id(btf, t->type);
 			break;
 		case BPF_MODIFY_RETURN:
@@ -5394,7 +5395,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			if (!t)
 				return false;
 
-			t = btf_type_skip_modifiers(btf, t->type, NULL);
+			t = btf_type_skip_modifiers(btf, t->type, &curr_tid);
 			if (!btf_type_is_small_int(t)) {
 				bpf_log(log,
 					"ret type %s not allowed for fmod_ret\n",
@@ -5411,15 +5412,25 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		if (!t)
 			/* Default prog with MAX_BPF_FUNC_REG_ARGS args */
 			return true;
+		curr_tid = args[arg].type;
 		t = btf_type_by_id(btf, args[arg].type);
 	}
 
 	/* skip modifiers */
-	while (btf_type_is_modifier(t))
+	while (btf_type_is_modifier(t)) {
+		curr_tid = t->type;
 		t = btf_type_by_id(btf, t->type);
+	}
 	if (btf_type_is_small_int(t) || btf_is_any_enum(t))
 		/* accessing a scalar */
 		return true;
+	if (__btf_type_is_struct(t) && curr_tid) {
+		info->reg_type = PTR_TO_BTF_ID;
+		info->btf = btf;
+		info->btf_id = curr_tid;
+		return true;
+	}
+
 	if (!btf_type_is_ptr(t)) {
 		bpf_log(log,
 			"func '%s' arg%d '%s' has type %s. Only pointer access is allowed\n",
@@ -5878,7 +5889,7 @@ static int __get_type_size(struct btf *btf, u32 btf_id,
 	if (!t)
 		return -EINVAL;
 	*ret_type = t;
-	if (btf_type_is_ptr(t))
+	if (btf_type_is_ptr(t) || __btf_type_is_struct(t))
 		/* kernel size of pointer. Not BPF's size of pointer*/
 		return sizeof(void *);
 	if (btf_type_is_int(t) || btf_is_any_enum(t))
@@ -5894,8 +5905,13 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 {
 	const struct btf_param *args;
 	const struct btf_type *t;
-	u32 i, nargs;
+	u32 i, j = 0, nargs;
 	int ret;
+
+	for (i = 0; i < MAX_BPF_FUNC_STRUCT_ARGS; i++) {
+		m->struct_arg_idx[i] = 0;
+		m->struct_arg_bsize[i] = 0;
+	}
 
 	if (!func) {
 		/* BTF function prototype doesn't match the verifier types.
@@ -5943,6 +5959,25 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 				"The function %s has malformed void argument.\n",
 				tname);
 			return -EINVAL;
+		}
+		if (__btf_type_is_struct(t)) {
+			if (t->size > 16) {
+				bpf_log(log,
+					"The function %s arg%d struct size exceeds 16 bytes.\n",
+					tname, i);
+				return -EINVAL;
+			}
+
+			if (j == MAX_BPF_FUNC_STRUCT_ARGS) {
+				bpf_log(log,
+					"The function %s has more than %d struct/union args.\n",
+					tname, MAX_BPF_FUNC_STRUCT_ARGS);
+				return -EINVAL;
+			}
+
+			m->struct_arg_idx[j] = i;
+			m->struct_arg_bsize[j] = t->size;
+			j++;
 		}
 		m->arg_size[i] = ret;
 	}
