@@ -1982,6 +1982,10 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 	if (nargs > 8)
 		return -ENOTSUPP;
 
+	/* don't support struct argument */
+	if (m->struct_arg_bsize[0])
+		return -ENOTSUPP;
+
 	ret = prepare_trampoline(&ctx, im, tlinks, orig_call, nargs, flags);
 	if (ret < 0)
 		return ret;
