@@ -1749,7 +1749,7 @@ emit_jmp:
 }
 
 static void save_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
-		      int stack_size)
+		      int regs_off)
 {
 	int i;
 	/* Store function arguments to stack.
@@ -1761,11 +1761,11 @@ static void save_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
 		emit_stx(prog, bytes_to_bpf_size(m->arg_size[i]),
 			 BPF_REG_FP,
 			 i == 5 ? X86_REG_R9 : BPF_REG_1 + i,
-			 -(stack_size - i * 8));
+			 -(regs_off - i * 8));
 }
 
 static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
-			 int stack_size)
+			 int regs_off)
 {
 	int i;
 
@@ -1778,7 +1778,7 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
 		emit_ldx(prog, bytes_to_bpf_size(m->arg_size[i]),
 			 i == 5 ? X86_REG_R9 : BPF_REG_1 + i,
 			 BPF_REG_FP,
-			 -(stack_size - i * 8));
+			 -(regs_off - i * 8));
 }
 
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
