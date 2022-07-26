@@ -726,10 +726,19 @@ enum bpf_cgroup_storage_type {
  */
 #define MAX_BPF_FUNC_REG_ARGS 5
 
+/* The maximum number of struct arguments a single function may have. */
+#define MAX_BPF_FUNC_STRUCT_ARGS 2
+
 struct btf_func_model {
 	u8 ret_size;
 	u8 nr_args;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
+	/* The struct_arg_idx should be in increasing order like (0, 2, ...).
+	 * The struct_arg_bsize encodes the struct field byte size
+	 * for the corresponding struct argument index.
+	 */
+	u8 struct_arg_idx[MAX_BPF_FUNC_STRUCT_ARGS];
+	u8 struct_arg_bsize[MAX_BPF_FUNC_STRUCT_ARGS];
 };
 
 /* Restore arguments before returning from trampoline to let original function
