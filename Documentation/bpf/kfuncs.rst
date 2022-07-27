@@ -72,6 +72,24 @@ argument as its size. By default, without __sz annotation, the size of the type
 of the pointer is used. Without __sz annotation, a kfunc cannot accept a void
 pointer.
 
+2.2.2 __ref Annotation
+----------------------
+
+This annotation is used to indicate that the argument is trusted, i.e. it will
+be a pointer from an acquire function (defined later), and its offset will be
+zero. This annotation has the same effect as the KF_TRUSTED_ARGS kfunc flag but
+only on the parameter it is applied to. An example is shown below::
+
+        void bpf_task_send_signal(struct task_struct *task__ref, int signal)
+        {
+        ...
+        }
+
+Here, bpf_task_send_signal will only act on trusted task_struct pointers, and
+cannot be used on pointers obtained using pointer walking. This ensures that
+caller always calls this kfunc on a task whose lifetime is guaranteed for the
+duration of the call.
+
 .. _BPF_kfunc_nodef:
 
 2.3 Using an existing kernel function
