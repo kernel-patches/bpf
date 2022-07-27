@@ -46,8 +46,7 @@ static inline int copy_from_sockptr_offset(void *dst, sockptr_t src,
 {
 	if (!sockptr_is_kernel(src))
 		return copy_from_user(dst, src.user + offset, size);
-	memcpy(dst, src.kernel + offset, size);
-	return 0;
+	return copy_from_kernel_nofault(dst, src.kernel + offset, size);
 }
 
 static inline int copy_from_sockptr(void *dst, sockptr_t src, size_t size)
@@ -93,12 +92,8 @@ static inline void *memdup_sockptr_nul(sockptr_t src, size_t len)
 
 static inline long strncpy_from_sockptr(char *dst, sockptr_t src, size_t count)
 {
-	if (sockptr_is_kernel(src)) {
-		size_t len = min(strnlen(src.kernel, count - 1) + 1, count);
-
-		memcpy(dst, src.kernel, len);
-		return len;
-	}
+	if (sockptr_is_kernel(src))
+		return strncpy_from_kernel_nofault(dst, src.kernel, count);
 	return strncpy_from_user(dst, src.user, count);
 }
 
