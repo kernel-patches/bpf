@@ -417,7 +417,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 
 	if (needs_rtnl)
 		rtnl_lock();
-	lock_sock(sk);
+	lock_sock_sockopt(sk, optval);
 
 	switch (optname) {
 
@@ -994,14 +994,14 @@ done:
 		break;
 	}
 
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	if (needs_rtnl)
 		rtnl_unlock();
 
 	return retv;
 
 e_inval:
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	if (needs_rtnl)
 		rtnl_unlock();
 	return -EINVAL;
