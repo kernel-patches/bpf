@@ -1555,7 +1555,7 @@ static int nvme_tcp_alloc_queue(struct nvme_ctrl *nctrl,
 		char *iface = nctrl->opts->host_iface;
 		sockptr_t optval = KERNEL_SOCKPTR(iface);
 
-		ret = sock_setsockopt(queue->sock, SOL_SOCKET, SO_BINDTODEVICE,
+		ret = sock_setsockopt(queue->sock->sk, SOL_SOCKET, SO_BINDTODEVICE,
 				      optval, strlen(iface));
 		if (ret) {
 			dev_err(nctrl->device,

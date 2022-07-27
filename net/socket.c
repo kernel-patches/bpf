@@ -2245,7 +2245,7 @@ int __sys_setsockopt(int fd, int level, int optname, char __user *user_optval,
 	if (kernel_optval)
 		optval = KERNEL_SOCKPTR(kernel_optval);
 	if (level == SOL_SOCKET && !sock_use_custom_sol_socket(sock))
-		err = sock_setsockopt(sock, level, optname, optval, optlen);
+		err = sock_setsockopt(sock->sk, level, optname, optval, optlen);
 	else if (unlikely(!sock->ops->setsockopt))
 		err = -EOPNOTSUPP;
 	else

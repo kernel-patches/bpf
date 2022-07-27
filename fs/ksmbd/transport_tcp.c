@@ -420,7 +420,7 @@ static int create_socket(struct interface *iface)
 	ksmbd_tcp_nodelay(ksmbd_socket);
 	ksmbd_tcp_reuseaddr(ksmbd_socket);
 
-	ret = sock_setsockopt(ksmbd_socket,
+	ret = sock_setsockopt(ksmbd_socket->sk,
 			      SOL_SOCKET,
 			      SO_BINDTODEVICE,
 			      KERNEL_SOCKPTR(iface->name),

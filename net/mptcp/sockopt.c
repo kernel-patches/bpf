@@ -124,7 +124,7 @@ static int mptcp_sol_socket_intval(struct mptcp_sock *msk, int optname, int val)
 	struct sock *sk = (struct sock *)msk;
 	int ret;
 
-	ret = sock_setsockopt(sk->sk_socket, SOL_SOCKET, optname,
+	ret = sock_setsockopt(sk, SOL_SOCKET, optname,
 			      optval, sizeof(val));
 	if (ret)
 		return ret;
@@ -149,7 +149,7 @@ static int mptcp_setsockopt_sol_socket_tstamp(struct mptcp_sock *msk, int optnam
 	struct sock *sk = (struct sock *)msk;
 	int ret;
 
-	ret = sock_setsockopt(sk->sk_socket, SOL_SOCKET, optname,
+	ret = sock_setsockopt(sk, SOL_SOCKET, optname,
 			      optval, sizeof(val));
 	if (ret)
 		return ret;
@@ -225,7 +225,7 @@ static int mptcp_setsockopt_sol_socket_timestamping(struct mptcp_sock *msk,
 		return -EINVAL;
 	}
 
-	ret = sock_setsockopt(sk->sk_socket, SOL_SOCKET, optname,
+	ret = sock_setsockopt(sk, SOL_SOCKET, optname,
 			      KERNEL_SOCKPTR(&timestamping),
 			      sizeof(timestamping));
 	if (ret)
@@ -262,7 +262,7 @@ static int mptcp_setsockopt_sol_socket_linger(struct mptcp_sock *msk, sockptr_t 
 		return -EFAULT;
 
 	kopt = KERNEL_SOCKPTR(&ling);
-	ret = sock_setsockopt(sk->sk_socket, SOL_SOCKET, SO_LINGER, kopt, sizeof(ling));
+	ret = sock_setsockopt(sk, SOL_SOCKET, SO_LINGER, kopt, sizeof(ling));
 	if (ret)
 		return ret;
 
@@ -306,7 +306,7 @@ static int mptcp_setsockopt_sol_socket(struct mptcp_sock *msk, int optname,
 			return -EINVAL;
 		}
 
-		ret = sock_setsockopt(ssock, SOL_SOCKET, optname, optval, optlen);
+		ret = sock_setsockopt(ssock->sk, SOL_SOCKET, optname, optval, optlen);
 		if (ret == 0) {
 			if (optname == SO_REUSEPORT)
 				sk->sk_reuseport = ssock->sk->sk_reuseport;
@@ -349,7 +349,7 @@ static int mptcp_setsockopt_sol_socket(struct mptcp_sock *msk, int optname,
 	case SO_PREFER_BUSY_POLL:
 	case SO_BUSY_POLL_BUDGET:
 		/* No need to copy: only relevant for msk */
-		return sock_setsockopt(sk->sk_socket, SOL_SOCKET, optname, optval, optlen);
+		return sock_setsockopt(sk, SOL_SOCKET, optname, optval, optlen);
 	case SO_NO_CHECK:
 	case SO_DONTROUTE:
 	case SO_BROADCAST:
