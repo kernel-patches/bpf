@@ -944,7 +944,7 @@ static int do_ip_setsockopt(struct sock *sk, int level, int optname,
 	err = 0;
 	if (needs_rtnl)
 		rtnl_lock();
-	lock_sock(sk);
+	lock_sock_sockopt(sk, optval);
 
 	switch (optname) {
 	case IP_OPTIONS:
@@ -1368,13 +1368,13 @@ static int do_ip_setsockopt(struct sock *sk, int level, int optname,
 		err = -ENOPROTOOPT;
 		break;
 	}
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	if (needs_rtnl)
 		rtnl_unlock();
 	return err;
 
 e_inval:
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	if (needs_rtnl)
 		rtnl_unlock();
 	return -EINVAL;
