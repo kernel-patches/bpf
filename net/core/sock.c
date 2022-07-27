@@ -620,7 +620,7 @@ struct dst_entry *sk_dst_check(struct sock *sk, u32 cookie)
 }
 EXPORT_SYMBOL(sk_dst_check);
 
-static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
+static int sock_bindtoindex_locked(struct sock *sk, int ifindex, bool cap_check)
 {
 	int ret = -ENOPROTOOPT;
 #ifdef CONFIG_NETDEVICES
@@ -628,7 +628,8 @@ static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
 
 	/* Sorry... */
 	ret = -EPERM;
-	if (sk->sk_bound_dev_if && !ns_capable(net->user_ns, CAP_NET_RAW))
+	if (sk->sk_bound_dev_if && cap_check &&
+	    !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out;
 
 	ret = -EINVAL;
@@ -656,7 +657,7 @@ int sock_bindtoindex(struct sock *sk, int ifindex, bool lock_sk)
 
 	if (lock_sk)
 		lock_sock(sk);
-	ret = sock_bindtoindex_locked(sk, ifindex);
+	ret = sock_bindtoindex_locked(sk, ifindex, true);
 	if (lock_sk)
 		release_sock(sk);
 
@@ -704,7 +705,7 @@ static int sock_setbindtodevice(struct sock *sk, sockptr_t optval, int optlen)
 	}
 
 	lock_sock_sockopt(sk, optval);
-	ret = sock_bindtoindex_locked(sk, index);
+	ret = sock_bindtoindex_locked(sk, index, !optval.is_bpf);
 	release_sock_sockopt(sk, optval);
 out:
 #endif
@@ -1166,6 +1167,7 @@ set_sndbuf:
 
 	case SO_PRIORITY:
 		if ((val >= 0 && val <= 6) ||
+		    optval.is_bpf ||
 		    ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) ||
 		    ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
 			sk->sk_priority = val;
@@ -1312,7 +1314,8 @@ set_sndbuf:
 			clear_bit(SOCK_PASSSEC, &sock->flags);
 		break;
 	case SO_MARK:
-		if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) &&
+		if (!optval.is_bpf &&
+		    !ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) &&
 		    !ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN)) {
 			ret = -EPERM;
 			break;
@@ -1456,7 +1459,7 @@ set_sndbuf:
 		break;
 
 	case SO_BINDTOIFINDEX:
-		ret = sock_bindtoindex_locked(sk, val);
+		ret = sock_bindtoindex_locked(sk, val, !optval.is_bpf);
 		break;
 
 	case SO_BUF_LOCK:
