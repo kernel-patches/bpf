@@ -3502,11 +3502,12 @@ static int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 			return -EFAULT;
 		name[val] = 0;
 
-		lock_sock(sk);
-		err = tcp_set_congestion_control(sk, name, true,
-						 ns_capable(sock_net(sk)->user_ns,
-							    CAP_NET_ADMIN));
-		release_sock(sk);
+		lock_sock_sockopt(sk, optval);
+		err = tcp_set_congestion_control(sk, name, !optval.is_bpf,
+						 optval.is_bpf ?
+						 true : ns_capable(sock_net(sk)->user_ns,
+								   CAP_NET_ADMIN));
+		release_sock_sockopt(sk, optval);
 		return err;
 	}
 	case TCP_ULP: {
@@ -3522,9 +3523,9 @@ static int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 			return -EFAULT;
 		name[val] = 0;
 
-		lock_sock(sk);
+		lock_sock_sockopt(sk, optval);
 		err = tcp_set_ulp(sk, name);
-		release_sock(sk);
+		release_sock_sockopt(sk, optval);
 		return err;
 	}
 	case TCP_FASTOPEN_KEY: {
@@ -3557,7 +3558,7 @@ static int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 	if (copy_from_sockptr(&val, optval, sizeof(val)))
 		return -EFAULT;
 
-	lock_sock(sk);
+	lock_sock_sockopt(sk, optval);
 
 	switch (optname) {
 	case TCP_MAXSEG:
@@ -3779,7 +3780,7 @@ static int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 		break;
 	}
 
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	return err;
 }
 
