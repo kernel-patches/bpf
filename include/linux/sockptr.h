@@ -16,12 +16,18 @@ typedef struct {
 		void		*kernel;
 		void __user	*user;
 	};
-	bool		is_kernel : 1;
+	bool		is_kernel : 1,
+			is_bpf : 1;
 } sockptr_t;
 
 static inline bool sockptr_is_kernel(sockptr_t sockptr)
 {
 	return sockptr.is_kernel;
+}
+
+static inline sockptr_t KERNEL_SOCKPTR_BPF(void *p)
+{
+	return (sockptr_t) { .kernel = p, .is_kernel = true, .is_bpf = true };
 }
 
 static inline sockptr_t KERNEL_SOCKPTR(void *p)

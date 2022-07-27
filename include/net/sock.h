@@ -1721,6 +1721,18 @@ static inline void unlock_sock_fast(struct sock *sk, bool slow)
 	}
 }
 
+static inline void lock_sock_sockopt(struct sock *sk, sockptr_t optval)
+{
+	if (!optval.is_bpf)
+		lock_sock(sk);
+}
+
+static inline void release_sock_sockopt(struct sock *sk, sockptr_t optval)
+{
+	if (!optval.is_bpf)
+		release_sock(sk);
+}
+
 /* Used by processes to "lock" a socket state, so that
  * interrupts and bottom half handlers won't change it
  * from under us. It essentially blocks any incoming

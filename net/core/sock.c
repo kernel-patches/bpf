@@ -703,7 +703,9 @@ static int sock_setbindtodevice(struct sock *sk, sockptr_t optval, int optlen)
 			goto out;
 	}
 
-	return sock_bindtoindex(sk, index, true);
+	lock_sock_sockopt(sk, optval);
+	ret = sock_bindtoindex_locked(sk, index);
+	release_sock_sockopt(sk, optval);
 out:
 #endif
 
@@ -1067,7 +1069,7 @@ int sock_setsockopt(struct sock *sk, int level, int optname,
 
 	valbool = val ? 1 : 0;
 
-	lock_sock(sk);
+	lock_sock_sockopt(sk, optval);
 
 	switch (optname) {
 	case SO_DEBUG:
@@ -1496,7 +1498,7 @@ set_sndbuf:
 		ret = -ENOPROTOOPT;
 		break;
 	}
-	release_sock(sk);
+	release_sock_sockopt(sk, optval);
 	return ret;
 }
 EXPORT_SYMBOL(sock_setsockopt);
