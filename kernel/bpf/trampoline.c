@@ -255,8 +255,15 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 		return -ENOENT;
 
 	if (tr->func.ftrace_managed) {
-		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 0);
-		ret = register_ftrace_direct_multi(tr->fops, (long)new_addr);
+		if (tr->fops)
+			ret = ftrace_set_filter_ip(tr->fops, (unsigned long)ip,
+						   0, 0);
+		else
+			ret = -ENOTSUPP;
+
+		if (!ret)
+			ret = register_ftrace_direct_multi(tr->fops,
+							   (long)new_addr);
 	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
 	}
