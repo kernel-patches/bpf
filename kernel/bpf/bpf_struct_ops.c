@@ -12,6 +12,8 @@
 #include <linux/mutex.h>
 #include <linux/btf_ids.h>
 
+#define STRUCT_OPS_CREATE_FLAG_MASK (BPF_F_SELECTABLE_MEMCG)
+
 enum bpf_struct_ops_state {
 	BPF_STRUCT_OPS_STATE_INIT,
 	BPF_STRUCT_OPS_STATE_INUSE,
@@ -586,7 +588,8 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->key_size != sizeof(unsigned int) || attr->max_entries != 1 ||
-	    attr->map_flags || !attr->btf_vmlinux_value_type_id)
+	    (attr->map_flags & ~STRUCT_OPS_CREATE_FLAG_MASK) ||
+	    !attr->btf_vmlinux_value_type_id)
 		return -EINVAL;
 	return 0;
 }

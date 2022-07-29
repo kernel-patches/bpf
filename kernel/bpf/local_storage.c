@@ -16,7 +16,7 @@
 #include "../cgroup/cgroup-internal.h"
 
 #define LOCAL_STORAGE_CREATE_FLAG_MASK					\
-	(BPF_F_NUMA_NODE | BPF_F_ACCESS_MASK)
+	(BPF_F_NUMA_NODE | BPF_F_ACCESS_MASK | BPF_F_SELECTABLE_MEMCG)
 
 struct bpf_cgroup_storage_map {
 	struct bpf_map map;

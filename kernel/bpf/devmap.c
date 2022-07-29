@@ -50,8 +50,8 @@
 #include <trace/events/xdp.h>
 #include <linux/btf_ids.h>
 
-#define DEV_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
+#define DEV_CREATE_FLAG_MASK (BPF_F_NUMA_NODE |		\
+	BPF_F_RDONLY | BPF_F_WRONLY | BPF_F_SELECTABLE_MEMCG)
 
 struct xdp_dev_bulk_queue {
 	struct xdp_frame *q[DEV_MAP_BULK_SIZE];
