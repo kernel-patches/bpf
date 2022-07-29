@@ -1579,7 +1579,7 @@ static void reg_bounds_sync(struct bpf_reg_state *reg)
 
 static bool __reg32_bound_s64(s32 a)
 {
-	return a >= 0 && a <= S32_MAX;
+	return a >= 0;
 }
 
 static void __reg_assign_32_into_64(struct bpf_reg_state *reg)
