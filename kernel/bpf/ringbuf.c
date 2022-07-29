@@ -63,15 +63,15 @@ static struct bpf_ringbuf *bpf_ringbuf_area_alloc(struct bpf_map *map,
 						  size_t data_sz,
 						  int numa_node)
 {
-	const gfp_t flags = GFP_KERNEL_ACCOUNT | __GFP_RETRY_MAYFAIL |
+	const gfp_t flags = GFP_KERNEL | __GFP_RETRY_MAYFAIL |
 			    __GFP_NOWARN | __GFP_ZERO;
 	int nr_meta_pages = RINGBUF_PGOFF + RINGBUF_POS_PAGES;
 	int nr_data_pages = data_sz >> PAGE_SHIFT;
 	int nr_pages = nr_meta_pages + nr_data_pages;
-	struct page **pages, *page;
 	struct bpf_ringbuf *rb;
+	struct page **pages;
 	size_t array_size;
-	int i;
+	void *ptr;
 
 	/* Each data page is mapped twice to allow "virtual"
 	 * continuous read of samples wrapping around the end of ring
@@ -95,16 +95,10 @@ static struct bpf_ringbuf *bpf_ringbuf_area_alloc(struct bpf_map *map,
 	if (!pages)
 		return NULL;
 
-	for (i = 0; i < nr_pages; i++) {
-		page = alloc_pages_node(numa_node, flags, 0);
-		if (!page) {
-			nr_pages = i;
-			goto err_free_pages;
-		}
-		pages[i] = page;
-		if (i >= nr_meta_pages)
-			pages[nr_data_pages + i] = page;
-	}
+	ptr = bpf_map_pages_alloc(map, pages, nr_meta_pages, nr_data_pages,
+				  numa_node, flags, 0);
+	if (!ptr)
+		goto err_free_pages;
 
 	rb = vmap(pages, nr_meta_pages + 2 * nr_data_pages,
 		  VM_MAP | VM_USERMAP, PAGE_KERNEL);
@@ -116,8 +110,6 @@ static struct bpf_ringbuf *bpf_ringbuf_area_alloc(struct bpf_map *map,
 	}
 
 err_free_pages:
-	for (i = 0; i < nr_pages; i++)
-		__free_page(pages[i]);
 	bpf_map_area_free(pages);
 	return NULL;
 }
@@ -189,11 +181,10 @@ static void bpf_ringbuf_free(struct bpf_ringbuf *rb)
 	 * to unmap rb itself with vunmap() below
 	 */
 	struct page **pages = rb->pages;
-	int i, nr_pages = rb->nr_pages;
+	int nr_pages = rb->nr_pages;
 
 	vunmap(rb);
-	for (i = 0; i < nr_pages; i++)
-		__free_page(pages[i]);
+	bpf_map_pages_free(pages, nr_pages);
 	bpf_map_area_free(pages);
 }
 

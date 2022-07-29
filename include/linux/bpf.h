@@ -1638,8 +1638,12 @@ void *bpf_map_container_alloc(u64 size, int numa_node);
 void *bpf_map_container_mmapable_alloc(u64 size, int numa_node,
 				       u32 align, u32 offset);
 void *bpf_map_area_alloc(struct bpf_map *map, u64 size, int numa_node);
+void *bpf_map_pages_alloc(struct bpf_map *map, struct page **pages,
+			  int nr_meta_pages, int nr_data_pages, int nid,
+			  gfp_t flags, unsigned int order);
 void bpf_map_area_free(void *base);
 void bpf_map_container_free(void *base);
+void bpf_map_pages_free(struct page **pages, int nr_pages);
 bool bpf_map_write_active(const struct bpf_map *map);
 void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);
 int  generic_map_lookup_batch(struct bpf_map *map,

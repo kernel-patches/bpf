@@ -559,6 +559,47 @@ void bpf_map_container_free(void *container)
 	kvfree(container);
 }
 
+void *bpf_map_pages_alloc(struct bpf_map *map, struct page **pages,
+			  int nr_meta_pages, int nr_data_pages, int nid,
+			  gfp_t flags, unsigned int order)
+{
+	int nr_pages = nr_meta_pages + nr_data_pages;
+	struct mem_cgroup *memcg, *old_memcg;
+	struct page *page;
+	int i;
+
+	memcg = bpf_map_get_memcg(map);
+	old_memcg = set_active_memcg(memcg);
+	for (i = 0; i < nr_pages; i++) {
+		page = alloc_pages_node(nid, flags | __GFP_ACCOUNT, order);
+		if (!page) {
+			nr_pages = i;
+			set_active_memcg(old_memcg);
+			goto err_free_pages;
+		}
+		pages[i] = page;
+		if (i >= nr_meta_pages)
+			pages[nr_data_pages + i] = page;
+	}
+	set_active_memcg(old_memcg);
+
+	return pages;
+
+err_free_pages:
+	for (i = 0; i < nr_pages; i++)
+		__free_page(pages[i]);
+
+	return NULL;
+}
+
+void bpf_map_pages_free(struct page **pages, int nr_pages)
+{
+	int i;
+
+	for (i = 0; i < nr_pages; i++)
+		__free_page(pages[i]);
+}
+
 static int bpf_map_kptr_off_cmp(const void *a, const void *b)
 {
 	const struct bpf_map_value_off_desc *off_desc1 = a, *off_desc2 = b;
