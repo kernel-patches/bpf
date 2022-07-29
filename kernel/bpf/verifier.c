@@ -4383,6 +4383,7 @@ static void zext_32_to_64(struct bpf_reg_state *reg)
 {
 	reg->var_off = tnum_subreg(reg->var_off);
 	__reg_assign_32_into_64(reg);
+	reg_bounds_sync(reg);
 }
 
 /* truncate register to smaller size (in bytes)
@@ -9009,10 +9010,12 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		break;
 	}
 
-	/* ALU32 ops are zero extended into 64bit register */
-	if (alu32)
+	if (alu32) {
+		/* ALU32 ops are zero extended into 64bit register */
 		zext_32_to_64(dst_reg);
-	reg_bounds_sync(dst_reg);
+	} else {
+		__reg_combine_64_into_32(dst_reg);
+	}
 	return 0;
 }
 
@@ -9201,7 +9204,6 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							 insn->dst_reg);
 				}
 				zext_32_to_64(dst_reg);
-				reg_bounds_sync(dst_reg);
 			}
 		} else {
 			/* case: R = imm
