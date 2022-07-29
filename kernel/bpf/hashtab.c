@@ -331,7 +331,8 @@ static int prealloc_init(struct bpf_htab *htab)
 	if (htab_has_extra_elems(htab))
 		num_entries += num_possible_cpus();
 
-	htab->elems = bpf_map_area_alloc((u64)htab->elem_size * num_entries,
+	htab->elems = bpf_map_area_alloc(&htab->map,
+					 (u64)htab->elem_size * num_entries,
 					 htab->map.numa_node);
 	if (!htab->elems)
 		return -ENOMEM;
@@ -532,7 +533,7 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		goto free_htab;
 
 	err = -ENOMEM;
-	htab->buckets = bpf_map_area_alloc(htab->n_buckets *
+	htab->buckets = bpf_map_area_alloc(&htab->map, htab->n_buckets *
 					   sizeof(struct bucket),
 					   htab->map.numa_node);
 	if (!htab->buckets)

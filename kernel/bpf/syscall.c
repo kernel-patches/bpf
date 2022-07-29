@@ -334,16 +334,6 @@ static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
 			flags, numa_node, __builtin_return_address(0));
 }
 
-void *bpf_map_area_alloc(u64 size, int numa_node)
-{
-	return __bpf_map_area_alloc(size, numa_node, false);
-}
-
-void bpf_map_area_free(void *area)
-{
-	kvfree(area);
-}
-
 static u32 bpf_map_flags_retain_permanent(u32 flags)
 {
 	/* Some map creation flags are not tied to the map object but
@@ -494,6 +484,24 @@ static struct mem_cgroup *bpf_map_get_memcg(const struct bpf_map *map)
 	return root_memcg();
 }
 #endif
+
+void *bpf_map_area_alloc(struct bpf_map *map, u64 size, int numa_node)
+{
+	struct mem_cgroup *memcg, *old_memcg;
+	void *ptr;
+
+	memcg = bpf_map_get_memcg(map);
+	old_memcg = set_active_memcg(memcg);
+	ptr = __bpf_map_area_alloc(size, numa_node, false);
+	set_active_memcg(old_memcg);
+
+	return ptr;
+}
+
+void bpf_map_area_free(void *area)
+{
+	kvfree(area);
+}
 
 /*
  * The return pointer is a bpf_map container, as follow,

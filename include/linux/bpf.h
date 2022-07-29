@@ -1637,7 +1637,7 @@ void bpf_map_put(struct bpf_map *map);
 void *bpf_map_container_alloc(u64 size, int numa_node);
 void *bpf_map_container_mmapable_alloc(u64 size, int numa_node,
 				       u32 align, u32 offset);
-void *bpf_map_area_alloc(u64 size, int numa_node);
+void *bpf_map_area_alloc(struct bpf_map *map, u64 size, int numa_node);
 void bpf_map_area_free(void *base);
 void bpf_map_container_free(void *base);
 bool bpf_map_write_active(const struct bpf_map *map);

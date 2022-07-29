@@ -88,13 +88,15 @@ static DEFINE_PER_CPU(struct list_head, dev_flush_list);
 static DEFINE_SPINLOCK(dev_map_lock);
 static LIST_HEAD(dev_map_list);
 
-static struct hlist_head *dev_map_create_hash(unsigned int entries,
+static struct hlist_head *dev_map_create_hash(struct bpf_map *map,
+					      unsigned int entries,
 					      int numa_node)
 {
 	int i;
 	struct hlist_head *hash;
 
-	hash = bpf_map_area_alloc((u64) entries * sizeof(*hash), numa_node);
+	hash = bpf_map_area_alloc(map, (u64) entries * sizeof(*hash),
+				  numa_node);
 	if (hash != NULL)
 		for (i = 0; i < entries; i++)
 			INIT_HLIST_HEAD(&hash[i]);
@@ -138,14 +140,16 @@ static int dev_map_init_map(struct bpf_dtab *dtab, union bpf_attr *attr)
 	}
 
 	if (attr->map_type == BPF_MAP_TYPE_DEVMAP_HASH) {
-		dtab->dev_index_head = dev_map_create_hash(dtab->n_buckets,
+		dtab->dev_index_head = dev_map_create_hash(&dtab->map,
+							   dtab->n_buckets,
 							   dtab->map.numa_node);
 		if (!dtab->dev_index_head)
 			return -ENOMEM;
 
 		spin_lock_init(&dtab->index_lock);
 	} else {
-		dtab->netdev_map = bpf_map_area_alloc((u64) dtab->map.max_entries *
+		dtab->netdev_map = bpf_map_area_alloc(&dtab->map,
+						      (u64) dtab->map.max_entries *
 						      sizeof(struct bpf_dtab_netdev *),
 						      dtab->map.numa_node);
 		if (!dtab->netdev_map)

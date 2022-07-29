@@ -625,9 +625,9 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	st_map->st_ops = st_ops;
 	map = &st_map->map;
 
-	st_map->uvalue = bpf_map_area_alloc(vt->size, NUMA_NO_NODE);
+	st_map->uvalue = bpf_map_area_alloc(map, vt->size, NUMA_NO_NODE);
 	st_map->links =
-		bpf_map_area_alloc(btf_type_vlen(t) * sizeof(struct bpf_links *),
+		bpf_map_area_alloc(map, btf_type_vlen(t) * sizeof(struct bpf_links *),
 				   NUMA_NO_NODE);
 	st_map->image = bpf_jit_alloc_exec(PAGE_SIZE);
 	if (!st_map->uvalue || !st_map->links || !st_map->image) {
