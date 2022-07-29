@@ -153,14 +153,15 @@ static struct bpf_map *reuseport_array_alloc(union bpf_attr *attr)
 {
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct reuseport_array *array;
+	size_t size = struct_size(array, ptrs, attr->max_entries);
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
 
 	/* allocate all map elements and zero-initialize them */
-	array = bpf_map_container_alloc(struct_size(array, ptrs, attr->max_entries), numa_node);
-	if (!array)
-		return ERR_PTR(-ENOMEM);
+	array = bpf_map_container_alloc(attr, size, numa_node);
+	if (IS_ERR(array))
+		return ERR_CAST(array);
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&array->map, attr);

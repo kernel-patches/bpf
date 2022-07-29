@@ -526,14 +526,14 @@ void bpf_map_area_free(void *area)
  *
  * It is used in map creation path.
  */
-void *bpf_map_container_alloc(u64 size, int numa_node)
+void *bpf_map_container_alloc(union bpf_attr *attr, u64 size, int numa_node)
 {
 	struct bpf_map *map;
 	void *container;
 
 	container = __bpf_map_area_alloc(size, numa_node, false);
 	if (!container)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	map = (struct bpf_map *)container;
 	bpf_map_save_memcg(map);
@@ -541,8 +541,8 @@ void *bpf_map_container_alloc(u64 size, int numa_node)
 	return container;
 }
 
-void *bpf_map_container_mmapable_alloc(u64 size, int numa_node, u32 align,
-				       u32 offset)
+void *bpf_map_container_mmapable_alloc(union bpf_attr *attr, u64 size,
+				       int numa_node, u32 align, u32 offset)
 {
 	struct bpf_map *map;
 	void *container;
@@ -551,7 +551,7 @@ void *bpf_map_container_mmapable_alloc(u64 size, int numa_node, u32 align,
 	/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
 	ptr = __bpf_map_area_alloc(size, numa_node, true);
 	if (!ptr)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	container = ptr + align - offset;
 	map = (struct bpf_map *)container;

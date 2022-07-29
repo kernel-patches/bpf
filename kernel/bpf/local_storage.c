@@ -313,9 +313,9 @@ static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 		/* max_entries is not used and enforced to be 0 */
 		return ERR_PTR(-EINVAL);
 
-	map = bpf_map_container_alloc(sizeof(struct bpf_cgroup_storage_map), numa_node);
-	if (!map)
-		return ERR_PTR(-ENOMEM);
+	map = bpf_map_container_alloc(attr, sizeof(*map), numa_node);
+	if (IS_ERR(map))
+		return ERR_CAST(map);
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&map->map, attr);

@@ -101,9 +101,9 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-E2BIG);
 
 	cost = n_buckets * sizeof(struct stack_map_bucket *) + sizeof(*smap);
-	smap = bpf_map_container_alloc(cost, bpf_map_attr_numa_node(attr));
-	if (!smap)
-		return ERR_PTR(-ENOMEM);
+	smap = bpf_map_container_alloc(attr, cost, bpf_map_attr_numa_node(attr));
+	if (IS_ERR(smap))
+		return ERR_CAST(smap);
 
 	bpf_map_init_from_attr(&smap->map, attr);
 	smap->n_buckets = n_buckets;

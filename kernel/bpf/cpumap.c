@@ -97,9 +97,9 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	    attr->map_flags & ~BPF_F_NUMA_NODE)
 		return ERR_PTR(-EINVAL);
 
-	cmap = bpf_map_container_alloc(sizeof(*cmap), NUMA_NO_NODE);
-	if (!cmap)
-		return ERR_PTR(-ENOMEM);
+	cmap = bpf_map_container_alloc(attr, sizeof(*cmap), NUMA_NO_NODE);
+	if (IS_ERR(cmap))
+		return ERR_CAST(cmap);
 
 	bpf_map_init_from_attr(&cmap->map, attr);
 

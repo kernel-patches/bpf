@@ -496,9 +496,9 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	struct bpf_htab *htab;
 	int err, i;
 
-	htab = bpf_map_container_alloc(sizeof(*htab), NUMA_NO_NODE);
-	if (!htab)
-		return ERR_PTR(-ENOMEM);
+	htab = bpf_map_container_alloc(attr, sizeof(*htab), NUMA_NO_NODE);
+	if (IS_ERR(htab))
+		return ERR_CAST(htab);
 
 	lockdep_register_key(&htab->lockdep_key);
 

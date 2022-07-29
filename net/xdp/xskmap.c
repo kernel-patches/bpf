@@ -75,9 +75,9 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	numa_node = bpf_map_attr_numa_node(attr);
 	size = struct_size(m, xsk_map, attr->max_entries);
 
-	m = bpf_map_container_alloc(size, numa_node);
-	if (!m)
-		return ERR_PTR(-ENOMEM);
+	m = bpf_map_container_alloc(attr, size, numa_node);
+	if (IS_ERR(m))
+		return ERR_CAST(m);
 
 	bpf_map_init_from_attr(&m->map, attr);
 	spin_lock_init(&m->lock);

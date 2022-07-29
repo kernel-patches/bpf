@@ -618,9 +618,9 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		 */
 		(vt->size - sizeof(struct bpf_struct_ops_value));
 
-	st_map = bpf_map_container_alloc(st_map_size, NUMA_NO_NODE);
-	if (!st_map)
-		return ERR_PTR(-ENOMEM);
+	st_map = bpf_map_container_alloc(attr, st_map_size, NUMA_NO_NODE);
+	if (IS_ERR(st_map))
+		return ERR_CAST(st_map);
 
 	st_map->st_ops = st_ops;
 	map = &st_map->map;

@@ -167,9 +167,9 @@ static struct bpf_map *dev_map_alloc(union bpf_attr *attr)
 	if (!capable(CAP_NET_ADMIN))
 		return ERR_PTR(-EPERM);
 
-	dtab = bpf_map_container_alloc(sizeof(*dtab), NUMA_NO_NODE);
-	if (!dtab)
-		return ERR_PTR(-ENOMEM);
+	dtab = bpf_map_container_alloc(attr, sizeof(*dtab), NUMA_NO_NODE);
+	if (IS_ERR(dtab))
+		return ERR_CAST(dtab);
 
 	err = dev_map_init_map(dtab, attr);
 	if (err) {

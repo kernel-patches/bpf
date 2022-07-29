@@ -41,9 +41,9 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	    attr->map_flags & ~SOCK_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
-	stab = bpf_map_container_alloc(sizeof(*stab), NUMA_NO_NODE);
-	if (!stab)
-		return ERR_PTR(-ENOMEM);
+	stab = bpf_map_container_alloc(attr, sizeof(*stab), NUMA_NO_NODE);
+	if (IS_ERR(stab))
+		return ERR_CAST(stab);
 
 	bpf_map_init_from_attr(&stab->map, attr);
 	raw_spin_lock_init(&stab->lock);
@@ -1077,9 +1077,9 @@ static struct bpf_map *sock_hash_alloc(union bpf_attr *attr)
 	if (attr->key_size > MAX_BPF_STACK)
 		return ERR_PTR(-E2BIG);
 
-	htab = bpf_map_container_alloc(sizeof(*htab), NUMA_NO_NODE);
-	if (!htab)
-		return ERR_PTR(-ENOMEM);
+	htab = bpf_map_container_alloc(attr, sizeof(*htab), NUMA_NO_NODE);
+	if (IS_ERR(htab))
+		return ERR_CAST(htab);
 
 	bpf_map_init_from_attr(&htab->map, attr);
 

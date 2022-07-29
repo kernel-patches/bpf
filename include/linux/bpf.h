@@ -1634,9 +1634,9 @@ void bpf_map_inc_with_uref(struct bpf_map *map);
 struct bpf_map * __must_check bpf_map_inc_not_zero(struct bpf_map *map);
 void bpf_map_put_with_uref(struct bpf_map *map);
 void bpf_map_put(struct bpf_map *map);
-void *bpf_map_container_alloc(u64 size, int numa_node);
-void *bpf_map_container_mmapable_alloc(u64 size, int numa_node,
-				       u32 align, u32 offset);
+void *bpf_map_container_alloc(union bpf_attr *attr, u64 size, int numa_node);
+void *bpf_map_container_mmapable_alloc(union bpf_attr *attr, u64 size,
+				       int numa_node, u32 align, u32 offset);
 void *bpf_map_area_alloc(struct bpf_map *map, u64 size, int numa_node);
 void *bpf_map_pages_alloc(struct bpf_map *map, struct page **pages,
 			  int nr_meta_pages, int nr_data_pages, int nid,

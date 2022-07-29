@@ -610,9 +610,9 @@ struct bpf_local_storage_map *bpf_local_storage_map_alloc(union bpf_attr *attr)
 	unsigned int i;
 	u32 nbuckets;
 
-	smap = bpf_map_container_alloc(sizeof(*smap), NUMA_NO_NODE);
-	if (!smap)
-		return ERR_PTR(-ENOMEM);
+	smap = bpf_map_container_alloc(attr, sizeof(*smap), NUMA_NO_NODE);
+	if (IS_ERR(smap))
+		return ERR_CAST(smap);
 	bpf_map_init_from_attr(&smap->map, attr);
 
 	nbuckets = roundup_pow_of_two(num_possible_cpus());

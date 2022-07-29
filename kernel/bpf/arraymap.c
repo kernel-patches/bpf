@@ -131,16 +131,17 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 		void *data;
 
 		/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
-		data = bpf_map_container_mmapable_alloc(array_size, numa_node,
-							align, offset);
-		if (!data)
-			return ERR_PTR(-ENOMEM);
+		data = bpf_map_container_mmapable_alloc(attr, array_size,
+							numa_node, align,
+							offset);
+		if (IS_ERR(data))
+			return data;
 		array = data + align - offset;
 	} else {
-		array = bpf_map_container_alloc(array_size, numa_node);
+		array = bpf_map_container_alloc(attr, array_size, numa_node);
 	}
-	if (!array)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(array))
+		return ERR_CAST(array);
 	array->index_mask = index_mask;
 	array->map.bypass_spec_v1 = bypass_spec_v1;
 

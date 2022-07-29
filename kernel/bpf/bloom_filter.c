@@ -142,10 +142,11 @@ static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 	}
 
 	bitset_bytes = roundup(bitset_bytes, sizeof(unsigned long));
-	bloom = bpf_map_container_alloc(sizeof(*bloom) + bitset_bytes, numa_node);
+	bloom = bpf_map_container_alloc(attr, sizeof(*bloom) + bitset_bytes,
+					numa_node);
 
-	if (!bloom)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(bloom))
+		return ERR_CAST(bloom);
 
 	bpf_map_init_from_attr(&bloom->map, attr);
 

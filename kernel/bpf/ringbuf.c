@@ -159,9 +159,9 @@ static struct bpf_map *ringbuf_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-E2BIG);
 #endif
 
-	rb_map = bpf_map_container_alloc(sizeof(*rb_map), NUMA_NO_NODE);
-	if (!rb_map)
-		return ERR_PTR(-ENOMEM);
+	rb_map = bpf_map_container_alloc(attr, sizeof(*rb_map), NUMA_NO_NODE);
+	if (IS_ERR(rb_map))
+		return ERR_CAST(rb_map);
 
 	bpf_map_init_from_attr(&rb_map->map, attr);
 

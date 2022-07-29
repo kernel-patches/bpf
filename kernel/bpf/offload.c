@@ -372,9 +372,9 @@ struct bpf_map *bpf_map_offload_map_alloc(union bpf_attr *attr)
 	    attr->map_type != BPF_MAP_TYPE_HASH)
 		return ERR_PTR(-EINVAL);
 
-	offmap = bpf_map_container_alloc(sizeof(*offmap), NUMA_NO_NODE);
-	if (!offmap)
-		return ERR_PTR(-ENOMEM);
+	offmap = bpf_map_container_alloc(attr, sizeof(*offmap), NUMA_NO_NODE);
+	if (IS_ERR(offmap))
+		return ERR_CAST(offmap);
 
 	bpf_map_init_from_attr(&offmap->map, attr);
 

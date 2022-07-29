@@ -558,9 +558,9 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 	    attr->value_size > LPM_VAL_SIZE_MAX)
 		return ERR_PTR(-EINVAL);
 
-	trie = bpf_map_container_alloc(sizeof(*trie), NUMA_NO_NODE);
-	if (!trie)
-		return ERR_PTR(-ENOMEM);
+	trie = bpf_map_container_alloc(attr, sizeof(*trie), NUMA_NO_NODE);
+	if (IS_ERR(trie))
+		return ERR_CAST(trie);
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&trie->map, attr);
