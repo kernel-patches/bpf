@@ -126,16 +126,18 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 
 	/* allocate all map elements and zero-initialize them */
 	if (attr->map_flags & BPF_F_MMAPABLE) {
+		u32 align = PAGE_ALIGN(sizeof(struct bpf_array));
+		u32 offset = offsetof(struct bpf_array, value);
 		void *data;
 
 		/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
-		data = bpf_map_area_mmapable_alloc(array_size, numa_node);
+		data = bpf_map_container_mmapable_alloc(array_size, numa_node,
+							align, offset);
 		if (!data)
 			return ERR_PTR(-ENOMEM);
-		array = data + PAGE_ALIGN(sizeof(struct bpf_array))
-			- offsetof(struct bpf_array, value);
+		array = data + align - offset;
 	} else {
-		array = bpf_map_area_alloc(array_size, numa_node);
+		array = bpf_map_container_alloc(array_size, numa_node);
 	}
 	if (!array)
 		return ERR_PTR(-ENOMEM);
@@ -147,7 +149,7 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	array->elem_size = elem_size;
 
 	if (percpu && bpf_array_alloc_percpu(array)) {
-		bpf_map_area_free(array);
+		bpf_map_container_free(array);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -420,6 +422,7 @@ static void array_map_free(struct bpf_map *map)
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	int i;
 
+
 	if (map_value_has_kptrs(map)) {
 		for (i = 0; i < array->map.max_entries; i++)
 			bpf_map_free_kptrs(map, array_map_elem_ptr(array, i));
@@ -430,9 +433,9 @@ static void array_map_free(struct bpf_map *map)
 		bpf_array_free_percpu(array);
 
 	if (array->map.map_flags & BPF_F_MMAPABLE)
-		bpf_map_area_free(array_map_vmalloc_addr(array));
+		bpf_map_container_free(array_map_vmalloc_addr(array));
 	else
-		bpf_map_area_free(array);
+		bpf_map_container_free(array);
 }
 
 static void array_map_seq_show_elem(struct bpf_map *map, void *key,
@@ -774,7 +777,7 @@ static void fd_array_map_free(struct bpf_map *map)
 	for (i = 0; i < array->map.max_entries; i++)
 		BUG_ON(array->ptrs[i] != NULL);
 
-	bpf_map_area_free(array);
+	bpf_map_container_free(array);
 }
 
 static void *fd_array_map_lookup_elem(struct bpf_map *map, void *key)

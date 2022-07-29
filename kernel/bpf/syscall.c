@@ -339,11 +339,6 @@ void *bpf_map_area_alloc(u64 size, int numa_node)
 	return __bpf_map_area_alloc(size, numa_node, false);
 }
 
-void *bpf_map_area_mmapable_alloc(u64 size, int numa_node)
-{
-	return __bpf_map_area_alloc(size, numa_node, true);
-}
-
 void bpf_map_area_free(void *area)
 {
 	kvfree(area);
@@ -669,7 +664,6 @@ static void bpf_map_free_deferred(struct work_struct *work)
 
 	security_bpf_map_free(map);
 	kfree(map->off_arr);
-	bpf_map_release_memcg(map);
 	/* implementation dependent freeing, map_free callback also does
 	 * bpf_map_free_kptr_off_tab, if needed.
 	 */
@@ -1217,8 +1211,6 @@ static int map_create(union bpf_attr *attr)
 	err = bpf_map_alloc_id(map);
 	if (err)
 		goto free_map_sec;
-
-	bpf_map_save_memcg(map);
 
 	err = bpf_map_new_fd(map, f_flags);
 	if (err < 0) {

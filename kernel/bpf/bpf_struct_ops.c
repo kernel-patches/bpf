@@ -580,7 +580,7 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	bpf_map_area_free(st_map->links);
 	bpf_jit_free_exec(st_map->image);
 	bpf_map_area_free(st_map->uvalue);
-	bpf_map_area_free(st_map);
+	bpf_map_container_free(st_map);
 }
 
 static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
@@ -618,7 +618,7 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		 */
 		(vt->size - sizeof(struct bpf_struct_ops_value));
 
-	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
+	st_map = bpf_map_container_alloc(st_map_size, NUMA_NO_NODE);
 	if (!st_map)
 		return ERR_PTR(-ENOMEM);
 
