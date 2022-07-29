@@ -433,7 +433,7 @@ static struct mem_cgroup *bpf_map_get_memcg(const struct bpf_map *map)
 	if (map->objcg)
 		return get_mem_cgroup_from_objcg(map->objcg);
 
-	return root_mem_cgroup;
+	return root_memcg();
 }
 
 void *bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
@@ -487,6 +487,11 @@ static void bpf_map_save_memcg(struct bpf_map *map)
 
 static void bpf_map_release_memcg(struct bpf_map *map)
 {
+}
+
+static struct mem_cgroup *bpf_map_get_memcg(const struct bpf_map *map)
+{
+	return root_memcg();
 }
 #endif
 
