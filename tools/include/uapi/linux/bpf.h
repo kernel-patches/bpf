@@ -1296,6 +1296,8 @@ union bpf_attr {
 						   * struct stored as the
 						   * map value
 						   */
+		__s32	memcg_fd;	/* selectable memcg */
+		__s32	:32;		/* hole */
 		/* Any per-map-type extra fields
 		 *
 		 * BPF_MAP_TYPE_BLOOM_FILTER - the lowest 4 bits indicate the

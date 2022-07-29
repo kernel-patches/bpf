@@ -402,14 +402,30 @@ void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock)
 }
 
 #ifdef CONFIG_MEMCG_KMEM
-static void bpf_map_save_memcg(struct bpf_map *map)
+static int bpf_map_save_memcg(struct bpf_map *map, union bpf_attr *attr)
 {
-	/* Currently if a map is created by a process belonging to the root
-	 * memory cgroup, get_obj_cgroup_from_current() will return NULL.
-	 * So we have to check map->objcg for being NULL each time it's
-	 * being used.
-	 */
-	map->objcg = get_obj_cgroup_from_current();
+	struct obj_cgroup *objcg;
+	struct cgroup *cgrp;
+
+	if (attr->map_flags & BPF_F_SELECTABLE_MEMCG) {
+		cgrp = cgroup_get_from_fd(attr->memcg_fd);
+		if (IS_ERR(cgrp))
+			return -EINVAL;
+
+		objcg = get_obj_cgroup_from_cgroup(cgrp);
+		if (IS_ERR(objcg))
+			return PTR_ERR(objcg);
+	} else {
+		/* Currently if a map is created by a process belonging to the root
+		 * memory cgroup, get_obj_cgroup_from_current() will return NULL.
+		 * So we have to check map->objcg for being NULL each time it's
+		 * being used.
+		 */
+		objcg = get_obj_cgroup_from_current();
+	}
+
+	map->objcg = objcg;
+	return 0;
 }
 
 static void bpf_map_release_memcg(struct bpf_map *map)
@@ -485,8 +501,9 @@ void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 }
 
 #else
-static void bpf_map_save_memcg(struct bpf_map *map)
+static int bpf_map_save_memcg(struct bpf_map *map, union bpf_attr *attr)
 {
+	return 0;
 }
 
 static void bpf_map_release_memcg(struct bpf_map *map)
@@ -530,13 +547,18 @@ void *bpf_map_container_alloc(union bpf_attr *attr, u64 size, int numa_node)
 {
 	struct bpf_map *map;
 	void *container;
+	int ret;
 
 	container = __bpf_map_area_alloc(size, numa_node, false);
 	if (!container)
 		return ERR_PTR(-ENOMEM);
 
 	map = (struct bpf_map *)container;
-	bpf_map_save_memcg(map);
+	ret = bpf_map_save_memcg(map, attr);
+	if (ret) {
+		bpf_map_area_free(container);
+		return ERR_PTR(ret);
+	}
 
 	return container;
 }
@@ -547,6 +569,7 @@ void *bpf_map_container_mmapable_alloc(union bpf_attr *attr, u64 size,
 	struct bpf_map *map;
 	void *container;
 	void *ptr;
+	int ret;
 
 	/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
 	ptr = __bpf_map_area_alloc(size, numa_node, true);
@@ -555,7 +578,11 @@ void *bpf_map_container_mmapable_alloc(union bpf_attr *attr, u64 size,
 
 	container = ptr + align - offset;
 	map = (struct bpf_map *)container;
-	bpf_map_save_memcg(map);
+	ret = bpf_map_save_memcg(map, attr);
+	if (ret) {
+		bpf_map_area_free(ptr);
+		return ERR_PTR(ret);
+	}
 
 	return ptr;
 }

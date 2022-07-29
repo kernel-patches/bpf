@@ -505,6 +505,7 @@ struct bpf_map {
 	bool pinned;
 	bool reused;
 	bool autocreate;
+	__s32 memcg_fd;
 	__u64 map_extra;
 };
 
@@ -4928,6 +4929,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	create_attr.map_ifindex = map->map_ifindex;
 	create_attr.map_flags = def->map_flags;
 	create_attr.numa_node = map->numa_node;
+	create_attr.memcg_fd = map->memcg_fd;
 	create_attr.map_extra = map->map_extra;
 
 	if (bpf_map__is_struct_ops(map))
