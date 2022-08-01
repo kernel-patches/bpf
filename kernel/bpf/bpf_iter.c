@@ -77,6 +77,83 @@ static bool bpf_iter_support_resched(struct seq_file *seq)
 	return iter_priv->tinfo->reg_info->feature & BPF_ITER_RESCHED;
 }
 
+/* do_copy_to_user, copies seq->buf at offset seq->from to userspace and
+ * updates corresponding fields in seq. It returns -EFAULT if any error
+ * happens. The actual number of bytes copied is returned via the argument
+ * 'copied'.
+ */
+static int do_copy_to_user(struct seq_file *seq, char __user *buf, size_t size,
+			   size_t *copied)
+{
+	size_t n;
+
+	n = min(seq->count, size);
+	if (copy_to_user(buf, seq->buf + seq->from, n))
+		return -EFAULT;
+
+	seq->count -= n;
+	seq->from += n;
+	*copied = n;
+	return 0;
+}
+
+/* do_seq_show, shows the given object 'p'. If 'p' is skipped or
+ * error happens, resets seq->count to 'offs'.
+ *
+ * Returns err > 0, indicating show() skips this object.
+ * Returns err = 0, indicating show() succeeds.
+ * Returns err < 0, indicating show() fails or overflow happened.
+ */
+static int do_seq_show(struct seq_file *seq, void *p, size_t offs)
+{
+	int err;
+
+	WARN_ON(IS_ERR_OR_NULL(p));
+
+	err = seq->op->show(seq, p);
+	if (err > 0) {
+		/* object is skipped, decrease seq_num, so next
+		 * valid object can reuse the same seq_num.
+		 */
+		bpf_iter_dec_seq_num(seq);
+		seq->count = offs;
+		return err;
+	}
+
+	if (err < 0 || seq_has_overflowed(seq)) {
+		seq->count = offs;
+		return err ? err : -E2BIG;
+	}
+
+	/* err == 0 and no overflow */
+	return 0;
+}
+
+/* do_seq_stop, stops at the given object 'p'. 'p' could be an ERR or NULL. If
+ * 'p' is an ERR or there was an overflow, reset seq->count to 'offs' and
+ * returns error. Returns 0 otherwise.
+ */
+static int do_seq_stop(struct seq_file *seq, void *p, size_t offs)
+{
+	if (IS_ERR(p)) {
+		seq->op->stop(seq, NULL);
+		seq->count = offs;
+		return PTR_ERR(p);
+	}
+
+	seq->op->stop(seq, p);
+	if (!p) {
+		if (!seq_has_overflowed(seq)) {
+			bpf_iter_done_stop(seq);
+		} else {
+			seq->count = offs;
+			if (offs == 0)
+				return -E2BIG;
+		}
+	}
+	return 0;
+}
+
 /* maximum visited objects before bailing out */
 #define MAX_ITER_OBJECTS	1000000
 
@@ -90,7 +167,7 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 			    loff_t *ppos)
 {
 	struct seq_file *seq = file->private_data;
-	size_t n, offs, copied = 0;
+	size_t offs, copied = 0;
 	int err = 0, num_objs = 0;
 	bool can_resched;
 	void *p;
@@ -107,40 +184,18 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 	}
 
 	if (seq->count) {
-		n = min(seq->count, size);
-		err = copy_to_user(buf, seq->buf + seq->from, n);
-		if (err) {
-			err = -EFAULT;
-			goto done;
-		}
-		seq->count -= n;
-		seq->from += n;
-		copied = n;
+		err = do_copy_to_user(seq, buf, size, &copied);
 		goto done;
 	}
 
 	seq->from = 0;
 	p = seq->op->start(seq, &seq->index);
-	if (!p)
+	if (IS_ERR_OR_NULL(p))
 		goto stop;
-	if (IS_ERR(p)) {
-		err = PTR_ERR(p);
-		seq->op->stop(seq, p);
-		seq->count = 0;
-		goto done;
-	}
 
-	err = seq->op->show(seq, p);
-	if (err > 0) {
-		/* object is skipped, decrease seq_num, so next
-		 * valid object can reuse the same seq_num.
-		 */
-		bpf_iter_dec_seq_num(seq);
-		seq->count = 0;
-	} else if (err < 0 || seq_has_overflowed(seq)) {
-		if (!err)
-			err = -E2BIG;
-		seq->op->stop(seq, p);
+	err = do_seq_show(seq, p, 0);
+	if (err < 0) {
+		do_seq_stop(seq, p, 0);
 		seq->count = 0;
 		goto done;
 	}
@@ -152,7 +207,7 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 		num_objs++;
 		offs = seq->count;
 		p = seq->op->next(seq, p, &seq->index);
-		if (pos == seq->index) {
+		if (unlikely(pos == seq->index)) {
 			pr_info_ratelimited("buggy seq_file .next function %ps "
 				"did not updated position index\n",
 				seq->op->next);
@@ -160,7 +215,7 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 		}
 
 		if (IS_ERR_OR_NULL(p))
-			break;
+			goto stop;
 
 		/* got a valid next object, increase seq_num */
 		bpf_iter_inc_seq_num(seq);
@@ -171,22 +226,16 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 		if (num_objs >= MAX_ITER_OBJECTS) {
 			if (offs == 0) {
 				err = -EAGAIN;
-				seq->op->stop(seq, p);
+				do_seq_stop(seq, p, seq->count);
 				goto done;
 			}
 			break;
 		}
 
-		err = seq->op->show(seq, p);
-		if (err > 0) {
-			bpf_iter_dec_seq_num(seq);
-			seq->count = offs;
-		} else if (err < 0 || seq_has_overflowed(seq)) {
-			seq->count = offs;
+		err = do_seq_show(seq, p, offs);
+		if (err < 0) {
 			if (offs == 0) {
-				if (!err)
-					err = -E2BIG;
-				seq->op->stop(seq, p);
+				do_seq_stop(seq, p, seq->count);
 				goto done;
 			}
 			break;
@@ -196,30 +245,11 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 			cond_resched();
 	}
 stop:
-	offs = seq->count;
-	/* bpf program called if !p */
-	seq->op->stop(seq, p);
-	if (!p) {
-		if (!seq_has_overflowed(seq)) {
-			bpf_iter_done_stop(seq);
-		} else {
-			seq->count = offs;
-			if (offs == 0) {
-				err = -E2BIG;
-				goto done;
-			}
-		}
-	}
-
-	n = min(seq->count, size);
-	err = copy_to_user(buf, seq->buf, n);
-	if (err) {
-		err = -EFAULT;
+	err = do_seq_stop(seq, p, seq->count);
+	if (err)
 		goto done;
-	}
-	copied = n;
-	seq->count -= n;
-	seq->from = n;
+
+	err = do_copy_to_user(seq, buf, size, &copied);
 done:
 	if (!copied)
 		copied = err;
