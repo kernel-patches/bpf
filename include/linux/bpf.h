@@ -1966,6 +1966,10 @@ static inline bool unprivileged_ebpf_enabled(void)
 	return !sysctl_unprivileged_bpf_disabled;
 }
 
+static inline bool in_bpf(void)
+{
+	return !!current->bpf_ctx;
+}
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -2175,6 +2179,10 @@ static inline bool unprivileged_ebpf_enabled(void)
 	return false;
 }
 
+static inline bool in_bpf(void)
+{
+	return false;
+}
 #endif /* CONFIG_BPF_SYSCALL */
 
 void __bpf_free_used_btfs(struct bpf_prog_aux *aux,
