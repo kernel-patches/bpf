@@ -116,7 +116,8 @@ STATIC_OBJDIR	:= $(OUTPUT)staticobjs/
 BPF_IN_SHARED	:= $(SHARED_OBJDIR)libbpf-in.o
 BPF_IN_STATIC	:= $(STATIC_OBJDIR)libbpf-in.o
 BPF_HELPER_DEFS	:= $(OUTPUT)bpf_helper_defs.h
-BPF_GENERATED	:= $(BPF_HELPER_DEFS)
+BPF_HELPER_DEFS_ATTR	:= $(OUTPUT)bpf_helper_defs_attr.h
+BPF_GENERATED	:= $(BPF_HELPER_DEFS) $(BPF_HELPER_DEFS_ATTR)
 
 LIB_TARGET	:= $(addprefix $(OUTPUT),$(LIB_TARGET))
 LIB_FILE	:= $(addprefix $(OUTPUT),$(LIB_FILE))
@@ -159,6 +160,10 @@ $(BPF_IN_STATIC): force $(BPF_GENERATED)
 $(BPF_HELPER_DEFS): $(srctree)/tools/include/uapi/linux/bpf.h
 	$(QUIET_GEN)$(srctree)/scripts/bpf_doc.py --header \
 		--file $(srctree)/tools/include/uapi/linux/bpf.h > $(BPF_HELPER_DEFS)
+
+$(BPF_HELPER_DEFS_ATTR): $(srctree)/tools/include/uapi/linux/bpf.h
+	$(QUIET_GEN)$(srctree)/scripts/bpf_doc.py --attr-header \
+		--file $(srctree)/tools/include/uapi/linux/bpf.h > $(BPF_HELPER_DEFS_ATTR)
 
 $(OUTPUT)libbpf.so: $(OUTPUT)libbpf.so.$(LIBBPF_VERSION)
 

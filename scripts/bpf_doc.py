@@ -570,9 +570,10 @@ class PrinterHelpers(Printer):
     be included from BPF program.
     @parser: A HeaderParser with Helper objects to print to standard output
     """
-    def __init__(self, parser):
+    def __init__(self, parser, attr_header):
         self.elements = parser.helpers
         self.elem_number_check(parser.desc_unique_helpers, parser.define_unique_helpers, 'helper', '__BPF_FUNC_MAPPER')
+        self.attr_header = attr_header
 
     type_fwds = [
             'struct bpf_fib_lookup',
@@ -719,6 +720,24 @@ class PrinterHelpers(Printer):
 
     seen_helpers = set()
 
+    def print_args(self, proto):
+        comma = ''
+        for i, a in enumerate(proto['args']):
+            t = a['type']
+            n = a['name']
+            if proto['name'] in self.overloaded_helpers and i == 0:
+                    t = 'void'
+                    n = 'ctx'
+            one_arg = '{}{}'.format(comma, self.map_type(t))
+            if n:
+                if a['star']:
+                    one_arg += ' {}'.format(a['star'])
+                else:
+                    one_arg += ' '
+                one_arg += '{}'.format(n)
+            comma = ', '
+            print(one_arg, end='')
+
     def print_one(self, helper):
         proto = helper.proto_break_down()
 
@@ -742,26 +761,16 @@ class PrinterHelpers(Printer):
                 print(' *{}{}'.format(' \t' if line else '', line))
 
         print(' */')
-        print('static %s %s(*%s)(' % (self.map_type(proto['ret_type']),
-                                      proto['ret_star'], proto['name']), end='')
-        comma = ''
-        for i, a in enumerate(proto['args']):
-            t = a['type']
-            n = a['name']
-            if proto['name'] in self.overloaded_helpers and i == 0:
-                    t = 'void'
-                    n = 'ctx'
-            one_arg = '{}{}'.format(comma, self.map_type(t))
-            if n:
-                if a['star']:
-                    one_arg += ' {}'.format(a['star'])
-                else:
-                    one_arg += ' '
-                one_arg += '{}'.format(n)
-            comma = ', '
-            print(one_arg, end='')
-
-        print(') = (void *) %d;' % len(self.seen_helpers))
+        if self.attr_header:
+            print('%s %s%s(' % (self.map_type(proto['ret_type']),
+                                          proto['ret_star'], proto['name']), end='')
+            self.print_args(proto)
+            print(') __attribute__((kernel_helper(%d)));' % len(self.seen_helpers))
+        else:
+            print('static %s %s(*%s)(' % (self.map_type(proto['ret_type']),
+                                          proto['ret_star'], proto['name']), end='')
+            self.print_args(proto)
+            print(') = (void *) %d;' % len(self.seen_helpers))
         print('')
 
 ###############################################################################
@@ -785,6 +794,8 @@ rst2man utility.
 """)
 argParser.add_argument('--header', action='store_true',
                        help='generate C header file')
+argParser.add_argument('--attr-header', action='store_true',
+                       help='generate GCC attr style C header file')
 if (os.path.isfile(bpfh)):
     argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h',
                            default=bpfh)
@@ -799,10 +810,11 @@ headerParser = HeaderParser(args.filename)
 headerParser.run()
 
 # Print formatted output to standard output.
-if args.header:
+if args.header or args.attr_header:
     if args.target != 'helpers':
         raise NotImplementedError('Only helpers header generation is supported')
-    printer = PrinterHelpers(headerParser)
+    attr_header = True if args.attr_header else False
+    printer = PrinterHelpers(headerParser, attr_header)
 else:
     printer = printers[args.target](headerParser)
 printer.print_all()

@@ -8,7 +8,11 @@
  * in advance since bpf_helper_defs.h uses such types
  * as __u64.
  */
+#if __has_attribute(kernel_helper)
+#include "bpf_helper_defs_attr.h"
+#else
 #include "bpf_helper_defs.h"
+#endif
 
 #define __uint(name, val) int (*name)[val]
 #define __type(name, val) typeof(val) *name
