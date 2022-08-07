@@ -13832,8 +13832,9 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 }
 
 static int fixup_kfunc_call(struct bpf_verifier_env *env,
-			    struct bpf_insn *insn)
+			    struct bpf_insn *insn, struct bpf_insn *insn_buf, int *cnt)
 {
+	u8 ret_size, shift_cnt, rshift_opcode;
 	const struct bpf_kfunc_desc *desc;
 
 	if (!insn->imm) {
@@ -13852,6 +13853,26 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env,
 	}
 
 	insn->imm = desc->imm;
+
+	*cnt = 0;
+	ret_size = desc->func_model.ret_size;
+
+	/* If the kfunc return type is an integer and the type size is one byte or two
+	 * bytes, currently llvm/bpf assumes proper sign/zero extension has been done
+	 * in the caller. But such an asumption may not hold for non-bpf architectures.
+	 * For example, for x86_64, if the return type is 'u8', it is possible that only
+	 * %al register is set properly and upper 56 bits of %rax register may contain
+	 * garbage. To resolve this case, Let us do a necessary truncation to zero-out
+	 * or properly sign-extend upper 56 bits.
+	 */
+	if (desc->func_model.ret_integer && ret_size < sizeof(int)) {
+		shift_cnt = (sizeof(u64) - ret_size) * 8;
+		rshift_opcode = desc->func_model.ret_integer_signed ? BPF_ARSH : BPF_RSH;
+		insn_buf[0] = *insn;
+		insn_buf[1] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, shift_cnt);
+		insn_buf[2] = BPF_ALU64_IMM(rshift_opcode, BPF_REG_0, shift_cnt);
+		*cnt = 3;
+	}
 
 	return 0;
 }
@@ -13994,9 +14015,19 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			ret = fixup_kfunc_call(env, insn);
+			ret = fixup_kfunc_call(env, insn, insn_buf, &cnt);
 			if (ret)
 				return ret;
+			if (cnt == 0)
+				continue;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
 

@@ -5897,6 +5897,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	u32 i, nargs;
 	int ret;
 
+	m->ret_integer = false;
 	if (!func) {
 		/* BTF function prototype doesn't match the verifier types.
 		 * Fall back to MAX_BPF_FUNC_REG_ARGS u64 args.
@@ -5923,6 +5924,14 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 		return -EINVAL;
 	}
 	m->ret_size = ret;
+	if (btf_type_is_int(t)) {
+		m->ret_integer = true;
+		/* BTF_INT_BOOL is considered as unsigned */
+		if (BTF_INT_ENCODING(btf_type_int(t)) == BTF_INT_SIGNED)
+			m->ret_integer_signed = true;
+		else
+			m->ret_integer_signed = false;
+	}
 
 	for (i = 0; i < nargs; i++) {
 		if (i == nargs - 1 && args[i].type == 0) {

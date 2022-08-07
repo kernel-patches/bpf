@@ -727,6 +727,8 @@ enum bpf_cgroup_storage_type {
 #define MAX_BPF_FUNC_REG_ARGS 5
 
 struct btf_func_model {
+	u8 ret_integer:1;
+	u8 ret_integer_signed:1;
 	u8 ret_size;
 	u8 nr_args;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
