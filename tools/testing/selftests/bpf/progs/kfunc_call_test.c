@@ -6,6 +6,8 @@
 extern int bpf_kfunc_call_test2(struct sock *sk, __u32 a, __u32 b) __ksym;
 extern __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
 				  __u32 c, __u64 d) __ksym;
+extern __s16 bpf_kfunc_call_test4(struct sock *sk, __u32 a, __u32 b) __ksym;
+extern __u8 bpf_kfunc_call_test5(struct sock *sk, __u32 a, __u32 b) __ksym;
 
 extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp) __ksym;
 extern void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p) __ksym;
@@ -28,6 +30,36 @@ int kfunc_call_test2(struct __sk_buff *skb)
 		return -1;
 
 	return bpf_kfunc_call_test2((struct sock *)sk, 1, 2);
+}
+
+SEC("tc")
+int kfunc_call_test4(struct __sk_buff *skb)
+{
+	struct bpf_sock *sk = skb->sk;
+
+	if (!sk)
+		return -1;
+
+	sk = bpf_sk_fullsock(sk);
+	if (!sk)
+		return -1;
+
+	return bpf_kfunc_call_test4((struct sock *)sk, (1 << 16) + 0xff00, (1 << 16) + 0xff);
+}
+
+SEC("tc")
+int kfunc_call_test5(struct __sk_buff *skb)
+{
+	struct bpf_sock *sk = skb->sk;
+
+	if (!sk)
+		return -1;
+
+	sk = bpf_sk_fullsock(sk);
+	if (!sk)
+		return -1;
+
+	return bpf_kfunc_call_test5((struct sock *)sk, (1 << 8) + 1, (1 << 8) + 2);
 }
 
 SEC("tc")

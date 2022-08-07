@@ -35,6 +35,16 @@ static void test_main(void)
 	ASSERT_OK(err, "bpf_prog_test_run(test_ref_btf_id)");
 	ASSERT_EQ(topts.retval, 0, "test_ref_btf_id-retval");
 
+	prog_fd = skel->progs.kfunc_call_test4.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "bpf_prog_test_run(test4)");
+	ASSERT_EQ(topts.retval, 0xffffffff, "test4-retval");
+
+	prog_fd = skel->progs.kfunc_call_test5.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "bpf_prog_test_run(test5)");
+	ASSERT_EQ(topts.retval, 3, "test5-retval");
+
 	kfunc_call_test_lskel__destroy(skel);
 }
 
