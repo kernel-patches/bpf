@@ -7347,11 +7347,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err)
 		return err;
 
-	/* reset caller saved regs */
-	for (i = 0; i < CALLER_SAVED_REGS; i++) {
-		mark_reg_not_init(env, regs, caller_saved[i]);
-		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
-	}
+	/* reset return reg */
+	mark_reg_not_init(env, regs, BPF_REG_0);
+	check_reg_arg(env, BPF_REG_0, DST_OP_NO_MARK);
 
 	/* helper call returns 64-bit value. */
 	regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
@@ -7500,6 +7498,13 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = dynptr_id;
+	}
+
+	/* reset remaining caller saved regs */
+	BUILD_BUG_ON(caller_saved[0] != BPF_REG_0);
+	for (i = 1; i < CALLER_SAVED_REGS; i++) {
+		mark_reg_not_init(env, regs, caller_saved[i]);
+		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
 	}
 
 	do_refine_retval_range(regs, fn->ret_type, func_id, &meta);
