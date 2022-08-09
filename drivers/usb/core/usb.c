@@ -38,6 +38,8 @@
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
 #include <linux/usb/of.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 #include <asm/io.h>
 #include <linux/scatterlist.h>
@@ -434,6 +436,41 @@ static int usb_dev_uevent(struct device *dev, struct kobj_uevent_env *env)
 
 	if (add_uevent_var(env, "DEVNUM=%03d", usb_dev->devnum))
 		return -ENOMEM;
+
+	return 0;
+}
+
+struct usb_revoke_match {
+	int busnum, devnum; /* -1 to match all devices */
+	int euid; /* -1 to match all users */
+};
+
+static int
+__usb_revoke(struct usb_device *udev, void *data)
+{
+	struct usb_revoke_match *match = data;
+
+	if (match->devnum >= 0 && match->busnum >= 0) {
+		if (match->busnum != udev->bus->busnum ||
+		    match->devnum != udev->devnum) {
+			return 0;
+		}
+	}
+
+	usb_revoke_for_euid(udev, match->euid);
+	return 0;
+}
+
+noinline int
+usb_revoke_device(int busnum, int devnum, unsigned int euid)
+{
+	struct usb_revoke_match match;
+
+	match.busnum = busnum;
+	match.devnum = devnum;
+	match.euid = euid;
+
+	usb_for_each_dev(&match, __usb_revoke);
 
 	return 0;
 }
@@ -1004,6 +1041,15 @@ static void usb_debugfs_cleanup(void)
 /*
  * Init
  */
+BTF_SET_START(usbdev_kfunc_ids)
+BTF_ID(func, usb_revoke_device)
+BTF_SET_END(usbdev_kfunc_ids)
+
+static const struct btf_kfunc_id_set usbdev_kfunc_set = {
+	.owner     = THIS_MODULE,
+	.check_set = &usbdev_kfunc_ids,
+};
+
 static int __init usb_init(void)
 {
 	int retval;
@@ -1035,9 +1081,14 @@ static int __init usb_init(void)
 	if (retval)
 		goto hub_init_failed;
 	retval = usb_register_device_driver(&usb_generic_driver, THIS_MODULE);
+	if (retval)
+		goto register_failed;
+	retval = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &usbdev_kfunc_set);
 	if (!retval)
 		goto out;
+	usb_deregister_device_driver(&usb_generic_driver);
 
+register_failed:
 	usb_hub_cleanup();
 hub_init_failed:
 	usb_devio_cleanup();
