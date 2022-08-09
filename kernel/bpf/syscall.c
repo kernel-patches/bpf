@@ -4385,6 +4385,7 @@ static int bpf_task_fd_query(const union bpf_attr *attr,
 	const struct perf_event *event;
 	struct task_struct *task;
 	struct file *file;
+	struct pid *ppid;
 	int err;
 
 	if (CHECK_ATTR(BPF_TASK_FD_QUERY))
@@ -4396,7 +4397,9 @@ static int bpf_task_fd_query(const union bpf_attr *attr,
 	if (attr->task_fd_query.flags != 0)
 		return -EINVAL;
 
-	task = get_pid_task(find_vpid(pid), PIDTYPE_PID);
+	ppid = find_get_pid(pid);
+	task = get_pid_task(ppid, PIDTYPE_PID);
+	put_pid(ppid);
 	if (!task)
 		return -ENOENT;
 
