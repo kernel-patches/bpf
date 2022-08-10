@@ -499,9 +499,9 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	if (!htab)
 		return ERR_PTR(-ENOMEM);
 
-	lockdep_register_key(&htab->lockdep_key);
-
 	bpf_map_init_from_attr(&htab->map, attr);
+
+	lockdep_register_key(&htab->lockdep_key);
 
 	if (percpu_lru) {
 		/* ensure each CPU's lru list has >=1 elements.
