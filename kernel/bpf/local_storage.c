@@ -287,6 +287,7 @@ static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 	__u32 max_value_size = BPF_LOCAL_STORAGE_MAX_VALUE_SIZE;
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_cgroup_storage_map *map;
+	int err;
 
 	/* percpu is bound by PCPU_MIN_UNIT_SIZE, non-percu
 	 * is the same as other local storages.
@@ -318,7 +319,11 @@ static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-ENOMEM);
 
 	/* copy mandatory map attributes */
-	bpf_map_init_from_attr(&map->map, attr);
+	err = bpf_map_init_from_attr(&map->map, attr);
+	if (err) {
+		bpf_map_area_free(map, NULL);
+		return ERR_PTR(err);
+	}
 
 	spin_lock_init(&map->lock);
 	map->root = RB_ROOT;

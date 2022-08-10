@@ -31,6 +31,7 @@ static struct sk_psock_progs *sock_map_progs(struct bpf_map *map);
 static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_stab *stab;
+	int err;
 
 	if (!capable(CAP_NET_ADMIN))
 		return ERR_PTR(-EPERM);
@@ -45,7 +46,12 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	if (!stab)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&stab->map, attr);
+	err = bpf_map_init_from_attr(&stab->map, attr);
+	if (err) {
+		bpf_map_area_free(stab, NULL);
+		return ERR_PTR(err);
+	}
+
 	raw_spin_lock_init(&stab->lock);
 
 	stab->sks = bpf_map_area_alloc((u64) stab->map.max_entries *

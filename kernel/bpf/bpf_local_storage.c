@@ -609,11 +609,16 @@ struct bpf_local_storage_map *bpf_local_storage_map_alloc(union bpf_attr *attr)
 	struct bpf_local_storage_map *smap;
 	unsigned int i;
 	u32 nbuckets;
+	int err;
 
 	smap = bpf_map_area_alloc(sizeof(*smap), NUMA_NO_NODE, NULL);
 	if (!smap)
 		return ERR_PTR(-ENOMEM);
-	bpf_map_init_from_attr(&smap->map, attr);
+	err = bpf_map_init_from_attr(&smap->map, attr);
+	if (err) {
+		bpf_map_area_free(&smap->map, NULL);
+		return ERR_PTR(err);
+	}
 
 	nbuckets = roundup_pow_of_two(num_possible_cpus());
 	/* Use at least 2 buckets, select_bucket() is undefined behavior with 1 bucket */

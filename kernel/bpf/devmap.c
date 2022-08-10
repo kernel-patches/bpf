@@ -167,7 +167,11 @@ static struct bpf_map *dev_map_alloc(union bpf_attr *attr)
 	if (!dtab)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&dtab->map, attr);
+	err = bpf_map_init_from_attr(&dtab->map, attr);
+	if (err) {
+		bpf_map_area_free(dtab, NULL);
+		return ERR_PTR(err);
+	}
 
 	err = dev_map_init_map(dtab, attr);
 	if (err) {

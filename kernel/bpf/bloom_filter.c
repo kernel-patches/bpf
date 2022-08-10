@@ -93,6 +93,7 @@ static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 	u32 bitset_bytes, bitset_mask, nr_hash_funcs, nr_bits;
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_bloom_filter *bloom;
+	int err;
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -147,7 +148,11 @@ static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 	if (!bloom)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&bloom->map, attr);
+	err = bpf_map_init_from_attr(&bloom->map, attr);
+	if (err) {
+		bpf_map_area_free(bloom, NULL);
+		return ERR_PTR(err);
+	}
 
 	bloom->nr_hash_funcs = nr_hash_funcs;
 	bloom->bitset_mask = bitset_mask;

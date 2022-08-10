@@ -101,7 +101,11 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	if (!cmap)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&cmap->map, attr);
+	err = bpf_map_init_from_attr(&cmap->map, attr);
+	if (err) {
+		bpf_map_area_free(cmap, NULL);
+		return ERR_PTR(err);
+	}
 
 	/* Pre-limit array size based on NR_CPUS, not final CPU check */
 	if (cmap->map.max_entries > NR_CPUS) {

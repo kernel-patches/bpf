@@ -70,6 +70,7 @@ static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_queue_stack *qs;
 	u64 size, queue_size;
+	int err;
 
 	size = (u64) attr->max_entries + 1;
 	queue_size = sizeof(*qs) + size * attr->value_size;
@@ -78,7 +79,11 @@ static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 	if (!qs)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&qs->map, attr);
+	err = bpf_map_init_from_attr(&qs->map, attr);
+	if (err) {
+		bpf_map_area_free(qs, NULL);
+		return ERR_PTR(err);
+	}
 
 	qs->size = size;
 

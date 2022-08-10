@@ -403,7 +403,7 @@ static u32 bpf_map_flags_retain_permanent(u32 flags)
 	return flags & ~(BPF_F_RDONLY | BPF_F_WRONLY);
 }
 
-void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
+int bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 {
 	bpf_map_save_memcg(map);
 	map->map_type = attr->map_type;
@@ -413,6 +413,8 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->map_flags = bpf_map_flags_retain_permanent(attr->map_flags);
 	map->numa_node = bpf_map_attr_numa_node(attr);
 	map->map_extra = attr->map_extra;
+
+	return 0;
 }
 
 static int bpf_map_alloc_id(struct bpf_map *map)

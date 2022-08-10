@@ -1639,7 +1639,7 @@ void *bpf_map_area_alloc(u64 size, int numa_node, struct bpf_map *map);
 void *bpf_map_area_mmapable_alloc(u64 size, int numa_node);
 void bpf_map_area_free(void *base, struct bpf_map *map);
 bool bpf_map_write_active(const struct bpf_map *map);
-void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);
+int bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);
 int  generic_map_lookup_batch(struct bpf_map *map,
 			      const union bpf_attr *attr,
 			      union bpf_attr __user *uattr);

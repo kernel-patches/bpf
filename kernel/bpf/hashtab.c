@@ -500,7 +500,11 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	if (!htab)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&htab->map, attr);
+	err = bpf_map_init_from_attr(&htab->map, attr);
+	if (err) {
+		bpf_map_area_free(htab, NULL);
+		return ERR_PTR(err);
+	}
 
 	lockdep_register_key(&htab->lockdep_key);
 
