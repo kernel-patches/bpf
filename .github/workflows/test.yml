@@ -1,0 +1,77 @@
+name: bpf-ci
+
+on:
+  pull_request:
+
+jobs:
+  VM_Test:
+    runs-on: ${{ matrix.runs_on }}
+    name: Kernel ${{ matrix.kernel }} on ${{ matrix.runs_on[0] }} with ${{ matrix.toolchain }}
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kernel: 'LATEST'
+            runs_on: [ubuntu-latest, self-hosted]
+            arch: 'x86_64'
+            toolchain: 'gcc'
+          - kernel: 'LATEST'
+            runs_on: [ubuntu-latest, self-hosted]
+            arch: 'x86_64'
+            toolchain: 'llvm-16'
+          - kernel: 'LATEST'
+            runs_on: [z15, self-hosted]
+            arch: 's390x'
+            toolchain: 'gcc'
+    env:
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+    steps:
+      - uses: danielocfb/checkout@main
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Download bpf-next tree
+        uses: danielocfb/libbpf-ci/get-linux-source@topic/ci
+        with:
+          dest: '.kernel'
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .kernel/.git
+          cp -rf .kernel/. .
+          rm -rf .kernel
+      - uses: danielocfb/libbpf-ci/patch-kernel@topic/ci
+        with:
+          patches-root: '${{ github.workspace }}/travis-ci/diffs'
+          repo-root: '${{ github.workspace }}'
+      - name: Setup build environment
+        uses: danielocfb/libbpf-ci/setup-build-env@topic/ci
+      - name: Build kernel image
+        uses: danielocfb/libbpf-ci/build-linux@topic/ci
+        with:
+          arch: ${{ matrix.arch }}
+          toolchain: ${{ matrix.toolchain }}
+      - name: Build selftests
+        uses: danielocfb/libbpf-ci/build-selftests@topic/ci
+        with:
+          vmlinux_btf: ${{ github.workspace }}/vmlinux
+          toolchain: ${{ matrix.toolchain }}
+      - name: Build samples
+        uses: danielocfb/libbpf-ci/build-samples@topic/ci
+        with:
+          vmlinux_btf: ${{ github.workspace }}/vmlinux
+          toolchain: ${{ matrix.toolchain }}
+      - name: Prepare rootfs
+        uses: danielocfb/libbpf-ci/prepare-rootfs@topic/ci
+        with:
+          project-name: 'libbpf'
+          arch: ${{ matrix.arch }}
+          kernel-root: '.'
+      - name: Run selftests
+        uses: danielocfb/libbpf-ci/run-qemu@topic/ci
+        with:
+          arch: ${{ matrix.arch}}
+          img: '/tmp/root.img'
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
