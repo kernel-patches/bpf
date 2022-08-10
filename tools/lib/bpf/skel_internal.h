@@ -222,7 +222,7 @@ static inline int skel_map_create(enum bpf_map_type map_type,
 				  __u32 value_size,
 				  __u32 max_entries)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, map_extra);
+	const size_t attr_sz = offsetofend(union bpf_attr, memcg_fd);
 	union bpf_attr attr;
 
 	memset(&attr, 0, attr_sz);

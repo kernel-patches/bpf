@@ -294,14 +294,30 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 }
 
 #ifdef CONFIG_MEMCG_KMEM
-static void bpf_map_save_memcg(struct bpf_map *map)
+static int bpf_map_save_memcg(struct bpf_map *map, u32 memcg_fd)
 {
-	/* Currently if a map is created by a process belonging to the root
-	 * memory cgroup, get_obj_cgroup_from_current() will return NULL.
-	 * So we have to check map->objcg for being NULL each time it's
-	 * being used.
-	 */
-	map->objcg = get_obj_cgroup_from_current();
+	struct obj_cgroup *objcg;
+	struct cgroup *cgrp;
+
+	if (memcg_fd) {
+		cgrp = cgroup_get_from_fd(memcg_fd);
+		if (IS_ERR(cgrp))
+			return -EINVAL;
+
+		objcg = get_obj_cgroup_from_cgroup(cgrp);
+		if (IS_ERR(objcg))
+			return PTR_ERR(objcg);
+	} else {
+		/* Currently if a map is created by a process belonging to the root
+		 * memory cgroup, get_obj_cgroup_from_current() will return NULL.
+		 * So we have to check map->objcg for being NULL each time it's
+		 * being used.
+		 */
+		objcg = get_obj_cgroup_from_current();
+	}
+
+	map->objcg = objcg;
+	return 0;
 }
 
 static void bpf_map_release_memcg(struct bpf_map *map)
@@ -311,8 +327,9 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 }
 
 #else
-static void bpf_map_save_memcg(struct bpf_map *map)
+static int bpf_map_save_memcg(struct bpf_map *map, u32 memcg_fd)
 {
+	return 0;
 }
 
 static void bpf_map_release_memcg(struct bpf_map *map)
@@ -405,7 +422,12 @@ static u32 bpf_map_flags_retain_permanent(u32 flags)
 
 int bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 {
-	bpf_map_save_memcg(map);
+	int err;
+
+	err = bpf_map_save_memcg(map, attr->memcg_fd);
+	if (err)
+		return err;
+
 	map->map_type = attr->map_type;
 	map->key_size = attr->key_size;
 	map->value_size = attr->value_size;
@@ -1091,7 +1113,7 @@ free_map_tab:
 	return ret;
 }
 
-#define BPF_MAP_CREATE_LAST_FIELD map_extra
+#define BPF_MAP_CREATE_LAST_FIELD memcg_fd
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
 {
