@@ -92,7 +92,7 @@ static void queue_stack_map_free(struct bpf_map *map)
 {
 	struct bpf_queue_stack *qs = bpf_queue_stack(map);
 
-	bpf_map_area_free(qs);
+	bpf_map_area_free(qs, map);
 }
 
 static int __queue_map_get(struct bpf_map *map, void *value, bool delete)

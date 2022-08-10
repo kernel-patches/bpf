@@ -62,7 +62,7 @@ static int prealloc_elems_and_freelist(struct bpf_stack_map *smap)
 	return 0;
 
 free_elems:
-	bpf_map_area_free(smap->elems);
+	bpf_map_area_free(smap->elems, NULL);
 	return err;
 }
 
@@ -120,7 +120,7 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 put_buffers:
 	put_callchain_buffers();
 free_smap:
-	bpf_map_area_free(smap);
+	bpf_map_area_free(smap, &smap->map);
 	return ERR_PTR(err);
 }
 
@@ -648,9 +648,9 @@ static void stack_map_free(struct bpf_map *map)
 {
 	struct bpf_stack_map *smap = container_of(map, struct bpf_stack_map, map);
 
-	bpf_map_area_free(smap->elems);
+	bpf_map_area_free(smap->elems, NULL);
 	pcpu_freelist_destroy(&smap->freelist);
-	bpf_map_area_free(smap);
+	bpf_map_area_free(smap, map);
 	put_callchain_buffers();
 }
 

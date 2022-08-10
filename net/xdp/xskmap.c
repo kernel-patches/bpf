@@ -90,7 +90,7 @@ static void xsk_map_free(struct bpf_map *map)
 	struct xsk_map *m = container_of(map, struct xsk_map, map);
 
 	synchronize_net();
-	bpf_map_area_free(m);
+	bpf_map_area_free(m, map);
 }
 
 static int xsk_map_get_next_key(struct bpf_map *map, void *key, void *next_key)

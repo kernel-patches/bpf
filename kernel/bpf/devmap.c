@@ -168,7 +168,7 @@ static struct bpf_map *dev_map_alloc(union bpf_attr *attr)
 
 	err = dev_map_init_map(dtab, attr);
 	if (err) {
-		bpf_map_area_free(dtab);
+		bpf_map_area_free(dtab, &dtab->map);
 		return ERR_PTR(err);
 	}
 
@@ -221,7 +221,7 @@ static void dev_map_free(struct bpf_map *map)
 			}
 		}
 
-		bpf_map_area_free(dtab->dev_index_head);
+		bpf_map_area_free(dtab->dev_index_head, NULL);
 	} else {
 		for (i = 0; i < dtab->map.max_entries; i++) {
 			struct bpf_dtab_netdev *dev;
@@ -236,10 +236,10 @@ static void dev_map_free(struct bpf_map *map)
 			kfree(dev);
 		}
 
-		bpf_map_area_free(dtab->netdev_map);
+		bpf_map_area_free(dtab->netdev_map, NULL);
 	}
 
-	bpf_map_area_free(dtab);
+	bpf_map_area_free(dtab, &dtab->map);
 }
 
 static int dev_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
