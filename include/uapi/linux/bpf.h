@@ -6171,6 +6171,10 @@ struct bpf_link_info {
 				struct {
 					__u32 map_id;
 				} map;
+				struct {
+					__u32 tid;
+					__u32 tgid;
+				} task;
 			};
 		} iter;
 		struct  {
