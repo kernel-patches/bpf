@@ -1532,4 +1532,8 @@ static __always_inline int __bpf_xdp_redirect_map(struct bpf_map *map, u32 ifind
 	return XDP_REDIRECT;
 }
 
+int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset, void *to, u32 len);
+int __bpf_skb_store_bytes(struct sk_buff *skb, u32 offset, const void *from,
+			  u32 len, u64 flags);
+
 #endif /* __LINUX_FILTER_H__ */
