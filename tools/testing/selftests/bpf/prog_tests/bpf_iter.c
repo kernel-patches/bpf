@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2020 Facebook */
 #include <test_progs.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <signal.h>
 #include "bpf_iter_ipv6_route.skel.h"
 #include "bpf_iter_netlink.skel.h"
 #include "bpf_iter_bpf_map.skel.h"
@@ -42,13 +45,13 @@ static void test_btf_id_or_null(void)
 	}
 }
 
-static void do_dummy_read(struct bpf_program *prog)
+static void do_dummy_read(struct bpf_program *prog, struct bpf_iter_attach_opts *opts)
 {
 	struct bpf_link *link;
 	char buf[16] = {};
 	int iter_fd, len;
 
-	link = bpf_program__attach_iter(prog, NULL);
+	link = bpf_program__attach_iter(prog, opts);
 	if (!ASSERT_OK_PTR(link, "attach_iter"))
 		return;
 
@@ -91,7 +94,7 @@ static void test_ipv6_route(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_ipv6_route__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_ipv6_route);
+	do_dummy_read(skel->progs.dump_ipv6_route, NULL);
 
 	bpf_iter_ipv6_route__destroy(skel);
 }
@@ -104,7 +107,7 @@ static void test_netlink(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_netlink__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_netlink);
+	do_dummy_read(skel->progs.dump_netlink, NULL);
 
 	bpf_iter_netlink__destroy(skel);
 }
@@ -117,22 +120,137 @@ static void test_bpf_map(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_map__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_bpf_map);
+	do_dummy_read(skel->progs.dump_bpf_map, NULL);
 
 	bpf_iter_bpf_map__destroy(skel);
 }
 
-static void test_task(void)
+static int pidfd_open(pid_t pid, unsigned int flags)
+{
+	return syscall(SYS_pidfd_open, pid, flags);
+}
+
+static void check_bpf_link_info(const struct bpf_program *prog)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo;
+	struct bpf_link_info info = {};
+	__u32 info_len;
+	struct bpf_link *link;
+	int err;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.tid = getpid();
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	link = bpf_program__attach_iter(prog, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_iter"))
+		return;
+
+	info_len = sizeof(info);
+	err = bpf_obj_get_info_by_fd(bpf_link__fd(link), &info, &info_len);
+	if (ASSERT_OK(err, "bpf_obj_get_info_by_fd"))
+		ASSERT_EQ(info.iter.task.tid, getpid(), "check_task_tid");
+
+	bpf_link__destroy(link);
+}
+
+static pthread_mutex_t do_nothing_mutex;
+
+static void *do_nothing_wait(void *arg)
+{
+	pthread_mutex_lock(&do_nothing_mutex);
+	pthread_mutex_unlock(&do_nothing_mutex);
+
+	pthread_exit(arg);
+}
+
+static void test_task_(struct bpf_iter_attach_opts *opts, int num_unknown, int num_known)
 {
 	struct bpf_iter_task *skel;
+	pthread_t thread_id;
+	void *ret;
 
 	skel = bpf_iter_task__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_task__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_task);
+	if (!ASSERT_OK(pthread_mutex_init(&do_nothing_mutex, NULL), "pthread_mutex_init"))
+		goto done;
+	if (!ASSERT_OK(pthread_mutex_lock(&do_nothing_mutex), "pthread_mutex_lock"))
+		goto done;
 
+	if (!ASSERT_OK(pthread_create(&thread_id, NULL, &do_nothing_wait, NULL),
+		  "pthread_create"))
+		goto done;
+
+
+	skel->bss->tid = getpid();
+
+	do_dummy_read(skel->progs.dump_task, opts);
+
+	if (!ASSERT_OK(pthread_mutex_unlock(&do_nothing_mutex), "pthread_mutex_unlock"))
+		goto done;
+
+	if (num_unknown >= 0)
+		ASSERT_EQ(skel->bss->num_unknown_tid, num_unknown, "check_num_unknown_tid");
+	if (num_known >= 0)
+		ASSERT_EQ(skel->bss->num_known_tid, num_known, "check_num_known_tid");
+
+	ASSERT_FALSE(pthread_join(thread_id, &ret) || ret != NULL,
+		     "pthread_join");
+
+done:
 	bpf_iter_task__destroy(skel);
+}
+
+static void test_task(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.tid = getpid();
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	test_task_(&opts, 0, 1);
+
+	test_task_(NULL, -1, 1);
+}
+
+static void test_task_tgid(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.tgid = getpid();
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	test_task_(&opts, 1, 1);
+}
+
+static void test_task_pidfd(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo;
+	int pidfd;
+
+	pidfd = pidfd_open(getpid(), 0);
+	if (!ASSERT_GE(pidfd, 0, "pidfd_open"))
+		return;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.pid_fd = pidfd;
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	test_task_(&opts, 1, 1);
+
+	close(pidfd);
 }
 
 static void test_task_sleepable(void)
@@ -143,7 +261,7 @@ static void test_task_sleepable(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_task__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_task_sleepable);
+	do_dummy_read(skel->progs.dump_task_sleepable, NULL);
 
 	ASSERT_GT(skel->bss->num_expected_failure_copy_from_user_task, 0,
 		  "num_expected_failure_copy_from_user_task");
@@ -161,8 +279,8 @@ static void test_task_stack(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_task_stack__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_task_stack);
-	do_dummy_read(skel->progs.get_task_user_stacks);
+	do_dummy_read(skel->progs.dump_task_stack, NULL);
+	do_dummy_read(skel->progs.get_task_user_stacks, NULL);
 
 	bpf_iter_task_stack__destroy(skel);
 }
@@ -174,7 +292,9 @@ static void *do_nothing(void *arg)
 
 static void test_task_file(void)
 {
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	struct bpf_iter_task_file *skel;
+	union bpf_iter_link_info linfo;
 	pthread_t thread_id;
 	void *ret;
 
@@ -188,15 +308,31 @@ static void test_task_file(void)
 		  "pthread_create"))
 		goto done;
 
-	do_dummy_read(skel->progs.dump_task_file);
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.tid = getpid();
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	do_dummy_read(skel->progs.dump_task_file, &opts);
 
 	if (!ASSERT_FALSE(pthread_join(thread_id, &ret) || ret != NULL,
 		  "pthread_join"))
 		goto done;
 
 	ASSERT_EQ(skel->bss->count, 0, "check_count");
+	ASSERT_EQ(skel->bss->unique_tgid_count, 1, "check_unique_tgid_count");
 
-done:
+	skel->bss->count = 0;
+	skel->bss->unique_tgid_count = 0;
+
+	do_dummy_read(skel->progs.dump_task_file, NULL);
+
+	ASSERT_GE(skel->bss->count, 0, "check_count");
+	ASSERT_GE(skel->bss->unique_tgid_count, 1, "check_unique_tgid_count");
+
+	check_bpf_link_info(skel->progs.dump_task_file);
+
+ done:
 	bpf_iter_task_file__destroy(skel);
 }
 
@@ -274,7 +410,7 @@ static void test_tcp4(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_tcp4__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_tcp4);
+	do_dummy_read(skel->progs.dump_tcp4, NULL);
 
 	bpf_iter_tcp4__destroy(skel);
 }
@@ -287,7 +423,7 @@ static void test_tcp6(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_tcp6__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_tcp6);
+	do_dummy_read(skel->progs.dump_tcp6, NULL);
 
 	bpf_iter_tcp6__destroy(skel);
 }
@@ -300,7 +436,7 @@ static void test_udp4(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_udp4__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_udp4);
+	do_dummy_read(skel->progs.dump_udp4, NULL);
 
 	bpf_iter_udp4__destroy(skel);
 }
@@ -313,7 +449,7 @@ static void test_udp6(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_udp6__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_udp6);
+	do_dummy_read(skel->progs.dump_udp6, NULL);
 
 	bpf_iter_udp6__destroy(skel);
 }
@@ -326,7 +462,7 @@ static void test_unix(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_unix__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_unix);
+	do_dummy_read(skel->progs.dump_unix, NULL);
 
 	bpf_iter_unix__destroy(skel);
 }
@@ -988,7 +1124,7 @@ static void test_bpf_sk_storage_get(void)
 	if (!ASSERT_OK(err, "bpf_map_update_elem"))
 		goto close_socket;
 
-	do_dummy_read(skel->progs.fill_socket_owner);
+	do_dummy_read(skel->progs.fill_socket_owner, NULL);
 
 	err = bpf_map_lookup_elem(map_fd, &sock_fd, &val);
 	if (CHECK(err || val != getpid(), "bpf_map_lookup_elem",
@@ -996,7 +1132,7 @@ static void test_bpf_sk_storage_get(void)
 	    getpid(), val, err))
 		goto close_socket;
 
-	do_dummy_read(skel->progs.negate_socket_local_storage);
+	do_dummy_read(skel->progs.negate_socket_local_storage, NULL);
 
 	err = bpf_map_lookup_elem(map_fd, &sock_fd, &val);
 	CHECK(err || val != -getpid(), "bpf_map_lookup_elem",
@@ -1116,7 +1252,7 @@ static void test_link_iter(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_link__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_bpf_link);
+	do_dummy_read(skel->progs.dump_bpf_link, NULL);
 
 	bpf_iter_bpf_link__destroy(skel);
 }
@@ -1129,7 +1265,7 @@ static void test_ksym_iter(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_ksym__open_and_load"))
 		return;
 
-	do_dummy_read(skel->progs.dump_ksym);
+	do_dummy_read(skel->progs.dump_ksym, NULL);
 
 	bpf_iter_ksym__destroy(skel);
 }
@@ -1154,7 +1290,7 @@ static void str_strip_first_line(char *str)
 	*dst = '\0';
 }
 
-static void test_task_vma(void)
+static void test_task_vma_(struct bpf_iter_attach_opts *opts)
 {
 	int err, iter_fd = -1, proc_maps_fd = -1;
 	struct bpf_iter_task_vma *skel;
@@ -1166,13 +1302,14 @@ static void test_task_vma(void)
 		return;
 
 	skel->bss->pid = getpid();
+	skel->bss->one_task = opts ? 1 : 0;
 
 	err = bpf_iter_task_vma__load(skel);
 	if (!ASSERT_OK(err, "bpf_iter_task_vma__load"))
 		goto out;
 
 	skel->links.proc_maps = bpf_program__attach_iter(
-		skel->progs.proc_maps, NULL);
+		skel->progs.proc_maps, opts);
 
 	if (!ASSERT_OK_PTR(skel->links.proc_maps, "bpf_program__attach_iter")) {
 		skel->links.proc_maps = NULL;
@@ -1211,10 +1348,27 @@ static void test_task_vma(void)
 	str_strip_first_line(proc_maps_output);
 
 	ASSERT_STREQ(task_vma_output, proc_maps_output, "compare_output");
+
+	check_bpf_link_info(skel->progs.proc_maps);
+
 out:
 	close(proc_maps_fd);
 	close(iter_fd);
 	bpf_iter_task_vma__destroy(skel);
+}
+
+static void test_task_vma(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.task.tid = getpid();
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	test_task_vma_(&opts);
+	test_task_vma_(NULL);
 }
 
 void test_bpf_iter(void)
@@ -1229,6 +1383,10 @@ void test_bpf_iter(void)
 		test_bpf_map();
 	if (test__start_subtest("task"))
 		test_task();
+	if (test__start_subtest("task_tgid"))
+		test_task_tgid();
+	if (test__start_subtest("task_pidfd"))
+		test_task_pidfd();
 	if (test__start_subtest("task_sleepable"))
 		test_task_sleepable();
 	if (test__start_subtest("task_stack"))
