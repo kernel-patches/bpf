@@ -2,6 +2,7 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <stdbool.h>
 
 char _license[] SEC("license") = "GPL";
 
@@ -13,11 +14,18 @@ extern const void bpf_modify_return_test __ksym;
 extern const void bpf_fentry_test6 __ksym;
 extern const void bpf_fentry_test7 __ksym;
 
+extern bool CONFIG_X86_KERNEL_IBT __kconfig __weak;
+
+bool config_ibt;
+
 __u64 test1_result = 0;
 SEC("fentry/bpf_fentry_test1")
 int BPF_PROG(test1, int a)
 {
 	__u64 addr = bpf_get_func_ip(ctx);
+
+	/* just to propagate config option value to user space */
+	config_ibt = CONFIG_X86_KERNEL_IBT;
 
 	test1_result = (const void *) addr == &bpf_fentry_test1;
 	return 0;
@@ -64,21 +72,11 @@ int BPF_PROG(test5, int a, int *b, int ret)
 }
 
 __u64 test6_result = 0;
-SEC("kprobe/bpf_fentry_test6+0x5")
+SEC("?kprobe/")
 int test6(struct pt_regs *ctx)
 {
 	__u64 addr = bpf_get_func_ip(ctx);
 
 	test6_result = (const void *) addr == 0;
-	return 0;
-}
-
-__u64 test7_result = 0;
-SEC("kprobe/bpf_fentry_test7+5")
-int test7(struct pt_regs *ctx)
-{
-	__u64 addr = bpf_get_func_ip(ctx);
-
-	test7_result = (const void *) addr == 0;
 	return 0;
 }
