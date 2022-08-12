@@ -37,6 +37,11 @@ static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
 #define EMIT3(b1, b2, b3)	EMIT((b1) + ((b2) << 8) + ((b3) << 16), 3)
 #define EMIT4(b1, b2, b3, b4)   EMIT((b1) + ((b2) << 8) + ((b3) << 16) + ((b4) << 24), 4)
 
+#define EMIT2_UPDATE_PROG(bytes, len) \
+	do { *prog = emit_code(*prog, bytes, len); } while (0)
+#define EMIT4_UPDATE_PROG(b1, b2, b3, b4) \
+	EMIT2_UPDATE_PROG((b1) + ((b2) << 8) + ((b3) << 16) + ((b4) << 24), 4)
+
 #define EMIT1_off32(b1, off) \
 	do { EMIT1(b1); EMIT(off, 4); } while (0)
 #define EMIT2_off32(b1, b2, off) \
@@ -1749,36 +1754,92 @@ emit_jmp:
 }
 
 static void save_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
-		      int regs_off)
+		      int regs_off, int struct_val_off)
 {
-	int i;
-	/* Store function arguments to stack.
-	 * For a function that accepts two pointers the sequence will be:
-	 * mov QWORD PTR [rbp-0x10],rdi
-	 * mov QWORD PTR [rbp-0x8],rsi
-	 */
-	for (i = 0; i < min(nr_args, 6); i++)
-		emit_stx(prog, bytes_to_bpf_size(m->arg_size[i]),
-			 BPF_REG_FP,
-			 i == 5 ? X86_REG_R9 : BPF_REG_1 + i,
-			 -(regs_off - i * 8));
+	int i, j, curr_reg_idx, curr_s_stack_off, s_arg_nregs;
+
+	curr_reg_idx = curr_s_stack_off = 0;
+	for (i = 0; i < nr_args; i++) {
+		if (!(m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)) {
+			/* Store function arguments to stack.
+			 * For a function that accepts two pointers the sequence will be:
+			 * mov QWORD PTR [rbp-0x10],rdi
+			 * mov QWORD PTR [rbp-0x8],rsi
+			 */
+			emit_stx(prog, bytes_to_bpf_size(m->arg_size[i]),
+				 BPF_REG_FP,
+				 curr_reg_idx == 5 ? X86_REG_R9 : BPF_REG_1 + curr_reg_idx,
+				 -(regs_off - i * 8));
+			curr_reg_idx++;
+			continue;
+		}
+
+		/* lea rax, [rbp - struct_val_off] */
+		EMIT4_UPDATE_PROG(0x48, 0x8D, 0x45, -(struct_val_off - curr_s_stack_off * 8));
+		/* The struct value is converted to a pointer argument.
+		 * mov QWORD PTR [rbp - s_arg_idx * 8],rax
+		 */
+		emit_stx(prog, bytes_to_bpf_size(8),
+			 BPF_REG_FP, BPF_REG_0, -(regs_off - i * 8));
+
+		/* Save struct registers to stack.
+		 * For example, argument 1 (second argument) size is 16 which occupies two
+		 * registers, these two register values will be saved in stack.
+		 * mov QWORD PTR [rbp-0x40],rsi
+		 * mov QWORD PTR [rbp-0x38],rdx
+		 */
+		s_arg_nregs = (m->arg_size[i] + 7) / 8;
+		for (j = 0; j < s_arg_nregs; j++) {
+			emit_stx(prog, bytes_to_bpf_size(8),
+				 BPF_REG_FP,
+				 curr_reg_idx == 5 ? X86_REG_R9 : BPF_REG_1 + curr_reg_idx,
+				 -(struct_val_off - curr_s_stack_off * 8));
+			curr_reg_idx++;
+			curr_s_stack_off++;
+		}
+	}
 }
 
 static void restore_regs(const struct btf_func_model *m, u8 **prog, int nr_args,
-			 int regs_off)
+			 int regs_off, int struct_val_off)
 {
-	int i;
+	int i, j, curr_reg_idx, curr_s_stack_off, s_arg_nregs;
 
-	/* Restore function arguments from stack.
-	 * For a function that accepts two pointers the sequence will be:
-	 * EMIT4(0x48, 0x8B, 0x7D, 0xF0); mov rdi,QWORD PTR [rbp-0x10]
-	 * EMIT4(0x48, 0x8B, 0x75, 0xF8); mov rsi,QWORD PTR [rbp-0x8]
-	 */
-	for (i = 0; i < min(nr_args, 6); i++)
-		emit_ldx(prog, bytes_to_bpf_size(m->arg_size[i]),
-			 i == 5 ? X86_REG_R9 : BPF_REG_1 + i,
-			 BPF_REG_FP,
-			 -(regs_off - i * 8));
+	curr_reg_idx = curr_s_stack_off = 0;
+	for (i = 0; i < nr_args; i++) {
+		if (!(m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)) {
+			/* Restore struct values from stack.
+			 * For example, argument 1 (second argument) size is 16 which occupies two
+			 * registers, these two register values will be restored to the original
+			 * registers.
+			 * mov rsi,QWORD PTR [rbp-0x40]
+			 * mov rdx,QWORD PTR [rbp-0x38]
+			 */
+			emit_ldx(prog, bytes_to_bpf_size(m->arg_size[i]),
+				 curr_reg_idx  == 5 ? X86_REG_R9 : BPF_REG_1 + curr_reg_idx,
+				 BPF_REG_FP,
+				 -(regs_off - i * 8));
+			curr_reg_idx++;
+			continue;
+		}
+
+		/* Restore struct values from stack.
+		 * For example, argument 1 (second argument) size is 16 which occupies two
+		 * registers, these two register values will be restored to the original
+		 * registers.
+		 * mov rsi,QWORD PTR [rbp-0x40]
+		 * mov rdx,QWORD PTR [rbp-0x38]
+		 */
+		s_arg_nregs = (m->arg_size[i] + 7) / 8;
+		for (j = 0; j < s_arg_nregs; j++) {
+			emit_ldx(prog, bytes_to_bpf_size(8),
+				 curr_reg_idx == 5 ? X86_REG_R9 : BPF_REG_1 + curr_reg_idx,
+				 BPF_REG_FP,
+				 -(struct_val_off - curr_s_stack_off * 8));
+			curr_reg_idx++;
+			curr_s_stack_off++;
+		}
+	}
 }
 
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
@@ -2020,12 +2081,27 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_links *fmod_ret = &tlinks[BPF_TRAMP_MODIFY_RETURN];
+	int struct_val_off, extra_nregs = 0;
 	u8 **branches = NULL;
 	u8 *prog;
 	bool save_ret;
 
 	/* x86-64 supports up to 6 arguments. 7+ can be added in the future */
 	if (nr_args > 6)
+		return -ENOTSUPP;
+
+	for (i = 0; i < MAX_BPF_FUNC_ARGS; i++) {
+		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG) {
+			/* Only support up to 16 bytes struct which should keep
+			 * values in registers.
+			 */
+			if (m->arg_size[i] > 16)
+				return -ENOTSUPP;
+
+			extra_nregs += (m->arg_size[i] + 7) / 8 - 1;
+		}
+	}
+	if (nr_args + extra_nregs > 6)
 		return -ENOTSUPP;
 
 	/* Generated trampoline stack layout:
@@ -2066,6 +2142,13 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	stack_size += (sizeof(struct bpf_tramp_run_ctx) + 7) & ~0x7;
 	run_ctx_off = stack_size;
 
+	/* For structure argument */
+	for (i = 0; i < MAX_BPF_FUNC_ARGS; i++) {
+		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+			stack_size += (m->arg_size[i] + 7) & ~0x7;
+	}
+	struct_val_off = stack_size;
+
 	if (flags & BPF_TRAMP_F_SKIP_FRAME) {
 		/* skip patched call instruction and point orig_call to actual
 		 * body of the kernel function.
@@ -2101,7 +2184,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -ip_off);
 	}
 
-	save_regs(m, &prog, nr_args, regs_off);
+	save_regs(m, &prog, nr_args, regs_off, struct_val_off);
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/* arg1: mov rdi, im */
@@ -2131,7 +2214,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	}
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
-		restore_regs(m, &prog, nr_args, regs_off);
+		restore_regs(m, &prog, nr_args, regs_off, struct_val_off);
 
 		if (flags & BPF_TRAMP_F_ORIG_STACK) {
 			emit_ldx(&prog, BPF_DW, BPF_REG_0, BPF_REG_FP, 8);
@@ -2172,7 +2255,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		}
 
 	if (flags & BPF_TRAMP_F_RESTORE_REGS)
-		restore_regs(m, &prog, nr_args, regs_off);
+		restore_regs(m, &prog, nr_args, regs_off, struct_val_off);
 
 	/* This needs to be done regardless. If there were fmod_ret programs,
 	 * the return value is only updated on the stack and still needs to be
