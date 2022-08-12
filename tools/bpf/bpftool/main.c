@@ -435,6 +435,9 @@ int main(int argc, char **argv)
 
 	setlinebuf(stdout);
 
+	/* Libcap */
+	errno = 0;
+
 	last_do_help = do_help;
 	pretty_output = false;
 	json_output = false;
