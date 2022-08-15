@@ -125,9 +125,17 @@ static int tcp_bpf_push_locked(struct sock *sk, struct sk_msg *msg,
 {
 	int ret;
 
+	/* Hold on to socket wait queue. */
+	if (sk->sk_socket && sk->sk_socket->file)
+		get_file(sk->sk_socket->file);
+
 	lock_sock(sk);
 	ret = tcp_bpf_push(sk, msg, apply_bytes, flags, uncharge);
 	release_sock(sk);
+
+	if (sk->sk_socket && sk->sk_socket->file)
+		fput(sk->sk_socket->file);
+
 	return ret;
 }
 
