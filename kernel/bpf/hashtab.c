@@ -15,6 +15,9 @@
 #include "bpf_lru_list.h"
 #include "map_in_map.h"
 
+static uint n_prefetch;
+module_param(n_prefetch, uint, 0644);
+
 #define HTAB_CREATE_FLAG_MASK						\
 	(BPF_F_NO_PREALLOC | BPF_F_NO_COMMON_LRU | BPF_F_NUMA_NODE |	\
 	 BPF_F_ACCESS_MASK | BPF_F_ZERO_SEED)
@@ -1743,9 +1746,13 @@ again_nocopy:
 		if (is_percpu) {
 			int off = 0, cpu;
 			void __percpu *pptr;
+			int num_cpus = num_possible_cpus();
 
 			pptr = htab_elem_get_ptr(l, map->key_size);
 			for_each_possible_cpu(cpu) {
+				if (n_prefetch > 0 && (cpu + n_prefetch) <= num_cpus)
+					prefetch(per_cpu_ptr(pptr, cpu + n_prefetch));
+
 				bpf_long_memcpy(dst_val + off,
 						per_cpu_ptr(pptr, cpu), size);
 				off += size;
