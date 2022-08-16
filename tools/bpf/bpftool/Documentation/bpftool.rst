@@ -21,7 +21,7 @@ SYNOPSIS
 	**bpftool** **version**
 
 	*OBJECT* := { **map** | **program** | **link** | **cgroup** | **perf** | **net** | **feature** |
-	**btf** | **gen** | **struct_ops** | **iter** }
+	**btf** | **gen** | **struct_ops** | **iter** | **trace** }
 
 	*OPTIONS* := { { **-V** | **--version** } | |COMMON_OPTIONS| }
 
@@ -49,6 +49,8 @@ SYNOPSIS
 	*STRUCT-OPS-COMMANDS* := { **show** | **list** | **dump** | **register** | **unregister** | **help** }
 
 	*ITER-COMMANDS* := { **pin** | **help** }
+
+	*TRACE-COMMANDS* := { **pin** | **help** }
 
 DESCRIPTION
 ===========

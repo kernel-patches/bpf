@@ -295,6 +295,7 @@ static const struct cmd cmds[] = {
 	{ "gen",	do_gen },
 	{ "struct_ops",	do_struct_ops },
 	{ "iter",	do_iter },
+	{ "trace",	do_trace },
 	{ "version",	do_version },
 	{ 0 }
 };

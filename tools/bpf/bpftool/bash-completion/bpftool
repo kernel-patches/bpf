@@ -646,6 +646,19 @@ _bpftool()
                     ;;
             esac
             ;;
+        trace)
+            case $command in
+                pin)
+                    _filedir
+                    return 0
+                    ;;
+                *)
+                    [[ $prev == $object ]] && \
+                        COMPREPLY=( $( compgen -W 'pin help' \
+                            -- "$cur" ) )
+                    ;;
+            esac
+            ;;
         map)
             local MAP_TYPE='id pinned name'
             case $command in
