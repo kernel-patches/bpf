@@ -5119,8 +5119,8 @@ int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
 
 		run_ctx.bpf_cookie = 0;
 		run_ctx.saved_run_ctx = NULL;
-		if (!__bpf_prog_enter_sleepable(prog, &run_ctx)) {
-			/* recursion detected */
+		if (WARN_ON(!__bpf_prog_enter_sleepable(prog, &run_ctx))) {
+			/* recursion detected, should never happen */
 			bpf_prog_put(prog);
 			return -EBUSY;
 		}
