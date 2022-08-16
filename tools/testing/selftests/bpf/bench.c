@@ -12,6 +12,8 @@
 #include "bench.h"
 #include "testing_helpers.h"
 
+#define STK_SIZE (0xfffffff)
+
 struct env env = {
 	.warmup_sec = 1,
 	.duration_sec = 5,
@@ -275,6 +277,7 @@ extern struct argp bench_bpf_loop_argp;
 extern struct argp bench_local_storage_argp;
 extern struct argp bench_local_storage_rcu_tasks_trace_argp;
 extern struct argp bench_strncmp_argp;
+extern struct argp bench_bpf_htab_batch_ops_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
@@ -284,6 +287,7 @@ static const struct argp_child bench_parsers[] = {
 	{ &bench_strncmp_argp, 0, "bpf_strncmp helper benchmark", 0 },
 	{ &bench_local_storage_rcu_tasks_trace_argp, 0,
 		"local_storage RCU Tasks Trace slowdown benchmark", 0 },
+	{ &bench_bpf_htab_batch_ops_argp, 0, "bpf_htab_ops benchmark", 0},
 	{},
 };
 
@@ -490,6 +494,8 @@ extern const struct bench bench_local_storage_cache_seq_get;
 extern const struct bench bench_local_storage_cache_interleaved_get;
 extern const struct bench bench_local_storage_cache_hashmap_control;
 extern const struct bench bench_local_storage_tasks_trace;
+extern const struct bench bench_bpf_htab_batch_ops;
+extern const struct bench bench_bpf_htab_element_ops;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -529,6 +535,8 @@ static const struct bench *benchs[] = {
 	&bench_local_storage_cache_interleaved_get,
 	&bench_local_storage_cache_hashmap_control,
 	&bench_local_storage_tasks_trace,
+	&bench_bpf_htab_batch_ops,
+	&bench_bpf_htab_element_ops,
 };
 
 static void setup_benchmark()
@@ -585,7 +593,23 @@ static void setup_benchmark()
 		env.prod_cpus.next_cpu = env.cons_cpus.next_cpu;
 
 	for (i = 0; i < env.producer_cnt; i++) {
-		err = pthread_create(&state.producers[i], NULL,
+		pthread_attr_t attr_producer;
+
+		err = pthread_attr_init(&attr_producer);
+		if (err) {
+			fprintf(stderr, "failed to initialize pthread attr #%d: %d\n",
+				i, -errno);
+			exit(1);
+		}
+
+		err = pthread_attr_setstacksize(&attr_producer, STK_SIZE);
+		if (err) {
+			fprintf(stderr, "failed to set pthread stacksize #%d: %d\n",
+				i, -errno);
+			exit(1);
+		}
+
+		err = pthread_create(&state.producers[i], &attr_producer,
 				     bench->producer_thread, (void *)(long)i);
 		if (err) {
 			fprintf(stderr, "failed to create producer thread #%d: %d\n",
