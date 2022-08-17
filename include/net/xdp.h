@@ -172,6 +172,7 @@ struct xdp_frame {
 	struct xdp_mem_info mem;
 	struct net_device *dev_rx; /* used by cpumap */
 	u32 flags; /* supported values defined in xdp_buff_flags */
+	u32 queue_index;
 };
 
 static __always_inline bool xdp_frame_has_frags(struct xdp_frame *frame)
@@ -301,6 +302,7 @@ struct xdp_frame *xdp_convert_buff_to_frame(struct xdp_buff *xdp)
 
 	/* rxq only valid until napi_schedule ends, convert to xdp_mem_info */
 	xdp_frame->mem = xdp->rxq->mem;
+	xdp_frame->queue_index = xdp->rxq->queue_index;
 
 	return xdp_frame;
 }
