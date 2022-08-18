@@ -1110,14 +1110,16 @@ static inline bool bpf_jit_blinding_enabled(struct bpf_prog *prog)
 
 static inline bool bpf_jit_kallsyms_enabled(void)
 {
+	int jit_kallsyms = READ_ONCE(bpf_jit_kallsyms);
+
 	/* There are a couple of corner cases where kallsyms should
 	 * not be enabled f.e. on hardening.
 	 */
 	if (READ_ONCE(bpf_jit_harden))
 		return false;
-	if (!bpf_jit_kallsyms)
+	if (!jit_kallsyms)
 		return false;
-	if (bpf_jit_kallsyms == 1)
+	if (jit_kallsyms == 1)
 		return true;
 
 	return false;
