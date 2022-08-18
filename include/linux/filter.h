@@ -1090,6 +1090,8 @@ static inline bool bpf_prog_ebpf_jited(const struct bpf_prog *fp)
 
 static inline bool bpf_jit_blinding_enabled(struct bpf_prog *prog)
 {
+	int jit_harden = READ_ONCE(bpf_jit_harden);
+
 	/* These are the prerequisites, should someone ever have the
 	 * idea to call blinding outside of them, we make sure to
 	 * bail out.
@@ -1098,9 +1100,9 @@ static inline bool bpf_jit_blinding_enabled(struct bpf_prog *prog)
 		return false;
 	if (!prog->jit_requested)
 		return false;
-	if (!bpf_jit_harden)
+	if (!jit_harden)
 		return false;
-	if (bpf_jit_harden == 1 && capable(CAP_SYS_ADMIN))
+	if (jit_harden == 1 && capable(CAP_SYS_ADMIN))
 		return false;
 
 	return true;
@@ -1111,7 +1113,7 @@ static inline bool bpf_jit_kallsyms_enabled(void)
 	/* There are a couple of corner cases where kallsyms should
 	 * not be enabled f.e. on hardening.
 	 */
-	if (bpf_jit_harden)
+	if (READ_ONCE(bpf_jit_harden))
 		return false;
 	if (!bpf_jit_kallsyms)
 		return false;
