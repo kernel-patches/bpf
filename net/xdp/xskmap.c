@@ -63,6 +63,7 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	struct xsk_map *m;
 	int numa_node;
 	u64 size;
+	int err;
 
 	if (!capable(CAP_NET_ADMIN))
 		return ERR_PTR(-EPERM);
@@ -79,7 +80,12 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	if (!m)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&m->map, attr);
+	err = bpf_map_init_from_attr(&m->map, attr);
+	if (err) {
+		bpf_map_area_free(m, NULL);
+		return ERR_PTR(err);
+	}
+
 	spin_lock_init(&m->lock);
 
 	return &m->map;
