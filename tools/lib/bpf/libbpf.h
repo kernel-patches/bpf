@@ -1011,6 +1011,7 @@ LIBBPF_API int bpf_tc_query(const struct bpf_tc_hook *hook,
 
 /* Ring buffer APIs */
 struct ring_buffer;
+struct user_ring_buffer;
 
 typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
 
@@ -1029,6 +1030,26 @@ LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
+
+struct user_ring_buffer_opts {
+	size_t sz; /* size of this struct, for forward/backward compatibility */
+};
+
+#define user_ring_buffer_opts__last_field sz
+
+LIBBPF_API struct user_ring_buffer *
+user_ring_buffer__new(int map_fd, const struct user_ring_buffer_opts *opts);
+LIBBPF_API void *user_ring_buffer__reserve(struct user_ring_buffer *rb,
+					   __u32 size);
+
+LIBBPF_API void *user_ring_buffer__reserve_blocking(struct user_ring_buffer *rb,
+						    __u32 size,
+						    int timeout_ms);
+LIBBPF_API void user_ring_buffer__submit(struct user_ring_buffer *rb,
+					 void *sample);
+LIBBPF_API void user_ring_buffer__discard(struct user_ring_buffer *rb,
+					  void *sample);
+LIBBPF_API void user_ring_buffer__free(struct user_ring_buffer *rb);
 
 /* Perf buffer APIs */
 struct perf_buffer;
