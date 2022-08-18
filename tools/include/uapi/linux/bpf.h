@@ -5368,6 +5368,41 @@ union bpf_attr {
  *	Return
  *		Current *ktime*.
  *
+ * long bpf_user_ringbuf_drain(struct bpf_map *map, void *callback_fn, void *ctx, u64 flags)
+ *	Description
+ *		Drain samples from the specified user ringbuffer, and invoke the
+ *		provided callback for each such sample:
+ *
+ *		long (\*callback_fn)(struct bpf_dynptr \*dynptr, void \*ctx);
+ *
+ *		If **callback_fn** returns 0, the helper will continue to try
+ *		and drain the next sample, up to a maximum of
+ *		BPF_MAX_USER_RINGBUF_SAMPLES samples. If the return value is 1,
+ *		the helper will skip the rest of the samples and return. Other
+ *		return values are not used now, and will be rejected by the
+ *		verifier.
+ *	Return
+ *		The number of drained samples if no error was encountered while
+ *		draining samples. If a user-space producer was epoll-waiting on
+ *		this map, and at least one sample was drained, they will
+ *		receive an event notification notifying them of available space
+ *		in the ringbuffer. If the BPF_RB_NO_WAKEUP flag is passed to
+ *		this function, no wakeup notification will be sent. If there
+ *		are no samples in the ringbuffer, 0 is returned.
+ *
+ *		On failure, the returned value is one of the following:
+ *
+ *		**-EBUSY** if the ringbuffer is contended, and another calling
+ *		context was concurrently draining the ringbuffer.
+ *
+ *		**-EINVAL** if user-space is not properly tracking the
+ *		ringbuffer due to the producer position not being aligned to 8
+ *		bytes, a sample not being aligned to 8 bytes, the producer
+ *		position not matching the advertised length of a sample, or the
+ *		sample size being larger than the ringbuffer.
+ *
+ *		**-E2BIG** if user-space has tried to publish a sample that
+ *		cannot fit within a struct bpf_dynptr.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5579,6 +5614,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(ktime_get_tai_ns),		\
+	FN(bpf_user_ringbuf_drain),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
