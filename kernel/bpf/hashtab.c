@@ -290,7 +290,7 @@ static void htab_free_elems(struct bpf_htab *htab)
 		cond_resched();
 	}
 free_elems:
-	bpf_map_area_free(htab->elems);
+	bpf_map_area_free(htab->elems, NULL);
 }
 
 /* The LRU list has a lock (lru_lock). Each htab bucket has a lock
@@ -576,10 +576,10 @@ free_prealloc:
 free_map_locked:
 	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
 		free_percpu(htab->map_locked[i]);
-	bpf_map_area_free(htab->buckets);
+	bpf_map_area_free(htab->buckets, NULL);
 free_htab:
 	lockdep_unregister_key(&htab->lockdep_key);
-	bpf_map_area_free(htab);
+	bpf_map_area_free(htab, &htab->map);
 	return ERR_PTR(err);
 }
 
@@ -1492,11 +1492,11 @@ static void htab_map_free(struct bpf_map *map)
 
 	bpf_map_free_kptr_off_tab(map);
 	free_percpu(htab->extra_elems);
-	bpf_map_area_free(htab->buckets);
+	bpf_map_area_free(htab->buckets, NULL);
 	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
 		free_percpu(htab->map_locked[i]);
 	lockdep_unregister_key(&htab->lockdep_key);
-	bpf_map_area_free(htab);
+	bpf_map_area_free(htab, map);
 }
 
 static void htab_map_seq_show_elem(struct bpf_map *map, void *key,
