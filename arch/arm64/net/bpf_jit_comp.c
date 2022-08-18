@@ -1568,7 +1568,7 @@ skip_init_ctx:
 	}
 
 	/* And we're done. */
-	if (bpf_jit_enable > 1)
+	if (READ_ONCE(bpf_jit_enable) > 1)
 		bpf_jit_dump(prog->len, prog_size, 2, ctx.image);
 
 	bpf_flush_icache(header, ctx.image + ctx.idx);

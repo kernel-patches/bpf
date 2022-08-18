@@ -326,13 +326,14 @@ do {	*prog++ = BR_OPC | WDISP22(OFF);		\
 void bpf_jit_compile(struct bpf_prog *fp)
 {
 	unsigned int cleanup_addr, proglen, oldproglen = 0;
+	int jit_enable = READ_ONCE(bpf_jit_enable);
 	u32 temp[8], *prog, *func, seen = 0, pass;
 	const struct sock_filter *filter = fp->insns;
 	int i, flen = fp->len, pc_ret0 = -1;
 	unsigned int *addrs;
 	void *image;
 
-	if (!bpf_jit_enable)
+	if (!jit_enable)
 		return;
 
 	addrs = kmalloc_array(flen, sizeof(*addrs), GFP_KERNEL);
@@ -743,7 +744,7 @@ cond_branch:			f_offset = addrs[i + filter[i].jf];
 		oldproglen = proglen;
 	}
 
-	if (bpf_jit_enable > 1)
+	if (jit_enable > 1)
 		bpf_jit_dump(flen, proglen, pass + 1, image);
 
 	if (image) {

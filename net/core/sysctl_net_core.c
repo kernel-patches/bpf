@@ -263,7 +263,7 @@ static int proc_dointvec_minmax_bpf_enable(struct ctl_table *table, int write,
 					   void *buffer, size_t *lenp,
 					   loff_t *ppos)
 {
-	int ret, jit_enable = *(int *)table->data;
+	int ret, jit_enable = READ_ONCE(*(int *)table->data);
 	int min = *(int *)table->extra1;
 	int max = *(int *)table->extra2;
 	struct ctl_table tmp = *table;
@@ -276,7 +276,7 @@ static int proc_dointvec_minmax_bpf_enable(struct ctl_table *table, int write,
 	if (write && !ret) {
 		if (jit_enable < 2 ||
 		    (jit_enable == 2 && bpf_dump_raw_ok(current_cred()))) {
-			*(int *)table->data = jit_enable;
+			WRITE_ONCE(*(int *)table->data, jit_enable);
 			if (jit_enable == 2)
 				pr_warn("bpf_jit_enable = 2 was set! NEVER use this in production, only for JIT debugging!\n");
 		} else {

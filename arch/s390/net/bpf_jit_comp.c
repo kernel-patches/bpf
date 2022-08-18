@@ -1831,7 +1831,7 @@ skip_init_ctx:
 		fp = orig_fp;
 		goto free_addrs;
 	}
-	if (bpf_jit_enable > 1) {
+	if (READ_ONCE(bpf_jit_enable) > 1) {
 		bpf_jit_dump(fp->len, jit.size, pass, jit.prg_buf);
 		print_fn_code(jit.prg_buf, jit.size_prg);
 	}

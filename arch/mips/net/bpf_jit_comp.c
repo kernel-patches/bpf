@@ -1012,7 +1012,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	flush_icache_range((unsigned long)header,
 			   (unsigned long)&ctx.target[ctx.jit_index]);
 
-	if (bpf_jit_enable > 1)
+	if (READ_ONCE(bpf_jit_enable) > 1)
 		bpf_jit_dump(prog->len, image_size, 2, ctx.target);
 
 	prog->bpf_func = (void *)ctx.target;

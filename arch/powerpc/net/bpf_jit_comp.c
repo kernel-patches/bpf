@@ -122,6 +122,7 @@ bool bpf_jit_needs_zext(void)
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 {
+	int jit_enable = READ_ONCE(bpf_jit_enable);
 	u32 proglen;
 	u32 alloclen;
 	u8 *image = NULL;
@@ -263,13 +264,13 @@ skip_init_ctx:
 		}
 		bpf_jit_build_epilogue(code_base, &cgctx);
 
-		if (bpf_jit_enable > 1)
+		if (jit_enable > 1)
 			pr_info("Pass %d: shrink = %d, seen = 0x%x\n", pass,
 				proglen - (cgctx.idx * 4), cgctx.seen);
 	}
 
 skip_codegen_passes:
-	if (bpf_jit_enable > 1)
+	if (jit_enable > 1)
 		/*
 		 * Note that we output the base address of the code_base
 		 * rather than image, since opcodes are in code_base.

@@ -1080,7 +1080,7 @@ static inline bool bpf_jit_is_ebpf(void)
 
 static inline bool ebpf_jit_enabled(void)
 {
-	return bpf_jit_enable && bpf_jit_is_ebpf();
+	return READ_ONCE(bpf_jit_enable) && bpf_jit_is_ebpf();
 }
 
 static inline bool bpf_prog_ebpf_jited(const struct bpf_prog *fp)

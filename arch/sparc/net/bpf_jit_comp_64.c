@@ -1479,6 +1479,7 @@ struct sparc64_jit_data {
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
+	int jit_enable = READ_ONCE(bpf_jit_enable);
 	struct bpf_prog *tmp, *orig_prog = prog;
 	struct sparc64_jit_data *jit_data;
 	struct bpf_binary_header *header;
@@ -1549,7 +1550,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		}
 		build_epilogue(&ctx);
 
-		if (bpf_jit_enable > 1)
+		if (jit_enable > 1)
 			pr_info("Pass %d: size = %u, seen = [%c%c%c%c%c%c]\n", pass,
 				ctx.idx * 4,
 				ctx.tmp_1_used ? '1' : ' ',
@@ -1596,7 +1597,7 @@ skip_init_ctx:
 		goto out_off;
 	}
 
-	if (bpf_jit_enable > 1)
+	if (jit_enable > 1)
 		bpf_jit_dump(prog->len, image_size, pass, ctx.image);
 
 	bpf_flush_icache(header, (u8 *)header + header->size);
