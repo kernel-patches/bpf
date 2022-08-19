@@ -6187,6 +6187,12 @@ struct bpf_link_info {
 					__u32 map_id;
 				} map;
 			};
+			union {
+				struct {
+					__u32 tid;
+					__u32 pid;
+				} task;
+			};
 		} iter;
 		struct  {
 			__u32 netns_ino;
