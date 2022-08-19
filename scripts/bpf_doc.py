@@ -91,7 +91,7 @@ class HeaderParser(object):
         self.helpers = []
         self.commands = []
         self.desc_unique_helpers = set()
-        self.define_unique_helpers = []
+        self.define_unique_helpers = {}
         self.desc_syscalls = []
         self.enum_syscalls = []
 
@@ -248,24 +248,24 @@ class HeaderParser(object):
                 break
 
     def parse_define_helpers(self):
-        # Parse the number of FN(...) in #define __BPF_FUNC_MAPPER to compare
-        # later with the number of unique function names present in description.
+        # Parse FN(...) in #define __BPF_FUNC_MAPPER to compare later with the
+        # number of unique function names present in description and use the
+        # correct enumeration value.
         # Note: seek_to(..) discards the first line below the target search text,
         # resulting in FN(unspec) being skipped and not added to self.define_unique_helpers.
         self.seek_to('#define __BPF_FUNC_MAPPER(FN)',
                      'Could not find start of eBPF helper definition list')
         # Searches for either one or more FN(\w+) defines or a backslash for newline
-        p = re.compile('\s*(FN\(\w+\))+|\\\\')
-        fn_defines_str = ''
+        p = re.compile('\s*FN\((\w+)\)+|\\\\')
+        i = 1  # 'unspec' is skipped as mentioned above
         while True:
             capture = p.match(self.line)
             if capture:
-                fn_defines_str += self.line
+                self.define_unique_helpers[capture.expand(r'bpf_\1')] = i
+                i += 1
             else:
                 break
             self.line = self.reader.readline()
-        # Find the number of occurences of FN(\w+)
-        self.define_unique_helpers = re.findall('FN\(\w+\)', fn_defines_str)
 
     def run(self):
         self.parse_desc_syscall()
@@ -608,6 +608,7 @@ class PrinterHelpers(Printer):
     def __init__(self, parser):
         self.elements = parser.helpers
         self.elem_number_check(parser.desc_unique_helpers, parser.define_unique_helpers, 'helper', '__BPF_FUNC_MAPPER')
+        self.define_unique_helpers = parser.define_unique_helpers
 
     type_fwds = [
             'struct bpf_fib_lookup',
@@ -796,7 +797,7 @@ class PrinterHelpers(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % len(self.seen_helpers))
+        print(') = (void *) %d;' % self.define_unique_helpers[proto['name']])
         print('')
 
 ###############################################################################
