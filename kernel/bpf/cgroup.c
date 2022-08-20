@@ -1091,11 +1091,14 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		}
 
 		if (prog_attach_flags) {
+			int progs_cnt = prog_list_length(&cgrp->bpf.progs[atype]);
 			flags = cgrp->bpf.flags[atype];
 
-			for (i = 0; i < cnt; i++)
+			/* attach flags only for attached progs, but not effective progs */
+			for (i = 0; i < progs_cnt; i++)
 				if (copy_to_user(prog_attach_flags + i, &flags, sizeof(flags)))
 					return -EFAULT;
+
 			prog_attach_flags += cnt;
 		}
 
