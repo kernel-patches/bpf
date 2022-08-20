@@ -219,11 +219,7 @@ static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 		return 0;
 
 	for (iter = 0; iter < p.prog_cnt; iter++) {
-		__u32 attach_flags;
-
-		attach_flags = prog_attach_flags[iter] ?: p.attach_flags;
-
-		switch (attach_flags) {
+		switch (prog_attach_flags[iter]) {
 		case BPF_F_ALLOW_MULTI:
 			attach_flags_str = "multi";
 			break;
@@ -234,7 +230,8 @@ static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 			attach_flags_str = "";
 			break;
 		default:
-			snprintf(buf, sizeof(buf), "unknown(%x)", attach_flags);
+			snprintf(buf, sizeof(buf), "unknown(%x)",
+				 prog_attach_flags[iter]);
 			attach_flags_str = buf;
 		}
 
