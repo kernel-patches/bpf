@@ -1,0 +1,35 @@
+From 27e23836ce22a3e5d89712ef832ab72e47ce9f43 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20M=C3=BCller?= <deso@posteo.net>
+Date: Wed, 10 Aug 2022 20:07:10 +0000
+Subject: [PATCH] selftests/bpf: Add lru_bug to s390x deny list
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The lru_bug BPF selftest is failing execution on s390x machines. The
+failure is due to program attachment failing in turn, similar to a bunch
+of other tests. Those other tests have already been deny-listed and with
+this change we do the same for the lru_bug test, adding it to the
+corresponding file.
+
+Fixes: de7b9927105b ("selftests/bpf: Add test for prealloc_lru_pop bug")
+Signed-off-by: Daniel Müller <deso@posteo.net>
+Acked-by: Mykola Lysenko <mykolal@fb.com>
+Link: https://lore.kernel.org/r/20220810200710.1300299-1-deso@posteo.net
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ tools/testing/selftests/bpf/DENYLIST.s390x | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tools/testing/selftests/bpf/DENYLIST.s390x b/tools/testing/selftests/bpf/DENYLIST.s390x
+index e33cab..db9810 100644
+--- a/tools/testing/selftests/bpf/DENYLIST.s390x
++++ b/tools/testing/selftests/bpf/DENYLIST.s390x
+@@ -65,3 +65,4 @@ send_signal                              # intermittently fails to receive signa
+ select_reuseport                         # intermittently fails on new s390x setup
+ xdp_synproxy                             # JIT does not support calling kernel function                                (kfunc)
+ unpriv_bpf_disabled                      # fentry
++lru_bug                                  # prog 'printk': failed to auto-attach: -524
+-- 
+2.30.2
+
