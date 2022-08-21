@@ -138,6 +138,23 @@ static inline bool htab_use_raw_lock(const struct bpf_htab *htab)
 	return (!IS_ENABLED(CONFIG_PREEMPT_RT) || htab_is_prealloc(htab));
 }
 
+static inline void bpf_clear_map_busy(void)
+{
+#ifdef CONFIG_PREEMPT_RT
+	current->bpf_map_busy = 0;
+#endif
+}
+
+static inline int bpf_test_and_set_map_busy(void)
+{
+#ifdef CONFIG_PREEMPT_RT
+	if (current->bpf_map_busy)
+		return 1;
+	current->bpf_map_busy = 1;
+#endif
+	return 0;
+}
+
 static void htab_init_buckets(struct bpf_htab *htab)
 {
 	unsigned int i;
@@ -162,28 +179,21 @@ static inline int htab_lock_bucket(const struct bpf_htab *htab,
 				   unsigned long *pflags)
 {
 	unsigned long flags;
-	bool use_raw_lock;
 
-	hash = hash & HASHTAB_MAP_LOCK_MASK;
-
-	use_raw_lock = htab_use_raw_lock(htab);
-	if (use_raw_lock)
+	if (htab_use_raw_lock(htab)) {
+		hash = hash & HASHTAB_MAP_LOCK_MASK;
 		preempt_disable();
-	else
-		migrate_disable();
-	if (unlikely(__this_cpu_inc_return(*(htab->map_locked[hash])) != 1)) {
-		__this_cpu_dec(*(htab->map_locked[hash]));
-		if (use_raw_lock)
+		if (unlikely(__this_cpu_inc_return(*(htab->map_locked[hash])) != 1)) {
+			__this_cpu_dec(*(htab->map_locked[hash]));
 			preempt_enable();
-		else
-			migrate_enable();
-		return -EBUSY;
-	}
-
-	if (use_raw_lock)
+			return -EBUSY;
+		}
 		raw_spin_lock_irqsave(&b->raw_lock, flags);
-	else
+	} else {
+		if (bpf_test_and_set_map_busy())
+			return -EBUSY;
 		spin_lock_irqsave(&b->lock, flags);
+	}
 	*pflags = flags;
 
 	return 0;
@@ -193,18 +203,15 @@ static inline void htab_unlock_bucket(const struct bpf_htab *htab,
 				      struct bucket *b, u32 hash,
 				      unsigned long flags)
 {
-	bool use_raw_lock = htab_use_raw_lock(htab);
-
-	hash = hash & HASHTAB_MAP_LOCK_MASK;
-	if (use_raw_lock)
+	if (htab_use_raw_lock(htab)) {
+		hash = hash & HASHTAB_MAP_LOCK_MASK;
 		raw_spin_unlock_irqrestore(&b->raw_lock, flags);
-	else
-		spin_unlock_irqrestore(&b->lock, flags);
-	__this_cpu_dec(*(htab->map_locked[hash]));
-	if (use_raw_lock)
+		__this_cpu_dec(*(htab->map_locked[hash]));
 		preempt_enable();
-	else
-		migrate_enable();
+	} else {
+		spin_unlock_irqrestore(&b->lock, flags);
+		bpf_clear_map_busy();
+	}
 }
 
 static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node);

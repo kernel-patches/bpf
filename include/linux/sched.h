@@ -944,6 +944,9 @@ struct task_struct {
 #ifdef	CONFIG_CPU_SUP_INTEL
 	unsigned			reported_split_lock:1;
 #endif
+#if defined(CONFIG_PREEMPT_RT) && defined(CONFIG_BPF_SYSCALL)
+	unsigned			bpf_map_busy:1;
+#endif
 
 	unsigned long			atomic_flags; /* Flags requiring atomic access. */
 
