@@ -686,6 +686,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_RINGBUF;
 	case DYNPTR_TYPE_SKB:
 		return BPF_DYNPTR_TYPE_SKB;
+	case DYNPTR_TYPE_XDP:
+		return BPF_DYNPTR_TYPE_XDP;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -6078,6 +6080,9 @@ skip_type_check:
 			case DYNPTR_TYPE_SKB:
 				err_extra = "skb ";
 				break;
+			case DYNPTR_TYPE_XDP:
+				err_extra = "xdp ";
+				break;
 			}
 
 			verbose(env, "Expected an initialized %sdynptr as arg #%d\n",
@@ -7439,7 +7444,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 
 		if (func_id == BPF_FUNC_dynptr_data &&
-		    dynptr_type == BPF_DYNPTR_TYPE_SKB) {
+		    (dynptr_type == BPF_DYNPTR_TYPE_SKB ||
+		     dynptr_type == BPF_DYNPTR_TYPE_XDP)) {
 			regs[BPF_REG_0].type = PTR_TO_PACKET | ret_flag;
 			regs[BPF_REG_0].range = meta.mem_size;
 		} else {
