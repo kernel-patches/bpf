@@ -684,6 +684,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_LOCAL;
 	case DYNPTR_TYPE_RINGBUF:
 		return BPF_DYNPTR_TYPE_RINGBUF;
+	case DYNPTR_TYPE_SKB:
+		return BPF_DYNPTR_TYPE_SKB;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -5826,12 +5828,29 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	return __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
 }
 
-static u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+static struct bpf_reg_state *get_dynptr_arg_reg(const struct bpf_func_proto *fn,
+						struct bpf_reg_state *regs)
+{
+	int i;
+
+	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++)
+		if (arg_type_is_dynptr(fn->arg_type[i]))
+			return &regs[BPF_REG_1 + i];
+
+	return NULL;
+}
+
+static enum bpf_dynptr_type stack_slot_get_dynptr_info(struct bpf_verifier_env *env,
+						       struct bpf_reg_state *reg,
+						       int *ref_obj_id)
 {
 	struct bpf_func_state *state = func(env, reg);
 	int spi = get_spi(reg->off);
 
-	return state->stack[spi].spilled_ptr.id;
+	if (ref_obj_id)
+		*ref_obj_id = state->stack[spi].spilled_ptr.id;
+
+	return state->stack[spi].spilled_ptr.dynptr.type;
 }
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
@@ -6056,7 +6075,8 @@ skip_type_check:
 			case DYNPTR_TYPE_RINGBUF:
 				err_extra = "ringbuf ";
 				break;
-			default:
+			case DYNPTR_TYPE_SKB:
+				err_extra = "skb ";
 				break;
 			}
 
@@ -7149,6 +7169,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	const struct bpf_func_proto *fn = NULL;
+	enum bpf_dynptr_type dynptr_type;
 	enum bpf_return_type ret_type;
 	enum bpf_type_flag ret_flag;
 	struct bpf_reg_state *regs;
@@ -7320,23 +7341,42 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			}
 		}
 		break;
-	case BPF_FUNC_dynptr_data:
-		for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-			if (arg_type_is_dynptr(fn->arg_type[i])) {
-				if (meta.ref_obj_id) {
-					verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
-					return -EFAULT;
-				}
-				/* Find the id of the dynptr we're tracking the reference of */
-				meta.ref_obj_id = stack_slot_get_id(env, &regs[BPF_REG_1 + i]);
-				break;
-			}
-		}
-		if (i == MAX_BPF_FUNC_REG_ARGS) {
+	case BPF_FUNC_dynptr_write:
+	{
+		struct bpf_reg_state *reg;
+
+		reg = get_dynptr_arg_reg(fn, regs);
+		if (!reg) {
 			verbose(env, "verifier internal error: no dynptr in bpf_dynptr_data()\n");
 			return -EFAULT;
 		}
+
+		/* bpf_dynptr_write() for skb-type dynptrs may pull the skb, so we must
+		 * invalidate all data slices associated with it
+		 */
+		if (stack_slot_get_dynptr_info(env, reg, NULL) == BPF_DYNPTR_TYPE_SKB)
+			changes_data = true;
+
 		break;
+	}
+	case BPF_FUNC_dynptr_data:
+	{
+		struct bpf_reg_state *reg;
+
+		reg = get_dynptr_arg_reg(fn, regs);
+		if (!reg) {
+			verbose(env, "verifier internal error: no dynptr in bpf_dynptr_data()\n");
+			return -EFAULT;
+		}
+
+		if (meta.ref_obj_id) {
+			verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
+			return -EFAULT;
+		}
+
+		dynptr_type = stack_slot_get_dynptr_info(env, reg, &meta.ref_obj_id);
+		break;
+	}
 	}
 
 	if (err)
@@ -7397,8 +7437,15 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		break;
 	case RET_PTR_TO_ALLOC_MEM:
 		mark_reg_known_zero(env, regs, BPF_REG_0);
-		regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
-		regs[BPF_REG_0].mem_size = meta.mem_size;
+
+		if (func_id == BPF_FUNC_dynptr_data &&
+		    dynptr_type == BPF_DYNPTR_TYPE_SKB) {
+			regs[BPF_REG_0].type = PTR_TO_PACKET | ret_flag;
+			regs[BPF_REG_0].range = meta.mem_size;
+		} else {
+			regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
+			regs[BPF_REG_0].mem_size = meta.mem_size;
+		}
 		break;
 	case RET_PTR_TO_MEM_OR_BTF_ID:
 	{
@@ -14137,6 +14184,24 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 
 			delta += cnt - 1;
 			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			goto patch_call_imm;
+		}
+
+		if (insn->imm == BPF_FUNC_dynptr_from_skb) {
+			bool is_rdonly = !may_access_direct_pkt_data(env, NULL, BPF_WRITE);
+
+			insn_buf[0] = BPF_MOV32_IMM(BPF_REG_4, is_rdonly);
+			insn_buf[1] = *insn;
+			cnt = 2;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = new_prog;
+			prog = new_prog;
 			insn = new_prog->insnsi + i + delta;
 			goto patch_call_imm;
 		}
