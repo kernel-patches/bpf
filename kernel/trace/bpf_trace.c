@@ -20,6 +20,7 @@
 #include <linux/fprobe.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
+#include <linux/perf_event.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1532,6 +1533,44 @@ static const struct bpf_func_proto bpf_read_branch_records_proto = {
 	.arg4_type      = ARG_ANYTHING,
 };
 
+BPF_CALL_4(bpf_read_raw_record, struct bpf_perf_event_data_kern *, ctx,
+	   void *, buf, u32, size, u64, flags)
+{
+	struct perf_raw_record *raw = ctx->data->raw;
+	struct perf_raw_frag *frag;
+	u32 to_copy;
+
+	if (unlikely(flags & ~BPF_F_GET_RAW_RECORD_SIZE))
+		return -EINVAL;
+
+	if (unlikely(!raw))
+		return -ENOENT;
+
+	if (flags & BPF_F_GET_RAW_RECORD_SIZE)
+		return raw->size;
+
+	if (!buf || (size % sizeof(u32) != 0))
+		return -EINVAL;
+
+	frag = &raw->frag;
+	WARN_ON_ONCE(!perf_raw_frag_last(frag));
+
+	to_copy = min_t(u32, frag->size, size);
+	memcpy(buf, frag->data, to_copy);
+
+	return to_copy;
+}
+
+static const struct bpf_func_proto bpf_read_raw_record_proto = {
+	.func           = bpf_read_raw_record,
+	.gpl_only       = true,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_PTR_TO_MEM_OR_NULL,
+	.arg3_type      = ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type      = ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 pe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1548,6 +1587,8 @@ pe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_read_branch_records_proto;
 	case BPF_FUNC_get_attach_cookie:
 		return &bpf_get_attach_cookie_proto_pe;
+	case BPF_FUNC_read_raw_record:
+		return &bpf_read_raw_record_proto;
 	default:
 		return bpf_tracing_func_proto(func_id, prog);
 	}

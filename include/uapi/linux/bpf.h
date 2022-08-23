@@ -5367,6 +5367,23 @@ union bpf_attr {
  *	Return
  *		Current *ktime*.
  *
+ * long bpf_read_raw_record(struct bpf_perf_event_data *ctx, void *buf, u32 size, u64 flags)
+ *	Description
+ *		For an eBPF program attached to a perf event, retrieve the
+ *		raw record associated to *ctx* and store it in the buffer
+ *		pointed by *buf* up to size *size* bytes.
+ *	Return
+ *		On success, number of bytes written to *buf*. On error, a
+ *		negative value.
+ *
+ *		The *flags* can be set to **BPF_F_GET_RAW_RECORD_SIZE** to
+ *		instead return the number of bytes required to store the raw
+ *		record. If this flag is set, *buf* may be NULL.
+ *
+ *		**-EINVAL** if arguments invalid or **size** not a multiple
+ *		of **sizeof**\ (u64\ ).
+ *
+ *		**-ENOENT** if the event does not have raw records.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5578,6 +5595,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(ktime_get_tai_ns),		\
+	FN(read_raw_record),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -5759,6 +5777,11 @@ enum {
 enum {
 	BPF_F_BROADCAST		= (1ULL << 3),
 	BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
+};
+
+/* BPF_FUNC_read_raw_record flags. */
+enum {
+	BPF_F_GET_RAW_RECORD_SIZE	= (1ULL << 0),
 };
 
 #define __bpf_md_ptr(type, name)	\
