@@ -1461,6 +1461,16 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 	bpf_dynptr_set_type(ptr, type);
 }
 
+void *bpf_dynptr_get_data(struct bpf_dynptr_kern *ptr, u32 *avail_bytes)
+{
+	u32 size = bpf_dynptr_get_size(ptr);
+
+	if (!ptr->data || ptr->offset > size)
+		return NULL;
+	*avail_bytes = size - ptr->offset;
+	return ptr->data + ptr->offset;
+}
+
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr)
 {
 	memset(ptr, 0, sizeof(*ptr));
