@@ -378,6 +378,8 @@ list of eBPF helper functions
 -------------------------------------------------------------------------------
 
 :Manual section: 7
+:Manual group: Linux Programmer's Manual
+:Version: Linux
 
 DESCRIPTION
 ===========
