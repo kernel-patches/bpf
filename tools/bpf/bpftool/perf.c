@@ -233,8 +233,9 @@ static int do_show(int argc, char **argv)
 static int do_help(int argc, char **argv)
 {
 	fprintf(stderr,
-		"Usage: %1$s %2$s { show | list }\n"
+		"Usage: %1$s %2$s { show | list | attach }\n"
 		"       %1$s %2$s help }\n"
+		"       %1$s %2$s attach PROG TP_NAME FILE\n"
 		"\n"
 		"       " HELP_SPEC_OPTIONS " }\n"
 		"",
@@ -243,10 +244,74 @@ static int do_help(int argc, char **argv)
 	return 0;
 }
 
+static enum bpf_prog_type get_prog_type(int progfd)
+{
+	struct bpf_prog_info info = {};
+	__u32 len = sizeof(info);
+
+	if (bpf_obj_get_info_by_fd(progfd, &info, &len))
+		return BPF_PROG_TYPE_UNSPEC;
+
+	return info.type;
+}
+
+static int do_attach(int argc, char **argv)
+{
+	enum bpf_prog_type prog_type;
+	char *tp_name, *path;
+	int err, progfd, pfd;
+
+	if (!REQ_ARGS(4))
+		return -EINVAL;
+
+	progfd = prog_parse_fd(&argc, &argv);
+	if (progfd < 0)
+		return progfd;
+
+	if (!REQ_ARGS(2)) {
+		err = -EINVAL;
+		goto out_close;
+	}
+
+	tp_name = GET_ARG();
+	path = GET_ARG();
+
+	prog_type = get_prog_type(progfd);
+	switch (prog_type) {
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
+		pfd = bpf_raw_tracepoint_open(tp_name, progfd);
+		if (pfd < 0) {
+			printf("failed to attach to raw tracepoint '%s'\n",
+			       tp_name);
+			err = pfd;
+			goto out_close;
+		}
+		break;
+	default:
+		printf("invalid program type %s\n",
+		       libbpf_bpf_prog_type_str(prog_type));
+		err = -EINVAL;
+		goto out_close;
+	}
+
+	err = do_pin_fd(pfd, path);
+	if (err) {
+		close(pfd);
+		goto out_close;
+	}
+
+	return 0;
+
+out_close:
+	return err;
+}
+
 static const struct cmd cmds[] = {
 	{ "show",	do_show },
 	{ "list",	do_show },
 	{ "help",	do_help },
+	{ "attach",	do_attach },
 	{ 0 }
 };
 

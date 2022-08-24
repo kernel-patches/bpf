@@ -19,12 +19,13 @@ SYNOPSIS
 	*OPTIONS* := { |COMMON_OPTIONS| }
 
 	*COMMANDS* :=
-	{ **show** | **list** | **help** }
+	{ **show** | **list** | **help** | **attach** }
 
 PERF COMMANDS
 =============
 
 |	**bpftool** **perf** { **show** | **list** }
+|	**bpftool** **perf** **attach** *PROG* *TP_NAME* *FILE*
 |	**bpftool** **perf help**
 
 DESCRIPTION
@@ -38,6 +39,14 @@ DESCRIPTION
 		  The attachment point for k[ret]probe is either symbol name and offset,
 		  or a kernel virtual address.
 		  The attachment point for u[ret]probe is the file name and the file offset.
+
+	**bpftool perf attach PROG TP_NAME FILE**
+		  Attach bpf program *PROG* to tracepoint *TP_NAME* and pin
+		  program *PROG* as *FILE*.
+
+		  Note: *FILE* must be located in *bpffs* mount. It must not
+		  contain a dot character ('.'), which is reserved for future
+		  extensions of *bpffs*.
 
 	**bpftool perf help**
 		  Print short help message.
