@@ -10718,7 +10718,7 @@ int sk_get_filter(struct sock *sk, sockptr_t optval, unsigned int len)
 	struct sk_filter *filter;
 	int ret = 0;
 
-	lock_sock(sk);
+	sockopt_lock_sock(sk);
 	filter = rcu_dereference_protected(sk->sk_filter,
 					   lockdep_sock_is_held(sk));
 	if (!filter)
@@ -10751,7 +10751,7 @@ int sk_get_filter(struct sock *sk, sockptr_t optval, unsigned int len)
 	 */
 	ret = fprog->len;
 out:
-	release_sock(sk);
+	sockopt_release_sock(sk);
 	return ret;
 }
 
