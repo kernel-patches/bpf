@@ -6443,8 +6443,8 @@ int btf_check_subprog_arg_match(struct bpf_verifier_env *env, int subprog,
 {
 	struct bpf_prog *prog = env->prog;
 	struct btf *btf = prog->aux->btf;
+	u32 btf_id, max_ctx_offset;
 	bool is_global;
-	u32 btf_id;
 	int err;
 
 	if (!prog->aux->func_info)
@@ -6457,8 +6457,17 @@ int btf_check_subprog_arg_match(struct bpf_verifier_env *env, int subprog,
 	if (prog->aux->func_info_aux[subprog].unreliable)
 		return -EINVAL;
 
+	/* subprogs arguments are not actually accessing the data, we need
+	 * to check for the types if they match.
+	 * Store the max_ctx_offset and restore it after btf_check_func_arg_match()
+	 * given that this function will have a side effect of changing it.
+	 */
+	max_ctx_offset = env->prog->aux->max_ctx_offset;
+
 	is_global = prog->aux->func_info_aux[subprog].linkage == BTF_FUNC_GLOBAL;
 	err = btf_check_func_arg_match(env, btf, btf_id, regs, is_global, 0);
+
+	env->prog->aux->max_ctx_offset = max_ctx_offset;
 
 	/* Compiler optimizations can remove arguments from static functions
 	 * or mismatched type can be passed into a global function.
