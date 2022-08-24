@@ -1,5 +1,7 @@
 .. SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
+.. _libbpf:
+
 libbpf
 ======
 
@@ -9,6 +11,7 @@ libbpf
    API Documentation <https://libbpf.readthedocs.io/en/latest/api.html>
    libbpf_naming_convention
    libbpf_build
+   program_types
 
 This is documentation for libbpf, a userspace library for loading and
 interacting with bpf programs.

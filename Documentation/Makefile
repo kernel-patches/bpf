@@ -66,7 +66,8 @@ I18NSPHINXOPTS  = $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
 loop_cmd = $(echo-cmd) $(cmd_$(1)) || exit;
 
 BUILD_SUBDIRS = \
-	Documentation/userspace-api/media
+	Documentation/userspace-api/media \
+	Documentation/bpf/libbpf
 
 quiet_cmd_build_subdir = SUBDIR  $2
       cmd_build_subdir = $(MAKE) BUILDDIR=$(abspath $(BUILDDIR)) $(build)=$2 $3
