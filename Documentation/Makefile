@@ -65,6 +65,12 @@ I18NSPHINXOPTS  = $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
 # commands; the 'cmd' from scripts/Kbuild.include is not *loopable*
 loop_cmd = $(echo-cmd) $(cmd_$(1)) || exit;
 
+BUILD_SUBDIRS = \
+	Documentation/userspace-api/media
+
+quiet_cmd_build_subdir = SUBDIR  $2
+      cmd_build_subdir = $(MAKE) BUILDDIR=$(abspath $(BUILDDIR)) $(build)=$2 $3
+
 # $2 sphinx builder e.g. "html"
 # $3 name of the build subfolder / e.g. "userspace-api/media", used as:
 #    * dest folder relative to $(BUILDDIR) and
@@ -74,7 +80,7 @@ loop_cmd = $(echo-cmd) $(cmd_$(1)) || exit;
 #    e.g. "userspace-api/media" for the linux-tv book-set at ./Documentation/userspace-api/media
 
 quiet_cmd_sphinx = SPHINX  $@ --> file://$(abspath $(BUILDDIR)/$3/$4)
-      cmd_sphinx = $(MAKE) BUILDDIR=$(abspath $(BUILDDIR)) $(build)=Documentation/userspace-api/media $2 && \
+      cmd_sphinx =  \
 	PYTHONDONTWRITEBYTECODE=1 \
 	BUILDDIR=$(abspath $(BUILDDIR)) SPHINX_CONF=$(abspath $(srctree)/$(src)/$5/$(SPHINX_CONF)) \
 	$(PYTHON3) $(srctree)/scripts/jobserver-exec \
@@ -93,6 +99,7 @@ quiet_cmd_sphinx = SPHINX  $@ --> file://$(abspath $(BUILDDIR)/$3/$4)
 
 htmldocs:
 	@$(srctree)/scripts/sphinx-pre-install --version-check
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),html))
 	@+$(foreach var,$(SPHINXDIRS),$(call loop_cmd,sphinx,html,$(var),,$(var)))
 
 linkcheckdocs:
@@ -100,6 +107,7 @@ linkcheckdocs:
 
 latexdocs:
 	@$(srctree)/scripts/sphinx-pre-install --version-check
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),latex))
 	@+$(foreach var,$(SPHINXDIRS),$(call loop_cmd,sphinx,latex,$(var),latex,$(var)))
 
 ifeq ($(HAVE_PDFLATEX),0)
@@ -112,6 +120,7 @@ else # HAVE_PDFLATEX
 
 pdfdocs: latexdocs
 	@$(srctree)/scripts/sphinx-pre-install --version-check
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),latex))
 	$(foreach var,$(SPHINXDIRS), \
 	   $(MAKE) PDFLATEX="$(PDFLATEX)" LATEXOPTS="$(LATEXOPTS)" -C $(BUILDDIR)/$(var)/latex || exit; \
 	   mkdir -p $(BUILDDIR)/$(var)/pdf; \
@@ -122,10 +131,12 @@ endif # HAVE_PDFLATEX
 
 epubdocs:
 	@$(srctree)/scripts/sphinx-pre-install --version-check
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),epub))
 	@+$(foreach var,$(SPHINXDIRS),$(call loop_cmd,sphinx,epub,$(var),epub,$(var)))
 
 xmldocs:
 	@$(srctree)/scripts/sphinx-pre-install --version-check
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),xml))
 	@+$(foreach var,$(SPHINXDIRS),$(call loop_cmd,sphinx,xml,$(var),xml,$(var)))
 
 endif # HAVE_SPHINX
@@ -138,7 +149,7 @@ refcheckdocs:
 
 cleandocs:
 	$(Q)rm -rf $(BUILDDIR)
-	$(Q)$(MAKE) BUILDDIR=$(abspath $(BUILDDIR)) $(build)=Documentation/userspace-api/media clean
+	@+$(foreach var,$(BUILD_SUBDIRS),$(call loop_cmd,build_subdir,$(var),clean))
 
 dochelp:
 	@echo  ' Linux kernel internal documentation in different formats from ReST:'
