@@ -58,6 +58,7 @@ tprogs-y += xdp_redirect
 tprogs-y += xdp_monitor
 
 tprogs-y += hid_mouse
+tprogs-y += hid_surface_dial
 
 # Libbpf dependencies
 LIBBPF_SRC = $(TOOLS_PATH)/lib/bpf
@@ -122,6 +123,7 @@ xdp_monitor-objs := xdp_monitor_user.o $(XDP_SAMPLE)
 xdp_router_ipv4-objs := xdp_router_ipv4_user.o $(XDP_SAMPLE)
 
 hid_mouse-objs := hid_mouse.o
+hid_surface_dial-objs := hid_surface_dial.o
 
 # Tell kbuild to always build the programs
 always-y := $(tprogs-y)
@@ -343,6 +345,7 @@ $(obj)/hbm.o: $(src)/hbm.h
 $(obj)/hbm_edt_kern.o: $(src)/hbm.h $(src)/hbm_kern.h
 
 $(obj)/hid_mouse.o: $(obj)/hid_mouse.skel.h
+$(obj)/hid_surface_dial.o: $(obj)/hid_surface_dial.skel.h
 
 # Override includes for xdp_sample_user.o because $(srctree)/usr/include in
 # TPROGS_CFLAGS causes conflicts
@@ -429,9 +432,10 @@ $(BPF_SKELS_LINKED): $(BPF_OBJS_LINKED) $(BPFTOOL)
 	$(Q)$(BPFTOOL) gen skeleton $(@:.skel.h=.lbpf.o) name $(notdir $(@:.skel.h=)) > $@
 
 # Generate BPF skeletons for non XDP progs
-OTHER_BPF_SKELS := hid_mouse.skel.h
+OTHER_BPF_SKELS := hid_mouse.skel.h hid_surface_dial.skel.h
 
 hid_mouse.skel.h-deps := hid_mouse.bpf.o
+hid_surface_dial.skel.h-deps := hid_surface_dial.bpf.o
 
 OTHER_BPF_SRCS_LINKED := $(patsubst %.skel.h,%.bpf.c, $(OTHER_BPF_SKELS))
 OTHER_BPF_OBJS_LINKED := $(patsubst %.bpf.c,$(obj)/%.bpf.o, $(OTHER_BPF_SRCS_LINKED))
