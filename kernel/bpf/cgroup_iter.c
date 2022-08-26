@@ -104,6 +104,7 @@ static void *cgroup_iter_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
 	struct cgroup_subsys_state *curr = (struct cgroup_subsys_state *)v;
 	struct cgroup_iter_priv *p = seq->private;
+	struct cgroup *parent;
 
 	++*pos;
 	if (p->terminate)
@@ -113,9 +114,11 @@ static void *cgroup_iter_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 		return css_next_descendant_pre(curr, p->start_css);
 	else if (p->order == BPF_CGROUP_ITER_DESCENDANTS_POST)
 		return css_next_descendant_post(curr, p->start_css);
-	else if (p->order == BPF_CGROUP_ITER_ANCESTORS_UP)
-		return curr->parent;
-	else  /* BPF_CGROUP_ITER_SELF_ONLY */
+	else if (p->order == BPF_CGROUP_ITER_ANCESTORS_UP) {
+		parent = cgroup_parent_ns(curr->cgroup,
+					  current->nsproxy->cgroup_ns);
+		return parent ? &parent->self : NULL;
+	} else  /* BPF_CGROUP_ITER_SELF_ONLY */
 		return NULL;
 }
 

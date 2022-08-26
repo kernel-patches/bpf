@@ -858,6 +858,9 @@ struct cgroup_namespace *copy_cgroup_ns(unsigned long flags,
 int cgroup_path_ns(struct cgroup *cgrp, char *buf, size_t buflen,
 		   struct cgroup_namespace *ns);
 
+struct cgroup *cgroup_parent_ns(struct cgroup *cgrp,
+				struct cgroup_namespace *ns);
+
 #else /* !CONFIG_CGROUPS */
 
 static inline void free_cgroup_ns(struct cgroup_namespace *ns) { }
