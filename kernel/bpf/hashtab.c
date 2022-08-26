@@ -505,6 +505,11 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 
 	bpf_map_init_from_attr(&htab->map, attr);
 
+	if (!lru && bpf_force_dyn_alloc) {
+		prealloc = false;
+		htab->map.map_flags |= BPF_F_NO_PREALLOC;
+	}
+
 	if (percpu_lru) {
 		/* ensure each CPU's lru list has >=1 elements.
 		 * since we are at it, make each lru list has the same

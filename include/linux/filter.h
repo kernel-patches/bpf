@@ -1009,6 +1009,8 @@ bpf_run_sk_reuseport(struct sock_reuseport *reuse, struct sock *sk,
 }
 #endif
 
+extern int bpf_force_dyn_alloc;
+
 #ifdef CONFIG_BPF_JIT
 extern int bpf_jit_enable;
 extern int bpf_jit_harden;

@@ -533,6 +533,8 @@ void bpf_prog_kallsyms_del_all(struct bpf_prog *fp)
 	bpf_prog_kallsyms_del(fp);
 }
 
+int bpf_force_dyn_alloc __read_mostly;
+
 #ifdef CONFIG_BPF_JIT
 /* All BPF JIT sysctl knobs here. */
 int bpf_jit_enable   __read_mostly = IS_BUILTIN(CONFIG_BPF_JIT_DEFAULT_ON);
