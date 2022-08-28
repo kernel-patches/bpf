@@ -356,6 +356,20 @@ config PAHOLE_HAS_BTF_TAG
 	  btf_decl_tag) or not. Currently only clang compiler implements
 	  these attributes, so make the config depend on CC_IS_CLANG.
 
+config PAHOLE_HAS_SKIP_ENCODING_BTF_ENUM64
+	def_bool PAHOLE_VERSION >= 124
+	help
+	  Encoding BTF enum64s can be skipped with the
+	  --skip_encoding_btf_enum64 pahole option.
+
+config DEBUG_INFO_BTF_SKIP_ENCODING_ENUM64
+	def_bool n
+	depends on DEBUG_INFO_BTF && PAHOLE_HAS_SKIP_ENCODING_BTF_ENUM64
+	help
+	  Omit the encoding of 64 bits enum values with pahole. With certain
+	  kernel configurations having ENUM64s enabled may result in malformed
+	  output binaries.
+
 config DEBUG_INFO_BTF_MODULES
 	def_bool y
 	depends on DEBUG_INFO_BTF && MODULES && PAHOLE_HAS_SPLIT_BTF

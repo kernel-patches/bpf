@@ -9,6 +9,10 @@ fi
 
 pahole_ver=$($(dirname $0)/pahole-version.sh ${PAHOLE})
 
+is_enabled() {
+	grep -q "^$1=y" include/config/auto.conf
+}
+
 if [ "${pahole_ver}" -ge "118" ] && [ "${pahole_ver}" -le "121" ]; then
 	# pahole 1.18 through 1.21 can't handle zero-sized per-CPU vars
 	extra_paholeopt="${extra_paholeopt} --skip_encoding_btf_vars"
@@ -18,6 +22,9 @@ if [ "${pahole_ver}" -ge "121" ]; then
 fi
 if [ "${pahole_ver}" -ge "122" ]; then
 	extra_paholeopt="${extra_paholeopt} -j"
+fi
+if is_enabled DEBUG_INFO_BTF_SKIP_ENCODING_ENUM64; then
+	extra_paholeopt="${extra_paholeopt} --skip_encoding_btf_enum64"
 fi
 
 echo ${extra_paholeopt}
