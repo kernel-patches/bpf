@@ -1640,7 +1640,7 @@ union bpf_attr {
  *
  * 		::
  *
- * 			telnet-470   [001] .N.. 419421.045894: 0x00000001: <formatted msg>
+ * 			telnet-470   [001] .N.. 419421.045894: 0x00000001: <fmt>
  *
  * 		In the above:
  *
@@ -1657,8 +1657,7 @@ union bpf_attr {
  * 			* ``419421.045894`` is a timestamp.
  * 			* ``0x00000001`` is a fake value used by BPF for the
  * 			  instruction pointer register.
- * 			* ``<formatted msg>`` is the message formatted with
- * 			  *fmt*.
+ * 			* ``<fmt>`` is the message formatted with *fmt*.
  *
  * 		The conversion specifiers supported by *fmt* are similar, but
  * 		more limited than for printk(). They are **%d**, **%i**,
@@ -3896,8 +3895,10 @@ union bpf_attr {
  * 			void bpf_sys_open(struct pt_regs *ctx)
  * 			{
  * 			        char buf[PATHLEN]; // PATHLEN is defined to 256
- * 			        int res = bpf_probe_read_user_str(buf, sizeof(buf),
- * 				                                  ctx->di);
+ * 			        int res;
+ *
+ * 			        res = bpf_probe_read_user_str(buf, sizeof(buf),
+ * 				                              ctx->di);
  *
  * 				// Consume buf, for example push it to
  * 				// userspace via bpf_perf_event_output(); we
