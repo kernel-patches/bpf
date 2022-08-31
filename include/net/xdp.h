@@ -407,6 +407,9 @@ struct netdev_bpf;
 void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf);
 
+__wsum __xdp_checksum(struct xdp_buff *xdp, int offset, int len,
+		      __wsum csum, const struct skb_checksum_ops *ops);
+
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 
 #endif /* __LINUX_NET_XDP_H__ */

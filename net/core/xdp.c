@@ -711,3 +711,54 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 
 	return nxdpf;
 }
+
+/* Checksum skb data. */
+__wsum __xdp_checksum(struct xdp_buff *xdp, int offset, int len,
+		      __wsum csum, const struct skb_checksum_ops *ops)
+{
+	skb_frag_t *next_frag, *end_frag;
+	struct skb_shared_info *sinfo;
+	int copy, pos = 0;
+	u8 *ptr_buf;
+	int ptr_len;
+
+	/* If offset + len is contained in the linear area, just checksum that */
+	if (likely(xdp->data_end - xdp->data >= offset + len)) {
+		csum = INDIRECT_CALL_1(ops->update, csum_partial_ext,
+				       xdp->data + offset, len, csum);
+		return csum;
+	}
+
+	/* Walk all the buffers and checksum them sequentially. */
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+	end_frag = &sinfo->frags[sinfo->nr_frags];
+	next_frag = &sinfo->frags[0];
+
+	ptr_buf = xdp->data;
+	ptr_len = xdp->data_end - xdp->data;
+	copy = ptr_len;
+
+	while (len > 0) {
+		if (offset < ptr_len) {
+			__wsum csum2;
+
+			copy = min(len, ptr_len);
+			csum2 = INDIRECT_CALL_1(ops->update, csum_partial_ext,
+						ptr_buf + offset, copy, 0);
+			csum = INDIRECT_CALL_1(ops->combine, csum_block_add_ext,
+					       csum, csum2, pos, copy);
+			len -= copy;
+			pos += copy;
+		}
+		if (offset > 0)
+			offset -= copy;
+		ptr_buf = skb_frag_address(next_frag);
+		ptr_len = skb_frag_size(next_frag);
+		if (next_frag == end_frag)
+			break;
+		next_frag++;
+	}
+	WARN_ON(len);
+	return csum;
+}
+EXPORT_SYMBOL(__xdp_checksum);
