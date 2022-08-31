@@ -93,4 +93,6 @@ void test_l4lb_all(void)
 		test_l4lb("test_l4lb.o");
 	if (test__start_subtest("l4lb_noinline"))
 		test_l4lb("test_l4lb_noinline.o");
+	if (test__start_subtest("l4lb_noinline_dynptr"))
+		test_l4lb("test_l4lb_noinline_dynptr.o");
 }
