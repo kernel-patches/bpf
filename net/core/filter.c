@@ -1681,8 +1681,8 @@ static inline void bpf_pull_mac_rcsum(struct sk_buff *skb)
 		skb_postpull_rcsum(skb, skb_mac_header(skb), skb->mac_len);
 }
 
-BPF_CALL_5(bpf_skb_store_bytes, struct sk_buff *, skb, u32, offset,
-	   const void *, from, u32, len, u64, flags)
+int __bpf_skb_store_bytes(struct sk_buff *skb, u32 offset, const void *from,
+			  u32 len, u64 flags)
 {
 	void *ptr;
 
@@ -1707,6 +1707,12 @@ BPF_CALL_5(bpf_skb_store_bytes, struct sk_buff *, skb, u32, offset,
 	return 0;
 }
 
+BPF_CALL_5(bpf_skb_store_bytes, struct sk_buff *, skb, u32, offset,
+	   const void *, from, u32, len, u64, flags)
+{
+	return __bpf_skb_store_bytes(skb, offset, from, len, flags);
+}
+
 static const struct bpf_func_proto bpf_skb_store_bytes_proto = {
 	.func		= bpf_skb_store_bytes,
 	.gpl_only	= false,
@@ -1718,8 +1724,7 @@ static const struct bpf_func_proto bpf_skb_store_bytes_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
-	   void *, to, u32, len)
+int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset, void *to, u32 len)
 {
 	void *ptr;
 
@@ -1736,6 +1741,12 @@ BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
 err_clear:
 	memset(to, 0, len);
 	return -EFAULT;
+}
+
+BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
+	   void *, to, u32, len)
+{
+	return __bpf_skb_load_bytes(skb, offset, to, len);
 }
 
 static const struct bpf_func_proto bpf_skb_load_bytes_proto = {
@@ -1847,6 +1858,51 @@ static const struct bpf_func_proto bpf_skb_pull_data_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_dynptr_from_skb_rdwr, struct sk_buff *, skb, u64, flags,
+	   struct bpf_dynptr_kern *, ptr)
+{
+	if (flags) {
+		bpf_dynptr_set_null(ptr);
+		return -EINVAL;
+	}
+
+	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB, 0, skb->len);
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_dynptr_from_skb_rdwr_proto = {
+	.func		= bpf_dynptr_from_skb_rdwr,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_SKB | MEM_UNINIT,
+};
+
+BPF_CALL_3(bpf_dynptr_from_skb_rdonly, struct sk_buff *, skb, u64, flags,
+	   struct bpf_dynptr_kern *, ptr)
+{
+	int err;
+
+	err = ____bpf_dynptr_from_skb_rdwr(skb, flags, ptr);
+	if (err)
+		return err;
+
+	bpf_dynptr_set_rdonly(ptr);
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_dynptr_from_skb_rdonly_proto = {
+	.func		= bpf_dynptr_from_skb_rdonly,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_SKB | MEM_UNINIT,
 };
 
 BPF_CALL_1(bpf_sk_fullsock, struct sock *, sk)
@@ -7704,6 +7760,8 @@ sk_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_socket_uid_proto;
 	case BPF_FUNC_perf_event_output:
 		return &bpf_skb_event_output_proto;
+	case BPF_FUNC_dynptr_from_skb:
+		return &bpf_dynptr_from_skb_rdonly_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}
@@ -7891,6 +7949,8 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_tcp_raw_check_syncookie_ipv6_proto;
 #endif
 #endif
+	case BPF_FUNC_dynptr_from_skb:
+		return &bpf_dynptr_from_skb_rdwr_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}
@@ -8090,6 +8150,8 @@ sk_skb_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_skc_lookup_tcp:
 		return &bpf_skc_lookup_tcp_proto;
 #endif
+	case BPF_FUNC_dynptr_from_skb:
+		return &bpf_dynptr_from_skb_rdwr_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}
@@ -8128,6 +8190,8 @@ lwt_out_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_smp_processor_id_proto;
 	case BPF_FUNC_skb_under_cgroup:
 		return &bpf_skb_under_cgroup_proto;
+	case BPF_FUNC_dynptr_from_skb:
+		return &bpf_dynptr_from_skb_rdonly_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}
