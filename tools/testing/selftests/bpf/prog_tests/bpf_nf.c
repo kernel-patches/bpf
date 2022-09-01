@@ -115,6 +115,8 @@ static void test_bpf_nf_ct(int mode)
 	ASSERT_EQ(skel->bss->test_status, 2, "Test for ct status update ");
 	ASSERT_EQ(skel->data->test_exist_lookup, 0, "Test existing connection lookup");
 	ASSERT_EQ(skel->bss->test_exist_lookup_mark, 43, "Test existing connection lookup ctmark");
+	ASSERT_EQ(skel->data->test_snat_addr, 0, "Test for source natting");
+	ASSERT_EQ(skel->data->test_dnat_addr, 0, "Test for destination natting");
 end:
 	if (srv_client_fd != -1)
 		close(srv_client_fd);
