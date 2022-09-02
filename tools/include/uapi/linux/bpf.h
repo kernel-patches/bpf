@@ -1319,6 +1319,7 @@ union bpf_attr {
 		 * to using 5 hash functions).
 		 */
 		__u64	map_extra;
+		__u32	memcg_fd;	/* selectable memcg */
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
