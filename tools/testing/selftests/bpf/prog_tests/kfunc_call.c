@@ -35,11 +35,17 @@ static struct kfunc_test_params kfunc_tests[] = {
 	 */
 	{"kfunc_syscall_test_fail", -EINVAL, syscall_null_ctx_test, "processed 4 insns"},
 	{"kfunc_syscall_test_null_fail", -EINVAL, syscall_null_ctx_test, "processed 4 insns"},
+	{"kfunc_call_test_get_mem_fail_rdonly", 0, tc_test, "R0 cannot write into rdonly_mem"},
+	{"kfunc_call_test_get_mem_fail_use_after_free", 0, tc_test, "invalid mem access 'scalar'"},
+	{"kfunc_call_test_get_mem_fail_oob", 0, tc_test, "min value is outside of the allowed memory range"},
+	{"kfunc_call_test_get_mem_fail_not_const", 0, tc_test, "is not a const"},
+	{"kfunc_call_test_mem_acquire_fail", 0, tc_test, "acquire kernel function does not return PTR_TO_BTF_ID"},
 
 	/* success cases */
 	{"kfunc_call_test1", 12, tc_test, NULL},
 	{"kfunc_call_test2", 3, tc_test, NULL},
 	{"kfunc_call_test_ref_btf_id", 0, tc_test, NULL},
+	{"kfunc_call_test_get_mem", 42, tc_test, NULL},
 	{"kfunc_syscall_test", 0, syscall_test, NULL},
 	{"kfunc_syscall_test_null", 0, syscall_null_ctx_test, NULL},
 };
