@@ -185,6 +185,7 @@ static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node,
 static struct bpf_map *ringbuf_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_ringbuf_map *rb_map;
+	int err;
 
 	if (attr->map_flags & ~RINGBUF_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
@@ -204,7 +205,11 @@ static struct bpf_map *ringbuf_map_alloc(union bpf_attr *attr)
 	if (!rb_map)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&rb_map->map, attr);
+	err = bpf_map_init_from_attr(&rb_map->map, attr);
+	if (err) {
+		bpf_map_area_free(rb_map, NULL);
+		return ERR_PTR(err);
+	}
 
 	rb_map->rb = bpf_ringbuf_alloc(attr->max_entries, rb_map->map.numa_node,
 				       &rb_map->map);

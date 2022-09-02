@@ -85,6 +85,7 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	bool bypass_spec_v1 = bpf_bypass_spec_v1();
 	u64 array_size, mask64;
 	struct bpf_array *array;
+	int err;
 
 	elem_size = round_up(attr->value_size, 8);
 
@@ -143,7 +144,12 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	array->map.bypass_spec_v1 = bypass_spec_v1;
 
 	/* copy mandatory map attributes */
-	bpf_map_init_from_attr(&array->map, attr);
+	err = bpf_map_init_from_attr(&array->map, attr);
+	if (err) {
+		bpf_map_area_free(array, NULL);
+		return ERR_PTR(err);
+	}
+
 	array->elem_size = elem_size;
 
 	if (percpu && bpf_array_alloc_percpu(array)) {

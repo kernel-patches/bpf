@@ -376,7 +376,11 @@ struct bpf_map *bpf_map_offload_map_alloc(union bpf_attr *attr)
 	if (!offmap)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&offmap->map, attr);
+	err = bpf_map_init_from_attr(&offmap->map, attr);
+	if (err) {
+		bpf_map_area_free(offmap, NULL);
+		return ERR_PTR(err);
+	}
 
 	rtnl_lock();
 	down_write(&bpf_devs_lock);

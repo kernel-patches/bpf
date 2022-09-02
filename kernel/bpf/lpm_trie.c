@@ -543,6 +543,7 @@ out:
 static struct bpf_map *trie_alloc(union bpf_attr *attr)
 {
 	struct lpm_trie *trie;
+	int err;
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -563,7 +564,12 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 		return ERR_PTR(-ENOMEM);
 
 	/* copy mandatory map attributes */
-	bpf_map_init_from_attr(&trie->map, attr);
+	err = bpf_map_init_from_attr(&trie->map, attr);
+	if (err) {
+		bpf_map_area_free(trie, NULL);
+		return ERR_PTR(err);
+	}
+
 	trie->data_size = attr->key_size -
 			  offsetof(struct bpf_lpm_trie_key, data);
 	trie->max_prefixlen = trie->data_size * 8;
