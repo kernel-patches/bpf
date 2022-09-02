@@ -618,6 +618,7 @@ static const struct latch_tree_ops bpf_tree_ops = {
 	.comp	= bpf_tree_comp,
 };
 
+DEFINE_PER_CPU(struct bpf_account, bpftime);
 static DEFINE_SPINLOCK(bpf_lock);
 static LIST_HEAD(bpf_kallsyms);
 static struct latch_tree_root bpf_tree __cacheline_aligned;

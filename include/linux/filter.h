@@ -565,6 +565,12 @@ struct sk_filter {
 	struct bpf_prog	*prog;
 };
 
+struct bpf_account {
+	u64_stats_t nsecs;
+	struct u64_stats_sync syncp;
+};
+DECLARE_PER_CPU(struct bpf_account, bpftime);
+
 DECLARE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 
 typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
@@ -577,12 +583,14 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 					  bpf_dispatcher_fn dfunc)
 {
 	u32 ret;
+	struct bpf_account *bact;
+	unsigned long flags;
+	u64 start = 0;
 
 	cant_migrate();
+	start = sched_clock();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
 		struct bpf_prog_stats *stats;
-		u64 start = sched_clock();
-		unsigned long flags;
 
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
 		stats = this_cpu_ptr(prog->stats);
@@ -593,6 +601,11 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 	} else {
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
 	}
+	bact = this_cpu_ptr(&bpftime);
+	flags = u64_stats_update_begin_irqsave(&bact->syncp);
+	u64_stats_add(&bact->nsecs, sched_clock() - start);
+	u64_stats_update_end_irqrestore(&bact->syncp, flags);
+
 	return ret;
 }
 

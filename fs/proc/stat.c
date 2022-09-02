@@ -14,6 +14,8 @@
 #include <linux/irqnr.h>
 #include <linux/sched/cputime.h>
 #include <linux/tick.h>
+#include <linux/filter.h>
+#include <linux/u64_stats_sync.h>
 
 #ifndef arch_irq_stat_cpu
 #define arch_irq_stat_cpu(cpu) 0
@@ -21,6 +23,20 @@
 #ifndef arch_irq_stat
 #define arch_irq_stat() 0
 #endif
+
+DECLARE_PER_CPU(struct bpf_account, bpftime);
+
+static void get_bpf_time(u64 *ns, int cpu)
+{
+	unsigned int start = 0;
+	const struct bpf_account *bact;
+
+	bact = per_cpu_ptr(&bpftime, cpu);
+	do {
+		start = u64_stats_fetch_begin_irq(&bact->syncp);
+		*ns = u64_stats_read(&bact->nsecs);
+	} while (u64_stats_fetch_retry_irq(&bact->syncp, start));
+}
 
 #ifdef arch_idle_time
 
@@ -112,11 +128,12 @@ static int show_stat(struct seq_file *p, void *v)
 	u64 guest, guest_nice;
 	u64 sum = 0;
 	u64 sum_softirq = 0;
+	u64 bpf_sum, bpf;
 	unsigned int per_softirq_sums[NR_SOFTIRQS] = {0};
 	struct timespec64 boottime;
 
 	user = nice = system = idle = iowait =
-		irq = softirq = steal = 0;
+		irq = softirq = steal = bpf = bpf_sum = 0;
 	guest = guest_nice = 0;
 	getboottime64(&boottime);
 	/* shift boot timestamp according to the timens offset */
@@ -127,6 +144,7 @@ static int show_stat(struct seq_file *p, void *v)
 		u64 *cpustat = kcpustat.cpustat;
 
 		kcpustat_cpu_fetch(&kcpustat, i);
+		get_bpf_time(&bpf, i);
 
 		user		+= cpustat[CPUTIME_USER];
 		nice		+= cpustat[CPUTIME_NICE];
@@ -138,6 +156,7 @@ static int show_stat(struct seq_file *p, void *v)
 		steal		+= cpustat[CPUTIME_STEAL];
 		guest		+= cpustat[CPUTIME_GUEST];
 		guest_nice	+= cpustat[CPUTIME_GUEST_NICE];
+		bpf_sum		+= bpf;
 		sum		+= kstat_cpu_irqs_sum(i);
 		sum		+= arch_irq_stat_cpu(i);
 
@@ -160,6 +179,7 @@ static int show_stat(struct seq_file *p, void *v)
 	seq_put_decimal_ull(p, " ", nsec_to_clock_t(steal));
 	seq_put_decimal_ull(p, " ", nsec_to_clock_t(guest));
 	seq_put_decimal_ull(p, " ", nsec_to_clock_t(guest_nice));
+	seq_put_decimal_ull(p, " ", nsec_to_clock_t(bpf_sum));
 	seq_putc(p, '\n');
 
 	for_each_online_cpu(i) {
@@ -167,7 +187,7 @@ static int show_stat(struct seq_file *p, void *v)
 		u64 *cpustat = kcpustat.cpustat;
 
 		kcpustat_cpu_fetch(&kcpustat, i);
-
+		get_bpf_time(&bpf, i);
 		/* Copy values here to work around gcc-2.95.3, gcc-2.96 */
 		user		= cpustat[CPUTIME_USER];
 		nice		= cpustat[CPUTIME_NICE];
@@ -190,6 +210,7 @@ static int show_stat(struct seq_file *p, void *v)
 		seq_put_decimal_ull(p, " ", nsec_to_clock_t(steal));
 		seq_put_decimal_ull(p, " ", nsec_to_clock_t(guest));
 		seq_put_decimal_ull(p, " ", nsec_to_clock_t(guest_nice));
+		seq_put_decimal_ull(p, " ", nsec_to_clock_t(bpf));
 		seq_putc(p, '\n');
 	}
 	seq_put_decimal_ull(p, "intr ", (unsigned long long)sum);

@@ -1477,6 +1477,7 @@ second).  The meanings of the columns are as follows, from left to right:
 - steal: involuntary wait
 - guest: running a normal guest
 - guest_nice: running a niced guest
+- bpf: running in bpf_programs
 
 The "intr" line gives counts of interrupts  serviced since boot time, for each
 of the  possible system interrupts.   The first  column  is the  total of  all
