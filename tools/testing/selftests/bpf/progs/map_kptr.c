@@ -2,10 +2,17 @@
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
+#include "bpf_experimental.h"
+
+struct foo {
+	int data;
+};
 
 struct map_value {
 	struct prog_test_ref_kfunc __kptr *unref_ptr;
 	struct prog_test_ref_kfunc __kptr_ref *ref_ptr;
+	struct foo __kptr_ref __local *lref_ptr;
 };
 
 struct array_map {
@@ -130,11 +137,42 @@ static void test_kptr_get(struct map_value *v)
 	bpf_kfunc_call_test_release(p);
 }
 
+static void test_local_kptr_ref(struct map_value *v)
+{
+	struct foo *p;
+
+	p = v->lref_ptr;
+	if (!p)
+		return;
+	if (p->data > 100)
+		return;
+	/* store NULL */
+	p = bpf_kptr_xchg(&v->lref_ptr, NULL);
+	if (!p)
+		return;
+	if (p->data > 100) {
+		p->data = 0;
+		bpf_kptr_free(p);
+		return;
+	}
+	bpf_kptr_free(p);
+
+	p = bpf_kptr_alloc(bpf_core_type_id_local(struct foo), 0);
+	if (!p)
+		return;
+	/* store ptr_ */
+	p = bpf_kptr_xchg(&v->lref_ptr, p);
+	if (!p)
+		return;
+	bpf_kptr_free(p);
+}
+
 static void test_kptr(struct map_value *v)
 {
 	test_kptr_unref(v);
 	test_kptr_ref(v);
 	test_kptr_get(v);
+	test_local_kptr_ref(v);
 }
 
 SEC("tc")

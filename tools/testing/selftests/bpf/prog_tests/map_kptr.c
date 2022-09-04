@@ -91,7 +91,7 @@ static void test_map_kptr_success(bool test_run)
 	);
 	struct map_kptr *skel;
 	int key = 0, ret;
-	char buf[16];
+	char buf[24];
 
 	skel = map_kptr__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "map_kptr__open_and_load"))
