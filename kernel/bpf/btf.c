@@ -5981,7 +5981,8 @@ error:
 static int btf_find_local_type_field(const struct btf *btf,
 				     const struct btf_type *t,
 				     enum btf_field_type type,
-				     u32 *offsetp)
+				     u32 *offsetp, u32 *value_type_idp,
+				     u32 *list_node_offp)
 {
 	struct btf_field_info info;
 	int ret;
@@ -5996,9 +5997,40 @@ static int btf_find_local_type_field(const struct btf *btf,
 	/* A validation step needs to be done for bpf_list_head in local kptrs */
 	if (type == BTF_FIELD_LIST_HEAD_KPTR) {
 		const struct btf_type *vt = btf_type_by_id(btf, info.list_head.value_type_id);
+		const struct btf_type *n = NULL;
+		const struct btf_member *member;
+		u32 offset;
+		int i;
 
 		if (!list_head_value_ok(btf, t, vt, type))
 			return -EINVAL;
+		for_each_member(i, vt, member) {
+			if (strcmp(info.list_head.node_name, __btf_name_by_offset(btf, member->name_off)))
+				continue;
+			/* Invalid BTF, two members with same name */
+			if (n)
+				return -EINVAL;
+			n = btf_type_by_id(btf, member->type);
+			if (!__btf_type_is_struct(n))
+				return -EINVAL;
+			if (strcmp("bpf_list_node", __btf_name_by_offset(btf, n->name_off)))
+				return -EINVAL;
+			offset = __btf_member_bit_offset(n, member);
+			if (offset % 8)
+				return -EINVAL;
+			offset /= 8;
+			if (offset % __alignof__(struct bpf_list_node))
+				return -EINVAL;
+			if (value_type_idp)
+				*value_type_idp = info.list_head.value_type_id;
+			if (list_node_offp)
+				*list_node_offp = offset;
+		}
+		/* Could not find bpf_list_node */
+		if (!n)
+			return -ENOENT;
+	} else if (value_type_idp || list_node_offp) {
+		return -EFAULT;
 	}
 	if (offsetp)
 		*offsetp = info.off;
@@ -6008,19 +6040,26 @@ static int btf_find_local_type_field(const struct btf *btf,
 int btf_local_type_has_bpf_list_node(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp)
 {
-	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_NODE, offsetp);
+	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_NODE, offsetp, NULL, NULL);
 }
 
 int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp)
 {
-	return btf_find_local_type_field(btf, t, BTF_FIELD_SPIN_LOCK, offsetp);
+	return btf_find_local_type_field(btf, t, BTF_FIELD_SPIN_LOCK, offsetp, NULL, NULL);
+}
+
+int __btf_local_type_has_bpf_list_head(const struct btf *btf,
+				       const struct btf_type *t, u32 *offsetp,
+				       u32 *value_type_idp, u32 *list_node_offp)
+{
+	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_HEAD_KPTR, offsetp, value_type_idp, list_node_offp);
 }
 
 int btf_local_type_has_bpf_list_head(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp)
 {
-	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_HEAD_KPTR, offsetp);
+	return __btf_local_type_has_bpf_list_head(btf, t, offsetp, NULL, NULL);
 }
 
 bool btf_local_type_has_special_fields(const struct btf *btf, const struct btf_type *t)

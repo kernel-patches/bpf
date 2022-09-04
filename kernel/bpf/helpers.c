@@ -1736,6 +1736,56 @@ void bpf_kptr_free(void *p__dlkptr)
 	kfree(p__dlkptr);
 }
 
+static bool __always_inline __bpf_list_head_init_zeroed(struct bpf_list_head *h)
+{
+	struct list_head *head = (struct list_head *)h;
+
+	if (unlikely(!head->next)) {
+		INIT_LIST_HEAD(head);
+		return true;
+	}
+	return false;
+}
+
+void bpf_list_add(struct bpf_list_node *node, struct bpf_list_head *head)
+{
+	__bpf_list_head_init_zeroed(head);
+	list_add((struct list_head *)node, (struct list_head *)head);
+}
+
+void bpf_list_add_tail(struct bpf_list_node *node, struct bpf_list_head *head)
+{
+	__bpf_list_head_init_zeroed(head);
+	list_add_tail((struct list_head *)node, (struct list_head *)head);
+}
+
+void bpf_list_del(struct bpf_list_node *node)
+{
+	list_del_init((struct list_head *)node);
+}
+
+struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head)
+{
+	struct list_head *node, *list = (struct list_head *)head;
+
+	if (__bpf_list_head_init_zeroed(head) || list_empty(list))
+		return NULL;
+	node = list->next;
+	list_del_init(node);
+	return (struct bpf_list_node *)node;
+}
+
+struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head)
+{
+	struct list_head *node, *list = (struct list_head *)head;
+
+	if (__bpf_list_head_init_zeroed(head) || list_empty(list))
+		return NULL;
+	node = list->prev;
+	list_del_init(node);
+	return (struct bpf_list_node *)node;
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1747,6 +1797,11 @@ BTF_ID_FLAGS(func, bpf_list_node_init)
 BTF_ID_FLAGS(func, bpf_spin_lock_init)
 BTF_ID_FLAGS(func, bpf_list_head_init)
 BTF_ID_FLAGS(func, bpf_kptr_free, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_list_add)
+BTF_ID_FLAGS(func, bpf_list_add_tail)
+BTF_ID_FLAGS(func, bpf_list_del)
+BTF_ID_FLAGS(func, bpf_list_pop_front, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
+BTF_ID_FLAGS(func, bpf_list_pop_back, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

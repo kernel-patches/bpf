@@ -67,4 +67,39 @@ void bpf_list_head_init(struct bpf_list_head *node) __ksym;
  */
 void bpf_kptr_free(void *kptr) __ksym;
 
+/* Description
+ *	Add a new entry to the head of a BPF linked list.
+ * Returns
+ *	Void.
+ */
+void bpf_list_add(struct bpf_list_node *node, struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Add a new entry to the tail of a BPF linked list.
+ * Returns
+ *	Void.
+ */
+void bpf_list_add_tail(struct bpf_list_node *node, struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Remove an entry already part of a BPF linked list.
+ * Returns
+ *	Void.
+ */
+void bpf_list_del(struct bpf_list_node *node) __ksym;
+
+/* Description
+ *	Remove the first entry of a BPF linked list.
+ * Returns
+ *	Pointer to bpf_list_node of deleted entry, or NULL if list is empty.
+ */
+struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Remove the last entry of a BPF linked list.
+ * Returns
+ *	Pointer to bpf_list_node of deleted entry, or NULL if list is empty.
+ */
+struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head) __ksym;
+
 #endif

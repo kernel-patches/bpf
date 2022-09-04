@@ -437,6 +437,9 @@ int btf_local_type_has_bpf_list_node(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp);
 int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp);
+int __btf_local_type_has_bpf_list_head(const struct btf *btf,
+				       const struct btf_type *t, u32 *offsetp,
+				       u32 *value_type_idp, u32 *list_node_offp);
 int btf_local_type_has_bpf_list_head(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp);
 bool btf_local_type_has_special_fields(const struct btf *btf,
@@ -488,6 +491,14 @@ static inline int btf_local_type_has_bpf_list_node(const struct btf *btf,
 static inline int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
 					           const struct btf_type *t,
 					           u32 *offsetp)
+{
+	return -ENOENT;
+}
+static inline int __btf_local_type_has_bpf_list_head(const struct btf *btf,
+						     const struct btf_type *t,
+						     u32 *offsetp,
+						     u32 *value_type_idp,
+						     u32 *list_node_offp)
 {
 	return -ENOENT;
 }
