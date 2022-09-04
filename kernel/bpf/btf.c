@@ -5954,9 +5954,16 @@ int btf_local_type_has_bpf_list_node(const struct btf *btf,
 	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_NODE, offsetp);
 }
 
+int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
+				     const struct btf_type *t, u32 *offsetp)
+{
+	return btf_find_local_type_field(btf, t, BTF_FIELD_SPIN_LOCK, offsetp);
+}
+
 bool btf_local_type_has_special_fields(const struct btf *btf, const struct btf_type *t)
 {
-	return btf_local_type_has_bpf_list_node(btf, t, NULL) == 1;
+	return btf_local_type_has_bpf_list_node(btf, t, NULL) == 1 ||
+	       btf_local_type_has_bpf_spin_lock(btf, t, NULL) == 1;
 }
 
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
@@ -5985,6 +5992,7 @@ int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 		}									\
 	}
 		PREVENT_DIRECT_WRITE(bpf_list_node);
+		PREVENT_DIRECT_WRITE(bpf_spin_lock);
 
 #undef PREVENT_DIRECT_WRITE
 		err = 0;

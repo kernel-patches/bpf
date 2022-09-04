@@ -335,6 +335,7 @@ const struct bpf_func_proto bpf_spin_lock_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
+	.arg1_btf_id	= BPF_PTR_POISON,
 };
 
 static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
@@ -357,6 +358,7 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
+	.arg1_btf_id	= BPF_PTR_POISON,
 };
 
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
@@ -1375,10 +1377,10 @@ BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
 	return xchg(kptr, (unsigned long)ptr);
 }
 
-/* Unlike other PTR_TO_BTF_ID helpers the btf_id in bpf_kptr_xchg()
- * helper is determined dynamically by the verifier.
+/* Unlike other PTR_TO_BTF_ID helpers the btf_id in bpf_kptr_xchg() helper is
+ * determined dynamically by the verifier. Hence, BPF_PTR_POISON is used as the
+ * placeholder pointer.
  */
-#define BPF_PTR_POISON ((void *)((0xeB9FUL << 2) + POISON_POINTER_DELTA))
 
 static const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.func         = bpf_kptr_xchg,
@@ -1717,6 +1719,11 @@ void bpf_list_node_init(struct bpf_list_node *node__clkptr)
 	INIT_LIST_HEAD((struct list_head *)node__clkptr);
 }
 
+void bpf_spin_lock_init(struct bpf_spin_lock *lock__clkptr)
+{
+	memset(lock__clkptr, 0, sizeof(*lock__clkptr));
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1725,6 +1732,7 @@ BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
 BTF_ID_FLAGS(func, bpf_kptr_alloc, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_ID_FLAGS(func, bpf_list_node_init)
+BTF_ID_FLAGS(func, bpf_spin_lock_init)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

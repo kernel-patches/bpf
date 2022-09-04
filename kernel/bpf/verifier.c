@@ -451,8 +451,17 @@ static bool reg_type_not_null(enum bpf_reg_type type)
 
 static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
 {
-	return reg->type == PTR_TO_MAP_VALUE &&
-		map_value_has_spin_lock(reg->map_ptr);
+	if (reg->type == PTR_TO_MAP_VALUE)
+		return map_value_has_spin_lock(reg->map_ptr);
+	if (reg->type == (PTR_TO_BTF_ID | MEM_TYPE_LOCAL | OBJ_CONSTRUCTING)) {
+		const struct btf_type *t;
+
+		t = btf_type_by_id(reg->btf, reg->btf_id);
+		if (!t)
+			return false;
+		return btf_local_type_has_bpf_spin_lock(reg->btf, t, NULL) == 1;
+	}
+	return false;
 }
 
 static bool reg_type_may_be_refcounted_or_null(enum bpf_reg_type type)
@@ -5442,8 +5451,11 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	struct bpf_verifier_state *cur = env->cur_state;
 	bool is_const = tnum_is_const(reg->var_off);
-	struct bpf_map *map = reg->map_ptr;
 	u64 val = reg->var_off.value;
+	struct bpf_map *map = NULL;
+	struct btf *btf = NULL;
+	bool has_spin_lock;
+	int spin_lock_off;
 
 	if (!is_const) {
 		verbose(env,
@@ -5451,28 +5463,42 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			regno);
 		return -EINVAL;
 	}
-	if (!map->btf) {
-		verbose(env,
-			"map '%s' has to have BTF in order to use bpf_spin_lock\n",
-			map->name);
-		return -EINVAL;
+	if (reg->type == PTR_TO_MAP_VALUE) {
+		map = reg->map_ptr;
+		if (!map->btf) {
+			verbose(env,
+				"map '%s' has to have BTF in order to use bpf_spin_lock\n",
+				map->name);
+			return -EINVAL;
+		}
+		has_spin_lock = map_value_has_spin_lock(map);
+		spin_lock_off = map->spin_lock_off;
+	} else {
+		int ret;
+
+		btf = reg->btf;
+		WARN_ON_ONCE(reg->var_off.value);
+		ret = btf_local_type_has_bpf_spin_lock(reg->btf, btf_type_by_id(reg->btf, reg->btf_id), &spin_lock_off);
+		if (ret <= 0)
+			spin_lock_off = ret;
+		has_spin_lock = ret > 0;
 	}
-	if (!map_value_has_spin_lock(map)) {
-		if (map->spin_lock_off == -E2BIG)
+	if (!has_spin_lock) {
+		if (spin_lock_off == -E2BIG)
 			verbose(env,
-				"map '%s' has more than one 'struct bpf_spin_lock'\n",
-				map->name);
-		else if (map->spin_lock_off == -ENOENT)
+				"%s '%s' has more than one 'struct bpf_spin_lock'\n",
+				map ? "map" : "local", map ? map->name : "kptr");
+		else if (spin_lock_off == -ENOENT)
 			verbose(env,
-				"map '%s' doesn't have 'struct bpf_spin_lock'\n",
-				map->name);
+				"%s '%s' doesn't have 'struct bpf_spin_lock'\n",
+				map ? "map" : "local", map ? map->name : "kptr");
 		else
 			verbose(env,
-				"map '%s' is not a struct type or bpf_spin_lock is mangled\n",
-				map->name);
+				"%s '%s' is not a struct type or bpf_spin_lock is mangled\n",
+				map ? "map" : "local", map ? map->name : "kptr");
 		return -EINVAL;
 	}
-	if (map->spin_lock_off != val + reg->off) {
+	if (spin_lock_off != val + reg->off) {
 		verbose(env, "off %lld doesn't point to 'struct bpf_spin_lock'\n",
 			val + reg->off);
 		return -EINVAL;
@@ -5709,13 +5735,19 @@ static const struct bpf_reg_types int_ptr_types = {
 	},
 };
 
+static const struct bpf_reg_types spin_lock_types = {
+	.types = {
+		PTR_TO_MAP_VALUE,
+		PTR_TO_BTF_ID | MEM_TYPE_LOCAL,
+	},
+};
+
 static const struct bpf_reg_types fullsock_types = { .types = { PTR_TO_SOCKET } };
 static const struct bpf_reg_types scalar_types = { .types = { SCALAR_VALUE } };
 static const struct bpf_reg_types context_types = { .types = { PTR_TO_CTX } };
 static const struct bpf_reg_types alloc_mem_types = { .types = { PTR_TO_MEM | MEM_ALLOC } };
 static const struct bpf_reg_types const_map_ptr_types = { .types = { CONST_PTR_TO_MAP } };
 static const struct bpf_reg_types btf_ptr_types = { .types = { PTR_TO_BTF_ID } };
-static const struct bpf_reg_types spin_lock_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types percpu_btf_ptr_types = { .types = { PTR_TO_BTF_ID | MEM_PERCPU } };
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
 static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } };
@@ -5806,6 +5838,11 @@ found:
 		bool strict_type_match = arg_type_is_release(arg_type) &&
 					 meta->func_id != BPF_FUNC_sk_release;
 
+		if (type_is_local(reg->type) &&
+		    WARN_ON_ONCE(meta->func_id != BPF_FUNC_spin_lock &&
+				 meta->func_id != BPF_FUNC_spin_unlock))
+			return -EFAULT;
+
 		if (!arg_btf_id) {
 			if (!compatible->btf_id) {
 				verbose(env, "verifier internal error: missing arg compatible BTF ID\n");
@@ -5814,7 +5851,20 @@ found:
 			arg_btf_id = compatible->btf_id;
 		}
 
-		if (meta->func_id == BPF_FUNC_kptr_xchg) {
+		if (meta->func_id == BPF_FUNC_spin_lock || meta->func_id == BPF_FUNC_spin_unlock) {
+			u32 offset;
+			int ret;
+
+			if (WARN_ON_ONCE(!type_is_local(reg->type)))
+				return -EFAULT;
+			ret = btf_local_type_has_bpf_spin_lock(reg->btf,
+							       btf_type_by_id(reg->btf, reg->btf_id),
+							       &offset);
+			if (ret <= 0 || reg->off != offset) {
+				verbose(env, "no bpf_spin_lock field at offset=%d\n", reg->off);
+				return -EACCES;
+			}
+		} else if (meta->func_id == BPF_FUNC_kptr_xchg) {
 			if (map_kptr_match_type(env, meta->kptr_off_desc, reg, regno))
 				return -EACCES;
 		} else if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
@@ -5943,7 +5993,8 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		goto skip_type_check;
 
 	/* arg_btf_id and arg_size are in a union. */
-	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID)
+	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID ||
+	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
 	err = check_reg_type(env, regno, arg_type, arg_btf_id, meta);
@@ -6530,8 +6581,11 @@ static bool check_btf_id_ok(const struct bpf_func_proto *fn)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
-		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID && !fn->arg_btf_id[i])
-			return false;
+		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID)
+			return !!fn->arg_btf_id[i];
+
+		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_SPIN_LOCK)
+			return fn->arg_btf_id[i] == BPF_PTR_POISON;
 
 		if (base_type(fn->arg_type[i]) != ARG_PTR_TO_BTF_ID && fn->arg_btf_id[i] &&
 		    /* arg_btf_id and arg_size are in a union. */
@@ -7756,11 +7810,13 @@ static u32 *reg2btf_ids[__BPF_REG_TYPE_MAX] = {
 BTF_ID_LIST(special_kfuncs)
 BTF_ID(func, bpf_kptr_alloc)
 BTF_ID(func, bpf_list_node_init)
+BTF_ID(func, bpf_spin_lock_init)
 BTF_ID(struct, btf) /* empty entry */
 
 enum bpf_special_kfuncs {
 	KF_SPECIAL_bpf_kptr_alloc,
 	KF_SPECIAL_bpf_list_node_init,
+	KF_SPECIAL_bpf_spin_lock_init,
 	KF_SPECIAL_bpf_empty,
 	KF_SPECIAL_MAX = KF_SPECIAL_bpf_empty,
 };
@@ -7927,6 +7983,7 @@ static int process_kf_arg_ptr_to_kptr_strong(struct bpf_verifier_env *env,
 struct local_type_field {
 	enum {
 		FIELD_bpf_list_node,
+		FIELD_bpf_spin_lock,
 		FIELD_MAX,
 	} type;
 	enum bpf_special_kfuncs ctor_kfunc;
@@ -7972,6 +8029,7 @@ static int find_local_type_fields(const struct btf *btf, u32 btf_id, struct loca
 	}
 
 	FILL_LOCAL_TYPE_FIELD(bpf_list_node, bpf_list_node_init, bpf_empty, false);
+	FILL_LOCAL_TYPE_FIELD(bpf_spin_lock, bpf_spin_lock_init, bpf_empty, false);
 
 #undef FILL_LOCAL_TYPE_FIELD
 

@@ -435,6 +435,8 @@ btf_get_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 		      int arg);
 int btf_local_type_has_bpf_list_node(const struct btf *btf,
 				     const struct btf_type *t, u32 *offsetp);
+int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
+				     const struct btf_type *t, u32 *offsetp);
 bool btf_local_type_has_special_fields(const struct btf *btf,
 				       const struct btf_type *t);
 #else
@@ -478,6 +480,12 @@ btf_get_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 static inline int btf_local_type_has_bpf_list_node(const struct btf *btf,
 						   const struct btf_type *t,
 						   u32 *offsetp)
+{
+	return -ENOENT;
+}
+static inline int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
+					           const struct btf_type *t,
+					           u32 *offsetp)
 {
 	return -ENOENT;
 }
