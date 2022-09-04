@@ -49,6 +49,15 @@ enum bpf_reg_precise {
 	PRECISE_ABSOLUTE,
 };
 
+enum {
+	FIELD_STATE_UNKNOWN	  = 0,
+	FIELD_STATE_CONSTRUCTED   = 1,
+	FIELD_STATE_DESTRUCTED	  = 2,
+	/* We only have room for one more state */
+	FIELD_STATE_MAX,
+};
+static_assert(FIELD_STATE_MAX <= (1 << 2));
+
 struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
@@ -74,6 +83,17 @@ struct bpf_reg_state {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
+			/* In case of PTR_TO_BTF_ID to a local type, sometimes
+			 * it may embed some special kernel types that we need
+			 * to track the state of.
+			 * To save space, we use 2 bits per field for state
+			 * tracking, and so have room for 16 fields. The special
+			 * field with lowest offset takes first two bits,
+			 * special field with second lowest offset takes next
+			 * two bits, and so on. The mapping can be determined
+			 * each time we encounter the type.
+			 */
+			u32 states;
 		};
 
 		u32 mem_size; /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
@@ -92,8 +112,8 @@ struct bpf_reg_state {
 
 		/* Max size from any of the above. */
 		struct {
-			unsigned long raw1;
-			unsigned long raw2;
+			u64 raw1;
+			u64 raw2;
 		} raw;
 
 		u32 subprogno; /* for PTR_TO_FUNC */
@@ -643,6 +663,19 @@ static inline enum bpf_prog_type resolve_prog_type(struct bpf_prog *prog)
 {
 	return prog->type == BPF_PROG_TYPE_EXT ?
 		prog->aux->dst_prog->type : prog->type;
+}
+
+static inline int local_kptr_get_state(struct bpf_reg_state *reg, u8 index)
+{
+	WARN_ON_ONCE(index >= 16);
+	return (reg->states >> (2 * index)) & 0x3;
+}
+
+static inline void local_kptr_set_state(struct bpf_reg_state *reg, u8 index, u32 state)
+{
+	WARN_ON_ONCE(state >= FIELD_STATE_MAX);
+	reg->states &= ~(0x3UL << (2 * index));
+	reg->states |= (state << (2 * index));
 }
 
 #endif /* _LINUX_BPF_VERIFIER_H */

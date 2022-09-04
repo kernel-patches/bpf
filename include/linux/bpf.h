@@ -492,6 +492,21 @@ enum bpf_type_flag {
 	 */
 	MEM_TYPE_LOCAL		= BIT(11 + BPF_BASE_TYPE_BITS),
 
+	/* This is applied to PTR_TO_BTF_ID pointing to object of a local type
+	 * (also called local kptr) whose lifetime start needs explicit
+	 * constructor calls in the BPF program before it can be considered
+	 * fully intialized and ready for use, escape program, etc.
+	 */
+	OBJ_CONSTRUCTING	= BIT(12 + BPF_BASE_TYPE_BITS),
+
+	/* This is applied to PTR_TO_BTF_ID pointing to object of a local type
+	 * (also called local kptr) whose lifetime has ended officially and it
+	 * needs destructor calls to be invoked in the BPF program that has
+	 * final ownership of its storage before it can be released back to the
+	 * memory allocator.
+	 */
+	OBJ_DESTRUCTING		= BIT(13 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
 };

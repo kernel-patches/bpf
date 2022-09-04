@@ -585,6 +585,10 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		strncpy(prefix, "percpu_", 32);
 	if (type & PTR_UNTRUSTED)
 		strncpy(prefix, "untrusted_", 32);
+	if (type & OBJ_CONSTRUCTING)
+		strncpy(prefix, "constructing_", 32);
+	if (type & OBJ_DESTRUCTING)
+		strncpy(prefix, "destructing_", 32);
 
 	snprintf(env->type_str_buf, TYPE_STR_BUF_LEN, "%s%s%s",
 		 prefix, str[base_type(type)], postfix);
@@ -5861,6 +5865,9 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	 * fixed offset.
 	 */
 	case PTR_TO_BTF_ID:
+	case PTR_TO_BTF_ID | MEM_TYPE_LOCAL:
+	case PTR_TO_BTF_ID | MEM_TYPE_LOCAL | OBJ_CONSTRUCTING:
+	case PTR_TO_BTF_ID | MEM_TYPE_LOCAL | OBJ_DESTRUCTING:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * it's fixed offset must be 0.	In the other cases, fixed offset
 		 * can be non-zero.
@@ -7684,6 +7691,19 @@ static bool is_kfunc_arg_sfx_constant(const struct btf *btf, const struct btf_pa
 	return __kfunc_param_match_suffix(btf, arg, "__k");
 }
 
+static bool
+is_kfunc_arg_sfx_constructing_local_kptr(const struct btf *btf,
+					 const struct btf_param *arg)
+{
+	return __kfunc_param_match_suffix(btf, arg, "__clkptr");
+}
+
+static bool is_kfunc_arg_sfx_destructing_local_kptr(const struct btf *btf,
+						    const struct btf_param *arg)
+{
+	return __kfunc_param_match_suffix(btf, arg, "__dlkptr");
+}
+
 /* Returns true if struct is composed of scalars, 4 levels of nesting allowed */
 static bool __btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 					const struct btf *btf,
@@ -7755,6 +7775,8 @@ enum kfunc_ptr_arg_types {
 	KF_ARG_PTR_TO_CTX,
 	KF_ARG_PTR_TO_BTF_ID,	     /* Also covers reg2btf_ids conversions */
 	KF_ARG_PTR_TO_KPTR_STRONG,   /* PTR_TO_KPTR but type specific */
+	KF_ARG_CONSTRUCTING_LOCAL_KPTR,
+	KF_ARG_DESTRUCTING_LOCAL_KPTR,
 	KF_ARG_PTR_TO_MEM,
 	KF_ARG_PTR_TO_MEM_SIZE,	     /* Size derived from next argument, skip it */
 };
@@ -7778,6 +7800,12 @@ enum kfunc_ptr_arg_types get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 	 * arguments, we resolve it to a known kfunc_ptr_arg_types enum
 	 * constant.
 	 */
+	if (is_kfunc_arg_sfx_constructing_local_kptr(meta->btf, &args[argno]))
+		return KF_ARG_CONSTRUCTING_LOCAL_KPTR;
+
+	if (is_kfunc_arg_sfx_destructing_local_kptr(meta->btf, &args[argno]))
+		return KF_ARG_DESTRUCTING_LOCAL_KPTR;
+
 	if (is_kfunc_arg_kptr_get(meta, argno)) {
 		if (!btf_type_is_ptr(ref_t)) {
 			verbose(env, "arg#0 BTF type must be a double pointer for kptr_get kfunc\n");
@@ -7890,6 +7918,241 @@ static int process_kf_arg_ptr_to_kptr_strong(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 	return 0;
+}
+
+struct local_type_field {
+	enum {
+		FIELD_MAX,
+	} type;
+	enum bpf_special_kfuncs ctor_kfunc;
+	enum bpf_special_kfuncs dtor_kfunc;
+	const char *name;
+	u32 offset;
+	bool needs_destruction;
+};
+
+static int local_type_field_cmp(const void *a, const void *b)
+{
+	const struct local_type_field *fa = a, *fb = b;
+
+	if (fa->offset < fb->offset)
+		return -1;
+	else if (fa->offset > fb->offset)
+		return 1;
+	return 0;
+}
+
+static int find_local_type_fields(const struct btf *btf, u32 btf_id, struct local_type_field *fields)
+{
+	/* XXX: Fill the fields when support is added */
+	sort(fields, FIELD_MAX, sizeof(fields[0]), local_type_field_cmp, NULL);
+	return FIELD_MAX;
+}
+
+static int
+process_kf_arg_constructing_local_kptr(struct bpf_verifier_env *env,
+				       struct bpf_reg_state *reg,
+				       struct bpf_kfunc_arg_meta *meta)
+{
+	struct local_type_field fields[FIELD_MAX];
+	struct bpf_func_state *fstate;
+	struct bpf_reg_state *ireg;
+	int ret, i, cnt;
+
+	ret = find_local_type_fields(reg->btf, reg->btf_id, fields);
+	if (ret < 0) {
+		verbose(env, "verifier internal error: bad field specification in local type\n");
+		return -EFAULT;
+	}
+
+	cnt = ret;
+	for (i = 0; i < cnt; i++) {
+		int j;
+
+		if (fields[i].offset != reg->off)
+			continue;
+
+		switch (local_kptr_get_state(reg, i)) {
+		case FIELD_STATE_CONSTRUCTED:
+			verbose(env, "'%s' field at offset %d has already been constructed\n",
+				fields[i].name, fields[i].offset);
+			return -EINVAL;
+		case FIELD_STATE_UNKNOWN:
+			break;
+		case FIELD_STATE_DESTRUCTED:
+			WARN_ON_ONCE(1);
+			fallthrough;
+		default:
+			verbose(env, "verifier internal error: unknown field state\n");
+			return -EFAULT;
+		}
+
+		/* Make sure everything coming before us has been constructed */
+		for (j = 0; j < i; j++) {
+			if (local_kptr_get_state(reg, j) != FIELD_STATE_CONSTRUCTED) {
+				verbose(env, "'%s' field at offset %d must be constructed before this field\n",
+					fields[j].name, fields[j].offset);
+				return -EINVAL;
+			}
+		}
+
+		/* Since we always ensure everything before us is constructed,
+		 * fields after us will be in unknown state, so we do not need
+		 * to check them.
+		 */
+		if (!__is_kfunc_special(meta->btf, meta->func_id, fields[i].ctor_kfunc)) {
+			verbose(env, "incorrect constructor function for '%s' field\n",
+				fields[i].name);
+			return -EINVAL;
+		}
+
+		/* The constructor is the right one, everything before us is
+		 * also constructed, so we can mark this field as constructed.
+		 */
+		bpf_expr_for_each_reg_in_vstate(env->cur_state, fstate, ireg, ({
+			if (ireg->ref_obj_id == reg->ref_obj_id)
+				local_kptr_set_state(ireg, i, FIELD_STATE_CONSTRUCTED);
+		}));
+
+		/* If we are the final field needing construction, move the
+		 * object from constructing to constructed state as a whole.
+		 */
+		if (i + 1 == cnt) {
+			bpf_expr_for_each_reg_in_vstate(env->cur_state, fstate, ireg, ({
+				if (ireg->ref_obj_id == reg->ref_obj_id) {
+					ireg->type &= ~OBJ_CONSTRUCTING;
+					/* clear states to make it usable for tracking states of fields
+					 * after construction.
+					 */
+					reg->states = 0;
+				}
+			}));
+		}
+		return 0;
+	}
+	verbose(env, "no constructible field at offset: %d\n", reg->off);
+	return -EINVAL;
+}
+
+static int
+process_kf_arg_destructing_local_kptr(struct bpf_verifier_env *env,
+				      struct bpf_reg_state *reg,
+				      struct bpf_kfunc_arg_meta *meta)
+{
+	struct local_type_field fields[FIELD_MAX];
+	struct bpf_func_state *fstate;
+	struct bpf_reg_state *ireg;
+	int ret, i, cnt;
+
+	ret = find_local_type_fields(reg->btf, reg->btf_id, fields);
+	if (ret < 0) {
+		verbose(env, "verifier internal error: bad field specification in local type\n");
+		return -EFAULT;
+	}
+
+	cnt = ret;
+	/* If this is a normal reg transitioning to destructing phase,
+	 * mark state for all fields as constructed, to begin tracking
+	 * them during destruction.
+	 */
+	if (reg->type == (PTR_TO_BTF_ID | MEM_TYPE_LOCAL)) {
+		bpf_expr_for_each_reg_in_vstate(env->cur_state, fstate, ireg, ({
+			if (ireg->ref_obj_id != reg->ref_obj_id)
+				continue;
+			for (i = 0; i < cnt; i++)
+				local_kptr_set_state(ireg, i, FIELD_STATE_CONSTRUCTED);
+		}));
+	}
+
+	for (i = 0; i < cnt; i++) {
+		bool mark_dtor = false, unmark_ctor = false;
+		int j;
+
+		if (fields[i].offset != reg->off)
+			continue;
+
+		switch (local_kptr_get_state(reg, i)) {
+		case FIELD_STATE_UNKNOWN:
+			verbose(env, "'%s' field at offset %d has not been constructed\n",
+				fields[i].name, fields[i].offset);
+			return -EINVAL;
+		case FIELD_STATE_DESTRUCTED:
+			verbose(env, "'%s' field at offset %d has already been destructed\n",
+				fields[i].name, fields[i].offset);
+			return -EINVAL;
+		case FIELD_STATE_CONSTRUCTED:
+			break;
+		default:
+			verbose(env, "verifier internal error: unknown field state\n");
+			return -EFAULT;
+		}
+
+		/* Ensure all fields after us have been destructed */
+		for (j = i + 1; j < cnt; j++) {
+			if (!fields[j].needs_destruction)
+				continue;
+			/* For normal case, every field is constructed, so we
+			 * must check destruction order. If we see constructed
+			 * after us that needs destruction, we catch out of
+			 * order destructor call.
+			 *
+			 * For constructing kptr being destructed, later fields
+			 * may be in unknown state. It is fine to not destruct
+			 * them, as we are unwinding construction.
+			 *
+			 * For already destructing kptr, we can only see
+			 * destructed or unknown for later fields, never
+			 * constructed.
+			 */
+			if (local_kptr_get_state(reg, j) == FIELD_STATE_CONSTRUCTED) {
+				verbose(env, "'%s' field at offset %d must be destructed before this field\n",
+					fields[j].name, fields[j].offset);
+				return -EINVAL;
+			}
+		}
+
+		/* Everything before us must be constructed */
+		for (j = i - 1; j >= 0; j--) {
+			if (local_kptr_get_state(reg, j) != FIELD_STATE_CONSTRUCTED) {
+				verbose(env, "invalid state of '%s' field at offset %d\n",
+					fields[j].name, fields[j].offset);
+				return -EINVAL;
+			}
+		}
+
+		if (!__is_kfunc_special(meta->btf, meta->func_id, fields[i].dtor_kfunc)) {
+			verbose(env, "incorrect destructor function for '%s' field\n",
+				fields[i].name);
+			return -EINVAL;
+		}
+
+		if (reg->type != (PTR_TO_BTF_ID | MEM_TYPE_LOCAL | OBJ_DESTRUCTING)) {
+			mark_dtor = true;
+			if (reg->type & OBJ_CONSTRUCTING)
+				unmark_ctor = true;
+		}
+
+		/* The destructor is the right one, everything after us is
+		 * also destructed, so we can mark this field as destructed.
+		 */
+		bpf_expr_for_each_reg_in_vstate(env->cur_state, fstate, ireg, ({
+			if (ireg->ref_obj_id != reg->ref_obj_id)
+				continue;
+			local_kptr_set_state(ireg, i, FIELD_STATE_DESTRUCTED);
+			/* If mark_dtor is true, this is either a normal or
+			 * constructing kptr entering the destructing phase. If
+			 * it is constructing kptr, we also need to unmark
+			 * OBJ_CONSTRUCTING flag.
+			 */
+			if (unmark_ctor)
+				ireg->type &= ~OBJ_CONSTRUCTING;
+			if (mark_dtor)
+				ireg->type |= OBJ_DESTRUCTING;
+		}));
+		return 0;
+	}
+	verbose(env, "no destructible field at offset: %d\n", reg->off);
+	return -EINVAL;
 }
 
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_arg_meta *meta)
@@ -8008,6 +8271,25 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_arg_m
 				return -EINVAL;
 			}
 			ret = process_kf_arg_ptr_to_kptr_strong(env, reg, ref_t, ref_tname, meta, i);
+			if (ret < 0)
+				return ret;
+			break;
+		case KF_ARG_CONSTRUCTING_LOCAL_KPTR:
+			if (reg->type != (PTR_TO_BTF_ID | MEM_TYPE_LOCAL | OBJ_CONSTRUCTING)) {
+				verbose(env, "arg#%d expected pointer to constructing local kptr\n", i);
+				return -EINVAL;
+			}
+			ret = process_kf_arg_constructing_local_kptr(env, reg, meta);
+			if (ret < 0)
+				return ret;
+			break;
+		case KF_ARG_DESTRUCTING_LOCAL_KPTR:
+			if (base_type(reg->type) != PTR_TO_BTF_ID ||
+			    (type_flag(reg->type) & ~(MEM_TYPE_LOCAL | OBJ_CONSTRUCTING | OBJ_DESTRUCTING))) {
+				verbose(env, "arg#%d expected pointer to normal, constructing, or destructing local kptr\n", i);
+				return -EINVAL;
+			}
+			ret = process_kf_arg_destructing_local_kptr(env, reg, meta);
 			if (ret < 0)
 				return ret;
 			break;
@@ -8157,6 +8439,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			 * setting of this flag.
 			 */
 			regs[BPF_REG_0].type |= MEM_TYPE_LOCAL;
+			/* TODO: Recognize special fields in local type aand
+			 * force their construction before pointer escapes by
+			 * setting OBJ_CONSTRUCTING.
+			 */
 		} else {
 			if (!btf_type_is_struct(ptr_type)) {
 				ptr_type_name = btf_name_by_offset(desc_btf, ptr_type->name_off);
