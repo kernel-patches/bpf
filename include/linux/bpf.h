@@ -182,7 +182,9 @@ enum {
 enum bpf_off_type {
 	BPF_KPTR_UNREF,
 	BPF_KPTR_REF,
+	BPF_LOCAL_KPTR_REF,
 	BPF_LIST_HEAD,
+	BPF_OFF_TYPE_MAX,
 };
 
 struct bpf_map_value_off_desc {
@@ -546,6 +548,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_LONG,	/* pointer to long */
 	ARG_PTR_TO_SOCKET,	/* pointer to bpf_sock (fullsock) */
 	ARG_PTR_TO_BTF_ID,	/* pointer to in-kernel struct */
+	ARG_PTR_TO_DYN_BTF_ID,  /* pointer to in-kernel or local struct */
 	ARG_PTR_TO_ALLOC_MEM,	/* pointer to dynamically allocated memory */
 	ARG_CONST_ALLOC_SIZE_OR_ZERO,	/* number of allocated bytes requested */
 	ARG_PTR_TO_BTF_ID_SOCK_COMMON,	/* pointer to in-kernel sock_common or bpf-mirrored bpf_sock */
@@ -565,7 +568,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_SOCKET_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_SOCKET,
 	ARG_PTR_TO_ALLOC_MEM_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_ALLOC_MEM,
 	ARG_PTR_TO_STACK_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_STACK,
-	ARG_PTR_TO_BTF_ID_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_BTF_ID,
+	ARG_PTR_TO_DYN_BTF_ID_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_DYN_BTF_ID,
 	/* pointer to memory does not need to be initialized, helper function must fill
 	 * all bytes or clear them in error case.
 	 */
@@ -591,6 +594,7 @@ enum bpf_return_type {
 	RET_PTR_TO_ALLOC_MEM,		/* returns a pointer to dynamically allocated memory */
 	RET_PTR_TO_MEM_OR_BTF_ID,	/* returns a pointer to a valid memory or a btf_id */
 	RET_PTR_TO_BTF_ID,		/* returns a pointer to a btf_id */
+	RET_PTR_TO_DYN_BTF_ID,		/* returns a pointer to a btf_id determined dynamically */
 	__BPF_RET_TYPE_MAX,
 
 	/* Extended ret_types. */
@@ -601,6 +605,7 @@ enum bpf_return_type {
 	RET_PTR_TO_ALLOC_MEM_OR_NULL	= PTR_MAYBE_NULL | MEM_ALLOC | RET_PTR_TO_ALLOC_MEM,
 	RET_PTR_TO_DYNPTR_MEM_OR_NULL	= PTR_MAYBE_NULL | RET_PTR_TO_ALLOC_MEM,
 	RET_PTR_TO_BTF_ID_OR_NULL	= PTR_MAYBE_NULL | RET_PTR_TO_BTF_ID,
+	RET_PTR_TO_DYN_BTF_ID_OR_NULL	= PTR_MAYBE_NULL | RET_PTR_TO_DYN_BTF_ID,
 
 	/* This must be the last entry. Its purpose is to ensure the enum is
 	 * wide enough to hold the higher bits reserved for bpf_type_flag.

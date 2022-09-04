@@ -157,7 +157,7 @@ bool btf_member_is_reg_int(const struct btf *btf, const struct btf_type *s,
 			   u32 expected_offset, u32 expected_size);
 int btf_find_spin_lock(const struct btf *btf, const struct btf_type *t);
 int btf_find_timer(const struct btf *btf, const struct btf_type *t);
-struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
+struct bpf_map_value_off *btf_parse_kptrs(struct btf *btf,
 					  const struct btf_type *t);
 struct bpf_map_value_off *btf_parse_list_heads(struct btf *btf,
 					       const struct btf_type *t);

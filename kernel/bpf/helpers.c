@@ -1385,10 +1385,10 @@ BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
 static const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.func         = bpf_kptr_xchg,
 	.gpl_only     = false,
-	.ret_type     = RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_type     = RET_PTR_TO_DYN_BTF_ID_OR_NULL,
 	.ret_btf_id   = BPF_PTR_POISON,
 	.arg1_type    = ARG_PTR_TO_KPTR,
-	.arg2_type    = ARG_PTR_TO_BTF_ID_OR_NULL | OBJ_RELEASE,
+	.arg2_type    = ARG_PTR_TO_DYN_BTF_ID_OR_NULL | OBJ_RELEASE,
 	.arg2_btf_id  = BPF_PTR_POISON,
 };
 

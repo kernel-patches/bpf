@@ -3713,12 +3713,17 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	/* Only unreferenced case accepts untrusted pointers */
 	if (off_desc->type == BPF_KPTR_UNREF)
 		perm_flags |= PTR_UNTRUSTED;
+	else if (off_desc->type == BPF_LOCAL_KPTR_REF)
+		perm_flags |= MEM_TYPE_LOCAL;
 
 	if (base_type(reg->type) != PTR_TO_BTF_ID || (type_flag(reg->type) & ~perm_flags))
 		goto bad_type;
 
-	if (!btf_is_kernel(reg->btf)) {
+	if (off_desc->type != BPF_LOCAL_KPTR_REF && !btf_is_kernel(reg->btf)) {
 		verbose(env, "R%d must point to kernel BTF\n", regno);
+		return -EINVAL;
+	} else if (off_desc->type == BPF_LOCAL_KPTR_REF && btf_is_kernel(reg->btf)) {
+		verbose(env, "R%d must point to program BTF\n", regno);
 		return -EINVAL;
 	}
 	/* We need to verify reg->type and reg->btf, before accessing reg->btf */
@@ -3759,7 +3764,8 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	 */
 	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 				  off_desc->kptr.btf, off_desc->kptr.btf_id,
-				  off_desc->type == BPF_KPTR_REF))
+				  off_desc->type == BPF_KPTR_REF ||
+				  off_desc->type == BPF_LOCAL_KPTR_REF))
 		goto bad_type;
 	return 0;
 bad_type:
@@ -3797,18 +3803,21 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	/* We only allow loading referenced kptr, since it will be marked as
 	 * untrusted, similar to unreferenced kptr.
 	 */
-	if (class != BPF_LDX && off_desc->type == BPF_KPTR_REF) {
+	if (class != BPF_LDX &&
+	    (off_desc->type == BPF_KPTR_REF || off_desc->type == BPF_LOCAL_KPTR_REF)) {
 		verbose(env, "store to referenced kptr disallowed\n");
 		return -EACCES;
 	}
 
 	if (class == BPF_LDX) {
+		int local = (off_desc->type == BPF_LOCAL_KPTR_REF) ? MEM_TYPE_LOCAL : 0;
+
 		val_reg = reg_state(env, value_regno);
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, off_desc->kptr.btf,
-				off_desc->kptr.btf_id, PTR_MAYBE_NULL | PTR_UNTRUSTED);
+				off_desc->kptr.btf_id, local | PTR_MAYBE_NULL | PTR_UNTRUSTED);
 		/* For mark_ptr_or_null_reg */
 		val_reg->id = ++env->id_gen;
 	} else if (class == BPF_STX) {
@@ -5648,7 +5657,8 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
 		return -EACCES;
 	}
-	if (off_desc->type != BPF_KPTR_REF) {
+	if (off_desc->type != BPF_KPTR_REF &&
+	    off_desc->type != BPF_LOCAL_KPTR_REF) {
 		verbose(env, "off=%d kptr isn't referenced kptr\n", kptr_off);
 		return -EACCES;
 	}
@@ -5779,6 +5789,13 @@ static const struct bpf_reg_types spin_lock_types = {
 	},
 };
 
+static const struct bpf_reg_types dyn_btf_ptr_types = {
+	.types = {
+		PTR_TO_BTF_ID,
+		PTR_TO_BTF_ID | MEM_TYPE_LOCAL,
+	},
+};
+
 static const struct bpf_reg_types fullsock_types = { .types = { PTR_TO_SOCKET } };
 static const struct bpf_reg_types scalar_types = { .types = { SCALAR_VALUE } };
 static const struct bpf_reg_types context_types = { .types = { PTR_TO_CTX } };
@@ -5806,6 +5823,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 #endif
 	[ARG_PTR_TO_SOCKET]		= &fullsock_types,
 	[ARG_PTR_TO_BTF_ID]		= &btf_ptr_types,
+	[ARG_PTR_TO_DYN_BTF_ID]		= &dyn_btf_ptr_types,
 	[ARG_PTR_TO_SPIN_LOCK]		= &spin_lock_types,
 	[ARG_PTR_TO_MEM]		= &mem_types,
 	[ARG_PTR_TO_ALLOC_MEM]		= &alloc_mem_types,
@@ -5867,7 +5885,8 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	return -EACCES;
 
 found:
-	if (reg->type == PTR_TO_BTF_ID) {
+	if (reg->type == PTR_TO_BTF_ID ||
+	    reg->type == (PTR_TO_BTF_ID | MEM_TYPE_LOCAL)) {
 		/* For bpf_sk_release, it needs to match against first member
 		 * 'struct sock_common', hence make an exception for it. This
 		 * allows bpf_sk_release to work for multiple socket types.
@@ -5877,7 +5896,8 @@ found:
 
 		if (type_is_local(reg->type) &&
 		    WARN_ON_ONCE(meta->func_id != BPF_FUNC_spin_lock &&
-				 meta->func_id != BPF_FUNC_spin_unlock))
+				 meta->func_id != BPF_FUNC_spin_unlock &&
+				 meta->func_id != BPF_FUNC_kptr_xchg))
 			return -EFAULT;
 
 		if (!arg_btf_id) {
@@ -6031,6 +6051,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 
 	/* arg_btf_id and arg_size are in a union. */
 	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID ||
+	    base_type(arg_type) == ARG_PTR_TO_DYN_BTF_ID ||
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
@@ -6621,7 +6642,8 @@ static bool check_btf_id_ok(const struct bpf_func_proto *fn)
 		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID)
 			return !!fn->arg_btf_id[i];
 
-		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_SPIN_LOCK)
+		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_DYN_BTF_ID ||
+		    base_type(fn->arg_type[i]) == ARG_PTR_TO_SPIN_LOCK)
 			return fn->arg_btf_id[i] == BPF_PTR_POISON;
 
 		if (base_type(fn->arg_type[i]) != ARG_PTR_TO_BTF_ID && fn->arg_btf_id[i] &&
@@ -7575,28 +7597,33 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 	case RET_PTR_TO_BTF_ID:
 	{
-		struct btf *ret_btf;
 		int ret_btf_id;
 
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID | ret_flag;
-		if (func_id == BPF_FUNC_kptr_xchg) {
-			ret_btf = meta.kptr_off_desc->kptr.btf;
-			ret_btf_id = meta.kptr_off_desc->kptr.btf_id;
-		} else {
-			ret_btf = btf_vmlinux;
-			ret_btf_id = *fn->ret_btf_id;
-		}
+		ret_btf_id = *fn->ret_btf_id;
 		if (ret_btf_id == 0) {
 			verbose(env, "invalid return type %u of func %s#%d\n",
 				base_type(ret_type), func_id_name(func_id),
 				func_id);
 			return -EINVAL;
 		}
-		regs[BPF_REG_0].btf = ret_btf;
+		regs[BPF_REG_0].btf = btf_vmlinux;
 		regs[BPF_REG_0].btf_id = ret_btf_id;
 		break;
 	}
+	case RET_PTR_TO_DYN_BTF_ID:
+		if (func_id != BPF_FUNC_kptr_xchg) {
+			verbose(env, "verifier internal error: incorrect use of RET_PTR_TO_DYN_BTF_ID\n");
+			return -EFAULT;
+		}
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_BTF_ID | ret_flag;
+		if (meta.kptr_off_desc->type == BPF_LOCAL_KPTR_REF)
+			regs[BPF_REG_0].type |= MEM_TYPE_LOCAL;
+		regs[BPF_REG_0].btf = meta.kptr_off_desc->kptr.btf;
+		regs[BPF_REG_0].btf_id = meta.kptr_off_desc->kptr.btf_id;
+		break;
 	default:
 		verbose(env, "unknown return type %u of func %s#%d\n",
 			base_type(ret_type), func_id_name(func_id), func_id);
@@ -14832,6 +14859,8 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			break;
 		case PTR_TO_BTF_ID:
 		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
+		/* Only untrusted local kptrs need probe_mem conversions for loads */
+		case PTR_TO_BTF_ID | MEM_TYPE_LOCAL | PTR_UNTRUSTED:
 			if (type == BPF_READ) {
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);

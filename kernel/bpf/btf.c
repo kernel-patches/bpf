@@ -3224,8 +3224,10 @@ static int btf_find_struct(const struct btf *btf, const struct btf_type *t,
 static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 			 u32 off, int sz, struct btf_field_info *info)
 {
-	enum bpf_off_type type;
+	enum bpf_off_type type = BPF_OFF_TYPE_MAX;
+	bool local = false;
 	u32 res_id;
+	int i;
 
 	/* Permit modifiers on the pointer itself */
 	if (btf_type_is_volatile(t))
@@ -3237,16 +3239,29 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 
 	if (!btf_type_is_type_tag(t))
 		return BTF_FIELD_IGNORE;
-	/* Reject extra tags */
-	if (btf_type_is_type_tag(btf_type_by_id(btf, t->type)))
-		return -EINVAL;
-	if (!strcmp("kptr", __btf_name_by_offset(btf, t->name_off)))
-		type = BPF_KPTR_UNREF;
-	else if (!strcmp("kptr_ref", __btf_name_by_offset(btf, t->name_off)))
-		type = BPF_KPTR_REF;
-	else
-		return -EINVAL;
-
+	/* Maximum two type tags supported */
+	for (i = 0; i < 2; i++) {
+		if (!strcmp("kptr", __btf_name_by_offset(btf, t->name_off))) {
+			type = BPF_KPTR_UNREF;
+		} else if (!strcmp("kptr_ref", __btf_name_by_offset(btf, t->name_off))) {
+			type = BPF_KPTR_REF;
+		} else if (!strcmp("local", __btf_name_by_offset(btf, t->name_off))) {
+			local = true;
+		} else {
+			return -EINVAL;
+		}
+		if (!btf_type_is_type_tag(btf_type_by_id(btf, t->type)))
+			break;
+		/* Reject extra tags */
+		if (i == 1)
+			return -EINVAL;
+		t = btf_type_by_id(btf, t->type);
+	}
+	if (local) {
+		if (type == BPF_KPTR_UNREF)
+			return -EINVAL;
+		type = BPF_LOCAL_KPTR_REF;
+	}
 	/* Get the base type */
 	t = btf_type_skip_modifiers(btf, t->type, &res_id);
 	/* Only pointer to struct is allowed */
@@ -3521,12 +3536,12 @@ int btf_find_timer(const struct btf *btf, const struct btf_type *t)
 	return info.off;
 }
 
-struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
+struct bpf_map_value_off *btf_parse_kptrs(struct btf *btf,
 					  const struct btf_type *t)
 {
 	struct btf_field_info info_arr[BPF_MAP_VALUE_OFF_MAX];
 	struct bpf_map_value_off *tab;
-	struct btf *kernel_btf = NULL;
+	struct btf *kptr_btf = NULL;
 	struct module *mod = NULL;
 	int ret, i, nr_off;
 
@@ -3547,13 +3562,21 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 
 		/* Find type in map BTF, and use it to look up the matching type
 		 * in vmlinux or module BTFs, by name and kind.
+		 * For local kptrs, stash reference to map BTF and type ID same
+		 * as in info_arr.
 		 */
-		t = btf_type_by_id(btf, info_arr[i].kptr.type_id);
-		id = bpf_find_btf_id(__btf_name_by_offset(btf, t->name_off), BTF_INFO_KIND(t->info),
-				     &kernel_btf);
-		if (id < 0) {
-			ret = id;
-			goto end;
+		if (info_arr[i].kptr.type == BPF_LOCAL_KPTR_REF) {
+			kptr_btf = btf;
+			btf_get(kptr_btf);
+			id = info_arr[i].kptr.type_id;
+		} else {
+			t = btf_type_by_id(btf, info_arr[i].kptr.type_id);
+			id = bpf_find_btf_id(__btf_name_by_offset(btf, t->name_off), BTF_INFO_KIND(t->info),
+					     &kptr_btf);
+			if (id < 0) {
+				ret = id;
+				goto end;
+			}
 		}
 
 		/* Find and stash the function pointer for the destruction function that
@@ -3569,20 +3592,20 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 			 * can be used as a referenced pointer and be stored in a map at
 			 * the same time.
 			 */
-			dtor_btf_id = btf_find_dtor_kfunc(kernel_btf, id);
+			dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id);
 			if (dtor_btf_id < 0) {
 				ret = dtor_btf_id;
 				goto end_btf;
 			}
 
-			dtor_func = btf_type_by_id(kernel_btf, dtor_btf_id);
+			dtor_func = btf_type_by_id(kptr_btf, dtor_btf_id);
 			if (!dtor_func) {
 				ret = -ENOENT;
 				goto end_btf;
 			}
 
-			if (btf_is_module(kernel_btf)) {
-				mod = btf_try_get_module(kernel_btf);
+			if (btf_is_module(kptr_btf)) {
+				mod = btf_try_get_module(kptr_btf);
 				if (!mod) {
 					ret = -ENXIO;
 					goto end_btf;
@@ -3592,7 +3615,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 			/* We already verified dtor_func to be btf_type_is_func
 			 * in register_btf_id_dtor_kfuncs.
 			 */
-			dtor_func_name = __btf_name_by_offset(kernel_btf, dtor_func->name_off);
+			dtor_func_name = __btf_name_by_offset(kptr_btf, dtor_func->name_off);
 			addr = kallsyms_lookup_name(dtor_func_name);
 			if (!addr) {
 				ret = -EINVAL;
@@ -3604,7 +3627,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 		tab->off[i].offset = info_arr[i].off;
 		tab->off[i].type = info_arr[i].kptr.type;
 		tab->off[i].kptr.btf_id = id;
-		tab->off[i].kptr.btf = kernel_btf;
+		tab->off[i].kptr.btf = kptr_btf;
 		tab->off[i].kptr.module = mod;
 	}
 	tab->nr_off = nr_off;
@@ -3612,7 +3635,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 end_mod:
 	module_put(mod);
 end_btf:
-	btf_put(kernel_btf);
+	btf_put(kptr_btf);
 end:
 	while (i--) {
 		btf_put(tab->off[i].kptr.btf);

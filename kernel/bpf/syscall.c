@@ -590,6 +590,39 @@ bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_ma
 				       map_value_has_kptrs(map_b));
 }
 
+static void bpf_free_local_kptr(const struct btf *btf, u32 btf_id, void *kptr)
+{
+	struct list_head *list, *olist;
+	u32 offset, list_node_off;
+	const struct btf_type *t;
+	void *entry;
+	int ret;
+
+	if (!kptr)
+		return;
+	/* We must free bpf_list_head in local kptr */
+	t = btf_type_by_id(btf, btf_id);
+	/* TODO: We should just populate this info once in struct btf, and then
+	 * do quick lookups into it. Instead of offset, table would be keyed by
+	 * btf_id.
+	 */
+	ret = __btf_local_type_has_bpf_list_head(btf, t, &offset, NULL, &list_node_off);
+	if (ret <= 0)
+		goto free_kptr;
+	/* List elements for bpf_list_head in local kptr cannot have
+	 * bpf_list_head again. Hence, just iterate and kfree them.
+	 */
+	olist = list = kptr + offset;
+	list = list->next;
+	while (list != olist) {
+		entry = list - list_node_off;
+		list = list->next;
+		kfree(entry);
+	}
+free_kptr:
+	kfree(kptr);
+}
+
 /* Caller must ensure map_value_has_kptrs is true. Note that this function can
  * be called on a map value while the map_value is visible to BPF programs, as
  * it ensures the correct synchronization, and we already enforce the same using
@@ -613,7 +646,10 @@ void bpf_map_free_kptrs(struct bpf_map *map, void *map_value)
 			continue;
 		}
 		old_ptr = xchg(btf_id_ptr, 0);
-		off_desc->kptr.dtor((void *)old_ptr);
+		if (off_desc->type == BPF_LOCAL_KPTR_REF)
+			bpf_free_local_kptr(off_desc->kptr.btf, off_desc->kptr.btf_id, (void *)old_ptr);
+		else
+			off_desc->kptr.dtor((void *)old_ptr);
 	}
 }
 
@@ -1102,7 +1138,7 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 			return -EOPNOTSUPP;
 	}
 
-	map->kptr_off_tab = btf_parse_kptrs(btf, value_type);
+	map->kptr_off_tab = btf_parse_kptrs((struct btf *)btf, value_type);
 	if (map_value_has_kptrs(map)) {
 		if (!bpf_capable()) {
 			ret = -EPERM;
