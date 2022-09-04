@@ -838,7 +838,7 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 		print_liveness(env, reg->live);
 		verbose(env, "=");
 		if (t == SCALAR_VALUE && reg->precise)
-			verbose(env, "P");
+			verbose(env, reg->precise == PRECISE_ABSOLUTE ? "PA" : "P");
 		if ((t == SCALAR_VALUE || t == PTR_TO_STACK) &&
 		    tnum_is_const(reg->var_off)) {
 			/* reg->off should be 0 for SCALAR_VALUE */
@@ -935,7 +935,7 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 			t = reg->type;
 			verbose(env, "=%s", t == SCALAR_VALUE ? "" : reg_type_str(env, t));
 			if (t == SCALAR_VALUE && reg->precise)
-				verbose(env, "P");
+				verbose(env, reg->precise == PRECISE_ABSOLUTE ? "PA" : "P");
 			if (t == SCALAR_VALUE && tnum_is_const(reg->var_off))
 				verbose(env, "%lld", reg->var_off.value + reg->off);
 		} else {
@@ -1668,7 +1668,17 @@ static void __mark_reg_unknown(const struct bpf_verifier_env *env,
 	reg->type = SCALAR_VALUE;
 	reg->var_off = tnum_unknown;
 	reg->frameno = 0;
-	reg->precise = env->subprog_cnt > 1 || !env->bpf_capable;
+	/* Helpers requiring PRECISE_ABSOLUTE for constant arguments cannot be
+	 * called from programs without CAP_BPF. This is because we don't
+	 * propagate precision markers for when CAP_BPF is missing. If we
+	 * allowed calling such heleprs in those programs, the default would
+	 * have to be PRECISE_ABSOLUTE for them, which would be too aggresive.
+	 *
+	 * We still propagate PRECISE_ABSOLUTE when subprog_cnt > 1, hence
+	 * those cases would still override the default PRECISE value when
+	 * we propagate the precision markers.
+	 */
+	reg->precise = (env->subprog_cnt > 1 || !env->bpf_capable) ? PRECISE : NOT_PRECISE;
 	__mark_reg_unbounded(reg);
 }
 
@@ -2717,7 +2727,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx,
  * For now backtracking falls back into conservative marking.
  */
 static void mark_all_scalars_precise(struct bpf_verifier_env *env,
-				     struct bpf_verifier_state *st)
+				     struct bpf_verifier_state *st,
+				     bool absolute)
 {
 	struct bpf_func_state *func;
 	struct bpf_reg_state *reg;
@@ -2733,7 +2744,7 @@ static void mark_all_scalars_precise(struct bpf_verifier_env *env,
 				reg = &func->regs[j];
 				if (reg->type != SCALAR_VALUE)
 					continue;
-				reg->precise = true;
+				reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 			}
 			for (j = 0; j < func->allocated_stack / BPF_REG_SIZE; j++) {
 				if (!is_spilled_reg(&func->stack[j]))
@@ -2741,13 +2752,13 @@ static void mark_all_scalars_precise(struct bpf_verifier_env *env,
 				reg = &func->stack[j].spilled_ptr;
 				if (reg->type != SCALAR_VALUE)
 					continue;
-				reg->precise = true;
+				reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 			}
 		}
 }
 
 static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
-				  int spi)
+				  int spi, bool absolute)
 {
 	struct bpf_verifier_state *st = env->cur_state;
 	int first_idx = st->first_insn_idx;
@@ -2774,7 +2785,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 			new_marks = true;
 		else
 			reg_mask = 0;
-		reg->precise = true;
+		reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 	}
 
 	while (spi >= 0) {
@@ -2791,7 +2802,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 			new_marks = true;
 		else
 			stack_mask = 0;
-		reg->precise = true;
+		reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 		break;
 	}
 
@@ -2813,7 +2824,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 				err = backtrack_insn(env, i, &reg_mask, &stack_mask);
 			}
 			if (err == -ENOTSUPP) {
-				mark_all_scalars_precise(env, st);
+				mark_all_scalars_precise(env, st, absolute);
 				return 0;
 			} else if (err) {
 				return err;
@@ -2854,7 +2865,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 			}
 			if (!reg->precise)
 				new_marks = true;
-			reg->precise = true;
+			reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 		}
 
 		bitmap_from_u64(mask, stack_mask);
@@ -2873,7 +2884,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 				 * fp-8 and it's "unallocated" stack space.
 				 * In such case fallback to conservative.
 				 */
-				mark_all_scalars_precise(env, st);
+				mark_all_scalars_precise(env, st, absolute);
 				return 0;
 			}
 
@@ -2888,7 +2899,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 			}
 			if (!reg->precise)
 				new_marks = true;
-			reg->precise = true;
+			reg->precise = absolute ? PRECISE_ABSOLUTE : PRECISE;
 		}
 		if (env->log.level & BPF_LOG_LEVEL2) {
 			verbose(env, "parent %s regs=%x stack=%llx marks:",
@@ -2910,12 +2921,24 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 
 static int mark_chain_precision(struct bpf_verifier_env *env, int regno)
 {
-	return __mark_chain_precision(env, regno, -1);
+	return __mark_chain_precision(env, regno, -1, false);
+}
+
+static int mark_chain_precision_absolute(struct bpf_verifier_env *env, int regno)
+{
+	WARN_ON_ONCE(!env->bpf_capable);
+	return __mark_chain_precision(env, regno, -1, true);
 }
 
 static int mark_chain_precision_stack(struct bpf_verifier_env *env, int spi)
 {
-	return __mark_chain_precision(env, -1, spi);
+	return __mark_chain_precision(env, -1, spi, false);
+}
+
+static int mark_chain_precision_absolute_stack(struct bpf_verifier_env *env, int spi)
+{
+	WARN_ON_ONCE(!env->bpf_capable);
+	return __mark_chain_precision(env, -1, spi, true);
 }
 
 static bool is_spillable_regtype(enum bpf_reg_type type)
@@ -3253,7 +3276,7 @@ static void mark_reg_stack_read(struct bpf_verifier_env *env,
 		 * backtracking. Any register that contributed
 		 * to const 0 was marked precise before spill.
 		 */
-		state->regs[dst_regno].precise = true;
+		state->regs[dst_regno].precise = PRECISE;
 	} else {
 		/* have read misc data from the stack */
 		mark_reg_unknown(env, state->regs, dst_regno);
@@ -7903,7 +7926,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_arg_m
 					verbose(env, "R%d must be a known constant\n", regno);
 					return -EINVAL;
 				}
-				ret = mark_chain_precision(env, regno);
+				ret = mark_chain_precision_absolute(env, regno);
 				if (ret < 0)
 					return ret;
 				meta->arg_constant.found = true;
@@ -11899,9 +11922,23 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		if (rcur->type == SCALAR_VALUE) {
 			if (!rold->precise && !rcur->precise)
 				return true;
-			/* new val must satisfy old val knowledge */
-			return range_within(rold, rcur) &&
-			       tnum_in(rold->var_off, rcur->var_off);
+			/* We can only determine safety when type of precision
+			 * needed is same. For absolute, we must compare actual
+			 * value, otherwise old being within the current value
+			 * suffices.
+			 */
+			if (rold->precise == PRECISE_ABSOLUTE || rcur->precise == PRECISE_ABSOLUTE) {
+				/* Both should be PRECISE_ABSOLUTE for a comparison */
+				if (rold->precise != rcur->precise)
+					return false;
+				if (!tnum_is_const(rold->var_off) || !tnum_is_const(rcur->var_off))
+					return false;
+				return rold->var_off.value == rcur->var_off.value;
+			} else {
+				/* new val must satisfy old val knowledge */
+				return range_within(rold, rcur) &&
+				       tnum_in(rold->var_off, rcur->var_off);
+			}
 		} else {
 			/* We're trying to use a pointer in place of a scalar.
 			 * Even if the scalar was unbounded, this could lead to
@@ -12229,8 +12266,12 @@ static int propagate_precision(struct bpf_verifier_env *env,
 		    !state_reg->precise)
 			continue;
 		if (env->log.level & BPF_LOG_LEVEL2)
-			verbose(env, "propagating r%d\n", i);
-		err = mark_chain_precision(env, i);
+			verbose(env, "propagating %sr%d\n",
+				state_reg->precise == PRECISE_ABSOLUTE ? "abs " : "", i);
+		if (state_reg->precise == PRECISE_ABSOLUTE)
+			err = mark_chain_precision_absolute(env, i);
+		else
+			err = mark_chain_precision(env, i);
 		if (err < 0)
 			return err;
 	}
@@ -12243,9 +12284,13 @@ static int propagate_precision(struct bpf_verifier_env *env,
 		    !state_reg->precise)
 			continue;
 		if (env->log.level & BPF_LOG_LEVEL2)
-			verbose(env, "propagating fp%d\n",
+			verbose(env, "propagating %sfp%d\n",
+				state_reg->precise == PRECISE_ABSOLUTE ? "abs " : "",
 				(-i - 1) * BPF_REG_SIZE);
-		err = mark_chain_precision_stack(env, i);
+		if (state_reg->precise == PRECISE_ABSOLUTE)
+			err = mark_chain_precision_absolute_stack(env, i);
+		else
+			err = mark_chain_precision_stack(env, i);
 		if (err < 0)
 			return err;
 	}
