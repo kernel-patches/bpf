@@ -74,7 +74,8 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 				gfp_flags | __GFP_NOWARN);
 	if (selem) {
 		if (value)
-			memcpy(SDATA(selem)->data, value, smap->map.value_size);
+			copy_map_value(&smap->map, SDATA(selem)->data, value);
+		/* No call to check_and_init_map_value as memory is zero init */
 		return selem;
 	}
 
@@ -92,12 +93,27 @@ void bpf_local_storage_free_rcu(struct rcu_head *rcu)
 	kfree_rcu(local_storage, rcu);
 }
 
+static void check_and_free_fields(struct bpf_local_storage_elem *selem)
+{
+	if (map_value_has_kptrs(selem->map))
+		bpf_map_free_kptrs(selem->map, SDATA(selem));
+}
+
 static void bpf_selem_free_rcu(struct rcu_head *rcu)
 {
 	struct bpf_local_storage_elem *selem;
 
 	selem = container_of(rcu, struct bpf_local_storage_elem, rcu);
-	kfree_rcu(selem, rcu);
+	check_and_free_fields(selem);
+	kfree(selem);
+}
+
+static void bpf_selem_free_tasks_trace_rcu(struct rcu_head *rcu)
+{
+	struct bpf_local_storage_elem *selem;
+
+	selem = container_of(rcu, struct bpf_local_storage_elem, rcu);
+	call_rcu(&selem->rcu, bpf_selem_free_rcu);
 }
 
 /* local_storage->lock must be held and selem->local_storage == local_storage.
@@ -150,10 +166,11 @@ bool bpf_selem_unlink_storage_nolock(struct bpf_local_storage *local_storage,
 	    SDATA(selem))
 		RCU_INIT_POINTER(local_storage->cache[smap->cache_idx], NULL);
 
+	selem->map = &smap->map;
 	if (use_trace_rcu)
-		call_rcu_tasks_trace(&selem->rcu, bpf_selem_free_rcu);
+		call_rcu_tasks_trace(&selem->rcu, bpf_selem_free_tasks_trace_rcu);
 	else
-		kfree_rcu(selem, rcu);
+		call_rcu(&selem->rcu, bpf_selem_free_rcu);
 
 	return free_local_storage;
 }
@@ -581,6 +598,14 @@ void bpf_local_storage_map_free(struct bpf_local_storage_map *smap,
 	 */
 	synchronize_rcu();
 
+	/* When local storage map has kptrs, the call_rcu callback accesses
+	 * kptr_off_tab, hence we need the bpf_selem_free_rcu callbacks to
+	 * finish before we free it.
+	 */
+	if (map_value_has_kptrs(&smap->map)) {
+		rcu_barrier();
+		bpf_map_free_kptr_off_tab(&smap->map);
+	}
 	kvfree(smap->buckets);
 	bpf_map_area_free(smap);
 }
