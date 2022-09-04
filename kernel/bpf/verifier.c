@@ -5196,6 +5196,11 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 		return check_mem_region_access(env, regno, reg->off, access_size,
 					       reg->map_ptr->key_size, false);
 	case PTR_TO_MAP_VALUE:
+		/* process_kptr_func and kptr_get assume only map_access_type
+		 * and special field access is checked for PTR_TO_MAP_VALUE,
+		 * apart from verifying memory region access, hence they must be
+		 * revisited when that assumption changes here.
+		 */
 		if (check_map_access_type(env, regno, reg->off, access_size,
 					  meta && meta->raw_mode ? BPF_WRITE :
 					  BPF_READ))
