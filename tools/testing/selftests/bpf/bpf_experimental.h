@@ -50,4 +50,13 @@ void bpf_list_node_init(struct bpf_list_node *node) __ksym;
  */
 void bpf_spin_lock_init(struct bpf_spin_lock *node) __ksym;
 
+/* Description
+ *	Initialize bpf_list_head field in a local kptr. This kfunc has
+ *	constructor semantics, and thus can only be called on a local kptr in
+ *	'constructing' phase.
+ * Returns
+ *	Void.
+ */
+void bpf_list_head_init(struct bpf_list_head *node) __ksym;
+
 #endif

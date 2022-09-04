@@ -3185,7 +3185,8 @@ enum btf_field_type {
 	BTF_FIELD_SPIN_LOCK,
 	BTF_FIELD_TIMER,
 	BTF_FIELD_KPTR,
-	BTF_FIELD_LIST_HEAD,
+	BTF_FIELD_LIST_HEAD_MAP,
+	BTF_FIELD_LIST_HEAD_KPTR,
 	BTF_FIELD_LIST_NODE,
 };
 
@@ -3204,6 +3205,7 @@ struct btf_field_info {
 		struct {
 			u32 value_type_id;
 			const char *node_name;
+			enum btf_field_type type;
 		} list_head;
 	};
 };
@@ -3282,9 +3284,11 @@ static const char *btf_find_decl_tag_value(const struct btf *btf,
 	return NULL;
 }
 
-static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
-			      int comp_idx, const struct btf_type *t,
-			      u32 off, int sz, struct btf_field_info *info)
+static int btf_find_list_head(const struct btf *btf,
+			      enum btf_field_type field_type,
+			      const struct btf_type *pt, int comp_idx,
+			      const struct btf_type *t, u32 off, int sz,
+			      struct btf_field_info *info)
 {
 	const char *value_type;
 	const char *list_node;
@@ -3316,6 +3320,7 @@ static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
 	info->off = off;
 	info->list_head.value_type_id = id;
 	info->list_head.node_name = list_node;
+	info->list_head.type = field_type;
 	return BTF_FIELD_FOUND;
 }
 
@@ -3361,8 +3366,9 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 			if (ret < 0)
 				return ret;
 			break;
-		case BTF_FIELD_LIST_HEAD:
-			ret = btf_find_list_head(btf, t, i, member_type, off, sz,
+		case BTF_FIELD_LIST_HEAD_MAP:
+		case BTF_FIELD_LIST_HEAD_KPTR:
+			ret = btf_find_list_head(btf, field_type, t, i, member_type, off, sz,
 						 idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
 				return ret;
@@ -3420,8 +3426,9 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			if (ret < 0)
 				return ret;
 			break;
-		case BTF_FIELD_LIST_HEAD:
-			ret = btf_find_list_head(btf, var, -1, var_type, off, sz,
+		case BTF_FIELD_LIST_HEAD_MAP:
+		case BTF_FIELD_LIST_HEAD_KPTR:
+			ret = btf_find_list_head(btf, field_type, var, -1, var_type, off, sz,
 						 idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
 				return ret;
@@ -3462,7 +3469,8 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 		sz = sizeof(u64);
 		align = 8;
 		break;
-	case BTF_FIELD_LIST_HEAD:
+	case BTF_FIELD_LIST_HEAD_MAP:
+	case BTF_FIELD_LIST_HEAD_KPTR:
 		name = "bpf_list_head";
 		sz = sizeof(struct bpf_list_head);
 		align = __alignof__(struct bpf_list_head);
@@ -3615,13 +3623,53 @@ end:
 	return ERR_PTR(ret);
 }
 
+static bool list_head_value_ok(const struct btf *btf, const struct btf_type *pt,
+			       const struct btf_type *vt,
+			       enum btf_field_type type)
+{
+	struct btf_field_info info;
+	int ret;
+
+	/* This is the value type of either map or kptr list_head. For map
+	 * list_head, we allow the value_type to have another bpf_list_head, but
+	 * for kptr list_head, we cannot allow another level of list_head.
+	 *
+	 * Also, in the map case, we must catch the case where the value_type's
+	 * list_head encodes the map_value as its own value_type.
+	 *
+	 * Essentially, we want only two levels for map, one level for kptr, and
+	 * no cycles at all in the type graph.
+	 */
+	WARN_ON_ONCE(btf_is_kernel(btf) || !__btf_type_is_struct(vt));
+	ret = btf_find_field(btf, vt, type, "kernel", &info, 1);
+	if (ret < 0)
+		return false;
+	/* For map or kptr, if value doesn't have list_head, it's ok! */
+	if (!ret)
+		return true;
+	if (ret) {
+		/* For kptr, we don't allow list_head in the value type. */
+		if (type == BTF_FIELD_LIST_HEAD_KPTR)
+			return false;
+		/* The map's list_head's value has another list head. We now
+		 * need to ensure it doesn't refer to map value type itself,
+		 * creating a cycle.
+		 */
+		vt = btf_type_by_id(btf, info.list_head.value_type_id);
+		if (vt == pt)
+			return false;
+	}
+	return true;
+}
+
 struct bpf_map_value_off *btf_parse_list_heads(struct btf *btf, const struct btf_type *t)
 {
 	struct btf_field_info info_arr[BPF_MAP_VALUE_OFF_MAX];
 	struct bpf_map_value_off *tab;
+	const struct btf_type *pt = t;
 	int ret, i, nr_off;
 
-	ret = btf_find_field(btf, t, BTF_FIELD_LIST_HEAD, NULL, info_arr, ARRAY_SIZE(info_arr));
+	ret = btf_find_field(btf, t, BTF_FIELD_LIST_HEAD_MAP, NULL, info_arr, ARRAY_SIZE(info_arr));
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (!ret)
@@ -3644,6 +3692,8 @@ struct bpf_map_value_off *btf_parse_list_heads(struct btf *btf, const struct btf
 		 * verify its type.
 		 */
 		ret = -EINVAL;
+		if (!list_head_value_ok(btf, pt, t, BTF_FIELD_LIST_HEAD_MAP))
+			goto end;
 		for_each_member(j, t, member) {
 			if (strcmp(info_arr[i].list_head.node_name, __btf_name_by_offset(btf, member->name_off)))
 				continue;
@@ -5937,12 +5987,19 @@ static int btf_find_local_type_field(const struct btf *btf,
 	int ret;
 
 	/* These are invariants that must hold if this is a local type */
-	WARN_ON_ONCE(btf_is_kernel(btf) || !__btf_type_is_struct(t));
+	WARN_ON_ONCE(btf_is_kernel(btf) || !__btf_type_is_struct(t) || type == BTF_FIELD_LIST_HEAD_MAP);
 	ret = btf_find_field(btf, t, type, "kernel", &info, 1);
 	if (ret < 0)
 		return ret;
 	if (!ret)
 		return 0;
+	/* A validation step needs to be done for bpf_list_head in local kptrs */
+	if (type == BTF_FIELD_LIST_HEAD_KPTR) {
+		const struct btf_type *vt = btf_type_by_id(btf, info.list_head.value_type_id);
+
+		if (!list_head_value_ok(btf, t, vt, type))
+			return -EINVAL;
+	}
 	if (offsetp)
 		*offsetp = info.off;
 	return ret;
@@ -5960,10 +6017,17 @@ int btf_local_type_has_bpf_spin_lock(const struct btf *btf,
 	return btf_find_local_type_field(btf, t, BTF_FIELD_SPIN_LOCK, offsetp);
 }
 
+int btf_local_type_has_bpf_list_head(const struct btf *btf,
+				     const struct btf_type *t, u32 *offsetp)
+{
+	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_HEAD_KPTR, offsetp);
+}
+
 bool btf_local_type_has_special_fields(const struct btf *btf, const struct btf_type *t)
 {
 	return btf_local_type_has_bpf_list_node(btf, t, NULL) == 1 ||
-	       btf_local_type_has_bpf_spin_lock(btf, t, NULL) == 1;
+	       btf_local_type_has_bpf_spin_lock(btf, t, NULL) == 1 ||
+	       btf_local_type_has_bpf_list_head(btf, t, NULL) == 1;
 }
 
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
@@ -5993,6 +6057,7 @@ int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 	}
 		PREVENT_DIRECT_WRITE(bpf_list_node);
 		PREVENT_DIRECT_WRITE(bpf_spin_lock);
+		PREVENT_DIRECT_WRITE(bpf_list_head);
 
 #undef PREVENT_DIRECT_WRITE
 		err = 0;

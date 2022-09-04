@@ -7811,12 +7811,14 @@ BTF_ID_LIST(special_kfuncs)
 BTF_ID(func, bpf_kptr_alloc)
 BTF_ID(func, bpf_list_node_init)
 BTF_ID(func, bpf_spin_lock_init)
+BTF_ID(func, bpf_list_head_init)
 BTF_ID(struct, btf) /* empty entry */
 
 enum bpf_special_kfuncs {
 	KF_SPECIAL_bpf_kptr_alloc,
 	KF_SPECIAL_bpf_list_node_init,
 	KF_SPECIAL_bpf_spin_lock_init,
+	KF_SPECIAL_bpf_list_head_init,
 	KF_SPECIAL_bpf_empty,
 	KF_SPECIAL_MAX = KF_SPECIAL_bpf_empty,
 };
@@ -7984,6 +7986,7 @@ struct local_type_field {
 	enum {
 		FIELD_bpf_list_node,
 		FIELD_bpf_spin_lock,
+		FIELD_bpf_list_head,
 		FIELD_MAX,
 	} type;
 	enum bpf_special_kfuncs ctor_kfunc;
@@ -8030,6 +8033,7 @@ static int find_local_type_fields(const struct btf *btf, u32 btf_id, struct loca
 
 	FILL_LOCAL_TYPE_FIELD(bpf_list_node, bpf_list_node_init, bpf_empty, false);
 	FILL_LOCAL_TYPE_FIELD(bpf_spin_lock, bpf_spin_lock_init, bpf_empty, false);
+	FILL_LOCAL_TYPE_FIELD(bpf_list_head, bpf_list_head_init, bpf_empty, false);
 
 #undef FILL_LOCAL_TYPE_FIELD
 

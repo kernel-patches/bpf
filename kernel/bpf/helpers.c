@@ -1724,6 +1724,13 @@ void bpf_spin_lock_init(struct bpf_spin_lock *lock__clkptr)
 	memset(lock__clkptr, 0, sizeof(*lock__clkptr));
 }
 
+void bpf_list_head_init(struct bpf_list_head *head__clkptr)
+{
+	BUILD_BUG_ON(sizeof(struct bpf_list_head) != sizeof(struct list_head));
+	BUILD_BUG_ON(__alignof__(struct bpf_list_head) != __alignof__(struct list_head));
+	INIT_LIST_HEAD((struct list_head *)head__clkptr);
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1733,6 +1740,7 @@ BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 BTF_ID_FLAGS(func, bpf_kptr_alloc, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_ID_FLAGS(func, bpf_list_node_init)
 BTF_ID_FLAGS(func, bpf_spin_lock_init)
+BTF_ID_FLAGS(func, bpf_list_head_init)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {
