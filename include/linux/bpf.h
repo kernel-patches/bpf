@@ -381,6 +381,8 @@ static inline void zero_map_value(struct bpf_map *map, void *dst)
 
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src);
+void bpf_map_value_lock(struct bpf_map *map, void *map_value);
+void bpf_map_value_unlock(struct bpf_map *map, void *map_value);
 void bpf_timer_cancel_and_free(void *timer);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
@@ -1736,6 +1738,7 @@ struct bpf_map_value_off_desc *bpf_map_list_head_off_contains(struct bpf_map *ma
 void bpf_map_free_list_head_off_tab(struct bpf_map *map);
 struct bpf_map_value_off *bpf_map_copy_list_head_off_tab(const struct bpf_map *map);
 bool bpf_map_equal_list_head_off_tab(const struct bpf_map *map_a, const struct bpf_map *map_b);
+void bpf_map_free_list_heads(struct bpf_map *map, void *map_value);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);

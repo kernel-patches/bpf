@@ -297,6 +297,25 @@ static void htab_free_prealloced_kptrs(struct bpf_htab *htab)
 	}
 }
 
+static void htab_free_prealloced_list_heads(struct bpf_htab *htab)
+{
+	u32 num_entries = htab->map.max_entries;
+	int i;
+
+	if (!map_value_has_list_heads(&htab->map))
+		return;
+	if (htab_has_extra_elems(htab))
+		num_entries += num_possible_cpus();
+
+	for (i = 0; i < num_entries; i++) {
+		struct htab_elem *elem;
+
+		elem = get_htab_elem(htab, i);
+		bpf_map_free_list_heads(&htab->map, elem->key + round_up(htab->map.key_size, 8));
+		cond_resched();
+	}
+}
+
 static void htab_free_elems(struct bpf_htab *htab)
 {
 	int i;
@@ -782,6 +801,8 @@ static void check_and_free_fields(struct bpf_htab *htab,
 			bpf_map_free_kptrs(&htab->map, map_value);
 		}
 	}
+	if (map_value_has_list_heads(&htab->map))
+		bpf_map_free_list_heads(&htab->map, map_value);
 }
 
 /* It is called from the bpf_lru_list when the LRU needs to delete
@@ -1514,6 +1535,7 @@ static void htab_map_free(struct bpf_map *map)
 	if (!htab_is_prealloc(htab)) {
 		delete_all_elements(htab);
 	} else {
+		htab_free_prealloced_list_heads(htab);
 		htab_free_prealloced_kptrs(htab);
 		prealloc_destroy(htab);
 	}

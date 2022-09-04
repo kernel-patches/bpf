@@ -377,6 +377,20 @@ void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 	preempt_enable();
 }
 
+void bpf_map_value_lock(struct bpf_map *map, void *map_value)
+{
+	WARN_ON_ONCE(map->spin_lock_off < 0);
+	preempt_disable();
+	__bpf_spin_lock_irqsave(map_value + map->spin_lock_off);
+}
+
+void bpf_map_value_unlock(struct bpf_map *map, void *map_value)
+{
+	WARN_ON_ONCE(map->spin_lock_off < 0);
+	__bpf_spin_unlock_irqrestore(map_value + map->spin_lock_off);
+	preempt_enable();
+}
+
 BPF_CALL_0(bpf_jiffies64)
 {
 	return get_jiffies_64();

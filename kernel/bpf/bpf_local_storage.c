@@ -107,6 +107,8 @@ static void check_and_free_fields(struct bpf_local_storage_elem *selem)
 {
 	if (map_value_has_kptrs(selem->map))
 		bpf_map_free_kptrs(selem->map, SDATA(selem));
+	if (map_value_has_list_heads(selem->map))
+		bpf_map_free_list_heads(selem->map, SDATA(selem));
 }
 
 static void bpf_selem_free_rcu(struct rcu_head *rcu)
@@ -608,13 +610,14 @@ void bpf_local_storage_map_free(struct bpf_local_storage_map *smap,
 	 */
 	synchronize_rcu();
 
-	/* When local storage map has kptrs, the call_rcu callback accesses
-	 * kptr_off_tab, hence we need the bpf_selem_free_rcu callbacks to
-	 * finish before we free it.
+	/* When local storage map has kptrs or bpf_list_heads, the call_rcu
+	 * callback accesses kptr_off_tab or list_head_off_tab, hence we need
+	 * the bpf_selem_free_rcu callbacks to finish before we free it.
 	 */
-	if (map_value_has_kptrs(&smap->map)) {
+	if (map_value_has_kptrs(&smap->map) || map_value_has_list_heads(&smap->map)) {
 		rcu_barrier();
 		bpf_map_free_kptr_off_tab(&smap->map);
+		bpf_map_free_list_head_off_tab(&smap->map);
 	}
 	bpf_map_free_list_head_off_tab(&smap->map);
 	kvfree(smap->buckets);

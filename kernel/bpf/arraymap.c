@@ -312,6 +312,8 @@ static void check_and_free_fields(struct bpf_array *arr, void *val)
 		bpf_timer_cancel_and_free(val + arr->map.timer_off);
 	if (map_value_has_kptrs(&arr->map))
 		bpf_map_free_kptrs(&arr->map, val);
+	if (map_value_has_list_heads(&arr->map))
+		bpf_map_free_list_heads(&arr->map, val);
 }
 
 /* Called from syscall or from eBPF program */
@@ -441,6 +443,12 @@ static void array_map_free(struct bpf_map *map)
 				bpf_map_free_kptrs(map, array_map_elem_ptr(array, i));
 		}
 		bpf_map_free_kptr_off_tab(map);
+	}
+
+	if (map_value_has_list_heads(map)) {
+		for (i = 0; i < array->map.max_entries; i++)
+			bpf_map_free_list_heads(map, array_map_elem_ptr(array, i));
+		bpf_map_free_list_head_off_tab(map);
 	}
 
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY)

@@ -600,6 +600,13 @@ static void bpf_free_local_kptr(const struct btf *btf, u32 btf_id, void *kptr)
 
 	if (!kptr)
 		return;
+	/* There is no requirement to lock the bpf_spin_lock protecting
+	 * bpf_list_head in local kptr, as these are single ownership,
+	 * so if we have access to the kptr through xchg, we own it.
+	 *
+	 * If iterating elements of bpf_list_head in map value we are
+	 * already holding the lock for it.
+	 */
 	/* We must free bpf_list_head in local kptr */
 	t = btf_type_by_id(btf, btf_id);
 	/* TODO: We should just populate this info once in struct btf, and then
@@ -695,6 +702,38 @@ bool bpf_map_equal_list_head_off_tab(const struct bpf_map *map_a, const struct b
 	return __bpf_map_equal_off_tab(map_a->list_head_off_tab, map_b->list_head_off_tab,
 				       map_value_has_list_heads(map_a),
 				       map_value_has_list_heads(map_b));
+}
+
+void bpf_map_free_list_heads(struct bpf_map *map, void *map_value)
+{
+	struct bpf_map_value_off *tab = map->list_head_off_tab;
+	int i;
+
+	/* TODO: Should we error when bpf_list_head is alone in map value,
+	 * during BTF parsing, instead of ignoring it?
+	 */
+	if (map->spin_lock_off < 0)
+		return;
+
+	bpf_map_value_lock(map, map_value);
+	for (i = 0; i < tab->nr_off; i++) {
+		struct bpf_map_value_off_desc *off_desc = &tab->off[i];
+		struct list_head *list, *olist;
+		void *entry;
+
+		olist = list = map_value + off_desc->offset;
+		list = list->next;
+		if (!list)
+			goto init;
+		while (list != olist) {
+			entry = list - off_desc->list_head.list_node_off;
+			list = list->next;
+			bpf_free_local_kptr(off_desc->list_head.btf, off_desc->list_head.value_type_id, entry);
+		}
+	init:
+		INIT_LIST_HEAD(olist);
+	}
+	bpf_map_value_unlock(map, map_value);
 }
 
 /* called from workqueue */
