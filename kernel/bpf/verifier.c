@@ -7812,6 +7812,7 @@ BTF_ID(func, bpf_kptr_alloc)
 BTF_ID(func, bpf_list_node_init)
 BTF_ID(func, bpf_spin_lock_init)
 BTF_ID(func, bpf_list_head_init)
+BTF_ID(func, bpf_kptr_free)
 BTF_ID(struct, btf) /* empty entry */
 
 enum bpf_special_kfuncs {
@@ -7819,6 +7820,7 @@ enum bpf_special_kfuncs {
 	KF_SPECIAL_bpf_list_node_init,
 	KF_SPECIAL_bpf_spin_lock_init,
 	KF_SPECIAL_bpf_list_head_init,
+	KF_SPECIAL_bpf_kptr_free,
 	KF_SPECIAL_bpf_empty,
 	KF_SPECIAL_MAX = KF_SPECIAL_bpf_empty,
 };
@@ -8154,6 +8156,33 @@ process_kf_arg_destructing_local_kptr(struct bpf_verifier_env *env,
 			for (i = 0; i < cnt; i++)
 				local_kptr_set_state(ireg, i, FIELD_STATE_CONSTRUCTED);
 		}));
+	}
+
+	/* Handle bpf_kptr_free */
+	if (is_kfunc_special(meta->btf, meta->func_id, bpf_kptr_free)) {
+		for (i = cnt - 1; i >= 0; i--) {
+			if (!fields[i].needs_destruction)
+				continue;
+			/* If a field needs destruction, it must be in
+			 * destructed state when calling bpf_kptr_free.
+			 */
+			switch (local_kptr_get_state(reg, i)) {
+			case FIELD_STATE_CONSTRUCTED:
+				verbose(env, "'%s' field needs to be destructed before bpf_kptr_free\n",
+					fields[i].name);
+				return -EINVAL;
+			case FIELD_STATE_DESTRUCTED:
+				break;
+			case FIELD_STATE_UNKNOWN:
+				if (reg->type & OBJ_CONSTRUCTING)
+					break;
+				fallthrough;
+			default:
+				verbose(env, "verifier internal error: unknown field state\n");
+				return -EFAULT;
+			}
+		}
+		return 0;
 	}
 
 	for (i = 0; i < cnt; i++) {

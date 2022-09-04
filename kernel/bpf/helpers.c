@@ -1731,6 +1731,11 @@ void bpf_list_head_init(struct bpf_list_head *head__clkptr)
 	INIT_LIST_HEAD((struct list_head *)head__clkptr);
 }
 
+void bpf_kptr_free(void *p__dlkptr)
+{
+	kfree(p__dlkptr);
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1741,6 +1746,7 @@ BTF_ID_FLAGS(func, bpf_kptr_alloc, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_ID_FLAGS(func, bpf_list_node_init)
 BTF_ID_FLAGS(func, bpf_spin_lock_init)
 BTF_ID_FLAGS(func, bpf_list_head_init)
+BTF_ID_FLAGS(func, bpf_kptr_free, KF_RELEASE)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

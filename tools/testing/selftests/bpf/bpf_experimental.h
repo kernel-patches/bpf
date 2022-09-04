@@ -59,4 +59,12 @@ void bpf_spin_lock_init(struct bpf_spin_lock *node) __ksym;
  */
 void bpf_list_head_init(struct bpf_list_head *node) __ksym;
 
+/* Description
+ *	Free a local kptr. All fields of local kptr that require destruction
+ *	need to be in destructed state before this call is made.
+ * Returns
+ *	Void.
+ */
+void bpf_kptr_free(void *kptr) __ksym;
+
 #endif
