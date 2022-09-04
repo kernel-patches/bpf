@@ -3,6 +3,10 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 
+#define __contains(kind, name, node) __attribute__((btf_decl_tag("contains:" #kind ":" #name ":" #node)))
+#define __kernel __attribute__((btf_decl_tag("kernel")))
+#define __local __attribute__((btf_type_tag("local")))
+
 #else
 
 struct bpf_list_head {
