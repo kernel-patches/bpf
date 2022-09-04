@@ -464,6 +464,7 @@ struct bpf_struct_ops {
 #define KCONFIG_SEC ".kconfig"
 #define KSYMS_SEC ".ksyms"
 #define STRUCT_OPS_SEC ".struct_ops"
+#define BSS_SEC_PRIVATE ".bss.private"
 
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
@@ -577,6 +578,7 @@ enum sec_type {
 	SEC_BSS,
 	SEC_DATA,
 	SEC_RODATA,
+	SEC_BSS_PRIVATE,
 };
 
 struct elf_sec_desc {
@@ -1581,7 +1583,8 @@ bpf_map_find_btf_info(struct bpf_object *obj, struct bpf_map *map);
 
 static int
 bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
-			      const char *real_name, int sec_idx, void *data, size_t data_sz)
+			      const char *real_name, int sec_idx, void *data,
+			      size_t data_sz, bool do_mmap)
 {
 	struct bpf_map_def *def;
 	struct bpf_map *map;
@@ -1609,27 +1612,31 @@ bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 	def->max_entries = 1;
 	def->map_flags = type == LIBBPF_MAP_RODATA || type == LIBBPF_MAP_KCONFIG
 			 ? BPF_F_RDONLY_PROG : 0;
-	def->map_flags |= BPF_F_MMAPABLE;
+	if (do_mmap)
+		def->map_flags |= BPF_F_MMAPABLE;
 
 	pr_debug("map '%s' (global data): at sec_idx %d, offset %zu, flags %x.\n",
 		 map->name, map->sec_idx, map->sec_offset, def->map_flags);
 
-	map->mmaped = mmap(NULL, bpf_map_mmap_sz(map), PROT_READ | PROT_WRITE,
-			   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (map->mmaped == MAP_FAILED) {
-		err = -errno;
-		map->mmaped = NULL;
-		pr_warn("failed to alloc map '%s' content buffer: %d\n",
-			map->name, err);
-		zfree(&map->real_name);
-		zfree(&map->name);
-		return err;
+	map->mmaped = NULL;
+	if (do_mmap) {
+		map->mmaped = mmap(NULL, bpf_map_mmap_sz(map), PROT_READ | PROT_WRITE,
+				   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+		if (map->mmaped == MAP_FAILED) {
+			err = -errno;
+			map->mmaped = NULL;
+			pr_warn("failed to alloc map '%s' content buffer: %d\n",
+				map->name, err);
+			zfree(&map->real_name);
+			zfree(&map->name);
+			return err;
+		}
 	}
 
 	/* failures are fine because of maps like .rodata.str1.1 */
 	(void) bpf_map_find_btf_info(obj, map);
 
-	if (data)
+	if (do_mmap && data)
 		memcpy(map->mmaped, data, data_sz);
 
 	pr_debug("map %td is \"%s\"\n", map - obj->maps, map->name);
@@ -1641,12 +1648,14 @@ static int bpf_object__init_global_data_maps(struct bpf_object *obj)
 	struct elf_sec_desc *sec_desc;
 	const char *sec_name;
 	int err = 0, sec_idx;
+	bool do_mmap;
 
 	/*
 	 * Populate obj->maps with libbpf internal maps.
 	 */
 	for (sec_idx = 1; sec_idx < obj->efile.sec_cnt; sec_idx++) {
 		sec_desc = &obj->efile.secs[sec_idx];
+		do_mmap = true;
 
 		/* Skip recognized sections with size 0. */
 		if (!sec_desc->data || sec_desc->data->d_size == 0)
@@ -1658,7 +1667,8 @@ static int bpf_object__init_global_data_maps(struct bpf_object *obj)
 			err = bpf_object__init_internal_map(obj, LIBBPF_MAP_DATA,
 							    sec_name, sec_idx,
 							    sec_desc->data->d_buf,
-							    sec_desc->data->d_size);
+							    sec_desc->data->d_size,
+							    do_mmap);
 			break;
 		case SEC_RODATA:
 			obj->has_rodata = true;
@@ -1666,14 +1676,18 @@ static int bpf_object__init_global_data_maps(struct bpf_object *obj)
 			err = bpf_object__init_internal_map(obj, LIBBPF_MAP_RODATA,
 							    sec_name, sec_idx,
 							    sec_desc->data->d_buf,
-							    sec_desc->data->d_size);
+							    sec_desc->data->d_size,
+							    do_mmap);
 			break;
+		case SEC_BSS_PRIVATE:
+			do_mmap = false;
 		case SEC_BSS:
 			sec_name = elf_sec_name(obj, elf_sec_by_idx(obj, sec_idx));
 			err = bpf_object__init_internal_map(obj, LIBBPF_MAP_BSS,
 							    sec_name, sec_idx,
 							    NULL,
-							    sec_desc->data->d_size);
+							    sec_desc->data->d_size,
+							    do_mmap);
 			break;
 		default:
 			/* skip */
@@ -1987,7 +2001,7 @@ static int bpf_object__init_kconfig_map(struct bpf_object *obj)
 	map_sz = last_ext->kcfg.data_off + last_ext->kcfg.sz;
 	err = bpf_object__init_internal_map(obj, LIBBPF_MAP_KCONFIG,
 					    ".kconfig", obj->efile.symbols_shndx,
-					    NULL, map_sz);
+					    NULL, map_sz, true);
 	if (err)
 		return err;
 
@@ -3431,6 +3445,10 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			sec_desc->sec_type = SEC_BSS;
 			sec_desc->shdr = sh;
 			sec_desc->data = data;
+		} else if (sh->sh_type == SHT_NOBITS && strcmp(name, BSS_SEC_PRIVATE) == 0) {
+			sec_desc->sec_type = SEC_BSS_PRIVATE;
+			sec_desc->shdr = sh;
+			sec_desc->data = data;
 		} else {
 			pr_info("elf: skipping section(%d) %s (size %zu)\n", idx, name,
 				(size_t)sh->sh_size);
@@ -3893,6 +3911,7 @@ static bool bpf_object__shndx_is_data(const struct bpf_object *obj,
 	case SEC_BSS:
 	case SEC_DATA:
 	case SEC_RODATA:
+	case SEC_BSS_PRIVATE:
 		return true;
 	default:
 		return false;
@@ -3912,6 +3931,7 @@ bpf_object__section_to_libbpf_map_type(const struct bpf_object *obj, int shndx)
 		return LIBBPF_MAP_KCONFIG;
 
 	switch (obj->efile.secs[shndx].sec_type) {
+	case SEC_BSS_PRIVATE:
 	case SEC_BSS:
 		return LIBBPF_MAP_BSS;
 	case SEC_DATA:
@@ -4901,16 +4921,19 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 {
 	enum libbpf_map_type map_type = map->libbpf_type;
 	char *cp, errmsg[STRERR_BUFSIZE];
-	int err, zero = 0;
+	int err = 0, zero = 0;
 
 	if (obj->gen_loader) {
-		bpf_gen__map_update_elem(obj->gen_loader, map - obj->maps,
-					 map->mmaped, map->def.value_size);
+		if (map->mmaped)
+			bpf_gen__map_update_elem(obj->gen_loader, map - obj->maps,
+						 map->mmaped, map->def.value_size);
 		if (map_type == LIBBPF_MAP_RODATA || map_type == LIBBPF_MAP_KCONFIG)
 			bpf_gen__map_freeze(obj->gen_loader, map - obj->maps);
 		return 0;
 	}
-	err = bpf_map_update_elem(map->fd, &zero, map->mmaped, 0);
+
+	if (map->mmaped)
+		err = bpf_map_update_elem(map->fd, &zero, map->mmaped, 0);
 	if (err) {
 		err = -errno;
 		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
