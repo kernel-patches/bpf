@@ -3879,6 +3879,20 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			}
 		}
 	}
+	if (map_value_has_list_heads(map)) {
+		struct bpf_map_value_off *tab = map->list_head_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++) {
+			u32 p = tab->off[i].offset;
+
+			if (reg->smin_value + off < p + sizeof(struct bpf_list_head) &&
+			    p < reg->umax_value + off + size) {
+				verbose(env, "bpf_list_head cannot be accessed directly by load/store\n");
+				return -EACCES;
+			}
+		}
+	}
 	return err;
 }
 
@@ -13161,6 +13175,13 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	if (map_value_has_timer(map)) {
 		if (is_tracing_prog_type(prog_type)) {
 			verbose(env, "tracing progs cannot use bpf_timer yet\n");
+			return -EINVAL;
+		}
+	}
+
+	if (map_value_has_list_heads(map)) {
+		if (is_tracing_prog_type(prog_type)) {
+			verbose(env, "tracing progs cannot use bpf_list_head yet\n");
 			return -EINVAL;
 		}
 	}

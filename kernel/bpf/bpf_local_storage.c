@@ -616,6 +616,7 @@ void bpf_local_storage_map_free(struct bpf_local_storage_map *smap,
 		rcu_barrier();
 		bpf_map_free_kptr_off_tab(&smap->map);
 	}
+	bpf_map_free_list_head_off_tab(&smap->map);
 	kvfree(smap->buckets);
 	bpf_map_area_free(smap);
 }

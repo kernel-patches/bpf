@@ -53,6 +53,7 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 	inner_map_meta->spin_lock_off = inner_map->spin_lock_off;
 	inner_map_meta->timer_off = inner_map->timer_off;
 	inner_map_meta->kptr_off_tab = bpf_map_copy_kptr_off_tab(inner_map);
+	inner_map_meta->list_head_off_tab = bpf_map_copy_list_head_off_tab(inner_map);
 	if (inner_map->btf) {
 		btf_get(inner_map->btf);
 		inner_map_meta->btf = inner_map->btf;
@@ -72,6 +73,7 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 
 void bpf_map_meta_free(struct bpf_map *map_meta)
 {
+	bpf_map_free_list_head_off_tab(map_meta);
 	bpf_map_free_kptr_off_tab(map_meta);
 	btf_put(map_meta->btf);
 	kfree(map_meta);
@@ -86,7 +88,8 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 		meta0->value_size == meta1->value_size &&
 		meta0->timer_off == meta1->timer_off &&
 		meta0->map_flags == meta1->map_flags &&
-		bpf_map_equal_kptr_off_tab(meta0, meta1);
+		bpf_map_equal_kptr_off_tab(meta0, meta1) &&
+		bpf_map_equal_list_head_off_tab(meta0, meta1);
 }
 
 void *bpf_map_fd_get_ptr(struct bpf_map *map,

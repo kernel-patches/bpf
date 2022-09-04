@@ -3185,6 +3185,7 @@ enum btf_field_type {
 	BTF_FIELD_SPIN_LOCK,
 	BTF_FIELD_TIMER,
 	BTF_FIELD_KPTR,
+	BTF_FIELD_LIST_HEAD,
 };
 
 enum {
@@ -3193,9 +3194,17 @@ enum {
 };
 
 struct btf_field_info {
-	u32 type_id;
 	u32 off;
-	enum bpf_kptr_type type;
+	union {
+		struct {
+			u32 type_id;
+			enum bpf_off_type type;
+		} kptr;
+		struct {
+			u32 value_type_id;
+			const char *node_name;
+		} list_head;
+	};
 };
 
 static int btf_find_struct(const struct btf *btf, const struct btf_type *t,
@@ -3212,7 +3221,7 @@ static int btf_find_struct(const struct btf *btf, const struct btf_type *t,
 static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 			 u32 off, int sz, struct btf_field_info *info)
 {
-	enum bpf_kptr_type type;
+	enum bpf_off_type type;
 	u32 res_id;
 
 	/* Permit modifiers on the pointer itself */
@@ -3241,9 +3250,71 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 	if (!__btf_type_is_struct(t))
 		return -EINVAL;
 
-	info->type_id = res_id;
 	info->off = off;
-	info->type = type;
+	info->kptr.type_id = res_id;
+	info->kptr.type = type;
+	return BTF_FIELD_FOUND;
+}
+
+static const char *btf_find_decl_tag_value(const struct btf *btf,
+					   const struct btf_type *pt,
+					   int comp_idx, const char *tag_key)
+{
+	int i;
+
+	for (i = 1; i < btf_nr_types(btf); i++) {
+		const struct btf_type *t = btf_type_by_id(btf, i);
+		int len = strlen(tag_key);
+
+		if (!btf_type_is_decl_tag(t))
+			continue;
+		/* TODO: Instead of btf_type pt, it would be much better if we had BTF
+		 * ID of the map value type. This would avoid btf_type_by_id call here.
+		 */
+		if (pt != btf_type_by_id(btf, t->type) ||
+		    btf_type_decl_tag(t)->component_idx != comp_idx)
+			continue;
+		if (strncmp(__btf_name_by_offset(btf, t->name_off), tag_key, len))
+			continue;
+		return __btf_name_by_offset(btf, t->name_off) + len;
+	}
+	return NULL;
+}
+
+static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
+			      int comp_idx, const struct btf_type *t,
+			      u32 off, int sz, struct btf_field_info *info)
+{
+	const char *value_type;
+	const char *list_node;
+	s32 id;
+
+	if (!__btf_type_is_struct(t))
+		return BTF_FIELD_IGNORE;
+	if (t->size != sz)
+		return BTF_FIELD_IGNORE;
+	value_type = btf_find_decl_tag_value(btf, pt, comp_idx, "contains:");
+	if (!value_type)
+		return -EINVAL;
+	if (strncmp(value_type, "struct:", sizeof("struct:") - 1))
+		return -EINVAL;
+	value_type += sizeof("struct:") - 1;
+	list_node = strstr(value_type, ":");
+	if (!list_node)
+		return -EINVAL;
+	value_type = kstrndup(value_type, list_node - value_type, GFP_ATOMIC);
+	if (!value_type)
+		return -ENOMEM;
+	id = btf_find_by_name_kind(btf, value_type, BTF_KIND_STRUCT);
+	kfree(value_type);
+	if (id < 0)
+		return id;
+	list_node++;
+	if (str_is_empty(list_node))
+		return -EINVAL;
+	info->off = off;
+	info->list_head.value_type_id = id;
+	info->list_head.node_name = list_node;
 	return BTF_FIELD_FOUND;
 }
 
@@ -3283,6 +3354,12 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 		case BTF_FIELD_KPTR:
 			ret = btf_find_kptr(btf, member_type, off, sz,
 					    idx < info_cnt ? &info[idx] : &tmp);
+			if (ret < 0)
+				return ret;
+			break;
+		case BTF_FIELD_LIST_HEAD:
+			ret = btf_find_list_head(btf, t, i, member_type, off, sz,
+						 idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3336,6 +3413,12 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			if (ret < 0)
 				return ret;
 			break;
+		case BTF_FIELD_LIST_HEAD:
+			ret = btf_find_list_head(btf, var, -1, var_type, off, sz,
+						 idx < info_cnt ? &info[idx] : &tmp);
+			if (ret < 0)
+				return ret;
+			break;
 		default:
 			return -EFAULT;
 		}
@@ -3371,6 +3454,11 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 		name = NULL;
 		sz = sizeof(u64);
 		align = 8;
+		break;
+	case BTF_FIELD_LIST_HEAD:
+		name = "bpf_list_head";
+		sz = sizeof(struct bpf_list_head);
+		align = __alignof__(struct bpf_list_head);
 		break;
 	default:
 		return -EFAULT;
@@ -3440,7 +3528,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 		/* Find type in map BTF, and use it to look up the matching type
 		 * in vmlinux or module BTFs, by name and kind.
 		 */
-		t = btf_type_by_id(btf, info_arr[i].type_id);
+		t = btf_type_by_id(btf, info_arr[i].kptr.type_id);
 		id = bpf_find_btf_id(__btf_name_by_offset(btf, t->name_off), BTF_INFO_KIND(t->info),
 				     &kernel_btf);
 		if (id < 0) {
@@ -3451,7 +3539,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 		/* Find and stash the function pointer for the destruction function that
 		 * needs to be eventually invoked from the map free path.
 		 */
-		if (info_arr[i].type == BPF_KPTR_REF) {
+		if (info_arr[i].kptr.type == BPF_KPTR_REF) {
 			const struct btf_type *dtor_func;
 			const char *dtor_func_name;
 			unsigned long addr;
@@ -3494,7 +3582,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 		}
 
 		tab->off[i].offset = info_arr[i].off;
-		tab->off[i].type = info_arr[i].type;
+		tab->off[i].type = info_arr[i].kptr.type;
 		tab->off[i].kptr.btf_id = id;
 		tab->off[i].kptr.btf = kernel_btf;
 		tab->off[i].kptr.module = mod;
@@ -3511,6 +3599,75 @@ end:
 		if (tab->off[i].kptr.module)
 			module_put(tab->off[i].kptr.module);
 	}
+	kfree(tab);
+	return ERR_PTR(ret);
+}
+
+struct bpf_map_value_off *btf_parse_list_heads(struct btf *btf, const struct btf_type *t)
+{
+	struct btf_field_info info_arr[BPF_MAP_VALUE_OFF_MAX];
+	struct bpf_map_value_off *tab;
+	int ret, i, nr_off;
+
+	ret = btf_find_field(btf, t, BTF_FIELD_LIST_HEAD, info_arr, ARRAY_SIZE(info_arr));
+	if (ret < 0)
+		return ERR_PTR(ret);
+	if (!ret)
+		return NULL;
+
+	nr_off = ret;
+	tab = kzalloc(offsetof(struct bpf_map_value_off, off[nr_off]), GFP_KERNEL | __GFP_NOWARN);
+	if (!tab)
+		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i < nr_off; i++) {
+		const struct btf_type *t, *n = NULL;
+		const struct btf_member *member;
+		u32 offset;
+		int j;
+
+		t = btf_type_by_id(btf, info_arr[i].list_head.value_type_id);
+		/* We've already checked that value_type_id is a struct type. We
+		 * just need to figure out the offset of the list_node, and
+		 * verify its type.
+		 */
+		ret = -EINVAL;
+		for_each_member(j, t, member) {
+			if (strcmp(info_arr[i].list_head.node_name, __btf_name_by_offset(btf, member->name_off)))
+				continue;
+			/* Invalid BTF, two members with same name */
+			if (n) {
+				/* We also need to btf_put for the current iteration! */
+				i++;
+				goto end;
+			}
+			n = btf_type_by_id(btf, member->type);
+			if (!__btf_type_is_struct(n))
+				goto end;
+			if (strcmp("bpf_list_node", __btf_name_by_offset(btf, n->name_off)))
+				goto end;
+			offset = __btf_member_bit_offset(n, member);
+			if (offset % 8)
+				goto end;
+			offset /= 8;
+			if (offset % __alignof__(struct bpf_list_node))
+				goto end;
+
+			tab->off[i].offset = info_arr[i].off;
+			tab->off[i].type = BPF_LIST_HEAD;
+			btf_get(btf);
+			tab->off[i].list_head.btf = btf;
+			tab->off[i].list_head.value_type_id = info_arr[i].list_head.value_type_id;
+			tab->off[i].list_head.list_node_off = offset;
+		}
+		if (!n)
+			goto end;
+	}
+	tab->nr_off = nr_off;
+	return tab;
+end:
+	while (i--)
+		btf_put(tab->off[i].list_head.btf);
 	kfree(tab);
 	return ERR_PTR(ret);
 }

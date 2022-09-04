@@ -28,6 +28,9 @@
 #include <linux/btf.h>
 #include <linux/rcupdate_trace.h>
 
+/* Experimental BPF APIs header for type definitions */
+#include "../../../tools/testing/selftests/bpf/bpf_experimental.h"
+
 struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
@@ -164,27 +167,40 @@ struct bpf_map_ops {
 };
 
 enum {
-	/* Support at most 8 pointers in a BPF map value */
-	BPF_MAP_VALUE_OFF_MAX = 8,
-	BPF_MAP_OFF_ARR_MAX   = BPF_MAP_VALUE_OFF_MAX +
-				1 + /* for bpf_spin_lock */
-				1,  /* for bpf_timer */
+	/* Support at most 8 offsets in a table */
+	BPF_MAP_VALUE_OFF_MAX		= 8,
+	/* Support at most 8 pointer in a BPF map value */
+	BPF_MAP_VALUE_KPTR_MAX		= BPF_MAP_VALUE_OFF_MAX,
+	/* Support at most 8 list_head in a BPF map value */
+	BPF_MAP_VALUE_LIST_HEAD_MAX	= BPF_MAP_VALUE_OFF_MAX,
+	BPF_MAP_OFF_ARR_MAX		= BPF_MAP_VALUE_KPTR_MAX +
+					  BPF_MAP_VALUE_LIST_HEAD_MAX +
+					  1 + /* for bpf_spin_lock */
+					  1,  /* for bpf_timer */
 };
 
-enum bpf_kptr_type {
+enum bpf_off_type {
 	BPF_KPTR_UNREF,
 	BPF_KPTR_REF,
+	BPF_LIST_HEAD,
 };
 
 struct bpf_map_value_off_desc {
 	u32 offset;
-	enum bpf_kptr_type type;
-	struct {
-		struct btf *btf;
-		struct module *module;
-		btf_dtor_kfunc_t dtor;
-		u32 btf_id;
-	} kptr;
+	enum bpf_off_type type;
+	union {
+		struct {
+			struct btf *btf;
+			struct module *module;
+			btf_dtor_kfunc_t dtor;
+			u32 btf_id;
+		} kptr; /* for BPF_KPTR_{UNREF,REF} */
+		struct {
+			struct btf *btf;
+			u32 value_type_id;
+			u32 list_node_off;
+		} list_head; /* for BPF_LIST_HEAD */
+	};
 };
 
 struct bpf_map_value_off {
@@ -215,6 +231,7 @@ struct bpf_map {
 	u32 map_flags;
 	int spin_lock_off; /* >=0 valid offset, <0 error */
 	struct bpf_map_value_off *kptr_off_tab;
+	struct bpf_map_value_off *list_head_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
 	u32 id;
 	int numa_node;
@@ -265,6 +282,11 @@ static inline bool map_value_has_kptrs(const struct bpf_map *map)
 	return !IS_ERR_OR_NULL(map->kptr_off_tab);
 }
 
+static inline bool map_value_has_list_heads(const struct bpf_map *map)
+{
+	return !IS_ERR_OR_NULL(map->list_head_off_tab);
+}
+
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 {
 	if (unlikely(map_value_has_spin_lock(map)))
@@ -277,6 +299,13 @@ static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 
 		for (i = 0; i < tab->nr_off; i++)
 			*(u64 *)(dst + tab->off[i].offset) = 0;
+	}
+	if (unlikely(map_value_has_list_heads(map))) {
+		struct bpf_map_value_off *tab = map->list_head_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++)
+			memset(dst + tab->off[i].offset, 0, sizeof(struct list_head));
 	}
 }
 
@@ -1675,6 +1704,11 @@ void bpf_map_free_kptr_off_tab(struct bpf_map *map);
 struct bpf_map_value_off *bpf_map_copy_kptr_off_tab(const struct bpf_map *map);
 bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_map *map_b);
 void bpf_map_free_kptrs(struct bpf_map *map, void *map_value);
+
+struct bpf_map_value_off_desc *bpf_map_list_head_off_contains(struct bpf_map *map, u32 offset);
+void bpf_map_free_list_head_off_tab(struct bpf_map *map);
+struct bpf_map_value_off *bpf_map_copy_list_head_off_tab(const struct bpf_map *map);
+bool bpf_map_equal_list_head_off_tab(const struct bpf_map *map_a, const struct bpf_map *map_b);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);
