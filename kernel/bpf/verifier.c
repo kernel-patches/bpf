@@ -7755,10 +7755,14 @@ static u32 *reg2btf_ids[__BPF_REG_TYPE_MAX] = {
 
 BTF_ID_LIST(special_kfuncs)
 BTF_ID(func, bpf_kptr_alloc)
+BTF_ID(func, bpf_list_node_init)
+BTF_ID(struct, btf) /* empty entry */
 
 enum bpf_special_kfuncs {
 	KF_SPECIAL_bpf_kptr_alloc,
-	KF_SPECIAL_MAX,
+	KF_SPECIAL_bpf_list_node_init,
+	KF_SPECIAL_bpf_empty,
+	KF_SPECIAL_MAX = KF_SPECIAL_bpf_empty,
 };
 
 static bool __is_kfunc_special(const struct btf *btf, u32 func_id, unsigned int kf_sp)
@@ -7922,6 +7926,7 @@ static int process_kf_arg_ptr_to_kptr_strong(struct bpf_verifier_env *env,
 
 struct local_type_field {
 	enum {
+		FIELD_bpf_list_node,
 		FIELD_MAX,
 	} type;
 	enum bpf_special_kfuncs ctor_kfunc;
@@ -7944,9 +7949,34 @@ static int local_type_field_cmp(const void *a, const void *b)
 
 static int find_local_type_fields(const struct btf *btf, u32 btf_id, struct local_type_field *fields)
 {
-	/* XXX: Fill the fields when support is added */
-	sort(fields, FIELD_MAX, sizeof(fields[0]), local_type_field_cmp, NULL);
-	return FIELD_MAX;
+	const struct btf_type *t;
+	int cnt = 0, ret;
+	u32 offset;
+
+	t = btf_type_by_id(btf, btf_id);
+	if (!t)
+		return -ENOENT;
+
+#define FILL_LOCAL_TYPE_FIELD(ftype, ctor, dtor, nd)        \
+	ret = btf_local_type_has_##ftype(btf, t, &offset);  \
+	if (ret < 0)                                        \
+		return ret;                                 \
+	if (ret) {                                          \
+		fields[cnt].type = FIELD_##ftype;           \
+		fields[cnt].ctor_kfunc = KF_SPECIAL_##ctor; \
+		fields[cnt].dtor_kfunc = KF_SPECIAL_##dtor; \
+		fields[cnt].name = #ftype;                  \
+		fields[cnt].offset = offset;                \
+		fields[cnt].needs_destruction = nd;         \
+		cnt++;                                      \
+	}
+
+	FILL_LOCAL_TYPE_FIELD(bpf_list_node, bpf_list_node_init, bpf_empty, false);
+
+#undef FILL_LOCAL_TYPE_FIELD
+
+	sort(fields, cnt, sizeof(fields[0]), local_type_field_cmp, NULL);
+	return cnt;
 }
 
 static int
@@ -8439,10 +8469,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			 * setting of this flag.
 			 */
 			regs[BPF_REG_0].type |= MEM_TYPE_LOCAL;
-			/* TODO: Recognize special fields in local type aand
-			 * force their construction before pointer escapes by
-			 * setting OBJ_CONSTRUCTING.
+			/* Recognize special fields in local type and force
+			 * their construction before pointer escapes by setting
+			 * OBJ_CONSTRUCTING.
 			 */
+			if (btf_local_type_has_special_fields(ret_btf, ret_t))
+				regs[BPF_REG_0].type |= OBJ_CONSTRUCTING;
 		} else {
 			if (!btf_type_is_struct(ptr_type)) {
 				ptr_type_name = btf_name_by_offset(desc_btf, ptr_type->name_off);

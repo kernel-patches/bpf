@@ -32,4 +32,13 @@ struct bpf_list_node {
  */
 void *bpf_kptr_alloc(__u64 local_type_id, __u64 flags) __ksym;
 
+/* Description
+ *	Initialize bpf_list_node field in a local kptr. This kfunc has
+ *	constructor semantics, and thus can only be called on a local kptr in
+ *	'constructing' phase.
+ * Returns
+ *	Void.
+ */
+void bpf_list_node_init(struct bpf_list_node *node) __ksym;
+
 #endif

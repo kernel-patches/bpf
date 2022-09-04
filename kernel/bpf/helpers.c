@@ -1710,6 +1710,13 @@ void *bpf_kptr_alloc(u64 local_type_id__k, u64 flags)
 	return kmalloc(size, GFP_ATOMIC);
 }
 
+void bpf_list_node_init(struct bpf_list_node *node__clkptr)
+{
+	BUILD_BUG_ON(sizeof(struct bpf_list_node) != sizeof(struct list_head));
+	BUILD_BUG_ON(__alignof__(struct bpf_list_node) != __alignof__(struct list_head));
+	INIT_LIST_HEAD((struct list_head *)node__clkptr);
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1717,6 +1724,7 @@ BTF_SET8_START(tracing_btf_ids)
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
 BTF_ID_FLAGS(func, bpf_kptr_alloc, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
+BTF_ID_FLAGS(func, bpf_list_node_init)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

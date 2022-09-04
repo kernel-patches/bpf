@@ -3186,6 +3186,7 @@ enum btf_field_type {
 	BTF_FIELD_TIMER,
 	BTF_FIELD_KPTR,
 	BTF_FIELD_LIST_HEAD,
+	BTF_FIELD_LIST_NODE,
 };
 
 enum {
@@ -3319,8 +3320,8 @@ static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
 }
 
 static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t,
-				 const char *name, int sz, int align,
-				 enum btf_field_type field_type,
+				 const char *name, const char *decl_tag, int sz,
+				 int align, enum btf_field_type field_type,
 				 struct btf_field_info *info, int info_cnt)
 {
 	const struct btf_member *member;
@@ -3334,6 +3335,8 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 
 		if (name && strcmp(__btf_name_by_offset(btf, member_type->name_off), name))
 			continue;
+		if (decl_tag && !btf_find_decl_tag_value(btf, t, i, decl_tag))
+			continue;
 
 		off = __btf_member_bit_offset(t, member);
 		if (off % 8)
@@ -3346,6 +3349,7 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 		switch (field_type) {
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
+		case BTF_FIELD_LIST_NODE:
 			ret = btf_find_struct(btf, member_type, off, sz,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3377,8 +3381,8 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 }
 
 static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
-				const char *name, int sz, int align,
-				enum btf_field_type field_type,
+				const char *name, const char *decl_tag, int sz,
+				int align, enum btf_field_type field_type,
 				struct btf_field_info *info, int info_cnt)
 {
 	const struct btf_var_secinfo *vsi;
@@ -3394,6 +3398,8 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 
 		if (name && strcmp(__btf_name_by_offset(btf, var_type->name_off), name))
 			continue;
+		if (decl_tag && !btf_find_decl_tag_value(btf, t, i, decl_tag))
+			continue;
 		if (vsi->size != sz)
 			continue;
 		if (off % align)
@@ -3402,6 +3408,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		switch (field_type) {
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
+		case BTF_FIELD_LIST_NODE:
 			ret = btf_find_struct(btf, var_type, off, sz,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3433,7 +3440,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 }
 
 static int btf_find_field(const struct btf *btf, const struct btf_type *t,
-			  enum btf_field_type field_type,
+			  enum btf_field_type field_type, const char *decl_tag,
 			  struct btf_field_info *info, int info_cnt)
 {
 	const char *name;
@@ -3460,14 +3467,19 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 		sz = sizeof(struct bpf_list_head);
 		align = __alignof__(struct bpf_list_head);
 		break;
+	case BTF_FIELD_LIST_NODE:
+		name = "bpf_list_node";
+		sz = sizeof(struct bpf_list_node);
+		align = __alignof__(struct bpf_list_node);
+		break;
 	default:
 		return -EFAULT;
 	}
 
 	if (__btf_type_is_struct(t))
-		return btf_find_struct_field(btf, t, name, sz, align, field_type, info, info_cnt);
+		return btf_find_struct_field(btf, t, name, decl_tag, sz, align, field_type, info, info_cnt);
 	else if (btf_type_is_datasec(t))
-		return btf_find_datasec_var(btf, t, name, sz, align, field_type, info, info_cnt);
+		return btf_find_datasec_var(btf, t, name, decl_tag, sz, align, field_type, info, info_cnt);
 	return -EINVAL;
 }
 
@@ -3480,7 +3492,7 @@ int btf_find_spin_lock(const struct btf *btf, const struct btf_type *t)
 	struct btf_field_info info;
 	int ret;
 
-	ret = btf_find_field(btf, t, BTF_FIELD_SPIN_LOCK, &info, 1);
+	ret = btf_find_field(btf, t, BTF_FIELD_SPIN_LOCK, NULL, &info, 1);
 	if (ret < 0)
 		return ret;
 	if (!ret)
@@ -3493,7 +3505,7 @@ int btf_find_timer(const struct btf *btf, const struct btf_type *t)
 	struct btf_field_info info;
 	int ret;
 
-	ret = btf_find_field(btf, t, BTF_FIELD_TIMER, &info, 1);
+	ret = btf_find_field(btf, t, BTF_FIELD_TIMER, NULL, &info, 1);
 	if (ret < 0)
 		return ret;
 	if (!ret)
@@ -3510,7 +3522,7 @@ struct bpf_map_value_off *btf_parse_kptrs(const struct btf *btf,
 	struct module *mod = NULL;
 	int ret, i, nr_off;
 
-	ret = btf_find_field(btf, t, BTF_FIELD_KPTR, info_arr, ARRAY_SIZE(info_arr));
+	ret = btf_find_field(btf, t, BTF_FIELD_KPTR, NULL, info_arr, ARRAY_SIZE(info_arr));
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (!ret)
@@ -3609,7 +3621,7 @@ struct bpf_map_value_off *btf_parse_list_heads(struct btf *btf, const struct btf
 	struct bpf_map_value_off *tab;
 	int ret, i, nr_off;
 
-	ret = btf_find_field(btf, t, BTF_FIELD_LIST_HEAD, info_arr, ARRAY_SIZE(info_arr));
+	ret = btf_find_field(btf, t, BTF_FIELD_LIST_HEAD, NULL, info_arr, ARRAY_SIZE(info_arr));
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (!ret)
@@ -5916,6 +5928,37 @@ error:
 	return -EINVAL;
 }
 
+static int btf_find_local_type_field(const struct btf *btf,
+				     const struct btf_type *t,
+				     enum btf_field_type type,
+				     u32 *offsetp)
+{
+	struct btf_field_info info;
+	int ret;
+
+	/* These are invariants that must hold if this is a local type */
+	WARN_ON_ONCE(btf_is_kernel(btf) || !__btf_type_is_struct(t));
+	ret = btf_find_field(btf, t, type, "kernel", &info, 1);
+	if (ret < 0)
+		return ret;
+	if (!ret)
+		return 0;
+	if (offsetp)
+		*offsetp = info.off;
+	return ret;
+}
+
+int btf_local_type_has_bpf_list_node(const struct btf *btf,
+				     const struct btf_type *t, u32 *offsetp)
+{
+	return btf_find_local_type_field(btf, t, BTF_FIELD_LIST_NODE, offsetp);
+}
+
+bool btf_local_type_has_special_fields(const struct btf *btf, const struct btf_type *t)
+{
+	return btf_local_type_has_bpf_list_node(btf, t, NULL) == 1;
+}
+
 int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 		      const struct btf_type *t, int off, int size,
 		      enum bpf_access_type atype __maybe_unused,
@@ -5925,6 +5968,27 @@ int btf_struct_access(struct bpf_verifier_log *log, const struct btf *btf,
 	enum bpf_type_flag tmp_flag = 0;
 	int err;
 	u32 id;
+
+	if (local_type) {
+		u32 offset;
+
+#define PREVENT_DIRECT_WRITE(field)							\
+	err = btf_local_type_has_##field(btf, t, &offset);				\
+	if (err < 0) {									\
+		bpf_log(log, "incorrect " #field " specification in local type\n");	\
+		return err;								\
+	}										\
+	if (err) {									\
+		if (off < offset + sizeof(struct field) && offset < off + size) {	\
+			bpf_log(log, "direct access to " #field " is disallowed\n");	\
+			return -EACCES;							\
+		}									\
+	}
+		PREVENT_DIRECT_WRITE(bpf_list_node);
+
+#undef PREVENT_DIRECT_WRITE
+		err = 0;
+	}
 
 	do {
 		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag);
