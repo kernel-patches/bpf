@@ -1696,10 +1696,27 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 	}
 }
 
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "Global functions as their definitions will be in vmlinux BTF");
+
+void *bpf_kptr_alloc(u64 local_type_id__k, u64 flags)
+{
+	/* Verifier patches local_type_id__k to size */
+	u64 size = local_type_id__k;
+
+	if (flags)
+		return NULL;
+	return kmalloc(size, GFP_ATOMIC);
+}
+
+__diag_pop();
+
 BTF_SET8_START(tracing_btf_ids)
 #ifdef CONFIG_KEXEC_CORE
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
+BTF_ID_FLAGS(func, bpf_kptr_alloc, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

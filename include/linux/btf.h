@@ -52,6 +52,9 @@
 #define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
 #define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
 
+/* Internal kfunc flags, not meant for general use */
+#define __KF_RET_DYN_BTF (1 << 7) /* kfunc returns dynamically ascertained PTR_TO_BTF_ID */
+
 struct btf;
 struct btf_member;
 struct btf_type;

@@ -472,6 +472,11 @@ static bool type_may_be_null(u32 type)
 	return type & PTR_MAYBE_NULL;
 }
 
+static bool type_is_local(u32 type)
+{
+	return type & MEM_TYPE_LOCAL;
+}
+
 static bool is_acquire_function(enum bpf_func_id func_id,
 				const struct bpf_map *map)
 {
@@ -4556,17 +4561,22 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (env->ops->btf_struct_access) {
+	/* For allocated PTR_TO_BTF_ID pointing to a local type, we cannot do
+	 * btf_struct_access callback.
+	 */
+	if (env->ops->btf_struct_access && !type_is_local(reg->type)) {
 		ret = env->ops->btf_struct_access(&env->log, reg->btf, t,
-						  off, size, atype, &btf_id, &flag);
+						  off, size, atype, &btf_id, &flag,
+						  false);
 	} else {
-		if (atype != BPF_READ) {
+		/* It is allowed to write to pointer to a local type */
+		if (atype != BPF_READ && !type_is_local(reg->type)) {
 			verbose(env, "only read is supported\n");
 			return -EACCES;
 		}
 
 		ret = btf_struct_access(&env->log, reg->btf, t, off, size,
-					atype, &btf_id, &flag);
+					atype, &btf_id, &flag, type_is_local(reg->type));
 	}
 
 	if (ret < 0)
@@ -4630,7 +4640,7 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	ret = btf_struct_access(&env->log, btf_vmlinux, t, off, size, atype, &btf_id, &flag);
+	ret = btf_struct_access(&env->log, btf_vmlinux, t, off, size, atype, &btf_id, &flag, false);
 	if (ret < 0)
 		return ret;
 
@@ -7661,6 +7671,11 @@ static bool is_kfunc_destructive(struct bpf_kfunc_arg_meta *meta)
 	return meta->kfunc_flags & KF_DESTRUCTIVE;
 }
 
+static bool __is_kfunc_ret_dyn_btf(struct bpf_kfunc_arg_meta *meta)
+{
+	return meta->kfunc_flags & __KF_RET_DYN_BTF;
+}
+
 static bool is_kfunc_arg_kptr_get(struct bpf_kfunc_arg_meta *meta, int arg)
 {
 	return arg == 0 && (meta->kfunc_flags & KF_KPTR_GET);
@@ -7750,6 +7765,24 @@ static u32 *reg2btf_ids[__BPF_REG_TYPE_MAX] = {
 	[PTR_TO_TCP_SOCK] = &btf_sock_ids[BTF_SOCK_TYPE_TCP],
 #endif
 };
+
+BTF_ID_LIST(special_kfuncs)
+BTF_ID(func, bpf_kptr_alloc)
+
+enum bpf_special_kfuncs {
+	KF_SPECIAL_bpf_kptr_alloc,
+	KF_SPECIAL_MAX,
+};
+
+static bool __is_kfunc_special(const struct btf *btf, u32 func_id, unsigned int kf_sp)
+{
+	if (btf != btf_vmlinux || kf_sp >= KF_SPECIAL_MAX)
+		return false;
+	return func_id == special_kfuncs[kf_sp];
+}
+
+#define is_kfunc_special(btf, func_id, func_name) \
+	__is_kfunc_special(btf, func_id, KF_SPECIAL_##func_name)
 
 enum kfunc_ptr_arg_types {
 	KF_ARG_PTR_TO_CTX,
@@ -8120,20 +8153,55 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		mark_reg_unknown(env, regs, BPF_REG_0);
 		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
 	} else if (btf_type_is_ptr(t)) {
-		ptr_type = btf_type_skip_modifiers(desc_btf, t->type,
-						   &ptr_type_id);
-		if (!btf_type_is_struct(ptr_type)) {
-			ptr_type_name = btf_name_by_offset(desc_btf,
-							   ptr_type->name_off);
-			verbose(env, "kernel function %s returns pointer type %s %s is not supported\n",
-				func_name, btf_type_str(ptr_type),
-				ptr_type_name);
-			return -EINVAL;
-		}
+		struct btf *ret_btf;
+		u32 ret_btf_id;
+
+		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 		mark_reg_known_zero(env, regs, BPF_REG_0);
-		regs[BPF_REG_0].btf = desc_btf;
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID;
-		regs[BPF_REG_0].btf_id = ptr_type_id;
+
+		if (__is_kfunc_ret_dyn_btf(&meta)) {
+			const struct btf_type *ret_t;
+
+			/* Currently, only bpf_kptr_alloc needs special handling */
+			if (!is_kfunc_special(meta.btf, meta.func_id, bpf_kptr_alloc) ||
+			    !meta.arg_constant.found || !btf_type_is_void(ptr_type)) {
+				verbose(env, "verifier internal error: misconfigured kfunc\n");
+				return -EFAULT;
+			}
+
+			if (((u64)(u32)meta.arg_constant.value) != meta.arg_constant.value) {
+				verbose(env, "local type ID argument must be in range [0, U32_MAX]\n");
+				return -EINVAL;
+			}
+
+			ret_btf = env->prog->aux->btf;
+			ret_btf_id = meta.arg_constant.value;
+
+			ret_t = btf_type_by_id(ret_btf, ret_btf_id);
+			if (!ret_t || !__btf_type_is_struct(ret_t)) {
+				verbose(env, "local type ID %d passed to bpf_kptr_alloc does not refer to struct\n",
+					ret_btf_id);
+				return -EINVAL;
+			}
+			/* Remember this so that we can rewrite R1 as size in fixup_kfunc_call */
+			env->insn_aux_data[insn_idx].kptr_alloc_size = ret_t->size;
+			/* For now, since we hardcode prog->btf, also hardcode
+			 * setting of this flag.
+			 */
+			regs[BPF_REG_0].type |= MEM_TYPE_LOCAL;
+		} else {
+			if (!btf_type_is_struct(ptr_type)) {
+				ptr_type_name = btf_name_by_offset(desc_btf, ptr_type->name_off);
+				verbose(env, "kernel function %s returns pointer type %s %s is not supported\n",
+					func_name, btf_type_str(ptr_type), ptr_type_name);
+				return -EINVAL;
+			}
+			ret_btf = desc_btf;
+			ret_btf_id = ptr_type_id;
+		}
+		regs[BPF_REG_0].btf = ret_btf;
+		regs[BPF_REG_0].btf_id = ret_btf_id;
 		if (is_kfunc_ret_null(&meta)) {
 			regs[BPF_REG_0].type |= PTR_MAYBE_NULL;
 			/* For mark_ptr_or_null_reg, see 93c230e3f5bd6 */
@@ -14371,8 +14439,43 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 	return err;
 }
 
+static int do_kfunc_fixups(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			   s32 imm, int insn_idx, int delta)
+{
+	struct bpf_insn insn_buf[16];
+	struct bpf_prog *new_prog;
+	int cnt;
+
+	/* No need to lookup btf, only vmlinux kfuncs are supported for special
+	 * kfuncs handling. Hence when insn->off is zero, check if it is a
+	 * special kfunc by hardcoding btf as btf_vmlinux.
+	 */
+	if (!insn->off && is_kfunc_special(btf_vmlinux, insn->imm, bpf_kptr_alloc)) {
+		u64 local_type_size = env->insn_aux_data[insn_idx + delta].kptr_alloc_size;
+
+		insn_buf[0] = BPF_MOV64_IMM(BPF_REG_1, local_type_size);
+		insn_buf[1] = *insn;
+		cnt = 2;
+
+		new_prog = bpf_patch_insn_data(env, insn_idx + delta, insn_buf, cnt);
+		if (!new_prog)
+			return -ENOMEM;
+
+		delta += cnt - 1;
+		insn = new_prog->insnsi + insn_idx + delta;
+		goto patch_call_imm;
+	}
+
+	insn->imm = imm;
+	return 0;
+patch_call_imm:
+	insn->imm = imm;
+	return cnt - 1;
+}
+
 static int fixup_kfunc_call(struct bpf_verifier_env *env,
-			    struct bpf_insn *insn)
+			    struct bpf_insn *insn,
+			    int insn_idx, int delta)
 {
 	const struct bpf_kfunc_desc *desc;
 
@@ -14391,9 +14494,7 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env,
 		return -EFAULT;
 	}
 
-	insn->imm = desc->imm;
-
-	return 0;
+	return do_kfunc_fixups(env, insn, desc->imm, insn_idx, delta);
 }
 
 /* Do various post-verification rewrites in a single program pass.
@@ -14534,9 +14635,18 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			ret = fixup_kfunc_call(env, insn);
-			if (ret)
+			ret = fixup_kfunc_call(env, insn, i, delta);
+			if (ret < 0)
 				return ret;
+			/* If ret > 0, fixup_kfunc_call did some instruction
+			 * rewrites. Increment delta, reload prog and insn,
+			 * env->prog is already set by it to the new_prog.
+			 */
+			if (ret) {
+				delta += ret;
+				prog = env->prog;
+				insn = prog->insnsi + i + delta;
+			}
 			continue;
 		}
 

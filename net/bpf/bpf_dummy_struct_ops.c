@@ -160,7 +160,8 @@ static int bpf_dummy_ops_btf_struct_access(struct bpf_verifier_log *log,
 					   const struct btf_type *t, int off,
 					   int size, enum bpf_access_type atype,
 					   u32 *next_btf_id,
-					   enum bpf_type_flag *flag)
+					   enum bpf_type_flag *flag,
+					   bool local_type)
 {
 	const struct btf_type *state;
 	s32 type_id;
@@ -178,7 +179,7 @@ static int bpf_dummy_ops_btf_struct_access(struct bpf_verifier_log *log,
 	}
 
 	err = btf_struct_access(log, btf, t, off, size, atype, next_btf_id,
-				flag);
+				flag, false);
 	if (err < 0)
 		return err;
 
