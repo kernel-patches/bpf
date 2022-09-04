@@ -1733,6 +1733,7 @@ void bpf_map_free_kptr_off_tab(struct bpf_map *map);
 struct bpf_map_value_off *bpf_map_copy_kptr_off_tab(const struct bpf_map *map);
 bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_map *map_b);
 void bpf_map_free_kptrs(struct bpf_map *map, void *map_value);
+void bpf_free_local_kptr_list_head(struct list_head *list, u32 list_node_off);
 
 struct bpf_map_value_off_desc *bpf_map_list_head_off_contains(struct bpf_map *map, u32 offset);
 void bpf_map_free_list_head_off_tab(struct bpf_map *map);

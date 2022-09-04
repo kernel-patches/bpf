@@ -7911,6 +7911,7 @@ BTF_ID(func, bpf_list_add_tail)
 BTF_ID(func, bpf_list_del)
 BTF_ID(func, bpf_list_pop_front)
 BTF_ID(func, bpf_list_pop_back)
+BTF_ID(func, bpf_list_head_fini)
 BTF_ID(struct, btf) /* empty entry */
 
 enum bpf_special_kfuncs {
@@ -7924,6 +7925,7 @@ enum bpf_special_kfuncs {
 	KF_SPECIAL_bpf_list_del,
 	KF_SPECIAL_bpf_list_pop_front,
 	KF_SPECIAL_bpf_list_pop_back,
+	KF_SPECIAL_bpf_list_head_fini,
 	KF_SPECIAL_bpf_empty,
 	KF_SPECIAL_MAX = KF_SPECIAL_bpf_empty,
 };
@@ -8156,7 +8158,7 @@ static int find_local_type_fields(const struct btf *btf, u32 btf_id, struct loca
 
 	FILL_LOCAL_TYPE_FIELD(bpf_list_node, bpf_list_node_init, bpf_empty, false);
 	FILL_LOCAL_TYPE_FIELD(bpf_spin_lock, bpf_spin_lock_init, bpf_empty, false);
-	FILL_LOCAL_TYPE_FIELD(bpf_list_head, bpf_list_head_init, bpf_empty, true);
+	FILL_LOCAL_TYPE_FIELD(bpf_list_head, bpf_list_head_init, bpf_list_head_fini, true);
 
 #undef FILL_LOCAL_TYPE_FIELD
 
@@ -8391,6 +8393,19 @@ process_kf_arg_destructing_local_kptr(struct bpf_verifier_env *env,
 			if (mark_dtor)
 				ireg->type |= OBJ_DESTRUCTING;
 		}));
+
+		/* Stash the list_node offset in value type of the
+		 * bpf_list_head, so that offset of node in next argument can be
+		 * checked for bpf_list_head_fini.
+		 */
+		if (fields[i].type == FIELD_bpf_list_head) {
+			ret = __btf_local_type_has_bpf_list_head(reg->btf, btf_type_by_id(reg->btf, reg->btf_id),
+								 NULL, NULL, &meta->list_node.off);
+			if (ret <= 0) {
+				verbose(env, "verifier internal error: bpf_list_head not found\n");
+				return -EFAULT;
+			}
+		}
 		return 0;
 	}
 	verbose(env, "no destructible field at offset: %d\n", reg->off);
@@ -8873,6 +8888,15 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_arg_m
 		verbose(env, "release kernel function %s expects refcounted PTR_TO_BTF_ID\n",
 			func_name);
 		return -EINVAL;
+	}
+
+	/* Special semantic checks for some functions */
+	if (is_kfunc_special(meta->btf, meta->func_id, bpf_list_head_fini)) {
+		if (!meta->arg_constant.found || meta->list_node.off != meta->arg_constant.value) {
+			verbose(env, "arg#1 to bpf_list_head_fini must be constant %d\n",
+				meta->list_node.off);
+			return -EINVAL;
+		}
 	}
 
 	return 0;

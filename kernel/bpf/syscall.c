@@ -590,12 +590,31 @@ bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_ma
 				       map_value_has_kptrs(map_b));
 }
 
+void bpf_free_local_kptr_list_head(struct list_head *list, u32 list_node_off)
+{
+	struct list_head *olist;
+	void *entry;
+
+	/* List elements for bpf_list_head in local kptr cannot have
+	 * bpf_list_head again. Hence, just iterate and kfree them.
+	 */
+	olist = list;
+	list = list->next;
+	if (!list)
+		goto init;
+	while (list != olist) {
+		entry = list - list_node_off;
+		list = list->next;
+		kfree(entry);
+	}
+init:
+	INIT_LIST_HEAD(olist);
+}
+
 static void bpf_free_local_kptr(const struct btf *btf, u32 btf_id, void *kptr)
 {
-	struct list_head *list, *olist;
-	u32 offset, list_node_off;
+	u32 list_head_off, list_node_off;
 	const struct btf_type *t;
-	void *entry;
 	int ret;
 
 	if (!kptr)
@@ -613,19 +632,13 @@ static void bpf_free_local_kptr(const struct btf *btf, u32 btf_id, void *kptr)
 	 * do quick lookups into it. Instead of offset, table would be keyed by
 	 * btf_id.
 	 */
-	ret = __btf_local_type_has_bpf_list_head(btf, t, &offset, NULL, &list_node_off);
+	ret = __btf_local_type_has_bpf_list_head(btf, t, &list_head_off, NULL, &list_node_off);
 	if (ret <= 0)
 		goto free_kptr;
 	/* List elements for bpf_list_head in local kptr cannot have
-	 * bpf_list_head again. Hence, just iterate and kfree them.
-	 */
-	olist = list = kptr + offset;
-	list = list->next;
-	while (list != olist) {
-		entry = list - list_node_off;
-		list = list->next;
-		kfree(entry);
-	}
+         * bpf_list_head again. Hence, just iterate and kfree them.
+         */
+	bpf_free_local_kptr_list_head(kptr + list_head_off, list_node_off);
 free_kptr:
 	kfree(kptr);
 }

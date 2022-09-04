@@ -102,4 +102,15 @@ struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head) __ksym;
  */
 struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head) __ksym;
 
+/* Description
+ *	Destruct bpf_list_head field in a local kptr. This kfunc has destructor
+ *	semantics, and marks local kptr as destructing if it isn't already.
+ *
+ *	Note that value_node_offset is the offset of bpf_list_node inside the
+ *	value type of local kptr's bpf_list_head. It must be a known constant.
+ * Returns
+ *	Void.
+ */
+void bpf_list_head_fini(struct bpf_list_head *node, u64 value_node_offset) __ksym;
+
 #endif

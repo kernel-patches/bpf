@@ -1800,6 +1800,11 @@ struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head)
 	return (struct bpf_list_node *)node;
 }
 
+void bpf_list_head_fini(struct bpf_list_head *head__dlkptr, u64 node_off__k)
+{
+	bpf_free_local_kptr_list_head((struct list_head *)head__dlkptr, node_off__k);
+}
+
 __diag_pop();
 
 BTF_SET8_START(tracing_btf_ids)
@@ -1816,6 +1821,7 @@ BTF_ID_FLAGS(func, bpf_list_add_tail)
 BTF_ID_FLAGS(func, bpf_list_del)
 BTF_ID_FLAGS(func, bpf_list_pop_front, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
 BTF_ID_FLAGS(func, bpf_list_pop_back, KF_ACQUIRE | KF_RET_NULL | __KF_RET_DYN_BTF)
+BTF_ID_FLAGS(func, bpf_list_head_fini)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {
