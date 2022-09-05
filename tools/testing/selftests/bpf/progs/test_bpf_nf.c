@@ -23,6 +23,8 @@ int test_insert_entry = -EAFNOSUPPORT;
 int test_succ_lookup = -ENOENT;
 u32 test_delta_timeout = 0;
 u32 test_status = 0;
+int test_snat_addr = -EINVAL;
+int test_dnat_addr = -EINVAL;
 __be32 saddr = 0;
 __be16 sport = 0;
 __be32 daddr = 0;
@@ -53,6 +55,8 @@ void bpf_ct_set_timeout(struct nf_conn *, u32) __ksym;
 int bpf_ct_change_timeout(struct nf_conn *, u32) __ksym;
 int bpf_ct_set_status(struct nf_conn *, u32) __ksym;
 int bpf_ct_change_status(struct nf_conn *, u32) __ksym;
+int bpf_ct_set_nat_info(struct nf_conn *, union nf_inet_addr *,
+			__be16 *port, enum nf_nat_manip_type) __ksym;
 
 static __always_inline void
 nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
@@ -140,10 +144,19 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 	ct = alloc_fn(ctx, &bpf_tuple, sizeof(bpf_tuple.ipv4), &opts_def,
 		      sizeof(opts_def));
 	if (ct) {
+		__be16 sport = bpf_get_prandom_u32();
+		__be16 dport = bpf_get_prandom_u32();
+		union nf_inet_addr saddr = {};
+		union nf_inet_addr daddr = {};
 		struct nf_conn *ct_ins;
 
 		bpf_ct_set_timeout(ct, 10000);
-		bpf_ct_set_status(ct, IPS_CONFIRMED);
+		/* snat */
+		saddr.ip = bpf_get_prandom_u32();
+		bpf_ct_set_nat_info(ct, &saddr, &sport, NF_NAT_MANIP_SRC);
+		/* dnat */
+		daddr.ip = bpf_get_prandom_u32();
+		bpf_ct_set_nat_info(ct, &daddr, &dport, NF_NAT_MANIP_DST);
 
 		ct_ins = bpf_ct_insert_entry(ct);
 		if (ct_ins) {
@@ -152,6 +165,17 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 			ct_lk = lookup_fn(ctx, &bpf_tuple, sizeof(bpf_tuple.ipv4),
 					  &opts_def, sizeof(opts_def));
 			if (ct_lk) {
+				struct nf_conntrack_tuple *tuple;
+
+				/* check snat and dnat addresses */
+				tuple = &ct_lk->tuplehash[IP_CT_DIR_REPLY].tuple;
+				if (tuple->dst.u3.ip == saddr.ip &&
+				    tuple->dst.u.all == sport)
+					test_snat_addr = 0;
+				if (tuple->src.u3.ip == daddr.ip &&
+				    tuple->src.u.all == dport)
+					test_dnat_addr = 0;
+
 				/* update ct entry timeout */
 				bpf_ct_change_timeout(ct_lk, 10000);
 				test_delta_timeout = ct_lk->timeout - bpf_jiffies64();
