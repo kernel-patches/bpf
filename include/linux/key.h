@@ -88,6 +88,12 @@ enum key_need_perm {
 	KEY_DEFER_PERM_CHECK,	/* Special: permission check is deferred */
 };
 
+enum key_lookup_flag {
+	KEY_LOOKUP_CREATE = 0x01,	/* Create special keyrings if they don't exist */
+	KEY_LOOKUP_PARTIAL = 0x02,	/* Permit partially constructed keys to be found */
+	KEY_LOOKUP_ALL = (KEY_LOOKUP_CREATE | KEY_LOOKUP_PARTIAL), /* OR of previous flags */
+};
+
 struct seq_file;
 struct user_struct;
 struct signal_struct;
