@@ -20,17 +20,104 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <bfd.h>
-#include <dis-asm.h>
 #include <sys/stat.h>
 #include <limits.h>
 #include <bpf/libbpf.h>
+
+#ifdef HAVE_LLVM_SUPPORT
+#include <llvm-c/Core.h>
+#include <llvm-c/Disassembler.h>
+#include <llvm-c/Target.h>
+#include <llvm-c/TargetMachine.h>
+#endif
+
+#ifdef HAVE_LIBBFD_SUPPORT
+#include <bfd.h>
+#include <dis-asm.h>
 #include <tools/dis-asm-compat.h>
+#endif
 
 #include "json_writer.h"
 #include "main.h"
 
 static int oper_count;
+
+#ifdef HAVE_LLVM_SUPPORT
+#define DISASM_SPACER
+
+typedef LLVMDisasmContextRef disasm_ctx_t;
+
+static int printf_json(char *s)
+{
+	s = strtok(s, " \t");
+	jsonw_string_field(json_wtr, "operation", s);
+
+	jsonw_name(json_wtr, "operands");
+	jsonw_start_array(json_wtr);
+	oper_count = 1;
+
+	while ((s = strtok(NULL, " \t,()")) != 0) {
+		jsonw_string(json_wtr, s);
+		oper_count++;
+	}
+	return 0;
+}
+
+static int
+init_context(disasm_ctx_t *ctx, const char *arch,
+	     __maybe_unused const char *disassembler_options,
+	     __maybe_unused unsigned char *image, __maybe_unused ssize_t len)
+{
+	char *triple;
+
+	if (arch) {
+		p_err("Architecture %s not supported", arch);
+		return -1;
+	}
+
+	triple = LLVMGetDefaultTargetTriple();
+	*ctx = LLVMCreateDisasm(triple, NULL, 0, NULL, NULL);
+	LLVMDisposeMessage(triple);
+
+	if (!*ctx) {
+		p_err("Failed to create disassembler");
+		return -1;
+	}
+
+	return 0;
+}
+
+static void destroy_context(disasm_ctx_t *ctx)
+{
+	LLVMDisposeMessage(*ctx);
+}
+
+static int
+disassemble_insn(disasm_ctx_t *ctx, unsigned char *image, ssize_t len, int pc)
+{
+	char buf[256];
+	int count;
+
+	count = LLVMDisasmInstruction(*ctx, image + pc, len - pc, pc,
+				      buf, sizeof(buf));
+	if (json_output)
+		printf_json(buf);
+	else
+		printf("%s", buf);
+
+	return count;
+}
+
+int disasm_init(void)
+{
+	LLVMInitializeNativeTarget();
+	LLVMInitializeNativeDisassembler();
+	return 0;
+}
+#endif /* HAVE_LLVM_SUPPORT */
+
+#ifdef HAVE_LIBBFD_SUPPORT
+#define DISASM_SPACER "\t"
 
 typedef struct {
 	struct disassemble_info *info;
@@ -210,6 +297,7 @@ int disasm_init(void)
 	bfd_init();
 	return 0;
 }
+#endif /* HAVE_LIBBPFD_SUPPORT */
 
 int disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
 		      const char *arch, const char *disassembler_options,
@@ -252,7 +340,7 @@ int disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
 			if (linfo)
 				btf_dump_linfo_plain(btf, linfo, "; ",
 						     linum);
-			printf("%4x:\t", pc);
+			printf("%4x:" DISASM_SPACER, pc);
 		}
 
 		count = disassemble_insn(&ctx, image, len, pc);
