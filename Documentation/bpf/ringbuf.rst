@@ -124,7 +124,7 @@ buffer.  Currently 4 are supported:
 
 - ``BPF_RB_AVAIL_DATA`` returns amount of unconsumed data in ring buffer;
 - ``BPF_RB_RING_SIZE`` returns the size of ring buffer;
-- ``BPF_RB_CONS_POS``/``BPF_RB_PROD_POS`` returns current logical possition
+- ``BPF_RB_CONS_POS``/``BPF_RB_PROD_POS`` returns current logical position
   of consumer/producer, respectively.
 
 Returned values are momentarily snapshots of ring buffer state and could be
@@ -204,3 +204,19 @@ buffer. For extreme cases, when BPF program wants more manual control of
 notifications, commit/discard/output helpers accept ``BPF_RB_NO_WAKEUP`` and
 ``BPF_RB_FORCE_WAKEUP`` flags, which give full control over notifications of
 data availability, but require extra caution and diligence in using this API.
+
+Specific case of overwritable ring buffer
+-----------------------------------------
+
+Using ``BFP_F_RB_OVERWRITABLE`` when creating the ring buffer will make it
+overwritable.
+As a consequence, the producers will never be stopped from writing data, *i.e.*
+in this mode ``bpf_ringbuf_reserve()`` never blocks and returns NULL, but oldest
+events will be replaced by newest ones.
+
+In terms of implementation, this feature uses the same logic than overwritable
+perf ring buffer.
+The ring buffer is written backward, while it should be read forward from the
+producer position.
+As a consequence, in this mode, the consumer position has no meaning and can be
+used freely by userspace implementation.
