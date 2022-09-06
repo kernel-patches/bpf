@@ -1,0 +1,147 @@
+From e4b95b1f9625f62d0978173973070dce38bd7210 Mon Sep 17 00:00:00 2001
+From: Francis Laniel <flaniel@linux.microsoft.com>
+Date: Tue, 9 Aug 2022 18:18:53 +0200
+Subject: [PATCH] for test purpose only: Add toy to play with BPF ring buffer.
+
+Signed-off-by: Francis Laniel <flaniel@linux.microsoft.com>
+---
+ libbpf-tools/Makefile  |  1 +
+ libbpf-tools/toy.bpf.c | 29 +++++++++++++++++++
+ libbpf-tools/toy.c     | 65 ++++++++++++++++++++++++++++++++++++++++++
+ libbpf-tools/toy.h     |  4 +++
+ 4 files changed, 99 insertions(+)
+ create mode 100644 libbpf-tools/toy.bpf.c
+ create mode 100644 libbpf-tools/toy.c
+ create mode 100644 libbpf-tools/toy.h
+
+diff --git a/libbpf-tools/Makefile b/libbpf-tools/Makefile
+index 3e40f6e5..0d81d3b7 100644
+--- a/libbpf-tools/Makefile
++++ b/libbpf-tools/Makefile
+@@ -68,6 +68,7 @@ APPS = \
+ 	tcplife \
+ 	tcprtt \
+ 	tcpsynbl \
++	toy \
+ 	vfsstat \
+ 	#
+ 
+diff --git a/libbpf-tools/toy.bpf.c b/libbpf-tools/toy.bpf.c
+new file mode 100644
+index 00000000..3c28a20b
+--- /dev/null
++++ b/libbpf-tools/toy.bpf.c
+@@ -0,0 +1,29 @@
++#include <linux/types.h>
++#include <bpf/bpf_helpers.h>
++#include <linux/bpf.h>
++#include "toy.h"
++
++
++struct {
++	__uint(type, BPF_MAP_TYPE_RINGBUF);
++	__uint(max_entries, 4096);
++	__uint(map_flags, 1U << 13);
++} buffer SEC(".maps");
++
++static __u32 count = 0;
++
++SEC("tracepoint/syscalls/sys_enter_execve")
++int sys_enter_execve(void) {
++	count++;
++	struct event *event = bpf_ringbuf_reserve(&buffer, sizeof(struct event), 0);
++	if (!event) {
++		return 1;
++	}
++
++	event->count = count;
++	bpf_ringbuf_submit(event, 0);
++
++	return 0;
++}
++
++char _license[] SEC("license") = "GPL";
+diff --git a/libbpf-tools/toy.c b/libbpf-tools/toy.c
+new file mode 100644
+index 00000000..4cd8b588
+--- /dev/null
++++ b/libbpf-tools/toy.c
+@@ -0,0 +1,65 @@
++#include <bpf/libbpf.h>
++#include <stdio.h>
++#include <unistd.h>
++#include "toy.h"
++#include "toy.skel.h"
++#include "btf_helpers.h"
++
++
++static int buf_process_sample(void *ctx, void *data, size_t len) {
++	struct event *evt = (struct event *)data;
++
++	printf("%d\n", evt->count);
++
++	return 0;
++}
++
++int main(void) {
++	LIBBPF_OPTS(bpf_object_open_opts, open_opts);
++	int buffer_map_fd = -1;
++	struct toy_bpf *obj;
++	int err;
++
++	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
++
++	err = ensure_core_btf(&open_opts);
++	if (err) {
++		fprintf(stderr, "failed to fetch necessary BTF for CO-RE: %s\n", strerror(-err));
++		return 1;
++	}
++
++	obj = toy_bpf__open_opts(&open_opts);
++	if (!obj) {
++		fprintf(stderr, "failed to open BPF object\n");
++		return 1;
++	}
++
++	err = toy_bpf__load(obj);
++	if (err) {
++		fprintf(stderr, "failed to load BPF object: %d\n", err);
++		return 1;
++	}
++
++	struct ring_buffer *ring_buffer;
++
++	buffer_map_fd = bpf_object__find_map_fd_by_name(obj->obj, "buffer");
++	ring_buffer = ring_buffer__new(buffer_map_fd, buf_process_sample, NULL, NULL);
++
++	if(!ring_buffer) {
++		fprintf(stderr, "failed to create ring buffer\n");
++		return 1;
++	}
++
++	err = toy_bpf__attach(obj);
++	if (err) {
++		fprintf(stderr, "failed to attach BPF programs\n");
++		return 1;
++	}
++
++	for (;;) {
++		ring_buffer__consume(ring_buffer);
++		sleep(1);
++	}
++
++	return 0;
++}
+diff --git a/libbpf-tools/toy.h b/libbpf-tools/toy.h
+new file mode 100644
+index 00000000..ebfedf06
+--- /dev/null
++++ b/libbpf-tools/toy.h
+@@ -0,0 +1,4 @@
++struct event {
++	__u32 count;
++	char filler[4096 / 8 - sizeof(__u32) - 8];
++};
+-- 
+2.25.1
+
