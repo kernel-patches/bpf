@@ -12,7 +12,7 @@
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
 
-#define RINGBUF_CREATE_FLAG_MASK (BPF_F_NUMA_NODE)
+#define RINGBUF_CREATE_FLAG_MASK (BPF_F_NUMA_NODE | BFP_F_RB_OVERWRITABLE)
 
 /* non-mmap()'able part of bpf_ringbuf (everything up to consumer page) */
 #define RINGBUF_PGOFF \
@@ -37,6 +37,8 @@ struct bpf_ringbuf {
 	u64 mask;
 	struct page **pages;
 	int nr_pages;
+	__u8 overwritable: 1,
+	     __reserved:    7;
 	spinlock_t spinlock ____cacheline_aligned_in_smp;
 	/* Consumer and producer counters are put into separate pages to allow
 	 * mapping consumer page as r/w, but restrict producer page to r/o.
@@ -127,7 +129,12 @@ static void bpf_ringbuf_notify(struct irq_work *work)
 	wake_up_all(&rb->waitq);
 }
 
-static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node)
+static inline bool is_overwritable(struct bpf_ringbuf *rb)
+{
+	return !!rb->overwritable;
+}
+
+static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node, __u32 flags)
 {
 	struct bpf_ringbuf *rb;
 
@@ -142,6 +149,7 @@ static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node)
 	rb->mask = data_sz - 1;
 	rb->consumer_pos = 0;
 	rb->producer_pos = 0;
+	rb->overwritable = !!(flags & BFP_F_RB_OVERWRITABLE);
 
 	return rb;
 }
@@ -170,7 +178,7 @@ static struct bpf_map *ringbuf_map_alloc(union bpf_attr *attr)
 
 	bpf_map_init_from_attr(&rb_map->map, attr);
 
-	rb_map->rb = bpf_ringbuf_alloc(attr->max_entries, rb_map->map.numa_node);
+	rb_map->rb = bpf_ringbuf_alloc(attr->max_entries, rb_map->map.numa_node, attr->map_flags);
 	if (!rb_map->rb) {
 		bpf_map_area_free(rb_map);
 		return ERR_PTR(-ENOMEM);
@@ -248,6 +256,7 @@ static unsigned long ringbuf_avail_data_sz(struct bpf_ringbuf *rb)
 
 	cons_pos = smp_load_acquire(&rb->consumer_pos);
 	prod_pos = smp_load_acquire(&rb->producer_pos);
+
 	return prod_pos - cons_pos;
 }
 
@@ -325,14 +334,24 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	}
 
 	prod_pos = rb->producer_pos;
-	new_prod_pos = prod_pos + len;
 
-	/* check for out of ringbuf space by ensuring producer position
-	 * doesn't advance more than (ringbuf_size - 1) ahead
-	 */
-	if (new_prod_pos - cons_pos > rb->mask) {
-		spin_unlock_irqrestore(&rb->spinlock, flags);
-		return NULL;
+	if (!is_overwritable(rb)) {
+		new_prod_pos = prod_pos + len;
+
+		/* check for out of ringbuf space by ensuring producer position
+		 * doesn't advance more than (ringbuf_size - 1) ahead
+		 */
+		if (new_prod_pos - cons_pos > rb->mask) {
+			spin_unlock_irqrestore(&rb->spinlock, flags);
+			return NULL;
+		}
+	} else {
+		/*
+		 * With overwritable ring buffer we go from the end toward the
+		 * beginning.
+		 */
+		prod_pos -= len;
+		new_prod_pos = prod_pos;
 	}
 
 	hdr = (void *)rb->data + (prod_pos & rb->mask);
@@ -457,10 +476,14 @@ BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
 
 	switch (flags) {
 	case BPF_RB_AVAIL_DATA:
+		if (is_overwritable(rb))
+			return -EINVAL;
 		return ringbuf_avail_data_sz(rb);
 	case BPF_RB_RING_SIZE:
 		return rb->mask + 1;
 	case BPF_RB_CONS_POS:
+		if (is_overwritable(rb))
+			return -EINVAL;
 		return smp_load_acquire(&rb->consumer_pos);
 	case BPF_RB_PROD_POS:
 		return smp_load_acquire(&rb->producer_pos);
