@@ -1235,7 +1235,7 @@ struct bpf_map *bpf_map_get(u32 ufd)
 }
 EXPORT_SYMBOL(bpf_map_get);
 
-struct bpf_map *bpf_map_get_with_uref(u32 ufd)
+struct bpf_map *bpf_map_get_with_uref(u32 ufd, fmode_t req_modes)
 {
 	struct fd f = fdget(ufd);
 	struct bpf_map *map;
@@ -1244,7 +1244,13 @@ struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 	if (IS_ERR(map))
 		return map;
 
+	if ((map_get_sys_perms(map, f) & req_modes) != req_modes) {
+		map = ERR_PTR(-EPERM);
+		goto out;
+	}
+
 	bpf_map_inc_with_uref(map);
+out:
 	fdput(f);
 
 	return map;

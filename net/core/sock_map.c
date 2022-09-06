@@ -1636,7 +1636,8 @@ static int sock_map_iter_attach_target(struct bpf_prog *prog,
 	if (!linfo->map.map_fd)
 		return -EBADF;
 
-	map = bpf_map_get_with_uref(linfo->map.map_fd);
+	map = bpf_map_get_with_uref(linfo->map.map_fd,
+				    FMODE_CAN_READ | FMODE_CAN_WRITE);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 

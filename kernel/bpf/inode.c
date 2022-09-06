@@ -71,7 +71,7 @@ static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
 {
 	void *raw;
 
-	raw = bpf_map_get_with_uref(ufd);
+	raw = bpf_map_get_with_uref(ufd, 0);
 	if (!IS_ERR(raw)) {
 		*type = BPF_TYPE_MAP;
 		return raw;

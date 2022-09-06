@@ -1628,7 +1628,7 @@ bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_ma
 void bpf_map_free_kptrs(struct bpf_map *map, void *map_value);
 
 struct bpf_map *bpf_map_get(u32 ufd);
-struct bpf_map *bpf_map_get_with_uref(u32 ufd);
+struct bpf_map *bpf_map_get_with_uref(u32 ufd, fmode_t req_modes);
 struct bpf_map *__bpf_map_get(struct fd f);
 void bpf_map_inc(struct bpf_map *map);
 void bpf_map_inc_with_uref(struct bpf_map *map);
