@@ -72,10 +72,38 @@ static void do_read_map_iter_fd(struct bpf_object_skeleton **skel, struct bpf_pr
 				struct bpf_map *map)
 {
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	struct bpf_map_info info_m = { 0 };
+	__u32 info_m_len = sizeof(info_m);
 	union bpf_iter_link_info linfo;
 	struct bpf_link *link;
 	char buf[16] = {};
 	int iter_fd, len;
+	int ret, fd;
+
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_opts, fd_opts_rdonly,
+		.open_flags = BPF_F_RDONLY,
+	);
+
+	ret = bpf_obj_get_info_by_fd(bpf_map__fd(map), &info_m, &info_m_len);
+	if (!ASSERT_OK(ret, "bpf_obj_get_info_by_fd"))
+		return;
+
+	fd = bpf_map_get_fd_by_id_opts(info_m.id, &fd_opts_rdonly);
+	if (!ASSERT_GE(fd, 0, "bpf_map_get_fd_by_id_opts"))
+		return;
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.map.map_fd = fd;
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+	link = bpf_program__attach_iter(prog, &opts);
+
+	close(fd);
+
+	if (!ASSERT_ERR_PTR(link, "attach_map_iter")) {
+		bpf_link__destroy(link);
+		return;
+	}
 
 	memset(&linfo, 0, sizeof(linfo));
 	linfo.map.map_fd = bpf_map__fd(map);
@@ -656,12 +684,12 @@ static void test_bpf_hash_map(void)
 	opts.link_info_len = sizeof(linfo);
 	link = bpf_program__attach_iter(skel->progs.dump_bpf_hash_map, &opts);
 	if (!ASSERT_ERR_PTR(link, "attach_iter"))
-		goto out;
+		goto free_link;
 
 	linfo.map.map_fd = bpf_map__fd(skel->maps.hashmap3);
 	link = bpf_program__attach_iter(skel->progs.dump_bpf_hash_map, &opts);
 	if (!ASSERT_ERR_PTR(link, "attach_iter"))
-		goto out;
+		goto free_link;
 
 	/* hashmap1 should be good, update map values here */
 	map_fd = bpf_map__fd(skel->maps.hashmap1);
@@ -683,7 +711,7 @@ static void test_bpf_hash_map(void)
 	linfo.map.map_fd = map_fd;
 	link = bpf_program__attach_iter(skel->progs.sleepable_dummy_dump, &opts);
 	if (!ASSERT_ERR_PTR(link, "attach_sleepable_prog_to_iter"))
-		goto out;
+		goto free_link;
 
 	linfo.map.map_fd = map_fd;
 	link = bpf_program__attach_iter(skel->progs.dump_bpf_hash_map, &opts);
