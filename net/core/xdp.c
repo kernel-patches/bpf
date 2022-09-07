@@ -623,6 +623,7 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct net_device *dev)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_frame(xdpf);
+	struct xdp_hints_common *xdp_hints = NULL;
 	unsigned int headroom, frame_size;
 	void *hard_start;
 	u8 nr_frags;
@@ -640,14 +641,17 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	frame_size = xdpf->frame_sz;
 
 	hard_start = xdpf->data - headroom;
+	prefetch(xdpf->data); /* cache-line for eth_type_trans */
 	skb = build_skb_around(skb, hard_start, frame_size);
 	if (unlikely(!skb))
 		return NULL;
 
 	skb_reserve(skb, headroom);
 	__skb_put(skb, xdpf->len);
-	if (xdpf->metasize)
+	if (xdpf->metasize) {
 		skb_metadata_set(skb, xdpf->metasize);
+		prefetch(xdpf->data - sizeof(*xdp_hints));
+	}
 
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		xdp_update_skb_shared_info(skb, nr_frags,
@@ -658,11 +662,12 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
 
-	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
-	 * - HW RX hash			(skb_set_hash)
-	 * - RX ring dev queue index	(skb_record_rx_queue)
-	 */
+	/* Populate (optional) HW offload hints in SKB via XDP-hints */
+	if (xdp_frame_has_hints_compat(xdpf)
+	    && xdpf->metasize >= sizeof(*xdp_hints)) {
+		xdp_hints = xdpf->data - sizeof(*xdp_hints);
+		xdp_hint2skb(skb, xdp_hints);
+	}
 
 	/* Until page_pool get SKB return path, release DMA here */
 	xdp_release_frame(xdpf);

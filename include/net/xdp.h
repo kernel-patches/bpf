@@ -153,6 +153,68 @@ static __always_inline u32 xdp_hints_set_vlan(struct xdp_hints_common *hints,
 	return flags;
 }
 
+/* XDP hints to SKB helper functions */
+static inline void xdp_hint2skb_record_rx_queue(struct sk_buff *skb,
+						struct xdp_hints_common *hints)
+{
+	if (hints->xdp_hints_flags & HINT_FLAG_RX_QUEUE)
+		skb_record_rx_queue(skb, hints->rx_queue);
+}
+
+static inline void xdp_hint2skb_set_hash(struct sk_buff *skb,
+					 struct xdp_hints_common *hints)
+{
+	u32 hash_type = hints->xdp_hints_flags & HINT_FLAG_RX_HASH_TYPE_MASK;
+
+	if (hash_type) {
+		hash_type = hash_type >> HINT_FLAG_RX_HASH_TYPE_SHIFT;
+		skb_set_hash(skb, hints->rx_hash32, hash_type);
+	}
+}
+
+static inline void xdp_hint2skb_checksum(struct sk_buff *skb,
+					 struct xdp_hints_common *hints)
+{
+	u32 csum_type = hints->xdp_hints_flags & HINT_FLAG_CSUM_TYPE_MASK;
+	u32 csum_level = hints->xdp_hints_flags & HINT_FLAG_CSUM_LEVEL_MASK;
+
+	if (csum_type == CHECKSUM_UNNECESSARY)
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	if (csum_level)
+		skb->csum_level = csum_level >> HINT_FLAG_CSUM_LEVEL_SHIFT;
+
+	/* TODO: First driver implementing CHECKSUM_PARTIAL or CHECKSUM_COMPLETE
+	 *  need to implement handling here.
+	 */
+}
+
+static inline void xdp_hint2skb_vlan_hw_tag(struct sk_buff *skb,
+					    struct xdp_hints_common *hints)
+{
+	u32 flags = hints->xdp_hints_flags;
+	__be16 proto = htons(ETH_P_8021Q);
+
+	if (flags & HINT_FLAG_VLAN_PROTO_ETH_P_8021AD)
+		proto = htons(ETH_P_8021AD);
+
+	if (flags & HINT_FLAG_VLAN_PRESENT) {
+		/* like: __vlan_hwaccel_put_tag */
+		skb->vlan_proto = proto;
+		skb->vlan_tci = hints->vlan_tci;
+		skb->vlan_present = 1;
+	}
+}
+
+static inline void xdp_hint2skb(struct sk_buff *skb,
+				struct xdp_hints_common *hints)
+{
+	xdp_hint2skb_record_rx_queue(skb, hints);
+	xdp_hint2skb_set_hash(skb, hints);
+	xdp_hint2skb_checksum(skb, hints);
+	xdp_hint2skb_vlan_hw_tag(skb, hints);
+}
+
 /**
  * DOC: XDP RX-queue information
  *
@@ -362,6 +424,16 @@ static __always_inline bool xdp_frame_has_frags(struct xdp_frame *frame)
 static __always_inline bool xdp_frame_is_frag_pfmemalloc(struct xdp_frame *frame)
 {
 	return !!(frame->flags & XDP_FLAGS_FRAGS_PF_MEMALLOC);
+}
+
+static __always_inline bool xdp_frame_has_hints_compat(struct xdp_frame *xdpf)
+{
+	u32 flags = xdpf->flags;
+
+	if (!(flags & XDP_FLAGS_HINTS_COMPAT_COMMON))
+		return false;
+
+	return !!(flags & XDP_FLAGS_HINTS_MASK);
 }
 
 #define XDP_BULK_QUEUE_SIZE	16
