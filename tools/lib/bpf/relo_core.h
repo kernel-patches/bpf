@@ -66,6 +66,7 @@ struct bpf_core_relo_res {
 	__u32 orig_type_id;
 	__u32 new_sz;
 	__u32 new_type_id;
+	__u32 btf_obj_id;
 };
 
 int __bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,

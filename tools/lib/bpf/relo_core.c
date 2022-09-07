@@ -892,6 +892,7 @@ static int bpf_core_calc_relo(const char *prog_name,
 	res->fail_memsz_adjust = false;
 	res->orig_sz = res->new_sz = 0;
 	res->orig_type_id = res->new_type_id = 0;
+	res->btf_obj_id = 0;
 
 	if (core_relo_is_field_based(relo->kind)) {
 		err = bpf_core_calc_field_relo(prog_name, relo, local_spec,
@@ -942,6 +943,8 @@ static int bpf_core_calc_relo(const char *prog_name,
 	} else if (core_relo_is_type_based(relo->kind)) {
 		err = bpf_core_calc_type_relo(relo, local_spec, &res->orig_val, &res->validate);
 		err = err ?: bpf_core_calc_type_relo(relo, targ_spec, &res->new_val, NULL);
+		if (!err && relo->kind == BPF_CORE_TYPE_ID_TARGET)
+			res->btf_obj_id = btf_obj_id(targ_spec->btf);
 	} else if (core_relo_is_enumval_based(relo->kind)) {
 		err = bpf_core_calc_enumval_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_enumval_relo(relo, targ_spec, &res->new_val);
@@ -1133,7 +1136,10 @@ poison:
 		}
 
 		insn[0].imm = new_val;
-		insn[1].imm = new_val >> 32;
+		/* For type IDs, upper 32 bits are used for BTF object ID */
+		insn[1].imm = relo->kind == BPF_CORE_TYPE_ID_TARGET ?
+					    res->btf_obj_id :
+					    (new_val >> 32);
 		pr_debug("prog '%s': relo #%d: patched insn #%d (LDIMM64) imm64 %llu -> %llu\n",
 			 prog_name, relo_idx, insn_idx,
 			 (unsigned long long)imm, (unsigned long long)new_val);

@@ -168,7 +168,8 @@ enum bpf_enum_value_kind {
  * Convenience macro to get BTF type ID of a target kernel's type that matches
  * specified local type.
  * Returns:
- *    - valid 32-bit unsigned type ID in kernel BTF;
+ *    - valid 64-bit unsigned integer: the upper 32 bits is the BTF object ID
+ *      and the lower 32 bits is the BTF type ID within the BTF object.
  *    - 0, if no matching type was found in a target kernel BTF.
  */
 #define bpf_core_type_id_kernel(type)					    \
