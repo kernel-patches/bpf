@@ -1953,6 +1953,36 @@ struct xdp_hints_i40e_timestamp {
 	struct xdp_hints_i40e base;
 };
 
+/* xdp_hints_union defines xdp_hints_* structs available in this driver.
+ * As metadata grows backwards structure are padded to align.
+ */
+union xdp_hints_union {
+	struct xdp_hints_i40e_timestamp i40e_ts;
+	struct {
+		u64 pad1_ts;
+		struct xdp_hints_i40e i40e;
+	};
+	struct {
+		u64 pad2_ts;
+		u32 pad3_i40e;
+		struct xdp_hints_common common;
+	};
+}; // __aligned(4) __attribute__((packed));
+
+union xdp_hints_union define_union;
+
+#define OFFSET1 offsetof(union xdp_hints_union, common)
+#define OFFSET2 offsetof(union xdp_hints_union, i40e.common)
+#define OFFSET3 offsetof(union xdp_hints_union, i40e_ts.base.common)
+
+static void xdp_hints_compile_check(void)
+{
+	union xdp_hints_union my_union = {};
+
+	BUILD_BUG_ON(OFFSET1 != OFFSET2);
+	BUILD_BUG_ON(OFFSET1 != OFFSET3);
+}
+
 /* Extending xdp_hints_flags */
 enum xdp_hints_flags_driver {
 	HINT_FLAG_RX_TIMESTAMP = BIT(16),
@@ -1968,6 +1998,7 @@ static inline u32 i40e_rx_checksum_xdp(struct i40e_vsi *vsi, u64 qword1,
 {
 	struct i40e_rx_checksum_ret ret;
 
+	xdp_hints_compile_check();
 	ret = _i40e_rx_checksum(vsi, qword1, ptype);
 	return xdp_hints_set_rx_csum(&xdp_hints->common, ret.ip_summed, ret.csum_level);
 }
