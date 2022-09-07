@@ -808,6 +808,54 @@ void i40e_ptp_tx_hwtstamp(struct i40e_pf *pf)
 }
 
 /**
+ * i40e_ptp_rx_hwtstamp_raw - Utility function which checks for an Rx timestamp
+ * @pf: Board private structure
+ * @index: Index into the receive timestamp registers for the timestamp
+ *
+ * The XL710 receives a notification in the receive descriptor with an offset
+ * into the set of RXTIME registers where the timestamp is for that pkt. This
+ * function goes and fetches the receive timestamp from that offset, if a valid
+ * one exists, else zero is returned.
+ **/
+u64 i40e_ptp_rx_hwtstamp_raw(struct i40e_pf *pf, u8 index)
+{
+	u32 prttsyn_stat, hi, lo;
+	struct i40e_hw *hw;
+	u64 ns;
+
+	/* Since we cannot turn off the Rx timestamp logic if the device is
+	 * doing Tx timestamping, check if Rx timestamping is configured.
+	 */
+	if (!(pf->flags & I40E_FLAG_PTP) || !pf->ptp_rx)
+		return 0;
+
+	hw = &pf->hw;
+
+	spin_lock_bh(&pf->ptp_rx_lock);
+
+	/* Get current Rx events and update latch times */
+	prttsyn_stat = i40e_ptp_get_rx_events(pf);
+
+	/* TODO: Should we warn about missing Rx timestamp event? */
+	if (!(prttsyn_stat & BIT(index))) {
+		spin_unlock_bh(&pf->ptp_rx_lock);
+		return 0;
+	}
+
+	/* Clear the latched event since we're about to read its register */
+	pf->latch_event_flags &= ~BIT(index);
+
+	lo = rd32(hw, I40E_PRTTSYN_RXTIME_L(index));
+	hi = rd32(hw, I40E_PRTTSYN_RXTIME_H(index));
+
+	spin_unlock_bh(&pf->ptp_rx_lock);
+
+	ns = (((u64)hi) << 32) | lo;
+
+	return ns;
+}
+
+/**
  * i40e_ptp_rx_hwtstamp - Utility function which checks for an Rx timestamp
  * @pf: Board private structure
  * @skb: Particular skb to send timestamp with
@@ -821,40 +869,10 @@ void i40e_ptp_tx_hwtstamp(struct i40e_pf *pf)
  **/
 void i40e_ptp_rx_hwtstamp(struct i40e_pf *pf, struct sk_buff *skb, u8 index)
 {
-	u32 prttsyn_stat, hi, lo;
-	struct i40e_hw *hw;
-	u64 ns;
+	u64 ns = i40e_ptp_rx_hwtstamp_raw(pf, index);
 
-	/* Since we cannot turn off the Rx timestamp logic if the device is
-	 * doing Tx timestamping, check if Rx timestamping is configured.
-	 */
-	if (!(pf->flags & I40E_FLAG_PTP) || !pf->ptp_rx)
-		return;
-
-	hw = &pf->hw;
-
-	spin_lock_bh(&pf->ptp_rx_lock);
-
-	/* Get current Rx events and update latch times */
-	prttsyn_stat = i40e_ptp_get_rx_events(pf);
-
-	/* TODO: Should we warn about missing Rx timestamp event? */
-	if (!(prttsyn_stat & BIT(index))) {
-		spin_unlock_bh(&pf->ptp_rx_lock);
-		return;
-	}
-
-	/* Clear the latched event since we're about to read its register */
-	pf->latch_event_flags &= ~BIT(index);
-
-	lo = rd32(hw, I40E_PRTTSYN_RXTIME_L(index));
-	hi = rd32(hw, I40E_PRTTSYN_RXTIME_H(index));
-
-	spin_unlock_bh(&pf->ptp_rx_lock);
-
-	ns = (((u64)hi) << 32) | lo;
-
-	i40e_ptp_convert_to_hwtstamp(skb_hwtstamps(skb), ns);
+	if (ns)
+		i40e_ptp_convert_to_hwtstamp(skb_hwtstamps(skb), ns);
 }
 
 /**
