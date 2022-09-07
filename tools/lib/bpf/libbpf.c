@@ -512,6 +512,8 @@ struct bpf_map {
 	bool reused;
 	bool autocreate;
 	__u64 map_extra;
+	__u32 map_extra_data_size;
+	char map_extra_data[1024];
 };
 
 enum extern_type {
@@ -2120,14 +2122,303 @@ enum libbpf_pin_type {
 	LIBBPF_PIN_BY_NAME,
 };
 
+static int
+__parse_btf_wildcard_tm_opts(const char *msg_pfx, struct btf *btf,
+			     const struct btf_type *opts,
+			     struct wildcard_rule_desc *rule_desc)
+{
+	size_t max_size = ARRAY_SIZE(rule_desc->prefixes);
+	const struct btf_member *m;
+	__u32 vlen, val, i;
+
+	/*
+	 * Parsing the following structure:
+	 *     struct {
+	 *             __uint(prefix3, a);
+	 *             __uint(prefix2, b);
+	 *             __uint(prefix1, c);
+	 *     } xxx;
+	 */
+
+	vlen = btf_vlen(opts);
+	if (vlen > max_size) {
+		pr_warn("map '%s': opts size is too big: %u (max %zu).\n",
+			msg_pfx, vlen, max_size);
+		return -EINVAL;
+	}
+	rule_desc->n_prefixes = vlen;
+
+	m = btf_members(opts);
+	for (i = 0; i < vlen; i++, m++) {
+		if (!get_map_field_int(msg_pfx, btf, m, &val)) {
+			pr_warn("map '%s': invalid field #%u.\n", msg_pfx, i);
+			return -EINVAL;
+		}
+		rule_desc->prefixes[i] = val;
+	}
+
+	return 0;
+}
+
+static int
+parse_btf_wildcard_tm_opts(const char *orig_msg_pfx, struct btf *btf,
+			   const char *rule_name,
+			   const struct btf_type *wildcard_tm_opts,
+			   struct wildcard_rule_desc *rule_desc)
+{
+	const struct btf_member *m;
+	const struct btf_type *t;
+	char msg_pfx[256];
+	const char *name;
+	__u32 vlen, i;
+
+	/*
+	 * The wildcard_tm_opts, if present, can, optionally, contain
+	 * the following structure used in the TM algorithm:
+	 *
+	 *  struct {
+	 *     ...
+	 *     struct {
+	 *             __uint(prefix3, 0);
+	 *             __uint(prefix2, 8);
+	 *             __uint(prefix1, 16);
+	 *     } saddr;
+	 *     ...
+	 *  };
+	 *
+	 * We need to parse it and fill the corresponding fields in the
+	 * rule_desc structure. We don't care about the order, as kernel
+	 * will eventually sort the array.
+	 */
+
+	if (!wildcard_tm_opts)
+		return 0;
+
+	snprintf(msg_pfx, sizeof(msg_pfx), "%s->%s", orig_msg_pfx, "wildcard_tm_opts");
+
+	vlen = btf_vlen(wildcard_tm_opts);
+	m = btf_members(wildcard_tm_opts);
+	for (i = 0; i < vlen; i++, m++) {
+		name = btf__name_by_offset(btf, m->name_off);
+		if (!name) {
+			pr_warn("map '%s': invalid field #%u.\n", msg_pfx, i);
+			return -EINVAL;
+		}
+
+		/* not ours */
+		if (strcmp(rule_name, name))
+			continue;
+
+		t = btf__type_by_id(btf, m->type);
+		if (!t) {
+			pr_warn("map '%s': type [%d] not found.\n", msg_pfx, m->type);
+			return -EINVAL;
+		}
+		if (!btf_is_composite(t)) {
+			pr_warn("map '%s': spec is not STRUCT: %s.\n", msg_pfx, btf_kind_str(t));
+			return -EINVAL;
+		}
+
+		if (__parse_btf_wildcard_tm_opts(msg_pfx, btf, t, rule_desc))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+parse_btf_wildcard_rule_desc(const char *orig_msg_pfx, struct btf *btf,
+			     const char *rule_name,
+			     const struct btf_type *rule_desc_type,
+			     const struct btf_type *wildcard_tm_opts,
+			     struct wildcard_rule_desc *rule_desc)
+{
+	const struct btf_member *m;
+	char msg_pfx[128];
+	__u32 vlen, val, i;
+	const char *name;
+
+	snprintf(msg_pfx, sizeof(msg_pfx), "%s->%s", orig_msg_pfx, rule_name);
+
+	/*
+	 * The rule_desc_type points to the following structure:
+	 *
+	 *     struct {
+	 *             __uint(type, BPF_WILDCARD_RULE_XXX);
+	 *             __uint(size, sizeof(xxx));
+	 *     } saddr;
+	 *
+	 * So we need to extract fields and store them in the rule_desc.
+	 */
+
+	vlen = btf_vlen(rule_desc_type);
+	if (vlen != 2) {
+		pr_warn("map '%s': there should be %u fields, got %u\n",
+			msg_pfx, 2, vlen);
+		return -EINVAL;
+	}
+
+	m = btf_members(rule_desc_type);
+	for (i = 0; i < vlen; i++, m++) {
+		name = btf__name_by_offset(btf, m->name_off);
+		if (!name) {
+			pr_warn("map '%s': invalid field #%u.\n", msg_pfx, i);
+			return -EINVAL;
+		}
+		if (!get_map_field_int(msg_pfx, btf, m, &val))
+			return -EINVAL;
+
+		if (!strcmp(name, "type")) {
+			rule_desc->type = val;
+		} else if (!strcmp(name, "size")) {
+			rule_desc->size = val;
+		} else {
+			pr_warn("map '%s': the field name should be either of {\"type\",\"size\"}, got \"%s\"\n",
+					msg_pfx, name);
+			return -EINVAL;
+		}
+
+		if (parse_btf_wildcard_tm_opts(msg_pfx, btf, rule_name,
+					       wildcard_tm_opts, rule_desc))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int parse_btf_wildcard_desc(const char *map_name, struct btf *btf,
+				   const struct btf_type *wildcard_desc_type,
+				   const struct btf_type *wildcard_tm_opts,
+				   void *map_extra_data,
+				   __u32 *res_map_extra_data_size)
+{
+	/*
+	 * `wildcard_desc_type` has, e.g., the following structure:
+	 *
+	 *     struct capture4_wcard_desc {
+	 *             __uint(n_rules, 4);
+	 *             struct {
+	 *                     __uint(type, BPF_WILDCARD_RULE_PREFIX);
+	 *                     __uint(size, sizeof(__u32));
+	 *             } saddr;
+	 *             struct {
+	 *                     __uint(type, BPF_WILDCARD_RULE_PREFIX);
+	 *                     __uint(size, sizeof(__u32));
+	 *             } daddr;
+	 *             struct {
+	 *                     __uint(type, BPF_WILDCARD_RULE_RANGE);
+	 *                     __uint(size, sizeof(__u16));
+	 *             } sport;
+	 *             struct {
+	 *                     __uint(type, BPF_WILDCARD_RULE_RANGE);
+	 *                     __uint(size, sizeof(__u16));
+	 *             } dport;
+	 *     };
+	 *
+	 * using it we need to fill in the following structure:
+	 *
+	 *     struct wildcard_desc {
+	 *             __u32 n_rules;
+	 *             struct wildcard_rule_desc rule_desc[];
+	 *     };
+	 *
+	 */
+
+	const struct btf_member *m;
+	struct wildcard_desc *desc;
+	const struct btf_type *t;
+	char msg_pfx[64];
+	const char *name;
+	__u32 desc_size;
+	__u32 n_rules;
+	__u32 vlen;
+	__u32 i;
+	int err;
+
+	snprintf(msg_pfx, sizeof(msg_pfx), "%s->wildcard_desc", map_name);
+
+	vlen = btf_vlen(wildcard_desc_type);
+	m = btf_members(wildcard_desc_type);
+
+	/* The first member should be the "n_rules" which specify how large is
+	 * the structure */
+	name = btf__name_by_offset(btf, m->name_off);
+	if (!name) {
+		pr_warn("map '%s': invalid field #0.\n", msg_pfx);
+		return -EINVAL;
+	} else if (strcmp(name, "n_rules")) {
+		pr_warn("map '%s': the first field should be \"n_rules\", got \"%s\"\n",
+			msg_pfx, name);
+		return -EINVAL;
+	}
+	if (!get_map_field_int(msg_pfx, btf, m, &n_rules))
+		return -EINVAL;
+	if (vlen != n_rules + 1) {
+		pr_warn("map '%s': there should be %u fields, got %u\n",
+			msg_pfx, n_rules+1, vlen);
+		return -EINVAL;
+	}
+
+	desc_size = sizeof(*desc) + n_rules * sizeof(desc->rule_desc[0]);
+	if (desc_size > *res_map_extra_data_size) {
+		pr_warn("map '%s': wildcard_desc is too big: %u (max %u).\n",
+			msg_pfx, desc_size, *res_map_extra_data_size);
+		return -EINVAL;
+	}
+
+	desc = calloc(1, desc_size);
+	if (!desc) {
+		pr_warn("map '%s': failed to alloc wildcard_desc.\n", msg_pfx);
+		return -ENOMEM;
+	}
+	desc->n_rules = n_rules;
+
+	err = -EINVAL;
+	for (i = 1; i < vlen; i += 1) {
+		m++;
+
+		name = btf__name_by_offset(btf, m->name_off);
+		if (!name) {
+			pr_warn("map '%s': invalid field #%u.\n", msg_pfx, i);
+			goto free_desc;
+		}
+
+		t = btf__type_by_id(btf, m->type);
+		if (!t) {
+			pr_warn("map '%s': wildcard_desc type [%d] not found.\n",
+					msg_pfx, m->type);
+			goto free_desc;
+		}
+		if (!btf_is_composite(t)) {
+			pr_warn("map '%s': wildcard_desc spec is not STRUCT: %s.\n",
+					msg_pfx, btf_kind_str(t));
+			goto free_desc;
+		}
+
+		if (parse_btf_wildcard_rule_desc(msg_pfx, btf, name, t, wildcard_tm_opts,
+						 &desc->rule_desc[i-1]))
+			goto free_desc;
+	}
+
+	*res_map_extra_data_size = desc_size;
+	memcpy(map_extra_data, desc, desc_size);
+	err = 0;
+free_desc:
+	free(desc);
+	return err;
+}
+
 int parse_btf_map_def(const char *map_name, struct btf *btf,
 		      const struct btf_type *def_t, bool strict,
 		      struct btf_map_def *map_def, struct btf_map_def *inner_def)
 {
+	const struct btf_type *wildcard_desc_type = NULL;
+	const struct btf_type *wildcard_tm_opts = NULL;
 	const struct btf_type *t;
 	const struct btf_member *m;
 	bool is_inner = inner_def == NULL;
 	int vlen, i;
+	__u32 type;
 
 	vlen = btf_vlen(def_t);
 	m = btf_members(def_t);
@@ -2324,6 +2615,53 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 				return -EINVAL;
 			map_def->map_extra = map_extra;
 			map_def->parts |= MAP_DEF_MAP_EXTRA;
+		} else if (strcmp(name, "wildcard_desc") == 0) {
+			t = btf__type_by_id(btf, m->type);
+			if (!t) {
+				pr_warn("map '%s': wildcard_desc type [%d] not found.\n",
+					map_name, m->type);
+				return -EINVAL;
+			}
+			if (!btf_is_ptr(t)) {
+				pr_warn("map '%s': wildcard_desc spec is not PTR: %s.\n",
+					map_name, btf_kind_str(t));
+				return -EINVAL;
+			}
+
+			type = t->type;
+			t = btf__type_by_id(btf, type);
+			if (!t) {
+				pr_warn("map '%s': wildcard_desc type definition [%d] not found.\n",
+					map_name, type);
+				return -EINVAL;
+			}
+
+			/* We will parse wildcard_desc type below, after the
+			 * main loop is over because we don't know if map type is BPF_MAP_TYPE_WILDCARD
+			 * or not (and for the latter case we want to return -EINVAL) */
+			wildcard_desc_type = t;
+		} else if (strcmp(name, "wildcard_tm_opts") == 0) {
+			t = btf__type_by_id(btf, m->type);
+			if (!t) {
+				pr_warn("map '%s': wildcard_tm_opts type [%d] not found.\n",
+					map_name, m->type);
+				return -EINVAL;
+			}
+			if (!btf_is_ptr(t)) {
+				pr_warn("map '%s': wildcard_tm_opts spec is not PTR: %s.\n",
+					map_name, btf_kind_str(t));
+				return -EINVAL;
+			}
+			type = t->type;
+			t = btf__type_by_id(btf, type);
+			if (!t) {
+				pr_warn("map '%s': wildcard_tm_opts type definition [%d] not found.\n",
+					map_name, type);
+				return -EINVAL;
+			}
+
+			/* This type is required in the parse_btf_wildcard_desc() below */
+			wildcard_tm_opts = t;
 		} else {
 			if (strict) {
 				pr_warn("map '%s': unknown field '%s'.\n", map_name, name);
@@ -2336,6 +2674,26 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 	if (map_def->map_type == BPF_MAP_TYPE_UNSPEC) {
 		pr_warn("map '%s': map type isn't specified.\n", map_name);
 		return -EINVAL;
+	}
+
+	if (wildcard_desc_type || wildcard_tm_opts) {
+		if (map_def->map_type != BPF_MAP_TYPE_WILDCARD) {
+			if (wildcard_desc_type)
+				pr_warn("map '%s': 'wildcard_desc_type' isn't supported for map type %u.\n",
+					map_name, map_def->map_type);
+			if (wildcard_tm_opts)
+				pr_warn("map '%s': 'wildcard_tm_opts' isn't supported for map type %u.\n",
+					map_name, map_def->map_type);
+			return -EINVAL;
+		}
+		map_def->map_extra_data_size = sizeof(map_def->map_extra_data);
+		if (parse_btf_wildcard_desc(map_name, btf,
+					    wildcard_desc_type,
+					    wildcard_tm_opts,
+					    map_def->map_extra_data,
+					    &map_def->map_extra_data_size))
+			return -EINVAL;
+		map_def->parts |= MAP_DEF_MAP_EXTRA_DATA;
 	}
 
 	return 0;
@@ -2372,14 +2730,71 @@ static size_t adjust_ringbuf_sz(size_t sz)
 	return sz;
 }
 
+static const char *
+pr_map_extra_data(__u32 map_type, char *buf, ssize_t buf_size, const void *x)
+{
+	const struct wildcard_rule_desc *rule_desc;
+	const struct wildcard_desc *desc;
+	ssize_t nret, n = 0;
+	char err_buf[128];
+	int i, j;
+
+	if (map_type != BPF_MAP_TYPE_WILDCARD) {
+		snprintf(buf, buf_size,
+			 "can't parse map_extra_data due to unsupported map type %d",
+			 map_type);
+	} else {
+		desc = x;
+
+#define _snprintf(...)					\
+	nret = snprintf(buf+n, buf_size-n, __VA_ARGS__);\
+	if (nret < 0) {					\
+		goto print_error;			\
+	}						\
+	n += nret
+
+		_snprintf("{");
+		for (i = 0; i < desc->n_rules; i++) {
+			rule_desc = &desc->rule_desc[i];
+			_snprintf("{type=%u,size=%u", rule_desc->type,rule_desc->size);
+			if (rule_desc->n_prefixes) {
+				_snprintf(",prefixes={");
+				for (j = 0; j < rule_desc->n_prefixes; j++) {
+					_snprintf("%u%s", rule_desc->prefixes[j],
+						  j == rule_desc->n_prefixes-1 ? "" : ",");
+				}
+				_snprintf("}");
+			}
+			_snprintf("}%s", i == desc->n_rules-1 ? "" : ",");
+		}
+		_snprintf("}");
+
+#undef _snprintf
+
+	}
+
+	return buf;
+
+print_error:
+	buf[0] = 0;
+	snprintf(buf, buf_size, "error: %s", strerror_r(errno, err_buf, sizeof(err_buf)));
+	return buf;
+}
+
 static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def)
 {
+	char buf[512];
+
 	map->def.type = def->map_type;
 	map->def.key_size = def->key_size;
 	map->def.value_size = def->value_size;
 	map->def.max_entries = def->max_entries;
 	map->def.map_flags = def->map_flags;
 	map->map_extra = def->map_extra;
+	map->map_extra_data_size = def->map_extra_data_size;
+	if (map->map_extra_data_size)
+		memcpy(map->map_extra_data, def->map_extra_data,
+		       map->map_extra_data_size);
 
 	map->numa_node = def->numa_node;
 	map->btf_key_type_id = def->key_type_id;
@@ -2411,6 +2826,10 @@ static void fill_map_from_def(struct bpf_map *map, const struct btf_map_def *def
 	if (def->parts & MAP_DEF_MAP_EXTRA)
 		pr_debug("map '%s': found map_extra = 0x%llx.\n", map->name,
 			 (unsigned long long)def->map_extra);
+	if (def->parts & MAP_DEF_MAP_EXTRA_DATA)
+		pr_debug("map '%s': found map_extra_data = %s.\n", map->name,
+			 pr_map_extra_data(def->map_type, buf, sizeof(buf),
+					   def->map_extra_data));
 	if (def->parts & MAP_DEF_PINNING)
 		pr_debug("map '%s': found pinning = %u.\n", map->name, def->pinning);
 	if (def->parts & MAP_DEF_NUMA_NODE)
@@ -4948,6 +5367,10 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	create_attr.map_flags = def->map_flags;
 	create_attr.numa_node = map->numa_node;
 	create_attr.map_extra = map->map_extra;
+	create_attr.map_extra_data_size = map->map_extra_data_size;
+	if (create_attr.map_extra_data_size)
+		memcpy(create_attr.map_extra_data, map->map_extra_data,
+		       create_attr.map_extra_data_size);
 
 	if (bpf_map__is_struct_ops(map))
 		create_attr.btf_vmlinux_value_type_id = map->btf_vmlinux_value_type_id;

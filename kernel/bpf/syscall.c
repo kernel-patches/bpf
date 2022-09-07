@@ -1067,9 +1067,34 @@ free_map_tab:
 	return ret;
 }
 
+static int copy_map_extra_data(union bpf_attr *attr, bool is_kernel)
+{
+	u32 size = attr->map_extra_data_size;
+	void *old = attr->map_extra_data;
+	void *new;
+
+	if (!size || size > 1024)
+		return -EINVAL;
+
+	/* released by map */
+	new = kzalloc(size, unlikely(is_kernel) ? GFP_KERNEL : GFP_USER);
+	if (!new)
+		return -ENOMEM;
+
+	if (unlikely(is_kernel)) {
+		memcpy(new, old, size);
+	} else if (copy_from_user(new, old, size)) {
+		kfree(new);
+		return -EFAULT;
+	}
+
+	attr->map_extra_data = new;
+	return 0;
+}
+
 #define BPF_MAP_CREATE_LAST_FIELD map_extra
 /* called via syscall */
-static int map_create(union bpf_attr *attr)
+static int map_create(union bpf_attr *attr, bool is_kernel)
 {
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_map *map;
@@ -1089,7 +1114,12 @@ static int map_create(union bpf_attr *attr)
 	}
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
+	    attr->map_type != BPF_MAP_TYPE_WILDCARD &&
 	    attr->map_extra != 0)
+		return -EINVAL;
+
+	if (attr->map_type != BPF_MAP_TYPE_WILDCARD &&
+	    (attr->map_extra_data || attr->map_extra_data_size != 0))
 		return -EINVAL;
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
@@ -1101,10 +1131,21 @@ static int map_create(union bpf_attr *attr)
 	     !node_online(numa_node)))
 		return -EINVAL;
 
+	if (attr->map_extra_data) {
+		err = copy_map_extra_data(attr, is_kernel);
+		if (err)
+			return err;
+	}
+
 	/* find map type and init map: hashtable vs rbtree vs bloom vs ... */
 	map = find_and_alloc_map(attr);
-	if (IS_ERR(map))
-		return PTR_ERR(map);
+	if (IS_ERR(map)) {
+		err = PTR_ERR(map);
+		goto free_map_extra_data;
+	}
+
+	/* ->map_alloc should release and zero the attr->map_extra_data */
+	WARN_ON(attr->map_extra_data);
 
 	err = bpf_obj_name_cpy(map->name, attr->map_name,
 			       sizeof(attr->map_name));
@@ -1188,6 +1229,8 @@ free_map_off_arr:
 free_map:
 	btf_put(map->btf);
 	map->ops->map_free(map);
+free_map_extra_data:
+	kfree(attr->map_extra_data);
 	return err;
 }
 
@@ -4935,7 +4978,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 
 	switch (cmd) {
 	case BPF_MAP_CREATE:
-		err = map_create(&attr);
+		err = map_create(&attr, bpfptr_is_kernel(uattr));
 		break;
 	case BPF_MAP_LOOKUP_ELEM:
 		err = map_lookup_elem(&attr);

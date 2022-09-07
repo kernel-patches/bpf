@@ -170,6 +170,7 @@ int bpf_map_create(enum bpf_map_type map_type,
 		   const struct bpf_map_create_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, map_extra);
+	char map_extra_data[sizeof(opts->map_extra_data)];
 	union bpf_attr attr;
 	int fd;
 
@@ -197,6 +198,13 @@ int bpf_map_create(enum bpf_map_type map_type,
 	attr.map_extra = OPTS_GET(opts, map_extra, 0);
 	attr.numa_node = OPTS_GET(opts, numa_node, 0);
 	attr.map_ifindex = OPTS_GET(opts, map_ifindex, 0);
+
+	attr.map_extra_data_size = OPTS_GET(opts, map_extra_data_size, 0);
+	if (attr.map_extra_data_size) {
+		memcpy(map_extra_data, opts->map_extra_data,
+		       attr.map_extra_data_size);
+		attr.map_extra_data = map_extra_data;
+	}
 
 	fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(fd);
