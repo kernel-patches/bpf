@@ -121,11 +121,19 @@ struct btf {
 
 	/* Pointer size (in bytes) for a target architecture of this BTF */
 	int ptr_sz;
+
+	/* BTF object ID, valid for vmlinux and module BTF */
+	__u32 id;
 };
 
 static inline __u64 ptr_to_u64(const void *ptr)
 {
 	return (__u64) (unsigned long) ptr;
+}
+
+static inline const void *u64_to_ptr(__u64 val)
+{
+	return (const void *)(unsigned long)val;
 }
 
 /* Ensure given dynamically allocated memory region pointed to by *data* with
@@ -456,6 +464,11 @@ __u32 btf__type_cnt(const struct btf *btf)
 const struct btf *btf__base_btf(const struct btf *btf)
 {
 	return btf->base_btf;
+}
+
+__u32 btf_obj_id(const struct btf *btf)
+{
+	return btf->id;
 }
 
 /* internal helper returning non-const pointer to a type */
@@ -814,6 +827,7 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 	btf->fd = -1;
 	btf->ptr_sz = sizeof(void *);
 	btf->swapped_endian = false;
+	btf->id = 0;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -864,6 +878,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 	btf->start_id = 1;
 	btf->start_str_off = 0;
 	btf->fd = -1;
+	btf->id = 0;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -1327,7 +1342,7 @@ const char *btf__name_by_offset(const struct btf *btf, __u32 offset)
 	return btf__str_by_offset(btf, offset);
 }
 
-struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
+static struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 {
 	struct bpf_btf_info btf_info;
 	__u32 len = sizeof(btf_info);
@@ -1375,6 +1390,8 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	}
 
 	btf = btf_new(ptr, btf_info.btf_size, base_btf);
+	if (!IS_ERR_OR_NULL(btf))
+		btf->id = btf_info.id;
 
 exit_free:
 	free(ptr);
@@ -4634,6 +4651,97 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
 		return r;
 
 	return 0;
+}
+
+/**
+ * btf_load_next_with_info - get first BTF with ID bigger than the input one.
+ * @start_id: ID to start the search from
+ * @info: buffer to put BTF info to
+ * @base_btf: base BTF, can be %NULL if @vmlinux is true
+ * @vmlinux: true to look for the vmlinux BTF instead of a module BTF
+ *
+ * Obtains the first BTF with the ID bigger than the @start_id. @info::name and
+ * @info::name_len must be initialized by the caller. The default name buffer
+ * size is %BTF_NAME_BUF_LEN.
+ * FD must be closed after BTF is no longer needed. If @vmlinux is true, FD can
+ * be closed and set to -1 right away without preventing later usage.
+ *
+ * Returns pointer to the BTF loaded from the kernel or an error pointer.
+ */
+struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
+				    struct btf *base_btf, bool vmlinux)
+{
+	__u32 name_len = info->name_len;
+	__u64 name = info->name;
+	const char *name_str;
+	__u32 id = start_id;
+
+	if (!name)
+		return ERR_PTR(-EINVAL);
+
+	name_str = u64_to_ptr(name);
+
+	while (true) {
+		__u32 len = sizeof(*info);
+		struct btf *btf;
+		int err, fd;
+
+		err = bpf_btf_get_next_id(id, &id);
+		if (err) {
+			err = -errno;
+			if (err != -ENOENT)
+				pr_warn("failed to iterate BTF objects: %d\n",
+					err);
+			return ERR_PTR(err);
+		}
+
+		fd = bpf_btf_get_fd_by_id(id);
+		if (fd < 0) {
+			err = -errno;
+			if (err == -ENOENT)
+				/* Expected race: non-vmlinux BTF was
+				 * unloaded
+				 */
+				continue;
+			pr_warn("failed to get BTF object #%d FD: %d\n",
+				id, err);
+			return ERR_PTR(err);
+		}
+
+		memset(info, 0, len);
+		info->name = name;
+		info->name_len = name_len;
+
+		err = bpf_obj_get_info_by_fd(fd, info, &len);
+		if (err) {
+			err = -errno;
+			pr_warn("failed to get BTF object #%d info: %d\n",
+				id, err);
+			goto err_out;
+		}
+
+		/* Filter BTFs */
+		if (!info->kernel_btf ||
+		    !strcmp(name_str, "vmlinux") != vmlinux) {
+			close(fd);
+			continue;
+		}
+
+		btf = btf_get_from_fd(fd, base_btf);
+		err = libbpf_get_error(btf);
+		if (err) {
+			pr_warn("failed to load module [%s]'s BTF object #%d: %d\n",
+				name_str, id, err);
+			goto err_out;
+		}
+
+		btf->fd = fd;
+		return btf;
+
+err_out:
+		close(fd);
+		return ERR_PTR(err);
+	}
 }
 
 /*

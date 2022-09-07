@@ -5341,11 +5341,11 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 
 static int load_module_btfs(struct bpf_object *obj)
 {
-	struct bpf_btf_info info;
+	char name[BTF_NAME_BUF_LEN] = { };
 	struct module_btf *mod_btf;
+	struct bpf_btf_info info;
 	struct btf *btf;
-	char name[64];
-	__u32 id = 0, len;
+	__u32 id = 0;
 	int err, fd;
 
 	if (obj->btf_modules_loaded)
@@ -5362,49 +5362,19 @@ static int load_module_btfs(struct bpf_object *obj)
 		return 0;
 
 	while (true) {
-		err = bpf_btf_get_next_id(id, &id);
-		if (err && errno == ENOENT)
-			return 0;
-		if (err) {
-			err = -errno;
-			pr_warn("failed to iterate BTF objects: %d\n", err);
-			return err;
-		}
-
-		fd = bpf_btf_get_fd_by_id(id);
-		if (fd < 0) {
-			if (errno == ENOENT)
-				continue; /* expected race: BTF was unloaded */
-			err = -errno;
-			pr_warn("failed to get BTF object #%d FD: %d\n", id, err);
-			return err;
-		}
-
-		len = sizeof(info);
 		memset(&info, 0, sizeof(info));
 		info.name = ptr_to_u64(name);
 		info.name_len = sizeof(name);
 
-		err = bpf_obj_get_info_by_fd(fd, &info, &len);
-		if (err) {
-			err = -errno;
-			pr_warn("failed to get BTF object #%d info: %d\n", id, err);
-			goto err_out;
-		}
-
-		/* ignore non-module BTFs */
-		if (!info.kernel_btf || strcmp(name, "vmlinux") == 0) {
-			close(fd);
-			continue;
-		}
-
-		btf = btf_get_from_fd(fd, obj->btf_vmlinux);
+		btf = btf_load_next_with_info(id, &info, obj->btf_vmlinux,
+					      false);
 		err = libbpf_get_error(btf);
-		if (err) {
-			pr_warn("failed to load module [%s]'s BTF object #%d: %d\n",
-				name, id, err);
-			goto err_out;
-		}
+		if (err)
+			return err == -ENOENT ? 0 : err;
+
+		fd = btf__fd(btf);
+		btf__set_fd(btf, -1);
+		id = btf_obj_id(btf);
 
 		err = libbpf_ensure_mem((void **)&obj->btf_modules, &obj->btf_module_cap,
 				        sizeof(*obj->btf_modules), obj->btf_module_cnt + 1);

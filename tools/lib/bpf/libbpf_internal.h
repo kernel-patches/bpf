@@ -367,9 +367,14 @@ int libbpf__load_raw_btf(const char *raw_types, size_t types_len,
 			 const char *str_sec, size_t str_len);
 int btf_load_into_kernel(struct btf *btf, char *log_buf, size_t log_sz, __u32 log_level);
 
-struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 				const char **prefix, int *kind);
+__u32 btf_obj_id(const struct btf *btf);
+
+#define BTF_NAME_BUF_LEN 64
+
+struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
+				    struct btf *base_btf, bool vmlinux);
 
 struct btf_ext_info {
 	/*
