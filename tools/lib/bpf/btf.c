@@ -4744,6 +4744,25 @@ err_out:
 	}
 }
 
+static struct btf *btf_load_vmlinux_from_kernel(void)
+{
+	char name[BTF_NAME_BUF_LEN] = { };
+	struct bpf_btf_info info;
+	struct btf *btf;
+
+	memset(&info, 0, sizeof(info));
+	info.name = ptr_to_u64(name);
+	info.name_len = sizeof(name);
+
+	btf = btf_load_next_with_info(0, &info, NULL, true);
+	if (!libbpf_get_error(btf)) {
+		close(btf->fd);
+		btf__set_fd(btf, -1);
+	}
+
+	return btf;
+}
+
 /*
  * Probe few well-known locations for vmlinux kernel image and try to load BTF
  * data out of it to use for target BTF.
@@ -4770,6 +4789,15 @@ struct btf *btf__load_vmlinux_btf(void)
 	struct btf *btf;
 	int i, err;
 
+	btf = btf_load_vmlinux_from_kernel();
+	err = libbpf_get_error(btf);
+	pr_debug("loading vmlinux BTF from kernel: %d\n", err);
+	if (!err)
+		return btf;
+
+	pr_info("failed to load vmlinux BTF from kernel: %d, will look through filesystem\n",
+		err);
+
 	uname(&buf);
 
 	for (i = 0; i < ARRAY_SIZE(locations); i++) {
@@ -4783,14 +4811,14 @@ struct btf *btf__load_vmlinux_btf(void)
 		else
 			btf = btf__parse_elf(path, NULL);
 		err = libbpf_get_error(btf);
-		pr_debug("loading kernel BTF '%s': %d\n", path, err);
+		pr_debug("loading vmlinux BTF '%s': %d\n", path, err);
 		if (err)
 			continue;
 
 		return btf;
 	}
 
-	pr_warn("failed to find valid kernel BTF\n");
+	pr_warn("failed to find valid vmlinux BTF\n");
 	return libbpf_err_ptr(-ESRCH);
 }
 
