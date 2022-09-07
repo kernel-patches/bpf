@@ -103,7 +103,7 @@ struct xdp_options {
 struct xdp_desc {
 	__u64 addr;
 	__u32 len;
-	__u32 options;
+	__u32 options; /* set to the values of xdp_hints_flags*/
 };
 
 /* UMEM descriptor is __u64 */
