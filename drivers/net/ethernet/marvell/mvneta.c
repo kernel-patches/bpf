@@ -40,6 +40,7 @@
 #include <net/page_pool.h>
 #include <net/pkt_cls.h>
 #include <linux/bpf_trace.h>
+#include <linux/btf.h>
 
 /* Registers */
 #define MVNETA_RXQ_CONFIG_REG(q)                (0x1400 + ((q) << 2))
@@ -370,6 +371,9 @@
 
 #define MVNETA_RX_GET_BM_POOL_ID(rxd) \
 	(((rxd)->status & MVNETA_RXD_BM_POOL_MASK) >> MVNETA_RXD_BM_POOL_SHIFT)
+
+static struct btf *mvneta_btf;
+static u64 btf_id_xdp_hints;
 
 enum {
 	ETHTOOL_STAT_EEE_WAKEUP,
@@ -2308,12 +2312,15 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 		     struct mvneta_rx_desc *rx_desc,
 		     struct mvneta_rx_queue *rxq,
 		     struct xdp_buff *xdp, int *size,
-		     struct page *page)
+		     struct page *page, u32 status)
 {
 	unsigned char *data = page_address(page);
 	int data_len = -MVNETA_MH_SIZE, len;
+	struct xdp_hints_common *xdp_hints;
 	struct net_device *dev = pp->dev;
 	enum dma_data_direction dma_dir;
+	u32 xdp_hints_flags;
+	u16 cksum;
 
 	if (*size > MVNETA_MAX_RX_BUF_SIZE) {
 		len = MVNETA_MAX_RX_BUF_SIZE;
@@ -2336,6 +2343,20 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	xdp_buff_clear_frags_flag(xdp);
 	xdp_prepare_buff(xdp, data, pp->rx_offset_correction + MVNETA_MH_SIZE,
 			 data_len, false);
+
+	if (unlikely(!(pp->dev->features & NETIF_F_XDP_HINTS))) {
+		xdp_buff_clear_hints_flags(xdp);
+		return;
+	}
+
+	xdp_hints = xdp->data - sizeof(*xdp_hints);
+	cksum = mvneta_rx_csum(pp, status);
+	xdp_hints_flags = xdp_hints_set_rx_csum(xdp_hints, cksum, 0);
+	xdp_hints_set_flags(xdp_hints, xdp_hints_flags);
+	xdp_hints->btf_full_id = btf_id_xdp_hints;
+	xdp->data_meta = xdp->data - sizeof(*xdp_hints);
+
+	xdp_buff_set_hints_flags(xdp, true);
 }
 
 static void
@@ -2385,9 +2406,25 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 	*size -= len;
 }
 
+static void
+mvneta_set_skb_hints_from_xdp(struct xdp_buff *xdp, struct sk_buff *skb)
+{
+	struct xdp_hints_common *xdp_hints;
+
+	if (!(xdp_buff_has_hints_compat(xdp)))
+		return;
+
+	if (xdp->data - xdp->data_meta < sizeof(*xdp_hints))
+		return;
+
+	xdp_hints = xdp->data - sizeof(*xdp_hints);
+	xdp_hint2skb(skb, xdp_hints);
+}
+
+
 static struct sk_buff *
 mvneta_swbm_build_skb(struct mvneta_port *pp, struct page_pool *pool,
-		      struct xdp_buff *xdp, u32 desc_status)
+		      struct xdp_buff *xdp)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
 	struct sk_buff *skb;
@@ -2404,7 +2441,7 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct page_pool *pool,
 
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
 	skb_put(skb, xdp->data_end - xdp->data);
-	skb->ip_summed = mvneta_rx_csum(pp, desc_status);
+	mvneta_set_skb_hints_from_xdp(xdp, skb);
 
 	if (unlikely(xdp_buff_has_frags(xdp)))
 		xdp_update_skb_shared_info(skb, num_frags,
@@ -2424,8 +2461,8 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 	struct net_device *dev = pp->dev;
 	struct mvneta_stats ps = {};
 	struct bpf_prog *xdp_prog;
-	u32 desc_status, frame_sz;
 	struct xdp_buff xdp_buf;
+	u32 frame_sz;
 
 	xdp_init_buff(&xdp_buf, PAGE_SIZE, &rxq->xdp_rxq);
 	xdp_buf.data_hard_start = NULL;
@@ -2458,10 +2495,8 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 
 			size = rx_desc->data_size;
 			frame_sz = size - ETH_FCS_LEN;
-			desc_status = rx_status;
-
 			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
-					     &size, page);
+					     &size, page, rx_status);
 		} else {
 			if (unlikely(!xdp_buf.data_hard_start)) {
 				rx_desc->buf_phys_addr = 0;
@@ -2487,7 +2522,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 		    mvneta_run_xdp(pp, rxq, xdp_prog, &xdp_buf, frame_sz, &ps))
 			goto next;
 
-		skb = mvneta_swbm_build_skb(pp, rxq->page_pool, &xdp_buf, desc_status);
+		skb = mvneta_swbm_build_skb(pp, rxq->page_pool, &xdp_buf);
 		if (IS_ERR(skb)) {
 			struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
 
@@ -5613,7 +5648,7 @@ static int mvneta_probe(struct platform_device *pdev)
 	}
 
 	dev->features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-			NETIF_F_TSO | NETIF_F_RXCSUM;
+			NETIF_F_TSO | NETIF_F_RXCSUM | NETIF_F_XDP_HINTS;
 	dev->hw_features |= dev->features;
 	dev->vlan_features |= dev->features;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
@@ -5817,6 +5852,11 @@ static int __init mvneta_driver_init(void)
 {
 	int ret;
 
+	mvneta_btf = btf_get_module_btf(THIS_MODULE);
+	if (mvneta_btf)
+		btf_id_xdp_hints = btf_get_module_btf_full_id(mvneta_btf,
+							      "xdp_hints_common");
+
 	ret = cpuhp_setup_state_multi(CPUHP_AP_ONLINE_DYN, "net/mvneta:online",
 				      mvneta_cpu_online,
 				      mvneta_cpu_down_prepare);
@@ -5844,6 +5884,7 @@ module_init(mvneta_driver_init);
 
 static void __exit mvneta_driver_exit(void)
 {
+	btf_put_module_btf(mvneta_btf);
 	platform_driver_unregister(&mvneta_driver);
 	cpuhp_remove_multi_state(CPUHP_NET_MVNETA_DEAD);
 	cpuhp_remove_multi_state(online_hpstate);
