@@ -379,11 +379,11 @@ static u64 ixgbe_ptp_read_82599(const struct cyclecounter *cc)
 /**
  * ixgbe_ptp_convert_to_hwtstamp - convert register value to hw timestamp
  * @adapter: private adapter structure
- * @hwtstamp: stack timestamp structure
  * @timestamp: unsigned 64bit system time value
  *
- * We need to convert the adapter's RX/TXSTMP registers into a hwtstamp value
- * which can be used by the stack's ptp functions.
+ * We need to convert the adapter's RX/TXSTMP registers into a ns value
+ * which can be converted later to a hwtstamp to be used by the stack's
+ * ptp functions.
  *
  * The lock is used to protect consistency of the cyclecounter and the SYSTIME
  * registers. However, it does not need to protect against the Rx or Tx
@@ -393,15 +393,12 @@ static u64 ixgbe_ptp_read_82599(const struct cyclecounter *cc)
  * In addition to the timestamp in hardware, some controllers need a software
  * overflow cyclecounter, and this function takes this into account as well.
  **/
-static void ixgbe_ptp_convert_to_hwtstamp(struct ixgbe_adapter *adapter,
-					  struct skb_shared_hwtstamps *hwtstamp,
-					  u64 timestamp)
+u64 ixgbe_ptp_convert_to_hwtstamp(struct ixgbe_adapter *adapter,
+				 u64 timestamp)
 {
 	unsigned long flags;
 	struct timespec64 systime;
 	u64 ns;
-
-	memset(hwtstamp, 0, sizeof(*hwtstamp));
 
 	switch (adapter->hw.mac.type) {
 	/* X550 and later hardware supposedly represent time using a seconds
@@ -433,7 +430,7 @@ static void ixgbe_ptp_convert_to_hwtstamp(struct ixgbe_adapter *adapter,
 	ns = timecounter_cyc2time(&adapter->hw_tc, timestamp);
 	spin_unlock_irqrestore(&adapter->tmreg_lock, flags);
 
-	hwtstamp->hwtstamp = ns_to_ktime(ns);
+	return ns;
 }
 
 /**
@@ -820,11 +817,13 @@ static void ixgbe_ptp_tx_hwtstamp(struct ixgbe_adapter *adapter)
 	struct sk_buff *skb = adapter->ptp_tx_skb;
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct skb_shared_hwtstamps shhwtstamps;
-	u64 regval = 0;
+	u64 regval = 0, ns = 0;
 
 	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_TXSTMPL);
 	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_TXSTMPH) << 32;
-	ixgbe_ptp_convert_to_hwtstamp(adapter, &shhwtstamps, regval);
+	ns = ixgbe_ptp_convert_to_hwtstamp(adapter, regval);
+	if (ns)
+		shhwtstamps.hwtstamp = ns_to_ktime(ns);
 
 	/* Handle cleanup of the ptp_tx_skb ourselves, and unlock the state
 	 * bit prior to notifying the stack via skb_tstamp_tx(). This prevents
@@ -892,6 +891,10 @@ void ixgbe_ptp_rx_pktstamp(struct ixgbe_q_vector *q_vector,
 			   struct sk_buff *skb)
 {
 	__le64 regval;
+	u64 ns = 0;
+	struct skb_shared_hwtstamps *hwtstamp = skb_hwtstamps(skb);
+
+	memset(hwtstamp, 0, sizeof(*hwtstamp));
 
 	/* copy the bits out of the skb, and then trim the skb length */
 	skb_copy_bits(skb, skb->len - IXGBE_TS_HDR_LEN, &regval,
@@ -904,8 +907,35 @@ void ixgbe_ptp_rx_pktstamp(struct ixgbe_q_vector *q_vector,
 	 * DWORD: N              N + 1      N + 2
 	 * Field: End of Packet  SYSTIMH    SYSTIML
 	 */
-	ixgbe_ptp_convert_to_hwtstamp(q_vector->adapter, skb_hwtstamps(skb),
-				      le64_to_cpu(regval));
+	ns = ixgbe_ptp_convert_to_hwtstamp(q_vector->adapter, le64_to_cpu(regval));
+	if (ns)
+		hwtstamp->hwtstamp = ns_to_ktime(ns);
+}
+
+/**
+ * ixgbe_ptp_rx_hwtstamp_raw - utility function which returns the RX time stamp
+ * @adapter: the private adapter struct
+ *
+ * If the timestamp is valid, we return the raw value, else return 0;
+ */
+u64 ixgbe_ptp_rx_hwtstamp_raw(struct ixgbe_adapter *adapter)
+{
+	struct ixgbe_hw *hw = &adapter->hw;
+	u32 tsyncrxctl;
+	u64 regval = 0;
+
+	/* Read the tsyncrxctl register afterwards in order to prevent taking an
+	 * I/O hit on every packet.
+	 */
+
+	tsyncrxctl = IXGBE_READ_REG(hw, IXGBE_TSYNCRXCTL);
+	if (!(tsyncrxctl & IXGBE_TSYNCRXCTL_VALID))
+		return 0;
+
+	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_RXSTMPL);
+	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_RXSTMPH) << 32;
+
+	return regval;
 }
 
 /**
@@ -921,29 +951,21 @@ void ixgbe_ptp_rx_rgtstamp(struct ixgbe_q_vector *q_vector,
 			   struct sk_buff *skb)
 {
 	struct ixgbe_adapter *adapter;
-	struct ixgbe_hw *hw;
-	u64 regval = 0;
-	u32 tsyncrxctl;
+	u64 regval = 0, ns = 0;
+	struct skb_shared_hwtstamps *hwtstamp = skb_hwtstamps(skb);
 
 	/* we cannot process timestamps on a ring without a q_vector */
 	if (!q_vector || !q_vector->adapter)
 		return;
 
+	memset(hwtstamp, 0, sizeof(*hwtstamp));
 	adapter = q_vector->adapter;
-	hw = &adapter->hw;
-
-	/* Read the tsyncrxctl register afterwards in order to prevent taking an
-	 * I/O hit on every packet.
-	 */
-
-	tsyncrxctl = IXGBE_READ_REG(hw, IXGBE_TSYNCRXCTL);
-	if (!(tsyncrxctl & IXGBE_TSYNCRXCTL_VALID))
-		return;
-
-	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_RXSTMPL);
-	regval |= (u64)IXGBE_READ_REG(hw, IXGBE_RXSTMPH) << 32;
-
-	ixgbe_ptp_convert_to_hwtstamp(adapter, skb_hwtstamps(skb), regval);
+	regval = ixgbe_ptp_rx_hwtstamp_raw(adapter);
+	if (regval) {
+		ns = ixgbe_ptp_convert_to_hwtstamp(adapter, regval);
+		if (ns)
+			hwtstamp->hwtstamp = ns_to_ktime(ns);
+	}
 }
 
 /**

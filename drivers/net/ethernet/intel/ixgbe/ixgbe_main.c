@@ -68,7 +68,18 @@ struct xdp_hints_ixgbe {
 	struct xdp_hints_common common;
 };
 
+struct xdp_hints_ixgbe_timestamp {
+	u64 rx_timestamp;
+	struct xdp_hints_ixgbe base;
+};
+
+/* Extending xdp_hints_flags */
+enum xdp_hints_flags_driver {
+	HINT_FLAG_RX_TIMESTAMP = BIT(16),
+};
+
 u64 btf_id_xdp_hints_ixgbe;
+u64 btf_id_xdp_hints_ixgbe_timestamp;
 
 static const char ixgbe_overheat_msg[] = "Network adapter has been stopped because it has over heated. Restart the computer. If the problem persists, power off the system and replace the adapter";
 
@@ -1797,6 +1808,8 @@ static inline void ixgbe_process_xdp_hints(struct ixgbe_ring *ring,
 	u32 btf_id = btf_id_xdp_hints_ixgbe;
 	u32 btf_sz = sizeof(*xdp_hints);
 	u32 f1 = 0, f2, f3, f4, f5 = 0;
+	u32 flags = ring->q_vector->adapter->flags;
+	struct ixgbe_q_vector *q_vector = ring->q_vector;
 
 	if (!(ring->netdev->features & NETIF_F_XDP_HINTS)) {
 		xdp_buff_clear_hints_flags(xdp);
@@ -1809,6 +1822,25 @@ static inline void ixgbe_process_xdp_hints(struct ixgbe_ring *ring,
 
 	xdp_hints = xdp->data - btf_sz;
 	common = &xdp_hints->common;
+
+	if (q_vector && q_vector->adapter) {
+		if (unlikely(flags & IXGBE_FLAG_RX_HWTSTAMP_ENABLED)) {
+			u64 regval = 0, ns = 0;
+			struct xdp_hints_ixgbe_timestamp *hints;
+
+			regval = ixgbe_ptp_rx_hwtstamp_raw(q_vector->adapter);
+			if (regval) {
+				ns = ixgbe_ptp_convert_to_hwtstamp(q_vector->adapter, regval);
+				if (ns) {
+					btf_id = btf_id_xdp_hints_ixgbe_timestamp;
+					btf_sz = sizeof(*hints);
+					hints = xdp->data - btf_sz;
+					hints->rx_timestamp = ns_to_ktime(ns);
+					f1 = HINT_FLAG_RX_TIMESTAMP;
+				}
+			}
+		}
+	}
 
 	f2 = ixgbe_rx_hash_xdp(ring, rx_desc, xdp_hints, pkt_info);
 	f3 = ixgbe_rx_checksum_xdp(ring, rx_desc, xdp_hints, pkt_info);
@@ -11665,7 +11697,10 @@ static struct pci_driver ixgbe_driver = {
 
 static void ixgbe_this_module_btf_lookups(struct btf *btf)
 {
-	btf_id_xdp_hints_ixgbe = btf_get_module_btf_full_id(btf, "xdp_hints_ixgbe");
+	btf_id_xdp_hints_ixgbe = btf_get_module_btf_full_id(btf,
+							    "xdp_hints_ixgbe");
+	btf_id_xdp_hints_ixgbe_timestamp = btf_get_module_btf_full_id(btf,
+					      "xdp_hints_ixgbe_timestamp");
 }
 
 /**

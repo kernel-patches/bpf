@@ -1023,6 +1023,8 @@ void ixgbe_ptp_rx_hang(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_tx_hang(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_rx_pktstamp(struct ixgbe_q_vector *, struct sk_buff *);
 void ixgbe_ptp_rx_rgtstamp(struct ixgbe_q_vector *, struct sk_buff *skb);
+u64 ixgbe_ptp_convert_to_hwtstamp(struct ixgbe_adapter *adapter, u64 timestamp);
+u64 ixgbe_ptp_rx_hwtstamp_raw(struct ixgbe_adapter *adapter);
 static inline void ixgbe_ptp_rx_hwtstamp(struct ixgbe_ring *rx_ring,
 					 union ixgbe_adv_rx_desc *rx_desc,
 					 struct sk_buff *skb)
