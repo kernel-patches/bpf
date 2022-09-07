@@ -111,8 +111,8 @@ static void test_bpf_nf_ct(int mode)
 	/* allow some tolerance for test_delta_timeout value to avoid races. */
 	ASSERT_GT(skel->bss->test_delta_timeout, 8, "Test for min ct timeout update");
 	ASSERT_LE(skel->bss->test_delta_timeout, 10, "Test for max ct timeout update");
-	/* expected status is IPS_SEEN_REPLY */
-	ASSERT_EQ(skel->bss->test_status, 2, "Test for ct status update ");
+	/* expected status is IPS_CONFIRMED | IPS_SEEN_REPLY */
+	ASSERT_EQ(skel->bss->test_status, 0xa, "Test for ct status update ");
 	ASSERT_EQ(skel->data->test_exist_lookup, 0, "Test existing connection lookup");
 	ASSERT_EQ(skel->bss->test_exist_lookup_mark, 43, "Test existing connection lookup ctmark");
 end:
