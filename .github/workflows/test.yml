@@ -28,7 +28,6 @@ jobs:
         run: |
           echo "::set-output name=matrix::{\"include\":[ \
             {\"kernel\": \"LATEST\", \"runs_on\": [\"ubuntu-latest\", \"self-hosted\"], \"arch\": \"x86_64\", \"toolchain\": \"gcc\"}, \
-            {\"kernel\": \"LATEST\", \"runs_on\": [\"ubuntu-latest\", \"self-hosted\"], \"arch\": \"x86_64\", \"toolchain\": \"${{ needs.llvm-toolchain.outputs.llvm }}\"}, \
             {\"kernel\": \"LATEST\", \"runs_on\": [\"z15\", \"self-hosted\"], \"arch\": \"s390x\", \"toolchain\": \"gcc\"} \
           ]}"
   VM_Test:
