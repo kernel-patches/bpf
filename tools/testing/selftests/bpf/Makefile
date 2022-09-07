@@ -33,19 +33,14 @@ CFLAGS += -Wno-unused-command-line-argument
 endif
 
 # Order correspond to 'make run_tests' order
-TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_lpm_map test_progs \
-	test_verifier_log test_dev_cgroup \
-	test_sock test_sockmap get_cgroup_id_user \
-	test_cgroup_storage \
-	test_tcpnotify_user test_sysctl \
-	test_progs-no_alu32
+TEST_GEN_PROGS = test_progs
 
 # Also test bpf-gcc, if present
 ifneq ($(BPF_GCC),)
 TEST_GEN_PROGS += test_progs-bpf_gcc
 endif
 
-TEST_GEN_FILES = test_lwt_ip_encap.bpf.o test_tc_edt.bpf.o
+TEST_GEN_FILES =
 TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)
 
 # Order correspond to 'make run_tests' order
@@ -79,10 +74,7 @@ TEST_PROGS_EXTENDED := with_addr.sh \
 	test_xdp_vlan.sh test_bpftool.py
 
 # Compile but not part of 'make run_tests'
-TEST_GEN_PROGS_EXTENDED = test_sock_addr test_skb_cgroup_id_user \
-	flow_dissector_load test_flow_dissector test_tcp_check_syncookie_user \
-	test_lirc_mode2_user xdping test_cpp runqslower bench bpf_testmod.ko \
-	xskxceiver xdp_redirect_multi xdp_synproxy
+TEST_GEN_PROGS_EXTENDED = bpf_testmod.ko
 
 TEST_CUSTOM_PROGS = $(OUTPUT)/urandom_read
 
@@ -331,7 +323,13 @@ $(OUTPUT)/cgroup_getset_retval_hooks.o: cgroup_getset_retval_hooks.h
 # $3 - CFLAGS
 define CLANG_BPF_BUILD_RULE
 	$(call msg,CLNG-BPF,$(TRUNNER_BINARY),$2)
-	$(Q)$(CLANG) $3 -O2 -target bpf -c $1 -mcpu=v3 -o $2
+	$(Q)if [ "$2" = "$(TRUNNER_OUTPUT)/test_usdt.bpf.o" ]; then\
+		echo "Running CLANG with logs"; \
+		$(CLANG) $3 -mllvm --print-after-all -O2 -target bpf -c $1 -mcpu=v3 -o $2; \
+	else \
+		echo "Running CLANG without logs"; \
+		$(CLANG) $3 -O2 -target bpf -c $1 -mcpu=v3 -o $2; \
+	fi
 endef
 # Similar to CLANG_BPF_BUILD_RULE, but with disabled alu32
 define CLANG_NOALU32_BPF_BUILD_RULE
@@ -346,16 +344,13 @@ endef
 
 SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
 
-LINKED_SKELS := test_static_linked.skel.h linked_funcs.skel.h		\
-		linked_vars.skel.h linked_maps.skel.h 			\
-		test_subskeleton.skel.h test_subskeleton_lib.skel.h	\
-		test_usdt.skel.h
+LINKED_SKELS := test_usdt.skel.h
 
-LSKELS := kfunc_call_test.c fentry_test.c fexit_test.c fexit_sleep.c \
-	test_ringbuf.c atomics.c trace_printk.c trace_vprintk.c \
-	map_ptr_kern.c core_kern.c core_kern_overflow.c
+# LSKELS := kfunc_call_test.c fentry_test.c fexit_test.c fexit_sleep.c \
+# 	test_ringbuf.c atomics.c trace_printk.c trace_vprintk.c \
+# 	map_ptr_kern.c core_kern.c core_kern_overflow.c
 # Generate both light skeleton and libbpf skeleton for these
-LSKELS_EXTRA := test_ksyms_module.c test_ksyms_weak.c kfunc_call_test_subprog.c
+#LSKELS_EXTRA := test_ksyms_module.c test_ksyms_weak.c kfunc_call_test_subprog.c
 SKEL_BLACKLIST += $$(LSKELS)
 
 test_static_linked.skel.h-deps := test_static_linked1.bpf.o test_static_linked2.bpf.o
@@ -381,11 +376,21 @@ TRUNNER_OUTPUT := $(OUTPUT)$(if $2,/)$2
 TRUNNER_BINARY := $1$(if $2,-)$2
 TRUNNER_TEST_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.test.o,	\
 				 $$(notdir $$(wildcard $(TRUNNER_TESTS_DIR)/*.c)))
+ifdef TRUNNER_TEST_OBJS_FILTER
+TRUNNER_TEST_OBJS := $$(shell echo $$(TRUNNER_TEST_OBJS) | \
+			tr ' ' '\n' | \
+			grep $$(TRUNNER_TEST_OBJS_FILTER))
+endif
 TRUNNER_EXTRA_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.o,		\
 				 $$(filter %.c,$(TRUNNER_EXTRA_SOURCES)))
 TRUNNER_EXTRA_HDRS := $$(filter %.h,$(TRUNNER_EXTRA_SOURCES))
 TRUNNER_TESTS_HDR := $(TRUNNER_TESTS_DIR)/tests.h
 TRUNNER_BPF_SRCS := $$(notdir $$(wildcard $(TRUNNER_BPF_PROGS_DIR)/*.c))
+ifdef TRUNNER_BPF_SRCS_FILTER
+TRUNNER_BPF_SRCS :=  $$(shell echo $$(TRUNNER_BPF_SRCS) | \
+			tr ' ' '\n' | \
+			grep $$(TRUNNER_BPF_SRCS_FILTER))
+endif
 TRUNNER_BPF_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.bpf.o, $$(TRUNNER_BPF_SRCS))
 TRUNNER_BPF_SKELS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.skel.h,	\
 				 $$(filter-out $(SKEL_BLACKLIST) $(LINKED_BPF_SRCS),\
@@ -404,6 +409,15 @@ endef
 # $1 - test runner base binary name (e.g., test_progs)
 # $2 - test runner extra "flavor" (e.g., no_alu32, gcc-bpf, etc)
 define DEFINE_TEST_RUNNER_RULES
+
+$(1)-$(2)-show-test-objs:
+	@echo $(TRUNNER_TEST_OBJS)
+
+$(1)-$(2)-show-bpf-srcs:
+	@echo $(TRUNNER_BPF_SRCS)
+
+$(1)-$(2)-show-bpf-objs:
+	@echo $(TRUNNER_BPF_OBJS)
 
 ifeq ($($(TRUNNER_OUTPUT)-dir),)
 $(TRUNNER_OUTPUT)-dir := y
@@ -461,7 +475,7 @@ $(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c
 	$$(call msg,TEST-HDR,$(TRUNNER_BINARY),$$@)
 	$$(shell (echo '/* Generated header, do not edit */';					\
 		  sed -n -E 's/^void (serial_)?test_([a-zA-Z0-9_]+)\((void)?\).*/DEFINE_TEST(\2)/p'	\
-			$(TRUNNER_TESTS_DIR)/*.c | sort ;	\
+			$(TRUNNER_TESTS_DIR)/*.c | grep usdt | sort ;	\
 		 ) > $$@)
 endif
 
@@ -507,6 +521,8 @@ endef
 
 # Define test_progs test runner.
 TRUNNER_TESTS_DIR := prog_tests
+TRUNNER_TEST_OBJS_FILTER := usdt
+TRUNNER_BPF_SRCS_FILTER := usdt
 TRUNNER_BPF_PROGS_DIR := progs
 TRUNNER_EXTRA_SOURCES := test_progs.c cgroup_helpers.c trace_helpers.c	\
 			 network_helpers.c testing_helpers.c		\
@@ -514,7 +530,6 @@ TRUNNER_EXTRA_SOURCES := test_progs.c cgroup_helpers.c trace_helpers.c	\
 			 cap_helpers.c
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
 		       $(OUTPUT)/liburandom_read.so			\
-		       $(OUTPUT)/xdp_synproxy				\
 		       ima_setup.sh					\
 		       $(wildcard progs/btf_dump_test_case_*.c)
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
@@ -535,6 +550,8 @@ endif
 
 # Define test_maps test runner.
 TRUNNER_TESTS_DIR := map_tests
+TRUNNER_TEST_OBJS_FILTER := xxxxx
+TRUNNER_BPF_SRCS_FILTER := xxxxx
 TRUNNER_BPF_PROGS_DIR := progs
 TRUNNER_EXTRA_SOURCES := test_maps.c
 TRUNNER_EXTRA_FILES :=
