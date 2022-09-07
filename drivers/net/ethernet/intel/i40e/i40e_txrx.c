@@ -1751,45 +1751,38 @@ no_buffers:
 	return true;
 }
 
-/**
- * i40e_rx_checksum - Indicate in skb if hw indicated a good cksum
- * @vsi: the VSI we care about
- * @skb: skb currently being received and modified
- * @rx_desc: the receive descriptor
- **/
-static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
-				    struct sk_buff *skb,
-				    union i40e_rx_desc *rx_desc)
+struct i40e_rx_checksum_ret {
+	u16 ip_summed;
+	u16 csum_level;
+};
+
+static inline struct i40e_rx_checksum_ret
+_i40e_rx_checksum(struct i40e_vsi *vsi,
+		  u64 qword,
+		  struct i40e_rx_ptype_decoded decoded)
 {
-	struct i40e_rx_ptype_decoded decoded;
+	struct i40e_rx_checksum_ret ret = {};
 	u32 rx_error, rx_status;
 	bool ipv4, ipv6;
-	u8 ptype;
-	u64 qword;
 
-	qword = le64_to_cpu(rx_desc->wb.qword1.status_error_len);
-	ptype = (qword & I40E_RXD_QW1_PTYPE_MASK) >> I40E_RXD_QW1_PTYPE_SHIFT;
 	rx_error = (qword & I40E_RXD_QW1_ERROR_MASK) >>
 		   I40E_RXD_QW1_ERROR_SHIFT;
 	rx_status = (qword & I40E_RXD_QW1_STATUS_MASK) >>
 		    I40E_RXD_QW1_STATUS_SHIFT;
-	decoded = decode_rx_desc_ptype(ptype);
 
-	skb->ip_summed = CHECKSUM_NONE;
-
-	skb_checksum_none_assert(skb);
+	ret.ip_summed = CHECKSUM_NONE;
 
 	/* Rx csum enabled and ip headers found? */
 	if (!(vsi->netdev->features & NETIF_F_RXCSUM))
-		return;
+		return ret;
 
 	/* did the hardware decode the packet and checksum? */
 	if (!(rx_status & BIT(I40E_RX_DESC_STATUS_L3L4P_SHIFT)))
-		return;
+		return ret;
 
 	/* both known and outer_ip must be set for the below code to work */
 	if (!(decoded.known && decoded.outer_ip))
-		return;
+		return ret;
 
 	ipv4 = (decoded.outer_ip == I40E_RX_PTYPE_OUTER_IP) &&
 	       (decoded.outer_ip_ver == I40E_RX_PTYPE_OUTER_IPV4);
@@ -1805,7 +1798,7 @@ static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
 	if (ipv6 &&
 	    rx_status & BIT(I40E_RX_DESC_STATUS_IPV6EXADD_SHIFT))
 		/* don't increment checksum err here, non-fatal err */
-		return;
+		return ret;
 
 	/* there was some L4 error, count error and punt packet to the stack */
 	if (rx_error & BIT(I40E_RX_DESC_ERROR_L4E_SHIFT))
@@ -1816,30 +1809,51 @@ static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
 	 * the csum.
 	 */
 	if (rx_error & BIT(I40E_RX_DESC_ERROR_PPRS_SHIFT))
-		return;
+		return ret;
 
 	/* If there is an outer header present that might contain a checksum
 	 * we need to bump the checksum level by 1 to reflect the fact that
 	 * we are indicating we validated the inner checksum.
 	 */
 	if (decoded.tunnel_type >= I40E_RX_PTYPE_TUNNEL_IP_GRENAT)
-		skb->csum_level = 1;
+		ret.csum_level = 1;
 
 	/* Only report checksum unnecessary for TCP, UDP, or SCTP */
 	switch (decoded.inner_prot) {
 	case I40E_RX_PTYPE_INNER_PROT_TCP:
 	case I40E_RX_PTYPE_INNER_PROT_UDP:
 	case I40E_RX_PTYPE_INNER_PROT_SCTP:
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		ret.ip_summed = CHECKSUM_UNNECESSARY;
 		fallthrough;
 	default:
 		break;
 	}
 
-	return;
+	return ret;
 
 checksum_fail:
 	vsi->back->hw_csum_rx_error++;
+	return ret;
+}
+
+/**
+ * i40e_rx_checksum - Indicate in skb if hw indicated a good cksum
+ * @vsi: the VSI we care about
+ * @skb: skb currently being received and modified
+ * @rx_desc: the receive descriptor
+ **/
+static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
+				    struct sk_buff *skb,
+				    union i40e_rx_desc *rx_desc)
+{
+	struct i40e_rx_checksum_ret ret;
+	u64 qword = le64_to_cpu(rx_desc->wb.qword1.status_error_len);
+	u8 ptype = (qword & I40E_RXD_QW1_PTYPE_MASK) >> I40E_RXD_QW1_PTYPE_SHIFT;
+	struct i40e_rx_ptype_decoded decoded = decode_rx_desc_ptype(ptype);
+
+	ret = _i40e_rx_checksum(vsi, qword, decoded);
+	skb->ip_summed  = ret.ip_summed;
+	skb->csum_level = ret.csum_level;
 }
 
 /**
