@@ -1819,15 +1819,10 @@ _i40e_rx_checksum(struct i40e_vsi *vsi,
 		ret.csum_level = 1;
 
 	/* Only report checksum unnecessary for TCP, UDP, or SCTP */
-	switch (decoded.inner_prot) {
-	case I40E_RX_PTYPE_INNER_PROT_TCP:
-	case I40E_RX_PTYPE_INNER_PROT_UDP:
-	case I40E_RX_PTYPE_INNER_PROT_SCTP:
+	if (likely(decoded.inner_prot == I40E_RX_PTYPE_INNER_PROT_TCP ||
+		   decoded.inner_prot == I40E_RX_PTYPE_INNER_PROT_UDP ||
+		   decoded.inner_prot == I40E_RX_PTYPE_INNER_PROT_SCTP))
 		ret.ip_summed = CHECKSUM_UNNECESSARY;
-		fallthrough;
-	default:
-		break;
-	}
 
 	return ret;
 
@@ -1858,19 +1853,17 @@ static inline void i40e_rx_checksum(struct i40e_vsi *vsi,
 
 /**
  * i40e_ptype_to_htype - get a hash type
- * @ptype: the ptype value from the descriptor
+ * @ptype: the decoded ptype value from the descriptor
  *
  * Returns a hash type to be used by skb_set_hash
  **/
-static inline int i40e_ptype_to_htype(u8 ptype)
+static inline int i40e_ptype_to_htype(struct i40e_rx_ptype_decoded decoded)
 {
-	struct i40e_rx_ptype_decoded decoded = decode_rx_desc_ptype(ptype);
-
-	if (!decoded.known)
+	if (unlikely(!decoded.known))
 		return PKT_HASH_TYPE_NONE;
 
-	if (decoded.outer_ip == I40E_RX_PTYPE_OUTER_IP &&
-	    decoded.payload_layer == I40E_RX_PTYPE_PAYLOAD_LAYER_PAY4)
+	if (likely(decoded.outer_ip == I40E_RX_PTYPE_OUTER_IP &&
+		   decoded.payload_layer == I40E_RX_PTYPE_PAYLOAD_LAYER_PAY4))
 		return PKT_HASH_TYPE_L4;
 	else if (decoded.outer_ip == I40E_RX_PTYPE_OUTER_IP &&
 		 decoded.payload_layer == I40E_RX_PTYPE_PAYLOAD_LAYER_PAY3)
@@ -1900,8 +1893,11 @@ static inline void i40e_rx_hash(struct i40e_ring *ring,
 		return;
 
 	if ((rx_desc->wb.qword1.status_error_len & rss_mask) == rss_mask) {
+		struct i40e_rx_ptype_decoded ptype;
+
+		ptype = decode_rx_desc_ptype(rx_ptype);
 		hash = le32_to_cpu(rx_desc->wb.qword0.hi_dword.rss);
-		skb_set_hash(skb, hash, i40e_ptype_to_htype(rx_ptype));
+		skb_set_hash(skb, hash, i40e_ptype_to_htype(ptype));
 	}
 }
 
@@ -1945,6 +1941,129 @@ void i40e_process_skb_fields(struct i40e_ring *rx_ring,
 
 	/* modifies the skb - consumes the enet header */
 	skb->protocol = eth_type_trans(skb, rx_ring->netdev);
+}
+
+struct xdp_hints_i40e {
+	struct i40e_rx_ptype_decoded i40e_hash_ptype;
+	struct xdp_hints_common common;
+};
+
+struct xdp_hints_i40e_timestamp {
+	u64 rx_timestamp;
+	struct xdp_hints_i40e base;
+};
+
+/* Extending xdp_hints_flags */
+enum xdp_hints_flags_driver {
+	HINT_FLAG_RX_TIMESTAMP = BIT(16),
+};
+
+/* BTF full IDs gets looked up on driver i40e_init_module */
+u64 btf_id_xdp_hints_i40e;
+u64 btf_id_xdp_hints_i40e_timestamp;
+
+static inline u32 i40e_rx_checksum_xdp(struct i40e_vsi *vsi, u64 qword1,
+				       struct xdp_hints_i40e *xdp_hints,
+				       struct i40e_rx_ptype_decoded ptype)
+{
+	struct i40e_rx_checksum_ret ret;
+
+	ret = _i40e_rx_checksum(vsi, qword1, ptype);
+	return xdp_hints_set_rx_csum(&xdp_hints->common, ret.ip_summed, ret.csum_level);
+}
+
+static inline u32 i40e_rx_hash_xdp(struct i40e_ring *ring,
+				   union i40e_rx_desc *rx_desc,
+				   struct xdp_buff *xdp,
+				   u64 rx_desc_qword1,
+				   struct xdp_hints_i40e *xdp_hints,
+				   struct i40e_rx_ptype_decoded ptype
+	)
+{
+	const u64 rss_mask = (u64)I40E_RX_DESC_FLTSTAT_RSS_HASH <<
+				I40E_RX_DESC_STATUS_FLTSTAT_SHIFT;
+	u32 flags = 0;
+
+	if (unlikely(!(ring->netdev->features & NETIF_F_RXHASH))) {
+		struct i40e_rx_ptype_decoded zero = {};
+
+		xdp_hints->i40e_hash_ptype = zero;
+		return 0;
+	}
+
+	if (likely((rx_desc_qword1 & rss_mask) == rss_mask)) {
+		u32 hash = le32_to_cpu(rx_desc->wb.qword0.hi_dword.rss);
+		u32 htype;
+
+		/* i40e provide extra information about protocol type  */
+		xdp_hints->i40e_hash_ptype = ptype;
+		htype = i40e_ptype_to_htype(ptype);
+		flags = xdp_hints_set_rx_hash(&xdp_hints->common, hash, htype);
+	}
+	return flags;
+}
+
+static inline void i40e_process_xdp_hints(struct i40e_ring *rx_ring,
+					  union i40e_rx_desc *rx_desc,
+					  struct xdp_buff *xdp,
+					  u64 qword)
+{
+	u32 rx_status = (qword & I40E_RXD_QW1_STATUS_MASK) >>
+			I40E_RXD_QW1_STATUS_SHIFT;
+	u32 tsynvalid = rx_status & I40E_RXD_QW1_STATUS_TSYNVALID_MASK;
+	u32 tsyn = (rx_status & I40E_RXD_QW1_STATUS_TSYNINDX_MASK) >>
+		   I40E_RXD_QW1_STATUS_TSYNINDX_SHIFT;
+	u64 tsyn_ts;
+
+	struct i40e_rx_ptype_decoded ptype;
+	struct xdp_hints_i40e *xdp_hints;
+	struct xdp_hints_common *common;
+	u32 btf_full_id = btf_id_xdp_hints_i40e;
+	u32 btf_sz = sizeof(*xdp_hints);
+	u32 f1 = 0, f2, f3, f4, f5 = 0;
+	u8 rx_ptype;
+
+	if (!(rx_ring->netdev->features & NETIF_F_XDP_HINTS))
+		return;
+
+	/* Driver have xdp headroom when using build_skb */
+	if (unlikely(!ring_uses_build_skb(rx_ring)))
+		return;
+
+	xdp_hints = xdp->data - btf_sz;
+	common = &xdp_hints->common;
+
+	if (unlikely(tsynvalid)) {
+		struct xdp_hints_i40e_timestamp *hints;
+
+		tsyn_ts = i40e_ptp_rx_hwtstamp_raw(rx_ring->vsi->back, tsyn);
+		btf_full_id = btf_id_xdp_hints_i40e_timestamp;
+		btf_sz = sizeof(*hints);
+		hints = xdp->data - btf_sz;
+		hints->rx_timestamp = ns_to_ktime(tsyn_ts);
+		f1 = HINT_FLAG_RX_TIMESTAMP;
+	}
+
+	/* ptype needed by both hash and checksum code */
+	rx_ptype = (qword & I40E_RXD_QW1_PTYPE_MASK) >> I40E_RXD_QW1_PTYPE_SHIFT;
+	ptype = decode_rx_desc_ptype(rx_ptype);
+
+	f2 = i40e_rx_hash_xdp(rx_ring, rx_desc, xdp, qword, xdp_hints, ptype);
+	f3 = i40e_rx_checksum_xdp(rx_ring->vsi, qword, xdp_hints, ptype);
+	f4 = xdp_hints_set_rxq(common, rx_ring->queue_index);
+
+	if (unlikely(qword & BIT(I40E_RX_DESC_STATUS_L2TAG1P_SHIFT))) {
+		__le16 vlan_tag = rx_desc->wb.qword0.lo_dword.l2tag1;
+
+		f5 = xdp_hints_set_vlan(common, le16_to_cpu(vlan_tag),
+					htons(ETH_P_8021Q));
+	}
+
+	xdp_hints_set_flags(common, (f1 | f2 | f3 | f4 | f5));
+	common->btf_full_id = btf_full_id;
+	xdp->data_meta = xdp->data - btf_sz;
+
+	xdp_buff_set_hints_flags(xdp, true);
 }
 
 /**
@@ -2495,7 +2614,7 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 		 */
 		dma_rmb();
 
-		if (i40e_rx_is_programming_status(qword)) {
+		if (unlikely(i40e_rx_is_programming_status(qword))) {
 			i40e_clean_programming_status(rx_ring,
 						      rx_desc->raw.qword[0],
 						      qword);
@@ -2522,6 +2641,8 @@ static int i40e_clean_rx_irq(struct i40e_ring *rx_ring, int budget)
 				     rx_buffer->page_offset - offset;
 			xdp_prepare_buff(&xdp, hard_start, offset, size, true);
 			xdp_buff_clear_frags_flag(&xdp);
+			prefetchw(xdp.data - 8); /* xdp.data_meta cacheline */
+			i40e_process_xdp_hints(rx_ring, rx_desc, &xdp, qword);
 #if (PAGE_SIZE > 4096)
 			/* At larger PAGE_SIZE, frame_sz depend on len size */
 			xdp.frame_sz = i40e_rx_frame_truesize(rx_ring, size);
