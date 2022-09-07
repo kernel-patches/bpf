@@ -1798,7 +1798,7 @@ static inline u32 ixgbe_rx_hash_xdp(struct ixgbe_ring *ring,
 	return flags;
 }
 
-static inline void ixgbe_process_xdp_hints(struct ixgbe_ring *ring,
+inline void ixgbe_process_xdp_hints(struct ixgbe_ring *ring,
 						union ixgbe_adv_rx_desc *rx_desc,
 						struct xdp_buff *xdp)
 {
@@ -2395,7 +2395,7 @@ xdp_out:
 	return ERR_PTR(-result);
 }
 
-static unsigned int ixgbe_rx_frame_truesize(struct ixgbe_ring *rx_ring,
+static inline unsigned int ixgbe_rx_frame_truesize(struct ixgbe_ring *rx_ring,
 					    unsigned int size)
 {
 	unsigned int truesize;
