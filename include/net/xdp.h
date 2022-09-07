@@ -213,13 +213,18 @@ struct xdp_txq_info {
 };
 
 enum xdp_buff_flags {
-	XDP_FLAGS_HAS_FRAGS		= BIT(0), /* non-linear xdp buff */
-	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
+	XDP_FLAGS_HINTS_ENABLED 	= BIT(0),/* enum xdp_hint */
+#define	XDP_FLAGS_HINTS_COMPAT_COMMON_	  BIT(1) /* HINTS_BTF_COMPAT_COMMON */
+	XDP_FLAGS_HINTS_COMPAT_COMMON	= XDP_FLAGS_HINTS_COMPAT_COMMON_,
+
+	XDP_FLAGS_HAS_FRAGS		= BIT(2), /* non-linear xdp buff */
+	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(3), /* xdp paged memory is under
 						   * pressure
 						   */
-	XDP_FLAGS_HAS_HINTS		= BIT(2),
-	XDP_FLAGS_HINTS_COMPAT_COMMON	= BIT(3),
 };
+
+#define XDP_FLAGS_HINTS_MASK	(XDP_FLAGS_HINTS_ENABLED |	\
+				 XDP_FLAGS_HINTS_COMPAT_COMMON)
 
 struct xdp_buff {
 	void *data;
@@ -255,6 +260,34 @@ static __always_inline bool xdp_buff_is_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 {
 	xdp->flags |= XDP_FLAGS_FRAGS_PF_MEMALLOC;
+}
+
+static __always_inline bool xdp_buff_has_hints(struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_HINTS_MASK);
+}
+
+static __always_inline bool xdp_buff_has_hints_compat(struct xdp_buff *xdp)
+{
+	u32 flags = xdp->flags;
+
+	if (!(flags & XDP_FLAGS_HINTS_COMPAT_COMMON))
+		return false;
+
+	return !!(flags & XDP_FLAGS_HINTS_MASK);
+}
+
+static __always_inline void xdp_buff_set_hints_flags(struct xdp_buff *xdp,
+						     bool is_compat_common)
+{
+	u32 common = is_compat_common ? XDP_FLAGS_HINTS_COMPAT_COMMON : 0;
+
+	xdp->flags |= XDP_FLAGS_HINTS_ENABLED | common;
+}
+
+static __always_inline void xdp_buff_clear_hints_flags(struct xdp_buff *xdp)
+{
+	xdp->flags &= ~XDP_FLAGS_HINTS_MASK;
 }
 
 static __always_inline void

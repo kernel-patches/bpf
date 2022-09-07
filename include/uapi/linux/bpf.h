@@ -5387,6 +5387,37 @@ union bpf_attr {
  *	Return
  *		Current *ktime*.
  *
+ * long xdp_hints_btf(struct xdp_buff *xdp_md, u64 flags)
+ *	Description
+ *		Update and get info on XDP hints ctx state.
+ *
+ *		Drivers can provide XDP-hints information via the metadata area,
+ *		which defines the layout of this area via BTF. The *full* BTF ID
+ *		is available as the last member.
+ *
+ *		This **full** BTF ID is a 64-bit value, encoding the BTF
+ *		**object** ID as the high 32-bit and BTF *type* ID as lower
+ *		32-bit.  This is needed as the BTF **type** ID (32-bit) can
+ *		originate from different BTF **object** sources, e.g.  vmlinux,
+ *		module or local BTF-object.
+ *
+ *		In-case a BPF-prog want to redefine the layout of this area it
+ *		should update the full BTF ID (last-member) and call this helper
+ *		to specify if the layout is compatible with kernel struct
+ *		xdp_hints_common.
+ *
+ *		The **flags** are used to control the mode of the helper.
+ *		See enum xdp_hints_btf_mode_flags.
+ *
+ *     Return
+ * 		0 if driver didn't populate XDP-hints.
+ *
+ *		Flag **HINTS_BTF_ENABLED** (1) if driver populated hints.
+ *
+ *		Flag **HINTS_BTF_COMPAT_COMMON** (2) if layout is compatible
+ *		with kernel struct xdp_hints_common. Thus, return value 3 as
+ *		both flags will be set.
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5598,6 +5629,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(ktime_get_tai_ns),		\
+	FN(xdp_hints_btf),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -6020,6 +6052,15 @@ struct xdp_md {
 	__u32 rx_queue_index;  /* rxq->queue_index  */
 
 	__u32 egress_ifindex;  /* txq->dev->ifindex */
+};
+
+/* Mode flags for BPF_FUNC_xdp_hints_btf helper. */
+enum xdp_hints_btf_mode_flags {
+	HINTS_BTF_QUERY_ONLY    = (1U << 0),
+	HINTS_BTF_ENABLED       = (1U << 0), /* Return value */
+	HINTS_BTF_COMPAT_COMMON = (1U << 1), /* Return and query value */
+	HINTS_BTF_UPDATE        = (1U << 2),
+	HINTS_BTF_DISABLE       = (1U << 3),
 };
 
 /* DEVMAP map-value layout

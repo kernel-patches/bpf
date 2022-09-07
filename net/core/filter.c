@@ -6084,6 +6084,56 @@ static const struct bpf_func_proto bpf_xdp_check_mtu_proto = {
 	.arg5_type      = ARG_ANYTHING,
 };
 
+/* flags type &enum xdp_hints_btf_mode_flags */
+BPF_CALL_2(bpf_xdp_hints_btf, struct xdp_buff *, xdp, u64, flags)
+{
+	bool is_compat_common;
+	s64 ret = 0;
+
+	/* UAPI value HINTS_BTF_COMPAT_COMMON happens to match xdp_buff->flags
+	 * XDP_FLAGS_HINTS_COMPAT_COMMON which makes below code easier
+	 */
+	BUILD_BUG_ON(HINTS_BTF_COMPAT_COMMON != XDP_FLAGS_HINTS_COMPAT_COMMON_);
+
+	if (flags & HINTS_BTF_QUERY_ONLY) {
+		ret = xdp->flags & XDP_FLAGS_HINTS_MASK;
+		goto out;
+	}
+	if (flags & HINTS_BTF_DISABLE) {
+		xdp_buff_clear_hints_flags(xdp);
+		goto out;
+	}
+	if (flags & HINTS_BTF_UPDATE) {
+		is_compat_common = !!(flags & HINTS_BTF_COMPAT_COMMON);
+
+		if (is_compat_common) {
+			unsigned long metalen = xdp_get_metalen(xdp);
+
+			if (sizeof(struct xdp_hints_common) < metalen)
+				is_compat_common = false;
+			/* TODO: Can kernel validate if hints are BTF compat
+			 * with common?
+			 */
+		}
+	/* TODO: Could BPF prog provide BTF as ARG_PTR_TO_BTF_ID to prove compat_common ? */
+		xdp_buff_set_hints_flags(xdp, is_compat_common);
+
+		ret = xdp->flags & XDP_FLAGS_HINTS_MASK;
+		goto out;
+	}
+
+ out:
+	return ret;
+}
+
+static const struct bpf_func_proto bpf_xdp_hints_btf_proto = {
+	.func		= bpf_xdp_hints_btf,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+};
+
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 static int bpf_push_seg6_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len)
 {
@@ -7916,6 +7966,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_fib_lookup_proto;
 	case BPF_FUNC_check_mtu:
 		return &bpf_xdp_check_mtu_proto;
+	case BPF_FUNC_xdp_hints_btf:
+		return &bpf_xdp_hints_btf_proto;
 #ifdef CONFIG_INET
 	case BPF_FUNC_sk_lookup_udp:
 		return &bpf_xdp_sk_lookup_udp_proto;
