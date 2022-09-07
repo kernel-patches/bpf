@@ -7125,6 +7125,29 @@ struct btf *btf_get_module_btf(const struct module *module)
 }
 EXPORT_SYMBOL_GPL(btf_get_module_btf);
 
+u64 btf_get_module_btf_full_id(struct btf *btf, const char *name)
+{
+	s32 type_id;
+	u64 obj_id;
+
+	if (IS_ERR_OR_NULL(btf))
+		return 0;
+
+	obj_id  = btf_obj_id(btf);
+	type_id = btf_find_by_name_kind(btf, name, BTF_KIND_STRUCT);
+	if (type_id < 0) {
+		pr_warn("Module %s(ID:%d): BTF cannot find struct %s",
+			btf->name, (u32)obj_id, name);
+		return 0;
+	}
+
+	pr_info("Module %s(ID:%d): BTF type id %d for struct %s",
+		btf->name, (u32)obj_id, type_id, name);
+
+	return type_id | (obj_id << 32);
+}
+EXPORT_SYMBOL_GPL(btf_get_module_btf_full_id);
+
 BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int, flags)
 {
 	struct btf *btf = NULL;
