@@ -973,13 +973,14 @@ next:
 	return -1;
 }
 
-static u64 callchain_id(struct evsel *evsel, struct perf_sample *sample)
+static u64 callchain_id(struct evsel *evsel, struct perf_sample *sample, u64 *callchains)
 {
 	struct callchain_cursor *cursor = &callchain_cursor;
 	struct machine *machine = &session->machines.host;
 	struct thread *thread;
 	u64 hash = 0;
 	int skip = 0;
+	int i = 0;
 	int ret;
 
 	thread = machine__findnew_thread(machine, -1, sample->pid);
@@ -1002,6 +1003,9 @@ static u64 callchain_id(struct evsel *evsel, struct perf_sample *sample)
 		node = callchain_cursor_current(cursor);
 		if (node == NULL)
 			break;
+
+		if (callchains)
+			callchains[i++] = node->ip;
 
 		/* skip first few entries - for lock functions */
 		if (++skip <= CONTENTION_STACK_SKIP)
@@ -1026,6 +1030,7 @@ static int report_lock_contention_begin_event(struct evsel *evsel,
 	struct lock_seq_stat *seq;
 	u64 addr = evsel__intval(evsel, sample, "lock_addr");
 	u64 key;
+	u64 callchains[CONTENTION_STACK_DEPTH];
 
 	switch (aggr_mode) {
 	case LOCK_AGGR_ADDR:
@@ -1035,7 +1040,9 @@ static int report_lock_contention_begin_event(struct evsel *evsel,
 		key = sample->tid;
 		break;
 	case LOCK_AGGR_CALLER:
-		key = callchain_id(evsel, sample);
+		if (verbose)
+			memset(callchains, 0, sizeof(callchains));
+		key = callchain_id(evsel, sample, verbose ? callchains : NULL);
 		break;
 	default:
 		pr_err("Invalid aggregation mode: %d\n", aggr_mode);
@@ -1054,6 +1061,12 @@ static int report_lock_contention_begin_event(struct evsel *evsel,
 		ls = lock_stat_findnew(key, caller, flags);
 		if (!ls)
 			return -ENOMEM;
+
+		if (aggr_mode == LOCK_AGGR_CALLER && verbose) {
+			ls->callstack = memdup(callchains, sizeof(callchains));
+			if (ls->callstack == NULL)
+				return -ENOMEM;
+		}
 	}
 
 	ts = thread_stat_findnew(sample->tid);
@@ -1118,7 +1131,7 @@ static int report_lock_contention_end_event(struct evsel *evsel,
 		key = sample->tid;
 		break;
 	case LOCK_AGGR_CALLER:
-		key = callchain_id(evsel, sample);
+		key = callchain_id(evsel, sample, NULL);
 		break;
 	default:
 		pr_err("Invalid aggregation mode: %d\n", aggr_mode);
@@ -1467,7 +1480,7 @@ static void sort_contention_result(void)
 	sort_result();
 }
 
-static void print_contention_result(void)
+static void print_contention_result(struct lock_contention *con)
 {
 	struct lock_stat *st;
 	struct lock_key *key;
@@ -1506,6 +1519,22 @@ static void print_contention_result(void)
 		}
 
 		pr_info("  %10s   %s\n", get_type_str(st), st->name);
+		if (verbose) {
+			struct map *kmap;
+			struct symbol *sym;
+			char buf[128];
+			u64 ip;
+
+			for (int i = 0; i < CONTENTION_STACK_DEPTH; i++) {
+				if (!st->callstack || !st->callstack[i])
+					break;
+
+				ip = st->callstack[i];
+				sym = machine__find_kernel_symbol(con->machine, ip, &kmap);
+				get_symbol_name_offset(kmap, sym, ip, buf, sizeof(buf));
+				pr_info("\t\t\t%#lx  %s\n", (unsigned long)ip, buf);
+			}
+		}
 	}
 
 	print_bad_events(bad, total);
@@ -1621,6 +1650,8 @@ static int __cmd_contention(int argc, const char **argv)
 		return PTR_ERR(session);
 	}
 
+	con.machine = &session->machines.host;
+
 	/* for lock function check */
 	symbol_conf.sort_by_name = true;
 	symbol__init(&session->header.env);
@@ -1638,8 +1669,6 @@ static int __cmd_contention(int argc, const char **argv)
 		signal(SIGINT, sighandler);
 		signal(SIGCHLD, sighandler);
 		signal(SIGTERM, sighandler);
-
-		con.machine = &session->machines.host;
 
 		con.evlist = evlist__new();
 		if (con.evlist == NULL) {
@@ -1712,7 +1741,7 @@ static int __cmd_contention(int argc, const char **argv)
 	setup_pager();
 
 	sort_contention_result();
-	print_contention_result();
+	print_contention_result(&con);
 
 out_delete:
 	evlist__delete(con.evlist);
