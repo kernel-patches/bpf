@@ -2649,4 +2649,5 @@ static inline void bpf_cgroup_atype_get(u32 attach_btf_id, int cgroup_atype) {}
 static inline void bpf_cgroup_atype_put(int cgroup_atype) {}
 #endif /* CONFIG_BPF_LSM */
 
+void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog);
 #endif /* _LINUX_BPF_H */
