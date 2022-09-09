@@ -7755,15 +7755,10 @@ static int check_path(const char *path)
 	return err;
 }
 
-int bpf_program__pin(struct bpf_program *prog, const char *path)
+static int make_path_and_pin(int fd, const char *path)
 {
 	char *cp, errmsg[STRERR_BUFSIZE];
 	int err;
-
-	if (prog->fd < 0) {
-		pr_warn("prog '%s': can't pin program that wasn't loaded\n", prog->name);
-		return libbpf_err(-EINVAL);
-	}
 
 	err = make_parent_dir(path);
 	if (err)
@@ -7773,12 +7768,27 @@ int bpf_program__pin(struct bpf_program *prog, const char *path)
 	if (err)
 		return libbpf_err(err);
 
-	if (bpf_obj_pin(prog->fd, path)) {
+	if (bpf_obj_pin(fd, path)) {
 		err = -errno;
 		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
-		pr_warn("prog '%s': failed to pin at '%s': %s\n", prog->name, path, cp);
+		pr_warn("failed to pin at '%s': %s\n", path, cp);
 		return libbpf_err(err);
 	}
+	return 0;
+}
+
+int bpf_program__pin(struct bpf_program *prog, const char *path)
+{
+	int err;
+
+	if (prog->fd < 0) {
+		pr_warn("prog '%s': can't pin program that wasn't loaded\n", prog->name);
+		return libbpf_err(-EINVAL);
+	}
+
+	err = make_path_and_pin(prog->fd, path);
+	if (err)
+		return libbpf_err(err);
 
 	pr_debug("prog '%s': pinned at '%s'\n", prog->name, path);
 	return 0;
@@ -7838,32 +7848,20 @@ int bpf_map__pin(struct bpf_map *map, const char *path)
 		map->pin_path = strdup(path);
 		if (!map->pin_path) {
 			err = -errno;
-			goto out_err;
+			cp = libbpf_strerror_r(-err, errmsg, sizeof(errmsg));
+			pr_warn("failed to pin map: %s\n", cp);
+			return libbpf_err(err);
 		}
 	}
 
-	err = make_parent_dir(map->pin_path);
+	err = make_path_and_pin(map->fd, map->pin_path);
 	if (err)
 		return libbpf_err(err);
-
-	err = check_path(map->pin_path);
-	if (err)
-		return libbpf_err(err);
-
-	if (bpf_obj_pin(map->fd, map->pin_path)) {
-		err = -errno;
-		goto out_err;
-	}
 
 	map->pinned = true;
 	pr_debug("pinned map '%s'\n", map->pin_path);
 
 	return 0;
-
-out_err:
-	cp = libbpf_strerror_r(-err, errmsg, sizeof(errmsg));
-	pr_warn("failed to pin map: %s\n", cp);
-	return libbpf_err(err);
 }
 
 int bpf_map__unpin(struct bpf_map *map, const char *path)
@@ -9611,19 +9609,13 @@ int bpf_link__pin(struct bpf_link *link, const char *path)
 
 	if (link->pin_path)
 		return libbpf_err(-EBUSY);
-	err = make_parent_dir(path);
-	if (err)
-		return libbpf_err(err);
-	err = check_path(path);
-	if (err)
-		return libbpf_err(err);
 
 	link->pin_path = strdup(path);
 	if (!link->pin_path)
 		return libbpf_err(-ENOMEM);
 
-	if (bpf_obj_pin(link->fd, link->pin_path)) {
-		err = -errno;
+	err = make_path_and_pin(link->fd, path);
+	if (err) {
 		zfree(&link->pin_path);
 		return libbpf_err(err);
 	}
