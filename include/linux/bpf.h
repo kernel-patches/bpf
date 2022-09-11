@@ -2647,6 +2647,19 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 		     enum bpf_dynptr_type type, u32 offset, u32 size);
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 int bpf_dynptr_check_size(u32 size);
+#ifdef CONFIG_BPF_SYSCALL
+u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr);
+#else
+static inline u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr)
+{
+	return 0;
+}
+#endif
+
+static inline void *bpf_dynptr_get_data(struct bpf_dynptr_kern *ptr)
+{
+	return ptr->data ? ptr->data + ptr->offset : NULL;
+}
 
 #ifdef CONFIG_BPF_LSM
 void bpf_cgroup_atype_get(u32 attach_btf_id, int cgroup_atype);
