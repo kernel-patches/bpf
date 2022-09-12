@@ -4644,11 +4644,10 @@ struct btf *btf__load_vmlinux_btf(void)
 {
 	struct {
 		const char *path_fmt;
-		bool raw_btf;
 	} locations[] = {
 		/* try canonical vmlinux BTF through sysfs first */
-		{ "/sys/kernel/btf/vmlinux", true /* raw BTF */ },
-		/* fall back to trying to find vmlinux ELF on disk otherwise */
+		{ "/sys/kernel/btf/vmlinux" },
+		/* fall back to trying to find vmlinux on disk otherwise */
 		{ "/boot/vmlinux-%1$s" },
 		{ "/lib/modules/%1$s/vmlinux-%1$s" },
 		{ "/lib/modules/%1$s/build/vmlinux" },
@@ -4670,10 +4669,7 @@ struct btf *btf__load_vmlinux_btf(void)
 		if (access(path, R_OK))
 			continue;
 
-		if (locations[i].raw_btf)
-			btf = btf__parse_raw(path);
-		else
-			btf = btf__parse_elf(path, NULL);
+		btf = btf__parse(path, NULL);
 		err = libbpf_get_error(btf);
 		pr_debug("loading kernel BTF '%s': %d\n", path, err);
 		if (err)
