@@ -789,10 +789,12 @@ static struct fgraph_ops fgraph_ops __initdata  = {
 #define CALL_DEPTH_ACCOUNT ""
 #endif
 
+#ifndef trace_direct_tramp
 noinline __noclone static void trace_direct_tramp(void)
 {
 	asm(CALL_DEPTH_ACCOUNT);
 }
+#endif
 #endif
 
 /*

@@ -168,6 +168,13 @@ static inline bool arch_syscall_match_sym_name(const char *sym,
 	 */
 	return !strcmp(sym + 8, name);
 }
+
+#if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
+    defined(CONFIG_FTRACE_SELFTEST)
+extern void ftrace_dummy_tramp(void);
+#define trace_direct_tramp ftrace_dummy_tramp
+#endif
+
 #endif /* ifndef __ASSEMBLY__ */
 
 #endif /* __ASM_FTRACE_H */

@@ -118,6 +118,16 @@ SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 	ret	x9
 SYM_CODE_END(ftrace_caller)
 
+#if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
+    defined(CONFIG_FTRACE_SELFTEST)
+SYM_CODE_START(ftrace_dummy_tramp)
+	bti c
+	mov x10, x30
+	mov x30, x9
+	ret x10
+SYM_CODE_END(ftrace_dummy_tramp)
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+
 #else /* CONFIG_DYNAMIC_FTRACE_WITH_ARGS */
 
 /*
