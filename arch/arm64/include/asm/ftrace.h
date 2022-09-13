@@ -128,6 +128,10 @@ static inline bool arch_syscall_match_sym_name(const char *sym,
 #define ftrace_dummy_tramp ftrace_dummy_tramp
 extern void ftrace_dummy_tramp(void);
 
+#ifdef CONFIG_FTRACE_SELFTEST
+#define trace_direct_tramp ftrace_dummy_tramp
+#endif /* CONFIG_FTRACE_SELFTEST */
+
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
 #endif /* ifndef __ASSEMBLY__ */
