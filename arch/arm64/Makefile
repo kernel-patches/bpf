@@ -130,7 +130,11 @@ CHECKFLAGS	+= -D__aarch64__
 
 ifeq ($(CONFIG_DYNAMIC_FTRACE_WITH_REGS),y)
   KBUILD_CPPFLAGS += -DCC_USING_PATCHABLE_FUNCTION_ENTRY
+  ifeq ($(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS),y)
+  CC_FLAGS_FTRACE := -fpatchable-function-entry=7,5
+  else
   CC_FLAGS_FTRACE := -fpatchable-function-entry=2
+  endif
 endif
 
 # Default value

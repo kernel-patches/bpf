@@ -14,14 +14,16 @@
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS
 /*
- * Due to -fpatchable-function-entry=2, the compiler has placed two NOPs before
- * the regular function prologue. For an enabled callsite, ftrace_init_nop() and
- * ftrace_make_call() have patched those NOPs to:
+ * Due to -fpatchable-function-entry=2 or -fpatchable-function-entry=7,5, the
+ * compiler has placed two NOPs before the regular function prologue. For an
+ * enabled callsite, ftrace_init_nop() and ftrace_make_call() have patched those
+ * NOPs to:
  *
  * 	MOV	X9, LR
  * 	BL	<entry>
  *
- * ... where <entry> is either ftrace_caller or ftrace_regs_caller.
+ * ... where <entry> is ftrace_caller or ftrace_regs_caller or custom
+ * trampoline.
  *
  * Each instrumented function follows the AAPCS, so here x0-x8 and x18-x30 are
  * live (x18 holds the Shadow Call Stack pointer), and x9-x17 are safe to
@@ -327,3 +329,14 @@ SYM_CODE_START(return_to_handler)
 	ret
 SYM_CODE_END(return_to_handler)
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+SYM_FUNC_START(ftrace_dummy_tramp)
+#if IS_ENABLED(CONFIG_ARM64_BTI_KERNEL)
+	bti j /* ftrace_dummy_tramp is called via "br x10" */
+#endif
+	mov x10, x30
+	mov x30, x9
+	ret x10
+SYM_FUNC_END(ftrace_dummy_tramp)
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */

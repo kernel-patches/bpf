@@ -6629,6 +6629,10 @@ static void test_is_sorted(unsigned long *start, unsigned long count)
 }
 #endif
 
+void __weak ftrace_rec_arch_init(struct dyn_ftrace *rec, unsigned long addr)
+{
+}
+
 static int ftrace_process_locs(struct module *mod,
 			       unsigned long *start,
 			       unsigned long *end)
@@ -6691,7 +6695,9 @@ static int ftrace_process_locs(struct module *mod,
 	pg = start_pg;
 	while (p < end) {
 		unsigned long end_offset;
-		addr = ftrace_call_adjust(*p++);
+		unsigned long nop_addr = *p++;
+
+		addr = ftrace_call_adjust(nop_addr);
 		/*
 		 * Some architecture linkers will pad between
 		 * the different mcount_loc sections of different
@@ -6711,6 +6717,7 @@ static int ftrace_process_locs(struct module *mod,
 
 		rec = &pg->records[pg->index++];
 		rec->ip = addr;
+		ftrace_rec_arch_init(rec, nop_addr);
 	}
 
 	/* We should have used all pages */

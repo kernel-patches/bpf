@@ -566,6 +566,8 @@ struct dyn_ftrace {
 	struct dyn_arch_ftrace	arch;
 };
 
+void ftrace_rec_arch_init(struct dyn_ftrace *rec, unsigned long addr);
+
 int ftrace_set_filter_ip(struct ftrace_ops *ops, unsigned long ip,
 			 int remove, int reset);
 int ftrace_set_filter_ips(struct ftrace_ops *ops, unsigned long *ips,

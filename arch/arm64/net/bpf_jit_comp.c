@@ -600,6 +600,9 @@ static int emit_ll_sc_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	return 0;
 }
 
+#ifdef ftrace_dummy_tramp
+#define dummy_tramp ftrace_dummy_tramp
+#else
 void dummy_tramp(void);
 
 asm (
@@ -616,6 +619,7 @@ asm (
 "	.size dummy_tramp, .-dummy_tramp\n"
 "	.popsection\n"
 );
+#endif
 
 /* build a plt initialized like this:
  *

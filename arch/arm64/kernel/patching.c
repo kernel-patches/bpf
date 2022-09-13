@@ -83,6 +83,20 @@ static int __kprobes __aarch64_insn_write(void *addr, __le32 insn)
 	return ret;
 }
 
+void __kprobes aarch64_literal64_write(void *addr, u64 data)
+{
+	u64 *waddr;
+	unsigned long flags = 0;
+
+	raw_spin_lock_irqsave(&patch_lock, flags);
+	waddr = patch_map(addr, FIX_TEXT_POKE0);
+
+	WRITE_ONCE(*waddr, data);
+
+	patch_unmap(FIX_TEXT_POKE0);
+	raw_spin_unlock_irqrestore(&patch_lock, flags);
+}
+
 int __kprobes aarch64_insn_write(void *addr, u32 insn)
 {
 	return __aarch64_insn_write(addr, cpu_to_le32(insn));
