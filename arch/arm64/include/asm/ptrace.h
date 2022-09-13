@@ -185,7 +185,11 @@ struct pt_regs {
 			u64 pstate;
 		};
 	};
-	u64 orig_x0;
+	union {
+		u64 orig_x0;
+		/* Only used by ftrace to save custom trampoline address */
+		u64 custom_tramp;
+	};
 #ifdef __AARCH64EB__
 	u32 unused2;
 	s32 syscallno;
