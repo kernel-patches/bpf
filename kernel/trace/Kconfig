@@ -246,9 +246,14 @@ config DYNAMIC_FTRACE_WITH_REGS
 	depends on HAVE_DYNAMIC_FTRACE_WITH_REGS
 
 config DYNAMIC_FTRACE_WITH_DIRECT_CALLS
-	def_bool y
+	bool "Support for calling custom trampoline from fentry directly"
+	default y
 	depends on DYNAMIC_FTRACE_WITH_REGS
 	depends on HAVE_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	help
+	  This option enables calling custom trampoline from ftrace fentry
+	  directly, instead of using ftrace regs caller. This may reserve more
+	  space in the fentry, making the kernel image larger.
 
 config DYNAMIC_FTRACE_WITH_ARGS
 	def_bool y
