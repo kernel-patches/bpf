@@ -5627,6 +5627,7 @@ static const struct bpf_reg_types map_key_value_types = {
 		PTR_TO_PACKET_META,
 		PTR_TO_MAP_KEY,
 		PTR_TO_MAP_VALUE,
+		PTR_TO_MEM | MEM_ALLOC,
 	},
 };
 
