@@ -294,7 +294,7 @@ static inline bool libbpf_validate_opts(const char *opts,
 }
 
 #define OPTS_VALID(opts, type)						      \
-	(!(opts) || libbpf_validate_opts((const char *)opts,		      \
+	((opts) && libbpf_validate_opts((const char *)opts,		      \
 					 offsetofend(struct type,	      \
 						     type##__last_field),     \
 					 (opts)->sz, #type))
