@@ -157,9 +157,6 @@ struct tlb_state_shared {
 };
 DECLARE_PER_CPU_SHARED_ALIGNED(struct tlb_state_shared, cpu_tlbstate_shared);
 
-bool nmi_uaccess_okay(void);
-#define nmi_uaccess_okay nmi_uaccess_okay
-
 /* Initialize cr4 shadow for this CPU. */
 static inline void cr4_init_shadow(void)
 {

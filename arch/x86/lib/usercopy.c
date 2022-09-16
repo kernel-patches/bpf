@@ -7,8 +7,6 @@
 #include <linux/uaccess.h>
 #include <linux/export.h>
 
-#include <asm/tlbflush.h>
-
 /**
  * copy_from_user_nmi - NMI safe copy from user
  * @to:		Pointer to the destination buffer

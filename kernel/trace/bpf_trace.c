@@ -26,8 +26,6 @@
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/btf.h>
 
-#include <asm/tlb.h>
-
 #include "trace_probe.h"
 #include "trace.h"
 

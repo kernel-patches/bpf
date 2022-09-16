@@ -36,7 +36,6 @@
 #include <asm/smp.h>
 #include <asm/alternative.h>
 #include <asm/mmu_context.h>
-#include <asm/tlbflush.h>
 #include <asm/timer.h>
 #include <asm/desc.h>
 #include <asm/ldt.h>
