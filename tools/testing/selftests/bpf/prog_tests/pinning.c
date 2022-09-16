@@ -24,6 +24,61 @@ __u32 get_map_id(struct bpf_object *obj, const char *name)
 	return map_info.id;
 }
 
+static void test_pin_path(void)
+{
+	const char *progfile = "./test_pinning_path.bpf.o";
+	const char *progpinpath = "/sys/fs/bpf/test_pinpath";
+	char errpath[PATH_MAX + 1];
+	char command[64];
+	int prog_fd, err;
+	struct bpf_object *obj;
+	__u32 duration = 0;
+
+	/* Use libbpf 1.0 API mode */
+	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+
+	err = bpf_prog_test_load(progfile, BPF_PROG_TYPE_SOCK_OPS, &obj,
+				 &prog_fd);
+	CHECK(err, "bpf_prog_test_load", "err %d errno %d\n", err, errno);
+
+	memset(&errpath, 't', PATH_MAX);
+	err = bpf_object__pin_maps(obj, errpath);
+	if (CHECK(err != -ENAMETOOLONG, "pin maps errpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__pin_maps(obj, progpinpath);
+	if (CHECK(err, "pin maps", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__pin_programs(obj, errpath);
+	if (CHECK(err != -ENAMETOOLONG, "pin progs errpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__pin_programs(obj, progpinpath);
+	if (CHECK(err, "pin prog", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__unpin_programs(obj, errpath);
+	if (CHECK(err != -ENAMETOOLONG, "pin progs errpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__unpin_programs(obj, progpinpath);
+	if (CHECK(err, "pin prog", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__unpin_maps(obj, errpath);
+	if (CHECK(err != -ENAMETOOLONG, "pin maps errpath", "err %d errno %d\n", err, errno))
+		goto out;
+
+	err = bpf_object__unpin_maps(obj, progpinpath);
+	if (CHECK(err, "pin maps", "err %d errno %d\n", err, errno))
+		goto out;
+out:
+	bpf_object__close(obj);
+	sprintf(command, "rm -r %s", progpinpath);
+	system(command);
+}
+
 void test_pinning(void)
 {
 	const char *file_invalid = "./test_pinning_invalid.bpf.o";
@@ -32,6 +87,7 @@ void test_pinning(void)
 	const char *nopinpath2 = "/sys/fs/bpf/nopinmap2";
 	const char *custpath = "/sys/fs/bpf/custom";
 	const char *pinpath = "/sys/fs/bpf/pinmap";
+	char errpath[PATH_MAX + 1];
 	const char *file = "./test_pinning.bpf.o";
 	__u32 map_id, map_id2, duration = 0;
 	struct stat statbuf = {};
@@ -206,7 +262,17 @@ void test_pinning(void)
 
 	bpf_object__close(obj);
 
+	/* test auto-pinning at err path with open opt */
+	memset(&errpath, 't', PATH_MAX);
+	opts.pin_root_path = errpath;
+	obj = bpf_object__open_file(file, &opts);
+	if (CHECK_FAIL(libbpf_get_error(obj) != -ENAMETOOLONG)) {
+		obj = NULL;
+		goto out;
+	}
+
 	/* test auto-pinning at custom path with open opt */
+	opts.pin_root_path = custpath;
 	obj = bpf_object__open_file(file, &opts);
 	if (CHECK_FAIL(libbpf_get_error(obj))) {
 		obj = NULL;
@@ -277,4 +343,5 @@ out:
 	rmdir(custpath);
 	if (obj)
 		bpf_object__close(obj);
+	test_pin_path();
 }
