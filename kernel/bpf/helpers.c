@@ -1408,9 +1408,16 @@ static void bpf_dynptr_set_type(struct bpf_dynptr_kern *ptr, enum bpf_dynptr_typ
 	ptr->size |= type << DYNPTR_TYPE_SHIFT;
 }
 
-static u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr)
+u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr)
 {
 	return ptr->size & DYNPTR_SIZE_MASK;
+}
+
+void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
+{
+	u32 metadata = ptr->size & ~DYNPTR_SIZE_MASK;
+
+	ptr->size = new_size | metadata;
 }
 
 int bpf_dynptr_check_size(u32 size)
