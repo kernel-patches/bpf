@@ -151,6 +151,11 @@ bool bpf_map_write_active(const struct bpf_map *map)
 	return atomic64_read(&map->writecnt) != 0;
 }
 
+static inline bool is_dynptr_key(const struct bpf_map *map)
+{
+	return map->map_flags & BPF_F_DYNPTR_KEY;
+}
+
 static u32 bpf_map_value_size(const struct bpf_map *map)
 {
 	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
@@ -994,7 +999,8 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	/* Some maps allow key to be unspecified. */
 	if (btf_key_id) {
 		key_type = btf_type_id_size(btf, &btf_key_id, &key_size);
-		if (!key_type || key_size != map->key_size)
+		if (!key_type || key_size != map->key_size ||
+		    (is_dynptr_key(map) && !btf_type_is_bpf_dynptr(btf, key_type)))
 			return -EINVAL;
 	} else {
 		key_type = btf_type_by_id(btf, 0);
@@ -1089,9 +1095,16 @@ static int map_create(union bpf_attr *attr)
 		return -EINVAL;
 	}
 
-	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
-	    attr->map_extra != 0)
+	if (attr->map_flags & BPF_F_DYNPTR_KEY) {
+		/* The lower 32-bits of map_extra specifies the maximum size
+		 * of bpf_dynptr-typed key
+		 */
+		if (!attr->btf_key_type_id || !attr->map_extra || (attr->map_extra >> 32) ||
+		    bpf_dynptr_check_size(attr->map_extra))
+			return -EINVAL;
+	} else if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER && attr->map_extra != 0) {
 		return -EINVAL;
+	}
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
 	if (f_flags < 0)
@@ -1280,8 +1293,39 @@ int __weak bpf_stackmap_copy(struct bpf_map *map, void *key, void *value)
 	return -ENOTSUPP;
 }
 
-static void *__bpf_copy_key(void __user *ukey, u64 key_size)
+static void *bpf_copy_from_dynptr_ukey(bpfptr_t ukey)
 {
+	struct bpf_dynptr_kern *kptr;
+	struct bpf_dynptr_user uptr;
+	bpfptr_t data;
+
+	if (copy_from_bpfptr(&uptr, ukey, sizeof(uptr)))
+		return ERR_PTR(-EFAULT);
+
+	if (!uptr.size || bpf_dynptr_check_size(uptr.size))
+		return ERR_PTR(-EINVAL);
+
+	/* Allocate and free bpf_dynptr_kern and its data together */
+	kptr = kvmalloc(sizeof(*kptr) + uptr.size, GFP_USER | __GFP_NOWARN);
+	if (!kptr)
+		return ERR_PTR(-ENOMEM);
+
+	data = make_bpfptr(uptr.data, bpfptr_is_kernel(ukey));
+	if (copy_from_bpfptr(&kptr[1], data, uptr.size)) {
+		kvfree(kptr);
+		return ERR_PTR(-EFAULT);
+	}
+
+	bpf_dynptr_init(kptr, &kptr[1], BPF_DYNPTR_TYPE_USER, 0, uptr.size);
+
+	return kptr;
+}
+
+static void *__bpf_copy_key(void __user *ukey, u64 key_size, bool dynptr)
+{
+	if (dynptr)
+		return bpf_copy_from_dynptr_ukey(USER_BPFPTR(ukey));
+
 	if (key_size)
 		return vmemdup_user(ukey, key_size);
 
@@ -1291,8 +1335,11 @@ static void *__bpf_copy_key(void __user *ukey, u64 key_size)
 	return NULL;
 }
 
-static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
+static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size, bool dynptr)
 {
+	if (dynptr)
+		return bpf_copy_from_dynptr_ukey(ukey);
+
 	if (key_size)
 		return kvmemdup_bpfptr(ukey, key_size);
 
@@ -1300,6 +1347,34 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 		return ERR_PTR(-EINVAL);
 
 	return NULL;
+}
+
+static void *bpf_new_dynptr_key(u32 key_size)
+{
+	struct bpf_dynptr_kern *kptr;
+
+	kptr = kvmalloc(sizeof(*kptr) + key_size, GFP_USER | __GFP_NOWARN);
+	if (kptr)
+		bpf_dynptr_init(kptr, &kptr[1], BPF_DYNPTR_TYPE_USER, 0, key_size);
+	return kptr;
+}
+
+static int bpf_copy_to_dynptr_ukey(struct bpf_dynptr_user __user *uptr,
+				   struct bpf_dynptr_kern *kptr)
+{
+	unsigned int size;
+	u64 udata;
+
+	if (get_user(udata, &uptr->data))
+		return -EFAULT;
+
+	/* Also zeroing the reserved field in uptr */
+	size = bpf_dynptr_get_size(kptr);
+	if (copy_to_user(u64_to_user_ptr(udata), kptr->data + kptr->offset, size) ||
+	    put_user(size, &uptr->size) || put_user(0, &uptr->size + 1))
+		return -EFAULT;
+
+	return 0;
 }
 
 /* last field in 'union bpf_attr' used by this command */
@@ -1337,7 +1412,7 @@ static int map_lookup_elem(union bpf_attr *attr)
 		goto err_put;
 	}
 
-	key = __bpf_copy_key(ukey, map->key_size);
+	key = __bpf_copy_key(ukey, map->key_size, is_dynptr_key(map));
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
 		goto err_put;
@@ -1377,7 +1452,6 @@ err_put:
 	return err;
 }
 
-
 #define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
 
 static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
@@ -1410,7 +1484,7 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
-	key = ___bpf_copy_key(ukey, map->key_size);
+	key = ___bpf_copy_key(ukey, map->key_size, is_dynptr_key(map));
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
 		goto err_put;
@@ -1458,7 +1532,7 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
-	key = ___bpf_copy_key(ukey, map->key_size);
+	key = ___bpf_copy_key(ukey, map->key_size, is_dynptr_key(map));
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
 		goto err_put;
@@ -1514,7 +1588,7 @@ static int map_get_next_key(union bpf_attr *attr)
 	}
 
 	if (ukey) {
-		key = __bpf_copy_key(ukey, map->key_size);
+		key = __bpf_copy_key(ukey, map->key_size, is_dynptr_key(map));
 		if (IS_ERR(key)) {
 			err = PTR_ERR(key);
 			goto err_put;
@@ -1524,7 +1598,10 @@ static int map_get_next_key(union bpf_attr *attr)
 	}
 
 	err = -ENOMEM;
-	next_key = kvmalloc(map->key_size, GFP_USER);
+	if (is_dynptr_key(map))
+		next_key = bpf_new_dynptr_key(map->map_extra);
+	else
+		next_key = kvmalloc(map->key_size, GFP_USER | __GFP_NOWARN);
 	if (!next_key)
 		goto free_key;
 
@@ -1540,8 +1617,11 @@ out:
 	if (err)
 		goto free_next_key;
 
-	err = -EFAULT;
-	if (copy_to_user(unext_key, next_key, map->key_size) != 0)
+	if (is_dynptr_key(map))
+		err = bpf_copy_to_dynptr_ukey(unext_key, next_key);
+	else
+		err = copy_to_user(unext_key, next_key, map->key_size) != 0 ? -EFAULT : 0;
+	if (err)
 		goto free_next_key;
 
 	err = 0;
@@ -1815,7 +1895,7 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 		goto err_put;
 	}
 
-	key = __bpf_copy_key(ukey, map->key_size);
+	key = __bpf_copy_key(ukey, map->key_size, is_dynptr_key(map));
 	if (IS_ERR(key)) {
 		err = PTR_ERR(key);
 		goto err_put;

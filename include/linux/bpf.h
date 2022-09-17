@@ -2641,6 +2641,8 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_LOCAL,
 	/* Underlying data is a ringbuf record */
 	BPF_DYNPTR_TYPE_RINGBUF,
+	/* Points to memory copied from/to userspace */
+	BPF_DYNPTR_TYPE_USER,
 };
 
 void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,

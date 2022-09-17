@@ -1246,6 +1246,9 @@ enum {
 
 /* Create a map that is suitable to be an inner map with dynamic max entries */
 	BPF_F_INNER_MAP		= (1U << 12),
+
+/* Map with bpf_dynptr-typed key */
+	BPF_F_DYNPTR_KEY	= (1U << 13),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -6773,6 +6776,12 @@ struct bpf_spin_lock {
 struct bpf_timer {
 	__u64 :64;
 	__u64 :64;
+} __attribute__((aligned(8)));
+
+struct bpf_dynptr_user {
+	__u64 data;
+	__u32 size;
+	__u32 :32;
 } __attribute__((aligned(8)));
 
 struct bpf_dynptr {
