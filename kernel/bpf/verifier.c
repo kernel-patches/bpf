@@ -6000,9 +6000,21 @@ skip_type_check:
 			verbose(env, "invalid map_ptr to access map->key\n");
 			return -EACCES;
 		}
-		err = check_helper_mem_access(env, regno,
-					      meta->map_ptr->key_size, false,
-					      NULL);
+		/* For BPF_F_DYNPTR_KEY-enabled map, only allow bpf_dynptr
+		 * to be used as map key
+		 */
+		if (meta->map_ptr->map_flags & BPF_F_DYNPTR_KEY) {
+			if (base_type(reg->type) != PTR_TO_STACK ||
+			    !is_dynptr_reg_valid_init(env, reg, ARG_PTR_TO_DYNPTR)) {
+				verbose(env, "expect R%d to be dynptr instead of %s\n",
+					regno, reg_type_str(env, reg->type));
+				return -EACCES;
+			}
+		} else {
+			err = check_helper_mem_access(env, regno,
+						      meta->map_ptr->key_size, false,
+						      NULL);
+		}
 		break;
 	case ARG_PTR_TO_MAP_VALUE:
 		if (type_may_be_null(arg_type) && register_is_null(reg))
