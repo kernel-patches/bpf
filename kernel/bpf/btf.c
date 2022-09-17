@@ -3522,6 +3522,13 @@ end:
 	return ERR_PTR(ret);
 }
 
+bool btf_type_is_bpf_dynptr(const struct btf *btf, const struct btf_type *t)
+{
+	return __btf_type_is_struct(t) &&
+	       t->size == sizeof(struct bpf_dynptr) &&
+	       !strcmp("bpf_dynptr", __btf_name_by_offset(btf, t->name_off));
+}
+
 static void __btf_struct_show(const struct btf *btf, const struct btf_type *t,
 			      u32 type_id, void *data, u8 bits_offset,
 			      struct btf_show *show)
