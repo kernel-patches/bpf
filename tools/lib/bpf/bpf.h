@@ -371,6 +371,25 @@ LIBBPF_API int bpf_btf_get_fd_by_id(__u32 id);
 LIBBPF_API int bpf_link_get_fd_by_id(__u32 id);
 LIBBPF_API int bpf_obj_get_info_by_fd(int bpf_fd, void *info, __u32 *info_len);
 
+/* sys_bpf() will check the validity of size */
+static inline void bpf_dynptr_user_init(void *data, __u32 size, struct bpf_dynptr_user *dynptr)
+{
+	/* Zero padding bytes */
+	memset(dynptr, 0, sizeof(*dynptr));
+	dynptr->data = (__u64)(unsigned long)data;
+	dynptr->size = size;
+}
+
+static inline __u32 bpf_dynptr_user_get_size(const struct bpf_dynptr_user *dynptr)
+{
+	return dynptr->size;
+}
+
+static inline void *bpf_dynptr_user_get_data(const struct bpf_dynptr_user *dynptr)
+{
+	return (void *)(unsigned long)dynptr->data;
+}
+
 struct bpf_prog_query_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	__u32 query_flags;
