@@ -875,8 +875,9 @@ __u32 get_kernel_version(void)
 	const char *ubuntu_kver_file = "/proc/version_signature";
 	__u32 major, minor, patch;
 	struct utsname info;
+	struct stat sb;
 
-	if (access(ubuntu_kver_file, R_OK) == 0) {
+	if (stat(ubuntu_kver_file, &sb) == 0) {
 		FILE *f;
 
 		f = fopen(ubuntu_kver_file, "r");
@@ -9877,9 +9878,10 @@ static int append_to_file(const char *file, const char *fmt, ...)
 static bool use_debugfs(void)
 {
 	static int has_debugfs = -1;
+	struct stat sb;
 
 	if (has_debugfs < 0)
-		has_debugfs = access(DEBUGFS, F_OK) == 0;
+		has_debugfs = stat(DEBUGFS, &sb) == 0;
 
 	return has_debugfs == 1;
 }
