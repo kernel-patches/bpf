@@ -889,6 +889,35 @@ static void emit_nops(u8 **pprog, int len)
 	*pprog = prog;
 }
 
+static void emit_3vex(u8 **pprog, bool r, bool x, bool b, u8 m,
+		      bool w, u8 src_reg2, bool l, u8 p)
+{
+	u8 *prog = *pprog;
+	u8 b0 = 0xc4, b1, b2;
+	u8 src2 = reg2hex[src_reg2];
+
+	if (is_ereg(src_reg2))
+		src2 |= 1 << 3;
+
+	/*
+	 *    7                           0
+	 *  +---+---+---+---+---+---+---+---+
+	 *  |~R |~X |~B |         m         |
+	 *  +---+---+---+---+---+---+---+---+
+	 */
+	b1 = (!r << 7) | (!x << 6) | (!b << 5) | (m & 0x1f);
+	/*
+	 *    7                           0
+	 *  +---+---+---+---+---+---+---+---+
+	 *  | W |     ~vvvv     | L |   pp  |
+	 *  +---+---+---+---+---+---+---+---+
+	 */
+	b2 = (w << 7) | ((~src2 & 0xf) << 3) | (l << 2) | (p & 3);
+
+	EMIT3(b0, b1, b2);
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image,
@@ -1135,7 +1164,31 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ALU64 | BPF_LSH | BPF_X:
 		case BPF_ALU64 | BPF_RSH | BPF_X:
 		case BPF_ALU64 | BPF_ARSH | BPF_X:
+			if (boot_cpu_has(X86_FEATURE_BMI2)) {
+				/* shrx/sarx/shlx dst_reg, dst_reg, src_reg */
+				bool r = is_ereg(dst_reg);
+				u8 m = 2; /* escape code 0f38 */
+				bool w = (BPF_CLASS(insn->code) == BPF_ALU64);
+				u8 p;
 
+				switch (BPF_OP(insn->code)) {
+				case BPF_LSH:
+					p = 1; /* prefix 0x66 */
+					break;
+				case BPF_RSH:
+					p = 3; /* prefix 0xf2 */
+					break;
+				case BPF_ARSH:
+					p = 2; /* prefix 0xf3 */
+					break;
+				}
+
+				emit_3vex(&prog, r, false, r, m,
+					  w, src_reg, false, p);
+				EMIT2(0xf7, add_2reg(0xC0, dst_reg, dst_reg));
+
+				break;
+			}
 			/* Check for bad case when dst_reg == rcx */
 			if (dst_reg == BPF_REG_4) {
 				/* mov r11, dst_reg */
