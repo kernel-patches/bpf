@@ -609,7 +609,7 @@ static void trie_free(struct bpf_map *map)
 	}
 
 out:
-	bpf_map_area_free(trie);
+	bpf_map_area_free(trie, map);
 }
 
 static int trie_get_next_key(struct bpf_map *map, void *_key, void *_next_key)

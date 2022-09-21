@@ -118,7 +118,7 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 
 	return &cmap->map;
 free_cmap:
-	bpf_map_area_free(cmap);
+	bpf_map_area_free(cmap, &cmap->map);
 	return ERR_PTR(err);
 }
 
@@ -622,8 +622,8 @@ static void cpu_map_free(struct bpf_map *map)
 		/* bq flush and cleanup happens after RCU grace-period */
 		__cpu_map_entry_replace(cmap, i, NULL); /* call_rcu */
 	}
-	bpf_map_area_free(cmap->cpu_map);
-	bpf_map_area_free(cmap);
+	bpf_map_area_free(cmap->cpu_map, NULL);
+	bpf_map_area_free(cmap, map);
 }
 
 /* Elements are kept alive by RCU; either by rcu_read_lock() (from syscall) or

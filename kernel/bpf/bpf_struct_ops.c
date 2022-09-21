@@ -577,10 +577,10 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 
 	if (st_map->links)
 		bpf_struct_ops_map_put_progs(st_map);
-	bpf_map_area_free(st_map->links);
+	bpf_map_area_free(st_map->links, NULL);
 	bpf_jit_free_exec(st_map->image);
-	bpf_map_area_free(st_map->uvalue);
-	bpf_map_area_free(st_map);
+	bpf_map_area_free(st_map->uvalue, NULL);
+	bpf_map_area_free(st_map, map);
 }
 
 static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
