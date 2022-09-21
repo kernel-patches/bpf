@@ -82,6 +82,10 @@ struct mem_cgroup *root_mem_cgroup __read_mostly;
 DEFINE_PER_CPU(struct mem_cgroup *, int_active_memcg);
 EXPORT_PER_CPU_SYMBOL_GPL(int_active_memcg);
 
+/* Active memory cgroup to use from an interrupt context */
+DEFINE_PER_CPU(int, int_active_item);
+EXPORT_PER_CPU_SYMBOL_GPL(int_active_item);
+
 /* Socket memory accounting disabled? */
 static bool cgroup_memory_nosocket __ro_after_init;
 
@@ -923,6 +927,14 @@ static __always_inline struct mem_cgroup *active_memcg(void)
 		return current->active_memcg;
 }
 
+static __always_inline int active_memcg_item(void)
+{
+	if (!in_task())
+		return this_cpu_read(int_active_item);
+
+	return current->active_item;
+}
+
 /**
  * get_mem_cgroup_from_mm: Obtain a reference on given mm_struct's memcg.
  * @mm: mm from which memcg should be extracted. It can be NULL.
@@ -1436,6 +1448,7 @@ static const struct memory_stat memory_stats[] = {
 	{ "workingset_restore_anon",	WORKINGSET_RESTORE_ANON		},
 	{ "workingset_restore_file",	WORKINGSET_RESTORE_FILE		},
 	{ "workingset_nodereclaim",	WORKINGSET_NODERECLAIM		},
+	{ "bpf",					MEMCG_BPF			},
 };
 
 /* Translate stat items to the correct unit for memory.stat output */
@@ -2993,6 +3006,11 @@ struct obj_cgroup *get_obj_cgroup_from_page(struct page *page)
 
 static void memcg_account_kmem(struct mem_cgroup *memcg, int nr_pages)
 {
+	int item = active_memcg_item();
+
+	WARN_ON_ONCE(item != 0 && (item < MEMCG_SWAP || item >= MEMCG_NR_STAT));
+	if (item)
+		mod_memcg_state(memcg, item, nr_pages);
 	mod_memcg_state(memcg, MEMCG_KMEM, nr_pages);
 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys)) {
 		if (nr_pages > 0)
@@ -3976,6 +3994,7 @@ static const unsigned int memcg1_stats[] = {
 	NR_FILE_DIRTY,
 	NR_WRITEBACK,
 	MEMCG_SWAP,
+	MEMCG_BPF,
 };
 
 static const char *const memcg1_stat_names[] = {
@@ -3989,6 +4008,7 @@ static const char *const memcg1_stat_names[] = {
 	"dirty",
 	"writeback",
 	"swap",
+	"bpf",
 };
 
 /* Universal VM events cgroup1 shows, original sort order */

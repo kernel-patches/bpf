@@ -61,7 +61,11 @@ struct bpf_ringbuf_hdr {
 
 static inline void bpf_map_free_page(struct page *page)
 {
+	int old_item;
+
+	old_item = set_active_memcg_item(MEMCG_BPF);
 	__free_page(page);
+	set_active_memcg_item(old_item);
 }
 
 static void bpf_ringbuf_pages_free(struct page **pages, int nr_pages)

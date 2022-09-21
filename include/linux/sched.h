@@ -1423,6 +1423,7 @@ struct task_struct {
 
 	/* Used by memcontrol for targeted memcg charge: */
 	struct mem_cgroup		*active_memcg;
+	int						active_item;
 #endif
 
 #ifdef CONFIG_BLK_CGROUP

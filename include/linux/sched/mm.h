@@ -363,6 +363,7 @@ static inline void memalloc_pin_restore(unsigned int flags)
 
 #ifdef CONFIG_MEMCG
 DECLARE_PER_CPU(struct mem_cgroup *, int_active_memcg);
+DECLARE_PER_CPU(int, int_active_item);
 /**
  * set_active_memcg - Starts the remote memcg charging scope.
  * @memcg: memcg to charge.
@@ -389,11 +390,34 @@ set_active_memcg(struct mem_cgroup *memcg)
 
 	return old;
 }
+
+static inline int
+set_active_memcg_item(int item)
+{
+	int old_item;
+
+	if (!in_task()) {
+		old_item = this_cpu_read(int_active_item);
+		this_cpu_write(int_active_item, item);
+	} else {
+		old_item = current->active_item;
+		current->active_item = item;
+	}
+
+	return old_item;
+}
+
 #else
 static inline struct mem_cgroup *
 set_active_memcg(struct mem_cgroup *memcg)
 {
 	return NULL;
+}
+
+static inline int
+set_active_memcg_item(int item)
+{
+	return MEMCG_NR_STAT;
 }
 #endif
 

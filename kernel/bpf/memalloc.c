@@ -165,11 +165,14 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 {
 	struct mem_cgroup *memcg = NULL, *old_memcg;
 	unsigned long flags;
+	int old_item;
 	void *obj;
 	int i;
 
 	memcg = get_memcg(c);
 	old_memcg = set_active_memcg(memcg);
+	old_item = set_active_memcg_item(MEMCG_BPF);
+
 	for (i = 0; i < cnt; i++) {
 		obj = __alloc(c, node);
 		if (!obj)
@@ -194,19 +197,26 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 		if (IS_ENABLED(CONFIG_PREEMPT_RT))
 			local_irq_restore(flags);
 	}
+
+	set_active_memcg_item(old_item);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
 }
 
 static void free_one(struct bpf_mem_cache *c, void *obj)
 {
+	int old_item;
+
+	old_item = set_active_memcg_item(MEMCG_BPF);
 	if (c->percpu_size) {
 		free_percpu(((void **)obj)[1]);
 		kfree(obj);
+		set_active_memcg_item(old_item);
 		return;
 	}
 
 	kfree(obj);
+	set_active_memcg_item(old_item);
 }
 
 static void __free_rcu(struct rcu_head *head)

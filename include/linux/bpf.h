@@ -1725,7 +1725,13 @@ void bpf_map_kfree(const void *ptr);
 void bpf_map_kvfree(const void *ptr);
 void bpf_map_free_percpu(void __percpu *ptr);
 
-#define bpf_map_kfree_rcu(ptr, rhf...) kvfree_rcu(ptr, ## rhf)
+#define bpf_map_kfree_rcu(ptr, rhf...)	{		\
+	int old_item;					\
+							\
+	old_item = set_active_memcg_item(MEMCG_BPF);	\
+	kvfree_rcu(ptr, ## rhf);			\
+	set_active_memcg_item(old_item);		\
+}
 
 #else
 static inline void *
@@ -1771,7 +1777,7 @@ static inline void bpf_map_free_percpu(void __percpu *ptr)
 
 #define bpf_map_kfree_rcu(ptr, rhf...) kvfree_rcu(ptr, ## rhf)
 
-#endif
+#endif /* CONFIG_MEMCG_KMEM */
 
 extern int sysctl_unprivileged_bpf_disabled;
 
