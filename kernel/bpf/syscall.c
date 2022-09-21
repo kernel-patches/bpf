@@ -519,6 +519,20 @@ void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 	return ptr;
 }
 
+void bpf_map_kfree(const void *ptr)
+{
+	kfree(ptr);
+}
+
+void bpf_map_kvfree(const void *ptr)
+{
+	kvfree(ptr);
+}
+
+void bpf_map_free_percpu(void __percpu *ptr)
+{
+	free_percpu(ptr);
+}
 #endif
 
 static int bpf_map_kptr_off_cmp(const void *a, const void *b)

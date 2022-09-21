@@ -1721,6 +1721,12 @@ void *bpf_map_kvcalloc(struct bpf_map *map, size_t n, size_t size,
 		       gfp_t flags);
 void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 				    size_t align, gfp_t flags);
+void bpf_map_kfree(const void *ptr);
+void bpf_map_kvfree(const void *ptr);
+void bpf_map_free_percpu(void __percpu *ptr);
+
+#define bpf_map_kfree_rcu(ptr, rhf...) kvfree_rcu(ptr, ## rhf)
+
 #else
 static inline void *
 bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
@@ -1747,6 +1753,24 @@ bpf_map_alloc_percpu(const struct bpf_map *map, size_t size, size_t align,
 {
 	return __alloc_percpu_gfp(size, align, flags);
 }
+
+static inline void bpf_map_kfree(const void *ptr)
+{
+	kfree(ptr);
+}
+
+static inline void bpf_map_kvfree(const void *ptr)
+{
+	kvfree(ptr);
+}
+
+static inline void bpf_map_free_percpu(void __percpu *ptr)
+{
+	free_percpu(ptr);
+}
+
+#define bpf_map_kfree_rcu(ptr, rhf...) kvfree_rcu(ptr, ## rhf)
+
 #endif
 
 extern int sysctl_unprivileged_bpf_disabled;

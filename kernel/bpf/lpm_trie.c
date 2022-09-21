@@ -602,7 +602,7 @@ static void trie_free(struct bpf_map *map)
 				continue;
 			}
 
-			kfree(node);
+			bpf_map_kfree(node);
 			RCU_INIT_POINTER(*slot, NULL);
 			break;
 		}

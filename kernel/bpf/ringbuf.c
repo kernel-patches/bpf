@@ -59,12 +59,17 @@ struct bpf_ringbuf_hdr {
 	u32 pg_off;
 };
 
+static inline void bpf_map_free_page(struct page *page)
+{
+	__free_page(page);
+}
+
 static void bpf_ringbuf_pages_free(struct page **pages, int nr_pages)
 {
 	int i;
 
 	for (i = 0; i < nr_pages; i++)
-		__free_page(pages[i]);
+		bpf_map_free_page(pages[i]);
 	bpf_map_area_free(pages, NULL);
 }
 

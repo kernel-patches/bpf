@@ -1562,7 +1562,7 @@ static void htab_map_free(struct bpf_map *map)
 	}
 
 	bpf_map_free_kptr_off_tab(map);
-	free_percpu(htab->extra_elems);
+	bpf_map_free_percpu(htab->extra_elems);
 	bpf_map_area_free(htab->buckets, NULL);
 	bpf_mem_alloc_destroy(&htab->pcpu_ma);
 	bpf_mem_alloc_destroy(&htab->ma);
