@@ -50,6 +50,8 @@ $(BUILDDIR)/lirc.h.rst: ${UAPI}/lirc.h ${PARSER} $(SRC_DIR)/lirc.h.rst.exception
 .PHONY: all html epub xml latex
 
 all: $(IMGDOT) $(BUILDDIR) ${TARGETS}
+	@:
+
 html: all
 epub: all
 xml: all
