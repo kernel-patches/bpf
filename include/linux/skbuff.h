@@ -1235,7 +1235,7 @@ void kfree_skb_partial(struct sk_buff *skb, bool head_stolen);
 bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
 		      bool *fragstolen, int *delta_truesize);
 
-struct sk_buff *__alloc_skb(unsigned int size, gfp_t priority, int flags,
+struct sk_buff *__alloc_skb(unsigned int bytes, gfp_t priority, int flags,
 			    int node);
 struct sk_buff *__build_skb(void *data, unsigned int frag_size);
 struct sk_buff *build_skb(void *data, unsigned int frag_size);
@@ -1871,9 +1871,6 @@ static inline int skb_unclone(struct sk_buff *skb, gfp_t pri)
 
 /* This variant of skb_unclone() makes sure skb->truesize
  * and skb_end_offset() are not changed, whenever a new skb->head is needed.
- *
- * Indeed there is no guarantee that ksize(kmalloc(X)) == ksize(kmalloc(X))
- * when various debugging features are in place.
  */
 int __skb_unclone_keeptruesize(struct sk_buff *skb, gfp_t pri);
 static inline int skb_unclone_keeptruesize(struct sk_buff *skb, gfp_t pri)
