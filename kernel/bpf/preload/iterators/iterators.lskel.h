@@ -407,19 +407,4 @@ iterators_bpf__load(struct iterators_bpf *skel)
 	return 0;
 }
 
-static inline struct iterators_bpf *
-iterators_bpf__open_and_load(void)
-{
-	struct iterators_bpf *skel;
-
-	skel = iterators_bpf__open();
-	if (!skel)
-		return NULL;
-	if (iterators_bpf__load(skel)) {
-		iterators_bpf__destroy(skel);
-		return NULL;
-	}
-	return skel;
-}
-
 #endif /* __ITERATORS_BPF_SKEL_H__ */
