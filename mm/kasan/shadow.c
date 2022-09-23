@@ -124,9 +124,7 @@ void kasan_unpoison(const void *addr, size_t size, bool init)
 	addr = kasan_reset_tag(addr);
 
 	/*
-	 * Skip KFENCE memory if called explicitly outside of sl*b. Also note
-	 * that calls to ksize(), where size is not a multiple of machine-word
-	 * size, would otherwise poison the invalid portion of the word.
+	 * Skip KFENCE memory if called explicitly outside of sl*b.
 	 */
 	if (is_kfence_address(addr))
 		return;
