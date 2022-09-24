@@ -91,9 +91,10 @@ override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
 override CFLAGS += -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 override CFLAGS += $(CLANG_CROSS_FLAGS)
+override CFLAGS += -fPIC
 
 # flags specific for shared library
-SHLIB_FLAGS := -DSHARED -fPIC
+SHLIB_FLAGS := -DSHARED
 
 ifeq ($(VERBOSE),1)
   Q =
