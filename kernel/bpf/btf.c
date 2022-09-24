@@ -3522,6 +3522,19 @@ end:
 	return ERR_PTR(ret);
 }
 
+/* Now only allow to use 'struct bpf_dynptr' as map key.
+ * Map key with embedded bpf_dynptr is not allowed.
+ */
+int btf_find_dynptr(const struct btf *btf, const struct btf_type *t)
+{
+	/* Only allow struct type */
+	if (__btf_type_is_struct(t) && t->size == sizeof(struct bpf_dynptr) &&
+	    !strcmp("bpf_dynptr", __btf_name_by_offset(btf, t->name_off)))
+		return 0;
+
+	return -EINVAL;
+}
+
 static void __btf_struct_show(const struct btf *btf, const struct btf_type *t,
 			      u32 type_id, void *data, u8 bits_offset,
 			      struct btf_show *show)
