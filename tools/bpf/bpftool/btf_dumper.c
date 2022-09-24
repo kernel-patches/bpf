@@ -462,6 +462,30 @@ static int btf_dumper_int(const struct btf_type *t, __u8 bit_offset,
 	return 0;
 }
 
+static int btf_dumper_dynptr_user(const struct btf_dumper *d,
+				  const struct bpf_dynptr_user *dynptr)
+{
+	unsigned int i, size;
+	unsigned char *data;
+
+	data = bpf_dynptr_user_get_data(dynptr);
+	size = bpf_dynptr_user_get_size(dynptr);
+
+	jsonw_start_object(d->jw);
+
+	jsonw_name(d->jw, "size");
+	jsonw_printf(d->jw, "%u", size);
+	jsonw_name(d->jw, "data");
+	jsonw_start_array(d->jw);
+	for (i = 0; i < size; i++)
+		jsonw_printf(d->jw, "\"0x%hhx\"", data[i]);
+	jsonw_end_array(d->jw);
+
+	jsonw_end_object(d->jw);
+
+	return 0;
+}
+
 static int btf_dumper_struct(const struct btf_dumper *d, __u32 type_id,
 			     const void *data)
 {
@@ -552,6 +576,12 @@ static int btf_dumper_datasec(const struct btf_dumper *d, __u32 type_id,
 	return ret;
 }
 
+static bool btf_is_dynptr(const struct btf *btf, const struct btf_type *t)
+{
+	return t->size == sizeof(struct bpf_dynptr) &&
+	       !strcmp(btf__name_by_offset(btf, t->name_off), "bpf_dynptr");
+}
+
 static int btf_dumper_do_type(const struct btf_dumper *d, __u32 type_id,
 			      __u8 bit_offset, const void *data)
 {
@@ -562,6 +592,9 @@ static int btf_dumper_do_type(const struct btf_dumper *d, __u32 type_id,
 		return btf_dumper_int(t, bit_offset, data, d->jw,
 				     d->is_plain_text);
 	case BTF_KIND_STRUCT:
+		if (btf_is_dynptr(d->btf, t))
+			return btf_dumper_dynptr_user(d, data);
+		/* fallthrough */
 	case BTF_KIND_UNION:
 		return btf_dumper_struct(d, type_id, data);
 	case BTF_KIND_ARRAY:

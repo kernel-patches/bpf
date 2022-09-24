@@ -43,6 +43,17 @@ static bool map_is_map_of_progs(__u32 type)
 	return type == BPF_MAP_TYPE_PROG_ARRAY;
 }
 
+static bool map_is_dynptr_key(__u32 type)
+{
+	return type == BPF_MAP_TYPE_QP_TRIE;
+}
+
+static bool map_use_map_extra(__u32 type)
+{
+	return type == BPF_MAP_TYPE_BLOOM_FILTER ||
+	       type == BPF_MAP_TYPE_QP_TRIE;
+}
+
 static int map_type_from_str(const char *type)
 {
 	const char *map_type_str;
@@ -130,14 +141,44 @@ static json_writer_t *get_btf_writer(void)
 	return jw;
 }
 
-static void print_entry_json(struct bpf_map_info *info, unsigned char *key,
+static void print_key_by_hex_data_json(struct bpf_map_info *info, void *key)
+{
+	unsigned int data_size;
+	unsigned char *data;
+
+	if (map_is_dynptr_key(info->type)) {
+		data = bpf_dynptr_user_get_data(key);
+		data_size = bpf_dynptr_user_get_size(key);
+	} else {
+		data = key;
+		data_size = info->key_size;
+	}
+	print_hex_data_json(data, data_size);
+}
+
+static void fprint_key_in_hex(struct bpf_map_info *info, void *key)
+{
+	unsigned int data_size;
+	unsigned char *data;
+
+	if (map_is_dynptr_key(info->type)) {
+		data = bpf_dynptr_user_get_data(key);
+		data_size = bpf_dynptr_user_get_size(key);
+	} else {
+		data = key;
+		data_size = info->key_size;
+	}
+	fprint_hex(stdout, data, data_size, " ");
+}
+
+static void print_entry_json(struct bpf_map_info *info, void *key,
 			     unsigned char *value, struct btf *btf)
 {
 	jsonw_start_object(json_wtr);
 
 	if (!map_is_per_cpu(info->type)) {
 		jsonw_name(json_wtr, "key");
-		print_hex_data_json(key, info->key_size);
+		print_key_by_hex_data_json(info, key);
 		jsonw_name(json_wtr, "value");
 		print_hex_data_json(value, info->value_size);
 		if (btf) {
@@ -242,19 +283,23 @@ print_entry_error(struct bpf_map_info *map_info, void *key, int lookup_errno)
 	}
 }
 
-static void print_entry_plain(struct bpf_map_info *info, unsigned char *key,
+static void print_entry_plain(struct bpf_map_info *info, void *key,
 			      unsigned char *value)
 {
 	if (!map_is_per_cpu(info->type)) {
 		bool single_line, break_names;
+		unsigned int key_size;
 
-		break_names = info->key_size > 16 || info->value_size > 16;
-		single_line = info->key_size + info->value_size <= 24 &&
-			!break_names;
+		if (map_is_dynptr_key(info->type))
+			key_size = bpf_dynptr_user_get_size(key);
+		else
+			key_size = info->key_size;
+		break_names = key_size > 16 || info->value_size > 16;
+		single_line = key_size + info->value_size <= 24 && !break_names;
 
-		if (info->key_size) {
+		if (key_size) {
 			printf("key:%c", break_names ? '\n' : ' ');
-			fprint_hex(stdout, key, info->key_size, " ");
+			fprint_key_in_hex(info, key);
 
 			printf(single_line ? "  " : "\n");
 		}
@@ -316,6 +361,38 @@ static char **parse_bytes(char **argv, const char *name, unsigned char *val,
 	return argv + i;
 }
 
+/* The format of dynptr is "[hex] size BYTES" */
+static char **parse_dynptr(char **argv, const char *name,
+			   struct bpf_dynptr_user *dynptr)
+{
+	unsigned int base = 0, size;
+	char *endptr;
+
+	if (is_prefix(*argv, "hex")) {
+		base = 16;
+		argv++;
+	}
+	if (!*argv) {
+		p_err("no byte length");
+		return NULL;
+	}
+
+	size = strtoul(*argv, &endptr, base);
+	if (*endptr) {
+		p_err("error parsing byte length: %s", *argv);
+		return NULL;
+	}
+	if (!size || size > bpf_dynptr_user_get_size(dynptr)) {
+		p_err("invalid byte length %u (max length %u)",
+		      size, bpf_dynptr_user_get_size(dynptr));
+		return NULL;
+	}
+	bpf_dynptr_user_trim(dynptr, size);
+
+	return parse_bytes(argv + 1, name, bpf_dynptr_user_get_data(dynptr),
+			   size);
+}
+
 /* on per cpu maps we must copy the provided value on all value instances */
 static void fill_per_cpu_value(struct bpf_map_info *info, void *value)
 {
@@ -350,7 +427,10 @@ static int parse_elem(char **argv, struct bpf_map_info *info,
 			return -1;
 		}
 
-		argv = parse_bytes(argv + 1, "key", key, key_size);
+		if (map_is_dynptr_key(info->type))
+			argv = parse_dynptr(argv + 1, "key", key);
+		else
+			argv = parse_bytes(argv + 1, "key", key, key_size);
 		if (!argv)
 			return -1;
 
@@ -567,6 +647,9 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 	if (memlock)
 		printf("  memlock %sB", memlock);
 	free(memlock);
+
+	if (map_use_map_extra(info->type))
+		printf("  map_extra %llu", info->map_extra);
 
 	if (info->type == BPF_MAP_TYPE_PROG_ARRAY) {
 		char *owner_prog_type = get_fdinfo(fd, "owner_prog_type");
@@ -820,6 +903,18 @@ static void free_btf_vmlinux(void)
 		btf__free(btf_vmlinux);
 }
 
+static struct bpf_dynptr_user *bpf_dynptr_user_new(__u32 size)
+{
+	struct bpf_dynptr_user *dynptr;
+
+	dynptr = malloc(sizeof(*dynptr) + size);
+	if (!dynptr)
+		return NULL;
+
+	bpf_dynptr_user_init(&dynptr[1], size, dynptr);
+	return dynptr;
+}
+
 static int
 map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 	 bool show_header)
@@ -829,7 +924,10 @@ map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 	struct btf *btf = NULL;
 	int err;
 
-	key = malloc(info->key_size);
+	if (map_is_dynptr_key(info->type))
+		key = bpf_dynptr_user_new(info->map_extra);
+	else
+		key = malloc(info->key_size);
 	value = alloc_value(info);
 	if (!key || !value) {
 		p_err("mem alloc failed");
@@ -966,7 +1064,10 @@ static int alloc_key_value(struct bpf_map_info *info, void **key, void **value)
 	*value = NULL;
 
 	if (info->key_size) {
-		*key = malloc(info->key_size);
+		if (map_is_dynptr_key(info->type))
+			*key = bpf_dynptr_user_new(info->map_extra);
+		else
+			*key = malloc(info->key_size);
 		if (!*key) {
 			p_err("key mem alloc failed");
 			return -1;
@@ -1132,8 +1233,13 @@ static int do_getnext(int argc, char **argv)
 	if (fd < 0)
 		return -1;
 
-	key = malloc(info.key_size);
-	nextkey = malloc(info.key_size);
+	if (map_is_dynptr_key(info.type)) {
+		key = bpf_dynptr_user_new(info.map_extra);
+		nextkey = bpf_dynptr_user_new(info.map_extra);
+	} else {
+		key = malloc(info.key_size);
+		nextkey = malloc(info.key_size);
+	}
 	if (!key || !nextkey) {
 		p_err("mem alloc failed");
 		err = -1;
@@ -1160,23 +1266,23 @@ static int do_getnext(int argc, char **argv)
 		jsonw_start_object(json_wtr);
 		if (key) {
 			jsonw_name(json_wtr, "key");
-			print_hex_data_json(key, info.key_size);
+			print_key_by_hex_data_json(&info, key);
 		} else {
 			jsonw_null_field(json_wtr, "key");
 		}
 		jsonw_name(json_wtr, "next_key");
-		print_hex_data_json(nextkey, info.key_size);
+		print_key_by_hex_data_json(&info, nextkey);
 		jsonw_end_object(json_wtr);
 	} else {
 		if (key) {
 			printf("key:\n");
-			fprint_hex(stdout, key, info.key_size, " ");
+			fprint_key_in_hex(&info, key);
 			printf("\n");
 		} else {
 			printf("key: None\n");
 		}
 		printf("next key:\n");
-		fprint_hex(stdout, nextkey, info.key_size, " ");
+		fprint_key_in_hex(&info, nextkey);
 		printf("\n");
 	}
 
@@ -1203,7 +1309,10 @@ static int do_delete(int argc, char **argv)
 	if (fd < 0)
 		return -1;
 
-	key = malloc(info.key_size);
+	if (map_is_dynptr_key(info.type))
+		key = bpf_dynptr_user_new(info.map_extra);
+	else
+		key = malloc(info.key_size);
 	if (!key) {
 		p_err("mem alloc failed");
 		err = -1;
@@ -1449,7 +1558,7 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       " HELP_SPEC_MAP "\n"
-		"       DATA := { [hex] BYTES }\n"
+		"       DATA := { [hex] BYTES | [hex] size BYTES }\n"
 		"       " HELP_SPEC_PROGRAM "\n"
 		"       VALUE := { DATA | MAP | PROG }\n"
 		"       UPDATE_FLAGS := { any | exist | noexist }\n"
@@ -1459,7 +1568,7 @@ static int do_help(int argc, char **argv)
 		"                 devmap | devmap_hash | sockmap | cpumap | xskmap | sockhash |\n"
 		"                 cgroup_storage | reuseport_sockarray | percpu_cgroup_storage |\n"
 		"                 queue | stack | sk_storage | struct_ops | ringbuf | inode_storage |\n"
-		"                 task_storage | bloom_filter | user_ringbuf }\n"
+		"                 task_storage | bloom_filter | user_ringbuf | qp_trie }\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
 		"                    {-f|--bpffs} | {-n|--nomount} }\n"
 		"",
