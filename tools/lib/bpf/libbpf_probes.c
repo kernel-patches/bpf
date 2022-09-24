@@ -188,6 +188,19 @@ static int load_local_storage_btf(void)
 				     strs, sizeof(strs));
 }
 
+static int load_qp_trie_btf(void)
+{
+	const char strs[] = "\0bpf_dynptr";
+	__u32 types[] = {
+		/* struct bpf_dynptr */				/* [1] */
+		BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 0), 16),
+		/* unsigned int */				/* [2] */
+		BTF_TYPE_INT_ENC(0, 0, 0, 32, 4),
+	};
+	return libbpf__load_raw_btf((char *)types, sizeof(types),
+				    strs, sizeof(strs));
+}
+
 static int probe_map_create(enum bpf_map_type map_type)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts);
@@ -263,6 +276,18 @@ static int probe_map_create(enum bpf_map_type map_type)
 	case BPF_MAP_TYPE_XSKMAP:
 	case BPF_MAP_TYPE_SOCKHASH:
 	case BPF_MAP_TYPE_REUSEPORT_SOCKARRAY:
+		break;
+	case BPF_MAP_TYPE_QP_TRIE:
+		key_size = sizeof(struct bpf_dynptr);
+		value_size = 4;
+		btf_key_type_id = 1;
+		btf_value_type_id = 2;
+		max_entries = 1;
+		opts.map_flags = BPF_F_NO_PREALLOC;
+		opts.map_extra = 1;
+		btf_fd = load_qp_trie_btf();
+		if (btf_fd < 0)
+			return btf_fd;
 		break;
 	case BPF_MAP_TYPE_UNSPEC:
 	default:
