@@ -8,6 +8,10 @@
 #include <errno.h>
 #include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
 
+#ifndef ENOTSUPP
+#define ENOTSUPP 524
+#endif
+
 static inline unsigned int bpf_num_possible_cpus(void)
 {
 	int possible_cpus = libbpf_num_possible_cpus();
