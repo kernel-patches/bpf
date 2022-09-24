@@ -20,6 +20,8 @@ static struct {
 	{"ringbuf_invalid_api", "type=mem expected=alloc_mem"},
 	{"add_dynptr_to_map1", "invalid indirect read from stack"},
 	{"add_dynptr_to_map2", "invalid indirect read from stack"},
+	{"add_dynptr_to_key1", "invalid indirect read from stack"},
+	{"add_dynptr_to_key2", "invalid indirect read from stack"},
 	{"data_slice_out_of_bounds_ringbuf", "value is outside of the allowed memory range"},
 	{"data_slice_out_of_bounds_map_value", "value is outside of the allowed memory range"},
 	{"data_slice_use_after_release1", "invalid mem access 'scalar'"},

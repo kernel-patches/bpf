@@ -35,6 +35,20 @@ struct {
 	__type(value, __u32);
 } array_map3 SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, struct bpf_dynptr);
+	__type(value, __u32);
+} hash_map1 SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, struct test_info);
+	__type(value, __u32);
+} hash_map2 SEC(".maps");
+
 struct sample {
 	int pid;
 	long value;
@@ -200,6 +214,35 @@ int add_dynptr_to_map2(void *ctx)
 
 	/* this should fail */
 	bpf_map_update_elem(&array_map2, &key, &x, 0);
+
+	bpf_ringbuf_submit_dynptr(&x.ptr, 0);
+
+	return 0;
+}
+
+/* Can't use a dynptr as key of normal map */
+SEC("?raw_tp")
+int add_dynptr_to_key1(void *ctx)
+{
+	struct bpf_dynptr ptr;
+
+	get_map_val_dynptr(&ptr);
+	bpf_map_lookup_elem(&hash_map1, &ptr);
+
+	return 0;
+}
+
+/* Can't use a struct with an embedded dynptr as key of normal map */
+SEC("?raw_tp")
+int add_dynptr_to_key2(void *ctx)
+{
+	struct test_info x;
+
+	x.x = 0;
+	bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &x.ptr);
+
+	/* this should fail */
+	bpf_map_lookup_elem(&hash_map2, &x);
 
 	bpf_ringbuf_submit_dynptr(&x.ptr, 0);
 
