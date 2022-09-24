@@ -216,6 +216,7 @@ struct bpf_map {
 	int spin_lock_off; /* >=0 valid offset, <0 error */
 	struct bpf_map_value_off *kptr_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
+	int dynptr_key_off; /* >=0 valid offset, <0 error */
 	u32 id;
 	int numa_node;
 	u32 btf_key_type_id;
@@ -263,6 +264,11 @@ static inline bool map_value_has_timer(const struct bpf_map *map)
 static inline bool map_value_has_kptrs(const struct bpf_map *map)
 {
 	return !IS_ERR_OR_NULL(map->kptr_off_tab);
+}
+
+static inline bool map_key_has_dynptr(const struct bpf_map *map)
+{
+	return map->dynptr_key_off >= 0;
 }
 
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
@@ -2654,6 +2660,8 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_LOCAL,
 	/* Underlying data is a kernel-produced ringbuf record */
 	BPF_DYNPTR_TYPE_RINGBUF,
+	/* Points to memory copied from/to userspace */
+	BPF_DYNPTR_TYPE_USER,
 };
 
 void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,

@@ -6815,6 +6815,12 @@ struct bpf_timer {
 	__u64 :64;
 } __attribute__((aligned(8)));
 
+struct bpf_dynptr_user {
+	__u64 data;
+	__u32 size;
+	__u32 :32;
+} __attribute__((aligned(8)));
+
 struct bpf_dynptr {
 	__u64 :64;
 	__u64 :64;

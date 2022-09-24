@@ -52,6 +52,7 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 	inner_map_meta->max_entries = inner_map->max_entries;
 	inner_map_meta->spin_lock_off = inner_map->spin_lock_off;
 	inner_map_meta->timer_off = inner_map->timer_off;
+	inner_map_meta->dynptr_key_off = inner_map->dynptr_key_off;
 	inner_map_meta->kptr_off_tab = bpf_map_copy_kptr_off_tab(inner_map);
 	if (inner_map->btf) {
 		btf_get(inner_map->btf);
@@ -85,7 +86,9 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 		meta0->key_size == meta1->key_size &&
 		meta0->value_size == meta1->value_size &&
 		meta0->timer_off == meta1->timer_off &&
+		meta0->dynptr_key_off == meta1->dynptr_key_off &&
 		meta0->map_flags == meta1->map_flags &&
+		meta0->map_extra == meta1->map_extra &&
 		bpf_map_equal_kptr_off_tab(meta0, meta1);
 }
 
