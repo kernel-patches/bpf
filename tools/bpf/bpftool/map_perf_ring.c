@@ -198,7 +198,7 @@ int do_event_pipe(int argc, char **argv)
 	err = libbpf_get_error(pb);
 	if (err) {
 		p_err("failed to create perf buffer: %s (%d)",
-		      strerror(err), err);
+		      strerror(errno), err);
 		goto err_close_map;
 	}
 
@@ -213,7 +213,7 @@ int do_event_pipe(int argc, char **argv)
 		err = perf_buffer__poll(pb, 200);
 		if (err < 0 && err != -EINTR) {
 			p_err("perf buffer polling failed: %s (%d)",
-			      strerror(err), err);
+			      strerror(errno), err);
 			goto err_close_pb;
 		}
 	}

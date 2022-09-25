@@ -643,7 +643,7 @@ static int do_dump(int argc, char **argv)
 		if (err) {
 			btf = NULL;
 			p_err("failed to load BTF from %s: %s",
-			      *argv, strerror(err));
+			      *argv, strerror(errno));
 			goto done;
 		}
 		NEXT_ARG();
@@ -689,7 +689,7 @@ static int do_dump(int argc, char **argv)
 		btf = btf__load_from_kernel_by_id_split(btf_id, base_btf);
 		err = libbpf_get_error(btf);
 		if (err) {
-			p_err("get btf by id (%u): %s", btf_id, strerror(err));
+			p_err("get btf by id (%u): %s", btf_id, strerror(errno));
 			goto done;
 		}
 	}
@@ -825,7 +825,7 @@ build_btf_type_table(struct hashmap *tab, enum bpf_obj_type type,
 				      u32_as_hash_field(id));
 		if (err) {
 			p_err("failed to append entry to hashmap for BTF ID %u, object ID %u: %s",
-			      btf_id, id, strerror(errno));
+			      btf_id, id, strerror(-err));
 			goto err_free;
 		}
 	}
