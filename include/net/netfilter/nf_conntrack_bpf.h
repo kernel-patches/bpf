@@ -4,6 +4,11 @@
 #define _NF_CONNTRACK_BPF_H
 
 #include <linux/kconfig.h>
+#include <net/netfilter/nf_conntrack.h>
+
+struct nf_conn___init {
+	struct nf_conn ct;
+};
 
 #if (IS_BUILTIN(CONFIG_NF_CONNTRACK) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) || \
     (IS_MODULE(CONFIG_NF_CONNTRACK) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))

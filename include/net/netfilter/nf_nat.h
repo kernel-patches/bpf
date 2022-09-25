@@ -68,6 +68,20 @@ static inline bool nf_nat_oif_changed(unsigned int hooknum,
 #endif
 }
 
+#if (IS_BUILTIN(CONFIG_NF_NAT) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) || \
+    (IS_MODULE(CONFIG_NF_NAT) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
+
+extern int register_nf_nat_bpf(void);
+
+#else
+
+static inline int register_nf_nat_bpf(void)
+{
+	return 0;
+}
+
+#endif
+
 int nf_nat_register_fn(struct net *net, u8 pf, const struct nf_hook_ops *ops,
 		       const struct nf_hook_ops *nat_ops, unsigned int ops_count);
 void nf_nat_unregister_fn(struct net *net, u8 pf, const struct nf_hook_ops *ops,
