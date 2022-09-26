@@ -520,6 +520,8 @@ ssize_t fuse_simple_request(struct fuse_mount *fm, struct fuse_args *args)
 		BUG_ON(args->out_numargs == 0);
 		ret = args->out_args[args->out_numargs - 1].size;
 	}
+	if (args->is_filter)
+		args->ret = req->out.h.error;
 	fuse_put_request(req);
 
 	return ret;

@@ -2681,3 +2681,73 @@ void __exit fuse_bpf_cleanup(void)
 {
 	kmem_cache_destroy(fuse_bpf_aio_request_cachep);
 }
+
+static ssize_t fuse_bpf_simple_request(struct fuse_mount *fm, struct bpf_fuse_args *fa,
+				       unsigned short in_numargs, unsigned short out_numargs,
+				       struct bpf_fuse_arg *out_arg_array, bool add_out_to_in)
+{
+	int i;
+	uint32_t max_size;
+	ssize_t res;
+
+	struct fuse_args args = {
+		.nodeid = fa->nodeid,
+		.opcode = fa->opcode,
+		.error_in = fa->error_in,
+		.in_numargs = in_numargs,
+		.out_numargs = out_numargs,
+		.force = !!(fa->flags & FUSE_BPF_FORCE),
+		.out_argvar = !!(fa->flags & FUSE_BPF_OUT_ARGVAR),
+		.is_lookup = !!(fa->flags & FUSE_BPF_IS_LOOKUP),
+	};
+
+	/* Set in args */
+	for (i = 0; i < fa->in_numargs; ++i)
+		args.in_args[i] = (struct fuse_in_arg) {
+			.size = fa->in_args[i].size,
+			.value = fa->in_args[i].value,
+		};
+	if (add_out_to_in) {
+		for (i = 0; i < fa->out_numargs; ++i)
+			args.in_args[fa->in_numargs + i] = (struct fuse_in_arg) {
+				.size = fa->out_args[i].size,
+				.value = fa->out_args[i].value,
+			};
+	}
+
+	/* All out args must be writeable */
+	for (i = 0; i < out_numargs; ++i) {
+		max_size = out_arg_array[i].max_size ?: out_arg_array[i].size;
+		if (!bpf_fuse_get_writeable(&out_arg_array[i], max_size, true))
+			return -ENOMEM;
+	}
+
+	/* Set out args */
+	for (i = 0; i < out_numargs; ++i)
+		args.out_args[i] = (struct fuse_arg) {
+			.size = out_arg_array[i].size,
+			.value = out_arg_array[i].value,
+		};
+
+	res = fuse_simple_request(fm, &args);
+
+	/* update used areas of buffers */
+	for (i = 0; i < out_numargs; ++i)
+		if (out_arg_array[i].flags & BPF_FUSE_VARIABLE_SIZE)
+			out_arg_array[i].size = args.out_args[i].size;
+	fa->ret = args.ret;
+
+	return res;
+}
+
+ssize_t fuse_prefilter_simple_request(struct fuse_mount *fm, struct bpf_fuse_args *fa)
+{
+	return fuse_bpf_simple_request(fm, fa, fa->in_numargs, fa->in_numargs,
+				       fa->in_args, false);
+}
+
+ssize_t fuse_postfilter_simple_request(struct fuse_mount *fm, struct bpf_fuse_args *fa)
+{
+	return fuse_bpf_simple_request(fm, fa, fa->in_numargs + fa->out_numargs, fa->out_numargs,
+				       fa->out_args, true);
+}
