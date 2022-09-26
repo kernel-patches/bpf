@@ -1422,6 +1422,17 @@ int fuse_lseek_finalize(struct bpf_fuse_args *fa, loff_t *out, struct file *file
 
 ssize_t fuse_backing_mmap(struct file *file, struct vm_area_struct *vma);
 
+int fuse_file_fallocate_initialize_in(struct bpf_fuse_args *fa,
+				      struct fuse_fallocate_in *ffi,
+				      struct file *file, int mode, loff_t offset, loff_t length);
+int fuse_file_fallocate_initialize_out(struct bpf_fuse_args *fa,
+				       struct fuse_fallocate_in *ffi,
+				       struct file *file, int mode, loff_t offset, loff_t length);
+int fuse_file_fallocate_backing(struct bpf_fuse_args *fa, int *out,
+				struct file *file, int mode, loff_t offset, loff_t length);
+int fuse_file_fallocate_finalize(struct bpf_fuse_args *fa, int *out,
+				 struct file *file, int mode, loff_t offset, loff_t length);
+
 struct fuse_lookup_io {
 	struct fuse_entry_out feo;
 	struct fuse_entry_bpf feb;
