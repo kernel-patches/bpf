@@ -3180,6 +3180,16 @@ static ssize_t __fuse_copy_file_range(struct file *file_in, loff_t pos_in,
 	bool is_unstable = (!fc->writeback_cache) &&
 			   ((pos_out + len) > inode_out->i_size);
 
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(file_in->f_inode, struct fuse_copy_file_range_io, err,
+			       fuse_copy_file_range_initialize_in,
+			       fuse_copy_file_range_initialize_out,
+			       fuse_copy_file_range_backing,
+			       fuse_copy_file_range_finalize,
+			       file_in, pos_in, file_out, pos_out, len, flags))
+		return err;
+#endif
+
 	if (fc->no_copy_file_range)
 		return -EOPNOTSUPP;
 

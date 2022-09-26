@@ -553,6 +553,74 @@ int fuse_lseek_finalize(struct bpf_fuse_args *fa, loff_t *out,
 	return 0;
 }
 
+int fuse_copy_file_range_initialize_in(struct bpf_fuse_args *fa,
+					struct fuse_copy_file_range_io *fcf,
+					struct file *file_in, loff_t pos_in, struct file *file_out,
+					loff_t pos_out, size_t len, unsigned int flags)
+{
+	struct fuse_file *fuse_file_in = file_in->private_data;
+	struct fuse_file *fuse_file_out = file_out->private_data;
+
+	fcf->fci = (struct fuse_copy_file_range_in) {
+		.fh_in = fuse_file_in->fh,
+		.off_in = pos_in,
+		.nodeid_out = fuse_file_out->nodeid,
+		.fh_out = fuse_file_out->fh,
+		.off_out = pos_out,
+		.len = len,
+		.flags = flags,
+	};
+
+	*fa = (struct bpf_fuse_args) {
+		.nodeid = get_node_id(file_in->f_inode),
+		.opcode = FUSE_COPY_FILE_RANGE,
+		.in_numargs = 1,
+		.in_args[0].size = sizeof(fcf->fci),
+		.in_args[0].value = &fcf->fci,
+	};
+
+	return 0;
+}
+
+int fuse_copy_file_range_initialize_out(struct bpf_fuse_args *fa,
+					struct fuse_copy_file_range_io *fcf,
+					struct file *file_in, loff_t pos_in, struct file *file_out,
+					loff_t pos_out, size_t len, unsigned int flags)
+{
+	fa->out_numargs = 1;
+	fa->out_args[0].size = sizeof(fcf->fwo);
+	fa->out_args[0].value = &fcf->fwo;
+
+	return 0;
+}
+
+int fuse_copy_file_range_backing(struct bpf_fuse_args *fa, ssize_t *out, struct file *file_in,
+				 loff_t pos_in, struct file *file_out, loff_t pos_out, size_t len,
+				 unsigned int flags)
+{
+	const struct fuse_copy_file_range_in *fci = fa->in_args[0].value;
+	struct fuse_file *fuse_file_in = file_in->private_data;
+	struct file *backing_file_in = fuse_file_in->backing_file;
+	struct fuse_file *fuse_file_out = file_out->private_data;
+	struct file *backing_file_out = fuse_file_out->backing_file;
+
+	/* TODO: Handle changing of in/out files */
+	if (backing_file_out)
+		*out = vfs_copy_file_range(backing_file_in, fci->off_in, backing_file_out,
+					   fci->off_out, fci->len, fci->flags);
+	else
+		*out = generic_copy_file_range(file_in, pos_in, file_out, pos_out, len,
+					       flags);
+	return 0;
+}
+
+int fuse_copy_file_range_finalize(struct bpf_fuse_args *fa, ssize_t *out, struct file *file_in,
+				  loff_t pos_in, struct file *file_out, loff_t pos_out, size_t len,
+				  unsigned int flags)
+{
+	return 0;
+}
+
 int fuse_fsync_initialize_in(struct bpf_fuse_args *fa, struct fuse_fsync_in *ffi,
 			     struct file *file, loff_t start, loff_t end, int datasync)
 {
