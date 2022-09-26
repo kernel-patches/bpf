@@ -2160,6 +2160,7 @@ const struct file_operations bpf_prog_fops = {
 	.read		= bpf_dummy_read,
 	.write		= bpf_dummy_write,
 };
+EXPORT_SYMBOL_GPL(bpf_prog_fops);
 
 int bpf_prog_new_fd(struct bpf_prog *prog)
 {
