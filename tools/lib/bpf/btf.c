@@ -990,6 +990,8 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 	err = 0;
 
 	if (!btf_data) {
+		pr_warn("Failed to get section %s from ELF %s, check CONFIG_DEBUG_INFO_BTF if compiling kernel\n",
+			BTF_ELF_SEC, path);
 		err = -ENOENT;
 		goto done;
 	}
