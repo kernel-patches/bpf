@@ -1404,7 +1404,10 @@ struct fuse_entry_bpf {
 	struct bpf_prog *bpf;
 };
 
+
 int parse_fuse_entry_bpf(struct fuse_entry_bpf *feb);
+
+ssize_t fuse_backing_mmap(struct file *file, struct vm_area_struct *vma);
 
 struct fuse_lookup_io {
 	struct fuse_entry_out feo;
