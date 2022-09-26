@@ -1489,6 +1489,14 @@ int fuse_release_backing(struct bpf_fuse_args *fa, int *out,
 int fuse_release_finalize(struct bpf_fuse_args *fa, int *out,
 			    struct inode *inode, struct file *file);
 
+int fuse_flush_initialize_in(struct bpf_fuse_args *fa, struct fuse_flush_in *ffi,
+			     struct file *file, fl_owner_t id);
+int fuse_flush_initialize_out(struct bpf_fuse_args *fa, struct fuse_flush_in *ffi,
+			      struct file *file, fl_owner_t id);
+int fuse_flush_backing(struct bpf_fuse_args *fa, int *out, struct file *file, fl_owner_t id);
+int fuse_flush_finalize(struct bpf_fuse_args *fa, int *out,
+			struct file *file, fl_owner_t id);
+
 struct fuse_lseek_io {
 	struct fuse_lseek_in fli;
 	struct fuse_lseek_out flo;
@@ -1502,6 +1510,19 @@ int fuse_lseek_backing(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
 		       loff_t offset, int whence);
 int fuse_lseek_finalize(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
 			loff_t offset, int whence);
+
+int fuse_fsync_initialize_in(struct bpf_fuse_args *fa, struct fuse_fsync_in *ffi,
+			     struct file *file, loff_t start, loff_t end, int datasync);
+int fuse_fsync_initialize_out(struct bpf_fuse_args *fa, struct fuse_fsync_in *ffi,
+			      struct file *file, loff_t start, loff_t end, int datasync);
+int fuse_fsync_backing(struct bpf_fuse_args *fa, int *out,
+		       struct file *file, loff_t start, loff_t end, int datasync);
+int fuse_fsync_finalize(struct bpf_fuse_args *fa, int *out,
+			struct file *file, loff_t start, loff_t end, int datasync);
+int fuse_dir_fsync_initialize_in(struct bpf_fuse_args *fa, struct fuse_fsync_in *ffi,
+				 struct file *file, loff_t start, loff_t end, int datasync);
+int fuse_dir_fsync_initialize_out(struct bpf_fuse_args *fa, struct fuse_fsync_in *ffi,
+				  struct file *file, loff_t start, loff_t end, int datasync);
 
 struct fuse_read_iter_out {
 	uint64_t ret;

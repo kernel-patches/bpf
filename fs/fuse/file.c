@@ -513,6 +513,15 @@ static int fuse_flush(struct file *file, fl_owner_t id)
 	FUSE_ARGS(args);
 	int err;
 
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(file->f_inode, struct fuse_flush_in, err,
+			       fuse_flush_initialize_in, fuse_flush_initialize_out,
+			       fuse_flush_backing,
+			       fuse_flush_finalize,
+			       file, id))
+	return err;
+#endif
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 
@@ -587,6 +596,14 @@ static int fuse_fsync(struct file *file, loff_t start, loff_t end,
 	struct inode *inode = file->f_mapping->host;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	int err;
+
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(inode, struct fuse_fsync_in, err,
+			       fuse_fsync_initialize_in, fuse_fsync_initialize_out,
+			       fuse_fsync_backing, fuse_fsync_finalize,
+			       file, start, end, datasync))
+		return err;
+#endif
 
 	if (fuse_is_bad(inode))
 		return -EIO;

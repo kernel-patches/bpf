@@ -1638,6 +1638,14 @@ static int fuse_dir_fsync(struct file *file, loff_t start, loff_t end,
 	if (fuse_is_bad(inode))
 		return -EIO;
 
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(inode, struct fuse_fsync_in, err,
+			fuse_dir_fsync_initialize_in, fuse_dir_fsync_initialize_out,
+			fuse_fsync_backing, fuse_fsync_finalize,
+			file, start, end, datasync))
+		return err;
+#endif
+
 	if (fc->no_fsyncdir)
 		return 0;
 
