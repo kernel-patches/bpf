@@ -896,6 +896,16 @@ static int fuse_mknod(struct user_namespace *mnt_userns, struct inode *dir,
 	struct fuse_mount *fm = get_fuse_mount(dir);
 	FUSE_ARGS(args);
 
+#ifdef CONFIG_FUSE_BPF
+	int err;
+
+	if (fuse_bpf_backing(dir, struct fuse_mknod_in, err,
+			fuse_mknod_initialize_in, fuse_mknod_initialize_out,
+			fuse_mknod_backing, fuse_mknod_finalize,
+			dir, entry, mode, rdev))
+		return err;
+#endif
+
 	if (!fm->fc->dont_mask)
 		mode &= ~current_umask();
 
@@ -924,6 +934,16 @@ static int fuse_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
 	struct fuse_mkdir_in inarg;
 	struct fuse_mount *fm = get_fuse_mount(dir);
 	FUSE_ARGS(args);
+
+#ifdef CONFIG_FUSE_BPF
+	int err;
+
+	if (fuse_bpf_backing(dir, struct fuse_mkdir_in, err,
+			fuse_mkdir_initialize_in, fuse_mkdir_initialize_out,
+			fuse_mkdir_backing, fuse_mkdir_finalize,
+			dir, entry, mode))
+		return err;
+#endif
 
 	if (!fm->fc->dont_mask)
 		mode &= ~current_umask();
@@ -1010,6 +1030,16 @@ static int fuse_unlink(struct inode *dir, struct dentry *entry)
 	if (fuse_is_bad(dir))
 		return -EIO;
 
+#ifdef CONFIG_FUSE_BPF
+	{
+		if (fuse_bpf_backing(dir, struct fuse_dummy_io, err,
+					fuse_unlink_initialize_in, fuse_unlink_initialize_out,
+					fuse_unlink_backing, fuse_unlink_finalize,
+					dir, entry))
+			return err;
+	}
+#endif
+
 	args.opcode = FUSE_UNLINK;
 	args.nodeid = get_node_id(dir);
 	args.in_numargs = 1;
@@ -1032,6 +1062,16 @@ static int fuse_rmdir(struct inode *dir, struct dentry *entry)
 
 	if (fuse_is_bad(dir))
 		return -EIO;
+
+#ifdef CONFIG_FUSE_BPF
+	{
+		if (fuse_bpf_backing(dir, struct fuse_dummy_io, err,
+					fuse_rmdir_initialize_in, fuse_rmdir_initialize_out,
+					fuse_rmdir_backing, fuse_rmdir_finalize,
+					dir, entry))
+			return err;
+	}
+#endif
 
 	args.opcode = FUSE_RMDIR;
 	args.nodeid = get_node_id(dir);

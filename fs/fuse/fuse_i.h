@@ -1439,6 +1439,41 @@ int fuse_create_open_finalize(struct bpf_fuse_args *fa, int *out,
 			      struct inode *dir, struct dentry *entry,
 			      struct file *file, unsigned int flags, umode_t mode);
 
+int fuse_mknod_initialize_in(struct bpf_fuse_args *fa, struct fuse_mknod_in *fmi,
+			     struct inode *dir, struct dentry *entry, umode_t mode, dev_t rdev);
+int fuse_mknod_initialize_out(struct bpf_fuse_args *fa, struct fuse_mknod_in *fmi,
+			      struct inode *dir, struct dentry *entry, umode_t mode, dev_t rdev);
+int fuse_mknod_backing(struct bpf_fuse_args *fa, int *out,
+		       struct inode *dir, struct dentry *entry, umode_t mode, dev_t rdev);
+int fuse_mknod_finalize(struct bpf_fuse_args *fa, int *out,
+			struct inode *dir, struct dentry *entry, umode_t mode, dev_t rdev);
+
+int fuse_mkdir_initialize_in(struct bpf_fuse_args *fa, struct fuse_mkdir_in *fmi,
+			     struct inode *dir, struct dentry *entry, umode_t mode);
+int fuse_mkdir_initialize_out(struct bpf_fuse_args *fa, struct fuse_mkdir_in *fmi,
+			      struct inode *dir, struct dentry *entry, umode_t mode);
+int fuse_mkdir_backing(struct bpf_fuse_args *fa, int *out,
+		       struct inode *dir, struct dentry *entry, umode_t mode);
+int fuse_mkdir_finalize(struct bpf_fuse_args *fa, int *out,
+			struct inode *dir, struct dentry *entry, umode_t mode);
+
+int fuse_rmdir_initialize_in(struct bpf_fuse_args *fa, struct fuse_dummy_io *fmi,
+			     struct inode *dir, struct dentry *entry);
+int fuse_rmdir_initialize_out(struct bpf_fuse_args *fa, struct fuse_dummy_io *fmi,
+			      struct inode *dir, struct dentry *entry);
+int fuse_rmdir_backing(struct bpf_fuse_args *fa, int *out, struct inode *dir, struct dentry *entry);
+int fuse_rmdir_finalize(struct bpf_fuse_args *fa, int *out,
+			struct inode *dir, struct dentry *entry);
+
+int fuse_unlink_initialize_in(struct bpf_fuse_args *fa, struct fuse_dummy_io *fmi,
+			      struct inode *dir, struct dentry *entry);
+int fuse_unlink_initialize_out(struct bpf_fuse_args *fa, struct fuse_dummy_io *fmi,
+			       struct inode *dir, struct dentry *entry);
+int fuse_unlink_backing(struct bpf_fuse_args *fa, int *out,
+			struct inode *dir, struct dentry *entry);
+int fuse_unlink_finalize(struct bpf_fuse_args *fa, int *out,
+			 struct inode *dir, struct dentry *entry);
+
 int fuse_release_initialize_in(struct bpf_fuse_args *fa, struct fuse_release_in *fri,
 			       struct inode *inode, struct file *file);
 int fuse_release_initialize_out(struct bpf_fuse_args *fa, struct fuse_release_in *fri,
