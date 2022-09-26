@@ -1135,7 +1135,7 @@ int fuse_dev_init(void);
 void fuse_dev_cleanup(void);
 
 int fuse_ctl_init(void);
-void __exit fuse_ctl_cleanup(void);
+void fuse_ctl_cleanup(void);
 
 /**
  * Simple request sending that does request allocation and freeing
@@ -1503,6 +1503,43 @@ int fuse_lseek_backing(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
 int fuse_lseek_finalize(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
 			loff_t offset, int whence);
 
+struct fuse_read_iter_out {
+	uint64_t ret;
+};
+struct fuse_file_read_iter_io {
+	struct fuse_read_in fri;
+	struct fuse_read_iter_out frio;
+};
+
+int fuse_file_read_iter_initialize_in(struct bpf_fuse_args *fa, struct fuse_file_read_iter_io *fri,
+				      struct kiocb *iocb, struct iov_iter *to);
+int fuse_file_read_iter_initialize_out(struct bpf_fuse_args *fa, struct fuse_file_read_iter_io *fri,
+				       struct kiocb *iocb, struct iov_iter *to);
+int fuse_file_read_iter_backing(struct bpf_fuse_args *fa, ssize_t *out,
+				struct kiocb *iocb, struct iov_iter *to);
+int fuse_file_read_iter_finalize(struct bpf_fuse_args *fa, ssize_t *out,
+				 struct kiocb *iocb, struct iov_iter *to);
+
+struct fuse_write_iter_out {
+	uint64_t ret;
+};
+struct fuse_file_write_iter_io {
+	struct fuse_write_in fwi;
+	struct fuse_write_out fwo;
+	struct fuse_write_iter_out fwio;
+};
+
+int fuse_file_write_iter_initialize_in(struct bpf_fuse_args *fa,
+				       struct fuse_file_write_iter_io *fwio,
+				       struct kiocb *iocb, struct iov_iter *from);
+int fuse_file_write_iter_initialize_out(struct bpf_fuse_args *fa,
+					struct fuse_file_write_iter_io *fwio,
+					struct kiocb *iocb, struct iov_iter *from);
+int fuse_file_write_iter_backing(struct bpf_fuse_args *fa, ssize_t *out,
+				 struct kiocb *iocb, struct iov_iter *from);
+int fuse_file_write_iter_finalize(struct bpf_fuse_args *fa, ssize_t *out,
+				  struct kiocb *iocb, struct iov_iter *from);
+
 ssize_t fuse_backing_mmap(struct file *file, struct vm_area_struct *vma);
 
 int fuse_file_fallocate_initialize_in(struct bpf_fuse_args *fa,
@@ -1570,6 +1607,9 @@ static inline u64 attr_timeout(struct fuse_attr_out *o)
 }
 
 #ifdef CONFIG_FUSE_BPF
+int __init fuse_bpf_init(void);
+void __exit fuse_bpf_cleanup(void);
+
 /*
  * expression statement to wrap the backing filter logic
  * struct inode *inode: inode with bpf and backing inode
