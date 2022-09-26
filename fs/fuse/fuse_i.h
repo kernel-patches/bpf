@@ -13,9 +13,12 @@
 # define pr_fmt(fmt) "fuse: " fmt
 #endif
 
+#include <linux/filter.h>
 #include <linux/fuse.h>
 #include <linux/fs.h>
 #include <linux/mount.h>
+#include <linux/pagemap.h>
+#include <linux/statfs.h>
 #include <linux/wait.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
@@ -31,6 +34,8 @@
 #include <linux/pid_namespace.h>
 #include <linux/refcount.h>
 #include <linux/user_namespace.h>
+#include <linux/bpf_fuse.h>
+#include <linux/magic.h>
 
 /** Default max number of pages that can be used in a single read request */
 #define FUSE_DEFAULT_MAX_PAGES_PER_REQ 32
@@ -64,17 +69,55 @@ struct fuse_forget_link {
 };
 
 /** FUSE specific dentry data */
-#if BITS_PER_LONG < 64
-union fuse_dentry {
-	u64 time;
-	struct rcu_head rcu;
+#if BITS_PER_LONG < 64 || defined(CONFIG_FUSE_BPF)
+struct fuse_dentry {
+	union {
+		u64 time;
+		struct rcu_head rcu;
+	};
+	struct path backing_path;
 };
+
+static inline struct fuse_dentry *get_fuse_dentry(const struct dentry *entry)
+{
+	return entry->d_fsdata;
+}
+#endif
+
+#ifdef CONFIG_FUSE_BPF
+static inline void get_fuse_backing_path(const struct dentry *d,
+					  struct path *path)
+{
+	struct fuse_dentry *di = get_fuse_dentry(d);
+
+	if (!di) {
+		*path = (struct path) { .mnt = 0, .dentry = 0 };
+		return;
+	}
+
+	*path = di->backing_path;
+	path_get(path);
+}
 #endif
 
 /** FUSE inode */
 struct fuse_inode {
 	/** Inode data */
 	struct inode inode;
+
+#ifdef CONFIG_FUSE_BPF
+	/**
+	 * Backing inode, if this inode is from a backing file system.
+	 * If this is set, nodeid is 0.
+	 */
+	struct inode *backing_inode;
+
+	/**
+	 * bpf_prog, run on all operations to determine whether to pass through
+	 * or handle in place
+	 */
+	struct bpf_prog *bpf;
+#endif
 
 	/** Unique ID, which identifies the inode between userspace
 	 * and kernel */
@@ -226,6 +269,14 @@ struct fuse_file {
 
 	} readdir;
 
+#ifdef CONFIG_FUSE_BPF
+	/**
+	 * TODO: Reconcile with passthrough file
+	 * backing file when in bpf mode
+	 */
+	struct file *backing_file;
+#endif
+
 	/** RB node to be linked on fuse_conn->polled_files */
 	struct rb_node polled_node;
 
@@ -257,6 +308,7 @@ struct fuse_page_desc {
 struct fuse_args {
 	uint64_t nodeid;
 	uint32_t opcode;
+	uint32_t error_in;
 	unsigned short in_numargs;
 	unsigned short out_numargs;
 	bool force:1;
@@ -269,6 +321,7 @@ struct fuse_args {
 	bool page_zeroing:1;
 	bool page_replace:1;
 	bool may_block:1;
+	bool is_lookup:1;
 	struct fuse_in_arg in_args[3];
 	struct fuse_arg out_args[2];
 	void (*end)(struct fuse_mount *fm, struct fuse_args *args, int error);
@@ -522,6 +575,8 @@ struct fuse_fs_context {
 	unsigned int max_read;
 	unsigned int blksize;
 	const char *subtype;
+	struct bpf_prog *root_bpf;
+	struct file *root_dir;
 
 	/* DAX device, may be NULL */
 	struct dax_device *dax_dev;
@@ -962,12 +1017,16 @@ extern const struct dentry_operations fuse_root_dentry_operations;
 /**
  * Get a filled in inode
  */
+struct inode *fuse_iget_backing(struct super_block *sb,
+				u64 nodeid,
+				struct inode *backing_inode);
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
 			u64 attr_valid, u64 attr_version);
 
 int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name,
-		     struct fuse_entry_out *outarg, struct inode **inode);
+		     struct fuse_entry_out *outarg,
+		     struct dentry *entry, struct inode **inode);
 
 /**
  * Send FORGET command
@@ -1112,6 +1171,7 @@ void fuse_invalidate_entry_cache(struct dentry *entry);
 void fuse_invalidate_atime(struct inode *inode);
 
 u64 entry_attr_timeout(struct fuse_entry_out *o);
+void fuse_init_dentry_root(struct dentry *root, struct file *backing_dir);
 void fuse_change_entry_timeout(struct dentry *entry, struct fuse_entry_out *o);
 
 /**
@@ -1320,9 +1380,57 @@ int fuse_fileattr_set(struct user_namespace *mnt_userns,
 /* file.c */
 
 struct fuse_file *fuse_file_open(struct fuse_mount *fm, u64 nodeid,
-				 unsigned int open_flags, bool isdir);
+				 unsigned int open_flags, bool isdir,
+				 struct file *file);
 void fuse_file_release(struct inode *inode, struct fuse_file *ff,
 		       unsigned int open_flags, fl_owner_t id, bool isdir);
+
+/* backing.c */
+
+struct bpf_prog *fuse_get_bpf_prog(struct file *file);
+void fuse_get_backing_path(struct file *file, struct path *path);
+
+/*
+ * Dummy io passed to fuse_bpf_backing when io operation needs no scratch space
+ */
+struct fuse_dummy_io {
+	int unused;
+};
+
+struct fuse_entry_bpf {
+	struct fuse_entry_bpf_out out;
+
+	struct path backing_path;
+	struct bpf_prog *bpf;
+};
+
+int parse_fuse_entry_bpf(struct fuse_entry_bpf *feb);
+
+struct fuse_lookup_io {
+	struct fuse_entry_out feo;
+	struct fuse_entry_bpf feb;
+};
+
+int fuse_handle_backing(struct fuse_entry_bpf *feb, struct path *backing_path);
+int fuse_handle_bpf_prog(struct fuse_entry_bpf *feb, struct inode *parent,
+			 struct bpf_prog **bpf);
+
+int fuse_lookup_initialize_in(struct bpf_fuse_args *fa, struct fuse_lookup_io *feo,
+			      struct inode *dir, struct dentry *entry, unsigned int flags);
+int fuse_lookup_initialize_out(struct bpf_fuse_args *fa, struct fuse_lookup_io *feo,
+			       struct inode *dir, struct dentry *entry, unsigned int flags);
+int fuse_lookup_backing(struct bpf_fuse_args *fa, struct dentry **out, struct inode *dir,
+			struct dentry *entry, unsigned int flags);
+int fuse_lookup_finalize(struct bpf_fuse_args *fa, struct dentry **out,
+			 struct inode *dir, struct dentry *entry, unsigned int flags);
+int fuse_revalidate_backing(struct dentry *entry, unsigned int flags);
+
+int fuse_access_initialize_in(struct bpf_fuse_args *fa, struct fuse_access_in *fai,
+			      struct inode *inode, int mask);
+int fuse_access_initialize_out(struct bpf_fuse_args *fa, struct fuse_access_in *fai,
+			       struct inode *inode, int mask);
+int fuse_access_backing(struct bpf_fuse_args *fa, int *out, struct inode *inode, int mask);
+int fuse_access_finalize(struct bpf_fuse_args *fa, int *out, struct inode *inode, int mask);
 
 /*
  * FUSE caches dentries and attributes with separate timeout.  The
@@ -1350,5 +1458,70 @@ static inline u64 attr_timeout(struct fuse_attr_out *o)
 {
 	return time_to_jiffies(o->attr_valid, o->attr_valid_nsec);
 }
+
+#ifdef CONFIG_FUSE_BPF
+/*
+ * expression statement to wrap the backing filter logic
+ * struct inode *inode: inode with bpf and backing inode
+ * typedef io: (typically complex) type whose components fuse_args can point to.
+ *	An instance of this type is created locally and passed to initialize
+ * void initialize_in(struct bpf_fuse_args *fa, io *in_out, args...): function that sets
+ *	up fa and io based on args
+ * void initialize_out(struct bpf_fuse_args *fa, io *in_out, args...): function that sets
+ *	up fa and io based on args
+ * int backing(struct fuse_bpf_args_internal *fa, args...): function that actually performs
+ *	the backing io operation
+ * void *finalize(struct fuse_bpf_args *, args...): function that performs any final
+ *	work needed to commit the backing io
+ */
+#define fuse_bpf_backing(inode, io, out, initialize_in, initialize_out,	\
+			 backing, finalize, args...)			\
+({									\
+	struct fuse_inode *fuse_inode = get_fuse_inode(inode);		\
+	struct bpf_fuse_args fa = { 0 };				\
+	bool initialized = false;					\
+	bool handled = false;						\
+	ssize_t res;							\
+	io feo = { 0 };							\
+	int error = 0;							\
+									\
+	do {								\
+		if (!fuse_inode || !fuse_inode->backing_inode)		\
+			break;						\
+									\
+		handled = true;						\
+		error = initialize_in(&fa, &feo, args);			\
+		if (error)						\
+			break;						\
+									\
+		error = initialize_out(&fa, &feo, args);		\
+		if (error)						\
+			break;						\
+									\
+		initialized = true;					\
+									\
+		error = backing(&fa, &out, args);			\
+		if (error < 0)						\
+			fa.error_in = error;				\
+									\
+	} while (false);						\
+									\
+	if (initialized && handled) {					\
+		res = finalize(&fa, &out, args);			\
+		if (res)						\
+			error = res;					\
+	}								\
+									\
+	out = error ? _Generic((out),					\
+			default :					\
+				error,					\
+			struct dentry * :				\
+				ERR_PTR(error),				\
+			const char * :					\
+				ERR_PTR(error)				\
+			) : (out);					\
+	handled;							\
+})
+#endif /* CONFIG_FUSE_BPF */
 
 #endif /* _FS_FUSE_I_H */

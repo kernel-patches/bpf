@@ -31,6 +31,7 @@ struct bpf_fuse_arg {
 
 #define FUSE_BPF_FORCE (1 << 0)
 #define FUSE_BPF_OUT_ARGVAR (1 << 6)
+#define FUSE_BPF_IS_LOOKUP (1 << 11)
 
 struct bpf_fuse_args {
 	uint64_t nodeid;
