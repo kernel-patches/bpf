@@ -1623,6 +1623,46 @@ int fuse_lookup_finalize(struct bpf_fuse_args *fa, struct dentry **out,
 			 struct inode *dir, struct dentry *entry, unsigned int flags);
 int fuse_revalidate_backing(struct dentry *entry, unsigned int flags);
 
+struct fuse_getattr_io {
+	struct fuse_getattr_in fgi;
+	struct fuse_attr_out fao;
+};
+int fuse_getattr_initialize_in(struct bpf_fuse_args *fa, struct fuse_getattr_io *fgio,
+			       const struct dentry *entry, struct kstat *stat,
+			       u32 request_mask, unsigned int flags);
+int fuse_getattr_initialize_out(struct bpf_fuse_args *fa, struct fuse_getattr_io *fgio,
+				const struct dentry *entry, struct kstat *stat,
+				u32 request_mask, unsigned int flags);
+int fuse_getattr_backing(struct bpf_fuse_args *fa, int *out,
+			 const struct dentry *entry, struct kstat *stat,
+			 u32 request_mask, unsigned int flags);
+int fuse_getattr_finalize(struct bpf_fuse_args *fa, int *out,
+			  const struct dentry *entry, struct kstat *stat,
+			  u32 request_mask, unsigned int flags);
+
+struct fuse_setattr_io {
+	struct fuse_setattr_in fsi;
+	struct fuse_attr_out fao;
+};
+
+int fuse_setattr_initialize_in(struct bpf_fuse_args *fa, struct fuse_setattr_io *fsi,
+			       struct dentry *dentry, struct iattr *attr, struct file *file);
+int fuse_setattr_initialize_out(struct bpf_fuse_args *fa, struct fuse_setattr_io *fsi,
+				struct dentry *dentry, struct iattr *attr, struct file *file);
+int fuse_setattr_backing(struct bpf_fuse_args *fa, int *out,
+			 struct dentry *dentry, struct iattr *attr, struct file *file);
+int fuse_setattr_finalize(struct bpf_fuse_args *fa, int *out,
+			  struct dentry *dentry, struct iattr *attr, struct file *file);
+
+int fuse_statfs_initialize_in(struct bpf_fuse_args *fa, struct fuse_statfs_out *fso,
+			      struct dentry *dentry, struct kstatfs *buf);
+int fuse_statfs_initialize_out(struct bpf_fuse_args *fa, struct fuse_statfs_out *fso,
+			       struct dentry *dentry, struct kstatfs *buf);
+int fuse_statfs_backing(struct bpf_fuse_args *fa, int *out,
+			struct dentry *dentry, struct kstatfs *buf);
+int fuse_statfs_finalize(struct bpf_fuse_args *fa, int *out,
+			 struct dentry *dentry, struct kstatfs *buf);
+
 struct fuse_read_io {
 	struct fuse_read_in fri;
 	struct fuse_read_out fro;
@@ -1673,6 +1713,107 @@ static inline u64 time_to_jiffies(u64 sec, u32 nsec)
 static inline u64 attr_timeout(struct fuse_attr_out *o)
 {
 	return time_to_jiffies(o->attr_valid, o->attr_valid_nsec);
+}
+
+static inline bool update_mtime(unsigned int ivalid, bool trust_local_mtime)
+{
+	/* Always update if mtime is explicitly set  */
+	if (ivalid & ATTR_MTIME_SET)
+		return true;
+
+	/* Or if kernel i_mtime is the official one */
+	if (trust_local_mtime)
+		return true;
+
+	/* If it's an open(O_TRUNC) or an ftruncate(), don't update */
+	if ((ivalid & ATTR_SIZE) && (ivalid & (ATTR_OPEN | ATTR_FILE)))
+		return false;
+
+	/* In all other cases update */
+	return true;
+}
+
+void fuse_fillattr(struct inode *inode, struct fuse_attr *attr,
+			  struct kstat *stat);
+
+static inline void iattr_to_fattr(struct fuse_conn *fc, struct iattr *iattr,
+			   struct fuse_setattr_in *arg, bool trust_local_cmtime)
+{
+	unsigned int ivalid = iattr->ia_valid;
+
+	if (ivalid & ATTR_MODE)
+		arg->valid |= FATTR_MODE,   arg->mode = iattr->ia_mode;
+	if (ivalid & ATTR_UID)
+		arg->valid |= FATTR_UID,    arg->uid = from_kuid(fc->user_ns, iattr->ia_uid);
+	if (ivalid & ATTR_GID)
+		arg->valid |= FATTR_GID,    arg->gid = from_kgid(fc->user_ns, iattr->ia_gid);
+	if (ivalid & ATTR_SIZE)
+		arg->valid |= FATTR_SIZE,   arg->size = iattr->ia_size;
+	if (ivalid & ATTR_ATIME) {
+		arg->valid |= FATTR_ATIME;
+		arg->atime = iattr->ia_atime.tv_sec;
+		arg->atimensec = iattr->ia_atime.tv_nsec;
+		if (!(ivalid & ATTR_ATIME_SET))
+			arg->valid |= FATTR_ATIME_NOW;
+	}
+	if ((ivalid & ATTR_MTIME) && update_mtime(ivalid, trust_local_cmtime)) {
+		arg->valid |= FATTR_MTIME;
+		arg->mtime = iattr->ia_mtime.tv_sec;
+		arg->mtimensec = iattr->ia_mtime.tv_nsec;
+		if (!(ivalid & ATTR_MTIME_SET) && !trust_local_cmtime)
+			arg->valid |= FATTR_MTIME_NOW;
+	}
+	if ((ivalid & ATTR_CTIME) && trust_local_cmtime) {
+		arg->valid |= FATTR_CTIME;
+		arg->ctime = iattr->ia_ctime.tv_sec;
+		arg->ctimensec = iattr->ia_ctime.tv_nsec;
+	}
+}
+
+static inline int finalize_attr(struct inode *inode, struct fuse_attr_out *outarg,
+				u64 attr_version, struct kstat *stat)
+{
+	int err = 0;
+
+	if (fuse_invalid_attr(&outarg->attr) ||
+	    ((inode->i_mode ^ outarg->attr.mode) & S_IFMT)) {
+		fuse_make_bad(inode);
+		err = -EIO;
+	} else {
+		fuse_change_attributes(inode, &outarg->attr,
+				       attr_timeout(outarg),
+				       attr_version);
+		if (stat)
+			fuse_fillattr(inode, &outarg->attr, stat);
+	}
+	return err;
+}
+
+static inline void convert_statfs_to_fuse(struct fuse_kstatfs *attr, struct kstatfs *stbuf)
+{
+	attr->bsize   = stbuf->f_bsize;
+	attr->frsize  = stbuf->f_frsize;
+	attr->blocks  = stbuf->f_blocks;
+	attr->bfree   = stbuf->f_bfree;
+	attr->bavail  = stbuf->f_bavail;
+	attr->files   = stbuf->f_files;
+	attr->ffree   = stbuf->f_ffree;
+	attr->namelen = stbuf->f_namelen;
+	/* fsid is left zero */
+}
+
+static inline void convert_fuse_statfs(struct kstatfs *stbuf, struct fuse_kstatfs *attr)
+{
+	stbuf->f_type    = FUSE_SUPER_MAGIC;
+	stbuf->f_bsize   = attr->bsize;
+	stbuf->f_frsize  = attr->frsize;
+	stbuf->f_blocks  = attr->blocks;
+	stbuf->f_bfree   = attr->bfree;
+	stbuf->f_bavail  = attr->bavail;
+	stbuf->f_files   = attr->files;
+	stbuf->f_ffree   = attr->ffree;
+	stbuf->f_namelen = attr->namelen;
+	/* fsid is left zero */
 }
 
 #ifdef CONFIG_FUSE_BPF

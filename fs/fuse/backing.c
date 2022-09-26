@@ -1626,6 +1626,270 @@ int fuse_unlink_finalize(struct bpf_fuse_args *fa, int *out,
 	return 0;
 }
 
+int fuse_getattr_initialize_in(struct bpf_fuse_args *fa, struct fuse_getattr_io *fgio,
+			       const struct dentry *entry, struct kstat *stat,
+			       u32 request_mask, unsigned int flags)
+{
+	fgio->fgi = (struct fuse_getattr_in) {
+		.getattr_flags = flags,
+		.fh = -1, /* TODO is this OK? */
+	};
+
+	*fa = (struct bpf_fuse_args) {
+		.nodeid = get_node_id(entry->d_inode),
+		.opcode = FUSE_GETATTR,
+		.in_numargs = 1,
+		.in_args[0] = (struct bpf_fuse_arg) {
+			.size = sizeof(fgio->fgi),
+			.value = &fgio->fgi,
+		},
+	};
+
+	return 0;
+}
+
+int fuse_getattr_initialize_out(struct bpf_fuse_args *fa, struct fuse_getattr_io *fgio,
+				const struct dentry *entry, struct kstat *stat,
+				u32 request_mask, unsigned int flags)
+{
+	fgio->fao = (struct fuse_attr_out) { 0 };
+
+	fa->out_numargs = 1;
+	fa->out_args[0] = (struct bpf_fuse_arg) {
+		.size = sizeof(fgio->fao),
+		.value = &fgio->fao,
+	};
+
+	return 0;
+}
+
+static void fuse_stat_to_attr(struct fuse_conn *fc, struct inode *inode,
+			      struct kstat *stat, struct fuse_attr *attr)
+{
+	unsigned int blkbits;
+
+	/* see the comment in fuse_change_attributes() */
+	if (fc->writeback_cache && S_ISREG(inode->i_mode)) {
+		stat->size = i_size_read(inode);
+		stat->mtime.tv_sec = inode->i_mtime.tv_sec;
+		stat->mtime.tv_nsec = inode->i_mtime.tv_nsec;
+		stat->ctime.tv_sec = inode->i_ctime.tv_sec;
+		stat->ctime.tv_nsec = inode->i_ctime.tv_nsec;
+	}
+
+	attr->ino = stat->ino;
+	attr->mode = (inode->i_mode & S_IFMT) | (stat->mode & 07777);
+	attr->nlink = stat->nlink;
+	attr->uid = from_kuid(fc->user_ns, stat->uid);
+	attr->gid = from_kgid(fc->user_ns, stat->gid);
+	attr->atime = stat->atime.tv_sec;
+	attr->atimensec = stat->atime.tv_nsec;
+	attr->mtime = stat->mtime.tv_sec;
+	attr->mtimensec = stat->mtime.tv_nsec;
+	attr->ctime = stat->ctime.tv_sec;
+	attr->ctimensec = stat->ctime.tv_nsec;
+	attr->size = stat->size;
+	attr->blocks = stat->blocks;
+
+	if (stat->blksize != 0)
+		blkbits = ilog2(stat->blksize);
+	else
+		blkbits = inode->i_sb->s_blocksize_bits;
+
+	attr->blksize = 1 << blkbits;
+}
+
+int fuse_getattr_backing(struct bpf_fuse_args *fa, int *out,
+			 const struct dentry *entry, struct kstat *stat,
+			 u32 request_mask, unsigned int flags)
+{
+	struct path *backing_path = &get_fuse_dentry(entry)->backing_path;
+	struct inode *backing_inode = backing_path->dentry->d_inode;
+	struct fuse_attr_out *fao = fa->out_args[0].value;
+	struct kstat tmp;
+
+	if (!stat)
+		stat = &tmp;
+
+	*out = vfs_getattr(backing_path, stat, request_mask, flags);
+
+	if (!*out)
+		fuse_stat_to_attr(get_fuse_conn(entry->d_inode), backing_inode,
+				  stat, &fao->attr);
+
+	return 0;
+}
+
+int fuse_getattr_finalize(struct bpf_fuse_args *fa, int *out,
+			  const struct dentry *entry, struct kstat *stat,
+			  u32 request_mask, unsigned int flags)
+{
+	struct fuse_attr_out *outarg = fa->out_args[0].value;
+	struct inode *inode = entry->d_inode;
+	u64 attr_version = fuse_get_attr_version(get_fuse_mount(inode)->fc);
+
+	/* TODO: Ensure this doesn't happen if we had an error getting attrs in
+	 * backing.
+	 */
+	*out = finalize_attr(inode, outarg, attr_version, stat);
+	return 0;
+}
+
+static void fattr_to_iattr(struct fuse_conn *fc,
+			   const struct fuse_setattr_in *arg,
+			   struct iattr *iattr)
+{
+	unsigned int fvalid = arg->valid;
+
+	if (fvalid & FATTR_MODE)
+		iattr->ia_valid |= ATTR_MODE, iattr->ia_mode = arg->mode;
+	if (fvalid & FATTR_UID) {
+		iattr->ia_valid |= ATTR_UID;
+		iattr->ia_uid = make_kuid(fc->user_ns, arg->uid);
+	}
+	if (fvalid & FATTR_GID) {
+		iattr->ia_valid |= ATTR_GID;
+		iattr->ia_gid = make_kgid(fc->user_ns, arg->gid);
+	}
+	if (fvalid & FATTR_SIZE)
+		iattr->ia_valid |= ATTR_SIZE, iattr->ia_size = arg->size;
+	if (fvalid & FATTR_ATIME) {
+		iattr->ia_valid |= ATTR_ATIME;
+		iattr->ia_atime.tv_sec = arg->atime;
+		iattr->ia_atime.tv_nsec = arg->atimensec;
+		if (!(fvalid & FATTR_ATIME_NOW))
+			iattr->ia_valid |= ATTR_ATIME_SET;
+	}
+	if (fvalid & FATTR_MTIME) {
+		iattr->ia_valid |= ATTR_MTIME;
+		iattr->ia_mtime.tv_sec = arg->mtime;
+		iattr->ia_mtime.tv_nsec = arg->mtimensec;
+		if (!(fvalid & FATTR_MTIME_NOW))
+			iattr->ia_valid |= ATTR_MTIME_SET;
+	}
+	if (fvalid & FATTR_CTIME) {
+		iattr->ia_valid |= ATTR_CTIME;
+		iattr->ia_ctime.tv_sec = arg->ctime;
+		iattr->ia_ctime.tv_nsec = arg->ctimensec;
+	}
+}
+
+int fuse_setattr_initialize_in(struct bpf_fuse_args *fa, struct fuse_setattr_io *fsio,
+			       struct dentry *dentry, struct iattr *attr, struct file *file)
+{
+	struct fuse_conn *fc = get_fuse_conn(dentry->d_inode);
+
+	*fsio = (struct fuse_setattr_io) { 0 };
+	iattr_to_fattr(fc, attr, &fsio->fsi, true);
+
+	*fa = (struct bpf_fuse_args) {
+		.opcode = FUSE_SETATTR,
+		.nodeid = get_node_id(dentry->d_inode),
+		.in_numargs = 1,
+		.in_args[0].size = sizeof(fsio->fsi),
+		.in_args[0].value = &fsio->fsi,
+	};
+
+	return 0;
+}
+
+int fuse_setattr_initialize_out(struct bpf_fuse_args *fa, struct fuse_setattr_io *fsio,
+				struct dentry *dentry, struct iattr *attr, struct file *file)
+{
+	fa->out_numargs = 1;
+	fa->out_args[0].size = sizeof(fsio->fao);
+	fa->out_args[0].value = &fsio->fao;
+
+	return 0;
+}
+
+int fuse_setattr_backing(struct bpf_fuse_args *fa, int *out,
+			 struct dentry *dentry, struct iattr *attr, struct file *file)
+{
+	struct fuse_conn *fc = get_fuse_conn(dentry->d_inode);
+	const struct fuse_setattr_in *fsi = fa->in_args[0].value;
+	struct iattr new_attr = { 0 };
+	struct path *backing_path = &get_fuse_dentry(dentry)->backing_path;
+
+	fattr_to_iattr(fc, fsi, &new_attr);
+	/* TODO: Some info doesn't get saved by the attr->fattr->attr transition
+	 * When we actually allow the bpf to change these, we may have to consider
+	 * the extra flags more, or pass more info into the bpf. Until then we can
+	 * keep everything except for ATTR_FILE, since we'd need a file on the
+	 * lower fs. For what it's worth, neither f2fs nor ext4 make use of that
+	 * even if it is present.
+	 */
+	new_attr.ia_valid = attr->ia_valid & ~ATTR_FILE;
+	inode_lock(d_inode(backing_path->dentry));
+	*out = notify_change(&init_user_ns, backing_path->dentry, &new_attr,
+			    NULL);
+	inode_unlock(d_inode(backing_path->dentry));
+
+	if (*out == 0 && (new_attr.ia_valid & ATTR_SIZE))
+		i_size_write(dentry->d_inode, new_attr.ia_size);
+	return 0;
+}
+
+int fuse_setattr_finalize(struct bpf_fuse_args *fa, int *out,
+			  struct dentry *dentry, struct iattr *attr, struct file *file)
+{
+	return 0;
+}
+
+int fuse_statfs_initialize_in(struct bpf_fuse_args *fa, struct fuse_statfs_out *fso,
+			      struct dentry *dentry, struct kstatfs *buf)
+{
+	*fa = (struct bpf_fuse_args) {
+		.nodeid = get_node_id(d_inode(dentry)),
+		.opcode = FUSE_STATFS,
+	};
+
+	return 0;
+}
+
+int fuse_statfs_initialize_out(struct bpf_fuse_args *fa, struct fuse_statfs_out *fso,
+			       struct dentry *dentry, struct kstatfs *buf)
+{
+	*fso = (struct fuse_statfs_out) { 0 };
+
+	fa->out_numargs = 1;
+	fa->out_args[0].size = sizeof(fso);
+	fa->out_args[0].value = fso;
+
+	return 0;
+}
+
+int fuse_statfs_backing(struct bpf_fuse_args *fa, int *out,
+			struct dentry *dentry, struct kstatfs *buf)
+{
+	struct path backing_path;
+	struct fuse_statfs_out *fso = fa->out_args[0].value;
+
+	*out = 0;
+	get_fuse_backing_path(dentry, &backing_path);
+	if (!backing_path.dentry)
+		return -EBADF;
+	*out = vfs_statfs(&backing_path, buf);
+	path_put(&backing_path);
+	buf->f_type = FUSE_SUPER_MAGIC;
+
+	//TODO Provide postfilter opportunity to modify
+	if (!*out)
+		convert_statfs_to_fuse(&fso->st, buf);
+
+	return 0;
+}
+
+int fuse_statfs_finalize(struct bpf_fuse_args *fa, int *out,
+			 struct dentry *dentry, struct kstatfs *buf)
+{
+	struct fuse_statfs_out *fso = fa->out_args[0].value;
+
+	if (!fa->error_in)
+		convert_fuse_statfs(buf, &fso->st);
+	return 0;
+}
+
 int fuse_readdir_initialize_in(struct bpf_fuse_args *fa, struct fuse_read_io *frio,
 			    struct file *file, struct dir_context *ctx,
 			    bool *force_again, bool *allow_force, bool is_continued)
