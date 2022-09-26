@@ -967,6 +967,16 @@ static int fuse_symlink(struct user_namespace *mnt_userns, struct inode *dir,
 	unsigned len = strlen(link) + 1;
 	FUSE_ARGS(args);
 
+#ifdef CONFIG_FUSE_BPF
+	int err;
+
+	if (fuse_bpf_backing(dir, struct fuse_dummy_io, err,
+			fuse_symlink_initialize_in, fuse_symlink_initialize_out,
+			fuse_symlink_backing, fuse_symlink_finalize,
+			dir, entry, link, len))
+		return err;
+#endif
+
 	args.opcode = FUSE_SYMLINK;
 	args.in_numargs = 2;
 	args.in_args[0].size = entry->d_name.len + 1;
@@ -1197,6 +1207,14 @@ static int fuse_link(struct dentry *entry, struct inode *newdir,
 	struct inode *inode = d_inode(entry);
 	struct fuse_mount *fm = get_fuse_mount(inode);
 	FUSE_ARGS(args);
+
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(inode, struct fuse_link_in, err,
+				fuse_link_initialize_in, fuse_link_initialize_out,
+				fuse_link_backing, fuse_link_finalize, entry,
+				newdir, newent))
+		return err;
+#endif
 
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.oldnodeid = get_node_id(inode);
@@ -1608,6 +1626,19 @@ static const char *fuse_get_link(struct dentry *dentry, struct inode *inode,
 	err = -EIO;
 	if (fuse_is_bad(inode))
 		goto out_err;
+
+#ifdef CONFIG_FUSE_BPF
+	{
+		const char *out = NULL;
+
+		if (fuse_bpf_backing(inode, struct fuse_dummy_io, out,
+				       fuse_get_link_initialize_in, fuse_get_link_initialize_out,
+				       fuse_get_link_backing,
+				       fuse_get_link_finalize,
+				       inode, dentry, callback))
+			return out;
+	}
+#endif
 
 	if (fc->cache_symlinks)
 		return page_get_link(dentry, inode, callback);
