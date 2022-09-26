@@ -1404,8 +1404,21 @@ struct fuse_entry_bpf {
 	struct bpf_prog *bpf;
 };
 
-
 int parse_fuse_entry_bpf(struct fuse_entry_bpf *feb);
+
+struct fuse_lseek_io {
+	struct fuse_lseek_in fli;
+	struct fuse_lseek_out flo;
+};
+
+int fuse_lseek_initialize_in(struct bpf_fuse_args *fa, struct fuse_lseek_io *fli,
+			     struct file *file, loff_t offset, int whence);
+int fuse_lseek_initialize_out(struct bpf_fuse_args *fa, struct fuse_lseek_io *fli,
+			      struct file *file, loff_t offset, int whence);
+int fuse_lseek_backing(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
+		       loff_t offset, int whence);
+int fuse_lseek_finalize(struct bpf_fuse_args *fa, loff_t *out, struct file *file,
+			loff_t offset, int whence);
 
 ssize_t fuse_backing_mmap(struct file *file, struct vm_area_struct *vma);
 

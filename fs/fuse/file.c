@@ -2703,6 +2703,14 @@ static loff_t fuse_file_llseek(struct file *file, loff_t offset, int whence)
 {
 	loff_t retval;
 	struct inode *inode = file_inode(file);
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(inode, struct fuse_lseek_io, retval,
+			       fuse_lseek_initialize_in, fuse_lseek_initialize_out,
+			       fuse_lseek_backing,
+			       fuse_lseek_finalize,
+			       file, offset, whence))
+		return retval;
+#endif
 
 	switch (whence) {
 	case SEEK_SET:
