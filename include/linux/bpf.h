@@ -633,6 +633,7 @@ struct bpf_insn_access_aux {
 			struct btf *btf;
 			u32 btf_id;
 		};
+		int data_id;
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
 };
