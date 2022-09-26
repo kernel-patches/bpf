@@ -56,6 +56,7 @@ struct bpf_fuse_args {
 #define BPF_FUSE_MODIFIED	(1 << 3) // The helper function allowed writes to the buffer
 #define BPF_FUSE_ALLOCATED	(1 << 4) // The helper function allocated the buffer
 
+extern void *bpf_fuse_get_writeable(struct bpf_fuse_arg *arg, u64 size, bool copy);
 bool bpf_helper_changes_one_pkt_data(void *func);
 
 #endif /* _BPF_FUSE_H */

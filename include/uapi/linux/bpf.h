@@ -5545,6 +5545,8 @@ union bpf_attr {
 	FN(tcp_raw_gen_syncookie_ipv6),	\
 	FN(tcp_raw_check_syncookie_ipv4),	\
 	FN(tcp_raw_check_syncookie_ipv6),	\
+	FN(fuse_get_writeable_in),	\
+	FN(fuse_get_writeable_out),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
