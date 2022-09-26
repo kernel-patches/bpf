@@ -1572,6 +1572,24 @@ int fuse_lookup_finalize(struct bpf_fuse_args *fa, struct dentry **out,
 			 struct inode *dir, struct dentry *entry, unsigned int flags);
 int fuse_revalidate_backing(struct dentry *entry, unsigned int flags);
 
+struct fuse_read_io {
+	struct fuse_read_in fri;
+	struct fuse_read_out fro;
+};
+
+int fuse_readdir_initialize_in(struct bpf_fuse_args *fa, struct fuse_read_io *frio,
+			       struct file *file, struct dir_context *ctx,
+			       bool *force_again, bool *allow_force, bool is_continued);
+int fuse_readdir_initialize_out(struct bpf_fuse_args *fa, struct fuse_read_io *frio,
+				struct file *file, struct dir_context *ctx,
+				bool *force_again, bool *allow_force, bool is_continued);
+int fuse_readdir_backing(struct bpf_fuse_args *fa, int *out,
+			 struct file *file, struct dir_context *ctx,
+			 bool *force_again, bool *allow_force, bool is_continued);
+int fuse_readdir_finalize(struct bpf_fuse_args *fa, int *out,
+			    struct file *file, struct dir_context *ctx,
+			    bool *force_again, bool *allow_force, bool is_continued);
+
 int fuse_access_initialize_in(struct bpf_fuse_args *fa, struct fuse_access_in *fai,
 			      struct inode *inode, int mask);
 int fuse_access_initialize_out(struct bpf_fuse_args *fa, struct fuse_access_in *fai,
