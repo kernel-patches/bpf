@@ -952,6 +952,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
+	BPF_PROG_TYPE_FUSE,
 };
 
 enum bpf_attach_type {
@@ -6850,5 +6851,35 @@ struct bpf_core_relo {
 	__u32 access_str_off;
 	enum bpf_core_relo_kind kind;
 };
+
+struct __bpf_fuse_arg {
+	__u64 value;
+	__u64 end_offset;
+	__u32 size;
+	__u32 max_size;
+};
+
+struct __bpf_fuse_args {
+	__u64 nodeid;
+	__u32 opcode;
+	__u32 error_in;
+	__u32 in_numargs;
+	__u32 out_numargs;
+	__u32 flags;
+	struct __bpf_fuse_arg in_args[3];
+	struct __bpf_fuse_arg out_args[2];
+};
+
+/* Return Codes for Fuse BPF programs */
+#define BPF_FUSE_CONTINUE		0
+#define BPF_FUSE_USER			1
+#define BPF_FUSE_USER_PREFILTER		2
+#define BPF_FUSE_POSTFILTER		3
+#define BPF_FUSE_USER_POSTFILTER	4
+
+/* Op Code Filter values for BPF Programs */
+#define FUSE_OPCODE_FILTER	0x0ffff
+#define FUSE_PREFILTER		0x10000
+#define FUSE_POSTFILTER		0x20000
 
 #endif /* _UAPI__LINUX_BPF_H__ */

@@ -572,6 +572,17 @@ struct fuse_entry_out {
 	struct fuse_attr attr;
 };
 
+#define FUSE_ACTION_KEEP	0
+#define FUSE_ACTION_REMOVE	1
+#define FUSE_ACTION_REPLACE	2
+
+struct fuse_entry_bpf_out {
+	uint64_t	backing_action;
+	uint64_t	backing_fd;
+	uint64_t	bpf_action;
+	uint64_t	bpf_fd;
+};
+
 struct fuse_forget_in {
 	uint64_t	nlookup;
 };
@@ -870,7 +881,7 @@ struct fuse_in_header {
 	uint32_t	uid;
 	uint32_t	gid;
 	uint32_t	pid;
-	uint32_t	padding;
+	uint32_t	error_in;
 };
 
 struct fuse_out_header {
