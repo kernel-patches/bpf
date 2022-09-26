@@ -30,9 +30,9 @@ static void print_ksym(__u64 addr)
 	}
 
 	if (PRINT_RAW_ADDR)
-		printf("%s/%llx;", sym->name, addr);
+		printf("\t%s/%llx\n", sym->name, addr);
 	else
-		printf("%s;", sym->name);
+		printf("\t%s\n", sym->name);
 }
 
 #define TASK_COMM_LEN 16
@@ -50,21 +50,21 @@ static void print_stack(struct key_t *key, __u64 count)
 	static bool warned;
 	int i;
 
-	printf("%s;", key->target);
+	printf("%s [\n", key->target);
 	if (bpf_map_lookup_elem(map_fd[1], &key->tret, ip) != 0) {
-		printf("---;");
+		printf("\t---\n");
 	} else {
 		for (i = PERF_MAX_STACK_DEPTH - 1; i >= 0; i--)
 			print_ksym(ip[i]);
 	}
-	printf("-;");
+	printf("\t-\n");
 	if (bpf_map_lookup_elem(map_fd[1], &key->wret, ip) != 0) {
-		printf("---;");
+		printf("\t---\n");
 	} else {
 		for (i = 0; i < PERF_MAX_STACK_DEPTH; i++)
 			print_ksym(ip[i]);
 	}
-	printf(";%s %lld\n", key->waker, count);
+	printf("] %s %lld\n", key->waker, count);
 
 	if ((key->tret == -EEXIST || key->wret == -EEXIST) && !warned) {
 		printf("stackmap collisions seen. Consider increasing size\n");
