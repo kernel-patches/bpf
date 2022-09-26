@@ -1406,6 +1406,54 @@ struct fuse_entry_bpf {
 
 int parse_fuse_entry_bpf(struct fuse_entry_bpf *feb);
 
+struct fuse_open_io {
+	struct fuse_open_in foi;
+	struct fuse_open_out foo;
+};
+
+int fuse_open_initialize_in(struct bpf_fuse_args *fa, struct fuse_open_io *foi,
+			    struct inode *inode, struct file *file, bool isdir);
+int fuse_open_initialize_out(struct bpf_fuse_args *fa, struct fuse_open_io *foi,
+			     struct inode *inode, struct file *file, bool isdir);
+int fuse_open_backing(struct bpf_fuse_args *fa, int *out,
+		      struct inode *inode, struct file *file, bool isdir);
+int fuse_open_finalize(struct bpf_fuse_args *fa, int *out,
+			 struct inode *inode, struct file *file, bool isdir);
+
+struct fuse_create_open_io {
+	struct fuse_create_in fci;
+	struct fuse_entry_out feo;
+	struct fuse_open_out foo;
+};
+
+int fuse_create_open_initialize_in(struct bpf_fuse_args *fa, struct fuse_create_open_io *fcoi,
+				   struct inode *dir, struct dentry *entry,
+				   struct file *file, unsigned int flags, umode_t mode);
+int fuse_create_open_initialize_out(struct bpf_fuse_args *fa, struct fuse_create_open_io *fcoi,
+				    struct inode *dir, struct dentry *entry,
+				    struct file *file, unsigned int flags, umode_t mode);
+int fuse_create_open_backing(struct bpf_fuse_args *fa, int *out,
+			     struct inode *dir, struct dentry *entry,
+			     struct file *file, unsigned int flags, umode_t mode);
+int fuse_create_open_finalize(struct bpf_fuse_args *fa, int *out,
+			      struct inode *dir, struct dentry *entry,
+			      struct file *file, unsigned int flags, umode_t mode);
+
+int fuse_release_initialize_in(struct bpf_fuse_args *fa, struct fuse_release_in *fri,
+			       struct inode *inode, struct file *file);
+int fuse_release_initialize_out(struct bpf_fuse_args *fa, struct fuse_release_in *fri,
+				struct inode *inode, struct file *file);
+int fuse_releasedir_initialize_in(struct bpf_fuse_args *fa,
+				  struct fuse_release_in *fri,
+				  struct inode *inode, struct file *file);
+int fuse_releasedir_initialize_out(struct bpf_fuse_args *fa,
+				   struct fuse_release_in *fri,
+				   struct inode *inode, struct file *file);
+int fuse_release_backing(struct bpf_fuse_args *fa, int *out,
+			 struct inode *inode, struct file *file);
+int fuse_release_finalize(struct bpf_fuse_args *fa, int *out,
+			    struct inode *inode, struct file *file);
+
 struct fuse_lseek_io {
 	struct fuse_lseek_in fli;
 	struct fuse_lseek_out flo;

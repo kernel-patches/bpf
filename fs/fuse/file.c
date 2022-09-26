@@ -241,6 +241,17 @@ int fuse_open_common(struct inode *inode, struct file *file, bool isdir)
 	if (err)
 		return err;
 
+#ifdef CONFIG_FUSE_BPF
+	{
+		if (fuse_bpf_backing(inode, struct fuse_open_io, err,
+				       fuse_open_initialize_in, fuse_open_initialize_out,
+				       fuse_open_backing,
+				       fuse_open_finalize,
+				       inode, file, isdir))
+			return err;
+	}
+#endif
+
 	if (is_wb_truncate || dax_truncate)
 		inode_lock(inode);
 
@@ -349,6 +360,16 @@ static int fuse_open(struct inode *inode, struct file *file)
 static int fuse_release(struct inode *inode, struct file *file)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
+
+#ifdef CONFIG_FUSE_BPF
+	int err;
+
+	if (fuse_bpf_backing(inode, struct fuse_release_in, err,
+		       fuse_release_initialize_in, fuse_release_initialize_out,
+		       fuse_release_backing, fuse_release_finalize,
+		       inode, file))
+		return err;
+#endif
 
 	/*
 	 * Dirty pages might remain despite write_inode_now() call from
