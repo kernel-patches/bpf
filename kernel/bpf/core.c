@@ -2685,6 +2685,11 @@ bool __weak bpf_helper_changes_pkt_data(void *func)
 	return false;
 }
 
+bool __weak bpf_helper_changes_one_pkt_data(void *func)
+{
+	return false;
+}
+
 /* Return TRUE if the JIT backend wants verifier to enable sub-register usage
  * analysis code and wants explicit zero extension inserted by verifier.
  * Otherwise, return FALSE.

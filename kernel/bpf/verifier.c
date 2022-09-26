@@ -23,6 +23,7 @@
 #include <linux/error-injection.h>
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf_fuse.h>
 
 #include "disasm.h"
 
@@ -263,6 +264,7 @@ struct bpf_call_arg_meta {
 	u32 subprogno;
 	struct bpf_map_value_off_desc *kptr_off_desc;
 	u8 uninit_dynptr_regno;
+	u32 data_id;
 };
 
 struct btf *btf_vmlinux;
@@ -1394,6 +1396,12 @@ static bool reg_is_pkt_pointer_any(const struct bpf_reg_state *reg)
 {
 	return reg_is_pkt_pointer(reg) ||
 	       reg->type == PTR_TO_PACKET_END;
+}
+
+static bool reg_is_specific_pkt_pointer_any(const struct bpf_reg_state *reg, u32 id)
+{
+	return (reg_is_pkt_pointer(reg) ||
+	       reg->type == PTR_TO_PACKET_END) && reg->data_id == id;
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -5664,6 +5672,7 @@ static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } 
 static const struct bpf_reg_types const_str_ptr_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types timer_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types kptr_types = { .types = { PTR_TO_MAP_VALUE } };
+static const struct bpf_reg_types packet_ptr_types = { .types = { PTR_TO_PACKET } };
 
 static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_MAP_KEY]		= &map_key_value_types,
@@ -5691,6 +5700,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_TIMER]		= &timer_types,
 	[ARG_PTR_TO_KPTR]		= &kptr_types,
 	[ARG_PTR_TO_DYNPTR]		= &stack_ptr_types,
+	[ARG_PTR_TO_PACKET]		= &packet_ptr_types,
 };
 
 static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
@@ -5800,7 +5810,8 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		/* Some of the argument types nevertheless require a
 		 * zero register offset.
 		 */
-		if (base_type(arg_type) != ARG_PTR_TO_ALLOC_MEM)
+		if (base_type(arg_type) != ARG_PTR_TO_ALLOC_MEM &&
+			base_type(arg_type) != ARG_PTR_TO_PACKET)
 			return 0;
 		break;
 	/* All the rest must be rejected, except PTR_TO_BTF_ID which allows
@@ -6134,6 +6145,9 @@ skip_type_check:
 	case ARG_PTR_TO_KPTR:
 		if (process_kptr_func(env, regno, meta))
 			return -EACCES;
+		break;
+	case ARG_PTR_TO_PACKET:
+		meta->data_id = reg->data_id;
 		break;
 	}
 
@@ -6509,13 +6523,36 @@ static bool check_btf_id_ok(const struct bpf_func_proto *fn)
 	return true;
 }
 
+static bool check_packet_ok(const struct bpf_func_proto *fn)
+{
+	int count = 0;
+
+	if (fn->arg1_type == ARG_PTR_TO_PACKET)
+		count++;
+	if (fn->arg2_type == ARG_PTR_TO_PACKET)
+		count++;
+	if (fn->arg3_type == ARG_PTR_TO_PACKET)
+		count++;
+	if (fn->arg4_type == ARG_PTR_TO_PACKET)
+		count++;
+	if (fn->arg5_type == ARG_PTR_TO_PACKET)
+		count++;
+
+	/* We only support one arg being a packet at the moment,
+	 * which is sufficient for the helper functions we have right now.
+	 */
+	return count <= 1;
+}
+
+
 static int check_func_proto(const struct bpf_func_proto *fn, int func_id,
 			    struct bpf_call_arg_meta *meta)
 {
 	return check_raw_mode_ok(fn) &&
 	       check_arg_pair_ok(fn) &&
 	       check_btf_id_ok(fn) &&
-	       check_refcount_ok(fn, func_id) ? 0 : -EINVAL;
+	       check_refcount_ok(fn, func_id) &&
+	       check_packet_ok(fn) ? 0 : -EINVAL;
 }
 
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
@@ -6539,6 +6576,25 @@ static void __clear_all_pkt_pointers(struct bpf_verifier_env *env,
 	}
 }
 
+static void __clear_specific_pkt_pointers(struct bpf_verifier_env *env,
+				     struct bpf_func_state *state,
+				     u32 data_id)
+{
+	struct bpf_reg_state *regs = state->regs, *reg;
+	int i;
+
+	for (i = 0; i < MAX_BPF_REG; i++)
+		if (reg_is_specific_pkt_pointer_any(&regs[i], data_id))
+			mark_reg_unknown(env, regs, i);
+
+	bpf_for_each_spilled_reg(i, state, reg) {
+		if (!reg)
+			continue;
+		if (reg_is_specific_pkt_pointer_any(reg, data_id))
+			__mark_reg_unknown(env, reg);
+	}
+}
+
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
@@ -6546,6 +6602,15 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 
 	for (i = 0; i <= vstate->curframe; i++)
 		__clear_all_pkt_pointers(env, vstate->frame[i]);
+}
+
+static void clear_specific_pkt_pointers(struct bpf_verifier_env *env, u32 data_id)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i;
+
+	for (i = 0; i <= vstate->curframe; i++)
+		__clear_specific_pkt_pointers(env, vstate->frame[i], data_id);
 }
 
 enum {
@@ -7187,6 +7252,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	struct bpf_call_arg_meta meta;
 	int insn_idx = *insn_idx_p;
 	bool changes_data;
+	bool changes_specific_data;
 	int i, err, func_id;
 
 	/* find function prototype */
@@ -7220,6 +7286,17 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	changes_data = bpf_helper_changes_pkt_data(fn->func);
 	if (changes_data && fn->arg1_type != ARG_PTR_TO_CTX) {
 		verbose(env, "kernel subsystem misconfigured func %s#%d: r1 != ctx\n",
+			func_id_name(func_id), func_id);
+		return -EINVAL;
+	}
+
+	changes_specific_data = bpf_helper_changes_one_pkt_data(fn->func);
+	if (changes_data && fn->arg1_type != ARG_PTR_TO_PACKET &&
+			    fn->arg2_type != ARG_PTR_TO_PACKET &&
+			    fn->arg3_type != ARG_PTR_TO_PACKET &&
+			    fn->arg4_type != ARG_PTR_TO_PACKET &&
+			    fn->arg5_type != ARG_PTR_TO_PACKET) {
+		verbose(env, "kernel subsystem misconfigured func %s#%d: no packet arg\n",
 			func_id_name(func_id), func_id);
 		return -EINVAL;
 	}
@@ -7534,6 +7611,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	if (changes_data)
 		clear_all_pkt_pointers(env);
+	if (changes_specific_data)
+		clear_specific_pkt_pointers(env, meta.data_id);
 	return 0;
 }
 
