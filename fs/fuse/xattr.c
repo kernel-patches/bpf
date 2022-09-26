@@ -115,6 +115,14 @@ ssize_t fuse_listxattr(struct dentry *entry, char *list, size_t size)
 	struct fuse_getxattr_out outarg;
 	ssize_t ret;
 
+#ifdef CONFIG_FUSE_BPF
+	if (fuse_bpf_backing(inode, struct fuse_getxattr_io, ret,
+			       fuse_listxattr_initialize_in, fuse_listxattr_initialize_out,
+			       fuse_listxattr_backing, fuse_listxattr_finalize,
+			       entry, list, size))
+		return ret;
+#endif
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 
@@ -182,6 +190,16 @@ static int fuse_xattr_get(const struct xattr_handler *handler,
 			 struct dentry *dentry, struct inode *inode,
 			 const char *name, void *value, size_t size)
 {
+#ifdef CONFIG_FUSE_BPF
+	int err;
+
+	if (fuse_bpf_backing(inode, struct fuse_getxattr_io, err,
+			       fuse_getxattr_initialize_in, fuse_getxattr_initialize_out,
+			       fuse_getxattr_backing, fuse_getxattr_finalize,
+			       dentry, name, value, size))
+		return err;
+#endif
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 
@@ -194,6 +212,24 @@ static int fuse_xattr_set(const struct xattr_handler *handler,
 			  const char *name, const void *value, size_t size,
 			  int flags)
 {
+#ifdef CONFIG_FUSE_BPF
+	int err;
+	bool handled;
+
+	if (value)
+		handled = fuse_bpf_backing(inode, struct fuse_setxattr_in, err,
+			       fuse_setxattr_initialize_in, fuse_setxattr_initialize_out,
+			       fuse_setxattr_backing, fuse_setxattr_finalize,
+			       dentry, name, value, size, flags);
+	else
+		handled = fuse_bpf_backing(inode, struct fuse_dummy_io, err,
+			       fuse_removexattr_initialize_in, fuse_removexattr_initialize_out,
+			       fuse_removexattr_backing, fuse_removexattr_finalize,
+			       dentry, name);
+	if (handled)
+		return err;
+#endif
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 
