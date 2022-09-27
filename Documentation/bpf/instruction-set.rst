@@ -303,6 +303,9 @@ with the remaining registers being ignored.  The definition of a helper function
 is responsible for specifying the type (e.g., integer, pointer, etc.) of the value returned,
 the number of arguments, and the type of each argument.
 
+Note that ``BPF_CALL | BPF_X | BPF_JMP`` (0x8d), where the helper function integer
+would be read from a specified register, is not currently permitted.
+
 Runtime functions
 ~~~~~~~~~~~~~~~~~
 Runtime functions are like helper functions except that they are not specific
