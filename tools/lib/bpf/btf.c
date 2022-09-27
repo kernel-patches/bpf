@@ -4331,7 +4331,7 @@ static int btf_dedup_struct_type(struct btf_dedup *d, __u32 type_id)
 			continue;
 
 		btf_dedup_clear_hypot_map(d);
-		eq = btf_dedup_is_equiv(d, type_id, cand_id);
+		eq = btf_dedup_is_equiv(d, cand_id, type_id);
 		if (eq < 0)
 			return eq;
 		if (!eq)
