@@ -7,6 +7,12 @@ Linux implementation notes
 
 This document provides more details specific to the Linux kernel implementation of the eBPF instruction set.
 
+Arithmetic instructions
+=======================
+
+While the eBPF instruction set document uses the standard C terminology as the cross-platform specification,
+in the Linux kernel, uint32_t is expressed as u32, uint64_t is expressed as u64, etc.
+
 Byte swap instructions
 ======================
 

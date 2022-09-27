@@ -7,6 +7,10 @@ eBPF Instruction Set Specification, v1.0
 
 This document specifies version 1.0 of the eBPF instruction set.
 
+Documentation conventions
+=========================
+
+This specification uses the standard C types (uint32_t, etc.) in documentation.
 
 Registers and calling convention
 ================================
@@ -114,7 +118,9 @@ BPF_END   0xd0   byte swap operations (see `Byte swap instructions`_ below)
 
 ``BPF_ADD | BPF_X | BPF_ALU`` means::
 
-  dst_reg = (u32) dst_reg + (u32) src_reg;
+  dst_reg = (uint32_t) dst_reg + (uint32_t) src_reg;
+
+where '(uint32_t)' indicates truncation to 32 bits.
 
 ``BPF_ADD | BPF_X | BPF_ALU64`` means::
 
@@ -122,7 +128,7 @@ BPF_END   0xd0   byte swap operations (see `Byte swap instructions`_ below)
 
 ``BPF_XOR | BPF_K | BPF_ALU`` means::
 
-  src_reg = (u32) src_reg ^ (u32) imm32
+  src_reg = (uint32_t) src_reg ^ (uint32_t) imm32
 
 ``BPF_XOR | BPF_K | BPF_ALU64`` means::
 
@@ -276,11 +282,11 @@ BPF_XOR   0xa0   atomic xor
 
 ``BPF_ATOMIC | BPF_W  | BPF_STX`` with 'imm' = BPF_ADD means::
 
-  *(u32 *)(dst_reg + off16) += src_reg
+  *(uint32_t *)(dst_reg + off16) += src_reg
 
 ``BPF_ATOMIC | BPF_DW | BPF_STX`` with 'imm' = BPF ADD means::
 
-  *(u64 *)(dst_reg + off16) += src_reg
+  *(uint32_t *)(dst_reg + off16) += src_reg
 
 In addition to the simple atomic operations, there also is a modifier and
 two complex atomic operations:
