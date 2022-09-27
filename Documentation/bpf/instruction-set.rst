@@ -103,18 +103,25 @@ code      value  description
 BPF_ADD   0x00   dst += src
 BPF_SUB   0x10   dst -= src
 BPF_MUL   0x20   dst \*= src
-BPF_DIV   0x30   dst /= src
+BPF_DIV   0x30   dst = (src != 0) ? (dst / src) : 0
 BPF_OR    0x40   dst \|= src
 BPF_AND   0x50   dst &= src
 BPF_LSH   0x60   dst <<= src
 BPF_RSH   0x70   dst >>= src
 BPF_NEG   0x80   dst = ~src
-BPF_MOD   0x90   dst %= src
+BPF_MOD   0x90   dst = (src != 0) ? (dst % src) : dst
 BPF_XOR   0xa0   dst ^= src
 BPF_MOV   0xb0   dst = src
 BPF_ARSH  0xc0   sign extending shift right
 BPF_END   0xd0   byte swap operations (see `Byte swap instructions`_ below)
 ========  =====  ==========================================================
+
+Underflow and overflow are allowed during arithmetic operations,
+meaning the 64-bit or 32-bit value will wrap.  If
+eBPF program execution would result in division by zero,
+the destination register is instead set to zero.
+If execution would result in modulo by zero,
+the destination register is instead left unchanged.
 
 ``BPF_ADD | BPF_X | BPF_ALU`` means::
 
@@ -134,6 +141,14 @@ where '(uint32_t)' indicates truncation to 32 bits.
 
   src_reg = src_reg ^ imm32
 
+
+Also note that the modulo operation often varies by language
+when the dividend or divisor are negative, where Python, Ruby, etc.
+differ from C, Go, Java, etc. This specification requires that
+modulo use truncated division (where -13 % 3 == -1) as implemented
+in C, Go, etc.:
+
+   a % n = a - n * trunc(a / n)
 
 Byte swap instructions
 ~~~~~~~~~~~~~~~~~~~~~~
