@@ -4818,6 +4818,7 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 	char msg[STRERR_BUFSIZE];
 	__u32 map_info_len;
 	int err;
+	unsigned int effective_flags = map->def.map_flags;
 
 	map_info_len = sizeof(map_info);
 
@@ -4830,11 +4831,16 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		return false;
 	}
 
+	/* The kernel adds RDONLY_PROG to devmaps */
+	if (map->def.type == BPF_MAP_TYPE_DEVMAP ||
+	    map->def.type == BPF_MAP_TYPE_DEVMAP_HASH)
+		effective_flags |= BPF_F_RDONLY_PROG;
+
 	return (map_info.type == map->def.type &&
 		map_info.key_size == map->def.key_size &&
 		map_info.value_size == map->def.value_size &&
 		map_info.max_entries == map->def.max_entries &&
-		map_info.map_flags == map->def.map_flags &&
+		map_info.map_flags == effective_flags &&
 		map_info.map_extra == map->map_extra);
 }
 
