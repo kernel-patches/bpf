@@ -2464,6 +2464,10 @@ static int bpf_object__init_user_btf_map(struct bpf_object *obj,
 
 	vi = btf_var_secinfos(sec) + var_idx;
 	var = btf__type_by_id(obj->btf, vi->type);
+	if (!var || !btf_is_var(var)) {
+		pr_warn("map #%d: non-VAR type seen", var_idx);
+		return -EINVAL;
+	}
 	var_extra = btf_var(var);
 	map_name = btf__name_by_offset(obj->btf, var->name_off);
 
