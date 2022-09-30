@@ -4,12 +4,29 @@
 #include <test_progs.h>
 #include <bpf/btf.h>
 
+static int find_type_in_ctx_convert(struct btf *btf,
+				    const char *prog_type_name,
+				    const struct btf_type *t)
+{
+	const struct btf_member *m;
+	size_t cmplen = strlen(prog_type_name);
+	int i, n;
+
+	for (m = btf_members(t), i = 0, n = btf_vlen(t); i < n; m++, i++) {
+		const char *member_name = btf__str_by_offset(btf, m->name_off);
+
+		if (!strncmp(prog_type_name, member_name, cmplen))
+			return 1;
+	}
+	return 0;
+}
+
 void test_libbpf_probe_prog_types(void)
 {
 	struct btf *btf;
-	const struct btf_type *t;
+	const struct btf_type *t, *context_convert_t;
 	const struct btf_enum *e;
-	int i, n, id;
+	int i, n, id, context_convert_id;
 
 	btf = btf__parse("/sys/kernel/btf/vmlinux", NULL);
 	if (!ASSERT_OK_PTR(btf, "btf_parse"))
@@ -23,12 +40,24 @@ void test_libbpf_probe_prog_types(void)
 	if (!ASSERT_OK_PTR(t, "bpf_prog_type_enum"))
 		goto cleanup;
 
+	context_convert_id = btf__find_by_name_kind(btf, "bpf_ctx_convert",
+						    BTF_KIND_STRUCT);
+	if (!ASSERT_GT(context_convert_id, 0, "bpf_ctx_convert_id"))
+		goto cleanup;
+	context_convert_t = btf__type_by_id(btf, context_convert_id);
+	if (!ASSERT_OK_PTR(t, "bpf_ctx_convert_type"))
+		goto cleanup;
+
 	for (e = btf_enum(t), i = 0, n = btf_vlen(t); i < n; e++, i++) {
 		const char *prog_type_name = btf__str_by_offset(btf, e->name_off);
 		enum bpf_prog_type prog_type = (enum bpf_prog_type)e->val;
 		int res;
 
 		if (prog_type == BPF_PROG_TYPE_UNSPEC)
+			continue;
+
+		if (!find_type_in_ctx_convert(btf, prog_type_name,
+					      context_convert_t))
 			continue;
 
 		if (!test__start_subtest(prog_type_name))
