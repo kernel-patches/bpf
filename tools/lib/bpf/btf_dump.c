@@ -852,7 +852,7 @@ static int chip_away_bits(int total, int at_most)
 	return total % at_most ? : at_most;
 }
 
-static void btf_dump_emit_bit_padding(const struct btf_dump *d,
+static bool btf_dump_emit_bit_padding(const struct btf_dump *d,
 				      int cur_off, int m_off, int m_bit_sz,
 				      int align, int lvl)
 {
@@ -861,10 +861,10 @@ static void btf_dump_emit_bit_padding(const struct btf_dump *d,
 
 	if (off_diff <= 0)
 		/* no gap */
-		return;
+		return false;
 	if (m_bit_sz == 0 && off_diff < align * 8)
 		/* natural padding will take care of a gap */
-		return;
+		return false;
 
 	while (off_diff > 0) {
 		const char *pad_type;
@@ -886,6 +886,8 @@ static void btf_dump_emit_bit_padding(const struct btf_dump *d,
 		btf_dump_printf(d, "\n%s%s: %d;", pfx(lvl), pad_type, pad_bits);
 		off_diff -= pad_bits;
 	}
+
+	return true;
 }
 
 static void btf_dump_emit_struct_fwd(struct btf_dump *d, __u32 id,
@@ -906,6 +908,7 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 	bool is_struct = btf_is_struct(t);
 	int align, i, packed, off = 0;
 	__u16 vlen = btf_vlen(t);
+	bool padding_added = false;
 
 	packed = is_struct ? btf_is_struct_packed(d->btf, id, t) : 0;
 
@@ -940,11 +943,11 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 	/* pad at the end, if necessary */
 	if (is_struct) {
 		align = packed ? 1 : btf__align_of(d->btf, id);
-		btf_dump_emit_bit_padding(d, off, t->size * 8, 0, align,
-					  lvl + 1);
+		padding_added = btf_dump_emit_bit_padding(d, off, t->size * 8, 0, align,
+							  lvl + 1);
 	}
 
-	if (vlen)
+	if (vlen || padding_added)
 		btf_dump_printf(d, "\n");
 	btf_dump_printf(d, "%s}", pfx(lvl));
 	if (packed)
