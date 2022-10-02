@@ -565,6 +565,8 @@ struct prog_test_ref_kfunc {
 	int b;
 	struct prog_test_member memb;
 	struct prog_test_ref_kfunc *next;
+	struct rcu_head rcu;
+	atomic_t destroyed;
 	refcount_t cnt;
 };
 
@@ -572,12 +574,14 @@ static struct prog_test_ref_kfunc prog_test_struct = {
 	.a = 42,
 	.b = 108,
 	.next = &prog_test_struct,
+	.destroyed = ATOMIC_INIT(0),
 	.cnt = REFCOUNT_INIT(1),
 };
 
 noinline struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_acquire(unsigned long *scalar_ptr)
 {
+	WARN_ON_ONCE(atomic_read(&prog_test_struct.destroyed));
 	refcount_inc(&prog_test_struct.cnt);
 	return &prog_test_struct;
 }
@@ -589,12 +593,22 @@ bpf_kfunc_call_memb_acquire(void)
 	return NULL;
 }
 
+static void delayed_destroy_test_ref_struct(struct rcu_head *rhp)
+{
+	struct prog_test_ref_kfunc *p = container_of(rhp, struct prog_test_ref_kfunc, rcu);
+
+	WARN_ON_ONCE(refcount_read(&p->cnt) > 0);
+	atomic_set(&p->destroyed, true);
+}
+
 noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
 {
 	if (!p)
 		return;
 
-	refcount_dec(&p->cnt);
+	WARN_ON_ONCE(atomic_read(&p->destroyed));
+	if (refcount_dec_and_test(&p->cnt))
+		call_rcu(&p->rcu, delayed_destroy_test_ref_struct);
 }
 
 noinline void bpf_kfunc_call_memb_release(struct prog_test_member *p)
@@ -641,11 +655,20 @@ noinline void bpf_kfunc_call_int_mem_release(int *p)
 noinline struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **pp, int a, int b)
 {
-	struct prog_test_ref_kfunc *p = READ_ONCE(*pp);
+	struct prog_test_ref_kfunc *p;
 
-	if (!p)
+	rcu_read_lock();
+	p = READ_ONCE(*pp);
+	if (!p) {
+		rcu_read_unlock();
 		return NULL;
-	refcount_inc(&p->cnt);
+	}
+
+	WARN_ON_ONCE(atomic_read(&p->destroyed));
+	if (!refcount_inc_not_zero(&p->cnt))
+		p = NULL;
+	rcu_read_unlock();
+
 	return p;
 }
 
