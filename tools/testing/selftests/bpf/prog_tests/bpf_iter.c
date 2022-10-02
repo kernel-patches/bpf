@@ -1515,11 +1515,11 @@ static void test_task_vma_offset_common(struct bpf_iter_attach_opts *opts, bool 
 
 	link = bpf_program__attach_iter(skel->progs.get_vma_offset, opts);
 	if (!ASSERT_OK_PTR(link, "attach_iter"))
-		return;
+		goto exit_skel;
 
 	iter_fd = bpf_iter_create(bpf_link__fd(link));
 	if (!ASSERT_GT(iter_fd, 0, "create_iter"))
-		goto exit;
+		goto exit_link;
 
 	while ((len = read(iter_fd, buf, sizeof(buf))) > 0)
 		;
@@ -1534,8 +1534,10 @@ static void test_task_vma_offset_common(struct bpf_iter_attach_opts *opts, bool 
 
 	close(iter_fd);
 
-exit:
+exit_link:
 	bpf_link__destroy(link);
+exit_skel:
+	bpf_iter_vma_offset__destroy(skel);
 }
 
 static void test_task_vma_offset(void)
