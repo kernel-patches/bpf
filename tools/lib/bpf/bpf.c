@@ -846,7 +846,7 @@ int bpf_prog_query_opts(int target_fd,
 }
 
 int bpf_prog_query(int target_fd, enum bpf_attach_type type, __u32 query_flags,
-		   __u32 *attach_flags, __u32 *prog_ids, __u32 *prog_cnt)
+		   __u32 *attach_flags, void *prog_ids, __u32 *prog_cnt)
 {
 	LIBBPF_OPTS(bpf_prog_query_opts, opts);
 	int ret;

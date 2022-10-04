@@ -386,7 +386,7 @@ LIBBPF_API int bpf_prog_query_opts(int target_fd,
 				   struct bpf_prog_query_opts *opts);
 LIBBPF_API int bpf_prog_query(int target_fd, enum bpf_attach_type type,
 			      __u32 query_flags, __u32 *attach_flags,
-			      __u32 *prog_ids, __u32 *prog_cnt);
+			      void *prog_ids, __u32 *prog_cnt);
 
 LIBBPF_API int bpf_raw_tracepoint_open(const char *name, int prog_fd);
 LIBBPF_API int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf,
