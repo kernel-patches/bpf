@@ -27,6 +27,13 @@ struct xtc_entry_pair {
 	struct xtc_entry	b;
 };
 
+struct bpf_tc_link {
+	struct bpf_link link;
+	struct net_device *dev;
+	u32 priority;
+	u32 location;
+};
+
 static inline void xtc_set_ingress(struct sk_buff *skb, bool ingress)
 {
 #ifdef CONFIG_NET_XGRESS
@@ -155,6 +162,7 @@ int xtc_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 int xtc_prog_detach(const union bpf_attr *attr);
 int xtc_prog_query(const union bpf_attr *attr,
 		   union bpf_attr __user *uattr);
+int xtc_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 void dev_xtc_uninstall(struct net_device *dev);
 #else
 static inline int xtc_prog_attach(const union bpf_attr *attr,
@@ -170,6 +178,12 @@ static inline int xtc_prog_detach(const union bpf_attr *attr)
 
 static inline int xtc_prog_query(const union bpf_attr *attr,
 				 union bpf_attr __user *uattr)
+{
+	return -EINVAL;
+}
+
+static inline int xtc_link_attach(const union bpf_attr *attr,
+				  struct bpf_prog *prog)
 {
 	return -EINVAL;
 }

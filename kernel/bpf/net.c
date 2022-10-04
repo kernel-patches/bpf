@@ -8,7 +8,7 @@
 #include <net/xtc.h>
 
 static int __xtc_prog_attach(struct net_device *dev, bool ingress, u32 limit,
-			     struct bpf_prog *nprog, u32 prio, u32 flags)
+			     u32 id, struct bpf_prog *nprog, u32 prio, u32 flags)
 {
 	struct bpf_prog_array_item *item, *tmp;
 	struct xtc_entry *entry, *peer;
@@ -27,10 +27,13 @@ static int __xtc_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 		if (!oprog)
 			break;
 		if (item->bpf_priority == prio) {
-			if (flags & BPF_F_REPLACE) {
+			if (item->bpf_id == id &&
+			    (flags & BPF_F_REPLACE)) {
 				/* Pairs with READ_ONCE() in xtc_run_progs(). */
 				WRITE_ONCE(item->prog, nprog);
-				bpf_prog_put(oprog);
+				item->bpf_id = id;
+				if (!id)
+					bpf_prog_put(oprog);
 				dev_xtc_entry_prio_set(entry, prio, nprog);
 				return prio;
 			}
@@ -55,19 +58,23 @@ static int __xtc_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 			if (i == j) {
 				tmp->prog = nprog;
 				tmp->bpf_priority = prio;
+				tmp->bpf_id = id;
 			}
 			break;
 		} else if (item->bpf_priority < prio) {
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 		} else if (item->bpf_priority > prio) {
 			if (i == j) {
 				tmp->prog = nprog;
 				tmp->bpf_priority = prio;
+				tmp->bpf_id = id;
 				tmp = &peer->items[++j];
 			}
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 		}
 	}
 	dev_xtc_entry_update(dev, peer, ingress);
@@ -94,14 +101,14 @@ int xtc_prog_attach(const union bpf_attr *attr, struct bpf_prog *nprog)
 		rtnl_unlock();
 		return -EINVAL;
 	}
-	ret = __xtc_prog_attach(dev, ingress, XTC_MAX_ENTRIES, nprog,
+	ret = __xtc_prog_attach(dev, ingress, XTC_MAX_ENTRIES, 0, nprog,
 				attr->attach_priority, attr->attach_flags);
 	rtnl_unlock();
 	return ret;
 }
 
 static int __xtc_prog_detach(struct net_device *dev, bool ingress, u32 limit,
-			     u32 prio)
+			     u32 id, u32 prio)
 {
 	struct bpf_prog_array_item *item, *tmp;
 	struct bpf_prog *oprog, *fprog = NULL;
@@ -126,8 +133,11 @@ static int __xtc_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 		if (item->bpf_priority != prio) {
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 			j++;
 		} else {
+			if (item->bpf_id != id)
+				return -EBUSY;
 			fprog = oprog;
 		}
 	}
@@ -136,7 +146,8 @@ static int __xtc_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 		if (dev_xtc_entry_total(peer) == 0 && !entry->parent->miniq)
 			peer = NULL;
 		dev_xtc_entry_update(dev, peer, ingress);
-		bpf_prog_put(fprog);
+		if (!id)
+			bpf_prog_put(fprog);
 		if (!peer)
 			dev_xtc_entry_free(entry);
 		if (ingress)
@@ -164,7 +175,7 @@ int xtc_prog_detach(const union bpf_attr *attr)
 		rtnl_unlock();
 		return -EINVAL;
 	}
-	ret = __xtc_prog_detach(dev, ingress, XTC_MAX_ENTRIES,
+	ret = __xtc_prog_detach(dev, ingress, XTC_MAX_ENTRIES, 0,
 				attr->attach_priority);
 	rtnl_unlock();
 	return ret;
@@ -191,7 +202,8 @@ static void __xtc_prog_detach_all(struct net_device *dev, bool ingress, u32 limi
 		if (!prog)
 			break;
 		dev_xtc_entry_prio_del(entry, item->bpf_priority);
-		bpf_prog_put(prog);
+		if (!item->bpf_id)
+			bpf_prog_put(prog);
 		if (ingress)
 			net_dec_ingress_queue();
 		else
@@ -244,6 +256,7 @@ __xtc_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		if (!prog)
 			break;
 		info.prog_id = prog->aux->id;
+		info.link_id = item->bpf_id;
 		info.prio = item->bpf_priority;
 		if (copy_to_user(uinfo + i, &info, sizeof(info)))
 			return -EFAULT;
@@ -271,4 +284,91 @@ int xtc_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr)
 	ret = __xtc_prog_query(attr, uattr, dev, ingress, XTC_MAX_ENTRIES);
 	rtnl_unlock();
 	return ret;
+}
+
+static int __xtc_link_attach(struct bpf_link *l, u32 id)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	int ret;
+
+	rtnl_lock();
+	ret = __xtc_prog_attach(link->dev, link->location == BPF_NET_INGRESS,
+				XTC_MAX_ENTRIES, id, l->prog, link->priority,
+				0);
+	if (ret > 0) {
+		link->priority = ret;
+		ret = 0;
+	}
+	rtnl_unlock();
+	return ret;
+}
+
+static void xtc_link_release(struct bpf_link *l)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+
+	rtnl_lock();
+	if (link->dev) {
+		WARN_ON(__xtc_prog_detach(link->dev,
+					  link->location == BPF_NET_INGRESS,
+					  XTC_MAX_ENTRIES, l->id, link->priority));
+		link->dev = NULL;
+	}
+	rtnl_unlock();
+}
+
+static void xtc_link_dealloc(struct bpf_link *l)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+
+	kfree(link);
+}
+
+static const struct bpf_link_ops bpf_tc_link_lops = {
+	.release	= xtc_link_release,
+	.dealloc	= xtc_link_dealloc,
+};
+
+int xtc_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct net *net = current->nsproxy->net_ns;
+	struct bpf_link_primer link_primer;
+	struct bpf_tc_link *link;
+	struct net_device *dev;
+	int fd, err;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+	dev = dev_get_by_index(net, attr->link_create.target_ifindex);
+	if (!dev)
+		return -EINVAL;
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto out_put;
+	}
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_TC, &bpf_tc_link_lops, prog);
+	link->priority = attr->link_create.tc.priority;
+	link->location = attr->link_create.attach_type;
+	link->dev = dev;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		kfree(link);
+		goto out_put;
+	}
+	err = __xtc_link_attach(&link->link, link_primer.id);
+	if (err) {
+		link->dev = NULL;
+		bpf_link_cleanup(&link_primer);
+		goto out_put;
+	}
+
+	fd = bpf_link_settle(&link_primer);
+	dev_put(dev);
+	return fd;
+out_put:
+	dev_put(dev);
+	return err;
 }

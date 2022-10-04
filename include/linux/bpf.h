@@ -1473,7 +1473,10 @@ struct bpf_prog_array_item {
 	union {
 		struct bpf_cgroup_storage *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 		u64 bpf_cookie;
-		u32 bpf_priority;
+		struct {
+			u32 bpf_priority;
+			u32 bpf_id;
+		};
 	};
 };
 
