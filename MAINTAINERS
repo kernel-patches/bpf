@@ -3847,13 +3847,15 @@ S:	Maintained
 F:	kernel/trace/bpf_trace.c
 F:	kernel/bpf/stackmap.c
 
-BPF [NETWORKING] (tc BPF, sock_addr)
+BPF [NETWORKING] (xtc & tc BPF, sock_addr)
 M:	Martin KaFai Lau <martin.lau@linux.dev>
 M:	Daniel Borkmann <daniel@iogearbox.net>
 R:	John Fastabend <john.fastabend@gmail.com>
 L:	bpf@vger.kernel.org
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	include/net/xtc.h
+F:	kernel/bpf/net.c
 F:	net/core/filter.c
 F:	net/sched/act_bpf.c
 F:	net/sched/cls_bpf.c

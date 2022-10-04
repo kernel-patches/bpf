@@ -1,0 +1,274 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2022 Isovalent */
+
+#include <linux/bpf.h>
+#include <linux/filter.h>
+#include <linux/netdevice.h>
+
+#include <net/xtc.h>
+
+static int __xtc_prog_attach(struct net_device *dev, bool ingress, u32 limit,
+			     struct bpf_prog *nprog, u32 prio, u32 flags)
+{
+	struct bpf_prog_array_item *item, *tmp;
+	struct xtc_entry *entry, *peer;
+	struct bpf_prog *oprog;
+	bool created;
+	int i, j;
+
+	ASSERT_RTNL();
+
+	entry = dev_xtc_entry_fetch(dev, ingress, &created);
+	if (!entry)
+		return -ENOMEM;
+	for (i = 0; i < limit; i++) {
+		item = &entry->items[i];
+		oprog = item->prog;
+		if (!oprog)
+			break;
+		if (item->bpf_priority == prio) {
+			if (flags & BPF_F_REPLACE) {
+				/* Pairs with READ_ONCE() in xtc_run_progs(). */
+				WRITE_ONCE(item->prog, nprog);
+				bpf_prog_put(oprog);
+				dev_xtc_entry_prio_set(entry, prio, nprog);
+				return prio;
+			}
+			return -EBUSY;
+		}
+	}
+	if (dev_xtc_entry_total(entry) >= limit)
+		return -ENOSPC;
+	prio = dev_xtc_entry_prio_new(entry, prio, nprog);
+	if (prio < 0) {
+		if (created)
+			dev_xtc_entry_free(entry);
+		return -ENOMEM;
+	}
+	peer = dev_xtc_entry_peer(entry);
+	dev_xtc_entry_clear(peer);
+	for (i = 0, j = 0; i < limit; i++, j++) {
+		item = &entry->items[i];
+		tmp = &peer->items[j];
+		oprog = item->prog;
+		if (!oprog) {
+			if (i == j) {
+				tmp->prog = nprog;
+				tmp->bpf_priority = prio;
+			}
+			break;
+		} else if (item->bpf_priority < prio) {
+			tmp->prog = oprog;
+			tmp->bpf_priority = item->bpf_priority;
+		} else if (item->bpf_priority > prio) {
+			if (i == j) {
+				tmp->prog = nprog;
+				tmp->bpf_priority = prio;
+				tmp = &peer->items[++j];
+			}
+			tmp->prog = oprog;
+			tmp->bpf_priority = item->bpf_priority;
+		}
+	}
+	dev_xtc_entry_update(dev, peer, ingress);
+	if (ingress)
+		net_inc_ingress_queue();
+	else
+		net_inc_egress_queue();
+	xtc_inc();
+	return prio;
+}
+
+int xtc_prog_attach(const union bpf_attr *attr, struct bpf_prog *nprog)
+{
+	struct net *net = current->nsproxy->net_ns;
+	bool ingress = attr->attach_type == BPF_NET_INGRESS;
+	struct net_device *dev;
+	int ret;
+
+	if (attr->attach_flags & ~BPF_F_REPLACE)
+		return -EINVAL;
+	rtnl_lock();
+	dev = __dev_get_by_index(net, attr->target_ifindex);
+	if (!dev) {
+		rtnl_unlock();
+		return -EINVAL;
+	}
+	ret = __xtc_prog_attach(dev, ingress, XTC_MAX_ENTRIES, nprog,
+				attr->attach_priority, attr->attach_flags);
+	rtnl_unlock();
+	return ret;
+}
+
+static int __xtc_prog_detach(struct net_device *dev, bool ingress, u32 limit,
+			     u32 prio)
+{
+	struct bpf_prog_array_item *item, *tmp;
+	struct bpf_prog *oprog, *fprog = NULL;
+	struct xtc_entry *entry, *peer;
+	int i, j;
+
+	ASSERT_RTNL();
+
+	entry = ingress ?
+		rcu_dereference_rtnl(dev->xtc_ingress) :
+		rcu_dereference_rtnl(dev->xtc_egress);
+	if (!entry)
+		return -ENOENT;
+	peer = dev_xtc_entry_peer(entry);
+	dev_xtc_entry_clear(peer);
+	for (i = 0, j = 0; i < limit; i++) {
+		item = &entry->items[i];
+		tmp = &peer->items[j];
+		oprog = item->prog;
+		if (!oprog)
+			break;
+		if (item->bpf_priority != prio) {
+			tmp->prog = oprog;
+			tmp->bpf_priority = item->bpf_priority;
+			j++;
+		} else {
+			fprog = oprog;
+		}
+	}
+	if (fprog) {
+		dev_xtc_entry_prio_del(peer, prio);
+		if (dev_xtc_entry_total(peer) == 0 && !entry->parent->miniq)
+			peer = NULL;
+		dev_xtc_entry_update(dev, peer, ingress);
+		bpf_prog_put(fprog);
+		if (!peer)
+			dev_xtc_entry_free(entry);
+		if (ingress)
+			net_dec_ingress_queue();
+		else
+			net_dec_egress_queue();
+		xtc_dec();
+		return 0;
+	}
+	return -ENOENT;
+}
+
+int xtc_prog_detach(const union bpf_attr *attr)
+{
+	struct net *net = current->nsproxy->net_ns;
+	bool ingress = attr->attach_type == BPF_NET_INGRESS;
+	struct net_device *dev;
+	int ret;
+
+	if (attr->attach_flags || !attr->attach_priority)
+		return -EINVAL;
+	rtnl_lock();
+	dev = __dev_get_by_index(net, attr->target_ifindex);
+	if (!dev) {
+		rtnl_unlock();
+		return -EINVAL;
+	}
+	ret = __xtc_prog_detach(dev, ingress, XTC_MAX_ENTRIES,
+				attr->attach_priority);
+	rtnl_unlock();
+	return ret;
+}
+
+static void __xtc_prog_detach_all(struct net_device *dev, bool ingress, u32 limit)
+{
+	struct bpf_prog_array_item *item;
+	struct xtc_entry *entry;
+	struct bpf_prog *prog;
+	int i;
+
+	ASSERT_RTNL();
+
+	entry = ingress ?
+		rcu_dereference_rtnl(dev->xtc_ingress) :
+		rcu_dereference_rtnl(dev->xtc_egress);
+	if (!entry)
+		return;
+	dev_xtc_entry_update(dev, NULL, ingress);
+	for (i = 0; i < limit; i++) {
+		item = &entry->items[i];
+		prog = item->prog;
+		if (!prog)
+			break;
+		dev_xtc_entry_prio_del(entry, item->bpf_priority);
+		bpf_prog_put(prog);
+		if (ingress)
+			net_dec_ingress_queue();
+		else
+			net_dec_egress_queue();
+		xtc_dec();
+	}
+	dev_xtc_entry_free(entry);
+}
+
+void dev_xtc_uninstall(struct net_device *dev)
+{
+	__xtc_prog_detach_all(dev, true,  XTC_MAX_ENTRIES + 1);
+	__xtc_prog_detach_all(dev, false, XTC_MAX_ENTRIES + 1);
+}
+
+static int
+__xtc_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
+		 struct net_device *dev, bool ingress, u32 limit)
+{
+	struct bpf_query_info info, __user *uinfo;
+	struct bpf_prog_array_item *item;
+	struct xtc_entry *entry;
+	struct bpf_prog *prog;
+	u32 i, flags = 0, cnt;
+	int ret = 0;
+
+	ASSERT_RTNL();
+
+	entry = ingress ?
+		rcu_dereference_rtnl(dev->xtc_ingress) :
+		rcu_dereference_rtnl(dev->xtc_egress);
+	if (!entry)
+		return -ENOENT;
+	cnt = dev_xtc_entry_total(entry);
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags)))
+		return -EFAULT;
+	if (copy_to_user(&uattr->query.prog_cnt, &cnt, sizeof(cnt)))
+		return -EFAULT;
+	uinfo = u64_to_user_ptr(attr->query.prog_ids);
+	if (attr->query.prog_cnt == 0 || !uinfo || !cnt)
+		/* return early if user requested only program count + flags */
+		return 0;
+	if (attr->query.prog_cnt < cnt) {
+		cnt = attr->query.prog_cnt;
+		ret = -ENOSPC;
+	}
+	for (i = 0; i < limit; i++) {
+		item = &entry->items[i];
+		prog = item->prog;
+		if (!prog)
+			break;
+		info.prog_id = prog->aux->id;
+		info.prio = item->bpf_priority;
+		if (copy_to_user(uinfo + i, &info, sizeof(info)))
+			return -EFAULT;
+		if (i + 1 == cnt)
+			break;
+	}
+	return ret;
+}
+
+int xtc_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr)
+{
+	struct net *net = current->nsproxy->net_ns;
+	bool ingress = attr->query.attach_type == BPF_NET_INGRESS;
+	struct net_device *dev;
+	int ret;
+
+	if (attr->query.query_flags || attr->query.attach_flags)
+		return -EINVAL;
+	rtnl_lock();
+	dev = __dev_get_by_index(net, attr->query.target_ifindex);
+	if (!dev) {
+		rtnl_unlock();
+		return -EINVAL;
+	}
+	ret = __xtc_prog_query(attr, uattr, dev, ingress, XTC_MAX_ENTRIES);
+	rtnl_unlock();
+	return ret;
+}

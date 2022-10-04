@@ -1025,6 +1025,8 @@ enum bpf_attach_type {
 	BPF_PERF_EVENT,
 	BPF_TRACE_KPROBE_MULTI,
 	BPF_LSM_CGROUP,
+	BPF_NET_INGRESS,
+	BPF_NET_EGRESS,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1399,14 +1401,20 @@ union bpf_attr {
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
-		__u32		target_fd;	/* container object to attach to */
+		union {
+			__u32	target_fd;	/* container object to attach to */
+			__u32	target_ifindex; /* target ifindex */
+		};
 		__u32		attach_bpf_fd;	/* eBPF program to attach */
 		__u32		attach_type;
 		__u32		attach_flags;
-		__u32		replace_bpf_fd;	/* previously attached eBPF
+		union {
+			__u32	attach_priority;
+			__u32	replace_bpf_fd;	/* previously attached eBPF
 						 * program to replace if
 						 * BPF_F_REPLACE is used
 						 */
+		};
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
@@ -1452,7 +1460,10 @@ union bpf_attr {
 	} info;
 
 	struct { /* anonymous struct used by BPF_PROG_QUERY command */
-		__u32		target_fd;	/* container object to query */
+		union {
+			__u32	target_fd;	/* container object to query */
+			__u32	target_ifindex; /* target ifindex */
+		};
 		__u32		attach_type;
 		__u32		query_flags;
 		__u32		attach_flags;
@@ -6038,6 +6049,19 @@ struct bpf_sock_tuple {
 	};
 };
 
+/* (Simplified) user return codes for tc prog type.
+ * A valid tc program must return one of these defined values. All other
+ * return codes are reserved for future use. Must remain compatible with
+ * their TC_ACT_* counter-parts. For compatibility in behavior, unknown
+ * return codes are mapped to TC_NEXT.
+ */
+enum tc_action_base {
+	TC_NEXT		= -1,
+	TC_PASS		= 0,
+	TC_DROP		= 2,
+	TC_REDIRECT	= 7,
+};
+
 struct bpf_xdp_sock {
 	__u32 queue_id;
 };
@@ -6802,6 +6826,11 @@ struct bpf_flow_keys {
 	};
 	__u32	flags;
 	__be32	flow_label;
+};
+
+struct bpf_query_info {
+	__u32 prog_id;
+	__u32 prio;
 };
 
 struct bpf_func_info {
