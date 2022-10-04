@@ -575,8 +575,7 @@ extern int (*nfct_btf_struct_access)(struct bpf_verifier_log *log, const struct 
 
 typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
 					  const struct bpf_insn *insnsi,
-					  unsigned int (*bpf_func)(const void *,
-								   const struct bpf_insn *));
+					  bpf_func_t bpf_func);
 
 static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 					  const void *ctx,
