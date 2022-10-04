@@ -7,6 +7,11 @@ Linux implementation notes
 
 This document provides more details specific to the Linux kernel implementation of the eBPF instruction set.
 
+Stack space
+======================
+
+Linux currently supports 512 bytes of stack space.
+
 Byte swap instructions
 ======================
 

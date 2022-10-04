@@ -7,6 +7,9 @@ eBPF Instruction Set Specification, v1.0
 
 This document specifies version 1.0 of the eBPF instruction set.
 
+The eBPF instruction set consists of eleven 64 bit registers, a program counter,
+and an implementation-specific amount (e.g., 512 bytes) of stack space.
+
 Documentation conventions
 =========================
 
@@ -27,11 +30,23 @@ The eBPF calling convention is defined as:
 * R6 - R9: callee saved registers that function calls will preserve
 * R10: read-only frame pointer to access stack
 
-R0 - R5 are scratch registers and eBPF programs needs to spill/fill them if
-necessary across calls.
+Registers R0 - R5 are caller-saved registers, meaning the BPF program needs to either
+spill them to the BPF stack or move them to callee saved registers if these
+arguments are to be reused across multiple function calls. Spilling means
+that the value in the register is moved to the BPF stack. The reverse operation
+of moving the variable from the BPF stack to the register is called filling.
+The reason for spilling/filling is due to the limited number of registers.
+
+Upon entering execution of an eBPF program, registers R1 - R5 initially can contain
+the input arguments for the program (similar to the argc/argv pair for a typical C program).
+The actual number of registers used, and their meaning, is defined by the program type;
+for example, a networking program might have an argument that includes network packet data
+and/or metadata.
 
 Instruction encoding
 ====================
+
+An eBPF program is a sequence of instructions.
 
 eBPF has two instruction encodings:
 
@@ -65,7 +80,7 @@ opcode
   operation to perform
 
 Note that most instructions do not use all of the fields.
-Unused fields shall be cleared to zero.
+Unused fields must be set to zero.
 
 As discussed below in `64-bit immediate instructions`_, a 64-bit immediate
 instruction uses a 64-bit immediate value that is constructed as follows.
@@ -92,7 +107,9 @@ and destination registers, respectively, rather than the register number.
 Instruction classes
 -------------------
 
-The three LSB bits of the 'opcode' field store the instruction class:
+The encoding of the 'opcode' field varies and can be determined from
+the three least significant bits (LSB) of the 'opcode' field which holds
+the "instruction class", as follows:
 
 =========  =====  ===============================  ===================================
 class      value  description                      reference
@@ -138,9 +155,11 @@ instruction class
 Arithmetic instructions
 -----------------------
 
-``BPF_ALU`` uses 32-bit wide operands while ``BPF_ALU64`` uses 64-bit wide operands for
+Instruction class ``BPF_ALU`` uses 32-bit wide operands (zeroing the upper 32 bits
+of the destination register) while ``BPF_ALU64`` uses 64-bit wide operands for
 otherwise identical operations.
-The 'code' field encodes the operation as below:
+
+The 4-bit 'code' field encodes the operation as follows:
 
 ========  =====  ==========================================================
 code      value  description
@@ -170,21 +189,23 @@ the destination register is instead set to zero.
 If execution would result in modulo by zero,
 the destination register is instead left unchanged.
 
-``BPF_ADD | BPF_X | BPF_ALU`` means::
+Examples:
+
+``BPF_ADD | BPF_X | BPF_ALU`` (0x0c) means::
 
   dst = (u32) (dst + src)
 
 where '(u32)' indicates truncation to 32 bits.
 
-``BPF_ADD | BPF_X | BPF_ALU64`` means::
+``BPF_ADD | BPF_X | BPF_ALU64`` (0x0f) means::
 
   dst = dst + src
 
-``BPF_XOR | BPF_K | BPF_ALU`` means::
+``BPF_XOR | BPF_K | BPF_ALU`` (0xa4) means::
 
   src = (u32) src ^ (u32) imm
 
-``BPF_XOR | BPF_K | BPF_ALU64`` means::
+``BPF_XOR | BPF_K | BPF_ALU64`` (0xa7) means::
 
   src = src ^ imm
 
@@ -202,8 +223,9 @@ The byte swap instructions use an instruction class of ``BPF_ALU`` and a 4-bit
 The byte swap instructions operate on the destination register
 only and do not use a separate source register or immediate value.
 
-The 1-bit source operand field in the opcode is used to to select what byte
-order the operation convert from or to:
+Byte swap instructions use the 1-bit 'source' field in the 'opcode' field
+as follows.  Instead of indicating the source operator, it is instead
+used to select what byte order the operation converts from or to:
 
 =========  =====  =================================================
 source     value  description
@@ -213,24 +235,33 @@ BPF_TO_BE  0x08   convert between host byte order and big endian
 =========  =====  =================================================
 
 The 'imm' field encodes the width of the swap operations.  The following widths
-are supported: 16, 32 and 64.
+are supported: 16, 32 and 64. The following table summarizes the resulting
+possibilities:
 
-Examples:
+=============================  =========  ===  ========  ==================
+opcode construction            opcode     imm  mnemonic  pseudocode
+=============================  =========  ===  ========  ==================
+BPF_END | BPF_TO_LE | BPF_ALU  0xd4       16   le16 dst  dst = htole16(dst)
+BPF_END | BPF_TO_LE | BPF_ALU  0xd4       32   le32 dst  dst = htole32(dst)
+BPF_END | BPF_TO_LE | BPF_ALU  0xd4       64   le64 dst  dst = htole64(dst)
+BPF_END | BPF_TO_BE | BPF_ALU  0xdc       16   be16 dst  dst = htobe16(dst)
+BPF_END | BPF_TO_BE | BPF_ALU  0xdc       32   be32 dst  dst = htobe32(dst)
+BPF_END | BPF_TO_BE | BPF_ALU  0xdc       64   be64 dst  dst = htobe64(dst)
+=============================  =========  ===  ========  ==================
 
-``BPF_ALU | BPF_TO_LE | BPF_END`` with imm = 16 means::
+where
 
-  dst = htole16(dst)
-
-``BPF_ALU | BPF_TO_BE | BPF_END`` with imm = 64 means::
-
-  dst = htobe64(dst)
+* mnenomic indicates a short form that might be displayed by some tools such as disassemblers
+* 'htoleNN()' indicates converting a NN-bit value from host byte order to little-endian byte order
+* 'htobeNN()' indicates converting a NN-bit value from host byte order to big-endian byte order
 
 Jump instructions
 -----------------
 
-``BPF_JMP32`` uses 32-bit wide operands while ``BPF_JMP`` uses 64-bit wide operands for
+Instruction class ``BPF_JMP32`` uses 32-bit wide operands while ``BPF_JMP`` uses 64-bit wide operands for
 otherwise identical operations.
-The 'code' field encodes the operation as below:
+
+The 4-bit 'code' field encodes the operation as below, where PC is the program counter:
 
 ========  =====  =========================  ============
 code      value  description                notes
@@ -250,9 +281,6 @@ BPF_JLE   0xb0   PC += off if dst <= src    unsigned
 BPF_JSLT  0xc0   PC += off if dst < src     signed
 BPF_JSLE  0xd0   PC += off if dst <= src    signed
 ========  =====  =========================  ============
-
-The eBPF program needs to store the return value into register R0 before doing a
-BPF_EXIT.
 
 Helper functions
 ~~~~~~~~~~~~~~~~
@@ -283,7 +311,8 @@ For load and store instructions (``BPF_LD``, ``BPF_LDX``, ``BPF_ST``, and ``BPF_
 mode          size    instruction class
 ============  ======  =================
 
-The mode modifier is one of:
+mode
+  one of:
 
   =============  =====  ====================================  =============
   mode modifier  value  description                           reference
@@ -295,7 +324,8 @@ The mode modifier is one of:
   BPF_ATOMIC     0xc0   atomic operations                     `Atomic operations`_
   =============  =====  ====================================  =============
 
-The size modifier is one of:
+size
+  one of:
 
   =============  =====  =====================
   size modifier  value  description
@@ -305,6 +335,9 @@ The size modifier is one of:
   BPF_B          0x10   byte
   BPF_DW         0x18   double word (8 bytes)
   =============  =====  =====================
+
+instruction class
+  the instruction class (see `Instruction classes`_)
 
 Regular load and store operations
 ---------------------------------
@@ -324,7 +357,7 @@ instructions that transfer data between a register and memory.
 
   dst = *(size *) (src + offset)
 
-Where size is one of: ``BPF_B``, ``BPF_H``, ``BPF_W``, or ``BPF_DW``.
+where size is one of: ``BPF_B``, ``BPF_H``, ``BPF_W``, or ``BPF_DW``.
 
 Atomic operations
 -----------------
@@ -336,9 +369,11 @@ by other eBPF programs or means outside of this specification.
 All atomic operations supported by eBPF are encoded as store operations
 that use the ``BPF_ATOMIC`` mode modifier as follows:
 
-* ``BPF_ATOMIC | BPF_W | BPF_STX`` for 32-bit operations
-* ``BPF_ATOMIC | BPF_DW | BPF_STX`` for 64-bit operations
-* 8-bit and 16-bit wide atomic operations are not supported.
+* ``BPF_ATOMIC | BPF_W | BPF_STX`` (0xc3) for 32-bit operations
+* ``BPF_ATOMIC | BPF_DW | BPF_STX`` (0xdb) for 64-bit operations
+
+Note that 8-bit (``BPF_B``) and 16-bit (``BPF_H``) wide atomic operations are not supported,
+nor is ``BPF_ATOMIC | <size> | BPF_ST``.
 
 The 'imm' field is used to encode the actual atomic operation.
 Simple atomic operation use a subset of the values defined to encode
@@ -353,16 +388,15 @@ BPF_AND   0x50   atomic and
 BPF_XOR   0xa0   atomic xor
 ========  =====  ===========
 
-
-``BPF_ATOMIC | BPF_W  | BPF_STX`` with 'imm' = BPF_ADD means::
+``BPF_ATOMIC | BPF_W  | BPF_STX`` (0xc3) with 'imm' = BPF_ADD means::
 
   *(u32 *)(dst + offset) += src
 
-``BPF_ATOMIC | BPF_DW | BPF_STX`` with 'imm' = BPF ADD means::
+``BPF_ATOMIC | BPF_DW | BPF_STX`` (0xdb) with 'imm' = BPF ADD means::
 
   *(u64 *)(dst + offset) += src
 
-In addition to the simple atomic operations, there also is a modifier and
+In addition to the simple atomic operations above, there also is a modifier and
 two complex atomic operations:
 
 ===========  ================  ===========================
