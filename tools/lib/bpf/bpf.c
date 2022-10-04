@@ -670,6 +670,27 @@ int bpf_prog_detach2(int prog_fd, int target_fd, enum bpf_attach_type type)
 	return libbpf_err_errno(ret);
 }
 
+int bpf_prog_detach_opts(int prog_fd, int target_fd,
+			 enum bpf_attach_type type,
+			 const struct bpf_prog_detach_opts *opts)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, replace_bpf_fd);
+	union bpf_attr attr;
+	int ret;
+
+	if (!OPTS_VALID(opts, bpf_prog_detach_opts))
+		return libbpf_err(-EINVAL);
+
+	memset(&attr, 0, attr_sz);
+	attr.target_fd	   = target_fd;
+	attr.attach_bpf_fd = prog_fd;
+	attr.attach_type   = type;
+	attr.attach_priority = OPTS_GET(opts, attach_priority, 0);
+
+	ret = sys_bpf(BPF_PROG_DETACH, &attr, attr_sz);
+	return libbpf_err_errno(ret);
+}
+
 int bpf_link_create(int prog_fd, int target_fd,
 		    enum bpf_attach_type attach_type,
 		    const struct bpf_link_create_opts *opts)
