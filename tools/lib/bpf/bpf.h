@@ -334,6 +334,9 @@ struct bpf_link_create_opts {
 		struct {
 			__u64 cookie;
 		} tracing;
+		struct {
+			__u32 priority;
+		} tc;
 	};
 	size_t :0;
 };

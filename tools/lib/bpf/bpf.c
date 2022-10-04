@@ -752,6 +752,10 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_NET_INGRESS:
+	case BPF_NET_EGRESS:
+		attr.link_create.tc.priority = OPTS_GET(opts, tc.priority, 0);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);

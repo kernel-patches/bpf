@@ -378,4 +378,5 @@ LIBBPF_1.1.0 {
 		user_ring_buffer__reserve_blocking;
 		user_ring_buffer__submit;
 		bpf_prog_detach_opts;
+		bpf_program__attach_tc;
 } LIBBPF_1.0.0;

@@ -8474,6 +8474,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kretsyscall+",		KPROBE, 0, SEC_NONE, attach_ksyscall),
 	SEC_DEF("usdt+",		KPROBE,	0, SEC_NONE, attach_usdt),
 	SEC_DEF("tc",			SCHED_CLS, 0, SEC_NONE),
+	SEC_DEF("tc/ingress",		SCHED_CLS, BPF_NET_INGRESS, SEC_ATTACHABLE_OPT),
+	SEC_DEF("tc/egress",		SCHED_CLS, BPF_NET_EGRESS, SEC_ATTACHABLE_OPT),
 	SEC_DEF("classifier",		SCHED_CLS, 0, SEC_NONE),
 	SEC_DEF("action",		SCHED_ACT, 0, SEC_NONE),
 	SEC_DEF("tracepoint+",		TRACEPOINT, 0, SEC_NONE, attach_tp),
@@ -11238,11 +11240,10 @@ static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_li
 }
 
 static struct bpf_link *
-bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
-		       const char *target_name)
+bpf_program__attach_fd_opts(const struct bpf_program *prog,
+			    const struct bpf_link_create_opts *opts,
+			    int target_fd, const char *target_name)
 {
-	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
-			    .target_btf_id = btf_id);
 	enum bpf_attach_type attach_type;
 	char errmsg[STRERR_BUFSIZE];
 	struct bpf_link *link;
@@ -11260,7 +11261,7 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	link->detach = &bpf_link__detach_fd;
 
 	attach_type = bpf_program__expected_attach_type(prog);
-	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, &opts);
+	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, opts);
 	if (link_fd < 0) {
 		link_fd = -errno;
 		free(link);
@@ -11271,6 +11272,16 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	}
 	link->fd = link_fd;
 	return link;
+}
+
+static struct bpf_link *
+bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
+		       const char *target_name)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
+			    .target_btf_id = btf_id);
+
+	return bpf_program__attach_fd_opts(prog, &opts, target_fd, target_name);
 }
 
 struct bpf_link *
@@ -11289,6 +11300,16 @@ struct bpf_link *bpf_program__attach_xdp(const struct bpf_program *prog, int ifi
 {
 	/* target_fd/target_ifindex use the same field in LINK_CREATE */
 	return bpf_program__attach_fd(prog, ifindex, 0, "xdp");
+}
+
+struct bpf_link *bpf_program__attach_tc(const struct bpf_program *prog,
+					int ifindex, __u32 priority)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
+			    .tc.priority = priority);
+
+	/* target_fd/target_ifindex use the same field in LINK_CREATE */
+	return bpf_program__attach_fd_opts(prog, &opts, ifindex, "tc");
 }
 
 struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
