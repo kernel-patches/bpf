@@ -303,6 +303,39 @@ static int __xtc_link_attach(struct bpf_link *l, u32 id)
 	return ret;
 }
 
+static int xtc_link_update(struct bpf_link *l, struct bpf_prog *nprog,
+			   struct bpf_prog *oprog)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	int ret = 0;
+
+	rtnl_lock();
+	if (!link->dev) {
+		ret = -ENOLINK;
+		goto out;
+	}
+	if (oprog && l->prog != oprog) {
+		ret = -EPERM;
+		goto out;
+	}
+	oprog = l->prog;
+	if (oprog == nprog) {
+		bpf_prog_put(nprog);
+		goto out;
+	}
+	ret = __xtc_prog_attach(link->dev, link->location == BPF_NET_INGRESS,
+				XTC_MAX_ENTRIES, l->id, nprog, link->priority,
+				BPF_F_REPLACE);
+	if (ret == link->priority) {
+		oprog = xchg(&l->prog, nprog);
+		bpf_prog_put(oprog);
+		ret = 0;
+	}
+out:
+	rtnl_unlock();
+	return ret;
+}
+
 static void xtc_link_release(struct bpf_link *l)
 {
 	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
@@ -327,6 +360,7 @@ static void xtc_link_dealloc(struct bpf_link *l)
 static const struct bpf_link_ops bpf_tc_link_lops = {
 	.release	= xtc_link_release,
 	.dealloc	= xtc_link_dealloc,
+	.update_prog	= xtc_link_update,
 };
 
 int xtc_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
