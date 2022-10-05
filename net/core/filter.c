@@ -10655,6 +10655,18 @@ const struct bpf_prog_ops tc_cls_act_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
 };
 
+const struct bpf_verifier_ops tc_qdisc_verifier_ops = {
+	.get_func_proto		= tc_cls_act_func_proto,
+	.is_valid_access	= tc_cls_act_is_valid_access,
+	.convert_ctx_access	= tc_cls_act_convert_ctx_access,
+	.gen_prologue		= tc_cls_act_prologue,
+	.gen_ld_abs		= bpf_gen_ld_abs,
+};
+
+const struct bpf_prog_ops tc_qdisc_prog_ops = {
+	.test_run		= bpf_prog_test_run_skb,
+};
+
 const struct bpf_verifier_ops xdp_verifier_ops = {
 	.get_func_proto		= xdp_func_proto,
 	.is_valid_access	= xdp_is_valid_access,
