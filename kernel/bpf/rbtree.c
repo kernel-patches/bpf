@@ -12,6 +12,7 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/math.h>
 #include <linux/seq_file.h>
+#include "map_in_map.h"
 
 #define RBTREE_CREATE_FLAG_MASK \
 	(BPF_F_NUMA_NODE | BPF_F_ACCESS_MASK)
@@ -441,5 +442,162 @@ const struct bpf_map_ops rbtree_map_ops = {
 	.map_for_each_callback = bpf_for_each_rbtree_map,
 	.map_btf_id = &rbtree_map_btf_ids[0],
 	.iter_seq_info = &rbtree_map_iter_seq_info,
+};
+
+static struct bpf_map *rbtree_map_in_map_alloc(union bpf_attr *attr)
+{
+	struct bpf_map *map, *inner_map_meta;
+
+	inner_map_meta = bpf_map_meta_alloc(attr->inner_map_fd);
+	if (IS_ERR(inner_map_meta))
+		return inner_map_meta;
+
+	map = rbtree_map_alloc(attr);
+	if (IS_ERR(map)) {
+		bpf_map_meta_free(inner_map_meta);
+		return map;
+	}
+
+	map->inner_map_meta = inner_map_meta;
+	return map;
+}
+
+static void *fd_rbtree_map_get_ptr(const struct bpf_map *map, struct rbtree_elem *e)
+{
+	return *(void **)(e->key + roundup(map->key_size, 8));
+}
+
+static void rbtree_map_in_map_purge(struct bpf_map *map)
+{
+	struct rbtree_map *rb = rbtree_map(map);
+	struct rbtree_elem *e, *tmp;
+
+	rbtree_walk_safe(e, tmp, &rb->root) {
+		void *ptr = fd_rbtree_map_get_ptr(map, e);
+
+		map->ops->map_fd_put_ptr(ptr);
+	}
+}
+
+static void rbtree_map_in_map_free(struct bpf_map *map)
+{
+	struct rbtree_map *rb = rbtree_map(map);
+
+	bpf_map_meta_free(map->inner_map_meta);
+	rbtree_map_in_map_purge(map);
+	bpf_map_area_free(rb);
+}
+
+/* Called from eBPF program */
+static void *rbtree_map_in_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	struct bpf_map **inner_map = rbtree_map_lookup_elem(map, key);
+
+	if (!inner_map)
+		return NULL;
+
+	return READ_ONCE(*inner_map);
+}
+
+static int rbtree_map_in_map_alloc_check(union bpf_attr *attr)
+{
+	if (attr->value_size != sizeof(u32))
+		return -EINVAL;
+	return rbtree_map_alloc_check(attr);
+}
+
+/* Called from eBPF program */
+static int rbtree_map_in_map_pop_elem(struct bpf_map *map, void *value)
+{
+	struct rbtree_map *rb = rbtree_map(map);
+	struct rbtree_elem *e = elem_rb_first(&rb->root);
+	struct bpf_map **inner_map;
+	unsigned long flags;
+
+	if (!e)
+		return -ENOENT;
+	raw_spin_lock_irqsave(&rb->lock, flags);
+	rb_erase(&e->rbnode, &rb->root);
+	raw_spin_unlock_irqrestore(&rb->lock, flags);
+	inner_map = fd_rbtree_map_get_ptr(map, e);
+	*(void **)value = *inner_map;
+	bpf_mem_cache_free(&rb->ma, e);
+	atomic_dec(&rb->nr_entries);
+	return 0;
+}
+
+/* only called from syscall */
+int bpf_fd_rbtree_map_pop_elem(struct bpf_map *map, void *value)
+{
+	struct bpf_map *ptr;
+	int ret = 0;
+
+	if (!map->ops->map_fd_sys_lookup_elem)
+		return -ENOTSUPP;
+
+	rcu_read_lock();
+	ret = rbtree_map_in_map_pop_elem(map, &ptr);
+	if (!ret)
+		*(u32 *)value = map->ops->map_fd_sys_lookup_elem(ptr);
+	else
+		ret = -ENOENT;
+	rcu_read_unlock();
+
+	return ret;
+}
+
+/* only called from syscall */
+int bpf_fd_rbtree_map_lookup_elem(struct bpf_map *map, void *key, u32 *value)
+{
+	void **ptr;
+	int ret = 0;
+
+	if (!map->ops->map_fd_sys_lookup_elem)
+		return -ENOTSUPP;
+
+	rcu_read_lock();
+	ptr = rbtree_map_lookup_elem(map, key);
+	if (ptr)
+		*value = map->ops->map_fd_sys_lookup_elem(READ_ONCE(*ptr));
+	else
+		ret = -ENOENT;
+	rcu_read_unlock();
+
+	return ret;
+}
+
+/* only called from syscall */
+int bpf_fd_rbtree_map_update_elem(struct bpf_map *map, struct file *map_file,
+				  void *key, void *value, u64 map_flags)
+{
+	void *ptr;
+	int ret;
+	u32 ufd = *(u32 *)value;
+
+	ptr = map->ops->map_fd_get_ptr(map, map_file, ufd);
+	if (IS_ERR(ptr))
+		return PTR_ERR(ptr);
+
+	ret = rbtree_map_update_elem(map, key, &ptr, map_flags);
+	if (ret)
+		map->ops->map_fd_put_ptr(ptr);
+
+	return ret;
+}
+
+const struct bpf_map_ops rbtree_map_in_map_ops = {
+	.map_alloc_check = rbtree_map_in_map_alloc_check,
+	.map_alloc = rbtree_map_in_map_alloc,
+	.map_free = rbtree_map_in_map_free,
+	.map_get_next_key = rbtree_map_get_next_key,
+	.map_lookup_elem = rbtree_map_in_map_lookup_elem,
+	.map_update_elem = rbtree_map_update_elem,
+	.map_pop_elem = rbtree_map_in_map_pop_elem,
+	.map_delete_elem = rbtree_map_delete_elem,
+	.map_fd_get_ptr = bpf_map_fd_get_ptr,
+	.map_fd_put_ptr = bpf_map_fd_put_ptr,
+	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
+	.map_check_btf = map_check_no_btf,
+	.map_btf_id = &rbtree_map_btf_ids[0],
 };
 

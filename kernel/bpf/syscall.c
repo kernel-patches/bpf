@@ -213,6 +213,11 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 		err = bpf_fd_htab_map_update_elem(map, f.file, key, value,
 						  flags);
 		rcu_read_unlock();
+	} else if (map->map_type == BPF_MAP_TYPE_RBTREE_OF_MAPS) {
+		rcu_read_lock();
+		err = bpf_fd_rbtree_map_update_elem(map, f.file, key, value,
+						    flags);
+		rcu_read_unlock();
 	} else if (map->map_type == BPF_MAP_TYPE_REUSEPORT_SOCKARRAY) {
 		/* rcu_read_lock() is not needed */
 		err = bpf_fd_reuseport_array_update_elem(map, key, value,
@@ -1832,6 +1837,8 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 	    map->map_type == BPF_MAP_TYPE_STACK) {
 		err = map->ops->map_pop_elem(map, value);
+	} else if (map->map_type == BPF_MAP_TYPE_RBTREE_OF_MAPS) {
+		bpf_fd_rbtree_map_pop_elem(map, value);
 	} else if (map->map_type == BPF_MAP_TYPE_HASH ||
 		   map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 		   map->map_type == BPF_MAP_TYPE_LRU_HASH ||

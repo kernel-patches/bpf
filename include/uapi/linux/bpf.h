@@ -936,6 +936,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_BLOOM_FILTER,
 	BPF_MAP_TYPE_USER_RINGBUF,
 	BPF_MAP_TYPE_RBTREE,
+	BPF_MAP_TYPE_RBTREE_OF_MAPS,
 };
 
 /* Note that tracing related programs such as

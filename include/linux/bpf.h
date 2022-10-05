@@ -1913,6 +1913,10 @@ int bpf_fd_array_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
 int bpf_fd_htab_map_update_elem(struct bpf_map *map, struct file *map_file,
 				void *key, void *value, u64 map_flags);
 int bpf_fd_htab_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
+int bpf_fd_rbtree_map_update_elem(struct bpf_map *map, struct file *map_file,
+				  void *key, void *value, u64 map_flags);
+int bpf_fd_rbtree_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
+int bpf_fd_rbtree_map_pop_elem(struct bpf_map *map, void *value);
 
 int bpf_get_file_flag(int flags);
 int bpf_check_uarg_tail_zero(bpfptr_t uaddr, size_t expected_size,
