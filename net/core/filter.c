@@ -7926,6 +7926,21 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+const struct bpf_func_proto bpf_skb_tc_classify_proto __weak;
+
+static const struct bpf_func_proto *
+tc_qdisc_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	switch (func_id) {
+#ifdef CONFIG_NET_CLS_ACT
+	case BPF_FUNC_skb_tc_classify:
+		return &bpf_skb_tc_classify_proto;
+#endif
+	default:
+		return tc_cls_act_func_proto(func_id, prog);
+	}
+}
+
 static const struct bpf_func_proto *
 xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -10656,7 +10671,7 @@ const struct bpf_prog_ops tc_cls_act_prog_ops = {
 };
 
 const struct bpf_verifier_ops tc_qdisc_verifier_ops = {
-	.get_func_proto		= tc_cls_act_func_proto,
+	.get_func_proto		= tc_qdisc_func_proto,
 	.is_valid_access	= tc_cls_act_is_valid_access,
 	.convert_ctx_access	= tc_cls_act_convert_ctx_access,
 	.gen_prologue		= tc_cls_act_prologue,
