@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
+#include <linux/btf_ids.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
@@ -468,9 +469,87 @@ static struct Qdisc_ops sch_bpf_qdisc_ops __read_mostly = {
 	.owner		=	THIS_MODULE,
 };
 
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "Global functions as their definitions will be in vmlinux BTF");
+
+/**
+ * bpf_skb_acquire - Acquire a reference to an skb. An skb acquired by this
+ * kfunc which is not stored in a map as a kptr, must be released by calling
+ * bpf_skb_release().
+ * @p: The skb on which a reference is being acquired.
+ */
+__used noinline
+struct sk_buff *bpf_skb_acquire(struct sk_buff *p)
+{
+	return skb_get(p);
+}
+
+/**
+ * bpf_skb_kptr_get - Acquire a reference on a struct sk_buff kptr. An skb
+ * kptr acquired by this kfunc which is not subsequently stored in a map, must
+ * be released by calling bpf_skb_release().
+ * @pp: A pointer to an skb kptr on which a reference is being acquired.
+ */
+__used noinline
+struct sk_buff *bpf_skb_kptr_get(struct sk_buff **pp)
+{
+	struct sk_buff *p;
+
+	rcu_read_lock();
+	p = READ_ONCE(*pp);
+	if (p && !refcount_inc_not_zero(&p->users))
+		p = NULL;
+	rcu_read_unlock();
+
+	return p;
+}
+
+/**
+ * bpf_skb_release - Release the reference acquired on a struct sk_buff *.
+ * @p: The skb on which a reference is being released.
+ */
+__used noinline void bpf_skb_release(struct sk_buff *p)
+{
+	consume_skb(p);
+}
+
+__diag_pop();
+
+BTF_SET8_START(skb_kfunc_btf_ids)
+BTF_ID_FLAGS(func, bpf_skb_acquire, KF_ACQUIRE)
+BTF_ID_FLAGS(func, bpf_skb_kptr_get, KF_ACQUIRE | KF_KPTR_GET | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_skb_release, KF_RELEASE | KF_TRUSTED_ARGS)
+BTF_SET8_END(skb_kfunc_btf_ids)
+
+static const struct btf_kfunc_id_set skb_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &skb_kfunc_btf_ids,
+};
+
+BTF_ID_LIST(skb_kfunc_dtor_ids)
+BTF_ID(struct, sk_buff)
+BTF_ID(func, bpf_skb_release)
+
 static int __init sch_bpf_mod_init(void)
 {
-	return register_qdisc(&sch_bpf_qdisc_ops);
+	int ret;
+	const struct btf_id_dtor_kfunc skb_kfunc_dtors[] = {
+		{
+			.btf_id       = skb_kfunc_dtor_ids[0],
+			.kfunc_btf_id = skb_kfunc_dtor_ids[1]
+		},
+	};
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_QDISC, &skb_kfunc_set);
+	if (ret)
+		return ret;
+	ret = register_btf_id_dtor_kfuncs(skb_kfunc_dtors,
+					  ARRAY_SIZE(skb_kfunc_dtors),
+					  THIS_MODULE);
+	if (ret == 0)
+		return register_qdisc(&sch_bpf_qdisc_ops);
+	return ret;
 }
 
 static void __exit sch_bpf_mod_exit(void)
