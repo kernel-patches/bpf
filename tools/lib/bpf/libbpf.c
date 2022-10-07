@@ -597,7 +597,7 @@ struct elf_state {
 	size_t shstrndx; /* section index for section name strings */
 	size_t strtabidx;
 	struct elf_sec_desc *secs;
-	int sec_cnt;
+	size_t sec_cnt;
 	int btf_maps_shndx;
 	__u32 btf_maps_sec_btf_id;
 	int text_shndx;
@@ -1364,6 +1364,13 @@ static int bpf_object__elf_init(struct bpf_object *obj)
 
 	if (elf_getshdrstrndx(elf, &obj->efile.shstrndx)) {
 		pr_warn("elf: failed to get section names section index for %s: %s\n",
+			obj->path, elf_errmsg(-1));
+		err = -LIBBPF_ERRNO__FORMAT;
+		goto errout;
+	}
+
+	if (elf_getshdrnum(obj->efile.elf, &obj->efile.sec_cnt)) {
+		pr_warn("elf: failed to get the number of sections for %s: %s\n",
 			obj->path, elf_errmsg(-1));
 		err = -LIBBPF_ERRNO__FORMAT;
 		goto errout;
@@ -3315,7 +3322,6 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 	 * section. e_shnum does include sec #0, so e_shnum is the necessary
 	 * size of an array to keep all the sections.
 	 */
-	obj->efile.sec_cnt = obj->efile.ehdr->e_shnum;
 	obj->efile.secs = calloc(obj->efile.sec_cnt, sizeof(*obj->efile.secs));
 	if (!obj->efile.secs)
 		return -ENOMEM;
