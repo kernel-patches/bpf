@@ -2574,9 +2574,9 @@ union bpf_attr {
  * 		It supports the following *level*\ s:
  *
  * 		* **SOL_SOCKET**, which supports the following *optname*\ s:
- * 		  **SO_RCVBUF**, **SO_SNDBUF**, **SO_MAX_PACING_RATE**,
- * 		  **SO_PRIORITY**, **SO_RCVLOWAT**, **SO_MARK**,
- * 		  **SO_BINDTODEVICE**, **SO_KEEPALIVE**.
+ * 		  **SO_REUSEPORT**, **SO_RCVBUF**, **SO_SNDBUF**,
+ * 		  **SO_MAX_PACING_RATE**, **SO_PRIORITY**, **SO_RCVLOWAT**,
+ * 		  **SO_MARK**, **SO_BINDTODEVICE**, **SO_KEEPALIVE**.
  * 		* **IPPROTO_TCP**, which supports the following *optname*\ s:
  * 		  **TCP_CONGESTION**, **TCP_BPF_IW**,
  * 		  **TCP_BPF_SNDCWND_CLAMP**, **TCP_SAVE_SYN**,
@@ -2802,6 +2802,7 @@ union bpf_attr {
  * 		This helper actually implements a subset of **getsockopt()**.
  * 		It supports the following *level*\ s:
  *
+ * 		* **SOL_SOCKET**, which supports *optname* **SO_REUSEPORT**.
  * 		* **IPPROTO_TCP**, which supports *optname*
  * 		  **TCP_CONGESTION**.
  * 		* **IPPROTO_IP**, which supports *optname* **IP_TOS**.
