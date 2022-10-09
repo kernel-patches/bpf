@@ -910,10 +910,10 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 				 struct btf_ext **btf_ext)
 {
 	Elf_Data *btf_data = NULL, *btf_ext_data = NULL;
-	int err = 0, fd = -1, idx = 0;
+	int err, fd, idx = 0;
 	struct btf *btf = NULL;
-	Elf_Scn *scn = NULL;
-	Elf *elf = NULL;
+	Elf_Scn *scn;
+	Elf *elf;
 	GElf_Ehdr ehdr;
 	size_t shstrndx;
 
@@ -924,9 +924,8 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
-		err = -errno;
 		pr_warn("failed to open %s: %s\n", path, strerror(errno));
-		return ERR_PTR(err);
+		return ERR_PTR(-errno);
 	}
 
 	err = -LIBBPF_ERRNO__FORMAT;
@@ -986,8 +985,6 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 			continue;
 		}
 	}
-
-	err = 0;
 
 	if (!btf_data) {
 		err = -ENOENT;
