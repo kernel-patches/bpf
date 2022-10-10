@@ -1351,8 +1351,10 @@ static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec
 	char *reg_name = NULL;
 	int arg_sz, len, reg_off;
 	long off;
+	int ret;
 
-	if (sscanf(arg_str, " %d @ \[ %m[a-z0-9], %ld ] %n", &arg_sz, &reg_name, &off, &len) == 3) {
+	ret = sscanf(arg_str, " %d @ \[ %m[a-z0-9], %ld ] %n", &arg_sz, &reg_name, &off, &len);
+	if (ret == 3) {
 		/* Memory dereference case, e.g., -4@[sp, 96] */
 		arg->arg_type = USDT_ARG_REG_DEREF;
 		arg->val_off = off;
@@ -1361,32 +1363,37 @@ static int parse_usdt_arg(const char *arg_str, int arg_num, struct usdt_arg_spec
 		if (reg_off < 0)
 			return reg_off;
 		arg->reg_off = reg_off;
-	} else if (sscanf(arg_str, " %d @ \[ %m[a-z0-9] ] %n", &arg_sz, &reg_name, &len) == 2) {
-		/* Memory dereference case, e.g., -4@[sp] */
-		arg->arg_type = USDT_ARG_REG_DEREF;
-		arg->val_off = 0;
-		reg_off = calc_pt_regs_off(reg_name);
-		free(reg_name);
-		if (reg_off < 0)
-			return reg_off;
-		arg->reg_off = reg_off;
-	} else if (sscanf(arg_str, " %d @ %ld %n", &arg_sz, &off, &len) == 2) {
-		/* Constant value case, e.g., 4@5 */
-		arg->arg_type = USDT_ARG_CONST;
-		arg->val_off = off;
-		arg->reg_off = 0;
-	} else if (sscanf(arg_str, " %d @ %m[a-z0-9] %n", &arg_sz, &reg_name, &len) == 2) {
-		/* Register read case, e.g., -8@x4 */
-		arg->arg_type = USDT_ARG_REG;
-		arg->val_off = 0;
-		reg_off = calc_pt_regs_off(reg_name);
-		free(reg_name);
-		if (reg_off < 0)
-			return reg_off;
-		arg->reg_off = reg_off;
 	} else {
-		pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
-		return -EINVAL;
+		if (ret == 2)
+			free(reg_name);
+
+		if (sscanf(arg_str, " %d @ \[ %m[a-z0-9] ] %n", &arg_sz, &reg_name, &len) == 2) {
+			/* Memory dereference case, e.g., -4@[sp] */
+			arg->arg_type = USDT_ARG_REG_DEREF;
+			arg->val_off = 0;
+			reg_off = calc_pt_regs_off(reg_name);
+			free(reg_name);
+			if (reg_off < 0)
+				return reg_off;
+			arg->reg_off = reg_off;
+		} else if (sscanf(arg_str, " %d @ %ld %n", &arg_sz, &off, &len) == 2) {
+			/* Constant value case, e.g., 4@5 */
+			arg->arg_type = USDT_ARG_CONST;
+			arg->val_off = off;
+			arg->reg_off = 0;
+		} else if (sscanf(arg_str, " %d @ %m[a-z0-9] %n", &arg_sz, &reg_name, &len) == 2) {
+			/* Register read case, e.g., -8@x4 */
+			arg->arg_type = USDT_ARG_REG;
+			arg->val_off = 0;
+			reg_off = calc_pt_regs_off(reg_name);
+			free(reg_name);
+			if (reg_off < 0)
+				return reg_off;
+			arg->reg_off = reg_off;
+		} else {
+			pr_warn("usdt: unrecognized arg #%d spec '%s'\n", arg_num, arg_str);
+			return -EINVAL;
+		}
 	}
 
 	arg->arg_signed = arg_sz < 0;
