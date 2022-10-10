@@ -219,6 +219,17 @@ static int btf_dump_resize(struct btf_dump *d)
 	return 0;
 }
 
+static void btf_dump_free_names(struct hashmap *map)
+{
+	size_t bkt;
+	struct hashmap_entry *cur;
+
+	hashmap__for_each_entry(map, cur, bkt)
+		free((void *)cur->key);
+
+	hashmap__free(map);
+}
+
 void btf_dump__free(struct btf_dump *d)
 {
 	int i;
@@ -237,8 +248,8 @@ void btf_dump__free(struct btf_dump *d)
 	free(d->cached_names);
 	free(d->emit_queue);
 	free(d->decl_stack);
-	hashmap__free(d->type_names);
-	hashmap__free(d->ident_names);
+	btf_dump_free_names(d->type_names);
+	btf_dump_free_names(d->ident_names);
 
 	free(d);
 }
@@ -634,8 +645,8 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 
 static const char *btf_dump_type_name(struct btf_dump *d, __u32 id);
 static const char *btf_dump_ident_name(struct btf_dump *d, __u32 id);
-static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
-				 const char *orig_name);
+static ssize_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
+				  const char *orig_name);
 
 static bool btf_dump_is_blacklisted(struct btf_dump *d, __u32 id)
 {
@@ -991,7 +1002,7 @@ static void btf_dump_emit_enum32_val(struct btf_dump *d,
 	bool is_signed = btf_kflag(t);
 	const char *fmt_str;
 	const char *name;
-	size_t dup_cnt;
+	ssize_t dup_cnt;
 	int i;
 
 	for (i = 0; i < vlen; i++, v++) {
@@ -1016,7 +1027,7 @@ static void btf_dump_emit_enum64_val(struct btf_dump *d,
 	bool is_signed = btf_kflag(t);
 	const char *fmt_str;
 	const char *name;
-	size_t dup_cnt;
+	ssize_t dup_cnt;
 	__u64 val;
 	int i;
 
@@ -1517,14 +1528,30 @@ static void btf_dump_emit_type_cast(struct btf_dump *d, __u32 id,
 }
 
 /* return number of duplicates (occurrences) of a given name */
-static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
-				 const char *orig_name)
+static ssize_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
+				  const char *orig_name)
 {
-	size_t dup_cnt = 0;
+	int err;
+	char *old_name;
+	char *new_name;
+	ssize_t dup_cnt = 0;
+
+	new_name = strdup(orig_name);
+	if (!new_name)
+		return -ENOMEM;
 
 	hashmap__find(name_map, orig_name, (void **)&dup_cnt);
 	dup_cnt++;
-	hashmap__set(name_map, orig_name, (void *)dup_cnt, NULL, NULL);
+
+	err = hashmap__set(name_map, new_name, (void *)dup_cnt,
+			   (const void **)&old_name, NULL);
+	if (err) {
+		free(new_name);
+		return err;
+	}
+
+	if (old_name)
+		free(old_name);
 
 	return dup_cnt;
 }
