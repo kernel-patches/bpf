@@ -360,15 +360,14 @@ static int get_syms(char ***symsp, size_t *cntp)
 		 * to them. Filter out the current culprits - arch_cpu_idle
 		 * and rcu_* functions.
 		 */
-		if (!strcmp(name, "arch_cpu_idle"))
+		if (!strcmp(name, "arch_cpu_idle") ||
+			!strncmp(name, "rcu_", 4) ||
+			!strcmp(name, "bpf_dispatcher_xdp_func") ||
+			!strncmp(name, "__ftrace_invalid_address__",
+				 sizeof("__ftrace_invalid_address__") - 1)) {
+			free(name);
 			continue;
-		if (!strncmp(name, "rcu_", 4))
-			continue;
-		if (!strcmp(name, "bpf_dispatcher_xdp_func"))
-			continue;
-		if (!strncmp(name, "__ftrace_invalid_address__",
-			     sizeof("__ftrace_invalid_address__") - 1))
-			continue;
+		}
 		err = hashmap__add(map, name, NULL);
 		if (err) {
 			free(name);
@@ -394,7 +393,7 @@ error:
 	hashmap__free(map);
 	if (err) {
 		for (i = 0; i < cnt; i++)
-			free(syms[cnt]);
+			free(syms[i]);
 		free(syms);
 	}
 	return err;
