@@ -154,7 +154,7 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	return &array->map;
 }
 
-static void *array_map_elem_ptr(struct bpf_array* array, u32 index)
+static void *array_map_elem_ptr(struct bpf_array *array, u32 index)
 {
 	return array->value + (u64)array->elem_size * index;
 }
@@ -814,9 +814,11 @@ int bpf_fd_array_map_lookup_elem(struct bpf_map *map, void *key, u32 *value)
 
 	rcu_read_lock();
 	elem = array_map_lookup_elem(map, key);
-	if (elem && (ptr = READ_ONCE(*elem)))
-		*value = map->ops->map_fd_sys_lookup_elem(ptr);
-	else
+	if (elem) {
+		ptr = READ_ONCE(*elem);
+		if (ptr)
+			*value = map->ops->map_fd_sys_lookup_elem(ptr);
+	} else
 		ret = -ENOENT;
 	rcu_read_unlock();
 

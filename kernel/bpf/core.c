@@ -467,9 +467,11 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	 * We need to probe here before we do any reallocation where
 	 * we afterwards may not fail anymore.
 	 */
-	if (insn_adj_cnt > cnt_max &&
-	    (err = bpf_adj_branches(prog, off, off + 1, off + len, true)))
-		return ERR_PTR(err);
+	if (insn_adj_cnt > cnt_max) {
+		err = bpf_adj_branches(prog, off, off + 1, off + len, true);
+		if (err)
+			return ERR_PTR(err);
+	}
 
 	/* Several new instructions need to be inserted. Make room
 	 * for them. Likely, there's no need for a new allocation as
