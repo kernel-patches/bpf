@@ -34,7 +34,7 @@ run_one() {
 	ip -netns "${PEER_NS}" addr add dev veth1 2001:db8::1/64 nodad
 	ip -netns "${PEER_NS}" link set dev veth1 up
 
-	ip -n "${PEER_NS}" link set veth1 xdp object ../bpf/xdp_dummy.o section xdp
+	ip -n "${PEER_NS}" link set veth1 xdp object ../bpf/xdp_dummy.bpf.o section xdp
 	ip netns exec "${PEER_NS}" ./udpgso_bench_rx ${rx_args} -r &
 	ip netns exec "${PEER_NS}" ./udpgso_bench_rx -t ${rx_args} -r &
 
@@ -80,7 +80,7 @@ run_all() {
 	run_udp "${ipv6_args}"
 }
 
-if [ ! -f ../bpf/xdp_dummy.o ]; then
+if [ ! -f ../bpf/xdp_dummy.bpf.o ]; then
 	echo "Missing xdp_dummy helper. Build bpf selftest first"
 	exit -1
 fi
