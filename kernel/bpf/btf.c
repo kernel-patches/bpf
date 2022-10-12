@@ -1943,8 +1943,8 @@ const struct btf_type *btf_type_id_size(const struct btf *btf,
 	} else if (btf_type_is_ptr(size_type)) {
 		size = sizeof(void *);
 	} else {
-		if (WARN_ON_ONCE(!btf_type_is_modifier(size_type) &&
-				 !btf_type_is_var(size_type)))
+		if (!btf_type_is_modifier(size_type) &&
+		    !btf_type_is_var(size_type))
 			return NULL;
 
 		size_type_id = btf_resolved_type_id(btf, size_type_id);
