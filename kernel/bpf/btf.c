@@ -5316,8 +5316,8 @@ static bool is_int_ptr(struct btf *btf, const struct btf_type *t)
 	/* t comes in already as a pointer */
 	t = btf_type_by_id(btf, t->type);
 
-	/* allow const */
-	if (BTF_INFO_KIND(t->info) == BTF_KIND_CONST)
+	/* skip modifiers */
+	while (btf_type_is_modifier(t))
 		t = btf_type_by_id(btf, t->type);
 
 	return btf_type_is_int(t);
