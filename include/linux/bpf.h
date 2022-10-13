@@ -192,6 +192,7 @@ struct btf_field_list_head {
 	struct btf *btf;
 	u32 value_btf_id;
 	u32 node_offset;
+	struct btf_type_fields *value_tab;
 };
 
 struct btf_field {
