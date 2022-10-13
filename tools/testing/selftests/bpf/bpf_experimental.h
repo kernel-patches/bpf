@@ -52,4 +52,32 @@ extern void bpf_kptr_drop_impl(void *kptr, void *meta__ign) __ksym;
 /* Convenience macro to wrap over bpf_kptr_drop_impl */
 #define bpf_kptr_drop(kptr) bpf_kptr_drop_impl(kptr, NULL)
 
+/* Description
+ *	Add a new entry to the head of the BPF linked list.
+ * Returns
+ *	Void.
+ */
+extern void bpf_list_add(struct bpf_list_node *node, struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Add a new entry to the tail of the BPF linked list.
+ * Returns
+ *	Void.
+ */
+extern void bpf_list_add_tail(struct bpf_list_node *node, struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Remove the entry at head of the BPF linked list.
+ * Returns
+ *	Pointer to bpf_list_node of deleted entry, or NULL if list is empty.
+ */
+extern struct bpf_list_node *bpf_list_del(struct bpf_list_head *head) __ksym;
+
+/* Description
+ *	Remove the entry at tail of the BPF linked list.
+ * Returns
+ *	Pointer to bpf_list_node of deleted entry, or NULL if list is empty.
+ */
+extern struct bpf_list_node *bpf_list_del_tail(struct bpf_list_head *head) __ksym;
+
 #endif
