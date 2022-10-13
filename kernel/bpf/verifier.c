@@ -4522,16 +4522,20 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (env->ops->btf_struct_access) {
-		ret = env->ops->btf_struct_access(&env->log, reg->btf, t,
+	if (env->ops->btf_struct_access && !(type_flag(reg->type) & MEM_TYPE_LOCAL)) {
+		WARN_ON_ONCE(!btf_is_kernel(reg->btf));
+		ret = env->ops->btf_struct_access(&env->log, reg, reg->btf, t,
 						  off, size, atype, &btf_id, &flag);
 	} else {
-		if (atype != BPF_READ) {
+		if (atype != BPF_READ && !(type_flag(reg->type) & MEM_TYPE_LOCAL)) {
 			verbose(env, "only read is supported\n");
 			return -EACCES;
 		}
 
-		ret = btf_struct_access(&env->log, reg->btf, t, off, size,
+		if (reg->type & MEM_TYPE_LOCAL)
+			WARN_ON_ONCE(!reg->ref_obj_id);
+
+		ret = btf_struct_access(&env->log, reg, reg->btf, t, off, size,
 					atype, &btf_id, &flag);
 	}
 
@@ -4596,7 +4600,7 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	ret = btf_struct_access(&env->log, btf_vmlinux, t, off, size, atype, &btf_id, &flag);
+	ret = btf_struct_access(&env->log, NULL, btf_vmlinux, t, off, size, atype, &btf_id, &flag);
 	if (ret < 0)
 		return ret;
 
@@ -5816,6 +5820,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	 * fixed offset.
 	 */
 	case PTR_TO_BTF_ID:
+	case PTR_TO_BTF_ID | MEM_TYPE_LOCAL:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * it's fixed offset must be 0.	In the other cases, fixed offset
 		 * can be non-zero.
