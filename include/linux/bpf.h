@@ -55,6 +55,8 @@ struct cgroup;
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
 extern struct kobject *btf_kobj;
+extern struct bpf_mem_alloc bpf_global_ma;
+extern bool bpf_global_ma_set;
 
 typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
@@ -335,16 +337,19 @@ static inline bool btf_type_fields_has_field(const struct btf_type_fields *tab, 
 	return tab->field_mask & type;
 }
 
+static inline void bpf_obj_init(const struct btf_type_fields_off *off_arr, void *obj)
+{
+	int i;
+
+	if (!off_arr)
+		return;
+	for (i = 0; i < off_arr->cnt; i++)
+		memset(obj + off_arr->field_off[i], 0, off_arr->field_sz[i]);
+}
+
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 {
-	if (!IS_ERR_OR_NULL(map->fields_tab)) {
-		struct btf_field *fields = map->fields_tab->fields;
-		u32 cnt = map->fields_tab->cnt;
-		int i;
-
-		for (i = 0; i < cnt; i++)
-			memset(dst + fields[i].offset, 0, btf_field_type_size(fields[i].type));
-	}
+	bpf_obj_init(map->off_arr, dst);
 }
 
 /* memcpy that is used with 8-byte aligned pointers, power-of-8 size and
