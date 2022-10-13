@@ -39,4 +39,17 @@ extern void *bpf_kptr_new_impl(__u64 local_type_id, __u64 flags, void *meta__ign
 /* Convenience macro to wrap over bpf_kptr_new_impl */
 #define bpf_kptr_new(type) bpf_kptr_new_impl(bpf_core_type_id_local(type), 0, NULL)
 
+/* Description
+ *	Free a local kptr. All fields of local kptr that require destruction
+ *	will be destructed before the storage is freed.
+ *
+ *	The 'meta__ign' parameter is a hidden argument that is ignored.
+ * Returns
+ *	Void.
+ */
+extern void bpf_kptr_drop_impl(void *kptr, void *meta__ign) __ksym;
+
+/* Convenience macro to wrap over bpf_kptr_drop_impl */
+#define bpf_kptr_drop(kptr) bpf_kptr_drop_impl(kptr, NULL)
+
 #endif
