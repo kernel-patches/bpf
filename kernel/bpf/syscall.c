@@ -943,68 +943,6 @@ int map_check_no_btf(const struct bpf_map *map,
 	return -ENOTSUPP;
 }
 
-static int map_off_arr_cmp(const void *_a, const void *_b, const void *priv)
-{
-	const u32 a = *(const u32 *)_a;
-	const u32 b = *(const u32 *)_b;
-
-	if (a < b)
-		return -1;
-	else if (a > b)
-		return 1;
-	return 0;
-}
-
-static void map_off_arr_swap(void *_a, void *_b, int size, const void *priv)
-{
-	struct bpf_map *map = (struct bpf_map *)priv;
-	u32 *off_base = map->off_arr->field_off;
-	u32 *a = _a, *b = _b;
-	u8 *sz_a, *sz_b;
-
-	sz_a = map->off_arr->field_sz + (a - off_base);
-	sz_b = map->off_arr->field_sz + (b - off_base);
-
-	swap(*a, *b);
-	swap(*sz_a, *sz_b);
-}
-
-static int bpf_map_alloc_off_arr(struct bpf_map *map)
-{
-	bool has_fields = !IS_ERR_OR_NULL(map);
-	struct btf_type_fields_off *off_arr;
-	u32 i;
-
-	if (!has_fields) {
-		map->off_arr = NULL;
-		return 0;
-	}
-
-	off_arr = kmalloc(sizeof(*map->off_arr), GFP_KERNEL | __GFP_NOWARN);
-	if (!off_arr)
-		return -ENOMEM;
-	map->off_arr = off_arr;
-
-	off_arr->cnt = 0;
-	if (has_fields) {
-		struct btf_type_fields *tab = map->fields_tab;
-		u32 *off = &off_arr->field_off[off_arr->cnt];
-		u8 *sz = &off_arr->field_sz[off_arr->cnt];
-
-		for (i = 0; i < tab->cnt; i++) {
-			*off++ = tab->fields[i].offset;
-			*sz++ = btf_field_type_size(tab->fields[i].type);
-		}
-		off_arr->cnt = tab->cnt;
-	}
-
-	if (off_arr->cnt == 1)
-		return 0;
-	sort_r(off_arr->field_off, off_arr->cnt, sizeof(off_arr->field_off[0]),
-	       map_off_arr_cmp, map_off_arr_swap, map);
-	return 0;
-}
-
 static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 			 u32 btf_key_id, u32 btf_value_id)
 {
@@ -1098,6 +1036,7 @@ free_map_tab:
 static int map_create(union bpf_attr *attr)
 {
 	int numa_node = bpf_map_attr_numa_node(attr);
+	struct btf_type_fields_off *off_arr;
 	struct bpf_map *map;
 	int f_flags;
 	int err;
@@ -1177,9 +1116,13 @@ static int map_create(union bpf_attr *attr)
 			attr->btf_vmlinux_value_type_id;
 	}
 
-	err = bpf_map_alloc_off_arr(map);
-	if (err)
+
+	off_arr = btf_parse_fields_off(map->fields_tab);
+	if (IS_ERR(off_arr)) {
+		err = PTR_ERR(off_arr);
 		goto free_map;
+	}
+	map->off_arr = off_arr;
 
 	err = security_bpf_map_alloc(map);
 	if (err)

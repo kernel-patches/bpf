@@ -3556,6 +3556,61 @@ end:
 	return ERR_PTR(ret);
 }
 
+static int btf_type_fields_off_cmp(const void *_a, const void *_b, const void *priv)
+{
+	const u32 a = *(const u32 *)_a;
+	const u32 b = *(const u32 *)_b;
+
+	if (a < b)
+		return -1;
+	else if (a > b)
+		return 1;
+	return 0;
+}
+
+static void btf_type_fields_off_swap(void *_a, void *_b, int size, const void *priv)
+{
+	struct btf_type_fields_off *off_arr = (void *)priv;
+	u32 *off_base = off_arr->field_off;
+	u32 *a = _a, *b = _b;
+	u8 *sz_a, *sz_b;
+
+	sz_a = off_arr->field_sz + (a - off_base);
+	sz_b = off_arr->field_sz + (b - off_base);
+
+	swap(*a, *b);
+	swap(*sz_a, *sz_b);
+}
+
+struct btf_type_fields_off *btf_parse_fields_off(struct btf_type_fields *tab)
+{
+	struct btf_type_fields_off *off_arr;
+	u32 i, *off;
+	u8 *sz;
+
+	BUILD_BUG_ON(ARRAY_SIZE(off_arr->field_off) != ARRAY_SIZE(off_arr->field_sz));
+	if (IS_ERR_OR_NULL(tab) || WARN_ON_ONCE(tab->cnt > sizeof(off_arr->field_off)))
+		return NULL;
+
+	off_arr = kzalloc(sizeof(*off_arr), GFP_KERNEL | __GFP_NOWARN);
+	if (!off_arr)
+		return ERR_PTR(-ENOMEM);
+
+	off = &off_arr->field_off[0];
+	sz = &off_arr->field_sz[0];
+	for (i = 0; i < tab->cnt; i++) {
+		off[i] = tab->fields[i].offset;
+		sz[i] = btf_field_type_size(tab->fields[i].type);
+	}
+	off_arr->cnt = tab->cnt;
+
+	if (off_arr->cnt == 1)
+		return off_arr;
+	sort_r(off_arr->field_off, off_arr->cnt, sizeof(off_arr->field_off[0]),
+	       btf_type_fields_off_cmp, btf_type_fields_off_swap, off_arr);
+	return off_arr;
+}
+
 static void __btf_struct_show(const struct btf *btf, const struct btf_type *t,
 			      u32 type_id, void *data, u8 bits_offset,
 			      struct btf_show *show)
