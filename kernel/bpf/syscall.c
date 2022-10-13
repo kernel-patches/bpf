@@ -537,6 +537,7 @@ void btf_type_fields_free(struct btf_type_fields *tab)
 			btf_put(tab->fields[i].kptr.btf);
 			break;
 		case BPF_LIST_HEAD:
+		case BPF_LIST_NODE:
 			/* Nothing to release for bpf_list_head */
 			break;
 		default:
@@ -582,6 +583,7 @@ struct btf_type_fields *btf_type_fields_dup(const struct btf_type_fields *tab)
 			}
 			break;
 		case BPF_LIST_HEAD:
+		case BPF_LIST_NODE:
 			/* Nothing to acquire for bpf_list_head */
 			break;
 		default:
@@ -647,6 +649,8 @@ void bpf_obj_free_fields(const struct btf_type_fields *tab, void *obj)
 			if (WARN_ON_ONCE(tab->spin_lock_off < 0))
 				continue;
 			bpf_list_head_free(field, field_ptr, obj + tab->spin_lock_off);
+			break;
+		case BPF_LIST_NODE:
 			break;
 		default:
 			WARN_ON_ONCE(1);
