@@ -164,7 +164,8 @@ bool btf_member_is_reg_int(const struct btf *btf, const struct btf_type *s,
 int btf_find_spin_lock(const struct btf *btf, const struct btf_type *t);
 int btf_find_timer(const struct btf *btf, const struct btf_type *t);
 struct btf_type_fields *btf_parse_fields(const struct btf *btf,
-					 const struct btf_type *t);
+					 const struct btf_type *t,
+					 u32 field_mask, u32 value_size);
 bool btf_type_is_void(const struct btf_type *t);
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind);
 const struct btf_type *btf_type_skip_modifiers(const struct btf *btf,

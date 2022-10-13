@@ -151,7 +151,7 @@ static int cgroup_storage_update_elem(struct bpf_map *map, void *key,
 		return -EINVAL;
 
 	if (unlikely((flags & BPF_F_LOCK) &&
-		     !map_value_has_spin_lock(map)))
+		     !btf_type_fields_has_field(map->fields_tab, BPF_SPIN_LOCK)))
 		return -EINVAL;
 
 	storage = cgroup_storage_lookup((struct bpf_cgroup_storage_map *)map,
