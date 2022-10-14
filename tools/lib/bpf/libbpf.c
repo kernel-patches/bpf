@@ -164,6 +164,7 @@ static const char * const map_type_name[] = {
 	[BPF_MAP_TYPE_TASK_STORAGE]		= "task_storage",
 	[BPF_MAP_TYPE_BLOOM_FILTER]		= "bloom_filter",
 	[BPF_MAP_TYPE_USER_RINGBUF]             = "user_ringbuf",
+	[BPF_MAP_TYPE_CGROUP_LOCAL_STORAGE]	= "cgroup_local_storage",
 };
 
 static const char * const prog_type_name[] = {
