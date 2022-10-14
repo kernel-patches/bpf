@@ -1454,6 +1454,10 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_current_cgroup_id_proto;
 	case BPF_FUNC_get_current_ancestor_cgroup_id:
 		return &bpf_get_current_ancestor_cgroup_id_proto;
+	case BPF_FUNC_cgroup_local_storage_get:
+		return &bpf_cgroup_storage_get_proto;
+	case BPF_FUNC_cgroup_local_storage_delete:
+		return &bpf_cgroup_storage_delete_proto;
 #endif
 	case BPF_FUNC_send_signal:
 		return &bpf_send_signal_proto;

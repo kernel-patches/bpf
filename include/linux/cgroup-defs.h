@@ -504,6 +504,10 @@ struct cgroup {
 	/* Used to store internal freezer state */
 	struct cgroup_freezer_state freezer;
 
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_local_storage __rcu  *bpf_cgroup_storage;
+#endif
+
 	/* ids of the ancestors at each level including self */
 	u64 ancestor_ids[];
 };

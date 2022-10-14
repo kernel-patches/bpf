@@ -985,6 +985,10 @@ void put_css_set_locked(struct css_set *cset)
 		put_css_set_locked(cset->dom_cset);
 	}
 
+#ifdef CONFIG_BPF_SYSCALL
+	bpf_local_cgroup_storage_free(cset->dfl_cgrp);
+#endif
+
 	kfree_rcu(cset, rcu_head);
 }
 
