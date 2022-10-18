@@ -647,6 +647,11 @@ static void sk_psock_backlog(struct work_struct *work)
 	int ret;
 
 	mutex_lock(&psock->work_mutex);
+	lock_sock(psock->sk);
+
+	if (!sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+		goto end;
+
 	if (unlikely(state->skb)) {
 		spin_lock_bh(&psock->ingress_lock);
 		skb = state->skb;
@@ -672,9 +677,12 @@ start:
 		skb_bpf_redirect_clear(skb);
 		do {
 			ret = -EIO;
-			if (!sock_flag(psock->sk, SOCK_DEAD))
+			if (!sock_flag(psock->sk, SOCK_DEAD)) {
+				release_sock(psock->sk);
 				ret = sk_psock_handle_skb(psock, skb, off,
 							  len, ingress);
+				lock_sock(psock->sk);
+			}
 			if (ret <= 0) {
 				if (ret == -EAGAIN) {
 					sk_psock_skb_state(psock, state, skb,
@@ -695,6 +703,7 @@ start:
 			kfree_skb(skb);
 	}
 end:
+	release_sock(psock->sk);
 	mutex_unlock(&psock->work_mutex);
 }
 
@@ -803,16 +812,14 @@ static void sk_psock_link_destroy(struct sk_psock *psock)
 	}
 }
 
-void sk_psock_stop(struct sk_psock *psock, bool wait)
+void sk_psock_stop(struct sk_psock *psock)
 {
 	spin_lock_bh(&psock->ingress_lock);
 	sk_psock_clear_state(psock, SK_PSOCK_TX_ENABLED);
 	sk_psock_cork_free(psock);
 	__sk_psock_zap_ingress(psock);
 	spin_unlock_bh(&psock->ingress_lock);
-
-	if (wait)
-		cancel_work_sync(&psock->work);
+	cancel_work(&psock->work);
 }
 
 static void sk_psock_done_strp(struct sk_psock *psock);
@@ -850,7 +857,7 @@ void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 		sk_psock_stop_verdict(sk, psock);
 	write_unlock_bh(&sk->sk_callback_lock);
 
-	sk_psock_stop(psock, false);
+	sk_psock_stop(psock);
 
 	INIT_RCU_WORK(&psock->rwork, sk_psock_destroy);
 	queue_rcu_work(system_wq, &psock->rwork);
