@@ -668,13 +668,13 @@ static struct {
 	const char *expected_err_msg;
 } failure_tests[] = {
 	/* failure cases */
-	{"user_ringbuf_callback_bad_access1", "negative offset dynptr_ptr ptr"},
-	{"user_ringbuf_callback_bad_access2", "dereference of modified dynptr_ptr ptr"},
-	{"user_ringbuf_callback_write_forbidden", "invalid mem access 'dynptr_ptr'"},
+	{"user_ringbuf_callback_bad_access1", "negative offset dynptr ptr"},
+	{"user_ringbuf_callback_bad_access2", "dereference of modified dynptr ptr"},
+	{"user_ringbuf_callback_write_forbidden", "invalid mem access 'dynptr'"},
 	{"user_ringbuf_callback_null_context_write", "invalid mem access 'scalar'"},
 	{"user_ringbuf_callback_null_context_read", "invalid mem access 'scalar'"},
-	{"user_ringbuf_callback_discard_dynptr", "arg 1 is an unacquired reference"},
-	{"user_ringbuf_callback_submit_dynptr", "arg 1 is an unacquired reference"},
+	{"user_ringbuf_callback_discard_dynptr", "cannot release unowned const bpf_dynptr"},
+	{"user_ringbuf_callback_submit_dynptr", "cannot release unowned const bpf_dynptr"},
 	{"user_ringbuf_callback_invalid_return", "At callback return the register R0 has value"},
 };
 

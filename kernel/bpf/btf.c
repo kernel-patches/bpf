@@ -6479,14 +6479,15 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				}
 
 				if (arg_dynptr) {
-					if (reg->type != PTR_TO_STACK) {
-						bpf_log(log, "arg#%d pointer type %s %s not to stack\n",
+					if (reg->type != PTR_TO_STACK &&
+					    reg->type != CONST_PTR_TO_DYNPTR) {
+						bpf_log(log, "arg#%d pointer type %s %s not to stack or dynptr\n",
 							i, btf_type_str(ref_t),
 							ref_tname);
 						return -EINVAL;
 					}
 
-					if (process_dynptr_func(env, regno, ARG_PTR_TO_DYNPTR, i, NULL))
+					if (process_dynptr_func(env, regno, ARG_PTR_TO_DYNPTR | MEM_RDONLY, i, NULL))
 						return -EINVAL;
 					continue;
 				}
