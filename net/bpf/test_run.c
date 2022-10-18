@@ -762,28 +762,38 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ref, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_destructive, KF_DESTRUCTIVE)
 BTF_SET8_END(test_sk_check_kfunc_ids)
 
-static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
-			   u32 size, u32 headroom, u32 tailroom)
+struct bpfalloc {
+	size_t len;
+	void  *data;
+};
+
+static int bpf_test_init(struct bpfalloc *alloc,
+			 const union bpf_attr *kattr, u32 user_size,
+			 u32 size, u32 headroom, u32 tailroom)
 {
 	void __user *data_in = u64_to_user_ptr(kattr->test.data_in);
-	void *data;
 
 	if (size < ETH_HLEN || size > PAGE_SIZE - headroom - tailroom)
-		return ERR_PTR(-EINVAL);
+		return -EINVAL;
 
 	if (user_size > size)
-		return ERR_PTR(-EMSGSIZE);
+		return -EMSGSIZE;
 
-	data = kzalloc(size + headroom + tailroom, GFP_USER);
-	if (!data)
-		return ERR_PTR(-ENOMEM);
-
-	if (copy_from_user(data + headroom, data_in, user_size)) {
-		kfree(data);
-		return ERR_PTR(-EFAULT);
+	alloc->len = kmalloc_size_roundup(size + headroom + tailroom);
+	alloc->data = kzalloc(alloc->len, GFP_USER);
+	if (!alloc->data) {
+		alloc->len = 0;
+		return -ENOMEM;
 	}
 
-	return data;
+	if (copy_from_user(alloc->data + headroom, data_in, user_size)) {
+		kfree(alloc->data);
+		alloc->data = NULL;
+		alloc->len = 0;
+		return -EFAULT;
+	}
+
+	return 0;
 }
 
 int bpf_prog_test_run_tracing(struct bpf_prog *prog,
@@ -1086,25 +1096,25 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 size = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
 	struct __sk_buff *ctx = NULL;
+	struct bpfalloc alloc = { };
 	u32 retval, duration;
 	int hh_len = ETH_HLEN;
 	struct sk_buff *skb;
 	struct sock *sk;
-	void *data;
 	int ret;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
 
-	data = bpf_test_init(kattr, kattr->test.data_size_in,
-			     size, NET_SKB_PAD + NET_IP_ALIGN,
-			     SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
-	if (IS_ERR(data))
-		return PTR_ERR(data);
+	ret = bpf_test_init(&alloc, kattr, kattr->test.data_size_in,
+			    size, NET_SKB_PAD + NET_IP_ALIGN,
+			    SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
+	if (ret)
+		return ret;
 
 	ctx = bpf_ctx_init(kattr, sizeof(struct __sk_buff));
 	if (IS_ERR(ctx)) {
-		kfree(data);
+		kfree(alloc.data);
 		return PTR_ERR(ctx);
 	}
 
@@ -1124,15 +1134,15 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 
 	sk = sk_alloc(net, AF_UNSPEC, GFP_USER, &bpf_dummy_proto, 1);
 	if (!sk) {
-		kfree(data);
+		kfree(alloc.data);
 		kfree(ctx);
 		return -ENOMEM;
 	}
 	sock_init_data(NULL, sk);
 
-	skb = build_skb(data, 0);
+	skb = build_skb(alloc.data, alloc.len);
 	if (!skb) {
-		kfree(data);
+		kfree(alloc.data);
 		kfree(ctx);
 		sk_free(sk);
 		return -ENOMEM;
@@ -1283,10 +1293,10 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct skb_shared_info *sinfo;
+	struct bpfalloc alloc = {};
 	struct xdp_buff xdp = {};
 	int i, ret = -EINVAL;
 	struct xdp_md *ctx;
-	void *data;
 
 	if (prog->expected_attach_type == BPF_XDP_DEVMAP ||
 	    prog->expected_attach_type == BPF_XDP_CPUMAP)
@@ -1329,16 +1339,14 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 		size = max_data_sz;
 	}
 
-	data = bpf_test_init(kattr, size, max_data_sz, headroom, tailroom);
-	if (IS_ERR(data)) {
-		ret = PTR_ERR(data);
+	ret = bpf_test_init(&alloc, kattr, size, max_data_sz, headroom, tailroom);
+	if (ret)
 		goto free_ctx;
-	}
 
 	rxqueue = __netif_get_rx_queue(current->nsproxy->net_ns->loopback_dev, 0);
 	rxqueue->xdp_rxq.frag_size = headroom + max_data_sz + tailroom;
 	xdp_init_buff(&xdp, rxqueue->xdp_rxq.frag_size, &rxqueue->xdp_rxq);
-	xdp_prepare_buff(&xdp, data, headroom, size, true);
+	xdp_prepare_buff(&xdp, alloc.data, headroom, size, true);
 	sinfo = xdp_get_shared_info_from_buff(&xdp);
 
 	ret = xdp_convert_md_to_buff(ctx, &xdp);
@@ -1410,7 +1418,7 @@ out:
 free_data:
 	for (i = 0; i < sinfo->nr_frags; i++)
 		__free_page(skb_frag_page(&sinfo->frags[i]));
-	kfree(data);
+	kfree(alloc.data);
 free_ctx:
 	kfree(ctx);
 	return ret;
@@ -1441,10 +1449,10 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	u32 repeat = kattr->test.repeat;
 	struct bpf_flow_keys *user_ctx;
 	struct bpf_flow_keys flow_keys;
+	struct bpfalloc alloc = {};
 	const struct ethhdr *eth;
 	unsigned int flags = 0;
 	u32 retval, duration;
-	void *data;
 	int ret;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
@@ -1453,18 +1461,18 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	if (size < ETH_HLEN)
 		return -EINVAL;
 
-	data = bpf_test_init(kattr, kattr->test.data_size_in, size, 0, 0);
-	if (IS_ERR(data))
-		return PTR_ERR(data);
+	ret = bpf_test_init(&alloc, kattr, kattr->test.data_size_in, size, 0, 0);
+	if (ret)
+		return ret;
 
-	eth = (struct ethhdr *)data;
+	eth = (struct ethhdr *)alloc.data;
 
 	if (!repeat)
 		repeat = 1;
 
 	user_ctx = bpf_ctx_init(kattr, sizeof(struct bpf_flow_keys));
 	if (IS_ERR(user_ctx)) {
-		kfree(data);
+		kfree(alloc.data);
 		return PTR_ERR(user_ctx);
 	}
 	if (user_ctx) {
@@ -1475,8 +1483,8 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	}
 
 	ctx.flow_keys = &flow_keys;
-	ctx.data = data;
-	ctx.data_end = (__u8 *)data + size;
+	ctx.data = alloc.data;
+	ctx.data_end = (__u8 *)alloc.data + size;
 
 	bpf_test_timer_enter(&t);
 	do {
@@ -1496,7 +1504,7 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 
 out:
 	kfree(user_ctx);
-	kfree(data);
+	kfree(alloc.data);
 	return ret;
 }
 
