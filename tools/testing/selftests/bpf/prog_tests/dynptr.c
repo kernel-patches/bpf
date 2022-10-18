@@ -42,11 +42,14 @@ static struct {
 	{"release_twice_callback", "arg 1 is an unacquired reference"},
 	{"dynptr_from_mem_invalid_api",
 		"Unsupported reg type fp for bpf_dynptr_from_mem data"},
+	{"dynptr_read_into_slot", "potential write to dynptr at off=-16"},
+	{"uninit_write_into_slot", "potential write to dynptr at off=-16"},
 
 	/* success cases */
 	{"test_read_write", NULL},
 	{"test_data_slice", NULL},
 	{"test_ringbuf", NULL},
+	{"test_overlap", NULL},
 };
 
 static void verify_fail(const char *prog_name, const char *expected_err_msg)

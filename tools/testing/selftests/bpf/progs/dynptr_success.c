@@ -162,3 +162,23 @@ done:
 	bpf_ringbuf_discard_dynptr(&ptr, 0);
 	return 0;
 }
+
+SEC("tp/syscalls/sys_enter_nanosleep")
+int test_overlap(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	void *p;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+	bpf_ringbuf_reserve_dynptr(&ringbuf, 16, 0, &ptr);
+	p = bpf_dynptr_data(&ptr, 0, 16);
+	if (!p) {
+		err = 1;
+		goto done;
+	}
+	bpf_dynptr_read(p + 1, 8, &ptr, 0, 0);
+done:
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+	return 0;
+}
