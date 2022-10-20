@@ -6,6 +6,7 @@
 #include <linux/irq_work.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
+#include <linux/nodemask.h>
 #include <asm/local.h>
 
 /* Any context (including NMI) BPF specific memory allocator.
@@ -98,6 +99,7 @@ struct bpf_mem_cache {
 	int free_cnt;
 	int low_watermark, high_watermark, batch;
 	int percpu_size;
+	int numa_node;
 
 	struct rcu_head rcu;
 	struct llist_head free_by_rcu;
@@ -125,8 +127,8 @@ static void *__alloc(struct bpf_mem_cache *c, int node)
 {
 	/* Allocate, but don't deplete atomic reserves that typical
 	 * GFP_ATOMIC would do. irq_work runs on this cpu and kmalloc
-	 * will allocate from the current numa node which is what we
-	 * want here.
+	 * will allocate from the current numa node if numa_node is
+	 * NUMA_NO_NODE, else will allocate from specific numa_node.
 	 */
 	gfp_t flags = GFP_NOWAIT | __GFP_NOWARN | __GFP_ACCOUNT;
 
@@ -296,9 +298,10 @@ static void bpf_mem_refill(struct irq_work *work)
 	cnt = c->free_cnt;
 	if (cnt < c->low_watermark)
 		/* irq_work runs on this cpu and kmalloc will allocate
-		 * from the current numa node which is what we want here.
+		 * from the current numa node if numa_node is NUMA_NO_NODE,
+		 * else allocate from specific numa_node.
 		 */
-		alloc_bulk(c, c->batch, NUMA_NO_NODE);
+		alloc_bulk(c, c->batch, c->numa_node);
 	else if (cnt > c->high_watermark)
 		free_bulk(c);
 }
@@ -323,7 +326,7 @@ static void notrace irq_work_raise(struct bpf_mem_cache *c)
  * bpf progs can and should share bpf_mem_cache when possible.
  */
 
-static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
+static void prefill_mem_cache(struct bpf_mem_cache *c, int node)
 {
 	init_irq_work(&c->refill_work, bpf_mem_refill);
 	if (c->unit_size <= 256) {
@@ -344,7 +347,28 @@ static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
 	 * prog won't be doing more than 4 map_update_elem from
 	 * irq disabled region
 	 */
-	alloc_bulk(c, c->unit_size <= 256 ? 4 : 1, cpu_to_node(cpu));
+	alloc_bulk(c, c->unit_size <= 256 ? 4 : 1, node);
+}
+
+static inline bool is_valid_numa_node(int numa_node, bool percpu)
+{
+	return numa_node == NUMA_NO_NODE ||
+	       (!percpu && (unsigned int)numa_node < nr_node_ids);
+}
+
+/* The initial prefill is running in the context of map creation process, so
+ * if the preferred numa node is NUMA_NO_NODE, needs to use numa node of the
+ * specific cpu instead.
+ */
+static inline int get_prefill_numa_node(int numa_node, int cpu)
+{
+	int prefill_numa_node;
+
+	if (numa_node == NUMA_NO_NODE)
+		prefill_numa_node = cpu_to_node(cpu);
+	else
+		prefill_numa_node = numa_node;
+	return prefill_numa_node;
 }
 
 /* When size != 0 bpf_mem_cache for each cpu.
@@ -354,13 +378,17 @@ static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
  * kmalloc/kfree. Max allocation size is 4096 in this case.
  * This is bpf_dynptr and bpf_kptr use case.
  */
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, int numa_node,
+		       bool percpu)
 {
 	static u16 sizes[NUM_CACHES] = {96, 192, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
 	struct bpf_mem_caches *cc, __percpu *pcc;
+	int cpu, i, unit_size, percpu_size = 0;
 	struct bpf_mem_cache *c, __percpu *pc;
 	struct obj_cgroup *objcg = NULL;
-	int cpu, i, unit_size, percpu_size = 0;
+
+	if (!is_valid_numa_node(numa_node, percpu))
+		return -EINVAL;
 
 	if (size) {
 		pc = __alloc_percpu_gfp(sizeof(*pc), 8, GFP_KERNEL);
@@ -382,7 +410,8 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->unit_size = unit_size;
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
-			prefill_mem_cache(c, cpu);
+			c->numa_node = numa_node;
+			prefill_mem_cache(c, get_prefill_numa_node(numa_node, cpu));
 		}
 		ma->cache = pc;
 		return 0;
@@ -404,7 +433,8 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c = &cc->cache[i];
 			c->unit_size = sizes[i];
 			c->objcg = objcg;
-			prefill_mem_cache(c, cpu);
+			c->numa_node = numa_node;
+			prefill_mem_cache(c, get_prefill_numa_node(numa_node, cpu));
 		}
 	}
 	ma->caches = pcc;
