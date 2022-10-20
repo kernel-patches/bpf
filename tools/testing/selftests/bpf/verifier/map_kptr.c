@@ -242,7 +242,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "R1 type=untrusted_ptr_ expected=percpu_ptr_",
+	.errstr = "R1 type=untrusted_walked_ptr_ expected=percpu_ptr_",
 },
 {
 	"map_kptr: unref: no reference state created",

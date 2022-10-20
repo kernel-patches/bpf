@@ -137,30 +137,54 @@ KF_ACQUIRE and KF_RET_NULL flags.
 --------------------------
 
 The KF_TRUSTED_ARGS flag is used for kfuncs taking pointer arguments. It
-indicates that the all pointer arguments will always have a guaranteed lifetime,
-and pointers to kernel objects are always passed to helpers in their unmodified
-form (as obtained from acquire kfuncs).
+indicates that the all pointer arguments will always have a guaranteed
+lifetime, and pointers to kernel objects are always passed to helpers in their
+unmodified form (either as passed by the main kernel, or as obtained from
+acquire kfuncs).
 
-It can be used to enforce that a pointer to a refcounted object acquired from a
-kfunc or BPF helper is passed as an argument to this kfunc without any
-modifications (e.g. pointer arithmetic) such that it is trusted and points to
-the original object.
+It can be used to enforce that a safe pointer passed to the program by the
+kernel, or a refcounted object acquired from a kfunc or BPF helper, is passed
+as an argument to this kfunc without any modifications (e.g. pointer
+arithmetic) such that it is trusted and points to the original object.
 
 Meanwhile, it is also allowed pass pointers to normal memory to such kfuncs,
 but those can have a non-zero offset.
 
-This flag is often used for kfuncs that operate (change some property, perform
-some operation) on an object that was obtained using an acquire kfunc. Such
-kfuncs need an unchanged pointer to ensure the integrity of the operation being
-performed on the expected object.
+This flag is often used for kfuncs that receive a trusted pointer from the
+kernel, and which do not require a reference to be held by the program. For
+example, if there's a kernel object that was allocated by the main kernel, and
+which the BPF program wishes to store in a map as a kptr, KF_TRUSTED_ARGS can
+be used to ensure that the pointer is actually a trusted kernel pointer before
+a reference is acquired on it in a KF_ACQUIRE kfunc.
 
-2.4.6 KF_SLEEPABLE flag
+2.4.6 KF_OWNED_ARGS flag
+------------------------
+
+The KF_OWNED_ARGS flag is identical to the KF_TRUSTED_ARGS flag, though it is
+more restrictive in that it also requires the BPF program to hold a reference
+on the object.
+
+In other words, it can be used to enforce that a pointer to a refcounted object
+acquired from a kfunc or BPF helper is passed as an argument to this kfunc
+without any modifications (e.g. pointer arithmetic) such that it is trusted and
+points to the original object that was allocated or owned by the BPF program.
+
+This flag is often used for kfuncs that operate (change some property, perform
+some operation) on an object that was obtained using an acquire kfunc. For
+example, if an acquire kfunc allocates an object on behalf of a program,
+KF_OWNED_ARGS would be an appropriate flag to specify for other kfuncs which
+allow the program to mutate that object. KF_TRUSTED_ARGS, on the other hand,
+would likely not be sufficiently restrictive as the kfunc does not want to
+allow the BPF program to mutate another instance of the same object type which
+was allocated by the main kernel.
+
+2.4.7 KF_SLEEPABLE flag
 -----------------------
 
 The KF_SLEEPABLE flag is used for kfuncs that may sleep. Such kfuncs can only
 be called by sleepable BPF programs (BPF_F_SLEEPABLE).
 
-2.4.7 KF_DESTRUCTIVE flag
+2.4.8 KF_DESTRUCTIVE flag
 --------------------------
 
 The KF_DESTRUCTIVE flag is used to indicate functions calling which is

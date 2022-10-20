@@ -17,9 +17,48 @@
 #define KF_RELEASE	(1 << 1) /* kfunc is a release function */
 #define KF_RET_NULL	(1 << 2) /* kfunc returns a pointer that may be NULL */
 #define KF_KPTR_GET	(1 << 3) /* kfunc returns reference to a kptr */
-/* Trusted arguments are those which are meant to be referenced arguments with
- * unchanged offset. It is used to enforce that pointers obtained from acquire
- * kfuncs remain unmodified when being passed to helpers taking trusted args.
+/* Trusted arguments are those which are meant to be guaranteed valid
+ * arguments, with an unchanged offset. It is used to enforce that pointers
+ * obtained from either acquire kfuncs or the main kernel remain unmodified
+ * when being passed to helpers taking trusted args.
+ *
+ * Consider, for example, the following task tracepoint:
+ *
+ *	SEC("tp_btf/task_newtask")
+ *	int BPF_PROG(new_task_tp, struct task_struct *task, u64 clone_flags)
+ *	{
+ *		...
+ *	}
+ *
+ * And the following kfunc:
+ *
+ *	BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE | KF_RET_NULL | KF_TRUSTED_ARGS)
+ *
+ * All invocations to the kfunc must pass the unmodified, unwalked task:
+ *
+ *	bpf_task_acquire(task);		    // Allowed
+ *	bpf_task_acquire(task->last_wakee); // Rejected, walked task
+ *
+ * Users may also pass referenced tasks directly to the kfunc:
+ *
+ *	struct task_struct *acquired;
+ *
+ *	acquired = bpf_task_acquire(task);	// Allowed, same as above
+ *	bpf_task_acquire(acquired);		// Allowed
+ *	bpf_task_acquire(task);			// Allowed
+ *	bpf_task_acquire(acquired->last_wakee); // Rejected, walked task
+ *
+ * If users wish to only allow referenced objects to be passed to a kfunc, they
+ * may instead specify the KF_OWNED_ARGS flag.
+ */
+#define KF_TRUSTED_ARGS (1 << 4) /* kfunc only takes trusted pointer arguments */
+#define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
+#define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
+/* Owned arguments are similar to trusted arguments, but are even more
+ * restrictive.  Owned arguments are arguments which are "owned" by the BPF
+ * program, meaning it has acquired a reference to the object via an acquire
+ * kfunc. Just as with trusted arguments, the verifier enforces that owned
+ * arguments have an unchanged offset when they're passed to kfuncs.
  *
  * Consider
  *	struct foo {
@@ -36,7 +75,7 @@
  *	struct bar *b = alloc_bar(); // Acquire kfunc
  *
  * If a kfunc set_foo_data() wants to operate only on the allocated object, it
- * will set the KF_TRUSTED_ARGS flag, which will prevent unsafe usage like:
+ * will set the KR_ARGS_OWNED flag, which will prevent unsafe usage like:
  *
  *	set_foo_data(f, 42);	   // Allowed
  *	set_foo_data(f->next, 42); // Rejected, non-referenced pointer
@@ -47,10 +86,14 @@
  * by looking at the type of the member at the offset, but due to the
  * requirement of trusted argument, this deduction will be strict and not done
  * for this case.
+ *
+ * Note as well that if tracepoints existed which took a struct foo *f argument
+ * that was passed from the kernel, the verifier would also reject
+ * set_foo_bar(f, 42) on it, as the BPF program had not acquired a reference on
+ * it. If the kfunc had instead specified KF_TRUSTED_ARGS, this would be
+ * permitted.
  */
-#define KF_TRUSTED_ARGS (1 << 4) /* kfunc only takes trusted pointer arguments */
-#define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
-#define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
+#define KF_OWNED_ARGS   (1 << 7) /* kfunc performs destructive actions */
 
 /*
  * Return the name of the passed struct, if exists, or halt the build if for

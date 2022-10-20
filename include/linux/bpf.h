@@ -457,6 +457,12 @@ enum bpf_type_flag {
 	/* Size is known at compile time. */
 	MEM_FIXED_SIZE		= BIT(10 + BPF_BASE_TYPE_BITS),
 
+	/* PTR was obtained from walking a struct. This is used with
+	 * PTR_TO_BTF_ID to determine whether the pointer is safe to pass to a
+	 * kfunc with KF_TRUSTED_ARGS.
+	 */
+	PTR_WALKED		= BIT(11 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
 };

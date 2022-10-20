@@ -6227,7 +6227,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    bool processing_call)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
-	bool rel = false, kptr_get = false, trusted_args = false;
+	bool rel = false, kptr_get = false, trusted_args = false, owned_args = false;
 	bool sleepable = false;
 	struct bpf_verifier_log *log = &env->log;
 	u32 i, nargs, ref_id, ref_obj_id = 0;
@@ -6265,7 +6265,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		/* Only kfunc can be release func */
 		rel = kfunc_meta->flags & KF_RELEASE;
 		kptr_get = kfunc_meta->flags & KF_KPTR_GET;
-		trusted_args = kfunc_meta->flags & KF_TRUSTED_ARGS;
+		owned_args = kfunc_meta->flags & KF_OWNED_ARGS;
+		trusted_args = owned_args || (kfunc_meta->flags & KF_TRUSTED_ARGS);
 		sleepable = kfunc_meta->flags & KF_SLEEPABLE;
 	}
 
@@ -6333,8 +6334,19 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		/* Check if argument must be a referenced pointer, args + i has
 		 * been verified to be a pointer (after skipping modifiers).
 		 * PTR_TO_CTX is ok without having non-zero ref_obj_id.
+		 *
+		 * All object pointers must be refcounted, other than:
+		 * - PTR_TO_CTX
+		 * - Trusted pointers (i.e. pointers with no type modifiers).
+		 *   Kfuncs that have specified KF_OWNED_ARGS require
+		 *   references even if a pointer is otherwise trusted.
 		 */
-		if (is_kfunc && trusted_args && (obj_ptr && reg->type != PTR_TO_CTX) && !reg->ref_obj_id) {
+		if (is_kfunc &&
+		    trusted_args &&
+		    obj_ptr &&
+		    base_type(reg->type) != PTR_TO_CTX &&
+		    (owned_args || type_flag(reg->type)) &&
+		    !reg->ref_obj_id) {
 			bpf_log(log, "R%d must be referenced\n", regno);
 			return -EINVAL;
 		}

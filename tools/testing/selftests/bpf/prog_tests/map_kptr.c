@@ -20,7 +20,7 @@ struct {
 	{ "reject_bad_type_match", "invalid kptr access, R1 type=untrusted_ptr_prog_test_ref_kfunc" },
 	{ "marked_as_untrusted_or_null", "R1 type=untrusted_ptr_or_null_ expected=percpu_ptr_" },
 	{ "correct_btf_id_check_size", "access beyond struct prog_test_ref_kfunc at off 32 size 4" },
-	{ "inherit_untrusted_on_walk", "R1 type=untrusted_ptr_ expected=percpu_ptr_" },
+	{ "inherit_untrusted_on_walk", "R1 type=untrusted_walked_ptr_ expected=percpu_ptr_" },
 	{ "reject_kptr_xchg_on_unref", "off=8 kptr isn't referenced kptr" },
 	{ "reject_kptr_get_no_map_val", "arg#0 expected pointer to map value" },
 	{ "reject_kptr_get_no_null_map_val", "arg#0 expected pointer to map value" },
