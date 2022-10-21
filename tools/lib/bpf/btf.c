@@ -3918,8 +3918,11 @@ static bool btf_dedup_identical_structs(struct btf_dedup *d, __u32 id1, __u32 id
 	m1 = btf_members(t1);
 	m2 = btf_members(t2);
 	for (i = 0, n = btf_vlen(t1); i < n; i++, m1++, m2++) {
-		if (m1->type != m2->type)
-			return false;
+		if (m1->type == m2->type ||
+		    btf_dedup_identical_structs(d, m1->type, m2->type) ||
+		    btf_dedup_identical_arrays(d, m1->type, m2->type))
+			continue;
+		return false;
 	}
 	return true;
 }
