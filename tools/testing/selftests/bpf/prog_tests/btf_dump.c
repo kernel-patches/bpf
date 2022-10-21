@@ -23,6 +23,7 @@ static struct btf_dump_test_case {
 	{"btf_dump: bitfields", "btf_dump_test_case_bitfields", true},
 	{"btf_dump: multidim", "btf_dump_test_case_multidim", false},
 	{"btf_dump: namespacing", "btf_dump_test_case_namespacing", false},
+	{"btf_dump: decl_tag", "btf_dump_test_case_decl_tag", true},
 };
 
 static int btf_dump_all_types(const struct btf *btf, struct btf_dump *d)
@@ -338,6 +339,82 @@ static void test_btf_dump_incremental(void)
 "	struct s s;\n"
 "};\n\n" , "c_dump1");
 
+err_out:
+	fclose(dump_buf_file);
+	free(dump_buf);
+	btf_dump__free(d);
+	btf__free(btf);
+}
+
+static void test_btf_dump_func_proto_decl_tag(void)
+{
+	struct btf *btf = NULL;
+	struct btf_dump *d = NULL;
+	int id, err;
+
+	dump_buf_file = open_memstream(&dump_buf, &dump_buf_sz);
+	if (!ASSERT_OK_PTR(dump_buf_file, "dump_memstream"))
+		return;
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "new_empty"))
+		goto err_out;
+	d = btf_dump__new(btf, btf_dump_printf, dump_buf_file, NULL);
+	if (!ASSERT_OK(libbpf_get_error(d), "btf_dump__new"))
+		goto err_out;
+
+	/* First, BTF corresponding to the following C code:
+	 *
+	 * typedef void (*fn)(int a __btf_decl_tag("a_tag"));
+	 *
+	 */
+	id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	ASSERT_EQ(id, 1, "int_id");
+	id = btf__add_func_proto(btf, 0);
+	ASSERT_EQ(id, 2, "func_proto_id");
+	err = btf__add_func_param(btf, "a", 1);
+	ASSERT_OK(err, "func_param_ok");
+	id = btf__add_decl_tag(btf, "a_tag", 2, 0);
+	ASSERT_EQ(id, 3, "decl_tag_a");
+	id = btf__add_ptr(btf, 2);
+	ASSERT_EQ(id, 4, "proto_ptr");
+	id = btf__add_typedef(btf, "fn", 4);
+	ASSERT_EQ(id, 5, "typedef");
+
+	err = btf_dump_all_types(btf, d);
+	ASSERT_OK(err, "btf_dump_all_types #1");
+	fflush(dump_buf_file);
+	dump_buf[dump_buf_sz] = 0; /* some libc implementations don't do this */
+
+	ASSERT_STREQ(dump_buf,
+		     "#if __has_attribute(btf_decl_tag)\n"
+		     "#define __btf_decl_tag(x) __attribute__((btf_decl_tag(x)))\n"
+		     "#else\n"
+		     "#define __btf_decl_tag(x)\n"
+		     "#endif\n"
+		     "\n"
+		     "typedef void (*fn)(int a __btf_decl_tag(\"a_tag\"));\n\n",
+		     "decl tags for fn");
+
+	/* Next, add BTF corresponding to the following C code:
+	 *
+	 * typedef int foo __btf_decl_tag("foo_tag");
+	 *
+	 * To verify that decl_tag's table is updated incrementally.
+	 */
+	id = btf__add_typedef(btf, "foo", 1);
+	ASSERT_EQ(id, 6, "typedef");
+	id = btf__add_decl_tag(btf, "foo_tag", 6, -1);
+	ASSERT_EQ(id, 7, "decl_tag_foo");
+
+	fseek(dump_buf_file, 0, SEEK_SET);
+	err = btf_dump_all_types(btf, d);
+	ASSERT_OK(err, "btf_dump_all_types #2");
+	fflush(dump_buf_file);
+	dump_buf[dump_buf_sz] = 0; /* some libc implementations don't do this */
+
+	ASSERT_STREQ(dump_buf,
+		     "typedef int foo __btf_decl_tag(\"foo_tag\");\n\n",
+		     "decl tags for foo");
 err_out:
 	fclose(dump_buf_file);
 	free(dump_buf);
@@ -963,6 +1040,8 @@ void test_btf_dump() {
 	}
 	if (test__start_subtest("btf_dump: incremental"))
 		test_btf_dump_incremental();
+	if (test__start_subtest("btf_dump: func arg decl_tag"))
+		test_btf_dump_func_proto_decl_tag();
 
 	btf = libbpf_find_kernel_btf();
 	if (!ASSERT_OK_PTR(btf, "no kernel BTF found"))
