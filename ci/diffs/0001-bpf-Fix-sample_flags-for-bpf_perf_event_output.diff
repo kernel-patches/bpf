@@ -1,0 +1,47 @@
+From 01cc82fac426032c414258f2c322f63e75cf04c0 Mon Sep 17 00:00:00 2001
+From: Sumanth Korikkar <sumanthk@linux.ibm.com>
+Date: Fri, 7 Oct 2022 10:13:27 +0200
+Subject: [PATCH] bpf: Fix sample_flags for bpf_perf_event_output
+
+* Raw data is also filled by bpf_perf_event_output.
+* Add sample_flags to indicate raw data.
+* This eliminates the segfaults as shown below:
+  Run ./samples/bpf/trace_output
+  BUG pid 9 cookie 1001000000004 sized 4
+  BUG pid 9 cookie 1001000000004 sized 4
+  BUG pid 9 cookie 1001000000004 sized 4
+  Segmentation fault (core dumped)
+
+Fixes: 838d9bb62d13 ("perf: Use sample_flags for raw_data")
+Signed-off-by: Sumanth Korikkar <sumanthk@linux.ibm.com>
+Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+Acked-by: Namhyung Kim <namhyung@kernel.org>
+Acked-by: Jiri Olsa <jolsa@kernel.org>
+Link: https://lore.kernel.org/bpf/20221007081327.1047552-1-sumanthk@linux.ibm.com
+---
+ kernel/trace/bpf_trace.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/kernel/trace/bpf_trace.c b/kernel/trace/bpf_trace.c
+index 688552df95ca..596335fe62e2 100644
+--- a/kernel/trace/bpf_trace.c
++++ b/kernel/trace/bpf_trace.c
+@@ -687,6 +687,7 @@ BPF_CALL_5(bpf_perf_event_output, struct pt_regs *, regs, struct bpf_map *, map,
+ 
+ 	perf_sample_data_init(sd, 0, 0);
+ 	sd->raw = &raw;
++	sd->sample_flags |= PERF_SAMPLE_RAW;
+ 
+ 	err = __bpf_perf_event_output(regs, map, flags, sd);
+ 
+@@ -745,6 +746,7 @@ u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
+ 	perf_fetch_caller_regs(regs);
+ 	perf_sample_data_init(sd, 0, 0);
+ 	sd->raw = &raw;
++	sd->sample_flags |= PERF_SAMPLE_RAW;
+ 
+ 	ret = __bpf_perf_event_output(regs, map, flags, sd);
+ out:
+-- 
+2.30.2
+
