@@ -689,6 +689,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_RINGBUF;
 	case DYNPTR_TYPE_SKB:
 		return BPF_DYNPTR_TYPE_SKB;
+	case DYNPTR_TYPE_XDP:
+		return BPF_DYNPTR_TYPE_XDP;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -1427,7 +1429,7 @@ static bool reg_is_pkt_pointer_any(const struct bpf_reg_state *reg)
 static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
 {
 	return base_type(reg->type) == PTR_TO_MEM &&
-		reg->type & DYNPTR_TYPE_SKB;
+		(reg->type & DYNPTR_TYPE_SKB || reg->type & DYNPTR_TYPE_XDP);
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -6141,6 +6143,9 @@ skip_type_check:
 			case DYNPTR_TYPE_SKB:
 				err_extra = "skb ";
 				break;
+			case DYNPTR_TYPE_XDP:
+				err_extra = "xdp ";
+				break;
 			default:
 				err_extra = "<unknown>";
 				break;
@@ -6584,7 +6589,7 @@ static int check_func_proto(const struct bpf_func_proto *fn, int func_id)
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
  * are now invalid, so turn them into unknown SCALAR_VALUE.
  *
- * This also applies to dynptr slices belonging to skb dynptrs,
+ * This also applies to dynptr slices belonging to skb or xdp dynptrs,
  * since these slices point to packet data.
  */
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
@@ -7532,27 +7537,30 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
 		regs[BPF_REG_0].mem_size = meta.mem_size;
-		if (func_id == BPF_FUNC_dynptr_data &&
-		    dynptr_type == BPF_DYNPTR_TYPE_SKB) {
-			bool seen_direct_write = env->seen_direct_write;
+		if (func_id == BPF_FUNC_dynptr_data) {
+			if (dynptr_type == BPF_DYNPTR_TYPE_SKB) {
+				bool seen_direct_write = env->seen_direct_write;
 
-			regs[BPF_REG_0].type |= DYNPTR_TYPE_SKB;
-			if (!may_access_direct_pkt_data(env, NULL, BPF_WRITE))
-				regs[BPF_REG_0].type |= MEM_RDONLY;
-			else
-				/*
-				 * Calling may_access_direct_pkt_data() will set
-				 * env->seen_direct_write to true if the skb is
-				 * writable. As an optimization, we can ignore
-				 * setting env->seen_direct_write.
-				 *
-				 * env->seen_direct_write is used by skb
-				 * programs to determine whether the skb's page
-				 * buffers should be cloned. Since data slice
-				 * writes would only be to the head, we can skip
-				 * this.
-				 */
-				env->seen_direct_write = seen_direct_write;
+				regs[BPF_REG_0].type |= DYNPTR_TYPE_SKB;
+				if (!may_access_direct_pkt_data(env, NULL, BPF_WRITE))
+					regs[BPF_REG_0].type |= MEM_RDONLY;
+				else
+					/*
+					 * Calling may_access_direct_pkt_data() will set
+					 * env->seen_direct_write to true if the skb is
+					 * writable. As an optimization, we can ignore
+					 * setting env->seen_direct_write.
+					 *
+					 * env->seen_direct_write is used by skb
+					 * programs to determine whether the skb's page
+					 * buffers should be cloned. Since data slice
+					 * writes would only be to the head, we can skip
+					 * this.
+					 */
+					env->seen_direct_write = seen_direct_write;
+			} else if (dynptr_type == BPF_DYNPTR_TYPE_XDP) {
+				regs[BPF_REG_0].type |= DYNPTR_TYPE_XDP;
+			}
 		}
 		break;
 	case RET_PTR_TO_MEM_OR_BTF_ID:

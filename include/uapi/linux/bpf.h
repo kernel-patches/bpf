@@ -5328,13 +5328,17 @@ union bpf_attr {
  *		      and try again.
  *
  *		    * The data slice is automatically invalidated anytime
- *		      **bpf_dynptr_write**\ () or a helper call that changes
- *		      the underlying packet buffer (eg **bpf_skb_pull_data**\ ())
+ *		      **bpf_dynptr_write**\ () is called.
+ *
+ *		For skb-type and xdp-type dynptrs:
+ *		    * The data slice is automatically invalidated anytime a
+ *		      helper call that changes the underlying packet buffer
+ *		      (eg **bpf_skb_pull_data**\ (), **bpf_xdp_adjust_head**\ ())
  *		      is called.
  *	Return
  *		Pointer to the underlying dynptr data, NULL if the dynptr is invalid,
  *		or if the offset and length is out of bounds or in a paged buffer for
- *		skb-type dynptrs.
+ *		skb-type dynptrs or across fragments for xdp-type dynptrs.
  *
  * s64 bpf_tcp_raw_gen_syncookie_ipv4(struct iphdr *iph, struct tcphdr *th, u32 th_len)
  *	Description
@@ -5471,6 +5475,19 @@ union bpf_attr {
  *		*flags* is currently unused, it must be 0 for now.
  *	Return
  *		0 on success or -EINVAL if flags is not 0.
+ *
+ * long bpf_dynptr_from_xdp(struct xdp_buff *xdp_md, u64 flags, struct bpf_dynptr *ptr)
+ *	Description
+ *		Get a dynptr to the data in *xdp_md*. *xdp_md* must be the BPF program
+ *		context.
+ *
+ *		Calls that change the *xdp_md*'s underlying packet buffer
+ *		(eg **bpf_xdp_adjust_head**\ ()) do not invalidate the dynptr, but
+ *		they do invalidate any data slices associated with the dynptr.
+ *
+ *		*flags* is currently unused, it must be 0 for now.
+ *	Return
+ *		0 on success, -EINVAL if flags is not 0.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5684,6 +5701,7 @@ union bpf_attr {
 	FN(ktime_get_tai_ns, 208, ##ctx)		\
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(dynptr_from_skb, 210, ##ctx)			\
+	FN(dynptr_from_xdp, 211, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

@@ -3847,7 +3847,29 @@ static const struct bpf_func_proto sk_skb_change_head_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_1(bpf_xdp_get_buff_len, struct  xdp_buff*, xdp)
+BPF_CALL_3(bpf_dynptr_from_xdp, struct xdp_buff*, xdp, u64, flags,
+	   struct bpf_dynptr_kern *, ptr)
+{
+	if (flags) {
+		bpf_dynptr_set_null(ptr);
+		return -EINVAL;
+	}
+
+	bpf_dynptr_init(ptr, xdp, BPF_DYNPTR_TYPE_XDP, 0, xdp_get_buff_len(xdp));
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_dynptr_from_xdp_proto = {
+	.func		= bpf_dynptr_from_xdp,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_XDP | MEM_UNINIT,
+};
+
+BPF_CALL_1(bpf_xdp_get_buff_len, struct xdp_buff*, xdp)
 {
 	return xdp_get_buff_len(xdp);
 }
@@ -3949,7 +3971,7 @@ static void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 	}
 }
 
-static void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len)
+void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
 	u32 size = xdp->data_end - xdp->data;
@@ -3980,8 +4002,7 @@ out:
 	return offset + len <= size ? addr + offset : NULL;
 }
 
-BPF_CALL_4(bpf_xdp_load_bytes, struct xdp_buff *, xdp, u32, offset,
-	   void *, buf, u32, len)
+int __bpf_xdp_load_bytes(struct xdp_buff *xdp, u32 offset, void *buf, u32 len)
 {
 	void *ptr;
 
@@ -3997,6 +4018,12 @@ BPF_CALL_4(bpf_xdp_load_bytes, struct xdp_buff *, xdp, u32, offset,
 	return 0;
 }
 
+BPF_CALL_4(bpf_xdp_load_bytes, struct xdp_buff *, xdp, u32, offset,
+	   void *, buf, u32, len)
+{
+	return __bpf_xdp_load_bytes(xdp, offset, buf, len);
+}
+
 static const struct bpf_func_proto bpf_xdp_load_bytes_proto = {
 	.func		= bpf_xdp_load_bytes,
 	.gpl_only	= false,
@@ -4007,8 +4034,7 @@ static const struct bpf_func_proto bpf_xdp_load_bytes_proto = {
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
-BPF_CALL_4(bpf_xdp_store_bytes, struct xdp_buff *, xdp, u32, offset,
-	   void *, buf, u32, len)
+int __bpf_xdp_store_bytes(struct xdp_buff *xdp, u32 offset, void *buf, u32 len)
 {
 	void *ptr;
 
@@ -4022,6 +4048,12 @@ BPF_CALL_4(bpf_xdp_store_bytes, struct xdp_buff *, xdp, u32, offset,
 		memcpy(ptr, buf, len);
 
 	return 0;
+}
+
+BPF_CALL_4(bpf_xdp_store_bytes, struct xdp_buff *, xdp, u32, offset,
+	   void *, buf, u32, len)
+{
+	return __bpf_xdp_store_bytes(xdp, offset, buf, len);
 }
 
 static const struct bpf_func_proto bpf_xdp_store_bytes_proto = {
@@ -8041,6 +8073,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_tcp_raw_check_syncookie_ipv6_proto;
 #endif
 #endif
+	case BPF_FUNC_dynptr_from_xdp:
+		return &bpf_dynptr_from_xdp_proto;
 	default:
 		return bpf_sk_base_func_proto(func_id);
 	}
