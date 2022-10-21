@@ -687,6 +687,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_LOCAL;
 	case DYNPTR_TYPE_RINGBUF:
 		return BPF_DYNPTR_TYPE_RINGBUF;
+	case DYNPTR_TYPE_SKB:
+		return BPF_DYNPTR_TYPE_SKB;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -1420,6 +1422,12 @@ static bool reg_is_pkt_pointer_any(const struct bpf_reg_state *reg)
 {
 	return reg_is_pkt_pointer(reg) ||
 	       reg->type == PTR_TO_PACKET_END;
+}
+
+static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
+{
+	return base_type(reg->type) == PTR_TO_MEM &&
+		reg->type & DYNPTR_TYPE_SKB;
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -5871,12 +5879,29 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	return __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
 }
 
-static u32 stack_slot_get_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+static struct bpf_reg_state *get_dynptr_arg_reg(const struct bpf_func_proto *fn,
+						struct bpf_reg_state *regs)
+{
+	int i;
+
+	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++)
+		if (arg_type_is_dynptr(fn->arg_type[i]))
+			return &regs[BPF_REG_1 + i];
+
+	return NULL;
+}
+
+static enum bpf_dynptr_type stack_slot_get_dynptr_info(struct bpf_verifier_env *env,
+						       struct bpf_reg_state *reg,
+						       int *ref_obj_id)
 {
 	struct bpf_func_state *state = func(env, reg);
 	int spi = get_spi(reg->off);
 
-	return state->stack[spi].spilled_ptr.id;
+	if (ref_obj_id)
+		*ref_obj_id = state->stack[spi].spilled_ptr.id;
+
+	return state->stack[spi].spilled_ptr.dynptr.type;
 }
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
@@ -6112,6 +6137,9 @@ skip_type_check:
 				break;
 			case DYNPTR_TYPE_RINGBUF:
 				err_extra = "ringbuf";
+				break;
+			case DYNPTR_TYPE_SKB:
+				err_extra = "skb ";
 				break;
 			default:
 				err_extra = "<unknown>";
@@ -6555,6 +6583,9 @@ static int check_func_proto(const struct bpf_func_proto *fn, int func_id)
 
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
  * are now invalid, so turn them into unknown SCALAR_VALUE.
+ *
+ * This also applies to dynptr slices belonging to skb dynptrs,
+ * since these slices point to packet data.
  */
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 {
@@ -6562,7 +6593,7 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 	struct bpf_reg_state *reg;
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg_is_pkt_pointer_any(reg))
+		if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg))
 			__mark_reg_unknown(env, reg);
 	}));
 }
@@ -7223,6 +7254,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			     int *insn_idx_p)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	enum bpf_dynptr_type dynptr_type = BPF_DYNPTR_TYPE_INVALID;
 	const struct bpf_func_proto *fn = NULL;
 	enum bpf_return_type ret_type;
 	enum bpf_type_flag ret_flag;
@@ -7396,28 +7428,44 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 		break;
 	case BPF_FUNC_dynptr_data:
-		for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-			if (arg_type_is_dynptr(fn->arg_type[i])) {
-				struct bpf_reg_state *reg = &regs[BPF_REG_1 + i];
+	{
+		struct bpf_reg_state *reg;
 
-				if (meta.ref_obj_id) {
-					verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
-					return -EFAULT;
-				}
-
-				if (base_type(reg->type) != PTR_TO_DYNPTR)
-					/* Find the id of the dynptr we're
-					 * tracking the reference of
-					 */
-					meta.ref_obj_id = stack_slot_get_id(env, reg);
-				break;
-			}
-		}
-		if (i == MAX_BPF_FUNC_REG_ARGS) {
+		reg = get_dynptr_arg_reg(fn, regs);
+		if (!reg) {
 			verbose(env, "verifier internal error: no dynptr in bpf_dynptr_data()\n");
 			return -EFAULT;
 		}
+
+		if (base_type(reg->type) == PTR_TO_DYNPTR)
+			break;
+
+		if (meta.ref_obj_id) {
+			verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
+			return -EFAULT;
+		}
+
+		dynptr_type = stack_slot_get_dynptr_info(env, reg, &meta.ref_obj_id);
 		break;
+	}
+	case BPF_FUNC_dynptr_write:
+	{
+		struct bpf_reg_state *reg;
+
+		reg = get_dynptr_arg_reg(fn, regs);
+		if (!reg) {
+			verbose(env, "verifier internal error: no dynptr in bpf_dynptr_write()\n");
+			return -EFAULT;
+		}
+
+		/* bpf_dynptr_write() for skb-type dynptrs may pull the skb, so we must
+		 * invalidate all data slices associated with it
+		 */
+		if (stack_slot_get_dynptr_info(env, reg, NULL) == BPF_DYNPTR_TYPE_SKB)
+			changes_data = true;
+
+		break;
+	}
 	case BPF_FUNC_user_ringbuf_drain:
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_user_ringbuf_callback_state);
@@ -7484,6 +7532,28 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
 		regs[BPF_REG_0].mem_size = meta.mem_size;
+		if (func_id == BPF_FUNC_dynptr_data &&
+		    dynptr_type == BPF_DYNPTR_TYPE_SKB) {
+			bool seen_direct_write = env->seen_direct_write;
+
+			regs[BPF_REG_0].type |= DYNPTR_TYPE_SKB;
+			if (!may_access_direct_pkt_data(env, NULL, BPF_WRITE))
+				regs[BPF_REG_0].type |= MEM_RDONLY;
+			else
+				/*
+				 * Calling may_access_direct_pkt_data() will set
+				 * env->seen_direct_write to true if the skb is
+				 * writable. As an optimization, we can ignore
+				 * setting env->seen_direct_write.
+				 *
+				 * env->seen_direct_write is used by skb
+				 * programs to determine whether the skb's page
+				 * buffers should be cloned. Since data slice
+				 * writes would only be to the head, we can skip
+				 * this.
+				 */
+				env->seen_direct_write = seen_direct_write;
+		}
 		break;
 	case RET_PTR_TO_MEM_OR_BTF_ID:
 	{

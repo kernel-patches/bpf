@@ -5296,22 +5296,45 @@ union bpf_attr {
  *	Description
  *		Write *len* bytes from *src* into *dst*, starting from *offset*
  *		into *dst*.
- *		*flags* is currently unused.
+ *
+ *		*flags* must be 0 except for skb-type dynptrs.
+ *
+ *		For skb-type dynptrs:
+ *		    *  All data slices of the dynptr are automatically
+ *		       invalidated after **bpf_dynptr_write**\ (). If you wish to
+ *		       avoid this, please perform the write using direct data slices
+ *		       instead.
+ *
+ *		    *  For *flags*, please see the flags accepted by
+ *		       **bpf_skb_store_bytes**\ ().
  *	Return
  *		0 on success, -E2BIG if *offset* + *len* exceeds the length
  *		of *dst*'s data, -EINVAL if *dst* is an invalid dynptr or if *dst*
- *		is a read-only dynptr or if *flags* is not 0.
+ *		is a read-only dynptr or if *flags* is not correct. For skb-type dynptrs,
+ *		other errors correspond to errors returned by **bpf_skb_store_bytes**\ ().
  *
  * void *bpf_dynptr_data(struct bpf_dynptr *ptr, u32 offset, u32 len)
  *	Description
  *		Get a pointer to the underlying dynptr data.
  *
  *		*len* must be a statically known value. The returned data slice
- *		is invalidated whenever the dynptr is invalidated.
+ *		is invalidated whenever the dynptr is invalidated. Please note
+ *		that if the dynptr is read-only, then the returned data slice will
+ *		be read-only.
+ *
+ *		For skb-type dynptrs:
+ *		    * If *offset* + *len* extends into the skb's paged buffers,
+ *		      the user should manually pull the skb with **bpf_skb_pull_data**\ ()
+ *		      and try again.
+ *
+ *		    * The data slice is automatically invalidated anytime
+ *		      **bpf_dynptr_write**\ () or a helper call that changes
+ *		      the underlying packet buffer (eg **bpf_skb_pull_data**\ ())
+ *		      is called.
  *	Return
- *		Pointer to the underlying dynptr data, NULL if the dynptr is
- *		read-only, if the dynptr is invalid, or if the offset and length
- *		is out of bounds.
+ *		Pointer to the underlying dynptr data, NULL if the dynptr is invalid,
+ *		or if the offset and length is out of bounds or in a paged buffer for
+ *		skb-type dynptrs.
  *
  * s64 bpf_tcp_raw_gen_syncookie_ipv4(struct iphdr *iph, struct tcphdr *th, u32 th_len)
  *	Description
@@ -5435,6 +5458,19 @@ union bpf_attr {
  *		**-E2BIG** if user-space has tried to publish a sample which is
  *		larger than the size of the ring buffer, or which cannot fit
  *		within a struct bpf_dynptr.
+ *
+ * long bpf_dynptr_from_skb(struct sk_buff *skb, u64 flags, struct bpf_dynptr *ptr)
+ *	Description
+ *		Get a dynptr to the data in *skb*. *skb* must be the BPF program
+ *		context. Depending on program type, the dynptr may be read-only.
+ *
+ *		Calls that change the *skb*'s underlying packet buffer
+ *		(eg **bpf_skb_pull_data**\ ()) do not invalidate the dynptr, but
+ *		they do invalidate any data slices associated with the dynptr.
+ *
+ *		*flags* is currently unused, it must be 0 for now.
+ *	Return
+ *		0 on success or -EINVAL if flags is not 0.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5647,6 +5683,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv6, 207, ##ctx)	\
 	FN(ktime_get_tai_ns, 208, ##ctx)		\
 	FN(user_ringbuf_drain, 209, ##ctx)		\
+	FN(dynptr_from_skb, 210, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

@@ -1403,9 +1403,19 @@ static bool bpf_dynptr_is_rdonly(struct bpf_dynptr_kern *ptr)
 	return ptr->size & DYNPTR_RDONLY_BIT;
 }
 
+void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr)
+{
+	ptr->size |= DYNPTR_RDONLY_BIT;
+}
+
 static void bpf_dynptr_set_type(struct bpf_dynptr_kern *ptr, enum bpf_dynptr_type type)
 {
 	ptr->size |= type << DYNPTR_TYPE_SHIFT;
+}
+
+static enum bpf_dynptr_type bpf_dynptr_get_type(const struct bpf_dynptr_kern *ptr)
+{
+	return (ptr->size & ~(DYNPTR_RDONLY_BIT)) >> DYNPTR_TYPE_SHIFT;
 }
 
 u32 bpf_dynptr_get_size(struct bpf_dynptr_kern *ptr)
@@ -1480,6 +1490,7 @@ static const struct bpf_func_proto bpf_dynptr_from_mem_proto = {
 BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, struct bpf_dynptr_kern *, src,
 	   u32, offset, u64, flags)
 {
+	enum bpf_dynptr_type type;
 	int err;
 
 	if (!src->data || flags)
@@ -1489,9 +1500,19 @@ BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, struct bpf_dynptr_kern *, src
 	if (err)
 		return err;
 
-	memcpy(dst, src->data + src->offset + offset, len);
+	type = bpf_dynptr_get_type(src);
 
-	return 0;
+	switch (type) {
+	case BPF_DYNPTR_TYPE_LOCAL:
+	case BPF_DYNPTR_TYPE_RINGBUF:
+		memcpy(dst, src->data + src->offset + offset, len);
+		return 0;
+	case BPF_DYNPTR_TYPE_SKB:
+		return __bpf_skb_load_bytes(src->data, src->offset + offset, dst, len);
+	default:
+		WARN_ONCE(true, "bpf_dynptr_read: unknown dynptr type %d\n", type);
+		return -EFAULT;
+	}
 }
 
 static const struct bpf_func_proto bpf_dynptr_read_proto = {
@@ -1508,18 +1529,32 @@ static const struct bpf_func_proto bpf_dynptr_read_proto = {
 BPF_CALL_5(bpf_dynptr_write, struct bpf_dynptr_kern *, dst, u32, offset, void *, src,
 	   u32, len, u64, flags)
 {
+	enum bpf_dynptr_type type;
 	int err;
 
-	if (!dst->data || flags || bpf_dynptr_is_rdonly(dst))
+	if (!dst->data || bpf_dynptr_is_rdonly(dst))
 		return -EINVAL;
 
 	err = bpf_dynptr_check_off_len(dst, offset, len);
 	if (err)
 		return err;
 
-	memcpy(dst->data + dst->offset + offset, src, len);
+	type = bpf_dynptr_get_type(dst);
 
-	return 0;
+	switch (type) {
+	case BPF_DYNPTR_TYPE_LOCAL:
+	case BPF_DYNPTR_TYPE_RINGBUF:
+		if (flags)
+			return -EINVAL;
+		memcpy(dst->data + dst->offset + offset, src, len);
+		return 0;
+	case BPF_DYNPTR_TYPE_SKB:
+		return __bpf_skb_store_bytes(dst->data, dst->offset + offset, src, len,
+					     flags);
+	default:
+		WARN_ONCE(true, "bpf_dynptr_write: unknown dynptr type %d\n", type);
+		return -EFAULT;
+	}
 }
 
 static const struct bpf_func_proto bpf_dynptr_write_proto = {
@@ -1535,6 +1570,8 @@ static const struct bpf_func_proto bpf_dynptr_write_proto = {
 
 BPF_CALL_3(bpf_dynptr_data, struct bpf_dynptr_kern *, ptr, u32, offset, u32, len)
 {
+	enum bpf_dynptr_type type;
+	void *data;
 	int err;
 
 	if (!ptr->data)
@@ -1544,10 +1581,36 @@ BPF_CALL_3(bpf_dynptr_data, struct bpf_dynptr_kern *, ptr, u32, offset, u32, len
 	if (err)
 		return 0;
 
-	if (bpf_dynptr_is_rdonly(ptr))
-		return 0;
+	type = bpf_dynptr_get_type(ptr);
 
-	return (unsigned long)(ptr->data + ptr->offset + offset);
+	switch (type) {
+	case BPF_DYNPTR_TYPE_LOCAL:
+	case BPF_DYNPTR_TYPE_RINGBUF:
+		if (bpf_dynptr_is_rdonly(ptr))
+			return 0;
+
+		data = ptr->data;
+		break;
+	case BPF_DYNPTR_TYPE_SKB:
+	{
+		struct sk_buff *skb = ptr->data;
+
+		/* if the data is paged, the caller needs to pull it first */
+		if (ptr->offset + offset + len > skb_headlen(skb))
+			return 0;
+
+		/* Depending on the prog type, the data slice will be either
+		 * read-writable or read-only. The verifier will enforce that
+		 * any writes to read-only data slices are rejected
+		 */
+		data = skb->data;
+		break;
+	}
+	default:
+		WARN_ONCE(true, "bpf_dynptr_data: unknown dynptr type %d\n", type);
+		return 0;
+	}
+	return (unsigned long)(data + ptr->offset + offset);
 }
 
 static const struct bpf_func_proto bpf_dynptr_data_proto = {
