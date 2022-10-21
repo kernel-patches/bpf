@@ -5,6 +5,7 @@
 #include <string.h>
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <linux/if_ether.h>
 #include "bpf_misc.h"
 
 char _license[] SEC("license") = "GPL";
@@ -619,6 +620,116 @@ int dynptr_from_mem_invalid_api(void *ctx)
 
 	/* this should fail */
 	bpf_dynptr_from_mem(&x, sizeof(x), 0, &ptr);
+
+	return 0;
+}
+
+/* The data slice is invalidated whenever a helper changes packet data */
+SEC("?tc")
+int skb_invalid_data_slice1(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	hdr = bpf_dynptr_data(&ptr, 0, sizeof(*hdr));
+
+	if (bpf_skb_pull_data(skb, skb->len))
+		return SK_DROP;
+
+	if (!hdr)
+		return SK_DROP;
+
+	/* this should fail */
+	hdr->h_proto = 1;
+
+	return SK_PASS;
+}
+
+/* The data slice is invalidated whenever bpf_dynptr_write() is called */
+SEC("?tc")
+int skb_invalid_data_slice2(struct __sk_buff *skb)
+{
+	char write_data[64] = "hello there, world!!";
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	hdr = bpf_dynptr_data(&ptr, 0, sizeof(*hdr));
+
+	bpf_dynptr_write(&ptr, 0, write_data, sizeof(write_data), 0);
+
+	if (!hdr)
+		return SK_DROP;
+
+	/* this should fail */
+	hdr->h_proto = 1;
+
+	return SK_PASS;
+}
+
+/* The data slice is invalidated whenever a helper changes packet data */
+SEC("?xdp")
+int xdp_invalid_data_slice(struct xdp_md *xdp)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+
+	bpf_dynptr_from_xdp(xdp, 0, &ptr);
+	hdr = bpf_dynptr_data(&ptr, 0, sizeof(*hdr));
+	if (!hdr)
+		return SK_DROP;
+
+	hdr->h_proto = 9;
+
+	if (bpf_xdp_adjust_head(xdp, 0 - (int)sizeof(*hdr)))
+		return XDP_DROP;
+
+	/* this should fail */
+	hdr->h_proto = 1;
+
+	return XDP_PASS;
+}
+
+/* Only supported prog type can create skb-type dynptrs */
+SEC("?raw_tp")
+int skb_invalid_ctx(void *ctx)
+{
+	struct bpf_dynptr ptr;
+
+	/* this should fail */
+	bpf_dynptr_from_skb(ctx, 0, &ptr);
+
+	return 0;
+}
+
+/* Only supported prog type can create xdp-type dynptrs */
+SEC("?raw_tp")
+int xdp_invalid_ctx(void *ctx)
+{
+	struct bpf_dynptr ptr;
+
+	/* this should fail */
+	bpf_dynptr_from_xdp(ctx, 0, &ptr);
+
+	return 0;
+}
+
+/* Read-only skb packet buffers can't be written to through data slices */
+SEC("?cgroup_skb/egress")
+int skb_invalid_write(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	__u64 *data;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	data = bpf_dynptr_data(&ptr, 0, sizeof(*data));
+	if (!data)
+		return 0;
+
+	/* this should fail */
+	*data = 123;
 
 	return 0;
 }
