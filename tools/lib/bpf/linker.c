@@ -2355,6 +2355,11 @@ static int linker_append_btf(struct bpf_linker *linker, struct src_obj *obj)
 			if (btf_is_non_static(t)) {
 				name = btf__str_by_offset(linker->btf, t->name_off);
 				glob_sym = find_glob_sym(linker, name);
+				if (!glob_sym) {
+					pr_warn("global '%s': section mismatch %d\n", name,
+						dst_sec->id);
+					return -EINVAL;
+				}
 				if (glob_sym->sec_id != dst_sec->id) {
 					pr_warn("global '%s': section mismatch %d vs %d\n",
 						name, glob_sym->sec_id, dst_sec->id);
