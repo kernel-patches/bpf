@@ -2868,7 +2868,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (err) {
 		kprobe_multi_put_modules(link->mods, link->mods_cnt);
 		bpf_link_cleanup(&link_primer);
-		return err;
+		goto error;
 	}
 
 	return bpf_link_settle(&link_primer);
