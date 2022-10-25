@@ -88,6 +88,7 @@ static u8 feature_data[] = { 1, 2 };
 struct attach_prog_args {
 	int prog_fd;
 	unsigned int hid;
+	unsigned int flags;
 	int retval;
 };
 
@@ -491,6 +492,7 @@ FIXTURE_SETUP(hid_bpf)
 
 struct test_program {
 	const char *name;
+	unsigned int flags;
 };
 #define LOAD_PROGRAMS(progs) \
 	load_programs(progs, ARRAY_SIZE(progs), _metadata, self, variant)
@@ -540,6 +542,7 @@ static void load_programs(const struct test_program programs[],
 
 		args.prog_fd = bpf_program__fd(prog);
 		args.hid = self->hid_id;
+		args.flags = programs[i].flags;
 		err = bpf_prog_test_run_opts(attach_fd, &tattr);
 		ASSERT_OK(args.retval) TH_LOG("attach_hid(%s): %d", programs[i].name, args.retval);
 	}
@@ -739,6 +742,46 @@ TEST_F(hid_bpf, test_hid_user_raw_request_call)
 	ASSERT_EQ(args.retval, 2);
 
 	ASSERT_EQ(args.data[1], 2);
+}
+
+/*
+ * Attach hid_insert{0,1,2} to the given uhid device,
+ * retrieve and open the matching hidraw node,
+ * inject one event in the uhid device,
+ * check that the programs have been inserted in the correct order.
+ */
+TEST_F(hid_bpf, test_hid_attach_flags)
+{
+	const struct test_program progs[] = {
+		{
+			.name = "hid_test_insert2",
+			.flags = HID_BPF_FLAG_NONE,
+		},
+		{
+			.name = "hid_test_insert1",
+			.flags = HID_BPF_FLAG_INSERT_HEAD,
+		},
+		{
+			.name = "hid_test_insert3",
+			.flags = HID_BPF_FLAG_NONE,
+		},
+	};
+	u8 buf[10] = {0};
+	int err;
+
+	LOAD_PROGRAMS(progs);
+
+	/* inject one event */
+	buf[0] = 1;
+	uhid_send_event(_metadata, self->uhid_fd, buf, 6);
+
+	/* read the data from hidraw */
+	memset(buf, 0, sizeof(buf));
+	err = read(self->hidraw_fd, buf, sizeof(buf));
+	ASSERT_EQ(err, 6) TH_LOG("read_hidraw");
+	ASSERT_EQ(buf[1], 1);
+	ASSERT_EQ(buf[2], 2);
+	ASSERT_EQ(buf[3], 3);
 }
 
 /*
