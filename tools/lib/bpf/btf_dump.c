@@ -113,6 +113,8 @@ struct btf_dump {
 	int decl_stack_cap;
 	int decl_stack_cnt;
 
+	bool emit_header_guards;
+
 	/* maps struct/union/enum name to a number of name occurrences */
 	struct hashmap *type_names;
 	/*
@@ -201,6 +203,8 @@ struct btf_dump *btf_dump__new(const struct btf *btf,
 	d->printf_fn = printf_fn;
 	d->cb_ctx = ctx;
 	d->ptr_sz = btf__pointer_size(btf) ? : sizeof(void *);
+
+	d->emit_header_guards = OPTS_GET(opts, emit_header_guards, false);
 
 	d->type_names = hashmap__new(str_hash_fn, str_equal_fn, NULL);
 	if (IS_ERR(d->type_names)) {
@@ -347,6 +351,8 @@ int btf_dump__dump_type(struct btf_dump *d, __u32 id)
 	return 0;
 }
 
+static const char *btf_dump_is_header_guard_tag(struct btf_dump *d, const struct btf_type *t);
+
 /*
  * Mark all types that are referenced from any other type. This is used to
  * determine top-level anonymous enums that need to be emitted as an
@@ -384,9 +390,13 @@ static int btf_dump_mark_referenced(struct btf_dump *d)
 		case BTF_KIND_TYPEDEF:
 		case BTF_KIND_FUNC:
 		case BTF_KIND_VAR:
-		case BTF_KIND_DECL_TAG:
 		case BTF_KIND_TYPE_TAG:
 			d->type_states[t->type].referenced = 1;
+			break;
+
+		case BTF_KIND_DECL_TAG:
+			if (!btf_dump_is_header_guard_tag(d, t))
+				d->type_states[t->type].referenced = 1;
 			break;
 
 		case BTF_KIND_ARRAY: {
@@ -447,6 +457,40 @@ static struct decl_tag_array *realloc_decl_tags(struct decl_tag_array *tags, __u
 	new_tags->cap = new_cap;
 
 	return new_tags;
+}
+
+#define HEADER_GUARD_TAG "header_guard:"
+
+static const char *btf_dump_is_header_guard_tag(struct btf_dump *d, const struct btf_type *t)
+{
+	const char *tag_value;
+	int tag_len = strlen(HEADER_GUARD_TAG);
+
+	tag_value = btf__str_by_offset(d->btf, t->name_off);
+	if (strncmp(tag_value, HEADER_GUARD_TAG, tag_len))
+		return NULL;
+
+	return &tag_value[tag_len];
+}
+
+static const char *btf_dump_find_header_guard(struct btf_dump *d, __u32 id)
+{
+	struct decl_tag_array *decl_tags = btf_dump_find_decl_tags(d, id);
+	const struct btf_type *t;
+	const char *guard;
+	int i;
+
+	if (!decl_tags)
+		return NULL;
+
+	for (i = 0; i < decl_tags->cnt; ++i) {
+		t = btf__type_by_id(d->btf, decl_tags->tag_ids[i]);
+		guard = btf_dump_is_header_guard_tag(d, t);
+		if (guard)
+			return guard;
+	}
+
+	return NULL;
 }
 
 /*
@@ -770,6 +814,8 @@ static const char *btf_dump_type_name(struct btf_dump *d, __u32 id);
 static const char *btf_dump_ident_name(struct btf_dump *d, __u32 id);
 static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
 				 const char *orig_name);
+static void btf_dump_emit_guard_start(struct btf_dump *d, __u32 id);
+static void btf_dump_emit_guard_end(struct btf_dump *d, __u32 id);
 
 static bool btf_dump_is_blacklisted(struct btf_dump *d, __u32 id)
 {
@@ -835,8 +881,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 					id);
 				return;
 			}
+			btf_dump_emit_guard_start(d, id);
 			btf_dump_emit_struct_fwd(d, id, t);
 			btf_dump_printf(d, ";\n\n");
+			btf_dump_emit_guard_end(d, id);
 			tstate->fwd_emitted = 1;
 			break;
 		case BTF_KIND_TYPEDEF:
@@ -846,8 +894,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 			 * references through pointer only, not for embedding
 			 */
 			if (!btf_dump_is_blacklisted(d, id)) {
+				btf_dump_emit_guard_start(d, id);
 				btf_dump_emit_typedef_def(d, id, t, 0);
 				btf_dump_printf(d, ";\n\n");
+				btf_dump_emit_guard_end(d, id);
 			}
 			tstate->fwd_emitted = 1;
 			break;
@@ -868,8 +918,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 	case BTF_KIND_ENUM:
 	case BTF_KIND_ENUM64:
 		if (top_level_def) {
+			btf_dump_emit_guard_start(d, id);
 			btf_dump_emit_enum_def(d, id, t, 0);
 			btf_dump_printf(d, ";\n\n");
+			btf_dump_emit_guard_end(d, id);
 		}
 		tstate->emit_state = EMITTED;
 		break;
@@ -884,8 +936,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 		btf_dump_emit_type(d, btf_array(t)->type, cont_id);
 		break;
 	case BTF_KIND_FWD:
+		btf_dump_emit_guard_start(d, id);
 		btf_dump_emit_fwd_def(d, id, t);
 		btf_dump_printf(d, ";\n\n");
+		btf_dump_emit_guard_end(d, id);
 		tstate->emit_state = EMITTED;
 		break;
 	case BTF_KIND_TYPEDEF:
@@ -899,8 +953,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 		 * emit typedef as a forward declaration
 		 */
 		if (!tstate->fwd_emitted && !btf_dump_is_blacklisted(d, id)) {
+			btf_dump_emit_guard_start(d, id);
 			btf_dump_emit_typedef_def(d, id, t, 0);
 			btf_dump_printf(d, ";\n\n");
+			btf_dump_emit_guard_end(d, id);
 		}
 		tstate->emit_state = EMITTED;
 		break;
@@ -923,14 +979,18 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 			for (i = 0; i < vlen; i++, m++)
 				btf_dump_emit_type(d, m->type, new_cont_id);
 		} else if (!tstate->fwd_emitted && id != cont_id) {
+			btf_dump_emit_guard_start(d, id);
 			btf_dump_emit_struct_fwd(d, id, t);
 			btf_dump_printf(d, ";\n\n");
+			btf_dump_emit_guard_end(d, id);
 			tstate->fwd_emitted = 1;
 		}
 
 		if (top_level_def) {
+			btf_dump_emit_guard_start(d, id);
 			btf_dump_emit_struct_def(d, id, t, 0);
 			btf_dump_printf(d, ";\n\n");
+			btf_dump_emit_guard_end(d, id);
 			tstate->emit_state = EMITTED;
 		} else {
 			tstate->emit_state = NOT_EMITTED;
@@ -1034,6 +1094,8 @@ static void btf_dump_emit_decl_tags(struct btf_dump *d, __u32 id)
 
 	for (i = 0; i < decl_tags->cnt; ++i) {
 		decl_tag_t = btf_type_by_id(d->btf, decl_tags->tag_ids[i]);
+		if (btf_dump_is_header_guard_tag(d, decl_tag_t))
+			continue;
 		decl_tag_text = btf__name_by_offset(d->btf, decl_tag_t->name_off);
 		btf_dump_printf(d, " __attribute__((btf_decl_tag(\"%s\")))", decl_tag_text);
 	}
@@ -1670,6 +1732,31 @@ static void btf_dump_emit_type_cast(struct btf_dump *d, __u32 id,
 
 	if (top_level)
 		btf_dump_printf(d, ")");
+}
+
+static void btf_dump_emit_guard_start(struct btf_dump *d, __u32 id)
+{
+	const char *header_guard;
+
+	if (!d->emit_header_guards)
+		return;
+
+	header_guard = btf_dump_find_header_guard(d, id);
+	if (!header_guard)
+		return;
+
+	btf_dump_printf(d, "#ifndef %s\n\n", header_guard);
+}
+
+static void btf_dump_emit_guard_end(struct btf_dump *d, __u32 id)
+{
+	if (!d->emit_header_guards)
+		return;
+
+	if (!btf_dump_find_header_guard(d, id))
+		return;
+
+	btf_dump_printf(d, "#endif\n\n");
 }
 
 /* return number of duplicates (occurrences) of a given name */

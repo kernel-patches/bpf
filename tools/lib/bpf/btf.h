@@ -235,8 +235,13 @@ struct btf_dump;
 
 struct btf_dump_opts {
 	size_t sz;
+	/*
+	 * if set to true #ifndef X ... #endif brackets would be printed
+	 * for types marked by BTF_DECL_TAG with "header_guard:" prefix
+	 */
+	bool emit_header_guards;
 };
-#define btf_dump_opts__last_field sz
+#define btf_dump_opts__last_field emit_header_guards
 
 typedef void (*btf_dump_printf_fn_t)(void *ctx, const char *fmt, va_list args);
 
