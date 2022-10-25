@@ -13,6 +13,7 @@ static struct btf_dump_test_case {
 	const char *name;
 	const char *file;
 	bool known_ptr_sz;
+	bool emit_header_guards;
 } btf_dump_test_cases[] = {
 	{"btf_dump: syntax", "btf_dump_test_case_syntax", true},
 	{"btf_dump: ordering", "btf_dump_test_case_ordering", false},
@@ -22,15 +23,18 @@ static struct btf_dump_test_case {
 	{"btf_dump: multidim", "btf_dump_test_case_multidim", false},
 	{"btf_dump: namespacing", "btf_dump_test_case_namespacing", false},
 	{"btf_dump: decl_tag", "btf_dump_test_case_decl_tag", true},
+	{"btf_dump: header guards", "btf_dump_test_case_header_guards", true, true},
 };
 
-static int btf_dump_all_types(const struct btf *btf, void *ctx)
+static int btf_dump_all_types(const struct btf *btf, void *ctx, struct btf_dump_test_case *t)
 {
 	size_t type_cnt = btf__type_cnt(btf);
+	LIBBPF_OPTS(btf_dump_opts, opts);
 	struct btf_dump *d;
 	int err = 0, id;
 
-	d = btf_dump__new(btf, btf_dump_printf, ctx, NULL);
+	opts.emit_header_guards = t->emit_header_guards;
+	d = btf_dump__new(btf, btf_dump_printf, ctx, &opts);
 	err = libbpf_get_error(d);
 	if (err)
 		return err;
@@ -87,7 +91,7 @@ static int test_btf_dump_case(int n, struct btf_dump_test_case *t)
 		goto done;
 	}
 
-	err = btf_dump_all_types(btf, f);
+	err = btf_dump_all_types(btf, f, t);
 	fclose(f);
 	close(fd);
 	if (CHECK(err, "btf_dump", "failure during C dumping: %d\n", err)) {
