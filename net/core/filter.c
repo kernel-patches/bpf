@@ -5206,6 +5206,9 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 		return do_tcp_getsockopt(sk, SOL_TCP, optname,
 					 KERNEL_SOCKPTR(optval),
 					 KERNEL_SOCKPTR(optlen));
+	} else {
+		if (optname == TCP_SAVED_SYN)
+			return -EINVAL;
 	}
 
 	return do_tcp_setsockopt(sk, SOL_TCP, optname,
