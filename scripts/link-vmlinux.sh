@@ -110,6 +110,7 @@ vmlinux_link()
 gen_btf()
 {
 	local pahole_ver
+	local extra_flags
 
 	if ! [ -x "$(command -v ${PAHOLE})" ]; then
 		echo >&2 "BTF: ${1}: pahole (${PAHOLE}) is not available"
@@ -122,10 +123,20 @@ gen_btf()
 		return 1
 	fi
 
+	if [ "${pahole_ver}" -ge "124" ]; then
+		scripts/infer_header_guards.pl \
+			include/uapi \
+			include/generated/uapi \
+			arch/${SRCARCH}/include/uapi \
+			arch/${SRCARCH}/include/generated/uapi \
+			> .btf.uapi_header_guards || return 1;
+		extra_flags="--header_guards_db .btf.uapi_header_guards"
+	fi
+
 	vmlinux_link ${1}
 
 	info "BTF" ${2}
-	LLVM_OBJCOPY="${OBJCOPY}" ${PAHOLE} -J ${PAHOLE_FLAGS} ${1}
+	LLVM_OBJCOPY="${OBJCOPY}" ${PAHOLE} -J ${PAHOLE_FLAGS} ${extra_flags} ${1}
 
 	# Create ${2} which contains just .BTF section but no symbols. Add
 	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
