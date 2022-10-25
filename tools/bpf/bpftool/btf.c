@@ -466,7 +466,9 @@ static int dump_btf_c(const struct btf *btf,
 	struct btf_dump *d;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
+	LIBBPF_OPTS(btf_dump_opts, opts);
+	opts.emit_header_guards = true;
+	d = btf_dump__new(btf, btf_dump_printf, NULL, &opts);
 	err = libbpf_get_error(d);
 	if (err)
 		return err;
