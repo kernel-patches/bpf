@@ -75,6 +75,15 @@ struct btf_dump_data {
 	bool is_array_char;
 };
 
+/*
+ * An array of ids of BTF_DECL_TAG objects associated with a specific type.
+ */
+struct decl_tag_array {
+	__u16 cnt;
+	__u16 cap;
+	__u32 tag_ids[0];
+};
+
 struct btf_dump {
 	const struct btf *btf;
 	btf_dump_printf_fn_t printf_fn;
@@ -112,6 +121,11 @@ struct btf_dump {
 	 */
 	struct hashmap *ident_names;
 	/*
+	 * maps type id to decl_tag_array, assume that relatively small
+	 * fraction of types has btf_decl_tag's attached
+	 */
+	struct hashmap *decl_tags;
+	/*
 	 * data for typed display; allocated if needed.
 	 */
 	struct btf_dump_data *typed_dump;
@@ -125,6 +139,26 @@ static size_t str_hash_fn(const void *key, void *ctx)
 static bool str_equal_fn(const void *a, const void *b, void *ctx)
 {
 	return strcmp(a, b) == 0;
+}
+
+static size_t int_hash_fn(const void *key, void *ctx)
+{
+	int i;
+	size_t h = 0;
+	char *bytes = (char *)key;
+
+	for (i = 0; i < 4; ++i)
+		h = h * 31 + bytes[i];
+
+	return h;
+}
+
+static bool int_equal_fn(const void *a, const void *b, void *ctx)
+{
+	int *ia = (int *)a;
+	int *ib = (int *)b;
+
+	return *ia == *ib;
 }
 
 static const char *btf_name_of(const struct btf_dump *d, __u32 name_off)
@@ -143,6 +177,7 @@ static void btf_dump_printf(const struct btf_dump *d, const char *fmt, ...)
 
 static int btf_dump_mark_referenced(struct btf_dump *d);
 static int btf_dump_resize(struct btf_dump *d);
+static int btf_dump_assign_decl_tags(struct btf_dump *d);
 
 struct btf_dump *btf_dump__new(const struct btf *btf,
 			       btf_dump_printf_fn_t printf_fn,
@@ -179,8 +214,21 @@ struct btf_dump *btf_dump__new(const struct btf *btf,
 		d->ident_names = NULL;
 		goto err;
 	}
+	d->decl_tags = hashmap__new(int_hash_fn, int_equal_fn, NULL);
+	if (IS_ERR(d->decl_tags)) {
+		err = PTR_ERR(d->decl_tags);
+		d->decl_tags = NULL;
+		goto err;
+	}
 
 	err = btf_dump_resize(d);
+	if (err)
+		goto err;
+
+	err = btf_dump_assign_decl_tags(d);
+	if (err)
+		goto err;
+
 	if (err)
 		goto err;
 
@@ -232,7 +280,8 @@ static void btf_dump_free_names(struct hashmap *map)
 
 void btf_dump__free(struct btf_dump *d)
 {
-	int i;
+	int i, bkt;
+	struct hashmap_entry *cur;
 
 	if (IS_ERR_OR_NULL(d))
 		return;
@@ -250,6 +299,9 @@ void btf_dump__free(struct btf_dump *d)
 	free(d->decl_stack);
 	btf_dump_free_names(d->type_names);
 	btf_dump_free_names(d->ident_names);
+	hashmap__for_each_entry(d->decl_tags, cur, bkt)
+		free(cur->value);
+	hashmap__free(d->decl_tags);
 
 	free(d);
 }
@@ -370,6 +422,77 @@ static int btf_dump_mark_referenced(struct btf_dump *d)
 			return -EINVAL;
 		}
 	}
+	return 0;
+}
+
+static struct decl_tag_array *btf_dump_find_decl_tags(struct btf_dump *d, __u32 id)
+{
+	struct decl_tag_array *decl_tags = NULL;
+
+	hashmap__find(d->decl_tags, &id, (void **)&decl_tags);
+
+	return decl_tags;
+}
+
+static struct decl_tag_array *realloc_decl_tags(struct decl_tag_array *tags, __u16 new_cap)
+{
+	size_t new_size = sizeof(struct decl_tag_array) + new_cap * sizeof(__u32);
+	struct decl_tag_array *new_tags = (tags
+					   ? realloc(tags, new_size)
+					   : calloc(1, new_size));
+
+	if (!new_tags)
+		return NULL;
+
+	new_tags->cap = new_cap;
+
+	return new_tags;
+}
+
+/*
+ * Scans all BTF objects looking for BTF_KIND_DECL_TAG entries.
+ * The id's of the entries are stored in the `btf_dump.decl_tags` table,
+ * grouped by a target type.
+ */
+static int btf_dump_assign_decl_tags(struct btf_dump *d)
+{
+	int err;
+	__u32 id;
+	__u32 n = btf__type_cnt(d->btf);
+	__u32 new_capacity;
+	const struct btf_type *t;
+	struct decl_tag_array *decl_tags;
+
+	for (id = 0; id < n; id++) {
+		t = btf__type_by_id(d->btf, id);
+
+		if (btf_kind(t) != BTF_KIND_DECL_TAG)
+			continue;
+
+		decl_tags = btf_dump_find_decl_tags(d, t->type);
+		if (!decl_tags) {
+			decl_tags = realloc_decl_tags(NULL, 1);
+			if (!decl_tags)
+				return -ENOMEM;
+			err = hashmap__insert(d->decl_tags, &t->type, decl_tags,
+					      HASHMAP_SET, NULL, NULL);
+			if (err)
+				return err;
+		} else if (decl_tags->cnt == decl_tags->cap) {
+			new_capacity = decl_tags->cap * 2;
+			if (new_capacity > 0xffff)
+				return -ERANGE;
+			decl_tags = realloc_decl_tags(decl_tags, new_capacity);
+			if (!decl_tags)
+				return -ENOMEM;
+			decl_tags->cap = new_capacity;
+			err = hashmap__update(d->decl_tags, &t->type, decl_tags, NULL, NULL);
+			if (err)
+				return err;
+		}
+		decl_tags->tag_ids[decl_tags->cnt++] = id;
+	}
+
 	return 0;
 }
 
@@ -899,6 +1022,23 @@ static void btf_dump_emit_bit_padding(const struct btf_dump *d,
 	}
 }
 
+static void btf_dump_emit_decl_tags(struct btf_dump *d, __u32 id)
+{
+	struct decl_tag_array *decl_tags = btf_dump_find_decl_tags(d, id);
+	struct btf_type *decl_tag_t;
+	const char *decl_tag_text;
+	__u32 i;
+
+	if (!decl_tags)
+		return;
+
+	for (i = 0; i < decl_tags->cnt; ++i) {
+		decl_tag_t = btf_type_by_id(d->btf, decl_tags->tag_ids[i]);
+		decl_tag_text = btf__name_by_offset(d->btf, decl_tag_t->name_off);
+		btf_dump_printf(d, " __attribute__((btf_decl_tag(\"%s\")))", decl_tag_text);
+	}
+}
+
 static void btf_dump_emit_struct_fwd(struct btf_dump *d, __u32 id,
 				     const struct btf_type *t)
 {
@@ -964,6 +1104,7 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 	btf_dump_printf(d, "%s}", pfx(lvl));
 	if (packed)
 		btf_dump_printf(d, " __attribute__((packed))");
+	btf_dump_emit_decl_tags(d, id);
 }
 
 static const char *missing_base_types[][2] = {
