@@ -2881,6 +2881,7 @@ static int btf_dedup_strings(struct btf_dedup *d);
 static int btf_dedup_prim_types(struct btf_dedup *d);
 static int btf_dedup_struct_types(struct btf_dedup *d);
 static int btf_dedup_ref_types(struct btf_dedup *d);
+static int btf_dedup_standalone_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
 static int btf_dedup_remap_types(struct btf_dedup *d);
 
@@ -2988,15 +2989,16 @@ static int btf_dedup_remap_types(struct btf_dedup *d);
  * Algorithm summary
  * =================
  *
- * Algorithm completes its work in 6 separate passes:
+ * Algorithm completes its work in 7 separate passes:
  *
  * 1. Strings deduplication.
  * 2. Primitive types deduplication (int, enum, fwd).
  * 3. Struct/union types deduplication.
- * 4. Reference types deduplication (pointers, typedefs, arrays, funcs, func
+ * 4. Standalone fwd declarations deduplication.
+ * 5. Reference types deduplication (pointers, typedefs, arrays, funcs, func
  *    protos, and const/volatile/restrict modifiers).
- * 5. Types compaction.
- * 6. Types remapping.
+ * 6. Types compaction.
+ * 7. Types remapping.
  *
  * Algorithm determines canonical type descriptor, which is a single
  * representative type for each truly unique type. This canonical type is the
@@ -3058,6 +3060,11 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 	err = btf_dedup_struct_types(d);
 	if (err < 0) {
 		pr_debug("btf_dedup_struct_types failed:%d\n", err);
+		goto done;
+	}
+	err = btf_dedup_standalone_fwds(d);
+	if (err < 0) {
+		pr_debug("btf_dedup_standalone_fwd failed:%d\n", err);
 		goto done;
 	}
 	err = btf_dedup_ref_types(d);
@@ -4523,6 +4530,169 @@ static int btf_dedup_ref_types(struct btf_dedup *d)
 	hashmap__free(d->dedup_table);
 	d->dedup_table = NULL;
 	return 0;
+}
+
+/*
+ * `name_off_map` maps name offsets to type ids (essentially __u32 -> __u32).
+ *
+ * The __u32 key/value representations are cast to `void *` before passing
+ * to `hashmap__*` functions. These pseudo-pointers are never dereferenced.
+ *
+ */
+static struct hashmap *name_off_map__new(void)
+{
+	return hashmap__new(btf_dedup_identity_hash_fn,
+			    btf_dedup_equal_fn,
+			    NULL);
+}
+
+static int name_off_map__find(struct hashmap *map, __u32 name_off, __u32 *type_id)
+{
+	/* This has to be sizeof(void *) in order to be passed to hashmap__find */
+	void *tmp;
+	int found = hashmap__find(map, (void *)(ptrdiff_t)name_off, &tmp);
+	/*
+	 * __u64 cast is necessary to avoid pointer to integer conversion size warning.
+	 * It is fine to get rid of this warning as `void *` is used as an integer value.
+	 */
+	if (found)
+		*type_id = (__u64)tmp;
+	return found;
+}
+
+static int name_off_map__set(struct hashmap *map, __u32 name_off, __u32 type_id)
+{
+	return hashmap__set(map, (void *)(size_t)name_off, (void *)(size_t)type_id,
+			    NULL, NULL);
+}
+
+/*
+ * Collect a `name_off_map` that maps type names to type ids for all
+ * canonical structs and unions. If the same name is shared by several
+ * canonical types use a special value 0 to indicate this fact.
+ */
+static int btf_dedup_fill_unique_names_map(struct btf_dedup *d, struct hashmap *names_map)
+{
+	int i, err = 0;
+	__u32 type_id, collision_id;
+	__u16 kind;
+	struct btf_type *t;
+
+	for (i = 0; i < d->btf->nr_types; i++) {
+		type_id = d->btf->start_id + i;
+		t = btf_type_by_id(d->btf, type_id);
+		kind = btf_kind(t);
+
+		if (kind != BTF_KIND_STRUCT && kind != BTF_KIND_UNION)
+			continue;
+
+		/* Skip non-canonical types */
+		if (type_id != d->map[type_id])
+			continue;
+
+		err = 0;
+		if (name_off_map__find(names_map, t->name_off, &collision_id)) {
+			/* Mark non-unique names with 0 */
+			if (collision_id != 0 && collision_id != type_id)
+				err = name_off_map__set(names_map, t->name_off, 0);
+		} else {
+			err = name_off_map__set(names_map, t->name_off, type_id);
+		}
+
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
+}
+
+static int btf_dedup_standalone_fwd(struct btf_dedup *d,
+				    struct hashmap *names_map,
+				    __u32 type_id)
+{
+	struct btf_type *t = btf_type_by_id(d->btf, type_id);
+	__u16 kind = btf_kind(t);
+	enum btf_fwd_kind fwd_kind = BTF_INFO_KFLAG(t->info);
+
+	struct btf_type *cand_t;
+	__u16 cand_kind;
+	__u32 cand_id = 0;
+
+	if (kind != BTF_KIND_FWD)
+		return 0;
+
+	/* Skip if this FWD already has a mapping */
+	if (type_id != d->map[type_id])
+		return 0;
+
+	name_off_map__find(names_map, t->name_off, &cand_id);
+	if (!cand_id)
+		return 0;
+
+	cand_t = btf_type_by_id(d->btf, cand_id);
+	cand_kind = btf_kind(cand_t);
+	if (!(cand_kind == BTF_KIND_STRUCT && fwd_kind == BTF_FWD_STRUCT) &&
+	    !(cand_kind == BTF_KIND_UNION && fwd_kind == BTF_FWD_UNION))
+		return 0;
+
+	d->map[type_id] = cand_id;
+
+	return 0;
+}
+
+/*
+ * Standalone fwd declarations deduplication.
+ *
+ * The lion's share of all FWD declarations is resolved during
+ * `btf_dedup_struct_types` phase when different type graphs are
+ * compared against each other. However, if in some compilation unit a
+ * FWD declaration is not a part of a type graph compared against
+ * another type graph that declaration's canonical type would not be
+ * changed. Example:
+ *
+ * CU #1:
+ *
+ * struct foo;
+ * struct foo *some_global;
+ *
+ * CU #2:
+ *
+ * struct foo { int u; };
+ * struct foo *another_global;
+ *
+ * After `btf_dedup_struct_types` the BTF looks as follows:
+ *
+ * [1] STRUCT 'foo' size=4 vlen=1 ...
+ * [2] INT 'int' size=4 ...
+ * [3] PTR '(anon)' type_id=1
+ * [4] FWD 'foo' fwd_kind=struct
+ * [5] PTR '(anon)' type_id=4
+ *
+ * This pass assumes that such FWD declarations should be mapped to
+ * structs or unions with identical name in case if the name is not
+ * ambiguous.
+ */
+static int btf_dedup_standalone_fwds(struct btf_dedup *d)
+{
+	int i, err;
+	struct hashmap *names_map = name_off_map__new();
+
+	if (!names_map)
+		return -ENOMEM;
+
+	err = btf_dedup_fill_unique_names_map(d, names_map);
+	if (err < 0)
+		goto exit;
+
+	for (i = 0; i < d->btf->nr_types; i++) {
+		err = btf_dedup_standalone_fwd(d, names_map, d->btf->start_id + i);
+		if (err < 0)
+			goto exit;
+	}
+
+exit:
+	hashmap__free(names_map);
+	return err;
 }
 
 /*
