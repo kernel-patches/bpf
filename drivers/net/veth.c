@@ -597,6 +597,7 @@ static struct xdp_frame *veth_xdp_rcv_one(struct veth_rq *rq,
 
 		xdp_convert_frame_to_buff(frame, &xdp);
 		xdp.rxq = &rq->xdp_rxq;
+		xdp.priv = NULL;
 
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
 
@@ -820,6 +821,7 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 
 	orig_data = xdp.data;
 	orig_data_end = xdp.data_end;
+	xdp.priv = skb;
 
 	act = bpf_prog_run_xdp(xdp_prog, &xdp);
 
@@ -936,6 +938,7 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 			struct sk_buff *skb = ptr;
 
 			stats->xdp_bytes += skb->len;
+			__net_timestamp(skb);
 			skb = veth_xdp_rcv_skb(rq, skb, bq, stats);
 			if (skb) {
 				if (skb_shared(skb) || skb_unclone(skb, GFP_ATOMIC))
@@ -1595,6 +1598,33 @@ static int veth_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 	}
 }
 
+static int veth_unroll_kfunc(struct bpf_prog *prog, struct bpf_insn *insn)
+{
+	u32 func_id = insn->imm;
+
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_HAVE_RX_TIMESTAMP)) {
+		/* return true; */
+		insn[0] = BPF_MOV64_IMM(BPF_REG_0, 1);
+		return 1;
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {
+		/* r1 = ((struct xdp_buff *)r1)->priv; [skb] */
+		insn[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1,
+				      offsetof(struct xdp_buff, priv));
+		/* if (r1 == NULL) { */
+		insn[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 1);
+		/*	return 0; */
+		insn[2] = BPF_MOV64_IMM(BPF_REG_0, 0);
+		/* } else { */
+		/*	return ((struct sk_buff *)r1)->tstamp; */
+		insn[3] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1,
+				      offsetof(struct sk_buff, tstamp));
+		/* } */
+		return 4;
+	}
+
+	return 0;
+}
+
 static const struct net_device_ops veth_netdev_ops = {
 	.ndo_init            = veth_dev_init,
 	.ndo_open            = veth_open,
@@ -1614,6 +1644,7 @@ static const struct net_device_ops veth_netdev_ops = {
 	.ndo_bpf		= veth_xdp,
 	.ndo_xdp_xmit		= veth_ndo_xdp_xmit,
 	.ndo_get_peer_dev	= veth_peer_dev,
+	.ndo_unroll_kfunc       = veth_unroll_kfunc,
 };
 
 #define VETH_FEATURES (NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_HW_CSUM | \
