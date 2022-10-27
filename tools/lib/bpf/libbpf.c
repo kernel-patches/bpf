@@ -7190,6 +7190,7 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 
 		prog->type = prog->sec_def->prog_type;
 		prog->expected_attach_type = prog->sec_def->expected_attach_type;
+		prog->prog_ifindex = opts->prog_ifindex;
 
 		/* sec_def can have custom callback which should be called
 		 * after bpf_program is initialized to adjust its properties

@@ -170,9 +170,13 @@ struct bpf_object_open_opts {
 	 */
 	__u32 kernel_log_level;
 
+	/* Optional ifindex of netdev for offload purposes.
+	 */
+	int prog_ifindex;
+
 	size_t :0;
 };
-#define bpf_object_open_opts__last_field kernel_log_level
+#define bpf_object_open_opts__last_field prog_ifindex
 
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 
