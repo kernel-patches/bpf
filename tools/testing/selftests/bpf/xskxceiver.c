@@ -871,7 +871,9 @@ static bool is_offset_correct(struct xsk_umem_info *umem, struct pkt_stream *pkt
 static bool is_pkt_valid(struct pkt *pkt, void *buffer, u64 addr, u32 len)
 {
 	void *data = xsk_umem__get_data(buffer, addr);
+	void *data_meta = data - sizeof(__u32);
 	struct iphdr *iphdr = (struct iphdr *)(data + sizeof(struct ethhdr));
+	__u32 rx_timestamp = 0;
 
 	if (!pkt) {
 		ksft_print_msg("[%s] too many packets received\n", __func__);
@@ -904,6 +906,13 @@ static bool is_pkt_valid(struct pkt *pkt, void *buffer, u64 addr, u32 len)
 		ksft_print_msg("Invalid frame received: ");
 		ksft_print_msg("[IP_PKT_VER: %02X], [IP_PKT_TOS: %02X]\n", iphdr->version,
 			       iphdr->tos);
+		return false;
+	}
+
+	memcpy(&rx_timestamp, data_meta, sizeof(rx_timestamp));
+	if (rx_timestamp == 0) {
+		ksft_print_msg("Invalid metadata received: ");
+		ksft_print_msg("got %08x, expected != 0\n", rx_timestamp);
 		return false;
 	}
 
@@ -1331,6 +1340,7 @@ static void thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 	u64 umem_sz = ifobject->umem->num_frames * ifobject->umem->frame_size;
 	int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	LIBBPF_OPTS(bpf_xdp_query_opts, opts);
+	LIBBPF_OPTS(bpf_object_open_opts, open_opts);
 	int ret, ifindex;
 	void *bufs;
 
@@ -1340,9 +1350,20 @@ static void thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 	if (!ifindex)
 		exit_with_error(errno);
 
-	ifobject->bpf_obj = xskxceiver__open_and_load();
+	open_opts.prog_ifindex = ifindex;
+
+	ifobject->bpf_obj = xskxceiver__open_opts(&open_opts);
 	if (libbpf_get_error(ifobject->bpf_obj))
 		exit_with_error(libbpf_get_error(ifobject->bpf_obj));
+
+	ret = bpf_program__set_flags(bpf_object__find_program_by_name(ifobject->bpf_obj->obj, "rx"),
+				     BPF_F_XDP_HAS_METADATA);
+	if (ret < 0)
+		exit_with_error(ret);
+
+	ret = xskxceiver__load(ifobject->bpf_obj);
+	if (ret < 0)
+		exit_with_error(ret);
 
 	if (ifobject->umem->unaligned_mode)
 		mmap_flags |= MAP_HUGETLB;
