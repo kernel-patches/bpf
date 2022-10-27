@@ -5,6 +5,8 @@
 #ifndef XSKXCEIVER_H_
 #define XSKXCEIVER_H_
 
+#include "xskxceiver.skel.h"
+
 #ifndef SOL_XDP
 #define SOL_XDP 283
 #endif
@@ -134,6 +136,7 @@ typedef void *(*thread_func_t)(void *arg);
 struct ifobject {
 	char ifname[MAX_INTERFACE_NAME_CHARS];
 	char nsname[MAX_INTERFACES_NAMESPACE_CHARS];
+	struct xskxceiver *bpf_obj;
 	struct xsk_socket_info *xsk;
 	struct xsk_socket_info *xsk_arr;
 	struct xsk_umem_info *umem;
@@ -141,7 +144,7 @@ struct ifobject {
 	validation_func_t validation_func;
 	struct pkt_stream *pkt_stream;
 	int ns_fd;
-	int xsk_map_fd;
+	int ifindex;
 	u32 dst_ip;
 	u32 src_ip;
 	u32 xdp_flags;
