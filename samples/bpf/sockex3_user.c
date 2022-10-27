@@ -22,6 +22,14 @@ struct pair {
 	__u64 bytes;
 };
 
+static int socket_prog_type_id;
+
+__attribute__((destructor))
+static void unregister_socket_sec_handlers(void)
+{
+	libbpf_unregister_prog_handler(socket_prog_type_id);
+}
+
 int main(int argc, char **argv)
 {
 	int i, sock, key, fd, main_prog_fd, jmp_table_fd, hash_map_fd;
@@ -30,6 +38,13 @@ int main(int argc, char **argv)
 	const char *section;
 	char filename[256];
 	FILE *f;
+
+	LIBBPF_OPTS(libbpf_prog_handler_opts, socket_opts,
+		.cookie = 1,
+	);
+
+	socket_prog_type_id = libbpf_register_prog_handler("socket/",
+			BPF_PROG_TYPE_SOCKET_FILTER, 0, &socket_opts);
 
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 
