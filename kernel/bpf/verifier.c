@@ -13864,6 +13864,37 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 	return err;
 }
 
+static int unroll_kfunc_call(struct bpf_verifier_env *env,
+			     struct bpf_insn *insn)
+{
+	enum bpf_prog_type prog_type;
+	struct bpf_prog_aux *aux;
+	struct btf *desc_btf;
+	u32 *kfunc_flags;
+	u32 func_id;
+
+	desc_btf = find_kfunc_desc_btf(env, insn->off);
+	if (IS_ERR(desc_btf))
+		return PTR_ERR(desc_btf);
+
+	prog_type = resolve_prog_type(env->prog);
+	func_id = insn->imm;
+
+	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, prog_type, func_id);
+	if (!kfunc_flags)
+		return 0;
+	if (!(*kfunc_flags & KF_UNROLL))
+		return 0;
+	if (prog_type != BPF_PROG_TYPE_XDP)
+		return 0;
+
+	aux = env->prog->aux;
+	if (!aux->xdp_kfunc_ndo)
+		return 0;
+
+	return aux->xdp_kfunc_ndo->ndo_unroll_kfunc(env->prog, insn);
+}
+
 static int fixup_kfunc_call(struct bpf_verifier_env *env,
 			    struct bpf_insn *insn)
 {
@@ -14027,6 +14058,35 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			if (bpf_prog_is_dev_bound(env->prog->aux)) {
+				verbose(env, "no metadata kfuncs offload\n");
+				return -EINVAL;
+			}
+
+			insn_buf[0] = *insn;
+
+			cnt = unroll_kfunc_call(env, insn_buf);
+			if (cnt < 0) {
+				verbose(env, "failed to unroll kfunc with func_id=%d\n", insn->imm);
+				return cnt;
+			}
+			if (cnt > 0) {
+				if (cnt >= ARRAY_SIZE(insn_buf)) {
+					verbose(env, "bpf verifier is misconfigured (kfunc unroll)\n");
+					return -EINVAL;
+				}
+
+				new_prog = bpf_patch_insn_data(env, i + delta,
+							       insn_buf, cnt);
+				if (!new_prog)
+					return -ENOMEM;
+
+				delta    += cnt - 1;
+				env->prog = prog = new_prog;
+				insn      = new_prog->insnsi + i + delta;
+				continue;
+			}
+
 			ret = fixup_kfunc_call(env, insn);
 			if (ret)
 				return ret;

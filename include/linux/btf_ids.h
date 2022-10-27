@@ -195,6 +195,10 @@ asm(							\
 __BTF_ID_LIST(name, local)				\
 __BTF_SET8_START(name, local)
 
+#define BTF_SET8_START_GLOBAL(name)			\
+__BTF_ID_LIST(name, global)				\
+__BTF_SET8_START(name, global)
+
 #define BTF_SET8_END(name)				\
 asm(							\
 ".pushsection " BTF_IDS_SECTION ",\"a\";      \n"	\
