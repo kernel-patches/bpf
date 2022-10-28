@@ -1411,7 +1411,9 @@
  *	Check permissions for allocating a new virtual mapping.
  *	@mm contains the mm struct it is being added to.
  *	@pages contains the number of pages.
- *	Return 0 if permission is granted.
+ *	Return 0 if permission is granted by LSMs to the caller. LSMs should
+ *	return 1 if __vm_enough_memory() should be called with
+ *	cap_sys_admin set, 0 if not.
  *
  * @ismaclabel:
  *	Check if the extended attribute specified by @name
