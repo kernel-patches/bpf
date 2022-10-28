@@ -348,6 +348,62 @@ bool bpf_lsm_is_sleepable_hook(u32 btf_id)
 	return btf_id_set_contains(&sleepable_lsm_hooks, btf_id);
 }
 
+/* The set of hooks which are allowed to return a positive value. */
+BTF_SET_START(pos_ret_value_lsm_hooks)
+BTF_ID(func, bpf_lsm_vm_enough_memory)
+BTF_ID(func, bpf_lsm_inode_getsecurity)
+BTF_ID(func, bpf_lsm_inode_listsecurity)
+BTF_ID(func, bpf_lsm_inode_need_killpriv)
+BTF_ID(func, bpf_lsm_inode_copy_up_xattr)
+BTF_ID(func, bpf_lsm_getprocattr)
+BTF_ID(func, bpf_lsm_setprocattr)
+BTF_ID(func, bpf_lsm_xfrm_state_pol_flow_match)
+BTF_ID(func, bpf_lsm_key_getsecurity)
+BTF_ID(func, bpf_lsm_ismaclabel)
+BTF_ID(func, bpf_lsm_audit_rule_known)
+BTF_ID(func, bpf_lsm_audit_rule_match)
+BTF_SET_END(pos_ret_value_lsm_hooks)
+
+bool bpf_lsm_can_ret_pos_value(u32 btf_id)
+{
+	return btf_id_set_contains(&pos_ret_value_lsm_hooks, btf_id);
+}
+
+BTF_SET_START(one_ret_value_lsm_hooks)
+BTF_ID(func, bpf_lsm_vm_enough_memory)
+BTF_ID(func, bpf_lsm_inode_copy_up_xattr)
+BTF_ID(func, bpf_lsm_xfrm_state_pol_flow_match)
+BTF_ID(func, bpf_lsm_ismaclabel)
+BTF_ID(func, bpf_lsm_audit_rule_known)
+BTF_ID(func, bpf_lsm_audit_rule_match)
+BTF_SET_END(one_ret_value_lsm_hooks)
+
+bool bpf_lsm_can_ret_only_one_as_pos_value(u32 btf_id)
+{
+	return btf_id_set_contains(&one_ret_value_lsm_hooks, btf_id);
+}
+
+/* The set of hooks which are not allowed to return zero. */
+BTF_SET_START(not_zero_ret_value_lsm_hooks)
+BTF_ID(func, bpf_lsm_inode_init_security)
+BTF_SET_END(not_zero_ret_value_lsm_hooks)
+
+bool bpf_lsm_cannot_ret_zero(u32 btf_id)
+{
+	return btf_id_set_contains(&not_zero_ret_value_lsm_hooks, btf_id);
+}
+
+/* The set of hooks which are not allowed to return a negative value. */
+BTF_SET_START(not_neg_ret_value_lsm_hooks)
+BTF_ID(func, bpf_lsm_vm_enough_memory)
+BTF_ID(func, bpf_lsm_audit_rule_known)
+BTF_SET_END(not_neg_ret_value_lsm_hooks)
+
+bool bpf_lsm_cannot_ret_neg_value(u32 btf_id)
+{
+	return btf_id_set_contains(&not_neg_ret_value_lsm_hooks, btf_id);
+}
+
 const struct bpf_prog_ops lsm_prog_ops = {
 };
 

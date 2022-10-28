@@ -10622,9 +10622,38 @@ static int check_return_code(struct bpf_verifier_env *env)
 
 	case BPF_PROG_TYPE_LSM:
 		if (env->prog->expected_attach_type != BPF_LSM_CGROUP) {
-			/* Regular BPF_PROG_TYPE_LSM programs can return
-			 * any value.
-			 */
+			/* < 0 */
+			if (tnum_in(tnum_range((u64)(~0) << 31, (u64)(~0)), reg->var_off)) {
+				if (bpf_lsm_cannot_ret_neg_value(env->prog->aux->attach_btf_id)) {
+					verbose(env, "Invalid R0, cannot return negative value\n");
+					return -EINVAL;
+				}
+			/* = 0 */
+			} else if (tnum_equals_const(reg->var_off, 0)) {
+				if (bpf_lsm_cannot_ret_zero(env->prog->aux->attach_btf_id)) {
+					verbose(env, "Invalid R0, cannot return zero value\n");
+					return -EINVAL;
+				}
+			/* = 1 */
+			} else if (tnum_equals_const(reg->var_off, 1)) {
+				if (!bpf_lsm_can_ret_pos_value(env->prog->aux->attach_btf_id)) {
+					verbose(env, "Invalid R0, cannot return positive value\n");
+					return -EINVAL;
+				}
+			/* > 1 */
+			} else {
+				if (!bpf_lsm_can_ret_pos_value(env->prog->aux->attach_btf_id)) {
+					verbose(env, "Invalid R0, cannot return positive value\n");
+					return -EINVAL;
+				}
+
+				if (bpf_lsm_can_ret_only_one_as_pos_value(env->prog->aux->attach_btf_id)) {
+					verbose(env,
+						"Invalid R0, can return only one as positive value\n");
+					return -EINVAL;
+				}
+			}
+
 			return 0;
 		}
 		if (!env->prog->aux->attach_func_proto->type) {

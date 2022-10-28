@@ -28,6 +28,10 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			const struct bpf_prog *prog);
 
 bool bpf_lsm_is_sleepable_hook(u32 btf_id);
+bool bpf_lsm_can_ret_pos_value(u32 btf_id);
+bool bpf_lsm_can_ret_only_one_as_pos_value(u32 btf_id);
+bool bpf_lsm_cannot_ret_zero(u32 btf_id);
+bool bpf_lsm_cannot_ret_neg_value(u32 btf_id);
 
 static inline struct bpf_storage_blob *bpf_inode(
 	const struct inode *inode)
@@ -47,6 +51,26 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func)
 #else /* !CONFIG_BPF_LSM */
 
 static inline bool bpf_lsm_is_sleepable_hook(u32 btf_id)
+{
+	return false;
+}
+
+static inline bool bpf_lsm_can_ret_pos_value(u32 btf_id)
+{
+	return false;
+}
+
+static inline bool bpf_lsm_can_ret_only_one_as_pos_value(u32 btf_id)
+{
+	return false;
+}
+
+static inline bool bpf_lsm_cannot_ret_zero(u32 btf_id)
+{
+	return false;
+}
+
+static inline bool bpf_lsm_cannot_ret_neg_value(u32 btf_id)
 {
 	return false;
 }
