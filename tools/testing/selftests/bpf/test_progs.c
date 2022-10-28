@@ -222,6 +222,11 @@ static char *test_result(bool failed, bool skipped)
 	return failed ? "FAIL" : (skipped ? "SKIP" : "OK");
 }
 
+static char *test_group_result(int tests_count, bool failed, int skipped)
+{
+	return failed ? "FAIL" : (skipped == tests_count ? "SKIP" : "OK");
+}
+
 static void print_test_log(char *log_buf, size_t log_cnt)
 {
 	log_buf[log_cnt] = '\0';
@@ -308,7 +313,8 @@ static void dump_test_log(const struct prog_test_def *test,
 	}
 
 	print_test_name(test->test_num, test->test_name,
-			test_result(test_failed, test_state->skip_cnt));
+			test_group_result(test_state->subtest_num,
+				test_failed, test_state->skip_cnt));
 }
 
 static void stdio_restore(void);
@@ -1071,7 +1077,8 @@ static void run_one_test(int test_num)
 
 	if (verbose() && env.worker_id == -1)
 		print_test_name(test_num + 1, test->test_name,
-				test_result(state->error_cnt, state->skip_cnt));
+				test_group_result(state->subtest_num,
+					state->error_cnt, state->skip_cnt));
 
 	reset_affinity();
 	restore_netns();
