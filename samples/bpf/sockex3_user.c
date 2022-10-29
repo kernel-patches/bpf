@@ -39,6 +39,9 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	bpf_object__for_each_program(prog, obj)
+		bpf_program__set_type(prog, BPF_PROG_TYPE_SOCKET_FILTER);
+
 	/* load BPF program */
 	if (bpf_object__load(obj)) {
 		fprintf(stderr, "ERROR: loading BPF object file failed\n");
