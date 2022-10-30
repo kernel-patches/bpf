@@ -131,7 +131,7 @@ static void *program_priv(const struct bpf_program *prog)
 
 	if (IS_ERR_OR_NULL(bpf_program_hash))
 		return NULL;
-	if (!hashmap__find(bpf_program_hash, prog, &priv))
+	if (!hashmap__find(bpf_program_hash, (long)prog, (long *)&priv))
 		return NULL;
 	return priv;
 }
@@ -318,7 +318,7 @@ static void bpf_program_hash_free(void)
 		return;
 
 	hashmap__for_each_entry(bpf_program_hash, cur, bkt)
-		clear_prog_priv(cur->key, cur->value);
+		clear_prog_priv((struct bpf_program *)cur->key, (void *)cur->value);
 
 	hashmap__free(bpf_program_hash);
 	bpf_program_hash = NULL;
@@ -339,13 +339,12 @@ void bpf__clear(void)
 	bpf_map_hash_free();
 }
 
-static size_t ptr_hash(const void *__key, void *ctx __maybe_unused)
+static size_t ptr_hash(const long __key, void *ctx __maybe_unused)
 {
-	return (size_t) __key;
+	return __key;
 }
 
-static bool ptr_equal(const void *key1, const void *key2,
-			  void *ctx __maybe_unused)
+static bool ptr_equal(long key1, long key2, void *ctx __maybe_unused)
 {
 	return key1 == key2;
 }
@@ -370,9 +369,9 @@ static int program_set_priv(struct bpf_program *prog, void *priv)
 	old_priv = program_priv(prog);
 	if (old_priv) {
 		clear_prog_priv(prog, old_priv);
-		return hashmap__set(bpf_program_hash, prog, priv, NULL, NULL);
+		return hashmap__set(bpf_program_hash, (long)prog, (long)priv, NULL, NULL);
 	}
-	return hashmap__add(bpf_program_hash, prog, priv);
+	return hashmap__add(bpf_program_hash, (long)prog, (long)priv);
 }
 
 static int
@@ -1171,7 +1170,7 @@ static void *map_priv(const struct bpf_map *map)
 
 	if (IS_ERR_OR_NULL(bpf_map_hash))
 		return NULL;
-	if (!hashmap__find(bpf_map_hash, map, &priv))
+	if (!hashmap__find(bpf_map_hash, (long)map, (long *)&priv))
 		return NULL;
 	return priv;
 }
@@ -1185,7 +1184,7 @@ static void bpf_map_hash_free(void)
 		return;
 
 	hashmap__for_each_entry(bpf_map_hash, cur, bkt)
-		bpf_map_priv__clear(cur->key, cur->value);
+		bpf_map_priv__clear((struct bpf_map *)cur->key, (void *)cur->value);
 
 	hashmap__free(bpf_map_hash);
 	bpf_map_hash = NULL;
@@ -1207,9 +1206,9 @@ static int map_set_priv(struct bpf_map *map, void *priv)
 	old_priv = map_priv(map);
 	if (old_priv) {
 		bpf_map_priv__clear(map, old_priv);
-		return hashmap__set(bpf_map_hash, map, priv, NULL, NULL);
+		return hashmap__set(bpf_map_hash, (long)map, (long)priv, NULL, NULL);
 	}
-	return hashmap__add(bpf_map_hash, map, priv);
+	return hashmap__add(bpf_map_hash, (long)map, (long)priv);
 }
 
 static int

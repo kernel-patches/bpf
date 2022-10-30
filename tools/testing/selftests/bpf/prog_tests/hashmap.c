@@ -10,14 +10,14 @@
 
 static int duration = 0;
 
-static size_t hash_fn(const void *k, void *ctx)
+static size_t hash_fn(long k, void *ctx)
 {
-	return (long)k;
+	return k;
 }
 
-static bool equal_fn(const void *a, const void *b, void *ctx)
+static bool equal_fn(long a, long b, void *ctx)
 {
-	return (long)a == (long)b;
+	return a == b;
 }
 
 static inline size_t next_pow_2(size_t n)
@@ -52,8 +52,8 @@ static void test_hashmap_generic(void)
 		return;
 
 	for (i = 0; i < ELEM_CNT; i++) {
-		const void *oldk, *k = (const void *)(long)i;
-		void *oldv, *v = (void *)(long)(1024 + i);
+		long oldk, k = i;
+		long oldv, v = 1024 + i;
 
 		err = hashmap__update(map, k, v, &oldk, &oldv);
 		if (CHECK(err != -ENOENT, "hashmap__update",
@@ -64,20 +64,18 @@ static void test_hashmap_generic(void)
 			err = hashmap__add(map, k, v);
 		} else {
 			err = hashmap__set(map, k, v, &oldk, &oldv);
-			if (CHECK(oldk != NULL || oldv != NULL, "check_kv",
-				  "unexpected k/v: %p=%p\n", oldk, oldv))
+			if (CHECK(oldk != 0 || oldv != 0, "check_kv",
+				  "unexpected k/v: %ld=%ld\n", oldk, oldv))
 				goto cleanup;
 		}
 
-		if (CHECK(err, "elem_add", "failed to add k/v %ld = %ld: %d\n",
-			       (long)k, (long)v, err))
+		if (CHECK(err, "elem_add", "failed to add k/v %ld = %ld: %d\n", k, v, err))
 			goto cleanup;
 
 		if (CHECK(!hashmap__find(map, k, &oldv), "elem_find",
-			  "failed to find key %ld\n", (long)k))
+			  "failed to find key %ld\n", k))
 			goto cleanup;
-		if (CHECK(oldv != v, "elem_val",
-			  "found value is wrong: %ld\n", (long)oldv))
+		if (CHECK(oldv != v, "elem_val", "found value is wrong: %ld\n", oldv))
 			goto cleanup;
 	}
 
@@ -91,8 +89,8 @@ static void test_hashmap_generic(void)
 
 	found_msk = 0;
 	hashmap__for_each_entry(map, entry, bkt) {
-		long k = (long)entry->key;
-		long v = (long)entry->value;
+		long k = entry->key;
+		long v = entry->value;
 
 		found_msk |= 1ULL << k;
 		if (CHECK(v - k != 1024, "check_kv",
@@ -104,8 +102,8 @@ static void test_hashmap_generic(void)
 		goto cleanup;
 
 	for (i = 0; i < ELEM_CNT; i++) {
-		const void *oldk, *k = (const void *)(long)i;
-		void *oldv, *v = (void *)(long)(256 + i);
+		long oldk, k = i;
+		long oldv, v = 256 + i;
 
 		err = hashmap__add(map, k, v);
 		if (CHECK(err != -EEXIST, "hashmap__add",
@@ -119,13 +117,13 @@ static void test_hashmap_generic(void)
 
 		if (CHECK(err, "elem_upd",
 			  "failed to update k/v %ld = %ld: %d\n",
-			  (long)k, (long)v, err))
+			  k, v, err))
 			goto cleanup;
 		if (CHECK(!hashmap__find(map, k, &oldv), "elem_find",
-			  "failed to find key %ld\n", (long)k))
+			  "failed to find key %ld\n", k))
 			goto cleanup;
 		if (CHECK(oldv != v, "elem_val",
-			  "found value is wrong: %ld\n", (long)oldv))
+			  "found value is wrong: %ld\n", oldv))
 			goto cleanup;
 	}
 
@@ -139,8 +137,8 @@ static void test_hashmap_generic(void)
 
 	found_msk = 0;
 	hashmap__for_each_entry_safe(map, entry, tmp, bkt) {
-		long k = (long)entry->key;
-		long v = (long)entry->value;
+		long k = entry->key;
+		long v = entry->value;
 
 		found_msk |= 1ULL << k;
 		if (CHECK(v - k != 256, "elem_check",
@@ -152,7 +150,7 @@ static void test_hashmap_generic(void)
 		goto cleanup;
 
 	found_cnt = 0;
-	hashmap__for_each_key_entry(map, entry, (void *)0) {
+	hashmap__for_each_key_entry(map, entry, 0) {
 		found_cnt++;
 	}
 	if (CHECK(!found_cnt, "found_cnt",
@@ -161,27 +159,25 @@ static void test_hashmap_generic(void)
 
 	found_msk = 0;
 	found_cnt = 0;
-	hashmap__for_each_key_entry_safe(map, entry, tmp, (void *)0) {
-		const void *oldk, *k;
-		void *oldv, *v;
+	hashmap__for_each_key_entry_safe(map, entry, tmp, 0) {
+		long oldk, k;
+		long oldv, v;
 
 		k = entry->key;
 		v = entry->value;
 
 		found_cnt++;
-		found_msk |= 1ULL << (long)k;
+		found_msk |= 1ULL << k;
 
 		if (CHECK(!hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "failed to delete k/v %ld = %ld\n",
-			  (long)k, (long)v))
+			  "failed to delete k/v %ld = %ld\n", k, v))
 			goto cleanup;
 		if (CHECK(oldk != k || oldv != v, "check_old",
 			  "invalid deleted k/v: expected %ld = %ld, got %ld = %ld\n",
-			  (long)k, (long)v, (long)oldk, (long)oldv))
+			  k, v, oldk, oldv))
 			goto cleanup;
 		if (CHECK(hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "unexpectedly deleted k/v %ld = %ld\n",
-			  (long)oldk, (long)oldv))
+			  "unexpectedly deleted k/v %ld = %ld\n", oldk, oldv))
 			goto cleanup;
 	}
 
@@ -198,26 +194,24 @@ static void test_hashmap_generic(void)
 		goto cleanup;
 
 	hashmap__for_each_entry_safe(map, entry, tmp, bkt) {
-		const void *oldk, *k;
-		void *oldv, *v;
+		long oldk, k;
+		long oldv, v;
 
 		k = entry->key;
 		v = entry->value;
 
 		found_cnt++;
-		found_msk |= 1ULL << (long)k;
+		found_msk |= 1ULL << k;
 
 		if (CHECK(!hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "failed to delete k/v %ld = %ld\n",
-			  (long)k, (long)v))
+			  "failed to delete k/v %ld = %ld\n", k, v))
 			goto cleanup;
 		if (CHECK(oldk != k || oldv != v, "elem_check",
 			  "invalid old k/v: expect %ld = %ld, got %ld = %ld\n",
-			  (long)k, (long)v, (long)oldk, (long)oldv))
+			  k, v, oldk, oldv))
 			goto cleanup;
 		if (CHECK(hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "unexpectedly deleted k/v %ld = %ld\n",
-			  (long)k, (long)v))
+			  "unexpectedly deleted k/v %ld = %ld\n", k, v))
 			goto cleanup;
 	}
 
@@ -235,7 +229,7 @@ static void test_hashmap_generic(void)
 	hashmap__for_each_entry(map, entry, bkt) {
 		CHECK(false, "elem_exists",
 		      "unexpected map entries left: %ld = %ld\n",
-		      (long)entry->key, (long)entry->value);
+		      entry->key, entry->value);
 		goto cleanup;
 	}
 
@@ -243,7 +237,7 @@ static void test_hashmap_generic(void)
 	hashmap__for_each_entry(map, entry, bkt) {
 		CHECK(false, "elem_exists",
 		      "unexpected map entries left: %ld = %ld\n",
-		      (long)entry->key, (long)entry->value);
+		      entry->key, entry->value);
 		goto cleanup;
 	}
 
@@ -251,14 +245,14 @@ cleanup:
 	hashmap__free(map);
 }
 
-static size_t collision_hash_fn(const void *k, void *ctx)
+static size_t collision_hash_fn(long k, void *ctx)
 {
 	return 0;
 }
 
 static void test_hashmap_multimap(void)
 {
-	void *k1 = (void *)0, *k2 = (void *)1;
+	long k1 = 0, k2 = 1;
 	struct hashmap_entry *entry;
 	struct hashmap *map;
 	long found_msk;
@@ -273,23 +267,23 @@ static void test_hashmap_multimap(void)
 	 * [0] -> 1, 2, 4;
 	 * [1] -> 8, 16, 32;
 	 */
-	err = hashmap__append(map, k1, (void *)1);
+	err = hashmap__append(map, k1, 1);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
-	err = hashmap__append(map, k1, (void *)2);
+	err = hashmap__append(map, k1, 2);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
-	err = hashmap__append(map, k1, (void *)4);
+	err = hashmap__append(map, k1, 4);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
 
-	err = hashmap__append(map, k2, (void *)8);
+	err = hashmap__append(map, k2, 8);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
-	err = hashmap__append(map, k2, (void *)16);
+	err = hashmap__append(map, k2, 16);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
-	err = hashmap__append(map, k2, (void *)32);
+	err = hashmap__append(map, k2, 32);
 	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
 		goto cleanup;
 
@@ -300,7 +294,7 @@ static void test_hashmap_multimap(void)
 	/* verify global iteration still works and sees all values */
 	found_msk = 0;
 	hashmap__for_each_entry(map, entry, bkt) {
-		found_msk |= (long)entry->value;
+		found_msk |= entry->value;
 	}
 	if (CHECK(found_msk != (1 << 6) - 1, "found_msk",
 		  "not all keys iterated: %lx\n", found_msk))
@@ -309,7 +303,7 @@ static void test_hashmap_multimap(void)
 	/* iterate values for key 1 */
 	found_msk = 0;
 	hashmap__for_each_key_entry(map, entry, k1) {
-		found_msk |= (long)entry->value;
+		found_msk |= entry->value;
 	}
 	if (CHECK(found_msk != (1 | 2 | 4), "found_msk",
 		  "invalid k1 values: %lx\n", found_msk))
@@ -318,7 +312,7 @@ static void test_hashmap_multimap(void)
 	/* iterate values for key 2 */
 	found_msk = 0;
 	hashmap__for_each_key_entry(map, entry, k2) {
-		found_msk |= (long)entry->value;
+		found_msk |= entry->value;
 	}
 	if (CHECK(found_msk != (8 | 16 | 32), "found_msk",
 		  "invalid k2 values: %lx\n", found_msk))
@@ -333,7 +327,7 @@ static void test_hashmap_empty()
 	struct hashmap_entry *entry;
 	int bkt;
 	struct hashmap *map;
-	void *k = (void *)0;
+	long k = 0;
 
 	/* force collisions */
 	map = hashmap__new(hash_fn, equal_fn, NULL);

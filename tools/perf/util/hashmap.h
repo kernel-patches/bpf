@@ -40,12 +40,15 @@ static inline size_t str_hash(const char *s)
 	return h;
 }
 
-typedef size_t (*hashmap_hash_fn)(const void *key, void *ctx);
-typedef bool (*hashmap_equal_fn)(const void *key1, const void *key2, void *ctx);
+/* keys and values are represented as long to allow pointers and
+ * 32-bit integers as keys or values.
+ */
+typedef size_t (*hashmap_hash_fn)(long key, void *ctx);
+typedef bool (*hashmap_equal_fn)(long key1, long key2, void *ctx);
 
 struct hashmap_entry {
-	const void *key;
-	void *value;
+	long key;
+	long value;
 	struct hashmap_entry *next;
 };
 
@@ -109,42 +112,39 @@ enum hashmap_insert_strategy {
  * through old_key and old_value to allow calling code do proper memory
  * management.
  */
-int hashmap__insert(struct hashmap *map, const void *key, void *value,
+int hashmap__insert(struct hashmap *map, long key, long value,
 		    enum hashmap_insert_strategy strategy,
-		    const void **old_key, void **old_value);
+		    long *old_key, long *old_value);
 
-static inline int hashmap__add(struct hashmap *map,
-			       const void *key, void *value)
+static inline int hashmap__add(struct hashmap *map, long key, long value)
 {
 	return hashmap__insert(map, key, value, HASHMAP_ADD, NULL, NULL);
 }
 
 static inline int hashmap__set(struct hashmap *map,
-			       const void *key, void *value,
-			       const void **old_key, void **old_value)
+			       long key, long value,
+			       long *old_key, long *old_value)
 {
 	return hashmap__insert(map, key, value, HASHMAP_SET,
 			       old_key, old_value);
 }
 
 static inline int hashmap__update(struct hashmap *map,
-				  const void *key, void *value,
-				  const void **old_key, void **old_value)
+				  long key, long value,
+				  long *old_key, long *old_value)
 {
 	return hashmap__insert(map, key, value, HASHMAP_UPDATE,
 			       old_key, old_value);
 }
 
-static inline int hashmap__append(struct hashmap *map,
-				  const void *key, void *value)
+static inline int hashmap__append(struct hashmap *map, long key, long value)
 {
 	return hashmap__insert(map, key, value, HASHMAP_APPEND, NULL, NULL);
 }
 
-bool hashmap__delete(struct hashmap *map, const void *key,
-		     const void **old_key, void **old_value);
+bool hashmap__delete(struct hashmap *map, long key, long *old_key, long *old_value);
 
-bool hashmap__find(const struct hashmap *map, const void *key, void **value);
+bool hashmap__find(const struct hashmap *map, long key, long *value);
 
 /*
  * hashmap__for_each_entry - iterate over all entries in hashmap

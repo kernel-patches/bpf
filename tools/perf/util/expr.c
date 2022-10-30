@@ -46,7 +46,7 @@ struct expr_id_data {
 	} kind;
 };
 
-static size_t key_hash(const void *key, void *ctx __maybe_unused)
+static size_t key_hash(long key, void *ctx __maybe_unused)
 {
 	const char *str = (const char *)key;
 	size_t hash = 0;
@@ -59,8 +59,7 @@ static size_t key_hash(const void *key, void *ctx __maybe_unused)
 	return hash;
 }
 
-static bool key_equal(const void *key1, const void *key2,
-		    void *ctx __maybe_unused)
+static bool key_equal(long key1, long key2, void *ctx __maybe_unused)
 {
 	return !strcmp((const char *)key1, (const char *)key2);
 }
@@ -85,7 +84,7 @@ void ids__free(struct hashmap *ids)
 
 	hashmap__for_each_entry(ids, cur, bkt) {
 		free((char *)cur->key);
-		free(cur->value);
+		free((void *)cur->value);
 	}
 
 	hashmap__free(ids);
@@ -97,8 +96,8 @@ int ids__insert(struct hashmap *ids, const char *id)
 	char *old_key = NULL;
 	int ret;
 
-	ret = hashmap__set(ids, id, data_ptr,
-			   (const void **)&old_key, (void **)&old_data);
+	ret = hashmap__set(ids, (long)id, (long)data_ptr,
+			   (long *)&old_key, (long *)&old_data);
 	if (ret)
 		free(data_ptr);
 	free(old_key);
@@ -128,7 +127,7 @@ struct hashmap *ids__union(struct hashmap *ids1, struct hashmap *ids2)
 	}
 	hashmap__for_each_entry(ids2, cur, bkt) {
 		ret = hashmap__set(ids1, cur->key, cur->value,
-				(const void **)&old_key, (void **)&old_data);
+				(long *)&old_key, (long *)&old_data);
 		free(old_key);
 		free(old_data);
 
@@ -169,8 +168,8 @@ int expr__add_id_val_source_count(struct expr_parse_ctx *ctx, const char *id,
 	data_ptr->val.source_count = source_count;
 	data_ptr->kind = EXPR_ID_DATA__VALUE;
 
-	ret = hashmap__set(ctx->ids, id, data_ptr,
-			   (const void **)&old_key, (void **)&old_data);
+	ret = hashmap__set(ctx->ids, (long)id, (long)data_ptr,
+			   (long *)&old_key, (long *)&old_data);
 	if (ret)
 		free(data_ptr);
 	free(old_key);
@@ -205,8 +204,8 @@ int expr__add_ref(struct expr_parse_ctx *ctx, struct metric_ref *ref)
 	data_ptr->ref.metric_expr = ref->metric_expr;
 	data_ptr->kind = EXPR_ID_DATA__REF;
 
-	ret = hashmap__set(ctx->ids, name, data_ptr,
-			   (const void **)&old_key, (void **)&old_data);
+	ret = hashmap__set(ctx->ids, (long)name, (long)data_ptr,
+			   (long *)&old_key, (long *)&old_data);
 	if (ret)
 		free(data_ptr);
 
@@ -221,7 +220,7 @@ int expr__add_ref(struct expr_parse_ctx *ctx, struct metric_ref *ref)
 int expr__get_id(struct expr_parse_ctx *ctx, const char *id,
 		 struct expr_id_data **data)
 {
-	return hashmap__find(ctx->ids, id, (void **)data) ? 0 : -1;
+	return hashmap__find(ctx->ids, (long)id, (long *)data) ? 0 : -1;
 }
 
 bool expr__subset_of_ids(struct expr_parse_ctx *haystack,
@@ -232,7 +231,7 @@ bool expr__subset_of_ids(struct expr_parse_ctx *haystack,
 	struct expr_id_data *data;
 
 	hashmap__for_each_entry(needles->ids, cur, bkt) {
-		if (expr__get_id(haystack, cur->key, &data))
+		if (expr__get_id(haystack, (char *)cur->key, &data))
 			return false;
 	}
 	return true;
@@ -282,8 +281,7 @@ void expr__del_id(struct expr_parse_ctx *ctx, const char *id)
 	struct expr_id_data *old_val = NULL;
 	char *old_key = NULL;
 
-	hashmap__delete(ctx->ids, id,
-			(const void **)&old_key, (void **)&old_val);
+	hashmap__delete(ctx->ids, (long)id, (long *)&old_key, (long *)&old_val);
 	free(old_key);
 	free(old_val);
 }
@@ -315,7 +313,7 @@ void expr__ctx_clear(struct expr_parse_ctx *ctx)
 
 	hashmap__for_each_entry(ctx->ids, cur, bkt) {
 		free((char *)cur->key);
-		free(cur->value);
+		free((void *)cur->value);
 	}
 	hashmap__clear(ctx->ids);
 }
@@ -331,7 +329,7 @@ void expr__ctx_free(struct expr_parse_ctx *ctx)
 	free(ctx->sctx.user_requested_cpu_list);
 	hashmap__for_each_entry(ctx->ids, cur, bkt) {
 		free((char *)cur->key);
-		free(cur->value);
+		free((void *)cur->value);
 	}
 	hashmap__free(ctx->ids);
 	free(ctx);
