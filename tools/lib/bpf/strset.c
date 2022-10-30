@@ -19,19 +19,19 @@ struct strset {
 	struct hashmap *strs_hash;
 };
 
-static size_t strset_hash_fn(const void *key, void *ctx)
+static size_t strset_hash_fn(uintptr_t key, void *ctx)
 {
 	const struct strset *s = ctx;
-	const char *str = s->strs_data + (long)key;
+	const char *str = s->strs_data + key;
 
 	return str_hash(str);
 }
 
-static bool strset_equal_fn(const void *key1, const void *key2, void *ctx)
+static bool strset_equal_fn(uintptr_t key1, uintptr_t key2, void *ctx)
 {
 	const struct strset *s = ctx;
-	const char *str1 = s->strs_data + (long)key1;
-	const char *str2 = s->strs_data + (long)key2;
+	const char *str1 = s->strs_data + key1;
+	const char *str2 = s->strs_data + key2;
 
 	return strcmp(str1, str2) == 0;
 }
@@ -53,7 +53,7 @@ struct strset *strset__new(size_t max_data_sz, const char *init_data, size_t ini
 	set->strs_hash = hash;
 
 	if (init_data) {
-		long off;
+		uintptr_t off;
 
 		set->strs_data = malloc(init_data_sz);
 		if (!set->strs_data)
@@ -67,7 +67,7 @@ struct strset *strset__new(size_t max_data_sz, const char *init_data, size_t ini
 			/* hashmap__add() returns EEXIST if string with the same
 			 * content already is in the hash map
 			 */
-			err = hashmap__add(hash, (void *)off, (void *)off);
+			err = hashmap__add(hash, off, off);
 			if (err == -EEXIST)
 				continue; /* duplicate */
 			if (err)
@@ -115,7 +115,7 @@ static void *strset_add_str_mem(struct strset *set, size_t add_sz)
  */
 int strset__find_str(struct strset *set, const char *s)
 {
-	long old_off, new_off, len;
+	uintptr_t old_off, new_off, len;
 	void *p;
 
 	/* see strset__add_str() for why we do this */
@@ -127,7 +127,7 @@ int strset__find_str(struct strset *set, const char *s)
 	new_off = set->strs_data_len;
 	memcpy(p, s, len);
 
-	if (hashmap__find(set->strs_hash, (void *)new_off, (void **)&old_off))
+	if (hashmap__find(set->strs_hash, new_off, &old_off))
 		return old_off;
 
 	return -ENOENT;
@@ -141,7 +141,7 @@ int strset__find_str(struct strset *set, const char *s)
  */
 int strset__add_str(struct strset *set, const char *s)
 {
-	long old_off, new_off, len;
+	uintptr_t old_off, new_off, len;
 	void *p;
 	int err;
 
@@ -165,8 +165,8 @@ int strset__add_str(struct strset *set, const char *s)
 	 * contents doesn't exist already (HASHMAP_ADD strategy). If such
 	 * string exists, we'll get its offset in old_off (that's old_key).
 	 */
-	err = hashmap__insert(set->strs_hash, (void *)new_off, (void *)new_off,
-			      HASHMAP_ADD, (const void **)&old_off, NULL);
+	err = hashmap__insert(set->strs_hash, new_off, new_off,
+			      HASHMAP_ADD, &old_off, NULL);
 	if (err == -EEXIST)
 		return old_off; /* duplicated string, return existing offset */
 	if (err)
