@@ -389,7 +389,7 @@ out:
 	return ret;
 }
 
-int __init bpf_arch_init_dispatcher_early(void *ip)
+int __init_or_module bpf_arch_init_dispatcher_early(void *ip)
 {
 	const u8 *nop_insn = x86_nops[5];
 

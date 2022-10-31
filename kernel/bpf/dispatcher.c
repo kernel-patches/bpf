@@ -91,7 +91,7 @@ int __weak arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int n
 	return -ENOTSUPP;
 }
 
-int __weak __init bpf_arch_init_dispatcher_early(void *ip)
+int __weak __init_or_module bpf_arch_init_dispatcher_early(void *ip)
 {
 	return -ENOTSUPP;
 }
