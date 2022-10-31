@@ -371,6 +371,18 @@ int vm_map_pages_zero(struct vm_area_struct *vma, struct page **pages,
 }
 EXPORT_SYMBOL(vm_map_pages_zero);
 
+void *vmalloc_exec(unsigned long size, unsigned long align)
+{
+	return NULL;
+}
+
+void *vcopy_exec(void *dst, void *src, size_t len)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+void vfree_exec(const void *addr) { }
+
 /*
  *  sys_brk() for the most part doesn't need the global kernel
  *  lock, except when an application is doing something nasty
