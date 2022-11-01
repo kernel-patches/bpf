@@ -28,6 +28,7 @@
 
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/btf.h>
+#include <uapi/linux/perf_event.h>
 
 #include <asm/tlb.h>
 
@@ -1743,6 +1744,52 @@ static const struct bpf_func_proto bpf_read_branch_records_proto = {
 	.arg4_type      = ARG_ANYTHING,
 };
 
+BPF_CALL_4(bpf_perf_event_read_sample, struct bpf_perf_event_data_kern *, ctx,
+	   void *, buf, u32, size, u64, flags)
+{
+	struct perf_sample_data *sd = ctx->data;
+	void *data;
+	u32 to_copy = sizeof(u64);
+
+	/* only allow a single sample flag */
+	if (!is_power_of_2(flags))
+		return -EINVAL;
+
+	/* support reading only already populated info */
+	if (flags & ~sd->sample_flags)
+		return -ENOENT;
+
+	switch (flags) {
+	case PERF_SAMPLE_IP:
+		data = &sd->ip;
+		break;
+	case PERF_SAMPLE_ADDR:
+		data = &sd->addr;
+		break;
+	default:
+		return -ENOSYS;
+	}
+
+	if (!buf)
+		return to_copy;
+
+	if (size < to_copy)
+		to_copy = size;
+
+	memcpy(buf, data, to_copy);
+	return to_copy;
+}
+
+static const struct bpf_func_proto bpf_perf_event_read_sample_proto = {
+	.func           = bpf_perf_event_read_sample,
+	.gpl_only       = true,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_PTR_TO_MEM_OR_NULL,
+	.arg3_type      = ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type      = ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 pe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1759,6 +1806,8 @@ pe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_read_branch_records_proto;
 	case BPF_FUNC_get_attach_cookie:
 		return &bpf_get_attach_cookie_proto_pe;
+	case BPF_FUNC_perf_event_read_sample:
+		return &bpf_perf_event_read_sample_proto;
 	default:
 		return bpf_tracing_func_proto(func_id, prog);
 	}

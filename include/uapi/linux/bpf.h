@@ -5481,6 +5481,28 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_perf_event_read_sample(struct bpf_perf_event_data *ctx, void *buf, u32 size, u64 sample_flags)
+ *	Description
+ *		For an eBPF program attached to a perf event, retrieve the
+ *		sample data associated to *ctx*	and store it in the buffer
+ *		pointed by *buf* up to size *size* bytes.
+ *
+ *		The *sample_flags* should contain a single value in the
+ *		**enum perf_event_sample_format**.
+ *	Return
+ *		On success, number of bytes written to *buf*. On error, a
+ *		negative value.
+ *
+ *		The *buf* can be set to **NULL** to return the number of bytes
+ *		required to store the requested sample data.
+ *
+ *		**-EINVAL** if *sample_flags* is not a PERF_SAMPLE_* flag.
+ *
+ *		**-ENOENT** if the associated perf event doesn't have the data.
+ *
+ *		**-ENOSYS** if system doesn't support the sample data to be
+ *		retrieved.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5695,6 +5717,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(perf_event_read_sample, 212, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
