@@ -7329,8 +7329,10 @@ void perf_prepare_sample(struct perf_event_header *header,
 	filtered_sample_type = sample_type & ~data->sample_flags;
 	__perf_event_header__init_id(header, data, event, filtered_sample_type);
 
-	if (sample_type & (PERF_SAMPLE_IP | PERF_SAMPLE_CODE_PAGE_SIZE))
-		data->ip = perf_instruction_pointer(regs);
+	if (sample_type & (PERF_SAMPLE_IP | PERF_SAMPLE_CODE_PAGE_SIZE)) {
+		if (filtered_sample_type & PERF_SAMPLE_IP)
+			data->ip = perf_instruction_pointer(regs);
+	}
 
 	if (sample_type & PERF_SAMPLE_CALLCHAIN) {
 		int size = 1;
@@ -10006,6 +10008,32 @@ static void perf_event_free_filter(struct perf_event *event)
 }
 
 #ifdef CONFIG_BPF_SYSCALL
+static void bpf_prepare_sample(struct bpf_prog *prog,
+			       struct perf_event *event,
+			       struct perf_sample_data *data,
+			       struct pt_regs *regs)
+{
+	u64 filtered_sample_type;
+
+	filtered_sample_type = event->attr.sample_type & ~data->sample_flags;
+
+	if (prog->call_get_stack &&
+	    (filtered_sample_type & PERF_SAMPLE_CALLCHAIN)) {
+		data->callchain = perf_callchain(event, regs);
+		data->sample_flags |= PERF_SAMPLE_CALLCHAIN;
+	}
+
+	if (filtered_sample_type & PERF_SAMPLE_IP) {
+		data->ip = perf_instruction_pointer(regs);
+		data->sample_flags |= PERF_SAMPLE_IP;
+	}
+
+	if (filtered_sample_type & PERF_SAMPLE_ADDR) {
+		data->addr = 0;
+		data->sample_flags |= PERF_SAMPLE_ADDR;
+	}
+}
+
 static void bpf_overflow_handler(struct perf_event *event,
 				 struct perf_sample_data *data,
 				 struct pt_regs *regs)
@@ -10023,13 +10051,7 @@ static void bpf_overflow_handler(struct perf_event *event,
 	rcu_read_lock();
 	prog = READ_ONCE(event->prog);
 	if (prog) {
-		if (prog->call_get_stack &&
-		    (event->attr.sample_type & PERF_SAMPLE_CALLCHAIN) &&
-		    !(data->sample_flags & PERF_SAMPLE_CALLCHAIN)) {
-			data->callchain = perf_callchain(event, regs);
-			data->sample_flags |= PERF_SAMPLE_CALLCHAIN;
-		}
-
+		bpf_prepare_sample(prog, event, data, regs);
 		ret = bpf_prog_run(prog, &ctx);
 	}
 	rcu_read_unlock();
