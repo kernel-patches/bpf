@@ -724,6 +724,40 @@ print_all_levels(__maybe_unused enum libbpf_print_level level,
 	return vfprintf(stderr, format, args);
 }
 
+static bool is_invalid_name(char *nametag, struct bpf_prog_info *info,
+				struct bpf_func_info *finfo, bool tag)
+{
+	const struct btf *prog_btf;
+	const struct btf_type *func_type;
+	const char *name;
+
+	if (tag)
+		return memcmp(nametag, info->tag, BPF_TAG_SIZE);
+
+	if (strlen(nametag) < BPF_OBJ_NAME_LEN)
+		return strncmp(nametag, info->name, BPF_OBJ_NAME_LEN);
+
+	prog_btf = btf__load_from_kernel_by_id(info->btf_id);
+	if (!prog_btf) {
+		p_err("get prog btf failed, btf_id:%u\n", info->btf_id);
+		return true;
+	}
+
+	func_type = btf__type_by_id(prog_btf, finfo->type_id);
+	if (!func_type || !btf_is_func(func_type)) {
+		p_err("func type invalid, type_id:%u\n", finfo->type_id);
+		return true;
+	}
+
+	name = btf__name_by_offset(prog_btf, func_type->name_off);
+	if (!name) {
+		p_err("func name invalid, name_off:%u\n", func_type->name_off);
+		return true;
+	}
+
+	return strncmp(nametag, name, strlen(name));
+}
+
 static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 {
 	char prog_name[MAX_PROG_FULL_NAME];
@@ -734,6 +768,7 @@ static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 
 	while (true) {
 		struct bpf_prog_info info = {};
+		struct bpf_func_info finfo = {};
 		__u32 len = sizeof(info);
 
 		err = bpf_prog_get_next_id(id, &id);
@@ -752,6 +787,10 @@ static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 			goto err_close_fds;
 		}
 
+		info.nr_func_info = 1;
+		info.func_info_rec_size = sizeof(finfo);
+		info.func_info = ptr_to_u64(&finfo);
+
 		err = bpf_obj_get_info_by_fd(fd, &info, &len);
 		if (err) {
 			p_err("can't get prog info (%u): %s",
@@ -759,7 +798,7 @@ static int prog_fd_by_nametag(void *nametag, int **fds, bool tag)
 			goto err_close_fd;
 		}
 
-		if (tag && memcmp(nametag, info.tag, BPF_TAG_SIZE)) {
+		if (is_invalid_name(nametag, &info, &finfo, tag)) {
 			close(fd);
 			continue;
 		}
@@ -833,10 +872,6 @@ int prog_parse_fds(int *argc, char ***argv, int **fds)
 		NEXT_ARGP();
 
 		name = **argv;
-		if (strlen(name) > MAX_PROG_FULL_NAME - 1) {
-			p_err("can't parse name");
-			return -1;
-		}
 		NEXT_ARGP();
 
 		return prog_fd_by_nametag(name, fds, false);
