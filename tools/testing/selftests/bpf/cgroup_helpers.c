@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <ftw.h>
+#include <bpf/libbpf.h>
 
 #include "cgroup_helpers.h"
 
@@ -77,7 +78,7 @@ static int __enable_controllers(const char *cgroup_path, const char *controllers
 		enable[len] = 0;
 		close(fd);
 	} else {
-		strncpy(enable, controllers, sizeof(enable));
+		libbpf_strlcpy(enable, controllers, sizeof(enable));
 	}
 
 	snprintf(path, sizeof(path), "%s/cgroup.subtree_control", cgroup_path);
