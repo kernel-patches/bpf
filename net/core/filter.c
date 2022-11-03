@@ -8269,8 +8269,6 @@ static bool bpf_skb_is_valid_access(int off, int size, enum bpf_access_type type
 			return false;
 		break;
 	case offsetof(struct __sk_buff, sk):
-		if (type == BPF_WRITE || size != sizeof(__u64))
-			return false;
 		info->reg_type = PTR_TO_SOCK_COMMON_OR_NULL;
 		break;
 	case offsetof(struct __sk_buff, tstamp_type):
