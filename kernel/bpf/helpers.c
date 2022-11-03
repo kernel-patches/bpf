@@ -1273,6 +1273,28 @@ static const struct bpf_func_proto bpf_timer_start_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_0(bpf_rcu_read_lock) {
+	rcu_read_lock();
+	return 0;
+}
+
+const struct bpf_func_proto bpf_rcu_read_lock_proto = {
+	.func		= bpf_rcu_read_lock,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+};
+
+BPF_CALL_0(bpf_rcu_read_unlock) {
+	rcu_read_unlock();
+	return 0;
+}
+
+const struct bpf_func_proto bpf_rcu_read_unlock_proto = {
+	.func		= bpf_rcu_read_unlock,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+};
+
 static void drop_prog_refcnt(struct bpf_hrtimer *t)
 {
 	struct bpf_prog *prog = t->prog;
@@ -1627,6 +1649,10 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_spin_lock_proto;
 	case BPF_FUNC_spin_unlock:
 		return &bpf_spin_unlock_proto;
+	case BPF_FUNC_rcu_read_lock:
+		return &bpf_rcu_read_lock_proto;
+	case BPF_FUNC_rcu_read_unlock:
+		return &bpf_rcu_read_unlock_proto;
 	case BPF_FUNC_jiffies64:
 		return &bpf_jiffies64_proto;
 	case BPF_FUNC_per_cpu_ptr:
