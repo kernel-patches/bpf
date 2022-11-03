@@ -324,6 +324,7 @@ struct bpf_verifier_state {
 	u32 insn_idx;
 	u32 curframe;
 	u32 active_spin_lock;
+	u32 active_rcu_lock;
 	bool speculative;
 
 	/* first and last insn idx of this verifier state */

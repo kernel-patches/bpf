@@ -5527,6 +5527,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			info->reg_type |= MEM_USER;
 		if (strcmp(tag_value, "percpu") == 0)
 			info->reg_type |= MEM_PERCPU;
+		if (strcmp(tag_value, "rcu") == 0)
+			info->reg_type |= MEM_RCU;
 	}
 
 	/* skip modifiers */
@@ -5765,6 +5767,9 @@ error:
 				/* check __percpu tag */
 				if (strcmp(tag_value, "percpu") == 0)
 					tmp_flag = MEM_PERCPU;
+				/* check __rcu tag */
+				if (strcmp(tag_value, "rcu") == 0)
+					tmp_flag = MEM_RCU;
 			}
 
 			stype = btf_type_skip_modifiers(btf, mtype->type, &id);
@@ -6556,6 +6561,12 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 
 	if (sleepable && !env->prog->aux->sleepable) {
 		bpf_log(log, "kernel function %s is sleepable but the program is not\n",
+			func_name);
+		return -EINVAL;
+	}
+
+	if (sleepable && env->cur_state->active_rcu_lock) {
+		bpf_log(log, "kernel function %s is sleepable within rcu_read_lock region\n",
 			func_name);
 		return -EINVAL;
 	}
