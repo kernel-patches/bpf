@@ -1,0 +1,206 @@
+name: bpf-ci
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-test-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  llvm-toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      llvm: ${{ steps.llvm-toolchain-impl.outputs.version }}
+    steps:
+      - id: llvm-version
+        uses: libbpf/ci/get-llvm-version@master
+      - id: llvm-toolchain-impl
+        shell: bash
+        run: echo "version=llvm-${{ steps.llvm-version.outputs.version }}" >> $GITHUB_OUTPUT
+  set-matrix:
+    needs: llvm-toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.set-matrix-impl.outputs.build_matrix }}
+      test-matrix: ${{ steps.set-matrix-impl.outputs.test_matrix }}
+    steps:
+      - id: set-matrix-impl
+        shell: python3 -I {0}
+        run: |
+          from json import dumps
+          import os
+
+          def set_output(name, value):
+            """Write an output variable to the GitHub output file."""
+            with open(os.getenv("GITHUB_OUTPUT"), "a") as f:
+              f.write(f"{name}={value}\n")
+
+          def generate_test_config(test):
+            """Create the configuration for the provided test."""
+            experimental = test.endswith("_parallel")
+            config = {
+              "test": test,
+              "continue_on_error": experimental,
+              # While in experimental mode, parallel jobs may get stuck
+              # anywhere, including in user space where the kernel won't detect
+              # a problem and panic. We add a second layer of (smaller) timeouts
+              # here such that if we get stuck in a parallel run, we hit this
+              # timeout and fail without affecting the overall job success (as
+              # would be the case if we hit the job-wide timeout). For
+              # non-experimental jobs, 360 is the default which will be
+              # superseded by the overall workflow timeout (but we need to
+              # specify something).
+              "timeout_minutes": 30 if experimental else 360,
+            }
+            return config
+
+          matrix = [
+            {"kernel": "LATEST", "runs_on": ["ubuntu-latest", "self-hosted"], "arch": "x86_64", "toolchain": "gcc"},
+            {"kernel": "LATEST", "runs_on": ["ubuntu-latest", "self-hosted"], "arch": "x86_64", "toolchain": "${{ needs.llvm-toolchain.outputs.llvm }}"},
+            {"kernel": "LATEST", "runs_on": ["z15", "self-hosted"], "arch": "s390x", "toolchain": "gcc"},
+          ]
+          self_hosted_repos = [
+            "kernel-patches/bpf",
+            "kernel-patches/vmtest",
+          ]
+
+          # Only a few repository within "kernel-patches" use self-hosted runners.
+          if "${{ github.repository_owner }}" != "kernel-patches" or "${{ github.repository }}" not in self_hosted_repos:
+            # Outside of those repositories, remove the self-hosted label and skip
+            # any testing on s390x, as no suitable runners will be available.
+            for idx in range(len(matrix) - 1, -1, -1):
+              if "z15" in matrix[idx]["runs_on"]:
+                del matrix[idx]
+              else:
+                matrix[idx]["runs_on"].remove("self-hosted")
+
+          build_matrix = {"include": matrix}
+          set_output("build_matrix", dumps(build_matrix))
+
+          tests = [
+            "test_progs",
+            "test_progs_parallel",
+            "test_progs_no_alu32",
+            "test_progs_no_alu32_parallel",
+            "test_maps",
+            "test_verifier",
+          ]
+          test_matrix = {"include": [{**config, **generate_test_config(test)}
+                                      for config in matrix
+                                        for test in tests]}
+          set_output("test_matrix", dumps(test_matrix))
+  build:
+    name: build for ${{ matrix.arch }} with ${{ matrix.toolchain }}
+    needs: set-matrix
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.build-matrix) }}
+    env:
+      KERNEL: ${{ matrix.kernel }}
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+    steps:
+      - uses: actions/checkout@v3
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Download bpf-next tree
+        uses: libbpf/ci/get-linux-source@master
+        with:
+          dest: '.kernel'
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .kernel/.git
+          cp -rf .kernel/. .
+          rm -rf .kernel
+      - uses: libbpf/ci/patch-kernel@master
+        with:
+          patches-root: '${{ github.workspace }}/ci/diffs'
+          repo-root: '${{ github.workspace }}'
+      - name: Setup build environment
+        uses: libbpf/ci/setup-build-env@master
+      - name: Build kernel image
+        uses: libbpf/ci/build-linux@master
+        with:
+          arch: ${{ matrix.arch }}
+          toolchain: ${{ matrix.toolchain }}
+      - name: Build selftests
+        uses: libbpf/ci/build-selftests@master
+        with:
+          vmlinux_btf: ${{ github.workspace }}/vmlinux
+          toolchain: ${{ matrix.toolchain }}
+      - name: Build samples
+        uses: libbpf/ci/build-samples@master
+        with:
+          vmlinux_btf: ${{ github.workspace }}/vmlinux
+          toolchain: ${{ matrix.toolchain }}
+      - name: Tar artifacts
+        run: |
+          file_list=""
+          if [ "${{ github.repository }}" == "kernel-patches/vmtest" ]; then
+            # Package up a bunch of additional infrastructure to support running
+            # 'make kernelrelease' and bpf tool checks later on.
+            file_list="$(find . -iname Makefile | xargs) \
+              scripts/ \
+              tools/testing/selftests/bpf/ \
+              tools/include/ \
+              tools/bpf/bpftool/";
+          fi
+          # zstd is installed by default in the runner images.
+          tar -cf - \
+            .config \
+            arch/*/boot/bzImage \
+            include/config/auto.conf \
+            include/generated/autoconf.h \
+            ${file_list} \
+            --exclude '*.h' \
+            selftests/bpf/ \
+            vmlinux | zstd -T0 -19 -o vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst
+      - uses: actions/upload-artifact@v3
+        with:
+          name: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}
+          if-no-files-found: error
+          path: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst
+  test:
+    name: ${{ matrix.test }} on ${{ matrix.arch }} with ${{ matrix.toolchain }}
+    needs: [set-matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.test-matrix) }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 100
+    env:
+      KERNEL: ${{ matrix.kernel }}
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}
+          path: .
+      - name: Untar artifacts
+        # zstd is installed by default in the runner images.
+        run: zstd -d -T0  vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst --stdout | tar -xf -
+      - name: Prepare rootfs
+        uses: libbpf/ci/prepare-rootfs@master
+        with:
+          project-name: 'libbpf'
+          arch: ${{ matrix.arch }}
+          kernel: ${{ matrix.kernel }}
+          kernel-root: '.'
+          image-output: '/tmp/root.img'
+          test: ${{ matrix.test }}
+      - name: Run selftests
+        uses: libbpf/ci/run-qemu@master
+        continue-on-error: ${{ matrix.continue_on_error }}
+        timeout-minutes: ${{ matrix.timeout_minutes }}
+        with:
+          arch: ${{ matrix.arch}}
+          img: '/tmp/root.img'
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+          max-cpu: 8

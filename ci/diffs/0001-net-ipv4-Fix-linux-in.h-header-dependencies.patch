@@ -1,0 +1,38 @@
+From aec1dc972d27c837d1406310dab5170189eb01e5 Mon Sep 17 00:00:00 2001
+From: Andrii Nakryiko <andrii@kernel.org>
+Date: Wed, 2 Nov 2022 11:25:16 -0700
+Subject: [PATCH 1/2] net/ipv4: Fix linux/in.h header dependencies
+
+__DECLARE_FLEX_ARRAY is defined in include/uapi/linux/stddef.h but
+doesn't seem to be explicitly included from include/uapi/linux/in.h,
+which breaks BPF selftests builds (once we sync linux/stddef.h into
+tools/include directory in the next patch). Fix this by explicitly
+including linux/stddef.h.
+
+Given this affects BPF CI and bpf tree, targeting this for bpf tree.
+
+Fixes: 5854a09b4957 ("net/ipv4: Use __DECLARE_FLEX_ARRAY() helper")
+Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+Cc: Gustavo A. R. Silva <gustavoars@kernel.org>
+Cc: Jakub Kicinski <kuba@kernel.org>
+Link: https://lore.kernel.org/bpf/20221102182517.2675301-1-andrii@kernel.org
+---
+ include/uapi/linux/in.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/uapi/linux/in.h b/include/uapi/linux/in.h
+index f243ce665f74..07a4cb149305 100644
+--- a/include/uapi/linux/in.h
++++ b/include/uapi/linux/in.h
+@@ -20,6 +20,7 @@
+ #define _UAPI_LINUX_IN_H
+ 
+ #include <linux/types.h>
++#include <linux/stddef.h>
+ #include <linux/libc-compat.h>
+ #include <linux/socket.h>
+ 
+-- 
+2.37.3
+
