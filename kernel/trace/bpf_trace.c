@@ -1032,7 +1032,7 @@ static const struct bpf_func_proto bpf_get_func_ip_proto_tracing = {
 };
 
 #ifdef CONFIG_X86_KERNEL_IBT
-static unsigned long get_entry_ip(unsigned long fentry_ip)
+static unsigned long __maybe_unused get_entry_ip(unsigned long fentry_ip)
 {
 	u32 instr;
 
