@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2022 Isovalent, Inc.
+digraph {
+  node [colorscheme=accent4,style=filled] # Apply colorscheme to all nodes
+  graph [splines=ortho, nodesep=1]
+
+  subgraph cluster_key {
+    label = "Key\n(locks held during operation)";
+    rankdir = TB;
+
+    remote_lock [shape=rectangle,fillcolor=4,label="remote CPU LRU lock"]
+    hash_lock [shape=rectangle,fillcolor=3,label="hashtab lock"]
+    lru_lock [shape=rectangle,fillcolor=2,label="LRU lock"]
+    local_lock [shape=rectangle,fillcolor=1,label="local CPU LRU lock"]
+    no_lock [shape=rectangle,label="no locks held"]
+  }
+
+  begin [shape=oval,label="begin\nbpf_map_update()"]
+
+  // Nodes below with an 'fn_' prefix are roughly labeled by the C function
+  // names that initiate the corresponding logic in kernel/bpf/bpf_lru_list.c.
+  // Number suffixes and errno suffixes handle subsections of the corresponding
+  // logic in the function as of the writing of this dot.
+  fn_bpf_lru_pop_free [shape=diamond,fillcolor=1,
+    label="Local freelist\nnode available?"];
+  fn__local_list_pop_free [shape=rectangle,
+    label="Use node owned\nby this CPU"]
+
+  common_lru_check [shape=diamond,
+    label="Map created with\nBPF_NO_COMMON_LRU\nflag set?"];
+
+  fn_bpf_lru_list_pop_free_to_local [shape=rectangle,fillcolor=2,
+    label="Flush local pending,
+    Rotate Global list, move
+    LOCAL_FREE_TARGET
+    from global -> local"]
+  // Also corresponds to:
+  // fn__local_list_flush()
+  // fn_bpf_lru_list_rotate()
+  fn___bpf_lru_node_move_to_free[shape=diamond,fillcolor=2,
+    label="Able to free\nLOCAL_FREE_TARGET\nnodes?"]
+
+  fn___bpf_lru_list_shrink_inactive [shape=rectangle,fillcolor=3,
+    label="Shrink inactive list
+      up to remaining
+      LOCAL_FREE_TARGET
+      (global LRU -> local)"]
+  fn___bpf_lru_list_shrink [shape=diamond,fillcolor=2,
+    label="> 0 entries in\nlocal free list?"]
+  fn___bpf_lru_list_shrink2 [shape=rectangle,fillcolor=2,
+    label="Steal one node from
+      inactive, or if empty,
+      from active global list"]
+  fn___bpf_lru_list_shrink3 [shape=rectangle,fillcolor=3,
+    label="Try to remove\nnode from hashtab"]
+
+  fn_bpf_lru_pop_free2 [shape=diamond,label="Htab removal\nsuccessful?"]
+  common_lru_check2 [shape=diamond,
+    label="Map created with\nBPF_NO_COMMON_LRU\nflag set?"]
+
+  subgraph cluster_remote_lock {
+    label = "Iterate through CPUs\n(start from current)";
+    style = dashed;
+    rankdir=LR;
+
+    fn_bpf_lru_pop_free5 [shape=diamond,fillcolor=4,
+      label="Steal a node from\nper-cpu freelist?"]
+    fn_bpf_lru_pop_free6 [shape=rectangle,fillcolor=4,
+      label="Steal a node from
+        (1) Unreferenced pending, or
+        (2) Any pending node"]
+    fn_bpf_lru_pop_free7 [shape=rectangle,fillcolor=3,
+      label="Try to remove\nnode from hashtab"]
+    fn_htab_lru_map_update_elem [shape=diamond,
+      label="Stole node\nfrom remote\nCPU?"]
+    fn_htab_lru_map_update_elem2 [shape=diamond,label="Iterated\nall CPUs?"]
+    // Also corresponds to:
+    // fn__local_list_pop_free()
+    // fn__local_list_pop_pending()
+  }
+
+  fn_bpf_lru_list_pop_free_to_local2 [shape=rectangle,
+    label="Use node that was\nnot recently referenced"]
+  fn_bpf_lru_pop_free4 [shape=rectangle,
+    label="Use node that was\nactively referenced\nin global list"]
+  fn_htab_lru_map_update_elem_ENOMEM [shape=oval,label="return -ENOMEM"]
+  fn_htab_lru_map_update_elem3 [shape=rectangle,
+    label="Use node that was\nactively referenced\nin (another?) CPU's cache"]
+  fn_htab_lru_map_update_elem4 [shape=diamond,
+    label="Can lock this\nhashtab bucket?"]
+  fn_htab_lru_map_update_elem5 [shape=rectangle,fillcolor=3,
+    label="Update hashmap\nwith new element"]
+  fn_htab_lru_map_update_elem6 [shape=oval,label="return 0"]
+  fn_htab_lru_map_update_elem_EBUSY [shape=oval,label="return -EBUSY"]
+
+  begin -> fn_bpf_lru_pop_free
+  fn_bpf_lru_pop_free -> fn__local_list_pop_free [xlabel="Y"]
+  fn_bpf_lru_pop_free -> common_lru_check [xlabel="N"]
+  common_lru_check -> fn_bpf_lru_list_pop_free_to_local [xlabel="Y"]
+  common_lru_check -> fn___bpf_lru_list_shrink_inactive [xlabel="N"]
+  fn_bpf_lru_list_pop_free_to_local -> fn___bpf_lru_node_move_to_free
+  fn___bpf_lru_node_move_to_free ->
+    fn_bpf_lru_list_pop_free_to_local2 [xlabel="Y"]
+  fn___bpf_lru_node_move_to_free ->
+    fn___bpf_lru_list_shrink_inactive [xlabel="N"]
+  fn___bpf_lru_list_shrink_inactive -> fn___bpf_lru_list_shrink
+  fn___bpf_lru_list_shrink -> fn_bpf_lru_list_pop_free_to_local2 [xlabel = "Y"]
+  fn___bpf_lru_list_shrink -> fn___bpf_lru_list_shrink2 [xlabel="N"]
+  fn___bpf_lru_list_shrink2 -> fn___bpf_lru_list_shrink3
+  fn___bpf_lru_list_shrink3 -> fn_bpf_lru_pop_free2
+  fn_bpf_lru_pop_free2 -> fn_bpf_lru_pop_free4 [xlabel = "Y"]
+  fn_bpf_lru_pop_free2 -> common_lru_check2 [xlabel = "N"]
+  common_lru_check2 -> fn_htab_lru_map_update_elem_ENOMEM [xlabel = "Y"]
+  common_lru_check2 -> fn_bpf_lru_pop_free5 [xlabel = "N"]
+  fn_bpf_lru_pop_free5 -> fn_htab_lru_map_update_elem [xlabel = "Y"]
+  fn_bpf_lru_pop_free5 -> fn_bpf_lru_pop_free6 [xlabel = "N"]
+  fn_bpf_lru_pop_free6 -> fn_bpf_lru_pop_free7
+  fn_bpf_lru_pop_free7 -> fn_htab_lru_map_update_elem
+
+  fn_htab_lru_map_update_elem -> fn_htab_lru_map_update_elem3 [xlabel = "Y"]
+  fn_htab_lru_map_update_elem -> fn_htab_lru_map_update_elem2  [xlabel = "N"]
+  fn_htab_lru_map_update_elem2 ->
+    fn_htab_lru_map_update_elem_ENOMEM [xlabel = "Y"]
+  fn_htab_lru_map_update_elem2 -> fn_bpf_lru_pop_free5 [xlabel = "N"]
+  fn_htab_lru_map_update_elem3 -> fn_htab_lru_map_update_elem4
+
+  fn__local_list_pop_free -> fn_htab_lru_map_update_elem4
+  fn_bpf_lru_list_pop_free_to_local2 -> fn_htab_lru_map_update_elem4
+  fn_bpf_lru_pop_free4 -> fn_htab_lru_map_update_elem4
+
+  fn_htab_lru_map_update_elem4 -> fn_htab_lru_map_update_elem5 [xlabel="Y"]
+  fn_htab_lru_map_update_elem4 ->
+    fn_htab_lru_map_update_elem_EBUSY [xlabel="N"]
+  fn_htab_lru_map_update_elem5 -> fn_htab_lru_map_update_elem6
+
+  // Create invisible pad nodes to line up various nodes
+  pad0 [style=invis]
+  pad1 [style=invis]
+  pad2 [style=invis]
+  pad3 [style=invis]
+  pad4 [style=invis]
+
+  // Line up the key with the top of the graph
+  no_lock -> local_lock [style=invis]
+  local_lock -> lru_lock [style=invis]
+  lru_lock -> hash_lock [style=invis]
+  hash_lock -> remote_lock [style=invis]
+  remote_lock -> fn_bpf_lru_pop_free5 [style=invis]
+  remote_lock -> fn___bpf_lru_list_shrink [style=invis]
+
+  // Line up return code nodes at the bottom of the graph
+  fn_htab_lru_map_update_elem -> pad0 [style=invis]
+  pad0 -> pad1 [style=invis]
+  pad1 -> pad2 [style=invis]
+  pad2-> fn_htab_lru_map_update_elem_ENOMEM [style=invis]
+  fn_htab_lru_map_update_elem4 -> pad3 [style=invis]
+  pad3 -> fn_htab_lru_map_update_elem_EBUSY  [style=invis]
+
+  // Reduce diagram width by forcing some nodes to appear above others
+  fn_bpf_lru_pop_free4 -> fn_htab_lru_map_update_elem3 [style=invis]
+  common_lru_check2 -> pad4 [style=invis]
+  pad4 -> fn_bpf_lru_pop_free5 [style=invis]
+}
