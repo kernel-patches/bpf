@@ -1706,6 +1706,38 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 	}
 }
 
+void bpf_list_head_free(const struct btf_field *field, void *list_head,
+			struct bpf_spin_lock *spin_lock)
+{
+	struct list_head *head = list_head, *orig_head = head;
+	unsigned long flags;
+
+	BUILD_BUG_ON(sizeof(struct list_head) > sizeof(struct bpf_list_head));
+	BUILD_BUG_ON(__alignof__(struct list_head) > __alignof__(struct bpf_list_head));
+
+	/* __bpf_spin_lock_irqsave cannot be used here, as we may take a spin
+	 * lock again when we call bpf_obj_free_fields in the loop, and it will
+	 * overwrite the per-CPU local_irq_save state.
+	 */
+	local_irq_save(flags);
+	__bpf_spin_lock(spin_lock);
+	if (!head->next || list_empty(head))
+		goto unlock;
+	head = head->next;
+	while (head != orig_head) {
+		void *obj = head;
+
+		obj -= field->list_head.node_offset;
+		head = head->next;
+		/* TODO: Rework later */
+		kfree(obj);
+	}
+unlock:
+	INIT_LIST_HEAD(head);
+	__bpf_spin_unlock(spin_lock);
+	local_irq_restore(flags);
+}
+
 BTF_SET8_START(tracing_btf_ids)
 #ifdef CONFIG_KEXEC_CORE
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
