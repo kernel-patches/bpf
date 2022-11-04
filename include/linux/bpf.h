@@ -1188,6 +1188,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	const struct net_device_ops *xdp_kfunc_ndo;
 };
 
 struct bpf_prog {

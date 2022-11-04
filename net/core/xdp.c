@@ -4,6 +4,8 @@
  * Copyright (c) 2017 Jesper Dangaard Brouer, Red Hat Inc.
  */
 #include <linux/bpf.h>
+#include <linux/bpf_patch.h>
+#include <linux/btf_ids.h>
 #include <linux/filter.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -709,3 +711,40 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 
 	return nxdpf;
 }
+
+/* Indicates whether particular device supports rx_timestamp metadata.
+ * This is an optional helper to support marking some branches as
+ * "dead code" in the BPF programs.
+ */
+noinline int bpf_xdp_metadata_rx_timestamp_supported(const struct xdp_md *ctx)
+{
+	/* payload is ignored, see default case in unroll_kfunc_call */
+	return false;
+}
+
+/* Returns rx_timestamp metadata or 0 when the frame doesn't have it.
+ */
+noinline const __u64 bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx)
+{
+	/* payload is ignored, see default case in unroll_kfunc_call */
+	return 0;
+}
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+BTF_SET8_START_GLOBAL(xdp_metadata_kfunc_ids)
+#define XDP_METADATA_KFUNC(name, str) BTF_ID_FLAGS(func, str, KF_RET_NULL | KF_UNROLL)
+XDP_METADATA_KFUNC_xxx
+#undef XDP_METADATA_KFUNC
+BTF_SET8_END(xdp_metadata_kfunc_ids)
+
+static const struct btf_kfunc_id_set xdp_metadata_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &xdp_metadata_kfunc_ids,
+};
+
+static int __init xdp_metadata_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_metadata_kfunc_set);
+}
+late_initcall(xdp_metadata_init);
+#endif
