@@ -163,7 +163,7 @@ static void xsk_copy_xdp(struct xdp_buff *to, struct xdp_buff *from, u32 len)
 	} else {
 		from_buf = from->data_meta;
 		metalen = from->data - from->data_meta;
-		to_buf = to->data - metalen;
+		to_buf = to->data;
 	}
 
 	memcpy(to_buf, from_buf, len + metalen);
