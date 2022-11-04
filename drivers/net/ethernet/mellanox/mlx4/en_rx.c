@@ -33,6 +33,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
+#include <linux/bpf_patch.h>
 #include <linux/mlx4/cq.h>
 #include <linux/slab.h>
 #include <linux/mlx4/qp.h>
@@ -663,7 +664,42 @@ static int check_csum(struct mlx4_cqe *cqe, struct sk_buff *skb, void *va,
 
 struct mlx4_xdp_buff {
 	struct xdp_buff xdp;
+	struct mlx4_cqe *cqe;
+	struct mlx4_en_dev *mdev;
+	u64 r0;
 };
+
+struct mlx4_xdp_buff *mxl4_xdp_rx_timestamp(struct mlx4_xdp_buff *ctx)
+{
+	unsigned int seq;
+	u64 timestamp;
+	u64 nsec;
+
+	timestamp = mlx4_en_get_cqe_ts(ctx->cqe);
+
+	do {
+		seq = read_seqbegin(&ctx->mdev->clock_lock);
+		nsec = timecounter_cyc2time(&ctx->mdev->clock, timestamp);
+	} while (read_seqretry(&ctx->mdev->clock_lock, seq));
+
+	ctx->r0 = (u64)ns_to_ktime(nsec);
+	return ctx;
+}
+
+void mlx4_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		       struct bpf_patch *patch)
+{
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		return xdp_metadata_export_to_skb(prog, patch);
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
+		/* return true; */
+		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 1));
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {
+		xdp_kfunc_call_preserving_r1(patch,
+					     offsetof(struct mlx4_xdp_buff, r0),
+					     mxl4_xdp_rx_timestamp);
+	}
+}
 
 int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int budget)
 {
@@ -783,6 +819,10 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 			xdp_prepare_buff(&mxbuf.xdp, va - frags[0].page_offset,
 					 frags[0].page_offset, length, false);
 			orig_data = mxbuf.xdp.data;
+			if (unlikely(ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL)) {
+				mxbuf.cqe = cqe;
+				mxbuf.mdev = priv->mdev;
+			}
 
 			act = bpf_prog_run_xdp(xdp_prog, &mxbuf.xdp);
 
