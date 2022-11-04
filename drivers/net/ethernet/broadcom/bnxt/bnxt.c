@@ -37,6 +37,7 @@
 #include <linux/if_bridge.h>
 #include <linux/rtc.h>
 #include <linux/bpf.h>
+#include <linux/bpf_patch.h>
 #include <net/gro.h>
 #include <net/ip.h>
 #include <net/tcp.h>
@@ -1791,7 +1792,52 @@ static void bnxt_deliver_skb(struct bnxt *bp, struct bnxt_napi *bnapi,
 
 struct bnxt_xdp_buff {
 	struct xdp_buff xdp;
+	struct rx_cmp_ext *rxcmp1;
+	struct bnxt *bp;
+	u64 r0;
 };
+
+struct bnxt_xdp_buff *bnxt_xdp_rx_timestamp(struct bnxt_xdp_buff *ctx)
+{
+	struct bnxt_ptp_cfg *ptp;
+	u32 cmpl_ts;
+	u64 ns, ts;
+
+	if (!ctx->rxcmp1) {
+		ctx->r0 = 0;
+		return ctx;
+	}
+
+	cmpl_ts = le32_to_cpu(ctx->rxcmp1->rx_cmp_timestamp);
+	if (bnxt_get_rx_ts_p5(ctx->bp, &ts, cmpl_ts) < 0) {
+		ctx->r0 = 0;
+		return ctx;
+	}
+
+	ptp = ctx->bp->ptp_cfg;
+
+	spin_lock_bh(&ptp->ptp_lock);
+	ns = timecounter_cyc2time(&ptp->tc, ts);
+	spin_unlock_bh(&ptp->ptp_lock);
+
+	ctx->r0 = (u64)ns_to_ktime(ns);
+	return ctx;
+}
+
+void bnxt_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		       struct bpf_patch *patch)
+{
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		return xdp_metadata_export_to_skb(prog, patch);
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
+		/* return true; */
+		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 1));
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {
+		xdp_kfunc_call_preserving_r1(patch,
+					     offsetof(struct bnxt_xdp_buff, r0),
+					     bnxt_xdp_rx_timestamp);
+	}
+}
 
 /* returns the following:
  * 1       - 1 packet successfully received
@@ -1941,6 +1987,14 @@ static int bnxt_rx_pkt(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	}
 
 	if (xdp_active) {
+		if (unlikely((flags & RX_CMP_FLAGS_ITYPES_MASK) ==
+			     RX_CMP_FLAGS_ITYPE_PTP_W_TS) || bp->ptp_all_rx_tstamp) {
+			if (bp->flags & BNXT_FLAG_CHIP_P5) {
+				bxbuf.rxcmp1 = rxcmp1;
+				bxbuf.bp = bp;
+			}
+		}
+
 		if (bnxt_rx_xdp(bp, rxr, cons, bxbuf.xdp, data, &len, event)) {
 			rc = 1;
 			goto next_rx;
@@ -13116,6 +13170,7 @@ static const struct net_device_ops bnxt_netdev_ops = {
 	.ndo_bridge_getlink	= bnxt_bridge_getlink,
 	.ndo_bridge_setlink	= bnxt_bridge_setlink,
 	.ndo_get_devlink_port	= bnxt_get_devlink_port,
+	.ndo_unroll_kfunc	= bnxt_unroll_kfunc,
 };
 
 static void bnxt_remove_one(struct pci_dev *pdev)
