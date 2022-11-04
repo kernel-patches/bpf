@@ -440,10 +440,14 @@ static inline u32 xdp_metadata_kfunc_id(int id)
 	return xdp_metadata_kfunc_ids.pairs[id].id;
 }
 void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch);
+void xdp_kfunc_call_preserving_r1(struct bpf_patch *patch, size_t r0_offset,
+				  void *kfunc);
 #else
 #define xdp_metadata_magic 0
 static inline u32 xdp_metadata_kfunc_id(int id) { return 0; }
 static void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch) { return 0; }
+static void xdp_kfunc_call_preserving_r1(struct bpf_patch *patch, size_t r0_offset,
+					 void *kfunc) {}
 #endif
 
 #endif /* __LINUX_NET_XDP_H__ */

@@ -737,6 +737,7 @@ BTF_SET8_START_GLOBAL(xdp_metadata_kfunc_ids)
 XDP_METADATA_KFUNC_xxx
 #undef XDP_METADATA_KFUNC
 BTF_SET8_END(xdp_metadata_kfunc_ids)
+EXPORT_SYMBOL(xdp_metadata_kfunc_ids);
 
 /* Make sure userspace doesn't depend on our layout by using
  * different pseudo-generated magic value.
@@ -756,7 +757,8 @@ static const struct btf_kfunc_id_set xdp_metadata_kfunc_set = {
  *
  * The above also means we _cannot_ easily call any other helper/kfunc
  * because there is no place for us to preserve our R1 argument;
- * existing R6-R9 belong to the callee.
+ * existing R6-R9 belong to the callee. For the cases where calling into
+ * the kernel is the only option, see xdp_kfunc_call_preserving_r1.
  */
 void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch)
 {
@@ -832,6 +834,26 @@ void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *p
 
 	bpf_patch_resolve_jmp(patch);
 }
+EXPORT_SYMBOL(xdp_metadata_export_to_skb);
+
+/* Helper to generate the bytecode that calls the supplied kfunc.
+ * The kfunc has to accept a pointer to the context and return the
+ * same pointer back. The user also has to supply an offset within
+ * the context to store r0.
+ */
+void xdp_kfunc_call_preserving_r1(struct bpf_patch *patch, size_t r0_offset,
+				  void *kfunc)
+{
+	bpf_patch_append(patch,
+		/* r0 = kfunc(r1); */
+		BPF_EMIT_CALL(kfunc),
+		/* r1 = r0; */
+		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
+		/* r0 = *(r1 + r0_offset); */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, r0_offset),
+	);
+}
+EXPORT_SYMBOL(xdp_kfunc_call_preserving_r1);
 
 static int __init xdp_metadata_init(void)
 {
