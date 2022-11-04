@@ -9109,4 +9109,5 @@ static const struct net_device_ops ice_netdev_ops = {
 	.ndo_xdp_xmit = ice_xdp_xmit,
 	.ndo_xsk_wakeup = ice_xsk_wakeup,
 	.ndo_get_devlink_port = ice_get_devlink_port,
+	.ndo_unroll_kfunc = ice_unroll_kfunc,
 };

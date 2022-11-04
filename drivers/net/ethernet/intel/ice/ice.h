@@ -925,6 +925,11 @@ int ice_open_internal(struct net_device *netdev);
 int ice_stop(struct net_device *netdev);
 void ice_service_task_schedule(struct ice_pf *pf);
 
+struct bpf_insn;
+struct bpf_patch;
+void ice_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		      struct bpf_patch *patch);
+
 /**
  * ice_set_rdma_cap - enable RDMA support
  * @pf: PF struct

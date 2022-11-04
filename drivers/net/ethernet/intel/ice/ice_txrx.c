@@ -7,6 +7,7 @@
 #include <linux/netdevice.h>
 #include <linux/prefetch.h>
 #include <linux/bpf_trace.h>
+#include <linux/bpf_patch.h>
 #include <net/dsfield.h>
 #include <net/mpls.h>
 #include <net/xdp.h>
@@ -1098,7 +1099,79 @@ ice_is_non_eop(struct ice_rx_ring *rx_ring, union ice_32b_rx_flex_desc *rx_desc)
 
 struct ice_xdp_buff {
 	struct xdp_buff xdp;
+	struct ice_rx_ring *rx_ring;
+	union ice_32b_rx_flex_desc *rx_desc;
 };
+
+void ice_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		      struct bpf_patch *patch)
+{
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		return xdp_metadata_export_to_skb(prog, patch);
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
+		/* return true; */
+		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 1));
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {
+		bpf_patch_append(patch,
+			/* Loosely based on ice_ptp_rx_hwtstamp. */
+
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+
+			/* r5 = ((struct ice_xdp_buff *)r1)->rx_ring; */
+			BPF_LDX_MEM(BPF_DW, BPF_REG_5, BPF_REG_1,
+				    offsetof(struct ice_xdp_buff, rx_ring)),
+			/* if (r5 == NULL) return; */
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 0, S16_MAX),
+
+			/* r5 = rx_ring->cached_phctime; */
+			BPF_LDX_MEM(BPF_DW, BPF_REG_5, BPF_REG_5,
+				    offsetof(struct ice_rx_ring, cached_phctime)),
+			/* if (r5 == 0) return; */
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 0, S16_MAX),
+
+			/* r4 = ((struct ice_xdp_buff *)r1)->rx_desc; */
+			BPF_LDX_MEM(BPF_DW, BPF_REG_4, BPF_REG_1,
+				    offsetof(struct ice_xdp_buff, rx_desc)),
+
+			/* r3 = rx_desc->wb.time_stamp_low; */
+			BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_4,
+				    offsetof(union ice_32b_rx_flex_desc, wb.time_stamp_low)),
+			/* r3 = r3 & ICE_PTP_TS_VALID; */
+			BPF_ALU64_IMM(BPF_AND, BPF_REG_3, 1),
+			/* if (r3 == 0) return; */
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_3, 0, S16_MAX),
+
+			/* r3 = rx_desc->wb.flex_ts.ts_high; */
+			BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_4,
+				    offsetof(union ice_32b_rx_flex_desc, wb.flex_ts.ts_high)),
+
+			/* r5 == cached_phc_time; */
+			/* r3 == in_tstamp */
+
+			/* r4 = in_tstamp - pch_time_lo; (delta) */
+			BPF_MOV32_REG(BPF_REG_4, BPF_REG_3),
+			BPF_ALU32_REG(BPF_SUB, BPF_REG_4, BPF_REG_5),
+
+			/* if (delta <= U32_MAX / 2) { */
+			BPF_JMP_IMM(BPF_JGT, BPF_REG_4, U32_MAX / 2, 3),
+
+			/*	return cached_pch_time + delta */
+			BPF_MOV64_REG(BPF_REG_0, BPF_REG_4),
+			BPF_ALU32_REG(BPF_ADD, BPF_REG_0, BPF_REG_5),
+			BPF_JMP_A(4),
+
+			/* } else { */
+			/*	r4 = cached_phc_time_lo - in_tstamp; (delta) */
+			BPF_MOV64_REG(BPF_REG_4, BPF_REG_5),
+			BPF_ALU32_REG(BPF_SUB, BPF_REG_4, BPF_REG_3),
+
+			/*	return cached_pch_time - delta */
+			BPF_MOV64_REG(BPF_REG_0, BPF_REG_5),
+			BPF_ALU32_REG(BPF_SUB, BPF_REG_0, BPF_REG_4),
+			/* } */
+		);
+	}
+}
 
 /**
  * ice_clean_rx_irq - Clean completed descriptors from Rx ring - bounce buf
@@ -1196,6 +1269,8 @@ int ice_clean_rx_irq(struct ice_rx_ring *rx_ring, int budget)
 		/* At larger PAGE_SIZE, frame_sz depend on len size */
 		ixbuf.xdp.frame_sz = ice_rx_frame_truesize(rx_ring, size);
 #endif
+		ixbuf.rx_ring = rx_ring;
+		ixbuf.rx_desc = rx_desc;
 
 		if (!xdp_prog)
 			goto construct_skb;
