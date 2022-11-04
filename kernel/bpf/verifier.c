@@ -13902,6 +13902,24 @@ static int unroll_kfunc_call(struct bpf_verifier_env *env,
 		 */
 		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 0));
 	}
+
+	if (func_id != xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		u32 allowed = 0;
+		u32 mangled = bpf_patch_magles_registers(patch);
+
+		/* See xdp_metadata_export_to_skb comment for the
+		 * reason about these constraints.
+		 */
+
+		allowed |= 1 << BPF_REG_0;
+		allowed |= 1 << BPF_REG_2;
+		allowed |= 1 << BPF_REG_3;
+		allowed |= 1 << BPF_REG_4;
+		allowed |= 1 << BPF_REG_5;
+
+		WARN_ON_ONCE(mangled & ~allowed);
+	}
+
 	return bpf_patch_err(patch);
 }
 

@@ -16,6 +16,8 @@ size_t bpf_patch_len(const struct bpf_patch *patch);
 int bpf_patch_err(const struct bpf_patch *patch);
 void __bpf_patch_append(struct bpf_patch *patch, struct bpf_insn insn);
 struct bpf_insn *bpf_patch_data(const struct bpf_patch *patch);
+void bpf_patch_resolve_jmp(struct bpf_patch *patch);
+u32 bpf_patch_magles_registers(const struct bpf_patch *patch);
 
 #define bpf_patch_append(patch, ...) ({ \
 	struct bpf_insn insn[] = { __VA_ARGS__ }; \

@@ -49,3 +49,33 @@ struct bpf_insn *bpf_patch_data(const struct bpf_patch *patch)
 {
 	return patch->insn;
 }
+
+void bpf_patch_resolve_jmp(struct bpf_patch *patch)
+{
+	int i;
+
+	for (i = 0; i < patch->len; i++) {
+		if (BPF_CLASS(patch->insn[i].code) != BPF_JMP)
+			continue;
+
+		if (BPF_SRC(patch->insn[i].code) != BPF_X)
+			continue;
+
+		if (patch->insn[i].off != S16_MAX)
+			continue;
+
+		patch->insn[i].off = patch->len - i - 1;
+	}
+}
+
+u32 bpf_patch_magles_registers(const struct bpf_patch *patch)
+{
+	u32 mask = 0;
+	int i;
+
+	for (i = 0; i < patch->len; i++) {
+		mask |= 1 << patch->insn[i].dst_reg;
+	}
+
+	return mask;
+}

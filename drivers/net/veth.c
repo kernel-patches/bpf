@@ -1673,7 +1673,9 @@ static int veth_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 static void veth_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
 			      struct bpf_patch *patch)
 {
-	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		return xdp_metadata_export_to_skb(prog, patch);
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
 		/* return true; */
 		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 1));
 	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {

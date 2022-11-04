@@ -411,6 +411,8 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 
 #define XDP_METADATA_KFUNC_xxx	\
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_EXPORT_TO_SKB, \
+			   bpf_xdp_metadata_export_to_skb) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED, \
 			   bpf_xdp_metadata_rx_timestamp_supported) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP, \
@@ -423,14 +425,25 @@ XDP_METADATA_KFUNC_xxx
 MAX_XDP_METADATA_KFUNC,
 };
 
+struct xdp_to_skb_metadata {
+	u32 magic; /* xdp_metadata_magic */
+	u64 rx_timestamp;
+} __randomize_layout;
+
+struct bpf_patch;
+
 #ifdef CONFIG_DEBUG_INFO_BTF
+extern u32 xdp_metadata_magic;
 extern struct btf_id_set8 xdp_metadata_kfunc_ids;
 static inline u32 xdp_metadata_kfunc_id(int id)
 {
 	return xdp_metadata_kfunc_ids.pairs[id].id;
 }
+void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch);
 #else
+#define xdp_metadata_magic 0
 static inline u32 xdp_metadata_kfunc_id(int id) { return 0; }
+static void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch) { return 0; }
 #endif
 
 #endif /* __LINUX_NET_XDP_H__ */

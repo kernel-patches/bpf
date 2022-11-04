@@ -4217,9 +4217,13 @@ static inline bool skb_metadata_differs(const struct sk_buff *skb_a,
 	       true : __skb_metadata_differs(skb_a, skb_b, len_a);
 }
 
+void skb_metadata_import_from_xdp(struct sk_buff *skb, size_t len);
+
 static inline void skb_metadata_set(struct sk_buff *skb, u8 meta_len)
 {
 	skb_shinfo(skb)->meta_len = meta_len;
+	if (meta_len)
+		skb_metadata_import_from_xdp(skb, meta_len);
 }
 
 static inline void skb_metadata_clear(struct sk_buff *skb)
