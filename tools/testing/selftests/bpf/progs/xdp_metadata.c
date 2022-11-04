@@ -17,6 +17,7 @@ struct {
 	__type(value, __u32);
 } xsk SEC(".maps");
 
+extern void bpf_xdp_metadata_export_to_skb(const struct xdp_md *ctx) __ksym;
 extern int bpf_xdp_metadata_rx_timestamp_supported(const struct xdp_md *ctx) __ksym;
 extern const __u64 bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx) __ksym;
 
@@ -24,7 +25,34 @@ SEC("xdp")
 int rx(struct xdp_md *ctx)
 {
 	void *data, *data_meta;
+	struct ethhdr *eth = NULL;
+	struct udphdr *udp = NULL;
+	struct iphdr *iph = NULL;
+	void *data_end;
 	int ret;
+
+	/* Exercise xdp -> skb metadata path by diverting some traffic
+	 * into the kernel (UDP destination port 9081).
+	 */
+
+	data = (void *)(long)ctx->data;
+	data_end = (void *)(long)ctx->data_end;
+	eth = data;
+	if (eth + 1 < data_end) {
+		if (eth->h_proto == bpf_htons(ETH_P_IP)) {
+			iph = (void *)(eth + 1);
+			if (iph + 1 < data_end && iph->protocol == IPPROTO_UDP)
+				udp = (void *)(iph + 1);
+		}
+		if (udp && udp + 1 > data_end)
+			udp = NULL;
+	}
+	if (udp && udp->dest == bpf_htons(9081)) {
+		bpf_xdp_metadata_export_to_skb(ctx);
+		bpf_printk("exporting metadata to skb for UDP port 9081");
+		/*return bpf_redirect(ifindex, BPF_F_INGRESS);*/
+		return XDP_PASS;
+	}
 
 	if (bpf_xdp_metadata_rx_timestamp_supported(ctx)) {
 		__u64 rx_timestamp = bpf_xdp_metadata_rx_timestamp(ctx);

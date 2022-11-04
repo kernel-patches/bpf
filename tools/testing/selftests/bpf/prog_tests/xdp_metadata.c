@@ -19,6 +19,11 @@
 
 #define AF_XDP_SOURCE_PORT 1234
 #define AF_XDP_CONSUMER_PORT 8080
+#define SOCKET_CONSUMER_PORT 9081
+
+#ifndef SOL_UDP
+#define SOL_UDP		17
+#endif
 
 #define UMEM_NUM 16
 #define UMEM_FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
@@ -221,6 +226,71 @@ int verify_xsk_metadata(struct xsk *xsk)
 	return 0;
 }
 
+static void disable_rx_checksum(int fd)
+{
+	int ret, val;
+
+	val = 1;
+	ret = setsockopt(fd, SOL_UDP, UDP_NO_CHECK6_RX, &val, sizeof(val));
+	ASSERT_OK(ret, "setsockopt(UDP_NO_CHECK6_RX)");
+}
+
+static void timestamping_enable(int fd)
+{
+	int ret, val;
+
+	val = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RAW_HARDWARE;
+	ret = setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPING, &val, sizeof(val));
+	ASSERT_OK(ret, "setsockopt(SO_TIMESTAMPING)");
+}
+
+int verify_skb_metadata(int fd)
+{
+	char cmsg_buf[1024];
+	char packet_buf[128];
+
+	struct scm_timestamping *ts;
+	struct iovec packet_iov;
+	struct cmsghdr *cmsg;
+	struct msghdr hdr;
+	bool found_hwtstamp = false;
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.msg_iov = &packet_iov;
+	hdr.msg_iovlen = 1;
+	packet_iov.iov_base = packet_buf;
+	packet_iov.iov_len = sizeof(packet_buf);
+
+	hdr.msg_control = cmsg_buf;
+	hdr.msg_controllen = sizeof(cmsg_buf);
+
+	if (ASSERT_GE(recvmsg(fd, &hdr, 0), 0, "recvmsg")) {
+		for (cmsg = CMSG_FIRSTHDR(&hdr); cmsg != NULL;
+		     cmsg = CMSG_NXTHDR(&hdr, cmsg)) {
+
+			if (cmsg->cmsg_level != SOL_SOCKET)
+				continue;
+
+			switch (cmsg->cmsg_type) {
+			case SCM_TIMESTAMPING:
+				ts = (struct scm_timestamping *)CMSG_DATA(cmsg);
+				if (ts->ts[2].tv_sec || ts->ts[2].tv_nsec) {
+					found_hwtstamp = true;
+					break;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
+	if (!ASSERT_EQ(found_hwtstamp, true, "no hwtstamp!"))
+		return -1;
+
+	return 0;
+}
+
 void test_xdp_metadata(void)
 {
 	struct xdp_metadata *bpf_obj = NULL;
@@ -228,6 +298,7 @@ void test_xdp_metadata(void)
 	struct bpf_program *prog;
 	struct xsk tx_xsk = {};
 	struct xsk rx_xsk = {};
+	int rx_udp_fd = -1;
 	int rx_ifindex;
 	int ret;
 
@@ -243,6 +314,8 @@ void test_xdp_metadata(void)
 	SYS("ip link set dev " RX_NAME " up");
 	SYS("ip addr add " TX_ADDR "/" PREFIX_LEN " dev " TX_NAME);
 	SYS("ip addr add " RX_ADDR "/" PREFIX_LEN " dev " RX_NAME);
+	SYS("sysctl -q net.ipv4.ip_forward=1");
+	SYS("sysctl -q net.ipv4.conf.all.accept_local=1");
 
 	rx_ifindex = if_nametoindex(RX_NAME);
 
@@ -255,6 +328,14 @@ void test_xdp_metadata(void)
 	ret = open_xsk(RX_NAME, &rx_xsk);
 	if (!ASSERT_OK(ret, "open_xsk(RX_NAME)"))
 		goto out;
+
+	/* Setup UPD listener for RX interface. */
+
+	rx_udp_fd = start_server(FAMILY, SOCK_DGRAM, NULL, SOCKET_CONSUMER_PORT, 1000);
+	if (!ASSERT_GE(rx_udp_fd, 0, "start_server"))
+		goto out;
+	disable_rx_checksum(rx_udp_fd);
+	timestamping_enable(rx_udp_fd);
 
 	/* Attach BPF program to RX interface. */
 
@@ -291,9 +372,20 @@ void test_xdp_metadata(void)
 		       "verify_xsk_metadata"))
 	    goto out;
 
+	/* Send packet destined to RX UDP socket. */
+	if (!ASSERT_GE(generate_packet(&tx_xsk, SOCKET_CONSUMER_PORT), 0,
+		       "generate SOCKET_CONSUMER_PORT"))
+	    goto out;
+
+	/* Verify SKB RX packet has proper metadata. */
+	if (!ASSERT_GE(verify_skb_metadata(rx_udp_fd), 0,
+		       "verify_skb_metadata"))
+	    goto out;
+
 out:
 	close_xsk(&rx_xsk);
 	close_xsk(&tx_xsk);
+	close(rx_udp_fd);
 	if (bpf_obj)
 		xdp_metadata__destroy(bpf_obj);
 	system("ip netns del xdp_metadata");
