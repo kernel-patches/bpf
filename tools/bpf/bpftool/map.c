@@ -474,6 +474,8 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 	jsonw_uint_field(json_wtr, "bytes_key", info->key_size);
 	jsonw_uint_field(json_wtr, "bytes_value", info->value_size);
 	jsonw_uint_field(json_wtr, "max_entries", info->max_entries);
+	if (info->type == BPF_MAP_TYPE_HASH)
+		jsonw_uint_field(json_wtr, "used_entries", info->used_entries);
 
 	if (memlock)
 		jsonw_int_field(json_wtr, "bytes_memlock", atoll(memlock));
@@ -560,8 +562,11 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 	frozen_str = get_fdinfo(fd, "frozen");
 
 	show_map_header_plain(info);
-	printf("\tkey %uB  value %uB  max_entries %u",
-	       info->key_size, info->value_size, info->max_entries);
+	printf("\tkey %uB  value %uB  max_entries %u%1s",
+		   info->key_size, info->value_size, info->max_entries,
+		   !(info->map_flags & BPF_F_NO_PREALLOC) ? "*" : "");
+	if (info->type == BPF_MAP_TYPE_HASH)
+		printf("  used_entries %u", info->used_entries);
 
 	if (memlock)
 		printf("  memlock %sB", memlock);

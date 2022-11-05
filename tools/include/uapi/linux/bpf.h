@@ -6263,6 +6263,7 @@ struct bpf_map_info {
 	__u32 id;
 	__u32 key_size;
 	__u32 value_size;
+	__u32 used_entries;
 	__u32 max_entries;
 	__u32 map_flags;
 	char  name[BPF_OBJ_NAME_LEN];
