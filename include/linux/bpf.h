@@ -98,6 +98,7 @@ struct bpf_map_ops {
 	int (*map_pop_elem)(struct bpf_map *map, void *value);
 	int (*map_peek_elem)(struct bpf_map *map, void *value);
 	void *(*map_lookup_percpu_elem)(struct bpf_map *map, void *key, u32 cpu);
+	u32 (*map_get_used_elem)(struct bpf_map *map);
 
 	/* funcs called by prog_array and perf_event_array map */
 	void *(*map_fd_get_ptr)(struct bpf_map *map, struct file *map_file,

@@ -907,6 +907,7 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 	if (htab_is_prealloc(htab)) {
 		check_and_free_fields(htab, l);
 		__pcpu_freelist_push(&htab->freelist, &l->fnode);
+		dec_elem_count(htab);
 	} else {
 		dec_elem_count(htab);
 		htab_elem_free(htab, l);
@@ -988,6 +989,7 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 			if (!l)
 				return ERR_PTR(-E2BIG);
 			l_new = container_of(l, struct htab_elem, fnode);
+			inc_elem_count(htab);
 		}
 	} else {
 		if (is_map_full(htab))
@@ -2176,6 +2178,22 @@ out:
 	return num_elems;
 }
 
+u32 htab_map_get_used_elem(struct bpf_map *map)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+
+	/* The elem count may temporarily go beyond the max after
+	 * inc_elem_count() but before dec_elem_count().
+	 */
+	if (htab->use_percpu_counter)
+		return min_t(u32, htab->map.max_entries,
+				percpu_counter_sum(&htab->pcount) +
+							atomic_read(&htab->count));
+	else
+		return min_t(u32, htab->map.max_entries,
+							atomic_read(&htab->count));
+}
+
 BTF_ID_LIST_SINGLE(htab_map_btf_ids, struct, bpf_htab)
 const struct bpf_map_ops htab_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -2192,6 +2210,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_seq_show_elem = htab_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
+	.map_get_used_elem = htab_map_get_used_elem,
 	BATCH_OPS(htab),
 	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,

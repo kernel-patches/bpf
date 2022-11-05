@@ -4169,6 +4169,8 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	info.map_flags = map->map_flags;
 	info.map_extra = map->map_extra;
 	memcpy(info.name, map->name, sizeof(map->name));
+	if (map->ops->map_get_used_elem)
+		info.used_entries = map->ops->map_get_used_elem(map);
 
 	if (map->btf) {
 		info.btf_id = btf_obj_id(map->btf);
