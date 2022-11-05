@@ -38,6 +38,8 @@ static void test_hashmap(unsigned int task, void *data)
 {
 	long long key, next_key, first_key, value;
 	int fd;
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value), 2, &map_opts);
 	if (fd < 0) {
@@ -50,15 +52,31 @@ static void test_hashmap(unsigned int task, void *data)
 	/* Insert key=1 element. */
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_ANY) == 0);
 
+	/* Check used_entires is now 1. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 1);
+
 	value = 0;
 	/* BPF_NOEXIST means add new element if it doesn't exist. */
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_NOEXIST) < 0 &&
 	       /* key=1 already exists. */
 	       errno == EEXIST);
 
+	/* Check used_entires is still 1 because we are updating
+	 * an existing element.
+	 */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 1);
+
 	/* -1 is an invalid flag. */
 	assert(bpf_map_update_elem(fd, &key, &value, -1) < 0 &&
 	       errno == EINVAL);
+
+	/* Check used_entires is still 1 because the last
+	 * insertion was invalid.
+	 */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 1);
 
 	/* Check that key=1 can be found. */
 	assert(bpf_map_lookup_elem(fd, &key, &value) == 0 && value == 1234);
@@ -67,6 +85,10 @@ static void test_hashmap(unsigned int task, void *data)
 	value = 1234;
 	/* Insert key=2 element. */
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_ANY) == 0);
+
+	/* Check used_entires is now 2. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 2);
 
 	/* Check that key=2 matches the value and delete it */
 	assert(bpf_map_lookup_and_delete_elem(fd, &key, &value) == 0 && value == 1234);
@@ -89,6 +111,10 @@ static void test_hashmap(unsigned int task, void *data)
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_NOEXIST) < 0 &&
 	       errno == E2BIG);
 
+	/* Check used_entires is now 2. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 2);
+
 	/* Update existing element, though the map is full. */
 	key = 1;
 	assert(bpf_map_update_elem(fd, &key, &value, BPF_EXIST) == 0);
@@ -101,6 +127,10 @@ static void test_hashmap(unsigned int task, void *data)
 	/* Check that key = 0 doesn't exist. */
 	key = 0;
 	assert(bpf_map_delete_elem(fd, &key) < 0 && errno == ENOENT);
+
+	/* Check used_entires is now 2. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 2);
 
 	/* Iterate over two elements. */
 	assert(bpf_map_get_next_key(fd, NULL, &first_key) == 0 &&
@@ -126,6 +156,10 @@ static void test_hashmap(unsigned int task, void *data)
 	       errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &next_key) < 0 &&
 	       errno == ENOENT);
+
+	/* Check used_entires is now 0 because both elements were deleted. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 0);
 
 	close(fd);
 }
@@ -292,6 +326,8 @@ static void test_hashmap_walk(unsigned int task, void *data)
 	int fd, i, max_entries = 10000;
 	long long key, value[VALUE_SIZE], next_key;
 	bool next_key_valid = true;
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	fd = helper_fill_hashmap(max_entries);
 
@@ -302,6 +338,9 @@ static void test_hashmap_walk(unsigned int task, void *data)
 	}
 
 	assert(i == max_entries);
+	/* Check used_entires is now max_entries. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == max_entries);
 
 	assert(bpf_map_get_next_key(fd, NULL, &key) == 0);
 	for (i = 0; next_key_valid; i++) {
@@ -313,6 +352,9 @@ static void test_hashmap_walk(unsigned int task, void *data)
 	}
 
 	assert(i == max_entries);
+	/* Check used_entires is now max_entries. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == max_entries);
 
 	for (i = 0; bpf_map_get_next_key(fd, !i ? NULL : &key,
 					 &next_key) == 0; i++) {
@@ -322,6 +364,9 @@ static void test_hashmap_walk(unsigned int task, void *data)
 	}
 
 	assert(i == max_entries);
+	/* Check used_entires is now max_entries. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == max_entries);
 	close(fd);
 }
 
@@ -1303,13 +1348,14 @@ out_map_in_map:
 
 static void test_map_large(void)
 {
-
 	struct bigkey {
 		int a;
 		char b[4096];
 		long long c;
 	} key;
 	int fd, i, value;
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
@@ -1340,6 +1386,10 @@ static void test_map_large(void)
 	assert(bpf_map_lookup_elem(fd, &key, &value) == 0 && value == 0);
 	key.a = 1;
 	assert(bpf_map_lookup_elem(fd, &key, &value) < 0 && errno == ENOENT);
+
+	/* Check used_entires is now MAP_SIZE. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == MAP_SIZE);
 
 	close(fd);
 }
@@ -1466,6 +1516,8 @@ static void test_map_parallel(void)
 {
 	int i, fd, key = 0, value = 0, j = 0;
 	int data[2];
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
@@ -1504,6 +1556,10 @@ again:
 		       value == key);
 	}
 
+	/* Check used_entires is now MAP_SIZE. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == MAP_SIZE);
+
 	/* Now let's delete all elemenets in parallel. */
 	data[1] = DO_DELETE;
 	run_parallel(TASKS, test_update_delete, data);
@@ -1512,6 +1568,10 @@ again:
 	key = -1;
 	assert(bpf_map_get_next_key(fd, NULL, &key) < 0 && errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &key) < 0 && errno == ENOENT);
+
+	/* Check used_entires is now 0. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 0);
 
 	key = 0;
 	bpf_map_delete_elem(fd, &key);
@@ -1524,6 +1584,8 @@ static void test_map_rdonly(void)
 {
 	int fd, key = 0, value = 0;
 	__u32 old_flags;
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	old_flags = map_opts.map_flags;
 	map_opts.map_flags |= BPF_F_RDONLY;
@@ -1546,6 +1608,10 @@ static void test_map_rdonly(void)
 	assert(bpf_map_lookup_elem(fd, &key, &value) < 0 && errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &value) < 0 && errno == ENOENT);
 
+	/* Check used_entires is now 0. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 0);
+
 	close(fd);
 }
 
@@ -1553,6 +1619,8 @@ static void test_map_wronly_hash(void)
 {
 	int fd, key = 0, value = 0;
 	__u32 old_flags;
+	struct bpf_map_info map_info = {};
+	__u32 info_len = sizeof(map_info);
 
 	old_flags = map_opts.map_flags;
 	map_opts.map_flags |= BPF_F_WRONLY;
@@ -1573,6 +1641,10 @@ static void test_map_wronly_hash(void)
 	/* Check that reading elements and keys from the map is not allowed. */
 	assert(bpf_map_lookup_elem(fd, &key, &value) < 0 && errno == EPERM);
 	assert(bpf_map_get_next_key(fd, &key, &value) < 0 && errno == EPERM);
+
+	/* Check used_entires is now 1. */
+	assert(bpf_obj_get_info_by_fd(fd, &map_info, &info_len) == 0);
+	assert(map_info.used_entries == 1);
 
 	close(fd);
 }
