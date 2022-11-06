@@ -119,8 +119,8 @@ static int timer_cb1(void *map, int *key, struct bpf_timer *timer)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG2(test1, int, a)
+SEC("tc")
+int test1(void *ctx)
 {
 	struct bpf_timer *arr_timer, *lru_timer;
 	struct elem init = {};
@@ -235,8 +235,8 @@ int bpf_timer_test(void)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test2")
-int BPF_PROG2(test2, int, a, int, b)
+SEC("tc")
+int test2(void *ctx)
 {
 	struct hmap_elem init = {}, *val;
 	int key = HTAB, key_malloc = HTAB_MALLOC;

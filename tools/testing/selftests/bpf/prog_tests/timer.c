@@ -1,25 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2021 Facebook */
 #include <test_progs.h>
+#include <network_helpers.h>
 #include "timer.skel.h"
 
 static int timer(struct timer *timer_skel)
 {
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
 	int err, prog_fd;
-	LIBBPF_OPTS(bpf_test_run_opts, topts);
-
-	err = timer__attach(timer_skel);
-	if (!ASSERT_OK(err, "timer_attach"))
-		return err;
 
 	ASSERT_EQ(timer_skel->data->callback_check, 52, "callback_check1");
 	ASSERT_EQ(timer_skel->data->callback2_check, 52, "callback2_check1");
 
 	prog_fd = bpf_program__fd(timer_skel->progs.test1);
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
-	ASSERT_OK(err, "test_run");
-	ASSERT_EQ(topts.retval, 0, "test_run");
-	timer__detach(timer_skel);
+	ASSERT_OK(err, "test_run test1");
+	ASSERT_EQ(topts.retval, 0, "test_run retval test1");
+
+	prog_fd = bpf_program__fd(timer_skel->progs.test2);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run test2");
+	ASSERT_EQ(topts.retval, 0, "test_run retval test2");
 
 	usleep(50); /* 10 usecs should be enough, but give it extra */
 	/* check that timer_cb1() was executed 10+10 times */

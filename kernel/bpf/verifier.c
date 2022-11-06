@@ -12784,7 +12784,7 @@ err_put:
 	return err;
 }
 
-static bool is_tracing_prog_type(enum bpf_prog_type type)
+static bool is_tracing_prog_type(enum bpf_prog_type type, enum bpf_attach_type eatype)
 {
 	switch (type) {
 	case BPF_PROG_TYPE_KPROBE:
@@ -12792,6 +12792,9 @@ static bool is_tracing_prog_type(enum bpf_prog_type type)
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
+	case BPF_PROG_TYPE_TRACING:
+		if (eatype == BPF_TRACE_ITER)
+			return false;
 		return true;
 	default:
 		return false;
@@ -12803,6 +12806,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 					struct bpf_prog *prog)
 
 {
+	enum bpf_attach_type eatype = env->prog->expected_attach_type;
 	enum bpf_prog_type prog_type = resolve_prog_type(prog);
 
 	if (btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
@@ -12811,7 +12815,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog_type, eatype)) {
 			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
@@ -12823,7 +12827,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	}
 
 	if (btf_record_has_field(map->record, BPF_TIMER)) {
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog_type, eatype)) {
 			verbose(env, "tracing progs cannot use bpf_timer yet\n");
 			return -EINVAL;
 		}
