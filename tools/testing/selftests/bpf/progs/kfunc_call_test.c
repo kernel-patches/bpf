@@ -6,6 +6,11 @@
 extern int bpf_kfunc_call_test2(struct sock *sk, __u32 a, __u32 b) __ksym;
 extern __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
 				  __u32 c, __u64 d) __ksym;
+extern __u64 bpf_kfunc_call_test4(struct sock *sk, __u64 a, __u64 b,
+				  __u32 c, __u32 d) __ksym;
+extern __u64 bpf_kfunc_call_test5(__u64 a, __u64 b) __ksym;
+extern __u64 bpf_kfunc_call_test6(__u32 a, __u32 b, __u32 c, __u32 d,
+				  __u32 e) __ksym;
 
 extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp) __ksym;
 extern void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p) __ksym;
@@ -16,6 +21,53 @@ extern void bpf_kfunc_call_test_mem_len_pass1(void *mem, int len) __ksym;
 extern void bpf_kfunc_call_test_mem_len_fail2(__u64 *mem, int len) __ksym;
 extern int *bpf_kfunc_call_test_get_rdwr_mem(struct prog_test_ref_kfunc *p, const int rdwr_buf_size) __ksym;
 extern int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size) __ksym;
+
+SEC("tc")
+int kfunc_call_test6(struct __sk_buff *skb)
+{
+	__u64 a = 1ULL << 32;
+	__u32 ret;
+
+	a = bpf_kfunc_call_test6(1, 2, 3, 4, 5);
+	ret = a >> 32;   /* ret should be 0 */
+	ret += (__u32)a; /* ret should be 15 */
+
+	return ret;
+}
+
+SEC("tc")
+int kfunc_call_test5(struct __sk_buff *skb)
+{
+	__u64 a = 1ULL << 32;
+	__u32 ret;
+
+	a = bpf_kfunc_call_test5(a | 2, a | 3);
+	ret = a >> 32;   /* ret should be 2 */
+	ret += (__u32)a; /* ret should be 7 */
+
+	return ret;
+}
+
+SEC("tc")
+int kfunc_call_test4(struct __sk_buff *skb)
+{
+	struct bpf_sock *sk = skb->sk;
+	__u64 a = 1ULL << 32;
+	__u32 ret;
+
+	if (!sk)
+		return -1;
+
+	sk = bpf_sk_fullsock(sk);
+	if (!sk)
+		return -1;
+
+	a = bpf_kfunc_call_test4((struct sock *)sk, a | 2, a | 3, 4, 5);
+	ret = a >> 32;   /* ret should be 2 */
+	ret += (__u32)a; /* ret should be 16 */
+
+	return ret;
+}
 
 SEC("tc")
 int kfunc_call_test2(struct __sk_buff *skb)
