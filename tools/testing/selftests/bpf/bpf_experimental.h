@@ -6,6 +6,8 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 
+#define __contains(name, node) __attribute__((btf_decl_tag("contains:" #name ":" #node)))
+
 /* Description
  *	Allocates a local kptr of type represented by 'local_type_id' in program
  *	BTF. User may use the bpf_core_type_id_local macro to pass the type ID
