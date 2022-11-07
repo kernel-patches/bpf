@@ -5634,6 +5634,28 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 				       targ_res);
 }
 
+static bool
+bpf_core_patch_insn_skip(const struct btf *local_btf, const struct bpf_insn *insn,
+			 const struct bpf_core_relo_res *res)
+{
+	__u8 class;
+	const struct btf_type *orig_t;
+
+	class = BPF_CLASS(insn->code);
+	orig_t = btf_type_by_id(local_btf, res->orig_type_id);
+
+	/*
+	 * verifier has to see a load of a pointer as a 8-byte load,
+	 * CO_RE should not screws up access, bpf_core_patch_insn modifies
+	 * load's mem size from 8 bytes to 4 bytes in 32-bit arch,
+	 * so we skip adjust mem size.
+	 */
+	if (class == BPF_LDX && btf_is_ptr(orig_t))
+		return true;
+
+	return false;
+}
+
 static int
 bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 {
@@ -5730,11 +5752,13 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 				goto out;
 			}
 
-			err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
-			if (err) {
-				pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %d\n",
-					prog->name, i, insn_idx, err);
-				goto out;
+			if (!bpf_core_patch_insn_skip(obj->btf, insn, &targ_res)) {
+				err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
+				if (err) {
+					pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %d\n",
+						prog->name, i, insn_idx, err);
+					goto out;
+				}
 			}
 		}
 	}
