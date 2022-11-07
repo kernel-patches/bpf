@@ -2409,6 +2409,9 @@ static int insn_def_regno(const struct bpf_insn *insn)
 {
 	switch (BPF_CLASS(insn->code)) {
 	case BPF_JMP:
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
+			return insn->dst_reg;
+		fallthrough;
 	case BPF_JMP32:
 	case BPF_ST:
 		return -1;
