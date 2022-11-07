@@ -8269,7 +8269,13 @@ static bool bpf_skb_is_valid_access(int off, int size, enum bpf_access_type type
 			return false;
 		break;
 	case offsetof(struct __sk_buff, sk):
-		if (type == BPF_WRITE || size != sizeof(__u64))
+		/* CO_RE adjusts pointer accesses from 8-byte read to
+		 * 4-byte reads in 32-bit host arch, so 32-bit can only
+		 * read the 32-bit pointer or the full 64-bit value,
+		 * and 64-bit can read write the 64-bit pointer.
+		 */
+		if (type == BPF_WRITE ||
+		    (size != sizeof(struct bpf_sock *) && size != sizeof(__u64)))
 			return false;
 		info->reg_type = PTR_TO_SOCK_COMMON_OR_NULL;
 		break;
