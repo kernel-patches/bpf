@@ -172,7 +172,7 @@ static void parse_options(int argc, char *argv[], unsigned int *ifindex, __u32 *
 	if (tcpipopts_mask == 0xf) {
 		if (mss4 == 0 || mss6 == 0 || wscale == 0 || ttl == 0)
 			usage(argv[0]);
-		*tcpipopts = (mss6 << 32) | (ttl << 24) | (wscale << 16) | mss4;
+		*tcpipopts = ((unsigned long long)mss6 << 32) | (ttl << 24) | (wscale << 16) | mss4;
 	} else if (tcpipopts_mask != 0) {
 		usage(argv[0]);
 	}
@@ -286,7 +286,7 @@ static int syncookie_open_bpf_maps(__u32 prog_id, int *values_map_fd, int *ports
 
 	prog_info = (struct bpf_prog_info) {
 		.nr_map_ids = 8,
-		.map_ids = (__u64)map_ids,
+		.map_ids = (__u64)(unsigned long)map_ids,
 	};
 	info_len = sizeof(prog_info);
 
