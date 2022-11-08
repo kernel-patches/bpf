@@ -5481,6 +5481,14 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_vma_build_id_parse(struct vm_area_struct *vma, char *build_id)
+ *	Description
+ *		Parse build ID of ELF file mapped to @vma.
+ *
+ *	Return
+ *		Size of parsed build id on success.
+ *		Negative errno in case of failure.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5695,6 +5703,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(vma_build_id_parse, 212, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

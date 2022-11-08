@@ -23,6 +23,7 @@
 #include <linux/sort.h>
 #include <linux/key.h>
 #include <linux/verification.h>
+#include <linux/buildid.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1205,6 +1206,25 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_2(vma_build_id_parse, struct vm_area_struct *, vma, char *, build_id)
+{
+	__u32 size;
+	int err;
+
+	err = build_id_parse(vma, build_id, &size);
+	return err < 0 ? (long) err : (long) size;
+}
+
+static const struct bpf_func_proto bpf_vma_build_id_parse_proto = {
+	.func		= vma_build_id_parse,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_VMA],
+	.arg2_type	= ARG_PTR_TO_FIXED_SIZE_MEM,
+	.arg2_size	= BUILD_ID_SIZE_MAX,
+};
+
 #ifdef CONFIG_KEYS
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
@@ -1953,6 +1973,8 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_func_arg_cnt_proto : NULL;
 	case BPF_FUNC_get_attach_cookie:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto_tracing : NULL;
+	case BPF_FUNC_vma_build_id_parse:
+		return &bpf_vma_build_id_parse_proto;
 	default:
 		fn = raw_tp_prog_func_proto(func_id, prog);
 		if (!fn && prog->expected_attach_type == BPF_TRACE_ITER)
