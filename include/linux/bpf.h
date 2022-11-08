@@ -640,6 +640,8 @@ struct bpf_func_proto {
 			u32 *arg5_btf_id;
 		};
 		u32 *arg_btf_id[5];
+	};
+	union {
 		struct {
 			size_t arg1_size;
 			size_t arg2_size;
