@@ -59,8 +59,8 @@ typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
 					struct bpf_iter_aux_info *aux);
 typedef void (*bpf_iter_fini_seq_priv_t)(void *private_data);
-typedef unsigned int (*bpf_func_t)(const void *,
-				   const struct bpf_insn *);
+typedef u64 (*bpf_func_t)(const void *,
+			  const struct bpf_insn *);
 struct bpf_iter_seq_info {
 	const struct seq_operations *seq_ops;
 	bpf_iter_init_seq_priv_t init_seq_private;
@@ -1017,7 +1017,7 @@ struct bpf_dispatcher {
 	struct bpf_ksym ksym;
 };
 
-static __always_inline __nocfi unsigned int bpf_dispatcher_nop_func(
+static __always_inline __nocfi u64 bpf_dispatcher_nop_func(
 	const void *ctx,
 	const struct bpf_insn *insnsi,
 	bpf_func_t bpf_func)
@@ -1062,7 +1062,7 @@ int __init bpf_arch_init_dispatcher_early(void *ip);
 
 #define DEFINE_BPF_DISPATCHER(name)					\
 	notrace BPF_DISPATCHER_ATTRIBUTES				\
-	noinline __nocfi unsigned int bpf_dispatcher_##name##_func(	\
+	noinline __nocfi u64 bpf_dispatcher_##name##_func(		\
 		const void *ctx,					\
 		const struct bpf_insn *insnsi,				\
 		bpf_func_t bpf_func)					\
@@ -1075,7 +1075,7 @@ int __init bpf_arch_init_dispatcher_early(void *ip);
 	BPF_DISPATCHER_INIT_CALL(bpf_dispatcher_##name);
 
 #define DECLARE_BPF_DISPATCHER(name)					\
-	unsigned int bpf_dispatcher_##name##_func(			\
+	u64 bpf_dispatcher_##name##_func(				\
 		const void *ctx,					\
 		const struct bpf_insn *insnsi,				\
 		bpf_func_t bpf_func);					\
@@ -1278,7 +1278,7 @@ struct bpf_prog {
 	u8			tag[BPF_TAG_SIZE];
 	struct bpf_prog_stats __percpu *stats;
 	int __percpu		*active;
-	unsigned int		(*bpf_func)(const void *ctx,
+	u64			(*bpf_func)(const void *ctx,
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
@@ -1632,9 +1632,9 @@ static inline void bpf_reset_run_ctx(struct bpf_run_ctx *old_ctx)
 /* BPF program asks to set CN on the packet. */
 #define BPF_RET_SET_CN						(1 << 0)
 
-typedef u32 (*bpf_prog_run_fn)(const struct bpf_prog *prog, const void *ctx);
+typedef u64 (*bpf_prog_run_fn)(const struct bpf_prog *prog, const void *ctx);
 
-static __always_inline u32
+static __always_inline u64
 bpf_prog_run_array(const struct bpf_prog_array *array,
 		   const void *ctx, bpf_prog_run_fn run_prog)
 {
@@ -1642,7 +1642,7 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
 	const struct bpf_prog *prog;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
-	u32 ret = 1;
+	u64 ret = 1;
 
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
 
@@ -1672,7 +1672,7 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
  * section and disable preemption for that program alone, so it can access
  * rcu-protected dynamically sized maps.
  */
-static __always_inline u32
+static __always_inline u64
 bpf_prog_run_array_sleepable(const struct bpf_prog_array __rcu *array_rcu,
 			     const void *ctx, bpf_prog_run_fn run_prog)
 {
@@ -1681,7 +1681,7 @@ bpf_prog_run_array_sleepable(const struct bpf_prog_array __rcu *array_rcu,
 	const struct bpf_prog_array *array;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
-	u32 ret = 1;
+	u64 ret = 1;
 
 	might_fault();
 

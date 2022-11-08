@@ -2004,7 +2004,7 @@ out:
 
 #define PROG_NAME(stack_size) __bpf_prog_run##stack_size
 #define DEFINE_BPF_PROG_RUN(stack_size) \
-static unsigned int PROG_NAME(stack_size)(const void *ctx, const struct bpf_insn *insn) \
+static u64 PROG_NAME(stack_size)(const void *ctx, const struct bpf_insn *insn) \
 { \
 	u64 stack[stack_size / sizeof(u64)]; \
 	u64 regs[MAX_BPF_EXT_REG] = {}; \
@@ -2048,8 +2048,8 @@ EVAL4(DEFINE_BPF_PROG_RUN_ARGS, 416, 448, 480, 512);
 
 #define PROG_NAME_LIST(stack_size) PROG_NAME(stack_size),
 
-static unsigned int (*interpreters[])(const void *ctx,
-				      const struct bpf_insn *insn) = {
+static u64 (*interpreters[])(const void *ctx,
+			     const struct bpf_insn *insn) = {
 EVAL6(PROG_NAME_LIST, 32, 64, 96, 128, 160, 192)
 EVAL6(PROG_NAME_LIST, 224, 256, 288, 320, 352, 384)
 EVAL4(PROG_NAME_LIST, 416, 448, 480, 512)
@@ -2074,8 +2074,8 @@ void bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth)
 }
 
 #else
-static unsigned int __bpf_prog_ret0_warn(const void *ctx,
-					 const struct bpf_insn *insn)
+static u64 __bpf_prog_ret0_warn(const void *ctx,
+				const struct bpf_insn *insn)
 {
 	/* If this handler ever gets executed, then BPF_JIT_ALWAYS_ON
 	 * is not working properly, so warn about it!
@@ -2210,8 +2210,8 @@ finalize:
 }
 EXPORT_SYMBOL_GPL(bpf_prog_select_runtime);
 
-static unsigned int __bpf_prog_ret1(const void *ctx,
-				    const struct bpf_insn *insn)
+static u64 __bpf_prog_ret1(const void *ctx,
+			   const struct bpf_insn *insn)
 {
 	return 1;
 }
