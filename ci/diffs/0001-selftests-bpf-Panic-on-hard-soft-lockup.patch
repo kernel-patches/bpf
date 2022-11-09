@@ -1,0 +1,57 @@
+From 5ed88f81511ce695692f0510ab3ca17eee68eff6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20M=C3=BCller?= <deso@posteo.net>
+Date: Tue, 25 Oct 2022 23:15:46 +0000
+Subject: [PATCH] selftests/bpf: Panic on hard/soft lockup
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When running tests, we should probably accept any help we can get when
+it comes to detecting issues early or making them more debuggable. We
+have seen a few cases where a test_progs_noalu32 run, for example,
+encountered a soft lockup and stopped making progress. It was only
+interrupted once we hit the overall test timeout [0]. We can not and do
+not want to necessarily rely on test timeouts, because those rely on
+infrastructure provided by the environment we run in (and which is not
+present in tools/testing/selftests/bpf/vmtest.sh, for example).
+To that end, let's enable panics on soft as well as hard lockups to fail
+fast should we encounter one. That's happening in the configuration
+indented to be used for selftests (including when using vmtest.sh or
+when running in BPF CI).
+
+[0] https://github.com/kernel-patches/bpf/runs/7844499997
+
+Signed-off-by: Daniel Müller <deso@posteo.net>
+Link: https://lore.kernel.org/r/20221025231546.811766-1-deso@posteo.net
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ tools/testing/selftests/bpf/config        | 2 ++
+ tools/testing/selftests/bpf/config.x86_64 | 1 -
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/config b/tools/testing/selftests/bpf/config
+index 921356..7a99a6 100644
+--- a/tools/testing/selftests/bpf/config
++++ b/tools/testing/selftests/bpf/config
+@@ -1,4 +1,6 @@
+ CONFIG_BLK_DEV_LOOP=y
++CONFIG_BOOTPARAM_HARDLOCKUP_PANIC=y
++CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y
+ CONFIG_BPF=y
+ CONFIG_BPF_EVENTS=y
+ CONFIG_BPF_JIT=y
+diff --git a/tools/testing/selftests/bpf/config.x86_64 b/tools/testing/selftests/bpf/config.x86_64
+index 21ce5e..dd97d6 100644
+--- a/tools/testing/selftests/bpf/config.x86_64
++++ b/tools/testing/selftests/bpf/config.x86_64
+@@ -18,7 +18,6 @@ CONFIG_BLK_DEV_RAM=y
+ CONFIG_BLK_DEV_RAM_SIZE=16384
+ CONFIG_BLK_DEV_THROTTLING=y
+ CONFIG_BONDING=y
+-CONFIG_BOOTPARAM_HARDLOCKUP_PANIC=y
+ CONFIG_BOOTTIME_TRACING=y
+ CONFIG_BPF_JIT_ALWAYS_ON=y
+ CONFIG_BPF_KPROBE_OVERRIDE=y
+-- 
+2.30.2
+
