@@ -6123,6 +6123,7 @@ struct xdp_md {
 	__u32 rx_queue_index;  /* rxq->queue_index  */
 
 	__u32 egress_ifindex;  /* txq->dev->ifindex */
+	__bpf_md_ptr(struct net_device *, rx_dev); /* rxq->dev */
 };
 
 /* DEVMAP map-value layout

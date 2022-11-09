@@ -8690,6 +8690,8 @@ static bool __is_valid_xdp_access(int off, int size)
 	return true;
 }
 
+BTF_ID_LIST_SINGLE(btf_xdp_get_netdev_id, struct, net_device)
+
 static bool xdp_is_valid_access(int off, int size,
 				enum bpf_access_type type,
 				const struct bpf_prog *prog,
@@ -8722,6 +8724,15 @@ static bool xdp_is_valid_access(int off, int size,
 	case offsetof(struct xdp_md, data_end):
 		info->reg_type = PTR_TO_PACKET_END;
 		break;
+	case offsetof(struct xdp_md, rx_dev):
+		info->reg_type = PTR_TO_BTF_ID;
+		info->btf_id = btf_xdp_get_netdev_id[0];
+		info->btf = bpf_get_btf_vmlinux();
+	        if (IS_ERR_OR_NULL(info->btf))
+			return false;
+		if (size != sizeof(u64))
+			return false;
+		return true;
 	}
 
 	return __is_valid_xdp_access(off, size);
@@ -9813,6 +9824,14 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 				      offsetof(struct xdp_txq_info, dev));
 		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
 				      offsetof(struct net_device, ifindex));
+		break;
+	case offsetof(struct xdp_md, rx_dev):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, rxq),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_buff, rxq));
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_rxq_info, dev),
+				      si->dst_reg, si->dst_reg,
+				      offsetof(struct xdp_rxq_info, dev));
 		break;
 	}
 
