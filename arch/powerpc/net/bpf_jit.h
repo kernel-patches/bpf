@@ -21,7 +21,7 @@
 
 #define PLANT_INSTR(d, idx, instr)					      \
 	do { if (d) { (d)[idx] = instr; } idx++; } while (0)
-#define EMIT(instr)		PLANT_INSTR(image, ctx->idx, instr)
+#define EMIT(instr)		PLANT_INSTR(rw_image, ctx->idx, instr)
 
 /* Long jump; (unconditional 'branch') */
 #define PPC_JMP(dest)							      \
@@ -167,16 +167,18 @@ static inline void bpf_clear_seen_register(struct codegen_context *ctx, int i)
 }
 
 void bpf_jit_init_reg_mapping(struct codegen_context *ctx);
-int bpf_jit_emit_func_call_rel(u32 *image, struct codegen_context *ctx, u64 func);
-int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *ctx,
+int bpf_jit_emit_func_call_rel(u32 *image, u32 *rw_image, struct codegen_context *ctx, u64 func);
+int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *rw_image, struct codegen_context *ctx,
 		       u32 *addrs, int pass);
-void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx);
-void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx);
+void bpf_jit_build_prologue(u32 *image, u32 *rw_image, struct codegen_context *ctx);
+void bpf_jit_build_epilogue(u32 *image, u32 *rw_image, struct codegen_context *ctx);
 void bpf_jit_realloc_regs(struct codegen_context *ctx);
-int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx, int tmp_reg, long exit_addr);
+int bpf_jit_emit_exit_insn(u32 *image, u32 *rw_image, struct codegen_context *ctx,
+			   int tmp_reg, long exit_addr);
 
-int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct codegen_context *ctx,
-			  int insn_idx, int jmp_off, int dst_reg);
+int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, u32 *rw_image, int pass,
+			  struct codegen_context *ctx, int insn_idx,
+			  int jmp_off, int dst_reg);
 
 #endif
 

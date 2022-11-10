@@ -122,7 +122,7 @@ void bpf_jit_realloc_regs(struct codegen_context *ctx)
 {
 }
 
-void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
+void bpf_jit_build_prologue(u32 *image, u32 *rw_image, struct codegen_context *ctx)
 {
 	int i;
 
@@ -171,7 +171,7 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 				STACK_FRAME_MIN_SIZE + ctx->stack_size));
 }
 
-static void bpf_jit_emit_common_epilogue(u32 *image, struct codegen_context *ctx)
+static void bpf_jit_emit_common_epilogue(u32 *image, u32 *rw_image, struct codegen_context *ctx)
 {
 	int i;
 
@@ -190,9 +190,9 @@ static void bpf_jit_emit_common_epilogue(u32 *image, struct codegen_context *ctx
 	}
 }
 
-void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx)
+void bpf_jit_build_epilogue(u32 *image, u32 *rw_image, struct codegen_context *ctx)
 {
-	bpf_jit_emit_common_epilogue(image, ctx);
+	bpf_jit_emit_common_epilogue(image, rw_image, ctx);
 
 	/* Move result to r3 */
 	EMIT(PPC_RAW_MR(_R3, bpf_to_ppc(BPF_REG_0)));
@@ -200,7 +200,8 @@ void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx)
 	EMIT(PPC_RAW_BLR());
 }
 
-static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u64 func)
+static int bpf_jit_emit_func_call_hlp(u32 *image, u32 *rw_image, struct codegen_context *ctx,
+				      u64 func)
 {
 	unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
 	long reladdr;
@@ -222,7 +223,7 @@ static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u
 	return 0;
 }
 
-int bpf_jit_emit_func_call_rel(u32 *image, struct codegen_context *ctx, u64 func)
+int bpf_jit_emit_func_call_rel(u32 *image, u32 *rw_image, struct codegen_context *ctx, u64 func)
 {
 	unsigned int i, ctx_idx = ctx->idx;
 
@@ -254,7 +255,7 @@ int bpf_jit_emit_func_call_rel(u32 *image, struct codegen_context *ctx, u64 func
 	return 0;
 }
 
-static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 out)
+static int bpf_jit_emit_tail_call(u32 *image, u32 *rw_image, struct codegen_context *ctx, u32 out)
 {
 	/*
 	 * By now, the eBPF program has already setup parameters in r3, r4 and r5
@@ -311,7 +312,7 @@ static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 o
 	EMIT(PPC_RAW_MTCTR(bpf_to_ppc(TMP_REG_1)));
 
 	/* tear down stack, restore NVRs, ... */
-	bpf_jit_emit_common_epilogue(image, ctx);
+	bpf_jit_emit_common_epilogue(image, rw_image, ctx);
 
 	EMIT(PPC_RAW_BCTR());
 
@@ -342,7 +343,7 @@ asm (
 );
 
 /* Assemble the body code between the prologue & epilogue */
-int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *ctx,
+int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *rw_image, struct codegen_context *ctx,
 		       u32 *addrs, int pass)
 {
 	enum stf_barrier_type stf_barrier = stf_barrier_type_get();
@@ -921,8 +922,8 @@ emit_clear:
 				addrs[++i] = ctx->idx * 4;
 
 			if (BPF_MODE(code) == BPF_PROBE_MEM) {
-				ret = bpf_add_extable_entry(fp, image, pass, ctx, ctx->idx - 1,
-							    4, dst_reg);
+				ret = bpf_add_extable_entry(fp, image, rw_image, pass, ctx,
+							    ctx->idx - 1, 4, dst_reg);
 				if (ret)
 					return ret;
 			}
@@ -954,7 +955,8 @@ emit_clear:
 			 * we'll just fall through to the epilogue.
 			 */
 			if (i != flen - 1) {
-				ret = bpf_jit_emit_exit_insn(image, ctx, tmp1_reg, exit_addr);
+				ret = bpf_jit_emit_exit_insn(image, rw_image, ctx,
+							     tmp1_reg, exit_addr);
 				if (ret)
 					return ret;
 			}
@@ -973,9 +975,9 @@ emit_clear:
 				return ret;
 
 			if (func_addr_fixed)
-				ret = bpf_jit_emit_func_call_hlp(image, ctx, func_addr);
+				ret = bpf_jit_emit_func_call_hlp(image, rw_image, ctx, func_addr);
 			else
-				ret = bpf_jit_emit_func_call_rel(image, ctx, func_addr);
+				ret = bpf_jit_emit_func_call_rel(image, rw_image, ctx, func_addr);
 
 			if (ret)
 				return ret;
@@ -1184,7 +1186,7 @@ cond_branch:
 		 */
 		case BPF_JMP | BPF_TAIL_CALL:
 			ctx->seen |= SEEN_TAILCALL;
-			ret = bpf_jit_emit_tail_call(image, ctx, addrs[i + 1]);
+			ret = bpf_jit_emit_tail_call(image, rw_image, ctx, addrs[i + 1]);
 			if (ret < 0)
 				return ret;
 			break;

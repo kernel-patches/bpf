@@ -83,7 +83,7 @@ error:
 }
 
 /* Fix updated addresses (for subprog calls, ldimm64, et al) during extra pass */
-static int bpf_jit_fixup_addresses(struct bpf_prog *fp, u32 *image,
+static int bpf_jit_fixup_addresses(struct bpf_prog *fp, u32 *image, u32 *rw_image,
 				   struct codegen_context *ctx, u32 *addrs)
 {
 	const struct bpf_insn *insn = fp->insnsi;
@@ -118,7 +118,7 @@ static int bpf_jit_fixup_addresses(struct bpf_prog *fp, u32 *image,
 			 */
 			tmp_idx = ctx->idx;
 			ctx->idx = addrs[i] / 4;
-			ret = bpf_jit_emit_func_call_rel(image, ctx, func_addr);
+			ret = bpf_jit_emit_func_call_rel(image, rw_image, ctx, func_addr);
 			if (ret)
 				return ret;
 
@@ -150,7 +150,8 @@ static int bpf_jit_fixup_addresses(struct bpf_prog *fp, u32 *image,
 	return 0;
 }
 
-int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx, int tmp_reg, long exit_addr)
+int bpf_jit_emit_exit_insn(u32 *image, u32 *rw_image, struct codegen_context *ctx,
+			   int tmp_reg, long exit_addr)
 {
 	if (!exit_addr || is_offset_in_branch_range(exit_addr - (ctx->idx * 4))) {
 		PPC_JMP(exit_addr);
@@ -160,13 +161,14 @@ int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx, int tmp_reg,
 		PPC_JMP(ctx->alt_exit_addr);
 	} else {
 		ctx->alt_exit_addr = ctx->idx * 4;
-		bpf_jit_build_epilogue(image, ctx);
+		bpf_jit_build_epilogue(image, rw_image, ctx);
 	}
 
 	return 0;
 }
 
-struct powerpc64_jit_data {
+struct powerpc_jit_data {
+	struct bpf_binary_header *rw_header;
 	struct bpf_binary_header *header;
 	u32 *addrs;
 	u8 *image;
@@ -181,22 +183,25 @@ bool bpf_jit_needs_zext(void)
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 {
-	u32 proglen;
-	u32 alloclen;
-	u8 *image = NULL;
-	u32 *code_base;
-	u32 *addrs;
-	struct powerpc64_jit_data *jit_data;
-	struct codegen_context cgctx;
-	int pass;
-	int flen;
+	struct bpf_binary_header *rw_header = NULL;
+	struct powerpc_jit_data *jit_data;
 	struct bpf_binary_header *bpf_hdr;
+	struct codegen_context cgctx;
 	struct bpf_prog *org_fp = fp;
 	struct bpf_prog *tmp_fp;
 	bool bpf_blinded = false;
 	bool extra_pass = false;
+	u8 *rw_image = NULL;
+	u32 *rw_code_base;
+	u8 *image = NULL;
 	u32 extable_len;
+	u32 *code_base;
 	u32 fixup_len;
+	u32 alloclen;
+	u32 proglen;
+	u32 *addrs;
+	int pass;
+	int flen;
 
 	if (!fp->jit_requested)
 		return org_fp;
@@ -227,6 +232,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 		image = jit_data->image;
 		bpf_hdr = jit_data->header;
 		proglen = jit_data->proglen;
+		rw_header = jit_data->rw_header;
+		rw_image = (void *)rw_header + ((void *)image - (void *)bpf_hdr);
 		extra_pass = true;
 		goto skip_init_ctx;
 	}
@@ -244,7 +251,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	cgctx.stack_size = round_up(fp->aux->stack_depth, 16);
 
 	/* Scouting faux-generate pass 0 */
-	if (bpf_jit_build_body(fp, 0, &cgctx, addrs, 0)) {
+	if (bpf_jit_build_body(fp, 0, 0, &cgctx, addrs, 0)) {
 		/* We hit something illegal or unsupported. */
 		fp = org_fp;
 		goto out_addrs;
@@ -259,7 +266,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	 */
 	if (cgctx.seen & SEEN_TAILCALL || !is_offset_in_branch_range((long)cgctx.idx * 4)) {
 		cgctx.idx = 0;
-		if (bpf_jit_build_body(fp, 0, &cgctx, addrs, 0)) {
+		if (bpf_jit_build_body(fp, 0, 0, &cgctx, addrs, 0)) {
 			fp = org_fp;
 			goto out_addrs;
 		}
@@ -271,9 +278,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	 * update ctgtx.idx as it pretends to output instructions, then we can
 	 * calculate total size from idx.
 	 */
-	bpf_jit_build_prologue(0, &cgctx);
+	bpf_jit_build_prologue(0, 0, &cgctx);
 	addrs[fp->len] = cgctx.idx * 4;
-	bpf_jit_build_epilogue(0, &cgctx);
+	bpf_jit_build_epilogue(0, 0, &cgctx);
 
 	fixup_len = fp->aux->num_exentries * BPF_FIXUP_LEN * 4;
 	extable_len = fp->aux->num_exentries * sizeof(struct exception_table_entry);
@@ -281,7 +288,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	proglen = cgctx.idx * 4;
 	alloclen = proglen + FUNCTION_DESCR_SIZE + fixup_len + extable_len;
 
-	bpf_hdr = bpf_jit_binary_alloc(alloclen, &image, 4, bpf_jit_fill_ill_insns);
+	bpf_hdr = bpf_jit_binary_pack_alloc(alloclen, &image, 4, &rw_header, &rw_image,
+					    bpf_jit_fill_ill_insns);
 	if (!bpf_hdr) {
 		fp = org_fp;
 		goto out_addrs;
@@ -292,6 +300,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 
 skip_init_ctx:
 	code_base = (u32 *)(image + FUNCTION_DESCR_SIZE);
+	rw_code_base = (u32 *)(rw_image + FUNCTION_DESCR_SIZE);
 
 	if (extra_pass) {
 		/*
@@ -303,7 +312,7 @@ skip_init_ctx:
 		 * call instruction sequences and hence, the size of the JITed
 		 * image as well.
 		 */
-		bpf_jit_fixup_addresses(fp, code_base, &cgctx, addrs);
+		bpf_jit_fixup_addresses(fp, code_base, rw_code_base, &cgctx, addrs);
 
 		/* There is no need to perform the usual passes. */
 		goto skip_codegen_passes;
@@ -314,13 +323,15 @@ skip_init_ctx:
 		/* Now build the prologue, body code & epilogue for real. */
 		cgctx.idx = 0;
 		cgctx.alt_exit_addr = 0;
-		bpf_jit_build_prologue(code_base, &cgctx);
-		if (bpf_jit_build_body(fp, code_base, &cgctx, addrs, pass)) {
-			bpf_jit_binary_free(bpf_hdr);
+		bpf_jit_build_prologue(code_base, rw_code_base, &cgctx);
+		if (bpf_jit_build_body(fp, code_base, rw_code_base, &cgctx, addrs, pass)) {
+			bpf_arch_text_copy(&bpf_hdr->size, &rw_header->size,
+					   sizeof(rw_header->size));
+			bpf_jit_binary_pack_free(bpf_hdr, rw_header);
 			fp = org_fp;
 			goto out_addrs;
 		}
-		bpf_jit_build_epilogue(code_base, &cgctx);
+		bpf_jit_build_epilogue(code_base, rw_code_base, &cgctx);
 
 		if (bpf_jit_enable > 1)
 			pr_info("Pass %d: shrink = %d, seen = 0x%x\n", pass,
@@ -337,17 +348,26 @@ skip_codegen_passes:
 
 #ifdef CONFIG_PPC64_ELF_ABI_V1
 	/* Function descriptor nastiness: Address + TOC */
-	((u64 *)image)[0] = (u64)code_base;
-	((u64 *)image)[1] = local_paca->kernel_toc;
+	((u64 *)rw_image)[0] = (u64)code_base;
+	((u64 *)rw_image)[1] = local_paca->kernel_toc;
 #endif
 
 	fp->bpf_func = (void *)image;
 	fp->jited = 1;
 	fp->jited_len = proglen + FUNCTION_DESCR_SIZE;
 
-	bpf_flush_icache(bpf_hdr, (u8 *)bpf_hdr + bpf_hdr->size);
 	if (!fp->is_func || extra_pass) {
-		bpf_jit_binary_lock_ro(bpf_hdr);
+		/*
+		 * bpf_jit_binary_pack_finalize fails in two scenarios:
+		 *   1) header is not pointing to proper module memory;
+		 *   2) the arch doesn't support bpf_arch_text_copy().
+		 *
+		 * Both cases are serious bugs that justify WARN_ON.
+		 */
+		if (WARN_ON(bpf_jit_binary_pack_finalize(fp, bpf_hdr, rw_header))) {
+			fp = org_fp;
+			goto out_addrs;
+		}
 		bpf_prog_fill_jited_linfo(fp, addrs);
 out_addrs:
 		kfree(addrs);
@@ -359,6 +379,7 @@ out_addrs:
 		jit_data->proglen = proglen;
 		jit_data->image = image;
 		jit_data->header = bpf_hdr;
+		jit_data->rw_header = rw_header;
 	}
 
 out:
@@ -372,12 +393,13 @@ out:
  * The caller should check for (BPF_MODE(code) == BPF_PROBE_MEM) before calling
  * this function, as this only applies to BPF_PROBE_MEM, for now.
  */
-int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct codegen_context *ctx,
-			  int insn_idx, int jmp_off, int dst_reg)
+int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, u32 *rw_image, int pass,
+			  struct codegen_context *ctx, int insn_idx,
+			  int jmp_off, int dst_reg)
 {
-	off_t offset;
+	struct exception_table_entry *ex, *rw_extable;
 	unsigned long pc;
-	struct exception_table_entry *ex;
+	off_t offset;
 	u32 *fixup;
 
 	/* Populate extable entries only in the last pass */
@@ -388,9 +410,16 @@ int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct code
 	    WARN_ON_ONCE(ctx->exentry_idx >= fp->aux->num_exentries))
 		return -EINVAL;
 
-	pc = (unsigned long)&image[insn_idx];
+	/*
+	 * Program is firt written to rw_image before copying to the
+	 * final location. Accordingly, update in the rw_image first.
+	 * As all offsets used are relative, copying as is to the
+	 * final location should be alright.
+	 */
+	pc = (unsigned long)&rw_image[insn_idx];
+	rw_extable = (void *)fp->aux->extable - (void *)image + (void *)rw_image;
 
-	fixup = (void *)fp->aux->extable -
+	fixup = (void *)rw_extable -
 		(fp->aux->num_exentries * BPF_FIXUP_LEN * 4) +
 		(ctx->exentry_idx * BPF_FIXUP_LEN * 4);
 
@@ -401,7 +430,7 @@ int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct code
 	fixup[BPF_FIXUP_LEN - 1] =
 		PPC_RAW_BRANCH((long)(pc + jmp_off) - (long)&fixup[BPF_FIXUP_LEN - 1]);
 
-	ex = &fp->aux->extable[ctx->exentry_idx];
+	ex = &rw_extable[ctx->exentry_idx];
 
 	offset = pc - (long)&ex->insn;
 	if (WARN_ON_ONCE(offset >= 0 || offset < INT_MIN))
@@ -425,4 +454,28 @@ void *bpf_arch_text_copy(void *dst, void *src, size_t len)
 int bpf_arch_text_invalidate(void *dst, size_t len)
 {
 	return IS_ERR(bpf_patch_ill_insns(dst, len));
+}
+
+void bpf_jit_free(struct bpf_prog *fp)
+{
+	if (fp->jited) {
+		struct powerpc_jit_data *jit_data = fp->aux->jit_data;
+		struct bpf_binary_header *hdr;
+
+		/*
+		 * If we fail the final pass of JIT (from jit_subprogs),
+		 * the program may not be finalized yet. Call finalize here
+		 * before freeing it.
+		 */
+		if (jit_data) {
+			bpf_jit_binary_pack_finalize(fp, jit_data->header, jit_data->rw_header);
+			kvfree(jit_data->addrs);
+			kfree(jit_data);
+		}
+		hdr = bpf_jit_binary_pack_hdr(fp);
+		bpf_jit_binary_pack_free(hdr, NULL);
+		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(fp));
+	}
+
+	bpf_prog_unlock_free(fp);
 }
