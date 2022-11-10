@@ -13,14 +13,46 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
-#include <asm/kprobes.h>
+#include <linux/memory.h>
 #include <linux/bpf.h>
+
+#include <asm/kprobes.h>
+#include <asm/code-patching.h>
 
 #include "bpf_jit.h"
 
 static void bpf_jit_fill_ill_insns(void *area, unsigned int size)
 {
 	memset32(area, BREAKPOINT_INSTRUCTION, size / 4);
+}
+
+/*
+ * Patch 'len' bytes of instructions from opcode to addr, one instruction
+ * at a time. Returns addr on success. ERR_PTR(-EINVAL), otherwise.
+ */
+static void *bpf_patch_instructions(void *addr, void *opcode, size_t len)
+{
+	void *ret = ERR_PTR(-EINVAL);
+	size_t patched = 0;
+	u32 *inst = opcode;
+	u32 *start = addr;
+
+	if (WARN_ON_ONCE(core_kernel_text((unsigned long)addr)))
+		return ret;
+
+	mutex_lock(&text_mutex);
+	while (patched < len) {
+		if (patch_instruction(start++, ppc_inst(*inst)))
+			goto error;
+
+		inst++;
+		patched += 4;
+	}
+
+	ret = addr;
+error:
+	mutex_unlock(&text_mutex);
+	return ret;
 }
 
 /* Fix updated addresses (for subprog calls, ldimm64, et al) during extra pass */
@@ -356,4 +388,9 @@ int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct code
 
 	ctx->exentry_idx++;
 	return 0;
+}
+
+void *bpf_arch_text_copy(void *dst, void *src, size_t len)
+{
+	return bpf_patch_instructions(dst, src, len);
 }
