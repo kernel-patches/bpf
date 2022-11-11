@@ -19,6 +19,7 @@
 #include <linux/proc_ns.h>
 #include <linux/security.h>
 #include <linux/btf_ids.h>
+#include <linux/buildid.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -1706,10 +1707,25 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 	}
 }
 
+int bpf_vma_build_id_parse(struct vm_area_struct *vma,
+			   unsigned char *build_id,
+			   size_t build_id__sz)
+{
+	__u32 size;
+	int err;
+
+	if (build_id__sz < BUILD_ID_SIZE_MAX)
+		return -EINVAL;
+
+	err = build_id_parse(vma, build_id, &size);
+	return err ?: (int) size;
+}
+
 BTF_SET8_START(tracing_btf_ids)
 #ifdef CONFIG_KEXEC_CORE
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
+BTF_ID_FLAGS(func, bpf_vma_build_id_parse)
 BTF_SET8_END(tracing_btf_ids)
 
 static const struct btf_kfunc_id_set tracing_kfunc_set = {

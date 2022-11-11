@@ -2779,4 +2779,9 @@ struct bpf_key {
 	bool has_ref;
 };
 #endif /* CONFIG_KEYS */
+
+extern int bpf_vma_build_id_parse(struct vm_area_struct *vma,
+				  unsigned char *build_id,
+				  size_t build_id__sz);
+
 #endif /* _LINUX_BPF_H */
