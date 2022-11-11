@@ -11559,13 +11559,34 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 
 		/* If the new min/max/var_off satisfy the old ones and
 		 * everything else matches, we are OK.
-		 * 'id' is not compared, since it's only used for maps with
-		 * bpf_spin_lock inside map element and in such cases if
-		 * the rest of the prog is valid for one map element then
-		 * it's valid for all map elements regardless of the key
-		 * used in bpf_map_lookup()
+		 *
+		 * 'id' must also be compared, since it's used for maps with
+		 * bpf_spin_lock inside map element and in such cases if the
+		 * rest of the prog is valid for one map element with a specific
+		 * id, then the id in the current state must match that of the
+		 * old state so that any operations on this reg in the rest of
+		 * the program work correctly.
+		 *
+		 * One example is a program doing the following:
+		 *	r0 = bpf_map_lookup_elem(&map, ...); // id=1
+		 *	r6 = r0;
+		 *	r0 = bpf_map_lookup_elem(&map, ...); // id=2
+		 *	r7 = r0;
+		 *
+		 *	bpf_spin_lock(r1=r6);
+		 *	if (cond)
+		 *		r6 = r7;
+		 * p:
+		 *	bpf_spin_unlock(r1=r6);
+		 *
+		 * The label 'p' is a pruning point, hence states for that
+		 * insn_idx will be compared. If we don't compare the id, the
+		 * program will pass as the r6 and r7 are otherwise identical
+		 * during the second pass that compares the already verified
+		 * state with the one coming from the path having the additional
+		 * r6 = r7 assignment.
 		 */
-		return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
+		return memcmp(rold, rcur, offsetof(struct bpf_reg_state, ref_obj_id)) == 0 &&
 		       range_within(rold, rcur) &&
 		       tnum_in(rold->var_off, rcur->var_off);
 	case PTR_TO_PACKET_META:
