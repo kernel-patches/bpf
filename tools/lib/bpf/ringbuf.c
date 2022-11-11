@@ -77,6 +77,7 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	__u32 len = sizeof(info);
 	struct epoll_event *e;
 	struct ring *r;
+	__u64 ro_size;
 	void *tmp;
 	int err;
 
@@ -129,8 +130,14 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	 * data size to allow simple reading of samples that wrap around the
 	 * end of a ring buffer. See kernel implementation for details.
 	 * */
-	tmp = mmap(NULL, rb->page_size + 2 * info.max_entries, PROT_READ,
-		   MAP_SHARED, map_fd, rb->page_size);
+	ro_size = rb->page_size + 2 * (__u64)info.max_entries;
+	if (ro_size != (__u64)(size_t)ro_size) {
+		pr_warn("ringbuf: ring buffer size (%u) is too big\n",
+			info.max_entries);
+		return libbpf_err(-E2BIG);
+	}
+	tmp = mmap(NULL, (size_t)ro_size, PROT_READ, MAP_SHARED, map_fd,
+		   rb->page_size);
 	if (tmp == MAP_FAILED) {
 		err = -errno;
 		ringbuf_unmap_ring(rb, r);
