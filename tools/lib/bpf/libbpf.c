@@ -2353,7 +2353,7 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 	return 0;
 }
 
-static size_t adjust_ringbuf_sz(size_t sz)
+size_t adjust_ringbuf_sz(size_t sz)
 {
 	__u32 page_sz = sysconf(_SC_PAGE_SIZE);
 	__u32 mul;
