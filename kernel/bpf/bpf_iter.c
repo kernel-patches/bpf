@@ -20,7 +20,7 @@ struct bpf_iter_link {
 };
 
 struct bpf_iter_priv_data {
-	struct bpf_iter_target_info *tinfo;
+	struct bpf_iter_link *link;
 	const struct bpf_iter_seq_info *seq_info;
 	struct bpf_prog *prog;
 	u64 session_id;
@@ -79,7 +79,7 @@ static bool bpf_iter_support_resched(struct seq_file *seq)
 
 	iter_priv = container_of(seq->private, struct bpf_iter_priv_data,
 				 target_private);
-	return bpf_iter_target_support_resched(iter_priv->tinfo);
+	return bpf_iter_target_support_resched(iter_priv->link->tinfo);
 }
 
 /* maximum visited objects before bailing out */
@@ -276,6 +276,7 @@ static int iter_release(struct inode *inode, struct file *file)
 		iter_priv->seq_info->fini_seq_private(seq->private);
 
 	bpf_prog_put(iter_priv->prog);
+	bpf_link_put(&iter_priv->link->link);
 	seq->private = iter_priv;
 
 	return seq_release_private(inode, file);
@@ -576,11 +577,19 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 }
 
 static void init_seq_meta(struct bpf_iter_priv_data *priv_data,
-			  struct bpf_iter_target_info *tinfo,
+			  struct bpf_iter_link *link,
 			  const struct bpf_iter_seq_info *seq_info,
 			  struct bpf_prog *prog)
 {
-	priv_data->tinfo = tinfo;
+	/* For many bpf iterator, iterator link acquires the reference of
+	 * iteration target in .attach_target(), but iterator link may be
+	 * closed before or in the middle of iteration, so iterator will
+	 * need to acquire the reference of iteration target as well. To
+	 * avoid doing the acquisition in .init_seq_private() for each
+	 * iterator type, just pin iterator link in iterator.
+	 */
+	bpf_link_inc(&link->link);
+	priv_data->link = link;
 	priv_data->seq_info = seq_info;
 	priv_data->prog = prog;
 	priv_data->session_id = atomic64_inc_return(&session_id);
@@ -592,7 +601,6 @@ static int prepare_seq_file(struct file *file, struct bpf_iter_link *link,
 			    const struct bpf_iter_seq_info *seq_info)
 {
 	struct bpf_iter_priv_data *priv_data;
-	struct bpf_iter_target_info *tinfo;
 	struct bpf_prog *prog;
 	u32 total_priv_dsize;
 	struct seq_file *seq;
@@ -603,7 +611,6 @@ static int prepare_seq_file(struct file *file, struct bpf_iter_link *link,
 	bpf_prog_inc(prog);
 	mutex_unlock(&link_mutex);
 
-	tinfo = link->tinfo;
 	total_priv_dsize = offsetof(struct bpf_iter_priv_data, target_private) +
 			   seq_info->seq_priv_size;
 	priv_data = __seq_open_private(file, seq_info->seq_ops,
@@ -619,7 +626,7 @@ static int prepare_seq_file(struct file *file, struct bpf_iter_link *link,
 			goto release_seq_file;
 	}
 
-	init_seq_meta(priv_data, tinfo, seq_info, prog);
+	init_seq_meta(priv_data, link, seq_info, prog);
 	seq = file->private_data;
 	seq->private = priv_data->target_private;
 
