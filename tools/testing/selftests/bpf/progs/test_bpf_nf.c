@@ -3,6 +3,11 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+enum nf_nat_manip_type {
+	NF_NAT_MANIP_SRC,
+	NF_NAT_MANIP_DST
+};
+
 #define EAFNOSUPPORT 97
 #define EPROTO 71
 #define ENONET 64
