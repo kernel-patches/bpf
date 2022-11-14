@@ -200,7 +200,7 @@ int cmd_select(const struct cmd *cmds, int argc, char **argv,
 		return cmds[0].func(argc, argv);
 
 	for (i = 0; cmds[i].cmd; i++) {
-		if (is_prefix(*argv, cmds[i].cmd)) {
+		if (!strcmp(*argv, cmds[i].cmd)) {
 			if (!cmds[i].func) {
 				p_err("command '%s' is not supported in bootstrap mode",
 				      cmds[i].cmd);
@@ -337,7 +337,7 @@ static int do_batch(int argc, char **argv)
 	if (argc < 2) {
 		p_err("too few parameters for batch");
 		return -1;
-	} else if (!is_prefix(*argv, "file")) {
+	} else if (strcmp(*argv, "file")) {
 		p_err("expected 'file', got: %s", *argv);
 		return -1;
 	} else if (argc > 2) {
