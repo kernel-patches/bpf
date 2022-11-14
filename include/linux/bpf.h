@@ -2087,6 +2087,7 @@ struct bpf_kfunc_arg_meta {
 	bool r0_rdonly;
 	int ref_obj_id;
 	u32 flags;
+	u32 expected_ret_btf_id;
 };
 
 struct bpf_reg_state;
@@ -2113,6 +2114,7 @@ bool bpf_prog_has_kfunc_call(const struct bpf_prog *prog);
 const struct btf_func_model *
 bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 			 const struct bpf_insn *insn);
+void *bpf_get_kern_btf_id(void *, u32 expected_btf_id);
 struct bpf_core_ctx {
 	struct bpf_verifier_log *log;
 	const struct btf *btf;

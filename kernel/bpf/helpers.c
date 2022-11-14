@@ -1717,7 +1717,12 @@ static const struct btf_kfunc_id_set tracing_kfunc_set = {
 	.set   = &tracing_btf_ids,
 };
 
+void *bpf_get_kern_btf_id(void *obj, u32 expected_btf_id) {
+	return obj;
+}
+
 BTF_SET8_START(generic_btf_ids)
+BTF_ID_FLAGS(func, bpf_get_kern_btf_id)
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

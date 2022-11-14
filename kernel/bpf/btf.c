@@ -6309,6 +6309,9 @@ static bool btf_is_kfunc_arg_mem_size(const struct btf *btf,
 	return true;
 }
 
+BTF_ID_LIST_SINGLE(bpf_get_kern_btf_id_id, func, bpf_get_kern_btf_id)
+
+
 static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    const struct btf *btf, u32 func_id,
 				    struct bpf_reg_state *regs,
@@ -6318,7 +6321,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	bool rel = false, kptr_get = false, trusted_args = false;
-	bool sleepable = false;
+	bool sleepable = false, get_btf_id_kfunc = false;
 	struct bpf_verifier_log *log = &env->log;
 	u32 i, nargs, ref_id, ref_obj_id = 0;
 	bool is_kfunc = btf_is_kernel(btf);
@@ -6357,6 +6360,67 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		kptr_get = kfunc_meta->flags & KF_KPTR_GET;
 		trusted_args = kfunc_meta->flags & KF_TRUSTED_ARGS;
 		sleepable = kfunc_meta->flags & KF_SLEEPABLE;
+		get_btf_id_kfunc = func_id == *bpf_get_kern_btf_id_id;
+	}
+
+	/* special processing for bpf_get_btf_id kfunc.
+	 * arg1:
+	 *   must be a ptr_to_ctx or ptr_to_u8/s8.
+	 * arg2:
+	 *   must be a constant, if non-zero representing an user specified expected
+	 *   ret_btf_id.
+	 * If ptr_to_ctx, arg2 must be 0 or a value equals to corresponding kctx btf_id
+	 * and the ret ptr can be passed to a helper/kfunc. Otherwise, arg2 must be a
+	 * valid struct type btf_id, and the ret ptr cannot be passed to a helper/kfunc.
+	 */
+	if (get_btf_id_kfunc) {
+		struct bpf_reg_state *reg = &regs[1];
+		int kctx_btf_id = 0;
+		s64 val;
+
+		if (nargs != 2) {
+			bpf_log(log, "Incorrect number of arguments %s, actual %d expect 2\n",
+				func_name, nargs);
+			return -EINVAL;
+		}
+
+		/* arg1 */
+		if (reg->type == PTR_TO_CTX) {
+			enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+			const struct btf_type *conv_struct;
+			const struct btf_member *ctx_type;
+
+			conv_struct = bpf_ctx_convert.t;
+			ctx_type = btf_type_member(conv_struct) + bpf_ctx_convert_map[prog_type] * 2;
+			ctx_type++;
+
+			/* find the kctx type */
+			kctx_btf_id = ctx_type->type;
+		} else if (reg->type != SCALAR_VALUE) {
+			/* FIXME: we actually expects a pointer to char/unsigned_char */
+			bpf_log(log, "Incorrect type %x\n", reg->type);
+			return -EINVAL;
+		}
+
+		reg = &regs[2];
+		if (!tnum_is_const(reg->var_off)) {
+			bpf_log(log, "arg 2 is not constant\n");
+			return -EINVAL;
+		}
+
+		val = reg->var_off.value;
+		if (kctx_btf_id == 0) {
+			/* FIXME: ensure val is a btf_id pointing to a struct */
+			kctx_btf_id = val;
+		} else {
+			if (val != 0 && val != kctx_btf_id) {
+				bpf_log(log, "Incorrect expected_btf_id %lld, expect 0 or %d\n", val, kctx_btf_id);
+				return -EINVAL;
+			}
+		}
+
+		kfunc_meta->expected_ret_btf_id = kctx_btf_id;
+		goto check;
 	}
 
 	/* check that BTF function arguments match actual types that the
@@ -6639,6 +6703,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
+check:
 	if (sleepable && !env->prog->aux->sleepable) {
 		bpf_log(log, "kernel function %s is sleepable but the program is not\n",
 			func_name);
