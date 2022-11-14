@@ -1717,9 +1717,20 @@ static const struct btf_kfunc_id_set tracing_kfunc_set = {
 	.set   = &tracing_btf_ids,
 };
 
+BTF_SET8_START(generic_btf_ids)
+BTF_SET8_END(generic_btf_ids)
+
+static const struct btf_kfunc_id_set generic_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &generic_btf_ids,
+};
+
 static int __init kfunc_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &tracing_kfunc_set);
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &tracing_kfunc_set);
+	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &generic_kfunc_set);
 }
 
 late_initcall(kfunc_init);
