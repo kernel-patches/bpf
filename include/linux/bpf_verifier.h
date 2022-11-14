@@ -323,7 +323,15 @@ struct bpf_verifier_state {
 	u32 branches;
 	u32 insn_idx;
 	u32 curframe;
-	u32 active_spin_lock;
+	struct {
+		/* This can either be reg->map_ptr or reg->btf, but it is only
+		 * used to check whether the lock is held or not by comparing to
+		 * NULL.
+		 */
+		void *ptr;
+		/* This will be reg->id */
+		u32 id;
+	} active_lock;
 	bool speculative;
 
 	/* first and last insn idx of this verifier state */
