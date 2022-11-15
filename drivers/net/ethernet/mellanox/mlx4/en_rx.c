@@ -33,6 +33,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
+#include <linux/bpf_patch.h>
 #include <linux/mlx4/cq.h>
 #include <linux/slab.h>
 #include <linux/mlx4/qp.h>
@@ -663,7 +664,38 @@ static int check_csum(struct mlx4_cqe *cqe, struct sk_buff *skb, void *va,
 
 struct mlx4_xdp_buff {
 	struct xdp_buff xdp;
+	struct mlx4_cqe *cqe;
+	struct mlx4_en_dev *mdev;
 };
+
+u64 mxl4_xdp_rx_timestamp(struct mlx4_xdp_buff *ctx)
+{
+	unsigned int seq;
+	u64 timestamp;
+	u64 nsec;
+
+	timestamp = mlx4_en_get_cqe_ts(ctx->cqe);
+
+	do {
+		seq = read_seqbegin(&ctx->mdev->clock_lock);
+		nsec = timecounter_cyc2time(&ctx->mdev->clock, timestamp);
+	} while (read_seqretry(&ctx->mdev->clock_lock, seq));
+
+	return ns_to_ktime(nsec);
+}
+
+void mlx4_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		       struct bpf_patch *patch)
+{
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_EXPORT_TO_SKB)) {
+		return xdp_metadata_export_to_skb(prog, patch);
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED)) {
+		/* return true; */
+		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 1));
+	} else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP)) {
+		bpf_patch_append(patch, BPF_EMIT_CALL(mxl4_xdp_rx_timestamp));
+	}
+}
 
 int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int budget)
 {
@@ -781,8 +813,12 @@ int mlx4_en_process_rx_cq(struct net_device *dev, struct mlx4_en_cq *cq, int bud
 						DMA_FROM_DEVICE);
 
 			xdp_prepare_buff(&mxbuf.xdp, va - frags[0].page_offset,
-					 frags[0].page_offset, length, false);
+					 frags[0].page_offset, length, true);
 			orig_data = mxbuf.xdp.data;
+			if (unlikely(ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL)) {
+				mxbuf.cqe = cqe;
+				mxbuf.mdev = priv->mdev;
+			}
 
 			act = bpf_prog_run_xdp(xdp_prog, &mxbuf.xdp);
 
@@ -834,6 +870,9 @@ xdp_drop_no_cnt:
 		skb = napi_get_frags(&cq->napi);
 		if (unlikely(!skb))
 			goto next;
+
+		if (xdp_convert_skb_metadata(&mxbuf.xdp, skb))
+			goto skip_metadata;
 
 		if (unlikely(ring->hwtstamp_rx_filter == HWTSTAMP_FILTER_ALL)) {
 			u64 timestamp = mlx4_en_get_cqe_ts(cqe);
@@ -895,6 +934,7 @@ csum_none:
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021AD),
 					       be16_to_cpu(cqe->sl_vid));
 
+skip_metadata:
 		nr = mlx4_en_complete_rx_desc(priv, frags, skb, length);
 		if (likely(nr)) {
 			skb_shinfo(skb)->nr_frags = nr;

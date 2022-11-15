@@ -1585,4 +1585,11 @@ static inline int mlx4_get_num_reserved_uar(struct mlx4_dev *dev)
 	/* The first 128 UARs are used for EQ doorbells */
 	return (128 >> (PAGE_SHIFT - dev->uar_page_shift));
 }
+
+struct bpf_prog;
+struct bpf_insn;
+struct bpf_patch;
+
+void mlx4_unroll_kfunc(const struct bpf_prog *prog, u32 func_id,
+		       struct bpf_patch *patch);
 #endif /* MLX4_DEVICE_H */

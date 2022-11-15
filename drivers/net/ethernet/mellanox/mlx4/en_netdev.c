@@ -2855,6 +2855,7 @@ static const struct net_device_ops mlx4_netdev_ops = {
 	.ndo_features_check	= mlx4_en_features_check,
 	.ndo_set_tx_maxrate	= mlx4_en_set_tx_maxrate,
 	.ndo_bpf		= mlx4_xdp,
+	.ndo_unroll_kfunc	= mlx4_unroll_kfunc,
 };
 
 static const struct net_device_ops mlx4_netdev_ops_master = {
@@ -2887,6 +2888,7 @@ static const struct net_device_ops mlx4_netdev_ops_master = {
 	.ndo_features_check	= mlx4_en_features_check,
 	.ndo_set_tx_maxrate	= mlx4_en_set_tx_maxrate,
 	.ndo_bpf		= mlx4_xdp,
+	.ndo_unroll_kfunc	= mlx4_unroll_kfunc,
 };
 
 struct mlx4_en_bond {
