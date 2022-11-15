@@ -73,6 +73,7 @@ enum xdp_buff_flags {
 	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
 						   * pressure
 						   */
+	XDP_FLAGS_HAS_SKB_METADATA	= BIT(2), /* xdp_skb_metadata */
 };
 
 struct xdp_buff {
@@ -89,6 +90,11 @@ struct xdp_buff {
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
 {
 	return !!(xdp->flags & XDP_FLAGS_HAS_FRAGS);
+}
+
+static __always_inline bool xdp_buff_has_skb_metadata(struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_HAS_SKB_METADATA);
 }
 
 static __always_inline void xdp_buff_set_frags_flag(struct xdp_buff *xdp)
@@ -306,6 +312,8 @@ struct xdp_frame *xdp_convert_buff_to_frame(struct xdp_buff *xdp)
 	return xdp_frame;
 }
 
+bool xdp_convert_skb_metadata(struct xdp_buff *xdp, struct sk_buff *skb);
+
 void __xdp_return(void *data, struct xdp_mem_info *mem, bool napi_direct,
 		  struct xdp_buff *xdp);
 void xdp_return_frame(struct xdp_frame *xdpf);
@@ -411,6 +419,8 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 
 #define XDP_METADATA_KFUNC_xxx	\
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_EXPORT_TO_SKB, \
+			   bpf_xdp_metadata_export_to_skb) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED, \
 			   bpf_xdp_metadata_rx_timestamp_supported) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP, \
@@ -423,14 +433,21 @@ XDP_METADATA_KFUNC_xxx
 MAX_XDP_METADATA_KFUNC,
 };
 
+struct bpf_patch;
+
 #ifdef CONFIG_DEBUG_INFO_BTF
 extern struct btf_id_set8 xdp_metadata_kfunc_ids;
 static inline u32 xdp_metadata_kfunc_id(int id)
 {
 	return xdp_metadata_kfunc_ids.pairs[id].id;
 }
+void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch);
 #else
 static inline u32 xdp_metadata_kfunc_id(int id) { return 0; }
+static void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch)
+{
+	return 0;
+}
 #endif
 
 #endif /* __LINUX_NET_XDP_H__ */

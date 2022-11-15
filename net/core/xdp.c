@@ -368,6 +368,22 @@ int xdp_rxq_info_reg_mem_model(struct xdp_rxq_info *xdp_rxq,
 
 EXPORT_SYMBOL_GPL(xdp_rxq_info_reg_mem_model);
 
+bool xdp_convert_skb_metadata(struct xdp_buff *xdp, struct sk_buff *skb)
+{
+	struct xdp_skb_metadata *meta;
+	u32 metalen;
+
+	metalen = xdp->data - xdp->data_meta;
+	if (metalen)
+		skb_metadata_set(skb, metalen);
+	if (xdp_buff_has_skb_metadata(xdp)) {
+		meta = xdp->data_meta - sizeof(*meta);
+		return skb_metadata_import_from_xdp(skb, meta);
+	}
+	return false;
+}
+EXPORT_SYMBOL(xdp_convert_skb_metadata);
+
 /* XDP RX runs under NAPI protection, and in different delivery error
  * scenarios (e.g. queue full), it is possible to return the xdp_frame
  * while still leveraging this protection.  The @napi_direct boolean
@@ -619,6 +635,7 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_frame(xdpf);
 	unsigned int headroom, frame_size;
+	struct xdp_skb_metadata *meta;
 	void *hard_start;
 	u8 nr_frags;
 
@@ -653,11 +670,10 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
 
-	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
-	 * - HW RX hash			(skb_set_hash)
-	 * - RX ring dev queue index	(skb_record_rx_queue)
-	 */
+	if (xdpf->flags & XDP_FLAGS_HAS_SKB_METADATA) {
+		meta = xdpf->data - xdpf->metasize - sizeof(*meta);
+		skb_metadata_import_from_xdp(skb, meta);
+	}
 
 	/* Until page_pool get SKB return path, release DMA here */
 	xdp_release_frame(xdpf);
@@ -712,6 +728,14 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 	return nxdpf;
 }
 
+/* For the packets directed to the kernel, this kfunc exports XDP metadata
+ * into skb context.
+ */
+noinline int bpf_xdp_metadata_export_to_skb(const struct xdp_md *ctx)
+{
+	return 0;
+}
+
 /* Indicates whether particular device supports rx_timestamp metadata.
  * This is an optional helper to support marking some branches as
  * "dead code" in the BPF programs.
@@ -736,15 +760,126 @@ BTF_SET8_START_GLOBAL(xdp_metadata_kfunc_ids)
 XDP_METADATA_KFUNC_xxx
 #undef XDP_METADATA_KFUNC
 BTF_SET8_END(xdp_metadata_kfunc_ids)
+EXPORT_SYMBOL(xdp_metadata_kfunc_ids);
 
 static const struct btf_kfunc_id_set xdp_metadata_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &xdp_metadata_kfunc_ids,
 };
 
+/* Since we're not actually doing a call but instead rewriting
+ * in place, we can only afford to use R0-R5 scratch registers
+ * and hidden BPF_PUSH64/BPF_POP64 opcodes to spill to the stack.
+ */
+void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch)
+{
+	u32 func_id;
+
+	/* The code below generates the following:
+	 *
+	 * int bpf_xdp_metadata_export_to_skb(struct xdp_md *ctx)
+	 * {
+	 *	struct xdp_skb_metadata *meta = ctx->data_meta - sizeof(*meta);
+	 *	int ret;
+	 *
+	 *	if (ctx->flags & XDP_FLAGS_HAS_SKB_METADATA)
+	 *		return -1;
+	 *
+	 *	if (meta < ctx->data_hard_start + sizeof(struct xdp_frame))
+	 *		return -1;
+	 *
+	 *	meta->rx_timestamp = bpf_xdp_metadata_rx_timestamp(ctx);
+	 *	ctx->flags |= BPF_F_XDP_HAS_METADATA;
+	 *
+	 *	return 0;
+	 * }
+	 */
+
+	bpf_patch_append(patch,
+		BPF_MOV64_IMM(BPF_REG_0, -1),
+
+		/* r2 = ((struct xdp_buff *)r1)->flags; */
+		BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, flags),
+			    BPF_REG_2, BPF_REG_1,
+			    offsetof(struct xdp_buff, flags)),
+
+		/* r2 &= XDP_FLAGS_HAS_SKB_METADATA; */
+		BPF_ALU64_IMM(BPF_AND, BPF_REG_2, XDP_FLAGS_HAS_SKB_METADATA),
+
+		/* if (xdp_buff->flags & XDP_FLAGS_HAS_SKB_METADATA) return -1; */
+		BPF_JMP_IMM(BPF_JNE, BPF_REG_2, 0, S16_MAX),
+
+		/* r2 = ((struct xdp_buff *)r1)->data_meta; */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1,
+			    offsetof(struct xdp_buff, data_meta)),
+		/* r2 -= sizeof(struct xdp_skb_metadata); */
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2,
+			      sizeof(struct xdp_skb_metadata)),
+		/* r3 = ((struct xdp_buff *)r1)->data_hard_start; */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_1,
+			    offsetof(struct xdp_buff, data_hard_start)),
+		/* r3 += sizeof(struct xdp_frame) */
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_3,
+			      sizeof(struct xdp_frame)),
+		/* if (data_meta-sizeof(struct xdp_skb_metadata) <
+		 *     data_hard_start+sizeof(struct xdp_frame)) return -1;
+		 */
+		BPF_JMP_REG(BPF_JLT, BPF_REG_2, BPF_REG_3, S16_MAX),
+
+		/* r2 = ((struct xdp_buff *)r1)->flags; */
+		BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, flags),
+			    BPF_REG_2, BPF_REG_1,
+			    offsetof(struct xdp_buff, flags)),
+
+		/* r2 |= XDP_FLAGS_HAS_SKB_METADATA; */
+		BPF_ALU64_IMM(BPF_OR, BPF_REG_2, XDP_FLAGS_HAS_SKB_METADATA),
+
+		/* ((struct xdp_buff *)r1)->flags = r2; */
+		BPF_STX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, flags),
+			    BPF_REG_1, BPF_REG_2,
+			    offsetof(struct xdp_buff, flags)),
+
+		/* push r1 */
+		BPF_PUSH64(BPF_REG_1),
+	);
+
+	/*	r0 = bpf_xdp_metadata_rx_timestamp(ctx); */
+	func_id = xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP);
+	prog->aux->xdp_kfunc_ndo->ndo_unroll_kfunc(prog, func_id, patch);
+
+	bpf_patch_append(patch,
+		/* pop r1 */
+		BPF_POP64(BPF_REG_1),
+
+		/* r2 = ((struct xdp_buff *)r1)->data_meta; */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1,
+			    offsetof(struct xdp_buff, data_meta)),
+		/* r2 -= sizeof(struct xdp_skb_metadata); */
+		BPF_ALU64_IMM(BPF_SUB, BPF_REG_2,
+			      sizeof(struct xdp_skb_metadata)),
+
+		/* *((struct xdp_skb_metadata *)r2)->rx_timestamp = r0; */
+		BPF_STX_MEM(BPF_DW, BPF_REG_2, BPF_REG_0,
+			    offsetof(struct xdp_skb_metadata, rx_timestamp)),
+
+		/* return 0; */
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+	);
+
+	bpf_patch_resolve_jmp(patch);
+}
+EXPORT_SYMBOL(xdp_metadata_export_to_skb);
+
 static int __init xdp_metadata_init(void)
 {
 	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_metadata_kfunc_set);
 }
 late_initcall(xdp_metadata_init);
+#else
+struct btf_id_set8 xdp_metadata_kfunc_ids = {};
+EXPORT_SYMBOL(xdp_metadata_kfunc_ids);
+void xdp_metadata_export_to_skb(const struct bpf_prog *prog, struct bpf_patch *patch)
+{
+}
+EXPORT_SYMBOL(xdp_metadata_export_to_skb);
 #endif

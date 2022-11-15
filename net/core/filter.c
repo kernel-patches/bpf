@@ -4094,6 +4094,8 @@ BPF_CALL_2(bpf_xdp_adjust_meta, struct xdp_buff *, xdp, int, offset)
 		return -EINVAL;
 	if (unlikely(xdp_metalen_invalid(metalen)))
 		return -EACCES;
+	if (unlikely(xdp_buff_has_skb_metadata(xdp)))
+		return -EACCES;
 
 	xdp->data_meta = meta;
 
@@ -8687,6 +8689,8 @@ static bool __is_valid_xdp_access(int off, int size)
 	return true;
 }
 
+BTF_ID_LIST_SINGLE(xdp_to_skb_metadata_btf_ids, struct, xdp_skb_metadata);
+
 static bool xdp_is_valid_access(int off, int size,
 				enum bpf_access_type type,
 				const struct bpf_prog *prog,
@@ -8719,6 +8723,18 @@ static bool xdp_is_valid_access(int off, int size,
 	case offsetof(struct xdp_md, data_end):
 		info->reg_type = PTR_TO_PACKET_END;
 		break;
+	case offsetof(struct xdp_md, skb_metadata):
+		info->btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(info->btf))
+			return PTR_ERR(info->btf);
+		if (!info->btf)
+			return -EINVAL;
+
+		info->reg_type = PTR_TO_BTF_ID_OR_NULL;
+		info->btf_id = xdp_to_skb_metadata_btf_ids[0];
+		if (size == sizeof(__u64))
+			return true;
+		return false;
 	}
 
 	return __is_valid_xdp_access(off, size);
@@ -9807,6 +9823,30 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 				      offsetof(struct xdp_txq_info, dev));
 		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
 				      offsetof(struct net_device, ifindex));
+		break;
+	case offsetof(struct xdp_md, skb_metadata):
+		/* dst_reg = xdp_buff->flags; */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, flags),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_buff, flags));
+		/* dst_reg &= XDP_FLAGS_HAS_SKB_METADATA; */
+		*insn++ = BPF_ALU64_IMM(BPF_AND, si->dst_reg,
+					XDP_FLAGS_HAS_SKB_METADATA);
+
+		/* if (dst_reg != 0) { */
+		*insn++ = BPF_JMP_IMM(BPF_JEQ, si->dst_reg, 0, 3);
+		/*	dst_reg = xdp_buff->data_meta; */
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, data_meta),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_buff, data_meta));
+		/*	dst_reg -= sizeof(struct xdp_skb_metadata); */
+		*insn++ = BPF_ALU64_IMM(BPF_SUB, si->dst_reg,
+					sizeof(struct xdp_skb_metadata));
+		*insn++ = BPF_JMP_A(1);
+		/* } else { */
+		/*	return 0; */
+		*insn++ = BPF_MOV32_IMM(si->dst_reg, 0);
+		/* } */
 		break;
 	}
 

@@ -14063,6 +14063,7 @@ static int unroll_kfunc_call(struct bpf_verifier_env *env,
 	enum bpf_prog_type prog_type;
 	struct bpf_prog_aux *aux;
 	struct btf *desc_btf;
+	u32 allowed, mangled;
 	u32 *kfunc_flags;
 	u32 func_id;
 
@@ -14090,6 +14091,20 @@ static int unroll_kfunc_call(struct bpf_verifier_env *env,
 		 */
 		bpf_patch_append(patch, BPF_MOV64_IMM(BPF_REG_0, 0));
 	}
+
+	allowed = 1 << BPF_REG_0;
+	allowed |= 1 << BPF_REG_1;
+	allowed |= 1 << BPF_REG_2;
+	allowed |= 1 << BPF_REG_3;
+	allowed |= 1 << BPF_REG_4;
+	allowed |= 1 << BPF_REG_5;
+	mangled = bpf_patch_magles_registers(patch);
+	if (WARN_ON_ONCE(mangled & ~allowed)) {
+		bpf_patch_free(patch);
+		verbose(env, "bpf verifier is misconfigured\n");
+		return -EINVAL;
+	}
+
 	return bpf_patch_err(patch);
 }
 

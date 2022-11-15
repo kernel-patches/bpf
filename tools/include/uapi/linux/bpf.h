@@ -6116,6 +6116,12 @@ enum xdp_action {
 	XDP_REDIRECT,
 };
 
+/* Subset of XDP metadata exported to skb context.
+ */
+struct xdp_skb_metadata {
+	__u64 rx_timestamp;
+};
+
 /* user accessible metadata for XDP packet hook
  * new fields must be added to the end of this structure
  */
@@ -6128,6 +6134,7 @@ struct xdp_md {
 	__u32 rx_queue_index;  /* rxq->queue_index  */
 
 	__u32 egress_ifindex;  /* txq->dev->ifindex */
+	__bpf_md_ptr(struct xdp_skb_metadata *, skb_metadata);
 };
 
 /* DEVMAP map-value layout

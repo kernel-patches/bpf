@@ -72,6 +72,7 @@
 #include <net/mptcp.h>
 #include <net/mctp.h>
 #include <net/page_pool.h>
+#include <net/xdp.h>
 
 #include <linux/uaccess.h>
 #include <trace/events/skb.h>
@@ -6675,3 +6676,22 @@ nodefer:	__kfree_skb(skb);
 	if (unlikely(kick) && !cmpxchg(&sd->defer_ipi_scheduled, 0, 1))
 		smp_call_function_single_async(cpu, &sd->defer_csd);
 }
+
+bool skb_metadata_import_from_xdp(struct sk_buff *skb,
+				  struct xdp_skb_metadata *meta)
+{
+	/* Optional SKB info, currently missing:
+	 * - HW checksum info		(skb->ip_summed)
+	 * - HW RX hash			(skb_set_hash)
+	 * - RX ring dev queue index	(skb_record_rx_queue)
+	 */
+
+	if (meta->rx_timestamp) {
+		*skb_hwtstamps(skb) = (struct skb_shared_hwtstamps){
+			.hwtstamp = ns_to_ktime(meta->rx_timestamp),
+		};
+	}
+
+	return true;
+}
+EXPORT_SYMBOL(skb_metadata_import_from_xdp);
