@@ -1489,7 +1489,7 @@ BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, const struct bpf_dynptr_kern 
 	if (err)
 		return err;
 
-	memcpy(dst, src->data + src->offset + offset, len);
+	memmove(dst, src->data + src->offset + offset, len);
 
 	return 0;
 }
@@ -1517,7 +1517,7 @@ BPF_CALL_5(bpf_dynptr_write, const struct bpf_dynptr_kern *, dst, u32, offset, v
 	if (err)
 		return err;
 
-	memcpy(dst->data + dst->offset + offset, src, len);
+	memmove(dst->data + dst->offset + offset, src, len);
 
 	return 0;
 }
