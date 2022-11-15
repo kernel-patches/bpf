@@ -18,6 +18,13 @@ struct {
 	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 } user_ringbuf SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 2);
+} ringbuf SEC(".maps");
+
+static int map_value;
+
 static long
 bad_access1(struct bpf_dynptr *dynptr, void *context)
 {
@@ -173,5 +180,33 @@ int user_ringbuf_callback_invalid_return(void *ctx)
 {
 	bpf_user_ringbuf_drain(&user_ringbuf, invalid_drain_callback_return, NULL, 0);
 
+	return 0;
+}
+
+static long
+try_reinit_dynptr_mem(struct bpf_dynptr *dynptr, void *context)
+{
+	bpf_dynptr_from_mem(&map_value, 4, 0, dynptr);
+	return 0;
+}
+
+static long
+try_reinit_dynptr_ringbuf(struct bpf_dynptr *dynptr, void *context)
+{
+	bpf_ringbuf_reserve_dynptr(&ringbuf, 8, 0, dynptr);
+	return 0;
+}
+
+SEC("?raw_tp/sys_nanosleep")
+int user_ringbuf_callback_reinit_dynptr_mem(void *ctx)
+{
+	bpf_user_ringbuf_drain(&user_ringbuf, try_reinit_dynptr_mem, NULL, 0);
+	return 0;
+}
+
+SEC("?raw_tp/sys_nanosleep")
+int user_ringbuf_callback_reinit_dynptr_ringbuf(void *ctx)
+{
+	bpf_user_ringbuf_drain(&user_ringbuf, try_reinit_dynptr_ringbuf, NULL, 0);
 	return 0;
 }
