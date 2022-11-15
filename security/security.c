@@ -717,6 +717,35 @@ static int lsm_superblock_alloc(struct super_block *sb)
 #undef LSM_HOOK
 
 /*
+ * The return value flags of the LSM hook are defined in linux/lsm_hook_defs.h
+ * and can be accessed with:
+ *
+ *	LSM_RET_FLAGS(<hook_name>)
+ *
+ * The macros below define static constants for the return value flags of each
+ * LSM hook.
+ */
+#define LSM_RET_FLAGS(NAME) (NAME##_ret_flags)
+#define DECLARE_LSM_RET_FLAGS(RET_FLAGS, NAME) \
+	static const u32 __maybe_unused LSM_RET_FLAGS(NAME) = (RET_FLAGS);
+#define LSM_HOOK(RET, DEFAULT, RET_FLAGS, NAME, ...) \
+	DECLARE_LSM_RET_FLAGS(RET_FLAGS, NAME)
+
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+
+static bool is_ret_value_allowed(int ret, u32 ret_flags)
+{
+	if ((ret < 0 && !(ret_flags & LSM_RET_NEG)) ||
+	    (ret == 0 && !(ret_flags & LSM_RET_ZERO)) ||
+	    (ret == 1 && !(ret_flags & LSM_RET_ONE)) ||
+	    (ret > 1 && !(ret_flags & LSM_RET_GT_ONE)))
+		return false;
+
+	return true;
+}
+
+/*
  * Hook list operation macros.
  *
  * call_void_hook:
@@ -741,6 +770,11 @@ static int lsm_superblock_alloc(struct super_block *sb)
 								\
 		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
 			RC = P->hook.FUNC(__VA_ARGS__);		\
+			if (!is_ret_value_allowed(RC, LSM_RET_FLAGS(FUNC))) { \
+				WARN_ONCE(1, "Illegal ret %d for " #FUNC " from %s, forcing %d\n", \
+					  RC, P->lsm, LSM_RET_DEFAULT(FUNC)); \
+				RC = LSM_RET_DEFAULT(FUNC);	\
+			}					\
 			if (RC != 0)				\
 				break;				\
 		}						\
