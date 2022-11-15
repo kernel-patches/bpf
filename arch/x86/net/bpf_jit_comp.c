@@ -1324,6 +1324,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			EMIT_LFENCE();
 			break;
 
+			/* kernel hidden stack operations */
+		case BPF_ST | BPF_STACK:
+			EMIT1(add_1reg(0x50, src_reg)); /* pushq  */
+			break;
+		case BPF_LD | BPF_STACK:
+			EMIT1(add_1reg(0x58, dst_reg)); /* popq */
+			break;
+
 			/* ST: *(u8*)(dst_reg + off) = imm */
 		case BPF_ST | BPF_MEM | BPF_B:
 			if (is_ereg(dst_reg))

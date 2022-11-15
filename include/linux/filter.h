@@ -76,6 +76,9 @@ struct ctl_table_header;
  */
 #define BPF_NOSPEC	0xc0
 
+/* unused opcode for kernel hidden stack operations */
+#define BPF_STACK	0xe0
+
 /* As per nm, we expose JITed images as text (code) section for
  * kallsyms. That way, tools like perf can find it to match
  * addresses.
@@ -398,6 +401,26 @@ static inline bool insn_is_zext(const struct bpf_insn *insn)
 	((struct bpf_insn) {					\
 		.code  = BPF_ST | BPF_NOSPEC,			\
 		.dst_reg = 0,					\
+		.src_reg = 0,					\
+		.off   = 0,					\
+		.imm   = 0 })
+
+/* Push SRC register value onto the stack */
+
+#define BPF_PUSH64(SRC)						\
+	((struct bpf_insn) {					\
+		.code  = BPF_ST | BPF_STACK,			\
+		.dst_reg = 0,					\
+		.src_reg = SRC,					\
+		.off   = 0,					\
+		.imm   = 0 })
+
+/* Pop stack value into DST register */
+
+#define BPF_POP64(DST)						\
+	((struct bpf_insn) {					\
+		.code  = BPF_LD | BPF_STACK,			\
+		.dst_reg = DST,					\
 		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = 0 })

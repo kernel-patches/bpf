@@ -1185,6 +1185,14 @@ emit_cond_jmp:
 		 */
 		break;
 
+		/* kernel hidden stack operations */
+	case BPF_ST | BPF_STACK:
+		emit(A64_PUSH(src, src, A64_SP), ctx);
+		break;
+	case BPF_LD | BPF_STACK:
+		emit(A64_POP(dst, dst, A64_SP), ctx);
+		break;
+
 	/* ST: *(size *)(dst + off) = imm */
 	case BPF_ST | BPF_MEM | BPF_W:
 	case BPF_ST | BPF_MEM | BPF_H:

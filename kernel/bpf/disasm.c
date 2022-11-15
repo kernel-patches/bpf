@@ -214,6 +214,9 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->off, insn->imm);
 		} else if (BPF_MODE(insn->code) == 0xc0 /* BPF_NOSPEC, no UAPI */) {
 			verbose(cbs->private_data, "(%02x) nospec\n", insn->code);
+		} else if (BPF_MODE(insn->code) == 0xe0 /* BPF_STACK, no UAPI */) {
+			verbose(cbs->private_data, "(%02x) push r%d\n",
+				insn->code, insn->src_reg);
 		} else {
 			verbose(cbs->private_data, "BUG_st_%02x\n", insn->code);
 		}
@@ -254,6 +257,9 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->code, insn->dst_reg,
 				__func_imm_name(cbs, insn, imm,
 						tmp, sizeof(tmp)));
+		} else if (BPF_MODE(insn->code) == 0xe0 /* BPF_STACK, no UAPI */) {
+			verbose(cbs->private_data, "(%02x) pop r%d\n",
+				insn->code, insn->dst_reg);
 		} else {
 			verbose(cbs->private_data, "BUG_ld_%02x\n", insn->code);
 			return;
