@@ -34,6 +34,8 @@
 #include <bpf/libbpf.h>
 #include "xsk.h"
 
+#define FD_NOT_USED (-1)
+
 #ifndef SOL_XDP
  #define SOL_XDP 283
 #endif
@@ -601,6 +603,9 @@ static void xsk_delete_bpf_maps(struct xsk_socket *xsk)
 {
 	struct xsk_ctx *ctx = xsk->ctx;
 
+	if (ctx->xsks_map_fd == FD_NOT_USED)
+		return;
+
 	bpf_map_delete_elem(ctx->xsks_map_fd, &ctx->queue_id);
 	close(ctx->xsks_map_fd);
 }
@@ -959,6 +964,9 @@ static struct xsk_ctx *xsk_create_ctx(struct xsk_socket *xsk,
 	ctx->umem = umem;
 	ctx->queue_id = queue_id;
 	libbpf_strlcpy(ctx->ifname, ifname, IFNAMSIZ);
+	ctx->prog_fd = FD_NOT_USED;
+	ctx->link_fd = FD_NOT_USED;
+	ctx->xsks_map_fd = FD_NOT_USED;
 
 	ctx->fill = fill;
 	ctx->comp = comp;
@@ -1239,8 +1247,9 @@ void xsk_socket__delete(struct xsk_socket *xsk)
 
 	if (ctx->refcount == 1) {
 		xsk_delete_bpf_maps(xsk);
-		close(ctx->prog_fd);
-		if (ctx->has_bpf_link)
+		if (ctx->prog_fd != FD_NOT_USED)
+			close(ctx->prog_fd);
+		if (ctx->has_bpf_link && ctx->link_fd != FD_NOT_USED)
 			close(ctx->link_fd);
 	}
 
