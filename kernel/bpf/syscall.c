@@ -1991,7 +1991,6 @@ void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
 		__acquire(&prog_idr_lock);
 
 	idr_remove(&prog_idr, prog->aux->id);
-	prog->aux->id = 0;
 
 	if (do_idr_lock)
 		spin_unlock_irqrestore(&prog_idr_lock, flags);
