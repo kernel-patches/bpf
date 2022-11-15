@@ -5774,6 +5774,14 @@ int process_dynptr_func(struct bpf_verifier_env *env, int regno,
 		return -EFAULT;
 	}
 
+	/* CONST_PTR_TO_DYNPTR already has fixed and var_off as 0 due to
+	 * check_func_arg_reg_off's logic. We only need to check offset
+	 * alignment for PTR_TO_STACK.
+	 */
+	if (reg->type == PTR_TO_STACK && (reg->off % BPF_REG_SIZE)) {
+		verbose(env, "cannot pass in dynptr at an offset=%d\n", reg->off);
+		return -EINVAL;
+	}
 	/* MEM_UNINIT and MEM_RDONLY are exclusive, when applied to a
 	 * ARG_PTR_TO_DYNPTR (or ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_*):
 	 *
@@ -6125,11 +6133,6 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	switch (type) {
 	/* Pointer types where both fixed and variable offset is explicitly allowed: */
 	case PTR_TO_STACK:
-		if (arg_type_is_dynptr(arg_type) && reg->off % BPF_REG_SIZE) {
-			verbose(env, "cannot pass in dynptr at an offset\n");
-			return -EINVAL;
-		}
-		fallthrough;
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
 	case PTR_TO_MAP_KEY:
