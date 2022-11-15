@@ -2446,6 +2446,20 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 /* last field in 'union bpf_attr' used by this command */
 #define	BPF_PROG_LOAD_LAST_FIELD core_relo_rec_size
 
+static int xdp_resolve_netdev(struct bpf_prog *prog, int ifindex)
+{
+	struct net *net = current->nsproxy->net_ns;
+	struct net_device *dev;
+
+	for_each_netdev(net, dev) {
+		if (dev->ifindex == ifindex) {
+			prog->aux->xdp_kfunc_ndo = dev->netdev_ops;
+			return 0;
+		}
+	}
+	return -EINVAL;
+}
+
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 {
 	enum bpf_prog_type type = attr->prog_type;
@@ -2463,7 +2477,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 				 BPF_F_TEST_STATE_FREQ |
 				 BPF_F_SLEEPABLE |
 				 BPF_F_TEST_RND_HI32 |
-				 BPF_F_XDP_HAS_FRAGS))
+				 BPF_F_XDP_HAS_FRAGS |
+				 BPF_F_XDP_HAS_METADATA))
 		return -EINVAL;
 
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) &&
@@ -2550,6 +2565,17 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	prog->aux->offload_requested = !!attr->prog_ifindex;
 	prog->aux->sleepable = attr->prog_flags & BPF_F_SLEEPABLE;
 	prog->aux->xdp_has_frags = attr->prog_flags & BPF_F_XDP_HAS_FRAGS;
+
+	if (attr->prog_flags & BPF_F_XDP_HAS_METADATA) {
+		/* Reuse prog_ifindex to carry request to unroll
+		 * metadata kfuncs.
+		 */
+		prog->aux->offload_requested = false;
+
+		err = xdp_resolve_netdev(prog, attr->prog_ifindex);
+		if (err < 0)
+			goto free_prog;
+	}
 
 	err = security_bpf_prog_alloc(prog->aux);
 	if (err)

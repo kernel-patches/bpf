@@ -169,6 +169,14 @@ rebooting or panicking. Due to this additional restrictions apply to these
 calls. At the moment they only require CAP_SYS_BOOT capability, but more can be
 added later.
 
+2.4.8 KF_UNROLL flag
+-----------------------
+
+The KF_UNROLL flag is used for kfuncs that the verifier can attempt to unroll.
+Unrolling is currently implemented only for XDP programs' metadata kfuncs.
+The main motivation behind unrolling is to remove function call overhead
+and allow efficient inlined kfuncs to be generated.
+
 2.5 Registering the kfuncs
 --------------------------
 

@@ -73,6 +73,8 @@ struct udp_tunnel_info;
 struct udp_tunnel_nic_info;
 struct udp_tunnel_nic;
 struct bpf_prog;
+struct bpf_insn;
+struct bpf_patch;
 struct xdp_buff;
 
 void synchronize_net(void);
@@ -1604,6 +1606,9 @@ struct net_device_ops {
 	ktime_t			(*ndo_get_tstamp)(struct net_device *dev,
 						  const struct skb_shared_hwtstamps *hwtstamps,
 						  bool cycles);
+	void			(*ndo_unroll_kfunc)(const struct bpf_prog *prog,
+						    u32 func_id,
+						    struct bpf_patch *patch);
 };
 
 /**

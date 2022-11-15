@@ -7,6 +7,7 @@
 #define __LINUX_NET_XDP_H__
 
 #include <linux/skbuff.h> /* skb_shared_info */
+#include <linux/btf_ids.h> /* btf_id_set8 */
 
 /**
  * DOC: XDP RX-queue information
@@ -408,5 +409,28 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf);
 
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
+
+#define XDP_METADATA_KFUNC_xxx	\
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED, \
+			   bpf_xdp_metadata_rx_timestamp_supported) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP, \
+			   bpf_xdp_metadata_rx_timestamp) \
+
+enum {
+#define XDP_METADATA_KFUNC(name, str) name,
+XDP_METADATA_KFUNC_xxx
+#undef XDP_METADATA_KFUNC
+MAX_XDP_METADATA_KFUNC,
+};
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+extern struct btf_id_set8 xdp_metadata_kfunc_ids;
+static inline u32 xdp_metadata_kfunc_id(int id)
+{
+	return xdp_metadata_kfunc_ids.pairs[id].id;
+}
+#else
+static inline u32 xdp_metadata_kfunc_id(int id) { return 0; }
+#endif
 
 #endif /* __LINUX_NET_XDP_H__ */
