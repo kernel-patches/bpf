@@ -28,9 +28,9 @@ static int nr_cpus;
 
 static void usage(void)
 {
-	printf("USAGE: sampleip [-F freq] [duration]\n");
-	printf("       -F freq    # sample frequency (Hertz), default 99\n");
-	printf("       duration   # sampling duration (seconds), default 5\n");
+	printf("USAGE: sampleip [-F freq] [-D duration]\n");
+	printf("       -F freq       # sample frequency (Hertz), default 99\n");
+	printf("       -D duration   # sampling duration (seconds), default 5\n");
 }
 
 static int sampling_start(int freq, struct bpf_program *prog,
@@ -145,10 +145,13 @@ int main(int argc, char **argv)
 	char filename[256];
 
 	/* process arguments */
-	while ((opt = getopt(argc, argv, "F:h")) != -1) {
+	while ((opt = getopt(argc, argv, "F:D:h")) != -1) {
 		switch (opt) {
 		case 'F':
 			freq = atoi(optarg);
+			break;
+		case 'D':
+			secs = atoi(optarg);
 			break;
 		case 'h':
 		default:
@@ -156,8 +159,6 @@ int main(int argc, char **argv)
 			return 0;
 		}
 	}
-	if (argc - optind == 1)
-		secs = atoi(argv[optind]);
 	if (freq == 0 || secs == 0) {
 		usage();
 		return 1;
