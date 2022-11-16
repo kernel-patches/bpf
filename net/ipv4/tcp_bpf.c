@@ -322,6 +322,7 @@ more_data:
 		break;
 	case __SK_REDIRECT:
 		sk_redir = psock->sk_redir;
+		msg->flags = psock->flags;
 		sk_msg_apply_bytes(psock, tosend);
 		if (!psock->apply_bytes) {
 			/* Clean up before releasing the sock lock. */

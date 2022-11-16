@@ -889,6 +889,7 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 		if (psock->sk_redir)
 			sock_put(psock->sk_redir);
 		psock->sk_redir = msg->sk_redir;
+		psock->flags = msg->flags;
 		if (!psock->sk_redir) {
 			ret = __SK_DROP;
 			goto out;
