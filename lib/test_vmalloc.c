@@ -50,6 +50,7 @@ __param(int, run_test_mask, INT_MAX,
 		"\t\tid: 128,  name: pcpu_alloc_test\n"
 		"\t\tid: 256,  name: kvfree_rcu_1_arg_vmalloc_test\n"
 		"\t\tid: 512,  name: kvfree_rcu_2_arg_vmalloc_test\n"
+		"\t\tid: 1024, name: execmem_alloc_test\n"
 		/* Add a new test case description here. */
 );
 
@@ -352,6 +353,34 @@ kvfree_rcu_2_arg_vmalloc_test(void)
 	return 0;
 }
 
+static int
+execmem_alloc_test(void)
+{
+	void *p, *tmp;
+	int i;
+
+	for (i = 0; i < test_loop_count; i++) {
+		/* allocate variable size, up to 64kB */
+		size_t size = (i % 1024 + 1) * 64;
+
+		p = execmem_alloc(size, 64);
+		if (!p)
+			return -1;
+
+		tmp = execmem_fill(p, "a", 1);
+		if (tmp != p)
+			return -1;
+
+		tmp = execmem_fill(p + size - 1, "b", 1);
+		if (tmp != p + size - 1)
+			return -1;
+
+		execmem_free(p);
+	}
+
+	return 0;
+}
+
 struct test_case_desc {
 	const char *test_name;
 	int (*test_func)(void);
@@ -368,6 +397,7 @@ static struct test_case_desc test_case_array[] = {
 	{ "pcpu_alloc_test", pcpu_alloc_test },
 	{ "kvfree_rcu_1_arg_vmalloc_test", kvfree_rcu_1_arg_vmalloc_test },
 	{ "kvfree_rcu_2_arg_vmalloc_test", kvfree_rcu_2_arg_vmalloc_test },
+	{ "execmem_alloc_test", execmem_alloc_test },
 	/* Add a new test case here. */
 };
 
