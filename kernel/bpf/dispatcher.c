@@ -126,11 +126,11 @@ static void bpf_dispatcher_update(struct bpf_dispatcher *d, int prev_num_progs)
 	tmp = d->num_progs ? d->rw_image + noff : NULL;
 	if (new) {
 		/* Prepare the dispatcher in d->rw_image. Then use
-		 * bpf_arch_text_copy to update d->image, which is RO+X.
+		 * execmem_fill to update d->image, which is RO+X.
 		 */
 		if (bpf_dispatcher_prepare(d, new, tmp))
 			return;
-		if (IS_ERR(bpf_arch_text_copy(new, tmp, PAGE_SIZE / 2)))
+		if (IS_ERR(execmem_fill(new, tmp, PAGE_SIZE / 2)))
 			return;
 	}
 
@@ -152,15 +152,12 @@ void bpf_dispatcher_change_prog(struct bpf_dispatcher *d, struct bpf_prog *from,
 
 	mutex_lock(&d->mutex);
 	if (!d->image) {
-		d->image = bpf_prog_pack_alloc(PAGE_SIZE, bpf_jit_fill_hole_with_zero);
+		d->image = execmem_alloc(PAGE_SIZE, PAGE_SIZE /* align */);
 		if (!d->image)
 			goto out;
 		d->rw_image = bpf_jit_alloc_exec(PAGE_SIZE);
 		if (!d->rw_image) {
-			u32 size = PAGE_SIZE;
-
-			bpf_arch_text_copy(d->image, &size, sizeof(size));
-			bpf_prog_pack_free((struct bpf_binary_header *)d->image);
+			execmem_free((struct bpf_binary_header *)d->image);
 			d->image = NULL;
 			goto out;
 		}

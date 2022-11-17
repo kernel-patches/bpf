@@ -229,11 +229,6 @@ static void jit_fill_hole(void *area, unsigned int size)
 	memset(area, 0xcc, size);
 }
 
-int bpf_arch_text_invalidate(void *dst, size_t len)
-{
-	return IS_ERR_OR_NULL(text_poke_set(dst, 0xcc, len));
-}
-
 struct jit_context {
 	int cleanup_addr; /* Epilogue code offset */
 
@@ -2509,11 +2504,9 @@ skip_init_addrs:
 		if (proglen <= 0) {
 out_image:
 			image = NULL;
-			if (header) {
-				bpf_arch_text_copy(&header->size, &rw_header->size,
-						   sizeof(rw_header->size));
+			if (header)
 				bpf_jit_binary_pack_free(header, rw_header);
-			}
+
 			/* Fall back to interpreter mode */
 			prog = orig_prog;
 			if (extra_pass) {
@@ -2563,8 +2556,9 @@ out_image:
 		if (!prog->is_func || extra_pass) {
 			/*
 			 * bpf_jit_binary_pack_finalize fails in two scenarios:
-			 *   1) header is not pointing to proper module memory;
-			 *   2) the arch doesn't support bpf_arch_text_copy().
+			 *   1) header is not pointing to memory allocated by
+			 *      execmem_alloc;
+			 *   2) the arch doesn't support execmem_free().
 			 *
 			 * Both cases are serious bugs and justify WARN_ON.
 			 */
@@ -2608,13 +2602,6 @@ out:
 bool bpf_jit_supports_kfunc_call(void)
 {
 	return true;
-}
-
-void *bpf_arch_text_copy(void *dst, void *src, size_t len)
-{
-	if (text_poke_copy(dst, src, len) == NULL)
-		return ERR_PTR(-EINVAL);
-	return dst;
 }
 
 /* Indicate the JIT backend supports mixing bpf2bpf and tailcalls. */
