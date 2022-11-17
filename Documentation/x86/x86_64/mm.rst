@@ -62,7 +62,7 @@ Complete virtual memory map with 4-level page tables
    ffffff8000000000 | -512    GB | ffffffeeffffffff |  444 GB | ... unused hole
    ffffffef00000000 |  -68    GB | fffffffeffffffff |   64 GB | EFI region mapping space
    ffffffff00000000 |   -4    GB | ffffffff7fffffff |    2 GB | ... unused hole
-   ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping, mapped to physical address 0
+   ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping and execmem, mapped to physical address 0
    ffffffff80000000 |-2048    MB |                  |         |
    ffffffffa0000000 |-1536    MB | fffffffffeffffff | 1520 MB | module mapping space
    ffffffffff000000 |  -16    MB |                  |         |
@@ -121,7 +121,7 @@ Complete virtual memory map with 5-level page tables
    ffffff8000000000 | -512    GB | ffffffeeffffffff |  444 GB | ... unused hole
    ffffffef00000000 |  -68    GB | fffffffeffffffff |   64 GB | EFI region mapping space
    ffffffff00000000 |   -4    GB | ffffffff7fffffff |    2 GB | ... unused hole
-   ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping, mapped to physical address 0
+   ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping and execmem, mapped to physical address 0
    ffffffff80000000 |-2048    MB |                  |         |
    ffffffffa0000000 |-1536    MB | fffffffffeffffff | 1520 MB | module mapping space
    ffffffffff000000 |  -16    MB |                  |         |

@@ -1373,7 +1373,7 @@ void mark_rodata_ro(void)
 	unsigned long start = PFN_ALIGN(_text);
 	unsigned long rodata_start = PFN_ALIGN(__start_rodata);
 	unsigned long end = (unsigned long)__end_rodata_hpage_align;
-	unsigned long text_end = PFN_ALIGN(_etext);
+	unsigned long text_end = PMD_ALIGN(_etext);
 	unsigned long rodata_end = PFN_ALIGN(__end_rodata);
 	unsigned long all_end;
 
@@ -1414,6 +1414,8 @@ void mark_rodata_ro(void)
 				(void *)rodata_end, (void *)_sdata);
 
 	debug_checkwx();
+	register_text_tail_vm(PFN_ALIGN((unsigned long)_etext),
+			      PMD_ALIGN((unsigned long)_etext));
 }
 
 int kern_addr_valid(unsigned long addr)
