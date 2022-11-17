@@ -72,6 +72,11 @@ early_param("nohugevmalloc", set_nohugevmalloc);
 static const bool vmap_allow_huge = false;
 #endif	/* CONFIG_HAVE_ARCH_HUGE_VMALLOC */
 
+#ifndef PMD_ALIGN
+#define PMD_ALIGN(addr) ALIGN(addr, PMD_SIZE)
+#endif
+#define PMD_ALIGN_DOWN(addr) ALIGN_DOWN(addr, PMD_SIZE)
+
 bool is_vmalloc_addr(const void *x)
 {
 	unsigned long addr = (unsigned long)kasan_reset_tag(x);
@@ -768,6 +773,38 @@ static LIST_HEAD(free_vmap_area_list);
  * find a lowest match of free area.
  */
 static struct rb_root free_vmap_area_root = RB_ROOT;
+
+/*
+ * free_text_area for execmem_alloc()
+ */
+static DEFINE_SPINLOCK(free_text_area_lock);
+/*
+ * This linked list is used in pair with free_text_area_root.
+ * It gives O(1) access to prev/next to perform fast coalescing.
+ */
+static LIST_HEAD(free_text_area_list);
+
+/*
+ * This augment red-black tree represents the free text space.
+ * All vmap_area objects in this tree are sorted by va->va_start
+ * address. It is used for allocation and merging when a vmap
+ * object is released.
+ *
+ * Each vmap_area node contains a maximum available free block
+ * of its sub-tree, right or left. Therefore it is possible to
+ * find a lowest match of free area.
+ *
+ * vmap_area in this tree are backed by RO+X memory, but they do
+ * not have valid vm pointer (because we need subtree_max_size).
+ * The vm for these vmap_area are stored in all_text_vm.
+ */
+static struct rb_root free_text_area_root = RB_ROOT;
+
+/*
+ * List of vm_struct for free_text_area_root. This list is rarely
+ * accessed, so the O(N) complexity is not likely a real issue.
+ */
+struct vm_struct *all_text_vm;
 
 /*
  * Preload a CPU with one object for "no edge" split case. The
@@ -3312,6 +3349,297 @@ void *vmalloc(unsigned long size)
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc);
+
+#if defined(CONFIG_MODULES) && defined(MODULES_VADDR)
+#define EXEC_MEM_START MODULES_VADDR
+#define EXEC_MEM_END MODULES_END
+#else
+#define EXEC_MEM_START VMALLOC_START
+#define EXEC_MEM_END VMALLOC_END
+#endif
+
+static void move_vmap_to_free_text_tree(void *addr)
+{
+	struct vmap_area *va;
+
+	/* remove from vmap_area_root */
+	spin_lock(&vmap_area_lock);
+	va = __find_vmap_area((unsigned long)addr, &vmap_area_root);
+	if (WARN_ON_ONCE(!va)) {
+		spin_unlock(&vmap_area_lock);
+		return;
+	}
+	unlink_va(va, &vmap_area_root);
+	spin_unlock(&vmap_area_lock);
+
+	/* make the memory RO+X */
+	memset(addr, 0, va->va_end - va->va_start);
+	set_memory_ro(va->va_start, (va->va_end - va->va_start) >> PAGE_SHIFT);
+	set_memory_x(va->va_start, (va->va_end - va->va_start) >> PAGE_SHIFT);
+
+	spin_lock(&free_text_area_lock);
+	/* add to all_text_vm */
+	va->vm->next = all_text_vm;
+	all_text_vm = va->vm;
+
+	/* add to free_text_area_root */
+	merge_or_add_vmap_area_augment(va, &free_text_area_root, &free_text_area_list);
+	spin_unlock(&free_text_area_lock);
+}
+
+/**
+ * execmem_alloc - allocate virtually contiguous RO+X memory
+ * @size:    allocation size
+ *
+ * This is used to allocate dynamic kernel text, such as module text, BPF
+ * programs, etc. User need to use text_poke to update the memory allocated
+ * by execmem_alloc.
+ *
+ * Return: pointer to the allocated memory or %NULL on error
+ */
+void *execmem_alloc(unsigned long size, unsigned long align)
+{
+	struct vmap_area *va, *tmp;
+	unsigned long addr;
+	enum fit_type type;
+	int ret;
+
+	va = kmem_cache_alloc_node(vmap_area_cachep, GFP_KERNEL, NUMA_NO_NODE);
+	if (unlikely(!va))
+		return NULL;
+
+again:
+	preload_this_cpu_lock(&free_text_area_lock, GFP_KERNEL, NUMA_NO_NODE);
+	tmp = find_vmap_lowest_match(&free_text_area_root, size, align, 1, false);
+
+	if (!tmp) {
+		unsigned long alloc_size;
+		void *ptr;
+
+		spin_unlock(&free_text_area_lock);
+
+		/*
+		 * Not enough continuous space in free_text_area_root, try
+		 * allocate more memory. The memory is first added to
+		 * vmap_area_root, and then moved to free_text_area_root.
+		 */
+		alloc_size = roundup(size, PMD_SIZE * num_online_nodes());
+		ptr = __vmalloc_node_range(alloc_size, PMD_SIZE, EXEC_MEM_START,
+					   EXEC_MEM_END, GFP_KERNEL, PAGE_KERNEL,
+					   VM_ALLOW_HUGE_VMAP | VM_NO_GUARD,
+					   NUMA_NO_NODE, __builtin_return_address(0));
+		if (unlikely(!ptr))
+			goto err_out;
+
+		move_vmap_to_free_text_tree(ptr);
+		goto again;
+	}
+
+	addr = roundup(tmp->va_start, align);
+	type = classify_va_fit_type(tmp, addr, size);
+	if (WARN_ON_ONCE(type == NOTHING_FIT))
+		goto err_out_unlock;
+
+	ret = adjust_va_to_fit_type(&free_text_area_root, &free_text_area_list,
+				    tmp, addr, size);
+	if (ret)
+		goto err_out_unlock;
+
+	spin_unlock(&free_text_area_lock);
+
+	va->va_start = addr;
+	va->va_end = addr + size;
+	va->vm = NULL;
+
+	spin_lock(&vmap_area_lock);
+	insert_vmap_area(va, &vmap_area_root, &vmap_area_list);
+	spin_unlock(&vmap_area_lock);
+
+	return (void *)addr;
+
+err_out_unlock:
+	spin_unlock(&free_text_area_lock);
+err_out:
+	kmem_cache_free(vmap_area_cachep, va);
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(execmem_alloc);
+
+void __weak *arch_fill_execmem(void *dst, void *src, size_t len)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+int __weak arch_invalidate_execmem(void *ptr, size_t len)
+{
+	return -EOPNOTSUPP;
+}
+
+/**
+ * execmem_fill - Copy text to RO+X memory allocated by execmem_alloc()
+ * @dst:  pointer to memory allocated by execmem_alloc()
+ * @src:  pointer to data being copied from
+ * @len:  number of bytes to be copied
+ *
+ * execmem_fill() will only update memory allocated by a single execmem_fill()
+ * call. If dst + len goes beyond the boundary of one allocation,
+ * execmem_fill() is aborted.
+ *
+ * If @addr is NULL, no operation is performed.
+ */
+void *execmem_fill(void *dst, void *src, size_t len)
+{
+	struct vmap_area *va;
+
+	spin_lock(&vmap_area_lock);
+	va = __find_vmap_area((unsigned long)dst, &vmap_area_root);
+
+	/*
+	 * If no va, or va has a vm attached, this memory is not allocated
+	 * by execmem_alloc().
+	 */
+	if (WARN_ON_ONCE(!va))
+		goto err_out;
+	if (WARN_ON_ONCE(va->vm))
+		goto err_out;
+
+	/* Disallow filling across execmem_alloc boundaries */
+	if (WARN_ON_ONCE((unsigned long)dst + len > va->va_end))
+		goto err_out;
+
+	spin_unlock(&vmap_area_lock);
+
+	return arch_fill_execmem(dst, src, len);
+
+err_out:
+	spin_unlock(&vmap_area_lock);
+	return ERR_PTR(-EINVAL);
+}
+EXPORT_SYMBOL_GPL(execmem_fill);
+
+static struct vm_struct *find_and_unlink_text_vm(unsigned long start, unsigned long end)
+{
+	struct vm_struct *vm, *prev_vm;
+
+	lockdep_assert_held(&free_text_area_lock);
+
+	vm = all_text_vm;
+	while (vm) {
+		unsigned long vm_addr = (unsigned long)vm->addr;
+
+		/* vm is within this free space, we can free it */
+		if ((vm_addr >= start) && ((vm_addr + vm->size) <= end))
+			goto unlink_vm;
+		vm = vm->next;
+	}
+	return NULL;
+
+unlink_vm:
+	if (all_text_vm == vm) {
+		all_text_vm = vm->next;
+	} else {
+		prev_vm = all_text_vm;
+		while (prev_vm->next != vm)
+			prev_vm = prev_vm->next;
+		prev_vm->next = vm->next;
+	}
+	return vm;
+}
+
+/**
+ * execmem_free - Release memory allocated by execmem_alloc()
+ * @addr:  Memory base address
+ *
+ * If @addr is NULL, no operation is performed.
+ */
+void execmem_free(void *addr)
+{
+	unsigned long free_start, free_end, free_addr;
+	struct vm_struct *vm;
+	struct vmap_area *va;
+
+	might_sleep();
+
+	if (!addr)
+		return;
+
+	spin_lock(&vmap_area_lock);
+	va = __find_vmap_area((unsigned long)addr, &vmap_area_root);
+	if (WARN_ON_ONCE(!va)) {
+		spin_unlock(&vmap_area_lock);
+		return;
+	}
+	WARN_ON_ONCE(va->vm);
+
+	unlink_va(va, &vmap_area_root);
+	spin_unlock(&vmap_area_lock);
+
+	/* Invalidate text in the region */
+	arch_invalidate_execmem(addr, va->va_end - va->va_start);
+
+	spin_lock(&free_text_area_lock);
+	va = merge_or_add_vmap_area_augment(va,
+		&free_text_area_root, &free_text_area_list);
+
+	if (WARN_ON_ONCE(!va))
+		goto out;
+
+	free_start = PMD_ALIGN(va->va_start);
+	free_end = PMD_ALIGN_DOWN(va->va_end);
+
+	/*
+	 * Only try to free vm when there is at least one PMD_SIZE free
+	 * continuous memory.
+	 */
+	if (free_start >= free_end)
+		goto out;
+
+	/*
+	 * TODO: It is possible that multiple vm are ready to be freed
+	 * after one execmem_free(). But we free at most one vm for now.
+	 */
+	vm = find_and_unlink_text_vm(free_start, free_end);
+	if (!vm)
+		goto out;
+
+	va = kmem_cache_alloc_node(vmap_area_cachep, GFP_ATOMIC, NUMA_NO_NODE);
+	if (unlikely(!va))
+		goto out_save_vm;
+
+	free_addr = __alloc_vmap_area(&free_text_area_root, &free_text_area_list,
+				      vm->size, 1, (unsigned long)vm->addr,
+				      (unsigned long)vm->addr + vm->size);
+
+	if (WARN_ON_ONCE(free_addr != (unsigned long)vm->addr))
+		goto out_save_vm;
+
+	va->va_start = (unsigned long)vm->addr;
+	va->va_end = va->va_start + vm->size;
+	va->vm = vm;
+	spin_unlock(&free_text_area_lock);
+
+	set_memory_nx(va->va_start, vm->size >> PAGE_SHIFT);
+	set_memory_rw(va->va_start, vm->size >> PAGE_SHIFT);
+
+	/* put the va to vmap_area_root, and then free it with vfree */
+	spin_lock(&vmap_area_lock);
+	insert_vmap_area(va, &vmap_area_root, &vmap_area_list);
+	spin_unlock(&vmap_area_lock);
+
+	vfree(vm->addr);
+	return;
+
+out_save_vm:
+	/*
+	 * vm is removed from all_text_vm, but not freed. Add it back,
+	 * so that we can use or free it later.
+	 */
+	vm->next = all_text_vm;
+	all_text_vm = vm;
+out:
+	spin_unlock(&free_text_area_lock);
+}
+EXPORT_SYMBOL_GPL(execmem_free);
 
 /**
  * vmalloc_huge - allocate virtually contiguous memory, allow huge pages
