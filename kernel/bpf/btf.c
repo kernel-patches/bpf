@@ -5989,6 +5989,9 @@ error:
 				/* check __percpu tag */
 				if (strcmp(tag_value, "percpu") == 0)
 					tmp_flag = MEM_PERCPU;
+				/* check __rcu tag */
+				if (strcmp(tag_value, "rcu") == 0)
+					tmp_flag = MEM_RCU;
 			}
 
 			stype = btf_type_skip_modifiers(btf, mtype->type, &id);
@@ -6451,6 +6454,9 @@ static bool btf_is_kfunc_arg_mem_size(const struct btf *btf,
 	return true;
 }
 
+BTF_ID_LIST_SINGLE(bpf_rcu_read_lock_id, func, bpf_rcu_read_lock)
+BTF_ID_LIST_SINGLE(bpf_rcu_read_unlock_id, func, bpf_rcu_read_unlock)
+
 static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 				    const struct btf *btf, u32 func_id,
 				    struct bpf_reg_state *regs,
@@ -6460,7 +6466,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	bool rel = false, kptr_get = false, trusted_args = false;
-	bool sleepable = false;
+	bool sleepable = false, rcu_lock = false, rcu_unlock = false;
 	struct bpf_verifier_log *log = &env->log;
 	u32 i, nargs, ref_id, ref_obj_id = 0;
 	bool is_kfunc = btf_is_kernel(btf);
@@ -6468,6 +6474,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 	const struct btf_type *t, *ref_t;
 	const struct btf_param *args;
 	int ref_regno = 0, ret;
+
 
 	t = btf_type_by_id(btf, func_id);
 	if (!t || !btf_type_is_func(t)) {
@@ -6499,6 +6506,28 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env,
 		kptr_get = kfunc_meta->flags & KF_KPTR_GET;
 		trusted_args = kfunc_meta->flags & KF_TRUSTED_ARGS;
 		sleepable = kfunc_meta->flags & KF_SLEEPABLE;
+		rcu_lock = func_id == *bpf_rcu_read_lock_id;
+		rcu_unlock = func_id == *bpf_rcu_read_unlock_id;
+	}
+
+	/* checking rcu read lock/unlock */
+	if (env->cur_state->active_rcu_lock) {
+		if (rcu_lock) {
+			bpf_log(log, "nested rcu read lock (kernel function %s)\n", func_name);
+			return -EINVAL;
+		} else if (rcu_unlock) {
+			clear_all_rcu_pointers(env);
+			env->cur_state->active_rcu_lock = false;
+		} else if (sleepable) {
+			bpf_log(log, "kernel func %s is sleepable within rcu_read_lock region\n",
+				func_name);
+			return -EINVAL;
+		}
+	} else if (rcu_lock) {
+		env->cur_state->active_rcu_lock = true;
+	} else if (rcu_unlock) {
+		bpf_log(log, "unmatched rcu read unlock (kernel function %s)\n", func_name);
+		return -EINVAL;
 	}
 
 	/* check that BTF function arguments match actual types that the

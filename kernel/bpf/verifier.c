@@ -23,6 +23,7 @@
 #include <linux/error-injection.h>
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
+#include <linux/trace_events.h>
 #include <linux/poison.h>
 
 #include "disasm.h"
@@ -513,6 +514,14 @@ static bool is_callback_calling_function(enum bpf_func_id func_id)
 	       func_id == BPF_FUNC_user_ringbuf_drain;
 }
 
+static bool is_storage_get_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_sk_storage_get ||
+	       func_id == BPF_FUNC_inode_storage_get ||
+	       func_id == BPF_FUNC_task_storage_get ||
+	       func_id == BPF_FUNC_cgrp_storage_get;
+}
+
 static bool helper_multiple_ref_obj_use(enum bpf_func_id func_id,
 					const struct bpf_map *map)
 {
@@ -583,6 +592,8 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		strncpy(prefix, "user_", 32);
 	if (type & MEM_PERCPU)
 		strncpy(prefix, "percpu_", 32);
+	if (type & MEM_RCU)
+		strncpy(prefix, "rcu_", 32);
 	if (type & PTR_UNTRUSTED)
 		strncpy(prefix, "untrusted_", 32);
 
@@ -1208,6 +1219,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->speculative = src->speculative;
 	dst_state->curframe = src->curframe;
 	dst_state->active_spin_lock = src->active_spin_lock;
+	dst_state->active_rcu_lock = src->active_rcu_lock;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
 	dst_state->first_insn_idx = src->first_insn_idx;
@@ -4687,6 +4699,14 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
+	if ((reg->type & MEM_RCU) && env->prog->aux->sleepable &&
+	    !env->cur_state->active_rcu_lock) {
+		verbose(env,
+			"R%d is ptr_%s access rcu-protected memory with off=%d, not rcu protected\n",
+			regno, tname, off);
+		return -EACCES;
+	}
+
 	if (env->ops->btf_struct_access) {
 		ret = env->ops->btf_struct_access(&env->log, reg, off, size, atype, &btf_id, &flag);
 	} else {
@@ -4700,6 +4720,16 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 
 	if (ret < 0)
 		return ret;
+
+	/* The value is a rcu pointer. For a sleepable program, the load needs to be
+	 * in a rcu lock region, similar to rcu_dereference().
+	 */
+	if ((flag & MEM_RCU) && env->prog->aux->sleepable && !env->cur_state->active_rcu_lock) {
+		verbose(env,
+			"R%d is rcu dereference ptr_%s with off=%d, not in rcu_read_lock region\n",
+			regno, tname, off);
+		return -EACCES;
+	}
 
 	/* If this is an untrusted pointer, all pointers formed by walking it
 	 * also inherit the untrusted flag.
@@ -5807,7 +5837,12 @@ static const struct bpf_reg_types scalar_types = { .types = { SCALAR_VALUE } };
 static const struct bpf_reg_types context_types = { .types = { PTR_TO_CTX } };
 static const struct bpf_reg_types ringbuf_mem_types = { .types = { PTR_TO_MEM | MEM_RINGBUF } };
 static const struct bpf_reg_types const_map_ptr_types = { .types = { CONST_PTR_TO_MAP } };
-static const struct bpf_reg_types btf_ptr_types = { .types = { PTR_TO_BTF_ID } };
+static const struct bpf_reg_types btf_ptr_types = {
+	.types = {
+		PTR_TO_BTF_ID,
+		PTR_TO_BTF_ID | MEM_RCU,
+	}
+};
 static const struct bpf_reg_types spin_lock_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types percpu_btf_ptr_types = { .types = { PTR_TO_BTF_ID | MEM_PERCPU } };
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
@@ -5881,6 +5916,20 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	if (arg_type & PTR_MAYBE_NULL)
 		type &= ~PTR_MAYBE_NULL;
 
+	/* If the reg type is marked as MEM_RCU, ensure the usage is in the rcu_read_lock
+	 * region, and remove MEM_RCU from the type since the arg_type won't encode
+	 * MEM_RCU.
+	 */
+	if (type & MEM_RCU) {
+		if (env->prog->aux->sleepable && !env->cur_state->active_rcu_lock) {
+			verbose(env,
+				"R%d is arg type %s needs rcu protection\n",
+				regno, reg_type_str(env, reg->type));
+			return -EACCES;
+		}
+		type &= ~MEM_RCU;
+	}
+
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
 		if (expected == NOT_INIT)
@@ -5897,7 +5946,8 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	return -EACCES;
 
 found:
-	if (reg->type == PTR_TO_BTF_ID) {
+	/* reg is already protected by rcu_read_lock(). Peel off MEM_RCU from reg->type. */
+	if ((reg->type & ~MEM_RCU) == PTR_TO_BTF_ID) {
 		/* For bpf_sk_release, it needs to match against first member
 		 * 'struct sock_common', hence make an exception for it. This
 		 * allows bpf_sk_release to work for multiple socket types.
@@ -5973,6 +6023,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	 * fixed offset.
 	 */
 	case PTR_TO_BTF_ID:
+	case PTR_TO_BTF_ID | MEM_RCU:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * it's fixed offset must be 0.	In the other cases, fixed offset
 		 * can be non-zero.
@@ -6696,6 +6747,17 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
 		if (reg_is_pkt_pointer_any(reg))
+			__mark_reg_unknown(env, reg);
+	}));
+}
+
+void clear_all_rcu_pointers(struct bpf_verifier_env *env)
+{
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+
+	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
+		if (reg->type & MEM_RCU)
 			__mark_reg_unknown(env, reg);
 	}));
 }
@@ -7427,6 +7489,18 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		verbose(env, "kernel subsystem misconfigured func %s#%d\n",
 			func_id_name(func_id), func_id);
 		return err;
+	}
+
+	if (env->cur_state->active_rcu_lock) {
+		if (bpf_lsm_sleepable_func_proto(func_id) ||
+		    bpf_tracing_sleepable_func_proto(func_id)) {
+			verbose(env, "sleepable helper %s#%din rcu_read_lock region\n",
+				func_id_name(func_id), func_id);
+			return -EINVAL;
+		}
+
+		if (env->prog->aux->sleepable && is_storage_get_function(func_id))
+			env->insn_aux_data[insn_idx].storage_get_func_atomic = true;
 	}
 
 	meta.func_id = func_id;
@@ -10647,6 +10721,11 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		return -EINVAL;
 	}
 
+	if (env->prog->aux->sleepable && env->cur_state->active_rcu_lock) {
+		verbose(env, "BPF_LD_[ABS|IND] cannot be used inside bpf_rcu_read_lock-ed region\n");
+		return -EINVAL;
+	}
+
 	if (regs[ctx_reg].type != PTR_TO_CTX) {
 		verbose(env,
 			"at the time of BPF_LD_ABS|IND R6 != pointer to skb\n");
@@ -11911,6 +11990,9 @@ static bool states_equal(struct bpf_verifier_env *env,
 	if (old->active_spin_lock != cur->active_spin_lock)
 		return false;
 
+	if (old->active_rcu_lock != cur->active_rcu_lock)
+		return false;
+
 	/* for states to be equal callsites have to be the same
 	 * and all frame states need to be equivalent
 	 */
@@ -12324,6 +12406,11 @@ static bool reg_type_mismatch(enum bpf_reg_type src, enum bpf_reg_type prev)
 			       !reg_type_mismatch_ok(prev));
 }
 
+static bool reg_type_mismatch_ignore_rcu(enum bpf_reg_type src, enum bpf_reg_type prev)
+{
+	return reg_type_mismatch(src & ~MEM_RCU, prev & ~MEM_RCU);
+}
+
 static int do_check(struct bpf_verifier_env *env)
 {
 	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
@@ -12449,6 +12536,17 @@ static int do_check(struct bpf_verifier_env *env)
 
 			prev_src_type = &env->insn_aux_data[env->insn_idx].ptr_type;
 
+			/* For code like below,
+			 *   struct foo *f;
+			 *   if (...)
+			 *     f = ...; // f with MEM_RCU type tag.
+			 *   else
+			 *     f = ...; // f without MEM_RCU type tag.
+			 *   ... f ...  // Here f could be with/without MEM_RCU
+			 *
+			 * It is safe to ignore MEM_RCU type tag here since
+			 * base types are the same.
+			 */
 			if (*prev_src_type == NOT_INIT) {
 				/* saw a valid insn
 				 * dst_reg = *(u32 *)(src_reg + off)
@@ -12456,7 +12554,7 @@ static int do_check(struct bpf_verifier_env *env)
 				 */
 				*prev_src_type = src_reg_type;
 
-			} else if (reg_type_mismatch(src_reg_type, *prev_src_type)) {
+			} else if (reg_type_mismatch_ignore_rcu(src_reg_type, *prev_src_type)) {
 				/* ABuser program is trying to use the same insn
 				 * dst_reg = *(u32*) (src_reg + off)
 				 * with different pointer types:
@@ -12592,6 +12690,11 @@ static int do_check(struct bpf_verifier_env *env)
 
 				if (env->cur_state->active_spin_lock) {
 					verbose(env, "bpf_spin_unlock is missing\n");
+					return -EINVAL;
+				}
+
+				if (env->cur_state->active_rcu_lock) {
+					verbose(env, "bpf_rcu_read_unlock is missing\n");
 					return -EINVAL;
 				}
 
@@ -13690,6 +13793,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			break;
 		case PTR_TO_BTF_ID:
 		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
+		case PTR_TO_BTF_ID | MEM_RCU:
 			if (type == BPF_READ) {
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);
@@ -14338,14 +14442,12 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto patch_call_imm;
 		}
 
-		if (insn->imm == BPF_FUNC_task_storage_get ||
-		    insn->imm == BPF_FUNC_sk_storage_get ||
-		    insn->imm == BPF_FUNC_inode_storage_get ||
-		    insn->imm == BPF_FUNC_cgrp_storage_get) {
-			if (env->prog->aux->sleepable)
-				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_5, (__force __s32)GFP_KERNEL);
-			else
+		if (is_storage_get_function(insn->imm)) {
+			if (!env->prog->aux->sleepable ||
+			    env->insn_aux_data[i + delta].storage_get_func_atomic)
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_5, (__force __s32)GFP_ATOMIC);
+			else
+				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_5, (__force __s32)GFP_KERNEL);
 			insn_buf[1] = *insn;
 			cnt = 2;
 
