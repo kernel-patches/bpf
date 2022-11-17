@@ -9,6 +9,7 @@
 #include <linux/hardirq.h>
 #include <linux/perf_event.h>
 #include <linux/tracepoint.h>
+#include <uapi/linux/bpf.h>
 
 struct trace_array;
 struct array_buffer;
@@ -16,6 +17,7 @@ struct tracer;
 struct dentry;
 struct bpf_prog;
 union bpf_attr;
+struct bpf_func_proto;
 
 const char *trace_print_flags_seq(struct trace_seq *p, const char *delim,
 				  unsigned long flags,
@@ -748,6 +750,7 @@ int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 			    u32 *fd_type, const char **buf,
 			    u64 *probe_offset, u64 *probe_addr);
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+const struct bpf_func_proto *bpf_tracing_sleepable_func_proto(enum bpf_func_id func_id);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -793,6 +796,11 @@ static inline int
 bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	return -EOPNOTSUPP;
+}
+static inline const struct bpf_func_proto *
+bpf_tracing_sleepable_func_proto(enum bpf_func_id func_id)
+{
+	return NULL;
 }
 #endif
 

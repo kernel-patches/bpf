@@ -192,6 +192,18 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+const struct bpf_func_proto *bpf_lsm_sleepable_func_proto(enum bpf_func_id func_id)
+{
+	switch (func_id) {
+	case BPF_FUNC_ima_inode_hash:
+		return &bpf_ima_inode_hash_proto;
+	case BPF_FUNC_ima_file_hash:
+		return &bpf_ima_file_hash_proto;
+	default:
+		return NULL;
+	}
+}
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -202,6 +214,10 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		if (func_proto)
 			return func_proto;
 	}
+
+	func_proto = bpf_lsm_sleepable_func_proto(func_id);
+	if (func_proto)
+		return prog->aux->sleepable ? func_proto : NULL;
 
 	switch (func_id) {
 	case BPF_FUNC_inode_storage_get:
@@ -220,10 +236,6 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_spin_unlock_proto;
 	case BPF_FUNC_bprm_opts_set:
 		return &bpf_bprm_opts_set_proto;
-	case BPF_FUNC_ima_inode_hash:
-		return prog->aux->sleepable ? &bpf_ima_inode_hash_proto : NULL;
-	case BPF_FUNC_ima_file_hash:
-		return prog->aux->sleepable ? &bpf_ima_file_hash_proto : NULL;
 	case BPF_FUNC_get_attach_cookie:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto : NULL;
 #ifdef CONFIG_NET

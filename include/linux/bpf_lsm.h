@@ -28,6 +28,7 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			const struct bpf_prog *prog);
 
 bool bpf_lsm_is_sleepable_hook(u32 btf_id);
+const struct bpf_func_proto *bpf_lsm_sleepable_func_proto(enum bpf_func_id func_id);
 
 static inline struct bpf_storage_blob *bpf_inode(
 	const struct inode *inode)
@@ -49,6 +50,11 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func)
 static inline bool bpf_lsm_is_sleepable_hook(u32 btf_id)
 {
 	return false;
+}
+static inline const struct bpf_func_proto *
+bpf_lsm_sleepable_func_proto(enum bpf_func_id func_id)
+{
+	return NULL;
 }
 
 static inline int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
