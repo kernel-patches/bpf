@@ -1,0 +1,22 @@
+name: "lint"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  shellcheck:
+    # This workflow gets injected into other Linux repositories, but we don't
+    # want it to run there.
+    if: ${{ github.repository == 'kernel-patches/vmtest' }}
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: --severity=warning --exclude=SC1091
