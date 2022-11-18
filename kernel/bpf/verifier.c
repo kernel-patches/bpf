@@ -8746,6 +8746,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	return 0;
 }
 
+static bool is_kfunc_disabled(struct bpf_verifier_env *env, const struct btf *btf, u32 func_id)
+{
+	if (btf != btf_vmlinux)
+		return false;
+	if (!bpf_global_ma_set && func_id == special_kfunc_list[KF_bpf_obj_new_impl]) {
+		verbose(env, "bpf_global_ma initialization failed, can't call bpf_obj_new_impl\n");
+		return true;
+	}
+	return false;
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -8773,7 +8784,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	func_proto = btf_type_by_id(desc_btf, func->type);
 
 	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, resolve_prog_type(env->prog), func_id);
-	if (!kfunc_flags) {
+	if (!kfunc_flags || is_kfunc_disabled(env, desc_btf, func_id)) {
 		verbose(env, "calling kernel function %s is not allowed\n",
 			func_name);
 		return -EACCES;
