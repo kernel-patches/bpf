@@ -8746,6 +8746,29 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	return 0;
 }
 
+BTF_ID_LIST_SINGLE(bpf_vma_build_id_parse_id, func, bpf_vma_build_id_parse)
+
+static int check_kfunc_caller(struct bpf_verifier_env *env, u32 func_id)
+{
+	struct bpf_func_state *cur;
+	struct bpf_insn *insn;
+
+	/* Allow bpf_vma_build_id_parse only from bpf_find_vma callback */
+	if (func_id == bpf_vma_build_id_parse_id[0]) {
+		cur = env->cur_state->frame[env->cur_state->curframe];
+		if (cur->callsite != BPF_MAIN_FUNC) {
+			insn = &env->prog->insnsi[cur->callsite];
+			if (insn->imm == BPF_FUNC_find_vma)
+				return 0;
+		}
+		verbose(env, "calling bpf_vma_build_id_parse outside bpf_find_vma "
+			"callback is not allowed\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -8796,6 +8819,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		verbose(env, "program must be sleepable to call sleepable kfunc %s\n", func_name);
 		return -EACCES;
 	}
+
+	if (check_kfunc_caller(env, func_id))
+		return -EACCES;
 
 	/* Check the arguments */
 	err = check_kfunc_args(env, &meta);

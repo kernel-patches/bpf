@@ -23,6 +23,7 @@
 #include <linux/sort.h>
 #include <linux/key.h>
 #include <linux/verification.h>
+#include <linux/buildid.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -1382,6 +1383,36 @@ static int __init bpf_key_sig_kfuncs_init(void)
 
 late_initcall(bpf_key_sig_kfuncs_init);
 #endif /* CONFIG_KEYS */
+
+int bpf_vma_build_id_parse(struct vm_area_struct *vma,
+			   unsigned char *build_id,
+			   size_t build_id__sz)
+{
+	__u32 size;
+	int err;
+
+	if (build_id__sz < BUILD_ID_SIZE_MAX)
+		return -EINVAL;
+
+	err = build_id_parse(vma, build_id, &size);
+	return err ?: (int) size;
+}
+
+BTF_SET8_START(tracing_btf_ids)
+BTF_ID_FLAGS(func, bpf_vma_build_id_parse)
+BTF_SET8_END(tracing_btf_ids)
+
+static const struct btf_kfunc_id_set tracing_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &tracing_btf_ids,
+};
+
+static int __init kfunc_tracing_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &tracing_kfunc_set);
+}
+
+late_initcall(kfunc_tracing_init);
 
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
