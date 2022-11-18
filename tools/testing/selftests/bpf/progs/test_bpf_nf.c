@@ -157,10 +157,10 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 
 		/* snat */
 		saddr.ip = bpf_get_prandom_u32();
-		bpf_ct_set_nat_info(ct, &saddr, sport, NF_NAT_MANIP_SRC);
+		bpf_ct_set_nat_info(ct, &saddr, sport, 0 /*NF_NAT_MANIP_SRC*/);
 		/* dnat */
 		daddr.ip = bpf_get_prandom_u32();
-		bpf_ct_set_nat_info(ct, &daddr, dport, NF_NAT_MANIP_DST);
+		bpf_ct_set_nat_info(ct, &daddr, dport, 1 /*NF_NAT_MANIP_DST*/);
 
 		ct_ins = bpf_ct_insert_entry(ct);
 		if (ct_ins) {
