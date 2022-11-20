@@ -1062,4 +1062,5 @@ format.::
 7. Testing
 ==========
 
-Kernel bpf selftest `test_btf.c` provides extensive set of BTF-related tests.
+Kernel bpf selftest `prog_tests/btf.c` provides extensive set of BTF-related
+tests.
