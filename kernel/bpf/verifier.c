@@ -8878,6 +8878,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				struct btf *ret_btf;
 				u32 ret_btf_id;
 
+				/* Unlikely, but fail the kfunc call if bpf_global_ma
+				 * is not initialized.
+				 */
+				if (!bpf_global_ma_set)
+					return -ENOMEM;
+
 				if (((u64)(u32)meta.arg_constant.value) != meta.arg_constant.value) {
 					verbose(env, "local type ID argument must be in range [0, U32_MAX]\n");
 					return -EINVAL;
