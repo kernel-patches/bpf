@@ -500,9 +500,10 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		htab->elem_size += round_up(htab->map.value_size, 8);
 
 	err = -E2BIG;
-	/* prevent zero size kmalloc and check for u32 overflow */
-	if (htab->n_buckets == 0 ||
-	    htab->n_buckets > U32_MAX / sizeof(struct bucket))
+	/* avoid zero size and u32 overflow kmalloc.
+	 * bpf_attr::max_entries checked in .map_alloc_check().
+	 */
+	if (htab->n_buckets > U32_MAX / sizeof(struct bucket))
 		goto free_htab;
 
 	err = -ENOMEM;
