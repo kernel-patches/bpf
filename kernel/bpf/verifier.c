@@ -7526,6 +7526,47 @@ static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno
 				 state->callback_subprogno == subprogno);
 }
 
+int bpf_check_tp_printk_denylist(const char *name, struct bpf_prog *prog)
+{
+	static const char * const denylist[] = {
+		"contention_begin",
+		"bpf_trace_printk",
+	};
+	int i;
+
+	/* Do not allow attachment to denylist[] tracepoints,
+	 * if the program calls some of the printk helpers,
+	 * because there's possibility of deadlock.
+	 */
+	if (!prog->call_printk)
+		return 0;
+
+	for (i = 0; i < ARRAY_SIZE(denylist); i++) {
+		if (!strcmp(denylist[i], name))
+			return 1;
+	}
+	return 0;
+}
+
+static int check_tp_printk_denylist(struct bpf_verifier_env *env, int func_id)
+{
+	struct bpf_prog *prog = env->prog;
+
+	if (prog->type != BPF_PROG_TYPE_TRACING ||
+	    prog->expected_attach_type != BPF_TRACE_RAW_TP)
+		return 0;
+
+	if (WARN_ON_ONCE(!prog->aux->attach_func_name))
+		return -EINVAL;
+
+	if (!bpf_check_tp_printk_denylist(prog->aux->attach_func_name, prog))
+		return 0;
+
+	verbose(env, "Can't attach program with %s#%d helper to %s tracepoint.\n",
+		func_id_name(func_id), func_id, prog->aux->attach_func_name);
+	return -EACCES;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -7744,6 +7785,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	case BPF_FUNC_user_ringbuf_drain:
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_user_ringbuf_callback_state);
+		break;
+	case BPF_FUNC_trace_printk:
+	case BPF_FUNC_trace_vprintk:
+		env->prog->call_printk = 1;
+		err = check_tp_printk_denylist(env, func_id);
 		break;
 	}
 

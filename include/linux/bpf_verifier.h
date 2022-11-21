@@ -621,6 +621,8 @@ bool is_dynptr_type_expected(struct bpf_verifier_env *env,
 			     struct bpf_reg_state *reg,
 			     enum bpf_arg_type arg_type);
 
+int bpf_check_tp_printk_denylist(const char *name, struct bpf_prog *prog);
+
 /* this lives here instead of in bpf.h because it needs to dereference tgt_prog */
 static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
 					     struct btf *btf, u32 btf_id)

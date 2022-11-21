@@ -3329,6 +3329,9 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 		return -EINVAL;
 	}
 
+	if (bpf_check_tp_printk_denylist(tp_name, prog))
+		return -EACCES;
+
 	btp = bpf_get_raw_tracepoint(tp_name);
 	if (!btp)
 		return -ENOENT;
