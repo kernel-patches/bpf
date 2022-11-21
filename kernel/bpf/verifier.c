@@ -15171,6 +15171,25 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 	return err;
 }
 
+static int fixup_xdp_kfunc_call(struct bpf_verifier_env *env, u32 func_id)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+	void *resolved = NULL;
+
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED))
+		resolved = aux->xdp_netdev->netdev_ops->ndo_xdp_rx_timestamp_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
+		resolved = aux->xdp_netdev->netdev_ops->ndo_xdp_rx_timestamp;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH_SUPPORTED))
+		resolved = aux->xdp_netdev->netdev_ops->ndo_xdp_rx_hash_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
+		resolved = aux->xdp_netdev->netdev_ops->ndo_xdp_rx_hash;
+
+	if (resolved)
+		return BPF_CALL_IMM(resolved);
+	return 0;
+}
+
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
@@ -15179,6 +15198,15 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
 		return -EINVAL;
+	}
+
+	if (resolve_prog_type(env->prog) == BPF_PROG_TYPE_XDP) {
+		int imm = fixup_xdp_kfunc_call(env, insn->imm);
+
+		if (imm) {
+			insn->imm = imm;
+			return 0;
+		}
 	}
 
 	/* insn->imm has the btf func_id. Replace it with
@@ -15359,6 +15387,11 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			if (bpf_prog_is_dev_bound(env->prog->aux)) {
+				verbose(env, "no metadata kfuncs offload\n");
+				return -EINVAL;
+			}
+
 			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
 			if (ret)
 				return ret;

@@ -9248,6 +9248,11 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 			NL_SET_ERR_MSG(extack, "BPF_XDP_CPUMAP programs can not be attached to a device");
 			return -EINVAL;
 		}
+		if (new_prog->aux->xdp_netdev &&
+		    new_prog->aux->xdp_netdev->netdev_ops != dev->netdev_ops) {
+			NL_SET_ERR_MSG(extack, "Cannot attach to a different target device");
+			return -EINVAL;
+		}
 	}
 
 	/* don't call drivers if the effective program didn't change */

@@ -2576,6 +2576,7 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 	} else {
 		bpf_jit_free(aux->prog);
 	}
+	dev_put(aux->xdp_netdev);
 }
 
 void bpf_prog_free(struct bpf_prog *fp)

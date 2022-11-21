@@ -1302,6 +1302,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	struct net_device *xdp_netdev; /* xdp metadata kfuncs */
 };
 
 struct bpf_prog {
