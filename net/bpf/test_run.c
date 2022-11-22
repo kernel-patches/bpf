@@ -597,9 +597,13 @@ noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
 	refcount_dec(&p->cnt);
 }
 
+FUNC_IBT_NOSEAL(bpf_kfunc_call_test_release)
+
 noinline void bpf_kfunc_call_memb_release(struct prog_test_member *p)
 {
 }
+
+FUNC_IBT_NOSEAL(bpf_kfunc_call_memb_release)
 
 noinline void bpf_kfunc_call_memb1_release(struct prog_test_member1 *p)
 {

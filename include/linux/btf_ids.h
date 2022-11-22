@@ -266,4 +266,11 @@ MAX_BTF_TRACING_TYPE,
 
 extern u32 btf_tracing_ids[];
 
+#if defined(CONFIG_X86_KERNEL_IBT) && !defined(__DISABLE_EXPORTS)
+#define FUNC_IBT_NOSEAL(name)					\
+	asm(IBT_NOSEAL(#name));
+#else
+#define FUNC_IBT_NOSEAL(name)
+#endif /* CONFIG_X86_KERNEL_IBT */
+
 #endif
