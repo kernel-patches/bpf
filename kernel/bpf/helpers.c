@@ -1879,6 +1879,25 @@ void bpf_task_release(struct task_struct *p)
 	put_task_struct_rcu_user(p);
 }
 
+/**
+ * bpf_task_from_pid - Find a struct task_struct from its pid by looking it up
+ * in the root pid namespace idr. If a task is returned, it must either be
+ * stored in a map, or released with bpf_task_release().
+ * @pid: The pid of the task being looked up.
+ */
+struct task_struct *bpf_task_from_pid(s32 pid)
+{
+	struct task_struct *p;
+
+	rcu_read_lock();
+	p = find_task_by_pid_ns(pid, &init_pid_ns);
+	if (p)
+		bpf_task_acquire(p);
+	rcu_read_unlock();
+
+	return p;
+}
+
 void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -1904,6 +1923,7 @@ BTF_ID_FLAGS(func, bpf_list_pop_back, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_task_kptr_get, KF_ACQUIRE | KF_KPTR_GET | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_release, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {
