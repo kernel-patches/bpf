@@ -156,6 +156,38 @@ mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
 	return true;
 }
 
+bool mlx5e_xdp_rx_timestamp_supported(const struct xdp_md *ctx)
+{
+	const struct xdp_buff *xdp = (void *)ctx;
+	struct mlx5_xdp_ctx *mctx = xdp->drv_priv;
+
+	return mlx5e_rx_hw_stamp(mctx->rq->tstamp);
+}
+
+u64 mlx5e_xdp_rx_timestamp(const struct xdp_md *ctx)
+{
+	const struct xdp_buff *xdp = (void *)ctx;
+	struct mlx5_xdp_ctx *mctx = xdp->drv_priv;
+
+	return mlx5e_cqe_ts_to_ns(mctx->rq->ptp_cyc2time,
+				  mctx->rq->clock, get_cqe_ts(mctx->cqe));
+}
+
+bool mlx5e_xdp_rx_hash_supported(const struct xdp_md *ctx)
+{
+	const struct xdp_buff *xdp = (void *)ctx;
+
+	return xdp->rxq->dev->features & NETIF_F_RXHASH;
+}
+
+u32 mlx5e_xdp_rx_hash(const struct xdp_md *ctx)
+{
+	const struct xdp_buff *xdp = (void *)ctx;
+	struct mlx5_xdp_ctx *mctx = xdp->drv_priv;
+
+	return be32_to_cpu(mctx->cqe->rss_hash_result);
+}
+
 /* returns true if packet was consumed by xdp */
 bool mlx5e_xdp_handle(struct mlx5e_rq *rq, struct page *page,
 		      struct bpf_prog *prog, struct xdp_buff *xdp)

@@ -18,6 +18,7 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq,
 						    u32 page_idx);
 struct sk_buff *mlx5e_xsk_skb_from_cqe_linear(struct mlx5e_rq *rq,
 					      struct mlx5e_wqe_frag_info *wi,
-					      u32 cqe_bcnt);
+                                              struct mlx5_cqe64 *cqe,
+                                              u32 cqe_bcnt);
 
 #endif /* __MLX5_EN_XSK_RX_H__ */

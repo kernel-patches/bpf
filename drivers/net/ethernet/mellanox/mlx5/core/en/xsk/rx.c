@@ -283,8 +283,10 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq,
 
 struct sk_buff *mlx5e_xsk_skb_from_cqe_linear(struct mlx5e_rq *rq,
 					      struct mlx5e_wqe_frag_info *wi,
+					      struct mlx5_cqe64 *cqe,
 					      u32 cqe_bcnt)
 {
+	struct mlx5_xdp_ctx mlctx = { .cqe = cqe, .rq = rq };
 	struct xdp_buff *xdp = wi->au->xsk;
 	struct bpf_prog *prog;
 
@@ -298,6 +300,7 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_linear(struct mlx5e_rq *rq,
 	xsk_buff_set_size(xdp, cqe_bcnt);
 	xsk_buff_dma_sync_for_cpu(xdp, rq->xsk_pool);
 	net_prefetch(xdp->data);
+	xdp->drv_priv = &mlctx;
 
 	prog = rcu_dereference(rq->xdp_prog);
 	if (likely(prog && mlx5e_xdp_handle(rq, NULL, prog, xdp)))
