@@ -28,6 +28,16 @@
 
 static struct btf_type btf_void;
 
+/* info used to encode/decode an unrecognized kind */
+struct btf_kind_desc {
+	int kind;
+	const char *struct_name;	/* __BTF_KIND_ARRAY */
+	const char *typedef_name;	/* __BTF_KIND_2 */
+	const char *meta_name;		/* __BTF_KIND_META_ARRAY */
+	int nr_meta;
+	int meta_size;
+};
+
 struct btf {
 	/* raw BTF data in native endianness */
 	void *raw_data;
@@ -5009,5 +5019,276 @@ int btf_ext_visit_str_offs(struct btf_ext *btf_ext, str_off_visit_fn visit, void
 		}
 	}
 
+	return 0;
+}
+
+/* Here we use BTF to encode the BTF kinds that are known at the time of
+ * BTF encoding; the use of basic BTF kinds (structs, arrays, base types)
+ * to describe each kind and any associated metadata allows BTF parsing
+ * to handle new kinds that the parser (in libbpf or the kernel) does
+ * not know about.  These kinds will not be used, but since we know
+ * their format they can be skipped over and the rest of the BTF can
+ * be parsed.  This means we can encode BTF without worrying about the
+ * kinds a BTF parser knows about, and means we can avoid using
+ * --skip_new_kind solutions.  This is valuable, as if kernel BTF encodes
+ * everything it can, something as simple as a libbpf package update
+ * then unlocks that encodeded information, whereas if we encode
+ * pessimistically and drop representations of new kinds, this is not
+ * possible.
+ *
+ * So, in short, by carrying a representation of all the kinds encoded,
+ * parsers can parse all of the encoded kinds, even if they cannot use
+ * them all.
+ *
+ * We use BTF itself to carry this representation because this approach
+ * does not require BTF parsing to understand a new BTF header format;
+ * BTF parsing simply sees some additional types it does not do anything
+ * with.  A BTF parser that knows about the encoding of kind information
+ * however can use this information in parsing.
+ *
+ * The process works by explicitly adding btf structs for each kind.
+ * Each struct consists of a struct __btf_type followed by an array of
+ * metadata structs representing the following metadata (for those kinds
+ * that have it).  For kinds where a single metadata structure is used,
+ * the metadata array has one element.  For kinds where the number
+ * of metadata elements varies as per the info.vlen field, a zero-element
+ * array is encoded.
+ *
+ * For a given kind, we add a struct __BTF_KIND_<kind>.  For example,
+ *
+ * struct __BTF_KIND_INT {
+ *	struct __btf_type type;
+ * };
+ *
+ * For a type with one metadata element, the representation looks like
+ * this:
+ *
+ * struct __BTF_KIND_META_ARRAY {
+ *	__u32 type;
+ *	__u32 index_type;
+ *	__u32  nelems;
+ * };
+ *
+ * struct __BTF_KIND_ARRAY {
+ *	struct __btf_type type;
+ *	struct __BTF_KIND_META_ARRAY meta[1];
+ * };
+ *
+ *
+ * For a type with an info.vlen-determined number of following metadata
+ * objects, a zero-length array is used:
+ *
+ * struct __BTF_KIND_STRUCT {
+ *	struct __btf_type type;
+ *	struct __BTF_KIND_META_STRUCT meta[0];
+ * };
+ *
+ * In order to link kind numeric kind values to the appropriate struct,
+ * a typedef is added; for example:
+ *
+ * typedef struct __BTF_KIND_INT __BTF_KIND_1;
+ *
+ * When BTF parsing encounters a kind that is not known, the
+ * typedef __BTF_KIND_<kind number> is looked up, and we find which
+ * struct type id it points to.  So
+ *
+ *	1 -> typedef __BTF_KIND_1 -> struct __BTF_KIND_INT
+ *
+ * This approach is preferred, since it ensures the structs representing
+ * BTF kinds have names which match their associated kind rather than
+ * an opaque number.
+ *
+ * From there, BTF parsing can look up that struct and determine
+ *	- its basic size;
+ *	- if it has metadata; and if so
+ *	- how many array instances are present;
+ *		- if 0, we know it is a vlen-determined number;
+ *		- if > 0, simply use the overall struct size;
+ *
+ * Based upon that information, BTF parsing can proceed for such
+ * unknown kinds, since sufficient information was provided
+ * at encoding time.
+ *
+ * Note that this assumes that the above kind-related data
+ * structures are represented in BTF _prior_ to any kinds that
+ * are new to the parser.  It also assumes the basic kinds
+ * required to represent kinds + metadata; base types, structs,
+ * arrays, etc.
+ */
+
+/* info used to encode a kind metadata field */
+struct btf_meta_field {
+	const char *type;
+	const char *name;
+	int size;
+	int type_id;
+};
+
+#define BTF_MAX_META_FIELDS             10
+
+#define BTF_META_FIELD(__type, __name)					\
+	{ .type = #__type, .name = #__name, .size = sizeof(__type) }
+
+#define BTF_KIND_STR(__kind)	#__kind
+
+struct btf_kind_encoding {
+	struct btf_kind_desc kind;
+	struct btf_meta_field meta[BTF_MAX_META_FIELDS];
+};
+
+#define BTF_KIND(__name, __nr_meta, __meta_size, ...)			\
+	{ .kind = {							\
+	  .kind = BTF_KIND_##__name,					\
+	  .struct_name = BTF_KIND_PFX#__name,				\
+	  .meta_name = BTF_KIND_META_PFX #__name,			\
+	  .nr_meta = __nr_meta,						\
+	  .meta_size = __meta_size,					\
+	}, .meta = { __VA_ARGS__ } }
+
+struct btf_kind_encoding kinds[] = {
+	BTF_KIND(UNKN,		0,	0),
+
+	BTF_KIND(INT,		0,	0),
+
+	BTF_KIND(PTR,		0,	0),
+
+	BTF_KIND(ARRAY,		1,	sizeof(struct btf_array),
+					BTF_META_FIELD(__u32, type),
+					BTF_META_FIELD(__u32, index_type),
+					BTF_META_FIELD(__u32, nelems)),
+
+	BTF_KIND(STRUCT,	0,	sizeof(struct btf_member),
+					BTF_META_FIELD(__u32, name_off),
+					BTF_META_FIELD(__u32, type),
+					BTF_META_FIELD(__u32, offset)),
+
+	BTF_KIND(UNION,		0,	sizeof(struct btf_member),
+					BTF_META_FIELD(__u32, name_off),
+					BTF_META_FIELD(__u32, type),
+					BTF_META_FIELD(__u32, offset)),
+
+	BTF_KIND(ENUM,		0,	sizeof(struct btf_enum),
+					BTF_META_FIELD(__u32, name_off),
+					BTF_META_FIELD(__s32, val)),
+
+	BTF_KIND(FWD,		0,	0),
+
+	BTF_KIND(TYPEDEF,	0,	0),
+
+	BTF_KIND(VOLATILE,	0,	0),
+
+	BTF_KIND(CONST,		0,	0),
+
+	BTF_KIND(RESTRICT,	0,	0),
+
+	BTF_KIND(FUNC,		0,	0),
+
+	BTF_KIND(FUNC_PROTO,	0,	sizeof(struct btf_param),
+					BTF_META_FIELD(__u32, name_off),
+					BTF_META_FIELD(__u32, type)),
+
+	BTF_KIND(VAR,		1,	sizeof(struct btf_var),
+					BTF_META_FIELD(__u32, linkage)),
+
+	BTF_KIND(DATASEC,	0,	sizeof(struct btf_var_secinfo),
+					BTF_META_FIELD(__u32, type),
+					BTF_META_FIELD(__u32, offset),
+					BTF_META_FIELD(__u32, size)),
+
+
+	BTF_KIND(FLOAT,		0,	0),
+
+	BTF_KIND(DECL_TAG,	1,	sizeof(struct btf_decl_tag),
+					BTF_META_FIELD(__s32, component_idx)),
+
+	BTF_KIND(TYPE_TAG,	0,	0),
+
+	BTF_KIND(ENUM64,	0,	sizeof(struct btf_enum64),
+					BTF_META_FIELD(__u32, name_off),
+					BTF_META_FIELD(__u32, val_lo32),
+					BTF_META_FIELD(__u32, val_hi32)),
+};
+
+/* Try to add representations of the kinds supported to BTF provided.  This will allow parsers
+ * to decode kinds they do not support and skip over them.
+ */
+int btf__add_kinds(struct btf *btf)
+{
+	int btf_type_id, __u32_id, __s32_id, struct_type_id;
+	char name[64];
+	int i;
+
+	/* should have base types; if not bootstrap them. */
+	__u32_id = btf__find_by_name(btf, "__u32");
+	if (__u32_id < 0) {
+		__s32 unsigned_int_id = btf__find_by_name(btf, "unsigned int");
+
+		if (unsigned_int_id < 0)
+			unsigned_int_id = btf__add_int(btf, "unsigned int", 4, 0);
+		__u32_id = btf__add_typedef(btf, "__u32", unsigned_int_id);
+	}
+	__s32_id = btf__find_by_name(btf, "__s32");
+	if (__s32_id < 0) {
+		__s32 int_id = btf__find_by_name_kind(btf, "int", BTF_KIND_INT);
+
+		if (int_id < 0)
+			int_id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+		__s32_id = btf__add_typedef(btf, "__s32", int_id);
+	}
+
+	/* add "struct __btf_type" if not already present. */
+	btf_type_id = btf__find_by_name(btf, "__btf_type");
+	if (btf_type_id < 0) {
+		__s32 union_id = btf__add_union(btf, NULL, sizeof(__u32));
+
+		btf__add_field(btf, "size", __u32_id, 0, 0);
+		btf__add_field(btf, "type", __u32_id, 0, 0);
+
+		btf_type_id = btf__add_struct(btf, "__btf_type", sizeof(struct btf_type));
+		btf__add_field(btf, "name_off", __u32_id, 0, 0);
+		btf__add_field(btf, "info", __u32_id, sizeof(__u32) * 8, 0);
+		btf__add_field(btf, NULL, union_id, sizeof(__u32) * 16, 0);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(kinds); i++) {
+		struct btf_kind_encoding *kind = &kinds[i];
+		int meta_id, array_id = 0;
+
+		if (btf__find_by_name(btf, kind->kind.struct_name) > 0)
+			continue;
+
+		if (kind->kind.meta_size != 0) {
+			struct btf_meta_field *field;
+			__u32 bit_offset = 0;
+			int j;
+
+			meta_id = btf__add_struct(btf, kind->kind.meta_name, kind->kind.meta_size);
+
+			for (j = 0; bit_offset < kind->kind.meta_size * 8; j++) {
+				field = &kind->meta[j];
+
+				field->type_id = btf__find_by_name(btf, field->type);
+				if (field->type_id < 0) {
+					pr_debug("cannot find type '%s' for kind '%s' field '%s'\n",
+						 kind->meta[j].type, kind->kind.struct_name,
+						 kind->meta[j].name);
+				} else {
+					btf__add_field(btf, field->name, field->type_id, bit_offset, 0);
+				}
+				bit_offset += field->size * 8;
+			}
+			array_id = btf__add_array(btf, __u32_id, meta_id,
+						  kind->kind.nr_meta);
+
+		}
+		struct_type_id = btf__add_struct(btf, kind->kind.struct_name,
+						 sizeof(struct btf_type) +
+						 (kind->kind.nr_meta * kind->kind.meta_size));
+		btf__add_field(btf, "type", btf_type_id, 0, 0);
+		if (kind->kind.meta_size != 0)
+			btf__add_field(btf, "meta", array_id, sizeof(struct btf_type) * 8, 0);
+		snprintf(name, sizeof(name), BTF_KIND_PFX "%u", i);
+		btf__add_typedef(btf, name, struct_type_id);
+	}
 	return 0;
 }

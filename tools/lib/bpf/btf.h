@@ -219,6 +219,16 @@ LIBBPF_API int btf__add_datasec_var_info(struct btf *btf, int var_type_id,
 LIBBPF_API int btf__add_decl_tag(struct btf *btf, const char *value, int ref_type_id,
 			    int component_idx);
 
+/**
+ * @brief **btf__add_kinds()** adds BTF representations of the kind encoding for
+ * all of the kinds known to libbpf.  This ensures that when BTF is encoded, it
+ * will include enough information for parsers to decode (and skip over) kinds
+ * that the parser does not know about yet.  This ensures that an older BTF
+ * parser can read newer BTF, and avoids the need for the BTF encoder to limit
+ * which kinds it emits to make decoding easier.
+ */
+LIBBPF_API int btf__add_kinds(struct btf *btf);
+
 struct btf_dedup_opts {
 	size_t sz;
 	/* optional .BTF.ext info to dedup along the main BTF info */
