@@ -28,6 +28,8 @@
 
 static struct btf_type btf_void;
 
+#define NR_BTF_KINDS_POSSIBLE	0x20
+
 /* info used to encode/decode an unrecognized kind */
 struct btf_kind_desc {
 	int kind;
@@ -131,6 +133,9 @@ struct btf {
 
 	/* Pointer size (in bytes) for a target architecture of this BTF */
 	int ptr_sz;
+
+	/* representations of unrecognized kinds are stored here */
+	struct btf_kind_desc unrecognized_kinds[NR_BTF_KINDS_POSSIBLE - NR_BTF_KINDS];
 };
 
 static inline __u64 ptr_to_u64(const void *ptr)
@@ -420,6 +425,75 @@ static int btf_bswap_type_rest(struct btf_type *t)
 	}
 }
 
+static int btf_unrecognized_kind_type_size(struct btf *btf, const struct btf_type *t)
+{
+	struct btf_kind_desc *unrec_kind = NULL;
+	__u16 kind = btf_kind(t);
+	int size = 0;
+
+	if (kind >= NR_BTF_KINDS && kind < NR_BTF_KINDS_POSSIBLE)
+		unrec_kind = &btf->unrecognized_kinds[kind - NR_BTF_KINDS];
+	if (!unrec_kind) {
+		pr_debug("No information about unrecognized kind:%u\n", kind);
+		return -EINVAL;
+	}
+
+	if (unrec_kind->kind != kind) {
+		const char *kind_struct_name;
+		const struct btf_type *kt;
+		const struct btf_member *m;
+		const struct btf_array *a;
+		char typedef_name[64];
+		__s32 id;
+
+		/* we need to fill in information on this kind; it will be cached in struct btf
+		 * for subsequent references.
+		 */
+		snprintf(typedef_name, sizeof(typedef_name), BTF_KIND_PFX "%u", kind);
+		id = btf__find_by_name_kind(btf, typedef_name, BTF_KIND_TYPEDEF);
+		if (id < 0)
+			return id;
+		kt = btf__type_by_id(btf, id);
+		kt = btf__type_by_id(btf, kt->type);
+		kind_struct_name = btf__str_by_offset(btf, kt->name_off);
+		/* struct should contain type + optional meta fields; otherwise unsupported */
+		switch (btf_vlen(kt)) {
+		case 1:
+			unrec_kind->nr_meta = 0;
+			unrec_kind->meta_size = 0;
+			break;
+		case 2:
+			m = btf_members(kt);
+			kt = btf__type_by_id(btf, (++m)->type);
+			if (btf_kind(kt) != BTF_KIND_ARRAY) {
+				pr_debug("Unexpected kind %u for member in '%s'\n",
+					 btf_kind(kt), kind_struct_name);
+				return -EINVAL;
+			}
+			a = btf_array(kt);
+			unrec_kind->nr_meta = a->nelems;
+			kt = btf__type_by_id(btf, a->type);
+			unrec_kind->meta_size = kt->size;
+			unrec_kind->meta_name = btf__str_by_offset(btf, kt->name_off);
+			break;
+		default:
+			pr_debug("unexpected nr of fields for '%s'(%u)\n", kind_struct_name,
+				 kind);
+			return -EINVAL;
+		}
+		unrec_kind->kind = kind;
+		unrec_kind->struct_name = kind_struct_name;
+	}
+	size = sizeof(struct btf_type);
+	if (unrec_kind->meta_size > 0) {
+		if (unrec_kind->nr_meta == 0)
+			size += btf_vlen(t) * unrec_kind->meta_size;
+		else
+			size += unrec_kind->nr_meta * unrec_kind->meta_size;
+	}
+	return size;
+}
+
 static int btf_parse_type_sec(struct btf *btf)
 {
 	struct btf_header *hdr = btf->hdr;
@@ -432,6 +506,8 @@ static int btf_parse_type_sec(struct btf *btf)
 			btf_bswap_type_base(next_type);
 
 		type_size = btf_type_size(next_type);
+		if (type_size < 0)
+			type_size = btf_unrecognized_kind_type_size(btf, next_type);
 		if (type_size < 0)
 			return type_size;
 		if (next_type + type_size > end_type) {
