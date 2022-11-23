@@ -222,6 +222,14 @@ struct btf_id_dtor_kfunc_tab {
 	struct btf_id_dtor_kfunc dtors[];
 };
 
+struct btf_kind_desc {
+	u16 kind;
+	u16 nr_meta;
+	u32 meta_size;
+};
+
+#define NR_BTF_KINDS_POSSIBLE	0x20
+
 struct btf {
 	void *data;
 	struct btf_type **types;
@@ -246,6 +254,7 @@ struct btf {
 	u32 start_str_off; /* first string offset (0 for base BTF) */
 	char name[MODULE_NAME_LEN];
 	bool kernel_btf;
+	struct btf_kind_desc unrecognized_kinds[NR_BTF_KINDS_POSSIBLE - NR_BTF_KINDS];
 };
 
 enum verifier_phase {
@@ -4873,7 +4882,7 @@ static s32 btf_check_meta(struct btf_verifier_env *env,
 			  u32 meta_left)
 {
 	u32 saved_meta_left = meta_left;
-	s32 var_meta_size;
+	s32 var_meta_size = 0;
 
 	if (meta_left < sizeof(*t)) {
 		btf_verifier_log(env, "[%u] meta_left:%u meta_needed:%zu",
@@ -4888,11 +4897,79 @@ static s32 btf_check_meta(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	if (BTF_INFO_KIND(t->info) > BTF_KIND_MAX ||
-	    BTF_INFO_KIND(t->info) == BTF_KIND_UNKN) {
+	if (BTF_INFO_KIND(t->info) == BTF_KIND_UNKN ||
+	    BTF_INFO_KIND(t->info) >= NR_BTF_KINDS_POSSIBLE) {
 		btf_verifier_log(env, "[%u] Invalid kind:%u",
 				 env->log_type_id, BTF_INFO_KIND(t->info));
 		return -EINVAL;
+	}
+	if (BTF_INFO_KIND(t->info) <= BTF_KIND_MAX) {
+		var_meta_size = btf_type_ops(t)->check_meta(env, t, meta_left);
+		if (var_meta_size < 0)
+			return var_meta_size;
+	} else {
+		struct btf_kind_desc *unrec_kind;
+		u8 kind = BTF_INFO_KIND(t->info);
+		struct btf *btf = env->btf;
+
+		unrec_kind = &btf->unrecognized_kinds[kind - NR_BTF_KINDS];
+
+		if (unrec_kind->kind != kind) {
+			const struct btf_member *m;
+			const struct btf_type *kt;
+			const struct btf_array *a;
+			char name[64];
+			s32 id;
+
+			/* BTF may encode info about unrecognized kinds; check for this here. */
+			snprintf(name, sizeof(name), BTF_KIND_PFX "%u", kind);
+			id = btf_find_by_name_kind(btf, name, BTF_KIND_TYPEDEF);
+			if (id > 0) {
+				kt = btf_type_by_id(btf, id);
+				if (kt)
+					kt = btf_type_by_id(btf, kt->type);
+			}
+			if (id < 0 || !kt) {
+				btf_verifier_log_type(env, t, "[%u] invalid kind:%u",
+						      env->log_type_id, kind);
+				return -EINVAL;
+			}
+			switch (btf_type_vlen(kt)) {
+			case 1:
+				/* no metadata */
+				unrec_kind->kind = kind;
+				unrec_kind->nr_meta = 0;
+				unrec_kind->meta_size = 0;
+				break;
+			case 2:
+				m = btf_members(kt);
+				kt = btf_type_by_id(btf, (++m)->type);
+				if (btf_kind(kt) != BTF_KIND_ARRAY) {
+					btf_verifier_log_type(env, t, "[%u] invalid metadata:%u",
+							      env->log_type_id, kind);
+					return -EINVAL;
+				}
+				a = btf_array(kt);
+				kt = btf_type_by_id(btf, a->type);
+				if (!kt) {
+					btf_verifier_log_type(env, t, "[%u] invalid metadata:%u",
+							      env->log_type_id, kind);
+					return -EINVAL;
+				}
+				unrec_kind->kind = kind;
+				unrec_kind->nr_meta = a->nelems;
+				unrec_kind->meta_size = kt->size;
+				break;
+			default:
+				btf_verifier_log_type(env, t, "[%u] invalid metadata:%u",
+						      env->log_type_id, kind);
+				return -EINVAL;
+			}
+		}
+		if (!unrec_kind->nr_meta)
+			var_meta_size = btf_type_vlen(t) * unrec_kind->meta_size;
+		else
+			var_meta_size = unrec_kind->nr_meta * unrec_kind->meta_size;
 	}
 
 	if (!btf_name_offset_valid(env->btf, t->name_off)) {
@@ -4900,10 +4977,6 @@ static s32 btf_check_meta(struct btf_verifier_env *env,
 				 env->log_type_id, t->name_off);
 		return -EINVAL;
 	}
-
-	var_meta_size = btf_type_ops(t)->check_meta(env, t, meta_left);
-	if (var_meta_size < 0)
-		return var_meta_size;
 
 	meta_left -= var_meta_size;
 
