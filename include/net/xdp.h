@@ -83,6 +83,7 @@ struct xdp_buff {
 	struct xdp_txq_info *txq;
 	u32 frame_sz; /* frame size to deduce data_hard_end/reserved tailroom*/
 	u32 flags; /* supported values defined in xdp_buff_flags */
+	void *drv_priv;
 };
 
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
