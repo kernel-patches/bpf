@@ -197,4 +197,11 @@ struct btf_enum64 {
 	__u32	val_hi32;
 };
 
+/* Prefixes used for names encoding BTF kind information via structs;
+ * a "struct __BTF_KIND_ARRAY" represents how BTF_KIND_ARRAY is encoded,
+ * while a "struct __BTF_KIND_META_ARRAY" represents the metadata encoding.
+ */
+#define BTF_KIND_PFX		"__BTF_KIND_"
+#define BTF_KIND_META_PFX	"__BTF_KIND_META_"
+
 #endif /* _UAPI__LINUX_BTF_H__ */
