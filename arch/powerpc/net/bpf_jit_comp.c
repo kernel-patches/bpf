@@ -68,7 +68,8 @@ static int bpf_jit_fixup_addresses(struct bpf_prog *fp, u32 *image,
 			 * of the JITed sequence remains unchanged.
 			 */
 			ctx->idx = tmp_idx;
-		} else if (insn[i].code == (BPF_LD | BPF_IMM | BPF_DW)) {
+		} else if (insn[i].code == (BPF_LD | BPF_IMM | BPF_DW) &&
+			   insn[i].src_reg == BPF_PSEUDO_FUNC) {
 			tmp_idx = ctx->idx;
 			ctx->idx = addrs[i] / 4;
 #ifdef CONFIG_PPC32
