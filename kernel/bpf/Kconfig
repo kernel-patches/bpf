@@ -99,4 +99,17 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_PROG_KASAN
+	bool "Enable BPF Program Address Sanitize"
+	depends on BPF_JIT_ALWAYS_ON
+	depends on KASAN
+	help
+	  Enables instrumentation on LDX/STX/ST insn to capture memory
+	  access errors in BPF programs missed by the verifier.
+
+	  The actual check is conducted by KASAN, this feature presents
+	  certain overhead, and should be used mainly by testing purpose.
+
+	  If you are unsure how to answer this question, answer N.
+
 endmenu # "BPF subsystem"

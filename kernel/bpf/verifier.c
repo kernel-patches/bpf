@@ -15327,6 +15327,26 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return 0;
 }
 
+#ifdef CONFIG_BPF_PROG_KASAN
+
+/* Those are functions instrumented with KASAN for actual sanitizing. */
+
+#define BPF_ASAN_STORE(n)                          \
+	notrace u64 bpf_asan_store##n(u##n *addr); \
+	notrace u64 bpf_asan_store##n(u##n *addr)  \
+	{                                          \
+		u##n ret = *addr;                  \
+		*addr = ret;                       \
+		return ret;                        \
+	}
+
+BPF_ASAN_STORE(8);
+BPF_ASAN_STORE(16);
+BPF_ASAN_STORE(32);
+BPF_ASAN_STORE(64);
+
+#endif
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -15344,6 +15364,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_prog *new_prog;
 	struct bpf_map *map_ptr;
 	int i, ret, cnt, delta = 0;
+#ifdef CONFIG_BPF_PROG_KASAN
+	bool in_patch_use_ax = false;
+#endif
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		/* Make divide-by-zero exceptions impossible. */
@@ -15459,6 +15482,92 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
+
+#ifdef CONFIG_BPF_PROG_KASAN
+
+/* With CONFIG_BPF_PROG_KASAN, we extend prog stack to MAX_BPF_STACK + 64
+ * to backup scratch regs before calling the sanitize functions, because
+ * we don't rely on verifier's knowledge about calculated stack size or
+ * liveness of each reg.
+ */
+#define __BACKUP_REG(n)                                         \
+	*patch++ = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_##n, \
+			       -(MAX_BPF_STACK + 8 * n))
+#define BACKUP_SCRATCH_REGS \
+	__BACKUP_REG(1);    \
+	__BACKUP_REG(2);    \
+	__BACKUP_REG(3);    \
+	__BACKUP_REG(4);    \
+	__BACKUP_REG(5)
+
+#define __RESTORE_REG(n)                                        \
+	*patch++ = BPF_LDX_MEM(BPF_DW, BPF_REG_##n, BPF_REG_10, \
+			       -(MAX_BPF_STACK + 8 * n))
+#define RESTORE_SCRATCH_REGS \
+	__RESTORE_REG(1);    \
+	__RESTORE_REG(2);    \
+	__RESTORE_REG(3);    \
+	__RESTORE_REG(4);    \
+	__RESTORE_REG(5)
+
+		/* Patches that use REG_AX confilict with us, skip it.
+		 * This starts with first use of REG_AX, stops only when
+		 * we see next ldx/stx/st insn with valid aux information.
+		 */
+		aux = &env->insn_aux_data[i + delta];
+		if (in_patch_use_ax && (int)aux->ptr_type != 0)
+			in_patch_use_ax = false;
+		if (insn->dst_reg == BPF_REG_AX || insn->src_reg == BPF_REG_AX)
+			in_patch_use_ax = true;
+
+		/* Sanitize ST/STX operation. */
+		if (BPF_CLASS(insn->code) == BPF_ST ||
+		    BPF_CLASS(insn->code) == BPF_STX) {
+			struct bpf_insn sanitize_fn;
+			struct bpf_insn *patch = &insn_buf[0];
+
+			/* Skip st/stx to R10, they're trivial to check. */
+			if (in_patch_use_ax || insn->dst_reg == BPF_REG_10 ||
+			    BPF_MODE(insn->code) == BPF_NOSPEC)
+				continue;
+
+			switch (BPF_SIZE(insn->code)) {
+			case BPF_B:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_store8);
+				break;
+			case BPF_H:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_store16);
+				break;
+			case BPF_W:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_store32);
+				break;
+			case BPF_DW:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_store64);
+				break;
+			}
+
+			BACKUP_SCRATCH_REGS;
+			*patch++ = BPF_MOV64_REG(BPF_REG_AX, BPF_REG_0);
+			if (insn->dst_reg != BPF_REG_1)
+				*patch++ = BPF_MOV64_REG(BPF_REG_1, insn->dst_reg);
+			if (insn->off != 0)
+				*patch++ = BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, insn->off);
+			*patch++ = sanitize_fn;
+			RESTORE_SCRATCH_REGS;
+			*patch++ = BPF_MOV64_REG(BPF_REG_0, BPF_REG_AX);
+			*patch++ = *insn;
+			cnt = patch - insn_buf;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			continue;
+		}
+#endif
 
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			continue;
@@ -15851,6 +15960,10 @@ patch_call_imm:
 			return ret;
 		}
 	}
+
+#ifdef CONFIG_BPF_PROG_KASAN
+	prog->aux->stack_depth = MAX_BPF_STACK + 64;
+#endif
 
 	sort_kfunc_descs_by_imm(env->prog);
 
