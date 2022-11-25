@@ -15345,6 +15345,18 @@ BPF_ASAN_STORE(16);
 BPF_ASAN_STORE(32);
 BPF_ASAN_STORE(64);
 
+#define BPF_ASAN_LOAD(n)                          \
+	notrace u64 bpf_asan_load##n(u##n *addr); \
+	notrace u64 bpf_asan_load##n(u##n *addr)  \
+	{                                         \
+		return *addr;                     \
+	}
+
+BPF_ASAN_LOAD(8);
+BPF_ASAN_LOAD(16);
+BPF_ASAN_LOAD(32);
+BPF_ASAN_LOAD(64);
+
 #endif
 
 /* Do various post-verification rewrites in a single program pass.
@@ -15555,6 +15567,54 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			*patch++ = sanitize_fn;
 			RESTORE_SCRATCH_REGS;
 			*patch++ = BPF_MOV64_REG(BPF_REG_0, BPF_REG_AX);
+			*patch++ = *insn;
+			cnt = patch - insn_buf;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			continue;
+		}
+
+		/* Sanitize LDX operation*/
+		if (BPF_CLASS(insn->code) == BPF_LDX) {
+			struct bpf_insn sanitize_fn;
+			struct bpf_insn *patch = &insn_buf[0];
+
+			if (in_patch_use_ax || insn->src_reg == BPF_REG_10)
+				continue;
+
+			switch (BPF_SIZE(insn->code)) {
+			case BPF_B:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_load8);
+				break;
+			case BPF_H:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_load16);
+				break;
+			case BPF_W:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_load32);
+				break;
+			case BPF_DW:
+				sanitize_fn = BPF_EMIT_CALL(bpf_asan_load64);
+				break;
+			}
+
+			BACKUP_SCRATCH_REGS;
+			/* Skip R0, if it is dst but not src */
+			if (insn->dst_reg != BPF_REG_0 || insn->src_reg == BPF_REG_0)
+				*patch++ = BPF_MOV64_REG(BPF_REG_AX, BPF_REG_0);
+			if (insn->src_reg != BPF_REG_1)
+				*patch++ = BPF_MOV64_REG(BPF_REG_1, insn->src_reg);
+			if (insn->off != 0)
+				*patch++ = BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, insn->off);
+			*patch++ = sanitize_fn;
+			RESTORE_SCRATCH_REGS;
+			if (insn->dst_reg != BPF_REG_0 || insn->src_reg == BPF_REG_0)
+				*patch++ = BPF_MOV64_REG(BPF_REG_0, BPF_REG_AX);
 			*patch++ = *insn;
 			cnt = patch - insn_buf;
 
