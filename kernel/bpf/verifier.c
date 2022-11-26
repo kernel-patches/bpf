@@ -1954,6 +1954,21 @@ find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
 		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
 }
 
+static int kfunc_desc_cmp_by_imm(const void *a, const void *b);
+
+static const struct bpf_kfunc_desc *
+find_kfunc_desc_by_imm(const struct bpf_prog *prog, s32 imm)
+{
+	struct bpf_kfunc_desc desc = {
+		.imm = imm,
+	};
+	struct bpf_kfunc_desc_tab *tab;
+
+	tab = prog->aux->kfunc_tab;
+	return bsearch(&desc, tab->descs, tab->nr_descs,
+		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_imm);
+}
+
 static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 					 s16 offset)
 {
@@ -2369,6 +2384,13 @@ static bool is_reg64(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			 */
 			if (insn->src_reg == BPF_PSEUDO_CALL)
 				return false;
+
+			/* Kfunc call will reach here because of insn_has_def32,
+			 * conservatively return TRUE.
+			 */
+			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
+				return true;
+
 			/* Helper call will reach here because of arg type
 			 * check, conservatively return TRUE.
 			 */
@@ -2432,10 +2454,26 @@ static bool is_reg64(struct bpf_verifier_env *env, struct bpf_insn *insn,
 }
 
 /* Return the regno defined by the insn, or -1. */
-static int insn_def_regno(const struct bpf_insn *insn)
+static int insn_def_regno(struct bpf_verifier_env *env, const struct bpf_insn *insn)
 {
 	switch (BPF_CLASS(insn->code)) {
 	case BPF_JMP:
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			const struct bpf_kfunc_desc *desc;
+
+			/* The value of desc cannot be NULL */
+			desc = find_kfunc_desc_by_imm(env->prog, insn->imm);
+
+			/* A kfunc can return void.
+			 * The btf type of the kfunc's return value needs
+			 * to be checked against "void" first
+			 */
+			if (desc->func_model.ret_size == 0)
+				return -1;
+			else
+				return insn->dst_reg;
+		}
+		fallthrough;
 	case BPF_JMP32:
 	case BPF_ST:
 		return -1;
@@ -2457,7 +2495,7 @@ static int insn_def_regno(const struct bpf_insn *insn)
 /* Return TRUE if INSN has defined any 32-bit value explicitly. */
 static bool insn_has_def32(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
-	int dst_reg = insn_def_regno(insn);
+	int dst_reg = insn_def_regno(env, insn);
 
 	if (dst_reg == -1)
 		return false;
@@ -14727,7 +14765,7 @@ static int opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 		int load_reg;
 
 		insn = insns[adj_idx];
-		load_reg = insn_def_regno(&insn);
+		load_reg = insn_def_regno(env, &insn);
 		if (!aux[adj_idx].zext_dst) {
 			u8 code, class;
 			u32 imm_rnd;
