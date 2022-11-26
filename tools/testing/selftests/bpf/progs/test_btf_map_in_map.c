@@ -118,6 +118,28 @@ struct outer_sockarr_sz1 {
 	.values = { (void *)&sockarr_sz1 },
 };
 
+struct inner_key {
+	__u32 x;
+};
+
+struct inner_value {
+	__u32 y;
+};
+
+struct inner {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 1);
+	__type(key, struct inner_key);
+	__type(value, struct inner_value);
+} inner SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__array(values, struct inner);
+} outer SEC(".maps");
+
 int input = 0;
 
 SEC("raw_tp/sys_enter")

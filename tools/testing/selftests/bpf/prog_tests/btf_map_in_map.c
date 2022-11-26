@@ -154,6 +154,30 @@ static void test_diff_size(void)
 	test_btf_map_in_map__destroy(skel);
 }
 
+static void test_btf_key_value(void)
+{
+	struct test_btf_map_in_map *skel;
+	int err, map_fd1, map_fd2, zero = 0;
+
+	skel = test_btf_map_in_map__open_and_load();
+	if (CHECK(!skel, "skel_open", "failed to open&load skeleton\n"))
+		return;
+
+	map_fd1 = bpf_map__fd(skel->maps.inner);
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.outer), &zero, &map_fd1, 0);
+	CHECK(err, "update map_in_map using map with BTF key/value info",
+	      "cannot use inner map with BTF key/value info\n");
+
+	map_fd2 = bpf_map_create(BPF_MAP_TYPE_LRU_HASH, NULL, 4, 4, 1, NULL);
+	CHECK(map_fd2 < 0, "create map without BTF key/value info", "cannot create map\n");
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.outer), &zero, &map_fd2, 0);
+	CHECK(err, "update map_in_map using map without BTF key/value info",
+	      "cannot use inner map without BTF key/value info\n");
+
+	close(map_fd2);
+	test_btf_map_in_map__destroy(skel);
+}
+
 void test_btf_map_in_map(void)
 {
 	if (test__start_subtest("lookup_update"))
@@ -161,4 +185,7 @@ void test_btf_map_in_map(void)
 
 	if (test__start_subtest("diff_size"))
 		test_diff_size();
+
+	if (test__start_subtest("btf_key_value"))
+		test_btf_key_value();
 }
