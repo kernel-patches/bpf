@@ -80,11 +80,18 @@ void bpf_map_meta_free(struct bpf_map *map_meta)
 bool bpf_map_meta_equal(const struct bpf_map *meta0,
 			const struct bpf_map *meta1)
 {
+	bool timer_off_equal;
+
+	if (!map_value_has_timer(meta0) && !map_value_has_timer(meta1))
+		timer_off_equal = true;
+	else
+		timer_off_equal = meta0->timer_off == meta1->timer_off;
+
 	/* No need to compare ops because it is covered by map_type */
 	return meta0->map_type == meta1->map_type &&
 		meta0->key_size == meta1->key_size &&
 		meta0->value_size == meta1->value_size &&
-		meta0->timer_off == meta1->timer_off &&
+		timer_off_equal &&
 		meta0->map_flags == meta1->map_flags &&
 		bpf_map_equal_kptr_off_tab(meta0, meta1);
 }
