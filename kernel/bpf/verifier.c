@@ -9432,10 +9432,12 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				/* case: R1 = R2
 				 * copy register state to dest reg
 				 */
-				if (src_reg->type == SCALAR_VALUE && !src_reg->id)
+				if (src_reg->type == SCALAR_VALUE && !src_reg->id &&
+				    !tnum_is_const(src_reg->var_off))
 					/* Assign src and dst registers the same ID
 					 * that will be used by find_equal_scalars()
 					 * to propagate min/max range.
+					 * Skip constants to avoid allocation of useless ID.
 					 */
 					src_reg->id = ++env->id_gen;
 				*dst_reg = *src_reg;
@@ -10237,16 +10239,86 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	return true;
 }
 
+/* Scalar ID generation in check_alu_op() and logic of
+ * find_equal_scalars() make the following pattern possible:
+ *
+ * 1: r9 = ... some pointer with range X ...
+ * 2: r6 = ... unbound scalar ID=a ...
+ * 3: r7 = ... unbound scalar ID=b ...
+ * 4: if (r6 > r7) goto +1
+ * 5: r6 = r7
+ * 6: if (r6 > X) goto ...   ; <-- suppose checkpoint state is created here
+ * 7: r9 += r7
+ * 8: *(u64 *)r9 = Y
+ *
+ * Because of the jump at (4) the verifier would arrive at (6) in two states:
+ * I.  r6{.id=b}, r7{.id=b}
+ * II. r6{.id=a}, r7{.id=b}
+ *
+ * Relevant facts:
+ * - regsafe() matches ID mappings for scalars using check_ids(), this makes
+ *   states (I) and (II) non-equal;
+ * - clean_func_state() removes registers not marked as REG_LIVE_READ from
+ *   checkpoint states;
+ * - mark_reg_read() modifies reg->live for reg->parent (and it's parents);
+ * - when r6 = r7 is process the bpf_reg_state is copied in full, meaning
+ *   that parent pointers are copied as well.
+ *
+ * Thus, for execution path 1-6:
+ * - both r6->parent and r7->parent point to the same register in the parent state (r7);
+ * - only *one* register in the checkpoint state would receive REG_LIVE_READ mark;
+ * - clean_func_state() would remove r6 from checkpoint state (mark it NOT_INIT).
+ *
+ * Consequently, when execution path 1-4, 6 reaches (6) in state (II)
+ * regsafe() won't be able to see a mismatch in ID mappings.
+ *
+ * To avoid this issue mark_equal_scalars_as_read() conservatively
+ * marks all registers with matching ID as REG_LIVE_READ, thus
+ * preserving r6 and r7 in the checkpoint state for the example above.
+ */
+static void mark_equal_scalars_as_read(struct bpf_verifier_state *vstate, int id)
+{
+	struct bpf_verifier_state *st;
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+	bool move_up;
+	int i = 0;
+
+	for (st = vstate, move_up = true; st && move_up; st = st->parent) {
+		move_up = false;
+		bpf_for_each_reg_in_vstate(st, state, reg, ({
+			if (reg->type == SCALAR_VALUE && reg->id == id &&
+			    !(reg->live & REG_LIVE_READ)) {
+				reg->live |= REG_LIVE_READ;
+				move_up = true;
+			}
+			++i;
+		}));
+	}
+}
+
 static void find_equal_scalars(struct bpf_verifier_state *vstate,
 			       struct bpf_reg_state *known_reg)
 {
 	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
+	int count = 0;
 
 	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
-		if (reg->type == SCALAR_VALUE && reg->id == known_reg->id)
+		if (reg->type == SCALAR_VALUE && reg->id == known_reg->id) {
 			*reg = *known_reg;
+			++count;
+		}
 	}));
+
+	/* Count equal to 1 means that find_equal_scalars have not
+	 * found any registers with the same ID (except self), thus
+	 * the range knowledge have not been transferred and there is
+	 * no need to preserve registers with the same ID in a parent
+	 * state.
+	 */
+	if (count > 1)
+		mark_equal_scalars_as_read(vstate->parent, known_reg->id);
 }
 
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
@@ -11633,6 +11705,12 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 */
 		return equal && rold->frameno == rcur->frameno;
 
+	/* even if two registers are identical the id mapping might diverge
+	 * e.g. rold{.id=1}, rcur{.id=1}, idmap{1->2}
+	 */
+	if (equal && rold->type == SCALAR_VALUE && rold->id)
+		return check_ids(rold->id, rcur->id, idmap);
+
 	if (equal)
 		return true;
 
@@ -11646,6 +11724,11 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		if (env->explore_alu_limits)
 			return false;
 		if (rcur->type == SCALAR_VALUE) {
+			/* id relations must be preserved, see comment in
+			 * mark_equal_scalars_as_read() for SCALAR_VALUE example.
+			 */
+			if (rold->id && !check_ids(rold->id, rcur->id, idmap))
+				return false;
 			if (!rold->precise)
 				return true;
 			/* new val must satisfy old val knowledge */
