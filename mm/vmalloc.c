@@ -3387,6 +3387,9 @@ static void move_vmap_to_free_text_tree(void *addr)
 	spin_unlock(&free_text_area_lock);
 }
 
+/* This should match the define in test_vmalloc.c */
+#define DEBUG_TEST_VMALLOC_EXEMEM_ALLOC 0
+
 /**
  * execmem_alloc - allocate virtually contiguous RO+X memory
  * @size:    allocation size
@@ -3459,6 +3462,9 @@ err_out:
 	kmem_cache_free(vmap_area_cachep, va);
 	return NULL;
 }
+#if DEBUG_TEST_VMALLOC_EXEMEM_ALLOC
+EXPORT_SYMBOL_GPL(execmem_alloc);
+#endif
 
 void __weak *arch_fill_execmem(void *dst, void *src, size_t len)
 {
@@ -3510,6 +3516,9 @@ err_out:
 	spin_unlock(&vmap_area_lock);
 	return ERR_PTR(-EINVAL);
 }
+#if DEBUG_TEST_VMALLOC_EXEMEM_ALLOC
+EXPORT_SYMBOL_GPL(execmem_fill);
+#endif
 
 static struct vm_struct *find_and_unlink_text_vm(unsigned long start, unsigned long end)
 {
@@ -3633,6 +3642,9 @@ out_save_vm:
 out:
 	spin_unlock(&free_text_area_lock);
 }
+#if DEBUG_TEST_VMALLOC_EXEMEM_ALLOC
+EXPORT_SYMBOL_GPL(execmem_free);
+#endif
 
 /**
  * vmalloc_huge - allocate virtually contiguous memory, allow huge pages
