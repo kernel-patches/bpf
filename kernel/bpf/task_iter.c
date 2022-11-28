@@ -755,7 +755,7 @@ static struct bpf_iter_reg task_vma_reg_info = {
 		{ offsetof(struct bpf_iter__task_vma, task),
 		  PTR_TO_BTF_ID_OR_NULL },
 		{ offsetof(struct bpf_iter__task_vma, vma),
-		  PTR_TO_BTF_ID_OR_NULL },
+		  PTR_TO_BTF_ID_OR_NULL | PTR_TRUSTED },
 	},
 	.seq_info		= &task_vma_seq_info,
 	.fill_link_info		= bpf_iter_fill_link_info,

@@ -7206,7 +7206,7 @@ static int set_find_vma_callback_state(struct bpf_verifier_env *env,
 	 */
 	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_1];
 
-	callee->regs[BPF_REG_2].type = PTR_TO_BTF_ID;
+	callee->regs[BPF_REG_2].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
 	callee->regs[BPF_REG_2].btf =  btf_vmlinux;
 	callee->regs[BPF_REG_2].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_VMA],
