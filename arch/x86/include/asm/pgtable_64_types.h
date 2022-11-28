@@ -101,6 +101,7 @@ extern unsigned int ptrs_per_p4d;
 #define PUD_MASK	(~(PUD_SIZE - 1))
 #define PGDIR_SIZE	(_AC(1, UL) << PGDIR_SHIFT)
 #define PGDIR_MASK	(~(PGDIR_SIZE - 1))
+#define PMD_ALIGN(x)	(((unsigned long)(x) + (PMD_SIZE - 1)) & PMD_MASK)
 
 /*
  * See Documentation/x86/x86_64/mm.rst for a description of the memory map.
