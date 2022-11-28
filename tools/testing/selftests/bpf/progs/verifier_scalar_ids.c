@@ -321,4 +321,188 @@ __naked void precision_two_ids(void)
 	: __clobber_all);
 }
 
+/* Verify that check_ids() is used by regsafe() for scalars.
+ *
+ * r9 = ... some pointer with range X ...
+ * r6 = ... unbound scalar ID=a ...
+ * r7 = ... unbound scalar ID=b ...
+ * if (r6 > r7) goto +1
+ * r6 = r7
+ * if (r6 > X) goto exit
+ * r9 += r7
+ * *(u8 *)r9 = Y
+ *
+ * The memory access is safe only if r7 is bounded,
+ * which is true for one branch and not true for another.
+ */
+SEC("socket")
+__failure __msg("register with unbounded min value")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void check_ids_in_regsafe(void)
+{
+	asm volatile (
+	/* Bump allocated stack */
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	/* r9 = pointer to stack */
+	"r9 = r10;"
+	"r9 += -8;"
+	/* r7 = ktime_get_ns() */
+	"call %[bpf_ktime_get_ns];"
+	"r7 = r0;"
+	/* r6 = ktime_get_ns() */
+	"call %[bpf_ktime_get_ns];"
+	"r6 = r0;"
+	/* if r6 > r7 is an unpredictable jump */
+	"if r6 > r7 goto l1_%=;"
+	"r7 = r6;"
+"l1_%=:"
+	/* if r6 > 4 exit(0) */
+	"if r7 > 4 goto l2_%=;"
+	/* Access memory at r9[r7] */
+	"r9 += r6;"
+	"r0 = *(u8*)(r9 + 0);"
+"l2_%=:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* Similar to check_ids_in_regsafe.
+ * The l0 could be reached in two states:
+ *
+ *   (1) r6{.id=A}, r7{.id=A}, r8{.id=B}
+ *   (2) r6{.id=B}, r7{.id=A}, r8{.id=B}
+ *
+ * Where (2) is not safe, as "r7 > 4" check won't propagate range for it.
+ * This example would be considered safe without changes to
+ * mark_chain_precision() to track scalar values with equal IDs.
+ */
+SEC("socket")
+__failure __msg("register with unbounded min value")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void check_ids_in_regsafe_2(void)
+{
+	asm volatile (
+	/* Bump allocated stack */
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	/* r9 = pointer to stack */
+	"r9 = r10;"
+	"r9 += -8;"
+	/* r8 = ktime_get_ns() */
+	"call %[bpf_ktime_get_ns];"
+	"r8 = r0;"
+	/* r7 = ktime_get_ns() */
+	"call %[bpf_ktime_get_ns];"
+	"r7 = r0;"
+	/* r6 = ktime_get_ns() */
+	"call %[bpf_ktime_get_ns];"
+	"r6 = r0;"
+	/* scratch .id from r0 */
+	"r0 = 0;"
+	/* if r6 > r7 is an unpredictable jump */
+	"if r6 > r7 goto l1_%=;"
+	/* tie r6 and r7 .id */
+	"r6 = r7;"
+"l0_%=:"
+	/* if r7 > 4 exit(0) */
+	"if r7 > 4 goto l2_%=;"
+	/* Access memory at r9[r7] */
+	"r9 += r6;"
+	"r0 = *(u8*)(r9 + 0);"
+"l2_%=:"
+	"r0 = 0;"
+	"exit;"
+"l1_%=:"
+	/* tie r6 and r8 .id */
+	"r6 = r8;"
+	"goto l0_%=;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* Check that scalar IDs *are not* generated on register to register
+ * assignments if source register is a constant.
+ *
+ * If such IDs *are* generated the 'l1' below would be reached in
+ * two states:
+ *
+ *   (1) r1{.id=A}, r2{.id=A}
+ *   (2) r1{.id=C}, r2{.id=C}
+ *
+ * Thus forcing 'if r1 == r2' verification twice.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("11: (1d) if r3 == r4 goto pc+0")
+__msg("frame 0: propagating r3,r4")
+__msg("11: safe")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void no_scalar_id_for_const(void)
+{
+	asm volatile (
+	"call %[bpf_ktime_get_ns];"
+	/* unpredictable jump */
+	"if r0 > 7 goto l0_%=;"
+	/* possibly generate same scalar ids for r3 and r4 */
+	"r1 = 0;"
+	"r1 = r1;"
+	"r3 = r1;"
+	"r4 = r1;"
+	"goto l1_%=;"
+"l0_%=:"
+	/* possibly generate different scalar ids for r3 and r4 */
+	"r1 = 0;"
+	"r2 = 0;"
+	"r3 = r1;"
+	"r4 = r2;"
+"l1_%=:"
+	/* predictable jump, marks r3 and r4 precise */
+	"if r3 == r4 goto +0;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* Same as no_scalar_id_for_const() but for 32-bit values */
+SEC("socket")
+__success __log_level(2)
+__msg("11: (1e) if w3 == w4 goto pc+0")
+__msg("frame 0: propagating r3,r4")
+__msg("11: safe")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void no_scalar_id_for_const32(void)
+{
+	asm volatile (
+	"call %[bpf_ktime_get_ns];"
+	/* unpredictable jump */
+	"if r0 > 7 goto l0_%=;"
+	/* possibly generate same scalar ids for r3 and r4 */
+	"w1 = 0;"
+	"w1 = w1;"
+	"w3 = w1;"
+	"w4 = w1;"
+	"goto l1_%=;"
+"l0_%=:"
+	/* possibly generate different scalar ids for r3 and r4 */
+	"w1 = 0;"
+	"w2 = 0;"
+	"w3 = w1;"
+	"w4 = w2;"
+"l1_%=:"
+	/* predictable jump, marks r1 and r2 precise */
+	"if w3 == w4 goto +0;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
