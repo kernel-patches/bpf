@@ -132,11 +132,15 @@ extern void vm_unmap_aliases(void);
 #ifdef CONFIG_MMU
 extern void __init vmalloc_init(void);
 extern unsigned long vmalloc_nr_pages(void);
+void register_text_tail_vm(unsigned long start, unsigned long end);
 #else
 static inline void vmalloc_init(void)
 {
 }
 static inline unsigned long vmalloc_nr_pages(void) { return 0; }
+void register_text_tail_vm(unsigned long start, unsigned long end)
+{
+}
 #endif
 
 extern void *vmalloc(unsigned long size) __alloc_size(1);

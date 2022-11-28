@@ -77,6 +77,9 @@ static const bool vmap_allow_huge = false;
 #endif
 #define PMD_ALIGN_DOWN(addr) ALIGN_DOWN(addr, PMD_SIZE)
 
+static struct vm_struct text_tail_vm;
+static struct vmap_area text_tail_va;
+
 bool is_vmalloc_addr(const void *x)
 {
 	unsigned long addr = (unsigned long)kasan_reset_tag(x);
@@ -654,6 +657,8 @@ int is_vmalloc_or_module_addr(const void *x)
 #if defined(CONFIG_MODULES) && defined(MODULES_VADDR)
 	unsigned long addr = (unsigned long)kasan_reset_tag(x);
 	if (addr >= MODULES_VADDR && addr < MODULES_END)
+		return 1;
+	if (addr >= text_tail_va.va_start && addr < text_tail_va.va_end)
 		return 1;
 #endif
 	return is_vmalloc_addr(x);
@@ -2437,6 +2442,35 @@ static void vmap_init_free_space(void)
 					&free_vmap_area_list);
 		}
 	}
+}
+
+/*
+ * register_text_tail_vm() allows arch code to register memory regions
+ * for execmem_alloc. Unlike regular memory regions used by execmem_alloc,
+ * this region is never freed by vfree_exec.
+ *
+ * One possible use case is to allocate PMD pages for kernl text up to
+ * PMD_ALIGN(_etext), and use (_etext, PMD_ALIGN(_etext)) for
+ * execmem_alloc.
+ */
+void register_text_tail_vm(unsigned long start, unsigned long end)
+{
+	struct vmap_area *va;
+
+	/* only support one region */
+	if (WARN_ON_ONCE(text_tail_vm.addr))
+		return;
+
+	va = kmem_cache_zalloc(vmap_area_cachep, GFP_NOWAIT);
+	if (WARN_ON_ONCE(!va))
+		return;
+	text_tail_vm.addr = (void *)start;
+	text_tail_vm.size = end - start;
+	text_tail_va.va_start = start;
+	text_tail_va.va_end = end;
+	text_tail_va.vm = &text_tail_vm;
+	memcpy(va, &text_tail_va, sizeof(*va));
+	insert_vmap_area_augment(va, NULL, &free_text_area_root, &free_text_area_list);
 }
 
 void __init vmalloc_init(void)
