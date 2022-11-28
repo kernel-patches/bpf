@@ -33,6 +33,9 @@
 #include "bpf_iter_bpf_link.skel.h"
 #include "bpf_iter_ksym.skel.h"
 #include "bpf_iter_sockmap.skel.h"
+#include "bpf_iter_build_id.skel.h"
+
+#define BUILDID_STR_SIZE (BPF_BUILD_ID_SIZE*2 + 1)
 
 static int duration;
 
@@ -1560,6 +1563,45 @@ static void test_task_vma_offset(void)
 	test_task_vma_offset_common(NULL, false);
 }
 
+static void test_task_vma_build_id(void)
+{
+	struct bpf_iter_build_id *skel;
+	char buf[BUILDID_STR_SIZE] = {};
+	int iter_fd, len;
+	char *build_id;
+
+	skel = bpf_iter_build_id__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_vma_offset__open_and_load"))
+		return;
+
+	skel->bss->pid = getpid();
+	skel->bss->address = (uintptr_t)trigger_func;
+
+	skel->links.vma_build_id = bpf_program__attach_iter(skel->progs.vma_build_id, NULL);
+	if (!ASSERT_OK_PTR(skel->links.vma_build_id, "attach_iter"))
+		goto exit;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(skel->links.vma_build_id));
+	if (!ASSERT_GT(iter_fd, 0, "create_iter"))
+		goto exit;
+
+	while ((len = read(iter_fd, buf, sizeof(buf))) > 0)
+		;
+	buf[BUILDID_STR_SIZE] = 0;
+
+	/* Read build_id via readelf to compare with iterator buf. */
+	if (!ASSERT_OK(read_self_buildid(&build_id), "read_buildid"))
+		goto exit;
+
+	ASSERT_STREQ(buf, build_id, "build_id_match");
+	ASSERT_GT(skel->data->size, 0, "size");
+
+	free(build_id);
+	close(iter_fd);
+exit:
+	bpf_iter_build_id__destroy(skel);
+}
+
 void test_bpf_iter(void)
 {
 	ASSERT_OK(pthread_mutex_init(&do_nothing_mutex, NULL), "pthread_mutex_init");
@@ -1640,4 +1682,6 @@ void test_bpf_iter(void)
 		test_bpf_sockmap_map_iter_fd();
 	if (test__start_subtest("vma_offset"))
 		test_task_vma_offset();
+	if (test__start_subtest("vma_build_id"))
+		test_task_vma_build_id();
 }
