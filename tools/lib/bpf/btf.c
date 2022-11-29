@@ -990,6 +990,7 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 	err = 0;
 
 	if (!btf_data) {
+		pr_warn("can not find '%s' section\n", BTF_ELF_SEC);
 		err = -ENOENT;
 		goto done;
 	}
