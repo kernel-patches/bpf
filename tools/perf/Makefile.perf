@@ -1149,3 +1149,5 @@ FORCE:
 .PHONY: libtraceevent_plugins archheaders
 
 endif # force_fixdep
+
+.DELETE_ON_ERROR:
