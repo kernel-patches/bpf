@@ -766,6 +766,8 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 			   u32 size, u32 headroom, u32 tailroom)
 {
 	void __user *data_in = u64_to_user_ptr(kattr->test.data_in);
+	unsigned int true_size;
+	void *true_data;
 	void *data;
 
 	if (size < ETH_HLEN || size > PAGE_SIZE - headroom - tailroom)
@@ -778,6 +780,14 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	data = kzalloc(size + headroom + tailroom, GFP_USER);
 	if (!data)
 		return ERR_PTR(-ENOMEM);
+
+	true_size = ksize(data);
+	if (size + headroom + tailroom < true_size) {
+		true_data = krealloc(data, true_size, GFP_USER | __GFP_ZERO);
+			if (!true_data)
+				return ERR_PTR(-ENOMEM);
+		data = true_data;
+	}
 
 	if (copy_from_user(data + headroom, data_in, user_size)) {
 		kfree(data);
