@@ -1324,6 +1324,10 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	/* Underlying netdev for XDP metadata kfuncs resolution.
+	 * Note that the refcnt is held only during load/verification phase.
+	 */
+	struct net_device *xdp_netdev;
 };
 
 struct bpf_prog {

@@ -15281,6 +15281,26 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 	return err;
 }
 
+static void *resolve_xdp_kfunc_call(struct bpf_verifier_env *env, u32 func_id)
+{
+	const struct net_device_ops *netdev_ops;
+	struct bpf_prog_aux *aux = env->prog->aux;
+
+	netdev_ops = aux->xdp_netdev->netdev_ops;
+
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED))
+		return netdev_ops->ndo_xdp_rx_timestamp_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
+		return netdev_ops->ndo_xdp_rx_timestamp;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH_SUPPORTED))
+		return netdev_ops->ndo_xdp_rx_hash_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
+		return netdev_ops->ndo_xdp_rx_hash;
+
+	/* fallback to default kfunc when not supported by netdev */
+	return NULL;
+}
+
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
@@ -15289,6 +15309,17 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
 		return -EINVAL;
+	}
+
+	*cnt = 0;
+
+	if (resolve_prog_type(env->prog) == BPF_PROG_TYPE_XDP) {
+		void *p = resolve_xdp_kfunc_call(env, insn->imm);
+
+		if (p) {
+			insn->imm = BPF_CALL_IMM(p);
+			return 0;
+		}
 	}
 
 	/* insn->imm has the btf func_id. Replace it with
@@ -15301,7 +15332,6 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
-	*cnt = 0;
 	insn->imm = desc->imm;
 	if (insn->off)
 		return 0;
@@ -15469,6 +15499,11 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			if (bpf_prog_is_dev_bound(env->prog->aux)) {
+				verbose(env, "no metadata kfuncs offload\n");
+				return -EINVAL;
+			}
+
 			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
 			if (ret)
 				return ret;

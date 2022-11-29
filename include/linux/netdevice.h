@@ -74,6 +74,7 @@ struct udp_tunnel_nic_info;
 struct udp_tunnel_nic;
 struct bpf_prog;
 struct xdp_buff;
+struct xdp_md;
 
 void synchronize_net(void);
 void netdev_set_default_ethtool_ops(struct net_device *dev,
@@ -1611,6 +1612,10 @@ struct net_device_ops {
 	ktime_t			(*ndo_get_tstamp)(struct net_device *dev,
 						  const struct skb_shared_hwtstamps *hwtstamps,
 						  bool cycles);
+	bool			(*ndo_xdp_rx_timestamp_supported)(const struct xdp_md *ctx);
+	u64			(*ndo_xdp_rx_timestamp)(const struct xdp_md *ctx);
+	bool			(*ndo_xdp_rx_hash_supported)(const struct xdp_md *ctx);
+	u32			(*ndo_xdp_rx_hash)(const struct xdp_md *ctx);
 };
 
 /**
