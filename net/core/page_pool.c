@@ -516,14 +516,15 @@ static void page_pool_return_netmem(struct page_pool *pool, struct netmem *nmem)
 	 */
 }
 
-static bool page_pool_recycle_in_ring(struct page_pool *pool, struct page *page)
+static bool page_pool_recycle_in_ring(struct page_pool *pool,
+					struct netmem *nmem)
 {
 	int ret;
 	/* BH protection not needed if current is serving softirq */
 	if (in_serving_softirq())
-		ret = ptr_ring_produce(&pool->ring, page);
+		ret = ptr_ring_produce(&pool->ring, nmem);
 	else
-		ret = ptr_ring_produce_bh(&pool->ring, page);
+		ret = ptr_ring_produce_bh(&pool->ring, nmem);
 
 	if (!ret) {
 		recycle_stat_inc(pool, ring);
@@ -615,17 +616,17 @@ __page_pool_put_page(struct page_pool *pool, struct page *page,
 						dma_sync_size, allow_direct));
 }
 
-void page_pool_put_defragged_page(struct page_pool *pool, struct page *page,
+void page_pool_put_defragged_netmem(struct page_pool *pool, struct netmem *nmem,
 				  unsigned int dma_sync_size, bool allow_direct)
 {
-	page = __page_pool_put_page(pool, page, dma_sync_size, allow_direct);
-	if (page && !page_pool_recycle_in_ring(pool, page)) {
+	nmem = __page_pool_put_netmem(pool, nmem, dma_sync_size, allow_direct);
+	if (nmem && !page_pool_recycle_in_ring(pool, nmem)) {
 		/* Cache full, fallback to free pages */
 		recycle_stat_inc(pool, ring_full);
-		page_pool_return_page(pool, page);
+		page_pool_return_netmem(pool, nmem);
 	}
 }
-EXPORT_SYMBOL(page_pool_put_defragged_page);
+EXPORT_SYMBOL(page_pool_put_defragged_netmem);
 
 /* Caller must not use data area after call, as this function overwrites it */
 void page_pool_put_page_bulk(struct page_pool *pool, void **data,
@@ -634,16 +635,16 @@ void page_pool_put_page_bulk(struct page_pool *pool, void **data,
 	int i, bulk_len = 0;
 
 	for (i = 0; i < count; i++) {
-		struct page *page = virt_to_head_page(data[i]);
+		struct netmem *nmem = virt_to_netmem(data[i]);
 
 		/* It is not the last user for the page frag case */
-		if (!page_pool_is_last_frag(pool, page))
+		if (!page_pool_is_last_frag(pool, nmem))
 			continue;
 
-		page = __page_pool_put_page(pool, page, -1, false);
+		nmem = __page_pool_put_netmem(pool, nmem, -1, false);
 		/* Approved for bulk recycling in ptr_ring cache */
-		if (page)
-			data[bulk_len++] = page;
+		if (nmem)
+			data[bulk_len++] = nmem;
 	}
 
 	if (unlikely(!bulk_len))
@@ -669,7 +670,7 @@ void page_pool_put_page_bulk(struct page_pool *pool, void **data,
 	 * since put_page() with refcnt == 1 can be an expensive operation
 	 */
 	for (; i < bulk_len; i++)
-		page_pool_return_page(pool, data[i]);
+		page_pool_return_netmem(pool, data[i]);
 }
 EXPORT_SYMBOL(page_pool_put_page_bulk);
 
