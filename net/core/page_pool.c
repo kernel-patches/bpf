@@ -538,7 +538,7 @@ static bool page_pool_recycle_in_ring(struct page_pool *pool,
  *
  * Caller must provide appropriate safe context.
  */
-static bool page_pool_recycle_in_cache(struct page *page,
+static bool page_pool_recycle_in_cache(struct netmem *nmem,
 				       struct page_pool *pool)
 {
 	if (unlikely(pool->alloc.count == PP_ALLOC_CACHE_SIZE)) {
@@ -547,7 +547,7 @@ static bool page_pool_recycle_in_cache(struct page *page,
 	}
 
 	/* Caller MUST have verified/know (page_ref_count(page) == 1) */
-	pool->alloc.cache[pool->alloc.count++] = page_netmem(page);
+	pool->alloc.cache[pool->alloc.count++] = nmem;
 	recycle_stat_inc(pool, cached);
 	return true;
 }
@@ -580,7 +580,7 @@ __page_pool_put_netmem(struct page_pool *pool, struct netmem *nmem,
 						      dma_sync_size);
 
 		if (allow_direct && in_serving_softirq() &&
-		    page_pool_recycle_in_cache(netmem_page(nmem), pool))
+		    page_pool_recycle_in_cache(nmem, pool))
 			return NULL;
 
 		/* Page found as candidate for recycling */
