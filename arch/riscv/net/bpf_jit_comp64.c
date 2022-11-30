@@ -136,6 +136,30 @@ static bool in_auipc_jalr_range(s64 val)
 		val < ((1L << 31) - (1L << 11));
 }
 
+/* Emit fixed-length instructions for 32-bit imm */
+static void emit_fixed_imm32(u8 rd, s32 val, struct rv_jit_context *ctx)
+{
+	s32 upper = (val + (1U << 11)) >> 12;
+	s32 lower = ((val & 0xfff) << 20) >> 20;
+
+	emit(rv_lui(rd, upper), ctx);
+	emit(rv_addi(rd, rd, lower), ctx);
+}
+
+/* Emit fixed-length instructions for 64-bit imm */
+static void emit_fixed_imm64(u8 rd, s64 val, struct rv_jit_context *ctx)
+{
+	/* Compensation for sign-extension of rv_addi */
+	s32 imm_hi = (val + (1U << 31)) >> 32;
+	s32 imm_lo = val;
+
+	emit_fixed_imm32(rd, imm_hi, ctx);
+	emit_fixed_imm32(RV_REG_T1, imm_lo, ctx);
+	emit(rv_slli(rd, rd, 32), ctx);
+	emit(rv_add(rd, rd, RV_REG_T1), ctx);
+}
+
+/* Emit variable-length instructions for 32-bit and 64-bit imm */
 static void emit_imm(u8 rd, s64 val, struct rv_jit_context *ctx)
 {
 	/* Note that the immediate from the add is sign-extended,
@@ -1050,7 +1074,12 @@ out_be:
 		u64 imm64;
 
 		imm64 = (u64)insn1.imm << 32 | (u32)imm;
-		emit_imm(rd, imm64, ctx);
+		if (bpf_pseudo_func(insn))
+			/* fixed-length insns for extra jit pass */
+			emit_fixed_imm64(rd, imm64, ctx);
+		else
+			emit_imm(rd, imm64, ctx);
+
 		return 1;
 	}
 
