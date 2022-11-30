@@ -1,0 +1,2 @@
+kprobe_multi_bench_attach                # bpf_program__attach_kprobe_multi_opts unexpected error: -95
+kprobe_multi_test                        # relies on fentry

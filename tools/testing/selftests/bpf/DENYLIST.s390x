@@ -26,6 +26,7 @@ ksyms_module_lskel                       # test_ksyms_module_lskel__open_and_loa
 modify_return                            # modify_return attach failed: -524                                           (trampoline)
 module_attach                            # skel_attach skeleton attach failed: -524                                    (trampoline)
 mptcp
+kprobe_multi_bench_attach                # bpf_program__attach_kprobe_multi_opts unexpected error: -95
 kprobe_multi_test                        # relies on fentry
 netcnt                                   # failed to load BPF skeleton 'netcnt_prog': -7                               (?)
 probe_user                               # check_kprobe_res wrong kprobe res from probe read                           (?)
