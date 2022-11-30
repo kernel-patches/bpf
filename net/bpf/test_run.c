@@ -601,6 +601,11 @@ noinline void bpf_kfunc_call_memb_release(struct prog_test_member *p)
 {
 }
 
+#ifdef CONFIG_X86_KERNEL_IBT
+IBT_NOSEAL(bpf_kfunc_call_test_release);
+IBT_NOSEAL(bpf_kfunc_call_memb_release);
+#endif
+
 noinline void bpf_kfunc_call_memb1_release(struct prog_test_member1 *p)
 {
 	WARN_ON_ONCE(1);

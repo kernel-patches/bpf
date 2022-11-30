@@ -36,10 +36,13 @@
  * the function as needing to be "sealed" (i.e. ENDBR converted to NOP by
  * apply_ibt_endbr()).
  */
-#define IBT_NOSEAL(fname)				\
+#define ASM_IBT_NOSEAL(fname)				\
 	".pushsection .discard.ibt_endbr_noseal\n\t"	\
 	_ASM_PTR fname "\n\t"				\
 	".popsection\n\t"
+
+#define IBT_NOSEAL(name)				\
+	asm(ASM_IBT_NOSEAL(#name))
 
 static inline __attribute_const__ u32 gen_endbr(void)
 {
@@ -94,6 +97,7 @@ extern __noendbr void ibt_restore(u64 save);
 #ifndef __ASSEMBLY__
 
 #define ASM_ENDBR
+#define ASM_IBT_NOSEAL(name)
 #define IBT_NOSEAL(name)
 
 #define __noendbr

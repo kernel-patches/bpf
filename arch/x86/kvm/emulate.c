@@ -327,7 +327,7 @@ static int fastop(struct x86_emulate_ctxt *ctxt, fastop_t fop);
 	".type " name ", @function \n\t" \
 	name ":\n\t" \
 	ASM_ENDBR \
-	IBT_NOSEAL(name)
+	ASM_IBT_NOSEAL(name)
 
 #define FOP_FUNC(name) \
 	__FOP_FUNC(#name)
