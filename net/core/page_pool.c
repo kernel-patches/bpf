@@ -334,7 +334,7 @@ static void page_pool_set_pp_info(struct page_pool *pool,
 	nmem->pp = pool;
 	nmem->pp_magic |= PP_SIGNATURE;
 	if (pool->p.init_callback)
-		pool->p.init_callback(netmem_page(nmem), pool->p.init_arg);
+		pool->p.init_callback(nmem, pool->p.init_arg);
 }
 
 static void page_pool_clear_pp_info(struct netmem *nmem)
