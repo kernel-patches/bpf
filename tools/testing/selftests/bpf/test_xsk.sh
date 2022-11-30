@@ -106,7 +106,11 @@ MTU=1500
 trap ctrl_c INT
 
 function ctrl_c() {
-        cleanup_exit ${VETH0} ${VETH1} ${NS1}
+	if [ ! -z $ETH ]; then
+		cleanup_exit ${VETH0} ${VETH1} ${NS1}
+	else
+		cleanup_eth
+	fi
 	exit 1
 }
 
@@ -138,9 +142,28 @@ setup_vethPairs() {
 	ip link set ${VETH0} up
 }
 
+setup_eth() {
+       sudo ethtool -L ${ETH} combined 1
+       sudo ethtool -K ${ETH} loopback on
+       sudo ip link set ${ETH} promisc on
+       sudo ip link set ${ETH} mtu ${MTU}
+       sudo ip link set ${ETH} up
+       IPV6_DISABLE_CMD="sudo sysctl -n net.ipv6.conf.${ETH}.disable_ipv6"
+       IPV6_DISABLE=`$IPV6_DISABLE_CMD 2> /dev/null`
+       [[ $IPV6_DISABLE == "0" ]] && $IPV6_DISABLE_CMD=1
+       sleep 1
+}
+
+cleanup_eth() {
+       [[ $IPV6_DISABLE == "0" ]] && $IPV6_DISABLE_CMD=0
+       sudo ethtool -K ${ETH} loopback off
+       sudo ip link set ${ETH} promisc off
+}
+
 if [ ! -z $ETH ]; then
 	VETH0=${ETH}
 	VETH1=${ETH}
+	setup_eth
 	NS1=""
 else
 	validate_root_exec
@@ -191,6 +214,8 @@ exec_xskxceiver
 
 if [ -z $ETH ]; then
 	cleanup_exit ${VETH0} ${VETH1} ${NS1}
+else
+	cleanup_eth
 fi
 
 failures=0
