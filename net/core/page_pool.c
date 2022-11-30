@@ -672,17 +672,17 @@ static struct page *page_pool_drain_frag(struct page_pool *pool,
 	long drain_count = BIAS_MAX - pool->frag_users;
 
 	/* Some user is still using the page frag */
-	if (likely(page_pool_defrag_page(page, drain_count)))
+	if (likely(page_pool_defrag_netmem(nmem, drain_count)))
 		return NULL;
 
-	if (page_ref_count(page) == 1 && !page_is_pfmemalloc(page)) {
+	if (netmem_ref_count(nmem) == 1 && !netmem_is_pfmemalloc(nmem)) {
 		if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
 			page_pool_dma_sync_for_device(pool, nmem, -1);
 
 		return page;
 	}
 
-	page_pool_return_page(pool, page);
+	page_pool_return_netmem(pool, nmem);
 	return NULL;
 }
 
