@@ -112,6 +112,11 @@ static inline struct netmem *virt_to_netmem(const void *x)
 	return page_netmem(virt_to_head_page(x));
 }
 
+static inline void *netmem_to_virt(const struct netmem *nmem)
+{
+	return page_to_virt(netmem_page(nmem));
+}
+
 static inline int netmem_ref_count(const struct netmem *nmem)
 {
 	return page_ref_count(netmem_page(nmem));
