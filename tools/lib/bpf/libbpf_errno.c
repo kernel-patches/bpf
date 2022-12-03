@@ -54,10 +54,16 @@ int libbpf_strerror(int err, char *buf, size_t size)
 
 	if (err < __LIBBPF_ERRNO__END) {
 		const char *msg;
+		size_t msg_size;
 
 		msg = libbpf_strerror_table[ERRNO_OFFSET(err)];
 		snprintf(buf, size, "%s", msg);
 		buf[size - 1] = '\0';
+
+		msg_size = strlen(msg);
+		if (msg_size >= size)
+			return libbpf_err(-ERANGE);
+
 		return 0;
 	}
 
