@@ -2146,6 +2146,8 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 		goto unlock;
 
 	/* set the new array to event->tp_event and set event->prog */
+	if (prog->kprobe_override)
+		add_taint(TAINT_FAULT_INJECTED, LOCKDEP_NOW_UNRELIABLE);
 	event->prog = prog;
 	event->bpf_cookie = bpf_cookie;
 	rcu_assign_pointer(event->tp_event->prog_array, new_array);

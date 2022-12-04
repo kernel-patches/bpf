@@ -9,6 +9,7 @@
 #include <linux/kprobes.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/panic.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -298,6 +299,7 @@ static ssize_t fei_write(struct file *file, const char __user *buffer,
 		fei_attr_free(attr);
 		goto out;
 	}
+	add_taint(TAINT_FAULT_INJECTED, LOCKDEP_NOW_UNRELIABLE);
 	fei_debugfs_add_attr(attr);
 	list_add_tail(&attr->list, &fei_attr_list);
 	ret = count;
