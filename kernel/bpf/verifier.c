@@ -16483,7 +16483,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			else
 				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
 		} else {
-			addr = kallsyms_lookup_name(tname);
+			if (btf_is_module(btf))
+				addr = kallsyms_lookup_name_in_module(btf_module_name(btf), tname);
+			else
+				addr = kallsyms_lookup_name(tname);
 			if (!addr) {
 				bpf_log(log,
 					"The address of function %s cannot be found\n",

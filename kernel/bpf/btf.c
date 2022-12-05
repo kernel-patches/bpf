@@ -7208,6 +7208,11 @@ bool btf_is_module(const struct btf *btf)
 	return btf->kernel_btf && strcmp(btf->name, "vmlinux") != 0;
 }
 
+const char *btf_module_name(const struct btf *btf)
+{
+	return btf->name;
+}
+
 enum {
 	BTF_MODULE_F_LIVE = (1 << 0),
 };
