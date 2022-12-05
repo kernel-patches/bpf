@@ -605,6 +605,7 @@ struct module *find_module(const char *name);
 int module_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 			char *name, char *module_name, int *exported);
 
+unsigned long kallsyms_lookup_name_in_module(const char *module_name, const char *name);
 /* Look for this name: can be of form module:name. */
 unsigned long module_kallsyms_lookup_name(const char *name);
 
@@ -781,6 +782,12 @@ static inline int module_get_kallsym(unsigned int symnum, unsigned long *value,
 					char *module_name, int *exported)
 {
 	return -ERANGE;
+}
+
+static inline unsigned long kallsyms_lookup_name_in_module(const char *module_name,
+							   const char *name)
+{
+	return 0;
 }
 
 static inline unsigned long module_kallsyms_lookup_name(const char *name)

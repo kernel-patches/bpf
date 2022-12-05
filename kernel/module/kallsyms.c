@@ -482,6 +482,22 @@ static unsigned long __module_kallsyms_lookup_name(const char *name)
 	return 0;
 }
 
+unsigned long kallsyms_lookup_name_in_module(const char *module_name, const char *name)
+{
+	unsigned long ret;
+	struct module *mod;
+
+	preempt_disable();
+	mod = find_module_all(module_name, strlen(module_name), false);
+	if (mod)
+		ret = find_kallsyms_symbol_value(mod, name);
+	else
+		ret = 0;
+	preempt_enable();
+	return ret;
+
+}
+
 /* Look for this name: can be of form module:name. */
 unsigned long module_kallsyms_lookup_name(const char *name)
 {
