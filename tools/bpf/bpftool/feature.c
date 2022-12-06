@@ -487,14 +487,14 @@ static void probe_kernel_image_config(const char *define_prefix)
 	}
 
 end_parse:
-	if (file)
+	if (file) {
 		gzclose(file);
-
-	for (i = 0; i < ARRAY_SIZE(options); i++) {
-		if (define_prefix && !options[i].macro_dump)
-			continue;
-		print_kernel_option(options[i].name, values[i], define_prefix);
-		free(values[i]);
+		for (i = 0; i < ARRAY_SIZE(options); i++) {
+			if (define_prefix && !options[i].macro_dump)
+				continue;
+			print_kernel_option(options[i].name, values[i], define_prefix);
+			free(values[i]);
+		}
 	}
 }
 
