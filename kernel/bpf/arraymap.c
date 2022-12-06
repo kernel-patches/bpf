@@ -881,12 +881,21 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 	if (IS_ERR(prog))
 		return prog;
 
-	if (!bpf_prog_map_compatible(map, prog)) {
-		bpf_prog_put(prog);
-		return ERR_PTR(-EINVAL);
-	}
+	/* When tail-calling from a non-dev-bound program to a dev-bound one,
+	 * XDP metadata helpers should be disabled. Until it's implemented,
+	 * prohibit adding dev-bound programs to tail-call maps.
+	 */
+	if (bpf_prog_is_dev_bound(prog->aux))
+		goto err;
+
+	if (!bpf_prog_map_compatible(map, prog))
+		goto err;
 
 	return prog;
+
+err:
+	bpf_prog_put(prog);
+	return ERR_PTR(-EINVAL);
 }
 
 static void prog_fd_array_put_ptr(void *ptr)

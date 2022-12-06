@@ -15346,6 +15346,24 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EINVAL;
 	}
 
+	*cnt = 0;
+
+	if (resolve_prog_type(env->prog) == BPF_PROG_TYPE_XDP) {
+		if (bpf_prog_is_offloaded(env->prog->aux)) {
+			verbose(env, "no metadata kfuncs offload\n");
+			return -EINVAL;
+		}
+
+		if (bpf_prog_is_dev_bound(env->prog->aux)) {
+			void *p = bpf_offload_resolve_kfunc(env->prog, insn->imm);
+
+			if (p) {
+				insn->imm = BPF_CALL_IMM(p);
+				return 0;
+			}
+		}
+	}
+
 	/* insn->imm has the btf func_id. Replace it with
 	 * an address (relative to __bpf_base_call).
 	 */
@@ -15356,7 +15374,6 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
-	*cnt = 0;
 	insn->imm = desc->imm;
 	if (insn->off)
 		return 0;
@@ -16362,6 +16379,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	}
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
+
+		if (bpf_prog_is_dev_bound(tgt_prog->aux)) {
+			bpf_log(log, "Replacing device-bound programs not supported\n");
+			return -EINVAL;
+		}
 
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {

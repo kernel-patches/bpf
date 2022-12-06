@@ -41,7 +41,7 @@ struct bpf_offload_dev {
 struct bpf_offload_netdev {
 	struct rhash_head l;
 	struct net_device *netdev;
-	struct bpf_offload_dev *offdev;
+	struct bpf_offload_dev *offdev; /* NULL when bound-only */
 	struct list_head progs;
 	struct list_head maps;
 	struct list_head offdev_netdevs;
@@ -57,6 +57,12 @@ static const struct rhashtable_params offdevs_params = {
 
 static struct rhashtable offdevs;
 static bool offdevs_inited;
+
+static int __bpf_offload_init(void);
+static int __bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
+					     struct net_device *netdev);
+static void __bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
+						struct net_device *netdev);
 
 static int bpf_dev_offload_check(struct net_device *netdev)
 {
@@ -87,12 +93,16 @@ int bpf_prog_offload_init(struct bpf_prog *prog, union bpf_attr *attr)
 	    attr->prog_type != BPF_PROG_TYPE_XDP)
 		return -EINVAL;
 
-	if (attr->prog_flags)
+	if (attr->prog_flags & ~BPF_F_XDP_HAS_METADATA)
 		return -EINVAL;
 
 	offload = kzalloc(sizeof(*offload), GFP_USER);
 	if (!offload)
 		return -ENOMEM;
+
+	err = __bpf_offload_init();
+	if (err)
+		return err;
 
 	offload->prog = prog;
 
@@ -102,11 +112,25 @@ int bpf_prog_offload_init(struct bpf_prog *prog, union bpf_attr *attr)
 	if (err)
 		goto err_maybe_put;
 
+	prog->aux->offload_requested = !(attr->prog_flags & BPF_F_XDP_HAS_METADATA);
+
 	down_write(&bpf_devs_lock);
 	ondev = bpf_offload_find_netdev(offload->netdev);
 	if (!ondev) {
-		err = -EINVAL;
-		goto err_unlock;
+		if (!prog->aux->offload_requested) {
+			/* When only binding to the device, explicitly
+			 * create an entry in the hashtable. See related
+			 * maybe_remove_bound_netdev.
+			 */
+			err = __bpf_offload_dev_netdev_register(NULL, offload->netdev);
+			if (err)
+				goto err_unlock;
+			ondev = bpf_offload_find_netdev(offload->netdev);
+		}
+		if (!ondev) {
+			err = -EINVAL;
+			goto err_unlock;
+		}
 	}
 	offload->offdev = ondev->offdev;
 	prog->aux->offload = offload;
@@ -209,6 +233,19 @@ bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	up_read(&bpf_devs_lock);
 }
 
+static void maybe_remove_bound_netdev(struct net_device *dev)
+{
+	struct bpf_offload_netdev *ondev;
+
+	rtnl_lock();
+	down_write(&bpf_devs_lock);
+	ondev = bpf_offload_find_netdev(dev);
+	if (ondev && !ondev->offdev && list_empty(&ondev->progs))
+		__bpf_offload_dev_netdev_unregister(NULL, dev);
+	up_write(&bpf_devs_lock);
+	rtnl_unlock();
+}
+
 static void __bpf_prog_offload_destroy(struct bpf_prog *prog)
 {
 	struct bpf_prog_offload *offload = prog->aux->offload;
@@ -226,10 +263,17 @@ static void __bpf_prog_offload_destroy(struct bpf_prog *prog)
 
 void bpf_prog_offload_destroy(struct bpf_prog *prog)
 {
+	struct net_device *netdev = NULL;
+
 	down_write(&bpf_devs_lock);
-	if (prog->aux->offload)
+	if (prog->aux->offload) {
+		netdev = prog->aux->offload->netdev;
 		__bpf_prog_offload_destroy(prog);
+	}
 	up_write(&bpf_devs_lock);
+
+	if (netdev)
+		maybe_remove_bound_netdev(netdev);
 }
 
 static int bpf_prog_offload_translate(struct bpf_prog *prog)
@@ -549,7 +593,7 @@ static bool __bpf_offload_dev_match(struct bpf_prog *prog,
 	struct bpf_offload_netdev *ondev1, *ondev2;
 	struct bpf_prog_offload *offload;
 
-	if (!bpf_prog_is_offloaded(prog->aux))
+	if (!bpf_prog_is_dev_bound(prog->aux))
 		return false;
 
 	offload = prog->aux->offload;
@@ -592,8 +636,8 @@ bool bpf_offload_prog_map_match(struct bpf_prog *prog, struct bpf_map *map)
 	return ret;
 }
 
-int bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
-				    struct net_device *netdev)
+static int __bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
+					     struct net_device *netdev)
 {
 	struct bpf_offload_netdev *ondev;
 	int err;
@@ -607,15 +651,14 @@ int bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
 	INIT_LIST_HEAD(&ondev->progs);
 	INIT_LIST_HEAD(&ondev->maps);
 
-	down_write(&bpf_devs_lock);
 	err = rhashtable_insert_fast(&offdevs, &ondev->l, offdevs_params);
 	if (err) {
 		netdev_warn(netdev, "failed to register for BPF offload\n");
 		goto err_unlock_free;
 	}
 
-	list_add(&ondev->offdev_netdevs, &offdev->netdevs);
-	up_write(&bpf_devs_lock);
+	if (offdev)
+		list_add(&ondev->offdev_netdevs, &offdev->netdevs);
 	return 0;
 
 err_unlock_free:
@@ -623,29 +666,42 @@ err_unlock_free:
 	kfree(ondev);
 	return err;
 }
+
+int bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
+				    struct net_device *netdev)
+{
+	int err;
+
+	down_write(&bpf_devs_lock);
+	err = __bpf_offload_dev_netdev_register(offdev, netdev);
+	up_write(&bpf_devs_lock);
+	return err;
+}
 EXPORT_SYMBOL_GPL(bpf_offload_dev_netdev_register);
 
-void bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
-				       struct net_device *netdev)
+static void __bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
+						struct net_device *netdev)
 {
-	struct bpf_offload_netdev *ondev, *altdev;
+	struct bpf_offload_netdev *ondev, *altdev = NULL;
 	struct bpf_offloaded_map *offmap, *mtmp;
 	struct bpf_prog_offload *offload, *ptmp;
 
 	ASSERT_RTNL();
 
-	down_write(&bpf_devs_lock);
 	ondev = rhashtable_lookup_fast(&offdevs, &netdev, offdevs_params);
 	if (WARN_ON(!ondev))
-		goto unlock;
+		return;
 
 	WARN_ON(rhashtable_remove_fast(&offdevs, &ondev->l, offdevs_params));
-	list_del(&ondev->offdev_netdevs);
 
 	/* Try to move the objects to another netdev of the device */
-	altdev = list_first_entry_or_null(&offdev->netdevs,
-					  struct bpf_offload_netdev,
-					  offdev_netdevs);
+	if (offdev) {
+		list_del(&ondev->offdev_netdevs);
+		altdev = list_first_entry_or_null(&offdev->netdevs,
+						  struct bpf_offload_netdev,
+						  offdev_netdevs);
+	}
+
 	if (altdev) {
 		list_for_each_entry(offload, &ondev->progs, offloads)
 			offload->netdev = altdev->netdev;
@@ -664,15 +720,19 @@ void bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
 	WARN_ON(!list_empty(&ondev->progs));
 	WARN_ON(!list_empty(&ondev->maps));
 	kfree(ondev);
-unlock:
+}
+
+void bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
+				       struct net_device *netdev)
+{
+	down_write(&bpf_devs_lock);
+	__bpf_offload_dev_netdev_unregister(offdev, netdev);
 	up_write(&bpf_devs_lock);
 }
 EXPORT_SYMBOL_GPL(bpf_offload_dev_netdev_unregister);
 
-struct bpf_offload_dev *
-bpf_offload_dev_create(const struct bpf_prog_offload_ops *ops, void *priv)
+static int __bpf_offload_init(void)
 {
-	struct bpf_offload_dev *offdev;
 	int err;
 
 	down_write(&bpf_devs_lock);
@@ -680,11 +740,24 @@ bpf_offload_dev_create(const struct bpf_prog_offload_ops *ops, void *priv)
 		err = rhashtable_init(&offdevs, &offdevs_params);
 		if (err) {
 			up_write(&bpf_devs_lock);
-			return ERR_PTR(err);
+			return err;
 		}
 		offdevs_inited = true;
 	}
 	up_write(&bpf_devs_lock);
+
+	return 0;
+}
+
+struct bpf_offload_dev *
+bpf_offload_dev_create(const struct bpf_prog_offload_ops *ops, void *priv)
+{
+	struct bpf_offload_dev *offdev;
+	int err;
+
+	err = __bpf_offload_init();
+	if (err)
+		return ERR_PTR(err);
 
 	offdev = kzalloc(sizeof(*offdev), GFP_KERNEL);
 	if (!offdev)
@@ -710,3 +783,42 @@ void *bpf_offload_dev_priv(struct bpf_offload_dev *offdev)
 	return offdev->priv;
 }
 EXPORT_SYMBOL_GPL(bpf_offload_dev_priv);
+
+void bpf_offload_bound_netdev_unregister(struct net_device *dev)
+{
+	struct bpf_offload_netdev *ondev;
+
+	ASSERT_RTNL();
+
+	down_write(&bpf_devs_lock);
+	ondev = bpf_offload_find_netdev(dev);
+	if (ondev && !ondev->offdev)
+		__bpf_offload_dev_netdev_unregister(NULL, ondev->netdev);
+	up_write(&bpf_devs_lock);
+}
+
+void *bpf_offload_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
+{
+	const struct net_device_ops *netdev_ops;
+	void *p = NULL;
+
+	down_read(&bpf_devs_lock);
+	if (!prog->aux->offload || !prog->aux->offload->netdev)
+		goto out;
+
+	netdev_ops = prog->aux->offload->netdev->netdev_ops;
+
+	if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP_SUPPORTED))
+		p = netdev_ops->ndo_xdp_rx_timestamp_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
+		p = netdev_ops->ndo_xdp_rx_timestamp;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH_SUPPORTED))
+		p = netdev_ops->ndo_xdp_rx_hash_supported;
+	else if (func_id == xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
+		p = netdev_ops->ndo_xdp_rx_hash;
+	/* fallback to default kfunc when not supported by netdev */
+out:
+	up_read(&bpf_devs_lock);
+
+	return p;
+}
