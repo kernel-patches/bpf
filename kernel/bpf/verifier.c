@@ -6122,6 +6122,23 @@ found:
 	return 0;
 }
 
+static bool
+func_arg_reg_rb_node_offset(const struct bpf_reg_state *reg, s32 off)
+{
+	struct btf_record *rec;
+	struct btf_field *field;
+
+	rec = reg_btf_record(reg);
+	if (!rec)
+		return false;
+
+	field = btf_record_find(rec, off, BPF_RB_NODE);
+	if (!field)
+		return false;
+
+	return true;
+}
+
 int check_func_arg_reg_off(struct bpf_verifier_env *env,
 			   const struct bpf_reg_state *reg, int regno,
 			   enum bpf_arg_type arg_type)
@@ -6175,6 +6192,13 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		 * to true to allow fixed offset for all other cases.
 		 */
 		fixed_off_ok = true;
+		break;
+	case PTR_TO_BTF_ID | MEM_ALLOC | PTR_UNTRUSTED:
+		/* Currently only bpf_rbtree_remove accepts a PTR_UNTRUSTED
+		 * bpf_rb_node. Fixed off of the node type is OK
+		 */
+		if (reg->off && func_arg_reg_rb_node_offset(reg, reg->off))
+			fixed_off_ok = true;
 		break;
 	default:
 		break;
@@ -8875,26 +8899,44 @@ __process_kf_arg_ptr_to_datastructure_node(struct bpf_verifier_env *env,
 			btf_name_by_offset(field->datastructure_head.btf, et->name_off));
 		return -EINVAL;
 	}
-	/* Set arg#1 for expiration after unlock */
-	return ref_set_release_on_unlock(env, reg->ref_obj_id);
+
+	return 0;
 }
 
 static int process_kf_arg_ptr_to_list_node(struct bpf_verifier_env *env,
 					   struct bpf_reg_state *reg, u32 regno,
 					   struct bpf_kfunc_call_arg_meta *meta)
 {
-	return __process_kf_arg_ptr_to_datastructure_node(env, reg, regno, meta,
-							  BPF_LIST_HEAD, BPF_LIST_NODE,
-							  &meta->arg_list_head.field);
+	int err;
+
+	err = __process_kf_arg_ptr_to_datastructure_node(env, reg, regno, meta,
+							 BPF_LIST_HEAD, BPF_LIST_NODE,
+							 &meta->arg_list_head.field);
+	if (err)
+		return err;
+
+	return ref_set_release_on_unlock(env, reg->ref_obj_id);
 }
 
 static int process_kf_arg_ptr_to_rbtree_node(struct bpf_verifier_env *env,
 					     struct bpf_reg_state *reg, u32 regno,
 					     struct bpf_kfunc_call_arg_meta *meta)
 {
-	return __process_kf_arg_ptr_to_datastructure_node(env, reg, regno, meta,
-							  BPF_RB_ROOT, BPF_RB_NODE,
-							  &meta->arg_rbtree_root.field);
+	int err;
+
+	err = __process_kf_arg_ptr_to_datastructure_node(env, reg, regno, meta,
+							 BPF_RB_ROOT, BPF_RB_NODE,
+							 &meta->arg_rbtree_root.field);
+	if (err)
+		return err;
+
+	/* bpf_rbtree_remove's node parameter is a non-owning reference to
+	 * a bpf_rb_node, so release_on_unlock is already set
+	 */
+	if (meta->func_id == special_kfunc_list[KF_bpf_rbtree_remove])
+		return 0;
+
+	return ref_set_release_on_unlock(env, reg->ref_obj_id);
 }
 
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta)
@@ -8902,7 +8944,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	const char *func_name = meta->func_name, *ref_tname;
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
-	u32 i, nargs;
+	u32 i, nargs, check_type;
 	int ret;
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
@@ -9141,7 +9183,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_RB_NODE:
-			if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
+			if (meta->btf == btf_vmlinux &&
+			    meta->func_id == special_kfunc_list[KF_bpf_rbtree_remove])
+				check_type = (PTR_TO_BTF_ID | MEM_ALLOC | PTR_UNTRUSTED);
+			else
+				check_type = (PTR_TO_BTF_ID | MEM_ALLOC);
+
+			if (reg->type != check_type) {
 				verbose(env, "arg#%d expected pointer to allocated object\n", i);
 				return -EINVAL;
 			}
@@ -9380,11 +9428,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				   meta.func_id == special_kfunc_list[KF_bpf_list_pop_back]) {
 				struct btf_field *field = meta.arg_list_head.field;
 
-				mark_reg_known_zero(env, regs, BPF_REG_0);
-				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC;
-				regs[BPF_REG_0].btf = field->datastructure_head.btf;
-				regs[BPF_REG_0].btf_id = field->datastructure_head.value_btf_id;
-				regs[BPF_REG_0].off = field->datastructure_head.node_offset;
+				mark_reg_datastructure_node(regs, BPF_REG_0,
+							    &field->datastructure_head);
+			} else if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_remove] ||
+				   meta.func_id == special_kfunc_list[KF_bpf_rbtree_first]) {
+				struct btf_field *field = meta.arg_rbtree_root.field;
+
+				mark_reg_datastructure_node(regs, BPF_REG_0,
+							    &field->datastructure_head);
 			} else if (meta.func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx]) {
 				mark_reg_known_zero(env, regs, BPF_REG_0);
 				regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_TRUSTED;
@@ -9450,6 +9501,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (is_kfunc_ret_null(&meta))
 				regs[BPF_REG_0].id = id;
 			regs[BPF_REG_0].ref_obj_id = id;
+
+			if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_first])
+				ref_set_release_on_unlock(env, regs[BPF_REG_0].ref_obj_id);
 		}
 		if (reg_may_point_to_spin_lock(&regs[BPF_REG_0]) && !regs[BPF_REG_0].id)
 			regs[BPF_REG_0].id = ++env->id_gen;
@@ -11636,8 +11690,11 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 		 */
 		if (WARN_ON_ONCE(reg->smin_value || reg->smax_value || !tnum_equals_const(reg->var_off, 0)))
 			return;
-		if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC | PTR_MAYBE_NULL) && WARN_ON_ONCE(reg->off))
+		if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC | PTR_MAYBE_NULL) &&
+		    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC | PTR_MAYBE_NULL | PTR_UNTRUSTED) &&
+		    WARN_ON_ONCE(reg->off)) {
 			return;
+		}
 		if (is_null) {
 			reg->type = SCALAR_VALUE;
 			/* We don't need id and ref_obj_id from this point
