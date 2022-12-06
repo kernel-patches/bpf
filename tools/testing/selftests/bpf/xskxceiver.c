@@ -1509,8 +1509,6 @@ static void testapp_stats_tx_invalid_descs(struct test_spec *test)
 	pkt_stream_replace_half(test, XSK_UMEM__INVALID_FRAME_SIZE, 0);
 	test->ifobj_tx->validation_func = validate_tx_invalid_descs;
 	testapp_validate_traffic(test);
-
-	pkt_stream_restore_default(test);
 }
 
 static void testapp_stats_rx_full(struct test_spec *test)
@@ -1526,8 +1524,6 @@ static void testapp_stats_rx_full(struct test_spec *test)
 	test->ifobj_rx->release_rx = false;
 	test->ifobj_rx->validation_func = validate_rx_full;
 	testapp_validate_traffic(test);
-
-	pkt_stream_restore_default(test);
 }
 
 static void testapp_stats_fill_empty(struct test_spec *test)
@@ -1542,8 +1538,6 @@ static void testapp_stats_fill_empty(struct test_spec *test)
 	test->ifobj_rx->use_fill_ring = false;
 	test->ifobj_rx->validation_func = validate_fill_empty;
 	testapp_validate_traffic(test);
-
-	pkt_stream_restore_default(test);
 }
 
 /* Simple test */
@@ -1576,7 +1570,6 @@ static bool testapp_unaligned(struct test_spec *test)
 	test->ifobj_rx->pkt_stream->use_addr_for_fill = true;
 	testapp_validate_traffic(test);
 
-	pkt_stream_restore_default(test);
 	return true;
 }
 
@@ -1586,7 +1579,6 @@ static void testapp_single_pkt(struct test_spec *test)
 
 	pkt_stream_generate_custom(test, pkts, ARRAY_SIZE(pkts));
 	testapp_validate_traffic(test);
-	pkt_stream_restore_default(test);
 }
 
 static void testapp_invalid_desc(struct test_spec *test)
@@ -1627,7 +1619,6 @@ static void testapp_invalid_desc(struct test_spec *test)
 
 	pkt_stream_generate_custom(test, pkts, ARRAY_SIZE(pkts));
 	testapp_validate_traffic(test);
-	pkt_stream_restore_default(test);
 }
 
 static void testapp_xdp_drop(struct test_spec *test)
@@ -1649,7 +1640,6 @@ static void testapp_xdp_drop(struct test_spec *test)
 	pkt_stream_receive_half(test);
 	testapp_validate_traffic(test);
 
-	pkt_stream_restore_default(test);
 	xsk_detach_xdp_program(ifobj->ifindex, ifobj->xdp_flags);
 	err = xsk_attach_xdp_program(ifobj->def_prog->progs.xsk_def_prog, ifobj->ifindex,
 				     ifobj->xdp_flags);
@@ -1669,8 +1659,6 @@ static void testapp_poll_txq_tmout(struct test_spec *test)
 	test->ifobj_tx->umem->frame_size = 2048;
 	pkt_stream_replace(test, 2 * DEFAULT_PKT_CNT, 2048);
 	testapp_validate_traffic_single_thread(test, test->ifobj_tx);
-
-	pkt_stream_restore_default(test);
 }
 
 static void testapp_poll_rxq_tmout(struct test_spec *test)
@@ -1781,8 +1769,6 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		test->ifobj_rx->umem->frame_size = 2048;
 		pkt_stream_replace(test, DEFAULT_PKT_CNT, PKT_SIZE);
 		testapp_validate_traffic(test);
-
-		pkt_stream_restore_default(test);
 		break;
 	case TEST_TYPE_RX_POLL:
 		test->ifobj_rx->use_poll = true;
@@ -1837,6 +1823,7 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 	if (!test->fail)
 		ksft_test_result_pass("PASS: %s %s%s\n", mode_string(test), busy_poll_string(test),
 				      test->name);
+	pkt_stream_restore_default(test);
 }
 
 static struct ifobject *ifobject_create(void)
