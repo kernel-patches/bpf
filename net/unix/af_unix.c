@@ -115,6 +115,7 @@
 #include <linux/freezer.h>
 #include <linux/file.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf-cgroup.h>
 
 #include "scm.h"
 
@@ -920,11 +921,18 @@ static void unix_unhash(struct sock *sk)
 	 */
 }
 
+static int unix_pre_connect(struct sock *sk, struct sockaddr *uaddr,
+			    int addr_len)
+{
+	return BPF_CGROUP_RUN_PROG_UNIX_CONNECT(sk, uaddr);
+}
+
 struct proto unix_dgram_proto = {
 	.name			= "UNIX",
 	.owner			= THIS_MODULE,
 	.obj_size		= sizeof(struct unix_sock),
 	.close			= unix_close,
+	.pre_connect            = unix_pre_connect,
 #ifdef CONFIG_BPF_SYSCALL
 	.psock_update_sk_prot	= unix_dgram_bpf_update_proto,
 #endif
@@ -936,6 +944,7 @@ struct proto unix_stream_proto = {
 	.obj_size		= sizeof(struct unix_sock),
 	.close			= unix_close,
 	.unhash			= unix_unhash,
+	.pre_connect            = unix_pre_connect,
 #ifdef CONFIG_BPF_SYSCALL
 	.psock_update_sk_prot	= unix_stream_bpf_update_proto,
 #endif
@@ -1367,6 +1376,20 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 				goto out;
 		}
 
+		if (BPF_CGROUP_PRE_CONNECT_ENABLED(sk)) {
+			err = sk->sk_prot->pre_connect(sk, addr, alen);
+			if (err)
+				goto out;
+
+			alen = offsetof(struct sockaddr_un, sun_path) +
+				strnlen(sunaddr->sun_path,
+				sizeof(sunaddr->sun_path)) + 1;
+
+			err = unix_validate_addr(sunaddr, alen);
+			if (err)
+				goto out;
+		}
+
 restart:
 		other = unix_find_other(sock_net(sk), sunaddr, alen, sock->type);
 		if (IS_ERR(other)) {
@@ -1495,6 +1518,20 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	skb = sock_wmalloc(newsk, 1, 0, GFP_KERNEL);
 	if (skb == NULL)
 		goto out;
+
+	if (BPF_CGROUP_PRE_CONNECT_ENABLED(sk)) {
+		err = sk->sk_prot->pre_connect(sk, uaddr, addr_len);
+		if (err)
+			goto out;
+
+		addr_len = offsetof(struct sockaddr_un, sun_path) +
+			   strnlen(sunaddr->sun_path,
+				   sizeof(sunaddr->sun_path)) + 1;
+
+		err = unix_validate_addr(sunaddr, addr_len);
+		if (err)
+			goto out;
+	}
 
 restart:
 	/*  Find listening sock. */

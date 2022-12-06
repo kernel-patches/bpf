@@ -1068,6 +1068,7 @@ const char *bpf_attach_type_input_str(enum bpf_attach_type t)
 	case BPF_CGROUP_INET6_BIND:		return "bind6";
 	case BPF_CGROUP_INET4_CONNECT:		return "connect4";
 	case BPF_CGROUP_INET6_CONNECT:		return "connect6";
+	case BPF_CGROUP_UNIX_CONNECT:		return "connectun";
 	case BPF_CGROUP_INET4_POST_BIND:	return "post_bind4";
 	case BPF_CGROUP_INET6_POST_BIND:	return "post_bind6";
 	case BPF_CGROUP_INET4_GETPEERNAME:	return "getpeername4";

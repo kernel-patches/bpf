@@ -124,6 +124,11 @@ static struct sec_name_test tests[] = {
 		{0, BPF_CGROUP_INET6_CONNECT},
 	},
 	{
+		"cgroup/connectun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_CONNECT},
+		{0, BPF_CGROUP_UNIX_CONNECT},
+	},
+	{
 		"cgroup/sendmsg4",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UDP4_SENDMSG},
 		{0, BPF_CGROUP_UDP4_SENDMSG},

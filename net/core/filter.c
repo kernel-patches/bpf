@@ -26,6 +26,7 @@
 #include <linux/socket.h>
 #include <linux/sock_diag.h>
 #include <linux/in.h>
+#include <linux/un.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
 #include <linux/if_packet.h>
@@ -7674,6 +7675,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 			return &bpf_bind_proto;
 		default:
 			return NULL;
@@ -7704,6 +7706,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 		case BPF_CGROUP_UDP4_RECVMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
 		case BPF_CGROUP_UDP4_SENDMSG:
@@ -7722,6 +7725,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 		case BPF_CGROUP_UDP4_RECVMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
 		case BPF_CGROUP_UDP4_SENDMSG:
@@ -8839,6 +8843,14 @@ static bool sock_addr_is_valid_access(int off, int size,
 			return false;
 		}
 		break;
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		switch (prog->expected_attach_type) {
+		case BPF_CGROUP_UNIX_CONNECT:
+			break;
+		default:
+			return false;
+		}
+		break;
 	}
 
 	switch (off) {
@@ -8877,6 +8889,10 @@ static bool sock_addr_is_valid_access(int off, int size,
 			if (size != size_default)
 				return false;
 		}
+		break;
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		if (size != sizeof(char))
+			return false;
 		break;
 	case offsetof(struct bpf_sock_addr, sk):
 		if (type != BPF_READ)
@@ -9938,6 +9954,18 @@ static u32 sock_addr_convert_ctx_access(enum bpf_access_type type,
 			struct bpf_sock_addr_kern, struct sockaddr_in6, uaddr,
 			sin6_addr.s6_addr32[0], BPF_SIZE(si->code), off,
 			tmp_reg);
+		break;
+
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		/* In kernelspace, addresses are always stored in
+		 * sockaddr_storage so any access in the full range of
+		 * sockaddr_un.sun_path is safe.
+		 */
+		off = si->off;
+		off -= offsetof(struct bpf_sock_addr, user_path[0]);
+		SOCK_ADDR_LOAD_OR_STORE_NESTED_FIELD_SIZE_OFF(
+			struct bpf_sock_addr_kern, struct sockaddr_un, uaddr,
+			sun_path, BPF_SIZE(si->code), off, tmp_reg);
 		break;
 
 	case offsetof(struct bpf_sock_addr, user_port):

@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 #include <linux/filter.h>
 
@@ -28,6 +29,7 @@
 #define CG_PATH	"/foo"
 #define CONNECT4_PROG_PATH	"./connect4_prog.bpf.o"
 #define CONNECT6_PROG_PATH	"./connect6_prog.bpf.o"
+#define CONNECTUN_PROG_PATH	"./connectun_prog.bpf.o"
 #define SENDMSG4_PROG_PATH	"./sendmsg4_prog.bpf.o"
 #define SENDMSG6_PROG_PATH	"./sendmsg6_prog.bpf.o"
 #define RECVMSG4_PROG_PATH	"./recvmsg4_prog.bpf.o"
@@ -50,6 +52,9 @@
 #define WILDCARD6_IP		"::"
 #define SERV6_PORT		6060
 #define SERV6_REWRITE_PORT	6666
+
+#define SERV_UNIX_PATH		"/tmp/bpf_cgroup_unix_test"
+#define SERV_UNIX_REWRITE_PATH	"/tmp/bpf_cgroup_unix_test_rewrite"
 
 #define INET_NTOP_BUF	40
 
@@ -90,6 +95,7 @@ static int bind4_prog_load(const struct sock_addr_test *test);
 static int bind6_prog_load(const struct sock_addr_test *test);
 static int connect4_prog_load(const struct sock_addr_test *test);
 static int connect6_prog_load(const struct sock_addr_test *test);
+static int connectun_prog_load(const struct sock_addr_test *test);
 static int sendmsg_allow_prog_load(const struct sock_addr_test *test);
 static int sendmsg_deny_prog_load(const struct sock_addr_test *test);
 static int recvmsg_allow_prog_load(const struct sock_addr_test *test);
@@ -329,6 +335,34 @@ static struct sock_addr_test tests[] = {
 		SERV6_REWRITE_IP,
 		SERV6_REWRITE_PORT,
 		SRC6_REWRITE_IP,
+		SUCCESS,
+	},
+	{
+		"connectun: rewrite SOCK_STREAM path",
+		connectun_prog_load,
+		BPF_CGROUP_UNIX_CONNECT,
+		BPF_CGROUP_UNIX_CONNECT,
+		AF_UNIX,
+		SOCK_STREAM,
+		SERV_UNIX_PATH,
+		0,
+		SERV_UNIX_REWRITE_PATH,
+		0,
+		NULL,
+		SUCCESS,
+	},
+	{
+		"connectun: rewrite SOCK_DGRAM path",
+		connectun_prog_load,
+		BPF_CGROUP_UNIX_CONNECT,
+		BPF_CGROUP_UNIX_CONNECT,
+		AF_UNIX,
+		SOCK_DGRAM,
+		SERV_UNIX_PATH,
+		0,
+		SERV_UNIX_REWRITE_PATH,
+		0,
+		NULL,
 		SUCCESS,
 	},
 
@@ -603,13 +637,14 @@ static struct sock_addr_test tests[] = {
 	},
 };
 
-static int mk_sockaddr(int domain, const char *ip, unsigned short port,
+static int mk_sockaddr(int domain, const char *address, unsigned short port,
 		       struct sockaddr *addr, socklen_t addr_len)
 {
 	struct sockaddr_in6 *addr6;
 	struct sockaddr_in *addr4;
+	struct sockaddr_un *addrun;
 
-	if (domain != AF_INET && domain != AF_INET6) {
+	if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
 		log_err("Unsupported address family");
 		return -1;
 	}
@@ -622,8 +657,8 @@ static int mk_sockaddr(int domain, const char *ip, unsigned short port,
 		addr4 = (struct sockaddr_in *)addr;
 		addr4->sin_family = domain;
 		addr4->sin_port = htons(port);
-		if (inet_pton(domain, ip, (void *)&addr4->sin_addr) != 1) {
-			log_err("Invalid IPv4: %s", ip);
+		if (inet_pton(domain, address, (void *)&addr4->sin_addr) != 1) {
+			log_err("Invalid IPv4: %s", address);
 			return -1;
 		}
 	} else if (domain == AF_INET6) {
@@ -632,10 +667,16 @@ static int mk_sockaddr(int domain, const char *ip, unsigned short port,
 		addr6 = (struct sockaddr_in6 *)addr;
 		addr6->sin6_family = domain;
 		addr6->sin6_port = htons(port);
-		if (inet_pton(domain, ip, (void *)&addr6->sin6_addr) != 1) {
-			log_err("Invalid IPv6: %s", ip);
+		if (inet_pton(domain, address, (void *)&addr6->sin6_addr) != 1) {
+			log_err("Invalid IPv6: %s", address);
 			return -1;
 		}
+	} else if (domain == AF_UNIX) {
+		if (addr_len < sizeof(struct sockaddr_un))
+			return -1;
+		addrun = (struct sockaddr_un *)addr;
+		addrun->sun_family = domain;
+		strcpy(addrun->sun_path, address);
 	}
 
 	return 0;
@@ -712,6 +753,11 @@ static int connect4_prog_load(const struct sock_addr_test *test)
 static int connect6_prog_load(const struct sock_addr_test *test)
 {
 	return load_path(test, CONNECT6_PROG_PATH);
+}
+
+static int connectun_prog_load(const struct sock_addr_test *test)
+{
+	return load_path(test, CONNECTUN_PROG_PATH);
 }
 
 static int xmsg_ret_only_prog_load(const struct sock_addr_test *test,
@@ -890,6 +936,7 @@ static int cmp_addr(const struct sockaddr_storage *addr1,
 {
 	const struct sockaddr_in *four1, *four2;
 	const struct sockaddr_in6 *six1, *six2;
+	const struct sockaddr_un *un1, *un2;
 
 	if (addr1->ss_family != addr2->ss_family)
 		return -1;
@@ -905,6 +952,10 @@ static int cmp_addr(const struct sockaddr_storage *addr1,
 		return !((six1->sin6_port == six2->sin6_port || !cmp_port) &&
 			 !memcmp(&six1->sin6_addr, &six2->sin6_addr,
 				 sizeof(struct in6_addr)));
+	} else if (addr1->ss_family == AF_UNIX) {
+		un1 = (const struct sockaddr_un *)addr1;
+		un2 = (const struct sockaddr_un *)addr2;
+		return memcmp(un1->sun_path, un2->sun_path, sizeof(un1->sun_path));
 	}
 
 	return -1;
@@ -949,6 +1000,13 @@ static int start_server(int type, const struct sockaddr_storage *addr,
 		goto out;
 	}
 
+	if (addr->ss_family == AF_UNIX) {
+		struct sockaddr_un *un = (struct sockaddr_un *) addr;
+
+		addr_len = strlen(un->sun_path) + sizeof(un->sun_family);
+		unlink(un->sun_path);
+	}
+
 	if (bind(fd, (const struct sockaddr *)addr, addr_len) == -1) {
 		log_err("Failed to bind server socket");
 		goto close_out;
@@ -977,7 +1035,7 @@ static int connect_to_server(int type, const struct sockaddr_storage *addr,
 
 	domain = addr->ss_family;
 
-	if (domain != AF_INET && domain != AF_INET6) {
+	if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
 		log_err("Unsupported address family");
 		goto err;
 	}
@@ -986,6 +1044,12 @@ static int connect_to_server(int type, const struct sockaddr_storage *addr,
 	if (fd == -1) {
 		log_err("Failed to create client socket");
 		goto err;
+	}
+
+	if (addr->ss_family == AF_UNIX) {
+		struct sockaddr_un *un = (struct sockaddr_un *) addr;
+
+		addr_len = strlen(un->sun_path) + sizeof(un->sun_family);
 	}
 
 	if (connect(fd, (const struct sockaddr *)addr, addr_len) == -1) {
@@ -1225,10 +1289,10 @@ static int run_connect_test_case(const struct sock_addr_test *test)
 	if (cmp_peer_addr(clientfd, &expected_addr))
 		goto err;
 
-	if (cmp_local_ip(clientfd, &expected_src_addr))
+	if (test->domain != AF_UNIX && cmp_local_ip(clientfd, &expected_src_addr))
 		goto err;
 
-	if (test->type == SOCK_STREAM) {
+	if (test->domain != AF_UNIX && test->type == SOCK_STREAM) {
 		/* Test TCP Fast Open scenario */
 		clientfd = fastconnect_to_server(&requested_addr, addr_len);
 		if (clientfd == -1)
@@ -1346,6 +1410,7 @@ static int run_test_case(int cgfd, const struct sock_addr_test *test)
 		break;
 	case BPF_CGROUP_INET4_CONNECT:
 	case BPF_CGROUP_INET6_CONNECT:
+	case BPF_CGROUP_UNIX_CONNECT:
 		err = run_connect_test_case(test);
 		break;
 	case BPF_CGROUP_UDP4_SENDMSG:
