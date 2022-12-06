@@ -8438,19 +8438,21 @@ static int ref_set_release_on_unlock(struct bpf_verifier_env *env, u32 ref_obj_i
 		return -EFAULT;
 	}
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].id == ref_obj_id) {
-			if (state->refs[i].release_on_unlock) {
-				verbose(env, "verifier internal error: expected false release_on_unlock");
-				return -EFAULT;
-			}
-			state->refs[i].release_on_unlock = true;
-			/* Now mark everyone sharing same ref_obj_id as untrusted */
-			bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-				if (reg->ref_obj_id == ref_obj_id)
-					reg->type |= PTR_UNTRUSTED;
-			}));
-			return 0;
+		if (state->refs[i].id != ref_obj_id)
+			continue;
+
+		if (state->refs[i].release_on_unlock) {
+			verbose(env, "verifier internal error: expected false release_on_unlock\n");
+			return -EFAULT;
 		}
+
+		state->refs[i].release_on_unlock = true;
+		/* Now mark everyone sharing same ref_obj_id as untrusted */
+		bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
+			if (reg->ref_obj_id == ref_obj_id)
+				reg->type |= PTR_UNTRUSTED;
+		}));
+		return 0;
 	}
 	verbose(env, "verifier internal error: ref state missing for ref_obj_id\n");
 	return -EFAULT;
