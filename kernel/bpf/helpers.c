@@ -1737,12 +1737,12 @@ unlock:
 	while (head != orig_head) {
 		void *obj = head;
 
-		obj -= field->list_head.node_offset;
+		obj -= field->datastructure_head.node_offset;
 		head = head->next;
 		/* The contained type can also have resources, including a
 		 * bpf_list_head which needs to be freed.
 		 */
-		bpf_obj_free_fields(field->list_head.value_rec, obj);
+		bpf_obj_free_fields(field->datastructure_head.value_rec, obj);
 		/* bpf_mem_free requires migrate_disable(), since we can be
 		 * called from map free path as well apart from BPF program (as
 		 * part of map ops doing bpf_obj_free_fields).

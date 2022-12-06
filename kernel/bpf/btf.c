@@ -3227,7 +3227,7 @@ struct btf_field_info {
 		struct {
 			const char *node_name;
 			u32 value_btf_id;
-		} list_head;
+		} datastructure_head;
 	};
 };
 
@@ -3334,8 +3334,8 @@ static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
 		return -EINVAL;
 	info->type = BPF_LIST_HEAD;
 	info->off = off;
-	info->list_head.value_btf_id = id;
-	info->list_head.node_name = list_node;
+	info->datastructure_head.value_btf_id = id;
+	info->datastructure_head.node_name = list_node;
 	return BTF_FIELD_FOUND;
 }
 
@@ -3603,13 +3603,14 @@ static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
 	u32 offset;
 	int i;
 
-	t = btf_type_by_id(btf, info->list_head.value_btf_id);
+	t = btf_type_by_id(btf, info->datastructure_head.value_btf_id);
 	/* We've already checked that value_btf_id is a struct type. We
 	 * just need to figure out the offset of the list_node, and
 	 * verify its type.
 	 */
 	for_each_member(i, t, member) {
-		if (strcmp(info->list_head.node_name, __btf_name_by_offset(btf, member->name_off)))
+		if (strcmp(info->datastructure_head.node_name,
+			   __btf_name_by_offset(btf, member->name_off)))
 			continue;
 		/* Invalid BTF, two members with same name */
 		if (n)
@@ -3626,9 +3627,9 @@ static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
 		if (offset % __alignof__(struct bpf_list_node))
 			return -EINVAL;
 
-		field->list_head.btf = (struct btf *)btf;
-		field->list_head.value_btf_id = info->list_head.value_btf_id;
-		field->list_head.node_offset = offset;
+		field->datastructure_head.btf = (struct btf *)btf;
+		field->datastructure_head.value_btf_id = info->datastructure_head.value_btf_id;
+		field->datastructure_head.node_offset = offset;
 	}
 	if (!n)
 		return -ENOENT;
@@ -3735,11 +3736,11 @@ int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec)
 
 		if (!(rec->fields[i].type & BPF_LIST_HEAD))
 			continue;
-		btf_id = rec->fields[i].list_head.value_btf_id;
+		btf_id = rec->fields[i].datastructure_head.value_btf_id;
 		meta = btf_find_struct_meta(btf, btf_id);
 		if (!meta)
 			return -EFAULT;
-		rec->fields[i].list_head.value_rec = meta->record;
+		rec->fields[i].datastructure_head.value_rec = meta->record;
 
 		if (!(rec->field_mask & BPF_LIST_NODE))
 			continue;
