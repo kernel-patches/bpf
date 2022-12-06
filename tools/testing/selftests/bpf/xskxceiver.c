@@ -1364,83 +1364,59 @@ static void handler(int signum)
 	pthread_exit(NULL);
 }
 
-static int testapp_validate_traffic_single_thread(struct test_spec *test, struct ifobject *ifobj,
-						  enum test_type type)
+static int __testapp_validate_traffic(struct test_spec *test, struct ifobject *ifobj_rx,
+				      struct ifobject *ifobj_tx)
 {
-	bool old_shared_umem = ifobj->shared_umem;
-	pthread_t t0;
+	pthread_t t0, t1;
 
-	if (pthread_barrier_init(&barr, NULL, 2))
-		exit_with_error(errno);
+	if (ifobj_tx)
+		if (pthread_barrier_init(&barr, NULL, 2))
+			exit_with_error(errno);
 
 	test->current_step++;
-	if (type == TEST_TYPE_POLL_RXQ_TMOUT)
-		pkt_stream_reset(ifobj->pkt_stream);
+	pkt_stream_reset(ifobj_rx->pkt_stream);
 	pkts_in_flight = 0;
 
-	test->ifobj_rx->shared_umem = false;
-	test->ifobj_tx->shared_umem = false;
-
 	signal(SIGUSR1, handler);
-	/* Spawn thread */
-	pthread_create(&t0, NULL, ifobj->func_ptr, test);
+	/*Spawn RX thread */
+	pthread_create(&t0, NULL, ifobj_rx->func_ptr, test);
 
-	if (type != TEST_TYPE_POLL_TXQ_TMOUT)
+	if (ifobj_tx) {
 		pthread_barrier_wait(&barr);
+		if (pthread_barrier_destroy(&barr))
+			exit_with_error(errno);
 
-	if (pthread_barrier_destroy(&barr))
-		exit_with_error(errno);
+		/*Spawn TX thread */
+		pthread_create(&t1, NULL, ifobj_tx->func_ptr, test);
 
-	pthread_kill(t0, SIGUSR1);
-	pthread_join(t0, NULL);
-
-	if (test->total_steps == test->current_step || test->fail) {
-		xsk_socket__delete(ifobj->xsk->xsk);
-		xsk_clear_xskmap(ifobj->xskmap);
-		testapp_clean_xsk_umem(ifobj);
+		pthread_join(t1, NULL);
 	}
 
-	test->ifobj_rx->shared_umem = old_shared_umem;
-	test->ifobj_tx->shared_umem = old_shared_umem;
+	if (!ifobj_tx)
+		pthread_kill(t0, SIGUSR1);
+	else
+		pthread_join(t0, NULL);
+
+	if (test->total_steps == test->current_step || test->fail) {
+		if (ifobj_tx)
+			xsk_socket__delete(ifobj_tx->xsk->xsk);
+		xsk_socket__delete(ifobj_rx->xsk->xsk);
+		testapp_clean_xsk_umem(ifobj_rx);
+		if (ifobj_tx && !ifobj_tx->shared_umem)
+			testapp_clean_xsk_umem(ifobj_tx);
+	}
 
 	return !!test->fail;
 }
 
 static int testapp_validate_traffic(struct test_spec *test)
 {
-	struct ifobject *ifobj_tx = test->ifobj_tx;
-	struct ifobject *ifobj_rx = test->ifobj_rx;
-	pthread_t t0, t1;
+	return __testapp_validate_traffic(test, test->ifobj_rx, test->ifobj_tx);
+}
 
-	if (pthread_barrier_init(&barr, NULL, 2))
-		exit_with_error(errno);
-
-	test->current_step++;
-	pkt_stream_reset(ifobj_rx->pkt_stream);
-	pkts_in_flight = 0;
-
-	/*Spawn RX thread */
-	pthread_create(&t0, NULL, ifobj_rx->func_ptr, test);
-
-	pthread_barrier_wait(&barr);
-	if (pthread_barrier_destroy(&barr))
-		exit_with_error(errno);
-
-	/*Spawn TX thread */
-	pthread_create(&t1, NULL, ifobj_tx->func_ptr, test);
-
-	pthread_join(t1, NULL);
-	pthread_join(t0, NULL);
-
-	if (test->total_steps == test->current_step || test->fail) {
-		xsk_socket__delete(ifobj_tx->xsk->xsk);
-		xsk_socket__delete(ifobj_rx->xsk->xsk);
-		testapp_clean_xsk_umem(ifobj_rx);
-		if (!ifobj_tx->shared_umem)
-			testapp_clean_xsk_umem(ifobj_tx);
-	}
-
-	return !!test->fail;
+static int testapp_validate_traffic_single_thread(struct test_spec *test, struct ifobject *ifobj)
+{
+	return __testapp_validate_traffic(test, ifobj, NULL);
 }
 
 static void testapp_teardown(struct test_spec *test)
@@ -1684,6 +1660,26 @@ static void testapp_xdp_drop(struct test_spec *test)
 	ifobj->xskmap = ifobj->def_prog->maps.xsk;
 }
 
+static void testapp_poll_txq_tmout(struct test_spec *test)
+{
+	test_spec_set_name(test, "POLL_TXQ_FULL");
+
+	test->ifobj_tx->use_poll = true;
+	/* create invalid frame by set umem frame_size and pkt length equal to 2048 */
+	test->ifobj_tx->umem->frame_size = 2048;
+	pkt_stream_replace(test, 2 * DEFAULT_PKT_CNT, 2048);
+	testapp_validate_traffic_single_thread(test, test->ifobj_tx);
+
+	pkt_stream_restore_default(test);
+}
+
+static void testapp_poll_rxq_tmout(struct test_spec *test)
+{
+	test_spec_set_name(test, "POLL_RXQ_EMPTY");
+	test->ifobj_rx->use_poll = true;
+	testapp_validate_traffic_single_thread(test, test->ifobj_rx);
+}
+
 static int xsk_load_xdp_programs(struct ifobject *ifobj)
 {
 	ifobj->def_prog = xsk_def_prog__open_and_load();
@@ -1799,18 +1795,10 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		testapp_validate_traffic(test);
 		break;
 	case TEST_TYPE_POLL_TXQ_TMOUT:
-		test_spec_set_name(test, "POLL_TXQ_FULL");
-		test->ifobj_tx->use_poll = true;
-		/* create invalid frame by set umem frame_size and pkt length equal to 2048 */
-		test->ifobj_tx->umem->frame_size = 2048;
-		pkt_stream_replace(test, 2 * DEFAULT_PKT_CNT, 2048);
-		testapp_validate_traffic_single_thread(test, test->ifobj_tx, type);
-		pkt_stream_restore_default(test);
+		testapp_poll_txq_tmout(test);
 		break;
 	case TEST_TYPE_POLL_RXQ_TMOUT:
-		test_spec_set_name(test, "POLL_RXQ_EMPTY");
-		test->ifobj_rx->use_poll = true;
-		testapp_validate_traffic_single_thread(test, test->ifobj_rx, type);
+		testapp_poll_rxq_tmout(test);
 		break;
 	case TEST_TYPE_ALIGNED_INV_DESC:
 		test_spec_set_name(test, "ALIGNED_INV_DESC");
