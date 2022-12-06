@@ -11,6 +11,7 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/limits.h>
 #include <asm/extable.h>
 #include <asm/set_memory.h>
 #include <asm/nospec-branch.h>
@@ -94,6 +95,7 @@ static int bpf_size_to_x86_bytes(int bpf_size)
  */
 #define X86_JB  0x72
 #define X86_JAE 0x73
+#define X86_JNC 0x73
 #define X86_JE  0x74
 #define X86_JNE 0x75
 #define X86_JBE 0x76
@@ -950,6 +952,36 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+/* Check that condition necessary for PROBE_MEM handling for insn->off < 0
+ * holds.
+ *
+ * This could be a static_assert((TASK_SIZE_MAX + PAGE_SIZE) > -S16_MIN),
+ * but TASK_SIZE_MAX can't always be evaluated at compile time, so let's not
+ * assume insn->off size either
+ */
+static int check_probe_mem_task_size_overflow(void)
+{
+	struct bpf_insn insn;
+	s64 max_negative;
+
+	switch (sizeof(insn.off)) {
+	case 2:
+		max_negative = S16_MIN;
+		break;
+	default:
+		pr_err("bpf_jit_error: unexpected bpf_insn->off size\n");
+		return -EFAULT;
+	}
+
+	if (!((TASK_SIZE_MAX + PAGE_SIZE) > -max_negative)) {
+		pr_err("bpf jit error: assumption does not hold:\n");
+		pr_err("\t(TASK_SIZE_MAX + PAGE_SIZE) + (max negative insn->off) > 0\n");
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image,
@@ -966,6 +998,10 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int ilen, proglen = 0;
 	u8 *prog = temp;
 	int err;
+
+	err = check_probe_mem_task_size_overflow();
+	if (err)
+		return err;
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used,
 			 &tail_call_seen);
@@ -1359,20 +1395,30 @@ st:			if (is_imm8(insn->off))
 		case BPF_LDX | BPF_MEM | BPF_DW:
 		case BPF_LDX | BPF_PROBE_MEM | BPF_DW:
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEM) {
-				/* Though the verifier prevents negative insn->off in BPF_PROBE_MEM
-				 * add abs(insn->off) to the limit to make sure that negative
-				 * offset won't be an issue.
-				 * insn->off is s16, so it won't affect valid pointers.
-				 */
-				u64 limit = TASK_SIZE_MAX + PAGE_SIZE + abs(insn->off);
-				u8 *end_of_jmp1, *end_of_jmp2;
-
 				/* Conservatively check that src_reg + insn->off is a kernel address:
-				 * 1. src_reg + insn->off >= limit
-				 * 2. src_reg + insn->off doesn't become small positive.
-				 * Cannot do src_reg + insn->off >= limit in one branch,
-				 * since it needs two spare registers, but JIT has only one.
+				 * 1. src_reg + insn->off >= TASK_SIZE_MAX + PAGE_SIZE
+				 * 2. src_reg + insn->off doesn't overflow and become small positive
+				 *
+				 * For check 1, to save regs, do
+				 * src_reg >= (TASK_SIZE_MAX + PAGE_SIZE - insn->off) call rhs
+				 * of inequality 'limit'
+				 *
+				 * For check 2:
+				 * If insn->off is positive, add src_reg + insn->off and check
+				 * overflow directly
+				 * If insn->off is negative, we know that
+				 *   (TASK_SIZE_MAX + PAGE_SIZE - insn->off) > (TASK_SIZE_MAX + PAGE_SIZE)
+				 * and from check 1 we know
+				 *   src_reg >= (TASK_SIZE_MAX + PAGE_SIZE - insn->off)
+				 * So if (TASK_SIZE_MAX + PAGE_SIZE) + MAX_NEGATIVE_OFF > 0 we can
+				 * be sure that src_reg + insn->off won't overflow in either
+				 * direction and avoid runtime check entirely.
+				 *
+				 * check_probe_mem_task_size_overflow confirms the above assumption
+				 * at the beginning of this function
 				 */
+				u64 limit = TASK_SIZE_MAX + PAGE_SIZE - insn->off;
+				u8 *end_of_jmp1, *end_of_jmp2;
 
 				/* movabsq r11, limit */
 				EMIT2(add_1mod(0x48, AUX_REG), add_1reg(0xB8, AUX_REG));
@@ -1381,32 +1427,47 @@ st:			if (is_imm8(insn->off))
 				/* cmp src_reg, r11 */
 				maybe_emit_mod(&prog, src_reg, AUX_REG, true);
 				EMIT2(0x39, add_2reg(0xC0, src_reg, AUX_REG));
-				/* if unsigned '<' goto end_of_jmp2 */
-				EMIT2(X86_JB, 0);
-				end_of_jmp1 = prog;
+				if (insn->off >= 0) {
+					/* cmp src_reg, r11 */
+					/* if unsigned '<' goto end_of_jmp2 */
+					EMIT2(X86_JB, 0);
+					end_of_jmp1 = prog;
 
-				/* mov r11, src_reg */
-				emit_mov_reg(&prog, true, AUX_REG, src_reg);
-				/* add r11, insn->off */
-				maybe_emit_1mod(&prog, AUX_REG, true);
-				EMIT2_off32(0x81, add_1reg(0xC0, AUX_REG), insn->off);
-				/* jmp if not carry to start_of_ldx
-				 * Otherwise ERR_PTR(-EINVAL) + 128 will be the user addr
-				 * that has to be rejected.
-				 */
-				EMIT2(0x73 /* JNC */, 0);
-				end_of_jmp2 = prog;
+					/* mov r11, src_reg */
+					emit_mov_reg(&prog, true, AUX_REG, src_reg);
+					/* add r11, insn->off */
+					maybe_emit_1mod(&prog, AUX_REG, true);
+					EMIT2_off32(0x81, add_1reg(0xC0, AUX_REG), insn->off);
+					/* jmp if not carry to start_of_ldx
+					 * Otherwise ERR_PTR(-EINVAL) + 128 will be the user addr
+					 * that has to be rejected.
+					 */
+					EMIT2(X86_JNC, 0);
+					end_of_jmp2 = prog;
+				} else {
+					/* cmp src_reg, r11 */
+					/* if unsigned '>=' goto start_of_ldx
+					 * w/o needing to do check 2
+					 */
+					EMIT2(X86_JAE, 0);
+					end_of_jmp1 = prog;
+				}
 
 				/* xor dst_reg, dst_reg */
 				emit_mov_imm32(&prog, false, dst_reg, 0);
 				/* jmp byte_after_ldx */
 				EMIT2(0xEB, 0);
 
-				/* populate jmp_offset for JB above to jump to xor dst_reg */
-				end_of_jmp1[-1] = end_of_jmp2 - end_of_jmp1;
-				/* populate jmp_offset for JNC above to jump to start_of_ldx */
 				start_of_ldx = prog;
-				end_of_jmp2[-1] = start_of_ldx - end_of_jmp2;
+				if (insn->off >= 0) {
+					/* populate jmp_offset for JB above to jump to xor dst_reg */
+					end_of_jmp1[-1] = end_of_jmp2 - end_of_jmp1;
+					/* populate jmp_offset for JNC above to jump to start_of_ldx */
+					end_of_jmp2[-1] = start_of_ldx - end_of_jmp2;
+				} else {
+					/* populate jmp_offset for JAE above to jump to start_of_ldx */
+					end_of_jmp1[-1] = start_of_ldx - end_of_jmp1;
+				}
 			}
 			emit_ldx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEM) {
