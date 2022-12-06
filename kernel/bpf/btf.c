@@ -3304,12 +3304,14 @@ static const char *btf_find_decl_tag_value(const struct btf *btf,
 	return NULL;
 }
 
-static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
-			      const struct btf_type *t, int comp_idx,
-			      u32 off, int sz, struct btf_field_info *info)
+static int
+btf_find_datastructure_head(const struct btf *btf, const struct btf_type *pt,
+			    const struct btf_type *t, int comp_idx, u32 off,
+			    int sz, struct btf_field_info *info,
+			    enum btf_field_type head_type)
 {
+	const char *node_field_name;
 	const char *value_type;
-	const char *list_node;
 	s32 id;
 
 	if (!__btf_type_is_struct(t))
@@ -3319,25 +3321,31 @@ static int btf_find_list_head(const struct btf *btf, const struct btf_type *pt,
 	value_type = btf_find_decl_tag_value(btf, pt, comp_idx, "contains:");
 	if (!value_type)
 		return -EINVAL;
-	list_node = strstr(value_type, ":");
-	if (!list_node)
+	node_field_name = strstr(value_type, ":");
+	if (!node_field_name)
 		return -EINVAL;
-	value_type = kstrndup(value_type, list_node - value_type, GFP_KERNEL | __GFP_NOWARN);
+	value_type = kstrndup(value_type, node_field_name - value_type, GFP_KERNEL | __GFP_NOWARN);
 	if (!value_type)
 		return -ENOMEM;
 	id = btf_find_by_name_kind(btf, value_type, BTF_KIND_STRUCT);
 	kfree(value_type);
 	if (id < 0)
 		return id;
-	list_node++;
-	if (str_is_empty(list_node))
+	node_field_name++;
+	if (str_is_empty(node_field_name))
 		return -EINVAL;
-	info->type = BPF_LIST_HEAD;
+	info->type = head_type;
 	info->off = off;
 	info->datastructure_head.value_btf_id = id;
-	info->datastructure_head.node_name = list_node;
+	info->datastructure_head.node_name = node_field_name;
 	return BTF_FIELD_FOUND;
 }
+
+#define field_mask_test_name(field_type, field_type_str) \
+	if (field_mask & field_type && !strcmp(name, field_type_str)) { \
+		type = field_type;					\
+		goto end;						\
+	}
 
 static int btf_get_field_type(const char *name, u32 field_mask, u32 *seen_mask,
 			      int *align, int *sz)
@@ -3362,18 +3370,11 @@ static int btf_get_field_type(const char *name, u32 field_mask, u32 *seen_mask,
 			goto end;
 		}
 	}
-	if (field_mask & BPF_LIST_HEAD) {
-		if (!strcmp(name, "bpf_list_head")) {
-			type = BPF_LIST_HEAD;
-			goto end;
-		}
-	}
-	if (field_mask & BPF_LIST_NODE) {
-		if (!strcmp(name, "bpf_list_node")) {
-			type = BPF_LIST_NODE;
-			goto end;
-		}
-	}
+	field_mask_test_name(BPF_LIST_HEAD, "bpf_list_head");
+	field_mask_test_name(BPF_LIST_NODE, "bpf_list_node");
+	field_mask_test_name(BPF_RB_ROOT,   "bpf_rb_root");
+	field_mask_test_name(BPF_RB_NODE,   "bpf_rb_node");
+
 	/* Only return BPF_KPTR when all other types with matchable names fail */
 	if (field_mask & BPF_KPTR) {
 		type = BPF_KPTR_REF;
@@ -3385,6 +3386,8 @@ end:
 	*align = btf_field_type_align(type);
 	return type;
 }
+
+#undef field_mask_test_name
 
 static int btf_find_struct_field(const struct btf *btf,
 				 const struct btf_type *t, u32 field_mask,
@@ -3418,6 +3421,7 @@ static int btf_find_struct_field(const struct btf *btf,
 		case BPF_SPIN_LOCK:
 		case BPF_TIMER:
 		case BPF_LIST_NODE:
+		case BPF_RB_NODE:
 			ret = btf_find_struct(btf, member_type, off, sz, field_type,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3431,8 +3435,11 @@ static int btf_find_struct_field(const struct btf *btf,
 				return ret;
 			break;
 		case BPF_LIST_HEAD:
-			ret = btf_find_list_head(btf, t, member_type, i, off, sz,
-						 idx < info_cnt ? &info[idx] : &tmp);
+		case BPF_RB_ROOT:
+			ret = btf_find_datastructure_head(btf, t, member_type,
+							  i, off, sz,
+							  idx < info_cnt ? &info[idx] : &tmp,
+							  field_type);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3479,6 +3486,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		case BPF_SPIN_LOCK:
 		case BPF_TIMER:
 		case BPF_LIST_NODE:
+		case BPF_RB_NODE:
 			ret = btf_find_struct(btf, var_type, off, sz, field_type,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3492,8 +3500,11 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 				return ret;
 			break;
 		case BPF_LIST_HEAD:
-			ret = btf_find_list_head(btf, var, var_type, -1, off, sz,
-						 idx < info_cnt ? &info[idx] : &tmp);
+		case BPF_RB_ROOT:
+			ret = btf_find_datastructure_head(btf, var, var_type,
+							  -1, off, sz,
+							  idx < info_cnt ? &info[idx] : &tmp,
+							  field_type);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3595,8 +3606,11 @@ end_btf:
 	return ret;
 }
 
-static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
-			       struct btf_field_info *info)
+static int btf_parse_datastructure_head(const struct btf *btf,
+					struct btf_field *field,
+					struct btf_field_info *info,
+					const char *node_type_name,
+					size_t node_type_align)
 {
 	const struct btf_type *t, *n = NULL;
 	const struct btf_member *member;
@@ -3618,13 +3632,13 @@ static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
 		n = btf_type_by_id(btf, member->type);
 		if (!__btf_type_is_struct(n))
 			return -EINVAL;
-		if (strcmp("bpf_list_node", __btf_name_by_offset(btf, n->name_off)))
+		if (strcmp(node_type_name, __btf_name_by_offset(btf, n->name_off)))
 			return -EINVAL;
 		offset = __btf_member_bit_offset(n, member);
 		if (offset % 8)
 			return -EINVAL;
 		offset /= 8;
-		if (offset % __alignof__(struct bpf_list_node))
+		if (offset % node_type_align)
 			return -EINVAL;
 
 		field->datastructure_head.btf = (struct btf *)btf;
@@ -3634,6 +3648,20 @@ static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
 	if (!n)
 		return -ENOENT;
 	return 0;
+}
+
+static int btf_parse_list_head(const struct btf *btf, struct btf_field *field,
+			       struct btf_field_info *info)
+{
+	return btf_parse_datastructure_head(btf, field, info, "bpf_list_node",
+					    __alignof__(struct bpf_list_node));
+}
+
+static int btf_parse_rb_root(const struct btf *btf, struct btf_field *field,
+			     struct btf_field_info *info)
+{
+	return btf_parse_datastructure_head(btf, field, info, "bpf_rb_node",
+					    __alignof__(struct bpf_rb_node));
 }
 
 struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
@@ -3698,7 +3726,13 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			if (ret < 0)
 				goto end;
 			break;
+		case BPF_RB_ROOT:
+			ret = btf_parse_rb_root(btf, &rec->fields[i], &info_arr[i]);
+			if (ret < 0)
+				goto end;
+			break;
 		case BPF_LIST_NODE:
+		case BPF_RB_NODE:
 			break;
 		default:
 			ret = -EFAULT;
@@ -3707,8 +3741,9 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		rec->cnt++;
 	}
 
-	/* bpf_list_head requires bpf_spin_lock */
-	if (btf_record_has_field(rec, BPF_LIST_HEAD) && rec->spin_lock_off < 0) {
+	/* bpf_{list_head, rb_node} require bpf_spin_lock */
+	if ((btf_record_has_field(rec, BPF_LIST_HEAD) ||
+	     btf_record_has_field(rec, BPF_RB_ROOT)) && rec->spin_lock_off < 0) {
 		ret = -EINVAL;
 		goto end;
 	}
@@ -3719,22 +3754,28 @@ end:
 	return ERR_PTR(ret);
 }
 
+#define OWNER_FIELD_MASK (BPF_LIST_HEAD | BPF_RB_ROOT)
+#define OWNEE_FIELD_MASK (BPF_LIST_NODE | BPF_RB_NODE)
+
 int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec)
 {
 	int i;
 
-	/* There are two owning types, kptr_ref and bpf_list_head. The former
-	 * only supports storing kernel types, which can never store references
-	 * to program allocated local types, atleast not yet. Hence we only need
-	 * to ensure that bpf_list_head ownership does not form cycles.
+	/* There are three types that signify ownership of some other type:
+	 *  kptr_ref, bpf_list_head, bpf_rb_root.
+	 * kptr_ref only supports storing kernel types, which can't store
+	 * references to program allocated local types.
+	 *
+	 * Hence we only need to ensure that bpf_{list_head,rb_root} ownership
+	 * does not form cycles.
 	 */
-	if (IS_ERR_OR_NULL(rec) || !(rec->field_mask & BPF_LIST_HEAD))
+	if (IS_ERR_OR_NULL(rec) || !(rec->field_mask & OWNER_FIELD_MASK))
 		return 0;
 	for (i = 0; i < rec->cnt; i++) {
 		struct btf_struct_meta *meta;
 		u32 btf_id;
 
-		if (!(rec->fields[i].type & BPF_LIST_HEAD))
+		if (!(rec->fields[i].type & OWNER_FIELD_MASK))
 			continue;
 		btf_id = rec->fields[i].datastructure_head.value_btf_id;
 		meta = btf_find_struct_meta(btf, btf_id);
@@ -3742,39 +3783,47 @@ int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec)
 			return -EFAULT;
 		rec->fields[i].datastructure_head.value_rec = meta->record;
 
-		if (!(rec->field_mask & BPF_LIST_NODE))
+		/* We need to set value_rec for all owner types, but no need
+		 * to check ownership cycle for a type unless it's also an
+		 * ownee type.
+		 */
+		if (!(rec->field_mask & OWNEE_FIELD_MASK))
 			continue;
 
 		/* We need to ensure ownership acyclicity among all types. The
 		 * proper way to do it would be to topologically sort all BTF
 		 * IDs based on the ownership edges, since there can be multiple
-		 * bpf_list_head in a type. Instead, we use the following
-		 * reasoning:
+		 * bpf_{list_head,rb_node} in a type. Instead, we use the
+		 * following resaoning:
 		 *
 		 * - A type can only be owned by another type in user BTF if it
-		 *   has a bpf_list_node.
+		 *   has a bpf_{list,rb}_node. Let's call these ownee types.
 		 * - A type can only _own_ another type in user BTF if it has a
-		 *   bpf_list_head.
+		 *   bpf_{list_head,rb_root}. Let's call these owner types.
 		 *
-		 * We ensure that if a type has both bpf_list_head and
-		 * bpf_list_node, its element types cannot be owning types.
+		 * We ensure that if a type is both an owner and ownee, its
+		 * element types cannot be owner types.
 		 *
 		 * To ensure acyclicity:
 		 *
-		 * When A only has bpf_list_head, ownership chain can be:
+		 * When A is an owner type but not an ownee, its ownership
+		 * chain can be:
 		 *	A -> B -> C
 		 * Where:
-		 * - B has both bpf_list_head and bpf_list_node.
-		 * - C only has bpf_list_node.
+		 * - A is an owner, e.g. has bpf_rb_root.
+		 * - B is both an owner and ownee, e.g. has bpf_rb_node and
+		 *   bpf_list_head.
+		 * - C is only an owner, e.g. has bpf_list_node
 		 *
-		 * When A has both bpf_list_head and bpf_list_node, some other
-		 * type already owns it in the BTF domain, hence it can not own
-		 * another owning type through any of the bpf_list_head edges.
+		 * When A is both an owner and ownee, some other type already
+		 * owns it in the BTF domain, hence it can not own
+		 * another owner type through any of the ownership edges.
 		 *	A -> B
 		 * Where:
-		 * - B only has bpf_list_node.
+		 * - A is both an owner and ownee.
+		 * - B is only an ownee.
 		 */
-		if (meta->record->field_mask & BPF_LIST_HEAD)
+		if (meta->record->field_mask & OWNER_FIELD_MASK)
 			return -ELOOP;
 	}
 	return 0;
@@ -5236,6 +5285,8 @@ static const char *alloc_obj_fields[] = {
 	"bpf_spin_lock",
 	"bpf_list_head",
 	"bpf_list_node",
+	"bpf_rb_root",
+	"bpf_rb_node",
 };
 
 static struct btf_struct_metas *
@@ -5309,7 +5360,8 @@ btf_parse_struct_metas(struct bpf_verifier_log *log, struct btf *btf)
 
 		type = &tab->types[tab->cnt];
 		type->btf_id = i;
-		record = btf_parse_fields(btf, t, BPF_SPIN_LOCK | BPF_LIST_HEAD | BPF_LIST_NODE, t->size);
+		record = btf_parse_fields(btf, t, BPF_SPIN_LOCK | BPF_LIST_HEAD | BPF_LIST_NODE |
+						  BPF_RB_ROOT | BPF_RB_NODE, t->size);
 		/* The record cannot be unset, treat it as an error if so */
 		if (IS_ERR_OR_NULL(record)) {
 			ret = PTR_ERR_OR_ZERO(record) ?: -EFAULT;
