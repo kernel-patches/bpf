@@ -145,10 +145,11 @@ struct ifobject {
 	struct xsk_def_prog *def_prog;
 	struct xsk_xdp_drop *xdp_drop;
 	struct bpf_map *xskmap;
+	struct bpf_program *xdp_prog;
+	enum test_mode mode;
 	int ifindex;
 	u32 dst_ip;
 	u32 src_ip;
-	u32 xdp_flags;
 	u32 bind_flags;
 	u16 src_port;
 	u16 dst_port;
@@ -168,6 +169,10 @@ struct test_spec {
 	struct ifobject *ifobj_rx;
 	struct pkt_stream *tx_pkt_stream_default;
 	struct pkt_stream *rx_pkt_stream_default;
+	struct bpf_program *xdp_prog_rx;
+	struct bpf_program *xdp_prog_tx;
+	struct bpf_map *xskmap_rx;
+	struct bpf_map *xskmap_tx;
 	u16 total_steps;
 	u16 current_step;
 	u16 nb_sockets;
