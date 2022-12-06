@@ -46,6 +46,8 @@
 
 struct mlx5_xdp_buff {
 	struct xdp_buff xdp;
+	struct mlx5_cqe64 *cqe;
+	struct mlx5e_rq *rq;
 };
 
 struct mlx5e_xsk_param;
@@ -59,6 +61,11 @@ void mlx5e_set_xmit_fp(struct mlx5e_xdpsq *sq, bool is_mpw);
 void mlx5e_xdp_rx_poll_complete(struct mlx5e_rq *rq);
 int mlx5e_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames,
 		   u32 flags);
+
+bool mlx5e_xdp_rx_hash_supported(const struct xdp_md *ctx);
+u32 mlx5e_xdp_rx_hash(const struct xdp_md *ctx);
+bool mlx5e_xdp_rx_timestamp_supported(const struct xdp_md *ctx);
+u64 mlx5e_xdp_rx_timestamp(const struct xdp_md *ctx);
 
 INDIRECT_CALLABLE_DECLARE(bool mlx5e_xmit_xdp_frame_mpwqe(struct mlx5e_xdpsq *sq,
 							  struct mlx5e_xmit_data *xdptxd,
