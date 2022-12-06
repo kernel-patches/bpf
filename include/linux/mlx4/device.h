@@ -1585,4 +1585,11 @@ static inline int mlx4_get_num_reserved_uar(struct mlx4_dev *dev)
 	/* The first 128 UARs are used for EQ doorbells */
 	return (128 >> (PAGE_SHIFT - dev->uar_page_shift));
 }
+
+struct xdp_md;
+bool mlx4_xdp_rx_timestamp_supported(const struct xdp_md *ctx);
+u64 mlx4_xdp_rx_timestamp(const struct xdp_md *ctx);
+bool mlx4_xdp_rx_hash_supported(const struct xdp_md *ctx);
+u32 mlx4_xdp_rx_hash(const struct xdp_md *ctx);
+
 #endif /* MLX4_DEVICE_H */

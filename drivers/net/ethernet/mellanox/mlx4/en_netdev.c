@@ -2855,6 +2855,11 @@ static const struct net_device_ops mlx4_netdev_ops = {
 	.ndo_features_check	= mlx4_en_features_check,
 	.ndo_set_tx_maxrate	= mlx4_en_set_tx_maxrate,
 	.ndo_bpf		= mlx4_xdp,
+
+	.ndo_xdp_rx_timestamp_supported = mlx4_xdp_rx_timestamp_supported,
+	.ndo_xdp_rx_timestamp	= mlx4_xdp_rx_timestamp,
+	.ndo_xdp_rx_hash_supported = mlx4_xdp_rx_hash_supported,
+	.ndo_xdp_rx_hash	= mlx4_xdp_rx_hash,
 };
 
 static const struct net_device_ops mlx4_netdev_ops_master = {
@@ -2887,6 +2892,11 @@ static const struct net_device_ops mlx4_netdev_ops_master = {
 	.ndo_features_check	= mlx4_en_features_check,
 	.ndo_set_tx_maxrate	= mlx4_en_set_tx_maxrate,
 	.ndo_bpf		= mlx4_xdp,
+
+	.ndo_xdp_rx_timestamp_supported = mlx4_xdp_rx_timestamp_supported,
+	.ndo_xdp_rx_timestamp	= mlx4_xdp_rx_timestamp,
+	.ndo_xdp_rx_hash_supported = mlx4_xdp_rx_hash_supported,
+	.ndo_xdp_rx_hash	= mlx4_xdp_rx_hash,
 };
 
 struct mlx4_en_bond {
