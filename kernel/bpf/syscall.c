@@ -1007,7 +1007,10 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD,
 				       map->value_size);
-	if (!IS_ERR_OR_NULL(map->record)) {
+	if (IS_ERR(map->record))
+		return -EINVAL;
+
+	if (map->record) {
 		int i;
 
 		if (!bpf_capable()) {
