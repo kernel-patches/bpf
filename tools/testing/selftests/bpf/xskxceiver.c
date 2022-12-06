@@ -1654,18 +1654,53 @@ static void testapp_invalid_desc(struct test_spec *test)
 	pkt_stream_restore_default(test);
 }
 
-static int xsk_load_xdp_program(struct ifobject *ifobj)
+static void testapp_xdp_drop(struct test_spec *test)
+{
+	struct ifobject *ifobj = test->ifobj_rx;
+	int err;
+
+	test_spec_set_name(test, "XDP_CONSUMES_SOME_PACKETS");
+	xsk_detach_xdp_program(ifobj->ifindex, ifobj->xdp_flags);
+	err = xsk_attach_xdp_program(ifobj->xdp_drop->progs.xsk_xdp_drop, ifobj->ifindex,
+				     ifobj->xdp_flags);
+	if (err) {
+		printf("Error attaching XDP_DROP program\n");
+		test->fail = true;
+		return;
+	}
+	ifobj->xskmap = ifobj->xdp_drop->maps.xsk;
+
+	pkt_stream_receive_half(test);
+	testapp_validate_traffic(test);
+
+	pkt_stream_restore_default(test);
+	xsk_detach_xdp_program(ifobj->ifindex, ifobj->xdp_flags);
+	err = xsk_attach_xdp_program(ifobj->def_prog->progs.xsk_def_prog, ifobj->ifindex,
+				     ifobj->xdp_flags);
+	if (err) {
+		printf("Error restoring default XDP program\n");
+		exit_with_error(-err);
+	}
+	ifobj->xskmap = ifobj->def_prog->maps.xsk;
+}
+
+static int xsk_load_xdp_programs(struct ifobject *ifobj)
 {
 	ifobj->def_prog = xsk_def_prog__open_and_load();
 	if (libbpf_get_error(ifobj->def_prog))
 		return libbpf_get_error(ifobj->def_prog);
 
+	ifobj->xdp_drop = xsk_xdp_drop__open_and_load();
+	if (libbpf_get_error(ifobj->xdp_drop))
+		return libbpf_get_error(ifobj->xdp_drop);
+
 	return 0;
 }
 
-static void xsk_unload_xdp_program(struct ifobject *ifobj)
+static void xsk_unload_xdp_programs(struct ifobject *ifobj)
 {
 	xsk_def_prog__destroy(ifobj->def_prog);
+	xsk_xdp_drop__destroy(ifobj->xdp_drop);
 }
 
 static void init_iface(struct ifobject *ifobj, const char *dst_mac, const char *src_mac,
@@ -1692,7 +1727,7 @@ static void init_iface(struct ifobject *ifobj, const char *dst_mac, const char *
 	if (!load_xdp)
 		return;
 
-	err = xsk_load_xdp_program(ifobj);
+	err = xsk_load_xdp_programs(ifobj);
 	if (err) {
 		printf("Error loading XDP program\n");
 		exit_with_error(err);
@@ -1803,6 +1838,9 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		break;
 	case TEST_TYPE_HEADROOM:
 		testapp_headroom(test);
+		break;
+	case TEST_TYPE_XDP_CONSUMES_PACKETS:
+		testapp_xdp_drop(test);
 		break;
 	default:
 		break;
@@ -1971,8 +2009,8 @@ int main(int argc, char **argv)
 
 	pkt_stream_delete(tx_pkt_stream_default);
 	pkt_stream_delete(rx_pkt_stream_default);
-	xsk_unload_xdp_program(ifobj_tx);
-	xsk_unload_xdp_program(ifobj_rx);
+	xsk_unload_xdp_programs(ifobj_tx);
+	xsk_unload_xdp_programs(ifobj_rx);
 	ifobject_delete(ifobj_tx);
 	ifobject_delete(ifobj_rx);
 

@@ -6,6 +6,7 @@
 #define XSKXCEIVER_H_
 
 #include "xsk_def_prog.skel.h"
+#include "xsk_xdp_drop.skel.h"
 
 #ifndef SOL_XDP
 #define SOL_XDP 283
@@ -87,6 +88,7 @@ enum test_type {
 	TEST_TYPE_STATS_RX_FULL,
 	TEST_TYPE_STATS_FILL_EMPTY,
 	TEST_TYPE_BPF_RES,
+	TEST_TYPE_XDP_CONSUMES_PACKETS,
 	TEST_TYPE_MAX
 };
 
@@ -141,6 +143,7 @@ struct ifobject {
 	validation_func_t validation_func;
 	struct pkt_stream *pkt_stream;
 	struct xsk_def_prog *def_prog;
+	struct xsk_xdp_drop *xdp_drop;
 	struct bpf_map *xskmap;
 	int ifindex;
 	u32 dst_ip;
