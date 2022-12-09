@@ -500,6 +500,57 @@ cleanup:
 	bind4_prog__destroy(skel);
 }
 
+static void test_func_replace_progmap(void)
+{
+	struct bpf_cpumap_val value = { .qsize = 1 };
+	struct bpf_object *obj, *tgt_obj = NULL;
+	struct bpf_program *drop, *redirect;
+	struct bpf_map *cpumap;
+	int err, tgt_fd;
+	__u32 key = 0;
+
+	err = bpf_prog_test_open("freplace_progmap.bpf.o", BPF_PROG_TYPE_UNSPEC, &obj);
+	if (!ASSERT_OK(err, "prog_open"))
+		return;
+
+	err = bpf_prog_test_load("xdp_dummy.bpf.o", BPF_PROG_TYPE_UNSPEC, &tgt_obj, &tgt_fd);
+	if (!ASSERT_OK(err, "tgt_prog_load"))
+		goto out;
+
+	drop = bpf_object__find_program_by_name(obj, "xdp_drop_prog");
+	redirect = bpf_object__find_program_by_name(obj, "xdp_cpumap_prog");
+	cpumap = bpf_object__find_map_by_name(obj, "cpu_map");
+
+	if (!ASSERT_OK_PTR(drop, "drop") || !ASSERT_OK_PTR(redirect, "redirect") ||
+	    !ASSERT_OK_PTR(cpumap, "cpumap"))
+		goto out;
+
+	/* Change the 'redirect' program type to be a PROG_TYPE_EXT
+	 * with an XDP target
+	 */
+	bpf_program__set_type(redirect, BPF_PROG_TYPE_EXT);
+	bpf_program__set_expected_attach_type(redirect, 0);
+	err = bpf_program__set_attach_target(redirect, tgt_fd, "xdp_dummy_prog");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = bpf_object__load(obj);
+	if (!ASSERT_OK(err, "obj_load"))
+		goto out;
+
+	/* This will fail if the map is "owned" by a PROG_TYPE_EXT program,
+	 * which, prior to fixing the kernel, it will be since the map is used
+	 * from the 'redirect' prog above
+	 */
+	value.bpf_prog.fd = bpf_program__fd(drop);
+	err = bpf_map_update_elem(bpf_map__fd(cpumap), &key, &value, 0);
+	ASSERT_OK(err, "map_update");
+
+out:
+	bpf_object__close(tgt_obj);
+	bpf_object__close(obj);
+}
+
 /* NOTE: affect other tests, must run in serial mode */
 void serial_test_fexit_bpf2bpf(void)
 {
@@ -525,4 +576,6 @@ void serial_test_fexit_bpf2bpf(void)
 		test_func_replace_global_func();
 	if (test__start_subtest("fentry_to_cgroup_bpf"))
 		test_fentry_to_cgroup_bpf();
+	if (test__start_subtest("func_replace_progmap"))
+		test_func_replace_progmap();
 }

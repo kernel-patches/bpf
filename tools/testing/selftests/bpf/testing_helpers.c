@@ -174,8 +174,8 @@ __u32 link_info_prog_id(const struct bpf_link *link, struct bpf_link_info *info)
 
 int extra_prog_load_log_flags = 0;
 
-int bpf_prog_test_load(const char *file, enum bpf_prog_type type,
-		       struct bpf_object **pobj, int *prog_fd)
+int bpf_prog_test_open(const char *file, enum bpf_prog_type type,
+		       struct bpf_object **pobj)
 {
 	LIBBPF_OPTS(bpf_object_open_opts, opts,
 		.kernel_log_level = extra_prog_load_log_flags,
@@ -200,6 +200,26 @@ int bpf_prog_test_load(const char *file, enum bpf_prog_type type,
 
 	flags = bpf_program__flags(prog) | BPF_F_TEST_RND_HI32;
 	bpf_program__set_flags(prog, flags);
+
+	*pobj = obj;
+	return 0;
+err_out:
+	bpf_object__close(obj);
+	return err;
+}
+
+int bpf_prog_test_load(const char *file, enum bpf_prog_type type,
+		       struct bpf_object **pobj, int *prog_fd)
+{
+	struct bpf_program *prog;
+	struct bpf_object *obj;
+	int err;
+
+	err = bpf_prog_test_open(file, type, &obj);
+	if (err)
+		return err;
+
+	prog = bpf_object__next_program(obj, NULL);
 
 	err = bpf_object__load(obj);
 	if (err)
