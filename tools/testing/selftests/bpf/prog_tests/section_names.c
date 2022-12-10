@@ -114,6 +114,11 @@ static struct sec_name_test tests[] = {
 		{0, BPF_CGROUP_INET6_BIND},
 	},
 	{
+		"cgroup/bindun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_BIND},
+		{0, BPF_CGROUP_UNIX_BIND},
+	},
+	{
 		"cgroup/connect4",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_INET4_CONNECT},
 		{0, BPF_CGROUP_INET4_CONNECT},
@@ -122,6 +127,11 @@ static struct sec_name_test tests[] = {
 		"cgroup/connect6",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_INET6_CONNECT},
 		{0, BPF_CGROUP_INET6_CONNECT},
+	},
+	{
+		"cgroup/connectun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_CONNECT},
+		{0, BPF_CGROUP_UNIX_CONNECT},
 	},
 	{
 		"cgroup/sendmsg4",
@@ -134,6 +144,11 @@ static struct sec_name_test tests[] = {
 		{0, BPF_CGROUP_UDP6_SENDMSG},
 	},
 	{
+		"cgroup/sendmsgun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_SENDMSG},
+		{0, BPF_CGROUP_UNIX_SENDMSG},
+	},
+	{
 		"cgroup/recvmsg4",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UDP4_RECVMSG},
 		{0, BPF_CGROUP_UDP4_RECVMSG},
@@ -142,6 +157,11 @@ static struct sec_name_test tests[] = {
 		"cgroup/recvmsg6",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UDP6_RECVMSG},
 		{0, BPF_CGROUP_UDP6_RECVMSG},
+	},
+	{
+		"cgroup/recvmsgun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_RECVMSG},
+		{0, BPF_CGROUP_UNIX_RECVMSG},
 	},
 	{
 		"cgroup/sysctl",
@@ -169,6 +189,11 @@ static struct sec_name_test tests[] = {
 		{0, BPF_CGROUP_INET6_GETPEERNAME},
 	},
 	{
+		"cgroup/getpeernameun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_GETPEERNAME},
+		{0, BPF_CGROUP_UNIX_GETPEERNAME},
+	},
+	{
 		"cgroup/getsockname4",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_INET4_GETSOCKNAME},
 		{0, BPF_CGROUP_INET4_GETSOCKNAME},
@@ -177,6 +202,11 @@ static struct sec_name_test tests[] = {
 		"cgroup/getsockname6",
 		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_INET6_GETSOCKNAME},
 		{0, BPF_CGROUP_INET6_GETSOCKNAME},
+	},
+	{
+		"cgroup/getsocknameun",
+		{0, BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_CGROUP_UNIX_GETSOCKNAME},
+		{0, BPF_CGROUP_UNIX_GETSOCKNAME},
 	},
 };
 

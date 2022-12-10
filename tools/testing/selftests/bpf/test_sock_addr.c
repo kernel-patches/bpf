@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 #include <linux/filter.h>
 
@@ -28,12 +29,16 @@
 #define CG_PATH	"/foo"
 #define CONNECT4_PROG_PATH	"./connect4_prog.bpf.o"
 #define CONNECT6_PROG_PATH	"./connect6_prog.bpf.o"
+#define CONNECTUN_PROG_PATH	"./connectun_prog.bpf.o"
 #define SENDMSG4_PROG_PATH	"./sendmsg4_prog.bpf.o"
 #define SENDMSG6_PROG_PATH	"./sendmsg6_prog.bpf.o"
+#define SENDMSGUN_PROG_PATH	"./sendmsgun_prog.bpf.o"
 #define RECVMSG4_PROG_PATH	"./recvmsg4_prog.bpf.o"
 #define RECVMSG6_PROG_PATH	"./recvmsg6_prog.bpf.o"
+#define RECVMSGUN_PROG_PATH	"./recvmsgun_prog.bpf.o"
 #define BIND4_PROG_PATH		"./bind4_prog.bpf.o"
 #define BIND6_PROG_PATH		"./bind6_prog.bpf.o"
+#define BINDUN_PROG_PATH	"./bindun_prog.bpf.o"
 
 #define SERV4_IP		"192.168.1.254"
 #define SERV4_REWRITE_IP	"127.0.0.1"
@@ -50,6 +55,9 @@
 #define WILDCARD6_IP		"::"
 #define SERV6_PORT		6060
 #define SERV6_REWRITE_PORT	6666
+
+#define SERVUN_ADDRESS		"bpf_cgroup_unix_test"
+#define SERVUN_REWRITE_ADDRESS	"bpf_cgroup_unix_test_rewrite"
 
 #define INET_NTOP_BUF	40
 
@@ -88,8 +96,10 @@ struct sock_addr_test {
 
 static int bind4_prog_load(const struct sock_addr_test *test);
 static int bind6_prog_load(const struct sock_addr_test *test);
+static int bindun_prog_load(const struct sock_addr_test *test);
 static int connect4_prog_load(const struct sock_addr_test *test);
 static int connect6_prog_load(const struct sock_addr_test *test);
+static int connectun_prog_load(const struct sock_addr_test *test);
 static int sendmsg_allow_prog_load(const struct sock_addr_test *test);
 static int sendmsg_deny_prog_load(const struct sock_addr_test *test);
 static int recvmsg_allow_prog_load(const struct sock_addr_test *test);
@@ -102,6 +112,8 @@ static int recvmsg6_rw_c_prog_load(const struct sock_addr_test *test);
 static int sendmsg6_rw_c_prog_load(const struct sock_addr_test *test);
 static int sendmsg6_rw_v4mapped_prog_load(const struct sock_addr_test *test);
 static int sendmsg6_rw_wildcard_prog_load(const struct sock_addr_test *test);
+static int sendmsgun_prog_load(const struct sock_addr_test *test);
+static int recvmsgun_prog_load(const struct sock_addr_test *test);
 
 static struct sock_addr_test tests[] = {
 	/* bind */
@@ -217,6 +229,20 @@ static struct sock_addr_test tests[] = {
 		NULL,
 		SUCCESS,
 	},
+	{
+		"bindun: rewrite path",
+		bindun_prog_load,
+		BPF_CGROUP_UNIX_BIND,
+		BPF_CGROUP_UNIX_BIND,
+		AF_UNIX,
+		SOCK_STREAM,
+		SERVUN_ADDRESS,
+		0,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		NULL,
+		SUCCESS,
+	},
 
 	/* connect */
 	{
@@ -329,6 +355,34 @@ static struct sock_addr_test tests[] = {
 		SERV6_REWRITE_IP,
 		SERV6_REWRITE_PORT,
 		SRC6_REWRITE_IP,
+		SUCCESS,
+	},
+	{
+		"connectun: rewrite SOCK_STREAM path",
+		connectun_prog_load,
+		BPF_CGROUP_UNIX_CONNECT,
+		BPF_CGROUP_UNIX_CONNECT,
+		AF_UNIX,
+		SOCK_STREAM,
+		SERVUN_ADDRESS,
+		0,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		NULL,
+		SUCCESS,
+	},
+	{
+		"connectun: rewrite SOCK_DGRAM path",
+		connectun_prog_load,
+		BPF_CGROUP_UNIX_CONNECT,
+		BPF_CGROUP_UNIX_CONNECT,
+		AF_UNIX,
+		SOCK_DGRAM,
+		SERVUN_ADDRESS,
+		0,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		NULL,
 		SUCCESS,
 	},
 
@@ -515,6 +569,20 @@ static struct sock_addr_test tests[] = {
 		SRC6_REWRITE_IP,
 		SYSCALL_EPERM,
 	},
+	{
+		"sendmsgun: rewrite SOCK_DGRAM path",
+		sendmsgun_prog_load,
+		BPF_CGROUP_UNIX_SENDMSG,
+		BPF_CGROUP_UNIX_SENDMSG,
+		AF_UNIX,
+		SOCK_DGRAM,
+		SERVUN_ADDRESS,
+		0,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		NULL,
+		SUCCESS,
+	},
 
 	/* recvmsg */
 	{
@@ -601,6 +669,20 @@ static struct sock_addr_test tests[] = {
 		SERV6_IP,
 		SUCCESS,
 	},
+	{
+		"recvmsgun: rewrite SOCK_DGRAM path",
+		recvmsgun_prog_load,
+		BPF_CGROUP_UNIX_RECVMSG,
+		BPF_CGROUP_UNIX_RECVMSG,
+		AF_UNIX,
+		SOCK_DGRAM,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		SERVUN_REWRITE_ADDRESS,
+		0,
+		NULL,
+		SUCCESS,
+	},
 };
 
 static int mk_sockaddr(int domain, const char *ip, unsigned short port,
@@ -608,8 +690,9 @@ static int mk_sockaddr(int domain, const char *ip, unsigned short port,
 {
 	struct sockaddr_in6 *addr6;
 	struct sockaddr_in *addr4;
+	struct sockaddr_un *addrun;
 
-	if (domain != AF_INET && domain != AF_INET6) {
+	if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
 		log_err("Unsupported address family");
 		return -1;
 	}
@@ -638,6 +721,15 @@ static int mk_sockaddr(int domain, const char *ip, unsigned short port,
 			return -1;
 		}
 		*addr_len = sizeof(struct sockaddr_in6);
+	} else if (domain == AF_UNIX) {
+		if (*addr_len < sizeof(struct sockaddr_un))
+			return -1;
+		addrun = (struct sockaddr_un *)addr;
+		addrun->sun_family = domain;
+		addrun->sun_path[0] = 0;
+		strcpy(addrun->sun_path + 1, ip);
+		*addr_len = offsetof(struct sockaddr_un, sun_path) + 1 +
+			    strlen(ip);
 	}
 
 	return 0;
@@ -706,6 +798,11 @@ static int bind6_prog_load(const struct sock_addr_test *test)
 	return load_path(test, BIND6_PROG_PATH);
 }
 
+static int bindun_prog_load(const struct sock_addr_test *test)
+{
+	return load_path(test, BINDUN_PROG_PATH);
+}
+
 static int connect4_prog_load(const struct sock_addr_test *test)
 {
 	return load_path(test, CONNECT4_PROG_PATH);
@@ -714,6 +811,11 @@ static int connect4_prog_load(const struct sock_addr_test *test)
 static int connect6_prog_load(const struct sock_addr_test *test)
 {
 	return load_path(test, CONNECT6_PROG_PATH);
+}
+
+static int connectun_prog_load(const struct sock_addr_test *test)
+{
+	return load_path(test, CONNECTUN_PROG_PATH);
 }
 
 static int xmsg_ret_only_prog_load(const struct sock_addr_test *test,
@@ -889,12 +991,23 @@ static int sendmsg6_rw_c_prog_load(const struct sock_addr_test *test)
 	return load_path(test, SENDMSG6_PROG_PATH);
 }
 
+static int sendmsgun_prog_load(const struct sock_addr_test *test)
+{
+	return load_path(test, SENDMSGUN_PROG_PATH);
+}
+
+static int recvmsgun_prog_load(const struct sock_addr_test *test)
+{
+	return load_path(test, RECVMSGUN_PROG_PATH);
+}
+
 static int cmp_addr(const struct sockaddr_storage *addr1, socklen_t addr1_len,
 		    const struct sockaddr_storage *addr2, socklen_t addr2_len,
 		    int cmp_port)
 {
 	const struct sockaddr_in *four1, *four2;
 	const struct sockaddr_in6 *six1, *six2;
+	const struct sockaddr_un *un1, *un2;
 
 	if (addr1->ss_family != addr2->ss_family)
 		return -1;
@@ -913,6 +1026,10 @@ static int cmp_addr(const struct sockaddr_storage *addr1, socklen_t addr1_len,
 		return !((six1->sin6_port == six2->sin6_port || !cmp_port) &&
 			 !memcmp(&six1->sin6_addr, &six2->sin6_addr,
 				 sizeof(struct in6_addr)));
+	} else if (addr1->ss_family == AF_UNIX) {
+		un1 = (const struct sockaddr_un *)addr1;
+		un2 = (const struct sockaddr_un *)addr2;
+		return memcmp(un1, un2, addr1_len);
 	}
 
 	return -1;
@@ -992,7 +1109,7 @@ static int connect_to_server(int type, const struct sockaddr_storage *addr,
 
 	domain = addr->ss_family;
 
-	if (domain != AF_INET && domain != AF_INET6) {
+	if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
 		log_err("Unsupported address family");
 		goto err;
 	}
@@ -1066,7 +1183,7 @@ static int sendmsg_to_server(int type, const struct sockaddr_storage *addr,
 
 	domain = addr->ss_family;
 
-	if (domain != AF_INET && domain != AF_INET6) {
+	if (domain != AF_INET && domain != AF_INET6 && domain != AF_UNIX) {
 		log_err("Unsupported address family");
 		goto err;
 	}
@@ -1095,7 +1212,7 @@ static int sendmsg_to_server(int type, const struct sockaddr_storage *addr,
 			hdr.msg_control = &control6;
 			hdr.msg_controllen = sizeof(control6.buf);
 		}
-		if (init_pktinfo(domain, CMSG_FIRSTHDR(&hdr))) {
+		if (domain != AF_UNIX && init_pktinfo(domain, CMSG_FIRSTHDR(&hdr))) {
 			log_err("Fail to init pktinfo");
 			goto err;
 		}
@@ -1257,10 +1374,11 @@ static int run_connect_test_case(const struct sock_addr_test *test)
 	if (cmp_peer_addr(clientfd, &expected_addr, expected_addr_len))
 		goto err;
 
-	if (cmp_local_ip(clientfd, &expected_src_addr, expected_src_addr_len))
+	if (test->domain != AF_UNIX &&
+	    cmp_local_ip(clientfd, &expected_src_addr, expected_src_addr_len))
 		goto err;
 
-	if (test->type == SOCK_STREAM) {
+	if (test->domain != AF_UNIX && test->type == SOCK_STREAM) {
 		/* Test TCP Fast Open scenario */
 		clientfd = fastconnect_to_server(&requested_addr, addr_len);
 		if (clientfd == -1)
@@ -1339,7 +1457,8 @@ static int run_xmsg_test_case(const struct sock_addr_test *test, int max_cmsg)
 					&recvmsg_addr_len) == -1)
 			goto err;
 
-		if (cmp_addr(&recvmsg_addr, recvmsg_addr_len, &expected_addr,
+		if (test->domain != AF_UNIX &&
+		    cmp_addr(&recvmsg_addr, recvmsg_addr_len, &expected_addr,
 			     expected_addr_len,
 			     /*cmp_port*/ 0))
 			goto err;
@@ -1382,18 +1501,22 @@ static int run_test_case(int cgfd, const struct sock_addr_test *test)
 	switch (test->attach_type) {
 	case BPF_CGROUP_INET4_BIND:
 	case BPF_CGROUP_INET6_BIND:
+	case BPF_CGROUP_UNIX_BIND:
 		err = run_bind_test_case(test);
 		break;
 	case BPF_CGROUP_INET4_CONNECT:
 	case BPF_CGROUP_INET6_CONNECT:
+	case BPF_CGROUP_UNIX_CONNECT:
 		err = run_connect_test_case(test);
 		break;
 	case BPF_CGROUP_UDP4_SENDMSG:
 	case BPF_CGROUP_UDP6_SENDMSG:
+	case BPF_CGROUP_UNIX_SENDMSG:
 		err = run_xmsg_test_case(test, 1);
 		break;
 	case BPF_CGROUP_UDP4_RECVMSG:
 	case BPF_CGROUP_UDP6_RECVMSG:
+	case BPF_CGROUP_UNIX_RECVMSG:
 		err = run_xmsg_test_case(test, 0);
 		break;
 	default:
