@@ -26,6 +26,7 @@
 #include <linux/socket.h>
 #include <linux/sock_diag.h>
 #include <linux/in.h>
+#include <linux/un.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
 #include <linux/if_packet.h>
@@ -8839,6 +8840,8 @@ static bool sock_addr_is_valid_access(int off, int size,
 			return false;
 		}
 		break;
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		return false;
 	}
 
 	switch (off) {
@@ -8884,6 +8887,10 @@ static bool sock_addr_is_valid_access(int off, int size,
 		if (size != sizeof(__u64))
 			return false;
 		info->reg_type = PTR_TO_SOCKET;
+		break;
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		if (size != sizeof(char))
+			return false;
 		break;
 	case bpf_ctx_range(struct bpf_sock_addr, user_addrlen):
 		if (type != BPF_READ)
@@ -10002,6 +10009,18 @@ static u32 sock_addr_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern, sk),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct bpf_sock_addr_kern, sk));
+		break;
+
+	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
+		/* In kernelspace, addresses are always stored in
+		 * sockaddr_storage so any access in the full range of
+		 * sockaddr_un.sun_path is safe.
+		 */
+		off = si->off;
+		off -= offsetof(struct bpf_sock_addr, user_path[0]);
+		SOCK_ADDR_LOAD_OR_STORE_NESTED_FIELD_SIZE_OFF(
+			struct bpf_sock_addr_kern, struct sockaddr_un, uaddr,
+			sun_path, BPF_SIZE(si->code), off, tmp_reg);
 		break;
 
 	case offsetof(struct bpf_sock_addr, user_addrlen):

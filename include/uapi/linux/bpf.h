@@ -6366,6 +6366,7 @@ struct bpf_sock_addr {
 				 * Stored in network byte order.
 				 */
 	__bpf_md_ptr(struct bpf_sock *, sk);
+	char user_path[108];    /* Allows 1 byte read and write. */
 	__u32 user_addrlen;	/* Allows 4 byte read and write. */
 };
 
