@@ -8885,6 +8885,13 @@ static bool sock_addr_is_valid_access(int off, int size,
 			return false;
 		info->reg_type = PTR_TO_SOCKET;
 		break;
+	case bpf_ctx_range(struct bpf_sock_addr, user_addrlen):
+		if (type != BPF_READ)
+			return false;
+
+		if (size != sizeof(__u32))
+			return false;
+		break;
 	default:
 		if (type == BPF_READ) {
 			if (size != size_default)
@@ -9918,6 +9925,7 @@ static u32 sock_addr_convert_ctx_access(enum bpf_access_type type,
 {
 	int off, port_size = sizeof_field(struct sockaddr_in6, sin6_port);
 	struct bpf_insn *insn = insn_buf;
+	u32 read_size;
 
 	switch (si->off) {
 	case offsetof(struct bpf_sock_addr, user_family):
@@ -9994,6 +10002,49 @@ static u32 sock_addr_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern, sk),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct bpf_sock_addr_kern, sk));
+		break;
+
+	case offsetof(struct bpf_sock_addr, user_addrlen):
+		/* uaddrlen is a pointer so it should be accessed via indirect
+		 * loads and stores. Also for stores additional temporary
+		 * register is used since neither src_reg nor dst_reg can be
+		 * overridden.
+		 */
+		if (type == BPF_WRITE) {
+			int treg = BPF_REG_9;
+
+			if (si->src_reg == treg || si->dst_reg == treg)
+				--treg;
+			if (si->src_reg == treg || si->dst_reg == treg)
+				--treg;
+			*insn++ = BPF_STX_MEM(
+				BPF_DW, si->dst_reg, treg,
+				offsetof(struct bpf_sock_addr_kern, tmp_reg));
+			*insn++ = BPF_LDX_MEM(
+				BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern,
+						 uaddrlen),
+				treg, si->dst_reg,
+				offsetof(struct bpf_sock_addr_kern, uaddrlen));
+			*insn++ = BPF_STX_MEM(
+				BPF_SIZEOF(u32), treg, si->src_reg,
+				bpf_ctx_narrow_access_offset(0, sizeof(u32),
+							     sizeof(int)));
+			*insn++ = BPF_LDX_MEM(
+				BPF_DW, treg, si->dst_reg,
+				offsetof(struct bpf_sock_addr_kern, tmp_reg));
+		} else {
+			*insn++ = BPF_LDX_MEM(
+				BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern,
+						 uaddrlen),
+				si->dst_reg, si->src_reg,
+				offsetof(struct bpf_sock_addr_kern, uaddrlen));
+			read_size = bpf_size_to_bytes(BPF_SIZE(si->code));
+			*insn++ = BPF_LDX_MEM(
+				BPF_SIZE(si->code), si->dst_reg, si->dst_reg,
+				bpf_ctx_narrow_access_offset(0, read_size,
+							     sizeof(int)));
+		}
+		*target_size = sizeof(u32);
 		break;
 	}
 

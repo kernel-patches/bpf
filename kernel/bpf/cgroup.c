@@ -1449,6 +1449,7 @@ EXPORT_SYMBOL(__cgroup_bpf_run_filter_sk);
  *                                       provided by user sockaddr
  * @sk: sock struct that will use sockaddr
  * @uaddr: sockaddr struct provided by user
+ * @uaddrlen: Pointer to length of sockaddr struct provided by user
  * @type: The type of program to be executed
  * @t_ctx: Pointer to attach type specific context
  * @flags: Pointer to u32 which contains higher bits of BPF program
@@ -1461,6 +1462,7 @@ EXPORT_SYMBOL(__cgroup_bpf_run_filter_sk);
  */
 int __cgroup_bpf_run_filter_sock_addr(struct sock *sk,
 				      struct sockaddr *uaddr,
+				      int *uaddrlen,
 				      enum cgroup_bpf_attach_type atype,
 				      void *t_ctx,
 				      u32 *flags)
@@ -1468,6 +1470,7 @@ int __cgroup_bpf_run_filter_sock_addr(struct sock *sk,
 	struct bpf_sock_addr_kern ctx = {
 		.sk = sk,
 		.uaddr = uaddr,
+		.uaddrlen = uaddrlen,
 		.t_ctx = t_ctx,
 	};
 	struct sockaddr_storage unspec;

@@ -1294,6 +1294,7 @@ struct bpf_sock_addr_kern {
 	 */
 	u64 tmp_reg;
 	void *t_ctx;	/* Attach type specific context. */
+	int *uaddrlen;
 };
 
 struct bpf_sock_ops_kern {
