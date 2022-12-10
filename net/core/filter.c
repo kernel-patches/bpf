@@ -7675,6 +7675,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 			return &bpf_bind_proto;
 		default:
 			return NULL;
@@ -7703,16 +7704,22 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET6_BIND:
+		case BPF_CGROUP_UNIX_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 		case BPF_CGROUP_UDP4_RECVMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
+		case BPF_CGROUP_UNIX_RECVMSG:
 		case BPF_CGROUP_UDP4_SENDMSG:
 		case BPF_CGROUP_UDP6_SENDMSG:
+		case BPF_CGROUP_UNIX_SENDMSG:
 		case BPF_CGROUP_INET4_GETPEERNAME:
 		case BPF_CGROUP_INET6_GETPEERNAME:
+		case BPF_CGROUP_UNIX_GETPEERNAME:
 		case BPF_CGROUP_INET4_GETSOCKNAME:
 		case BPF_CGROUP_INET6_GETSOCKNAME:
+		case BPF_CGROUP_UNIX_GETSOCKNAME:
 			return &bpf_sock_addr_setsockopt_proto;
 		default:
 			return NULL;
@@ -7721,16 +7728,22 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET6_BIND:
+		case BPF_CGROUP_UNIX_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_UNIX_CONNECT:
 		case BPF_CGROUP_UDP4_RECVMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
+		case BPF_CGROUP_UNIX_RECVMSG:
 		case BPF_CGROUP_UDP4_SENDMSG:
 		case BPF_CGROUP_UDP6_SENDMSG:
+		case BPF_CGROUP_UNIX_SENDMSG:
 		case BPF_CGROUP_INET4_GETPEERNAME:
 		case BPF_CGROUP_INET6_GETPEERNAME:
+		case BPF_CGROUP_UNIX_GETPEERNAME:
 		case BPF_CGROUP_INET4_GETSOCKNAME:
 		case BPF_CGROUP_INET6_GETSOCKNAME:
+		case BPF_CGROUP_UNIX_GETSOCKNAME:
 			return &bpf_sock_addr_getsockopt_proto;
 		default:
 			return NULL;
@@ -8793,8 +8806,8 @@ static bool sock_addr_is_valid_access(int off, int size,
 	if (off % size != 0)
 		return false;
 
-	/* Disallow access to IPv6 fields from IPv4 contex and vise
-	 * versa.
+	/* Disallow access to fields not belonging to the attach type's address
+	 * family.
 	 */
 	switch (off) {
 	case bpf_ctx_range(struct bpf_sock_addr, user_ip4):
@@ -8841,7 +8854,18 @@ static bool sock_addr_is_valid_access(int off, int size,
 		}
 		break;
 	case bpf_ctx_range_till(struct bpf_sock_addr, user_path[0], user_path[107]):
-		return false;
+		switch (prog->expected_attach_type) {
+		case BPF_CGROUP_UNIX_BIND:
+		case BPF_CGROUP_UNIX_CONNECT:
+		case BPF_CGROUP_UNIX_SENDMSG:
+		case BPF_CGROUP_UNIX_RECVMSG:
+		case BPF_CGROUP_UNIX_GETPEERNAME:
+		case BPF_CGROUP_UNIX_GETSOCKNAME:
+			break;
+		default:
+			return false;
+		}
+		break;
 	}
 
 	switch (off) {
@@ -8893,8 +8917,19 @@ static bool sock_addr_is_valid_access(int off, int size,
 			return false;
 		break;
 	case bpf_ctx_range(struct bpf_sock_addr, user_addrlen):
-		if (type != BPF_READ)
-			return false;
+		if (type != BPF_READ) {
+			switch (prog->expected_attach_type) {
+			case BPF_CGROUP_UNIX_BIND:
+			case BPF_CGROUP_UNIX_CONNECT:
+			case BPF_CGROUP_UNIX_SENDMSG:
+			case BPF_CGROUP_UNIX_RECVMSG:
+			case BPF_CGROUP_UNIX_GETPEERNAME:
+			case BPF_CGROUP_UNIX_GETSOCKNAME:
+				break;
+			default:
+				return false;
+			}
+		}
 
 		if (size != sizeof(__u32))
 			return false;
