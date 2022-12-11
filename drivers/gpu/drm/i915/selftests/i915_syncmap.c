@@ -223,7 +223,7 @@ static int igt_syncmap_one(void *arg)
 
 		for (loop = 0; loop <= max; loop++) {
 			err = check_one(&sync, context,
-					prandom_u32_state(&prng));
+					predictable_rng_prandom_u32_state(&prng));
 			if (err)
 				goto out;
 		}
@@ -575,7 +575,7 @@ static int igt_syncmap_random(void *arg)
 		u32 last_seqno = seqno;
 		bool expect;
 
-		seqno = prandom_u32_state(&prng);
+		seqno = predictable_rng_prandom_u32_state(&prng);
 		expect = seqno_later(last_seqno, seqno);
 
 		for (i = 0; i < count; i++) {

@@ -1760,7 +1760,7 @@ static struct i915_request *garbage(struct intel_context *ce,
 	if (err)
 		return ERR_PTR(err);
 
-	prandom_bytes_state(prng,
+	predictable_rng_prandom_bytes_state(prng,
 			    ce->lrc_reg_state,
 			    ce->engine->context_size -
 			    LRC_STATE_OFFSET);

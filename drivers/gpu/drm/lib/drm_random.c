@@ -9,7 +9,7 @@
 
 u32 drm_prandom_u32_max_state(u32 ep_ro, struct rnd_state *state)
 {
-	return upper_32_bits((u64)prandom_u32_state(state) * ep_ro);
+	return upper_32_bits((u64)predictable_rng_prandom_u32_state(state) * ep_ro);
 }
 EXPORT_SYMBOL(drm_prandom_u32_max_state);
 

@@ -136,7 +136,7 @@ static void test_parman_rnd_init(struct test_parman *test_parman)
 
 static u32 test_parman_rnd_get(struct test_parman *test_parman)
 {
-	return prandom_u32_state(&test_parman->rnd);
+	return predictable_rng_prandom_u32_state(&test_parman->rnd);
 }
 
 static unsigned long test_parman_priority_gen(struct test_parman *test_parman)

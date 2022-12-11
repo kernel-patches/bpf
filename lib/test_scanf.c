@@ -269,16 +269,16 @@ static void __init numbers_simple(void)
  */
 static u32 __init next_test_random(u32 max_bits)
 {
-	u32 n_bits = hweight32(prandom_u32_state(&rnd_state)) % (max_bits + 1);
+	u32 n_bits = hweight32(predictable_rng_prandom_u32_state(&rnd_state)) % (max_bits + 1);
 
-	return prandom_u32_state(&rnd_state) & GENMASK(n_bits, 0);
+	return predictable_rng_prandom_u32_state(&rnd_state) & GENMASK(n_bits, 0);
 }
 
 static unsigned long long __init next_test_random_ull(void)
 {
-	u32 rand1 = prandom_u32_state(&rnd_state);
+	u32 rand1 = predictable_rng_prandom_u32_state(&rnd_state);
 	u32 n_bits = (hweight32(rand1) * 3) % 64;
-	u64 val = (u64)prandom_u32_state(&rnd_state) * rand1;
+	u64 val = (u64)predictable_rng_prandom_u32_state(&rnd_state) * rand1;
 
 	return val & GENMASK_ULL(n_bits, 0);
 }

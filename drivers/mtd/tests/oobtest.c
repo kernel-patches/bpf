@@ -60,7 +60,7 @@ static int write_eraseblock(int ebnum)
 	int err = 0;
 	loff_t addr = (loff_t)ebnum * mtd->erasesize;
 
-	prandom_bytes_state(&rnd_state, writebuf, use_len_max * pgcnt);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, use_len_max * pgcnt);
 	for (i = 0; i < pgcnt; ++i, addr += mtd->writesize) {
 		ops.mode      = MTD_OPS_AUTO_OOB;
 		ops.len       = 0;
@@ -170,7 +170,7 @@ static int verify_eraseblock(int ebnum)
 	loff_t addr = (loff_t)ebnum * mtd->erasesize;
 	size_t bitflips;
 
-	prandom_bytes_state(&rnd_state, writebuf, use_len_max * pgcnt);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, use_len_max * pgcnt);
 	for (i = 0; i < pgcnt; ++i, addr += mtd->writesize) {
 		ops.mode      = MTD_OPS_AUTO_OOB;
 		ops.len       = 0;
@@ -268,7 +268,7 @@ static int verify_eraseblock_in_one_go(int ebnum)
 	size_t bitflips;
 	int i;
 
-	prandom_bytes_state(&rnd_state, writebuf, len);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, len);
 	ops.mode      = MTD_OPS_AUTO_OOB;
 	ops.len       = 0;
 	ops.retlen    = 0;
@@ -642,7 +642,7 @@ static int __init mtd_oobtest_init(void)
 		if (bbt[i] || bbt[i + 1])
 			continue;
 		addr = (loff_t)(i + 1) * mtd->erasesize - mtd->writesize;
-		prandom_bytes_state(&rnd_state, writebuf, sz * cnt);
+		predictable_rng_prandom_bytes_state(&rnd_state, writebuf, sz * cnt);
 		for (pg = 0; pg < cnt; ++pg) {
 			ops.mode      = MTD_OPS_AUTO_OOB;
 			ops.len       = 0;
@@ -673,7 +673,7 @@ static int __init mtd_oobtest_init(void)
 	for (i = 0; i < ebcnt - 1; ++i) {
 		if (bbt[i] || bbt[i + 1])
 			continue;
-		prandom_bytes_state(&rnd_state, writebuf, mtd->oobavail * 2);
+		predictable_rng_prandom_bytes_state(&rnd_state, writebuf, mtd->oobavail * 2);
 		addr = (loff_t)(i + 1) * mtd->erasesize - mtd->writesize;
 		ops.mode      = MTD_OPS_AUTO_OOB;
 		ops.len       = 0;

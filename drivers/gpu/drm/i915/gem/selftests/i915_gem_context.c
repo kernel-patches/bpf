@@ -1407,7 +1407,7 @@ static int igt_ctx_readonly(void *arg)
 					goto out_file;
 				}
 
-				if (prandom_u32_state(&prng) & 1)
+				if (predictable_rng_prandom_u32_state(&prng) & 1)
 					i915_gem_object_set_readonly(obj);
 			}
 

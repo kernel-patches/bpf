@@ -1141,7 +1141,7 @@ static void freelist_randomize(struct rnd_state *state, unsigned int *list,
 
 	/* Fisher-Yates shuffle */
 	for (i = count - 1; i > 0; i--) {
-		rand = prandom_u32_state(state);
+		rand = predictable_rng_prandom_u32_state(state);
 		rand %= (i + 1);
 		swap(list[i], list[rand]);
 	}

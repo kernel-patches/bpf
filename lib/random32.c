@@ -43,13 +43,13 @@
 #include <asm/unaligned.h>
 
 /**
- *	prandom_u32_state - seeded pseudo-random number generator.
+ *	predictable_rng_prandom_u32_state - seeded pseudo-random number generator.
  *	@state: pointer to state structure holding seeded state.
  *
  *	This is used for pseudo-randomness with no outside seeding.
  *	For more random results, use get_random_u32().
  */
-u32 prandom_u32_state(struct rnd_state *state)
+u32 predictable_rng_prandom_u32_state(struct rnd_state *state)
 {
 #define TAUSWORTHE(s, a, b, c, d) ((s & c) << d) ^ (((s << a) ^ s) >> b)
 	state->s1 = TAUSWORTHE(state->s1,  6U, 13U, 4294967294U, 18U);
@@ -59,10 +59,10 @@ u32 prandom_u32_state(struct rnd_state *state)
 
 	return (state->s1 ^ state->s2 ^ state->s3 ^ state->s4);
 }
-EXPORT_SYMBOL(prandom_u32_state);
+EXPORT_SYMBOL(predictable_rng_prandom_u32_state);
 
 /**
- *	prandom_bytes_state - get the requested number of pseudo-random bytes
+ *	predictable_rng_prandom_bytes_state - get the requested number of pseudo-random bytes
  *
  *	@state: pointer to state structure holding seeded state.
  *	@buf: where to copy the pseudo-random bytes to
@@ -71,18 +71,18 @@ EXPORT_SYMBOL(prandom_u32_state);
  *	This is used for pseudo-randomness with no outside seeding.
  *	For more random results, use get_random_bytes().
  */
-void prandom_bytes_state(struct rnd_state *state, void *buf, size_t bytes)
+void predictable_rng_prandom_bytes_state(struct rnd_state *state, void *buf, size_t bytes)
 {
 	u8 *ptr = buf;
 
 	while (bytes >= sizeof(u32)) {
-		put_unaligned(prandom_u32_state(state), (u32 *) ptr);
+		put_unaligned(predictable_rng_prandom_u32_state(state), (u32 *) ptr);
 		ptr += sizeof(u32);
 		bytes -= sizeof(u32);
 	}
 
 	if (bytes > 0) {
-		u32 rem = prandom_u32_state(state);
+		u32 rem = predictable_rng_prandom_u32_state(state);
 		do {
 			*ptr++ = (u8) rem;
 			bytes--;
@@ -90,21 +90,21 @@ void prandom_bytes_state(struct rnd_state *state, void *buf, size_t bytes)
 		} while (bytes > 0);
 	}
 }
-EXPORT_SYMBOL(prandom_bytes_state);
+EXPORT_SYMBOL(predictable_rng_prandom_bytes_state);
 
 static void prandom_warmup(struct rnd_state *state)
 {
 	/* Calling RNG ten times to satisfy recurrence condition */
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
-	prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
+	predictable_rng_prandom_u32_state(state);
 }
 
 void prandom_seed_full_state(struct rnd_state __percpu *pcpu_state)
@@ -265,7 +265,7 @@ static int __init prandom_state_selftest(void)
 		prandom_state_selftest_seed(&state, test1[i].seed);
 		prandom_warmup(&state);
 
-		if (test1[i].result != prandom_u32_state(&state))
+		if (test1[i].result != predictable_rng_prandom_u32_state(&state))
 			error = true;
 	}
 
@@ -281,9 +281,9 @@ static int __init prandom_state_selftest(void)
 		prandom_warmup(&state);
 
 		for (j = 0; j < test2[i].iteration - 1; j++)
-			prandom_u32_state(&state);
+			predictable_rng_prandom_u32_state(&state);
 
-		if (test2[i].result != prandom_u32_state(&state))
+		if (test2[i].result != predictable_rng_prandom_u32_state(&state))
 			errors++;
 
 		runs++;

@@ -42,7 +42,7 @@ static int write_eraseblock(int ebnum)
 {
 	loff_t addr = (loff_t)ebnum * mtd->erasesize;
 
-	prandom_bytes_state(&rnd_state, writebuf, mtd->erasesize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, mtd->erasesize);
 	cond_resched();
 	return mtdtest_write(mtd, addr, mtd->erasesize, writebuf);
 }
@@ -62,7 +62,7 @@ static int verify_eraseblock(int ebnum)
 	for (i = 0; i < ebcnt && bbt[ebcnt - i - 1]; ++i)
 		addrn -= mtd->erasesize;
 
-	prandom_bytes_state(&rnd_state, writebuf, mtd->erasesize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, mtd->erasesize);
 	for (j = 0; j < pgcnt - 1; ++j, addr += pgsize) {
 		/* Do a read to set the internal dataRAMs to different data */
 		err = mtdtest_read(mtd, addr0, bufsize, twopages);
@@ -97,7 +97,7 @@ static int verify_eraseblock(int ebnum)
 		if (err)
 			return err;
 		memcpy(boundary, writebuf + mtd->erasesize - pgsize, pgsize);
-		prandom_bytes_state(&rnd_state, boundary + pgsize, pgsize);
+		predictable_rng_prandom_bytes_state(&rnd_state, boundary + pgsize, pgsize);
 		if (memcmp(twopages, boundary, bufsize)) {
 			pr_err("error: verify failed at %#llx\n",
 			       (long long)addr);
@@ -210,7 +210,7 @@ static int erasecrosstest(void)
 		return err;
 
 	pr_info("writing 1st page of block %d\n", ebnum);
-	prandom_bytes_state(&rnd_state, writebuf, pgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, pgsize);
 	strcpy(writebuf, "There is no data like this!");
 	err = mtdtest_write(mtd, addr0, pgsize, writebuf);
 	if (err)
@@ -235,7 +235,7 @@ static int erasecrosstest(void)
 		return err;
 
 	pr_info("writing 1st page of block %d\n", ebnum);
-	prandom_bytes_state(&rnd_state, writebuf, pgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, pgsize);
 	strcpy(writebuf, "There is no data like this!");
 	err = mtdtest_write(mtd, addr0, pgsize, writebuf);
 	if (err)
@@ -284,7 +284,7 @@ static int erasetest(void)
 		return err;
 
 	pr_info("writing 1st page of block %d\n", ebnum);
-	prandom_bytes_state(&rnd_state, writebuf, pgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, pgsize);
 	err = mtdtest_write(mtd, addr0, pgsize, writebuf);
 	if (err)
 		return err;

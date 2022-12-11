@@ -46,7 +46,7 @@ static int write_eraseblock(int ebnum)
 	int err = 0;
 	loff_t addr = (loff_t)ebnum * mtd->erasesize;
 
-	prandom_bytes_state(&rnd_state, writebuf, subpgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize);
 	err = mtd_write(mtd, addr, subpgsize, &written, writebuf);
 	if (unlikely(err || written != subpgsize)) {
 		pr_err("error: write failed at %#llx\n",
@@ -60,7 +60,7 @@ static int write_eraseblock(int ebnum)
 
 	addr += subpgsize;
 
-	prandom_bytes_state(&rnd_state, writebuf, subpgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize);
 	err = mtd_write(mtd, addr, subpgsize, &written, writebuf);
 	if (unlikely(err || written != subpgsize)) {
 		pr_err("error: write failed at %#llx\n",
@@ -84,7 +84,7 @@ static int write_eraseblock2(int ebnum)
 	for (k = 1; k < 33; ++k) {
 		if (addr + (subpgsize * k) > (loff_t)(ebnum + 1) * mtd->erasesize)
 			break;
-		prandom_bytes_state(&rnd_state, writebuf, subpgsize * k);
+		predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize * k);
 		err = mtd_write(mtd, addr, subpgsize * k, &written, writebuf);
 		if (unlikely(err || written != subpgsize * k)) {
 			pr_err("error: write failed at %#llx\n",
@@ -120,7 +120,7 @@ static int verify_eraseblock(int ebnum)
 	int err = 0;
 	loff_t addr = (loff_t)ebnum * mtd->erasesize;
 
-	prandom_bytes_state(&rnd_state, writebuf, subpgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize);
 	clear_data(readbuf, subpgsize);
 	err = mtd_read(mtd, addr, subpgsize, &read, readbuf);
 	if (unlikely(err || read != subpgsize)) {
@@ -147,7 +147,7 @@ static int verify_eraseblock(int ebnum)
 
 	addr += subpgsize;
 
-	prandom_bytes_state(&rnd_state, writebuf, subpgsize);
+	predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize);
 	clear_data(readbuf, subpgsize);
 	err = mtd_read(mtd, addr, subpgsize, &read, readbuf);
 	if (unlikely(err || read != subpgsize)) {
@@ -184,7 +184,7 @@ static int verify_eraseblock2(int ebnum)
 	for (k = 1; k < 33; ++k) {
 		if (addr + (subpgsize * k) > (loff_t)(ebnum + 1) * mtd->erasesize)
 			break;
-		prandom_bytes_state(&rnd_state, writebuf, subpgsize * k);
+		predictable_rng_prandom_bytes_state(&rnd_state, writebuf, subpgsize * k);
 		clear_data(readbuf, subpgsize * k);
 		err = mtd_read(mtd, addr, subpgsize * k, &read, readbuf);
 		if (unlikely(err || read != subpgsize * k)) {

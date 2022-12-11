@@ -187,7 +187,7 @@ static unsigned int random(unsigned long n,
 			   unsigned long count,
 			   struct rnd_state *rnd)
 {
-	return 1 + (prandom_u32_state(rnd) % 1024);
+	return 1 + (predictable_rng_prandom_u32_state(rnd) % 1024);
 }
 
 static unsigned int random_page_size_pages(unsigned long n,
@@ -201,7 +201,7 @@ static unsigned int random_page_size_pages(unsigned long n,
 		BIT(21) >> PAGE_SHIFT,
 	};
 
-	return page_count[(prandom_u32_state(rnd) % 3)];
+	return page_count[(predictable_rng_prandom_u32_state(rnd) % 3)];
 }
 
 static inline bool page_contiguous(struct page *first,

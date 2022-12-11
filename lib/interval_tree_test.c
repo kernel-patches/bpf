@@ -43,8 +43,8 @@ static void init(void)
 	int i;
 
 	for (i = 0; i < nnodes; i++) {
-		u32 b = (prandom_u32_state(&rnd) >> 4) % max_endpoint;
-		u32 a = (prandom_u32_state(&rnd) >> 4) % b;
+		u32 b = (predictable_rng_prandom_u32_state(&rnd) >> 4) % max_endpoint;
+		u32 a = (predictable_rng_prandom_u32_state(&rnd) >> 4) % b;
 
 		nodes[i].start = a;
 		nodes[i].last = b;
@@ -56,7 +56,7 @@ static void init(void)
 	 * which is pointless.
 	 */
 	for (i = 0; i < nsearches; i++)
-		queries[i] = (prandom_u32_state(&rnd) >> 4) % max_endpoint;
+		queries[i] = (predictable_rng_prandom_u32_state(&rnd) >> 4) % max_endpoint;
 }
 
 static int interval_tree_test_init(void)

@@ -35,9 +35,9 @@ u64 i915_prandom_u64_state(struct rnd_state *rnd)
 {
 	u64 x;
 
-	x = prandom_u32_state(rnd);
+	x = predictable_rng_prandom_u32_state(rnd);
 	x <<= 32;
-	x |= prandom_u32_state(rnd);
+	x |= predictable_rng_prandom_u32_state(rnd);
 
 	return x;
 }

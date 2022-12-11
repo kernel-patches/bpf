@@ -371,7 +371,7 @@ static int igt_gem_coherency(void *arg)
 
 					i915_random_reorder(offsets, ncachelines, &prng);
 					for (n = 0; n < count; n++)
-						values[n] = prandom_u32_state(&prng);
+						values[n] = predictable_rng_prandom_u32_state(&prng);
 
 					for (n = 0; n < count; n++) {
 						err = over->set(&ctx, offsets[n], ~values[n]);

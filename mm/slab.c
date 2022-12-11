@@ -2447,7 +2447,7 @@ static bool shuffle_freelist(struct kmem_cache *cachep, struct slab *slab)
 
 		/* Fisher-Yates shuffle */
 		for (i = count - 1; i > 0; i--) {
-			rand = prandom_u32_state(&state.rnd_state);
+			rand = predictable_rng_prandom_u32_state(&state.rnd_state);
 			rand %= (i + 1);
 			swap_free_obj(slab, i, rand);
 		}

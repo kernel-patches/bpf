@@ -150,8 +150,8 @@ static void init(void)
 {
 	int i;
 	for (i = 0; i < nnodes; i++) {
-		nodes[i].key = prandom_u32_state(&rnd);
-		nodes[i].val = prandom_u32_state(&rnd);
+		nodes[i].key = predictable_rng_prandom_u32_state(&rnd);
+		nodes[i].val = predictable_rng_prandom_u32_state(&rnd);
 	}
 }
 

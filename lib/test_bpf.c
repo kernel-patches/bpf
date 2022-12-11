@@ -140,7 +140,7 @@ static int bpf_fill_maxinsns3(struct bpf_test *self)
 	prandom_seed_state(&rnd, 3141592653589793238ULL);
 
 	for (i = 0; i < len - 1; i++) {
-		__u32 k = prandom_u32_state(&rnd);
+		__u32 k = predictable_rng_prandom_u32_state(&rnd);
 
 		insn[i] = __BPF_STMT(BPF_ALU | BPF_ADD | BPF_K, k);
 	}

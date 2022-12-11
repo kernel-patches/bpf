@@ -758,7 +758,7 @@ static int igt_gpu_write(struct i915_gem_context *ctx,
 	i = 0;
 	engines = i915_gem_context_lock_engines(ctx);
 	do {
-		u32 rng = prandom_u32_state(&prng);
+		u32 rng = predictable_rng_prandom_u32_state(&prng);
 		u32 dword = offset_in_page(rng) / 4;
 
 		ce = engines->engines[order[i] % engines->num_engines];
@@ -929,7 +929,7 @@ static int igt_lmem_create_cleared_cpu(void *arg)
 			goto out_unpin;
 		}
 
-		val = prandom_u32_state(&prng);
+		val = predictable_rng_prandom_u32_state(&prng);
 
 		memset32(vaddr, val, obj->base.size / sizeof(u32));
 
@@ -972,7 +972,7 @@ static int igt_lmem_write_gpu(void *arg)
 		goto out_file;
 	}
 
-	sz = round_up(prandom_u32_state(&prng) % SZ_32M, PAGE_SIZE);
+	sz = round_up(predictable_rng_prandom_u32_state(&prng) % SZ_32M, PAGE_SIZE);
 
 	obj = i915_gem_object_create_lmem(i915, sz, 0);
 	if (IS_ERR(obj)) {
@@ -1046,7 +1046,7 @@ static int igt_lmem_write_cpu(void *arg)
 
 	pr_info("%s: using %s\n", __func__, engine->name);
 
-	sz = round_up(prandom_u32_state(&prng) % SZ_32M, PAGE_SIZE);
+	sz = round_up(predictable_rng_prandom_u32_state(&prng) % SZ_32M, PAGE_SIZE);
 	sz = max_t(u32, 2 * PAGE_SIZE, sz);
 
 	obj = i915_gem_object_create_lmem(i915, sz, I915_BO_ALLOC_CONTIGUOUS);
@@ -1115,7 +1115,7 @@ static int igt_lmem_write_cpu(void *arg)
 		offset = igt_random_offset(&prng, 0, obj->base.size,
 					   size, align);
 
-		val = prandom_u32_state(&prng);
+		val = predictable_rng_prandom_u32_state(&prng);
 		memset32(vaddr + offset / sizeof(u32), val ^ 0xdeadbeaf,
 			 size / sizeof(u32));
 

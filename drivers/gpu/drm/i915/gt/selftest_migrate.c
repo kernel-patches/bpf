@@ -551,7 +551,7 @@ static int threaded_migrate(struct intel_migrate *migrate,
 
 		thread[i].migrate = migrate;
 		thread[i].prng =
-			I915_RND_STATE_INITIALIZER(prandom_u32_state(&prng));
+			I915_RND_STATE_INITIALIZER(predictable_rng_prandom_u32_state(&prng));
 
 		tsk = kthread_run(fn, &thread[i], "igt-%d", i);
 		if (IS_ERR(tsk)) {

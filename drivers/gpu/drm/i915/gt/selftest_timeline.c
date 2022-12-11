@@ -308,7 +308,7 @@ static int bench_sync(void *arg)
 		u32 x;
 
 		/* Make sure the compiler doesn't optimise away the prng call */
-		WRITE_ONCE(x, prandom_u32_state(&prng));
+		WRITE_ONCE(x, predictable_rng_prandom_u32_state(&prng));
 
 		count++;
 	} while (!time_after(jiffies, end_time));
@@ -393,7 +393,7 @@ static int bench_sync(void *arg)
 	end_time = jiffies + HZ/10;
 	do {
 		u32 id = random_engine(&prng);
-		u32 seqno = prandom_u32_state(&prng);
+		u32 seqno = predictable_rng_prandom_u32_state(&prng);
 
 		if (!__intel_timeline_sync_is_later(&tl, id, seqno))
 			__intel_timeline_sync_set(&tl, id, seqno);

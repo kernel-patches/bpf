@@ -630,7 +630,7 @@ static int tiled_blits_prepare(struct tiled_blits *t,
 
 	/* Use scratch to fill objects */
 	for (i = 0; i < ARRAY_SIZE(t->buffers); i++) {
-		fill_scratch(t, map, prandom_u32_state(prng));
+		fill_scratch(t, map, predictable_rng_prandom_u32_state(prng));
 		GEM_BUG_ON(verify_buffer(t, &t->scratch, prng));
 
 		err = tiled_blit(t,
