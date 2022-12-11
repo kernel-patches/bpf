@@ -444,7 +444,6 @@ static bool convert_bpf_extensions(struct sock_filter *fp,
 			break;
 		case SKF_AD_OFF + SKF_AD_RANDOM:
 			*insn = BPF_EMIT_CALL(bpf_user_rnd_u32);
-			bpf_user_rnd_init_once();
 			break;
 		}
 		break;
