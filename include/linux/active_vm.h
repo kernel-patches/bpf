@@ -2,6 +2,11 @@
 #ifndef __INCLUDE_ACTIVE_VM_H
 #define __INCLUDE_ACTIVE_VM_H
 
+enum active_vm_item {
+	ACTIVE_VM_BPF = 1,
+	NR_ACTIVE_VM_ITEM = ACTIVE_VM_BPF,
+};
+
 #ifdef CONFIG_ACTIVE_VM
 #include <linux/jump_label.h>
 #include <linux/preempt.h>
@@ -17,11 +22,6 @@ static inline bool active_vm_enabled(void)
 
 	return true;
 }
-
-enum active_vm_item {
-	DUMMY_ITEM = 1,
-	NR_ACTIVE_VM_ITEM = DUMMY_ITEM,
-};
 
 struct active_vm_stat {
 	long stat[NR_ACTIVE_VM_ITEM];

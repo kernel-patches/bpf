@@ -11,6 +11,7 @@
 #include <linux/kmemleak.h>
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/active_vm.h>
 
 #define RINGBUF_CREATE_FLAG_MASK (BPF_F_NUMA_NODE)
 
@@ -107,16 +108,18 @@ static struct page **bpf_ringbuf_pages_alloc(int nr_meta_pages,
 {
 	int nr_pages = nr_meta_pages + nr_data_pages;
 	struct page **pages, *page;
+	int old_active_vm;
 	int array_size;
 	int i;
 
+	old_active_vm = active_vm_item_set(ACTIVE_VM_BPF);
 	array_size = (nr_meta_pages + 2 * nr_data_pages) * sizeof(*pages);
 	pages = bpf_map_area_alloc(array_size, numa_node);
 	if (!pages)
 		goto err;
 
 	for (i = 0; i < nr_pages; i++) {
-		page = alloc_pages_node(numa_node, flags, 0);
+		page = alloc_pages_node(numa_node, flags | __GFP_ACCOUNT, 0);
 		if (!page) {
 			nr_pages = i;
 			goto err_free_pages;
@@ -125,12 +128,13 @@ static struct page **bpf_ringbuf_pages_alloc(int nr_meta_pages,
 		if (i >= nr_meta_pages)
 			pages[nr_data_pages + i] = page;
 	}
-
+	active_vm_item_set(old_active_vm);
 	return pages;
 
 err_free_pages:
 	bpf_ringbuf_pages_free(pages, nr_pages);
 err:
+	active_vm_item_set(old_active_vm);
 	return NULL;
 }
 

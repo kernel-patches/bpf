@@ -7,6 +7,8 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
 #include <asm/local.h>
+#include <linux/page_ext.h>
+#include <linux/active_vm.h>
 
 /* Any context (including NMI) BPF specific memory allocator.
  *
@@ -165,11 +167,13 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 {
 	struct mem_cgroup *memcg = NULL, *old_memcg;
 	unsigned long flags;
+	int old_active_vm;
 	void *obj;
 	int i;
 
 	memcg = get_memcg(c);
 	old_memcg = set_active_memcg(memcg);
+	old_active_vm = active_vm_item_set(ACTIVE_VM_BPF);
 	for (i = 0; i < cnt; i++) {
 		/*
 		 * free_by_rcu is only manipulated by irq work refill_work().
@@ -209,6 +213,7 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 		if (IS_ENABLED(CONFIG_PREEMPT_RT))
 			local_irq_restore(flags);
 	}
+	active_vm_item_set(old_active_vm);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
 }

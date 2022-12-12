@@ -16,6 +16,7 @@
 #ifdef CONFIG_CMA
 #include <linux/cma.h>
 #endif
+#include <linux/active_vm.h>
 #include <asm/page.h>
 #include "internal.h"
 
@@ -159,6 +160,8 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 
 	arch_report_meminfo(m);
 
+	seq_printf(m,  "BPF:            %8lu kB\n",
+			active_vm_item_sum(ACTIVE_VM_BPF) >> 10);
 	return 0;
 }
 
