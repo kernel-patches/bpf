@@ -4,8 +4,12 @@
 
 #ifdef CONFIG_ACTIVE_VM
 #include <linux/active_vm.h>
+#include <linux/page_ext.h>
 
 extern struct page_ext_operations active_vm_ops;
+void active_vm_slab_add(struct kmem_cache *s, gfp_t flags, size_t size, void **p);
+void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, void **p, int cnt);
+void active_vm_slab_free(struct slab *slab);
 
 static inline int active_vm_item(void)
 {
@@ -40,6 +44,18 @@ static inline void active_vm_item_add(int item, long delta)
 }
 
 static inline void active_vm_item_sub(int item, long delta)
+{
+}
+
+static inline void active_vm_slab_add(struct kmem_cache *s, gfp_t flags, size_t size, void **p)
+{
+}
+
+static inline void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, void **p, int cnt)
+{
+}
+
+static inline void active_vm_slab_free(struct slab *slab)
 {
 }
 #endif /* CONFIG_ACTIVE_VM */

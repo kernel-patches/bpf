@@ -232,6 +232,8 @@ struct kmem_cache {
 #include <linux/random.h>
 #include <linux/sched/mm.h>
 #include <linux/list_lru.h>
+#include <linux/active_vm.h>
+#include "active_vm.h"
 
 /*
  * State of the slab allocator.
@@ -644,6 +646,9 @@ static __always_inline void unaccount_slab(struct slab *slab, int order,
 	if (memcg_kmem_enabled())
 		memcg_free_slab_cgroups(slab);
 
+	if (active_vm_enabled())
+		active_vm_slab_free(slab);
+
 	mod_node_page_state(slab_pgdat(slab), cache_vmstat_idx(s),
 			    -(PAGE_SIZE << order));
 }
@@ -742,6 +747,8 @@ static inline void slab_post_alloc_hook(struct kmem_cache *s,
 		kmsan_slab_alloc(s, p[i], flags);
 	}
 
+	if (active_vm_enabled() && (flags & __GFP_ACCOUNT) && active_vm_item() > 0)
+		active_vm_slab_add(s, flags, size, p);
 	memcg_slab_post_alloc_hook(s, objcg, flags, size, p);
 }
 

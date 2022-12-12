@@ -45,6 +45,7 @@
 #include <trace/events/kmem.h>
 
 #include "internal.h"
+#include "active_vm.h"
 
 /*
  * Lock order:
@@ -3654,6 +3655,7 @@ static __always_inline void slab_free(struct kmem_cache *s, struct slab *slab,
 				      unsigned long addr)
 {
 	memcg_slab_free_hook(s, slab, p, cnt);
+	active_vm_slab_sub(s, slab, p, cnt);
 	/*
 	 * With KASAN enabled slab_free_freelist_hook modifies the freelist
 	 * to remove objects, whose reuse must be delayed.

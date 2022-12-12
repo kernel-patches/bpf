@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/mm.h>
 #include <linux/page_ext.h>
 #include <linux/active_vm.h>
+#include <linux/slab.h>
+
+#include "active_vm.h"
+#include "slab.h"
 
 static bool __active_vm_enabled __initdata =
 				IS_ENABLED(CONFIG_ACTIVE_VM);
@@ -28,7 +33,12 @@ static void __init init_active_vm(void)
 	static_branch_disable(&active_vm_disabled);
 }
 
+struct active_vm {
+	int *slab_data;     /* for slab */
+};
+
 struct page_ext_operations active_vm_ops = {
+	.size = sizeof(struct active_vm),
 	.need = need_active_vm,
 	.init = init_active_vm,
 };
@@ -53,4 +63,105 @@ long active_vm_item_sum(int item)
 	}
 
 	return sum;
+}
+
+static int *active_vm_from_slab(struct page_ext *page_ext)
+{
+	struct active_vm *av;
+
+	if (static_branch_likely(&active_vm_disabled))
+		return NULL;
+
+	av = (void *)(page_ext) + active_vm_ops.offset;
+	return READ_ONCE(av->slab_data);
+}
+
+void active_vm_slab_free(struct slab *slab)
+{
+	struct page_ext *page_ext;
+	struct active_vm *av;
+	struct page *page;
+
+	page = slab_page(slab);
+	page_ext = page_ext_get(page);
+	if (!page_ext)
+		return;
+
+	av = (void *)(page_ext) + active_vm_ops.offset;
+	kfree(av->slab_data);
+	av->slab_data = NULL;
+	page_ext_put(page_ext);
+}
+
+static bool active_vm_slab_cmpxchg(struct page_ext *page_ext, int *new)
+{
+	struct active_vm *av;
+
+	av = (void *)(page_ext) + active_vm_ops.offset;
+	return cmpxchg(&av->slab_data, NULL, new) == NULL;
+}
+
+void active_vm_slab_add(struct kmem_cache *s, gfp_t flags, size_t size, void **p)
+{
+	struct page_ext *page_ext;
+	struct slab *slab;
+	struct page *page;
+	int *vec;
+	int item;
+	int off;
+	int i;
+
+	item = active_vm_item();
+	for (i = 0; i < size; i++) {
+		slab = virt_to_slab(p[i]);
+		page = slab_page(slab);
+		page_ext = page_ext_get(page);
+
+		if (!page_ext)
+			continue;
+
+		off = obj_to_index(s, slab, p[i]);
+		vec = active_vm_from_slab(page_ext);
+		if (!vec) {
+			vec = kcalloc_node(objs_per_slab(s, slab), sizeof(int),
+						flags & ~__GFP_ACCOUNT, slab_nid(slab));
+			if (!vec) {
+				page_ext_put(page_ext);
+				continue;
+			}
+
+			if (!active_vm_slab_cmpxchg(page_ext, vec)) {
+				kfree(vec);
+				vec = active_vm_from_slab(page_ext);
+			}
+		}
+
+		vec[off] = item;
+		active_vm_item_add(item, obj_full_size(s));
+		page_ext_put(page_ext);
+	}
+}
+
+void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, void **p, int cnt)
+{
+	struct page *page = slab_page(slab);
+	struct page_ext *page_ext = page_ext_get(page);
+	int *vec;
+	int off;
+	int i;
+
+	if (!page_ext)
+		return;
+
+	for (i = 0; i < cnt; i++) {
+		vec = active_vm_from_slab(page_ext);
+		if (vec) {
+			off = obj_to_index(s, slab, p[i]);
+			if (vec[off] > 0) {
+				active_vm_item_sub(vec[off], obj_full_size(s));
+				vec[off] = 0;
+			}
+		}
+	}
+	page_ext_put(page_ext);
 }
