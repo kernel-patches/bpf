@@ -98,6 +98,7 @@
 #include <trace/events/percpu.h>
 
 #include "percpu-internal.h"
+#include "active_vm.h"
 
 /*
  * The slots are sorted by the size of the biggest continuous free area.
@@ -1399,6 +1400,9 @@ static struct pcpu_chunk * __init pcpu_alloc_first_chunk(unsigned long tmp_addr,
 	/* first chunk is free to use */
 	chunk->obj_cgroups = NULL;
 #endif
+#ifdef CONFIG_ACTIVE_VM
+	chunk->active_vm = NULL;
+#endif
 	pcpu_init_md_blocks(chunk);
 
 	/* manage populated page bitmap */
@@ -1476,6 +1480,14 @@ static struct pcpu_chunk *pcpu_alloc_chunk(gfp_t gfp)
 	}
 #endif
 
+#ifdef CONFIG_ACTIVE_VM
+	if (active_vm_enabled()) {
+		chunk->active_vm = pcpu_mem_zalloc(pcpu_chunk_map_bits(chunk) *
+								sizeof(int), gfp);
+		if (!chunk->active_vm)
+			goto active_vm_fail;
+	}
+#endif
 	pcpu_init_md_blocks(chunk);
 
 	/* init metadata */
@@ -1483,6 +1495,12 @@ static struct pcpu_chunk *pcpu_alloc_chunk(gfp_t gfp)
 
 	return chunk;
 
+#ifdef CONFIG_ACTIVE_VM
+active_vm_fail:
+#ifdef CONFIG_MEMCG_KMEM
+	pcpu_mem_free(chunk->obj_cgroups);
+#endif
+#endif
 #ifdef CONFIG_MEMCG_KMEM
 objcg_fail:
 	pcpu_mem_free(chunk->md_blocks);
@@ -1501,6 +1519,9 @@ static void pcpu_free_chunk(struct pcpu_chunk *chunk)
 {
 	if (!chunk)
 		return;
+#ifdef CONFIG_ACTIVE_VM
+	pcpu_mem_free(chunk->active_vm);
+#endif
 #ifdef CONFIG_MEMCG_KMEM
 	pcpu_mem_free(chunk->obj_cgroups);
 #endif
@@ -1889,6 +1910,17 @@ area_found:
 				  pcpu_obj_full_size(size), gfp);
 
 	pcpu_memcg_post_alloc_hook(objcg, chunk, off, size);
+
+#ifdef CONFIG_ACTIVE_VM
+	if (active_vm_enabled() && chunk->active_vm && (gfp & __GFP_ACCOUNT)) {
+		int item = active_vm_item();
+
+		if (item > 0) {
+			chunk->active_vm[off >> PCPU_MIN_ALLOC_SHIFT] = item;
+			active_vm_item_add(item, size);
+		}
+	}
+#endif
 
 	return ptr;
 
@@ -2282,6 +2314,17 @@ void free_percpu(void __percpu *ptr)
 	size = pcpu_free_area(chunk, off);
 
 	pcpu_memcg_free_hook(chunk, off, size);
+
+#ifdef CONFIG_ACTIVE_VM
+	if (active_vm_enabled() && chunk->active_vm) {
+		int item = chunk->active_vm[off >> PCPU_MIN_ALLOC_SHIFT];
+
+		if (item > 0) {
+			active_vm_item_sub(item, size);
+			chunk->active_vm[off >> PCPU_MIN_ALLOC_SHIFT] = 0;
+		}
+	}
+#endif
 
 	/*
 	 * If there are more than one fully free chunks, wake up grim reaper.
