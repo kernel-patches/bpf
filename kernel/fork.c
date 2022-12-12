@@ -1043,6 +1043,10 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->active_memcg = NULL;
 #endif
 
+#ifdef CONFIG_ACTIVE_VM
+	tsk->active_vm_item = 0;
+#endif
+
 #ifdef CONFIG_CPU_SUP_INTEL
 	tsk->reported_split_lock = 0;
 #endif

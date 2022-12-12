@@ -1441,6 +1441,11 @@ struct task_struct {
 	struct mem_cgroup		*active_memcg;
 #endif
 
+#ifdef CONFIG_ACTIVE_VM
+	/* Used for scope-based memory accounting */
+	int				active_vm_item;
+#endif
+
 #ifdef CONFIG_BLK_CGROUP
 	struct request_queue		*throttle_queue;
 #endif
