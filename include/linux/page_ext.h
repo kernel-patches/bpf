@@ -5,6 +5,7 @@
 #include <linux/types.h>
 #include <linux/stacktrace.h>
 #include <linux/stackdepot.h>
+#include <linux/active_vm.h>
 
 struct pglist_data;
 struct page_ext_operations {

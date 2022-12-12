@@ -10,6 +10,8 @@ extern struct page_ext_operations active_vm_ops;
 void active_vm_slab_add(struct kmem_cache *s, gfp_t flags, size_t size, void **p);
 void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, void **p, int cnt);
 void active_vm_slab_free(struct slab *slab);
+void page_set_active_vm(struct page *page, unsigned int item, unsigned int order);
+void page_test_clear_active_vm(struct page *page, unsigned int order);
 
 static inline int active_vm_item(void)
 {
@@ -33,6 +35,7 @@ static inline void active_vm_item_sub(int item, long delta)
 	WARN_ON_ONCE(item <= 0);
 	this_cpu_sub(active_vm_stats.stat[item - 1], delta);
 }
+
 #else /* CONFIG_ACTIVE_VM */
 static inline int active_vm_item(void)
 {
@@ -56,6 +59,15 @@ static inline void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, v
 }
 
 static inline void active_vm_slab_free(struct slab *slab)
+{
+}
+
+static inline void page_set_active_vm(struct page *page, int item,
+									  unsigned int order)
+{
+}
+
+static inline void page_test_clear_active_vm(struct page *page, unsigned int order)
 {
 }
 #endif /* CONFIG_ACTIVE_VM */

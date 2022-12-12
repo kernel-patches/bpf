@@ -34,7 +34,10 @@ static void __init init_active_vm(void)
 }
 
 struct active_vm {
-	int *slab_data;     /* for slab */
+	union {
+		int *slab_data;     /* for slab */
+		unsigned long page_data;	/* for page */
+	}
 };
 
 struct page_ext_operations active_vm_ops = {
@@ -163,5 +166,38 @@ void active_vm_slab_sub(struct kmem_cache *s, struct slab *slab, void **p, int c
 			}
 		}
 	}
+	page_ext_put(page_ext);
+}
+
+void page_set_active_vm(struct page *page, unsigned int item, unsigned int order)
+{
+	struct page_ext *page_ext = page_ext_get(page);
+	struct active_vm *av;
+
+	if (unlikely(!page_ext))
+		return;
+
+	av = (void *)(page_ext) + active_vm_ops.offset;
+	WARN_ON_ONCE(av->page_data != 0);
+	av->page_data = item;
+	page_ext_put(page_ext);
+	active_vm_item_add(item, PAGE_SIZE << order);
+}
+
+void page_test_clear_active_vm(struct page *page, unsigned int order)
+{
+	struct page_ext *page_ext = page_ext_get(page);
+	struct active_vm *av;
+
+	if (unlikely(!page_ext))
+		return;
+
+	av = (void *)(page_ext) + active_vm_ops.offset;
+	if (av->page_data <= 0)
+		goto out;
+
+	active_vm_item_sub(av->page_data, PAGE_SIZE << order);
+	av->page_data = 0;
+out:
 	page_ext_put(page_ext);
 }

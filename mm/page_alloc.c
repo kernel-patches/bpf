@@ -76,6 +76,8 @@
 #include <linux/khugepaged.h>
 #include <linux/buffer_head.h>
 #include <linux/delayacct.h>
+#include <linux/page_ext.h>
+#include <linux/active_vm.h>
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -83,6 +85,7 @@
 #include "shuffle.h"
 #include "page_reporting.h"
 #include "swap.h"
+#include "active_vm.h"
 
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
@@ -1449,6 +1452,10 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		page->mapping = NULL;
 	if (memcg_kmem_enabled() && PageMemcgKmem(page))
 		__memcg_kmem_uncharge_page(page, order);
+
+	if (active_vm_enabled())
+		page_test_clear_active_vm(page, order);
+
 	if (check_free && free_page_is_bad(page))
 		bad++;
 	if (bad)
@@ -5575,6 +5582,13 @@ out:
 	    unlikely(__memcg_kmem_charge_page(page, gfp, order) != 0)) {
 		__free_pages(page, order);
 		page = NULL;
+	}
+
+	if (active_vm_enabled() && (gfp & __GFP_ACCOUNT) && page) {
+		int active_vm = active_vm_item();
+
+		if (active_vm > 0)
+			page_set_active_vm(page, active_vm, order);
 	}
 
 	trace_mm_page_alloc(page, order, alloc_gfp, ac.migratetype);
