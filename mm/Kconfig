@@ -1150,6 +1150,14 @@ config LRU_GEN_STATS
 	  This option has a per-memcg and per-node memory overhead.
 # }
 
+config ACTIVE_VM
+	bool "To track memory size of active VM item"
+	default y
+	depends on PAGE_EXTENSION
+	help
+		Allow scope-based memory accouting for specific memory, e.g. the
+		system-wide BPF memory usage.
+
 source "mm/damon/Kconfig"
 
 endmenu

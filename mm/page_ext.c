@@ -10,6 +10,7 @@
 #include <linux/page_idle.h>
 #include <linux/page_table_check.h>
 #include <linux/rcupdate.h>
+#include "active_vm.h"
 
 /*
  * struct page extension
@@ -83,6 +84,9 @@ static struct page_ext_operations *page_ext_ops[] __initdata = {
 #endif
 #ifdef CONFIG_PAGE_TABLE_CHECK
 	&page_table_check_ops,
+#endif
+#ifdef CONFIG_ACTIVE_VM
+	&active_vm_ops,
 #endif
 };
 
