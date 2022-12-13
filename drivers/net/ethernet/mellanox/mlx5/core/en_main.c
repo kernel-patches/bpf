@@ -4913,6 +4913,11 @@ const struct net_device_ops mlx5e_netdev_ops = {
 #endif
 };
 
+static const struct xdp_metadata_ops mlx5_xdp_metadata_ops = {
+	.xmo_rx_timestamp		= mlx5e_xdp_rx_timestamp,
+	.xmo_rx_hash			= mlx5e_xdp_rx_hash,
+};
+
 static u32 mlx5e_choose_lro_timeout(struct mlx5_core_dev *mdev, u32 wanted_timeout)
 {
 	int i;
@@ -5053,6 +5058,7 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 	SET_NETDEV_DEV(netdev, mdev->device);
 
 	netdev->netdev_ops = &mlx5e_netdev_ops;
+	netdev->xdp_metadata_ops = &mlx5_xdp_metadata_ops;
 
 	mlx5e_dcbnl_build_netdev(netdev);
 
