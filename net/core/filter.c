@@ -1655,6 +1655,20 @@ static DEFINE_PER_CPU(struct bpf_scratchpad, bpf_sp);
 static inline int __bpf_try_make_writable(struct sk_buff *skb,
 					  unsigned int write_len)
 {
+	struct sk_buff *list_skb = skb_shinfo(skb)->frag_list;
+
+	if (skb_is_gso(skb) && list_skb && !list_skb->head_frag &&
+	    skb_headlen(list_skb)) {
+		int headlen = skb_headlen(skb);
+		int err = skb_ensure_writable(skb, write_len);
+
+		/* pskb_pull_tail() has occurred */
+		if (!err && headlen != skb_headlen(skb))
+			skb_shinfo(skb)->gso_type |= SKB_GSO_DODGY;
+
+		return err;
+	}
+
 	return skb_ensure_writable(skb, write_len);
 }
 
