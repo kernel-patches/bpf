@@ -369,33 +369,62 @@ static const struct bpf_func_proto *bpf_get_probe_write_proto(void)
 	return &bpf_probe_write_user_proto;
 }
 
-static DEFINE_RAW_SPINLOCK(trace_printk_lock);
-
 #define MAX_TRACE_PRINTK_VARARGS	3
 #define BPF_TRACE_PRINTK_SIZE		1024
+#define BPF_TRACE_PRINTK_LEVELS		4
+
+struct trace_printk_buf {
+	char data[BPF_TRACE_PRINTK_LEVELS][BPF_TRACE_PRINTK_SIZE];
+	int level;
+};
+static DEFINE_PER_CPU(struct trace_printk_buf, printk_buf);
+
+static void put_printk_buf(struct trace_printk_buf __percpu *buf)
+{
+	if (WARN_ON_ONCE(this_cpu_read(buf->level) == 0))
+		return;
+	this_cpu_dec(buf->level);
+	preempt_enable();
+}
+
+static bool get_printk_buf(struct trace_printk_buf __percpu *buf, char **data)
+{
+	int level;
+
+	preempt_disable();
+	level = this_cpu_inc_return(buf->level);
+	if (level > BPF_TRACE_PRINTK_LEVELS) {
+		put_printk_buf(buf);
+		return false;
+	}
+	*data = (char *) this_cpu_ptr(&buf->data[level - 1]);
+	return true;
+}
 
 BPF_CALL_5(bpf_trace_printk, char *, fmt, u32, fmt_size, u64, arg1,
 	   u64, arg2, u64, arg3)
 {
 	u64 args[MAX_TRACE_PRINTK_VARARGS] = { arg1, arg2, arg3 };
 	u32 *bin_args;
-	static char buf[BPF_TRACE_PRINTK_SIZE];
-	unsigned long flags;
+	char *buf;
 	int ret;
+
+	if (!get_printk_buf(&printk_buf, &buf))
+		return -EBUSY;
 
 	ret = bpf_bprintf_prepare(fmt, fmt_size, args, &bin_args,
 				  MAX_TRACE_PRINTK_VARARGS);
 	if (ret < 0)
-		return ret;
+		goto out;
 
-	raw_spin_lock_irqsave(&trace_printk_lock, flags);
-	ret = bstr_printf(buf, sizeof(buf), fmt, bin_args);
+	ret = bstr_printf(buf, BPF_TRACE_PRINTK_SIZE, fmt, bin_args);
 
 	trace_bpf_trace_printk(buf);
-	raw_spin_unlock_irqrestore(&trace_printk_lock, flags);
 
 	bpf_bprintf_cleanup();
 
+out:
+	put_printk_buf(&printk_buf);
 	return ret;
 }
 
@@ -427,31 +456,35 @@ const struct bpf_func_proto *bpf_get_trace_printk_proto(void)
 	return &bpf_trace_printk_proto;
 }
 
+static DEFINE_PER_CPU(struct trace_printk_buf, vprintk_buf);
+
 BPF_CALL_4(bpf_trace_vprintk, char *, fmt, u32, fmt_size, const void *, data,
 	   u32, data_len)
 {
-	static char buf[BPF_TRACE_PRINTK_SIZE];
-	unsigned long flags;
 	int ret, num_args;
 	u32 *bin_args;
+	char *buf;
 
 	if (data_len & 7 || data_len > MAX_BPRINTF_VARARGS * 8 ||
 	    (data_len && !data))
 		return -EINVAL;
 	num_args = data_len / 8;
 
+	if (!get_printk_buf(&vprintk_buf, &buf))
+		return -EBUSY;
+
 	ret = bpf_bprintf_prepare(fmt, fmt_size, data, &bin_args, num_args);
 	if (ret < 0)
-		return ret;
+		goto out;
 
-	raw_spin_lock_irqsave(&trace_printk_lock, flags);
-	ret = bstr_printf(buf, sizeof(buf), fmt, bin_args);
+	ret = bstr_printf(buf, BPF_TRACE_PRINTK_SIZE, fmt, bin_args);
 
 	trace_bpf_trace_printk(buf);
-	raw_spin_unlock_irqrestore(&trace_printk_lock, flags);
 
 	bpf_bprintf_cleanup();
 
+out:
+	put_printk_buf(&vprintk_buf);
 	return ret;
 }
 
