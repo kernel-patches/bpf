@@ -188,17 +188,13 @@ static void __bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
 	kfree(ondev);
 }
 
-int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
+int __bpf_prog_dev_bound_init(struct bpf_prog *prog, struct net_device *netdev)
 {
 	struct bpf_offload_netdev *ondev;
 	struct bpf_prog_offload *offload;
 	int err;
 
-	if (attr->prog_type != BPF_PROG_TYPE_SCHED_CLS &&
-	    attr->prog_type != BPF_PROG_TYPE_XDP)
-		return -EINVAL;
-
-	if (attr->prog_flags & ~BPF_F_XDP_DEV_BOUND_ONLY)
+	if (!netdev)
 		return -EINVAL;
 
 	offload = kzalloc(sizeof(*offload), GFP_USER);
@@ -206,14 +202,7 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 		return -ENOMEM;
 
 	offload->prog = prog;
-
-	offload->netdev = dev_get_by_index(current->nsproxy->net_ns,
-					   attr->prog_ifindex);
-	err = bpf_dev_offload_check(offload->netdev);
-	if (err)
-		goto err_maybe_put;
-
-	prog->aux->offload_requested = !(attr->prog_flags & BPF_F_XDP_DEV_BOUND_ONLY);
+	offload->netdev = netdev;
 
 	down_write(&bpf_devs_lock);
 	ondev = bpf_offload_find_netdev(offload->netdev);
@@ -236,16 +225,43 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 	offload->offdev = ondev->offdev;
 	prog->aux->offload = offload;
 	list_add_tail(&offload->offloads, &ondev->progs);
-	dev_put(offload->netdev);
 	up_write(&bpf_devs_lock);
 
 	return 0;
 err_unlock:
 	up_write(&bpf_devs_lock);
-err_maybe_put:
-	if (offload->netdev)
-		dev_put(offload->netdev);
 	kfree(offload);
+	return err;
+}
+
+int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
+{
+	struct net_device *netdev;
+	int err;
+
+	if (attr->prog_type != BPF_PROG_TYPE_SCHED_CLS &&
+	    attr->prog_type != BPF_PROG_TYPE_XDP)
+		return -EINVAL;
+
+	if (attr->prog_flags & ~BPF_F_XDP_DEV_BOUND_ONLY)
+		return -EINVAL;
+
+	netdev = dev_get_by_index(current->nsproxy->net_ns, attr->prog_ifindex);
+	if (!netdev)
+		return -EINVAL;
+
+	err = bpf_dev_offload_check(netdev);
+	if (err)
+		goto out;
+
+	prog->aux->offload_requested = !(attr->prog_flags & BPF_F_XDP_DEV_BOUND_ONLY);
+
+	err = __bpf_prog_dev_bound_init(prog, netdev);
+	if (err)
+		goto out;
+
+out:
+	dev_put(netdev);
 	return err;
 }
 

@@ -3021,6 +3021,14 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			goto out_put_prog;
 		}
 
+		if (bpf_prog_is_dev_bound(prog->aux) &&
+		    (bpf_prog_is_offloaded(tgt_prog->aux) ||
+		     !bpf_prog_is_dev_bound(tgt_prog->aux) ||
+		     !bpf_offload_dev_match(prog, tgt_prog->aux->offload->netdev))) {
+			err = -EINVAL;
+			goto out_put_prog;
+		}
+
 		key = bpf_trampoline_compute_key(tgt_prog, NULL, btf_id);
 	}
 

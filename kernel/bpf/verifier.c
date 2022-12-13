@@ -16524,11 +16524,6 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
 
-		if (bpf_prog_is_dev_bound(tgt_prog->aux)) {
-			bpf_log(log, "Replacing device-bound programs not supported\n");
-			return -EINVAL;
-		}
-
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {
 				subprog = i;
@@ -16789,10 +16784,22 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	if (tgt_prog && prog->type == BPF_PROG_TYPE_EXT) {
 		/* to make freplace equivalent to their targets, they need to
 		 * inherit env->ops and expected_attach_type for the rest of the
-		 * verification
+		 * verification; we also need to propagate the prog offload data
+		 * for resolving kfuncs.
 		 */
 		env->ops = bpf_verifier_ops[tgt_prog->type];
 		prog->expected_attach_type = tgt_prog->expected_attach_type;
+
+		if (bpf_prog_is_dev_bound(tgt_prog->aux)) {
+			if (bpf_prog_is_offloaded(tgt_prog->aux))
+				return -EINVAL;
+
+			prog->aux->dev_bound = true;
+			ret = __bpf_prog_dev_bound_init(prog,
+							tgt_prog->aux->offload->netdev);
+			if (ret)
+				return ret;
+		}
 	}
 
 	/* store info about the attachment target that will be used later */
