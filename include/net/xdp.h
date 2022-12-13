@@ -409,4 +409,29 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 
+#define XDP_METADATA_KFUNC_xxx	\
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP, \
+			   bpf_xdp_metadata_rx_timestamp) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_HASH, \
+			   bpf_xdp_metadata_rx_hash) \
+
+enum {
+#define XDP_METADATA_KFUNC(name, str) name,
+XDP_METADATA_KFUNC_xxx
+#undef XDP_METADATA_KFUNC
+MAX_XDP_METADATA_KFUNC,
+};
+
+struct xdp_md;
+int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp);
+int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, u32 *hash);
+
+#ifdef CONFIG_NET
+u32 xdp_metadata_kfunc_id(int id);
+bool xdp_is_metadata_kfunc_id(u32 btf_id);
+#else
+static inline u32 xdp_metadata_kfunc_id(int id) { return 0; }
+static inline bool xdp_is_metadata_kfunc_id(u32 btf_id) { return false; }
+#endif
+
 #endif /* __LINUX_NET_XDP_H__ */

@@ -15479,10 +15479,33 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
 	const struct bpf_kfunc_desc *desc;
+	void *xdp_kfunc;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
 		return -EINVAL;
+	}
+
+	*cnt = 0;
+
+	if (xdp_is_metadata_kfunc_id(insn->imm)) {
+		if (!bpf_prog_is_dev_bound(env->prog->aux)) {
+			verbose(env, "metadata kfuncs require device-bound program\n");
+			return -EINVAL;
+		}
+
+		if (bpf_prog_is_offloaded(env->prog->aux)) {
+			verbose(env, "metadata kfuncs can't be offloaded\n");
+			return -EINVAL;
+		}
+
+		xdp_kfunc = bpf_dev_bound_resolve_kfunc(env->prog, insn->imm);
+		if (xdp_kfunc) {
+			insn->imm = BPF_CALL_IMM(xdp_kfunc);
+			return 0;
+		}
+
+		/* fallback to default kfunc when not supported by netdev */
 	}
 
 	/* insn->imm has the btf func_id. Replace it with
@@ -15495,7 +15518,6 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
-	*cnt = 0;
 	insn->imm = desc->imm;
 	if (insn->off)
 		return 0;
@@ -16501,6 +16523,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	}
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
+
+		if (bpf_prog_is_dev_bound(tgt_prog->aux)) {
+			bpf_log(log, "Replacing device-bound programs not supported\n");
+			return -EINVAL;
+		}
 
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {

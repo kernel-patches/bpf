@@ -2097,6 +2097,13 @@ bool bpf_prog_map_compatible(struct bpf_map *map,
 	if (fp->kprobe_override)
 		return false;
 
+	/* When tail-calling from a non-dev-bound program to a dev-bound one,
+	 * XDP metadata helpers should be disabled. Until it's implemented,
+	 * prohibit adding dev-bound programs to tail-call maps.
+	 */
+	if (bpf_prog_is_dev_bound(fp->aux))
+		return false;
+
 	spin_lock(&map->owner.lock);
 	if (!map->owner.type) {
 		/* There's no owner yet where we could check for
