@@ -679,6 +679,7 @@ enum ip_defrag_users {
 	IP_DEFRAG_VS_FWD,
 	IP_DEFRAG_AF_PACKET,
 	IP_DEFRAG_MACVLAN,
+	IP_DEFRAG_BPF,
 };
 
 /* Return true if the value of 'user' is between 'lower_bond'
@@ -692,6 +693,16 @@ static inline bool ip_defrag_user_in_between(u32 user,
 }
 
 int ip_defrag(struct net *net, struct sk_buff *skb, u32 user);
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+int register_ip_frag_bpf(void);
+#else
+static inline int register_ip_frag_bpf(void)
+{
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_INET
 struct sk_buff *ip_check_defrag(struct net *net, struct sk_buff *skb, u32 user);
 #else

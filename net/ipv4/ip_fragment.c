@@ -757,5 +757,7 @@ void __init ipfrag_init(void)
 	if (inet_frags_init(&ip4_frags))
 		panic("IP: failed to allocate ip4_frags cache\n");
 	ip4_frags_ctl_register();
+	if (register_ip_frag_bpf())
+		panic("IP: bpf: failed to register ip_frag_bpf\n");
 	register_pernet_subsys(&ip4_frags_ops);
 }
