@@ -514,6 +514,7 @@ struct sk_buff *ip_check_defrag(struct net *net, struct sk_buff *skb, u32 user)
 	struct iphdr iph;
 	int netoff;
 	u32 len;
+	int err;
 
 	if (skb->protocol != htons(ETH_P_IP))
 		return skb;
@@ -535,15 +536,15 @@ struct sk_buff *ip_check_defrag(struct net *net, struct sk_buff *skb, u32 user)
 		if (skb) {
 			if (!pskb_may_pull(skb, netoff + iph.ihl * 4)) {
 				kfree_skb(skb);
-				return NULL;
+				return ERR_PTR(-ENOMEM);
 			}
-			if (pskb_trim_rcsum(skb, netoff + len)) {
+			if ((err = pskb_trim_rcsum(skb, netoff + len))) {
 				kfree_skb(skb);
-				return NULL;
+				return ERR_PTR(err);
 			}
 			memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
-			if (ip_defrag(net, skb, user))
-				return NULL;
+			if ((err = ip_defrag(net, skb, user)))
+				return ERR_PTR(err);
 			skb_clear_hash(skb);
 		}
 	}

@@ -1472,7 +1472,7 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 
 	if (fanout_has_flag(f, PACKET_FANOUT_FLAG_DEFRAG)) {
 		skb = ip_check_defrag(net, skb, IP_DEFRAG_AF_PACKET);
-		if (!skb)
+		if (IS_ERR(skb))
 			return 0;
 	}
 	switch (f->type) {
