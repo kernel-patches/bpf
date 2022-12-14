@@ -71,6 +71,7 @@
 #define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
 #define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
 #define KF_RCU          (1 << 7) /* kfunc only takes rcu pointer arguments */
+#define KF_CHANGES_PKT  (1 << 8) /* kfunc may change packet data */
 
 /*
  * Return the name of the passed struct, if exists, or halt the build if for

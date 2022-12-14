@@ -200,6 +200,13 @@ single argument which must be a trusted argument or a MEM_RCU pointer.
 The argument may have reference count of 0 and the kfunc must take this
 into consideration.
 
+2.4.9 KF_CHANGES_PKT flag
+-----------------
+
+The KF_CHANGES_PKT is used for kfuncs that may change packet data.
+After calls to such kfuncs, existing packet pointers will be invalidated
+and must be revalidated before the prog can access packet data.
+
 2.5 Registering the kfuncs
 --------------------------
 
