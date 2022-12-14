@@ -267,13 +267,14 @@ void *libbpf_add_mem(void **data, size_t *cap_cnt, size_t elem_sz,
 		     size_t cur_cnt, size_t max_cnt, size_t add_cnt);
 int libbpf_ensure_mem(void **data, size_t *cap_cnt, size_t elem_sz, size_t need_cnt);
 
-static inline bool libbpf_is_mem_zeroed(const char *p, ssize_t len)
+static inline bool libbpf_is_mem_zeroed(const char *obj,
+					size_t off_start, size_t off_end)
 {
-	while (len > 0) {
+	const char *p;
+
+	for (p = obj + off_start; p < obj + off_end; p++) {
 		if (*p)
 			return false;
-		p++;
-		len--;
 	}
 	return true;
 }
@@ -286,7 +287,7 @@ static inline bool libbpf_validate_opts(const char *opts,
 		pr_warn("%s size (%zu) is too small\n", type_name, user_sz);
 		return false;
 	}
-	if (!libbpf_is_mem_zeroed(opts + opts_sz, (ssize_t)user_sz - opts_sz)) {
+	if (!libbpf_is_mem_zeroed(opts, opts_sz, user_sz)) {
 		pr_warn("%s has non-zero extra bytes\n", type_name);
 		return false;
 	}
@@ -309,11 +310,10 @@ static inline bool libbpf_validate_opts(const char *opts,
 	} while (0)
 
 #define OPTS_ZEROED(opts, last_nonzero_field)				      \
-({									      \
-	ssize_t __off = offsetofend(typeof(*(opts)), last_nonzero_field);     \
-	!(opts) || libbpf_is_mem_zeroed((const void *)opts + __off,	      \
-					(opts)->sz - __off);		      \
-})
+	(!(opts) || libbpf_is_mem_zeroed((const void *)opts,		      \
+					 offsetofend(typeof(*(opts)),	      \
+						     last_nonzero_field),     \
+					 (opts)->sz))
 
 enum kern_feature_id {
 	/* v4.14: kernel support for program & map names. */
