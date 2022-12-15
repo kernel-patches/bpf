@@ -1404,6 +1404,13 @@ __printf(4, 5) static void __btf_verifier_log_type(struct btf_verifier_env *env,
 	if (log->level == BPF_LOG_KERNEL && !fmt)
 		return;
 
+	/*
+	 * Skip logging when loading module BTF with mismatches permitted
+	 */
+	if (env->btf->base_btf && env->btf->kernel_btf &&
+	    IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH))
+		return;
+
 	__btf_verifier_log(log, "[%u] %s %s%s",
 			   env->log_type_id,
 			   btf_type_str(t),
@@ -1443,6 +1450,14 @@ static void btf_verifier_log_member(struct btf_verifier_env *env,
 
 	if (log->level == BPF_LOG_KERNEL && !fmt)
 		return;
+
+	/*
+	 * Skip logging when loading module BTF with mismatches permitted
+	 */
+	if (env->btf->base_btf && env->btf->kernel_btf &&
+	    IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH))
+		return;
+
 	/* The CHECK_META phase already did a btf dump.
 	 *
 	 * If member is logged again, it must hit an error in
@@ -7260,11 +7275,14 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		}
 		btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size);
 		if (IS_ERR(btf)) {
-			pr_warn("failed to validate module [%s] BTF: %ld\n",
-				mod->name, PTR_ERR(btf));
 			kfree(btf_mod);
-			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH))
+			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH)) {
+				pr_warn("failed to validate module [%s] BTF: %ld\n",
+					mod->name, PTR_ERR(btf));
 				err = PTR_ERR(btf);
+			} else {
+				pr_warn_once("Kernel module BTF mismatch detected, BTF debug info may be unavailable for some modules\n");
+			}
 			goto out;
 		}
 		err = btf_alloc_id(btf);
