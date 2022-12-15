@@ -2105,6 +2105,7 @@ struct bpf_prog_kstats {
 	u64 nsecs;
 	u64 cnt;
 	u64 misses;
+	u64 max_cost;
 };
 
 void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog)
@@ -2122,12 +2123,13 @@ static void bpf_prog_get_stats(const struct bpf_prog *prog,
 			       struct bpf_prog_kstats *stats)
 {
 	u64 nsecs = 0, cnt = 0, misses = 0;
+	u64 max_cost = 0;
 	int cpu;
 
 	for_each_possible_cpu(cpu) {
 		const struct bpf_prog_stats *st;
 		unsigned int start;
-		u64 tnsecs, tcnt, tmisses;
+		u64 tnsecs, tcnt, tmisses, tmax_cost;
 
 		st = per_cpu_ptr(prog->stats, cpu);
 		do {
@@ -2135,14 +2137,17 @@ static void bpf_prog_get_stats(const struct bpf_prog *prog,
 			tnsecs = u64_stats_read(&st->nsecs);
 			tcnt = u64_stats_read(&st->cnt);
 			tmisses = u64_stats_read(&st->misses);
+			tmax_cost = u64_stats_read(&st->max_cost);
 		} while (u64_stats_fetch_retry(&st->syncp, start));
 		nsecs += tnsecs;
 		cnt += tcnt;
 		misses += tmisses;
+		max_cost = max(max_cost, tmax_cost);
 	}
 	stats->nsecs = nsecs;
 	stats->cnt = cnt;
 	stats->misses = misses;
+	stats->max_cost = max_cost;
 }
 
 #ifdef CONFIG_PROC_FS
@@ -2162,6 +2167,7 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "prog_id:\t%u\n"
 		   "run_time_ns:\t%llu\n"
 		   "run_cnt:\t%llu\n"
+		   "run_max_cost_ns:\t%llu\n"
 		   "recursion_misses:\t%llu\n"
 		   "verified_insns:\t%u\n",
 		   prog->type,
@@ -2171,6 +2177,7 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   prog->aux->id,
 		   stats.nsecs,
 		   stats.cnt,
+		   stats.max_cost,
 		   stats.misses,
 		   prog->aux->verified_insns);
 }
@@ -3962,6 +3969,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 	info.run_time_ns = stats.nsecs;
 	info.run_cnt = stats.cnt;
 	info.recursion_misses = stats.misses;
+	info.run_max_cost_ns = stats.max_cost;
 
 	info.verified_insns = prog->aux->verified_insns;
 

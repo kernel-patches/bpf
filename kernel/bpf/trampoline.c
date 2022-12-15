@@ -882,8 +882,6 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 static void notrace update_prog_stats(struct bpf_prog *prog,
 				      u64 start)
 {
-	struct bpf_prog_stats *stats;
-
 	if (static_branch_unlikely(&bpf_stats_enabled_key) &&
 	    /* static_key could be enabled in __bpf_prog_enter*
 	     * and disabled in __bpf_prog_exit*.
@@ -891,13 +889,7 @@ static void notrace update_prog_stats(struct bpf_prog *prog,
 	     * Hence check that 'start' is valid.
 	     */
 	    start > NO_START_TIME) {
-		unsigned long flags;
-
-		stats = this_cpu_ptr(prog->stats);
-		flags = u64_stats_update_begin_irqsave(&stats->syncp);
-		u64_stats_inc(&stats->cnt);
-		u64_stats_add(&stats->nsecs, sched_clock() - start);
-		u64_stats_update_end_irqrestore(&stats->syncp, flags);
+		bpf_prog_update_stats(prog, start);
 	}
 }
 
