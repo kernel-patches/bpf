@@ -199,7 +199,7 @@ install_headers:
 
 install_pkgconfig: $(LIBPERF_PC)
 	$(call QUIET_INSTALL, $(LIBPERF_PC)) \
-		$(call do_install,$(LIBPERF_PC),$(libdir_SQ)/pkgconfig,644)
+		$(call do_install,$(LIBPERF_PC),$(DESTDIR_SQ)$(libdir_SQ)/pkgconfig,644)
 
 install_doc:
 	$(Q)$(MAKE) -C Documentation install-man install-html install-examples
