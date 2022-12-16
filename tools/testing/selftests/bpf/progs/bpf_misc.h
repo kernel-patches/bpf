@@ -6,6 +6,7 @@
 #define __failure		__attribute__((btf_decl_tag("comment:test_expect_failure")))
 #define __success		__attribute__((btf_decl_tag("comment:test_expect_success")))
 #define __log_level(lvl)	__attribute__((btf_decl_tag("comment:test_log_level="#lvl)))
+#define __test_state_freq	__attribute__((btf_decl_tag("comment:test_state_freq")))
 
 #if defined(__TARGET_ARCH_x86)
 #define SYSCALL_WRAPPER 1

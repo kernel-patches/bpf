@@ -11,6 +11,7 @@
 
 #define TEST_TAG_EXPECT_FAILURE "comment:test_expect_failure"
 #define TEST_TAG_EXPECT_SUCCESS "comment:test_expect_success"
+#define TEST_TAG_TEST_STATE_FREQ "comment:test_state_freq"
 #define TEST_TAG_EXPECT_MSG_PFX "comment:test_expect_msg="
 #define TEST_TAG_LOG_LEVEL_PFX "comment:test_log_level="
 
@@ -19,6 +20,7 @@ struct test_spec {
 	bool expect_failure;
 	const char *expect_msg;
 	int log_level;
+	bool test_state_freq;
 };
 
 static int tester_init(struct test_loader *tester)
@@ -81,6 +83,8 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->expect_failure = true;
 		} else if (strcmp(s, TEST_TAG_EXPECT_SUCCESS) == 0) {
 			spec->expect_failure = false;
+		} else if (strcmp(s, TEST_TAG_TEST_STATE_FREQ) == 0) {
+			spec->test_state_freq = true;
 		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX)) {
 			spec->expect_msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX) - 1;
 		} else if (str_has_pfx(s, TEST_TAG_LOG_LEVEL_PFX)) {
@@ -102,6 +106,7 @@ static void prepare_case(struct test_loader *tester,
 			 struct bpf_program *prog)
 {
 	int min_log_level = 0;
+	__u32 flags = 0;
 
 	if (env.verbosity > VERBOSE_NONE)
 		min_log_level = 1;
@@ -120,6 +125,11 @@ static void prepare_case(struct test_loader *tester,
 		bpf_program__set_log_level(prog, spec->log_level);
 
 	tester->log_buf[0] = '\0';
+
+	if (spec->test_state_freq)
+		flags |= BPF_F_TEST_STATE_FREQ;
+
+	bpf_program__set_flags(prog, flags);
 }
 
 static void emit_verifier_log(const char *log_buf, bool force)
