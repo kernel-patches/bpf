@@ -3831,10 +3831,10 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 	u8 code;
 	int i;
 
-	insns = kmemdup(prog->insnsi, bpf_prog_insn_size(prog),
-			GFP_USER);
-	if (!insns)
+	insns = kvmalloc(bpf_prog_insn_size(prog), GFP_USER | __GFP_NOWARN);
+	if (unlikely(!insns))
 		return insns;
+	memcpy(insns, prog->insnsi, bpf_prog_insn_size(prog));
 
 	for (i = 0; i < prog->len; i++) {
 		code = insns[i].code;
@@ -3992,7 +3992,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		uinsns = u64_to_user_ptr(info.xlated_prog_insns);
 		ulen = min_t(u32, info.xlated_prog_len, ulen);
 		fault = copy_to_user(uinsns, insns_sanitized, ulen);
-		kfree(insns_sanitized);
+		kvfree(insns_sanitized);
 		if (fault)
 			return -EFAULT;
 	}
