@@ -72,6 +72,7 @@
 #define KF_DESTRUCTIVE		(1 << 6) /* kfunc performs destructive actions */
 #define KF_RCU			(1 << 7) /* kfunc only takes rcu pointer arguments */
 #define KF_RELEASE_NON_OWN	(1 << 8) /* kfunc converts its referenced arg into non-owning ref */
+#define KF_INVALIDATE_NON_OWN	(1 << 9) /* kfunc invalidates non-owning refs after return */
 
 /*
  * Return the name of the passed struct, if exists, or halt the build if for

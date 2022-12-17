@@ -2132,7 +2132,7 @@ BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_task_acquire_not_zero, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_kptr_get, KF_ACQUIRE | KF_KPTR_GET | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_release, KF_RELEASE)
-BTF_ID_FLAGS(func, bpf_rbtree_remove, KF_ACQUIRE)
+BTF_ID_FLAGS(func, bpf_rbtree_remove, KF_ACQUIRE | KF_INVALIDATE_NON_OWN)
 BTF_ID_FLAGS(func, bpf_rbtree_add, KF_RELEASE | KF_RELEASE_NON_OWN)
 BTF_ID_FLAGS(func, bpf_rbtree_first, KF_RET_NULL)
 
