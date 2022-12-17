@@ -998,6 +998,31 @@ find_struct_ops_kern_types(const struct btf *btf, const char *tname,
 	return 0;
 }
 
+/* Should match alloc_obj_fields in kernel/bpf/btf.c
+ */
+static const char *alloc_obj_fields[] = {
+	"bpf_spin_lock",
+	"bpf_list_head",
+	"bpf_list_node",
+	"bpf_rb_root",
+	"bpf_rb_node",
+};
+
+static bool
+btf_has_alloc_obj_type(const struct btf *btf)
+{
+	const char *tname;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(alloc_obj_fields); i++) {
+		tname = alloc_obj_fields[i];
+		if (btf__find_by_name_kind(btf, tname, BTF_KIND_STRUCT) > 0)
+			return true;
+	}
+
+	return false;
+}
+
 static bool bpf_map__is_struct_ops(const struct bpf_map *map)
 {
 	return map->def.type == BPF_MAP_TYPE_STRUCT_OPS;
@@ -2794,7 +2819,8 @@ static bool libbpf_needs_btf(const struct bpf_object *obj)
 
 static bool kernel_needs_btf(const struct bpf_object *obj)
 {
-	return obj->efile.st_ops_shndx >= 0;
+	return obj->efile.st_ops_shndx >= 0 ||
+		(obj->btf && btf_has_alloc_obj_type(obj->btf));
 }
 
 static int bpf_object__init_btf(struct bpf_object *obj,
@@ -5103,16 +5129,18 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 
 		err = -errno;
 		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
-		pr_warn("Error in bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
-			map->name, cp, err);
-		create_attr.btf_fd = 0;
-		create_attr.btf_key_type_id = 0;
-		create_attr.btf_value_type_id = 0;
-		map->btf_key_type_id = 0;
-		map->btf_value_type_id = 0;
-		map->fd = bpf_map_create(def->type, map_name,
-					 def->key_size, def->value_size,
-					 def->max_entries, &create_attr);
+		pr_warn("Error in bpf_create_map_xattr(%s):%s(%d).\n", map->name, cp, err);
+		if (!kernel_needs_btf(obj)) {
+			pr_warn("Retrying bpf_map_create_xattr(%s) without BTF.\n", map->name);
+			create_attr.btf_fd = 0;
+			create_attr.btf_key_type_id = 0;
+			create_attr.btf_value_type_id = 0;
+			map->btf_key_type_id = 0;
+			map->btf_value_type_id = 0;
+			map->fd = bpf_map_create(def->type, map_name,
+						 def->key_size, def->value_size,
+						 def->max_entries, &create_attr);
+		}
 	}
 
 	err = map->fd < 0 ? -errno : 0;
