@@ -12952,8 +12952,10 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_id_pair *idmap)
 		if (idmap[i].old == old_id)
 			return idmap[i].cur == cur_id;
 	}
-	/* We ran out of idmap slots, which should be impossible */
-	WARN_ON_ONCE(1);
+	/* Run out of slots in idmap, conservatively return false, cached
+	 * state will not be reused. The BPF_ID_MAP_SIZE is sufficiently
+	 * large to fit all valid programs.
+	 */
 	return false;
 }
 
