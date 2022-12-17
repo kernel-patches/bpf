@@ -11569,6 +11569,8 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 		break;
 	case BPF_FUNC_ktime_get_coarse_ns:
 		return &bpf_ktime_get_coarse_ns_proto;
+	case BPF_FUNC_sock_destroy:
+		return &bpf_sock_destroy_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -11578,3 +11580,71 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 
 	return func;
 }
+
+struct sock_destroy_work {
+	struct sock *sk;
+	struct work_struct destroy;
+};
+
+static DEFINE_PER_CPU(struct sock_destroy_work, sock_destroy_workqueue);
+
+static void bpf_sock_destroy_fn(struct work_struct *work)
+{
+	struct sock_destroy_work *sd_work = container_of(work,
+			struct sock_destroy_work, destroy);
+	struct sock *sk = READ_ONCE(sd_work->sk);
+
+	sk->sk_prot->diag_destroy(sk, ECONNABORTED);
+	sock_put(sk);
+}
+
+static int __init bpf_sock_destroy_workqueue_init(void)
+{
+	int cpu;
+	struct sock_destroy_work *work;
+
+	for_each_possible_cpu(cpu) {
+		work = per_cpu_ptr(&sock_destroy_workqueue, cpu);
+		INIT_WORK(&work->destroy, bpf_sock_destroy_fn);
+	}
+
+	return 0;
+}
+subsys_initcall(bpf_sock_destroy_workqueue_init);
+
+BPF_CALL_1(bpf_sock_destroy, struct sock *, sk)
+{
+	struct sock_destroy_work *sd_work;
+
+	if (!sk->sk_prot->diag_destroy)
+		return -EOPNOTSUPP;
+
+	sd_work = this_cpu_ptr(&sock_destroy_workqueue);
+	/* This check prevents duplicate ref counting
+	 * of sockets, in case the handler is invoked
+	 * multiple times for the same socket.
+	 */
+	if (work_pending(&sd_work->destroy))
+		return -EBUSY;
+
+	/* Ref counting ensures that the socket
+	 * isn't deleted from underneath us before
+	 * the work queue item is processed.
+	 */
+	if (!refcount_inc_not_zero(&sk->sk_refcnt))
+		return -EINVAL;
+
+	WRITE_ONCE(sd_work->sk, sk);
+	if (!queue_work(system_wq, &sd_work->destroy)) {
+		sock_put(sk);
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_sock_destroy_proto = {
+	.func		= bpf_sock_destroy,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
+};

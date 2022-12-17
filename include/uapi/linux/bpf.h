@@ -5484,6 +5484,22 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * int bpf_sock_destroy(struct sock *sk)
+ *	Description
+ *		Destroy the given socket with **ECONNABORTED** error code.
+ *
+ *		*sk* must be a non-**NULL** pointer to a socket.
+ *
+ *	Return
+ *		The socket is destroyed asynchronosuly, so 0 return value may
+ *		not suggest indicate that the socket was successfully destroyed.
+ *
+ *		On error, may return **EPROTONOSUPPORT**, **EBUSY**, **EINVAL**.
+ *
+ *		**-EPROTONOSUPPORT** if protocol specific destroy handler is not implemented.
+ *
+ *		**-EBUSY** if another socket destroy operation is in progress.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5698,6 +5714,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(sock_destroy, 212, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
