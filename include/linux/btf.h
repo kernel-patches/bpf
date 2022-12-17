@@ -15,10 +15,10 @@
 #define BTF_TYPE_EMIT_ENUM(enum_val) ((void)enum_val)
 
 /* These need to be macros, as the expressions are used in assembler input */
-#define KF_ACQUIRE	(1 << 0) /* kfunc is an acquire function */
-#define KF_RELEASE	(1 << 1) /* kfunc is a release function */
-#define KF_RET_NULL	(1 << 2) /* kfunc returns a pointer that may be NULL */
-#define KF_KPTR_GET	(1 << 3) /* kfunc returns reference to a kptr */
+#define KF_ACQUIRE		(1 << 0) /* kfunc is an acquire function */
+#define KF_RELEASE		(1 << 1) /* kfunc is a release function */
+#define KF_RET_NULL		(1 << 2) /* kfunc returns a pointer that may be NULL */
+#define KF_KPTR_GET		(1 << 3) /* kfunc returns reference to a kptr */
 /* Trusted arguments are those which are guaranteed to be valid when passed to
  * the kfunc. It is used to enforce that pointers obtained from either acquire
  * kfuncs, or from the main kernel on a tracepoint or struct_ops callback
@@ -67,10 +67,11 @@
  *	return 0;
  * }
  */
-#define KF_TRUSTED_ARGS (1 << 4) /* kfunc only takes trusted pointer arguments */
-#define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
-#define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
-#define KF_RCU          (1 << 7) /* kfunc only takes rcu pointer arguments */
+#define KF_TRUSTED_ARGS	(1 << 4) /* kfunc only takes trusted pointer arguments */
+#define KF_SLEEPABLE		(1 << 5) /* kfunc may sleep */
+#define KF_DESTRUCTIVE		(1 << 6) /* kfunc performs destructive actions */
+#define KF_RCU			(1 << 7) /* kfunc only takes rcu pointer arguments */
+#define KF_RELEASE_NON_OWN	(1 << 8) /* kfunc converts its referenced arg into non-owning ref */
 
 /*
  * Return the name of the passed struct, if exists, or halt the build if for
