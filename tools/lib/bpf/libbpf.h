@@ -967,6 +967,7 @@ LIBBPF_API int bpf_xdp_detach(int ifindex, __u32 flags,
 			      const struct bpf_xdp_attach_opts *opts);
 LIBBPF_API int bpf_xdp_query(int ifindex, int flags, struct bpf_xdp_query_opts *opts);
 LIBBPF_API int bpf_xdp_query_id(int ifindex, int flags, __u32 *prog_id);
+LIBBPF_API int bpf_xdp_query_features(int ifindex, __u32 *fflags, __u32 *fflags_cnt);
 
 /* TC related API */
 enum bpf_tc_attach_point {

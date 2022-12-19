@@ -362,6 +362,7 @@ LIBBPF_1.0.0 {
 		bpf_program__set_autoattach;
 		btf__add_enum64;
 		btf__add_enum64_value;
+		bpf_xdp_query_features;
 		libbpf_bpf_attach_type_str;
 		libbpf_bpf_link_type_str;
 		libbpf_bpf_map_type_str;

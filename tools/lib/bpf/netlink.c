@@ -9,6 +9,7 @@
 #include <linux/if_ether.h>
 #include <linux/pkt_cls.h>
 #include <linux/rtnetlink.h>
+#include <linux/xdp_features.h>
 #include <sys/socket.h>
 #include <errno.h>
 #include <time.h>
@@ -39,6 +40,12 @@ struct xdp_id_md {
 	int ifindex;
 	__u32 flags;
 	struct xdp_link_info info;
+};
+
+struct xdp_features_md {
+	int ifindex;
+	__u32 *flags;
+	__u32 *flags_cnt;
 };
 
 static int libbpf_netlink_open(__u32 *nl_pid)
@@ -357,6 +364,39 @@ static int get_xdp_info(void *cookie, void *msg, struct nlattr **tb)
 	return 0;
 }
 
+static int bpf_get_xdp_features(void *cookie, void *msg, struct nlattr **tb)
+{
+	struct nlattr *xdp_tb[IFLA_XDP_FEATURES_BITS_WORD + 1];
+	struct xdp_features_md *md = cookie;
+	struct ifinfomsg *ifinfo = msg;
+	int ret, i, words;
+
+	if (md->ifindex && md->ifindex != ifinfo->ifi_index)
+		return 0;
+
+	if (!tb[IFLA_XDP_FEATURES])
+		return 0;
+
+	words = min(XDP_FEATURES_WORDS, *md->flags_cnt);
+	for (i = 0; i < words; ++i)
+		md->flags[i] = 0;
+
+	ret = libbpf_nla_parse_nested(xdp_tb, XDP_FEATURES_WORDS,
+				      tb[IFLA_XDP_FEATURES], NULL);
+	if (ret)
+		return ret;
+
+	*md->flags_cnt = words;
+	for (i = 0; i < words; ++i) {
+		if (!xdp_tb[IFLA_XDP_FEATURES_BITS_WORD])
+			continue;
+
+		md->flags[i] = libbpf_nla_getattr_u32(xdp_tb[IFLA_XDP_FEATURES_BITS_WORD]);
+	}
+
+	return 0;
+}
+
 int bpf_xdp_query(int ifindex, int xdp_flags, struct bpf_xdp_query_opts *opts)
 {
 	struct libbpf_nla_req req = {
@@ -421,6 +461,28 @@ int bpf_xdp_query_id(int ifindex, int flags, __u32 *prog_id)
 	return 0;
 }
 
+int bpf_xdp_query_features(int ifindex, __u32 *xdp_fflags, __u32 *fflags_cnt)
+{
+	struct libbpf_nla_req req = {
+		.nh.nlmsg_len		= NLMSG_LENGTH(sizeof(struct ifinfomsg)),
+		.nh.nlmsg_type		= RTM_GETLINK,
+		.nh.nlmsg_flags		= NLM_F_DUMP | NLM_F_REQUEST,
+		.ifinfo.ifi_family	= AF_PACKET,
+	};
+	struct xdp_features_md md = {};
+	int ret;
+
+	if (!xdp_fflags || !fflags_cnt)
+		return -EINVAL;
+
+	md.ifindex = ifindex;
+	md.flags = xdp_fflags;
+	md.flags_cnt = fflags_cnt;
+
+	ret = libbpf_netlink_send_recv(&req, __dump_link_nlmsg,
+				       bpf_get_xdp_features, &md);
+	return libbpf_err(ret);
+}
 
 typedef int (*qdisc_config_t)(struct libbpf_nla_req *req);
 
