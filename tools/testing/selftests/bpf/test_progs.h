@@ -410,6 +410,7 @@ int write_sysctl(const char *sysctl, const char *value);
 struct test_loader {
 	char *log_buf;
 	size_t log_buf_sz;
+	size_t next_match_pos;
 
 	struct bpf_object *obj;
 };
