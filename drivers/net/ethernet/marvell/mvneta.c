@@ -5612,6 +5612,9 @@ static int mvneta_probe(struct platform_device *pdev)
 			NETIF_F_TSO | NETIF_F_RXCSUM;
 	dev->hw_features |= dev->features;
 	dev->vlan_features |= dev->features;
+	dev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+			    XDP_F_REDIRECT_TARGET | XDP_F_FRAG_RX |
+			    XDP_F_FRAG_TARGET;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 	netif_set_tso_max_segs(dev, MVNETA_MAX_TSO_SEGS);
 

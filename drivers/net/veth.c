@@ -1648,6 +1648,10 @@ static void veth_setup(struct net_device *dev)
 	dev->hw_enc_features = VETH_FEATURES;
 	dev->mpls_features = NETIF_F_HW_CSUM | NETIF_F_GSO_SOFTWARE;
 	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
+
+	dev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+			    XDP_F_REDIRECT_TARGET | XDP_F_FRAG_RX |
+			    XDP_F_FRAG_TARGET;
 }
 
 /*

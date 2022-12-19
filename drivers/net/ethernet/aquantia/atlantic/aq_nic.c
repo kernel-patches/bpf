@@ -384,6 +384,9 @@ void aq_nic_ndev_init(struct aq_nic_s *self)
 	self->ndev->mtu = aq_nic_cfg->mtu - ETH_HLEN;
 	self->ndev->max_mtu = aq_hw_caps->mtu - ETH_FCS_LEN - ETH_HLEN;
 
+	self->ndev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+				   XDP_F_REDIRECT_TARGET | XDP_F_FRAG_RX |
+				   XDP_F_FRAG_TARGET;
 }
 
 void aq_nic_set_tx_ring(struct aq_nic_s *self, unsigned int idx,

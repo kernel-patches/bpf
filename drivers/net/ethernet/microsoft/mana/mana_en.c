@@ -2160,6 +2160,8 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 	ndev->hw_features |= NETIF_F_RXHASH;
 	ndev->features = ndev->hw_features;
 	ndev->vlan_features = 0;
+	ndev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+			     XDP_F_REDIRECT_TARGET;
 
 	err = register_netdev(ndev);
 	if (err) {

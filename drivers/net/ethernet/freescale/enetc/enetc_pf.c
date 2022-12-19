@@ -825,6 +825,9 @@ static void enetc_pf_netdev_setup(struct enetc_si *si, struct net_device *ndev,
 		ndev->hw_features |= NETIF_F_RXHASH;
 
 	ndev->priv_flags |= IFF_UNICAST_FLT;
+	ndev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+			     XDP_F_REDIRECT_TARGET | XDP_F_FRAG_RX |
+			     XDP_F_FRAG_TARGET;
 
 	if (si->hw_features & ENETC_SI_F_PSFP && !enetc_psfp_enable(priv)) {
 		priv->active_offloads |= ENETC_F_QCI;

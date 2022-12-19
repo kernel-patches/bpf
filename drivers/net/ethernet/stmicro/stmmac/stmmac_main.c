@@ -7144,6 +7144,7 @@ int stmmac_dvr_probe(struct device *device,
 
 	ndev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
 			    NETIF_F_RXCSUM;
+	ndev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK | XDP_F_REDIRECT_TARGET;
 
 	ret = stmmac_tc_init(priv, priv);
 	if (!ret) {

@@ -29,6 +29,11 @@ int igc_xdp_set_prog(struct igc_adapter *adapter, struct bpf_prog *prog,
 	if (old_prog)
 		bpf_prog_put(old_prog);
 
+	if (prog)
+		xdp_features_set_redirect_target(&dev->xdp_features);
+	else
+		xdp_features_clear_redirect_target(&dev->xdp_features);
+
 	if (if_running)
 		igc_open(dev);
 

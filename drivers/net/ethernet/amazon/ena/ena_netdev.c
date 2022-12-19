@@ -589,7 +589,10 @@ static int ena_xdp_set(struct net_device *netdev, struct netdev_bpf *bpf)
 				if (rc)
 					return rc;
 			}
+			__xdp_features_set_redirect_target(&netdev->xdp_features,
+							   XDP_F_REDIRECT_TARGET);
 		} else if (old_bpf_prog) {
+			xdp_features_clear_redirect_target(&netdev->xdp_features);
 			rc = ena_destroy_and_free_all_xdp_queues(adapter);
 			if (rc)
 				return rc;
@@ -4065,6 +4068,8 @@ static void ena_set_conf_feat_params(struct ena_adapter *adapter,
 
 	/* Set offload features */
 	ena_set_dev_offloads(feat, netdev);
+
+	netdev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK;
 
 	adapter->max_mtu = feat->dev_attr.max_mtu;
 	netdev->max_mtu = adapter->max_mtu;

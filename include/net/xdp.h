@@ -7,6 +7,7 @@
 #define __LINUX_NET_XDP_H__
 
 #include <linux/skbuff.h> /* skb_shared_info */
+#include <linux/xdp_features.h>
 
 /**
  * DOC: XDP RX-queue information
@@ -406,6 +407,44 @@ struct xdp_attachment_info {
 struct netdev_bpf;
 void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf);
+
+#if defined(CONFIG_NET) && defined(CONFIG_BPF_SYSCALL)
+
+static inline void
+__xdp_features_set_redirect_target(xdp_features_t *xdp_features, u32 flags)
+{
+	flags &= (XDP_F_REDIRECT_TARGET | XDP_F_FRAG_TARGET);
+	WRITE_ONCE(*xdp_features, *xdp_features | flags);
+}
+
+static inline void
+xdp_features_clear_redirect_target(xdp_features_t *xdp_features)
+{
+	WRITE_ONCE(*xdp_features,
+		   *xdp_features & ~(XDP_F_REDIRECT_TARGET | XDP_F_FRAG_TARGET));
+}
+
+#else
+
+static inline void
+__xdp_features_set_redirect_target(xdp_features_t *xdp_features, u32 flags)
+{
+}
+
+static inline void
+xdp_features_clear_redirect_target(xdp_features_t *xdp_features)
+{
+}
+
+#endif
+
+static inline void
+xdp_features_set_redirect_target(xdp_features_t *xdp_features)
+{
+	__xdp_features_set_redirect_target(xdp_features,
+					   XDP_F_REDIRECT_TARGET |
+					   XDP_F_FRAG_TARGET);
+}
 
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 

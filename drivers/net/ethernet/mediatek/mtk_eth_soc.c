@@ -4186,6 +4186,11 @@ static int mtk_add_mac(struct mtk_eth *eth, struct device_node *np)
 		register_netdevice_notifier(&mac->device_notifier);
 	}
 
+	if (mtk_page_pool_enabled(eth))
+		eth->netdev[id]->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK |
+						XDP_F_REDIRECT_TARGET |
+						XDP_F_FRAG_TARGET;
+
 	return 0;
 
 free_netdev:
