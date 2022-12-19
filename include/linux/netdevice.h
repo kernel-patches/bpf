@@ -43,6 +43,7 @@
 #include <net/xdp.h>
 
 #include <linux/netdev_features.h>
+#include <linux/xdp_features.h>
 #include <linux/neighbour.h>
 #include <uapi/linux/netdevice.h>
 #include <uapi/linux/if_bonding.h>
@@ -2362,6 +2363,7 @@ struct net_device {
 	struct rtnl_hw_stats64	*offload_xstats_l3;
 
 	struct devlink_port	*devlink_port;
+	xdp_features_t		xdp_features;
 };
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 

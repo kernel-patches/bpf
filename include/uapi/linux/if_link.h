@@ -374,6 +374,8 @@ enum {
 
 	IFLA_DEVLINK_PORT,
 
+	IFLA_XDP_FEATURES,
+
 	__IFLA_MAX
 };
 
@@ -1317,6 +1319,11 @@ enum {
 };
 
 #define IFLA_XDP_MAX (__IFLA_XDP_MAX - 1)
+
+enum {
+	IFLA_XDP_FEATURES_WORD_UNSPEC = 0,
+	IFLA_XDP_FEATURES_BITS_WORD,
+};
 
 enum {
 	IFLA_EVENT_NONE,
