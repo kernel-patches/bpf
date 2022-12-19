@@ -437,6 +437,7 @@ static void print_prog_header_json(struct bpf_prog_info *info, int fd)
 	if (info->run_time_ns) {
 		jsonw_uint_field(json_wtr, "run_time_ns", info->run_time_ns);
 		jsonw_uint_field(json_wtr, "run_cnt", info->run_cnt);
+		jsonw_uint_field(json_wtr, "run_max_cost_ns", info->run_max_cost_ns);
 	}
 	if (info->recursion_misses)
 		jsonw_uint_field(json_wtr, "recursion_misses", info->recursion_misses);
