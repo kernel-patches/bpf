@@ -556,6 +556,7 @@ struct bpf_prog_stats {
 	u64_stats_t cnt;
 	u64_stats_t nsecs;
 	u64_stats_t misses;
+	u64_stats_t max_cost;
 	struct u64_stats_sync syncp;
 } __aligned(2 * sizeof(u64));
 
@@ -578,6 +579,26 @@ typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
 					  unsigned int (*bpf_func)(const void *,
 								   const struct bpf_insn *));
 
+static inline void bpf_prog_update_stats(const struct bpf_prog *prog, u64 start)
+{
+	struct bpf_prog_stats *stats;
+	unsigned long flags;
+	u64 run_time, max_cost;
+
+	stats = this_cpu_ptr(prog->stats);
+	flags = u64_stats_update_begin_irqsave(&stats->syncp);
+
+	run_time =  sched_clock() - start;
+	u64_stats_inc(&stats->cnt);
+	u64_stats_add(&stats->nsecs, run_time);
+
+	max_cost = u64_stats_read(&stats->max_cost);
+	if (max_cost < run_time)
+		u64_stats_set(&stats->max_cost, run_time);
+
+	u64_stats_update_end_irqrestore(&stats->syncp, flags);
+}
+
 static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 					  const void *ctx,
 					  bpf_dispatcher_fn dfunc)
@@ -586,16 +607,10 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 
 	cant_migrate();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
-		struct bpf_prog_stats *stats;
 		u64 start = sched_clock();
-		unsigned long flags;
 
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
-		stats = this_cpu_ptr(prog->stats);
-		flags = u64_stats_update_begin_irqsave(&stats->syncp);
-		u64_stats_inc(&stats->cnt);
-		u64_stats_add(&stats->nsecs, sched_clock() - start);
-		u64_stats_update_end_irqrestore(&stats->syncp, flags);
+		bpf_prog_update_stats(prog, start);
 	} else {
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
 	}
