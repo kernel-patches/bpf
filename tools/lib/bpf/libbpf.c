@@ -9764,6 +9764,11 @@ struct bpf_link *bpf_program__attach_perf_event_opts(const struct bpf_program *p
 	if (!OPTS_VALID(opts, bpf_perf_event_opts))
 		return libbpf_err_ptr(-EINVAL);
 
+	if (!prog || !prog->name) {
+		pr_warn("prog: invalid prog\n");
+		return libbpf_err_ptr(-EINVAL);
+	}
+
 	if (pfd < 0) {
 		pr_warn("prog '%s': invalid perf event FD %d\n",
 			prog->name, pfd);
@@ -10967,13 +10972,18 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 					  const struct bpf_usdt_opts *opts)
 {
 	char resolved_path[512];
-	struct bpf_object *obj = prog->obj;
+	struct bpf_object *obj;
 	struct bpf_link *link;
 	__u64 usdt_cookie;
 	int err;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
+
+	if (!prog || !prog->name || !prog->obj) {
+		pr_warn("prog: invalid prog\n");
+		return libbpf_err_ptr(-EINVAL);
+	}
 
 	if (bpf_program__fd(prog) < 0) {
 		pr_warn("prog '%s': can't attach BPF program w/o FD (did you load it?)\n",
@@ -10997,6 +11007,7 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 	/* USDT manager is instantiated lazily on first USDT attach. It will
 	 * be destroyed together with BPF object in bpf_object__close().
 	 */
+	obj = prog->obj;
 	if (IS_ERR(obj->usdt_man))
 		return libbpf_ptr(obj->usdt_man);
 	if (!obj->usdt_man) {
