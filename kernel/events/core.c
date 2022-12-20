@@ -10332,6 +10332,7 @@ static void bpf_overflow_handler(struct perf_event *event,
 		.event = event,
 	};
 	struct bpf_prog *prog;
+	struct perf_event_header dummy;
 	int ret = 0;
 
 	ctx.regs = perf_arch_bpf_user_pt_regs(regs);
@@ -10346,6 +10347,8 @@ static void bpf_overflow_handler(struct perf_event *event,
 			data->callchain = perf_callchain(event, regs);
 			data->sample_flags |= PERF_SAMPLE_CALLCHAIN;
 		}
+		if (prog->call_cast_kctx)
+			perf_prepare_sample(&dummy, data, event, regs);
 
 		ret = bpf_prog_run(prog, &ctx);
 	}

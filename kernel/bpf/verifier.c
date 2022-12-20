@@ -9236,6 +9236,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 				regs[BPF_REG_0].btf = desc_btf;
 				regs[BPF_REG_0].btf_id = meta.ret_btf_id;
+				env->prog->call_cast_kctx = 1;
 			} else if (meta.func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 				ret_t = btf_type_by_id(desc_btf, meta.arg_constant.value);
 				if (!ret_t || !btf_type_is_struct(ret_t)) {
