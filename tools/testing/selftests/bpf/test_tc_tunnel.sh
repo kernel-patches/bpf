@@ -15,6 +15,7 @@ readonly ns1_v4=192.168.1.1
 readonly ns2_v4=192.168.1.2
 readonly ns1_v6=fd::1
 readonly ns2_v6=fd::2
+readonly nsim_v4=192.168.2.1
 
 # Must match port used by bpf program
 readonly udpport=5555
@@ -67,6 +68,10 @@ cleanup() {
 	if [[ -n $server_pid ]]; then
 		kill $server_pid 2> /dev/null
 	fi
+
+	if [ -e /sys/bus/netdevsim/devices/netdevsim1 ]; then
+	    echo 1 > /sys/bus/netdevsim/del_device
+	fi
 }
 
 server_listen() {
@@ -91,6 +96,25 @@ verify_data() {
 		echo "data mismatch"
 		exit 1
 	fi
+}
+
+decap_sanity() {
+    echo "test decap sanity"
+    modprobe netdevsim
+    echo 1 1 > /sys/bus/netdevsim/new_device
+    udevadm settle
+    nsim=$(ls /sys/bus/netdevsim/devices/netdevsim1/net/)
+    ip link set dev $nsim up
+    ip addr add dev $nsim $nsim_v4/24
+
+    tc qdisc add dev $nsim clsact
+    tc filter add dev $nsim egress \
+       bpf direct-action object-file ${BPF_FILE} section decap
+
+    echo abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz | \
+	nc -u 192.168.2.2 7777
+
+    echo 1 > /sys/bus/netdevsim/del_device
 }
 
 set -e
@@ -137,6 +161,9 @@ if [[ "$#" -eq "0" ]]; then
 		echo "ip6 udp $mac gso"
 		$0 ipv6 ip6udp $mac 2000
 	done
+
+	echo "decap sanity check"
+	decap_sanity
 
 	echo "OK. All tests passed"
 	exit 0

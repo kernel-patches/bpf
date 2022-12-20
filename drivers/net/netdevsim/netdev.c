@@ -33,6 +33,11 @@ static netdev_tx_t nsim_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (!nsim_ipsec_tx(ns, skb))
 		goto out;
 
+	/* Validate the packet */
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		WARN_ON_ONCE((unsigned int)skb_checksum_start_offset(skb) >=
+			     skb_headlen(skb));
+
 	u64_stats_update_begin(&ns->syncp);
 	ns->tx_packets++;
 	ns->tx_bytes += skb->len;
