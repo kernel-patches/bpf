@@ -220,9 +220,7 @@ struct outer_mixed_but_unpacked {
 	struct nested_packed b2;
 };
 
-/* ------ END-EXPECTED-OUTPUT ------ */
-
-int f(struct {
+struct root_struct {
 	struct padded_implicitly _1;
 	struct padded_explicitly _2;
 	struct padded_a_lot _3;
@@ -243,7 +241,11 @@ int f(struct {
 	struct ib_wc _201;
 	struct acpi_object_method _202;
 	struct outer_mixed_but_unpacked _203;
-} *_)
+} __attribute__((packed));
+
+/* ------ END-EXPECTED-OUTPUT ------ */
+
+int f(struct root_struct *_)
 {
 	return 0;
 }

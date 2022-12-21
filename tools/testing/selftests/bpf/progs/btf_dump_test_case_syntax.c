@@ -104,24 +104,24 @@ typedef void (*printf_fn_t)(const char *, ...);
  *   typedef const fn_output_inner_t fn_ptr_arr2_t[5];
  */
 /* ----- START-EXPECTED-OUTPUT ----- */
-typedef char * const * (*fn_ptr2_t)(struct {
-	int a;
-}, int (*)(int));
+struct struct_a;
+
+typedef char * const * (*fn_ptr2_t)(struct struct_a, int (*)(int));
+
+struct struct_c;
+
+struct struct_h;
 
 typedef struct {
 	int a;
-	void (*b)(int, struct {
-		int c;
-	}, union {
+	void (*b)(int, struct struct_c, union {
 		char d;
 		int e[5];
 	});
 } (*fn_complex_t)(union {
 	void *f;
 	char g[16];
-}, struct {
-	int h;
-});
+}, struct struct_h);
 
 typedef void (* (*signal_t)(int, void (*)(int)))(int);
 
@@ -270,6 +270,18 @@ struct root_struct {
 	union_fwd_ptr_t _13;
 	struct struct_with_embedded_stuff _14;
 	struct float_struct _15;
+};
+
+struct struct_a {
+	int a;
+};
+
+struct struct_h {
+	int h;
+};
+
+struct struct_c {
+	int c;
 };
 
 /* ------ END-EXPECTED-OUTPUT ------ */

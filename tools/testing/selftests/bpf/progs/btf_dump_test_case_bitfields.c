@@ -82,11 +82,16 @@ struct bitfield_flushed {
 	long b: 16;
 };
 
-int f(struct {
+/* ----- START-EXPECTED-OUTPUT ----- */
+struct root_struct {
 	struct bitfields_only_mixed_types _1;
 	struct bitfield_mixed_with_others _2;
 	struct bitfield_flushed _3;
-} *_)
+};
+
+/* ------ END-EXPECTED-OUTPUT ------ */
+
+int f(struct root_struct *_)
 {
 	return 0;
 }
