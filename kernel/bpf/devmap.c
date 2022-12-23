@@ -868,7 +868,7 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 	dev->dtab = dtab;
 	if (prog) {
 		dev->xdp_prog = prog;
-		dev->val.bpf_prog.id = prog->aux->id;
+		dev->val.bpf_prog.id = bpf_prog_get_id(prog);
 	} else {
 		dev->xdp_prog = NULL;
 		dev->val.bpf_prog.id = 0;

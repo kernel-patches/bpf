@@ -2353,7 +2353,7 @@ int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 	if (prog->type == BPF_PROG_TYPE_PERF_EVENT)
 		return -EOPNOTSUPP;
 
-	*prog_id = prog->aux->id;
+	*prog_id = bpf_prog_get_id(prog);
 	flags = event->tp_event->flags;
 	is_tracepoint = flags & TRACE_EVENT_FL_TRACEPOINT;
 	is_syscall_tp = is_syscall_trace_event(event->tp_event);

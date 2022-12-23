@@ -109,7 +109,7 @@ nsim_bpf_offload(struct netdevsim *ns, struct bpf_prog *prog, bool oldprog)
 	     "bad offload state, expected offload %sto be active",
 	     oldprog ? "" : "not ");
 	ns->bpf_offloaded = prog;
-	ns->bpf_offloaded_id = prog ? prog->aux->id : 0;
+	ns->bpf_offloaded_id = prog ? bpf_prog_get_id(prog) : 0;
 	nsim_prog_set_loaded(prog, true);
 
 	return 0;
@@ -221,6 +221,7 @@ static int nsim_bpf_create_prog(struct nsim_dev *nsim_dev,
 	struct nsim_bpf_bound_prog *state;
 	char name[16];
 	int ret;
+	u32 id;
 
 	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (!state)
@@ -239,7 +240,8 @@ static int nsim_bpf_create_prog(struct nsim_dev *nsim_dev,
 		return ret;
 	}
 
-	debugfs_create_u32("id", 0400, state->ddir, &prog->aux->id);
+	id = bpf_prog_get_id(prog);
+	debugfs_create_u32("id", 0400, state->ddir, &id);
 	debugfs_create_file("state", 0400, state->ddir,
 			    &state->state, &nsim_bpf_string_fops);
 	debugfs_create_bool("loaded", 0400, state->ddir, &state->is_loaded);

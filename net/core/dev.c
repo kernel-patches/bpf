@@ -9060,7 +9060,7 @@ u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode)
 {
 	struct bpf_prog *prog = dev_xdp_prog(dev, mode);
 
-	return prog ? prog->aux->id : 0;
+	return prog ? bpf_prog_get_id(prog) : 0;
 }
 
 static void dev_xdp_set_link(struct net_device *dev, enum bpf_xdp_mode mode,

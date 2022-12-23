@@ -896,7 +896,7 @@ static void prog_fd_array_put_ptr(void *ptr)
 
 static u32 prog_fd_array_sys_lookup_elem(void *ptr)
 {
-	return ((struct bpf_prog *)ptr)->aux->id;
+	return bpf_prog_get_id((struct bpf_prog *)ptr);
 }
 
 /* decrement refcnt of all bpf_progs that are stored in this map */

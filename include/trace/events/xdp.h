@@ -39,7 +39,7 @@ TRACE_EVENT(xdp_exception,
 	),
 
 	TP_fast_assign(
-		__entry->prog_id	= xdp->aux->id;
+		__entry->prog_id	= (xdp->valid_id ? xdp->aux->__id : 0);
 		__entry->act		= act;
 		__entry->ifindex	= dev->ifindex;
 	),
@@ -120,7 +120,7 @@ DECLARE_EVENT_CLASS(xdp_redirect_template,
 			map_index = 0;
 		}
 
-		__entry->prog_id	= xdp->aux->id;
+		__entry->prog_id	= (xdp->valid_id ? xdp->aux->__id : 0);
 		__entry->act		= XDP_REDIRECT;
 		__entry->ifindex	= dev->ifindex;
 		__entry->err		= err;

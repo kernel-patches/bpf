@@ -8761,7 +8761,8 @@ void bpf_warn_invalid_xdp_action(struct net_device *dev, struct bpf_prog *prog, 
 
 	pr_warn_once("%s XDP return value %u on prog %s (id %d) dev %s, expect packet loss!\n",
 		     act > act_max ? "Illegal" : "Driver unsupported",
-		     act, prog->aux->name, prog->aux->id, dev ? dev->name : "N/A");
+		     act, prog->aux->name, bpf_prog_get_id(prog),
+		     dev ? dev->name : "N/A");
 }
 EXPORT_SYMBOL_GPL(bpf_warn_invalid_xdp_action);
 

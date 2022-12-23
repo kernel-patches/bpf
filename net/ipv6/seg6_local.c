@@ -1543,7 +1543,8 @@ static int put_nla_bpf(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	if (!nest)
 		return -EMSGSIZE;
 
-	if (nla_put_u32(skb, SEG6_LOCAL_BPF_PROG, slwt->bpf.prog->aux->id))
+	if (nla_put_u32(skb, SEG6_LOCAL_BPF_PROG,
+			bpf_prog_get_id(slwt->bpf.prog)))
 		return -EMSGSIZE;
 
 	if (slwt->bpf.name &&

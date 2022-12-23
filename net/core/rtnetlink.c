@@ -1465,7 +1465,7 @@ static u32 rtnl_xdp_prog_skb(struct net_device *dev)
 	generic_xdp_prog = rtnl_dereference(dev->xdp_prog);
 	if (!generic_xdp_prog)
 		return 0;
-	return generic_xdp_prog->aux->id;
+	return bpf_prog_get_id(generic_xdp_prog);
 }
 
 static u32 rtnl_xdp_prog_drv(struct net_device *dev)

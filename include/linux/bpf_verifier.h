@@ -624,7 +624,7 @@ static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
 					     struct btf *btf, u32 btf_id)
 {
 	if (tgt_prog)
-		return ((u64)tgt_prog->aux->id << 32) | btf_id;
+		return ((u64)bpf_prog_get_id(tgt_prog) << 32) | btf_id;
 	else
 		return ((u64)btf_obj_id(btf) << 32) | 0x80000000 | btf_id;
 }

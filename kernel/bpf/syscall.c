@@ -1972,13 +1972,14 @@ static void bpf_audit_prog(const struct bpf_prog *prog, unsigned int op)
 		return;
 	if (audit_enabled == AUDIT_OFF)
 		return;
-	if (op == BPF_AUDIT_LOAD)
+	if (!in_irq() && !irqs_disabled())
 		ctx = audit_context();
 	ab = audit_log_start(ctx, GFP_ATOMIC, AUDIT_BPF);
 	if (unlikely(!ab))
 		return;
+	/* log the id regardless of bpf_prog::valid_id */
 	audit_log_format(ab, "prog-id=%u op=%s",
-			 prog->aux->id, bpf_audit_str[op]);
+			 prog->aux->__id, bpf_audit_str[op]);
 	audit_log_end(ab);
 }
 
@@ -1989,8 +1990,10 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 	idr_preload(GFP_KERNEL);
 	spin_lock_bh(&prog_idr_lock);
 	id = idr_alloc_cyclic(&prog_idr, prog, 1, INT_MAX, GFP_ATOMIC);
-	if (id > 0)
-		prog->aux->id = id;
+	if (id > 0) {
+		prog->aux->__id = id;
+		prog->valid_id = true;
+	}
 	spin_unlock_bh(&prog_idr_lock);
 	idr_preload_end();
 
@@ -2010,7 +2013,7 @@ void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
 	 * disappears - even if someone grabs an fd to them they are unusable,
 	 * simply waiting for refcnt to drop to be freed.
 	 */
-	if (!prog->aux->id)
+	if (!prog->valid_id)
 		return;
 
 	if (do_idr_lock)
@@ -2018,8 +2021,8 @@ void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
 	else
 		__acquire(&prog_idr_lock);
 
-	idr_remove(&prog_idr, prog->aux->id);
-	prog->aux->id = 0;
+	idr_remove(&prog_idr, prog->aux->__id);
+	prog->valid_id = false;
 
 	if (do_idr_lock)
 		spin_unlock_irqrestore(&prog_idr_lock, flags);
@@ -2168,7 +2171,7 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   prog->jited,
 		   prog_tag,
 		   prog->pages * 1ULL << PAGE_SHIFT,
-		   prog->aux->id,
+		   bpf_prog_get_id(prog),
 		   stats.nsecs,
 		   stats.cnt,
 		   stats.misses,
@@ -2800,7 +2803,7 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 		   bpf_link_type_strs[link->type],
 		   link->id,
 		   prog_tag,
-		   prog->aux->id);
+		   bpf_prog_get_id(prog));
 	if (link->ops->show_fdinfo)
 		link->ops->show_fdinfo(link, m);
 }
@@ -3928,7 +3931,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		return -EFAULT;
 
 	info.type = prog->type;
-	info.id = prog->aux->id;
+	info.id = bpf_prog_get_id(prog);
 	info.load_time = prog->aux->load_time;
 	info.created_by_uid = from_kuid_munged(current_user_ns(),
 					       prog->aux->user->uid);
@@ -4275,7 +4278,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 
 	info.type = link->type;
 	info.id = link->id;
-	info.prog_id = link->prog->aux->id;
+	info.prog_id = bpf_prog_get_id(link->prog);
 
 	if (link->ops->fill_link_info) {
 		err = link->ops->fill_link_info(link, &info);
@@ -4440,7 +4443,7 @@ static int bpf_task_fd_query(const union bpf_attr *attr,
 			struct bpf_raw_event_map *btp = raw_tp->btp;
 
 			err = bpf_task_fd_query_copy(attr, uattr,
-						     raw_tp->link.prog->aux->id,
+						     bpf_prog_get_id(raw_tp->link.prog),
 						     BPF_FD_TYPE_RAW_TRACEPOINT,
 						     btp->tp->name, 0, 0);
 			goto put_file;

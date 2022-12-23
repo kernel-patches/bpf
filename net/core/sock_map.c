@@ -1520,7 +1520,7 @@ int sock_map_bpf_prog_query(const union bpf_attr *attr,
 	/* we do not hold the refcnt, the bpf prog may be released
 	 * asynchronously and the id would be set to 0.
 	 */
-	id = data_race(prog->aux->id);
+	id = data_race(bpf_prog_get_id(prog));
 	if (id == 0)
 		prog_cnt = 0;
 

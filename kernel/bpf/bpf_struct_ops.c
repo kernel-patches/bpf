@@ -488,7 +488,7 @@ static int bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		image += err;
 
 		/* put prog_id to udata */
-		*(unsigned long *)(udata + moff) = prog->aux->id;
+		*(unsigned long *)(udata + moff) = bpf_prog_get_id(prog);
 	}
 
 	refcount_set(&kvalue->refcnt, 1);

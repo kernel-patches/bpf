@@ -567,7 +567,7 @@ static int cls_bpf_dump_ebpf_info(const struct cls_bpf_prog *prog,
 	    nla_put_string(skb, TCA_BPF_NAME, prog->bpf_name))
 		return -EMSGSIZE;
 
-	if (nla_put_u32(skb, TCA_BPF_ID, prog->filter->aux->id))
+	if (nla_put_u32(skb, TCA_BPF_ID, bpf_prog_get_id(prog->filter)))
 		return -EMSGSIZE;
 
 	nla = nla_reserve(skb, TCA_BPF_TAG, sizeof(prog->filter->tag));

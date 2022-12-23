@@ -412,7 +412,7 @@ static int __cpu_map_load_bpf_program(struct bpf_cpu_map_entry *rcpu,
 		return -EINVAL;
 	}
 
-	rcpu->value.bpf_prog.id = prog->aux->id;
+	rcpu->value.bpf_prog.id = bpf_prog_get_id(prog);
 	rcpu->prog = prog;
 
 	return 0;

@@ -2303,7 +2303,7 @@ static bool bpf_prog_array_copy_core(struct bpf_prog_array *array,
 	for (item = array->items; item->prog; item++) {
 		if (item->prog == &dummy_bpf_prog.prog)
 			continue;
-		prog_ids[i] = item->prog->aux->id;
+		prog_ids[i] = bpf_prog_get_id(item->prog);
 		if (++i == request_cnt) {
 			item++;
 			break;

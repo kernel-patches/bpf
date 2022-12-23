@@ -9242,7 +9242,11 @@ void perf_event_bpf_event(struct bpf_prog *prog,
 			},
 			.type = type,
 			.flags = flags,
-			.id = prog->aux->id,
+			/*
+			 * don't use bpf_prog_get_id() as the id may be marked
+			 * invalid on PERF_BPF_EVENT_PROG_UNLOAD events
+			 */
+			.id = prog->aux->__id,
 		},
 	};
 
