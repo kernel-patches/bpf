@@ -8,12 +8,16 @@
 
 #include "../../include/uapi/linux/bpfilter.h"
 
+#include <linux/pkt_cls.h>
+
 #include <unistd.h>
 #include <sys/syscall.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <bpf/libbpf.h>
 
 #include "logger.h"
 
@@ -390,6 +394,150 @@ static void unload_maps(struct codegen *codegen)
 	}
 }
 
+static int tc_gen_inline_prologue(struct codegen *codegen)
+{
+	EMIT(codegen, BPF_MOV64_REG(CODEGEN_REG_CTX, BPF_REG_ARG1));
+	EMIT(codegen, BPF_MOV64_REG(CODEGEN_REG_RUNTIME_CTX, BPF_REG_FP));
+	EMIT(codegen, BPF_MOV32_IMM(CODEGEN_REG_RETVAL, TC_ACT_OK));
+
+	return 0;
+}
+
+static int tc_load_packet_data(struct codegen *codegen, int dst_reg)
+{
+	EMIT(codegen, BPF_LDX_MEM(BPF_W, dst_reg, CODEGEN_REG_CTX,
+				  offsetof(struct __sk_buff, data)));
+
+	return 0;
+}
+
+static int tc_load_packet_data_end(struct codegen *codegen, int dst_reg)
+{
+	EMIT(codegen, BPF_LDX_MEM(BPF_W, CODEGEN_REG_DATA_END, CODEGEN_REG_CTX,
+				  offsetof(struct __sk_buff, data_end)));
+
+	return 0;
+}
+
+static int tc_emit_ret_code(struct codegen *codegen, int ret_code)
+{
+	int tc_ret_code;
+
+	if (ret_code == BPFILTER_NF_ACCEPT)
+		tc_ret_code = TC_ACT_UNSPEC;
+	else if (ret_code == BPFILTER_NF_DROP)
+		tc_ret_code = TC_ACT_SHOT;
+	else
+		return -EINVAL;
+
+	EMIT(codegen, BPF_MOV32_IMM(BPF_REG_0, tc_ret_code));
+
+	return 0;
+}
+
+static int tc_gen_inline_epilogue(struct codegen *codegen)
+{
+	EMIT(codegen, BPF_EXIT_INSN());
+
+	return 0;
+}
+
+struct tc_img_ctx {
+	int fd;
+	struct bpf_tc_hook hook;
+	struct bpf_tc_opts opts;
+};
+
+static int tc_load_img(struct codegen *codegen)
+{
+	struct tc_img_ctx *img_ctx;
+	int fd;
+	int r;
+
+	if (codegen->img_ctx) {
+		BFLOG_ERR("TC context missing from codegen");
+		return -EINVAL;
+	}
+
+	img_ctx = calloc(1, sizeof(*img_ctx));
+	if (!img_ctx) {
+		BFLOG_ERR("out of memory");
+		return -ENOMEM;
+	}
+
+	img_ctx->hook.sz = sizeof(img_ctx->hook);
+	img_ctx->hook.ifindex = 2;
+	img_ctx->hook.attach_point = codegen->bpf_tc_hook;
+
+	fd = load_img(codegen);
+	if (fd < 0) {
+		BFLOG_ERR("failed to load TC codegen image: %s", STRERR(fd));
+		r = fd;
+		goto err_free;
+	}
+
+	r = bpf_tc_hook_create(&img_ctx->hook);
+	if (r && r != -EEXIST) {
+		BFLOG_ERR("failed to create TC hook: %s\n", STRERR(r));
+		goto err_free;
+	}
+
+	img_ctx->opts.sz = sizeof(img_ctx->opts);
+	img_ctx->opts.handle = codegen->iptables_hook;
+	img_ctx->opts.priority = 0;
+	img_ctx->opts.prog_fd = fd;
+	r = bpf_tc_attach(&img_ctx->hook, &img_ctx->opts);
+	if (r) {
+		BFLOG_ERR("failed to attach TC program: %s", STRERR(r));
+		goto err_free;
+	}
+
+	img_ctx->fd = fd;
+	codegen->img_ctx = img_ctx;
+
+	return fd;
+
+err_free:
+	if (fd > -1)
+		close(fd);
+	free(img_ctx);
+	return r;
+}
+
+static void tc_unload_img(struct codegen *codegen)
+{
+	struct tc_img_ctx *img_ctx;
+	int r;
+
+	BUG_ON(!codegen->img_ctx);
+
+	img_ctx = (struct tc_img_ctx *)codegen->img_ctx;
+	img_ctx->opts.flags = 0;
+	img_ctx->opts.prog_fd = 0;
+	img_ctx->opts.prog_id = 0;
+	r = bpf_tc_detach(&img_ctx->hook, &img_ctx->opts);
+	if (r)
+		BFLOG_EMERG("failed to detach TC program: %s", STRERR(r));
+
+	BUG_ON(img_ctx->fd < 0);
+	close(img_ctx->fd);
+	free(img_ctx);
+
+	codegen->img_ctx = NULL;
+
+	unload_img(codegen);
+}
+
+static const struct codegen_ops tc_codegen_ops = {
+	.gen_inline_prologue = tc_gen_inline_prologue,
+	.load_packet_data = tc_load_packet_data,
+	.load_packet_data_end = tc_load_packet_data_end,
+	.emit_ret_code = tc_emit_ret_code,
+	.gen_inline_epilogue = tc_gen_inline_epilogue,
+	.load_img = tc_load_img,
+	.unload_img = tc_unload_img,
+};
+
 void create_shared_codegen(struct shared_codegen *shared_codegen)
 {
 	shared_codegen->maps_refcnt = 0;
@@ -413,6 +561,9 @@ int create_codegen(struct codegen *codegen, enum bpf_prog_type type)
 	memset(codegen, 0, sizeof(*codegen));
 
 	switch (type) {
+	case BPF_PROG_TYPE_SCHED_CLS:
+		codegen->codegen_ops = &tc_codegen_ops;
+		break;
 	default:
 		BFLOG_ERR("unsupported BPF program type %d", type);
 		return -EINVAL;
