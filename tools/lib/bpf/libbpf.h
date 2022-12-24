@@ -96,6 +96,12 @@ enum libbpf_print_level {
 typedef int (*libbpf_print_fn_t)(enum libbpf_print_level level,
 				 const char *, va_list ap);
 
+/**
+ * @brief **libbpf_set_print()** use the user-provided log print function.
+ * @param fn the log print function. Disable all print if the parameter
+ * is NULL.
+ * @return Pointer to old print function.
+ */
 LIBBPF_API libbpf_print_fn_t libbpf_set_print(libbpf_print_fn_t fn);
 
 /* Hide internal to user */
@@ -174,6 +180,14 @@ struct bpf_object_open_opts {
 };
 #define bpf_object_open_opts__last_field kernel_log_level
 
+/**
+ * @brief **bpf_object__open()** creates a bpf_object by opening
+ * the BPF ELF object file pointed to by the passed path and loading it
+ * into memory.
+ * @param path BPF object file path.
+ * @return pointer to the new bpf_object; or NULL is returned on error,
+ * error code is stored in errno
+ */
 LIBBPF_API struct bpf_object *bpf_object__open(const char *path);
 
 /**
@@ -204,9 +218,20 @@ bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
 		     const struct bpf_object_open_opts *opts);
 
 /* Load/unload object into/from kernel */
+/**
+ * @brief **bpf_object__load()** load bpf_object into kernel
+ * @param obj pointer to a valid bpf_object
+ * @return 0, on success; negative error code, otherwise, error code is
+ * stored in errno
+ */
 LIBBPF_API int bpf_object__load(struct bpf_object *obj);
 
-LIBBPF_API void bpf_object__close(struct bpf_object *object);
+/**
+ * @brief **bpf_object__close()** close a bpf_object and release all
+ * resources.
+ * @param obj pointer to a valid bpf_object
+ */
+LIBBPF_API void bpf_object__close(struct bpf_object *obj);
 
 /* pin_maps and unpin_maps can both be called with a NULL path, in which case
  * they will use the pin_path attribute of each map (and ignore all maps that
