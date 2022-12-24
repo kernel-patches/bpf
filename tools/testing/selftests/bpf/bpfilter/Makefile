@@ -15,6 +15,7 @@ TEST_GEN_PROGS += test_match
 TEST_GEN_PROGS += test_xt_udp
 TEST_GEN_PROGS += test_target
 TEST_GEN_PROGS += test_rule
+TEST_GEN_PROGS += test_codegen
 
 KSFT_KHDR_INSTALL := 1
 
@@ -46,9 +47,11 @@ BPFILTER_COMMON_SRCS := $(BPFILTER_MAP_SRCS) $(BPFILTER_CODEGEN_SRCS)
 BPFILTER_COMMON_SRCS += $(BPFILTERSRCDIR)/context.c $(BPFILTERSRCDIR)/logger.c
 BPFILTER_COMMON_SRCS += $(BPFILTER_MATCH_SRCS) $(BPFILTER_TARGET_SRCS)
 BPFILTER_COMMON_SRCS += $(BPFILTER_RULE_SRCS) $(BPFILTERSRCDIR)/table.c
+BPFILTER_COMMON_SRCS +=  $(BPFILTERSRCDIR)/filter-table.c $(BPFILTERSRCDIR)/sockopt.c
 
 $(OUTPUT)/test_map: test_map.c $(BPFILTER_MAP_SRCS)
 $(OUTPUT)/test_match: test_match.c $(BPFILTER_COMMON_SRCS)
 $(OUTPUT)/test_xt_udp: test_xt_udp.c $(BPFILTER_COMMON_SRCS)
 $(OUTPUT)/test_target: test_target.c $(BPFILTER_COMMON_SRCS)
 $(OUTPUT)/test_rule: test_rule.c $(BPFILTER_COMMON_SRCS)
+$(OUTPUT)/test_codegen: test_codegen.c $(BPFILTER_COMMON_SRCS)

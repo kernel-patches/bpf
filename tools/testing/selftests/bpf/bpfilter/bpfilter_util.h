@@ -3,12 +3,39 @@
 #ifndef BPFILTER_UTIL_H
 #define BPFILTER_UTIL_H
 
+#include <linux/bpf.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+static inline int sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
+{
+	return syscall(SYS_bpf, cmd, attr, size);
+}
+
+static inline int bpf_prog_test_run(int fd, const void *data,
+				    unsigned int data_size, uint32_t *retval)
+{
+	union bpf_attr attr = {};
+	int r;
+
+	attr.test.prog_fd = fd;
+	attr.test.data_in = (uintptr_t)data;
+	attr.test.data_size_in = data_size;
+	attr.test.repeat = 1000000;
+
+	r = sys_bpf(BPF_PROG_TEST_RUN, &attr, sizeof(attr));
+
+	if (retval)
+		*retval = attr.test.retval;
+
+	return r;
+}
 
 static inline void init_entry_match(struct xt_entry_match *match,
 				    uint16_t size, uint8_t revision,

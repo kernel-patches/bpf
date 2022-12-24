@@ -13,6 +13,7 @@
 
 #include <string.h>
 
+#include "filter-table.h"
 #include "logger.h"
 #include "map-common.h"
 #include "match.h"
@@ -73,7 +74,7 @@ static int init_target_ops_map(struct context *ctx)
 	return 0;
 }
 
-static const struct table_ops *table_ops[] = {};
+static const struct table_ops *table_ops[] = { &filter_table_ops };
 
 static int init_table_ops_map(struct context *ctx)
 {

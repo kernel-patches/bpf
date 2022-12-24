@@ -15,6 +15,7 @@ bpfilter_umh-objs := main.o logger.o map-common.o
 bpfilter_umh-objs += context.o codegen.o
 bpfilter_umh-objs += match.o xt_udp.o target.o rule.o table.o
 bpfilter_umh-objs += sockopt.o
+bpfilter_umh-objs += filter-table.o
 bpfilter_umh-userldlibs := $(LIBBPF_A) -lelf -lz
 userccflags += -I $(srctree)/tools/include/ -I $(srctree)/tools/include/uapi
 

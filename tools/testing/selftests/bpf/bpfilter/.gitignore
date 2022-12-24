@@ -5,3 +5,4 @@ test_match
 test_xt_udp
 test_target
 test_rule
+test_codegen
