@@ -11,6 +11,7 @@
 
 struct context {
 	struct hsearch_data match_ops_map;
+	struct hsearch_data target_ops_map;
 };
 
 int create_context(struct context *ctx);
