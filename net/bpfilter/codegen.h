@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 struct context;
+struct table;
 
 #define CODEGEN_REG_RETVAL	BPF_REG_0
 #define CODEGEN_REG_SCRATCH1	BPF_REG_1
@@ -174,6 +175,7 @@ int codegen_fixup(struct codegen *codegen, enum codegen_fixup_type fixup_type);
 int emit_fixup(struct codegen *codegen, enum codegen_fixup_type fixup_type,
 	       struct bpf_insn insn);
 int emit_add_counter(struct codegen *codegen);
+int try_codegen(struct codegen *codegen, const struct table *table);
 int load_img(struct codegen *codegen);
 void unload_img(struct codegen *codegen);
 void free_codegen(struct codegen *codegen);
