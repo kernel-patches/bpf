@@ -9,9 +9,13 @@
 
 #include <search.h>
 
+#include "table.h"
+
 struct context {
 	struct hsearch_data match_ops_map;
 	struct hsearch_data target_ops_map;
+	struct hsearch_data table_ops_map;
+	struct table_index table_index;
 };
 
 int create_context(struct context *ctx);
