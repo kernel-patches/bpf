@@ -7,7 +7,10 @@
 #ifndef NET_BPFILTER_CONTEXT_H
 #define NET_BPFILTER_CONTEXT_H
 
+#include <search.h>
+
 struct context {
+	struct hsearch_data match_ops_map;
 };
 
 int create_context(struct context *ctx);
