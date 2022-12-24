@@ -16,7 +16,7 @@
 #include "map-common.h"
 #include "match.h"
 
-static const struct match_ops *match_ops[] = { };
+static const struct match_ops *match_ops[] = { &xt_udp };
 
 static int init_match_ops_map(struct context *ctx)
 {

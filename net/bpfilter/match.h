@@ -29,6 +29,8 @@ struct match {
 	const struct bpfilter_ipt_match *ipt_match;
 };
 
+extern const struct match_ops xt_udp;
+
 int init_match(struct context *ctx, const struct bpfilter_ipt_match *ipt_match,
 	       struct match *match);
 

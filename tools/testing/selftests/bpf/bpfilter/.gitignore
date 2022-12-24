@@ -2,3 +2,4 @@
 tools/**
 test_map
 test_match
+test_xt_udp
