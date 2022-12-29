@@ -7576,6 +7576,15 @@ void perf_prepare_sample(struct perf_event_header *header,
 	header->misc |= perf_misc_flags(regs);
 
 	/*
+	 * If it called perf_prepare_sample() already, it set the all data fields
+	 * and recorded the final size to data->saved_size.
+	 */
+	if (data->saved_size) {
+		header->size = data->saved_size;
+		return;
+	}
+
+	/*
 	 * Clear the sample flags that have already been done by the
 	 * PMU driver.
 	 */
@@ -7796,6 +7805,8 @@ void perf_prepare_sample(struct perf_event_header *header,
 	 * do here next.
 	 */
 	WARN_ON_ONCE(header->size & 7);
+
+	data->saved_size = header->size;
 }
 
 static __always_inline int
