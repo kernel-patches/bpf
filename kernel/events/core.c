@@ -7582,14 +7582,21 @@ void perf_prepare_sample(struct perf_event_header *header,
 	filtered_sample_type = sample_type & ~data->sample_flags;
 	__perf_event_header__init_id(header, data, event, filtered_sample_type);
 
-	if (sample_type & (PERF_SAMPLE_IP | PERF_SAMPLE_CODE_PAGE_SIZE))
-		data->ip = perf_instruction_pointer(regs);
+	if (sample_type & (PERF_SAMPLE_IP | PERF_SAMPLE_CODE_PAGE_SIZE)) {
+		/* attr.sample_type may not have PERF_SAMPLE_IP */
+		if (!(data->sample_flags & PERF_SAMPLE_IP)) {
+			data->ip = perf_instruction_pointer(regs);
+			data->sample_flags |= PERF_SAMPLE_IP;
+		}
+	}
 
 	if (sample_type & PERF_SAMPLE_CALLCHAIN) {
 		int size = 1;
 
-		if (filtered_sample_type & PERF_SAMPLE_CALLCHAIN)
+		if (filtered_sample_type & PERF_SAMPLE_CALLCHAIN) {
 			data->callchain = perf_callchain(event, regs);
+			data->sample_flags |= PERF_SAMPLE_CALLCHAIN;
+		}
 
 		size += data->callchain->nr;
 
@@ -7634,8 +7641,13 @@ void perf_prepare_sample(struct perf_event_header *header,
 		header->size += size;
 	}
 
-	if (sample_type & (PERF_SAMPLE_REGS_USER | PERF_SAMPLE_STACK_USER))
-		perf_sample_regs_user(&data->regs_user, regs);
+	if (sample_type & (PERF_SAMPLE_REGS_USER | PERF_SAMPLE_STACK_USER)) {
+		/* attr.sample_type may not have PERF_SAMPLE_REGS_USER */
+		if (!(data->sample_flags & PERF_SAMPLE_REGS_USER)) {
+			perf_sample_regs_user(&data->regs_user, regs);
+			data->sample_flags |= PERF_SAMPLE_REGS_USER;
+		}
+	}
 
 	if (sample_type & PERF_SAMPLE_REGS_USER) {
 		/* regs dump ABI info */
@@ -7656,11 +7668,18 @@ void perf_prepare_sample(struct perf_event_header *header,
 		 * in case new sample type is added, because we could eat
 		 * up the rest of the sample size.
 		 */
-		u16 stack_size = event->attr.sample_stack_user;
 		u16 size = sizeof(u64);
+		u16 stack_size;
 
-		stack_size = perf_sample_ustack_size(stack_size, header->size,
-						     data->regs_user.regs);
+		if (filtered_sample_type & PERF_SAMPLE_STACK_USER) {
+			stack_size = event->attr.sample_stack_user;
+			stack_size = perf_sample_ustack_size(stack_size, header->size,
+							     data->regs_user.regs);
+
+			data->stack_user_size = stack_size;
+			data->sample_flags |= PERF_SAMPLE_STACK_USER;
+		}
+		stack_size = data->stack_user_size;
 
 		/*
 		 * If there is something to dump, add space for the dump
@@ -7670,29 +7689,40 @@ void perf_prepare_sample(struct perf_event_header *header,
 		if (stack_size)
 			size += sizeof(u64) + stack_size;
 
-		data->stack_user_size = stack_size;
 		header->size += size;
 	}
 
-	if (filtered_sample_type & PERF_SAMPLE_WEIGHT_TYPE)
+	if (filtered_sample_type & PERF_SAMPLE_WEIGHT_TYPE) {
 		data->weight.full = 0;
+		data->sample_flags |= PERF_SAMPLE_WEIGHT_TYPE;
+	}
 
-	if (filtered_sample_type & PERF_SAMPLE_DATA_SRC)
+	if (filtered_sample_type & PERF_SAMPLE_DATA_SRC) {
 		data->data_src.val = PERF_MEM_NA;
+		data->sample_flags |= PERF_SAMPLE_DATA_SRC;
+	}
 
-	if (filtered_sample_type & PERF_SAMPLE_TRANSACTION)
+	if (filtered_sample_type & PERF_SAMPLE_TRANSACTION) {
 		data->txn = 0;
+		data->sample_flags |= PERF_SAMPLE_TRANSACTION;
+	}
 
 	if (sample_type & (PERF_SAMPLE_ADDR | PERF_SAMPLE_PHYS_ADDR | PERF_SAMPLE_DATA_PAGE_SIZE)) {
-		if (filtered_sample_type & PERF_SAMPLE_ADDR)
+		/* attr.sample_type may not have PERF_SAMPLE_ADDR */
+		if (!(data->sample_flags & PERF_SAMPLE_ADDR)) {
 			data->addr = 0;
+			data->sample_flags |= PERF_SAMPLE_ADDR;
+		}
 	}
 
 	if (sample_type & PERF_SAMPLE_REGS_INTR) {
 		/* regs dump ABI info */
 		int size = sizeof(u64);
 
-		perf_sample_regs_intr(&data->regs_intr, regs);
+		if (filtered_sample_type & PERF_SAMPLE_REGS_INTR) {
+			perf_sample_regs_intr(&data->regs_intr, regs);
+			data->sample_flags |= PERF_SAMPLE_REGS_INTR;
+		}
 
 		if (data->regs_intr.regs) {
 			u64 mask = event->attr.sample_regs_intr;
@@ -7703,17 +7733,19 @@ void perf_prepare_sample(struct perf_event_header *header,
 		header->size += size;
 	}
 
-	if (sample_type & PERF_SAMPLE_PHYS_ADDR &&
-	    filtered_sample_type & PERF_SAMPLE_PHYS_ADDR)
+	if (filtered_sample_type & PERF_SAMPLE_PHYS_ADDR) {
 		data->phys_addr = perf_virt_to_phys(data->addr);
+		data->sample_flags |= PERF_SAMPLE_PHYS_ADDR;
+	}
 
 #ifdef CONFIG_CGROUP_PERF
-	if (sample_type & PERF_SAMPLE_CGROUP) {
+	if (filtered_sample_type & PERF_SAMPLE_CGROUP) {
 		struct cgroup *cgrp;
 
 		/* protected by RCU */
 		cgrp = task_css_check(current, perf_event_cgrp_id, 1)->cgroup;
 		data->cgroup = cgroup_id(cgrp);
+		data->sample_flags |= PERF_SAMPLE_CGROUP;
 	}
 #endif
 
@@ -7722,11 +7754,15 @@ void perf_prepare_sample(struct perf_event_header *header,
 	 * require PERF_SAMPLE_ADDR, kernel implicitly retrieve the data->addr,
 	 * but the value will not dump to the userspace.
 	 */
-	if (sample_type & PERF_SAMPLE_DATA_PAGE_SIZE)
+	if (filtered_sample_type & PERF_SAMPLE_DATA_PAGE_SIZE) {
 		data->data_page_size = perf_get_page_size(data->addr);
+		data->sample_flags |= PERF_SAMPLE_DATA_PAGE_SIZE;
+	}
 
-	if (sample_type & PERF_SAMPLE_CODE_PAGE_SIZE)
+	if (filtered_sample_type & PERF_SAMPLE_CODE_PAGE_SIZE) {
 		data->code_page_size = perf_get_page_size(data->ip);
+		data->sample_flags |= PERF_SAMPLE_CODE_PAGE_SIZE;
+	}
 
 	if (sample_type & PERF_SAMPLE_AUX) {
 		u64 size;
@@ -7739,10 +7775,14 @@ void perf_prepare_sample(struct perf_event_header *header,
 		 * Make sure this doesn't happen by using up to U16_MAX bytes
 		 * per sample in total (rounded down to 8 byte boundary).
 		 */
-		size = min_t(size_t, U16_MAX - header->size,
-			     event->attr.aux_sample_size);
-		size = rounddown(size, 8);
-		size = perf_prepare_sample_aux(event, data, size);
+		if (filtered_sample_type & PERF_SAMPLE_AUX) {
+			size = min_t(size_t, U16_MAX - header->size,
+				     event->attr.aux_sample_size);
+			size = rounddown(size, 8);
+			perf_prepare_sample_aux(event, data, size);
+			data->sample_flags |= PERF_SAMPLE_AUX;
+		}
+		size = data->aux_size;
 
 		WARN_ON_ONCE(size + header->size > U16_MAX);
 		header->size += size;
