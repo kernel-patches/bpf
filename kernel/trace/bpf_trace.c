@@ -2682,69 +2682,55 @@ static void symbols_swap_r(void *a, void *b, int size, const void *priv)
 	}
 }
 
-struct module_addr_args {
-	unsigned long *addrs;
-	u32 addrs_cnt;
-	struct module **mods;
-	int mods_cnt;
-	int mods_cap;
-};
-
-static int module_callback(void *data, const char *name,
-			   struct module *mod, unsigned long addr)
+static int get_modules_for_addrs(struct module ***out_mods, unsigned long *addrs, u32 addrs_cnt)
 {
-	struct module_addr_args *args = data;
-	struct module **mods;
+	int i, j, err;
+	int mods_cnt = 0;
+	int mods_cap = 0;
+	struct module *mod;
+	struct module **mods = NULL;
 
-	/* We iterate all modules symbols and for each we:
-	 * - search for it in provided addresses array
-	 * - if found we check if we already have the module pointer stored
-	 *   (we iterate modules sequentially, so we can check just the last
-	 *   module pointer)
-	 * - take module reference and store it
-	 */
-	if (!bsearch(&addr, args->addrs, args->addrs_cnt, sizeof(addr),
-		       bpf_kprobe_multi_addrs_cmp))
-		return 0;
+	for (i = 0; i < addrs_cnt; i++) {
+		mod = __module_address(addrs[i]);
+		if (!mod)
+			continue;
 
-	if (args->mods && args->mods[args->mods_cnt - 1] == mod)
-		return 0;
+		/* check if we already have the module pointer stored */
+		for (j = 0; j < mods_cnt; j++) {
+			if (mods[j] == mod)
+				break;
+		}
+		if (j < mods_cnt)
+			continue;
 
-	if (args->mods_cnt == args->mods_cap) {
-		args->mods_cap = max(16, args->mods_cap * 3 / 2);
-		mods = krealloc_array(args->mods, args->mods_cap, sizeof(*mods), GFP_KERNEL);
-		if (!mods)
-			return -ENOMEM;
-		args->mods = mods;
+		if (mods_cnt == mods_cap) {
+			struct module **new_mods;
+
+			mods_cap = max(16, mods_cap * 3 / 2);
+			new_mods = krealloc_array(mods, mods_cap, sizeof(*mods), GFP_KERNEL);
+			if (!new_mods) {
+				err = -ENOMEM;
+				goto failed;
+			}
+			mods = new_mods;
+		}
+
+		if (!try_module_get(mod)) {
+			err = -EINVAL;
+			goto failed;
+		}
+
+		mods[mods_cnt] = mod;
+		mods_cnt++;
 	}
 
-	if (!try_module_get(mod))
-		return -EINVAL;
+	*out_mods = mods;
+	return mods_cnt;
 
-	args->mods[args->mods_cnt] = mod;
-	args->mods_cnt++;
-	return 0;
-}
-
-static int get_modules_for_addrs(struct module ***mods, unsigned long *addrs, u32 addrs_cnt)
-{
-	struct module_addr_args args = {
-		.addrs     = addrs,
-		.addrs_cnt = addrs_cnt,
-	};
-	int err;
-
-	/* We return either err < 0 in case of error, ... */
-	err = module_kallsyms_on_each_symbol(NULL, module_callback, &args);
-	if (err) {
-		kprobe_multi_put_modules(args.mods, args.mods_cnt);
-		kfree(args.mods);
-		return err;
-	}
-
-	/* or number of modules found if everything is ok. */
-	*mods = args.mods;
-	return args.mods_cnt;
+failed:
+	kprobe_multi_put_modules(mods, mods_cnt);
+	kfree(mods);
+	return err;
 }
 
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
@@ -2857,13 +2843,6 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		       bpf_kprobe_multi_cookie_cmp,
 		       bpf_kprobe_multi_cookie_swap,
 		       link);
-	} else {
-		/*
-		 * We need to sort addrs array even if there are no cookies
-		 * provided, to allow bsearch in get_modules_for_addrs.
-		 */
-		sort(addrs, cnt, sizeof(*addrs),
-		       bpf_kprobe_multi_addrs_cmp, NULL);
 	}
 
 	err = get_modules_for_addrs(&link->mods, addrs, cnt);
