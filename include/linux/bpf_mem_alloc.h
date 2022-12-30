@@ -13,9 +13,15 @@ struct bpf_mem_alloc {
 	struct bpf_mem_cache __percpu *cache;
 	struct work_struct work;
 	void (*ctor)(struct bpf_mem_alloc *ma, void *obj);
+	unsigned int flags;
 };
 
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu,
+/* flags for bpf_mem_alloc_init() */
+enum {
+	BPF_MA_PERCPU = 1,
+};
+
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, unsigned int flags,
 		       void (*ctor)(struct bpf_mem_alloc *, void *));
 void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma);
 

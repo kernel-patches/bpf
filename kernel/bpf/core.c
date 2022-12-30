@@ -2755,7 +2755,7 @@ static int __init bpf_global_ma_init(void)
 {
 	int ret;
 
-	ret = bpf_mem_alloc_init(&bpf_global_ma, 0, false, NULL);
+	ret = bpf_mem_alloc_init(&bpf_global_ma, 0, 0, NULL);
 	bpf_global_ma_set = !ret;
 	return ret;
 }

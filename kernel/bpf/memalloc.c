@@ -383,7 +383,7 @@ static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
  * kmalloc/kfree. Max allocation size is 4096 in this case.
  * This is bpf_dynptr and bpf_kptr use case.
  */
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu,
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, unsigned int flags,
 		       void (*ctor)(struct bpf_mem_alloc *, void *))
 {
 	static u16 sizes[NUM_CACHES] = {96, 192, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
@@ -391,7 +391,9 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu,
 	struct bpf_mem_cache *c, __percpu *pc;
 	struct obj_cgroup *objcg = NULL;
 	int cpu, i, unit_size, percpu_size = 0;
+	bool percpu = (flags & BPF_MA_PERCPU);
 
+	ma->flags = flags;
 	ma->ctor = ctor;
 	if (size) {
 		pc = __alloc_percpu_gfp(sizeof(*pc), 8, GFP_KERNEL);
