@@ -98,6 +98,7 @@ struct bpf_mem_cache {
 	int free_cnt;
 	int low_watermark, high_watermark, batch;
 	int percpu_size;
+	struct bpf_mem_alloc *ma;
 
 	struct rcu_head rcu;
 	struct llist_head free_by_rcu;
@@ -188,6 +189,9 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 			obj = __alloc(c, node);
 			if (!obj)
 				break;
+			/* Only do initialize for newly allocated object */
+			if (c->ma->ctor)
+				c->ma->ctor(c->ma, obj);
 		}
 		if (IS_ENABLED(CONFIG_PREEMPT_RT))
 			/* In RT irq_work runs in per-cpu kthread, so disable
@@ -374,7 +378,8 @@ static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
  * kmalloc/kfree. Max allocation size is 4096 in this case.
  * This is bpf_dynptr and bpf_kptr use case.
  */
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu,
+		       void (*ctor)(struct bpf_mem_alloc *, void *))
 {
 	static u16 sizes[NUM_CACHES] = {96, 192, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
 	struct bpf_mem_caches *cc, __percpu *pcc;
@@ -382,6 +387,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 	struct obj_cgroup *objcg = NULL;
 	int cpu, i, unit_size, percpu_size = 0;
 
+	ma->ctor = ctor;
 	if (size) {
 		pc = __alloc_percpu_gfp(sizeof(*pc), 8, GFP_KERNEL);
 		if (!pc)
@@ -402,6 +408,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->unit_size = unit_size;
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
+			c->ma = ma;
 			prefill_mem_cache(c, cpu);
 		}
 		ma->cache = pc;
@@ -424,6 +431,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c = &cc->cache[i];
 			c->unit_size = sizes[i];
 			c->objcg = objcg;
+			c->ma = ma;
 			prefill_mem_cache(c, cpu);
 		}
 	}

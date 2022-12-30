@@ -12,9 +12,11 @@ struct bpf_mem_alloc {
 	struct bpf_mem_caches __percpu *caches;
 	struct bpf_mem_cache __percpu *cache;
 	struct work_struct work;
+	void (*ctor)(struct bpf_mem_alloc *ma, void *obj);
 };
 
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu);
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu,
+		       void (*ctor)(struct bpf_mem_alloc *, void *));
 void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma);
 
 /* kmalloc/kfree equivalent: */
