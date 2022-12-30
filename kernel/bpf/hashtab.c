@@ -574,14 +574,14 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 				goto free_prealloc;
 		}
 	} else {
-		err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, 0,
+		err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, BPF_MA_NO_REUSE,
 					 htab_elem_ctor);
 		if (err)
 			goto free_map_locked;
 		if (percpu) {
 			err = bpf_mem_alloc_init(&htab->pcpu_ma,
 						 round_up(htab->map.value_size, 8),
-						 BPF_MA_PERCPU, NULL);
+						 BPF_MA_PERCPU | BPF_MA_NO_REUSE, NULL);
 			if (err)
 				goto free_map_locked;
 		}
