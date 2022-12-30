@@ -19,6 +19,8 @@ struct bpf_mem_alloc {
 /* flags for bpf_mem_alloc_init() */
 enum {
 	BPF_MA_PERCPU = 1,
+	/* Don't reuse freed elements during allocation */
+	BPF_MA_NO_REUSE = 2,
 };
 
 int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, unsigned int flags,

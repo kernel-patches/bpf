@@ -35,6 +35,23 @@
  */
 #define LLIST_NODE_SZ sizeof(struct llist_node)
 
+#define BPF_MA_FREE_TYPE_NR 2
+
+struct bpf_ma_free_context {
+	raw_spinlock_t lock;
+	local_t active;
+	/* For both no per-cpu and per-cpu */
+	struct llist_head to_free[BPF_MA_FREE_TYPE_NR];
+	unsigned int to_free_cnt[BPF_MA_FREE_TYPE_NR];
+	struct llist_head to_free_extra[BPF_MA_FREE_TYPE_NR];
+	struct delayed_work dwork;
+};
+
+struct bpf_ma_free_batch {
+	struct rcu_head rcu;
+	struct llist_node *to_free[BPF_MA_FREE_TYPE_NR];
+};
+
 /* similar to kmalloc, but sizeof == 8 bucket is gone */
 static u8 size_index[24] __ro_after_init = {
 	3,	/* 8 */
@@ -62,6 +79,9 @@ static u8 size_index[24] __ro_after_init = {
 	2,	/* 184 */
 	2	/* 192 */
 };
+
+static DEFINE_PER_CPU(struct bpf_ma_free_context, percpu_free_ctx);
+static struct workqueue_struct *bpf_ma_free_wq;
 
 static int bpf_mem_cache_idx(size_t size)
 {
@@ -609,13 +629,10 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
  * add it to the free_llist of the current cpu.
  * Let kfree() logic deal with it when it's later called from irq_work.
  */
-static void notrace unit_free(struct bpf_mem_cache *c, void *ptr)
+static void notrace reuse_free(struct bpf_mem_cache *c, struct llist_node *llnode)
 {
-	struct llist_node *llnode = ptr - LLIST_NODE_SZ;
 	unsigned long flags;
 	int cnt = 0;
-
-	BUILD_BUG_ON(LLIST_NODE_SZ > 8);
 
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
@@ -636,6 +653,137 @@ static void notrace unit_free(struct bpf_mem_cache *c, void *ptr)
 	if (cnt > c->high_watermark)
 		/* free few objects from current cpu into global kmalloc pool */
 		irq_work_raise(c);
+}
+
+static void batch_free_rcu(struct rcu_head *rcu)
+{
+	struct bpf_ma_free_batch *batch = container_of(rcu, struct bpf_ma_free_batch, rcu);
+
+	free_llist(batch->to_free[0], false);
+	free_llist(batch->to_free[1], true);
+	kfree(batch);
+}
+
+static void batch_free_rcu_tasks_trace(struct rcu_head *rcu)
+{
+	if (rcu_trace_implies_rcu_gp())
+		batch_free_rcu(rcu);
+	else
+		call_rcu(rcu, batch_free_rcu);
+}
+
+static void bpf_ma_schedule_free_dwork(struct bpf_ma_free_context *ctx)
+{
+	long delay, left;
+	u64 to_free_cnt;
+
+	to_free_cnt = ctx->to_free_cnt[0] + ctx->to_free_cnt[1];
+	delay = to_free_cnt >= 256 ? 1 : HZ;
+	if (delayed_work_pending(&ctx->dwork)) {
+		left = ctx->dwork.timer.expires - jiffies;
+		if (delay < left)
+			mod_delayed_work(bpf_ma_free_wq, &ctx->dwork, delay);
+		return;
+	}
+	queue_delayed_work(bpf_ma_free_wq, &ctx->dwork, delay);
+}
+
+static void bpf_ma_splice_to_free_list(struct bpf_ma_free_context *ctx, struct llist_node **to_free)
+{
+	struct llist_node *tmp[BPF_MA_FREE_TYPE_NR];
+	unsigned long flags;
+	unsigned int i;
+
+	raw_spin_lock_irqsave(&ctx->lock, flags);
+	for (i = 0; i < ARRAY_SIZE(tmp); i++) {
+		tmp[i] = __llist_del_all(&ctx->to_free[i]);
+		ctx->to_free_cnt[i] = 0;
+	}
+	raw_spin_unlock_irqrestore(&ctx->lock, flags);
+
+	for (i = 0; i < ARRAY_SIZE(tmp); i++) {
+		struct llist_node *first, *last;
+
+		first = llist_del_all(&ctx->to_free_extra[i]);
+		if (!first) {
+			to_free[i] = tmp[i];
+			continue;
+		}
+		last = first;
+		while (last->next)
+			last = last->next;
+		to_free[i] = first;
+		last->next = tmp[i];
+	}
+}
+
+static inline bool bpf_ma_has_to_free(const struct bpf_ma_free_context *ctx)
+{
+	return !llist_empty(&ctx->to_free[0]) || !llist_empty(&ctx->to_free[1]) ||
+	       !llist_empty(&ctx->to_free_extra[0]) || !llist_empty(&ctx->to_free_extra[1]);
+}
+
+static void bpf_ma_free_dwork(struct work_struct *work)
+{
+	struct bpf_ma_free_context *ctx = container_of(to_delayed_work(work),
+						       struct bpf_ma_free_context, dwork);
+	struct llist_node *to_free[BPF_MA_FREE_TYPE_NR];
+	struct bpf_ma_free_batch *batch;
+	unsigned long flags;
+
+	bpf_ma_splice_to_free_list(ctx, to_free);
+
+	batch = kmalloc(sizeof(*batch), GFP_NOWAIT | __GFP_NOWARN);
+	if (!batch) {
+		/* TODO: handle ENOMEM case better ? */
+		rcu_barrier_tasks_trace();
+		rcu_barrier();
+		free_llist(to_free[0], false);
+		free_llist(to_free[1], true);
+		goto check;
+	}
+
+	batch->to_free[0] = to_free[0];
+	batch->to_free[1] = to_free[1];
+	call_rcu_tasks_trace(&batch->rcu, batch_free_rcu_tasks_trace);
+check:
+	raw_spin_lock_irqsave(&ctx->lock, flags);
+	if (bpf_ma_has_to_free(ctx))
+		bpf_ma_schedule_free_dwork(ctx);
+	raw_spin_unlock_irqrestore(&ctx->lock, flags);
+}
+
+static void notrace direct_free(struct bpf_mem_cache *c, struct llist_node *llnode)
+{
+	struct bpf_ma_free_context *ctx;
+	bool percpu = !!c->percpu_size;
+	unsigned long flags;
+
+	local_irq_save(flags);
+	ctx = this_cpu_ptr(&percpu_free_ctx);
+	if (local_inc_return(&ctx->active) == 1) {
+		raw_spin_lock(&ctx->lock);
+		__llist_add(llnode, &ctx->to_free[percpu]);
+		ctx->to_free_cnt[percpu] += 1;
+		bpf_ma_schedule_free_dwork(ctx);
+		raw_spin_unlock(&ctx->lock);
+	} else {
+		llist_add(llnode, &ctx->to_free_extra[percpu]);
+	}
+	local_dec(&ctx->active);
+	local_irq_restore(flags);
+}
+
+static inline void unit_free(struct bpf_mem_cache *c, void *ptr)
+{
+	struct llist_node *llnode = ptr - LLIST_NODE_SZ;
+
+	BUILD_BUG_ON(LLIST_NODE_SZ > 8);
+
+	if (c->ma->flags & BPF_MA_NO_REUSE)
+		direct_free(c, llnode);
+	else
+		reuse_free(c, llnode);
 }
 
 /* Called from BPF program or from sys_bpf syscall.
@@ -686,3 +834,22 @@ void notrace bpf_mem_cache_free(struct bpf_mem_alloc *ma, void *ptr)
 
 	unit_free(this_cpu_ptr(ma->cache), ptr);
 }
+
+static int __init bpf_ma_init(void)
+{
+	int cpu;
+
+	bpf_ma_free_wq = alloc_workqueue("bpf_ma_free", WQ_MEM_RECLAIM, 0);
+	BUG_ON(!bpf_ma_free_wq);
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_ma_free_context *ctx;
+
+		ctx = per_cpu_ptr(&percpu_free_ctx, cpu);
+		raw_spin_lock_init(&ctx->lock);
+		INIT_DELAYED_WORK(&ctx->dwork, bpf_ma_free_dwork);
+	}
+
+	return 0;
+}
+fs_initcall(bpf_ma_init);
