@@ -267,6 +267,20 @@ out_umem_alloc:
 	return err;
 }
 
+bool xsk_is_in_drv_mode(u32 ifindex)
+{
+	LIBBPF_OPTS(bpf_xdp_query_opts, opts);
+	int ret;
+
+	ret = bpf_xdp_query(ifindex, XDP_FLAGS_DRV_MODE, &opts);
+	if (ret) {
+		printf("DRV mode query returned error %s\n", strerror(errno));
+		return false;
+	}
+
+	return opts.attach_mode == XDP_ATTACHED_DRV;
+}
+
 int xsk_attach_xdp_program(struct bpf_program *prog, int ifindex, u32 xdp_flags)
 {
 	int prog_fd;
