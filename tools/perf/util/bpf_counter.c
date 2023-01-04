@@ -471,8 +471,10 @@ static int bperf__load(struct evsel *evsel, struct target *target)
 
 	if (!all_cpu_map) {
 		all_cpu_map = perf_cpu_map__new(NULL);
-		if (!all_cpu_map)
+		if (!all_cpu_map) {
+			pr_err("failed to create all cpu map\n");
 			return -1;
+		}
 	}
 
 	evsel->bperf_leader_prog_fd = -1;
@@ -493,13 +495,16 @@ static int bperf__load(struct evsel *evsel, struct target *target)
 	err = bpf_map_lookup_elem(attr_map_fd, &evsel->core.attr, &entry);
 	if (err) {
 		err = bpf_map_update_elem(attr_map_fd, &evsel->core.attr, &entry, BPF_ANY);
-		if (err)
+		if (err) {
+			pr_err("updating perf_event_attr map failed: err=%d\n", err);
 			goto out;
+		}
 	}
 
 	evsel->bperf_leader_link_fd = bpf_link_get_fd_by_id(entry.link_id);
 	if (evsel->bperf_leader_link_fd < 0 &&
 	    bperf_reload_leader_program(evsel, attr_map_fd, &entry)) {
+		pr_err("reload leader program failed\n");
 		err = -1;
 		goto out;
 	}
