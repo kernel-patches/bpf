@@ -49,6 +49,7 @@ int mlx5e_xsk_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 			umr_wqe->inline_mtts[i] = (struct mlx5_mtt) {
 				.ptag = cpu_to_be64(addr | MLX5_EN_WR),
 			};
+			wi->alloc_units[i].mxbuf->rq = rq;
 		}
 	} else if (unlikely(rq->mpwqe.umr_mode == MLX5E_MPWRQ_UMR_MODE_UNALIGNED)) {
 		for (i = 0; i < batch; i++) {
@@ -58,6 +59,7 @@ int mlx5e_xsk_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 				.key = rq->mkey_be,
 				.va = cpu_to_be64(addr),
 			};
+			wi->alloc_units[i].mxbuf->rq = rq;
 		}
 	} else if (likely(rq->mpwqe.umr_mode == MLX5E_MPWRQ_UMR_MODE_TRIPLE)) {
 		u32 mapping_size = 1 << (rq->mpwqe.page_shift - 2);
@@ -81,6 +83,7 @@ int mlx5e_xsk_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 				.key = rq->mkey_be,
 				.va = cpu_to_be64(rq->wqe_overflow.addr),
 			};
+			wi->alloc_units[i].mxbuf->rq = rq;
 		}
 	} else {
 		__be32 pad_size = cpu_to_be32((1 << rq->mpwqe.page_shift) -
@@ -100,6 +103,7 @@ int mlx5e_xsk_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 				.va = cpu_to_be64(rq->wqe_overflow.addr),
 				.bcount = pad_size,
 			};
+			wi->alloc_units[i].mxbuf->rq = rq;
 		}
 	}
 
@@ -230,6 +234,7 @@ static struct sk_buff *mlx5e_xsk_construct_skb(struct mlx5e_rq *rq, struct xdp_b
 
 struct sk_buff *mlx5e_xsk_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq,
 						    struct mlx5e_mpw_info *wi,
+						    struct mlx5_cqe64 *cqe,
 						    u16 cqe_bcnt,
 						    u32 head_offset,
 						    u32 page_idx)
@@ -250,6 +255,8 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq,
 	 */
 	WARN_ON_ONCE(head_offset);
 
+	/* mxbuf->rq is set on allocation, but cqe is per-packet so set it here */
+	mxbuf->cqe = cqe;
 	xsk_buff_set_size(&mxbuf->xdp, cqe_bcnt);
 	xsk_buff_dma_sync_for_cpu(&mxbuf->xdp, rq->xsk_pool);
 	net_prefetch(mxbuf->xdp.data);
@@ -284,6 +291,7 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq,
 
 struct sk_buff *mlx5e_xsk_skb_from_cqe_linear(struct mlx5e_rq *rq,
 					      struct mlx5e_wqe_frag_info *wi,
+					      struct mlx5_cqe64 *cqe,
 					      u32 cqe_bcnt)
 {
 	struct mlx5e_xdp_buff *mxbuf = wi->au->mxbuf;
@@ -296,6 +304,8 @@ struct sk_buff *mlx5e_xsk_skb_from_cqe_linear(struct mlx5e_rq *rq,
 	 */
 	WARN_ON_ONCE(wi->offset);
 
+	/* mxbuf->rq is set on allocation, but cqe is per-packet so set it here */
+	mxbuf->cqe = cqe;
 	xsk_buff_set_size(&mxbuf->xdp, cqe_bcnt);
 	xsk_buff_dma_sync_for_cpu(&mxbuf->xdp, rq->xsk_pool);
 	net_prefetch(mxbuf->xdp.data);
