@@ -28,7 +28,7 @@
 #include "bpf_skel/bperf_leader.skel.h"
 #include "bpf_skel/bperf_follower.skel.h"
 
-#define ATTR_MAP_SIZE 16
+#define ATTR_MAP_SIZE 32
 
 static inline void *u64_to_ptr(__u64 ptr)
 {
