@@ -314,7 +314,18 @@ struct page_pool {
 	u64 destroy_cnt;
 };
 
-struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp);
+struct netmem *page_pool_alloc_netmem(struct page_pool *pool, gfp_t gfp);
+
+static inline struct netmem *page_pool_dev_alloc_netmem(struct page_pool *pool)
+{
+	return page_pool_alloc_netmem(pool, GFP_ATOMIC | __GFP_NOWARN);
+}
+
+static inline
+struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp)
+{
+	return netmem_page(page_pool_alloc_netmem(pool, gfp));
+}
 
 static inline struct page *page_pool_dev_alloc_pages(struct page_pool *pool)
 {
