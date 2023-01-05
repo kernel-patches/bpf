@@ -221,3 +221,8 @@ Driver unload
     /* Driver unload */
     page_pool_put_full_page(page_pool, page, false);
     xdp_rxq_info_unreg(&xdp_rxq);
+
+Functions and structures
+========================
+
+.. kernel-doc:: include/net/page_pool.h
