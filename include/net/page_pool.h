@@ -384,7 +384,7 @@ static inline void page_pool_release_page(struct page_pool *pool,
 	page_pool_release_netmem(pool, page_netmem(page));
 }
 
-void page_pool_put_defragged_page(struct page_pool *pool, struct page *page,
+void page_pool_put_defragged_netmem(struct page_pool *pool, struct netmem *nmem,
 				  unsigned int dma_sync_size,
 				  bool allow_direct);
 
@@ -420,15 +420,15 @@ static inline long page_pool_defrag_page(struct page *page, long nr)
 }
 
 static inline bool page_pool_is_last_frag(struct page_pool *pool,
-					  struct page *page)
+					  struct netmem *nmem)
 {
 	/* If fragments aren't enabled or count is 0 we were the last user */
 	return !(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
-	       (page_pool_defrag_page(page, 1) == 0);
+	       (page_pool_defrag_netmem(nmem, 1) == 0);
 }
 
-static inline void page_pool_put_page(struct page_pool *pool,
-				      struct page *page,
+static inline void page_pool_put_netmem(struct page_pool *pool,
+				      struct netmem *nmem,
 				      unsigned int dma_sync_size,
 				      bool allow_direct)
 {
@@ -436,11 +436,20 @@ static inline void page_pool_put_page(struct page_pool *pool,
 	 * allow registering MEM_TYPE_PAGE_POOL, but shield linker.
 	 */
 #ifdef CONFIG_PAGE_POOL
-	if (!page_pool_is_last_frag(pool, page))
+	if (!page_pool_is_last_frag(pool, nmem))
 		return;
 
-	page_pool_put_defragged_page(pool, page, dma_sync_size, allow_direct);
+	page_pool_put_defragged_netmem(pool, nmem, dma_sync_size, allow_direct);
 #endif
+}
+
+static inline void page_pool_put_page(struct page_pool *pool,
+				      struct page *page,
+				      unsigned int dma_sync_size,
+				      bool allow_direct)
+{
+	page_pool_put_netmem(pool, page_netmem(page), dma_sync_size,
+				allow_direct);
 }
 
 /* Same as above but will try to sync the entire area pool->max_len */
