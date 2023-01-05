@@ -86,11 +86,7 @@ struct netmem {
 	static_assert(offsetof(struct page, pg) == offsetof(struct netmem, nm))
 NETMEM_MATCH(flags, flags);
 NETMEM_MATCH(lru, pp_magic);
-NETMEM_MATCH(pp, pp);
 NETMEM_MATCH(mapping, _pp_mapping_pad);
-NETMEM_MATCH(dma_addr, dma_addr);
-NETMEM_MATCH(dma_addr_upper, dma_addr_upper);
-NETMEM_MATCH(pp_frag_count, pp_frag_count);
 NETMEM_MATCH(_mapcount, _mapcount);
 NETMEM_MATCH(_refcount, _refcount);
 #undef NETMEM_MATCH
