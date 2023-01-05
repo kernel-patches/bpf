@@ -18,7 +18,7 @@
  *
  * API keeps track of in-flight pages, in-order to let API user know
  * when it is safe to dealloactor page_pool object.  Thus, API users
- * must make sure to call page_pool_release_page() when a page is
+ * must make sure to call page_pool_release_netmem() when a page is
  * "leaving" the page_pool.  Or call page_pool_put_page() where
  * appropiate.  For maintaining correct accounting.
  *
@@ -354,7 +354,7 @@ struct xdp_mem_info;
 void page_pool_destroy(struct page_pool *pool);
 void page_pool_use_xdp_mem(struct page_pool *pool, void (*disconnect)(void *),
 			   struct xdp_mem_info *mem);
-void page_pool_release_page(struct page_pool *pool, struct page *page);
+void page_pool_release_netmem(struct page_pool *pool, struct netmem *nmem);
 void page_pool_put_page_bulk(struct page_pool *pool, void **data,
 			     int count);
 #else
@@ -367,8 +367,8 @@ static inline void page_pool_use_xdp_mem(struct page_pool *pool,
 					 struct xdp_mem_info *mem)
 {
 }
-static inline void page_pool_release_page(struct page_pool *pool,
-					  struct page *page)
+static inline void page_pool_release_netmem(struct page_pool *pool,
+					  struct netmem *nmem)
 {
 }
 
@@ -377,6 +377,12 @@ static inline void page_pool_put_page_bulk(struct page_pool *pool, void **data,
 {
 }
 #endif
+
+static inline void page_pool_release_page(struct page_pool *pool,
+					struct page *page)
+{
+	page_pool_release_netmem(pool, page_netmem(page));
+}
 
 void page_pool_put_defragged_page(struct page_pool *pool, struct page *page,
 				  unsigned int dma_sync_size,
