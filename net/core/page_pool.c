@@ -299,10 +299,10 @@ static struct netmem *__page_pool_get_cached(struct page_pool *pool)
 }
 
 static void page_pool_dma_sync_for_device(struct page_pool *pool,
-					  struct page *page,
+					  struct netmem *nmem,
 					  unsigned int dma_sync_size)
 {
-	dma_addr_t dma_addr = page_pool_get_dma_addr(page);
+	dma_addr_t dma_addr = netmem_get_dma_addr(nmem);
 
 	dma_sync_size = min(dma_sync_size, pool->p.max_len);
 	dma_sync_single_range_for_device(pool->p.dev, dma_addr,
@@ -329,7 +329,7 @@ static bool page_pool_dma_map(struct page_pool *pool, struct netmem *nmem)
 	page_pool_set_dma_addr(page, dma);
 
 	if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
-		page_pool_dma_sync_for_device(pool, page, pool->p.max_len);
+		page_pool_dma_sync_for_device(pool, nmem, pool->p.max_len);
 
 	return true;
 }
@@ -576,7 +576,7 @@ __page_pool_put_netmem(struct page_pool *pool, struct netmem *nmem,
 		/* Read barrier done in netmem_ref_count / READ_ONCE */
 
 		if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
-			page_pool_dma_sync_for_device(pool, netmem_page(nmem),
+			page_pool_dma_sync_for_device(pool, nmem,
 						      dma_sync_size);
 
 		if (allow_direct && in_serving_softirq() &&
@@ -676,6 +676,7 @@ EXPORT_SYMBOL(page_pool_put_page_bulk);
 static struct page *page_pool_drain_frag(struct page_pool *pool,
 					 struct page *page)
 {
+	struct netmem *nmem = page_netmem(page);
 	long drain_count = BIAS_MAX - pool->frag_users;
 
 	/* Some user is still using the page frag */
@@ -684,7 +685,7 @@ static struct page *page_pool_drain_frag(struct page_pool *pool,
 
 	if (page_ref_count(page) == 1 && !page_is_pfmemalloc(page)) {
 		if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
-			page_pool_dma_sync_for_device(pool, page, -1);
+			page_pool_dma_sync_for_device(pool, nmem, -1);
 
 		return page;
 	}
