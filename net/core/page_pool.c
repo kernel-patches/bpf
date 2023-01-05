@@ -558,8 +558,8 @@ static bool page_pool_recycle_in_cache(struct page *page,
  * If the page refcnt != 1, then the page will be returned to memory
  * subsystem.
  */
-static __always_inline struct page *
-__page_pool_put_page(struct page_pool *pool, struct page *page,
+static __always_inline struct netmem *
+__page_pool_put_netmem(struct page_pool *pool, struct netmem *nmem,
 		     unsigned int dma_sync_size, bool allow_direct)
 {
 	/* This allocator is optimized for the XDP mode that uses
@@ -571,19 +571,20 @@ __page_pool_put_page(struct page_pool *pool, struct page *page,
 	 * page is NOT reusable when allocated when system is under
 	 * some pressure. (page_is_pfmemalloc)
 	 */
-	if (likely(page_ref_count(page) == 1 && !page_is_pfmemalloc(page))) {
-		/* Read barrier done in page_ref_count / READ_ONCE */
+	if (likely(netmem_ref_count(nmem) == 1 &&
+		   !netmem_is_pfmemalloc(nmem))) {
+		/* Read barrier done in netmem_ref_count / READ_ONCE */
 
 		if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
-			page_pool_dma_sync_for_device(pool, page,
+			page_pool_dma_sync_for_device(pool, netmem_page(nmem),
 						      dma_sync_size);
 
 		if (allow_direct && in_serving_softirq() &&
-		    page_pool_recycle_in_cache(page, pool))
+		    page_pool_recycle_in_cache(netmem_page(nmem), pool))
 			return NULL;
 
 		/* Page found as candidate for recycling */
-		return page;
+		return nmem;
 	}
 	/* Fallback/non-XDP mode: API user have elevated refcnt.
 	 *
@@ -599,11 +600,19 @@ __page_pool_put_page(struct page_pool *pool, struct page *page,
 	 * will be invoking put_page.
 	 */
 	recycle_stat_inc(pool, released_refcnt);
-	/* Do not replace this with page_pool_return_page() */
-	page_pool_release_page(pool, page);
-	put_page(page);
+	/* Do not replace this with page_pool_return_netmem() */
+	page_pool_release_netmem(pool, nmem);
+	netmem_put(nmem);
 
 	return NULL;
+}
+
+static __always_inline struct page *
+__page_pool_put_page(struct page_pool *pool, struct page *page,
+		     unsigned int dma_sync_size, bool allow_direct)
+{
+	return netmem_page(__page_pool_put_netmem(pool, page_netmem(page),
+						dma_sync_size, allow_direct));
 }
 
 void page_pool_put_defragged_page(struct page_pool *pool, struct page *page,
