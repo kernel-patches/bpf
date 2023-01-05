@@ -222,12 +222,6 @@ EXPORT_SYMBOL(page_pool_create);
 
 static void page_pool_return_netmem(struct page_pool *pool, struct netmem *nm);
 
-static inline
-void page_pool_return_page(struct page_pool *pool, struct page *page)
-{
-	page_pool_return_netmem(pool, page_netmem(page));
-}
-
 noinline
 static struct netmem *page_pool_refill_alloc_cache(struct page_pool *pool)
 {
@@ -665,10 +659,9 @@ void page_pool_put_page_bulk(struct page_pool *pool, void **data,
 }
 EXPORT_SYMBOL(page_pool_put_page_bulk);
 
-static struct page *page_pool_drain_frag(struct page_pool *pool,
-					 struct page *page)
+static struct netmem *page_pool_drain_frag(struct page_pool *pool,
+					 struct netmem *nmem)
 {
-	struct netmem *nmem = page_netmem(page);
 	long drain_count = BIAS_MAX - pool->frag_users;
 
 	/* Some user is still using the page frag */
@@ -679,7 +672,7 @@ static struct page *page_pool_drain_frag(struct page_pool *pool,
 		if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
 			page_pool_dma_sync_for_device(pool, nmem, -1);
 
-		return page;
+		return nmem;
 	}
 
 	page_pool_return_netmem(pool, nmem);
@@ -689,22 +682,22 @@ static struct page *page_pool_drain_frag(struct page_pool *pool,
 static void page_pool_free_frag(struct page_pool *pool)
 {
 	long drain_count = BIAS_MAX - pool->frag_users;
-	struct page *page = pool->frag_page;
+	struct netmem *nmem = pool->frag_nmem;
 
-	pool->frag_page = NULL;
+	pool->frag_nmem = NULL;
 
-	if (!page || page_pool_defrag_page(page, drain_count))
+	if (!nmem || page_pool_defrag_netmem(nmem, drain_count))
 		return;
 
-	page_pool_return_page(pool, page);
+	page_pool_return_netmem(pool, nmem);
 }
 
-struct page *page_pool_alloc_frag(struct page_pool *pool,
+struct netmem *page_pool_alloc_frag(struct page_pool *pool,
 				  unsigned int *offset,
 				  unsigned int size, gfp_t gfp)
 {
 	unsigned int max_size = PAGE_SIZE << pool->p.order;
-	struct page *page = pool->frag_page;
+	struct netmem *nmem = pool->frag_nmem;
 
 	if (WARN_ON(!(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
 		    size > max_size))
@@ -713,35 +706,35 @@ struct page *page_pool_alloc_frag(struct page_pool *pool,
 	size = ALIGN(size, dma_get_cache_alignment());
 	*offset = pool->frag_offset;
 
-	if (page && *offset + size > max_size) {
-		page = page_pool_drain_frag(pool, page);
-		if (page) {
+	if (nmem && *offset + size > max_size) {
+		nmem = page_pool_drain_frag(pool, nmem);
+		if (nmem) {
 			alloc_stat_inc(pool, fast);
 			goto frag_reset;
 		}
 	}
 
-	if (!page) {
-		page = page_pool_alloc_pages(pool, gfp);
-		if (unlikely(!page)) {
-			pool->frag_page = NULL;
+	if (!nmem) {
+		nmem = page_pool_alloc_netmem(pool, gfp);
+		if (unlikely(!nmem)) {
+			pool->frag_nmem = NULL;
 			return NULL;
 		}
 
-		pool->frag_page = page;
+		pool->frag_nmem = nmem;
 
 frag_reset:
 		pool->frag_users = 1;
 		*offset = 0;
 		pool->frag_offset = size;
-		page_pool_fragment_page(page, BIAS_MAX);
-		return page;
+		page_pool_fragment_netmem(nmem, BIAS_MAX);
+		return nmem;
 	}
 
 	pool->frag_users++;
 	pool->frag_offset = *offset + size;
 	alloc_stat_inc(pool, fast);
-	return page;
+	return nmem;
 }
 EXPORT_SYMBOL(page_pool_alloc_frag);
 
