@@ -151,9 +151,6 @@ skip_init_ctx:
 	}
 	bpf_jit_build_epilogue(ctx);
 
-	if (bpf_jit_enable > 1)
-		bpf_jit_dump(prog->len, prog_size, pass, ctx->insns);
-
 	prog->bpf_func = (void *)ctx->insns;
 	prog->jited = 1;
 	prog->jited_len = prog_size;

@@ -74,13 +74,9 @@ $(OUTPUT)%.yacc.o: $(OUTPUT)%.yacc.c
 $(OUTPUT)%.lex.o: $(OUTPUT)%.lex.c
 	$(QUIET_CC)$(CC) $(CFLAGS) -c -o $@ $<
 
-PROGS = $(OUTPUT)bpf_jit_disasm $(OUTPUT)bpf_dbg $(OUTPUT)bpf_asm
+PROGS = $(OUTPUT)bpf_dbg $(OUTPUT)bpf_asm
 
 all: $(PROGS) bpftool runqslower
-
-$(OUTPUT)bpf_jit_disasm: CFLAGS += -DPACKAGE='bpf_jit_disasm'
-$(OUTPUT)bpf_jit_disasm: $(OUTPUT)bpf_jit_disasm.o
-	$(QUIET_LINK)$(CC) $(CFLAGS) -o $@ $^ -lopcodes -lbfd -ldl
 
 $(OUTPUT)bpf_dbg: $(OUTPUT)bpf_dbg.o
 	$(QUIET_LINK)$(CC) $(CFLAGS) -o $@ $^ -lreadline
@@ -94,16 +90,14 @@ $(OUTPUT)bpf_exp.lex.o: $(OUTPUT)bpf_exp.lex.c
 
 clean: bpftool_clean runqslower_clean resolve_btfids_clean
 	$(call QUIET_CLEAN, bpf-progs)
-	$(Q)$(RM) -r -- $(OUTPUT)*.o $(OUTPUT)bpf_jit_disasm $(OUTPUT)bpf_dbg \
+	$(Q)$(RM) -r -- $(OUTPUT)*.o $(OUTPUT)bpf_dbg \
 	       $(OUTPUT)bpf_asm $(OUTPUT)bpf_exp.yacc.* $(OUTPUT)bpf_exp.lex.*
 	$(call QUIET_CLEAN, core-gen)
 	$(Q)$(RM) -- $(OUTPUT)FEATURE-DUMP.bpf
 	$(Q)$(RM) -r -- $(OUTPUT)feature
 
 install: $(PROGS) bpftool_install
-	$(call QUIET_INSTALL, bpf_jit_disasm)
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(prefix)/bin
-	$(Q)$(INSTALL) $(OUTPUT)bpf_jit_disasm $(DESTDIR)$(prefix)/bin/bpf_jit_disasm
 	$(call QUIET_INSTALL, bpf_dbg)
 	$(Q)$(INSTALL) $(OUTPUT)bpf_dbg $(DESTDIR)$(prefix)/bin/bpf_dbg
 	$(call QUIET_INSTALL, bpf_asm)

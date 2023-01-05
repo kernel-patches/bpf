@@ -1123,10 +1123,6 @@ skip_init_ctx:
 		goto out_offset;
 	}
 
-	/* And we're done */
-	if (bpf_jit_enable > 1)
-		bpf_jit_dump(prog->len, image_size, 2, ctx.image);
-
 	/* Update the icache */
 	flush_icache_range((unsigned long)header, (unsigned long)(ctx.image + ctx.idx));
 

@@ -1567,10 +1567,6 @@ skip_init_ctx:
 		goto out_off;
 	}
 
-	/* And we're done. */
-	if (bpf_jit_enable > 1)
-		bpf_jit_dump(prog->len, prog_size, 2, ctx.image);
-
 	bpf_flush_icache(header, ctx.image + ctx.idx);
 
 	if (!prog->is_func || extra_pass) {

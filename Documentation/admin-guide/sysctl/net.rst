@@ -88,6 +88,7 @@ Values:
 	- 0 - disable the JIT (default value)
 	- 1 - enable the JIT
 	- 2 - enable the JIT and ask the compiler to emit traces on kernel log.
+              (deprecated since v6.3, use ``bpftool prog dump jited id <id>`` instead)
 
 bpf_jit_harden
 --------------

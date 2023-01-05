@@ -1831,10 +1831,6 @@ skip_init_ctx:
 		fp = orig_fp;
 		goto free_addrs;
 	}
-	if (bpf_jit_enable > 1) {
-		bpf_jit_dump(fp->len, jit.size, pass, jit.prg_buf);
-		print_fn_code(jit.prg_buf, jit.size_prg);
-	}
 	if (!fp->is_func || extra_pass) {
 		bpf_jit_binary_lock_ro(header);
 	} else {

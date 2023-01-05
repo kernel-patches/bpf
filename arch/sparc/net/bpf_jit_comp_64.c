@@ -1549,16 +1549,6 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		}
 		build_epilogue(&ctx);
 
-		if (bpf_jit_enable > 1)
-			pr_info("Pass %d: size = %u, seen = [%c%c%c%c%c%c]\n", pass,
-				ctx.idx * 4,
-				ctx.tmp_1_used ? '1' : ' ',
-				ctx.tmp_2_used ? '2' : ' ',
-				ctx.tmp_3_used ? '3' : ' ',
-				ctx.saw_frame_pointer ? 'F' : ' ',
-				ctx.saw_call ? 'C' : ' ',
-				ctx.saw_tail_call ? 'T' : ' ');
-
 		if (ctx.idx * 4 == prev_image_size)
 			break;
 		prev_image_size = ctx.idx * 4;
@@ -1595,9 +1585,6 @@ skip_init_ctx:
 		prog = orig_prog;
 		goto out_off;
 	}
-
-	if (bpf_jit_enable > 1)
-		bpf_jit_dump(prog->len, image_size, pass, ctx.image);
 
 	bpf_flush_icache(header, (u8 *)header + header->size);
 
