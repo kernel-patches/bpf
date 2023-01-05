@@ -304,8 +304,9 @@ static void page_pool_dma_sync_for_device(struct page_pool *pool,
 					 pool->p.dma_dir);
 }
 
-static bool page_pool_dma_map(struct page_pool *pool, struct page *page)
+static bool page_pool_dma_map(struct page_pool *pool, struct netmem *nmem)
 {
+	struct page *page = netmem_page(nmem);
 	dma_addr_t dma;
 
 	/* Setup DMA mapping: use 'struct page' area for storing DMA-addr
@@ -328,12 +329,12 @@ static bool page_pool_dma_map(struct page_pool *pool, struct page *page)
 }
 
 static void page_pool_set_pp_info(struct page_pool *pool,
-				  struct page *page)
+				  struct netmem *nmem)
 {
-	page->pp = pool;
-	page->pp_magic |= PP_SIGNATURE;
+	nmem->pp = pool;
+	nmem->pp_magic |= PP_SIGNATURE;
 	if (pool->p.init_callback)
-		pool->p.init_callback(page, pool->p.init_arg);
+		pool->p.init_callback(netmem_page(nmem), pool->p.init_arg);
 }
 
 static void page_pool_clear_pp_info(struct netmem *nmem)
@@ -345,26 +346,26 @@ static void page_pool_clear_pp_info(struct netmem *nmem)
 static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 						 gfp_t gfp)
 {
-	struct page *page;
+	struct netmem *nmem;
 
 	gfp |= __GFP_COMP;
-	page = alloc_pages_node(pool->p.nid, gfp, pool->p.order);
-	if (unlikely(!page))
+	nmem = page_netmem(alloc_pages_node(pool->p.nid, gfp, pool->p.order));
+	if (unlikely(!nmem))
 		return NULL;
 
 	if ((pool->p.flags & PP_FLAG_DMA_MAP) &&
-	    unlikely(!page_pool_dma_map(pool, page))) {
-		put_page(page);
+	    unlikely(!page_pool_dma_map(pool, nmem))) {
+		netmem_put(nmem);
 		return NULL;
 	}
 
 	alloc_stat_inc(pool, slow_high_order);
-	page_pool_set_pp_info(pool, page);
+	page_pool_set_pp_info(pool, nmem);
 
 	/* Track how many pages are held 'in-flight' */
 	pool->pages_state_hold_cnt++;
-	trace_page_pool_state_hold(pool, page, pool->pages_state_hold_cnt);
-	return page;
+	trace_page_pool_state_hold(pool, nmem, pool->pages_state_hold_cnt);
+	return netmem_page(nmem);
 }
 
 /* slow path */
@@ -398,18 +399,18 @@ static struct page *__page_pool_alloc_pages_slow(struct page_pool *pool,
 	 * page element have not been (possibly) DMA mapped.
 	 */
 	for (i = 0; i < nr_pages; i++) {
-		page = pool->alloc.cache[i];
+		struct netmem *nmem = page_netmem(pool->alloc.cache[i]);
 		if ((pp_flags & PP_FLAG_DMA_MAP) &&
-		    unlikely(!page_pool_dma_map(pool, page))) {
-			put_page(page);
+		    unlikely(!page_pool_dma_map(pool, nmem))) {
+			netmem_put(nmem);
 			continue;
 		}
 
-		page_pool_set_pp_info(pool, page);
-		pool->alloc.cache[pool->alloc.count++] = page;
+		page_pool_set_pp_info(pool, nmem);
+		pool->alloc.cache[pool->alloc.count++] = netmem_page(nmem);
 		/* Track how many pages are held 'in-flight' */
 		pool->pages_state_hold_cnt++;
-		trace_page_pool_state_hold(pool, page,
+		trace_page_pool_state_hold(pool, nmem,
 					   pool->pages_state_hold_cnt);
 	}
 
@@ -421,7 +422,8 @@ static struct page *__page_pool_alloc_pages_slow(struct page_pool *pool,
 		page = NULL;
 	}
 
-	/* When page just alloc'ed is should/must have refcnt 1. */
+	/* When page just allocated it should have refcnt 1 (but may have
+	 * speculative references) */
 	return page;
 }
 
