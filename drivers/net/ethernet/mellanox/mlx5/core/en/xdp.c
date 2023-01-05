@@ -32,6 +32,7 @@
 
 #include <linux/bpf_trace.h>
 #include <net/xdp_sock_drv.h>
+#include "en/txrx.h"
 #include "en/xdp.h"
 #include "en/params.h"
 
@@ -57,7 +58,7 @@ int mlx5e_xdp_max_mtu(struct mlx5e_params *params, struct mlx5e_xsk_param *xsk)
 
 static inline bool
 mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
-		    struct page *page, struct xdp_buff *xdp)
+		    struct netmem *nmem, struct xdp_buff *xdp)
 {
 	struct skb_shared_info *sinfo = NULL;
 	struct mlx5e_xmit_data xdptxd;
@@ -116,7 +117,7 @@ mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
 	xdpi.mode = MLX5E_XDP_XMIT_MODE_PAGE;
 	xdpi.page.rq = rq;
 
-	dma_addr = page_pool_get_dma_addr(page) + (xdpf->data - (void *)xdpf);
+	dma_addr = netmem_get_dma_addr(nmem) + (xdpf->data - (void *)xdpf);
 	dma_sync_single_for_device(sq->pdev, dma_addr, xdptxd.len, DMA_BIDIRECTIONAL);
 
 	if (unlikely(xdp_frame_has_frags(xdpf))) {
@@ -127,7 +128,7 @@ mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
 			dma_addr_t addr;
 			u32 len;
 
-			addr = page_pool_get_dma_addr(skb_frag_page(frag)) +
+			addr = netmem_get_dma_addr(skb_frag_netmem(frag)) +
 				skb_frag_off(frag);
 			len = skb_frag_size(frag);
 			dma_sync_single_for_device(sq->pdev, addr, len,
@@ -141,14 +142,14 @@ mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
 				      mlx5e_xmit_xdp_frame, sq, &xdptxd, sinfo, 0)))
 		return false;
 
-	xdpi.page.page = page;
+	xdpi.page.nmem = nmem;
 	mlx5e_xdpi_fifo_push(&sq->db.xdpi_fifo, &xdpi);
 
 	if (unlikely(xdp_frame_has_frags(xdpf))) {
 		for (i = 0; i < sinfo->nr_frags; i++) {
 			skb_frag_t *frag = &sinfo->frags[i];
 
-			xdpi.page.page = skb_frag_page(frag);
+			xdpi.page.nmem = skb_frag_netmem(frag);
 			mlx5e_xdpi_fifo_push(&sq->db.xdpi_fifo, &xdpi);
 		}
 	}
@@ -157,7 +158,7 @@ mlx5e_xmit_xdp_buff(struct mlx5e_xdpsq *sq, struct mlx5e_rq *rq,
 }
 
 /* returns true if packet was consumed by xdp */
-bool mlx5e_xdp_handle(struct mlx5e_rq *rq, struct page *page,
+bool mlx5e_xdp_handle(struct mlx5e_rq *rq, struct netmem *nmem,
 		      struct bpf_prog *prog, struct xdp_buff *xdp)
 {
 	u32 act;
@@ -168,19 +169,19 @@ bool mlx5e_xdp_handle(struct mlx5e_rq *rq, struct page *page,
 	case XDP_PASS:
 		return false;
 	case XDP_TX:
-		if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, page, xdp)))
+		if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, nmem, xdp)))
 			goto xdp_abort;
 		__set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags); /* non-atomic */
 		return true;
 	case XDP_REDIRECT:
-		/* When XDP enabled then page-refcnt==1 here */
+		/* When XDP enabled then nmem->refcnt==1 here */
 		err = xdp_do_redirect(rq->netdev, xdp, prog);
 		if (unlikely(err))
 			goto xdp_abort;
 		__set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags);
 		__set_bit(MLX5E_RQ_FLAG_XDP_REDIRECT, rq->flags);
 		if (xdp->rxq->mem.type != MEM_TYPE_XSK_BUFF_POOL)
-			mlx5e_page_dma_unmap(rq, page);
+			mlx5e_nmem_dma_unmap(rq, nmem);
 		rq->stats->xdp_redirect++;
 		return true;
 	default:
@@ -445,7 +446,7 @@ mlx5e_xmit_xdp_frame(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptxd,
 			skb_frag_t *frag = &sinfo->frags[i];
 			dma_addr_t addr;
 
-			addr = page_pool_get_dma_addr(skb_frag_page(frag)) +
+			addr = netmem_get_dma_addr(skb_frag_netmem(frag)) +
 				skb_frag_off(frag);
 
 			dseg++;
@@ -495,7 +496,8 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 			break;
 		case MLX5E_XDP_XMIT_MODE_PAGE:
 			/* XDP_TX from the regular RQ */
-			mlx5e_page_release_dynamic(xdpi.page.rq, xdpi.page.page, recycle);
+			mlx5e_page_release_dynamic(xdpi.page.rq,
+						xdpi.page.nmem, recycle);
 			break;
 		case MLX5E_XDP_XMIT_MODE_XSK:
 			/* AF_XDP send */

@@ -467,7 +467,7 @@ struct mlx5e_txqsq {
 } ____cacheline_aligned_in_smp;
 
 union mlx5e_alloc_unit {
-	struct page *page;
+	struct netmem *nmem;
 	struct xdp_buff *xsk;
 };
 
@@ -501,7 +501,7 @@ struct mlx5e_xdp_info {
 		} frame;
 		struct {
 			struct mlx5e_rq *rq;
-			struct page *page;
+			struct netmem *nmem;
 		} page;
 	};
 };
@@ -619,7 +619,7 @@ struct mlx5e_mpw_info {
 struct mlx5e_page_cache {
 	u32 head;
 	u32 tail;
-	struct page *page_cache[MLX5E_CACHE_SIZE];
+	struct netmem *page_cache[MLX5E_CACHE_SIZE];
 };
 
 struct mlx5e_rq;
@@ -657,13 +657,13 @@ struct mlx5e_rq_frags_info {
 
 struct mlx5e_dma_info {
 	dma_addr_t addr;
-	struct page *page;
+	struct netmem *nmem;
 };
 
 struct mlx5e_shampo_hd {
 	u32 mkey;
 	struct mlx5e_dma_info *info;
-	struct page *last_page;
+	struct netmem *last_nmem;
 	u16 hd_per_wq;
 	u16 hd_per_wqe;
 	unsigned long *bitmap;
