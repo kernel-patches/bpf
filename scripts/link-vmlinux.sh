@@ -122,6 +122,10 @@ gen_btf()
 		return 1
 	fi
 
+	if is_enabled CONFIG_RUST; then
+		PAHOLE_FLAGS="${PAHOLE_FLAGS} --lang_exclude=rust"
+	fi
+
 	vmlinux_link ${1}
 
 	info "BTF" ${2}
