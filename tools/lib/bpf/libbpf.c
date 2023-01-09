@@ -10375,12 +10375,30 @@ error:
 	return libbpf_err_ptr(err);
 }
 
+struct kprobe_resolve {
+	char pattern[128];
+	char name[128];
+};
+
+static int kprobe_kallsyms_cb(unsigned long long sym_addr, char sym_type,
+			      const char *sym_name, void *ctx)
+{
+	struct kprobe_resolve *res = ctx;
+
+	if (!glob_match(sym_name, res->pattern))
+		return 0;
+	strcpy(res->name, sym_name);
+	return 1;
+}
+
 static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf_link **link)
 {
 	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, opts);
+	struct kprobe_resolve res = {};
 	unsigned long offset = 0;
 	const char *func_name;
 	char *func;
+	int err;
 	int n;
 
 	*link = NULL;
@@ -10408,8 +10426,25 @@ static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf
 
 	opts.offset = offset;
 	*link = bpf_program__attach_kprobe_opts(prog, func, &opts);
+	err = libbpf_get_error(*link);
+
+	if (!err || err != -ENOENT)
+		goto out;
+
+	sprintf(res.pattern, "%s.*", func);
+	if (!libbpf_kallsyms_parse(kprobe_kallsyms_cb, &res))
+		goto out;
+
+	pr_warn("prog '%s': trying to create %s '%s+0x%zx' perf event instead\n",
+		prog->name, opts.retprobe ? "kretprobe" : "kprobe",
+		res.name, offset);
+
+	*link = bpf_program__attach_kprobe_opts(prog, res.name, &opts);
+	err = libbpf_get_error(*link);
+
+out:
 	free(func);
-	return libbpf_get_error(*link);
+	return err;
 }
 
 static int attach_ksyscall(const struct bpf_program *prog, long cookie, struct bpf_link **link)
