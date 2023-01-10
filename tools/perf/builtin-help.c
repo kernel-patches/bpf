@@ -70,46 +70,27 @@ static const char *get_man_viewer_info(const char *name)
 static int check_emacsclient_version(void)
 {
 	struct strbuf buffer = STRBUF_INIT;
-	struct child_process ec_process;
-	const char *argv_ec[] = { "emacsclient", "--version", NULL };
-	int version;
 	int ret = -1;
 
-	/* emacsclient prints its version number on stderr */
-	memset(&ec_process, 0, sizeof(ec_process));
-	ec_process.argv = argv_ec;
-	ec_process.err = -1;
-	ec_process.stdout_to_stderr = 1;
-	if (start_command(&ec_process)) {
-		fprintf(stderr, "Failed to start emacsclient.\n");
-		return -1;
-	}
-	if (strbuf_read(&buffer, ec_process.err, 20) < 0) {
-		fprintf(stderr, "Failed to read emacsclient version\n");
-		goto out;
-	}
-	close(ec_process.err);
-
 	/*
-	 * Don't bother checking return value, because "emacsclient --version"
-	 * seems to always exits with code 1.
+	 * emacsclient may print its version number on stderr. Don't bother
+	 * checking return value, because some "emacsclient --version" commands
+	 * seem to always exits with code 1.
 	 */
-	finish_command(&ec_process);
+	run_command_strbuf("emacsclient --version 2>&1", &buffer);
 
-	if (!strstarts(buffer.buf, "emacsclient")) {
+	if (!strstarts(buffer.buf, "emacsclient"))
 		fprintf(stderr, "Failed to parse emacsclient version.\n");
-		goto out;
+	else {
+		int version = atoi(buffer.buf + strlen("emacsclient"));
+
+		if (version < 22) {
+			fprintf(stderr,
+				"emacsclient version '%d' too old (< 22).\n",
+				version);
+		} else
+			ret = 0;
 	}
-
-	version = atoi(buffer.buf + strlen("emacsclient"));
-
-	if (version < 22) {
-		fprintf(stderr,
-			"emacsclient version '%d' too old (< 22).\n",
-			version);
-	} else
-		ret = 0;
-out:
 	strbuf_release(&buffer);
 	return ret;
 }
