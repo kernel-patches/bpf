@@ -4,6 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/zalloc.h>
+#include <malloc.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +43,6 @@ char *strbuf_detach(struct strbuf *sb, size_t *sz)
 	return res;
 }
 
-#define alloc_nr(x) (((x)+16)*3/2)
 int strbuf_grow(struct strbuf *sb, size_t extra)
 {
 	char *buf;
@@ -54,9 +54,6 @@ int strbuf_grow(struct strbuf *sb, size_t extra)
 	if (nr <= sb->len)
 		return -E2BIG;
 
-	if (alloc_nr(sb->alloc) > nr)
-		nr = alloc_nr(sb->alloc);
-
 	/*
 	 * Note that sb->buf == strbuf_slopbuf if sb->alloc == 0, and it is
 	 * a static variable. Thus we have to avoid passing it to realloc.
@@ -66,10 +63,9 @@ int strbuf_grow(struct strbuf *sb, size_t extra)
 		return -ENOMEM;
 
 	sb->buf = buf;
-	sb->alloc = nr;
+	sb->alloc = malloc_usable_size(buf);
 	return 0;
 }
-#undef alloc_nr
 
 int strbuf_addch(struct strbuf *sb, int c)
 {
