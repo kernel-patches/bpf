@@ -10,7 +10,7 @@
 #include <sys/utsname.h>
 #include <stdlib.h>
 #include <string.h>
-#include "strbuf.h"
+#include <api/strbuf.h>
 
 struct perf_env perf_env;
 

@@ -38,7 +38,7 @@
 #include "cpumap.h"
 #include "pmu.h"
 #include "vdso.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include "build-id.h"
 #include "data.h"
 #include <api/fs/fs.h>

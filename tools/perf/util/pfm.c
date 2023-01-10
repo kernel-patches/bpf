@@ -12,7 +12,7 @@
 #include "util/parse-events.h"
 #include "util/pmu.h"
 #include "util/pfm.h"
-#include "util/strbuf.h"
+#include <api/strbuf.h>
 
 #include <string.h>
 #include <linux/kernel.h>

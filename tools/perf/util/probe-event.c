@@ -38,7 +38,7 @@
 #include "probe-file.h"
 #include "session.h"
 #include "string2.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 
 #include <subcmd/pager.h>
 #include <linux/ctype.h>

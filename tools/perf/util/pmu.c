@@ -27,7 +27,7 @@
 #include "print-events.h"
 #include "header.h"
 #include "string2.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include "fncache.h"
 #include "pmu-hybrid.h"
 

@@ -6,7 +6,7 @@
  */
 #include "util/cache.h"
 #include "util/config.h"
-#include "util/strbuf.h"
+#include <api/strbuf.h>
 #include "builtin.h"
 #include <subcmd/exec-cmd.h>
 #include "common-cmds.h"

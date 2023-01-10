@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "cache.h"
-#include "debug.h"
+#include "debug-internal.h"
 #include "strbuf.h"
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -43,6 +42,7 @@ char *strbuf_detach(struct strbuf *sb, size_t *sz)
 	return res;
 }
 
+#define alloc_nr(x) (((x)+16)*3/2)
 int strbuf_grow(struct strbuf *sb, size_t extra)
 {
 	char *buf;
@@ -69,6 +69,7 @@ int strbuf_grow(struct strbuf *sb, size_t extra)
 	sb->alloc = nr;
 	return 0;
 }
+#undef alloc_nr
 
 int strbuf_addch(struct strbuf *sb, int c)
 {

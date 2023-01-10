@@ -21,7 +21,7 @@
 #include "evlist.h"
 #include "srcline.h"
 #include "strlist.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include "mem-events.h"
 #include "annotate.h"
 #include "event.h"

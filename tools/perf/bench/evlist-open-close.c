@@ -8,7 +8,7 @@
 #include "../util/stat.h"
 #include "../util/evlist.h"
 #include "../util/evsel.h"
-#include "../util/strbuf.h"
+#include <api/strbuf.h>
 #include "../util/record.h"
 #include "../util/parse-events.h"
 #include "internal/threadmap.h"

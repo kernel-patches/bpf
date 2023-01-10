@@ -9,7 +9,7 @@
 #include "debug.h"
 #include "evlist.h"
 #include "evsel.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include "pmu.h"
 #include "pmu-hybrid.h"
 #include "print-events.h"

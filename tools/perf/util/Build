@@ -37,7 +37,6 @@ perf-y += libstring.o
 perf-y += bitmap.o
 perf-y += hweight.o
 perf-y += smt.o
-perf-y += strbuf.o
 perf-y += string.o
 perf-y += strlist.o
 perf-y += strfilter.o

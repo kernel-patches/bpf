@@ -2,7 +2,7 @@
 #ifndef __PERF_CACHE_H
 #define __PERF_CACHE_H
 
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include <subcmd/pager.h>
 #include "../ui/ui.h"
 

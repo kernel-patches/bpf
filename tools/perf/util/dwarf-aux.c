@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include "debug.h"
 #include "dwarf-aux.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include "string2.h"
 
 /**

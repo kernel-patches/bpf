@@ -20,7 +20,7 @@
 #include "dso.h"
 #include "color.h"
 #include "symbol.h"
-#include "strbuf.h"
+#include <api/strbuf.h>
 #include <api/fs/tracing_path.h>
 #include <api/fs/fs.h>
 #include "probe-event.h"
