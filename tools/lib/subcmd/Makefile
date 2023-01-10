@@ -13,6 +13,7 @@ CC ?= $(CROSS_COMPILE)gcc
 LD ?= $(CROSS_COMPILE)ld
 AR ?= $(CROSS_COMPILE)ar
 
+MKDIR = mkdir
 RM = rm -f
 
 MAKEFLAGS += --no-print-directory
@@ -55,6 +56,17 @@ CFLAGS += -I$(srctree)/tools/include/
 
 CFLAGS += $(EXTRA_WARNINGS) $(EXTRA_CFLAGS)
 
+LIBAPI_DIR      = $(srctree)/tools/lib/api/
+ifneq ($(OUTPUT),)
+  LIBAPI_OUTPUT = $(abspath $(OUTPUT))/libapi
+else
+  LIBAPI_OUTPUT = $(CURDIR)/libapi
+endif
+LIBAPI_DESTDIR = $(LIBAPI_OUTPUT)
+LIBAPI_INCLUDE = $(LIBAPI_DESTDIR)/include
+LIBAPI = $(LIBAPI_OUTPUT)/libapi.a
+CFLAGS += -I$(LIBAPI_OUTPUT)/include
+
 SUBCMD_IN := $(OUTPUT)libsubcmd-in.o
 
 ifeq ($(LP64), 1)
@@ -76,7 +88,9 @@ include $(srctree)/tools/build/Makefile.include
 
 all: fixdep $(LIBFILE)
 
-$(SUBCMD_IN): FORCE
+prepare: $(LIBAPI)
+
+$(SUBCMD_IN): FORCE prepare
 	@$(MAKE) $(build)=libsubcmd
 
 $(LIBFILE): $(SUBCMD_IN)
@@ -113,10 +127,22 @@ install_headers: $(INSTALL_HDRS)
 
 install: install_lib install_headers
 
-clean:
+$(LIBAPI_OUTPUT):
+	$(Q)$(MKDIR) -p $@
+
+$(LIBAPI): FORCE | $(LIBAPI_OUTPUT)
+	$(Q)$(MAKE) -C $(LIBAPI_DIR) O=$(LIBAPI_OUTPUT) \
+		DESTDIR=$(LIBAPI_DESTDIR) prefix= \
+		$@ install_headers
+
+$(LIBAPI)-clean:
+	$(call QUIET_CLEAN, libapi)
+	$(Q)$(RM) -r -- $(LIBAPI_OUTPUT)
+
+clean: $(LIBAPI)-clean
 	$(call QUIET_CLEAN, libsubcmd) $(RM) $(LIBFILE); \
 	find $(or $(OUTPUT),.) -name \*.o -or -name \*.o.cmd -or -name \*.o.d | xargs $(RM)
 
 FORCE:
 
-.PHONY: clean FORCE
+.PHONY: clean FORCE prepare

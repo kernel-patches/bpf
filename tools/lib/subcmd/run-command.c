@@ -7,6 +7,7 @@
 #include <linux/string.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <api/strbuf.h>
 #include "subcmd-util.h"
 #include "run-command.h"
 #include "exec-cmd.h"
@@ -226,4 +227,33 @@ int run_command_v_opt(const char **argv, int opt)
 	struct child_process cmd;
 	prepare_run_command_v_opt(&cmd, argv, opt);
 	return run_command(&cmd);
+}
+
+int run_command_strbuf(const char *cmd, struct strbuf *buf)
+{
+	const char *argv[4] = {
+		"/bin/sh",
+		"-c",
+		cmd,
+		NULL
+	};
+	struct child_process child = {
+		.argv = argv,
+		.out = -1,
+	};
+	int err;
+	ssize_t read_sz;
+
+	err = start_command(&child);
+	if (err)
+		return err;
+
+	read_sz = strbuf_read(buf, child.out, 0);
+
+	err = finish_command(&child);
+	close(child.out);
+	if (read_sz < 0)
+		return (int)read_sz;
+
+	return err;
 }

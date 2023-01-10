@@ -58,4 +58,18 @@ int run_command(struct child_process *);
 #define RUN_COMMAND_STDOUT_TO_STDERR 4
 int run_command_v_opt(const char **argv, int opt);
 
+struct strbuf;
+/**
+ * run_command_strbuf() - Run cmd using /bin/sh and place stdout in strbuf.
+ * @cmd: The command to run by "/bin/sh -c".
+ * @buf: The strbuf appended to by reading stdout.
+ *
+ * Similar to popen with fread, run the given command reading the stdout output
+ * to buf. As with popen, stderr output goes to the current processes stderr but
+ * may be redirected in cmd by using "2>&1".
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int run_command_strbuf(const char *cmd, struct strbuf *buf);
+
 #endif /* __SUBCMD_RUN_COMMAND_H */
