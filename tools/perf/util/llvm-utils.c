@@ -17,7 +17,9 @@
 #include "config.h"
 #include "util.h"
 #include <sys/wait.h>
+#include <api/strbuf.h>
 #include <subcmd/exec-cmd.h>
+#include <subcmd/run-command.h>
 
 #define CLANG_BPF_CMD_DEFAULT_TEMPLATE				\
 		"$CLANG_EXEC -D__KERNEL__ -D__NR_CPUS__=$NR_CPUS "\
@@ -125,92 +127,6 @@ static int search_program_and_warn(const char *def, const char *name,
 	return ret;
 }
 
-#define READ_SIZE	4096
-static int
-read_from_pipe(const char *cmd, void **p_buf, size_t *p_read_sz)
-{
-	int err = 0;
-	void *buf = NULL;
-	FILE *file = NULL;
-	size_t read_sz = 0, buf_sz = 0;
-	char serr[STRERR_BUFSIZE];
-
-	file = popen(cmd, "r");
-	if (!file) {
-		pr_err("ERROR: unable to popen cmd: %s\n",
-		       str_error_r(errno, serr, sizeof(serr)));
-		return -EINVAL;
-	}
-
-	while (!feof(file) && !ferror(file)) {
-		/*
-		 * Make buf_sz always have obe byte extra space so we
-		 * can put '\0' there.
-		 */
-		if (buf_sz - read_sz < READ_SIZE + 1) {
-			void *new_buf;
-
-			buf_sz = read_sz + READ_SIZE + 1;
-			new_buf = realloc(buf, buf_sz);
-
-			if (!new_buf) {
-				pr_err("ERROR: failed to realloc memory\n");
-				err = -ENOMEM;
-				goto errout;
-			}
-
-			buf = new_buf;
-		}
-		read_sz += fread(buf + read_sz, 1, READ_SIZE, file);
-	}
-
-	if (buf_sz - read_sz < 1) {
-		pr_err("ERROR: internal error\n");
-		err = -EINVAL;
-		goto errout;
-	}
-
-	if (ferror(file)) {
-		pr_err("ERROR: error occurred when reading from pipe: %s\n",
-		       str_error_r(errno, serr, sizeof(serr)));
-		err = -EIO;
-		goto errout;
-	}
-
-	err = WEXITSTATUS(pclose(file));
-	file = NULL;
-	if (err) {
-		err = -EINVAL;
-		goto errout;
-	}
-
-	/*
-	 * If buf is string, give it terminal '\0' to make our life
-	 * easier. If buf is not string, that '\0' is out of space
-	 * indicated by read_sz so caller won't even notice it.
-	 */
-	((char *)buf)[read_sz] = '\0';
-
-	if (!p_buf)
-		free(buf);
-	else
-		*p_buf = buf;
-
-	if (p_read_sz)
-		*p_read_sz = read_sz;
-	return 0;
-
-errout:
-	if (file)
-		pclose(file);
-	free(buf);
-	if (p_buf)
-		*p_buf = NULL;
-	if (p_read_sz)
-		*p_read_sz = 0;
-	return err;
-}
-
 static inline void
 force_set_env(const char *var, const char *value)
 {
@@ -244,7 +160,7 @@ version_notice(void)
 );
 }
 
-static int detect_kbuild_dir(char **kbuild_dir)
+static int detect_kbuild_dir(struct strbuf *kbuild_dir)
 {
 	const char *test_dir = llvm_param.kbuild_dir;
 	const char *prefix_dir = "";
@@ -276,10 +192,9 @@ static int detect_kbuild_dir(char **kbuild_dir)
 	if (access(autoconf_path, R_OK) == 0) {
 		free(autoconf_path);
 
-		err = asprintf(kbuild_dir, "%s%s%s", prefix_dir, test_dir,
-			       suffix_dir);
+		err = (int)strbuf_addf(kbuild_dir, "%s%s%s", prefix_dir, test_dir, suffix_dir);
 		if (err < 0)
-			return -ENOMEM;
+			return err;
 		return 0;
 	}
 	pr_debug("%s: Couldn't find \"%s\", missing kernel-devel package?.\n",
@@ -315,7 +230,7 @@ static const char *kinc_fetch_script =
 "rm -rf $TMPDIR\n"
 "exit $RET\n";
 
-void llvm__get_kbuild_opts(char **kbuild_dir, char **kbuild_include_opts)
+void llvm__get_kbuild_opts(struct strbuf *kbuild_dir, struct strbuf *kbuild_include_opts)
 {
 	static char *saved_kbuild_dir;
 	static char *saved_kbuild_include_opts;
@@ -324,22 +239,14 @@ void llvm__get_kbuild_opts(char **kbuild_dir, char **kbuild_include_opts)
 	if (!kbuild_dir || !kbuild_include_opts)
 		return;
 
-	*kbuild_dir = NULL;
-	*kbuild_include_opts = NULL;
-
 	if (saved_kbuild_dir && saved_kbuild_include_opts &&
 	    !IS_ERR(saved_kbuild_dir) && !IS_ERR(saved_kbuild_include_opts)) {
-		*kbuild_dir = strdup(saved_kbuild_dir);
-		*kbuild_include_opts = strdup(saved_kbuild_include_opts);
+		strbuf_addstr(kbuild_dir, saved_kbuild_dir);
+		strbuf_addstr(kbuild_include_opts, saved_kbuild_include_opts);
 
-		if (*kbuild_dir && *kbuild_include_opts)
-			return;
-
-		zfree(kbuild_dir);
-		zfree(kbuild_include_opts);
 		/*
-		 * Don't fall through: it may breaks saved_kbuild_dir and
-		 * saved_kbuild_include_opts if detect them again when
+		 * Don't fallthrough: it may break the saved_kbuild_dir and
+		 * saved_kbuild_include_opts if they are detected again when
 		 * memory is low.
 		 */
 		return;
@@ -361,28 +268,26 @@ void llvm__get_kbuild_opts(char **kbuild_dir, char **kbuild_include_opts)
 		goto errout;
 	}
 
-	pr_debug("Kernel build dir is set to %s\n", *kbuild_dir);
-	force_set_env("KBUILD_DIR", *kbuild_dir);
+	pr_debug("Kernel build dir is set to %s\n", kbuild_dir->buf);
+	force_set_env("KBUILD_DIR", kbuild_dir->buf);
 	force_set_env("KBUILD_OPTS", llvm_param.kbuild_opts);
-	err = read_from_pipe(kinc_fetch_script,
-			     (void **)kbuild_include_opts,
-			     NULL);
+	err = run_command_strbuf(kinc_fetch_script, kbuild_include_opts);
 	if (err) {
 		pr_warning(
 "WARNING:\tunable to get kernel include directories from '%s'\n"
 "Hint:\tTry set clang include options using 'clang-bpf-cmd-template'\n"
 "     \toption in [llvm] section of ~/.perfconfig and set 'kbuild-dir'\n"
 "     \toption in [llvm] to \"\" to suppress this detection.\n\n",
-			*kbuild_dir);
+			kbuild_dir->buf);
 
 		zfree(kbuild_dir);
 		goto errout;
 	}
 
-	pr_debug("include option is set to %s\n", *kbuild_include_opts);
+	pr_debug("include option is set to %s\n", kbuild_include_opts->buf);
 
-	saved_kbuild_dir = strdup(*kbuild_dir);
-	saved_kbuild_include_opts = strdup(*kbuild_include_opts);
+	saved_kbuild_dir = strdup(kbuild_dir->buf);
+	saved_kbuild_include_opts = strdup(kbuild_include_opts->buf);
 
 	if (!saved_kbuild_dir || !saved_kbuild_include_opts) {
 		zfree(&saved_kbuild_dir);
@@ -446,24 +351,23 @@ out:
 	free(obj_path);
 }
 
-int llvm__compile_bpf(const char *path, void **p_obj_buf,
-		      size_t *p_obj_buf_sz)
+int llvm__compile_bpf(const char *path, struct strbuf *obj_buf)
 {
-	size_t obj_buf_sz;
-	void *obj_buf = NULL;
 	int err, nr_cpus_avail;
 	unsigned int kernel_version;
 	char linux_version_code_str[64];
 	const char *clang_opt = llvm_param.clang_opt;
 	char clang_path[PATH_MAX], llc_path[PATH_MAX], abspath[PATH_MAX], nr_cpus_avail_str[64];
 	char serr[STRERR_BUFSIZE];
-	char *kbuild_dir = NULL, *kbuild_include_opts = NULL,
-	     *perf_bpf_include_opts = NULL;
+	char *perf_bpf_include_opts = NULL;
 	const char *template = llvm_param.clang_bpf_cmd_template;
 	char *pipe_template = NULL;
 	const char *opts = llvm_param.opts;
-	char *command_echo = NULL, *command_out;
+	char *command_echo = NULL;
 	char *libbpf_include_dir = system_path(LIBBPF_INCLUDE_DIR);
+	struct strbuf kbuild_dir = STRBUF_INIT;
+	struct strbuf kbuild_include_opts = STRBUF_INIT;
+	struct strbuf command_out = STRBUF_INIT;
 
 	if (path[0] != '-' && realpath(path, abspath) == NULL) {
 		err = errno;
@@ -501,9 +405,9 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 	force_set_env("LINUX_VERSION_CODE", linux_version_code_str);
 	force_set_env("CLANG_EXEC", clang_path);
 	force_set_env("CLANG_OPTIONS", clang_opt);
-	force_set_env("KERNEL_INC_OPTIONS", kbuild_include_opts);
+	force_set_env("KERNEL_INC_OPTIONS", kbuild_include_opts.buf);
 	force_set_env("PERF_BPF_INC_OPTIONS", perf_bpf_include_opts);
-	force_set_env("WORKING_DIR", kbuild_dir ? : ".");
+	force_set_env("WORKING_DIR", kbuild_dir.len ? kbuild_dir.buf : ".");
 
 	if (opts) {
 		err = search_program_and_warn(llvm_param.llc_path, "llc", llc_path);
@@ -549,11 +453,11 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 		SWAP_CHAR('&', '\006');
 		SWAP_CHAR('\a', '"');
 	}
-	err = read_from_pipe(command_echo, (void **) &command_out, NULL);
-	if (err)
+	err = run_command_strbuf(command_echo, &command_out);
+	if (err < 0)
 		goto errout;
 
-	for (char *p = command_out; *p; p++) {
+	for (char *p = command_out.buf; *p; p++) {
 		SWAP_CHAR('\001', '<');
 		SWAP_CHAR('\002', '>');
 		SWAP_CHAR('\003', '"');
@@ -562,10 +466,10 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 		SWAP_CHAR('\006', '&');
 	}
 #undef SWAP_CHAR
-	pr_debug("llvm compiling command : %s\n", command_out);
+	pr_debug("llvm compiling command : %s\n", command_out.buf);
 
-	err = read_from_pipe(template, &obj_buf, &obj_buf_sz);
-	if (err) {
+	err = run_command_strbuf(template, obj_buf);
+	if (err < 0) {
 		pr_err("ERROR:\tunable to compile %s\n", path);
 		pr_err("Hint:\tCheck error message shown above.\n");
 		pr_err("Hint:\tYou can also pre-compile it into .o using:\n");
@@ -574,33 +478,15 @@ int llvm__compile_bpf(const char *path, void **p_obj_buf,
 		goto errout;
 	}
 
-	free(command_echo);
-	free(command_out);
-	free(kbuild_dir);
-	free(kbuild_include_opts);
-	free(perf_bpf_include_opts);
-	free(libbpf_include_dir);
-
-	if (!p_obj_buf)
-		free(obj_buf);
-	else
-		*p_obj_buf = obj_buf;
-
-	if (p_obj_buf_sz)
-		*p_obj_buf_sz = obj_buf_sz;
-	return 0;
+	err = 0;
 errout:
 	free(command_echo);
-	free(kbuild_dir);
-	free(kbuild_include_opts);
-	free(obj_buf);
+	strbuf_release(&command_out);
+	strbuf_release(&kbuild_dir);
+	strbuf_release(&kbuild_include_opts);
 	free(perf_bpf_include_opts);
 	free(libbpf_include_dir);
 	free(pipe_template);
-	if (p_obj_buf)
-		*p_obj_buf = NULL;
-	if (p_obj_buf_sz)
-		*p_obj_buf_sz = 0;
 	return err;
 }
 

@@ -16,6 +16,7 @@
 #include <linux/zalloc.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <api/strbuf.h>
 #include "debug.h"
 #include "evlist.h"
 #include "bpf-loader.h"
@@ -245,10 +246,14 @@ struct bpf_object *bpf__prepare_load(const char *filename, bool source)
 		err = perf_clang__compile_bpf(filename, &obj_buf, &obj_buf_sz);
 		perf_clang__cleanup();
 		if (err) {
+			struct strbuf str_obj_buf = STRBUF_INIT;
+
 			pr_debug("bpf: builtin compilation failed: %d, try external compiler\n", err);
-			err = llvm__compile_bpf(filename, &obj_buf, &obj_buf_sz);
-			if (err)
+			err = llvm__compile_bpf(filename, &str_obj_buf);
+			if (err < 0)
 				return ERR_PTR(-BPF_LOADER_ERRNO__COMPILE);
+			obj_buf = str_obj_buf.buf;
+			obj_buf_sz = str_obj_buf.len;
 		} else
 			pr_debug("bpf: successful builtin compilation\n");
 		obj = bpf_object__open_mem(obj_buf, obj_buf_sz, &opts);

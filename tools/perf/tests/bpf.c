@@ -13,6 +13,7 @@
 #include <linux/filter.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
+#include <api/strbuf.h>
 #include <api/fs/fs.h>
 #include <perf/mmap.h>
 #include "tests.h"
@@ -216,14 +217,13 @@ prepare_bpf(void *obj_buf, size_t obj_buf_sz, const char *name)
 static int __test__bpf(int idx)
 {
 	int ret;
-	void *obj_buf;
-	size_t obj_buf_sz;
+	struct strbuf obj_buf = STRBUF_INIT;
 	struct bpf_object *obj;
 
-	ret = test_llvm__fetch_bpf_obj(&obj_buf, &obj_buf_sz,
+	ret = test_llvm__fetch_bpf_obj(&obj_buf,
 				       bpf_testcase_table[idx].prog_id,
 				       false, NULL);
-	if (ret != TEST_OK || !obj_buf || !obj_buf_sz) {
+	if (ret != TEST_OK || !obj_buf.len) {
 		pr_debug("Unable to get BPF object, %s\n",
 			 bpf_testcase_table[idx].msg_compile_fail);
 		if ((idx == 0) || (ret == TEST_SKIP))
@@ -232,7 +232,7 @@ static int __test__bpf(int idx)
 			return TEST_FAIL;
 	}
 
-	obj = prepare_bpf(obj_buf, obj_buf_sz,
+	obj = prepare_bpf(obj_buf.buf, obj_buf.len,
 			  bpf_testcase_table[idx].name);
 	if ((!!bpf_testcase_table[idx].target_func) != (!!obj)) {
 		if (!obj)
@@ -274,7 +274,7 @@ static int __test__bpf(int idx)
 	}
 
 out:
-	free(obj_buf);
+	strbuf_release(&obj_buf);
 	bpf__clear();
 	return ret;
 }

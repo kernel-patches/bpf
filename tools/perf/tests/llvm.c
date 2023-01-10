@@ -4,6 +4,7 @@
 #include <string.h>
 #include "tests.h"
 #include "debug.h"
+#include <api/strbuf.h>
 
 #ifdef HAVE_LIBBPF_SUPPORT
 #include <bpf/libbpf.h>
@@ -45,8 +46,7 @@ static struct {
 };
 
 int
-test_llvm__fetch_bpf_obj(void **p_obj_buf,
-			 size_t *p_obj_buf_sz,
+test_llvm__fetch_bpf_obj(struct strbuf *obj_buf,
 			 enum test_llvm__testcase idx,
 			 bool force,
 			 bool *should_load_fail)
@@ -83,9 +83,6 @@ test_llvm__fetch_bpf_obj(void **p_obj_buf,
 	if (verbose == 0)
 		verbose = -1;
 
-	*p_obj_buf = NULL;
-	*p_obj_buf_sz = 0;
-
 	if (!llvm_param.clang_bpf_cmd_template)
 		goto out;
 
@@ -106,7 +103,7 @@ test_llvm__fetch_bpf_obj(void **p_obj_buf,
 	clang_opt_old = llvm_param.clang_opt;
 	llvm_param.clang_opt = clang_opt_new;
 
-	err = llvm__compile_bpf("-", p_obj_buf, p_obj_buf_sz);
+	err = llvm__compile_bpf("-", obj_buf);
 
 	llvm_param.clang_bpf_cmd_template = tmpl_old;
 	llvm_param.clang_opt = clang_opt_old;
@@ -127,24 +124,23 @@ out:
 static int test__llvm(int subtest)
 {
 	int ret;
-	void *obj_buf = NULL;
-	size_t obj_buf_sz = 0;
+	struct strbuf obj_buf = STRBUF_INIT;
 	bool should_load_fail = false;
 
 	if ((subtest < 0) || (subtest >= __LLVM_TESTCASE_MAX))
 		return TEST_FAIL;
 
-	ret = test_llvm__fetch_bpf_obj(&obj_buf, &obj_buf_sz,
+	ret = test_llvm__fetch_bpf_obj(&obj_buf,
 				       subtest, false, &should_load_fail);
 
 	if (ret == TEST_OK && !should_load_fail) {
-		ret = test__bpf_parsing(obj_buf, obj_buf_sz);
+		ret = test__bpf_parsing(obj_buf.buf, obj_buf.len);
 		if (ret != TEST_OK) {
 			pr_debug("Failed to parse test case '%s'\n",
 				 bpf_source_table[subtest].desc);
 		}
 	}
-	free(obj_buf);
+	strbuf_release(&obj_buf);
 
 	return ret;
 }
