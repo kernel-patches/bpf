@@ -143,25 +143,28 @@ ssize_t strbuf_read(struct strbuf *sb, int fd, ssize_t hint)
 	size_t oldalloc = sb->alloc;
 	int ret;
 
-	ret = strbuf_grow(sb, hint ? hint : 8192);
+	ret = strbuf_grow(sb, hint ? hint : 4095);
 	if (ret)
 		return ret;
 
 	for (;;) {
-		ssize_t cnt;
+		ssize_t read_size;
+		size_t sb_remaining = sb->alloc - sb->len - 1;
 
-		cnt = read(fd, sb->buf + sb->len, sb->alloc - sb->len - 1);
-		if (cnt < 0) {
+		read_size = read(fd, sb->buf + sb->len, sb_remaining);
+		if (read_size < 0) {
 			if (oldalloc == 0)
 				strbuf_release(sb);
 			else
 				strbuf_setlen(sb, oldlen);
-			return cnt;
+			return read_size;
 		}
-		if (!cnt)
+		if (read_size == 0)
 			break;
-		sb->len += cnt;
-		ret = strbuf_grow(sb, 8192);
+		sb->len += read_size;
+		if ((size_t)read_size < sb_remaining)
+			continue;
+		ret = strbuf_grow(sb, 4095);
 		if (ret)
 			return ret;
 	}
