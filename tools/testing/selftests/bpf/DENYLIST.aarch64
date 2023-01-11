@@ -24,6 +24,7 @@ fexit_test                                       # fexit_attach unexpected error
 get_func_args_test                               # get_func_args_test__attach unexpected error: -524 (errno 524) (trampoline)
 get_func_ip_test                                 # get_func_ip_test__attach unexpected error: -524 (errno 524) (trampoline)
 htab_update/reenter_update
+htab_deadlock                                    # fentry failed: -524 (trampoline)
 kfree_skb                                        # attach fentry unexpected error: -524 (trampoline)
 kfunc_call/subprog                               # extern (var ksym) 'bpf_prog_active': not found in kernel BTF
 kfunc_call/subprog_lskel                         # skel unexpected error: -2
