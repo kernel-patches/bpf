@@ -3346,6 +3346,12 @@ static inline struct page *skb_frag_page(const skb_frag_t *frag)
 	return frag->bv_page;
 }
 
+static inline struct netmem *skb_frag_netmem(const skb_frag_t *frag)
+{
+	VM_BUG_ON_PAGE(PageTail(frag->bv_page), frag->bv_page);
+	return page_netmem(frag->bv_page);
+}
+
 /**
  * __skb_frag_ref - take an addition reference on a paged fragment.
  * @frag: the paged fragment
@@ -3452,6 +3458,11 @@ static inline void skb_frag_page_copy(skb_frag_t *fragto,
 static inline void __skb_frag_set_page(skb_frag_t *frag, struct page *page)
 {
 	frag->bv_page = page;
+}
+
+static inline void __skb_frag_set_netmem(skb_frag_t *frag, struct netmem *nmem)
+{
+	__skb_frag_set_page(frag, netmem_page(nmem));
 }
 
 /**
