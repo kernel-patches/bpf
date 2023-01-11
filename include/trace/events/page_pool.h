@@ -42,26 +42,26 @@ TRACE_EVENT(page_pool_release,
 TRACE_EVENT(page_pool_state_release,
 
 	TP_PROTO(const struct page_pool *pool,
-		 const struct page *page, u32 release),
+		 const struct netmem *nmem, u32 release),
 
-	TP_ARGS(pool, page, release),
+	TP_ARGS(pool, nmem, release),
 
 	TP_STRUCT__entry(
 		__field(const struct page_pool *,	pool)
-		__field(const struct page *,		page)
+		__field(const struct netmem *,		nmem)
 		__field(u32,				release)
 		__field(unsigned long,			pfn)
 	),
 
 	TP_fast_assign(
 		__entry->pool		= pool;
-		__entry->page		= page;
+		__entry->nmem		= nmem;
 		__entry->release	= release;
-		__entry->pfn		= page_to_pfn(page);
+		__entry->pfn		= netmem_pfn(nmem);
 	),
 
-	TP_printk("page_pool=%p page=%p pfn=0x%lx release=%u",
-		  __entry->pool, __entry->page, __entry->pfn, __entry->release)
+	TP_printk("page_pool=%p nmem=%p pfn=0x%lx release=%u",
+		  __entry->pool, __entry->nmem, __entry->pfn, __entry->release)
 );
 
 TRACE_EVENT(page_pool_state_hold,

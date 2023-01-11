@@ -336,10 +336,10 @@ static void page_pool_set_pp_info(struct page_pool *pool,
 		pool->p.init_callback(page, pool->p.init_arg);
 }
 
-static void page_pool_clear_pp_info(struct page *page)
+static void page_pool_clear_pp_info(struct netmem *nmem)
 {
-	page->pp_magic = 0;
-	page->pp = NULL;
+	nmem->pp_magic = 0;
+	nmem->pp = NULL;
 }
 
 static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
@@ -467,7 +467,7 @@ static s32 page_pool_inflight(struct page_pool *pool)
  * a regular page (that will eventually be returned to the normal
  * page-allocator via put_page).
  */
-void page_pool_release_page(struct page_pool *pool, struct page *page)
+void page_pool_release_netmem(struct page_pool *pool, struct netmem *nmem)
 {
 	dma_addr_t dma;
 	int count;
@@ -478,23 +478,23 @@ void page_pool_release_page(struct page_pool *pool, struct page *page)
 		 */
 		goto skip_dma_unmap;
 
-	dma = page_pool_get_dma_addr(page);
+	dma = netmem_get_dma_addr(nmem);
 
 	/* When page is unmapped, it cannot be returned to our pool */
 	dma_unmap_page_attrs(pool->p.dev, dma,
 			     PAGE_SIZE << pool->p.order, pool->p.dma_dir,
 			     DMA_ATTR_SKIP_CPU_SYNC);
-	page_pool_set_dma_addr(page, 0);
+	netmem_set_dma_addr(nmem, 0);
 skip_dma_unmap:
-	page_pool_clear_pp_info(page);
+	page_pool_clear_pp_info(nmem);
 
 	/* This may be the last page returned, releasing the pool, so
 	 * it is not safe to reference pool afterwards.
 	 */
 	count = atomic_inc_return_relaxed(&pool->pages_state_release_cnt);
-	trace_page_pool_state_release(pool, page, count);
+	trace_page_pool_state_release(pool, nmem, count);
 }
-EXPORT_SYMBOL(page_pool_release_page);
+EXPORT_SYMBOL(page_pool_release_netmem);
 
 /* Return a page to the page allocator, cleaning up our state */
 static void page_pool_return_page(struct page_pool *pool, struct page *page)
