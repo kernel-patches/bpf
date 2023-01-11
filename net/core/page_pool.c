@@ -220,7 +220,13 @@ struct page_pool *page_pool_create(const struct page_pool_params *params)
 }
 EXPORT_SYMBOL(page_pool_create);
 
-static void page_pool_return_page(struct page_pool *pool, struct page *page);
+static void page_pool_return_netmem(struct page_pool *pool, struct netmem *nm);
+
+static inline
+void page_pool_return_page(struct page_pool *pool, struct page *page)
+{
+	page_pool_return_netmem(pool, page_netmem(page));
+}
 
 noinline
 static struct page *page_pool_refill_alloc_cache(struct page_pool *pool)
@@ -499,11 +505,11 @@ skip_dma_unmap:
 EXPORT_SYMBOL(page_pool_release_netmem);
 
 /* Return a page to the page allocator, cleaning up our state */
-static void page_pool_return_page(struct page_pool *pool, struct page *page)
+static void page_pool_return_netmem(struct page_pool *pool, struct netmem *nmem)
 {
-	page_pool_release_page(pool, page);
+	page_pool_release_netmem(pool, nmem);
 
-	put_page(page);
+	netmem_put(nmem);
 	/* An optimization would be to call __free_pages(page, pool->p.order)
 	 * knowing page is not part of page-cache (thus avoiding a
 	 * __page_cache_release() call).
