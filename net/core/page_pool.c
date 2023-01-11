@@ -282,7 +282,7 @@ static struct netmem *page_pool_refill_alloc_cache(struct page_pool *pool)
 }
 
 /* fast path */
-static struct page *__page_pool_get_cached(struct page_pool *pool)
+static struct netmem *__page_pool_get_cached(struct page_pool *pool)
 {
 	struct netmem *nmem;
 
@@ -295,7 +295,7 @@ static struct page *__page_pool_get_cached(struct page_pool *pool)
 		nmem = page_pool_refill_alloc_cache(pool);
 	}
 
-	return netmem_page(nmem);
+	return nmem;
 }
 
 static void page_pool_dma_sync_for_device(struct page_pool *pool,
@@ -349,8 +349,8 @@ static void page_pool_clear_pp_info(struct netmem *nmem)
 	nmem->pp = NULL;
 }
 
-static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
-						 gfp_t gfp)
+static
+struct netmem *__page_pool_alloc_netmem(struct page_pool *pool, gfp_t gfp)
 {
 	struct netmem *nmem;
 
@@ -371,27 +371,27 @@ static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 	/* Track how many pages are held 'in-flight' */
 	pool->pages_state_hold_cnt++;
 	trace_page_pool_state_hold(pool, nmem, pool->pages_state_hold_cnt);
-	return netmem_page(nmem);
+	return nmem;
 }
 
 /* slow path */
 noinline
-static struct page *__page_pool_alloc_pages_slow(struct page_pool *pool,
+static struct netmem *__page_pool_alloc_netmem_slow(struct page_pool *pool,
 						 gfp_t gfp)
 {
 	const int bulk = PP_ALLOC_CACHE_REFILL;
 	unsigned int pp_flags = pool->p.flags;
 	unsigned int pp_order = pool->p.order;
-	struct page *page;
+	struct netmem *nmem;
 	int i, nr_pages;
 
 	/* Don't support bulk alloc for high-order pages */
 	if (unlikely(pp_order))
-		return __page_pool_alloc_page_order(pool, gfp);
+		return __page_pool_alloc_netmem(pool, gfp);
 
 	/* Unnecessary as alloc cache is empty, but guarantees zero count */
 	if (unlikely(pool->alloc.count > 0))
-		return netmem_page(pool->alloc.cache[--pool->alloc.count]);
+		return pool->alloc.cache[--pool->alloc.count];
 
 	/* Mark empty alloc.cache slots "empty" for alloc_pages_bulk_array */
 	memset(&pool->alloc.cache, 0, sizeof(void *) * bulk);
@@ -422,34 +422,33 @@ static struct page *__page_pool_alloc_pages_slow(struct page_pool *pool,
 
 	/* Return last page */
 	if (likely(pool->alloc.count > 0)) {
-		page = netmem_page(pool->alloc.cache[--pool->alloc.count]);
+		nmem = pool->alloc.cache[--pool->alloc.count];
 		alloc_stat_inc(pool, slow);
 	} else {
-		page = NULL;
+		nmem = NULL;
 	}
 
 	/* When page just allocated it should have refcnt 1 (but may have
 	 * speculative references) */
-	return page;
+	return nmem;
 }
 
 /* For using page_pool replace: alloc_pages() API calls, but provide
  * synchronization guarantee for allocation side.
  */
-struct page *page_pool_alloc_pages(struct page_pool *pool, gfp_t gfp)
+struct netmem *page_pool_alloc_netmem(struct page_pool *pool, gfp_t gfp)
 {
-	struct page *page;
+	struct netmem *nmem;
 
 	/* Fast-path: Get a page from cache */
-	page = __page_pool_get_cached(pool);
-	if (page)
-		return page;
+	nmem = __page_pool_get_cached(pool);
+	if (nmem)
+		return nmem;
 
 	/* Slow-path: cache empty, do real allocation */
-	page = __page_pool_alloc_pages_slow(pool, gfp);
-	return page;
+	return __page_pool_alloc_netmem_slow(pool, gfp);
 }
-EXPORT_SYMBOL(page_pool_alloc_pages);
+EXPORT_SYMBOL(page_pool_alloc_netmem);
 
 /* Calculate distance between two u32 values, valid if distance is below 2^(31)
  *  https://en.wikipedia.org/wiki/Serial_number_arithmetic#General_Solution
