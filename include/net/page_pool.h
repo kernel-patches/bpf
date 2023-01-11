@@ -262,7 +262,7 @@ struct page_pool {
 
 	u32 pages_state_hold_cnt;
 	unsigned int frag_offset;
-	struct page *frag_page;
+	struct netmem *frag_nmem;
 	long frag_users;
 
 #ifdef CONFIG_PAGE_POOL_STATS
@@ -335,8 +335,8 @@ static inline struct page *page_pool_dev_alloc_pages(struct page_pool *pool)
 	return page_pool_alloc_pages(pool, gfp);
 }
 
-struct page *page_pool_alloc_frag(struct page_pool *pool, unsigned int *offset,
-				  unsigned int size, gfp_t gfp);
+struct netmem *page_pool_alloc_frag(struct page_pool *pool,
+		unsigned int *offset, unsigned int size, gfp_t gfp);
 
 static inline struct page *page_pool_dev_alloc_frag(struct page_pool *pool,
 						    unsigned int *offset,
@@ -344,7 +344,7 @@ static inline struct page *page_pool_dev_alloc_frag(struct page_pool *pool,
 {
 	gfp_t gfp = (GFP_ATOMIC | __GFP_NOWARN);
 
-	return page_pool_alloc_frag(pool, offset, size, gfp);
+	return netmem_page(page_pool_alloc_frag(pool, offset, size, gfp));
 }
 
 /* get the stored dma direction. A driver might decide to treat this locally and
@@ -401,9 +401,9 @@ void page_pool_put_defragged_netmem(struct page_pool *pool, struct netmem *nmem,
 				  unsigned int dma_sync_size,
 				  bool allow_direct);
 
-static inline void page_pool_fragment_page(struct page *page, long nr)
+static inline void page_pool_fragment_netmem(struct netmem *nmem, long nr)
 {
-	atomic_long_set(&page->pp_frag_count, nr);
+	atomic_long_set(&nmem->pp_frag_count, nr);
 }
 
 static inline long page_pool_defrag_netmem(struct netmem *nmem, long nr)
@@ -425,12 +425,6 @@ static inline long page_pool_defrag_netmem(struct netmem *nmem, long nr)
 	ret = atomic_long_sub_return(nr, &nmem->pp_frag_count);
 	WARN_ON(ret < 0);
 	return ret;
-}
-
-/* Compat, remove when all users gone */
-static inline long page_pool_defrag_page(struct page *page, long nr)
-{
-	return page_pool_defrag_netmem(page_netmem(page), nr);
 }
 
 static inline bool page_pool_is_last_frag(struct page_pool *pool,
