@@ -886,28 +886,27 @@ EXPORT_SYMBOL(page_pool_update_nid);
 
 bool page_pool_return_skb_page(struct page *page)
 {
+	struct netmem *nmem = page_netmem(compound_head(page));
 	struct page_pool *pp;
 
-	page = compound_head(page);
-
-	/* page->pp_magic is OR'ed with PP_SIGNATURE after the allocation
+	/* nmem->pp_magic is OR'ed with PP_SIGNATURE after the allocation
 	 * in order to preserve any existing bits, such as bit 0 for the
 	 * head page of compound page and bit 1 for pfmemalloc page, so
 	 * mask those bits for freeing side when doing below checking,
-	 * and page_is_pfmemalloc() is checked in __page_pool_put_page()
+	 * and netmem_is_pfmemalloc() is checked in __page_pool_put_netmem()
 	 * to avoid recycling the pfmemalloc page.
 	 */
-	if (unlikely((page->pp_magic & ~0x3UL) != PP_SIGNATURE))
+	if (unlikely((nmem->pp_magic & ~0x3UL) != PP_SIGNATURE))
 		return false;
 
-	pp = page->pp;
+	pp = nmem->pp;
 
 	/* Driver set this to memory recycling info. Reset it on recycle.
 	 * This will *not* work for NIC using a split-page memory model.
 	 * The page will be returned to the pool here regardless of the
 	 * 'flipped' fragment being in use or not.
 	 */
-	page_pool_put_full_page(pp, page, false);
+	page_pool_put_full_netmem(pp, nmem, false);
 
 	return true;
 }

@@ -468,10 +468,17 @@ static inline void page_pool_put_page(struct page_pool *pool,
 }
 
 /* Same as above but will try to sync the entire area pool->max_len */
+static inline void page_pool_put_full_netmem(struct page_pool *pool,
+		struct netmem *nmem, bool allow_direct)
+{
+	page_pool_put_netmem(pool, nmem, -1, allow_direct);
+}
+
+/* Compat, remove when all users gone */
 static inline void page_pool_put_full_page(struct page_pool *pool,
 					   struct page *page, bool allow_direct)
 {
-	page_pool_put_page(pool, page, -1, allow_direct);
+	page_pool_put_full_netmem(pool, page_netmem(page), allow_direct);
 }
 
 /* Same as above but the caller must guarantee safe context. e.g NAPI */
