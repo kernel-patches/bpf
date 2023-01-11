@@ -96,6 +96,65 @@ NETMEM_MATCH(_refcount, _refcount);
 #undef NETMEM_MATCH
 static_assert(sizeof(struct netmem) <= sizeof(struct page));
 
+#define netmem_page(nmem) (_Generic((nmem),				\
+	const struct netmem *:	(const struct page *)nmem,		\
+	struct netmem *:	(struct page *)nmem))
+
+static inline struct netmem *page_netmem(struct page *page)
+{
+	VM_BUG_ON_PAGE(PageTail(page), page);
+	return (struct netmem *)page;
+}
+
+static inline unsigned long netmem_pfn(const struct netmem *nmem)
+{
+	return page_to_pfn(netmem_page(nmem));
+}
+
+static inline unsigned long netmem_nid(const struct netmem *nmem)
+{
+	return page_to_nid(netmem_page(nmem));
+}
+
+static inline struct netmem *virt_to_netmem(const void *x)
+{
+	return page_netmem(virt_to_head_page(x));
+}
+
+static inline void *netmem_to_virt(const struct netmem *nmem)
+{
+	return page_to_virt(netmem_page(nmem));
+}
+
+static inline void *netmem_address(const struct netmem *nmem)
+{
+	return page_address(netmem_page(nmem));
+}
+
+static inline int netmem_ref_count(const struct netmem *nmem)
+{
+	return page_ref_count(netmem_page(nmem));
+}
+
+static inline void netmem_get(struct netmem *nmem)
+{
+	struct folio *folio = (struct folio *)nmem;
+
+	folio_get(folio);
+}
+
+static inline void netmem_put(struct netmem *nmem)
+{
+	struct folio *folio = (struct folio *)nmem;
+
+	folio_put(folio);
+}
+
+static inline bool netmem_is_pfmemalloc(const struct netmem *nmem)
+{
+	return nmem->pp_magic & BIT(1);
+}
+
 /*
  * Fast allocation side cache array/stack
  *
