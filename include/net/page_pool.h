@@ -173,7 +173,7 @@ static inline bool netmem_is_pfmemalloc(const struct netmem *nmem)
 #define PP_ALLOC_CACHE_REFILL	64
 struct pp_alloc_cache {
 	u32 count;
-	struct page *cache[PP_ALLOC_CACHE_SIZE];
+	struct netmem *cache[PP_ALLOC_CACHE_SIZE];
 };
 
 struct page_pool_params {
