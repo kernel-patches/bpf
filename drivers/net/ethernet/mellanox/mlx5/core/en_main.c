@@ -555,16 +555,18 @@ static void mlx5e_rq_err_cqe_work(struct work_struct *recover_work)
 
 static int mlx5e_alloc_mpwqe_rq_drop_page(struct mlx5e_rq *rq)
 {
-	rq->wqe_overflow.page = alloc_page(GFP_KERNEL);
-	if (!rq->wqe_overflow.page)
+	struct page *page = alloc_page(GFP_KERNEL);
+	if (!page)
 		return -ENOMEM;
 
-	rq->wqe_overflow.addr = dma_map_page(rq->pdev, rq->wqe_overflow.page, 0,
+	rq->wqe_overflow.addr = dma_map_page(rq->pdev, page, 0,
 					     PAGE_SIZE, rq->buff.map_dir);
 	if (dma_mapping_error(rq->pdev, rq->wqe_overflow.addr)) {
-		__free_page(rq->wqe_overflow.page);
+		__free_page(page);
 		return -ENOMEM;
 	}
+
+	rq->wqe_overflow.nmem = page_netmem(page);
 	return 0;
 }
 
@@ -572,7 +574,7 @@ static void mlx5e_free_mpwqe_rq_drop_page(struct mlx5e_rq *rq)
 {
 	 dma_unmap_page(rq->pdev, rq->wqe_overflow.addr, PAGE_SIZE,
 			rq->buff.map_dir);
-	 __free_page(rq->wqe_overflow.page);
+	 __free_page(netmem_page(rq->wqe_overflow.nmem));
 }
 
 static int mlx5e_init_rxq_rq(struct mlx5e_channel *c, struct mlx5e_params *params,
