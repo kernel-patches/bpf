@@ -607,14 +607,6 @@ __page_pool_put_netmem(struct page_pool *pool, struct netmem *nmem,
 	return NULL;
 }
 
-static __always_inline struct page *
-__page_pool_put_page(struct page_pool *pool, struct page *page,
-		     unsigned int dma_sync_size, bool allow_direct)
-{
-	return netmem_page(__page_pool_put_netmem(pool, page_netmem(page),
-						dma_sync_size, allow_direct));
-}
-
 void page_pool_put_defragged_netmem(struct page_pool *pool, struct netmem *nmem,
 				  unsigned int dma_sync_size, bool allow_direct)
 {
