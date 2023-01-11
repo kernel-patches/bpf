@@ -50,6 +50,52 @@
 				 PP_FLAG_DMA_SYNC_DEV |\
 				 PP_FLAG_PAGE_FRAG)
 
+/**
+ * struct netmem - A memory allocation from a &struct page_pool.
+ * @flags: The same as the page flags.  Do not use directly.
+ * @pp_magic: Magic value to avoid recycling non page_pool allocated pages.
+ * @pp: The page pool this netmem was allocated from.
+ * @dma_addr: Call netmem_get_dma_addr() to read this value.
+ * @dma_addr_upper: Might need to be 64-bit on 32-bit architectures.
+ * @pp_frag_count: For frag page support, not supported in 32-bit
+ *   architectures with 64-bit DMA.
+ * @_mapcount: Do not access this member directly.
+ * @_refcount: Do not access this member directly.  Read it using
+ *   netmem_ref_count() and manipulate it with netmem_get() and netmem_put().
+ *
+ * This struct overlays struct page for now.  Do not modify without a
+ * good understanding of the issues.
+ */
+struct netmem {
+	unsigned long flags;
+	unsigned long pp_magic;
+	struct page_pool *pp;
+	/* private: no need to document this padding */
+	unsigned long _pp_mapping_pad;	/* aliases with folio->mapping */
+	/* public: */
+	unsigned long dma_addr;
+	union {
+		unsigned long dma_addr_upper;
+		atomic_long_t pp_frag_count;
+	};
+	atomic_t _mapcount;
+	atomic_t _refcount;
+};
+
+#define NETMEM_MATCH(pg, nm)						\
+	static_assert(offsetof(struct page, pg) == offsetof(struct netmem, nm))
+NETMEM_MATCH(flags, flags);
+NETMEM_MATCH(lru, pp_magic);
+NETMEM_MATCH(pp, pp);
+NETMEM_MATCH(mapping, _pp_mapping_pad);
+NETMEM_MATCH(dma_addr, dma_addr);
+NETMEM_MATCH(dma_addr_upper, dma_addr_upper);
+NETMEM_MATCH(pp_frag_count, pp_frag_count);
+NETMEM_MATCH(_mapcount, _mapcount);
+NETMEM_MATCH(_refcount, _refcount);
+#undef NETMEM_MATCH
+static_assert(sizeof(struct netmem) <= sizeof(struct page));
+
 /*
  * Fast allocation side cache array/stack
  *
