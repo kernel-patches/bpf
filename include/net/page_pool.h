@@ -482,11 +482,21 @@ static inline void page_pool_put_full_page(struct page_pool *pool,
 }
 
 /* Same as above but the caller must guarantee safe context. e.g NAPI */
-static inline void page_pool_recycle_direct(struct page_pool *pool,
+static inline void __page_pool_recycle_direct(struct page_pool *pool,
+					    struct netmem *nmem)
+{
+	page_pool_put_full_netmem(pool, nmem, true);
+}
+
+static inline void __page_pool_recycle_page_direct(struct page_pool *pool,
 					    struct page *page)
 {
-	page_pool_put_full_page(pool, page, true);
+	page_pool_put_full_netmem(pool, page_netmem(page), true);
 }
+
+#define page_pool_recycle_direct(pool, mem)	_Generic((mem),		\
+	struct netmem *: __page_pool_recycle_direct(pool, (struct netmem *)mem),		\
+	struct page *:	 __page_pool_recycle_page_direct(pool, (struct page *)mem))
 
 #define PAGE_POOL_DMA_USE_PP_FRAG_COUNT	\
 		(sizeof(dma_addr_t) > sizeof(unsigned long))
