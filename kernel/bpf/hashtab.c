@@ -161,9 +161,24 @@ static inline int htab_lock_bucket(const struct bpf_htab *htab,
 		return -EBUSY;
 	}
 
+	/*
+	 * The lock may be taken in both NMI and non-NMI contexts.
+	 * There is a false lockdep warning (inconsistent lock state),
+	 * if lockdep enabled. The potential deadlock happens when the
+	 * lock is contended from the same cpu. map_locked rejects
+	 * concurrent access to the same bucket from the same CPU.
+	 * When the lock is contended from a remote cpu, we would
+	 * like the remote cpu to spin and wait, instead of giving
+	 * up immediately. As this gives better throughput. So replacing
+	 * the current raw_spin_lock_irqsave() with trylock sacrifices
+	 * this performance gain. atomic map_locked is necessary.
+	 * lockdep_off is invoked temporarily to fix the false warning.
+	 */
+	lockdep_off();
 	raw_spin_lock_irqsave(&b->raw_lock, flags);
-	*pflags = flags;
+	lockdep_on();
 
+	*pflags = flags;
 	return 0;
 }
 
@@ -172,7 +187,11 @@ static inline void htab_unlock_bucket(const struct bpf_htab *htab,
 				      unsigned long flags)
 {
 	hash = hash & min_t(u32, HASHTAB_MAP_LOCK_MASK, htab->n_buckets - 1);
+
+	lockdep_off();
 	raw_spin_unlock_irqrestore(&b->raw_lock, flags);
+	lockdep_on();
+
 	__this_cpu_dec(*(htab->map_locked[hash]));
 	preempt_enable();
 }
