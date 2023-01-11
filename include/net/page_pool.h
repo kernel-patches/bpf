@@ -449,21 +449,33 @@ static inline void page_pool_recycle_direct(struct page_pool *pool,
 #define PAGE_POOL_DMA_USE_PP_FRAG_COUNT	\
 		(sizeof(dma_addr_t) > sizeof(unsigned long))
 
-static inline dma_addr_t page_pool_get_dma_addr(struct page *page)
+static inline dma_addr_t netmem_get_dma_addr(struct netmem *nmem)
 {
-	dma_addr_t ret = page->dma_addr;
+	dma_addr_t ret = nmem->dma_addr;
 
 	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT)
-		ret |= (dma_addr_t)page->dma_addr_upper << 16 << 16;
+		ret |= (dma_addr_t)nmem->dma_addr_upper << 16 << 16;
 
 	return ret;
 }
 
+/* Compat, remove when all users gone */
+static inline dma_addr_t page_pool_get_dma_addr(struct page *page)
+{
+	return netmem_get_dma_addr(page_netmem(page));
+}
+
+static inline void netmem_set_dma_addr(struct netmem *nmem, dma_addr_t addr)
+{
+	nmem->dma_addr = addr;
+	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT)
+		nmem->dma_addr_upper = upper_32_bits(addr);
+}
+
+/* Compat, remove when all users gone */
 static inline void page_pool_set_dma_addr(struct page *page, dma_addr_t addr)
 {
-	page->dma_addr = addr;
-	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT)
-		page->dma_addr_upper = upper_32_bits(addr);
+	netmem_set_dma_addr(page_netmem(page), addr);
 }
 
 static inline bool is_page_pool_compiled_in(void)
