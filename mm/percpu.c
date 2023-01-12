@@ -2302,6 +2302,41 @@ void free_percpu(void __percpu *ptr)
 }
 EXPORT_SYMBOL_GPL(free_percpu);
 
+/**
+ * percpu_size - report full size of underlying allocation of percpu addr
+ * @ptr: pointer to percpu area
+ *
+ * CONTEXT:
+ * Can be called from atomic context.
+ */
+size_t percpu_size(void __percpu *ptr)
+{
+	int bit_off, bits, end, off, size;
+	struct pcpu_chunk *chunk;
+	unsigned long flags;
+	void *addr;
+
+	if (!ptr)
+		return 0;
+
+	addr = __pcpu_ptr_to_addr(ptr);
+
+	spin_lock_irqsave(&pcpu_lock, flags);
+	chunk = pcpu_chunk_addr_search(addr);
+	off = addr - chunk->base_addr;
+	bit_off = off / PCPU_MIN_ALLOC_SIZE;
+
+	/* find end index */
+	end = find_next_bit(chunk->bound_map, pcpu_chunk_map_bits(chunk),
+			    bit_off + 1);
+	spin_unlock_irqrestore(&pcpu_lock, flags);
+
+	bits = end - bit_off;
+	size = bits * PCPU_MIN_ALLOC_SIZE;
+
+	return pcpu_obj_full_size(size);
+}
+
 bool __is_kernel_percpu_address(unsigned long addr, unsigned long *can_addr)
 {
 #ifdef CONFIG_SMP
