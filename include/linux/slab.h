@@ -226,6 +226,15 @@ size_t __ksize(const void *objp);
  */
 size_t ksize(const void *objp);
 
+/**
+ * ksize_full - Report full size of each accounted objp
+ * @objp: pointer to the object
+ *
+ * The difference between ksize() and ksize_full() is that ksize_full()
+ * includes the extra space which is used to store obj_cgroup membership.
+ */
+size_t ksize_full(const void *objp);
+
 #ifdef CONFIG_PRINTK
 bool kmem_valid_obj(void *object);
 void kmem_dump_obj(void *object);
@@ -762,6 +771,7 @@ static inline __alloc_size(1, 2) void *kvcalloc(size_t n, size_t size, gfp_t fla
 
 extern void *kvrealloc(const void *p, size_t oldsize, size_t newsize, gfp_t flags)
 		      __realloc_size(3);
+extern size_t kvsize(const void *addr);
 extern void kvfree(const void *addr);
 extern void kvfree_sensitive(const void *addr, size_t len);
 

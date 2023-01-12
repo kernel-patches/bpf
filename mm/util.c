@@ -610,6 +610,21 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 EXPORT_SYMBOL(kvmalloc_node);
 
 /**
+ * kvsize() - Report full size of underlying allocation of adddr
+ * @addr: Pointer to kmalloc'ed or vmalloc'ed memory
+ *
+ * kvsize reports full size of underlying allocation of a kmalloc'ed addr
+ * or a vmalloc'ed addr.
+ */
+size_t kvsize(const void *addr)
+{
+	if (is_vmalloc_addr(addr))
+		return vsize(addr);
+
+	return ksize_full(addr);
+}
+
+/**
  * kvfree() - Free memory.
  * @addr: Pointer to allocated memory.
  *
