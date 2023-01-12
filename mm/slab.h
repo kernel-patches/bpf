@@ -467,7 +467,10 @@ static inline void memcg_free_slab_cgroups(struct slab *slab)
 	slab->memcg_data = 0;
 }
 
-static inline size_t obj_full_size(struct kmem_cache *s)
+/*
+ * This helper is only valid when kmemcg isn't disabled.
+ */
+static inline size_t obj_kmemcg_size(struct kmem_cache *s)
 {
 	/*
 	 * For each accounted object there is an extra space which is used
@@ -508,7 +511,7 @@ static inline bool memcg_slab_pre_alloc_hook(struct kmem_cache *s,
 			goto out;
 	}
 
-	if (obj_cgroup_charge(objcg, flags, objects * obj_full_size(s)))
+	if (obj_cgroup_charge(objcg, flags, objects * obj_kmemcg_size(s)))
 		goto out;
 
 	*objcgp = objcg;
@@ -537,7 +540,7 @@ static inline void memcg_slab_post_alloc_hook(struct kmem_cache *s,
 			if (!slab_objcgs(slab) &&
 			    memcg_alloc_slab_cgroups(slab, s, flags,
 							 false)) {
-				obj_cgroup_uncharge(objcg, obj_full_size(s));
+				obj_cgroup_uncharge(objcg, obj_kmemcg_size(s));
 				continue;
 			}
 
@@ -545,9 +548,9 @@ static inline void memcg_slab_post_alloc_hook(struct kmem_cache *s,
 			obj_cgroup_get(objcg);
 			slab_objcgs(slab)[off] = objcg;
 			mod_objcg_state(objcg, slab_pgdat(slab),
-					cache_vmstat_idx(s), obj_full_size(s));
+					cache_vmstat_idx(s), obj_kmemcg_size(s));
 		} else {
-			obj_cgroup_uncharge(objcg, obj_full_size(s));
+			obj_cgroup_uncharge(objcg, obj_kmemcg_size(s));
 		}
 	}
 	obj_cgroup_put(objcg);
@@ -576,9 +579,9 @@ static inline void memcg_slab_free_hook(struct kmem_cache *s, struct slab *slab,
 			continue;
 
 		objcgs[off] = NULL;
-		obj_cgroup_uncharge(objcg, obj_full_size(s));
+		obj_cgroup_uncharge(objcg, obj_kmemcg_size(s));
 		mod_objcg_state(objcg, slab_pgdat(slab), cache_vmstat_idx(s),
-				-obj_full_size(s));
+				-obj_kmemcg_size(s));
 		obj_cgroup_put(objcg);
 	}
 }
