@@ -579,7 +579,7 @@ size_t kmalloc_size_roundup(size_t size)
 EXPORT_SYMBOL(kmalloc_size_roundup);
 
 /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
-size_t __ksize(const void *block)
+size_t ___ksize(const void *block, bool full)
 {
 	struct folio *folio;
 	unsigned int align;

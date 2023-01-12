@@ -1021,21 +1021,11 @@ void kfree(const void *object)
 }
 EXPORT_SYMBOL(kfree);
 
-/**
- * __ksize -- Report full size of underlying allocation
- * @object: pointer to the object
- *
- * This should only be used internally to query the true size of allocations.
- * It is not meant to be a way to discover the usable size of an allocation
- * after the fact. Instead, use kmalloc_size_roundup(). Using memory beyond
- * the originally requested allocation size may trigger KASAN, UBSAN_BOUNDS,
- * and/or FORTIFY_SOURCE.
- *
- * Return: size of the actual memory used by @object in bytes
- */
-size_t __ksize(const void *object)
+size_t ___ksize(const void *object, bool full)
 {
+	size_t kmemcg_size = 0;
 	struct folio *folio;
+	struct slab *slab;
 
 	if (unlikely(object == ZERO_SIZE_PTR))
 		return 0;
@@ -1054,7 +1044,27 @@ size_t __ksize(const void *object)
 	skip_orig_size_check(folio_slab(folio)->slab_cache, object);
 #endif
 
-	return slab_ksize(folio_slab(folio)->slab_cache);
+	slab = folio_slab(folio);
+	if (memcg_kmem_enabled() && full && slab_objcgs(slab))
+		kmemcg_size = sizeof(struct obj_cgroup *);
+	return slab_ksize(slab->slab_cache) + kmemcg_size;
+}
+
+/**
+ * __ksize -- Report full size of underlying allocation
+ * @object: pointer to the object
+ *
+ * This should only be used internally to query the true size of allocations.
+ * It is not meant to be a way to discover the usable size of an allocation
+ * after the fact. Instead, use kmalloc_size_roundup(). Using memory beyond
+ * the originally requested allocation size may trigger KASAN, UBSAN_BOUNDS,
+ * and/or FORTIFY_SOURCE.
+ *
+ * Return: size of the actual memory used by @object in bytes
+ */
+size_t __ksize(const void *object)
+{
+	return ___ksize(object, false);
 }
 
 void *kmalloc_trace(struct kmem_cache *s, gfp_t gfpflags, size_t size)
@@ -1428,7 +1438,7 @@ void kfree_sensitive(const void *p)
 }
 EXPORT_SYMBOL(kfree_sensitive);
 
-size_t ksize(const void *objp)
+size_t _ksize(const void *objp, bool full)
 {
 	/*
 	 * We need to first check that the pointer to the object is valid.
@@ -1448,9 +1458,19 @@ size_t ksize(const void *objp)
 	if (unlikely(ZERO_OR_NULL_PTR(objp)) || !kasan_check_byte(objp))
 		return 0;
 
-	return kfence_ksize(objp) ?: __ksize(objp);
+	return kfence_ksize(objp) ?: ___ksize(objp, full);
 }
 EXPORT_SYMBOL(ksize);
+
+size_t ksize(const void *objp)
+{
+	return _ksize(objp, false);
+}
+
+size_t ksize_full(const void *objp)
+{
+	return _ksize(objp, true);
+}
 
 /* Tracepoints definitions. */
 EXPORT_TRACEPOINT_SYMBOL(kmalloc);
