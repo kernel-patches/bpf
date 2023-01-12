@@ -78,7 +78,7 @@ void bpf_inode_storage_free(struct inode *inode)
 	rcu_read_unlock();
 
 	if (free_inode_storage)
-		kfree_rcu(local_storage, rcu);
+		bpf_map_kfree_rcu(local_storage, rcu);
 }
 
 static void *bpf_fd_inode_storage_lookup_elem(struct bpf_map *map, void *key)

@@ -91,7 +91,7 @@ void bpf_task_storage_free(struct task_struct *task)
 	rcu_read_unlock();
 
 	if (free_task_storage)
-		kfree_rcu(local_storage, rcu);
+		bpf_map_kfree_rcu(local_storage, rcu);
 }
 
 static void *bpf_pid_task_storage_lookup_elem(struct bpf_map *map, void *key)

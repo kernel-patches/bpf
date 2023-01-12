@@ -33,7 +33,7 @@ static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
 static void xsk_map_node_free(struct xsk_map_node *node)
 {
 	bpf_map_put(&node->map->map);
-	kfree(node);
+	bpf_map_kfree(node);
 }
 
 static void xsk_map_sock_add(struct xdp_sock *xs, struct xsk_map_node *node)

@@ -164,8 +164,8 @@ static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 		/* The queue should be empty at this point */
 		__cpu_map_ring_cleanup(rcpu->queue);
 		ptr_ring_cleanup(rcpu->queue, NULL);
-		kfree(rcpu->queue);
-		kfree(rcpu);
+		bpf_map_kfree(rcpu->queue);
+		bpf_map_kfree(rcpu);
 	}
 }
 
@@ -484,11 +484,11 @@ free_prog:
 free_ptr_ring:
 	ptr_ring_cleanup(rcpu->queue, NULL);
 free_queue:
-	kfree(rcpu->queue);
+	bpf_map_kfree(rcpu->queue);
 free_bulkq:
-	free_percpu(rcpu->bulkq);
+	bpf_map_free_percpu(rcpu->bulkq);
 free_rcu:
-	kfree(rcpu);
+	bpf_map_kfree(rcpu);
 	return NULL;
 }
 
@@ -502,8 +502,7 @@ static void __cpu_map_entry_free(struct rcu_head *rcu)
 	 * find this entry.
 	 */
 	rcpu = container_of(rcu, struct bpf_cpu_map_entry, rcu);
-
-	free_percpu(rcpu->bulkq);
+	bpf_map_free_percpu(rcpu->bulkq);
 	/* Cannot kthread_stop() here, last put free rcpu resources */
 	put_cpu_map_entry(rcpu);
 }

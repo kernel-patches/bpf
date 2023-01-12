@@ -888,7 +888,7 @@ static void sock_hash_free_elem(struct bpf_shtab *htab,
 				struct bpf_shtab_elem *elem)
 {
 	atomic_dec(&htab->count);
-	kfree_rcu(elem, rcu);
+	bpf_map_kfree_rcu(elem, rcu);
 }
 
 static void sock_hash_delete_from_link(struct bpf_map *map, struct sock *sk,

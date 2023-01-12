@@ -64,7 +64,7 @@ void bpf_sk_storage_free(struct sock *sk)
 	rcu_read_unlock();
 
 	if (free_sk_storage)
-		kfree_rcu(sk_storage, rcu);
+		bpf_map_kfree_rcu(sk_storage, rcu);
 }
 
 static void bpf_sk_storage_map_free(struct bpf_map *map)
@@ -203,7 +203,7 @@ int bpf_sk_storage_clone(const struct sock *sk, struct sock *newsk)
 		} else {
 			ret = bpf_local_storage_alloc(newsk, smap, copy_selem, GFP_ATOMIC);
 			if (ret) {
-				kfree(copy_selem);
+				bpf_map_kfree(copy_selem);
 				atomic_sub(smap->elem_size,
 					   &newsk->sk_omem_alloc);
 				bpf_map_put(map);

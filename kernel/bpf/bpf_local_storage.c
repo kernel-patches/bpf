@@ -93,9 +93,9 @@ void bpf_local_storage_free_rcu(struct rcu_head *rcu)
 	 */
 	local_storage = container_of(rcu, struct bpf_local_storage, rcu);
 	if (rcu_trace_implies_rcu_gp())
-		kfree(local_storage);
+		bpf_map_kfree(local_storage);
 	else
-		kfree_rcu(local_storage, rcu);
+		bpf_map_kfree_rcu(local_storage, rcu);
 }
 
 static void bpf_selem_free_rcu(struct rcu_head *rcu)
@@ -104,9 +104,9 @@ static void bpf_selem_free_rcu(struct rcu_head *rcu)
 
 	selem = container_of(rcu, struct bpf_local_storage_elem, rcu);
 	if (rcu_trace_implies_rcu_gp())
-		kfree(selem);
+		bpf_map_kfree(selem);
 	else
-		kfree_rcu(selem, rcu);
+		bpf_map_kfree_rcu(selem, rcu);
 }
 
 /* local_storage->lock must be held and selem->local_storage == local_storage.
@@ -162,7 +162,7 @@ static bool bpf_selem_unlink_storage_nolock(struct bpf_local_storage *local_stor
 	if (use_trace_rcu)
 		call_rcu_tasks_trace(&selem->rcu, bpf_selem_free_rcu);
 	else
-		kfree_rcu(selem, rcu);
+		bpf_map_kfree_rcu(selem, rcu);
 
 	return free_local_storage;
 }
@@ -191,7 +191,7 @@ static void __bpf_selem_unlink_storage(struct bpf_local_storage_elem *selem,
 			call_rcu_tasks_trace(&local_storage->rcu,
 				     bpf_local_storage_free_rcu);
 		else
-			kfree_rcu(local_storage, rcu);
+			bpf_map_kfree_rcu(local_storage, rcu);
 	}
 }
 
@@ -358,7 +358,7 @@ int bpf_local_storage_alloc(void *owner,
 	return 0;
 
 uncharge:
-	kfree(storage);
+	bpf_map_kfree(storage);
 	mem_uncharge(smap, owner, sizeof(*storage));
 	return err;
 }
@@ -402,7 +402,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 		err = bpf_local_storage_alloc(owner, smap, selem, gfp_flags);
 		if (err) {
-			kfree(selem);
+			bpf_map_kfree(selem);
 			mem_uncharge(smap, owner, smap->elem_size);
 			return ERR_PTR(err);
 		}
@@ -496,7 +496,7 @@ unlock_err:
 	raw_spin_unlock_irqrestore(&local_storage->lock, flags);
 	if (selem) {
 		mem_uncharge(smap, owner, smap->elem_size);
-		kfree(selem);
+		bpf_map_kfree(selem);
 	}
 	return ERR_PTR(err);
 }
@@ -713,6 +713,6 @@ void bpf_local_storage_map_free(struct bpf_map *map,
 	 */
 	synchronize_rcu();
 
-	kvfree(smap->buckets);
+	bpf_map_kvfree(smap->buckets);
 	bpf_map_area_free(smap);
 }

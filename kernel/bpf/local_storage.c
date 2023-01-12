@@ -174,7 +174,7 @@ static int cgroup_storage_update_elem(struct bpf_map *map, void *key,
 	check_and_init_map_value(map, new->data);
 
 	new = xchg(&storage->buf, new);
-	kfree_rcu(new, rcu);
+	bpf_map_kfree_rcu(new, rcu);
 
 	return 0;
 }
@@ -526,7 +526,7 @@ struct bpf_cgroup_storage *bpf_cgroup_storage_alloc(struct bpf_prog *prog,
 	return storage;
 
 enomem:
-	kfree(storage);
+	bpf_map_kfree(storage);
 	return ERR_PTR(-ENOMEM);
 }
 
@@ -535,8 +535,8 @@ static void free_shared_cgroup_storage_rcu(struct rcu_head *rcu)
 	struct bpf_cgroup_storage *storage =
 		container_of(rcu, struct bpf_cgroup_storage, rcu);
 
-	kfree(storage->buf);
-	kfree(storage);
+	bpf_map_kfree(storage->buf);
+	bpf_map_kfree(storage);
 }
 
 static void free_percpu_cgroup_storage_rcu(struct rcu_head *rcu)
@@ -544,8 +544,8 @@ static void free_percpu_cgroup_storage_rcu(struct rcu_head *rcu)
 	struct bpf_cgroup_storage *storage =
 		container_of(rcu, struct bpf_cgroup_storage, rcu);
 
-	free_percpu(storage->percpu_buf);
-	kfree(storage);
+	bpf_map_free_percpu(storage->percpu_buf);
+	bpf_map_kfree(storage);
 }
 
 void bpf_cgroup_storage_free(struct bpf_cgroup_storage *storage)

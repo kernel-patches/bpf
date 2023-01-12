@@ -64,7 +64,7 @@ void bpf_cgrp_storage_free(struct cgroup *cgroup)
 	rcu_read_unlock();
 
 	if (free_cgroup_storage)
-		kfree_rcu(local_storage, rcu);
+		bpf_map_kfree_rcu(local_storage, rcu);
 }
 
 static struct bpf_local_storage_data *

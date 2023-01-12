@@ -218,7 +218,7 @@ static void dev_map_free(struct bpf_map *map)
 				if (dev->xdp_prog)
 					bpf_prog_put(dev->xdp_prog);
 				dev_put(dev->dev);
-				kfree(dev);
+				bpf_map_kfree(dev);
 			}
 		}
 
@@ -234,7 +234,7 @@ static void dev_map_free(struct bpf_map *map)
 			if (dev->xdp_prog)
 				bpf_prog_put(dev->xdp_prog);
 			dev_put(dev->dev);
-			kfree(dev);
+			bpf_map_kfree(dev);
 		}
 
 		bpf_map_area_free(dtab->netdev_map);
@@ -791,12 +791,14 @@ static void *dev_map_hash_lookup_elem(struct bpf_map *map, void *key)
 static void __dev_map_entry_free(struct rcu_head *rcu)
 {
 	struct bpf_dtab_netdev *dev;
+	struct bpf_dtab *dtab;
 
 	dev = container_of(rcu, struct bpf_dtab_netdev, rcu);
 	if (dev->xdp_prog)
 		bpf_prog_put(dev->xdp_prog);
 	dev_put(dev->dev);
-	kfree(dev);
+	dtab = dev->dtab;
+	bpf_map_kfree(dev);
 }
 
 static int dev_map_delete_elem(struct bpf_map *map, void *key)
@@ -881,7 +883,7 @@ err_put_prog:
 err_put_dev:
 	dev_put(dev->dev);
 err_out:
-	kfree(dev);
+	bpf_map_kfree(dev);
 	return ERR_PTR(-EINVAL);
 }
 

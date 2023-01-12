@@ -24,7 +24,7 @@ static void bpf_array_free_percpu(struct bpf_array *array)
 	int i;
 
 	for (i = 0; i < array->map.max_entries; i++) {
-		free_percpu(array->pptrs[i]);
+		bpf_map_free_percpu(array->pptrs[i]);
 		cond_resched();
 	}
 }
@@ -1132,7 +1132,7 @@ static void prog_array_map_free(struct bpf_map *map)
 		list_del_init(&elem->list);
 		kfree(elem);
 	}
-	kfree(aux);
+	bpf_map_kfree(aux);
 	fd_array_map_free(map);
 }
 

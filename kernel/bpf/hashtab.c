@@ -266,7 +266,7 @@ static void htab_free_elems(struct bpf_htab *htab)
 
 		pptr = htab_elem_get_ptr(get_htab_elem(htab, i),
 					 htab->map.key_size);
-		free_percpu(pptr);
+		bpf_map_free_percpu(pptr);
 		cond_resched();
 	}
 free_elems:
@@ -584,7 +584,7 @@ free_map_locked:
 	if (htab->use_percpu_counter)
 		percpu_counter_destroy(&htab->pcount);
 	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
-		free_percpu(htab->map_locked[i]);
+		bpf_map_free_percpu(htab->map_locked[i]);
 	bpf_map_area_free(htab->buckets);
 	bpf_mem_alloc_destroy(&htab->pcpu_ma);
 	bpf_mem_alloc_destroy(&htab->ma);
@@ -1511,14 +1511,14 @@ static void htab_map_free(struct bpf_map *map)
 		prealloc_destroy(htab);
 	}
 
-	free_percpu(htab->extra_elems);
+	bpf_map_free_percpu(htab->extra_elems);
 	bpf_map_area_free(htab->buckets);
 	bpf_mem_alloc_destroy(&htab->pcpu_ma);
 	bpf_mem_alloc_destroy(&htab->ma);
 	if (htab->use_percpu_counter)
 		percpu_counter_destroy(&htab->pcount);
 	for (i = 0; i < HASHTAB_MAP_LOCK_COUNT; i++)
-		free_percpu(htab->map_locked[i]);
+		bpf_map_free_percpu(htab->map_locked[i]);
 	lockdep_unregister_key(&htab->lockdep_key);
 	bpf_map_area_free(htab);
 }

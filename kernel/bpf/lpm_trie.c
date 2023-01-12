@@ -379,7 +379,7 @@ static int trie_update_elem(struct bpf_map *map,
 			trie->n_entries--;
 
 		rcu_assign_pointer(*slot, new_node);
-		kfree_rcu(node, rcu);
+		bpf_map_kfree_rcu(node, rcu);
 
 		goto out;
 	}
@@ -421,8 +421,8 @@ out:
 		if (new_node)
 			trie->n_entries--;
 
-		kfree(new_node);
-		kfree(im_node);
+		bpf_map_kfree(new_node);
+		bpf_map_kfree(im_node);
 	}
 
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
@@ -503,8 +503,8 @@ static int trie_delete_elem(struct bpf_map *map, void *_key)
 		else
 			rcu_assign_pointer(
 				*trim2, rcu_access_pointer(parent->child[0]));
-		kfree_rcu(parent, rcu);
-		kfree_rcu(node, rcu);
+		bpf_map_kfree_rcu(parent, rcu);
+		bpf_map_kfree_rcu(node, rcu);
 		goto out;
 	}
 
@@ -518,7 +518,7 @@ static int trie_delete_elem(struct bpf_map *map, void *_key)
 		rcu_assign_pointer(*trim, rcu_access_pointer(node->child[1]));
 	else
 		RCU_INIT_POINTER(*trim, NULL);
-	kfree_rcu(node, rcu);
+	bpf_map_kfree_rcu(node, rcu);
 
 out:
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
@@ -602,7 +602,7 @@ static void trie_free(struct bpf_map *map)
 				continue;
 			}
 
-			kfree(node);
+			bpf_map_kfree(node);
 			RCU_INIT_POINTER(*slot, NULL);
 			break;
 		}
