@@ -469,6 +469,7 @@ struct mlx5e_txqsq {
 union mlx5e_alloc_unit {
 	struct page *page;
 	struct xdp_buff *xsk;
+	struct mlx5e_xdp_buff *mxbuf;
 };
 
 /* XDP packets can be transmitted in different ways. On completion, we need to
