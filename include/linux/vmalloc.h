@@ -297,4 +297,19 @@ bool vmalloc_dump_obj(void *object);
 static inline bool vmalloc_dump_obj(void *object) { return false; }
 #endif
 
+/* Report full size of underlying allocation of a vmalloc'ed addr */
+static inline size_t vsize(const void *addr)
+{
+	struct vm_struct *area;
+
+	if (!addr)
+		return 0;
+
+	area = find_vm_area(addr);
+	if (unlikely(!area))
+		return 0;
+
+	return area->size;
+}
+
 #endif /* _LINUX_VMALLOC_H */
