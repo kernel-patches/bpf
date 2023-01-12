@@ -96,6 +96,7 @@ static void bpf_ringbuf_pages_free(struct page **pages, int nr_pages)
 {
 	int i;
 
+	bpf_mem_stat_sub(nr_pages * PAGE_SIZE);
 	for (i = 0; i < nr_pages; i++)
 		__free_page(pages[i]);
 	bpf_map_area_free(pages);
@@ -126,9 +127,12 @@ static struct page **bpf_ringbuf_pages_alloc(int nr_meta_pages,
 			pages[nr_data_pages + i] = page;
 	}
 
+	bpf_mem_stat_add(nr_pages * PAGE_SIZE);
 	return pages;
 
 err_free_pages:
+	if (nr_pages)
+		bpf_mem_stat_add(nr_pages * PAGE_SIZE);
 	bpf_ringbuf_pages_free(pages, nr_pages);
 err:
 	return NULL;

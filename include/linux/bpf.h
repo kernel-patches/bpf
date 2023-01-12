@@ -1869,23 +1869,71 @@ int  generic_map_delete_batch(struct bpf_map *map,
 struct bpf_map *bpf_map_get_curr_or_next(u32 *id);
 struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id);
 
+struct bpf_mem_stat {
+	long stat;
+};
+
+DECLARE_PER_CPU(struct bpf_mem_stat, bpfmm);
+
+static inline void bpf_mem_stat_add(size_t cnt)
+{
+	this_cpu_add(bpfmm.stat, cnt);
+}
+
+static inline void bpf_mem_stat_sub(size_t cnt)
+{
+	this_cpu_sub(bpfmm.stat, cnt);
+}
+
+static inline long bpf_mem_stat_sum(void)
+{
+	struct bpf_mem_stat *this;
+	long sum = 0;
+	int cpu;
+
+	for_each_online_cpu(cpu) {
+		this = &per_cpu(bpfmm, cpu);
+		sum += this->stat;
+	}
+
+	return sum;
+}
 
 static inline void bpf_map_kfree(const void *ptr)
 {
+	size_t sz = ksize_full(ptr);
+
+	if (sz)
+		bpf_mem_stat_sub(sz);
 	kfree(ptr);
 }
 
 static inline void bpf_map_kvfree(const void *ptr)
 {
+	size_t sz = kvsize(ptr);
+
+	if (sz)
+		bpf_mem_stat_sub(sz);
 	kvfree(ptr);
 }
 
 static inline void bpf_map_free_percpu(void __percpu *ptr)
 {
+	size_t sz = percpu_size(ptr);
+
+	if (sz)
+		bpf_mem_stat_sub(sz);
 	free_percpu(ptr);
 }
 
-#define bpf_map_kfree_rcu(ptr, rhf...) kvfree_rcu(ptr, ## rhf)
+#define bpf_map_kfree_rcu(ptr, rhf...)			\
+do {											\
+	size_t sz = kvsize(ptr);					\
+												\
+	if (sz)										\
+		bpf_mem_stat_sub(sz);					\
+	kvfree_rcu(ptr, ## rhf);					\
+} while (0)
 
 #ifdef CONFIG_MEMCG_KMEM
 void *bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
@@ -1901,26 +1949,54 @@ static inline void *
 bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
 		     int node)
 {
-	return kmalloc_node(size, flags, node);
+	void *ptr;
+	size_t sz;
+
+	ptr = kmalloc_node(size, flags, node);
+	sz = ksize_full(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 static inline void *
 bpf_map_kzalloc(const struct bpf_map *map, size_t size, gfp_t flags)
 {
-	return kzalloc(size, flags);
+	void *ptr;
+	size_t sz;
+
+	ptr = kzalloc(size, flags);
+	sz = ksize_full(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 static inline void *
 bpf_map_kvcalloc(struct bpf_map *map, size_t n, size_t size, gfp_t flags)
 {
-	return kvcalloc(n, size, flags);
+	void *ptr;
+	size_t sz;
+
+	ptr = kvcalloc(n, size, flags);
+	sz = kvsize(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 static inline void __percpu *
 bpf_map_alloc_percpu(const struct bpf_map *map, size_t size, size_t align,
 		     gfp_t flags)
 {
-	return __alloc_percpu_gfp(size, align, flags);
+	void *ptr;
+	size_t sz;
+
+	ptr = __alloc_percpu_gfp(size, align, flags);
+	sz = percpu_size(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 #endif
 
@@ -2461,6 +2537,11 @@ static inline void bpf_prog_inc_misses_counter(struct bpf_prog *prog)
 static inline void bpf_cgrp_storage_free(struct cgroup *cgroup)
 {
 }
+
+static inline long bpf_mem_stat_sum(void)
+{
+	return 0;
+}
 #endif /* CONFIG_BPF_SYSCALL */
 
 void __bpf_free_used_btfs(struct bpf_prog_aux *aux,
@@ -2886,5 +2967,4 @@ static inline bool type_is_alloc(u32 type)
 {
 	return type & MEM_ALLOC;
 }
-
 #endif /* _LINUX_BPF_H */

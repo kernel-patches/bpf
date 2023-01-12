@@ -16,6 +16,7 @@
 #ifdef CONFIG_CMA
 #include <linux/cma.h>
 #endif
+#include <linux/bpf.h>
 #include <asm/page.h>
 #include "internal.h"
 
@@ -158,6 +159,9 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	hugetlb_report_meminfo(m);
 
 	arch_report_meminfo(m);
+
+	seq_printf(m,  "BPF:            %8lu kB\n",
+			bpf_mem_stat_sum() >> 10);
 
 	return 0;
 }

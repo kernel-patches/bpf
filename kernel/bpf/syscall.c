@@ -46,6 +46,7 @@
 
 #define BPF_OBJ_FLAG_MASK   (BPF_F_RDONLY | BPF_F_WRONLY)
 
+DEFINE_PER_CPU(struct bpf_mem_stat, bpfmm);
 DEFINE_PER_CPU(int, bpf_prog_active);
 static DEFINE_IDR(prog_idr);
 static DEFINE_SPINLOCK(prog_idr_lock);
@@ -336,16 +337,34 @@ static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
 
 void *bpf_map_area_alloc(u64 size, int numa_node)
 {
-	return __bpf_map_area_alloc(size, numa_node, false);
+	size_t sz;
+	void *ptr;
+
+	ptr = __bpf_map_area_alloc(size, numa_node, false);
+	sz = kvsize(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 void *bpf_map_area_mmapable_alloc(u64 size, int numa_node)
 {
-	return __bpf_map_area_alloc(size, numa_node, true);
+	size_t sz;
+	void *ptr;
+
+	ptr =  __bpf_map_area_alloc(size, numa_node, true);
+	sz = kvsize(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 void bpf_map_area_free(void *area)
 {
+	size_t sz = kvsize(area);
+
+	if (sz)
+		bpf_mem_stat_sub(sz);
 	kvfree(area);
 }
 
@@ -446,12 +465,16 @@ void *bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
 {
 	struct mem_cgroup *memcg, *old_memcg;
 	void *ptr;
+	size_t sz;
 
 	memcg = bpf_map_get_memcg(map);
 	old_memcg = set_active_memcg(memcg);
 	ptr = kmalloc_node(size, flags | __GFP_ACCOUNT, node);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
+	sz = ksize_full(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
 
 	return ptr;
 }
@@ -460,12 +483,16 @@ void *bpf_map_kzalloc(const struct bpf_map *map, size_t size, gfp_t flags)
 {
 	struct mem_cgroup *memcg, *old_memcg;
 	void *ptr;
+	size_t sz;
 
 	memcg = bpf_map_get_memcg(map);
 	old_memcg = set_active_memcg(memcg);
 	ptr = kzalloc(size, flags | __GFP_ACCOUNT);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
+	sz = ksize_full(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
 
 	return ptr;
 }
@@ -475,12 +502,16 @@ void *bpf_map_kvcalloc(struct bpf_map *map, size_t n, size_t size,
 {
 	struct mem_cgroup *memcg, *old_memcg;
 	void *ptr;
+	size_t sz;
 
 	memcg = bpf_map_get_memcg(map);
 	old_memcg = set_active_memcg(memcg);
 	ptr = kvcalloc(n, size, flags | __GFP_ACCOUNT);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
+	sz = kvsize(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
 
 	return ptr;
 }
@@ -490,12 +521,16 @@ void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 {
 	struct mem_cgroup *memcg, *old_memcg;
 	void __percpu *ptr;
+	size_t sz;
 
 	memcg = bpf_map_get_memcg(map);
 	old_memcg = set_active_memcg(memcg);
 	ptr = __alloc_percpu_gfp(size, align, flags | __GFP_ACCOUNT);
 	set_active_memcg(old_memcg);
 	mem_cgroup_put(memcg);
+	sz = percpu_size(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
 
 	return ptr;
 }

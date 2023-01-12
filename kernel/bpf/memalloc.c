@@ -129,6 +129,8 @@ static void *__alloc(struct bpf_mem_cache *c, int node)
 	 * want here.
 	 */
 	gfp_t flags = GFP_NOWAIT | __GFP_NOWARN | __GFP_ACCOUNT;
+	void *ptr;
+	size_t sz;
 
 	if (c->percpu_size) {
 		void **obj = kmalloc_node(c->percpu_size, flags, node);
@@ -140,10 +142,18 @@ static void *__alloc(struct bpf_mem_cache *c, int node)
 			return NULL;
 		}
 		obj[1] = pptr;
+		sz = ksize_full(obj);
+		sz += percpu_size(pptr);
+		if (sz)
+			bpf_mem_stat_add(sz);
 		return obj;
 	}
 
-	return kmalloc_node(c->unit_size, flags, node);
+	ptr = kmalloc_node(c->unit_size, flags, node);
+	sz = ksize_full(ptr);
+	if (sz)
+		bpf_mem_stat_add(sz);
+	return ptr;
 }
 
 static struct mem_cgroup *get_memcg(const struct bpf_mem_cache *c)
@@ -215,12 +225,19 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node)
 
 static void free_one(struct bpf_mem_cache *c, void *obj)
 {
+	size_t sz = ksize_full(obj);
+
 	if (c->percpu_size) {
+		sz += percpu_size(((void **)obj)[1]);
+		if (sz)
+			bpf_mem_stat_sub(sz);
 		free_percpu(((void **)obj)[1]);
 		kfree(obj);
 		return;
 	}
 
+	if (sz)
+		bpf_mem_stat_sub(sz);
 	kfree(obj);
 }
 
