@@ -1401,6 +1401,10 @@ static void tun_net_initialize(struct net_device *dev)
 
 		eth_hw_addr_random(dev);
 
+		/* Currently tun does not support XDP, only tap does. */
+		dev->xdp_features = NETDEV_XDP_ACT_FULL |
+				    NETDEV_XDP_ACT_NDO_XMIT;
+
 		break;
 	}
 

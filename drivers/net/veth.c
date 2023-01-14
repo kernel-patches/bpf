@@ -1649,6 +1649,9 @@ static void veth_setup(struct net_device *dev)
 	dev->hw_enc_features = VETH_FEATURES;
 	dev->mpls_features = NETIF_F_HW_CSUM | NETIF_F_GSO_SOFTWARE;
 	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
+
+	dev->xdp_features = NETDEV_XDP_ACT_FULL | NETDEV_XDP_ACT_NDO_XMIT |
+			    NETDEV_XDP_ACT_RX_SG | NETDEV_XDP_ACT_NDO_XMIT_SG;
 }
 
 /*

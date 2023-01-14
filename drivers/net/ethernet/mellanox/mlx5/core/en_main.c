@@ -4776,6 +4776,13 @@ static int mlx5e_xdp_set(struct net_device *netdev, struct bpf_prog *prog)
 	if (old_prog)
 		bpf_prog_put(old_prog);
 
+	if (reset) {
+		if (prog)
+			xdp_features_set_redirect_target(&netdev->xdp_features);
+		else
+			xdp_features_clear_redirect_target(&netdev->xdp_features);
+	}
+
 	if (!test_bit(MLX5E_STATE_OPENED, &priv->state) || reset)
 		goto unlock;
 
@@ -5169,6 +5176,8 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 
 	netdev->features         |= NETIF_F_HIGHDMA;
 	netdev->features         |= NETIF_F_HW_VLAN_STAG_FILTER;
+
+	netdev->xdp_features = NETDEV_XDP_ACT_ZC | NETDEV_XDP_ACT_RX_SG;
 
 	netdev->priv_flags       |= IFF_UNICAST_FLT;
 

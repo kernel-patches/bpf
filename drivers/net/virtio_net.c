@@ -3155,7 +3155,11 @@ static int virtnet_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			if (i == 0 && !old_prog)
 				virtnet_clear_guest_offloads(vi);
 		}
+		if (!old_prog)
+			__xdp_features_set_redirect_target(&dev->xdp_features,
+							   NETDEV_XDP_ACT_NDO_XMIT);
 	} else {
+		xdp_features_clear_redirect_target(&dev->xdp_features);
 		vi->xdp_enabled = false;
 	}
 
@@ -3785,6 +3789,7 @@ static int virtnet_probe(struct virtio_device *vdev)
 		dev->hw_features |= NETIF_F_GRO_HW;
 
 	dev->vlan_features = dev->features;
+	dev->xdp_features = NETDEV_XDP_ACT_FULL;
 
 	/* MTU range: 68 - 65535 */
 	dev->min_mtu = MIN_MTU;
