@@ -7,9 +7,9 @@ BPF Kernel Functions (kfuncs)
 
 BPF Kernel Functions or more commonly known as kfuncs are functions in the Linux
 kernel which are exposed for use by BPF programs. Unlike normal BPF helpers,
-kfuncs do not have a stable interface and can change from one kernel release to
-another. Hence, BPF programs need to be updated in response to changes in the
-kernel.
+kfuncs by default do not have a stable interface and can change from one kernel
+release to another. Hence, BPF programs may need to be updated in response to
+changes in the kernel. See :ref:`BPF_kfunc_stability`.
 
 2. Defining a kfunc
 ===================
@@ -223,14 +223,81 @@ type. An example is shown below::
         }
         late_initcall(init_subsystem);
 
-3. Core kfuncs
+
+.. _BPF_kfunc_stability:
+
+3. API stability of kfuncs
+==========================
+
+By default, kfuncs exported to BPF programs are considered a kernel-internal
+interface that can change between kernel versions. This means that BPF programs
+using kfuncs need to adapt to changes between kernel versions; these kfuncs can
+be thought of as being similar to internal kernel API functions exported using
+the ``EXPORT_SYMBOL_GPL`` macro.
+
+The libbpf library contains functionality that can help applications discover
+which kfuncs are available and the CO-RE functionality can be used to handle
+differences in kfunc availability across kernel versions as described in (TBD,
+once this is implemented).
+
+3.1 Stable kfuncs
+-----------------
+
+While kfuncs are by default considered unstable as described above, some kfuncs
+warrant a stronger stability guarantee and are marked as *stable*. The decision
+to move a kfunc to *stable* is taken on a case-by-case basis based on demand for
+a stable interface, and only once a function has proven to be useful in practice
+without any unforeseen API issues.
+
+Stable kfuncs are marked with the ``KF_STABLE`` tag in their definition, and
+provide the following stability guarantees:
+
+1. Stable kfuncs will not change their function signature or functionality in a
+   way that may cause incompatibilities for BPF programs calling the function.
+
+2. The BPF community will make every reasonable effort to keep stable kfuncs
+   around as long as they continue to be useful to real-world BPF applications.
+
+3. Should a stable kfunc turn out to be no longer useful, or otherwise become
+   enough of a maintenance burden that it has to be removed, removal will only
+   happen following the deprecation procedure outlined below.
+
+3.2 Deprecation of kfuncs
+-------------------------
+
+As described above, the community will make every reasonable effort to keep
+kfuncs available through future kernel versions once they are marked as stable.
+However, it may be the case that BPF development moves in a direction where even
+a stable kfunc is no longer useful and/or becomes an unreasonable maintenance
+burden for further development.
+
+In this case, stable kfuncs can be marked as *deprecated* using the
+``KF_DEPRECATED`` tag. This will have the following effect:
+
+1. When using a deprecated kfunc, libbpf will emit a warning that the function
+   will be removed in a future kernel version.
+
+2. Deprecated kfuncs will be kept in the kernel for a minimum of 10 kernel
+   releases after it is first marked as deprecated (corresponding to roughly two
+   years of development time).
+
+3. Deprecated functions will be documented in the kernel docs, including a
+   recommendation for new functionality that can replace the usage of the
+   deprecated function (or an explanation for why no such replacement exists).
+
+4. After the deprecation period, the kfunc will be removed and the function name
+   will be marked as invalid inside the kernel (to ensure that no new kfunc is
+   accidentally introduced with the same name in the future). After this
+   happens, BPF programs calling the kfunc will be refused by the verifier.
+
+4. Core kfuncs
 ==============
 
 The BPF subsystem provides a number of "core" kfuncs that are potentially
 applicable to a wide variety of different possible use cases and programs.
 Those kfuncs are documented here.
 
-3.1 struct task_struct * kfuncs
+4.1 struct task_struct * kfuncs
 -------------------------------
 
 There are a number of kfuncs that allow ``struct task_struct *`` objects to be
@@ -306,7 +373,7 @@ Here is an example of it being used:
 		return 0;
 	}
 
-3.2 struct cgroup * kfuncs
+4.2 struct cgroup * kfuncs
 --------------------------
 
 ``struct cgroup *`` objects also have acquire and release functions:
