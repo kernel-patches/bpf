@@ -2056,6 +2056,7 @@ static int profile_parse_metrics(int argc, char **argv)
 
 static void profile_read_values(struct profiler_bpf *obj)
 {
+	__u32 possible_cpus = libbpf_num_possible_cpus();
 	__u32 m, cpu, num_cpu = obj->rodata->num_cpu;
 	int reading_map_fd, count_map_fd;
 	__u64 counts[num_cpu];
@@ -2080,7 +2081,7 @@ static void profile_read_values(struct profiler_bpf *obj)
 		profile_total_count += counts[cpu];
 
 	for (m = 0; m < ARRAY_SIZE(metrics); m++) {
-		struct bpf_perf_event_value values[num_cpu];
+		struct bpf_perf_event_value values[possible_cpus];
 
 		if (!metrics[m].selected)
 			continue;
@@ -2321,7 +2322,7 @@ static int do_profile(int argc, char **argv)
 	if (num_metric <= 0)
 		goto out;
 
-	num_cpu = libbpf_num_possible_cpus();
+	num_cpu = libbpf_num_online_cpus();
 	if (num_cpu <= 0) {
 		p_err("failed to identify number of CPUs");
 		goto out;
