@@ -1988,7 +1988,7 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 	return id > 0 ? 0 : id;
 }
 
-void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
+void bpf_prog_free_id(struct bpf_prog *prog)
 {
 	unsigned long flags;
 
@@ -2000,18 +2000,10 @@ void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock)
 	if (!prog->aux->id)
 		return;
 
-	if (do_idr_lock)
-		spin_lock_irqsave(&prog_idr_lock, flags);
-	else
-		__acquire(&prog_idr_lock);
-
+	spin_lock_irqsave(&prog_idr_lock, flags);
 	idr_remove(&prog_idr, prog->aux->id);
 	prog->aux->id = 0;
-
-	if (do_idr_lock)
-		spin_unlock_irqrestore(&prog_idr_lock, flags);
-	else
-		__release(&prog_idr_lock);
+	spin_unlock_irqrestore(&prog_idr_lock, flags);
 }
 
 static void __bpf_prog_put_rcu(struct rcu_head *rcu)
@@ -2057,13 +2049,13 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 	__bpf_prog_put_noref(prog, true);
 }
 
-static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
+void bpf_prog_put(struct bpf_prog *prog)
 {
 	struct bpf_prog_aux *aux = prog->aux;
 
 	if (atomic64_dec_and_test(&aux->refcnt)) {
 		/* bpf_prog_free_id() must be called first */
-		bpf_prog_free_id(prog, do_idr_lock);
+		bpf_prog_free_id(prog);
 
 		if (in_irq() || irqs_disabled()) {
 			INIT_WORK(&aux->work, bpf_prog_put_deferred);
@@ -2072,11 +2064,6 @@ static void __bpf_prog_put(struct bpf_prog *prog, bool do_idr_lock)
 			bpf_prog_put_deferred(&aux->work);
 		}
 	}
-}
-
-void bpf_prog_put(struct bpf_prog *prog)
-{
-	__bpf_prog_put(prog, true);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_put);
 
