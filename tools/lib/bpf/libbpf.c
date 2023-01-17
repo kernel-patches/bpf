@@ -12192,30 +12192,53 @@ int parse_cpu_mask_file(const char *fcpu, bool **mask, int *mask_sz)
 	return parse_cpu_mask_str(buf, mask, mask_sz);
 }
 
-int libbpf_num_possible_cpus(void)
+static int num_cpus(const char *fcpu)
 {
-	static const char *fcpu = "/sys/devices/system/cpu/possible";
-	static int cpus;
-	int err, n, i, tmp_cpus;
+	int err, n, i, cpus;
 	bool *mask;
-
-	tmp_cpus = READ_ONCE(cpus);
-	if (tmp_cpus > 0)
-		return tmp_cpus;
 
 	err = parse_cpu_mask_file(fcpu, &mask, &n);
 	if (err)
 		return libbpf_err(err);
 
-	tmp_cpus = 0;
+	cpus = 0;
 	for (i = 0; i < n; i++) {
 		if (mask[i])
-			tmp_cpus++;
+			cpus++;
 	}
 	free(mask);
 
-	WRITE_ONCE(cpus, tmp_cpus);
-	return tmp_cpus;
+	return cpus;
+}
+
+int libbpf_num_online_cpus(void)
+{
+	static int online_cpus;
+	int cpus;
+
+	cpus = READ_ONCE(online_cpus);
+	if (cpus > 0)
+		return cpus;
+
+	cpus = num_cpus("/sys/devices/system/cpu/online");
+
+	WRITE_ONCE(online_cpus, cpus);
+	return cpus;
+}
+
+int libbpf_num_possible_cpus(void)
+{
+	static int possible_cpus;
+	int cpus;
+
+	cpus = READ_ONCE(possible_cpus);
+	if (cpus > 0)
+		return cpus;
+
+	cpus = num_cpus("/sys/devices/system/cpu/possible");
+
+	WRITE_ONCE(possible_cpus, cpus);
+	return cpus;
 }
 
 static int populate_skeleton_maps(const struct bpf_object *obj,

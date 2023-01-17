@@ -1332,6 +1332,13 @@ LIBBPF_API int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type,
  */
 LIBBPF_API int libbpf_num_possible_cpus(void);
 
+/**
+ * @brief **libbpf_num_online_cpus()** is a helper function to get the
+ * number of online CPUs that the host kernel supports and expects.
+ * @return number of online CPUs; or error code on failure
+ */
+LIBBPF_API int libbpf_num_online_cpus(void);
+
 struct bpf_map_skeleton {
 	const char *name;
 	struct bpf_map **map;
