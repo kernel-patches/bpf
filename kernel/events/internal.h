@@ -190,21 +190,7 @@ memcpy_skip(void *dst, const void *src, unsigned long n)
 
 DEFINE_OUTPUT_COPY(__output_skip, memcpy_skip)
 
-#ifndef arch_perf_out_copy_user
-#define arch_perf_out_copy_user arch_perf_out_copy_user
-
-static inline unsigned long
-arch_perf_out_copy_user(void *dst, const void *src, unsigned long n)
-{
-	unsigned long ret;
-
-	pagefault_disable();
-	ret = __copy_from_user_inatomic(dst, src, n);
-	pagefault_enable();
-
-	return ret;
-}
-#endif
+#define arch_perf_out_copy_user copy_from_user_nmi
 
 DEFINE_OUTPUT_COPY(__output_copy_user, arch_perf_out_copy_user)
 
