@@ -352,6 +352,7 @@ bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size);
 long copy_from_kernel_nofault(void *dst, const void *src, size_t size);
 long notrace copy_to_kernel_nofault(void *dst, const void *src, size_t size);
 
+unsigned long copy_from_user_nmi(void *dst, const void __user *src, unsigned long size);
 long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
 long notrace copy_to_user_nofault(void __user *dst, const void *src,
 		size_t size);
