@@ -1461,9 +1461,11 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_cgrp_storage_delete_proto;
 #endif
 	case BPF_FUNC_send_signal:
-		return &bpf_send_signal_proto;
+		return security_locked_down(LOCKDOWN_BPF_SEND_SIGNAL) < 0 ?
+		       NULL : &bpf_send_signal_proto;
 	case BPF_FUNC_send_signal_thread:
-		return &bpf_send_signal_thread_proto;
+		return security_locked_down(LOCKDOWN_BPF_SEND_SIGNAL) < 0 ?
+		       NULL : &bpf_send_signal_thread_proto;
 	case BPF_FUNC_perf_event_read_value:
 		return &bpf_perf_event_read_value_proto;
 	case BPF_FUNC_get_ns_current_pid_tgid:
@@ -1529,7 +1531,8 @@ kprobe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_stack_proto;
 #ifdef CONFIG_BPF_KPROBE_OVERRIDE
 	case BPF_FUNC_override_return:
-		return &bpf_override_return_proto;
+		return security_locked_down(LOCKDOWN_BPF_OVERRIDE_RETURN) < 0 ?
+		       NULL : &bpf_override_return_proto;
 #endif
 	case BPF_FUNC_get_func_ip:
 		return prog->expected_attach_type == BPF_TRACE_KPROBE_MULTI ?
