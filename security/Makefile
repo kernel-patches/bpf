@@ -3,6 +3,7 @@
 # Makefile for the kernel security code
 #
 
+gen := include/generated
 obj-$(CONFIG_KEYS)			+= keys/
 
 # always enable default capabilities
@@ -27,3 +28,13 @@ obj-$(CONFIG_SECURITY_LANDLOCK)		+= landlock/
 
 # Object integrity file lists
 obj-$(CONFIG_INTEGRITY)			+= integrity/
+
+$(addprefix $(obj)/,$(obj-y)): $(gen)/lsm_count.h
+
+quiet_cmd_lsm_count = GEN     ${gen}/lsm_count.h
+      cmd_lsm_count = scripts/security/gen_lsm_count ${gen}/lsm_count.h
+
+targets += lsm_count.h
+
+${gen}/lsm_count.h: FORCE
+	$(call if_changed,lsm_count)
