@@ -366,7 +366,8 @@ static void __init lsm_static_call_init(struct security_hook_list *hl)
 		if (!scall->hl) {
 			__static_call_update(scall->key, scall->trampoline, hl->hook.lsm_callback);
 			scall->hl = hl;
-			static_key_enable(scall->enabled_key);
+			if (hl->default_state)
+				static_key_enable(scall->enabled_key);
 			return;
 		}
 		scall++;

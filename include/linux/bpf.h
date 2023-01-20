@@ -1049,6 +1049,7 @@ struct bpf_attach_target_info {
 	long tgt_addr;
 	const char *tgt_name;
 	const struct btf_type *tgt_type;
+	bool is_lsm_target;
 };
 
 #define BPF_DISPATCHER_MAX 48 /* Fits in 2048B */
