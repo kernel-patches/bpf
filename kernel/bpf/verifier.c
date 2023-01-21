@@ -6418,49 +6418,6 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 skip_type_check:
-	if (arg_type_is_release(arg_type)) {
-		if (arg_type_is_dynptr(arg_type)) {
-			struct bpf_func_state *state = func(env, reg);
-			int spi;
-
-			/* Only dynptr created on stack can be released, thus
-			 * the get_spi and stack state checks for spilled_ptr
-			 * should only be done before process_dynptr_func for
-			 * PTR_TO_STACK.
-			 */
-			if (reg->type == PTR_TO_STACK) {
-				spi = get_spi(reg->off);
-				if (!is_spi_bounds_valid(state, spi, BPF_DYNPTR_NR_SLOTS) ||
-				    !state->stack[spi].spilled_ptr.ref_obj_id) {
-					verbose(env, "arg %d is an unacquired reference\n", regno);
-					return -EINVAL;
-				}
-			} else {
-				verbose(env, "cannot release unowned const bpf_dynptr\n");
-				return -EINVAL;
-			}
-		} else if (!reg->ref_obj_id && !register_is_null(reg)) {
-			verbose(env, "R%d must be referenced when passed to release function\n",
-				regno);
-			return -EINVAL;
-		}
-		if (meta->release_regno) {
-			verbose(env, "verifier internal error: more than one release argument\n");
-			return -EFAULT;
-		}
-		meta->release_regno = regno;
-	}
-
-	if (reg->ref_obj_id) {
-		if (meta->ref_obj_id) {
-			verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
-				regno, reg->ref_obj_id,
-				meta->ref_obj_id);
-			return -EFAULT;
-		}
-		meta->ref_obj_id = reg->ref_obj_id;
-	}
-
 	switch (base_type(arg_type)) {
 	case ARG_CONST_MAP_PTR:
 		/* bpf_map_xxx(map_ptr) call: remember that map_ptr */
@@ -6571,6 +6528,27 @@ skip_type_check:
 		err = check_mem_size_reg(env, reg, regno, true, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
+		if (meta->release_regno == regno) {
+			struct bpf_func_state *state = func(env, reg);
+			int spi;
+
+			/* Only dynptr created on stack can be released, thus
+			 * the get_spi and stack state checks for spilled_ptr
+			 * should only be done before process_dynptr_func for
+			 * PTR_TO_STACK.
+			 */
+			if (reg->type == PTR_TO_STACK) {
+				spi = get_spi(reg->off);
+				if (!is_spi_bounds_valid(state, spi, BPF_DYNPTR_NR_SLOTS) ||
+				    !state->stack[spi].spilled_ptr.ref_obj_id) {
+					verbose(env, "arg %d is an unacquired reference\n", regno);
+					return -EINVAL;
+				}
+			} else {
+				verbose(env, "cannot release unowned const bpf_dynptr\n");
+				return -EINVAL;
+			}
+		}
 		err = process_dynptr_func(env, regno, arg_type, meta);
 		if (err)
 			return err;
@@ -7706,10 +7684,91 @@ static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno
 				 state->callback_subprogno == subprogno);
 }
 
+/**
+ * args_find_ref_obj_id_regno() - Find regno that should become meta->ref_obj_id
+ * @env: Verifier env
+ * @regs: Regs to search for ref_obj_id
+ * @nargs: Number of arg regs to search
+ *
+ * Call arg meta's ref_obj_id is used to either:
+ * * For release funcs, keep track of ref that needs to be released
+ * * For other funcs, keep track of ref that needs to be propagated to retval
+ *
+ * Find the arg regno with nonzero ref_obj_id
+ *
+ * Return:
+ * * On success, regno that should become meta->ref_obj_id (regno > 0 since
+ *   BPF_REG_1 is first arg
+ * * 0 if no arg had ref_obj_id set
+ * * -err if some invalid arg reg state
+ */
+static int args_find_ref_obj_id_regno(struct bpf_verifier_env *env, struct bpf_reg_state *regs,
+				      u32 nargs)
+{
+	struct bpf_reg_state *reg;
+	u32 i, regno, found_regno = 0;
+
+	for (i = 0; i < nargs; i++) {
+		regno = i + BPF_REG_1;
+		reg = &regs[regno];
+
+		if (!reg->ref_obj_id)
+			continue;
+
+		if (found_regno) {
+			verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
+				regno, reg->ref_obj_id, regs[found_regno].ref_obj_id);
+			return -EFAULT;
+		}
+
+		found_regno = regno;
+	}
+
+	return found_regno;
+}
+
+/**
+ * helper_proto_find_release_arg_regno() - Find OBJ_RELEASE arg in func proto
+ * @env: Verifier env
+ * @fn: Func proto to search for OBJ_RELEASE
+ * @nargs: Number of arg specs to search
+ *
+ * For helpers, to determine which arg reg should be released, loop through
+ * func proto arg specification to find arg with OBJ_RELEASE
+ *
+ * Return:
+ * * On success, regno of single OBJ_RELEASE arg
+ * * 0 if no arg in the proto was OBJ_RELEASE
+ * * -err if some invalid func proto state
+ */
+static int helper_proto_find_release_arg_regno(struct bpf_verifier_env *env,
+					       const struct bpf_func_proto *fn, u32 nargs)
+{
+	enum bpf_arg_type arg_type;
+	int i, release_regno = 0;
+
+	for (i = 0; i < nargs; i++) {
+		arg_type = fn->arg_type[i];
+
+		if (!arg_type_is_release(arg_type))
+			continue;
+
+		if (release_regno) {
+			verbose(env, "verifier internal error: more than one release argument\n");
+			return -EFAULT;
+		}
+
+		release_regno = i + BPF_REG_1;
+	}
+
+	return release_regno;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	int i, err, func_id, nargs, release_regno, ref_regno;
 	const struct bpf_func_proto *fn = NULL;
 	enum bpf_return_type ret_type;
 	enum bpf_type_flag ret_flag;
@@ -7717,7 +7776,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	struct bpf_call_arg_meta meta;
 	int insn_idx = *insn_idx_p;
 	bool changes_data;
-	int i, err, func_id;
 
 	/* find function prototype */
 	func_id = insn->imm;
@@ -7781,8 +7839,37 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 
 	meta.func_id = func_id;
+	regs = cur_regs(env);
+
+	/* find actual arg count */
+	for (nargs = 0; nargs < MAX_BPF_FUNC_REG_ARGS; nargs++)
+		if (fn->arg_type[i] == ARG_DONTCARE)
+			break;
+
+	release_regno = helper_proto_find_release_arg_regno(env, fn, nargs);
+	if (release_regno < 0)
+		return release_regno;
+
+	ref_regno = args_find_ref_obj_id_regno(env, regs, nargs);
+	if (ref_regno < 0)
+		return ref_regno;
+	else if (ref_regno > 0)
+		meta.ref_obj_id = regs[ref_regno].ref_obj_id;
+
+	if (release_regno > 0) {
+		if (!regs[release_regno].ref_obj_id &&
+		    !register_is_null(&regs[release_regno]) &&
+		    !arg_type_is_dynptr(fn->arg_type[release_regno - BPF_REG_1])) {
+			verbose(env, "R%d must be referenced when passed to release function\n",
+				release_regno);
+			return -EINVAL;
+		}
+
+		meta.release_regno = release_regno;
+	}
+
 	/* check args */
-	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
+	for (i = 0; i < nargs; i++) {
 		err = check_func_arg(env, i, &meta, fn);
 		if (err)
 			return err;
@@ -7805,8 +7892,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (err)
 			return err;
 	}
-
-	regs = cur_regs(env);
 
 	/* This can only be set for PTR_TO_STACK, as CONST_PTR_TO_DYNPTR cannot
 	 * be reinitialized by any dynptr helper. Hence, mark_stack_slots_dynptr
@@ -8803,10 +8888,11 @@ static int process_kf_arg_ptr_to_list_node(struct bpf_verifier_env *env,
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta)
 {
 	const char *func_name = meta->func_name, *ref_tname;
+	struct bpf_reg_state *regs = cur_regs(env);
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
+	int ret, ref_regno;
 	u32 i, nargs;
-	int ret;
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
 	nargs = btf_type_vlen(meta->func_proto);
@@ -8816,17 +8902,31 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		return -EINVAL;
 	}
 
+	ref_regno = args_find_ref_obj_id_regno(env, cur_regs(env), nargs);
+	if (ref_regno < 0) {
+		return ref_regno;
+	} else if (!ref_regno && is_kfunc_release(meta)) {
+		verbose(env, "release kernel function %s expects refcounted PTR_TO_BTF_ID\n",
+			func_name);
+		return -EINVAL;
+	}
+
+	meta->ref_obj_id = regs[ref_regno].ref_obj_id;
+	if (is_kfunc_release(meta))
+		meta->release_regno = ref_regno;
+
 	/* Check that BTF function arguments match actual types that the
 	 * verifier sees.
 	 */
 	for (i = 0; i < nargs; i++) {
-		struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[i + 1];
 		const struct btf_type *t, *ref_t, *resolve_ret;
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
 		u32 regno = i + 1, ref_id, type_size;
 		bool is_ret_buf_sz = false;
+		struct bpf_reg_state *reg;
 		int kf_arg_type;
 
+		reg = &regs[regno];
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
 		if (is_kfunc_arg_ignore(btf, &args[i]))
@@ -8883,18 +8983,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			return -EINVAL;
 		}
 
-		if (reg->ref_obj_id) {
-			if (is_kfunc_release(meta) && meta->ref_obj_id) {
-				verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
-					regno, reg->ref_obj_id,
-					meta->ref_obj_id);
-				return -EFAULT;
-			}
-			meta->ref_obj_id = reg->ref_obj_id;
-			if (is_kfunc_release(meta))
-				meta->release_regno = regno;
-		}
-
 		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
 		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 
@@ -8937,7 +9025,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			return -EFAULT;
 		}
 
-		if (is_kfunc_release(meta) && reg->ref_obj_id)
+		if (is_kfunc_release(meta) && regno == meta->release_regno)
 			arg_type |= OBJ_RELEASE;
 		ret = check_func_arg_reg_off(env, reg, regno, arg_type);
 		if (ret < 0)
@@ -9055,12 +9143,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			i++;
 			break;
 		}
-	}
-
-	if (is_kfunc_release(meta) && !meta->release_regno) {
-		verbose(env, "release kernel function %s expects refcounted PTR_TO_BTF_ID\n",
-			func_name);
-		return -EINVAL;
 	}
 
 	return 0;
