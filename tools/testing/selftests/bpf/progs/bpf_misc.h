@@ -61,6 +61,7 @@
 #define __clobber_common "r0", "r1", "r2", "r3", "r4", "r5", "memory"
 #define __imm(name) [name]"i"(name)
 #define __imm_addr(name) [name]"i"(&name)
+#define __imm_insn(name, expr) [name]"i"(*(long *)&(expr))
 
 #if defined(__TARGET_ARCH_x86)
 #define SYSCALL_WRAPPER 1
