@@ -398,6 +398,11 @@ TRUNNER_OUTPUT := $(OUTPUT)$(if $2,/)$2
 TRUNNER_BINARY := $1$(if $2,-)$2
 TRUNNER_TEST_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.test.o,	\
 				 $$(notdir $$(wildcard $(TRUNNER_TESTS_DIR)/*.c)))
+ifneq ($(TRUNNER_TEST_LOADER_AUTO_WRAPPERS),)
+TRUNNER_TEST_OBJS := $$(filter-out $$(TRUNNER_OUTPUT)/test_loader_auto_wrappers.test.o, \
+				   $$(TRUNNER_TEST_OBJS))
+TRUNNER_TEST_OBJS += $$(TRUNNER_OUTPUT)/test_loader_auto_wrappers.test.o
+endif
 TRUNNER_EXTRA_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.o,		\
 				 $$(filter %.c,$(TRUNNER_EXTRA_SOURCES)))
 TRUNNER_EXTRA_HDRS := $$(filter %.h,$(TRUNNER_EXTRA_SOURCES))
@@ -482,6 +487,32 @@ $(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c
 		 ) > $$@)
 endif
 
+ifneq ($(TRUNNER_TEST_LOADER_AUTO_WRAPPERS),)
+ifeq ($($(TRUNNER_TESTS_DIR)-test-loader-auto-wrappers-c),)
+$(TRUNNER_TESTS_DIR)-test-loader-auto-wrappers-c := y
+$(TRUNNER_TESTS_DIR)/test_loader_auto_wrappers.c: $(TRUNNER_BPF_PROGS_DIR)/*.c
+	$$(call msg,GEN-TEST,$(TRUNNER_BINARY),$$@)
+	$$(shell (echo '/* Generated source, do not edit */';			\
+		  tests=$$$$(grep --null -lF '/* Use test_loader marker */'	\
+				$$(TRUNNER_BPF_PROGS_DIR)/*.c			\
+				| xargs -0 -I {} basename {} .c);		\
+		  echo "#include <test_progs.h>";				\
+		  echo "";							\
+		  for case in $$$$tests;					\
+		  do								\
+			echo "#include \"$$$$case.skel.h\"";			\
+		  done;								\
+		  echo "";							\
+		  for case in $$$$tests;					\
+		  do								\
+			printf	"void %-50s { %-50s }\n"			\
+				"test_$$$$case(void)"				\
+				"RUN_TESTS($$$$case);";				\
+		  done) > $$@)
+$(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/test_loader_auto_wrappers.c
+endif
+endif # TRUNNER_TEST_LOADER_AUTO_WRAPPERS
+
 # compile individual test files
 # Note: we cd into output directory to ensure embedded BPF object is found
 $(TRUNNER_TEST_OBJS): $(TRUNNER_OUTPUT)/%.test.o:			\
@@ -537,6 +568,7 @@ TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
 		       verify_sig_setup.sh				\
 		       $(wildcard progs/btf_dump_test_case_*.c)		\
 		       $(wildcard progs/*.bpf.o)
+TRUNNER_TEST_LOADER_AUTO_WRAPPERS := t
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
 $(eval $(call DEFINE_TEST_RUNNER,test_progs))
@@ -560,6 +592,7 @@ TRUNNER_EXTRA_SOURCES := test_maps.c
 TRUNNER_EXTRA_FILES :=
 TRUNNER_BPF_BUILD_RULE := $$(error no BPF objects should be built)
 TRUNNER_BPF_CFLAGS :=
+TRUNNER_TEST_LOADER_AUTO_WRAPPERS :=
 $(eval $(call DEFINE_TEST_RUNNER,test_maps))
 
 # Define test_verifier test runner.
@@ -625,6 +658,7 @@ $(OUTPUT)/veristat: $(OUTPUT)/veristat.o
 
 EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\
+	prog_tests/test_loader_auto_wrappers.c				\
 	feature bpftool							\
 	$(addprefix $(OUTPUT)/,*.o *.skel.h *.lskel.h *.subskel.h	\
 			       no_alu32 bpf_gcc bpf_testmod.ko		\
