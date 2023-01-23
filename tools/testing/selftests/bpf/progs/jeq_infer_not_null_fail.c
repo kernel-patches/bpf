@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+/* Use test_loader marker */
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
