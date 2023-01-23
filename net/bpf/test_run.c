@@ -481,10 +481,7 @@ out:
  * architecture dependent calling conventions. 7+ can be supported in the
  * future.
  */
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in vmlinux BTF");
-int noinline bpf_fentry_test1(int a)
+BPF_KFUNC(int bpf_fentry_test1(int a))
 {
 	return a + 1;
 }
@@ -529,23 +526,23 @@ int noinline bpf_fentry_test8(struct bpf_fentry_test_t *arg)
 	return (long)arg->a;
 }
 
-int noinline bpf_modify_return_test(int a, int *b)
+BPF_KFUNC(int bpf_modify_return_test(int a, int *b))
 {
 	*b += 1;
 	return a + *b;
 }
 
-u64 noinline bpf_kfunc_call_test1(struct sock *sk, u32 a, u64 b, u32 c, u64 d)
+BPF_KFUNC(u64 bpf_kfunc_call_test1(struct sock *sk, u32 a, u64 b, u32 c, u64 d))
 {
 	return a + b + c + d;
 }
 
-int noinline bpf_kfunc_call_test2(struct sock *sk, u32 a, u32 b)
+BPF_KFUNC(int bpf_kfunc_call_test2(struct sock *sk, u32 a, u32 b))
 {
 	return a + b;
 }
 
-struct sock * noinline bpf_kfunc_call_test3(struct sock *sk)
+BPF_KFUNC(struct sock *bpf_kfunc_call_test3(struct sock *sk))
 {
 	return sk;
 }
@@ -574,21 +571,19 @@ static struct prog_test_ref_kfunc prog_test_struct = {
 	.cnt = REFCOUNT_INIT(1),
 };
 
-noinline struct prog_test_ref_kfunc *
-bpf_kfunc_call_test_acquire(unsigned long *scalar_ptr)
+BPF_KFUNC(struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *scalar_ptr))
 {
 	refcount_inc(&prog_test_struct.cnt);
 	return &prog_test_struct;
 }
 
-noinline struct prog_test_member *
-bpf_kfunc_call_memb_acquire(void)
+BPF_KFUNC(struct prog_test_member *bpf_kfunc_call_memb_acquire(void))
 {
 	WARN_ON_ONCE(1);
 	return NULL;
 }
 
-noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
+BPF_KFUNC(void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p))
 {
 	if (!p)
 		return;
@@ -596,11 +591,11 @@ noinline void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p)
 	refcount_dec(&p->cnt);
 }
 
-noinline void bpf_kfunc_call_memb_release(struct prog_test_member *p)
+BPF_KFUNC(void bpf_kfunc_call_memb_release(struct prog_test_member *p))
 {
 }
 
-noinline void bpf_kfunc_call_memb1_release(struct prog_test_member1 *p)
+BPF_KFUNC(void bpf_kfunc_call_memb1_release(struct prog_test_member1 *p))
 {
 	WARN_ON_ONCE(1);
 }
@@ -613,12 +608,14 @@ static int *__bpf_kfunc_call_test_get_mem(struct prog_test_ref_kfunc *p, const i
 	return (int *)p;
 }
 
-noinline int *bpf_kfunc_call_test_get_rdwr_mem(struct prog_test_ref_kfunc *p, const int rdwr_buf_size)
+BPF_KFUNC(int *bpf_kfunc_call_test_get_rdwr_mem(struct prog_test_ref_kfunc *p,
+						const int rdwr_buf_size))
 {
 	return __bpf_kfunc_call_test_get_mem(p, rdwr_buf_size);
 }
 
-noinline int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size)
+BPF_KFUNC(int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p,
+						  const int rdonly_buf_size))
 {
 	return __bpf_kfunc_call_test_get_mem(p, rdonly_buf_size);
 }
@@ -628,17 +625,18 @@ noinline int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p, 
  * Acquire functions must return struct pointers, so these ones are
  * failing.
  */
-noinline int *bpf_kfunc_call_test_acq_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size)
+BPF_KFUNC(int *bpf_kfunc_call_test_acq_rdonly_mem(struct prog_test_ref_kfunc *p,
+						  const int rdonly_buf_size))
 {
 	return __bpf_kfunc_call_test_get_mem(p, rdonly_buf_size);
 }
 
-noinline void bpf_kfunc_call_int_mem_release(int *p)
+BPF_KFUNC(void bpf_kfunc_call_int_mem_release(int *p))
 {
 }
 
-noinline struct prog_test_ref_kfunc *
-bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **pp, int a, int b)
+BPF_KFUNC(struct prog_test_ref_kfunc *
+bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **pp, int a, int b))
 {
 	struct prog_test_ref_kfunc *p = READ_ONCE(*pp);
 
@@ -686,51 +684,49 @@ struct prog_test_fail3 {
 	char arr2[];
 };
 
-noinline void bpf_kfunc_call_test_pass_ctx(struct __sk_buff *skb)
+BPF_KFUNC(void bpf_kfunc_call_test_pass_ctx(struct __sk_buff *skb))
 {
 }
 
-noinline void bpf_kfunc_call_test_pass1(struct prog_test_pass1 *p)
+BPF_KFUNC(void bpf_kfunc_call_test_pass1(struct prog_test_pass1 *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_pass2(struct prog_test_pass2 *p)
+BPF_KFUNC(void bpf_kfunc_call_test_pass2(struct prog_test_pass2 *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_fail1(struct prog_test_fail1 *p)
+BPF_KFUNC(void bpf_kfunc_call_test_fail1(struct prog_test_fail1 *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_fail2(struct prog_test_fail2 *p)
+BPF_KFUNC(void bpf_kfunc_call_test_fail2(struct prog_test_fail2 *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_fail3(struct prog_test_fail3 *p)
+BPF_KFUNC(void bpf_kfunc_call_test_fail3(struct prog_test_fail3 *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_mem_len_pass1(void *mem, int mem__sz)
+BPF_KFUNC(void bpf_kfunc_call_test_mem_len_pass1(void *mem, int mem__sz))
 {
 }
 
-noinline void bpf_kfunc_call_test_mem_len_fail1(void *mem, int len)
+BPF_KFUNC(void bpf_kfunc_call_test_mem_len_fail1(void *mem, int len))
 {
 }
 
-noinline void bpf_kfunc_call_test_mem_len_fail2(u64 *mem, int len)
+BPF_KFUNC(void bpf_kfunc_call_test_mem_len_fail2(u64 *mem, int len))
 {
 }
 
-noinline void bpf_kfunc_call_test_ref(struct prog_test_ref_kfunc *p)
+BPF_KFUNC(void bpf_kfunc_call_test_ref(struct prog_test_ref_kfunc *p))
 {
 }
 
-noinline void bpf_kfunc_call_test_destructive(void)
+BPF_KFUNC(void bpf_kfunc_call_test_destructive(void))
 {
 }
-
-__diag_pop();
 
 BTF_SET8_START(bpf_test_modify_return_ids)
 BTF_ID_FLAGS(func, bpf_modify_return_test)

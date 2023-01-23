@@ -230,10 +230,6 @@ static int _nf_conntrack_btf_struct_access(struct bpf_verifier_log *log,
 	return 0;
 }
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in nf_conntrack BTF");
-
 /* bpf_xdp_ct_alloc - Allocate a new CT entry
  *
  * Parameters:
@@ -249,9 +245,9 @@ __diag_ignore_all("-Wmissing-prototypes",
  * @opts__sz	- Length of the bpf_ct_opts structure
  *		    Must be NF_BPF_CT_OPTS_SZ (12)
  */
-struct nf_conn___init *
+BPF_KFUNC(struct nf_conn___init *
 bpf_xdp_ct_alloc(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
-		 u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz)
+		 u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz))
 {
 	struct xdp_buff *ctx = (struct xdp_buff *)xdp_ctx;
 	struct nf_conn *nfct;
@@ -283,9 +279,9 @@ bpf_xdp_ct_alloc(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
  * @opts__sz	- Length of the bpf_ct_opts structure
  *		    Must be NF_BPF_CT_OPTS_SZ (12)
  */
-struct nf_conn *
+BPF_KFUNC(struct nf_conn *
 bpf_xdp_ct_lookup(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
-		  u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz)
+		  u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz))
 {
 	struct xdp_buff *ctx = (struct xdp_buff *)xdp_ctx;
 	struct net *caller_net;
@@ -316,9 +312,9 @@ bpf_xdp_ct_lookup(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
  * @opts__sz	- Length of the bpf_ct_opts structure
  *		    Must be NF_BPF_CT_OPTS_SZ (12)
  */
-struct nf_conn___init *
+BPF_KFUNC(struct nf_conn___init *
 bpf_skb_ct_alloc(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
-		 u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz)
+		 u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz))
 {
 	struct sk_buff *skb = (struct sk_buff *)skb_ctx;
 	struct nf_conn *nfct;
@@ -351,9 +347,9 @@ bpf_skb_ct_alloc(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
  * @opts__sz	- Length of the bpf_ct_opts structure
  *		    Must be NF_BPF_CT_OPTS_SZ (12)
  */
-struct nf_conn *
+BPF_KFUNC(struct nf_conn *
 bpf_skb_ct_lookup(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
-		  u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz)
+		  u32 tuple__sz, struct bpf_ct_opts *opts, u32 opts__sz))
 {
 	struct sk_buff *skb = (struct sk_buff *)skb_ctx;
 	struct net *caller_net;
@@ -376,7 +372,7 @@ bpf_skb_ct_lookup(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
  * @nfct	 - Pointer to referenced nf_conn___init object, obtained
  *		   using bpf_xdp_ct_alloc or bpf_skb_ct_alloc.
  */
-struct nf_conn *bpf_ct_insert_entry(struct nf_conn___init *nfct_i)
+BPF_KFUNC(struct nf_conn *bpf_ct_insert_entry(struct nf_conn___init *nfct_i))
 {
 	struct nf_conn *nfct = (struct nf_conn *)nfct_i;
 	int err;
@@ -400,7 +396,7 @@ struct nf_conn *bpf_ct_insert_entry(struct nf_conn___init *nfct_i)
  * @nf_conn	 - Pointer to referenced nf_conn object, obtained using
  *		   bpf_xdp_ct_lookup or bpf_skb_ct_lookup.
  */
-void bpf_ct_release(struct nf_conn *nfct)
+BPF_KFUNC(void bpf_ct_release(struct nf_conn *nfct))
 {
 	if (!nfct)
 		return;
@@ -417,7 +413,7 @@ void bpf_ct_release(struct nf_conn *nfct)
  *                 bpf_xdp_ct_alloc or bpf_skb_ct_alloc.
  * @timeout      - Timeout in msecs.
  */
-void bpf_ct_set_timeout(struct nf_conn___init *nfct, u32 timeout)
+BPF_KFUNC(void bpf_ct_set_timeout(struct nf_conn___init *nfct, u32 timeout))
 {
 	__nf_ct_set_timeout((struct nf_conn *)nfct, msecs_to_jiffies(timeout));
 }
@@ -432,7 +428,7 @@ void bpf_ct_set_timeout(struct nf_conn___init *nfct, u32 timeout)
  *		   bpf_ct_insert_entry, bpf_xdp_ct_lookup, or bpf_skb_ct_lookup.
  * @timeout      - New timeout in msecs.
  */
-int bpf_ct_change_timeout(struct nf_conn *nfct, u32 timeout)
+BPF_KFUNC(int bpf_ct_change_timeout(struct nf_conn *nfct, u32 timeout))
 {
 	return __nf_ct_change_timeout(nfct, msecs_to_jiffies(timeout));
 }
@@ -447,7 +443,7 @@ int bpf_ct_change_timeout(struct nf_conn *nfct, u32 timeout)
  *		   bpf_xdp_ct_alloc or bpf_skb_ct_alloc.
  * @status       - New status value.
  */
-int bpf_ct_set_status(const struct nf_conn___init *nfct, u32 status)
+BPF_KFUNC(int bpf_ct_set_status(const struct nf_conn___init *nfct, u32 status))
 {
 	return nf_ct_change_status_common((struct nf_conn *)nfct, status);
 }
@@ -462,12 +458,10 @@ int bpf_ct_set_status(const struct nf_conn___init *nfct, u32 status)
  *		   bpf_ct_insert_entry, bpf_xdp_ct_lookup or bpf_skb_ct_lookup.
  * @status       - New status value.
  */
-int bpf_ct_change_status(struct nf_conn *nfct, u32 status)
+BPF_KFUNC(int bpf_ct_change_status(struct nf_conn *nfct, u32 status))
 {
 	return nf_ct_change_status_common(nfct, status);
 }
-
-__diag_pop()
 
 BTF_SET8_START(nf_ct_kfunc_set)
 BTF_ID_FLAGS(func, bpf_xdp_ct_alloc, KF_ACQUIRE | KF_RET_NULL)

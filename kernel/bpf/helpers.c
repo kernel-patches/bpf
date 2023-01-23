@@ -1772,11 +1772,7 @@ unlock:
 	}
 }
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in vmlinux BTF");
-
-void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
+BPF_KFUNC(void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign))
 {
 	struct btf_struct_meta *meta = meta__ign;
 	u64 size = local_type_id__k;
@@ -1790,7 +1786,7 @@ void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 	return p;
 }
 
-void bpf_obj_drop_impl(void *p__alloc, void *meta__ign)
+BPF_KFUNC(void bpf_obj_drop_impl(void *p__alloc, void *meta__ign))
 {
 	struct btf_struct_meta *meta = meta__ign;
 	void *p = p__alloc;
@@ -1811,12 +1807,12 @@ static void __bpf_list_add(struct bpf_list_node *node, struct bpf_list_head *hea
 	tail ? list_add_tail(n, h) : list_add(n, h);
 }
 
-void bpf_list_push_front(struct bpf_list_head *head, struct bpf_list_node *node)
+BPF_KFUNC(void bpf_list_push_front(struct bpf_list_head *head, struct bpf_list_node *node))
 {
 	return __bpf_list_add(node, head, false);
 }
 
-void bpf_list_push_back(struct bpf_list_head *head, struct bpf_list_node *node)
+BPF_KFUNC(void bpf_list_push_back(struct bpf_list_head *head, struct bpf_list_node *node))
 {
 	return __bpf_list_add(node, head, true);
 }
@@ -1834,12 +1830,12 @@ static struct bpf_list_node *__bpf_list_del(struct bpf_list_head *head, bool tai
 	return (struct bpf_list_node *)n;
 }
 
-struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head)
+BPF_KFUNC(struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head))
 {
 	return __bpf_list_del(head, false);
 }
 
-struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head)
+BPF_KFUNC(struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head))
 {
 	return __bpf_list_del(head, true);
 }
@@ -1850,7 +1846,7 @@ struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head)
  * bpf_task_release().
  * @p: The task on which a reference is being acquired.
  */
-struct task_struct *bpf_task_acquire(struct task_struct *p)
+BPF_KFUNC(struct task_struct *bpf_task_acquire(struct task_struct *p))
 {
 	return get_task_struct(p);
 }
@@ -1861,7 +1857,7 @@ struct task_struct *bpf_task_acquire(struct task_struct *p)
  * released by calling bpf_task_release().
  * @p: The task on which a reference is being acquired.
  */
-struct task_struct *bpf_task_acquire_not_zero(struct task_struct *p)
+BPF_KFUNC(struct task_struct *bpf_task_acquire_not_zero(struct task_struct *p))
 {
 	/* For the time being this function returns NULL, as it's not currently
 	 * possible to safely acquire a reference to a task with RCU protection
@@ -1913,7 +1909,7 @@ struct task_struct *bpf_task_acquire_not_zero(struct task_struct *p)
  * be released by calling bpf_task_release().
  * @pp: A pointer to a task kptr on which a reference is being acquired.
  */
-struct task_struct *bpf_task_kptr_get(struct task_struct **pp)
+BPF_KFUNC(struct task_struct *bpf_task_kptr_get(struct task_struct **pp))
 {
 	/* We must return NULL here until we have clarity on how to properly
 	 * leverage RCU for ensuring a task's lifetime. See the comment above
@@ -1926,7 +1922,7 @@ struct task_struct *bpf_task_kptr_get(struct task_struct **pp)
  * bpf_task_release - Release the reference acquired on a task.
  * @p: The task on which a reference is being released.
  */
-void bpf_task_release(struct task_struct *p)
+BPF_KFUNC(void bpf_task_release(struct task_struct *p))
 {
 	if (!p)
 		return;
@@ -1941,7 +1937,7 @@ void bpf_task_release(struct task_struct *p)
  * calling bpf_cgroup_release().
  * @cgrp: The cgroup on which a reference is being acquired.
  */
-struct cgroup *bpf_cgroup_acquire(struct cgroup *cgrp)
+BPF_KFUNC(struct cgroup *bpf_cgroup_acquire(struct cgroup *cgrp))
 {
 	cgroup_get(cgrp);
 	return cgrp;
@@ -1953,7 +1949,7 @@ struct cgroup *bpf_cgroup_acquire(struct cgroup *cgrp)
  * be released by calling bpf_cgroup_release().
  * @cgrpp: A pointer to a cgroup kptr on which a reference is being acquired.
  */
-struct cgroup *bpf_cgroup_kptr_get(struct cgroup **cgrpp)
+BPF_KFUNC(struct cgroup *bpf_cgroup_kptr_get(struct cgroup **cgrpp))
 {
 	struct cgroup *cgrp;
 
@@ -1985,7 +1981,7 @@ struct cgroup *bpf_cgroup_kptr_get(struct cgroup **cgrpp)
  * drops to 0.
  * @cgrp: The cgroup on which a reference is being released.
  */
-void bpf_cgroup_release(struct cgroup *cgrp)
+BPF_KFUNC(void bpf_cgroup_release(struct cgroup *cgrp))
 {
 	if (!cgrp)
 		return;
@@ -2000,7 +1996,7 @@ void bpf_cgroup_release(struct cgroup *cgrp)
  * @cgrp: The cgroup for which we're performing a lookup.
  * @level: The level of ancestor to look up.
  */
-struct cgroup *bpf_cgroup_ancestor(struct cgroup *cgrp, int level)
+BPF_KFUNC(struct cgroup *bpf_cgroup_ancestor(struct cgroup *cgrp, int level))
 {
 	struct cgroup *ancestor;
 
@@ -2019,7 +2015,7 @@ struct cgroup *bpf_cgroup_ancestor(struct cgroup *cgrp, int level)
  * stored in a map, or released with bpf_task_release().
  * @pid: The pid of the task being looked up.
  */
-struct task_struct *bpf_task_from_pid(s32 pid)
+BPF_KFUNC(struct task_struct *bpf_task_from_pid(s32 pid))
 {
 	struct task_struct *p;
 
@@ -2032,27 +2028,25 @@ struct task_struct *bpf_task_from_pid(s32 pid)
 	return p;
 }
 
-void *bpf_cast_to_kern_ctx(void *obj)
+BPF_KFUNC(void *bpf_cast_to_kern_ctx(void *obj))
 {
 	return obj;
 }
 
-void *bpf_rdonly_cast(void *obj__ign, u32 btf_id__k)
+BPF_KFUNC(void *bpf_rdonly_cast(void *obj__ign, u32 btf_id__k))
 {
 	return obj__ign;
 }
 
-void bpf_rcu_read_lock(void)
+BPF_KFUNC(void bpf_rcu_read_lock(void))
 {
 	rcu_read_lock();
 }
 
-void bpf_rcu_read_unlock(void)
+BPF_KFUNC(void bpf_rcu_read_unlock(void))
 {
 	rcu_read_unlock();
 }
-
-__diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
 #ifdef CONFIG_KEXEC_CORE

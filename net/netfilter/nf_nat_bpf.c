@@ -12,10 +12,6 @@
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_nat.h>
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in nf_nat BTF");
-
 /* bpf_ct_set_nat_info - Set source or destination nat address
  *
  * Set source or destination nat address of the newly allocated
@@ -30,9 +26,9 @@ __diag_ignore_all("-Wmissing-prototypes",
  *		  interpreted as select a random port.
  * @manip	- NF_NAT_MANIP_SRC or NF_NAT_MANIP_DST
  */
-int bpf_ct_set_nat_info(struct nf_conn___init *nfct,
-			union nf_inet_addr *addr, int port,
-			enum nf_nat_manip_type manip)
+BPF_KFUNC(int bpf_ct_set_nat_info(struct nf_conn___init *nfct,
+				  union nf_inet_addr *addr, int port,
+				  enum nf_nat_manip_type manip))
 {
 	struct nf_conn *ct = (struct nf_conn *)nfct;
 	u16 proto = nf_ct_l3num(ct);
@@ -53,8 +49,6 @@ int bpf_ct_set_nat_info(struct nf_conn___init *nfct,
 
 	return nf_nat_setup_info(ct, &range, manip) == NF_DROP ? -ENOMEM : 0;
 }
-
-__diag_pop()
 
 BTF_SET8_START(nf_nat_kfunc_set)
 BTF_ID_FLAGS(func, bpf_ct_set_nat_info, KF_TRUSTED_ARGS)
