@@ -73,6 +73,16 @@
 #define KF_RCU          (1 << 7) /* kfunc only takes rcu pointer arguments */
 
 /*
+ * Macro for defining a kfunc. This is meant to minimize the amount of
+ * copy-paste that kfunc authors have to include for correctness so as to avoid
+ * issues such as the compiler inlining or eliding either a static kfunc, or a
+ * global kfunc in an LTO build.
+ */
+#define BPF_KFUNC(proto)	\
+	proto;			\
+	__used noinline proto
+
+/*
  * Return the name of the passed struct, if exists, or halt the build if for
  * example the structure gets renamed. In this way, developers have to revisit
  * the code using that structure name, and update it accordingly.
