@@ -14,55 +14,56 @@ kernel.
 2. Defining a kfunc
 ===================
 
-There are two ways to expose a kernel function to BPF programs, either make an
-existing function in the kernel visible, or add a new wrapper for BPF. In both
-cases, care must be taken that BPF program can only call such function in a
-valid context. To enforce this, visibility of a kfunc can be per program type.
+There are two ways to expose a kernel function to BPF programs: either make an
+existing function in the kernel visible, or add a new function that is only
+invoked from BPF. In both cases, care must be taken that BPF program can only
+call the function in a valid context. To enforce this, attributes may be set on
+a kfunc which inform the verifier of how the kfunc should be invoked in order
+to ensure safety. Additionally, when kfuncs are first registered, they are
+registered for a specific program type.
 
-If you are not creating a BPF wrapper for existing kernel function, skip ahead
-to :ref:`BPF_kfunc_nodef`.
+2.1 Using BPF_KFUNC macro
+-------------------------
 
-2.1 Creating a wrapper kfunc
-----------------------------
+When defining a kfunc, always wrap its signature in the ``BPF_KFUNC`` macro.
+This macro adds the necessary attributes to prevent the compiler from
+optimizing away dead code, as some kfuncs may not be invoked anywhere in the
+kernel itself, or may e.g. be removed in LTO builds. If an additional
+annotation is required to prevent such an issue with your kfunc, it is likely a
+bug and should be added to the definition of the macro so that other kfuncs are
+similarly protected. This macro also provides an easy way to grep for kfunc
+definitions.
 
-When defining a wrapper kfunc, the wrapper function should have extern linkage.
-This prevents the compiler from optimizing away dead code, as this wrapper kfunc
-is not invoked anywhere in the kernel itself. It is not necessary to provide a
-prototype in a header for the wrapper kfunc.
+An example is given below:
 
-An example is given below::
+.. code-block:: c
 
-        /* Disables missing prototype warnings */
-        __diag_push();
-        __diag_ignore_all("-Wmissing-prototypes",
-                          "Global kfuncs as their definitions will be in BTF");
-
-        struct task_struct *bpf_find_get_task_by_vpid(pid_t nr)
+        BPF_KFUNC(void bpf_memzero(void *mem, int mem__sz))
         {
-                return find_get_task_by_vpid(nr);
+        ...
         }
 
-        __diag_pop();
-
-A wrapper kfunc is often needed when we need to annotate parameters of the
-kfunc. Otherwise one may directly make the kfunc visible to the BPF program by
-registering it with the BPF subsystem. See :ref:`BPF_kfunc_nodef`.
+It is not necessary to provide a prototype in a header for a kfunc (the macro
+also takes care of this), though you may provide one if the kfunc is invoked
+elsewhere in the main kernel.
 
 2.2 Annotating kfunc parameters
 -------------------------------
 
-Similar to BPF helpers, there is sometime need for additional context required
-by the verifier to make the usage of kernel functions safer and more useful.
-Hence, we can annotate a parameter by suffixing the name of the argument of the
-kfunc with a __tag, where tag may be one of the supported annotations.
+Similar to BPF helpers, the verifier sometimes requires additional context to
+make the usage of kernel functions safer and more useful.  Hence, we can
+annotate a parameter by suffixing the name of the argument of the kfunc with a
+__tag, where tag may be one of the following supported annotations.
 
 2.2.1 __sz Annotation
 ---------------------
 
 This annotation is used to indicate a memory and size pair in the argument list.
-An example is given below::
+An example is given below:
 
-        void bpf_memzero(void *mem, int mem__sz)
+.. code-block:: c
+
+        BPF_KFUNC(void bpf_memzero(void *mem, int mem__sz))
         {
         ...
         }
@@ -80,9 +81,11 @@ the verifier must check the scalar argument to be a known constant, which does
 not indicate a size parameter, and the value of the constant is relevant to the
 safety of the program.
 
-An example is given below::
+An example is given below:
 
-        void *bpf_obj_new(u32 local_type_id__k, ...)
+.. code-block:: c
+
+        BPF_KFUNC(void *bpf_obj_new(u32 local_type_id__k, ...))
         {
         ...
         }
@@ -96,8 +99,6 @@ Hence, whenever a constant scalar argument is accepted by a kfunc which is not a
 size parameter, and the value of the constant matters for program safety, __k
 suffix should be used.
 
-.. _BPF_kfunc_nodef:
-
 2.3 Using an existing kernel function
 -------------------------------------
 
@@ -109,17 +110,21 @@ and whether it is safe to do so.
 2.4 Annotating kfuncs
 ---------------------
 
-In addition to kfuncs' arguments, verifier may need more information about the
+In addition to kfunc arguments, verifier may need more information about the
 type of kfunc(s) being registered with the BPF subsystem. To do so, we define
-flags on a set of kfuncs as follows::
+flags on a set of kfuncs as follows:
+
+.. code-block:: c
 
         BTF_SET8_START(bpf_task_set)
         BTF_ID_FLAGS(func, bpf_get_task_pid, KF_ACQUIRE | KF_RET_NULL)
         BTF_ID_FLAGS(func, bpf_put_pid, KF_RELEASE)
+        BTF_ID_FLAGS(func, bpf_task_is_kthread) /* Flags are optional */
         BTF_SET8_END(bpf_task_set)
 
-This set encodes the BTF ID of each kfunc listed above, and encodes the flags
-along with it. Ofcourse, it is also allowed to specify no flags.
+This set encodes the BTF ID of each kfunc listed above, along with an optional
+set of flags which provide context to the verifier about how the kfunc should
+be invoked.
 
 2.4.1 KF_ACQUIRE flag
 ---------------------
@@ -205,7 +210,9 @@ into consideration.
 
 Once the kfunc is prepared for use, the final step to making it visible is
 registering it with the BPF subsystem. Registration is done per BPF program
-type. An example is shown below::
+type. An example is shown below:
+
+.. code-block:: c
 
         BTF_SET8_START(bpf_task_set)
         BTF_ID_FLAGS(func, bpf_get_task_pid, KF_ACQUIRE | KF_RET_NULL)
