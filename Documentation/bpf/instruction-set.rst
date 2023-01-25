@@ -7,6 +7,11 @@ eBPF Instruction Set Specification, v1.0
 
 This document specifies version 1.0 of the eBPF instruction set.
 
+Documentation conventions
+=========================
+
+For brevity, this document uses the type notion "u64", "u32", etc.
+to mean an unsigned integer whose width is the specified number of bits.
 
 Registers and calling convention
 ================================
@@ -122,6 +127,8 @@ the destination register is unchanged whereas for ``BPF_ALU`` the upper
 ``BPF_ADD | BPF_X | BPF_ALU`` means::
 
   dst_reg = (u32) dst_reg + (u32) src_reg;
+
+where '(u32)' indicates that the upper 32 bits are zeroed.
 
 ``BPF_ADD | BPF_X | BPF_ALU64`` means::
 
