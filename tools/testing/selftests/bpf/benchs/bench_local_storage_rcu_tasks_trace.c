@@ -12,11 +12,9 @@
 static struct {
 	__u32 nr_procs;
 	__u32 kthread_pid;
-	bool quiet;
 } args = {
 	.nr_procs = 1000,
 	.kthread_pid = 0,
-	.quiet = false,
 };
 
 static const struct argp_option opts[] = {
@@ -24,8 +22,6 @@ static const struct argp_option opts[] = {
 		"Set number of user processes to spin up"},
 	{ "kthread_pid", ARG_KTHREAD_PID, "PID", 0,
 		"Pid of rcu_tasks_trace kthread for ticks tracking"},
-	{ "quiet", ARG_QUIET, "{0,1}", 0,
-		"If true, don't report progress"},
 	{},
 };
 
@@ -49,14 +45,6 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			argp_usage(state);
 		}
 		args.kthread_pid = ret;
-		break;
-	case ARG_QUIET:
-		ret = strtol(arg, NULL, 10);
-		if (ret < 0 || ret > 1) {
-			fprintf(stderr, "invalid quiet %ld\n", ret);
-			argp_usage(state);
-		}
-		args.quiet = ret;
 		break;
 break;
 	default:
@@ -224,7 +212,7 @@ static void report_progress(int iter, struct bench_res *res, long delta_ns)
 		exit(1);
 	}
 
-	if (args.quiet)
+	if (env.quiet)
 		return;
 
 	printf("Iter %d\t avg tasks_trace grace period latency\t%lf ns\n",
