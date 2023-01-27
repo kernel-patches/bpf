@@ -803,14 +803,34 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	return data;
 }
 
+struct bpf_tracing_test_run_info {
+	struct bpf_prog *prog;
+	void *ctx;
+	u32 retval;
+};
+
+static void
+__bpf_prog_test_run_tracing(void *data)
+{
+	struct bpf_tracing_test_run_info *info = data;
+
+	rcu_read_lock();
+	info->retval = bpf_prog_run(info->prog, info->ctx);
+	rcu_read_unlock();
+}
+
 int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 			      const union bpf_attr *kattr,
 			      union bpf_attr __user *uattr)
 {
 	struct bpf_fentry_test_t arg = {};
 	u16 side_effect = 0, ret = 0;
-	int b = 2, err = -EFAULT;
-	u32 retval = 0;
+	int b = 2, err = -EFAULT, current_cpu;
+
+	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
+	__u32 ctx_size_in = kattr->test.ctx_size_in;
+	struct bpf_tracing_test_run_info info;
+	int cpu = kattr->test.cpu;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
@@ -837,11 +857,53 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 		goto out;
 	}
 
-	retval = ((u32)side_effect << 16) | ret;
-	if (copy_to_user(&uattr->test.retval, &retval, sizeof(retval)))
-		goto out;
+	/* doesn't support data_in/out, ctx_out, duration, or repeat */
+	if (kattr->test.data_in || kattr->test.data_out ||
+	    kattr->test.ctx_out || kattr->test.duration ||
+	    kattr->test.repeat || kattr->test.batch_size)
+		return -EINVAL;
+
+	if (ctx_size_in < prog->aux->max_ctx_offset ||
+	    ctx_size_in > MAX_BPF_FUNC_ARGS * sizeof(u64))
+		return -EINVAL;
+
+	if ((kattr->test.flags & BPF_F_TEST_RUN_ON_CPU) == 0 && cpu != 0)
+		return -EINVAL;
+
+	if (ctx_size_in) {
+		info.ctx = memdup_user(ctx_in, ctx_size_in);
+		if (IS_ERR(info.ctx))
+			return PTR_ERR(info.ctx);
+	} else {
+		info.ctx = NULL;
+	}
 
 	err = 0;
+	info.prog = prog;
+
+	current_cpu = get_cpu();
+	if ((kattr->test.flags & BPF_F_TEST_RUN_ON_CPU) == 0 ||
+	    cpu == current_cpu) {
+		__bpf_prog_test_run_tracing(&info);
+	} else if (cpu >= nr_cpu_ids || !cpu_online(cpu)) {
+		/* smp_call_function_single() also checks cpu_online()
+		 * after csd_lock(). However, since cpu is from user
+		 * space, let's do an extra quick check to filter out
+		 * invalid value before smp_call_function_single().
+		 */
+		err = -ENXIO;
+	} else {
+		err = smp_call_function_single(cpu, __bpf_prog_test_run_tracing,
+					       &info, 1);
+	}
+	put_cpu();
+
+	if (!err &&
+	    copy_to_user(&uattr->test.retval, &info.retval, sizeof(u32)))
+		err = -EFAULT;
+
+	kfree(info.ctx);
+
 out:
 	trace_bpf_test_finish(&err);
 	return err;
