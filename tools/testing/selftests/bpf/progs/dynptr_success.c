@@ -9,6 +9,11 @@
 
 char _license[] SEC("license") = "GPL";
 
+extern int bpf_dynptr_from_skb(struct __sk_buff *skb, __u64 flags,
+			       struct bpf_dynptr *ptr, int rd_only) __ksym;
+
+#define bpf_dynptr_from_skb(skb, flags, ptr) bpf_dynptr_from_skb(skb, flags, ptr, 0)
+
 int pid, err, val;
 
 struct sample {
@@ -161,5 +166,28 @@ int test_ringbuf(void *ctx)
 
 done:
 	bpf_ringbuf_discard_dynptr(&ptr, 0);
+	return 0;
+}
+
+SEC("cgroup_skb/egress")
+int test_skb_readonly(struct __sk_buff *skb)
+{
+	__u8 write_data[2] = {1, 2};
+	struct bpf_dynptr ptr;
+	__u64 *data;
+	int ret;
+
+	if (bpf_dynptr_from_skb(skb, 0, &ptr)) {
+		err = 1;
+		return 0;
+	}
+
+	/* since cgroup skbs are read only, writes should fail */
+	ret = bpf_dynptr_write(&ptr, 0, write_data, sizeof(write_data), 0);
+	if (ret != -EINVAL) {
+		err = 2;
+		return 0;
+	}
+
 	return 0;
 }
