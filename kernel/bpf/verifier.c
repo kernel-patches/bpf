@@ -741,6 +741,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_LOCAL;
 	case DYNPTR_TYPE_RINGBUF:
 		return BPF_DYNPTR_TYPE_RINGBUF;
+	case DYNPTR_TYPE_SKB:
+		return BPF_DYNPTR_TYPE_SKB;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -1623,6 +1625,12 @@ static bool reg_is_pkt_pointer_any(const struct bpf_reg_state *reg)
 {
 	return reg_is_pkt_pointer(reg) ||
 	       reg->type == PTR_TO_PACKET_END;
+}
+
+static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
+{
+	return base_type(reg->type) == PTR_TO_MEM &&
+		reg->type & DYNPTR_TYPE_SKB;
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -6156,7 +6164,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
  * type, and declare it as 'const struct bpf_dynptr *' in their prototype.
  */
 int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn_idx,
-			enum bpf_arg_type arg_type)
+			enum bpf_arg_type arg_type, int func_id)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	int err;
@@ -6240,6 +6248,9 @@ int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn_idx,
 				break;
 			case DYNPTR_TYPE_RINGBUF:
 				err_extra = "ringbuf";
+				break;
+			case DYNPTR_TYPE_SKB:
+				err_extra = "skb ";
 				break;
 			default:
 				err_extra = "<unknown>";
@@ -6589,6 +6600,28 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	}
 }
 
+static struct bpf_reg_state *get_dynptr_arg_reg(struct bpf_verifier_env *env,
+						const struct bpf_func_proto *fn,
+						struct bpf_reg_state *regs)
+{
+	struct bpf_reg_state *state = NULL;
+	int i;
+
+	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++)
+		if (arg_type_is_dynptr(fn->arg_type[i])) {
+			if (state) {
+				verbose(env, "verifier internal error: multiple dynptr args\n");
+				return NULL;
+			}
+			state = &regs[BPF_REG_1 + i];
+		}
+
+	if (!state)
+		verbose(env, "verifier internal error: no dynptr arg found\n");
+
+	return state;
+}
+
 static int dynptr_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
 	struct bpf_func_state *state = func(env, reg);
@@ -6613,6 +6646,24 @@ static int dynptr_ref_obj_id(struct bpf_verifier_env *env, struct bpf_reg_state 
 	if (spi < 0)
 		return spi;
 	return state->stack[spi].spilled_ptr.ref_obj_id;
+}
+
+static enum bpf_dynptr_type dynptr_get_type(struct bpf_verifier_env *env,
+					    struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi;
+
+	if (reg->type == CONST_PTR_TO_DYNPTR)
+		return reg->dynptr.type;
+
+	spi = __get_spi(reg->off);
+	if (spi < 0) {
+		verbose(env, "verifier internal error: invalid spi when querying dynptr type\n");
+		return BPF_DYNPTR_TYPE_INVALID;
+	}
+
+	return state->stack[spi].spilled_ptr.dynptr.type;
 }
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
@@ -6827,7 +6878,7 @@ skip_type_check:
 		err = check_mem_size_reg(env, reg, regno, true, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
-		err = process_dynptr_func(env, regno, insn_idx, arg_type);
+		err = process_dynptr_func(env, regno, insn_idx, arg_type, meta->func_id);
 		if (err)
 			return err;
 		break;
@@ -7275,6 +7326,9 @@ static int check_func_proto(const struct bpf_func_proto *fn, int func_id)
 
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
  * are now invalid, so turn them into unknown SCALAR_VALUE.
+ *
+ * This also applies to dynptr slices belonging to skb dynptrs,
+ * since these slices point to packet data.
  */
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 {
@@ -7282,7 +7336,7 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 	struct bpf_reg_state *reg;
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg_is_pkt_pointer_any(reg))
+		if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg))
 			__mark_reg_unknown(env, reg);
 	}));
 }
@@ -7966,6 +8020,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			     int *insn_idx_p)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	enum bpf_dynptr_type dynptr_type = BPF_DYNPTR_TYPE_INVALID;
 	const struct bpf_func_proto *fn = NULL;
 	enum bpf_return_type ret_type;
 	enum bpf_type_flag ret_flag;
@@ -8148,43 +8203,61 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 		break;
 	case BPF_FUNC_dynptr_data:
-		for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-			if (arg_type_is_dynptr(fn->arg_type[i])) {
-				struct bpf_reg_state *reg = &regs[BPF_REG_1 + i];
-				int id, ref_obj_id;
+	{
+		struct bpf_reg_state *reg;
+		int id, ref_obj_id;
 
-				if (meta.dynptr_id) {
-					verbose(env, "verifier internal error: meta.dynptr_id already set\n");
-					return -EFAULT;
-				}
+		reg = get_dynptr_arg_reg(env, fn, regs);
+		if (!reg)
+			return -EFAULT;
 
-				if (meta.ref_obj_id) {
-					verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
-					return -EFAULT;
-				}
-
-				id = dynptr_id(env, reg);
-				if (id < 0) {
-					verbose(env, "verifier internal error: failed to obtain dynptr id\n");
-					return id;
-				}
-
-				ref_obj_id = dynptr_ref_obj_id(env, reg);
-				if (ref_obj_id < 0) {
-					verbose(env, "verifier internal error: failed to obtain dynptr ref_obj_id\n");
-					return ref_obj_id;
-				}
-
-				meta.dynptr_id = id;
-				meta.ref_obj_id = ref_obj_id;
-				break;
-			}
-		}
-		if (i == MAX_BPF_FUNC_REG_ARGS) {
-			verbose(env, "verifier internal error: no dynptr in bpf_dynptr_data()\n");
+		if (meta.dynptr_id) {
+			verbose(env, "verifier internal error: meta.dynptr_id already set\n");
 			return -EFAULT;
 		}
+		if (meta.ref_obj_id) {
+			verbose(env, "verifier internal error: meta.ref_obj_id already set\n");
+			return -EFAULT;
+		}
+
+		id = dynptr_id(env, reg);
+		if (id < 0) {
+			verbose(env, "verifier internal error: failed to obtain dynptr id\n");
+			return id;
+		}
+
+		ref_obj_id = dynptr_ref_obj_id(env, reg);
+		if (ref_obj_id < 0) {
+			verbose(env, "verifier internal error: failed to obtain dynptr ref_obj_id\n");
+			return ref_obj_id;
+		}
+
+		meta.dynptr_id = id;
+		meta.ref_obj_id = ref_obj_id;
+
+		dynptr_type = dynptr_get_type(env, reg);
+		if (dynptr_type == BPF_DYNPTR_TYPE_INVALID)
+			return -EFAULT;
+
 		break;
+	}
+	case BPF_FUNC_dynptr_write:
+	{
+		struct bpf_reg_state *reg;
+
+		reg = get_dynptr_arg_reg(env, fn, regs);
+		if (!reg)
+			return -EFAULT;
+
+		dynptr_type = dynptr_get_type(env, reg);
+		if (dynptr_type == BPF_DYNPTR_TYPE_INVALID)
+			return -EFAULT;
+
+		if (dynptr_type == BPF_DYNPTR_TYPE_SKB)
+			changes_data = true;
+
+		break;
+	}
 	case BPF_FUNC_user_ringbuf_drain:
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_user_ringbuf_callback_state);
@@ -8251,6 +8324,28 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
 		regs[BPF_REG_0].mem_size = meta.mem_size;
+		if (func_id == BPF_FUNC_dynptr_data &&
+		    dynptr_type == BPF_DYNPTR_TYPE_SKB) {
+			bool seen_direct_write = env->seen_direct_write;
+
+			regs[BPF_REG_0].type |= DYNPTR_TYPE_SKB;
+			if (!may_access_direct_pkt_data(env, NULL, BPF_WRITE))
+				regs[BPF_REG_0].type |= MEM_RDONLY;
+			else
+				/*
+				 * Calling may_access_direct_pkt_data() will set
+				 * env->seen_direct_write to true if the skb is
+				 * writable. As an optimization, we can ignore
+				 * setting env->seen_direct_write.
+				 *
+				 * env->seen_direct_write is used by skb
+				 * programs to determine whether the skb's page
+				 * buffers should be cloned. Since data slice
+				 * writes would only be to the head, we can skip
+				 * this.
+				 */
+				env->seen_direct_write = seen_direct_write;
+		}
 		break;
 	case RET_PTR_TO_MEM_OR_BTF_ID:
 	{
@@ -8657,6 +8752,7 @@ enum special_kfunc_type {
 	KF_bpf_list_pop_back,
 	KF_bpf_cast_to_kern_ctx,
 	KF_bpf_rdonly_cast,
+	KF_bpf_dynptr_from_skb,
 	KF_bpf_rcu_read_lock,
 	KF_bpf_rcu_read_unlock,
 };
@@ -8670,6 +8766,7 @@ BTF_ID(func, bpf_list_pop_front)
 BTF_ID(func, bpf_list_pop_back)
 BTF_ID(func, bpf_cast_to_kern_ctx)
 BTF_ID(func, bpf_rdonly_cast)
+BTF_ID(func, bpf_dynptr_from_skb)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -8681,6 +8778,7 @@ BTF_ID(func, bpf_list_pop_front)
 BTF_ID(func, bpf_list_pop_back)
 BTF_ID(func, bpf_cast_to_kern_ctx)
 BTF_ID(func, bpf_rdonly_cast)
+BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_rcu_read_lock)
 BTF_ID(func, bpf_rcu_read_unlock)
 
@@ -9271,17 +9369,26 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_DYNPTR:
+		{
+			enum bpf_arg_type dynptr_arg_type = ARG_PTR_TO_DYNPTR;
+
 			if (reg->type != PTR_TO_STACK &&
 			    reg->type != CONST_PTR_TO_DYNPTR) {
 				verbose(env, "arg#%d expected pointer to stack or dynptr_ptr\n", i);
 				return -EINVAL;
 			}
 
-			ret = process_dynptr_func(env, regno, insn_idx,
-						  ARG_PTR_TO_DYNPTR | MEM_RDONLY);
+			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb])
+				dynptr_arg_type |= MEM_UNINIT | DYNPTR_TYPE_SKB;
+			else
+				dynptr_arg_type |= MEM_RDONLY;
+
+			ret = process_dynptr_func(env, regno, insn_idx, dynptr_arg_type,
+						  meta->func_id);
 			if (ret < 0)
 				return ret;
 			break;
+		}
 		case KF_ARG_PTR_TO_LIST_HEAD:
 			if (reg->type != PTR_TO_MAP_VALUE &&
 			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
@@ -15865,6 +15972,14 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		   desc->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb]) {
+		bool is_rdonly = !may_access_direct_pkt_data(env, NULL, BPF_WRITE);
+		struct bpf_insn addr[2] = { BPF_LD_IMM64(BPF_REG_4, is_rdonly) };
+
+		insn_buf[0] = addr[0];
+		insn_buf[1] = addr[1];
+		insn_buf[2] = *insn;
+		*cnt = 3;
 	}
 	return 0;
 }
