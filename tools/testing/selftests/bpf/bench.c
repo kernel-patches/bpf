@@ -272,6 +272,7 @@ extern struct argp bench_bpf_loop_argp;
 extern struct argp bench_local_storage_argp;
 extern struct argp bench_local_storage_rcu_tasks_trace_argp;
 extern struct argp bench_strncmp_argp;
+extern struct argp bench_hashmap_lookup_argp;
 
 static struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
@@ -281,6 +282,7 @@ static struct argp_child bench_parsers[] = {
 	{ &bench_strncmp_argp, 0, "bpf_strncmp helper benchmark", 0 },
 	{ &bench_local_storage_rcu_tasks_trace_argp, 0,
 		"local_storage RCU Tasks Trace slowdown benchmark", 0 },
+	{ &bench_hashmap_lookup_argp, 0, "Hashmap lookup benchmark", 0 },
 	{},
 };
 
@@ -402,6 +404,9 @@ struct argp *bench_name_to_argp(const char *bench_name)
 
 	if (_SCMP("bpf-loop"))
 		return &bench_bpf_loop_argp;
+
+	if (_SCMP("bpf-hashmap-lookup"))
+		return &bench_hashmap_lookup_argp;
 
 	/* no extra arguments */
 	if (_SCMP("count-global") ||
@@ -587,6 +592,7 @@ extern const struct bench bench_local_storage_cache_seq_get;
 extern const struct bench bench_local_storage_cache_interleaved_get;
 extern const struct bench bench_local_storage_cache_hashmap_control;
 extern const struct bench bench_local_storage_tasks_trace;
+extern const struct bench bench_bpf_hashmap_lookup;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -626,6 +632,7 @@ static const struct bench *benchs[] = {
 	&bench_local_storage_cache_interleaved_get,
 	&bench_local_storage_cache_hashmap_control,
 	&bench_local_storage_tasks_trace,
+	&bench_bpf_hashmap_lookup,
 };
 
 static void setup_benchmark()
