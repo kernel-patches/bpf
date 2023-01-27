@@ -45,12 +45,6 @@ static struct {
 	.value_size = 8,
 };
 
-enum {
-	ARG_NR_ENTRIES = 3000,
-	ARG_NR_HASH_FUNCS = 3001,
-	ARG_VALUE_SIZE = 3002,
-};
-
 static const struct argp_option opts[] = {
 	{ "nr_entries", ARG_NR_ENTRIES, "NR_ENTRIES", 0,
 		"Set number of expected unique entries in the bloom filter"},

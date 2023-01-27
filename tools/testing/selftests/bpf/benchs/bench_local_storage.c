@@ -17,11 +17,6 @@ static struct {
 	.hashmap_nr_keys_used = 1000,
 };
 
-enum {
-	ARG_NR_MAPS = 6000,
-	ARG_HASHMAP_NR_KEYS_USED = 6001,
-};
-
 static const struct argp_option opts[] = {
 	{ "nr_maps", ARG_NR_MAPS, "NR_MAPS", 0,
 		"Set number of local_storage maps"},

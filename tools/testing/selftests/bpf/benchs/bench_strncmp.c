@@ -14,10 +14,6 @@ static struct strncmp_args {
 	.cmp_str_len = 32,
 };
 
-enum {
-	ARG_CMP_STR_LEN = 5000,
-};
-
 static const struct argp_option opts[] = {
 	{ "cmp-str-len", ARG_CMP_STR_LEN, "CMP_STR_LEN", 0,
 	  "Set the length of compared string" },

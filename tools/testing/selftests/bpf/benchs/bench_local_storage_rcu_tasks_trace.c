@@ -19,12 +19,6 @@ static struct {
 	.quiet = false,
 };
 
-enum {
-	ARG_NR_PROCS = 7000,
-	ARG_KTHREAD_PID = 7001,
-	ARG_QUIET = 7002,
-};
-
 static const struct argp_option opts[] = {
 	{ "nr_procs", ARG_NR_PROCS, "NR_PROCS", 0,
 		"Set number of user processes to spin up"},

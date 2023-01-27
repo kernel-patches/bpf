@@ -29,14 +29,6 @@ static struct {
 	.perfbuf_sz = 128,
 };
 
-enum {
-	ARG_RB_BACK2BACK = 2000,
-	ARG_RB_USE_OUTPUT = 2001,
-	ARG_RB_BATCH_CNT = 2002,
-	ARG_RB_SAMPLED = 2003,
-	ARG_RB_SAMPLE_RATE = 2004,
-};
-
 static const struct argp_option opts[] = {
 	{ "rb-b2b", ARG_RB_BACK2BACK, NULL, 0, "Back-to-back mode"},
 	{ "rb-use-output", ARG_RB_USE_OUTPUT, NULL, 0, "Use bpf_ringbuf_output() instead of bpf_ringbuf_reserve()"},

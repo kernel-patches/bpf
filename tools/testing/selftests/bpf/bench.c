@@ -249,11 +249,6 @@ const char argp_program_doc[] =
 "    # run 'count-local' with 16 producer and 8 consumer thread, pinned to CPUs\n"
 "    benchmark -p16 -c8 -a count-local\n";
 
-enum {
-	ARG_PROD_AFFINITY_SET = 1000,
-	ARG_CONS_AFFINITY_SET = 1001,
-};
-
 static const struct argp_option opts[] = {
 	{ "list", 'l', NULL, 0, "List available benchmarks"},
 	{ "duration", 'd', "SEC", 0, "Duration of benchmark, seconds"},
@@ -276,7 +271,7 @@ extern struct argp bench_local_storage_argp;
 extern struct argp bench_local_storage_rcu_tasks_trace_argp;
 extern struct argp bench_strncmp_argp;
 
-static const struct argp_child bench_parsers[] = {
+static struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
 	{ &bench_bloom_map_argp, 0, "Bloom filter map benchmark", 0 },
 	{ &bench_bpf_loop_argp, 0, "bpf_loop helper benchmark", 0 },
@@ -287,9 +282,10 @@ static const struct argp_child bench_parsers[] = {
 	{},
 };
 
+static int pos_args;
+
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-	static int pos_args;
 
 	switch (key) {
 	case 'v':
@@ -359,6 +355,69 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+struct argp *bench_name_to_argp(const char *bench_name)
+{
+
+#define _SCMP(NAME) (!strcmp(bench_name, NAME))
+
+	if (_SCMP("bloom-lookup") ||
+	    _SCMP("bloom-update") ||
+	    _SCMP("bloom-false-positive") ||
+	    _SCMP("hashmap-without-bloom") ||
+	    _SCMP("hashmap-with-bloom"))
+		return &bench_bloom_map_argp;
+
+	if (_SCMP("rb-libbpf") ||
+	    _SCMP("rb-custom") ||
+	    _SCMP("pb-libbpf") ||
+	    _SCMP("pb-custom"))
+		return &bench_ringbufs_argp;
+
+	if (_SCMP("local-storage-cache-seq-get") ||
+	    _SCMP("local-storage-cache-int-get") ||
+	    _SCMP("local-storage-cache-hashmap-control"))
+		return &bench_local_storage_argp;
+
+	if (_SCMP("local-storage-tasks-trace"))
+		return &bench_local_storage_rcu_tasks_trace_argp;
+
+	if (_SCMP("strncmp-no-helper") ||
+	    _SCMP("strncmp-helper"))
+		return &bench_strncmp_argp;
+
+	if (_SCMP("bpf-loop"))
+		return &bench_bpf_loop_argp;
+
+	/* no extra arguments */
+	if (_SCMP("count-global") ||
+	    _SCMP("count-local") ||
+	    _SCMP("rename-base") ||
+	    _SCMP("rename-kprobe") ||
+	    _SCMP("rename-kretprobe") ||
+	    _SCMP("rename-rawtp") ||
+	    _SCMP("rename-fentry") ||
+	    _SCMP("rename-fexit") ||
+	    _SCMP("trig-base") ||
+	    _SCMP("trig-tp") ||
+	    _SCMP("trig-rawtp") ||
+	    _SCMP("trig-kprobe") ||
+	    _SCMP("trig-fentry") ||
+	    _SCMP("trig-fentry-sleep") ||
+	    _SCMP("trig-fmodret") ||
+	    _SCMP("trig-uprobe-base") ||
+	    _SCMP("trig-uprobe-with-nop") ||
+	    _SCMP("trig-uretprobe-with-nop") ||
+	    _SCMP("trig-uprobe-without-nop") ||
+	    _SCMP("trig-uretprobe-without-nop") ||
+	    _SCMP("bpf-hashmap-full-update"))
+		return NULL;
+
+#undef _SCMP
+
+	fprintf(stderr, "%s: bench %s is unknown\n", __func__, bench_name);
+	exit(1);
+}
+
 static void parse_cmdline_args(int argc, char **argv)
 {
 	static const struct argp argp = {
@@ -367,11 +426,34 @@ static void parse_cmdline_args(int argc, char **argv)
 		.doc = argp_program_doc,
 		.children = bench_parsers,
 	};
+	static struct argp *bench_argp;
+
+	/* Parse args for the first time to get bench name */
 	if (argp_parse(&argp, argc, argv, 0, NULL, NULL))
 		exit(1);
-	if (!env.list && !env.bench_name) {
+
+	if (env.list)
+		return;
+
+	if (!env.bench_name) {
 		argp_help(&argp, stderr, ARGP_HELP_DOC, "bench");
 		exit(1);
+	}
+
+	/* Now check if there are custom options available. If not, then
+	 * everything is done, if yes, then we need to patch bench_parsers
+	 * so that bench_parsers[0] points to the right 'struct argp', and
+	 * bench_parsers[1] terminates the list.
+	 */
+	bench_argp = bench_name_to_argp(env.bench_name);
+	if (bench_argp) {
+		bench_parsers[0].argp = bench_argp;
+		bench_parsers[0].header = env.bench_name;
+		memset(&bench_parsers[1], 0, sizeof(bench_parsers[1]));
+
+		pos_args = 0;
+		if (argp_parse(&argp, argc, argv, 0, NULL, NULL))
+			exit(1);
 	}
 }
 

@@ -16,10 +16,6 @@ static struct {
 	.nr_loops = 10,
 };
 
-enum {
-	ARG_NR_LOOPS = 4000,
-};
-
 static const struct argp_option opts[] = {
 	{ "nr_loops", ARG_NR_LOOPS, "nr_loops", 0,
 		"Set number of loops for the bpf_loop helper"},
