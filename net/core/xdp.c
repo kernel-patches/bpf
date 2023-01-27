@@ -724,6 +724,7 @@ __diag_ignore_all("-Wmissing-prototypes",
  */
 int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
 {
+	// XXX: Question: Should we clear mem pointed to by @timestamp ?
 	return -EOPNOTSUPP;
 }
 
@@ -736,6 +737,7 @@ int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
  */
 int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, u32 *hash)
 {
+	// XXX: Question: Should we clear mem pointed to by @hash ?
 	return -EOPNOTSUPP;
 }
 
