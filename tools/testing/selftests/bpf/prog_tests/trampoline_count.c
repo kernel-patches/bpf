@@ -2,7 +2,11 @@
 #define _GNU_SOURCE
 #include <test_progs.h>
 
+#if defined(__s390x__)
+#define MAX_TRAMP_PROGS 27
+#else
 #define MAX_TRAMP_PROGS 38
+#endif
 
 struct inst {
 	struct bpf_object *obj;
@@ -37,14 +41,21 @@ void serial_test_trampoline_count(void)
 {
 	char *file = "test_trampoline_count.bpf.o";
 	char *const progs[] = { "fentry_test", "fmod_ret_test", "fexit_test" };
-	struct inst inst[MAX_TRAMP_PROGS + 1] = {};
+	int bpf_max_tramp_links, err, i, prog_fd;
 	struct bpf_program *prog;
 	struct bpf_link *link;
-	int prog_fd, err, i;
+	struct inst *inst;
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 
+	bpf_max_tramp_links = get_bpf_max_tramp_links();
+	if (!ASSERT_GE(bpf_max_tramp_links, 1, "bpf_max_tramp_links"))
+		return;
+	inst = calloc(bpf_max_tramp_links + 1, sizeof(*inst));
+	if (!ASSERT_OK_PTR(inst, "inst"))
+		return;
+
 	/* attach 'allowed' trampoline programs */
-	for (i = 0; i < MAX_TRAMP_PROGS; i++) {
+	for (i = 0; i < bpf_max_tramp_links; i++) {
 		prog = load_prog(file, progs[i % ARRAY_SIZE(progs)], &inst[i]);
 		if (!prog)
 			goto cleanup;
@@ -91,4 +102,5 @@ cleanup:
 		bpf_link__destroy(inst[i].link);
 		bpf_object__close(inst[i].obj);
 	}
+	free(inst);
 }
