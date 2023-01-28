@@ -16,25 +16,13 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-/* Pin map under /sys/fs/bpf/tc/globals/<map name> */
-#define PIN_GLOBAL_NS 2
-
-/* Must match struct bpf_elf_map layout from iproute2 */
 struct {
-	__u32 type;
-	__u32 size_key;
-	__u32 size_value;
-	__u32 max_elem;
-	__u32 flags;
-	__u32 id;
-	__u32 pinning;
-} server_map SEC("maps") = {
-	.type = BPF_MAP_TYPE_SOCKMAP,
-	.size_key = sizeof(int),
-	.size_value  = sizeof(__u64),
-	.max_elem = 1,
-	.pinning = PIN_GLOBAL_NS,
-};
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__type(key, int);
+	__type(value, __u64);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, 1);
+} server_map SEC(".maps");
 
 char _license[] SEC("license") = "GPL";
 
