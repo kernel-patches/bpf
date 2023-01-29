@@ -7986,6 +7986,40 @@ static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno
 				 state->callback_subprogno == subprogno);
 }
 
+/* Mark slots with STACK_MISC in case of raw mode, stack offset
+ * is inferred from register state.
+ */
+static int mark_arg_mem_written(struct bpf_verifier_env *env,
+				struct bpf_call_arg_meta *meta,
+				int insn_idx)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state *reg = regs + meta->regno;
+	int off, size, step, err = 0;
+	struct tnum reg_off;
+
+	for (off = 0; off < meta->access_size;) {
+		reg_off = tnum_add(reg->var_off, tnum_const(reg->off + off));
+		if (off + BPF_REG_SIZE <= meta->access_size &&
+		    tnum_is_aligned(reg_off, BPF_REG_SIZE)) {
+			size = BPF_DW;
+			step = BPF_REG_SIZE;
+		} else {
+			size = BPF_B;
+			step = 1;
+		}
+
+		err = check_mem_access(env, insn_idx, meta->regno, off, size,
+				       BPF_WRITE, -1, false);
+		if (err)
+			return err;
+
+		off += step;
+	}
+
+	return err;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -8076,15 +8110,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err)
 		return err;
 
-	/* Mark slots with STACK_MISC in case of raw mode, stack offset
-	 * is inferred from register state.
-	 */
-	for (i = 0; i < meta.access_size; i++) {
-		err = check_mem_access(env, insn_idx, meta.regno, i, BPF_B,
-				       BPF_WRITE, -1, false);
-		if (err)
-			return err;
-	}
+	err = mark_arg_mem_written(env, &meta, insn_idx);
+	if (err)
+		return err;
 
 	regs = cur_regs(env);
 
