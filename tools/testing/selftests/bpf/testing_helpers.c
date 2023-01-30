@@ -262,9 +262,6 @@ int load_bpf_testmod(FILE *err, bool verbose)
 {
 	int fd;
 
-	/* ensure previous instance of the module is unloaded */
-	unload_bpf_testmod(err, verbose);
-
 	if (verbose)
 		fprintf(stdout, "Loading bpf_testmod.ko...\n");
 
