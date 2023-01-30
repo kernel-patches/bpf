@@ -7,10 +7,6 @@ on:
       - bpf_base
       - bpf-next_base
 
-concurrency:
-  group: ci-test-${{ github.ref_name }}
-  cancel-in-progress: true
-
 jobs:
   llvm-toolchain:
     runs-on: ubuntu-latest
@@ -18,7 +14,7 @@ jobs:
       llvm: ${{ steps.llvm-toolchain-impl.outputs.version }}
     steps:
       - id: llvm-version
-        uses: libbpf/ci/get-llvm-version@master
+        uses: insearchoflosttime/libbpf-ci/get-llvm-version@master
       - id: llvm-toolchain-impl
         shell: bash
         run: echo "version=llvm-${{ steps.llvm-version.outputs.version }}" >> $GITHUB_OUTPUT
@@ -129,7 +125,7 @@ jobs:
           fetch-depth: 50
       - if: ${{ github.repository == 'kernel-patches/vmtest' }}
         name: Download bpf-next tree
-        uses: libbpf/ci/get-linux-source@master
+        uses: insearchoflosttime/libbpf-ci/get-linux-source@master
         with:
           dest: '.kernel'
       - if: ${{ github.repository == 'kernel-patches/vmtest' }}
@@ -226,14 +222,14 @@ jobs:
           fi
 
           echo -n "${{ steps.get-commit-metadata.outputs.commit }}" > "${KBUILD_OUTPUT}/.build-base-sha"
-      - uses: libbpf/ci/patch-kernel@master
+      - uses: insearchoflosttime/libbpf-ci/patch-kernel@master
         with:
           patches-root: '${{ github.workspace }}/ci/diffs'
           repo-root: '${{ github.workspace }}'
       - name: Setup build environment
-        uses: libbpf/ci/setup-build-env@master
+        uses: insearchoflosttime/libbpf-ci/setup-build-env@master
       - name: Build kernel image
-        uses: libbpf/ci/build-linux@master
+        uses: insearchoflosttime/libbpf-ci/build-linux@master
         with:
           arch: ${{ matrix.arch }}
           toolchain: ${{ matrix.toolchain }}
@@ -241,14 +237,14 @@ jobs:
           max-make-jobs: 32
       - if: ${{ github.event_name != 'push' }}
         name: Build selftests
-        uses: libbpf/ci/build-selftests@master
+        uses: insearchoflosttime/libbpf-ci/build-selftests@master
         with:
           toolchain: ${{ matrix.toolchain }}
           kbuild-output: ${{ env.KBUILD_OUTPUT }}
           max-make-jobs: 32
       - if: ${{ github.event_name != 'push' }}
         name: Build samples
-        uses: libbpf/ci/build-samples@master
+        uses: insearchoflosttime/libbpf-ci/build-samples@master
         with:
           toolchain: ${{ matrix.toolchain }}
           kbuild-output: ${{ env.KBUILD_OUTPUT }}
@@ -328,7 +324,7 @@ jobs:
         # zstd is installed by default in the runner images.
         run: zstd -d -T0  vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst --stdout | tar -xf -
       - name: Prepare rootfs
-        uses: libbpf/ci/prepare-rootfs@master
+        uses: insearchoflosttime/libbpf-ci/prepare-rootfs@master
         with:
           project-name: 'libbpf'
           arch: ${{ matrix.arch }}
@@ -338,7 +334,7 @@ jobs:
           image-output: '/tmp/root.img'
           test: ${{ matrix.test }}
       - name: Run selftests
-        uses: libbpf/ci/run-qemu@master
+        uses: insearchoflosttime/libbpf-ci/run-qemu@master
         continue-on-error: ${{ matrix.continue_on_error }}
         timeout-minutes: ${{ matrix.timeout_minutes }}
         with:
