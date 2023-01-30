@@ -45,6 +45,7 @@
 #include "bpf_util.h"
 #include "test_btf.h"
 #include "../../../include/linux/filter.h"
+#include "testing_helpers.h"
 
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
@@ -1705,6 +1706,12 @@ static int do_test(bool unpriv, unsigned int from, unsigned int to)
 {
 	int i, passes = 0, errors = 0;
 
+	/* ensure previous instance of the module is unloaded */
+	unload_bpf_testmod(stderr, verbose);
+
+	if (load_bpf_testmod(stderr, verbose))
+		return EXIT_FAILURE;
+
 	for (i = from; i < to; i++) {
 		struct bpf_test *test = &tests[i];
 
@@ -1731,6 +1738,8 @@ static int do_test(bool unpriv, unsigned int from, unsigned int to)
 			do_test_single(test, false, &passes, &errors);
 		}
 	}
+
+	unload_bpf_testmod(stderr, verbose);
 
 	printf("Summary: %d PASSED, %d SKIPPED, %d FAILED\n", passes,
 	       skips, errors);
