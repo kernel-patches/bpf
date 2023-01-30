@@ -44,7 +44,7 @@ RST2MAN_DEP := $(shell command -v rst2man 2>/dev/null)
 # $1 - target for scripts/bpf_doc.py
 # $2 - man page section to generate the troff file
 define DOCS_RULES =
-$(OUTPUT)bpf-$1.rst: ../../../../include/uapi/linux/bpf.h
+$(OUTPUT)bpf-$1.rst: $(KHDR_INCLUDES)/linux/bpf.h
 	$$(QUIET_GEN)../../../../scripts/bpf_doc.py $1 \
 		--filename $$< > $$@
 
