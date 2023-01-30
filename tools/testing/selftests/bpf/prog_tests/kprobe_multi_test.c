@@ -338,7 +338,7 @@ static int get_syms(char ***symsp, size_t *cntp)
 	 * Filtering out duplicates by using hashmap__add, which won't
 	 * add existing entry.
 	 */
-	f = fopen("/sys/kernel/debug/tracing/available_filter_functions", "r");
+	f = fopen("/sys/kernel/tracing/available_filter_functions", "r");
 	if (!f)
 		return -EINVAL;
 

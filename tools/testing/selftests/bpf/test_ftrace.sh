@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TR=/sys/kernel/debug/tracing/
+TR=/sys/kernel/tracing/
 clear_trace() { # reset trace output
     echo > $TR/trace
 }
