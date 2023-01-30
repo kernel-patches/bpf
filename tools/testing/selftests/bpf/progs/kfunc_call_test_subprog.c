@@ -4,10 +4,21 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_tcp_helpers.h"
 
+/*
+ * We can't include vmlinux.h, because it conflicts with bpf_tcp_helpers.h,
+ * but we need refcount_t typedef for bpf_testmod_kfunc.h.
+ * Adding it directly.
+ */
+typedef struct {
+	int counter;
+} atomic_t;
+typedef struct refcount_struct {
+	atomic_t refs;
+} refcount_t;
+
+#include "bpf_testmod/bpf_testmod_kfunc.h"
+
 extern const int bpf_prog_active __ksym;
-extern __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
-				  __u32 c, __u64 d) __ksym;
-extern struct sock *bpf_kfunc_call_test3(struct sock *sk) __ksym;
 int active_res = -1;
 int sk_state_res = -1;
 
