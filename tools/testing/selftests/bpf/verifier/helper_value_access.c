@@ -951,3 +951,19 @@
 	.errstr = "invalid access to map value, value_size=16 off=9 size=8",
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 },
+{
+	"helper access unaligned mem: fixed off",
+	.insns = {
+	BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -23),
+	BPF_MOV64_IMM(BPF_REG_2, 17),
+	BPF_MOV64_IMM(BPF_REG_3, 0xbeef),
+	BPF_EMIT_CALL(BPF_FUNC_probe_read_kernel),
+	BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+	},
+	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
+	.result = VERBOSE_ACCEPT,
+	.errstr = "fp-8=??????mm fp-16=mmmmmmmm fp-24=mmmmmmm?"
+},
