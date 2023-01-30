@@ -54,11 +54,11 @@ static int open_xsk(int ifindex, struct xsk *xsk)
 	int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	const struct xsk_socket_config socket_config = {
 		.rx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
-		.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.tx_size = UMEM_NUM / 2,
 		.bind_flags = XDP_COPY,
 	};
 	const struct xsk_umem_config umem_config = {
-		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.fill_size = UMEM_NUM / 2,
 		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
 		.frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE,
 		.flags = XDP_UMEM_UNALIGNED_CHUNK_FLAG,
@@ -88,13 +88,24 @@ static int open_xsk(int ifindex, struct xsk *xsk)
 	if (!ASSERT_OK(ret, "xsk_socket__create"))
 		return ret;
 
+	printf("%p: umem=<%p..%p>\n", xsk, xsk->umem_area, xsk->umem_area + UMEM_SIZE);
+	printf("%p: fill=<%p..%p>\n", xsk, xsk->fill.ring,
+	       xsk->fill.ring + xsk->fill.size * sizeof(__u64));
+	printf("%p: comp=<%p..%p>\n", xsk, xsk->comp.ring,
+	       xsk->comp.ring + xsk->comp.size * sizeof(__u64));
+	printf("%p: rx=<%p..%p>\n", xsk, xsk->rx.ring,
+	       xsk->rx.ring + xsk->rx.size * sizeof(struct xdp_desc));
+	printf("%p: tx=<%p..%p>\n", xsk, xsk->tx.ring,
+	       xsk->tx.ring + xsk->tx.size * sizeof(struct xdp_desc));
+
 	/* First half of umem is for TX. This way address matches 1-to-1
 	 * to the completion queue index.
 	 */
 
 	for (i = 0; i < UMEM_NUM / 2; i++) {
 		addr = i * UMEM_FRAME_SIZE;
-		printf("%p: tx_desc[%d] -> %lx\n", xsk, i, addr);
+		printf("%p: tx_desc[%d] -> %lx (%p)\n", xsk, i, addr,
+		       xsk_umem__get_data(xsk->umem_area, addr));
 	}
 
 	/* Second half of umem is for RX. */
@@ -107,7 +118,10 @@ static int open_xsk(int ifindex, struct xsk *xsk)
 
 	for (i = 0; i < UMEM_NUM / 2; i++) {
 		addr = (UMEM_NUM / 2 + i) * UMEM_FRAME_SIZE;
-		printf("%p: rx_desc[%d] -> %lx\n", xsk, i, addr);
+		printf("%p: rx_desc[%d] -> %lx (%p)\n", xsk, i, addr,
+		       xsk_umem__get_data(xsk->umem_area, addr));
+		printf("%p: fill %lx at %p\n", xsk, addr,
+		       xsk_ring_prod__fill_addr(&xsk->fill, i));
 		*xsk_ring_prod__fill_addr(&xsk->fill, i) = addr;
 	}
 	xsk_ring_prod__submit(&xsk->fill, ret);
@@ -159,6 +173,7 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 	tx_desc->addr = idx % (UMEM_NUM / 2) * UMEM_FRAME_SIZE;
 	printf("%p: tx_desc[%u]->addr=%llx\n", xsk, idx, tx_desc->addr);
 	data = xsk_umem__get_data(xsk->umem_area, tx_desc->addr);
+	printf("%p: tx %llx (%p) at %p\n", xsk, tx_desc->addr, data, tx_desc);
 
 	eth = data;
 	iph = (void *)(eth + 1);
@@ -205,9 +220,8 @@ static void complete_tx(struct xsk *xsk)
 	if (ASSERT_EQ(xsk_ring_cons__peek(&xsk->comp, 1, &idx), 1, "xsk_ring_cons__peek")) {
 		addr = *xsk_ring_cons__comp_addr(&xsk->comp, idx);
 
-		printf("%p: refill idx=%u addr=%llx\n", xsk, idx, addr);
-		*xsk_ring_prod__fill_addr(&xsk->fill, idx) = addr;
-		xsk_ring_prod__submit(&xsk->fill, 1);
+		printf("%p: complete tx idx=%u addr=%llx\n", xsk, idx, addr);
+		xsk_ring_cons__release(&xsk->comp, 1);
 	}
 }
 
@@ -216,7 +230,9 @@ static void refill_rx(struct xsk *xsk, __u64 addr)
 	__u32 idx;
 
 	if (ASSERT_EQ(xsk_ring_prod__reserve(&xsk->fill, 1, &idx), 1, "xsk_ring_prod__reserve")) {
-		printf("%p: complete idx=%u addr=%llx\n", xsk, idx, addr);
+		printf("%p: complete rx idx=%u addr=%llx\n", xsk, idx, addr);
+		printf("%p: fill %llx at %p\n", xsk, addr,
+		       xsk_ring_prod__fill_addr(&xsk->fill, idx));
 		*xsk_ring_prod__fill_addr(&xsk->fill, idx) = addr;
 		xsk_ring_prod__submit(&xsk->fill, 1);
 	}
@@ -253,8 +269,8 @@ static int verify_xsk_metadata(struct xsk *xsk)
 	rx_desc = xsk_ring_cons__rx_desc(&xsk->rx, idx);
 	comp_addr = xsk_umem__extract_addr(rx_desc->addr);
 	addr = xsk_umem__add_offset_to_addr(rx_desc->addr);
-	printf("%p: rx_desc[%u]->addr=%llx addr=%llx comp_addr=%llx\n",
-	       xsk, idx, rx_desc->addr, addr, comp_addr);
+	printf("%p: rx_desc[%u]->addr=%llx (%p) addr=%llx comp_addr=%llx\n",
+	       xsk, idx, rx_desc->addr, rx_desc, addr, comp_addr);
 	data = xsk_umem__get_data(xsk->umem_area, addr);
 
 	/* Make sure we got the packet offset correctly. */
