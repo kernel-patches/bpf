@@ -84,7 +84,7 @@ struct bpf_reg_state {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
-			struct bpf_active_lock non_owning_ref_lock;
+			bool non_owning_ref_lock;
 		};
 
 		struct { /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */

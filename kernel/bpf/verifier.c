@@ -1077,9 +1077,8 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 				verbose_a("id=%d", reg->id);
 			if (reg->ref_obj_id)
 				verbose_a("ref_obj_id=%d", reg->ref_obj_id);
-			if (reg->non_owning_ref_lock.ptr)
-				verbose_a("non_own_id=(%p,%d)", reg->non_owning_ref_lock.ptr,
-					  reg->non_owning_ref_lock.id);
+			if (reg->non_owning_ref_lock)
+				verbose(env, "non_own_ref,");
 			if (t != SCALAR_VALUE)
 				verbose_a("off=%d", reg->off);
 			if (type_is_pkt_pointer(t))
@@ -5049,7 +5048,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		}
 
 		if (type_is_alloc(reg->type) && !reg->ref_obj_id &&
-		    !reg->non_owning_ref_lock.ptr) {
+		    !reg->non_owning_ref_lock) {
 			verbose(env, "verifier internal error: ref_obj_id for allocated object must be non-zero\n");
 			return -EFAULT;
 		}
@@ -7376,13 +7375,15 @@ static int release_reference(struct bpf_verifier_env *env,
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env,
 				       struct bpf_active_lock *lock)
 {
+	struct bpf_active_lock *cur_state_lock;
 	struct bpf_func_state *unused;
 	struct bpf_reg_state *reg;
 
+	cur_state_lock = &env->cur_state->active_lock;
 	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
-		if (reg->non_owning_ref_lock.ptr &&
-		    reg->non_owning_ref_lock.ptr == lock->ptr &&
-		    reg->non_owning_ref_lock.id == lock->id)
+		if (reg->non_owning_ref_lock &&
+		    cur_state_lock->ptr == lock->ptr &&
+		    cur_state_lock->id == lock->id)
 			__mark_reg_unknown(env, reg);
 	}));
 }
@@ -8948,13 +8949,12 @@ static int ref_set_non_owning_lock(struct bpf_verifier_env *env, struct bpf_reg_
 		return -EFAULT;
 	}
 
-	if (reg->non_owning_ref_lock.ptr) {
+	if (reg->non_owning_ref_lock) {
 		verbose(env, "verifier internal error: non_owning_ref_lock already set\n");
 		return -EFAULT;
 	}
 
-	reg->non_owning_ref_lock.id = state->active_lock.id;
-	reg->non_owning_ref_lock.ptr = state->active_lock.ptr;
+	reg->non_owning_ref_lock = true;
 	return 0;
 }
 
