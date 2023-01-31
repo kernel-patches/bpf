@@ -190,6 +190,10 @@ struct bpf_verifier_stack_elem {
 
 static int acquire_reference_state(struct bpf_verifier_env *env, int insn_idx);
 static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
+static void invalidate_non_owning_refs(struct bpf_verifier_env *env,
+				       struct bpf_active_lock *lock);
+static int ref_set_non_owning_lock(struct bpf_verifier_env *env,
+				   struct bpf_reg_state *reg);
 
 static bool bpf_map_ptr_poisoned(const struct bpf_insn_aux_data *aux)
 {
@@ -1073,6 +1077,9 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 				verbose_a("id=%d", reg->id);
 			if (reg->ref_obj_id)
 				verbose_a("ref_obj_id=%d", reg->ref_obj_id);
+			if (reg->non_owning_ref_lock.ptr)
+				verbose_a("non_own_id=(%p,%d)", reg->non_owning_ref_lock.ptr,
+					  reg->non_owning_ref_lock.id);
 			if (t != SCALAR_VALUE)
 				verbose_a("off=%d", reg->off);
 			if (type_is_pkt_pointer(t))
@@ -5041,7 +5048,8 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			return -EACCES;
 		}
 
-		if (type_is_alloc(reg->type) && !reg->ref_obj_id) {
+		if (type_is_alloc(reg->type) && !reg->ref_obj_id &&
+		    !reg->non_owning_ref_lock.ptr) {
 			verbose(env, "verifier internal error: ref_obj_id for allocated object must be non-zero\n");
 			return -EFAULT;
 		}
@@ -6031,9 +6039,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			cur->active_lock.ptr = btf;
 		cur->active_lock.id = reg->id;
 	} else {
-		struct bpf_func_state *fstate = cur_func(env);
 		void *ptr;
-		int i;
 
 		if (map)
 			ptr = map;
@@ -6049,25 +6055,11 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			verbose(env, "bpf_spin_unlock of different lock\n");
 			return -EINVAL;
 		}
+
+		invalidate_non_owning_refs(env, &cur->active_lock);
+
 		cur->active_lock.ptr = NULL;
 		cur->active_lock.id = 0;
-
-		for (i = fstate->acquired_refs - 1; i >= 0; i--) {
-			int err;
-
-			/* Complain on error because this reference state cannot
-			 * be freed before this point, as bpf_spin_lock critical
-			 * section does not allow functions that release the
-			 * allocated object immediately.
-			 */
-			if (!fstate->refs[i].release_on_unlock)
-				continue;
-			err = release_reference(env, fstate->refs[i].id);
-			if (err) {
-				verbose(env, "failed to release release_on_unlock reference");
-				return err;
-			}
-		}
 	}
 	return 0;
 }
@@ -6535,6 +6527,23 @@ found:
 	return 0;
 }
 
+static struct btf_field *
+reg_find_field_offset(const struct bpf_reg_state *reg, s32 off, u32 fields)
+{
+	struct btf_field *field;
+	struct btf_record *rec;
+
+	rec = reg_btf_record(reg);
+	if (!rec)
+		return NULL;
+
+	field = btf_record_find(rec, off, fields);
+	if (!field)
+		return NULL;
+
+	return field;
+}
+
 int check_func_arg_reg_off(struct bpf_verifier_env *env,
 			   const struct bpf_reg_state *reg, int regno,
 			   enum bpf_arg_type arg_type)
@@ -6556,6 +6565,18 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		 */
 		if (arg_type_is_dynptr(arg_type) && type == PTR_TO_STACK)
 			return 0;
+
+		if (type == (PTR_TO_BTF_ID | MEM_ALLOC) && reg->off) {
+			if (reg_find_field_offset(reg, reg->off, BPF_GRAPH_NODE_OR_ROOT))
+				return __check_ptr_off_reg(env, reg, regno, true);
+
+			verbose(env, "R%d must have zero offset when passed to release func\n",
+				regno);
+			verbose(env, "No graph node or root found at R%d type:%s off:%d\n", regno,
+				kernel_type_name(reg->btf, reg->btf_id), reg->off);
+			return -EINVAL;
+		}
+
 		/* Doing check_ptr_off_reg check for the offset will catch this
 		 * because fixed_off_ok is false, but checking here allows us
 		 * to give the user a better error message.
@@ -7350,6 +7371,20 @@ static int release_reference(struct bpf_verifier_env *env,
 	}));
 
 	return 0;
+}
+
+static void invalidate_non_owning_refs(struct bpf_verifier_env *env,
+				       struct bpf_active_lock *lock)
+{
+	struct bpf_func_state *unused;
+	struct bpf_reg_state *reg;
+
+	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
+		if (reg->non_owning_ref_lock.ptr &&
+		    reg->non_owning_ref_lock.ptr == lock->ptr &&
+		    reg->non_owning_ref_lock.id == lock->id)
+			__mark_reg_unknown(env, reg);
+	}));
 }
 
 static void clear_caller_saved_regs(struct bpf_verifier_env *env,
@@ -8904,38 +8939,55 @@ static int process_kf_arg_ptr_to_kptr(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static int ref_set_release_on_unlock(struct bpf_verifier_env *env, u32 ref_obj_id)
+static int ref_set_non_owning_lock(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
-	struct bpf_func_state *state = cur_func(env);
+	struct bpf_verifier_state *state = env->cur_state;
+
+	if (!state->active_lock.ptr) {
+		verbose(env, "verifier internal error: ref_set_non_owning_lock w/o active lock\n");
+		return -EFAULT;
+	}
+
+	if (reg->non_owning_ref_lock.ptr) {
+		verbose(env, "verifier internal error: non_owning_ref_lock already set\n");
+		return -EFAULT;
+	}
+
+	reg->non_owning_ref_lock.id = state->active_lock.id;
+	reg->non_owning_ref_lock.ptr = state->active_lock.ptr;
+	return 0;
+}
+
+static int ref_convert_owning_non_owning(struct bpf_verifier_env *env, u32 ref_obj_id)
+{
+	struct bpf_func_state *state, *unused;
 	struct bpf_reg_state *reg;
 	int i;
 
-	/* bpf_spin_lock only allows calling list_push and list_pop, no BPF
-	 * subprogs, no global functions. This means that the references would
-	 * not be released inside the critical section but they may be added to
-	 * the reference state, and the acquired_refs are never copied out for a
-	 * different frame as BPF to BPF calls don't work in bpf_spin_lock
-	 * critical sections.
-	 */
+	state = cur_func(env);
+
 	if (!ref_obj_id) {
-		verbose(env, "verifier internal error: ref_obj_id is zero for release_on_unlock\n");
+		verbose(env, "verifier internal error: ref_obj_id is zero for "
+			     "owning -> non-owning conversion\n");
 		return -EFAULT;
 	}
+
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].id == ref_obj_id) {
-			if (state->refs[i].release_on_unlock) {
-				verbose(env, "verifier internal error: expected false release_on_unlock");
-				return -EFAULT;
+		if (state->refs[i].id != ref_obj_id)
+			continue;
+
+		/* Clear ref_obj_id here so release_reference doesn't clobber
+		 * the whole reg
+		 */
+		bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
+			if (reg->ref_obj_id == ref_obj_id) {
+				reg->ref_obj_id = 0;
+				ref_set_non_owning_lock(env, reg);
 			}
-			state->refs[i].release_on_unlock = true;
-			/* Now mark everyone sharing same ref_obj_id as untrusted */
-			bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-				if (reg->ref_obj_id == ref_obj_id)
-					reg->type |= PTR_UNTRUSTED;
-			}));
-			return 0;
-		}
+		}));
+		return 0;
 	}
+
 	verbose(env, "verifier internal error: ref state missing for ref_obj_id\n");
 	return -EFAULT;
 }
@@ -9070,7 +9122,6 @@ static int process_kf_arg_ptr_to_list_node(struct bpf_verifier_env *env,
 {
 	const struct btf_type *et, *t;
 	struct btf_field *field;
-	struct btf_record *rec;
 	u32 list_node_off;
 
 	if (meta->btf != btf_vmlinux ||
@@ -9087,9 +9138,8 @@ static int process_kf_arg_ptr_to_list_node(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	rec = reg_btf_record(reg);
 	list_node_off = reg->off + reg->var_off.value;
-	field = btf_record_find(rec, list_node_off, BPF_LIST_NODE);
+	field = reg_find_field_offset(reg, list_node_off, BPF_LIST_NODE);
 	if (!field || field->offset != list_node_off) {
 		verbose(env, "bpf_list_node not found at offset=%u\n", list_node_off);
 		return -EINVAL;
@@ -9115,8 +9165,8 @@ static int process_kf_arg_ptr_to_list_node(struct bpf_verifier_env *env,
 			btf_name_by_offset(field->graph_root.btf, et->name_off));
 		return -EINVAL;
 	}
-	/* Set arg#1 for expiration after unlock */
-	return ref_set_release_on_unlock(env, reg->ref_obj_id);
+
+	return 0;
 }
 
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta)
@@ -9395,11 +9445,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
 	const struct btf_type *t, *func, *func_proto, *ptr_type;
+	u32 i, nargs, func_id, ptr_type_id, release_ref_obj_id;
 	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
 	bool sleepable, rcu_lock, rcu_unlock;
 	struct bpf_kfunc_call_arg_meta meta;
-	u32 i, nargs, func_id, ptr_type_id;
 	int err, insn_idx = *insn_idx_p;
 	const struct btf_param *args;
 	const struct btf_type *ret_t;
@@ -9487,6 +9537,24 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 */
 	if (meta.release_regno) {
 		err = release_reference(env, regs[meta.release_regno].ref_obj_id);
+		if (err) {
+			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
+				func_name, func_id);
+			return err;
+		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_list_push_front] ||
+	    meta.func_id == special_kfunc_list[KF_bpf_list_push_back]) {
+		release_ref_obj_id = regs[BPF_REG_2].ref_obj_id;
+		err = ref_convert_owning_non_owning(env, release_ref_obj_id);
+		if (err) {
+			verbose(env, "kfunc %s#%d conversion of owning ref to non-owning failed\n",
+				func_name, func_id);
+			return err;
+		}
+
+		err = release_reference(env, release_ref_obj_id);
 		if (err) {
 			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
 				func_name, func_id);
