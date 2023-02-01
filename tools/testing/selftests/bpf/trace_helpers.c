@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <linux/perf_event.h>
+#include <linux/limits.h>
 #include <sys/mman.h>
 #include "trace_helpers.h"
 
@@ -229,4 +230,38 @@ ssize_t get_rel_offset(uintptr_t addr)
 
 	fclose(f);
 	return -EINVAL;
+}
+
+int read_buildid(const char *path, char **build_id)
+{
+	char tmp[] = "/tmp/dataXXXXXX";
+	char buf[PATH_MAX + 200];
+	int err, fd;
+	FILE *f;
+
+	fd = mkstemp(tmp);
+	if (fd == -1)
+		return -1;
+	close(fd);
+
+	snprintf(buf, sizeof(buf),
+		"readelf -n %s 2>/dev/null | grep 'Build ID' | awk '{print $3}' > %s",
+		path, tmp);
+
+	err = system(buf);
+	if (err)
+		goto out;
+
+	f = fopen(tmp, "r");
+	if (f) {
+		if (fscanf(f, "%ms$*\n", build_id) != 1) {
+			*build_id = NULL;
+			err = -1;
+		}
+		fclose(f);
+	}
+
+out:
+	unlink(tmp);
+	return err;
 }
