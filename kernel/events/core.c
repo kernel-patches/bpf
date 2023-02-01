@@ -8508,6 +8508,9 @@ struct perf_mmap_event {
 	u32			prot, flags;
 	u8			build_id[BUILD_ID_SIZE_MAX];
 	u32			build_id_size;
+#ifdef CONFIG_FILE_BUILD_ID
+	struct build_id		*f_bid;
+#endif
 
 	struct {
 		struct perf_event_header	header;
@@ -8519,6 +8522,38 @@ struct perf_mmap_event {
 		u64				pgoff;
 	} event_id;
 };
+
+#ifdef CONFIG_FILE_BUILD_ID
+static void build_id_read(struct perf_mmap_event *mmap_event)
+{
+	struct vm_area_struct *vma = mmap_event->vma;
+
+	mmap_event->f_bid = vma->vm_file ? vma->vm_file->f_bid : NULL;
+}
+
+static bool has_build_id(struct perf_mmap_event *mmap_event)
+{
+	return mmap_event->f_bid;
+}
+
+#define build_id_data mmap_event->f_bid->data
+#define build_id_size mmap_event->f_bid->sz
+#else
+static void build_id_read(struct perf_mmap_event *mmap_event)
+{
+	struct vm_area_struct *vma = mmap_event->vma;
+
+	build_id_parse(vma, mmap_event->build_id, &mmap_event->build_id_size);
+}
+
+static bool has_build_id(struct perf_mmap_event *mmap_event)
+{
+	return mmap_event->build_id_size;
+}
+
+#define build_id_data mmap_event->build_id
+#define build_id_size mmap_event->build_id_size
+#endif
 
 static int perf_event_mmap_match(struct perf_event *event,
 				 void *data)
@@ -8564,7 +8599,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 	mmap_event->event_id.pid = perf_event_pid(event, current);
 	mmap_event->event_id.tid = perf_event_tid(event, current);
 
-	use_build_id = event->attr.build_id && mmap_event->build_id_size;
+	use_build_id = event->attr.build_id && has_build_id(mmap_event);
 
 	if (event->attr.mmap2 && use_build_id)
 		mmap_event->event_id.header.misc |= PERF_RECORD_MISC_MMAP_BUILD_ID;
@@ -8573,10 +8608,10 @@ static void perf_event_mmap_output(struct perf_event *event,
 
 	if (event->attr.mmap2) {
 		if (use_build_id) {
-			u8 size[4] = { (u8) mmap_event->build_id_size, 0, 0, 0 };
+			u8 size[4] = { (u8) build_id_size, 0, 0, 0 };
 
 			__output_copy(&handle, size, 4);
-			__output_copy(&handle, mmap_event->build_id, BUILD_ID_SIZE_MAX);
+			__output_copy(&handle, build_id_data, BUILD_ID_SIZE_MAX);
 		} else {
 			perf_output_put(&handle, mmap_event->maj);
 			perf_output_put(&handle, mmap_event->min);
@@ -8708,7 +8743,7 @@ got_name:
 	mmap_event->event_id.header.size = sizeof(mmap_event->event_id) + size;
 
 	if (atomic_read(&nr_build_id_events))
-		build_id_parse(vma, mmap_event->build_id, &mmap_event->build_id_size);
+		build_id_read(mmap_event);
 
 	perf_iterate_sb(perf_event_mmap_output,
 		       mmap_event,
