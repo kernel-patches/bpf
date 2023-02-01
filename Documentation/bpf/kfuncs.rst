@@ -7,9 +7,9 @@ BPF Kernel Functions (kfuncs)
 
 BPF Kernel Functions or more commonly known as kfuncs are functions in the Linux
 kernel which are exposed for use by BPF programs. Unlike normal BPF helpers,
-kfuncs do not have a stable interface and can change from one kernel release to
-another. Hence, BPF programs need to be updated in response to changes in the
-kernel.
+kfuncs by default do not have a stable interface and can change from one kernel
+release to another. Hence, BPF programs may need to be updated in response to
+changes in the kernel. See :ref:`BPF_kfunc_stability`.
 
 2. Defining a kfunc
 ===================
@@ -223,14 +223,90 @@ type. An example is shown below::
         }
         late_initcall(init_subsystem);
 
-3. Core kfuncs
+
+.. _BPF_kfunc_stability:
+
+3. API (in)stability of kfuncs
+==============================
+
+By default, kfuncs exported to BPF programs are considered a kernel-internal
+interface that can change between kernel versions. This means that BPF programs
+using kfuncs may need to adapt to changes between kernel versions. In the
+extreme case that could also include removal of a kfunc. In other words, kfuncs
+are _not_ part of the kernel UAPI! Rather, these kfuncs can be thought of as
+being similar to internal kernel API functions exported using the
+``EXPORT_SYMBOL_GPL`` macro.
+
+While kfuncs are similar to internal kernel API functions, they differ in that
+most consumers of kfuncs (i.e., BPF programs) are not part of the kernel source
+tree. This means that callers of a kfunc cannot generally be changed at the same
+time as the kfunc itself, which is otherwise standard practice in the kernel
+tree. For this reason, the BPF community has to strike a balance between being
+able to move the kernel forward without being locked into a rigid exported API,
+and avoiding breaking BPF consumers of the functions. This is a technical
+trade-off that will be judged on a case-by-case basis. The following points are
+an attempt to capture the things that will be taken into account when making a
+decision on whether to change or remove a kfunc:
+
+1. When a patch adding a new kfunc is merged into the kernel tree, that will
+   make the kfunc available to a wider audience than during its development,
+   subjecting it to additional scrutiny. This may reveal limitations in the API
+   that was not apparent during development. As such, a newly added kfunc may
+   change in the period immediately after it was first merged into the kernel.
+
+2. The BPF community will make every reasonable effort to keep kfuncs around as
+   long as they continue to be useful to real-world BPF applications, and don't
+   have any unforeseen API issues or limitations.
+
+3. Should the need arise to change a kfunc that is still in active use by BPF
+   applications, that kfunc will go through a deprecation procedure as outlined
+   below.
+
+The procedural description above is deliberately vague, as the decision on
+whether to change it will ultimately be a judgement call made by the BPF
+maintainers. However, feedback from users of a kfunc is an important input to
+this decision, as it helps maintainers determine to what extent a given kfunc is
+in use. For this reason, the BPF community encourages users to provide such
+feedback (including pointing out problems with a given kfunc).
+
+In addition to the guidelines outlined above, the kernel subsystems exposing
+functionality via kfuncs may have their own guidelines. These will be documented
+by that subsystem as part of the documentation of the functionality exposed to
+BPF.
+
+3.1 Deprecation of kfuncs
+-------------------------
+
+As described above, the community will make every reasonable effort to keep
+useful kfuncs available through future kernel versions. However, it may happen
+that the kernel development moves in a direction so that the API exposed by a
+given kfunc becomes a barrier to further development.
+
+A kfunc that is slated for removal can be marked as *deprecated* using the
+``KF_DEPRECATED`` tag. Once a kfunc is marked as deprecated, the following
+procedure will be followed for removal:
+
+1. A deprecated kfunc will be kept in the kernel for a period of time after it
+   was first marked as deprecated. This time period will be chosen on a
+   case-by-case basis, based on how widespread the use of the kfunc is, how long
+   it has been in the kernel, and how hard it is to move to alternatives.
+
+2. Deprecated functions will be documented in the kernel docs along with their
+   remaining lifespan and including a recommendation for new functionality that
+   can replace the usage of the deprecated function (or an explanation for why
+   no such replacement exists).
+
+3. After the deprecation period, the kfunc will be removed. After this happens,
+   BPF programs calling the kfunc will be rejected by the verifier.
+
+4. Core kfuncs
 ==============
 
 The BPF subsystem provides a number of "core" kfuncs that are potentially
 applicable to a wide variety of different possible use cases and programs.
 Those kfuncs are documented here.
 
-3.1 struct task_struct * kfuncs
+4.1 struct task_struct * kfuncs
 -------------------------------
 
 There are a number of kfuncs that allow ``struct task_struct *`` objects to be
@@ -306,7 +382,7 @@ Here is an example of it being used:
 		return 0;
 	}
 
-3.2 struct cgroup * kfuncs
+4.2 struct cgroup * kfuncs
 --------------------------
 
 ``struct cgroup *`` objects also have acquire and release functions:
