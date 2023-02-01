@@ -33,6 +33,7 @@
 #include "bpf_iter_bpf_link.skel.h"
 #include "bpf_iter_ksym.skel.h"
 #include "bpf_iter_sockmap.skel.h"
+#include "bpf_iter_task_vma_buildid.skel.h"
 
 static int duration;
 
@@ -1536,6 +1537,91 @@ out:
 	bpf_iter_task_vma__destroy(skel);
 }
 
+#define D_PATH_BUF_SIZE		1024
+#define BUILD_ID_SIZE_MAX	20
+
+struct build_id {
+	u32 sz;
+	char data[BUILD_ID_SIZE_MAX];
+};
+
+#define BUILDID_STR_SIZE (BPF_BUILD_ID_SIZE*2 + 1)
+
+static void test_task_vma_buildid(void)
+{
+	int err, iter_fd = -1, proc_maps_fd = -1;
+	struct bpf_iter_task_vma_buildid *skel;
+	char key[D_PATH_BUF_SIZE], *prev_key;
+	char bpf_build_id[BUILDID_STR_SIZE];
+	int len, files_fd, i, cnt = 0;
+	struct build_id val;
+	char *build_id;
+	char c;
+
+	skel = bpf_iter_task_vma_buildid__open();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_task_vma_buildid__open"))
+		return;
+
+	err = bpf_iter_task_vma_buildid__load(skel);
+	if (!ASSERT_OK(err, "bpf_iter_task_vma_buildid__load"))
+		goto out;
+
+	skel->links.proc_maps = bpf_program__attach_iter(
+		skel->progs.proc_maps, NULL);
+
+	if (!ASSERT_OK_PTR(skel->links.proc_maps, "bpf_program__attach_iter")) {
+		skel->links.proc_maps = NULL;
+		goto out;
+	}
+
+	iter_fd = bpf_iter_create(bpf_link__fd(skel->links.proc_maps));
+	if (!ASSERT_GE(iter_fd, 0, "create_iter"))
+		goto out;
+
+	/* trigger the iterator, there's no output, just map */
+	len = read(iter_fd, &c, 1);
+	ASSERT_EQ(len, 0, "len_check");
+
+	files_fd = bpf_map__fd(skel->maps.files);
+
+	prev_key = NULL;
+
+	while (true) {
+		err = bpf_map_get_next_key(files_fd, prev_key, &key);
+		if (err) {
+			if (errno == ENOENT)
+				err = 0;
+			break;
+		}
+		if (bpf_map_lookup_elem(files_fd, key, &val))
+			break;
+		if (!ASSERT_LE(val.sz, BUILD_ID_SIZE_MAX, "buildid_size"))
+			break;
+
+		memset(bpf_build_id, 0x0, sizeof(bpf_build_id));
+		for (i = 0; i < val.sz; i++) {
+			sprintf(bpf_build_id + i*2, "%02x",
+				(unsigned char) val.data[i]);
+		}
+
+		if (!ASSERT_OK(read_buildid(key, &build_id), "read_buildid"))
+			break;
+
+		printf("BUILDID %s %s %s\n", bpf_build_id, build_id, key);
+		ASSERT_OK(strncmp(bpf_build_id, build_id, strlen(bpf_build_id)), "buildid_cmp");
+
+		free(build_id);
+		prev_key = key;
+		cnt++;
+	}
+
+	printf("checked %d files\n", cnt);
+out:
+	close(proc_maps_fd);
+	close(iter_fd);
+	bpf_iter_task_vma_buildid__destroy(skel);
+}
+
 void test_bpf_sockmap_map_iter_fd(void)
 {
 	struct bpf_iter_sockmap *skel;
@@ -1659,6 +1745,8 @@ void test_bpf_iter(void)
 		test_task_vma();
 	if (test__start_subtest("task_vma_dead_task"))
 		test_task_vma_dead_task();
+	if (test__start_subtest("task_vma_buildid"))
+		test_task_vma_buildid();
 	if (test__start_subtest("task_btf"))
 		test_task_btf();
 	if (test__start_subtest("tcp4"))
