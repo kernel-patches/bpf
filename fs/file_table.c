@@ -28,6 +28,7 @@
 #include <linux/ima.h>
 #include <linux/swap.h>
 #include <linux/kmemleak.h>
+#include <linux/buildid.h>
 
 #include <linux/atomic.h>
 
@@ -47,6 +48,7 @@ static void file_free_rcu(struct rcu_head *head)
 {
 	struct file *f = container_of(head, struct file, f_rcuhead);
 
+	file_build_id_free(f);
 	put_cred(f->f_cred);
 	kmem_cache_free(filp_cachep, f);
 }
@@ -412,6 +414,7 @@ void __init files_init(void)
 	filp_cachep = kmem_cache_create("filp", sizeof(struct file), 0,
 			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT, NULL);
 	percpu_counter_init(&nr_files, 0, GFP_KERNEL);
+	build_id_init();
 }
 
 /*

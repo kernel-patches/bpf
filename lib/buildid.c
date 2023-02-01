@@ -5,6 +5,7 @@
 #include <linux/elf.h>
 #include <linux/kernel.h>
 #include <linux/pagemap.h>
+#include <linux/slab.h>
 
 #define BUILD_ID 3
 
@@ -189,3 +190,46 @@ void __init init_vmlinux_build_id(void)
 	build_id_parse_buf(&__start_notes, vmlinux_build_id, size);
 }
 #endif
+
+#ifdef CONFIG_FILE_BUILD_ID
+
+/* SLAB cache for build_id structures */
+static struct kmem_cache *build_id_cachep;
+
+int vma_get_build_id(struct vm_area_struct *vma, struct build_id **bidp)
+{
+	struct build_id *bid;
+	int err;
+
+	bid = kmem_cache_alloc(build_id_cachep, GFP_KERNEL);
+	if (!bid)
+		return -ENOMEM;
+	err = build_id_parse(vma, bid->data, &bid->sz);
+	if (err) {
+		build_id_free(bid);
+		/* ignore parsing error */
+		return 0;
+	}
+	*bidp = bid;
+	return 0;
+}
+
+void file_build_id_free(struct file *f)
+{
+	build_id_free(f->f_bid);
+}
+
+void build_id_free(struct build_id *bid)
+{
+	if (!bid)
+		return;
+	kmem_cache_free(build_id_cachep, bid);
+}
+
+void __init build_id_init(void)
+{
+	build_id_cachep = kmem_cache_create("build_id", sizeof(struct build_id), 0,
+				SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT, NULL);
+}
+
+#endif /* CONFIG_FILE_BUILD_ID */
