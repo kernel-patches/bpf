@@ -8,8 +8,8 @@
 #define		BPF_LDX		0x01
 #define		BPF_ST		0x02
 #define		BPF_STX		0x03
-#define		BPF_ALU		0x04
-#define		BPF_JMP		0x05
+#define		BPF_ALU		0x04 /* deprecated */
+#define		BPF_JMP		0x05 /* deprecated */
 #define		BPF_RET		0x06
 #define		BPF_MISC        0x07
 
