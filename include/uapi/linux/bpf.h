@@ -15,6 +15,8 @@
 
 /* instruction classes */
 #define BPF_JMP32	0x06	/* jmp mode in word width */
+#define BPF_JMP64	0x05	/* jmp mode in double word width */
+#define BPF_ALU32	0x04	/* alu mode in word width */
 #define BPF_ALU64	0x07	/* alu mode in double word width */
 
 /* ld/ldx fields */
