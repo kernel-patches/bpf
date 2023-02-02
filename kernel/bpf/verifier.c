@@ -8511,6 +8511,11 @@ static bool is_kfunc_rcu(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_RCU;
 }
 
+static bool is_kfunc_deprecated(const struct bpf_kfunc_call_arg_meta *meta)
+{
+	return meta->kfunc_flags & KF_DEPRECATED;
+}
+
 static bool is_kfunc_arg_kptr_get(struct bpf_kfunc_call_arg_meta *meta, int arg)
 {
 	return arg == 0 && (meta->kfunc_flags & KF_KPTR_GET);
@@ -9645,6 +9650,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			/* scalar. ensured by btf_check_kfunc_arg_match() */
 			mark_btf_func_reg_size(env, regno, t->size);
 	}
+
+	if (is_kfunc_deprecated(&meta))
+		verbose(env, "calling deprecated kfunc %s\n", func_name);
 
 	return 0;
 }
