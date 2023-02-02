@@ -319,4 +319,6 @@ void test_kfunc_call(void)
 
 	if (test__start_subtest("destructive"))
 		test_destructive();
+
+	RUN_TESTS(kfunc_call_test);
 }

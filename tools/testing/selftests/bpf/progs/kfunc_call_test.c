@@ -2,6 +2,7 @@
 /* Copyright (c) 2021 Facebook */
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 extern long bpf_kfunc_call_test4(signed char a, short b, int c, long d) __ksym;
 extern int bpf_kfunc_call_test2(struct sock *sk, __u32 a, __u32 b) __ksym;
@@ -18,6 +19,7 @@ extern void bpf_kfunc_call_test_mem_len_fail2(__u64 *mem, int len) __ksym;
 extern int *bpf_kfunc_call_test_get_rdwr_mem(struct prog_test_ref_kfunc *p, const int rdwr_buf_size) __ksym;
 extern int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size) __ksym;
 extern u32 bpf_kfunc_call_test_static_unused_arg(u32 arg, u32 unused) __ksym;
+extern void bpf_kfunc_call_test_deprecated(void) __ksym;
 
 SEC("tc")
 int kfunc_call_test4(struct __sk_buff *skb)
@@ -190,6 +192,14 @@ int kfunc_call_test_static_unused_arg(struct __sk_buff *skb)
 
 	actual = bpf_kfunc_call_test_static_unused_arg(expected, 0xdeadbeef);
 	return actual != expected ? -1 : 0;
+}
+
+SEC("tc")
+__success __log_level(2) __msg("calling deprecated kfunc bpf_kfunc_call_test_deprecated")
+int kfunc_call_test_deprecated(struct __sk_buff *skb)
+{
+	bpf_kfunc_call_test_deprecated();
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
