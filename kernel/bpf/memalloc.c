@@ -224,6 +224,22 @@ static void free_one(struct bpf_mem_cache *c, void *obj)
 	kfree(obj);
 }
 
+unsigned long bpf_mem_cache_size(struct bpf_mem_cache *c, void *obj)
+{
+	unsigned long size;
+
+	if (!obj)
+		return 0;
+
+	if (c->percpu_size) {
+		size = percpu_size(((void **)obj)[1]);
+		size += ksize(obj);
+		return size;
+	}
+
+	return ksize(obj);
+}
+
 static void __free_rcu(struct rcu_head *head)
 {
 	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu);
@@ -559,6 +575,41 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 	}
 }
 
+/* We only account the elements on free list */
+static unsigned long bpf_mem_cache_free_size(struct bpf_mem_cache *c)
+{
+	return c->unit_size * c->free_cnt;
+}
+
+/* Get the free list size of a bpf_mem_alloc pool. */
+unsigned long bpf_mem_alloc_size(struct bpf_mem_alloc *ma)
+{
+	struct bpf_mem_caches *cc;
+	struct bpf_mem_cache *c;
+	unsigned long size = 0;
+	int cpu, i;
+
+	if (ma->cache) {
+		for_each_possible_cpu(cpu) {
+			c = per_cpu_ptr(ma->cache, cpu);
+			size += bpf_mem_cache_free_size(c);
+		}
+		size += percpu_size(ma->cache);
+	}
+	if (ma->caches) {
+		for_each_possible_cpu(cpu) {
+			cc = per_cpu_ptr(ma->caches, cpu);
+			for (i = 0; i < NUM_CACHES; i++) {
+				c = &cc->cache[i];
+				size += bpf_mem_cache_free_size(c);
+			}
+		}
+		size += percpu_size(ma->caches);
+	}
+
+	return size;
+}
+
 /* notrace is necessary here and in other functions to make sure
  * bpf programs cannot attach to them and cause llist corruptions.
  */
@@ -674,4 +725,23 @@ void notrace bpf_mem_cache_free(struct bpf_mem_alloc *ma, void *ptr)
 		return;
 
 	unit_free(this_cpu_ptr(ma->cache), ptr);
+}
+
+/* Get elemet size from the element pointer @ptr */
+unsigned long notrace bpf_mem_cache_elem_size(struct bpf_mem_alloc *ma, void *ptr)
+{
+	struct llist_node *llnode;
+	struct bpf_mem_cache *c;
+	unsigned long size;
+
+	if (!ptr)
+		return 0;
+
+	llnode = ptr - LLIST_NODE_SZ;
+	migrate_disable();
+	c = this_cpu_ptr(ma->cache);
+	size = bpf_mem_cache_size(c, llnode);
+	migrate_enable();
+
+	return size;
 }

@@ -24,5 +24,7 @@ void bpf_mem_free(struct bpf_mem_alloc *ma, void *ptr);
 /* kmem_cache_alloc/free equivalent: */
 void *bpf_mem_cache_alloc(struct bpf_mem_alloc *ma);
 void bpf_mem_cache_free(struct bpf_mem_alloc *ma, void *ptr);
+unsigned long bpf_mem_alloc_size(struct bpf_mem_alloc *ma);
+unsigned long bpf_mem_cache_elem_size(struct bpf_mem_alloc *ma, void *ptr);
 
 #endif /* _BPF_MEM_ALLOC_H */
