@@ -137,5 +137,6 @@ extern phys_addr_t per_cpu_ptr_to_phys(void *addr);
 						__alignof__(type))
 
 extern unsigned long pcpu_nr_pages(void);
+extern size_t percpu_size(void __percpu *ptr);
 
 #endif /* __LINUX_PERCPU_H */
