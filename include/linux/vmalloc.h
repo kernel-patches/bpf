@@ -297,4 +297,5 @@ bool vmalloc_dump_obj(void *object);
 static inline bool vmalloc_dump_obj(void *object) { return false; }
 #endif
 
+size_t vsize(void *addr);
 #endif /* _LINUX_VMALLOC_H */

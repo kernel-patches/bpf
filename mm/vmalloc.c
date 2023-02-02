@@ -4057,6 +4057,23 @@ bool vmalloc_dump_obj(void *object)
 }
 #endif
 
+/* Report full size of underlying allocation of a vmalloc'ed addr */
+size_t vsize(void *addr)
+{
+	struct vmap_area *va;
+	size_t va_size = 0;
+
+	if (!addr)
+		return 0;
+
+	spin_lock(&vmap_area_lock);
+	va = __find_vmap_area((unsigned long)addr, &vmap_area_root);
+	if (va && va->vm)
+		va_size = va->vm->size;
+	spin_unlock(&vmap_area_lock);
+	return va_size;
+}
+
 #ifdef CONFIG_PROC_FS
 static void *s_start(struct seq_file *m, loff_t *pos)
 	__acquires(&vmap_purge_lock)
