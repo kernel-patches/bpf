@@ -1247,8 +1247,9 @@ typedef void (*perf_buffer_lost_fn)(void *ctx, int cpu, __u64 cnt);
 /* common use perf buffer options */
 struct perf_buffer_opts {
 	size_t sz;
+	__u32 wakeup_events;
 };
-#define perf_buffer_opts__last_field sz
+#define perf_buffer_opts__last_field wakeup_events
 
 /**
  * @brief **perf_buffer__new()** creates BPF perfbuf manager for a specified
