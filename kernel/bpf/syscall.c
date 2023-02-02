@@ -747,16 +747,20 @@ static fmode_t map_get_sys_perms(struct bpf_map *map, struct fd f)
 }
 
 #ifdef CONFIG_PROC_FS
-/* Provides an approximation of the map's memory footprint.
- * Used only to provide a backward compatibility and display
- * a reasonable "memlock" info.
- */
-static unsigned long bpf_map_memory_footprint(const struct bpf_map *map)
+/* Show the memory usage of a bpf map */
+static unsigned long bpf_map_memory_usage(const struct bpf_map *map)
 {
 	unsigned long size;
 
-	size = round_up(map->key_size + bpf_map_value_size(map), 8);
+	/* ->map_mem_usage will get the map memory size from the pointers
+	 * which will be freed in ->map_free. So it is very similar to
+	 * ->map_free except that it only get the underlaying memory size
+	 * from the pointers rather than freeing them.
+	 */
+	if (map->ops->map_mem_usage)
+		return map->ops->map_mem_usage(map);
 
+	size = round_up(map->key_size + bpf_map_value_size(map), 8);
 	return round_up(map->max_entries * size, PAGE_SIZE);
 }
 
@@ -788,7 +792,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   map->max_entries,
 		   map->map_flags,
 		   (unsigned long long)map->map_extra,
-		   bpf_map_memory_footprint(map),
+		   bpf_map_memory_usage(map),
 		   map->id,
 		   READ_ONCE(map->frozen));
 	if (type) {
