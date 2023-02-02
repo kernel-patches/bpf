@@ -273,6 +273,25 @@ free_elems:
 	bpf_map_area_free(htab->elems);
 }
 
+static unsigned long htab_prealloc_elems_size(struct bpf_htab *htab)
+{
+	unsigned long size = 0;
+	int i;
+
+	if (!htab_is_percpu(htab))
+		return kvsize(htab->elems);
+
+	for (i = 0; i < htab->map.max_entries; i++) {
+		void __percpu *pptr;
+
+		pptr = htab_elem_get_ptr(get_htab_elem(htab, i),
+					htab->map.key_size);
+		size += percpu_size(pptr);
+	}
+	size += kvsize(htab->elems);
+	return size;
+}
+
 /* The LRU list has a lock (lru_lock). Each htab bucket has a lock
  * (bucket_lock). If both locks need to be acquired together, the lock
  * order is always lru_lock -> bucket_lock and this only happens in
@@ -864,6 +883,16 @@ static void htab_elem_free(struct bpf_htab *htab, struct htab_elem *l)
 	bpf_mem_cache_free(&htab->ma, l);
 }
 
+static unsigned long htab_elem_size(struct bpf_htab *htab, struct htab_elem *l)
+{
+	unsigned long size = 0;
+
+	if (htab->map.map_type == BPF_MAP_TYPE_PERCPU_HASH)
+		size += bpf_mem_cache_elem_size(&htab->pcpu_ma, l->ptr_to_pptr);
+
+	return size + bpf_mem_cache_elem_size(&htab->ma, l);
+}
+
 static void htab_put_fd_value(struct bpf_htab *htab, struct htab_elem *l)
 {
 	struct bpf_map *map = &htab->map;
@@ -898,7 +927,6 @@ static void dec_elem_count(struct bpf_htab *htab)
 	else
 		atomic_dec(&htab->count);
 }
-
 
 static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 {
@@ -1457,6 +1485,31 @@ static void delete_all_elements(struct bpf_htab *htab)
 	migrate_enable();
 }
 
+static unsigned long htab_non_prealloc_elems_size(struct bpf_htab *htab)
+{
+	unsigned long size = 0;
+	unsigned long count;
+	int i;
+
+	rcu_read_lock();
+	for (i = 0; i < htab->n_buckets; i++) {
+		struct hlist_nulls_head *head = select_bucket(htab, i);
+		struct hlist_nulls_node *n;
+		struct htab_elem *l;
+
+		hlist_nulls_for_each_entry(l, n, head, hash_node) {
+			size = htab_elem_size(htab, l);
+			goto out;
+		}
+	}
+out:
+	rcu_read_unlock();
+	count = htab->use_percpu_counter ? percpu_counter_sum(&htab->pcount) :
+			atomic_read(&htab->count);
+
+	return size * count;
+}
+
 static void htab_free_malloced_timers(struct bpf_htab *htab)
 {
 	int i;
@@ -1521,6 +1574,26 @@ static void htab_map_free(struct bpf_map *map)
 		free_percpu(htab->map_locked[i]);
 	lockdep_unregister_key(&htab->lockdep_key);
 	bpf_map_area_free(htab);
+}
+
+/* Get the htab memory usage from pointers we have already allocated.
+ * Some minor pointers are igored as their size are quite small compared
+ * with the total size.
+ */
+static unsigned long htab_mem_usage(const struct bpf_map *map)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	unsigned long size = 0;
+
+	if (!htab_is_prealloc(htab))
+		size += htab_non_prealloc_elems_size(htab);
+	else
+		size += htab_prealloc_elems_size(htab);
+	size += percpu_size(htab->extra_elems);
+	size += kvsize(htab->buckets);
+	size += bpf_mem_alloc_size(&htab->pcpu_ma);
+	size += bpf_mem_alloc_size(&htab->ma);
+	return size;
 }
 
 static void htab_map_seq_show_elem(struct bpf_map *map, void *key,
@@ -2191,6 +2264,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_seq_show_elem = htab_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
+	.map_mem_usage = htab_mem_usage,
 	BATCH_OPS(htab),
 	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
@@ -2212,6 +2286,7 @@ const struct bpf_map_ops htab_lru_map_ops = {
 	.map_seq_show_elem = htab_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
+	.map_mem_usage = htab_mem_usage,
 	BATCH_OPS(htab_lru),
 	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
@@ -2363,6 +2438,7 @@ const struct bpf_map_ops htab_percpu_map_ops = {
 	.map_seq_show_elem = htab_percpu_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
+	.map_mem_usage = htab_mem_usage,
 	BATCH_OPS(htab_percpu),
 	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
@@ -2382,6 +2458,7 @@ const struct bpf_map_ops htab_lru_percpu_map_ops = {
 	.map_seq_show_elem = htab_percpu_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,
 	.map_for_each_callback = bpf_for_each_hash_elem,
+	.map_mem_usage = htab_mem_usage,
 	BATCH_OPS(htab_lru_percpu),
 	.map_btf_id = &htab_map_btf_ids[0],
 	.iter_seq_info = &iter_seq_info,
@@ -2519,6 +2596,7 @@ const struct bpf_map_ops htab_of_maps_map_ops = {
 	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
 	.map_gen_lookup = htab_of_map_gen_lookup,
 	.map_check_btf = map_check_no_btf,
+	.map_mem_usage = htab_mem_usage,
 	BATCH_OPS(htab),
 	.map_btf_id = &htab_map_btf_ids[0],
 };
