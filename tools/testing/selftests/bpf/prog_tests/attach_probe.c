@@ -23,15 +23,22 @@ static noinline void trigger_func3(void)
 	asm volatile ("");
 }
 
+/* attach point for legacy uprobe */
+static noinline void trigger_func4(void)
+{
+	asm volatile ("");
+}
+
 static char test_data[] = "test_data";
 
 void test_attach_probe(void)
 {
+	ssize_t uprobe_offset, uprobe4_offset, ref_ctr_offset;
 	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
 	struct bpf_link *kprobe_link, *kretprobe_link;
 	struct bpf_link *uprobe_link, *uretprobe_link;
+	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, opts);
 	struct test_attach_probe* skel;
-	ssize_t uprobe_offset, ref_ctr_offset;
 	struct bpf_link *uprobe_err_link;
 	bool legacy;
 	char *mem;
@@ -86,6 +93,25 @@ void test_attach_probe(void)
 		goto cleanup;
 	skel->links.handle_kretprobe = kretprobe_link;
 
+	/* manual-attach kprobe in legacy mode */
+	opts.retprobe = false;
+	opts.mode = PROBE_MODE_LEGACY;
+	kprobe_link = bpf_program__attach_kprobe_opts(skel->progs.handle_kprobe_legacy,
+						      SYS_NANOSLEEP_KPROBE_NAME,
+						      &opts);
+	if (!ASSERT_OK_PTR(kprobe_link, "attach_kprobe_legacy"))
+		goto cleanup;
+	skel->links.handle_kprobe_legacy = kprobe_link;
+
+	/* manual-attach kprobe in perf mode */
+	opts.mode = PROBE_MODE_PERF;
+	kprobe_link = bpf_program__attach_kprobe_opts(skel->progs.handle_kprobe_perf,
+						      SYS_NANOSLEEP_KPROBE_NAME,
+						      &opts);
+	if (!ASSERT_OK_PTR(kprobe_link, "attach_kprobe_perf"))
+		goto cleanup;
+	skel->links.handle_kprobe_perf = kprobe_link;
+
 	/* auto-attachable kprobe and kretprobe */
 	skel->links.handle_kprobe_auto = bpf_program__attach(skel->progs.handle_kprobe_auto);
 	ASSERT_OK_PTR(skel->links.handle_kprobe_auto, "attach_kprobe_auto");
@@ -109,6 +135,32 @@ void test_attach_probe(void)
 
 	if (!legacy)
 		ASSERT_GT(uprobe_ref_ctr, 0, "uprobe_ref_ctr_after");
+
+	uprobe4_offset = get_uprobe_offset(&trigger_func4);
+	if (!ASSERT_GE(uprobe4_offset, 0, "uprobe4_offset"))
+		goto cleanup;
+
+	uprobe_opts.mode = PROBE_MODE_LEGACY;
+	uprobe_opts.ref_ctr_offset = 0;
+	uprobe_link = bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe_legacy,
+						      0 /* self pid */,
+						      "/proc/self/exe",
+						      uprobe4_offset,
+						      &uprobe_opts);
+	if (!ASSERT_OK_PTR(uprobe_link, "attach_uprobe_legacy"))
+		goto cleanup;
+	skel->links.handle_uprobe_legacy = uprobe_link;
+
+	uprobe_opts.mode = PROBE_MODE_PERF;
+	uprobe_opts.ref_ctr_offset = legacy ? 0 : ref_ctr_offset;
+	uprobe_link = bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe_perf,
+						      0 /* self pid */,
+						      "/proc/self/exe",
+						      uprobe_offset,
+						      &uprobe_opts);
+	if (!ASSERT_OK_PTR(uprobe_link, "attach_uprobe_perf"))
+		goto cleanup;
+	skel->links.handle_uprobe_perf = uprobe_link;
 
 	/* if uprobe uses ref_ctr, uretprobe has to use ref_ctr as well */
 	uprobe_opts.retprobe = true;
@@ -207,11 +259,18 @@ void test_attach_probe(void)
 	/* trigger & validate sleepable uprobe attached by name */
 	trigger_func3();
 
+	/* trigger & validate uprobe in legacy mode */
+	trigger_func4();
+
 	ASSERT_EQ(skel->bss->kprobe_res, 1, "check_kprobe_res");
 	ASSERT_EQ(skel->bss->kprobe2_res, 11, "check_kprobe_auto_res");
+	ASSERT_EQ(skel->bss->kprobe3_res, 3, "check_kprobe_legacy_res");
+	ASSERT_EQ(skel->bss->kprobe4_res, 4, "check_kprobe_perf_res");
 	ASSERT_EQ(skel->bss->kretprobe_res, 2, "check_kretprobe_res");
 	ASSERT_EQ(skel->bss->kretprobe2_res, 22, "check_kretprobe_auto_res");
 	ASSERT_EQ(skel->bss->uprobe_res, 3, "check_uprobe_res");
+	ASSERT_EQ(skel->bss->uprobe2_res, 4, "check_uprobe_legacy_res");
+	ASSERT_EQ(skel->bss->uprobe3_res, 5, "check_uprobe_perf_res");
 	ASSERT_EQ(skel->bss->uretprobe_res, 4, "check_uretprobe_res");
 	ASSERT_EQ(skel->bss->uprobe_byname_res, 5, "check_uprobe_byname_res");
 	ASSERT_EQ(skel->bss->uretprobe_byname_res, 6, "check_uretprobe_byname_res");

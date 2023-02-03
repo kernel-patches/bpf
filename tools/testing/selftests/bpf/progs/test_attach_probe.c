@@ -9,9 +9,13 @@
 
 int kprobe_res = 0;
 int kprobe2_res = 0;
+int kprobe3_res = 0;
+int kprobe4_res = 0;
 int kretprobe_res = 0;
 int kretprobe2_res = 0;
 int uprobe_res = 0;
+int uprobe2_res = 0;
+int uprobe3_res = 0;
 int uretprobe_res = 0;
 int uprobe_byname_res = 0;
 int uretprobe_byname_res = 0;
@@ -27,6 +31,20 @@ SEC("kprobe")
 int handle_kprobe(struct pt_regs *ctx)
 {
 	kprobe_res = 1;
+	return 0;
+}
+
+SEC("kprobe")
+int handle_kprobe_legacy(struct pt_regs *ctx)
+{
+	kprobe3_res = 3;
+	return 0;
+}
+
+SEC("kprobe")
+int handle_kprobe_perf(struct pt_regs *ctx)
+{
+	kprobe4_res = 4;
 	return 0;
 }
 
@@ -66,6 +84,20 @@ SEC("uprobe")
 int handle_uprobe(struct pt_regs *ctx)
 {
 	uprobe_res = 3;
+	return 0;
+}
+
+SEC("uprobe")
+int handle_uprobe_legacy(struct pt_regs *ctx)
+{
+	uprobe2_res = 4;
+	return 0;
+}
+
+SEC("uprobe")
+int handle_uprobe_perf(struct pt_regs *ctx)
+{
+	uprobe3_res = 5;
 	return 0;
 }
 
