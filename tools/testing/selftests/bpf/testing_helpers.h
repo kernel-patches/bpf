@@ -26,7 +26,7 @@ int parse_test_list(const char *s,
 		    bool is_glob_pattern);
 
 int load_bpf_testmod(bool verbose);
-void unload_bpf_testmod(bool verbose);
+int unload_bpf_testmod(bool verbose);
 int kern_sync_rcu(void);
 
 #endif /* __TESTING_HELPERS_H */
