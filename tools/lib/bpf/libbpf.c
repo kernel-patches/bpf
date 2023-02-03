@@ -9784,7 +9784,7 @@ struct bpf_link *bpf_program__attach_perf_event_opts(const struct bpf_program *p
 	link->link.dealloc = &bpf_link_perf_dealloc;
 	link->perf_event_fd = pfd;
 
-	if (kernel_supports(prog->obj, FEAT_PERF_LINK)) {
+	if (kernel_supports(prog->obj, FEAT_PERF_LINK) && !opts->no_link) {
 		DECLARE_LIBBPF_OPTS(bpf_link_create_opts, link_opts,
 			.perf_event.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0));
 
@@ -10148,16 +10148,28 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	struct bpf_link *link;
 	size_t offset;
 	bool retprobe, legacy;
+	enum probe_mode mode;
 	int pfd, err;
 
 	if (!OPTS_VALID(opts, bpf_kprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
 
+	mode = OPTS_GET(opts, mode, PROBE_MODE_DEFAULT);
 	retprobe = OPTS_GET(opts, retprobe, false);
 	offset = OPTS_GET(opts, offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
 
 	legacy = determine_kprobe_perf_type() < 0;
+	switch (mode) {
+	case PROBE_MODE_LEGACY:
+		legacy = true;
+	case PROBE_MODE_PERF:
+		pe_opts.no_link = true;
+		break;
+	default:
+		break;
+	}
+
 	if (!legacy) {
 		pfd = perf_event_open_probe(false /* uprobe */, retprobe,
 					    func_name, offset,
@@ -10817,10 +10829,12 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	int pfd, err;
 	bool retprobe, legacy;
 	const char *func_name;
+	enum probe_mode mode;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
 
+	mode = OPTS_GET(opts, mode, PROBE_MODE_DEFAULT);
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
@@ -10849,6 +10863,16 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	}
 
 	legacy = determine_uprobe_perf_type() < 0;
+	switch (mode) {
+	case PROBE_MODE_LEGACY:
+		legacy = true;
+	case PROBE_MODE_PERF:
+		pe_opts.no_link = true;
+		break;
+	default:
+		break;
+	}
+
 	if (!legacy) {
 		pfd = perf_event_open_probe(true /* uprobe */, retprobe, binary_path,
 					    func_offset, pid, ref_ctr_off);

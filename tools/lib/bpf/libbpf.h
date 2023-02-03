@@ -451,8 +451,10 @@ struct bpf_perf_event_opts {
 	size_t sz;
 	/* custom user-provided value fetchable through bpf_get_attach_cookie() */
 	__u64 bpf_cookie;
+	/* don't use bpf_link when attach eBPF pprogram */
+	bool no_link;
 };
-#define bpf_perf_event_opts__last_field bpf_cookie
+#define bpf_perf_event_opts__last_field no_link
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_perf_event(const struct bpf_program *prog, int pfd);
@@ -460,6 +462,13 @@ bpf_program__attach_perf_event(const struct bpf_program *prog, int pfd);
 LIBBPF_API struct bpf_link *
 bpf_program__attach_perf_event_opts(const struct bpf_program *prog, int pfd,
 				    const struct bpf_perf_event_opts *opts);
+
+enum probe_mode {
+	PROBE_MODE_DEFAULT = 0, /* latest supported by kernel */
+	PROBE_MODE_LEGACY,
+	PROBE_MODE_PERF,
+	PROBE_MODE_LINK,
+};
 
 struct bpf_kprobe_opts {
 	/* size of this struct, for forward/backward compatiblity */
@@ -470,9 +479,11 @@ struct bpf_kprobe_opts {
 	size_t offset;
 	/* kprobe is return probe */
 	bool retprobe;
+	/* kprobe attach mode */
+	enum probe_mode mode;
 	size_t :0;
 };
-#define bpf_kprobe_opts__last_field retprobe
+#define bpf_kprobe_opts__last_field mode
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_kprobe(const struct bpf_program *prog, bool retprobe,
@@ -570,9 +581,11 @@ struct bpf_uprobe_opts {
 	 * binary_path.
 	 */
 	const char *func_name;
+	/* uprobe attach mode */
+	enum probe_mode mode;
 	size_t :0;
 };
-#define bpf_uprobe_opts__last_field func_name
+#define bpf_uprobe_opts__last_field mode
 
 /**
  * @brief **bpf_program__attach_uprobe()** attaches a BPF program
