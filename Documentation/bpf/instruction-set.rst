@@ -33,13 +33,24 @@ eBPF has two instruction encodings:
 * the wide instruction encoding, which appends a second 64-bit immediate value
   (imm64) after the basic instruction for a total of 128 bits.
 
-The basic instruction encoding looks as follows:
+The basic instruction encoding looks as follows for a little-endian processor:
 
 =============  =======  ===============  ====================  ============
 32 bits (MSB)  16 bits  4 bits           4 bits                8 bits (LSB)
 =============  =======  ===============  ====================  ============
 immediate      offset   source register  destination register  opcode
 =============  =======  ===============  ====================  ============
+
+and as follows for a big-endian processor:
+
+=============  =======  ====================  ===============  ============
+32 bits (MSB)  16 bits  4 bits                4 bits           8 bits (LSB)
+=============  =======  ====================  ===============  ============
+immediate      offset   destination register  source register  opcode
+=============  =======  ====================  ===============  ============
+
+Multi-byte fields ('immediate' and 'offset') are similarly stored in
+the byte order of the processor.
 
 Note that most instructions do not use all of the fields.
 Unused fields shall be cleared to zero.
