@@ -39,6 +39,7 @@ static inline void ftrace_boot_snapshot(void) { }
 
 struct ftrace_ops;
 struct ftrace_regs;
+struct dyn_ftrace;
 
 #ifdef CONFIG_FUNCTION_TRACER
 /*
@@ -57,6 +58,9 @@ void arch_ftrace_ops_list_func(unsigned long ip, unsigned long parent_ip);
 void arch_ftrace_ops_list_func(unsigned long ip, unsigned long parent_ip,
 			       struct ftrace_ops *op, struct ftrace_regs *fregs);
 #endif
+extern const struct ftrace_ops ftrace_nop_ops;
+extern const struct ftrace_ops ftrace_list_ops;
+struct ftrace_ops *ftrace_find_unique_ops(struct dyn_ftrace *rec);
 #endif /* CONFIG_FUNCTION_TRACER */
 
 /* Main tracing buffer and events set up */
@@ -317,6 +321,9 @@ struct ftrace_ops {
 	unsigned long			trampoline_size;
 	struct list_head		list;
 	ftrace_ops_func_t		ops_func;
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	unsigned long			direct_call;
+#endif
 #endif
 };
 
@@ -391,68 +398,34 @@ struct ftrace_func_entry {
 	unsigned long direct; /* for direct lookup only */
 };
 
-struct dyn_ftrace;
-
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 extern int ftrace_direct_func_count;
-int register_ftrace_direct(unsigned long ip, unsigned long addr);
-int unregister_ftrace_direct(unsigned long ip, unsigned long addr);
-int modify_ftrace_direct(unsigned long ip, unsigned long old_addr, unsigned long new_addr);
-struct ftrace_direct_func *ftrace_find_direct_func(unsigned long addr);
-int ftrace_modify_direct_caller(struct ftrace_func_entry *entry,
-				struct dyn_ftrace *rec,
-				unsigned long old_addr,
-				unsigned long new_addr);
 unsigned long ftrace_find_rec_direct(unsigned long ip);
-int register_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr);
-int unregister_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr);
-int modify_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr);
-int modify_ftrace_direct_multi_nolock(struct ftrace_ops *ops, unsigned long addr);
+int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
+int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
+int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
+int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr);
 
 #else
 struct ftrace_ops;
 # define ftrace_direct_func_count 0
-static inline int register_ftrace_direct(unsigned long ip, unsigned long addr)
-{
-	return -ENOTSUPP;
-}
-static inline int unregister_ftrace_direct(unsigned long ip, unsigned long addr)
-{
-	return -ENOTSUPP;
-}
-static inline int modify_ftrace_direct(unsigned long ip,
-				       unsigned long old_addr, unsigned long new_addr)
-{
-	return -ENOTSUPP;
-}
-static inline struct ftrace_direct_func *ftrace_find_direct_func(unsigned long addr)
-{
-	return NULL;
-}
-static inline int ftrace_modify_direct_caller(struct ftrace_func_entry *entry,
-					      struct dyn_ftrace *rec,
-					      unsigned long old_addr,
-					      unsigned long new_addr)
-{
-	return -ENODEV;
-}
 static inline unsigned long ftrace_find_rec_direct(unsigned long ip)
 {
 	return 0;
 }
-static inline int register_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr)
+static inline int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 {
 	return -ENODEV;
 }
-static inline int unregister_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr)
+static inline int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 {
 	return -ENODEV;
 }
-static inline int modify_ftrace_direct_multi(struct ftrace_ops *ops, unsigned long addr)
+static inline int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 {
 	return -ENODEV;
 }
-static inline int modify_ftrace_direct_multi_nolock(struct ftrace_ops *ops, unsigned long addr)
+static inline int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr)
 {
 	return -ENODEV;
 }
@@ -563,6 +536,8 @@ bool is_ftrace_trampoline(unsigned long addr);
  *  IPMODIFY - the record allows for the IP address to be changed.
  *  DISABLED - the record is not ready to be touched yet
  *  DIRECT   - there is a direct function to call
+ *  CALL_OPS - the record can use callsite-specific ops
+ *  CALL_OPS_EN - the function is set up to use callsite-specific ops
  *
  * When a new ftrace_ops is registered and wants a function to save
  * pt_regs, the rec->flags REGS is set. When the function has been
@@ -580,9 +555,11 @@ enum {
 	FTRACE_FL_DISABLED	= (1UL << 25),
 	FTRACE_FL_DIRECT	= (1UL << 24),
 	FTRACE_FL_DIRECT_EN	= (1UL << 23),
+	FTRACE_FL_CALL_OPS	= (1UL << 22),
+	FTRACE_FL_CALL_OPS_EN	= (1UL << 21),
 };
 
-#define FTRACE_REF_MAX_SHIFT	23
+#define FTRACE_REF_MAX_SHIFT	21
 #define FTRACE_REF_MAX		((1UL << FTRACE_REF_MAX_SHIFT) - 1)
 
 #define ftrace_rec_count(rec)	((rec)->flags & FTRACE_REF_MAX)
@@ -820,7 +797,8 @@ static inline int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec)
  */
 extern int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr);
 
-#ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS
+#if defined(CONFIG_DYNAMIC_FTRACE_WITH_REGS) || \
+	defined(CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS)
 /**
  * ftrace_modify_call - convert from one addr to another (no nop)
  * @rec: the call site record (e.g. mcount/fentry)
@@ -832,6 +810,9 @@ extern int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr);
  * read the location, check to see if what is read is indeed
  * what we expect it to be, and then on success of the compare,
  * it should write to the location.
+ *
+ * When using call ops, this is called when the associated ops change, even
+ * when (addr == old_addr).
  *
  * The code segment at @rec->ip should be a caller to @old_addr
  *

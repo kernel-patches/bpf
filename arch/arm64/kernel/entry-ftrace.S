@@ -36,6 +36,30 @@
 SYM_CODE_START(ftrace_caller)
 	bti	c
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS
+	/*
+	 * The literal pointer to the ops is at an 8-byte aligned boundary
+	 * which is either 12 or 16 bytes before the BL instruction in the call
+	 * site. See ftrace_call_adjust() for details.
+	 *
+	 * Therefore here the LR points at `literal + 16` or `literal + 20`,
+	 * and we can find the address of the literal in either case by
+	 * aligning to an 8-byte boundary and subtracting 16. We do the
+	 * alignment first as this allows us to fold the subtraction into the
+	 * LDR.
+	 */
+	bic	x11, x30, 0x7
+	ldr	x11, [x11, #-(4 * AARCH64_INSN_SIZE)]		// op
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	/* If the op has a direct call address, return to it */
+	ldr	x12, [x11, #FTRACE_OPS_DIRECT_CALL]		// op->direct_call
+	cbz	x12, 1f
+	ret	x12
+1:
+#endif
+#endif
+
 	/* Save original SP */
 	mov	x10, sp
 
@@ -57,6 +81,11 @@ SYM_CODE_START(ftrace_caller)
 	/* Save the PC after the ftrace callsite */
 	str	x30, [sp, #FREGS_PC]
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	/* Set custom_tramp to zero  */
+	str	xzr, [sp, #FREGS_CUSTOM_TRAMP]
+#endif
+
 	/* Create a frame record for the callsite above the ftrace regs */
 	stp	x29, x9, [sp, #FREGS_SIZE + 16]
 	add	x29, sp, #FREGS_SIZE + 16
@@ -65,13 +94,22 @@ SYM_CODE_START(ftrace_caller)
 	stp	x29, x30, [sp, #FREGS_SIZE]
 	add	x29, sp, #FREGS_SIZE
 
-	sub	x0, x30, #AARCH64_INSN_SIZE	// ip (callsite's BL insn)
-	mov	x1, x9				// parent_ip (callsite's LR)
-	ldr_l	x2, function_trace_op		// op
-	mov	x3, sp				// regs
+	/* Prepare arguments for the the tracer func */
+	sub	x0, x30, #AARCH64_INSN_SIZE		// ip (callsite's BL insn)
+	mov	x1, x9					// parent_ip (callsite's LR)
+	mov	x3, sp					// regs
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS
+	mov	x2, x11					// op
+	ldr	x4, [x2, #FTRACE_OPS_FUNC]		// op->func
+	blr	x4					// op->func(ip, parent_ip, op, regs)
+
+#else
+	ldr_l   x2, function_trace_op			// op
 
 SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
-	bl	ftrace_stub
+	bl      ftrace_stub				// func(ip, parent_ip, op, regs)
+#endif
 
 /*
  * At the callsite x0-x8 and x19-x30 were live. Any C code will have preserved
@@ -88,13 +126,35 @@ SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 	/* Restore the callsite's FP, LR, PC */
 	ldr	x29, [sp, #FREGS_FP]
 	ldr	x30, [sp, #FREGS_LR]
-	ldr	x9,  [sp, #FREGS_PC]
+	ldr	x10, [sp, #FREGS_PC]
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	ldr	x11, [sp, #FREGS_CUSTOM_TRAMP]
+	cbz	x11, 1f
+	/* Set x9 to parent ip before jump to custom trampoline */
+	mov	x9,  x30
+	/* Set lr to self ip */
+	ldr	x30, [sp, #FREGS_PC]
+	/* Set x10 (used for return address) to custom trampoline */
+	mov	x10, x11
+1:
+#endif
 
 	/* Restore the callsite's SP */
 	add	sp, sp, #FREGS_SIZE + 32
 
-	ret	x9
+	ret	x10
 SYM_CODE_END(ftrace_caller)
+
+#if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
+    defined(CONFIG_FTRACE_SELFTEST)
+SYM_CODE_START(ftrace_dummy_tramp)
+	bti c
+	mov x10, x30
+	mov x30, x9
+	ret x10
+SYM_CODE_END(ftrace_dummy_tramp)
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
 #else /* CONFIG_DYNAMIC_FTRACE_WITH_ARGS */
 

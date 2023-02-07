@@ -62,20 +62,7 @@ extern unsigned long ftrace_graph_call;
 
 extern void return_to_handler(void);
 
-static inline unsigned long ftrace_call_adjust(unsigned long addr)
-{
-	/*
-	 * Adjust addr to point at the BL in the callsite.
-	 * See ftrace_init_nop() for the callsite sequence.
-	 */
-	if (IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_ARGS))
-		return addr + AARCH64_INSN_SIZE;
-	/*
-	 * addr is the address of the mcount call instruction.
-	 * recordmcount does the necessary offset calculation.
-	 */
-	return addr;
-}
+unsigned long ftrace_call_adjust(unsigned long addr);
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_ARGS
 struct dyn_ftrace;
@@ -93,6 +80,10 @@ struct ftrace_regs {
 
 	unsigned long sp;
 	unsigned long pc;
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	unsigned long custom_tramp;
+#endif
 };
 
 static __always_inline unsigned long
@@ -149,6 +140,19 @@ int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec);
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs);
 #define ftrace_graph_func ftrace_graph_func
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+static inline void arch_ftrace_set_direct_caller(struct ftrace_regs *fregs,
+						 unsigned long addr)
+{
+	/*
+	 * The ftrace trampoline will return to this address instead of the
+	 * instrumented function.
+	 */
+	fregs->custom_tramp = addr;
+}
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+
 #endif
 
 #define ftrace_return_address(n) return_address(n)
@@ -181,6 +185,13 @@ static inline bool arch_syscall_match_sym_name(const char *sym,
 	 */
 	return !strcmp(sym + 8, name);
 }
+
+#if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
+    defined(CONFIG_FTRACE_SELFTEST)
+extern void ftrace_dummy_tramp(void);
+#define trace_direct_tramp ftrace_dummy_tramp
+#endif
+
 #endif /* ifndef __ASSEMBLY__ */
 
 #endif /* __ASM_FTRACE_H */
