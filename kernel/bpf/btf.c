@@ -25,6 +25,9 @@
 #include <linux/bsearch.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+
+#include <net/netfilter/nf_hook_bpf.h>
+
 #include <net/sock.h>
 #include "../tools/lib/bpf/relo_core.h"
 
