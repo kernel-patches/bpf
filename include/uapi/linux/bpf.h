@@ -76,10 +76,21 @@ struct bpf_insn {
 	__s32	imm;		/* signed immediate constant */
 };
 
-/* Key of an a BPF_MAP_TYPE_LPM_TRIE entry */
+/* Header for a key of a BPF_MAP_TYPE_LPM_TRIE entry */
 struct bpf_lpm_trie_key {
 	__u32	prefixlen;	/* up to 32 for AF_INET, 128 for AF_INET6 */
-	__u8	data[0];	/* Arbitrary size */
+	__u8	data[0];	/* Deprecated field: use struct bpf_lpm_trie_key_u8 */
+};
+
+/* Raw (u8 byte array) key of a BPF_MAP_TYPE_LPM_TRIE entry */
+struct bpf_lpm_trie_key_u8 {
+	union {
+		struct bpf_lpm_trie_key hdr;
+		struct {
+			__u32	prefixlen;
+			__u8	data[];
+		};
+	};
 };
 
 struct bpf_cgroup_storage_key {
