@@ -56,13 +56,6 @@ static union sa46 {
 	}								\
 })
 
-#define RET_ERR(condition, tag, format...) ({				\
-	if (CHECK_FAIL(condition)) {					\
-		printf(tag " " format);					\
-		return -1;						\
-	}								\
-})
-
 static int create_maps(enum bpf_map_type inner_type)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts);
@@ -155,42 +148,6 @@ static void sa46_init_inany(union sa46 *sa, sa_family_t family)
 		sa->v6.sin6_addr = in6addr_any;
 	else
 		sa->v4.sin_addr.s_addr = INADDR_ANY;
-}
-
-static int read_int_sysctl(const char *sysctl)
-{
-	char buf[16];
-	int fd, ret;
-
-	fd = open(sysctl, 0);
-	RET_ERR(fd == -1, "open(sysctl)",
-		"sysctl:%s fd:%d errno:%d\n", sysctl, fd, errno);
-
-	ret = read(fd, buf, sizeof(buf));
-	RET_ERR(ret <= 0, "read(sysctl)",
-		"sysctl:%s ret:%d errno:%d\n", sysctl, ret, errno);
-
-	close(fd);
-	return atoi(buf);
-}
-
-static int write_int_sysctl(const char *sysctl, int v)
-{
-	int fd, ret, size;
-	char buf[16];
-
-	fd = open(sysctl, O_RDWR);
-	RET_ERR(fd == -1, "open(sysctl)",
-		"sysctl:%s fd:%d errno:%d\n", sysctl, fd, errno);
-
-	size = snprintf(buf, sizeof(buf), "%d", v);
-	ret = write(fd, buf, size);
-	RET_ERR(ret != size, "write(sysctl)",
-		"sysctl:%s ret:%d size:%d errno:%d\n",
-		sysctl, ret, size, errno);
-
-	close(fd);
-	return 0;
 }
 
 static void restore_sysctls(void)

@@ -11,6 +11,8 @@
 #define TCP_CA_NAME_MAX	16
 #endif
 
+#define MPTCP_ENABLED_SYSCTL "/proc/sys/net/mptcp/enabled"
+
 struct mptcp_storage {
 	__u32 invoked;
 	__u32 is_mptcp;
@@ -138,7 +140,7 @@ out:
 
 static void test_base(void)
 {
-	int server_fd, cgroup_fd;
+	int server_fd, cgroup_fd, saved_mptcp_enabled = -1;
 
 	cgroup_fd = test__join_cgroup("/mptcp");
 	if (!ASSERT_GE(cgroup_fd, 0, "test__join_cgroup"))
@@ -155,6 +157,14 @@ static void test_base(void)
 
 with_mptcp:
 	/* with MPTCP */
+	saved_mptcp_enabled = read_int_sysctl(MPTCP_ENABLED_SYSCTL);
+	if (saved_mptcp_enabled < 0)
+		goto close_cgroup_fd;
+
+	if (saved_mptcp_enabled == 0 &&
+	    write_int_sysctl(MPTCP_ENABLED_SYSCTL, 1))
+		goto close_cgroup_fd;
+
 	server_fd = start_mptcp_server(AF_INET, NULL, 0, 0);
 	if (!ASSERT_GE(server_fd, 0, "start_mptcp_server"))
 		goto close_cgroup_fd;
@@ -164,6 +174,9 @@ with_mptcp:
 	close(server_fd);
 
 close_cgroup_fd:
+	if (saved_mptcp_enabled == 0)
+		write_int_sysctl(MPTCP_ENABLED_SYSCTL, saved_mptcp_enabled);
+
 	close(cgroup_fd);
 }
 
