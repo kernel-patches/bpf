@@ -121,7 +121,7 @@ get_bpf_prog_info_linear(int fd, __u64 arrays)
 		return ERR_PTR(-EINVAL);
 
 	/* step 1: get array dimensions */
-	err = bpf_obj_get_info_by_fd(fd, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(fd, &info, &info_len);
 	if (err) {
 		pr_debug("can't get prog info: %s", strerror(errno));
 		return ERR_PTR(-EFAULT);
@@ -183,7 +183,7 @@ get_bpf_prog_info_linear(int fd, __u64 arrays)
 	}
 
 	/* step 5: call syscall again to get required arrays */
-	err = bpf_obj_get_info_by_fd(fd, &info_linear->info, &info_len);
+	err = bpf_prog_get_info_by_fd(fd, &info_linear->info, &info_len);
 	if (err) {
 		pr_debug("can't get prog info: %s", strerror(errno));
 		free(info_linear);

@@ -97,7 +97,7 @@ static inline __u32 bpf_link_get_id(int fd)
 	struct bpf_link_info link_info = { .id = 0, };
 	__u32 link_info_len = sizeof(link_info);
 
-	bpf_obj_get_info_by_fd(fd, &link_info, &link_info_len);
+	bpf_link_get_info_by_fd(fd, &link_info, &link_info_len);
 	return link_info.id;
 }
 
@@ -106,7 +106,7 @@ static inline __u32 bpf_link_get_prog_id(int fd)
 	struct bpf_link_info link_info = { .id = 0, };
 	__u32 link_info_len = sizeof(link_info);
 
-	bpf_obj_get_info_by_fd(fd, &link_info, &link_info_len);
+	bpf_link_get_info_by_fd(fd, &link_info, &link_info_len);
 	return link_info.prog_id;
 }
 
@@ -115,7 +115,7 @@ static inline __u32 bpf_map_get_id(int fd)
 	struct bpf_map_info map_info = { .id = 0, };
 	__u32 map_info_len = sizeof(map_info);
 
-	bpf_obj_get_info_by_fd(fd, &map_info, &map_info_len);
+	bpf_map_get_info_by_fd(fd, &map_info, &map_info_len);
 	return map_info.id;
 }
 

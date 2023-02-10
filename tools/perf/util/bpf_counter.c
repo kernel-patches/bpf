@@ -304,7 +304,7 @@ static bool bperf_attr_map_compatible(int attr_map_fd)
 	__u32 map_info_len = sizeof(map_info);
 	int err;
 
-	err = bpf_obj_get_info_by_fd(attr_map_fd, &map_info, &map_info_len);
+	err = bpf_map_get_info_by_fd(attr_map_fd, &map_info, &map_info_len);
 
 	if (err)
 		return false;
