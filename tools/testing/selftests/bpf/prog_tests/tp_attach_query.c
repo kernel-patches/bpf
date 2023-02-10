@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include <bpf/libbpf_internal.h>
 
 void serial_test_tp_attach_query(void)
 {
@@ -66,6 +67,7 @@ void serial_test_tp_attach_query(void)
 		if (i == 0) {
 			/* check NULL prog array query */
 			query->ids_len = num_progs;
+			libbpf_mark_var_written(query->prog_cnt);
 			err = ioctl(pmu_fd[i], PERF_EVENT_IOC_QUERY_BPF, query);
 			if (CHECK(err || query->prog_cnt != 0,
 				  "perf_event_ioc_query_bpf",
@@ -115,6 +117,8 @@ void serial_test_tp_attach_query(void)
 			  "err %d errno %d query->prog_cnt %u\n",
 			  err, errno, query->prog_cnt))
 			goto cleanup3;
+		libbpf_mark_mem_written(query->ids,
+					query->ids_len * sizeof(__u32));
 		for (j = 0; j < i + 1; j++)
 			if (CHECK(saved_prog_ids[j] != query->ids[j],
 				  "perf_event_ioc_query_bpf",

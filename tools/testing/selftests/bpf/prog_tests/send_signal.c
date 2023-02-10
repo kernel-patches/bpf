@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include <bpf/libbpf_internal.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include "test_send_signal_kern.skel.h"
@@ -58,6 +59,7 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 		ASSERT_OK(setpriority(PRIO_PROCESS, 0, -20), "setpriority");
 
 		/* notify parent signal handler is installed */
+		libbpf_mark_mem_written(buf, 1);
 		ASSERT_EQ(write(pipe_c2p[1], buf, 1), 1, "pipe_write");
 
 		/* make sure parent enabled bpf program to send_signal */

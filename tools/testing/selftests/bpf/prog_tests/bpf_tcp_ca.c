@@ -4,6 +4,7 @@
 #include <linux/err.h>
 #include <netinet/tcp.h>
 #include <test_progs.h>
+#include <bpf/libbpf_internal.h>
 #include "network_helpers.h"
 #include "bpf_dctcp.skel.h"
 #include "bpf_cubic.skel.h"
@@ -38,6 +39,8 @@ static void *server(void *arg)
 	int lfd = (int)(long)arg, err = 0, fd;
 	ssize_t nr_sent = 0, bytes = 0;
 	char batch[1500];
+
+	libbpf_mark_mem_written(batch, sizeof(batch));
 
 	fd = accept(lfd, NULL, NULL);
 	while (fd == -1) {
