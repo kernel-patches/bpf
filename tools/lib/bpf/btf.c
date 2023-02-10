@@ -1388,6 +1388,7 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 		goto exit_free;
 	}
 
+	libbpf_mark_mem_written(ptr, btf_info.btf_size);
 	btf = btf_new(ptr, btf_info.btf_size, base_btf);
 
 exit_free:
