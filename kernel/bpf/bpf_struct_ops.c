@@ -752,11 +752,66 @@ static int bpf_struct_ops_map_link_fill_link_info(const struct bpf_link *link,
 	return 0;
 }
 
+static int bpf_struct_ops_map_link_update(struct bpf_link *link, struct bpf_map *new_map)
+{
+	struct bpf_struct_ops_value *kvalue;
+	struct bpf_struct_ops_map *st_map, *old_st_map;
+	struct bpf_map *old_map;
+	int err;
+
+	if (new_map->map_type != BPF_MAP_TYPE_STRUCT_OPS || !(new_map->map_flags & BPF_F_LINK))
+		return -EINVAL;
+
+	old_map = link->map;
+
+	/* It does nothing if the new map is the same as the old one.
+	 * A struct_ops that backs a bpf_link can not be updated or
+	 * its kvalue would be updated and causes inconsistencies.
+	 */
+	if (old_map == new_map)
+		return 0;
+
+	/* The new and old struct_ops must be the same type. */
+	st_map = (struct bpf_struct_ops_map *)new_map;
+	old_st_map = (struct bpf_struct_ops_map *)old_map;
+	if (st_map->st_ops != old_st_map->st_ops)
+		return -EINVAL;
+
+	/* Assure the struct_ops is updated (has value) and not
+	 * backing any other link.
+	 */
+	kvalue = &st_map->kvalue;
+	if (kvalue->state != BPF_STRUCT_OPS_STATE_INUSE ||
+	    refcount_read(&kvalue->refcnt) != 0)
+		return -EINVAL;
+
+	bpf_map_inc(new_map);
+	refcount_set(&kvalue->refcnt, 1);
+
+	set_memory_rox((long)st_map->image, 1);
+	err = st_map->st_ops->update(kvalue->data, old_st_map->kvalue.data);
+	if (err) {
+		refcount_set(&kvalue->refcnt, 0);
+
+		set_memory_nx((long)st_map->image, 1);
+		set_memory_rw((long)st_map->image, 1);
+		bpf_map_put(new_map);
+		return err;
+	}
+
+	link->map = new_map;
+
+	bpf_struct_ops_kvalue_put(&old_st_map->kvalue);
+
+	return 0;
+}
+
 static const struct bpf_link_ops bpf_struct_ops_map_lops = {
 	.release = bpf_struct_ops_map_link_release,
 	.dealloc = bpf_struct_ops_map_link_dealloc,
 	.show_fdinfo = bpf_struct_ops_map_link_show_fdinfo,
 	.fill_link_info = bpf_struct_ops_map_link_fill_link_info,
+	.update_struct_ops = bpf_struct_ops_map_link_update,
 };
 
 int link_create_struct_ops_map(union bpf_attr *attr, bpfptr_t uattr)
