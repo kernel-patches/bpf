@@ -2464,7 +2464,7 @@ static int do_help(int argc, char **argv)
 		"                         data_in FILE \\\n"
 		"                         [data_out FILE [data_size_out L]] \\\n"
 		"                         [ctx_in FILE [ctx_out FILE [ctx_size_out M]]] \\\n"
-		"                         [repeat N]\n"
+		"                         [repeat N] [cpu N] [batch_size N]\n"
 		"       %1$s %2$s profile PROG [duration DURATION] METRICs\n"
 		"       %1$s %2$s tracelog\n"
 		"       %1$s %2$s help\n"
