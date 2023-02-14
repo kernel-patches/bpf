@@ -11524,6 +11524,41 @@ struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
 	return &link->link;
 }
 
+/*
+ * Swap the back struct_ops of a link with a new struct_ops map.
+ */
+int bpf_link__update_struct_ops(struct bpf_link *link, const struct bpf_map *map)
+{
+	struct bpf_link_struct_ops_map *st_ops_link;
+	int err, fd;
+
+	if (!bpf_map__is_struct_ops(map) || map->fd == -1)
+		return -EINVAL;
+
+	/* Ensure the type of a link is correct */
+	if (link->detach != bpf_link__detach_struct_ops)
+		return -EINVAL;
+
+	err = bpf_map__update_vdata(map);
+	if (err) {
+		err = -errno;
+		free(link);
+		return err;
+	}
+
+	fd = bpf_link_update(link->fd, map->fd, NULL);
+	if (fd < 0) {
+		err = -errno;
+		free(link);
+		return err;
+	}
+
+	st_ops_link = container_of(link, struct bpf_link_struct_ops_map, link);
+	st_ops_link->map_fd = map->fd;
+
+	return 0;
+}
+
 typedef enum bpf_perf_event_ret (*bpf_perf_event_print_t)(struct perf_event_header *hdr,
 							  void *private_data);
 

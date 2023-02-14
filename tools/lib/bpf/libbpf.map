@@ -373,6 +373,7 @@ LIBBPF_1.1.0 {
 	global:
 		bpf_btf_get_fd_by_id_opts;
 		bpf_link_get_fd_by_id_opts;
+		bpf_link__update_struct_ops;
 		bpf_map_get_fd_by_id_opts;
 		bpf_prog_get_fd_by_id_opts;
 		user_ring_buffer__discard;
