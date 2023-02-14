@@ -8,6 +8,7 @@
 #include "bpf_dctcp.skel.h"
 #include "bpf_cubic.skel.h"
 #include "bpf_tcp_nogpl.skel.h"
+#include "tcp_ca_update.skel.h"
 #include "bpf_dctcp_release.skel.h"
 #include "tcp_ca_write_sk_pacing.skel.h"
 #include "tcp_ca_incompl_cong_ops.skel.h"
@@ -381,6 +382,51 @@ static void test_unsupp_cong_op(void)
 	libbpf_set_print(old_print_fn);
 }
 
+static void test_update_ca(void)
+{
+	struct tcp_ca_update *skel;
+	struct bpf_link *link;
+	int saved_ca1_cnt;
+	int err;
+
+	skel = tcp_ca_update__open();
+	if (!ASSERT_OK_PTR(skel, "open"))
+		return;
+
+	err = bpf_map__set_map_flags(skel->maps.ca_update_1,
+				     bpf_map__map_flags(skel->maps.ca_update_1) | BPF_F_LINK);
+	if (!ASSERT_OK(err, "set_map_flags_1"))
+		return;
+
+	err = bpf_map__set_map_flags(skel->maps.ca_update_2,
+				     bpf_map__map_flags(skel->maps.ca_update_2) | BPF_F_LINK);
+	if (!ASSERT_OK(err, "set_map_flags_2"))
+		return;
+
+	err = tcp_ca_update__load(skel);
+	if (!ASSERT_OK(err, "load")) {
+		tcp_ca_update__destroy(skel);
+		return;
+	}
+
+	link = bpf_map__attach_struct_ops(skel->maps.ca_update_1);
+	ASSERT_OK_PTR(link, "attach_struct_ops");
+
+	do_test("tcp_ca_update", NULL);
+	saved_ca1_cnt = skel->bss->ca1_cnt;
+	ASSERT_GT(saved_ca1_cnt, 0, "ca1_ca1_cnt");
+
+	err = bpf_link__update_struct_ops(link, skel->maps.ca_update_2);
+	ASSERT_OK(err, "update_struct_ops");
+
+	do_test("tcp_ca_update", NULL);
+	ASSERT_EQ(skel->bss->ca1_cnt, saved_ca1_cnt, "ca2_ca1_cnt");
+	ASSERT_GT(skel->bss->ca2_cnt, 0, "ca2_ca2_cnt");
+
+	bpf_link__destroy(link);
+	tcp_ca_update__destroy(skel);
+}
+
 void test_bpf_tcp_ca(void)
 {
 	if (test__start_subtest("dctcp"))
@@ -399,4 +445,6 @@ void test_bpf_tcp_ca(void)
 		test_incompl_cong_ops();
 	if (test__start_subtest("unsupp_cong_op"))
 		test_unsupp_cong_op();
+	if (test__start_subtest("update_ca"))
+		test_update_ca();
 }
