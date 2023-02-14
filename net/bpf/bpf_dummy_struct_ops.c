@@ -222,12 +222,18 @@ static void bpf_dummy_unreg(void *kdata)
 {
 }
 
+static int bpf_dummy_update(void *kdata, void *old_kdata)
+{
+	return -EOPNOTSUPP;
+}
+
 struct bpf_struct_ops bpf_bpf_dummy_ops = {
 	.verifier_ops = &bpf_dummy_verifier_ops,
 	.init = bpf_dummy_init,
 	.check_member = bpf_dummy_ops_check_member,
 	.init_member = bpf_dummy_init_member,
 	.reg = bpf_dummy_reg,
+	.update = bpf_dummy_update,
 	.unreg = bpf_dummy_unreg,
 	.name = "bpf_dummy_ops",
 };

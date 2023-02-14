@@ -1468,6 +1468,7 @@ struct bpf_struct_ops {
 			   void *kdata, const void *udata);
 	int (*reg)(void *kdata);
 	void (*unreg)(void *kdata);
+	int (*update)(void *kdata, void *old_kdata);
 	const struct btf_type *type;
 	const struct btf_type *value_type;
 	const char *name;
