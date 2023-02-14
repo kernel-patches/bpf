@@ -69,6 +69,11 @@ static inline __u64 ptr_to_u64(const void *ptr)
 	return (__u64) (unsigned long) ptr;
 }
 
+static inline void *u64_to_ptr(__u64 val)
+{
+	return (void *) (unsigned long) val;
+}
+
 static inline int sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr,
 			  unsigned int size)
 {
@@ -91,6 +96,8 @@ int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int attempts)
 	do {
 		fd = sys_bpf_fd(BPF_PROG_LOAD, attr, size);
 	} while (fd < 0 && errno == EAGAIN && --attempts > 0);
+
+	libbpf_mark_mem_written(u64_to_ptr(attr->log_buf), attr->log_size);
 
 	return fd;
 }
@@ -395,6 +402,26 @@ int bpf_map_update_elem(int fd, const void *key, const void *value,
 	return libbpf_err_errno(ret);
 }
 
+/* Tell memory checkers that the given value of the given map is initialized. */
+static void libbpf_mark_map_value_written(int fd, void *value)
+{
+#ifdef HAVE_LIBBPF_MARK_MEM_WRITTEN
+	struct bpf_map_info info;
+	__u32 info_len;
+	size_t size;
+	int err;
+
+	info_len = sizeof(info);
+	err = bpf_map_get_info_by_fd(fd, &info, &info_len);
+	if (!err) {
+		size = info.value_size;
+		if (is_percpu_bpf_map_type(info.type))
+			size = roundup(size, 8) * libbpf_num_possible_cpus();
+		libbpf_mark_mem_written(value, size);
+	}
+#endif
+}
+
 int bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, flags);
@@ -407,6 +434,8 @@ int bpf_map_lookup_elem(int fd, const void *key, void *value)
 	attr.value = ptr_to_u64(value);
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, attr_sz);
+	if (!ret)
+		libbpf_mark_map_value_written(fd, value);
 	return libbpf_err_errno(ret);
 }
 
@@ -423,6 +452,8 @@ int bpf_map_lookup_elem_flags(int fd, const void *key, void *value, __u64 flags)
 	attr.flags = flags;
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, attr_sz);
+	if (!ret)
+		libbpf_mark_map_value_written(fd, value);
 	return libbpf_err_errno(ret);
 }
 
@@ -438,6 +469,8 @@ int bpf_map_lookup_and_delete_elem(int fd, const void *key, void *value)
 	attr.value = ptr_to_u64(value);
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_AND_DELETE_ELEM, &attr, attr_sz);
+	if (!ret)
+		libbpf_mark_map_value_written(fd, value);
 	return libbpf_err_errno(ret);
 }
 
@@ -454,6 +487,8 @@ int bpf_map_lookup_and_delete_elem_flags(int fd, const void *key, void *value, _
 	attr.flags = flags;
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_AND_DELETE_ELEM, &attr, attr_sz);
+	if (!ret)
+		libbpf_mark_map_value_written(fd, value);
 	return libbpf_err_errno(ret);
 }
 
@@ -823,10 +858,12 @@ int bpf_prog_query_opts(int target_fd,
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, query);
 	union bpf_attr attr;
+	__u32 *prog_ids;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_prog_query_opts))
 		return libbpf_err(-EINVAL);
+	prog_ids = OPTS_GET(opts, prog_ids, NULL);
 
 	memset(&attr, 0, attr_sz);
 
@@ -834,10 +871,14 @@ int bpf_prog_query_opts(int target_fd,
 	attr.query.attach_type	= type;
 	attr.query.query_flags	= OPTS_GET(opts, query_flags, 0);
 	attr.query.prog_cnt	= OPTS_GET(opts, prog_cnt, 0);
-	attr.query.prog_ids	= ptr_to_u64(OPTS_GET(opts, prog_ids, NULL));
+	attr.query.prog_ids	= ptr_to_u64(prog_ids);
 	attr.query.prog_attach_flags = ptr_to_u64(OPTS_GET(opts, prog_attach_flags, NULL));
 
 	ret = sys_bpf(BPF_PROG_QUERY, &attr, attr_sz);
+
+	libbpf_mark_mem_written_if(prog_ids,
+				   attr.query.prog_cnt * sizeof(*prog_ids),
+				   !ret);
 
 	OPTS_SET(opts, attach_flags, attr.query.attach_flags);
 	OPTS_SET(opts, prog_cnt, attr.query.prog_cnt);
@@ -868,10 +909,14 @@ int bpf_prog_test_run_opts(int prog_fd, struct bpf_test_run_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, test);
 	union bpf_attr attr;
+	void *data_out;
+	void *ctx_out;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_test_run_opts))
 		return libbpf_err(-EINVAL);
+	data_out = OPTS_GET(opts, data_out, NULL);
+	ctx_out = OPTS_GET(opts, ctx_out, NULL);
 
 	memset(&attr, 0, attr_sz);
 	attr.test.prog_fd = prog_fd;
@@ -885,11 +930,14 @@ int bpf_prog_test_run_opts(int prog_fd, struct bpf_test_run_opts *opts)
 	attr.test.data_size_in = OPTS_GET(opts, data_size_in, 0);
 	attr.test.data_size_out = OPTS_GET(opts, data_size_out, 0);
 	attr.test.ctx_in = ptr_to_u64(OPTS_GET(opts, ctx_in, NULL));
-	attr.test.ctx_out = ptr_to_u64(OPTS_GET(opts, ctx_out, NULL));
+	attr.test.ctx_out = ptr_to_u64(ctx_out);
 	attr.test.data_in = ptr_to_u64(OPTS_GET(opts, data_in, NULL));
-	attr.test.data_out = ptr_to_u64(OPTS_GET(opts, data_out, NULL));
+	attr.test.data_out = ptr_to_u64(data_out);
 
 	ret = sys_bpf(BPF_PROG_TEST_RUN, &attr, attr_sz);
+
+	libbpf_mark_mem_written_if(data_out, attr.test.data_size_out, !ret);
+	libbpf_mark_mem_written_if(ctx_out, attr.test.ctx_size_out, !ret);
 
 	OPTS_SET(opts, data_size_out, attr.test.data_size_out);
 	OPTS_SET(opts, ctx_size_out, attr.test.ctx_size_out);
@@ -1039,15 +1087,100 @@ int bpf_obj_get_info_by_fd(int bpf_fd, void *info, __u32 *info_len)
 	attr.info.info = ptr_to_u64(info);
 
 	err = sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &attr, attr_sz);
-	if (!err)
+	if (!err) {
 		*info_len = attr.info.info_len;
+		libbpf_mark_mem_written(info, attr.info.info_len);
+	}
 	return libbpf_err_errno(err);
 }
+
+/* Helper macros for telling memory checkers that an array pointed to by
+ * a struct bpf_{btf,link,map,prog}_info member is initialized. Before doing
+ * that, they make sure that kernel has provided the respective member.
+ */
+
+/* Handle arrays with a certain element size. */
+#define __MARK_INFO_ARRAY_WRITTEN(ptr, nr, elem_size) do {		       \
+	if (info_len >= offsetofend(typeof(*info), ptr) &&		       \
+	    info_len >= offsetofend(typeof(*info), nr) &&		       \
+	    info->ptr)							       \
+		libbpf_mark_mem_written(u64_to_ptr(info->ptr),		       \
+					info->nr * elem_size);		       \
+} while (0)
+
+/* Handle arrays with a certain element type. */
+#define MARK_INFO_ARRAY_WRITTEN(ptr, nr, type)				       \
+	__MARK_INFO_ARRAY_WRITTEN(ptr, nr, sizeof(type))
+
+/* Handle arrays with element size defined by a struct member. */
+#define MARK_INFO_REC_ARRAY_WRITTEN(ptr, nr, rec_size) do {		       \
+	if (info_len >= offsetofend(typeof(*info), rec_size))		       \
+		__MARK_INFO_ARRAY_WRITTEN(ptr, nr, info->rec_size);	       \
+} while (0)
+
+/* Handle null-terminated strings. */
+#define MARK_INFO_STR_WRITTEN(ptr, nr) do {				       \
+	if (info_len >= offsetofend(typeof(*info), ptr) &&		       \
+	    info_len >= offsetofend(typeof(*info), nr) &&		       \
+	    info->ptr)							       \
+		libbpf_mark_mem_written(u64_to_ptr(info->ptr),		       \
+					info->nr + 1);			       \
+} while (0)
+
+/* Helper functions for telling memory checkers that arrays pointed to by
+ * bpf_{btf,link,map,prog}_info members are initialized.
+ */
+
+static void mark_prog_info_written(struct bpf_prog_info *info, __u32 info_len)
+{
+	MARK_INFO_ARRAY_WRITTEN(map_ids, nr_map_ids, __u32);
+	MARK_INFO_ARRAY_WRITTEN(jited_ksyms, nr_jited_ksyms, __u64);
+	MARK_INFO_ARRAY_WRITTEN(jited_func_lens, nr_jited_func_lens, __u32);
+	MARK_INFO_REC_ARRAY_WRITTEN(func_info, nr_func_info,
+				    func_info_rec_size);
+	MARK_INFO_REC_ARRAY_WRITTEN(line_info, nr_line_info,
+				    line_info_rec_size);
+	MARK_INFO_REC_ARRAY_WRITTEN(jited_line_info, nr_jited_line_info,
+				    jited_line_info_rec_size);
+	MARK_INFO_ARRAY_WRITTEN(prog_tags, nr_prog_tags, __u8[BPF_TAG_SIZE]);
+}
+
+static void mark_btf_info_written(struct bpf_btf_info *info, __u32 info_len)
+{
+	MARK_INFO_ARRAY_WRITTEN(btf, btf_size, __u8);
+	MARK_INFO_STR_WRITTEN(name, name_len);
+}
+
+static void mark_link_info_written(struct bpf_link_info *info, __u32 info_len)
+{
+	switch (info->type) {
+	case BPF_LINK_TYPE_RAW_TRACEPOINT:
+		MARK_INFO_STR_WRITTEN(raw_tracepoint.tp_name,
+				      raw_tracepoint.tp_name_len);
+		break;
+	case BPF_LINK_TYPE_ITER:
+		MARK_INFO_STR_WRITTEN(iter.target_name, iter.target_name_len);
+		break;
+	default:
+		break;
+	}
+}
+
+#undef MARK_INFO_STR_WRITTEN
+#undef MARK_INFO_REC_ARRAY_WRITTEN
+#undef MARK_INFO_ARRAY_WRITTEN
+#undef __MARK_INFO_ARRAY_WRITTEN
 
 int bpf_prog_get_info_by_fd(int prog_fd, struct bpf_prog_info *info,
 			    __u32 *info_len)
 {
-	return bpf_obj_get_info_by_fd(prog_fd, info, info_len);
+	int err;
+
+	err = bpf_obj_get_info_by_fd(prog_fd, info, info_len);
+	if (!err)
+		mark_prog_info_written(info, *info_len);
+
+	return err;
 }
 
 int bpf_map_get_info_by_fd(int map_fd, struct bpf_map_info *info,
@@ -1059,13 +1192,25 @@ int bpf_map_get_info_by_fd(int map_fd, struct bpf_map_info *info,
 int bpf_btf_get_info_by_fd(int btf_fd, struct bpf_btf_info *info,
 			   __u32 *info_len)
 {
-	return bpf_obj_get_info_by_fd(btf_fd, info, info_len);
+	int err;
+
+	err = bpf_obj_get_info_by_fd(btf_fd, info, info_len);
+	if (!err)
+		mark_btf_info_written(info, *info_len);
+
+	return err;
 }
 
 int bpf_link_get_info_by_fd(int link_fd, struct bpf_link_info *info,
 			    __u32 *info_len)
 {
-	return bpf_obj_get_info_by_fd(link_fd, info, info_len);
+	int err;
+
+	err = bpf_obj_get_info_by_fd(link_fd, info, info_len);
+	if (!err)
+		mark_link_info_written(info, *info_len);
+
+	return err;
 }
 
 int bpf_raw_tracepoint_open(const char *name, int prog_fd)
@@ -1127,6 +1272,7 @@ int bpf_btf_load(const void *btf_data, size_t btf_size, const struct bpf_btf_loa
 		attr.btf_log_level = 1;
 		fd = sys_bpf_fd(BPF_BTF_LOAD, &attr, attr_sz);
 	}
+	libbpf_mark_mem_written(log_buf, attr.btf_log_size);
 	return libbpf_err_errno(fd);
 }
 
@@ -1146,6 +1292,7 @@ int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf, __u32 *buf_len,
 	attr.task_fd_query.buf_len = *buf_len;
 
 	err = sys_bpf(BPF_TASK_FD_QUERY, &attr, attr_sz);
+	libbpf_mark_mem_written_if(buf, attr.task_fd_query.buf_len + 1, !err);
 
 	*buf_len = attr.task_fd_query.buf_len;
 	*prog_id = attr.task_fd_query.prog_id;

@@ -5443,6 +5443,7 @@ static int load_module_btfs(struct bpf_object *obj)
 			pr_warn("failed to get BTF object #%d info: %d\n", id, err);
 			goto err_out;
 		}
+		libbpf_mark_mem_written(name, info.name_len + 1);
 
 		/* ignore non-module BTFs */
 		if (!info.kernel_btf || strcmp(name, "vmlinux") == 0) {

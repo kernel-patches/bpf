@@ -585,4 +585,42 @@ static inline bool is_percpu_bpf_map_type(__u32 type)
 	       type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE;
 }
 
+/* Check whether the code is compiled with the Memory Sanitizer. This needs to
+ * be two #if statements: if they are combined into one and __has_feature is
+ * not defined, then its usage will generate a syntax error.
+ */
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+#define LIBBPF_MSAN
+#endif
+#endif
+
+/* __libbpf_mark_mem_written(): tell memory checkers that a certain address
+ * range should be treated as initialized. Currently supports Memory Sanitizer;
+ * Valgrind support can be added in the future.
+ */
+#ifdef LIBBPF_MSAN
+#define HAVE_LIBBPF_MARK_MEM_WRITTEN
+#include <sanitizer/msan_interface.h>
+#define __libbpf_mark_mem_written __msan_unpoison
+#else
+static inline void __libbpf_mark_mem_written(void *s, size_t n) {}
+#endif
+
+/* Convenience wrappers around __libbpf_mark_mem_written(). */
+
+static inline void libbpf_mark_mem_written(void *s, size_t n)
+{
+	if (s && n)
+		__libbpf_mark_mem_written(s, n);
+}
+
+static inline void libbpf_mark_mem_written_if(void *s, size_t n, bool c)
+{
+	if (c)
+		libbpf_mark_mem_written(s, n);
+}
+
+#define libbpf_mark_var_written(v) libbpf_mark_mem_written(&(v), sizeof(v))
+
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */
