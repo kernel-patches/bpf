@@ -1265,6 +1265,8 @@ static int do_run(int argc, char **argv)
 	void *data_in = NULL, *data_out = NULL;
 	void *ctx_in = NULL, *ctx_out = NULL;
 	unsigned int repeat = 1;
+	unsigned int cpu = 0;
+	unsigned int batch_size = 0;
 	int fd, err;
 	LIBBPF_OPTS(bpf_test_run_opts, test_attr);
 
@@ -1353,8 +1355,34 @@ static int do_run(int argc, char **argv)
 				return -1;
 			}
 			NEXT_ARG();
+		} else if (is_prefix(*argv, "cpu")) {
+			char *endptr;
+
+			NEXT_ARG();
+			if (!REQ_ARGS(1))
+				return -1;
+
+			cpu = strtoul(*argv, &endptr, 0);
+			if (*endptr) {
+				p_err("can't parse %s as cpu number", *argv);
+				return -1;
+			}
+			NEXT_ARG();
+		} else if (is_prefix(*argv, "batch_size")) {
+			char *endptr;
+
+			NEXT_ARG();
+			if (!REQ_ARGS(1))
+				return -1;
+
+			batch_size = strtoul(*argv, &endptr, 0);
+			if (*endptr) {
+				p_err("can't parse %s as batch size", *argv);
+				return -1;
+			}
+			NEXT_ARG();
 		} else {
-			p_err("expected no more arguments, 'data_in', 'data_out', 'data_size_out', 'ctx_in', 'ctx_out', 'ctx_size_out' or 'repeat', got: '%s'?",
+			p_err("expected no more arguments, 'data_in', 'data_out', 'data_size_out', 'ctx_in', 'ctx_out', 'ctx_size_out', 'repeat', 'cpu' or 'batch_size', got: '%s'?",
 			      *argv);
 			return -1;
 		}
@@ -1389,6 +1417,8 @@ static int do_run(int argc, char **argv)
 	test_attr.data_out	= data_out;
 	test_attr.ctx_in	= ctx_in;
 	test_attr.ctx_out	= ctx_out;
+	test_attr.cpu		= cpu;
+	test_attr.batch_size	= batch_size;
 
 	err = bpf_prog_test_run_opts(fd, &test_attr);
 	if (err) {
