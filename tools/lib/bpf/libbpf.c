@@ -9432,11 +9432,7 @@ static int validate_map_op(const struct bpf_map *map, size_t key_sz,
 	if (!check_value_sz)
 		return 0;
 
-	switch (map->def.type) {
-	case BPF_MAP_TYPE_PERCPU_ARRAY:
-	case BPF_MAP_TYPE_PERCPU_HASH:
-	case BPF_MAP_TYPE_LRU_PERCPU_HASH:
-	case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE: {
+	if (is_percpu_bpf_map_type(map->def.type)) {
 		int num_cpu = libbpf_num_possible_cpus();
 		size_t elem_sz = roundup(map->def.value_size, 8);
 
@@ -9445,15 +9441,12 @@ static int validate_map_op(const struct bpf_map *map, size_t key_sz,
 				map->name, value_sz, num_cpu, elem_sz, num_cpu * elem_sz);
 			return -EINVAL;
 		}
-		break;
-	}
-	default:
+	} else {
 		if (map->def.value_size != value_sz) {
 			pr_warn("map '%s': unexpected value size %zu provided, expected %u\n",
 				map->name, value_sz, map->def.value_size);
 			return -EINVAL;
 		}
-		break;
 	}
 	return 0;
 }
