@@ -71,10 +71,37 @@ An example is given below::
         ...
         }
 
-Here, the verifier will treat first argument as a PTR_TO_MEM, and second
-argument as its size. By default, without __sz annotation, the size of the type
-of the pointer is used. Without __sz annotation, a kfunc cannot accept a void
-pointer.
+Here, the verifier will treat first argument (KF_ARG_PTR_TO_MEM_SIZE) as a
+pointer to the memory region and second argument as its size. By default,
+without __sz annotation, the size of the type of the pointer is used. Without
+__sz annotation, a kfunc cannot accept a void pointer.
+
+Please note that if the memory is on the stack, the stack space must be
+explicitly initialized by the program. For example:
+
+.. code-block:: c
+
+	SEC("tc")
+	int prog(struct __sk_buff *skb)
+	{
+		char buf[8];
+
+		bpf_memzero(buf, sizeof(buf));
+	...
+	}
+
+should be
+
+.. code-block:: c
+
+	SEC("tc")
+	int prog(struct __sk_buff *skb)
+	{
+		char buf[8] = {};
+
+		bpf_memzero(buf, sizeof(buf));
+	...
+	}
 
 2.2.2 __k Annotation
 --------------------
