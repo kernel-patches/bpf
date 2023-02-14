@@ -1409,7 +1409,11 @@ struct bpf_link {
 	u32 id;
 	enum bpf_link_type type;
 	const struct bpf_link_ops *ops;
-	struct bpf_prog *prog;
+	union {
+		struct bpf_prog *prog;
+		/* Backed by a struct_ops (type == BPF_LINK_UPDATE_STRUCT_OPS) */
+		struct bpf_map *map;
+	};
 	struct work_struct work;
 };
 

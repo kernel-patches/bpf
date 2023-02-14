@@ -698,3 +698,69 @@ void bpf_struct_ops_put(const void *kdata)
 		call_rcu(&st_map->rcu, bpf_struct_ops_put_rcu);
 	}
 }
+
+static void bpf_struct_ops_map_link_release(struct bpf_link *link)
+{
+	if (link->map) {
+		bpf_map_put(link->map);
+		link->map = NULL;
+	}
+}
+
+static void bpf_struct_ops_map_link_dealloc(struct bpf_link *link)
+{
+	kfree(link);
+}
+
+static void bpf_struct_ops_map_link_show_fdinfo(const struct bpf_link *link,
+					    struct seq_file *seq)
+{
+	seq_printf(seq, "map_id:\t%d\n",
+		  link->map->id);
+}
+
+static int bpf_struct_ops_map_link_fill_link_info(const struct bpf_link *link,
+					       struct bpf_link_info *info)
+{
+	info->struct_ops_map.map_id = link->map->id;
+	return 0;
+}
+
+static const struct bpf_link_ops bpf_struct_ops_map_lops = {
+	.release = bpf_struct_ops_map_link_release,
+	.dealloc = bpf_struct_ops_map_link_dealloc,
+	.show_fdinfo = bpf_struct_ops_map_link_show_fdinfo,
+	.fill_link_info = bpf_struct_ops_map_link_fill_link_info,
+};
+
+int link_create_struct_ops_map(union bpf_attr *attr, bpfptr_t uattr)
+{
+	struct bpf_link_primer link_primer;
+	struct bpf_map *map;
+	struct bpf_link *link = NULL;
+	int err;
+
+	map = bpf_map_get(attr->link_create.prog_fd);
+	if (map->map_type != BPF_MAP_TYPE_STRUCT_OPS)
+		return -EINVAL;
+
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+	bpf_link_init(link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_map_lops, NULL);
+	link->map = map;
+
+	err = bpf_link_prime(link, &link_primer);
+	if (err)
+		goto err_out;
+
+	return bpf_link_settle(&link_primer);
+
+err_out:
+	bpf_map_put(map);
+	kfree(link);
+	return err;
+}
+

@@ -2748,7 +2748,9 @@ static void bpf_link_free(struct bpf_link *link)
 	if (link->prog) {
 		/* detach BPF program, clean up used resources */
 		link->ops->release(link);
-		bpf_prog_put(link->prog);
+		if (link->type != BPF_LINK_TYPE_STRUCT_OPS)
+			bpf_prog_put(link->prog);
+		/* The struct_ops links clean up map by them-selves. */
 	}
 	/* free bpf_link and its containing memory */
 	link->ops->dealloc(link);
@@ -2804,16 +2806,19 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 	const struct bpf_prog *prog = link->prog;
 	char prog_tag[sizeof(prog->tag) * 2 + 1] = { };
 
-	bin2hex(prog_tag, prog->tag, sizeof(prog->tag));
 	seq_printf(m,
 		   "link_type:\t%s\n"
-		   "link_id:\t%u\n"
-		   "prog_tag:\t%s\n"
-		   "prog_id:\t%u\n",
+		   "link_id:\t%u\n",
 		   bpf_link_type_strs[link->type],
-		   link->id,
-		   prog_tag,
-		   prog->aux->id);
+		   link->id);
+	if (link->type != BPF_LINK_TYPE_STRUCT_OPS) {
+		bin2hex(prog_tag, prog->tag, sizeof(prog->tag));
+		seq_printf(m,
+			   "prog_tag:\t%s\n"
+			   "prog_id:\t%u\n",
+			   prog_tag,
+			   prog->aux->id);
+	}
 	if (link->ops->show_fdinfo)
 		link->ops->show_fdinfo(link, m);
 }
@@ -4288,7 +4293,8 @@ static int bpf_link_get_info_by_fd(struct file *file,
 
 	info.type = link->type;
 	info.id = link->id;
-	info.prog_id = link->prog->aux->id;
+	if (link->type != BPF_LINK_TYPE_STRUCT_OPS)
+		info.prog_id = link->prog->aux->id;
 
 	if (link->ops->fill_link_info) {
 		err = link->ops->fill_link_info(link, &info);
@@ -4541,6 +4547,8 @@ err_put:
 	return err;
 }
 
+extern int link_create_struct_ops_map(union bpf_attr *attr, bpfptr_t uattr);
+
 #define BPF_LINK_CREATE_LAST_FIELD link_create.kprobe_multi.cookies
 static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 {
@@ -4550,6 +4558,9 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 
 	if (CHECK_ATTR(BPF_LINK_CREATE))
 		return -EINVAL;
+
+	if (attr->link_create.attach_type == BPF_STRUCT_OPS_MAP)
+		return link_create_struct_ops_map(attr, uattr);
 
 	prog = bpf_prog_get(attr->link_create.prog_fd);
 	if (IS_ERR(prog))

@@ -115,6 +115,7 @@ static const char * const attach_type_name[] = {
 	[BPF_SK_REUSEPORT_SELECT_OR_MIGRATE]	= "sk_reuseport_select_or_migrate",
 	[BPF_PERF_EVENT]		= "perf_event",
 	[BPF_TRACE_KPROBE_MULTI]	= "trace_kprobe_multi",
+	[BPF_STRUCT_OPS_MAP]		= "struct_ops_map",
 };
 
 static const char * const link_type_name[] = {
