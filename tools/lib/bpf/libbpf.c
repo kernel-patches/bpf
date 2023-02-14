@@ -11430,29 +11430,41 @@ struct bpf_link *bpf_program__attach(const struct bpf_program *prog)
 	return link;
 }
 
+struct bpf_link_struct_ops_map {
+	struct bpf_link link;
+	int map_fd;
+};
+
 static int bpf_link__detach_struct_ops(struct bpf_link *link)
 {
+	struct bpf_link_struct_ops_map *st_link;
 	__u32 zero = 0;
 
-	if (bpf_map_delete_elem(link->fd, &zero))
+	st_link = container_of(link, struct bpf_link_struct_ops_map, link);
+
+	if (st_link->map_fd < 0) {
+		/* Fake bpf_link */
+		if (bpf_map_delete_elem(link->fd, &zero))
+			return -errno;
+		return 0;
+	}
+
+	if (bpf_map_delete_elem(st_link->map_fd, &zero))
+		return -errno;
+
+	if (close(link->fd))
 		return -errno;
 
 	return 0;
 }
 
-struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
+/*
+ * Update the map with the prepared vdata.
+ */
+static int bpf_map__update_vdata(const struct bpf_map *map)
 {
 	struct bpf_struct_ops *st_ops;
-	struct bpf_link *link;
 	__u32 i, zero = 0;
-	int err;
-
-	if (!bpf_map__is_struct_ops(map) || map->fd == -1)
-		return libbpf_err_ptr(-EINVAL);
-
-	link = calloc(1, sizeof(*link));
-	if (!link)
-		return libbpf_err_ptr(-EINVAL);
 
 	st_ops = map->st_ops;
 	for (i = 0; i < btf_vlen(st_ops->type); i++) {
@@ -11468,17 +11480,48 @@ struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
 		*(unsigned long *)kern_data = prog_fd;
 	}
 
-	err = bpf_map_update_elem(map->fd, &zero, st_ops->kern_vdata, 0);
+	return bpf_map_update_elem(map->fd, &zero, st_ops->kern_vdata, 0);
+}
+
+struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
+{
+	struct bpf_link_struct_ops_map *link;
+	int err, fd;
+
+	if (!bpf_map__is_struct_ops(map) || map->fd == -1)
+		return libbpf_err_ptr(-EINVAL);
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return libbpf_err_ptr(-EINVAL);
+
+	err = bpf_map__update_vdata(map);
 	if (err) {
 		err = -errno;
 		free(link);
 		return libbpf_err_ptr(err);
 	}
 
-	link->detach = bpf_link__detach_struct_ops;
-	link->fd = map->fd;
+	link->link.detach = bpf_link__detach_struct_ops;
 
-	return link;
+	if (!(map->def.map_flags & BPF_F_LINK)) {
+		/* Fake bpf_link */
+		link->link.fd = map->fd;
+		link->map_fd = -1;
+		return &link->link;
+	}
+
+	fd = bpf_link_create(map->fd, -1, BPF_STRUCT_OPS_MAP, NULL);
+	if (fd < 0) {
+		err = -errno;
+		free(link);
+		return libbpf_err_ptr(err);
+	}
+
+	link->link.fd = fd;
+	link->map_fd = map->fd;
+
+	return &link->link;
 }
 
 typedef enum bpf_perf_event_ret (*bpf_perf_event_print_t)(struct perf_event_header *hdr,
