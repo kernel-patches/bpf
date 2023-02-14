@@ -14,6 +14,7 @@
 #include <net/if.h>
 #include <linux/if_link.h>
 #include "test_progs.h"
+#include "bpf/libbpf_internal.h"
 #include "network_helpers.h"
 #include <linux/if_bonding.h>
 #include <linux/limits.h>
@@ -223,6 +224,8 @@ static int send_udp_packets(int vary_dst_ip)
 	uint8_t buf[128];
 	int i, s = -1;
 	int ifindex;
+
+	libbpf_mark_mem_written(buf, sizeof(buf));
 
 	s = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
 	if (!ASSERT_GE(s, 0, "socket"))
