@@ -5,7 +5,7 @@
 
 struct map_value {
 	struct prog_test_ref_kfunc __kptr_untrusted *unref_ptr;
-	struct prog_test_ref_kfunc __kptr *ref_ptr;
+	struct prog_test_ref_kfunc __kptr_rcu *ref_ptr;
 };
 
 struct array_map {
@@ -61,6 +61,7 @@ extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp
 extern struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_kptr_get(struct prog_test_ref_kfunc **p, int a, int b) __ksym;
 extern void bpf_kfunc_call_test_release(struct prog_test_ref_kfunc *p) __ksym;
+void bpf_kfunc_call_test_ref(struct prog_test_ref_kfunc *p) __ksym;
 
 #define WRITE_ONCE(x, val) ((*(volatile typeof(x) *) &(x)) = (val))
 
@@ -90,12 +91,20 @@ static void test_kptr_ref(struct map_value *v)
 	WRITE_ONCE(v->unref_ptr, p);
 	if (!p)
 		return;
+	/*
+	 * p is trusted_ptr_prog_test_ref_kfunc
+	 * because bpf prog is non-sleepable and runs in RCU CS.
+	 * p can be passed to kfunc that requires KF_TRUSTED_ARGS
+	 */
+	bpf_kfunc_call_test_ref(p);
 	if (p->a + p->b > 100)
 		return;
 	/* store NULL */
 	p = bpf_kptr_xchg(&v->ref_ptr, NULL);
 	if (!p)
 		return;
+	/* p is trusted_ptr_prog_test_ref_kfunc */
+	bpf_kfunc_call_test_ref(p);
 	if (p->a + p->b > 100) {
 		bpf_kfunc_call_test_release(p);
 		return;
@@ -288,6 +297,8 @@ int test_map_kptr_ref2(struct __sk_buff *ctx)
 	if (p_st->cnt.refs.counter != 2)
 		return 6;
 
+	/* p_st is trusted, because we're in RCU CS */
+	bpf_kfunc_call_test_ref(p_st);
 	return 0;
 }
 
