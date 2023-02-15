@@ -176,6 +176,7 @@ enum libbpf_tristate {
 #define __ksym __attribute__((section(".ksyms")))
 #define __kptr_untrusted __attribute__((btf_type_tag("kptr_untrusted")))
 #define __kptr __attribute__((btf_type_tag("kptr")))
+#define __kptr_rcu __attribute__((btf_type_tag("kptr_rcu")))
 
 #ifndef ___bpf_concat
 #define ___bpf_concat(a, b) a ## b

@@ -3287,6 +3287,8 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 		type = BPF_KPTR_UNREF;
 	else if (!strcmp("kptr", __btf_name_by_offset(btf, t->name_off)))
 		type = BPF_KPTR_REF;
+	else if (!strcmp("kptr_rcu", __btf_name_by_offset(btf, t->name_off)))
+		type = BPF_KPTR_RCU;
 	else
 		return -EINVAL;
 
@@ -3449,6 +3451,7 @@ static int btf_find_struct_field(const struct btf *btf,
 			break;
 		case BPF_KPTR_UNREF:
 		case BPF_KPTR_REF:
+		case BPF_KPTR_RCU:
 			ret = btf_find_kptr(btf, member_type, off, sz,
 					    idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3514,6 +3517,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			break;
 		case BPF_KPTR_UNREF:
 		case BPF_KPTR_REF:
+		case BPF_KPTR_RCU:
 			ret = btf_find_kptr(btf, var_type, off, sz,
 					    idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3552,6 +3556,18 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 	return -EINVAL;
 }
 
+BTF_SET_START(rcu_protected_types)
+BTF_ID(struct, prog_test_ref_kfunc)
+BTF_ID(struct, cgroup)
+BTF_SET_END(rcu_protected_types)
+
+static bool rcu_protected_object(const struct btf *btf, u32 btf_id)
+{
+	if (!btf_is_kernel(btf))
+		return false;
+	return btf_id_set_contains(&rcu_protected_types, btf_id);
+}
+
 static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 			  struct btf_field_info *info)
 {
@@ -3570,10 +3586,13 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 	if (id < 0)
 		return id;
 
+	if (info->type == BPF_KPTR_RCU && !rcu_protected_object(kernel_btf, id))
+		return -EINVAL;
+
 	/* Find and stash the function pointer for the destruction function that
 	 * needs to be eventually invoked from the map free path.
 	 */
-	if (info->type == BPF_KPTR_REF) {
+	if (info->type == BPF_KPTR_REF || info->type == BPF_KPTR_RCU) {
 		const struct btf_type *dtor_func;
 		const char *dtor_func_name;
 		unsigned long addr;
@@ -3737,6 +3756,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			break;
 		case BPF_KPTR_UNREF:
 		case BPF_KPTR_REF:
+		case BPF_KPTR_RCU:
 			ret = btf_parse_kptr(btf, &rec->fields[i], &info_arr[i]);
 			if (ret < 0)
 				goto end;
