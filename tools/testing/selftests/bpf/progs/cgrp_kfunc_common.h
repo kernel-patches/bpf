@@ -10,7 +10,7 @@
 #include <bpf/bpf_tracing.h>
 
 struct __cgrps_kfunc_map_value {
-	struct cgroup __kptr * cgrp;
+	struct cgroup __kptr_rcu * cgrp;
 };
 
 struct hash_map {
