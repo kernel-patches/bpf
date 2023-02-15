@@ -2947,7 +2947,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx,
 			/* BPF helpers that invoke callback subprogs are
 			 * equivalent to BPF_PSEUDO_CALL above
 			 */
-			if (insn->src_reg == 0 && is_callback_calling_function(insn->imm))
+			if (insn->src_reg == BPF_HELPER_CALL &&
+			    is_callback_calling_function(insn->imm))
 				return -ENOTSUPP;
 			/* kfunc with imm==0 is invalid and fixup_kfunc_call will
 			 * catch this error later. Make backtracking conservative
@@ -7522,7 +7523,7 @@ static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 
 	if (insn->code == (BPF_JMP | BPF_CALL) &&
-	    insn->src_reg == 0 &&
+	    insn->src_reg == BPF_HELPER_CALL &&
 	    insn->imm == BPF_FUNC_timer_set_callback) {
 		struct bpf_verifier_state *async_cb;
 
@@ -14730,7 +14731,7 @@ static int do_check(struct bpf_verifier_env *env)
 				if (BPF_SRC(insn->code) != BPF_K ||
 				    (insn->src_reg != BPF_PSEUDO_KFUNC_CALL
 				     && insn->off != 0) ||
-				    (insn->src_reg != BPF_REG_0 &&
+				    (insn->src_reg != BPF_HELPER_CALL &&
 				     insn->src_reg != BPF_PSEUDO_CALL &&
 				     insn->src_reg != BPF_PSEUDO_KFUNC_CALL) ||
 				    insn->dst_reg != BPF_REG_0 ||
@@ -14740,7 +14741,8 @@ static int do_check(struct bpf_verifier_env *env)
 				}
 
 				if (env->cur_state->active_lock.ptr) {
-					if ((insn->src_reg == BPF_REG_0 && insn->imm != BPF_FUNC_spin_unlock) ||
+					if ((insn->src_reg == BPF_HELPER_CALL &&
+					     insn->imm != BPF_FUNC_spin_unlock) ||
 					    (insn->src_reg == BPF_PSEUDO_CALL) ||
 					    (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
 					     (insn->off != 0 || !is_bpf_graph_api_kfunc(insn->imm)))) {
@@ -16933,7 +16935,7 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 static bool is_bpf_loop_call(struct bpf_insn *insn)
 {
 	return insn->code == (BPF_JMP | BPF_CALL) &&
-		insn->src_reg == 0 &&
+		insn->src_reg == BPF_HELPER_CALL &&
 		insn->imm == BPF_FUNC_loop;
 }
 

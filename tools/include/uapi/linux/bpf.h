@@ -1211,6 +1211,10 @@ enum bpf_link_type {
  */
 #define BPF_PSEUDO_FUNC		4
 
+/* when bpf_call->src_reg == BPF_HELPER_CALL, bpf_call->imm == index of a bpf
+ * helper function (see ___BPF_FUNC_MAPPER below for a full list)
+ */
+#define BPF_HELPER_CALL		0
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
  */

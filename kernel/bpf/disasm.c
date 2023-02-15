@@ -19,7 +19,7 @@ static const char *__func_get_name(const struct bpf_insn_cbs *cbs,
 {
 	BUILD_BUG_ON(ARRAY_SIZE(func_id_str) != __BPF_FUNC_MAX_ID);
 
-	if (!insn->src_reg &&
+	if (insn->src_reg == BPF_HELPER_CALL &&
 	    insn->imm >= 0 && insn->imm < __BPF_FUNC_MAX_ID &&
 	    func_id_str[insn->imm])
 		return func_id_str[insn->imm];

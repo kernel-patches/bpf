@@ -261,7 +261,7 @@
 	((struct bpf_insn) {					\
 		.code  = BPF_JMP | BPF_CALL,			\
 		.dst_reg = 0,					\
-		.src_reg = 0,					\
+		.src_reg = BPF_HELPER_CALL,			\
 		.off   = 0,					\
 		.imm   = ((FUNC) - BPF_FUNC_unspec) })
 
