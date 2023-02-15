@@ -63,9 +63,9 @@ static int attach_tc_prog(struct bpf_tc_hook *hook, int fd)
 }
 
 /* The maximum permissible size is: PAGE_SIZE - sizeof(struct xdp_page_head) -
- * sizeof(struct skb_shared_info) - XDP_PACKET_HEADROOM = 3368 bytes
+ * sizeof(struct skb_shared_info) - XDP_PACKET_HEADROOM = 3408 bytes
  */
-#define MAX_PKT_SIZE 3368
+#define MAX_PKT_SIZE 3408
 static void test_max_pkt_size(int fd)
 {
 	char data[MAX_PKT_SIZE + 1] = {};
