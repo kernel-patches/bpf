@@ -5,12 +5,12 @@
 #include "bpf_misc.h"
 
 struct Small {
-	int x;
+	long x;
 };
 
 struct Big {
-	int x;
-	int y;
+	long x;
+	long y;
 };
 
 __noinline int foo(const struct Big *big)
