@@ -311,6 +311,62 @@ extern char igc_driver_name[];
 #define IGC_MRQC_RSS_FIELD_IPV4_UDP	0x00400000
 #define IGC_MRQC_RSS_FIELD_IPV6_UDP	0x00800000
 
+/* RX-desc Write-Back format RSS Type's */
+enum igc_rss_type_num {
+	IGC_RSS_TYPE_NO_HASH		= 0,
+	IGC_RSS_TYPE_HASH_TCP_IPV4	= 1,
+	IGC_RSS_TYPE_HASH_IPV4		= 2,
+	IGC_RSS_TYPE_HASH_TCP_IPV6	= 3,
+	IGC_RSS_TYPE_HASH_IPV6_EX	= 4,
+	IGC_RSS_TYPE_HASH_IPV6		= 5,
+	IGC_RSS_TYPE_HASH_TCP_IPV6_EX	= 6,
+	IGC_RSS_TYPE_HASH_UDP_IPV4	= 7,
+	IGC_RSS_TYPE_HASH_UDP_IPV6	= 8,
+	IGC_RSS_TYPE_HASH_UDP_IPV6_EX	= 9,
+	IGC_RSS_TYPE_MAX		= 10,
+};
+#define IGC_RSS_TYPE_MAX_TABLE		16
+#define IGC_RSS_TYPE_MASK		0xF
+
+/* igc_rss_type - Rx descriptor RSS type field */
+static inline u32 igc_rss_type(const union igc_adv_rx_desc *rx_desc)
+{
+	/* RSS Type 4-bit number: 0-9 (above 9 is reserved)
+	 * Accessing the same bits via u16 (wb.lower.lo_dword.hs_rss.pkt_info)
+	 * is slightly slower than via u32 (wb.lower.lo_dword.data)
+	 */
+	return le32_to_cpu(rx_desc->wb.lower.lo_dword.data) & IGC_RSS_TYPE_MASK;
+}
+
+/* Packet header type identified by hardware (when BIT(11) is zero).
+ * Even when UDP ports are not part of RSS hash HW still parse and mark UDP bits
+ */
+enum igc_pkt_type_bits {
+	IGC_PKT_TYPE_HDR_IPV4	=	BIT(0),
+	IGC_PKT_TYPE_HDR_IPV4_WITH_OPT=	BIT(1), /* IPv4 Hdr includes IP options */
+	IGC_PKT_TYPE_HDR_IPV6	=	BIT(2),
+	IGC_PKT_TYPE_HDR_IPV6_WITH_EXT=	BIT(3), /* IPv6 Hdr includes extensions */
+	IGC_PKT_TYPE_HDR_L4_TCP	=	BIT(4),
+	IGC_PKT_TYPE_HDR_L4_UDP	=	BIT(5),
+	IGC_PKT_TYPE_HDR_L4_SCTP=	BIT(6),
+	IGC_PKT_TYPE_HDR_NFS	=	BIT(7),
+	/* Above only valid when BIT(11) is zero */
+	IGC_PKT_TYPE_L2		=	BIT(11),
+	IGC_PKT_TYPE_VLAN	=	BIT(12),
+	IGC_PKT_TYPE_MASK	=	GENMASK(16,4), /* 13-bits (16:4) */
+	IGC_PKT_TYPE_SHIFT	=	4
+};
+
+/* igc_pkt_type - Rx descriptor Packet type field */
+static inline u32 igc_pkt_type(const union igc_adv_rx_desc *rx_desc)
+{
+	u32 data = le32_to_cpu(rx_desc->wb.lower.lo_dword.data);
+	/* Packet type is 13-bits - as bits (16:4) in lower.lo_dword*/
+	u32 pkt_type = (data & IGC_PKT_TYPE_MASK) >> IGC_PKT_TYPE_SHIFT;
+
+	return pkt_type;
+}
+
 /* Interrupt defines */
 #define IGC_START_ITR			648 /* ~6000 ints/sec */
 #define IGC_4K_ITR			980
