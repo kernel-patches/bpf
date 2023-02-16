@@ -2074,6 +2074,8 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 	prog = aux->prog;
 	perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_UNLOAD, 0);
 	bpf_audit_prog(prog, BPF_AUDIT_UNLOAD);
+	if (aux->mod)
+		module_put(aux->mod);
 	bpf_prog_free_id(prog);
 	__bpf_prog_put_noref(prog, true);
 }
