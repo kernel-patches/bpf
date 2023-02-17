@@ -5317,7 +5317,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	/* for access checks, reg->off is just part of off */
 	off += reg->off;
 
-	if (reg->type == PTR_TO_MAP_KEY) {
+	switch (base_type(reg->type)) {
+	case PTR_TO_MAP_KEY:
 		if (t == BPF_WRITE) {
 			verbose(env, "write to change key R%d not allowed\n", regno);
 			return -EACCES;
@@ -5329,7 +5330,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			return err;
 		if (value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (reg->type == PTR_TO_MAP_VALUE) {
+
+		break;
+	case PTR_TO_MAP_VALUE:
+	{
 		struct btf_field *kptr_field = NULL;
 
 		if (t == BPF_WRITE && value_regno >= 0 &&
@@ -5369,7 +5373,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 				mark_reg_unknown(env, regs, value_regno);
 			}
 		}
-	} else if (base_type(reg->type) == PTR_TO_MEM) {
+		break;
+	}
+	case PTR_TO_MEM:
+	{
 		bool rdonly_mem = type_is_rdonly_mem(reg->type);
 
 		if (type_may_be_null(reg->type)) {
@@ -5394,7 +5401,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 					      reg->mem_size, false);
 		if (!err && value_regno >= 0 && (t == BPF_READ || rdonly_mem))
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (reg->type == PTR_TO_CTX) {
+		break;
+	}
+	case PTR_TO_CTX:
+	{
 		enum bpf_reg_type reg_type = SCALAR_VALUE;
 		struct btf *btf = NULL;
 		u32 btf_id = 0;
@@ -5438,8 +5448,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			}
 			regs[value_regno].type = reg_type;
 		}
-
-	} else if (reg->type == PTR_TO_STACK) {
+		break;
+	}
+	case PTR_TO_STACK:
 		/* Basic bounds checks. */
 		err = check_stack_access_within_bounds(env, regno, off, size, ACCESS_DIRECT, t);
 		if (err)
@@ -5456,7 +5467,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		else
 			err = check_stack_write(env, regno, off, size,
 						value_regno, insn_idx);
-	} else if (reg_is_pkt_pointer(reg)) {
+		break;
+	case PTR_TO_PACKET:
+	case PTR_TO_PACKET_META:
 		if (t == BPF_WRITE && !may_access_direct_pkt_data(env, NULL, t)) {
 			verbose(env, "cannot write into packet\n");
 			return -EACCES;
@@ -5470,7 +5483,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_packet_access(env, regno, off, size, false);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (reg->type == PTR_TO_FLOW_KEYS) {
+		break;
+	case PTR_TO_FLOW_KEYS:
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
 			verbose(env, "R%d leaks addr into flow keys\n",
@@ -5481,7 +5495,11 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_flow_keys_access(env, off, size);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (type_is_sk_pointer(reg->type)) {
+		break;
+	case PTR_TO_SOCKET:
+	case PTR_TO_SOCK_COMMON:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_XDP_SOCK:
 		if (t == BPF_WRITE) {
 			verbose(env, "R%d cannot write into %s\n",
 				regno, reg_type_str(env, reg->type));
@@ -5490,18 +5508,18 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_sock_access(env, insn_idx, regno, off, size, t);
 		if (!err && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (reg->type == PTR_TO_TP_BUFFER) {
+		break;
+	case PTR_TO_TP_BUFFER:
 		err = check_tp_buffer_access(env, reg, regno, off, size);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
-	} else if (base_type(reg->type) == PTR_TO_BTF_ID &&
-		   !type_may_be_null(reg->type)) {
-		err = check_ptr_to_btf_access(env, regs, regno, off, size, t,
-					      value_regno);
-	} else if (reg->type == CONST_PTR_TO_MAP) {
+		break;
+	case CONST_PTR_TO_MAP:
 		err = check_ptr_to_map_access(env, regs, regno, off, size, t,
 					      value_regno);
-	} else if (base_type(reg->type) == PTR_TO_BUF) {
+		break;
+	case PTR_TO_BUF:
+	{
 		bool rdonly_mem = type_is_rdonly_mem(reg->type);
 		u32 *max_access;
 
@@ -5521,7 +5539,17 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 
 		if (!err && value_regno >= 0 && (rdonly_mem || t == BPF_READ))
 			mark_reg_unknown(env, regs, value_regno);
-	} else {
+		break;
+	}
+	case PTR_TO_BTF_ID:
+		if (!type_may_be_null(reg->type)) {
+			err = check_ptr_to_btf_access(env, regs, regno, off, size, t,
+						      value_regno);
+			break;
+		} else {
+			fallthrough;
+		}
+	default:
 		verbose(env, "R%d invalid mem access '%s'\n", regno,
 			reg_type_str(env, reg->type));
 		return -EACCES;
@@ -8377,10 +8405,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return err;
 
 	/* reset caller saved regs */
-	for (i = 0; i < CALLER_SAVED_REGS; i++) {
-		mark_reg_not_init(env, regs, caller_saved[i]);
-		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
-	}
+	clear_caller_saved_regs(env, regs);
 
 	/* helper call returns 64-bit value. */
 	regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
