@@ -53,6 +53,7 @@
 #include "libbpf_internal.h"
 #include "hashmap.h"
 #include "bpf_gen_internal.h"
+#include "zip.h"
 
 #ifndef BPF_FS_MAGIC
 #define BPF_FS_MAGIC		0xcafe4a11
@@ -10702,6 +10703,60 @@ static long elf_find_func_offset_from_elf_file(const char *binary_path, const ch
 	return ret;
 }
 
+/* Find offset of function name in archive specified by path. Currently
+ * supported are .zip files that do not compress their contents (as used on
+ * Android in the form of APKs, for example).  "file_name" is the name of the
+ * ELF file inside the archive.  "func_name" matches symbol name or name@@LIB
+ * for library functions.
+ */
+static long elf_find_func_offset_from_archive(const char *archive_path, const char *file_name,
+					      const char *func_name)
+{
+	struct zip_archive *archive;
+	struct zip_entry entry;
+	long ret = -ENOENT;
+	Elf *elf;
+
+	archive = zip_archive_open(archive_path);
+	if (!archive) {
+		pr_warn("failed to open %s\n", archive_path);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+
+	if (zip_archive_find_entry(archive, file_name, &entry)) {
+		pr_warn("zip: could not find archive member %s in %s\n", file_name, archive_path);
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+
+	if (entry.compression) {
+		pr_warn("zip: entry %s of %s is compressed and cannot be handled\n", file_name,
+			archive_path);
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+
+	elf = elf_memory((void *)entry.data, entry.data_length);
+	if (!elf) {
+		pr_warn("elf: could not read elf file %s from %s: %s\n", file_name, archive_path,
+			elf_errmsg(-1));
+		ret = -LIBBPF_ERRNO__FORMAT;
+		goto out;
+	}
+
+	ret = elf_find_func_offset(elf, file_name, func_name);
+	if (ret > 0) {
+		ret += entry.data_offset;
+		pr_debug("elf: symbol address match for '%s' in '%s': 0x%lx\n", func_name,
+			 archive_path, ret);
+	}
+	elf_end(elf);
+
+out:
+	zip_archive_close(archive);
+	return ret;
+}
+
 static const char *arch_specific_lib_paths(void)
 {
 	/*
@@ -10789,6 +10844,9 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 {
 	DECLARE_LIBBPF_OPTS(bpf_perf_event_opts, pe_opts);
 	char errmsg[STRERR_BUFSIZE], *legacy_probe = NULL;
+	const char *archive_path = NULL;
+	const char *archive_sep = NULL;
+	char full_archive_path[PATH_MAX];
 	char full_binary_path[PATH_MAX];
 	struct bpf_link *link;
 	size_t ref_ctr_off;
@@ -10806,9 +10864,21 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	if (!binary_path)
 		return libbpf_err_ptr(-EINVAL);
 
-	if (!strchr(binary_path, '/')) {
-		err = resolve_full_path(binary_path, full_binary_path,
-					sizeof(full_binary_path));
+	/* Check if "binary_path" refers to an archive. */
+	archive_sep = strstr(binary_path, "!/");
+	if (archive_sep) {
+		if (archive_sep - binary_path >= sizeof(full_archive_path)) {
+			return libbpf_err_ptr(-EINVAL);
+		}
+
+		strncpy(full_archive_path, binary_path, archive_sep - binary_path);
+		full_archive_path[archive_sep - binary_path] = 0;
+		archive_path = full_archive_path;
+
+		strcpy(full_binary_path, archive_sep + 2);
+		binary_path = full_binary_path;
+	} else if (!strchr(binary_path, '/')) {
+		err = resolve_full_path(binary_path, full_binary_path, sizeof(full_binary_path));
 		if (err) {
 			pr_warn("prog '%s': failed to resolve full path for '%s': %d\n",
 				prog->name, binary_path, err);
@@ -10820,7 +10890,13 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	if (func_name) {
 		long sym_off;
 
-		sym_off = elf_find_func_offset_from_elf_file(binary_path, func_name);
+		if (archive_path) {
+			sym_off = elf_find_func_offset_from_archive(archive_path, binary_path,
+								    func_name);
+			binary_path = archive_path;
+		} else {
+			sym_off = elf_find_func_offset_from_elf_file(binary_path, func_name);
+		}
 		if (sym_off < 0)
 			return libbpf_err_ptr(sym_off);
 		func_offset += sym_off;
