@@ -721,10 +721,12 @@ __diag_ignore_all("-Wmissing-prototypes",
  * @timestamp: Return value pointer.
  *
  * Returns 0 on success or ``-errno`` on error.
+ *
+ *  -ENODEV (19): means device driver doesn't implement kfunc
  */
 __bpf_kfunc int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
 {
-	return -EOPNOTSUPP;
+	return -ENODEV;
 }
 
 /**
@@ -733,10 +735,12 @@ __bpf_kfunc int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx, u64 *tim
  * @hash: Return value pointer.
  *
  * Returns 0 on success or ``-errno`` on error.
+ *
+ *  -ENODEV (19): means device driver doesn't implement kfunc
  */
 __bpf_kfunc int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, u32 *hash)
 {
-	return -EOPNOTSUPP;
+	return -ENODEV;
 }
 
 __diag_pop();
