@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
 #include "test_attach_kprobe_sleepable.skel.h"
+#include "test_attach_probe_manual.skel.h"
 #include "test_attach_probe.skel.h"
 
 /* this is how USDT semaphore is actually defined, except volatile modifier */
@@ -33,33 +34,48 @@ static noinline void trigger_func4(void)
 static char test_data[] = "test_data";
 
 /* manual attach kprobe/kretprobe/uprobe/uretprobe testings */
-static void test_attach_probe_manual(struct test_attach_probe *skel)
+static void test_attach_probe_manual(enum probe_attach_mode attach_mode)
 {
 	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
+	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, kprobe_opts);
 	struct bpf_link *kprobe_link, *kretprobe_link;
 	struct bpf_link *uprobe_link, *uretprobe_link;
+	struct test_attach_probe_manual *skel;
 	ssize_t uprobe_offset;
+
+	skel = test_attach_probe_manual__open();
+	if (!ASSERT_OK_PTR(skel, "skel_kprobe_manual_open"))
+		return;
+
+	if (!ASSERT_OK(test_attach_probe_manual__load(skel), "skel_manual_load"))
+		goto cleanup;
+	if (!ASSERT_OK_PTR(skel->bss, "manual_check_bss"))
+		goto cleanup;
 
 	uprobe_offset = get_uprobe_offset(&trigger_func);
 	if (!ASSERT_GE(uprobe_offset, 0, "uprobe_offset"))
-		return;
+		goto cleanup;
 
 	/* manual-attach kprobe/kretprobe */
-	kprobe_link = bpf_program__attach_kprobe(skel->progs.handle_kprobe,
-						 false /* retprobe */,
-						 SYS_NANOSLEEP_KPROBE_NAME);
+	kprobe_opts.attach_mode = attach_mode;
+	kprobe_opts.retprobe = false;
+	kprobe_link = bpf_program__attach_kprobe_opts(skel->progs.handle_kprobe,
+						      SYS_NANOSLEEP_KPROBE_NAME,
+						      &kprobe_opts);
 	if (!ASSERT_OK_PTR(kprobe_link, "attach_kprobe"))
-		return;
+		goto cleanup;
 	skel->links.handle_kprobe = kprobe_link;
 
-	kretprobe_link = bpf_program__attach_kprobe(skel->progs.handle_kretprobe,
-						    true /* retprobe */,
-						    SYS_NANOSLEEP_KPROBE_NAME);
+	kprobe_opts.retprobe = true;
+	kretprobe_link = bpf_program__attach_kprobe_opts(skel->progs.handle_kretprobe,
+							 SYS_NANOSLEEP_KPROBE_NAME,
+							 &kprobe_opts);
 	if (!ASSERT_OK_PTR(kretprobe_link, "attach_kretprobe"))
-		return;
+		goto cleanup;
 	skel->links.handle_kretprobe = kretprobe_link;
 
 	/* manual-attach uprobe/uretprobe */
+	uprobe_opts.attach_mode = attach_mode;
 	uprobe_opts.ref_ctr_offset = 0;
 	uprobe_opts.retprobe = false;
 	uprobe_link = bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe,
@@ -68,7 +84,7 @@ static void test_attach_probe_manual(struct test_attach_probe *skel)
 						      uprobe_offset,
 						      &uprobe_opts);
 	if (!ASSERT_OK_PTR(uprobe_link, "attach_uprobe"))
-		return;
+		goto cleanup;
 	skel->links.handle_uprobe = uprobe_link;
 
 	uprobe_opts.retprobe = true;
@@ -77,7 +93,7 @@ static void test_attach_probe_manual(struct test_attach_probe *skel)
 							 "/proc/self/exe",
 							 uprobe_offset, &uprobe_opts);
 	if (!ASSERT_OK_PTR(uretprobe_link, "attach_uretprobe"))
-		return;
+		goto cleanup;
 	skel->links.handle_uretprobe = uretprobe_link;
 
 	/* attach uprobe by function name manually */
@@ -106,6 +122,9 @@ static void test_attach_probe_manual(struct test_attach_probe *skel)
 	ASSERT_EQ(skel->bss->uprobe_res, 3, "check_uprobe_res");
 	ASSERT_EQ(skel->bss->uretprobe_res, 4, "check_uretprobe_res");
 	ASSERT_EQ(skel->bss->uprobe_byname_res, 5, "check_uprobe_byname_res");
+
+cleanup:
+	test_attach_probe_manual__destroy(skel);
 }
 
 static void test_attach_probe_auto(struct test_attach_probe *skel)
@@ -287,8 +306,15 @@ void test_attach_probe(void)
 	if (!ASSERT_OK_PTR(skel->bss, "check_bss"))
 		goto cleanup;
 
-	if (test__start_subtest("manual"))
-		test_attach_probe_manual(skel);
+	if (test__start_subtest("manual-default"))
+		test_attach_probe_manual(PROBE_ATTACH_MODE_DEFAULT);
+	if (test__start_subtest("manual-legacy"))
+		test_attach_probe_manual(PROBE_ATTACH_MODE_LEGACY);
+	if (test__start_subtest("manual-perf"))
+		test_attach_probe_manual(PROBE_ATTACH_MODE_PERF);
+	if (test__start_subtest("manual-link"))
+		test_attach_probe_manual(PROBE_ATTACH_MODE_LINK);
+
 	if (test__start_subtest("auto"))
 		test_attach_probe_auto(skel);
 	if (test__start_subtest("kprobe-sleepable"))
