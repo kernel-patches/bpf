@@ -52,6 +52,11 @@ obj-$(CONFIG_TIPC)		+= tipc/
 obj-$(CONFIG_NETLABEL)		+= netlabel/
 obj-$(CONFIG_IUCV)		+= iucv/
 obj-$(CONFIG_SMC)		+= smc/
+ifneq ($(CONFIG_SMC),)
+ifeq ($(CONFIG_BPF_SYSCALL),y)
+obj-y				+= smc/bpf_smc_struct_ops.o
+endif
+endif
 obj-$(CONFIG_RFKILL)		+= rfkill/
 obj-$(CONFIG_NET_9P)		+= 9p/
 obj-$(CONFIG_CAIF)		+= caif/

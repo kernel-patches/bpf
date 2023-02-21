@@ -264,6 +264,21 @@ BTF_TRACING_TYPE_xxx
 MAX_BTF_TRACING_TYPE,
 };
 
+#if IS_ENABLED(CONFIG_SMC)
+#define BTF_SMC_TYPE_xxx		\
+	BTF_SMC_TYPE(BTF_SMC_TYPE_SOCK, smc_sock)		\
+	BTF_SMC_TYPE(BTF_SMC_TYPE_CONNECTION, smc_connection)	\
+	BTF_SMC_TYPE(BTF_SMC_TYPE_HOST_CURSOR, smc_host_cursor)
+
+enum {
+#define BTF_SMC_TYPE(name, type) name,
+BTF_SMC_TYPE_xxx
+#undef BTF_SMC_TYPE
+MAX_BTF_SMC_TYPE,
+};
+extern u32 btf_smc_ids[];
+#endif
+
 extern u32 btf_tracing_ids[];
 extern u32 bpf_cgroup_btf_id[];
 extern u32 bpf_local_storage_map_btf_id[];

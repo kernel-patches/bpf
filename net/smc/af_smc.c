@@ -166,6 +166,9 @@ static bool smc_hs_congested(const struct sock *sk)
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
 		return true;
 
+	if (!smc_sock_should_select_smc(smc))
+		return true;
+
 	return false;
 }
 
@@ -319,6 +322,9 @@ static int smc_release(struct socket *sock)
 
 	sock_hold(sk); /* sock_put below */
 	smc = smc_sk(sk);
+
+	/* trigger info gathering if needed.*/
+	smc_sock_perform_collecting_info(smc, SMC_SOCK_CLOSED_TIMING);
 
 	old_state = sk->sk_state;
 
@@ -1627,7 +1633,9 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 	}
 
 	smc_copy_sock_settings_to_clc(smc);
-	tcp_sk(smc->clcsock->sk)->syn_smc = 1;
+	tcp_sk(smc->clcsock->sk)->syn_smc = (smc_sock_should_select_smc(smc) == SK_PASS) ?
+		1 : 0;
+
 	if (smc->connect_nonblock) {
 		rc = -EALREADY;
 		goto out;
