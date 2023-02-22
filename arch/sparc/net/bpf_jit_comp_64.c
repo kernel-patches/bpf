@@ -1243,10 +1243,19 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	case BPF_LD | BPF_IMM | BPF_DW:
 	{
 		const struct bpf_insn insn1 = insn[1];
+		const u8 tmp = bpf2sparc[TMP_REG_1];
 		u64 imm64;
 
-		imm64 = (u64)insn1.imm << 32 | (u32)imm;
-		emit_loadimm64(imm64, dst, ctx);
+		if (bpf_pseudo_func(insn)) {
+			/* fixed-length insns for extra jit pass */
+			emit_set_const(dst, insn1.imm, ctx);
+			emit_set_const(tmp, imm, ctx);
+			emit_alu_K(SLLX, dst, 32, ctx);
+			emit_alu3(ADD, dst, tmp, dst, ctx);
+		} else {
+			imm64 = (u64)insn1.imm << 32 | (u32)imm;
+			emit_loadimm64(imm64, dst, ctx);
+		}
 
 		return 1;
 	}
