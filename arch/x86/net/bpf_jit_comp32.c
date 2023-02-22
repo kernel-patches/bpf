@@ -1567,7 +1567,7 @@ static u8 get_cond_jmp_opcode(const u8 op, bool is_cmp_lo)
  *	- 0-2 jit-insns (3 bytes each) to handle the return value.
  */
 static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
-			   const struct bpf_insn *insn, u8 **pprog)
+			   const struct bpf_insn *insn, u8 *func, u8 **pprog)
 {
 	const u8 arg_regs[] = { IA32_EAX, IA32_EDX, IA32_ECX };
 	int i, cnt = 0, first_stack_regno, last_stack_regno;
@@ -1628,7 +1628,7 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 	if (fm->ret_size)
 		end_addr -= 3;
 
-	jmp_offset = (u8 *)__bpf_call_base + insn->imm - end_addr;
+	jmp_offset = func - end_addr;
 	if (!is_simm32(jmp_offset)) {
 		pr_err("unsupported BPF kernel function jmp_offset:%lld\n",
 		       jmp_offset);
@@ -1657,7 +1657,7 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 }
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
-		  int oldproglen, struct jit_context *ctx)
+		  int oldproglen, struct jit_context *ctx, bool extra_pass)
 {
 	struct bpf_insn *insn = bpf_prog->insnsi;
 	int insn_cnt = bpf_prog->len;
@@ -2087,6 +2087,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			const u8 *r3 = bpf2ia32[BPF_REG_3];
 			const u8 *r4 = bpf2ia32[BPF_REG_4];
 			const u8 *r5 = bpf2ia32[BPF_REG_5];
+			bool func_addr_fixed;
+			u64 func_addr;
+			int err;
 
 			if (insn->src_reg == BPF_PSEUDO_CALL)
 				goto notyet;
@@ -2103,14 +2106,13 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 
 				err = emit_kfunc_call(bpf_prog,
 						      image + addrs[i],
-						      insn, &prog);
+						      insn, func, &prog);
 
 				if (err)
 					return err;
 				break;
 			}
 
-			func = (u8 *) __bpf_call_base + imm32;
 			jmp_offset = func - (image + addrs[i]);
 
 			if (!imm32 || !is_simm32(jmp_offset)) {
@@ -2533,6 +2535,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct jit_context ctx = {};
 	bool tmp_blinded = false;
 	u8 *image = NULL;
+	bool extra_pass;
 	int *addrs;
 	int pass;
 	int i;
@@ -2551,6 +2554,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		tmp_blinded = true;
 		prog = tmp;
 	}
+
+	extra_pass = prog->aux->jit_data;
+	if (!extra_pass)
+		prog->aux->jit_data = bpf_int_jit_compile;
 
 	addrs = kmalloc_array(prog->len, sizeof(*addrs), GFP_KERNEL);
 	if (!addrs) {
@@ -2575,7 +2582,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	 * pass to emit the final image.
 	 */
 	for (pass = 0; pass < 20 || image; pass++) {
-		proglen = do_jit(prog, addrs, image, oldproglen, &ctx);
+		proglen = do_jit(prog, addrs, image, oldproglen, &ctx,
+				 extra_pass);
 		if (proglen <= 0) {
 out_image:
 			image = NULL;
