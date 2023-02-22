@@ -38,6 +38,8 @@
 #include <linux/memcontrol.h>
 
 #include <asm/barrier.h>
+#include <linux/nospec.h>
+
 #include <asm/unaligned.h>
 
 /* Registers */
