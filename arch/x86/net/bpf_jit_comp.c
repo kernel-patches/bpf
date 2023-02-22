@@ -964,7 +964,8 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image,
-		  int oldproglen, struct jit_context *ctx, bool jmp_padding)
+		  int oldproglen, struct jit_context *ctx, bool jmp_padding,
+		  bool extra_pass)
 {
 	bool tail_call_reachable = bpf_prog->aux->tail_call_reachable;
 	struct bpf_insn *insn = bpf_prog->insnsi;
@@ -1000,9 +1001,11 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
+		bool func_addr_fixed;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
+		u64 func_addr;
 		s16 insn_off;
 		u8 jmp_cond;
 		u8 *func;
@@ -1536,7 +1539,12 @@ st:			if (is_imm8(insn->off))
 		case BPF_JMP | BPF_CALL: {
 			int offs;
 
-			func = (u8 *) __bpf_call_base + imm32;
+			err = bpf_jit_get_func_addr(bpf_prog, insn, extra_pass,
+						    &func_addr,
+						    &func_addr_fixed);
+			if (err < 0)
+				return err;
+			func = (u8 *)(unsigned long)func_addr;
 			if (tail_call_reachable) {
 				/* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
 				EMIT3_off32(0x48, 0x8B, 0x85,
@@ -2518,7 +2526,8 @@ skip_init_addrs:
 	for (pass = 0; pass < MAX_PASSES || image; pass++) {
 		if (!padding && pass >= PADDING_PASSES)
 			padding = true;
-		proglen = do_jit(prog, addrs, image, rw_image, oldproglen, &ctx, padding);
+		proglen = do_jit(prog, addrs, image, rw_image, oldproglen, &ctx,
+				 padding, extra_pass);
 		if (proglen <= 0) {
 out_image:
 			image = NULL;
