@@ -690,6 +690,7 @@ when:
    https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/bpf/
 .. _Documentation/dev-tools/kselftest.rst:
    https://www.kernel.org/doc/html/latest/dev-tools/kselftest.html
-.. _Documentation/bpf/btf.rst: btf.rst
+.. _Documentation/bpf/btf.rst:
+   https://www.kernel.org/doc/html/latest/bpf/btf.html
 
 Happy BPF hacking!
