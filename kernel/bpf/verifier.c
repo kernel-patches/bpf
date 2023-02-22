@@ -752,6 +752,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_RINGBUF;
 	case DYNPTR_TYPE_SKB:
 		return BPF_DYNPTR_TYPE_SKB;
+	case DYNPTR_TYPE_XDP:
+		return BPF_DYNPTR_TYPE_XDP;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -6291,6 +6293,9 @@ int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn_idx,
 			case DYNPTR_TYPE_SKB:
 				err_extra = "skb ";
 				break;
+			case DYNPTR_TYPE_XDP:
+				err_extra = "xdp ";
+				break;
 			default:
 				err_extra = "<unknown>";
 				break;
@@ -8922,6 +8927,7 @@ enum special_kfunc_type {
 	KF_bpf_rbtree_add,
 	KF_bpf_rbtree_first,
 	KF_bpf_dynptr_from_skb,
+	KF_bpf_dynptr_from_xdp,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -8937,6 +8943,7 @@ BTF_ID(func, bpf_rbtree_remove)
 BTF_ID(func, bpf_rbtree_add)
 BTF_ID(func, bpf_rbtree_first)
 BTF_ID(func, bpf_dynptr_from_skb)
+BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -8954,6 +8961,7 @@ BTF_ID(func, bpf_rbtree_remove)
 BTF_ID(func, bpf_rbtree_add)
 BTF_ID(func, bpf_rbtree_first)
 BTF_ID(func, bpf_dynptr_from_skb)
+BTF_ID(func, bpf_dynptr_from_xdp)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -9711,6 +9719,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 
 			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb])
 				dynptr_arg_type |= DYNPTR_TYPE_SKB;
+			else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp])
+				dynptr_arg_type |= DYNPTR_TYPE_XDP;
 
 			ret = process_dynptr_func(env, regno, insn_idx, dynptr_arg_type);
 			if (ret < 0)
