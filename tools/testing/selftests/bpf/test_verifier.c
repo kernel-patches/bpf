@@ -62,6 +62,11 @@
 #define MAX_FUNC_INFOS	8
 #define MAX_BTF_STRINGS	256
 #define MAX_BTF_TYPES	256
+#if BITS_PER_LONG == 32
+#define BPF_PTR BPF_W
+#else
+#define BPF_PTR BPF_DW
+#endif
 
 #define INSN_OFF_MASK	((__s16)0xFFFF)
 #define INSN_IMM_MASK	((__s32)0xFFFFFFFF)

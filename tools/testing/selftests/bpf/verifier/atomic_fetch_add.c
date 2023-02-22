@@ -93,7 +93,7 @@
 		 * because it's kernel memory.
 		 */
 		BPF_MOV64_IMM(BPF_REG_3, 1),
-		BPF_ATOMIC_OP(BPF_DW, BPF_ADD | BPF_FETCH, BPF_REG_2, BPF_REG_3, 0),
+		BPF_ATOMIC_OP(BPF_PTR, BPF_ADD | BPF_FETCH, BPF_REG_2, BPF_REG_3, 0),
 		/* Done */
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),

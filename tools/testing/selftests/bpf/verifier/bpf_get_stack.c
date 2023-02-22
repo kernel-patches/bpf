@@ -46,7 +46,7 @@
 	"bpf_get_task_stack return R0 range is refined",
 	.insns = {
 	BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 0),
-	BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_6, 0), // ctx->meta->seq
+	BPF_LDX_MEM(BPF_PTR, BPF_REG_6, BPF_REG_6, 0), // ctx->meta->seq
 	BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_1, 8), // ctx->task
 	BPF_LD_MAP_FD(BPF_REG_1, 0), // fixup_map_array_48b
 	BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0),
