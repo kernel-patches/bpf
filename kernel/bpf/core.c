@@ -1185,10 +1185,12 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 {
 	s16 off = insn->off;
 	s32 imm = insn->imm;
+	bool fixed;
 	u8 *addr;
+	int err;
 
-	*func_addr_fixed = insn->src_reg != BPF_PSEUDO_CALL;
-	if (!*func_addr_fixed) {
+	switch (insn->src_reg) {
+	case BPF_PSEUDO_CALL:
 		/* Place-holder address till the last pass has collected
 		 * all addresses for JITed subprograms in which case we
 		 * can pick them up from prog->aux.
@@ -1200,15 +1202,28 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			addr = (u8 *)prog->aux->func[off]->bpf_func;
 		else
 			return -EINVAL;
-	} else {
+		fixed = false;
+		break;
+	case 0:
 		/* Address of a BPF helper call. Since part of the core
 		 * kernel, it's always at a fixed location. __bpf_call_base
 		 * and the helper with imm relative to it are both in core
 		 * kernel.
 		 */
 		addr = (u8 *)__bpf_call_base + imm;
+		fixed = true;
+		break;
+	case BPF_PSEUDO_KFUNC_CALL:
+		err = bpf_get_kfunc_addr(prog, imm, off, &addr);
+		if (err)
+			return err;
+		fixed = true;
+		break;
+	default:
+		return -EINVAL;
 	}
 
+	*func_addr_fixed = fixed;
 	*func_addr = (unsigned long)addr;
 	return 0;
 }
