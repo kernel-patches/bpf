@@ -1345,7 +1345,8 @@ static void build_epilogue(struct jit_ctx *ctx)
  *	>0 - Successfully JITed a 16-byte eBPF instruction
  *	<0 - Failed to JIT.
  */
-static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
+static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
+		      bool extra_pass)
 {
 	const u8 code = insn->code;
 	const s8 *dst = bpf2a32[insn->dst_reg];
@@ -1783,7 +1784,14 @@ go_jmp:
 		const s8 *r3 = bpf2a32[BPF_REG_3];
 		const s8 *r4 = bpf2a32[BPF_REG_4];
 		const s8 *r5 = bpf2a32[BPF_REG_5];
-		const u32 func = (u32)__bpf_call_base + (u32)imm;
+		bool func_addr_fixed;
+		u64 func;
+		int err;
+
+		err = bpf_jit_get_func_addr(ctx->prog, insn, extra_pass,
+					    &func, &func_addr_fixed);
+		if (err)
+			return err;
 
 		emit_a32_mov_r64(true, r0, r1, ctx);
 		emit_a32_mov_r64(true, r1, r2, ctx);
@@ -1791,7 +1799,7 @@ go_jmp:
 		emit_push_r64(r4, ctx);
 		emit_push_r64(r3, ctx);
 
-		emit_a32_mov_i(tmp[1], func, ctx);
+		emit_a32_mov_i(tmp[1], (u32)func, ctx);
 		emit_blx_r(tmp[1], ctx);
 
 		emit(ARM_ADD_I(ARM_SP, ARM_SP, imm8m(24)), ctx); // callee clean
@@ -1826,7 +1834,7 @@ notyet:
 	return 0;
 }
 
-static int build_body(struct jit_ctx *ctx)
+static int build_body(struct jit_ctx *ctx, bool extra_pass)
 {
 	const struct bpf_prog *prog = ctx->prog;
 	unsigned int i;
@@ -1835,7 +1843,7 @@ static int build_body(struct jit_ctx *ctx)
 		const struct bpf_insn *insn = &(prog->insnsi[i]);
 		int ret;
 
-		ret = build_insn(insn, ctx);
+		ret = build_insn(insn, ctx, extra_pass);
 
 		/* It's used with loading the 64 bit immediate value. */
 		if (ret > 0) {
@@ -1880,6 +1888,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct jit_ctx ctx;
 	unsigned int tmp_idx;
 	unsigned int image_size;
+	bool extra_pass;
 	u8 *image_ptr;
 
 	/* If BPF JIT was not enabled then we must fall back to
@@ -1900,6 +1909,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		tmp_blinded = true;
 		prog = tmp;
 	}
+
+	extra_pass = prog->aux->jit_data;
+	if (!extra_pass)
+		prog->aux->jit_data = bpf_int_jit_compile;
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.prog = prog;
@@ -1924,7 +1937,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	 * being successful in the second pass, so just fall back
 	 * to the interpreter.
 	 */
-	if (build_body(&ctx)) {
+	if (build_body(&ctx, extra_pass)) {
 		prog = orig_prog;
 		goto out_off;
 	}
@@ -1982,7 +1995,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	/* If building the body of the JITed code fails somehow,
 	 * we fall back to the interpretation.
 	 */
-	if (build_body(&ctx) < 0) {
+	if (build_body(&ctx, extra_pass) < 0) {
 		image_ptr = NULL;
 		bpf_jit_binary_free(header);
 		prog = orig_prog;
