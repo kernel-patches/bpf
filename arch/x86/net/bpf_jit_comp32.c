@@ -2091,6 +2091,13 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			if (insn->src_reg == BPF_PSEUDO_CALL)
 				goto notyet;
 
+			err = bpf_jit_get_func_addr(bpf_prog, insn, extra_pass,
+						    &func_addr,
+						    &func_addr_fixed);
+			if (err)
+				return err;
+			func = (u8 *)(unsigned long)func_addr;
+
 			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 				int err;
 

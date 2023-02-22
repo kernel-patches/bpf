@@ -893,7 +893,8 @@ static void emit_tail_call(struct jit_ctx *ctx)
 	emit_nop(ctx);
 }
 
-static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
+static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
+		      bool extra_pass)
 {
 	const u8 code = insn->code;
 	const u8 dst = bpf2sparc[insn->dst_reg];
@@ -1214,7 +1215,14 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	/* function call */
 	case BPF_JMP | BPF_CALL:
 	{
-		u8 *func = ((u8 *)__bpf_call_base) + imm;
+		bool func_addr_fixed;
+		u64 func;
+		int err;
+
+		err = bpf_jit_get_func_addr(ctx->prog, insn, extra_pass,
+					    &func, &func_addr_fixed);
+		if (err)
+			return err;
 
 		ctx->saw_call = true;
 
@@ -1445,7 +1453,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	return 0;
 }
 
-static int build_body(struct jit_ctx *ctx)
+static int build_body(struct jit_ctx *ctx, bool extra_pass)
 {
 	const struct bpf_prog *prog = ctx->prog;
 	int i;
@@ -1455,7 +1463,7 @@ static int build_body(struct jit_ctx *ctx)
 		int ret;
 
 		ctx->offset[i] = ctx->idx;
-		ret = build_insn(insn, ctx);
+		ret = build_insn(insn, ctx, extra_pass);
 		if (ret < 0)
 			return ret;
 
@@ -1549,7 +1557,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		ctx.idx = 0;
 
 		build_prologue(&ctx);
-		if (build_body(&ctx)) {
+		if (build_body(&ctx, extra_pass)) {
 			prog = orig_prog;
 			goto out_off;
 		}
@@ -1586,7 +1594,7 @@ skip_init_ctx:
 
 	build_prologue(&ctx);
 
-	if (build_body(&ctx)) {
+	if (build_body(&ctx, extra_pass)) {
 		bpf_jit_binary_free(header);
 		prog = orig_prog;
 		goto out_off;
