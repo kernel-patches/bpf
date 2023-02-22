@@ -1168,7 +1168,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 
 	/* JUMP off */
 	case BPF_JMP | BPF_JA:
-		emit_branch(BA, ctx->idx, ctx->offset[i + off], ctx);
+		emit_branch(BA, ctx->idx, ctx->offset[i + off + 1], ctx);
 		emit_nop(ctx);
 		break;
 	/* IF (dst COND src) JUMP off */
@@ -1185,7 +1185,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	case BPF_JMP | BPF_JSET | BPF_X: {
 		int err;
 
-		err = emit_compare_and_branch(code, dst, src, 0, false, i + off, ctx);
+		err = emit_compare_and_branch(code, dst, src, 0, false, i + off + 1, ctx);
 		if (err)
 			return err;
 		break;
@@ -1204,7 +1204,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	case BPF_JMP | BPF_JSET | BPF_K: {
 		int err;
 
-		err = emit_compare_and_branch(code, dst, 0, imm, true, i + off, ctx);
+		err = emit_compare_and_branch(code, dst, 0, imm, true, i + off + 1, ctx);
 		if (err)
 			return err;
 		break;
@@ -1453,16 +1453,12 @@ static int build_body(struct jit_ctx *ctx)
 		const struct bpf_insn *insn = &prog->insnsi[i];
 		int ret;
 
-		ret = build_insn(insn, ctx);
-
-		if (ret > 0) {
-			i++;
-			ctx->offset[i] = ctx->idx;
-			continue;
-		}
 		ctx->offset[i] = ctx->idx;
-		if (ret)
+		ret = build_insn(insn, ctx);
+		if (ret < 0)
 			return ret;
+
+		i += ret;
 	}
 	return 0;
 }
