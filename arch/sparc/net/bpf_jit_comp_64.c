@@ -856,6 +856,7 @@ static void emit_tail_call(struct jit_ctx *ctx)
 
 	ctx->saw_tail_call = true;
 
+	emit_alu_K(SRL, bpf_index, 0, ctx);
 	off = offsetof(struct bpf_array, map.max_entries);
 	emit(LD32 | IMMED | RS1(bpf_array) | S13(off) | RD(tmp), ctx);
 	emit_cmp(bpf_index, tmp, ctx);
