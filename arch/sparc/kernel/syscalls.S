@@ -262,7 +262,7 @@ ret_sys_call:
 	mov	%ulo(TSTATE_XCARRY | TSTATE_ICARRY), %g2
 	sllx	%g2, 32, %g2
 
-	cmp	%o0, -ERESTART_RESTARTBLOCK
+	cmp	%o0, -EMAXERRNO
 	bgeu,pn	%xcc, 1f
 	 andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT|_TIF_NOHZ), %g0
 	ldx	[%sp + PTREGS_OFF + PT_V9_TNPC], %l1 ! pc = npc

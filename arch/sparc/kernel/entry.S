@@ -1004,7 +1004,7 @@ do_syscall:
 
 ret_sys_call:
 	ld	[%curptr + TI_FLAGS], %l5
-	cmp	%o0, -ERESTART_RESTARTBLOCK
+	cmp	%o0, -EMAXERRNO
 	ld	[%sp + STACKFRAME_SZ + PT_PSR], %g3
 	set	PSR_C, %g2
 	bgeu	1f

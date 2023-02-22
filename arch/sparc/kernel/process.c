@@ -32,7 +32,7 @@ asmlinkage long sparc_fork(struct pt_regs *regs)
 	 * the parent's %o1.  So detect that case and restore it
 	 * here.
 	 */
-	if ((unsigned long)ret >= -ERESTART_RESTARTBLOCK)
+	if ((unsigned long)ret >= -EMAXERRNO)
 		regs->u_regs[UREG_I1] = orig_i1;
 
 	return ret;
@@ -57,7 +57,7 @@ asmlinkage long sparc_vfork(struct pt_regs *regs)
 	 * the parent's %o1.  So detect that case and restore it
 	 * here.
 	 */
-	if ((unsigned long)ret >= -ERESTART_RESTARTBLOCK)
+	if ((unsigned long)ret >= -EMAXERRNO)
 		regs->u_regs[UREG_I1] = orig_i1;
 
 	return ret;
@@ -103,7 +103,7 @@ asmlinkage long sparc_clone(struct pt_regs *regs)
 	 * the parent's %o1.  So detect that case and restore it
 	 * here.
 	 */
-	if ((unsigned long)ret >= -ERESTART_RESTARTBLOCK)
+	if ((unsigned long)ret >= -EMAXERRNO)
 		regs->u_regs[UREG_I1] = orig_i1;
 
 	return ret;
