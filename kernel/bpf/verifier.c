@@ -895,6 +895,14 @@ static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_re
 static void __mark_reg_unknown(const struct bpf_verifier_env *env,
 			       struct bpf_reg_state *reg);
 
+static void mark_reg_invalid(const struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	if (!env->allow_ptr_leaks)
+		__mark_reg_not_init(env, reg);
+	else
+		__mark_reg_unknown(env, reg);
+}
+
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 				        struct bpf_func_state *state, int spi)
 {
@@ -934,12 +942,8 @@ static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 		/* Dynptr slices are only PTR_TO_MEM_OR_NULL and PTR_TO_MEM */
 		if (dreg->type != (PTR_TO_MEM | PTR_MAYBE_NULL) && dreg->type != PTR_TO_MEM)
 			continue;
-		if (dreg->dynptr_id == dynptr_id) {
-			if (!env->allow_ptr_leaks)
-				__mark_reg_not_init(env, dreg);
-			else
-				__mark_reg_unknown(env, dreg);
-		}
+		if (dreg->dynptr_id == dynptr_id)
+			mark_reg_invalid(env, dreg);
 	}));
 
 	/* Do not release reference state, we are destroying dynptr on stack,
@@ -2475,8 +2479,8 @@ static int check_subprogs(struct bpf_verifier_env *env)
 		u8 code = insn[i].code;
 
 		if (code == (BPF_JMP | BPF_CALL) &&
-		    insn[i].imm == BPF_FUNC_tail_call &&
-		    insn[i].src_reg != BPF_PSEUDO_CALL)
+		    insn[i].src_reg == 0 &&
+		    insn[i].imm == BPF_FUNC_tail_call)
 			subprog[cur_subprog].has_tail_call = true;
 		if (BPF_CLASS(code) == BPF_LD &&
 		    (BPF_MODE(code) == BPF_ABS || BPF_MODE(code) == BPF_IND))
@@ -3826,6 +3830,8 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 						continue;
 					if (type == STACK_MISC)
 						continue;
+					if (type == STACK_INVALID && env->allow_uninit_stack)
+						continue;
 					verbose(env, "invalid read from stack off %d+%d size %d\n",
 						off, i, size);
 					return -EACCES;
@@ -3862,6 +3868,8 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			if (type == STACK_MISC)
 				continue;
 			if (type == STACK_ZERO)
+				continue;
+			if (type == STACK_INVALID && env->allow_uninit_stack)
 				continue;
 			verbose(env, "invalid read from stack off %d+%d size %d\n",
 				off, i, size);
@@ -5754,7 +5762,8 @@ static int check_stack_range_initialized(
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
 		if (*stype == STACK_MISC)
 			goto mark;
-		if (*stype == STACK_ZERO) {
+		if ((*stype == STACK_ZERO) ||
+		    (*stype == STACK_INVALID && env->allow_uninit_stack)) {
 			if (clobber) {
 				/* helper can write anything into the stack */
 				*stype = STACK_MISC;
@@ -6522,7 +6531,14 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	return -EACCES;
 
 found:
-	if (reg->type == PTR_TO_BTF_ID || reg->type & PTR_TRUSTED) {
+	if (base_type(reg->type) != PTR_TO_BTF_ID)
+		return 0;
+
+	switch ((int)reg->type) {
+	case PTR_TO_BTF_ID:
+	case PTR_TO_BTF_ID | PTR_TRUSTED:
+	case PTR_TO_BTF_ID | MEM_RCU:
+	{
 		/* For bpf_sk_release, it needs to match against first member
 		 * 'struct sock_common', hence make an exception for it. This
 		 * allows bpf_sk_release to work for multiple socket types.
@@ -6558,13 +6574,23 @@ found:
 				return -EACCES;
 			}
 		}
-	} else if (type_is_alloc(reg->type)) {
+		break;
+	}
+	case PTR_TO_BTF_ID | MEM_ALLOC:
 		if (meta->func_id != BPF_FUNC_spin_lock && meta->func_id != BPF_FUNC_spin_unlock) {
 			verbose(env, "verifier internal error: unimplemented handling of MEM_ALLOC\n");
 			return -EFAULT;
 		}
+		/* Handled by helper specific checks */
+		break;
+	case PTR_TO_BTF_ID | MEM_PERCPU:
+	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
+		/* Handled by helper specific checks */
+		break;
+	default:
+		verbose(env, "verifier internal error: invalid PTR_TO_BTF_ID register for type match\n");
+		return -EFAULT;
 	}
-
 	return 0;
 }
 
@@ -6651,7 +6677,6 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_BTF_ID | MEM_ALLOC:
 	case PTR_TO_BTF_ID | PTR_TRUSTED:
 	case PTR_TO_BTF_ID | MEM_RCU:
-	case PTR_TO_BTF_ID | MEM_ALLOC | PTR_TRUSTED:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * its fixed offset must be 0. In the other cases, fixed offset
@@ -7363,7 +7388,7 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
 		if (reg_is_pkt_pointer_any(reg))
-			__mark_reg_unknown(env, reg);
+			mark_reg_invalid(env, reg);
 	}));
 }
 
@@ -7408,12 +7433,8 @@ static int release_reference(struct bpf_verifier_env *env,
 		return err;
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg->ref_obj_id == ref_obj_id) {
-			if (!env->allow_ptr_leaks)
-				__mark_reg_not_init(env, reg);
-			else
-				__mark_reg_unknown(env, reg);
-		}
+		if (reg->ref_obj_id == ref_obj_id)
+			mark_reg_invalid(env, reg);
 	}));
 
 	return 0;
@@ -7426,7 +7447,7 @@ static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 
 	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
 		if (type_is_non_owning_ref(reg->type))
-			__mark_reg_unknown(env, reg);
+			mark_reg_invalid(env, reg);
 	}));
 }
 
@@ -9206,7 +9227,6 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 		ptr = reg->map_ptr;
 		break;
 	case PTR_TO_BTF_ID | MEM_ALLOC:
-	case PTR_TO_BTF_ID | MEM_ALLOC | PTR_TRUSTED:
 		ptr = reg->btf;
 		break;
 	default:
@@ -13934,6 +13954,10 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		}
 
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
+			continue;
+
+		if (env->allow_uninit_stack &&
+		    old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC)
 			continue;
 
 		/* explored stack has more populated slots than current stack
