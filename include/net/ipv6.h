@@ -1238,6 +1238,7 @@ int inet6_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 extern const struct proto_ops inet6_stream_ops;
 extern const struct proto_ops inet6_dgram_ops;
 extern const struct proto_ops inet6_sockraw_ops;
+int _ipv6_frag_rcv(struct net *net, struct sk_buff *skb, u32 user);
 
 struct group_source_req;
 struct group_filter;

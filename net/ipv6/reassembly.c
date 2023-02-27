@@ -81,13 +81,13 @@ static void ip6_frag_expire(struct timer_list *t)
 }
 
 static struct frag_queue *
-fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif)
+fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif, u32 user)
 {
 	struct frag_v6_compare_key key = {
 		.id = id,
 		.saddr = hdr->saddr,
 		.daddr = hdr->daddr,
-		.user = IP6_DEFRAG_LOCAL_DELIVER,
+		.user = user,
 		.iif = iif,
 	};
 	struct inet_frag_queue *q;
@@ -324,12 +324,11 @@ out_fail:
 	return -1;
 }
 
-static int ipv6_frag_rcv(struct sk_buff *skb)
+int _ipv6_frag_rcv(struct net *net, struct sk_buff *skb, u32 user)
 {
 	struct frag_hdr *fhdr;
 	struct frag_queue *fq;
 	const struct ipv6hdr *hdr = ipv6_hdr(skb);
-	struct net *net = dev_net(skb_dst(skb)->dev);
 	u8 nexthdr;
 	int iif;
 
@@ -377,7 +376,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	}
 
 	iif = skb->dev ? skb->dev->ifindex : 0;
-	fq = fq_find(net, fhdr->identification, hdr, iif);
+	fq = fq_find(net, fhdr->identification, hdr, iif, user);
 	if (fq) {
 		u32 prob_offset = 0;
 		int ret;
@@ -408,6 +407,13 @@ fail_hdr:
 			IPSTATS_MIB_INHDRERRORS);
 	icmpv6_param_prob(skb, ICMPV6_HDR_FIELD, skb_network_header_len(skb));
 	return -1;
+}
+
+static int ipv6_frag_rcv(struct sk_buff *skb)
+{
+	struct net *net = dev_net(skb_dst(skb)->dev);
+
+	return _ipv6_frag_rcv(net, skb, IP6_DEFRAG_LOCAL_DELIVER);
 }
 
 static const struct inet6_protocol frag_protocol = {
