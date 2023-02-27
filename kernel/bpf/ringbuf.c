@@ -336,6 +336,23 @@ static __poll_t ringbuf_map_poll_user(struct bpf_map *map, struct file *filp,
 	return 0;
 }
 
+static u64 ringbuf_map_mem_usage(const struct bpf_map *map)
+{
+	struct bpf_ringbuf_map *rb_map;
+	struct bpf_ringbuf *rb;
+	int nr_data_pages;
+	int nr_meta_pages;
+	u64 usage = sizeof(struct bpf_ringbuf_map);
+
+	rb_map = container_of(map, struct bpf_ringbuf_map, map);
+	rb = rb_map->rb;
+	usage += (u64)rb->nr_pages << PAGE_SHIFT;
+	nr_meta_pages = RINGBUF_PGOFF + RINGBUF_POS_PAGES;
+	nr_data_pages = map->max_entries >> PAGE_SHIFT;
+	usage += (nr_meta_pages + 2 * nr_data_pages) * sizeof(struct page *);
+	return usage;
+}
+
 BTF_ID_LIST_SINGLE(ringbuf_map_btf_ids, struct, bpf_ringbuf_map)
 const struct bpf_map_ops ringbuf_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -347,6 +364,7 @@ const struct bpf_map_ops ringbuf_map_ops = {
 	.map_update_elem = ringbuf_map_update_elem,
 	.map_delete_elem = ringbuf_map_delete_elem,
 	.map_get_next_key = ringbuf_map_get_next_key,
+	.map_mem_usage = ringbuf_map_mem_usage,
 	.map_btf_id = &ringbuf_map_btf_ids[0],
 };
 
@@ -361,6 +379,7 @@ const struct bpf_map_ops user_ringbuf_map_ops = {
 	.map_update_elem = ringbuf_map_update_elem,
 	.map_delete_elem = ringbuf_map_delete_elem,
 	.map_get_next_key = ringbuf_map_get_next_key,
+	.map_mem_usage = ringbuf_map_mem_usage,
 	.map_btf_id = &user_ringbuf_map_btf_ids[0],
 };
 
