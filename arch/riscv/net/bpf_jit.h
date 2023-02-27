@@ -12,6 +12,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <asm/cacheflush.h>
+#include <asm/patch.h>
 
 static inline bool rvc_enabled(void)
 {
