@@ -20,6 +20,7 @@ int ipv6_exthdrs_init(void);
 void ipv6_exthdrs_exit(void);
 int ipv6_frag_init(void);
 void ipv6_frag_exit(void);
+int register_ipv6_reassembly_bpf(void);
 
 /* transport protocols */
 int pingv6_init(void);

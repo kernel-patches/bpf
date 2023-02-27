@@ -1174,6 +1174,10 @@ static int __init inet6_init(void)
 	if (err)
 		goto ipv6_frag_fail;
 
+	err = register_ipv6_reassembly_bpf();
+	if (err)
+		goto ipv6_frag_fail;
+
 	/* Init v6 transport protocols. */
 	err = udpv6_init();
 	if (err)
