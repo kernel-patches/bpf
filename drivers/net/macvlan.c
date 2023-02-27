@@ -456,7 +456,7 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		unsigned int hash;
 
 		skb = ip_check_defrag(dev_net(skb->dev), skb, IP_DEFRAG_MACVLAN);
-		if (!skb)
+		if (IS_ERR(skb))
 			return RX_HANDLER_CONSUMED;
 		*pskb = skb;
 		eth = eth_hdr(skb);
