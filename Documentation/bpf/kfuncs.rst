@@ -260,6 +260,13 @@ encouraged to make their use-cases known as early as possible, and participate
 in upstream discussions regarding whether to keep, change, deprecate, or remove
 those kfuncs if and when such discussions occur.
 
+2.4.10 KF_CHANGES_PKT flag
+-----------------
+
+The KF_CHANGES_PKT is used for kfuncs that may change packet data.
+After calls to such kfuncs, existing packet pointers will be invalidated
+and must be revalidated before the prog can access packet data.
+
 2.5 Registering the kfuncs
 --------------------------
 
