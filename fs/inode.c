@@ -22,6 +22,7 @@
 #include <linux/list_lru.h>
 #include <linux/iversion.h>
 #include <trace/events/writeback.h>
+#include <linux/buildid.h>
 #include "internal.h"
 
 /*
@@ -228,6 +229,10 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 #endif
 	inode->i_flctx = NULL;
 
+#ifdef CONFIG_INODE_BUILD_ID
+	inode->i_build_id = NULL;
+	spin_lock_init(&inode->i_build_id_lock);
+#endif
 	if (unlikely(security_inode_alloc(inode)))
 		return -ENOMEM;
 	this_cpu_inc(nr_inodes);
@@ -296,6 +301,11 @@ void __destroy_inode(struct inode *inode)
 	if (inode->i_default_acl && !is_uncached_acl(inode->i_default_acl))
 		posix_acl_release(inode->i_default_acl);
 #endif
+#ifdef CONFIG_INODE_BUILD_ID
+	build_id_free(inode->i_build_id);
+	inode->i_build_id = NULL;
+#endif
+
 	this_cpu_dec(nr_inodes);
 }
 EXPORT_SYMBOL(__destroy_inode);
@@ -2241,6 +2251,8 @@ void __init inode_init(void)
 					 (SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
 					 SLAB_MEM_SPREAD|SLAB_ACCOUNT),
 					 init_once);
+
+	build_id_init();
 
 	/* Hash may have been set up in inode_init_early */
 	if (!hashdist)

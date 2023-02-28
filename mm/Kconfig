@@ -1183,6 +1183,14 @@ config LRU_GEN_STATS
 	  This option has a per-memcg and per-node memory overhead.
 # }
 
+config INODE_BUILD_ID
+	bool "Store build id in inode object"
+	default n
+	help
+	  Store build id in iinode object for elf executable with build id
+	  defined. The build id is stored when file for the given inode is
+	  mmap-ed.
+
 source "mm/damon/Kconfig"
 
 endmenu

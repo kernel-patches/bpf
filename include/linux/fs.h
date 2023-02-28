@@ -43,6 +43,7 @@
 #include <linux/cred.h>
 #include <linux/mnt_idmapping.h>
 #include <linux/slab.h>
+#include <linux/buildid.h>
 
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
@@ -697,6 +698,12 @@ struct inode {
 
 #ifdef CONFIG_FS_VERITY
 	struct fsverity_info	*i_verity_info;
+#endif
+
+#ifdef CONFIG_INODE_BUILD_ID
+	/* Initialized and valid for executable elf files when mmap-ed. */
+	struct build_id		*i_build_id;
+	spinlock_t		i_build_id_lock;
 #endif
 
 	void			*i_private; /* fs or device private pointer */
