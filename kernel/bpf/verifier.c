@@ -4218,7 +4218,7 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 			       struct bpf_reg_state *reg, u32 regno)
 {
 	const char *targ_name = kernel_type_name(kptr_field->kptr.btf, kptr_field->kptr.btf_id);
-	int perm_flags = PTR_MAYBE_NULL | PTR_TRUSTED;
+	int perm_flags = PTR_MAYBE_NULL | PTR_TRUSTED | MEM_RCU;
 	const char *reg_name = "";
 
 	/* Only unreferenced case accepts untrusted pointers */
@@ -4265,12 +4265,12 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	 * In the kptr_ref case, check_func_arg_reg_off already ensures reg->off
 	 * is zero. We must also ensure that btf_struct_ids_match does not walk
 	 * the struct to match type against first member of struct, i.e. reject
-	 * second case from above. Hence, when type is BPF_KPTR_REF, we set
+	 * second case from above. Hence, when type is BPF_KPTR_REF | BPF_KPTR_RCU, we set
 	 * strict mode to true for type match.
 	 */
 	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 				  kptr_field->kptr.btf, kptr_field->kptr.btf_id,
-				  kptr_field->type == BPF_KPTR_REF))
+				  kptr_field->type == BPF_KPTR_REF || kptr_field->type == BPF_KPTR_RCU))
 		goto bad_type;
 	return 0;
 bad_type:
@@ -4283,6 +4283,14 @@ bad_type:
 	else
 		verbose(env, "\n");
 	return -EINVAL;
+}
+
+/* The non-sleepable programs and sleepable programs with explicit bpf_rcu_read_lock()
+ * can dereference RCU protected pointers and result is PTR_TRUSTED.
+ */
+static bool in_rcu_cs(struct bpf_verifier_env *env)
+{
+	return env->cur_state->active_rcu_lock || !env->prog->aux->sleepable;
 }
 
 static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
@@ -4308,7 +4316,7 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	/* We only allow loading referenced kptr, since it will be marked as
 	 * untrusted, similar to unreferenced kptr.
 	 */
-	if (class != BPF_LDX && kptr_field->type == BPF_KPTR_REF) {
+	if (class != BPF_LDX && kptr_field->type != BPF_KPTR_UNREF) {
 		verbose(env, "store to referenced kptr disallowed\n");
 		return -EACCES;
 	}
@@ -4319,7 +4327,10 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, kptr_field->kptr.btf,
-				kptr_field->kptr.btf_id, PTR_MAYBE_NULL | PTR_UNTRUSTED);
+				kptr_field->kptr.btf_id,
+				kptr_field->type == BPF_KPTR_RCU && in_rcu_cs(env) ?
+				PTR_MAYBE_NULL | MEM_RCU :
+				PTR_MAYBE_NULL | PTR_UNTRUSTED);
 		/* For mark_ptr_or_null_reg */
 		val_reg->id = ++env->id_gen;
 	} else if (class == BPF_STX) {
@@ -4373,6 +4384,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			switch (field->type) {
 			case BPF_KPTR_UNREF:
 			case BPF_KPTR_REF:
+			case BPF_KPTR_RCU:
 				if (src != ACCESS_DIRECT) {
 					verbose(env, "kptr cannot be accessed indirectly by helper\n");
 					return -EACCES;
@@ -5174,11 +5186,10 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * read lock region. Also mark rcu pointer as PTR_MAYBE_NULL since
 		 * it could be null in some cases.
 		 */
-		if (!env->cur_state->active_rcu_lock ||
-		    !(is_trusted_reg(reg) || is_rcu_reg(reg)))
-			flag &= ~MEM_RCU;
-		else
+		if (in_rcu_cs(env) && (is_trusted_reg(reg) || is_rcu_reg(reg)))
 			flag |= PTR_MAYBE_NULL;
+		else
+			flag &= ~MEM_RCU;
 	} else if (reg->type & MEM_RCU) {
 		/* ptr (reg) is marked as MEM_RCU, but the struct field is not tagged
 		 * with __rcu. Mark the flag as PTR_UNTRUSTED conservatively.
@@ -6222,7 +6233,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
 		return -EACCES;
 	}
-	if (kptr_field->type != BPF_KPTR_REF) {
+	if (kptr_field->type != BPF_KPTR_REF && kptr_field->type != BPF_KPTR_RCU) {
 		verbose(env, "off=%d kptr isn't referenced kptr\n", kptr_off);
 		return -EACCES;
 	}
@@ -9218,7 +9229,7 @@ static int process_kf_arg_ptr_to_kptr(struct bpf_verifier_env *env,
 	}
 
 	kptr_field = btf_record_find(reg->map_ptr->record, reg->off + reg->var_off.value, BPF_KPTR);
-	if (!kptr_field || kptr_field->type != BPF_KPTR_REF) {
+	if (!kptr_field || (kptr_field->type != BPF_KPTR_REF && kptr_field->type != BPF_KPTR_RCU)) {
 		verbose(env, "arg#0 no referenced kptr at map value offset=%llu\n",
 			reg->off + reg->var_off.value);
 		return -EINVAL;

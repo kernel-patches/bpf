@@ -3557,6 +3557,18 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 	return -EINVAL;
 }
 
+BTF_SET_START(rcu_protected_types)
+BTF_ID(struct, prog_test_ref_kfunc)
+BTF_ID(struct, cgroup)
+BTF_SET_END(rcu_protected_types)
+
+static bool rcu_protected_object(const struct btf *btf, u32 btf_id)
+{
+	if (!btf_is_kernel(btf))
+		return false;
+	return btf_id_set_contains(&rcu_protected_types, btf_id);
+}
+
 static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 			  struct btf_field_info *info)
 {
@@ -3619,6 +3631,10 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 		}
 		field->kptr.dtor = (void *)addr;
 	}
+
+	if (info->type == BPF_KPTR_REF && rcu_protected_object(kernel_btf, id))
+		/* rcu dereference of this field will return MEM_RCU instead of PTR_UNTRUSTED */
+		field->type = BPF_KPTR_RCU;
 
 	field->kptr.btf_id = id;
 	field->kptr.btf = kernel_btf;
