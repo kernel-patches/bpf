@@ -16,6 +16,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
+#include <linux/bpf.h>
 #include "linux/ism.h"
 
 #ifdef ATOMIC64_INIT
@@ -314,5 +315,42 @@ struct smc_sock {				/* smc sock container */
 						 * socket
 						 */
 };
+
+#define SMC_SOCK_CLOSED_TIMING	(0)
+
+#ifdef CONFIG_BPF_SYSCALL
+
+/* BPF struct ops for smc protocol negotiator */
+struct smc_sock_negotiator_ops {
+	/* ret for negotiate */
+	int (*negotiate)(struct smc_sock *sk);
+
+	/* info gathering timing */
+	void (*collect_info)(struct sock *sk, int timing);
+};
+
+/* Query if current sock should go with SMC protocol
+ * SK_PASS for yes, otherwise for no.
+ */
+int smc_sock_should_select_smc(const struct smc_sock *smc);
+
+/* At some specific points in time,
+ * let negotiator can perform info gathering
+ * on target sock.
+ */
+void smc_sock_perform_collecting_info(const struct sock *sk, int timing);
+
+#else
+
+static inline int smc_sock_should_select_smc(const struct smc_sock *smc)
+{
+	return SK_PASS;
+}
+
+static inline void smc_sock_perform_collecting_info(const struct sock *sk, int timing)
+{
+}
+
+#endif /* CONFIG_BPF_SYSCALL */
 
 #endif	/* _SMC_H */
