@@ -5683,7 +5683,10 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 		obj->btf_vmlinux_override = btf__parse(targ_btf_path, NULL);
 		err = libbpf_get_error(obj->btf_vmlinux_override);
 		if (err) {
-			pr_warn("failed to parse target BTF: %d\n", err);
+			char *cp, errmsg[STRERR_BUFSIZE];
+
+			cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
+			pr_warn("failed to parse target BTF: %s\n", cp);
 			return err;
 		}
 	}
