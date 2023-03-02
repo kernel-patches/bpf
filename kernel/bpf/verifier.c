@@ -779,6 +779,8 @@ static const char *dynptr_type_str(enum bpf_dynptr_type type)
 static const char *iter_type_str(enum bpf_iter_type type)
 {
 	switch (type) {
+	case BPF_ITER_TYPE_NUM:
+		return "num";
 	case BPF_ITER_TYPE_INVALID:
 		return "<invalid>";
 	default:
@@ -1157,6 +1159,8 @@ static bool is_dynptr_type_expected(struct bpf_verifier_env *env, struct bpf_reg
 static enum bpf_dynptr_type arg_to_iter_type(enum bpf_arg_type arg_type)
 {
 	switch (arg_type & ITER_TYPE_FLAG_MASK) {
+	case ITER_TYPE_NUM:
+		return BPF_ITER_TYPE_NUM;
 	default:
 		return BPF_ITER_TYPE_INVALID;
 	}
@@ -9544,6 +9548,9 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_from_xdp,
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
+	KF_bpf_iter_num_new,
+	KF_bpf_iter_num_next,
+	KF_bpf_iter_num_destroy,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -9582,6 +9589,9 @@ BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
+BTF_ID(func, bpf_iter_num_new)
+BTF_ID(func, bpf_iter_num_next)
+BTF_ID(func, bpf_iter_num_destroy)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -9595,7 +9605,7 @@ static bool is_kfunc_bpf_rcu_read_unlock(struct bpf_kfunc_call_arg_meta *meta)
 
 static bool is_iter_next_kfunc(int btf_id)
 {
-	return false;
+	return btf_id == special_kfunc_list[KF_bpf_iter_num_next];
 }
 
 static enum kfunc_ptr_arg_type
@@ -10377,7 +10387,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			if (is_kfunc_arg_uninit(btf, &args[i]))
 				iter_arg_type |= MEM_UNINIT;
 
-			ret = process_iter_arg(env, regno, insn_idx, iter_arg_type,  meta);
+			if (meta->func_id == special_kfunc_list[KF_bpf_iter_num_new] ||
+			    meta->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
+				iter_arg_type |= ITER_TYPE_NUM;
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_iter_num_destroy]) {
+				iter_arg_type |= ITER_TYPE_NUM | OBJ_RELEASE;
+			} else {
+				verbose(env, "verifier internal error: unrecognized iterator kfunc\n");
+				return -EFAULT;
+			}
+
+			ret = process_iter_arg(env, regno, insn_idx, iter_arg_type, meta);
 			if (ret < 0)
 				return ret;
 			break;

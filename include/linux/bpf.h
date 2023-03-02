@@ -613,6 +613,9 @@ enum bpf_type_flag {
 	/* DYNPTR points to xdp_buff */
 	DYNPTR_TYPE_XDP		= BIT(16 + BPF_BASE_TYPE_BITS),
 
+	/* ITER of integers */
+	ITER_TYPE_NUM		= BIT(17 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
 };
@@ -620,7 +623,7 @@ enum bpf_type_flag {
 #define DYNPTR_TYPE_FLAG_MASK	(DYNPTR_TYPE_LOCAL | DYNPTR_TYPE_RINGBUF | DYNPTR_TYPE_SKB \
 				 | DYNPTR_TYPE_XDP)
 
-#define ITER_TYPE_FLAG_MASK	(0)
+#define ITER_TYPE_FLAG_MASK	(ITER_TYPE_NUM)
 
 /* Max number of base types. */
 #define BPF_BASE_TYPE_LIMIT	(1UL << BPF_BASE_TYPE_BITS)
@@ -1167,6 +1170,7 @@ u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr);
 
 enum bpf_iter_type {
 	BPF_ITER_TYPE_INVALID,
+	BPF_ITER_TYPE_NUM,
 };
 
 #ifdef CONFIG_BPF_JIT
@@ -1622,8 +1626,12 @@ struct bpf_array {
 #define BPF_COMPLEXITY_LIMIT_INSNS      1000000 /* yes. 1M insns */
 #define MAX_TAIL_CALL_CNT 33
 
-/* Maximum number of loops for bpf_loop */
-#define BPF_MAX_LOOPS	BIT(23)
+/* Maximum number of loops for bpf_loop and bpf_iter_num.
+ * It's enum to expose it (and thus make it discoverable) through BTF.
+ */
+enum {
+	BPF_MAX_LOOPS = 8 * 1024 * 1024,
+};
 
 #define BPF_F_ACCESS_MASK	(BPF_F_RDONLY |		\
 				 BPF_F_RDONLY_PROG |	\
