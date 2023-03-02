@@ -25,6 +25,9 @@
 #include <linux/bsearch.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+
+#include <net/netfilter/nf_hook_bpf.h>
+
 #include <net/sock.h>
 #include "../tools/lib/bpf/relo_core.h"
 
@@ -7726,6 +7729,8 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 	case BPF_PROG_TYPE_LWT_XMIT:
 	case BPF_PROG_TYPE_LWT_SEG6LOCAL:
 		return BTF_KFUNC_HOOK_LWT;
+	case BPF_PROG_TYPE_NETFILTER:
+		return BTF_KFUNC_HOOK_SOCKET_FILTER;
 	default:
 		return BTF_KFUNC_HOOK_MAX;
 	}
