@@ -4584,6 +4584,7 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 			return -EINVAL;
 		}
 
+		env->resolve_mode = RESOLVE_TBD;
 		if (!env_type_is_resolve_sink(env, var_type) &&
 		    !env_type_is_resolved(env, var_type_id)) {
 			env_stack_set_next_member(env, i + 1);
