@@ -620,6 +620,8 @@ enum bpf_type_flag {
 #define DYNPTR_TYPE_FLAG_MASK	(DYNPTR_TYPE_LOCAL | DYNPTR_TYPE_RINGBUF | DYNPTR_TYPE_SKB \
 				 | DYNPTR_TYPE_XDP)
 
+#define ITER_TYPE_FLAG_MASK	(0)
+
 /* Max number of base types. */
 #define BPF_BASE_TYPE_LIMIT	(1UL << BPF_BASE_TYPE_BITS)
 
@@ -663,6 +665,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
 	ARG_PTR_TO_KPTR,	/* pointer to referenced kptr */
 	ARG_PTR_TO_DYNPTR,      /* pointer to bpf_dynptr. See bpf_type_flag for dynptr type */
+	ARG_PTR_TO_ITER,	/* pointer to bpf_iter. See bpf_type_flag for iter type */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */
@@ -1161,6 +1164,10 @@ enum bpf_dynptr_type {
 
 int bpf_dynptr_check_size(u32 size);
 u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr);
+
+enum bpf_iter_type {
+	BPF_ITER_TYPE_INVALID,
+};
 
 #ifdef CONFIG_BPF_JIT
 int bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_trampoline *tr);

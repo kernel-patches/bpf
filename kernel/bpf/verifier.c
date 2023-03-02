@@ -302,6 +302,10 @@ struct bpf_kfunc_call_arg_meta {
 		enum bpf_dynptr_type type;
 		u32 id;
 	} initialized_dynptr;
+	struct {
+		u8 spi;
+		u8 frameno;
+	} iter;
 	u64 mem_size;
 };
 
@@ -668,6 +672,7 @@ static char slot_type_char[] = {
 	[STACK_MISC]	= 'm',
 	[STACK_ZERO]	= '0',
 	[STACK_DYNPTR]	= 'd',
+	[STACK_ITER]	= 'i',
 };
 
 static void print_liveness(struct bpf_verifier_env *env,
@@ -742,6 +747,11 @@ static int dynptr_get_spi(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	return stack_slot_obj_get_spi(env, reg, "dynptr", BPF_DYNPTR_NR_SLOTS);
 }
 
+static int iter_get_spi(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	return stack_slot_obj_get_spi(env, reg, "iter", BPF_ITER_NR_SLOTS);
+}
+
 static const char *kernel_type_name(const struct btf* btf, u32 id)
 {
 	return btf_name_by_offset(btf, btf_type_by_id(btf, id)->name_off);
@@ -762,6 +772,32 @@ static const char *dynptr_type_str(enum bpf_dynptr_type type)
 		return "<invalid>";
 	default:
 		WARN_ONCE(1, "unknown dynptr type %d\n", type);
+		return "<unknown>";
+	}
+}
+
+static const char *iter_type_str(enum bpf_iter_type type)
+{
+	switch (type) {
+	case BPF_ITER_TYPE_INVALID:
+		return "<invalid>";
+	default:
+		WARN_ONCE(1, "unknown iter type %d\n", type);
+		return "<unknown>";
+	}
+}
+
+static const char *iter_state_str(enum bpf_iter_state state)
+{
+	switch (state) {
+	case BPF_ITER_STATE_ACTIVE:
+		return "active";
+	case BPF_ITER_STATE_DRAINED:
+		return "drained";
+	case BPF_ITER_STATE_INVALID:
+		return "<invalid>";
+	default:
+		WARN_ONCE(1, "unknown iter state %d\n", state);
 		return "<unknown>";
 	}
 }
@@ -1118,6 +1154,179 @@ static bool is_dynptr_type_expected(struct bpf_verifier_env *env, struct bpf_reg
 	}
 }
 
+static enum bpf_dynptr_type arg_to_iter_type(enum bpf_arg_type arg_type)
+{
+	switch (arg_type & ITER_TYPE_FLAG_MASK) {
+	default:
+		return BPF_ITER_TYPE_INVALID;
+	}
+}
+
+static void __mark_reg_known_zero(struct bpf_reg_state *reg);
+
+static int mark_stack_slots_iter(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+				 enum bpf_arg_type arg_type, int insn_idx)
+{
+	struct bpf_func_state *state = func(env, reg);
+	enum bpf_iter_type type;
+	int spi, i, j, id;
+
+	spi = iter_get_spi(env, reg);
+	if (spi < 0)
+		return spi;
+
+	type = arg_to_iter_type(arg_type);
+	if (type == BPF_ITER_TYPE_INVALID)
+		return -EINVAL;
+
+	id = acquire_reference_state(env, insn_idx);
+	if (id < 0)
+		return id;
+
+	for (i = 0; i < BPF_ITER_NR_SLOTS; i++) {
+		struct bpf_stack_state *slot = &state->stack[spi - i];
+		struct bpf_reg_state *st = &slot->spilled_ptr;
+
+		__mark_reg_known_zero(st);
+		st->type = PTR_TO_STACK; /* we don't have dedicated reg type */
+		st->live |= REG_LIVE_WRITTEN;
+		st->ref_obj_id = i == 0 ? id : 0;
+		st->iter.type = i == 0 ? type : BPF_ITER_TYPE_INVALID;
+		st->iter.state = BPF_ITER_STATE_ACTIVE;
+		st->iter.depth = 0;
+
+		for (j = 0; j < BPF_REG_SIZE; j++)
+			slot->slot_type[j] = STACK_ITER;
+
+		mark_stack_slot_scratched(env, spi - i);
+	}
+
+	return 0;
+}
+
+static int unmark_stack_slots_iter(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi, i, j;
+
+	spi = iter_get_spi(env, reg);
+	if (spi < 0)
+		return spi;
+
+	for (i = 0; i < BPF_ITER_NR_SLOTS; i++) {
+		struct bpf_stack_state *slot = &state->stack[spi - i];
+		struct bpf_reg_state *st = &slot->spilled_ptr;
+
+		if (i == 0)
+			WARN_ON_ONCE(release_reference(env, st->ref_obj_id));
+
+		__mark_reg_not_init(env, st);
+
+		/* see unmark_stack_slots_dynptr() for why we need to set REG_LIVE_WRITTEN */
+		st->live |= REG_LIVE_WRITTEN;
+
+		for (j = 0; j < BPF_REG_SIZE; j++)
+			slot->slot_type[j] = STACK_INVALID;
+
+		mark_stack_slot_scratched(env, spi - i);
+	}
+
+	return 0;
+}
+
+static bool is_iter_reg_valid_uninit(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi, i, j;
+
+	/* For -ERANGE (i.e. spi not falling into allocated stack slots), we
+	 * will do check_mem_access to check and update stack bounds later, so
+	 * return true for that case.
+	 */
+	spi = iter_get_spi(env, reg);
+	if (spi == -ERANGE)
+		return true;
+	if (spi < 0)
+		return spi;
+
+	for (i = 0; i < BPF_ITER_NR_SLOTS; i++) {
+		struct bpf_stack_state *slot = &state->stack[spi - i];
+
+		if (slot->slot_type[j] == STACK_ITER)
+			return false;
+	}
+
+	return true;
+}
+
+static bool is_iter_reg_valid_init(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi, i, j;
+
+	spi = iter_get_spi(env, reg);
+	if (spi < 0)
+		return false;
+
+	for (i = 0; i < BPF_ITER_NR_SLOTS; i++) {
+		struct bpf_stack_state *slot = &state->stack[spi - i];
+		struct bpf_reg_state *st = &slot->spilled_ptr;
+
+		/* only first slot contains valid iterator type */
+		if (i == 0 && st->iter.type == BPF_ITER_TYPE_INVALID)
+			return false;
+
+		for (j = 0; j < BPF_REG_SIZE; j++)
+			if (slot->slot_type[j] != STACK_ITER)
+				return false;
+	}
+
+	return true;
+}
+
+static bool is_iter_type_compatible(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+				    enum bpf_arg_type arg_type)
+{
+	struct bpf_func_state *state = func(env, reg);
+	enum bpf_iter_type iter_type;
+	int spi;
+
+	/* ARG_PTR_TO_ITER takes any type of iter */
+	if (arg_type == ARG_PTR_TO_ITER)
+		return true;
+
+	spi = iter_get_spi(env, reg);
+	if (spi < 0)
+		return false;
+
+	iter_type = arg_to_iter_type(arg_type);
+	return state->stack[spi].spilled_ptr.iter.type == iter_type;
+}
+
+/* Check if given stack slot is "special":
+ *   - spilled register state (STACK_SPILL);
+ *   - dynptr state (STACK_DYNPTR);
+ *   - iter state (STACK_ITER).
+ */
+static bool is_stack_slot_special(const struct bpf_stack_state *stack)
+{
+	enum bpf_stack_slot_type type = stack->slot_type[BPF_REG_SIZE - 1];
+
+	switch (type) {
+	case STACK_SPILL:
+	case STACK_DYNPTR:
+	case STACK_ITER:
+		return true;
+	case STACK_INVALID:
+	case STACK_MISC:
+	case STACK_ZERO:
+		return false;
+	default:
+		WARN_ONCE(1, "unknown stack slot type %d\n", type);
+		return true;
+	}
+}
+
 /* The reg state of a pointer or a bounded scalar was saved when
  * it was spilled to the stack.
  */
@@ -1266,6 +1475,16 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 			verbose(env, "=dynptr_%s", dynptr_type_str(reg->dynptr.type));
 			if (reg->ref_obj_id)
 				verbose(env, "(ref_id=%d)", reg->ref_obj_id);
+			break;
+		case STACK_ITER:
+			i += BPF_ITER_NR_SLOTS - 1;
+			reg = &state->stack[i].spilled_ptr;
+
+			verbose(env, " fp%d", (-i - 1) * BPF_REG_SIZE);
+			print_liveness(env, reg->live);
+			verbose(env, "=iter_%s(ref_id=%d,state=%s,depth=%u)",
+				iter_type_str(reg->iter.type), reg->ref_obj_id,
+				iter_state_str(reg->iter.state), reg->iter.depth);
 			break;
 		case STACK_MISC:
 		case STACK_ZERO:
@@ -2710,6 +2929,24 @@ static int mark_dynptr_read(struct bpf_verifier_env *env, struct bpf_reg_state *
 			     state->stack[spi - 1].spilled_ptr.parent, REG_LIVE_READ64);
 }
 
+static int mark_iter_read(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int spi)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int err, i;
+
+	for (i = 0; i < BPF_ITER_NR_SLOTS; i++) {
+		struct bpf_reg_state *st = &state->stack[spi - i].spilled_ptr;
+
+		err = mark_reg_read(env, st, st->parent, REG_LIVE_READ64);
+		if (err)
+			return err;
+
+		mark_stack_slot_scratched(env, spi - i);
+	}
+
+	return 0;
+}
+
 /* This function is supposed to be used by the following 32-bit optimization
  * code only. It returns TRUE if the source or destination register operates
  * on 64-bit, otherwise return FALSE.
@@ -3691,8 +3928,8 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 
 		/* regular write of data into stack destroys any spilled ptr */
 		state->stack[spi].spilled_ptr.type = NOT_INIT;
-		/* Mark slots as STACK_MISC if they belonged to spilled ptr. */
-		if (is_spilled_reg(&state->stack[spi]))
+		/* Mark slots as STACK_MISC if they belonged to spilled ptr/dynptr/iter. */
+		if (is_stack_slot_special(&state->stack[spi]))
 			for (i = 0; i < BPF_REG_SIZE; i++)
 				scrub_spilled_slot(&state->stack[spi].slot_type[i]);
 
@@ -6506,6 +6743,168 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 	return err;
 }
 
+static u32 iter_ref_obj_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int spi)
+{
+	struct bpf_func_state *state = func(env, reg);
+
+	return state->stack[spi].spilled_ptr.ref_obj_id;
+}
+
+static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_idx,
+			    enum bpf_arg_type arg_type,
+			    struct bpf_kfunc_call_arg_meta *meta)
+{
+	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	int spi, err, i;
+
+	spi = iter_get_spi(env, reg);
+	if (spi < 0 && spi != -ERANGE)
+		return spi;
+
+	meta->iter.spi = spi;
+	meta->iter.frameno = reg->frameno;
+
+	if (arg_type & MEM_UNINIT) {
+		if (!is_iter_reg_valid_uninit(env, reg)) {
+			verbose(env, "expected uninitialized iter as arg #%d\n", regno);
+			return -EINVAL;
+		}
+
+		/* we write BPF_DW bits (8 bytes) at a time */
+		for (i = 0; i < BPF_ITER_SIZE; i += BPF_REG_SIZE) {
+			err = check_mem_access(env, insn_idx, regno,
+					       i, BPF_DW, BPF_WRITE, -1, false);
+			if (err)
+				return err;
+		}
+
+		err = mark_stack_slots_iter(env, reg, arg_type, insn_idx);
+		if (err)
+			return err;
+	} else {
+		if (!is_iter_reg_valid_init(env, reg)) {
+			verbose(env, "expected an initialized iter as arg #%d\n", regno);
+			return -EINVAL;
+		}
+
+		if (!is_iter_type_compatible(env, reg, arg_type)) {
+			verbose(env, "expected an iter of type %s as arg #%d\n",
+				iter_type_str(arg_to_iter_type(arg_type)), regno);
+			return -EINVAL;
+		}
+
+		err = mark_iter_read(env, reg, spi);
+		if (err)
+			return err;
+
+		meta->ref_obj_id = iter_ref_obj_id(env, reg, spi);
+
+		if (arg_type & OBJ_RELEASE) {
+			err = unmark_stack_slots_iter(env, reg);
+			if (err)
+				return err;
+		}
+	}
+	return 0;
+}
+
+/* process_iter_next_call() is called when verifier gets to iterator's next "method"
+ * (e.g., bpf_iter_num_next() for numbers iterator) call. We'll refer to it as
+ * just "iter_next()" in comments below.
+ *
+ * BPF verifier relies on a crucial contract for any iter_next()
+ * implementation: it should *eventually* return NULL, and once that happens
+ * it should keep returning NULL. That is, once iterator exhausts elements to
+ * iterate, it should never reset or spuriously return new elements.
+ *
+ * With the assumption of such contract, process_iter_next_call() simulates
+ * a fork in verifier state to validate loop logic correctness and safety
+ * without having to simulate infinite amount of iterations.
+ *
+ * In current state, we assume that iter_next() returned NULL and iterator
+ * state went to BPF_ITER_STATE_DRAINED. In such conditions we should not form
+ * an infinite loop and should eventually reach exit.
+ *
+ * Besides that, we also fork current state and enqueue it for later
+ * verification. In a forked state we keep iterator state as
+ * BPF_ITER_STATE_ACTIVE and assume non-null return from iter_next(). We also
+ * bump iteration depth to prevent erroneous infinite loop detection later on
+ * (see iter_active_depths_differ() comment for details). In this state we
+ * assume that we'll eventually loop back to another iter_next() calls (it
+ * could be in exactly same location or some other one, it doesn't matter, we
+ * don't make any unnecessary assumptions about this, everything revolves
+ * around iterator state in a stack slot, not which instruction is calling
+ * iter_next()). When that happens, we either will come to iter_next() with
+ * equivalent state and can conclude that next iteration will proceed in
+ * exactly the same way as we just verified, so it's safe to assume that loop
+ * converges. If not, we'll go on another iteration simulation with
+ * a different input state.
+ *
+ * This way, we will either exhaustively discover all possible input states
+ * that iterator loop can start with and eventually will converge, or we'll
+ * effectively regress into bounded loop simulation logic and either reach
+ * maximum number of instructions if loop is not provably convergent, or there
+ * is some statically known limit on number of iterations (e.g., if there is
+ * an explicit `if n > 100 then break;` statement somewhere in the loop).
+ *
+ * One very subtle but very important aspect is that we *always* simulate NULL
+ * condition first (as current state) before we simulate non-NULL case. This
+ * has to do with intricacies of scalar precision tracking. By simulating
+ * "exit condition" of iter_next() returning NULL first, we make sure all the
+ * relevant precision marks *that will be set **after** we exit iterator loop*
+ * are propagated backwards to common parent state of NULL and non-NULL
+ * branches. Thanks to that, state equivalence checks done later in forked
+ * state, when reaching iter_next() for ACTIVE iterator, can assume that
+ * precision marks are finalized and won't change. Because simulating another
+ * ACTIVE iterator iteration won't change them (because given same input
+ * states we'll end up with exactly same output states which we are currently
+ * comparing; and verification after the loop already propagated back what
+ * needs to be **additionally** tracked as precise). It's subtle, grok
+ * precision tracking for more intuitive understanding.
+ */
+static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
+				  struct bpf_kfunc_call_arg_meta *meta)
+{
+	struct bpf_verifier_state *cur_st = env->cur_state, *queued_st;
+	struct bpf_func_state *cur_fr = cur_st->frame[cur_st->curframe], *queued_fr;
+	struct bpf_reg_state *cur_iter, *queued_iter;
+	int iter_frameno = meta->iter.frameno;
+	int iter_spi = meta->iter.spi;
+
+	BTF_TYPE_EMIT(struct bpf_iter);
+
+	cur_iter = &env->cur_state->frame[iter_frameno]->stack[iter_spi].spilled_ptr;
+
+	if (cur_iter->iter.state != BPF_ITER_STATE_ACTIVE &&
+	    cur_iter->iter.state != BPF_ITER_STATE_DRAINED) {
+		verbose(env, "verifier internal error: unexpected iterator state %d (%s)\n",
+			cur_iter->iter.state, iter_state_str(cur_iter->iter.state));
+		return -EFAULT;
+	}
+
+	if (cur_iter->iter.state == BPF_ITER_STATE_ACTIVE) {
+		/* branch out active iter state */
+		queued_st = push_stack(env, insn_idx + 1, insn_idx, false);
+		if (!queued_st)
+			return -ENOMEM;
+
+		queued_iter = &queued_st->frame[iter_frameno]->stack[iter_spi].spilled_ptr;
+		queued_iter->iter.state = BPF_ITER_STATE_ACTIVE;
+		queued_iter->iter.depth++;
+
+		queued_fr = queued_st->frame[queued_st->curframe];
+		mark_ptr_not_null_reg(&queued_fr->regs[BPF_REG_0]);
+	}
+
+	/* switch to DRAINED state, but keep the depth unchanged */
+	/* mark current iter state as drained and assume returned NULL */
+	cur_iter->iter.state = BPF_ITER_STATE_DRAINED;
+	__mark_reg_known_zero(&cur_fr->regs[BPF_REG_0]);
+	cur_fr->regs[BPF_REG_0].type = SCALAR_VALUE;
+
+	return 0;
+}
+
 static bool arg_type_is_mem_size(enum bpf_arg_type type)
 {
 	return type == ARG_CONST_SIZE ||
@@ -6520,6 +6919,11 @@ static bool arg_type_is_release(enum bpf_arg_type type)
 static bool arg_type_is_dynptr(enum bpf_arg_type type)
 {
 	return base_type(type) == ARG_PTR_TO_DYNPTR;
+}
+
+static bool arg_type_is_iter(enum bpf_arg_type type)
+{
+	return base_type(type) == ARG_PTR_TO_ITER;
 }
 
 static int int_ptr_type_to_size(enum bpf_arg_type type)
@@ -6649,6 +7053,7 @@ static const struct bpf_reg_types dynptr_types = {
 		CONST_PTR_TO_DYNPTR,
 	}
 };
+static const struct bpf_reg_types iter_types = { .types = { PTR_TO_STACK } };
 
 static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_MAP_KEY]		= &mem_types,
@@ -6676,6 +7081,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_TIMER]		= &timer_types,
 	[ARG_PTR_TO_KPTR]		= &kptr_types,
 	[ARG_PTR_TO_DYNPTR]		= &dynptr_types,
+	[ARG_PTR_TO_ITER]		= &iter_types,
 };
 
 static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
@@ -6825,6 +7231,9 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		 * default handling.
 		 */
 		if (arg_type_is_dynptr(arg_type) && type == PTR_TO_STACK)
+			return 0;
+
+		if (arg_type_is_iter(arg_type))
 			return 0;
 
 		if ((type_is_ptr_alloc_obj(type) || type_is_non_owning_ref(type)) && reg->off) {
@@ -8978,6 +9387,7 @@ static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
 
 enum {
 	KF_ARG_DYNPTR_ID,
+	KF_ARG_ITER_ID,
 	KF_ARG_LIST_HEAD_ID,
 	KF_ARG_LIST_NODE_ID,
 	KF_ARG_RB_ROOT_ID,
@@ -8986,6 +9396,7 @@ enum {
 
 BTF_ID_LIST(kf_arg_btf_ids)
 BTF_ID(struct, bpf_dynptr_kern)
+BTF_ID(struct, bpf_iter)
 BTF_ID(struct, bpf_list_head)
 BTF_ID(struct, bpf_list_node)
 BTF_ID(struct, bpf_rb_root)
@@ -9011,6 +9422,11 @@ static bool __is_kfunc_ptr_arg_type(const struct btf *btf,
 static bool is_kfunc_arg_dynptr(const struct btf *btf, const struct btf_param *arg)
 {
 	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_DYNPTR_ID);
+}
+
+static bool is_kfunc_arg_iter(const struct btf *btf, const struct btf_param *arg)
+{
+	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_ITER_ID);
 }
 
 static bool is_kfunc_arg_list_head(const struct btf *btf, const struct btf_param *arg)
@@ -9099,6 +9515,7 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_ALLOC_BTF_ID,  /* Allocated object */
 	KF_ARG_PTR_TO_KPTR,	     /* PTR_TO_KPTR but type specific */
 	KF_ARG_PTR_TO_DYNPTR,
+	KF_ARG_PTR_TO_ITER,
 	KF_ARG_PTR_TO_LIST_HEAD,
 	KF_ARG_PTR_TO_LIST_NODE,
 	KF_ARG_PTR_TO_BTF_ID,	     /* Also covers reg2btf_ids conversions */
@@ -9176,6 +9593,11 @@ static bool is_kfunc_bpf_rcu_read_unlock(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->func_id == special_kfunc_list[KF_bpf_rcu_read_unlock];
 }
 
+static bool is_iter_next_kfunc(int btf_id)
+{
+	return false;
+}
+
 static enum kfunc_ptr_arg_type
 get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 		       struct bpf_kfunc_call_arg_meta *meta,
@@ -9219,6 +9641,9 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 
 	if (is_kfunc_arg_dynptr(meta->btf, &args[argno]))
 		return KF_ARG_PTR_TO_DYNPTR;
+
+	if (is_kfunc_arg_iter(meta->btf, &args[argno]))
+		return KF_ARG_PTR_TO_ITER;
 
 	if (is_kfunc_arg_list_head(meta->btf, &args[argno]))
 		return KF_ARG_PTR_TO_LIST_HEAD;
@@ -9848,6 +10273,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			break;
 		case KF_ARG_PTR_TO_KPTR:
 		case KF_ARG_PTR_TO_DYNPTR:
+		case KF_ARG_PTR_TO_ITER:
 		case KF_ARG_PTR_TO_LIST_HEAD:
 		case KF_ARG_PTR_TO_LIST_NODE:
 		case KF_ARG_PTR_TO_RB_ROOT:
@@ -9942,6 +10368,18 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				meta->initialized_dynptr.type = dynptr_get_type(env, reg);
 			}
 
+			break;
+		}
+		case KF_ARG_PTR_TO_ITER:
+		{
+			enum bpf_arg_type iter_arg_type = ARG_PTR_TO_ITER;
+
+			if (is_kfunc_arg_uninit(btf, &args[i]))
+				iter_arg_type |= MEM_UNINIT;
+
+			ret = process_iter_arg(env, regno, insn_idx, iter_arg_type,  meta);
+			if (ret < 0)
+				return ret;
 			break;
 		}
 		case KF_ARG_PTR_TO_LIST_HEAD:
@@ -10408,6 +10846,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		else
 			/* scalar. ensured by btf_check_kfunc_arg_match() */
 			mark_btf_func_reg_size(env, regno, t->size);
+	}
+
+	if (is_iter_next_kfunc(meta.func_id)) {
+		err = process_iter_next_call(env, insn_idx, &meta);
+		if (err)
+			return err;
 	}
 
 	return 0;
@@ -13522,6 +13966,8 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			 * async state will be pushed for further exploration.
 			 */
 			mark_prune_point(env, t);
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL && is_iter_next_kfunc(insn->imm))
+			mark_prune_point(env, t);
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
 	case BPF_JA:
@@ -14275,6 +14721,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	 * didn't use them
 	 */
 	for (i = 0; i < old->allocated_stack; i++) {
+		struct bpf_reg_state *old_reg, *cur_reg;
+
 		spi = i / BPF_REG_SIZE;
 
 		if (!(old->stack[spi].spilled_ptr.live & REG_LIVE_READ)) {
@@ -14331,9 +14779,6 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 				return false;
 			break;
 		case STACK_DYNPTR:
-		{
-			const struct bpf_reg_state *old_reg, *cur_reg;
-
 			old_reg = &old->stack[spi].spilled_ptr;
 			cur_reg = &cur->stack[spi].spilled_ptr;
 			if (old_reg->dynptr.type != cur_reg->dynptr.type ||
@@ -14341,7 +14786,14 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
 				return false;
 			break;
-		}
+		case STACK_ITER:
+			old_reg = &old->stack[spi].spilled_ptr;
+			cur_reg = &cur->stack[spi].spilled_ptr;
+			if (old_reg->iter.type != cur_reg->iter.type ||
+			    old_reg->iter.state != cur_reg->iter.state ||
+			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
+				return false;
+			break;
 		case STACK_MISC:
 		case STACK_ZERO:
 		case STACK_INVALID:
@@ -14600,6 +15052,119 @@ static bool states_maybe_looping(struct bpf_verifier_state *old,
 	return true;
 }
 
+static bool is_iter_next_insn(struct bpf_verifier_env *env, int insn_idx, int *reg_idx)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	const struct btf_param *args;
+	const struct btf_type *t;
+	const struct btf *btf;
+	int nargs, i;
+
+	if (!bpf_pseudo_kfunc_call(insn))
+		return false;
+	if (!is_iter_next_kfunc(insn->imm))
+		return false;
+
+	btf = find_kfunc_desc_btf(env, insn->off);
+	if (IS_ERR(btf))
+		return false;
+
+	t = btf_type_by_id(btf, insn->imm);	/* FUNC */
+	t = btf_type_by_id(btf, t->type);	/* FUNC_PROTO */
+
+	args = btf_params(t);
+	nargs = btf_vlen(t);
+	for (i = 0; i < nargs; i++) {
+		if (is_kfunc_arg_iter(btf, &args[i])) {
+			*reg_idx = BPF_REG_1 + i;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/* is_state_visited() handles iter_next() (see process_iter_next_call() for
+ * terminology) calls specially: as opposed to bounded BPF loops, it *expects*
+ * state matching, which otherwise looks like an infinite loop. So while
+ * iter_next() calls are taken care of, we still need to be careful and
+ * prevent erroneous and too eager declaration of "ininite loop", when
+ * iterators are involved.
+ *
+ * Here's a situation in pseudo-BPF assembly form:
+ *
+ *   0: again:                          ; set up iter_next() call args
+ *   1:   r1 = &it                      ; <CHECKPOINT HERE>
+ *   2:   call bpf_iter_num_next        ; this is iter_next() call
+ *   3:   if r0 == 0 goto done
+ *   4:   ... something useful here ...
+ *   5:   goto again                    ; another iteration
+ *   6: done:
+ *   7:   r1 = &it
+ *   8:   call bpf_iter_num_destroy     ; clean up iter state
+ *   9:   exit
+ *
+ * This is a typical loop. Let's assume that we have a prune point at 1:,
+ * before we get to `call bpf_iter_num_next` (e.g., because of that `goto
+ * again`, assuming other heuristics don't get in a way).
+ *
+ * When we first time come to 1:, let's say we have some state X. We proceed
+ * to 2:, fork states, enqueue ACTIVE, validate NULL case successfully, exit.
+ * Now we come back to validate that forked ACTIVE state. We proceed through
+ * 3-5, come to goto, jump to 1:. Let's assume our state didn't change, so we
+ * are converging. But the problem is that we don't know that yet, as this
+ * convergence has to happen at iter_next() call site only. So if nothing is
+ * done, at 1: verifier will use bounded loop logic and declare infinite
+ * looping (and would be *technically* correct, if not for iterator "eventual
+ * sticky NULL" contract, see process_iter_next_call()). But we don't want
+ * that. So what we do in process_iter_next_call() when we go on another
+ * ACTIVE iteration, we bump slot->iter.depth, to mark that it's a different
+ * iteration. So when we detect soon-to-be-declared infinite loop, we also
+ * check if any of *ACTIVE* iterator state's depth differs. If yes, we pretend
+ * we are not looping and wait for next iter_next() call.
+ *
+ * This only applies to ACTIVE state. In DRAINED state we don't expect to
+ * loop, because that would actually mean infinite loop, as DRAINED state is
+ * "sticky", and so we'll keep returning into the same instruction with the
+ * same state (at least in one of possible code paths).
+ *
+ * This approach allows to keep infinite loop heuristic even in the face of
+ * active iterator. E.g., C snippet below will be detected as (and actually is)
+ * looping:
+ *
+ *   struct bpf_iter it;
+ *   int *p, x;
+ *
+ *   bpf_iter_num_new(&it, 0, 10);
+ *   while ((p = bpf_iter_num_next(&t))) {
+ *       x = p;
+ *       while (x--) {} // <<-- infinite loop here
+ *   }
+ *
+ */
+static bool iter_active_depths_differ(struct bpf_verifier_state *old, struct bpf_verifier_state *cur)
+{
+	struct bpf_reg_state *slot, *cur_slot;
+	struct bpf_func_state *state;
+	int i, fr;
+
+	for (fr = old->curframe; fr >= 0; fr--) {
+		state = old->frame[fr];
+		for (i = 0; i < state->allocated_stack / BPF_REG_SIZE; i++) {
+			if (state->stack[i].slot_type[0] != STACK_ITER)
+				continue;
+
+			slot = &state->stack[i].spilled_ptr;
+			if (slot->iter.state != BPF_ITER_STATE_ACTIVE)
+				continue;
+
+			cur_slot = &cur->frame[fr]->stack[i].spilled_ptr;
+			if (cur_slot->iter.depth != slot->iter.depth)
+				return true;
+		}
+	}
+	return false;
+}
 
 static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
@@ -14633,6 +15198,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 
 		if (sl->state.branches) {
 			struct bpf_func_state *frame = sl->state.frame[sl->state.curframe];
+			int iter_arg_reg_idx;
 
 			if (frame->in_async_callback_fn &&
 			    frame->async_entry_cnt != cur->frame[cur->curframe]->async_entry_cnt) {
@@ -14647,8 +15213,45 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 				 * Since the verifier still needs to catch infinite loops
 				 * inside async callbacks.
 				 */
-			} else if (states_maybe_looping(&sl->state, cur) &&
-				   states_equal(env, &sl->state, cur)) {
+				goto skip_inf_loop_check;
+			}
+			/* BPF open-coded iterators loop detection is special.
+			 * states_maybe_looping() logic is too simplistic in detecting
+			 * states that *might* be equivalent, because it doesn't know
+			 * about ID remapping, so don't even perform it.
+			 * See process_iter_next_call() and iter_active_depths_differ()
+			 * for overview of the logic. When current and one of parent
+			 * states are detected as equivalent, it's a good thing: we prove
+			 * convergence and can stop simulating further iterations.
+			 * It's safe to assume that iterator loop will finish, taking into
+			 * account iter_next() contract of eventually returning
+			 * sticky NULL result.
+			 */
+			if (is_iter_next_insn(env, insn_idx, &iter_arg_reg_idx)) {
+				if (states_equal(env, &sl->state, cur)) {
+					struct bpf_func_state *cur_frame;
+					struct bpf_reg_state *iter_state, *iter_reg;
+					int spi;
+
+					/* current state is valid due to states_equal(),
+					 * so we can assume valid iter state, no need for extra
+					 * (re-)validations
+					 */
+					cur_frame = cur->frame[cur->curframe];
+					iter_reg = &cur_frame->regs[iter_arg_reg_idx];
+					spi = iter_get_spi(env, iter_reg);
+					if (spi < 0)
+						return spi;
+					iter_state = &func(env, iter_reg)->stack[spi].spilled_ptr;
+					if (iter_state->iter.state == BPF_ITER_STATE_ACTIVE)
+						goto hit;
+				}
+				goto skip_inf_loop_check;
+			}
+			/* attempt to detect infinite loop to avoid unnecessary doomed work */
+			if (states_maybe_looping(&sl->state, cur) &&
+			    states_equal(env, &sl->state, cur) &&
+			    !iter_active_depths_differ(&sl->state, cur)) {
 				verbose_linfo(env, insn_idx, "; ");
 				verbose(env, "infinite loop detected at insn %d\n", insn_idx);
 				return -EINVAL;
@@ -14665,6 +15268,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			 * This threshold shouldn't be too high either, since states
 			 * at the end of the loop are likely to be useful in pruning.
 			 */
+skip_inf_loop_check:
 			if (!env->test_state_freq &&
 			    env->jmps_processed - env->prev_jmps_processed < 20 &&
 			    env->insn_processed - env->prev_insn_processed < 100)
@@ -14672,6 +15276,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			goto miss;
 		}
 		if (states_equal(env, &sl->state, cur)) {
+hit:
 			sl->hit_cnt++;
 			/* reached equivalent register/stack state,
 			 * prune the search.
