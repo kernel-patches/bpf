@@ -11604,6 +11604,87 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 	__update_reg_bounds(dst_reg);
 }
 
+static void scalar32_min_max_mod(struct bpf_reg_state *dst_reg,
+				 struct bpf_reg_state *src_reg)
+{
+	u32 val = (u32)src_reg->var_off.value; /* src_reg is const */
+	u32 umax = dst_reg->u32_max_value;
+	u32 umin = dst_reg->u32_min_value;
+	u32 umax_rem, umin_rem;
+
+	/* dst_reg is 32-bit truncated when mod32 zero, since
+	 * adjust_scalar_min_max_vals calls zext_32_to_64 to do truncation for
+	 * all alu32 ops, here we do nothing and just return.
+	 */
+	if (!val)
+		return;
+
+	umax_rem = do_div(umax, val);
+	umin_rem = do_div(umin, val);
+
+	/* no winding */
+	if (umax - umin < val && umin_rem <= umax_rem) {
+		dst_reg->var_off = tnum_range(umin_rem, umax_rem);
+		dst_reg->u32_min_value = umin_rem;
+		dst_reg->u32_max_value = umax_rem;
+	} else {
+		dst_reg->var_off = tnum_range(0, val - 1);
+		dst_reg->u32_min_value = 0;
+		dst_reg->u32_max_value = val - 1;
+	}
+
+	/* cross the sign boundary */
+	if ((s32)dst_reg->u32_min_value > (s32)dst_reg->u32_max_value) {
+		dst_reg->s32_min_value = S32_MIN;
+		dst_reg->s32_max_value = S32_MAX;
+	} else {
+		dst_reg->s32_min_value = (s32)dst_reg->u32_min_value;
+		dst_reg->s32_max_value = (s32)dst_reg->u32_max_value;
+	}
+
+	/* mark reg64 unbounded to deduce 64-bit bounds from var_off */
+	__mark_reg64_unbounded(dst_reg);
+}
+
+static void scalar_min_max_mod(struct bpf_reg_state *dst_reg,
+			       struct bpf_reg_state *src_reg)
+{
+	u64 val = src_reg->var_off.value; /* src_reg is const */
+	u64 umax = dst_reg->umax_value;
+	u64 umin = dst_reg->umin_value;
+	u64 umax_rem, umin_rem;
+
+	/* dst_reg is untouched when mod64 zero */
+	if (!val)
+		return;
+
+	div64_u64_rem(umin, val, &umin_rem);
+	div64_u64_rem(umax, val, &umax_rem);
+
+	/* no winding */
+	if (umax - umin < val && umin_rem <= umax_rem) {
+		dst_reg->var_off = tnum_range(umin_rem, umax_rem);
+		dst_reg->umin_value = umin_rem;
+		dst_reg->umax_value = umax_rem;
+	} else {
+		dst_reg->var_off = tnum_range(0, val - 1);
+		dst_reg->umin_value = 0;
+		dst_reg->umax_value = val - 1;
+	}
+
+	/* cross the sign boundary */
+	if ((s64)dst_reg->umin_value > (s64)dst_reg->umax_value) {
+		dst_reg->smin_value = S64_MIN;
+		dst_reg->smax_value = S64_MAX;
+	} else {
+		dst_reg->smin_value = (s64)dst_reg->umin_value;
+		dst_reg->smax_value = (s64)dst_reg->umax_value;
+	}
+
+	/* mark reg32 unbounded to deduce 32-bit bounds from var_off */
+	__mark_reg32_unbounded(dst_reg);
+}
+
 /* WARNING: This function does calculations on 64-bit values, but the actual
  * execution may occur on 32-bit values. Therefore, things like bitshifts
  * need extra checks in the 32-bit case.
@@ -11678,11 +11759,12 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 * and BPF_OR. This is possible because these ops have fairly easy to
 	 * understand and calculate behavior in both 32-bit and 64-bit alu ops.
 	 * See alu32 verifier tests for examples. The second class of
-	 * operations, BPF_LSH, BPF_RSH, and BPF_ARSH, however are not so easy
-	 * with regards to tracking sign/unsigned bounds because the bits may
-	 * cross subreg boundaries in the alu64 case. When this happens we mark
-	 * the reg unbounded in the subreg bound space and use the resulting
-	 * tnum to calculate an approximation of the sign/unsigned bounds.
+	 * operations, BPF_LSH, BPF_RSH, BPF_ARSH and BPF_MOD, however are not
+	 * so easy with regards to tracking sign/unsigned bounds because the
+	 * bits may cross subreg boundaries in the alu64 case. When this happens
+	 * we mark the reg unbounded in the subreg bound space and use the
+	 * resulting tnum to calculate an approximation of the sign/unsigned
+	 * bounds.
 	 */
 	switch (opcode) {
 	case BPF_ADD:
@@ -11753,6 +11835,12 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 			scalar32_min_max_arsh(dst_reg, &src_reg);
 		else
 			scalar_min_max_arsh(dst_reg, &src_reg);
+		break;
+	case BPF_MOD:
+		if (alu32)
+			scalar32_min_max_mod(dst_reg, &src_reg);
+		else
+			scalar_min_max_mod(dst_reg, &src_reg);
 		break;
 	default:
 		mark_reg_unknown(env, regs, insn->dst_reg);
