@@ -1,0 +1,247 @@
+{
+	"mod64 positive imm",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_ALU64_IMM(BPF_MOD, BPF_REG_0, 1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod64 positive reg",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_MOV64_IMM(BPF_REG_1, 1),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod64 zero",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod64 negative 1",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 1),
+	BPF_MOV64_IMM(BPF_REG_1, -1),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 1,
+},
+{
+	"mod64 negative 2",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, -4),
+	BPF_MOV32_IMM(BPF_REG_1, 5),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 2,
+},
+{
+	"mod64 negative 3",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, -4),
+	BPF_MOV32_IMM(BPF_REG_1, -5),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 1,
+},
+{
+	"mod64 variable dividend cross signed boundary",
+	.insns = {
+	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offsetof(struct xdp_md, data)),
+	BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1, offsetof(struct xdp_md, data_end)),
+	BPF_MOV64_REG(BPF_REG_1, BPF_REG_2),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JGT, BPF_REG_1, BPF_REG_3, 11),
+
+	BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0),
+	BPF_LD_IMM64(BPF_REG_0, 0x7fffffffffffff10),
+	BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_0),
+	BPF_LD_IMM64(BPF_REG_0, 0x80000000000000ff),
+	BPF_ALU64_REG(BPF_MOD, BPF_REG_1, BPF_REG_0),
+
+	BPF_LD_IMM64(BPF_REG_0, 0x8000000000000000),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_0, 1),
+	BPF_JMP_REG(BPF_JSLT, BPF_REG_0, BPF_REG_1, -2),
+
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+	},
+	.errstr = "BPF program is too large.",
+	.result = REJECT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod32 positive imm",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, 0),
+	BPF_ALU32_IMM(BPF_MOD, BPF_REG_0, 1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod32 positive reg",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, 0),
+	BPF_MOV32_IMM(BPF_REG_1, 1),
+	BPF_ALU32_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod32 zero",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, 0),
+	BPF_MOV32_IMM(BPF_REG_1, 0),
+	BPF_ALU32_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
+{
+	"mod32 negative 1",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, 1),
+	BPF_MOV32_IMM(BPF_REG_1, -1),
+	BPF_ALU32_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 1,
+},
+{
+	"mod32 negative 2",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, -4),
+	BPF_MOV32_IMM(BPF_REG_1, 5),
+	BPF_ALU32_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 2,
+},
+{
+	"mod32 negative 3",
+	.insns = {
+	BPF_MOV32_IMM(BPF_REG_0, -4),
+	BPF_MOV32_IMM(BPF_REG_1, -5),
+	BPF_ALU32_REG(BPF_MOD, BPF_REG_0, BPF_REG_1),
+
+	BPF_MOV64_IMM(BPF_REG_1, 0),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JLT, BPF_REG_1, BPF_REG_0, -2),
+
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.retval = 1,
+},
+{
+	"mod32 variable dividend cross signed boundary",
+	.insns = {
+	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offsetof(struct xdp_md, data)),
+	BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1, offsetof(struct xdp_md, data_end)),
+	BPF_MOV64_REG(BPF_REG_1, BPF_REG_2),
+	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
+	BPF_JMP_REG(BPF_JGT, BPF_REG_1, BPF_REG_3, 7),
+
+	BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0),
+	BPF_MOV64_IMM(BPF_REG_0, 0x7fffff10),
+	BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_0),
+	BPF_ALU32_IMM(BPF_MOD, BPF_REG_1, 0x800000ff),
+
+	BPF_MOV32_IMM(BPF_REG_0, 0x80000000),
+	BPF_ALU32_IMM(BPF_ADD, BPF_REG_0, 1),
+	BPF_JMP32_REG(BPF_JSLT, BPF_REG_0, BPF_REG_1, -2),
+
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+	},
+	.errstr = "BPF program is too large.",
+	.result = REJECT,
+	.prog_type = BPF_PROG_TYPE_XDP,
+},
