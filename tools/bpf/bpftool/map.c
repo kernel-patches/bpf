@@ -705,14 +705,14 @@ static int do_show(int argc, char **argv)
 				continue;
 			p_err("can't get map by id (%u): %s",
 			      id, strerror(errno));
-			break;
+			continue;
 		}
 
 		err = bpf_map_get_info_by_fd(fd, &info, &len);
 		if (err) {
 			p_err("can't get map info: %s", strerror(errno));
 			close(fd);
-			break;
+			continue;
 		}
 
 		if (json_output)
