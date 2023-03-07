@@ -2013,26 +2013,21 @@ static void __reg_combine_32_into_64(struct bpf_reg_state *reg)
 	reg_bounds_sync(reg);
 }
 
-static bool __reg64_bound_s32(s64 a)
-{
-	return a >= S32_MIN && a <= S32_MAX;
-}
-
-static bool __reg64_bound_u32(u64 a)
-{
-	return a >= U32_MIN && a <= U32_MAX;
-}
-
 static void __reg_combine_64_into_32(struct bpf_reg_state *reg)
 {
+	s64 smin = reg->smin_value;
+	s64 smax = reg->smax_value;
+	u64 umin = reg->umin_value;
+	u64 umax = reg->umax_value;
+
 	__mark_reg32_unbounded(reg);
-	if (__reg64_bound_s32(reg->smin_value) && __reg64_bound_s32(reg->smax_value)) {
-		reg->s32_min_value = (s32)reg->smin_value;
-		reg->s32_max_value = (s32)reg->smax_value;
+	if ((u64)(smax - smin) <= (u64)U32_MAX && (s32)smin <= (s32)smax) {
+		reg->s32_min_value = (s32)smin;
+		reg->s32_max_value = (s32)smax;
 	}
-	if (__reg64_bound_u32(reg->umin_value) && __reg64_bound_u32(reg->umax_value)) {
-		reg->u32_min_value = (u32)reg->umin_value;
-		reg->u32_max_value = (u32)reg->umax_value;
+	if (umax - umin <= U32_MAX && (u32)umin <= (u32)umax) {
+		reg->u32_min_value = (u32)umin;
+		reg->u32_max_value = (u32)umax;
 	}
 	reg_bounds_sync(reg);
 }
