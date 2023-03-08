@@ -13,6 +13,7 @@
 #include <linux/list.h>
 #include <linux/hash.h>
 #include <linux/types.h>
+#include <linux/bpf_mem_alloc.h>
 #include <uapi/linux/btf.h>
 
 #define BPF_LOCAL_STORAGE_CACHE_SIZE	16
@@ -55,6 +56,7 @@ struct bpf_local_storage_map {
 	u32 bucket_log;
 	u16 elem_size;
 	u16 cache_idx;
+	struct bpf_mem_alloc selem_ma;
 };
 
 struct bpf_local_storage_data {
@@ -74,11 +76,7 @@ struct bpf_local_storage_elem {
 	struct hlist_node snode;	/* Linked to bpf_local_storage */
 	struct bpf_local_storage __rcu *local_storage;
 	struct rcu_head rcu;
-	/* 8 bytes hole */
-	/* The data is stored in another cacheline to minimize
-	 * the number of cachelines access during a cache hit.
-	 */
-	struct bpf_local_storage_data sdata ____cacheline_aligned;
+	struct bpf_local_storage_data sdata;
 };
 
 struct bpf_local_storage {
