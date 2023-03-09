@@ -13,8 +13,11 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
-#include <asm/kprobes.h>
+#include <linux/memory.h>
 #include <linux/bpf.h>
+
+#include <asm/kprobes.h>
+#include <asm/code-patching.h>
 
 #include "bpf_jit.h"
 
@@ -271,4 +274,22 @@ int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct code
 
 	ctx->exentry_idx++;
 	return 0;
+}
+
+void *bpf_arch_text_copy(void *dst, void *src, size_t len)
+{
+	void *ret = ERR_PTR(-EINVAL);
+	int err;
+
+	if (WARN_ON_ONCE(core_kernel_text((unsigned long)dst)))
+		return ret;
+
+	ret = dst;
+	mutex_lock(&text_mutex);
+	err = patch_instructions(dst, src, false, len);
+	if (err)
+		ret = ERR_PTR(err);
+	mutex_unlock(&text_mutex);
+
+	return ret;
 }
