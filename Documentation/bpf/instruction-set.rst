@@ -242,35 +242,52 @@ Jump instructions
 otherwise identical operations.
 The 'code' field encodes the operation as below:
 
-========  =====  =========================  ============
-code      value  description                notes
-========  =====  =========================  ============
-BPF_JA    0x00   PC += off                  BPF_JMP only
-BPF_JEQ   0x10   PC += off if dst == src
-BPF_JGT   0x20   PC += off if dst > src     unsigned
-BPF_JGE   0x30   PC += off if dst >= src    unsigned
-BPF_JSET  0x40   PC += off if dst & src
-BPF_JNE   0x50   PC += off if dst != src
-BPF_JSGT  0x60   PC += off if dst > src     signed
-BPF_JSGE  0x70   PC += off if dst >= src    signed
-BPF_CALL  0x80   function call              see `Helper functions`_
-BPF_EXIT  0x90   function / program return  BPF_JMP only
-BPF_JLT   0xa0   PC += off if dst < src     unsigned
-BPF_JLE   0xb0   PC += off if dst <= src    unsigned
-BPF_JSLT  0xc0   PC += off if dst < src     signed
-BPF_JSLE  0xd0   PC += off if dst <= src    signed
-========  =====  =========================  ============
+========  =====  ===  ===========================================  =========================================
+code      value  src  description                                  notes
+========  =====  ===  ===========================================  =========================================
+BPF_JA    0x0    0x0  PC += offset                                 BPF_JMP only
+BPF_JEQ   0x1    any  PC += offset if dst == src
+BPF_JGT   0x2    any  PC += offset if dst > src                    unsigned
+BPF_JGE   0x3    any  PC += offset if dst >= src                   unsigned
+BPF_JSET  0x4    any  PC += offset if dst & src
+BPF_JNE   0x5    any  PC += offset if dst != src
+BPF_JSGT  0x6    any  PC += offset if dst > src                    signed
+BPF_JSGE  0x7    any  PC += offset if dst >= src                   signed
+BPF_CALL  0x8    0x0  call platform-agnostic helper function imm   see `Platform-agnostic helper functions`_
+BPF_CALL  0x8    0x1  call PC += offset                            see `BPF-local functions`_
+BPF_CALL  0x8    0x2  call platform-specific helper function imm   see `Platform-specific helper functions`_
+BPF_EXIT  0x9    0x0  return                                       BPF_JMP only
+BPF_JLT   0xa    any  PC += offset if dst < src                    unsigned
+BPF_JLE   0xb    any  PC += offset if dst <= src                   unsigned
+BPF_JSLT  0xc    any  PC += offset if dst < src                    signed
+BPF_JSLE  0xd    any  PC += offset if dst <= src                   signed
+========  =====  ===  ===========================================  =========================================
 
 The eBPF program needs to store the return value into register R0 before doing a
 BPF_EXIT.
 
-Helper functions
-~~~~~~~~~~~~~~~~
+Platform-agnostic helper functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Helper functions are a concept whereby BPF programs can call into a
-set of function calls exposed by the runtime.  Each helper
+Platform-agnostic helper functions are a concept whereby BPF programs can call
+into a set of function calls exposed by the runtime.  Each helper
 function is identified by an integer used in a ``BPF_CALL`` instruction.
-The available helper functions may differ for each program type.
+The available platform-agnostic helper functions may differ for each program
+type, but integer values are unique across all program types.
+
+Platform-specific helper functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Platform-specific helper functions are helper functions that are unique to
+a particular platform.  They use a separate integer numbering space from
+platform-agnostic helper functions, but otherwise the same considerations
+apply.  Platforms are not required to implement any platform-specific
+functions.
+
+BPF-local functions
+~~~~~~~~~~~~~~
+BPF-local functions are functions exposed by the same BPF program as the caller,
+and are referenced by offset from the call instruction, similar to ``BPF_JA``.
+A ``BPF_EXIT`` within the BPF-local function will return to the caller.
 
 Load and store instructions
 ===========================

@@ -20,6 +20,10 @@ integer would be read from a specified register, is not currently supported
 by the verifier.  Any programs with this instruction will fail to load
 until such support is added.
 
+For historical reasons, Linux has a number of Linux-specific helper functions
+that are encoded as platform-agnostic helper functions rather than
+ platform-specific helper functions ("kfuncs").
+
 Legacy BPF Packet access instructions
 =====================================
 
