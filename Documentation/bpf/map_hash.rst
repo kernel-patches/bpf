@@ -1,5 +1,6 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. Copyright (C) 2022 Red Hat, Inc.
+.. Copyright (C) 2022-2023 Isovalent, Inc.
 
 ===============================================
 BPF_MAP_TYPE_HASH, with PERCPU and LRU Variants
@@ -206,3 +207,64 @@ Userspace walking the map elements from the map declared above:
                     cur_key = &next_key;
             }
     }
+
+Internals
+=========
+
+This section of the document is targeted at Linux developers and describes
+aspects of the map implementations that are not considered stable ABI. The
+following details are subject to change in future versions of the kernel.
+
+``BPF_MAP_TYPE_LRU_HASH`` and variants
+--------------------------------------
+
+An LRU hashmap type consists of two properties: Firstly, it is a hash map and
+hence is indexable by key for constant time lookups. Secondly, when at map
+capacity, map updates will trigger eviction of old entries based on the age of
+the elements in a set of lists. Each of these properties may be either global
+or per-CPU, depending on the map type and flags used to create the map:
+
++------------------------+---------------------------+----------------------------------+
+|                        | ``BPF_MAP_TYPE_LRU_HASH`` | ``BPF_MAP_TYPE_LRU_PERCPU_HASH`` |
++========================+===========================+==================================+
+| ``BPF_NO_COMMON_LRU``  | Per-CPU LRU, global map   | Per-CPU LRU, per-cpu map         |
++------------------------+---------------------------+----------------------------------+
+| ``!BPF_NO_COMMON_LRU`` | Global LRU, global map    | Global LRU, per-cpu map          |
++------------------------+---------------------------+----------------------------------+
+
+Notably, there are various steps that the update algorithm attempts in order to
+enforce the LRU property which have increasing impacts on other CPUs involved
+in the following operation attempts:
+
+- Attempt to use CPU-local state to batch operations
+- Attempt to fetch free nodes from global lists
+- Attempt to pull any node from a global list and remove it from the hashmap
+- Attempt to pull any node from any CPU's list and remove it from the hashmap
+
+Even if an LRU node may be acquired, maps of type ``BPF_MAP_TYPE_LRU_HASH``
+may fail to insert the entry into the map if other CPUs are heavily contending
+on the global hashmap lock.
+
+This algorithm is described visually in the following diagram. See the
+description in commit 3a08c2fd7634 ("bpf: LRU List") for a full explanation of
+the corresponding operations:
+
+.. kernel-figure::  map_lru_hash_update.dot
+   :alt:    Diagram outlining the LRU eviction steps taken during map update
+
+   LRU hash eviction during map update for ``BPF_MAP_TYPE_LRU_HASH`` and
+   variants
+
+Map updates start from the oval in the top right "begin ``bpf_map_update()``"
+and progress through the graph towards the bottom where the result may be
+either a successful update or a failure with various error codes. The key in
+the top right provides indicators for which locks may be involved in specific
+operations. This is intended as a visual hint for reasoning about how map
+contention may impact update operations, though the map type and flags may
+impact the actual contention on those locks, based on the logic described in
+the table above. For instance, if the map is created with type
+``BPF_MAP_TYPE_LRU_PERCPU_HASH`` and flags ``BPF_NO_COMMON_LRU`` then all map
+properties would be per-cpu.
+
+The dot file source for the above figure uses internal kernel function names
+for the node names in order to make the corresponding logic easier to find.
