@@ -2224,14 +2224,21 @@ static bool __reg64_bound_u32(u64 a)
 
 static void __reg_combine_64_into_32(struct bpf_reg_state *reg)
 {
+	s64 smin = reg->smin_value;
+	s64 smax = reg->smax_value;
+	u64 umin = reg->umin_value;
+	u64 umax = reg->umax_value;
+
 	__mark_reg32_unbounded(reg);
-	if (__reg64_bound_s32(reg->smin_value) && __reg64_bound_s32(reg->smax_value)) {
-		reg->s32_min_value = (s32)reg->smin_value;
-		reg->s32_max_value = (s32)reg->smax_value;
+	if ((__reg64_bound_s32(smin) && __reg64_bound_s32(smax)) ||
+		smin == smax) {
+		reg->s32_min_value = (s32)smin;
+		reg->s32_max_value = (s32)smax;
 	}
-	if (__reg64_bound_u32(reg->umin_value) && __reg64_bound_u32(reg->umax_value)) {
-		reg->u32_min_value = (u32)reg->umin_value;
-		reg->u32_max_value = (u32)reg->umax_value;
+	if ((__reg64_bound_u32(umin) && __reg64_bound_u32(umax)) ||
+		umin == umax) {
+		reg->u32_min_value = (u32)umin;
+		reg->u32_max_value = (u32)umax;
 	}
 	reg_bounds_sync(reg);
 }
@@ -12826,6 +12833,62 @@ static int is_pkt_ptr_branch_taken(struct bpf_reg_state *dst_reg,
 	return -1;
 }
 
+static void reg_inc_u32_min(struct bpf_reg_state *reg, u32 val)
+{
+	reg->u32_min_value = max(reg->u32_min_value, val);
+	if (reg->u32_min_value > reg->u32_max_value)
+		reg->u32_min_value = reg->u32_max_value;
+}
+
+static void reg_dec_u32_max(struct bpf_reg_state *reg, u32 val)
+{
+	reg->u32_max_value = min(reg->u32_max_value, val);
+	if (reg->u32_max_value < reg->u32_min_value)
+		reg->u32_max_value = reg->u32_min_value;
+}
+
+static void reg_inc_s32_min(struct bpf_reg_state *reg, s32 val)
+{
+	reg->s32_min_value = max(reg->s32_min_value, val);
+	if (reg->s32_min_value > reg->s32_max_value)
+		reg->s32_min_value = reg->s32_max_value;
+}
+
+static void reg_dec_s32_max(struct bpf_reg_state *reg, s32 val)
+{
+	reg->s32_max_value = min(reg->s32_max_value, val);
+	if (reg->s32_max_value < reg->s32_min_value)
+		reg->s32_max_value = reg->s32_min_value;
+}
+
+static void reg_inc_u64_min(struct bpf_reg_state *reg, u64 val)
+{
+	reg->umin_value = max(reg->umin_value, val);
+	if (reg->umin_value > reg->umax_value)
+		reg->umin_value = reg->umax_value;
+}
+
+static void reg_dec_u64_max(struct bpf_reg_state *reg, u64 val)
+{
+	reg->umax_value = min(reg->umax_value, val);
+	if (reg->umax_value < reg->umin_value)
+		reg->umax_value = reg->umin_value;
+}
+
+static void reg_inc_s64_min(struct bpf_reg_state *reg, s64 val)
+{
+	reg->smin_value = max(reg->smin_value, val);
+	if (reg->smin_value > reg->smax_value)
+		reg->smin_value = reg->smax_value;
+}
+
+static void reg_dec_s64_max(struct bpf_reg_state *reg, s64 val)
+{
+	reg->smax_value = min(reg->smax_value, val);
+	if (reg->smax_value < reg->smin_value)
+		reg->smax_value = reg->smin_value;
+}
+
 /* Adjusts the register min/max values in the case that the dst_reg is the
  * variable register that we are working on, and src_reg is a constant or we're
  * simply doing a BPF_K check.
@@ -12896,76 +12959,56 @@ static void reg_set_min_max(struct bpf_reg_state *true_reg,
 	case BPF_JGE:
 	case BPF_JGT:
 	{
+		bool neq = (opcode == BPF_JGT);
+
 		if (is_jmp32) {
-			u32 false_umax = opcode == BPF_JGT ? val32  : val32 - 1;
-			u32 true_umin = opcode == BPF_JGT ? val32 + 1 : val32;
-
-			false_reg->u32_max_value = min(false_reg->u32_max_value,
-						       false_umax);
-			true_reg->u32_min_value = max(true_reg->u32_min_value,
-						      true_umin);
+			reg_dec_u32_max(false_reg, neq ? val32 : val32 - 1);
+			reg_inc_u32_min(true_reg, neq ? val32 + 1 : val32);
 		} else {
-			u64 false_umax = opcode == BPF_JGT ? val    : val - 1;
-			u64 true_umin = opcode == BPF_JGT ? val + 1 : val;
-
-			false_reg->umax_value = min(false_reg->umax_value, false_umax);
-			true_reg->umin_value = max(true_reg->umin_value, true_umin);
+			reg_dec_u64_max(false_reg, neq ? val : val - 1);
+			reg_inc_u64_min(true_reg, neq ? val + 1 : val);
 		}
 		break;
 	}
 	case BPF_JSGE:
 	case BPF_JSGT:
 	{
+		bool neq = (opcode == BPF_JSGT);
+
 		if (is_jmp32) {
-			s32 false_smax = opcode == BPF_JSGT ? sval32    : sval32 - 1;
-			s32 true_smin = opcode == BPF_JSGT ? sval32 + 1 : sval32;
-
-			false_reg->s32_max_value = min(false_reg->s32_max_value, false_smax);
-			true_reg->s32_min_value = max(true_reg->s32_min_value, true_smin);
+			reg_dec_s32_max(false_reg, neq ? sval32 : sval32 - 1);
+			reg_inc_s32_min(true_reg, neq ? sval32 + 1 : sval32);
 		} else {
-			s64 false_smax = opcode == BPF_JSGT ? sval    : sval - 1;
-			s64 true_smin = opcode == BPF_JSGT ? sval + 1 : sval;
-
-			false_reg->smax_value = min(false_reg->smax_value, false_smax);
-			true_reg->smin_value = max(true_reg->smin_value, true_smin);
+			reg_dec_s64_max(false_reg, neq ? sval : sval - 1);
+			reg_inc_s64_min(true_reg, neq ? sval + 1 : sval);
 		}
 		break;
 	}
 	case BPF_JLE:
 	case BPF_JLT:
 	{
+		bool neq = (opcode == BPF_JLT);
+
 		if (is_jmp32) {
-			u32 false_umin = opcode == BPF_JLT ? val32  : val32 + 1;
-			u32 true_umax = opcode == BPF_JLT ? val32 - 1 : val32;
-
-			false_reg->u32_min_value = max(false_reg->u32_min_value,
-						       false_umin);
-			true_reg->u32_max_value = min(true_reg->u32_max_value,
-						      true_umax);
+			reg_inc_u32_min(false_reg, neq ? val32 : val32 + 1);
+			reg_dec_u32_max(true_reg, neq ? val32 - 1 : val32);
 		} else {
-			u64 false_umin = opcode == BPF_JLT ? val    : val + 1;
-			u64 true_umax = opcode == BPF_JLT ? val - 1 : val;
-
-			false_reg->umin_value = max(false_reg->umin_value, false_umin);
-			true_reg->umax_value = min(true_reg->umax_value, true_umax);
+			reg_inc_u64_min(false_reg, neq ? val : val + 1);
+			reg_dec_u64_max(true_reg, neq ? val - 1 : val);
 		}
 		break;
 	}
 	case BPF_JSLE:
 	case BPF_JSLT:
 	{
+		bool neq = (opcode == BPF_JSLT);
+
 		if (is_jmp32) {
-			s32 false_smin = opcode == BPF_JSLT ? sval32    : sval32 + 1;
-			s32 true_smax = opcode == BPF_JSLT ? sval32 - 1 : sval32;
-
-			false_reg->s32_min_value = max(false_reg->s32_min_value, false_smin);
-			true_reg->s32_max_value = min(true_reg->s32_max_value, true_smax);
+			reg_inc_s32_min(false_reg, neq ? sval32 : sval32 + 1);
+			reg_dec_s32_max(true_reg, neq ? sval32 - 1 : sval32);
 		} else {
-			s64 false_smin = opcode == BPF_JSLT ? sval    : sval + 1;
-			s64 true_smax = opcode == BPF_JSLT ? sval - 1 : sval;
-
-			false_reg->smin_value = max(false_reg->smin_value, false_smin);
-			true_reg->smax_value = min(true_reg->smax_value, true_smax);
+			reg_inc_s64_min(false_reg, neq ? sval : sval + 1);
+			reg_dec_s64_max(true_reg, neq ? sval - 1 : sval);
 		}
 		break;
 	}
