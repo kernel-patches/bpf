@@ -49,32 +49,33 @@ read_test_names() {
 }
 
 test_progs_helper() {
-  local selftest="test_progs${1}"
-  local args="$2"
+  local testname="$1"
+  local selftest="test_progs${2}"
+  local args="$3"
 
   foldable start ${selftest} "Testing ${selftest}"
   # "&& true" does not change the return code (it is not executed
   # if the Python script fails), but it prevents exiting on a
   # failure due to the "set -e".
-  ./${selftest} ${args} ${DENYLIST:+-d"$DENYLIST"} ${ALLOWLIST:+-a"$ALLOWLIST"} && true
+  ./${selftest} ${args} ${DENYLIST:+-d"$DENYLIST"} ${ALLOWLIST:+-a"$ALLOWLIST"} --json-summary /${testname}.json && true
   echo "${selftest}:$?" >>"${STATUS_FILE}"
   foldable end ${selftest}
 }
 
 test_progs() {
-  test_progs_helper "" ""
+  test_progs_helper "${FUNCNAME[0]}" "" ""
 }
 
 test_progs_parallel() {
-  test_progs_helper "" "-j"
+  test_progs_helper "${FUNCNAME[0]}" "" "-j"
 }
 
 test_progs_no_alu32() {
-  test_progs_helper "-no_alu32" ""
+  test_progs_helper "${FUNCNAME[0]}" "-no_alu32" ""
 }
 
 test_progs_no_alu32_parallel() {
-  test_progs_helper "-no_alu32" "-j"
+  test_progs_helper "${FUNCNAME[0]}" "-no_alu32" "-j"
 }
 
 test_maps() {
