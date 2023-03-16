@@ -5,7 +5,9 @@
 #include <linux/mm_types.h>
 #include <linux/slab.h>
 
-#define BUILD_ID_SIZE_MAX 20
+enum {
+	BUILD_ID_SIZE_MAX = 20
+};
 
 struct build_id {
 	u32 sz;
