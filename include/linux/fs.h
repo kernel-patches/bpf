@@ -977,6 +977,13 @@ struct file {
 	struct address_space	*f_mapping;
 	errseq_t		f_wb_err;
 	errseq_t		f_sb_err; /* for syncfs */
+#ifdef CONFIG_FILE_BUILD_ID
+	/*
+	 * Initialized when the file is mmaped (mmap_region),
+	 * guarded by f_mapping lock.
+	 */
+	struct build_id		*f_build_id;
+#endif
 } __randomize_layout
   __attribute__((aligned(4)));	/* lest something weird decides that 2 is OK */
 

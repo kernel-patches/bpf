@@ -2480,6 +2480,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	pgoff_t vm_pgoff;
 	int error;
 	VMA_ITERATOR(vmi, mm, addr);
+	struct build_id *bid = NULL;
 
 	/* Check against address space limit. */
 	if (!may_expand_vm(mm, vm_flags, len >> PAGE_SHIFT)) {
@@ -2575,6 +2576,10 @@ cannot_expand:
 		if (error)
 			goto unmap_and_free_vma;
 
+#ifdef CONFIG_FILE_BUILD_ID
+		if (vma->vm_flags & VM_EXEC && !file->f_build_id)
+			vma_read_build_id(vma, &bid);
+#endif
 		/*
 		 * Expansion is handled above, merging is handled below.
 		 * Drivers should not alter the address of the VMA.
@@ -2647,6 +2652,12 @@ cannot_expand:
 		if (vma->vm_flags & VM_SHARED)
 			mapping_allow_writable(vma->vm_file->f_mapping);
 
+#ifdef CONFIG_FILE_BUILD_ID
+		if (bid && !file->f_build_id) {
+			file->f_build_id = bid;
+			bid = NULL;
+		}
+#endif
 		flush_dcache_mmap_lock(vma->vm_file->f_mapping);
 		vma_interval_tree_insert(vma, &vma->vm_file->f_mapping->i_mmap);
 		flush_dcache_mmap_unlock(vma->vm_file->f_mapping);
@@ -2666,6 +2677,12 @@ unmap_writable:
 	file = vma->vm_file;
 expanded:
 	perf_event_mmap(vma);
+
+	/*
+	 * File can already have f_build_id assigned, so we need to release
+	 * the build id we just read and did not assign.
+	 */
+	build_id_free(bid);
 
 	vm_stat_account(mm, vm_flags, len >> PAGE_SHIFT);
 	if (vm_flags & VM_LOCKED) {
@@ -2711,6 +2728,7 @@ unmap_and_free_vma:
 		mapping_unmap_writable(file->f_mapping);
 free_vma:
 	vm_area_free(vma);
+	build_id_free(bid);
 unacct_error:
 	if (charged)
 		vm_unacct_memory(charged);
