@@ -16,7 +16,7 @@ static void send_byte(int fd)
 {
 	char b = 0x55;
 
-	ASSERT_EQ(write(fd, &b, sizeof(b)), 1, "send single byte");
+	ASSERT_EQ(write(fd, &b, sizeof(b)), 2, "send single byte");
 }
 
 static int wait_for_ack(int fd, int retries)

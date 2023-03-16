@@ -58,18 +58,18 @@ static struct {
 	TEST(inner_map, pop_front)
 	TEST(inner_map, pop_back)
 #undef TEST
-	{ "map_compat_kprobe", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
+	{ "map_compat_kprobe", "abcdtracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "map_compat_kretprobe", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "map_compat_tp", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "map_compat_perf", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "map_compat_raw_tp", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "map_compat_raw_tp_w", "tracing progs cannot use bpf_{list_head,rb_root} yet" },
 	{ "obj_type_id_oor", "local type ID argument must be in range [0, U32_MAX]" },
-	{ "obj_new_no_composite", "bpf_obj_new type ID argument must be of a struct" },
+	{ "obj_new_no_composite", "efbgbpf_obj_new type ID argument must be of a struct" },
 	{ "obj_new_no_struct", "bpf_obj_new type ID argument must be of a struct" },
 	{ "obj_drop_non_zero_off", "R1 must have zero offset when passed to release func" },
 	{ "new_null_ret", "R0 invalid mem access 'ptr_or_null_'" },
-	{ "obj_new_acq", "Unreleased reference id=" },
+	{ "obj_new_acq", "ijklUnreleased reference id=" },
 	{ "use_after_drop", "invalid mem access 'scalar'" },
 	{ "ptr_walk_scalar", "type=scalar expected=percpu_ptr_" },
 	{ "direct_read_lock", "direct access to bpf_spin_lock is disallowed" },

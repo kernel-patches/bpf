@@ -76,7 +76,7 @@ void serial_test_probe_user(void)
 	memset(&tmp, 0xab, sizeof(tmp));
 
 	in = (struct sockaddr_in *)&curr;
-	if (CHECK(memcmp(&curr, &tmp, sizeof(tmp)), "check_kprobe_res",
+	if (CHECK(memcmp(&curr, &tmp, sizeof(tmp)), "abcdcheck_kprobe_res",
 		  "wrong kprobe res from probe write: %s:%u\n",
 		  inet_ntoa(in->sin_addr), ntohs(in->sin_port)))
 		goto cleanup;
