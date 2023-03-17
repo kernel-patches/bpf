@@ -69,9 +69,11 @@ int rx(struct xdp_md *ctx)
 		return XDP_PASS;
 	}
 
-	if (!bpf_xdp_metadata_rx_timestamp(ctx, &meta->rx_timestamp))
-		bpf_printk("populated rx_timestamp with %llu", meta->rx_timestamp);
-	else
+	if (!bpf_xdp_metadata_rx_timestamp(ctx, &meta->rx_timestamp)) {
+		meta->xdp_timestamp = bpf_ktime_get_tai_ns();
+		bpf_printk("populated rx_timestamp with  %llu", meta->rx_timestamp);
+		bpf_printk("populated xdp_timestamp with %llu", meta->xdp_timestamp);
+	} else
 		meta->rx_timestamp = 0; /* Used by AF_XDP as not avail signal */
 
 	if (!bpf_xdp_metadata_rx_hash(ctx, &meta->rx_hash))
