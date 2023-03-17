@@ -379,6 +379,8 @@ static int get_syms(char ***symsp, size_t *cntp, bool kernel)
 		if (!strncmp(name, "__ftrace_invalid_address__",
 			     sizeof("__ftrace_invalid_address__") - 1))
 			continue;
+		if (!strncmp(name, "preempt_count_", strlen("preempt_count_")))
+			continue;
 
 		err = hashmap__add(map, name, 0);
 		if (err == -EEXIST)
