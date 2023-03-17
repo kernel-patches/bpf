@@ -11254,6 +11254,7 @@ KERNEL USERMODE DRIVER MANAGEMENT
 M:	Roberto Sassu <roberto.sassu@huawei.com>
 L:	linux-kernel@vger.kernel.org
 S:	Maintained
+F:	Documentation/driver-api/umd_mgmt.rst
 F:	include/linux/usermode_driver_mgmt.h
 F:	kernel/usermode_driver_mgmt.c
 F:	tools/testing/selftests/umd_mgmt/*

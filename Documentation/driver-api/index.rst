@@ -113,6 +113,7 @@ available subsections can be seen below.
    xillybus
    zorro
    hte/index
+   umd_mgmt
 
 .. only::  subproject and html
 
