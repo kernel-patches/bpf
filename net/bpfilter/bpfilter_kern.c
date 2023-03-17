@@ -25,40 +25,6 @@ static void shutdown_umh(void)
 	}
 }
 
-static void __stop_umh(void)
-{
-	if (IS_ENABLED(CONFIG_INET))
-		shutdown_umh();
-}
-
-static int bpfilter_send_req(struct mbox_request *req)
-{
-	struct mbox_reply reply;
-	loff_t pos = 0;
-	ssize_t n;
-
-	if (!bpfilter_ops.info.tgid)
-		return -EFAULT;
-	pos = 0;
-	n = kernel_write(bpfilter_ops.info.pipe_to_umh, req, sizeof(*req),
-			   &pos);
-	if (n != sizeof(*req)) {
-		pr_err("write fail %zd\n", n);
-		goto stop;
-	}
-	pos = 0;
-	n = kernel_read(bpfilter_ops.info.pipe_from_umh, &reply, sizeof(reply),
-			&pos);
-	if (n != sizeof(reply)) {
-		pr_err("read fail %zd\n", n);
-		goto stop;
-	}
-	return reply.status;
-stop:
-	__stop_umh();
-	return -EFAULT;
-}
-
 static int bpfilter_process_sockopt(struct sock *sk, int optname,
 				    sockptr_t optval, unsigned int optlen,
 				    bool is_set)
@@ -70,16 +36,27 @@ static int bpfilter_process_sockopt(struct sock *sk, int optname,
 		.addr		= (uintptr_t)optval.user,
 		.len		= optlen,
 	};
+	struct mbox_reply reply;
+	int err;
+
 	if (sockptr_is_kernel(optval)) {
 		pr_err("kernel access not supported\n");
 		return -EFAULT;
 	}
-	return bpfilter_send_req(&req);
+	err = umd_send_recv(&bpfilter_ops.info, &req, sizeof(req), &reply,
+			    sizeof(reply));
+	if (err) {
+		shutdown_umh();
+		return err;
+	}
+
+	return reply.status;
 }
 
 static int start_umh(void)
 {
 	struct mbox_request req = { .pid = current->pid };
+	struct mbox_reply reply;
 	int err;
 
 	/* fork usermode process */
@@ -89,7 +66,8 @@ static int start_umh(void)
 	pr_info("Loaded bpfilter_umh pid %d\n", pid_nr(bpfilter_ops.info.tgid));
 
 	/* health check that usermode process started correctly */
-	if (bpfilter_send_req(&req) != 0) {
+	if (umd_send_recv(&bpfilter_ops.info, &req, sizeof(req), &reply,
+			  sizeof(reply)) != 0 || reply.status != 0) {
 		shutdown_umh();
 		return -EFAULT;
 	}

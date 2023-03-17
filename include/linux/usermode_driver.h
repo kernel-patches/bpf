@@ -15,5 +15,7 @@ int umd_load_blob(struct umd_info *info, const void *data, size_t len);
 int umd_unload_blob(struct umd_info *info);
 int fork_usermode_driver(struct umd_info *info);
 void umd_cleanup_helper(struct umd_info *info);
+int umd_send_recv(struct umd_info *info, void *in, size_t in_len, void *out,
+		  size_t out_len);
 
 #endif /* __LINUX_USERMODE_DRIVER_H__ */

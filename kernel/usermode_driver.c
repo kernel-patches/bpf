@@ -188,4 +188,49 @@ out:
 }
 EXPORT_SYMBOL_GPL(fork_usermode_driver);
 
+/**
+ * umd_send_recv - send/receive a message through the pipe
+ * @info: user mode driver info
+ * @in: request message
+ * @in_len: size of @in
+ * @out: reply message
+ * @out_len: size of @out
+ *
+ * Send a message to the user space process through the created pipe and read
+ * the reply. Partial reads and writes are supported.
+ *
+ * Return: Zero on success, -EFAULT otherwise.
+ */
+int umd_send_recv(struct umd_info *info, void *in, size_t in_len, void *out,
+		  size_t out_len)
+{
+	loff_t pos, offset;
+	ssize_t n;
 
+	if (!info->tgid)
+		return -EFAULT;
+	pos = 0;
+	offset = 0;
+	while (in_len) {
+		n = kernel_write(info->pipe_to_umh, in + offset, in_len, &pos);
+		if (n <= 0) {
+			pr_err("write fail %zd\n", n);
+			return -EFAULT;
+		}
+		in_len -= n;
+		offset += n;
+	}
+	pos = 0;
+	offset = 0;
+	while (out_len) {
+		n = kernel_read(info->pipe_from_umh, out + offset, out_len, &pos);
+		if (n <= 0) {
+			pr_err("read fail %zd\n", n);
+			return -EFAULT;
+		}
+		out_len -= n;
+		offset += n;
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(umd_send_recv);
