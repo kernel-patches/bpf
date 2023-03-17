@@ -11256,6 +11256,7 @@ L:	linux-kernel@vger.kernel.org
 S:	Maintained
 F:	include/linux/usermode_driver_mgmt.h
 F:	kernel/usermode_driver_mgmt.c
+F:	tools/testing/selftests/umd_mgmt/*
 
 KERNEL VIRTUAL MACHINE (KVM)
 M:	Paolo Bonzini <pbonzini@redhat.com>
