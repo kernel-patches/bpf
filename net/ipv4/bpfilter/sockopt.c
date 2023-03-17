@@ -8,8 +8,9 @@
 #include <linux/kmod.h>
 #include <linux/fs.h>
 #include <linux/file.h>
+#include "../../bpfilter/msgfmt.h"
 
-struct bpfilter_umh_ops bpfilter_ops;
+struct umd_mgmt bpfilter_ops;
 EXPORT_SYMBOL_GPL(bpfilter_ops);
 
 void bpfilter_umh_cleanup(struct umd_info *info)
@@ -21,40 +22,49 @@ void bpfilter_umh_cleanup(struct umd_info *info)
 }
 EXPORT_SYMBOL_GPL(bpfilter_umh_cleanup);
 
-static int bpfilter_mbox_request(struct sock *sk, int optname, sockptr_t optval,
-				 unsigned int optlen, bool is_set)
+static int bpfilter_process_sockopt(struct sock *sk, int optname,
+				    sockptr_t optval, unsigned int optlen,
+				    bool is_set)
 {
+	struct mbox_request req = {
+		.is_set		= is_set,
+		.pid		= current->pid,
+		.cmd		= optname,
+		.addr		= (uintptr_t)optval.user,
+		.len		= optlen,
+	};
+	struct mbox_reply reply;
 	int err;
-	mutex_lock(&bpfilter_ops.lock);
-	if (!bpfilter_ops.sockopt) {
-		mutex_unlock(&bpfilter_ops.lock);
-		request_module("bpfilter");
-		mutex_lock(&bpfilter_ops.lock);
 
-		if (!bpfilter_ops.sockopt) {
-			err = -ENOPROTOOPT;
-			goto out;
-		}
+	if (sockptr_is_kernel(optval)) {
+		pr_err("kernel access not supported\n");
+		return -EFAULT;
 	}
-	if (bpfilter_ops.info.tgid &&
-	    thread_group_exited(bpfilter_ops.info.tgid))
-		bpfilter_umh_cleanup(&bpfilter_ops.info);
+	err = umd_mgmt_send_recv(&bpfilter_ops, &req, sizeof(req), &reply,
+				 sizeof(reply));
+	if (err)
+		return err;
 
-	if (!bpfilter_ops.info.tgid) {
-		err = bpfilter_ops.start();
-		if (err)
-			goto out;
-	}
-	err = bpfilter_ops.sockopt(sk, optname, optval, optlen, is_set);
-out:
-	mutex_unlock(&bpfilter_ops.lock);
-	return err;
+	return reply.status;
+}
+
+static int bpfilter_post_start_umh(struct umd_mgmt *mgmt)
+{
+	struct mbox_request req = { .pid = current->pid };
+	struct mbox_reply reply;
+
+	/* health check that usermode process started correctly */
+	if (umd_send_recv(&bpfilter_ops.info, &req, sizeof(req), &reply,
+			  sizeof(reply)) != 0 || reply.status != 0)
+		return -EFAULT;
+
+	return 0;
 }
 
 int bpfilter_ip_set_sockopt(struct sock *sk, int optname, sockptr_t optval,
 			    unsigned int optlen)
 {
-	return bpfilter_mbox_request(sk, optname, optval, optlen, true);
+	return bpfilter_process_sockopt(sk, optname, optval, optlen, true);
 }
 
 int bpfilter_ip_get_sockopt(struct sock *sk, int optname, char __user *optval,
@@ -65,8 +75,8 @@ int bpfilter_ip_get_sockopt(struct sock *sk, int optname, char __user *optval,
 	if (get_user(len, optlen))
 		return -EFAULT;
 
-	return bpfilter_mbox_request(sk, optname, USER_SOCKPTR(optval), len,
-				     false);
+	return bpfilter_process_sockopt(sk, optname, USER_SOCKPTR(optval), len,
+					false);
 }
 
 static int __init bpfilter_sockopt_init(void)
@@ -74,6 +84,9 @@ static int __init bpfilter_sockopt_init(void)
 	mutex_init(&bpfilter_ops.lock);
 	bpfilter_ops.info.tgid = NULL;
 	bpfilter_ops.info.driver_name = "bpfilter_umh";
+	bpfilter_ops.post_start = bpfilter_post_start_umh;
+	bpfilter_ops.kmod = "bpfilter";
+	bpfilter_ops.kmod_loaded = false;
 
 	return 0;
 }
