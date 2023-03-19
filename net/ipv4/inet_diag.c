@@ -197,6 +197,11 @@ int inet_diag_msg_attrs_fill(struct sock *sk, struct sk_buff *skb,
 		    &inet_sockopt))
 		goto errout;
 
+#ifdef CONFIG_BPF_SYSCALL
+	if (sock_map_diag_dump(sk, skb, INET_DIAG_BPF_MAP) < 0)
+		goto errout;
+#endif
+
 	return 0;
 errout:
 	return 1;

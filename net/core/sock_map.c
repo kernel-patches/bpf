@@ -1656,6 +1656,52 @@ void sock_map_close(struct sock *sk, long timeout)
 }
 EXPORT_SYMBOL_GPL(sock_map_close);
 
+int sock_map_diag_dump(struct sock *sk, struct sk_buff *skb, int attrtype)
+{
+	struct sk_psock_link *link;
+	struct nlattr *nla, *attr;
+	int nr_links = 0, ret = 0;
+	struct sk_psock *psock;
+	u32 *ids;
+
+	psock = sk_psock_get(sk);
+	if (likely(!psock))
+		return 0;
+
+	nla = nla_nest_start_noflag(skb, attrtype);
+	if (!nla) {
+		sk_psock_put(sk, psock);
+		return -EMSGSIZE;
+	}
+	spin_lock_bh(&psock->link_lock);
+	list_for_each_entry(link, &psock->link, list)
+		nr_links++;
+
+	attr = nla_reserve(skb, SK_DIAG_BPF_MAP_IDS,
+			   sizeof(link->map->id) * nr_links);
+	if (!attr) {
+		ret = -EMSGSIZE;
+		goto unlock;
+	}
+
+	ids = nla_data(attr);
+	list_for_each_entry(link, &psock->link, list) {
+		*ids = link->map->id;
+		ids++;
+	}
+unlock:
+	spin_unlock_bh(&psock->link_lock);
+	sk_psock_put(sk, psock);
+	if (ret) {
+		nla_nest_cancel(skb, nla);
+	} else {
+		ret = nr_links;
+		nla_nest_end(skb, nla);
+	}
+	return ret;
+}
+EXPORT_SYMBOL_GPL(sock_map_diag_dump);
+
 static int sock_map_iter_attach_target(struct bpf_prog *prog,
 				       union bpf_iter_link_info *linfo,
 				       struct bpf_iter_aux_info *aux)

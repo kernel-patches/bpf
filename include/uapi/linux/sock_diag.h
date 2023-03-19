@@ -62,4 +62,12 @@ enum {
 
 #define SK_DIAG_BPF_STORAGE_MAX        (__SK_DIAG_BPF_STORAGE_MAX - 1)
 
+enum {
+	SK_DIAG_BPF_MAP_NONE,
+	SK_DIAG_BPF_MAP_IDS,
+	__SK_DIAG_BPF_MAP_MAX,
+};
+
+#define SK_DIAG_BPF_MAP_MAX        (__SK_DIAG_BPF_MAP_MAX - 1)
+
 #endif /* _UAPI__SOCK_DIAG_H__ */

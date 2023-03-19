@@ -6,6 +6,7 @@
 #include <linux/skbuff.h>
 #include <linux/module.h>
 #include <linux/uidgid.h>
+#include <linux/bpf.h>
 #include <net/netlink.h>
 #include <net/af_unix.h>
 #include <net/tcp_states.h>
@@ -171,6 +172,11 @@ static int sk_diag_fill(struct sock *sk, struct sk_buff *skb, struct unix_diag_r
 	if ((req->udiag_show & UDIAG_SHOW_UID) &&
 	    sk_diag_dump_uid(sk, skb, user_ns))
 		goto out_nlmsg_trim;
+
+#ifdef CONFIG_BPF_SYSCALL
+	if (sock_map_diag_dump(sk, skb, UNIX_DIAG_BPF_MAP) < 0)
+		goto out_nlmsg_trim;
+#endif
 
 	nlmsg_end(skb, nlh);
 	return 0;
