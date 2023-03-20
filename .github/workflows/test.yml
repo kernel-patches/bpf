@@ -1,0 +1,355 @@
+name: bpf-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - bpf_base
+      - bpf-next_base
+
+concurrency:
+  group: ci-test-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  llvm-toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      llvm: ${{ steps.llvm-toolchain-impl.outputs.version }}
+    steps:
+      - id: llvm-version
+        uses: libbpf/ci/get-llvm-version@master
+      - id: llvm-toolchain-impl
+        shell: bash
+        run: echo "version=llvm-${{ steps.llvm-version.outputs.version }}" >> $GITHUB_OUTPUT
+  set-matrix:
+    needs: llvm-toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.set-matrix-impl.outputs.build_matrix }}
+      test-matrix: ${{ steps.set-matrix-impl.outputs.test_matrix }}
+    steps:
+      - id: set-matrix-impl
+        shell: python3 -I {0}
+        run: |
+          from json import dumps
+          from enum import Enum
+          import os
+
+          class Arch(Enum):
+            """
+            CPU architecture supported by CI.
+            """
+            aarch64 = "aarch64"
+            s390x = "s390x"
+            x86_64 = "x86_64"
+
+          def set_output(name, value):
+            """Write an output variable to the GitHub output file."""
+            with open(os.getenv("GITHUB_OUTPUT"), "a") as f:
+              f.write(f"{name}={value}\n")
+
+          def generate_test_config(test):
+            """Create the configuration for the provided test."""
+            experimental = test.endswith("_parallel")
+            config = {
+              "test": test,
+              "continue_on_error": experimental,
+              # While in experimental mode, parallel jobs may get stuck
+              # anywhere, including in user space where the kernel won't detect
+              # a problem and panic. We add a second layer of (smaller) timeouts
+              # here such that if we get stuck in a parallel run, we hit this
+              # timeout and fail without affecting the overall job success (as
+              # would be the case if we hit the job-wide timeout). For
+              # non-experimental jobs, 360 is the default which will be
+              # superseded by the overall workflow timeout (but we need to
+              # specify something).
+              "timeout_minutes": 30 if experimental else 360,
+            }
+            return config
+
+          matrix = [
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.x86_64.value, "toolchain": "gcc"},
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.x86_64.value, "toolchain": "${{ needs.llvm-toolchain.outputs.llvm }}"},
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.aarch64.value, "toolchain": "gcc"},
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.aarch64.value, "toolchain": "${{ needs.llvm-toolchain.outputs.llvm }}"},
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.s390x.value, "toolchain": "gcc", "parallel_tests": False},
+          ]
+          self_hosted_repos = [
+            "kernel-patches/bpf",
+            "kernel-patches/vmtest",
+          ]
+
+          # Only a few repository within "kernel-patches" use self-hosted runners.
+          if "${{ github.repository_owner }}" != "kernel-patches" or "${{ github.repository }}" not in self_hosted_repos:
+            # Outside of those repositories, we only run on x86_64 GH hosted runners (ubuntu-latest)
+            for idx in range(len(matrix) - 1, -1, -1):
+              if matrix[idx]["arch"] != Arch.x86_64.value:
+                del matrix[idx]
+              else:
+                matrix[idx]["runs_on"] = ["ubuntu-latest"]
+          else:
+            # Otherwise, run on (self-hosted, arch) runners
+            for idx in range(len(matrix) - 1, -1, -1):
+              matrix[idx]["runs_on"].extend(["self-hosted", matrix[idx]["arch"]])
+
+          build_matrix = {"include": matrix}
+          set_output("build_matrix", dumps(build_matrix))
+
+          def get_tests(config):
+            tests = [
+              "test_progs",
+              "test_progs_parallel",
+              "test_progs_no_alu32",
+              "test_progs_no_alu32_parallel",
+              "test_maps",
+              "test_verifier",
+            ]
+            if config.get("parallel_tests", True):
+              return tests
+            return [test for test in tests if not test.endswith("parallel") ]
+
+          test_matrix = {"include": [{**config, **generate_test_config(test)}
+                                      for config in matrix
+                                      for test in get_tests(config)
+                                    ]}
+          set_output("test_matrix", dumps(test_matrix))
+  build:
+    name: build for ${{ matrix.arch }} with ${{ matrix.toolchain }}
+    needs: set-matrix
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.build-matrix) }}
+    env:
+      KERNEL: ${{ matrix.kernel }}
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+    steps:
+      - uses: actions/checkout@v3
+        # We fetch an actual bit of history here to facilitate incremental
+        # builds (which may check out some earlier upstream change).
+        with:
+          fetch-depth: 50
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Download bpf-next tree
+        uses: libbpf/ci/get-linux-source@master
+        with:
+          dest: '.kernel'
+      - if: ${{ github.repository == 'kernel-patches/vmtest' }}
+        name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .kernel/.git
+          cp -rf .kernel/. .
+          rm -rf .kernel
+      - name: Get commit meta-data
+        id: get-commit-metadata
+        shell: bash
+        run: |
+          if [ ${{ github.event_name }} = 'push' ]; then
+            branch="${{ github.ref_name }}"
+            echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
+          else
+            branch="${{ github.base_ref }}"
+            echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
+          fi
+
+          upstream=$(echo "${branch}" | sed 's@_base$@@')
+          commit="$(
+            git rev-parse "origin/${upstream}" &> /dev/null \
+              || (
+                git fetch --quiet --prune --no-tags --depth=1 --no-recurse-submodules origin +refs/heads/${upstream}:refs/remotes/origin/${upstream} \
+                  && git rev-parse "origin/${upstream}"
+              )
+          )"
+
+          echo "timestamp=$(TZ=utc git show --format='%cd' --no-patch --date=iso-strict-local ${commit})" >> "${GITHUB_OUTPUT}"
+          echo "commit=${commit}" >> "${GITHUB_OUTPUT}"
+          echo "Most recent upstream commit is ${commit}"
+      - name: Pull recent KBUILD_OUTPUT contents
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.KBUILD_OUTPUT }}
+          key: kbuild-output-${{ matrix.arch }}-${{ matrix.toolchain }}-${{ steps.get-commit-metadata.outputs.branch }}-${{ steps.get-commit-metadata.outputs.timestamp }}-${{ steps.get-commit-metadata.outputs.commit }}
+          restore-keys: |
+            kbuild-output-${{ matrix.arch }}-${{ matrix.toolchain }}-${{ steps.get-commit-metadata.outputs.branch }}-${{ steps.get-commit-metadata.outputs.timestamp }}-
+            kbuild-output-${{ matrix.arch }}-${{ matrix.toolchain }}-${{ steps.get-commit-metadata.outputs.branch }}-
+            kbuild-output-${{ matrix.arch }}-${{ matrix.toolchain }}-
+      - name: Prepare incremental build
+        shell: bash
+        run: |
+          set -e -u
+
+          # $1 - the SHA-1 to fetch and check out
+          fetch_and_checkout() {
+            local build_base_sha="${1}"
+
+            # If cached artifacts became stale for one reason or another, we
+            # may not have the build base SHA available. Fetch it and retry.
+            git fetch origin "${build_base_sha}" && git checkout --quiet "${build_base_sha}"
+          }
+
+          # $1 - value of KBUILD_OUTPUT
+          clear_cache_artifacts() {
+            local kbuild_output="${1}"
+            echo "Unable to find earlier upstream ref. Discarding KBUILD_OUTPUT contents..."
+            rm --recursive --force "${kbuild_output}"
+            mkdir "${kbuild_output}"
+            false
+          }
+
+          # $1 - value of KBUILD_OUTPUT
+          # $2 - current time in ISO 8601 format
+          restore_source_code_times() {
+            local kbuild_output="${1}"
+            local current_time="${2}"
+            local src_time="$(date --iso-8601=ns --date="${current_time} - 2 minutes")"
+            local obj_time="$(date --iso-8601=ns --date="${current_time} - 1 minute")"
+
+            git ls-files | xargs --max-args=10000 touch -m --no-create --date="${src_time}"
+            find "${kbuild_output}" -type f | xargs --max-args=10000 touch -m --no-create --date="${obj_time}"
+            git checkout --quiet -
+            echo "Adjusted src and obj time stamps relative to system time"
+          }
+
+          mkdir --parents "${KBUILD_OUTPUT}"
+          current_time="$(date --iso-8601=ns)"
+
+          if [ -f "${KBUILD_OUTPUT}/.build-base-sha" ]; then
+            build_base_sha="$(cat "${KBUILD_OUTPUT}/.build-base-sha")"
+            echo "Setting up base build state for ${build_base_sha}"
+
+            (
+              git checkout --quiet "${build_base_sha}" \
+                || fetch_and_checkout "${build_base_sha}" \
+                || clear_cache_artifacts "${KBUILD_OUTPUT}"
+            ) && restore_source_code_times "${KBUILD_OUTPUT}" "${current_time}"
+          else
+            echo "No previous build data found"
+          fi
+
+          echo -n "${{ steps.get-commit-metadata.outputs.commit }}" > "${KBUILD_OUTPUT}/.build-base-sha"
+      - uses: libbpf/ci/patch-kernel@master
+        with:
+          patches-root: '${{ github.workspace }}/ci/diffs'
+          repo-root: '${{ github.workspace }}'
+      - name: Setup build environment
+        uses: libbpf/ci/setup-build-env@master
+      - name: Build kernel image
+        uses: libbpf/ci/build-linux@master
+        with:
+          arch: ${{ matrix.arch }}
+          toolchain: ${{ matrix.toolchain }}
+          kbuild-output: ${{ env.KBUILD_OUTPUT }}
+          max-make-jobs: 32
+      - if: ${{ github.event_name != 'push' }}
+        name: Build selftests
+        uses: libbpf/ci/build-selftests@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          kbuild-output: ${{ env.KBUILD_OUTPUT }}
+          max-make-jobs: 32
+      - if: ${{ github.event_name != 'push' }}
+        name: Build samples
+        uses: libbpf/ci/build-samples@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          kbuild-output: ${{ env.KBUILD_OUTPUT }}
+          max-make-jobs: 32
+      - if: ${{ github.event_name != 'push' }}
+        name: Tar artifacts
+        run: |
+          # Remove intermediate object files that we have no use for. Ideally
+          # we'd just exclude them from tar below, but it does not provide
+          # options to express the precise constraints.
+          find selftests/ -name "*.o" -a ! -name "*.bpf.o" -print0 | \
+            xargs --null --max-args=10000 rm
+
+          # Strip debug information, which is excessively large (consuming
+          # bandwidth) while not actually being used (the kernel does not use
+          # DWARF to symbolize stacktraces).
+          strip --strip-debug "${KBUILD_OUTPUT}"/vmlinux
+
+          file_list=""
+          if [ "${{ github.repository }}" == "kernel-patches/vmtest" ]; then
+            # Package up a bunch of additional infrastructure to support running
+            # 'make kernelrelease' and bpf tool checks later on.
+            file_list="$(find . -iname Makefile | xargs) \
+              scripts/ \
+              tools/testing/selftests/bpf/ \
+              tools/include/ \
+              tools/bpf/bpftool/";
+          fi
+          # zstd is installed by default in the runner images.
+          tar -cf - \
+            "${KBUILD_OUTPUT}"/.config \
+            "${KBUILD_OUTPUT}"/$(KBUILD_OUTPUT="${KBUILD_OUTPUT}" make -s image_name) \
+            "${KBUILD_OUTPUT}"/include/config/auto.conf \
+            "${KBUILD_OUTPUT}"/include/generated/autoconf.h \
+            "${KBUILD_OUTPUT}"/vmlinux \
+            ${file_list} \
+            --exclude '*.cmd' \
+            --exclude '*.d' \
+            --exclude '*.h' \
+            --exclude '*.output' \
+            selftests/bpf/ | zstd -T0 -19 -o vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst
+      - if: ${{ github.event_name != 'push' }}
+        name: Remove KBUILD_OUTPUT contents
+        shell: bash
+        run: |
+          # Remove $KBUILD_OUTPUT to prevent cache creation for pull requests.
+          # Only on pushed changes are build artifacts actually cached, because
+          # of github.com/actions/cache's cache isolation logic.
+          rm -rf "${KBUILD_OUTPUT}"
+      - if: ${{ github.event_name != 'push' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}
+          if-no-files-found: error
+          path: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst
+  test:
+    if: ${{ github.event_name != 'push' }}
+    name: ${{ matrix.test }} on ${{ matrix.arch }} with ${{ matrix.toolchain }}
+    needs: [set-matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.test-matrix) }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 100
+    env:
+      KERNEL: ${{ matrix.kernel }}
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}
+          path: .
+      - name: Untar artifacts
+        # zstd is installed by default in the runner images.
+        run: zstd -d -T0  vmlinux-${{ matrix.arch }}-${{ matrix.toolchain }}.tar.zst --stdout | tar -xf -
+      - name: Prepare rootfs
+        uses: libbpf/ci/prepare-rootfs@master
+        with:
+          project-name: 'libbpf'
+          arch: ${{ matrix.arch }}
+          kernel: ${{ matrix.kernel }}
+          kernel-root: '.'
+          kbuild-output: ${{ env.KBUILD_OUTPUT }}
+          image-output: '/tmp/root.img'
+          test: ${{ matrix.test }}
+      - name: Run selftests
+        uses: libbpf/ci/run-qemu@master
+        continue-on-error: ${{ matrix.continue_on_error }}
+        timeout-minutes: ${{ matrix.timeout_minutes }}
+        with:
+          arch: ${{ matrix.arch}}
+          img: '/tmp/root.img'
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+          max-cpu: 8
