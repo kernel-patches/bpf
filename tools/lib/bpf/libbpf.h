@@ -99,6 +99,9 @@ typedef int (*libbpf_print_fn_t)(enum libbpf_print_level level,
 /**
  * @brief **libbpf_set_print()** sets user-provided log callback function to
  * be used for libbpf warnings and informational messages.
+ *
+ * This function is thread safe.
+ *
  * @param fn The log print function. If NULL, libbpf won't print anything.
  * @return Pointer to old print function.
  *
