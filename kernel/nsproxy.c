@@ -19,6 +19,7 @@
 #include <net/net_namespace.h>
 #include <linux/ipc_namespace.h>
 #include <linux/time_namespace.h>
+#include <linux/bpf_namespace.h>
 #include <linux/fs_struct.h>
 #include <linux/proc_fs.h>
 #include <linux/proc_ns.h>
@@ -26,6 +27,7 @@
 #include <linux/syscalls.h>
 #include <linux/cgroup.h>
 #include <linux/perf_event.h>
+#include <linux/bpf_namespace.h>
 
 static struct kmem_cache *nsproxy_cachep;
 
@@ -46,6 +48,9 @@ struct nsproxy init_nsproxy = {
 #ifdef CONFIG_TIME_NS
 	.time_ns		= &init_time_ns,
 	.time_ns_for_children	= &init_time_ns,
+#endif
+#ifdef CONFIG_BPF
+	.bpf_ns		= &init_bpf_ns,
 #endif
 };
 
@@ -121,8 +126,16 @@ static struct nsproxy *create_new_namespaces(unsigned long flags,
 	}
 	new_nsp->time_ns = get_time_ns(tsk->nsproxy->time_ns);
 
+	new_nsp->bpf_ns = copy_bpfns(flags, user_ns, tsk->nsproxy->bpf_ns);
+	if (IS_ERR(new_nsp->bpf_ns)) {
+		err = PTR_ERR(new_nsp->bpf_ns);
+		goto out_bpf;
+	}
 	return new_nsp;
 
+out_bpf:
+	put_time_ns(new_nsp->time_ns);
+	put_time_ns(new_nsp->time_ns_for_children);
 out_time:
 	put_net(new_nsp->net_ns);
 out_net:
@@ -156,7 +169,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 
 	if (likely(!(flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
 			      CLONE_NEWPID | CLONE_NEWNET |
-			      CLONE_NEWCGROUP | CLONE_NEWTIME)))) {
+			      CLONE_NEWCGROUP | CLONE_NEWTIME | CLONE_NEWBPF)))) {
 		if ((flags & CLONE_VM) ||
 		    likely(old_ns->time_ns_for_children == old_ns->time_ns)) {
 			get_nsproxy(old_ns);
@@ -203,6 +216,8 @@ void free_nsproxy(struct nsproxy *ns)
 		put_time_ns(ns->time_ns_for_children);
 	put_cgroup_ns(ns->cgroup_ns);
 	put_net(ns->net_ns);
+	if (ns->bpf_ns)
+		put_bpfns(ns->bpf_ns);
 	kmem_cache_free(nsproxy_cachep, ns);
 }
 
@@ -218,7 +233,7 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 
 	if (!(unshare_flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
 			       CLONE_NEWNET | CLONE_NEWPID | CLONE_NEWCGROUP |
-			       CLONE_NEWTIME)))
+			       CLONE_NEWTIME | CLONE_NEWBPF)))
 		return 0;
 
 	user_ns = new_cred ? new_cred->user_ns : current_user_ns();

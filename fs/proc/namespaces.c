@@ -9,6 +9,7 @@
 #include <linux/ipc_namespace.h>
 #include <linux/pid_namespace.h>
 #include <linux/user_namespace.h>
+#include <linux/bpf_namespace.h>
 #include "internal.h"
 
 
@@ -36,6 +37,9 @@ static const struct proc_ns_operations *ns_entries[] = {
 #ifdef CONFIG_TIME_NS
 	&timens_operations,
 	&timens_for_children_operations,
+#endif
+#ifdef CONFIG_BPF
+	&bpfns_operations,
 #endif
 };
 

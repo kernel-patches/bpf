@@ -87,6 +87,7 @@ static struct ctl_table user_table[] = {
 	UCOUNT_ENTRY("max_fanotify_groups"),
 	UCOUNT_ENTRY("max_fanotify_marks"),
 #endif
+	UCOUNT_ENTRY("max_bpf_namespaces"),
 	{ }
 };
 #endif /* CONFIG_SYSCTL */
