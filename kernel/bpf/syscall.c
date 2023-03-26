@@ -387,9 +387,6 @@ static int bpf_map_alloc_id(struct bpf_map *map)
 	spin_unlock_bh(&map_idr_lock);
 	idr_preload_end();
 
-	if (WARN_ON_ONCE(!id))
-		return -ENOSPC;
-
 	return id > 0 ? 0 : id;
 }
 
@@ -2031,10 +2028,6 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 		prog->aux->id = id;
 	spin_unlock_bh(&prog_idr_lock);
 	idr_preload_end();
-
-	/* id is in [1, INT_MAX) */
-	if (WARN_ON_ONCE(!id))
-		return -ENOSPC;
 
 	return id > 0 ? 0 : id;
 }
