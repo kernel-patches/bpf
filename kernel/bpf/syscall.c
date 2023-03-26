@@ -1269,7 +1269,7 @@ struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 	return map;
 }
 
-/* map_idr_lock should have been held or the map should have been
+/* map idr_lock should have been held or the map should have been
  * protected by rcu read lock.
  */
 struct bpf_map *__bpf_map_inc_not_zero(struct bpf_map *map, bool uref)
@@ -1287,9 +1287,9 @@ struct bpf_map *__bpf_map_inc_not_zero(struct bpf_map *map, bool uref)
 
 struct bpf_map *bpf_map_inc_not_zero(struct bpf_map *map)
 {
-	spin_lock_bh(&map_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 	map = __bpf_map_inc_not_zero(map, false);
-	spin_unlock_bh(&map_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 
 	return map;
 }
@@ -2195,7 +2195,7 @@ void bpf_prog_inc(struct bpf_prog *prog)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_inc);
 
-/* prog_idr_lock should have been held */
+/* prog idr_lock should have been held */
 struct bpf_prog *bpf_prog_inc_not_zero(struct bpf_prog *prog)
 {
 	int refold;
@@ -2836,10 +2836,10 @@ int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer)
 int bpf_link_settle(struct bpf_link_primer *primer)
 {
 	/* make bpf_link fetchable by ID */
-	spin_lock_bh(&link_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 	primer->link->id = primer->id;
 	primer->link->obj_id = primer->obj_id;
-	spin_unlock_bh(&link_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 	/* make bpf_link fetchable by FD */
 	fd_install(primer->fd, primer->file);
 	/* pass through installed FD */
@@ -3648,7 +3648,7 @@ struct bpf_map *bpf_map_get_curr_or_next(u32 *id)
 	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_map *map;
 
-	spin_lock_bh(&map_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 again:
 	map = idr_get_next(&ns->idr[MAP_OBJ_ID], id);
 	if (map) {
@@ -3658,7 +3658,7 @@ again:
 			goto again;
 		}
 	}
-	spin_unlock_bh(&map_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 
 	return map;
 }
@@ -3668,7 +3668,7 @@ struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id)
 	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_prog *prog;
 
-	spin_lock_bh(&prog_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[PROG_OBJ_ID]);
 again:
 	prog = idr_get_next(&ns->idr[PROG_OBJ_ID], id);
 	if (prog) {
@@ -3678,7 +3678,7 @@ again:
 			goto again;
 		}
 	}
-	spin_unlock_bh(&prog_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[PROG_OBJ_ID]);
 
 	return prog;
 }
@@ -3693,13 +3693,13 @@ struct bpf_prog *bpf_prog_by_id(u32 id)
 	if (!id)
 		return ERR_PTR(-ENOENT);
 
-	spin_lock_bh(&prog_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[PROG_OBJ_ID]);
 	prog = idr_find(&ns->idr[PROG_OBJ_ID], id);
 	if (prog)
 		prog = bpf_prog_inc_not_zero(prog);
 	else
 		prog = ERR_PTR(-ENOENT);
-	spin_unlock_bh(&prog_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[PROG_OBJ_ID]);
 	return prog;
 }
 
@@ -3747,13 +3747,13 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	if (f_flags < 0)
 		return f_flags;
 
-	spin_lock_bh(&map_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 	map = idr_find(&ns->idr[MAP_OBJ_ID], id);
 	if (map)
 		map = __bpf_map_inc_not_zero(map, true);
 	else
 		map = ERR_PTR(-ENOENT);
-	spin_unlock_bh(&map_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[MAP_OBJ_ID]);
 
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -4735,7 +4735,7 @@ struct bpf_link *bpf_link_by_id(u32 id)
 	if (!id)
 		return ERR_PTR(-ENOENT);
 
-	spin_lock_bh(&link_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 	/* before link is "settled", ID is 0, pretend it doesn't exist yet */
 	link = idr_find(&ns->idr[LINK_OBJ_ID], id);
 	if (link) {
@@ -4746,7 +4746,7 @@ struct bpf_link *bpf_link_by_id(u32 id)
 	} else {
 		link = ERR_PTR(-ENOENT);
 	}
-	spin_unlock_bh(&link_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 	return link;
 }
 
@@ -4755,7 +4755,7 @@ struct bpf_link *bpf_link_get_curr_or_next(u32 *id)
 	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_link *link;
 
-	spin_lock_bh(&link_idr_lock);
+	spin_lock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 again:
 	link = idr_get_next(&ns->idr[LINK_OBJ_ID], id);
 	if (link) {
@@ -4765,7 +4765,7 @@ again:
 			goto again;
 		}
 	}
-	spin_unlock_bh(&link_idr_lock);
+	spin_unlock_bh(&bpf_idr_lock[LINK_OBJ_ID]);
 
 	return link;
 }
@@ -5011,11 +5011,11 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_PROG_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &ns->idr[PROG_OBJ_ID], &prog_idr_lock);
+					  &ns->idr[PROG_OBJ_ID], &bpf_idr_lock[PROG_OBJ_ID]);
 		break;
 	case BPF_MAP_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &ns->idr[MAP_OBJ_ID], &map_idr_lock);
+					  &ns->idr[MAP_OBJ_ID], &bpf_idr_lock[MAP_OBJ_ID]);
 		break;
 	case BPF_BTF_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
@@ -5069,7 +5069,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_LINK_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &ns->idr[LINK_OBJ_ID], &link_idr_lock);
+					  &ns->idr[LINK_OBJ_ID], &bpf_idr_lock[LINK_OBJ_ID]);
 		break;
 	case BPF_ENABLE_STATS:
 		err = bpf_enable_stats(&attr);

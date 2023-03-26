@@ -39,9 +39,7 @@ struct bpf_namespace {
 
 extern struct bpf_namespace init_bpf_ns;
 extern struct proc_ns_operations bpfns_operations;
-extern spinlock_t map_idr_lock;
-extern spinlock_t prog_idr_lock;
-extern spinlock_t link_idr_lock;
+extern spinlock_t bpf_idr_lock[OBJ_ID_NUM];
 
 struct bpf_namespace *copy_bpfns(unsigned long flags,
 								struct user_namespace *user_ns,
