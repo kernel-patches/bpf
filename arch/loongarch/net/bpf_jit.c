@@ -1046,6 +1046,11 @@ static int build_body(struct jit_ctx *ctx, bool extra_pass)
 		if (ctx->image == NULL)
 			ctx->offset[i] = ctx->idx;
 
+		/* skip the code that has no couterpart to the host arch */
+		if(insn->code == (BPF_ST | BPF_NOSPEC)) {
+			continue;
+		}
+
 		ret = build_insn(insn, ctx, extra_pass);
 		if (ret > 0) {
 			i++;
