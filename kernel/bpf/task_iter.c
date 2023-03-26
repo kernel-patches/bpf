@@ -8,6 +8,7 @@
 #include <linux/fdtable.h>
 #include <linux/filter.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf_namespace.h>
 #include "mmap_unlock_work.h"
 
 static const char * const iter_task_type_names[] = {
@@ -821,6 +822,17 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 	.arg3_type	= ARG_PTR_TO_FUNC,
 	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg5_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_find_obj_id, void *, obj_id)
+{
+	return bpf_obj_id_vnr(obj_id);
+}
+
+const struct bpf_func_proto bpf_find_obj_id_proto = {
+	.func		= bpf_find_obj_id,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
 };
 
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
