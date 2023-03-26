@@ -25,6 +25,7 @@
 #include <linux/rhashtable.h>
 #include <linux/rtnetlink.h>
 #include <linux/rwsem.h>
+#include <linux/bpf_namespace.h>
 
 /* Protects offdevs, members of bpf_offload_netdev and offload members
  * of all progs.
@@ -145,7 +146,7 @@ static void __bpf_map_offload_destroy(struct bpf_offloaded_map *offmap)
 	 * refcnt to drop to be freed.
 	 */
 	if (map->id) {
-		bpf_map_free_id(map);
+		bpf_free_obj_id(map->obj_id, MAP_OBJ_ID);
 		map->id = 0;
 	}
 	list_del_init(&offmap->offloads);

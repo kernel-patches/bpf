@@ -24,11 +24,14 @@ const volatile enum bpf_obj_type obj_type = BPF_OBJ_UNKNOWN;
 
 static __always_inline __u32 get_obj_id(void *ent, enum bpf_obj_type type)
 {
+	void *obj_id;
+
 	switch (type) {
 	case BPF_OBJ_PROG:
 		return BPF_CORE_READ((struct bpf_prog *)ent, aux, id);
 	case BPF_OBJ_MAP:
-		return BPF_CORE_READ((struct bpf_map *)ent, id);
+		obj_id = BPF_CORE_READ((struct bpf_map *)ent, obj_id);
+		break;
 	case BPF_OBJ_BTF:
 		return BPF_CORE_READ((struct btf *)ent, id);
 	case BPF_OBJ_LINK:
@@ -36,6 +39,8 @@ static __always_inline __u32 get_obj_id(void *ent, enum bpf_obj_type type)
 	default:
 		return 0;
 	}
+
+	return bpf_find_obj_id(obj_id);
 }
 
 /* could be used only with BPF_LINK_TYPE_PERF_EVENT links */

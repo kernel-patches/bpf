@@ -35,6 +35,7 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
+#include <linux/bpf_namespace.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -49,8 +50,6 @@
 DEFINE_PER_CPU(int, bpf_prog_active);
 static DEFINE_IDR(prog_idr);
 DEFINE_SPINLOCK(prog_idr_lock);
-static DEFINE_IDR(map_idr);
-DEFINE_SPINLOCK(map_idr_lock);
 static DEFINE_IDR(link_idr);
 DEFINE_SPINLOCK(link_idr_lock);
 
@@ -373,30 +372,6 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->map_flags = bpf_map_flags_retain_permanent(attr->map_flags);
 	map->numa_node = bpf_map_attr_numa_node(attr);
 	map->map_extra = attr->map_extra;
-}
-
-static int bpf_map_alloc_id(struct bpf_map *map)
-{
-	int id;
-
-	idr_preload(GFP_KERNEL);
-	spin_lock_bh(&map_idr_lock);
-	id = idr_alloc_cyclic(&map_idr, map, 1, INT_MAX, GFP_ATOMIC);
-	spin_unlock_bh(&map_idr_lock);
-	idr_preload_end();
-
-	return id;
-}
-
-void bpf_map_free_id(struct bpf_map *map)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&map_idr_lock, flags);
-
-	idr_remove(&map_idr, map->id);
-
-	spin_unlock_irqrestore(&map_idr_lock, flags);
 }
 
 #ifdef CONFIG_MEMCG_KMEM
@@ -737,9 +712,9 @@ static void bpf_map_put_uref(struct bpf_map *map)
 void bpf_map_put(struct bpf_map *map)
 {
 	if (atomic64_dec_and_test(&map->refcnt)) {
-		/* bpf_map_free_id() must be called first. */
+		/* bpf_free_obj_id() must be called first. */
 		if (map->id) {
-			bpf_map_free_id(map);
+			bpf_free_obj_id(map->obj_id, MAP_OBJ_ID);
 			map->id = 0;
 		}
 		btf_put(map->btf);
@@ -817,7 +792,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   map->map_flags,
 		   (unsigned long long)map->map_extra,
 		   bpf_map_memory_usage(map),
-		   map->id,
+		   bpf_obj_id_vnr(map->obj_id),
 		   READ_ONCE(map->frozen));
 	if (type) {
 		seq_printf(m, "owner_prog_type:\t%u\n", type);
@@ -1115,6 +1090,7 @@ static int map_create(union bpf_attr *attr)
 {
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct btf_field_offs *foffs;
+	struct bpf_obj_id *obj_id;
 	struct bpf_map *map;
 	int f_flags;
 	int err;
@@ -1206,10 +1182,11 @@ static int map_create(union bpf_attr *attr)
 	if (err)
 		goto free_map_field_offs;
 
-	err = bpf_map_alloc_id(map);
-	if (err < 0)
+	obj_id = bpf_alloc_obj_id(current->nsproxy->bpf_ns, map, MAP_OBJ_ID);
+	if (IS_ERR(obj_id))
 		goto free_map_sec;
-	map->id = err;
+	map->obj_id = obj_id;
+	map->id = bpf_obj_id_nr(obj_id);
 
 	bpf_map_save_memcg(map);
 
@@ -1217,7 +1194,7 @@ static int map_create(union bpf_attr *attr)
 	if (err < 0) {
 		/* failed to allocate fd.
 		 * bpf_map_put_with_uref() is needed because the above
-		 * bpf_map_alloc_id() has published the map
+		 * bpf_alloc_obj_id() has published the map
 		 * to the userspace and the userspace may
 		 * have refcnt-ed it through BPF_MAP_GET_FD_BY_ID.
 		 */
@@ -3709,11 +3686,12 @@ static int bpf_obj_get_next_id(const union bpf_attr *attr,
 
 struct bpf_map *bpf_map_get_curr_or_next(u32 *id)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_map *map;
 
 	spin_lock_bh(&map_idr_lock);
 again:
-	map = idr_get_next(&map_idr, id);
+	map = idr_get_next(&ns->idr[MAP_OBJ_ID], id);
 	if (map) {
 		map = __bpf_map_inc_not_zero(map, false);
 		if (IS_ERR(map)) {
@@ -3791,6 +3769,7 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 
 static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_map *map;
 	u32 id = attr->map_id;
 	int f_flags;
@@ -3808,7 +3787,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 		return f_flags;
 
 	spin_lock_bh(&map_idr_lock);
-	map = idr_find(&map_idr, id);
+	map = idr_find(&ns->idr[MAP_OBJ_ID], id);
 	if (map)
 		map = __bpf_map_inc_not_zero(map, true);
 	else
@@ -3896,7 +3875,7 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 		map = bpf_map_from_imm(prog, imm, &off, &type);
 		if (map) {
 			insns[i].src_reg = type;
-			insns[i].imm = map->id;
+			insns[i].imm = bpf_obj_id_vnr(map->obj_id);
 			insns[i + 1].imm = off;
 			continue;
 		}
@@ -3978,7 +3957,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		u32 i;
 
 		for (i = 0; i < ulen; i++)
-			if (put_user(prog->aux->used_maps[i]->id,
+			if (put_user(bpf_obj_id_vnr(prog->aux->used_maps[i]->obj_id),
 				     &user_map_ids[i])) {
 				mutex_unlock(&prog->aux->used_maps_mutex);
 				return -EFAULT;
@@ -4242,7 +4221,7 @@ static int bpf_map_get_info_by_fd(struct file *file,
 
 	memset(&info, 0, sizeof(info));
 	info.type = map->map_type;
-	info.id = map->id;
+	info.id = bpf_obj_id_vnr(map->obj_id);
 	info.key_size = map->key_size;
 	info.value_size = map->value_size;
 	info.max_entries = map->max_entries;
@@ -4994,6 +4973,7 @@ out_prog_put:
 
 static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	union bpf_attr attr;
 	bool capable;
 	int err;
@@ -5072,7 +5052,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_MAP_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &map_idr, &map_idr_lock);
+					  &ns->idr[MAP_OBJ_ID], &map_idr_lock);
 		break;
 	case BPF_BTF_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
