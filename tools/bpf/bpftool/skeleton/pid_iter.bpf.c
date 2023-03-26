@@ -36,7 +36,8 @@ static __always_inline __u32 get_obj_id(void *ent, enum bpf_obj_type type)
 	case BPF_OBJ_BTF:
 		return BPF_CORE_READ((struct btf *)ent, id);
 	case BPF_OBJ_LINK:
-		return BPF_CORE_READ((struct bpf_link *)ent, id);
+		obj_id = BPF_CORE_READ((struct bpf_link *)ent, obj_id);
+		break;
 	default:
 		return 0;
 	}

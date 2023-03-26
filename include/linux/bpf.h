@@ -1468,6 +1468,7 @@ struct bpf_link {
 	const struct bpf_link_ops *ops;
 	struct bpf_prog *prog;
 	struct work_struct work;
+	struct bpf_obj_id *obj_id;
 };
 
 struct bpf_link_ops {
@@ -1506,6 +1507,7 @@ struct bpf_link_primer {
 	struct file *file;
 	int fd;
 	u32 id;
+	struct bpf_obj_id *obj_id;
 };
 
 struct bpf_struct_ops_value;

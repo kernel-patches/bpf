@@ -48,8 +48,6 @@
 #define BPF_OBJ_FLAG_MASK   (BPF_F_RDONLY | BPF_F_WRONLY)
 
 DEFINE_PER_CPU(int, bpf_prog_active);
-static DEFINE_IDR(link_idr);
-DEFINE_SPINLOCK(link_idr_lock);
 
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
@@ -2670,15 +2668,9 @@ void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
 	atomic64_set(&link->refcnt, 1);
 	link->type = type;
 	link->id = 0;
+	link->obj_id = NULL;
 	link->ops = ops;
 	link->prog = prog;
-}
-
-static void bpf_link_free_id(int id)
-{
-	spin_lock_bh(&link_idr_lock);
-	idr_remove(&link_idr, id);
-	spin_unlock_bh(&link_idr_lock);
 }
 
 /* Clean up bpf_link and corresponding anon_inode file and FD. After
@@ -2692,7 +2684,7 @@ void bpf_link_cleanup(struct bpf_link_primer *primer)
 {
 	primer->link->prog = NULL;
 	if (primer->id) {
-		bpf_link_free_id(primer->id);
+		bpf_free_obj_id(primer->obj_id, LINK_OBJ_ID);
 		primer->id = 0;
 	}
 	fput(primer->file);
@@ -2708,7 +2700,7 @@ void bpf_link_inc(struct bpf_link *link)
 static void bpf_link_free(struct bpf_link *link)
 {
 	if (link->id) {
-		bpf_link_free_id(link->id);
+		bpf_free_obj_id(link->obj_id, LINK_OBJ_ID);
 		link->id = 0;
 	}
 	if (link->prog) {
@@ -2774,7 +2766,7 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "link_type:\t%s\n"
 		   "link_id:\t%u\n",
 		   bpf_link_type_strs[link->type],
-		   link->id);
+		   bpf_obj_id_vnr(link->obj_id));
 	if (prog) {
 		bin2hex(prog_tag, prog->tag, sizeof(prog->tag));
 		seq_printf(m,
@@ -2797,19 +2789,6 @@ static const struct file_operations bpf_link_fops = {
 	.write		= bpf_dummy_write,
 };
 
-static int bpf_link_alloc_id(struct bpf_link *link)
-{
-	int id;
-
-	idr_preload(GFP_KERNEL);
-	spin_lock_bh(&link_idr_lock);
-	id = idr_alloc_cyclic(&link_idr, link, 1, INT_MAX, GFP_ATOMIC);
-	spin_unlock_bh(&link_idr_lock);
-	idr_preload_end();
-
-	return id;
-}
-
 /* Prepare bpf_link to be exposed to user-space by allocating anon_inode file,
  * reserving unused FD and allocating ID from link_idr. This is to be paired
  * with bpf_link_settle() to install FD and ID and expose bpf_link to
@@ -2825,23 +2804,23 @@ static int bpf_link_alloc_id(struct bpf_link *link)
  */
 int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer)
 {
+	struct bpf_obj_id *obj_id;
 	struct file *file;
-	int fd, id;
+	int fd;
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)
 		return fd;
 
-
-	id = bpf_link_alloc_id(link);
-	if (id < 0) {
+	obj_id = bpf_alloc_obj_id(current->nsproxy->bpf_ns, link, LINK_OBJ_ID);
+	if (IS_ERR(obj_id)) {
 		put_unused_fd(fd);
-		return id;
+		return PTR_ERR(obj_id);
 	}
 
 	file = anon_inode_getfile("bpf_link", &bpf_link_fops, link, O_CLOEXEC);
 	if (IS_ERR(file)) {
-		bpf_link_free_id(id);
+		bpf_free_obj_id(obj_id, LINK_OBJ_ID);
 		put_unused_fd(fd);
 		return PTR_ERR(file);
 	}
@@ -2849,7 +2828,8 @@ int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer)
 	primer->link = link;
 	primer->file = file;
 	primer->fd = fd;
-	primer->id = id;
+	primer->id = bpf_obj_id_nr(obj_id);
+	primer->obj_id = obj_id;
 	return 0;
 }
 
@@ -2858,6 +2838,7 @@ int bpf_link_settle(struct bpf_link_primer *primer)
 	/* make bpf_link fetchable by ID */
 	spin_lock_bh(&link_idr_lock);
 	primer->link->id = primer->id;
+	primer->link->obj_id = primer->obj_id;
 	spin_unlock_bh(&link_idr_lock);
 	/* make bpf_link fetchable by FD */
 	fd_install(primer->fd, primer->file);
@@ -4265,7 +4246,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 		return -EFAULT;
 
 	info.type = link->type;
-	info.id = link->id;
+	info.id = bpf_obj_id_vnr(link->obj_id);
 	if (link->prog)
 		info.prog_id = bpf_obj_id_vnr(link->prog->aux->obj_id);
 
@@ -4748,6 +4729,7 @@ static struct bpf_link *bpf_link_inc_not_zero(struct bpf_link *link)
 
 struct bpf_link *bpf_link_by_id(u32 id)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_link *link;
 
 	if (!id)
@@ -4755,7 +4737,7 @@ struct bpf_link *bpf_link_by_id(u32 id)
 
 	spin_lock_bh(&link_idr_lock);
 	/* before link is "settled", ID is 0, pretend it doesn't exist yet */
-	link = idr_find(&link_idr, id);
+	link = idr_find(&ns->idr[LINK_OBJ_ID], id);
 	if (link) {
 		if (link->id)
 			link = bpf_link_inc_not_zero(link);
@@ -4770,11 +4752,12 @@ struct bpf_link *bpf_link_by_id(u32 id)
 
 struct bpf_link *bpf_link_get_curr_or_next(u32 *id)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_link *link;
 
 	spin_lock_bh(&link_idr_lock);
 again:
-	link = idr_get_next(&link_idr, id);
+	link = idr_get_next(&ns->idr[LINK_OBJ_ID], id);
 	if (link) {
 		link = bpf_link_inc_not_zero(link);
 		if (IS_ERR(link)) {
@@ -5086,7 +5069,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_LINK_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &link_idr, &link_idr_lock);
+					  &ns->idr[LINK_OBJ_ID], &link_idr_lock);
 		break;
 	case BPF_ENABLE_STATS:
 		err = bpf_enable_stats(&attr);

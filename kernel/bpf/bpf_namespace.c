@@ -13,6 +13,7 @@
 #define MAX_BPF_NS_LEVEL 32
 DEFINE_SPINLOCK(map_idr_lock);
 DEFINE_SPINLOCK(prog_idr_lock);
+DEFINE_SPINLOCK(link_idr_lock);
 static struct kmem_cache *bpfns_cachep;
 static struct kmem_cache *obj_id_cache[MAX_PID_NS_LEVEL];
 static struct ns_common *bpfns_get(struct task_struct *task);
