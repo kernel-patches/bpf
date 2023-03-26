@@ -5,6 +5,7 @@
 #include <linux/idr.h>
 #include <linux/ns_common.h>
 #include <linux/user_namespace.h>
+#include <linux/capability.h>
 
 struct ubpf_obj_id {
 	int nr;
@@ -78,5 +79,12 @@ static inline int bpf_obj_id_nr_ns(struct bpf_obj_id *obj_id,
 static inline int bpf_obj_id_vnr(struct bpf_obj_id *obj_id)
 {
 	return bpf_obj_id_nr_ns(obj_id, current->nsproxy->bpf_ns);
+}
+
+static inline bool bpfns_capable(void)
+{
+	if (current->nsproxy->bpf_ns != &init_bpf_ns && capable(CAP_BPF))
+		return true;
+	return false;
 }
 #endif /* _LINUX_BPF_ID_NS_H */

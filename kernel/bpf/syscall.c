@@ -3628,7 +3628,7 @@ static int bpf_obj_get_next_id(const union bpf_attr *attr,
 	if (CHECK_ATTR(BPF_OBJ_GET_NEXT_ID) || next_id >= INT_MAX)
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !bpfns_capable())
 		return -EPERM;
 
 	next_id++;
@@ -3712,7 +3712,7 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_PROG_GET_FD_BY_ID))
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !bpfns_capable())
 		return -EPERM;
 
 	prog = bpf_prog_by_id(id);
@@ -3740,7 +3740,7 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	    attr->open_flags & ~BPF_OBJ_FLAG_MASK)
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !bpfns_capable())
 		return -EPERM;
 
 	f_flags = bpf_get_file_flag(attr->open_flags);
@@ -4386,7 +4386,7 @@ static int bpf_task_fd_query(const union bpf_attr *attr,
 	if (CHECK_ATTR(BPF_TASK_FD_QUERY))
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !bpfns_capable())
 		return -EPERM;
 
 	if (attr->task_fd_query.flags != 0)
@@ -4781,7 +4781,7 @@ static int bpf_link_get_fd_by_id(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_LINK_GET_FD_BY_ID))
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN) && !bpfns_capable())
 		return -EPERM;
 
 	link = bpf_link_by_id(id);
