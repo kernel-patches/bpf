@@ -134,9 +134,20 @@ static int bpf_map_offload_ndo(struct bpf_offloaded_map *offmap,
 
 static void __bpf_map_offload_destroy(struct bpf_offloaded_map *offmap)
 {
+	struct bpf_map *map = &offmap->map;
+
 	WARN_ON(bpf_map_offload_ndo(offmap, BPF_OFFLOAD_MAP_FREE));
-	/* Make sure BPF_MAP_GET_NEXT_ID can't find this dead map */
-	bpf_map_free_id(&offmap->map);
+	/* Make sure BPF_MAP_GET_NEXT_ID can't find this dead map.
+	 *
+	 * Offloaded maps are removed from the IDR store when their device
+	 * disappears - even if someone holds an fd to them they are unusable,
+	 * the memory is gone, all ops will fail; they are simply waiting for
+	 * refcnt to drop to be freed.
+	 */
+	if (map->id) {
+		bpf_map_free_id(map);
+		map->id = 0;
+	}
 	list_del_init(&offmap->offloads);
 	offmap->netdev = NULL;
 }

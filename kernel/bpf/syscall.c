@@ -382,30 +382,19 @@ static int bpf_map_alloc_id(struct bpf_map *map)
 	idr_preload(GFP_KERNEL);
 	spin_lock_bh(&map_idr_lock);
 	id = idr_alloc_cyclic(&map_idr, map, 1, INT_MAX, GFP_ATOMIC);
-	if (id > 0)
-		map->id = id;
 	spin_unlock_bh(&map_idr_lock);
 	idr_preload_end();
 
-	return id > 0 ? 0 : id;
+	return id;
 }
 
 void bpf_map_free_id(struct bpf_map *map)
 {
 	unsigned long flags;
 
-	/* Offloaded maps are removed from the IDR store when their device
-	 * disappears - even if someone holds an fd to them they are unusable,
-	 * the memory is gone, all ops will fail; they are simply waiting for
-	 * refcnt to drop to be freed.
-	 */
-	if (!map->id)
-		return;
-
 	spin_lock_irqsave(&map_idr_lock, flags);
 
 	idr_remove(&map_idr, map->id);
-	map->id = 0;
 
 	spin_unlock_irqrestore(&map_idr_lock, flags);
 }
@@ -748,8 +737,11 @@ static void bpf_map_put_uref(struct bpf_map *map)
 void bpf_map_put(struct bpf_map *map)
 {
 	if (atomic64_dec_and_test(&map->refcnt)) {
-		/* bpf_map_free_id() must be called first */
-		bpf_map_free_id(map);
+		/* bpf_map_free_id() must be called first. */
+		if (map->id) {
+			bpf_map_free_id(map);
+			map->id = 0;
+		}
 		btf_put(map->btf);
 		INIT_WORK(&map->work, bpf_map_free_deferred);
 		/* Avoid spawning kworkers, since they all might contend
@@ -1215,8 +1207,9 @@ static int map_create(union bpf_attr *attr)
 		goto free_map_field_offs;
 
 	err = bpf_map_alloc_id(map);
-	if (err)
+	if (err < 0)
 		goto free_map_sec;
+	map->id = err;
 
 	bpf_map_save_memcg(map);
 
@@ -2024,29 +2017,18 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 	idr_preload(GFP_KERNEL);
 	spin_lock_bh(&prog_idr_lock);
 	id = idr_alloc_cyclic(&prog_idr, prog, 1, INT_MAX, GFP_ATOMIC);
-	if (id > 0)
-		prog->aux->id = id;
 	spin_unlock_bh(&prog_idr_lock);
 	idr_preload_end();
 
-	return id > 0 ? 0 : id;
+	return id;
 }
 
 void bpf_prog_free_id(struct bpf_prog *prog)
 {
 	unsigned long flags;
 
-	/* cBPF to eBPF migrations are currently not in the idr store.
-	 * Offloaded programs are removed from the store when their device
-	 * disappears - even if someone grabs an fd to them they are unusable,
-	 * simply waiting for refcnt to drop to be freed.
-	 */
-	if (!prog->aux->id)
-		return;
-
 	spin_lock_irqsave(&prog_idr_lock, flags);
 	idr_remove(&prog_idr, prog->aux->id);
-	prog->aux->id = 0;
 	spin_unlock_irqrestore(&prog_idr_lock, flags);
 }
 
@@ -2091,7 +2073,15 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 	prog = aux->prog;
 	perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_UNLOAD, 0);
 	bpf_audit_prog(prog, BPF_AUDIT_UNLOAD);
-	bpf_prog_free_id(prog);
+	/* cBPF to eBPF migrations are currently not in the idr store.
+	 * Offloaded programs are removed from the store when their device
+	 * disappears - even if someone grabs an fd to them they are unusable,
+	 * simply waiting for refcnt to drop to be freed.
+	 */
+	if (prog->aux->id) {
+		bpf_prog_free_id(prog);
+		prog->aux->id = 0;
+	}
 	__bpf_prog_put_noref(prog, true);
 }
 
@@ -2655,8 +2645,9 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 		goto free_used_maps;
 
 	err = bpf_prog_alloc_id(prog);
-	if (err)
+	if (err < 0)
 		goto free_used_maps;
+	prog->aux->id = err;
 
 	/* Upon success of bpf_prog_alloc_id(), the BPF prog is
 	 * effectively publicly exposed. However, retrieving via
@@ -2730,9 +2721,6 @@ void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
 
 static void bpf_link_free_id(int id)
 {
-	if (!id)
-		return;
-
 	spin_lock_bh(&link_idr_lock);
 	idr_remove(&link_idr, id);
 	spin_unlock_bh(&link_idr_lock);
@@ -2748,7 +2736,10 @@ static void bpf_link_free_id(int id)
 void bpf_link_cleanup(struct bpf_link_primer *primer)
 {
 	primer->link->prog = NULL;
-	bpf_link_free_id(primer->id);
+	if (primer->id) {
+		bpf_link_free_id(primer->id);
+		primer->id = 0;
+	}
 	fput(primer->file);
 	put_unused_fd(primer->fd);
 }
@@ -2761,7 +2752,10 @@ void bpf_link_inc(struct bpf_link *link)
 /* bpf_link_free is guaranteed to be called from process context */
 static void bpf_link_free(struct bpf_link *link)
 {
-	bpf_link_free_id(link->id);
+	if (link->id) {
+		bpf_link_free_id(link->id);
+		link->id = 0;
+	}
 	if (link->prog) {
 		/* detach BPF program, clean up used resources */
 		link->ops->release(link);
