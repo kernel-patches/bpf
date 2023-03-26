@@ -1416,6 +1416,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	struct bpf_obj_id *obj_id;
 };
 
 struct bpf_prog {
@@ -1939,8 +1940,6 @@ void bpf_prog_sub(struct bpf_prog *prog, int i);
 void bpf_prog_inc(struct bpf_prog *prog);
 struct bpf_prog * __must_check bpf_prog_inc_not_zero(struct bpf_prog *prog);
 void bpf_prog_put(struct bpf_prog *prog);
-
-void bpf_prog_free_id(struct bpf_prog *prog);
 
 struct btf_field *btf_record_find(const struct btf_record *rec,
 				  u32 offset, u32 field_mask);

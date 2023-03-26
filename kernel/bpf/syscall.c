@@ -48,8 +48,6 @@
 #define BPF_OBJ_FLAG_MASK   (BPF_F_RDONLY | BPF_F_WRONLY)
 
 DEFINE_PER_CPU(int, bpf_prog_active);
-static DEFINE_IDR(prog_idr);
-DEFINE_SPINLOCK(prog_idr_lock);
 static DEFINE_IDR(link_idr);
 DEFINE_SPINLOCK(link_idr_lock);
 
@@ -1983,30 +1981,8 @@ static void bpf_audit_prog(const struct bpf_prog *prog, unsigned int op)
 	if (unlikely(!ab))
 		return;
 	audit_log_format(ab, "prog-id=%u op=%s",
-			 prog->aux->id, bpf_audit_str[op]);
+			 bpf_obj_id_vnr(prog->aux->obj_id), bpf_audit_str[op]);
 	audit_log_end(ab);
-}
-
-static int bpf_prog_alloc_id(struct bpf_prog *prog)
-{
-	int id;
-
-	idr_preload(GFP_KERNEL);
-	spin_lock_bh(&prog_idr_lock);
-	id = idr_alloc_cyclic(&prog_idr, prog, 1, INT_MAX, GFP_ATOMIC);
-	spin_unlock_bh(&prog_idr_lock);
-	idr_preload_end();
-
-	return id;
-}
-
-void bpf_prog_free_id(struct bpf_prog *prog)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&prog_idr_lock, flags);
-	idr_remove(&prog_idr, prog->aux->id);
-	spin_unlock_irqrestore(&prog_idr_lock, flags);
 }
 
 static void __bpf_prog_put_rcu(struct rcu_head *rcu)
@@ -2056,7 +2032,7 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 	 * simply waiting for refcnt to drop to be freed.
 	 */
 	if (prog->aux->id) {
-		bpf_prog_free_id(prog);
+		bpf_free_obj_id(prog->aux->obj_id, PROG_OBJ_ID);
 		prog->aux->id = 0;
 	}
 	__bpf_prog_put_noref(prog, true);
@@ -2157,7 +2133,7 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   prog->jited,
 		   prog_tag,
 		   prog->pages * 1ULL << PAGE_SHIFT,
-		   prog->aux->id,
+		   bpf_obj_id_vnr(prog->aux->obj_id),
 		   stats.nsecs,
 		   stats.cnt,
 		   stats.misses,
@@ -2468,6 +2444,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
+	struct bpf_obj_id *obj_id;
 	int err;
 	char license[128];
 	bool is_gpl;
@@ -2621,12 +2598,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr)
 	if (err < 0)
 		goto free_used_maps;
 
-	err = bpf_prog_alloc_id(prog);
-	if (err < 0)
+	obj_id = bpf_alloc_obj_id(current->nsproxy->bpf_ns, prog, PROG_OBJ_ID);
+	if (IS_ERR(obj_id))
 		goto free_used_maps;
-	prog->aux->id = err;
+	prog->aux->obj_id = obj_id;
+	prog->aux->id = bpf_obj_id_nr(obj_id);
 
-	/* Upon success of bpf_prog_alloc_id(), the BPF prog is
+	/* Upon success of bpf_alloc_obj_id(), the BPF prog is
 	 * effectively publicly exposed. However, retrieving via
 	 * bpf_prog_get_fd_by_id() will take another reference,
 	 * therefore it cannot be gone underneath us.
@@ -2803,7 +2781,7 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 			   "prog_tag:\t%s\n"
 			   "prog_id:\t%u\n",
 			   prog_tag,
-			   prog->aux->id);
+			   bpf_obj_id_vnr(prog->aux->obj_id));
 	}
 	if (link->ops->show_fdinfo)
 		link->ops->show_fdinfo(link, m);
@@ -3706,11 +3684,12 @@ again:
 
 struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_prog *prog;
 
 	spin_lock_bh(&prog_idr_lock);
 again:
-	prog = idr_get_next(&prog_idr, id);
+	prog = idr_get_next(&ns->idr[PROG_OBJ_ID], id);
 	if (prog) {
 		prog = bpf_prog_inc_not_zero(prog);
 		if (IS_ERR(prog)) {
@@ -3727,13 +3706,14 @@ again:
 
 struct bpf_prog *bpf_prog_by_id(u32 id)
 {
+	struct bpf_namespace *ns = current->nsproxy->bpf_ns;
 	struct bpf_prog *prog;
 
 	if (!id)
 		return ERR_PTR(-ENOENT);
 
 	spin_lock_bh(&prog_idr_lock);
-	prog = idr_find(&prog_idr, id);
+	prog = idr_find(&ns->idr[PROG_OBJ_ID], id);
 	if (prog)
 		prog = bpf_prog_inc_not_zero(prog);
 	else
@@ -3939,7 +3919,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		return -EFAULT;
 
 	info.type = prog->type;
-	info.id = prog->aux->id;
+	info.id = bpf_obj_id_vnr(prog->aux->obj_id);
 	info.load_time = prog->aux->load_time;
 	info.created_by_uid = from_kuid_munged(current_user_ns(),
 					       prog->aux->user->uid);
@@ -4287,7 +4267,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 	info.type = link->type;
 	info.id = link->id;
 	if (link->prog)
-		info.prog_id = link->prog->aux->id;
+		info.prog_id = bpf_obj_id_vnr(link->prog->aux->obj_id);
 
 	if (link->ops->fill_link_info) {
 		err = link->ops->fill_link_info(link, &info);
@@ -4452,7 +4432,7 @@ static int bpf_task_fd_query(const union bpf_attr *attr,
 			struct bpf_raw_event_map *btp = raw_tp->btp;
 
 			err = bpf_task_fd_query_copy(attr, uattr,
-						     raw_tp->link.prog->aux->id,
+						     bpf_obj_id_vnr(raw_tp->link.prog->aux->obj_id),
 						     BPF_FD_TYPE_RAW_TRACEPOINT,
 						     btp->tp->name, 0, 0);
 			goto put_file;
@@ -5048,7 +5028,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_PROG_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
-					  &prog_idr, &prog_idr_lock);
+					  &ns->idr[PROG_OBJ_ID], &prog_idr_lock);
 		break;
 	case BPF_MAP_GET_NEXT_ID:
 		err = bpf_obj_get_next_id(&attr, uattr.user,
