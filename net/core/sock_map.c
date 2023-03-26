@@ -799,9 +799,17 @@ static void sock_map_fini_seq_private(void *priv_data)
 
 static u64 sock_map_mem_usage(const struct bpf_map *map)
 {
+	struct bpf_stab *stab = container_of(map, struct bpf_stab, map);
 	u64 usage = sizeof(struct bpf_stab);
+	int i;
 
 	usage += (u64)map->max_entries * sizeof(struct sock *);
+
+	for (i = 0; i < stab->map.max_entries; i++) {
+		if (stab->sks[i])
+			usage += sizeof(struct sk_psock);
+	}
+
 	return usage;
 }
 
@@ -1412,7 +1420,7 @@ static u64 sock_hash_mem_usage(const struct bpf_map *map)
 	u64 usage = sizeof(*htab);
 
 	usage += htab->buckets_num * sizeof(struct bpf_shtab_bucket);
-	usage += atomic_read(&htab->count) * (u64)htab->elem_size;
+	usage += atomic_read(&htab->count) * ((u64)htab->elem_size + sizeof(struct sk_psock));
 	return usage;
 }
 
