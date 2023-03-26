@@ -48,11 +48,11 @@
 
 DEFINE_PER_CPU(int, bpf_prog_active);
 static DEFINE_IDR(prog_idr);
-static DEFINE_SPINLOCK(prog_idr_lock);
+DEFINE_SPINLOCK(prog_idr_lock);
 static DEFINE_IDR(map_idr);
-static DEFINE_SPINLOCK(map_idr_lock);
+DEFINE_SPINLOCK(map_idr_lock);
 static DEFINE_IDR(link_idr);
-static DEFINE_SPINLOCK(link_idr_lock);
+DEFINE_SPINLOCK(link_idr_lock);
 
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;

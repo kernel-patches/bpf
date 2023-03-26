@@ -38,9 +38,45 @@ struct bpf_namespace {
 
 extern struct bpf_namespace init_bpf_ns;
 extern struct proc_ns_operations bpfns_operations;
+extern spinlock_t map_idr_lock;
+extern spinlock_t prog_idr_lock;
+extern spinlock_t link_idr_lock;
 
 struct bpf_namespace *copy_bpfns(unsigned long flags,
 								struct user_namespace *user_ns,
 								struct bpf_namespace *old_ns);
 void put_bpfns(struct bpf_namespace *ns);
+struct bpf_obj_id *bpf_alloc_obj_id(struct bpf_namespace *ns,
+									void *obj, int type);
+void bpf_free_obj_id(struct bpf_obj_id *obj_id, int type);
+
+/*
+ * The helpers to get the bpf_id's id seen from different namespaces
+ *
+ * bpf_id_nr()    : global id, i.e. the id seen from the init namespace;
+ * bpf_id_vnr()   : virtual id, i.e. the id seen from the pid namespace of
+ *                  current.
+ * bpf_id_nr_ns() : id seen from the ns specified.
+ *
+ * see also task_xid_nr() etc in include/linux/sched.h
+ */
+static inline int bpf_obj_id_nr(struct bpf_obj_id *obj_id)
+{
+	if (obj_id)
+		return obj_id->numbers[0].nr;
+	return 0;
+}
+
+static inline int bpf_obj_id_nr_ns(struct bpf_obj_id *obj_id,
+								   struct bpf_namespace *ns)
+{
+	if (obj_id && ns->level <= obj_id->level)
+		return obj_id->numbers[ns->level].nr;
+	return 0;
+}
+
+static inline int bpf_obj_id_vnr(struct bpf_obj_id *obj_id)
+{
+	return bpf_obj_id_nr_ns(obj_id, current->nsproxy->bpf_ns);
+}
 #endif /* _LINUX_BPF_ID_NS_H */

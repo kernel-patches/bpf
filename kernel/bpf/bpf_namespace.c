@@ -217,3 +217,89 @@ static __init int bpf_namespaces_init(void)
 }
 
 late_initcall(bpf_namespaces_init);
+
+struct bpf_obj_id *bpf_alloc_obj_id(struct bpf_namespace *ns,
+									void *obj, int type)
+{
+	struct bpf_namespace *tmp = ns;
+	struct bpf_obj_id *obj_id;
+	spinlock_t *idr_lock;
+	unsigned long flags;
+	int id;
+	int i;
+
+	switch (type) {
+	case MAP_OBJ_ID:
+		idr_lock = &map_idr_lock;
+		break;
+	case PROG_OBJ_ID:
+		idr_lock = &prog_idr_lock;
+		break;
+	case LINK_OBJ_ID:
+		idr_lock = &link_idr_lock;
+		break;
+	default:
+		return ERR_PTR(-EINVAL);
+	}
+
+	obj_id = kmem_cache_alloc(ns->obj_id_cachep, GFP_KERNEL);
+	if (!obj_id)
+		return ERR_PTR(-ENOMEM);
+
+	obj_id->level = ns->level;
+	for (i = ns->level; i >= 0; i--) {
+		idr_preload(GFP_KERNEL);
+		spin_lock_bh(idr_lock);
+		id = idr_alloc_cyclic(&tmp->idr[type], obj, 1, INT_MAX, GFP_ATOMIC);
+		spin_unlock_bh(idr_lock);
+		idr_preload_end();
+		if (id < 0)
+			goto out_free;
+		obj_id->numbers[i].nr = id;
+		obj_id->numbers[i].ns = tmp;
+		tmp = tmp->parent;
+	}
+
+	return obj_id;
+
+out_free:
+	for (; i <= ns->level; i++) {
+		tmp = obj_id->numbers[i].ns;
+		spin_lock_irqsave(idr_lock, flags);
+		idr_remove(&tmp->idr[type], obj_id->numbers[i].nr);
+		spin_unlock_irqrestore(idr_lock, flags);
+	}
+	kmem_cache_free(ns->obj_id_cachep, obj_id);
+	return ERR_PTR(id);
+}
+
+void bpf_free_obj_id(struct bpf_obj_id *obj_id, int type)
+{
+	struct bpf_namespace *ns;
+	spinlock_t *idr_lock;
+	unsigned long flags;
+	int i;
+
+	switch (type) {
+	case MAP_OBJ_ID:
+		idr_lock = &map_idr_lock;
+		break;
+	case PROG_OBJ_ID:
+		idr_lock = &prog_idr_lock;
+		break;
+	case LINK_OBJ_ID:
+		idr_lock = &link_idr_lock;
+		break;
+	default:
+		return;
+	}
+	/* Note that the level-0 should be freed at last */
+	for (i = obj_id->level; i >= 0; i--) {
+		spin_lock_irqsave(idr_lock, flags);
+		ns = obj_id->numbers[i].ns;
+		idr_remove(&ns->idr[type], obj_id->numbers[i].nr);
+		spin_unlock_irqrestore(idr_lock, flags);
+	}
+	ns = obj_id->numbers[obj_id->level].ns;
+	kmem_cache_free(ns->obj_id_cachep, obj_id);
+}
