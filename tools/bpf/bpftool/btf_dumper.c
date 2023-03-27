@@ -841,13 +841,30 @@ static void dotlabel_puts(const char *s)
 }
 
 void btf_dump_linfo_dotlabel(const struct btf *btf,
-			     const struct bpf_line_info *linfo)
+			     const struct bpf_line_info *linfo, bool linum)
 {
 	const char *line = btf__name_by_offset(btf, linfo->line_off);
 
 	if (!line)
 		return;
 	line = ltrim(line);
+
+	if (linum) {
+		const char *file = btf__name_by_offset(btf, linfo->file_name_off);
+
+		/* More forgiving on file because linum option is
+		 * expected to provide more info than the already
+		 * available src line.
+		 */
+		if (!file)
+			file = "";
+
+		printf("; [file:");
+		dotlabel_puts(file);
+		printf("line_num:%u line_col:%u]\\l\\\n",
+		       BPF_LINE_INFO_LINE_NUM(linfo->line_col),
+		       BPF_LINE_INFO_LINE_COL(linfo->line_col));
+	}
 
 	printf("; ");
 	dotlabel_puts(line);
