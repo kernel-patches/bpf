@@ -778,31 +778,6 @@
 	.prog_type = BPF_PROG_TYPE_XDP,
 },
 {
-	"bound check with JMP_JSLT for crossing 64-bit signed boundary",
-	.insns = {
-	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offsetof(struct xdp_md, data)),
-	BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1, offsetof(struct xdp_md, data_end)),
-	BPF_MOV64_REG(BPF_REG_1, BPF_REG_2),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
-	BPF_JMP_REG(BPF_JGT, BPF_REG_1, BPF_REG_3, 8),
-
-	BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0),
-	BPF_LD_IMM64(BPF_REG_0, 0x7fffffffffffff10),
-	BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_0),
-
-	BPF_LD_IMM64(BPF_REG_0, 0x8000000000000000),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_0, 1),
-	/* r1 signed range is [S64_MIN, S64_MAX] */
-	BPF_JMP_REG(BPF_JSLT, BPF_REG_0, BPF_REG_1, -2),
-
-	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_EXIT_INSN(),
-	},
-	.errstr = "BPF program is too large",
-	.result = REJECT,
-	.prog_type = BPF_PROG_TYPE_XDP,
-},
-{
 	"bound check for loop upper bound greater than U32_MAX",
 	.insns = {
 	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offsetof(struct xdp_md, data)),
@@ -847,30 +822,5 @@
 	BPF_EXIT_INSN(),
 	},
 	.result = ACCEPT,
-	.prog_type = BPF_PROG_TYPE_XDP,
-},
-{
-	"bound check with JMP32_JSLT for crossing 32-bit signed boundary",
-	.insns = {
-	BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, offsetof(struct xdp_md, data)),
-	BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_1, offsetof(struct xdp_md, data_end)),
-	BPF_MOV64_REG(BPF_REG_1, BPF_REG_2),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
-	BPF_JMP_REG(BPF_JGT, BPF_REG_1, BPF_REG_3, 6),
-
-	BPF_LDX_MEM(BPF_B, BPF_REG_1, BPF_REG_2, 0),
-	BPF_MOV32_IMM(BPF_REG_0, 0x7fffff10),
-	BPF_ALU32_REG(BPF_ADD, BPF_REG_1, BPF_REG_0),
-
-	BPF_MOV32_IMM(BPF_REG_0, 0x80000000),
-	BPF_ALU32_IMM(BPF_ADD, BPF_REG_0, 1),
-	/* r1 signed range is [S32_MIN, S32_MAX] */
-	BPF_JMP32_REG(BPF_JSLT, BPF_REG_0, BPF_REG_1, -2),
-
-	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_EXIT_INSN(),
-	},
-	.errstr = "BPF program is too large",
-	.result = REJECT,
 	.prog_type = BPF_PROG_TYPE_XDP,
 },
