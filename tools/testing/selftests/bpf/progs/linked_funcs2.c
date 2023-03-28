@@ -86,4 +86,7 @@ int BPF_PROG(handler2, struct pt_regs *regs, long id)
 	return 0;
 }
 
+SEC(".empty_section")
+__naked void empty_function2(void) {}
+
 char LICENSE[] SEC("license") = "GPL";
