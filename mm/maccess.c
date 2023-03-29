@@ -103,6 +103,50 @@ Efault:
 }
 
 /**
+ * copy_from_user_nmi - NMI safe copy from user
+ * @dst:	Pointer to the destination buffer
+ * @src:	Pointer to a user space address of the current task
+ * @size:	Number of bytes to copy
+ *
+ * Returns: The number of not copied bytes. 0 is success, i.e. all bytes copied
+ *
+ * Contrary to other copy_from_user() variants this function can be called
+ * from NMI context. Despite the name it is not restricted to be called
+ * from NMI context. It is safe to be called from any other context as
+ * well. It disables pagefaults across the copy which means a fault will
+ * abort the copy.
+ *
+ * For NMI context invocations this relies on the nested NMI work to allow
+ * atomic faults from the NMI path; the nested NMI paths are careful to
+ * preserve CR2 on X86 architecture.
+ */
+unsigned long
+copy_from_user_nmi(void *dst, const void __user *src, unsigned long size)
+{
+	unsigned long ret = size;
+
+	if (!__access_ok(src, size))
+		return ret;
+
+	if (!nmi_uaccess_okay())
+		return ret;
+
+	/*
+	 * Even though this function is typically called from NMI/IRQ context
+	 * disable pagefaults so that its behaviour is consistent even when
+	 * called from other contexts.
+	 */
+	pagefault_disable();
+	instrument_copy_from_user_before(dst, src, size);
+	ret = raw_copy_from_user(dst, src, size);
+	instrument_copy_from_user_after(dst, src, size, ret);
+	pagefault_enable();
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(copy_from_user_nmi);
+
+/**
  * copy_from_user_nofault(): safely attempt to read from a user-space location
  * @dst: pointer to the buffer that shall take the data
  * @src: address to read from. This must be a user address.
@@ -113,21 +157,7 @@ Efault:
  */
 long copy_from_user_nofault(void *dst, const void __user *src, size_t size)
 {
-	long ret = -EFAULT;
-
-	if (!__access_ok(src, size))
-		return ret;
-
-	if (!nmi_uaccess_okay())
-		return ret;
-
-	pagefault_disable();
-	instrument_copy_from_user_before(dst, src, size);
-	ret = raw_copy_from_user(dst, src, size);
-	instrument_copy_from_user_after(dst, src, size, ret);
-	pagefault_enable();
-
-	if (ret)
+	if (copy_from_user_nmi(dst, src, size))
 		return -EFAULT;
 	return 0;
 }
