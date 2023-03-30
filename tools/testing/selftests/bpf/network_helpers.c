@@ -427,3 +427,17 @@ void close_netns(struct nstoken *token)
 	close(token->orig_netns_fd);
 	free(token);
 }
+
+int get_sock_port6(int sock_fd, __u16 *out_port)
+{
+	struct sockaddr_in6 addr = {};
+	socklen_t addr_len = sizeof(addr);
+	int err;
+
+	err = getsockname(sock_fd, (struct sockaddr *)&addr, &addr_len);
+	if (err < 0)
+		return err;
+	*out_port = addr.sin6_port;
+
+	return err;
+}
