@@ -180,6 +180,11 @@ void test_verif_scale_loop6()
 	scale_test("loop6.bpf.o", BPF_PROG_TYPE_KPROBE, false);
 }
 
+void test_verif_scale_loop7()
+{
+	scale_test("loop7.bpf.o", BPF_PROG_TYPE_KPROBE, false);
+}
+
 void test_verif_scale_strobemeta()
 {
 	/* partial unroll. 19k insn in a loop.
