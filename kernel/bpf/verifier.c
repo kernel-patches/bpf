@@ -12606,10 +12606,14 @@ static int is_branch32_taken(struct bpf_reg_state *reg, u32 val, u8 opcode)
 	case BPF_JEQ:
 		if (tnum_is_const(subreg))
 			return !!tnum_equals_const(subreg, val);
+		else if (reg->u32_min_value > val)
+			return 0;
 		break;
 	case BPF_JNE:
 		if (tnum_is_const(subreg))
 			return !tnum_equals_const(subreg, val);
+		else if (reg->u32_min_value > val)
+			return 1;
 		break;
 	case BPF_JSET:
 		if ((~subreg.mask & subreg.value) & val)
@@ -12679,10 +12683,14 @@ static int is_branch64_taken(struct bpf_reg_state *reg, u64 val, u8 opcode)
 	case BPF_JEQ:
 		if (tnum_is_const(reg->var_off))
 			return !!tnum_equals_const(reg->var_off, val);
+		else if (reg->umin_value > val)
+			return 0;
 		break;
 	case BPF_JNE:
 		if (tnum_is_const(reg->var_off))
 			return !tnum_equals_const(reg->var_off, val);
+		else if (reg->umin_value > val)
+			return 1;
 		break;
 	case BPF_JSET:
 		if ((~reg->var_off.mask & reg->var_off.value) & val)
