@@ -77,7 +77,6 @@ int BPF_KPROBE(trace_virtqueue_add_sgs, void *unused, struct scatterlist **sgs,
 		return 0;
 
 	for (i = 0; (i < VIRTIO_MAX_SGS) && (i < out_sgs); i++) {
-		__sink(out_sgs);
 		for (n = 0, sgp = get_sgp(sgs, i); sgp && (n < SG_MAX);
 		     sgp = __sg_next(sgp)) {
 			bpf_probe_read_kernel(&len, sizeof(len), &sgp->length);
@@ -87,7 +86,6 @@ int BPF_KPROBE(trace_virtqueue_add_sgs, void *unused, struct scatterlist **sgs,
 	}
 
 	for (i = 0; (i < VIRTIO_MAX_SGS) && (i < in_sgs); i++) {
-		__sink(in_sgs);
 		for (n = 0, sgp = get_sgp(sgs, i); sgp && (n < SG_MAX);
 		     sgp = __sg_next(sgp)) {
 			bpf_probe_read_kernel(&len, sizeof(len), &sgp->length);
