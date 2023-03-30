@@ -14859,6 +14859,23 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		/* Both old and cur are having same slot_type */
 		switch (old->stack[spi].slot_type[BPF_REG_SIZE - 1]) {
 		case STACK_SPILL:
+			/* sometime loop index variable is spilled and the spill
+			 * is not marked as precise. If only state difference
+			 * between two iterations are spilled loop index, the
+			 * "infinite loop detected at insn" error will be hit.
+			 * Mark spilled constant as precise so it went through value
+			 * comparison.
+			 */
+			old_reg = &old->stack[spi].spilled_ptr;
+			cur_reg = &cur->stack[spi].spilled_ptr;
+			if (!old_reg->precise) {
+				if (old_reg->type == SCALAR_VALUE &&
+				    cur_reg->type == SCALAR_VALUE &&
+				    tnum_is_const(old_reg->var_off) &&
+				    tnum_is_const(cur_reg->var_off))
+					old_reg->precise = true;
+			}
+
 			/* when explored and current stack slot are both storing
 			 * spilled registers, check that stored pointers types
 			 * are the same as well.
@@ -14869,8 +14886,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 * such verifier states are not equivalent.
 			 * return false to continue verification of this path
 			 */
-			if (!regsafe(env, &old->stack[spi].spilled_ptr,
-				     &cur->stack[spi].spilled_ptr, idmap))
+			if (!regsafe(env, old_reg, cur_reg, idmap))
 				return false;
 			break;
 		case STACK_DYNPTR:
