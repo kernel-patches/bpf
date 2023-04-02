@@ -141,7 +141,7 @@ static void verify_xdp_metadata(void *data)
 	meta = data - sizeof(*meta);
 
 	printf("rx_timestamp: %llu\n", meta->rx_timestamp);
-	printf("rx_hash: %u\n", meta->rx_hash);
+	printf("rx_hash: 0x%X RSS type:0x%X\n", meta->rx_hash, meta->rx_hash_type);
 }
 
 static void verify_skb_metadata(int fd)
