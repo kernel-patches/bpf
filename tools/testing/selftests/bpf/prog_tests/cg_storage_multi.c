@@ -7,6 +7,7 @@
 #include <test_progs.h>
 #include <cgroup_helpers.h>
 #include <network_helpers.h>
+#include <poll.h>
 
 #include "progs/cg_storage_multi.h"
 
@@ -56,8 +57,9 @@ static bool assert_storage_noexist(struct bpf_map *map, const void *key)
 
 static bool connect_send(const char *cgroup_path)
 {
-	bool res = true;
 	int server_fd = -1, client_fd = -1;
+	struct pollfd pollfd;
+	bool res = true;
 
 	if (join_cgroup(cgroup_path))
 		goto out_clean;
@@ -71,6 +73,11 @@ static bool connect_send(const char *cgroup_path)
 		goto out_clean;
 
 	if (send(client_fd, "message", strlen("message"), 0) < 0)
+		goto out_clean;
+
+	pollfd.fd = server_fd;
+	pollfd.events = POLLIN;
+	if (poll(&pollfd, 1, 1000) != 1)
 		goto out_clean;
 
 	res = false;
