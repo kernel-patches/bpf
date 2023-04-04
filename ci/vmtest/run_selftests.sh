@@ -15,6 +15,7 @@ source "$(cd "$(dirname "$0")" && pwd)/helpers.sh"
 ARCH=$(uname -m)
 
 STATUS_FILE=/exitstatus
+OUTPUT_FILE=/command_output
 
 declare -a TEST_NAMES=()
 
@@ -96,6 +97,14 @@ test_verifier() {
   ./test_verifier && true
   echo "test_verifier:$?" >>"${STATUS_FILE}"
   foldable end test_verifier
+}
+
+run_veristat() {
+  foldable start run_veristat "Running veristat"
+  globs=$(awk '/^#/ { next; } { print $0 ".bpf.o"; }' ./veristat.cfg)
+  ./veristat -o csv -q -e file,prog,verdict,states ${globs} > ${OUTPUT_FILE}
+  echo "run_veristat:$?" >> ${STATUS_FILE}
+  foldable end run_veristat
 }
 
 foldable end vm_init

@@ -243,8 +243,7 @@ jobs:
           kbuild-output: ${{ env.KBUILD_OUTPUT }}
           max-make-jobs: 32
           llvm-version: ${{ matrix.llvm-version }}
-      - if: ${{ github.event_name != 'push' }}
-        name: Build selftests
+      - name: Build selftests
         uses: libbpf/ci/build-selftests@main
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -354,3 +353,88 @@ jobs:
           kernel-root: '.'
           max-cpu: 8
           kernel-test: ${{ matrix.test }}
+  veristat:
+    name: veristat
+    needs: [build]
+    runs-on: [ubuntu-latest]
+    timeout-minutes: 100
+    env:
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: vmlinux-x86_64-gcc
+          path: .
+      - name: Untar artifacts
+        # zstd is installed by default in the runner images.
+        run: zstd -d -T0  vmlinux-x86_64-gcc.tar.zst --stdout | tar -xf -
+      - name: Prepare rootfs
+        uses: eddyz87/libbpf-ci/prepare-rootfs@main
+        with:
+          project-name: 'libbpf'
+          arch: x86_64
+          kernel: LATEST
+          kernel-root: '.'
+          kbuild-output: ${{ env.KBUILD_OUTPUT }}
+          image-output: '/tmp/root.img'
+          test: run_veristat
+      - name: Run veristat
+        uses: eddyz87/libbpf-ci/run-qemu@main
+        timeout-minutes: 10
+        with:
+          arch: x86_64
+          img: '/tmp/root.img'
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+          max-cpu: 8
+          kernel-test: run_veristat
+          output-file: '${{ github.workspace }}/veristat.csv'
+      - uses: actions/upload-artifact@v3
+        with:
+          name: x86_64-gcc-veristat-log
+          if-no-files-found: error
+          path: '${{ github.workspace }}/veristat.csv'
+      # For pull request:
+      # - get baseline log from cache
+      - if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/cache/restore@v3
+        with:
+          key: x86_64-gcc-veristat-baseline
+          restore-keys: |
+            x86_64-gcc-veristat-baseline-
+          path: '${{ github.workspace }}/veristat-baseline.csv'
+      # - compare logs
+      - if: ${{ github.event_name == 'pull_request' }}
+        name: compare to baseline
+        run: |
+          cd ${{ github.workspace }}
+          ./selftests/bpf/veristat \
+              -e file,prog,verdict,states \
+              -f 'states_pct>1' \
+              -f 'states_pct<-1' \
+              -C veristat-baseline.csv veristat.csv \
+            > veristat-compare.log
+          cat veristat-compare.log
+
+      - if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: x86_64-gcc-veristat-compare.log
+          if-no-files-found: error
+          path: '${{ github.workspace }}/veristat-compare.log'
+
+      # For push: just put baseline log to cache
+      - if: ${{ github.event_name == 'push' && github.ref_name == 'bpf-next' }}
+        run: |
+          cp '${{ github.workspace }}/veristat.csv' \
+             '${{ github.workspace }}/veristat-baseline.csv'
+
+      - if: ${{ github.event_name == 'push' && github.ref_name == 'bpf-next' }}
+        uses: actions/cache/save@v3
+        with:
+          key: x86_64-gcc-veristat-baseline-${{ github.run_id }}
+          path: '${{ github.workspace }}/veristat-baseline.csv'
