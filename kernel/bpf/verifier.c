@@ -1736,6 +1736,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	}
 	dst_state->speculative = src->speculative;
 	dst_state->active_rcu_lock = src->active_rcu_lock;
+	dst_state->exception_callback_subprog = src->exception_callback_subprog;
 	dst_state->curframe = src->curframe;
 	dst_state->active_lock.ptr = src->active_lock.ptr;
 	dst_state->active_lock.id = src->active_lock.id;
@@ -5178,10 +5179,16 @@ continue_func:
 				  next_insn);
 			return -EFAULT;
 		}
-		if (subprog[idx].is_async_cb) {
+		if (subprog[idx].is_async_or_exception_cb) {
 			if (subprog[idx].has_tail_call) {
-				verbose(env, "verifier bug. subprog has tail_call and async cb\n");
+				verbose(env, "verifier bug. subprog has tail_call and async or exception cb\n");
 				return -EFAULT;
+			}
+			if (subprog[idx].is_exception_cb) {
+				if (subprog[0].stack_depth + subprog[idx].stack_depth > MAX_BPF_STACK) {
+					verbose(env, "combined stack size of main and exception calls is %d. Too large\n", depth);
+					return -EACCES;
+				}
 			}
 			 /* async callbacks don't increase bpf prog stack size */
 			continue;
@@ -8203,6 +8210,7 @@ static int set_callee_state(struct bpf_verifier_env *env,
 			    struct bpf_func_state *callee, int insn_idx);
 
 static bool is_callback_calling_kfunc(u32 btf_id);
+static bool is_set_exception_cb_kfunc(struct bpf_insn *insn);
 static int mark_chain_throw(struct bpf_verifier_env *env, int insn_idx);
 
 static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
@@ -8279,13 +8287,16 @@ static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
-	if (insn->code == (BPF_JMP | BPF_CALL) &&
-	    insn->src_reg == 0 &&
-	    insn->imm == BPF_FUNC_timer_set_callback) {
+	if ((insn->code == (BPF_JMP | BPF_CALL) &&
+	     insn->src_reg == 0 &&
+	     insn->imm == BPF_FUNC_timer_set_callback) ||
+	     is_set_exception_cb_kfunc(insn)) {
 		struct bpf_verifier_state *async_cb;
 
 		/* there is no real recursion here. timer callbacks are async */
-		env->subprog_info[subprog].is_async_cb = true;
+		env->subprog_info[subprog].is_async_or_exception_cb = true;
+		if (is_set_exception_cb_kfunc(insn))
+			env->subprog_info[subprog].is_exception_cb = true;
 		async_cb = push_async_cb(env, env->subprog_info[subprog].start,
 					 *insn_idx, subprog);
 		if (!async_cb)
@@ -8396,12 +8407,15 @@ static int set_throw_state_type(struct bpf_verifier_env *env, int insn_idx,
 				int frame, int subprog)
 {
 	struct bpf_throw_state *ts = &env->insn_aux_data[insn_idx].throw_state;
-	int type;
+	int exception_subprog, type;
 
-	if (!frame && !subprog && env->prog->type != BPF_PROG_TYPE_EXT)
+	if (!frame && !subprog && env->prog->type != BPF_PROG_TYPE_EXT) {
 		type = BPF_THROW_OUTER;
-	else
+		exception_subprog = env->cur_state->exception_callback_subprog;
+	} else {
 		type = BPF_THROW_INNER;
+		exception_subprog = -1;
+	}
 	if (ts->type != BPF_THROW_NONE) {
 		if (ts->type != type) {
 			verbose(env,
@@ -8409,8 +8423,14 @@ static int set_throw_state_type(struct bpf_verifier_env *env, int insn_idx,
 				insn_idx, ts->type, type);
 			return -EINVAL;
 		}
+		if (ts->subprog != exception_subprog) {
+			verbose(env, "different exception callback subprogs for same insn %d: %d and %d\n",
+				insn_idx, ts->subprog, exception_subprog);
+			return -EINVAL;
+		}
 	}
 	ts->type = type;
+	ts->subprog = exception_subprog;
 	return 0;
 }
 
@@ -8432,9 +8452,23 @@ static int mark_chain_throw(struct bpf_verifier_env *env, int insn_idx) {
 		ret = set_throw_state_type(env, frame[i]->callsite, i - 1, subprogno);
 		if (ret < 0)
 			return ret;
+		/* Have we seen this being used as exception cb? Reject! */
+		if (subprog[subprogno].is_exception_cb) {
+			verbose(env,
+				"subprog %d (at insn %d) is used as exception callback, cannot throw\n",
+				subprogno, subprog[subprogno].start);
+			return -EACCES;
+		}
 	}
 	/* Now mark actual instruction which caused the throw */
 	cur_subprogno = frame[state->curframe]->subprogno;
+	/* Have we seen this being used as exception cb? Reject! */
+	if (subprog[cur_subprogno].is_exception_cb) {
+		verbose(env,
+			"subprog %d (at insn %d) is used as exception callback, cannot throw\n",
+			cur_subprogno, subprog[cur_subprogno].start);
+		return -EACCES;
+	}
 	func_info_aux[cur_subprogno].throws_exception = subprog[cur_subprogno].can_throw = true;
 	return set_throw_state_type(env, insn_idx, state->curframe, cur_subprogno);
 }
@@ -8616,6 +8650,23 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = tnum_range(0, 1);
+	return 0;
+}
+
+static int set_exception_callback_state(struct bpf_verifier_env *env,
+					struct bpf_func_state *caller,
+					struct bpf_func_state *callee,
+					int insn_idx)
+{
+	/* void bpf_exception_callback(int (*cb)(void)); */
+
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_1]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+	callee->in_exception_callback_fn = true;
+	callee->callback_ret_range = tnum_range(0, 0);
 	return 0;
 }
 
@@ -9695,6 +9746,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_throw,
+	KF_bpf_set_exception_callback,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -9714,6 +9766,7 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_throw)
+BTF_ID(func, bpf_set_exception_callback)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -9735,6 +9788,7 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_throw)
+BTF_ID(func, bpf_set_exception_callback)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10080,7 +10134,14 @@ static bool is_bpf_graph_api_kfunc(u32 btf_id)
 
 static bool is_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_rbtree_add];
+	return btf_id == special_kfunc_list[KF_bpf_rbtree_add] ||
+	       btf_id == special_kfunc_list[KF_bpf_set_exception_callback];
+}
+
+static bool is_set_exception_cb_kfunc(struct bpf_insn *insn)
+{
+	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
+	       insn->imm == special_kfunc_list[KF_bpf_set_exception_callback];
 }
 
 static bool is_rbtree_lock_required_kfunc(u32 btf_id)
@@ -10704,6 +10765,9 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	return 0;
 }
 
+#define BPF_EXCEPTION_CB_CAN_SET (-1)
+#define BPF_EXCEPTION_CB_CANNOT_SET (-2)
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -10816,6 +10880,33 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				func_name, meta.func_id);
 			return err;
 		}
+	}
+
+	if (meta.btf == btf_vmlinux && meta.func_id == special_kfunc_list[KF_bpf_set_exception_callback]) {
+		if (env->cur_state->exception_callback_subprog == BPF_EXCEPTION_CB_CANNOT_SET) {
+			verbose(env, "exception callback cannot be set within global function or extension program\n");
+			return -EINVAL;
+		}
+		if (env->cur_state->frame[env->cur_state->curframe]->in_exception_callback_fn) {
+			verbose(env, "exception callback cannot be set from within exception callback\n");
+			return -EINVAL;
+		}
+		/* If we didn't explore and mark can_throw yet, we will see it
+		 * when we pop_stack for the pushed async cb which gets the
+		 * is_exception_cb marking and is caught in mark_chain_throw.
+		 */
+		if (env->subprog_info[meta.subprogno].can_throw) {
+			verbose(env, "exception callback can throw, which is not allowed\n");
+			return -EINVAL;
+		}
+		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
+					set_exception_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+		env->cur_state->exception_callback_subprog = meta.subprogno;
 	}
 
 	if (is_kfunc_throwing(&meta) ||
@@ -13829,7 +13920,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 	const bool is_subprog = frame->subprogno;
 
 	/* LSM and struct_ops func-ptr's return type could be "void" */
-	if (!is_subprog) {
+	if (!is_subprog || frame->in_exception_callback_fn) {
 		switch (prog_type) {
 		case BPF_PROG_TYPE_LSM:
 			if (prog->expected_attach_type == BPF_LSM_CGROUP)
@@ -13877,7 +13968,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 		return 0;
 	}
 
-	if (is_subprog) {
+	if (is_subprog && !frame->in_exception_callback_fn) {
 		if (reg->type != SCALAR_VALUE) {
 			verbose(env, "At subprogram exit the register R0 is not a scalar value (%s)\n",
 				reg_type_str(env, reg->type));
@@ -15132,6 +15223,9 @@ static bool states_equal(struct bpf_verifier_env *env,
 		return false;
 
 	if (old->active_rcu_lock != cur->active_rcu_lock)
+		return false;
+
+	if (old->exception_callback_subprog != cur->exception_callback_subprog)
 		return false;
 
 	/* for states to be equal callsites have to be the same
@@ -17538,6 +17632,9 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		 * may_access_direct_pkt_data mutates it
 		 */
 		env->seen_direct_write = seen_direct_write;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_set_exception_callback]) {
+		insn_buf[0] = BPF_JMP_IMM(BPF_JA, 0, 0, 0);
+		*cnt = 1;
 	}
 	return 0;
 }
@@ -18194,15 +18291,35 @@ static struct bpf_prog *rewrite_bpf_throw_call(struct bpf_verifier_env *env,
 {
 	struct bpf_insn insn_buf[] = {
 		env->prog->insnsi[position],
-		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
+	struct bpf_prog *new_prog;
+	u32 callback_start;
+	u32 call_insn_offset;
+	s32 callback_offset;
+	int type, esubprog;
 
+	type = tstate->type;
+	esubprog = tstate->subprog;
 	*cnt = ARRAY_SIZE(insn_buf);
 	/* We don't need the call instruction for throws in frame 0 */
-	if (tstate->type == BPF_THROW_OUTER)
-		return bpf_patch_insn_data(env, position, insn_buf + 1, *cnt - 1);
-	return bpf_patch_insn_data(env, position, insn_buf, *cnt);
+	if (type == BPF_THROW_OUTER) {
+		/* We need to return r0 of exception callback from outermost frame */
+		if (esubprog != -1)
+			insn_buf[0] = BPF_CALL_REL(0);
+		else
+			insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	}
+	new_prog = bpf_patch_insn_data(env, position, insn_buf, *cnt);
+	if (!new_prog || esubprog == -1)
+		return new_prog;
+
+	callback_start = env->subprog_info[esubprog].start;
+	/* Note: insn_buf[0] is an offset of BPF_CALL_REL instruction */
+	call_insn_offset = position + 0;
+	callback_offset = callback_start - call_insn_offset - 1;
+	new_prog->insnsi[call_insn_offset].imm = callback_offset;
+	return new_prog;
 }
 
 static bool is_bpf_throw_call(struct bpf_insn *insn)
@@ -18234,17 +18351,25 @@ static struct bpf_prog *rewrite_bpf_call(struct bpf_verifier_env *env,
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
+	int type, tsubprog = -1, esubprog;
 	struct bpf_prog *new_prog;
-	int type, tsubprog = -1;
 	u32 callback_start;
 	u32 call_insn_offset;
 	s32 callback_offset;
 	bool ret_code;
 
 	type = tstate->type;
+	esubprog = tstate->subprog;
 	ret_code = tstate->check_helper_ret_code;
-	if (type == BPF_THROW_OUTER)
+	if (type == BPF_THROW_OUTER) {
 		insn_buf[4] = insn_buf[9] = BPF_EMIT_CALL(bpf_reset_exception);
+		/* Note that we allow progs to attach to exception callbacks,
+		 * even if they do, they won't clobber any exception state that
+		 * we care about at this point.
+		 */
+		if (esubprog != -1)
+			insn_buf[5] = insn_buf[10] = BPF_CALL_REL(0);
+	}
 	if (type == BPF_THROW_INNER)
 		insn_buf[9] = BPF_EMIT_CALL(bpf_throw);
 
@@ -18285,6 +18410,25 @@ static struct bpf_prog *rewrite_bpf_call(struct bpf_verifier_env *env,
 	/* Note: For BPF_THROW_OUTER, we already patched in call at insn_buf[4] */
 	if (type == BPF_THROW_OUTER)
 		aux_data[position + 4].skip_patch_call_imm = true;
+
+	/* Fixups for exception callback begin here */
+	if (esubprog == -1)
+		return new_prog;
+	callback_start = env->subprog_info[esubprog].start;
+
+	/* Note: insn_buf[5] is an offset of BPF_CALL_REL instruction */
+	call_insn_offset = position + 5;
+	callback_offset = callback_start - call_insn_offset - 1;
+	new_prog->insnsi[call_insn_offset].imm = callback_offset;
+
+	if (!ret_code)
+		return new_prog;
+
+	/* Note: insn_buf[10] is an offset of BPF_CALL_REL instruction */
+	call_insn_offset = position + 10;
+	callback_offset = callback_start - call_insn_offset - 1;
+	new_prog->insnsi[call_insn_offset].imm = callback_offset;
+
 	return new_prog;
 }
 
@@ -18439,6 +18583,10 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 		return -ENOMEM;
 	state->curframe = 0;
 	state->speculative = false;
+	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT)
+		state->exception_callback_subprog = BPF_EXCEPTION_CB_CANNOT_SET;
+	else
+		state->exception_callback_subprog = BPF_EXCEPTION_CB_CAN_SET;
 	state->branches = 1;
 	state->frame[0] = kzalloc(sizeof(struct bpf_func_state), GFP_KERNEL);
 	if (!state->frame[0]) {

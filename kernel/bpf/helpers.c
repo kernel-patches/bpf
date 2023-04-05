@@ -2322,6 +2322,11 @@ __bpf_kfunc notrace void bpf_throw(void)
 	current->bpf_exception_thrown[i] = true;
 }
 
+__bpf_kfunc notrace void bpf_set_exception_callback(int (*cb)(void))
+{
+	WARN_ON_ONCE(1);
+}
+
 __diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
@@ -2349,6 +2354,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_set_exception_callback)
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

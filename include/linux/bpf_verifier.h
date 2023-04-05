@@ -293,6 +293,7 @@ struct bpf_func_state {
 	bool in_callback_fn;
 	struct tnum callback_ret_range;
 	bool in_async_callback_fn;
+	bool in_exception_callback_fn;
 
 	/* The following fields should be last. See copy_func_state() */
 	int acquired_refs;
@@ -370,6 +371,7 @@ struct bpf_verifier_state {
 	struct bpf_active_lock active_lock;
 	bool speculative;
 	bool active_rcu_lock;
+	s32 exception_callback_subprog;
 
 	/* first and last insn idx of this verifier state */
 	u32 first_insn_idx;
@@ -439,6 +441,7 @@ enum {
 struct bpf_throw_state {
 	int type;
 	bool check_helper_ret_code;
+	s32 subprog;
 };
 
 /* Possible states for alu_state member. */
@@ -549,7 +552,8 @@ struct bpf_subprog_info {
 	bool has_tail_call;
 	bool tail_call_reachable;
 	bool has_ld_abs;
-	bool is_async_cb;
+	bool is_async_or_exception_cb;
+	bool is_exception_cb;
 	bool can_throw;
 };
 

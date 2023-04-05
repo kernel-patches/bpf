@@ -98,4 +98,15 @@ extern struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root) __ksym;
  */
 extern void bpf_throw(void) __attribute__((noreturn)) __ksym;
 
+/*
+ * Description
+ *  Set the callback which will be invoked after an exception is thrown and the
+ *  eBPF runtime has completely unwinded the program stack. The return value of
+ *  this callback is treated as the return value of the program when the
+ *  exception is thrown.
+ * Returns
+ *  Void
+ */
+extern void bpf_set_exception_callback(int (*)(void)) __ksym;
+
 #endif
