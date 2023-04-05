@@ -9454,6 +9454,11 @@ static bool is_kfunc_arg_kptr_get(struct bpf_kfunc_call_arg_meta *meta, int arg)
 	return arg == 0 && (meta->kfunc_flags & KF_KPTR_GET);
 }
 
+static bool is_kfunc_throwing(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return meta->kfunc_flags & KF_THROW;
+}
+
 static bool __kfunc_param_match_suffix(const struct btf *btf,
 				       const struct btf_param *arg,
 				       const char *suffix)
@@ -10813,11 +10818,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
-	if (meta.btf == btf_vmlinux && meta.func_id == special_kfunc_list[KF_bpf_throw]) {
+	if (is_kfunc_throwing(&meta) ||
+	    (meta.btf == btf_vmlinux && meta.func_id == special_kfunc_list[KF_bpf_throw])) {
 		err = mark_chain_throw(env, insn_idx);
 		if (err < 0)
 			return err;
-		return 1;
+		/* Halt exploration only for bpf_throw */
+		if (!is_kfunc_throwing(&meta))
+			return 1;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
