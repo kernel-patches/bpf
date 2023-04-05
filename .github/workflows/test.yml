@@ -6,6 +6,7 @@ on:
     branches:
       - bpf_base
       - bpf-next_base
+  workflow_dispatch:
 
 concurrency:
   group: ci-test-${{ github.ref_name }}
