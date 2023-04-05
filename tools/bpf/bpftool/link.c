@@ -135,6 +135,18 @@ static void show_iter_json(struct bpf_link_info *info, json_writer_t *wtr)
 	}
 }
 
+static void show_netfilter_json(const struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_uint_field(json_wtr, "pf",
+			 info->netfilter.pf);
+	jsonw_uint_field(json_wtr, "hook",
+			 info->netfilter.hooknum);
+	jsonw_int_field(json_wtr, "prio",
+			 info->netfilter.priority);
+	jsonw_uint_field(json_wtr, "flags",
+			 info->netfilter.flags);
+}
+
 static int get_prog_info(int prog_id, struct bpf_prog_info *info)
 {
 	__u32 len = sizeof(*info);
@@ -195,6 +207,10 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 				 info->netns.netns_ino);
 		show_link_attach_type_json(info->netns.attach_type, json_wtr);
 		break;
+	case BPF_LINK_TYPE_NETFILTER:
+		show_netfilter_json(info, json_wtr);
+		break;
+
 	default:
 		break;
 	}
@@ -300,6 +316,14 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_NETNS:
 		printf("\n\tnetns_ino %u  ", info->netns.netns_ino);
 		show_link_attach_type_plain(info->netns.attach_type);
+		break;
+	case BPF_LINK_TYPE_NETFILTER:
+		printf("\n\tpf: %d, hook %u, prio %d",
+		       info->netfilter.pf,
+		       info->netfilter.hooknum,
+		       info->netfilter.priority);
+		if (info->netfilter.flags)
+			printf(" flags 0x%x", info->netfilter.flags);
 		break;
 	default:
 		break;
