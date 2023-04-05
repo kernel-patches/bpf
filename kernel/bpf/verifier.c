@@ -13664,6 +13664,12 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			verbose(env, "missing btf func_info\n");
 			return -EINVAL;
 		}
+		/* NOTE: Do not change this directly, as we rely on only
+		 * BPF_FUNC_STATIC allowed as BPF_PSEUDO_FUNC targets in
+		 * do_check_subprogs, see comment about propagating exception
+		 * information across global functions. When changing this, add
+		 * bpf_pseudo_func handling to the propagating loop as well.
+		 */
 		if (aux->func_info_aux[subprogno].linkage != BTF_FUNC_STATIC) {
 			verbose(env, "callback function not static\n");
 			return -EINVAL;
@@ -18491,6 +18497,110 @@ out:
 	return ret;
 }
 
+/* We have gone through all global subprogs, and we know which ones were seen as
+ * throwing exceptions. Since calls to other global functions are not explored
+ * and we simply continue exploration at the next instruction, we may have not
+ * fully propagated can_throw information. E.g. consider the case below, where 1
+ * and 2 are verified in order.
+ *
+ * gfunc 1:
+ *	call gfunc2
+ *	exit
+ * gfunc 2:
+ *	call bpf_throw
+ *
+ * At this point, gfunc1 is not marked as throwing, but it calls gfunc2 which
+ * actually throws. The only thing we need to do is go through every global
+ * function, and propagate the information back to their callers. We only care
+ * about BPF_PSEUDO_CALL, as BPF_PSEUDO_FUNC loads cannot have global functions
+ * as targets
+ *
+ * Logic mostly mimics check_max_stack_depth, but adjusted and simplified for
+ * our use case.
+ */
+static int fixup_global_subprog_throw_info(struct bpf_verifier_env *env)
+{
+	struct bpf_func_info_aux *func_info_aux = env->prog->aux->func_info_aux;
+	struct bpf_subprog_info *subprog = env->subprog_info;
+	int frame = 0, idx = 0, i = 0, subprog_end;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int ret_insn[MAX_CALL_FRAMES];
+	int ret_prog[MAX_CALL_FRAMES];
+	bool can_throw;
+	int j, ret;
+
+	/* Start at first global subprog */
+	for (int s = 1; s < env->subprog_cnt; s++) {
+		if (func_info_aux[s].linkage != BTF_FUNC_GLOBAL)
+			continue;
+		idx = s;
+		break;
+	}
+	if (!idx)
+		return -EFAULT;
+	i = subprog[idx].start;
+continue_func:
+	can_throw = false;
+	subprog_end = subprog[idx + 1].start;
+	for (; i < subprog_end; i++) {
+		int next_insn;
+
+		if (!bpf_pseudo_call(insn + i))
+			continue;
+		/* remember insn and function to return to */
+		ret_insn[frame] = i + 1;
+		ret_prog[frame] = idx;
+
+		/* find the callee */
+		next_insn = i + insn[i].imm + 1;
+		idx = find_subprog(env, next_insn);
+		if (idx < 0) {
+			WARN_ONCE(1, "verifier bug. No program starts at insn %d\n", next_insn);
+			return -EFAULT;
+		}
+
+		/* Only follow global subprog calls */
+		if (func_info_aux[idx].linkage != BTF_FUNC_GLOBAL)
+			continue;
+		/* If this subprog already throws, mark all callers and continue
+		 * with next instruction in current subprog.
+		 */
+		if (subprog[idx].can_throw) {
+			/* Include current frame info when marking */
+			for (j = frame; j >= 0; j--) {
+				func_info_aux[ret_prog[j]].throws_exception = subprog[ret_prog[j]].can_throw = true;
+				/* Exception subprog cannot be set in global
+				 * function context, so set_throw_state_type
+				 * will always mark type as BPF_THROW_INNER
+				 * and subprog as -1.
+				 */
+				ret = set_throw_state_type(env, ret_insn[j] - 1, j, ret_prog[j]);
+				if (ret < 0)
+					return ret;
+			}
+			continue;
+		}
+
+		i = next_insn;
+		frame++;
+		if (frame >= MAX_CALL_FRAMES) {
+			verbose(env, "the call stack of %d frames is too deep !\n",
+				frame);
+			return -E2BIG;
+		}
+		goto continue_func;
+	}
+	/* end of for() loop means the last insn of the 'subprog'
+	 * was reached. Doesn't matter whether it was JA or EXIT
+	 */
+	if (frame == 0)
+		return 0;
+	frame--;
+	i = ret_insn[frame];
+	idx = ret_prog[frame];
+	goto continue_func;
+}
+
 /* Verify all global functions in a BPF program one by one based on their BTF.
  * All global functions must pass verification. Otherwise the whole program is rejected.
  * Consider:
@@ -18511,6 +18621,7 @@ out:
 static int do_check_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog_aux *aux = env->prog->aux;
+	bool does_anyone_throw = false;
 	int i, ret;
 
 	if (!aux->func_info)
@@ -18535,8 +18646,13 @@ static int do_check_subprogs(struct bpf_verifier_env *env)
 		 * opposite is fine though.
 		 */
 		aux->func_info_aux[i].throws_exception = env->subprog_info[i].can_throw;
+		if (!does_anyone_throw && env->subprog_info[i].can_throw)
+			does_anyone_throw = true;
 	}
-	return 0;
+
+	if (!does_anyone_throw)
+		return 0;
+	return fixup_global_subprog_throw_info(env);
 }
 
 static int do_check_main(struct bpf_verifier_env *env)
