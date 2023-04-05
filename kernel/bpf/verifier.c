@@ -18024,23 +18024,26 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	return new_prog;
 }
 
-static bool is_bpf_loop_call(struct bpf_insn *insn)
+static bool is_inlineable_bpf_loop_call(struct bpf_insn *insn,
+					struct bpf_insn_aux_data *aux)
 {
 	return insn->code == (BPF_JMP | BPF_CALL) &&
 		insn->src_reg == 0 &&
-		insn->imm == BPF_FUNC_loop;
+		insn->imm == BPF_FUNC_loop &&
+		aux->loop_inline_state.fit_for_inline;
 }
 
 /* For all sub-programs in the program (including main) check
- * insn_aux_data to see if there are bpf_loop calls that require
- * inlining. If such calls are found the calls are replaced with a
+ * insn_aux_data to see if there are any instructions that need to be
+ * transformed into an instruction sequence. E.g. bpf_loop calls that
+ * require inlining. If such calls are found the calls are replaced with a
  * sequence of instructions produced by `inline_bpf_loop` function and
  * subprog stack_depth is increased by the size of 3 registers.
  * This stack space is used to spill values of the R6, R7, R8.  These
  * registers are used to store the loop bound, counter and context
  * variables.
  */
-static int optimize_bpf_loop(struct bpf_verifier_env *env)
+static int do_misc_rewrites(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprogs = env->subprog_info;
 	int i, cur_subprog = 0, cnt, delta = 0;
@@ -18051,13 +18054,14 @@ static int optimize_bpf_loop(struct bpf_verifier_env *env)
 	u16 stack_depth_extra = 0;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
-		struct bpf_loop_inline_state *inline_state =
-			&env->insn_aux_data[i + delta].loop_inline_state;
+		struct bpf_insn_aux_data *insn_aux = &env->insn_aux_data[i + delta];
+		struct bpf_prog *new_prog = NULL;
 
-		if (is_bpf_loop_call(insn) && inline_state->fit_for_inline) {
-			struct bpf_prog *new_prog;
+		if (is_inlineable_bpf_loop_call(insn, insn_aux)) {
+			struct bpf_loop_inline_state *inline_state = &insn_aux->loop_inline_state;
 
-			stack_depth_extra = BPF_REG_SIZE * 3 + stack_depth_roundup;
+			stack_depth_extra = max_t(u16, stack_depth_extra,
+						  BPF_REG_SIZE * 3 + stack_depth_roundup);
 			new_prog = inline_bpf_loop(env,
 						   i + delta,
 						   -(stack_depth + stack_depth_extra),
@@ -18065,7 +18069,9 @@ static int optimize_bpf_loop(struct bpf_verifier_env *env)
 						   &cnt);
 			if (!new_prog)
 				return -ENOMEM;
+		}
 
+		if (new_prog) {
 			delta     += cnt - 1;
 			env->prog  = new_prog;
 			insn       = new_prog->insnsi + i + delta;
@@ -18876,7 +18882,7 @@ skip_full_check:
 
 	/* instruction rewrites happen after this point */
 	if (ret == 0)
-		ret = optimize_bpf_loop(env);
+		ret = do_misc_rewrites(env);
 
 	if (is_priv) {
 		if (ret == 0)
