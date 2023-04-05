@@ -905,7 +905,14 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 	if (IS_ERR(prog))
 		return prog;
 
-	if (!bpf_prog_map_compatible(map, prog)) {
+	/* Programs which throw exceptions are not allowed to be tail call
+	 * targets. This is because it forces us to be conservative for each
+	 * bpf_tail_call invocation and assume it may throw, since we do not
+	 * know what the target program may do, thus causing us to propagate the
+	 * exception and mark calling prog as potentially throwing. Just be
+	 * restrictive for now and disallow this.
+	 */
+	if (prog->throws_exception || !bpf_prog_map_compatible(map, prog)) {
 		bpf_prog_put(prog);
 		return ERR_PTR(-EINVAL);
 	}

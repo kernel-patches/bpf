@@ -514,7 +514,9 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 	kind = bpf_attach_type_to_tramp(link->link.prog);
 	if (tr->extension_prog)
 		/* cannot attach fentry/fexit if extension prog is attached.
-		 * cannot overwrite extension prog either.
+		 * cannot overwrite extension prog either. We rely on this to
+		 * not check extension prog's exception specification (since
+		 * throwing extension may not replace non-throwing).
 		 */
 		return -EBUSY;
 

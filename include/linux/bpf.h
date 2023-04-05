@@ -1287,6 +1287,7 @@ static inline bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 struct bpf_func_info_aux {
 	u16 linkage;
 	bool unreliable;
+	bool throws_exception;
 };
 
 enum bpf_jit_poke_reason {
@@ -1430,7 +1431,8 @@ struct bpf_prog {
 				enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
 				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
 				call_get_func_ip:1, /* Do we call get_func_ip() */
-				tstamp_type_access:1; /* Accessed __sk_buff->tstamp_type */
+				tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
+				throws_exception:1; /* Does this program throw exceptions? */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
 	u32			len;		/* Number of filter blocks */
@@ -3034,5 +3036,10 @@ static inline gfp_t bpf_memcg_flags(gfp_t flags)
 		return flags | __GFP_ACCOUNT;
 	return flags;
 }
+
+/* BPF Exception helpers */
+void bpf_reset_exception(void);
+u64 bpf_get_exception(void);
+void bpf_throw(void);
 
 #endif /* _LINUX_BPF_H */

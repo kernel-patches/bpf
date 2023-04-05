@@ -430,6 +430,17 @@ struct bpf_loop_inline_state {
 	u32 callback_subprogno; /* valid when fit_for_inline is true */
 };
 
+enum {
+	BPF_THROW_NONE,
+	BPF_THROW_OUTER,
+	BPF_THROW_INNER,
+};
+
+struct bpf_throw_state {
+	int type;
+	bool check_helper_ret_code;
+};
+
 /* Possible states for alu_state member. */
 #define BPF_ALU_SANITIZE_SRC		(1U << 0)
 #define BPF_ALU_SANITIZE_DST		(1U << 1)
@@ -464,6 +475,7 @@ struct bpf_insn_aux_data {
 		 */
 		struct bpf_loop_inline_state loop_inline_state;
 	};
+	struct bpf_throw_state throw_state;
 	u64 obj_new_size; /* remember the size of type passed to bpf_obj_new to rewrite R1 */
 	struct btf_struct_meta *kptr_struct_meta;
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
@@ -537,6 +549,7 @@ struct bpf_subprog_info {
 	bool tail_call_reachable;
 	bool has_ld_abs;
 	bool is_async_cb;
+	bool can_throw;
 };
 
 /* single container for all structs

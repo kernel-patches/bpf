@@ -3144,6 +3144,16 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		tgt_prog = prog->aux->dst_prog;
 	}
 
+	/* Don't allow tracing programs to attach to fexit and clear exception
+	 * state when we are unwinding the program.
+	 */
+	if (prog->type == BPF_PROG_TYPE_TRACING &&
+	    (prog->expected_attach_type == BPF_TRACE_FEXIT) &&
+	    tgt_prog && tgt_prog->throws_exception && prog->throws_exception) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
 		goto out_unlock;

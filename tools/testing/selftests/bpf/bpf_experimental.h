@@ -89,4 +89,13 @@ extern void bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
  */
 extern struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root) __ksym;
 
+/* Description
+ *  Throw an exception, terminating the execution of the program immediately.
+ *  The eBPF runtime unwinds the stack automatically and exits the program with
+ *  the default return value of 0.
+ * Returns
+ *  This function never returns.
+ */
+extern void bpf_throw(void) __attribute__((noreturn)) __ksym;
+
 #endif

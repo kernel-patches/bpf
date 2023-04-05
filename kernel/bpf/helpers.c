@@ -1879,6 +1879,20 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 	}
 }
 
+notrace void bpf_reset_exception(void)
+{
+	int i = interrupt_context_level();
+
+	current->bpf_exception_thrown[i] = false;
+}
+
+notrace u64 bpf_get_exception(void)
+{
+	int i = interrupt_context_level();
+
+	return current->bpf_exception_thrown[i];
+}
+
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in vmlinux BTF");
@@ -2295,6 +2309,13 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+__bpf_kfunc notrace void bpf_throw(void)
+{
+	int i = interrupt_context_level();
+
+	current->bpf_exception_thrown[i] = true;
+}
+
 __diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
@@ -2321,6 +2342,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_throw)
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

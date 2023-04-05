@@ -2787,6 +2787,8 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 	return 0;
 }
 
+static bool is_bpf_throw_call(struct bpf_insn *insn);
+
 static int check_subprogs(struct bpf_verifier_env *env)
 {
 	int i, subprog_start, subprog_end, off, cur_subprog = 0;
@@ -2820,11 +2822,12 @@ next:
 		if (i == subprog_end - 1) {
 			/* to avoid fall-through from one subprog into another
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back
+			 * or unconditional jump back or bpf_throw call
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
-			    code != (BPF_JMP | BPF_JA)) {
-				verbose(env, "last insn is not an exit or jmp\n");
+			    code != (BPF_JMP | BPF_JA) &&
+			    !is_bpf_throw_call(insn + i)) {
+				verbose(env, "last insn is not an exit or jmp or bpf_throw call\n");
 				return -EINVAL;
 			}
 			subprog_start = subprog_end;
@@ -8200,6 +8203,7 @@ static int set_callee_state(struct bpf_verifier_env *env,
 			    struct bpf_func_state *callee, int insn_idx);
 
 static bool is_callback_calling_kfunc(u32 btf_id);
+static int mark_chain_throw(struct bpf_verifier_env *env, int insn_idx);
 
 static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx, int subprog,
@@ -8247,6 +8251,12 @@ static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
 
 			/* continue with next insn after call */
+
+			/* We don't explore the global function, but if it
+			 * throws, mark the callchain as throwing.
+			 */
+			if (env->subprog_info[subprog].can_throw)
+				return mark_chain_throw(env, *insn_idx);
 			return 0;
 		}
 	}
@@ -8382,6 +8392,53 @@ static int set_callee_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_throw_state_type(struct bpf_verifier_env *env, int insn_idx,
+				int frame, int subprog)
+{
+	struct bpf_throw_state *ts = &env->insn_aux_data[insn_idx].throw_state;
+	int type;
+
+	if (!frame && !subprog && env->prog->type != BPF_PROG_TYPE_EXT)
+		type = BPF_THROW_OUTER;
+	else
+		type = BPF_THROW_INNER;
+	if (ts->type != BPF_THROW_NONE) {
+		if (ts->type != type) {
+			verbose(env,
+				"conflicting rewrite type for throwing call insn %d: %d and %d\n",
+				insn_idx, ts->type, type);
+			return -EINVAL;
+		}
+	}
+	ts->type = type;
+	return 0;
+}
+
+static int mark_chain_throw(struct bpf_verifier_env *env, int insn_idx) {
+	struct bpf_func_info_aux *func_info_aux = env->prog->aux->func_info_aux;
+	struct bpf_subprog_info *subprog = env->subprog_info;
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state **frame = state->frame;
+	u32 cur_subprogno;
+	int ret;
+
+	/* Mark all callsites leading up to this throw and their corresponding
+	 * subprogs and update their func_info_aux table.
+	 */
+	for (int i = 1; i <= state->curframe; i++) {
+		u32 subprogno = frame[i - 1]->subprogno;
+
+		func_info_aux[subprogno].throws_exception = subprog[subprogno].can_throw = true;
+		ret = set_throw_state_type(env, frame[i]->callsite, i - 1, subprogno);
+		if (ret < 0)
+			return ret;
+	}
+	/* Now mark actual instruction which caused the throw */
+	cur_subprogno = frame[state->curframe]->subprogno;
+	func_info_aux[cur_subprogno].throws_exception = subprog[cur_subprogno].can_throw = true;
+	return set_throw_state_type(env, insn_idx, state->curframe, cur_subprogno);
+}
+
 static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int *insn_idx)
 {
@@ -8394,7 +8451,6 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			target_insn);
 		return -EFAULT;
 	}
-
 	return __check_func_call(env, insn, insn_idx, subprog, set_callee_state);
 }
 
@@ -8755,17 +8811,17 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
-static int check_reference_leak(struct bpf_verifier_env *env)
+static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
 	struct bpf_func_state *state = cur_func(env);
 	bool refs_lingering = false;
 	int i;
 
-	if (state->frameno && !state->in_callback_fn)
+	if (!exception_exit && state->frameno && !state->in_callback_fn)
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
+		if (!exception_exit && state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -8999,7 +9055,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
-		err = check_reference_leak(env);
+		err = check_reference_leak(env, false);
 		if (err) {
 			verbose(env, "tail_call would lead to reference leak\n");
 			return err;
@@ -9615,6 +9671,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_from_xdp,
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
+	KF_bpf_throw,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -9633,6 +9690,7 @@ BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
+BTF_ID(func, bpf_throw)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -9653,6 +9711,7 @@ BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
+BTF_ID(func, bpf_throw)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10734,6 +10793,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				func_name, meta.func_id);
 			return err;
 		}
+	}
+
+	if (meta.btf == btf_vmlinux && meta.func_id == special_kfunc_list[KF_bpf_throw]) {
+		err = mark_chain_throw(env, insn_idx);
+		if (err < 0)
+			return err;
+		return 1;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
@@ -13670,7 +13736,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	 * gen_ld_abs() may terminate the program at runtime, leading to
 	 * reference leak.
 	 */
-	err = check_reference_leak(env);
+	err = check_reference_leak(env, false);
 	if (err) {
 		verbose(env, "BPF_LD_[ABS|IND] cannot be mixed with socket references\n");
 		return err;
@@ -14074,6 +14140,10 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			mark_prune_point(env, t);
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_kfunc_call_arg_meta meta;
+
+			/* 'call bpf_throw' has no fallthrough edge, same as BPF_EXIT */
+			if (is_bpf_throw_call(insn))
+				return DONE_EXPLORING;
 
 			ret = fetch_kfunc_meta(env, insn, &meta, NULL);
 			if (ret == 0 && is_iter_next_kfunc(&meta)) {
@@ -14738,7 +14808,7 @@ static bool regs_exact(const struct bpf_reg_state *rold,
 		       const struct bpf_reg_state *rcur,
 		       struct bpf_id_pair *idmap)
 {
-	return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 && 
+	return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
 	       check_ids(rold->id, rcur->id, idmap) &&
 	       check_ids(rold->ref_obj_id, rcur->ref_obj_id, idmap);
 }
@@ -15617,6 +15687,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int prev_insn_idx = -1;
 
 	for (;;) {
+		bool exception_exit = false;
 		struct bpf_insn *insn;
 		u8 class;
 		int err;
@@ -15830,12 +15901,18 @@ static int do_check(struct bpf_verifier_env *env)
 						return -EINVAL;
 					}
 				}
-				if (insn->src_reg == BPF_PSEUDO_CALL)
+				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
-				else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
+				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
-				else
+					if (err == 1) {
+						err = 0;
+						exception_exit = true;
+						goto process_bpf_exit_full;
+					}
+				} else {
 					err = check_helper_call(env, insn, &env->insn_idx);
+				}
 				if (err)
 					return err;
 
@@ -15863,6 +15940,7 @@ static int do_check(struct bpf_verifier_env *env)
 					return -EINVAL;
 				}
 
+process_bpf_exit_full:
 				if (env->cur_state->active_lock.ptr &&
 				    !in_rbtree_lock_required_cb(env)) {
 					verbose(env, "bpf_spin_unlock is missing\n");
@@ -15880,9 +15958,22 @@ static int do_check(struct bpf_verifier_env *env)
 				 * function, for which reference_state must
 				 * match caller reference state when it exits.
 				 */
-				err = check_reference_leak(env);
+				err = check_reference_leak(env, exception_exit);
 				if (err)
 					return err;
+
+				/* The side effect of the prepare_func_exit
+				 * which is being skipped is that it frees
+				 * bpf_func_state. Typically, process_bpf_exit
+				 * will only be hit with outermost exit.
+				 * copy_verifier_state in pop_stack will handle
+				 * freeing of any extra bpf_func_state left over
+				 * from not processing all nested function
+				 * exits. We also skip return code checks as
+				 * they are not needed for exceptional exits.
+				 */
+				if (exception_exit)
+					goto process_bpf_exit;
 
 				if (state->curframe) {
 					/* exit from nested function */
@@ -17438,6 +17529,33 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	int i, ret, cnt, delta = 0;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
+		/* Typically, exception state is always cleared on entry and we
+		 * ensure to clear it before exiting, but in some cases, our
+		 * invocation can occur after a BPF callback has been executed
+		 * asynchronously in the context of the current task, which may
+		 * clobber the state (think of BPF timer callbacks). Callbacks
+		 * never reset exception state (as they may be called from
+		 * within a program). Thus, if we rely on seeing the exception
+		 * state, always clear it on entry.
+		 */
+		if (i == 0 && prog->throws_exception) {
+			struct bpf_insn entry_insns[] = {
+				BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+				BPF_EMIT_CALL(bpf_reset_exception),
+				BPF_MOV64_REG(BPF_REG_1, BPF_REG_6),
+				insn[i],
+			};
+
+			cnt = ARRAY_SIZE(entry_insns);
+			new_prog = bpf_patch_insn_data(env, i + delta, entry_insns, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+		}
+
 		/* Make divide-by-zero exceptions impossible. */
 		if (insn->code == (BPF_ALU64 | BPF_MOD | BPF_X) ||
 		    insn->code == (BPF_ALU64 | BPF_DIV | BPF_X) ||
@@ -18030,7 +18148,33 @@ static bool is_inlineable_bpf_loop_call(struct bpf_insn *insn,
 	return insn->code == (BPF_JMP | BPF_CALL) &&
 		insn->src_reg == 0 &&
 		insn->imm == BPF_FUNC_loop &&
-		aux->loop_inline_state.fit_for_inline;
+		aux->loop_inline_state.fit_for_inline &&
+		aux->throw_state.type == BPF_THROW_NONE;
+}
+
+static struct bpf_prog *rewrite_bpf_throw_call(struct bpf_verifier_env *env,
+					       int position,
+					       struct bpf_throw_state *tstate,
+					       u32 *cnt)
+{
+	struct bpf_insn insn_buf[] = {
+		env->prog->insnsi[position],
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+
+	*cnt = ARRAY_SIZE(insn_buf);
+	/* We don't need the call instruction for throws in frame 0 */
+	if (tstate->type == BPF_THROW_OUTER)
+		return bpf_patch_insn_data(env, position, insn_buf + 1, *cnt - 1);
+	return bpf_patch_insn_data(env, position, insn_buf, *cnt);
+}
+
+static bool is_bpf_throw_call(struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_CALL) &&
+	       insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+	       insn->off == 0 && insn->imm == special_kfunc_list[KF_bpf_throw];
 }
 
 /* For all sub-programs in the program (including main) check
@@ -18069,8 +18213,24 @@ static int do_misc_rewrites(struct bpf_verifier_env *env)
 						   &cnt);
 			if (!new_prog)
 				return -ENOMEM;
+		} else if (is_bpf_throw_call(insn)) {
+			struct bpf_throw_state *throw_state = &insn_aux->throw_state;
+
+			/* The verifier was able to prove that the bpf_throw
+			 * call was unreachable, hence it must have not been
+			 * seen and will be removed by opt_remove_dead_code.
+			 */
+			if (throw_state->type == BPF_THROW_NONE) {
+				WARN_ON_ONCE(insn_aux->seen);
+				goto skip;
+			}
+
+			new_prog = rewrite_bpf_throw_call(env, i + delta, throw_state, &cnt);
+			if (!new_prog)
+				return -ENOMEM;
 		}
 
+skip:
 		if (new_prog) {
 			delta     += cnt - 1;
 			env->prog  = new_prog;
@@ -18240,6 +18400,12 @@ static int do_check_subprogs(struct bpf_verifier_env *env)
 				"Func#%d is safe for any args that match its prototype\n",
 				i);
 		}
+		/* Only reliable functions from BTF PoV can be extended, hence
+		 * remember their exception specification to check that we don't
+		 * replace non-throwing subprog with throwing subprog. The
+		 * opposite is fine though.
+		 */
+		aux->func_info_aux[i].throws_exception = env->subprog_info[i].can_throw;
 	}
 	return 0;
 }
@@ -18250,8 +18416,12 @@ static int do_check_main(struct bpf_verifier_env *env)
 
 	env->insn_idx = 0;
 	ret = do_check_common(env, 0);
-	if (!ret)
+	if (!ret) {
 		env->prog->aux->stack_depth = env->subprog_info[0].stack_depth;
+		env->prog->throws_exception = env->subprog_info[0].can_throw;
+		if (env->prog->aux->func_info)
+			env->prog->aux->func_info_aux[0].throws_exception = env->prog->throws_exception;
+	}
 	return ret;
 }
 
@@ -18753,6 +18923,42 @@ struct btf *bpf_get_btf_vmlinux(void)
 	return btf_vmlinux;
 }
 
+static int check_ext_prog(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *tgt_prog = env->prog->aux->dst_prog;
+	u32 btf_id = env->prog->aux->attach_btf_id;
+	struct bpf_prog *prog = env->prog;
+	int subprog = -1;
+
+	if (prog->type != BPF_PROG_TYPE_EXT)
+		return 0;
+	for (int i = 0; i < tgt_prog->aux->func_info_cnt; i++) {
+		if (tgt_prog->aux->func_info[i].type_id == btf_id) {
+			subprog = i;
+			break;
+		}
+	}
+	if (subprog == -1) {
+		verbose(env, "verifier internal error: extension prog's subprog not found\n");
+		return -EFAULT;
+	}
+	/* BPF_THROW_OUTER rewrites won't match BPF_PROG_TYPE_EXT's
+	 * BPF_THROW_INNER rewrites.
+	 */
+	if (!subprog && prog->throws_exception) {
+		verbose(env, "Cannot attach throwing extension to main subprog\n");
+		return -EINVAL;
+	}
+	/* Overwriting extensions is not allowed, so we can simply check
+	 * the specification of the subprog we are replacing.
+	 */
+	if (!tgt_prog->aux->func_info_aux[subprog].throws_exception && prog->throws_exception) {
+		verbose(env, "Cannot attach throwing extension to non-throwing subprog\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
 int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 {
 	u64 start_time = ktime_get_ns();
@@ -18870,6 +19076,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 
 	ret = do_check_subprogs(env);
 	ret = ret ?: do_check_main(env);
+
+	ret = ret ?: check_ext_prog(env);
+
 
 	if (ret == 0 && bpf_prog_is_offloaded(env->prog->aux))
 		ret = bpf_prog_offload_finalize(env);
