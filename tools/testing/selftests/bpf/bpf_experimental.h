@@ -109,4 +109,21 @@ extern void bpf_throw(void) __attribute__((noreturn)) __ksym;
  */
 extern void bpf_set_exception_callback(int (*)(void)) __ksym;
 
+#define __bpf_assert_op(LHS, op, RHS)								   \
+	_Static_assert(sizeof(&(LHS)), "1st argument must be an lvalue expression");		   \
+	_Static_assert(__builtin_constant_p((RHS)), "2nd argument must be a constant expression"); \
+	asm volatile ("if %[lhs] " op " %[rhs] goto +1; call bpf_throw"				   \
+		      : : [lhs] "r"(LHS) , [rhs] "i"(RHS) :)
+
+#define bpf_assert_eq(LHS, RHS) __bpf_assert_op(LHS, "==", RHS)
+#define bpf_assert_ne(LHS, RHS) __bpf_assert_op(LHS, "!=", RHS)
+#define bpf_assert_lt(LHS, RHS) __bpf_assert_op(LHS, "<", RHS)
+#define bpf_assert_gt(LHS, RHS) __bpf_assert_op(LHS, ">", RHS)
+#define bpf_assert_le(LHS, RHS) __bpf_assert_op(LHS, "<=", RHS)
+#define bpf_assert_ge(LHS, RHS) __bpf_assert_op(LHS, ">=", RHS)
+#define bpf_assert_slt(LHS, RHS) __bpf_assert_op(LHS, "s<", RHS)
+#define bpf_assert_sgt(LHS, RHS) __bpf_assert_op(LHS, "s>", RHS)
+#define bpf_assert_sle(LHS, RHS) __bpf_assert_op(LHS, "s<=", RHS)
+#define bpf_assert_sge(LHS, RHS) __bpf_assert_op(LHS, "s>=", RHS)
+
 #endif
