@@ -766,6 +766,10 @@ BPF_CALL_4(bpf_user_ringbuf_drain, struct bpf_map *, map,
 
 		bpf_dynptr_init(&dynptr, sample, BPF_DYNPTR_TYPE_LOCAL, 0, size);
 		ret = callback((uintptr_t)&dynptr, (uintptr_t)callback_ctx, 0, 0, 0);
+		if (bpf_get_exception()) {
+			ret = -EJUKEBOX;
+			goto schedule_work_return;
+		}
 		__bpf_user_ringbuf_sample_release(rb, size, flags);
 	}
 	ret = samples - discarded_samples;

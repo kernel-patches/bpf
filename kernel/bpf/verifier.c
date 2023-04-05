@@ -9053,6 +9053,24 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
+	/* For each helper call which invokes a callback which may throw, it
+	 * will propagate the thrown exception to us. For helpers, we check the
+	 * return code in addition to exception state, as it may be reset
+	 * between detection and return within kernel. Note that we don't
+	 * include async callbacks (passed to bpf_timer_set_callback) because
+	 * exceptions won't be propagated.
+	 */
+	if (is_callback_calling_function(meta.func_id) &&
+	    meta.func_id != BPF_FUNC_timer_set_callback) {
+		struct bpf_throw_state *ts = &env->insn_aux_data[insn_idx].throw_state;
+		/* Check for -EJUKEBOX in case exception state is clobbered by
+		 * some other program executing between bpf_get_exception and
+		 * return from helper.
+		 */
+		if (base_type(fn->ret_type) == RET_INTEGER)
+			ts->check_helper_ret_code = true;
+	}
+
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
 		err = check_reference_leak(env, false);
@@ -17691,6 +17709,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			continue;
 		}
 
+		if (env->insn_aux_data[i + delta].skip_patch_call_imm)
+			continue;
+
 		if (insn->imm == BPF_FUNC_get_route_realm)
 			prog->dst_needed = 1;
 		if (insn->imm == BPF_FUNC_get_prandom_u32)
@@ -18177,6 +18198,94 @@ static bool is_bpf_throw_call(struct bpf_insn *insn)
 	       insn->off == 0 && insn->imm == special_kfunc_list[KF_bpf_throw];
 }
 
+static struct bpf_prog *rewrite_bpf_call(struct bpf_verifier_env *env,
+					 int position,
+					 s32 stack_base,
+					 struct bpf_throw_state *tstate,
+					 u32 *cnt)
+{
+	s32 r0_offset = stack_base + 0 * BPF_REG_SIZE;
+	struct bpf_insn_aux_data *aux_data;
+	struct bpf_insn insn_buf[] = {
+		env->prog->insnsi[position],
+		BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_0, r0_offset),
+		BPF_EMIT_CALL(bpf_get_exception),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 3),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_10, r0_offset),
+		BPF_JMP32_IMM(BPF_JNE, BPF_REG_0, -EJUKEBOX, 3),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	struct bpf_prog *new_prog;
+	int type, tsubprog = -1;
+	u32 callback_start;
+	u32 call_insn_offset;
+	s32 callback_offset;
+	bool ret_code;
+
+	type = tstate->type;
+	ret_code = tstate->check_helper_ret_code;
+	if (type == BPF_THROW_OUTER)
+		insn_buf[4] = insn_buf[9] = BPF_EMIT_CALL(bpf_reset_exception);
+	if (type == BPF_THROW_INNER)
+		insn_buf[9] = BPF_EMIT_CALL(bpf_throw);
+
+	/* We need to fix offset of the pseudo call after patching.
+	 * Note: The actual call instruction is at insn_buf[0]
+	 */
+	if (bpf_pseudo_call(&insn_buf[0])) {
+		tsubprog = find_subprog(env, position + insn_buf[0].imm + 1);
+		if (WARN_ON_ONCE(tsubprog < 0))
+			return NULL;
+	}
+	/* For helpers, the code path between checking bpf_get_exception and
+	 * returning may involve invocation of tracing progs which reset
+	 * exception state, so also use the return value to invoke exception
+	 * path. Otherwise, exception event from callback is lost.
+	 */
+	if (ret_code)
+		*cnt = ARRAY_SIZE(insn_buf);
+	else
+		*cnt = ARRAY_SIZE(insn_buf) - 4;
+	new_prog = bpf_patch_insn_data(env, position, insn_buf, *cnt);
+	if (!new_prog)
+		return new_prog;
+
+	/* Note: The actual call instruction is at insn_buf[0] */
+	if (bpf_pseudo_call(&insn_buf[0])) {
+		callback_start = env->subprog_info[tsubprog].start;
+		call_insn_offset = position + 0;
+		callback_offset = callback_start - call_insn_offset - 1;
+		new_prog->insnsi[call_insn_offset].imm = callback_offset;
+	}
+
+	aux_data = env->insn_aux_data;
+	/* Note: We already patched in call at insn_buf[2], insn_buf[9]. */
+	aux_data[position + 2].skip_patch_call_imm = true;
+	if (ret_code)
+		aux_data[position + 9].skip_patch_call_imm = true;
+	/* Note: For BPF_THROW_OUTER, we already patched in call at insn_buf[4] */
+	if (type == BPF_THROW_OUTER)
+		aux_data[position + 4].skip_patch_call_imm = true;
+	return new_prog;
+}
+
+static bool is_throwing_bpf_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
+				 struct bpf_insn_aux_data *insn_aux)
+{
+	if (insn->code != (BPF_JMP | BPF_CALL))
+		return false;
+	if (insn->src_reg == BPF_PSEUDO_CALL ||
+	    insn->src_reg == BPF_PSEUDO_KFUNC_CALL ||
+	    insn->src_reg == 0)
+		return insn_aux->throw_state.type != BPF_THROW_NONE;
+	return false;
+}
+
 /* For all sub-programs in the program (including main) check
  * insn_aux_data to see if there are any instructions that need to be
  * transformed into an instruction sequence. E.g. bpf_loop calls that
@@ -18226,6 +18335,26 @@ static int do_misc_rewrites(struct bpf_verifier_env *env)
 			}
 
 			new_prog = rewrite_bpf_throw_call(env, i + delta, throw_state, &cnt);
+			if (!new_prog)
+				return -ENOMEM;
+		} else if (is_throwing_bpf_call(env, insn, insn_aux)) {
+			struct bpf_throw_state *throw_state = &insn_aux->throw_state;
+
+			stack_depth_extra = max_t(u16, stack_depth_extra,
+						  BPF_REG_SIZE * 1 + stack_depth_roundup);
+
+			/* The verifier was able to prove that the throwing call
+			 * was unreachable, hence it must have not been seen and
+			 * will be removed by opt_remove_dead_code.
+			 */
+			if (throw_state->type == BPF_THROW_NONE) {
+				WARN_ON_ONCE(insn_aux->seen);
+				goto skip;
+			}
+
+			new_prog = rewrite_bpf_call(env, i + delta,
+						    -(stack_depth + stack_depth_extra),
+						    throw_state, &cnt);
 			if (!new_prog)
 				return -ENOMEM;
 		}

@@ -1982,10 +1982,11 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_remove(struct bpf_rb_root *root,
 }
 
 /* Need to copy rbtree_add_cached's logic here because our 'less' is a BPF
- * program
+ * program.
+ * Marked notrace to avoid clobbering of exception state in current by BPF
+ * programs.
  */
-static void __bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
-			     void *less)
+static notrace void __bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node, void *less)
 {
 	struct rb_node **link = &((struct rb_root_cached *)root)->rb_root.rb_node;
 	bpf_callback_t cb = (bpf_callback_t)less;
@@ -1993,8 +1994,13 @@ static void __bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
 	bool leftmost = true;
 
 	while (*link) {
+		u64 cb_res;
+
 		parent = *link;
-		if (cb((uintptr_t)node, (uintptr_t)parent, 0, 0, 0)) {
+		cb_res = cb((uintptr_t)node, (uintptr_t)parent, 0, 0, 0);
+		if (bpf_get_exception())
+			return;
+		if (cb_res) {
 			link = &parent->rb_left;
 		} else {
 			link = &parent->rb_right;
@@ -2007,8 +2013,8 @@ static void __bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
 			       (struct rb_root_cached *)root, leftmost);
 }
 
-__bpf_kfunc void bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
-				bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b))
+__bpf_kfunc notrace void bpf_rbtree_add(struct bpf_rb_root *root, struct bpf_rb_node *node,
+					bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b))
 {
 	__bpf_rbtree_add(root, node, (void *)less);
 }

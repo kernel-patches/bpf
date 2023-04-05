@@ -807,6 +807,8 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 		callback_fn((u64)(long)task, (u64)(long)vma,
 			    (u64)(long)callback_ctx, 0, 0);
 		ret = 0;
+		if (bpf_get_exception())
+			ret = -EJUKEBOX;
 	}
 	bpf_mmap_unlock_mm(work, mm);
 	return ret;

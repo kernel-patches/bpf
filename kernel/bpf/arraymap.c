@@ -711,6 +711,8 @@ static long bpf_for_each_array_elem(struct bpf_map *map, bpf_callback_t callback
 		key = i;
 		ret = callback_fn((u64)(long)map, (u64)(long)&key,
 				  (u64)(long)val, (u64)(long)callback_ctx, 0);
+		if (bpf_get_exception())
+			ret = -EJUKEBOX;
 		/* return value: 0 - continue, 1 - stop and return */
 		if (ret)
 			break;
@@ -718,7 +720,7 @@ static long bpf_for_each_array_elem(struct bpf_map *map, bpf_callback_t callback
 
 	if (is_percpu)
 		migrate_enable();
-	return num_elems;
+	return ret == -EJUKEBOX ? ret : num_elems;
 }
 
 static u64 array_map_mem_usage(const struct bpf_map *map)
