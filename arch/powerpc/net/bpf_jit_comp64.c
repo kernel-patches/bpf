@@ -921,7 +921,7 @@ emit_clear:
 			if (size != BPF_DW && insn_is_zext(&insn[i + 1]))
 				addrs[++i] = ctx->idx * 4;
 
-			if (BPF_MODE(code) == BPF_PROBE_MEM) {
+			if (BPF_MODE(code) == BPF_PROBE_MEM && !extra_pass) {
 				ret = bpf_add_extable_entry(fp, image, pass, ctx, ctx->idx - 1,
 							    4, dst_reg);
 				if (ret)
