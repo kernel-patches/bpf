@@ -13561,7 +13561,8 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			dst_reg->btf_id = aux->btf_var.btf_id;
 			break;
 		default:
-			verbose(env, "bpf verifier is misconfigured\n");
+			verbose(env, "bpf verifier is misconfigured: dst_reg->type = %d\n",
+					dst_reg->type);
 			return -EFAULT;
 		}
 		return 0;
@@ -13599,7 +13600,8 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		   insn->src_reg == BPF_PSEUDO_MAP_IDX) {
 		dst_reg->type = CONST_PTR_TO_MAP;
 	} else {
-		verbose(env, "bpf verifier is misconfigured\n");
+		verbose(env, "bpf verifier is misconfigured: insn->src_reg = %d\n",
+				(int)insn->src_reg);
 		return -EINVAL;
 	}
 
@@ -13646,7 +13648,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	}
 
 	if (!env->ops->gen_ld_abs) {
-		verbose(env, "bpf verifier is misconfigured\n");
+		verbose(env, "bpf verifier is misconfigured: gen_ld_abs is NULL\n");
 		return -EINVAL;
 	}
 
@@ -16890,13 +16892,14 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 
 	if (ops->gen_prologue || env->seen_direct_write) {
 		if (!ops->gen_prologue) {
-			verbose(env, "bpf verifier is misconfigured\n");
+			verbose(env, "bpf verifier is misconfigured: gen_prologue is NULL\n");
 			return -EINVAL;
 		}
 		cnt = ops->gen_prologue(insn_buf, env->seen_direct_write,
 					env->prog);
 		if (cnt >= ARRAY_SIZE(insn_buf)) {
-			verbose(env, "bpf verifier is misconfigured\n");
+			verbose(env, "bpf verifier is misconfigured: cnt=%d exceeds limit@%lu\n",
+					cnt, ARRAY_SIZE(insn_buf));
 			return -EINVAL;
 		} else if (cnt) {
 			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
@@ -17021,7 +17024,8 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 					 &target_size);
 		if (cnt == 0 || cnt >= ARRAY_SIZE(insn_buf) ||
 		    (ctx_field_size && !target_size)) {
-			verbose(env, "bpf verifier is misconfigured\n");
+			verbose(env, "bpf verifier is misconfigured: ins[%d] cnt=%d ctx_s=%u tg_s=%u\n",
+					i, cnt, ctx_field_size, target_size);
 			return -EINVAL;
 		}
 
@@ -17481,7 +17485,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		     BPF_MODE(insn->code) == BPF_IND)) {
 			cnt = env->ops->gen_ld_abs(insn, insn_buf);
 			if (cnt == 0 || cnt >= ARRAY_SIZE(insn_buf)) {
-				verbose(env, "bpf verifier is misconfigured\n");
+				verbose(env, "bpf verifier is misconfigured: cnt=%d exceeds limit@%lu\n",
+						cnt, ARRAY_SIZE(insn_buf));
 				return -EINVAL;
 			}
 
@@ -17728,7 +17733,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				if (cnt == -EOPNOTSUPP)
 					goto patch_map_ops_generic;
 				if (cnt <= 0 || cnt >= ARRAY_SIZE(insn_buf)) {
-					verbose(env, "bpf verifier is misconfigured\n");
+					verbose(env, "bpf verifier is misconfigured: cnt=%d exceeds limit@%lu\n",
+							cnt, ARRAY_SIZE(insn_buf));
 					return -EINVAL;
 				}
 
@@ -17929,7 +17935,7 @@ patch_call_imm:
 		if (!map_ptr->ops->map_poke_track ||
 		    !map_ptr->ops->map_poke_untrack ||
 		    !map_ptr->ops->map_poke_run) {
-			verbose(env, "bpf verifier is misconfigured\n");
+			verbose(env, "bpf verifier is misconfigured: map_poke_xxx is NULL\n");
 			return -EINVAL;
 		}
 
