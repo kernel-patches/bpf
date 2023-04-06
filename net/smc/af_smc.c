@@ -68,6 +68,49 @@ struct workqueue_struct	*smc_close_wq;	/* wq for close work */
 static void smc_tcp_listen_work(struct work_struct *);
 static void smc_connect_work(struct work_struct *);
 
+static int smc_sock_should_select_smc(const struct smc_sock *smc)
+{
+#ifdef CONFIG_SMC_BPF
+	const struct smc_sock_negotiator_ops *ops;
+	int ret;
+
+	rcu_read_lock();
+	ops = READ_ONCE(smc->negotiator_ops);
+
+	/* No negotiator_ops supply or no negotiate func set,
+	 * always pass it.
+	 */
+	if (!ops || !ops->negotiate) {
+		rcu_read_unlock();
+		return SK_PASS;
+	}
+
+	ret = ops->negotiate((struct sock *)&smc->sk);
+	rcu_read_unlock();
+	return ret;
+#else
+	return SK_PASS;
+#endif
+}
+
+#ifdef CONFIG_SMC_BPF
+static void smc_sock_perform_collecting_info(const struct smc_sock *smc, int timing)
+{
+	const struct smc_sock_negotiator_ops *ops;
+
+	rcu_read_lock();
+	ops = READ_ONCE(smc->negotiator_ops);
+
+	if (!ops || !ops->collect_info) {
+		rcu_read_unlock();
+		return;
+	}
+
+	ops->collect_info((struct sock *)&smc->sk, timing);
+	rcu_read_unlock();
+}
+#endif
+
 int smc_nl_dump_hs_limitation(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct smc_nl_dmp_ctx *cb_ctx = smc_nl_dmp_ctx(cb);
@@ -164,6 +207,9 @@ static bool smc_hs_congested(const struct sock *sk)
 		return true;
 
 	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
+		return true;
+
+	if (!smc_sock_should_select_smc(smc))
 		return true;
 
 	return false;
@@ -320,6 +366,11 @@ static int smc_release(struct socket *sock)
 	sock_hold(sk); /* sock_put below */
 	smc = smc_sk(sk);
 
+#ifdef CONFIG_SMC_BPF
+	/* trigger info gathering if needed.*/
+	smc_sock_perform_collecting_info(smc, SMC_SOCK_CLOSED_TIMING);
+#endif
+
 	old_state = sk->sk_state;
 
 	/* cleanup for a dangling non-blocking connect */
@@ -360,6 +411,10 @@ static void smc_destruct(struct sock *sk)
 		return;
 	if (!sock_flag(sk, SOCK_DEAD))
 		return;
+#ifdef CONFIG_SMC_BPF
+	/* cleanup negotiator_ops if set */
+	smc_sock_cleanup_negotiator_ops(smc_sk(sk), /* in release */ 1);
+#endif
 }
 
 static struct sock *smc_sock_alloc(struct net *net, struct socket *sock,
@@ -1627,7 +1682,14 @@ static int smc_connect(struct socket *sock, struct sockaddr *addr,
 	}
 
 	smc_copy_sock_settings_to_clc(smc);
-	tcp_sk(smc->clcsock->sk)->syn_smc = 1;
+	/* accept out connection as SMC connection */
+	if (smc_sock_should_select_smc(smc) == SK_PASS) {
+		tcp_sk(smc->clcsock->sk)->syn_smc = 1;
+	} else {
+		tcp_sk(smc->clcsock->sk)->syn_smc = 0;
+		smc_switch_to_fallback(smc, /* active fallback */ 0);
+	}
+
 	if (smc->connect_nonblock) {
 		rc = -EALREADY;
 		goto out;
@@ -1678,6 +1740,10 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 		goto out;
 	}
 	*new_smc = smc_sk(new_sk);
+
+#ifdef CONFIG_SMC_BPF
+	smc_sock_clone_negotiator_ops(lsk, new_sk);
+#endif
 
 	mutex_lock(&lsmc->clcsock_release_lock);
 	if (lsmc->clcsock)

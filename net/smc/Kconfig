@@ -19,3 +19,16 @@ config SMC_DIAG
 	  smcss.
 
 	  if unsure, say Y.
+
+if SMC
+config SMC_BPF
+	bool "SMC: support eBPF" if SMC
+	depends on BPF_SYSCALL
+	default n
+	help
+	  Supports eBPF to allows user mode participation in SMC's protocol process
+	  via ebpf programs. Alternatively, obtain information about the SMC socks
+	  through the ebpf program.
+
+	  If unsure, say N.
+endif

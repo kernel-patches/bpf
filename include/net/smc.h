@@ -295,6 +295,8 @@ struct smc_sock {				/* smc sock container */
 	atomic_t                queued_smc_hs;  /* queued smc handshakes */
 	struct inet_connection_sock_af_ops		af_ops;
 	const struct inet_connection_sock_af_ops	*ori_af_ops;
+	/* protocol negotiator ops */
+	const struct smc_sock_negotiator_ops *negotiator_ops;
 						/* original af ops */
 	int			sockopt_defer_accept;
 						/* sockopt TCP_DEFER_ACCEPT
@@ -314,5 +316,46 @@ struct smc_sock {				/* smc sock container */
 						 * socket
 						 */
 };
+
+#ifdef CONFIG_SMC_BPF
+
+#define SMC_NEGOTIATOR_NAME_MAX	(16)
+#define SMC_SOCK_CLOSED_TIMING	(0)
+
+/* BPF struct ops for smc protocol negotiator */
+struct smc_sock_negotiator_ops {
+
+	struct list_head	list;
+
+	/* ops name */
+	char		name[16];
+	/* key for name */
+	u32			key;
+
+	/* init with sk */
+	void (*init)(struct sock *sk);
+
+	/* release with sk */
+	void (*release)(struct sock *sk);
+
+	/* advice for negotiate */
+	int (*negotiate)(struct sock *sk);
+
+	/* info gathering timing */
+	void (*collect_info)(struct sock *sk, int timing);
+
+	/* module owner */
+	struct module *owner;
+};
+
+int smc_sock_register_negotiator_ops(struct smc_sock_negotiator_ops *ops);
+int smc_sock_update_negotiator_ops(struct smc_sock_negotiator_ops *ops,
+					  struct smc_sock_negotiator_ops *old_ops);
+void smc_sock_unregister_negotiator_ops(struct smc_sock_negotiator_ops *ops);
+int smc_sock_assign_negotiator_ops(struct smc_sock *smc, const char *name);
+void smc_sock_cleanup_negotiator_ops(struct smc_sock *smc, int in_release);
+void smc_sock_clone_negotiator_ops(struct sock *parent, struct sock *child);
+
+#endif
 
 #endif	/* _SMC_H */
