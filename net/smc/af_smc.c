@@ -2932,48 +2932,41 @@ out:
 	return rc ? rc : rc1;
 }
 
-static int __smc_getsockopt(struct socket *sock, int level, int optname,
-			    char __user *optval, int __user *optlen)
+/* set smc negotoiatior by name */
+static int smc_setsockopt_negotiator(struct sock *sk, sockptr_t optval,
+				     unsigned int optlen)
 {
-	struct smc_sock *smc;
-	int val, len;
-
-	smc = smc_sk(sock->sk);
-
-	if (get_user(len, optlen))
-		return -EFAULT;
-
-	len = min_t(int, len, sizeof(int));
-
-	if (len < 0)
-		return -EINVAL;
-
-	switch (optname) {
-	case SMC_LIMIT_HS:
-		val = smc->limit_smc_hs;
-		break;
-	default:
-		return -EOPNOTSUPP;
-	}
-
-	if (put_user(len, optlen))
-		return -EFAULT;
-	if (copy_to_user(optval, &val, len))
-		return -EFAULT;
-
-	return 0;
-}
-
-static int __smc_setsockopt(struct socket *sock, int level, int optname,
-			    sockptr_t optval, unsigned int optlen)
-{
-	struct sock *sk = sock->sk;
-	struct smc_sock *smc;
+#ifdef CONFIG_SMC_BPF
+	char name[SMC_NEGOTIATOR_NAME_MAX];
+	struct smc_sock *smc = smc_sk(sk);
 	int val, rc;
 
-	smc = smc_sk(sk);
+	if (optlen < 1)
+		return -EINVAL;
 
-	lock_sock(sk);
+	val = strncpy_from_sockptr(name, optval,
+				   min_t(long, SMC_NEGOTIATOR_NAME_MAX - 1, optlen));
+	if (val < 0)
+		return -EFAULT;
+
+	/* typical c str */
+	name[val] = 0;
+
+	sockopt_lock_sock(sk);
+	rc = smc_sock_assign_negotiator_ops(smc, name);
+	sockopt_release_sock(sk);
+	return rc;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
+static int __smc_setsockopt(struct sock *sk, int level, int optname,
+			    sockptr_t optval, unsigned int optlen)
+{
+	struct smc_sock *smc = smc_sk(sk);
+	int val, rc;
+
 	switch (optname) {
 	case SMC_LIMIT_HS:
 		if (optlen < sizeof(int)) {
@@ -2984,15 +2977,17 @@ static int __smc_setsockopt(struct socket *sock, int level, int optname,
 			rc = -EFAULT;
 			break;
 		}
-
+		sockopt_lock_sock(sk);
 		smc->limit_smc_hs = !!val;
+		sockopt_release_sock(sk);
 		rc = 0;
 		break;
+	case SMC_NEGOTIATOR:
+		return smc_setsockopt_negotiator(sk, optval, optlen);
 	default:
 		rc = -EOPNOTSUPP;
 		break;
 	}
-	release_sock(sk);
 
 	return rc;
 }
@@ -3007,7 +3002,7 @@ static int smc_setsockopt(struct socket *sock, int level, int optname,
 	if (level == SOL_TCP && optname == TCP_ULP)
 		return -EOPNOTSUPP;
 	else if (level == SOL_SMC)
-		return __smc_setsockopt(sock, level, optname, optval, optlen);
+		return __smc_setsockopt(sk, level, optname, optval, optlen);
 
 	smc = smc_sk(sk);
 
@@ -3084,6 +3079,77 @@ out:
 	return rc;
 }
 
+/* get current negotoiatior sock used */
+static int smc_getsockopt_negotiator(struct sock *sk, sockptr_t optval,
+				     sockptr_t optlen)
+{
+#ifdef CONFIG_SMC_BPF
+	const struct smc_sock_negotiator_ops *ops;
+	struct smc_sock *smc = smc_sk(sk);
+	int len;
+
+	if (copy_from_sockptr(&len, optlen, sizeof(int)))
+		return -EFAULT;
+
+	len = min_t(unsigned int, len, sizeof(int));
+
+	if (len < 0)
+		return -EINVAL;
+
+	rcu_read_lock();
+	ops = READ_ONCE(smc->negotiator_ops);
+	if (ops) {
+		len = min_t(unsigned int, len, SMC_NEGOTIATOR_NAME_MAX);
+		if (copy_to_sockptr(optval, ops->name, len)) {
+			rcu_read_unlock();
+			return -EFAULT;
+		}
+	} else {
+		len = 0;
+	}
+	rcu_read_unlock();
+
+	if (copy_to_sockptr(optlen, &len, sizeof(int)))
+		return -EFAULT;
+
+	return 0;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
+static int __smc_getsockopt(struct sock *sk, int level, int optname,
+			    sockptr_t optval, sockptr_t optlen)
+{
+	struct smc_sock *smc = smc_sk(sk);
+	int val, len;
+
+	if (copy_from_sockptr(&len, optlen, sizeof(int)))
+		return -EFAULT;
+
+	len = min_t(unsigned int, len, sizeof(int));
+
+	if (len < 0)
+		return -EINVAL;
+
+	switch (optname) {
+	case SMC_LIMIT_HS:
+		val = smc->limit_smc_hs;
+		break;
+	case SMC_NEGOTIATOR:
+		return smc_getsockopt_negotiator(sk, optval, optlen);
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	if (copy_to_sockptr(optval, &val, len))
+		return -EFAULT;
+	if (copy_to_sockptr(optlen, &len, sizeof(int)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static int smc_getsockopt(struct socket *sock, int level, int optname,
 			  char __user *optval, int __user *optlen)
 {
@@ -3091,7 +3157,8 @@ static int smc_getsockopt(struct socket *sock, int level, int optname,
 	int rc;
 
 	if (level == SOL_SMC)
-		return __smc_getsockopt(sock, level, optname, optval, optlen);
+		return __smc_getsockopt(sock->sk, level, optname,
+					USER_SOCKPTR(optval), USER_SOCKPTR(optlen));
 
 	smc = smc_sk(sock->sk);
 	mutex_lock(&smc->clcsock_release_lock);
