@@ -15428,7 +15428,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 		if (PTR_ERR(new_prog) == -ERANGE)
 			verbose(env,
 				"insn %d cannot be patched due to 16-bit range\n",
-				env->insn_aux_data[off].orig_idx);
+				ORIG_IDX_BY_OFF(env->insn_aux_data, off));
 		vfree(new_data);
 		return NULL;
 	}
@@ -17652,7 +17652,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 	u64 start_time = ktime_get_ns();
 	struct bpf_verifier_env *env;
 	struct bpf_verifier_log *log;
-	int i, len, ret = -EINVAL;
+	int len, ret = -EINVAL;
 	bool is_priv;
 
 	/* no program is valid */
@@ -17673,8 +17673,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 	ret = -ENOMEM;
 	if (!env->insn_aux_data)
 		goto err_free_env;
-	for (i = 0; i < len; i++)
-		env->insn_aux_data[i].orig_idx = i;
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
 	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);

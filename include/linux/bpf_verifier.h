@@ -451,10 +451,11 @@ struct bpf_insn_aux_data {
 	u8 alu_state; /* used in combination with alu_limit */
 
 	/* below fields are initialized once */
-	unsigned int orig_idx; /* original instruction index */
 	bool prune_point;
 	bool jmp_point;
 };
+
+#define ORIG_IDX_BY_OFF(head, off)	(off)
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
 #define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
