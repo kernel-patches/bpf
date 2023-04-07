@@ -1,0 +1,43 @@
+From fa95252a62bc120fb1f939c46991280ba1375196 Mon Sep 17 00:00:00 2001
+From: Song Liu <song@kernel.org>
+Date: Thu, 2 Mar 2023 13:49:44 -0800
+Subject: [PATCH] selftests/bpf: Adjust expected error message for
+ test_global_func10.c
+
+For test programs that are expected to be failed verifier, we use
+__failure __msg(...) to specify the expected error message. However, the
+error message may change slightly among different versions of llvm. For
+example, in [1], the program compiled by llvm-17 gets
+
+  "invalid indirect access to stack ..."
+
+but the same program compile by llvm-16 gets
+
+  "invalid indirect read from stack ..."
+
+To avoid such issues, only compares "invalid indirect" part of the error
+message for test_global_func10.c.
+
+[1] https://github.com/kernel-patches/bpf/actions/runs/4288572350/jobs/7533052993
+
+Signed-off-by: Song Liu <song@kernel.org>
+---
+ tools/testing/selftests/bpf/progs/test_global_func10.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/test_global_func10.c b/tools/testing/selftests/bpf/progs/test_global_func10.c
+index 98327bdbbfd2..7a591d946027 100644
+--- a/tools/testing/selftests/bpf/progs/test_global_func10.c
++++ b/tools/testing/selftests/bpf/progs/test_global_func10.c
+@@ -22,7 +22,7 @@ __noinline int foo(const struct Big *big)
+ }
+ 
+ SEC("cgroup_skb/ingress")
+-__failure __msg("invalid indirect read from stack")
++__failure __msg("invalid indirect")
+ int global_func10(struct __sk_buff *skb)
+ {
+ 	const struct Small small = {.x = skb->len };
+-- 
+2.30.2
+
