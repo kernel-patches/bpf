@@ -18826,11 +18826,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 		goto skip_full_check;
 	}
 
-	env->strict_alignment = !!(attr->prog_flags & BPF_F_STRICT_ALIGNMENT);
-	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))
-		env->strict_alignment = true;
+	env->strict_alignment = !IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS);
 	if (attr->prog_flags & BPF_F_ANY_ALIGNMENT)
 		env->strict_alignment = false;
+	env->strict_alignment |= !!(attr->prog_flags & BPF_F_STRICT_ALIGNMENT);
 
 	env->allow_ptr_leaks = bpf_allow_ptr_leaks();
 	env->allow_uninit_stack = bpf_allow_uninit_stack();
