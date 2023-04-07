@@ -18771,10 +18771,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 	int i, len, ret = -EINVAL;
 	bool is_priv;
 
-	/* no program is valid */
-	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
-		return -EINVAL;
-
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
 	 * allocate/free it every time bpf_check() is called
 	 */
