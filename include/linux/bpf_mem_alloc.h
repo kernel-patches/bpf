@@ -12,6 +12,12 @@ struct bpf_mem_alloc {
 	struct bpf_mem_caches __percpu *caches;
 	struct bpf_mem_cache __percpu *cache;
 	struct work_struct work;
+	unsigned int flags;
+};
+
+/* flags for bpf_mem_alloc_init() */
+enum {
+	BPF_MA_PERCPU = 1U << 0,
 };
 
 /* 'size != 0' is for bpf_mem_alloc which manages fixed-size objects.
@@ -21,7 +27,7 @@ struct bpf_mem_alloc {
  * Alloc and free are done with bpf_mem_{alloc,free}() and the size of
  * the returned object is given by the size argument of bpf_mem_alloc().
  */
-int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu);
+int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, unsigned int flags);
 void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma);
 
 /* kmalloc/kfree equivalent: */
