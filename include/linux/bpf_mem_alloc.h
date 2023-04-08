@@ -18,6 +18,7 @@ struct bpf_mem_alloc {
 /* flags for bpf_mem_alloc_init() */
 enum {
 	BPF_MA_PERCPU = 1U << 0,
+	BPF_MA_REUSE_AFTER_RCU_GP = 1U << 1,
 };
 
 /* 'size != 0' is for bpf_mem_alloc which manages fixed-size objects.
