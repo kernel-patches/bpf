@@ -1443,7 +1443,7 @@ static enum bpf_dynptr_type bpf_dynptr_get_type(const struct bpf_dynptr_kern *pt
 	return (ptr->size & ~(DYNPTR_RDONLY_BIT)) >> DYNPTR_TYPE_SHIFT;
 }
 
-u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr)
+u32 __bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr)
 {
 	return ptr->size & DYNPTR_SIZE_MASK;
 }
@@ -1476,7 +1476,7 @@ void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr)
 
 static int bpf_dynptr_check_off_len(const struct bpf_dynptr_kern *ptr, u32 offset, u32 len)
 {
-	u32 size = bpf_dynptr_get_size(ptr);
+	u32 size = __bpf_dynptr_get_size(ptr);
 
 	if (len > size || offset > size - len)
 		return -E2BIG;
@@ -2258,7 +2258,7 @@ static int bpf_dynptr_adjust(struct bpf_dynptr_kern *ptr, u32 off_inc, u32 sz_de
 	if (!ptr->data)
 		return -EINVAL;
 
-	size = bpf_dynptr_get_size(ptr);
+	size = __bpf_dynptr_get_size(ptr);
 
 	if (sz_dec > size)
 		return -ERANGE;
@@ -2301,6 +2301,22 @@ __bpf_kfunc bool bpf_dynptr_is_rdonly(struct bpf_dynptr_kern *ptr)
 		return false;
 
 	return __bpf_dynptr_is_rdonly(ptr);
+}
+
+__bpf_kfunc __u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr)
+{
+	if (!ptr->data)
+		return -EINVAL;
+
+	return __bpf_dynptr_get_size(ptr);
+}
+
+__bpf_kfunc __u32 bpf_dynptr_get_offset(const struct bpf_dynptr_kern *ptr)
+{
+	if (!ptr->data)
+		return -EINVAL;
+
+	return ptr->offset;
 }
 
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
@@ -2378,6 +2394,8 @@ BTF_ID_FLAGS(func, bpf_dynptr_trim)
 BTF_ID_FLAGS(func, bpf_dynptr_advance)
 BTF_ID_FLAGS(func, bpf_dynptr_is_null)
 BTF_ID_FLAGS(func, bpf_dynptr_is_rdonly)
+BTF_ID_FLAGS(func, bpf_dynptr_get_size)
+BTF_ID_FLAGS(func, bpf_dynptr_get_offset)
 BTF_SET8_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
