@@ -207,3 +207,323 @@ int test_dynptr_skb_data(struct __sk_buff *skb)
 
 	return 1;
 }
+
+SEC("tp/syscalls/sys_enter_nanosleep")
+int test_advance_trim(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	__u32 bytes = 64;
+	__u32 off = 10;
+	__u32 trim = 5;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	err = bpf_ringbuf_reserve_dynptr(&ringbuf, bytes, 0, &ptr);
+	if (err) {
+		err = 1;
+		goto done;
+	}
+
+	if (bpf_dynptr_get_size(&ptr) != bytes) {
+		err = 2;
+		goto done;
+	}
+
+	/* Advance the dynptr by off */
+	err = bpf_dynptr_advance(&ptr, off);
+	if (err) {
+		err = 3;
+		goto done;
+	}
+
+	/* Check that the dynptr off and size were adjusted correctly */
+	if (bpf_dynptr_get_offset(&ptr) != off) {
+		err = 4;
+		goto done;
+	}
+	if (bpf_dynptr_get_size(&ptr) != bytes - off) {
+		err = 5;
+		goto done;
+	}
+
+	/* Trim the dynptr */
+	err = bpf_dynptr_trim(&ptr, trim);
+	if (err) {
+		err = 6;
+		goto done;
+	}
+
+	/* Check that the off was unaffected */
+	if (bpf_dynptr_get_offset(&ptr) != off) {
+		err = 7;
+		goto done;
+	}
+	/* Check that the size was adjusted correctly */
+	if (bpf_dynptr_get_size(&ptr) != bytes - off - trim) {
+		err = 8;
+		goto done;
+	}
+
+done:
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+	return 0;
+}
+
+SEC("tp/syscalls/sys_enter_nanosleep")
+int test_advance_trim_err(void *ctx)
+{
+	char write_data[45] = "hello there, world!!";
+	struct bpf_dynptr ptr;
+	__u32 trim_size = 10;
+	__u32 size = 64;
+	__u32 off = 10;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	if (bpf_ringbuf_reserve_dynptr(&ringbuf, size, 0, &ptr)) {
+		err = 1;
+		goto done;
+	}
+
+	/* Check that you can't advance beyond size of dynptr data */
+	if (bpf_dynptr_advance(&ptr, size + 1) != -ERANGE) {
+		err = 2;
+		goto done;
+	}
+
+	if (bpf_dynptr_advance(&ptr, off)) {
+		err = 3;
+		goto done;
+	}
+
+	/* Check that you can't trim more than size of dynptr data */
+	if (bpf_dynptr_trim(&ptr, size - off + 1) != -ERANGE) {
+		err = 4;
+		goto done;
+	}
+
+	/* Check that you can't write more bytes than available into the dynptr
+	 * after you've trimmed it
+	 */
+	if (bpf_dynptr_trim(&ptr, trim_size)) {
+		err = 5;
+		goto done;
+	}
+
+	if (bpf_dynptr_write(&ptr, 0, &write_data, sizeof(write_data), 0) != -E2BIG) {
+		err = 6;
+		goto done;
+	}
+
+	/* Check that even after advancing / trimming, submitting/discarding
+	 * a ringbuf dynptr works
+	 */
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+	return 0;
+
+done:
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+	return 0;
+}
+
+SEC("tp/syscalls/sys_enter_nanosleep")
+int test_zero_size_dynptr(void *ctx)
+{
+	char write_data = 'x', read_data;
+	struct bpf_dynptr ptr;
+	__u32 size = 64;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	/* check that you can reserve a dynamic size reservation */
+	if (bpf_ringbuf_reserve_dynptr(&ringbuf, size, 0, &ptr)) {
+		err = 1;
+		goto done;
+	}
+
+	/* After this, the dynptr has a size of 0 */
+	if (bpf_dynptr_advance(&ptr, size)) {
+		err = 2;
+		goto done;
+	}
+
+	/* Test that reading + writing non-zero bytes is not ok */
+	if (bpf_dynptr_read(&read_data, sizeof(read_data), &ptr, 0, 0) != -E2BIG) {
+		err = 3;
+		goto done;
+	}
+
+	if (bpf_dynptr_write(&ptr, 0, &write_data, sizeof(write_data), 0) != -E2BIG) {
+		err = 4;
+		goto done;
+	}
+
+	/* Test that reading + writing 0 bytes from a 0-size dynptr is ok */
+	if (bpf_dynptr_read(&read_data, 0, &ptr, 0, 0)) {
+		err = 5;
+		goto done;
+	}
+
+	if (bpf_dynptr_write(&ptr, 0, &write_data, 0, 0)) {
+		err = 6;
+		goto done;
+	}
+
+	err = 0;
+
+done:
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+	return 0;
+}
+
+SEC("tp/syscalls/sys_enter_nanosleep")
+int test_dynptr_is_null(void *ctx)
+{
+	struct bpf_dynptr ptr1;
+	struct bpf_dynptr ptr2;
+	__u64 size = 4;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	/* Pass in invalid flags, get back an invalid dynptr */
+	if (bpf_ringbuf_reserve_dynptr(&ringbuf, size, 123, &ptr1) != -EINVAL) {
+		err = 1;
+		goto exit_early;
+	}
+
+	/* Test that the invalid dynptr is null */
+	if (!bpf_dynptr_is_null(&ptr1)) {
+		err = 2;
+		goto exit_early;
+	}
+
+	/* Get a valid dynptr */
+	if (bpf_ringbuf_reserve_dynptr(&ringbuf, size, 0, &ptr2)) {
+		err = 3;
+		goto exit;
+	}
+
+	/* Test that the valid dynptr is not null */
+	if (bpf_dynptr_is_null(&ptr2)) {
+		err = 4;
+		goto exit;
+	}
+
+exit:
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+exit_early:
+	bpf_ringbuf_discard_dynptr(&ptr1, 0);
+	return 0;
+}
+
+SEC("cgroup_skb/egress")
+int test_dynptr_is_rdonly(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr1;
+	struct bpf_dynptr ptr2;
+	struct bpf_dynptr ptr3;
+
+	/* Pass in invalid flags, get back an invalid dynptr */
+	if (bpf_dynptr_from_skb(skb, 123, &ptr1) != -EINVAL) {
+		err = 1;
+		return 0;
+	}
+
+	/* Test that an invalid dynptr is_rdonly returns false */
+	if (bpf_dynptr_is_rdonly(&ptr1)) {
+		err = 2;
+		return 0;
+	}
+
+	/* Get a read-only dynptr */
+	if (bpf_dynptr_from_skb(skb, 0, &ptr2)) {
+		err = 3;
+		return 0;
+	}
+
+	/* Test that the dynptr is read-only */
+	if (!bpf_dynptr_is_rdonly(&ptr2)) {
+		err = 4;
+		return 0;
+	}
+
+	/* Get a read-writeable dynptr */
+	if (bpf_ringbuf_reserve_dynptr(&ringbuf, 64, 0, &ptr3)) {
+		err = 5;
+		goto done;
+	}
+
+	/* Test that the dynptr is read-only */
+	if (bpf_dynptr_is_rdonly(&ptr3)) {
+		err = 6;
+		goto done;
+	}
+
+done:
+	bpf_ringbuf_discard_dynptr(&ptr3, 0);
+	return 0;
+}
+
+SEC("cgroup_skb/egress")
+int test_dynptr_clone(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr1;
+	struct bpf_dynptr ptr2;
+	__u32 off = 2, size;
+
+	/* Get a dynptr */
+	if (bpf_dynptr_from_skb(skb, 0, &ptr1)) {
+		err = 1;
+		return 0;
+	}
+
+	if (bpf_dynptr_advance(&ptr1, off)) {
+		err = 2;
+		return 0;
+	}
+
+	/* Clone the dynptr */
+	if (bpf_dynptr_clone(&ptr1, &ptr2)) {
+		err = 3;
+		return 0;
+	}
+
+	size = bpf_dynptr_get_size(&ptr1);
+
+	/* Check that the clone has the same offset, size, and rd-only */
+	if (bpf_dynptr_get_size(&ptr2) != size) {
+		err = 4;
+		return 0;
+	}
+
+	if (bpf_dynptr_get_offset(&ptr2) != off) {
+		err = 5;
+		return 0;
+	}
+
+	if (bpf_dynptr_is_rdonly(&ptr2) != bpf_dynptr_is_rdonly(&ptr1)) {
+		err = 6;
+		return 0;
+	}
+
+	/* Advance and trim the original dynptr */
+	bpf_dynptr_advance(&ptr1, 50);
+	bpf_dynptr_trim(&ptr1, 50);
+
+	/* Check that only original dynptr was affected, and the clone wasn't */
+	if (bpf_dynptr_get_offset(&ptr2) != off) {
+		err = 7;
+		return 0;
+	}
+
+	if (bpf_dynptr_get_size(&ptr2) != size) {
+		err = 8;
+		return 0;
+	}
+
+	return 0;
+}
