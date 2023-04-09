@@ -1448,6 +1448,13 @@ u32 bpf_dynptr_get_size(const struct bpf_dynptr_kern *ptr)
 	return ptr->size & DYNPTR_SIZE_MASK;
 }
 
+static void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
+{
+	u32 metadata = ptr->size & ~DYNPTR_SIZE_MASK;
+
+	ptr->size = new_size | metadata;
+}
+
 int bpf_dynptr_check_size(u32 size)
 {
 	return size > DYNPTR_MAX_SIZE ? -E2BIG : 0;
@@ -2243,6 +2250,46 @@ __bpf_kfunc void *bpf_dynptr_slice_rdwr(const struct bpf_dynptr_kern *ptr, u32 o
 	return bpf_dynptr_slice(ptr, offset, buffer, buffer__szk);
 }
 
+/* For dynptrs, the offset may only be advanced and the size may only be decremented */
+static int bpf_dynptr_adjust(struct bpf_dynptr_kern *ptr, u32 off_inc, u32 sz_dec)
+{
+	u32 size;
+
+	if (!ptr->data)
+		return -EINVAL;
+
+	size = bpf_dynptr_get_size(ptr);
+
+	if (sz_dec > size)
+		return -ERANGE;
+
+	if (off_inc) {
+		u32 new_off;
+
+		if (off_inc > size)
+			return -ERANGE;
+
+		if (check_add_overflow(ptr->offset, off_inc, &new_off))
+			return -ERANGE;
+
+		ptr->offset = new_off;
+	}
+
+	bpf_dynptr_set_size(ptr, size - sz_dec);
+
+	return 0;
+}
+
+__bpf_kfunc int bpf_dynptr_advance(struct bpf_dynptr_kern *ptr, u32 len)
+{
+	return bpf_dynptr_adjust(ptr, len, len);
+}
+
+__bpf_kfunc int bpf_dynptr_trim(struct bpf_dynptr_kern *ptr, u32 len)
+{
+	return bpf_dynptr_adjust(ptr, 0, len);
+}
+
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -2314,6 +2361,8 @@ BTF_ID_FLAGS(func, bpf_dynptr_slice_rdwr, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_num_new, KF_ITER_NEW)
 BTF_ID_FLAGS(func, bpf_iter_num_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_num_destroy, KF_ITER_DESTROY)
+BTF_ID_FLAGS(func, bpf_dynptr_trim)
+BTF_ID_FLAGS(func, bpf_dynptr_advance)
 BTF_SET8_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
