@@ -302,6 +302,7 @@ struct bpf_kfunc_call_arg_meta {
 	struct {
 		enum bpf_dynptr_type type;
 		u32 id;
+		u32 ref_obj_id;
 	} initialized_dynptr;
 	struct {
 		u8 spi;
@@ -894,23 +895,14 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 	return 0;
 }
 
-static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+static void invalidate_dynptr(struct bpf_verifier_env *env, struct bpf_func_state *state, int spi)
 {
-	struct bpf_func_state *state = func(env, reg);
-	int spi, i;
-
-	spi = dynptr_get_spi(env, reg);
-	if (spi < 0)
-		return spi;
+	int i;
 
 	for (i = 0; i < BPF_REG_SIZE; i++) {
 		state->stack[spi].slot_type[i] = STACK_INVALID;
 		state->stack[spi - 1].slot_type[i] = STACK_INVALID;
 	}
-
-	/* Invalidate any slices associated with this dynptr */
-	if (dynptr_type_refcounted(state->stack[spi].spilled_ptr.dynptr.type))
-		WARN_ON_ONCE(release_reference(env, state->stack[spi].spilled_ptr.ref_obj_id));
 
 	__mark_reg_not_init(env, &state->stack[spi].spilled_ptr);
 	__mark_reg_not_init(env, &state->stack[spi - 1].spilled_ptr);
@@ -938,6 +930,51 @@ static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_re
 	 */
 	state->stack[spi].spilled_ptr.live |= REG_LIVE_WRITTEN;
 	state->stack[spi - 1].spilled_ptr.live |= REG_LIVE_WRITTEN;
+}
+
+static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct bpf_func_state *state = func(env, reg);
+	int spi;
+
+	spi = dynptr_get_spi(env, reg);
+	if (spi < 0)
+		return spi;
+
+	if (dynptr_type_refcounted(state->stack[spi].spilled_ptr.dynptr.type)) {
+		int ref_obj_id = state->stack[spi].spilled_ptr.ref_obj_id;
+		int i;
+
+		/* If the dynptr has a ref_obj_id, then we need to invaldiate
+		 * two things:
+		 *
+		 * 1) Any dynptrs with a matching ref_obj_id (clones)
+		 * 2) Any slices associated with the ref_obj_id
+		 */
+
+		/* Invalidate any slices associated with this dynptr */
+		WARN_ON_ONCE(release_reference(env, ref_obj_id));
+
+		/* Invalidate any dynptr clones */
+		for (i = 1; i < state->allocated_stack / BPF_REG_SIZE; i++) {
+			if (state->stack[i].spilled_ptr.ref_obj_id == ref_obj_id) {
+				/* it should always be the case that if the ref obj id
+				 * matches then the stack slot also belongs to a
+				 * dynptr
+				 */
+				if (state->stack[i].slot_type[0] != STACK_DYNPTR) {
+					verbose(env, "verifier internal error: misconfigured ref_obj_id\n");
+					return -EFAULT;
+				}
+				if (state->stack[i].spilled_ptr.dynptr.first_slot)
+					invalidate_dynptr(env, state, i);
+			}
+		}
+
+		return 0;
+	}
+
+	invalidate_dynptr(env, state, spi);
 
 	return 0;
 }
@@ -6898,6 +6935,50 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 	return 0;
 }
 
+static int handle_dynptr_clone(struct bpf_verifier_env *env, enum bpf_arg_type arg_type,
+			       int regno, int insn_idx, struct bpf_kfunc_call_arg_meta *meta)
+{
+	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	struct bpf_reg_state *first_reg_state, *second_reg_state;
+	struct bpf_func_state *state = func(env, reg);
+	enum bpf_dynptr_type dynptr_type = meta->initialized_dynptr.type;
+	int err, spi, ref_obj_id;
+
+	if (!dynptr_type) {
+		verbose(env, "verifier internal error: no dynptr type for bpf_dynptr_clone\n");
+		return -EFAULT;
+	}
+	arg_type |= get_dynptr_type_flag(dynptr_type);
+
+	err = process_dynptr_func(env, regno, insn_idx, arg_type);
+	if (err < 0)
+		return err;
+
+	spi = dynptr_get_spi(env, reg);
+	if (spi < 0)
+		return spi;
+
+	first_reg_state = &state->stack[spi].spilled_ptr;
+	second_reg_state = &state->stack[spi - 1].spilled_ptr;
+	ref_obj_id = first_reg_state->ref_obj_id;
+
+	/* reassign the clone the same dynptr id as the original */
+	__mark_dynptr_reg(first_reg_state, dynptr_type, true, meta->initialized_dynptr.id);
+	__mark_dynptr_reg(second_reg_state, dynptr_type, false, meta->initialized_dynptr.id);
+
+	if (meta->initialized_dynptr.ref_obj_id) {
+		/* release the new ref obj id assigned during process_dynptr_func */
+		err = release_reference_state(cur_func(env), ref_obj_id);
+		if (err)
+			return err;
+		/* reassign the clone the same ref obj id as the original */
+		first_reg_state->ref_obj_id = meta->initialized_dynptr.ref_obj_id;
+		second_reg_state->ref_obj_id = meta->initialized_dynptr.ref_obj_id;
+	}
+
+	return 0;
+}
+
 static bool arg_type_is_mem_size(enum bpf_arg_type type)
 {
 	return type == ARG_CONST_SIZE ||
@@ -9546,6 +9627,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_from_xdp,
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
+	KF_bpf_dynptr_clone,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -9564,6 +9646,7 @@ BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
+BTF_ID(func, bpf_dynptr_clone)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -9584,6 +9667,7 @@ BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
+BTF_ID(func, bpf_dynptr_clone)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10345,10 +10429,24 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			if (is_kfunc_arg_uninit(btf, &args[i]))
 				dynptr_arg_type |= MEM_UNINIT;
 
-			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb])
+			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb]) {
 				dynptr_arg_type |= DYNPTR_TYPE_SKB;
-			else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp])
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp]) {
 				dynptr_arg_type |= DYNPTR_TYPE_XDP;
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
+				   (dynptr_arg_type & MEM_UNINIT)) {
+				/* bpf_dynptr_clone is special.
+				 *
+				 * we need to assign the clone the same dynptr type and
+				 * the clone needs to have the same id and ref_obj_id as
+				 * the original dynptr
+				 */
+				ret = handle_dynptr_clone(env, dynptr_arg_type, regno, insn_idx, meta);
+				if (ret < 0)
+					return ret;
+
+				break;
+			}
 
 			ret = process_dynptr_func(env, regno, insn_idx, dynptr_arg_type);
 			if (ret < 0)
@@ -10363,6 +10461,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				}
 				meta->initialized_dynptr.id = id;
 				meta->initialized_dynptr.type = dynptr_get_type(env, reg);
+				meta->initialized_dynptr.ref_obj_id = dynptr_ref_obj_id(env, reg);
 			}
 
 			break;
