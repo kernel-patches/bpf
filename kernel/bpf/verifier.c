@@ -3276,6 +3276,18 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx,
 			}
 		} else if (opcode == BPF_EXIT) {
 			return -ENOTSUPP;
+		} else {
+			if (!(*reg_mask & dreg))
+				return 0;
+			if (BPF_SRC(insn->code) == BPF_X) {
+				/* dreg <cond> sreg
+				 * Both dreg and sreg need precision before
+				 * this insn.
+				 */
+				*reg_mask |= sreg;
+			} /* else dreg <cond> K
+			   * dreg still needs precision before this insn.
+			   */
 		}
 	} else if (class == BPF_LD) {
 		if (!(*reg_mask & dreg))
