@@ -4449,12 +4449,22 @@ static int bpf_obj_get_info_by_fd(const union bpf_attr *attr,
 
 static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
+	int err;
+
 	if (CHECK_ATTR(BPF_BTF_LOAD))
 		return -EINVAL;
+
+	/* security checks */
+	err = security_bpf_btf_load(attr);
+	if (err < 0)
+		return err;
+	if (err > 0)
+		goto skip_priv_checks;
 
 	if (!bpf_capable())
 		return -EPERM;
 
+skip_priv_checks:
 	return btf_new_fd(attr, uattr, uattr_size);
 }
 

@@ -1598,6 +1598,19 @@
  *	@prog: bpf prog that userspace want to use.
  *	Return 0 if permission is granted.
  *
+ * @bpf_btf_load_security:
+ *	Do a check to determine permission to create BTF data object
+ *	(BPF_BTF_LOAD command of bpf() syscall).
+ *	Implementation can override kernel capabilities checks according to
+ *	the rules below:
+ *	  - 0 should be returned to delegate permission checks to other
+ *	    installed LSM callbacks and/or hard-wired kernel logic, which
+ *	    would enforce CAP_BPF capability;
+ *	  - reject BTF data object creation by returning -EPERM or any other
+ *	    negative error code;
+ *	  - allow BTF data object creation, overriding kernel checks, by
+ *	    returning a positive result.
+ *
  * @bpf_map_create_security:
  *	Do a check to determine permission to create requested BPF map.
  *	Implementation can override kernel capabilities checks according to

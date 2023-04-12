@@ -2682,6 +2682,10 @@ int security_bpf_prog(struct bpf_prog *prog)
 {
 	return call_int_hook(bpf_prog, 0, prog);
 }
+int security_bpf_btf_load(const union bpf_attr *attr)
+{
+	return call_int_hook(bpf_btf_load_security, 0, attr);
+}
 int security_bpf_map_create(const union bpf_attr *attr)
 {
 	return call_int_hook(bpf_map_create_security, 0, attr);
