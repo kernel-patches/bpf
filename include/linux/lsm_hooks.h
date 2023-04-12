@@ -1598,6 +1598,18 @@
  *	@prog: bpf prog that userspace want to use.
  *	Return 0 if permission is granted.
  *
+ * @bpf_map_create_security:
+ *	Do a check to determine permission to create requested BPF map.
+ *	Implementation can override kernel capabilities checks according to
+ *	the rules below:
+ *	  - 0 should be returned to delegate permission checks to other
+ *	    installed LSM callbacks and/or hard-wired kernel logic, which
+ *	    would enforce CAP_BPF/CAP_NET_ADMIN capabilities;
+ *	  - reject BPF map creation by returning -EPERM or any other
+ *	    negative error code;
+ *	  - allow BPF map creation, overriding kernel checks, by returning
+ *	    a positive result.
+ *
  * @bpf_map_alloc_security:
  *	Initialize the security field inside bpf map.
  *	Return 0 on success, error on failure.

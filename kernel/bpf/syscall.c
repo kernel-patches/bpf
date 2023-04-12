@@ -980,7 +980,7 @@ int map_check_no_btf(const struct bpf_map *map,
 }
 
 static int map_check_btf(struct bpf_map *map, const struct btf *btf,
-			 u32 btf_key_id, u32 btf_value_id)
+			 u32 btf_key_id, u32 btf_value_id, bool priv_checked)
 {
 	const struct btf_type *key_type, *value_type;
 	u32 key_size, value_size;
@@ -1008,7 +1008,7 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
 
-		if (!bpf_capable()) {
+		if (!priv_checked && !bpf_capable()) {
 			ret = -EPERM;
 			goto free_map_tab;
 		}
@@ -1097,10 +1097,12 @@ static int map_create(union bpf_attr *attr)
 	int numa_node = bpf_map_attr_numa_node(attr);
 	u32 map_type = attr->map_type;
 	struct btf_field_offs *foffs;
+	bool priv_checked = false;
 	struct bpf_map *map;
 	int f_flags;
 	int err;
 
+	/* sanity checks */
 	err = CHECK_ATTR(BPF_MAP_CREATE);
 	if (err)
 		return -EINVAL;
@@ -1144,6 +1146,15 @@ static int map_create(union bpf_attr *attr)
 		ops = &bpf_map_offload_ops;
 	if (!ops->map_mem_usage)
 		return -EINVAL;
+
+	/* security checks */
+	err = security_bpf_map_create(attr);
+	if (err < 0)
+		return err;
+	if (err > 0) {
+		priv_checked = true;
+		goto skip_priv_checks;
+	}
 
 	/* Intent here is for unprivileged_bpf_disabled to block key object
 	 * creation commands for unprivileged users; other actions depend
@@ -1203,6 +1214,8 @@ static int map_create(union bpf_attr *attr)
 		return -EPERM;
 	}
 
+skip_priv_checks:
+	/* create and init map */
 	map = ops->map_alloc(attr);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -1243,7 +1256,7 @@ static int map_create(union bpf_attr *attr)
 
 		if (attr->btf_value_type_id) {
 			err = map_check_btf(map, btf, attr->btf_key_type_id,
-					    attr->btf_value_type_id);
+					    attr->btf_value_type_id, priv_checked);
 			if (err)
 				goto free_map;
 		}

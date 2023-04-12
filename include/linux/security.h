@@ -2023,6 +2023,7 @@ struct bpf_prog_aux;
 extern int security_bpf(int cmd, union bpf_attr *attr, unsigned int size);
 extern int security_bpf_map(struct bpf_map *map, fmode_t fmode);
 extern int security_bpf_prog(struct bpf_prog *prog);
+extern int security_bpf_map_create(const union bpf_attr *attr);
 extern int security_bpf_map_alloc(struct bpf_map *map);
 extern void security_bpf_map_free(struct bpf_map *map);
 extern int security_bpf_prog_alloc(struct bpf_prog_aux *aux);
@@ -2040,6 +2041,11 @@ static inline int security_bpf_map(struct bpf_map *map, fmode_t fmode)
 }
 
 static inline int security_bpf_prog(struct bpf_prog *prog)
+{
+	return 0;
+}
+
+static inline int security_bpf_map_create(const union bpf_attr *attr)
 {
 	return 0;
 }
