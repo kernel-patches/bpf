@@ -12,6 +12,18 @@
 #define XDP_UMEM_MIN_CHUNK_SHIFT 11
 #define XDP_UMEM_MIN_CHUNK_SIZE (1 << XDP_UMEM_MIN_CHUNK_SHIFT)
 
+static_assert(XDP_UMEM_MIN_CHUNK_SIZE <= PAGE_SIZE);
+
+/* Allow chunk sizes up to the maximum size of an ethernet frame (64 KiB).
+ * Larger chunks are not guaranteed to fit in a single SKB.
+ */
+#ifdef CONFIG_HUGETLB_PAGE
+#define XDP_UMEM_MAX_CHUNK_SHIFT min(16, HPAGE_SHIFT)
+#else
+#define XDP_UMEM_MAX_CHUNK_SHIFT min(16, PAGE_SHIFT)
+#endif
+#define XDP_UMEM_MAX_CHUNK_SIZE (1 << XDP_UMEM_MAX_CHUNK_SHIFT)
+
 #ifdef CONFIG_XDP_SOCKETS
 
 void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries);

@@ -10,6 +10,8 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/bpf.h>
+#include <linux/hugetlb.h>
+#include <linux/hugetlb_inline.h>
 #include <linux/mm.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
@@ -91,9 +93,39 @@ void xdp_put_umem(struct xdp_umem *umem, bool defer_cleanup)
 	}
 }
 
+/* NOTE: The mmap_lock must be held by the caller. */
+static void xdp_umem_init_page_size(struct xdp_umem *umem, unsigned long address)
+{
+#ifdef CONFIG_HUGETLB_PAGE
+	struct vm_area_struct *vma;
+	struct vma_iterator vmi;
+	unsigned long end;
+
+	if (!IS_ALIGNED(address, HPAGE_SIZE))
+		goto no_hugetlb;
+
+	vma_iter_init(&vmi, current->mm, address);
+	end = address + umem->size;
+
+	for_each_vma_range(vmi, vma, end) {
+		if (!is_vm_hugetlb_page(vma))
+			goto no_hugetlb;
+		/* Hugepage sizes smaller than the default are not supported. */
+		if (huge_page_size(hstate_vma(vma)) < HPAGE_SIZE)
+			goto no_hugetlb;
+	}
+
+	umem->page_shift = HPAGE_SHIFT;
+	umem->page_size = HPAGE_SIZE;
+	return;
+no_hugetlb:
+#endif
+	umem->page_shift = PAGE_SHIFT;
+	umem->page_size = PAGE_SIZE;
+}
+
 static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 {
-	unsigned int gup_flags = FOLL_WRITE;
 	long npgs;
 	int err;
 
@@ -102,8 +134,18 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 		return -ENOMEM;
 
 	mmap_read_lock(current->mm);
+
+	xdp_umem_init_page_size(umem, address);
+
+	if (umem->chunk_size > umem->page_size) {
+		mmap_read_unlock(current->mm);
+		err = -EINVAL;
+		goto out_pgs;
+	}
+
 	npgs = pin_user_pages(address, umem->npgs,
-			      gup_flags | FOLL_LONGTERM, &umem->pgs[0], NULL);
+			      FOLL_WRITE | FOLL_LONGTERM, &umem->pgs[0], NULL);
+
 	mmap_read_unlock(current->mm);
 
 	if (npgs != umem->npgs) {
@@ -157,15 +199,8 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 	u64 chunks, npgs;
 	int err;
 
-	if (chunk_size < XDP_UMEM_MIN_CHUNK_SIZE || chunk_size > PAGE_SIZE) {
-		/* Strictly speaking we could support this, if:
-		 * - huge pages, or*
-		 * - using an IOMMU, or
-		 * - making sure the memory area is consecutive
-		 * but for now, we simply say "computer says no".
-		 */
+	if (chunk_size < XDP_UMEM_MIN_CHUNK_SIZE || chunk_size > XDP_UMEM_MAX_CHUNK_SIZE)
 		return -EINVAL;
-	}
 
 	if (mr->flags & ~XDP_UMEM_UNALIGNED_CHUNK_FLAG)
 		return -EINVAL;

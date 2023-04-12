@@ -25,6 +25,8 @@ struct xdp_umem {
 	u32 chunk_size;
 	u32 chunks;
 	u32 npgs;
+	u32 page_shift;
+	u32 page_size;
 	struct user_struct *user;
 	refcount_t users;
 	u8 flags;

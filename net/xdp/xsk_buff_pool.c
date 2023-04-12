@@ -75,14 +75,16 @@ struct xsk_buff_pool *xp_create_and_assign_umem(struct xdp_sock *xs,
 
 	pool->chunk_mask = ~((u64)umem->chunk_size - 1);
 	pool->addrs_cnt = umem->size;
+	pool->page_shift = umem->page_shift;
+	pool->page_size = umem->page_size;
 	pool->heads_cnt = umem->chunks;
 	pool->free_heads_cnt = umem->chunks;
 	pool->headroom = umem->headroom;
 	pool->chunk_size = umem->chunk_size;
 	pool->chunk_shift = ffs(umem->chunk_size) - 1;
-	pool->unaligned = unaligned;
 	pool->frame_len = umem->chunk_size - umem->headroom -
 		XDP_PACKET_HEADROOM;
+	pool->unaligned = unaligned;
 	pool->umem = umem;
 	pool->addrs = umem->addrs;
 	INIT_LIST_HEAD(&pool->free_list);
@@ -328,7 +330,8 @@ static void xp_destroy_dma_map(struct xsk_dma_map *dma_map)
 	kfree(dma_map);
 }
 
-static void __xp_dma_unmap(struct xsk_dma_map *dma_map, unsigned long attrs)
+static void __xp_dma_unmap(struct xsk_dma_map *dma_map, unsigned long attrs,
+			   u32 page_size)
 {
 	dma_addr_t *dma;
 	u32 i;
@@ -337,7 +340,7 @@ static void __xp_dma_unmap(struct xsk_dma_map *dma_map, unsigned long attrs)
 		dma = &dma_map->dma_pages[i];
 		if (*dma) {
 			*dma &= ~XSK_NEXT_PG_CONTIG_MASK;
-			dma_unmap_page_attrs(dma_map->dev, *dma, PAGE_SIZE,
+			dma_unmap_page_attrs(dma_map->dev, *dma, page_size,
 					     DMA_BIDIRECTIONAL, attrs);
 			*dma = 0;
 		}
@@ -362,7 +365,7 @@ void xp_dma_unmap(struct xsk_buff_pool *pool, unsigned long attrs)
 	if (!refcount_dec_and_test(&dma_map->users))
 		return;
 
-	__xp_dma_unmap(dma_map, attrs);
+	__xp_dma_unmap(dma_map, attrs, pool->page_size);
 	kvfree(pool->dma_pages);
 	pool->dma_pages = NULL;
 	pool->dma_pages_cnt = 0;
@@ -370,16 +373,17 @@ void xp_dma_unmap(struct xsk_buff_pool *pool, unsigned long attrs)
 }
 EXPORT_SYMBOL(xp_dma_unmap);
 
-static void xp_check_dma_contiguity(struct xsk_dma_map *dma_map)
+static void xp_check_dma_contiguity(struct xsk_dma_map *dma_map, u32 page_size)
 {
 	u32 i;
 
 	for (i = 0; i < dma_map->dma_pages_cnt - 1; i++) {
-		if (dma_map->dma_pages[i] + PAGE_SIZE == dma_map->dma_pages[i + 1])
+		if (dma_map->dma_pages[i] + page_size == dma_map->dma_pages[i + 1])
 			dma_map->dma_pages[i] |= XSK_NEXT_PG_CONTIG_MASK;
 		else
 			dma_map->dma_pages[i] &= ~XSK_NEXT_PG_CONTIG_MASK;
 	}
+	dma_map->dma_pages[i] &= ~XSK_NEXT_PG_CONTIG_MASK;
 }
 
 static int xp_init_dma_info(struct xsk_buff_pool *pool, struct xsk_dma_map *dma_map)
@@ -412,6 +416,7 @@ int xp_dma_map(struct xsk_buff_pool *pool, struct device *dev,
 {
 	struct xsk_dma_map *dma_map;
 	dma_addr_t dma;
+	u32 stride;
 	int err;
 	u32 i;
 
@@ -425,15 +430,19 @@ int xp_dma_map(struct xsk_buff_pool *pool, struct device *dev,
 		return 0;
 	}
 
+	/* dma_pages use pool->page_size whereas `pages` are always order-0. */
+	stride = pool->page_size >> PAGE_SHIFT; /* in order-0 pages */
+	nr_pages = (nr_pages + stride - 1) >> (pool->page_shift - PAGE_SHIFT);
+
 	dma_map = xp_create_dma_map(dev, pool->netdev, nr_pages, pool->umem);
 	if (!dma_map)
 		return -ENOMEM;
 
 	for (i = 0; i < dma_map->dma_pages_cnt; i++) {
-		dma = dma_map_page_attrs(dev, pages[i], 0, PAGE_SIZE,
+		dma = dma_map_page_attrs(dev, pages[i * stride], 0, pool->page_size,
 					 DMA_BIDIRECTIONAL, attrs);
 		if (dma_mapping_error(dev, dma)) {
-			__xp_dma_unmap(dma_map, attrs);
+			__xp_dma_unmap(dma_map, attrs, pool->page_size);
 			return -ENOMEM;
 		}
 		if (dma_need_sync(dev, dma))
@@ -442,11 +451,11 @@ int xp_dma_map(struct xsk_buff_pool *pool, struct device *dev,
 	}
 
 	if (pool->unaligned)
-		xp_check_dma_contiguity(dma_map);
+		xp_check_dma_contiguity(dma_map, pool->page_size);
 
 	err = xp_init_dma_info(pool, dma_map);
 	if (err) {
-		__xp_dma_unmap(dma_map, attrs);
+		__xp_dma_unmap(dma_map, attrs, pool->page_size);
 		return err;
 	}
 
@@ -663,9 +672,8 @@ EXPORT_SYMBOL(xp_raw_get_data);
 dma_addr_t xp_raw_get_dma(struct xsk_buff_pool *pool, u64 addr)
 {
 	addr = pool->unaligned ? xp_unaligned_add_offset_to_addr(addr) : addr;
-	return (pool->dma_pages[addr >> PAGE_SHIFT] &
-		~XSK_NEXT_PG_CONTIG_MASK) +
-		(addr & ~PAGE_MASK);
+	return (pool->dma_pages[addr >> pool->page_shift] & ~XSK_NEXT_PG_CONTIG_MASK) +
+	       (addr & (pool->page_size - 1));
 }
 EXPORT_SYMBOL(xp_raw_get_dma);
 

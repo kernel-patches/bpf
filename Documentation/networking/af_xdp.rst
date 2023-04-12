@@ -105,12 +105,13 @@ with AF_XDP". It can be found at https://lwn.net/Articles/750845/.
 UMEM
 ----
 
-UMEM is a region of virtual contiguous memory, divided into
-equal-sized frames. An UMEM is associated to a netdev and a specific
-queue id of that netdev. It is created and configured (chunk size,
-headroom, start address and size) by using the XDP_UMEM_REG setsockopt
-system call. A UMEM is bound to a netdev and queue id, via the bind()
-system call.
+UMEM is a region of virtual contiguous memory divided into equal-sized
+frames. This is the area that contains all the buffers that packets can
+reside in. A UMEM is associated with a netdev and a specific queue id of
+that netdev. It is created and configured (start address, size,
+chunk size, and headroom) by using the XDP_UMEM_REG setsockopt system
+call. A UMEM is bound to a netdev and queue id via the bind() system
+call.
 
 An AF_XDP is socket linked to a single UMEM, but one UMEM can have
 multiple AF_XDP sockets. To share an UMEM created via one socket A,
@@ -418,14 +419,21 @@ negatively impact performance.
 XDP_UMEM_REG setsockopt
 -----------------------
 
-This setsockopt registers a UMEM to a socket. This is the area that
-contain all the buffers that packet can reside in. The call takes a
-pointer to the beginning of this area and the size of it. Moreover, it
-also has parameter called chunk_size that is the size that the UMEM is
-divided into. It can only be 2K or 4K at the moment. If you have an
-UMEM area that is 128K and a chunk size of 2K, this means that you
-will be able to hold a maximum of 128K / 2K = 64 packets in your UMEM
-area and that your largest packet size can be 2K.
+This setsockopt registers a UMEM to a socket. The call takes a pointer
+to the beginning of this area and the size of it. Moreover, there is a
+parameter called chunk_size that is the size that the UMEM is divided
+into. The chunk size limits the maximum packet size that can be sent or
+received. For example, if you have a UMEM area that is 128K and a chunk
+size of 2K, then you will be able to hold a maximum of 128K / 2K = 64
+packets in your UMEM. In this case, the maximum packet size will be 2K.
+
+Valid chunk sizes range from 2K to 64K. However, in aligned mode, the
+chunk size must also be a power of two. Additionally, the chunk size
+must not exceed the size of a page (usually 4K). This limitation is
+relaxed for UMEM areas allocated with HugeTLB pages, in which case
+chunk sizes up to 64K are allowed. Note, this only works with hugepages
+allocated from the kernel's persistent pool. Using Transparent Huge
+Pages (THP) has no effect on the maximum chunk size.
 
 There is also an option to set the headroom of each single buffer in
 the UMEM. If you set this to N bytes, it means that the packet will

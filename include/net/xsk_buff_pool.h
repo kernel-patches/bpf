@@ -68,6 +68,8 @@ struct xsk_buff_pool {
 	struct xdp_desc *tx_descs;
 	u64 chunk_mask;
 	u64 addrs_cnt;
+	u32 page_shift;
+	u32 page_size;
 	u32 free_list_cnt;
 	u32 dma_pages_cnt;
 	u32 free_heads_cnt;
@@ -123,8 +125,8 @@ static inline void xp_init_xskb_addr(struct xdp_buff_xsk *xskb, struct xsk_buff_
 static inline void xp_init_xskb_dma(struct xdp_buff_xsk *xskb, struct xsk_buff_pool *pool,
 				    dma_addr_t *dma_pages, u64 addr)
 {
-	xskb->frame_dma = (dma_pages[addr >> PAGE_SHIFT] & ~XSK_NEXT_PG_CONTIG_MASK) +
-		(addr & ~PAGE_MASK);
+	xskb->frame_dma = (dma_pages[addr >> pool->page_shift] & ~XSK_NEXT_PG_CONTIG_MASK) +
+			  (addr & (pool->page_size - 1));
 	xskb->dma = xskb->frame_dma + pool->headroom + XDP_PACKET_HEADROOM;
 }
 
@@ -175,13 +177,13 @@ static inline void xp_dma_sync_for_device(struct xsk_buff_pool *pool,
 static inline bool xp_desc_crosses_non_contig_pg(struct xsk_buff_pool *pool,
 						 u64 addr, u32 len)
 {
-	bool cross_pg = (addr & (PAGE_SIZE - 1)) + len > PAGE_SIZE;
+	bool cross_pg = (addr & (pool->page_size - 1)) + len > pool->page_size;
 
 	if (likely(!cross_pg))
 		return false;
 
 	return pool->dma_pages &&
-	       !(pool->dma_pages[addr >> PAGE_SHIFT] & XSK_NEXT_PG_CONTIG_MASK);
+	       !(pool->dma_pages[addr >> pool->page_shift] & XSK_NEXT_PG_CONTIG_MASK);
 }
 
 static inline u64 xp_aligned_extract_addr(struct xsk_buff_pool *pool, u64 addr)
