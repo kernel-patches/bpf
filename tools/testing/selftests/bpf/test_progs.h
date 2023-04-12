@@ -23,6 +23,7 @@ typedef __u16 __sum16;
 #include <linux/perf_event.h>
 #include <linux/socket.h>
 #include <linux/unistd.h>
+#include <sys/syscall.h>
 
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -175,6 +176,11 @@ void test__end_subtest(void);
 void test__skip(void);
 void test__fail(void);
 int test__join_cgroup(const char *path);
+
+static inline int gettid(void)
+{
+	return syscall(SYS_gettid);
+}
 
 #define PRINT_FAIL(format...)                                                  \
 	({                                                                     \
