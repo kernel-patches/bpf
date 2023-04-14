@@ -168,6 +168,17 @@ static int bonding_setup(struct skeletons *skeletons, int mode, int xmit_policy,
 
 		if (xdp_attach(skeletons, skeletons->xdp_dummy->progs.xdp_dummy_prog, "veth1_2"))
 			return -1;
+
+		if (!ASSERT_OK(setns_by_name("ns_dst"), "set netns to ns_dst"))
+			return -1;
+
+		/* Load a dummy XDP program on veth2_2 in order to enable
+		 * NETDEV_XDP_ACT_NDO_XMIT feature
+		 */
+		if (xdp_attach(skeletons, skeletons->xdp_dummy->progs.xdp_dummy_prog, "veth2_2"))
+			return -1;
+
+		restore_root_netns();
 	}
 
 	SYS("ip -netns ns_dst link set veth2_1 master bond2");
