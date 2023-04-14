@@ -18,6 +18,10 @@
 #include "libbpf.h"
 #include "libbpf_internal.h"
 
+#ifndef LIBBPF_KERNEL_VERSION
+#define LIBBPF_KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+#endif
+
 /* On Ubuntu LINUX_VERSION_CODE doesn't correspond to info.release,
  * but Ubuntu provides /proc/version_signature file, as described at
  * https://ubuntu.com/kernel, with an example contents below, which we
@@ -47,7 +51,7 @@ static __u32 get_ubuntu_kernel_version(void)
 	if (ret != 3)
 		return 0;
 
-	return KERNEL_VERSION(major, minor, patch);
+	return LIBBPF_KERNEL_VERSION(major, minor, patch);
 }
 
 /* On Debian LINUX_VERSION_CODE doesn't correspond to info.release.
@@ -74,7 +78,7 @@ static __u32 get_debian_kernel_version(struct utsname *info)
 	if (sscanf(p, "Debian %u.%u.%u", &major, &minor, &patch) != 3)
 		return 0;
 
-	return KERNEL_VERSION(major, minor, patch);
+	return LIBBPF_KERNEL_VERSION(major, minor, patch);
 }
 
 __u32 get_kernel_version(void)
@@ -97,7 +101,7 @@ __u32 get_kernel_version(void)
 	if (sscanf(info.release, "%u.%u.%u", &major, &minor, &patch) != 3)
 		return 0;
 
-	return KERNEL_VERSION(major, minor, patch);
+	return LIBBPF_KERNEL_VERSION(major, minor, patch);
 }
 
 static int probe_prog_load(enum bpf_prog_type prog_type,
