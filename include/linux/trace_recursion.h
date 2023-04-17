@@ -168,6 +168,8 @@ static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsign
 		 * will think a recursion occurred, and the event will be dropped.
 		 * Let a single instance happen via the TRANSITION_BIT to
 		 * not drop those events.
+		 * After this rule is applied, one single recursion is allowed in
+		 * the process context.
 		 */
 		bit = TRACE_CTX_TRANSITION + start;
 		if (val & (1 << bit)) {
