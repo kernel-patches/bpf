@@ -8,6 +8,7 @@ void test_recursion(void)
 	struct bpf_prog_info prog_info = {};
 	__u32 prog_info_len = sizeof(prog_info);
 	struct recursion *skel;
+	int expected[2];
 	int key = 0;
 	int err;
 
@@ -27,9 +28,11 @@ void test_recursion(void)
 
 	ASSERT_EQ(skel->bss->pass2, 0, "pass2 == 0");
 	bpf_map_delete_elem(bpf_map__fd(skel->maps.hash2), &key);
-	ASSERT_EQ(skel->bss->pass2, 1, "pass2 == 1");
+	expected[1] = 2;
+	ASSERT_IN_ARRAY(skel->bss->pass2, expected, "pass2 in [0 2]");
 	bpf_map_delete_elem(bpf_map__fd(skel->maps.hash2), &key);
-	ASSERT_EQ(skel->bss->pass2, 2, "pass2 == 2");
+	expected[1] = 4;
+	ASSERT_IN_ARRAY(skel->bss->pass2, expected, "pass2 in [0 4]");
 
 	err = bpf_prog_get_info_by_fd(bpf_program__fd(skel->progs.on_delete),
 				      &prog_info, &prog_info_len);

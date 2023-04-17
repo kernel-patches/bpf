@@ -245,6 +245,25 @@ int test__join_cgroup(const char *path);
 	___ok;								\
 })
 
+#define ASSERT_IN_ARRAY(actual, expected, name) ({			\
+	static int duration;						\
+	typeof(actual) ___act = (actual);				\
+	typeof((expected)[0]) * ___exp = (expected);			\
+	bool ___ok = false;						\
+	int i;								\
+									\
+	for (i = 0; i < ARRAY_SIZE(expected); i++) {			\
+		if (___act == ___exp[i]) {				\
+			___ok = true;					\
+			break;						\
+		}							\
+	}								\
+	CHECK(!___ok, (name),						\
+	      "unexpected %s: actual %lld not in array\n",		\
+	      (name), (long long)(___act));				\
+	___ok;								\
+})
+
 #define ASSERT_NEQ(actual, expected, name) ({				\
 	static int duration = 0;					\
 	typeof(actual) ___act = (actual);				\
