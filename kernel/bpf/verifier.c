@@ -3491,11 +3491,11 @@ static void mark_all_scalars_imprecise(struct bpf_verifier_env *env, struct bpf_
  * finalized states which help in short circuiting more future states.
  */
 static int __mark_chain_precision(struct bpf_verifier_env *env, int frame, int regno,
-				  int spi)
+				  int spi, bool from_state)
 {
 	struct bpf_verifier_state *st = env->cur_state;
 	int first_idx = st->first_insn_idx;
-	int last_idx = env->insn_idx;
+	int last_idx = from_state ? st->last_insn_idx : env->insn_idx;
 	struct bpf_func_state *func;
 	struct bpf_reg_state *reg;
 	u32 reg_mask = regno >= 0 ? 1u << regno : 0;
@@ -3680,17 +3680,20 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int frame, int r
 
 int mark_chain_precision(struct bpf_verifier_env *env, int regno)
 {
-	return __mark_chain_precision(env, env->cur_state->curframe, regno, -1);
+	return __mark_chain_precision(env, env->cur_state->curframe,
+				      regno, -1, false);
 }
 
-static int mark_chain_precision_frame(struct bpf_verifier_env *env, int frame, int regno)
+static int mark_chain_precision_frame(struct bpf_verifier_env *env,
+				      int frame, int regno)
 {
-	return __mark_chain_precision(env, frame, regno, -1);
+	return __mark_chain_precision(env, frame, regno, -1, true);
 }
 
-static int mark_chain_precision_stack_frame(struct bpf_verifier_env *env, int frame, int spi)
+static int mark_chain_precision_stack_frame(struct bpf_verifier_env *env,
+					    int frame, int spi)
 {
-	return __mark_chain_precision(env, frame, -1, spi);
+	return __mark_chain_precision(env, frame, -1, spi, true);
 }
 
 static bool is_spillable_regtype(enum bpf_reg_type type)
