@@ -2250,16 +2250,18 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 static __always_inline
 void __bpf_trace_run(struct bpf_prog *prog, u64 *args)
 {
-	cant_sleep();
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
+	int bit;
+
+	bit = test_recursion_try_acquire(_THIS_IP_, _RET_IP_);
+	if (bit < 0) {
 		bpf_prog_inc_misses_counter(prog);
-		goto out;
+		return;
 	}
+	cant_sleep();
 	rcu_read_lock();
 	(void) bpf_prog_run(prog, args);
 	rcu_read_unlock();
-out:
-	this_cpu_dec(*(prog->active));
+	test_recursion_release(bit);
 }
 
 #define UNPACK(...)			__VA_ARGS__

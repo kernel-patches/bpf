@@ -103,12 +103,6 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 		vfree(fp);
 		return NULL;
 	}
-	fp->active = alloc_percpu_gfp(int, bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
-	if (!fp->active) {
-		vfree(fp);
-		kfree(aux);
-		return NULL;
-	}
 
 	fp->pages = size / PAGE_SIZE;
 	fp->aux = aux;
@@ -138,7 +132,6 @@ struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
 
 	prog->stats = alloc_percpu_gfp(struct bpf_prog_stats, gfp_flags);
 	if (!prog->stats) {
-		free_percpu(prog->active);
 		kfree(prog->aux);
 		vfree(prog);
 		return NULL;
@@ -256,7 +249,6 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		 */
 		fp_old->aux = NULL;
 		fp_old->stats = NULL;
-		fp_old->active = NULL;
 		__bpf_prog_free(fp_old);
 	}
 
@@ -272,7 +264,6 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
-	free_percpu(fp->active);
 	vfree(fp);
 }
 
@@ -1385,7 +1376,6 @@ static void bpf_prog_clone_free(struct bpf_prog *fp)
 	 */
 	fp->aux = NULL;
 	fp->stats = NULL;
-	fp->active = NULL;
 	__bpf_prog_free(fp);
 }
 

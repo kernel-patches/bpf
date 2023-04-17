@@ -842,15 +842,21 @@ static __always_inline u64 notrace bpf_prog_start_time(void)
 static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
+	int bit;
+
 	rcu_read_lock();
+	bit = test_recursion_try_acquire(_THIS_IP_, _RET_IP_);
+	run_ctx->recursion_bit = bit;
+	if (bit < 0) {
+		preempt_disable_notrace();
+		bpf_prog_inc_misses_counter(prog);
+		preempt_enable_notrace();
+		return 0;
+	}
+
 	migrate_disable();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
-
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
-		bpf_prog_inc_misses_counter(prog);
-		return 0;
-	}
 	return bpf_prog_start_time();
 }
 
@@ -880,11 +886,16 @@ static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
 					  struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
+	if (run_ctx->recursion_bit < 0)
+		goto out;
+
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
 	update_prog_stats(prog, start);
-	this_cpu_dec(*(prog->active));
 	migrate_enable();
+	test_recursion_release(run_ctx->recursion_bit);
+
+out:
 	rcu_read_unlock();
 }
 
@@ -916,14 +927,20 @@ static void notrace __bpf_prog_exit_lsm_cgroup(struct bpf_prog *prog, u64 start,
 u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 					     struct bpf_tramp_run_ctx *run_ctx)
 {
-	rcu_read_lock_trace();
-	migrate_disable();
-	might_fault();
+	int bit;
 
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
+	rcu_read_lock_trace();
+	bit = test_recursion_try_acquire(_THIS_IP_, _RET_IP_);
+	run_ctx->recursion_bit = bit;
+	if (bit < 0) {
+		preempt_disable_notrace();
 		bpf_prog_inc_misses_counter(prog);
+		preempt_enable_notrace();
 		return 0;
 	}
+
+	migrate_disable();
+	might_fault();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
 
@@ -933,11 +950,16 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 					     struct bpf_tramp_run_ctx *run_ctx)
 {
+	if (run_ctx->recursion_bit < 0)
+		goto out;
+
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
 	update_prog_stats(prog, start);
-	this_cpu_dec(*(prog->active));
 	migrate_enable();
+	test_recursion_release(run_ctx->recursion_bit);
+
+out:
 	rcu_read_unlock_trace();
 }
 
