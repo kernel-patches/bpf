@@ -7647,6 +7647,7 @@ __ftrace_ops_list_func(unsigned long ip, unsigned long parent_ip,
 	if (bit < 0)
 		return;
 
+	preempt_disable();
 	do_for_each_ftrace_op(op, ftrace_ops_list) {
 		/* Stub functions don't need to be called nor tested */
 		if (op->flags & FTRACE_OPS_FL_STUB)
@@ -7668,6 +7669,7 @@ __ftrace_ops_list_func(unsigned long ip, unsigned long parent_ip,
 		}
 	} while_for_each_ftrace_op(op);
 out:
+	preempt_enable();
 	trace_clear_recursion(bit);
 }
 

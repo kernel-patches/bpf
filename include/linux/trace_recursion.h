@@ -150,9 +150,6 @@ extern void ftrace_record_recursion(unsigned long ip, unsigned long parent_ip);
 # define trace_warn_on_no_rcu(ip)	false
 #endif
 
-/*
- * Preemption is promised to be disabled when return bit >= 0.
- */
 static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsigned long pip,
 							int start)
 {
@@ -182,18 +179,11 @@ static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsign
 	val |= 1 << bit;
 	current->trace_recursion = val;
 	barrier();
-
-	preempt_disable_notrace();
-
 	return bit;
 }
 
-/*
- * Preemption will be enabled (if it was previously enabled).
- */
 static __always_inline void trace_clear_recursion(int bit)
 {
-	preempt_enable_notrace();
 	barrier();
 	trace_recursion_clear(bit);
 }
@@ -205,12 +195,18 @@ static __always_inline void trace_clear_recursion(int bit)
  * tracing recursed in the same context (normal vs interrupt),
  *
  * Returns: -1 if a recursion happened.
- *           >= 0 if no recursion.
+ *           >= 0 if no recursion and preemption will be disabled.
  */
 static __always_inline int ftrace_test_recursion_trylock(unsigned long ip,
 							 unsigned long parent_ip)
 {
-	return trace_test_and_set_recursion(ip, parent_ip, TRACE_FTRACE_START);
+	int bit;
+
+	bit = trace_test_and_set_recursion(ip, parent_ip, TRACE_FTRACE_START);
+	if (unlikely(bit < 0))
+		return bit;
+	preempt_disable_notrace();
+	return bit;
 }
 
 /**
@@ -220,6 +216,33 @@ static __always_inline int ftrace_test_recursion_trylock(unsigned long ip,
  * This is used at the end of a ftrace callback.
  */
 static __always_inline void ftrace_test_recursion_unlock(int bit)
+{
+	preempt_enable_notrace();
+	trace_clear_recursion(bit);
+}
+
+/**
+ * test_recursion_try_acquire - tests for recursion in same context
+ *
+ * This will detect recursion of a function.
+ *
+ * Returns: -1 if a recursion happened.
+ *           >= 0 if no recursion
+ */
+static __always_inline int test_recursion_try_acquire(unsigned long ip,
+						      unsigned long parent_ip)
+{
+	return trace_test_and_set_recursion(ip, parent_ip, TRACE_FTRACE_START);
+}
+
+/**
+ * test_recursion_release - called after a success of test_recursion_try_acquire()
+ * @bit: The return of a successful test_recursion_try_acquire()
+ *
+ * This releases the recursion lock taken by a non-negative return call
+ * by test_recursion_try_acquire().
+ */
+static __always_inline void test_recursion_release(int bit)
 {
 	trace_clear_recursion(bit);
 }
