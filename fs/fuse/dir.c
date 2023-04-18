@@ -719,6 +719,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	/* Userspace expects S_IFREG in create mode */
 	BUG_ON((mode & S_IFMT) != S_IFREG);
 
+	if (fuse_bpf_create_open(&err, dir, entry, file, flags, mode))
+		return err;
+
 	forget = fuse_alloc_forget();
 	err = -ENOMEM;
 	if (!forget)
@@ -1629,6 +1632,11 @@ static int fuse_dir_open(struct inode *inode, struct file *file)
 
 static int fuse_dir_release(struct inode *inode, struct file *file)
 {
+	int err = 0;
+
+	if (fuse_bpf_releasedir(&err, inode, file))
+		return err;
+
 	fuse_release_common(file, true);
 
 	return 0;
