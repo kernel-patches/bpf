@@ -427,3 +427,31 @@ void close_netns(struct nstoken *token)
 	close(token->orig_netns_fd);
 	free(token);
 }
+
+int get_socket_local_port(int family, int sock_fd, __u16 *out_port)
+{
+	socklen_t addr_len;
+	int err;
+
+	if (family == AF_INET) {
+		struct sockaddr_in addr = {};
+
+		addr_len = sizeof(addr);
+		err = getsockname(sock_fd, (struct sockaddr *)&addr, &addr_len);
+		if (err < 0)
+			return err;
+		*out_port = addr.sin_port;
+		return 0;
+	} else if (family == AF_INET6) {
+		struct sockaddr_in6 addr = {};
+
+		addr_len = sizeof(addr);
+		err = getsockname(sock_fd, (struct sockaddr *)&addr, &addr_len);
+		if (err < 0)
+			return err;
+		*out_port = addr.sin6_port;
+		return 0;
+	}
+
+	return -1;
+}
