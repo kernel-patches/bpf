@@ -1016,18 +1016,19 @@ static int fuse_copy_one(struct fuse_copy_state *cs, void *val, unsigned size)
 
 /* Copy the fuse-bpf lookup args and verify them */
 #ifdef CONFIG_FUSE_BPF
-static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size)
+static int fuse_copy_lookup(struct fuse_copy_state *cs, unsigned via_ioctl, void *val, unsigned size)
 {
 	struct fuse_bpf_entry_out *fbeo = (struct fuse_bpf_entry_out *)val;
 	struct fuse_bpf_entry *feb = container_of(fbeo, struct fuse_bpf_entry, out[0]);
 	int num_entries = size / sizeof(*fbeo);
 	int err;
 
-	if (size && size % sizeof(*fbeo) != 0)
+	if (size && (size % sizeof(*fbeo) != 0 || !via_ioctl))
 		return -EINVAL;
 
 	if (num_entries > FUSE_BPF_MAX_ENTRIES)
 		return -EINVAL;
+
 	err = fuse_copy_one(cs, val, size);
 	if (err)
 		return err;
@@ -1036,7 +1037,7 @@ static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size
 	return err;
 }
 #else
-static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size)
+static int fuse_copy_lookup(struct fuse_copy_state *cs, unsigned via_ioctl, void *val, unsigned size)
 {
 	return fuse_copy_one(cs, val, size);
 }
@@ -1045,7 +1046,7 @@ static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size
 /* Copy request arguments to/from userspace buffer */
 static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 			  unsigned argpages, struct fuse_arg *args,
-			  int zeroing, unsigned is_lookup)
+			  int zeroing, unsigned is_lookup, unsigned via_ioct)
 {
 	int err = 0;
 	unsigned i;
@@ -1055,7 +1056,7 @@ static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 		if (i == numargs - 1 && argpages)
 			err = fuse_copy_pages(cs, arg->size, zeroing);
 		else if (i == numargs - 1 && is_lookup)
-			err = fuse_copy_lookup(cs, arg->value, arg->size);
+			err = fuse_copy_lookup(cs, via_ioct, arg->value, arg->size);
 		else
 			err = fuse_copy_one(cs, arg->value, arg->size);
 	}
@@ -1333,7 +1334,7 @@ static ssize_t fuse_dev_do_read(struct fuse_dev *fud, struct file *file,
 	err = fuse_copy_one(cs, &req->in.h, sizeof(req->in.h));
 	if (!err)
 		err = fuse_copy_args(cs, args->in_numargs, args->in_pages,
-				     (struct fuse_arg *) args->in_args, 0, 0);
+				     (struct fuse_arg *) args->in_args, 0, 0, 0);
 	fuse_copy_finish(cs);
 	spin_lock(&fpq->lock);
 	clear_bit(FR_LOCKED, &req->flags);
@@ -1872,7 +1873,8 @@ static int copy_out_args(struct fuse_copy_state *cs, struct fuse_args *args,
 		lastarg->size -= diffsize;
 	}
 	return fuse_copy_args(cs, args->out_numargs, args->out_pages,
-			      args->out_args, args->page_zeroing, args->is_lookup);
+			      args->out_args, args->page_zeroing, args->is_lookup,
+			      args->via_ioctl);
 }
 
 /*
@@ -1882,7 +1884,7 @@ static int copy_out_args(struct fuse_copy_state *cs, struct fuse_args *args,
  * it from the list and copy the rest of the buffer to the request.
  * The request is finished by calling fuse_request_end().
  */
-static ssize_t fuse_dev_do_write(struct fuse_dev *fud,
+static ssize_t fuse_dev_do_write(struct fuse_dev *fud, bool from_ioctl,
 				 struct fuse_copy_state *cs, size_t nbytes)
 {
 	int err;
@@ -1954,6 +1956,7 @@ static ssize_t fuse_dev_do_write(struct fuse_dev *fud,
 	if (!req->args->page_replace)
 		cs->move_pages = 0;
 
+	req->args->via_ioctl = from_ioctl;
 	if (oh.error)
 		err = nbytes != sizeof(oh) ? -EINVAL : 0;
 	else
@@ -1992,7 +1995,7 @@ static ssize_t fuse_dev_write(struct kiocb *iocb, struct iov_iter *from)
 
 	fuse_copy_init(&cs, 0, from);
 
-	return fuse_dev_do_write(fud, &cs, iov_iter_count(from));
+	return fuse_dev_do_write(fud, false, &cs, iov_iter_count(from));
 }
 
 static ssize_t fuse_dev_splice_write(struct pipe_inode_info *pipe,
@@ -2073,7 +2076,7 @@ static ssize_t fuse_dev_splice_write(struct pipe_inode_info *pipe,
 	if (flags & SPLICE_F_MOVE)
 		cs.move_pages = 1;
 
-	ret = fuse_dev_do_write(fud, &cs, len);
+	ret = fuse_dev_do_write(fud, false, &cs, len);
 
 	pipe_lock(pipe);
 out_free:
@@ -2286,6 +2289,33 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
+// Provides an alternate means to respond to a fuse request
+static int fuse_handle_ioc_response(struct fuse_dev *dev, void *buff, uint32_t size)
+{
+	struct fuse_copy_state cs;
+	struct iovec *iov = NULL;
+	struct iov_iter iter;
+	int res;
+
+	if (size > PAGE_SIZE)
+		return -EINVAL;
+	iov = (struct iovec *) __get_free_page(GFP_KERNEL);
+	if (!iov)
+		return -ENOMEM;
+
+	iov->iov_base = buff;
+	iov->iov_len = size;
+
+	iov_iter_init(&iter, READ, iov, 1, size);
+	fuse_copy_init(&cs, 0, &iter);
+
+
+	res = fuse_dev_do_write(dev, true, &cs, size);
+	free_page((unsigned long) iov);
+
+	return res;
+}
+
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
@@ -2318,6 +2348,12 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 	default:
+		if (_IOC_TYPE(cmd) == FUSE_DEV_IOC_MAGIC
+				&& _IOC_NR(cmd) == _IOC_NR(FUSE_DEV_IOC_BPF_RESPONSE(0))
+				&& _IOC_DIR(cmd) == _IOC_WRITE) {
+			res = fuse_handle_ioc_response(fuse_get_dev(file), (void *) arg, _IOC_SIZE(cmd));
+			break;
+		}
 		res = -ENOTTY;
 		break;
 	}

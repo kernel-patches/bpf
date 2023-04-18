@@ -316,6 +316,7 @@ struct fuse_args {
 	bool may_block:1;
 	bool is_ext:1;
 	bool is_lookup:1;
+	bool via_ioctl:1;
 	struct fuse_in_arg in_args[3];
 	struct fuse_arg out_args[2];
 	void (*end)(struct fuse_mount *fm, struct fuse_args *args, int error);
