@@ -1826,7 +1826,9 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		ret = 1;
 	} else if (ctx.optlen > max_optlen || ctx.optlen < -1) {
 		/* optlen is out of bounds */
-		ret = -EFAULT;
+		pr_info_ratelimited(
+			"bpf setsockopt returned unexpected optlen=%d (max_optlen=%d)\n",
+			ctx.optlen, max_optlen);
 	} else {
 		/* optlen within bounds, run kernel handler */
 		ret = 0;
@@ -1922,7 +1924,9 @@ int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
 		goto out;
 
 	if (optval && (ctx.optlen > max_optlen || ctx.optlen < 0)) {
-		ret = -EFAULT;
+		pr_info_ratelimited(
+			"bpf getsockopt returned unexpected optlen=%d (max_optlen=%d)\n",
+			ctx.optlen, max_optlen);
 		goto out;
 	}
 
