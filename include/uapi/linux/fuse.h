@@ -748,6 +748,11 @@ struct fuse_read_in {
 	uint32_t	padding;
 };
 
+// This is likely not what we want
+struct fuse_read_iter_out {
+	uint64_t ret;
+};
+
 #define FUSE_COMPAT_WRITE_IN_SIZE 24
 
 struct fuse_write_in {
@@ -763,6 +768,11 @@ struct fuse_write_in {
 struct fuse_write_out {
 	uint32_t	size;
 	uint32_t	padding;
+};
+
+// This is likely not what we want
+struct fuse_write_iter_out {
+	uint64_t ret;
 };
 
 #define FUSE_COMPAT_STATFS_SIZE 48
