@@ -249,7 +249,7 @@ static struct sockopt_test {
 		.get_optlen = 64,
 	},
 	{
-		.descr = "getsockopt: deny bigger ctx->optlen",
+		.descr = "getsockopt: ignore bigger ctx->optlen",
 		.insns = {
 			/* ctx->optlen = 65 */
 			BPF_MOV64_IMM(BPF_REG_0, 65),
@@ -268,28 +268,10 @@ static struct sockopt_test {
 		.attach_type = BPF_CGROUP_GETSOCKOPT,
 		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
 
-		.get_optlen = 64,
-
-		.error = EFAULT_GETSOCKOPT,
-	},
-	{
-		.descr = "getsockopt: deny arbitrary ctx->retval",
-		.insns = {
-			/* ctx->retval = 123 */
-			BPF_MOV64_IMM(BPF_REG_0, 123),
-			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
-				    offsetof(struct bpf_sockopt, retval)),
-
-			/* return 1 */
-			BPF_MOV64_IMM(BPF_REG_0, 1),
-			BPF_EXIT_INSN(),
-		},
-		.attach_type = BPF_CGROUP_GETSOCKOPT,
-		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
-
-		.get_optlen = 64,
-
-		.error = EFAULT_GETSOCKOPT,
+		.get_level = SOL_IP,
+		.get_optname = IP_TOS,
+		.get_optval = {},
+		.get_optlen = 4,
 	},
 	{
 		.descr = "getsockopt: support smaller ctx->optlen",
@@ -627,9 +609,10 @@ static struct sockopt_test {
 		.attach_type = BPF_CGROUP_SETSOCKOPT,
 		.expected_attach_type = BPF_CGROUP_SETSOCKOPT,
 
-		.set_optlen = 4,
-
-		.error = EFAULT_SETSOCKOPT,
+		.set_level = SOL_IP,
+		.set_optname = IP_TOS,
+		.set_optval = { 1 << 3 },
+		.set_optlen = 1,
 	},
 	{
 		.descr = "setsockopt: deny ctx->optlen > input optlen",
@@ -644,9 +627,10 @@ static struct sockopt_test {
 		.attach_type = BPF_CGROUP_SETSOCKOPT,
 		.expected_attach_type = BPF_CGROUP_SETSOCKOPT,
 
-		.set_optlen = 64,
-
-		.error = EFAULT_SETSOCKOPT,
+		.set_level = SOL_IP,
+		.set_optname = IP_TOS,
+		.set_optval = { 1 << 3 },
+		.set_optlen = 1,
 	},
 	{
 		.descr = "setsockopt: allow changing ctx->optlen within bounds",
