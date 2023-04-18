@@ -19,7 +19,7 @@ int sockopt_qos_to_cc(struct bpf_sockopt *ctx)
 	char cc_cubic[TCP_CA_NAME_MAX] = "cubic";
 
 	if (ctx->level != SOL_IPV6 || ctx->optname != IPV6_TCLASS)
-		return 1;
+		goto out;
 
 	if (optval + 1 > optval_end)
 		return 0; /* EPERM, bounds check */
@@ -35,5 +35,11 @@ int sockopt_qos_to_cc(struct bpf_sockopt *ctx)
 				sizeof(cc_reno)))
 			return 0;
 	}
+	return 1;
+
+out:
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
 	return 1;
 }

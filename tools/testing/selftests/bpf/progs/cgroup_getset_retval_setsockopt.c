@@ -18,6 +18,10 @@ int get_retval(struct bpf_sockopt *ctx)
 	retval_value = bpf_get_retval();
 	__sync_fetch_and_add(&invocations, 1);
 
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
+
 	return 1;
 }
 
@@ -28,6 +32,10 @@ int set_eunatch(struct bpf_sockopt *ctx)
 
 	if (bpf_set_retval(-EUNATCH))
 		assertion_error = 1;
+
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
 
 	return 0;
 }
@@ -40,6 +48,10 @@ int set_eisconn(struct bpf_sockopt *ctx)
 	if (bpf_set_retval(-EISCONN))
 		assertion_error = 1;
 
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
+
 	return 0;
 }
 
@@ -47,6 +59,10 @@ SEC("cgroup/setsockopt")
 int legacy_eperm(struct bpf_sockopt *ctx)
 {
 	__sync_fetch_and_add(&invocations, 1);
+
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
 
 	return 0;
 }
