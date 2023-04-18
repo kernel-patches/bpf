@@ -238,6 +238,11 @@ void fuse_queue_forget(struct fuse_conn *fc, struct fuse_forget_link *forget,
 {
 	struct fuse_iqueue *fiq = &fc->iq;
 
+	if (nodeid == 0) {
+		kfree(forget);
+		return;
+	}
+
 	forget->forget_one.nodeid = nodeid;
 	forget->forget_one.nlookup = nlookup;
 
@@ -1009,10 +1014,38 @@ static int fuse_copy_one(struct fuse_copy_state *cs, void *val, unsigned size)
 	return 0;
 }
 
+/* Copy the fuse-bpf lookup args and verify them */
+#ifdef CONFIG_FUSE_BPF
+static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size)
+{
+	struct fuse_bpf_entry_out *fbeo = (struct fuse_bpf_entry_out *)val;
+	struct fuse_bpf_entry *feb = container_of(fbeo, struct fuse_bpf_entry, out[0]);
+	int num_entries = size / sizeof(*fbeo);
+	int err;
+
+	if (size && size % sizeof(*fbeo) != 0)
+		return -EINVAL;
+
+	if (num_entries > FUSE_BPF_MAX_ENTRIES)
+		return -EINVAL;
+	err = fuse_copy_one(cs, val, size);
+	if (err)
+		return err;
+	if (size)
+		err = parse_fuse_bpf_entry(feb, num_entries);
+	return err;
+}
+#else
+static int fuse_copy_lookup(struct fuse_copy_state *cs, void *val, unsigned size)
+{
+	return fuse_copy_one(cs, val, size);
+}
+#endif
+
 /* Copy request arguments to/from userspace buffer */
 static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 			  unsigned argpages, struct fuse_arg *args,
-			  int zeroing)
+			  int zeroing, unsigned is_lookup)
 {
 	int err = 0;
 	unsigned i;
@@ -1021,6 +1054,8 @@ static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 		struct fuse_arg *arg = &args[i];
 		if (i == numargs - 1 && argpages)
 			err = fuse_copy_pages(cs, arg->size, zeroing);
+		else if (i == numargs - 1 && is_lookup)
+			err = fuse_copy_lookup(cs, arg->value, arg->size);
 		else
 			err = fuse_copy_one(cs, arg->value, arg->size);
 	}
@@ -1298,7 +1333,7 @@ static ssize_t fuse_dev_do_read(struct fuse_dev *fud, struct file *file,
 	err = fuse_copy_one(cs, &req->in.h, sizeof(req->in.h));
 	if (!err)
 		err = fuse_copy_args(cs, args->in_numargs, args->in_pages,
-				     (struct fuse_arg *) args->in_args, 0);
+				     (struct fuse_arg *) args->in_args, 0, 0);
 	fuse_copy_finish(cs);
 	spin_lock(&fpq->lock);
 	clear_bit(FR_LOCKED, &req->flags);
@@ -1837,7 +1872,7 @@ static int copy_out_args(struct fuse_copy_state *cs, struct fuse_args *args,
 		lastarg->size -= diffsize;
 	}
 	return fuse_copy_args(cs, args->out_numargs, args->out_pages,
-			      args->out_args, args->page_zeroing);
+			      args->out_args, args->page_zeroing, args->is_lookup);
 }
 
 /*

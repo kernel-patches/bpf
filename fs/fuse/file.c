@@ -8,6 +8,7 @@
 
 #include "fuse_i.h"
 
+#include <linux/filter.h>
 #include <linux/pagemap.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
@@ -127,13 +128,18 @@ static void fuse_file_put(struct fuse_file *ff, bool sync, bool isdir)
 }
 
 struct fuse_file *fuse_file_open(struct fuse_mount *fm, u64 nodeid,
-				 unsigned int open_flags, bool isdir)
+				 unsigned int open_flags, bool isdir, struct file *file)
 {
 	struct fuse_conn *fc = fm->fc;
 	struct fuse_file *ff;
 	int opcode = isdir ? FUSE_OPENDIR : FUSE_OPEN;
 
-	ff = fuse_file_alloc(fm);
+	if (file && file->private_data) {
+		ff = file->private_data;
+		file->private_data = NULL;
+	} else {
+		ff = fuse_file_alloc(fm);
+	}
 	if (!ff)
 		return ERR_PTR(-ENOMEM);
 
@@ -171,7 +177,7 @@ struct fuse_file *fuse_file_open(struct fuse_mount *fm, u64 nodeid,
 int fuse_do_open(struct fuse_mount *fm, u64 nodeid, struct file *file,
 		 bool isdir)
 {
-	struct fuse_file *ff = fuse_file_open(fm, nodeid, file->f_flags, isdir);
+	struct fuse_file *ff = fuse_file_open(fm, nodeid, file->f_flags, isdir, file);
 
 	if (!IS_ERR(ff))
 		file->private_data = ff;
@@ -1947,6 +1953,19 @@ int fuse_write_inode(struct inode *inode, struct writeback_control *wbc)
 	 * involve any number of unrelated userspace processes.
 	 */
 	WARN_ON(wbc->for_reclaim);
+
+	/**
+	 * TODO - fully understand why this is necessary
+	 *
+	 * With fuse-bpf, fsstress fails if rename is enabled without this
+	 *
+	 * We are getting writes here on directory inodes, which do not have an
+	 * initialized file list so crash.
+	 *
+	 * The question is why we are getting those writes
+	 */
+	if (!S_ISREG(inode->i_mode))
+		return 0;
 
 	ff = __fuse_write_file_get(fi);
 	err = fuse_flush_times(inode, ff);
