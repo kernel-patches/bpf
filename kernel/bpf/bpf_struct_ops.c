@@ -417,7 +417,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	udata = &uvalue->data;
 	kdata = &kvalue->data;
 	image = st_map->image;
-	image_end = st_map->image + PAGE_SIZE;
+	image_end = st_map->image + 2 * PAGE_SIZE;
 
 	for_each_member(i, t, member) {
 		const struct btf_type *mtype, *ptype;
@@ -688,7 +688,7 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	st_map->links =
 		bpf_map_area_alloc(btf_type_vlen(t) * sizeof(struct bpf_links *),
 				   NUMA_NO_NODE);
-	st_map->image = bpf_jit_alloc_exec(PAGE_SIZE);
+	st_map->image = bpf_jit_alloc_exec(2 * PAGE_SIZE);
 	if (!st_map->uvalue || !st_map->links || !st_map->image) {
 		__bpf_struct_ops_map_free(map);
 		return ERR_PTR(-ENOMEM);
