@@ -29,7 +29,7 @@ chain finish (i.e. kernel ``setsockopt`` handling will *not* be executed).
 
 Note, that ``optlen`` can not be increased beyond the user-supplied
 value. It can only be decreased or set to -1. Any other value will
-trigger ``EFAULT``.
+ignore the BPF program's changes to ``optlen``/``optval``.
 
 Return Type
 -----------
@@ -45,13 +45,14 @@ sockopt. The BPF hook can observe ``optval``, ``optlen`` and ``retval``
 if it's interested in whatever kernel has returned. BPF hook can override
 the values above, adjust ``optlen`` and reset ``retval`` to 0. If ``optlen``
 has been increased above initial ``getsockopt`` value (i.e. userspace
-buffer is too small), ``EFAULT`` is returned.
+buffer is too small), BPF program's ``optlen`` and ``optval`` are
+ignored.
 
 This hook has access to the cgroup and socket local storage.
 
 Note, that the only acceptable value to set to ``retval`` is 0 and the
 original value that the kernel returned. Any other value will trigger
-``EFAULT``.
+ignore BPF program's changes.
 
 Return Type
 -----------
@@ -98,10 +99,65 @@ can access only the first ``PAGE_SIZE`` of that data. So it has to options:
   indicates that the kernel should use BPF's trimmed ``optval``.
 
 When the BPF program returns with the ``optlen`` greater than
-``PAGE_SIZE``, the userspace will receive ``EFAULT`` errno.
+``PAGE_SIZE``, the userspace will receive original kernel
+buffers without any modifications that the BPF program might have
+applied.
 
 Example
 =======
+
+Recommended way to handle BPF programs is as follows:
+
+```
+SEC("cgroup/getsockopt")
+int getsockopt(struct bpf_sockopt *ctx)
+{
+	/* Custom socket option. */
+	if (ctx->level == MY_SOL && ctx->optname == MY_OPTNAME) {
+		ctx->retval = 0;
+		optval[0] = ...;
+		ctx->optlen = 1;
+		return 1;
+	}
+
+	/* Modify kernel's socket option. */
+	if (ctx->level == SOL_IP && ctx->optname == IP_FREEBIND) {
+		ctx->retval = 0;
+		optval[0] = ...;
+		ctx->optlen = 1;
+		return 1;
+	}
+
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
+
+	return 1;
+}
+
+SEC("cgroup/setsockopt")
+int setsockopt(struct bpf_sockopt *ctx)
+{
+	/* Custom socket option. */
+	if (ctx->level == MY_SOL && ctx->optname == MY_OPTNAME) {
+		/* do something */
+		ctx->optlen = -1;
+		return 1;
+	}
+
+	/* Modify kernel's socket option. */
+	if (ctx->level == SOL_IP && ctx->optname == IP_FREEBIND) {
+		optval[0] = ...;
+		return 1;
+	}
+
+	/* optval larger than PAGE_SIZE use kernel's buffer. */
+	if (ctx->optlen > 4096)
+		ctx->optlen = 0;
+
+	return 1;
+}
+```
 
 See ``tools/testing/selftests/bpf/progs/sockopt_sk.c`` for an example
 of BPF program that handles socket options.
