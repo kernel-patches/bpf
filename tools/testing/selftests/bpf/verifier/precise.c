@@ -249,6 +249,7 @@
 		BPF_EXIT_INSN(),
 	},
 	.fixup_map_array_48b = { 13 },
+	.prog_type = BPF_PROG_TYPE_XDP,
 	.result = REJECT,
 	.errstr = "register with unbounded min value is not allowed",
 },
