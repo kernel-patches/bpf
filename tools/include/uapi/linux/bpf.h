@@ -5550,6 +5550,18 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_task_under_cgroup(struct bpf_map *map, struct task_struct *task, u32 index)
+ *	Description
+ *		Check whether the probe is being run is the context of a given
+ *		subset of the cgroup2 hierarchy. The cgroup2 to test is held by
+ *		*map* of type **BPF_MAP_TYPE_CGROUP_ARRAY**, at *index*.
+ *	Return
+ *		The return value depends on the result of the test, and can be:
+ *
+ *		* 1, if assigned task belongs to the cgroup2.
+ *		* 0, if assigned task does not belong to the cgroup2.
+ *		* A negative error code, if an error occurred.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5764,6 +5776,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(task_under_cgroup, 212, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
