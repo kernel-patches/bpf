@@ -2142,6 +2142,24 @@ __bpf_kfunc struct cgroup *bpf_cgroup_from_id(u64 cgid)
 		return NULL;
 	return cgrp;
 }
+
+/**
+ * bpf_task_under_cgroup - Check whether the task is a given subset of the
+ * cgroup2 hierarchy. The cgroup2 to test is assigned by cgrp.
+ * @cgrp: assigned cgrp.
+ * @task: assigned task.
+ */
+__bpf_kfunc int bpf_task_under_cgroup(struct cgroup *cgrp,
+				      struct task_struct *task)
+{
+	if (unlikely(!cgrp))
+		return -EAGAIN;
+
+	if (unlikely(!task))
+		return -ENOENT;
+
+	return task_under_cgroup_hierarchy(task, cgrp);
+}
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -2341,6 +2359,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_SET8_END(generic_btf_ids)
