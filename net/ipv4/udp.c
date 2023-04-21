@@ -1157,8 +1157,10 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 	if (cgroup_bpf_enabled(CGROUP_UDP4_SENDMSG) && !connected) {
 		err = BPF_CGROUP_RUN_PROG_UDP4_SENDMSG_LOCK(sk,
-					    (struct sockaddr *)usin, &ipc.addr);
-		if (err)
+					    (struct sockaddr *)usin,
+					    msg->msg_namelen,
+					    &ipc.addr);
+		if (err < 0)
 			goto out_free;
 		if (usin) {
 			if (usin->sin_port == 0) {
@@ -1927,7 +1929,8 @@ try_again:
 		*addr_len = sizeof(*sin);
 
 		BPF_CGROUP_RUN_PROG_UDP4_RECVMSG_LOCK(sk,
-						      (struct sockaddr *)sin);
+						      (struct sockaddr *)sin,
+						      *addr_len);
 	}
 
 	if (udp_sk(sk)->gro_enabled)
@@ -1959,6 +1962,8 @@ csum_copy_err:
 
 int udp_pre_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
+	int err;
+
 	/* This check is replicated from __ip4_datagram_connect() and
 	 * intended to prevent BPF program called below from accessing bytes
 	 * that are out of the bound specified by user in addr_len.
@@ -1966,7 +1971,11 @@ int udp_pre_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	if (addr_len < sizeof(struct sockaddr_in))
 		return -EINVAL;
 
-	return BPF_CGROUP_RUN_PROG_INET4_CONNECT_LOCK(sk, uaddr);
+	err = BPF_CGROUP_RUN_PROG_INET4_CONNECT_LOCK(sk, uaddr, addr_len);
+	if (err < 0)
+		return err;
+
+	return 0;
 }
 EXPORT_SYMBOL(udp_pre_connect);
 

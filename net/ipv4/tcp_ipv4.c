@@ -184,6 +184,8 @@ EXPORT_SYMBOL_GPL(tcp_twsk_unique);
 static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
 			      int addr_len)
 {
+	int err;
+
 	/* This check is replicated from tcp_v4_connect() and intended to
 	 * prevent BPF program called below from accessing bytes that are out
 	 * of the bound specified by user in addr_len.
@@ -193,7 +195,11 @@ static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
 
 	sock_owned_by_me(sk);
 
-	return BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr);
+	err = BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr, addr_len);
+	if (err < 0)
+		return err;
+
+	return 0;
 }
 
 /* This will initiate an outgoing connection. */
