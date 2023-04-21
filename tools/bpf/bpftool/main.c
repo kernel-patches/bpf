@@ -251,6 +251,22 @@ int detect_common_prefix(const char *arg, ...)
 	return 0;
 }
 
+void fprint_uint(FILE *f, void *arg, unsigned int n)
+{
+	unsigned char *data = arg;
+	unsigned int data_uint = 0;
+
+	for (unsigned int i = 0; i < n && i < 4; i++) {
+	#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+		data_uint |= data[i] << (i * 8);
+	#else
+		data_uint |= data[i] << ((n - i - 1) * 8);
+	#endif
+	}
+
+	fprintf(f, "%d", data_uint);
+}
+
 void fprint_hex(FILE *f, void *arg, unsigned int n, const char *sep)
 {
 	unsigned char *data = arg;
