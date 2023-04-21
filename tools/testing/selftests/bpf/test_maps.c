@@ -1376,18 +1376,19 @@ static void __run_parallel(unsigned int tasks,
 	}
 }
 
+static int TASKS = 100;
+
 static void test_map_stress(void)
 {
-	run_parallel(100, test_hashmap_walk, NULL);
-	run_parallel(100, test_hashmap, NULL);
-	run_parallel(100, test_hashmap_percpu, NULL);
-	run_parallel(100, test_hashmap_sizes, NULL);
+	run_parallel(TASKS, test_hashmap_walk, NULL);
+	run_parallel(TASKS, test_hashmap, NULL);
+	run_parallel(TASKS, test_hashmap_percpu, NULL);
+	run_parallel(TASKS, test_hashmap_sizes, NULL);
 
-	run_parallel(100, test_arraymap, NULL);
-	run_parallel(100, test_arraymap_percpu, NULL);
+	run_parallel(TASKS, test_arraymap, NULL);
+	run_parallel(TASKS, test_arraymap_percpu, NULL);
 }
 
-#define TASKS 100
 
 #define DO_UPDATE 1
 #define DO_DELETE 0
@@ -1907,7 +1908,7 @@ static void run_all_tests(void)
 #include <map_tests/tests.h>
 #undef DEFINE_TEST
 
-int main(void)
+int main_aux(void)
 {
 	srand(time(NULL));
 
@@ -1924,5 +1925,24 @@ int main(void)
 #undef DEFINE_TEST
 
 	printf("test_maps: OK, %d SKIPPED\n", skips);
+	return 0;
+}
+
+int main(void)
+{
+	int sizes[] = { 1, 10, 20, 30, 40, 50, 60, 70 };
+	struct timespec start, finish;
+
+	for (int i = 0; i < ARRAY_SIZE(sizes); ++i) {
+		TASKS = sizes[i];
+
+		clock_gettime(CLOCK_MONOTONIC, &start);
+		main_aux();
+		clock_gettime(CLOCK_MONOTONIC, &finish);
+
+		printf("timing: %-2d, %ld\n",
+		       TASKS, (int64_t)difftime(finish.tv_sec, start.tv_sec));
+	}
+
 	return 0;
 }
