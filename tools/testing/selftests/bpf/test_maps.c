@@ -1930,7 +1930,7 @@ int main_aux(void)
 
 int main(void)
 {
-	int sizes[] = { 70, 80 };
+	int sizes[] = { 1, 10, 20, 30, 40, 50, 60, 70 };
 	struct timespec start, finish;
 
 	for (int i = 0; i < ARRAY_SIZE(sizes); ++i) {

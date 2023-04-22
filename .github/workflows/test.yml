@@ -58,7 +58,8 @@ jobs:
             return config
 
           matrix = [
-            {"kernel": "LATEST", "runs_on": [], "arch": Arch.s390x.value, "toolchain": "gcc", "llvm-version": "16", "parallel_tests": False},
+            {"kernel": "LATEST", "runs_on": [], "arch": Arch.x86_64.value, "toolchain": "gcc", "llvm-version": "16"},
+            # {"kernel": "LATEST", "runs_on": [], "arch": Arch.s390x.value, "toolchain": "gcc", "llvm-version": "16", "parallel_tests": False},
           ]
           self_hosted_repos = [
             "kernel-patches/bpf",
