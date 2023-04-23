@@ -17,6 +17,8 @@ int uprobe_byname3_sleepable_res = 0;
 int uprobe_byname3_res = 0;
 int uretprobe_byname3_sleepable_res = 0;
 int uretprobe_byname3_res = 0;
+int uprobe_byversionedname_a_res = 0;
+int uprobe_byversionedname_b_res = 0;
 void *user_ptr = 0;
 
 SEC("ksyscall/nanosleep")
@@ -121,5 +123,18 @@ int handle_uretprobe_byname3(struct pt_regs *ctx)
 	return 0;
 }
 
+SEC("uprobe")
+int BPF_UPROBE(handle_uprobe_byversionedname_a, const char *a, char *b)
+{
+	uprobe_byversionedname_a_res = 13;
+	return 0;
+}
+
+SEC("uprobe")
+int BPF_UPROBE(handle_uprobe_byversionedname_b, const char *a, char *b)
+{
+	uprobe_byversionedname_b_res = 14;
+	return 0;
+}
 
 char _license[] SEC("license") = "GPL";

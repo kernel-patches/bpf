@@ -192,6 +192,41 @@ static void test_uprobe_lib(struct test_attach_probe *skel)
 	ASSERT_EQ(skel->bss->uretprobe_byname2_res, 8, "check_uretprobe_byname2_res");
 }
 
+static void test_uprobe_lib_with_versions(struct test_attach_probe *skel)
+{
+	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
+	char absolute_path[256];
+
+	/* test attach with a versioned name.
+	 * realpath has two implementations in libc, only the default version will be used.
+	 */
+	uprobe_opts.func_name = "realpath@@GLIBC_2.3";
+	uprobe_opts.retprobe = false;
+	skel->links.handle_uprobe_byversionedname_a =
+			bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe_byversionedname_a,
+							0 /* this pid */,
+							"libc.so.6",
+							0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(skel->links.handle_uprobe_byversionedname_a, "attach_handle_uprobe_byversionedname_a"))
+		return;
+
+	uprobe_opts.func_name = "realpath@GLIBC_2.2.5";
+	uprobe_opts.retprobe = false;
+	skel->links.handle_uprobe_byversionedname_b =
+			bpf_program__attach_uprobe_opts(skel->progs.handle_uprobe_byversionedname_b,
+							0 /* this pid */,
+							"libc.so.6",
+							0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(skel->links.handle_uprobe_byversionedname_b, "attach_handle_uprobe_byversionedname_b"))
+		return;
+
+	/* trigger & validate probes */
+	realpath("/", absolute_path);
+
+	ASSERT_EQ(skel->bss->uprobe_byversionedname_a_res, 13, "check_uprobe_byversionedname_a_res");
+	ASSERT_NEQ(skel->bss->uprobe_byversionedname_b_res, 14, "check_uprobe_byversionedname_b_res");
+}
+
 static void test_uprobe_ref_ctr(struct test_attach_probe *skel)
 {
 	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
@@ -316,6 +351,8 @@ void test_attach_probe(void)
 		test_kprobe_sleepable();
 	if (test__start_subtest("uprobe-lib"))
 		test_uprobe_lib(skel);
+	if (test__start_subtest("uprobe-lib-with-versions"))
+		test_uprobe_lib_with_versions(skel);
 	if (test__start_subtest("uprobe-sleepable"))
 		test_uprobe_sleepable(skel);
 	if (test__start_subtest("uprobe-ref_ctr"))
