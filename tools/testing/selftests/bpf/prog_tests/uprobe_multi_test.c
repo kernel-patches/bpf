@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <test_progs.h>
 #include "uprobe_multi.skel.h"
+#include "uprobe_multi_usdt.skel.h"
 
 noinline void uprobe_multi_func_1(void)
 {
@@ -217,6 +218,57 @@ cleanup:
 	printf("%s: detached in %7.3lfs\n", __func__, detach_delta);
 }
 
+void test_bench_attach_usdt(void)
+{
+	struct uprobe_multi_usdt *skel = NULL;
+	long attach_start_ns, attach_end_ns;
+	long detach_start_ns, detach_end_ns;
+	double attach_delta, detach_delta;
+	LIBBPF_OPTS(bpf_usdt_opts, opts,
+		.uprobe_multi = true,
+	);
+	struct bpf_program *prog;
+	int err;
+
+	skel = uprobe_multi_usdt__open();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open"))
+		goto cleanup;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+
+	bpf_program__set_autoload(skel->progs.usdt0, true);
+	bpf_program__set_expected_attach_type(skel->progs.usdt0, BPF_TRACE_UPROBE_MULTI);
+
+	err = uprobe_multi_usdt__load(skel);
+	if (!ASSERT_EQ(err, 0, "strncmp_test load"))
+		goto cleanup;
+
+	attach_start_ns = get_time_ns();
+
+	skel->links.usdt0 = bpf_program__attach_usdt(skel->progs.usdt0, -1, "./usdt_multi",
+						     "test", "usdt", &opts);
+	if (!ASSERT_OK_PTR(skel->links.usdt0, "usdt_link"))
+		goto cleanup;
+
+	attach_end_ns = get_time_ns();
+
+	system("./usdt_multi");
+
+	ASSERT_EQ(skel->bss->count, 50000, "usdt_count");
+
+cleanup:
+	detach_start_ns = get_time_ns();
+	uprobe_multi_usdt__destroy(skel);
+	detach_end_ns = get_time_ns();
+
+	attach_delta = (attach_end_ns - attach_start_ns) / 1000000000.0;
+	detach_delta = (detach_end_ns - detach_start_ns) / 1000000000.0;
+
+	printf("%s: attached in %7.3lfs\n", __func__, attach_delta);
+	printf("%s: detached in %7.3lfs\n", __func__, detach_delta);
+}
+
 void test_uprobe_multi_test(void)
 {
 	if (test__start_subtest("skel_api"))
@@ -229,4 +281,6 @@ void test_uprobe_multi_test(void)
 		test_link_api();
 	if (test__start_subtest("bench_uprobe"))
 		test_bench_attach_uprobe();
+	if (test__start_subtest("bench_usdt"))
+		test_bench_attach_usdt();
 }
