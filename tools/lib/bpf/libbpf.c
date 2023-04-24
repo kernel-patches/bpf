@@ -11052,6 +11052,127 @@ elf_find_multi_func_offset(const char *binary_path, int cnt,
 	return ret;
 }
 
+struct match_pattern_data {
+	const char *pattern;
+	struct elf_func_offset *func_offs;
+	size_t func_offs_cnt;
+	size_t func_offs_cap;
+};
+
+static int pattern_done(void *_data)
+{
+	struct match_pattern_data *data = _data;
+
+	// If we found anything in the first symbol section, do not search others
+	// to avoid duplicates.
+	return data->func_offs_cnt;
+}
+
+static int pattern_match(Elf *elf, const char *binary_path, const char *sname,
+			 GElf_Sym *sym, void *_data)
+{
+	struct match_pattern_data *data = _data;
+	unsigned long offset;
+	Elf_Scn *sym_scn;
+	GElf_Shdr sym_sh;
+	int err;
+
+	if (!glob_match(sname, data->pattern))
+		return 0;
+	sym_scn = elf_getscn(elf, sym->st_shndx);
+	if (!sym_scn)
+		return 0;
+	if (!gelf_getshdr(sym_scn, &sym_sh))
+		return 0;
+
+	err = libbpf_ensure_mem((void **) &data->func_offs, &data->func_offs_cap,
+				sizeof(*data->func_offs), data->func_offs_cnt + 1);
+	if (err)
+		return err;
+
+	offset = sym->st_value - sym_sh.sh_addr + sym_sh.sh_offset;
+	data->func_offs[data->func_offs_cnt].offset = offset;
+	data->func_offs[data->func_offs_cnt].name = strdup(sname);
+	data->func_offs_cnt++;
+	return 0;
+}
+
+static int
+__elf_find_patern_func_offset(Elf *elf, const char *binary_path, const char *pattern,
+			      const char ***pnames, unsigned long **poffsets, size_t *pcnt)
+{
+	struct match_pattern_data data = {
+		.pattern = pattern,
+	};
+	unsigned long *offsets = NULL;
+	const char **names = NULL;
+	size_t cnt = 0;
+	int err, i;
+
+	err = elf_for_each_symbol(elf, binary_path, pattern_match, pattern_done, &data);
+	if (err)
+		goto out;
+
+	cnt = data.func_offs_cnt;
+	if (!cnt) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	offsets = calloc(cnt, sizeof(*offsets));
+	names = calloc(cnt, sizeof(*names));
+	if (!offsets || !names) {
+		free(offsets);
+		free(names);
+		err = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		offsets[i] = data.func_offs[i].offset;
+		names[i] = data.func_offs[i].name;
+	}
+
+out:
+	*pnames = names;
+	*poffsets = offsets;
+	*pcnt = cnt;
+	free(data.func_offs);
+	return err;
+}
+
+LIBBPF_API int
+elf_find_patern_func_offset(const char *binary_path, const char *pattern,
+			    const char ***pnames, unsigned long **poffsets, size_t *pcnt)
+{
+	char errmsg[STRERR_BUFSIZE];
+	long ret = -ENOENT;
+	Elf *elf;
+	int fd;
+
+	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		pr_warn("failed to open %s: %s\n", binary_path,
+			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+		return ret;
+	}
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_warn("failed to init libelf for %s\n", binary_path);
+		return -LIBBPF_ERRNO__LIBELF;
+	}
+	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+	if (!elf) {
+		pr_warn("elf: could not read elf from %s: %s\n", binary_path, elf_errmsg(-1));
+		close(fd);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	ret = __elf_find_patern_func_offset(elf, binary_path, pattern, pnames, poffsets, pcnt);
+	elf_end(elf);
+	close(fd);
+	return ret;
+}
+
 /* Find offset of function name in ELF object specified by path. "name" matches
  * symbol name or name@@LIB for library functions.
  */

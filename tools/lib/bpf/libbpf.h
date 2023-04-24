@@ -1655,6 +1655,13 @@ LIBBPF_API int libbpf_unregister_prog_handler(int handler_id);
 LIBBPF_API int elf_find_multi_func_offset(const char *binary_path, int cnt,
 					  const char **syms, unsigned long **poffsets);
 
+/**
+ * @brief *elf_find_patern_func_offset()* return symbols and offsets for given *pattern*
+ */
+LIBBPF_API int
+elf_find_patern_func_offset(const char *binary_path, const char *pattern,
+			    const char ***pnames, unsigned long **poffsets, size_t *pcnt);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
