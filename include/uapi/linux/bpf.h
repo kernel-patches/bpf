@@ -1581,6 +1581,7 @@ union bpf_attr {
 				__aligned_u64	paths;
 				__aligned_u64	offsets;
 				__aligned_u64	ref_ctr_offsets;
+				__aligned_u64	cookies;
 			} uprobe_multi;
 		};
 	} link_create;
