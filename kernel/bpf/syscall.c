@@ -4601,7 +4601,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		break;
 	case BPF_PROG_TYPE_KPROBE:
 		if (attr->link_create.attach_type != BPF_PERF_EVENT &&
-		    attr->link_create.attach_type != BPF_TRACE_KPROBE_MULTI) {
+		    attr->link_create.attach_type != BPF_TRACE_KPROBE_MULTI &&
+		    attr->link_create.attach_type != BPF_TRACE_UPROBE_MULTI) {
 			ret = -EINVAL;
 			goto out;
 		}
@@ -4666,10 +4667,21 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = bpf_perf_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_KPROBE:
+		/* Ensure that program with eBPF_TRACE_UPROBE_MULTI attach type can
+		 * attach only to uprobe_multi link. It has its own runtime context
+		 * which is specific for get_func_ip/get_attach_cookie helpers.
+		 */
+		if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI &&
+		    attr->link_create.attach_type != BPF_TRACE_UPROBE_MULTI) {
+			ret = -EINVAL;
+			goto out;
+		}
 		if (attr->link_create.attach_type == BPF_PERF_EVENT)
 			ret = bpf_perf_link_attach(attr, prog);
-		else
+		else if (attr->link_create.attach_type == BPF_TRACE_KPROBE_MULTI)
 			ret = bpf_kprobe_multi_link_attach(attr, prog);
+		else if (attr->link_create.attach_type == BPF_TRACE_UPROBE_MULTI)
+			ret = bpf_uprobe_multi_link_attach(attr, prog);
 		break;
 	default:
 		ret = -EINVAL;
