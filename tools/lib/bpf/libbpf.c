@@ -6817,7 +6817,6 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	if (!insns || !insns_cnt)
 		return -EINVAL;
 
-	load_attr.expected_attach_type = prog->expected_attach_type;
 	if (kernel_supports(obj, FEAT_PROG_NAME))
 		prog_name = prog->name;
 	load_attr.attach_prog_fd = prog->attach_prog_fd;
@@ -6852,6 +6851,9 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 		insns = prog->insns;
 		insns_cnt = prog->insns_cnt;
 	}
+
+	/* allow prog_prepare_load_fn to change expected_attach_type */
+	load_attr.expected_attach_type = prog->expected_attach_type;
 
 	if (obj->gen_loader) {
 		bpf_gen__prog_load(obj->gen_loader, prog->type, prog->name,
@@ -11730,6 +11732,7 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 	struct bpf_object *obj = prog->obj;
 	struct bpf_link *link;
 	__u64 usdt_cookie;
+	bool uprobe_multi;
 	int err;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
@@ -11766,8 +11769,10 @@ struct bpf_link *bpf_program__attach_usdt(const struct bpf_program *prog,
 	}
 
 	usdt_cookie = OPTS_GET(opts, usdt_cookie, 0);
+	uprobe_multi = OPTS_GET(opts, uprobe_multi, 0);
 	link = usdt_manager_attach_usdt(obj->usdt_man, prog, pid, binary_path,
-					usdt_provider, usdt_name, usdt_cookie);
+					usdt_provider, usdt_name, usdt_cookie,
+					uprobe_multi);
 	err = libbpf_get_error(link);
 	if (err)
 		return libbpf_err_ptr(err);

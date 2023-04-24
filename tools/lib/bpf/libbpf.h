@@ -673,6 +673,8 @@ struct bpf_usdt_opts {
 	size_t sz;
 	/* custom user-provided value accessible through usdt_cookie() */
 	__u64 usdt_cookie;
+	/* use uprobe_multi link */
+	bool uprobe_multi;
 	size_t :0;
 };
 #define bpf_usdt_opts__last_field usdt_cookie
