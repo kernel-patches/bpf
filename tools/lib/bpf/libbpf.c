@@ -10713,6 +10713,7 @@ struct elf_func_offset {
 	int last_bind;
 	size_t name_len;
 	bool is_name_qualified;
+	int idx;
 };
 
 static int single_done(void *_data)
@@ -10888,6 +10889,166 @@ static long elf_find_func_offset(Elf *elf, const char *binary_path, const char *
 		}
 	}
 out:
+	return ret;
+}
+
+struct match_multi_data {
+	int cnt;
+	int cnt_done;
+	struct elf_func_offset *func_offs;
+};
+
+static int cmp_func_offset(const void *_a, const void *_b)
+{
+	const struct elf_func_offset *a = _a;
+	const struct elf_func_offset *b = _b;
+
+	return strcmp(a->name, b->name);
+}
+
+static int multi_done(void *_data)
+{
+	struct match_multi_data *data = _data;
+
+	return data->cnt == data->cnt_done;
+}
+
+static int multi_match(Elf *elf, const char *binary_path, const char *sname,
+		       GElf_Sym *sym, void *_data)
+{
+	struct match_multi_data *data = _data;
+	struct elf_func_offset *fo, func_offs = {
+		.name = sname,
+	};
+	Elf_Scn *sym_scn;
+	GElf_Shdr sym_sh;
+	int curr_bind;
+
+	fo = bsearch(&func_offs, data->func_offs, data->cnt, sizeof(*data->func_offs),
+		     cmp_func_offset);
+	if (!fo)
+		return 0;
+
+	curr_bind = GELF_ST_BIND(sym->st_info);
+
+	if (fo->offset > 0) {
+		/* handle multiple matches */
+		if (fo->last_bind != STB_WEAK && curr_bind != STB_WEAK) {
+			/* Only accept one non-weak bind. */
+			pr_warn("elf: ambiguous match for '%s', '%s' in '%s'\n",
+				sname, fo->name, binary_path);
+			return -LIBBPF_ERRNO__FORMAT;
+		} else if (curr_bind == STB_WEAK) {
+			/* already have a non-weak bind, and
+			 * this is a weak bind, so ignore.
+			 */
+			return 0;
+		}
+	}
+
+	/* Transform symbol's virtual address (absolute for
+	 * binaries and relative for shared libs) into file
+	 * offset, which is what kernel is expecting for
+	 * uprobe/uretprobe attachment.
+	 * See Documentation/trace/uprobetracer.rst for more
+	 * details.
+	 * This is done by looking up symbol's containing
+	 * section's header and using it's virtual address
+	 * (sh_addr) and corresponding file offset (sh_offset)
+	 * to transform sym.st_value (virtual address) into
+	 * desired final file offset.
+	 */
+	sym_scn = elf_getscn(elf, sym->st_shndx);
+	if (!sym_scn)
+		return 0;
+	if (!gelf_getshdr(sym_scn, &sym_sh))
+		return 0;
+
+	if (!fo->offset)
+		data->cnt_done++;
+
+	fo->offset = sym->st_value - sym_sh.sh_addr + sym_sh.sh_offset;
+	fo->last_bind = curr_bind;
+	return 0;
+}
+
+static int
+__elf_find_multi_func_offset(Elf *elf, const char *binary_path, int cnt,
+			     const char **syms, unsigned long **poffsets)
+{
+	struct match_multi_data data = {
+		.cnt = cnt,
+	};
+	struct elf_func_offset *func_offs;
+	unsigned long *offsets = NULL;
+	int err, i, idx;
+
+	data.func_offs = func_offs = calloc(cnt, sizeof(*func_offs));
+	if (!func_offs)
+		return -ENOMEM;
+
+	for (i = 0; i < cnt; i++) {
+		func_offs[i].name = syms[i];
+		func_offs[i].idx = i;
+	}
+
+	qsort(func_offs, cnt, sizeof(*func_offs), cmp_func_offset);
+
+	err = elf_for_each_symbol(elf, binary_path, multi_match, multi_done, &data);
+	if (err)
+		goto out;
+
+	if (cnt != data.cnt_done) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	offsets = calloc(cnt, sizeof(*offsets));
+	if (!offsets) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		idx = func_offs[i].idx;
+		offsets[idx] = func_offs[i].offset;
+	}
+
+out:
+	*poffsets = offsets;
+	free(func_offs);
+	return err;
+}
+
+LIBBPF_API int
+elf_find_multi_func_offset(const char *binary_path, int cnt,
+			   const char **syms, unsigned long **poffsets)
+{
+	char errmsg[STRERR_BUFSIZE];
+	long ret = -ENOENT;
+	Elf *elf;
+	int fd;
+
+	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		pr_warn("failed to open %s: %s\n", binary_path,
+			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+		return ret;
+	}
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_warn("failed to init libelf for %s\n", binary_path);
+		return -LIBBPF_ERRNO__LIBELF;
+	}
+	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+	if (!elf) {
+		pr_warn("elf: could not read elf from %s: %s\n", binary_path, elf_errmsg(-1));
+		close(fd);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	ret = __elf_find_multi_func_offset(elf, binary_path, cnt, syms, poffsets);
+	elf_end(elf);
+	close(fd);
 	return ret;
 }
 

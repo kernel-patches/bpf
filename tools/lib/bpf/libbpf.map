@@ -390,4 +390,5 @@ LIBBPF_1.2.0 {
 		bpf_link_get_info_by_fd;
 		bpf_map_get_info_by_fd;
 		bpf_prog_get_info_by_fd;
+		elf_find_multi_func_offset;
 } LIBBPF_1.1.0;
