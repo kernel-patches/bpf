@@ -43,6 +43,7 @@ extern const char *const key_being_used_for[NR__KEY_BEING_USED_FOR];
 
 struct key;
 struct pkcs7_message;
+struct umd_sig_message;
 
 extern int verify_pkcs7_signature(const void *data, size_t len,
 				  const void *raw_pkcs7, size_t pkcs7_len,
@@ -61,6 +62,53 @@ extern int verify_pkcs7_message_sig(const void *data, size_t len,
 							size_t len,
 							size_t asn1hdrlen),
 				    void *ctx);
+
+#ifdef CONFIG_UMD_SIG_PARSER
+extern int verify_umd_message_sig(const void *data, size_t len,
+				  struct umd_sig_message *umd_sig,
+				  struct key *trusted_keys,
+				  enum key_being_used_for usage,
+				  int (*view_content)(void *ctx,
+						      const void *data,
+						      size_t len,
+						      size_t asn1hdrlen),
+				  void *ctx);
+extern int verify_umd_signature(const void *data, size_t len,
+				const void *raw_pgp, size_t pgp_len,
+				struct key *trusted_keys,
+				enum key_being_used_for usage,
+				int (*view_content)(void *ctx,
+						const void *data, size_t len,
+						size_t asn1hdrlen),
+				void *ctx);
+#else
+static inline int verify_umd_message_sig(const void *data, size_t len,
+					 struct umd_sig_message *umd_sig,
+					 struct key *trusted_keys,
+					 enum key_being_used_for usage,
+					 int (*view_content)(void *ctx,
+							     const void *data,
+							     size_t len,
+							     size_t asn1hdrlen),
+					 void *ctx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int verify_umd_signature(const void *data, size_t len,
+				       const void *raw_umd_sig,
+				       size_t raw_umd_sig_len,
+				       struct key *trusted_keys,
+				       enum key_being_used_for usage,
+				       int (*view_content)(void *ctx,
+							   const void *data,
+							   size_t len,
+							   size_t asn1hdrlen),
+				       void *ctx)
+{
+	return -EOPNOTSUPP;
+}
+#endif /* CONFIG_UMD_SIG_PARSER */
 
 #ifdef CONFIG_SIGNED_PE_FILE_VERIFICATION
 extern int verify_pefile_signature(const void *pebuf, unsigned pelen,
