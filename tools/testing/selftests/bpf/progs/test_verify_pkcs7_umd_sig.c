@@ -20,10 +20,14 @@ extern void bpf_key_put(struct bpf_key *key) __ksym;
 extern int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr,
 				      struct bpf_dynptr *sig_ptr,
 				      struct bpf_key *trusted_keyring) __ksym;
+extern int bpf_verify_umd_signature(struct bpf_dynptr *data_ptr,
+				    struct bpf_dynptr *sig_ptr,
+				    struct bpf_key *trusted_keyring) __ksym;
 
 __u32 monitored_pid;
 __u32 user_keyring_serial;
 __u64 system_keyring_id;
+__u8 key_type;
 
 struct data {
 	__u8 data[MAX_DATA_SIZE];
@@ -86,7 +90,19 @@ int BPF_PROG(bpf, int cmd, union bpf_attr *attr, unsigned int size)
 	if (!trusted_keyring)
 		return -ENOENT;
 
-	ret = bpf_verify_pkcs7_signature(&data_ptr, &sig_ptr, trusted_keyring);
+	switch (key_type) {
+	case PKEY_ID_PKCS7:
+		ret = bpf_verify_pkcs7_signature(&data_ptr, &sig_ptr,
+						 trusted_keyring);
+		break;
+	case PKEY_ID_PGP:
+		ret = bpf_verify_umd_signature(&data_ptr, &sig_ptr,
+					       trusted_keyring);
+		break;
+	default:
+		ret = -EOPNOTSUPP;
+		break;
+	}
 
 	bpf_key_put(trusted_keyring);
 
