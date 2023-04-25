@@ -96,4 +96,15 @@ config UMD_KEY_PARSER
 
 	  On success, the parser fills the key from the UMD handler response.
 
+config UMD_SIG_PARSER
+	bool "UMD-based parser for asymmetric key signatures"
+	depends on UMD_KEY_PARSER
+	help
+	  This option introduces a new parser for asymmetric key signatures.
+	  The parser forwards the request to a User Mode Driver (UMD) handler
+	  (the same used for keys), which replies with the result.
+
+	  On success, the parser fills the signature from the UMD handler
+	  response.
+
 endif # ASYMMETRIC_KEY_TYPE
