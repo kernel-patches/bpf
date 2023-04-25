@@ -174,3 +174,6 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+# User mode driver for asymmetric keys and signatures
+/crypto/asymmetric_keys/umd_key_sig_umh

@@ -86,3 +86,16 @@ obj-$(CONFIG_UMD_KEY_PARSER) += umd_key_parser.o
 # UMD signature parser
 #
 obj-$(CONFIG_UMD_SIG_PARSER) += umd_sig_parser.o
+
+#
+# UMD handler for asymmetric keys and signatures
+#
+CC=klcc
+userprogs := umd_key_sig_umh
+umd_key_sig_umh-objs := umd_key_sig_umh_user.o
+userldflags += -static
+
+$(obj)/umd_key_sig_umh_blob.o: $(obj)/umd_key_sig_umh
+
+obj-$(CONFIG_UMD_KEY_SIG_HANDLER) += umd_key_sig_user.o
+umd_key_sig_user-objs += umd_key_sig_loader.o umd_key_sig_umh_blob.o

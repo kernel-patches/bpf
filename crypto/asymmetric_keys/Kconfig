@@ -107,4 +107,14 @@ config UMD_SIG_PARSER
 	  On success, the parser fills the signature from the UMD handler
 	  response.
 
+config UMD_KEY_SIG_HANDLER
+	tristate "UMD handler for asymmetric keys and signatures"
+	depends on UMD_KEY_PARSER
+	help
+	  This option introduces a UMD handler to parse data received from
+	  the key and signature kernel parsers.
+
+	  It includes just the basic program structure, to be enhanced with
+	  actual parsers.
+
 endif # ASYMMETRIC_KEY_TYPE
