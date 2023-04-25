@@ -85,4 +85,15 @@ config FIPS_SIGNATURE_SELFTEST
 	depends on ASYMMETRIC_KEY_TYPE
 	depends on PKCS7_MESSAGE_PARSER=X509_CERTIFICATE_PARSER
 
+config UMD_KEY_PARSER
+	bool "UMD-based parser for the asymmetric key type"
+	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE
+	select USERMODE_DRIVER
+	help
+	  This option introduces a new parser for the asymmetric key type.
+	  The parser forwards the request to a User Mode Driver (UMD) handler,
+	  which replies with the result.
+
+	  On success, the parser fills the key from the UMD handler response.
+
 endif # ASYMMETRIC_KEY_TYPE
