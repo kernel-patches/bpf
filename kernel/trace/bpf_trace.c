@@ -1271,7 +1271,7 @@ __bpf_kfunc struct bpf_key *bpf_lookup_user_key(u32 serial, u64 flags)
  * The key pointer is marked as invalid, to prevent bpf_key_put() from
  * attempting to decrement the key reference count on that pointer. The key
  * pointer set in such way is currently understood only by
- * verify_pkcs7_signature().
+ * verify_pkcs7_signature() and verify_umd_signature().
  *
  * Set *id* to one of the values defined in include/linux/verification.h:
  * 0 for the primary keyring (immutable keyring of system keys);
@@ -1317,6 +1317,27 @@ __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 }
 
 #ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+static int validate_key(struct bpf_key *trusted_keyring)
+{
+	int ret = 0;
+
+	if (trusted_keyring->has_ref) {
+		/*
+		 * Do the permission check deferred in bpf_lookup_user_key().
+		 * See bpf_lookup_user_key() for more details.
+		 *
+		 * A call to key_task_permission() here would be redundant, as
+		 * it is already done by keyring_search() called by
+		 * find_asymmetric_key().
+		 */
+		ret = key_validate(trusted_keyring->key);
+		if (ret < 0)
+			return ret;
+	}
+
+	return ret;
+}
+
 /**
  * bpf_verify_pkcs7_signature - verify a PKCS#7 signature
  * @data_ptr: data to verify
@@ -1334,19 +1355,9 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr_kern *data_ptr,
 {
 	int ret;
 
-	if (trusted_keyring->has_ref) {
-		/*
-		 * Do the permission check deferred in bpf_lookup_user_key().
-		 * See bpf_lookup_user_key() for more details.
-		 *
-		 * A call to key_task_permission() here would be redundant, as
-		 * it is already done by keyring_search() called by
-		 * find_asymmetric_key().
-		 */
-		ret = key_validate(trusted_keyring->key);
-		if (ret < 0)
-			return ret;
-	}
+	ret = validate_key(trusted_keyring);
+	if (ret < 0)
+		return ret;
 
 	return verify_pkcs7_signature(data_ptr->data,
 				      bpf_dynptr_get_size(data_ptr),
@@ -1355,6 +1366,35 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr_kern *data_ptr,
 				      trusted_keyring->key,
 				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
 				      NULL);
+}
+
+/**
+ * bpf_verify_umd_signature - Verify a UMD-parsed signature
+ * @data_ptr: Data to verify
+ * @sig_ptr: Signature of the data
+ * @trusted_keyring: Keyring with keys trusted for signature verification
+ *
+ * Verify the UMD-parsed signature *sig_ptr* against the supplied *data_ptr*
+ * with keys in a keyring referenced by *trusted_keyring*.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_verify_umd_signature(struct bpf_dynptr_kern *data_ptr,
+					 struct bpf_dynptr_kern *sig_ptr,
+					 struct bpf_key *trusted_keyring)
+{
+	int ret;
+
+	ret = validate_key(trusted_keyring);
+	if (ret < 0)
+		return ret;
+
+	return verify_umd_signature(data_ptr->data,
+				    bpf_dynptr_get_size(data_ptr),
+				    sig_ptr->data, bpf_dynptr_get_size(sig_ptr),
+				    trusted_keyring->key,
+				    VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
+				    NULL);
 }
 #endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 
@@ -1366,6 +1406,7 @@ BTF_ID_FLAGS(func, bpf_lookup_system_key, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_key_put, KF_RELEASE)
 #ifdef CONFIG_SYSTEM_DATA_VERIFICATION
 BTF_ID_FLAGS(func, bpf_verify_pkcs7_signature, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_verify_umd_signature, KF_SLEEPABLE)
 #endif
 BTF_SET8_END(key_sig_kfunc_set)
 
