@@ -576,7 +576,10 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_
 	}
 	hlist_del_init(&link->tramp_hlist);
 	tr->progs_cnt[kind]--;
-	return bpf_trampoline_update(tr, true /* lock_direct_mutex */);
+	err =  bpf_trampoline_update(tr, true /* lock_direct_mutex */);
+	if (err && tr->cur_image)
+		unregister_fentry(tr, tr->cur_image->image);
+	return err;
 }
 
 /* bpf_trampoline_unlink_prog() should never fail. */
