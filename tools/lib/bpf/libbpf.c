@@ -9412,12 +9412,150 @@ __u32 bpf_map__value_size(const struct bpf_map *map)
 	return map->def.value_size;
 }
 
+static bool map_is_datasec(struct bpf_map *map)
+{
+	struct btf *btf;
+	struct btf_type *map_type;
+
+	btf = bpf_object__btf(map->obj);
+	if (!btf)
+		return false;
+
+	map_type = btf_type_by_id(btf, bpf_map__btf_value_type_id(map));
+
+	return btf_is_datasec(map_type);
+}
+
+static int map_datasec_resize(struct bpf_map *map, __u32 size)
+{
+	int err;
+	struct btf *btf;
+	struct btf_type *datasec_type, *var_type, *resolved_type, *array_element_type;
+	struct btf_var_secinfo *var;
+	struct btf_array *array;
+	__u32 resolved_id, new_array_id;
+	__u32 rounded_sz;
+	__u32 nr_elements;
+	__u32 old_value_sz = map->def.value_size;
+	size_t old_mmap_sz, new_mmap_sz;
+
+	/* btf is required and datasec map must be memory mapped */
+	btf = bpf_object__btf(map->obj);
+	if (!btf) {
+		pr_warn("cannot resize datasec map '%s' while btf info is not present\n",
+				bpf_map__name(map));
+
+		return -EINVAL;
+	}
+
+	datasec_type = btf_type_by_id(btf, bpf_map__btf_value_type_id(map));
+	if (!btf_is_datasec(datasec_type)) {
+		pr_warn("attempted to resize datasec map '%s' but map is not a datasec\n",
+				bpf_map__name(map));
+
+		return -EINVAL;
+	}
+
+	if (!map->mmaped) {
+		pr_warn("cannot resize datasec map '%s' while map is unexpectedly not memory mapped\n",
+				bpf_map__name(map));
+
+		return -EINVAL;
+	}
+
+	/* datasec must only have a single variable */
+	if (btf_vlen(datasec_type) != 1) {
+		pr_warn("cannot resize datasec map '%s' that does not consist of a single var\n",
+				bpf_map__name(map));
+
+		return -EINVAL;
+	}
+
+	/* the single variable has to be an array */
+	var = btf_var_secinfos(datasec_type);
+	resolved_id = btf__resolve_type(btf, var->type);
+	resolved_type = btf_type_by_id(btf, resolved_id);
+	if (!btf_is_array(resolved_type)) {
+		pr_warn("cannot resize datasec map '%s' whose single var is not an array\n",
+				bpf_map__name(map));
+
+		return -EINVAL;
+	}
+
+	/* create a new array based on the existing array but with new length,
+	 * rounding up the requested size for alignment
+	 */
+	array = btf_array(resolved_type);
+	array_element_type = btf_type_by_id(btf, array->type);
+	rounded_sz = roundup(size, array_element_type->size);
+	nr_elements = rounded_sz / array_element_type->size;
+	new_array_id = btf__add_array(btf, array->index_type, array->type,
+			nr_elements);
+	if (new_array_id < 0) {
+		pr_warn("failed to resize datasec map '%s' due to failure in creating new array\n",
+				bpf_map__name(map));
+		err = new_array_id;
+
+		goto fail_array;
+	}
+
+	/* adding a new btf type invalidates existing pointers to btf objects.
+	 * refresh pointers before proceeding
+	 */
+	datasec_type = btf_type_by_id(btf, map->btf_value_type_id);
+	var = btf_var_secinfos(datasec_type);
+	var_type = btf_type_by_id(btf, var->type);
+
+	/* remap the associated memory */
+	old_value_sz = map->def.value_size;
+	old_mmap_sz = bpf_map_mmap_sz(map);
+	map->def.value_size = rounded_sz;
+	new_mmap_sz = bpf_map_mmap_sz(map);
+
+	if (munmap(map->mmaped, old_mmap_sz)) {
+		err = -errno;
+		pr_warn("failed to resize datasec map '%s' due to failure in munmap(), err:%d\n",
+			 bpf_map__name(map), err);
+
+		goto fail_mmap;
+	}
+
+	map->mmaped = mmap(NULL, new_mmap_sz, PROT_READ | PROT_WRITE,
+		   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (map->mmaped == MAP_FAILED) {
+		err = -errno;
+		map->mmaped = NULL;
+		pr_warn("failed to resize datasec map '%s' due to failure in mmap(), err:%d\n",
+			 bpf_map__name(map), err);
+
+		goto fail_mmap;
+	}
+
+	/* finally update btf info */
+	datasec_type->size = var->size = rounded_sz;
+	var_type->type = new_array_id;
+
+	return 0;
+
+fail_mmap:
+	map->def.value_size = old_value_sz;
+
+fail_array:
+	return err;
+}
+
 int bpf_map__set_value_size(struct bpf_map *map, __u32 size)
 {
 	if (map->fd >= 0)
 		return libbpf_err(-EBUSY);
+
+	if (map_is_datasec(map))
+		return map_datasec_resize(map, size);
+
 	map->def.value_size = size;
+
 	return 0;
+
 }
 
 __u32 bpf_map__btf_key_type_id(const struct bpf_map *map)
