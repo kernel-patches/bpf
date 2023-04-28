@@ -1549,8 +1549,21 @@ st:			if (is_imm8(insn->off))
 					return -EINVAL;
 				offs = x86_call_depth_emit_accounting(&prog, func);
 			}
-			if (emit_call(&prog, func, image + addrs[i - 1] + offs))
-				return -EINVAL;
+			/*
+			 * If image is NULL, ip is in bottom address and func
+			 * is in kernel image address (top 2G), so the offset
+			 * is valid. However, PIE kernel image could be below
+			 * top 2G, then the offset would be out of range. Since
+			 * the length of PC-relative call(0xe8) is fixed, so it's
+			 * pointless to calculate the offset until the last pass.
+			 * Use 1 as the dummy offset if image is NULL.
+			 */
+			if (image)
+				err = emit_call(&prog, func, image + addrs[i - 1] + offs);
+			else
+				err = emit_call(&prog, (void *)(X86_PATCH_SIZE + 1UL), 0);
+			if (err)
+				return err;
 			break;
 		}
 
