@@ -2250,9 +2250,11 @@ static int btf_dump_type_data_check_overflow(struct btf_dump *d,
 					     const struct btf_type *t,
 					     __u32 id,
 					     const void *data,
-					     __u8 bits_offset)
+					     __u8 bits_offset,
+					     __u8 bit_sz)
 {
 	__s64 size = btf__resolve_size(d->btf, id);
+	const void *end;
 
 	if (size < 0 || size >= INT_MAX) {
 		pr_warn("unexpected size [%zu] for id [%u]\n",
@@ -2280,7 +2282,11 @@ static int btf_dump_type_data_check_overflow(struct btf_dump *d,
 	case BTF_KIND_PTR:
 	case BTF_KIND_ENUM:
 	case BTF_KIND_ENUM64:
-		if (data + bits_offset / 8 + size > d->typed_dump->data_end)
+		if (bit_sz)
+			end = data + (bits_offset + bit_sz + 7) / 8;
+		else
+			end = data + (bits_offset + 7) / 8 + size;
+		if (end > d->typed_dump->data_end)
 			return -E2BIG;
 		break;
 	default:
@@ -2407,7 +2413,7 @@ static int btf_dump_dump_type_data(struct btf_dump *d,
 {
 	int size, err = 0;
 
-	size = btf_dump_type_data_check_overflow(d, t, id, data, bits_offset);
+	size = btf_dump_type_data_check_overflow(d, t, id, data, bits_offset, bit_sz);
 	if (size < 0)
 		return size;
 	err = btf_dump_type_data_check_zero(d, t, id, data, bits_offset, bit_sz);
