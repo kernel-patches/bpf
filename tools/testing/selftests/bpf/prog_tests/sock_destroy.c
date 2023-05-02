@@ -3,6 +3,7 @@
 #include <bpf/bpf_endian.h>
 
 #include "sock_destroy_prog.skel.h"
+#include "sock_destroy_prog_fail.skel.h"
 #include "network_helpers.h"
 
 #define TEST_NS "sock_destroy_netns"
@@ -208,6 +209,7 @@ void test_sock_destroy(void)
 	if (test__start_subtest("udp_server"))
 		test_udp_server(skel);
 
+	RUN_TESTS(sock_destroy_prog_fail);
 
 cleanup:
 	if (nstoken)
