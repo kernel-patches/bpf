@@ -2568,6 +2568,7 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
+	bool bpf_cap, net_admin_cap, sys_admin_cap, perfmon_cap;
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
@@ -2586,6 +2587,12 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 				 BPF_F_XDP_DEV_BOUND_ONLY))
 		return -EINVAL;
 
+	/* remember set of effective capabilities to be used throughout */
+	bpf_cap = bpf_capable();
+	perfmon_cap = perfmon_capable();
+	net_admin_cap = capable(CAP_NET_ADMIN);
+	sys_admin_cap = capable(CAP_SYS_ADMIN);
+
 	/* Intent here is for unprivileged_bpf_disabled to block key object
 	 * creation commands for unprivileged users; other actions depend
 	 * of fd availability and access to bpffs, so are dependent on
@@ -2594,25 +2601,25 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	 * BPF disabled, capability checks are still carried out for these
 	 * and other operations.
 	 */
-	if (sysctl_unprivileged_bpf_disabled && !bpf_capable())
+	if (sysctl_unprivileged_bpf_disabled && !bpf_cap)
 		return -EPERM;
 
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) &&
 	    (attr->prog_flags & BPF_F_ANY_ALIGNMENT) &&
-	    !bpf_capable())
+	    !bpf_cap)
 		return -EPERM;
 
 	if (attr->insn_cnt == 0 ||
-	    attr->insn_cnt > (bpf_capable() ? BPF_COMPLEXITY_LIMIT_INSNS : BPF_MAXINSNS))
+	    attr->insn_cnt > (bpf_cap ? BPF_COMPLEXITY_LIMIT_INSNS : BPF_MAXINSNS))
 		return -E2BIG;
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER &&
 	    type != BPF_PROG_TYPE_CGROUP_SKB &&
-	    !bpf_capable())
+	    !bpf_cap)
 		return -EPERM;
 
-	if (is_net_admin_prog_type(type) && !capable(CAP_NET_ADMIN) && !capable(CAP_SYS_ADMIN))
+	if (is_net_admin_prog_type(type) && !net_admin_cap && !sys_admin_cap)
 		return -EPERM;
-	if (is_perfmon_prog_type(type) && !perfmon_capable())
+	if (is_perfmon_prog_type(type) && !perfmon_cap)
 		return -EPERM;
 
 	/* attach_prog_fd/attach_btf_obj_fd can specify fd of either bpf_prog
@@ -2671,6 +2678,10 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	prog->aux->dev_bound = !!attr->prog_ifindex;
 	prog->aux->sleepable = attr->prog_flags & BPF_F_SLEEPABLE;
 	prog->aux->xdp_has_frags = attr->prog_flags & BPF_F_XDP_HAS_FRAGS;
+
+	/* remember effective capabilities prog was given */
+	prog->aux->bpf_capable = bpf_cap;
+	prog->aux->perfmon_capable = perfmon_cap;
 
 	err = security_bpf_prog_alloc(prog->aux);
 	if (err)

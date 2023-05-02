@@ -1370,6 +1370,11 @@ struct bpf_prog_aux {
 	u32 ctx_arg_info_size;
 	u32 max_rdonly_access;
 	u32 max_rdwr_access;
+
+	/* effective capabilities that were given to BPF program at load time */
+	bool bpf_capable;
+	bool perfmon_capable;
+
 	struct btf *attach_btf;
 	const struct bpf_ctx_arg_aux *ctx_arg_info;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
