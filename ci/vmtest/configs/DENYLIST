@@ -1,0 +1,7 @@
+# TEMPORARY
+btf_dump/btf_dump: syntax
+kprobe_multi_bench_attach
+core_reloc/enum64val
+core_reloc/size___diff_sz
+core_reloc/type_based___diff_sz
+test_ima	# All of CI is broken on it following 6.3-rc1 merge
