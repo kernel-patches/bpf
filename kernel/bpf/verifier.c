@@ -17194,6 +17194,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->poke_tab = prog->aux->poke_tab;
 		func[i]->aux->size_poke_tab = prog->aux->size_poke_tab;
 
+		/* inherit main prog's effective capabilities */
+		func[i]->aux->bpf_capable = prog->aux->bpf_capable;
+		func[i]->aux->perfmon_capable = prog->aux->perfmon_capable;
+
 		for (j = 0; j < prog->aux->size_poke_tab; j++) {
 			struct bpf_jit_poke_descriptor *poke;
 
@@ -18878,7 +18882,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
 	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
-	is_priv = bpf_capable();
+
+	env->allow_ptr_leaks = bpf_allow_ptr_leaks(*prog);
+	env->allow_uninit_stack = bpf_allow_uninit_stack(*prog);
+	env->bypass_spec_v1 = bpf_bypass_spec_v1(*prog);
+	env->bypass_spec_v4 = bpf_bypass_spec_v4(*prog);
+	env->bpf_capable = is_priv = (*prog)->aux->bpf_capable;
 
 	bpf_get_btf_vmlinux();
 
@@ -18909,12 +18918,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		env->strict_alignment = true;
 	if (attr->prog_flags & BPF_F_ANY_ALIGNMENT)
 		env->strict_alignment = false;
-
-	env->allow_ptr_leaks = bpf_allow_ptr_leaks();
-	env->allow_uninit_stack = bpf_allow_uninit_stack();
-	env->bypass_spec_v1 = bpf_bypass_spec_v1();
-	env->bypass_spec_v4 = bpf_bypass_spec_v4();
-	env->bpf_capable = bpf_capable();
 
 	if (is_priv)
 		env->test_state_freq = attr->prog_flags & BPF_F_TEST_STATE_FREQ;

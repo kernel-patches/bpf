@@ -2048,26 +2048,26 @@ bpf_map_alloc_percpu(const struct bpf_map *map, size_t size, size_t align,
 
 extern int sysctl_unprivileged_bpf_disabled;
 
-static inline bool bpf_allow_ptr_leaks(void)
+static inline bool bpf_allow_ptr_leaks(const struct bpf_prog *prog)
 {
-	return perfmon_capable();
+	return prog->aux->perfmon_capable;
 }
 
-static inline bool bpf_allow_uninit_stack(void)
+static inline bool bpf_allow_uninit_stack(const struct bpf_prog *prog)
 {
-	return perfmon_capable();
+	return prog->aux->perfmon_capable;
 }
 
-static inline bool bpf_bypass_spec_v1(void)
+static inline bool bpf_bypass_spec_v1(const struct bpf_prog *prog)
 {
-	return perfmon_capable();
+	return prog->aux->perfmon_capable;
 }
 
 int bpf_array_adjust_for_spec_v1(union bpf_attr *attr);
 
-static inline bool bpf_bypass_spec_v4(void)
+static inline bool bpf_bypass_spec_v4(const struct bpf_prog *prog)
 {
-	return perfmon_capable();
+	return prog->aux->perfmon_capable;
 }
 
 int bpf_map_new_fd(struct bpf_map *map, int flags);
