@@ -77,18 +77,9 @@ int array_map_alloc_check(union bpf_attr *attr)
 	return 0;
 }
 
-static struct bpf_map *array_map_alloc(union bpf_attr *attr)
+static u32 array_index_mask(u32 max_entries)
 {
-	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
-	int numa_node = bpf_map_attr_numa_node(attr);
-	u32 elem_size, index_mask, max_entries;
-	bool bypass_spec_v1 = bpf_bypass_spec_v1();
-	u64 array_size, mask64;
-	struct bpf_array *array;
-
-	elem_size = round_up(attr->value_size, 8);
-
-	max_entries = attr->max_entries;
+	u64 mask64;
 
 	/* On 32 bit archs roundup_pow_of_two() with max_entries that has
 	 * upper most bit set in u32 space is undefined behavior due to
@@ -98,17 +89,38 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	mask64 = 1ULL << mask64;
 	mask64 -= 1;
 
-	index_mask = mask64;
-	if (!bypass_spec_v1) {
-		/* round up array size to nearest power of 2,
-		 * since cpu will speculate within index_mask limits
-		 */
-		max_entries = index_mask + 1;
-		/* Check for overflows. */
-		if (max_entries < attr->max_entries)
-			return ERR_PTR(-E2BIG);
-	}
+	return (u32)mask64;
+}
 
+int bpf_array_adjust_for_spec_v1(union bpf_attr *attr)
+{
+	u32 max_entries, index_mask;
+
+	/* round up array size to nearest power of 2,
+	 * since cpu will speculate within index_mask limits
+	 */
+	index_mask = array_index_mask(attr->max_entries);
+	max_entries = index_mask + 1;
+	/* Check for overflows. */
+	if (max_entries < attr->max_entries)
+		return -E2BIG;
+
+	attr->max_entries = max_entries;
+	return 0;
+}
+
+static struct bpf_map *array_map_alloc(union bpf_attr *attr)
+{
+	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
+	int numa_node = bpf_map_attr_numa_node(attr);
+	u32 elem_size, index_mask, max_entries;
+	u64 array_size;
+	struct bpf_array *array;
+
+	elem_size = round_up(attr->value_size, 8);
+
+	max_entries = attr->max_entries;
+	index_mask = array_index_mask(max_entries);
 	array_size = sizeof(*array);
 	if (percpu) {
 		array_size += (u64) max_entries * sizeof(void *);
@@ -140,7 +152,6 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	if (!array)
 		return ERR_PTR(-ENOMEM);
 	array->index_mask = index_mask;
-	array->map.bypass_spec_v1 = bypass_spec_v1;
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&array->map, attr);
@@ -216,7 +227,7 @@ static int array_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
 	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
-	if (!map->bypass_spec_v1) {
+	if (map->unpriv) {
 		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 4);
 		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
 	} else {
@@ -1373,7 +1384,7 @@ static int array_of_map_gen_lookup(struct bpf_map *map,
 
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
 	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
-	if (!map->bypass_spec_v1) {
+	if (map->unpriv) {
 		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 6);
 		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
 	} else {

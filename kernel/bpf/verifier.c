@@ -8731,11 +8731,9 @@ record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	}
 
 	if (!BPF_MAP_PTR(aux->map_ptr_state))
-		bpf_map_ptr_store(aux, meta->map_ptr,
-				  !meta->map_ptr->bypass_spec_v1);
+		bpf_map_ptr_store(aux, meta->map_ptr, meta->map_ptr->unpriv);
 	else if (BPF_MAP_PTR(aux->map_ptr_state) != meta->map_ptr)
-		bpf_map_ptr_store(aux, BPF_MAP_PTR_POISON,
-				  !meta->map_ptr->bypass_spec_v1);
+		bpf_map_ptr_store(aux, BPF_MAP_PTR_POISON, meta->map_ptr->unpriv);
 	return 0;
 }
 

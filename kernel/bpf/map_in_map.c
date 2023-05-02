@@ -41,6 +41,7 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		goto put;
 	}
 
+	inner_map_meta->unpriv = inner_map->unpriv;
 	inner_map_meta->map_type = inner_map->map_type;
 	inner_map_meta->key_size = inner_map->key_size;
 	inner_map_meta->value_size = inner_map->value_size;
@@ -69,7 +70,6 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 	/* Misc members not needed in bpf_map_meta_equal() check. */
 	inner_map_meta->ops = inner_map->ops;
 	if (inner_map->ops == &array_map_ops) {
-		inner_map_meta->bypass_spec_v1 = inner_map->bypass_spec_v1;
 		container_of(inner_map_meta, struct bpf_array, map)->index_mask =
 		     container_of(inner_map, struct bpf_array, map)->index_mask;
 	}
@@ -98,6 +98,7 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 		meta0->key_size == meta1->key_size &&
 		meta0->value_size == meta1->value_size &&
 		meta0->map_flags == meta1->map_flags &&
+		meta0->unpriv == meta1->unpriv &&
 		btf_record_equal(meta0->record, meta1->record);
 }
 

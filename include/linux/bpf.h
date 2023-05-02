@@ -273,7 +273,7 @@ struct bpf_map {
 		bool jited;
 		bool xdp_has_frags;
 	} owner;
-	bool bypass_spec_v1;
+	bool unpriv;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
 };
 
@@ -2057,6 +2057,8 @@ static inline bool bpf_bypass_spec_v1(void)
 {
 	return perfmon_capable();
 }
+
+int bpf_array_adjust_for_spec_v1(union bpf_attr *attr);
 
 static inline bool bpf_bypass_spec_v4(void)
 {

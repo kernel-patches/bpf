@@ -1010,7 +1010,7 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
 
-		if (!bpf_capable()) {
+		if (map->unpriv) {
 			ret = -EPERM;
 			goto free_map_tab;
 		}
@@ -1100,6 +1100,7 @@ static int map_create(union bpf_attr *attr)
 	int numa_node = bpf_map_attr_numa_node(attr);
 	u32 map_type = attr->map_type;
 	struct bpf_map *map;
+	bool unpriv;
 	int f_flags;
 	int err;
 
@@ -1176,6 +1177,7 @@ static int map_create(union bpf_attr *attr)
 	case BPF_MAP_TYPE_CPUMAP:
 		if (!bpf_capable())
 			return -EPERM;
+		unpriv = false;
 		break;
 	case BPF_MAP_TYPE_SOCKMAP:
 	case BPF_MAP_TYPE_SOCKHASH:
@@ -1184,6 +1186,7 @@ static int map_create(union bpf_attr *attr)
 	case BPF_MAP_TYPE_XSKMAP:
 		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
+		unpriv = false;
 		break;
 	case BPF_MAP_TYPE_ARRAY:
 	case BPF_MAP_TYPE_PERCPU_ARRAY:
@@ -1198,11 +1201,28 @@ static int map_create(union bpf_attr *attr)
 	case BPF_MAP_TYPE_USER_RINGBUF:
 	case BPF_MAP_TYPE_CGROUP_STORAGE:
 	case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE:
-		/* unprivileged */
+		/* unprivileged is OK, but we still record if we had CAP_BPF */
+		unpriv = !bpf_capable();
 		break;
 	default:
 		WARN(1, "unsupported map type %d", map_type);
 		return -EPERM;
+	}
+
+	/* ARRAY-like maps have special sizing provisions for mitigating Spectre v1 */
+	if (unpriv) {
+		switch (map_type) {
+		case BPF_MAP_TYPE_ARRAY:
+		case BPF_MAP_TYPE_PERCPU_ARRAY:
+		case BPF_MAP_TYPE_PROG_ARRAY:
+		case BPF_MAP_TYPE_PERF_EVENT_ARRAY:
+		case BPF_MAP_TYPE_CGROUP_ARRAY:
+		case BPF_MAP_TYPE_ARRAY_OF_MAPS:
+			err = bpf_array_adjust_for_spec_v1(attr);
+			if (err)
+				return err;
+			break;
+		}
 	}
 
 	map = ops->map_alloc(attr);
@@ -1210,6 +1230,7 @@ static int map_create(union bpf_attr *attr)
 		return PTR_ERR(map);
 	map->ops = ops;
 	map->map_type = map_type;
+	map->unpriv = unpriv;
 
 	err = bpf_obj_name_cpy(map->name, attr->map_name,
 			       sizeof(attr->map_name));
