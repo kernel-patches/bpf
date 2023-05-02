@@ -1963,7 +1963,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	image_size = sizeof(u32) * ctx.idx;
 
 	/* Now we know the size of the structure to make */
-	header = bpf_jit_binary_alloc(image_size, &image_ptr,
+	header = bpf_jit_binary_alloc(prog, image_size, &image_ptr,
 				      sizeof(u32), jit_fill_hole);
 	/* Not able to allocate memory for the structure then
 	 * we must fall back to the interpretation

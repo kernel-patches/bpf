@@ -1878,7 +1878,8 @@ static struct bpf_binary_header *bpf_jit_alloc(struct bpf_jit *jit,
 			    __alignof__(struct exception_table_entry));
 	extable_size = fp->aux->num_exentries *
 		sizeof(struct exception_table_entry);
-	header = bpf_jit_binary_alloc(code_size + extable_size, &jit->prg_buf,
+	header = bpf_jit_binary_alloc(fp,
+				      code_size + extable_size, &jit->prg_buf,
 				      8, jit_fill_hole);
 	if (!header)
 		return NULL;

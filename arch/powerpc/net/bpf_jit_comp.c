@@ -154,7 +154,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	proglen = cgctx.idx * 4;
 	alloclen = proglen + FUNCTION_DESCR_SIZE + fixup_len + extable_len;
 
-	bpf_hdr = bpf_jit_binary_alloc(alloclen, &image, 4, bpf_jit_fill_ill_insns);
+	bpf_hdr = bpf_jit_binary_alloc(fp, alloclen, &image, 4, bpf_jit_fill_ill_insns);
 	if (!bpf_hdr) {
 		fp = org_fp;
 		goto out_addrs;

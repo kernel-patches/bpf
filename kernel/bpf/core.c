@@ -978,13 +978,13 @@ static int __init bpf_jit_charge_init(void)
 }
 pure_initcall(bpf_jit_charge_init);
 
-int bpf_jit_charge_modmem(u32 size)
+int bpf_jit_charge_modmem(u32 size, const struct bpf_prog *prog)
 {
 	if (atomic_long_add_return(size, &bpf_jit_current) > READ_ONCE(bpf_jit_limit)) {
-		if (!bpf_capable()) {
-			atomic_long_sub(size, &bpf_jit_current);
-			return -EPERM;
-		}
+		if (prog ? prog->aux->bpf_capable : bpf_capable())
+			return 0;
+		atomic_long_sub(size, &bpf_jit_current);
+		return -EPERM;
 	}
 
 	return 0;
@@ -1006,7 +1006,8 @@ void __weak bpf_jit_free_exec(void *addr)
 }
 
 struct bpf_binary_header *
-bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
+bpf_jit_binary_alloc(const struct bpf_prog *prog,
+		     unsigned int proglen, u8 **image_ptr,
 		     unsigned int alignment,
 		     bpf_jit_fill_hole_t bpf_fill_ill_insns)
 {
@@ -1022,7 +1023,7 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 	 */
 	size = round_up(proglen + sizeof(*hdr) + 128, PAGE_SIZE);
 
-	if (bpf_jit_charge_modmem(size))
+	if (bpf_jit_charge_modmem(size, prog))
 		return NULL;
 	hdr = bpf_jit_alloc_exec(size);
 	if (!hdr) {
@@ -1061,7 +1062,8 @@ void bpf_jit_binary_free(struct bpf_binary_header *hdr)
  * the JITed program to the RO memory.
  */
 struct bpf_binary_header *
-bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
+bpf_jit_binary_pack_alloc(const struct bpf_prog *prog,
+			  unsigned int proglen, u8 **image_ptr,
 			  unsigned int alignment,
 			  struct bpf_binary_header **rw_header,
 			  u8 **rw_image,
@@ -1076,7 +1078,7 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 	/* add 16 bytes for a random section of illegal instructions */
 	size = round_up(proglen + sizeof(*ro_header) + 16, BPF_PROG_CHUNK_SIZE);
 
-	if (bpf_jit_charge_modmem(size))
+	if (bpf_jit_charge_modmem(size, prog))
 		return NULL;
 	ro_header = bpf_prog_pack_alloc(size, bpf_fill_ill_insns);
 	if (!ro_header) {

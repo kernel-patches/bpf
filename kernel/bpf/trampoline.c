@@ -355,7 +355,7 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, u32 idx)
 	if (!im)
 		goto out;
 
-	err = bpf_jit_charge_modmem(PAGE_SIZE);
+	err = bpf_jit_charge_modmem(PAGE_SIZE, NULL);
 	if (err)
 		goto out_free_im;
 

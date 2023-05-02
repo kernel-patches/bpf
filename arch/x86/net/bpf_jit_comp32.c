@@ -2586,7 +2586,7 @@ out_image:
 			break;
 		}
 		if (proglen == oldproglen) {
-			header = bpf_jit_binary_alloc(proglen, &image,
+			header = bpf_jit_binary_alloc(prog, proglen, &image,
 						      1, jit_fill_hole);
 			if (!header) {
 				prog = orig_prog;

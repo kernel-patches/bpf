@@ -2556,7 +2556,8 @@ out_image:
 				sizeof(struct exception_table_entry);
 
 			/* allocate module memory for x86 insns and extable */
-			header = bpf_jit_binary_pack_alloc(roundup(proglen, align) + extable_size,
+			header = bpf_jit_binary_pack_alloc(prog,
+							   roundup(proglen, align) + extable_size,
 							   &image, align, &rw_header, &rw_image,
 							   jit_fill_hole);
 			if (!header) {

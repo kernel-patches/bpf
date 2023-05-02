@@ -109,7 +109,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 			prog_size = sizeof(*ctx->insns) * ctx->ninsns;
 
 			jit_data->header =
-				bpf_jit_binary_alloc(prog_size + extable_size,
+				bpf_jit_binary_alloc(prog,
+						     prog_size + extable_size,
 						     &jit_data->image,
 						     sizeof(u32),
 						     bpf_fill_ill_insns);

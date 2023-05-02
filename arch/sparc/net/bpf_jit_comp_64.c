@@ -1567,7 +1567,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	/* Now we know the actual image size. */
 	image_size = sizeof(u32) * ctx.idx;
-	header = bpf_jit_binary_alloc(image_size, &image_ptr,
+	header = bpf_jit_binary_alloc(prog, image_size, &image_ptr,
 				      sizeof(u32), jit_fill_hole);
 	if (header == NULL) {
 		prog = orig_prog;
