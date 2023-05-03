@@ -11770,9 +11770,18 @@ BTF_SET8_START(sock_destroy_kfunc_set)
 BTF_ID_FLAGS(func, bpf_sock_destroy)
 BTF_SET8_END(sock_destroy_kfunc_set)
 
+static int tracing_iter_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (btf_id_set8_contains(&sock_destroy_kfunc_set, kfunc_id) &&
+	    prog->expected_attach_type != BPF_TRACE_ITER)
+		return -EACCES;
+	return 0;
+}
+
 static const struct btf_kfunc_id_set bpf_sock_destroy_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &sock_destroy_kfunc_set,
+	.filter = tracing_iter_filter,
 };
 
 static int init_subsystem(void)
