@@ -39,8 +39,19 @@ private(A) struct bpf_spin_lock lock;
 private(A) struct bpf_rb_root root __contains(node_data, r);
 private(A) struct bpf_list_head head __contains(node_data, l);
 
+private(C) struct bpf_spin_lock lock2;
+private(C) struct bpf_rb_root root2 __contains(node_data, r);
+
 private(B) struct bpf_spin_lock alock;
 private(B) struct bpf_rb_root aroot __contains(node_acquire, node);
+
+private(D) struct bpf_spin_lock ref_acq_lock;
+private(E) struct bpf_spin_lock rem_node_lock;
+
+/* Provided by bpf_testmod */
+extern void bpf__unsafe_spin_lock(void *lock__ign) __ksym;
+extern void bpf__unsafe_spin_unlock(void *lock__ign) __ksym;
+extern volatile int bpf_refcount_read(void *refcount__ign) __ksym;
 
 static bool less(struct bpf_rb_node *node_a, const struct bpf_rb_node *node_b)
 {
@@ -403,6 +414,153 @@ long rbtree_refcounted_node_ref_escapes_owning_input(void *ctx)
 	bpf_obj_drop(m);
 
 	return 0;
+}
+
+SEC("tc")
+long unsafe_ref_acq_lock(void *ctx)
+{
+	bpf__unsafe_spin_lock(&ref_acq_lock);
+	return 0;
+}
+
+SEC("tc")
+long unsafe_ref_acq_unlock(void *ctx)
+{
+	bpf__unsafe_spin_unlock(&ref_acq_lock);
+	return 0;
+}
+
+SEC("tc")
+long unsafe_rem_node_lock(void *ctx)
+{
+	bpf__unsafe_spin_lock(&rem_node_lock);
+	return 0;
+}
+
+/* The following 3 progs are used in concert to test a bpf_refcount-related
+ * race. Consider the following pseudocode interleaving of rbtree operations:
+ *
+ * (Assumptions: n, m, o, p, q are pointers to nodes, t1 and t2 are different
+ * rbtrees, l1 and l2 are locks accompanying the trees, mapval is some
+ * kptr_xchg'able ptr_to_map_value. A single node is being manipulated by both
+ * programs. Irrelevant error-checking and casting is omitted.)
+ *
+ *               CPU O                               CPU 1
+ *     ----------------------------------|---------------------------
+ *     n = bpf_obj_new  [0]              |
+ *     lock(l1)                          |
+ *     bpf_rbtree_add(t1, &n->r, less)   |
+ *     m = bpf_refcount_acquire(n)  [1]  |
+ *     unlock(l1)                        |
+ *     kptr_xchg(mapval, m)         [2]  |
+ *     --------------------------------------------------------------
+ *                                       |    o = kptr_xchg(mapval, NULL)  [3]
+ *                                       |    lock(l2)
+ *                                       |    rbtree_add(t2, &o->r, less)  [4]
+ *     --------------------------------------------------------------
+ *     lock(l1)                          |
+ *     p = rbtree_first(t1)              |
+ *     p = rbtree_remove(t1, p)          |
+ *     unlock(l1)                        |
+ *     if (p)                            |
+ *       bpf_obj_drop(p)  [5]            |
+ *     --------------------------------------------------------------
+ *                                       |    q = bpf_refcount_acquire(o)  [6]
+ *                                       |    unlock(l2)
+ *
+ * If bpf_refcount_acquire can't fail, the sequence of operations on the node's
+ * refcount is:
+ *    [0] - refcount initialized to 1
+ *    [1] - refcount bumped to 2
+ *    [2] - refcount is still 2, but m's ownership passed to mapval
+ *    [3] - refcount is still 2, mapval's ownership passed to o
+ *    [4] - refcount is decr'd to 1, rbtree_add fails, node is already in t1
+ *          o is converted to non-owning reference
+ *    [5] - refcount is decr'd to 0, node free'd
+ *    [6] - refcount is incr'd to 1 from 0, ERROR
+ *
+ * To prevent [6] bpf_refcount_acquire was made failable. This interleaving is
+ * used to test failable refcount_acquire.
+ *
+ * The two halves of CPU 0's operations are implemented by
+ * add_refcounted_node_to_tree_and_stash and remove_refcounted_node_from_tree.
+ * We can't do the same for CPU 1's operations due to l2 critical section.
+ * Instead, bpf__unsafe_spin_{lock, unlock} are used to ensure the expected
+ * order of operations.
+ */
+
+SEC("tc")
+long add_refcounted_node_to_tree_and_stash(void *ctx)
+{
+	long err;
+
+	err = __stash_map_insert_tree(0, 42, &root, &lock);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+SEC("tc")
+long remove_refcounted_node_from_tree(void *ctx)
+{
+	long ret = 0;
+
+	/* rem_node_lock is held by another program to force race */
+	bpf__unsafe_spin_lock(&rem_node_lock);
+	ret = __read_from_tree(&root, &lock, true);
+	if (ret != 42)
+		return ret;
+
+	bpf__unsafe_spin_unlock(&rem_node_lock);
+	return 0;
+}
+
+/* ref_check_n numbers correspond to refcount operation points in comment above */
+int ref_check_3, ref_check_4, ref_check_5;
+
+SEC("tc")
+long unstash_add_and_acquire_refcount(void *ctx)
+{
+	struct map_value *mapval;
+	struct node_data *n, *m;
+	int idx = 0;
+
+	mapval = bpf_map_lookup_elem(&stashed_nodes, &idx);
+	if (!mapval)
+		return -1;
+
+	n = bpf_kptr_xchg(&mapval->node, NULL);
+	if (!n)
+		return -2;
+	ref_check_3 = bpf_refcount_read(&n->ref);
+
+	bpf_spin_lock(&lock2);
+	bpf_rbtree_add(&root2, &n->r, less);
+	ref_check_4 = bpf_refcount_read(&n->ref);
+
+	/* Let CPU 0 do first->remove->drop */
+	bpf__unsafe_spin_unlock(&rem_node_lock);
+
+	/* ref_acq_lock is held by another program to force race
+	 * when this program holds the lock, remove_refcounted_node_from_tree
+	 * has finished
+	 */
+	bpf__unsafe_spin_lock(&ref_acq_lock);
+	ref_check_5 = bpf_refcount_read(&n->ref);
+
+	/* Error-causing use-after-free incr ([6] in long comment above) */
+	m = bpf_refcount_acquire(n);
+	bpf__unsafe_spin_unlock(&ref_acq_lock);
+
+	bpf_spin_unlock(&lock2);
+
+	if (m) {
+		bpf_obj_drop(m);
+		return -3;
+	}
+
+	return !!m;
 }
 
 char _license[] SEC("license") = "GPL";
