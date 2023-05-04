@@ -298,8 +298,11 @@ struct bpf_kfunc_call_arg_meta {
 	} arg_constant;
 	union {
 		struct btf_and_id arg_obj_drop;
-		struct btf_and_id arg_refcount_acquire;
 		struct btf_and_id arg_graph_node;
+		struct {
+			struct btf_and_id btf_and_id;
+			bool owning_ref;
+		} arg_refcount_acquire;
 	};
 	struct {
 		struct btf_field *field;
@@ -9372,11 +9375,6 @@ static bool is_kfunc_acquire(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_ACQUIRE;
 }
 
-static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
-{
-	return meta->kfunc_flags & KF_RET_NULL;
-}
-
 static bool is_kfunc_release(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_RELEASE;
@@ -9686,6 +9684,16 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+
+static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
+{
+	if (meta->func_id == special_kfunc_list[KF_bpf_refcount_acquire_impl] &&
+	    meta->arg_refcount_acquire.owning_ref) {
+		return false;
+	}
+
+	return meta->kfunc_flags & KF_RET_NULL;
+}
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10580,10 +10588,12 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			meta->subprogno = reg->subprogno;
 			break;
 		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
-			if (!type_is_ptr_alloc_obj(reg->type) && !type_is_non_owning_ref(reg->type)) {
+			if (!type_is_ptr_alloc_obj(reg->type)) {
 				verbose(env, "arg#%d is neither owning or non-owning ref\n", i);
 				return -EINVAL;
 			}
+			if (!type_is_non_owning_ref(reg->type))
+				meta->arg_refcount_acquire.owning_ref = true;
 
 			rec = reg_btf_record(reg);
 			if (!rec) {
@@ -10596,8 +10606,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return -EINVAL;
 			}
 
-			meta->arg_refcount_acquire.btf = reg->btf;
-			meta->arg_refcount_acquire.btf_id = reg->btf_id;
+			meta->arg_refcount_acquire.btf_and_id.btf = reg->btf;
+			meta->arg_refcount_acquire.btf_and_id.btf_id = reg->btf_id;
 			break;
 		}
 	}
@@ -10829,14 +10839,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				insn_aux->kptr_struct_meta =
 					btf_find_struct_meta(ret_btf, ret_btf_id);
 			} else if (meta.func_id == special_kfunc_list[KF_bpf_refcount_acquire_impl]) {
+				struct btf_and_id *b = &meta.arg_refcount_acquire.btf_and_id;
+
 				mark_reg_known_zero(env, regs, BPF_REG_0);
 				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC;
-				regs[BPF_REG_0].btf = meta.arg_refcount_acquire.btf;
-				regs[BPF_REG_0].btf_id = meta.arg_refcount_acquire.btf_id;
+				regs[BPF_REG_0].btf = b->btf;
+				regs[BPF_REG_0].btf_id = b->btf_id;
 
-				insn_aux->kptr_struct_meta =
-					btf_find_struct_meta(meta.arg_refcount_acquire.btf,
-							     meta.arg_refcount_acquire.btf_id);
+				insn_aux->kptr_struct_meta = btf_find_struct_meta(b->btf, b->btf_id);
 			} else if (meta.func_id == special_kfunc_list[KF_bpf_list_pop_front] ||
 				   meta.func_id == special_kfunc_list[KF_bpf_list_pop_back]) {
 				struct btf_field *field = meta.arg_list_head.field;
