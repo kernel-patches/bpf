@@ -319,6 +319,11 @@ struct bpf_kfunc_call_arg_meta {
 	u64 mem_size;
 };
 
+static int fetch_kfunc_meta(struct bpf_verifier_env *env,
+			    struct bpf_insn *insn,
+			    struct bpf_kfunc_call_arg_meta *meta,
+			    const char **kfunc_name);
+
 struct btf *btf_vmlinux;
 
 static DEFINE_MUTEX(bpf_verifier_lock);
@@ -9989,6 +9994,21 @@ static bool is_rbtree_lock_required_kfunc(u32 btf_id)
 	return is_bpf_rbtree_api_kfunc(btf_id);
 }
 
+static bool is_kfunc_callable_in_spinlock(struct bpf_verifier_env *env,
+					  struct bpf_insn *insn)
+{
+	struct bpf_kfunc_call_arg_meta meta;
+
+	/* insn->off is idx into btf fd_array - 0 for vmlinux btf, else nonzero */
+	if (!insn->off && is_bpf_graph_api_kfunc(insn->imm))
+		return true;
+
+	if (fetch_kfunc_meta(env, insn, &meta, NULL))
+		return false;
+
+	return is_kfunc_destructive(&meta);
+}
+
 static bool check_kfunc_is_graph_root_api(struct bpf_verifier_env *env,
 					  enum btf_field_type head_field_type,
 					  u32 kfunc_btf_id)
@@ -15875,7 +15895,7 @@ static int do_check(struct bpf_verifier_env *env)
 					if ((insn->src_reg == BPF_REG_0 && insn->imm != BPF_FUNC_spin_unlock) ||
 					    (insn->src_reg == BPF_PSEUDO_CALL) ||
 					    (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
-					     (insn->off != 0 || !is_bpf_graph_api_kfunc(insn->imm)))) {
+					     !is_kfunc_callable_in_spinlock(env, insn))) {
 						verbose(env, "function calls are not allowed while holding a lock\n");
 						return -EINVAL;
 					}
