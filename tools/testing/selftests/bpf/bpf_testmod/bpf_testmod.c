@@ -108,6 +108,64 @@ __bpf_kfunc void bpf_iter_testmod_seq_destroy(struct bpf_iter_testmod_seq *it)
 	it->cnt = 0;
 }
 
+/* BEGIN copied from kernel/bpf/helpers.c */
+static DEFINE_PER_CPU(unsigned long, irqsave_flags);
+
+static inline void __bpf_spin_lock(struct bpf_spin_lock *lock)
+{
+        arch_spinlock_t *l = (void *)lock;
+        union {
+                __u32 val;
+                arch_spinlock_t lock;
+        } u = { .lock = __ARCH_SPIN_LOCK_UNLOCKED };
+
+        compiletime_assert(u.val == 0, "__ARCH_SPIN_LOCK_UNLOCKED not 0");
+        BUILD_BUG_ON(sizeof(*l) != sizeof(__u32));
+        BUILD_BUG_ON(sizeof(*lock) != sizeof(__u32));
+        arch_spin_lock(l);
+}
+
+static inline void __bpf_spin_unlock(struct bpf_spin_lock *lock)
+{
+        arch_spinlock_t *l = (void *)lock;
+
+        arch_spin_unlock(l);
+}
+
+static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
+{
+        unsigned long flags;
+
+        local_irq_save(flags);
+        __bpf_spin_lock(lock);
+        __this_cpu_write(irqsave_flags, flags);
+}
+
+static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
+{
+        unsigned long flags;
+
+        flags = __this_cpu_read(irqsave_flags);
+        __bpf_spin_unlock(lock);
+        local_irq_restore(flags);
+}
+/* END copied from kernel/bpf/helpers.c */
+
+__bpf_kfunc void bpf__unsafe_spin_lock(void *lock__ign)
+{
+	__bpf_spin_lock_irqsave((struct bpf_spin_lock *)lock__ign);
+}
+
+__bpf_kfunc void bpf__unsafe_spin_unlock(void *lock__ign)
+{
+	__bpf_spin_unlock_irqrestore((struct bpf_spin_lock *)lock__ign);
+}
+
+__bpf_kfunc int bpf_refcount_read(void *refcount__ign)
+{
+	return refcount_read((refcount_t *)refcount__ign);
+}
+
 struct bpf_testmod_btf_type_tag_1 {
 	int a;
 };
@@ -282,6 +340,9 @@ BTF_SET8_START(bpf_testmod_common_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_iter_testmod_seq_new, KF_ITER_NEW)
 BTF_ID_FLAGS(func, bpf_iter_testmod_seq_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_testmod_seq_destroy, KF_ITER_DESTROY)
+BTF_ID_FLAGS(func, bpf__unsafe_spin_lock, KF_DESTRUCTIVE)
+BTF_ID_FLAGS(func, bpf__unsafe_spin_unlock, KF_DESTRUCTIVE)
+BTF_ID_FLAGS(func, bpf_refcount_read, KF_DESTRUCTIVE)
 BTF_SET8_END(bpf_testmod_common_kfunc_ids)
 
 static const struct btf_kfunc_id_set bpf_testmod_common_kfunc_set = {
