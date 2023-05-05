@@ -370,6 +370,13 @@ struct bpf_link_create_opts {
 		struct {
 			__u64 cookie;
 		} tracing;
+		struct {
+			union {
+				__u32 relative_fd;
+				__u32 relative_id;
+			};
+			__u32 expected_revision;
+		} tcx;
 	};
 	size_t :0;
 };
