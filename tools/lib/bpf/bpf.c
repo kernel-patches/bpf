@@ -746,6 +746,11 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_TCX_INGRESS:
+	case BPF_TCX_EGRESS:
+		attr.link_create.tcx.relative_fd = OPTS_GET(opts, tcx.relative_fd, 0);
+		attr.link_create.tcx.expected_revision = OPTS_GET(opts, tcx.expected_revision, 0);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);

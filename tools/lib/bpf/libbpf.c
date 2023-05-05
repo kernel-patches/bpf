@@ -133,6 +133,7 @@ static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_KPROBE_MULTI]		= "kprobe_multi",
 	[BPF_LINK_TYPE_STRUCT_OPS]		= "struct_ops",
 	[BPF_LINK_TYPE_NETFILTER]		= "netfilter",
+	[BPF_LINK_TYPE_TCX]			= "tcx",
 };
 
 static const char * const map_type_name[] = {
@@ -11685,11 +11686,10 @@ static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_li
 }
 
 static struct bpf_link *
-bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
-		       const char *target_name)
+bpf_program__attach_fd_opts(const struct bpf_program *prog,
+			    const struct bpf_link_create_opts *opts,
+			    int target_fd, const char *target_name)
 {
-	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
-			    .target_btf_id = btf_id);
 	enum bpf_attach_type attach_type;
 	char errmsg[STRERR_BUFSIZE];
 	struct bpf_link *link;
@@ -11707,7 +11707,7 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	link->detach = &bpf_link__detach_fd;
 
 	attach_type = bpf_program__expected_attach_type(prog);
-	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, &opts);
+	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, opts);
 	if (link_fd < 0) {
 		link_fd = -errno;
 		free(link);
@@ -11718,6 +11718,17 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	}
 	link->fd = link_fd;
 	return link;
+}
+
+static struct bpf_link *
+bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
+		       const char *target_name)
+{
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		.target_btf_id = btf_id,
+	);
+
+	return bpf_program__attach_fd_opts(prog, &opts, target_fd, target_name);
 }
 
 struct bpf_link *
@@ -11736,6 +11747,29 @@ struct bpf_link *bpf_program__attach_xdp(const struct bpf_program *prog, int ifi
 {
 	/* target_fd/target_ifindex use the same field in LINK_CREATE */
 	return bpf_program__attach_fd(prog, ifindex, 0, "xdp");
+}
+
+struct bpf_link *
+bpf_program__attach_tcx_opts(const struct bpf_program *prog,
+			     const struct bpf_tcx_opts *opts)
+{
+	LIBBPF_OPTS(bpf_link_create_opts, link_create_opts);
+	int ifindex = OPTS_GET(opts, ifindex, 0);
+
+	if (!OPTS_VALID(opts, bpf_tcx_opts))
+		return libbpf_err_ptr(-EINVAL);
+	if (!ifindex) {
+		pr_warn("prog '%s': target netdevice ifindex cannot be zero\n",
+			prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+
+	link_create_opts.tcx.expected_revision = OPTS_GET(opts, expected_revision, 0);
+	link_create_opts.tcx.relative_fd = OPTS_GET(opts, relative_fd, 0);
+	link_create_opts.flags = OPTS_GET(opts, flags, 0);
+
+	/* target_fd/target_ifindex use the same field in LINK_CREATE */
+	return bpf_program__attach_fd_opts(prog, &link_create_opts, ifindex, "tc");
 }
 
 struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
