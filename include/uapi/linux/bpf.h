@@ -95,6 +95,10 @@ enum bpf_cgroup_iter_order {
 	BPF_CGROUP_ITER_ANCESTORS_UP,		/* walk ancestors upward. */
 };
 
+enum bpf_fs_iter_type {
+	BPF_FS_ITER_INODE = 0,	/* a specific inode */
+};
+
 union bpf_iter_link_info {
 	struct {
 		__u32	map_fd;
@@ -116,6 +120,10 @@ union bpf_iter_link_info {
 		__u32	pid;
 		__u32	pid_fd;
 	} task;
+	struct {
+		enum bpf_fs_iter_type type;
+		__u32 fd;
+	} fs;
 };
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */

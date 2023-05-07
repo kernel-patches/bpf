@@ -2120,6 +2120,8 @@ struct bpf_iter_aux_info {
 		enum bpf_iter_task_type	type;
 		u32 pid;
 	} task;
+	/* for fs iter */
+	void *fs;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
