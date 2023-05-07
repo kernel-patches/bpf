@@ -97,6 +97,7 @@ enum bpf_cgroup_iter_order {
 
 enum bpf_fs_iter_type {
 	BPF_FS_ITER_INODE = 0,	/* a specific inode */
+	BPF_FS_ITER_MNT,	/* a specific mount */
 };
 
 union bpf_iter_link_info {
