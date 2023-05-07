@@ -22,6 +22,7 @@
 #include <linux/security.h>
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
+#include <uapi/linux/mman.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -2186,6 +2187,27 @@ __bpf_kfunc struct task_struct *bpf_task_from_pid(s32 pid)
 	return p;
 }
 
+__bpf_kfunc void bpf_filemap_cachestat(struct inode *inode, unsigned long from,
+				       unsigned long last, struct cachestat *cs)
+{
+	filemap_cachestat(inode->i_mapping, from, last, cs);
+}
+
+__bpf_kfunc long bpf_filemap_find_present(struct inode *inode, unsigned long from,
+					  unsigned long last)
+{
+	unsigned long index = from;
+
+	if (!xa_find(&inode->i_mapping->i_pages, &index, last, XA_PRESENT))
+		return ULONG_MAX;
+	return index;
+}
+
+__bpf_kfunc long bpf_filemap_get_order(struct inode *inode, unsigned long index)
+{
+	return xa_get_order(&inode->i_mapping->i_pages, index);
+}
+
 /**
  * bpf_dynptr_slice() - Obtain a read-only pointer to the dynptr data.
  * @ptr: The dynptr whose data slice to retrieve
@@ -2425,6 +2447,10 @@ BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
+/* TODO: KF_TRUSTED_ARGS is missing */
+BTF_ID_FLAGS(func, bpf_filemap_cachestat);
+BTF_ID_FLAGS(func, bpf_filemap_find_present);
+BTF_ID_FLAGS(func, bpf_filemap_get_order);
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

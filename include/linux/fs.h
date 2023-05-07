@@ -46,6 +46,7 @@
 
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
+#include <uapi/linux/mman.h>
 
 struct backing_dev_info;
 struct bdi_writeback;
@@ -3190,5 +3191,8 @@ extern int vfs_fadvise(struct file *file, loff_t offset, loff_t len,
 		       int advice);
 extern int generic_fadvise(struct file *file, loff_t offset, loff_t len,
 			   int advice);
+
+extern void filemap_cachestat(struct address_space *mapping, pgoff_t first_index,
+			      pgoff_t last_index, struct cachestat *cs);
 
 #endif /* _LINUX_FS_H */
