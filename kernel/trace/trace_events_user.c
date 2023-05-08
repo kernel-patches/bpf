@@ -939,11 +939,12 @@ discard:
 static void user_event_perf(struct user_event *user, struct iov_iter *i,
 			    void *tpdata, bool *faulted)
 {
+	bool bpf_prog = bpf_prog_array_valid(&user->call);
 	struct hlist_head *perf_head;
 
 	perf_head = this_cpu_ptr(user->call.perf_events);
 
-	if (perf_head && !hlist_empty(perf_head)) {
+	if (perf_head && (!hlist_empty(perf_head) || bpf_prog)) {
 		struct trace_entry *perf_entry;
 		struct pt_regs *regs;
 		size_t size = sizeof(*perf_entry) + i->count;
@@ -964,9 +965,9 @@ static void user_event_perf(struct user_event *user, struct iov_iter *i,
 		    unlikely(user_event_validate(user, perf_entry, size)))
 			goto discard;
 
-		perf_trace_buf_submit(perf_entry, size, context,
-				      user->call.event.type, 1, regs,
-				      perf_head, NULL);
+		perf_trace_run_bpf_submit(perf_entry, size, context,
+					  &user->call, 1, regs,
+					  perf_head, NULL);
 
 		return;
 discard:
