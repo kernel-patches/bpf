@@ -1105,7 +1105,6 @@ static u32 __bnxt_rx_agg_pages(struct bnxt *bp,
 			unsigned int nr_frags;
 
 			nr_frags = --shinfo->nr_frags;
-			__skb_frag_set_page(&shinfo->frags[nr_frags], NULL);
 			cons_rx_buf->page = page;
 
 			/* Update prod since possibly some pages have been
