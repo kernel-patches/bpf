@@ -1963,6 +1963,11 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 			     USER_SOCKPTR(optlen));
 }
 
+bool sock_bpf_bypass_getsockopt(int level, int optname)
+{
+	return false;
+}
+
 /*
  * Initialize an sk_lock.
  *

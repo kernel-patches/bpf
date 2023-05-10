@@ -387,10 +387,12 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
 	int __ret = retval;						       \
 	if (cgroup_bpf_enabled(CGROUP_GETSOCKOPT) &&			       \
 	    cgroup_bpf_sock_enabled(sock, CGROUP_GETSOCKOPT))		       \
-		if (!(sock)->sk_prot->bpf_bypass_getsockopt ||		       \
-		    !INDIRECT_CALL_INET_1((sock)->sk_prot->bpf_bypass_getsockopt, \
+		if (((level != SOL_SOCKET) ||				       \
+		     !sock_bpf_bypass_getsockopt(level, optname)) &&	       \
+		    (!(sock)->sk_prot->bpf_bypass_getsockopt ||		       \
+		     !INDIRECT_CALL_INET_1((sock)->sk_prot->bpf_bypass_getsockopt, \
 					tcp_bpf_bypass_getsockopt,	       \
-					level, optname))		       \
+					level, optname)))		       \
 			__ret = __cgroup_bpf_run_filter_getsockopt(	       \
 				sock, level, optname, optval, optlen,	       \
 				max_optlen, retval);			       \
