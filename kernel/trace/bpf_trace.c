@@ -2753,6 +2753,37 @@ static int get_modules_for_addrs(struct module ***mods, unsigned long *addrs, u3
 	return arr.mods_cnt;
 }
 
+static inline int check_kprobe_address_safe(unsigned long addr)
+{
+	if (within_kprobe_blacklist(addr))
+		return -EINVAL;
+	else
+		return 0;
+}
+
+static int check_bpf_kprobe_addrs_safe(unsigned long *addrs, int num)
+{
+	int i, cnt;
+	char symname[KSYM_NAME_LEN];
+
+	for (i = 0; i < num; ++i) {
+		if (check_kprobe_address_safe((unsigned long)addrs[i])) {
+			lookup_symbol_name(addrs[i], symname);
+			pr_warn("bpf_kprobe: %s at %lx is blacklisted\n", symname, addrs[i]);
+			/* mark blacklisted symbol for remove */
+			addrs[i] = 0;
+		}
+	}
+
+	/* remove blacklisted symbol from addrs */
+	for (i = 0, cnt = 0; i < num; ++i) {
+		if (addrs[i])
+			addrs[cnt++]  = addrs[i];
+	}
+
+	return cnt;
+}
+
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	struct bpf_kprobe_multi_link *link = NULL;
@@ -2847,6 +2878,12 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		link->fp.exit_handler = kprobe_multi_link_handler;
 	else
 		link->fp.entry_handler = kprobe_multi_link_handler;
+
+	cnt = check_bpf_kprobe_addrs_safe(addrs, cnt);
+	if (!cnt) {
+		err = -EINVAL;
+		goto error;
+	}
 
 	link->addrs = addrs;
 	link->cookies = cookies;
