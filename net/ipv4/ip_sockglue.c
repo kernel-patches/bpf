@@ -1341,8 +1341,8 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case IP_TRANSPARENT:
-		if (!!val && !sockopt_ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) &&
-		    !sockopt_ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN)) {
+		if (!!val && !sockopt_ns_capable_any(sock_net(sk)->user_ns, CAP_NET_RAW,
+						     CAP_NET_ADMIN)) {
 			err = -EPERM;
 			break;
 		}
