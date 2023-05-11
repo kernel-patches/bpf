@@ -285,12 +285,15 @@ static void cgroup_bpf_release(struct work_struct *work)
 	mutex_lock(&cgroup_mutex);
 
 	for (atype = 0; atype < ARRAY_SIZE(cgrp->bpf.progs); atype++) {
-		struct hlist_head *progs = &cgrp->bpf.progs[atype];
+		struct hlist_head *progs;
 		struct bpf_prog_list *pl;
 		struct hlist_node *pltmp;
 
+		progs = rcu_dereference_protected(&cgrp->bpf.progs[atype],
+						  lockdep_is_held(&cgroup_mutex));
+
 		hlist_for_each_entry_safe(pl, pltmp, progs, node) {
-			hlist_del(&pl->node);
+			hlist_del_rcu(&pl->node);
 			if (pl->prog) {
 				if (pl->prog->expected_attach_type == BPF_LSM_CGROUP)
 					bpf_trampoline_unlink_cgroup_shim(pl->prog);
@@ -301,7 +304,7 @@ static void cgroup_bpf_release(struct work_struct *work)
 					bpf_trampoline_unlink_cgroup_shim(pl->link->link.prog);
 				bpf_cgroup_link_auto_detach(pl->link);
 			}
-			kfree(pl);
+			kfree_rcu(pl, rcu);
 			static_branch_dec(&cgroup_bpf_enabled_key[atype]);
 		}
 		old_array = rcu_dereference_protected(
@@ -352,12 +355,12 @@ static struct bpf_prog *prog_list_prog(struct bpf_prog_list *pl)
 /* count number of elements in the list.
  * it's slow but the list cannot be long
  */
-static u32 prog_list_length(struct hlist_head *head)
+static u32 prog_list_length(struct hlist_head __rcu *head)
 {
 	struct bpf_prog_list *pl;
 	u32 cnt = 0;
 
-	hlist_for_each_entry(pl, head, node) {
+	hlist_for_each_entry_rcu(pl, head, node) {
 		if (!prog_list_prog(pl))
 			continue;
 		cnt++;
@@ -553,7 +556,7 @@ cleanup:
 
 #define BPF_CGROUP_MAX_PROGS 64
 
-static struct bpf_prog_list *find_attach_entry(struct hlist_head *progs,
+static struct bpf_prog_list *find_attach_entry(struct hlist_head __rcu *progs,
 					       struct bpf_prog *prog,
 					       struct bpf_cgroup_link *link,
 					       struct bpf_prog *replace_prog,
@@ -565,10 +568,10 @@ static struct bpf_prog_list *find_attach_entry(struct hlist_head *progs,
 	if (!allow_multi) {
 		if (hlist_empty(progs))
 			return NULL;
-		return hlist_entry(progs->first, typeof(*pl), node);
+		return hlist_entry(rcu_dereference_raw(progs)->first, typeof(*pl), node);
 	}
 
-	hlist_for_each_entry(pl, progs, node) {
+	hlist_for_each_entry_rcu(pl, progs, node) {
 		if (prog && pl->prog == prog && prog != replace_prog)
 			/* disallow attaching the same prog twice */
 			return ERR_PTR(-EINVAL);
@@ -579,7 +582,7 @@ static struct bpf_prog_list *find_attach_entry(struct hlist_head *progs,
 
 	/* direct prog multi-attach w/ replacement case */
 	if (replace_prog) {
-		hlist_for_each_entry(pl, progs, node) {
+		hlist_for_each_entry_rcu(pl, progs, node) {
 			if (pl->prog == replace_prog)
 				/* a match found */
 				return pl;
@@ -615,8 +618,8 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	struct bpf_cgroup_storage *new_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_prog *new_prog = prog ? : link->link.prog;
 	enum cgroup_bpf_attach_type atype;
+	struct hlist_head __rcu *progs;
 	struct bpf_prog_list *pl;
-	struct hlist_head *progs;
 	int err;
 
 	if (((flags & BPF_F_ALLOW_OVERRIDE) && (flags & BPF_F_ALLOW_MULTI)) ||
@@ -658,6 +661,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 				      prog ? : link->link.prog, cgrp))
 		return -ENOMEM;
 
+	WRITE_ONCE(cgrp->bpf.flags[atype], saved_flags);
 	if (pl) {
 		old_prog = pl->prog;
 	} else {
@@ -669,12 +673,12 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 			return -ENOMEM;
 		}
 		if (hlist_empty(progs))
-			hlist_add_head(&pl->node, progs);
+			hlist_add_head_rcu(&pl->node, progs);
 		else
-			hlist_for_each(last, progs) {
+			__hlist_for_each_rcu(last, progs) {
 				if (last->next)
 					continue;
-				hlist_add_behind(&pl->node, last);
+				hlist_add_behind_rcu(&pl->node, last);
 				break;
 			}
 	}
@@ -682,7 +686,6 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	pl->prog = prog;
 	pl->link = link;
 	bpf_cgroup_storages_assign(pl->storage, storage);
-	cgrp->bpf.flags[atype] = saved_flags;
 
 	if (type == BPF_LSM_CGROUP) {
 		err = bpf_trampoline_link_cgroup_shim(new_prog, atype);
@@ -796,7 +799,7 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	enum cgroup_bpf_attach_type atype;
 	struct bpf_prog *old_prog;
 	struct bpf_prog_list *pl;
-	struct hlist_head *progs;
+	struct hlist_head __rcu *progs;
 	bool found = false;
 
 	atype = bpf_cgroup_atype_find(link->type, new_prog->aux->attach_btf_id);
@@ -808,7 +811,7 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	if (link->link.prog->type != new_prog->type)
 		return -EINVAL;
 
-	hlist_for_each_entry(pl, progs, node) {
+	hlist_for_each_entry_rcu(pl, progs, node) {
 		if (pl->link == link) {
 			found = true;
 			break;
@@ -847,7 +850,7 @@ out_unlock:
 	return ret;
 }
 
-static struct bpf_prog_list *find_detach_entry(struct hlist_head *progs,
+static struct bpf_prog_list *find_detach_entry(struct hlist_head __rcu *progs,
 					       struct bpf_prog *prog,
 					       struct bpf_cgroup_link *link,
 					       bool allow_multi)
@@ -862,7 +865,7 @@ static struct bpf_prog_list *find_detach_entry(struct hlist_head *progs,
 		/* to maintain backward compatibility NONE and OVERRIDE cgroups
 		 * allow detaching with invalid FD (prog==NULL) in legacy mode
 		 */
-		return hlist_entry(progs->first, typeof(*pl), node);
+		return hlist_entry(rcu_dereference_raw(progs)->first, typeof(*pl), node);
 	}
 
 	if (!prog && !link)
@@ -872,7 +875,7 @@ static struct bpf_prog_list *find_detach_entry(struct hlist_head *progs,
 		return ERR_PTR(-EINVAL);
 
 	/* find the prog or link and detach it */
-	hlist_for_each_entry(pl, progs, node) {
+	hlist_for_each_entry_rcu(pl, progs, node) {
 		if (pl->prog == prog && pl->link == link)
 			return pl;
 	}
@@ -894,9 +897,9 @@ static void purge_effective_progs(struct cgroup *cgrp, struct bpf_prog *prog,
 				  enum cgroup_bpf_attach_type atype)
 {
 	struct cgroup_subsys_state *css;
+	struct hlist_head __rcu *head;
 	struct bpf_prog_array *progs;
 	struct bpf_prog_list *pl;
-	struct hlist_head *head;
 	struct cgroup *cg;
 	int pos;
 
@@ -913,7 +916,7 @@ static void purge_effective_progs(struct cgroup *cgrp, struct bpf_prog *prog,
 				continue;
 
 			head = &cg->bpf.progs[atype];
-			hlist_for_each_entry(pl, head, node) {
+			hlist_for_each_entry_rcu(pl, head, node) {
 				if (!prog_list_prog(pl))
 					continue;
 				if (pl->prog == prog && pl->link == link)
@@ -950,9 +953,9 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 			       struct bpf_cgroup_link *link, enum bpf_attach_type type)
 {
 	enum cgroup_bpf_attach_type atype;
+	struct hlist_head __rcu *progs;
 	struct bpf_prog *old_prog;
 	struct bpf_prog_list *pl;
-	struct hlist_head *progs;
 	u32 attach_btf_id = 0;
 	u32 flags;
 
@@ -989,12 +992,12 @@ static int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	}
 
 	/* now can actually delete it from this cgroup list */
-	hlist_del(&pl->node);
+	hlist_del_rcu(&pl->node);
 
 	kfree(pl);
 	if (hlist_empty(progs))
 		/* last program was detached, reset flags to zero */
-		cgrp->bpf.flags[atype] = 0;
+		WRITE_ONCE(cgrp->bpf.flags[atype], 0);
 	if (old_prog) {
 		if (type == BPF_LSM_CGROUP)
 			bpf_trampoline_unlink_cgroup_shim(old_prog);
@@ -1022,10 +1025,10 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 	__u32 __user *prog_attach_flags = u64_to_user_ptr(attr->query.prog_attach_flags);
 	bool effective_query = attr->query.query_flags & BPF_F_QUERY_EFFECTIVE;
 	__u32 __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+	struct bpf_prog_array *effective[MAX_CGROUP_BPF_ATTACH_TYPE];
 	enum bpf_attach_type type = attr->query.attach_type;
 	enum cgroup_bpf_attach_type from_atype, to_atype;
 	enum cgroup_bpf_attach_type atype;
-	struct bpf_prog_array *effective;
 	int cnt, ret = 0, i;
 	int total_cnt = 0;
 	u32 flags;
@@ -1046,14 +1049,15 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		if (from_atype < 0)
 			return -EINVAL;
 		to_atype = from_atype;
-		flags = cgrp->bpf.flags[from_atype];
+		flags = READ_ONCE(cgrp->bpf.flags[from_atype]);
 	}
 
 	for (atype = from_atype; atype <= to_atype; atype++) {
 		if (effective_query) {
-			effective = rcu_dereference_protected(cgrp->bpf.effective[atype],
-							      lockdep_is_held(&cgroup_mutex));
-			total_cnt += bpf_prog_array_length(effective);
+			effective[atype] = rcu_dereference_protected(
+						cgrp->bpf.effective[atype],
+						lockdep_is_held(&cgroup_mutex));
+			total_cnt += bpf_prog_array_length(effective[atype]);
 		} else {
 			total_cnt += prog_list_length(&cgrp->bpf.progs[atype]);
 		}
@@ -1076,12 +1080,10 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 
 	for (atype = from_atype; atype <= to_atype && total_cnt; atype++) {
 		if (effective_query) {
-			effective = rcu_dereference_protected(cgrp->bpf.effective[atype],
-							      lockdep_is_held(&cgroup_mutex));
-			cnt = min_t(int, bpf_prog_array_length(effective), total_cnt);
-			ret = bpf_prog_array_copy_to_user(effective, prog_ids, cnt);
+			cnt = min_t(int, bpf_prog_array_length(effective[atype]), total_cnt);
+			ret = bpf_prog_array_copy_to_user(effective[atype], prog_ids, cnt);
 		} else {
-			struct hlist_head *progs;
+			struct hlist_head __rcu *progs;
 			struct bpf_prog_list *pl;
 			struct bpf_prog *prog;
 			u32 id;
@@ -1089,7 +1091,7 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 			progs = &cgrp->bpf.progs[atype];
 			cnt = min_t(int, prog_list_length(progs), total_cnt);
 			i = 0;
-			hlist_for_each_entry(pl, progs, node) {
+			hlist_for_each_entry_rcu(pl, progs, node) {
 				prog = prog_list_prog(pl);
 				id = prog->aux->id;
 				if (copy_to_user(prog_ids + i, &id, sizeof(id)))
@@ -1099,7 +1101,7 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 			}
 
 			if (prog_attach_flags) {
-				flags = cgrp->bpf.flags[atype];
+				flags = READ_ONCE(cgrp->bpf.flags[atype]);
 
 				for (i = 0; i < cnt; i++)
 					if (copy_to_user(prog_attach_flags + i,
@@ -1112,6 +1114,8 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		prog_ids += cnt;
 		total_cnt -= cnt;
 	}
+	if (total_cnt != 0)
+		return -EAGAIN; /* raced with the detach */
 	return ret;
 }
 
@@ -1120,9 +1124,9 @@ static int cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 {
 	int ret;
 
-	mutex_lock(&cgroup_mutex);
+	rcu_read_lock();
 	ret = __cgroup_bpf_query(cgrp, attr, uattr);
-	mutex_unlock(&cgroup_mutex);
+	rcu_read_unlock();
 	return ret;
 }
 
