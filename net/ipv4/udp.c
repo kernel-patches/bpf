@@ -2426,7 +2426,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	struct rtable *rt = skb_rtable(skb);
 	__be32 saddr, daddr;
 	struct net *net = dev_net(skb->dev);
-	bool refcounted;
+	bool refcounted, prefetched;
 	int drop_reason;
 
 	drop_reason = SKB_DROP_REASON_NOT_SPECIFIED;
@@ -2455,10 +2455,27 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	if (udp4_csum_init(skb, uh, proto))
 		goto csum_error;
 
-	sk = skb_steal_sock(skb, &refcounted);
+	sk = skb_steal_sock(skb, &refcounted, &prefetched);
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);
 		int ret;
+
+		if (prefetched) {
+			struct sock *reuse_sk = lookup_reuseport(net, sk, skb,
+								 saddr, uh->source,
+								 daddr, ntohs(uh->dest));
+			if (reuse_sk) {
+				if (reuse_sk != sk) {
+					if (refcounted) {
+						sock_put(sk);
+						refcounted = false;
+					}
+					if (IS_ERR(reuse_sk))
+						goto no_sk;
+				}
+				sk = reuse_sk;
+			}
+		}
 
 		if (unlikely(rcu_dereference(sk->sk_rx_dst) != dst))
 			udp_sk_rx_dst_set(sk, dst);
@@ -2476,7 +2493,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	sk = __udp4_lib_lookup_skb(skb, uh->source, uh->dest, udptable);
 	if (sk)
 		return udp_unicast_rcv_skb(sk, skb, uh);
-
+no_sk:
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
 		goto drop;
 	nf_reset_ct(skb);
