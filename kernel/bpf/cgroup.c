@@ -1021,21 +1021,23 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 {
 	__u32 __user *prog_attach_flags = u64_to_user_ptr(attr->query.prog_attach_flags);
 	bool effective_query = attr->query.query_flags & BPF_F_QUERY_EFFECTIVE;
-	__u32 __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+	__u32 __user *user_prog_ids = u64_to_user_ptr(attr->query.prog_ids);
 	enum bpf_attach_type type = attr->query.attach_type;
 	enum cgroup_bpf_attach_type from_atype, to_atype;
 	enum cgroup_bpf_attach_type atype;
 	struct bpf_prog_array *effective;
 	int cnt, ret = 0, i;
 	int total_cnt = 0;
+	int remaining;
 	u32 flags;
+	u32 *p;
 
 	if (effective_query && prog_attach_flags)
 		return -EINVAL;
 
 	if (type == BPF_LSM_CGROUP) {
 		if (!effective_query && attr->query.prog_cnt &&
-		    prog_ids && !prog_attach_flags)
+		    user_prog_ids && !prog_attach_flags)
 			return -EINVAL;
 
 		from_atype = CGROUP_LSM_START;
@@ -1065,7 +1067,7 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		return -EFAULT;
 	if (copy_to_user(&uattr->query.prog_cnt, &total_cnt, sizeof(total_cnt)))
 		return -EFAULT;
-	if (attr->query.prog_cnt == 0 || !prog_ids || !total_cnt)
+	if (attr->query.prog_cnt == 0 || !user_prog_ids || !total_cnt)
 		/* return early if user requested only program count + flags */
 		return 0;
 
@@ -1074,12 +1076,14 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 		ret = -ENOSPC;
 	}
 
-	for (atype = from_atype; atype <= to_atype && total_cnt; atype++) {
+	p = user_prog_ids;
+	remaining = total_cnt;
+	for (atype = from_atype; atype <= to_atype && remaining; atype++) {
 		if (effective_query) {
 			effective = rcu_dereference_protected(cgrp->bpf.effective[atype],
 							      lockdep_is_held(&cgroup_mutex));
-			cnt = min_t(int, bpf_prog_array_length(effective), total_cnt);
-			ret = bpf_prog_array_copy_to_user(effective, prog_ids, cnt);
+			cnt = min_t(int, bpf_prog_array_length(effective), remaining);
+			ret = bpf_prog_array_copy_to_user(effective, p, cnt);
 		} else {
 			struct hlist_head *progs;
 			struct bpf_prog_list *pl;
@@ -1087,12 +1091,12 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 			u32 id;
 
 			progs = &cgrp->bpf.progs[atype];
-			cnt = min_t(int, prog_list_length(progs), total_cnt);
+			cnt = min_t(int, prog_list_length(progs), remaining);
 			i = 0;
 			hlist_for_each_entry(pl, progs, node) {
 				prog = prog_list_prog(pl);
 				id = prog->aux->id;
-				if (copy_to_user(prog_ids + i, &id, sizeof(id)))
+				if (copy_to_user(p + i, &id, sizeof(id)))
 					return -EFAULT;
 				if (++i == cnt)
 					break;
@@ -1109,8 +1113,8 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 			}
 		}
 
-		prog_ids += cnt;
-		total_cnt -= cnt;
+		p += cnt;
+		remaining -= cnt;
 	}
 	return ret;
 }
