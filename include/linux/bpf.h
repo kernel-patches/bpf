@@ -1778,6 +1778,8 @@ void bpf_prog_array_free(struct bpf_prog_array *progs);
 void bpf_prog_array_free_sleepable(struct bpf_prog_array *progs);
 int bpf_prog_array_length(struct bpf_prog_array *progs);
 bool bpf_prog_array_is_empty(struct bpf_prog_array *array);
+int bpf_prog_array_copy_core(struct bpf_prog_array *array,
+			     u32 *prog_ids, u32 request_cnt);
 int bpf_prog_array_copy_to_user(struct bpf_prog_array *progs,
 				__u32 __user *prog_ids, u32 cnt);
 

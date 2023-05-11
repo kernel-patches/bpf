@@ -2306,9 +2306,8 @@ bool bpf_prog_array_is_empty(struct bpf_prog_array *array)
 	return true;
 }
 
-static bool bpf_prog_array_copy_core(struct bpf_prog_array *array,
-				     u32 *prog_ids,
-				     u32 request_cnt)
+int bpf_prog_array_copy_core(struct bpf_prog_array *array,
+			     u32 *prog_ids, u32 request_cnt)
 {
 	struct bpf_prog_array_item *item;
 	int i = 0;
@@ -2323,14 +2322,14 @@ static bool bpf_prog_array_copy_core(struct bpf_prog_array *array,
 		}
 	}
 
-	return !!(item->prog);
+	return !!(item->prog) ? -ENOSPC : 0;
 }
 
 int bpf_prog_array_copy_to_user(struct bpf_prog_array *array,
 				__u32 __user *prog_ids, u32 cnt)
 {
 	unsigned long err = 0;
-	bool nospc;
+	int nospc;
 	u32 *ids;
 
 	/* users of this function are doing:
@@ -2348,7 +2347,7 @@ int bpf_prog_array_copy_to_user(struct bpf_prog_array *array,
 	if (err)
 		return -EFAULT;
 	if (nospc)
-		return -ENOSPC;
+		return nospc;
 	return 0;
 }
 
@@ -2506,8 +2505,7 @@ int bpf_prog_array_copy_info(struct bpf_prog_array *array,
 		return 0;
 
 	/* this function is called under trace/bpf_trace.c: bpf_event_mutex */
-	return bpf_prog_array_copy_core(array, prog_ids, request_cnt) ? -ENOSPC
-								     : 0;
+	return bpf_prog_array_copy_core(array, prog_ids, request_cnt);
 }
 
 void __bpf_free_used_maps(struct bpf_prog_aux *aux,
