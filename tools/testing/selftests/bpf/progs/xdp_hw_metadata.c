@@ -20,6 +20,12 @@ extern int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx,
 					 __u64 *timestamp) __ksym;
 extern int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, __u32 *hash,
 				    enum xdp_rss_hash_type *rss_type) __ksym;
+extern int bpf_xdp_metadata_rx_ctag(const struct xdp_md *ctx,
+				    __u16 *vlan_tag) __ksym;
+extern int bpf_xdp_metadata_rx_stag(const struct xdp_md *ctx,
+				    __u16 *vlan_tag) __ksym;
+extern int bpf_xdp_metadata_rx_csum_lvl(const struct xdp_md *ctx,
+					__u8 *csum_level) __ksym;
 
 SEC("xdp")
 int rx(struct xdp_md *ctx)
@@ -83,15 +89,39 @@ int rx(struct xdp_md *ctx)
 		return XDP_PASS;
 	}
 
+	meta->hint_valid = 0;
+
 	err = bpf_xdp_metadata_rx_timestamp(ctx, &meta->rx_timestamp);
-	if (!err)
+	if (err) {
+		meta->rx_timestamp_err = err;
+	} else {
+		meta->hint_valid |= XDP_META_FIELD_TS;
 		meta->xdp_timestamp = bpf_ktime_get_tai_ns();
-	else
-		meta->rx_timestamp = 0; /* Used by AF_XDP as not avail signal */
+	}
 
 	err = bpf_xdp_metadata_rx_hash(ctx, &meta->rx_hash, &meta->rx_hash_type);
-	if (err < 0)
-		meta->rx_hash_err = err; /* Used by AF_XDP as no hash signal */
+	if (err)
+		meta->rx_hash_err = err;
+	else
+		meta->hint_valid |= XDP_META_FIELD_RSS;
+
+	err = bpf_xdp_metadata_rx_ctag(ctx, &meta->rx_ctag);
+	if (err)
+		meta->rx_ctag_err = err;
+	else
+		meta->hint_valid |= XDP_META_FIELD_CTAG;
+
+	err = bpf_xdp_metadata_rx_stag(ctx, &meta->rx_stag);
+	if (err)
+		meta->rx_stag_err = err;
+	else
+		meta->hint_valid |= XDP_META_FIELD_STAG;
+
+	err = bpf_xdp_metadata_rx_csum_lvl(ctx, &meta->rx_csum_lvl);
+	if (err)
+		meta->rx_csum_err = err;
+	else
+		meta->hint_valid |= XDP_META_FIELD_CSUM_LVL;
 
 	__sync_add_and_fetch(&pkts_redir, 1);
 	return bpf_redirect_map(&xsk, ctx->rx_queue_index, XDP_PASS);
