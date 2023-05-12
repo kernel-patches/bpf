@@ -389,6 +389,10 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 			   bpf_xdp_metadata_rx_timestamp) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_HASH, \
 			   bpf_xdp_metadata_rx_hash) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_CTAG, \
+			   bpf_xdp_metadata_rx_ctag) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_STAG, \
+			   bpf_xdp_metadata_rx_stag) \
 
 enum {
 #define XDP_METADATA_KFUNC(name, _) name,

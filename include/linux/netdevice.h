@@ -1655,6 +1655,8 @@ struct xdp_metadata_ops {
 	int	(*xmo_rx_timestamp)(const struct xdp_md *ctx, u64 *timestamp);
 	int	(*xmo_rx_hash)(const struct xdp_md *ctx, u32 *hash,
 			       enum xdp_rss_hash_type *rss_type);
+	int	(*xmo_rx_ctag)(const struct xdp_md *ctx, u16 *vlan_tag);
+	int	(*xmo_rx_stag)(const struct xdp_md *ctx, u16 *vlan_tag);
 };
 
 /**
