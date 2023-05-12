@@ -393,6 +393,8 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 			   bpf_xdp_metadata_rx_ctag) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_STAG, \
 			   bpf_xdp_metadata_rx_stag) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_CSUM_LVL, \
+			   bpf_xdp_metadata_rx_csum_lvl) \
 
 enum {
 #define XDP_METADATA_KFUNC(name, _) name,

@@ -762,6 +762,18 @@ __bpf_kfunc int bpf_xdp_metadata_rx_stag(const struct xdp_md *ctx, u16 *vlan_tag
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_metadata_rx_csum_lvl - Get depth at which HW has checked the checksum.
+ * @ctx: XDP context pointer.
+ * @csum_level: Return value pointer.
+ *
+ * Returns 0 on success (HW has checked the checksum) or ``-errno`` on error.
+ */
+__bpf_kfunc int bpf_xdp_metadata_rx_csum_lvl(const struct xdp_md *ctx, u8 *csum_level)
+{
+	return -EOPNOTSUPP;
+}
+
 __diag_pop();
 
 BTF_SET8_START(xdp_metadata_kfunc_ids)

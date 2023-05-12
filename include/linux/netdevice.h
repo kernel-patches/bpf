@@ -1657,6 +1657,7 @@ struct xdp_metadata_ops {
 			       enum xdp_rss_hash_type *rss_type);
 	int	(*xmo_rx_ctag)(const struct xdp_md *ctx, u16 *vlan_tag);
 	int	(*xmo_rx_stag)(const struct xdp_md *ctx, u16 *vlan_tag);
+	int	(*xmo_rx_csum_lvl)(const struct xdp_md *ctx, u8 *csum_level);
 };
 
 /**
