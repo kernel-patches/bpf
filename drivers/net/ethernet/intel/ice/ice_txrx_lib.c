@@ -627,7 +627,51 @@ static int ice_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+/**
+ * ice_xdp_rx_ctag - VLAN tag XDP hint handler
+ * @ctx: XDP buff pointer
+ * @vlan_tag: destination address
+ *
+ * Copy VLAN tag (if was stripped) to the destination address.
+ */
+static int ice_xdp_rx_ctag(const struct xdp_md *ctx, u16 *vlan_tag)
+{
+	const struct ice_xdp_buff *xdp_ext = (void *)ctx;
+	netdev_features_t features;
+
+	features = xdp_ext->rx_ring->netdev->features;
+
+	if (!(features & NETIF_F_HW_VLAN_CTAG_RX))
+		return -EINVAL;
+
+	*vlan_tag = ice_get_vlan_tag_from_rx_desc(xdp_ext->eop_desc);
+	return 0;
+}
+
+/**
+ * ice_xdp_rx_stag - VLAN s-tag XDP hint handler
+ * @ctx: XDP buff pointer
+ * @vlan_tag: destination address
+ *
+ * Copy VLAN s-tag (if was stripped) to the destination address.
+ */
+static int ice_xdp_rx_stag(const struct xdp_md *ctx, u16 *vlan_tag)
+{
+	const struct ice_xdp_buff *xdp_ext = (void *)ctx;
+	netdev_features_t features;
+
+	features = xdp_ext->rx_ring->netdev->features;
+
+	if (!(features & NETIF_F_HW_VLAN_STAG_RX))
+		return -EINVAL;
+
+	*vlan_tag = ice_get_vlan_tag_from_rx_desc(xdp_ext->eop_desc);
+	return 0;
+}
+
 const struct xdp_metadata_ops ice_xdp_md_ops = {
 	.xmo_rx_timestamp		= ice_xdp_rx_hw_ts,
 	.xmo_rx_hash			= ice_xdp_rx_hash,
+	.xmo_rx_ctag			= ice_xdp_rx_ctag,
+	.xmo_rx_stag			= ice_xdp_rx_stag,
 };
