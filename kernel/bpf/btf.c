@@ -264,10 +264,19 @@ enum verifier_phase {
 	CHECK_TYPE,
 };
 
+enum resolve_mode {
+	RESOLVE_TBD,	/* To Be Determined */
+	RESOLVE_PTR,	/* Resolving for Pointer */
+	RESOLVE_STRUCT_OR_ARRAY,	/* Resolving for struct/union
+					 * or array
+					 */
+};
+
 struct resolve_vertex {
 	const struct btf_type *t;
 	u32 type_id;
 	u16 next_member;
+	enum resolve_mode parent_mode;
 };
 
 enum visit_state {
@@ -276,13 +285,6 @@ enum visit_state {
 	RESOLVED,
 };
 
-enum resolve_mode {
-	RESOLVE_TBD,	/* To Be Determined */
-	RESOLVE_PTR,	/* Resolving for Pointer */
-	RESOLVE_STRUCT_OR_ARRAY,	/* Resolving for struct/union
-					 * or array
-					 */
-};
 
 #define MAX_RESOLVE_DEPTH 32
 
@@ -1811,6 +1813,7 @@ static int env_stack_push(struct btf_verifier_env *env,
 	v->t = t;
 	v->type_id = type_id;
 	v->next_member = 0;
+	v->parent_mode = env->resolve_mode;
 
 	if (env->resolve_mode == RESOLVE_TBD) {
 		if (btf_type_is_ptr(t))
@@ -1832,13 +1835,15 @@ static void env_stack_pop_resolved(struct btf_verifier_env *env,
 				   u32 resolved_type_id,
 				   u32 resolved_size)
 {
-	u32 type_id = env->stack[--(env->top_stack)].type_id;
+	struct resolve_vertex *v = &env->stack[--(env->top_stack)];
+	u32 type_id = v->type_id;
 	struct btf *btf = env->btf;
 
 	type_id -= btf->start_id; /* adjust to local type id */
 	btf->resolved_sizes[type_id] = resolved_size;
 	btf->resolved_ids[type_id] = resolved_type_id;
 	env->visit_states[type_id] = RESOLVED;
+	env->resolve_mode = v->parent_mode;
 }
 
 static const struct resolve_vertex *env_stack_peak(struct btf_verifier_env *env)
@@ -4541,7 +4546,6 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 	struct btf *btf = env->btf;
 	u16 i;
 
-	env->resolve_mode = RESOLVE_TBD;
 	for_each_vsi_from(i, v->next_member, v->t, vsi) {
 		u32 var_type_id = vsi->type, type_id, type_size = 0;
 		const struct btf_type *var_type = btf_type_by_id(env->btf,
