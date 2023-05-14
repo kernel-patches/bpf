@@ -451,10 +451,16 @@ static const struct fetch_type *parse_btf_arg_type(int arg_idx,
 
 	return find_fetch_type(typestr, ctx->flags);
 }
+
 #else
 static struct btf *traceprobe_get_btf(void)
 {
 	return NULL;
+}
+
+static const struct btf_param *find_btf_func_param(const char *funcname, s32 *nr)
+{
+	return ERR_PTR(-EOPNOTSUPP);
 }
 
 static int parse_btf_arg(const char *varname, struct fetch_insn *code,
@@ -535,6 +541,11 @@ static int parse_probe_vars(char *arg, const struct fetch_type *t,
 #ifdef CONFIG_HAVE_FUNCTION_ARG_ACCESS_API
 	len = str_has_prefix(arg, "arg");
 	if (len && tparg_is_function_entry(ctx->flags)) {
+		if (strcmp(arg, "args") == 0) {
+			err = TP_ERR_BAD_VAR_ARGS;
+			goto inval;
+		}
+
 		ret = kstrtoul(arg + len, 10, &param);
 		if (ret)
 			goto inval;
@@ -1092,6 +1103,93 @@ void traceprobe_free_probe_arg(struct probe_arg *arg)
 	kfree(arg->name);
 	kfree(arg->comm);
 	kfree(arg->fmt);
+}
+
+/* Return new_argv which must be freed after use */
+const char **traceprobe_expand_meta_args(int argc, const char *argv[],
+					 int *new_argc, char *buf, int bufsize,
+					 struct traceprobe_parse_context *ctx)
+{
+	struct btf *btf = traceprobe_get_btf();
+	const struct btf_param *params = NULL;
+	int i, j, used, ret, args_idx = -1;
+	const char **new_argv = NULL;
+	int nr_skipped;
+
+	/* The first argument of tracepoint should be skipped. */
+	nr_skipped = ctx->flags & TPARG_FL_TPOINT ? 1 : 0;
+	for (i = 0; i < argc; i++)
+		if (!strcmp(argv[i], "$args")) {
+			trace_probe_log_set_index(i + 2);
+
+			if (!tparg_is_function_entry(ctx->flags)) {
+				trace_probe_log_err(0, NOFENTRY_ARGS);
+				return ERR_PTR(-EINVAL);
+			}
+
+			if (args_idx >= 0) {
+				trace_probe_log_err(0, DOUBLE_ARGS);
+				return ERR_PTR(-EINVAL);
+			}
+
+			args_idx = i;
+			params = find_btf_func_param(ctx->funcname, &ctx->nr_params);
+			if (IS_ERR(params)) {
+				trace_probe_log_err(0, NOSUP_BTFARG);
+				return (const char **)params;
+			}
+			ctx->params = params;
+		}
+
+	/* If target has no arguments, return NULL and the original argc. */
+	if (args_idx < 0 || ctx->nr_params < nr_skipped) {
+		*new_argc = argc;
+		return NULL;
+	}
+
+	*new_argc = argc - 1 + ctx->nr_params - nr_skipped;
+
+	new_argv = kcalloc(*new_argc, sizeof(char *), GFP_KERNEL);
+	if (!new_argv)
+		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i < args_idx; i++)
+		new_argv[i] = argv[i];
+
+	used = 0;
+	trace_probe_log_set_index(args_idx + 2);
+	for (i = 0; i < ctx->nr_params - nr_skipped; i++) {
+		const char *name;
+
+		name = btf_name_by_offset(btf, params[i + nr_skipped].name_off);
+		if (!name) {
+			trace_probe_log_err(0, NO_BTF_ENTRY);
+			ret = -ENOENT;
+			goto error;
+		}
+		ret = snprintf(buf + used, bufsize - used, "%s", name);
+		if (ret >= bufsize - used) {
+			trace_probe_log_err(0, ARGS_2LONG);
+			ret = -E2BIG;
+			goto error;
+		}
+		new_argv[args_idx + i] = buf + used;
+		used += ret + 1; /* include null byte */
+	}
+
+	/* Note: we have to skip $$args */
+	j = args_idx + ctx->nr_params - nr_skipped;
+	for (i = args_idx + 1; i < argc; i++, j++) {
+		if (WARN_ON(j >= *new_argc))
+			goto error;
+		new_argv[j] = argv[i];
+	}
+
+	return new_argv;
+
+error:
+	kfree(new_argv);
+	return ERR_PTR(ret);
 }
 
 int traceprobe_update_arg(struct probe_arg *arg)
