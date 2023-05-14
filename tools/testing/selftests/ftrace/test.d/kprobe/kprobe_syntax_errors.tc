@@ -103,4 +103,17 @@ check_error 'p vfs_read^%hoge'		# BAD_ADDR_SUFFIX
 check_error 'p ^vfs_read+10%return'	# BAD_RETPROBE
 fi
 
+# BTF arguments errors
+if grep -q "<argname>" README; then
+check_error 'p vfs_read args=^$args'		# BAD_VAR_ARGS
+check_error 'p vfs_read +0(^$args)'		# BAD_VAR_ARGS
+check_error 'p vfs_read $args ^$args'		# DOUBLE_ARGS
+check_error 'r vfs_read ^$args'			# NOFENTRY_ARGS
+check_error 'p vfs_read+8 ^$args'		# NOFENTRY_ARGS
+check_error 'p vfs_read ^hoge'			# NO_BTFARG
+check_error 'r kfree ^$retval'			# NO_RETVAL
+else
+check_error 'p vfs_read ^$args'			# NOSUP_BTFARG
+fi
+
 exit 0
