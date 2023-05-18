@@ -389,5 +389,6 @@ LIBBPF_1.2.0 {
 		bpf_link__update_map;
 		bpf_link_get_info_by_fd;
 		bpf_map_get_info_by_fd;
+		bpf_obj_pin_opts;
 		bpf_prog_get_info_by_fd;
 } LIBBPF_1.1.0;
