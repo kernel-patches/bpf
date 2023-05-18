@@ -108,4 +108,20 @@ struct xdp_desc {
 
 /* UMEM descriptor is __u64 */
 
+/* Flag indicating that the packet continues with the buffer pointed out by the
+ * next frame in the ring. The end of the packet is signalled by setting this
+ * bit to zero. For single buffer packets, every descriptor has 'options' set
+ * to 0 and this maintains backward compatibility.
+ */
+#define XDP_PKT_CONTD (1 << 0)
+
+/* Maximum number of descriptors supported as frags for a packet. So the total
+ * number of descriptors supported for a packet is XSK_DESC_MAX_FRAGS + 1. The
+ * max frags supported by skb is 16 for page sizes greater than 4K and 17 or
+ * more for 4K or lesser page sizes. XSK_DESC_MAX_FRAGS is set as the minimum
+ * value of 16 so that xsk applications see the same behavior for all
+ * architectures.
+ */
+#define XSK_DESC_MAX_FRAGS 16
+
 #endif /* _LINUX_IF_XDP_H */
