@@ -634,7 +634,7 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	 * in the tramopline image to finish before releasing
 	 * the trampoline image.
 	 */
-	synchronize_rcu_mult(call_rcu, call_rcu_tasks);
+	synchronize_rcu_mult(call_rcu_hurry, call_rcu_tasks);
 
 	__bpf_struct_ops_map_free(map);
 }
