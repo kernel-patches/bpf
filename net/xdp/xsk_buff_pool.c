@@ -189,6 +189,12 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 		goto err_unreg_pool;
 	}
 
+	if (!(netdev->xdp_features & NETDEV_XDP_ACT_NDO_ZC_SG) &&
+	    flags & XDP_USE_SG) {
+		err = -EOPNOTSUPP;
+		goto err_unreg_pool;
+	}
+
 	bpf.command = XDP_SETUP_XSK_POOL;
 	bpf.xsk.pool = pool;
 	bpf.xsk.queue_id = queue_id;
