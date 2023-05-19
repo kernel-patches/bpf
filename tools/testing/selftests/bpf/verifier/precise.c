@@ -180,15 +180,12 @@
 	.prog_type = BPF_PROG_TYPE_XDP,
 	.flags = BPF_F_TEST_STATE_FREQ,
 	.errstr = "mark_precise: frame0: last_idx 6 first_idx 6\
-	mark_precise: frame0: parent state regs=r4 stack=:\
+	mark_precise: frame0: parent state regs=r4 stack=-8:\
 	mark_precise: frame0: last_idx 5 first_idx 3\
-	mark_precise: frame0: regs=r4 stack= before 5\
-	mark_precise: frame0: regs=r4 stack= before 4\
+	mark_precise: frame0: regs=r4 stack=-8 before 5\
+	mark_precise: frame0: regs=r4 stack=-8 before 4\
 	mark_precise: frame0: regs= stack=-8 before 3\
 	mark_precise: frame0: falling back to forcing all scalars precise\
-	force_precise: frame0: forcing r0 to be precise\
-	force_precise: frame0: forcing r0 to be precise\
-	force_precise: frame0: forcing r0 to be precise\
 	force_precise: frame0: forcing r0 to be precise\
 	mark_precise: frame0: last_idx 6 first_idx 6\
 	mark_precise: frame0: parent state regs= stack=:",
