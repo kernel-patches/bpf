@@ -4022,17 +4022,6 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 
 	info.verified_insns = prog->aux->verified_insns;
 
-	if (!bpf_capable()) {
-		info.jited_prog_len = 0;
-		info.xlated_prog_len = 0;
-		info.nr_jited_ksyms = 0;
-		info.nr_jited_func_lens = 0;
-		info.nr_func_info = 0;
-		info.nr_line_info = 0;
-		info.nr_jited_line_info = 0;
-		goto done;
-	}
-
 	ulen = info.xlated_prog_len;
 	info.xlated_prog_len = bpf_prog_insn_size(prog);
 	if (info.xlated_prog_len && ulen) {
