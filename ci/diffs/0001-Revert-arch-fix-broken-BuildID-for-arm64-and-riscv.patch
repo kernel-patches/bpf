@@ -1,0 +1,30 @@
+From cb50dac513235c6996b9d26f959886ba1d7be607 Mon Sep 17 00:00:00 2001
+From: Eduard Zingerman <eddyz87@gmail.com>
+Date: Fri, 6 Jan 2023 13:59:26 +0200
+Subject: [PATCH] Revert "arch: fix broken BuildID for arm64 and riscv"
+
+This reverts commit 99cb0d917ffa1ab628bb67364ca9b162c07699b1.
+---
+ include/asm-generic/vmlinux.lds.h | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/include/asm-generic/vmlinux.lds.h b/include/asm-generic/vmlinux.lds.h
+index 659bf3b31c91..a94219e9916f 100644
+--- a/include/asm-generic/vmlinux.lds.h
++++ b/include/asm-generic/vmlinux.lds.h
+@@ -891,12 +891,7 @@
+ #define PRINTK_INDEX
+ #endif
+ 
+-/*
+- * Discard .note.GNU-stack, which is emitted as PROGBITS by the compiler.
+- * Otherwise, the type of .notes section would become PROGBITS instead of NOTES.
+- */
+ #define NOTES								\
+-	/DISCARD/ : { *(.note.GNU-stack) }				\
+ 	.notes : AT(ADDR(.notes) - LOAD_OFFSET) {			\
+ 		BOUNDED_SECTION_BY(.note.*, _notes)			\
+ 	} NOTES_HEADERS							\
+-- 
+2.39.0
+

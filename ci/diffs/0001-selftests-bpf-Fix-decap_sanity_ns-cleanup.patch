@@ -1,0 +1,36 @@
+From:   Ilya Leoshkevich <iii@linux.ibm.com>
+Subject: [PATCH bpf-next 07/24] selftests/bpf: Fix decap_sanity_ns cleanup
+Date:   Wed, 25 Jan 2023 22:38:00 +0100
+
+decap_sanity prints the following on the 1st run:
+
+    decap_sanity: sh: 1: Syntax error: Bad fd number
+
+and the following on the 2nd run:
+
+    Cannot create namespace file "/run/netns/decap_sanity_ns": File exists
+
+The problem is that the cleanup command has a typo and does nothing.
+Fix the typo.
+
+Signed-off-by: Ilya Leoshkevich <iii@linux.ibm.com>
+---
+ tools/testing/selftests/bpf/prog_tests/decap_sanity.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/decap_sanity.c b/tools/testing/selftests/bpf/prog_tests/decap_sanity.c
+index 0b2f73b88c53..2853883b7cbb 100644
+--- a/tools/testing/selftests/bpf/prog_tests/decap_sanity.c
++++ b/tools/testing/selftests/bpf/prog_tests/decap_sanity.c
+@@ -80,6 +80,6 @@ void test_decap_sanity(void)
+ 		bpf_tc_hook_destroy(&qdisc_hook);
+ 		close_netns(nstoken);
+ 	}
+-	system("ip netns del " NS_TEST " >& /dev/null");
++	system("ip netns del " NS_TEST " &> /dev/null");
+ 	decap_sanity__destroy(skel);
+ }
+-- 
+2.39.1
+
+
