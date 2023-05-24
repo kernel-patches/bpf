@@ -1,0 +1,50 @@
+From 11e456cae91e9044cb12c2b037b52c9b268925f7 Mon Sep 17 00:00:00 2001
+From: Rong Tao <rongtao@cestc.cn>
+Date: Fri, 24 Feb 2023 23:10:02 +0800
+Subject: [PATCH bpf] selftests/bpf: Fix compilation errors: Assign a value to
+ a constant
+
+Commit bc292ab00f6c("mm: introduce vma->vm_flags wrapper functions")
+turns the vm_flags into a const variable.
+
+Added bpf_find_vma test in commit f108662b27c9("selftests/bpf: Add tests
+for bpf_find_vma") to assign values to variables that declare const in
+find_vma_fail1.c programs, which is an error to the compiler and does not
+test BPF verifiers. It is better to replace 'const vm_flags_t vm_flags'
+with 'unsigned long vm_start' for testing.
+
+    $ make -C tools/testing/selftests/bpf/ -j8
+    ...
+    progs/find_vma_fail1.c:16:16: error: cannot assign to non-static data
+    member 'vm_flags' with const-qualified type 'const vm_flags_t' (aka
+    'const unsigned long')
+            vma->vm_flags |= 0x55;
+            ~~~~~~~~~~~~~ ^
+    ../tools/testing/selftests/bpf/tools/include/vmlinux.h:1898:20:
+    note: non-static data member 'vm_flags' declared const here
+                    const vm_flags_t vm_flags;
+                    ~~~~~~~~~~~`~~~~~~^~~~~~~~
+
+Signed-off-by: Rong Tao <rongtao@cestc.cn>
+Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+Link: https://lore.kernel.org/bpf/tencent_CB281722B3C1BD504C16CDE586CACC2BE706@qq.com
+---
+ tools/testing/selftests/bpf/progs/find_vma_fail1.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/find_vma_fail1.c b/tools/testing/selftests/bpf/progs/find_vma_fail1.c
+index b3b326b8e2d1..47d5dedff554 100644
+--- a/tools/testing/selftests/bpf/progs/find_vma_fail1.c
++++ b/tools/testing/selftests/bpf/progs/find_vma_fail1.c
+@@ -13,7 +13,7 @@ static long write_vma(struct task_struct *task, struct vm_area_struct *vma,
+ 		      struct callback_ctx *data)
+ {
+ 	/* writing to vma, which is illegal */
+-	vma->vm_flags |= 0x55;
++	vma->vm_start = 0xffffffffff600000;
+ 
+ 	return 0;
+ }
+-- 
+2.39.0
+

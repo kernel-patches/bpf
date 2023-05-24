@@ -1,0 +1,44 @@
+Recently, ld.lld moved from '--undefined-version' to
+'--no-undefined-version' as the default, which breaks building the vDSO
+when CONFIG_X86_SGX is not set:
+
+  ld.lld: error: version script assignment of 'LINUX_2.6' to symbol '__vdso_sgx_enter_enclave' failed: symbol not defined
+
+__vdso_sgx_enter_enclave is only included in the vDSO when
+CONFIG_X86_SGX is set. Only export it if it will be present in the final
+object, which clears up the error.
+
+Link: https://github.com/ClangBuiltLinux/linux/issues/1756
+Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+---
+
+It would be nice if this could be picked up for an -rc release but I
+won't argue otherwise.
+
+Alternatively, we could add '--undefined-version' to the vDSO ldflags
+but this does not seem unreasonable to me.
+
+ arch/x86/entry/vdso/vdso.lds.S | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/entry/vdso/vdso.lds.S b/arch/x86/entry/vdso/vdso.lds.S
+index 4bf48462fca7..e8c60ae7a7c8 100644
+--- a/arch/x86/entry/vdso/vdso.lds.S
++++ b/arch/x86/entry/vdso/vdso.lds.S
+@@ -27,7 +27,9 @@ VERSION {
+ 		__vdso_time;
+ 		clock_getres;
+ 		__vdso_clock_getres;
++#ifdef CONFIG_X86_SGX
+ 		__vdso_sgx_enter_enclave;
++#endif
+ 	local: *;
+ 	};
+ }
+
+base-commit: f0c4d9fc9cc9462659728d168387191387e903cc
+
+-- 
+2.38.1
+
+
