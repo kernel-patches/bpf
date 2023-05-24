@@ -12806,10 +12806,12 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				/* case: R1 = R2
 				 * copy register state to dest reg
 				 */
-				if (src_reg->type == SCALAR_VALUE && !src_reg->id)
+				if (src_reg->type == SCALAR_VALUE && !src_reg->id &&
+				    !tnum_is_const(src_reg->var_off))
 					/* Assign src and dst registers the same ID
 					 * that will be used by find_equal_scalars()
 					 * to propagate min/max range.
+					 * Skip constants to avoid allocation of useless ID.
 					 */
 					src_reg->id = ++env->id_gen;
 				copy_register_state(dst_reg, src_reg);
@@ -15151,6 +15153,33 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 
 	switch (base_type(rold->type)) {
 	case SCALAR_VALUE:
+		/* Why check_ids() for precise registers?
+		 *
+		 * Consider the following BPF code:
+		 *   1: r6 = ... unbound scalar, ID=a ...
+		 *   2: r7 = ... unbound scalar, ID=b ...
+		 *   3: if (r6 > r7) goto +1
+		 *   4: r6 = r7
+		 *   5: if (r6 > X) goto ...
+		 *   6: ... memory operation using r7 ...
+		 *
+		 * First verification path is [1-6]:
+		 * - at (4) same bpf_reg_state::id (b) would be assigned to r6 and r7;
+		 * - at (5) r6 would be marked <= X, find_equal_scalars() would also mark
+		 *   r7 <= X, because r6 and r7 share same id.
+		 *
+		 * Next verification path would start from (5), because of the jump at (3).
+		 * The only state difference between first and second visits of (5) is
+		 * bpf_reg_state::id assignments for r6 and r7: (b, b) vs (a, b).
+		 * Thus, use check_ids() to distinguish these states.
+		 *
+		 * The `rold->precise` check is a performance optimization. If `rold->id`
+		 * was ever used to access memory / predict jump, the `rold` or any
+		 * register used in `rold = r?` / `r? = rold` operations would be marked
+		 * as precise, otherwise it's ID is not really interesting.
+		 */
+		if (rold->precise && rold->id && !check_ids(rold->id, rcur->id, idmap))
+			return false;
 		if (regs_exact(rold, rcur, idmap))
 			return true;
 		if (env->explore_alu_limits)
