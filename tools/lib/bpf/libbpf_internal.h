@@ -575,6 +575,6 @@ static inline bool is_pow_of_2(size_t x)
 }
 
 #define PROG_LOAD_ATTEMPTS 5
-int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int attempts);
+int sys_bpf_prog_load(struct bpf_prog_load_attr *attr, unsigned int size, int attempts);
 
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

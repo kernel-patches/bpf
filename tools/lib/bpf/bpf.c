@@ -69,13 +69,13 @@ static inline __u64 ptr_to_u64(const void *ptr)
 	return (__u64) (unsigned long) ptr;
 }
 
-static inline int sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr,
+static inline int sys_bpf(enum bpf_cmd cmd, void *attr,
 			  unsigned int size)
 {
 	return syscall(__NR_bpf, cmd, attr, size);
 }
 
-static inline int sys_bpf_fd(enum bpf_cmd cmd, union bpf_attr *attr,
+static inline int sys_bpf_fd(enum bpf_cmd cmd, void *attr,
 			     unsigned int size)
 {
 	int fd;
@@ -84,7 +84,7 @@ static inline int sys_bpf_fd(enum bpf_cmd cmd, union bpf_attr *attr,
 	return ensure_good_fd(fd);
 }
 
-int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int attempts)
+int sys_bpf_prog_load(struct bpf_prog_load_attr *attr, unsigned int size, int attempts)
 {
 	int fd;
 
@@ -105,13 +105,13 @@ int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int attempts)
  */
 int probe_memcg_account(void)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, attach_btf_obj_fd);
+	const size_t attr_sz = offsetofend(struct bpf_prog_load_attr, attach_btf_obj_fd);
 	struct bpf_insn insns[] = {
 		BPF_EMIT_CALL(BPF_FUNC_ktime_get_coarse_ns),
 		BPF_EXIT_INSN(),
 	};
 	size_t insn_cnt = ARRAY_SIZE(insns);
-	union bpf_attr attr;
+	struct bpf_prog_load_attr attr;
 	int prog_fd;
 
 	/* attempt loading freplace trying to use custom BTF */
@@ -169,17 +169,16 @@ int bpf_map_create(enum bpf_map_type map_type,
 		   __u32 max_entries,
 		   const struct bpf_map_create_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, map_extra);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_create_attr, map_extra);
+	struct bpf_map_create_attr attr;
 	int fd;
-
-	bump_rlimit_memlock();
-
-	memset(&attr, 0, attr_sz);
 
 	if (!OPTS_VALID(opts, bpf_map_create_opts))
 		return libbpf_err(-EINVAL);
 
+	bump_rlimit_memlock();
+
+	memset(&attr, 0, attr_sz);
 	attr.map_type = map_type;
 	if (map_name && kernel_supports(NULL, FEAT_PROG_NAME))
 		libbpf_strlcpy(attr.map_name, map_name, sizeof(attr.map_name));
@@ -232,19 +231,19 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 		  const struct bpf_insn *insns, size_t insn_cnt,
 		  struct bpf_prog_load_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, log_true_size);
+	const size_t attr_sz = offsetofend(struct bpf_prog_load_attr, log_true_size);
 	void *finfo = NULL, *linfo = NULL;
 	const char *func_info, *line_info;
 	__u32 log_size, log_level, attach_prog_fd, attach_btf_obj_fd;
 	__u32 func_info_rec_size, line_info_rec_size;
 	int fd, attempts;
-	union bpf_attr attr;
+	struct bpf_prog_load_attr attr;
 	char *log_buf;
-
-	bump_rlimit_memlock();
 
 	if (!OPTS_VALID(opts, bpf_prog_load_opts))
 		return libbpf_err(-EINVAL);
+
+	bump_rlimit_memlock();
 
 	attempts = OPTS_GET(opts, attempts, 0);
 	if (attempts < 0)
@@ -380,8 +379,8 @@ done:
 int bpf_map_update_elem(int fd, const void *key, const void *value,
 			__u64 flags)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -396,8 +395,8 @@ int bpf_map_update_elem(int fd, const void *key, const void *value,
 
 int bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -411,8 +410,8 @@ int bpf_map_lookup_elem(int fd, const void *key, void *value)
 
 int bpf_map_lookup_elem_flags(int fd, const void *key, void *value, __u64 flags)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -427,8 +426,8 @@ int bpf_map_lookup_elem_flags(int fd, const void *key, void *value, __u64 flags)
 
 int bpf_map_lookup_and_delete_elem(int fd, const void *key, void *value)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -442,8 +441,8 @@ int bpf_map_lookup_and_delete_elem(int fd, const void *key, void *value)
 
 int bpf_map_lookup_and_delete_elem_flags(int fd, const void *key, void *value, __u64 flags)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -458,8 +457,8 @@ int bpf_map_lookup_and_delete_elem_flags(int fd, const void *key, void *value, _
 
 int bpf_map_delete_elem(int fd, const void *key)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -472,8 +471,8 @@ int bpf_map_delete_elem(int fd, const void *key)
 
 int bpf_map_delete_elem_flags(int fd, const void *key, __u64 flags)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_elem_attr, flags);
+	struct bpf_map_elem_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -487,8 +486,8 @@ int bpf_map_delete_elem_flags(int fd, const void *key, __u64 flags)
 
 int bpf_map_get_next_key(int fd, const void *key, void *next_key)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, next_key);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_next_key_attr, next_key);
+	struct bpf_map_next_key_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -502,8 +501,8 @@ int bpf_map_get_next_key(int fd, const void *key, void *next_key)
 
 int bpf_map_freeze(int fd)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, map_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_freeze_attr, map_fd);
+	struct bpf_map_freeze_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -518,25 +517,25 @@ static int bpf_map_batch_common(int cmd, int fd, void  *in_batch,
 				__u32 *count,
 				const struct bpf_map_batch_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, batch);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_map_batch_attr, flags);
+	struct bpf_map_batch_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_map_batch_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.batch.map_fd = fd;
-	attr.batch.in_batch = ptr_to_u64(in_batch);
-	attr.batch.out_batch = ptr_to_u64(out_batch);
-	attr.batch.keys = ptr_to_u64(keys);
-	attr.batch.values = ptr_to_u64(values);
-	attr.batch.count = *count;
-	attr.batch.elem_flags  = OPTS_GET(opts, elem_flags, 0);
-	attr.batch.flags = OPTS_GET(opts, flags, 0);
+	attr.map_fd = fd;
+	attr.in_batch = ptr_to_u64(in_batch);
+	attr.out_batch = ptr_to_u64(out_batch);
+	attr.keys = ptr_to_u64(keys);
+	attr.values = ptr_to_u64(values);
+	attr.count = *count;
+	attr.elem_flags  = OPTS_GET(opts, elem_flags, 0);
+	attr.flags = OPTS_GET(opts, flags, 0);
 
 	ret = sys_bpf(cmd, &attr, attr_sz);
-	*count = attr.batch.count;
+	*count = attr.count;
 
 	return libbpf_err_errno(ret);
 }
@@ -574,8 +573,8 @@ int bpf_map_update_batch(int fd, const void *keys, const void *values, __u32 *co
 
 int bpf_obj_pin_opts(int fd, const char *pathname, const struct bpf_obj_pin_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, path_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_pin_attr, path_fd);
+	struct bpf_obj_pin_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_obj_pin_opts))
@@ -584,7 +583,7 @@ int bpf_obj_pin_opts(int fd, const char *pathname, const struct bpf_obj_pin_opts
 	memset(&attr, 0, attr_sz);
 	attr.path_fd = OPTS_GET(opts, path_fd, 0);
 	attr.pathname = ptr_to_u64((void *)pathname);
-	attr.file_flags = OPTS_GET(opts, file_flags, 0);
+	attr.flags = OPTS_GET(opts, file_flags, 0);
 	attr.bpf_fd = fd;
 
 	ret = sys_bpf(BPF_OBJ_PIN, &attr, attr_sz);
@@ -603,8 +602,8 @@ int bpf_obj_get(const char *pathname)
 
 int bpf_obj_get_opts(const char *pathname, const struct bpf_obj_get_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, path_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_get_attr, path_fd);
+	struct bpf_obj_get_attr attr;
 	int fd;
 
 	if (!OPTS_VALID(opts, bpf_obj_get_opts))
@@ -613,7 +612,7 @@ int bpf_obj_get_opts(const char *pathname, const struct bpf_obj_get_opts *opts)
 	memset(&attr, 0, attr_sz);
 	attr.path_fd = OPTS_GET(opts, path_fd, 0);
 	attr.pathname = ptr_to_u64((void *)pathname);
-	attr.file_flags = OPTS_GET(opts, file_flags, 0);
+	attr.flags = OPTS_GET(opts, file_flags, 0);
 
 	fd = sys_bpf_fd(BPF_OBJ_GET, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -633,8 +632,8 @@ int bpf_prog_attach_opts(int prog_fd, int target_fd,
 			  enum bpf_attach_type type,
 			  const struct bpf_prog_attach_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, replace_bpf_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_attach_attr, replace_bpf_fd);
+	struct bpf_prog_attach_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_prog_attach_opts))
@@ -653,8 +652,8 @@ int bpf_prog_attach_opts(int prog_fd, int target_fd,
 
 int bpf_prog_detach(int target_fd, enum bpf_attach_type type)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, replace_bpf_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_detach_attr, attach_type);
+	struct bpf_prog_detach_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
@@ -667,13 +666,13 @@ int bpf_prog_detach(int target_fd, enum bpf_attach_type type)
 
 int bpf_prog_detach2(int prog_fd, int target_fd, enum bpf_attach_type type)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, replace_bpf_fd);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_detach_attr, attach_type);
+	struct bpf_prog_detach_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
-	attr.target_fd	 = target_fd;
-	attr.attach_bpf_fd = prog_fd;
+	attr.target_fd  = target_fd;
+	attr.prog_fd = prog_fd;
 	attr.attach_type = type;
 
 	ret = sys_bpf(BPF_PROG_DETACH, &attr, attr_sz);
@@ -684,9 +683,9 @@ int bpf_link_create(int prog_fd, int target_fd,
 		    enum bpf_attach_type attach_type,
 		    const struct bpf_link_create_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, link_create);
+	const size_t attr_sz = sizeof(struct bpf_link_create_attr);
 	__u32 target_btf_id, iter_info_len;
-	union bpf_attr attr;
+	struct bpf_link_create_attr attr;
 	int fd, err;
 
 	if (!OPTS_VALID(opts, bpf_link_create_opts))
@@ -704,32 +703,32 @@ int bpf_link_create(int prog_fd, int target_fd,
 	}
 
 	memset(&attr, 0, attr_sz);
-	attr.link_create.prog_fd = prog_fd;
-	attr.link_create.target_fd = target_fd;
-	attr.link_create.attach_type = attach_type;
-	attr.link_create.flags = OPTS_GET(opts, flags, 0);
+	attr.prog_fd = prog_fd;
+	attr.target_fd = target_fd;
+	attr.attach_type = attach_type;
+	attr.flags = OPTS_GET(opts, flags, 0);
 
 	if (target_btf_id) {
-		attr.link_create.target_btf_id = target_btf_id;
+		attr.target_btf_id = target_btf_id;
 		goto proceed;
 	}
 
 	switch (attach_type) {
 	case BPF_TRACE_ITER:
-		attr.link_create.iter_info = ptr_to_u64(OPTS_GET(opts, iter_info, (void *)0));
-		attr.link_create.iter_info_len = iter_info_len;
+		attr.iter_info = ptr_to_u64(OPTS_GET(opts, iter_info, (void *)0));
+		attr.iter_info_len = iter_info_len;
 		break;
 	case BPF_PERF_EVENT:
-		attr.link_create.perf_event.bpf_cookie = OPTS_GET(opts, perf_event.bpf_cookie, 0);
+		attr.perf_event.bpf_cookie = OPTS_GET(opts, perf_event.bpf_cookie, 0);
 		if (!OPTS_ZEROED(opts, perf_event))
 			return libbpf_err(-EINVAL);
 		break;
 	case BPF_TRACE_KPROBE_MULTI:
-		attr.link_create.kprobe_multi.flags = OPTS_GET(opts, kprobe_multi.flags, 0);
-		attr.link_create.kprobe_multi.cnt = OPTS_GET(opts, kprobe_multi.cnt, 0);
-		attr.link_create.kprobe_multi.syms = ptr_to_u64(OPTS_GET(opts, kprobe_multi.syms, 0));
-		attr.link_create.kprobe_multi.addrs = ptr_to_u64(OPTS_GET(opts, kprobe_multi.addrs, 0));
-		attr.link_create.kprobe_multi.cookies = ptr_to_u64(OPTS_GET(opts, kprobe_multi.cookies, 0));
+		attr.kprobe_multi.flags = OPTS_GET(opts, kprobe_multi.flags, 0);
+		attr.kprobe_multi.cnt = OPTS_GET(opts, kprobe_multi.cnt, 0);
+		attr.kprobe_multi.syms = ptr_to_u64(OPTS_GET(opts, kprobe_multi.syms, 0));
+		attr.kprobe_multi.addrs = ptr_to_u64(OPTS_GET(opts, kprobe_multi.addrs, 0));
+		attr.kprobe_multi.cookies = ptr_to_u64(OPTS_GET(opts, kprobe_multi.cookies, 0));
 		if (!OPTS_ZEROED(opts, kprobe_multi))
 			return libbpf_err(-EINVAL);
 		break;
@@ -737,7 +736,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 	case BPF_TRACE_FEXIT:
 	case BPF_MODIFY_RETURN:
 	case BPF_LSM_MAC:
-		attr.link_create.tracing.cookie = OPTS_GET(opts, tracing.cookie, 0);
+		attr.tracing.cookie = OPTS_GET(opts, tracing.cookie, 0);
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);
 		break;
@@ -760,7 +759,7 @@ proceed:
 	/* if user used features not supported by
 	 * BPF_RAW_TRACEPOINT_OPEN command, then just give up immediately
 	 */
-	if (attr.link_create.target_fd || attr.link_create.target_btf_id)
+	if (attr.target_fd || attr.target_btf_id)
 		return libbpf_err(err);
 	if (!OPTS_ZEROED(opts, sz))
 		return libbpf_err(err);
@@ -783,12 +782,12 @@ proceed:
 
 int bpf_link_detach(int link_fd)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, link_detach);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_link_detach_attr, link_fd);
+	struct bpf_link_detach_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);
-	attr.link_detach.link_fd = link_fd;
+	attr.link_fd = link_fd;
 
 	ret = sys_bpf(BPF_LINK_DETACH, &attr, attr_sz);
 	return libbpf_err_errno(ret);
@@ -797,8 +796,8 @@ int bpf_link_detach(int link_fd)
 int bpf_link_update(int link_fd, int new_prog_fd,
 		    const struct bpf_link_update_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, link_update);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_link_update_attr, old_prog_fd);
+	struct bpf_link_update_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_link_update_opts))
@@ -808,13 +807,13 @@ int bpf_link_update(int link_fd, int new_prog_fd,
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.link_update.link_fd = link_fd;
-	attr.link_update.new_prog_fd = new_prog_fd;
-	attr.link_update.flags = OPTS_GET(opts, flags, 0);
+	attr.link_fd = link_fd;
+	attr.new_prog_fd = new_prog_fd;
+	attr.flags = OPTS_GET(opts, flags, 0);
 	if (OPTS_GET(opts, old_prog_fd, 0))
-		attr.link_update.old_prog_fd = OPTS_GET(opts, old_prog_fd, 0);
+		attr.old_prog_fd = OPTS_GET(opts, old_prog_fd, 0);
 	else if (OPTS_GET(opts, old_map_fd, 0))
-		attr.link_update.old_map_fd = OPTS_GET(opts, old_map_fd, 0);
+		attr.old_map_fd = OPTS_GET(opts, old_map_fd, 0);
 
 	ret = sys_bpf(BPF_LINK_UPDATE, &attr, attr_sz);
 	return libbpf_err_errno(ret);
@@ -822,12 +821,12 @@ int bpf_link_update(int link_fd, int new_prog_fd,
 
 int bpf_iter_create(int link_fd)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, iter_create);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_iter_create_attr, flags);
+	struct bpf_iter_create_attr attr;
 	int fd;
 
 	memset(&attr, 0, attr_sz);
-	attr.iter_create.link_fd = link_fd;
+	attr.link_fd = link_fd;
 
 	fd = sys_bpf_fd(BPF_ITER_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -837,8 +836,8 @@ int bpf_prog_query_opts(int target_fd,
 			enum bpf_attach_type type,
 			struct bpf_prog_query_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, query);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_query_attr, prog_attach_flags);
+	struct bpf_prog_query_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_prog_query_opts))
@@ -846,17 +845,17 @@ int bpf_prog_query_opts(int target_fd,
 
 	memset(&attr, 0, attr_sz);
 
-	attr.query.target_fd	= target_fd;
-	attr.query.attach_type	= type;
-	attr.query.query_flags	= OPTS_GET(opts, query_flags, 0);
-	attr.query.prog_cnt	= OPTS_GET(opts, prog_cnt, 0);
-	attr.query.prog_ids	= ptr_to_u64(OPTS_GET(opts, prog_ids, NULL));
-	attr.query.prog_attach_flags = ptr_to_u64(OPTS_GET(opts, prog_attach_flags, NULL));
+	attr.target_fd	= target_fd;
+	attr.attach_type	= type;
+	attr.query_flags	= OPTS_GET(opts, query_flags, 0);
+	attr.prog_cnt	= OPTS_GET(opts, prog_cnt, 0);
+	attr.prog_ids	= ptr_to_u64(OPTS_GET(opts, prog_ids, NULL));
+	attr.prog_attach_flags = ptr_to_u64(OPTS_GET(opts, prog_attach_flags, NULL));
 
 	ret = sys_bpf(BPF_PROG_QUERY, &attr, attr_sz);
 
-	OPTS_SET(opts, attach_flags, attr.query.attach_flags);
-	OPTS_SET(opts, prog_cnt, attr.query.prog_cnt);
+	OPTS_SET(opts, attach_flags, attr.attach_flags);
+	OPTS_SET(opts, prog_cnt, attr.prog_cnt);
 
 	return libbpf_err_errno(ret);
 }
@@ -882,43 +881,43 @@ int bpf_prog_query(int target_fd, enum bpf_attach_type type, __u32 query_flags,
 
 int bpf_prog_test_run_opts(int prog_fd, struct bpf_test_run_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, test);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_run_attr, batch_size);
+	struct bpf_prog_run_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_test_run_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.test.prog_fd = prog_fd;
-	attr.test.batch_size = OPTS_GET(opts, batch_size, 0);
-	attr.test.cpu = OPTS_GET(opts, cpu, 0);
-	attr.test.flags = OPTS_GET(opts, flags, 0);
-	attr.test.repeat = OPTS_GET(opts, repeat, 0);
-	attr.test.duration = OPTS_GET(opts, duration, 0);
-	attr.test.ctx_size_in = OPTS_GET(opts, ctx_size_in, 0);
-	attr.test.ctx_size_out = OPTS_GET(opts, ctx_size_out, 0);
-	attr.test.data_size_in = OPTS_GET(opts, data_size_in, 0);
-	attr.test.data_size_out = OPTS_GET(opts, data_size_out, 0);
-	attr.test.ctx_in = ptr_to_u64(OPTS_GET(opts, ctx_in, NULL));
-	attr.test.ctx_out = ptr_to_u64(OPTS_GET(opts, ctx_out, NULL));
-	attr.test.data_in = ptr_to_u64(OPTS_GET(opts, data_in, NULL));
-	attr.test.data_out = ptr_to_u64(OPTS_GET(opts, data_out, NULL));
+	attr.prog_fd = prog_fd;
+	attr.batch_size = OPTS_GET(opts, batch_size, 0);
+	attr.cpu = OPTS_GET(opts, cpu, 0);
+	attr.flags = OPTS_GET(opts, flags, 0);
+	attr.repeat = OPTS_GET(opts, repeat, 0);
+	attr.duration = OPTS_GET(opts, duration, 0);
+	attr.ctx_size_in = OPTS_GET(opts, ctx_size_in, 0);
+	attr.ctx_size_out = OPTS_GET(opts, ctx_size_out, 0);
+	attr.data_size_in = OPTS_GET(opts, data_size_in, 0);
+	attr.data_size_out = OPTS_GET(opts, data_size_out, 0);
+	attr.ctx_in = ptr_to_u64(OPTS_GET(opts, ctx_in, NULL));
+	attr.ctx_out = ptr_to_u64(OPTS_GET(opts, ctx_out, NULL));
+	attr.data_in = ptr_to_u64(OPTS_GET(opts, data_in, NULL));
+	attr.data_out = ptr_to_u64(OPTS_GET(opts, data_out, NULL));
 
 	ret = sys_bpf(BPF_PROG_TEST_RUN, &attr, attr_sz);
 
-	OPTS_SET(opts, data_size_out, attr.test.data_size_out);
-	OPTS_SET(opts, ctx_size_out, attr.test.ctx_size_out);
-	OPTS_SET(opts, duration, attr.test.duration);
-	OPTS_SET(opts, retval, attr.test.retval);
+	OPTS_SET(opts, data_size_out, attr.data_size_out);
+	OPTS_SET(opts, ctx_size_out, attr.ctx_size_out);
+	OPTS_SET(opts, duration, attr.duration);
+	OPTS_SET(opts, retval, attr.retval);
 
 	return libbpf_err_errno(ret);
 }
 
 static int bpf_obj_get_next_id(__u32 start_id, __u32 *next_id, int cmd)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_next_id_attr, next_id);
+	struct bpf_obj_next_id_attr attr;
 	int err;
 
 	memset(&attr, 0, attr_sz);
@@ -954,16 +953,16 @@ int bpf_link_get_next_id(__u32 start_id, __u32 *next_id)
 int bpf_prog_get_fd_by_id_opts(__u32 id,
 			       const struct bpf_get_fd_by_id_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_fd_by_id_attr, flags);
+	struct bpf_obj_fd_by_id_attr attr;
 	int fd;
 
 	if (!OPTS_VALID(opts, bpf_get_fd_by_id_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.prog_id = id;
-	attr.open_flags = OPTS_GET(opts, open_flags, 0);
+	attr.obj_id = id;
+	attr.flags = OPTS_GET(opts, open_flags, 0);
 
 	fd = sys_bpf_fd(BPF_PROG_GET_FD_BY_ID, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -977,16 +976,16 @@ int bpf_prog_get_fd_by_id(__u32 id)
 int bpf_map_get_fd_by_id_opts(__u32 id,
 			      const struct bpf_get_fd_by_id_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_fd_by_id_attr, flags);
+	struct bpf_obj_fd_by_id_attr attr;
 	int fd;
 
 	if (!OPTS_VALID(opts, bpf_get_fd_by_id_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.map_id = id;
-	attr.open_flags = OPTS_GET(opts, open_flags, 0);
+	attr.obj_id = id;
+	attr.flags = OPTS_GET(opts, open_flags, 0);
 
 	fd = sys_bpf_fd(BPF_MAP_GET_FD_BY_ID, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1000,16 +999,16 @@ int bpf_map_get_fd_by_id(__u32 id)
 int bpf_btf_get_fd_by_id_opts(__u32 id,
 			      const struct bpf_get_fd_by_id_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_fd_by_id_attr, flags);
+	struct bpf_obj_fd_by_id_attr attr;
 	int fd;
 
 	if (!OPTS_VALID(opts, bpf_get_fd_by_id_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.btf_id = id;
-	attr.open_flags = OPTS_GET(opts, open_flags, 0);
+	attr.obj_id = id;
+	attr.flags = OPTS_GET(opts, open_flags, 0);
 
 	fd = sys_bpf_fd(BPF_BTF_GET_FD_BY_ID, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1023,16 +1022,16 @@ int bpf_btf_get_fd_by_id(__u32 id)
 int bpf_link_get_fd_by_id_opts(__u32 id,
 			       const struct bpf_get_fd_by_id_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_fd_by_id_attr, flags);
+	struct bpf_obj_fd_by_id_attr attr;
 	int fd;
 
 	if (!OPTS_VALID(opts, bpf_get_fd_by_id_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.link_id = id;
-	attr.open_flags = OPTS_GET(opts, open_flags, 0);
+	attr.obj_id = id;
+	attr.flags = OPTS_GET(opts, open_flags, 0);
 
 	fd = sys_bpf_fd(BPF_LINK_GET_FD_BY_ID, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1045,18 +1044,18 @@ int bpf_link_get_fd_by_id(__u32 id)
 
 int bpf_obj_get_info_by_fd(int bpf_fd, void *info, __u32 *info_len)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, info);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_obj_info_by_fd_attr, info);
+	struct bpf_obj_info_by_fd_attr attr;
 	int err;
 
 	memset(&attr, 0, attr_sz);
-	attr.info.bpf_fd = bpf_fd;
-	attr.info.info_len = *info_len;
-	attr.info.info = ptr_to_u64(info);
+	attr.bpf_fd = bpf_fd;
+	attr.info_len = *info_len;
+	attr.info = ptr_to_u64(info);
 
 	err = sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &attr, attr_sz);
 	if (!err)
-		*info_len = attr.info.info_len;
+		*info_len = attr.info_len;
 	return libbpf_err_errno(err);
 }
 
@@ -1082,13 +1081,13 @@ int bpf_link_get_info_by_fd(int link_fd, struct bpf_link_info *info, __u32 *info
 
 int bpf_raw_tracepoint_open(const char *name, int prog_fd)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, raw_tracepoint);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_raw_tp_open_attr, prog_fd);
+	struct bpf_raw_tp_open_attr attr;
 	int fd;
 
 	memset(&attr, 0, attr_sz);
-	attr.raw_tracepoint.name = ptr_to_u64(name);
-	attr.raw_tracepoint.prog_fd = prog_fd;
+	attr.name = ptr_to_u64(name);
+	attr.prog_fd = prog_fd;
 
 	fd = sys_bpf_fd(BPF_RAW_TRACEPOINT_OPEN, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1096,19 +1095,19 @@ int bpf_raw_tracepoint_open(const char *name, int prog_fd)
 
 int bpf_btf_load(const void *btf_data, size_t btf_size, struct bpf_btf_load_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, btf_log_true_size);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_btf_load_attr, log_true_size);
+	struct bpf_btf_load_attr attr;
 	char *log_buf;
 	size_t log_size;
 	__u32 log_level;
 	int fd;
 
+	if (!OPTS_VALID(opts, bpf_btf_load_opts))
+		return libbpf_err(-EINVAL);
+
 	bump_rlimit_memlock();
 
 	memset(&attr, 0, attr_sz);
-
-	if (!OPTS_VALID(opts, bpf_btf_load_opts))
-		return libbpf_err(-EINVAL);
 
 	log_buf = OPTS_GET(opts, log_buf, NULL);
 	log_size = OPTS_GET(opts, log_size, 0);
@@ -1127,20 +1126,20 @@ int bpf_btf_load(const void *btf_data, size_t btf_size, struct bpf_btf_load_opts
 	 * APIs within libbpf and provides a sensible behavior in practice
 	 */
 	if (log_level) {
-		attr.btf_log_buf = ptr_to_u64(log_buf);
-		attr.btf_log_size = (__u32)log_size;
-		attr.btf_log_level = log_level;
+		attr.log_buf = ptr_to_u64(log_buf);
+		attr.log_size = (__u32)log_size;
+		attr.log_level = log_level;
 	}
 
 	fd = sys_bpf_fd(BPF_BTF_LOAD, &attr, attr_sz);
 	if (fd < 0 && log_buf && log_level == 0) {
-		attr.btf_log_buf = ptr_to_u64(log_buf);
-		attr.btf_log_size = (__u32)log_size;
-		attr.btf_log_level = 1;
+		attr.log_buf = ptr_to_u64(log_buf);
+		attr.log_size = (__u32)log_size;
+		attr.log_level = 1;
 		fd = sys_bpf_fd(BPF_BTF_LOAD, &attr, attr_sz);
 	}
 
-	OPTS_SET(opts, log_true_size, attr.btf_log_true_size);
+	OPTS_SET(opts, log_true_size, attr.log_true_size);
 	return libbpf_err_errno(fd);
 }
 
@@ -1148,36 +1147,36 @@ int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf, __u32 *buf_len,
 		      __u32 *prog_id, __u32 *fd_type, __u64 *probe_offset,
 		      __u64 *probe_addr)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, task_fd_query);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_task_fd_query_attr, probe_addr);
+	struct bpf_task_fd_query_attr attr;
 	int err;
 
 	memset(&attr, 0, attr_sz);
-	attr.task_fd_query.pid = pid;
-	attr.task_fd_query.fd = fd;
-	attr.task_fd_query.flags = flags;
-	attr.task_fd_query.buf = ptr_to_u64(buf);
-	attr.task_fd_query.buf_len = *buf_len;
+	attr.pid = pid;
+	attr.fd = fd;
+	attr.flags = flags;
+	attr.buf = ptr_to_u64(buf);
+	attr.buf_len = *buf_len;
 
 	err = sys_bpf(BPF_TASK_FD_QUERY, &attr, attr_sz);
 
-	*buf_len = attr.task_fd_query.buf_len;
-	*prog_id = attr.task_fd_query.prog_id;
-	*fd_type = attr.task_fd_query.fd_type;
-	*probe_offset = attr.task_fd_query.probe_offset;
-	*probe_addr = attr.task_fd_query.probe_addr;
+	*buf_len = attr.buf_len;
+	*prog_id = attr.prog_id;
+	*fd_type = attr.fd_type;
+	*probe_offset = attr.probe_offset;
+	*probe_addr = attr.probe_addr;
 
 	return libbpf_err_errno(err);
 }
 
 int bpf_enable_stats(enum bpf_stats_type type)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, enable_stats);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_enable_stats_attr, type);
+	struct bpf_enable_stats_attr attr;
 	int fd;
 
 	memset(&attr, 0, attr_sz);
-	attr.enable_stats.type = type;
+	attr.type = type;
 
 	fd = sys_bpf_fd(BPF_ENABLE_STATS, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1186,17 +1185,17 @@ int bpf_enable_stats(enum bpf_stats_type type)
 int bpf_prog_bind_map(int prog_fd, int map_fd,
 		      const struct bpf_prog_bind_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, prog_bind_map);
-	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(struct bpf_prog_bind_map_attr, flags);
+	struct bpf_prog_bind_map_attr attr;
 	int ret;
 
 	if (!OPTS_VALID(opts, bpf_prog_bind_opts))
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
-	attr.prog_bind_map.prog_fd = prog_fd;
-	attr.prog_bind_map.map_fd = map_fd;
-	attr.prog_bind_map.flags = OPTS_GET(opts, flags, 0);
+	attr.prog_fd = prog_fd;
+	attr.map_fd = map_fd;
+	attr.flags = OPTS_GET(opts, flags, 0);
 
 	ret = sys_bpf(BPF_PROG_BIND_MAP, &attr, attr_sz);
 	return libbpf_err_errno(ret);

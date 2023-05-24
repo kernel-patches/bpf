@@ -4525,12 +4525,12 @@ static int probe_fd(int fd)
 
 static int probe_kern_prog_name(void)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, prog_name);
+	const size_t attr_sz = offsetofend(struct bpf_prog_load_attr, prog_name);
 	struct bpf_insn insns[] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
-	union bpf_attr attr;
+	struct bpf_prog_load_attr attr;
 	int ret;
 
 	memset(&attr, 0, attr_sz);

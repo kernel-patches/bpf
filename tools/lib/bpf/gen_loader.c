@@ -417,9 +417,9 @@ void bpf_gen__free(struct bpf_gen *gen)
 void bpf_gen__load_btf(struct bpf_gen *gen, const void *btf_raw_data,
 		       __u32 btf_raw_size)
 {
-	int attr_size = offsetofend(union bpf_attr, btf_log_level);
+	int attr_size = offsetofend(struct bpf_btf_load_attr, log_level);
 	int btf_data, btf_load_attr;
-	union bpf_attr attr;
+	struct bpf_btf_load_attr attr;
 
 	memset(&attr, 0, attr_size);
 	pr_debug("gen: load_btf: size %d\n", btf_raw_size);
@@ -429,14 +429,14 @@ void bpf_gen__load_btf(struct bpf_gen *gen, const void *btf_raw_data,
 	btf_load_attr = add_data(gen, &attr, attr_size);
 
 	/* populate union bpf_attr with user provided log details */
-	move_ctx2blob(gen, attr_field(btf_load_attr, btf_log_level), 4,
+	move_ctx2blob(gen, attr_field(btf_load_attr, btf_load.log_level), 4,
 		      offsetof(struct bpf_loader_ctx, log_level), false);
-	move_ctx2blob(gen, attr_field(btf_load_attr, btf_log_size), 4,
+	move_ctx2blob(gen, attr_field(btf_load_attr, btf_load.log_size), 4,
 		      offsetof(struct bpf_loader_ctx, log_size), false);
-	move_ctx2blob(gen, attr_field(btf_load_attr, btf_log_buf), 8,
+	move_ctx2blob(gen, attr_field(btf_load_attr, btf_load.log_buf), 8,
 		      offsetof(struct bpf_loader_ctx, log_buf), false);
 	/* populate union bpf_attr with a pointer to the BTF data */
-	emit_rel_store(gen, attr_field(btf_load_attr, btf), btf_data);
+	emit_rel_store(gen, attr_field(btf_load_attr, btf_load.btf), btf_data);
 	/* emit BTF_LOAD command */
 	emit_sys_bpf(gen, BPF_BTF_LOAD, btf_load_attr, attr_size);
 	debug_ret(gen, "btf_load size %d", btf_raw_size);
@@ -451,10 +451,10 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 			 __u32 key_size, __u32 value_size, __u32 max_entries,
 			 struct bpf_map_create_opts *map_attr, int map_idx)
 {
-	int attr_size = offsetofend(union bpf_attr, map_extra);
+	int attr_size = offsetofend(struct bpf_map_create_attr, map_extra);
 	bool close_inner_map_fd = false;
 	int map_create_attr, idx;
-	union bpf_attr attr;
+	struct bpf_map_create_attr attr;
 
 	memset(&attr, 0, attr_size);
 	attr.map_type = map_type;
@@ -476,12 +476,12 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 	map_create_attr = add_data(gen, &attr, attr_size);
 	if (attr.btf_value_type_id)
 		/* populate union bpf_attr with btf_fd saved in the stack earlier */
-		move_stack2blob(gen, attr_field(map_create_attr, btf_fd), 4,
+		move_stack2blob(gen, attr_field(map_create_attr, map_create.btf_fd), 4,
 				stack_off(btf_fd));
 	switch (attr.map_type) {
 	case BPF_MAP_TYPE_ARRAY_OF_MAPS:
 	case BPF_MAP_TYPE_HASH_OF_MAPS:
-		move_stack2blob(gen, attr_field(map_create_attr, inner_map_fd), 4,
+		move_stack2blob(gen, attr_field(map_create_attr, map_create.inner_map_fd), 4,
 				stack_off(inner_map_fd));
 		close_inner_map_fd = true;
 		break;
@@ -490,7 +490,7 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 	}
 	/* conditionally update max_entries */
 	if (map_idx >= 0)
-		move_ctx2blob(gen, attr_field(map_create_attr, max_entries), 4,
+		move_ctx2blob(gen, attr_field(map_create_attr, map_create.max_entries), 4,
 			      sizeof(struct bpf_loader_ctx) +
 			      sizeof(struct bpf_map_desc) * map_idx +
 			      offsetof(struct bpf_map_desc, max_entries),
@@ -937,8 +937,8 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 			struct bpf_prog_load_opts *load_attr, int prog_idx)
 {
 	int prog_load_attr, license_off, insns_off, func_info, line_info, core_relos;
-	int attr_size = offsetofend(union bpf_attr, core_relo_rec_size);
-	union bpf_attr attr;
+	int attr_size = offsetofend(struct bpf_prog_load_attr, core_relo_rec_size);
+	struct bpf_prog_load_attr attr;
 
 	memset(&attr, 0, attr_size);
 	pr_debug("gen: prog_load: type %d insns_cnt %zd progi_idx %d\n",
@@ -975,32 +975,32 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 	prog_load_attr = add_data(gen, &attr, attr_size);
 
 	/* populate union bpf_attr with a pointer to license */
-	emit_rel_store(gen, attr_field(prog_load_attr, license), license_off);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.license), license_off);
 
 	/* populate union bpf_attr with a pointer to instructions */
-	emit_rel_store(gen, attr_field(prog_load_attr, insns), insns_off);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.insns), insns_off);
 
 	/* populate union bpf_attr with a pointer to func_info */
-	emit_rel_store(gen, attr_field(prog_load_attr, func_info), func_info);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.func_info), func_info);
 
 	/* populate union bpf_attr with a pointer to line_info */
-	emit_rel_store(gen, attr_field(prog_load_attr, line_info), line_info);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.line_info), line_info);
 
 	/* populate union bpf_attr with a pointer to core_relos */
-	emit_rel_store(gen, attr_field(prog_load_attr, core_relos), core_relos);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.core_relos), core_relos);
 
 	/* populate union bpf_attr fd_array with a pointer to data where map_fds are saved */
-	emit_rel_store(gen, attr_field(prog_load_attr, fd_array), gen->fd_array);
+	emit_rel_store(gen, attr_field(prog_load_attr, prog_load.fd_array), gen->fd_array);
 
 	/* populate union bpf_attr with user provided log details */
-	move_ctx2blob(gen, attr_field(prog_load_attr, log_level), 4,
+	move_ctx2blob(gen, attr_field(prog_load_attr, prog_load.log_level), 4,
 		      offsetof(struct bpf_loader_ctx, log_level), false);
-	move_ctx2blob(gen, attr_field(prog_load_attr, log_size), 4,
+	move_ctx2blob(gen, attr_field(prog_load_attr, prog_load.log_size), 4,
 		      offsetof(struct bpf_loader_ctx, log_size), false);
-	move_ctx2blob(gen, attr_field(prog_load_attr, log_buf), 8,
+	move_ctx2blob(gen, attr_field(prog_load_attr, prog_load.log_buf), 8,
 		      offsetof(struct bpf_loader_ctx, log_buf), false);
 	/* populate union bpf_attr with btf_fd saved in the stack earlier */
-	move_stack2blob(gen, attr_field(prog_load_attr, prog_btf_fd), 4,
+	move_stack2blob(gen, attr_field(prog_load_attr, prog_load.prog_btf_fd), 4,
 			stack_off(btf_fd));
 	if (gen->attach_kind) {
 		emit_find_attach_target(gen);
@@ -1008,10 +1008,10 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE,
 						 0, 0, 0, prog_load_attr));
 		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
-				      offsetof(union bpf_attr, attach_btf_id)));
+				      offsetof(union bpf_attr, prog_load.attach_btf_id)));
 		emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_7, 32));
 		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
-				      offsetof(union bpf_attr, attach_btf_obj_fd)));
+				      offsetof(union bpf_attr, prog_load.attach_btf_obj_fd)));
 	}
 	emit_relos(gen, insns_off);
 	/* emit PROG_LOAD command */
@@ -1021,7 +1021,7 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 	cleanup_relos(gen, insns_off);
 	if (gen->attach_kind) {
 		emit_sys_close_blob(gen,
-				    attr_field(prog_load_attr, attach_btf_obj_fd));
+				    attr_field(prog_load_attr, prog_load.attach_btf_obj_fd));
 		gen->attach_kind = 0;
 	}
 	emit_check_err(gen);
@@ -1034,9 +1034,9 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 void bpf_gen__map_update_elem(struct bpf_gen *gen, int map_idx, void *pvalue,
 			      __u32 value_size)
 {
-	int attr_size = offsetofend(union bpf_attr, flags);
+	int attr_size = offsetofend(struct bpf_map_elem_attr, flags);
 	int map_update_attr, value, key;
-	union bpf_attr attr;
+	struct bpf_map_elem_attr attr;
 	int zero = 0;
 
 	memset(&attr, 0, attr_size);
@@ -1068,10 +1068,10 @@ void bpf_gen__map_update_elem(struct bpf_gen *gen, int map_idx, void *pvalue,
 	emit(gen, BPF_EMIT_CALL(BPF_FUNC_probe_read_kernel));
 
 	map_update_attr = add_data(gen, &attr, attr_size);
-	move_blob2blob(gen, attr_field(map_update_attr, map_fd), 4,
+	move_blob2blob(gen, attr_field(map_update_attr, map_elem.map_fd), 4,
 		       blob_fd_array_off(gen, map_idx));
-	emit_rel_store(gen, attr_field(map_update_attr, key), key);
-	emit_rel_store(gen, attr_field(map_update_attr, value), value);
+	emit_rel_store(gen, attr_field(map_update_attr, map_elem.key), key);
+	emit_rel_store(gen, attr_field(map_update_attr, map_elem.value), value);
 	/* emit MAP_UPDATE_ELEM command */
 	emit_sys_bpf(gen, BPF_MAP_UPDATE_ELEM, map_update_attr, attr_size);
 	debug_ret(gen, "update_elem idx %d value_size %d", map_idx, value_size);
@@ -1081,9 +1081,9 @@ void bpf_gen__map_update_elem(struct bpf_gen *gen, int map_idx, void *pvalue,
 void bpf_gen__populate_outer_map(struct bpf_gen *gen, int outer_map_idx, int slot,
 				 int inner_map_idx)
 {
-	int attr_size = offsetofend(union bpf_attr, flags);
+	int attr_size = offsetofend(struct bpf_map_elem_attr, flags);
 	int map_update_attr, key;
-	union bpf_attr attr;
+	struct bpf_map_elem_attr attr;
 
 	memset(&attr, 0, attr_size);
 	pr_debug("gen: populate_outer_map: outer %d key %d inner %d\n",
@@ -1092,10 +1092,10 @@ void bpf_gen__populate_outer_map(struct bpf_gen *gen, int outer_map_idx, int slo
 	key = add_data(gen, &slot, sizeof(slot));
 
 	map_update_attr = add_data(gen, &attr, attr_size);
-	move_blob2blob(gen, attr_field(map_update_attr, map_fd), 4,
+	move_blob2blob(gen, attr_field(map_update_attr, map_elem.map_fd), 4,
 		       blob_fd_array_off(gen, outer_map_idx));
-	emit_rel_store(gen, attr_field(map_update_attr, key), key);
-	emit_rel_store(gen, attr_field(map_update_attr, value),
+	emit_rel_store(gen, attr_field(map_update_attr, map_elem.key), key);
+	emit_rel_store(gen, attr_field(map_update_attr, map_elem.value),
 		       blob_fd_array_off(gen, inner_map_idx));
 
 	/* emit MAP_UPDATE_ELEM command */
@@ -1107,14 +1107,14 @@ void bpf_gen__populate_outer_map(struct bpf_gen *gen, int outer_map_idx, int slo
 
 void bpf_gen__map_freeze(struct bpf_gen *gen, int map_idx)
 {
-	int attr_size = offsetofend(union bpf_attr, map_fd);
+	int attr_size = offsetofend(struct bpf_map_freeze_attr, map_fd);
 	int map_freeze_attr;
-	union bpf_attr attr;
+	struct bpf_map_freeze_attr attr;
 
 	memset(&attr, 0, attr_size);
 	pr_debug("gen: map_freeze: idx %d\n", map_idx);
 	map_freeze_attr = add_data(gen, &attr, attr_size);
-	move_blob2blob(gen, attr_field(map_freeze_attr, map_fd), 4,
+	move_blob2blob(gen, attr_field(map_freeze_attr, map_freeze.map_fd), 4,
 		       blob_fd_array_off(gen, map_idx));
 	/* emit MAP_FREEZE command */
 	emit_sys_bpf(gen, BPF_MAP_FREEZE, map_freeze_attr, attr_size);
