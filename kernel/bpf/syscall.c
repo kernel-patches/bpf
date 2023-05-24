@@ -1123,7 +1123,7 @@ free_map_tab:
 	return ret;
 }
 
-#define BPF_MAP_CREATE_LAST_FIELD map_extra
+#define BPF_MAP_CREATE_LAST_FIELD map_create.map_extra
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
 {
@@ -1352,7 +1352,7 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
+#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD map_elem.flags
 
 static int map_lookup_elem(union bpf_attr *attr)
 {
@@ -1427,7 +1427,7 @@ err_put:
 }
 
 
-#define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
+#define BPF_MAP_UPDATE_ELEM_LAST_FIELD map_elem.flags
 
 static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 {
@@ -1483,7 +1483,7 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_DELETE_ELEM_LAST_FIELD key
+#define BPF_MAP_DELETE_ELEM_LAST_FIELD map_elem.key
 
 static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 {
@@ -1538,7 +1538,7 @@ err_put:
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD next_key
+#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD map_next_key.next_key
 
 static int map_get_next_key(union bpf_attr *attr)
 {
@@ -1817,7 +1817,7 @@ free_buf:
 	return err;
 }
 
-#define BPF_MAP_LOOKUP_AND_DELETE_ELEM_LAST_FIELD flags
+#define BPF_MAP_LOOKUP_AND_DELETE_ELEM_LAST_FIELD map_elem.flags
 
 static int map_lookup_and_delete_elem(union bpf_attr *attr)
 {
@@ -1910,7 +1910,7 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_FREEZE_LAST_FIELD map_fd
+#define BPF_MAP_FREEZE_LAST_FIELD map_freeze.map_fd
 
 static int map_freeze(const union bpf_attr *attr)
 {
@@ -2493,7 +2493,7 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define	BPF_PROG_LOAD_LAST_FIELD log_true_size
+#define BPF_PROG_LOAD_LAST_FIELD prog_load.log_true_size
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
@@ -2697,13 +2697,13 @@ free_prog:
 	return err;
 }
 
-#define BPF_OBJ_LAST_FIELD path_fd
+#define BPF_OBJ_PIN_LAST_FIELD obj_pin.path_fd
 
 static int bpf_obj_pin(const union bpf_attr *attr)
 {
 	int path_fd;
 
-	if (CHECK_ATTR(BPF_OBJ) || attr->file_flags & ~BPF_F_PATH_FD)
+	if (CHECK_ATTR(BPF_OBJ_PIN) || attr->file_flags & ~BPF_F_PATH_FD)
 		return -EINVAL;
 
 	/* path_fd has to be accompanied by BPF_F_PATH_FD flag */
@@ -2715,11 +2715,13 @@ static int bpf_obj_pin(const union bpf_attr *attr)
 				u64_to_user_ptr(attr->pathname));
 }
 
+#define BPF_OBJ_GET_LAST_FIELD obj_get.path_fd
+
 static int bpf_obj_get(const union bpf_attr *attr)
 {
 	int path_fd;
 
-	if (CHECK_ATTR(BPF_OBJ) || attr->bpf_fd != 0 ||
+	if (CHECK_ATTR(BPF_OBJ_GET) || attr->bpf_fd != 0 ||
 	    attr->file_flags & ~(BPF_OBJ_FLAG_MASK | BPF_F_PATH_FD))
 		return -EINVAL;
 
@@ -3526,7 +3528,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	}
 }
 
-#define BPF_PROG_ATTACH_LAST_FIELD replace_bpf_fd
+#define BPF_PROG_ATTACH_LAST_FIELD prog_attach.replace_bpf_fd
 
 #define BPF_F_ATTACH_MASK \
 	(BPF_F_ALLOW_OVERRIDE | BPF_F_ALLOW_MULTI | BPF_F_REPLACE)
@@ -3590,7 +3592,7 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	return ret;
 }
 
-#define BPF_PROG_DETACH_LAST_FIELD attach_type
+#define BPF_PROG_DETACH_LAST_FIELD prog_detach.attach_type
 
 static int bpf_prog_detach(const union bpf_attr *attr)
 {
@@ -3706,7 +3708,7 @@ static int bpf_prog_test_run(const union bpf_attr *attr,
 	return ret;
 }
 
-#define BPF_OBJ_GET_NEXT_ID_LAST_FIELD next_id
+#define BPF_OBJ_GET_NEXT_ID_LAST_FIELD obj_next_id.next_id
 
 static int bpf_obj_get_next_id(const union bpf_attr *attr,
 			       union bpf_attr __user *uattr,
@@ -3772,7 +3774,7 @@ again:
 	return prog;
 }
 
-#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD prog_id
+#define BPF_PROG_GET_FD_BY_ID_LAST_FIELD obj_fd_by_id.obj_id
 
 struct bpf_prog *bpf_prog_by_id(u32 id)
 {
@@ -3814,7 +3816,7 @@ static int bpf_prog_get_fd_by_id(const union bpf_attr *attr)
 	return fd;
 }
 
-#define BPF_MAP_GET_FD_BY_ID_LAST_FIELD open_flags
+#define BPF_MAP_GET_FD_BY_ID_LAST_FIELD obj_fd_by_id.flags
 
 static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 {
@@ -4385,7 +4387,7 @@ static int bpf_obj_get_info_by_fd(const union bpf_attr *attr,
 	return err;
 }
 
-#define BPF_BTF_LOAD_LAST_FIELD btf_log_true_size
+#define BPF_BTF_LOAD_LAST_FIELD btf_load.log_true_size
 
 static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
@@ -4398,7 +4400,7 @@ static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_
 	return btf_new_fd(attr, uattr, uattr_size);
 }
 
-#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD btf_id
+#define BPF_BTF_GET_FD_BY_ID_LAST_FIELD obj_fd_by_id.obj_id
 
 static int bpf_btf_get_fd_by_id(const union bpf_attr *attr)
 {
@@ -4859,7 +4861,7 @@ again:
 	return link;
 }
 
-#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD link_id
+#define BPF_LINK_GET_FD_BY_ID_LAST_FIELD obj_fd_by_id.obj_id
 
 static int bpf_link_get_fd_by_id(const union bpf_attr *attr)
 {

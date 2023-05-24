@@ -1320,7 +1320,8 @@ struct bpf_stack_build_id {
 #define BPF_OBJ_NAME_LEN 16U
 
 union bpf_attr {
-	struct { /* anonymous struct used by BPF_MAP_CREATE command */
+	/* BPF_MAP_CREATE command */
+	struct bpf_map_create_attr {
 		__u32	map_type;	/* one of enum bpf_map_type */
 		__u32	key_size;	/* size of key in bytes */
 		__u32	value_size;	/* size of value in bytes */
@@ -1348,19 +1349,30 @@ union bpf_attr {
 		 * to using 5 hash functions).
 		 */
 		__u64	map_extra;
-	};
+	} map_create;
 
-	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
+	/* BPF_MAP_{LOOKUP,UPDATE,DELETE,LOOKUP_AND_DELETE}_ELEM commands */
+	struct bpf_map_elem_attr {
 		__u32		map_fd;
 		__aligned_u64	key;
-		union {
-			__aligned_u64 value;
-			__aligned_u64 next_key;
-		};
+		__aligned_u64	value;
 		__u64		flags;
-	};
+	} map_elem;
 
-	struct { /* struct used by BPF_MAP_*_BATCH commands */
+	/* BPF_MAP_GET_NEXT_KEY command */
+	struct bpf_map_next_key_attr {
+		__u32		map_fd;
+		__aligned_u64	key;
+		__aligned_u64	next_key;
+	} map_next_key;
+
+	/* BPF_MAP_FREEZE command */
+	struct bpf_map_freeze_attr {
+		__u32		map_fd;
+	} map_freeze;
+
+	/* BPF_MAP_{LOOKUP,UPDATE,DELETE,LOOKUP_AND_DELETE}_BATCH commands */
+	struct bpf_map_batch_attr {
 		__aligned_u64	in_batch;	/* start batch,
 						 * NULL to start from beginning
 						 */
@@ -1377,7 +1389,8 @@ union bpf_attr {
 		__u64		flags;
 	} batch;
 
-	struct { /* anonymous struct used by BPF_PROG_LOAD command */
+	/* BPF_PROG_LOAD command */
+	struct bpf_prog_load_attr {
 		__u32		prog_type;	/* one of enum bpf_prog_type */
 		__u32		insn_cnt;
 		__aligned_u64	insns;
@@ -1417,12 +1430,13 @@ union bpf_attr {
 		 * truncated), or smaller (if log buffer wasn't filled completely).
 		 */
 		__u32		log_true_size;
-	};
+	} prog_load;
 
-	struct { /* anonymous struct used by BPF_OBJ_* commands */
+	/* BPF_OBJ_PIN command */
+	struct bpf_obj_pin_attr {
 		__aligned_u64	pathname;
 		__u32		bpf_fd;
-		__u32		file_flags;
+		__u32		flags;
 		/* Same as dirfd in openat() syscall; see openat(2)
 		 * manpage for details of path FD and pathname semantics;
 		 * path_fd should accompanied by BPF_F_PATH_FD flag set in
@@ -1430,9 +1444,24 @@ union bpf_attr {
 		 * if BPF_F_PATH_FD flag is not set, AT_FDCWD is assumed.
 		 */
 		__s32		path_fd;
-	};
+	} obj_pin;
 
-	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
+	/* BPF_OBJ_GET command */
+	struct bpf_obj_get_attr {
+		__aligned_u64	pathname;
+		__u32		__reserved;
+		__u32		flags;
+		/* Same as dirfd in openat() syscall; see openat(2)
+		 * manpage for details of path FD and pathname semantics;
+		 * path_fd should accompanied by BPF_F_PATH_FD flag set in
+		 * file_flags field, otherwise it should be set to zero;
+		 * if BPF_F_PATH_FD flag is not set, AT_FDCWD is assumed.
+		 */
+		__s32		path_fd;
+	} obj_get;
+
+	/* BPF_PROG_ATTACH command */
+	struct bpf_prog_attach_attr {
 		__u32		target_fd;	/* container object to attach to */
 		__u32		attach_bpf_fd;	/* eBPF program to attach */
 		__u32		attach_type;
@@ -1441,9 +1470,16 @@ union bpf_attr {
 						 * program to replace if
 						 * BPF_F_REPLACE is used
 						 */
-	};
+	} prog_attach;
 
-	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
+	/* BPF_PROG_DETACH command */
+	struct bpf_prog_detach_attr {
+		__u32		target_fd;	/* container object to attach to */
+		__u32		prog_fd;	/* eBPF program to detach */
+		__u32		attach_type;
+	} prog_detach;
+
+	struct bpf_prog_run_attr { /* anonymous struct used by BPF_PROG_TEST_RUN command */
 		__u32		prog_fd;
 		__u32		retval;
 		__u32		data_size_in;	/* input: len of data_in */
@@ -1467,25 +1503,26 @@ union bpf_attr {
 		__u32		batch_size;
 	} test;
 
-	struct { /* anonymous struct used by BPF_*_GET_*_ID */
-		union {
-			__u32		start_id;
-			__u32		prog_id;
-			__u32		map_id;
-			__u32		btf_id;
-			__u32		link_id;
-		};
-		__u32		next_id;
-		__u32		open_flags;
-	};
+	/* BPF_{MAP,PROG,BTF,LINK}_GET_FD_BY_ID commands */
+	struct bpf_obj_fd_by_id_attr {
+		__u32		obj_id;
+		__u32		__reserved;
+		__u32		flags;
+	} obj_fd_by_id;
 
-	struct { /* anonymous struct used by BPF_OBJ_GET_INFO_BY_FD */
+	/* BPF_OBJ_GET_NEXT_ID command */
+	struct bpf_obj_next_id_attr {
+		__u32		start_id;
+		__u32		next_id;
+	} obj_next_id;
+
+	struct bpf_obj_info_by_fd_attr { /* anonymous struct used by BPF_OBJ_GET_INFO_BY_FD */
 		__u32		bpf_fd;
 		__u32		info_len;
 		__aligned_u64	info;
 	} info;
 
-	struct { /* anonymous struct used by BPF_PROG_QUERY command */
+	struct bpf_prog_query_attr { /* anonymous struct used by BPF_PROG_QUERY command */
 		__u32		target_fd;	/* container object to query */
 		__u32		attach_type;
 		__u32		query_flags;
@@ -1498,25 +1535,26 @@ union bpf_attr {
 		__aligned_u64	prog_attach_flags;
 	} query;
 
-	struct { /* anonymous struct used by BPF_RAW_TRACEPOINT_OPEN command */
+	struct bpf_raw_tp_open_attr { /* anonymous struct used by BPF_RAW_TRACEPOINT_OPEN command */
 		__u64 name;
 		__u32 prog_fd;
 	} raw_tracepoint;
 
-	struct { /* anonymous struct for BPF_BTF_LOAD */
+	/* BPF_BTF_LOAD command */
+	struct bpf_btf_load_attr {
 		__aligned_u64	btf;
-		__aligned_u64	btf_log_buf;
+		__aligned_u64	log_buf;
 		__u32		btf_size;
-		__u32		btf_log_size;
-		__u32		btf_log_level;
+		__u32		log_size;
+		__u32		log_level;
 		/* output: actual total log contents size (including termintaing zero).
 		 * It could be both larger than original log_size (if log was
 		 * truncated), or smaller (if log buffer wasn't filled completely).
 		 */
-		__u32		btf_log_true_size;
-	};
+		__u32		log_true_size;
+	} btf_load;
 
-	struct {
+	struct bpf_task_fd_query_attr {
 		__u32		pid;		/* input: pid */
 		__u32		fd;		/* input: fd */
 		__u32		flags;		/* input: flags */
@@ -1532,7 +1570,7 @@ union bpf_attr {
 		__u64		probe_addr;	/* output: probe_addr */
 	} task_fd_query;
 
-	struct { /* struct used by BPF_LINK_CREATE command */
+	struct bpf_link_create_attr { /* struct used by BPF_LINK_CREATE command */
 		union {
 			__u32		prog_fd;	/* eBPF program to attach */
 			__u32		map_fd;		/* struct_ops to attach */
@@ -1581,7 +1619,7 @@ union bpf_attr {
 		};
 	} link_create;
 
-	struct { /* struct used by BPF_LINK_UPDATE command */
+	struct bpf_link_update_attr { /* struct used by BPF_LINK_UPDATE command */
 		__u32		link_fd;	/* link fd */
 		union {
 			/* new program fd to update link with */
@@ -1602,25 +1640,136 @@ union bpf_attr {
 		};
 	} link_update;
 
-	struct {
+	struct bpf_link_detach_attr {
 		__u32		link_fd;
 	} link_detach;
 
-	struct { /* struct used by BPF_ENABLE_STATS command */
+	struct bpf_enable_stats_attr { /* struct used by BPF_ENABLE_STATS command */
 		__u32		type;
 	} enable_stats;
 
-	struct { /* struct used by BPF_ITER_CREATE command */
+	struct bpf_iter_create_attr { /* struct used by BPF_ITER_CREATE command */
 		__u32		link_fd;
 		__u32		flags;
 	} iter_create;
 
-	struct { /* struct used by BPF_PROG_BIND_MAP command */
+	struct bpf_prog_bind_map_attr { /* struct used by BPF_PROG_BIND_MAP command */
 		__u32		prog_fd;
 		__u32		map_fd;
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
 
+	/*
+	 * LEGACY anonymous substructs, for backwards compatibility.
+	 * Each of the below anonymous substructs are ABI compatible with one
+	 * of the above named substructs. Please use named substructs.
+	 */
+
+	struct { /* legacy BPF_MAP_CREATE attrs, use .map_create instead */
+		__u32	map_type;
+		__u32	key_size;
+		__u32	value_size;
+		__u32	max_entries;
+		__u32	map_flags;
+		__u32	inner_map_fd;
+		__u32	numa_node;
+		char	map_name[BPF_OBJ_NAME_LEN];
+		__u32	map_ifindex;
+		__u32	btf_fd;
+		__u32	btf_key_type_id;
+		__u32	btf_value_type_id;
+		__u32	btf_vmlinux_value_type_id;
+		__u64	map_extra;
+	};
+	/*
+	 * legacy BPF_MAP_*_ELEM and BPF_MAP_GET_NEXT_KEY attrs,
+	 * use .map_elem or .get_next_key, respectively, instead
+	 */
+	struct {
+		__u32		map_fd;
+		__aligned_u64	key;
+		union {
+			__aligned_u64 value;
+			__aligned_u64 next_key;
+		};
+		__u64		flags;
+	};
+	struct { /* legacy BPF_PROG_LOAD attrs, use .prog_load instead */
+		__u32		prog_type;
+		__u32		insn_cnt;
+		__aligned_u64	insns;
+		__aligned_u64	license;
+		__u32		log_level;
+		__u32		log_size;
+		__aligned_u64	log_buf;
+		__u32		kern_version;
+		__u32		prog_flags;
+		char		prog_name[BPF_OBJ_NAME_LEN];
+		__u32		prog_ifindex;
+		__u32		expected_attach_type;
+		__u32		prog_btf_fd;
+		__u32		func_info_rec_size;
+		__aligned_u64	func_info;
+		__u32		func_info_cnt;
+		__u32		line_info_rec_size;
+		__aligned_u64	line_info;
+		__u32		line_info_cnt;
+		__u32		attach_btf_id;
+		union {
+			__u32		attach_prog_fd;
+			__u32		attach_btf_obj_fd;
+		};
+		__u32		core_relo_cnt;
+		__aligned_u64	fd_array;
+		__aligned_u64	core_relos;
+		__u32		core_relo_rec_size;
+		__u32		log_true_size;
+	};
+	/* legacy BPF_OBJ_{PIN, GET} attrs, use .obj_pin or .obj_get instead */
+	struct {
+		__aligned_u64	pathname;
+		__u32		bpf_fd;
+		__u32		file_flags;
+		__s32		path_fd;
+	};
+	/*
+	 * legacy BPF_PROG_{ATTACH,DETACH} attrs,
+	 * use .prog_attach or .prog_detach instead
+	 */
+	struct {
+		__u32		target_fd;	/* container object to attach to */
+		__u32		attach_bpf_fd;	/* eBPF program to attach */
+		__u32		attach_type;
+		__u32		attach_flags;
+		__u32		replace_bpf_fd;	/* previously attached eBPF
+						 * program to replace if
+						 * BPF_F_REPLACE is used
+						 */
+	};
+	/*
+	 * legacy BPF_*_GET_FD_BY_ID and BPF_OBJ_GET_NEXT_ID attrs,
+	 * use .obj_fd_by_id or .obj_next_id, respectively, instead
+	 */
+	struct {
+		union {
+			__u32		start_id;
+			__u32		prog_id;
+			__u32		map_id;
+			__u32		btf_id;
+			__u32		link_id;
+		};
+		__u32		next_id;
+		__u32		open_flags;
+	};
+	/* legacy BPF_BTF_LOAD attrs, use .btf_load instead */
+	struct {
+		__aligned_u64	btf;
+		__aligned_u64	btf_log_buf;
+		__u32		btf_size;
+		__u32		btf_log_size;
+		__u32		btf_log_level;
+		__u32		btf_log_true_size;
+	};
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF
