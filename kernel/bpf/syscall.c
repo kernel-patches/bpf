@@ -974,11 +974,8 @@ int bpf_get_file_flag(int flags)
 
 /* helper macro to check that unused fields 'union bpf_attr' are zero */
 #define CHECK_ATTR(CMD) \
-	memchr_inv((void *) &attr->CMD##_LAST_FIELD + \
-		   sizeof(attr->CMD##_LAST_FIELD), 0, \
-		   sizeof(*attr) - \
-		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
-		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
+	memchr_inv((void *)attr + offsetofend(union bpf_attr, CMD##_LAST_FIELD), 0, \
+		   sizeof(union bpf_attr) - offsetofend(union bpf_attr, CMD##_LAST_FIELD)) != NULL
 
 /* dst and src must have at least "size" number of bytes.
  * Return strlen on success and < 0 on error.
@@ -1354,7 +1351,7 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_MAP_LOOKUP_ELEM_LAST_FIELD map_elem.flags
 
-static int map_lookup_elem(union bpf_attr *attr)
+static int map_lookup_elem(struct bpf_map_elem_attr *attr)
 {
 	void __user *ukey = u64_to_user_ptr(attr->key);
 	void __user *uvalue = u64_to_user_ptr(attr->value);
@@ -1429,7 +1426,7 @@ err_put:
 
 #define BPF_MAP_UPDATE_ELEM_LAST_FIELD map_elem.flags
 
-static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
+static int map_update_elem(struct bpf_map_elem_attr *attr, bpfptr_t uattr)
 {
 	bpfptr_t ukey = make_bpfptr(attr->key, uattr.is_kernel);
 	bpfptr_t uvalue = make_bpfptr(attr->value, uattr.is_kernel);
@@ -1485,7 +1482,7 @@ err_put:
 
 #define BPF_MAP_DELETE_ELEM_LAST_FIELD map_elem.key
 
-static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
+static int map_delete_elem(struct bpf_map_elem_attr *attr, bpfptr_t uattr)
 {
 	bpfptr_t ukey = make_bpfptr(attr->key, uattr.is_kernel);
 	int ufd = attr->map_fd;
@@ -1540,7 +1537,7 @@ err_put:
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_MAP_GET_NEXT_KEY_LAST_FIELD map_next_key.next_key
 
-static int map_get_next_key(union bpf_attr *attr)
+static int map_get_next_key(struct bpf_map_next_key_attr *attr)
 {
 	void __user *ukey = u64_to_user_ptr(attr->key);
 	void __user *unext_key = u64_to_user_ptr(attr->next_key);
@@ -1912,7 +1909,7 @@ err_put:
 
 #define BPF_MAP_FREEZE_LAST_FIELD map_freeze.map_fd
 
-static int map_freeze(const union bpf_attr *attr)
+static int map_freeze(const struct bpf_map_freeze_attr *attr)
 {
 	int err = 0, ufd = attr->map_fd;
 	struct bpf_map *map;
@@ -3710,7 +3707,7 @@ static int bpf_prog_test_run(const union bpf_attr *attr,
 
 #define BPF_OBJ_GET_NEXT_ID_LAST_FIELD obj_next_id.next_id
 
-static int bpf_obj_get_next_id(const union bpf_attr *attr,
+static int bpf_obj_get_next_id(const struct bpf_obj_next_id_attr *attr,
 			       union bpf_attr __user *uattr,
 			       struct idr *idr,
 			       spinlock_t *lock)
@@ -5064,19 +5061,19 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		err = map_create(&attr);
 		break;
 	case BPF_MAP_LOOKUP_ELEM:
-		err = map_lookup_elem(&attr);
+		err = map_lookup_elem(&attr.map_elem);
 		break;
 	case BPF_MAP_UPDATE_ELEM:
-		err = map_update_elem(&attr, uattr);
+		err = map_update_elem(&attr.map_elem, uattr);
 		break;
 	case BPF_MAP_DELETE_ELEM:
-		err = map_delete_elem(&attr, uattr);
+		err = map_delete_elem(&attr.map_elem, uattr);
 		break;
 	case BPF_MAP_GET_NEXT_KEY:
-		err = map_get_next_key(&attr);
+		err = map_get_next_key(&attr.map_next_key);
 		break;
 	case BPF_MAP_FREEZE:
-		err = map_freeze(&attr);
+		err = map_freeze(&attr.map_freeze);
 		break;
 	case BPF_PROG_LOAD:
 		err = bpf_prog_load(&attr, uattr, size);
@@ -5100,15 +5097,15 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		err = bpf_prog_test_run(&attr, uattr.user);
 		break;
 	case BPF_PROG_GET_NEXT_ID:
-		err = bpf_obj_get_next_id(&attr, uattr.user,
+		err = bpf_obj_get_next_id(&attr.obj_next_id, uattr.user,
 					  &prog_idr, &prog_idr_lock);
 		break;
 	case BPF_MAP_GET_NEXT_ID:
-		err = bpf_obj_get_next_id(&attr, uattr.user,
+		err = bpf_obj_get_next_id(&attr.obj_next_id, uattr.user,
 					  &map_idr, &map_idr_lock);
 		break;
 	case BPF_BTF_GET_NEXT_ID:
-		err = bpf_obj_get_next_id(&attr, uattr.user,
+		err = bpf_obj_get_next_id(&attr.obj_next_id, uattr.user,
 					  &btf_idr, &btf_idr_lock);
 		break;
 	case BPF_PROG_GET_FD_BY_ID:
@@ -5158,7 +5155,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		err = bpf_link_get_fd_by_id(&attr);
 		break;
 	case BPF_LINK_GET_NEXT_ID:
-		err = bpf_obj_get_next_id(&attr, uattr.user,
+		err = bpf_obj_get_next_id(&attr.obj_next_id, uattr.user,
 					  &link_idr, &link_idr_lock);
 		break;
 	case BPF_ENABLE_STATS:
