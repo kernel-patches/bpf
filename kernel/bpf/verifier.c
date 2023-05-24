@@ -15151,6 +15151,28 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 
 	switch (base_type(rold->type)) {
 	case SCALAR_VALUE:
+		/* Why check_ids() for scalar registers?
+		 *
+		 * Consider the following BPF code:
+		 *   1: r6 = ... unbound scalar, ID=a ...
+		 *   2: r7 = ... unbound scalar, ID=b ...
+		 *   3: if (r6 > r7) goto +1
+		 *   4: r6 = r7
+		 *   5: if (r6 > X) goto ...
+		 *   6: ... memory operation using r7 ...
+		 *
+		 * First verification path is [1-6]:
+		 * - at (4) same bpf_reg_state::id (b) would be assigned to r6 and r7;
+		 * - at (5) r6 would be marked <= X, find_equal_scalars() would also mark
+		 *   r7 <= X, because r6 and r7 share same id.
+		 *
+		 * Next verification path would start from (5), because of the jump at (3).
+		 * The only state difference between first and second visits of (5) is
+		 * bpf_reg_state::id assignments for r6 and r7: (b, b) vs (a, b).
+		 * Thus, use check_ids() to distinguish these states.
+		 */
+		if (!check_ids(rold->id, rcur->id, idmap))
+			return false;
 		if (regs_exact(rold, rcur, idmap))
 			return true;
 		if (env->explore_alu_limits)
