@@ -156,7 +156,6 @@ static void test_unpriv_bpf_disabled_negative(struct test_unpriv_bpf_disabled *s
 	__u32 attach_flags = 0;
 	__u32 prog_ids[3] = {};
 	__u32 prog_cnt = 3;
-	__u32 next;
 	int i;
 
 	/* Negative tests for unprivileged BPF disabled.  Verify we cannot
@@ -176,25 +175,15 @@ static void test_unpriv_bpf_disabled_negative(struct test_unpriv_bpf_disabled *s
 			  -EPERM, "map_create_fails");
 
 	ASSERT_EQ(bpf_prog_get_fd_by_id(prog_id), -EPERM, "prog_get_fd_by_id_fails");
-	ASSERT_EQ(bpf_prog_get_next_id(prog_id, &next), -EPERM, "prog_get_next_id_fails");
-	ASSERT_EQ(bpf_prog_get_next_id(0, &next), -EPERM, "prog_get_next_id_fails");
 
 	if (ASSERT_OK(bpf_map_get_info_by_fd(map_fds[0], &map_info, &map_info_len),
-		      "obj_get_info_by_fd")) {
+		      "obj_get_info_by_fd"))
 		ASSERT_EQ(bpf_map_get_fd_by_id(map_info.id), -EPERM, "map_get_fd_by_id_fails");
-		ASSERT_EQ(bpf_map_get_next_id(map_info.id, &next), -EPERM,
-			  "map_get_next_id_fails");
-	}
-	ASSERT_EQ(bpf_map_get_next_id(0, &next), -EPERM, "map_get_next_id_fails");
 
 	if (ASSERT_OK(bpf_link_get_info_by_fd(bpf_link__fd(skel->links.sys_nanosleep_enter),
 					      &link_info, &link_info_len),
-		      "obj_get_info_by_fd")) {
+		      "obj_get_info_by_fd"))
 		ASSERT_EQ(bpf_link_get_fd_by_id(link_info.id), -EPERM, "link_get_fd_by_id_fails");
-		ASSERT_EQ(bpf_link_get_next_id(link_info.id, &next), -EPERM,
-			  "link_get_next_id_fails");
-	}
-	ASSERT_EQ(bpf_link_get_next_id(0, &next), -EPERM, "link_get_next_id_fails");
 
 	ASSERT_EQ(bpf_prog_query(prog_fd, BPF_TRACE_FENTRY, 0, &attach_flags, prog_ids,
 				 &prog_cnt), -EPERM, "prog_query_fails");

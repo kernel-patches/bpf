@@ -3720,9 +3720,6 @@ static int bpf_obj_get_next_id(const union bpf_attr *attr,
 	if (CHECK_ATTR(BPF_OBJ_GET_NEXT_ID) || next_id >= INT_MAX)
 		return -EINVAL;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	next_id++;
 	spin_lock_bh(lock);
 	if (!idr_get_next(idr, &next_id))
