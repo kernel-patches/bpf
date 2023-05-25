@@ -11134,6 +11134,8 @@ sk_reuseport_is_valid_access(int off, int size,
 	case bpf_ctx_range(struct sk_reuseport_md, ip_protocol):
 	case bpf_ctx_range(struct sk_reuseport_md, bind_inany):
 	case bpf_ctx_range(struct sk_reuseport_md, len):
+	case bpf_ctx_range(struct sk_reuseport_md, rx_queue_mapping):
+	case bpf_ctx_range(struct sk_reuseport_md, napi_id):
 		bpf_ctx_record_field_size(info, size_default);
 		return bpf_ctx_narrow_access_ok(off, size, size_default);
 
@@ -11181,6 +11183,14 @@ static u32 sk_reuseport_convert_ctx_access(enum bpf_access_type type,
 
 	case offsetof(struct sk_reuseport_md, eth_protocol):
 		SK_REUSEPORT_LOAD_SKB_FIELD(protocol);
+		break;
+
+	case offsetof(struct sk_reuseport_md, rx_queue_mapping):
+		SK_REUSEPORT_LOAD_SKB_FIELD(queue_mapping);
+		break;
+
+	case offsetof(struct sk_reuseport_md, napi_id):
+		SK_REUSEPORT_LOAD_SKB_FIELD(napi_id);
 		break;
 
 	case offsetof(struct sk_reuseport_md, ip_protocol):

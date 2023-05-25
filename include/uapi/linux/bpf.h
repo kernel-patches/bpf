@@ -6286,6 +6286,8 @@ struct sk_reuseport_md {
 	 */
 	__u32 eth_protocol;
 	__u32 ip_protocol;	/* IP protocol. e.g. IPPROTO_TCP, IPPROTO_UDP */
+	__u32 rx_queue_mapping; /* Rx queue associated with the skb */
+	__u32 napi_id;          /* napi id associated with the skb */
 	__u32 bind_inany;	/* Is sock bound to an INANY address? */
 	__u32 hash;		/* A hash of the packet 4 tuples */
 	/* When reuse->migrating_sk is NULL, it is selecting a sk for the
