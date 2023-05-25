@@ -11811,6 +11811,57 @@ static int attach_iter(const struct bpf_program *prog, long cookie, struct bpf_l
 	return libbpf_get_error(*link);
 }
 
+struct bpf_link *bpf_program__attach_netfilter_opts(const struct bpf_program *prog,
+						    const struct bpf_netfilter_opts *opts)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, link_create);
+	struct bpf_link *link;
+	int prog_fd, link_fd;
+	union bpf_attr attr;
+
+	if (!OPTS_VALID(opts, bpf_netfilter_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link)
+		return libbpf_err_ptr(-ENOMEM);
+	link->detach = &bpf_link__detach_fd;
+
+	memset(&attr, 0, attr_sz);
+
+	attr.link_create.prog_fd = prog_fd;
+	attr.link_create.netfilter.pf = OPTS_GET(opts, pf, 0);
+	attr.link_create.netfilter.hooknum = OPTS_GET(opts, hooknum, 0);
+	attr.link_create.netfilter.priority = OPTS_GET(opts, priority, 0);
+	attr.link_create.netfilter.flags = OPTS_GET(opts, flags, 0);
+
+	link_fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, attr_sz);
+
+	link->fd = ensure_good_fd(link_fd);
+
+	if (link->fd < 0) {
+		char errmsg[STRERR_BUFSIZE];
+
+		link_fd = -errno;
+		free(link);
+		pr_warn("prog '%s': failed to attach to pf:%d,hooknum:%d:prio:%d: %s\n",
+			prog->name,
+			OPTS_GET(opts, pf, 0),
+			OPTS_GET(opts, hooknum, 0),
+			OPTS_GET(opts, priority, 0),
+			libbpf_strerror_r(link_fd, errmsg, sizeof(errmsg)));
+		return libbpf_err_ptr(link_fd);
+	}
+
+	return link;
+}
+
 struct bpf_link *bpf_program__attach(const struct bpf_program *prog)
 {
 	struct bpf_link *link = NULL;
