@@ -949,7 +949,7 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	struct net *net = dev_net(skb->dev);
 	struct udphdr *uh;
 	struct sock *sk;
-	bool refcounted;
+	bool refcounted, prefetched;
 	u32 ulen = 0;
 
 	if (!pskb_may_pull(skb, sizeof(struct udphdr)))
@@ -986,10 +986,27 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		goto csum_error;
 
 	/* Check if the socket is already available, e.g. due to early demux */
-	sk = skb_steal_sock(skb, &refcounted);
+	sk = skb_steal_sock(skb, &refcounted, &prefetched);
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);
 		int ret;
+
+		if (prefetched) {
+			struct sock *reuse_sk = lookup_reuseport(net, sk, skb,
+								 saddr, uh->source,
+								 daddr, ntohs(uh->dest));
+			if (reuse_sk) {
+				if (reuse_sk != sk) {
+					if (refcounted) {
+						sock_put(sk);
+						refcounted = false;
+					}
+					if (IS_ERR(reuse_sk))
+						goto no_sk;
+				}
+				sk = reuse_sk;
+			}
+		}
 
 		if (unlikely(rcu_dereference(sk->sk_rx_dst) != dst))
 			udp6_sk_rx_dst_set(sk, dst);
@@ -1020,7 +1037,7 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 			goto report_csum_error;
 		return udp6_unicast_rcv_skb(sk, skb, uh);
 	}
-
+no_sk:
 	reason = SKB_DROP_REASON_NO_SOCKET;
 
 	if (!uh->check)

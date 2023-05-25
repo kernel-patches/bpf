@@ -379,6 +379,11 @@ struct sock *__inet_lookup_established(struct net *net,
 				       const __be32 daddr, const u16 hnum,
 				       const int dif, const int sdif);
 
+struct sock *inet_lookup_reuseport(struct net *net, struct sock *sk,
+				   struct sk_buff *skb, int doff,
+				   __be32 saddr, __be16 sport,
+				   __be32 daddr, unsigned short hnum);
+
 static inline struct sock *
 	inet_lookup_established(struct net *net, struct inet_hashinfo *hashinfo,
 				const __be32 saddr, const __be16 sport,
@@ -436,13 +441,31 @@ static inline struct sock *__inet_lookup_skb(struct inet_hashinfo *hashinfo,
 					     const int sdif,
 					     bool *refcounted)
 {
-	struct sock *sk = skb_steal_sock(skb, refcounted);
+	bool prefetched;
+	struct sock *sk = skb_steal_sock(skb, refcounted, &prefetched);
+	struct net *net = dev_net(skb_dst(skb)->dev);
 	const struct iphdr *iph = ip_hdr(skb);
 
+	if (prefetched) {
+		struct sock *reuse_sk = inet_lookup_reuseport(net, sk, skb, doff,
+							      iph->saddr, sport,
+							      iph->daddr, ntohs(dport));
+		if (reuse_sk) {
+			if (reuse_sk != sk) {
+				if (*refcounted) {
+					sock_put(sk);
+					*refcounted = false;
+				}
+				if (IS_ERR(reuse_sk))
+					return NULL;
+			}
+			return reuse_sk;
+		}
+	}
 	if (sk)
 		return sk;
 
-	return __inet_lookup(dev_net(skb_dst(skb)->dev), hashinfo, skb,
+	return __inet_lookup(net, hashinfo, skb,
 			     doff, iph->saddr, sport,
 			     iph->daddr, dport, inet_iif(skb), sdif,
 			     refcounted);
