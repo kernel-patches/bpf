@@ -49,7 +49,7 @@ static void *bpf_any_get(void *raw, enum bpf_type type)
 	return raw;
 }
 
-static void bpf_any_put(void *raw, enum bpf_type type)
+static void bpf_any_put(void *raw, enum bpf_type type, bool may_sleep)
 {
 	switch (type) {
 	case BPF_TYPE_PROG:
@@ -59,7 +59,10 @@ static void bpf_any_put(void *raw, enum bpf_type type)
 		bpf_map_put_with_uref(raw);
 		break;
 	case BPF_TYPE_LINK:
-		bpf_link_put(raw);
+		if (may_sleep)
+			bpf_link_put(raw);
+		else
+			bpf_link_put_from_atomic(raw);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -489,7 +492,7 @@ int bpf_obj_pin_user(u32 ufd, int path_fd, const char __user *pathname)
 
 	ret = bpf_obj_do_pin(path_fd, pathname, raw, type);
 	if (ret != 0)
-		bpf_any_put(raw, type);
+		bpf_any_put(raw, type, true);
 
 	return ret;
 }
@@ -551,7 +554,7 @@ int bpf_obj_get_user(int path_fd, const char __user *pathname, int flags)
 		return -ENOENT;
 
 	if (ret < 0)
-		bpf_any_put(raw, type);
+		bpf_any_put(raw, type, true);
 	return ret;
 }
 
@@ -616,7 +619,7 @@ static void bpf_free_inode(struct inode *inode)
 	if (S_ISLNK(inode->i_mode))
 		kfree(inode->i_link);
 	if (!bpf_inode_type(inode, &type))
-		bpf_any_put(inode->i_private, type);
+		bpf_any_put(inode->i_private, type, false);
 	free_inode_nonrcu(inode);
 }
 

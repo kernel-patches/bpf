@@ -2793,20 +2793,23 @@ static void bpf_link_put_deferred(struct work_struct *work)
 	bpf_link_free(link);
 }
 
-/* bpf_link_put can be called from atomic context, but ensures that resources
- * are freed from process context
+/* bpf_link_put_from_atomic is called from atomic context. It needs to be called
+ * from sleepable context in order to acquire sleeping locks during the process.
  */
-void bpf_link_put(struct bpf_link *link)
+void bpf_link_put_from_atomic(struct bpf_link *link)
 {
 	if (!atomic64_dec_and_test(&link->refcnt))
 		return;
 
-	if (in_atomic()) {
-		INIT_WORK(&link->work, bpf_link_put_deferred);
-		schedule_work(&link->work);
-	} else {
-		bpf_link_free(link);
-	}
+	INIT_WORK(&link->work, bpf_link_put_deferred);
+	schedule_work(&link->work);
+}
+
+void bpf_link_put(struct bpf_link *link)
+{
+	if (!atomic64_dec_and_test(&link->refcnt))
+		return;
+	bpf_link_free(link);
 }
 EXPORT_SYMBOL(bpf_link_put);
 
