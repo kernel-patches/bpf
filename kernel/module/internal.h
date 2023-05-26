@@ -12,6 +12,7 @@
 #include <linux/mutex.h>
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
+#include <linux/moduleloader.h>
 #include <linux/mm.h>
 
 #ifndef ARCH_SHF_SMALL
@@ -392,3 +393,5 @@ static inline int same_magic(const char *amagic, const char *bmagic, bool has_cr
 	return strcmp(amagic, bmagic) == 0;
 }
 #endif /* CONFIG_MODVERSIONS */
+
+extern struct mod_allocators module_allocators;

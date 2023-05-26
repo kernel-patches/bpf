@@ -113,17 +113,17 @@ enum kprobe_slot_state {
 void __weak *alloc_insn_page(void)
 {
 	/*
-	 * Use module_alloc() so this page is within +/- 2GB of where the
+	 * Use module_alloc_type() so this page is within +/- 2GB of where the
 	 * kernel image and loaded module images reside. This is required
 	 * for most of the architectures.
 	 * (e.g. x86-64 needs this to handle the %rip-relative fixups.)
 	 */
-	return module_alloc(PAGE_SIZE);
+	return module_alloc_type(PAGE_SIZE, MOD_TEXT);
 }
 
 static void free_insn_page(void *page)
 {
-	module_memfree(page);
+	module_memfree_type(page, MOD_TEXT);
 }
 
 struct kprobe_insn_cache kprobe_insn_slots = {

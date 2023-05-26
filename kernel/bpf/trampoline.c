@@ -13,6 +13,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
+#include <linux/moduleloader.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -440,7 +441,7 @@ again:
 	if (err < 0)
 		goto out;
 
-	set_memory_rox((long)im->image, 1);
+	module_memory_protect(im->image, PAGE_SIZE, MOD_TEXT);
 
 	WARN_ON(tr->cur_image && tr->selector == 0);
 	WARN_ON(!tr->cur_image && tr->selector);
@@ -462,8 +463,7 @@ again:
 		tr->fops->trampoline = 0;
 
 		/* reset im->image memory attr for arch_prepare_bpf_trampoline */
-		set_memory_nx((long)im->image, 1);
-		set_memory_rw((long)im->image, 1);
+		module_memory_unprotect(im->image, PAGE_SIZE, MOD_TEXT);
 		goto again;
 	}
 #endif

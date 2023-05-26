@@ -16,6 +16,10 @@ static void module_set_memory(const struct module *mod, enum mod_mem_type type,
 {
 	const struct module_memory *mod_mem = &mod->mem[type];
 
+	/* The allocator already called set_memory_*, skip here. */
+	if (module_allocators.types[type]->params.flags & MOD_ALLOC_SET_MEMORY)
+		return;
+
 	set_vm_flush_reset_perms(mod_mem->base);
 	set_memory((unsigned long)mod_mem->base, mod_mem->size >> PAGE_SHIFT);
 }

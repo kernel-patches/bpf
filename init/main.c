@@ -936,6 +936,7 @@ asmlinkage __visible void __init __no_sanitize_address __noreturn start_kernel(v
 	sort_main_extable();
 	trap_init();
 	mm_core_init();
+	module_allocator_init();
 	poking_init();
 	ftrace_init();
 

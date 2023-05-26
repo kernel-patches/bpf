@@ -12,6 +12,7 @@
 #include <linux/mutex.h>
 #include <linux/btf_ids.h>
 #include <linux/rcupdate_wait.h>
+#include <linux/moduleloader.h>
 
 enum bpf_struct_ops_state {
 	BPF_STRUCT_OPS_STATE_INIT,
@@ -512,7 +513,8 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		err = st_ops->validate(kdata);
 		if (err)
 			goto reset_unlock;
-		set_memory_rox((long)st_map->image, 1);
+		module_memory_protect(st_map->image, PAGE_SIZE, MOD_TEXT);
+
 		/* Let bpf_link handle registration & unregistration.
 		 *
 		 * Pair with smp_load_acquire() during lookup_elem().
@@ -521,7 +523,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		goto unlock;
 	}
 
-	set_memory_rox((long)st_map->image, 1);
+	module_memory_protect(st_map->image, PAGE_SIZE, MOD_TEXT);
 	err = st_ops->reg(kdata);
 	if (likely(!err)) {
 		/* This refcnt increment on the map here after
@@ -544,8 +546,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	 * there was a race in registering the struct_ops (under the same name) to
 	 * a sub-system through different struct_ops's maps.
 	 */
-	set_memory_nx((long)st_map->image, 1);
-	set_memory_rw((long)st_map->image, 1);
+	module_memory_unprotect(st_map->image, PAGE_SIZE, MOD_TEXT);
 
 reset_unlock:
 	bpf_struct_ops_map_put_progs(st_map);
@@ -907,4 +908,3 @@ err_out:
 	kfree(link);
 	return err;
 }
-

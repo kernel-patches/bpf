@@ -1210,11 +1210,11 @@ static bool mod_mem_use_vmalloc(enum mod_mem_type type)
 		mod_mem_type_is_core_data(type);
 }
 
-static void *module_memory_alloc(unsigned int size, enum mod_mem_type type)
+static void *module_memory_alloc(size_t size, enum mod_mem_type type)
 {
 	if (mod_mem_use_vmalloc(type))
 		return vzalloc(size);
-	return module_alloc(size);
+	return module_alloc_type(size, type);
 }
 
 static void module_memory_free(void *ptr, enum mod_mem_type type)
@@ -1222,7 +1222,7 @@ static void module_memory_free(void *ptr, enum mod_mem_type type)
 	if (mod_mem_use_vmalloc(type))
 		vfree(ptr);
 	else
-		module_memfree(ptr);
+		module_memfree_type(ptr, type);
 }
 
 static void free_mod_mem(struct module *mod)
@@ -1614,6 +1614,201 @@ void * __weak module_alloc(unsigned long size)
 	return __vmalloc_node_range(size, 1, VMALLOC_START, VMALLOC_END,
 			GFP_KERNEL, PAGE_KERNEL_EXEC, VM_FLUSH_RESET_PERMS,
 			NUMA_NO_NODE, __builtin_return_address(0));
+}
+
+struct mod_allocators module_allocators;
+
+static struct mod_type_allocator default_mod_type_allocator = {
+	.params = {
+		.flags = MOD_ALLOC_FALLBACK,
+	},
+};
+
+void __init __weak module_alloc_type_init(struct mod_allocators *allocators)
+{
+	for_each_mod_mem_type(type)
+		allocators->types[type] = &default_mod_type_allocator;
+}
+
+static void module_memory_enable_protection(void *ptr, size_t len, enum mod_mem_type type)
+{
+	int npages = DIV_ROUND_UP(len, PAGE_SIZE);
+
+	switch (type) {
+	case MOD_TEXT:
+	case MOD_INIT_TEXT:
+		set_memory_rox((unsigned long)ptr, npages);
+		break;
+	case MOD_DATA:
+	case MOD_INIT_DATA:
+		set_memory_nx((unsigned long)ptr, npages);
+		break;
+	case MOD_RODATA:
+		set_memory_nx((unsigned long)ptr, npages);
+		set_memory_ro((unsigned long)ptr, npages);
+		break;
+	case MOD_RO_AFTER_INIT:
+		set_memory_ro((unsigned long)ptr, npages);
+		break;
+	default:
+		WARN_ONCE(true, "Unknown mod_mem_type: %d\n", type);
+		break;
+	}
+}
+
+static void module_memory_disable_protection(void *ptr, size_t len, enum mod_mem_type type)
+{
+	int npages = DIV_ROUND_UP(len, PAGE_SIZE);
+
+	switch (type) {
+	case MOD_TEXT:
+	case MOD_INIT_TEXT:
+		set_memory_nx((unsigned long)ptr, npages);
+		set_memory_rw((unsigned long)ptr, npages);
+		break;
+	case MOD_RODATA:
+	case MOD_RO_AFTER_INIT:
+		set_memory_rw((unsigned long)ptr, npages);
+		break;
+	case MOD_DATA:
+	case MOD_INIT_DATA:
+		break;
+	default:
+		WARN_ONCE(true, "Unknown mod_mem_type: %d\n", type);
+		break;
+	}
+}
+
+void *module_alloc_type(size_t size, enum mod_mem_type type)
+{
+	struct mod_type_allocator *allocator;
+	struct mod_alloc_params *params;
+	void *ptr = NULL;
+	int i;
+
+	if (WARN_ON_ONCE(type >= MOD_MEM_NUM_TYPES))
+		return NULL;
+
+	allocator = module_allocators.types[type];
+	params = &allocator->params;
+
+	if (params->flags & MOD_ALLOC_FALLBACK)
+		return module_alloc(size);
+
+	for (i = 0; i < MOD_MAX_ADDR_SPACES; i++) {
+		struct vmalloc_params *vmp = &params->vmp[i];
+
+		if (vmp->start == vmp->end)
+			continue;
+
+		ptr = __vmalloc_node_range(size, params->alignment, vmp->start, vmp->end,
+					   vmp->gfp_mask, vmp->pgprot, vmp->vm_flags,
+					   NUMA_NO_NODE, __builtin_return_address(0));
+		if (!ptr)
+			continue;
+
+		if (params->flags & MOD_ALLOC_KASAN_MODULE_SHADOW) {
+			if (ptr && kasan_alloc_module_shadow(ptr, size, vmp->gfp_mask)) {
+				vfree(ptr);
+				return NULL;
+			}
+		}
+
+		/*
+		 * VM_FLUSH_RESET_PERMS is still needed here. This is
+		 * because "size" is not available in module_memfree_type
+		 * at the moment, so we cannot undo set_memory_rox in
+		 * module_memfree_type. Once a better allocator is used,
+		 * we can manually undo set_memory_rox, and thus remove
+		 * VM_FLUSH_RESET_PERMS.
+		 */
+		set_vm_flush_reset_perms(ptr);
+
+		if (params->flags & MOD_ALLOC_SET_MEMORY)
+			module_memory_enable_protection(ptr, size, type);
+
+		if (params->flags & MOD_ALLOC_KASAN_RESET_TAG)
+			return kasan_reset_tag(ptr);
+		return ptr;
+	}
+	return NULL;
+}
+
+void module_memfree_type(void *ptr, enum mod_mem_type type)
+{
+	module_memfree(ptr);
+}
+
+void module_memory_fill_type(void *dst, void *src, size_t len, enum mod_mem_type type)
+{
+	struct mod_type_allocator *allocator;
+	struct mod_alloc_params *params;
+
+	allocator = module_allocators.types[type];
+	params = &allocator->params;
+
+	if (params->fill)
+		params->fill(dst, src, len);
+	else
+		memcpy(dst, src, len);
+}
+
+void module_memory_invalidate_type(void *dst, size_t len, enum mod_mem_type type)
+{
+	struct mod_type_allocator *allocator;
+	struct mod_alloc_params *params;
+
+	allocator = module_allocators.types[type];
+	params = &allocator->params;
+
+	if (params->invalidate)
+		params->invalidate(dst, len);
+	else
+		memset(dst, 0, len);
+}
+
+/*
+ * Protect memory allocated by module_alloc_type(). Called by users of
+ * module_alloc_type. This is a no-op with MOD_ALLOC_SET_MEMORY.
+ */
+void module_memory_protect(void *ptr, size_t len, enum mod_mem_type type)
+{
+	struct mod_alloc_params *params = &module_allocators.types[type]->params;
+
+	if (params->flags & MOD_ALLOC_SET_MEMORY)
+		return;
+	module_memory_enable_protection(ptr, len, type);
+}
+
+/*
+ * Unprotect memory allocated by module_alloc_type(). Called by users of
+ * module_alloc_type. This is a no-op with MOD_ALLOC_SET_MEMORY.
+ */
+void module_memory_unprotect(void *ptr, size_t len, enum mod_mem_type type)
+{
+	struct mod_alloc_params *params = &module_allocators.types[type]->params;
+
+	if (params->flags & MOD_ALLOC_SET_MEMORY)
+		return;
+	module_memory_disable_protection(ptr, len, type);
+}
+
+/*
+ * Should only be used by arch code in cases where text_poke like
+ * solution is not ready yet
+ */
+void module_memory_force_protect(void *ptr, size_t len, enum mod_mem_type type)
+{
+	module_memory_enable_protection(ptr, len, type);
+}
+
+/*
+ * Should only be used by arch code in cases where text_poke like
+ * solution is not ready yet
+ */
+void module_memory_force_unprotect(void *ptr, size_t len, enum mod_mem_type type)
+{
+	module_memory_disable_protection(ptr, len, type);
 }
 
 bool __weak module_init_section(const char *name)
@@ -2248,7 +2443,7 @@ static int move_module(struct module *mod, struct load_info *info)
 			t = type;
 			goto out_enomem;
 		}
-		memset(ptr, 0, mod->mem[type].size);
+		module_memory_invalidate_type(ptr, mod->mem[type].size, type);
 		mod->mem[type].base = ptr;
 	}
 
@@ -2276,7 +2471,8 @@ static int move_module(struct module *mod, struct load_info *info)
 				ret = -ENOEXEC;
 				goto out_enomem;
 			}
-			memcpy(dest, (void *)shdr->sh_addr, shdr->sh_size);
+
+			module_memory_fill_type(dest, (void *)shdr->sh_addr, shdr->sh_size, type);
 		}
 		/*
 		 * Update the userspace copy's ELF section address to point to
@@ -2478,9 +2674,9 @@ static void do_free_init(struct work_struct *w)
 
 	llist_for_each_safe(pos, n, list) {
 		initfree = container_of(pos, struct mod_initfree, node);
-		module_memfree(initfree->init_text);
-		module_memfree(initfree->init_data);
-		module_memfree(initfree->init_rodata);
+		module_memfree_type(initfree->init_text, MOD_INIT_TEXT);
+		module_memfree_type(initfree->init_data, MOD_INIT_DATA);
+		module_memfree_type(initfree->init_rodata, MOD_INIT_RODATA);
 		kfree(initfree);
 	}
 }
@@ -3275,3 +3471,8 @@ static int module_debugfs_init(void)
 }
 module_init(module_debugfs_init);
 #endif
+
+void __init module_allocator_init(void)
+{
+	module_alloc_type_init(&module_allocators);
+}
