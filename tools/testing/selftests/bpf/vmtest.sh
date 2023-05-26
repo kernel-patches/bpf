@@ -160,7 +160,7 @@ update_selftests()
 	local selftests_dir="${kernel_checkout}/tools/testing/selftests/bpf"
 
 	cd "${selftests_dir}"
-	${make_command}
+	TRUNNER_LDFLAGS=-static ${make_command}
 
 	# Mount the image and copy the selftests to the image.
 	mount_image
