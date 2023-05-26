@@ -67,24 +67,82 @@ static unsigned long int get_module_load_offset(void)
 
 void *module_alloc(unsigned long size)
 {
-	gfp_t gfp_mask = GFP_KERNEL;
-	void *p;
+	WARN(true, "x86 should not use module_alloc\n");
+	return NULL;
+}
 
-	if (PAGE_ALIGN(size) > MODULES_LEN)
-		return NULL;
+static void *x86_module_invalidate_text(void *ptr, size_t len)
+{
+	return text_poke_set(ptr, 0xcc, len);
+}
 
-	p = __vmalloc_node_range(size, MODULE_ALIGN,
-				 MODULES_VADDR + get_module_load_offset(),
-				 MODULES_END, gfp_mask, PAGE_KERNEL,
-				 VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK,
-				 NUMA_NO_NODE, __builtin_return_address(0));
+static struct mod_type_allocator x86_mod_allocator_text = {
+	.params = {
+		.flags		= MOD_ALLOC_KASAN_MODULE_SHADOW | MOD_ALLOC_SET_MEMORY,
+		.granularity	= PAGE_SIZE,
+		.alignment	= MODULE_ALIGN,
+		.fill		= text_poke_copy,
+		.invalidate	= x86_module_invalidate_text,
+	},
+};
 
-	if (p && (kasan_alloc_module_shadow(p, size, gfp_mask) < 0)) {
-		vfree(p);
-		return NULL;
-	}
+static struct mod_type_allocator x86_mod_allocator_rw_data = {
+	.params = {
+		.flags		= MOD_ALLOC_KASAN_MODULE_SHADOW,
+		.granularity	= PAGE_SIZE,
+		.alignment	= MODULE_ALIGN,
+	},
+};
 
-	return p;
+static struct mod_type_allocator x86_mod_allocator_ro_data = {
+	.params = {
+		.flags		= MOD_ALLOC_KASAN_MODULE_SHADOW | MOD_ALLOC_SET_MEMORY,
+		.granularity	= PAGE_SIZE,
+		.alignment	= MODULE_ALIGN,
+		.fill		= text_poke_copy,
+		.invalidate	= x86_module_invalidate_text,
+	},
+};
+
+void __init module_alloc_type_init(struct mod_allocators *allocators)
+{
+	struct mod_alloc_params *params = &x86_mod_allocator_text.params;
+	struct vmalloc_params *vmp = &params->vmp[0];
+
+	vmp->start = MODULES_VADDR + get_module_load_offset();
+	vmp->end = MODULES_END;
+	vmp->gfp_mask = GFP_KERNEL;
+	vmp->pgprot = PAGE_KERNEL_EXEC;
+	vmp->vm_flags = VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK |
+		VM_ALLOW_HUGE_VMAP;
+
+	for_class_mod_mem_type(type, text)
+		allocators->types[type] = &x86_mod_allocator_text;
+
+	params = &x86_mod_allocator_rw_data.params;
+	vmp = &params->vmp[0];
+
+	vmp->start = MODULES_VADDR + get_module_load_offset();
+	vmp->end = MODULES_END;
+	vmp->gfp_mask = GFP_KERNEL;
+	vmp->pgprot = PAGE_KERNEL_EXEC;
+	vmp->vm_flags = VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK;
+
+	allocators->types[MOD_DATA] = &x86_mod_allocator_rw_data;
+	allocators->types[MOD_INIT_DATA] = &x86_mod_allocator_rw_data;
+	allocators->types[MOD_RO_AFTER_INIT] = &x86_mod_allocator_rw_data;
+
+	params = &x86_mod_allocator_ro_data.params;
+	vmp = &params->vmp[0];
+
+	vmp->start = MODULES_VADDR + get_module_load_offset();
+	vmp->end = MODULES_END;
+	vmp->gfp_mask = GFP_KERNEL;
+	vmp->pgprot = PAGE_KERNEL_EXEC;
+	vmp->vm_flags = VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK;
+
+	allocators->types[MOD_RODATA] = &x86_mod_allocator_ro_data;
+	allocators->types[MOD_INIT_RODATA] = &x86_mod_allocator_ro_data;
 }
 
 #ifdef CONFIG_X86_32
@@ -134,7 +192,6 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 		   unsigned int symindex,
 		   unsigned int relsec,
 		   struct module *me,
-		   void *(*write)(void *dest, const void *src, size_t len),
 		   bool apply)
 {
 	unsigned int i;
@@ -202,14 +259,14 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 				       (int)ELF64_R_TYPE(rel[i].r_info), loc, val);
 				return -ENOEXEC;
 			}
-			write(loc, &val, size);
+			text_poke(loc, &val, size);
 		} else {
 			if (memcmp(loc, &val, size)) {
 				pr_warn("x86/modules: Invalid relocation target, existing value does not match expected value for type %d, loc %p, val %Lx\n",
 					(int)ELF64_R_TYPE(rel[i].r_info), loc, val);
 				return -ENOEXEC;
 			}
-			write(loc, &zero, size);
+			text_poke(loc, &zero, size);
 		}
 	}
 	return 0;
@@ -230,22 +287,11 @@ static int write_relocate_add(Elf64_Shdr *sechdrs,
 			      bool apply)
 {
 	int ret;
-	bool early = me->state == MODULE_STATE_UNFORMED;
-	void *(*write)(void *, const void *, size_t) = memcpy;
 
-	if (!early) {
-		write = text_poke;
-		mutex_lock(&text_mutex);
-	}
-
-	ret = __write_relocate_add(sechdrs, strtab, symindex, relsec, me,
-				   write, apply);
-
-	if (!early) {
-		text_poke_sync();
-		mutex_unlock(&text_mutex);
-	}
-
+	mutex_lock(&text_mutex);
+	ret = __write_relocate_add(sechdrs, strtab, symindex, relsec, me, apply);
+	text_poke_sync();
+	mutex_unlock(&text_mutex);
 	return ret;
 }
 

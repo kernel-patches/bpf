@@ -11,6 +11,7 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/moduleloader.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -226,7 +227,7 @@ static u8 simple_alu_opcodes[] = {
 static void jit_fill_hole(void *area, unsigned int size)
 {
 	/* Fill whole space with INT3 instructions */
-	memset(area, 0xcc, size);
+	text_poke_set(area, 0xcc, size);
 }
 
 int bpf_arch_text_invalidate(void *dst, size_t len)
@@ -2202,6 +2203,8 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		orig_call += X86_PATCH_SIZE;
 	}
 
+	module_memory_force_unprotect((void *)((unsigned long)image & PAGE_MASK),
+				      PAGE_SIZE, MOD_TEXT);
 	prog = image;
 
 	EMIT_ENDBR();
@@ -2238,20 +2241,24 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		emit_mov_imm64(&prog, BPF_REG_1, (long) im >> 32, (u32) (long) im);
 		if (emit_rsb_call(&prog, __bpf_tramp_enter, prog)) {
 			ret = -EINVAL;
-			goto cleanup;
+			goto reprotect_memory;
 		}
 	}
 
 	if (fentry->nr_links)
 		if (invoke_bpf(m, &prog, fentry, regs_off, run_ctx_off,
-			       flags & BPF_TRAMP_F_RET_FENTRY_RET))
-			return -EINVAL;
+			       flags & BPF_TRAMP_F_RET_FENTRY_RET)) {
+			ret = -EINVAL;
+			goto reprotect_memory;
+		}
 
 	if (fmod_ret->nr_links) {
 		branches = kcalloc(fmod_ret->nr_links, sizeof(u8 *),
 				   GFP_KERNEL);
-		if (!branches)
-			return -ENOMEM;
+		if (!branches) {
+			ret =  -ENOMEM;
+			goto reprotect_memory;
+		}
 
 		if (invoke_bpf_mod_ret(m, &prog, fmod_ret, regs_off,
 				       run_ctx_off, branches)) {
@@ -2336,6 +2343,9 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 
 cleanup:
 	kfree(branches);
+reprotect_memory:
+	module_memory_force_protect((void *)((unsigned long)image & PAGE_MASK),
+				    PAGE_SIZE, MOD_TEXT);
 	return ret;
 }
 

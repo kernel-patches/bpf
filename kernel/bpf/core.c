@@ -1092,8 +1092,10 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 		return NULL;
 	}
 
-	/* Fill space with illegal/arch-dep instructions. */
-	bpf_fill_ill_insns(*rw_header, size);
+	/* bpf_fill_ill_insns is used to write to RO memory, so we cannot
+	 * use it on rw_header, use memset(0) instead.
+	 */
+	memset(*rw_header, 0, size);
 	(*rw_header)->size = size;
 
 	hole = min_t(unsigned int, size - (proglen + sizeof(*ro_header)),
