@@ -232,6 +232,12 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 			jsonw_lluint(json_wtr, addrs[i]);
 		jsonw_end_array(json_wtr);
 		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		jsonw_string_field(json_wtr, "func",
+				   u64_to_ptr(info->perf_event.name));
+		jsonw_uint_field(json_wtr, "addr", info->perf_event.addr);
+		jsonw_uint_field(json_wtr, "offset", info->perf_event.offset);
+		break;
 	default:
 		break;
 	}
@@ -368,7 +374,7 @@ void netfilter_dump_plain(const struct bpf_link_info *info)
 static int show_link_close_plain(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
-	const char *prog_type_str;
+	const char *prog_type_str, *buf;
 	int err;
 
 	show_link_header_plain(info);
@@ -428,6 +434,12 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 			printf(" %0*llx", 16, addrs[i]);
 		}
 		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		buf = (const char *)u64_to_ptr(info->perf_event.name);
+		if (buf[0] != '\0' || info->perf_event.addr)
+			printf("\n\tfunc %s  addr %llx  offset %d  ", buf,
+			       info->perf_event.addr, info->perf_event.offset);
+		break;
 	default:
 		break;
 	}
@@ -454,6 +466,7 @@ static int do_show_link(int fd)
 	int count;
 	int err;
 
+	buf[0] = '\0';
 	memset(&info, 0, sizeof(info));
 again:
 	err = bpf_link_get_info_by_fd(fd, &info, &len);
@@ -488,6 +501,12 @@ again:
 			info.kprobe_multi.addrs = (unsigned long)addrs;
 			goto again;
 		}
+	}
+	if (info.type == BPF_LINK_TYPE_PERF_EVENT &&
+	    !info.perf_event.name) {
+		info.perf_event.name = (unsigned long)&buf;
+		info.perf_event.name_len = sizeof(buf);
+		goto again;
 	}
 
 	if (json_output)
