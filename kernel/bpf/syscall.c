@@ -3297,9 +3297,36 @@ static void bpf_perf_link_dealloc(struct bpf_link *link)
 	kfree(perf_link);
 }
 
+static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
+				      struct seq_file *seq)
+{
+	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
+	const struct perf_event *event;
+	u64 probe_offset, probe_addr;
+	u32 prog_id, fd_type;
+	const char *buf;
+	int err;
+
+	event = perf_get_event(perf_link->perf_file);
+	if (IS_ERR(event))
+		return;
+
+	err = bpf_get_perf_event_info(event, &prog_id, &fd_type,
+				      &buf, &probe_offset,
+				      &probe_addr);
+	if (err)
+		return;
+
+	if (buf)
+		seq_printf(seq, "func:\t%s\n", buf);
+	seq_printf(seq, "addr:\t%llx\n", probe_addr);
+	seq_printf(seq, "offset:\t%llu\n", probe_offset);
+}
+
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
 	.dealloc = bpf_perf_link_dealloc,
+	.show_fdinfo = bpf_perf_link_show_fdinfo,
 };
 
 static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
