@@ -218,6 +218,20 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 		jsonw_uint_field(json_wtr, "map_id",
 				 info->struct_ops.map_id);
 		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		const __u64 *addrs;
+		__u32 i;
+
+		jsonw_uint_field(json_wtr, "func_cnt", info->kprobe_multi.count);
+		if (!info->kprobe_multi.count)
+			break;
+		jsonw_name(json_wtr, "addrs");
+		jsonw_start_array(json_wtr);
+		addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+		for (i = 0; i < info->kprobe_multi.count; i++)
+			jsonw_lluint(json_wtr, addrs[i]);
+		jsonw_end_array(json_wtr);
+		break;
 	default:
 		break;
 	}
@@ -396,6 +410,24 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_NETFILTER:
 		netfilter_dump_plain(info);
 		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		__u32 indent, cnt, i;
+		const __u64 *addrs;
+
+		cnt = info->kprobe_multi.count;
+		if (!cnt)
+			break;
+		printf("\n\tfunc_cnt %d  addrs", cnt);
+		for (i = 0; cnt; i++)
+			cnt /= 10;
+		indent = strlen("func_cnt ") + i + strlen("  addrs");
+		addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+		for (i = 0; i < info->kprobe_multi.count; i++) {
+			if (i && !(i & 0x1))
+				printf("\n\t%*s", indent, "");
+			printf(" %0*llx", 16, addrs[i]);
+		}
+		break;
 	default:
 		break;
 	}
@@ -417,7 +449,9 @@ static int do_show_link(int fd)
 {
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
+	__u64 *addrs = NULL;
 	char buf[256];
+	int count;
 	int err;
 
 	memset(&info, 0, sizeof(info));
@@ -441,12 +475,28 @@ again:
 		info.iter.target_name_len = sizeof(buf);
 		goto again;
 	}
+	if (info.type == BPF_LINK_TYPE_KPROBE_MULTI &&
+	    !info.kprobe_multi.addrs) {
+		count = info.kprobe_multi.count;
+		if (count) {
+			addrs = malloc(count * sizeof(__u64));
+			if (!addrs) {
+				p_err("mem alloc failed");
+				close(fd);
+				return -1;
+			}
+			info.kprobe_multi.addrs = (unsigned long)addrs;
+			goto again;
+		}
+	}
 
 	if (json_output)
 		show_link_close_json(fd, &info);
 	else
 		show_link_close_plain(fd, &info);
 
+	if (addrs)
+		free(addrs);
 	close(fd);
 	return 0;
 }
