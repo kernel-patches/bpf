@@ -2564,10 +2564,41 @@ static void bpf_kprobe_multi_link_show_fdinfo(const struct bpf_link *link,
 	}
 }
 
+static int bpf_kprobe_multi_link_fill_link_info(const struct bpf_link *link,
+						struct bpf_link_info *info)
+{
+	struct bpf_kprobe_multi_link *kmulti_link;
+	u64 *uaddrs = u64_to_user_ptr(info->kprobe_multi.addrs);
+	u32 ucount = info->kprobe_multi.count;
+	int i;
+
+	if (!uaddrs ^ !ucount)
+		return -EINVAL;
+
+	kmulti_link = container_of(link, struct bpf_kprobe_multi_link, link);
+	if (!uaddrs) {
+		info->kprobe_multi.count = kmulti_link->cnt;
+		return 0;
+	}
+
+	if (!ucount)
+		return 0;
+
+	if (ucount != kmulti_link->cnt)
+		return -EINVAL;
+
+	for (i = 0; i < ucount; i++)
+		if (copy_to_user(uaddrs + i, kmulti_link->addrs + i,
+				 sizeof(u64)))
+			return -EFAULT;
+	return 0;
+}
+
 static const struct bpf_link_ops bpf_kprobe_multi_link_lops = {
 	.release = bpf_kprobe_multi_link_release,
 	.dealloc = bpf_kprobe_multi_link_dealloc,
 	.show_fdinfo = bpf_kprobe_multi_link_show_fdinfo,
+	.fill_link_info = bpf_kprobe_multi_link_fill_link_info,
 };
 
 static void bpf_kprobe_multi_cookie_swap(void *a, void *b, int size, const void *priv)
