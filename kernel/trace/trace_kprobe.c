@@ -1547,7 +1547,7 @@ int bpf_get_kprobe_info(const struct perf_event *event, u32 *fd_type,
 	if (tk->symbol) {
 		*symbol = tk->symbol;
 		*probe_offset = tk->rp.kp.offset;
-		*probe_addr = 0;
+		*probe_addr = (unsigned long)tk->rp.kp.addr;
 	} else {
 		*symbol = NULL;
 		*probe_offset = 0;
