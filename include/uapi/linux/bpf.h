@@ -6438,6 +6438,12 @@ struct bpf_link_info {
 			__aligned_u64 addrs;
 			__u32 count;
 		} kprobe_multi;
+		struct {
+			__aligned_u64 name;
+			__aligned_u64 addr;
+			__u32 name_len;
+			__u32 offset;
+		} perf_event;
 	};
 } __attribute__((aligned(8)));
 

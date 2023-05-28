@@ -3329,10 +3329,56 @@ static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
 	seq_printf(seq, "offset:\t%llu\n", probe_offset);
 }
 
+static int bpf_perf_link_fill_link_info(const struct bpf_link *link,
+					struct bpf_link_info *info)
+{
+	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
+	char __user *ubuf = u64_to_user_ptr(info->perf_event.name);
+	u32 ulen = info->perf_event.name_len;
+	const struct perf_event *event;
+	u64 probe_offset, probe_addr;
+	u32 prog_id, fd_type;
+	const char *buf;
+	size_t len;
+	int err;
+
+	if (!ulen ^ !ubuf)
+		return -EINVAL;
+	if (!ubuf)
+		return 0;
+
+	event = perf_get_event(perf_link->perf_file);
+	if (IS_ERR(event))
+		return PTR_ERR(event);
+
+	err = bpf_get_perf_event_info(event, &prog_id, &fd_type,
+				      &buf, &probe_offset,
+				      &probe_addr);
+	if (err)
+		return err;
+
+	len = strlen(buf);
+	info->perf_event.name_len = len + 1;
+	if (buf) {
+		err = bpf_copy_to_user(ubuf, buf, ulen, len);
+		if (err)
+			return err;
+	} else {
+		char zero = '\0';
+
+		if (put_user(zero, ubuf))
+			return -EFAULT;
+	}
+	info->perf_event.addr = probe_addr;
+	info->perf_event.offset = probe_offset;
+	return 0;
+}
+
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
 	.dealloc = bpf_perf_link_dealloc,
 	.show_fdinfo = bpf_perf_link_show_fdinfo,
+	.fill_link_info = bpf_perf_link_fill_link_info,
 };
 
 static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
