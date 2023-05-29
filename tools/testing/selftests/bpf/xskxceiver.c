@@ -1975,6 +1975,40 @@ static int testapp_poll_rxq_tmout(struct test_spec *test)
 	return testapp_validate_traffic_single_thread(test, test->ifobj_rx);
 }
 
+static int testapp_too_many_frags(struct test_spec *test)
+{
+	struct pkt pkts[XSK_DESC__MAX_FRAGS + 3] = {};
+	u32 i;
+
+	test_spec_set_name(test, "TOO_MANY_FRAGS");
+	if (test->mode == TEST_MODE_ZC) {
+		/* Limit is up to driver for zero-copy mode so not testable. */
+		ksft_test_result_skip("Cannot be run for zero-copy mode.\n");
+		return TEST_SKIP;
+	}
+
+	test->mtu = MAX_ETH_JUMBO_SIZE;
+
+	/* Valid packet for synch */
+	pkts[0].len = MIN_PKT_SIZE;
+	pkts[0].valid = true;
+
+	/* Do not signal end-of-packet in the 17th frag. This is not legal. */
+	for (i = 1; i < XSK_DESC__MAX_FRAGS + 2; i++) {
+		pkts[i].len = MIN_PKT_SIZE;
+		pkts[i].options = XDP_PKT_CONTD;
+		pkts[i].valid = true;
+	}
+	pkts[XSK_DESC__MAX_FRAGS + 1].valid = false;
+
+	/* Valid packet for synch */
+	pkts[XSK_DESC__MAX_FRAGS + 2].len = MIN_PKT_SIZE;
+	pkts[XSK_DESC__MAX_FRAGS + 2].valid = true;
+
+	pkt_stream_generate_custom(test, pkts, ARRAY_SIZE(pkts));
+	return testapp_validate_traffic(test);
+}
+
 static int xsk_load_xdp_programs(struct ifobject *ifobj)
 {
 	ifobj->xdp_progs = xsk_xdp_progs__open_and_load();
@@ -2159,6 +2193,9 @@ static void run_pkt_test(struct test_spec *test, enum test_mode mode, enum test_
 		test_spec_set_name(test, "XDP_METADATA_COUNT_MULTI_BUFF");
 		test->mtu = MAX_ETH_JUMBO_SIZE;
 		ret = testapp_xdp_metadata_count(test);
+		break;
+	case TEST_TYPE_TOO_MANY_FRAGS:
+		ret = testapp_too_many_frags(test);
 		break;
 	default:
 		break;
