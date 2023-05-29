@@ -35,14 +35,19 @@ struct {
 /* store egress interface mac address */
 const volatile __u8 tx_mac_addr[ETH_ALEN];
 
+#define XDPBUFSIZE	64
 static __always_inline int xdp_redirect_map(struct xdp_md *ctx, void *redirect_map)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	__u8 pkt[XDPBUFSIZE] = {};
+	void *data_end = &pkt[XDPBUFSIZE-1];
+	void *data = pkt;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	struct datarec *rec;
 	u64 nh_off;
+
+	if (bpf_xdp_load_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
@@ -53,29 +58,36 @@ static __always_inline int xdp_redirect_map(struct xdp_md *ctx, void *redirect_m
 		return XDP_PASS;
 	NO_TEAR_INC(rec->processed);
 	swap_src_dst_mac(data);
+	if (bpf_xdp_store_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
+
 	return bpf_redirect_map(redirect_map, 0, 0);
 }
 
-SEC("xdp")
+SEC("xdp.frags")
 int xdp_redirect_map_general(struct xdp_md *ctx)
 {
 	return xdp_redirect_map(ctx, &tx_port_general);
 }
 
-SEC("xdp")
+SEC("xdp.frags")
 int xdp_redirect_map_native(struct xdp_md *ctx)
 {
 	return xdp_redirect_map(ctx, &tx_port_native);
 }
 
-SEC("xdp/devmap")
+SEC("xdp.frags/devmap")
 int xdp_redirect_map_egress(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	__u8 pkt[XDPBUFSIZE] = {};
+	void *data_end = &pkt[XDPBUFSIZE-1];
+	void *data = pkt;
 	u8 *mac_addr = (u8 *) tx_mac_addr;
 	struct ethhdr *eth = data;
 	u64 nh_off;
+
+	if (bpf_xdp_load_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
@@ -84,11 +96,14 @@ int xdp_redirect_map_egress(struct xdp_md *ctx)
 	barrier_var(mac_addr); /* prevent optimizing out memcpy */
 	__builtin_memcpy(eth->h_source, mac_addr, ETH_ALEN);
 
+	if (bpf_xdp_store_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
+
 	return XDP_PASS;
 }
 
 /* Redirect require an XDP bpf_prog loaded on the TX device */
-SEC("xdp")
+SEC("xdp.frags")
 int xdp_redirect_dummy_prog(struct xdp_md *ctx)
 {
 	return XDP_PASS;
