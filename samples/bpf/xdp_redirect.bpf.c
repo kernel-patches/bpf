@@ -16,15 +16,20 @@
 
 const volatile int ifindex_out;
 
-SEC("xdp")
+#define XDPBUFSIZE	64
+SEC("xdp.frags")
 int xdp_redirect_prog(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
+	__u8 pkt[XDPBUFSIZE] = {};
+	void *data_end = &pkt[XDPBUFSIZE-1];
+	void *data = pkt;
 	u32 key = bpf_get_smp_processor_id();
 	struct ethhdr *eth = data;
 	struct datarec *rec;
 	u64 nh_off;
+
+	if (bpf_xdp_load_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
@@ -36,11 +41,14 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	NO_TEAR_INC(rec->processed);
 
 	swap_src_dst_mac(data);
+	if (bpf_xdp_store_bytes(ctx, 0, pkt, sizeof(pkt)))
+		return XDP_DROP;
+
 	return bpf_redirect(ifindex_out, 0);
 }
 
 /* Redirect require an XDP bpf_prog loaded on the TX device */
-SEC("xdp")
+SEC("xdp.frags")
 int xdp_redirect_dummy_prog(struct xdp_md *ctx)
 {
 	return XDP_PASS;
