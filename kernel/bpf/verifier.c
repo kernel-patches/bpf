@@ -27,6 +27,7 @@
 #include <linux/module.h>
 
 #include "disasm.h"
+#include "u32_hashset.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -13629,16 +13630,25 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	return true;
 }
 
-static void find_equal_scalars(struct bpf_verifier_state *vstate,
-			       struct bpf_reg_state *known_reg)
+static int find_equal_scalars(struct bpf_verifier_env *env,
+			      struct bpf_verifier_state *vstate,
+			      struct bpf_reg_state *known_reg)
 {
 	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
+	int err = 0, count = 0;
 
 	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
-		if (reg->type == SCALAR_VALUE && reg->id == known_reg->id)
+		if (reg->type == SCALAR_VALUE && reg->id == known_reg->id) {
 			copy_register_state(reg, known_reg);
+			++count;
+		}
 	}));
+
+	if (count > 1)
+		err = u32_hashset_add(env->range_transfer_ids, known_reg->id);
+
+	return err;
 }
 
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
@@ -13803,8 +13813,13 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 						    src_reg, dst_reg, opcode);
 			if (src_reg->id &&
 			    !WARN_ON_ONCE(src_reg->id != other_branch_regs[insn->src_reg].id)) {
-				find_equal_scalars(this_branch, src_reg);
-				find_equal_scalars(other_branch, &other_branch_regs[insn->src_reg]);
+				err = find_equal_scalars(env, this_branch, src_reg);
+				if (err)
+					return err;
+				err = find_equal_scalars(env, other_branch,
+							 &other_branch_regs[insn->src_reg]);
+				if (err)
+					return err;
 			}
 
 		}
@@ -13816,8 +13831,12 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 
 	if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
 	    !WARN_ON_ONCE(dst_reg->id != other_branch_regs[insn->dst_reg].id)) {
-		find_equal_scalars(this_branch, dst_reg);
-		find_equal_scalars(other_branch, &other_branch_regs[insn->dst_reg]);
+		err = find_equal_scalars(env, this_branch, dst_reg);
+		if (err)
+			return err;
+		err = find_equal_scalars(env, other_branch, &other_branch_regs[insn->dst_reg]);
+		if (err)
+			return err;
 	}
 
 	/* if one pointer register is compared to another pointer
@@ -15170,8 +15189,13 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * The only state difference between first and second visits of (5) is
 		 * bpf_reg_state::id assignments for r6 and r7: (b, b) vs (a, b).
 		 * Thus, use check_ids() to distinguish these states.
+		 *
+		 * All children states of 'rold' are already verified.
+		 * Thus env->range_transfer_ids contains all ids that gained range via
+		 * find_equal_scalars() during children verification.
 		 */
-		if (!check_ids(rold->id, rcur->id, idmap))
+		if (u32_hashset_find(env->range_transfer_ids, rold->id) &&
+		    !check_ids(rold->id, rcur->id, idmap))
 			return false;
 		if (regs_exact(rold, rcur, idmap))
 			return true;
@@ -19289,6 +19313,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (!env->explored_states)
 		goto skip_full_check;
 
+	env->range_transfer_ids = kzalloc(sizeof(*env->range_transfer_ids), GFP_KERNEL);
+	if (!env->range_transfer_ids)
+		goto skip_full_check;
+
 	ret = add_subprog_and_kfunc(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -19327,6 +19355,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 
 skip_full_check:
 	kvfree(env->explored_states);
+	u32_hashset_clear(env->range_transfer_ids);
+	kvfree(env->range_transfer_ids);
 
 	if (ret == 0)
 		ret = check_max_stack_depth(env);
