@@ -557,6 +557,8 @@ struct backtrack_state {
 	u64 stack_masks[MAX_CALL_FRAMES];
 };
 
+struct u32_hashset;
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -622,6 +624,8 @@ struct bpf_verifier_env {
 	u32 scratched_regs;
 	/* Same as scratched_regs but for stack slots */
 	u64 scratched_stack_slots;
+	/* set of ids that gain range via find_equal_scalars() */
+	struct u32_hashset *range_transfer_ids;
 	u64 prev_log_pos, prev_insn_print_pos;
 	/* buffer used to generate temporary string representations,
 	 * e.g., in reg_type_str() to generate reg_type string
