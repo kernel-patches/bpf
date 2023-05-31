@@ -504,6 +504,47 @@ done:
 	return err;
 }
 
+static int dump_btf_meta(const struct btf *btf)
+{
+	const struct btf_header *hdr;
+	const struct btf_metadata *m;
+	const void *data;
+	__u32 data_sz;
+	__u8 i;
+
+	data = btf__raw_data(btf, &data_sz);
+	if (!data)
+		return -ENOMEM;
+	hdr = data;
+	printf("BTF: data size %u\n", data_sz);
+	printf("Header: magic 0x%x, version %d, flags 0x%x, hdr_len %u\n",
+	       hdr->magic, hdr->version, hdr->flags, hdr->hdr_len);
+	printf("Types: len %u, offset %u\n", hdr->type_len, hdr->type_off);
+	printf("Strings: len %u, offset %u\n", hdr->str_len, hdr->str_off);
+
+	if (hdr->hdr_len < sizeof(struct btf_header) ||
+	    hdr->meta_header.meta_len == 0 ||
+	    hdr->meta_header.meta_off == 0)
+		return 0;
+
+	m = (void *)hdr + hdr->hdr_len + hdr->meta_header.meta_off;
+
+	printf("Metadata header found: len %u, offset %u, flags 0x%x\n",
+	       hdr->meta_header.meta_len, hdr->meta_header.meta_off, m->flags);
+	if (m->description_off)
+		printf("Description: '%s'\n", btf__name_by_offset(btf, m->description_off));
+	printf("CRC 0x%x ; base CRC 0x%x\n", m->crc, m->base_crc);
+	printf("Kind metadata for %d kinds:\n", m->kind_meta_cnt);
+	for (i = 0; i < m->kind_meta_cnt; i++) {
+		printf("%20s[%2d] flags 0x%-4x info_sz %2d elem_sz %2d\n",
+		       btf__name_by_offset(btf, m->kind_meta[i].name_off),
+		       i, m->kind_meta[i].flags, m->kind_meta[i].info_sz,
+		       m->kind_meta[i].elem_sz);
+	}
+
+	return 0;
+}
+
 static const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
 
 static struct btf *get_vmlinux_btf_from_sysfs(void)
@@ -553,6 +594,7 @@ static int do_dump(int argc, char **argv)
 	__u32 root_type_ids[2];
 	int root_type_cnt = 0;
 	bool dump_c = false;
+	bool dump_meta = false;
 	__u32 btf_id = -1;
 	const char *src;
 	int fd = -1;
@@ -654,6 +696,8 @@ static int do_dump(int argc, char **argv)
 			}
 			if (strcmp(*argv, "c") == 0) {
 				dump_c = true;
+			} else if (strcmp(*argv, "meta") == 0) {
+				dump_meta = true;
 			} else if (strcmp(*argv, "raw") == 0) {
 				dump_c = false;
 			} else {
@@ -692,6 +736,8 @@ static int do_dump(int argc, char **argv)
 			goto done;
 		}
 		err = dump_btf_c(btf, root_type_ids, root_type_cnt);
+	} else if (dump_meta) {
+		err = dump_btf_meta(btf);
 	} else {
 		err = dump_btf_raw(btf, root_type_ids, root_type_cnt);
 	}
