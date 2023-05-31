@@ -24,6 +24,9 @@
 struct cred;
 struct module;
 
+/* How and when do we show kallsyms values? */
+extern bool kallsyms_show_value(const struct cred *cred);
+
 static inline int is_kernel_text(unsigned long addr)
 {
 	if (__is_kernel_text(addr))
@@ -95,8 +98,6 @@ extern int sprint_backtrace_build_id(char *buffer, unsigned long address);
 int lookup_symbol_name(unsigned long addr, char *symname);
 int lookup_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name);
 
-/* How and when do we show kallsyms values? */
-extern bool kallsyms_show_value(const struct cred *cred);
 
 #else /* !CONFIG_KALLSYMS */
 
@@ -158,11 +159,6 @@ static inline int lookup_symbol_name(unsigned long addr, char *symname)
 static inline int lookup_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name)
 {
 	return -ERANGE;
-}
-
-static inline bool kallsyms_show_value(const struct cred *cred)
-{
-	return false;
 }
 
 static inline int kallsyms_on_each_symbol(int (*fn)(void *, const char *, unsigned long),
