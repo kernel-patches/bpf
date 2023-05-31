@@ -122,6 +122,7 @@ struct btf {
 	bool strs_deduped;
 
 	void *meta_data;
+	size_t meta_sz;
 
 	/* BTF object FD, if loaded into kernel */
 	int fd;
@@ -896,8 +897,84 @@ void btf__free(struct btf *btf)
 	free(btf);
 }
 
-static struct btf *btf_new_empty(struct btf *base_btf)
+static void __btf_add_kind_meta(struct btf *btf, __u8 kind, const char *name,
+				__u16 flags, __u8 info_sz, __u8 elem_sz)
 {
+	struct btf_metadata *meta = btf->meta_data;
+	struct btf_kind_meta *kind_meta = &meta->kind_meta[kind];
+
+	kind_meta->name_off = btf__add_str(btf, name);
+	kind_meta->flags = flags;
+	kind_meta->info_sz = info_sz;
+	kind_meta->elem_sz = elem_sz;
+}
+
+#define btf_add_kind_meta(btf, kind, flags, info_sz, elem_sz)	\
+	__btf_add_kind_meta(btf, kind, #kind, flags, info_sz, elem_sz)
+
+static int btf_ensure_modifiable(struct btf *btf);
+
+static int btf_add_meta(struct btf *btf, struct btf_new_opts *opts)
+{
+	const char *description = OPTS_GET(opts, description, NULL);
+	struct btf_metadata *meta;
+
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	btf->meta_sz = sizeof(struct btf_metadata) +
+		       (NR_BTF_KINDS * sizeof(struct btf_kind_meta));
+	btf->meta_data = calloc(1, btf->meta_sz);
+
+	if (!btf->meta_data) {
+		btf->meta_sz = 0;
+		return -ENOMEM;
+	}
+
+	meta = btf->meta_data;
+
+	if (btf->base_btf) {
+		struct btf_metadata *base_meta = btf->base_btf->meta_data;
+
+		if (base_meta && (base_meta->flags & BTF_META_CRC_SET)) {
+			meta->base_crc =  base_meta->crc;
+			meta->flags |= BTF_META_BASE_CRC_SET;
+		}
+	}
+
+	if (description)
+		meta->description_off = btf__add_str(btf, description);
+
+	meta->kind_meta_cnt = NR_BTF_KINDS;
+
+	/* all supported kinds should describe their format here. */
+	btf_add_kind_meta(btf, BTF_KIND_UNKN, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_INT, 0, sizeof(__u32), 0);
+	btf_add_kind_meta(btf, BTF_KIND_PTR, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_ARRAY, 0, sizeof(struct btf_array), 0);
+	btf_add_kind_meta(btf, BTF_KIND_STRUCT, 0, 0, sizeof(struct btf_member));
+	btf_add_kind_meta(btf, BTF_KIND_UNION, 0, 0, sizeof(struct btf_member));
+	btf_add_kind_meta(btf, BTF_KIND_ENUM, 0, 0, sizeof(struct btf_enum));
+	btf_add_kind_meta(btf, BTF_KIND_FWD, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_TYPEDEF, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_VOLATILE, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_CONST, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_RESTRICT, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_FUNC, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_FUNC_PROTO, 0, 0, sizeof(struct btf_param));
+	btf_add_kind_meta(btf, BTF_KIND_VAR, 0, sizeof(struct btf_var), 0);
+	btf_add_kind_meta(btf, BTF_KIND_DATASEC, 0, 0, sizeof(struct btf_var_secinfo));
+	btf_add_kind_meta(btf, BTF_KIND_FLOAT, 0, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_DECL_TAG, BTF_KIND_META_OPTIONAL,
+							sizeof(struct btf_decl_tag), 0);
+	btf_add_kind_meta(btf, BTF_KIND_TYPE_TAG, BTF_KIND_META_OPTIONAL, 0, 0);
+	btf_add_kind_meta(btf, BTF_KIND_ENUM64, 0, 0, sizeof(struct btf_enum64));
+	return 0;
+}
+
+static struct btf *btf_new_empty(struct btf_new_opts *opts)
+{
+	struct btf *base_btf = OPTS_GET(opts, base_btf, NULL);
 	struct btf *btf;
 
 	btf = calloc(1, sizeof(*btf));
@@ -934,17 +1011,42 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 	btf->strs_data = btf->raw_data + btf->hdr->hdr_len;
 	btf->hdr->str_len = base_btf ? 0 : 1; /* empty string at offset 0 */
 
+	if (opts->add_meta) {
+		int err = btf_add_meta(btf, opts);
+
+		if (err) {
+			free(btf->raw_data);
+			free(btf);
+			return ERR_PTR(err);
+		}
+		btf->hdr->meta_header.meta_len = btf->meta_sz;
+	}
+
 	return btf;
 }
 
 struct btf *btf__new_empty(void)
 {
-	return libbpf_ptr(btf_new_empty(NULL));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	return libbpf_ptr(btf_new_empty(&opts));
 }
 
 struct btf *btf__new_empty_split(struct btf *base_btf)
 {
-	return libbpf_ptr(btf_new_empty(base_btf));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	opts.base_btf = base_btf;
+
+	return libbpf_ptr(btf_new_empty(&opts));
+}
+
+struct btf *btf__new_empty_opts(struct btf_new_opts *opts)
+{
+	if (!OPTS_VALID(opts, btf_new_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	return libbpf_ptr(btf_new_empty(opts));
 }
 
 static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
