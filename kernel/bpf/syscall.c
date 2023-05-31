@@ -794,6 +794,13 @@ static fmode_t map_get_sys_perms(struct bpf_map *map, struct fd f)
 	return mode;
 }
 
+static u32 bpf_map_pressure(const struct bpf_map *map)
+{
+	if (map->ops->map_pressure)
+		return map->ops->map_pressure(map);
+	return 0;
+}
+
 #ifdef CONFIG_PROC_FS
 /* Show the memory usage of a bpf map */
 static u64 bpf_map_memory_usage(const struct bpf_map *map)
@@ -804,6 +811,7 @@ static u64 bpf_map_memory_usage(const struct bpf_map *map)
 static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 {
 	struct bpf_map *map = filp->private_data;
+	char map_pressure_buf[36] = "";
 	u32 type = 0, jited = 0;
 
 	if (map_type_contains_progs(map)) {
@@ -813,6 +821,10 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		spin_unlock(&map->owner.lock);
 	}
 
+	if (map->ops->map_pressure)
+		snprintf(map_pressure_buf, sizeof(map_pressure_buf),
+			 "raw_pressure:\t%u\n", map->ops->map_pressure(map));
+
 	seq_printf(m,
 		   "map_type:\t%u\n"
 		   "key_size:\t%u\n"
@@ -821,6 +833,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "map_flags:\t%#x\n"
 		   "map_extra:\t%#llx\n"
 		   "memlock:\t%llu\n"
+		   "%s"
 		   "map_id:\t%u\n"
 		   "frozen:\t%u\n",
 		   map->map_type,
@@ -830,6 +843,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 		   map->map_flags,
 		   (unsigned long long)map->map_extra,
 		   bpf_map_memory_usage(map),
+		   map_pressure_buf,
 		   map->id,
 		   READ_ONCE(map->frozen));
 	if (type) {
@@ -4275,6 +4289,7 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	info.value_size = map->value_size;
 	info.max_entries = map->max_entries;
 	info.map_flags = map->map_flags;
+	info.raw_pressure = bpf_map_pressure(map);
 	info.map_extra = map->map_extra;
 	memcpy(info.name, map->name, sizeof(map->name));
 
