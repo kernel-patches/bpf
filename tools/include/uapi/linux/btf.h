@@ -8,6 +8,34 @@
 #define BTF_MAGIC	0xeB9F
 #define BTF_VERSION	1
 
+/* is this information required? If so it cannot be sanitized safely. */
+#define BTF_KIND_META_OPTIONAL		(1 << 0)
+
+struct btf_kind_meta {
+	__u32 name_off;		/* kind name string offset */
+	__u16 flags;		/* see BTF_KIND_META_* values above */
+	__u8 info_sz;		/* size of singular element after btf_type */
+	__u8 elem_sz;		/* size of each of btf_vlen(t) elements */
+};
+
+/* for CRCs for BTF, base BTF to be considered usable, flags must be set. */
+#define BTF_META_CRC_SET		(1 << 0)
+#define BTF_META_BASE_CRC_SET		(1 << 1)
+
+struct btf_metadata {
+	__u8	kind_meta_cnt;		/* number of struct btf_kind_meta */
+	__u32	flags;
+	__u32	description_off;	/* optional description string */
+	__u32	crc;			/* crc32 of BTF */
+	__u32	base_crc;		/* crc32 of base BTF */
+	struct btf_kind_meta kind_meta[];
+};
+
+struct btf_meta_header {
+	__u32	meta_off;	/* offset of metadata section */
+	__u32	meta_len;	/* length of metadata section */
+};
+
 struct btf_header {
 	__u16	magic;
 	__u8	version;
@@ -19,6 +47,7 @@ struct btf_header {
 	__u32	type_len;	/* length of type section	*/
 	__u32	str_off;	/* offset of string section	*/
 	__u32	str_len;	/* length of string section	*/
+	struct btf_meta_header meta_header;
 };
 
 /* Max # of type identifier */
