@@ -96,6 +96,10 @@ static struct jit_alloc_params jit_alloc_params = {
 
 struct jit_alloc_params *jit_alloc_arch_params(void)
 {
+	/*
+	 * BOOK3S_32 and 8xx define MODULES_VADDR for text allocations and
+	 * allow allocating data in the entire vmalloc space
+	 */
 #ifdef MODULES_VADDR
 	pgprot_t prot = strict_module_rwx_enabled() ? PAGE_KERNEL : PAGE_KERNEL_EXEC;
 	unsigned long limit = (unsigned long)_etext - SZ_32M;
@@ -112,6 +116,10 @@ struct jit_alloc_params *jit_alloc_arch_params(void)
 		jit_alloc_params.text.start = MODULES_VADDR;
 		jit_alloc_params.text.end = MODULES_END;
 	}
+
+	jit_alloc_params.data.pgprot	= PAGE_KERNEL;
+	jit_alloc_params.data.start	= VMALLOC_START;
+	jit_alloc_params.data.end	= VMALLOC_END;
 #else
 	jit_alloc_params.text.start = VMALLOC_START;
 	jit_alloc_params.text.end = VMALLOC_END;

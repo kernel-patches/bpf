@@ -72,6 +72,20 @@ void *jit_text_alloc(size_t len)
 			 fallback_start, fallback_end, kasan);
 }
 
+void *jit_data_alloc(size_t len)
+{
+	unsigned int align = jit_alloc_params.alignment;
+	pgprot_t pgprot = jit_alloc_params.data.pgprot;
+	unsigned long start = jit_alloc_params.data.start;
+	unsigned long end = jit_alloc_params.data.end;
+	unsigned long fallback_start = jit_alloc_params.data.fallback_start;
+	unsigned long fallback_end = jit_alloc_params.data.fallback_end;
+	bool kasan = jit_alloc_params.flags & JIT_ALLOC_KASAN_SHADOW;
+
+	return jit_alloc(len, align, pgprot, start, end,
+			 fallback_start, fallback_end, kasan);
+}
+
 struct jit_alloc_params * __weak jit_alloc_arch_params(void)
 {
 	return NULL;
@@ -88,6 +102,23 @@ static bool jit_alloc_validate_params(struct jit_alloc_params *p)
 	return true;
 }
 
+static void jit_alloc_init_missing(struct jit_alloc_params *p)
+{
+	if (!pgprot_val(jit_alloc_params.data.pgprot))
+		jit_alloc_params.data.pgprot = PAGE_KERNEL;
+
+	if (!jit_alloc_params.data.start) {
+		jit_alloc_params.data.start = p->text.start;
+		jit_alloc_params.data.end = p->text.end;
+	}
+
+	if (!jit_alloc_params.data.fallback_start &&
+	    jit_alloc_params.text.fallback_start) {
+		jit_alloc_params.data.fallback_start = p->text.fallback_start;
+		jit_alloc_params.data.fallback_end = p->text.fallback_end;
+	}
+}
+
 void jit_alloc_init(void)
 {
 	struct jit_alloc_params *p = jit_alloc_arch_params();
@@ -97,6 +128,8 @@ void jit_alloc_init(void)
 			return;
 
 		jit_alloc_params = *p;
+		jit_alloc_init_missing(p);
+
 		return;
 	}
 
@@ -105,4 +138,7 @@ void jit_alloc_init(void)
 	jit_alloc_params.text.pgprot	= PAGE_KERNEL_EXEC;
 	jit_alloc_params.text.start	= VMALLOC_START;
 	jit_alloc_params.text.end	= VMALLOC_END;
+	jit_alloc_params.data.pgprot	= PAGE_KERNEL;
+	jit_alloc_params.data.start	= VMALLOC_START;
+	jit_alloc_params.data.end	= VMALLOC_END;
 }

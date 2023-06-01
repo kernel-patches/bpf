@@ -45,6 +45,7 @@ struct jit_address_space {
  */
 struct jit_alloc_params {
 	struct jit_address_space	text;
+	struct jit_address_space	data;
 	enum jit_alloc_flags		flags;
 	unsigned int			alignment;
 };
@@ -53,6 +54,7 @@ struct jit_alloc_params *jit_alloc_arch_params(void);
 
 void jit_free(void *buf);
 void *jit_text_alloc(size_t len);
+void *jit_data_alloc(size_t len);
 
 #ifdef CONFIG_JIT_ALLOC
 void jit_alloc_init(void);
