@@ -7,6 +7,16 @@
 
 static struct jit_alloc_params jit_alloc_params;
 
+static inline void jit_text_poke_copy(void *dst, const void *src, size_t len)
+{
+	memcpy(dst, src, len);
+}
+
+static inline void jit_text_poke_set(void *addr, int c, size_t len)
+{
+	memset(addr, c, len);
+}
+
 static void *jit_alloc(size_t len, unsigned int alignment, pgprot_t pgprot,
 		       unsigned long start, unsigned long end,
 		       unsigned long fallback_start, unsigned long fallback_end,
@@ -84,6 +94,16 @@ void *jit_data_alloc(size_t len)
 
 	return jit_alloc(len, align, pgprot, start, end,
 			 fallback_start, fallback_end, kasan);
+}
+
+void jit_update_copy(void *buf, void *new_buf, size_t len)
+{
+	jit_text_poke_copy(buf, new_buf, len);
+}
+
+void jit_update_set(void *addr, int c, size_t len)
+{
+	jit_text_poke_set(addr, c, len);
 }
 
 struct jit_alloc_params * __weak jit_alloc_arch_params(void)

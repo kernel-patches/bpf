@@ -55,6 +55,8 @@ struct jit_alloc_params *jit_alloc_arch_params(void);
 void jit_free(void *buf);
 void *jit_text_alloc(size_t len);
 void *jit_data_alloc(size_t len);
+void jit_update_copy(void *buf, void *new_buf, size_t len);
+void jit_update_set(void *buf, int c, size_t len);
 
 #ifdef CONFIG_JIT_ALLOC
 void jit_alloc_init(void);

@@ -1197,9 +1197,19 @@ void __weak module_arch_freeing_init(struct module *mod)
 
 static void *module_memory_alloc(unsigned int size, enum mod_mem_type type)
 {
-	if (mod_mem_type_is_data(type))
-		return jit_data_alloc(size);
-	return jit_text_alloc(size);
+	void *p;
+
+	if (mod_mem_type_is_data(type)) {
+		p = jit_data_alloc(size);
+		if (p)
+			memset(p, 0, size);
+	} else {
+		p = jit_text_alloc(size);
+		if (p)
+			jit_update_set(p, 0, size);
+	}
+
+	return p;
 }
 
 static void module_memory_free(void *ptr, enum mod_mem_type type)
@@ -2223,7 +2233,6 @@ static int move_module(struct module *mod, struct load_info *info)
 			t = type;
 			goto out_enomem;
 		}
-		memset(ptr, 0, mod->mem[type].size);
 		mod->mem[type].base = ptr;
 	}
 
@@ -2251,7 +2260,7 @@ static int move_module(struct module *mod, struct load_info *info)
 				ret = -ENOEXEC;
 				goto out_enomem;
 			}
-			memcpy(dest, (void *)shdr->sh_addr, shdr->sh_size);
+			jit_update_copy(dest, (void *)shdr->sh_addr, shdr->sh_size);
 		}
 		/*
 		 * Update the userspace copy's ELF section address to point to
