@@ -1896,30 +1896,21 @@ int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
 	if (max_optlen < 0)
 		return max_optlen;
 
-	if (!retval) {
-		/* If kernel getsockopt finished successfully,
-		 * copy whatever was returned to the user back
-		 * into our temporary buffer. Set optlen to the
-		 * one that kernel returned as well to let
-		 * BPF programs inspect the value.
-		 */
+	if (get_user(ctx.optlen, optlen)) {
+		ret = -EFAULT;
+		goto out;
+	}
 
-		if (get_user(ctx.optlen, optlen)) {
-			ret = -EFAULT;
-			goto out;
-		}
+	if (ctx.optlen < 0) {
+		ret = -EFAULT;
+		goto out;
+	}
+	orig_optlen = ctx.optlen;
 
-		if (ctx.optlen < 0) {
-			ret = -EFAULT;
-			goto out;
-		}
-		orig_optlen = ctx.optlen;
-
-		if (copy_from_user(ctx.optval, optval,
-				   min(ctx.optlen, max_optlen)) != 0) {
-			ret = -EFAULT;
-			goto out;
-		}
+	if (copy_from_user(ctx.optval, optval,
+				min(ctx.optlen, max_optlen)) != 0) {
+		ret = -EFAULT;
+		goto out;
 	}
 
 	lock_sock(sk);
