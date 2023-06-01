@@ -60,20 +60,16 @@ void jit_free(void *buf)
 
 void *jit_text_alloc(size_t len)
 {
-	if (jit_alloc_params.text.start) {
-		unsigned int align = jit_alloc_params.alignment;
-		pgprot_t pgprot = jit_alloc_params.text.pgprot;
-		unsigned long start = jit_alloc_params.text.start;
-		unsigned long end = jit_alloc_params.text.end;
-		unsigned long fallback_start = jit_alloc_params.text.fallback_start;
-		unsigned long fallback_end = jit_alloc_params.text.fallback_end;
-		bool kasan = jit_alloc_params.flags & JIT_ALLOC_KASAN_SHADOW;
+	unsigned int align = jit_alloc_params.alignment;
+	pgprot_t pgprot = jit_alloc_params.text.pgprot;
+	unsigned long start = jit_alloc_params.text.start;
+	unsigned long end = jit_alloc_params.text.end;
+	unsigned long fallback_start = jit_alloc_params.text.fallback_start;
+	unsigned long fallback_end = jit_alloc_params.text.fallback_end;
+	bool kasan = jit_alloc_params.flags & JIT_ALLOC_KASAN_SHADOW;
 
-		return jit_alloc(len, align, pgprot, start, end,
-				 fallback_start, fallback_end, kasan);
-	}
-
-	return module_alloc(len);
+	return jit_alloc(len, align, pgprot, start, end,
+			 fallback_start, fallback_end, kasan);
 }
 
 struct jit_alloc_params * __weak jit_alloc_arch_params(void)
@@ -101,5 +97,12 @@ void jit_alloc_init(void)
 			return;
 
 		jit_alloc_params = *p;
+		return;
 	}
+
+	/* defaults for architecures that don't need special handling */
+	jit_alloc_params.alignment	= 1;
+	jit_alloc_params.text.pgprot	= PAGE_KERNEL_EXEC;
+	jit_alloc_params.text.start	= VMALLOC_START;
+	jit_alloc_params.text.end	= VMALLOC_END;
 }

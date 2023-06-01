@@ -24,7 +24,7 @@
 #include <asm/sections.h>
 
 static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= MODULE_ALIGN,
+	.alignment	= JIT_ALLOC_ALIGN,
 	.flags		= JIT_ALLOC_KASAN_SHADOW,
 };
 

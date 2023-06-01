@@ -56,7 +56,7 @@ static unsigned long get_module_load_offset(void)
 }
 
 static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= MODULE_ALIGN,
+	.alignment	= JIT_ALLOC_ALIGN,
 	.flags		= JIT_ALLOC_KASAN_SHADOW,
 	.text.pgprot	= PAGE_KERNEL,
 };
