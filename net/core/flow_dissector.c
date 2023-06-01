@@ -407,10 +407,18 @@ skb_flow_dissect_tunnel_info(const struct sk_buff *skb,
 						    target_container);
 
 		if (info->options_len) {
+			IP_TUNNEL_DECLARE_FLAGS(flags) = { };
+			u32 val;
+
 			enc_opt->len = info->options_len;
 			ip_tunnel_info_opts_get(enc_opt->data, info);
-			enc_opt->dst_opt_type = info->key.tun_flags &
-						TUNNEL_OPTIONS_PRESENT;
+
+			ip_tunnel_set_options_present(flags);
+			bitmap_and(flags, info->key.tun_flags, flags,
+				   __IP_TUNNEL_FLAG_NUM);
+
+			val = find_next_bit(flags, __IP_TUNNEL_FLAG_NUM, 0);
+			enc_opt->dst_opt_type = val;
 		}
 	}
 }
