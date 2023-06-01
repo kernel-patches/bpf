@@ -7,6 +7,7 @@
 #include <asm/unwind.h>
 #include <asm/orc_types.h>
 #include <asm/orc_lookup.h>
+#include <asm/text-patching.h>
 
 #define orc_warn(fmt, ...) \
 	printk_deferred_once(KERN_WARNING "WARNING: " fmt, ##__VA_ARGS__)
@@ -222,18 +223,22 @@ static void orc_sort_swap(void *_a, void *_b, int size)
 	struct orc_entry orc_tmp;
 	int *a = _a, *b = _b, tmp;
 	int delta = _b - _a;
+	int val;
 
 	/* Swap the .orc_unwind_ip entries: */
 	tmp = *a;
-	*a = *b + delta;
-	*b = tmp - delta;
+	val = *b + delta;
+	text_poke_copy(a, &val, sizeof(val));
+	val = tmp - delta;
+	text_poke_copy(b, &val, sizeof(val));
 
 	/* Swap the corresponding .orc_unwind entries: */
 	orc_a = cur_orc_table + (a - cur_orc_ip_table);
 	orc_b = cur_orc_table + (b - cur_orc_ip_table);
 	orc_tmp = *orc_a;
-	*orc_a = *orc_b;
-	*orc_b = orc_tmp;
+
+	text_poke_copy(orc_a, orc_b, sizeof(*orc_b));
+	text_poke_copy(orc_b, &orc_tmp, sizeof(orc_tmp));
 }
 
 static int orc_sort_cmp(const void *_a, const void *_b)

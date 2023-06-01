@@ -18,6 +18,7 @@
 #include <linux/mmu_context.h>
 #include <linux/bsearch.h>
 #include <linux/sync_core.h>
+#include <linux/set_memory.h>
 #include <asm/text-patching.h>
 #include <asm/alternative.h>
 #include <asm/sections.h>
@@ -76,6 +77,19 @@ do {									\
 	}								\
 } while (0)
 
+void text_poke_early(void *addr, const void *opcode, size_t len);
+
+static void __init_or_module do_text_poke(void *addr, const void *opcode, size_t len)
+{
+	if (system_state < SYSTEM_RUNNING) {
+		text_poke_early(addr, opcode, len);
+	} else {
+		mutex_lock(&text_mutex);
+		text_poke(addr, opcode, len);
+		mutex_unlock(&text_mutex);
+	}
+}
+
 static const unsigned char x86nops[] =
 {
 	BYTES_NOP1,
@@ -108,7 +122,7 @@ static void __init_or_module add_nops(void *insns, unsigned int len)
 		unsigned int noplen = len;
 		if (noplen > ASM_NOP_MAX)
 			noplen = ASM_NOP_MAX;
-		memcpy(insns, x86_nops[noplen], noplen);
+		do_text_poke(insns, x86_nops[noplen], noplen);
 		insns += noplen;
 		len -= noplen;
 	}
@@ -120,7 +134,6 @@ extern s32 __cfi_sites[], __cfi_sites_end[];
 extern s32 __ibt_endbr_seal[], __ibt_endbr_seal_end[];
 extern struct alt_instr __alt_instructions[], __alt_instructions_end[];
 extern s32 __smp_locks[], __smp_locks_end[];
-void text_poke_early(void *addr, const void *opcode, size_t len);
 
 /*
  * Are we looking at a near JMP with a 1 or 4-byte displacement.
@@ -331,7 +344,7 @@ void __init_or_module noinline apply_alternatives(struct alt_instr *start,
 
 		DUMP_BYTES(insn_buff, insn_buff_sz, "%px: final_insn: ", instr);
 
-		text_poke_early(instr, insn_buff, insn_buff_sz);
+		do_text_poke(instr, insn_buff, insn_buff_sz);
 
 next:
 		optimize_nops(instr, a->instrlen);
@@ -564,7 +577,7 @@ void __init_or_module noinline apply_retpolines(s32 *start, s32 *end)
 			optimize_nops(bytes, len);
 			DUMP_BYTES(((u8*)addr),  len, "%px: orig: ", addr);
 			DUMP_BYTES(((u8*)bytes), len, "%px: repl: ", addr);
-			text_poke_early(addr, bytes, len);
+			do_text_poke(addr, bytes, len);
 		}
 	}
 }
@@ -638,7 +651,7 @@ void __init_or_module noinline apply_returns(s32 *start, s32 *end)
 		if (len == insn.length) {
 			DUMP_BYTES(((u8*)addr),  len, "%px: orig: ", addr);
 			DUMP_BYTES(((u8*)bytes), len, "%px: repl: ", addr);
-			text_poke_early(addr, bytes, len);
+			do_text_poke(addr, bytes, len);
 		}
 	}
 }
@@ -674,7 +687,7 @@ static void poison_endbr(void *addr, bool warn)
 	 */
 	DUMP_BYTES(((u8*)addr), 4, "%px: orig: ", addr);
 	DUMP_BYTES(((u8*)&poison), 4, "%px: repl: ", addr);
-	text_poke_early(addr, &poison, 4);
+	do_text_poke(addr, &poison, 4);
 }
 
 /*
@@ -869,7 +882,7 @@ static int cfi_disable_callers(s32 *start, s32 *end)
 		if (!hash) /* nocfi callers */
 			continue;
 
-		text_poke_early(addr, jmp, 2);
+		do_text_poke(addr, jmp, 2);
 	}
 
 	return 0;
@@ -892,7 +905,7 @@ static int cfi_enable_callers(s32 *start, s32 *end)
 		if (!hash) /* nocfi callers */
 			continue;
 
-		text_poke_early(addr, mov, 2);
+		do_text_poke(addr, mov, 2);
 	}
 
 	return 0;
@@ -913,7 +926,7 @@ static int cfi_rand_preamble(s32 *start, s32 *end)
 			return -EINVAL;
 
 		hash = cfi_rehash(hash);
-		text_poke_early(addr + 1, &hash, 4);
+		do_text_poke(addr + 1, &hash, 4);
 	}
 
 	return 0;
@@ -932,9 +945,9 @@ static int cfi_rewrite_preamble(s32 *start, s32 *end)
 			 addr, addr, 5, addr))
 			return -EINVAL;
 
-		text_poke_early(addr, fineibt_preamble_start, fineibt_preamble_size);
+		do_text_poke(addr, fineibt_preamble_start, fineibt_preamble_size);
 		WARN_ON(*(u32 *)(addr + fineibt_preamble_hash) != 0x12345678);
-		text_poke_early(addr + fineibt_preamble_hash, &hash, 4);
+		do_text_poke(addr + fineibt_preamble_hash, &hash, 4);
 	}
 
 	return 0;
@@ -953,7 +966,7 @@ static int cfi_rand_callers(s32 *start, s32 *end)
 		hash = decode_caller_hash(addr);
 		if (hash) {
 			hash = -cfi_rehash(hash);
-			text_poke_early(addr + 2, &hash, 4);
+			do_text_poke(addr + 2, &hash, 4);
 		}
 	}
 
@@ -971,9 +984,9 @@ static int cfi_rewrite_callers(s32 *start, s32 *end)
 		addr -= fineibt_caller_size;
 		hash = decode_caller_hash(addr);
 		if (hash) {
-			text_poke_early(addr, fineibt_caller_start, fineibt_caller_size);
+			do_text_poke(addr, fineibt_caller_start, fineibt_caller_size);
 			WARN_ON(*(u32 *)(addr + fineibt_caller_hash) != 0x12345678);
-			text_poke_early(addr + fineibt_caller_hash, &hash, 4);
+			do_text_poke(addr + fineibt_caller_hash, &hash, 4);
 		}
 		/* rely on apply_retpolines() */
 	}
@@ -1243,7 +1256,7 @@ void __init_or_module apply_paravirt(struct paravirt_patch_site *start,
 
 		/* Pad the rest with nops */
 		add_nops(insn_buff + used, p->len - used);
-		text_poke_early(p->instr, insn_buff, p->len);
+		do_text_poke(p->instr, insn_buff, p->len);
 	}
 }
 extern struct paravirt_patch_site __start_parainstructions[],

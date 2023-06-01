@@ -83,7 +83,6 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 		   unsigned int symindex,
 		   unsigned int relsec,
 		   struct module *me,
-		   void *(*write)(void *dest, const void *src, size_t len),
 		   bool apply)
 {
 	unsigned int i;
@@ -151,14 +150,14 @@ static int __write_relocate_add(Elf64_Shdr *sechdrs,
 				       (int)ELF64_R_TYPE(rel[i].r_info), loc, val);
 				return -ENOEXEC;
 			}
-			write(loc, &val, size);
+			text_poke(loc, &val, size);
 		} else {
 			if (memcmp(loc, &val, size)) {
 				pr_warn("x86/modules: Invalid relocation target, existing value does not match expected value for type %d, loc %p, val %Lx\n",
 					(int)ELF64_R_TYPE(rel[i].r_info), loc, val);
 				return -ENOEXEC;
 			}
-			write(loc, &zero, size);
+			text_poke(loc, &zero, size);
 		}
 	}
 	return 0;
@@ -179,22 +178,11 @@ static int write_relocate_add(Elf64_Shdr *sechdrs,
 			      bool apply)
 {
 	int ret;
-	bool early = me->state == MODULE_STATE_UNFORMED;
-	void *(*write)(void *, const void *, size_t) = memcpy;
 
-	if (!early) {
-		write = text_poke;
-		mutex_lock(&text_mutex);
-	}
-
-	ret = __write_relocate_add(sechdrs, strtab, symindex, relsec, me,
-				   write, apply);
-
-	if (!early) {
-		text_poke_sync();
-		mutex_unlock(&text_mutex);
-	}
-
+	mutex_lock(&text_mutex);
+	ret = __write_relocate_add(sechdrs, strtab, symindex, relsec, me, apply);
+	text_poke_sync();
+	mutex_unlock(&text_mutex);
 	return ret;
 }
 
