@@ -24,6 +24,7 @@
 #include <linux/nodemask.h>	/* for node_online_map */
 #include <linux/pagemap.h>	/* for release_pages */
 #include <linux/compat.h>
+#include <linux/jitalloc.h>
 
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
@@ -479,7 +480,7 @@ void free_initmem(void)
 	/* finally dump all the instructions which were cached, since the
 	 * pages are no-longer executable */
 	flush_icache_range(init_begin, init_end);
-	
+
 	free_initmem_default(POISON_FREE_INITMEM);
 
 	/* set up a new led state on systems shipped LED State panel */
@@ -891,3 +892,21 @@ static const pgprot_t protection_map[16] = {
 	[VM_SHARED | VM_EXEC | VM_WRITE | VM_READ]	= PAGE_RWX
 };
 DECLARE_VM_GET_PAGE_PROT
+
+#ifdef CONFIG_JIT_ALLOC
+static struct jit_alloc_params jit_alloc_params = {
+	.alignment	= 1,
+	/* using RWX means less protection for modules, but it's
+	 * easier than trying to map the text, data, init_text and
+	 * init_data correctly */
+	.text.pgprot	= PAGE_KERNEL_RWX,
+	.text.end	= VMALLOC_END,
+};
+
+struct jit_alloc_params *jit_alloc_arch_params(void)
+{
+	jit_alloc_params.text.start = VMALLOC_START;
+
+	return &jit_alloc_params;
+}
+#endif

@@ -49,7 +49,6 @@
 #include <linux/bug.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/jitalloc.h>
 
 #include <asm/unwind.h>
 #include <asm/sections.h>
@@ -172,22 +171,6 @@ static inline int reassemble_22(int as22)
 		((as22 & 0x00f800) << 5) |
 		((as22 & 0x000400) >> 8) |
 		((as22 & 0x0003ff) << 3));
-}
-
-static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= 1,
-	/* using RWX means less protection for modules, but it's
-	 * easier than trying to map the text, data, init_text and
-	 * init_data correctly */
-	.text.pgprot	= PAGE_KERNEL_RWX,
-	.text.end	= VMALLOC_END,
-};
-
-struct jit_alloc_params *jit_alloc_arch_params(void)
-{
-	jit_alloc_params.text.start = VMALLOC_START;
-
-	return &jit_alloc_params;
 }
 
 #ifndef CONFIG_64BIT

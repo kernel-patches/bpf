@@ -12,7 +12,6 @@
 #include <linux/bug.h>
 #include <asm/module.h>
 #include <linux/uaccess.h>
-#include <linux/jitalloc.h>
 #include <asm/firmware.h>
 #include <linux/sort.h>
 #include <asm/setup.h>
@@ -88,42 +87,4 @@ int module_finalize(const Elf_Ehdr *hdr,
 				 (void *)sect->sh_addr + sect->sh_size);
 
 	return 0;
-}
-
-static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= 1,
-};
-
-struct jit_alloc_params *jit_alloc_arch_params(void)
-{
-	/*
-	 * BOOK3S_32 and 8xx define MODULES_VADDR for text allocations and
-	 * allow allocating data in the entire vmalloc space
-	 */
-#ifdef MODULES_VADDR
-	pgprot_t prot = strict_module_rwx_enabled() ? PAGE_KERNEL : PAGE_KERNEL_EXEC;
-	unsigned long limit = (unsigned long)_etext - SZ_32M;
-
-	jit_alloc_params.text.pgprot = prot;
-
-	/* First try within 32M limit from _etext to avoid branch trampolines */
-	if (MODULES_VADDR < PAGE_OFFSET && MODULES_END > limit) {
-		jit_alloc_params.text.start = limit;
-		jit_alloc_params.text.end = MODULES_END;
-		jit_alloc_params.text.fallback_start = MODULES_VADDR;
-		jit_alloc_params.text.fallback_end = MODULES_END;
-	} else {
-		jit_alloc_params.text.start = MODULES_VADDR;
-		jit_alloc_params.text.end = MODULES_END;
-	}
-
-	jit_alloc_params.data.pgprot	= PAGE_KERNEL;
-	jit_alloc_params.data.start	= VMALLOC_START;
-	jit_alloc_params.data.end	= VMALLOC_END;
-#else
-	jit_alloc_params.text.start = VMALLOC_START;
-	jit_alloc_params.text.end = VMALLOC_END;
-#endif
-
-	return &jit_alloc_params;
 }

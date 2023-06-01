@@ -23,6 +23,7 @@
 #ifdef CONFIG_RELOCATABLE
 #include <linux/elf.h>
 #endif
+#include <linux/jitalloc.h>
 
 #include <asm/fixmap.h>
 #include <asm/tlbflush.h>
@@ -1362,4 +1363,21 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 {
 	return vmemmap_populate_basepages(start, end, node, NULL);
 }
+#endif
+
+#ifdef CONFIG_JIT_ALLOC
+#if defined(CONFIG_MMU) && defined(CONFIG_64BIT)
+static struct jit_alloc_params jit_alloc_params = {
+	.alignment	= 1,
+	.text.pgprot	= PAGE_KERNEL,
+};
+
+struct jit_alloc_params *jit_alloc_arch_params(void)
+{
+	jit_alloc_params.text.start = MODULES_VADDR;
+	jit_alloc_params.text.end = MODULES_END;
+
+	return &jit_alloc_params;
+}
+#endif
 #endif

@@ -50,6 +50,7 @@
 #include <asm/uv.h>
 #include <linux/virtio_anchor.h>
 #include <linux/virtio_config.h>
+#include <linux/jitalloc.h>
 
 pgd_t swapper_pg_dir[PTRS_PER_PGD] __section(".bss..swapper_pg_dir");
 pgd_t invalid_pg_dir[PTRS_PER_PGD] __section(".bss..invalid_pg_dir");
@@ -311,3 +312,37 @@ void arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 	vmem_remove_mapping(start, size);
 }
 #endif /* CONFIG_MEMORY_HOTPLUG */
+
+#ifdef CONFIG_JIT_ALLOC
+static unsigned long get_module_load_offset(void)
+{
+	static DEFINE_MUTEX(module_kaslr_mutex);
+	static unsigned long module_load_offset;
+
+	if (!kaslr_enabled())
+		return 0;
+	/*
+	 * Calculate the module_load_offset the first time this code
+	 * is called. Once calculated it stays the same until reboot.
+	 */
+	mutex_lock(&module_kaslr_mutex);
+	if (!module_load_offset)
+		module_load_offset = get_random_u32_inclusive(1, 1024) * PAGE_SIZE;
+	mutex_unlock(&module_kaslr_mutex);
+	return module_load_offset;
+}
+
+static struct jit_alloc_params jit_alloc_params = {
+	.alignment	= JIT_ALLOC_ALIGN,
+	.flags		= JIT_ALLOC_KASAN_SHADOW,
+	.text.pgprot	= PAGE_KERNEL,
+};
+
+struct jit_alloc_params *jit_alloc_arch_params(void)
+{
+	jit_alloc_params.text.start = MODULES_VADDR + get_module_load_offset();
+	jit_alloc_params.text.end = MODULES_END;
+
+	return &jit_alloc_params;
+}
+#endif

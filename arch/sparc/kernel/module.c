@@ -14,7 +14,6 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/mm.h>
-#include <linux/jitalloc.h>
 
 #ifdef CONFIG_SPARC64
 #include <linux/jump_label.h>
@@ -25,24 +24,6 @@
 #include <asm/cacheflush.h>
 
 #include "entry.h"
-
-static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= 1,
-#ifdef CONFIG_SPARC64
-	.text.start	= MODULES_VADDR,
-	.text.end	= MODULES_END,
-#else
-	.text.start	= VMALLOC_START,
-	.text.end	= VMALLOC_END,
-#endif
-};
-
-struct jit_alloc_params *jit_alloc_arch_params(void)
-{
-	jit_alloc_params.text.pgprot = PAGE_KERNEL;
-
-	return &jit_alloc_params;
-}
 
 /* Make generic code ignore STT_REGISTER dummy undefined symbols.  */
 int module_frob_arch_sections(Elf_Ehdr *hdr,

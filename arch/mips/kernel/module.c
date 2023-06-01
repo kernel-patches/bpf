@@ -20,7 +20,6 @@
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/jump_label.h>
-#include <linux/jitalloc.h>
 
 extern void jump_label_apply_nops(struct module *mod);
 
@@ -32,22 +31,6 @@ struct mips_hi16 {
 
 static LIST_HEAD(dbe_list);
 static DEFINE_SPINLOCK(dbe_lock);
-
-#ifdef MODULE_START
-
-static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= 1,
-	.text.start	= MODULE_START,
-	.text.end	= MODULE_END,
-};
-
-struct jit_alloc_params *jit_alloc_arch_params(void)
-{
-	jit_alloc_params.text.pgprot = PAGE_KERNEL;
-
-	return &jit_alloc_params;
-}
-#endif
 
 static void apply_r_mips_32(u32 *location, u32 base, Elf_Addr v)
 {

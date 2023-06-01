@@ -11,7 +11,6 @@
 #include <linux/vmalloc.h>
 #include <linux/sizes.h>
 #include <linux/pgtable.h>
-#include <linux/jitalloc.h>
 #include <asm/alternative.h>
 #include <asm/sections.h>
 
@@ -435,21 +434,6 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 
 	return 0;
 }
-
-#if defined(CONFIG_MMU) && defined(CONFIG_64BIT)
-static struct jit_alloc_params jit_alloc_params = {
-	.alignment	= 1,
-	.text.pgprot	= PAGE_KERNEL,
-};
-
-struct jit_alloc_params *jit_alloc_arch_params(void)
-{
-	jit_alloc_params.text.start = MODULES_VADDR;
-	jit_alloc_params.text.end = MODULES_END;
-
-	return &jit_alloc_params;
-}
-#endif
 
 int module_finalize(const Elf_Ehdr *hdr,
 		    const Elf_Shdr *sechdrs,
