@@ -5,25 +5,39 @@
 #include <linux/types.h>
 
 /**
+ * enum jit_alloc_flags - options for executable memory allocations
+ * @JIT_ALLOC_KASAN_SHADOW:	allocate kasan shadow
+ */
+enum jit_alloc_flags {
+	JIT_ALLOC_KASAN_SHADOW	= (1 << 0),
+};
+
+/**
  * struct jit_address_space -	address space definition for code and
  *				related data allocations
  * @pgprot:	permisssions for memory in this address space
  * @start:	address space start
  * @end:	address space end (inclusive)
+ * @fallback_start:	start of the range for fallback allocations
+ * @fallback_end:	end of the range for fallback allocations (inclusive)
  */
 struct jit_address_space {
 	pgprot_t        pgprot;
 	unsigned long   start;
 	unsigned long   end;
+	unsigned long	fallback_start;
+	unsigned long	fallback_end;
 };
 
 /**
  * struct jit_alloc_params -	architecure parameters for code allocations
  * @text:	address space range for text allocations
+ * @flags:	options for executable memory allocations
  * @alignment:	alignment required for text allocations
  */
 struct jit_alloc_params {
 	struct jit_address_space	text;
+	enum jit_alloc_flags		flags;
 	unsigned int			alignment;
 };
 
