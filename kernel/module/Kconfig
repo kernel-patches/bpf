@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menuconfig MODULES
 	bool "Enable loadable module support"
+	select JIT_ALLOC
 	modules
 	help
 	  Kernel modules are small pieces of compiled code which can
