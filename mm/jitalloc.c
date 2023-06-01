@@ -7,6 +7,26 @@
 
 static struct jit_alloc_params jit_alloc_params;
 
+#ifdef CONFIG_ARCH_HAS_TEXT_POKE
+#include <asm/text-patching.h>
+
+static inline void jit_text_poke_copy(void *dst, const void *src, size_t len)
+{
+	if (jit_alloc_params.flags & JIT_ALLOC_USE_TEXT_POKE)
+		text_poke_copy(dst, src, len);
+	else
+		memcpy(dst, src, len);
+}
+
+static inline void jit_text_poke_set(void *addr, int c, size_t len)
+{
+	if (jit_alloc_params.flags & JIT_ALLOC_USE_TEXT_POKE)
+		text_poke_set(addr, c, len);
+	else
+		memset(addr, c, len);
+}
+
+#else
 static inline void jit_text_poke_copy(void *dst, const void *src, size_t len)
 {
 	memcpy(dst, src, len);
@@ -16,6 +36,7 @@ static inline void jit_text_poke_set(void *addr, int c, size_t len)
 {
 	memset(addr, c, len);
 }
+#endif
 
 static void *jit_alloc(size_t len, unsigned int alignment, pgprot_t pgprot,
 		       unsigned long start, unsigned long end,

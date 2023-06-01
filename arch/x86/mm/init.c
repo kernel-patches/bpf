@@ -1152,6 +1152,12 @@ struct jit_alloc_params *jit_alloc_arch_params(void)
 	jit_alloc_params.text.start = MODULES_VADDR + get_jit_load_offset();
 	jit_alloc_params.text.end = MODULES_END;
 
+	if (IS_ENABLED(CONFIG_STRICT_KERNEL_RWX) ||
+	    IS_ENABLED(CONFIG_STRICT_MODULE_RWX)) {
+		jit_alloc_params.text.pgprot = PAGE_KERNEL_ROX;
+		jit_alloc_params.flags |= JIT_ALLOC_USE_TEXT_POKE;
+	}
+
 	return &jit_alloc_params;
 }
 #endif /* CONFIG_JIT_ALLOC */

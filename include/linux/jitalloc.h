@@ -15,9 +15,11 @@
 /**
  * enum jit_alloc_flags - options for executable memory allocations
  * @JIT_ALLOC_KASAN_SHADOW:	allocate kasan shadow
+ * @JIT_ALLOC_USE_TEXT_POKE:	use text poking APIs to update memory
  */
 enum jit_alloc_flags {
 	JIT_ALLOC_KASAN_SHADOW	= (1 << 0),
+	JIT_ALLOC_USE_TEXT_POKE	= (1 << 1),
 };
 
 /**
