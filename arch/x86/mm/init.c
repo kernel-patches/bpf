@@ -7,6 +7,7 @@
 #include <linux/swapops.h>
 #include <linux/kmemleak.h>
 #include <linux/sched/task.h>
+#include <linux/jitalloc.h>
 
 #include <asm/set_memory.h>
 #include <asm/cpu_device_id.h>
@@ -1109,3 +1110,48 @@ unsigned long arch_max_swapfile_size(void)
 	return pages;
 }
 #endif
+
+#ifdef CONFIG_JIT_ALLOC
+#ifdef CONFIG_RANDOMIZE_BASE
+static unsigned long jit_load_offset;
+
+/* Mutex protects the jit_load_offset. */
+static DEFINE_MUTEX(jit_kaslr_mutex);
+
+static unsigned long int get_jit_load_offset(void)
+{
+	if (kaslr_enabled()) {
+		mutex_lock(&jit_kaslr_mutex);
+		/*
+		 * Calculate the jit_load_offset the first time this
+		 * code is called. Once calculated it stays the same until
+		 * reboot.
+		 */
+		if (jit_load_offset == 0)
+			jit_load_offset =
+				get_random_u32_inclusive(1, 1024) * PAGE_SIZE;
+		mutex_unlock(&jit_kaslr_mutex);
+	}
+	return jit_load_offset;
+}
+#else
+static unsigned long int get_jit_load_offset(void)
+{
+	return 0;
+}
+#endif
+
+static struct jit_alloc_params jit_alloc_params = {
+	.alignment	= JIT_ALLOC_ALIGN,
+	.flags		= JIT_ALLOC_KASAN_SHADOW,
+};
+
+struct jit_alloc_params *jit_alloc_arch_params(void)
+{
+	jit_alloc_params.text.pgprot = PAGE_KERNEL;
+	jit_alloc_params.text.start = MODULES_VADDR + get_jit_load_offset();
+	jit_alloc_params.text.end = MODULES_END;
+
+	return &jit_alloc_params;
+}
+#endif /* CONFIG_JIT_ALLOC */
