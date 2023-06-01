@@ -20,6 +20,7 @@
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
 #include <linux/jump_label.h>
+#include <linux/jitalloc.h>
 
 extern void jump_label_apply_nops(struct module *mod);
 
@@ -33,11 +34,18 @@ static LIST_HEAD(dbe_list);
 static DEFINE_SPINLOCK(dbe_lock);
 
 #ifdef MODULE_START
-void *module_alloc(unsigned long size)
+
+static struct jit_alloc_params jit_alloc_params = {
+	.alignment	= 1,
+	.text.start	= MODULE_START,
+	.text.end	= MODULE_END,
+};
+
+struct jit_alloc_params *jit_alloc_arch_params(void)
 {
-	return __vmalloc_node_range(size, 1, MODULE_START, MODULE_END,
-				GFP_KERNEL, PAGE_KERNEL, 0, NUMA_NO_NODE,
-				__builtin_return_address(0));
+	jit_alloc_params.text.pgprot = PAGE_KERNEL;
+
+	return &jit_alloc_params;
 }
 #endif
 
