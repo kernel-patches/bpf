@@ -105,8 +105,8 @@ static void test_link_api_addrs(void)
 	GET_ADDR("bpf_fentry_test4", addrs[3]);
 	GET_ADDR("bpf_fentry_test5", addrs[4]);
 	GET_ADDR("bpf_fentry_test6", addrs[5]);
-	GET_ADDR("bpf_fentry_test7", addrs[6]);
-	GET_ADDR("bpf_fentry_test8", addrs[7]);
+	GET_ADDR("bpf_fentry_test_ptr1", addrs[6]);
+	GET_ADDR("bpf_fentry_test_ptr2", addrs[7]);
 
 	opts.kprobe_multi.addrs = (const unsigned long*) addrs;
 	opts.kprobe_multi.cnt = ARRAY_SIZE(addrs);
@@ -123,8 +123,8 @@ static void test_link_api_syms(void)
 		"bpf_fentry_test4",
 		"bpf_fentry_test5",
 		"bpf_fentry_test6",
-		"bpf_fentry_test7",
-		"bpf_fentry_test8",
+		"bpf_fentry_test_ptr1",
+		"bpf_fentry_test_ptr2",
 	};
 
 	opts.kprobe_multi.syms = syms;
@@ -183,8 +183,8 @@ static void test_attach_api_addrs(void)
 	GET_ADDR("bpf_fentry_test4", addrs[3]);
 	GET_ADDR("bpf_fentry_test5", addrs[4]);
 	GET_ADDR("bpf_fentry_test6", addrs[5]);
-	GET_ADDR("bpf_fentry_test7", addrs[6]);
-	GET_ADDR("bpf_fentry_test8", addrs[7]);
+	GET_ADDR("bpf_fentry_test_ptr1", addrs[6]);
+	GET_ADDR("bpf_fentry_test_ptr2", addrs[7]);
 
 	opts.addrs = (const unsigned long *) addrs;
 	opts.cnt = ARRAY_SIZE(addrs);
@@ -201,8 +201,8 @@ static void test_attach_api_syms(void)
 		"bpf_fentry_test4",
 		"bpf_fentry_test5",
 		"bpf_fentry_test6",
-		"bpf_fentry_test7",
-		"bpf_fentry_test8",
+		"bpf_fentry_test_ptr1",
+		"bpf_fentry_test_ptr2",
 	};
 
 	opts.syms = syms;

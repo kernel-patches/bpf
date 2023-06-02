@@ -12,8 +12,8 @@ extern const void bpf_fentry_test3 __ksym;
 extern const void bpf_fentry_test4 __ksym;
 extern const void bpf_fentry_test5 __ksym;
 extern const void bpf_fentry_test6 __ksym;
-extern const void bpf_fentry_test7 __ksym;
-extern const void bpf_fentry_test8 __ksym;
+extern const void bpf_fentry_test_ptr1 __ksym;
+extern const void bpf_fentry_test_ptr2 __ksym;
 
 int pid = 0;
 bool test_cookie = false;
@@ -57,8 +57,8 @@ static void kprobe_multi_check(void *ctx, bool is_return)
 		SET(kretprobe_test4_result, &bpf_fentry_test4, 6);
 		SET(kretprobe_test5_result, &bpf_fentry_test5, 5);
 		SET(kretprobe_test6_result, &bpf_fentry_test6, 4);
-		SET(kretprobe_test7_result, &bpf_fentry_test7, 3);
-		SET(kretprobe_test8_result, &bpf_fentry_test8, 1);
+		SET(kretprobe_test7_result, &bpf_fentry_test_ptr1, 3);
+		SET(kretprobe_test8_result, &bpf_fentry_test_ptr2, 1);
 	} else {
 		SET(kprobe_test1_result, &bpf_fentry_test1, 1);
 		SET(kprobe_test2_result, &bpf_fentry_test2, 7);
@@ -66,8 +66,8 @@ static void kprobe_multi_check(void *ctx, bool is_return)
 		SET(kprobe_test4_result, &bpf_fentry_test4, 3);
 		SET(kprobe_test5_result, &bpf_fentry_test5, 4);
 		SET(kprobe_test6_result, &bpf_fentry_test6, 5);
-		SET(kprobe_test7_result, &bpf_fentry_test7, 6);
-		SET(kprobe_test8_result, &bpf_fentry_test8, 8);
+		SET(kprobe_test7_result, &bpf_fentry_test_ptr1, 6);
+		SET(kprobe_test8_result, &bpf_fentry_test_ptr2, 8);
 	}
 
 #undef SET

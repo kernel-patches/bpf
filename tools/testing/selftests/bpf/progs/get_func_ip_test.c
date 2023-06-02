@@ -12,7 +12,7 @@ extern const void bpf_fentry_test3 __ksym;
 extern const void bpf_fentry_test4 __ksym;
 extern const void bpf_modify_return_test __ksym;
 extern const void bpf_fentry_test6 __ksym;
-extern const void bpf_fentry_test7 __ksym;
+extern const void bpf_fentry_test_ptr1 __ksym;
 
 extern bool CONFIG_X86_KERNEL_IBT __kconfig __weak;
 

@@ -61,20 +61,20 @@ struct bpf_fentry_test_t {
 	struct bpf_fentry_test *a;
 };
 
-__u64 test7_result = 0;
-SEC("fexit/bpf_fentry_test7")
-int BPF_PROG(test7, struct bpf_fentry_test_t *arg)
+__u64 test_ptr1_result = 0;
+SEC("fexit/bpf_fentry_test_ptr1")
+int BPF_PROG(test_ptr1, struct bpf_fentry_test_t *arg)
 {
 	if (!arg)
-		test7_result = 1;
+		test_ptr1_result = 1;
 	return 0;
 }
 
-__u64 test8_result = 0;
-SEC("fexit/bpf_fentry_test8")
-int BPF_PROG(test8, struct bpf_fentry_test_t *arg)
+__u64 test_ptr2_result = 0;
+SEC("fexit/bpf_fentry_test_ptr2")
+int BPF_PROG(test_ptr2, struct bpf_fentry_test_t *arg)
 {
 	if (!arg->a)
-		test8_result = 1;
+		test_ptr2_result = 1;
 	return 0;
 }

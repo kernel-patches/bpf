@@ -17,7 +17,7 @@ __naked void btf_ctx_access_accept(void)
 "	::: __clobber_all);
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("fentry/bpf_fentry_test_ptr3")
 __description("btf_ctx_access u32 pointer accept")
 __success __retval(0)
 __naked void ctx_access_u32_pointer_accept(void)

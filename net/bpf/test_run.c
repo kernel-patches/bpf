@@ -540,17 +540,17 @@ struct bpf_fentry_test_t {
 	struct bpf_fentry_test_t *a;
 };
 
-int noinline bpf_fentry_test7(struct bpf_fentry_test_t *arg)
+noinline int bpf_fentry_test_ptr1(struct bpf_fentry_test_t *arg)
 {
 	return (long)arg;
 }
 
-int noinline bpf_fentry_test8(struct bpf_fentry_test_t *arg)
+noinline int bpf_fentry_test_ptr2(struct bpf_fentry_test_t *arg)
 {
 	return (long)arg->a;
 }
 
-__bpf_kfunc u32 bpf_fentry_test9(u32 *a)
+__bpf_kfunc u32 bpf_fentry_test_ptr3(u32 *a)
 {
 	return *a;
 }
@@ -655,9 +655,9 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 		    bpf_fentry_test4((void *)7, 8, 9, 10) != 34 ||
 		    bpf_fentry_test5(11, (void *)12, 13, 14, 15) != 65 ||
 		    bpf_fentry_test6(16, (void *)17, 18, 19, (void *)20, 21) != 111 ||
-		    bpf_fentry_test7((struct bpf_fentry_test_t *)0) != 0 ||
-		    bpf_fentry_test8(&arg) != 0 ||
-		    bpf_fentry_test9(&retval) != 0)
+		    bpf_fentry_test_ptr1((struct bpf_fentry_test_t *)0) != 0 ||
+		    bpf_fentry_test_ptr2(&arg) != 0 ||
+		    bpf_fentry_test_ptr3(&retval) != 0)
 			goto out;
 		break;
 	case BPF_MODIFY_RETURN:

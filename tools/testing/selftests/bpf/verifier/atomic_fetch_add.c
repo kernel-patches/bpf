@@ -88,7 +88,7 @@
 		 * kernel function being called. Load first arg into R2.
 		 */
 		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 0),
-		/* First arg of bpf_fentry_test7 is a pointer to a struct.
+		/* First arg of bpf_fentry_test_ptr1 is a pointer to a struct.
 		 * Attempt to modify that struct. Verifier shouldn't let us
 		 * because it's kernel memory.
 		 */
@@ -100,7 +100,7 @@
 	},
 	.prog_type = BPF_PROG_TYPE_TRACING,
 	.expected_attach_type = BPF_TRACE_FENTRY,
-	.kfunc = "bpf_fentry_test7",
+	.kfunc = "bpf_fentry_test_ptr1",
 	.result = REJECT,
 	.errstr = "only read is supported",
 },

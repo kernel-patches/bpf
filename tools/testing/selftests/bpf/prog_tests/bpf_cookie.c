@@ -125,9 +125,9 @@ static void kprobe_multi_link_api_subtest(void)
 	GET_ADDR("bpf_fentry_test4", addrs[2]);
 	GET_ADDR("bpf_fentry_test5", addrs[3]);
 	GET_ADDR("bpf_fentry_test6", addrs[4]);
-	GET_ADDR("bpf_fentry_test7", addrs[5]);
+	GET_ADDR("bpf_fentry_test_ptr1", addrs[5]);
 	GET_ADDR("bpf_fentry_test2", addrs[6]);
-	GET_ADDR("bpf_fentry_test8", addrs[7]);
+	GET_ADDR("bpf_fentry_test_ptr2", addrs[7]);
 
 #undef GET_ADDR
 
@@ -136,9 +136,9 @@ static void kprobe_multi_link_api_subtest(void)
 	cookies[2] = 3; /* bpf_fentry_test4 */
 	cookies[3] = 4; /* bpf_fentry_test5 */
 	cookies[4] = 5; /* bpf_fentry_test6 */
-	cookies[5] = 6; /* bpf_fentry_test7 */
+	cookies[5] = 6; /* bpf_fentry_test_ptr1 */
 	cookies[6] = 7; /* bpf_fentry_test2 */
-	cookies[7] = 8; /* bpf_fentry_test8 */
+	cookies[7] = 8; /* bpf_fentry_test_ptr2 */
 
 	opts.kprobe_multi.addrs = (const unsigned long *) &addrs;
 	opts.kprobe_multi.cnt = ARRAY_SIZE(addrs);
@@ -154,9 +154,9 @@ static void kprobe_multi_link_api_subtest(void)
 	cookies[2] = 6; /* bpf_fentry_test4 */
 	cookies[3] = 5; /* bpf_fentry_test5 */
 	cookies[4] = 4; /* bpf_fentry_test6 */
-	cookies[5] = 3; /* bpf_fentry_test7 */
+	cookies[5] = 3; /* bpf_fentry_test_ptr1 */
 	cookies[6] = 2; /* bpf_fentry_test2 */
-	cookies[7] = 1; /* bpf_fentry_test8 */
+	cookies[7] = 1; /* bpf_fentry_test_ptr2 */
 
 	opts.kprobe_multi.flags = BPF_F_KPROBE_MULTI_RETURN;
 	prog_fd = bpf_program__fd(skel->progs.test_kretprobe);
@@ -185,9 +185,9 @@ static void kprobe_multi_attach_api_subtest(void)
 		"bpf_fentry_test4",
 		"bpf_fentry_test5",
 		"bpf_fentry_test6",
-		"bpf_fentry_test7",
+		"bpf_fentry_test_ptr1",
 		"bpf_fentry_test2",
-		"bpf_fentry_test8",
+		"bpf_fentry_test_ptr2",
 	};
 	__u64 cookies[8];
 
@@ -203,9 +203,9 @@ static void kprobe_multi_attach_api_subtest(void)
 	cookies[2] = 3; /* bpf_fentry_test4 */
 	cookies[3] = 4; /* bpf_fentry_test5 */
 	cookies[4] = 5; /* bpf_fentry_test6 */
-	cookies[5] = 6; /* bpf_fentry_test7 */
+	cookies[5] = 6; /* bpf_fentry_test_ptr1 */
 	cookies[6] = 7; /* bpf_fentry_test2 */
-	cookies[7] = 8; /* bpf_fentry_test8 */
+	cookies[7] = 8; /* bpf_fentry_test_ptr2 */
 
 	opts.syms = syms;
 	opts.cnt = ARRAY_SIZE(syms);
@@ -221,9 +221,9 @@ static void kprobe_multi_attach_api_subtest(void)
 	cookies[2] = 6; /* bpf_fentry_test4 */
 	cookies[3] = 5; /* bpf_fentry_test5 */
 	cookies[4] = 4; /* bpf_fentry_test6 */
-	cookies[5] = 3; /* bpf_fentry_test7 */
+	cookies[5] = 3; /* bpf_fentry_test_ptr1 */
 	cookies[6] = 2; /* bpf_fentry_test2 */
-	cookies[7] = 1; /* bpf_fentry_test8 */
+	cookies[7] = 1; /* bpf_fentry_test_ptr2 */
 
 	opts.retprobe = true;
 
