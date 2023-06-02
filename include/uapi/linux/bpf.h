@@ -846,6 +846,16 @@ union bpf_iter_link_info {
  *		Returns zero on success. On error, -1 is returned and *errno*
  *		is set appropriately.
  *
+ * BPF_TOKEN_CREATE
+ *	Description
+ *		Create BPF token with embedded information about what
+ *		BPF-related functionality is allowed. This BPF token can be
+ *		passed as an extra parameter to various bpf() syscall command.
+ *
+ *	Return
+ *		A new file descriptor (a nonnegative integer), or -1 if an
+ *		error occurred (in which case, *errno* is set appropriately).
+ *
  * NOTES
  *	eBPF objects (maps and programs) can be shared between processes.
  *
@@ -900,6 +910,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_TOKEN_CREATE,
 };
 
 enum bpf_map_type {
@@ -1168,6 +1179,24 @@ enum bpf_link_type {
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
  */
 #define BPF_F_KPROBE_MULTI_RETURN	(1U << 0)
+
+/* BPF_TOKEN_CREATE command flags
+ */
+enum {
+	/* Ignore unrecognized bits in token_create.allowed_cmds bit set.  If
+	 * this flag is set, kernel won't return -EINVAL for a bit
+	 * corresponding to a non-existing command or the one that doesn't
+	 * support BPF token passing. This flags allows application to request
+	 * BPF token creation for a desired set of commands without worrying
+	 * about older kernels not supporting some of the commands.
+	 * Presumably, deployed applications will do separate feature
+	 * detection and will avoid calling not-yet-supported bpf() commands,
+	 * so this BPF token will work equally well both on older and newer
+	 * kernels, even if some of the requested commands won't be BPF
+	 * token-enabled.
+	 */
+	BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS		  = 1U << 0,
+};
 
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
@@ -1620,6 +1649,19 @@ union bpf_attr {
 		__u32		map_fd;
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
+
+	struct { /* struct used by BPF_TOKEN_CREATE command */
+		__u32		flags;
+		__u32		token_fd;
+		/* a bit set of allowed bpf() syscall commands,
+		 * e.g., (1ULL << BPF_TOKEN_CREATE) | (1ULL << BPF_PROG_LOAD)
+		 * will allow creating derived BPF tokens and loading new BPF
+		 * programs;
+		 * see also BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS for its effect on
+		 * validity checking of this set
+		 */
+		__u64		allowed_cmds;
+	} token_create;
 
 } __attribute__((aligned(8)));
 

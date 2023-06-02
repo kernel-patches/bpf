@@ -5024,6 +5024,77 @@ out_prog_put:
 	return ret;
 }
 
+#define BPF_TOKEN_FLAGS_MASK (BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS)
+#define BPF_TOKEN_CMDS_MASK ((1ULL << BPF_TOKEN_CREATE))
+
+#define BPF_TOKEN_CREATE_LAST_FIELD token_create.allowed_cmds
+
+static int token_create(union bpf_attr *attr)
+{
+	struct bpf_token *new_token, *token = NULL;
+	u64 allowed_cmds;
+	int fd, err;
+
+	if (CHECK_ATTR(BPF_TOKEN_CREATE))
+		return -EINVAL;
+
+	if (attr->token_create.flags & ~BPF_TOKEN_FLAGS_MASK)
+		return -EINVAL;
+
+	if (attr->token_create.token_fd) {
+		token = bpf_token_get_from_fd(attr->token_create.token_fd);
+		if (IS_ERR(token))
+			return PTR_ERR(token);
+		/* if provided BPF token doesn't allow creating new tokens,
+		 * then use system-wide capability checks only
+		 */
+		if (!bpf_token_allow_cmd(token, BPF_TOKEN_CREATE)) {
+			bpf_token_put(token);
+			token = NULL;
+		}
+	}
+
+	allowed_cmds = attr->token_create.allowed_cmds;
+	if (!(attr->token_create.flags & BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS) &&
+	    allowed_cmds & ~BPF_TOKEN_CMDS_MASK) {
+		err = -ENOTSUPP;
+		goto err_out;
+	}
+
+	if (!bpf_token_capable(token, CAP_SYS_ADMIN)) {
+		err = -EPERM;
+		goto err_out;
+	}
+
+	/* requested cmds should be a subset of associated token's set */
+	if (token && (token->allowed_cmds & allowed_cmds) != allowed_cmds) {
+		err = -EPERM;
+		goto err_out;
+	}
+
+	new_token = bpf_token_alloc();
+	if (!new_token) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	new_token->allowed_cmds = allowed_cmds & BPF_TOKEN_CMDS_MASK;
+
+	fd = bpf_token_new_fd(new_token);
+	if (fd < 0) {
+		bpf_token_put(new_token);
+		err = fd;
+		goto err_out;
+	}
+
+	bpf_token_put(token);
+	return fd;
+
+err_out:
+	bpf_token_put(token);
+	return err;
+}
+
 static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -5171,6 +5242,9 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_PROG_BIND_MAP:
 		err = bpf_prog_bind_map(&attr);
+		break;
+	case BPF_TOKEN_CREATE:
+		err = token_create(&attr);
 		break;
 	default:
 		err = -EINVAL;
