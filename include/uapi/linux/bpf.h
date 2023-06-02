@@ -6438,6 +6438,10 @@ struct bpf_link_info {
 			__s32 priority;
 			__u32 flags;
 		} netfilter;
+		struct {
+			__u64 addrs;
+			__u32 count;
+		} kprobe_multi;
 	};
 } __attribute__((aligned(8)));
 
