@@ -961,10 +961,10 @@ enum bpf_cgroup_storage_type {
 
 #define MAX_BPF_CGROUP_STORAGE_TYPE __BPF_CGROUP_STORAGE_MAX
 
-/* The longest tracepoint has 12 args.
- * See include/trace/bpf_probe.h
+/* The maximun number of the kernel function arguments.
+ * Let's make it 14, for now.
  */
-#define MAX_BPF_FUNC_ARGS 12
+#define MAX_BPF_FUNC_ARGS 14
 
 /* The maximum number of arguments passed through registers
  * a single function may have.
@@ -2273,7 +2273,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 static inline bool bpf_tracing_ctx_access(int off, int size,
 					  enum bpf_access_type type)
 {
-	if (off < 0 || off >= sizeof(__u64) * MAX_BPF_FUNC_ARGS)
+	/* "+1" here is for FEXIT return value. */
+	if (off < 0 || off >= sizeof(__u64) * (MAX_BPF_FUNC_ARGS + 1))
 		return false;
 	if (type != BPF_READ)
 		return false;
