@@ -536,6 +536,27 @@ int noinline bpf_fentry_test6(u64 a, void *b, short c, int d, void *e, u64 f)
 	return a + (long)b + c + d + (long)e + f;
 }
 
+noinline int bpf_fentry_test7(u64 a, void *b, short c, int d, void *e,
+			      u64 f, u64 g)
+{
+	return a + (long)b + c + d + (long)e + f + g;
+}
+
+noinline int bpf_fentry_test12(u64 a, void *b, short c, int d, void *e,
+			       u64 f, u64 g, u64 h, u64 i, u64 j,
+			       u64 k, u64 l)
+{
+	return a + (long)b + c + d + (long)e + f + g + h + i + j + k + l;
+}
+
+noinline int bpf_fentry_test14(u64 a, void *b, short c, int d, void *e,
+			       u64 f, u64 g, u64 h, u64 i, u64 j,
+			       u64 k, u64 l, u64 m, u64 n)
+{
+	return a + (long)b + c + d + (long)e + f + g + h + i + j + k + l +
+	       m + n;
+}
+
 struct bpf_fentry_test_t {
 	struct bpf_fentry_test_t *a;
 };
@@ -657,7 +678,14 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 		    bpf_fentry_test6(16, (void *)17, 18, 19, (void *)20, 21) != 111 ||
 		    bpf_fentry_test_ptr1((struct bpf_fentry_test_t *)0) != 0 ||
 		    bpf_fentry_test_ptr2(&arg) != 0 ||
-		    bpf_fentry_test_ptr3(&retval) != 0)
+		    bpf_fentry_test_ptr3(&retval) != 0 ||
+		    bpf_fentry_test7(16, (void *)17, 18, 19, (void *)20,
+				     21, 22) != 133 ||
+		    bpf_fentry_test12(16, (void *)17, 18, 19, (void *)20,
+				      21, 22, 23, 24, 25, 26, 27) != 258 ||
+		    bpf_fentry_test14(16, (void *)17, 18, 19, (void *)20,
+				      21, 22, 23, 24, 25, 26, 27, 28,
+				      29) != 315)
 			goto out;
 		break;
 	case BPF_MODIFY_RETURN:

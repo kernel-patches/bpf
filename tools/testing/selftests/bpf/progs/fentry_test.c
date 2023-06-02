@@ -56,6 +56,40 @@ int BPF_PROG(test6, __u64 a, void *b, short c, int d, void * e, __u64 f)
 	return 0;
 }
 
+__u64 test7_result = 0;
+SEC("fentry/bpf_fentry_test7")
+int BPF_PROG(test7, __u64 a, void *b, short c, int d, void *e, __u64 f,
+	     __u64 g)
+{
+	test7_result = a == 16 && b == (void *)17 && c == 18 && d == 19 &&
+		e == (void *)20 && f == 21 && g == 22;
+	return 0;
+}
+
+__u64 test12_result = 0;
+SEC("fentry/bpf_fentry_test12")
+int BPF_PROG(test12, __u64 a, void *b, short c, int d, void *e, __u64 f,
+	     __u64 g, __u64 h, __u64 i, __u64 j, __u64 k, __u64 l)
+{
+	test12_result = a == 16 && b == (void *)17 && c == 18 && d == 19 &&
+		e == (void *)20 && f == 21 && g == 22 && h == 23 &&
+		i == 24 && j == 25 && k == 26 && l == 27;
+	return 0;
+}
+
+__u64 test14_result = 0;
+SEC("fentry/bpf_fentry_test14")
+int BPF_PROG(test14, __u64 a, void *b, short c, int d, void *e, __u64 f,
+	     __u64 g, __u64 h, __u64 i, __u64 j, __u64 k, __u64 l,
+	     __u64 m, __u64 n)
+{
+	test14_result = a == 16 && b == (void *)17 && c == 18 && d == 19 &&
+		e == (void *)20 && f == 21 && g == 22 && h == 23 &&
+		i == 24 && j == 25 && k == 26 && l == 27 && m == 28 &&
+		n == 29;
+	return 0;
+}
+
 struct bpf_fentry_test_t {
 	struct bpf_fentry_test_t *a;
 };
