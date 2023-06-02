@@ -166,6 +166,57 @@ static int get_prog_info(int prog_id, struct bpf_prog_info *info)
 	return err;
 }
 
+static int cmp_u64(const void *A, const void *B)
+{
+	const __u64 *a = A, *b = B;
+
+	return *a - *b;
+}
+
+static void kprobe_multi_print_plain(__u64 addr, char *sym, __u32 indent)
+{
+	printf("\n\t%*s  %0*llx %s", indent, "", 16, addr, sym);
+}
+
+static void kprobe_multi_print_json(__u64 addr, char *sym)
+{
+	jsonw_start_object(json_wtr);
+	jsonw_uint_field(json_wtr, "addr", addr);
+	jsonw_string_field(json_wtr, "symbol", sym);
+	jsonw_end_object(json_wtr);
+}
+
+static void kernel_syms_show(const __u64 *addrs, __u32 cnt, __u32 indent)
+{
+	char buff[256], sym[256];
+	__u64 addr;
+	int i = 0;
+	FILE *fp;
+
+	fp = fopen("/proc/kallsyms", "r");
+	if (!fp)
+		return;
+
+	/* Each address is guaranteed to be unique. */
+	qsort((void *)addrs, cnt, sizeof(__u64), cmp_u64);
+	/* The addresses in /proc/kallsyms are already sorted. */
+	while (fgets(buff, sizeof(buff), fp)) {
+		if (sscanf(buff, "%llx %*c %s", &addr, sym) != 2)
+			continue;
+		/* The addr probed by kprobe_multi is always in
+		 * /proc/kallsyms, so we can ignore some edge cases.
+		 */
+		if (addr != addrs[i])
+			continue;
+		if (indent)
+			kprobe_multi_print_plain(addr, sym, indent);
+		else
+			kprobe_multi_print_json(addr, sym);
+		i++;
+	}
+	fclose(fp);
+}
+
 static int show_link_close_json(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
@@ -217,6 +268,17 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_STRUCT_OPS:
 		jsonw_uint_field(json_wtr, "map_id",
 				 info->struct_ops.map_id);
+		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		const __u64 *addrs;
+
+		jsonw_uint_field(json_wtr, "func_cnt", info->kprobe_multi.count);
+		jsonw_name(json_wtr, "addrs");
+		jsonw_start_array(json_wtr);
+		addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+		if (info->kprobe_multi.count)
+			kernel_syms_show(addrs, info->kprobe_multi.count, 0);
+		jsonw_end_array(json_wtr);
 		break;
 	default:
 		break;
@@ -396,6 +458,20 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_NETFILTER:
 		netfilter_dump_plain(info);
 		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		__u32 indent, cnt, i;
+		const __u64 *addrs;
+
+		cnt = info->kprobe_multi.count;
+		if (!cnt)
+			break;
+		printf("\n\tfunc_cnt %d  %-16s %s", cnt, "addrs", "symbols");
+		for (i = 0; cnt; i++)
+			cnt /= 10;
+		indent = strlen("func_cnt ") + i;
+		addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+		kernel_syms_show(addrs, cnt, indent);
+		break;
 	default:
 		break;
 	}
@@ -417,7 +493,9 @@ static int do_show_link(int fd)
 {
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
+	__u64 *addrs = NULL;
 	char buf[256];
+	int count;
 	int err;
 
 	memset(&info, 0, sizeof(info));
@@ -441,12 +519,28 @@ again:
 		info.iter.target_name_len = sizeof(buf);
 		goto again;
 	}
+	if (info.type == BPF_LINK_TYPE_KPROBE_MULTI &&
+	    !info.kprobe_multi.addrs) {
+		count = info.kprobe_multi.count;
+		if (count) {
+			addrs = calloc(count, sizeof(__u64));
+			if (!addrs) {
+				p_err("mem alloc failed");
+				close(fd);
+				return -1;
+			}
+			info.kprobe_multi.addrs = (unsigned long)addrs;
+			goto again;
+		}
+	}
 
 	if (json_output)
 		show_link_close_json(fd, &info);
 	else
 		show_link_close_plain(fd, &info);
 
+	if (addrs)
+		free(addrs);
 	close(fd);
 	return 0;
 }
