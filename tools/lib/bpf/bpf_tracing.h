@@ -628,10 +628,13 @@ struct pt_regs;
 #define ___bpf_apply(fn, n) ___bpf_concat(fn, n)
 #endif
 #ifndef ___bpf_nth
-#define ___bpf_nth(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _a, _b, _c, N, ...) N
+#define ___bpf_nth(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _a, _b, _c,	\
+		   _d, _e, _f, N, ...) N
 #endif
 #ifndef ___bpf_narg
-#define ___bpf_narg(...) ___bpf_nth(_, ##__VA_ARGS__, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define ___bpf_narg(...) \
+	___bpf_nth(_, ##__VA_ARGS__, 15, 14, 13, 12, 11, 10, 9, 8, 7,	\
+		   6, 5, 4, 3, 2, 1, 0)
 #endif
 
 #define ___bpf_ctx_cast0()            ctx
@@ -647,6 +650,9 @@ struct pt_regs;
 #define ___bpf_ctx_cast10(x, args...) ___bpf_ctx_cast9(args), (void *)ctx[9]
 #define ___bpf_ctx_cast11(x, args...) ___bpf_ctx_cast10(args), (void *)ctx[10]
 #define ___bpf_ctx_cast12(x, args...) ___bpf_ctx_cast11(args), (void *)ctx[11]
+#define ___bpf_ctx_cast13(x, args...) ___bpf_ctx_cast12(args), (void *)ctx[12]
+#define ___bpf_ctx_cast14(x, args...) ___bpf_ctx_cast13(args), (void *)ctx[13]
+#define ___bpf_ctx_cast15(x, args...) ___bpf_ctx_cast14(args), (void *)ctx[14]
 #define ___bpf_ctx_cast(args...)      ___bpf_apply(___bpf_ctx_cast, ___bpf_narg(args))(args)
 
 /*

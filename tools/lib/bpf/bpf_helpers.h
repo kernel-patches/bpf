@@ -194,11 +194,13 @@ enum libbpf_tristate {
 #define ___bpf_apply(fn, n) ___bpf_concat(fn, n)
 #endif
 #ifndef ___bpf_nth
-#define ___bpf_nth(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _a, _b, _c, N, ...) N
+#define ___bpf_nth(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _a, _b, _c,	\
+		   _d, _e, _f, N, ...) N
 #endif
 #ifndef ___bpf_narg
 #define ___bpf_narg(...) \
-	___bpf_nth(_, ##__VA_ARGS__, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+	___bpf_nth(_, ##__VA_ARGS__, 15, 14, 13, 12, 11, 10, 9, 8, 7,	\
+		   6, 5, 4, 3, 2, 1, 0)
 #endif
 
 #define ___bpf_fill0(arr, p, x) do {} while (0)
@@ -290,7 +292,8 @@ enum libbpf_tristate {
 #define ___bpf_pick_printk(...) \
 	___bpf_nth(_, ##__VA_ARGS__, __bpf_vprintk, __bpf_vprintk, __bpf_vprintk,	\
 		   __bpf_vprintk, __bpf_vprintk, __bpf_vprintk, __bpf_vprintk,		\
-		   __bpf_vprintk, __bpf_vprintk, __bpf_printk /*3*/, __bpf_printk /*2*/,\
+		   __bpf_vprintk, __bpf_vprintk, __bpf_vprintk, __bpf_vprintk,		\
+		   __bpf_vprintk, __bpf_printk /*3*/, __bpf_printk /*2*/,		\
 		   __bpf_printk /*1*/, __bpf_printk /*0*/)
 
 /* Helper macro to print out debug messages */
