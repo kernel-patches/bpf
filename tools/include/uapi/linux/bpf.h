@@ -999,6 +999,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
 	BPF_PROG_TYPE_NETFILTER,
+	__MAX_BPF_PROG_TYPE
 };
 
 enum bpf_attach_type {
@@ -1201,6 +1202,14 @@ enum {
 	 * token_create.allowed_map_types bit set.
 	 */
 	BPF_F_TOKEN_IGNORE_UNKNOWN_MAP_TYPES	  = 1U << 1,
+	/* Similar to BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS flag, but for
+	 * token_create.allowed_prog_types bit set.
+	 */
+	BPF_F_TOKEN_IGNORE_UNKNOWN_PROG_TYPES	  = 1U << 2,
+	/* Similar to BPF_F_TOKEN_IGNORE_UNKNOWN_CMDS flag, but for
+	 * token_create.allowed_attach_types bit set.
+	 */
+	BPF_F_TOKEN_IGNORE_UNKNOWN_ATTACH_TYPES	  = 1U << 3,
 };
 
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
@@ -1452,6 +1461,7 @@ union bpf_attr {
 		 * truncated), or smaller (if log buffer wasn't filled completely).
 		 */
 		__u32		log_true_size;
+		__u32		prog_token_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -1674,6 +1684,15 @@ union bpf_attr {
 		 * effect on validity checking of this set
 		 */
 		__u64		allowed_map_types;
+		/* similarly to allowed_map_types, bit sets of BPF program
+		 * types and BPF program attach types that are allowed to be
+		 * loaded by requested BPF token;
+		 * see also BPF_F_TOKEN_IGNORE_UNKNOWN_PROG_TYPES and
+		 * BPF_F_TOKEN_IGNORE_UNKNOWN_ATTACH_TYPES for their
+		 * effect on validity checking of these sets
+		 */
+		__u64		allowed_prog_types;
+		__u64		allowed_attach_types;
 	} token_create;
 
 } __attribute__((aligned(8)));
