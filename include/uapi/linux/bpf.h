@@ -4909,7 +4909,8 @@ union bpf_attr {
  *
  *		BPF_MAP_TYPE_HASH, BPF_MAP_TYPE_PERCPU_HASH,
  *		BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_LRU_PERCPU_HASH,
- *		BPF_MAP_TYPE_ARRAY, BPF_MAP_TYPE_PERCPU_ARRAY
+ *		BPF_MAP_TYPE_HASH_OF_MAPS, BPF_MAP_TYPE_ARRAY,
+ *		BPF_MAP_TYPE_PERCPU_ARRAY
  *
  *		long (\*callback_fn)(struct bpf_map \*map, const void \*key, void \*value, void \*ctx);
  *
