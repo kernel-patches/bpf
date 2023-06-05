@@ -248,7 +248,7 @@ static int64_t ringbuf_process_ring(struct ring *r)
 			got_new_data = true;
 			cons_pos += roundup_len(len);
 
-			if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
+			if (r->sample_cb && ((len & BPF_RINGBUF_DISCARD_BIT) == 0)) {
 				sample = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
 				err = r->sample_cb(r->ctx, sample, len);
 				if (err < 0) {
