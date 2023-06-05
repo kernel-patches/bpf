@@ -1,7 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2020 Facebook */
-#include <linux/bpf.h>
+#include <linux/types.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <vmlinux.h>
+
+#include "bpf_misc.h"
+
+int err, pid;
 
 struct inner_map {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -120,6 +126,13 @@ struct outer_sockarr_sz1 {
 
 int input = 0;
 
+static bool is_test_task(void)
+{
+	int cur_pid = bpf_get_current_pid_tgid() >> 32;
+
+	return pid == cur_pid;
+}
+
 SEC("raw_tp/sys_enter")
 int handle__sys_enter(void *ctx)
 {
@@ -144,6 +157,64 @@ int handle__sys_enter(void *ctx)
 	val = input + 2;
 	bpf_map_update_elem(inner_map, &key, &val, 0);
 
+	return 0;
+}
+
+struct callback_ctx {
+	bool invoked;
+	bool failed;
+};
+
+static __u64 set_invoked(struct bpf_map *map, __u64 *key, __u64 *val, struct callback_ctx *ctx)
+{
+	struct bpf_map *inner_map;
+
+	ctx->invoked = true;
+	inner_map = bpf_map_lookup_elem(map, key);
+	if (!inner_map) {
+		ctx->failed = true;
+		return 1;
+	}
+
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(test_iter_hash_of_maps, struct task_struct *task, u64 clone_flags)
+{
+	long ret;
+	struct callback_ctx callback_ctx = {
+		.invoked = false,
+		.failed = false,
+	};
+
+	if (!is_test_task())
+		return 0;
+
+	ret = bpf_for_each_map_elem(&outer_hash, set_invoked, &callback_ctx, 0);
+	if (ret < 1)
+		err = 1;
+
+	if (!callback_ctx.invoked)
+		err = 2;
+
+	if (callback_ctx.failed)
+		err = 3;
+
+	return 0;
+}
+
+static __u64 empty_cb(struct bpf_map *map, __u64 *key, __u64 *val, void *ctx)
+{
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
+__success
+int BPF_PROG(test_iter_hash_of_maps_no_ctx, struct task_struct *task, u64 clone_flags)
+{
+	/* Should be able to iterate with no context as well. */
+	bpf_for_each_map_elem(&outer_hash, empty_cb, NULL, 0);
 	return 0;
 }
 

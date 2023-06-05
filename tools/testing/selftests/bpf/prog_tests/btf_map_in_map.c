@@ -4,6 +4,7 @@
 #include <test_progs.h>
 
 #include "test_btf_map_in_map.skel.h"
+#include "test_btf_map_in_map_failure.skel.h"
 
 static int duration;
 
@@ -154,6 +155,43 @@ static void test_diff_size(void)
 	test_btf_map_in_map__destroy(skel);
 }
 
+static void test_hash_iter(const char *prog_name)
+{
+	struct test_btf_map_in_map *skel;
+	struct bpf_program *prog;
+	struct bpf_link *link = NULL;
+	int err, child_pid, status;
+
+	skel = test_btf_map_in_map__open();
+	if (!ASSERT_OK_PTR(skel, "test_btf_map_in_map__open\n"))
+		return;
+
+	skel->bss->pid = getpid();
+	err = test_btf_map_in_map__load(skel);
+	if (!ASSERT_OK(err, "test_btf_map_in_map__load"))
+		goto cleanup;
+
+	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto cleanup;
+
+	link = bpf_program__attach(prog);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach"))
+		goto cleanup;
+
+	child_pid = fork();
+	if (!ASSERT_GT(child_pid, -1, "child_pid"))
+		goto cleanup;
+	if (child_pid == 0)
+		_exit(0);
+	waitpid(child_pid, &status, 0);
+	ASSERT_OK(skel->bss->err, "post_wait_err");
+
+cleanup:
+	bpf_link__destroy(link);
+	test_btf_map_in_map__destroy(skel);
+}
+
 void test_btf_map_in_map(void)
 {
 	if (test__start_subtest("lookup_update"))
@@ -161,4 +199,10 @@ void test_btf_map_in_map(void)
 
 	if (test__start_subtest("diff_size"))
 		test_diff_size();
+
+	if (test__start_subtest("hash_iter"))
+		test_hash_iter("test_iter_hash_of_maps");
+
+	RUN_TESTS(test_btf_map_in_map);
+	RUN_TESTS(test_btf_map_in_map_failure);
 }
