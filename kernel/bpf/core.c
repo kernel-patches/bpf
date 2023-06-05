@@ -736,15 +736,33 @@ const struct exception_table_entry *search_bpf_extables(unsigned long addr)
 {
 	const struct exception_table_entry *e = NULL;
 	struct bpf_prog *prog;
+	struct bpf_prog_aux *aux;
+	int i;
 
 	rcu_read_lock();
 	prog = bpf_prog_ksym_find(addr);
 	if (!prog)
 		goto out;
-	if (!prog->aux->num_exentries)
+	aux = prog->aux;
+	if (!aux->num_exentries)
 		goto out;
 
-	e = search_extable(prog->aux->extable, prog->aux->num_exentries, addr);
+	/* prog->aux->extable can be NULL if subprograms are in use. In that
+	 * case, check each sub-function's aux->extables to see if it has a
+	 * matching entry.
+	 */
+	if (aux->extable != NULL) {
+		e = search_extable(prog->aux->extable,
+		    prog->aux->num_exentries, addr);
+	} else {
+		for (i = 0; (i < aux->func_cnt) && (e == NULL); i++) {
+			if (!aux->func[i]->aux->num_exentries ||
+			    aux->func[i]->aux->extable == NULL)
+				continue;
+			e = search_extable(aux->func[i]->aux->extable,
+			    aux->func[i]->aux->num_exentries, addr);
+		}
+	}
 out:
 	rcu_read_unlock();
 	return e;
