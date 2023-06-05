@@ -26,10 +26,12 @@
 #include <memory.h>
 #include <unistd.h>
 #include <asm/unistd.h>
+#include <asm/byteorder.h>
 #include <errno.h>
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/kernel.h>
+#include <linux/bitops.h>
 #include <limits.h>
 #include <sys/resource.h>
 #include "bpf.h"
@@ -1200,4 +1202,810 @@ int bpf_prog_bind_map(int prog_fd, int map_fd,
 
 	ret = sys_bpf(BPF_PROG_BIND_MAP, &attr, attr_sz);
 	return libbpf_err_errno(ret);
+}
+
+
+#define BITS_PER_BYTE_MASK (BITS_PER_BYTE - 1)
+#define BITS_PER_BYTE_MASKED(bits) ((bits) & BITS_PER_BYTE_MASK)
+#define BITS_ROUNDDOWN_BYTES(bits) ((bits) >> 3)
+#define BITS_ROUNDUP_BYTES(bits) \
+    (BITS_ROUNDDOWN_BYTES(bits) + !!BITS_PER_BYTE_MASKED(bits))
+
+static struct btf *bpf_map_get_btf(const struct bpf_map_info *info)
+{
+	struct btf *btf, *btf_vmlinux = NULL;
+
+	if (info->btf_vmlinux_value_type_id) {
+		btf_vmlinux = libbpf_find_kernel_btf();
+		if (!btf_vmlinux) {
+			pr_debug("cannot find kernel btf");
+			return NULL;
+		}
+
+		return btf_vmlinux;
+	}
+
+	if (info->btf_value_type_id) {
+		btf = btf__load_from_kernel_by_id(info->btf_id);
+		if (!btf) {
+			pr_debug("cannot load btf");
+			return NULL;
+		}
+
+		return btf;
+	}
+
+	return NULL;
+}
+
+static void bpf_map_free_btf(struct btf * btf)
+{
+	btf__free(btf);
+}
+
+static struct member *btf_handle_bitfield(__u32 nr_bits, __u8 bit_offset, void * data, bool update, const char *value);
+static struct member *search_key(struct btf *btf, __u32 id, __u8 bit_offset,  void *data, char *keyword, bool update, const char *value, int index);
+
+static struct member *btf_handle_int_bits(__u32 int_type, __u8 bit_offset, void *data, bool update, const char *value) {
+	int nr_bits = BTF_INT_BITS(int_type);
+	int total_bits_offset;
+
+	/* bits_offset is at most 7.
+	 * BTF_INT_OFFSET() cannot exceed 128 bits.
+	 */
+	total_bits_offset = bit_offset + BTF_INT_OFFSET(int_type);
+	data += BITS_ROUNDDOWN_BYTES(total_bits_offset);
+	bit_offset = BITS_PER_BYTE_MASKED(total_bits_offset);
+	return btf_handle_bitfield(nr_bits, bit_offset, data, update, value);
+}
+
+static struct member *btf_handle_int(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, int index) {
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	long long v;
+	char *end;
+	bool vv = false, vv1 = false;
+
+	printf("int\n");
+
+	if (index >= 0) {
+		pr_debug("index on primitive type, only on array");
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (keyword == NULL) {
+		__u32 *int_type;
+		__u32 nr_bits;
+		int encoding;
+		size_t size;
+		struct member *member;
+
+		int_type = (__u32 *)(t + 1);
+		nr_bits = BTF_INT_BITS(*int_type);
+
+		// don't support bits for now
+		if (bit_offset || BTF_INT_OFFSET(*int_type) || BITS_PER_BYTE_MASKED(nr_bits)) {
+			return btf_handle_int_bits(*int_type, bit_offset, data, update, value);
+		}
+
+		encoding = BTF_INT_ENCODING(*int_type);
+		size = BITS_ROUNDUP_BYTES(nr_bits);
+
+		member = malloc(sizeof(struct member));
+		if (!member) {
+			pr_debug("can not alloc member for int");
+			errno = ENOMEM;
+			return NULL;
+		}
+
+		member->data = malloc(size);
+		if (!member->data) {
+			free(member);
+			pr_debug("cannot alloc data field");
+			errno = ENOMEM;
+			return NULL;
+		}
+
+		member->type = BTF_KIND_INT;
+		member->size = nr_bits;
+
+		switch (encoding) {
+			case 0:
+			case BTF_INT_SIGNED:
+				if (nr_bits == 64 || nr_bits == 32 || nr_bits == 16 || nr_bits == 8) {
+					size = nr_bits / 8;
+					memcpy(member->data, data, size);
+				} else {
+					//handle bits
+					free(member->data);
+					free(member);
+					return btf_handle_int_bits(*int_type, bit_offset, data, update, value);
+				}
+
+				// update for non-bits int
+				if (update) {
+					errno = 0;
+					v = strtoll(value, &end, 0);
+					if (errno || value == end) {
+						pr_debug("can not convert to long long");
+						goto free_data;
+					}
+
+					if (*end != '\0') {
+						pr_debug("value contains non-digits");
+					}
+
+#if defined(__BYTE_ORDER) ? __BYTE_ORDER == __BIG_ENDIAN : defined(__BIG_ENDIAN)
+					printf("big endian?\n");
+					memcpy(data, (void *)&v + 8 - size, size);
+#else
+					memcpy(data, &v, size);
+#endif
+				}
+
+				return member;
+
+			case BTF_INT_CHAR:
+				memcpy(member->data, data, size);
+				if (update) {
+					if (strlen(value) == 1) {
+						*(char *)data = value[0];
+					} else {
+						pr_debug("invalid char");
+						errno = EINVAL;
+						goto free_data;
+					}
+				}
+				return member;
+
+			case BTF_INT_BOOL:
+				memcpy(member->data, data, size);
+				if (update) {
+					vv = strcasecmp(value, "yes") == 0 || strcasecmp(value, "y") == 0 || strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0;
+					vv1 = strcasecmp(value, "no") == 0 || strcasecmp(value, "n") == 0 || strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0;
+					if (!vv && !vv1) {
+						pr_debug("invalid bool");
+						errno = EINVAL;
+						goto free_data;
+					}
+
+					*(bool *)data = vv;
+				}
+				return member;
+
+			default:
+				pr_debug("unknown encoding");
+				errno = EINVAL;
+				goto free_data;
+		}
+
+		return member;
+
+	free_data:
+		free(member->data);
+		free(member);
+		return NULL;
+	}
+
+	pr_debug("primitive type found, still remain keyword");
+	errno = EINVAL;
+	return NULL;
+}
+
+static void btf_int128_shift(__u64 *print_num, __u16 left_shift_bits,
+			     __u16 right_shift_bits)
+{
+	__u64 upper_num, lower_num;
+
+#ifdef __BIG_ENDIAN_BITFIELD
+	upper_num = print_num[0];
+	lower_num = print_num[1];
+#else
+	upper_num = print_num[1];
+	lower_num = print_num[0];
+#endif
+
+	/* shake out un-needed bits by shift/or operations */
+	if (left_shift_bits > 0) {
+		if (left_shift_bits >= 64) {
+			upper_num = lower_num << (left_shift_bits - 64);
+			lower_num = 0;
+		} else {
+			upper_num = (upper_num << left_shift_bits) |
+			    (lower_num >> (64 - left_shift_bits));
+			lower_num = lower_num << left_shift_bits;
+		}
+	}
+
+	if (right_shift_bits > 0) {
+		if (right_shift_bits >= 64) {
+			lower_num = upper_num >> (right_shift_bits - 64);
+			upper_num = 0;
+		} else {
+			lower_num = (lower_num >> right_shift_bits) |
+			    (upper_num << (64 - right_shift_bits));
+			upper_num = upper_num >> right_shift_bits;
+		}
+	}
+
+#ifdef __BIG_ENDIAN_BITFIELD
+	print_num[0] = upper_num;
+	print_num[1] = lower_num;
+#else
+	print_num[0] = lower_num;
+	print_num[1] = upper_num;
+#endif
+}
+
+static void update_bitfield_value(void *data, __u64 *mask, __u64 *val, int bytes_to_copy) {
+	__u64 new[2] = {};
+
+	memcpy(new, data, bytes_to_copy);
+
+	printf("mask: %llx, %llx\n", mask[0], mask[1]);
+	printf("val: %llx, %llx\n", val[0], val[1]);
+
+	new[0] &= mask[0];
+	new[1] &= mask[1];
+	printf("old: %llx, %llx\n", new[0], new[1]);
+
+	new[0] |= val[0];
+	new[1] |= val[1];
+	printf("new: %llx, %llx\n", new[0], new[1]);
+
+	memcpy(data, new, bytes_to_copy);
+}
+
+static struct member *btf_handle_bitfield(__u32 nr_bits, __u8 bit_offset, void *data, bool update, const char *value) {
+	int left_shift_bits, right_shift_bits;
+	int left_shift_bits2;
+	__u64 print_num[2] = {};
+	__u64 mask[2] = {0xffffffffffffffff, 0xffffffffffffffff};
+	int bytes_to_copy;
+	int bits_to_copy;
+	struct member *ret;
+
+	bits_to_copy = bit_offset + nr_bits;
+	bytes_to_copy = BITS_ROUNDUP_BYTES(bits_to_copy);
+
+	memcpy(print_num, data, bytes_to_copy);
+
+#if defined(__BIG_ENDIAN_BITFIELD)
+	left_shift_bits = bit_offset;
+	left_shift_bits2 = 128 - bits_to_copy;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+	left_shift_bits = 128 - bits_to_copy;
+	left_shift_bits2 = bit_offset;
+#else
+#error neither big nor little endian
+#endif
+	right_shift_bits = 128 - nr_bits;
+
+	printf("left: %d, right: %d, left2: %d\n", left_shift_bits, right_shift_bits, left_shift_bits2);
+
+	btf_int128_shift(print_num, left_shift_bits, right_shift_bits);
+
+	btf_int128_shift(mask, left_shift_bits, right_shift_bits);
+	printf("revert mask: %llx, %llx\n", mask[0], mask[1]);
+	btf_int128_shift(mask, left_shift_bits2, 0);
+	printf("revert mask2: %llx, %llx\n", mask[0], mask[1]);
+	mask[0] = ~mask[0];
+	mask[1] = ~mask[1];
+
+	ret = malloc(sizeof(struct member));
+	if (!ret) {
+		pr_debug("no memory!");
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	ret->data = malloc(bytes_to_copy);
+	if (!ret->data) {
+		pr_debug("no memory!");
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	memcpy(ret->data, print_num, bytes_to_copy);
+	ret->type = BTF_KIND_INT;
+	ret->size = nr_bits; // size in bits
+
+	if (update) {
+		long long val;
+		char *end;
+		__u64 tmp[2] = {};
+
+		errno = 0;
+		val = strtoll(value, &end, 0);
+		if (errno || value == end) {
+			pr_debug("cannot convert string to int!");
+			free(ret->data);
+			free(ret);
+			return NULL;
+		}
+
+		if (*end != '\0') {
+			pr_debug("value has non-digits!");
+		}
+		printf("value in bitfield: %lld\n", val);
+#ifdef __BIG_ENDIAN_BITFIELD
+		tmp[1] = val;
+#else
+		tmp[0] = val;
+#endif
+		//btf_int128_shift(tmp, left_shift_bits, right_shift_bits);
+		btf_int128_shift(tmp, left_shift_bits2, 0);
+		tmp[0] &= ~mask[0];
+		tmp[1] &= ~mask[1];
+
+		update_bitfield_value(data, mask, tmp, bytes_to_copy);
+	}
+
+	return ret;
+}
+
+static struct member *btf_handle_struct_and_union(struct btf *btf, __u32 id, __u8 pre_bit_offset, void *data, char *keyword, bool update, const char *value, char *token, int index) {
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	int kind_flag, vlen, i;
+	struct btf_member *m;
+	const char *name;
+	void *data_off;
+
+	printf("struct\n");
+
+	kind_flag = BTF_INFO_KFLAG(t->info);
+	vlen = BTF_INFO_VLEN(t->info);
+	m = (struct btf_member *)(t + 1);
+
+	for (i = 0; i < vlen; i++) {
+		__u32 bitfield_size = 0;
+		__u8 offset = 0;
+		__u32 bit_offset = m[i].offset;
+
+		if (kind_flag) {
+			bitfield_size = BTF_MEMBER_BITFIELD_SIZE(bit_offset);
+			bit_offset = BTF_MEMBER_BIT_OFFSET(bit_offset);
+		}
+		name = btf__name_by_offset(btf, m[i].name_off);
+		data_off = data + BITS_ROUNDDOWN_BYTES(bit_offset);
+		offset = BITS_PER_BYTE_MASKED(bit_offset);
+
+		printf("name: %s, kind_flag: %d, bitfield_size: %d, m[i].offset: %x\n", name, kind_flag, bitfield_size, m[i].offset);
+
+		if (strcmp(name, token) == 0) {
+			if (bitfield_size) {
+				// already here, calculate and copy bits out
+				if (index >= 0) {
+					pr_debug("index on primitive type, only on array");
+					errno = EINVAL;
+					return NULL;
+				}
+
+				if (keyword) {
+					pr_debug("primitive type found, still remain keyword");
+					errno = EINVAL;
+					return NULL;
+				}
+				return btf_handle_bitfield(bitfield_size, offset, data_off, update, value);
+			} else {
+				return search_key(btf, m[i].type, offset, data_off, keyword, update, value, index);
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static struct member *btf_handle_array(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, int index) {
+	// FIXME: implement array
+	const struct btf_type *t;
+	struct btf_array *arr;
+	long long elem_size;
+
+	printf("array\n");
+	if (index < 0) {
+		pr_debug("index array with negative index!");
+		errno = EINVAL;
+		return NULL;
+	}
+
+	t = btf__type_by_id(btf, id);
+	arr = (struct btf_array *)(t + 1);
+	elem_size = btf__resolve_size(btf, arr->type);
+	if (elem_size < 0) {
+		pr_debug("array element size less than 0!");
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (index >= arr->nelems) {
+		pr_debug("index out of range, max: %d", arr->nelems - 1);
+		errno = EINVAL;
+		return NULL;
+	}
+
+	return search_key(btf, arr->type, bit_offset, data + index * elem_size, keyword, update, value, -1);
+}
+
+static struct member *btf_handle_enum(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, int index) {
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	int kind = btf_kind(t);
+
+	// FIXME: byteorder consideration. little endian is ok, but
+	// probably not work for big endian.
+	printf("enum\n");
+	if (index >= 0) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (keyword == NULL) {
+		struct member *member = malloc(sizeof(struct member));
+
+		if (!member) {
+			pr_debug("cannot allocate memory");
+			errno = ENOMEM;
+			return NULL;
+		}
+
+		member->data = malloc(t->size);
+		if (!member->data) {
+			free(member);
+			pr_debug("cannot allocate dat memory");
+			errno = ENOMEM;
+			return NULL;
+		}
+
+		memcpy(member->data, data, t->size);
+		if (kind == BTF_KIND_ENUM) {
+			member->type = BTF_KIND_ENUM;
+		} else {
+			member->type = BTF_KIND_ENUM64;
+		}
+		member->size = t->size * 8; // to bits
+
+		if (update) {
+			char *end;
+			long long v;
+
+			errno = 0;
+			v = strtoll(value, &end, 0);
+
+			if (errno || value == end) {
+				pr_debug("can not convert to number");
+				free(member->data);
+				free(member);
+				return NULL;
+			}
+
+			if (*end != '\0') {
+				pr_debug("value contains non-digits");
+			}
+
+#if defined(__BYTE_ORDER) ? __BYTE_ORDER == __BIG_ENDIAN : defined(__BIG_ENDIAN)
+			memcpy(data, (void *)&v + 8 - t->size, t->size);
+#else
+			memcpy(data, &v, t->size);
+#endif
+		}
+
+		return member;
+	}
+
+	pr_debug("primitive type found, still have keyword");
+	errno = EINVAL;
+	return NULL;
+}
+
+static struct member *btf_handle_modifier(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, int index) {
+	
+	int actual_type_id;
+	printf("modifier\n");
+
+	actual_type_id = btf__resolve_type(btf, id);
+	if (actual_type_id < 0) {
+		return NULL;
+	}
+
+	return search_key(btf, actual_type_id, bit_offset, data, keyword, update, value, index);
+}
+
+static struct member *btf_handle_var(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, char *token, int index) {
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	const char *name = btf__name_by_offset(btf, t->name_off);
+
+	// FIXME: for array, var/struct/union is in the format var[index], need
+	// to handle it here.
+	printf("var\n");
+	printf("name: %s, key: %s\n", name, token);
+
+	if (strcmp(name, token) == 0) {
+		// found the name, continue search
+		return search_key(btf, t->type, bit_offset, data, keyword, update, value, index);
+	}
+
+	return NULL;
+}
+
+static struct member *btf_handle_datasec(struct btf *btf, __u32 id, __u8 bit_offset, void *data, char *keyword, bool update, const char *value, int index) {
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	int vlen, i;
+	const struct btf_var_secinfo *vsi;
+	struct member *ret;
+
+	printf("datasec\n");
+
+	vlen = BTF_INFO_VLEN(t->info);
+	vsi = (const struct btf_var_secinfo *)(t + 1);
+
+	for (i = 0; i < vlen; i++) {
+		ret = search_key(btf, vsi[i].type, 0, data + vsi[i].offset, keyword, update, value, index);
+
+		if (ret) {
+			return ret;
+		}
+	}
+
+	pr_debug("key not found");
+	errno = EINVAL;
+
+	return NULL;
+
+}
+
+static int count = 0;
+
+static struct member *search_key(struct btf *btf, __u32 id, __u8 bit_offset,  void *data, char *keyword, bool update, const char *value, int index)
+{
+	char *token = NULL;
+	char *old, *end;
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	int kind;
+	char *dup = NULL;
+	char *orig_dup = NULL;
+	struct member *ret;
+
+	kind = BTF_INFO_KIND(t->info);
+
+	printf("iteration: %d, key: %s\n", count, keyword);
+
+	if (kind == BTF_KIND_VAR || kind == BTF_KIND_STRUCT || kind == BTF_KIND_UNION) {
+		if (keyword) {
+			dup = strdup(keyword);
+			if (!dup) {
+				pr_debug("no memory!");
+				return NULL;
+			}
+
+			orig_dup = dup;
+		}
+
+		token = strsep(&dup, ".");
+		if (token == NULL) {
+			pr_debug("null token");
+			goto fail;
+		}
+
+		old = token;
+		token = strsep(&old, "[");
+		if (old != NULL) {
+			// have array presentaion, "number]" is the remaining
+			errno = 0;
+			index = strtol(old, &end, 0);
+			if (errno != 0) {
+				pr_debug("strtol error!");
+				printf("convert error!\n");
+				goto fail;
+			}
+			
+			errno = EINVAL;
+			if (old == end) {
+				pr_debug("no digits for index!");
+				goto fail;
+			}
+	
+			// validate representation, remaining must be ']'
+			if (strlen(end) != 1 || *end != ']') {
+				pr_debug("invalid array representation!");
+				goto fail;
+			}
+	
+			if (index < 0) {
+				pr_debug("invalid index!");
+				goto fail;
+			}
+		}
+	}
+
+	printf("iteration: %d, key: %s, token: %s\n", count++, keyword, token ? : "(null)");
+
+	switch (kind) {
+		case BTF_KIND_INT:
+			ret = btf_handle_int(btf, id, bit_offset, data, keyword, update, value, index);
+			goto success;
+
+		case BTF_KIND_STRUCT:
+		case BTF_KIND_UNION:
+			ret = btf_handle_struct_and_union(btf, id, bit_offset, data, dup, update, value, token, index);
+			goto success;
+
+		case BTF_KIND_ARRAY:
+			ret = btf_handle_array(btf, id, bit_offset, data, keyword, update, value, index);
+			goto success;
+
+		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
+			ret = btf_handle_enum(btf, id, bit_offset, data, keyword, update, value, index);
+			goto success;
+
+		case BTF_KIND_PTR:
+			pr_debug("pointer, don't known what to do with it");
+			goto fail;
+
+		case BTF_KIND_UNKN:
+		case BTF_KIND_FWD:
+			pr_debug("unknown type");
+			goto fail;
+
+		case BTF_KIND_TYPEDEF:
+		case BTF_KIND_VOLATILE:
+		case BTF_KIND_CONST:
+		case BTF_KIND_RESTRICT:
+			// modifier, find actual type id
+			ret = btf_handle_modifier(btf, id, bit_offset, data, keyword, update, value, index);
+			goto success;
+
+		case BTF_KIND_VAR:
+			ret = btf_handle_var(btf, id, bit_offset, data, dup, update, value, token, index);
+			goto success;
+
+		case BTF_KIND_DATASEC:
+			ret = btf_handle_datasec(btf, id, bit_offset, data, keyword, update, value, index);
+			goto success;
+
+		default:
+			goto fail;
+	}
+
+success:
+	if (orig_dup) {
+		free(orig_dup);
+	}
+	return ret;
+
+fail:
+	if (orig_dup) {
+		free(orig_dup);
+	}
+	return NULL;
+}
+
+static struct member *bpf_global_query_and_update_key(__u32 id, const char *identifier,  bool update, const char *data)
+{
+	int fd, err;
+	struct bpf_map_info info = {};
+	__u32 len = sizeof(info);
+	struct btf *btf;
+	void *key, *value;
+	__u32 value_id;
+	const struct btf_type *t;
+	__u32 kind;
+	char *keyword, *origin;
+	struct member *member = NULL;
+
+	fd = bpf_map_get_fd_by_id(id);
+	if (fd < 0) {
+		pr_debug("get map by id (%u): %s\n", id, strerror(errno));
+		return NULL;
+	}
+
+	err = bpf_map_get_info_by_fd(fd, &info, &len);
+	if (err) {
+		pr_debug("get map info by fd(%d): %s\n", fd, strerror(errno));
+		return NULL;
+	}
+
+	if (!info.btf_id) {
+		pr_debug("no btf associated with this map");
+		errno = ENOTSUP;
+		return NULL;
+	}
+
+	if (info.type != BPF_MAP_TYPE_ARRAY) {
+		pr_debug("global variables must be in array map");
+		errno = ENOTSUP;
+		return NULL;
+	}
+
+	// lookup the key
+	btf = bpf_map_get_btf(&info);
+	if (!btf) {
+		pr_debug("cannot get btf: %s\n", strerror(errno));
+		return NULL;
+	}
+
+	key = malloc(info.key_size);
+	value = malloc(info.value_size);
+
+	if (!key || !value) {
+		pr_debug("no memory");
+		errno = ENOMEM;
+		goto out_free_btf;
+	}
+
+	memset(key, 0, info.key_size);
+	memset(value, 0, info.value_size);
+
+	if (bpf_map_lookup_elem(fd, key, value)) {
+		pr_debug("cannot find element 0");
+		errno = EINVAL;
+		goto out_free_kv;
+	}
+
+	// found value, parse btf
+	value_id = info.btf_vmlinux_value_type_id ? :
+			info.btf_value_type_id;
+
+	t = btf__type_by_id(btf, value_id);
+	
+	// must be datasec
+	kind = BTF_INFO_KIND(t->info);
+	if (kind != BTF_KIND_DATASEC) {
+		pr_debug("not datasec");
+		errno = EINVAL;
+		goto out_free_kv;
+	}
+
+	keyword = strdup(identifier);
+	origin = keyword;
+
+	member = search_key(btf, value_id, 0, value, keyword, update, data, -1);
+
+	if (update) {
+		err = bpf_map_update_elem(fd, key, value, 0);
+		if (err) {
+			pr_debug("update failed: %s", strerror(errno));
+			free(member->data);
+			free(member);
+			goto out_free_keyword;
+		}
+	}
+
+	free(origin);
+	free(key);
+	free(value);
+	bpf_map_free_btf(btf);
+
+	return member;
+
+out_free_keyword:
+	free(origin);
+
+out_free_kv:
+	free(key);
+	free(value);
+
+out_free_btf:
+	bpf_map_free_btf(btf);
+	return NULL;
+}
+
+struct member *bpf_global_query_key(__u32 id, const char *key)
+{
+	return bpf_global_query_and_update_key(id, key, false, NULL);
+}
+
+int bpf_global_update_key(__u32 id, const char *key, const char *value)
+{
+	struct member *member;
+	int err =0;
+	member = bpf_global_query_and_update_key(id, key, true, value);
+	if (!member) {
+		err = -1;
+	}
+
+	free(member->data);
+	free(member);
+
+	return err;
 }

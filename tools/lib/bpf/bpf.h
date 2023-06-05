@@ -117,6 +117,12 @@ LIBBPF_API int bpf_prog_load(enum bpf_prog_type prog_type,
 /* Recommended log buffer size */
 #define BPF_LOG_BUF_SIZE (UINT32_MAX >> 8) /* verifier maximum in kernels <= 5.1 */
 
+struct member {
+	void *data;
+	__u32 type;
+	size_t size;
+};
+
 struct bpf_btf_load_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 
@@ -151,6 +157,9 @@ LIBBPF_API int bpf_map_delete_elem(int fd, const void *key);
 LIBBPF_API int bpf_map_delete_elem_flags(int fd, const void *key, __u64 flags);
 LIBBPF_API int bpf_map_get_next_key(int fd, const void *key, void *next_key);
 LIBBPF_API int bpf_map_freeze(int fd);
+
+LIBBPF_API struct member *bpf_global_query_key(__u32 id, const char *key);
+LIBBPF_API int bpf_global_update_key(__u32 id, const char *key, const char *value);
 
 struct bpf_map_batch_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
