@@ -7,10 +7,14 @@
 
 struct bpf_mem_cache;
 struct bpf_mem_caches;
+struct bpf_mem_shared_cache;
+struct bpf_mem_shared_caches;
 
 struct bpf_mem_alloc {
 	struct bpf_mem_caches __percpu *caches;
 	struct bpf_mem_cache __percpu *cache;
+	struct bpf_mem_shared_cache *s_cache;
+	struct bpf_mem_shared_caches *s_caches;
 	struct work_struct work;
 };
 
