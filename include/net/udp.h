@@ -317,6 +317,14 @@ struct sock *udp6_lib_lookup_skb(const struct sk_buff *skb,
 				 __be16 sport, __be16 dport);
 int udp_read_skb(struct sock *sk, skb_read_actor_t recv_actor);
 
+INDIRECT_CALLABLE_DECLARE(u32 udp_ehashfn(const struct net *,
+					  const __be32, const __u16,
+					  const __be32, const __be16));
+
+INDIRECT_CALLABLE_DECLARE(u32 udp6_ehashfn(const struct net *,
+					   const struct in6_addr *, const u16,
+					   const struct in6_addr *, const __be16));
+
 /* UDP uses skb->dev_scratch to cache as much information as possible and avoid
  * possibly multiple cache miss on dequeue()
  */
