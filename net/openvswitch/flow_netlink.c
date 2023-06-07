@@ -667,8 +667,8 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			      bool log)
 {
 	bool ttl = false, ipv4 = false, ipv6 = false;
+	IP_TUNNEL_DECLARE_FLAGS(tun_flags) = { };
 	bool info_bridge_mode = false;
-	__be16 tun_flags = 0;
 	int opts_type = 0;
 	struct nlattr *a;
 	int rem;
@@ -694,7 +694,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 		case OVS_TUNNEL_KEY_ATTR_ID:
 			SW_FLOW_KEY_PUT(match, tun_key.tun_id,
 					nla_get_be64(a), is_mask);
-			tun_flags |= TUNNEL_KEY;
+			__set_bit(IP_TUNNEL_KEY_BIT, tun_flags);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_IPV4_SRC:
 			SW_FLOW_KEY_PUT(match, tun_key.u.ipv4.src,
@@ -726,10 +726,10 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			ttl = true;
 			break;
 		case OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT:
-			tun_flags |= TUNNEL_DONT_FRAGMENT;
+			__set_bit(IP_TUNNEL_DONT_FRAGMENT_BIT, tun_flags);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_CSUM:
-			tun_flags |= TUNNEL_CSUM;
+			__set_bit(IP_TUNNEL_CSUM_BIT, tun_flags);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_TP_SRC:
 			SW_FLOW_KEY_PUT(match, tun_key.tp_src,
@@ -740,7 +740,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 					nla_get_be16(a), is_mask);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_OAM:
-			tun_flags |= TUNNEL_OAM;
+			__set_bit(IP_TUNNEL_OAM_BIT, tun_flags);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS:
 			if (opts_type) {
@@ -752,7 +752,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			if (err)
 				return err;
 
-			tun_flags |= TUNNEL_GENEVE_OPT;
+			__set_bit(IP_TUNNEL_GENEVE_OPT_BIT, tun_flags);
 			opts_type = type;
 			break;
 		case OVS_TUNNEL_KEY_ATTR_VXLAN_OPTS:
@@ -765,7 +765,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			if (err)
 				return err;
 
-			tun_flags |= TUNNEL_VXLAN_OPT;
+			__set_bit(IP_TUNNEL_VXLAN_OPT_BIT, tun_flags);
 			opts_type = type;
 			break;
 		case OVS_TUNNEL_KEY_ATTR_PAD:
@@ -781,7 +781,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			if (err)
 				return err;
 
-			tun_flags |= TUNNEL_ERSPAN_OPT;
+			__set_bit(IP_TUNNEL_ERSPAN_OPT_BIT, tun_flags);
 			opts_type = type;
 			break;
 		case OVS_TUNNEL_KEY_ATTR_IPV4_INFO_BRIDGE:
@@ -795,7 +795,8 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 		}
 	}
 
-	SW_FLOW_KEY_PUT(match, tun_key.tun_flags, tun_flags, is_mask);
+	SW_FLOW_KEY_MEMCPY(match, tun_key.tun_flags, tun_flags,
+			   sizeof(tun_flags), is_mask);
 	if (is_mask)
 		SW_FLOW_KEY_MEMSET_FIELD(match, tun_proto, 0xff, true);
 	else
@@ -820,13 +821,16 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 		}
 		if (ipv4) {
 			if (info_bridge_mode) {
+				__clear_bit(IP_TUNNEL_KEY_BIT, tun_flags);
+
 				if (match->key->tun_key.u.ipv4.src ||
 				    match->key->tun_key.u.ipv4.dst ||
 				    match->key->tun_key.tp_src ||
 				    match->key->tun_key.tp_dst ||
 				    match->key->tun_key.ttl ||
 				    match->key->tun_key.tos ||
-				    tun_flags & ~TUNNEL_KEY) {
+				    !bitmap_empty(tun_flags,
+						  __IP_TUNNEL_FLAG_NUM)) {
 					OVS_NLERR(log, "IPv4 tun info is not correct");
 					return -EINVAL;
 				}
@@ -871,7 +875,7 @@ static int __ip_tun_to_nlattr(struct sk_buff *skb,
 			      const void *tun_opts, int swkey_tun_opts_len,
 			      unsigned short tun_proto, u8 mode)
 {
-	if (output->tun_flags & TUNNEL_KEY &&
+	if (test_bit(IP_TUNNEL_KEY_BIT, output->tun_flags) &&
 	    nla_put_be64(skb, OVS_TUNNEL_KEY_ATTR_ID, output->tun_id,
 			 OVS_TUNNEL_KEY_ATTR_PAD))
 		return -EMSGSIZE;
@@ -907,10 +911,10 @@ static int __ip_tun_to_nlattr(struct sk_buff *skb,
 		return -EMSGSIZE;
 	if (nla_put_u8(skb, OVS_TUNNEL_KEY_ATTR_TTL, output->ttl))
 		return -EMSGSIZE;
-	if ((output->tun_flags & TUNNEL_DONT_FRAGMENT) &&
+	if (test_bit(IP_TUNNEL_DONT_FRAGMENT_BIT, output->tun_flags) &&
 	    nla_put_flag(skb, OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT))
 		return -EMSGSIZE;
-	if ((output->tun_flags & TUNNEL_CSUM) &&
+	if (test_bit(IP_TUNNEL_CSUM_BIT, output->tun_flags) &&
 	    nla_put_flag(skb, OVS_TUNNEL_KEY_ATTR_CSUM))
 		return -EMSGSIZE;
 	if (output->tp_src &&
@@ -919,18 +923,20 @@ static int __ip_tun_to_nlattr(struct sk_buff *skb,
 	if (output->tp_dst &&
 	    nla_put_be16(skb, OVS_TUNNEL_KEY_ATTR_TP_DST, output->tp_dst))
 		return -EMSGSIZE;
-	if ((output->tun_flags & TUNNEL_OAM) &&
+	if (test_bit(IP_TUNNEL_OAM_BIT, output->tun_flags) &&
 	    nla_put_flag(skb, OVS_TUNNEL_KEY_ATTR_OAM))
 		return -EMSGSIZE;
 	if (swkey_tun_opts_len) {
-		if (output->tun_flags & TUNNEL_GENEVE_OPT &&
+		if (test_bit(IP_TUNNEL_GENEVE_OPT_BIT, output->tun_flags) &&
 		    nla_put(skb, OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS,
 			    swkey_tun_opts_len, tun_opts))
 			return -EMSGSIZE;
-		else if (output->tun_flags & TUNNEL_VXLAN_OPT &&
+		else if (test_bit(IP_TUNNEL_VXLAN_OPT_BIT,
+				  output->tun_flags) &&
 			 vxlan_opt_to_nlattr(skb, tun_opts, swkey_tun_opts_len))
 			return -EMSGSIZE;
-		else if (output->tun_flags & TUNNEL_ERSPAN_OPT &&
+		else if (test_bit(IP_TUNNEL_ERSPAN_OPT_BIT,
+				  output->tun_flags) &&
 			 nla_put(skb, OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS,
 				 swkey_tun_opts_len, tun_opts))
 			return -EMSGSIZE;
@@ -2026,7 +2032,7 @@ static int __ovs_nla_put_key(const struct sw_flow_key *swkey,
 	if ((swkey->tun_proto || is_mask)) {
 		const void *opts = NULL;
 
-		if (output->tun_key.tun_flags & TUNNEL_OPTIONS_PRESENT)
+		if (ip_tunnel_is_options_present(output->tun_key.tun_flags))
 			opts = TUN_METADATA_OPTS(output, swkey->tun_opts_len);
 
 		if (ip_tun_to_nlattr(skb, &output->tun_key, opts,
@@ -2742,7 +2748,8 @@ static int validate_geneve_opts(struct sw_flow_key *key)
 		opts_len -= len;
 	}
 
-	key->tun_key.tun_flags |= crit_opt ? TUNNEL_CRIT_OPT : 0;
+	if (crit_opt)
+		__set_bit(IP_TUNNEL_CRIT_OPT_BIT, key->tun_key.tun_flags);
 
 	return 0;
 }
@@ -2750,6 +2757,7 @@ static int validate_geneve_opts(struct sw_flow_key *key)
 static int validate_and_copy_set_tun(const struct nlattr *attr,
 				     struct sw_flow_actions **sfa, bool log)
 {
+	IP_TUNNEL_DECLARE_FLAGS(dst_opt_type) = { };
 	struct sw_flow_match match;
 	struct sw_flow_key key;
 	struct metadata_dst *tun_dst;
@@ -2757,9 +2765,7 @@ static int validate_and_copy_set_tun(const struct nlattr *attr,
 	struct ovs_tunnel_info *ovs_tun;
 	struct nlattr *a;
 	int err = 0, start, opts_type;
-	__be16 dst_opt_type;
 
-	dst_opt_type = 0;
 	ovs_match_init(&match, &key, true, NULL);
 	opts_type = ip_tun_from_nlattr(nla_data(attr), &match, false, log);
 	if (opts_type < 0)
@@ -2771,13 +2777,14 @@ static int validate_and_copy_set_tun(const struct nlattr *attr,
 			err = validate_geneve_opts(&key);
 			if (err < 0)
 				return err;
-			dst_opt_type = TUNNEL_GENEVE_OPT;
+
+			__set_bit(IP_TUNNEL_GENEVE_OPT_BIT, dst_opt_type);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_VXLAN_OPTS:
-			dst_opt_type = TUNNEL_VXLAN_OPT;
+			__set_bit(IP_TUNNEL_VXLAN_OPT_BIT, dst_opt_type);
 			break;
 		case OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS:
-			dst_opt_type = TUNNEL_ERSPAN_OPT;
+			__set_bit(IP_TUNNEL_ERSPAN_OPT_BIT, dst_opt_type);
 			break;
 		}
 	}

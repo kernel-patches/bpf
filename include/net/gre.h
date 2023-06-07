@@ -49,67 +49,66 @@ static inline bool netif_is_ip6gretap(const struct net_device *dev)
 	       !strcmp(dev->rtnl_link_ops->kind, "ip6gretap");
 }
 
-static inline int gre_calc_hlen(__be16 o_flags)
+static inline int gre_calc_hlen(const unsigned long *o_flags)
 {
 	int addend = 4;
 
-	if (o_flags & TUNNEL_CSUM)
+	if (test_bit(IP_TUNNEL_CSUM_BIT, o_flags))
 		addend += 4;
-	if (o_flags & TUNNEL_KEY)
+	if (test_bit(IP_TUNNEL_KEY_BIT, o_flags))
 		addend += 4;
-	if (o_flags & TUNNEL_SEQ)
+	if (test_bit(IP_TUNNEL_SEQ_BIT, o_flags))
 		addend += 4;
 	return addend;
 }
 
-static inline __be16 gre_flags_to_tnl_flags(__be16 flags)
+static inline void gre_flags_to_tnl_flags(unsigned long *dst, __be16 flags)
 {
-	__be16 tflags = 0;
+	bitmap_zero(dst, __IP_TUNNEL_FLAG_NUM);
 
 	if (flags & GRE_CSUM)
-		tflags |= TUNNEL_CSUM;
+		__set_bit(IP_TUNNEL_CSUM_BIT, dst);
 	if (flags & GRE_ROUTING)
-		tflags |= TUNNEL_ROUTING;
+		__set_bit(IP_TUNNEL_ROUTING_BIT, dst);
 	if (flags & GRE_KEY)
-		tflags |= TUNNEL_KEY;
+		__set_bit(IP_TUNNEL_KEY_BIT, dst);
 	if (flags & GRE_SEQ)
-		tflags |= TUNNEL_SEQ;
+		__set_bit(IP_TUNNEL_SEQ_BIT, dst);
 	if (flags & GRE_STRICT)
-		tflags |= TUNNEL_STRICT;
+		__set_bit(IP_TUNNEL_STRICT_BIT, dst);
 	if (flags & GRE_REC)
-		tflags |= TUNNEL_REC;
+		__set_bit(IP_TUNNEL_REC_BIT, dst);
 	if (flags & GRE_VERSION)
-		tflags |= TUNNEL_VERSION;
-
-	return tflags;
+		__set_bit(IP_TUNNEL_VERSION_BIT, dst);
 }
 
-static inline __be16 gre_tnl_flags_to_gre_flags(__be16 tflags)
+static inline __be16 gre_tnl_flags_to_gre_flags(const unsigned long *tflags)
 {
 	__be16 flags = 0;
 
-	if (tflags & TUNNEL_CSUM)
+	if (test_bit(IP_TUNNEL_CSUM_BIT, tflags))
 		flags |= GRE_CSUM;
-	if (tflags & TUNNEL_ROUTING)
+	if (test_bit(IP_TUNNEL_ROUTING_BIT, tflags))
 		flags |= GRE_ROUTING;
-	if (tflags & TUNNEL_KEY)
+	if (test_bit(IP_TUNNEL_KEY_BIT, tflags))
 		flags |= GRE_KEY;
-	if (tflags & TUNNEL_SEQ)
+	if (test_bit(IP_TUNNEL_SEQ_BIT, tflags))
 		flags |= GRE_SEQ;
-	if (tflags & TUNNEL_STRICT)
+	if (test_bit(IP_TUNNEL_STRICT_BIT, tflags))
 		flags |= GRE_STRICT;
-	if (tflags & TUNNEL_REC)
+	if (test_bit(IP_TUNNEL_REC_BIT, tflags))
 		flags |= GRE_REC;
-	if (tflags & TUNNEL_VERSION)
+	if (test_bit(IP_TUNNEL_VERSION_BIT, tflags))
 		flags |= GRE_VERSION;
 
 	return flags;
 }
 
 static inline void gre_build_header(struct sk_buff *skb, int hdr_len,
-				    __be16 flags, __be16 proto,
+				    const unsigned long *flags, __be16 proto,
 				    __be32 key, __be32 seq)
 {
+	IP_TUNNEL_DECLARE_FLAGS(cond) = { };
 	struct gre_base_hdr *greh;
 
 	skb_push(skb, hdr_len);
@@ -120,18 +119,22 @@ static inline void gre_build_header(struct sk_buff *skb, int hdr_len,
 	greh->flags = gre_tnl_flags_to_gre_flags(flags);
 	greh->protocol = proto;
 
-	if (flags & (TUNNEL_KEY | TUNNEL_CSUM | TUNNEL_SEQ)) {
+	__set_bit(IP_TUNNEL_KEY_BIT, cond);
+	__set_bit(IP_TUNNEL_CSUM_BIT, cond);
+	__set_bit(IP_TUNNEL_SEQ_BIT, cond);
+
+	if (bitmap_and(cond, flags, cond, __IP_TUNNEL_FLAG_NUM)) {
 		__be32 *ptr = (__be32 *)(((u8 *)greh) + hdr_len - 4);
 
-		if (flags & TUNNEL_SEQ) {
+		if (test_bit(IP_TUNNEL_SEQ_BIT, flags)) {
 			*ptr = seq;
 			ptr--;
 		}
-		if (flags & TUNNEL_KEY) {
+		if (test_bit(IP_TUNNEL_KEY_BIT, flags)) {
 			*ptr = key;
 			ptr--;
 		}
-		if (flags & TUNNEL_CSUM &&
+		if (test_bit(IP_TUNNEL_CSUM_BIT, flags) &&
 		    !(skb_shinfo(skb)->gso_type &
 		      (SKB_GSO_GRE | SKB_GSO_GRE_CSUM))) {
 			*ptr = 0;

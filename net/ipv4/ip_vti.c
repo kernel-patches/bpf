@@ -51,8 +51,11 @@ static int vti_input(struct sk_buff *skb, int nexthdr, __be32 spi,
 	const struct iphdr *iph = ip_hdr(skb);
 	struct net *net = dev_net(skb->dev);
 	struct ip_tunnel_net *itn = net_generic(net, vti_net_id);
+	IP_TUNNEL_DECLARE_FLAGS(flags) = { };
 
-	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, TUNNEL_NO_KEY,
+	__set_bit(IP_TUNNEL_NO_KEY_BIT, flags);
+
+	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, flags,
 				  iph->saddr, iph->daddr, 0);
 	if (tunnel) {
 		if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
@@ -322,8 +325,11 @@ static int vti4_err(struct sk_buff *skb, u32 info)
 	const struct iphdr *iph = (const struct iphdr *)skb->data;
 	int protocol = iph->protocol;
 	struct ip_tunnel_net *itn = net_generic(net, vti_net_id);
+	IP_TUNNEL_DECLARE_FLAGS(flags) = { };
 
-	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, TUNNEL_NO_KEY,
+	__set_bit(IP_TUNNEL_NO_KEY_BIT, flags);
+
+	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, flags,
 				  iph->daddr, iph->saddr, 0);
 	if (!tunnel)
 		return -1;
@@ -383,20 +389,28 @@ vti_tunnel_ctl(struct net_device *dev, struct ip_tunnel_parm_kern *p, int cmd)
 			return -EINVAL;
 	}
 
-	if (!(p->i_flags & GRE_KEY))
+	if (!ip_tunnel_flags_is_be16_compat(p->i_flags) ||
+	    !ip_tunnel_flags_is_be16_compat(p->o_flags))
+		return -EOVERFLOW;
+
+	if (!(ip_tunnel_flags_to_be16(p->i_flags) & GRE_KEY))
 		p->i_key = 0;
-	if (!(p->o_flags & GRE_KEY))
+	if (!(ip_tunnel_flags_to_be16(p->o_flags) & GRE_KEY))
 		p->o_key = 0;
 
-	p->i_flags = VTI_ISVTI;
+	bitmap_zero(p->i_flags, __IP_TUNNEL_FLAG_NUM);
+	__set_bit(IP_TUNNEL_VTI_BIT, p->i_flags);
 
 	err = ip_tunnel_ctl(dev, p, cmd);
 	if (err)
 		return err;
 
 	if (cmd != SIOCDELTUNNEL) {
-		p->i_flags |= GRE_KEY;
-		p->o_flags |= GRE_KEY;
+		IP_TUNNEL_DECLARE_FLAGS(flags) = { };
+
+		ip_tunnel_flags_from_be16(flags, GRE_KEY);
+		bitmap_or(p->i_flags, p->i_flags, flags, __IP_TUNNEL_FLAG_NUM);
+		bitmap_or(p->o_flags, p->o_flags, flags, __IP_TUNNEL_FLAG_NUM);
 	}
 	return 0;
 }
@@ -539,7 +553,8 @@ static void vti_netlink_parms(struct nlattr *data[],
 	if (!data)
 		return;
 
-	parms->i_flags = VTI_ISVTI;
+	bitmap_zero(parms->i_flags, __IP_TUNNEL_FLAG_NUM);
+	__set_bit(IP_TUNNEL_VTI_BIT, parms->i_flags);
 
 	if (data[IFLA_VTI_LINK])
 		parms->link = nla_get_u32(data[IFLA_VTI_LINK]);

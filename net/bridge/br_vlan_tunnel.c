@@ -65,12 +65,15 @@ static int __vlan_tunnel_info_add(struct net_bridge_vlan_group *vg,
 {
 	struct metadata_dst *metadata = rtnl_dereference(vlan->tinfo.tunnel_dst);
 	__be64 key = key32_to_tunnel_id(cpu_to_be32(tun_id));
+	IP_TUNNEL_DECLARE_FLAGS(flags) = { };
 	int err;
 
 	if (metadata)
 		return -EEXIST;
 
-	metadata = __ip_tun_set_dst(0, 0, 0, 0, 0, TUNNEL_KEY,
+	__set_bit(IP_TUNNEL_KEY_BIT, flags);
+
+	metadata = __ip_tun_set_dst(0, 0, 0, 0, 0, flags,
 				    key, 0);
 	if (!metadata)
 		return -EINVAL;
