@@ -212,6 +212,9 @@ enum {
 	IP_TUNNEL_VTI_BIT		= 16U,
 	IP_TUNNEL_SIT_ISATAP_BIT	= IP_TUNNEL_VTI_BIT,
 
+	/* Flags starting from here are available only via new bitmap cmds */
+	IP_TUNNEL_PFCP_OPT_BIT		= 17U,		/* OPTIONS_PRESENT */
+
 	__IP_TUNNEL_FLAG_NUM,
 };
 
