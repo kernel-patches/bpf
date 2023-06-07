@@ -312,21 +312,42 @@ LIBBPF_API int bpf_obj_get(const char *pathname);
 LIBBPF_API int bpf_obj_get_opts(const char *pathname,
 				const struct bpf_obj_get_opts *opts);
 
-struct bpf_prog_attach_opts {
-	size_t sz; /* size of this struct for forward/backward compatibility */
-	unsigned int flags;
-	int replace_prog_fd;
-};
-#define bpf_prog_attach_opts__last_field replace_prog_fd
-
 LIBBPF_API int bpf_prog_attach(int prog_fd, int attachable_fd,
 			       enum bpf_attach_type type, unsigned int flags);
-LIBBPF_API int bpf_prog_attach_opts(int prog_fd, int attachable_fd,
-				     enum bpf_attach_type type,
-				     const struct bpf_prog_attach_opts *opts);
 LIBBPF_API int bpf_prog_detach(int attachable_fd, enum bpf_attach_type type);
 LIBBPF_API int bpf_prog_detach2(int prog_fd, int attachable_fd,
 				enum bpf_attach_type type);
+
+struct bpf_prog_attach_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 flags;
+	union {
+		int	replace_prog_fd;
+		int	replace_fd;
+		int	relative_fd;
+		__u32	relative_id;
+	};
+	__u32 expected_revision;
+};
+#define bpf_prog_attach_opts__last_field expected_revision
+
+struct bpf_prog_detach_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 flags;
+	union {
+		int	relative_fd;
+		__u32	relative_id;
+	};
+	__u32 expected_revision;
+};
+#define bpf_prog_detach_opts__last_field expected_revision
+
+LIBBPF_API int bpf_prog_attach_opts(int prog_fd, int target,
+				    enum bpf_attach_type type,
+				    const struct bpf_prog_attach_opts *opts);
+LIBBPF_API int bpf_prog_detach_opts(int prog_fd, int target,
+				    enum bpf_attach_type type,
+				    const struct bpf_prog_detach_opts *opts);
 
 union bpf_iter_link_info; /* defined in up-to-date linux/bpf.h */
 struct bpf_link_create_opts {
@@ -489,14 +510,21 @@ struct bpf_prog_query_opts {
 	__u32 query_flags;
 	__u32 attach_flags; /* output argument */
 	__u32 *prog_ids;
-	__u32 prog_cnt; /* input+output argument */
+	union {
+		__u32 prog_cnt; /* input+output argument */
+		__u32 count;
+	};
 	__u32 *prog_attach_flags;
+	__u32 *link_ids;
+	__u32 *link_attach_flags;
+	__u32 revision;
 };
-#define bpf_prog_query_opts__last_field prog_attach_flags
+#define bpf_prog_query_opts__last_field revision
 
-LIBBPF_API int bpf_prog_query_opts(int target_fd,
+LIBBPF_API int bpf_prog_query_opts(int target,
 				   enum bpf_attach_type type,
 				   struct bpf_prog_query_opts *opts);
+
 LIBBPF_API int bpf_prog_query(int target_fd, enum bpf_attach_type type,
 			      __u32 query_flags, __u32 *attach_flags,
 			      __u32 *prog_ids, __u32 *prog_cnt);
