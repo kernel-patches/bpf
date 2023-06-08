@@ -26,7 +26,8 @@ struct dump_data {
 	char scratch_buff[SYM_MAX_NAME + 8];
 };
 
-void kernel_syms_load(struct dump_data *dd);
+int kernel_syms_load(struct dump_data *dd, const __u64 *filter_addrs,
+		     __u32 filter_cnt);
 void kernel_syms_destroy(struct dump_data *dd);
 struct kernel_sym *kernel_syms_search(struct dump_data *dd, unsigned long key);
 void dump_xlated_json(struct dump_data *dd, void *buf, unsigned int len,

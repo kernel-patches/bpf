@@ -23,46 +23,88 @@ static int kernel_syms_cmp(const void *sym_a, const void *sym_b)
 	       ((struct kernel_sym *)sym_b)->address;
 }
 
-void kernel_syms_load(struct dump_data *dd)
+static int cmp_u64(const void *A, const void *B)
+{
+	const __u64 *a = A, *b = B;
+
+	return *a - *b;
+}
+
+/* Set @filter_addrs to filter out the interested addresses.
+ * The addresses in @filter_addrs must be in /proc/kallsyms.
+ * The number of addresses in @filter_addrs must be @filter_cnt.
+ * Each address in @filter_addrs must be unique.
+ *
+ * Return 0 on success, -1 on invalid filter, 1 on no symbols.
+ */
+int kernel_syms_load(struct dump_data *dd, const __u64 *filter_addrs,
+		     __u32 filter_cnt)
 {
 	struct kernel_sym *sym;
 	char buff[256];
-	void *tmp, *address;
+	void *tmp = NULL, *address;
+	bool realloc = true;
+	__u32 i = 0;
 	FILE *fp;
 
 	fp = fopen("/proc/kallsyms", "r");
 	if (!fp)
-		return;
+		return 1;
 
+	if (filter_addrs && filter_cnt)
+		qsort((void *)filter_addrs, filter_cnt, sizeof(__u64),
+		      cmp_u64);
 	while (fgets(buff, sizeof(buff), fp)) {
-		tmp = libbpf_reallocarray(dd->sym_mapping, dd->sym_count + 1,
-					  sizeof(*dd->sym_mapping));
-		if (!tmp) {
+		if (realloc) {
+			tmp = libbpf_reallocarray(dd->sym_mapping,
+						  dd->sym_count + 1,
+						  sizeof(*dd->sym_mapping));
+			if (!tmp) {
 out:
-			free(dd->sym_mapping);
-			dd->sym_mapping = NULL;
-			fclose(fp);
-			return;
+				free(dd->sym_mapping);
+				dd->sym_mapping = NULL;
+				fclose(fp);
+				return 1;
+			}
+			dd->sym_mapping = tmp;
+			sym = &dd->sym_mapping[dd->sym_count];
 		}
-		dd->sym_mapping = tmp;
-		sym = &dd->sym_mapping[dd->sym_count];
 		if (sscanf(buff, "%p %*c %s", &address, sym->name) != 2)
 			continue;
-		sym->address = (unsigned long)address;
 		if (!strcmp(sym->name, "__bpf_call_base")) {
-			dd->address_call_base = sym->address;
+			dd->address_call_base = (unsigned long)address;
 			/* sysctl kernel.kptr_restrict was set */
-			if (!sym->address)
+			if (!address)
 				goto out;
 		}
+		if (filter_addrs && filter_cnt) {
+			if ((__u64)address != filter_addrs[i]) {
+				if (realloc)
+					realloc = false;
+				continue;
+			}
+			if (i++ == filter_cnt)
+				break;
+			if (!realloc)
+				realloc = true;
+		}
+		sym->address = (unsigned long)address;
 		if (sym->address)
 			dd->sym_count++;
 	}
 
 	fclose(fp);
 
+	/* invalid filter address found */
+	if (filter_addrs && filter_cnt && i != filter_cnt) {
+		free(dd->sym_mapping);
+		dd->sym_mapping = NULL;
+		return -1;
+	}
+
 	qsort(dd->sym_mapping, dd->sym_count,
 	      sizeof(*dd->sym_mapping), kernel_syms_cmp);
+	return 0;
 }
 
 void kernel_syms_destroy(struct dump_data *dd)

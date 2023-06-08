@@ -777,7 +777,7 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 			__u32 *lens;
 			__u32 i;
 			if (info->nr_jited_ksyms) {
-				kernel_syms_load(&dd);
+				kernel_syms_load(&dd, NULL, 0);
 				ksyms = u64_to_ptr(info->jited_ksyms);
 			}
 
@@ -841,7 +841,7 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 				goto exit_free;
 		}
 	} else {
-		kernel_syms_load(&dd);
+		kernel_syms_load(&dd, NULL, 0);
 		dd.nr_jited_ksyms = info->nr_jited_ksyms;
 		dd.jited_ksyms = u64_to_ptr(info->jited_ksyms);
 		dd.btf = btf;
@@ -1927,7 +1927,7 @@ static int do_loader(int argc, char **argv)
 	if (verifier_logs) {
 		struct dump_data dd = {};
 
-		kernel_syms_load(&dd);
+		kernel_syms_load(&dd, NULL, 0);
 		dump_xlated_plain(&dd, (void *)gen.insns, gen.insns_sz, false, false);
 		kernel_syms_destroy(&dd);
 	}
