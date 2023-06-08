@@ -195,11 +195,10 @@ show_kprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 	kernel_syms_destroy(&dd);
 }
 
-static int show_link_close_json(int fd, struct bpf_link_info *info)
+static int show_link_close_json(int fd, struct bpf_link_info *info,
+				const struct bpf_prog_info *prog_info)
 {
-	struct bpf_prog_info prog_info;
 	const char *prog_type_str;
-	int err;
 
 	jsonw_start_object(json_wtr);
 
@@ -211,16 +210,12 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 				   u64_to_ptr(info->raw_tracepoint.tp_name));
 		break;
 	case BPF_LINK_TYPE_TRACING:
-		err = get_prog_info(info->prog_id, &prog_info);
-		if (err)
-			return err;
-
-		prog_type_str = libbpf_bpf_prog_type_str(prog_info.type);
+		prog_type_str = libbpf_bpf_prog_type_str(prog_info->type);
 		/* libbpf will return NULL for variants unknown to it. */
 		if (prog_type_str)
 			jsonw_string_field(json_wtr, "prog_type", prog_type_str);
 		else
-			jsonw_uint_field(json_wtr, "prog_type", prog_info.type);
+			jsonw_uint_field(json_wtr, "prog_type", prog_info->type);
 
 		show_link_attach_type_json(info->tracing.attach_type,
 					   json_wtr);
@@ -412,11 +407,10 @@ static void show_kprobe_multi_plain(struct bpf_link_info *info)
 	kernel_syms_destroy(&dd);
 }
 
-static int show_link_close_plain(int fd, struct bpf_link_info *info)
+static int show_link_close_plain(int fd, struct bpf_link_info *info,
+				 const struct bpf_prog_info *prog_info)
 {
-	struct bpf_prog_info prog_info;
 	const char *prog_type_str;
-	int err;
 
 	show_link_header_plain(info);
 
@@ -426,16 +420,12 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 		       (const char *)u64_to_ptr(info->raw_tracepoint.tp_name));
 		break;
 	case BPF_LINK_TYPE_TRACING:
-		err = get_prog_info(info->prog_id, &prog_info);
-		if (err)
-			return err;
-
-		prog_type_str = libbpf_bpf_prog_type_str(prog_info.type);
+		prog_type_str = libbpf_bpf_prog_type_str(prog_info->type);
 		/* libbpf will return NULL for variants unknown to it. */
 		if (prog_type_str)
 			printf("\n\tprog_type %s  ", prog_type_str);
 		else
-			printf("\n\tprog_type %u  ", prog_info.type);
+			printf("\n\tprog_type %u  ", prog_info->type);
 
 		show_link_attach_type_plain(info->tracing.attach_type);
 		if (info->tracing.target_obj_id || info->tracing.target_btf_id)
@@ -479,6 +469,7 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 
 static int do_show_link(int fd)
 {
+	struct bpf_prog_info prog_info;
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
 	__u64 *addrs = NULL;
@@ -486,6 +477,7 @@ static int do_show_link(int fd)
 	int count;
 	int err;
 
+	memset(&prog_info, 0, sizeof(info));
 	memset(&info, 0, sizeof(info));
 again:
 	err = bpf_link_get_info_by_fd(fd, &info, &len);
@@ -495,6 +487,13 @@ again:
 		close(fd);
 		return err;
 	}
+
+	if (!prog_info.type) {
+		err = get_prog_info(info.prog_id, &prog_info);
+		if (err)
+			return err;
+	}
+
 	if (info.type == BPF_LINK_TYPE_RAW_TRACEPOINT &&
 	    !info.raw_tracepoint.tp_name) {
 		info.raw_tracepoint.tp_name = (unsigned long)&buf;
@@ -523,9 +522,9 @@ again:
 	}
 
 	if (json_output)
-		show_link_close_json(fd, &info);
+		show_link_close_json(fd, &info, &prog_info);
 	else
-		show_link_close_plain(fd, &info);
+		show_link_close_plain(fd, &info, &prog_info);
 
 	if (addrs)
 		free(addrs);
