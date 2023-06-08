@@ -119,6 +119,64 @@ static const char * const attach_type_name[] = {
 	[BPF_STRUCT_OPS]		= "struct_ops",
 };
 
+static const char * const perf_type_name[] = {
+	[PERF_TYPE_HARDWARE]		= "hardware",
+	[PERF_TYPE_SOFTWARE]		= "software",
+	[PERF_TYPE_TRACEPOINT]		= "tracepoint",
+	[PERF_TYPE_HW_CACHE]		= "hw_cache",
+	[PERF_TYPE_RAW]			= "raw",
+	[PERF_TYPE_BREAKPOINT]		= "breakpoint",
+};
+
+static const char * const perf_hw_name[] = {
+	[PERF_COUNT_HW_CPU_CYCLES]		= "cpu_cycles",
+	[PERF_COUNT_HW_INSTRUCTIONS]		= "instructions",
+	[PERF_COUNT_HW_CACHE_REFERENCES]	= "cache_references",
+	[PERF_COUNT_HW_CACHE_MISSES]		= "cache_misses",
+	[PERF_COUNT_HW_BRANCH_INSTRUCTIONS]	= "branch_instructions",
+	[PERF_COUNT_HW_BRANCH_MISSES]		= "branch_misses",
+	[PERF_COUNT_HW_BUS_CYCLES]		= "bus_cycles",
+	[PERF_COUNT_HW_STALLED_CYCLES_FRONTEND]	= "stalled_cycles_frontend",
+	[PERF_COUNT_HW_STALLED_CYCLES_BACKEND]	= "stalled_cycles_backend",
+	[PERF_COUNT_HW_REF_CPU_CYCLES]		= "ref_cpu_cycles",
+};
+
+static const char * const perf_hw_cache_name[] = {
+	[PERF_COUNT_HW_CACHE_L1D]		= "l1d",
+	[PERF_COUNT_HW_CACHE_L1I]		= "l1i",
+	[PERF_COUNT_HW_CACHE_LL]		= "ll",
+	[PERF_COUNT_HW_CACHE_DTLB]		= "dtlb",
+	[PERF_COUNT_HW_CACHE_ITLB]		= "itlb",
+	[PERF_COUNT_HW_CACHE_BPU]		= "bpu",
+	[PERF_COUNT_HW_CACHE_NODE]		= "node",
+};
+
+static const char * const perf_hw_cache_op_name[] = {
+	[PERF_COUNT_HW_CACHE_OP_READ]		= "read",
+	[PERF_COUNT_HW_CACHE_OP_WRITE]		= "write",
+	[PERF_COUNT_HW_CACHE_OP_PREFETCH]	= "prefetch",
+};
+
+static const char * const perf_hw_cache_op_result_name[] = {
+	[PERF_COUNT_HW_CACHE_RESULT_ACCESS]	= "access",
+	[PERF_COUNT_HW_CACHE_RESULT_MISS]	= "miss",
+};
+
+static const char * const perf_sw_name[] = {
+	[PERF_COUNT_SW_CPU_CLOCK]		= "cpu_clock",
+	[PERF_COUNT_SW_TASK_CLOCK]		= "task_clock",
+	[PERF_COUNT_SW_PAGE_FAULTS]		= "page_faults",
+	[PERF_COUNT_SW_CONTEXT_SWITCHES]	= "context_switches",
+	[PERF_COUNT_SW_CPU_MIGRATIONS]		= "cpu_migrations",
+	[PERF_COUNT_SW_PAGE_FAULTS_MIN]		= "page_faults_min",
+	[PERF_COUNT_SW_PAGE_FAULTS_MAJ]		= "page_faults_maj",
+	[PERF_COUNT_SW_ALIGNMENT_FAULTS]	= "alignment_faults",
+	[PERF_COUNT_SW_EMULATION_FAULTS]	= "emulation_faults",
+	[PERF_COUNT_SW_DUMMY]			= "dummy",
+	[PERF_COUNT_SW_BPF_OUTPUT]		= "bpf_output",
+	[PERF_COUNT_SW_CGROUP_SWITCHES]		= "cgroup_switches",
+};
+
 static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_UNSPEC]			= "unspec",
 	[BPF_LINK_TYPE_RAW_TRACEPOINT]		= "raw_tracepoint",
@@ -8951,6 +9009,55 @@ const char *libbpf_bpf_attach_type_str(enum bpf_attach_type t)
 		return NULL;
 
 	return attach_type_name[t];
+}
+
+const char *libbpf_perf_type_str(enum perf_type_id t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_type_name))
+		return NULL;
+
+	return perf_type_name[t];
+}
+
+const char *libbpf_perf_hw_str(enum perf_hw_id t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_hw_name))
+		return NULL;
+
+	return perf_hw_name[t];
+}
+
+const char *libbpf_perf_hw_cache_str(enum perf_hw_cache_id t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_hw_cache_name))
+		return NULL;
+
+	return perf_hw_cache_name[t];
+}
+
+const char *libbpf_perf_hw_cache_op_str(enum perf_hw_cache_op_id t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_hw_cache_op_name))
+		return NULL;
+
+	return perf_hw_cache_op_name[t];
+}
+
+const char *
+libbpf_perf_hw_cache_op_result_str(enum perf_hw_cache_op_result_id t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_hw_cache_op_result_name))
+		return NULL;
+
+	return perf_hw_cache_op_result_name[t];
+}
+
+const char *libbpf_perf_sw_str(enum perf_sw_ids t)
+{
+	if (t < 0 || t >= ARRAY_SIZE(perf_sw_name))
+		return NULL;
+
+	return perf_sw_name[t];
 }
 
 const char *libbpf_bpf_link_type_str(enum bpf_link_type t)

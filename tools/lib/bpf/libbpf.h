@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <sys/types.h>  // for size_t
 #include <linux/bpf.h>
+#include <linux/perf_event.h>
 
 #include "libbpf_common.h"
 #include "libbpf_legacy.h"
@@ -59,6 +60,61 @@ LIBBPF_API int libbpf_strerror(int err, char *buf, size_t size);
  * returned for unknown **bpf_attach_type** values.
  */
 LIBBPF_API const char *libbpf_bpf_attach_type_str(enum bpf_attach_type t);
+
+/**
+ * @brief **libbpf_perf_type_str()** converts the provided perf type value
+ * into a textual representation.
+ * @param t The perf type.
+ * @return Pointer to a static string identifying the perf type. NULL is
+ * returned for unknown **perf_type_id** values.
+ */
+LIBBPF_API const char *libbpf_perf_type_str(enum perf_type_id t);
+
+/**
+ * @brief **libbpf_perf_hw_str()** converts the provided perf hw id
+ * into a textual representation.
+ * @param t The perf hw id.
+ * @return Pointer to a static string identifying the perf hw id. NULL is
+ * returned for unknown **perf_hw_id** values.
+ */
+LIBBPF_API const char *libbpf_perf_hw_str(enum perf_hw_id t);
+
+/**
+ * @brief **libbpf_perf_hw_cache_str()** converts the provided perf hw cache
+ * id into a textual representation.
+ * @param t The perf hw cache id.
+ * @return Pointer to a static string identifying the perf hw cache id.
+ * NULL is returned for unknown **perf_hw_cache_id** values.
+ */
+LIBBPF_API const char *libbpf_perf_hw_cache_str(enum perf_hw_cache_id t);
+
+/**
+ * @brief **libbpf_perf_hw_cache_op_str()** converts the provided perf hw
+ * cache op id into a textual representation.
+ * @param t The perf hw cache op id.
+ * @return Pointer to a static string identifying the perf hw cache op id.
+ * NULL is returned for unknown **perf_hw_cache_op_id** values.
+ */
+LIBBPF_API const char *libbpf_perf_hw_cache_op_str(enum perf_hw_cache_op_id t);
+
+/**
+ * @brief **libbpf_perf_hw_cache_op_result_str()** converts the provided
+ * perf hw cache op result id into a textual representation.
+ * @param t The perf hw cache op result id.
+ * @return Pointer to a static string identifying the perf hw cache op result
+ * id. NULL is returned for unknown **perf_hw_cache_op_result_id** values.
+ */
+LIBBPF_API const char *
+libbpf_perf_hw_cache_op_result_str(enum perf_hw_cache_op_result_id t);
+
+/**
+ * @brief **libbpf_perf_sw_str()** converts the provided perf sw id
+ * into a textual representation.
+ * @param t The perf sw id.
+ * @return Pointer to a static string identifying the perf sw id. NULL is
+ * returned for unknown **perf_sw_ids** values.
+ */
+LIBBPF_API const char *libbpf_perf_sw_str(enum perf_sw_ids t);
 
 /**
  * @brief **libbpf_bpf_link_type_str()** converts the provided link type value
