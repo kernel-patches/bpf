@@ -195,6 +195,100 @@ show_kprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 	kernel_syms_destroy(&dd);
 }
 
+static void
+show_perf_event_probe_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_uint_field(wtr, "retprobe", info->perf_event.probe.retprobe);
+	jsonw_string_field(wtr, "name",
+			   u64_to_ptr(info->perf_event.probe.name));
+	jsonw_uint_field(wtr, "offset", info->perf_event.probe.offset);
+	jsonw_uint_field(wtr, "addr", info->perf_event.probe.addr);
+}
+
+static void
+show_perf_event_tp_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_string_field(wtr, "tp_name",
+			   u64_to_ptr(info->perf_event.tp.tp_name));
+}
+
+static const char *perf_config_hw_cache_str(__u64 config)
+{
+#define PERF_HW_CACHE_LEN 128
+	const char *hw_cache, *result, *op;
+	char *str = malloc(PERF_HW_CACHE_LEN);
+
+	if (!str) {
+		p_err("mem alloc failed");
+		return NULL;
+	}
+	hw_cache = libbpf_perf_hw_cache_str(config & 0xff);
+	if (hw_cache)
+		snprintf(str, PERF_HW_CACHE_LEN, "%s-", hw_cache);
+	else
+		snprintf(str, PERF_HW_CACHE_LEN, "%lld-", config & 0xff);
+	op = libbpf_perf_hw_cache_op_str((config >> 8) & 0xff);
+	if (op)
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%s-", op);
+	else
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%lld-", (config >> 8) & 0xff);
+	result = libbpf_perf_hw_cache_op_result_str(config >> 16);
+	if (result)
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%s", result);
+	else
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%lld", config >> 16);
+
+	return str;
+}
+
+static const char *perf_config_str(__u32 type, __u64 config)
+{
+	const char *perf_config;
+
+	switch (type) {
+	case PERF_TYPE_HARDWARE:
+		perf_config = libbpf_perf_hw_str(config);
+		break;
+	case PERF_TYPE_SOFTWARE:
+		perf_config = libbpf_perf_sw_str(config);
+		break;
+	case PERF_TYPE_HW_CACHE:
+		perf_config = perf_config_hw_cache_str(config);
+		break;
+	default:
+		perf_config = NULL;
+		break;
+	}
+	return perf_config;
+}
+
+static void
+show_perf_event_event_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	__u64 config = info->perf_event.event.config;
+	__u32 type = info->perf_event.event.type;
+	const char *perf_type, *perf_config;
+
+	perf_type = libbpf_perf_type_str(type);
+	if (perf_type)
+		jsonw_string_field(wtr, "type", perf_type);
+	else
+		jsonw_uint_field(wtr, "type", type);
+
+	perf_config = perf_config_str(type, config);
+	if (perf_config)
+		jsonw_string_field(wtr, "config", perf_config);
+	else
+		jsonw_uint_field(wtr, "config", config);
+
+	if (type == PERF_TYPE_HW_CACHE && perf_config)
+		free((void *)perf_config);
+}
+
 static int show_link_close_json(int fd, struct bpf_link_info *info,
 				const struct bpf_prog_info *prog_info)
 {
@@ -244,6 +338,14 @@ static int show_link_close_json(int fd, struct bpf_link_info *info,
 		break;
 	case BPF_LINK_TYPE_KPROBE_MULTI:
 		show_kprobe_multi_json(info, json_wtr);
+		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		if (prog_info->type == BPF_PROG_TYPE_PERF_EVENT)
+			show_perf_event_event_json(info, json_wtr);
+		else if (prog_info->type == BPF_PROG_TYPE_TRACEPOINT)
+			show_perf_event_tp_json(info, json_wtr);
+		else
+			show_perf_event_probe_json(info, json_wtr);
 		break;
 	default:
 		break;
@@ -407,6 +509,56 @@ static void show_kprobe_multi_plain(struct bpf_link_info *info)
 	kernel_syms_destroy(&dd);
 }
 
+static void show_perf_event_probe_plain(struct bpf_link_info *info)
+{
+	const char *buf;
+	__u32 retprobe;
+
+	buf = (const char *)u64_to_ptr(info->perf_event.probe.name);
+	if (buf[0] == '\0' && !info->perf_event.probe.addr)
+		return;
+
+	retprobe = info->perf_event.probe.retprobe;
+	printf("\n\tretprobe %u  name %s  ", retprobe, buf);
+	if (info->perf_event.probe.offset)
+		printf("offset %#x  ", info->perf_event.probe.offset);
+	if (info->perf_event.probe.addr)
+		printf("addr %llx  ", info->perf_event.probe.addr);
+}
+
+static void show_perf_event_tp_plain(struct bpf_link_info *info)
+{
+	const char *buf;
+
+	buf = (const char *)u64_to_ptr(info->perf_event.tp.tp_name);
+	if (buf[0] == '\0')
+		return;
+
+	printf("\n\ttp_name %s  ", buf);
+}
+
+static void show_perf_event_event_plain(struct bpf_link_info *info)
+{
+	__u64 config = info->perf_event.event.config;
+	__u32 type = info->perf_event.event.type;
+	const char *perf_type, *perf_config;
+
+	perf_type = libbpf_perf_type_str(type);
+	if (perf_type)
+		printf("\n\ttype %s  ", perf_type);
+	else
+		printf("\n\ttype %u  ", type);
+
+	perf_config = perf_config_str(type, config);
+	if (perf_config)
+		printf("config %s  ", perf_config);
+	else
+		printf("config %llu  ", config);
+
+	if (type == PERF_TYPE_HW_CACHE && perf_config)
+		free((void *)perf_config);
+}
+
 static int show_link_close_plain(int fd, struct bpf_link_info *info,
 				 const struct bpf_prog_info *prog_info)
 {
@@ -450,6 +602,14 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info,
 	case BPF_LINK_TYPE_KPROBE_MULTI:
 		show_kprobe_multi_plain(info);
 		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		if (prog_info->type == BPF_PROG_TYPE_PERF_EVENT)
+			show_perf_event_event_plain(info);
+		else if (prog_info->type == BPF_PROG_TYPE_TRACEPOINT)
+			show_perf_event_tp_plain(info);
+		else
+			show_perf_event_probe_plain(info);
+		break;
 	default:
 		break;
 	}
@@ -479,6 +639,7 @@ static int do_show_link(int fd)
 
 	memset(&prog_info, 0, sizeof(info));
 	memset(&info, 0, sizeof(info));
+	buf[0] = '\0';
 again:
 	err = bpf_link_get_info_by_fd(fd, &info, &len);
 	if (err) {
@@ -520,7 +681,24 @@ again:
 			goto again;
 		}
 	}
+	if (info.type == BPF_LINK_TYPE_PERF_EVENT) {
+		if (prog_info.type == BPF_PROG_TYPE_PERF_EVENT)
+			goto out;
+		if (prog_info.type == BPF_PROG_TYPE_TRACEPOINT &&
+		    !info.perf_event.tp.tp_name) {
+			info.perf_event.tp.tp_name = (unsigned long)&buf;
+			info.perf_event.tp.name_len = sizeof(buf);
+			goto again;
+		}
+		if (prog_info.type == BPF_PROG_TYPE_KPROBE &&
+		    !info.perf_event.probe.name) {
+			info.perf_event.probe.name = (unsigned long)&buf;
+			info.perf_event.probe.name_len = sizeof(buf);
+			goto again;
+		}
+	}
 
+out:
 	if (json_output)
 		show_link_close_json(fd, &info, &prog_info);
 	else
