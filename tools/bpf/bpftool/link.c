@@ -14,6 +14,7 @@
 
 #include "json_writer.h"
 #include "main.h"
+#include "xlated_dumper.h"
 
 static struct hashmap *link_table;
 
@@ -166,6 +167,34 @@ static int get_prog_info(int prog_id, struct bpf_prog_info *info)
 	return err;
 }
 
+static void
+show_kprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	struct dump_data dd = {};
+	const __u64 *addrs;
+	__u32 i;
+	int err;
+
+	jsonw_uint_field(json_wtr, "retprobe", info->kprobe_multi.retprobe);
+	jsonw_uint_field(json_wtr, "func_cnt", info->kprobe_multi.count);
+	jsonw_name(json_wtr, "funcs");
+	jsonw_start_array(json_wtr);
+	addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+	err = kernel_syms_load(&dd, addrs, info->kprobe_multi.count);
+	if (err) {
+		jsonw_end_array(json_wtr);
+		return;
+	}
+	for (i = 0; i < dd.sym_count; i++) {
+		jsonw_start_object(json_wtr);
+		jsonw_uint_field(json_wtr, "addr", dd.sym_mapping[i].address);
+		jsonw_string_field(json_wtr, "func", dd.sym_mapping[i].name);
+		jsonw_end_object(json_wtr);
+	}
+	jsonw_end_array(json_wtr);
+	kernel_syms_destroy(&dd);
+}
+
 static int show_link_close_json(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
@@ -217,6 +246,9 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_STRUCT_OPS:
 		jsonw_uint_field(json_wtr, "map_id",
 				 info->struct_ops.map_id);
+		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		show_kprobe_multi_json(info, json_wtr);
 		break;
 	default:
 		break;
@@ -351,6 +383,35 @@ void netfilter_dump_plain(const struct bpf_link_info *info)
 		printf(" flags 0x%x", info->netfilter.flags);
 }
 
+static void show_kprobe_multi_plain(struct bpf_link_info *info)
+{
+	struct dump_data dd = {};
+	const __u64 *addrs;
+	__u32 i;
+	int err;
+
+	if (!info->kprobe_multi.count)
+		return;
+
+	printf("\n\tretprobe %d  func_cnt %u  ",
+	       info->kprobe_multi.retprobe, info->kprobe_multi.count);
+	addrs = (const __u64 *)u64_to_ptr(info->kprobe_multi.addrs);
+	err = kernel_syms_load(&dd, addrs, info->kprobe_multi.count);
+	if (err)
+		return;
+	for (i = 0; i < dd.sym_count; i++) {
+		if (!i)
+			printf("\n\taddrs %016lx  funcs %s  ",
+			       dd.sym_mapping[i].address,
+			       dd.sym_mapping[i].name);
+		else
+			printf("\n\t      %016lx        %s  ",
+			       dd.sym_mapping[i].address,
+			       dd.sym_mapping[i].name);
+	}
+	kernel_syms_destroy(&dd);
+}
+
 static int show_link_close_plain(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
@@ -396,6 +457,9 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_NETFILTER:
 		netfilter_dump_plain(info);
 		break;
+	case BPF_LINK_TYPE_KPROBE_MULTI:
+		show_kprobe_multi_plain(info);
+		break;
 	default:
 		break;
 	}
@@ -417,7 +481,9 @@ static int do_show_link(int fd)
 {
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
+	__u64 *addrs = NULL;
 	char buf[256];
+	int count;
 	int err;
 
 	memset(&info, 0, sizeof(info));
@@ -441,12 +507,28 @@ again:
 		info.iter.target_name_len = sizeof(buf);
 		goto again;
 	}
+	if (info.type == BPF_LINK_TYPE_KPROBE_MULTI &&
+	    !info.kprobe_multi.addrs) {
+		count = info.kprobe_multi.count;
+		if (count) {
+			addrs = calloc(count, sizeof(__u64));
+			if (!addrs) {
+				p_err("mem alloc failed");
+				close(fd);
+				return -1;
+			}
+			info.kprobe_multi.addrs = (unsigned long)addrs;
+			goto again;
+		}
+	}
 
 	if (json_output)
 		show_link_close_json(fd, &info);
 	else
 		show_link_close_plain(fd, &info);
 
+	if (addrs)
+		free(addrs);
 	close(fd);
 	return 0;
 }
