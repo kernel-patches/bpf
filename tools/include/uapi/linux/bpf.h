@@ -6443,6 +6443,28 @@ struct bpf_link_info {
 			__u32 count;
 			__u8  retprobe;
 		} kprobe_multi;
+		union {
+			struct {
+				/* The name is:
+				 * a) uprobe: file name
+				 * b) kprobe: kernel function
+				 */
+				__aligned_u64 name; /* in/out: name buffer ptr */
+				__u32 name_len;
+				__u32 offset;	/* offset from the name */
+				__u64 addr;
+				__u8 retprobe;
+			} probe; /* uprobe, kprobe */
+			struct {
+				/* in/out: tracepoint name buffer ptr */
+				__aligned_u64 tp_name;
+				__u32 name_len;
+			} tp; /* tracepoint */
+			struct {
+				__u64 config;
+				__u32 type;
+			} event; /* generic perf event */
+		} perf_event;
 	};
 } __attribute__((aligned(8)));
 
