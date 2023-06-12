@@ -2238,6 +2238,8 @@ struct net_device {
 	unsigned int		real_num_rx_queues;
 
 	struct bpf_prog __rcu	*xdp_prog;
+	struct bpf_prog	__rcu	*devtx_sb;
+	struct bpf_prog	__rcu	*devtx_cp;
 	unsigned long		gro_flush_timeout;
 	int			napi_defer_hard_irqs;
 #define GRO_LEGACY_MAX_SIZE	65536u
