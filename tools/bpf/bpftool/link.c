@@ -15,6 +15,7 @@
 #include "json_writer.h"
 #include "main.h"
 #include "xlated_dumper.h"
+#include "perf.h"
 
 static struct hashmap *link_table;
 static struct dump_data dd = {};
@@ -207,6 +208,109 @@ show_kprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 	jsonw_end_array(json_wtr);
 }
 
+static void
+show_perf_event_kprobe_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_uint_field(wtr, "retprobe", info->kprobe.flags & 0x1);
+	jsonw_string_field(wtr, "func_name",
+			   u64_to_ptr(info->kprobe.func_name));
+	jsonw_uint_field(wtr, "offset", info->kprobe.offset);
+	jsonw_uint_field(wtr, "addr", info->kprobe.addr);
+}
+
+static void
+show_perf_event_uprobe_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_uint_field(wtr, "retprobe", info->uprobe.flags & 0x1);
+	jsonw_string_field(wtr, "file_name",
+			   u64_to_ptr(info->uprobe.file_name));
+	jsonw_uint_field(wtr, "offset", info->uprobe.offset);
+}
+
+static void
+show_perf_event_tp_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	jsonw_string_field(wtr, "tp_name",
+			   u64_to_ptr(info->tracepoint.tp_name));
+}
+
+static const char *perf_config_hw_cache_str(__u64 config)
+{
+#define PERF_HW_CACHE_LEN 128
+	const char *hw_cache, *result, *op;
+	char *str = malloc(PERF_HW_CACHE_LEN);
+
+	if (!str) {
+		p_err("mem alloc failed");
+		return NULL;
+	}
+	hw_cache = perf_hw_cache_str(config & 0xff);
+	if (hw_cache)
+		snprintf(str, PERF_HW_CACHE_LEN, "%s-", hw_cache);
+	else
+		snprintf(str, PERF_HW_CACHE_LEN, "%lld-", config & 0xff);
+	op = perf_hw_cache_op_str((config >> 8) & 0xff);
+	if (op)
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%s-", op);
+	else
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%lld-", (config >> 8) & 0xff);
+	result = perf_hw_cache_op_result_str(config >> 16);
+	if (result)
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%s", result);
+	else
+		snprintf(str + strlen(str), PERF_HW_CACHE_LEN - strlen(str),
+			 "%lld", config >> 16);
+
+	return str;
+}
+
+static const char *perf_config_str(__u32 type, __u64 config)
+{
+	const char *perf_config;
+
+	switch (type) {
+	case PERF_TYPE_HARDWARE:
+		perf_config = perf_hw_str(config);
+		break;
+	case PERF_TYPE_SOFTWARE:
+		perf_config = perf_sw_str(config);
+		break;
+	case PERF_TYPE_HW_CACHE:
+		perf_config = perf_config_hw_cache_str(config);
+		break;
+	default:
+		perf_config = NULL;
+		break;
+	}
+	return perf_config;
+}
+
+static void
+show_perf_event_event_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	__u64 config = info->perf_event.config;
+	__u32 type = info->perf_event.type;
+	const char *perf_type, *perf_config;
+
+	perf_type = perf_type_str(type);
+	if (perf_type)
+		jsonw_string_field(wtr, "event_type", perf_type);
+	else
+		jsonw_uint_field(wtr, "event_type", type);
+
+	perf_config = perf_config_str(type, config);
+	if (perf_config)
+		jsonw_string_field(wtr, "event_config", perf_config);
+	else
+		jsonw_uint_field(wtr, "event_config", config);
+
+	if (type == PERF_TYPE_HW_CACHE && perf_config)
+		free((void *)perf_config);
+}
+
 static int show_link_close_json(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
@@ -261,6 +365,16 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 		break;
 	case BPF_LINK_TYPE_KPROBE_MULTI:
 		show_kprobe_multi_json(info, json_wtr);
+		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		if (info->perf_link_type == BPF_PERF_LINK_PERF_EVENT)
+			show_perf_event_event_json(info, json_wtr);
+		else if (info->perf_link_type == BPF_PERF_LINK_TRACEPOINT)
+			show_perf_event_tp_json(info, json_wtr);
+		else if (info->perf_link_type == BPF_PERF_LINK_KPROBE)
+			show_perf_event_kprobe_json(info, json_wtr);
+		else if (info->perf_link_type == BPF_PERF_LINK_UPROBE)
+			show_perf_event_uprobe_json(info, json_wtr);
 		break;
 	default:
 		break;
@@ -433,6 +547,71 @@ static void show_kprobe_multi_plain(struct bpf_link_info *info)
 	}
 }
 
+static void show_perf_event_kprobe_plain(struct bpf_link_info *info)
+{
+	const char *buf;
+	__u32 retprobe;
+
+	buf = (const char *)u64_to_ptr(info->kprobe.func_name);
+	if (buf[0] == '\0' && !info->kprobe.addr)
+		return;
+
+	retprobe = info->kprobe.flags & 0x1;
+	printf("\n\tretprobe %u  func_name %s  ", retprobe, buf);
+	if (info->kprobe.offset)
+		printf("offset %#x  ", info->kprobe.offset);
+	if (info->kprobe.addr)
+		printf("addr %llx  ", info->kprobe.addr);
+}
+
+static void show_perf_event_uprobe_plain(struct bpf_link_info *info)
+{
+	const char *buf;
+	__u32 retprobe;
+
+	buf = (const char *)u64_to_ptr(info->uprobe.file_name);
+	if (buf[0] == '\0')
+		return;
+
+	retprobe = info->uprobe.flags & 0x1;
+	printf("\n\tretprobe %u  file_name %s  ", retprobe, buf);
+	if (info->uprobe.offset)
+		printf("offset %#x  ", info->kprobe.offset);
+}
+
+static void show_perf_event_tp_plain(struct bpf_link_info *info)
+{
+	const char *buf;
+
+	buf = (const char *)u64_to_ptr(info->tracepoint.tp_name);
+	if (buf[0] == '\0')
+		return;
+
+	printf("\n\ttp_name %s  ", buf);
+}
+
+static void show_perf_event_event_plain(struct bpf_link_info *info)
+{
+	__u64 config = info->perf_event.config;
+	__u32 type = info->perf_event.type;
+	const char *perf_type, *perf_config;
+
+	perf_type = perf_type_str(type);
+	if (perf_type)
+		printf("\n\tevent_type %s  ", perf_type);
+	else
+		printf("\n\tevent_type %u  ", type);
+
+	perf_config = perf_config_str(type, config);
+	if (perf_config)
+		printf("event_config %s  ", perf_config);
+	else
+		printf("event_config %llu  ", config);
+
+	if (type == PERF_TYPE_HW_CACHE && perf_config)
+		free((void *)perf_config);
+}
+
 static int show_link_close_plain(int fd, struct bpf_link_info *info)
 {
 	struct bpf_prog_info prog_info;
@@ -481,6 +660,16 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_KPROBE_MULTI:
 		show_kprobe_multi_plain(info);
 		break;
+	case BPF_LINK_TYPE_PERF_EVENT:
+		if (info->perf_link_type == BPF_PERF_LINK_PERF_EVENT)
+			show_perf_event_event_plain(info);
+		else if (info->perf_link_type == BPF_PERF_LINK_TRACEPOINT)
+			show_perf_event_tp_plain(info);
+		else if (info->perf_link_type == BPF_PERF_LINK_KPROBE)
+			show_perf_event_kprobe_plain(info);
+		else if (info->perf_link_type == BPF_PERF_LINK_UPROBE)
+			show_perf_event_uprobe_plain(info);
+		break;
 	default:
 		break;
 	}
@@ -508,6 +697,7 @@ static int do_show_link(int fd)
 	int err;
 
 	memset(&info, 0, sizeof(info));
+	buf[0] = '\0';
 again:
 	err = bpf_link_get_info_by_fd(fd, &info, &len);
 	if (err) {
@@ -542,7 +732,30 @@ again:
 			goto again;
 		}
 	}
+	if (info.type == BPF_LINK_TYPE_PERF_EVENT) {
+		if (info.perf_link_type == BPF_PERF_LINK_PERF_EVENT)
+			goto out;
+		if (info.perf_link_type == BPF_PERF_LINK_TRACEPOINT &&
+		    !info.tracepoint.tp_name) {
+			info.tracepoint.tp_name = (unsigned long)&buf;
+			info.tracepoint.name_len = sizeof(buf);
+			goto again;
+		}
+		if (info.perf_link_type == BPF_PERF_LINK_KPROBE &&
+		    !info.kprobe.func_name) {
+			info.kprobe.func_name = (unsigned long)&buf;
+			info.kprobe.name_len = sizeof(buf);
+			goto again;
+		}
+		if (info.perf_link_type == BPF_PERF_LINK_UPROBE &&
+		    !info.uprobe.file_name) {
+			info.uprobe.file_name = (unsigned long)&buf;
+			info.uprobe.name_len = sizeof(buf);
+			goto again;
+		}
+	}
 
+out:
 	if (json_output)
 		show_link_close_json(fd, &info);
 	else
