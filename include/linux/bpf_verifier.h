@@ -239,8 +239,6 @@ enum bpf_stack_slot_type {
 	STACK_ITER,
 };
 
-#define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
-
 #define BPF_REGMASK_ARGS ((1 << BPF_REG_1) | (1 << BPF_REG_2) | \
 			  (1 << BPF_REG_3) | (1 << BPF_REG_4) | \
 			  (1 << BPF_REG_5))
