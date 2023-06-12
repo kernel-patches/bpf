@@ -3303,9 +3303,133 @@ static void bpf_perf_link_dealloc(struct bpf_link *link)
 	kfree(perf_link);
 }
 
+static int bpf_perf_link_fill_name(const struct perf_event *event,
+				   char __user *uname, u32 ulen,
+				   u64 *probe_offset, u64 *probe_addr,
+				   u32 *fd_type)
+{
+	const char *buf;
+	u32 prog_id;
+	size_t len;
+	int err;
+
+	if (!ulen ^ !uname)
+		return -EINVAL;
+	if (!uname)
+		return 0;
+
+	err = bpf_get_perf_event_info(event, &prog_id, fd_type, &buf,
+				      probe_offset, probe_addr);
+	if (err)
+		return err;
+
+	len = strlen(buf);
+	if (buf) {
+		err = bpf_copy_to_user(uname, buf, ulen, len);
+		if (err)
+			return err;
+	} else {
+		char zero = '\0';
+
+		if (put_user(zero, uname))
+			return -EFAULT;
+	}
+	return 0;
+}
+
+static int bpf_perf_link_fill_probe(const struct perf_event *event,
+				    struct bpf_link_info *info)
+{
+	char __user *uname;
+	u64 addr, offset;
+	u32 ulen, type;
+	int err;
+
+#ifdef CONFIG_KPROBE_EVENTS
+	if (event->tp_event->flags & TRACE_EVENT_FL_KPROBE) {
+		uname = u64_to_user_ptr(info->kprobe.func_name);
+		ulen = info->kprobe.name_len;
+		info->perf_link_type = BPF_PERF_LINK_KPROBE;
+		err = bpf_perf_link_fill_name(event, uname, ulen, &offset,
+					      &addr, &type);
+		if (err)
+			return err;
+
+		info->kprobe.offset = offset;
+		if (type == BPF_FD_TYPE_KRETPROBE)
+			info->kprobe.flags = 1;
+		if (!kallsyms_show_value(current_cred()))
+			return 0;
+		info->kprobe.addr = addr;
+		return 0;
+	}
+#endif
+
+#ifdef CONFIG_UPROBE_EVENTS
+	if (event->tp_event->flags & TRACE_EVENT_FL_UPROBE) {
+		uname = u64_to_user_ptr(info->uprobe.file_name);
+		ulen = info->uprobe.name_len;
+		info->perf_link_type = BPF_PERF_LINK_UPROBE;
+		err = bpf_perf_link_fill_name(event, uname, ulen, &offset,
+					      &addr, &type);
+		if (err)
+			return err;
+
+		info->uprobe.offset = offset;
+		if (type == BPF_FD_TYPE_URETPROBE)
+			info->uprobe.flags = 1;
+		return 0;
+	}
+#endif
+
+	return -EOPNOTSUPP;
+}
+
+static int bpf_perf_link_fill_tracepoint(const struct perf_event *event,
+					 struct bpf_link_info *info)
+{
+	char __user *uname = u64_to_user_ptr(info->tracepoint.tp_name);
+	u32 ulen = info->tracepoint.name_len;
+	u64 addr, off;
+	u32 type;
+
+	info->perf_link_type = BPF_PERF_LINK_TRACEPOINT;
+	return bpf_perf_link_fill_name(event, uname, ulen, &off, &addr, &type);
+}
+
+static int bpf_perf_link_fill_perf_event(const struct perf_event *event,
+				    struct bpf_link_info *info)
+{
+	info->perf_event.type = event->attr.type;
+	info->perf_event.config = event->attr.config;
+	info->perf_link_type = BPF_PERF_LINK_PERF_EVENT;
+	return 0;
+}
+
+static int bpf_perf_link_fill_link_info(const struct bpf_link *link,
+					struct bpf_link_info *info)
+{
+	struct bpf_perf_link *perf_link;
+	const struct perf_event *event;
+
+	perf_link = container_of(link, struct bpf_perf_link, link);
+	event = perf_get_event(perf_link->perf_file);
+	if (IS_ERR(event))
+		return PTR_ERR(event);
+
+	if (!event->prog)
+		return -EINVAL;
+	if (event->prog->type == BPF_PROG_TYPE_PERF_EVENT)
+		return bpf_perf_link_fill_perf_event(event, info);
+	if (event->prog->type == BPF_PROG_TYPE_TRACEPOINT)
+		return bpf_perf_link_fill_tracepoint(event, info);
+	return bpf_perf_link_fill_probe(event, info);
+}
+
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
 	.dealloc = bpf_perf_link_dealloc,
+	.fill_link_info = bpf_perf_link_fill_link_info,
 };
 
 static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)

@@ -1056,6 +1056,16 @@ enum bpf_link_type {
 	MAX_BPF_LINK_TYPE,
 };
 
+enum bpf_perf_link_type {
+	BPF_PERF_LINK_UNSPEC = 0,
+	BPF_PERF_LINK_UPROBE = 1,
+	BPF_PERF_LINK_KPROBE = 2,
+	BPF_PERF_LINK_TRACEPOINT = 3,
+	BPF_PERF_LINK_PERF_EVENT = 4,
+
+	MAX_BPF_LINK_PERF_EVENT_TYPE,
+};
+
 /* cgroup-bpf attach flags used in BPF_PROG_ATTACH command
  *
  * NONE(default): No further bpf programs allowed in the subtree.
@@ -6443,7 +6453,29 @@ struct bpf_link_info {
 			__u32 count;
 			__u32 flags;
 		} kprobe_multi;
+		struct {
+			__u64 config;
+			__u32 type;
+		} perf_event; /* BPF_LINK_PERF_EVENT_PERF_EVENT */
+		struct {
+			__aligned_u64 file_name; /* in/out: buff ptr */
+			__u32 name_len;
+			__u32 offset;            /* offset from name */
+			__u32 flags;
+		} uprobe; /* BPF_LINK_PERF_EVENT_UPROBE */
+		struct {
+			__aligned_u64 func_name; /* in/out: buff ptr */
+			__u32 name_len;
+			__u32 offset;            /* offset from name */
+			__u64 addr;
+			__u32 flags;
+		} kprobe; /* BPF_LINK_PERF_EVENT_KPROBE */
+		struct {
+			__aligned_u64 tp_name;   /* in/out: buff ptr */
+			__u32 name_len;
+		} tracepoint; /* BPF_LINK_PERF_EVENT_TRACEPOINT */
 	};
+	__u32 perf_link_type; /* enum bpf_perf_link_type */
 } __attribute__((aligned(8)));
 
 /* User bpf_sock_addr struct to access socket fields and sockaddr struct passed
