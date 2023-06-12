@@ -216,7 +216,7 @@ __naked void uninit_u32_from_the_stack(void)
 
 SEC("tc")
 __description("Spill a u32 const scalar.  Refill as u16.  Offset to skb->data")
-__failure __msg("invalid access to packet")
+__success __retval(0)
 __naked void u16_offset_to_skb_data(void)
 {
 	asm volatile ("					\
@@ -224,7 +224,7 @@ __naked void u16_offset_to_skb_data(void)
 	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
 	w4 = 20;					\
 	*(u32*)(r10 - 8) = r4;				\
-	r4 = *(u16*)(r10 - 8);				\
+	r4 = *(u16*)(r10 - %[offset]);			\
 	r0 = r2;					\
 	/* r0 += r4 R0=pkt R2=pkt R3=pkt_end R4=umax=65535 */\
 	r0 += r4;					\
@@ -236,7 +236,12 @@ l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
-	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	  __imm_const(offset, 8)
+#else
+	  __imm_const(offset, 6)
+#endif
 	: __clobber_all);
 }
 
@@ -269,7 +274,7 @@ l0_%=:	r0 = 0;						\
 }
 
 SEC("tc")
-__description("Spill a u32 const scalar.  Refill as u16 from fp-6.  Offset to skb->data")
+__description("Spill a u32 const scalar.  Refill as u16 from MSB.  Offset to skb->data")
 __failure __msg("invalid access to packet")
 __naked void _6_offset_to_skb_data(void)
 {
@@ -278,7 +283,7 @@ __naked void _6_offset_to_skb_data(void)
 	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
 	w4 = 20;					\
 	*(u32*)(r10 - 8) = r4;				\
-	r4 = *(u16*)(r10 - 6);				\
+	r4 = *(u16*)(r10 - %[offset]);			\
 	r0 = r2;					\
 	/* r0 += r4 R0=pkt R2=pkt R3=pkt_end R4=umax=65535 */\
 	r0 += r4;					\
@@ -290,7 +295,12 @@ l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
-	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	  __imm_const(offset, 6)
+#else
+	  __imm_const(offset, 8)
+#endif
 	: __clobber_all);
 }
 
