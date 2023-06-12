@@ -42,6 +42,9 @@ struct xsk {
 	struct xsk_ring_prod tx;
 	struct xsk_ring_cons rx;
 	struct xsk_socket *socket;
+	int tx_completions;
+	u32 last_tx_timestamp_retval;
+	u64 last_tx_timestamp;
 };
 
 static int open_xsk(int ifindex, struct xsk *xsk)
@@ -192,7 +195,8 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 	return 0;
 }
 
-static void complete_tx(struct xsk *xsk)
+static void complete_tx(struct xsk *xsk, struct xdp_metadata *bpf_obj,
+			struct ring_buffer *ringbuf)
 {
 	__u32 idx;
 	__u64 addr;
@@ -202,6 +206,13 @@ static void complete_tx(struct xsk *xsk)
 
 		printf("%p: complete tx idx=%u addr=%llx\n", xsk, idx, addr);
 		xsk_ring_cons__release(&xsk->comp, 1);
+
+		ring_buffer__poll(ringbuf, 1000);
+
+		ASSERT_EQ(bpf_obj->bss->pkts_fail_tx, 0, "pkts_fail_tx");
+		ASSERT_GE(xsk->tx_completions, 1, "tx_completions");
+		ASSERT_EQ(xsk->last_tx_timestamp_retval, 0, "last_tx_timestamp_retval");
+		ASSERT_GE(xsk->last_tx_timestamp, 0, "last_tx_timestamp");
 	}
 }
 
@@ -276,8 +287,24 @@ static int verify_xsk_metadata(struct xsk *xsk)
 	return 0;
 }
 
+static int process_sample(void *ctx, void *data, size_t len)
+{
+	struct devtx_sample *sample = data;
+	struct xsk *xsk = ctx;
+
+	printf("%p: got tx timestamp sample %u %llu\n",
+	       xsk, sample->timestamp_retval, sample->timestamp);
+
+	xsk->tx_completions++;
+	xsk->last_tx_timestamp_retval = sample->timestamp_retval;
+	xsk->last_tx_timestamp = sample->timestamp;
+
+	return 0;
+}
+
 void test_xdp_metadata(void)
 {
+	struct ring_buffer *tx_compl_ringbuf = NULL;
 	struct xdp_metadata2 *bpf_obj2 = NULL;
 	struct xdp_metadata *bpf_obj = NULL;
 	struct bpf_program *new_prog, *prog;
@@ -290,6 +317,7 @@ void test_xdp_metadata(void)
 	int retries = 10;
 	int rx_ifindex;
 	int tx_ifindex;
+	int syscall_fd;
 	int sock_fd;
 	int ret;
 
@@ -323,11 +351,30 @@ void test_xdp_metadata(void)
 	if (!ASSERT_OK_PTR(bpf_obj, "open skeleton"))
 		goto out;
 
+	prog = bpf_object__find_program_by_name(bpf_obj->obj, "devtx_sb");
+	bpf_program__set_ifindex(prog, tx_ifindex);
+	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
+	bpf_program__set_autoattach(prog, false);
+
+	prog = bpf_object__find_program_by_name(bpf_obj->obj, "devtx_cp");
+	bpf_program__set_ifindex(prog, tx_ifindex);
+	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
+	bpf_program__set_autoattach(prog, false);
+
 	prog = bpf_object__find_program_by_name(bpf_obj->obj, "rx");
 	bpf_program__set_ifindex(prog, rx_ifindex);
 	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
 
 	if (!ASSERT_OK(xdp_metadata__load(bpf_obj), "load skeleton"))
+		goto out;
+
+	ret = xdp_metadata__attach(bpf_obj);
+	if (!ASSERT_OK(ret, "xdp_metadata__attach"))
+		goto out;
+
+	tx_compl_ringbuf = ring_buffer__new(bpf_map__fd(bpf_obj->maps.tx_compl_buf),
+					    process_sample, &tx_xsk, NULL);
+	if (!ASSERT_OK_PTR(tx_compl_ringbuf, "ring_buffer__new"))
 		goto out;
 
 	/* Make sure we can't add dev-bound programs to prog maps. */
@@ -340,6 +387,26 @@ void test_xdp_metadata(void)
 					     &val, sizeof(val), BPF_ANY),
 			"update prog_arr"))
 		goto out;
+
+	/* Attach egress BPF programs to interface. */
+	struct devtx_attach_args args = {
+		.ifindex = tx_ifindex,
+		.devtx_sb_prog_fd = bpf_program__fd(bpf_obj->progs.devtx_sb),
+		.devtx_cp_prog_fd = bpf_program__fd(bpf_obj->progs.devtx_cp),
+		.devtx_sb_retval = -1,
+		.devtx_cp_retval = -1,
+	};
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, tattr,
+		.ctx_in = &args,
+		.ctx_size_in = sizeof(args),
+	);
+
+	syscall_fd = bpf_program__fd(bpf_obj->progs.attach_prog);
+	ret = bpf_prog_test_run_opts(syscall_fd, &tattr);
+	if (!ASSERT_GE(ret, 0, "bpf_prog_test_run_opts(attach_prog)"))
+		goto out;
+	ASSERT_GE(args.devtx_sb_retval, 0, "bpf_prog_test_run_opts(attach_prog) devtx_sb_retval");
+	ASSERT_GE(args.devtx_cp_retval, 0, "bpf_prog_test_run_opts(attach_prog) devtx_cp_retval");
 
 	/* Attach BPF program to RX interface. */
 
@@ -364,7 +431,16 @@ void test_xdp_metadata(void)
 		       "verify_xsk_metadata"))
 		goto out;
 
-	complete_tx(&tx_xsk);
+	/* Verify AF_XDP TX packet has completion event with a timestamp. */
+	complete_tx(&tx_xsk, bpf_obj, tx_compl_ringbuf);
+
+	/* Detach egress program. */
+	syscall_fd = bpf_program__fd(bpf_obj->progs.detach_prog);
+	ret = bpf_prog_test_run_opts(syscall_fd, &tattr);
+	if (!ASSERT_GE(ret, 0, "bpf_prog_test_run_opts(detach_prog)"))
+		goto out;
+	ASSERT_GE(args.devtx_sb_retval, 0, "bpf_prog_test_run_opts(detach_prog) devtx_sb_retval");
+	ASSERT_GE(args.devtx_cp_retval, 0, "bpf_prog_test_run_opts(detach_prog) devtx_cp_retval");
 
 	/* Make sure freplace correctly picks up original bound device
 	 * and doesn't crash.
@@ -402,5 +478,7 @@ out:
 	xdp_metadata__destroy(bpf_obj);
 	if (tok)
 		close_netns(tok);
+	if (tx_compl_ringbuf)
+		ring_buffer__free(tx_compl_ringbuf);
 	SYS_NOFAIL("ip netns del xdp_metadata");
 }

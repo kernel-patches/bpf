@@ -18,3 +18,16 @@ struct xdp_meta {
 		__s32 rx_hash_err;
 	};
 };
+
+struct devtx_sample {
+	int timestamp_retval;
+	__u64 timestamp;
+};
+
+struct devtx_attach_args {
+	int ifindex;
+	int devtx_sb_prog_fd;
+	int devtx_cp_prog_fd;
+	int devtx_sb_retval;
+	int devtx_cp_retval;
+};
