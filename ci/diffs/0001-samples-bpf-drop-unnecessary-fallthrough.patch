@@ -1,0 +1,32 @@
+From f23a4ed043dfd36b758e627bdb30fc8e686f330d Mon Sep 17 00:00:00 2001
+From: Andrii Nakryiko <andrii@kernel.org>
+Date: Mon, 15 May 2023 13:00:20 -0700
+Subject: [PATCH bpf] samples/bpf: drop unnecessary fallthrough
+
+__fallthrough is now not supported. Instead of renaming it to
+now-canonical ([0]) fallthrough pseudo-keyword, just get rid of it and
+equate 'h' case to default case, as both emit usage information and
+succeed.
+
+  [0] https://www.kernel.org/doc/html/latest/process/deprecated.html?highlight=fallthrough#implicit-switch-case-fall-through
+
+Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+---
+ samples/bpf/hbm.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/samples/bpf/hbm.c b/samples/bpf/hbm.c
+index 6448b7826107..bf66277115e2 100644
+--- a/samples/bpf/hbm.c
++++ b/samples/bpf/hbm.c
+@@ -498,7 +498,6 @@ int main(int argc, char **argv)
+ 					"Option -%c requires an argument.\n\n",
+ 					optopt);
+ 		case 'h':
+-			__fallthrough;
+ 		default:
+ 			Usage();
+ 			return 0;
+-- 
+2.34.1
+
