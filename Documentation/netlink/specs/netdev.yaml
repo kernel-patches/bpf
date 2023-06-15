@@ -42,6 +42,11 @@ definitions:
         doc:
           This feature informs if netdev implements non-linear XDP buffer
           support in ndo_xdp_xmit callback.
+      -
+        name: zc-sg
+        doc:
+          This feature informs if netdev implements non-linear XDP buffer
+          support in zero-copy mode.
 
 attribute-sets:
   -
