@@ -777,14 +777,33 @@ class PrinterHelpers(Printer):
         'bpf_get_socket_cookie',
         'bpf_sk_assign',
     ]
+    # Helpers that need __nomerge attribute
+    nomerge_helpers = set([
+	"bpf_tail_call",
+	"bpf_map_lookup_elem",
+	"bpf_map_update_elem",
+	"bpf_map_delete_elem",
+	"bpf_map_push_elem",
+	"bpf_map_pop_elem",
+	"bpf_map_peek_elem",
+	"bpf_for_each_map_elem",
+	"bpf_redirect_map",
+	"bpf_map_lookup_percpu_elem"
+    ])
+
+    macros = '''\
+#if __has_attribute(nomerge)
+#define __nomerge __attribute__((nomerge))
+#else
+#define __nomerge
+#endif'''
 
     def print_header(self):
-        header = '''\
-/* This is auto-generated file. See bpf_doc.py for details. */
-
-/* Forward declarations of BPF structs */'''
-
-        print(header)
+        print('/* This is auto-generated file. See bpf_doc.py for details. */')
+        print()
+        print(self.macros)
+        print()
+        print('/* Forward declarations of BPF structs */')
         for fwd in self.type_fwds:
             print('%s;' % fwd)
         print('')
@@ -846,7 +865,11 @@ class PrinterHelpers(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % helper.enum_val)
+        print(')', end='')
+        if proto['name'] in self.nomerge_helpers:
+            print(' __nomerge', end='')
+
+        print(' = (void *) %d;' % helper.enum_val)
         print('')
 
 ###############################################################################
