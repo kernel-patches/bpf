@@ -59,9 +59,6 @@ void *execmem_text_alloc(size_t size)
 	unsigned long fallback_end = execmem_params.modules.text.fallback_end;
 	bool kasan = execmem_params.modules.flags & EXECMEM_KASAN_SHADOW;
 
-	if (!execmem_params.modules.text.start)
-		return module_alloc(size);
-
 	return execmem_alloc(size, start, end, align, pgprot,
 			     fallback_start, fallback_end, kasan);
 }
@@ -108,8 +105,15 @@ void __init execmem_init(void)
 {
 	struct execmem_params *p = execmem_arch_params();
 
-	if (!p)
+	if (!p) {
+		p = &execmem_params;
+		p->modules.text.start = VMALLOC_START;
+		p->modules.text.end = VMALLOC_END;
+		p->modules.text.pgprot = PAGE_KERNEL_EXEC;
+		p->modules.text.alignment = 1;
+
 		return;
+	}
 
 	if (!execmem_validate_params(p))
 		return;
