@@ -504,6 +504,90 @@ done:
 	return err;
 }
 
+static int dump_btf_meta(const struct btf *btf)
+{
+	const struct btf_header *hdr;
+	const struct btf_kind_layout *k;
+	const void *data;
+	__u32 data_sz;
+	__u8 i, nr_kinds;
+
+	data = btf__raw_data(btf, &data_sz);
+	if (!data)
+		return -ENOMEM;
+	hdr = data;
+	if (json_output) {
+		jsonw_start_object(json_wtr);   /* btf metadata object */
+		jsonw_uint_field(json_wtr, "size", data_sz);
+		jsonw_start_object(json_wtr);
+		jsonw_name(json_wtr, "header");
+		jsonw_uint_field(json_wtr, "magic", hdr->magic);
+		jsonw_uint_field(json_wtr, "version", hdr->version);
+		jsonw_uint_field(json_wtr, "flags", hdr->flags);
+		jsonw_uint_field(json_wtr, "hdr_len", hdr->hdr_len);
+		jsonw_uint_field(json_wtr, "type_len", hdr->type_len);
+		jsonw_uint_field(json_wtr, "type_off", hdr->type_off);
+		jsonw_uint_field(json_wtr, "str_len", hdr->str_len);
+		jsonw_uint_field(json_wtr, "str_off", hdr->str_off);
+	} else {
+		printf("size %-10d\n", data_sz);
+		printf("magic 0x%-10x\nversion %-10d\nflags 0x%-10x\nhdr_len %-10d\n",
+		       hdr->magic, hdr->version, hdr->flags, hdr->hdr_len);
+		printf("type_len %-10d\ntype_off %-10d\n", hdr->type_len, hdr->type_off);
+		printf("str_len %-10d\nstr_off %-10d\n", hdr->str_len, hdr->str_off);
+	}
+
+	if (hdr->hdr_len < sizeof(struct btf_header) ||
+	    hdr->kind_layout_len == 0 || hdr->kind_layout_len == 0) {
+		if (json_output) {
+			jsonw_end_object(json_wtr); /* header object */
+			jsonw_end_object(json_wtr); /* metadata object */
+		}
+		return 0;
+	}
+
+	if (json_output) {
+		jsonw_uint_field(json_wtr, "kind_layout_len", hdr->kind_layout_len);
+		jsonw_uint_field(json_wtr, "kind_layout_offset", hdr->kind_layout_off);
+		jsonw_uint_field(json_wtr, "crc", hdr->crc);
+		jsonw_uint_field(json_wtr, "base_crc", hdr->base_crc);
+		jsonw_end_object(json_wtr); /* end header object */
+
+		jsonw_start_object(json_wtr);
+		jsonw_name(json_wtr, "kind_layouts");
+		jsonw_start_array(json_wtr);
+	} else {
+		printf("kind_layout_len %-10d\nkind_layout_off %-10d\n",
+		       hdr->kind_layout_len, hdr->kind_layout_off);
+		printf("crc 0x%-10x\nbase_crc 0x%-10x\n",
+		       hdr->crc, hdr->base_crc);
+	}
+
+	k = (void *)hdr + hdr->hdr_len + hdr->kind_layout_off;
+	nr_kinds = hdr->kind_layout_len / sizeof(*k);
+	for (i = 0; i < nr_kinds; i++) {
+		if (json_output) {
+			jsonw_start_object(json_wtr);
+			jsonw_name(json_wtr, "kind_layout");
+			jsonw_uint_field(json_wtr, "kind", i);
+			jsonw_uint_field(json_wtr, "flags", k[i].flags);
+			jsonw_uint_field(json_wtr, "info_sz", k[i].info_sz);
+			jsonw_uint_field(json_wtr, "elem_sz", k[i].elem_sz);
+			jsonw_end_object(json_wtr);
+		} else {
+			printf("kind %-4d flags 0x%-4x info_sz %-4d elem_sz %-4d\n",
+			       i, k[i].flags, k[i].info_sz, k[i].elem_sz);
+		}
+	}
+	if (json_output) {
+		jsonw_end_array(json_wtr);
+		jsonw_end_object(json_wtr); /* end kind layout */
+		jsonw_end_object(json_wtr); /* end metadata object */
+	}
+
+	return 0;
+}
+
 static const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
 
 static struct btf *get_vmlinux_btf_from_sysfs(void)
@@ -553,6 +637,7 @@ static int do_dump(int argc, char **argv)
 	__u32 root_type_ids[2];
 	int root_type_cnt = 0;
 	bool dump_c = false;
+	bool dump_meta = false;
 	__u32 btf_id = -1;
 	const char *src;
 	int fd = -1;
@@ -654,10 +739,12 @@ static int do_dump(int argc, char **argv)
 			}
 			if (strcmp(*argv, "c") == 0) {
 				dump_c = true;
+			} else if (is_prefix(*argv, "meta")) {
+				dump_meta = true;
 			} else if (strcmp(*argv, "raw") == 0) {
 				dump_c = false;
 			} else {
-				p_err("unrecognized format specifier: '%s', possible values: raw, c",
+				p_err("unrecognized format specifier: '%s', possible values: raw, c, meta",
 				      *argv);
 				err = -EINVAL;
 				goto done;
@@ -692,6 +779,8 @@ static int do_dump(int argc, char **argv)
 			goto done;
 		}
 		err = dump_btf_c(btf, root_type_ids, root_type_cnt);
+	} else if (dump_meta) {
+		err = dump_btf_meta(btf);
 	} else {
 		err = dump_btf_raw(btf, root_type_ids, root_type_cnt);
 	}
@@ -1063,7 +1152,7 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       BTF_SRC := { id BTF_ID | prog PROG | map MAP [{key | value | kv | all}] | file FILE }\n"
-		"       FORMAT  := { raw | c }\n"
+		"       FORMAT  := { raw | c | meta }\n"
 		"       " HELP_SPEC_MAP "\n"
 		"       " HELP_SPEC_PROGRAM "\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
