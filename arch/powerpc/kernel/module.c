@@ -96,6 +96,11 @@ static struct execmem_params execmem_params = {
 			.alignment = 1,
 		},
 	},
+	.jit = {
+		.text = {
+			.alignment = 1,
+		},
+	},
 };
 
 
@@ -130,6 +135,14 @@ struct execmem_params __init *execmem_arch_params(void)
 #endif
 
 	execmem_params.modules.text.pgprot = prot;
+
+	execmem_params.jit.text.start = VMALLOC_START;
+	execmem_params.jit.text.end = VMALLOC_END;
+
+	if (strict_module_rwx_enabled())
+		execmem_params.jit.text.pgprot = PAGE_KERNEL_ROX;
+	else
+		execmem_params.jit.text.pgprot = PAGE_KERNEL_EXEC;
 
 	return &execmem_params;
 }
