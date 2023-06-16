@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <gelf.h>
+#include <zlib.h>
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"
@@ -882,8 +883,58 @@ void btf__free(struct btf *btf)
 	free(btf);
 }
 
-static struct btf *btf_new_empty(struct btf *base_btf)
+static void btf_add_kind_layout(struct btf *btf, __u8 kind,
+				__u16 flags, __u8 info_sz, __u8 elem_sz)
 {
+	struct btf_kind_layout *k = &btf->kind_layout[kind];
+
+	k->flags = flags;
+	k->info_sz = info_sz;
+	k->elem_sz = elem_sz;
+	btf->hdr->kind_layout_len += sizeof(*k);
+}
+
+static int btf_ensure_modifiable(struct btf *btf);
+
+static int btf_add_kind_layouts(struct btf *btf, struct btf_new_opts *opts)
+{
+	if (btf_ensure_modifiable(btf))
+		return libbpf_err(-ENOMEM);
+
+	btf->kind_layout = calloc(NR_BTF_KINDS, sizeof(struct btf_kind_layout));
+
+	if (!btf->kind_layout)
+		return -ENOMEM;
+
+	/* all supported kinds should describe their layout here. */
+	btf_add_kind_layout(btf, BTF_KIND_UNKN, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_INT, 0, sizeof(__u32), 0);
+	btf_add_kind_layout(btf, BTF_KIND_PTR, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_ARRAY, 0, sizeof(struct btf_array), 0);
+	btf_add_kind_layout(btf, BTF_KIND_STRUCT, 0, 0, sizeof(struct btf_member));
+	btf_add_kind_layout(btf, BTF_KIND_UNION, 0, 0, sizeof(struct btf_member));
+	btf_add_kind_layout(btf, BTF_KIND_ENUM, 0, 0, sizeof(struct btf_enum));
+	btf_add_kind_layout(btf, BTF_KIND_FWD, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_TYPEDEF, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_VOLATILE, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_CONST, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_RESTRICT, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_FUNC, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_FUNC_PROTO, 0, 0, sizeof(struct btf_param));
+	btf_add_kind_layout(btf, BTF_KIND_VAR, 0, sizeof(struct btf_var), 0);
+	btf_add_kind_layout(btf, BTF_KIND_DATASEC, 0, 0, sizeof(struct btf_var_secinfo));
+	btf_add_kind_layout(btf, BTF_KIND_FLOAT, 0, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_DECL_TAG, BTF_KIND_LAYOUT_OPTIONAL,
+							sizeof(struct btf_decl_tag), 0);
+	btf_add_kind_layout(btf, BTF_KIND_TYPE_TAG, BTF_KIND_LAYOUT_OPTIONAL, 0, 0);
+	btf_add_kind_layout(btf, BTF_KIND_ENUM64, 0, 0, sizeof(struct btf_enum64));
+
+	return 0;
+}
+
+static struct btf *btf_new_empty(struct btf_new_opts *opts)
+{
+	struct btf *base_btf = OPTS_GET(opts, base_btf, NULL);
 	struct btf *btf;
 
 	btf = calloc(1, sizeof(*btf));
@@ -920,17 +971,53 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 	btf->strs_data = btf->raw_data + btf->hdr->hdr_len;
 	btf->hdr->str_len = base_btf ? 0 : 1; /* empty string at offset 0 */
 
+	if (opts->add_kind_layout) {
+		int err = btf_add_kind_layouts(btf, opts);
+
+		if (err) {
+			free(btf->raw_data);
+			free(btf);
+			return ERR_PTR(err);
+		}
+	}
+	if (opts->add_crc) {
+		if (btf->base_btf) {
+			struct btf_header *base_hdr = btf->base_btf->hdr;
+
+			if (base_hdr->hdr_len >= sizeof(struct btf_header) &&
+			    base_hdr->flags & BTF_FLAG_CRC_SET) {
+				btf->hdr->base_crc = base_hdr->crc;
+				btf->hdr->flags |= BTF_FLAG_BASE_CRC_SET;
+			}
+		}
+		btf->hdr->flags |= BTF_FLAG_CRC_SET;
+	}
+
 	return btf;
 }
 
 struct btf *btf__new_empty(void)
 {
-	return libbpf_ptr(btf_new_empty(NULL));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	return libbpf_ptr(btf_new_empty(&opts));
 }
 
 struct btf *btf__new_empty_split(struct btf *base_btf)
 {
-	return libbpf_ptr(btf_new_empty(base_btf));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	opts.base_btf = base_btf;
+
+	return libbpf_ptr(btf_new_empty(&opts));
+}
+
+struct btf *btf__new_empty_opts(struct btf_new_opts *opts)
+{
+	if (!OPTS_VALID(opts, btf_new_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	return libbpf_ptr(btf_new_empty(opts));
 }
 
 static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
@@ -1377,6 +1464,12 @@ static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endi
 			btf_bswap_kind_layout_sec(p, hdr->kind_layout_len);
 		p += hdr->kind_layout_len;
 	}
+	if (hdr->flags & BTF_FLAG_CRC_SET) {
+		struct btf_header *h = data;
+
+		h->crc = crc32(0L, (const Bytef *)&data, sizeof(data));
+	}
+
 	*size = data_sz;
 	return data;
 err_out:
