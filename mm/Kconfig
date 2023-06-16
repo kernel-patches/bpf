@@ -1206,6 +1206,9 @@ config PER_VMA_LOCK
 	  This feature allows locking each virtual memory area separately when
 	  handling page faults instead of taking mmap_lock.
 
+config EXECMEM
+	bool
+
 source "mm/damon/Kconfig"
 
 endmenu
