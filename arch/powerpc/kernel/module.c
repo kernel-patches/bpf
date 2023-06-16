@@ -103,6 +103,10 @@ struct execmem_params __init *execmem_arch_params(void)
 {
 	pgprot_t prot = strict_module_rwx_enabled() ? PAGE_KERNEL : PAGE_KERNEL_EXEC;
 
+	/*
+	 * BOOK3S_32 and 8xx define MODULES_VADDR for text allocations and
+	 * allow allocating data in the entire vmalloc space
+	 */
 #ifdef MODULES_VADDR
 	unsigned long limit = (unsigned long)_etext - SZ_32M;
 
@@ -116,6 +120,10 @@ struct execmem_params __init *execmem_arch_params(void)
 		execmem_params.modules.text.start = MODULES_VADDR;
 		execmem_params.modules.text.end = MODULES_END;
 	}
+	execmem_params.modules.data.start = VMALLOC_START;
+	execmem_params.modules.data.end = VMALLOC_END;
+	execmem_params.modules.data.pgprot = PAGE_KERNEL;
+	execmem_params.modules.data.alignment = 1;
 #else
 	execmem_params.modules.text.start = VMALLOC_START;
 	execmem_params.modules.text.end = VMALLOC_END;

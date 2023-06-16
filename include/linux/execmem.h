@@ -44,10 +44,12 @@ enum execmem_module_flags {
  *				  space
  * @flags:	options for module memory allocations
  * @text:	address range for text allocations
+ * @data:	address range for data allocations
  */
 struct execmem_modules_range {
 	enum execmem_module_flags flags;
 	struct execmem_range text;
+	struct execmem_range data;
 };
 
 /**
@@ -88,6 +90,22 @@ struct execmem_params *execmem_arch_params(void);
  * Return: a pointer to the allocated memory or %NULL
  */
 void *execmem_text_alloc(size_t size);
+
+/**
+ * execmem_data_alloc - allocate memory for data coupled to code
+ * @size: how many bytes of memory are required
+ *
+ * Allocates memory that will contain data copupled with executable code,
+ * like data sections in kernel modules.
+ *
+ * The memory will have protections defined by architecture.
+ *
+ * The allocated memory will reside in an area that does not impose
+ * restrictions on the addressing modes.
+ *
+ * Return: a pointer to the allocated memory or %NULL
+ */
+void *execmem_data_alloc(size_t size);
 
 /**
  * execmem_free - free executable memory

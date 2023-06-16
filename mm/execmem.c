@@ -63,6 +63,20 @@ void *execmem_text_alloc(size_t size)
 			     fallback_start, fallback_end, kasan);
 }
 
+void *execmem_data_alloc(size_t size)
+{
+	unsigned long start = execmem_params.modules.data.start;
+	unsigned long end = execmem_params.modules.data.end;
+	pgprot_t pgprot = execmem_params.modules.data.pgprot;
+	unsigned int align = execmem_params.modules.data.alignment;
+	unsigned long fallback_start = execmem_params.modules.data.fallback_start;
+	unsigned long fallback_end = execmem_params.modules.data.fallback_end;
+	bool kasan = execmem_params.modules.flags & EXECMEM_KASAN_SHADOW;
+
+	return execmem_alloc(size, start, end, align, pgprot,
+			     fallback_start, fallback_end, kasan);
+}
+
 void execmem_free(void *ptr)
 {
 	/*
@@ -101,6 +115,28 @@ static bool execmem_validate_params(struct execmem_params *p)
 	return true;
 }
 
+static void execmem_init_missing(struct execmem_params *p)
+{
+	struct execmem_modules_range *m = &p->modules;
+
+	if (!pgprot_val(execmem_params.modules.data.pgprot))
+		execmem_params.modules.data.pgprot = PAGE_KERNEL;
+
+	if (!execmem_params.modules.data.alignment)
+		execmem_params.modules.data.alignment = m->text.alignment;
+
+	if (!execmem_params.modules.data.start) {
+		execmem_params.modules.data.start = m->text.start;
+		execmem_params.modules.data.end = m->text.end;
+	}
+
+	if (!execmem_params.modules.data.fallback_start &&
+	    execmem_params.modules.text.fallback_start) {
+		execmem_params.modules.data.fallback_start = m->text.fallback_start;
+		execmem_params.modules.data.fallback_end = m->text.fallback_end;
+	}
+}
+
 void __init execmem_init(void)
 {
 	struct execmem_params *p = execmem_arch_params();
@@ -112,6 +148,11 @@ void __init execmem_init(void)
 		p->modules.text.pgprot = PAGE_KERNEL_EXEC;
 		p->modules.text.alignment = 1;
 
+		p->modules.data.start = VMALLOC_START;
+		p->modules.data.end = VMALLOC_END;
+		p->modules.data.pgprot = PAGE_KERNEL;
+		p->modules.data.alignment = 1;
+
 		return;
 	}
 
@@ -119,4 +160,6 @@ void __init execmem_init(void)
 		return;
 
 	execmem_params = *p;
+
+	execmem_init_missing(p);
 }
