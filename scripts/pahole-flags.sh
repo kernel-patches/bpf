@@ -25,6 +25,13 @@ if [ "${pahole_ver}" -ge "124" ]; then
 fi
 if [ "${pahole_ver}" -ge "125" ]; then
 	extra_paholeopt="${extra_paholeopt} --skip_encoding_btf_inconsistent_proto --btf_gen_optimized"
+	pahole_help="$(${PAHOLE} --help)"
+	if [[ "$pahole_help" =~ "btf_gen_kind_layout" ]]; then
+		extra_paholeopt="${extra_paholeopt} --btf_gen_kind_layout"
+	fi
+	if [[ "$pahole_help" =~ "btf_gen_crc" ]]; then
+		extra_paholeopt="${extra_paholeopt} --btf_gen_crc"
+	fi
 fi
 
 echo ${extra_paholeopt}
