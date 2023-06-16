@@ -34,6 +34,7 @@
 #include <linux/percpu.h>
 #include <asm/processor.h>
 #include <linux/uaccess.h>
+#include <linux/execmem.h>
 #include <asm/pgalloc.h>
 #include <asm/kfence.h>
 #include <asm/ptdump.h>
@@ -311,3 +312,43 @@ void arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 	vmem_remove_mapping(start, size);
 }
 #endif /* CONFIG_MEMORY_HOTPLUG */
+
+#ifdef CONFIG_EXECMEM
+static unsigned long get_module_load_offset(void)
+{
+	static DEFINE_MUTEX(module_kaslr_mutex);
+	static unsigned long module_load_offset;
+
+	if (!kaslr_enabled())
+		return 0;
+	/*
+	 * Calculate the module_load_offset the first time this code
+	 * is called. Once calculated it stays the same until reboot.
+	 */
+	mutex_lock(&module_kaslr_mutex);
+	if (!module_load_offset)
+		module_load_offset = get_random_u32_inclusive(1, 1024) * PAGE_SIZE;
+	mutex_unlock(&module_kaslr_mutex);
+	return module_load_offset;
+}
+
+static struct execmem_params execmem_params = {
+	.modules = {
+		.flags = EXECMEM_KASAN_SHADOW,
+		.text = {
+			.alignment = MODULE_ALIGN,
+			.pgprot = PAGE_KERNEL,
+		},
+	},
+};
+
+struct execmem_params __init *execmem_arch_params(void)
+{
+	unsigned long start = MODULES_VADDR + get_module_load_offset();
+
+	execmem_params.modules.text.start = start;
+	execmem_params.modules.text.end = MODULES_END;
+
+	return &execmem_params;
+}
+#endif

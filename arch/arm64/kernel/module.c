@@ -17,60 +17,10 @@
 #include <linux/moduleloader.h>
 #include <linux/scs.h>
 #include <linux/vmalloc.h>
-#include <linux/execmem.h>
 #include <asm/alternative.h>
 #include <asm/insn.h>
 #include <asm/scs.h>
 #include <asm/sections.h>
-
-static struct execmem_params execmem_params = {
-	.modules = {
-		.flags = EXECMEM_KASAN_SHADOW,
-		.text = {
-			.alignment = MODULE_ALIGN,
-		},
-	},
-	.jit = {
-		.text = {
-			.start = VMALLOC_START,
-			.end = VMALLOC_END,
-			.alignment = 1,
-		},
-	},
-};
-
-struct execmem_params __init *execmem_arch_params(void)
-{
-	u64 module_alloc_end = module_alloc_base + MODULES_VSIZE;
-
-	execmem_params.modules.text.pgprot = PAGE_KERNEL;
-	execmem_params.modules.text.start = module_alloc_base;
-	execmem_params.modules.text.end = module_alloc_end;
-
-	execmem_params.jit.text.pgprot = PAGE_KERNEL_ROX;
-
-	/*
-	 * KASAN without KASAN_VMALLOC can only deal with module
-	 * allocations being served from the reserved module region,
-	 * since the remainder of the vmalloc region is already
-	 * backed by zero shadow pages, and punching holes into it
-	 * is non-trivial. Since the module region is not randomized
-	 * when KASAN is enabled without KASAN_VMALLOC, it is even
-	 * less likely that the module region gets exhausted, so we
-	 * can simply omit this fallback in that case.
-	 */
-	if (IS_ENABLED(CONFIG_ARM64_MODULE_PLTS) &&
-	    (IS_ENABLED(CONFIG_KASAN_VMALLOC) ||
-	     (!IS_ENABLED(CONFIG_KASAN_GENERIC) &&
-	      !IS_ENABLED(CONFIG_KASAN_SW_TAGS)))) {
-		unsigned long end = module_alloc_base + SZ_2G;
-
-		execmem_params.modules.text.fallback_start = module_alloc_base;
-		execmem_params.modules.text.fallback_end = end;
-	}
-
-	return &execmem_params;
-}
 
 enum aarch64_reloc_op {
 	RELOC_OP_NONE,

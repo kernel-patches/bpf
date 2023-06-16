@@ -214,6 +214,14 @@ static inline bool kaslr_enabled(void)
 	return kaslr_offset() >= MIN_KIMG_ALIGN;
 }
 
+#ifdef CONFIG_RANDOMIZE_BASE
+extern u64 module_alloc_base;
+int kaslr_init(void);
+#else
+static int kaslr_init(void) {}
+#define module_alloc_base	((u64)_etext - MODULES_VSIZE)
+#endif
+
 /*
  * Allow all memory at the discovery stage. We will clip it later.
  */

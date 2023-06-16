@@ -10,7 +10,6 @@
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 #include <linux/bug.h>
-#include <linux/execmem.h>
 #include <asm/module.h>
 #include <linux/uaccess.h>
 #include <asm/firmware.h>
@@ -88,61 +87,4 @@ int module_finalize(const Elf_Ehdr *hdr,
 				 (void *)sect->sh_addr + sect->sh_size);
 
 	return 0;
-}
-
-static struct execmem_params execmem_params = {
-	.modules = {
-		.text = {
-			.alignment = 1,
-		},
-	},
-	.jit = {
-		.text = {
-			.alignment = 1,
-		},
-	},
-};
-
-
-struct execmem_params __init *execmem_arch_params(void)
-{
-	pgprot_t prot = strict_module_rwx_enabled() ? PAGE_KERNEL : PAGE_KERNEL_EXEC;
-
-	/*
-	 * BOOK3S_32 and 8xx define MODULES_VADDR for text allocations and
-	 * allow allocating data in the entire vmalloc space
-	 */
-#ifdef MODULES_VADDR
-	unsigned long limit = (unsigned long)_etext - SZ_32M;
-
-	/* First try within 32M limit from _etext to avoid branch trampolines */
-	if (MODULES_VADDR < PAGE_OFFSET && MODULES_END > limit) {
-		execmem_params.modules.text.start = limit;
-		execmem_params.modules.text.end = MODULES_END;
-		execmem_params.modules.text.fallback_start = MODULES_VADDR;
-		execmem_params.modules.text.fallback_end = MODULES_END;
-	} else {
-		execmem_params.modules.text.start = MODULES_VADDR;
-		execmem_params.modules.text.end = MODULES_END;
-	}
-	execmem_params.modules.data.start = VMALLOC_START;
-	execmem_params.modules.data.end = VMALLOC_END;
-	execmem_params.modules.data.pgprot = PAGE_KERNEL;
-	execmem_params.modules.data.alignment = 1;
-#else
-	execmem_params.modules.text.start = VMALLOC_START;
-	execmem_params.modules.text.end = VMALLOC_END;
-#endif
-
-	execmem_params.modules.text.pgprot = prot;
-
-	execmem_params.jit.text.start = VMALLOC_START;
-	execmem_params.jit.text.end = VMALLOC_END;
-
-	if (strict_module_rwx_enabled())
-		execmem_params.jit.text.pgprot = PAGE_KERNEL_ROX;
-	else
-		execmem_params.jit.text.pgprot = PAGE_KERNEL_EXEC;
-
-	return &execmem_params;
 }

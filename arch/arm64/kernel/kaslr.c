@@ -25,7 +25,7 @@ u16 __initdata memstart_offset_seed;
 
 struct arm64_ftr_override kaslr_feature_override __initdata;
 
-static int __init kaslr_init(void)
+int __init kaslr_init(void)
 {
 	u64 module_range;
 	u32 seed;
@@ -90,4 +90,3 @@ static int __init kaslr_init(void)
 
 	return 0;
 }
-subsys_initcall(kaslr_init)
