@@ -8,6 +8,22 @@
 #define BTF_MAGIC	0xeB9F
 #define BTF_VERSION	1
 
+/* is this information required? If so it cannot be sanitized safely. */
+#define BTF_KIND_LAYOUT_OPTIONAL		(1 << 0)
+
+/* kind layout section consists of a struct btf_kind_layout for each known
+ * kind at BTF encoding time.
+ */
+struct btf_kind_layout {
+	__u16 flags;		/* see BTF_KIND_LAYOUT_* values above */
+	__u8 info_sz;		/* size of singular element after btf_type */
+	__u8 elem_sz;		/* size of each of btf_vlen(t) elements */
+};
+
+/* for CRCs for BTF, base BTF to be considered usable, flags must be set. */
+#define BTF_FLAG_CRC_SET		(1 << 0)
+#define BTF_FLAG_BASE_CRC_SET		(1 << 1)
+
 struct btf_header {
 	__u16	magic;
 	__u8	version;
@@ -19,7 +35,15 @@ struct btf_header {
 	__u32	type_len;	/* length of type section	*/
 	__u32	str_off;	/* offset of string section	*/
 	__u32	str_len;	/* length of string section	*/
+	__u32	kind_layout_off;/* offset of kind layout section */
+	__u32	kind_layout_len;/* length of kind layout section */
+
+	__u32	crc;		/* crc of BTF; used if flags set BTF_FLAG_CRC_VALID */
+	__u32	base_crc;	/* crc of base BTF; used if flags set BTF_FLAG_BASE_CRC_VALID */
 };
+
+/* required minimum BTF header length */
+#define BTF_HEADER_MIN_LEN	(sizeof(struct btf_header) - 16)
 
 /* Max # of type identifier */
 #define BTF_MAX_TYPE	0x000fffff
