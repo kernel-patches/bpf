@@ -39,40 +39,44 @@ struct btf {
 
 	/*
 	 * When BTF is loaded from an ELF or raw memory it is stored
-	 * in a contiguous memory block. The hdr, type_data, and, strs_data
-	 * point inside that memory region to their respective parts of BTF
-	 * representation:
+	 * in a contiguous memory block. The hdr, type_data, strs_data,
+	 * and optional kind layout point inside that memory region to their
+	 * respective parts of BTF representation:
 	 *
-	 * +--------------------------------+
-	 * |  Header  |  Types  |  Strings  |
-	 * +--------------------------------+
-	 * ^          ^         ^
-	 * |          |         |
-	 * hdr        |         |
-	 * types_data-+         |
-	 * strs_data------------+
+	 * +--------------------------------+-------------+
+	 * |  Header  |  Types  |  Strings  | Kind Layout |
+	 * +--------------------------------+-------------+
+	 * ^          ^         ^           ^
+	 * |          |         |           |
+	 * hdr        |         |           |
+	 * types_data-+         |           |
+	 * strs_data------------+           |
+	 * kind_layout----------------------+
+	 *
+	 * kind_layout is optional.
 	 *
 	 * If BTF data is later modified, e.g., due to types added or
 	 * removed, BTF deduplication performed, etc, this contiguous
-	 * representation is broken up into three independently allocated
-	 * memory regions to be able to modify them independently.
+	 * representation is broken up into three or four independently
+	 * allocated memory regions to be able to modify them independently.
 	 * raw_data is nulled out at that point, but can be later allocated
 	 * and cached again if user calls btf__raw_data(), at which point
-	 * raw_data will contain a contiguous copy of header, types, and
-	 * strings:
+	 * raw_data will contain a contiguous copy of header, types, strings
+	 * and (again optionally) kind layout:
 	 *
-	 * +----------+  +---------+  +-----------+
-	 * |  Header  |  |  Types  |  |  Strings  |
-	 * +----------+  +---------+  +-----------+
-	 * ^             ^            ^
-	 * |             |            |
-	 * hdr           |            |
-	 * types_data----+            |
-	 * strset__data(strs_set)-----+
+	 * +----------+  +---------+  +-----------+  +-------------+
+	 * |  Header  |  |  Types  |  |  Strings  |  | Kind layout |
+	 * +----------+  +---------+  +-----------+  +-------------+
+	 * ^             ^            ^              ^
+	 * |             |            |              |
+	 * hdr           |            |              |
+	 * types_data----+            |              |
+	 * strset__data(strs_set)-----+              |
+	 * kind_layout-------------------------------+
 	 *
-	 *               +----------+---------+-----------+
-	 *               |  Header  |  Types  |  Strings  |
-	 * raw_data----->+----------+---------+-----------+
+	 *               +----------+---------+-----------+-------------+
+	 *               |  Header  |  Types  |  Strings  | Kind Layout |
+	 * raw_data----->+----------+---------+-----------+-------------+
 	 */
 	struct btf_header *hdr;
 
@@ -115,6 +119,8 @@ struct btf {
 	struct strset *strs_set;
 	/* whether strings are already deduplicated */
 	bool strs_deduped;
+
+	struct btf_kind_layout *kind_layout;
 
 	/* BTF object FD, if loaded into kernel */
 	int fd;
@@ -215,6 +221,13 @@ static void btf_bswap_hdr(struct btf_header *h)
 	h->type_len = bswap_32(h->type_len);
 	h->str_off = bswap_32(h->str_off);
 	h->str_len = bswap_32(h->str_len);
+	if (h->hdr_len >= sizeof(struct btf_header)) {
+		h->kind_layout_off = bswap_32(h->kind_layout_off);
+		h->kind_layout_len = bswap_32(h->kind_layout_len);
+		h->crc = bswap_32(h->crc);
+		h->base_crc = bswap_32(h->base_crc);
+	}
+
 }
 
 static int btf_parse_hdr(struct btf *btf)
@@ -222,14 +235,17 @@ static int btf_parse_hdr(struct btf *btf)
 	struct btf_header *hdr = btf->hdr;
 	__u32 meta_left;
 
-	if (btf->raw_size < sizeof(struct btf_header)) {
+	if (btf->raw_size < BTF_HEADER_MIN_LEN) {
 		pr_debug("BTF header not found\n");
 		return -EINVAL;
 	}
 
 	if (hdr->magic == bswap_16(BTF_MAGIC)) {
+		int swapped_len = bswap_32(hdr->hdr_len);
+
 		btf->swapped_endian = true;
-		if (bswap_32(hdr->hdr_len) != sizeof(struct btf_header)) {
+		if (swapped_len != sizeof(struct btf_header) &&
+		    swapped_len != BTF_HEADER_MIN_LEN) {
 			pr_warn("Can't load BTF with non-native endianness due to unsupported header length %u\n",
 				bswap_32(hdr->hdr_len));
 			return -ENOTSUP;
@@ -282,6 +298,32 @@ static int btf_parse_str_sec(struct btf *btf)
 		pr_debug("Invalid BTF string section\n");
 		return -EINVAL;
 	}
+	return 0;
+}
+
+static void btf_bswap_kind_layout_sec(struct btf_kind_layout *k, int len)
+{
+	struct btf_kind_layout *end = (void *)k + len;
+
+	while (k < end) {
+		k->flags = bswap_16(k->flags);
+		k++;
+	}
+}
+
+static int btf_parse_kind_layout_sec(struct btf *btf)
+{
+	const struct btf_header *hdr = btf->hdr;
+
+	if (hdr->hdr_len < sizeof(struct btf_header) ||
+	    !hdr->kind_layout_off || !hdr->kind_layout_len)
+		return 0;
+	if (hdr->kind_layout_len < sizeof(struct btf_kind_layout)) {
+		pr_debug("Invalid BTF kind layout section\n");
+		return -EINVAL;
+	}
+	btf->kind_layout = btf->raw_data + btf->hdr->hdr_len + btf->hdr->kind_layout_off;
+
 	return 0;
 }
 
@@ -901,6 +943,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 	btf->types_data = btf->raw_data + btf->hdr->hdr_len + btf->hdr->type_off;
 
 	err = btf_parse_str_sec(btf);
+	err = err ?: btf_parse_kind_layout_sec(btf);
 	err = err ?: btf_parse_type_sec(btf);
 	if (err)
 		goto done;
@@ -1267,6 +1310,11 @@ static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endi
 	}
 
 	data_sz = hdr->hdr_len + hdr->type_len + hdr->str_len;
+	if (btf->kind_layout) {
+		data_sz = roundup(data_sz, 4);
+		data_sz += hdr->kind_layout_len;
+		hdr->kind_layout_off = roundup(hdr->type_len + hdr->str_len, 4);
+	}
 	data = calloc(1, data_sz);
 	if (!data)
 		return NULL;
@@ -1293,8 +1341,15 @@ static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endi
 	p += hdr->type_len;
 
 	memcpy(p, btf_strs_data(btf), hdr->str_len);
-	p += hdr->str_len;
+	/* round up to 4 byte alignment to match offset above */
+	p = data + hdr->hdr_len + roundup(hdr->type_len + hdr->str_len, 4);
 
+	if (btf->kind_layout) {
+		memcpy(p, btf->kind_layout, hdr->kind_layout_len);
+		if (swap_endian)
+			btf_bswap_kind_layout_sec(p, hdr->kind_layout_len);
+		p += hdr->kind_layout_len;
+	}
 	*size = data_sz;
 	return data;
 err_out:
@@ -1425,13 +1480,13 @@ static void btf_invalidate_raw_data(struct btf *btf)
 	}
 }
 
-/* Ensure BTF is ready to be modified (by splitting into a three memory
- * regions for header, types, and strings). Also invalidate cached
- * raw_data, if any.
+/* Ensure BTF is ready to be modified (by splitting into a three or four memory
+ * regions for header, types, strings and optional kind layout). Also invalidate
+ * cached raw_data, if any.
  */
 static int btf_ensure_modifiable(struct btf *btf)
 {
-	void *hdr, *types;
+	void *hdr, *types, *kind_layout = NULL;
 	struct strset *set = NULL;
 	int err = -ENOMEM;
 
@@ -1446,9 +1501,17 @@ static int btf_ensure_modifiable(struct btf *btf)
 	types = malloc(btf->hdr->type_len);
 	if (!hdr || !types)
 		goto err_out;
+	if (btf->hdr->hdr_len >= sizeof(struct btf_header)  &&
+	    btf->hdr->kind_layout_off && btf->hdr->kind_layout_len) {
+		kind_layout = calloc(1, btf->hdr->kind_layout_len);
+		if (!kind_layout)
+			goto err_out;
+	}
 
 	memcpy(hdr, btf->hdr, btf->hdr->hdr_len);
 	memcpy(types, btf->types_data, btf->hdr->type_len);
+	if (kind_layout)
+		memcpy(kind_layout, btf->kind_layout, btf->hdr->kind_layout_len);
 
 	/* build lookup index for all strings */
 	set = strset__new(BTF_MAX_STR_OFFSET, btf->strs_data, btf->hdr->str_len);
@@ -1463,6 +1526,8 @@ static int btf_ensure_modifiable(struct btf *btf)
 	btf->types_data_cap = btf->hdr->type_len;
 	btf->strs_data = NULL;
 	btf->strs_set = set;
+	btf->kind_layout = kind_layout;
+
 	/* if BTF was created from scratch, all strings are guaranteed to be
 	 * unique and deduplicated
 	 */
@@ -1480,6 +1545,7 @@ err_out:
 	strset__free(set);
 	free(hdr);
 	free(types);
+	free(kind_layout);
 	return err;
 }
 
