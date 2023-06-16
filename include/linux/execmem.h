@@ -53,11 +53,22 @@ struct execmem_modules_range {
 };
 
 /**
+ * struct execmem_jit_range - architecure parameters for address space
+ *			      suitable for JIT code allocations
+ * @text:	address range for text allocations
+ */
+struct execmem_jit_range {
+	struct execmem_range text;
+};
+
+/**
  * struct execmem_params -	architecure parameters for code allocations
  * @modules:	parameters for modules address space
+ * @jit:	parameters for jit memory address space
  */
 struct execmem_params {
 	struct execmem_modules_range	modules;
+	struct execmem_jit_range	jit;
 };
 
 /**
