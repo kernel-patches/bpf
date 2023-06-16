@@ -9,22 +9,36 @@
  *			  related data allocations
  * @start:	address space start
  * @end:	address space end (inclusive)
+ * @fallback_start:	start of the range for fallback allocations
+ * @fallback_end:	end of the range for fallback allocations (inclusive)
  * @pgprot:	permisssions for memory in this address space
  * @alignment:	alignment required for text allocations
  */
 struct execmem_range {
 	unsigned long   start;
 	unsigned long   end;
+	unsigned long   fallback_start;
+	unsigned long   fallback_end;
 	pgprot_t        pgprot;
 	unsigned int	alignment;
 };
 
 /**
+ * enum execmem_module_flags - options for executable memory allocations
+ * @EXECMEM_KASAN_SHADOW:	allocate kasan shadow
+ */
+enum execmem_module_flags {
+	EXECMEM_KASAN_SHADOW	= (1 << 0),
+};
+
+/**
  * struct execmem_modules_range - architecure parameters for modules address
  *				  space
+ * @flags:	options for module memory allocations
  * @text:	address range for text allocations
  */
 struct execmem_modules_range {
+	enum execmem_module_flags flags;
 	struct execmem_range text;
 };
 

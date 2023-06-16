@@ -19,6 +19,7 @@
 #include <linux/jump_label.h>
 #include <linux/random.h>
 #include <linux/memory.h>
+#include <linux/execmem.h>
 
 #include <asm/text-patching.h>
 #include <asm/page.h>
@@ -65,26 +66,24 @@ static unsigned long int get_module_load_offset(void)
 }
 #endif
 
-void *module_alloc(unsigned long size)
+static struct execmem_params execmem_params = {
+	.modules = {
+		.flags = EXECMEM_KASAN_SHADOW,
+		.text = {
+			.alignment = MODULE_ALIGN,
+		},
+	},
+};
+
+struct execmem_params __init *execmem_arch_params(void)
 {
-	gfp_t gfp_mask = GFP_KERNEL;
-	void *p;
+	unsigned long start = MODULES_VADDR + get_module_load_offset();
 
-	if (PAGE_ALIGN(size) > MODULES_LEN)
-		return NULL;
+	execmem_params.modules.text.start = start;
+	execmem_params.modules.text.end = MODULES_END;
+	execmem_params.modules.text.pgprot = PAGE_KERNEL;
 
-	p = __vmalloc_node_range(size, MODULE_ALIGN,
-				 MODULES_VADDR + get_module_load_offset(),
-				 MODULES_END, gfp_mask, PAGE_KERNEL,
-				 VM_FLUSH_RESET_PERMS | VM_DEFER_KMEMLEAK,
-				 NUMA_NO_NODE, __builtin_return_address(0));
-
-	if (p && (kasan_alloc_module_shadow(p, size, gfp_mask) < 0)) {
-		vfree(p);
-		return NULL;
-	}
-
-	return p;
+	return &execmem_params;
 }
 
 #ifdef CONFIG_X86_32
