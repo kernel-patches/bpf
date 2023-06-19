@@ -6,6 +6,7 @@
 #include <linux/irq_work.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
+#include <linux/task_work.h>
 #include <asm/local.h>
 
 /* Any context (including NMI) BPF specific memory allocator.
@@ -122,6 +123,16 @@ struct bpf_reuse_batch {
 	struct llist_node *head;
 	struct rcu_head rcu;
 };
+
+#define BPF_GP_ACC_RUNNING 0
+
+struct bpf_rcu_gp_acc_ctx {
+	unsigned long flags;
+	unsigned long next_run;
+	struct callback_head work;
+};
+
+static DEFINE_PER_CPU(struct bpf_rcu_gp_acc_ctx, bpf_acc_ctx);
 
 static struct llist_node notrace *__llist_del_first(struct llist_head *head)
 {
@@ -347,11 +358,46 @@ static void dyn_reuse_rcu(struct rcu_head *rcu)
 	kfree(batch);
 }
 
+static void bpf_rcu_gp_acc_work(struct callback_head *head)
+{
+	struct bpf_rcu_gp_acc_ctx *ctx = container_of(head, struct bpf_rcu_gp_acc_ctx, work);
+
+	local_irq_disable();
+	rcu_momentary_dyntick_idle();
+	local_irq_enable();
+
+	/* The interval between rcu_momentary_dyntick_idle() calls is
+	 * at least 10ms.
+	 */
+	WRITE_ONCE(ctx->next_run, jiffies + msecs_to_jiffies(10));
+	clear_bit(BPF_GP_ACC_RUNNING, &ctx->flags);
+}
+
+static void bpf_mem_rcu_gp_acc(struct bpf_mem_cache *c)
+{
+	struct bpf_rcu_gp_acc_ctx *ctx = this_cpu_ptr(&bpf_acc_ctx);
+
+	if (atomic_read(&c->dyn_reuse_rcu_cnt) < 128 ||
+	    time_before(jiffies, READ_ONCE(ctx->next_run)))
+		return;
+
+	if ((current->flags & PF_KTHREAD) ||
+	    test_and_set_bit(BPF_GP_ACC_RUNNING, &ctx->flags))
+		return;
+
+	init_task_work(&ctx->work, bpf_rcu_gp_acc_work);
+	/* Task is exiting ? */
+	if (task_work_add(current, &ctx->work, TWA_RESUME))
+		clear_bit(BPF_GP_ACC_RUNNING, &ctx->flags);
+}
+
 static void reuse_bulk(struct bpf_mem_cache *c)
 {
 	struct llist_node *head, *tail;
 	struct bpf_reuse_batch *batch;
 	unsigned long flags;
+
+	bpf_mem_rcu_gp_acc(c);
 
 	head = llist_del_all(&c->free_llist_extra);
 	tail = head;
