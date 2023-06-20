@@ -15402,7 +15402,10 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		      struct bpf_func_state *cur, struct bpf_idmap *idmap)
 {
+	struct bpf_reg_state zero_reg = {};
 	int i, spi;
+
+	__mark_reg_const_zero(&zero_reg);
 
 	/* walk slots of the explored stack and ignore any additional
 	 * slots in the current stack, since explored(safe) state
@@ -15438,6 +15441,14 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		 */
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC &&
 		    cur->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO)
+			continue;
+		if (is_spilled_scalar_reg(&old->stack[spi]) &&
+		    cur->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO &&
+		    regsafe(env, &old->stack[spi].spilled_ptr, &zero_reg, idmap))
+			continue;
+		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO &&
+		    is_spilled_scalar_reg(&cur->stack[spi]) &&
+		    regsafe(env, &zero_reg, &cur->stack[spi].spilled_ptr, idmap))
 			continue;
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
 		    cur->stack[spi].slot_type[i % BPF_REG_SIZE])
