@@ -153,6 +153,7 @@ __test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_mul
 	struct bpf_link *link1 = NULL, *link2 = NULL;
 	struct bpf_link *link3 = NULL, *link4 = NULL;
 	pid_t pid = child ? child->pid : -1;
+	struct bpf_link *link_extra = NULL;
 	struct uprobe_multi *skel = NULL;
 
 	skel = uprobe_multi__open_and_load();
@@ -183,9 +184,16 @@ __test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_mul
 	if (!ASSERT_OK_PTR(link2, "bpf_program__attach_uprobe_multi_opts_retprobe"))
 		goto cleanup;
 
+	opts->retprobe = false;
+	link_extra = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uprobe_extra, -1,
+						      binary, pattern, opts);
+	if (!ASSERT_OK_PTR(link_extra, "bpf_program__attach_uprobe_multi_opts"))
+		goto cleanup;
+
 	uprobe_multi_test_run(skel, child);
 
 cleanup:
+	bpf_link__destroy(link_extra);
 	bpf_link__destroy(link4);
 	bpf_link__destroy(link3);
 	bpf_link__destroy(link2);
@@ -243,6 +251,7 @@ static void __test_link_api(struct child *child)
 		"uprobe_multi_func_2",
 		"uprobe_multi_func_3",
 	};
+	int link_extra_fd = -1;
 	int err;
 
 	err = elf_find_multi_func_offset(path, 3, syms, (unsigned long **) &offsets);
@@ -281,6 +290,14 @@ static void __test_link_api(struct child *child)
 	link4_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link2_fd, 0, "link4_fd"))
 		goto cleanup;
+
+	opts.kprobe_multi.flags = 0;
+	opts.uprobe_multi.pid = 0;
+	prog_fd = bpf_program__fd(skel->progs.test_uprobe_extra);
+	link_extra_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	if (!ASSERT_GE(link_extra_fd, 0, "link_extra_fd"))
+		goto cleanup;
+
 	uprobe_multi_test_run(skel, child);
 
 cleanup:
@@ -292,6 +309,8 @@ cleanup:
 		close(link3_fd);
 	if (link4_fd >= 0)
 		close(link4_fd);
+	if (link_extra_fd >= 0)
+		close(link_extra_fd);
 
 	uprobe_multi__destroy(skel);
 	free(offsets);
