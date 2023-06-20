@@ -11053,6 +11053,118 @@ out:
 	return ret;
 }
 
+struct elf_symbol_offset {
+	const char *name;
+	unsigned long offset;
+	int bind;
+	int idx;
+};
+
+static int cmp_func_offset(const void *_a, const void *_b)
+{
+	const struct elf_symbol_offset *a = _a;
+	const struct elf_symbol_offset *b = _b;
+
+	return strcmp(a->name, b->name);
+}
+
+static int
+__elf_find_multi_func_offset(Elf *elf, const char *binary_path, int cnt,
+			     const char **syms, unsigned long **poffsets)
+{
+	int sh_types[2] = { SHT_DYNSYM, SHT_SYMTAB };
+	struct elf_symbol_offset *func_offs;
+	int err = 0, i, idx, cnt_done = 0;
+	unsigned long *offsets = NULL;
+
+	func_offs = calloc(cnt, sizeof(*func_offs));
+	if (!func_offs)
+		return -ENOMEM;
+
+	for (i = 0; i < cnt; i++) {
+		func_offs[i].name = syms[i];
+		func_offs[i].idx = i;
+	}
+
+	qsort(func_offs, cnt, sizeof(*func_offs), cmp_func_offset);
+
+	for (i = 0; i < ARRAY_SIZE(sh_types); i++) {
+		struct elf_symbol_iter iter;
+		struct elf_symbol *sym;
+
+		if (elf_symbol_iter_new(&iter, elf, binary_path, sh_types[i]))
+			continue;
+
+		while ((sym = elf_symbol_iter_next(&iter))) {
+			struct elf_symbol_offset *fo, tmp = {
+				.name = sym->name,
+			};
+
+			fo = bsearch(&tmp, func_offs, cnt, sizeof(*func_offs),
+				     cmp_func_offset);
+			if (!fo)
+				continue;
+
+			if (fo->offset > 0) {
+				/* same offset, no problem */
+				if (fo->offset == sym->offset)
+					continue;
+				/* handle multiple matches */
+				if (fo->bind != STB_WEAK && sym->bind != STB_WEAK) {
+					/* Only accept one non-weak bind. */
+					pr_warn("elf: ambiguous match for '%s', '%s' in '%s'\n",
+						sym->name, fo->name, binary_path);
+					err = -LIBBPF_ERRNO__FORMAT;
+					goto out;
+				} else if (sym->bind == STB_WEAK) {
+					/* already have a non-weak bind, and
+					 * this is a weak bind, so ignore.
+					 */
+					continue;
+				}
+			}
+			if (!fo->offset)
+				cnt_done++;
+			fo->offset = sym->offset;
+			fo->bind = sym->bind;
+		}
+	}
+
+	if (cnt != cnt_done) {
+		err = -ENOENT;
+		goto out;
+	}
+	offsets = calloc(cnt, sizeof(*offsets));
+	if (!offsets) {
+		err = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < cnt; i++) {
+		idx = func_offs[i].idx;
+		offsets[idx] = func_offs[i].offset;
+	}
+
+out:
+	*poffsets = offsets;
+	free(func_offs);
+	return err;
+}
+
+int elf_find_multi_func_offset(const char *binary_path, int cnt,
+			       const char **syms, unsigned long **poffsets)
+{
+	struct elf_fd elf_fd = {};
+	long ret = -ENOENT;
+
+	ret = open_elf(binary_path, &elf_fd);
+	if (ret)
+		return ret;
+
+	ret = __elf_find_multi_func_offset(elf_fd.elf, binary_path, cnt, syms, poffsets);
+	close_elf(&elf_fd);
+	return ret;
+}
+
 /* Find offset of function name in ELF object specified by path. "name" matches
  * symbol name or name@@LIB for library functions.
  */
