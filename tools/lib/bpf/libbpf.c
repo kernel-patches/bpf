@@ -10927,6 +10927,45 @@ static struct elf_symbol *elf_symbol_iter_next(struct elf_symbol_iter *iter)
 	return ret;
 }
 
+struct elf_fd {
+	Elf *elf;
+	int fd;
+};
+
+static int open_elf(const char *binary_path, struct elf_fd *elf_fd)
+{
+	char errmsg[STRERR_BUFSIZE];
+	int fd, ret;
+	Elf *elf;
+
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_warn("failed to init libelf for %s\n", binary_path);
+		return -LIBBPF_ERRNO__LIBELF;
+	}
+	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		pr_warn("failed to open %s: %s\n", binary_path,
+			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+		return ret;
+	}
+	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
+	if (!elf) {
+		pr_warn("elf: could not read elf from %s: %s\n", binary_path, elf_errmsg(-1));
+		close(fd);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	elf_fd->fd = fd;
+	elf_fd->elf = elf;
+	return 0;
+}
+
+static void close_elf(struct elf_fd *elf_fd)
+{
+	elf_end(elf_fd->elf);
+	close(elf_fd->fd);
+}
+
 /* Find offset of function name in the provided ELF object. "binary_path" is
  * the path to the ELF binary represented by "elf", and only used for error
  * reporting matters. "name" matches symbol name or name@@LIB for library
@@ -11019,28 +11058,15 @@ out:
  */
 static long elf_find_func_offset_from_file(const char *binary_path, const char *name)
 {
-	char errmsg[STRERR_BUFSIZE];
+	struct elf_fd elf_fd = {};
 	long ret = -ENOENT;
-	Elf *elf;
-	int fd;
 
-	fd = open(binary_path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		ret = -errno;
-		pr_warn("failed to open %s: %s\n", binary_path,
-			libbpf_strerror_r(ret, errmsg, sizeof(errmsg)));
+	ret = open_elf(binary_path, &elf_fd);
+	if (ret)
 		return ret;
-	}
-	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
-	if (!elf) {
-		pr_warn("elf: could not read elf from %s: %s\n", binary_path, elf_errmsg(-1));
-		close(fd);
-		return -LIBBPF_ERRNO__FORMAT;
-	}
 
-	ret = elf_find_func_offset(elf, binary_path, name);
-	elf_end(elf);
-	close(fd);
+	ret = elf_find_func_offset(elf_fd.elf, binary_path, name);
+	close_elf(&elf_fd);
 	return ret;
 }
 
