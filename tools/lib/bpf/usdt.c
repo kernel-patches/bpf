@@ -808,6 +808,16 @@ struct bpf_link_usdt {
 		long abs_ip;
 		struct bpf_link *link;
 	} *uprobes;
+
+	bool has_uprobe_multi;
+
+	struct {
+		char *path;
+		unsigned long *offsets;
+		unsigned long *ref_ctr_offsets;
+		__u64 *cookies;
+		struct bpf_link *link;
+	} uprobe_multi;
 };
 
 static int bpf_link_usdt_detach(struct bpf_link *link)
@@ -816,19 +826,23 @@ static int bpf_link_usdt_detach(struct bpf_link *link)
 	struct usdt_manager *man = usdt_link->usdt_man;
 	int i;
 
-	for (i = 0; i < usdt_link->uprobe_cnt; i++) {
-		/* detach underlying uprobe link */
-		bpf_link__destroy(usdt_link->uprobes[i].link);
-		/* there is no need to update specs map because it will be
-		 * unconditionally overwritten on subsequent USDT attaches,
-		 * but if BPF cookies are not used we need to remove entry
-		 * from ip_to_spec_id map, otherwise we'll run into false
-		 * conflicting IP errors
-		 */
-		if (!man->has_bpf_cookie) {
-			/* not much we can do about errors here */
-			(void)bpf_map_delete_elem(bpf_map__fd(man->ip_to_spec_id_map),
-						  &usdt_link->uprobes[i].abs_ip);
+	if (usdt_link->has_uprobe_multi) {
+		bpf_link__destroy(usdt_link->uprobe_multi.link);
+	} else {
+		for (i = 0; i < usdt_link->uprobe_cnt; i++) {
+			/* detach underlying uprobe link */
+			bpf_link__destroy(usdt_link->uprobes[i].link);
+			/* there is no need to update specs map because it will be
+			 * unconditionally overwritten on subsequent USDT attaches,
+			 * but if BPF cookies are not used we need to remove entry
+			 * from ip_to_spec_id map, otherwise we'll run into false
+			 * conflicting IP errors
+			 */
+			if (!man->has_bpf_cookie) {
+				/* not much we can do about errors here */
+				(void)bpf_map_delete_elem(bpf_map__fd(man->ip_to_spec_id_map),
+							  &usdt_link->uprobes[i].abs_ip);
+			}
 		}
 	}
 
@@ -868,9 +882,15 @@ static void bpf_link_usdt_dealloc(struct bpf_link *link)
 {
 	struct bpf_link_usdt *usdt_link = container_of(link, struct bpf_link_usdt, link);
 
-	free(usdt_link->spec_ids);
-	free(usdt_link->uprobes);
-	free(usdt_link);
+	if (usdt_link->has_uprobe_multi) {
+		free(usdt_link->uprobe_multi.offsets);
+		free(usdt_link->uprobe_multi.ref_ctr_offsets);
+		free(usdt_link->uprobe_multi.cookies);
+	} else {
+		free(usdt_link->spec_ids);
+		free(usdt_link->uprobes);
+		free(usdt_link);
+	}
 }
 
 static size_t specs_hash_fn(long key, void *ctx)
@@ -943,11 +963,13 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 					  const char *usdt_provider, const char *usdt_name,
 					  __u64 usdt_cookie)
 {
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts_multi);
 	int i, fd, err, spec_map_fd, ip_map_fd;
 	LIBBPF_OPTS(bpf_uprobe_opts, opts);
 	struct hashmap *specs_hash = NULL;
 	struct bpf_link_usdt *link = NULL;
 	struct usdt_target *targets = NULL;
+	struct bpf_link *uprobe_link;
 	size_t target_cnt;
 	Elf *elf;
 
@@ -1003,16 +1025,29 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 	link->usdt_man = man;
 	link->link.detach = &bpf_link_usdt_detach;
 	link->link.dealloc = &bpf_link_usdt_dealloc;
+	link->has_uprobe_multi = bpf_program__expected_attach_type(prog) == BPF_TRACE_UPROBE_MULTI;
 
-	link->uprobes = calloc(target_cnt, sizeof(*link->uprobes));
-	if (!link->uprobes) {
-		err = -ENOMEM;
-		goto err_out;
+	if (link->has_uprobe_multi) {
+		link->uprobe_multi.offsets = calloc(target_cnt, sizeof(*link->uprobe_multi.offsets));
+		link->uprobe_multi.ref_ctr_offsets = calloc(target_cnt, sizeof(*link->uprobe_multi.ref_ctr_offsets));
+		link->uprobe_multi.cookies = calloc(target_cnt, sizeof(*link->uprobe_multi.cookies));
+
+		if (!link->uprobe_multi.offsets ||
+		    !link->uprobe_multi.ref_ctr_offsets ||
+		    !link->uprobe_multi.cookies) {
+			err = -ENOMEM;
+			goto err_out;
+		}
+	} else {
+		link->uprobes = calloc(target_cnt, sizeof(*link->uprobes));
+		if (!link->uprobes) {
+			err = -ENOMEM;
+			goto err_out;
+		}
 	}
 
 	for (i = 0; i < target_cnt; i++) {
 		struct usdt_target *target = &targets[i];
-		struct bpf_link *uprobe_link;
 		bool is_new;
 		int spec_id;
 
@@ -1048,20 +1083,43 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 			goto err_out;
 		}
 
-		opts.ref_ctr_offset = target->sema_off;
-		opts.bpf_cookie = man->has_bpf_cookie ? spec_id : 0;
-		uprobe_link = bpf_program__attach_uprobe_opts(prog, pid, path,
-							      target->rel_ip, &opts);
+		if (link->has_uprobe_multi) {
+			link->uprobe_multi.offsets[i] = target->rel_ip;
+			link->uprobe_multi.ref_ctr_offsets[i] = target->sema_off;
+			link->uprobe_multi.cookies[i] = spec_id;
+		} else {
+			opts.ref_ctr_offset = target->sema_off;
+			opts.bpf_cookie = man->has_bpf_cookie ? spec_id : 0;
+			uprobe_link = bpf_program__attach_uprobe_opts(prog, pid, path,
+								      target->rel_ip, &opts);
+			err = libbpf_get_error(uprobe_link);
+			if (err) {
+				pr_warn("usdt: failed to attach uprobe #%d for '%s:%s' in '%s': %d\n",
+					i, usdt_provider, usdt_name, path, err);
+				goto err_out;
+			}
+
+			link->uprobes[i].link = uprobe_link;
+			link->uprobes[i].abs_ip = target->abs_ip;
+			link->uprobe_cnt++;
+		}
+	}
+
+	if (link->has_uprobe_multi) {
+		opts_multi.cnt = target_cnt;
+		opts_multi.path = path;
+		opts_multi.offsets = link->uprobe_multi.offsets;
+		opts_multi.ref_ctr_offsets = link->uprobe_multi.ref_ctr_offsets;
+		opts_multi.cookies = link->uprobe_multi.cookies;
+
+		uprobe_link = bpf_program__attach_uprobe_multi_opts(prog, pid, NULL, NULL, &opts_multi);
 		err = libbpf_get_error(uprobe_link);
 		if (err) {
-			pr_warn("usdt: failed to attach uprobe #%d for '%s:%s' in '%s': %d\n",
-				i, usdt_provider, usdt_name, path, err);
+			pr_warn("usdt: failed to attach uprobe multi for '%s:%s' in '%s': %d\n",
+				usdt_provider, usdt_name, path, err);
 			goto err_out;
 		}
-
-		link->uprobes[i].link = uprobe_link;
-		link->uprobes[i].abs_ip = target->abs_ip;
-		link->uprobe_cnt++;
+		link->uprobe_multi.link = uprobe_link;
 	}
 
 	free(targets);
