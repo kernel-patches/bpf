@@ -579,4 +579,7 @@ int sys_bpf_prog_load(union bpf_attr *attr, unsigned int size, int attempts);
 
 int elf_find_multi_func_offset(const char *binary_path, int cnt,
 			       const char **syms, unsigned long **poffsets);
+int elf_find_pattern_func_offset(const char *binary_path, const char *pattern,
+				 const char ***pnames, unsigned long **poffsets,
+				 size_t *pcnt);
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

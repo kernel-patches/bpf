@@ -11165,6 +11165,84 @@ int elf_find_multi_func_offset(const char *binary_path, int cnt,
 	return ret;
 }
 
+static int
+__elf_find_pattern_func_offset(Elf *elf, const char *binary_path, const char *pattern,
+			       const char ***pnames, unsigned long **poffsets, size_t *pcnt)
+{
+	int sh_types[2] = { SHT_DYNSYM, SHT_SYMTAB };
+	struct elf_symbol_offset *func_offs = NULL;
+	unsigned long *offsets = NULL;
+	const char **names = NULL;
+	size_t func_offs_cnt = 0;
+	size_t func_offs_cap = 0;
+	int err = 0, i;
+
+	for (i = 0; i < ARRAY_SIZE(sh_types); i++) {
+		struct elf_symbol_iter iter;
+		struct elf_symbol *sym;
+
+		if (elf_symbol_iter_new(&iter, elf, binary_path, sh_types[i]))
+			continue;
+
+		while ((sym = elf_symbol_iter_next(&iter))) {
+			if (!glob_match(sym->name, pattern))
+				continue;
+
+			err = libbpf_ensure_mem((void **) &func_offs, &func_offs_cap,
+						sizeof(*func_offs), func_offs_cnt + 1);
+			if (err)
+				goto out;
+
+			func_offs[func_offs_cnt].offset = sym->offset;
+			func_offs[func_offs_cnt].name = strdup(sym->name);
+			func_offs_cnt++;
+		}
+
+		/* If we found anything in the first symbol section,
+		 * do not search others to avoid duplicates.
+		 */
+		if (func_offs_cnt)
+			break;
+	}
+
+	offsets = calloc(func_offs_cnt, sizeof(*offsets));
+	names = calloc(func_offs_cnt, sizeof(*names));
+	if (!offsets || !names) {
+		free(offsets);
+		free(names);
+		err = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < func_offs_cnt; i++) {
+		offsets[i] = func_offs[i].offset;
+		names[i] = func_offs[i].name;
+	}
+
+	*pnames = names;
+	*poffsets = offsets;
+	*pcnt = func_offs_cnt;
+out:
+	free(func_offs);
+	return err;
+}
+
+int elf_find_pattern_func_offset(const char *binary_path, const char *pattern,
+				 const char ***pnames, unsigned long **poffsets,
+				 size_t *pcnt)
+{
+	struct elf_fd elf_fd = {};
+	long ret = -ENOENT;
+
+	ret = open_elf(binary_path, &elf_fd);
+	if (ret)
+		return ret;
+
+	ret = __elf_find_pattern_func_offset(elf_fd.elf, binary_path, pattern, pnames, poffsets, pcnt);
+	close_elf(&elf_fd);
+	return ret;
+}
+
 /* Find offset of function name in ELF object specified by path. "name" matches
  * symbol name or name@@LIB for library functions.
  */
