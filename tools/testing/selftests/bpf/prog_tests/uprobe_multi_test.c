@@ -23,14 +23,86 @@ noinline void uprobe_multi_func_3(void)
 	asm volatile ("");
 }
 
-static void uprobe_multi_test_run(struct uprobe_multi *skel)
+struct child {
+	int go[2];
+	int pid;
+};
+
+static void release_child(struct child *child)
+{
+	int child_status;
+
+	if (!child)
+		return;
+	close(child->go[1]);
+	close(child->go[0]);
+	if (child->pid > 0)
+		waitpid(child->pid, &child_status, 0);
+}
+
+static void kick_child(struct child *child)
+{
+	char c = 1;
+
+	if (child) {
+		write(child->go[1], &c, 1);
+		release_child(child);
+	}
+	fflush(NULL);
+}
+
+static struct child *spawn_child(void)
+{
+	static struct child child;
+	int err;
+	int c;
+
+	/* pid filter */
+	if (!ASSERT_OK(pipe(child.go), "pipe"))
+		return NULL;
+
+	child.pid = fork();
+	if (child.pid < 0) {
+		release_child(&child);
+		return NULL;
+	}
+
+	/* child */
+	if (child.pid == 0) {
+		close(child.go[1]);
+		fflush(NULL);
+		/* wait for parent's kick */
+		err = read(child.go[0], &c, 1);
+		if (!ASSERT_EQ(err, 1, "child_read_pipe"))
+			exit(err);
+
+		uprobe_multi_func_1();
+		uprobe_multi_func_2();
+		uprobe_multi_func_3();
+
+		exit(errno);
+	}
+
+	return &child;
+}
+
+static void uprobe_multi_test_run(struct uprobe_multi *skel, struct child *child)
 {
 	skel->bss->uprobe_multi_func_1_addr = (__u64) uprobe_multi_func_1;
 	skel->bss->uprobe_multi_func_2_addr = (__u64) uprobe_multi_func_2;
 	skel->bss->uprobe_multi_func_3_addr = (__u64) uprobe_multi_func_3;
 
 	skel->bss->user_ptr = test_data;
-	skel->bss->pid = getpid();
+
+	/*
+	 * Disable pid check in bpf program if we are pid filter test,
+	 * because the probe should be executed only by child->pid
+	 * passed at the probe attach.
+	 */
+	skel->bss->pid = child ? 0 : getpid();
+
+	if (child)
+		kick_child(child);
 
 	/* trigger all probes */
 	uprobe_multi_func_1();
@@ -50,6 +122,9 @@ static void uprobe_multi_test_run(struct uprobe_multi *skel)
 	ASSERT_EQ(skel->bss->uretprobe_multi_func_3_result, 2, "uretprobe_multi_func_3_result");
 
 	ASSERT_EQ(skel->bss->uprobe_multi_sleep_result, 6, "uprobe_multi_sleep_result");
+
+	if (child)
+		ASSERT_EQ(skel->bss->child_pid, child->pid, "uprobe_multi_child_pid");
 }
 
 static void test_skel_api(void)
@@ -65,17 +140,19 @@ static void test_skel_api(void)
 	if (!ASSERT_OK(err, "uprobe_multi__attach"))
 		goto cleanup;
 
-	uprobe_multi_test_run(skel);
+	uprobe_multi_test_run(skel, NULL);
 
 cleanup:
 	uprobe_multi__destroy(skel);
 }
 
 static void
-test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_multi_opts *opts)
+__test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_multi_opts *opts,
+		  struct child *child)
 {
 	struct bpf_link *link1 = NULL, *link2 = NULL;
 	struct bpf_link *link3 = NULL, *link4 = NULL;
+	pid_t pid = child ? child->pid : -1;
 	struct uprobe_multi *skel = NULL;
 
 	skel = uprobe_multi__open_and_load();
@@ -83,30 +160,30 @@ test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_multi
 		goto cleanup;
 
 	opts->retprobe = false;
-	link1 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uprobe, -1,
+	link1 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uprobe, pid,
 						      binary, pattern, opts);
 	if (!ASSERT_OK_PTR(link1, "bpf_program__attach_uprobe_multi_opts"))
 		goto cleanup;
 
 	opts->retprobe = true;
-	link2 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uretprobe, -1,
+	link2 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uretprobe, pid,
 						      binary, pattern, opts);
 	if (!ASSERT_OK_PTR(link2, "bpf_program__attach_uprobe_multi_opts_retprobe"))
 		goto cleanup;
 
 	opts->retprobe = false;
-	link3 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uprobe_sleep, -1,
+	link3 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uprobe_sleep, pid,
 						      binary, pattern, opts);
 	if (!ASSERT_OK_PTR(link1, "bpf_program__attach_uprobe_multi_opts"))
 		goto cleanup;
 
 	opts->retprobe = true;
-	link4 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uretprobe_sleep, -1,
+	link4 = bpf_program__attach_uprobe_multi_opts(skel->progs.test_uretprobe_sleep, pid,
 						      binary, pattern, opts);
 	if (!ASSERT_OK_PTR(link2, "bpf_program__attach_uprobe_multi_opts_retprobe"))
 		goto cleanup;
 
-	uprobe_multi_test_run(skel);
+	uprobe_multi_test_run(skel, child);
 
 cleanup:
 	bpf_link__destroy(link4);
@@ -114,6 +191,22 @@ cleanup:
 	bpf_link__destroy(link2);
 	bpf_link__destroy(link1);
 	uprobe_multi__destroy(skel);
+}
+
+static void
+test_attach_api(const char *binary, const char *pattern, struct bpf_uprobe_multi_opts *opts)
+{
+	struct child *child;
+
+	/* no pid filter */
+	__test_attach_api(binary, pattern, opts, NULL);
+
+	/* pid filter */
+	child = spawn_child();
+	if (!child)
+		return;
+
+	__test_attach_api(binary, pattern, opts, child);
 }
 
 static void test_attach_api_pattern(void)
@@ -138,7 +231,7 @@ static void test_attach_api_syms(void)
 	test_attach_api("/proc/self/exe", NULL, &opts);
 }
 
-static void test_link_api(void)
+static void __test_link_api(struct child *child)
 {
 	int prog_fd, link1_fd = -1, link2_fd = -1, link3_fd = -1, link4_fd = -1;
 	LIBBPF_OPTS(bpf_link_create_opts, opts);
@@ -159,6 +252,7 @@ static void test_link_api(void)
 	opts.uprobe_multi.path = path;
 	opts.uprobe_multi.offsets = offsets;
 	opts.uprobe_multi.cnt = ARRAY_SIZE(syms);
+	opts.uprobe_multi.pid = child ? child->pid : 0;
 
 	skel = uprobe_multi__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
@@ -187,7 +281,7 @@ static void test_link_api(void)
 	link4_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link2_fd, 0, "link4_fd"))
 		goto cleanup;
-	uprobe_multi_test_run(skel);
+	uprobe_multi_test_run(skel, child);
 
 cleanup:
 	if (link1_fd >= 0)
@@ -201,6 +295,21 @@ cleanup:
 
 	uprobe_multi__destroy(skel);
 	free(offsets);
+}
+
+void test_link_api(void)
+{
+	struct child *child;
+
+	/* no pid filter */
+	__test_link_api(NULL);
+
+	/* pid filter */
+	child = spawn_child();
+	if (!child)
+		return;
+
+	__test_link_api(child);
 }
 
 static inline __u64 get_time_ns(void)
