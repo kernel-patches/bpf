@@ -1056,6 +1056,16 @@ enum bpf_link_type {
 	MAX_BPF_LINK_TYPE,
 };
 
+enum bpf_perf_event_type {
+	BPF_PERF_EVENT_UNSPEC = 0,
+	BPF_PERF_EVENT_UPROBE = 1,
+	BPF_PERF_EVENT_KPROBE = 2,
+	BPF_PERF_EVENT_TRACEPOINT = 3,
+	BPF_PERF_EVENT_EVENT = 4,
+
+	MAX_BPF_PERF_EVENT_TYPE,
+};
+
 /* cgroup-bpf attach flags used in BPF_PROG_ATTACH command
  *
  * NONE(default): No further bpf programs allowed in the subtree.
@@ -6443,6 +6453,32 @@ struct bpf_link_info {
 			__u32 count;
 			__u32 flags;
 		} kprobe_multi;
+		struct {
+			__u32 type; /* enum bpf_perf_event_type */
+			union {
+				struct {
+					__aligned_u64 file_name; /* in/out */
+					__u32 name_len;
+					__u32 offset;/* offset from file_name */
+					__u32 flags;
+				} uprobe; /* BPF_PERF_EVENT_UPROBE */
+				struct {
+					__aligned_u64 func_name; /* in/out */
+					__u32 name_len;
+					__u32 offset;/* offset from func_name */
+					__u64 addr;
+					__u32 flags;
+				} kprobe; /* BPF_PERF_EVENT_KPROBE */
+				struct {
+					__aligned_u64 tp_name;   /* in/out */
+					__u32 name_len;
+				} tracepoint; /* BPF_PERF_EVENT_TRACEPOINT */
+				struct {
+					__u64 config;
+					__u32 type;
+				} event; /* BPF_PERF_EVENT_EVENT */
+			};
+		} perf_event;
 	};
 } __attribute__((aligned(8)));
 
