@@ -485,6 +485,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 		int err;
 
 		hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(dev->needed_headroom));
+		hr = max(hr, L1_CACHE_ALIGN((u32)xs->tx_metadata_len));
 		tr = dev->needed_tailroom;
 		len = desc->len;
 
@@ -493,13 +494,20 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			return ERR_PTR(err);
 
 		skb_reserve(skb, hr);
-		skb_put(skb, len);
+		skb_put(skb, len + xs->tx_metadata_len);
 
 		buffer = xsk_buff_raw_get_data(xs->pool, desc->addr);
+		buffer -= xs->tx_metadata_len;
+
 		err = skb_store_bits(skb, 0, buffer, len);
 		if (unlikely(err)) {
 			kfree_skb(skb);
 			return ERR_PTR(err);
+		}
+
+		if (xs->tx_metadata_len) {
+			skb_metadata_set(skb, xs->tx_metadata_len);
+			__skb_pull(skb, xs->tx_metadata_len);
 		}
 	}
 
@@ -1134,6 +1142,27 @@ static int xsk_setsockopt(struct socket *sock, int level, int optname,
 		q = (optname == XDP_UMEM_FILL_RING) ? &xs->fq_tmp :
 			&xs->cq_tmp;
 		err = xsk_init_queue(entries, q, true);
+		mutex_unlock(&xs->mutex);
+		return err;
+	}
+	case XDP_TX_METADATA_LEN:
+	{
+		int val;
+
+		if (optlen < sizeof(val))
+			return -EINVAL;
+		if (copy_from_sockptr(&val, optval, sizeof(val)))
+			return -EFAULT;
+
+		if (val >= 256)
+			return -EINVAL;
+
+		mutex_lock(&xs->mutex);
+		if (xs->state != XSK_READY) {
+			mutex_unlock(&xs->mutex);
+			return -EBUSY;
+		}
+		xs->tx_metadata_len = val;
 		mutex_unlock(&xs->mutex);
 		return err;
 	}
