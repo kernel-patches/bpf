@@ -2721,7 +2721,7 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 		}
 	}
 
-	if (bpf_dev_bound_kfunc_id(func_id)) {
+	if (bpf_is_dev_bound_kfunc(func_id)) {
 		err = bpf_dev_bound_kfunc_check(&env->log, prog_aux);
 		if (err)
 			return err;
@@ -17917,7 +17917,7 @@ static void specialize_kfunc(struct bpf_verifier_env *env,
 	void *xdp_kfunc;
 	bool is_rdonly;
 
-	if (bpf_dev_bound_kfunc_id(func_id)) {
+	if (bpf_is_dev_bound_kfunc(func_id)) {
 		xdp_kfunc = bpf_dev_bound_resolve_kfunc(prog, func_id);
 		if (xdp_kfunc) {
 			*addr = (unsigned long)xdp_kfunc;

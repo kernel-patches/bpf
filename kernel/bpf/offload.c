@@ -844,14 +844,36 @@ void *bpf_dev_bound_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
 	if (!ops)
 		goto out;
 
-	if (func_id == bpf_xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
+	if (func_id == bpf_dev_bound_kfunc_id(XDP_METADATA_KFUNC_RX_TIMESTAMP))
 		p = ops->xmo_rx_timestamp;
-	else if (func_id == bpf_xdp_metadata_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
+	else if (func_id == bpf_dev_bound_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
 		p = ops->xmo_rx_hash;
 out:
 	up_read(&bpf_devs_lock);
 
 	return p;
+}
+
+BTF_SET_START(dev_bound_kfunc_ids)
+#define NETDEV_METADATA_KFUNC(name, str) BTF_ID(func, str)
+XDP_METADATA_KFUNC_xxx
+#undef NETDEV_METADATA_KFUNC
+BTF_SET_END(dev_bound_kfunc_ids)
+
+BTF_ID_LIST(dev_bound_kfunc_ids_unsorted)
+#define NETDEV_METADATA_KFUNC(name, str) BTF_ID(func, str)
+XDP_METADATA_KFUNC_xxx
+#undef NETDEV_METADATA_KFUNC
+
+u32 bpf_dev_bound_kfunc_id(int id)
+{
+	/* dev_bound_kfunc_ids is sorted and can't be used */
+	return dev_bound_kfunc_ids_unsorted[id];
+}
+
+bool bpf_is_dev_bound_kfunc(u32 btf_id)
+{
+	return btf_id_set_contains(&dev_bound_kfunc_ids, btf_id);
 }
 
 static int __init bpf_offload_init(void)
