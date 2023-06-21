@@ -48,6 +48,7 @@
 #include <linux/mlx5/vport.h>
 #include <linux/version.h>
 #include <net/devlink.h>
+#include <net/devtx.h>
 #include "mlx5_core.h"
 #include "thermal.h"
 #include "lib/eq.h"
@@ -73,6 +74,7 @@
 #include "sf/dev/dev.h"
 #include "sf/sf.h"
 #include "mlx5_irq.h"
+#include "en/xdp.h"
 
 MODULE_AUTHOR("Eli Cohen <eli@mellanox.com>");
 MODULE_DESCRIPTION("Mellanox 5th generation network adapters (ConnectX series) core driver");
@@ -2132,6 +2134,19 @@ static void mlx5_core_verify_params(void)
 	}
 }
 
+__weak noinline void mlx5e_devtx_submit(struct devtx_frame *ctx)
+{
+}
+
+__weak noinline void mlx5e_devtx_complete(struct devtx_frame *ctx)
+{
+}
+
+BTF_SET8_START(mlx5e_devtx_hook_ids)
+BTF_ID_FLAGS(func, mlx5e_devtx_submit)
+BTF_ID_FLAGS(func, mlx5e_devtx_complete)
+BTF_SET8_END(mlx5e_devtx_hook_ids)
+
 static int __init mlx5_init(void)
 {
 	int err;
@@ -2144,9 +2159,15 @@ static int __init mlx5_init(void)
 	mlx5_core_verify_params();
 	mlx5_register_debugfs();
 
+	err = devtx_hooks_register(&mlx5e_devtx_hook_ids, &mlx5e_xdp_metadata_ops);
+	if (err) {
+		pr_warn("failed to register devtx hooks: %d", err);
+		goto err_debug;
+	}
+
 	err = mlx5e_init();
 	if (err)
-		goto err_debug;
+		goto err_devtx;
 
 	err = mlx5_sf_driver_register();
 	if (err)
@@ -2162,6 +2183,8 @@ err_pci:
 	mlx5_sf_driver_unregister();
 err_sf:
 	mlx5e_cleanup();
+err_devtx:
+	devtx_hooks_unregister(&mlx5e_devtx_hook_ids);
 err_debug:
 	mlx5_unregister_debugfs();
 	return err;
@@ -2169,6 +2192,7 @@ err_debug:
 
 static void __exit mlx5_cleanup(void)
 {
+	devtx_hooks_unregister(&mlx5e_devtx_hook_ids);
 	pci_unregister_driver(&mlx5_core_driver);
 	mlx5_sf_driver_unregister();
 	mlx5e_cleanup();

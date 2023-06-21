@@ -255,9 +255,30 @@ static int mlx5e_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+static int mlx5e_devtx_sb_request_timestamp(const struct devtx_frame *ctx)
+{
+	/* Nothing to do here, CQE always has a timestamp. */
+	return 0;
+}
+
+static int mlx5e_devtx_cp_timestamp(const struct devtx_frame *_ctx, u64 *timestamp)
+{
+	const struct mlx5e_devtx_frame *ctx = (void *)_ctx;
+	u64 ts;
+
+	if (unlikely(!ctx->cqe))
+		return -ENODATA;
+
+	ts = get_cqe_ts(ctx->cqe);
+	*timestamp = mlx5_real_time_cyc2time(NULL, ts);
+	return 0;
+}
+
 const struct xdp_metadata_ops mlx5e_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= mlx5e_xdp_rx_timestamp,
 	.xmo_rx_hash			= mlx5e_xdp_rx_hash,
+	.xmo_sb_request_timestamp	= mlx5e_devtx_sb_request_timestamp,
+	.xmo_cp_timestamp		= mlx5e_devtx_cp_timestamp,
 };
 
 /* returns true if packet was consumed by xdp */
@@ -453,6 +474,23 @@ mlx5e_xmit_xdp_frame_mpwqe(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptx
 
 	mlx5e_xdp_mpwqe_add_dseg(sq, p, stats);
 
+	if (devtx_enabled()) {
+		struct mlx5e_xmit_data_frags *xdptxdf =
+			container_of(xdptxd, struct mlx5e_xmit_data_frags, xd);
+
+		struct mlx5e_devtx_frame ctx = {
+			.frame = {
+				.data = p->data,
+				.len = p->len,
+				.meta_len = sq->xsk_pool->tx_metadata_len,
+				.sinfo = xdptxd->has_frags ? xdptxdf->sinfo : NULL,
+				.netdev = sq->cq.netdev,
+			},
+			.wqe = sq->mpwqe.wqe,
+		};
+		mlx5e_devtx_submit(&ctx.frame);
+	}
+
 	if (unlikely(mlx5e_xdp_mpwqe_is_full(session, sq->max_sq_mpw_wqebbs)))
 		mlx5e_xdp_mpwqe_complete(sq);
 
@@ -560,6 +598,20 @@ mlx5e_xmit_xdp_frame(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptxd,
 		dseg++;
 	}
 
+	if (devtx_enabled()) {
+		struct mlx5e_devtx_frame ctx = {
+			.frame = {
+				.data = xdptxd->data,
+				.len = xdptxd->len,
+				.meta_len = sq->xsk_pool->tx_metadata_len,
+				.sinfo = xdptxd->has_frags ? xdptxdf->sinfo : NULL,
+				.netdev = sq->cq.netdev,
+			},
+			.wqe = wqe,
+		};
+		mlx5e_devtx_submit(&ctx.frame);
+	}
+
 	cseg->opmod_idx_opcode = cpu_to_be32((sq->pc << 8) | MLX5_OPCODE_SEND);
 
 	if (test_bit(MLX5E_SQ_STATE_XDP_MULTIBUF, &sq->state)) {
@@ -607,7 +659,8 @@ mlx5e_xmit_xdp_frame(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptxd,
 static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 				  struct mlx5e_xdp_wqe_info *wi,
 				  u32 *xsk_frames,
-				  struct xdp_frame_bulk *bq)
+				  struct xdp_frame_bulk *bq,
+				  struct mlx5_cqe64 *cqe)
 {
 	struct mlx5e_xdp_info_fifo *xdpi_fifo = &sq->db.xdpi_fifo;
 	u16 i;
@@ -625,6 +678,14 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 			xdpf = xdpi.frame.xdpf;
 			xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
 			dma_addr = xdpi.frame.dma_addr;
+
+			if (false && devtx_enabled()) {
+				struct mlx5e_devtx_frame ctx;
+
+				devtx_frame_from_xdp(&ctx.frame, xdpf, sq->cq.netdev);
+				ctx.cqe = cqe;
+				mlx5e_devtx_complete(&ctx.frame);
+			}
 
 			dma_unmap_single(sq->pdev, dma_addr,
 					 xdpf->len, DMA_TO_DEVICE);
@@ -659,6 +720,20 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 				xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
 				page = xdpi.page.page;
 
+				if (false && devtx_enabled()) {
+					struct mlx5e_devtx_frame ctx = {
+						.frame = {
+							.data = page,
+							.len = PAGE_SIZE,
+							.meta_len = sq->xsk_pool->tx_metadata_len,
+							.netdev = sq->cq.netdev,
+						},
+						.cqe = cqe,
+					};
+
+					mlx5e_devtx_complete(&ctx.frame);
+				}
+
 				/* No need to check ((page->pp_magic & ~0x3UL) == PP_SIGNATURE)
 				 * as we know this is a page_pool page.
 				 */
@@ -670,6 +745,21 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 		}
 		case MLX5E_XDP_XMIT_MODE_XSK:
 			/* AF_XDP send */
+
+			if (devtx_enabled()) {
+				struct mlx5e_devtx_frame ctx = {
+					.frame = {
+						.data = xdpi.frame.xsk_head,
+						.len = xdpi.page.xsk_head_len,
+						.meta_len = sq->xsk_pool->tx_metadata_len,
+						.netdev = sq->cq.netdev,
+					},
+					.cqe = cqe,
+				};
+
+				mlx5e_devtx_complete(&ctx.frame);
+			}
+
 			(*xsk_frames)++;
 			break;
 		default:
@@ -720,7 +810,7 @@ bool mlx5e_poll_xdpsq_cq(struct mlx5e_cq *cq)
 
 			sqcc += wi->num_wqebbs;
 
-			mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq);
+			mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq, cqe);
 		} while (!last_wqe);
 
 		if (unlikely(get_cqe_opcode(cqe) != MLX5_CQE_REQ)) {
@@ -767,7 +857,7 @@ void mlx5e_free_xdpsq_descs(struct mlx5e_xdpsq *sq)
 
 		sq->cc += wi->num_wqebbs;
 
-		mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq);
+		mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq, NULL);
 	}
 
 	xdp_flush_frame_bulk(&bq);
