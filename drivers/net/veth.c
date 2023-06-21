@@ -27,6 +27,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/net_tstamp.h>
 #include <net/page_pool.h>
+#include <net/devtx.h>
 
 #define DRV_NAME	"veth"
 #define DRV_VERSION	"1.0"
@@ -120,6 +121,13 @@ static struct {
 
 struct veth_xdp_buff {
 	struct xdp_buff xdp;
+	struct sk_buff *skb;
+};
+
+struct veth_devtx_frame {
+	struct devtx_frame frame;
+	bool request_timestamp;
+	ktime_t xdp_tx_timestamp;
 	struct sk_buff *skb;
 };
 
@@ -313,10 +321,43 @@ static int veth_xdp_rx(struct veth_rq *rq, struct sk_buff *skb)
 	return NET_RX_SUCCESS;
 }
 
-static int veth_forward_skb(struct net_device *dev, struct sk_buff *skb,
-			    struct veth_rq *rq, bool xdp)
+__weak noinline void veth_devtx_submit(struct devtx_frame *ctx)
 {
-	return __dev_forward_skb(dev, skb) ?: xdp ?
+}
+
+__weak noinline void veth_devtx_complete(struct devtx_frame *ctx)
+{
+}
+
+BTF_SET8_START(veth_devtx_hook_ids)
+BTF_ID_FLAGS(func, veth_devtx_submit)
+BTF_ID_FLAGS(func, veth_devtx_complete)
+BTF_SET8_END(veth_devtx_hook_ids)
+
+static int veth_forward_skb(struct net_device *dev, struct sk_buff *skb,
+			    struct veth_rq *rq, bool xdp, bool request_timestamp)
+{
+	struct net_device *orig_dev = skb->dev;
+	int ret;
+
+	ret = __dev_forward_skb(dev, skb);
+	if (ret)
+		return ret;
+
+	if (devtx_enabled()) {
+		struct veth_devtx_frame ctx;
+
+		if (unlikely(request_timestamp))
+			__net_timestamp(skb);
+
+		devtx_frame_from_skb(&ctx.frame, skb, orig_dev);
+		ctx.frame.data -= ETH_HLEN; /* undo eth_type_trans pull */
+		ctx.frame.len += ETH_HLEN;
+		ctx.skb = skb;
+		veth_devtx_complete(&ctx.frame);
+	}
+
+	return xdp ?
 		veth_xdp_rx(rq, skb) :
 		__netif_rx(skb);
 }
@@ -343,6 +384,7 @@ static bool veth_skb_is_eligible_for_gro(const struct net_device *dev,
 static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct veth_priv *rcv_priv, *priv = netdev_priv(dev);
+	bool request_timestamp = false;
 	struct veth_rq *rq = NULL;
 	struct net_device *rcv;
 	int length = skb->len;
@@ -354,6 +396,15 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (unlikely(!rcv) || !pskb_may_pull(skb, ETH_HLEN)) {
 		kfree_skb(skb);
 		goto drop;
+	}
+
+	if (devtx_enabled()) {
+		struct veth_devtx_frame ctx;
+
+		devtx_frame_from_skb(&ctx.frame, skb, dev);
+		ctx.request_timestamp = false;
+		veth_devtx_submit(&ctx.frame);
+		request_timestamp = ctx.request_timestamp;
 	}
 
 	rcv_priv = netdev_priv(rcv);
@@ -370,7 +421,7 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	skb_tx_timestamp(skb);
-	if (likely(veth_forward_skb(rcv, skb, rq, use_napi) == NET_RX_SUCCESS)) {
+	if (likely(veth_forward_skb(rcv, skb, rq, use_napi, request_timestamp) == NET_RX_SUCCESS)) {
 		if (!use_napi)
 			dev_lstats_add(dev, length);
 	} else {
@@ -483,6 +534,7 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 {
 	struct veth_priv *rcv_priv, *priv = netdev_priv(dev);
 	int i, ret = -ENXIO, nxmit = 0;
+	ktime_t tx_timestamp = 0;
 	struct net_device *rcv;
 	unsigned int max_len;
 	struct veth_rq *rq;
@@ -511,9 +563,32 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 		void *ptr = veth_xdp_to_ptr(frame);
 
 		if (unlikely(xdp_get_frame_len(frame) > max_len ||
-			     __ptr_ring_produce(&rq->xdp_ring, ptr)))
+			     __ptr_ring_full(&rq->xdp_ring)))
+			break;
+
+		if (devtx_enabled()) {
+			struct veth_devtx_frame ctx;
+
+			devtx_frame_from_xdp(&ctx.frame, frame, dev);
+			ctx.request_timestamp = false;
+			veth_devtx_submit(&ctx.frame);
+
+			if (unlikely(ctx.request_timestamp))
+				tx_timestamp = ktime_get_real();
+		}
+
+		if (unlikely(__ptr_ring_produce(&rq->xdp_ring, ptr)))
 			break;
 		nxmit++;
+
+		if (devtx_enabled()) {
+			struct veth_devtx_frame ctx;
+
+			devtx_frame_from_xdp(&ctx.frame, frame, dev);
+			ctx.xdp_tx_timestamp = tx_timestamp;
+			ctx.skb = NULL;
+			veth_devtx_complete(&ctx.frame);
+		}
 	}
 	spin_unlock(&rq->xdp_ring.producer_lock);
 
@@ -1732,6 +1807,28 @@ static int veth_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+static int veth_devtx_sb_request_timestamp(const struct devtx_frame *_ctx)
+{
+	struct veth_devtx_frame *ctx = (struct veth_devtx_frame *)_ctx;
+
+	ctx->request_timestamp = true;
+
+	return 0;
+}
+
+static int veth_devtx_cp_timestamp(const struct devtx_frame *_ctx, u64 *timestamp)
+{
+	struct veth_devtx_frame *ctx = (struct veth_devtx_frame *)_ctx;
+
+	if (ctx->skb) {
+		*timestamp = ctx->skb->tstamp;
+		return 0;
+	}
+
+	*timestamp = ctx->xdp_tx_timestamp;
+	return 0;
+}
+
 static const struct net_device_ops veth_netdev_ops = {
 	.ndo_init            = veth_dev_init,
 	.ndo_open            = veth_open,
@@ -1756,6 +1853,8 @@ static const struct net_device_ops veth_netdev_ops = {
 static const struct xdp_metadata_ops veth_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= veth_xdp_rx_timestamp,
 	.xmo_rx_hash			= veth_xdp_rx_hash,
+	.xmo_sb_request_timestamp	= veth_devtx_sb_request_timestamp,
+	.xmo_cp_timestamp		= veth_devtx_cp_timestamp,
 };
 
 #define VETH_FEATURES (NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_HW_CSUM | \
@@ -2041,11 +2140,20 @@ static struct rtnl_link_ops veth_link_ops = {
 
 static __init int veth_init(void)
 {
+	int ret;
+
+	ret = devtx_hooks_register(&veth_devtx_hook_ids, &veth_xdp_metadata_ops);
+	if (ret) {
+		pr_warn("failed to register devtx hooks: %d", ret);
+		return ret;
+	}
+
 	return rtnl_link_register(&veth_link_ops);
 }
 
 static __exit void veth_exit(void)
 {
+	devtx_hooks_unregister(&veth_devtx_hook_ids);
 	rtnl_link_unregister(&veth_link_ops);
 }
 
