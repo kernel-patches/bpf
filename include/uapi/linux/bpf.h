@@ -846,6 +846,24 @@ union bpf_iter_link_info {
  *		Returns zero on success. On error, -1 is returned and *errno*
  *		is set appropriately.
  *
+ * BPF_TOKEN_CREATE
+ *	Description
+ *		Create BPF token with embedded information about what
+ *		BPF-related functionality it allows. This BPF token can be
+ *		passed as an extra parameter to various bpf() syscall commands
+ *		to grant BPF subsystem functionality to unprivileged processes.
+ *		BPF token is automatically pinned at specified location in BPF
+ *		FS. It can be retrieved (to get FD passed to bpf() syscall)
+ *		using BPF_OBJ_GET command. It's not allowed to re-pin BPF
+ *		token using BPF_OBJ_PIN command. Such restrictions ensure BPF
+ *		token stays associated with originally intended BPF FS
+ *		instance and cannot be intentionally or unintentionally pinned
+ *		somewhere else.
+ *
+ *	Return
+ *		Returns zero on success. On error, -1 is returned and *errno*
+ *		is set appropriately.
+ *
  * NOTES
  *	eBPF objects (maps and programs) can be shared between processes.
  *
@@ -900,6 +918,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_TOKEN_CREATE,
 };
 
 enum bpf_map_type {
@@ -1620,6 +1639,25 @@ union bpf_attr {
 		__u32		map_fd;
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
+
+	struct { /* struct used by BPF_TOKEN_CREATE command */
+		/* optional, BPF token FD granting operation */
+		__u32		token_fd;
+		__u32		token_flags;
+		__u32		pin_flags;
+		/* pin_{path_fd,pathname} specify location in BPF FS instance
+		 * to pin BPF token at;
+		 * path_fd + pathname have the same semantics as openat() syscall
+		 */
+		__u32		pin_path_fd;
+		__u64		pin_pathname;
+		/* a bit set of allowed bpf() syscall commands,
+		 * e.g., (1ULL << BPF_TOKEN_CREATE) | (1ULL << BPF_PROG_LOAD)
+		 * will allow creating derived BPF tokens and loading new BPF
+		 * programs
+		 */
+		__u64		allowed_cmds;
+	} token_create;
 
 } __attribute__((aligned(8)));
 

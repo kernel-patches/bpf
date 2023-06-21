@@ -22,13 +22,6 @@
 #include <linux/bpf_trace.h>
 #include "preload/bpf_preload.h"
 
-enum bpf_type {
-	BPF_TYPE_UNSPEC	= 0,
-	BPF_TYPE_PROG,
-	BPF_TYPE_MAP,
-	BPF_TYPE_LINK,
-};
-
 static void *bpf_any_get(void *raw, enum bpf_type type)
 {
 	switch (type) {
@@ -40,6 +33,9 @@ static void *bpf_any_get(void *raw, enum bpf_type type)
 		break;
 	case BPF_TYPE_LINK:
 		bpf_link_inc(raw);
+		break;
+	case BPF_TYPE_TOKEN:
+		bpf_token_inc(raw);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -60,6 +56,9 @@ static void bpf_any_put(void *raw, enum bpf_type type)
 		break;
 	case BPF_TYPE_LINK:
 		bpf_link_put(raw);
+		break;
+	case BPF_TYPE_TOKEN:
+		bpf_token_put(raw);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -89,6 +88,12 @@ static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
 		return raw;
 	}
 
+	raw = bpf_token_get_from_fd(ufd);
+	if (!IS_ERR(raw)) {
+		*type = BPF_TYPE_TOKEN;
+		return raw;
+	}
+
 	return ERR_PTR(-EINVAL);
 }
 
@@ -97,6 +102,7 @@ static const struct inode_operations bpf_dir_iops;
 static const struct inode_operations bpf_prog_iops = { };
 static const struct inode_operations bpf_map_iops  = { };
 static const struct inode_operations bpf_link_iops  = { };
+static const struct inode_operations bpf_token_iops  = { };
 
 static struct inode *bpf_get_inode(struct super_block *sb,
 				   const struct inode *dir,
@@ -136,6 +142,8 @@ static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
 		*type = BPF_TYPE_MAP;
 	else if (inode->i_op == &bpf_link_iops)
 		*type = BPF_TYPE_LINK;
+	else if (inode->i_op == &bpf_token_iops)
+		*type = BPF_TYPE_TOKEN;
 	else
 		return -EACCES;
 
@@ -369,6 +377,11 @@ static int bpf_mklink(struct dentry *dentry, umode_t mode, void *arg)
 			     &bpf_iter_fops : &bpffs_obj_fops);
 }
 
+static int bpf_mktoken(struct dentry *dentry, umode_t mode, void *arg)
+{
+	return bpf_mkobj_ops(dentry, mode, arg, &bpf_token_iops, &bpffs_obj_fops);
+}
+
 static struct dentry *
 bpf_lookup(struct inode *dir, struct dentry *dentry, unsigned flags)
 {
@@ -435,8 +448,8 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 	return ret;
 }
 
-static int bpf_obj_do_pin(int path_fd, const char __user *pathname, void *raw,
-			  enum bpf_type type)
+int bpf_obj_pin_any(int path_fd, const char __user *pathname, void *raw,
+		    enum bpf_type type)
 {
 	struct dentry *dentry;
 	struct inode *dir;
@@ -469,6 +482,9 @@ static int bpf_obj_do_pin(int path_fd, const char __user *pathname, void *raw,
 	case BPF_TYPE_LINK:
 		ret = vfs_mkobj(dentry, mode, bpf_mklink, raw);
 		break;
+	case BPF_TYPE_TOKEN:
+		ret = vfs_mkobj(dentry, mode, bpf_mktoken, raw);
+		break;
 	default:
 		ret = -EPERM;
 	}
@@ -487,7 +503,15 @@ int bpf_obj_pin_user(u32 ufd, int path_fd, const char __user *pathname)
 	if (IS_ERR(raw))
 		return PTR_ERR(raw);
 
-	ret = bpf_obj_do_pin(path_fd, pathname, raw, type);
+	/* disallow BPF_OBJ_PIN command for BPF token; BPF token can only be
+	 * auto-pinned during creation with BPF_TOKEN_CREATE
+	 */
+	if (type == BPF_TYPE_TOKEN) {
+		bpf_any_put(raw, type);
+		return -EOPNOTSUPP;
+	}
+
+	ret = bpf_obj_pin_any(path_fd, pathname, raw, type);
 	if (ret != 0)
 		bpf_any_put(raw, type);
 
@@ -547,6 +571,8 @@ int bpf_obj_get_user(int path_fd, const char __user *pathname, int flags)
 		ret = bpf_map_new_fd(raw, f_flags);
 	else if (type == BPF_TYPE_LINK)
 		ret = (f_flags != O_RDWR) ? -EINVAL : bpf_link_new_fd(raw);
+	else if (type == BPF_TYPE_TOKEN)
+		ret = (f_flags != O_RDWR) ? -EINVAL : bpf_token_new_fd(raw);
 	else
 		return -ENOENT;
 
