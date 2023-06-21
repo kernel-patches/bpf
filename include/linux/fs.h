@@ -646,7 +646,7 @@ struct inode {
 	loff_t			i_size;
 	struct timespec64	i_atime;
 	struct timespec64	i_mtime;
-	struct timespec64	i_ctime;
+	struct timespec64	__i_ctime; /* use inode_ctime_* accessors! */
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
 	unsigned short          i_bytes;
 	u8			i_blkbits;
@@ -1485,7 +1485,7 @@ struct timespec64 inode_ctime_set_current(struct inode *inode);
  */
 static inline struct timespec64 inode_ctime_peek(const struct inode *inode)
 {
-	return inode->i_ctime;
+	return inode->__i_ctime;
 }
 
 /**
@@ -1497,7 +1497,7 @@ static inline struct timespec64 inode_ctime_peek(const struct inode *inode)
  */
 static inline struct timespec64 inode_ctime_set(struct inode *inode, struct timespec64 ts)
 {
-	inode->i_ctime = ts;
+	inode->__i_ctime = ts;
 	return ts;
 }
 
@@ -1510,7 +1510,7 @@ static inline struct timespec64 inode_ctime_set(struct inode *inode, struct time
  */
 static inline time64_t inode_ctime_set_sec(struct inode *inode, time64_t sec)
 {
-	inode->i_ctime.tv_sec = sec;
+	inode->__i_ctime.tv_sec = sec;
 	return sec;
 }
 
@@ -1523,7 +1523,7 @@ static inline time64_t inode_ctime_set_sec(struct inode *inode, time64_t sec)
  */
 static inline long inode_ctime_set_nsec(struct inode *inode, long nsec)
 {
-	inode->i_ctime.tv_nsec = nsec;
+	inode->__i_ctime.tv_nsec = nsec;
 	return nsec;
 }
 
