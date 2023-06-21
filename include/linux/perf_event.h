@@ -1881,4 +1881,7 @@ static inline void perf_lopwr_cb(bool mode)
 }
 #endif
 
+int perf_type_kprobe(void);
+int perf_type_uprobe(void);
+
 #endif /* _LINUX_PERF_EVENT_H */

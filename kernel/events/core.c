@@ -10456,6 +10456,24 @@ static inline bool perf_event_is_tracing(struct perf_event *event)
 	return false;
 }
 
+int perf_type_kprobe(void)
+{
+#ifdef CONFIG_KPROBE_EVENTS
+	return perf_kprobe.type;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
+int perf_type_uprobe(void)
+{
+#ifdef CONFIG_UPROBE_EVENTS
+	return perf_uprobe.type;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
 int perf_event_set_bpf_prog(struct perf_event *event, struct bpf_prog *prog,
 			    u64 bpf_cookie)
 {
