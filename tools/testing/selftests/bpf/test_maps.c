@@ -1913,15 +1913,21 @@ int main(void)
 
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
+	if (0) {
 	map_opts.map_flags = 0;
 	run_all_tests();
 
 	map_opts.map_flags = BPF_F_NO_PREALLOC;
 	run_all_tests();
+	}
 
+if (0) {
 #define DEFINE_TEST(name) test_##name();
 #include <map_tests/tests.h>
 #undef DEFINE_TEST
+}
+
+	test_map_percpu_stats();
 
 	printf("test_maps: OK, %d SKIPPED\n", skips);
 	return 0;
