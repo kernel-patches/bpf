@@ -5572,6 +5572,22 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * int bpf_perf_type_kprobe(void)
+ *	Description
+ *		Get perf_kprobe.type
+ *	Return
+ *		perf_kprobe.type on success.
+ *
+ *		**-EOPNOTSUPP** if CONFIG_KPROBE_EVENTS is not set.
+ *
+ * int bpf_perf_type_uprobe(void)
+ *	Description
+ *		Get perf_uprobe.type
+ *	Return
+ *		perf_uprobe.type on success.
+ *
+ *		**-EOPNOTSUPP** if CONFIG_UPROBE_EVENTS is not set.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5786,6 +5802,8 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(perf_type_kprobe, 212, ##ctx)		\
+	FN(perf_type_uprobe, 213, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

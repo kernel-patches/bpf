@@ -22,6 +22,7 @@
 #include <linux/security.h>
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
+#include <linux/perf_event.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -1652,6 +1653,28 @@ static const struct bpf_func_proto bpf_dynptr_data_proto = {
 	.arg1_type	= ARG_PTR_TO_DYNPTR | MEM_RDONLY,
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_CONST_ALLOC_SIZE_OR_ZERO,
+};
+
+BPF_CALL_0(bpf_perf_type_kprobe)
+{
+	return perf_type_kprobe();
+}
+
+const struct bpf_func_proto bpf_perf_type_kprobe_proto = {
+	.func		= bpf_perf_type_kprobe,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+};
+
+BPF_CALL_0(bpf_perf_type_uprobe)
+{
+	return perf_type_uprobe();
+}
+
+const struct bpf_func_proto bpf_perf_type_uprobe_proto = {
+	.func		= bpf_perf_type_uprobe,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
 };
 
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
