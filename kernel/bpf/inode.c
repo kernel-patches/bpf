@@ -120,7 +120,7 @@ static struct inode *bpf_get_inode(struct super_block *sb,
 	inode->i_ino = get_next_ino();
 	inode->i_atime = current_time(inode);
 	inode->i_mtime = inode->i_atime;
-	inode->i_ctime = inode->i_atime;
+	inode_ctime_set(inode, inode->i_atime);
 
 	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
 
@@ -149,7 +149,7 @@ static void bpf_dentry_finalize(struct dentry *dentry, struct inode *inode,
 	dget(dentry);
 
 	dir->i_mtime = current_time(dir);
-	dir->i_ctime = dir->i_mtime;
+	inode_ctime_set(dir, dir->i_mtime);
 }
 
 static int bpf_mkdir(struct mnt_idmap *idmap, struct inode *dir,
