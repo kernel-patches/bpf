@@ -1474,7 +1474,58 @@ static inline bool fsuidgid_has_mapping(struct super_block *sb,
 	       kgid_has_mapping(fs_userns, kgid);
 }
 
-extern struct timespec64 current_time(struct inode *inode);
+struct timespec64 current_time(struct inode *inode);
+struct timespec64 inode_ctime_set_current(struct inode *inode);
+
+/**
+ * inode_ctime_peek - fetch the current ctime from the inode
+ * @inode: inode from which to fetch ctime
+ *
+ * Grab the current ctime from the inode and return it.
+ */
+static inline struct timespec64 inode_ctime_peek(const struct inode *inode)
+{
+	return inode->i_ctime;
+}
+
+/**
+ * inode_ctime_set - set the ctime in the inode to the given value
+ * @inode: inode in which to set the ctime
+ * @ts: timespec value to set the ctime
+ *
+ * Set the ctime in @inode to @ts.
+ */
+static inline struct timespec64 inode_ctime_set(struct inode *inode, struct timespec64 ts)
+{
+	inode->i_ctime = ts;
+	return ts;
+}
+
+/**
+ * inode_ctime_set_sec - set only the tv_sec field in the inode ctime
+ * @inode: inode in which to set the ctime
+ * @sec:  value to set the tv_sec field
+ *
+ * Set the sec field in the ctime. Returns @sec.
+ */
+static inline time64_t inode_ctime_set_sec(struct inode *inode, time64_t sec)
+{
+	inode->i_ctime.tv_sec = sec;
+	return sec;
+}
+
+/**
+ * inode_ctime_set_nsec - set only the tv_nsec field in the inode ctime
+ * @inode: inode in which to set the ctime
+ * @nsec:  value to set the tv_nsec field
+ *
+ * Set the nsec field in the ctime. Returns @nsec.
+ */
+static inline long inode_ctime_set_nsec(struct inode *inode, long nsec)
+{
+	inode->i_ctime.tv_nsec = nsec;
+	return nsec;
+}
 
 /*
  * Snapshotting support.
