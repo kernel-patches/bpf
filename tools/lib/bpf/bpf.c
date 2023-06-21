@@ -169,7 +169,7 @@ int bpf_map_create(enum bpf_map_type map_type,
 		   __u32 max_entries,
 		   const struct bpf_map_create_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, map_extra);
+	const size_t attr_sz = offsetofend(union bpf_attr, map_token_fd);
 	union bpf_attr attr;
 	int fd;
 
@@ -197,6 +197,8 @@ int bpf_map_create(enum bpf_map_type map_type,
 	attr.map_extra = OPTS_GET(opts, map_extra, 0);
 	attr.numa_node = OPTS_GET(opts, numa_node, 0);
 	attr.map_ifindex = OPTS_GET(opts, map_ifindex, 0);
+
+	attr.map_token_fd = OPTS_GET(opts, token_fd, 0);
 
 	fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(fd);
@@ -1218,6 +1220,7 @@ int bpf_token_create(int pin_path_fd, const char *pin_pathname, struct bpf_token
 	attr.token_create.token_flags = OPTS_GET(opts, token_flags, 0);
 	attr.token_create.pin_flags = OPTS_GET(opts, pin_flags, 0);
 	attr.token_create.allowed_cmds = OPTS_GET(opts, allowed_cmds, 0);
+	attr.token_create.allowed_map_types = OPTS_GET(opts, allowed_map_types, 0);
 
 	ret = sys_bpf(BPF_TOKEN_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(ret);
