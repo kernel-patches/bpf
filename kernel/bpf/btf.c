@@ -6129,7 +6129,7 @@ enum bpf_struct_walk_result {
 static int btf_struct_walk(struct bpf_verifier_log *log, const struct btf *btf,
 			   const struct btf_type *t, int off, int size,
 			   u32 *next_btf_id, enum bpf_type_flag *flag,
-			   const char **field_name)
+			   const char **field_name, bool *in_union)
 {
 	u32 i, moff, mtrue_end, msize = 0, total_nelems = 0;
 	const struct btf_type *mtype, *elem_type = NULL;
@@ -6188,6 +6188,8 @@ error:
 		return -EACCES;
 	}
 
+	if (BTF_INFO_KIND(t->info) == BTF_KIND_UNION && !in_union)
+		*in_union = true;
 	for_each_member(i, t, member) {
 		/* offset of the field in bytes */
 		moff = __btf_member_bit_offset(t, member) / 8;
@@ -6372,7 +6374,7 @@ error:
 		 * that also allows using an array of int as a scratch
 		 * space. e.g. skb->cb[].
 		 */
-		if (off + size > mtrue_end) {
+		if (off + size > mtrue_end && !in_union) {
 			bpf_log(log,
 				"access beyond the end of member %s (mend:%u) in struct %s with off %u size %u\n",
 				mname, mtrue_end, tname, off, size);
@@ -6395,6 +6397,7 @@ int btf_struct_access(struct bpf_verifier_log *log,
 	enum bpf_type_flag tmp_flag = 0;
 	const struct btf_type *t;
 	u32 id = reg->btf_id;
+	bool in_union;
 	int err;
 
 	while (type_is_alloc(reg->type)) {
@@ -6421,7 +6424,8 @@ int btf_struct_access(struct bpf_verifier_log *log,
 
 	t = btf_type_by_id(btf, id);
 	do {
-		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag, field_name);
+		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag, field_name,
+				      &in_union);
 
 		switch (err) {
 		case WALK_PTR:
@@ -6481,6 +6485,7 @@ bool btf_struct_ids_match(struct bpf_verifier_log *log,
 {
 	const struct btf_type *type;
 	enum bpf_type_flag flag;
+	bool in_union;
 	int err;
 
 	/* Are we already done? */
@@ -6496,7 +6501,7 @@ again:
 	type = btf_type_by_id(btf, id);
 	if (!type)
 		return false;
-	err = btf_struct_walk(log, btf, type, off, 1, &id, &flag, NULL);
+	err = btf_struct_walk(log, btf, type, off, 1, &id, &flag, NULL, &in_union);
 	if (err != WALK_STRUCT)
 		return false;
 
