@@ -863,6 +863,10 @@ void *bpf_dev_bound_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
 		p = ops->xmo_rx_timestamp;
 	else if (func_id == bpf_dev_bound_kfunc_id(XDP_METADATA_KFUNC_RX_HASH))
 		p = ops->xmo_rx_hash;
+	else if (func_id == bpf_dev_bound_kfunc_id(DEVTX_SB_KFUNC_REQUEST_TIMESTAMP))
+		p = ops->xmo_sb_request_timestamp;
+	else if (func_id == bpf_dev_bound_kfunc_id(DEVTX_CP_KFUNC_TIMESTAMP))
+		p = ops->xmo_cp_timestamp;
 out:
 	up_read(&bpf_devs_lock);
 
@@ -872,12 +876,16 @@ out:
 BTF_SET_START(dev_bound_kfunc_ids)
 #define NETDEV_METADATA_KFUNC(name, str) BTF_ID(func, str)
 XDP_METADATA_KFUNC_xxx
+DEVTX_SB_KFUNC_xxx
+DEVTX_CP_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 BTF_SET_END(dev_bound_kfunc_ids)
 
 BTF_ID_LIST(dev_bound_kfunc_ids_unsorted)
 #define NETDEV_METADATA_KFUNC(name, str) BTF_ID(func, str)
 XDP_METADATA_KFUNC_xxx
+DEVTX_SB_KFUNC_xxx
+DEVTX_CP_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 
 u32 bpf_dev_bound_kfunc_id(int id)
