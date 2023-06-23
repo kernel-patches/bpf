@@ -819,15 +819,14 @@ out:
 	mutex_unlock(&trampoline_mutex);
 }
 
-#define NO_START_TIME 1
 static __always_inline u64 notrace bpf_prog_start_time(void)
 {
-	u64 start = NO_START_TIME;
+	u64 start = BPF_PROG_NO_START_TIME;
 
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
 		start = sched_clock();
 		if (unlikely(!start))
-			start = NO_START_TIME;
+			start = BPF_PROG_NO_START_TIME;
 	}
 	return start;
 }
@@ -860,35 +859,13 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 	return bpf_prog_start_time();
 }
 
-static void notrace update_prog_stats(struct bpf_prog *prog,
-				      u64 start)
-{
-	struct bpf_prog_stats *stats;
-
-	if (static_branch_unlikely(&bpf_stats_enabled_key) &&
-	    /* static_key could be enabled in __bpf_prog_enter*
-	     * and disabled in __bpf_prog_exit*.
-	     * And vice versa.
-	     * Hence check that 'start' is valid.
-	     */
-	    start > NO_START_TIME) {
-		unsigned long flags;
-
-		stats = this_cpu_ptr(prog->stats);
-		flags = u64_stats_update_begin_irqsave(&stats->syncp);
-		u64_stats_inc(&stats->cnt);
-		u64_stats_add(&stats->nsecs, sched_clock() - start);
-		u64_stats_update_end_irqrestore(&stats->syncp, flags);
-	}
-}
-
 static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
 					  struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
-	update_prog_stats(prog, start);
+	bpf_prog_update_prog_stats(prog, start);
 	this_cpu_dec(*(prog->active));
 	migrate_enable();
 	rcu_read_unlock();
@@ -906,7 +883,7 @@ static u64 notrace __bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog,
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
 
-	return NO_START_TIME;
+	return BPF_PROG_NO_START_TIME;
 }
 
 static void notrace __bpf_prog_exit_lsm_cgroup(struct bpf_prog *prog, u64 start,
@@ -941,7 +918,7 @@ void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
-	update_prog_stats(prog, start);
+	bpf_prog_update_prog_stats(prog, start);
 	this_cpu_dec(*(prog->active));
 	migrate_enable();
 	rcu_read_unlock_trace();
@@ -964,7 +941,7 @@ static void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start,
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
-	update_prog_stats(prog, start);
+	bpf_prog_update_prog_stats(prog, start);
 	migrate_enable();
 	rcu_read_unlock_trace();
 }
@@ -987,7 +964,7 @@ static void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start,
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
-	update_prog_stats(prog, start);
+	bpf_prog_update_prog_stats(prog, start);
 	migrate_enable();
 	rcu_read_unlock();
 }
