@@ -2706,18 +2706,24 @@ kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
 		.link = link,
 		.entry_ip = entry_ip,
 	};
+	struct bpf_prog *prog = link->link.prog;
 	struct bpf_run_ctx *old_run_ctx;
+	u64 start;
 	int err;
 
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
+		bpf_prog_inc_misses_counter(prog);
 		err = 0;
 		goto out;
 	}
 
+
 	migrate_disable();
 	rcu_read_lock();
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
-	err = bpf_prog_run(link->link.prog, regs);
+	start = bpf_prog_start_time();
+	err = bpf_prog_run(prog, regs);
+	bpf_prog_update_prog_stats(prog, start);
 	bpf_reset_run_ctx(old_run_ctx);
 	rcu_read_unlock();
 	migrate_enable();
