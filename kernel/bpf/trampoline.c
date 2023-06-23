@@ -819,18 +819,6 @@ out:
 	mutex_unlock(&trampoline_mutex);
 }
 
-static __always_inline u64 notrace bpf_prog_start_time(void)
-{
-	u64 start = BPF_PROG_NO_START_TIME;
-
-	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
-		start = sched_clock();
-		if (unlikely(!start))
-			start = BPF_PROG_NO_START_TIME;
-	}
-	return start;
-}
-
 /* The logic is similar to bpf_prog_run(), but with an explicit
  * rcu_read_lock() and migrate_disable() which are required
  * for the trampoline. The macro is split into
