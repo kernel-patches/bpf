@@ -10561,7 +10561,7 @@ resolve_kprobe_multi_cb(unsigned long long sym_addr, char sym_type,
 struct bpf_link *
 bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 				      const char *pattern,
-				      const struct bpf_kprobe_multi_opts *opts)
+				      struct bpf_kprobe_multi_opts *opts)
 {
 	LIBBPF_OPTS(bpf_link_create_opts, lopts);
 	struct kprobe_multi_resolve res = {
@@ -10630,6 +10630,7 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	}
 	link->fd = link_fd;
 	free(res.addrs);
+	OPTS_SET(opts, cnt, res.cnt);
 	return link;
 
 error:

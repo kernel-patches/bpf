@@ -527,7 +527,7 @@ struct bpf_kprobe_multi_opts {
 LIBBPF_API struct bpf_link *
 bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 				      const char *pattern,
-				      const struct bpf_kprobe_multi_opts *opts);
+				      struct bpf_kprobe_multi_opts *opts);
 
 struct bpf_ksyscall_opts {
 	/* size of this struct, for forward/backward compatibility */
