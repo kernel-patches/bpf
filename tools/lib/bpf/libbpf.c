@@ -12629,7 +12629,6 @@ static const char *cpu_topology_sysfs_path_by_type(const CPU_TOPOLOGY_SYSFS_TYPE
 
 int libbpf_num_cpus_by_topology_sysfs_type(const CPU_TOPOLOGY_SYSFS_TYPE type)
 {
-	const char *fcpu = cpu_topology_sysfs_path_by_type(type);
 	static int cpus[NUM_TYPES];
 	int err, n, i, tmp_cpus;
 	bool *mask;
@@ -12638,6 +12637,7 @@ int libbpf_num_cpus_by_topology_sysfs_type(const CPU_TOPOLOGY_SYSFS_TYPE type)
 	if (tmp_cpus > 0)
 		return tmp_cpus;
 
+	const char *fcpu = cpu_topology_sysfs_path_by_type(type);
 	err = parse_cpu_mask_file(fcpu, &mask, &n);
 	if (err)
 		return libbpf_err(err);
