@@ -741,6 +741,12 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_NETFILTER:
+		attr.link_create.netfilter.pf = OPTS_GET(opts, netfilter.pf, 0);
+		attr.link_create.netfilter.hooknum = OPTS_GET(opts, netfilter.hooknum, 0);
+		attr.link_create.netfilter.priority = OPTS_GET(opts, netfilter.priority, 0);
+		attr.link_create.netfilter.flags = OPTS_GET(opts, netfilter.flags, 0);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
