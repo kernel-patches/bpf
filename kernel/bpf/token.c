@@ -114,6 +114,14 @@ int bpf_token_create(union bpf_attr *attr)
 	if (token && !is_bit_subset_of(attr->token_create.allowed_map_types,
 				       token->allowed_map_types))
 		goto out;
+	/* requested prog types should be a subset of associated token's set */
+	if (token && !is_bit_subset_of(attr->token_create.allowed_prog_types,
+				       token->allowed_prog_types))
+		goto out;
+	/* requested attach types should be a subset of associated token's set */
+	if (token && !is_bit_subset_of(attr->token_create.allowed_attach_types,
+				       token->allowed_attach_types))
+		goto out;
 
 	new_token = bpf_token_alloc();
 	if (!new_token) {
@@ -123,6 +131,8 @@ int bpf_token_create(union bpf_attr *attr)
 
 	new_token->allowed_cmds = attr->token_create.allowed_cmds;
 	new_token->allowed_map_types = attr->token_create.allowed_map_types;
+	new_token->allowed_prog_types = attr->token_create.allowed_prog_types;
+	new_token->allowed_attach_types = attr->token_create.allowed_attach_types;
 
 	ret = bpf_obj_pin_any(attr->token_create.pin_path_fd,
 			      u64_to_user_ptr(attr->token_create.pin_pathname),
@@ -177,4 +187,15 @@ bool bpf_token_allow_map_type(const struct bpf_token *token, enum bpf_map_type t
 		return false;
 
 	return token->allowed_map_types & (1ULL << type);
+}
+
+bool bpf_token_allow_prog_type(const struct bpf_token *token,
+			       enum bpf_prog_type prog_type,
+			       enum bpf_attach_type attach_type)
+{
+	if (!token || prog_type >= __MAX_BPF_PROG_TYPE || attach_type >= __MAX_BPF_ATTACH_TYPE)
+		return false;
+
+	return (token->allowed_prog_types & (1ULL << prog_type)) &&
+	       (token->allowed_attach_types & (1ULL << attach_type));
 }
