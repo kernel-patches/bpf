@@ -15,8 +15,10 @@
 #define SO_RCVLOWAT		18
 #define SO_BINDTODEVICE		25
 #define SO_MARK			36
+#define SO_TIMESTAMPING_OLD     37
 #define SO_MAX_PACING_RATE	47
 #define SO_BINDTOIFINDEX	62
+#define SO_TIMESTAMPING_NEW     65
 #define SO_TXREHASH		74
 #define __SO_ACCEPTCON		(1 << 16)
 
