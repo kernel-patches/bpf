@@ -12926,9 +12926,21 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	} else if (opcode == BPF_MOV) {
 
 		if (BPF_SRC(insn->code) == BPF_X) {
-			if (insn->imm != 0 || insn->off != 0) {
+			if (insn->imm != 0) {
 				verbose(env, "BPF_MOV uses reserved fields\n");
 				return -EINVAL;
+			}
+
+			if (BPF_CLASS(insn->code) == BPF_ALU) {
+				if (insn->off != 0 && insn->off != 8 && insn->off != 16) {
+					verbose(env, "BPF_MOV uses reserved fields\n");
+					return -EINVAL;
+				}
+			} else {
+				if (insn->off != 0 && insn->off != 8 && insn->off != 16 && insn->off != 32) {
+					verbose(env, "BPF_MOV uses reserved fields\n");
+					return -EINVAL;
+				}
 			}
 
 			/* check src operand */
