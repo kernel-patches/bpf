@@ -551,6 +551,38 @@ struct bpf_test_run_opts {
 LIBBPF_API int bpf_prog_test_run_opts(int prog_fd,
 				      struct bpf_test_run_opts *opts);
 
+struct bpf_token_create_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 token_fd;
+	__u32 token_flags;
+	__u32 pin_flags;
+	__u64 allowed_cmds;
+	size_t :0;
+};
+#define bpf_token_create_opts__last_field allowed_cmds
+
+/**
+ * @brief **bpf_token_create()** creates a new instance of BPF token, pinning
+ * it at the specified location in BPF FS.
+ *
+ * BPF token created and pinned with this API can be subsequently opened using
+ * bpf_obj_get() API to obtain FD that can be passed to bpf() syscall for
+ * commands like BPF_PROG_LOAD, BPF_MAP_CREATE, etc.
+ *
+ * @param pin_path_fd O_PATH FD (see man 2 openat() for semantics) specifying,
+ * in combination with *pin_pathname*, target location in BPF FS at which to
+ * create and pin BPF token.
+ * @param pin_pathname absolute or relative path specifying, in combination
+ * with *pin_path_fd*, specifying in combination with *pin_path_fd*, target
+ * location in BPF FS at which to create and pin BPF token.
+ * @param opts optional BPF token creation options, can be NULL
+ *
+ * @return 0, on success; negative error code, otherwise (errno is also set to
+ * the error code)
+ */
+LIBBPF_API int bpf_token_create(int pin_path_fd, const char *pin_pathname,
+				struct bpf_token_create_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
