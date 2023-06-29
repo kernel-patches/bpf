@@ -16790,7 +16790,8 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (BPF_CLASS(insn->code) == BPF_LDX &&
-		    (BPF_MODE(insn->code) != BPF_MEM || insn->imm != 0)) {
+		    ((BPF_MODE(insn->code) != BPF_MEM && BPF_MODE(insn->code) != BPF_MEMS) ||
+		    insn->imm != 0)) {
 			verbose(env, "BPF_LDX uses reserved fields\n");
 			return -EINVAL;
 		}
@@ -17488,7 +17489,10 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		if (insn->code == (BPF_LDX | BPF_MEM | BPF_B) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_H) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_W) ||
-		    insn->code == (BPF_LDX | BPF_MEM | BPF_DW)) {
+		    insn->code == (BPF_LDX | BPF_MEM | BPF_DW) ||
+		    insn->code == (BPF_LDX | BPF_MEMS | BPF_B) ||
+		    insn->code == (BPF_LDX | BPF_MEMS | BPF_H) ||
+		    insn->code == (BPF_LDX | BPF_MEMS | BPF_W)) {
 			type = BPF_READ;
 		} else if (insn->code == (BPF_STX | BPF_MEM | BPF_B) ||
 			   insn->code == (BPF_STX | BPF_MEM | BPF_H) ||
