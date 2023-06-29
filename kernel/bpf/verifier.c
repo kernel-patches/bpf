@@ -6247,7 +6247,7 @@ static int check_stack_access_within_bounds(
  */
 static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regno,
 			    int off, int bpf_size, enum bpf_access_type t,
-			    int value_regno, bool strict_alignment_once)
+			    int value_regno, bool strict_alignment_once, bool sign_ext_ld)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = regs + regno;
@@ -6316,6 +6316,19 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 				__mark_reg_known(&regs[value_regno], val);
 			} else {
 				mark_reg_unknown(env, regs, value_regno);
+
+				if (sign_ext_ld) {
+					if (size == 1) {
+						regs[value_regno].smax_value = (char)INT_MAX;
+						regs[value_regno].smin_value = (char)INT_MIN;
+					} else if (size == 2) {
+						regs[value_regno].smax_value = (short)INT_MAX;
+						regs[value_regno].smin_value = (short)INT_MIN;
+					} else if (size == 4) {
+						regs[value_regno].smax_value = INT_MAX;
+						regs[value_regno].smin_value = INT_MIN;
+					}
+				}
 			}
 		}
 	} else if (base_type(reg->type) == PTR_TO_MEM) {
@@ -6477,7 +6490,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	}
 
 	if (!err && size < BPF_REG_SIZE && value_regno >= 0 && t == BPF_READ &&
-	    regs[value_regno].type == SCALAR_VALUE) {
+	    regs[value_regno].type == SCALAR_VALUE && !sign_ext_ld) {
 		/* b/h/w load zero-extends, mark upper bits as known 0 */
 		coerce_reg_to_size(&regs[value_regno], size);
 	}
@@ -6571,17 +6584,17 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	 * case to simulate the register fill.
 	 */
 	err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-			       BPF_SIZE(insn->code), BPF_READ, -1, true);
+			       BPF_SIZE(insn->code), BPF_READ, -1, true, false);
 	if (!err && load_reg >= 0)
 		err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
 				       BPF_SIZE(insn->code), BPF_READ, load_reg,
-				       true);
+				       true, false);
 	if (err)
 		return err;
 
 	/* Check whether we can write into the same memory. */
 	err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-			       BPF_SIZE(insn->code), BPF_WRITE, -1, true);
+			       BPF_SIZE(insn->code), BPF_WRITE, -1, true, false);
 	if (err)
 		return err;
 
@@ -6827,7 +6840,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				return zero_size_allowed ? 0 : -EACCES;
 
 			return check_mem_access(env, env->insn_idx, regno, offset, BPF_B,
-						atype, -1, false);
+						atype, -1, false, false);
 		}
 
 		fallthrough;
@@ -7199,7 +7212,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 		/* we write BPF_DW bits (8 bytes) at a time */
 		for (i = 0; i < BPF_DYNPTR_SIZE; i += 8) {
 			err = check_mem_access(env, insn_idx, regno,
-					       i, BPF_DW, BPF_WRITE, -1, false);
+					       i, BPF_DW, BPF_WRITE, -1, false, false);
 			if (err)
 				return err;
 		}
@@ -7292,7 +7305,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 
 		for (i = 0; i < nr_slots * 8; i += BPF_REG_SIZE) {
 			err = check_mem_access(env, insn_idx, regno,
-					       i, BPF_DW, BPF_WRITE, -1, false);
+					       i, BPF_DW, BPF_WRITE, -1, false, false);
 			if (err)
 				return err;
 		}
@@ -9422,7 +9435,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	 */
 	for (i = 0; i < meta.access_size; i++) {
 		err = check_mem_access(env, insn_idx, meta.regno, i, BPF_B,
-				       BPF_WRITE, -1, false);
+				       BPF_WRITE, -1, false, false);
 		if (err)
 			return err;
 	}
@@ -16300,7 +16313,8 @@ static int do_check(struct bpf_verifier_env *env)
 			 */
 			err = check_mem_access(env, env->insn_idx, insn->src_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_READ, insn->dst_reg, false);
+					       BPF_READ, insn->dst_reg, false,
+					       BPF_MODE(insn->code) == BPF_MEMS);
 			if (err)
 				return err;
 
@@ -16337,7 +16351,7 @@ static int do_check(struct bpf_verifier_env *env)
 			/* check that memory (dst_reg + off) is writeable */
 			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_WRITE, insn->src_reg, false);
+					       BPF_WRITE, insn->src_reg, false, false);
 			if (err)
 				return err;
 
@@ -16362,7 +16376,7 @@ static int do_check(struct bpf_verifier_env *env)
 			/* check that memory (dst_reg + off) is writeable */
 			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
 					       insn->off, BPF_SIZE(insn->code),
-					       BPF_WRITE, -1, false);
+					       BPF_WRITE, -1, false, false);
 			if (err)
 				return err;
 
