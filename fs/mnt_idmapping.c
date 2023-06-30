@@ -6,6 +6,7 @@
 #include <linux/mnt_idmapping.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
+#include <linux/bpf.h>
 
 #include "internal.h"
 
@@ -271,3 +272,71 @@ void mnt_idmap_put(struct mnt_idmap *idmap)
 		kfree(idmap);
 	}
 }
+
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "Global functions as their definitions will be in vmlinux BTF");
+
+/**
+ * bpf_is_idmapped_mnt - check whether a mount is idmapped
+ * @mnt: the mount to check
+ *
+ * Return: true if mount is mapped, false if not.
+ */
+__bpf_kfunc bool bpf_is_idmapped_mnt(struct vfsmount *mnt)
+{
+	return is_idmapped_mnt(mnt);
+}
+
+/**
+ * bpf_file_mnt_idmap - get file idmapping
+ * @file: the file from which to get mapping
+ *
+ * Return: The idmap for the @file.
+ */
+__bpf_kfunc struct mnt_idmap *bpf_file_mnt_idmap(struct file *file)
+{
+	return file_mnt_idmap(file);
+}
+
+/**
+ * bpf_inode_into_vfs_ids - map an inode's i_uid and i_gid down according to an idmapping
+ * @idmap: idmap of the mount the inode was found from
+ * @inode: inode to map
+ *
+ * The inode's i_uid and i_gid mapped down according to @idmap. If the inode's
+ * i_uid or i_gid has no mapping INVALID_VFSUID or INVALID_VFSGID is returned in
+ * the corresponding position.
+ *
+ * Return: A 64-bit integer containing the current GID and UID, and created as
+ * such: *gid* **<< 32 \|** *uid*.
+ */
+__bpf_kfunc uint64_t bpf_inode_into_vfs_ids(struct mnt_idmap *idmap,
+		const struct inode *inode)
+{
+	vfsuid_t vfsuid = i_uid_into_vfsuid(idmap, inode);
+	vfsgid_t vfsgid = i_gid_into_vfsgid(idmap, inode);
+
+	return (u64) __vfsgid_val(vfsgid) << 32 |
+		     __vfsuid_val(vfsuid);
+}
+
+__diag_pop();
+
+BTF_SET8_START(idmap_btf_ids)
+BTF_ID_FLAGS(func, bpf_is_idmapped_mnt)
+BTF_ID_FLAGS(func, bpf_file_mnt_idmap)
+BTF_ID_FLAGS(func, bpf_inode_into_vfs_ids)
+BTF_SET8_END(idmap_btf_ids)
+
+static const struct btf_kfunc_id_set idmap_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &idmap_btf_ids,
+};
+
+static int __init bpf_idmap_kfunc_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &idmap_kfunc_set);
+}
+
+late_initcall(bpf_idmap_kfunc_init);
