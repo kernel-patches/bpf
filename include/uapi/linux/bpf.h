@@ -1036,6 +1036,7 @@ enum bpf_attach_type {
 	BPF_LSM_CGROUP,
 	BPF_STRUCT_OPS,
 	BPF_NETFILTER,
+	BPF_TRACE_UPROBE_MULTI,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1053,6 +1054,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_KPROBE_MULTI = 8,
 	BPF_LINK_TYPE_STRUCT_OPS = 9,
 	BPF_LINK_TYPE_NETFILTER = 10,
+	BPF_LINK_TYPE_UPROBE_MULTI = 11,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1169,6 +1171,11 @@ enum bpf_link_type {
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
  */
 #define BPF_F_KPROBE_MULTI_RETURN	(1U << 0)
+
+/* link_create.uprobe_multi.flags used in LINK_CREATE command for
+ * BPF_TRACE_UPROBE_MULTI attach type to create return probe.
+ */
+#define BPF_F_UPROBE_MULTI_RETURN	(1U << 0)
 
 /* When BPF ldimm64's insn[0].src_reg != 0 then this can have
  * the following extensions:
@@ -1579,6 +1586,13 @@ union bpf_attr {
 				__s32		priority;
 				__u32		flags;
 			} netfilter;
+			struct {
+				__u32		flags;
+				__u32		cnt;
+				__aligned_u64	path;
+				__aligned_u64	offsets;
+				__aligned_u64	ref_ctr_offsets;
+			} uprobe_multi;
 		};
 	} link_create;
 
