@@ -18,4 +18,7 @@ long elf_find_func_offset_from_file(const char *binary_path, const char *name);
 
 int elf_resolve_syms_offsets(const char *binary_path, int cnt,
 			     const char **syms, unsigned long **poffsets);
+
+int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
+				 unsigned long **poffsets, size_t *pcnt);
 #endif /* *__LIBBPF_LIBBPF_ELF_H */
