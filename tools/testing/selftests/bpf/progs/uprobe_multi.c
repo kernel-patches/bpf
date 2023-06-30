@@ -89,3 +89,12 @@ int test_uretprobe_sleep(struct pt_regs *ctx)
 	uprobe_multi_check(ctx, true, true);
 	return 0;
 }
+
+int count;
+
+SEC("?uprobe.multi/./uprobe_multi:uprobe_multi_func_*")
+int test_uprobe_bench(struct pt_regs *ctx)
+{
+	count++;
+	return 0;
+}
