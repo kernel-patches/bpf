@@ -271,3 +271,108 @@ long elf_find_func_offset_from_file(const char *binary_path, const char *name)
 	elf_close(&elf_fd);
 	return ret;
 }
+
+struct symbol {
+	const char *name;
+	int bind;
+	int idx;
+};
+
+static int symbol_cmp(const void *_a, const void *_b)
+{
+	const struct symbol *a = _a;
+	const struct symbol *b = _b;
+
+	return strcmp(a->name, b->name);
+}
+
+int elf_resolve_syms_offsets(const char *binary_path, int cnt,
+			     const char **syms, unsigned long **poffsets)
+{
+	int sh_types[2] = { SHT_DYNSYM, SHT_SYMTAB };
+	int err = 0, i, cnt_done = 0;
+	unsigned long *offsets;
+	struct symbol *symbols;
+	struct elf_fd elf_fd;
+
+	err = elf_open(binary_path, &elf_fd);
+	if (err)
+		return err;
+
+	offsets = calloc(cnt, sizeof(*offsets));
+	symbols = calloc(cnt, sizeof(*symbols));
+
+	if (!offsets || !symbols) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		symbols[i].name = syms[i];
+		symbols[i].idx = i;
+	}
+
+	qsort(symbols, cnt, sizeof(*symbols), symbol_cmp);
+
+	for (i = 0; i < ARRAY_SIZE(sh_types); i++) {
+		struct elf_sym_iter iter;
+		struct elf_sym *sym;
+
+		err = elf_sym_iter_new(&iter, elf_fd.elf, binary_path, sh_types[i], STT_FUNC);
+		if (err) {
+			if (err == -ENOENT)
+				continue;
+			goto out;
+		}
+
+		while ((sym = elf_sym_iter_next(&iter))) {
+			int bind = GELF_ST_BIND(sym->sym.st_info);
+			struct symbol *found, tmp = {
+				.name = sym->name,
+			};
+			unsigned long *offset;
+
+			found = bsearch(&tmp, symbols, cnt, sizeof(*symbols), symbol_cmp);
+			if (!found)
+				continue;
+
+			offset = &offsets[found->idx];
+			if (*offset > 0) {
+				/* same offset, no problem */
+				if (*offset == elf_sym_offset(sym))
+					continue;
+				/* handle multiple matches */
+				if (found->bind != STB_WEAK && bind != STB_WEAK) {
+					/* Only accept one non-weak bind. */
+					pr_warn("elf: ambiguous match foundr '%s', '%s' in '%s'\n",
+						sym->name, found->name, binary_path);
+					err = -LIBBPF_ERRNO__FORMAT;
+					goto out;
+				} else if (bind == STB_WEAK) {
+					/* already have a non-weak bind, and
+					 * this is a weak bind, so ignore.
+					 */
+					continue;
+				}
+			} else {
+				cnt_done++;
+			}
+			*offset = elf_sym_offset(sym);
+			found->bind = bind;
+		}
+	}
+
+	if (cnt != cnt_done) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	*poffsets = offsets;
+
+out:
+	free(symbols);
+	if (err)
+		free(offsets);
+	elf_close(&elf_fd);
+	return err;
+}

@@ -16,4 +16,6 @@ void elf_close(struct elf_fd *elf_fd);
 long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name);
 long elf_find_func_offset_from_file(const char *binary_path, const char *name);
 
+int elf_resolve_syms_offsets(const char *binary_path, int cnt,
+			     const char **syms, unsigned long **poffsets);
 #endif /* *__LIBBPF_LIBBPF_ELF_H */
