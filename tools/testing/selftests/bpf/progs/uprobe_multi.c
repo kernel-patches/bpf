@@ -102,3 +102,9 @@ int test_uprobe_bench(struct pt_regs *ctx)
 	count++;
 	return 0;
 }
+
+SEC("uprobe.multi//proc/self/exe:uprobe_multi_func_*")
+int test_uprobe_extra(struct pt_regs *ctx)
+{
+	return 0;
+}
