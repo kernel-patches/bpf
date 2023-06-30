@@ -19,6 +19,7 @@
 #include "libbpf.h"
 #include "libbpf_common.h"
 #include "libbpf_internal.h"
+#include "libbpf_elf.h"
 #include "hashmap.h"
 
 /* libbpf's USDT support consists of BPF-side state/code and user-space
@@ -943,32 +944,22 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 					  const char *usdt_provider, const char *usdt_name,
 					  __u64 usdt_cookie)
 {
-	int i, fd, err, spec_map_fd, ip_map_fd;
+	int i, err, spec_map_fd, ip_map_fd;
 	LIBBPF_OPTS(bpf_uprobe_opts, opts);
 	struct hashmap *specs_hash = NULL;
 	struct bpf_link_usdt *link = NULL;
 	struct usdt_target *targets = NULL;
+	struct elf_fd elf_fd;
 	size_t target_cnt;
-	Elf *elf;
 
 	spec_map_fd = bpf_map__fd(man->specs_map);
 	ip_map_fd = bpf_map__fd(man->ip_to_spec_id_map);
 
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		err = -errno;
-		pr_warn("usdt: failed to open ELF binary '%s': %d\n", path, err);
+	err = elf_open(path, &elf_fd);
+	if (err)
 		return libbpf_err_ptr(err);
-	}
 
-	elf = elf_begin(fd, ELF_C_READ_MMAP, NULL);
-	if (!elf) {
-		err = -EBADF;
-		pr_warn("usdt: failed to parse ELF binary '%s': %s\n", path, elf_errmsg(-1));
-		goto err_out;
-	}
-
-	err = sanity_check_usdt_elf(elf, path);
+	err = sanity_check_usdt_elf(elf_fd.elf, path);
 	if (err)
 		goto err_out;
 
@@ -981,7 +972,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 	/* discover USDT in given binary, optionally limiting
 	 * activations to a given PID, if pid > 0
 	 */
-	err = collect_usdt_targets(man, elf, path, pid, usdt_provider, usdt_name,
+	err = collect_usdt_targets(man, elf_fd.elf, path, pid, usdt_provider, usdt_name,
 				   usdt_cookie, &targets, &target_cnt);
 	if (err <= 0) {
 		err = (err == 0) ? -ENOENT : err;
@@ -1066,9 +1057,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 
 	free(targets);
 	hashmap__free(specs_hash);
-	elf_end(elf);
-	close(fd);
-
+	elf_close(&elf_fd);
 	return &link->link;
 
 err_out:
@@ -1076,9 +1065,7 @@ err_out:
 		bpf_link__destroy(&link->link);
 	free(targets);
 	hashmap__free(specs_hash);
-	if (elf)
-		elf_end(elf);
-	close(fd);
+	elf_close(&elf_fd);
 	return libbpf_err_ptr(err);
 }
 
