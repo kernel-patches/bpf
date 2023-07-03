@@ -58,6 +58,8 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 char *ping_command(int family);
 int get_socket_local_port(int sock_fd);
 
+int get_cur_netns(void);
+int get_netns(const char *name);
 struct nstoken;
 /**
  * open_netns() - Switch to specified network namespace by name.
@@ -67,4 +69,5 @@ struct nstoken;
  */
 struct nstoken *open_netns(const char *name);
 void close_netns(struct nstoken *token);
+int set_netns(int netns_fd);
 #endif

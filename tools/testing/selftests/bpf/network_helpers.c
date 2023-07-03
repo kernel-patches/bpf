@@ -386,28 +386,51 @@ char *ping_command(int family)
 	return "ping";
 }
 
+int get_cur_netns(void)
+{
+	int nsfd;
+
+	nsfd = open("/proc/self/ns/net", O_RDONLY);
+	ASSERT_GE(nsfd, 0, "open /proc/self/ns/net");
+	return nsfd;
+}
+
+int get_netns(const char *name)
+{
+	char nspath[PATH_MAX];
+	int nsfd;
+
+	snprintf(nspath, sizeof(nspath), "%s/%s", "/var/run/netns", name);
+	nsfd = open(nspath, O_RDONLY | O_CLOEXEC);
+	ASSERT_GE(nsfd, 0, "open /proc/self/ns/net");
+	return nsfd;
+}
+
+int set_netns(int netns_fd)
+{
+	return setns(netns_fd, CLONE_NEWNET);
+}
+
 struct nstoken {
 	int orig_netns_fd;
 };
 
 struct nstoken *open_netns(const char *name)
 {
-	int nsfd;
-	char nspath[PATH_MAX];
-	int err;
 	struct nstoken *token;
+	int nsfd;
+	int err;
 
 	token = calloc(1, sizeof(struct nstoken));
 	if (!ASSERT_OK_PTR(token, "malloc token"))
 		return NULL;
 
-	token->orig_netns_fd = open("/proc/self/ns/net", O_RDONLY);
-	if (!ASSERT_GE(token->orig_netns_fd, 0, "open /proc/self/ns/net"))
+	token->orig_netns_fd = get_cur_netns();
+	if (token->orig_netns_fd < 0)
 		goto fail;
 
-	snprintf(nspath, sizeof(nspath), "%s/%s", "/var/run/netns", name);
-	nsfd = open(nspath, O_RDONLY | O_CLOEXEC);
-	if (!ASSERT_GE(nsfd, 0, "open netns fd"))
+	nsfd = get_netns(name);
+	if (nsfd < 0)
 		goto fail;
 
 	err = setns(nsfd, CLONE_NEWNET);
