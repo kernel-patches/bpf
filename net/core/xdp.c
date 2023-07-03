@@ -738,6 +738,26 @@ __bpf_kfunc int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_metadata_rx_vlan_tag - Get XDP packet outermost VLAN tag with protocol
+ * @ctx: XDP context pointer.
+ * @vlan_tag: Destination pointer for VLAN tag
+ * @vlan_proto: Destination pointer for VLAN protocol identifier in network byte order.
+ *
+ * In case of success, vlan_tag contains VLAN tag, including 12 least significant bytes
+ * containing VLAN ID, vlan_proto contains protocol identifier.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-EOPNOTSUPP`` : device driver doesn't implement kfunc
+ * * ``-ENODATA``    : VLAN tag was not stripped or is not available
+ */
+__bpf_kfunc int bpf_xdp_metadata_rx_vlan_tag(const struct xdp_md *ctx, u16 *vlan_tag,
+					     __be16 *vlan_proto)
+{
+	return -EOPNOTSUPP;
+}
+
 __diag_pop();
 
 BTF_SET8_START(xdp_metadata_kfunc_ids)
