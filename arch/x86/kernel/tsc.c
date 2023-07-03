@@ -15,6 +15,8 @@
 #include <linux/timex.h>
 #include <linux/static_key.h>
 #include <linux/static_call.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 #include <asm/hpet.h>
 #include <asm/timer.h>
@@ -29,6 +31,7 @@
 #include <asm/intel-family.h>
 #include <asm/i8259.h>
 #include <asm/uv/uv.h>
+#include <asm/tlbflush.h>
 
 unsigned int __read_mostly cpu_khz;	/* TSC clocks / usec, not used here */
 EXPORT_SYMBOL(cpu_khz);
@@ -1571,6 +1574,24 @@ void __init tsc_early_init(void)
 	tsc_enable_sched_clock();
 }
 
+u64 bpf_rdtsc(void)
+{
+	/* Check if Time Stamp is enabled only in ring 0 */
+	if (cr4_read_shadow() & X86_CR4_TSD)
+		return 0;
+
+	return rdtsc_ordered();
+}
+
+BTF_SET8_START(tsc_bpf_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_rdtsc)
+BTF_SET8_END(tsc_bpf_kfunc_ids)
+
+static const struct btf_kfunc_id_set tsc_bpf_kfunc_set = {
+	.owner		= THIS_MODULE,
+	.set		= &tsc_bpf_kfunc_ids,
+};
+
 void __init tsc_init(void)
 {
 	if (!cpu_feature_enabled(X86_FEATURE_TSC)) {
@@ -1614,6 +1635,8 @@ void __init tsc_init(void)
 
 	clocksource_register_khz(&clocksource_tsc_early, tsc_khz);
 	detect_art();
+
+	register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &tsc_bpf_kfunc_set);
 }
 
 #ifdef CONFIG_SMP
