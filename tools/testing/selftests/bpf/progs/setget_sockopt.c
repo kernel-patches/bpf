@@ -48,6 +48,10 @@ static const struct sockopt_test sol_socket_tests[] = {
 	{ .opt = SO_MARK, .new = 0xeb9f, .expected = 0xeb9f, },
 	{ .opt = SO_MAX_PACING_RATE, .new = 0xeb9f, .expected = 0xeb9f, },
 	{ .opt = SO_TXREHASH, .flip = 1, },
+	{ .opt = SO_TIMESTAMPING_NEW, .new = SOF_TIMESTAMPING_RX_HARDWARE,
+		.expected = SOF_TIMESTAMPING_RX_HARDWARE, },
+	{ .opt = SO_TIMESTAMPING_OLD, .new = SOF_TIMESTAMPING_RX_HARDWARE,
+		.expected = SOF_TIMESTAMPING_RX_HARDWARE, },
 	{ .opt = 0, },
 };
 
