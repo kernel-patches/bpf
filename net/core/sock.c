@@ -1712,9 +1712,11 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 	case SO_TIMESTAMPING_OLD:
 	case SO_TIMESTAMPING_NEW:
 		lv = sizeof(v.timestamping);
-		if (optname == (sock_flag(sk, SOCK_TSTAMP_NEW) ?
-					SO_TIMESTAMPING_NEW :
-					SO_TIMESTAMPING_OLD)) {
+		/* For the later-added case SO_TIMESTAMPING_NEW: Be strict about only
+		 * returning the flags when they were set through the same option.
+		 * Don't change the beviour for the old case SO_TIMESTAMPING_OLD.
+		 */
+		if (optname == SO_TIMESTAMPING_OLD || sock_flag(sk, SOCK_TSTAMP_NEW)) {
 			v.timestamping.flags = sk->sk_tsflags;
 			v.timestamping.bind_phc = sk->sk_bind_phc;
 		}
