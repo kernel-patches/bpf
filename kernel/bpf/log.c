@@ -325,3 +325,36 @@ __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 	va_end(args);
 }
 EXPORT_SYMBOL_GPL(bpf_log);
+
+static inline void __bpf_generic_log_write(struct bpf_generic_log *log, const char *fmt,
+				      va_list args)
+{
+	unsigned int n;
+
+	n = vscnprintf(log->kbuf, BPF_GENERIC_TMP_LOG_SIZE, fmt, args);
+
+	WARN_ONCE(n >= BPF_GENERIC_TMP_LOG_SIZE - 1,
+		  "bpf generic log truncated - local buffer too short\n");
+
+	n = min(log->len_total - log->len_used - 1, n);
+	log->kbuf[n] = '\0';
+
+	if (!copy_to_user(log->ubuf + log->len_used, log->kbuf, n + 1))
+		log->len_used += n;
+	else
+		log->ubuf = NULL;
+}
+
+__printf(2, 3) void bpf_generic_log_write(struct bpf_generic_log *log,
+				     const char *fmt, ...)
+{
+	va_list args;
+
+	if (!log->ubuf || !log->len_total)
+		return;
+
+	va_start(args, fmt);
+	__bpf_generic_log_write(log, fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL_GPL(bpf_generic_log_write);
