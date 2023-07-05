@@ -52,13 +52,9 @@ struct {
 SEC("?raw_tp/sys_enter")
 int use_missing_map(const void *ctx)
 {
-	int zero = 0, *value;
+	int zero = 0;
 
-	value = bpf_map_lookup_elem(&existing_map, &zero);
-
-	value = bpf_map_lookup_elem(&missing_map, &zero);
-
-	return value != NULL;
+	return bpf_map_lookup_elem(&missing_map, &zero) != NULL;
 }
 
 extern int bpf_nonexistent_kfunc(void) __ksym __weak;
