@@ -1318,6 +1318,11 @@ struct bpf_stack_build_id {
 	};
 };
 
+struct bpf_generic_user_log {
+	__aligned_u64	log_buf;    /* user supplied buffer */
+	__u32		log_size;   /* size of user buffer */
+};
+
 #define BPF_OBJ_NAME_LEN 16U
 
 union bpf_attr {
@@ -1544,6 +1549,7 @@ union bpf_attr {
 		};
 		__u32		attach_type;	/* attach type */
 		__u32		flags;		/* extra flags */
+		struct bpf_generic_user_log log; /* user log */
 		union {
 			__u32		target_btf_id;	/* btf_id of target to attach to */
 			struct {
