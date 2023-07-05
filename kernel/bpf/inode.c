@@ -597,6 +597,49 @@ struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type typ
 }
 EXPORT_SYMBOL(bpf_prog_get_type_path);
 
+static struct bpf_map *__get_map_inode(struct inode *inode, fmode_t fmode)
+{
+	struct bpf_map *map;
+	int ret = inode_permission(&nop_mnt_idmap, inode, MAY_READ);
+
+	if (ret)
+		return ERR_PTR(ret);
+
+	if (inode->i_op == &bpf_prog_iops)
+		return ERR_PTR(-EINVAL);
+	if (inode->i_op == &bpf_link_iops)
+		return ERR_PTR(-EINVAL);
+	if (inode->i_op != &bpf_map_iops)
+		return ERR_PTR(-EPERM);
+
+	map = inode->i_private;
+
+	ret = security_bpf_map(map, fmode);
+
+	if (ret < 0)
+		return ERR_PTR(ret);
+
+	bpf_map_inc(map);
+	return map;
+}
+
+struct bpf_map *bpf_map_get_path(const char *name, fmode_t fmode)
+{
+	struct bpf_map *map;
+	struct path path;
+	int ret = kern_path(name, LOOKUP_FOLLOW, &path);
+
+	if (ret)
+		return ERR_PTR(ret);
+	map = __get_map_inode(d_backing_inode(path.dentry), fmode);
+	if (!IS_ERR(map))
+		touch_atime(&path);
+	path_put(&path);
+	return map;
+}
+EXPORT_SYMBOL(bpf_map_get_path);
+
+
 /*
  * Display the mount options in /proc/mounts.
  */

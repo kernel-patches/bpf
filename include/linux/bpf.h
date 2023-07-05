@@ -2004,6 +2004,20 @@ int  generic_map_delete_batch(struct bpf_map *map,
 struct bpf_map *bpf_map_get_curr_or_next(u32 *id);
 struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id);
 
+void *_bpf_ringbuf_reserve(struct bpf_map *map,
+				 u64 size, u64 flags);
+void _bpf_ringbuf_commit(void *sample, u64 flags);
+void _bpf_ringbuf_discard(void *sample, u64 flags);
+int _bpf_ringbuf_output(struct bpf_map *map,
+			      void *data, u64 size, u64 flags);
+int _bpf_ringbuf_query(struct bpf_map *map, u64 flags);
+int _bpf_user_ringbuf_drain(struct bpf_map *map,
+				  void *callback_fn,
+				  void *callback_ctx,
+				  u64 flags);
+
+
+
 #ifdef CONFIG_MEMCG_KMEM
 void *bpf_map_kmalloc_node(const struct bpf_map *map, size_t size, gfp_t flags,
 			   int node);
@@ -2245,6 +2259,8 @@ static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
 }
 
 struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type);
+struct bpf_map *bpf_map_get_path(const char *name, fmode_t fmod);
+
 int array_map_alloc_check(union bpf_attr *attr);
 
 int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,

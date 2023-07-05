@@ -452,15 +452,21 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	return (void *)hdr + BPF_RINGBUF_HDR_SZ;
 }
 
-BPF_CALL_3(bpf_ringbuf_reserve, struct bpf_map *, map, u64, size, u64, flags)
+void *_bpf_ringbuf_reserve(struct bpf_map *map, u64 size, u64 flags)
 {
 	struct bpf_ringbuf_map *rb_map;
 
 	if (unlikely(flags))
-		return 0;
+		return NULL;
 
 	rb_map = container_of(map, struct bpf_ringbuf_map, map);
-	return (unsigned long)__bpf_ringbuf_reserve(rb_map->rb, size);
+	return __bpf_ringbuf_reserve(rb_map->rb, size);
+}
+EXPORT_SYMBOL(_bpf_ringbuf_reserve);
+
+BPF_CALL_3(bpf_ringbuf_reserve, struct bpf_map *, map, u64, size, u64, flags)
+{
+	return (unsigned long)_bpf_ringbuf_reserve(map, size, flags);
 }
 
 const struct bpf_func_proto bpf_ringbuf_reserve_proto = {
@@ -499,6 +505,12 @@ static void bpf_ringbuf_commit(void *sample, u64 flags, bool discard)
 		irq_work_queue(&rb->work);
 }
 
+void _bpf_ringbuf_commit(void *sample, u64 flags)
+{
+	bpf_ringbuf_commit(sample, flags, false);
+}
+EXPORT_SYMBOL(_bpf_ringbuf_commit);
+
 BPF_CALL_2(bpf_ringbuf_submit, void *, sample, u64, flags)
 {
 	bpf_ringbuf_commit(sample, flags, false /* discard */);
@@ -511,6 +523,12 @@ const struct bpf_func_proto bpf_ringbuf_submit_proto = {
 	.arg1_type	= ARG_PTR_TO_RINGBUF_MEM | OBJ_RELEASE,
 	.arg2_type	= ARG_ANYTHING,
 };
+
+void _bpf_ringbuf_discard(void *sample, u64 flags)
+{
+	bpf_ringbuf_commit(sample, flags, true);
+}
+EXPORT_SYMBOL(_bpf_ringbuf_discard);
 
 BPF_CALL_2(bpf_ringbuf_discard, void *, sample, u64, flags)
 {
@@ -525,8 +543,8 @@ const struct bpf_func_proto bpf_ringbuf_discard_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_4(bpf_ringbuf_output, struct bpf_map *, map, void *, data, u64, size,
-	   u64, flags)
+int _bpf_ringbuf_output(struct bpf_map *map, void *data, u64 size,
+	   u64 flags)
 {
 	struct bpf_ringbuf_map *rb_map;
 	void *rec;
@@ -543,6 +561,13 @@ BPF_CALL_4(bpf_ringbuf_output, struct bpf_map *, map, void *, data, u64, size,
 	bpf_ringbuf_commit(rec, flags, false /* discard */);
 	return 0;
 }
+EXPORT_SYMBOL(_bpf_ringbuf_output);
+
+BPF_CALL_4(bpf_ringbuf_output, struct bpf_map *, map, void *, data, u64, size,
+	   u64, flags)
+{
+	return _bpf_ringbuf_output(map, data, size, flags);
+}
 
 const struct bpf_func_proto bpf_ringbuf_output_proto = {
 	.func		= bpf_ringbuf_output,
@@ -553,7 +578,7 @@ const struct bpf_func_proto bpf_ringbuf_output_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
+int _bpf_ringbuf_query(struct bpf_map *map, u64 flags)
 {
 	struct bpf_ringbuf *rb;
 
@@ -571,6 +596,12 @@ BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
 	default:
 		return 0;
 	}
+}
+EXPORT_SYMBOL(_bpf_ringbuf_query);
+
+BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
+{
+	return _bpf_ringbuf_query(map, flags);
 }
 
 const struct bpf_func_proto bpf_ringbuf_query_proto = {
@@ -727,8 +758,8 @@ static void __bpf_user_ringbuf_sample_release(struct bpf_ringbuf *rb, size_t siz
 	smp_store_release(&rb->consumer_pos, consumer_pos + rounded_size);
 }
 
-BPF_CALL_4(bpf_user_ringbuf_drain, struct bpf_map *, map,
-	   void *, callback_fn, void *, callback_ctx, u64, flags)
+int __bpf_user_ringbuf_drain(struct bpf_map *map,
+	   void *callback_fn, void *callback_ctx, u64 flags)
 {
 	struct bpf_ringbuf *rb;
 	long samples, discarded_samples = 0, ret = 0;
@@ -783,6 +814,21 @@ schedule_work_return:
 		irq_work_queue(&rb->work);
 	return ret;
 }
+
+BPF_CALL_4(bpf_user_ringbuf_drain, struct bpf_map *, map,
+	   void *, callback_fn, void *, callback_ctx, u64, flags)
+{
+	return __bpf_user_ringbuf_drain(map, callback_fn, callback_ctx, flags);
+}
+
+
+int _bpf_user_ringbuf_drain(struct bpf_map *map,
+	   void *callback_fn, void *callback_ctx, u64 flags)
+{
+	return __bpf_user_ringbuf_drain(map, callback_fn, callback_ctx, flags);
+}
+EXPORT_SYMBOL(bpf_user_ringbuf_drain);
+
 
 const struct bpf_func_proto bpf_user_ringbuf_drain_proto = {
 	.func		= bpf_user_ringbuf_drain,
