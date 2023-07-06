@@ -138,4 +138,15 @@ config SYSTEM_BLACKLIST_AUTH_UPDATE
 	  keyring.  The PKCS#7 signature of the description is set in the key
 	  payload.  Blacklist keys cannot be removed.
 
+config UASYM_PRELOAD_PUBLIC_KEYS
+	bool "Preload user asymmetric keys"
+	depends on SYSTEM_TRUSTED_KEYRING
+	select UASYM_KEYS_SIGS
+	default n
+	help
+	  Load at boot time the user asymmetric keys from a reserved area
+	  (populated with the content of 'certs/uasym_keys.bin' provided at
+	  kernel build time), and add them to the built-in keyring. Invalid
+	  keys are ignored and the loading continues.
+
 endmenu

@@ -22,6 +22,13 @@ $(obj)/blacklist_hash_list: $(CONFIG_SYSTEM_BLACKLIST_HASH_LIST) FORCE
 
 targets += blacklist_hash_list
 
+ifdef CONFIG_UASYM_PRELOAD_PUBLIC_KEYS
+ifeq ($(shell ls $(srctree)/certs/uasym_keys.bin 2> /dev/null), $(srctree)/certs/uasym_keys.bin)
+AFLAGS_system_certificates.o += -DHAVE_UASYM_KEYRING_BLOB
+$(obj)/system_certificates.o: $(srctree)/certs/uasym_keys.bin
+endif
+endif
+
 quiet_cmd_extract_certs  = CERT    $@
       cmd_extract_certs  = $(obj)/extract-cert "$(extract-cert-in)" $@
 extract-cert-in = $(filter-out $(obj)/extract-cert, $(real-prereqs))

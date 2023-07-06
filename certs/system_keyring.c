@@ -179,6 +179,31 @@ static __init int system_trusted_keyring_init(void)
 	return 0;
 }
 
+#ifdef CONFIG_UASYM_PRELOAD_PUBLIC_KEYS
+extern __initconst const u8 uasym_keys[];
+extern __initconst const unsigned long uasym_keys_size;
+
+/**
+ * load_uasym_keyring - Load user asymmetric keys from a keyring blob
+ *
+ * Load user asymmetric keys from a keyring blob. Halt the parsing if
+ * a parsing error is encountered. If parsing succeed, ignore invalid keys.
+ *
+ * Return: Zero on success or on failure (ignored).
+ */
+static __init int load_uasym_keyring(void)
+{
+	pr_notice("Loading compiled-in user asymmetric keys\n");
+
+	if (preload_uasym_keys(uasym_keys, uasym_keys_size,
+			       builtin_trusted_keys) < 0)
+		pr_err("Can't load user asymmetric keys\n");
+
+	return 0;
+}
+late_initcall(load_uasym_keyring);
+#endif /* CONFIG_UASYM_PRELOAD_PUBLIC_KEYS */
+
 /*
  * Must be initialised before we try and load the keys into the keyring.
  */
@@ -186,13 +211,25 @@ device_initcall(system_trusted_keyring_init);
 
 __init int load_module_cert(struct key *keyring)
 {
+	int ret;
+
 	if (!IS_ENABLED(CONFIG_IMA_APPRAISE_MODSIG))
 		return 0;
 
 	pr_notice("Loading compiled-in module X.509 certificates\n");
 
-	return x509_load_certificate_list(system_certificate_list,
-					  module_cert_size, keyring);
+	ret = x509_load_certificate_list(system_certificate_list,
+					 module_cert_size, keyring);
+#ifdef CONFIG_UASYM_PRELOAD_PUBLIC_KEYS
+	if (!ret) {
+		pr_notice("Loading compiled-in user asymmetric keys\n");
+
+		ret = preload_uasym_keys(uasym_keys, uasym_keys_size, keyring);
+		if (ret < 0)
+			pr_err("Can't load user asymmetric keys\n");
+	}
+#endif
+	return ret;
 }
 
 /*

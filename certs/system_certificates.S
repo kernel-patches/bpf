@@ -44,3 +44,21 @@ module_cert_size:
 #else
 	.long __module_cert_end - __module_cert_start
 #endif
+
+	.align 8
+	.globl uasym_keys
+uasym_keys:
+__uasym_key_list_start:
+#ifdef HAVE_UASYM_KEYRING_BLOB
+	.incbin "certs/uasym_keys.bin"
+#endif
+__uasym_key_list_end:
+
+	.align 8
+	.globl uasym_keys_size
+uasym_keys_size:
+#ifdef CONFIG_64BIT
+	.quad __uasym_key_list_end - __uasym_key_list_start
+#else
+	.long __uasym_key_list_end - __uasym_key_list_start
+#endif
