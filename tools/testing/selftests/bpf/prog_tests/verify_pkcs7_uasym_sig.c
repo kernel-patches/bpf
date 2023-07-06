@@ -18,7 +18,7 @@
 #include <linux/keyctl.h>
 #include <test_progs.h>
 
-#include "test_verify_pkcs7_sig.skel.h"
+#include "test_verify_pkcs7_uasym_sig.skel.h"
 
 #define MAX_DATA_SIZE (1024 * 1024)
 #define MAX_SIG_SIZE 1024
@@ -28,6 +28,24 @@
 
 /* In stripped ARM and x86-64 modules, ~ is surprisingly rare. */
 #define MODULE_SIG_STRING "~Module signature appended~\n"
+
+#define PKEY_ID_PGP 0
+#define PKEY_ID_X509 1
+#define PKEY_ID_PKCS7 2
+
+static char *key_types_str[PKEY_ID_PKCS7 + 1] = {
+	[PKEY_ID_PGP] = "pgp",
+	[PKEY_ID_X509] = "x509",
+	[PKEY_ID_PKCS7] = "pkcs7",
+};
+
+enum algos { ALGO_RSA, ALGO_ECDSA_P256, ALGO_ECDSA_P384, ALGO__LAST };
+
+static char *algos_str[ALGO_ECDSA_P384 + 1] = {
+	[ALGO_RSA] = "rsa",
+	[ALGO_ECDSA_P256] = "ecdsa_p256",
+	[ALGO_ECDSA_P384] = "ecdsa_p384",
+};
 
 /*
  * Module signature information block.
@@ -74,13 +92,15 @@ static int libbpf_print_cb(enum libbpf_print_level level, const char *fmt,
 	return 0;
 }
 
-static int _run_setup_process(const char *setup_dir, const char *cmd)
+static int _run_setup_process(const char *setup_dir, const char *cmd,
+			      __u8 key_type, __u8 pkey_algo)
 {
 	int child_pid, child_status;
 
 	child_pid = fork();
 	if (child_pid == 0) {
-		execlp("./verify_sig_setup.sh", "./verify_sig_setup.sh", cmd,
+		execlp("./verify_sig_setup.sh", "./verify_sig_setup.sh",
+		       cmd, key_types_str[key_type], algos_str[pkey_algo] ?: "",
 		       setup_dir, NULL);
 		exit(errno);
 
@@ -92,11 +112,13 @@ static int _run_setup_process(const char *setup_dir, const char *cmd)
 	return -EINVAL;
 }
 
-static int populate_data_item_str(const char *tmp_dir, struct data *data_item)
+static int populate_data_item_str(const char *tmp_dir, __u8 key_type,
+				  struct data *data_item)
 {
 	struct stat st;
 	char data_template[] = "/tmp/dataXXXXXX";
 	char path[PATH_MAX];
+	char path_out[PATH_MAX];
 	int ret, fd, child_status, child_pid;
 
 	data_item->data_len = 4;
@@ -123,10 +145,26 @@ static int populate_data_item_str(const char *tmp_dir, struct data *data_item)
 	}
 
 	if (child_pid == 0) {
-		snprintf(path, sizeof(path), "%s/signing_key.pem", tmp_dir);
+		if (key_type == PKEY_ID_PKCS7) {
+			snprintf(path, sizeof(path), "%s/signing_key.pem",
+				 tmp_dir);
 
-		return execlp("./sign-file", "./sign-file", "-d", "sha256",
-			      path, path, data_template, NULL);
+			return execlp("./sign-file", "./sign-file", "-d",
+				      "sha256", path, path, data_template,
+				      NULL);
+		} else {
+			snprintf(path, sizeof(path), "%s.gpg", data_template);
+
+			return execlp("gpg", "gpg", "--no-options",
+				      "--no-auto-check-trustdb",
+				      "--no-permission-warning",
+				      "--default-key", "eBPF_UASYM_Test",
+				      "--sign", "-o", path, "--batch", "--yes",
+				      "--compress-algo=none", "-b",
+				      "--passphrase", "abc",
+				      "--pinentry-mode", "loopback", "-q",
+				      data_template, NULL);
+		}
 	}
 
 	waitpid(child_pid, &child_status, 0);
@@ -135,7 +173,35 @@ static int populate_data_item_str(const char *tmp_dir, struct data *data_item)
 	if (ret)
 		goto out;
 
-	snprintf(path, sizeof(path), "%s.p7s", data_template);
+	if (key_type != PKEY_ID_PKCS7) {
+		child_pid = fork();
+
+		if (child_pid == -1) {
+			ret = -errno;
+			goto out;
+		}
+
+		if (child_pid == 0) {
+			snprintf(path, sizeof(path), "%s.gpg", data_template);
+			snprintf(path_out, sizeof(path), "%s.kernel",
+				 data_template);
+
+			return execlp("gpg", "gpg", "--no-keyring",
+				      "--conv-kernel", "-o", path_out, path,
+				      NULL);
+		}
+
+		waitpid(child_pid, &child_status, 0);
+
+		ret = WEXITSTATUS(child_status);
+		if (ret)
+			goto out;
+	}
+
+	if (key_type == PKEY_ID_PKCS7)
+		snprintf(path, sizeof(path), "%s.p7s", data_template);
+	else
+		snprintf(path, sizeof(path), "%s.kernel", data_template);
 
 	ret = stat(path, &st);
 	if (ret == -1) {
@@ -254,12 +320,12 @@ out:
 	return ret;
 }
 
-void test_verify_pkcs7_sig(void)
+static void test_verify_pkcs7_uasym_sig(__u8 key_type, __u8 pkey_algo)
 {
 	libbpf_print_fn_t old_print_cb;
 	char tmp_dir_template[] = "/tmp/verify_sigXXXXXX";
 	char *tmp_dir;
-	struct test_verify_pkcs7_sig *skel = NULL;
+	struct test_verify_pkcs7_uasym_sig *skel = NULL;
 	struct bpf_map *map;
 	struct data data;
 	int ret, zero = 0;
@@ -272,37 +338,38 @@ void test_verify_pkcs7_sig(void)
 	if (!ASSERT_OK_PTR(tmp_dir, "mkdtemp"))
 		return;
 
-	ret = _run_setup_process(tmp_dir, "setup");
+	ret = _run_setup_process(tmp_dir, "setup", key_type, pkey_algo);
 	if (!ASSERT_OK(ret, "_run_setup_process"))
 		goto close_prog;
 
-	skel = test_verify_pkcs7_sig__open();
-	if (!ASSERT_OK_PTR(skel, "test_verify_pkcs7_sig__open"))
+	skel = test_verify_pkcs7_uasym_sig__open();
+	if (!ASSERT_OK_PTR(skel, "test_verify_pkcs7_uasym_sig__open"))
 		goto close_prog;
 
 	old_print_cb = libbpf_set_print(libbpf_print_cb);
-	ret = test_verify_pkcs7_sig__load(skel);
+	ret = test_verify_pkcs7_uasym_sig__load(skel);
 	libbpf_set_print(old_print_cb);
 
 	if (ret < 0 && kfunc_not_supported) {
 		printf(
-		  "%s:SKIP:bpf_verify_pkcs7_signature() kfunc not supported\n",
+		  "%s:SKIP:bpf_verify_*_signature() kfunc not supported\n",
 		  __func__);
 		test__skip();
 		goto close_prog;
 	}
 
-	if (!ASSERT_OK(ret, "test_verify_pkcs7_sig__load"))
+	if (!ASSERT_OK(ret, "test_verify_pkcs7_uasym_sig__load"))
 		goto close_prog;
 
-	ret = test_verify_pkcs7_sig__attach(skel);
-	if (!ASSERT_OK(ret, "test_verify_pkcs7_sig__attach"))
+	ret = test_verify_pkcs7_uasym_sig__attach(skel);
+	if (!ASSERT_OK(ret, "test_verify_pkcs7_uasym_sig__attach"))
 		goto close_prog;
 
 	map = bpf_object__find_map_by_name(skel->obj, "data_input");
 	if (!ASSERT_OK_PTR(map, "data_input not found"))
 		goto close_prog;
 
+	skel->bss->key_type = key_type;
 	skel->bss->monitored_pid = getpid();
 
 	/* Test without data and signature. */
@@ -313,7 +380,7 @@ void test_verify_pkcs7_sig(void)
 		goto close_prog;
 
 	/* Test successful signature verification with session keyring. */
-	ret = populate_data_item_str(tmp_dir, &data);
+	ret = populate_data_item_str(tmp_dir, key_type, &data);
 	if (!ASSERT_OK(ret, "populate_data_item_str"))
 		goto close_prog;
 
@@ -363,9 +430,13 @@ void test_verify_pkcs7_sig(void)
 	if (!ASSERT_LT(ret, 0, "bpf_map_update_elem data_input"))
 		goto close_prog;
 
-	ret = populate_data_item_mod(&data);
-	if (!ASSERT_OK(ret, "populate_data_item_mod"))
-		goto close_prog;
+	data.data_len = 0;
+
+	if (key_type == PKEY_ID_PKCS7) {
+		ret = populate_data_item_mod(&data);
+		if (!ASSERT_OK(ret, "populate_data_item_mod"))
+			goto close_prog;
+	}
 
 	/* Test signature verification with system keyrings. */
 	if (data.data_len) {
@@ -392,11 +463,49 @@ void test_verify_pkcs7_sig(void)
 	}
 
 close_prog:
-	_run_setup_process(tmp_dir, "cleanup");
+	_run_setup_process(tmp_dir, "cleanup", key_type, pkey_algo);
 
 	if (!skel)
 		return;
 
 	skel->bss->monitored_pid = 0;
-	test_verify_pkcs7_sig__destroy(skel);
+	test_verify_pkcs7_uasym_sig__destroy(skel);
+}
+
+static bool gpg_conv_kernel_supported(void)
+{
+	bool supported = false;
+	char line[1024];
+	FILE *fp;
+
+	fp = popen("gpg --conv-kernel /dev/null 2>&1", "r");
+	if (!fp)
+		return false;
+
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "gpg: processing message failed: Unknown system error")) {
+			supported = true;
+			break;
+		}
+	}
+
+	pclose(fp);
+	return supported;
+}
+
+void test_verify_pkcs7_sig(void)
+{
+	test_verify_pkcs7_uasym_sig(PKEY_ID_PKCS7, ALGO__LAST);
+}
+
+void test_verify_uasym_sig(void)
+{
+	int i;
+
+	/* This test requires support for the new gpg command --conv-kernel. */
+	if (!gpg_conv_kernel_supported())
+		return;
+
+	for (i = 0; i < ALGO__LAST; i++)
+		test_verify_pkcs7_uasym_sig(PKEY_ID_PGP, i);
 }

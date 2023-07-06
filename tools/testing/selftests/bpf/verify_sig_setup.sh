@@ -26,13 +26,39 @@ subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid
 "
 
+gpg_genkey_content_common="\
+     Name-Real: eBPF_UASYM_Test
+     Name-Comment: eBPF_UASYM_Test
+     Name-Email: ebpf_uasym_test@localhost
+     Expire-Date: 0
+     Passphrase: abc
+     %commit
+"
+gpg_genkey_content_rsa="\
+     Key-Type: RSA
+     Key-Length: 4096
+     $gpg_genkey_content_common
+"
+
+gpg_genkey_content_ecdsa_p256="\
+     Key-Type: ECDSA
+     Key-Curve: NIST P-256
+     $gpg_genkey_content_common
+"
+
+gpg_genkey_content_ecdsa_p384="\
+     Key-Type: ECDSA
+     Key-Curve: NIST P-384
+     $gpg_genkey_content_common
+"
+
 usage()
 {
-	echo "Usage: $0 <setup|cleanup <existing_tmp_dir>"
+	echo "Usage: $0 <setup|cleanup> <key type> <existing_tmp_dir>"
 	exit 1
 }
 
-setup()
+setup_pkcs7()
 {
 	local tmp_dir="$1"
 
@@ -52,11 +78,37 @@ setup()
 	keyctl link $key_id $keyring_id
 }
 
-cleanup() {
+setup_pgp()
+{
+	local tmp_dir="$1"
+	local varname="gpg_genkey_content_$2"
+
+	modprobe ecdsa_generic
+
+	echo "${!varname}" > ${tmp_dir}/gpg.genkey
+	gpg --batch --generate-key ${tmp_dir}/gpg.genkey
+
+	key_id=$(gpg --export eBPF_UASYM_Test | gpg --conv-kernel | keyctl padd asymmetric ebpf_testing_key @s)
+	keyring_id=$(keyctl newring ebpf_testing_keyring @s)
+	keyctl link $key_id $keyring_id
+}
+
+cleanup_pkcs7() {
 	local tmp_dir="$1"
 
 	keyctl unlink $(keyctl search @s asymmetric ebpf_testing_key) @s
 	keyctl unlink $(keyctl search @s keyring ebpf_testing_keyring) @s
+	rm -rf ${tmp_dir}
+}
+
+cleanup_pgp() {
+	local tmp_dir="$1"
+
+	keyctl unlink $(keyctl search @s asymmetric ebpf_testing_key) @s
+	keyctl unlink $(keyctl search @s keyring ebpf_testing_keyring) @s
+	key_fingerprint=$(gpg --fingerprint --with-colons eBPF_UASYM_Test | awk -F ":" '$1 == "fpr" {print $(NF-1)}')
+	gpg --delete-secret-key --batch --yes $key_fingerprint
+	gpg --delete-key --batch --yes $key_fingerprint
 	rm -rf ${tmp_dir}
 }
 
@@ -75,17 +127,33 @@ catch()
 
 main()
 {
-	[[ $# -ne 2 ]] && usage
+	[[ $# -ne 4 ]] && usage
 
 	local action="$1"
-	local tmp_dir="$2"
+	local key_type="$2"
+	local key_algo="$3"
+	local tmp_dir="$4"
 
 	[[ ! -d "${tmp_dir}" ]] && echo "Directory ${tmp_dir} doesn't exist" && exit 1
 
 	if [[ "${action}" == "setup" ]]; then
-		setup "${tmp_dir}"
+		if [[ "${key_type}" == "pkcs7" ]]; then
+			setup_pkcs7 "${tmp_dir}"
+		elif [[ "${key_type}" == "pgp" ]]; then
+			setup_pgp "${tmp_dir}" "${key_algo}"
+		else
+			echo "Unknown key type: ${key_type}"
+			exit 1
+		fi
 	elif [[ "${action}" == "cleanup" ]]; then
-		cleanup "${tmp_dir}"
+		if [[ "${key_type}" == "pkcs7" ]]; then
+			cleanup_pkcs7 "${tmp_dir}"
+		elif [[ "${key_type}" == "pgp" ]]; then
+			cleanup_pgp "${tmp_dir}"
+		else
+			echo "Unknown key type: ${key_type}"
+			exit 1
+		fi
 	else
 		echo "Unknown action: ${action}"
 		exit 1
