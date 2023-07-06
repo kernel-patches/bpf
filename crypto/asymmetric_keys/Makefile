@@ -84,4 +84,5 @@ obj-$(CONFIG_UASYM_KEYS_SIGS) += uasym_keys_sigs.o
 uasym_keys_sigs-y := \
 	uasym_parser.o \
 	uasym_key_parser.o \
-	uasym_sig_parser.o
+	uasym_sig_parser.o \
+	uasym_key_preload.o

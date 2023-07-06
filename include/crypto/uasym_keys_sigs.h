@@ -30,6 +30,9 @@ extern int uasym_sig_get_digest(struct uasym_sig_message *uasym_sig,
 extern int uasym_sig_verify_message(struct uasym_sig_message *uasym_sig,
 				    struct key *keyring);
 extern void uasym_sig_free_message(struct uasym_sig_message *uasym_sig);
+
+int __init preload_uasym_keys(const u8 *data, size_t data_len,
+			      struct key *keyring);
 #else
 static inline struct uasym_sig_message *
 uasym_sig_parse_message(const u8 *sig_data, size_t sig_len)
@@ -67,6 +70,12 @@ static inline int uasym_sig_verify_message(struct uasym_sig_message *uasym_sig,
 
 static inline void uasym_sig_free_message(struct uasym_sig_message *uasym_sig)
 {
+}
+
+static inline int __init preload_uasym_keys(const u8 *data, size_t data_len,
+					    struct key *keyring)
+{
+	return -EOPNOTSUPP;
 }
 
 #endif /* CONFIG_UASYM_KEYS_SIGS */
