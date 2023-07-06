@@ -1391,6 +1391,9 @@ config CRYPTO_HASH_INFO
 config CRYPTO_PUB_KEY_INFO
 	bool
 
+config CRYPTO_SIG_ENC_INFO
+	bool
+
 if !KMSAN # avoid false positives from assembly
 if ARM
 source "arch/arm/crypto/Kconfig"
