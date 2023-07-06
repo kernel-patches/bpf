@@ -9409,13 +9409,6 @@ static const struct bpf_link_ops bpf_xdp_link_lops = {
 	.update_prog = bpf_xdp_link_update,
 };
 
-static inline void bpf_xdp_link_log(const union bpf_attr *attr, struct netlink_ext_ack *extack)
-{
-	const struct bpf_generic_user_log *ulog = &attr->link_create.log;
-
-	BPF_GENERIC_ULOG_WRITE(ulog, extack->_msg);
-}
-
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	struct net *net = current->nsproxy->net_ns;
@@ -9454,7 +9447,7 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	if (err) {
 		link->dev = NULL;
 		bpf_link_cleanup(&link_primer);
-		bpf_xdp_link_log(attr, &extack);
+		bpf_ulog_once(&attr->link_create.xdp.ulog, extack._msg);
 		goto out_put_dev;
 	}
 
