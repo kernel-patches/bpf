@@ -16,6 +16,7 @@
 #include <keys/asymmetric-type.h>
 #include <keys/system_keyring.h>
 #include <crypto/pkcs7.h>
+#include <crypto/uasym_keys_sigs.h>
 
 static struct key *builtin_trusted_keys;
 #ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
@@ -339,6 +340,130 @@ int verify_pkcs7_signature(const void *data, size_t len,
 }
 EXPORT_SYMBOL_GPL(verify_pkcs7_signature);
 
+#ifdef CONFIG_UASYM_KEYS_SIGS
+/**
+ * verify_uasym_sig_message - Verify a user asym key signature on system data
+ * @data: The data to be verified (must be provided)
+ * @len: Size of @data
+ * @uasym_sig: The signature context
+ * @trusted_keys: Trusted keys to use (NULL for builtin trusted keys only,
+ *					(void *)1UL for all trusted keys)
+ *					(void *)2UL for platform keys)
+ * @usage: The use to which the key is being put
+ * @view_content: Callback to gain access to content
+ * @ctx: Context for callback
+ *
+ * Verify the user asymmetric key signature of the supplied system data,
+ * against a key (if found) in the supplied trusted keyring.
+ *
+ * Return: Zero on successful verification, a negative value otherwise.
+ */
+int verify_uasym_sig_message(const void *data, size_t len,
+			     struct uasym_sig_message *uasym_sig,
+			     struct key *trusted_keys,
+			     enum key_being_used_for usage,
+			     int (*view_content)(void *ctx,
+						 const void *data, size_t len,
+						 size_t asn1hdrlen),
+			     void *ctx)
+{
+	int ret;
+
+	/* The data should be detached - so we need to supply it. */
+	if (data && uasym_sig_supply_detached_data(uasym_sig, data, len)) {
+		pr_err("Failed to supply data for user asymmetric key signature\n");
+		ret = -EBADMSG;
+		goto error;
+	}
+
+	if (!trusted_keys) {
+		trusted_keys = builtin_trusted_keys;
+	} else if (trusted_keys == VERIFY_USE_SECONDARY_KEYRING) {
+#ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
+		trusted_keys = secondary_trusted_keys;
+#else
+		trusted_keys = builtin_trusted_keys;
+#endif
+	} else if (trusted_keys == VERIFY_USE_PLATFORM_KEYRING) {
+#ifdef CONFIG_INTEGRITY_PLATFORM_KEYRING
+		trusted_keys = platform_trusted_keys;
+#else
+		trusted_keys = NULL;
+#endif
+		if (!trusted_keys) {
+			ret = -ENOKEY;
+			pr_devel("Platform keyring is not available\n");
+			goto error;
+		}
+	}
+
+	ret = uasym_sig_verify_message(uasym_sig, trusted_keys);
+	if (ret < 0)
+		goto error;
+
+	if (view_content) {
+		size_t sig_data_len;
+
+		ret = uasym_sig_get_content_data(uasym_sig, &data, &len,
+						 &sig_data_len);
+		if (ret < 0) {
+			if (ret == -ENODATA)
+				pr_devel("User asymmetric key signature does not contain data\n");
+			goto error;
+		}
+
+		ret = view_content(ctx, data, len, sig_data_len);
+		kfree(data);
+	}
+error:
+	pr_devel("<==%s() = %d\n", __func__, ret);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(verify_uasym_sig_message);
+
+/**
+ * verify_uasym_signature - Verify a user asym key signature on system data
+ * @data: The data to be verified (must be provided)
+ * @len: Size of @data
+ * @raw_uasym_sig: The raw signature
+ * @raw_uasym_sig_len: The size of @raw_uasym_sig
+ * @trusted_keys: Trusted keys to use (NULL for builtin trusted keys only,
+ *					(void *)1UL for all trusted keys)
+ *					(void *)2UL for platform keys)
+ * @usage: The use to which the key is being put
+ * @view_content: Callback to gain access to content
+ * @ctx: Context for callback
+ *
+ * Verify the user asymmetric key signature of the supplied system data,
+ * against a key (if found) in the supplied trusted keyring.
+ *
+ * Return: Zero on successful verification, a negative value otherwise.
+ */
+int verify_uasym_signature(const void *data, size_t len,
+			   const void *raw_uasym_sig, size_t raw_uasym_sig_len,
+			   struct key *trusted_keys,
+			   enum key_being_used_for usage,
+			   int (*view_content)(void *ctx,
+					       const void *data, size_t len,
+					       size_t asn1hdrlen),
+			   void *ctx)
+{
+	struct uasym_sig_message *uasym_sig;
+	int ret;
+
+	uasym_sig = uasym_sig_parse_message(raw_uasym_sig, raw_uasym_sig_len);
+	if (IS_ERR(uasym_sig))
+		return PTR_ERR(uasym_sig);
+
+	ret = verify_uasym_sig_message(data, len, uasym_sig, trusted_keys, usage,
+				       view_content, ctx);
+
+	uasym_sig_free_message(uasym_sig);
+	pr_devel("<==%s() = %d\n", __func__, ret);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(verify_uasym_signature);
+#endif /* CONFIG_UASYM_KEYS_SIGS */
 #endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
 
 #ifdef CONFIG_INTEGRITY_PLATFORM_KEYRING

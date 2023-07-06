@@ -43,6 +43,7 @@ extern const char *const key_being_used_for[NR__KEY_BEING_USED_FOR];
 
 struct key;
 struct pkcs7_message;
+struct uasym_sig_message;
 
 extern int verify_pkcs7_signature(const void *data, size_t len,
 				  const void *raw_pkcs7, size_t pkcs7_len,
@@ -61,6 +62,55 @@ extern int verify_pkcs7_message_sig(const void *data, size_t len,
 							size_t len,
 							size_t asn1hdrlen),
 				    void *ctx);
+
+#ifdef CONFIG_UASYM_KEYS_SIGS
+extern int verify_uasym_sig_message(const void *data, size_t len,
+				    struct uasym_sig_message *uasym_sig,
+				    struct key *trusted_keys,
+				    enum key_being_used_for usage,
+				    int (*view_content)(void *ctx,
+							const void *data,
+							size_t len,
+							size_t asn1hdrlen),
+				    void *ctx);
+extern int verify_uasym_signature(const void *data, size_t len,
+				  const void *raw_uasym_sig,
+				  size_t raw_uasym_sig_len,
+				  struct key *trusted_keys,
+				  enum key_being_used_for usage,
+				  int (*view_content)(void *ctx,
+						      const void *data,
+						      size_t len,
+						      size_t asn1hdrlen),
+				  void *ctx);
+#else
+static inline int verify_uasym_sig_message(const void *data, size_t len,
+					   struct uasym_sig_message *uasym_sig,
+					   struct key *trusted_keys,
+					   enum key_being_used_for usage,
+					   int (*view_content)(void *ctx,
+							const void *data,
+							size_t len,
+							size_t asn1hdrlen),
+					   void *ctx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int verify_uasym_signature(const void *data, size_t len,
+					 const void *raw_uasym_sig,
+					 size_t raw_uasym_sig_len,
+					 struct key *trusted_keys,
+					 enum key_being_used_for usage,
+					 int (*view_content)(void *ctx,
+							     const void *data,
+							     size_t len,
+							     size_t asn1hdrlen),
+					 void *ctx)
+{
+	return -EOPNOTSUPP;
+}
+#endif /* CONFIG_UASYM_KEYS_SIGS */
 
 #ifdef CONFIG_SIGNED_PE_FILE_VERIFICATION
 extern int verify_pefile_signature(const void *pebuf, unsigned pelen,
