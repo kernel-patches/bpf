@@ -1388,6 +1388,9 @@ endmenu
 config CRYPTO_HASH_INFO
 	bool
 
+config CRYPTO_PUB_KEY_INFO
+	bool
+
 if !KMSAN # avoid false positives from assembly
 if ARM
 source "arch/arm/crypto/Kconfig"
