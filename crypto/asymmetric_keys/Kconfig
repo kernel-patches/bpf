@@ -85,4 +85,16 @@ config FIPS_SIGNATURE_SELFTEST
 	depends on ASYMMETRIC_KEY_TYPE
 	depends on PKCS7_MESSAGE_PARSER=X509_CERTIFICATE_PARSER
 
+config UASYM_KEYS_SIGS
+	tristate "User asymmetric keys and signatures"
+	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE
+	help
+	  This option enables user asymmetric keys and signatures. They are
+	  keys and signatures converted in user space from their native
+	  format (e.g. PGP), to the TLV format (Type-Length-Value) understood
+	  by the kernel.
+
+	  Key and signature-specific fields are defined in the UAPI interface,
+	  so that user space converters can reference them.
+
 endif # ASYMMETRIC_KEY_TYPE
