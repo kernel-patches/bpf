@@ -326,15 +326,32 @@ __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 }
 EXPORT_SYMBOL_GPL(bpf_log);
 
-static inline void __bpf_generic_log_write(struct bpf_generic_log *log, const char *fmt,
-				      va_list args)
+#define BPF_USER_TMP_LOG_SIZE	256
+
+struct bpf_user_log {
+	char		kbuf[BPF_USER_TMP_LOG_SIZE];
+	char __user	*ubuf;
+	u32		len_used;
+	u32		len_total;
+};
+
+static inline void bpf_ulog_init(struct bpf_user_log *log,
+				 const struct bpf_generic_user_log *ulog)
+{
+	log->ubuf = (char __user *) (unsigned long) ulog->log_buf;
+	log->len_total = ulog->log_size;
+	log->len_used = 0;
+}
+
+static inline void bpf_ulog_write(struct bpf_user_log *log,
+				  const char *fmt, va_list args)
 {
 	unsigned int n;
 
-	n = vscnprintf(log->kbuf, BPF_GENERIC_TMP_LOG_SIZE, fmt, args);
+	n = vscnprintf(log->kbuf, BPF_USER_TMP_LOG_SIZE, fmt, args);
 
-	WARN_ONCE(n >= BPF_GENERIC_TMP_LOG_SIZE - 1,
-		  "bpf generic log truncated - local buffer too short\n");
+	WARN_ONCE(n >= BPF_USER_TMP_LOG_SIZE - 1,
+		  "bpf user log line truncated - local buffer too short\n");
 
 	n = min(log->len_total - log->len_used - 1, n);
 	log->kbuf[n] = '\0';
@@ -345,16 +362,18 @@ static inline void __bpf_generic_log_write(struct bpf_generic_log *log, const ch
 		log->ubuf = NULL;
 }
 
-__printf(2, 3) void bpf_generic_log_write(struct bpf_generic_log *log,
-				     const char *fmt, ...)
+__printf(2, 3) void bpf_ulog_once(const struct bpf_generic_user_log *ulog,
+				  const char *fmt, ...)
 {
+	struct bpf_user_log log;
 	va_list args;
 
-	if (!log->ubuf || !log->len_total)
+	if (!ulog->log_buf || !ulog->log_size)
 		return;
 
+	bpf_ulog_init(&log, ulog);
 	va_start(args, fmt);
-	__bpf_generic_log_write(log, fmt, args);
+	bpf_ulog_write(&log, fmt, args);
 	va_end(args);
 }
-EXPORT_SYMBOL_GPL(bpf_generic_log_write);
+EXPORT_SYMBOL_GPL(bpf_ulog_once);
