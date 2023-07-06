@@ -430,7 +430,7 @@ static int asymmetric_key_preparse(struct key_preparsed_payload *prep)
 /*
  * Clean up the key ID list
  */
-static void asymmetric_key_free_kids(struct asymmetric_key_ids *kids)
+void asymmetric_key_free_kids(struct asymmetric_key_ids *kids)
 {
 	int i;
 
@@ -440,6 +440,7 @@ static void asymmetric_key_free_kids(struct asymmetric_key_ids *kids)
 		kfree(kids);
 	}
 }
+EXPORT_SYMBOL_GPL(asymmetric_key_free_kids);
 
 /*
  * Clean up the preparse data

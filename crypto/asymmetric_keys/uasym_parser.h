@@ -28,3 +28,8 @@ int uasym_parse_data(parse_callback callback, void *callback_data,
 		     u16 num_fields, const u8 *data, size_t data_len);
 int uasym_parse(enum data_types expected_data_type, parse_callback callback,
 		void *callback_data, const u8 *data, size_t data_len);
+
+int parse_key_algo(const char **pkey_algo, enum fields field,
+		   const u8 *field_data, u32 field_data_len);
+int parse_key_kid(struct asymmetric_key_id **id, enum fields field,
+		  const u8 *data, u32 data_len);

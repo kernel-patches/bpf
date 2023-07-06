@@ -88,6 +88,7 @@ config FIPS_SIGNATURE_SELFTEST
 config UASYM_KEYS_SIGS
 	tristate "User asymmetric keys and signatures"
 	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE
+	select CRYPTO_PUB_KEY_INFO
 	help
 	  This option enables user asymmetric keys and signatures. They are
 	  keys and signatures converted in user space from their native

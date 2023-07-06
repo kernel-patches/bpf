@@ -66,6 +66,7 @@ extern struct asymmetric_key_id *asymmetric_key_generate_id(const void *val_1,
 							    size_t len_1,
 							    const void *val_2,
 							    size_t len_2);
+void asymmetric_key_free_kids(struct asymmetric_key_ids *kids);
 static inline
 const struct asymmetric_key_ids *asymmetric_key_ids(const struct key *key)
 {

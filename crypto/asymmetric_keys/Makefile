@@ -82,4 +82,5 @@ $(obj)/mscode.asn1.o: $(obj)/mscode.asn1.c $(obj)/mscode.asn1.h
 #
 obj-$(CONFIG_UASYM_KEYS_SIGS) += uasym_keys_sigs.o
 uasym_keys_sigs-y := \
-	uasym_parser.o
+	uasym_parser.o \
+	uasym_key_parser.o
