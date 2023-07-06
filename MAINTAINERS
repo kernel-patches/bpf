@@ -3211,6 +3211,7 @@ F:	Documentation/crypto/asymmetric-keys.rst
 F:	crypto/asymmetric_keys/
 F:	include/crypto/pkcs7.h
 F:	include/crypto/public_key.h
+F:	include/crypto/uasym_sig.h
 F:	include/linux/verification.h
 
 ASYNCHRONOUS TRANSFERS/TRANSFORMS (IOAT) API

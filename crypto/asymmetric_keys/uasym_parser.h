@@ -17,6 +17,14 @@
 #define kleave(FMT, ...) \
 	pr_debug("<== %s()"FMT"\n", __func__, ##__VA_ARGS__)
 
+struct uasym_sig_message {
+	struct public_key_signature *sig;
+	size_t data_len;
+	const void *data;
+	size_t sig_data_len;
+	const void *sig_data;
+};
+
 typedef int (*parse_callback)(void *, enum fields, const u8 *, u32);
 
 extern const char *data_types_str[];
