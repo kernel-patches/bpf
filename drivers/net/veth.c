@@ -1814,6 +1814,34 @@ static int veth_devtx_tx_timestamp(const struct devtx_ctx *_ctx, u64 *timestamp)
 	return 0;
 }
 
+static int veth_devtx_request_l4_csum(const struct devtx_ctx *_ctx,
+				      u16 csum_start, u16 csum_offset)
+{
+	struct veth_devtx_ctx *ctx = (struct veth_devtx_ctx *)_ctx;
+	struct sk_buff *skb = ctx->skb;
+	__wsum csum;
+	int ret;
+
+	if (!skb)
+		return -EINVAL;
+
+	if (skb_transport_header_was_set(skb))
+		return -EINVAL;
+
+	if (csum_start >= skb->len)
+		return -EINVAL;
+
+	ret = skb_ensure_writable(skb, csum_offset + sizeof(__sum16));
+	if (ret)
+		return ret;
+
+	csum = csum_partial(skb->data + csum_start, skb->len - csum_start, 0);
+	*(__sum16 *)(skb->data + csum_offset) = csum_fold(csum) ?: CSUM_MANGLED_0;
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	return 0;
+}
+
 static const struct net_device_ops veth_netdev_ops = {
 	.ndo_init            = veth_dev_init,
 	.ndo_open            = veth_open,
@@ -1840,6 +1868,7 @@ static const struct xdp_metadata_ops veth_xdp_metadata_ops = {
 	.xmo_rx_hash			= veth_xdp_rx_hash,
 	.xmo_request_tx_timestamp	= veth_devtx_request_tx_timestamp,
 	.xmo_tx_timestamp		= veth_devtx_tx_timestamp,
+	.xmo_request_l4_checksum	= veth_devtx_request_l4_csum,
 };
 
 #define VETH_FEATURES (NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_HW_CSUM | \
