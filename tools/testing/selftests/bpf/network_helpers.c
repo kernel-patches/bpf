@@ -450,3 +450,24 @@ int get_socket_local_port(int sock_fd)
 
 	return -1;
 }
+
+#ifndef SO_NETNS_COOKIE
+#define SO_NETNS_COOKIE 71
+#endif
+
+__u64 get_net_cookie(void)
+{
+	socklen_t optlen;
+	__u64 optval = 0;
+	int fd;
+
+	fd = socket(AF_LOCAL, SOCK_DGRAM, 0);
+	if (fd >= 0) {
+		optlen = sizeof(optval);
+		getsockopt(fd, SOL_SOCKET, SO_NETNS_COOKIE, &optval, &optlen);
+		close(fd);
+	}
+
+	return optval;
+}
+

@@ -57,6 +57,7 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		  struct sockaddr_storage *addr, socklen_t *len);
 char *ping_command(int family);
 int get_socket_local_port(int sock_fd);
+__u64 get_net_cookie(void);
 
 struct nstoken;
 /**
