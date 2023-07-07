@@ -1654,10 +1654,14 @@ struct net_device_ops {
 						  bool cycles);
 };
 
+struct devtx_ctx;
+
 struct xdp_metadata_ops {
 	int	(*xmo_rx_timestamp)(const struct xdp_md *ctx, u64 *timestamp);
 	int	(*xmo_rx_hash)(const struct xdp_md *ctx, u32 *hash,
 			       enum xdp_rss_hash_type *rss_type);
+	int	(*xmo_request_tx_timestamp)(const struct devtx_ctx *ctx);
+	int	(*xmo_tx_timestamp)(const struct devtx_ctx *ctx, u64 *timestamp);
 };
 
 /**

@@ -12,9 +12,21 @@
 			      bpf_xdp_metadata_rx_hash, \
 			      xmo_rx_hash)
 
+#define DEVTX_SUBMIT_KFUNC_xxx	\
+	NETDEV_METADATA_KFUNC(DEVTX_KFUNC_REQUEST_TX_TIMESTAMP, \
+			      bpf_devtx_request_tx_timestamp, \
+			      xmo_request_tx_timestamp)
+
+#define DEVTX_COMPLETE_KFUNC_xxx	\
+	NETDEV_METADATA_KFUNC(DEVTX_KFUNC_TX_TIMESTAMP, \
+			      bpf_devtx_tx_timestamp, \
+			      xmo_tx_timestamp)
+
 enum {
 #define NETDEV_METADATA_KFUNC(name, _, __) name,
 XDP_METADATA_KFUNC_xxx
+DEVTX_SUBMIT_KFUNC_xxx
+DEVTX_COMPLETE_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 MAX_NETDEV_METADATA_KFUNC,
 };

@@ -862,6 +862,8 @@ void *bpf_dev_bound_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
 #define NETDEV_METADATA_KFUNC(name, _, xmo) \
 	if (func_id == bpf_dev_bound_kfunc_id(name)) p = ops->xmo;
 	XDP_METADATA_KFUNC_xxx
+	DEVTX_SUBMIT_KFUNC_xxx
+	DEVTX_COMPLETE_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 
 out:
@@ -873,12 +875,16 @@ out:
 BTF_SET_START(dev_bound_kfunc_ids)
 #define NETDEV_METADATA_KFUNC(name, str, _) BTF_ID(func, str)
 XDP_METADATA_KFUNC_xxx
+DEVTX_SUBMIT_KFUNC_xxx
+DEVTX_COMPLETE_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 BTF_SET_END(dev_bound_kfunc_ids)
 
 BTF_ID_LIST(dev_bound_kfunc_ids_unsorted)
 #define NETDEV_METADATA_KFUNC(name, str, _) BTF_ID(func, str)
 XDP_METADATA_KFUNC_xxx
+DEVTX_SUBMIT_KFUNC_xxx
+DEVTX_COMPLETE_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 
 u32 bpf_dev_bound_kfunc_id(int id)
