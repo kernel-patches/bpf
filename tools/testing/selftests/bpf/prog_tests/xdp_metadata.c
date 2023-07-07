@@ -42,6 +42,8 @@ struct xsk {
 	struct xsk_ring_prod tx;
 	struct xsk_ring_cons rx;
 	struct xsk_socket *socket;
+	int tx_completions;
+	struct devtx_sample last_sample;
 };
 
 static int open_xsk(int ifindex, struct xsk *xsk)
@@ -51,6 +53,7 @@ static int open_xsk(int ifindex, struct xsk *xsk)
 		.rx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
 		.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
 		.bind_flags = XDP_COPY,
+		.tx_metadata_len = TX_META_LEN,
 	};
 	const struct xsk_umem_config umem_config = {
 		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
@@ -138,6 +141,7 @@ static void ip_csum(struct iphdr *iph)
 
 static int generate_packet(struct xsk *xsk, __u16 dst_port)
 {
+	struct xdp_tx_meta *meta;
 	struct xdp_desc *tx_desc;
 	struct udphdr *udph;
 	struct ethhdr *eth;
@@ -151,9 +155,12 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 		return -1;
 
 	tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx);
-	tx_desc->addr = idx % (UMEM_NUM / 2) * UMEM_FRAME_SIZE;
+	tx_desc->addr = idx % (UMEM_NUM / 2) * UMEM_FRAME_SIZE + TX_META_LEN;
 	printf("%p: tx_desc[%u]->addr=%llx\n", xsk, idx, tx_desc->addr);
 	data = xsk_umem__get_data(xsk->umem_area, tx_desc->addr);
+
+	meta = data - TX_META_LEN;
+	meta->request_timestamp = 1;
 
 	eth = data;
 	iph = (void *)(eth + 1);
@@ -178,7 +185,8 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 	udph->source = htons(AF_XDP_SOURCE_PORT);
 	udph->dest = htons(dst_port);
 	udph->len = htons(sizeof(*udph) + UDP_PAYLOAD_BYTES);
-	udph->check = 0;
+	udph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
+					 ntohs(udph->len), IPPROTO_UDP, 0);
 
 	memset(udph + 1, 0xAA, UDP_PAYLOAD_BYTES);
 
@@ -192,7 +200,8 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 	return 0;
 }
 
-static void complete_tx(struct xsk *xsk)
+static void complete_tx(struct xsk *xsk, struct xdp_metadata *bpf_obj,
+			struct ring_buffer *ringbuf)
 {
 	__u32 idx;
 	__u64 addr;
@@ -202,6 +211,14 @@ static void complete_tx(struct xsk *xsk)
 
 		printf("%p: complete tx idx=%u addr=%llx\n", xsk, idx, addr);
 		xsk_ring_cons__release(&xsk->comp, 1);
+
+		ring_buffer__poll(ringbuf, 1000);
+
+		ASSERT_EQ(bpf_obj->bss->pkts_fail_tx, 0, "pkts_fail_tx");
+		ASSERT_GE(xsk->tx_completions, 1, "tx_completions");
+		ASSERT_EQ(xsk->last_sample.timestamp_retval, 0, "timestamp_retval");
+		ASSERT_GE(xsk->last_sample.hw_timestamp, 0, "hw_timestamp");
+		ASSERT_EQ(xsk->last_sample.tx_csum, 0x1c72, "tx_csum");
 	}
 }
 
@@ -276,8 +293,23 @@ static int verify_xsk_metadata(struct xsk *xsk)
 	return 0;
 }
 
+static int process_sample(void *ctx, void *data, size_t len)
+{
+	struct devtx_sample *sample = data;
+	struct xsk *xsk = ctx;
+
+	printf("%p: got tx timestamp sample %u %llu\n",
+	       xsk, sample->timestamp_retval, sample->hw_timestamp);
+
+	xsk->tx_completions++;
+	xsk->last_sample = *sample;
+
+	return 0;
+}
+
 void test_xdp_metadata(void)
 {
+	struct ring_buffer *tx_compl_ringbuf = NULL;
 	struct xdp_metadata2 *bpf_obj2 = NULL;
 	struct xdp_metadata *bpf_obj = NULL;
 	struct bpf_program *new_prog, *prog;
@@ -290,6 +322,7 @@ void test_xdp_metadata(void)
 	int retries = 10;
 	int rx_ifindex;
 	int tx_ifindex;
+	int syscall_fd;
 	int sock_fd;
 	int ret;
 
@@ -323,11 +356,31 @@ void test_xdp_metadata(void)
 	if (!ASSERT_OK_PTR(bpf_obj, "open skeleton"))
 		goto out;
 
+	prog = bpf_object__find_program_by_name(bpf_obj->obj, "tx_submit");
+	bpf_program__set_ifindex(prog, tx_ifindex);
+	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
+
+	prog = bpf_object__find_program_by_name(bpf_obj->obj, "tx_complete");
+	bpf_program__set_ifindex(prog, tx_ifindex);
+	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
+
 	prog = bpf_object__find_program_by_name(bpf_obj->obj, "rx");
 	bpf_program__set_ifindex(prog, rx_ifindex);
 	bpf_program__set_flags(prog, BPF_F_XDP_DEV_BOUND_ONLY);
 
 	if (!ASSERT_OK(xdp_metadata__load(bpf_obj), "load skeleton"))
+		goto out;
+
+	bpf_obj->data->ifindex = tx_ifindex;
+	bpf_obj->data->net_cookie = get_net_cookie();
+
+	ret = xdp_metadata__attach(bpf_obj);
+	if (!ASSERT_OK(ret, "xdp_metadata__attach"))
+		goto out;
+
+	tx_compl_ringbuf = ring_buffer__new(bpf_map__fd(bpf_obj->maps.tx_compl_buf),
+					    process_sample, &tx_xsk, NULL);
+	if (!ASSERT_OK_PTR(tx_compl_ringbuf, "ring_buffer__new"))
 		goto out;
 
 	/* Make sure we can't add dev-bound programs to prog maps. */
@@ -364,7 +417,8 @@ void test_xdp_metadata(void)
 		       "verify_xsk_metadata"))
 		goto out;
 
-	complete_tx(&tx_xsk);
+	/* Verify AF_XDP TX packet has completion event with a timestamp. */
+	complete_tx(&tx_xsk, bpf_obj, tx_compl_ringbuf);
 
 	/* Make sure freplace correctly picks up original bound device
 	 * and doesn't crash.
@@ -402,5 +456,7 @@ out:
 	xdp_metadata__destroy(bpf_obj);
 	if (tok)
 		close_netns(tok);
+	if (tx_compl_ringbuf)
+		ring_buffer__free(tx_compl_ringbuf);
 	SYS_NOFAIL("ip netns del xdp_metadata");
 }

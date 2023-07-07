@@ -18,3 +18,19 @@ struct xdp_meta {
 		__s32 rx_hash_err;
 	};
 };
+
+struct devtx_sample {
+	int timestamp_retval;
+	__u64 hw_timestamp;
+	__u64 sw_complete_timestamp;
+	__u16 tx_csum;
+};
+
+#define TX_META_LEN	8
+
+struct xdp_tx_meta {
+	__u8 request_timestamp;
+	__u8 padding0;
+	__u16 padding1;
+	__u32 padding2;
+};
