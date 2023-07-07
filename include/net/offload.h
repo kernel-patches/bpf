@@ -6,12 +6,14 @@
 
 #define XDP_METADATA_KFUNC_xxx	\
 	NETDEV_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_TIMESTAMP, \
-			      bpf_xdp_metadata_rx_timestamp) \
+			      bpf_xdp_metadata_rx_timestamp, \
+			      xmo_rx_timestamp) \
 	NETDEV_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_HASH, \
-			      bpf_xdp_metadata_rx_hash)
+			      bpf_xdp_metadata_rx_hash, \
+			      xmo_rx_hash)
 
 enum {
-#define NETDEV_METADATA_KFUNC(name, _) name,
+#define NETDEV_METADATA_KFUNC(name, _, __) name,
 XDP_METADATA_KFUNC_xxx
 #undef NETDEV_METADATA_KFUNC
 MAX_NETDEV_METADATA_KFUNC,
