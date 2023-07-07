@@ -6,6 +6,7 @@
 
 #include "en.h"
 #include <linux/indirect_call_wrapper.h>
+#include <net/devtx.h>
 
 #define MLX5E_TX_WQE_EMPTY_DS_COUNT (sizeof(struct mlx5e_tx_wqe) / MLX5_SEND_WQE_DS)
 
@@ -506,4 +507,18 @@ static inline struct mlx5e_mpw_info *mlx5e_get_mpw_info(struct mlx5e_rq *rq, int
 
 	return (struct mlx5e_mpw_info *)((char *)rq->mpwqe.info + array_size(i, isz));
 }
+
+struct mlx5e_devtx_ctx {
+	struct devtx_ctx devtx;
+	union {
+		struct {
+			struct mlx5_cqe64 *cqe; /* tx completion */
+			struct mlx5e_cq *cq; /* tx completion */
+		};
+		struct mlx5e_tx_wqe *wqe; /* tx */
+	};
+};
+
+DECLARE_DEVTX_HOOKS(mlx5e);
+
 #endif

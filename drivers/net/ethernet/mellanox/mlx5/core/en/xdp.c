@@ -255,9 +255,60 @@ static int mlx5e_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+static int mlx5e_devtx_request_tx_timestamp(const struct devtx_ctx *ctx)
+{
+	/* Nothing to do here, CQE always has a timestamp. */
+	return 0;
+}
+
+static int mlx5e_devtx_tx_timestamp(const struct devtx_ctx *_ctx, u64 *timestamp)
+{
+	const struct mlx5e_devtx_ctx *ctx = (void *)_ctx;
+	u64 ts;
+
+	if (unlikely(!ctx->cqe || !ctx->cq))
+		return -ENODATA;
+
+	ts = get_cqe_ts(ctx->cqe);
+
+	if (mlx5_is_real_time_rq(ctx->cq->mdev) || mlx5_is_real_time_sq(ctx->cq->mdev))
+		*timestamp = mlx5_real_time_cyc2time(&ctx->cq->mdev->clock, ts);
+	else
+		*timestamp = mlx5_timecounter_cyc2time(&ctx->cq->mdev->clock, ts);
+
+	return 0;
+}
+
+static int mlx5e_devtx_request_l4_checksum(const struct devtx_ctx *_ctx,
+					   u16 csum_start, u16 csum_offset)
+{
+	const struct mlx5e_devtx_ctx *ctx = (void *)_ctx;
+	struct mlx5_wqe_eth_seg *eseg;
+
+	if (unlikely(!ctx->wqe))
+		return -ENODATA;
+
+	eseg = &ctx->wqe->eth;
+
+	switch (csum_offset) {
+	case sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct udphdr, check):
+	case sizeof(struct ethhdr) + sizeof(struct ipv6hdr) + offsetof(struct udphdr, check):
+		/* Looks like HW/FW is doing parsing, so offsets are largely ignored. */
+		eseg->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 const struct xdp_metadata_ops mlx5e_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= mlx5e_xdp_rx_timestamp,
 	.xmo_rx_hash			= mlx5e_xdp_rx_hash,
+	.xmo_request_tx_timestamp	= mlx5e_devtx_request_tx_timestamp,
+	.xmo_tx_timestamp		= mlx5e_devtx_tx_timestamp,
+	.xmo_request_l4_checksum	= mlx5e_devtx_request_l4_checksum,
 };
 
 /* returns true if packet was consumed by xdp */
@@ -453,6 +504,27 @@ mlx5e_xmit_xdp_frame_mpwqe(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptx
 
 	mlx5e_xdp_mpwqe_add_dseg(sq, p, stats);
 
+	if (devtx_enabled()) {
+		struct mlx5e_xmit_data_frags *xdptxdf =
+			container_of(xdptxd, struct mlx5e_xmit_data_frags, xd);
+
+		struct xdp_frame frame = {
+			.data = p->data,
+			.len = p->len,
+			.metasize = sq->xsk_pool->tx_metadata_len,
+		};
+
+		struct mlx5e_devtx_ctx ctx = {
+			.devtx = {
+				.netdev = sq->cq.netdev,
+				.sinfo = xdptxd->has_frags ? xdptxdf->sinfo : NULL,
+			},
+			.wqe = sq->mpwqe.wqe,
+		};
+
+		mlx5e_devtx_submit_xdp(&ctx.devtx, &frame);
+	}
+
 	if (unlikely(mlx5e_xdp_mpwqe_is_full(session, sq->max_sq_mpw_wqebbs)))
 		mlx5e_xdp_mpwqe_complete(sq);
 
@@ -560,6 +632,24 @@ mlx5e_xmit_xdp_frame(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptxd,
 		dseg++;
 	}
 
+	if (devtx_enabled()) {
+		struct xdp_frame frame = {
+			.data = xdptxd->data,
+			.len = xdptxd->len,
+			.metasize = sq->xsk_pool->tx_metadata_len,
+		};
+
+		struct mlx5e_devtx_ctx ctx = {
+			.devtx = {
+				.netdev = sq->cq.netdev,
+				.sinfo = xdptxd->has_frags ? xdptxdf->sinfo : NULL,
+			},
+			.wqe = wqe,
+		};
+
+		mlx5e_devtx_submit_xdp(&ctx.devtx, &frame);
+	}
+
 	cseg->opmod_idx_opcode = cpu_to_be32((sq->pc << 8) | MLX5_OPCODE_SEND);
 
 	if (test_bit(MLX5E_SQ_STATE_XDP_MULTIBUF, &sq->state)) {
@@ -607,7 +697,9 @@ mlx5e_xmit_xdp_frame(struct mlx5e_xdpsq *sq, struct mlx5e_xmit_data *xdptxd,
 static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 				  struct mlx5e_xdp_wqe_info *wi,
 				  u32 *xsk_frames,
-				  struct xdp_frame_bulk *bq)
+				  struct xdp_frame_bulk *bq,
+				  struct mlx5e_cq *cq,
+				  struct mlx5_cqe64 *cqe)
 {
 	struct mlx5e_xdp_info_fifo *xdpi_fifo = &sq->db.xdpi_fifo;
 	u16 i;
@@ -625,6 +717,21 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 			xdpf = xdpi.frame.xdpf;
 			xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
 			dma_addr = xdpi.frame.dma_addr;
+
+			if (devtx_enabled()) {
+				struct mlx5e_devtx_ctx ctx = {
+					.devtx = {
+						.netdev = sq->cq.netdev,
+						.sinfo = xdp_frame_has_frags(xdpf) ?
+							 xdp_get_shared_info_from_frame(xdpf) :
+							 NULL,
+					},
+					.cqe = cqe,
+					.cq = cq,
+				};
+
+				mlx5e_devtx_complete_xdp(&ctx.devtx, xdpi.frame.xdpf);
+			}
 
 			dma_unmap_single(sq->pdev, dma_addr,
 					 xdpf->len, DMA_TO_DEVICE);
@@ -659,6 +766,24 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 				xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
 				page = xdpi.page.page;
 
+				if (devtx_enabled()) {
+					struct xdp_frame frame = {
+						.data = page,
+						.len = PAGE_SIZE,
+						.metasize = sq->xsk_pool->tx_metadata_len,
+					};
+
+					struct mlx5e_devtx_ctx ctx = {
+						.devtx = {
+							.netdev = sq->cq.netdev,
+						},
+						.cqe = cqe,
+						.cq = cq,
+					};
+
+					mlx5e_devtx_complete_xdp(&ctx.devtx, &frame);
+				}
+
 				/* No need to check ((page->pp_magic & ~0x3UL) == PP_SIGNATURE)
 				 * as we know this is a page_pool page.
 				 */
@@ -668,10 +793,32 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 
 			break;
 		}
-		case MLX5E_XDP_XMIT_MODE_XSK:
+		case MLX5E_XDP_XMIT_MODE_XSK: {
 			/* AF_XDP send */
+			struct xdp_frame frame = {};
+
+			xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
+			frame.data = xdpi.frame.xsk_head;
+			xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
+			frame.len = xdpi.frame.xsk_head_len;
+
+			if (devtx_enabled()) {
+				struct mlx5e_devtx_ctx ctx = {
+					.devtx = {
+						.netdev = sq->cq.netdev,
+					},
+					.cqe = cqe,
+					.cq = cq,
+				};
+
+				frame.metasize = sq->xsk_pool->tx_metadata_len;
+
+				mlx5e_devtx_complete_xdp(&ctx.devtx, &frame);
+			}
+
 			(*xsk_frames)++;
 			break;
+		}
 		default:
 			WARN_ON_ONCE(true);
 		}
@@ -720,7 +867,7 @@ bool mlx5e_poll_xdpsq_cq(struct mlx5e_cq *cq)
 
 			sqcc += wi->num_wqebbs;
 
-			mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq);
+			mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq, cq, cqe);
 		} while (!last_wqe);
 
 		if (unlikely(get_cqe_opcode(cqe) != MLX5_CQE_REQ)) {
@@ -767,7 +914,7 @@ void mlx5e_free_xdpsq_descs(struct mlx5e_xdpsq *sq)
 
 		sq->cc += wi->num_wqebbs;
 
-		mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq);
+		mlx5e_free_xdpsq_desc(sq, wi, &xsk_frames, &bq, NULL, NULL);
 	}
 
 	xdp_flush_frame_bulk(&bq);

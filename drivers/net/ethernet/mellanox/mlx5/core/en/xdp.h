@@ -82,13 +82,15 @@ enum mlx5e_xdp_xmit_mode {
  *    num, page_1, page_2, ... , page_num.
  *
  * MLX5E_XDP_XMIT_MODE_XSK:
- *    none.
+ *    frame.xsk_head + frame.xsk_head_len for header portion only.
  */
 union mlx5e_xdp_info {
 	enum mlx5e_xdp_xmit_mode mode;
 	union {
 		struct xdp_frame *xdpf;
 		dma_addr_t dma_addr;
+		void *xsk_head;
+		u32 xsk_head_len;
 	} frame;
 	union {
 		struct mlx5e_rq *rq;

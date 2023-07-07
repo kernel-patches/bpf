@@ -758,6 +758,18 @@ static void mlx5e_tx_wi_consume_fifo_skbs(struct mlx5e_txqsq *sq, struct mlx5e_t
 	for (i = 0; i < wi->num_fifo_pkts; i++) {
 		struct sk_buff *skb = mlx5e_skb_fifo_pop(&sq->db.skb_fifo);
 
+		if (devtx_enabled()) {
+			struct mlx5e_devtx_ctx ctx = {
+				.devtx = {
+					.netdev = skb->dev,
+					.sinfo = skb_shinfo(skb),
+				},
+				.cqe = cqe,
+			};
+
+			mlx5e_devtx_complete_skb(&ctx.devtx, skb);
+		}
+
 		mlx5e_consume_skb(sq, skb, cqe, napi_budget);
 	}
 }
@@ -826,6 +838,18 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			sqcc += wi->num_wqebbs;
 
 			if (likely(wi->skb)) {
+				if (devtx_enabled()) {
+					struct mlx5e_devtx_ctx ctx = {
+						.devtx = {
+							.netdev = wi->skb->dev,
+							.sinfo = skb_shinfo(wi->skb),
+						},
+						.cqe = cqe,
+					};
+
+					mlx5e_devtx_complete_skb(&ctx.devtx, wi->skb);
+				}
+
 				mlx5e_tx_wi_dma_unmap(sq, wi, &dma_fifo_cc);
 				mlx5e_consume_skb(sq, wi->skb, cqe, napi_budget);
 
