@@ -27,6 +27,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/net_tstamp.h>
 #include <net/page_pool.h>
+#include <net/devtx.h>
 
 #define DRV_NAME	"veth"
 #define DRV_VERSION	"1.0"
@@ -121,6 +122,13 @@ static struct {
 struct veth_xdp_buff {
 	struct xdp_buff xdp;
 	struct sk_buff *skb;
+};
+
+struct veth_devtx_ctx {
+	struct devtx_ctx devtx;
+	struct xdp_frame *xdpf;
+	struct sk_buff *skb;
+	ktime_t xdp_tx_timestamp;
 };
 
 static int veth_get_link_ksettings(struct net_device *dev,
@@ -313,10 +321,33 @@ static int veth_xdp_rx(struct veth_rq *rq, struct sk_buff *skb)
 	return NET_RX_SUCCESS;
 }
 
+DEFINE_DEVTX_HOOKS(veth);
+
 static int veth_forward_skb(struct net_device *dev, struct sk_buff *skb,
 			    struct veth_rq *rq, bool xdp)
 {
-	return __dev_forward_skb(dev, skb) ?: xdp ?
+	struct net_device *orig_dev = skb->dev;
+	int ret;
+
+	ret = __dev_forward_skb(dev, skb);
+	if (ret)
+		return ret;
+
+	if (devtx_enabled()) {
+		struct veth_devtx_ctx ctx = {
+			.devtx = {
+				.netdev = orig_dev,
+				.sinfo = skb_shinfo(skb),
+			},
+			.skb = skb,
+		};
+
+		__skb_push(skb, ETH_HLEN);
+		veth_devtx_complete_skb(&ctx.devtx, skb);
+		__skb_pull(skb, ETH_HLEN);
+	}
+
+	return xdp ?
 		veth_xdp_rx(rq, skb) :
 		__netif_rx(skb);
 }
@@ -354,6 +385,18 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (unlikely(!rcv) || !pskb_may_pull(skb, ETH_HLEN)) {
 		kfree_skb(skb);
 		goto drop;
+	}
+
+	if (devtx_enabled()) {
+		struct veth_devtx_ctx ctx = {
+			.devtx = {
+				.netdev = skb->dev,
+				.sinfo = skb_shinfo(skb),
+			},
+			.skb = skb,
+		};
+
+		veth_devtx_submit_skb(&ctx.devtx, skb);
 	}
 
 	rcv_priv = netdev_priv(rcv);
@@ -509,11 +552,28 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 	for (i = 0; i < n; i++) {
 		struct xdp_frame *frame = frames[i];
 		void *ptr = veth_xdp_to_ptr(frame);
+		struct veth_devtx_ctx ctx;
 
 		if (unlikely(xdp_get_frame_len(frame) > max_len ||
-			     __ptr_ring_produce(&rq->xdp_ring, ptr)))
+			     __ptr_ring_full(&rq->xdp_ring)))
+			break;
+
+		if (devtx_enabled()) {
+			memset(&ctx, 0, sizeof(ctx));
+			ctx.devtx.netdev = dev;
+			ctx.devtx.sinfo = xdp_frame_has_frags(frame) ?
+				xdp_get_shared_info_from_frame(frame) : NULL;
+			ctx.xdpf = frame;
+
+			veth_devtx_submit_xdp(&ctx.devtx, frame);
+		}
+
+		if (unlikely(__ptr_ring_produce(&rq->xdp_ring, ptr)))
 			break;
 		nxmit++;
+
+		if (devtx_enabled())
+			veth_devtx_complete_xdp(&ctx.devtx, frame);
 	}
 	spin_unlock(&rq->xdp_ring.producer_lock);
 
@@ -1732,6 +1792,28 @@ static int veth_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+static int veth_devtx_request_tx_timestamp(const struct devtx_ctx *_ctx)
+{
+	struct veth_devtx_ctx *ctx = (struct veth_devtx_ctx *)_ctx;
+
+	if (ctx->skb)
+		__net_timestamp(ctx->skb);
+	else
+		ctx->xdp_tx_timestamp = ktime_get_real();
+
+	return 0;
+}
+
+static int veth_devtx_tx_timestamp(const struct devtx_ctx *_ctx, u64 *timestamp)
+{
+	struct veth_devtx_ctx *ctx = (struct veth_devtx_ctx *)_ctx;
+
+	if (ctx->skb)
+		*timestamp = ctx->skb->tstamp;
+
+	return 0;
+}
+
 static const struct net_device_ops veth_netdev_ops = {
 	.ndo_init            = veth_dev_init,
 	.ndo_open            = veth_open,
@@ -1756,6 +1838,8 @@ static const struct net_device_ops veth_netdev_ops = {
 static const struct xdp_metadata_ops veth_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= veth_xdp_rx_timestamp,
 	.xmo_rx_hash			= veth_xdp_rx_hash,
+	.xmo_request_tx_timestamp	= veth_devtx_request_tx_timestamp,
+	.xmo_tx_timestamp		= veth_devtx_tx_timestamp,
 };
 
 #define VETH_FEATURES (NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_HW_CSUM | \
@@ -2041,11 +2125,20 @@ static struct rtnl_link_ops veth_link_ops = {
 
 static __init int veth_init(void)
 {
+	int ret;
+
+	ret = devtx_hooks_register(&veth_devtx_hook_ids, &veth_xdp_metadata_ops);
+	if (ret) {
+		pr_warn("failed to register devtx hooks: %d", ret);
+		return ret;
+	}
+
 	return rtnl_link_register(&veth_link_ops);
 }
 
 static __exit void veth_exit(void)
 {
+	devtx_hooks_unregister(&veth_devtx_hook_ids);
 	rtnl_link_unregister(&veth_link_ops);
 }
 
