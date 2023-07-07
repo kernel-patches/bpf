@@ -25,6 +25,7 @@
 #include <linux/rhashtable.h>
 #include <linux/rtnetlink.h>
 #include <linux/rwsem.h>
+#include <net/devtx.h>
 
 /* Protects offdevs, members of bpf_offload_netdev and offload members
  * of all progs.
@@ -228,6 +229,7 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 	int err;
 
 	if (attr->prog_type != BPF_PROG_TYPE_SCHED_CLS &&
+	    attr->prog_type != BPF_PROG_TYPE_TRACING &&
 	    attr->prog_type != BPF_PROG_TYPE_XDP)
 		return -EINVAL;
 
@@ -242,6 +244,15 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 	if (!netdev)
 		return -EINVAL;
 
+	/* Make sure device-bound tracing programs are being attached
+	 * to the appropriate netdev.
+	 */
+	if (attr->prog_type == BPF_PROG_TYPE_TRACING &&
+	    !devtx_hooks_match(prog->aux->attach_btf_id, netdev->xdp_metadata_ops)) {
+		err = -EINVAL;
+		goto out;
+	}
+
 	err = bpf_dev_offload_check(netdev);
 	if (err)
 		goto out;
@@ -251,6 +262,9 @@ int bpf_prog_dev_bound_init(struct bpf_prog *prog, union bpf_attr *attr)
 	down_write(&bpf_devs_lock);
 	err = __bpf_prog_dev_bound_init(prog, netdev);
 	up_write(&bpf_devs_lock);
+
+	if (!err)
+		devtx_hooks_enable();
 
 out:
 	dev_put(netdev);
@@ -384,6 +398,7 @@ void bpf_prog_dev_bound_destroy(struct bpf_prog *prog)
 		ondev = bpf_offload_find_netdev(netdev);
 		if (!ondev->offdev && list_empty(&ondev->progs))
 			__bpf_offload_dev_netdev_unregister(NULL, netdev);
+		devtx_hooks_disable();
 	}
 	up_write(&bpf_devs_lock);
 	rtnl_unlock();
