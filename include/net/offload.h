@@ -15,7 +15,10 @@
 #define DEVTX_SUBMIT_KFUNC_xxx	\
 	NETDEV_METADATA_KFUNC(DEVTX_KFUNC_REQUEST_TX_TIMESTAMP, \
 			      bpf_devtx_request_tx_timestamp, \
-			      xmo_request_tx_timestamp)
+			      xmo_request_tx_timestamp) \
+	NETDEV_METADATA_KFUNC(DEVTX_KFUNC_REQUEST_L4_CHECKSUM, \
+			      bpf_devtx_request_l4_csum, \
+			      xmo_request_l4_checksum)
 
 #define DEVTX_COMPLETE_KFUNC_xxx	\
 	NETDEV_METADATA_KFUNC(DEVTX_KFUNC_TX_TIMESTAMP, \

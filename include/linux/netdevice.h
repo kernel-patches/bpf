@@ -1662,6 +1662,8 @@ struct xdp_metadata_ops {
 			       enum xdp_rss_hash_type *rss_type);
 	int	(*xmo_request_tx_timestamp)(const struct devtx_ctx *ctx);
 	int	(*xmo_tx_timestamp)(const struct devtx_ctx *ctx, u64 *timestamp);
+	int	(*xmo_request_l4_checksum)(const struct devtx_ctx *ctx,
+					   u16 csum_start, u16 csum_offset);
 };
 
 /**

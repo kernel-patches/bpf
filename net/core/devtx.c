@@ -106,6 +106,23 @@ __bpf_kfunc int bpf_devtx_tx_timestamp(const struct devtx_ctx *ctx, __u64 *times
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_devtx_request_l4_csum - Request TX checksum offload on the packet.
+ * Callable only from the devtx-submit hook.
+ * @ctx: devtx context pointer.
+ * @csum_start: start checksumming from given position
+ * @csum_offset: add resulting checksum at given offset
+ *
+ * Note, this checksum offload doesn't calculate pseudo-header part.
+ *
+ * Returns 0 on success or ``-errno`` on error.
+ */
+__bpf_kfunc int bpf_devtx_request_l4_csum(const struct devtx_ctx *ctx,
+					  u16 csum_start, u16 csum_offset)
+{
+	return -EOPNOTSUPP;
+}
+
 __diag_pop();
 
 BTF_SET8_START(devtx_sb_kfunc_ids)
