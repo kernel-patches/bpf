@@ -3107,4 +3107,34 @@ static inline gfp_t bpf_memcg_flags(gfp_t flags)
 	return flags;
 }
 
+#define BPF_GENERIC_TMP_LOG_SIZE	256
+
+struct bpf_generic_log {
+	char		kbuf[BPF_GENERIC_TMP_LOG_SIZE];
+	char __user	*ubuf;
+	u32		len_used;
+	u32		len_total;
+};
+
+__printf(2, 3) void bpf_generic_log_write(struct bpf_generic_log *log,
+			const char *fmt, ...);
+static inline void bpf_generic_log_init(struct bpf_generic_log *log,
+			const struct bpf_generic_user_log *ulog)
+{
+	log->ubuf = (char __user *) (unsigned long) ulog->log_buf;
+	log->len_total = ulog->log_size;
+	log->len_used = 0;
+}
+
+#define BPF_GENERIC_LOG_WRITE(log, ulog, fmt, ...)	do {	\
+	const char *____fmt = (fmt);				\
+	bpf_generic_log_init(log, ulog);			\
+	bpf_generic_log_write(log, ____fmt, ##__VA_ARGS__);	\
+} while (0)
+
+#define BPF_GENERIC_ULOG_WRITE(ulog, fmt, ...)	do {			\
+	struct bpf_generic_log ____log;					\
+	BPF_GENERIC_LOG_WRITE(&____log, ulog, fmt, ##__VA_ARGS__);	\
+} while (0)
+
 #endif /* _LINUX_BPF_H */

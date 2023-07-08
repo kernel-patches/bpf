@@ -9409,12 +9409,20 @@ static const struct bpf_link_ops bpf_xdp_link_lops = {
 	.update_prog = bpf_xdp_link_update,
 };
 
+static inline void bpf_xdp_link_log(const union bpf_attr *attr, struct netlink_ext_ack *extack)
+{
+	const struct bpf_generic_user_log *ulog = &attr->link_create.log;
+
+	BPF_GENERIC_ULOG_WRITE(ulog, extack->_msg);
+}
+
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	struct net *net = current->nsproxy->net_ns;
 	struct bpf_link_primer link_primer;
 	struct bpf_xdp_link *link;
 	struct net_device *dev;
+	struct netlink_ext_ack extack;
 	int err, fd;
 
 	rtnl_lock();
@@ -9440,12 +9448,13 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		goto unlock;
 	}
 
-	err = dev_xdp_attach_link(dev, NULL, link);
+	err = dev_xdp_attach_link(dev, &extack, link);
 	rtnl_unlock();
 
 	if (err) {
 		link->dev = NULL;
 		bpf_link_cleanup(&link_primer);
+		bpf_xdp_link_log(attr, &extack);
 		goto out_put_dev;
 	}
 
