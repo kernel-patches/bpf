@@ -1549,7 +1549,6 @@ union bpf_attr {
 		};
 		__u32		attach_type;	/* attach type */
 		__u32		flags;		/* extra flags */
-		struct bpf_generic_user_log log; /* user log */
 		union {
 			__u32		target_btf_id;	/* btf_id of target to attach to */
 			struct {
@@ -1585,6 +1584,9 @@ union bpf_attr {
 				__s32		priority;
 				__u32		flags;
 			} netfilter;
+			struct {
+				struct bpf_generic_user_log ulog; /* user log */
+			} xdp;
 		};
 	} link_create;
 
