@@ -173,6 +173,11 @@ BPF_ARSH  0xc0   sign extending dst >>= (src & mask)
 BPF_END   0xd0   byte swap operations (see `Byte swap instructions`_ below)
 ========  =====  ==========================================================
 
+eBPF supports 32- and 64-bit signed and unsigned integers. It does
+not support floating-point data types. All signed integers are represented in
+twos-complement format where the sign bit is stored in the most-significant
+bit.
+
 Underflow and overflow are allowed during arithmetic operations, meaning
 the 64-bit or 32-bit value will wrap. If eBPF program execution would
 result in division by zero, the destination register is instead set to zero.
