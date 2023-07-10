@@ -70,4 +70,15 @@
 		};							    \
 	})
 
+/* Helper macro to clear a libbpf options struct
+ *
+ * Small helper macro to reset all fields and to reinitialize the common
+ * structure size member.
+ */
+#define LIBBPF_OPTS_CLEAR(NAME)						    \
+	do {								    \
+		memset(&NAME, 0, sizeof(NAME));				    \
+		NAME.sz = sizeof(NAME);					    \
+	} while (0)
+
 #endif /* __LIBBPF_LIBBPF_COMMON_H */
