@@ -1399,6 +1399,71 @@ static void print_scalar_ranges(struct bpf_verifier_env *env,
 	}
 }
 
+static void print_register(struct bpf_verifier_env *env,
+			   const struct bpf_reg_state *reg)
+{
+	enum bpf_reg_type t;
+
+	t = reg->type;
+	if (t == SCALAR_VALUE && reg->precise)
+		verbose(env, "P");
+	if ((t == SCALAR_VALUE || t == PTR_TO_STACK) &&
+	    tnum_is_const(reg->var_off)) {
+		/* reg->off should be 0 for SCALAR_VALUE */
+		verbose(env, "%s", t == SCALAR_VALUE ? "" : reg_type_str(env, t));
+		if (reg->id)
+			verbose(env, "(id=%d)", reg->id);
+		verbose(env, "%lld", reg->var_off.value + reg->off);
+	} else {
+		const char *sep = "";
+
+		verbose(env, "%s", reg_type_str(env, t));
+		if (base_type(t) == PTR_TO_BTF_ID)
+			verbose(env, "%s", btf_type_name(reg->btf, reg->btf_id));
+		verbose(env, "(");
+/*
+ * _a stands for append, was shortened to avoid multiline statements below.
+ * This macro is used to output a comma separated list of attributes.
+ */
+#define verbose_a(fmt, ...) ({ verbose(env, "%s" fmt, sep, __VA_ARGS__); sep = ","; })
+
+		if (reg->id)
+			verbose_a("id=%d", reg->id);
+		if (reg->ref_obj_id)
+			verbose_a("ref_obj_id=%d", reg->ref_obj_id);
+		if (type_is_non_owning_ref(reg->type))
+			verbose_a("%s", "non_own_ref");
+		if (t != SCALAR_VALUE)
+			verbose_a("off=%d", reg->off);
+		if (type_is_pkt_pointer(t))
+			verbose_a("r=%d", reg->range);
+		else if (base_type(t) == CONST_PTR_TO_MAP ||
+			 base_type(t) == PTR_TO_MAP_KEY ||
+			 base_type(t) == PTR_TO_MAP_VALUE)
+			verbose_a("ks=%d,vs=%d",
+				  reg->map_ptr->key_size,
+				  reg->map_ptr->value_size);
+		if (tnum_is_const(reg->var_off)) {
+			/* Typically an immediate SCALAR_VALUE, but
+			 * could be a pointer whose offset is too big
+			 * for reg->off
+			 */
+			verbose_a("imm=%llx", reg->var_off.value);
+		} else {
+			print_scalar_ranges(env, reg, &sep);
+			if (!tnum_is_unknown(reg->var_off)) {
+				char tn_buf[48];
+
+				tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+				verbose_a("var_off=%s", tn_buf);
+			}
+		}
+#undef verbose_a
+
+		verbose(env, ")");
+	}
+}
+
 static void print_verifier_state(struct bpf_verifier_env *env,
 				 const struct bpf_func_state *state,
 				 bool print_all)
@@ -1419,64 +1484,11 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 		verbose(env, " R%d", i);
 		print_liveness(env, reg->live);
 		verbose(env, "=");
-		if (t == SCALAR_VALUE && reg->precise)
-			verbose(env, "P");
-		if ((t == SCALAR_VALUE || t == PTR_TO_STACK) &&
-		    tnum_is_const(reg->var_off)) {
-			/* reg->off should be 0 for SCALAR_VALUE */
-			verbose(env, "%s", t == SCALAR_VALUE ? "" : reg_type_str(env, t));
-			verbose(env, "%lld", reg->var_off.value + reg->off);
-		} else {
-			const char *sep = "";
-
-			verbose(env, "%s", reg_type_str(env, t));
-			if (base_type(t) == PTR_TO_BTF_ID)
-				verbose(env, "%s", btf_type_name(reg->btf, reg->btf_id));
-			verbose(env, "(");
-/*
- * _a stands for append, was shortened to avoid multiline statements below.
- * This macro is used to output a comma separated list of attributes.
- */
-#define verbose_a(fmt, ...) ({ verbose(env, "%s" fmt, sep, __VA_ARGS__); sep = ","; })
-
-			if (reg->id)
-				verbose_a("id=%d", reg->id);
-			if (reg->ref_obj_id)
-				verbose_a("ref_obj_id=%d", reg->ref_obj_id);
-			if (type_is_non_owning_ref(reg->type))
-				verbose_a("%s", "non_own_ref");
-			if (t != SCALAR_VALUE)
-				verbose_a("off=%d", reg->off);
-			if (type_is_pkt_pointer(t))
-				verbose_a("r=%d", reg->range);
-			else if (base_type(t) == CONST_PTR_TO_MAP ||
-				 base_type(t) == PTR_TO_MAP_KEY ||
-				 base_type(t) == PTR_TO_MAP_VALUE)
-				verbose_a("ks=%d,vs=%d",
-					  reg->map_ptr->key_size,
-					  reg->map_ptr->value_size);
-			if (tnum_is_const(reg->var_off)) {
-				/* Typically an immediate SCALAR_VALUE, but
-				 * could be a pointer whose offset is too big
-				 * for reg->off
-				 */
-				verbose_a("imm=%llx", reg->var_off.value);
-			} else {
-				print_scalar_ranges(env, reg, &sep);
-				if (!tnum_is_unknown(reg->var_off)) {
-					char tn_buf[48];
-
-					tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-					verbose_a("var_off=%s", tn_buf);
-				}
-			}
-#undef verbose_a
-
-			verbose(env, ")");
-		}
+		print_register(env, reg);
 	}
 	for (i = 0; i < state->allocated_stack / BPF_REG_SIZE; i++) {
 		char types_buf[BPF_REG_SIZE + 1];
+		bool has_non_spill = false;
 		bool valid = false;
 		int j;
 
@@ -1497,11 +1509,18 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 
 			verbose(env, " fp%d", (-i - 1) * BPF_REG_SIZE);
 			print_liveness(env, reg->live);
-			verbose(env, "=%s", t == SCALAR_VALUE ? "" : reg_type_str(env, t));
-			if (t == SCALAR_VALUE && reg->precise)
-				verbose(env, "P");
-			if (t == SCALAR_VALUE && tnum_is_const(reg->var_off))
-				verbose(env, "%lld", reg->var_off.value + reg->off);
+			verbose(env, "=");
+			for (j = 0; j < BPF_REG_SIZE; j++) {
+				u8 slot_t = state->stack[i].slot_type[j];
+
+				if (slot_t != STACK_SPILL)
+					has_non_spill = true;
+				types_buf[j] = slot_type_char[slot_t];
+			}
+			types_buf[BPF_REG_SIZE] = 0;
+			if (has_non_spill)
+				verbose(env, "[%s]", types_buf);
+			print_register(env, reg);
 			break;
 		case STACK_DYNPTR:
 			i += BPF_DYNPTR_NR_SLOTS - 1;
