@@ -542,6 +542,8 @@ static bool is_dynptr_ref_function(enum bpf_func_id func_id)
 }
 
 static bool is_callback_calling_kfunc(u32 btf_id);
+static bool is_forbidden_exception_kfunc_in_cb(u32 btf_id);
+static bool is_bpf_throw_kfunc(struct bpf_insn *insn);
 
 static bool is_callback_calling_function(enum bpf_func_id func_id)
 {
@@ -2864,11 +2866,12 @@ next:
 		if (i == subprog_end - 1) {
 			/* to avoid fall-through from one subprog into another
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back
+			 * or unconditional jump back or bpf_throw call
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
-			    code != (BPF_JMP | BPF_JA)) {
-				verbose(env, "last insn is not an exit or jmp\n");
+			    code != (BPF_JMP | BPF_JA) &&
+			    !is_bpf_throw_kfunc(insn + i)) {
+				verbose(env, "last insn is not an exit or jmp or bpf_throw call\n");
 				return -EINVAL;
 			}
 			subprog_start = subprog_end;
@@ -5624,6 +5627,25 @@ continue_func:
 	subprog_end = subprog[idx + 1].start;
 	for (; i < subprog_end; i++) {
 		int next_insn, sidx;
+
+		if (bpf_pseudo_kfunc_call(insn + i) && !insn[i].off) {
+			bool err = false;
+
+			if (!is_forbidden_exception_kfunc_in_cb(insn[i].imm))
+				continue;
+			if (subprog[idx].is_cb)
+				err = true;
+			for (int c = 0; c < frame && !err; c++) {
+				if (subprog[ret_prog[c]].is_cb) {
+					err = true;
+					break;
+				}
+			}
+			if (!err)
+				continue;
+			verbose(env, "exception kfunc insn %d cannot be called from callback\n", i);
+			return -EINVAL;
+		}
 
 		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
 			continue;
@@ -8739,6 +8761,7 @@ static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	 * callbacks
 	 */
 	if (set_callee_state_cb != set_callee_state) {
+		env->subprog_info[subprog].is_cb = true;
 		if (bpf_pseudo_kfunc_call(insn) &&
 		    !is_callback_calling_kfunc(insn->imm)) {
 			verbose(env, "verifier bug: kfunc %s#%d not marked as callback-calling\n",
@@ -9252,17 +9275,17 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
-static int check_reference_leak(struct bpf_verifier_env *env)
+static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
 	struct bpf_func_state *state = cur_func(env);
 	bool refs_lingering = false;
 	int i;
 
-	if (state->frameno && !state->in_callback_fn)
+	if (!exception_exit && state->frameno && !state->in_callback_fn)
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
+		if (!exception_exit && state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -9496,7 +9519,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
-		err = check_reference_leak(env);
+		err = check_reference_leak(env, false);
 		if (err) {
 			verbose(env, "tail_call would lead to reference leak\n");
 			return err;
@@ -10114,6 +10137,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
+	KF_bpf_throw,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -10134,6 +10158,7 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_throw)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -10156,6 +10181,7 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_throw)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10467,6 +10493,17 @@ static bool is_bpf_graph_api_kfunc(u32 btf_id)
 static bool is_callback_calling_kfunc(u32 btf_id)
 {
 	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl];
+}
+
+static bool is_bpf_throw_kfunc(struct bpf_insn *insn)
+{
+	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
+	       insn->imm == special_kfunc_list[KF_bpf_throw];
+}
+
+static bool is_forbidden_exception_kfunc_in_cb(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_throw];
 }
 
 static bool is_rbtree_lock_required_kfunc(u32 btf_id)
@@ -11145,6 +11182,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	const struct btf_param *args;
 	const struct btf_type *ret_t;
 	struct btf *desc_btf;
+	bool throw = false;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
@@ -11245,6 +11283,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				func_name, meta.func_id);
 			return err;
 		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_throw]) {
+		if (!bpf_jit_supports_exceptions()) {
+			verbose(env, "JIT does not support calling kfunc %s#%d\n",
+				func_name, meta.func_id);
+			return -EINVAL;
+		}
+		env->seen_exception = true;
+		throw = true;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
@@ -11468,7 +11516,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 	}
 
-	return 0;
+	return throw ? 1 : 0;
 }
 
 static bool signed_add_overflows(s64 a, s64 b)
@@ -14216,7 +14264,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	 * gen_ld_abs() may terminate the program at runtime, leading to
 	 * reference leak.
 	 */
-	err = check_reference_leak(env);
+	err = check_reference_leak(env, false);
 	if (err) {
 		verbose(env, "BPF_LD_[ABS|IND] cannot be mixed with socket references\n");
 		return err;
@@ -14624,6 +14672,9 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_kfunc_call_arg_meta meta;
 
+			/* No fallthrough edge to walk, same as BPF_EXIT */
+			if (is_bpf_throw_kfunc(insn))
+				return DONE_EXPLORING;
 			ret = fetch_kfunc_meta(env, insn, &meta, NULL);
 			if (ret == 0 && is_iter_next_kfunc(&meta)) {
 				mark_prune_point(env, t);
@@ -16227,6 +16278,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int prev_insn_idx = -1;
 
 	for (;;) {
+		bool exception_exit = false;
 		struct bpf_insn *insn;
 		u8 class;
 		int err;
@@ -16440,12 +16492,18 @@ static int do_check(struct bpf_verifier_env *env)
 						return -EINVAL;
 					}
 				}
-				if (insn->src_reg == BPF_PSEUDO_CALL)
+				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
-				else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
+				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
-				else
+					if (err == 1) {
+						err = 0;
+						exception_exit = true;
+						goto process_bpf_exit_full;
+					}
+				} else {
 					err = check_helper_call(env, insn, &env->insn_idx);
+				}
 				if (err)
 					return err;
 
@@ -16472,7 +16530,7 @@ static int do_check(struct bpf_verifier_env *env)
 					verbose(env, "BPF_EXIT uses reserved fields\n");
 					return -EINVAL;
 				}
-
+process_bpf_exit_full:
 				if (env->cur_state->active_lock.ptr &&
 				    !in_rbtree_lock_required_cb(env)) {
 					verbose(env, "bpf_spin_unlock is missing\n");
@@ -16490,9 +16548,22 @@ static int do_check(struct bpf_verifier_env *env)
 				 * function, for which reference_state must
 				 * match caller reference state when it exits.
 				 */
-				err = check_reference_leak(env);
+				err = check_reference_leak(env, exception_exit);
 				if (err)
 					return err;
+
+				/* The side effect of the prepare_func_exit
+				 * which is being skipped is that it frees
+				 * bpf_func_state. Typically, process_bpf_exit
+				 * will only be hit with outermost exit.
+				 * copy_verifier_state in pop_stack will handle
+				 * freeing of any extra bpf_func_state left over
+				 * from not processing all nested function
+				 * exits. We also skip return code checks as
+				 * they are not needed for exceptional exits.
+				 */
+				if (exception_exit)
+					goto process_bpf_exit;
 
 				if (state->curframe) {
 					/* exit from nested function */
@@ -17787,6 +17858,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->num_exentries = num_exentries;
 		func[i]->aux->tail_call_reachable = env->subprog_info[i].tail_call_reachable;
 		func[i]->aux->invented_prog = env->subprog_info[i].invented_prog;
+		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
+		if (!i)
+			func[i]->aux->seen_exception = env->seen_exception;
 		func[i] = bpf_int_jit_compile(func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -17873,6 +17947,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->num_exentries = func[0]->aux->num_exentries;
 	prog->aux->func = func;
 	prog->aux->func_cnt = env->subprog_cnt;
+	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
+	prog->aux->seen_exception = func[0]->aux->seen_exception;
 	bpf_prog_jit_attempt_done(prog);
 	return 0;
 out_free:
@@ -18120,6 +18196,26 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_prog *new_prog;
 	struct bpf_map *map_ptr;
 	int i, ret, cnt, delta = 0;
+
+	if (env->seen_exception && !env->exception_callback_subprog) {
+		struct bpf_insn patch[] = {
+			env->prog->insnsi[insn_cnt - 1],
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_EXIT_INSN(),
+		};
+
+		ret = invent_subprog(env, patch, ARRAY_SIZE(patch));
+		if (ret < 0)
+			return ret;
+		prog = env->prog;
+		insn = prog->insnsi;
+
+		env->exception_callback_subprog = env->subprog_cnt - 1;
+		/* Don't update insn_cnt, as invent_subprog always appends insns */
+		env->subprog_info[env->exception_callback_subprog].is_cb = true;
+		env->subprog_info[env->exception_callback_subprog].is_async_cb = true;
+		env->subprog_info[env->exception_callback_subprog].is_exception_cb = true;
+	}
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		/* Make divide-by-zero exceptions impossible. */

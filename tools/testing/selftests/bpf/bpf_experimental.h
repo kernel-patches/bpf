@@ -131,4 +131,10 @@ extern int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *nod
  */
 extern struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root) __ksym;
 
+__attribute__((noreturn))
+extern void bpf_throw(u64 cookie) __ksym;
+
+#define throw bpf_throw(0)
+#define throw_value(cookie) bpf_throw(cookie)
+
 #endif

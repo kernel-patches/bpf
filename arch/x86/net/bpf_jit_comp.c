@@ -256,32 +256,36 @@ struct jit_context {
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	(11 + ENDBR_INSN_SIZE)
 
-static void push_callee_regs(u8 **pprog, bool *callee_regs_used)
+static void push_callee_regs(u8 **pprog, bool *callee_regs_used, bool force)
 {
 	u8 *prog = *pprog;
 
-	if (callee_regs_used[0])
+	if (callee_regs_used[0] || force)
 		EMIT1(0x53);         /* push rbx */
-	if (callee_regs_used[1])
+	if (force)
+		EMIT2(0x41, 0x54);   /* push r12 */
+	if (callee_regs_used[1] || force)
 		EMIT2(0x41, 0x55);   /* push r13 */
-	if (callee_regs_used[2])
+	if (callee_regs_used[2] || force)
 		EMIT2(0x41, 0x56);   /* push r14 */
-	if (callee_regs_used[3])
+	if (callee_regs_used[3] || force)
 		EMIT2(0x41, 0x57);   /* push r15 */
 	*pprog = prog;
 }
 
-static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
+static void pop_callee_regs(u8 **pprog, bool *callee_regs_used, bool force)
 {
 	u8 *prog = *pprog;
 
-	if (callee_regs_used[3])
+	if (callee_regs_used[3] || force)
 		EMIT2(0x41, 0x5F);   /* pop r15 */
-	if (callee_regs_used[2])
+	if (callee_regs_used[2] || force)
 		EMIT2(0x41, 0x5E);   /* pop r14 */
-	if (callee_regs_used[1])
+	if (callee_regs_used[1] || force)
 		EMIT2(0x41, 0x5D);   /* pop r13 */
-	if (callee_regs_used[0])
+	if (force)
+		EMIT2(0x41, 0x5C);   /* pop r12 */
+	if (callee_regs_used[0] || force)
 		EMIT1(0x5B);         /* pop rbx */
 	*pprog = prog;
 }
@@ -292,7 +296,8 @@ static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
  * while jumping to another program
  */
 static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
-			  bool tail_call_reachable, bool is_subprog)
+			  bool tail_call_reachable, bool is_subprog,
+			  bool is_exception_cb)
 {
 	u8 *prog = *pprog;
 
@@ -308,8 +313,23 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
 		else
 			EMIT2(0x66, 0x90); /* nop2 */
 	}
-	EMIT1(0x55);             /* push rbp */
-	EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
+	/* Exception callback receives FP as second parameter */
+	if (is_exception_cb) {
+		bool regs_used[4] = {};
+
+		EMIT3(0x48, 0x89, 0xF4); /* mov rsp, rsi */
+		EMIT3(0x48, 0x89, 0xD5); /* mov rbp, rdx */
+		/* The main frame must have seen_exception as true, so we first
+		 * restore those callee-saved regs from stack, before reusing
+		 * the stack frame.
+		 */
+		pop_callee_regs(&prog, regs_used, true);
+		/* Reset the stack frame. */
+		EMIT3(0x48, 0x89, 0xEC); /* mov rsp, rbp */
+	} else {
+		EMIT1(0x55);             /* push rbp */
+		EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
+	}
 
 	/* X86_TAIL_CALL_OFFSET is here */
 	EMIT_ENDBR();
@@ -468,10 +488,12 @@ static void emit_return(u8 **pprog, u8 *ip)
  *   goto *(prog->bpf_func + prologue_size);
  * out:
  */
-static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
+static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
+					u8 **pprog, bool *callee_regs_used,
 					u32 stack_depth, u8 *ip,
 					struct jit_context *ctx)
 {
+	bool force_pop_all = bpf_prog->aux->seen_exception;
 	int tcc_off = -4 - round_up(stack_depth, 8);
 	u8 *prog = *pprog, *start = *pprog;
 	int offset;
@@ -518,7 +540,7 @@ static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
 	offset = ctx->tail_call_indirect_label - (prog + 2 - start);
 	EMIT2(X86_JE, offset);                    /* je out */
 
-	pop_callee_regs(&prog, callee_regs_used);
+	pop_callee_regs(&prog, callee_regs_used, force_pop_all);
 
 	EMIT1(0x58);                              /* pop rax */
 	if (stack_depth)
@@ -542,11 +564,13 @@ static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
 	*pprog = prog;
 }
 
-static void emit_bpf_tail_call_direct(struct bpf_jit_poke_descriptor *poke,
+static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
+				      struct bpf_jit_poke_descriptor *poke,
 				      u8 **pprog, u8 *ip,
 				      bool *callee_regs_used, u32 stack_depth,
 				      struct jit_context *ctx)
 {
+	bool force_pop_all = bpf_prog->aux->seen_exception;
 	int tcc_off = -4 - round_up(stack_depth, 8);
 	u8 *prog = *pprog, *start = *pprog;
 	int offset;
@@ -571,7 +595,7 @@ static void emit_bpf_tail_call_direct(struct bpf_jit_poke_descriptor *poke,
 	emit_jump(&prog, (u8 *)poke->tailcall_target + X86_PATCH_SIZE,
 		  poke->tailcall_bypass);
 
-	pop_callee_regs(&prog, callee_regs_used);
+	pop_callee_regs(&prog, callee_regs_used, force_pop_all);
 	EMIT1(0x58);                                  /* pop rax */
 	if (stack_depth)
 		EMIT3_off32(0x48, 0x81, 0xC4, round_up(stack_depth, 8));
@@ -987,8 +1011,11 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 	emit_prologue(&prog, bpf_prog->aux->stack_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
-		      bpf_prog->aux->func_idx != 0);
-	push_callee_regs(&prog, callee_regs_used);
+		      bpf_prog->aux->func_idx != 0, bpf_prog->aux->exception_cb);
+	/* Exception callback will clobber callee regs for its own use, and
+	 * restore the original callee regs from main prog's stack frame.
+	 */
+	push_callee_regs(&prog, callee_regs_used, bpf_prog->aux->seen_exception);
 
 	ilen = prog - temp;
 	if (rw_image)
@@ -1557,13 +1584,15 @@ st:			if (is_imm8(insn->off))
 
 		case BPF_JMP | BPF_TAIL_CALL:
 			if (imm32)
-				emit_bpf_tail_call_direct(&bpf_prog->aux->poke_tab[imm32 - 1],
+				emit_bpf_tail_call_direct(bpf_prog,
+							  &bpf_prog->aux->poke_tab[imm32 - 1],
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
 							  bpf_prog->aux->stack_depth,
 							  ctx);
 			else
-				emit_bpf_tail_call_indirect(&prog,
+				emit_bpf_tail_call_indirect(bpf_prog,
+							    &prog,
 							    callee_regs_used,
 							    bpf_prog->aux->stack_depth,
 							    image + addrs[i - 1],
@@ -1808,7 +1837,7 @@ emit_jmp:
 			seen_exit = true;
 			/* Update cleanup_addr */
 			ctx->cleanup_addr = proglen;
-			pop_callee_regs(&prog, callee_regs_used);
+			pop_callee_regs(&prog, callee_regs_used, bpf_prog->aux->seen_exception);
 			EMIT1(0xC9);         /* leave */
 			emit_return(&prog, image + addrs[i - 1] + (prog - temp));
 			break;
