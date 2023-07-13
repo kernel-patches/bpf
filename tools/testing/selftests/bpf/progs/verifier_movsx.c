@@ -1,0 +1,177 @@
+// SPDX-License-Identifier: GPL-2.0
+
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
+
+SEC("socket")
+__description("MOV32SX, S8")
+__success __success_unpriv __retval(0x23)
+__naked void mov32sx_s8(void)
+{
+	asm volatile ("					\
+	w0 = 0xff23;					\
+	w0 = (s8)w0;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV32SX, S16")
+__success __success_unpriv __retval(0xFFFFff23)
+__naked void mov32sx_s16(void)
+{
+	asm volatile ("					\
+	w0 = 0xff23;					\
+	w0 = (s16)w0;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S8")
+__success __success_unpriv __retval(-2)
+__naked void mov64sx_s8(void)
+{
+	asm volatile ("					\
+	r0 = 0x1fe;					\
+	r0 = (s8)r0;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S16")
+__success __success_unpriv __retval(0xf23)
+__naked void mov64sx_s16(void)
+{
+	asm volatile ("					\
+	r0 = 0xf0f23;					\
+	r0 = (s16)r0;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S32")
+__success __success_unpriv __retval(-2)
+__naked void mov64sx_s32(void)
+{
+	asm volatile ("					\
+	r0 = 0xfffffffe;				\
+	r0 = (s32)w0;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV32SX, S8, range_check")
+__success __success_unpriv __retval(1)
+__naked void mov32sx_s8_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w1 = (s8)w0;					\
+	/* w1 with s8 range */				\
+	if w1 s> 0x7f goto l0_%=;			\
+	if w1 s< -0x80 goto l0_%=;			\
+	r0 = 1;						\
+l1_%=:							\
+	exit;						\
+l0_%=:							\
+	r0 = 2;						\
+	goto l1_%=;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV32SX, S16, range_check")
+__success __success_unpriv __retval(1)
+__naked void mov32sx_s16_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w1 = (s16)w0;					\
+	/* w1 with s16 range */				\
+	if w1 s> 0x7fff goto l0_%=;			\
+	if w1 s< -0x80ff goto l0_%=;			\
+	r0 = 1;						\
+l1_%=:							\
+	exit;						\
+l0_%=:							\
+	r0 = 2;						\
+	goto l1_%=;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S8, range_check")
+__success __success_unpriv __retval(1)
+__naked void mov64sx_s8_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = (s8)r0;					\
+	/* r1 with s8 range */				\
+	if r1 s> 0x7f goto l0_%=;			\
+	if r1 s< -0x80 goto l0_%=;			\
+	r0 = 1;						\
+l1_%=:							\
+	exit;						\
+l0_%=:							\
+	r0 = 2;						\
+	goto l1_%=;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S16, range_check")
+__success __success_unpriv __retval(1)
+__naked void mov64sx_s16_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = (s16)r0;					\
+	/* r1 with s16 range */				\
+	if r1 s> 0x7fff goto l0_%=;			\
+	if r1 s< -0x8000 goto l0_%=;			\
+	r0 = 1;						\
+l1_%=:							\
+	exit;						\
+l0_%=:							\
+	r0 = 2;						\
+	goto l1_%=;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S32, range_check")
+__success __success_unpriv __retval(1)
+__naked void mov64sx_s32_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = (s32)w0;					\
+	/* r1 with s32 range */				\
+	if r1 s> 0x7fffffff goto l0_%=;			\
+	if r1 s< -0x80000000 goto l0_%=;		\
+	r0 = 1;						\
+l1_%=:							\
+	exit;						\
+l0_%=:							\
+	r0 = 2;						\
+	goto l1_%=;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+char _license[] SEC("license") = "GPL";
