@@ -2397,9 +2397,10 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 }
 
 #define CG_SOCKOPT_READ_FIELD(F)					\
-	BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_sockopt_kern, F),	\
+	BPF_RAW_INSN((BPF_FIELD_SIZEOF(struct bpf_sockopt_kern, F) |	\
+		      BPF_MODE(si->code) | BPF_CLASS(si->code)),	\
 		    si->dst_reg, si->src_reg,				\
-		    offsetof(struct bpf_sockopt_kern, F))
+		    offsetof(struct bpf_sockopt_kern, F), si->imm)
 
 #define CG_SOCKOPT_WRITE_FIELD(F)					\
 	BPF_RAW_INSN((BPF_FIELD_SIZEOF(struct bpf_sockopt_kern, F) |	\
@@ -2456,7 +2457,7 @@ static u32 cg_sockopt_convert_ctx_access(enum bpf_access_type type,
 			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct task_struct, bpf_ctx),
 					      treg, treg,
 					      offsetof(struct task_struct, bpf_ctx));
-			*insn++ = BPF_RAW_INSN(BPF_CLASS(si->code) | BPF_MEM |
+			*insn++ = BPF_RAW_INSN(BPF_CLASS(si->code) | BPF_MODE(si->code) |
 					       BPF_FIELD_SIZEOF(struct bpf_cg_run_ctx, retval),
 					       treg, si->src_reg,
 					       offsetof(struct bpf_cg_run_ctx, retval),
@@ -2470,9 +2471,10 @@ static u32 cg_sockopt_convert_ctx_access(enum bpf_access_type type,
 			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct task_struct, bpf_ctx),
 					      si->dst_reg, si->dst_reg,
 					      offsetof(struct task_struct, bpf_ctx));
-			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_cg_run_ctx, retval),
-					      si->dst_reg, si->dst_reg,
-					      offsetof(struct bpf_cg_run_ctx, retval));
+			*insn++ = BPF_RAW_INSN((BPF_FIELD_SIZEOF(struct bpf_cg_run_ctx, retval) |
+						BPF_MODE(si->code) | BPF_CLASS(si->code)),
+					       si->dst_reg, si->dst_reg,
+					       offsetof(struct bpf_cg_run_ctx, retval), si->imm);
 		}
 		break;
 	case offsetof(struct bpf_sockopt, optval):
