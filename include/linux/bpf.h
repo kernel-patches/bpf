@@ -3111,4 +3111,6 @@ static inline gfp_t bpf_memcg_flags(gfp_t flags)
 	return flags;
 }
 
+extern void bpf_throw(u64);
+
 #endif /* _LINUX_BPF_H */

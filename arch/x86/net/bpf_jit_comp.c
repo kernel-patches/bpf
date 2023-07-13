@@ -1579,6 +1579,17 @@ st:			if (is_imm8(insn->off))
 			}
 			if (emit_call(&prog, func, image + addrs[i - 1] + offs))
 				return -EINVAL;
+			/* Similar to BPF_EXIT_INSN, call for bpf_throw may be
+			 * the final instruction in the program. Insert an int3
+			 * following the call instruction so that we can still
+			 * detect pc to be part of the bpf_prog in
+			 * bpf_ksym_find, otherwise when this is the last
+			 * instruction (as allowed by verifier, similar to exit
+			 * and jump instructions), pc will be == ksym.end,
+			 * leading to bpf_throw failing to unwind the stack.
+			 */
+			if (func == (u8 *)&bpf_throw)
+				EMIT1(0xCC); /* int3 */
 			break;
 		}
 
