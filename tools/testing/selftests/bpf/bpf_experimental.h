@@ -139,4 +139,24 @@ extern void bpf_throw(u64 cookie) __ksym;
 
 extern void bpf_set_exception_callback(int (*cb)(u64)) __ksym;
 
+#define __bpf_assert_op(LHS, op, RHS, VAL)							   \
+	_Static_assert(sizeof(&(LHS)), "1st argument must be an lvalue expression");		   \
+	_Static_assert(__builtin_constant_p((RHS)), "2nd argument must be a constant expression"); \
+	asm volatile ("if %[lhs] " op " %[rhs] goto +2; r1 = %[value]; call bpf_throw"		   \
+		      : : [lhs] "r"(LHS), [rhs] "i"(RHS), [value] "ri"(VAL) : )
+
+#define bpf_assert_eq(LHS, RHS) __bpf_assert_op(LHS, "==", RHS, 0)
+#define bpf_assert_ne(LHS, RHS) __bpf_assert_op(LHS, "!=", RHS, 0)
+#define bpf_assert_lt(LHS, RHS) __bpf_assert_op(LHS, "<", RHS, 0)
+#define bpf_assert_gt(LHS, RHS) __bpf_assert_op(LHS, ">", RHS, 0)
+#define bpf_assert_le(LHS, RHS) __bpf_assert_op(LHS, "<=", RHS, 0)
+#define bpf_assert_ge(LHS, RHS) __bpf_assert_op(LHS, ">=", RHS, 0)
+
+#define bpf_assert_eq_value(LHS, RHS, value) __bpf_assert_op(LHS, "==", RHS, value)
+#define bpf_assert_ne_value(LHS, RHS, value) __bpf_assert_op(LHS, "!=", RHS, value)
+#define bpf_assert_lt_value(LHS, RHS, value) __bpf_assert_op(LHS, "<", RHS, value)
+#define bpf_assert_gt_value(LHS, RHS, value) __bpf_assert_op(LHS, ">", RHS, value)
+#define bpf_assert_le_value(LHS, RHS, value) __bpf_assert_op(LHS, "<=", RHS, value)
+#define bpf_assert_ge_value(LHS, RHS, value) __bpf_assert_op(LHS, ">=", RHS, value)
+
 #endif
