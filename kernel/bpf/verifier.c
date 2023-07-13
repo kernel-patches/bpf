@@ -14896,8 +14896,11 @@ static void adjust_btf_func(struct bpf_verifier_env *env)
 	if (!aux->func_info)
 		return;
 
-	for (i = 0; i < env->subprog_cnt; i++)
+	for (i = 0; i < env->subprog_cnt; i++) {
+		if (env->subprog_info[i].invented_prog)
+			break;
 		aux->func_info[i].insn_off = env->subprog_info[i].start;
+	}
 }
 
 #define MIN_BPF_LINEINFO_SIZE	offsetofend(struct bpf_line_info, line_col)
@@ -17783,6 +17786,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		}
 		func[i]->aux->num_exentries = num_exentries;
 		func[i]->aux->tail_call_reachable = env->subprog_info[i].tail_call_reachable;
+		func[i]->aux->invented_prog = env->subprog_info[i].invented_prog;
 		func[i] = bpf_int_jit_compile(func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -18073,6 +18077,29 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
 	}
+	return 0;
+}
+
+/* The function requires that first instruction in 'patch' is insnsi[prog->len - 1] */
+static int invent_subprog(struct bpf_verifier_env *env, struct bpf_insn *patch, int len)
+{
+	struct bpf_subprog_info *info = env->subprog_info;
+	int cnt = env->subprog_cnt;
+	struct bpf_prog *prog;
+
+	if (env->invented_prog) {
+		verbose(env, "verifier internal error: only one invented prog supported\n");
+		return -EFAULT;
+	}
+	prog = bpf_patch_insn_data(env, env->prog->len - 1, patch, len);
+	if (!prog)
+		return -ENOMEM;
+	env->prog = prog;
+	info[cnt + 1].start = info[cnt].start;
+	info[cnt].start = prog->len - len + 1;
+	info[cnt].invented_prog = true;
+	env->subprog_cnt++;
+	env->invented_prog = true;
 	return 0;
 }
 

@@ -4291,8 +4291,11 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		u32 i;
 
 		info.jited_prog_len = 0;
-		for (i = 0; i < prog->aux->func_cnt; i++)
+		for (i = 0; i < prog->aux->func_cnt; i++) {
+			if (prog->aux->func[i]->aux->invented_prog)
+				break;
 			info.jited_prog_len += prog->aux->func[i]->jited_len;
+		}
 	} else {
 		info.jited_prog_len = prog->jited_len;
 	}
@@ -4311,6 +4314,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 
 				free = ulen;
 				for (i = 0; i < prog->aux->func_cnt; i++) {
+					if (prog->aux->func[i]->aux->invented_prog)
+						break;
 					len = prog->aux->func[i]->jited_len;
 					len = min_t(u32, len, free);
 					img = (u8 *) prog->aux->func[i]->bpf_func;
@@ -4332,6 +4337,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 
 	ulen = info.nr_jited_ksyms;
 	info.nr_jited_ksyms = prog->aux->func_cnt ? : 1;
+	if (prog->aux->func_cnt && prog->aux->func[prog->aux->func_cnt - 1]->aux->invented_prog)
+		info.nr_jited_ksyms--;
 	if (ulen) {
 		if (bpf_dump_raw_ok(file->f_cred)) {
 			unsigned long ksym_addr;
@@ -4345,6 +4352,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 			user_ksyms = u64_to_user_ptr(info.jited_ksyms);
 			if (prog->aux->func_cnt) {
 				for (i = 0; i < ulen; i++) {
+					if (prog->aux->func[i]->aux->invented_prog)
+						break;
 					ksym_addr = (unsigned long)
 						prog->aux->func[i]->bpf_func;
 					if (put_user((u64) ksym_addr,
@@ -4363,6 +4372,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 
 	ulen = info.nr_jited_func_lens;
 	info.nr_jited_func_lens = prog->aux->func_cnt ? : 1;
+	if (prog->aux->func_cnt && prog->aux->func[prog->aux->func_cnt - 1]->aux->invented_prog)
+		info.nr_jited_func_lens--;
 	if (ulen) {
 		if (bpf_dump_raw_ok(file->f_cred)) {
 			u32 __user *user_lens;
@@ -4373,6 +4384,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 			user_lens = u64_to_user_ptr(info.jited_func_lens);
 			if (prog->aux->func_cnt) {
 				for (i = 0; i < ulen; i++) {
+					if (prog->aux->func[i]->aux->invented_prog)
+						break;
 					func_len =
 						prog->aux->func[i]->jited_len;
 					if (put_user(func_len, &user_lens[i]))
@@ -4443,6 +4456,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 
 	ulen = info.nr_prog_tags;
 	info.nr_prog_tags = prog->aux->func_cnt ? : 1;
+	if (prog->aux->func_cnt && prog->aux->func[prog->aux->func_cnt - 1]->aux->invented_prog)
+		info.nr_prog_tags--;
 	if (ulen) {
 		__u8 __user (*user_prog_tags)[BPF_TAG_SIZE];
 		u32 i;
@@ -4451,6 +4466,8 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		ulen = min_t(u32, info.nr_prog_tags, ulen);
 		if (prog->aux->func_cnt) {
 			for (i = 0; i < ulen; i++) {
+				if (prog->aux->func[i]->aux->invented_prog)
+					break;
 				if (copy_to_user(user_prog_tags[i],
 						 prog->aux->func[i]->tag,
 						 BPF_TAG_SIZE))

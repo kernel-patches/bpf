@@ -211,7 +211,7 @@ void bpf_prog_fill_jited_linfo(struct bpf_prog *prog,
 	const struct bpf_line_info *linfo;
 	void **jited_linfo;
 
-	if (!prog->aux->jited_linfo)
+	if (!prog->aux->jited_linfo || prog->aux->invented_prog)
 		/* Userspace did not provide linfo */
 		return;
 
@@ -579,7 +579,7 @@ bpf_prog_ksym_set_name(struct bpf_prog *prog)
 	sym  = bin2hex(sym, prog->tag, sizeof(prog->tag));
 
 	/* prog->aux->name will be ignored if full btf name is available */
-	if (prog->aux->func_info_cnt) {
+	if (prog->aux->func_info_cnt && !prog->aux->invented_prog) {
 		type = btf_type_by_id(prog->aux->btf,
 				      prog->aux->func_info[prog->aux->func_idx].type_id);
 		func_name = btf_name_by_offset(prog->aux->btf, type->name_off);
