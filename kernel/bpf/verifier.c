@@ -14347,6 +14347,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 		case BPF_MODIFY_RETURN:
 			return 0;
 		case BPF_TRACE_ITER:
+			range = tnum_range(-1, 1);
 			break;
 		default:
 			return -ENOTSUPP;

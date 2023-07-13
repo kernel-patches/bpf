@@ -716,13 +716,14 @@ int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 		rcu_read_unlock();
 	}
 
-	/* bpf program can only return 0 or 1:
-	 *  0 : okay
-	 *  1 : retry the same object
+	/* bpf program can return:
+	 *  0 : has shown the object, go next
+	 *  1 : has skipped the object, go next
+	 * -1 : encountered error and should terminate
 	 * The bpf_iter_run_prog() return value
 	 * will be seq_ops->show() return value.
 	 */
-	return ret == 0 ? 0 : -EAGAIN;
+	return ret == 0 ? 0 : (ret == 1 ? 1 : -EAGAIN);
 }
 
 BPF_CALL_4(bpf_for_each_map_elem, struct bpf_map *, map, void *, callback_fn,
