@@ -137,4 +137,6 @@ extern void bpf_throw(u64 cookie) __ksym;
 #define throw bpf_throw(0)
 #define throw_value(cookie) bpf_throw(cookie)
 
+extern void bpf_set_exception_callback(int (*cb)(u64)) __ksym;
+
 #endif

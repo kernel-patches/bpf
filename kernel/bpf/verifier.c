@@ -544,6 +544,8 @@ static bool is_dynptr_ref_function(enum bpf_func_id func_id)
 static bool is_callback_calling_kfunc(u32 btf_id);
 static bool is_forbidden_exception_kfunc_in_cb(u32 btf_id);
 static bool is_bpf_throw_kfunc(struct bpf_insn *insn);
+static bool is_async_callback_calling_kfunc(u32 btf_id);
+static bool is_exception_cb_kfunc(struct bpf_insn *insn);
 
 static bool is_callback_calling_function(enum bpf_func_id func_id)
 {
@@ -3555,7 +3557,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		} else if ((bpf_helper_call(insn) &&
 			    is_callback_calling_function(insn->imm) &&
 			    !is_async_callback_calling_function(insn->imm)) ||
-			   (bpf_pseudo_kfunc_call(insn) && is_callback_calling_kfunc(insn->imm))) {
+			   (bpf_pseudo_kfunc_call(insn) && is_callback_calling_kfunc(insn->imm) &&
+			    !is_async_callback_calling_kfunc(insn->imm))) {
 			/* callback-calling helper or kfunc call, which means
 			 * we are exiting from subprog, but unlike the subprog
 			 * call handling above, we shouldn't propagate
@@ -5666,6 +5669,14 @@ continue_func:
 				verbose(env, "verifier bug. subprog has tail_call and async cb\n");
 				return -EFAULT;
 			}
+			if (subprog[sidx].is_exception_cb && bpf_pseudo_call(insn + i)) {
+				verbose(env, "insn %d cannot call exception cb directly\n", i);
+				return -EINVAL;
+			}
+			if (subprog[sidx].is_exception_cb && subprog[sidx].has_tail_call) {
+				verbose(env, "insn %d cannot tail call within exception cb\n", i);
+				return -EINVAL;
+			}
 			 /* async callbacks don't increase bpf prog stack size */
 			continue;
 		}
@@ -5689,8 +5700,13 @@ continue_func:
 	 * tail call counter throughout bpf2bpf calls combined with tailcalls
 	 */
 	if (tail_call_reachable)
-		for (j = 0; j < frame; j++)
+		for (j = 0; j < frame; j++) {
+			if (subprog[ret_prog[j]].is_exception_cb) {
+				verbose(env, "cannot tail call within exception cb\n");
+				return -EINVAL;
+			}
 			subprog[ret_prog[j]].tail_call_reachable = true;
+		}
 	if (subprog[0].tail_call_reachable)
 		env->prog->aux->tail_call_reachable = true;
 
@@ -8775,13 +8791,16 @@ static int __check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
-	if (insn->code == (BPF_JMP | BPF_CALL) &&
+	if ((insn->code == (BPF_JMP | BPF_CALL) &&
 	    insn->src_reg == 0 &&
-	    insn->imm == BPF_FUNC_timer_set_callback) {
+	    insn->imm == BPF_FUNC_timer_set_callback) ||
+	    is_exception_cb_kfunc(insn)) {
 		struct bpf_verifier_state *async_cb;
 
 		/* there is no real recursion here. timer callbacks are async */
 		env->subprog_info[subprog].is_async_cb = true;
+		if (is_exception_cb_kfunc(insn))
+			env->subprog_info[subprog].is_exception_cb = true;
 		async_cb = push_async_cb(env, env->subprog_info[subprog].start,
 					 *insn_idx, subprog);
 		if (!async_cb)
@@ -9035,6 +9054,22 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = tnum_range(0, 1);
 	return 0;
+}
+
+static int set_exception_callback_state(struct bpf_verifier_env *env,
+					struct bpf_func_state *caller,
+					struct bpf_func_state *callee,
+					int insn_idx)
+{
+	__mark_reg_unknown(env, &callee->regs[BPF_REG_1]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+	callee->in_exception_callback_fn = true;
+	callee->callback_ret_range = tnum_range(0, 0);
+	return 0;
+
 }
 
 static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
@@ -10138,6 +10173,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
 	KF_bpf_throw,
+	KF_bpf_set_exception_callback,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -10159,6 +10195,7 @@ BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
 BTF_ID(func, bpf_throw)
+BTF_ID(func, bpf_set_exception_callback)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -10182,6 +10219,7 @@ BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
 BTF_ID(func, bpf_throw)
+BTF_ID(func, bpf_set_exception_callback)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10492,7 +10530,19 @@ static bool is_bpf_graph_api_kfunc(u32 btf_id)
 
 static bool is_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl];
+	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl] ||
+	       btf_id == special_kfunc_list[KF_bpf_set_exception_callback];
+}
+
+static bool is_async_callback_calling_kfunc(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_set_exception_callback];
+}
+
+static bool is_exception_cb_kfunc(struct bpf_insn *insn)
+{
+	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
+	       insn->imm == special_kfunc_list[KF_bpf_set_exception_callback];
 }
 
 static bool is_bpf_throw_kfunc(struct bpf_insn *insn)
@@ -10503,7 +10553,8 @@ static bool is_bpf_throw_kfunc(struct bpf_insn *insn)
 
 static bool is_forbidden_exception_kfunc_in_cb(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_throw];
+	return btf_id == special_kfunc_list[KF_bpf_throw] ||
+	       btf_id == special_kfunc_list[KF_bpf_set_exception_callback];
 }
 
 static bool is_rbtree_lock_required_kfunc(u32 btf_id)
@@ -11293,6 +11344,33 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 		env->seen_exception = true;
 		throw = true;
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_set_exception_callback]) {
+		if (!bpf_jit_supports_exceptions()) {
+			verbose(env, "JIT does not support calling kfunc %s#%d\n",
+				func_name, meta.func_id);
+			return -EINVAL;
+		}
+
+		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
+					set_exception_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+		if (env->cur_state->frame[0]->subprogno) {
+			verbose(env, "kfunc %s#%d can only be called from main prog\n",
+				func_name, meta.func_id);
+			return -EINVAL;
+		}
+		if (env->exception_callback_subprog) {
+			verbose(env, "kfunc %s#%d can only be called once to set exception callback\n",
+				func_name, meta.func_id);
+			return -EINVAL;
+		}
+		env->exception_callback_subprog = meta.subprogno;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)
@@ -14325,7 +14403,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 	const bool is_subprog = frame->subprogno;
 
 	/* LSM and struct_ops func-ptr's return type could be "void" */
-	if (!is_subprog) {
+	if (!is_subprog || frame->in_exception_callback_fn) {
 		switch (prog_type) {
 		case BPF_PROG_TYPE_LSM:
 			if (prog->expected_attach_type == BPF_LSM_CGROUP)
@@ -14373,7 +14451,7 @@ static int check_return_code(struct bpf_verifier_env *env)
 		return 0;
 	}
 
-	if (is_subprog) {
+	if (is_subprog && !frame->in_exception_callback_fn) {
 		if (reg->type != SCALAR_VALUE) {
 			verbose(env, "At subprogram exit the register R0 is not a scalar value (%s)\n",
 				reg_type_str(env, reg->type));
@@ -18151,6 +18229,9 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
 		   desc->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
+		*cnt = 1;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_set_exception_callback]) {
+		insn_buf[0] = BPF_JMP_IMM(BPF_JA, 0, 0, 0);
 		*cnt = 1;
 	}
 	return 0;
