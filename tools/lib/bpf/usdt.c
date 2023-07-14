@@ -466,7 +466,7 @@ static int parse_vma_segs(int pid, const char *lib_path, struct elf_seg **segs, 
 
 proceed:
 	sprintf(line, "/proc/%d/maps", pid);
-	f = fopen(line, "r");
+	f = fopen(line, "re");
 	if (!f) {
 		err = -errno;
 		pr_warn("usdt: failed to open '%s' to get base addr of '%s': %d\n",
@@ -852,8 +852,11 @@ static int bpf_link_usdt_detach(struct bpf_link *link)
 		 * system is so exhausted on memory, it's the least of user's
 		 * concerns, probably.
 		 * So just do our best here to return those IDs to usdt_manager.
+		 * Another edge case when we can legitimately get NULL is when
+		 * new_cnt is zero, which can happen in some edge cases, so we
+		 * need to be careful about that.
 		 */
-		if (new_free_ids) {
+		if (new_free_ids || new_cnt == 0) {
 			memcpy(new_free_ids + man->free_spec_cnt, usdt_link->spec_ids,
 			       usdt_link->spec_cnt * sizeof(*usdt_link->spec_ids));
 			man->free_spec_ids = new_free_ids;
@@ -954,8 +957,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 	spec_map_fd = bpf_map__fd(man->specs_map);
 	ip_map_fd = bpf_map__fd(man->ip_to_spec_id_map);
 
-	/* TODO: perform path resolution similar to uprobe's */
-	fd = open(path, O_RDONLY);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
 		err = -errno;
 		pr_warn("usdt: failed to open ELF binary '%s': %d\n", path, err);

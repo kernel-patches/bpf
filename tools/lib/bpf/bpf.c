@@ -572,18 +572,28 @@ int bpf_map_update_batch(int fd, const void *keys, const void *values, __u32 *co
 				    (void *)keys, (void *)values, count, opts);
 }
 
-int bpf_obj_pin(int fd, const char *pathname)
+int bpf_obj_pin_opts(int fd, const char *pathname, const struct bpf_obj_pin_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, file_flags);
+	const size_t attr_sz = offsetofend(union bpf_attr, path_fd);
 	union bpf_attr attr;
 	int ret;
 
+	if (!OPTS_VALID(opts, bpf_obj_pin_opts))
+		return libbpf_err(-EINVAL);
+
 	memset(&attr, 0, attr_sz);
+	attr.path_fd = OPTS_GET(opts, path_fd, 0);
 	attr.pathname = ptr_to_u64((void *)pathname);
+	attr.file_flags = OPTS_GET(opts, file_flags, 0);
 	attr.bpf_fd = fd;
 
 	ret = sys_bpf(BPF_OBJ_PIN, &attr, attr_sz);
 	return libbpf_err_errno(ret);
+}
+
+int bpf_obj_pin(int fd, const char *pathname)
+{
+	return bpf_obj_pin_opts(fd, pathname, NULL);
 }
 
 int bpf_obj_get(const char *pathname)
@@ -593,7 +603,7 @@ int bpf_obj_get(const char *pathname)
 
 int bpf_obj_get_opts(const char *pathname, const struct bpf_obj_get_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, file_flags);
+	const size_t attr_sz = offsetofend(union bpf_attr, path_fd);
 	union bpf_attr attr;
 	int fd;
 
@@ -601,6 +611,7 @@ int bpf_obj_get_opts(const char *pathname, const struct bpf_obj_get_opts *opts)
 		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
+	attr.path_fd = OPTS_GET(opts, path_fd, 0);
 	attr.pathname = ptr_to_u64((void *)pathname);
 	attr.file_flags = OPTS_GET(opts, file_flags, 0);
 
@@ -728,6 +739,14 @@ int bpf_link_create(int prog_fd, int target_fd,
 	case BPF_LSM_MAC:
 		attr.link_create.tracing.cookie = OPTS_GET(opts, tracing.cookie, 0);
 		if (!OPTS_ZEROED(opts, tracing))
+			return libbpf_err(-EINVAL);
+		break;
+	case BPF_NETFILTER:
+		attr.link_create.netfilter.pf = OPTS_GET(opts, netfilter.pf, 0);
+		attr.link_create.netfilter.hooknum = OPTS_GET(opts, netfilter.hooknum, 0);
+		attr.link_create.netfilter.priority = OPTS_GET(opts, netfilter.priority, 0);
+		attr.link_create.netfilter.flags = OPTS_GET(opts, netfilter.flags, 0);
+		if (!OPTS_ZEROED(opts, netfilter))
 			return libbpf_err(-EINVAL);
 		break;
 	default:
