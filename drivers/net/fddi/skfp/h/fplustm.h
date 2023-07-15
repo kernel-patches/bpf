@@ -246,10 +246,10 @@ struct s_smt_fp {
  */
 #ifdef	AIX
 #define MDR_REV
-#define	AIX_REVERSE(x)		((((x)<<24L)&0xff000000L)	+	\
-				 (((x)<< 8L)&0x00ff0000L)	+	\
-				 (((x)>> 8L)&0x0000ff00L)	+	\
-				 (((x)>>24L)&0x000000ffL))
+#define	AIX_REVERSE(x)		((((x)<<24)&0xff000000L)	+	\
+				 (((x)<< 8)&0x00ff0000L)	+	\
+				 (((x)>> 8)&0x0000ff00L)	+	\
+				 (((x)>>24)&0x000000ffL))
 #else
 #ifndef AIX_REVERSE
 #define	AIX_REVERSE(x)	(x)
@@ -257,10 +257,10 @@ struct s_smt_fp {
 #endif
 
 #ifdef	MDR_REV	
-#define	MDR_REVERSE(x)		((((x)<<24L)&0xff000000L)	+	\
-				 (((x)<< 8L)&0x00ff0000L)	+	\
-				 (((x)>> 8L)&0x0000ff00L)	+	\
-				 (((x)>>24L)&0x000000ffL))
+#define	MDR_REVERSE(x)		((((x)<<24)&0xff000000L)	+	\
+				 (((x)<< 8)&0x00ff0000L)	+	\
+				 (((x)>> 8)&0x0000ff00L)	+	\
+				 (((x)>>24)&0x000000ffL))
 #else
 #ifndef MDR_REVERSE
 #define	MDR_REVERSE(x)	(x)

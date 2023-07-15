@@ -2279,7 +2279,7 @@ int efx_ef10_tx_tso_desc(struct efx_tx_queue *tx_queue, struct sk_buff *skb,
 	 */
 	ip_tot_len = 0x10000 - EFX_TSO2_MAX_HDRLEN;
 	EFX_WARN_ON_ONCE_PARANOID(mss + EFX_TSO2_MAX_HDRLEN +
-				  (tcp->doff << 2u) > ip_tot_len);
+				  (tcp->doff << 2) > ip_tot_len);
 
 	if (ip->version == 4) {
 		ip->tot_len = htons(ip_tot_len);

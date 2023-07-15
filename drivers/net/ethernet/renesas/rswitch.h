@@ -868,14 +868,14 @@ enum DIE_DT {
 #define INFO1_TXC		BIT(3)
 
 /* For transmission */
-#define INFO1_TSUN(val)		((u64)(val) << 8ULL)
-#define INFO1_IPV(prio)		((u64)(prio) << 28ULL)
-#define INFO1_CSD0(index)	((u64)(index) << 32ULL)
-#define INFO1_CSD1(index)	((u64)(index) << 40ULL)
-#define INFO1_DV(port_vector)	((u64)(port_vector) << 48ULL)
+#define INFO1_TSUN(val)		((u64)(val) << 8)
+#define INFO1_IPV(prio)		((u64)(prio) << 28)
+#define INFO1_CSD0(index)	((u64)(index) << 32)
+#define INFO1_CSD1(index)	((u64)(index) << 40)
+#define INFO1_DV(port_vector)	((u64)(port_vector) << 48)
 
 /* For reception */
-#define INFO1_SPN(port)		((u64)(port) << 36ULL)
+#define INFO1_SPN(port)		((u64)(port) << 36)
 
 /* For timestamp descriptor in dptrl (Byte 4 to 7) */
 #define TS_DESC_TSUN(dptrl)	((dptrl) & GENMASK(7, 0))

@@ -176,7 +176,7 @@
  * are used !
  */
 
-#define EV_TOKEN(class,event)	(((u_long)(class)<<16L)|((u_long)(event)))
+#define EV_TOKEN(class,event)	(((u_long)(class)<<16)|((u_long)(event)))
 #define EV_T_CLASS(token)	((int)((token)>>16)&0xffff)
 #define EV_T_EVENT(token)	((int)(token)&0xffff)
 

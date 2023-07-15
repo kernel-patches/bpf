@@ -444,7 +444,7 @@ static void directed_beacon(struct s_smc *smc)
 	 * enable FORMAC to send endless queue of directed beacon
 	 * important: the UNA starts at byte 1 (not at byte 0)
 	 */
-	* (char *) a = (char) ((long)DBEACON_INFO<<24L) ;
+	* (char *) a = (char) ((long)DBEACON_INFO<<24) ;
 	a[1] = 0 ;
 	memcpy((char *)a+1, (char *) &smc->mib.m[MAC0].fddiMACUpstreamNbr, ETH_ALEN);
 

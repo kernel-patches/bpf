@@ -111,7 +111,7 @@ __u32 BPF_PROG(dctcp_ssthresh, struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	ca->loss_cwnd = tp->snd_cwnd;
-	return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->dctcp_alpha) >> 11U), 2U);
+	return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->dctcp_alpha) >> 11), 2U);
 }
 
 SEC("struct_ops/dctcp_update_alpha")
@@ -150,7 +150,7 @@ static __always_inline void dctcp_react_to_loss(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	ca->loss_cwnd = tp->snd_cwnd;
-	tp->snd_ssthresh = max(tp->snd_cwnd >> 1U, 2U);
+	tp->snd_ssthresh = max(tp->snd_cwnd >> 1, 2U);
 }
 
 SEC("struct_ops/dctcp_state")

@@ -45,7 +45,7 @@ static u32 sockopt_seq_reset(const struct sock *sk)
 	 * will fail.
 	 */
 
-	return (u32)sk->sk_state << 24u;
+	return (u32)sk->sk_state << 24;
 }
 
 static void sockopt_seq_inc(struct mptcp_sock *msk)

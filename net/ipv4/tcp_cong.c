@@ -518,7 +518,7 @@ __bpf_kfunc u32 tcp_reno_ssthresh(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
-	return max(tcp_snd_cwnd(tp) >> 1U, 2U);
+	return max(tcp_snd_cwnd(tp) >> 1, 2U);
 }
 EXPORT_SYMBOL_GPL(tcp_reno_ssthresh);
 

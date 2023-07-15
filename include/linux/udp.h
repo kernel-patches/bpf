@@ -95,7 +95,7 @@ struct udp_sock {
 	int		forward_threshold;
 };
 
-#define UDP_MAX_SEGMENTS	(1 << 6UL)
+#define UDP_MAX_SEGMENTS	(1 << 6)
 
 #define udp_sk(ptr) container_of_const(ptr, struct udp_sock, inet.sk)
 

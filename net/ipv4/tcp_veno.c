@@ -202,7 +202,7 @@ static u32 tcp_veno_ssthresh(struct sock *sk)
 		return max(tcp_snd_cwnd(tp) * 4 / 5, 2U);
 	else
 		/* in "congestive state", cut cwnd by 1/2 */
-		return max(tcp_snd_cwnd(tp) >> 1U, 2U);
+		return max(tcp_snd_cwnd(tp) >> 1, 2U);
 }
 
 static struct tcp_congestion_ops tcp_veno __read_mostly = {

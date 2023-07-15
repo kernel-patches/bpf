@@ -520,7 +520,7 @@ static inline int ksz_write64(struct ksz_device *dev, u32 reg, u64 value)
 	/* Ick! ToDo: Add 64bit R/W to regmap on 32bit systems */
 	value = swab64(value);
 	val[0] = swab32(value & 0xffffffffULL);
-	val[1] = swab32(value >> 32ULL);
+	val[1] = swab32(value >> 32);
 
 	return regmap_bulk_write(ksz_regmap_32(dev), reg, val, 2);
 }

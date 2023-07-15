@@ -110,7 +110,7 @@ __bpf_kfunc static u32 dctcp_ssthresh(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	ca->loss_cwnd = tcp_snd_cwnd(tp);
-	return max(tcp_snd_cwnd(tp) - ((tcp_snd_cwnd(tp) * ca->dctcp_alpha) >> 11U), 2U);
+	return max(tcp_snd_cwnd(tp) - ((tcp_snd_cwnd(tp) * ca->dctcp_alpha) >> 11), 2U);
 }
 
 __bpf_kfunc static void dctcp_update_alpha(struct sock *sk, u32 flags)
@@ -166,7 +166,7 @@ static void dctcp_react_to_loss(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	ca->loss_cwnd = tcp_snd_cwnd(tp);
-	tp->snd_ssthresh = max(tcp_snd_cwnd(tp) >> 1U, 2U);
+	tp->snd_ssthresh = max(tcp_snd_cwnd(tp) >> 1, 2U);
 }
 
 __bpf_kfunc static void dctcp_state(struct sock *sk, u8 new_state)

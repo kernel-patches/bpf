@@ -35,7 +35,7 @@ struct qlcnic_ms_reg_ctrl {
 #ifndef readq
 static inline u64 readq(void __iomem *addr)
 {
-	return readl(addr) | (((u64) readl(addr + 4)) << 32LL);
+	return readl(addr) | (((u64) readl(addr + 4)) << 32);
 }
 #endif
 

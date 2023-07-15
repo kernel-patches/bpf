@@ -159,7 +159,7 @@ static __be16 efx_tso_check_protocol(struct sk_buff *skb)
 		EFX_WARN_ON_ONCE_PARANOID(ipv6_hdr(skb)->nexthdr != NEXTHDR_TCP);
 	}
 	EFX_WARN_ON_ONCE_PARANOID((PTR_DIFF(tcp_hdr(skb), skb->data) +
-				   (tcp_hdr(skb)->doff << 2u)) >
+				   (tcp_hdr(skb)->doff << 2)) >
 				  skb_headlen(skb));
 
 	return protocol;
@@ -176,7 +176,7 @@ static int tso_start(struct tso_state *st, struct efx_nic *efx,
 
 	st->ip_off = skb_network_header(skb) - skb->data;
 	st->tcp_off = skb_transport_header(skb) - skb->data;
-	header_len = st->tcp_off + (tcp_hdr(skb)->doff << 2u);
+	header_len = st->tcp_off + (tcp_hdr(skb)->doff << 2);
 	in_len = skb_headlen(skb) - header_len;
 	st->header_len = header_len;
 	st->in_len = in_len;

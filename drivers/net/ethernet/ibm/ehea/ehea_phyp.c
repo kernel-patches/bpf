@@ -442,7 +442,7 @@ u64 ehea_h_register_smr(const u64 adapter_handle, const u64 orig_mr_handle,
 				 adapter_handle	      ,		 /* R4 */
 				 orig_mr_handle,		 /* R5 */
 				 vaddr_in,			 /* R6 */
-				 (((u64)access_ctrl) << 32ULL),	 /* R7 */
+				 (((u64)access_ctrl) << 32),	 /* R7 */
 				 pd,				 /* R8 */
 				 0, 0, 0, 0);			 /* R9-R12 */
 
@@ -487,7 +487,7 @@ u64 ehea_h_alloc_resource_mr(const u64 adapter_handle, const u64 vaddr,
 				 5,				   /* R5 */
 				 vaddr,				   /* R6 */
 				 length,			   /* R7 */
-				 (((u64) access_ctrl) << 32ULL),   /* R8 */
+				 (((u64) access_ctrl) << 32),	   /* R8 */
 				 pd,				   /* R9 */
 				 0, 0, 0);			   /* R10-R12 */
 

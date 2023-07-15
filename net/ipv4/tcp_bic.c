@@ -173,7 +173,7 @@ static u32 bictcp_recalc_ssthresh(struct sock *sk)
 		ca->last_max_cwnd = tcp_snd_cwnd(tp);
 
 	if (tcp_snd_cwnd(tp) <= low_window)
-		return max(tcp_snd_cwnd(tp) >> 1U, 2U);
+		return max(tcp_snd_cwnd(tp) >> 1, 2U);
 	else
 		return max((tcp_snd_cwnd(tp) * beta) / BICTCP_BETA_SCALE, 2U);
 }

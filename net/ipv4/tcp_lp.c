@@ -318,7 +318,7 @@ static void tcp_lp_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 	/* happened after inference
 	 * cut snd_cwnd into half */
 	else
-		tcp_snd_cwnd_set(tp, max(tcp_snd_cwnd(tp) >> 1U, 1U));
+		tcp_snd_cwnd_set(tp, max(tcp_snd_cwnd(tp) >> 1, 1U));
 
 	/* record this drop time */
 	lp->last_drop = now;

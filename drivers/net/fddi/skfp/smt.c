@@ -443,10 +443,10 @@ void smt_event(struct s_smc *smc, int event)
 
 static int div_ratio(u_long upper, u_long lower)
 {
-	if ((upper<<16L) < upper)
+	if ((upper<<16) < upper)
 		upper = 0xffff0000L ;
 	else
-		upper <<= 16L ;
+		upper <<= 16 ;
 	if (!lower)
 		return 0;
 	return (int)(upper/lower) ;
