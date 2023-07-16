@@ -158,7 +158,8 @@ static bool is_iter_map_target(const char *target_name)
 
 static bool is_iter_cgroup_target(const char *target_name)
 {
-	return strcmp(target_name, "cgroup") == 0;
+	return strcmp(target_name, "cgroup") == 0 ||
+	       strcmp(target_name, "cgroup_task") == 0;
 }
 
 static const char *cgroup_order_string(__u32 order)
