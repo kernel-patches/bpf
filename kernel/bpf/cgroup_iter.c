@@ -191,20 +191,13 @@ static const struct bpf_iter_seq_info cgroup_iter_seq_info = {
 	.seq_priv_size		= sizeof(struct cgroup_iter_priv),
 };
 
-static int bpf_iter_attach_cgroup(struct bpf_prog *prog,
-				  union bpf_iter_link_info *linfo,
-				  struct bpf_iter_aux_info *aux)
+static int __bpf_iter_attach_cgroup(struct bpf_prog *prog,
+				    union bpf_iter_link_info *linfo,
+				    struct bpf_iter_aux_info *aux)
 {
 	int fd = linfo->cgroup.cgroup_fd;
 	u64 id = linfo->cgroup.cgroup_id;
-	int order = linfo->cgroup.order;
 	struct cgroup *cgrp;
-
-	if (order != BPF_CGROUP_ITER_DESCENDANTS_PRE &&
-	    order != BPF_CGROUP_ITER_DESCENDANTS_POST &&
-	    order != BPF_CGROUP_ITER_ANCESTORS_UP &&
-	    order != BPF_CGROUP_ITER_SELF_ONLY)
-		return -EINVAL;
 
 	if (fd && id)
 		return -EINVAL;
@@ -220,8 +213,23 @@ static int bpf_iter_attach_cgroup(struct bpf_prog *prog,
 		return PTR_ERR(cgrp);
 
 	aux->cgroup.start = cgrp;
-	aux->cgroup.order = order;
 	return 0;
+}
+
+static int bpf_iter_attach_cgroup(struct bpf_prog *prog,
+				  union bpf_iter_link_info *linfo,
+				  struct bpf_iter_aux_info *aux)
+{
+	int order = linfo->cgroup.order;
+
+	if (order != BPF_CGROUP_ITER_DESCENDANTS_PRE &&
+	    order != BPF_CGROUP_ITER_DESCENDANTS_POST &&
+	    order != BPF_CGROUP_ITER_ANCESTORS_UP &&
+	    order != BPF_CGROUP_ITER_SELF_ONLY)
+		return -EINVAL;
+
+	aux->cgroup.order = order;
+	return __bpf_iter_attach_cgroup(prog, linfo, aux);
 }
 
 static void bpf_iter_detach_cgroup(struct bpf_iter_aux_info *aux)
