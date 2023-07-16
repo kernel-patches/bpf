@@ -265,6 +265,20 @@ MAX_BTF_TRACING_TYPE,
 };
 
 extern u32 btf_tracing_ids[];
+
+#ifdef CONFIG_CGROUPS
+#define BTF_CGROUP_TYPE_xxx    \
+	BTF_CGROUP_TYPE(BTF_CGROUP_TYPE_CGROUP, cgroup)		\
+	BTF_CGROUP_TYPE(BTF_CGROUP_TYPE_TASK, task_struct)
+
+enum {
+#define BTF_CGROUP_TYPE(name, type) name,
+BTF_CGROUP_TYPE_xxx
+#undef BTF_CGROUP_TYPE
+MAX_BTF_CGROUP_TYPE,
+};
+#endif
+
 extern u32 bpf_cgroup_btf_id[];
 extern u32 bpf_local_storage_map_btf_id[];
 

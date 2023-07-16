@@ -157,7 +157,9 @@ static const struct seq_operations cgroup_iter_seq_ops = {
 	.show   = cgroup_iter_seq_show,
 };
 
-BTF_ID_LIST_GLOBAL_SINGLE(bpf_cgroup_btf_id, struct, cgroup)
+BTF_ID_LIST_GLOBAL(bpf_cgroup_btf_id, MAX_BTF_CGROUP_TYPE)
+BTF_ID(struct, cgroup)
+BTF_ID(struct, task_struct)
 
 static int cgroup_iter_seq_init(void *priv, struct bpf_iter_aux_info *aux)
 {
@@ -295,10 +297,153 @@ static struct bpf_iter_reg bpf_cgroup_reg_info = {
 	.seq_info		= &cgroup_iter_seq_info,
 };
 
+struct bpf_iter__cgroup_task {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct cgroup *, cgroup);
+	__bpf_md_ptr(struct task_struct *, task);
+};
+
+struct cgroup_task_iter_priv {
+	struct cgroup_iter_priv common;
+	struct css_task_iter it;
+	struct task_struct *task;
+};
+
+DEFINE_BPF_ITER_FUNC(cgroup_task, struct bpf_iter_meta *meta,
+		     struct cgroup *cgroup, struct task_struct *task)
+
+static int bpf_iter_attach_cgroup_task(struct bpf_prog *prog,
+				       union bpf_iter_link_info *linfo,
+				       struct bpf_iter_aux_info *aux)
+{
+	int order = linfo->cgroup.order;
+
+	if (order != BPF_CGROUP_ITER_SELF_ONLY)
+		return -EINVAL;
+
+	aux->cgroup.order = order;
+	return __bpf_iter_attach_cgroup(prog, linfo, aux);
+}
+
+static void *cgroup_task_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	struct cgroup_task_iter_priv *p = seq->private;
+	struct cgroup_subsys_state *css = p->common.start_css;
+	struct css_task_iter *it = &p->it;
+	struct task_struct *task;
+
+	css_task_iter_start(css, 0, it);
+	if (*pos > 0) {
+		if (p->common.visited_all)
+			return NULL;
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
+	++*pos;
+	p->common.terminate = false;
+	p->common.visited_all = false;
+	task = css_task_iter_next(it);
+	p->task = task;
+	return task;
+}
+
+static void *cgroup_task_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	struct cgroup_task_iter_priv *p = seq->private;
+	struct css_task_iter *it = &p->it;
+	struct task_struct *task;
+
+	++*pos;
+	if (p->common.terminate)
+		return NULL;
+
+	task = css_task_iter_next(it);
+	p->task = task;
+	return task;
+}
+
+static int __cgroup_task_seq_show(struct seq_file *seq, struct cgroup_subsys_state *css,
+				bool in_stop)
+{
+	struct cgroup_task_iter_priv *p = seq->private;
+
+	struct bpf_iter__cgroup_task ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+	int ret = 0;
+
+	ctx.meta = &meta;
+	ctx.cgroup = css ? css->cgroup : NULL;
+	ctx.task = p->task;
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, in_stop);
+	if (prog)
+		ret = bpf_iter_run_prog(prog, &ctx);
+	if (ret)
+		p->common.terminate = true;
+	return 0;
+}
+
+static int cgroup_task_seq_show(struct seq_file *seq, void *v)
+{
+	return __cgroup_task_seq_show(seq, (struct cgroup_subsys_state *)v, false);
+}
+
+static void cgroup_task_seq_stop(struct seq_file *seq, void *v)
+{
+	struct cgroup_task_iter_priv *p = seq->private;
+	struct css_task_iter *it = &p->it;
+
+	css_task_iter_end(it);
+	if (!v) {
+		__cgroup_task_seq_show(seq, NULL, true);
+		p->common.visited_all = true;
+	}
+}
+
+static const struct seq_operations cgroup_task_seq_ops = {
+	.start	= cgroup_task_seq_start,
+	.next	= cgroup_task_seq_next,
+	.stop	= cgroup_task_seq_stop,
+	.show	= cgroup_task_seq_show,
+};
+
+static const struct bpf_iter_seq_info cgroup_task_seq_info = {
+	.seq_ops		= &cgroup_task_seq_ops,
+	.init_seq_private	= cgroup_iter_seq_init,
+	.fini_seq_private	= cgroup_iter_seq_fini,
+	.seq_priv_size		= sizeof(struct cgroup_task_iter_priv),
+};
+
+static struct bpf_iter_reg bpf_cgroup_task_reg_info = {
+	.target			= "cgroup_task",
+	.feature		= BPF_ITER_RESCHED,
+	.attach_target		= bpf_iter_attach_cgroup_task,
+	.detach_target		= bpf_iter_detach_cgroup,
+	.show_fdinfo		= bpf_iter_cgroup_show_fdinfo,
+	.fill_link_info		= bpf_iter_cgroup_fill_link_info,
+	.ctx_arg_info_size	= 2,
+	.ctx_arg_info		= {
+		{ offsetof(struct bpf_iter__cgroup_task, cgroup),
+		  PTR_TO_BTF_ID_OR_NULL },
+		{ offsetof(struct bpf_iter__cgroup_task, task),
+		  PTR_TO_BTF_ID_OR_NULL },
+	},
+	.seq_info		= &cgroup_task_seq_info,
+};
+
 static int __init bpf_cgroup_iter_init(void)
 {
-	bpf_cgroup_reg_info.ctx_arg_info[0].btf_id = bpf_cgroup_btf_id[0];
-	return bpf_iter_reg_target(&bpf_cgroup_reg_info);
+	int ret;
+
+	bpf_cgroup_reg_info.ctx_arg_info[0].btf_id = bpf_cgroup_btf_id[BTF_CGROUP_TYPE_CGROUP];
+	ret = bpf_iter_reg_target(&bpf_cgroup_reg_info);
+	if (ret)
+		return ret;
+
+	bpf_cgroup_task_reg_info.ctx_arg_info[0].btf_id = bpf_cgroup_btf_id[BTF_CGROUP_TYPE_CGROUP];
+	bpf_cgroup_task_reg_info.ctx_arg_info[1].btf_id = bpf_cgroup_btf_id[BTF_CGROUP_TYPE_TASK];
+	return bpf_iter_reg_target(&bpf_cgroup_task_reg_info);
 }
 
 late_initcall(bpf_cgroup_iter_init);
