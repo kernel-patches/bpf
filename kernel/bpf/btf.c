@@ -1992,6 +1992,44 @@ const struct btf_param *btf_get_func_param(const struct btf_type *func_proto, s3
 		return NULL;
 }
 
+/*
+ * Find a member of data structure/union by name and return it.
+ * Return NULL if not found, or -EINVAL if parameter is invalid.
+ */
+const struct btf_member *btf_find_struct_member(struct btf *btf,
+						const struct btf_type *type,
+						const char *member_name)
+{
+	const struct btf_member *members, *ret;
+	const char *name;
+	int i, vlen;
+
+	if (!btf || !member_name || !btf_type_is_struct(type))
+		return ERR_PTR(-EINVAL);
+
+	vlen = btf_type_vlen(type);
+	members = (const struct btf_member *)(type + 1);
+
+	for (i = 0; i < vlen; i++) {
+		if (!members[i].name_off) {
+			/* unnamed union: dig deeper */
+			type = btf_type_by_id(btf, members[i].type);
+			if (!IS_ERR_OR_NULL(type)) {
+				ret = btf_find_struct_member(btf, type,
+							     member_name);
+				if (!IS_ERR_OR_NULL(ret))
+					return ret;
+			}
+		} else {
+			name = btf_name_by_offset(btf, members[i].name_off);
+			if (name && !strcmp(member_name, name))
+				return &members[i];
+		}
+	}
+
+	return NULL;
+}
+
 static u32 btf_resolved_type_id(const struct btf *btf, u32 type_id)
 {
 	while (type_id < btf->start_id)
