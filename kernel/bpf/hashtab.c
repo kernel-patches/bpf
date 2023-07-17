@@ -1692,6 +1692,13 @@ __htab_map_lookup_and_delete_batch(struct bpf_map *map,
 	struct bucket *b;
 	int ret = 0;
 
+	max_count = attr->batch.count;
+	if (!max_count)
+		return 0;
+
+	if (put_user(0, &uattr->batch.count))
+		return -EFAULT;
+
 	elem_map_flags = attr->batch.elem_flags;
 	if ((elem_map_flags & ~BPF_F_LOCK) ||
 	    ((elem_map_flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK)))
@@ -1700,13 +1707,6 @@ __htab_map_lookup_and_delete_batch(struct bpf_map *map,
 	map_flags = attr->batch.flags;
 	if (map_flags)
 		return -EINVAL;
-
-	max_count = attr->batch.count;
-	if (!max_count)
-		return 0;
-
-	if (put_user(0, &uattr->batch.count))
-		return -EFAULT;
 
 	batch = 0;
 	if (ubatch && copy_from_user(&batch, ubatch, sizeof(batch)))
