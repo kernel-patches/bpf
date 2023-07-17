@@ -632,16 +632,18 @@ union bpf_iter_link_info {
  *			returning the lock. This must be specified if the
  *			elements contain a spinlock.
  *
- *		On success, *count* elements from the map are copied into the
- *		user buffer, with the keys copied into *keys* and the values
- *		copied into the corresponding indices in *values*.
- *
- *		If an error is returned and *errno* is not **EFAULT**, *count*
- *		is set to the number of successfully processed elements.
+ *		On success, up to *count* elements from the map are copied into
+ *		the user buffer, with the keys copied into *keys* and the
+ *		values copied into the corresponding indices in *values*.
  *
  *	Return
  *		Returns zero on success. On error, -1 is returned and *errno*
  *		is set appropriately.
+ *
+ *		If an error is returned and *errno* is not **EFAULT**, then
+ *		*count* is set to the number of successfully processed
+ *		elements. In particular, the *errno* may be set to **ENOENT**
+ *		in case of success to indicate that the end of map is reached.
  *
  *		May set *errno* to **ENOSPC** to indicate that *keys* or
  *		*values* is too small to dump an entire bucket during
@@ -655,15 +657,15 @@ union bpf_iter_link_info {
  *		**BPF_MAP_LOOKUP_BATCH** with two exceptions:
  *
  *		* Every element that is successfully returned is also deleted
- *		  from the map. This is at least *count* elements. Note that
- *		  *count* is both an input and an output parameter.
+ *		  from the map. The *count* parameter is set to the number of
+ *		  returned elements. This value can be less than the actual
+ *		  number of deleted elements, see the next item.
  *		* Upon returning with *errno* set to **EFAULT**, up to
  *		  *count* elements may be deleted without returning the keys
  *		  and values of the deleted elements.
  *
  *	Return
- *		Returns zero on success. On error, -1 is returned and *errno*
- *		is set appropriately.
+ *		Same as the BPF_MAP_LOOKUP_BATCH return values.
  *
  * BPF_MAP_UPDATE_BATCH
  *	Description
