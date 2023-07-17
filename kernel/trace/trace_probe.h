@@ -384,6 +384,9 @@ static inline bool tparg_is_function_entry(unsigned int flags)
 struct traceprobe_parse_context {
 	struct trace_event_call *event;
 	const struct btf_param *params;
+	const struct btf_type *last_type;
+	u32 last_bitoffs;
+	u32 last_bitsize;
 	s32 nr_params;
 	const char *funcname;
 	unsigned int flags;
@@ -495,7 +498,13 @@ extern int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	C(BAD_VAR_ARGS,		"$arg* must be an independent parameter without name etc."),\
 	C(NOFENTRY_ARGS,	"$arg* can be used only on function entry"),	\
 	C(DOUBLE_ARGS,		"$arg* can be used only once in the parameters"),	\
-	C(ARGS_2LONG,		"$arg* failed because the argument list is too long"),
+	C(ARGS_2LONG,		"$arg* failed because the argument list is too long"),	\
+	C(ARGIDX_2BIG,		"$argN index is too big"),		\
+	C(NO_PTR_STRCT,		"This is not a pointer to union/structure."),	\
+	C(NOSUP_DAT_ARG,	"Non pointer structure/union argument is not supported."),\
+	C(BAD_HYPHEN,		"Failed to parse single hyphen. Forgot '>'?"),	\
+	C(NO_BTF_FIELD,		"This field is not found."),	\
+	C(BAD_BTF_TID,		"Failed to get BTF type info."),
 
 #undef C
 #define C(a, b)		TP_ERR_##a
