@@ -21,6 +21,8 @@ echo 0 > events/enable
 echo > dynamic_events
 
 TP=kfree
+TP2=kmem_cache_alloc
+TP3=getname_flags
 
 if [ "$FPROBES" ] ; then
 echo "f:fpevent $TP object" >> dynamic_events
@@ -33,6 +35,7 @@ echo > dynamic_events
 
 echo "f:fpevent $TP "'$arg1' >> dynamic_events
 grep -q "fpevent.*object=object" dynamic_events
+
 echo > dynamic_events
 
 echo "f:fpevent $TP "'$arg*' >> dynamic_events
@@ -42,6 +45,14 @@ grep -q "fpevent.*object=object" dynamic_events
 grep -q "tpevent.*ptr=ptr" dynamic_events
 ! grep -q "tpevent.*_data" dynamic_events
 fi
+
+echo > dynamic_events
+
+echo "t:tpevent $TP2 name=s->name:string" >> dynamic_events
+echo "f:fpevent ${TP3}%return path=\$retval->name:string" >> dynamic_events
+
+grep -q "tpevent.*name=s->name:string" dynamic_events
+grep -q "fpevent.*path=\$retval->name:string" dynamic_events
 
 echo > dynamic_events
 
