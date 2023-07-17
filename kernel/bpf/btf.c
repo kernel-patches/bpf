@@ -1947,6 +1947,51 @@ btf_resolve_size(const struct btf *btf, const struct btf_type *type,
 	return __btf_resolve_size(btf, type, type_size, NULL, NULL, NULL, NULL);
 }
 
+/*
+ * Find a functio proto type by name, and return it.
+ * Return NULL if not found, or return -EINVAL if parameter is invalid.
+ */
+const struct btf_type *btf_find_func_proto(struct btf *btf, const char *func_name)
+{
+	const struct btf_type *t;
+	s32 id;
+
+	if (!btf || !func_name)
+		return ERR_PTR(-EINVAL);
+
+	id = btf_find_by_name_kind(btf, func_name, BTF_KIND_FUNC);
+	if (id <= 0)
+		return NULL;
+
+	/* Get BTF_KIND_FUNC type */
+	t = btf_type_by_id(btf, id);
+	if (!t || !btf_type_is_func(t))
+		return NULL;
+
+	/* The type of BTF_KIND_FUNC is BTF_KIND_FUNC_PROTO */
+	t = btf_type_by_id(btf, t->type);
+	if (!t || !btf_type_is_func_proto(t))
+		return NULL;
+
+	return t;
+}
+
+/*
+ * Get function parameter with the number of parameters.
+ * This can return NULL if the function has no parameters.
+ */
+const struct btf_param *btf_get_func_param(const struct btf_type *func_proto, s32 *nr)
+{
+	if (!func_proto || !nr)
+		return ERR_PTR(-EINVAL);
+
+	*nr = btf_type_vlen(func_proto);
+	if (*nr > 0)
+		return (const struct btf_param *)(func_proto + 1);
+	else
+		return NULL;
+}
+
 static u32 btf_resolved_type_id(const struct btf *btf, u32 type_id)
 {
 	while (type_id < btf->start_id)

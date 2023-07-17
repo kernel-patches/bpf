@@ -221,6 +221,10 @@ const struct btf_type *
 btf_resolve_size(const struct btf *btf, const struct btf_type *type,
 		 u32 *type_size);
 const char *btf_type_str(const struct btf_type *t);
+const struct btf_type *btf_find_func_proto(struct btf *btf,
+					   const char *func_name);
+const struct btf_param *btf_get_func_param(const struct btf_type *func_proto,
+					   s32 *nr);
 
 #define for_each_member(i, struct_type, member)			\
 	for (i = 0, member = btf_type_member(struct_type);	\

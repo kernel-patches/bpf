@@ -371,47 +371,23 @@ static const char *type_from_btf_id(struct btf *btf, s32 id)
 	return NULL;
 }
 
-static const struct btf_type *find_btf_func_proto(const char *funcname)
-{
-	struct btf *btf = traceprobe_get_btf();
-	const struct btf_type *t;
-	s32 id;
-
-	if (!btf || !funcname)
-		return ERR_PTR(-EINVAL);
-
-	id = btf_find_by_name_kind(btf, funcname, BTF_KIND_FUNC);
-	if (id <= 0)
-		return ERR_PTR(-ENOENT);
-
-	/* Get BTF_KIND_FUNC type */
-	t = btf_type_by_id(btf, id);
-	if (!t || !btf_type_is_func(t))
-		return ERR_PTR(-ENOENT);
-
-	/* The type of BTF_KIND_FUNC is BTF_KIND_FUNC_PROTO */
-	t = btf_type_by_id(btf, t->type);
-	if (!t || !btf_type_is_func_proto(t))
-		return ERR_PTR(-ENOENT);
-
-	return t;
-}
-
 static const struct btf_param *find_btf_func_param(const char *funcname, s32 *nr,
 						   bool tracepoint)
 {
+	struct btf *btf = traceprobe_get_btf();
 	const struct btf_param *param;
 	const struct btf_type *t;
 
-	if (!funcname || !nr)
+	if (!funcname || !nr || !btf)
 		return ERR_PTR(-EINVAL);
 
-	t = find_btf_func_proto(funcname);
-	if (IS_ERR(t))
+	t = btf_find_func_proto(btf, funcname);
+	if (IS_ERR_OR_NULL(t))
 		return (const struct btf_param *)t;
 
-	*nr = btf_type_vlen(t);
-	param = (const struct btf_param *)(t + 1);
+	param = btf_get_func_param(t, nr);
+	if (IS_ERR_OR_NULL(param))
+		return param;
 
 	/* Hide the first 'data' argument of tracepoint */
 	if (tracepoint) {
@@ -490,8 +466,8 @@ static const struct fetch_type *parse_btf_retval_type(
 	const struct btf_type *t;
 
 	if (btf && ctx->funcname) {
-		t = find_btf_func_proto(ctx->funcname);
-		if (!IS_ERR(t))
+		t = btf_find_func_proto(btf, ctx->funcname);
+		if (!IS_ERR_OR_NULL(t))
 			typestr = type_from_btf_id(btf, t->type);
 	}
 
@@ -500,10 +476,14 @@ static const struct fetch_type *parse_btf_retval_type(
 
 static bool is_btf_retval_void(const char *funcname)
 {
+	struct btf *btf = traceprobe_get_btf();
 	const struct btf_type *t;
 
-	t = find_btf_func_proto(funcname);
-	if (IS_ERR(t))
+	if (!btf)
+		return false;
+
+	t = btf_find_func_proto(btf, funcname);
+	if (IS_ERR_OR_NULL(t))
 		return false;
 
 	return t->type == 0;
