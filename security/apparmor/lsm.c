@@ -868,7 +868,7 @@ static void apparmor_sk_clone_security(const struct sock *sk,
 /**
  * apparmor_socket_create - check perms before creating a new socket
  */
-static int apparmor_socket_create(int family, int type, int protocol, int kern)
+static int apparmor_socket_create(int *family, int *type, int *protocol, int kern)
 {
 	struct aa_label *label;
 	int error = 0;
@@ -877,10 +877,10 @@ static int apparmor_socket_create(int family, int type, int protocol, int kern)
 
 	label = begin_current_label_crit_section();
 	if (!(kern || unconfined(label)))
-		error = af_select(family,
-				  create_perm(label, family, type, protocol),
+		error = af_select(*family,
+				  create_perm(label, *family, *type, *protocol),
 				  aa_af_perm(label, OP_CREATE, AA_MAY_CREATE,
-					     family, type, protocol));
+					     *family, *type, *protocol));
 	end_current_label_crit_section(label);
 
 	return error;

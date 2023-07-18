@@ -1328,7 +1328,7 @@ int sock_create_lite(int family, int type, int protocol, struct socket **res)
 	int err;
 	struct socket *sock = NULL;
 
-	err = security_socket_create(family, type, protocol, 1);
+	err = security_socket_create(&family, &type, &protocol, 1);
 	if (err)
 		goto out;
 
@@ -1488,7 +1488,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 		family = PF_PACKET;
 	}
 
-	err = security_socket_create(family, type, protocol, kern);
+	err = security_socket_create(&family, &type, &protocol, kern);
 	if (err)
 		return err;
 

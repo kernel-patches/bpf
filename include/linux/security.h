@@ -1416,7 +1416,7 @@ static inline int security_watch_key(struct key *key)
 
 int security_unix_stream_connect(struct sock *sock, struct sock *other, struct sock *newsk);
 int security_unix_may_send(struct socket *sock,  struct socket *other);
-int security_socket_create(int family, int type, int protocol, int kern);
+int security_socket_create(int *family, int *type, int *protocol, int kern);
 int security_socket_post_create(struct socket *sock, int family,
 				int type, int protocol, int kern);
 int security_socket_socketpair(struct socket *socka, struct socket *sockb);
@@ -1482,8 +1482,8 @@ static inline int security_unix_may_send(struct socket *sock,
 	return 0;
 }
 
-static inline int security_socket_create(int family, int type,
-					 int protocol, int kern)
+static inline int security_socket_create(int *family, int *type,
+					 int *protocol, int kern)
 {
 	return 0;
 }

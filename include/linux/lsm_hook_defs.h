@@ -288,7 +288,7 @@ LSM_HOOK(int, 0, watch_key, struct key *key)
 LSM_HOOK(int, 0, unix_stream_connect, struct sock *sock, struct sock *other,
 	 struct sock *newsk)
 LSM_HOOK(int, 0, unix_may_send, struct socket *sock, struct socket *other)
-LSM_HOOK(int, 0, socket_create, int family, int type, int protocol, int kern)
+LSM_HOOK(int, 0, socket_create, int *family, int *type, int *protocol, int kern)
 LSM_HOOK(int, 0, socket_post_create, struct socket *sock, int family, int type,
 	 int protocol, int kern)
 LSM_HOOK(int, 0, socket_socketpair, struct socket *socka, struct socket *sockb)

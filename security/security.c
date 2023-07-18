@@ -4078,7 +4078,7 @@ EXPORT_SYMBOL(security_unix_may_send);
  *
  * Return: Returns 0 if permission is granted.
  */
-int security_socket_create(int family, int type, int protocol, int kern)
+int security_socket_create(int *family, int *type, int *protocol, int kern)
 {
 	return call_int_hook(socket_create, 0, family, type, protocol, kern);
 }

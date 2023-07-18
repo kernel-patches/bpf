@@ -248,6 +248,8 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 					prog->aux->attach_btf_id))
 			return &bpf_unlocked_sk_getsockopt_proto;
 		return NULL;
+	case BPF_FUNC_mptcpify:
+		return &bpf_mptcpify_proto;
 #endif
 	default:
 		return tracing_prog_func_proto(func_id, prog);

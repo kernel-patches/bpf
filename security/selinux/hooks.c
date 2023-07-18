@@ -4512,8 +4512,8 @@ static int sock_has_perm(struct sock *sk, u32 perms)
 			    &ad);
 }
 
-static int selinux_socket_create(int family, int type,
-				 int protocol, int kern)
+static int selinux_socket_create(int *family, int *type,
+				 int *protocol, int kern)
 {
 	const struct task_security_struct *tsec = selinux_cred(current_cred());
 	u32 newsid;
@@ -4523,7 +4523,7 @@ static int selinux_socket_create(int family, int type,
 	if (kern)
 		return 0;
 
-	secclass = socket_type_to_security_class(family, type, protocol);
+	secclass = socket_type_to_security_class(*family, *type, *protocol);
 	rc = socket_sockcreate_sid(tsec, secclass, &newsid);
 	if (rc)
 		return rc;

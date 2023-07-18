@@ -19,3 +19,23 @@ struct mptcp_sock *bpf_mptcp_sock_from_subflow(struct sock *sk)
 
 	return NULL;
 }
+
+BPF_CALL_3(bpf_mptcpify, int *, family, int *, type, int *, protocol)
+{
+	if ((*family == AF_INET || *family == AF_INET6) &&
+	    *type == SOCK_STREAM &&
+	    (!*protocol || *protocol == IPPROTO_TCP)) {
+		*protocol = IPPROTO_MPTCP;
+	}
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_mptcpify_proto = {
+	.func		= bpf_mptcpify,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
