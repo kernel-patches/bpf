@@ -2129,6 +2129,11 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 	ret = dev_queue_xmit(skb);
 	dev_xmit_recursion_dec();
 
+	// We should not return NET_XMIT_xxx here since it will conflict with
+	// LWTUNNEL_XMIT_xxx values. Convert the return value to errno instead.
+	if (unlikely(ret != NET_XMIT_SUCCESS))
+		ret = net_xmit_errno(ret);
+
 	return ret;
 }
 
