@@ -41,7 +41,6 @@ jobs:
             CPU architecture supported by CI.
             """
             aarch64 = "aarch64"
-            s390x = "s390x"
             x86_64 = "x86_64"
 
           def set_output(name, value):
@@ -73,7 +72,6 @@ jobs:
             {"kernel": "LATEST", "runs_on": [], "arch": Arch.x86_64.value, "toolchain": "llvm", "llvm-version": "16"},
             {"kernel": "LATEST", "runs_on": [], "arch": Arch.aarch64.value, "toolchain": "gcc", "llvm-version": "17"},
             #{"kernel": "LATEST", "runs_on": [], "arch": Arch.aarch64.value, "toolchain": "llvm", "llvm-version": "17"},
-            {"kernel": "LATEST", "runs_on": [], "arch": Arch.s390x.value, "toolchain": "gcc", "llvm-version": "16", "parallel_tests": False},
           ]
           self_hosted_repos = [
             "kernel-patches/bpf",
