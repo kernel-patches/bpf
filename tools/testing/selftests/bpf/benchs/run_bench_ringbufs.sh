@@ -6,12 +6,12 @@ set -eufo pipefail
 
 RUN_RB_BENCH="$RUN_BENCH -c1"
 
-header "Single-producer, parallel producer"
+header "Single-consumer, parallel producer"
 for b in rb-libbpf rb-custom pb-libbpf pb-custom; do
 	summarize $b "$($RUN_RB_BENCH $b)"
 done
 
-header "Single-producer, parallel producer, sampled notification"
+header "Single-consumer, parallel producer, sampled notification"
 for b in rb-libbpf rb-custom pb-libbpf pb-custom; do
 	summarize $b "$($RUN_RB_BENCH --rb-sampled $b)"
 done
