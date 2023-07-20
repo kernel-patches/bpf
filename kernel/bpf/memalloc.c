@@ -84,14 +84,15 @@ struct bpf_mem_cache {
 	struct llist_head free_llist;
 	local_t active;
 
-	/* Operations on the free_list from unit_alloc/unit_free/bpf_mem_refill
+	/* Operations on the free_list from unit_alloc/unit_free/bpf_mem_refill_*
 	 * are sequenced by per-cpu 'active' counter. But unit_free() cannot
 	 * fail. When 'active' is busy the unit_free() will add an object to
 	 * free_llist_extra.
 	 */
 	struct llist_head free_llist_extra;
 
-	struct irq_work refill_work;
+	struct irq_work refill_work_irq;
+	struct work_struct refill_work_wq;
 	struct obj_cgroup *objcg;
 	int unit_size;
 	/* count of objects in free_llist */
@@ -153,7 +154,7 @@ static struct mem_cgroup *get_memcg(const struct bpf_mem_cache *c)
 #endif
 }
 
-/* Mostly runs from irq_work except __init phase. */
+/* Mostly runs from irq_work except workqueue and __init phase. */
 static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node, bool atomic)
 {
 	struct mem_cgroup *memcg = NULL, *old_memcg;
@@ -188,10 +189,18 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node, bool atomic)
 			 * want here.
 			 */
 			obj = __alloc(c, node, gfp);
-			if (!obj)
+			if (!obj) {
+				/* We might have exhausted the percpu chunks, schedule
+				 * non-atomic allocation so hopefully caller can get
+				 * a free unit upon next invocation.
+				 */
+				if (atomic)
+					queue_work_on(smp_processor_id(),
+						      system_highpri_wq, &c->refill_work_wq);
 				break;
+			}
 		}
-		if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		if (IS_ENABLED(CONFIG_PREEMPT_RT) || !atomic)
 			/* In RT irq_work runs in per-cpu kthread, so disable
 			 * interrupts to avoid preemption and interrupts and
 			 * reduce the chance of bpf prog executing on this cpu
@@ -208,7 +217,7 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node, bool atomic)
 		__llist_add(obj, &c->free_llist);
 		c->free_cnt++;
 		local_dec(&c->active);
-		if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		if (IS_ENABLED(CONFIG_PREEMPT_RT) || !atomic)
 			local_irq_restore(flags);
 	}
 	set_active_memcg(old_memcg);
@@ -314,9 +323,9 @@ static void free_bulk(struct bpf_mem_cache *c)
 	do_call_rcu(c);
 }
 
-static void bpf_mem_refill(struct irq_work *work)
+static void bpf_mem_refill_irq(struct irq_work *work)
 {
-	struct bpf_mem_cache *c = container_of(work, struct bpf_mem_cache, refill_work);
+	struct bpf_mem_cache *c = container_of(work, struct bpf_mem_cache, refill_work_irq);
 	int cnt;
 
 	/* Racy access to free_cnt. It doesn't need to be 100% accurate */
@@ -332,7 +341,14 @@ static void bpf_mem_refill(struct irq_work *work)
 
 static void notrace irq_work_raise(struct bpf_mem_cache *c)
 {
-	irq_work_queue(&c->refill_work);
+	irq_work_queue(&c->refill_work_irq);
+}
+
+static void bpf_mem_refill_wq(struct work_struct *work)
+{
+	struct bpf_mem_cache *c = container_of(work, struct bpf_mem_cache, refill_work_wq);
+
+	alloc_bulk(c, c->batch, NUMA_NO_NODE, false);
 }
 
 /* For typical bpf map case that uses bpf_mem_cache_alloc and single bucket
@@ -352,7 +368,8 @@ static void notrace irq_work_raise(struct bpf_mem_cache *c)
 
 static void prefill_mem_cache(struct bpf_mem_cache *c, int cpu)
 {
-	init_irq_work(&c->refill_work, bpf_mem_refill);
+	init_irq_work(&c->refill_work_irq, bpf_mem_refill_irq);
+	INIT_WORK(&c->refill_work_wq, bpf_mem_refill_wq);
 	if (c->unit_size <= 256) {
 		c->low_watermark = 32;
 		c->high_watermark = 96;
@@ -529,7 +546,7 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 		for_each_possible_cpu(cpu) {
 			c = per_cpu_ptr(ma->cache, cpu);
 			/*
-			 * refill_work may be unfinished for PREEMPT_RT kernel
+			 * refill_work_irq may be unfinished for PREEMPT_RT kernel
 			 * in which irq work is invoked in a per-CPU RT thread.
 			 * It is also possible for kernel with
 			 * arch_irq_work_has_interrupt() being false and irq
@@ -537,7 +554,8 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 			 * the completion of irq work to ease the handling of
 			 * concurrency.
 			 */
-			irq_work_sync(&c->refill_work);
+			irq_work_sync(&c->refill_work_irq);
+			cancel_work_sync(&c->refill_work_wq);
 			drain_mem_cache(c);
 			rcu_in_progress += atomic_read(&c->call_rcu_in_progress);
 		}
@@ -552,7 +570,8 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 			cc = per_cpu_ptr(ma->caches, cpu);
 			for (i = 0; i < NUM_CACHES; i++) {
 				c = &cc->cache[i];
-				irq_work_sync(&c->refill_work);
+				irq_work_sync(&c->refill_work_irq);
+				cancel_work_sync(&c->refill_work_wq);
 				drain_mem_cache(c);
 				rcu_in_progress += atomic_read(&c->call_rcu_in_progress);
 			}
@@ -580,7 +599,7 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	 *
 	 * but prog_B could be a perf_event NMI prog.
 	 * Use per-cpu 'active' counter to order free_list access between
-	 * unit_alloc/unit_free/bpf_mem_refill.
+	 * unit_alloc/unit_free/bpf_mem_refill_*.
 	 */
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
