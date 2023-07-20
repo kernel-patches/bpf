@@ -53,7 +53,7 @@ static void patch_unmap(int fixmap)
 }
 NOKPROBE_SYMBOL(patch_unmap);
 
-static int patch_insn_write(void *addr, const void *insn, size_t len)
+static int __patch_insn_write(void *addr, const void *insn, size_t len)
 {
 	void *waddr = addr;
 	bool across_pages = (((uintptr_t) addr & ~PAGE_MASK) + len) > PAGE_SIZE;
@@ -74,7 +74,7 @@ static int patch_insn_write(void *addr, const void *insn, size_t len)
 		lockdep_assert_held(&text_mutex);
 
 	if (across_pages)
-		patch_map(addr + len, FIX_TEXT_POKE1);
+		patch_map(addr + PAGE_SIZE, FIX_TEXT_POKE1);
 
 	waddr = patch_map(addr, FIX_TEXT_POKE0);
 
@@ -87,14 +87,33 @@ static int patch_insn_write(void *addr, const void *insn, size_t len)
 
 	return ret;
 }
-NOKPROBE_SYMBOL(patch_insn_write);
+NOKPROBE_SYMBOL(__patch_insn_write);
 #else
-static int patch_insn_write(void *addr, const void *insn, size_t len)
+static int __patch_insn_write(void *addr, const void *insn, size_t len)
 {
 	return copy_to_kernel_nofault(addr, insn, len);
 }
-NOKPROBE_SYMBOL(patch_insn_write);
+NOKPROBE_SYMBOL(__patch_insn_write);
 #endif /* CONFIG_MMU */
+
+static int patch_insn_write(void *addr, const void *insn, size_t len)
+{
+	size_t patched = 0;
+	size_t size;
+	int ret = 0;
+
+	while (patched < len && !ret) {
+		size = min_t(size_t,
+			     PAGE_SIZE * 2 - offset_in_page(addr + patched),
+			     len - patched);
+		ret = __patch_insn_write(addr + patched, insn + patched, size);
+
+		patched += size;
+	}
+
+	return ret;
+}
+NOKPROBE_SYMBOL(patch_insn_write);
 
 int patch_text_nosync(void *addr, const void *insns, size_t len)
 {
