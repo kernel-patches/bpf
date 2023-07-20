@@ -350,7 +350,6 @@ ssize_t tcp_splice_read(struct socket *sk, loff_t *ppos,
 struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, gfp_t gfp,
 				     bool force_schedule);
 
-void tcp_enter_quickack_mode(struct sock *sk, unsigned int max_quickacks);
 static inline void tcp_dec_quickack_mode(struct sock *sk,
 					 const unsigned int pkts)
 {
@@ -606,7 +605,6 @@ int tcp_fragment(struct sock *sk, enum tcp_queue tcp_queue,
 		 unsigned int mss_now, gfp_t gfp);
 
 void tcp_send_probe0(struct sock *);
-void tcp_send_partial(struct sock *);
 int tcp_write_wakeup(struct sock *, int mib);
 void tcp_send_fin(struct sock *sk);
 void tcp_send_active_reset(struct sock *sk, gfp_t priority);
@@ -1434,11 +1432,27 @@ void tcp_select_initial_window(const struct sock *sk, int __space,
 
 static inline int tcp_win_from_space(const struct sock *sk, int space)
 {
-	int tcp_adv_win_scale = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_adv_win_scale);
+	s64 scaled_space = (s64)space * tcp_sk(sk)->scaling_ratio;
 
-	return tcp_adv_win_scale <= 0 ?
-		(space>>(-tcp_adv_win_scale)) :
-		space - (space>>tcp_adv_win_scale);
+	return scaled_space >> TCP_RMEM_TO_WIN_SCALE;
+}
+
+/* inverse of tcp_win_from_space() */
+static inline int tcp_space_from_win(const struct sock *sk, int win)
+{
+	u64 val = (u64)win << TCP_RMEM_TO_WIN_SCALE;
+
+	do_div(val, tcp_sk(sk)->scaling_ratio);
+	return val;
+}
+
+static inline void tcp_scaling_ratio_init(struct sock *sk)
+{
+	/* Assume a conservative default of 1200 bytes of payload per 4K page.
+	 * This may be adjusted later in tcp_measure_rcv_mss().
+	 */
+	tcp_sk(sk)->scaling_ratio = (1200 << TCP_RMEM_TO_WIN_SCALE) /
+				    SKB_TRUESIZE(4096);
 }
 
 /* Note: caller must be prepared to deal with negative returns */
