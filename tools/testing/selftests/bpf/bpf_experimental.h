@@ -131,4 +131,31 @@ extern int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *nod
  */
 extern struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root) __ksym;
 
+/* Description
+ *	Allocate a buffer of 'size' bytes for being installed as optval.
+ * Returns
+ *	> 0 on success, the size of the allocated buffer
+ *	-ENOMEM or -EINVAL on failure
+ */
+extern int bpf_sockopt_alloc_optval(struct bpf_sockopt *sopt, int size,
+				    struct bpf_dynptr *ptr__uninit) __ksym;
+
+/* Description
+ *	Install the buffer pointed to by 'ptr' as optval.
+ * Returns
+ *	0 on success
+ *	-EINVAL if the buffer is too small
+ */
+extern int bpf_sockopt_install_optval(struct bpf_sockopt *sopt,
+				      struct bpf_dynptr *ptr) __ksym;
+
+/* Description
+ *	Release the buffer allocated by bpf_sockopt_alloc_optval.
+ * Returns
+ *	0 on success
+ *	-EINVAL if the buffer was not allocated by bpf_sockopt_alloc_optval
+ */
+extern int bpf_sockopt_release_optval(struct bpf_sockopt *sopt,
+				      struct bpf_dynptr *ptr) __ksym;
+
 #endif

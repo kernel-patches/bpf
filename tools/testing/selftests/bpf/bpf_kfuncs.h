@@ -41,4 +41,34 @@ extern bool bpf_dynptr_is_rdonly(const struct bpf_dynptr *ptr) __ksym;
 extern __u32 bpf_dynptr_size(const struct bpf_dynptr *ptr) __ksym;
 extern int bpf_dynptr_clone(const struct bpf_dynptr *ptr, struct bpf_dynptr *clone__init) __ksym;
 
+extern int bpf_copy_to_user(void *dst__uninit, __u32 dst__sz,
+			    const void *src_ign) __ksym;
+
+/* Description
+ *	Allocate a buffer of 'size' bytes for being installed as optval.
+ * Returns
+ *	> 0 on success, the size of the allocated buffer
+ *	-ENOMEM or -EINVAL on failure
+ */
+extern int bpf_sockopt_alloc_optval(struct bpf_sockopt *sopt, int size,
+				    struct bpf_dynptr *ptr__uninit) __ksym;
+
+/* Description
+ *	Install the buffer pointed to by 'ptr' as optval.
+ * Returns
+ *	0 on success
+ *	-EINVAL if the buffer is too small
+ */
+extern int bpf_sockopt_install_optval(struct bpf_sockopt *sopt,
+				      struct bpf_dynptr *ptr) __ksym;
+
+/* Description
+ *	Release the buffer allocated by bpf_sockopt_alloc_optval.
+ * Returns
+ *	0 on success
+ *	-EINVAL if the buffer was not allocated by bpf_sockopt_alloc_optval
+ */
+extern int bpf_sockopt_release_optval(struct bpf_sockopt *sopt,
+				      struct bpf_dynptr *ptr) __ksym;
+
 #endif
