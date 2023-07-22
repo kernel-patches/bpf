@@ -7135,6 +7135,15 @@ struct bpf_sockopt {
 	__s32	optname;
 	__s32	optlen;
 	__s32	retval;
+
+	__bpf_md_ptr(void *, user_optval);
+	__bpf_md_ptr(void *, user_optval_end);
+	__u32	flags;
+};
+
+enum bpf_sockopt_flags {
+	/* optval is a pointer to user space memory */
+	BPF_SOCKOPT_FLAG_OPTVAL_USER	= (1U << 0),
 };
 
 struct bpf_pidns_info {

@@ -38,15 +38,26 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 	const struct bpf_prog_array *array;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_cg_run_ctx run_ctx;
+	bool do_sleepable;
 	u32 func_ret;
+
+	do_sleepable =
+		atype == CGROUP_SETSOCKOPT || atype == CGROUP_GETSOCKOPT;
 
 	run_ctx.retval = retval;
 	migrate_disable();
-	rcu_read_lock();
+	if (do_sleepable) {
+		might_fault();
+		rcu_read_lock_trace();
+	} else
+		rcu_read_lock();
 	array = rcu_dereference(cgrp->effective[atype]);
 	item = &array->items[0];
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	while ((prog = READ_ONCE(item->prog))) {
+		if (do_sleepable && !prog->aux->sleepable)
+			rcu_read_lock();
+
 		run_ctx.prog_item = item;
 		func_ret = run_prog(prog, ctx);
 		if (ret_flags) {
@@ -56,11 +67,41 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 		if (!func_ret && !IS_ERR_VALUE((long)run_ctx.retval))
 			run_ctx.retval = -EPERM;
 		item++;
+
+		if (do_sleepable && !prog->aux->sleepable)
+			rcu_read_unlock();
 	}
 	bpf_reset_run_ctx(old_run_ctx);
-	rcu_read_unlock();
+	if (do_sleepable)
+		rcu_read_unlock_trace();
+	else
+		rcu_read_unlock();
 	migrate_enable();
 	return run_ctx.retval;
+}
+
+static __always_inline bool
+has_only_sleepable_prog_cg(const struct cgroup_bpf *cgrp,
+			 enum cgroup_bpf_attach_type atype)
+{
+	const struct bpf_prog_array_item *item;
+	const struct bpf_prog *prog;
+	int cnt = 0;
+	bool ret = true;
+
+	rcu_read_lock();
+	item = &rcu_dereference(cgrp->effective[atype])->items[0];
+	while (ret && (prog = READ_ONCE(item->prog))) {
+		if (!prog->aux->sleepable)
+			ret = false;
+		item++;
+		cnt++;
+	}
+	rcu_read_unlock();
+	if (cnt == 0)
+		ret = false;
+
+	return ret;
 }
 
 unsigned int __cgroup_bpf_run_lsm_sock(const void *ctx,
@@ -1773,7 +1814,8 @@ static int sockopt_alloc_buf(struct bpf_sockopt_kern *ctx, int max_optlen,
 static void sockopt_free_buf(struct bpf_sockopt_kern *ctx,
 			     struct bpf_sockopt_buf *buf)
 {
-	if (ctx->optval == buf->data)
+	if (ctx->optval == buf->data ||
+	    ctx->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER)
 		return;
 	kfree(ctx->optval);
 }
@@ -1781,7 +1823,8 @@ static void sockopt_free_buf(struct bpf_sockopt_kern *ctx,
 static bool sockopt_buf_allocated(struct bpf_sockopt_kern *ctx,
 				  struct bpf_sockopt_buf *buf)
 {
-	return ctx->optval != buf->data;
+	return ctx->optval != buf->data &&
+		!(ctx->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER);
 }
 
 int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
@@ -1796,21 +1839,31 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		.optname = *optname,
 	};
 	int ret, max_optlen;
+	bool alloc_mem;
 
-	/* Allocate a bit more than the initial user buffer for
-	 * BPF program. The canonical use case is overriding
-	 * TCP_CONGESTION(nv) to TCP_CONGESTION(cubic).
-	 */
-	max_optlen = max_t(int, 16, *optlen);
-	max_optlen = sockopt_alloc_buf(&ctx, max_optlen, &buf);
-	if (max_optlen < 0)
-		return max_optlen;
+	alloc_mem = !has_only_sleepable_prog_cg(&cgrp->bpf, CGROUP_SETSOCKOPT);
+	if (!alloc_mem) {
+		max_optlen = *optlen;
+		ctx.optlen = *optlen;
+		ctx.user_optval = optval;
+		ctx.user_optval_end = optval + *optlen;
+		ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER;
+	} else {
+		/* Allocate a bit more than the initial user buffer for
+		 * BPF program. The canonical use case is overriding
+		 * TCP_CONGESTION(nv) to TCP_CONGESTION(cubic).
+		 */
+		max_optlen = max_t(int, 16, *optlen);
+		max_optlen = sockopt_alloc_buf(&ctx, max_optlen, &buf);
+		if (max_optlen < 0)
+			return max_optlen;
 
-	ctx.optlen = *optlen;
+		ctx.optlen = *optlen;
 
-	if (copy_from_user(ctx.optval, optval, min(*optlen, max_optlen)) != 0) {
-		ret = -EFAULT;
-		goto out;
+		if (copy_from_user(ctx.optval, optval, min(*optlen, max_optlen)) != 0) {
+			ret = -EFAULT;
+			goto out;
+		}
 	}
 
 	lock_sock(sk);
@@ -1824,7 +1877,8 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 	if (ctx.optlen == -1) {
 		/* optlen set to -1, bypass kernel */
 		ret = 1;
-	} else if (ctx.optlen > max_optlen || ctx.optlen < -1) {
+	} else if (alloc_mem &&
+		   (ctx.optlen > max_optlen || ctx.optlen < -1)) {
 		/* optlen is out of bounds */
 		if (*optlen > PAGE_SIZE && ctx.optlen >= 0) {
 			pr_info_once("bpf setsockopt: ignoring program buffer with optlen=%d (max_optlen=%d)\n",
@@ -1846,6 +1900,8 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		 */
 		if (ctx.optlen != 0) {
 			*optlen = ctx.optlen;
+			if (ctx.flags & BPF_SOCKOPT_FLAG_OPTVAL_USER)
+				return 0;
 			/* We've used bpf_sockopt_kern->buf as an intermediary
 			 * storage, but the BPF program indicates that we need
 			 * to pass this data to the kernel setsockopt handler.
@@ -1892,33 +1948,59 @@ int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
 
 	orig_optlen = max_optlen;
 	ctx.optlen = max_optlen;
-	max_optlen = sockopt_alloc_buf(&ctx, max_optlen, &buf);
-	if (max_optlen < 0)
-		return max_optlen;
+	if (has_only_sleepable_prog_cg(&cgrp->bpf, CGROUP_GETSOCKOPT)) {
+		if (!retval) {
+			/* If kernel getsockopt finished successfully,
+			 * copy whatever was returned to the user back
+			 * into our temporary buffer. Set optlen to the
+			 * one that kernel returned as well to let
+			 * BPF programs inspect the value.
+			 */
 
-	if (!retval) {
-		/* If kernel getsockopt finished successfully,
-		 * copy whatever was returned to the user back
-		 * into our temporary buffer. Set optlen to the
-		 * one that kernel returned as well to let
-		 * BPF programs inspect the value.
-		 */
+			if (get_user(ctx.optlen, optlen)) {
+				ret = -EFAULT;
+				goto out;
+			}
 
-		if (get_user(ctx.optlen, optlen)) {
-			ret = -EFAULT;
-			goto out;
+			if (ctx.optlen < 0) {
+				ret = -EFAULT;
+				goto out;
+			}
+			orig_optlen = ctx.optlen;
 		}
 
-		if (ctx.optlen < 0) {
-			ret = -EFAULT;
-			goto out;
-		}
-		orig_optlen = ctx.optlen;
+		ctx.user_optval = optval;
+		ctx.user_optval_end = optval + *optlen;
+		ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER;
+	} else {
+		max_optlen = sockopt_alloc_buf(&ctx, max_optlen, &buf);
+		if (max_optlen < 0)
+			return max_optlen;
 
-		if (copy_from_user(ctx.optval, optval,
-				   min(ctx.optlen, max_optlen)) != 0) {
-			ret = -EFAULT;
-			goto out;
+		if (!retval) {
+			/* If kernel getsockopt finished successfully,
+			 * copy whatever was returned to the user back
+			 * into our temporary buffer. Set optlen to the
+			 * one that kernel returned as well to let
+			 * BPF programs inspect the value.
+			 */
+
+			if (get_user(ctx.optlen, optlen)) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			if (ctx.optlen < 0) {
+				ret = -EFAULT;
+				goto out;
+			}
+			orig_optlen = ctx.optlen;
+
+			if (copy_from_user(ctx.optval, optval,
+					   min(ctx.optlen, max_optlen)) != 0) {
+				ret = -EFAULT;
+				goto out;
+			}
 		}
 	}
 
@@ -1942,7 +2024,9 @@ int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
 	}
 
 	if (ctx.optlen != 0) {
-		if (optval && copy_to_user(optval, ctx.optval, ctx.optlen)) {
+		if (optval &&
+		    !(ctx.flags & BPF_SOCKOPT_FLAG_OPTVAL_USER) &&
+		    copy_to_user(optval, ctx.optval, ctx.optlen)) {
 			ret = -EFAULT;
 			goto out;
 		}
@@ -2388,6 +2472,20 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 		if (size != size_default)
 			return false;
 		return prog->expected_attach_type == BPF_CGROUP_GETSOCKOPT;
+	case offsetof(struct bpf_sockopt, user_optval):
+		if (size != sizeof(__u64))
+			return false;
+		info->reg_type = PTR_TO_PACKET;
+		break;
+	case offsetof(struct bpf_sockopt, user_optval_end):
+		if (size != sizeof(__u64))
+			return false;
+		info->reg_type = PTR_TO_PACKET_END;
+		break;
+	case offsetof(struct bpf_sockopt, flags):
+		if (size != sizeof(__u32))
+			return false;
+		break;
 	default:
 		if (size != size_default)
 			return false;
@@ -2480,6 +2578,15 @@ static u32 cg_sockopt_convert_ctx_access(enum bpf_access_type type,
 		break;
 	case offsetof(struct bpf_sockopt, optval_end):
 		*insn++ = CG_SOCKOPT_READ_FIELD(optval_end);
+		break;
+	case offsetof(struct bpf_sockopt, user_optval):
+		*insn++ = CG_SOCKOPT_READ_FIELD(user_optval);
+		break;
+	case offsetof(struct bpf_sockopt, user_optval_end):
+		*insn++ = CG_SOCKOPT_READ_FIELD(user_optval_end);
+		break;
+	case offsetof(struct bpf_sockopt, flags):
+		*insn++ = CG_SOCKOPT_READ_FIELD(flags);
 		break;
 	}
 
