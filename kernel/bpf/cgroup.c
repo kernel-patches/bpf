@@ -2482,12 +2482,12 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 	case offsetof(struct bpf_sockopt, user_optval):
 		if (size != sizeof(__u64))
 			return false;
-		info->reg_type = PTR_TO_PACKET;
+		info->reg_type = PTR_TO_PACKET | MEM_USER;
 		break;
 	case offsetof(struct bpf_sockopt, user_optval_end):
 		if (size != sizeof(__u64))
 			return false;
-		info->reg_type = PTR_TO_PACKET_END;
+		info->reg_type = PTR_TO_PACKET_END | MEM_USER;
 		break;
 	case offsetof(struct bpf_sockopt, flags):
 		if (size != sizeof(__u32))
