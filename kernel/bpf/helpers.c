@@ -1557,6 +1557,7 @@ BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, const struct bpf_dynptr_kern 
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		/* Source and destination may possibly overlap, hence use memmove to
 		 * copy the data. E.g. bpf_dynptr_from_mem may create two dynptr
 		 * pointing to overlapping PTR_TO_MAP_VALUE regions.
@@ -1602,6 +1603,7 @@ BPF_CALL_5(bpf_dynptr_write, const struct bpf_dynptr_kern *, dst, u32, offset, v
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		if (flags)
 			return -EINVAL;
 		/* Source and destination may possibly overlap, hence use memmove to
@@ -1654,6 +1656,7 @@ BPF_CALL_3(bpf_dynptr_data, const struct bpf_dynptr_kern *, ptr, u32, offset, u3
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		return (unsigned long)(ptr->data + ptr->offset + offset);
 	case BPF_DYNPTR_TYPE_SKB:
 	case BPF_DYNPTR_TYPE_XDP:
@@ -2281,6 +2284,7 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr_kern *ptr, u32 offset
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		return ptr->data + ptr->offset + offset;
 	case BPF_DYNPTR_TYPE_SKB:
 		if (buffer__opt)
@@ -2449,6 +2453,72 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+__bpf_kfunc int bpf_sockopt_alloc_optval(struct bpf_sockopt *sopt, int size,
+					 struct bpf_dynptr_kern *ptr__uninit)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+	void *optval;
+	int err;
+
+	if (!(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_ALLOC))
+		return -EINVAL;
+
+	err = bpf_dynptr_check_size(size);
+	if (err)
+		return err;
+
+	optval = kzalloc(size, GFP_KERNEL);
+	if (!optval)
+		return -ENOMEM;
+
+	bpf_dynptr_init(ptr__uninit, optval,
+			BPF_DYNPTR_TYPE_CGROUP_SOCKOPT, 0, size);
+
+	return size;
+}
+
+__bpf_kfunc int bpf_sockopt_install_optval(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+
+	if (!(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_ALLOC) ||
+	    bpf_dynptr_get_type(ptr) != BPF_DYNPTR_TYPE_CGROUP_SOCKOPT ||
+	    !ptr->data)
+		return -EINVAL;
+
+	if (sopt_kern->optval &&
+	    !(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER))
+		kfree(sopt_kern->optval);
+
+	sopt_kern->optval = ptr->data;
+	sopt_kern->optval_end = ptr->data + __bpf_dynptr_size(ptr);
+	sopt_kern->user_optval = NULL;
+	sopt_kern->user_optval_end = NULL;
+	sopt_kern->optlen = __bpf_dynptr_size(ptr);
+	sopt_kern->flags &= ~BPF_SOCKOPT_FLAG_OPTVAL_USER;
+
+	bpf_dynptr_set_null(ptr);
+
+	return 0;
+}
+
+__bpf_kfunc int bpf_sockopt_release_optval(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+
+	if (!(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_ALLOC) ||
+	    bpf_dynptr_get_type(ptr) != BPF_DYNPTR_TYPE_CGROUP_SOCKOPT ||
+	    !ptr->data)
+		return -EINVAL;
+
+	kfree(ptr->data);
+	bpf_dynptr_set_null(ptr);
+
+	return 0;
+}
+
 __diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
@@ -2517,6 +2587,9 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 
 BTF_SET8_START(cgroup_common_btf_ids)
 BTF_ID_FLAGS(func, bpf_copy_to_user, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_alloc_optval)
+BTF_ID_FLAGS(func, bpf_sockopt_install_optval)
+BTF_ID_FLAGS(func, bpf_sockopt_release_optval)
 BTF_SET8_END(cgroup_common_btf_ids)
 
 static const struct btf_kfunc_id_set cgroup_kfunc_set = {

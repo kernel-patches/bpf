@@ -1847,7 +1847,8 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		ctx.optlen = *optlen;
 		ctx.user_optval = optval;
 		ctx.user_optval_end = optval + *optlen;
-		ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER;
+		ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER |
+			BPF_SOCKOPT_FLAG_OPTVAL_ALLOC;
 	} else {
 		/* Allocate a bit more than the initial user buffer for
 		 * BPF program. The canonical use case is overriding

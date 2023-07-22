@@ -744,6 +744,8 @@ static const char *dynptr_type_str(enum bpf_dynptr_type type)
 		return "skb";
 	case BPF_DYNPTR_TYPE_XDP:
 		return "xdp";
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return "cgroup_sockopt";
 	case BPF_DYNPTR_TYPE_INVALID:
 		return "<invalid>";
 	default:
@@ -825,6 +827,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_SKB;
 	case DYNPTR_TYPE_XDP:
 		return BPF_DYNPTR_TYPE_XDP;
+	case DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return BPF_DYNPTR_TYPE_CGROUP_SOCKOPT;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -841,6 +845,8 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 		return DYNPTR_TYPE_SKB;
 	case BPF_DYNPTR_TYPE_XDP:
 		return DYNPTR_TYPE_XDP;
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return DYNPTR_TYPE_CGROUP_SOCKOPT;
 	default:
 		return 0;
 	}
@@ -848,7 +854,8 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 
 static bool dynptr_type_refcounted(enum bpf_dynptr_type type)
 {
-	return type == BPF_DYNPTR_TYPE_RINGBUF;
+	return type == BPF_DYNPTR_TYPE_RINGBUF ||
+		type == BPF_DYNPTR_TYPE_CGROUP_SOCKOPT;
 }
 
 static void __mark_dynptr_reg(struct bpf_reg_state *reg,
@@ -10101,6 +10108,9 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
+	KF_bpf_sockopt_alloc_optval,
+	KF_bpf_sockopt_install_optval,
+	KF_bpf_sockopt_release_optval,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -10121,6 +10131,9 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_sockopt_alloc_optval)
+BTF_ID(func, bpf_sockopt_install_optval)
+BTF_ID(func, bpf_sockopt_release_optval)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -10143,6 +10156,9 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_sockopt_alloc_optval)
+BTF_ID(func, bpf_sockopt_install_optval)
+BTF_ID(func, bpf_sockopt_release_optval)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -10796,6 +10812,20 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			arg_type |= OBJ_RELEASE;
 			break;
 		case KF_ARG_PTR_TO_DYNPTR:
+			if (meta->func_id == special_kfunc_list[KF_bpf_sockopt_install_optval] ||
+			    meta->func_id == special_kfunc_list[KF_bpf_sockopt_release_optval]) {
+				int ref_obj_id = dynptr_ref_obj_id(env, reg);
+
+				if (ref_obj_id < 0) {
+					verbose(env, "R%d is not a valid dynptr\n", regno);
+					return -EINVAL;
+				}
+
+				/* Required by check_func_arg_reg_off() */
+				arg_type |= ARG_PTR_TO_DYNPTR | OBJ_RELEASE;
+				meta->release_regno = regno;
+			}
+			break;
 		case KF_ARG_PTR_TO_ITER:
 		case KF_ARG_PTR_TO_LIST_HEAD:
 		case KF_ARG_PTR_TO_LIST_NODE:
@@ -10883,6 +10913,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					verbose(env, "verifier internal error: missing ref obj id for parent of clone\n");
 					return -EFAULT;
 				}
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_sockopt_alloc_optval] &&
+				   (dynptr_arg_type & MEM_UNINIT)) {
+				dynptr_arg_type |= DYNPTR_TYPE_CGROUP_SOCKOPT;
 			}
 
 			ret = process_dynptr_func(env, regno, insn_idx, dynptr_arg_type, clone_ref_obj_id);
@@ -11191,7 +11224,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * PTR_TO_BTF_ID in bpf_kfunc_arg_meta, do the release now.
 	 */
 	if (meta.release_regno) {
-		err = release_reference(env, regs[meta.release_regno].ref_obj_id);
+		verbose(env, "release refcounted PTR_TO_BTF_ID %s\n",
+			meta.func_name);
+		if (meta.func_id == special_kfunc_list[KF_bpf_sockopt_install_optval] ||
+		    meta.func_id == special_kfunc_list[KF_bpf_sockopt_release_optval])
+			err = unmark_stack_slots_dynptr(env, &regs[meta.release_regno]);
+		else
+			err = release_reference(env, regs[meta.release_regno].ref_obj_id);
 		if (err) {
 			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
 				func_name, meta.func_id);
