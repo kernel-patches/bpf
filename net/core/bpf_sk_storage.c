@@ -511,6 +511,11 @@ bpf_sk_storage_diag_alloc(const struct nlattr *nla_stgs)
 		if (nla_type(nla) != SK_DIAG_BPF_STORAGE_REQ_MAP_FD)
 			continue;
 
+		if (nla_len(nla) < sizeof(map_fd)) {
+			err = -EINVAL;
+			goto err_free;
+		}
+
 		map_fd = nla_get_u32(nla);
 		map = bpf_map_get(map_fd);
 		if (IS_ERR(map)) {
