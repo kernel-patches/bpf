@@ -157,7 +157,10 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 		struct nf_conn *ct_ins;
 
 		bpf_ct_set_timeout(ct, 10000);
-		ct->mark = 77;
+		#if defined(CONFIG_NF_CONNTRACK_MARK)
+			ct->mark = 77;
+		#endif
+
 
 		/* snat */
 		saddr.ip = bpf_get_prandom_u32();
@@ -188,7 +191,9 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 				bpf_ct_change_timeout(ct_lk, 10000);
 				test_delta_timeout = ct_lk->timeout - bpf_jiffies64();
 				test_delta_timeout /= CONFIG_HZ;
-				test_insert_lookup_mark = ct_lk->mark;
+				#if defined(CONFIG_NF_CONNTRACK_MARK)
+					test_insert_lookup_mark = ct_lk->mark;
+				#endif
 				bpf_ct_change_status(ct_lk,
 						     IPS_CONFIRMED | IPS_SEEN_REPLY);
 				test_status = ct_lk->status;
@@ -210,10 +215,12 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 		       sizeof(opts_def));
 	if (ct) {
 		test_exist_lookup = 0;
-		if (ct->mark == 42) {
-			ct->mark++;
-			test_exist_lookup_mark = ct->mark;
-		}
+		#if defined(CONFIG_NF_CONNTRACK_MARK)
+			if (ct->mark == 42) {
+				ct->mark++;
+				test_exist_lookup_mark = ct->mark;
+			}
+		#endif
 		bpf_ct_release(ct);
 	} else {
 		test_exist_lookup = opts_def.error;
