@@ -237,7 +237,11 @@ static int64_t ringbuf_process_ring(struct ring *r)
 	do {
 		got_new_data = false;
 		prod_pos = smp_load_acquire(r->producer_pos);
-		while (cons_pos < prod_pos) {
+
+		/* Avoid signed comparisons between the positions; the producer
+		 * position can overflow before the consumer position.
+		 */
+		while (cons_pos != prod_pos) {
 			len_ptr = r->data + (cons_pos & r->mask);
 			len = smp_load_acquire(len_ptr);
 
@@ -498,6 +502,11 @@ void *user_ring_buffer__reserve(struct user_ring_buffer *rb, __u32 size)
 	prod_pos = smp_load_acquire(rb->producer_pos);
 
 	max_size = rb->mask + 1;
+
+	/* Note that this formulation is valid in the face of overflow of
+	 * prod_pos so long as the delta between prod_pos and cons_pos is
+	 * no greater than max_size.
+	 */
 	avail_size = max_size - (prod_pos - cons_pos);
 	/* Round up total size to a multiple of 8. */
 	total_size = (size + BPF_RINGBUF_HDR_SZ + 7) / 8 * 8;
