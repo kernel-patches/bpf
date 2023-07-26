@@ -1617,16 +1617,20 @@ static inline bool sk_wmem_schedule(struct sock *sk, int size)
 	return delta <= 0 || __sk_mem_schedule(sk, delta, SK_MEM_SEND);
 }
 
-static inline bool
-sk_rmem_schedule(struct sock *sk, struct sk_buff *skb, int size)
+static inline bool __sk_rmem_schedule(struct sock *sk, int size)
 {
 	int delta;
 
 	if (!sk_has_account(sk))
 		return true;
 	delta = size - sk->sk_forward_alloc;
-	return delta <= 0 || __sk_mem_schedule(sk, delta, SK_MEM_RECV) ||
-		skb_pfmemalloc(skb);
+	return delta <= 0 || __sk_mem_schedule(sk, delta, SK_MEM_RECV);
+}
+
+static inline bool
+sk_rmem_schedule(struct sock *sk, struct sk_buff *skb, int size)
+{
+	return __sk_rmem_schedule(sk, size) || skb_pfmemalloc(skb);
 }
 
 static inline int sk_unused_reserved_mem(const struct sock *sk)
