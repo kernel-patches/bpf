@@ -87,6 +87,8 @@ void netdev_sw_irq_coalesce_default_on(struct net_device *dev);
 #define NET_RX_SUCCESS		0	/* keep 'em coming, baby */
 #define NET_RX_DROP		1	/* packet dropped */
 
+#define net_rx_errno(e)		((e) == NET_RX_DROP ? -ENOBUFS : (e))
+
 #define MAX_NEST_DEV 8
 
 /*

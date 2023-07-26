@@ -2095,7 +2095,9 @@ static const struct bpf_func_proto bpf_csum_level_proto = {
 
 static inline int __bpf_rx_skb(struct net_device *dev, struct sk_buff *skb)
 {
-	return dev_forward_skb_nomtu(dev, skb);
+	int ret = dev_forward_skb_nomtu(dev, skb);
+
+	return net_rx_errno(ret);
 }
 
 static inline int __bpf_rx_skb_no_mac(struct net_device *dev,
@@ -2108,7 +2110,7 @@ static inline int __bpf_rx_skb_no_mac(struct net_device *dev,
 		ret = netif_rx(skb);
 	}
 
-	return ret;
+	return net_rx_errno(ret);
 }
 
 static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
@@ -2128,6 +2130,9 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 	dev_xmit_recursion_inc();
 	ret = dev_queue_xmit(skb);
 	dev_xmit_recursion_dec();
+
+	if (unlikely(ret > 0))
+		ret = net_xmit_errno(ret);
 
 	return ret;
 }
