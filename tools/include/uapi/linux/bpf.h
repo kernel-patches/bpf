@@ -5575,6 +5575,12 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * u64 bpf_get_ino_from_cgroup_id(u64 id)
+ *	Description
+ *		Get inode number from a *cgroup id*.
+ *	Return
+ *		Inode number.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5789,6 +5795,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(get_ino_from_cgroup_id, 212, ##ctx)  \
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

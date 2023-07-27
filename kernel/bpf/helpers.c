@@ -433,6 +433,21 @@ const struct bpf_func_proto bpf_get_current_ancestor_cgroup_id_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_ANYTHING,
 };
+
+BPF_CALL_1(bpf_get_ino_from_cgroup_id, u64, id)
+{
+	u64 ino = kernfs_id_ino(id);
+
+	return ino;
+}
+
+const struct bpf_func_proto bpf_get_ino_from_cgroup_id_proto = {
+	.func		= bpf_get_ino_from_cgroup_id,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+};
+
 #endif /* CONFIG_CGROUPS */
 
 #define BPF_STRTOX_BASE_MASK 0x1F
@@ -1767,6 +1782,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_get_current_cgroup_id_proto;
 	case BPF_FUNC_get_current_ancestor_cgroup_id:
 		return &bpf_get_current_ancestor_cgroup_id_proto;
+	case BPF_FUNC_get_ino_from_cgroup_id:
+		return &bpf_get_ino_from_cgroup_id_proto;
 #endif
 	default:
 		break;
