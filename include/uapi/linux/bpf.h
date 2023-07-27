@@ -987,6 +987,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
 	BPF_PROG_TYPE_NETFILTER,
+	BPF_PROG_TYPE_OOM_POLICY,
 };
 
 enum bpf_attach_type {
@@ -1036,6 +1037,7 @@ enum bpf_attach_type {
 	BPF_LSM_CGROUP,
 	BPF_STRUCT_OPS,
 	BPF_NETFILTER,
+	BPF_OOM_POLICY,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -6823,6 +6825,18 @@ struct bpf_cgroup_dev_ctx {
 	__u32 access_type;
 	__u32 major;
 	__u32 minor;
+};
+
+enum {
+	BPF_OOM_CMP_EQUAL   = (1ULL << 0),
+	BPF_OOM_CMP_GREATER = (1ULL << 1),
+	BPF_OOM_CMP_LESS    = (1ULL << 2),
+};
+
+struct bpf_oom_ctx {
+	__u64 cg_id_1;
+	__u64 cg_id_2;
+	__u8  cmp_ret;
 };
 
 struct bpf_raw_tracepoint_args {

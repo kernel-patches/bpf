@@ -19,6 +19,7 @@
  */
 
 #include <linux/oom.h>
+#include <linux/bpf_oom.h>
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/gfp.h>
@@ -72,6 +73,9 @@ static inline bool is_memcg_oom(struct oom_control *oc)
 {
 	return oc->memcg != NULL;
 }
+
+DEFINE_MUTEX(oom_policy_lock);
+static struct bpf_oom_policy global_oom_policy;
 
 #ifdef CONFIG_NUMA
 /**
@@ -1257,4 +1261,168 @@ put_task:
 #else
 	return -ENOSYS;
 #endif /* CONFIG_MMU */
+}
+
+const struct bpf_prog_ops oom_policy_prog_ops = {
+};
+
+static const struct bpf_func_proto *
+oom_policy_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return bpf_base_func_proto(func_id);
+}
+
+static bool oom_policy_is_valid_access(int off, int size,
+						enum bpf_access_type type,
+						const struct bpf_prog *prog,
+						struct bpf_insn_access_aux *info)
+{
+	if (off < 0 || off + size > sizeof(struct bpf_oom_ctx) || off % size)
+		return false;
+
+	switch (off) {
+	case bpf_ctx_range(struct bpf_oom_ctx, cg_id_1):
+	case bpf_ctx_range(struct bpf_oom_ctx, cg_id_2):
+		if (type != BPF_READ)
+			return false;
+		bpf_ctx_record_field_size(info, sizeof(__u64));
+		return bpf_ctx_narrow_access_ok(off, size, sizeof(__u64));
+	case bpf_ctx_range(struct bpf_oom_ctx, cmp_ret):
+		if (type == BPF_READ) {
+			bpf_ctx_record_field_size(info, sizeof(__u8));
+			return bpf_ctx_narrow_access_ok(off, size, sizeof(__u8));
+		} else {
+			return size == sizeof(__u8);
+		}
+	default:
+		return false;
+	}
+}
+
+const struct bpf_verifier_ops oom_policy_verifier_ops = {
+	.get_func_proto		= oom_policy_func_proto,
+	.is_valid_access	= oom_policy_is_valid_access,
+};
+
+#define BPF_MAX_PROGS 10
+
+int oom_policy_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_prog_array *old_array;
+	struct bpf_prog_array *new_array;
+	int ret;
+
+	mutex_lock(&oom_policy_lock);
+	old_array = rcu_dereference(global_oom_policy.progs);
+	if (old_array && bpf_prog_array_length(old_array) >= BPF_MAX_PROGS) {
+		ret = -E2BIG;
+		goto unlock;
+	}
+	ret = bpf_prog_array_copy(old_array, NULL, prog, 0, &new_array);
+	if (ret < 0)
+		goto unlock;
+
+	rcu_assign_pointer(global_oom_policy.progs, new_array);
+	bpf_prog_array_free(old_array);
+
+unlock:
+	mutex_unlock(&oom_policy_lock);
+	return ret;
+}
+
+static int detach_prog(struct bpf_prog *prog)
+{
+	struct bpf_prog_array *old_array;
+	struct bpf_prog_array *new_array;
+	int ret;
+
+	mutex_lock(&oom_policy_lock);
+	old_array = rcu_dereference(global_oom_policy.progs);
+	ret = bpf_prog_array_copy(old_array, prog, NULL, 0, &new_array);
+
+	if (ret)
+		goto unlock;
+
+	rcu_assign_pointer(global_oom_policy.progs, new_array);
+	bpf_prog_array_free(old_array);
+	bpf_prog_put(prog);
+unlock:
+	mutex_unlock(&oom_policy_lock);
+	return ret;
+}
+
+int oom_policy_prog_detach(const union bpf_attr *attr)
+{
+	struct bpf_prog *prog;
+	int ret;
+
+	if (attr->attach_flags)
+		return -EINVAL;
+
+	prog = bpf_prog_get_type(attr->attach_bpf_fd,
+					BPF_PROG_TYPE_OOM_POLICY);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	ret = detach_prog(prog);
+	bpf_prog_put(prog);
+
+	return ret;
+}
+
+int oom_policy_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr)
+{
+	__u32 __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+	struct bpf_prog_array *progs;
+	u32 cnt, flags;
+	int ret = 0;
+
+	if (attr->query.query_flags)
+		return -EINVAL;
+
+	mutex_lock(&oom_policy_lock);
+	progs = rcu_dereference(global_oom_policy.progs);
+	cnt = progs ? bpf_prog_array_length(progs) : 0;
+	if (copy_to_user(&uattr->query.prog_cnt, &cnt, sizeof(cnt))) {
+		ret = -EFAULT;
+		goto unlock;
+	}
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags))) {
+		ret = -EFAULT;
+		goto unlock;
+	}
+	if (attr->query.prog_cnt != 0 && prog_ids && cnt)
+		ret = bpf_prog_array_copy_to_user(progs, prog_ids,
+						  attr->query.prog_cnt);
+
+unlock:
+	mutex_unlock(&oom_policy_lock);
+	return ret;
+}
+
+int __bpf_run_oom_policy(u64 cg_id_1, u64 cg_id_2)
+{
+	struct bpf_oom_ctx ctx = {
+		.cg_id_1 = cg_id_1,
+		.cg_id_2 = cg_id_2,
+		.cmp_ret = BPF_OOM_CMP_EQUAL,
+	};
+	rcu_read_lock();
+	bpf_prog_run_array(rcu_dereference(global_oom_policy.progs),
+						&ctx, bpf_prog_run);
+	rcu_read_unlock();
+	return ctx.cmp_ret;
+}
+
+bool bpf_oom_policy_enabled(void)
+{
+	struct bpf_prog_array *prog_array;
+	bool empty = true;
+
+	rcu_read_lock();
+	prog_array = rcu_dereference(global_oom_policy.progs);
+	if (prog_array)
+		empty = bpf_prog_array_is_empty(prog_array);
+	rcu_read_unlock();
+	return !empty;
 }
