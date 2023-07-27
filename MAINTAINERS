@@ -3703,7 +3703,7 @@ M:	Daniel Borkmann <daniel@iogearbox.net>
 M:	Andrii Nakryiko <andrii@kernel.org>
 R:	Martin KaFai Lau <martin.lau@linux.dev>
 R:	Song Liu <song@kernel.org>
-R:	Yonghong Song <yhs@fb.com>
+R:	Yonghong Song <yonghong.song@linux.dev>
 R:	John Fastabend <john.fastabend@gmail.com>
 R:	KP Singh <kpsingh@kernel.org>
 R:	Stanislav Fomichev <sdf@google.com>
@@ -3742,7 +3742,7 @@ F:	tools/lib/bpf/
 F:	tools/testing/selftests/bpf/
 
 BPF [ITERATOR]
-M:	Yonghong Song <yhs@fb.com>
+M:	Yonghong Song <yonghong.song@linux.dev>
 L:	bpf@vger.kernel.org
 S:	Maintained
 F:	kernel/bpf/*iter.c
@@ -3837,6 +3837,15 @@ L:	bpf@vger.kernel.org
 S:	Maintained
 F:	kernel/bpf/stackmap.c
 F:	kernel/trace/bpf_trace.c
+
+BROADCOM ASP 2.0 ETHERNET DRIVER
+M:	Justin Chen <justin.chen@broadcom.com>
+M:	Florian Fainelli <florian.fainelli@broadcom.com>
+L:	bcm-kernel-feedback-list@broadcom.com
+L:	netdev@vger.kernel.org
+S:	Supported
+F:	Documentation/devicetree/bindings/net/brcm,asp-v2.0.yaml
+F:	drivers/net/ethernet/broadcom/asp2/
 
 BROADCOM B44 10/100 ETHERNET DRIVER
 M:	Michael Chan <michael.chan@broadcom.com>
@@ -4124,6 +4133,13 @@ F:	Documentation/devicetree/bindings/spi/brcm,bcm63xx-hsspi.yaml
 F:	drivers/spi/spi-bcm63xx-hsspi.c
 F:	drivers/spi/spi-bcmbca-hsspi.c
 
+BROADCOM BCM6348/BCM6358 SPI controller DRIVER
+M:	Jonas Gorski <jonas.gorski@gmail.com>
+L:	linux-spi@vger.kernel.org
+S:	Odd Fixes
+F:	Documentation/devicetree/bindings/spi/spi-bcm63xx.txt
+F:	drivers/spi/spi-bcm63xx.c
+
 BROADCOM ETHERNET PHY DRIVERS
 M:	Florian Fainelli <florian.fainelli@broadcom.com>
 R:	Broadcom internal kernel review list <bcm-kernel-feedback-list@broadcom.com>
@@ -4147,15 +4163,6 @@ F:	drivers/net/ethernet/broadcom/unimac.h
 F:	drivers/net/mdio/mdio-bcm-unimac.c
 F:	include/linux/platform_data/bcmgenet.h
 F:	include/linux/platform_data/mdio-bcm-unimac.h
-
-BROADCOM ASP 2.0 ETHERNET DRIVER
-M:	Justin Chen <justin.chen@broadcom.com>
-M:	Florian Fainelli <florian.fainelli@broadcom.com>
-L:	bcm-kernel-feedback-list@broadcom.com
-L:	netdev@vger.kernel.org
-S:	Supported
-F:	Documentation/devicetree/bindings/net/brcm,asp-v2.0.yaml
-F:	drivers/net/ethernet/broadcom/asp2/
 
 BROADCOM IPROC ARM ARCHITECTURE
 M:	Ray Jui <rjui@broadcom.com>
@@ -8684,8 +8691,11 @@ S:	Maintained
 F:	drivers/input/touchscreen/resistive-adc-touch.c
 
 GENERIC STRING LIBRARY
+M:	Kees Cook <keescook@chromium.org>
 R:	Andy Shevchenko <andy@kernel.org>
-S:	Maintained
+L:	linux-hardening@vger.kernel.org
+S:	Supported
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git for-next/hardening
 F:	include/linux/string.h
 F:	include/linux/string_choices.h
 F:	include/linux/string_helpers.h
@@ -13980,7 +13990,7 @@ T:	git https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux.git/
 F:	drivers/soc/microchip/
 
 MICROCHIP SPI DRIVER
-M:	Tudor Ambarus <tudor.ambarus@linaro.org>
+M:	Ryan Wanner <ryan.wanner@microchip.com>
 S:	Supported
 F:	drivers/spi/spi-atmel.*
 
