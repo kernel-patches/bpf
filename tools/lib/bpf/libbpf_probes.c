@@ -129,6 +129,8 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 	case BPF_PROG_TYPE_LIRC_MODE2:
 		opts.expected_attach_type = BPF_LIRC_MODE2;
 		break;
+	case BPF_PROG_TYPE_OOM_POLICY:
+		opts.expected_attach_type = BPF_OOM_POLICY;
 	case BPF_PROG_TYPE_TRACING:
 	case BPF_PROG_TYPE_LSM:
 		opts.log_buf = buf;
