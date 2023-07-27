@@ -64,6 +64,7 @@
 #include <linux/psi.h>
 #include <linux/seq_buf.h>
 #include <linux/sched/isolation.h>
+#include <linux/bpf_oom.h>
 #include "internal.h"
 #include <net/sock.h>
 #include <net/ip.h>
@@ -2636,6 +2637,55 @@ retry_reclaim:
 
 out:
 	css_put(&memcg->css);
+}
+
+struct mem_cgroup *select_victim_memcg(void)
+{
+	struct cgroup_subsys_state *pos, *parent, *victim;
+	struct mem_cgroup *victim_memcg;
+
+	parent = &root_mem_cgroup->css;
+	victim_memcg = NULL;
+
+	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys))
+		return NULL;
+
+	rcu_read_lock();
+	while (parent) {
+		struct cgroup_subsys_state *chosen = NULL;
+		struct mem_cgroup *pos_mem, *chosen_mem;
+		u64 chosen_id, pos_id;
+		int cmp_ret;
+
+		victim = parent;
+
+		list_for_each_entry_rcu(pos, &parent->children, sibling) {
+			pos_id = cgroup_id(pos->cgroup);
+			if (!chosen)
+				goto chose;
+
+			cmp_ret = __bpf_run_oom_policy(chosen_id, pos_id);
+			if (cmp_ret == BPF_OOM_CMP_GREATER)
+				continue;
+			if (cmp_ret == BPF_OOM_CMP_EQUAL) {
+				pos_mem = mem_cgroup_from_css(pos);
+				chosen_mem = mem_cgroup_from_css(chosen);
+				if (page_counter_read(&pos_mem->memory) <=
+					page_counter_read(&chosen_mem->memory))
+					continue;
+			}
+chose:
+			chosen = pos;
+			chosen_id = pos_id;
+		}
+		parent = chosen;
+	}
+
+	if (victim && css_tryget(victim))
+		victim_memcg = mem_cgroup_from_css(victim);
+	rcu_read_unlock();
+
+	return victim_memcg;
 }
 
 static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,

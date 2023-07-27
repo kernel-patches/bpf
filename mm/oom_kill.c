@@ -361,6 +361,19 @@ abort:
 	return 1;
 }
 
+static bool bpf_select_bad_process(struct oom_control *oc)
+{
+	struct mem_cgroup *victim_memcg;
+
+	victim_memcg = select_victim_memcg();
+	if (victim_memcg) {
+		mem_cgroup_scan_tasks(victim_memcg, oom_evaluate_task, oc);
+		css_put(&victim_memcg->css);
+	}
+
+	return !!oc->chosen;
+}
+
 /*
  * Simple selection loop. We choose the process with the highest number of
  * 'points'. In case scan was aborted, oc->chosen is set to -1.
@@ -372,6 +385,9 @@ static void select_bad_process(struct oom_control *oc)
 	if (is_memcg_oom(oc))
 		mem_cgroup_scan_tasks(oc->memcg, oom_evaluate_task, oc);
 	else {
+		if (bpf_oom_policy_enabled() && bpf_select_bad_process(oc))
+			return;
+
 		struct task_struct *p;
 
 		rcu_read_lock();
@@ -1426,3 +1442,4 @@ bool bpf_oom_policy_enabled(void)
 	rcu_read_unlock();
 	return !empty;
 }
+
