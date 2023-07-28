@@ -391,6 +391,8 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 			   bpf_xdp_metadata_rx_hash) \
 	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_VLAN_TAG, \
 			   bpf_xdp_metadata_rx_vlan_tag) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_CSUM, \
+			   bpf_xdp_metadata_rx_csum) \
 
 enum {
 #define XDP_METADATA_KFUNC(name, _) name,
@@ -446,6 +448,50 @@ enum xdp_rss_hash_type {
 	XDP_RSS_TYPE_L4_IPV6_TCP_EX  = XDP_RSS_TYPE_L4_IPV6_TCP  | XDP_RSS_L3_DYNHDR,
 	XDP_RSS_TYPE_L4_IPV6_UDP_EX  = XDP_RSS_TYPE_L4_IPV6_UDP  | XDP_RSS_L3_DYNHDR,
 	XDP_RSS_TYPE_L4_IPV6_SCTP_EX = XDP_RSS_TYPE_L4_IPV6_SCTP | XDP_RSS_L3_DYNHDR,
+};
+
+union xdp_csum_info {
+	/* Checksum referred to by ``csum_start + csum_offset`` is considered
+	 * valid, but was never calculated, TX device has to do this,
+	 * starting from csum_start packet byte.
+	 * Any preceding checksums are also considered valid.
+	 * Available, if ``status == XDP_CHECKSUM_PARTIAL``.
+	 */
+	struct {
+		u16 csum_start;
+		u16 csum_offset;
+	};
+
+	/* Checksum, calculated over the whole packet.
+	 * Available, if ``status & XDP_CHECKSUM_COMPLETE``.
+	 */
+	u32 checksum;
+};
+
+enum xdp_csum_status {
+	/* HW had parsed several transport headers and validated their
+	 * checksums, same as ``CHECKSUM_UNNECESSARY`` in ``sk_buff``.
+	 * 3 least significant bytes contain number of consecutive checksums,
+	 * starting with the outermost, reported by hardware as valid.
+	 * ``sk_buff`` checksum level (``csum_level``) notation is provided
+	 * for driver developers.
+	 */
+	XDP_CHECKSUM_VALID_LVL0		= 1,	/* 1 outermost checksum */
+	XDP_CHECKSUM_VALID_LVL1		= 2,	/* 2 outermost checksums */
+	XDP_CHECKSUM_VALID_LVL2		= 3,	/* 3 outermost checksums */
+	XDP_CHECKSUM_VALID_LVL3		= 4,	/* 4 outermost checksums */
+	XDP_CHECKSUM_VALID_NUM_MASK	= GENMASK(2, 0),
+	XDP_CHECKSUM_VALID		= XDP_CHECKSUM_VALID_NUM_MASK,
+
+	/* Occurs if packet is sent virtually (between Linux VMs / containers)
+	 * This status cannot coexist with any other.
+	 * Refer to ``csum_start`` and ``csum_offset`` in ``xdp_csum_info``
+	 * for more information.
+	 */
+	XDP_CHECKSUM_PARTIAL	= BIT(3),
+
+	/* Checksum, calculated over the entire packet is provided */
+	XDP_CHECKSUM_COMPLETE	= BIT(4),
 };
 
 #ifdef CONFIG_NET
