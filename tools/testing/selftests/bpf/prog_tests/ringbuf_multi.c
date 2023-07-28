@@ -29,6 +29,11 @@ static int process_sample(void *ctx, void *data, size_t len)
 		CHECK(s->value != 777, "sample2_value", "exp %ld, got %ld\n",
 		      777L, s->value);
 		break;
+	case 2:
+		CHECK(ring != 2, "sample3_ring", "exp %d, got %d\n", 2, ring);
+		CHECK(s->value != 1337, "sample3_value", "exp %ld, got %ld\n",
+		      1337L, s->value);
+		break;
 	default:
 		CHECK(true, "extra_sample", "unexpected sample seq %d, val %ld\n",
 		      s->seq, s->value);
@@ -45,6 +50,8 @@ void test_ringbuf_multi(void)
 	int err;
 	int page_size = getpagesize();
 	int proto_fd = -1;
+	int epoll_fd;
+	struct epoll_event events[2];
 
 	skel = test_ringbuf_multi__open();
 	if (CHECK(!skel, "skel_open", "skeleton open failed\n"))
@@ -123,6 +130,25 @@ void test_ringbuf_multi(void)
 	      1L, skel->bss->skipped);
 	CHECK(skel->bss->total != 2, "err_total", "exp %ld, got %ld\n",
 	      2L, skel->bss->total);
+
+	/* validate APIs to support external polling */
+	epoll_fd = ring_buffer__epoll_fd(ringbuf);
+
+	/* expect events on either ring to trigger through the epoll_fd */
+	skel->bss->target_ring = 2;
+	skel->bss->value = 1337;
+	syscall(__NR_getpgid);
+
+	err = epoll_wait(epoll_fd, events, sizeof(events) / sizeof(struct epoll_event), -1);
+	if (CHECK(err != 1, "epoll_wait", "epoll_wait exp %d, got %d\n", 1, err))
+		goto cleanup;
+	if (CHECK(!(events[0].events & EPOLLIN), "epoll_event", "expected EPOLLIN\n"))
+		goto cleanup;
+
+	/* epoll data can be used to consume only the affected ring */
+	err = ring_buffer__consume_ring(ringbuf, events[0].data.u32);
+	CHECK(err != 1, "consume_ring", "consume_ring %u exp %d, got %d\n",
+		  events[0].data.u32, 1, err);
 
 cleanup:
 	if (proto_fd >= 0)
