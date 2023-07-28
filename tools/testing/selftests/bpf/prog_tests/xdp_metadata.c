@@ -46,6 +46,7 @@
 
 #define XDP_RSS_TYPE_L4 BIT(3)
 #define VLAN_VID_MASK 0xfff
+#define XDP_CHECKSUM_PARTIAL BIT(3)
 
 struct xsk {
 	void *umem_area;
@@ -167,6 +168,32 @@ static void refill_rx(struct xsk *xsk, __u64 addr)
 	}
 }
 
+struct partial_csum_info {
+	__u16 csum_start;
+	__u16 csum_offset;
+};
+
+static bool assert_checksum_ok(struct xdp_meta *meta)
+{
+	struct partial_csum_info *info;
+	u32 csum_start, csum_offset;
+
+	if (!ASSERT_EQ(meta->rx_csum_status, XDP_CHECKSUM_PARTIAL,
+		       "rx_csum_status"))
+		return false;
+
+	csum_start = sizeof(struct ethhdr) + sizeof(struct iphdr);
+	csum_offset = offsetof(struct udphdr, check);
+	info = (void *)&meta->rx_csum_info;
+
+	if (!ASSERT_EQ(info->csum_start, csum_start, "rx csum_start"))
+		return false;
+	if (!ASSERT_EQ(info->csum_offset, csum_offset, "rx csum_offset"))
+		return false;
+
+	return true;
+}
+
 static int verify_xsk_metadata(struct xsk *xsk)
 {
 	const struct xdp_desc *rx_desc;
@@ -226,6 +253,9 @@ static int verify_xsk_metadata(struct xsk *xsk)
 		return -1;
 
 	if (!ASSERT_EQ(meta->rx_vlan_proto, VLAN_PID, "rx_vlan_proto"))
+		return -1;
+
+	if (!assert_checksum_ok(meta))
 		return -1;
 
 	xsk_ring_cons__release(&xsk->rx, 1);
