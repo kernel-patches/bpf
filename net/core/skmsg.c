@@ -609,15 +609,42 @@ static int sk_psock_skb_ingress_self(struct sk_psock *psock, struct sk_buff *skb
 	return err;
 }
 
+static int sk_psock_handle_ingress_skb(struct sk_psock *psock,
+				       struct sk_buff *skb,
+				       u32 off, u32 len)
+{
+	if (sock_flag(psock->sk, SOCK_DEAD))
+		return -EIO;
+	return sk_psock_skb_ingress(psock, skb, off, len);
+}
+
+static int sk_psock_handle_egress_skb(struct sk_psock *psock,
+				      struct sk_buff *skb,
+				      u32 off, u32 len)
+{
+	int ret;
+
+	lock_sock(psock->sk);
+
+	if (sock_flag(psock->sk, SOCK_DEAD))
+		ret = -EIO;
+	else if (!sock_writeable(psock->sk))
+		ret = -EAGAIN;
+	else
+		ret = skb_send_sock_locked(psock->sk, skb, off, len);
+
+	release_sock(psock->sk);
+
+	return ret;
+}
+
 static int sk_psock_handle_skb(struct sk_psock *psock, struct sk_buff *skb,
 			       u32 off, u32 len, bool ingress)
 {
-	if (!ingress) {
-		if (!sock_writeable(psock->sk))
-			return -EAGAIN;
-		return skb_send_sock(psock->sk, skb, off, len);
-	}
-	return sk_psock_skb_ingress(psock, skb, off, len);
+	if (ingress)
+		return sk_psock_handle_ingress_skb(psock, skb, off, len);
+	else
+		return sk_psock_handle_egress_skb(psock, skb, off, len);
 }
 
 static void sk_psock_skb_state(struct sk_psock *psock,
@@ -660,10 +687,7 @@ static void sk_psock_backlog(struct work_struct *work)
 		ingress = skb_bpf_ingress(skb);
 		skb_bpf_redirect_clear(skb);
 		do {
-			ret = -EIO;
-			if (!sock_flag(psock->sk, SOCK_DEAD))
-				ret = sk_psock_handle_skb(psock, skb, off,
-							  len, ingress);
+			ret = sk_psock_handle_skb(psock, skb, off, len, ingress);
 			if (ret <= 0) {
 				if (ret == -EAGAIN) {
 					sk_psock_skb_state(psock, state, len, off);
