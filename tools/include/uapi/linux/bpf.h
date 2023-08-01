@@ -5169,8 +5169,13 @@ union bpf_attr {
  *		function with *task*, *vma*, and *callback_ctx*.
  *		The *callback_fn* should be a static function and
  *		the *callback_ctx* should be a pointer to the stack.
- *		The *flags* is used to control certain aspects of the helper.
- *		Currently, the *flags* must be 0.
+ *		The *flags* is used to control certain aspects of the helper and
+ *		may be one of the following:
+ *
+ *		**BPF_F_VMA_NEXT**
+ *			If no vma contains *addr*, call *callback_fn* with the next vma,
+ *			i.e. the vma with lowest vm_start that is higher than *addr*.
+ *			This replicates behavior of kernel's find_vma helper.
  *
  *		The expected callback signature is
  *
@@ -6024,6 +6029,11 @@ enum {
 enum {
 	BPF_F_BROADCAST		= (1ULL << 3),
 	BPF_F_EXCLUDE_INGRESS	= (1ULL << 4),
+};
+
+/* Flags for bpf_find_vma helper */
+enum {
+	BPF_F_VMA_NEXT		= (1ULL << 0),
 };
 
 #define __bpf_md_ptr(type, name)	\

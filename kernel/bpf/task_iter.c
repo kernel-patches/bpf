@@ -777,7 +777,7 @@ static struct bpf_iter_reg task_vma_reg_info = {
 	.show_fdinfo		= bpf_iter_task_show_fdinfo,
 };
 
-BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
+BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, addr,
 	   bpf_callback_t, callback_fn, void *, callback_ctx, u64, flags)
 {
 	struct mmap_unlock_irq_work *work = NULL;
@@ -785,9 +785,12 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	bool irq_work_busy = false;
 	struct mm_struct *mm;
 	int ret = -ENOENT;
+	bool vma_next;
 
-	if (flags)
+	if (flags & ~BPF_F_VMA_NEXT)
 		return -EINVAL;
+
+	vma_next = flags & BPF_F_VMA_NEXT;
 
 	if (!task)
 		return -ENOENT;
@@ -801,9 +804,10 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	if (irq_work_busy || !mmap_read_trylock(mm))
 		return -EBUSY;
 
-	vma = find_vma(mm, start);
+	vma = find_vma(mm, addr);
 
-	if (vma && vma->vm_start <= start && vma->vm_end > start) {
+	if (vma &&
+	    ((vma->vm_start <= addr && vma->vm_end > addr) || vma_next)) {
 		callback_fn((u64)(long)task, (u64)(long)vma,
 			    (u64)(long)callback_ctx, 0, 0);
 		ret = 0;
