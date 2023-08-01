@@ -1669,6 +1669,14 @@ union bpf_attr {
 
 } __attribute__((aligned(8)));
 
+enum bpf_cpu_mask_type {
+	CPU_MASK_UNSPEC = 0,
+	CPU_MASK_POSSIBLE = 1,
+	CPU_MASK_ONLINE = 2,
+	CPU_MASK_PRESENT = 3,
+	CPU_MASK_TASK = 4, /* cpu mask of a task */
+};
+
 /* The description below is an attempt at providing documentation to eBPF
  * developers about the multiple available eBPF helper functions. It can be
  * parsed and used to produce a manual page. The workflow is the following,
@@ -5615,6 +5623,29 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_for_each_cpu(void *callback_fn, void *callback_ctx, const void *pcpu_ptr, u32 type, u32 target)
+ *	Description
+ *		Walk the percpu pointer **pcpu_ptr** with the callback **callback_fn** function.
+ *		The **callback_fn** should be a static function and the **callback_ctx** should
+ *		be a pointer to the stack.
+ *		The **callback_ctx** is the context parameter.
+ *		The **type** and **tartet** specify which CPUs to walk. If **target** is specified,
+ *		it will get the cpumask from the associated target.
+ *
+ *		long (\*callback_fn)(u32 cpu, void \*ctx, const void \*ptr);
+ *
+ *		where **cpu** is the current cpu in the walk, the **ctx** is the **callback_ctx**,
+ *		and the **ptr** is the address of **pcpu_ptr** on current cpu.
+ *
+ *		If **callback_fn** returns 0, the helper will continue to the next
+ *		loop. If return value is 1, the helper will skip the rest of
+ *		the loops and return. Other return values are not used now,
+ *		and will be rejected by the verifier.
+ *
+ *	Return
+ *		The number of CPUs walked, **-EINVAL** for invalid **type**, **target** or
+ *		**pcpu_ptr**.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -5829,6 +5860,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(for_each_cpu, 212, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

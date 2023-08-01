@@ -6,6 +6,8 @@
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/btf.h>
+#include <linux/cpumask.h>
 
 struct bpf_iter_target_info {
 	struct list_head list;
@@ -775,6 +777,76 @@ const struct bpf_func_proto bpf_loop_proto = {
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_5(bpf_for_each_cpu, void *, callback_fn, void *, callback_ctx,
+	   const void *, pcpu_ptr, u32, type, u32, target)
+{
+	bpf_callback_t callback = (bpf_callback_t)callback_fn;
+	struct task_struct *task = NULL;
+	const cpumask_t *mask;
+	const void *ptr;
+	u64 ret;
+	u32 cpu;
+
+	if (!pcpu_ptr)
+		return -EINVAL;
+
+	if ((type != CPU_MASK_TASK && target) || (type == CPU_MASK_TASK && !target))
+		return -EINVAL;
+
+	switch (type) {
+	case CPU_MASK_POSSIBLE:
+		mask = cpu_possible_mask;
+		break;
+	case CPU_MASK_ONLINE:
+		mask = cpu_online_mask;
+		break;
+	case CPU_MASK_PRESENT:
+		mask = cpu_present_mask;
+		break;
+	case CPU_MASK_TASK:
+		rcu_read_lock();
+		task = get_pid_task(find_vpid(target), PIDTYPE_PID);
+		rcu_read_unlock();
+		if (!task)
+			return -EINVAL;
+		mask = task->cpus_ptr;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	for_each_cpu(cpu, mask) {
+		ptr = per_cpu_ptr((const void __percpu *)pcpu_ptr, cpu);
+		if (!ptr) {
+			if (task)
+				put_task_struct(task);
+			return cpu + 1;
+		}
+
+		ret = callback((u64)cpu, (u64)(long)callback_ctx, (u64)(long)ptr, 0, 0);
+		if (ret) {
+			if (task)
+				put_task_struct(task);
+			return cpu + 1;
+		}
+	}
+
+	if (task)
+		put_task_struct(task);
+	return cpu;
+}
+
+const struct bpf_func_proto bpf_for_each_cpu_proto = {
+	.func		= bpf_for_each_cpu,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_FUNC,
+	.arg2_type	= ARG_PTR_TO_STACK_OR_NULL,
+	.arg3_type	= ARG_PTR_TO_PERCPU_BTF_ID,
+	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_ANYTHING,
 };
 
 struct bpf_iter_num_kern {

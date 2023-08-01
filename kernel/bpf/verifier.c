@@ -549,7 +549,8 @@ static bool is_callback_calling_function(enum bpf_func_id func_id)
 	       func_id == BPF_FUNC_timer_set_callback ||
 	       func_id == BPF_FUNC_find_vma ||
 	       func_id == BPF_FUNC_loop ||
-	       func_id == BPF_FUNC_user_ringbuf_drain;
+	       func_id == BPF_FUNC_user_ringbuf_drain ||
+	       func_id == BPF_FUNC_for_each_cpu;
 }
 
 static bool is_async_callback_calling_function(enum bpf_func_id func_id)
@@ -9179,6 +9180,28 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_for_each_cpu_callback_state(struct bpf_verifier_env *env,
+					   struct bpf_func_state *caller,
+					   struct bpf_func_state *callee,
+					   int insn_idx)
+{
+	/* long bpf_for_each_cpu(bpf_callback_t callback_fn, void *callback_ctx,
+	 *                       const void *pc, u32 type, u64 flags)
+	 * callback_fn(u64 cpu, void *callback_ctx, const void *pc);
+	 */
+	callee->regs[BPF_REG_1].type = SCALAR_VALUE;
+	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_2];
+	callee->regs[BPF_REG_3] = caller->regs[BPF_REG_3];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = tnum_range(0, 1);
+	return 0;
+}
+
 static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 					 struct bpf_func_state *caller,
 					 struct bpf_func_state *callee,
@@ -9775,6 +9798,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	case BPF_FUNC_user_ringbuf_drain:
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_user_ringbuf_callback_state);
+		break;
+	case BPF_FUNC_for_each_cpu:
+		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
+					set_for_each_cpu_callback_state);
 		break;
 	}
 
