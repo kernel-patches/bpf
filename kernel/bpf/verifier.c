@@ -8270,6 +8270,10 @@ skip_type_check:
 			verbose(env, "can't spin_{lock,unlock} in rbtree cb\n");
 			return -EACCES;
 		}
+		if (!in_rcu_cs(env)) {
+			verbose(env, "sleepable progs may only spin_{lock,unlock} in RCU CS\n");
+			return -EACCES;
+		}
 		if (meta->func_id == BPF_FUNC_spin_lock) {
 			err = process_spin_lock(env, regno, true);
 			if (err)
@@ -16970,11 +16974,6 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 
 		if (is_tracing_prog_type(prog_type)) {
 			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
-			return -EINVAL;
-		}
-
-		if (prog->aux->sleepable) {
-			verbose(env, "sleepable progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
 	}
