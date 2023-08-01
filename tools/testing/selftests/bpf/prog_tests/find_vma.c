@@ -19,6 +19,7 @@ static void test_and_reset_skel(struct find_vma *skel, int expected_find_zero_re
 	skel->bss->found_vm_exec = 0;
 	skel->data->find_addr_ret = -1;
 	skel->data->find_zero_ret = -1;
+	skel->bss->find_zero_flags = 0;
 	skel->bss->d_iname[0] = 0;
 }
 
@@ -77,16 +78,23 @@ cleanup:
 	close(pfd);
 }
 
-static void test_find_vma_kprobe(struct find_vma *skel)
+static void test_find_vma_kprobe(struct find_vma *skel, bool vma_next)
 {
-	int err;
+	int err, expected_find_zero_ret;
 
 	err = find_vma__attach(skel);
 	if (!ASSERT_OK(err, "get_branch_snapshot__attach"))
 		return;
 
+	if (vma_next) {
+		skel->bss->find_zero_flags = BPF_F_VMA_NEXT;
+		expected_find_zero_ret = 0;
+	} else {
+		expected_find_zero_ret = -ENOENT; /* no vma contains ptr 0 */
+	}
+
 	getpgid(skel->bss->target_pid);
-	test_and_reset_skel(skel, -ENOENT /* could not find vma for ptr 0 */, true);
+	test_and_reset_skel(skel, expected_find_zero_ret, true);
 }
 
 static void test_illegal_write_vma(void)
@@ -119,7 +127,8 @@ void serial_test_find_vma(void)
 	skel->bss->addr = (__u64)(uintptr_t)test_find_vma_pe;
 
 	test_find_vma_pe(skel);
-	test_find_vma_kprobe(skel);
+	test_find_vma_kprobe(skel, false);
+	test_find_vma_kprobe(skel, true);
 
 	find_vma__destroy(skel);
 	test_illegal_write_vma();

@@ -17,6 +17,7 @@ pid_t target_pid = 0;
 char d_iname[DNAME_INLINE_LEN] = {0};
 __u32 found_vm_exec = 0;
 __u64 addr = 0;
+__u64 find_zero_flags = 0;
 int find_zero_ret = -1;
 int find_addr_ret = -1;
 
@@ -46,7 +47,7 @@ int handle_getpid(void)
 	find_addr_ret = bpf_find_vma(task, addr, check_vma, &data, 0);
 
 	/* this should return -ENOENT */
-	find_zero_ret = bpf_find_vma(task, 0, check_vma, &data, 0);
+	find_zero_ret = bpf_find_vma(task, 0, check_vma, &data, find_zero_flags);
 	return 0;
 }
 
@@ -64,6 +65,6 @@ int handle_pe(void)
 	/* In NMI, this should return -EBUSY, as the previous call is using
 	 * the irq_work.
 	 */
-	find_zero_ret = bpf_find_vma(task, 0, check_vma, &data, 0);
+	find_zero_ret = bpf_find_vma(task, 0, check_vma, &data, find_zero_flags);
 	return 0;
 }
