@@ -101,7 +101,7 @@ static void verify_success(struct kfunc_test_params *param)
 	case syscall_test:
 		topts.ctx_in = &args;
 		topts.ctx_size_in = sizeof(args);
-		/* fallthrough */
+		fallthrough;
 	case syscall_null_ctx_test:
 		break;
 	case tc_test:
@@ -167,7 +167,7 @@ static void verify_fail(struct kfunc_test_params *param)
 	case syscall_test:
 		topts.ctx_in = &args;
 		topts.ctx_size_in = sizeof(args);
-		/* fallthrough */
+		fallthrough;
 	case syscall_null_ctx_test:
 		break;
 	case tc_test:
