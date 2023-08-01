@@ -300,7 +300,7 @@ bool pkt_skip_ipv6_extension_headers(buf_t *pkt,
 		case IPPROTO_FRAGMENT:
 			*is_fragment = true;
 			/* NB: We don't check that hdrlen == 0 as per spec. */
-			/* fallthrough; */
+			fallthrough;
 
 		case IPPROTO_HOPOPTS:
 		case IPPROTO_ROUTING:

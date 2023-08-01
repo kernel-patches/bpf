@@ -1289,7 +1289,7 @@ static int do_prog_test_run(int fd_prog, bool unpriv, uint32_t expected_val,
 				printf("Did not run the program (no permission) ");
 				return 0;
 			}
-			/* fallthrough; */
+			fallthrough;
 		default:
 			printf("FAIL: Unexpected bpf_prog_test_run error (%s) ",
 				strerror(saved_errno));
