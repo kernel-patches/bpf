@@ -18,6 +18,7 @@
  *  kernel subsystems and hints as to where to find out what things do.
  */
 
+#include <linux/bpf.h>
 #include <linux/oom.h>
 #include <linux/mm.h>
 #include <linux/err.h>
@@ -211,6 +212,16 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
 		return LONG_MIN;
 
 	/*
+	 * If task is allocating a lot of memory and has been marked to be
+	 * killed first if it triggers an oom, then set points to LONG_MAX.
+	 * It will be selected unless we keep oc->chosen through bpf interface.
+	 */
+	if (oom_task_origin(p)) {
+		task_unlock(p);
+		return LONG_MAX;
+	}
+
+	/*
 	 * Do not even consider tasks which are explicitly marked oom
 	 * unkillable or have been already oom reaped or the are in
 	 * the middle of vfork
@@ -305,8 +316,30 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	return CONSTRAINT_NONE;
 }
 
+enum bpf_select_ret {
+	BPF_SELECT_DISABLE,
+	BPF_SELECT_TASK,
+	BPF_SELECT_CHOSEN,
+};
+
+__weak noinline int bpf_select_task(struct oom_control *oc,
+				struct task_struct *task, long badness_points)
+{
+	return BPF_SELECT_DISABLE;
+}
+
+BTF_SET8_START(oom_bpf_fmodret_ids)
+BTF_ID_FLAGS(func, bpf_select_task)
+BTF_SET8_END(oom_bpf_fmodret_ids)
+
+static const struct btf_kfunc_id_set oom_bpf_fmodret_set = {
+	.owner = THIS_MODULE,
+	.set   = &oom_bpf_fmodret_ids,
+};
+
 static int oom_evaluate_task(struct task_struct *task, void *arg)
 {
+	enum bpf_select_ret bpf_ret = BPF_SELECT_DISABLE;
 	struct oom_control *oc = arg;
 	long points;
 
@@ -329,17 +362,23 @@ static int oom_evaluate_task(struct task_struct *task, void *arg)
 		goto abort;
 	}
 
-	/*
-	 * If task is allocating a lot of memory and has been marked to be
-	 * killed first if it triggers an oom, then select it.
-	 */
-	if (oom_task_origin(task)) {
-		points = LONG_MAX;
-		goto select;
-	}
-
 	points = oom_badness(task, oc->totalpages);
-	if (points == LONG_MIN || points < oc->chosen_points)
+
+	/*
+	 * Do not consider tasks with lowest score value except it was caused
+	 * by OOM_SCORE_ADJ_MIN. Give these tasks a chance to be selected by
+	 * bpf interface.
+	 */
+	if (points == LONG_MIN && task->signal->oom_score_adj != OOM_SCORE_ADJ_MIN)
+		goto next;
+
+	if (oc->chosen)
+		bpf_ret = bpf_select_task(oc, task, points);
+
+	if (bpf_ret == BPF_SELECT_TASK)
+		goto select;
+
+	if (bpf_ret == BPF_SELECT_CHOSEN || points == LONG_MIN || points < oc->chosen_points)
 		goto next;
 
 select:
@@ -732,10 +771,14 @@ static struct ctl_table vm_oom_kill_table[] = {
 
 static int __init oom_init(void)
 {
+	int err;
 	oom_reaper_th = kthread_run(oom_reaper, NULL, "oom_reaper");
 #ifdef CONFIG_SYSCTL
 	register_sysctl_init("vm", vm_oom_kill_table);
 #endif
+	err = register_btf_fmodret_id_set(&oom_bpf_fmodret_set);
+	if (err)
+		pr_warn("error while registering oom fmodret entrypoints: %d", err);
 	return 0;
 }
 subsys_initcall(oom_init)
