@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <asm/insn.h>
 #include <linux/highmem.h>
 #include <linux/ptrace.h>
 #include <linux/uprobes.h>
@@ -29,7 +30,7 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm,
 
 	opcode = *(probe_opcode_t *)(&auprobe->insn[0]);
 
-	auprobe->insn_size = GET_INSN_LENGTH(opcode);
+	auprobe->insn_size = INSN_LEN(opcode);
 
 	switch (riscv_probe_decode_insn(&opcode, &auprobe->api)) {
 	case INSN_REJECTED:
@@ -166,7 +167,7 @@ void arch_uprobe_copy_ixol(struct page *page, unsigned long vaddr,
 
 	/* Add ebreak behind opcode to simulate singlestep */
 	if (vaddr) {
-		dst += GET_INSN_LENGTH(*(probe_opcode_t *)src);
+		dst += INSN_LEN(*(probe_opcode_t *)src);
 		*(uprobe_opcode_t *)dst = __BUG_INSN_32;
 	}
 

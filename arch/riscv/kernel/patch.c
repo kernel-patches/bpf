@@ -12,6 +12,7 @@
 #include <asm/cacheflush.h>
 #include <asm/fixmap.h>
 #include <asm/ftrace.h>
+#include <asm/insn.h>
 #include <asm/patch.h>
 
 struct patch_insn {
@@ -118,7 +119,7 @@ static int patch_text_cb(void *data)
 
 	if (atomic_inc_return(&patch->cpu_count) == num_online_cpus()) {
 		for (i = 0; ret == 0 && i < patch->ninsns; i++) {
-			len = GET_INSN_LENGTH(patch->insns[i]);
+			len = INSN_LEN(patch->insns[i]);
 			ret = patch_text_nosync(patch->addr + i * len,
 						&patch->insns[i], len);
 		}

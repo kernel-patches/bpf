@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include <asm/insn.h>
 #include <asm/reg.h>
 #include <linux/bitops.h>
 #include <linux/kernel.h>
@@ -16,19 +17,16 @@ bool __kprobes simulate_jal(u32 opcode, unsigned long addr, struct pt_regs *regs
 	 *     1         10          1           8       5    JAL/J
 	 */
 	bool ret;
-	u32 imm;
-	u32 index = (opcode >> 7) & 0x1f;
+	s32 imm;
+	u32 index = riscv_insn_extract_rd(opcode);
 
 	ret = rv_insn_reg_set_val((unsigned long *)regs, index, addr + 4);
 	if (!ret)
 		return ret;
 
-	imm  = ((opcode >> 21) & 0x3ff) << 1;
-	imm |= ((opcode >> 20) & 0x1)   << 11;
-	imm |= ((opcode >> 12) & 0xff)  << 12;
-	imm |= ((opcode >> 31) & 0x1)   << 20;
+	imm = riscv_insn_extract_jtype_imm(opcode);
 
-	instruction_pointer_set(regs, addr + sign_extend32((imm), 20));
+	instruction_pointer_set(regs, addr + imm);
 
 	return ret;
 }
@@ -42,9 +40,9 @@ bool __kprobes simulate_jalr(u32 opcode, unsigned long addr, struct pt_regs *reg
 	 */
 	bool ret;
 	unsigned long base_addr;
-	u32 imm = (opcode >> 20) & 0xfff;
-	u32 rd_index = (opcode >> 7) & 0x1f;
-	u32 rs1_index = (opcode >> 15) & 0x1f;
+	s32 imm = riscv_insn_extract_itype_imm(opcode);
+	u32 rd_index = riscv_insn_extract_rd(opcode);
+	u32 rs1_index = riscv_insn_extract_rs1(opcode);
 
 	ret = rv_insn_reg_get_val((unsigned long *)regs, rs1_index, &base_addr);
 	if (!ret)
@@ -54,24 +52,10 @@ bool __kprobes simulate_jalr(u32 opcode, unsigned long addr, struct pt_regs *reg
 	if (!ret)
 		return ret;
 
-	instruction_pointer_set(regs, (base_addr + sign_extend32((imm), 11))&~1);
+	instruction_pointer_set(regs, (base_addr + imm) & ~1);
 
 	return ret;
 }
-
-#define auipc_rd_idx(opcode) \
-	((opcode >> 7) & 0x1f)
-
-#define auipc_imm(opcode) \
-	((((opcode) >> 12) & 0xfffff) << 12)
-
-#if __riscv_xlen == 64
-#define auipc_offset(opcode)	sign_extend64(auipc_imm(opcode), 31)
-#elif __riscv_xlen == 32
-#define auipc_offset(opcode)	auipc_imm(opcode)
-#else
-#error "Unexpected __riscv_xlen"
-#endif
 
 bool __kprobes simulate_auipc(u32 opcode, unsigned long addr, struct pt_regs *regs)
 {
@@ -82,34 +66,15 @@ bool __kprobes simulate_auipc(u32 opcode, unsigned long addr, struct pt_regs *re
 	 *        20       5     7
 	 */
 
-	u32 rd_idx = auipc_rd_idx(opcode);
-	unsigned long rd_val = addr + auipc_offset(opcode);
+	u32 rd_idx = riscv_insn_extract_rd(opcode);
+	unsigned long rd_val = addr + riscv_insn_extract_utype_imm(opcode);
 
 	if (!rv_insn_reg_set_val((unsigned long *)regs, rd_idx, rd_val))
 		return false;
 
 	instruction_pointer_set(regs, addr + 4);
-
 	return true;
 }
-
-#define branch_rs1_idx(opcode) \
-	(((opcode) >> 15) & 0x1f)
-
-#define branch_rs2_idx(opcode) \
-	(((opcode) >> 20) & 0x1f)
-
-#define branch_funct3(opcode) \
-	(((opcode) >> 12) & 0x7)
-
-#define branch_imm(opcode) \
-	(((((opcode) >>  8) & 0xf ) <<  1) | \
-	 ((((opcode) >> 25) & 0x3f) <<  5) | \
-	 ((((opcode) >>  7) & 0x1 ) << 11) | \
-	 ((((opcode) >> 31) & 0x1 ) << 12))
-
-#define branch_offset(opcode) \
-	sign_extend32((branch_imm(opcode)), 12)
 
 bool __kprobes simulate_branch(u32 opcode, unsigned long addr, struct pt_regs *regs)
 {
@@ -135,8 +100,8 @@ bool __kprobes simulate_branch(u32 opcode, unsigned long addr, struct pt_regs *r
 	    !rv_insn_reg_get_val((unsigned long *)regs, riscv_insn_extract_rs2(opcode), &rs2_val))
 		return false;
 
-	offset_tmp = branch_offset(opcode);
-	switch (branch_funct3(opcode)) {
+	offset_tmp = riscv_insn_extract_btype_imm(opcode);
+	switch (riscv_insn_extract_funct3(opcode)) {
 	case RVG_FUNCT3_BEQ:
 		offset = (rs1_val == rs2_val) ? offset_tmp : 4;
 		break;

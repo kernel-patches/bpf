@@ -12,6 +12,7 @@
 #include <asm/cacheflush.h>
 #include <asm/bug.h>
 #include <asm/patch.h>
+#include <asm/insn.h>
 
 #include "decode-insn.h"
 
@@ -24,7 +25,7 @@ post_kprobe_handler(struct kprobe *, struct kprobe_ctlblk *, struct pt_regs *);
 static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 {
 	u32 insn = __BUG_INSN_32;
-	unsigned long offset = GET_INSN_LENGTH(p->opcode);
+	unsigned long offset = INSN_LEN(p->opcode);
 
 	p->ainsn.api.restore = (unsigned long)p->addr + offset;
 
@@ -58,7 +59,7 @@ static bool __kprobes arch_check_kprobe(struct kprobe *p)
 		if (tmp == addr)
 			return true;
 
-		tmp += GET_INSN_LENGTH(*(u16 *)tmp);
+		tmp += INSN_LEN(*(u16 *)tmp);
 	}
 
 	return false;
@@ -76,7 +77,7 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 
 	/* copy instruction */
 	p->opcode = (kprobe_opcode_t)(*insn++);
-	if (GET_INSN_LENGTH(p->opcode) == 4)
+	if (INSN_LEN(p->opcode) == 4)
 		p->opcode |= (kprobe_opcode_t)(*insn) << 16;
 
 	/* decode instruction */
@@ -117,8 +118,8 @@ void *alloc_insn_page(void)
 /* install breakpoint in text */
 void __kprobes arch_arm_kprobe(struct kprobe *p)
 {
-	u32 insn = (p->opcode & __INSN_LENGTH_MASK) == __INSN_LENGTH_32 ?
-		   __BUG_INSN_32 : __BUG_INSN_16;
+	u32 insn = INSN_IS_C(p->opcode) ?
+		   __BUG_INSN_16 : __BUG_INSN_32;
 
 	patch_text(p->addr, &insn, 1);
 }
@@ -344,7 +345,7 @@ kprobe_single_step_handler(struct pt_regs *regs)
 	struct kprobe *cur = kprobe_running();
 
 	if (cur && (kcb->kprobe_status & (KPROBE_HIT_SS | KPROBE_REENTER)) &&
-	    ((unsigned long)&cur->ainsn.api.insn[0] + GET_INSN_LENGTH(cur->opcode) == addr)) {
+	    ((unsigned long)&cur->ainsn.api.insn[0] + INSN_LEN(cur->opcode) == addr)) {
 		kprobes_restore_local_irqflag(kcb, regs);
 		post_kprobe_handler(cur, kcb, regs);
 		return true;
