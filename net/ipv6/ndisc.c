@@ -1266,10 +1266,6 @@ static enum skb_drop_reason ndisc_router_discovery(struct sk_buff *skb)
 	}
 #endif
 
-	/*
-	 *	set the RA_RECV flag in the interface
-	 */
-
 	in6_dev = __in6_dev_get(skb->dev);
 	if (!in6_dev) {
 		ND_PRINTK(0, err, "RA: can't find inet6 device for %s\n",
@@ -1280,19 +1276,10 @@ static enum skb_drop_reason ndisc_router_discovery(struct sk_buff *skb)
 	if (!ndisc_parse_options(skb->dev, opt, optlen, &ndopts))
 		return SKB_DROP_REASON_IPV6_NDISC_BAD_OPTIONS;
 
-	lifetime = ntohs(ra_msg->icmph.icmp6_rt_lifetime);
-
 	if (!ipv6_accept_ra(in6_dev)) {
 		ND_PRINTK(2, info,
 			  "RA: %s, did not accept ra for dev: %s\n",
 			  __func__, skb->dev->name);
-		goto skip_linkparms;
-	}
-
-	if (lifetime != 0 && lifetime < in6_dev->cnf.accept_ra_min_rtr_lft) {
-		ND_PRINTK(2, info,
-			  "RA: router lifetime (%ds) is too short: %s\n",
-			  lifetime, skb->dev->name);
 		goto skip_linkparms;
 	}
 
@@ -1333,6 +1320,14 @@ static enum skb_drop_reason ndisc_router_discovery(struct sk_buff *skb)
 		ND_PRINTK(2, info,
 			  "RA: %s, defrtr is false for dev: %s\n",
 			  __func__, skb->dev->name);
+		goto skip_defrtr;
+	}
+
+	lifetime = ntohs(ra_msg->icmph.icmp6_rt_lifetime);
+	if (lifetime != 0 && lifetime < in6_dev->cnf.accept_ra_min_lft) {
+		ND_PRINTK(2, info,
+			  "RA: router lifetime (%ds) is too short: %s\n",
+			  lifetime, skb->dev->name);
 		goto skip_defrtr;
 	}
 
@@ -1499,13 +1494,6 @@ skip_linkparms:
 		goto out;
 	}
 
-	if (lifetime != 0 && lifetime < in6_dev->cnf.accept_ra_min_rtr_lft) {
-		ND_PRINTK(2, info,
-			  "RA: router lifetime (%ds) is too short: %s\n",
-			  lifetime, skb->dev->name);
-		goto out;
-	}
-
 #ifdef CONFIG_IPV6_ROUTE_INFO
 	if (!in6_dev->cnf.accept_ra_from_local &&
 	    ipv6_chk_addr(dev_net(in6_dev->dev), &ipv6_hdr(skb)->saddr,
@@ -1529,6 +1517,9 @@ skip_linkparms:
 #endif
 			if (ri->prefix_len == 0 &&
 			    !in6_dev->cnf.accept_ra_defrtr)
+				continue;
+			if (ri->lifetime != 0 &&
+			    ntohl(ri->lifetime) < in6_dev->cnf.accept_ra_min_lft)
 				continue;
 			if (ri->prefix_len < in6_dev->cnf.accept_ra_rt_info_min_plen)
 				continue;

@@ -25,6 +25,7 @@
 #include <linux/vmalloc.h>
 #include <net/xdp_sock_drv.h>
 #include <net/busy_poll.h>
+#include <net/netdev_rx_queue.h>
 #include <net/xdp.h>
 
 #include "xsk_queue.h"
@@ -682,7 +683,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 
 	skb->dev = dev;
 	skb->priority = xs->sk.sk_priority;
-	skb->mark = xs->sk.sk_mark;
+	skb->mark = READ_ONCE(xs->sk.sk_mark);
 	skb->destructor = xsk_destruct_skb;
 	xsk_set_destructor_arg(skb);
 
