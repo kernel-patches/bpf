@@ -1984,7 +1984,7 @@ static __always_inline bool riscv_insn_is_branch(u32 code)
 		<< RVC_J_IMM_10_OFF) | \
 	(RVC_IMM_SIGN(x_) << RVC_J_IMM_SIGN_OFF); })
 
-#define RVC_EXTRACT_BTYPE_IMM(x) \
+#define RVC_EXTRACT_BZ_IMM(x) \
 	({typeof(x) x_ = (x); \
 	(RVC_X(x_, RVC_BZ_IMM_2_1_OPOFF, RVC_BZ_IMM_2_1_MASK) \
 		<< RVC_BZ_IMM_2_1_OFF) | \
