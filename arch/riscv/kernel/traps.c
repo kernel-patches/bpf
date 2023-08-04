@@ -22,6 +22,7 @@
 #include <asm/asm-prototypes.h>
 #include <asm/bug.h>
 #include <asm/csr.h>
+#include <asm/insn.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/syscall.h>
@@ -243,7 +244,7 @@ static inline unsigned long get_break_insn_length(unsigned long pc)
 	if (get_kernel_nofault(insn, (bug_insn_t *)pc))
 		return 0;
 
-	return GET_INSN_LENGTH(insn);
+	return INSN_LEN(insn);
 }
 
 void handle_break(struct pt_regs *regs)
@@ -389,10 +390,10 @@ int is_valid_bugaddr(unsigned long pc)
 		return 0;
 	if (get_kernel_nofault(insn, (bug_insn_t *)pc))
 		return 0;
-	if ((insn & __INSN_LENGTH_MASK) == __INSN_LENGTH_32)
-		return (insn == __BUG_INSN_32);
+	if (INSN_IS_C(insn))
+		return __IS_BUG_INSN_16(insn);
 	else
-		return ((insn & __COMPRESSED_INSN_MASK) == __BUG_INSN_16);
+		return __IS_BUG_INSN_32(insn);
 }
 #endif /* CONFIG_GENERIC_BUG */
 

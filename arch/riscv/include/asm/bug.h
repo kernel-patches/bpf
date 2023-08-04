@@ -11,21 +11,13 @@
 #include <linux/types.h>
 
 #include <asm/asm.h>
+#include <asm/insn.h>
 
-#define __INSN_LENGTH_MASK  _UL(0x3)
-#define __INSN_LENGTH_32    _UL(0x3)
-#define __COMPRESSED_INSN_MASK	_UL(0xffff)
+#define __IS_BUG_INSN_32(insn) riscv_insn_is_c_ebreak(insn)
+#define __IS_BUG_INSN_16(insn) riscv_insn_is_ebreak(insn)
 
-#define __BUG_INSN_32	_UL(0x00100073) /* ebreak */
-#define __BUG_INSN_16	_UL(0x9002) /* c.ebreak */
-
-#define GET_INSN_LENGTH(insn)						\
-({									\
-	unsigned long __len;						\
-	__len = ((insn & __INSN_LENGTH_MASK) == __INSN_LENGTH_32) ?	\
-		4UL : 2UL;						\
-	__len;								\
-})
+#define __BUG_INSN_32	RVG_MATCH_EBREAK
+#define __BUG_INSN_16	RVC_MATCH_C_EBREAK
 
 typedef u32 bug_insn_t;
 
