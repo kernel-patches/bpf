@@ -1,37 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include <asm/reg.h>
 #include <linux/bitops.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
 
 #include "decode-insn.h"
 #include "simulate-insn.h"
-
-static inline bool rv_insn_reg_get_val(struct pt_regs *regs, u32 index,
-				       unsigned long *ptr)
-{
-	if (index == 0)
-		*ptr = 0;
-	else if (index <= 31)
-		*ptr = *((unsigned long *)regs + index);
-	else
-		return false;
-
-	return true;
-}
-
-static inline bool rv_insn_reg_set_val(struct pt_regs *regs, u32 index,
-				       unsigned long val)
-{
-	if (index == 0)
-		return false;
-	else if (index <= 31)
-		*((unsigned long *)regs + index) = val;
-	else
-		return false;
-
-	return true;
-}
 
 bool __kprobes simulate_jal(u32 opcode, unsigned long addr, struct pt_regs *regs)
 {
@@ -44,7 +19,7 @@ bool __kprobes simulate_jal(u32 opcode, unsigned long addr, struct pt_regs *regs
 	u32 imm;
 	u32 index = (opcode >> 7) & 0x1f;
 
-	ret = rv_insn_reg_set_val(regs, index, addr + 4);
+	ret = rv_insn_reg_set_val((unsigned long *)regs, index, addr + 4);
 	if (!ret)
 		return ret;
 
@@ -71,11 +46,11 @@ bool __kprobes simulate_jalr(u32 opcode, unsigned long addr, struct pt_regs *reg
 	u32 rd_index = (opcode >> 7) & 0x1f;
 	u32 rs1_index = (opcode >> 15) & 0x1f;
 
-	ret = rv_insn_reg_get_val(regs, rs1_index, &base_addr);
+	ret = rv_insn_reg_get_val((unsigned long *)regs, rs1_index, &base_addr);
 	if (!ret)
 		return ret;
 
-	ret = rv_insn_reg_set_val(regs, rd_index, addr + 4);
+	ret = rv_insn_reg_set_val((unsigned long *)regs, rd_index, addr + 4);
 	if (!ret)
 		return ret;
 
@@ -110,7 +85,7 @@ bool __kprobes simulate_auipc(u32 opcode, unsigned long addr, struct pt_regs *re
 	u32 rd_idx = auipc_rd_idx(opcode);
 	unsigned long rd_val = addr + auipc_offset(opcode);
 
-	if (!rv_insn_reg_set_val(regs, rd_idx, rd_val))
+	if (!rv_insn_reg_set_val((unsigned long *)regs, rd_idx, rd_val))
 		return false;
 
 	instruction_pointer_set(regs, addr + 4);
@@ -156,8 +131,8 @@ bool __kprobes simulate_branch(u32 opcode, unsigned long addr, struct pt_regs *r
 	unsigned long rs1_val;
 	unsigned long rs2_val;
 
-	if (!rv_insn_reg_get_val(regs, branch_rs1_idx(opcode), &rs1_val) ||
-	    !rv_insn_reg_get_val(regs, branch_rs2_idx(opcode), &rs2_val))
+	if (!rv_insn_reg_get_val((unsigned long *)regs, riscv_insn_extract_rs1(opcode), &rs1_val) ||
+	    !rv_insn_reg_get_val((unsigned long *)regs, riscv_insn_extract_rs2(opcode), &rs2_val))
 		return false;
 
 	offset_tmp = branch_offset(opcode);

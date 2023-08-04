@@ -49,7 +49,7 @@ int riscv_v_setup_vsize(void)
 
 static bool insn_is_vector(u32 insn_buf)
 {
-	u32 opcode = insn_buf & __INSN_OPCODE_MASK;
+	u32 opcode = insn_buf & RV_INSN_OPCODE_MASK;
 	u32 width, csr;
 
 	/*

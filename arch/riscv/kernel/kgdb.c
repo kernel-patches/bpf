@@ -43,7 +43,7 @@ static int get_step_address(struct pt_regs *regs, unsigned long *next_addr)
 
 	if (get_kernel_nofault(op_code, (void *)pc))
 		return -EINVAL;
-	if ((op_code & __INSN_LENGTH_MASK) != __INSN_LENGTH_GE_32) {
+	if ((op_code & __INSN_LENGTH_MASK) != INSN_C_MASK) {
 		if (riscv_insn_is_c_jalr(op_code) ||
 		    riscv_insn_is_c_jr(op_code)) {
 			rs1_num = decode_register_index(op_code, RVC_C2_RS1_OPOFF);
@@ -69,7 +69,7 @@ static int get_step_address(struct pt_regs *regs, unsigned long *next_addr)
 			*next_addr = pc + 2;
 		}
 	} else {
-		if ((op_code & __INSN_OPCODE_MASK) == __INSN_BRANCH_OPCODE) {
+		if (riscv_insn_is_branch(op_code)) {
 			bool result = false;
 			long imm = RV_EXTRACT_BTYPE_IMM(op_code);
 			unsigned long rs1_val = 0, rs2_val = 0;
