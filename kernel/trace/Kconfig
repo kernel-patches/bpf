@@ -57,6 +57,13 @@ config HAVE_DYNAMIC_FTRACE_WITH_ARGS
 	 This allows for use of ftrace_regs_get_argument() and
 	 ftrace_regs_get_stack_pointer().
 
+config HAVE_PT_REGS_COMPAT_FTRACE_REGS
+	bool
+	help
+	 If this is set, the ftrace_regs data structure is compatible
+	 with the pt_regs. So it is possible to be converted by
+	 ftrace_get_regs().
+
 config HAVE_DYNAMIC_FTRACE_NO_PATCHABLE
 	bool
 	help

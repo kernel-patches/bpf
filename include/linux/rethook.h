@@ -7,6 +7,7 @@
 
 #include <linux/compiler.h>
 #include <linux/freelist.h>
+#include <linux/ftrace.h>
 #include <linux/kallsyms.h>
 #include <linux/llist.h>
 #include <linux/rcupdate.h>
@@ -14,7 +15,7 @@
 
 struct rethook_node;
 
-typedef void (*rethook_handler_t) (struct rethook_node *, void *, unsigned long, struct pt_regs *);
+typedef void (*rethook_handler_t) (struct rethook_node *, void *, unsigned long, struct ftrace_regs *);
 
 /**
  * struct rethook - The rethook management data structure.
@@ -64,12 +65,12 @@ void rethook_free(struct rethook *rh);
 void rethook_add_node(struct rethook *rh, struct rethook_node *node);
 struct rethook_node *rethook_try_get(struct rethook *rh);
 void rethook_recycle(struct rethook_node *node);
-void rethook_hook(struct rethook_node *node, struct pt_regs *regs, bool mcount);
+void rethook_hook(struct rethook_node *node, struct ftrace_regs *regs, bool mcount);
 unsigned long rethook_find_ret_addr(struct task_struct *tsk, unsigned long frame,
 				    struct llist_node **cur);
 
 /* Arch dependent code must implement arch_* and trampoline code */
-void arch_rethook_prepare(struct rethook_node *node, struct pt_regs *regs, bool mcount);
+void arch_rethook_prepare(struct rethook_node *node, struct ftrace_regs *regs, bool mcount);
 void arch_rethook_trampoline(void);
 
 /**
@@ -84,11 +85,11 @@ static inline bool is_rethook_trampoline(unsigned long addr)
 }
 
 /* If the architecture needs to fixup the return address, implement it. */
-void arch_rethook_fixup_return(struct pt_regs *regs,
+void arch_rethook_fixup_return(struct ftrace_regs *regs,
 			       unsigned long correct_ret_addr);
 
 /* Generic trampoline handler, arch code must prepare asm stub */
-unsigned long rethook_trampoline_handler(struct pt_regs *regs,
+unsigned long rethook_trampoline_handler(struct ftrace_regs *regs,
 					 unsigned long frame);
 
 #ifdef CONFIG_RETHOOK

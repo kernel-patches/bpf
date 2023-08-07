@@ -2132,7 +2132,7 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 	if (rp->entry_handler && rp->entry_handler(ri, regs))
 		rethook_recycle(rhn);
 	else
-		rethook_hook(rhn, regs, kprobe_ftrace(p));
+		rethook_hook(rhn, (struct ftrace_regs *)regs, kprobe_ftrace(p));
 
 	return 0;
 }
@@ -2140,11 +2140,16 @@ NOKPROBE_SYMBOL(pre_handler_kretprobe);
 
 static void kretprobe_rethook_handler(struct rethook_node *rh, void *data,
 				      unsigned long ret_addr,
-				      struct pt_regs *regs)
+				      struct ftrace_regs *fregs)
 {
 	struct kretprobe *rp = (struct kretprobe *)data;
+	struct pt_regs *regs = ftrace_get_regs(fregs);
 	struct kretprobe_instance *ri;
 	struct kprobe_ctlblk *kcb;
+
+	/* This is bug because this depends on HAVE_PT_REGS_COMPAT_FTRACE_REGS */
+	if (WARN_ON_ONCE(!regs))
+		return;
 
 	/* The data must NOT be null. This means rethook data structure is broken. */
 	if (WARN_ON_ONCE(!data) || !rp->handler)
