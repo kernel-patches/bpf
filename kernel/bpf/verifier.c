@@ -19622,6 +19622,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 					"Extension programs should be JITed\n");
 				return -EINVAL;
 			}
+			if (aux->func && aux->func[subprog]->aux->exception_cb) {
+				bpf_log(log,
+					"Extension programs cannot replace exception callback\n");
+				return -EINVAL;
+			}
 		}
 		if (!tgt_prog->jited) {
 			bpf_log(log, "Can attach to only JITed progs\n");
