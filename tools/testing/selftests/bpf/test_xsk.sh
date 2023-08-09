@@ -81,13 +81,14 @@
 
 ETH=""
 
-while getopts "vi:dm:" flag
+while getopts "vi:dm:l" flag
 do
 	case "${flag}" in
 		v) verbose=1;;
 		d) debug=1;;
 		i) ETH=${OPTARG};;
 		m) MODE=${OPTARG};;
+		l) list=1;;
 	esac
 done
 
@@ -157,6 +158,10 @@ if [[ $verbose -eq 1 ]]; then
 	ARGS+="-v "
 fi
 
+if [[ $list -eq 1 ]]; then
+	ARGS+="-l "
+fi
+
 if [ ! -z $MODE ]; then
 	ARGS+="-m ${MODE} "
 fi
@@ -181,6 +186,10 @@ if [ -z $ETH ]; then
 	cleanup_exit ${VETH0} ${VETH1}
 else
 	cleanup_iface ${ETH} ${MTU}
+fi
+
+if [[ $list -eq 1 ]]; then
+    exit
 fi
 
 TEST_NAME="XSK_SELFTESTS_${VETH0}_BUSY_POLL"
