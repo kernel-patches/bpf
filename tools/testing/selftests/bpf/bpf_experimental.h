@@ -131,4 +131,20 @@ extern int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *nod
  */
 extern struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root) __ksym;
 
+/* Description
+ *	Throw a BPF exception from the program, immediately terminating its
+ *	execution and unwinding the stack. The supplied 'cookie' parameter
+ *	will be the return value of the program when an exception is thrown.
+ *
+ *	Note that throwing an exception with lingering resources (locks,
+ *	references, etc.) will lead to a verification error.
+ *
+ *	Note that callbacks *cannot* call this helper.
+ * Returns
+ *	Never.
+ * Throws
+ *	An exception with the specified 'cookie' value.
+ */
+extern void bpf_throw(u64 cookie) __ksym;
+
 #endif
