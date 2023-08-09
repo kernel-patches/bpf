@@ -1,0 +1,45 @@
+From 345d24a91c79f408e355c8b7e873ccde0f097eea Mon Sep 17 00:00:00 2001
+From: Huacai Chen <chenhuacai@loongson.cn>
+Date: Wed, 22 Feb 2023 10:50:48 +0800
+Subject: [PATCH] bpf: Include missing nospec.h to avoid build error.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Commit 74e19ef0ff80 ("uaccess: Add speculation barrier to copy_from_user()")
+defines a default barrier_nospec() and removes the
+such a build error:
+
+  CC      kernel/bpf/core.o
+kernel/bpf/core.c: In function ‘___bpf_prog_run’:
+kernel/bpf/core.c:1913:3: error: implicit declaration of function ‘barrier_nospec’; did you mean ‘barrier_data’? [-Werror=implicit-function-declaration]
+   barrier_nospec();
+   ^~~~~~~~~~~~~~
+   barrier_data
+cc1: some warnings being treated as errors
+
+So include nospec.h to avoid the build error.
+
+Fixes: 74e19ef0ff80 ("uaccess: Add speculation barrier to copy_from_user()")
+Signed-off-by: Huacai Chen <chenhuacai@loongson.cn>
+Link: https://lore.kernel.org/r/20230222025048.3677315-1-chenhuacai@loongson.cn
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ kernel/bpf/core.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/bpf/core.c b/kernel/bpf/core.c
+index 933869983e2a..b297e9f60ca1 100644
+--- a/kernel/bpf/core.c
++++ b/kernel/bpf/core.c
+@@ -34,6 +34,7 @@
+ #include <linux/log2.h>
+ #include <linux/bpf_verifier.h>
+ #include <linux/nodemask.h>
++#include <linux/nospec.h>
+ #include <linux/bpf_mem_alloc.h>
+ #include <linux/memcontrol.h>
+ 
+-- 
+2.30.2
+
