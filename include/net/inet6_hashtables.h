@@ -119,16 +119,6 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!prefetched)
 		return sk;
 
-	if (sk->sk_protocol == IPPROTO_TCP) {
-		if (sk->sk_state != TCP_LISTEN)
-			return sk;
-	} else if (sk->sk_protocol == IPPROTO_UDP) {
-		if (sk->sk_state != TCP_CLOSE)
-			return sk;
-	} else {
-		return sk;
-	}
-
 	reuse_sk = inet6_lookup_reuseport(net, sk, skb, doff,
 					  saddr, sport, daddr, ntohs(dport),
 					  ehashfn);
