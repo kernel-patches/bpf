@@ -234,4 +234,9 @@ static inline u64 xp_get_handle(struct xdp_buff_xsk *xskb)
 	return xskb->orig_addr + (offset << XSK_UNALIGNED_BUF_OFFSET_SHIFT);
 }
 
+static inline bool xp_tx_metadata_enabled(const xdp_buff_xsk *xskb)
+{
+	return sq->xsk_pool->tx_metadata_len > 0;
+}
+
 #endif /* XSK_BUFF_POOL_H_ */
