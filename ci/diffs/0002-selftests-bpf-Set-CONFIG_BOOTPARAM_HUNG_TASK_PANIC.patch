@@ -1,0 +1,39 @@
+From 91c614a38376374ff39c4cc678c2c5cd22cbf8fc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20M=C3=BCller?= <deso@posteo.net>
+Date: Wed, 26 Oct 2022 13:52:28 -0700
+Subject: [PATCH] selftests/bpf: Set CONFIG_BOOTPARAM_HUNG_TASK_PANIC
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With commit 5ed88f81511ce ("selftests/bpf: Panic on hard/soft lockup")
+we enabled the means to panic test runs quickly when they are stuck
+because of a hard or soft lockup. What we did not include is the means
+to do the same when a hung task is detected. The reasoning there was
+that virtualization effects may lead to delays and, hence, spurious
+failures.
+However, we see the occasional CI timeout when running the test_progs
+selftest with internal parallelism enabled (-j) that is not caused by a
+hard or soft lockup but due to a hung task. Hence, it makes sense to
+enable this detection as well. But let's give it some mileage first
+before upstreaming, though, and only include it in BPF CI.
+
+Signed-off-by: Daniel Müller <deso@posteo.net>
+---
+ tools/testing/selftests/bpf/config | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tools/testing/selftests/bpf/config b/tools/testing/selftests/bpf/config
+index 7a99a6..6c6821a 100644
+--- a/tools/testing/selftests/bpf/config
++++ b/tools/testing/selftests/bpf/config
+@@ -1,5 +1,6 @@
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_BOOTPARAM_HARDLOCKUP_PANIC=y
++CONFIG_BOOTPARAM_HUNG_TASK_PANIC=y
+ CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y
+ CONFIG_BPF=y
+ CONFIG_BPF_EVENTS=y
+-- 
+2.30.2
+
