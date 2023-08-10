@@ -7291,4 +7291,9 @@ struct bpf_iter_num {
 	__u64 __opaque[1];
 } __attribute__((aligned(8)));
 
+struct bpf_iter_task_vma {
+	__u64 __opaque[9]; /* See bpf_iter_num comment above */
+	char __opaque_c[3];
+} __attribute__((aligned(8)));
+
 #endif /* _UAPI__LINUX_BPF_H__ */

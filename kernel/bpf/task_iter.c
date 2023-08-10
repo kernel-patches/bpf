@@ -8,6 +8,7 @@
 #include <linux/fdtable.h>
 #include <linux/filter.h>
 #include <linux/btf_ids.h>
+#include <linux/mm_types.h>
 #include "mmap_unlock_work.h"
 
 static const char * const iter_task_type_names[] = {
@@ -822,6 +823,61 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg5_type	= ARG_ANYTHING,
 };
+
+struct bpf_iter_task_vma_kern {
+	struct mm_struct *mm;
+	struct mmap_unlock_irq_work *work;
+	struct vma_iterator vmi;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
+				      struct task_struct *task, u64 addr)
+{
+	struct bpf_iter_task_vma_kern *i = (void *)it;
+	bool irq_work_busy = false;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_task_vma_kern) != sizeof(struct bpf_iter_task_vma));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_vma_kern) != __alignof__(struct bpf_iter_task_vma));
+
+	BTF_TYPE_EMIT(struct bpf_iter_task_vma);
+
+	/* NULL i->mm signals failed bpf_iter_task_vma initialization.
+	 * i->work == NULL is valid.
+	 */
+	i->mm = NULL;
+	if (!task)
+		return -ENOENT;
+
+	i->mm = task->mm;
+	if (!i->mm)
+		return -ENOENT;
+
+	irq_work_busy = bpf_mmap_unlock_get_irq_work(&i->work);
+	if (irq_work_busy || !mmap_read_trylock(i->mm)) {
+		i->mm = NULL;
+		return -EBUSY;
+	}
+
+	vma_iter_init(&i->vmi, i->mm, addr);
+	return 0;
+}
+
+__bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_vma *it)
+{
+	struct bpf_iter_task_vma_kern *i = (void *)it;
+
+	if (!i->mm) /* bpf_iter_task_vma_new failed */
+		return NULL;
+	return vma_next(&i->vmi);
+}
+
+__bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
+{
+	struct bpf_iter_task_vma_kern *i = (void *)it;
+
+	if (i->mm)
+		bpf_mmap_unlock_mm(i->work, i->mm);
+}
 
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
 
