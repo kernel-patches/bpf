@@ -236,17 +236,6 @@ static __always_inline int __encap_ipv4(struct __sk_buff *skb, __u8 encap_proto,
 				BPF_F_INVALIDATE_HASH) < 0)
 		return TC_ACT_SHOT;
 
-	/* if changing outer proto type, update eth->h_proto */
-	if (encap_proto == IPPROTO_IPV6) {
-		struct ethhdr eth;
-
-		if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
-			return TC_ACT_SHOT;
-		eth.h_proto = bpf_htons(ETH_P_IP);
-		if (bpf_skb_store_bytes(skb, 0, &eth, sizeof(eth), 0) < 0)
-			return TC_ACT_SHOT;
-	}
-
 	return TC_ACT_OK;
 }
 
@@ -410,13 +399,6 @@ static int encap_ipv6_ipip6(struct __sk_buff *skb)
 	/* store new outer network header */
 	if (bpf_skb_store_bytes(skb, ETH_HLEN, &h_outer, olen,
 				BPF_F_INVALIDATE_HASH) < 0)
-		return TC_ACT_SHOT;
-
-	/* update eth->h_proto */
-	if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
-		return TC_ACT_SHOT;
-	eth.h_proto = bpf_htons(ETH_P_IPV6);
-	if (bpf_skb_store_bytes(skb, 0, &eth, sizeof(eth), 0) < 0)
 		return TC_ACT_SHOT;
 
 	return TC_ACT_OK;
