@@ -443,6 +443,35 @@ static int dump_task(struct task_struct *p, void *arg)
 	return 0;
 }
 
+__bpf_kfunc void set_oom_policy_name(struct oom_control *oc, const char *src, size_t sz)
+{
+	memset(oc->policy_name, 0, sizeof(oc->policy_name));
+
+	if (sz > POLICY_NAME_LEN)
+		sz = POLICY_NAME_LEN;
+
+	memcpy(oc->policy_name, src, sz);
+}
+
+__diag_push();
+__diag_ignore_all("-Wmissing-prototypes",
+		  "kfuncs which will be used in BPF programs");
+
+__weak noinline void bpf_set_policy_name(struct oom_control *oc)
+{
+}
+
+__diag_pop();
+
+BTF_SET8_START(bpf_oom_policy_kfunc_ids)
+BTF_ID_FLAGS(func, set_oom_policy_name)
+BTF_SET8_END(bpf_oom_policy_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_oom_policy_kfunc_set = {
+	.owner          = THIS_MODULE,
+	.set            = &bpf_oom_policy_kfunc_ids,
+};
+
 /**
  * dump_tasks - dump current memory state of all system tasks
  * @oc: pointer to struct oom_control
@@ -484,8 +513,8 @@ static void dump_oom_summary(struct oom_control *oc, struct task_struct *victim)
 
 static void dump_header(struct oom_control *oc, struct task_struct *p)
 {
-	pr_warn("%s invoked oom-killer: gfp_mask=%#x(%pGg), order=%d, oom_score_adj=%hd\n",
-		current->comm, oc->gfp_mask, &oc->gfp_mask, oc->order,
+	pr_warn("%s invoked oom-killer: gfp_mask=%#x(%pGg), order=%d, policy_name=%s, oom_score_adj=%hd\n",
+		current->comm, oc->gfp_mask, &oc->gfp_mask, oc->order, oc->policy_name,
 			current->signal->oom_score_adj);
 	if (!IS_ENABLED(CONFIG_COMPACTION) && oc->order)
 		pr_warn("COMPACTION is disabled!!!\n");
@@ -775,8 +804,11 @@ static int __init oom_init(void)
 	err = register_btf_fmodret_id_set(&oom_bpf_fmodret_set);
 	if (err)
 		pr_warn("error while registering oom fmodret entrypoints: %d", err);
+	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+					&bpf_oom_policy_kfunc_set);
+	if (err)
+		pr_warn("error while registering oom kfunc entrypoints: %d", err);
 #endif
-
 	return 0;
 }
 subsys_initcall(oom_init)
@@ -1195,6 +1227,10 @@ bool out_of_memory(struct oom_control *oc)
 		oom_kill_process(oc, "Out of memory (oom_kill_allocating_task)");
 		return true;
 	}
+
+	set_oom_policy_name(oc, "default", sizeof("default"));
+
+	bpf_set_policy_name(oc);
 
 	select_bad_process(oc);
 	/* Found nothing?!?! */

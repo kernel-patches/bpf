@@ -22,6 +22,10 @@ enum oom_constraint {
 	CONSTRAINT_MEMCG,
 };
 
+enum {
+	POLICY_NAME_LEN = 16,
+};
+
 /*
  * Details of the page allocation that triggered the oom killer that are used to
  * determine what should be killed.
@@ -52,6 +56,9 @@ struct oom_control {
 
 	/* Used to print the constraint info. */
 	enum oom_constraint constraint;
+
+	/* Used to report the policy info. */
+	char policy_name[POLICY_NAME_LEN];
 };
 
 extern struct mutex oom_lock;
