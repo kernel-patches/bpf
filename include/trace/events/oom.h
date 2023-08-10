@@ -6,6 +6,7 @@
 #define _TRACE_OOM_H
 #include <linux/tracepoint.h>
 #include <trace/events/mmflags.h>
+#include <linux/oom.h>
 
 TRACE_EVENT(oom_score_adj_update,
 
@@ -149,6 +150,23 @@ TRACE_EVENT(skip_task_reaping,
 	),
 
 	TP_printk("pid=%d", __entry->pid)
+);
+
+TRACE_EVENT(select_bad_process_end,
+
+	TP_PROTO(struct oom_control *oc),
+
+	TP_ARGS(oc),
+
+	TP_STRUCT__entry(
+		__array(char, policy_name, POLICY_NAME_LEN)
+	),
+
+	TP_fast_assign(
+		memcpy(__entry->policy_name, oc->policy_name, POLICY_NAME_LEN);
+	),
+
+	TP_printk("policy_name=%s", __entry->policy_name)
 );
 
 #ifdef CONFIG_COMPACTION
