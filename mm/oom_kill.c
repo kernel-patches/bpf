@@ -18,6 +18,7 @@
  *  kernel subsystems and hints as to where to find out what things do.
  */
 
+#include <linux/bpf.h>
 #include <linux/oom.h>
 #include <linux/mm.h>
 #include <linux/err.h>
@@ -305,6 +306,27 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	return CONSTRAINT_NONE;
 }
 
+enum {
+	NO_BPF_POLICY,
+	BPF_EVAL_ABORT,
+	BPF_EVAL_NEXT,
+	BPF_EVAL_SELECT,
+};
+
+__weak noinline int bpf_oom_evaluate_task(struct task_struct *task, struct oom_control *oc)
+{
+	return NO_BPF_POLICY;
+}
+
+BTF_SET8_START(oom_bpf_fmodret_ids)
+BTF_ID_FLAGS(func, bpf_oom_evaluate_task)
+BTF_SET8_END(oom_bpf_fmodret_ids)
+
+static const struct btf_kfunc_id_set oom_bpf_fmodret_set = {
+	.owner = THIS_MODULE,
+	.set   = &oom_bpf_fmodret_ids,
+};
+
 static int oom_evaluate_task(struct task_struct *task, void *arg)
 {
 	struct oom_control *oc = arg;
@@ -318,6 +340,26 @@ static int oom_evaluate_task(struct task_struct *task, void *arg)
 		goto next;
 
 	/*
+	 * If task is allocating a lot of memory and has been marked to be
+	 * killed first if it triggers an oom, then select it.
+	 */
+	if (oom_task_origin(task)) {
+		points = LONG_MAX;
+		goto select;
+	}
+
+	switch (bpf_oom_evaluate_task(task, oc)) {
+	case BPF_EVAL_ABORT:
+		goto abort; /* abort search process */
+	case BPF_EVAL_NEXT:
+		goto next; /* ignore the task */
+	case BPF_EVAL_SELECT:
+		goto select; /* select the task */
+	default:
+		break; /* No BPF policy */
+	}
+
+	/*
 	 * This task already has access to memory reserves and is being killed.
 	 * Don't allow any other task to have access to the reserves unless
 	 * the task has MMF_OOM_SKIP because chances that it would release
@@ -327,15 +369,6 @@ static int oom_evaluate_task(struct task_struct *task, void *arg)
 		if (test_bit(MMF_OOM_SKIP, &task->signal->oom_mm->flags))
 			goto next;
 		goto abort;
-	}
-
-	/*
-	 * If task is allocating a lot of memory and has been marked to be
-	 * killed first if it triggers an oom, then select it.
-	 */
-	if (oom_task_origin(task)) {
-		points = LONG_MAX;
-		goto select;
 	}
 
 	points = oom_badness(task, oc->totalpages);
@@ -732,10 +765,18 @@ static struct ctl_table vm_oom_kill_table[] = {
 
 static int __init oom_init(void)
 {
+	int err;
 	oom_reaper_th = kthread_run(oom_reaper, NULL, "oom_reaper");
 #ifdef CONFIG_SYSCTL
 	register_sysctl_init("vm", vm_oom_kill_table);
 #endif
+
+#ifdef CONFIG_BPF_SYSCALL
+	err = register_btf_fmodret_id_set(&oom_bpf_fmodret_set);
+	if (err)
+		pr_warn("error while registering oom fmodret entrypoints: %d", err);
+#endif
+
 	return 0;
 }
 subsys_initcall(oom_init)
