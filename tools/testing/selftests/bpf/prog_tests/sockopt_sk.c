@@ -92,6 +92,7 @@ static int getsetsockopt(void)
 	}
 	if (buf.u8[0] != 0x01) {
 		log_err("Unexpected buf[0] 0x%02x != 0x01", buf.u8[0]);
+		log_err("optlen %d", optlen);
 		goto err;
 	}
 
@@ -220,7 +221,7 @@ err:
 	return -1;
 }
 
-static void run_test(int cgroup_fd)
+static void run_test_nonsleepable(int cgroup_fd)
 {
 	struct sockopt_sk *skel;
 
@@ -246,6 +247,32 @@ cleanup:
 	sockopt_sk__destroy(skel);
 }
 
+static void run_test_sleepable(int cgroup_fd)
+{
+	struct sockopt_sk *skel;
+
+	skel = sockopt_sk__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_load"))
+		goto cleanup;
+
+	skel->bss->page_size = getpagesize();
+
+	skel->links._setsockopt_s =
+		bpf_program__attach_cgroup(skel->progs._setsockopt_s, cgroup_fd);
+	if (!ASSERT_OK_PTR(skel->links._setsockopt_s, "setsockopt_link"))
+		goto cleanup;
+
+	skel->links._getsockopt_s =
+		bpf_program__attach_cgroup(skel->progs._getsockopt_s, cgroup_fd);
+	if (!ASSERT_OK_PTR(skel->links._getsockopt_s, "getsockopt_link"))
+		goto cleanup;
+
+	ASSERT_OK(getsetsockopt(), "getsetsockopt");
+
+cleanup:
+	sockopt_sk__destroy(skel);
+}
+
 void test_sockopt_sk(void)
 {
 	int cgroup_fd;
@@ -254,6 +281,9 @@ void test_sockopt_sk(void)
 	if (!ASSERT_GE(cgroup_fd, 0, "join_cgroup /sockopt_sk"))
 		return;
 
-	run_test(cgroup_fd);
+	if (test__start_subtest("nonsleepable"))
+		run_test_nonsleepable(cgroup_fd);
+	if (test__start_subtest("sleepable"))
+		run_test_sleepable(cgroup_fd);
 	close(cgroup_fd);
 }
