@@ -550,6 +550,7 @@ struct extern_desc {
 	int btf_id;
 	int sec_btf_id;
 	const char *name;
+	char *essent_name;
 	bool is_set;
 	bool is_weak;
 	union {
@@ -3770,6 +3771,7 @@ static int bpf_object__collect_externs(struct bpf_object *obj)
 	struct extern_desc *ext;
 	int i, n, off, dummy_var_btf_id;
 	const char *ext_name, *sec_name;
+	size_t ext_essent_len;
 	Elf_Scn *scn;
 	Elf64_Shdr *sh;
 
@@ -3818,6 +3820,14 @@ static int bpf_object__collect_externs(struct bpf_object *obj)
 		ext->name = btf__name_by_offset(obj->btf, t->name_off);
 		ext->sym_idx = i;
 		ext->is_weak = ELF64_ST_BIND(sym->st_info) == STB_WEAK;
+
+		ext_essent_len = bpf_core_essential_name_len(ext->name);
+		ext->essent_name = NULL;
+		if (ext_essent_len != strlen(ext->name)) {
+			ext->essent_name = malloc(ext_essent_len + 1);
+			memcpy(ext->essent_name, ext->name, ext_essent_len);
+			ext->essent_name[ext_essent_len] = '\0';
+		}
 
 		ext->sec_btf_id = find_extern_sec_btf_id(obj->btf, ext->btf_id);
 		if (ext->sec_btf_id <= 0) {
@@ -7624,7 +7634,8 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 
 	local_func_proto_id = ext->ksym.type_id;
 
-	kfunc_id = find_ksym_btf_id(obj, ext->name, BTF_KIND_FUNC, &kern_btf, &mod_btf);
+	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
+				    &mod_btf);
 	if (kfunc_id < 0) {
 		if (kfunc_id == -ESRCH && ext->is_weak)
 			return 0;
@@ -7642,6 +7653,9 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 		pr_warn("extern (func ksym) '%s': func_proto [%d] incompatible with %s [%d]\n",
 			ext->name, local_func_proto_id,
 			mod_btf ? mod_btf->name : "vmlinux", kfunc_proto_id);
+
+		if (ext->is_weak)
+			return 0;
 		return -EINVAL;
 	}
 
@@ -8370,6 +8384,11 @@ void bpf_object__close(struct bpf_object *obj)
 
 	zfree(&obj->btf_custom_path);
 	zfree(&obj->kconfig);
+
+	for (i = 0; i < obj->nr_extern; i++)
+		if (obj->externs[i].essent_name)
+			zfree(&obj->externs[i].essent_name);
+
 	zfree(&obj->externs);
 	obj->nr_extern = 0;
 
