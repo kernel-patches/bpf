@@ -419,8 +419,10 @@ more_data:
 		if (!psock->apply_bytes) {
 			/* Clean up before releasing the sock lock. */
 			eval = psock->eval;
-			psock->eval = __SK_NONE;
-			psock->sk_redir = NULL;
+			if (!psock->eval_permanently) {
+				psock->eval = __SK_NONE;
+				psock->sk_redir = NULL;
+			}
 		}
 		if (psock->cork) {
 			cork = true;
@@ -433,9 +435,15 @@ more_data:
 		ret = tcp_bpf_sendmsg_redir(sk_redir, redir_ingress,
 					    msg, tosend, flags);
 		sent = origsize - msg->sg.size;
+		/* disable the ability when something wrong */
+		if (unlikely(ret < 0))
+			psock->eval_permanently = 0;
 
-		if (eval == __SK_REDIRECT)
+		if (!psock->eval_permanently && eval == __SK_REDIRECT) {
 			sock_put(sk_redir);
+			psock->sk_redir = NULL;
+			psock->eval = __SK_NONE;
+		}
 
 		lock_sock(sk);
 		if (unlikely(ret < 0)) {
@@ -460,8 +468,8 @@ more_data:
 	}
 
 	if (likely(!ret)) {
-		if (!psock->apply_bytes) {
-			psock->eval =  __SK_NONE;
+		if (!psock->apply_bytes && !psock->eval_permanently) {
+			psock->eval = __SK_NONE;
 			if (psock->sk_redir) {
 				sock_put(psock->sk_redir);
 				psock->sk_redir = NULL;
@@ -540,7 +548,8 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 			if (psock->cork_bytes && !enospc)
 				goto out_err;
 			/* All cork bytes are accounted, rerun the prog. */
-			psock->eval = __SK_NONE;
+			if (!psock->eval_permanently)
+				psock->eval = __SK_NONE;
 			psock->cork_bytes = 0;
 		}
 
