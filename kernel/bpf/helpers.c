@@ -669,6 +669,26 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+/**
+ * int bpf_copy_to_user(void *dst, u32 size, const void *kern_ptr)
+ *     Description
+ *             Read *size* bytes from kernel space address *kern_ptr* and
+ *              store the data in user space address *dst*. This is a
+ *              wrapper of **copy_to_user**\ ().
+ *     Return
+ *             0 on success, or a negative error in case of failure.
+ */
+__bpf_kfunc int bpf_copy_to_user(void *dst__uninit, u32 dst__sz,
+				 const void *src__ign)
+{
+	int ret = copy_to_user(dst__uninit, src__ign, dst__sz);
+
+	if (unlikely(ret))
+		return -EFAULT;
+
+	return ret;
+}
+
 BPF_CALL_5(bpf_copy_from_user_task, void *, dst, u32, size,
 	   const void __user *, user_ptr, struct task_struct *, tsk, u64, flags)
 {
@@ -2456,6 +2476,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_copy_to_user, KF_SLEEPABLE)
 BTF_SET8_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {
@@ -2494,6 +2515,15 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 	.set   = &common_btf_ids,
 };
 
+BTF_SET8_START(cgroup_common_btf_ids)
+BTF_ID_FLAGS(func, bpf_copy_to_user, KF_SLEEPABLE)
+BTF_SET8_END(cgroup_common_btf_ids)
+
+static const struct btf_kfunc_id_set cgroup_kfunc_set = {
+	.owner	= THIS_MODULE,
+	.set	= &cgroup_common_btf_ids,
+};
+
 static int __init kfunc_init(void)
 {
 	int ret;
@@ -2513,6 +2543,7 @@ static int __init kfunc_init(void)
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCKOPT, &cgroup_kfunc_set);
 	ret = ret ?: register_btf_id_dtor_kfuncs(generic_dtors,
 						  ARRAY_SIZE(generic_dtors),
 						  THIS_MODULE);

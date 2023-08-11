@@ -2461,6 +2461,12 @@ cg_sockopt_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 #endif
 	case BPF_FUNC_perf_event_output:
 		return &bpf_event_output_data_proto;
+
+	case BPF_FUNC_copy_from_user:
+		if (prog->aux->sleepable)
+			return &bpf_copy_from_user_proto;
+		return NULL;
+
 	default:
 		return bpf_base_func_proto(func_id);
 	}
