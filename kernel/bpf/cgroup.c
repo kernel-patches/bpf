@@ -1877,6 +1877,8 @@ static int filter_setsockopt_progs_cb(void *arg,
 	if (max_optlen < 0)
 		return max_optlen;
 
+	ctx->flags = BPF_SOCKOPT_FLAG_OPTVAL_REPLACE;
+
 	if (copy_from_user(ctx->optval, optval,
 			   min(ctx->optlen, max_optlen)) != 0)
 		return -EFAULT;
@@ -1905,7 +1907,8 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 	ctx.optlen = *optlen;
 	ctx.optval = optval;
 	ctx.optval_end = optval + *optlen;
-	ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER;
+	ctx.flags = BPF_SOCKOPT_FLAG_OPTVAL_USER |
+		BPF_SOCKOPT_FLAG_OPTVAL_REPLACE;
 
 	lock_sock(sk);
 	ret = bpf_prog_run_array_cg_cb(&cgrp->bpf, CGROUP_SETSOCKOPT,

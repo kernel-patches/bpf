@@ -7150,6 +7150,10 @@ struct bpf_sockopt {
 enum bpf_sockopt_flags {
 	/* optval is a pointer to user space memory */
 	BPF_SOCKOPT_FLAG_OPTVAL_USER	= (1U << 0),
+	/* able to install new optval */
+	BPF_SOCKOPT_FLAG_OPTVAL_REPLACE	= (1U << 1),
+	/* optval is referenced by a dynptr */
+	BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR	= (1U << 2),
 };
 
 struct bpf_pidns_info {
