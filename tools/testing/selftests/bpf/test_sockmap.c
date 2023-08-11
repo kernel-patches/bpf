@@ -1166,14 +1166,27 @@ run:
 
 		}
 
-		if (txmsg_ingress) {
-			int in = BPF_F_INGRESS;
-
-			if (txmsg_permanently)
-				in |= BPF_F_PERMANENTLY;
+		if (txmsg_permanently) {
+			int txmsg_flag = BPF_F_PERMANENTLY;
 
 			i = 0;
-			err = bpf_map_update_elem(map_fd[6], &i, &in, BPF_ANY);
+			err = bpf_map_update_elem(map_fd[6], &i, &txmsg_flag, BPF_ANY);
+			if (err) {
+				fprintf(stderr,
+					"ERROR: bpf_map_update_elem (txmsg_permanently): %d (%s)\n",
+					err, strerror(errno));
+				goto out;
+			}
+		}
+
+		if (txmsg_ingress) {
+			int txmsg_flag = BPF_F_INGRESS;
+
+			if (txmsg_permanently)
+				txmsg_flag |= BPF_F_PERMANENTLY;
+
+			i = 0;
+			err = bpf_map_update_elem(map_fd[6], &i, &txmsg_flag, BPF_ANY);
 			if (err) {
 				fprintf(stderr,
 					"ERROR: bpf_map_update_elem (txmsg_ingress): %d (%s)\n",
@@ -1487,6 +1500,13 @@ static void test_txmsg_pass(int cgrp, struct sockmap_options *opt)
 static void test_txmsg_redir(int cgrp, struct sockmap_options *opt)
 {
 	txmsg_redir = 1;
+	test_send(opt, cgrp);
+}
+
+static void test_txmsg_redir_permanently(int cgrp, struct sockmap_options *opt)
+{
+	txmsg_redir = 1;
+	txmsg_permanently = 1;
 	test_send(opt, cgrp);
 }
 
@@ -1872,6 +1892,7 @@ static int populate_progs(char *bpf_file)
 struct _test test[] = {
 	{"txmsg test passthrough", test_txmsg_pass},
 	{"txmsg test redirect", test_txmsg_redir},
+	{"txmsg test redirect permanently", test_txmsg_redir_permanently},
 	{"txmsg test redirect wait send mem", test_txmsg_redir_wait_sndmem},
 	{"txmsg test drop", test_txmsg_drop},
 	{"txmsg test ingress redirect", test_txmsg_ingress_redir},
