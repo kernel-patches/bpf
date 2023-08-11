@@ -19547,9 +19547,11 @@ static bool can_be_sleepable(struct bpf_prog *prog)
 			return false;
 		}
 	}
+
 	return prog->type == BPF_PROG_TYPE_LSM ||
 	       prog->type == BPF_PROG_TYPE_KPROBE /* only for uprobes */ ||
-	       prog->type == BPF_PROG_TYPE_STRUCT_OPS;
+	       prog->type == BPF_PROG_TYPE_STRUCT_OPS ||
+	       prog->type == BPF_PROG_TYPE_CGROUP_SOCKOPT;
 }
 
 static int check_attach_btf_id(struct bpf_verifier_env *env)
@@ -19571,7 +19573,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	}
 
 	if (prog->aux->sleepable && !can_be_sleepable(prog)) {
-		verbose(env, "Only fentry/fexit/fmod_ret, lsm, iter, uprobe, and struct_ops programs can be sleepable\n");
+		verbose(env, "Only fentry/fexit/fmod_ret, lsm, iter, uprobe,"
+			"cgroup, and struct_ops programs can be sleepable\n");
 		return -EINVAL;
 	}
 
