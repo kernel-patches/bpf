@@ -79,6 +79,7 @@ static const char * const success_tests[] = {
 	"test_task_from_pid_current",
 	"test_task_from_pid_invalid",
 	"task_kfunc_acquire_trusted_walked",
+	"test_task_kfunc_flavor_relo",
 };
 
 void test_task_kfunc(void)
