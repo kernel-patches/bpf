@@ -83,7 +83,8 @@ __used __visible void arch_rethook_trampoline_callback(struct pt_regs *regs)
 	 * arch_rethook_fixup_return() which called from this
 	 * rethook_trampoline_handler().
 	 */
-	rethook_trampoline_handler(regs, (unsigned long)frame_pointer);
+	rethook_trampoline_handler((struct ftrace_regs *)regs,
+				   (unsigned long)frame_pointer);
 
 	/*
 	 * Copy FLAGS to 'pt_regs::ss' so that arch_rethook_trapmoline()
@@ -104,22 +105,22 @@ NOKPROBE_SYMBOL(arch_rethook_trampoline_callback);
 STACK_FRAME_NON_STANDARD_FP(arch_rethook_trampoline);
 
 /* This is called from rethook_trampoline_handler(). */
-void arch_rethook_fixup_return(struct pt_regs *regs,
+void arch_rethook_fixup_return(struct ftrace_regs *fregs,
 			       unsigned long correct_ret_addr)
 {
-	unsigned long *frame_pointer = (void *)(regs + 1);
+	unsigned long *frame_pointer = (void *)(fregs + 1);
 
 	/* Replace fake return address with real one. */
 	*frame_pointer = correct_ret_addr;
 }
 NOKPROBE_SYMBOL(arch_rethook_fixup_return);
 
-void arch_rethook_prepare(struct rethook_node *rh, struct pt_regs *regs, bool mcount)
+void arch_rethook_prepare(struct rethook_node *rh, struct ftrace_regs *fregs, bool mcount)
 {
-	unsigned long *stack = (unsigned long *)regs->sp;
+	unsigned long *stack = (unsigned long *)ftrace_regs_get_stack_pointer(fregs);
 
 	rh->ret_addr = stack[0];
-	rh->frame = regs->sp;
+	rh->frame = (unsigned long)stack;
 
 	/* Replace the return addr with trampoline addr */
 	stack[0] = (unsigned long) arch_rethook_trampoline;

@@ -2132,7 +2132,11 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 	if (rp->entry_handler && rp->entry_handler(ri, regs))
 		rethook_recycle(rhn);
 	else
-		rethook_hook(rhn, regs, kprobe_ftrace(p));
+		/*
+		 * We can cast pt_regs to ftrace_regs because this depends on
+		 * HAVE_PT_REGS_TO_FTRACE_REGS_CAST.
+		 */
+		rethook_hook(rhn, (struct ftrace_regs *)regs, kprobe_ftrace(p));
 
 	return 0;
 }
@@ -2140,9 +2144,11 @@ NOKPROBE_SYMBOL(pre_handler_kretprobe);
 
 static void kretprobe_rethook_handler(struct rethook_node *rh, void *data,
 				      unsigned long ret_addr,
-				      struct pt_regs *regs)
+				      struct ftrace_regs *fregs)
 {
 	struct kretprobe *rp = (struct kretprobe *)data;
+	/* Ditto, this depends on HAVE_PT_REGS_TO_FTRACE_REGS_CAST. */
+	struct pt_regs *regs = (struct pt_regs *)fregs;
 	struct kretprobe_instance *ri;
 	struct kprobe_ctlblk *kcb;
 
