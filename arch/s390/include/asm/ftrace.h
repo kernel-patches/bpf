@@ -41,6 +41,8 @@ static inline unsigned long ftrace_call_adjust(unsigned long addr)
 	return addr;
 }
 
+#ifdef CONFIG_FUNCTION_TRACER
+
 struct ftrace_regs {
 	struct pt_regs regs;
 };
@@ -79,6 +81,8 @@ ftrace_regs_set_instruction_pointer(struct ftrace_regs *fregs,
 	override_function_with_return(&(fregs)->regs)
 #define ftrace_regs_query_register_offset(name) \
 	regs_query_register_offset(name)
+
+#endif /* CONFIG_FUNCTION_TRACER */
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 /*
