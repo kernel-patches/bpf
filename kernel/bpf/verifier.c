@@ -19400,10 +19400,15 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			return -EINVAL;
 		fallthrough;
 	case BPF_MODIFY_RETURN:
-	case BPF_LSM_MAC:
-	case BPF_LSM_CGROUP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
+		if (tgt_prog && subprog > 0 &&
+		    tgt_prog->aux->func[subprog]->is_func &&
+		    tgt_prog->aux->tail_call_reachable)
+			tgt_info->tail_call_ctx = true;
+		fallthrough;
+	case BPF_LSM_MAC:
+	case BPF_LSM_CGROUP:
 		if (!btf_type_is_func(t)) {
 			bpf_log(log, "attach_btf_id %u is not a function\n",
 				btf_id);
