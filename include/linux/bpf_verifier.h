@@ -480,6 +480,7 @@ struct bpf_insn_aux_data {
 	bool zext_dst; /* this insn zero extends dst reg */
 	bool storage_get_func_atomic; /* bpf_*_storage_get() with atomic memory alloc */
 	bool is_iter_next; /* bpf_iter_<type>_next() kfunc call */
+	bool percpu_ptr_prog_alloc; /* {this,per}_cpu_ptr() with prog alloc */
 	u8 alu_state; /* used in combination with alu_limit */
 
 	/* below fields are initialized once */

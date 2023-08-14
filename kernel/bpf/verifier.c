@@ -6221,7 +6221,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		}
 
 		if (type_is_alloc(reg->type) && !type_is_non_owning_ref(reg->type) &&
-		    !reg->ref_obj_id) {
+		    !(reg->type & MEM_RCU) && !reg->ref_obj_id) {
 			verbose(env, "verifier internal error: ref_obj_id for allocated object must be non-zero\n");
 			return -EFAULT;
 		}
@@ -7765,6 +7765,7 @@ static const struct bpf_reg_types btf_ptr_types = {
 static const struct bpf_reg_types percpu_btf_ptr_types = {
 	.types = {
 		PTR_TO_BTF_ID | MEM_PERCPU,
+		PTR_TO_BTF_ID | MEM_PERCPU | MEM_RCU,
 		PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED,
 	}
 };
@@ -7945,6 +7946,7 @@ found:
 			return -EACCES;
 		break;
 	case PTR_TO_BTF_ID | MEM_PERCPU:
+	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
 		/* Handled by helper specific checks */
 		break;
@@ -8287,6 +8289,16 @@ skip_type_check:
 			verbose(env, "Helper has invalid btf_id in R%d\n", regno);
 			return -EACCES;
 		}
+		if (reg->type & MEM_RCU) {
+			const struct btf_type *type = btf_type_by_id(reg->btf, reg->btf_id);
+
+			if (!type || !btf_type_is_struct(type)) {
+				verbose(env, "Helper has invalid btf/btf_id in R%d\n", regno);
+				return -EFAULT;
+			}
+			env->insn_aux_data[insn_idx].percpu_ptr_prog_alloc = true;
+		}
+
 		meta->ret_btf = reg->btf;
 		meta->ret_btf_id = reg->btf_id;
 		break;
@@ -9888,14 +9900,18 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			regs[BPF_REG_0].type = PTR_TO_MEM | ret_flag;
 			regs[BPF_REG_0].mem_size = tsize;
 		} else {
-			/* MEM_RDONLY may be carried from ret_flag, but it
-			 * doesn't apply on PTR_TO_BTF_ID. Fold it, otherwise
-			 * it will confuse the check of PTR_TO_BTF_ID in
-			 * check_mem_access().
-			 */
-			ret_flag &= ~MEM_RDONLY;
+			if (env->insn_aux_data[insn_idx].percpu_ptr_prog_alloc) {
+				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU;
+			} else {
+				/* MEM_RDONLY may be carried from ret_flag, but it
+				 * doesn't apply on PTR_TO_BTF_ID. Fold it, otherwise
+				 * it will confuse the check of PTR_TO_BTF_ID in
+				 * check_mem_access().
+				 */
+				ret_flag &= ~MEM_RDONLY;
+				regs[BPF_REG_0].type = PTR_TO_BTF_ID | ret_flag;
+			}
 
-			regs[BPF_REG_0].type = PTR_TO_BTF_ID | ret_flag;
 			regs[BPF_REG_0].btf = meta.ret_btf;
 			regs[BPF_REG_0].btf_id = meta.ret_btf_id;
 		}
@@ -18633,6 +18649,25 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_5, (__force __s32)GFP_ATOMIC);
 			else
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_5, (__force __s32)GFP_KERNEL);
+			insn_buf[1] = *insn;
+			cnt = 2;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			goto patch_call_imm;
+		}
+
+		/* bpf_per_cpu_ptr() and bpf_this_cpu_ptr() */
+		if (env->insn_aux_data[i + delta].percpu_ptr_prog_alloc) {
+			/* patch with 'r1 = *(u64 *)(r1 + 0)' since for percpu data,
+			 * bpf_mem_alloc() returns a ptr to the percpu data ptr.
+			 */
+			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0);
 			insn_buf[1] = *insn;
 			cnt = 2;
 
