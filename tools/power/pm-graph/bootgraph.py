@@ -77,12 +77,12 @@ class SystemValues(aslib.SystemValues):
 			fp.close()
 		self.testdir = datetime.now().strftime('boot-%y%m%d-%H%M%S')
 	def kernelVersion(self, msg):
-		m = re.match('^[Ll]inux *[Vv]ersion *(?P<v>\S*) .*', msg)
+		m = re.match('^[Ll]inux *[Vv]ersion *(?P<v>\\S*) .*', msg)
 		if m:
 			return m.group('v')
 		return 'unknown'
 	def checkFtraceKernelVersion(self):
-		m = re.match('^(?P<x>[0-9]*)\.(?P<y>[0-9]*)\.(?P<z>[0-9]*).*', self.kernel)
+		m = re.match('^(?P<x>[0-9]*)\\.(?P<y>[0-9]*)\\.(?P<z>[0-9]*).*', self.kernel)
 		if m:
 			val = tuple(map(int, m.groups()))
 			if val >= (4, 10, 0):
@@ -324,7 +324,7 @@ def parseKernelLog():
 		idx = line.find('[')
 		if idx > 1:
 			line = line[idx:]
-		m = re.match('[ \t]*(\[ *)(?P<ktime>[0-9\.]*)(\]) (?P<msg>.*)', line)
+		m = re.match('[ \t]*(\\[ *)(?P<ktime>[0-9\\.]*)(\\]) (?P<msg>.*)', line)
 		if(not m):
 			continue
 		ktime = float(m.group('ktime'))
@@ -336,20 +336,20 @@ def parseKernelLog():
 			if(not sysvals.stamp['kernel']):
 				sysvals.stamp['kernel'] = sysvals.kernelVersion(msg)
 			continue
-		m = re.match('.* setting system clock to (?P<d>[0-9\-]*)[ A-Z](?P<t>[0-9:]*) UTC.*', msg)
+		m = re.match('.* setting system clock to (?P<d>[0-9\\-]*)[ A-Z](?P<t>[0-9:]*) UTC.*', msg)
 		if(m):
 			bt = datetime.strptime(m.group('d')+' '+m.group('t'), '%Y-%m-%d %H:%M:%S')
 			bt = bt - timedelta(seconds=int(ktime))
 			data.boottime = bt.strftime('%Y-%m-%d_%H:%M:%S')
 			sysvals.stamp['time'] = bt.strftime('%B %d %Y, %I:%M:%S %p')
 			continue
-		m = re.match('^calling *(?P<f>.*)\+.* @ (?P<p>[0-9]*)', msg)
+		m = re.match('^calling *(?P<f>.*)\\+.* @ (?P<p>[0-9]*)', msg)
 		if(m):
 			func = m.group('f')
 			pid = int(m.group('p'))
 			devtemp[func] = (ktime, pid)
 			continue
-		m = re.match('^initcall *(?P<f>.*)\+.* returned (?P<r>.*) after (?P<t>.*) usecs', msg)
+		m = re.match('^initcall *(?P<f>.*)\\+.* returned (?P<r>.*) after (?P<t>.*) usecs', msg)
 		if(m):
 			data.valid = True
 			data.end = ktime
