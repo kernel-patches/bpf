@@ -184,6 +184,8 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
 	return array != &bpf_empty_prog_array.hdr;
 }
 
+bool cgroup_bpf_device_guard_enabled(struct task_struct *task);
+
 /* Wrappers for __cgroup_bpf_run_filter_skb() guarded by cgroup_bpf_enabled. */
 #define BPF_CGROUP_RUN_PROG_INET_INGRESS(sk, skb)			      \
 ({									      \
@@ -474,6 +476,11 @@ static inline int bpf_percpu_cgroup_storage_copy(struct bpf_map *map, void *key,
 static inline int bpf_percpu_cgroup_storage_update(struct bpf_map *map,
 					void *key, void *value, u64 flags) {
 	return 0;
+}
+
+static bool cgroup_bpf_device_guard_enabled(struct task_struct *task)
+{
+	return false;
 }
 
 #define cgroup_bpf_enabled(atype) (0)

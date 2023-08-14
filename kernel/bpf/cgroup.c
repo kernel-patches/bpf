@@ -2505,6 +2505,36 @@ const struct bpf_verifier_ops cg_sockopt_verifier_ops = {
 const struct bpf_prog_ops cg_sockopt_prog_ops = {
 };
 
+bool
+cgroup_bpf_device_guard_enabled(struct task_struct *task)
+{
+	bool ret;
+	const struct bpf_prog_array *array;
+	const struct bpf_prog_array_item *item;
+	const struct bpf_prog *prog;
+	struct cgroup *cgrp = task_dfl_cgroup(task);
+
+	ret = false;
+
+	array = rcu_access_pointer(cgrp->bpf.effective[CGROUP_DEVICE]);
+	if (array == &bpf_empty_prog_array.hdr)
+		return ret;
+
+	mutex_lock(&cgroup_mutex);
+	array = rcu_dereference_protected(cgrp->bpf.effective[CGROUP_DEVICE],
+					      lockdep_is_held(&cgroup_mutex));
+	item = &array->items[0];
+	while ((prog = READ_ONCE(item->prog))) {
+		if (prog->aux->cgroup_device_guard) {
+			ret = true;
+			break;
+		}
+		item++;
+	}
+	mutex_unlock(&cgroup_mutex);
+	return ret;
+}
+
 /* Common helpers for cgroup hooks. */
 const struct bpf_func_proto *
 cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)

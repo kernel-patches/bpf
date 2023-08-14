@@ -1183,6 +1183,11 @@ enum bpf_perf_event_type {
  */
 #define BPF_F_XDP_DEV_BOUND_ONLY	(1U << 6)
 
+/* If BPF_F_CGROUP_DEVICE_GUARD is used in BPF_PROG_LOAD command, the loaded
+ * program will be allowed to guard device access inside user namespaces.
+ */
+#define BPF_F_CGROUP_DEVICE_GUARD	(1U << 7)
+
 /* link_create.kprobe_multi.flags used in LINK_CREATE command for
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
  */
