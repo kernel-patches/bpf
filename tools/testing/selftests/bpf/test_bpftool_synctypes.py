@@ -66,7 +66,7 @@ class ArrayParser(BlockParser):
 
     def __init__(self, reader, array_name):
         self.array_name = array_name
-        self.start_marker = re.compile(f'(static )?const bool {self.array_name}\[.*\] = {{\n')
+        self.start_marker = re.compile(f'(static )?const bool {self.array_name}\\[.*\\] = {{\n')
         super().__init__(reader)
 
     def search_block(self):
@@ -226,7 +226,7 @@ class FileExtractor(object):
 
         @block_name: name of the blog to parse, 'TYPE' in the example
         """
-        start_marker = re.compile(f'\*{block_name}\* := {{')
+        start_marker = re.compile(f'\\*{block_name}\\* := {{')
         pattern = re.compile('\\*\\*([\\w/-]+)\\*\\*')
         end_marker = re.compile('}\n')
         return self.__get_description_list(start_marker, pattern, end_marker)
@@ -245,7 +245,7 @@ class FileExtractor(object):
 
         @block_name: name of the blog to parse, 'TYPE' in the example
         """
-        start_marker = re.compile(f'"\s*{block_name} := {{')
+        start_marker = re.compile(f'"\\s*{block_name} := {{')
         pattern = re.compile('([\\w/]+) [|}]')
         end_marker = re.compile('}')
         return self.__get_description_list(start_marker, pattern, end_marker)
@@ -264,7 +264,7 @@ class FileExtractor(object):
 
         @macro: macro starting the block, 'HELP_SPEC_OPTIONS' in the example
         """
-        start_marker = re.compile(f'"\s*{macro}\s*" [|}}]')
+        start_marker = re.compile(f'"\\s*{macro}\\s*" [|}}]')
         pattern = re.compile('([\\w-]+) ?(?:\\||}[ }\\]])')
         end_marker = re.compile('}\\\\n')
         return self.__get_description_list(start_marker, pattern, end_marker)
