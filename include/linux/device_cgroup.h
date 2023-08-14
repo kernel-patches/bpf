@@ -65,3 +65,10 @@ static inline int devcgroup_inode_permission(struct inode *inode, int mask)
 static inline int devcgroup_inode_mknod(int mode, dev_t dev)
 { return 0; }
 #endif
+
+#ifdef CONFIG_CGROUP_BPF
+bool devcgroup_task_is_guarded(struct task_struct *task);
+#else
+static inline bool devcgroup_task_is_guarded(struct task_struct *task)
+{ return false; }
+#endif /* CONFIG_CGROUP_BPF */

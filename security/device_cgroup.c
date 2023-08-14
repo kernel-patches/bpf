@@ -874,3 +874,13 @@ int devcgroup_check_permission(short type, u32 major, u32 minor, short access)
 }
 EXPORT_SYMBOL(devcgroup_check_permission);
 #endif /* defined(CONFIG_CGROUP_DEVICE) || defined(CONFIG_CGROUP_BPF) */
+
+#ifdef CONFIG_CGROUP_BPF
+
+bool devcgroup_task_is_guarded(struct task_struct *task)
+{
+	return (cgroup_bpf_enabled(CGROUP_DEVICE) &&
+		cgroup_bpf_device_guard_enabled(task));
+}
+EXPORT_SYMBOL(devcgroup_task_is_guarded);
+#endif /* CONFIG_CGROUP_BPF */
