@@ -8854,8 +8854,15 @@ static int release_reference(struct bpf_verifier_env *env,
 		return err;
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg->ref_obj_id == ref_obj_id)
-			mark_reg_invalid(env, reg);
+		if (reg->ref_obj_id == ref_obj_id) {
+			if (in_rcu_cs(env) && (reg->type & MEM_ALLOC) && (reg->type & MEM_PERCPU)) {
+				reg->ref_obj_id = 0;
+				reg->type &= ~MEM_ALLOC;
+				reg->type |= MEM_RCU;
+			} else {
+				mark_reg_invalid(env, reg);
+			}
+		}
 	}));
 
 	return 0;
