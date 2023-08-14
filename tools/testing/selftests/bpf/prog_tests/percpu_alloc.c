@@ -2,6 +2,7 @@
 #include <test_progs.h>
 #include "percpu_alloc_array.skel.h"
 #include "percpu_alloc_cgrp_local_storage.skel.h"
+#include "percpu_alloc_nested_special_fields.skel.h"
 
 static void test_array(void)
 {
@@ -107,6 +108,43 @@ close_fd:
 	close(cgroup_fd);
 }
 
+static void test_nested_special_fields(void)
+{
+	struct percpu_alloc_nested_special_fields *skel;
+	int err, cgroup_fd, prog_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+
+	cgroup_fd = test__join_cgroup("/percpu_alloc");
+	if (!ASSERT_GE(cgroup_fd, 0, "join_cgroup /percpu_alloc"))
+		return;
+
+	skel = percpu_alloc_nested_special_fields__open();
+	if (!ASSERT_OK_PTR(skel, "percpu_alloc_nested_special_fields__open"))
+		goto close_fd;
+
+	skel->rodata->nr_cpus = libbpf_num_possible_cpus();
+
+	err = percpu_alloc_nested_special_fields__load(skel);
+	if (!ASSERT_OK(err, "percpu_alloc_nested_special_fields__load"))
+		goto destroy_skel;
+
+	err = percpu_alloc_nested_special_fields__attach(skel);
+	if (!ASSERT_OK(err, "percpu_alloc_nested_special_fields__attach"))
+		goto destroy_skel;
+
+	prog_fd = bpf_program__fd(skel->progs.test_cgrp_local_storage_1);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run nested_special_fields 1-3");
+	ASSERT_EQ(topts.retval, 0, "test_run nested_special_fields 1-3");
+	ASSERT_EQ(skel->bss->cpu0_field_d, 2, "cpu0_field_d");
+	ASSERT_EQ(skel->bss->sum_field_c, 1, "sum_field_c");
+
+destroy_skel:
+	percpu_alloc_nested_special_fields__destroy(skel);
+close_fd:
+	close(cgroup_fd);
+}
+
 void test_percpu_alloc(void)
 {
 	if (test__start_subtest("array"))
@@ -115,4 +153,6 @@ void test_percpu_alloc(void)
 		test_array_sleepable();
 	if (test__start_subtest("cgrp_local_storage"))
 		test_cgrp_local_storage();
+	if (test__start_subtest("nested_special_fields"))
+		test_nested_special_fields();
 }
