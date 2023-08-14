@@ -429,7 +429,7 @@ class NetdevSim:
     def __init__(self, nsimdev, port_index, ifname):
         # In case udev renamed the netdev to according to new schema,
         # check if the name matches the port_index.
-        nsimnamere = re.compile("eni\d+np(\d+)")
+        nsimnamere = re.compile("eni\\d+np(\\d+)")
         match = nsimnamere.match(ifname)
         if match and int(match.groups()[0]) != port_index + 1:
             raise Exception("netdevice name mismatches the expected one")
