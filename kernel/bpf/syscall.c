@@ -627,6 +627,7 @@ void bpf_obj_free_timer(const struct btf_record *rec, void *obj)
 }
 
 extern void __bpf_obj_drop_impl(void *p, const struct btf_record *rec);
+extern void __bpf_percpu_obj_drop_impl(void *p, const struct btf_record *rec);
 
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
@@ -660,13 +661,21 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			if (!btf_is_kernel(field->kptr.btf)) {
 				pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,
 									   field->kptr.btf_id);
-				if (field->type != BPF_KPTR_PERCPU_REF)
+
+				if (field->type == BPF_KPTR_PERCPU_REF) {
+					migrate_disable();
+					__bpf_percpu_obj_drop_impl(xchgd_field, pointee_struct_meta ?
+										pointee_struct_meta->record :
+										NULL);
+					migrate_enable();
+				} else {
 					WARN_ON_ONCE(!pointee_struct_meta);
-				migrate_disable();
-				__bpf_obj_drop_impl(xchgd_field, pointee_struct_meta ?
-								 pointee_struct_meta->record :
-								 NULL);
-				migrate_enable();
+					migrate_disable();
+					__bpf_obj_drop_impl(xchgd_field, pointee_struct_meta ?
+									 pointee_struct_meta->record :
+									 NULL);
+					migrate_enable();
+				}
 			} else {
 				field->kptr.dtor(xchgd_field);
 			}

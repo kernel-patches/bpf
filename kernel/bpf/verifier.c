@@ -304,7 +304,7 @@ struct bpf_kfunc_call_arg_meta {
 	/* arg_{btf,btf_id,owning_ref} are used by kfunc-specific handling,
 	 * generally to pass info about user-defined local kptr types to later
 	 * verification logic
-	 *   bpf_obj_drop
+	 *   bpf_obj_drop/bpf_percpu_obj_drop
 	 *     Record the local kptr type to be drop'd
 	 *   bpf_refcount_acquire (via KF_ARG_PTR_TO_REFCOUNTED_KPTR arg type)
 	 *     Record the local kptr type to be refcount_incr'd and use
@@ -4997,11 +4997,18 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	if (kptr_field->type == BPF_KPTR_UNREF)
 		perm_flags |= PTR_UNTRUSTED;
 
+	if (kptr_field->type == BPF_KPTR_PERCPU_REF)
+		perm_flags |= MEM_PERCPU | MEM_ALLOC;
+
 	if (base_type(reg->type) != PTR_TO_BTF_ID || (type_flag(reg->type) & ~perm_flags))
 		goto bad_type;
 
-	if (!btf_is_kernel(reg->btf)) {
+	if (kptr_field->type != BPF_KPTR_PERCPU_REF && !btf_is_kernel(reg->btf)) {
 		verbose(env, "R%d must point to kernel BTF\n", regno);
+		return -EINVAL;
+	}
+	if (kptr_field->type == BPF_KPTR_PERCPU_REF && btf_is_kernel(reg->btf)) {
+		verbose(env, "R%d must point to prog BTF\n", regno);
 		return -EINVAL;
 	}
 	/* We need to verify reg->type and reg->btf, before accessing reg->btf */
@@ -5084,7 +5091,17 @@ static bool rcu_safe_kptr(const struct btf_field *field)
 {
 	const struct btf_field_kptr *kptr = &field->kptr;
 
-	return field->type == BPF_KPTR_REF && rcu_protected_object(kptr->btf, kptr->btf_id);
+	return field->type == BPF_KPTR_PERCPU_REF ||
+	       (field->type == BPF_KPTR_REF && rcu_protected_object(kptr->btf, kptr->btf_id));
+}
+
+static u32 btf_ld_kptr_type(struct bpf_verifier_env *env, struct btf_field *kptr_field)
+{
+	if (!rcu_safe_kptr(kptr_field) || !in_rcu_cs(env))
+		return PTR_MAYBE_NULL | PTR_UNTRUSTED;
+	if (kptr_field->type != BPF_KPTR_PERCPU_REF)
+		return PTR_MAYBE_NULL | MEM_RCU;
+	return PTR_MAYBE_NULL | MEM_RCU | MEM_PERCPU;
 }
 
 static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
@@ -5110,7 +5127,8 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	/* We only allow loading referenced kptr, since it will be marked as
 	 * untrusted, similar to unreferenced kptr.
 	 */
-	if (class != BPF_LDX && kptr_field->type == BPF_KPTR_REF) {
+	if (class != BPF_LDX &&
+	    (kptr_field->type == BPF_KPTR_REF || kptr_field->type == BPF_KPTR_PERCPU_REF)) {
 		verbose(env, "store to referenced kptr disallowed\n");
 		return -EACCES;
 	}
@@ -5121,10 +5139,7 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
 		mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID, kptr_field->kptr.btf,
-				kptr_field->kptr.btf_id,
-				rcu_safe_kptr(kptr_field) && in_rcu_cs(env) ?
-				PTR_MAYBE_NULL | MEM_RCU :
-				PTR_MAYBE_NULL | PTR_UNTRUSTED);
+				kptr_field->kptr.btf_id, btf_ld_kptr_type(env, kptr_field));
 		/* For mark_ptr_or_null_reg */
 		val_reg->id = ++env->id_gen;
 	} else if (class == BPF_STX) {
@@ -5178,6 +5193,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			switch (field->type) {
 			case BPF_KPTR_UNREF:
 			case BPF_KPTR_REF:
+			case BPF_KPTR_PERCPU_REF:
 				if (src != ACCESS_DIRECT) {
 					verbose(env, "kptr cannot be accessed indirectly by helper\n");
 					return -EACCES;
@@ -7316,7 +7332,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
 		return -EACCES;
 	}
-	if (kptr_field->type != BPF_KPTR_REF) {
+	if (kptr_field->type != BPF_KPTR_REF && kptr_field->type != BPF_KPTR_PERCPU_REF) {
 		verbose(env, "off=%d kptr isn't referenced kptr\n", kptr_off);
 		return -EACCES;
 	}
@@ -7827,8 +7843,10 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	if (base_type(arg_type) == ARG_PTR_TO_MEM)
 		type &= ~DYNPTR_TYPE_FLAG_MASK;
 
-	if (meta->func_id == BPF_FUNC_kptr_xchg && type_is_alloc(type))
+	if (meta->func_id == BPF_FUNC_kptr_xchg && type_is_alloc(type)) {
 		type &= ~MEM_ALLOC;
+		type &= ~MEM_PERCPU;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
@@ -7917,6 +7935,14 @@ found:
 			return -EFAULT;
 		}
 		/* Handled by helper specific checks */
+		break;
+	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_ALLOC:
+		if (meta->func_id != BPF_FUNC_kptr_xchg) {
+			verbose(env, "verifier internal error: unimplemented handling of MEM_PERCPU | MEM_ALLOC\n");
+			return -EFAULT;
+		}
+		if (map_kptr_match_type(env, meta->kptr_field, reg, regno))
+			return -EACCES;
 		break;
 	case PTR_TO_BTF_ID | MEM_PERCPU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
@@ -9885,8 +9911,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (func_id == BPF_FUNC_kptr_xchg) {
 			ret_btf = meta.kptr_field->kptr.btf;
 			ret_btf_id = meta.kptr_field->kptr.btf_id;
-			if (!btf_is_kernel(ret_btf))
+			if (!btf_is_kernel(ret_btf)) {
 				regs[BPF_REG_0].type |= MEM_ALLOC;
+				if (meta.kptr_field->type == BPF_KPTR_PERCPU_REF)
+					regs[BPF_REG_0].type |= MEM_PERCPU;
+			}
 		} else {
 			if (fn->ret_btf_id == BPF_PTR_POISON) {
 				verbose(env, "verifier internal error:");
@@ -10271,6 +10300,8 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
+	KF_bpf_percpu_obj_new_impl,
+	KF_bpf_percpu_obj_drop_impl,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -10291,6 +10322,8 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_percpu_obj_new_impl)
+BTF_ID(func, bpf_percpu_obj_drop_impl)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -10313,6 +10346,8 @@ BTF_ID(func, bpf_dynptr_from_xdp)
 BTF_ID(func, bpf_dynptr_slice)
 BTF_ID(func, bpf_dynptr_slice_rdwr)
 BTF_ID(func, bpf_dynptr_clone)
+BTF_ID(func, bpf_percpu_obj_new_impl)
+BTF_ID(func, bpf_percpu_obj_drop_impl)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -11003,7 +11038,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			}
 			break;
 		case KF_ARG_PTR_TO_ALLOC_BTF_ID:
-			if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
+			if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC) &&
+			    reg->type != (PTR_TO_BTF_ID | MEM_PERCPU | MEM_ALLOC)) {
 				verbose(env, "arg#%d expected pointer to allocated object\n", i);
 				return -EINVAL;
 			}
@@ -11012,7 +11048,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return -EINVAL;
 			}
 			if (meta->btf == btf_vmlinux &&
-			    meta->func_id == special_kfunc_list[KF_bpf_obj_drop_impl]) {
+			    (meta->func_id == special_kfunc_list[KF_bpf_obj_drop_impl] ||
+			     meta->func_id == special_kfunc_list[KF_bpf_percpu_obj_drop_impl])) {
 				meta->arg_btf = reg->btf;
 				meta->arg_btf_id = reg->btf_id;
 			}
@@ -11410,6 +11447,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		/* Only exception is bpf_obj_new_impl */
 		if (meta.btf != btf_vmlinux ||
 		    (meta.func_id != special_kfunc_list[KF_bpf_obj_new_impl] &&
+		     meta.func_id != special_kfunc_list[KF_bpf_percpu_obj_new_impl] &&
 		     meta.func_id != special_kfunc_list[KF_bpf_refcount_acquire_impl])) {
 			verbose(env, "acquire kernel function does not return PTR_TO_BTF_ID\n");
 			return -EINVAL;
@@ -11423,11 +11461,15 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 
 		if (meta.btf == btf_vmlinux && btf_id_set_contains(&special_kfunc_set, meta.func_id)) {
-			if (meta.func_id == special_kfunc_list[KF_bpf_obj_new_impl]) {
+			if (meta.func_id == special_kfunc_list[KF_bpf_obj_new_impl] ||
+			    meta.func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl]) {
 				struct btf *ret_btf;
 				u32 ret_btf_id;
 
-				if (unlikely(!bpf_global_ma_set))
+				if (meta.func_id == special_kfunc_list[KF_bpf_obj_new_impl] && !bpf_global_ma_set)
+					return -ENOMEM;
+
+				if (meta.func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl] && !bpf_global_percpu_ma_set)
 					return -ENOMEM;
 
 				if (((u64)(u32)meta.arg_constant.value) != meta.arg_constant.value) {
@@ -11440,13 +11482,18 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 				/* This may be NULL due to user not supplying a BTF */
 				if (!ret_btf) {
-					verbose(env, "bpf_obj_new requires prog BTF\n");
+					verbose(env, "bpf_obj_new/bpf_percpu_obj_new requires prog BTF\n");
 					return -EINVAL;
 				}
 
 				ret_t = btf_type_by_id(ret_btf, ret_btf_id);
 				if (!ret_t || !__btf_type_is_struct(ret_t)) {
-					verbose(env, "bpf_obj_new type ID argument must be of a struct\n");
+					verbose(env, "bpf_obj_new/bpf_percpu_obj_new type ID argument must be of a struct\n");
+					return -EINVAL;
+				}
+				if (meta.func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl] &&
+				    !__btf_type_is_scalar_struct(env, ret_btf, ret_t, 0)) {
+					verbose(env, "bpf_percpu_obj_new type ID argument must be of a struct of scalars\n");
 					return -EINVAL;
 				}
 
@@ -11454,6 +11501,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC;
 				regs[BPF_REG_0].btf = ret_btf;
 				regs[BPF_REG_0].btf_id = ret_btf_id;
+				if (meta.func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl])
+					regs[BPF_REG_0].type |= MEM_PERCPU;
 
 				insn_aux->obj_new_size = ret_t->size;
 				insn_aux->kptr_struct_meta =
@@ -11594,7 +11643,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].id = ++env->id_gen;
 	} else if (btf_type_is_void(t)) {
 		if (meta.btf == btf_vmlinux && btf_id_set_contains(&special_kfunc_set, meta.func_id)) {
-			if (meta.func_id == special_kfunc_list[KF_bpf_obj_drop_impl]) {
+			if (meta.func_id == special_kfunc_list[KF_bpf_obj_drop_impl] ||
+			    meta.func_id == special_kfunc_list[KF_bpf_percpu_obj_drop_impl]) {
 				insn_aux->kptr_struct_meta =
 					btf_find_struct_meta(meta.arg_btf,
 							     meta.arg_btf_id);
@@ -18266,7 +18316,8 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn->imm = BPF_CALL_IMM(desc->addr);
 	if (insn->off)
 		return 0;
-	if (desc->func_id == special_kfunc_list[KF_bpf_obj_new_impl]) {
+	if (desc->func_id == special_kfunc_list[KF_bpf_obj_new_impl] ||
+	    desc->func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl]) {
 		struct btf_struct_meta *kptr_struct_meta = env->insn_aux_data[insn_idx].kptr_struct_meta;
 		struct bpf_insn addr[2] = { BPF_LD_IMM64(BPF_REG_2, (long)kptr_struct_meta) };
 		u64 obj_new_size = env->insn_aux_data[insn_idx].obj_new_size;
@@ -18277,6 +18328,7 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[3] = *insn;
 		*cnt = 4;
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_obj_drop_impl] ||
+		   desc->func_id == special_kfunc_list[KF_bpf_percpu_obj_drop_impl] ||
 		   desc->func_id == special_kfunc_list[KF_bpf_refcount_acquire_impl]) {
 		struct btf_struct_meta *kptr_struct_meta = env->insn_aux_data[insn_idx].kptr_struct_meta;
 		struct bpf_insn addr[2] = { BPF_LD_IMM64(BPF_REG_2, (long)kptr_struct_meta) };

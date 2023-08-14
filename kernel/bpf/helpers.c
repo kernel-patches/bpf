@@ -1900,6 +1900,29 @@ __bpf_kfunc void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 	return p;
 }
 
+__bpf_kfunc void *bpf_percpu_obj_new_impl(u64 local_type_id__k, void *meta__ign)
+{
+	struct btf_struct_meta *meta = meta__ign;
+	const struct btf_record *rec;
+	u64 size = local_type_id__k;
+	void __percpu *pptr;
+	void *p;
+	int cpu;
+
+	p = bpf_mem_alloc(&bpf_global_percpu_ma, size);
+	if (!p)
+		return NULL;
+	if (meta) {
+		pptr = *((void __percpu **)p);
+		rec = meta->record;
+		for_each_possible_cpu(cpu) {
+			bpf_obj_init(rec, per_cpu_ptr(pptr, cpu));
+		}
+	}
+
+	return p;
+}
+
 /* Must be called under migrate_disable(), as required by bpf_mem_free */
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec)
 {
@@ -1922,6 +1945,30 @@ __bpf_kfunc void bpf_obj_drop_impl(void *p__alloc, void *meta__ign)
 	void *p = p__alloc;
 
 	__bpf_obj_drop_impl(p, meta ? meta->record : NULL);
+}
+
+/* Must be called under migrate_disable(), as required by bpf_mem_free_rcu */
+void __bpf_percpu_obj_drop_impl(void *p, const struct btf_record *rec)
+{
+	void __percpu *pptr;
+	int cpu;
+
+	if (rec) {
+		pptr = *((void __percpu **)p);
+		for_each_possible_cpu(cpu) {
+			bpf_obj_free_fields(rec, per_cpu_ptr(pptr, cpu));
+		}
+	}
+
+	bpf_mem_free_rcu(&bpf_global_percpu_ma, p);
+}
+
+__bpf_kfunc void bpf_percpu_obj_drop_impl(void *p__alloc, void *meta__ign)
+{
+	struct btf_struct_meta *meta = meta__ign;
+	void *p = p__alloc;
+
+	__bpf_percpu_obj_drop_impl(p, meta ? meta->record : NULL);
 }
 
 __bpf_kfunc void *bpf_refcount_acquire_impl(void *p__refcounted_kptr, void *meta__ign)
@@ -2436,7 +2483,9 @@ BTF_SET8_START(generic_btf_ids)
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
 BTF_ID_FLAGS(func, bpf_obj_new_impl, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_percpu_obj_new_impl, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_obj_drop_impl, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_percpu_obj_drop_impl, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_refcount_acquire_impl, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_list_push_front_impl)
 BTF_ID_FLAGS(func, bpf_list_push_back_impl)

@@ -197,7 +197,8 @@ struct btf_field_kptr {
 	struct btf *btf;
 	struct module *module;
 	/* dtor used if btf_is_kernel(btf), otherwise the type is
-	 * program-allocated, dtor is NULL,  and __bpf_obj_drop_impl is used
+	 * program-allocated, dtor is NULL,  and __bpf_obj_drop_impl
+	 * or __bpf_percpu_drop_impl is used
 	 */
 	btf_dtor_kfunc_t dtor;
 	u32 btf_id;
