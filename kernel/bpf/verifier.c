@@ -7848,6 +7848,8 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 		type &= ~MEM_ALLOC;
 		type &= ~MEM_PERCPU;
 	}
+	if (meta->func_id == BPF_FUNC_spin_lock || meta->func_id == BPF_FUNC_spin_unlock)
+		type &= ~MEM_RCU;
 
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
@@ -7929,6 +7931,7 @@ found:
 		}
 		break;
 	}
+	case PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_ALLOC:
 		if (meta->func_id != BPF_FUNC_spin_lock && meta->func_id != BPF_FUNC_spin_unlock &&
 		    meta->func_id != BPF_FUNC_kptr_xchg) {
@@ -8040,6 +8043,7 @@ int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_BTF_ID | MEM_ALLOC:
 	case PTR_TO_BTF_ID | PTR_TRUSTED:
 	case PTR_TO_BTF_ID | MEM_RCU:
+	case PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * its fixed offset must be 0. In the other cases, fixed offset
@@ -10604,8 +10608,8 @@ static int ref_convert_owning_non_owning(struct bpf_verifier_env *env, u32 ref_o
  *	active_lock.ptr = Register's type specific pointer
  *	active_lock.id  = A unique ID for each register pointer value
  *
- * Currently, PTR_TO_MAP_VALUE and PTR_TO_BTF_ID | MEM_ALLOC are the two
- * supported register types.
+ * Currently, PTR_TO_MAP_VALUE, PTR_TO_BTF_ID | MEM_ALLOC and
+ * PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU are the three supported register types.
  *
  * The active_lock.ptr in case of map values is the reg->map_ptr, and in case of
  * allocated objects is the reg->btf pointer.
@@ -10640,6 +10644,7 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 		ptr = reg->map_ptr;
 		break;
 	case PTR_TO_BTF_ID | MEM_ALLOC:
+	case PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU:
 		ptr = reg->btf;
 		break;
 	default:
@@ -11140,7 +11145,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			break;
 		case KF_ARG_PTR_TO_LIST_HEAD:
 			if (reg->type != PTR_TO_MAP_VALUE &&
-			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
+			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC) &&
+			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU)) {
 				verbose(env, "arg#%d expected pointer to map value or allocated object\n", i);
 				return -EINVAL;
 			}
