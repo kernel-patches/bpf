@@ -1816,7 +1816,13 @@ struct bpf_prog_array_item {
 
 struct bpf_prog_array {
 	struct rcu_head rcu;
+	u32 flags;
 	struct bpf_prog_array_item items[];
+};
+
+enum bpf_prog_array_flags {
+	BPF_PROG_ARRAY_F_SLEEPABLE = 1 << 0,
+	BPF_PROG_ARRAY_F_NON_SLEEPABLE = 1 << 1,
 };
 
 struct bpf_empty_prog_array {
