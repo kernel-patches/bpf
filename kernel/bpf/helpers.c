@@ -1537,6 +1537,7 @@ BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, const struct bpf_dynptr_kern 
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		/* Source and destination may possibly overlap, hence use memmove to
 		 * copy the data. E.g. bpf_dynptr_from_mem may create two dynptr
 		 * pointing to overlapping PTR_TO_MAP_VALUE regions.
@@ -1582,6 +1583,7 @@ BPF_CALL_5(bpf_dynptr_write, const struct bpf_dynptr_kern *, dst, u32, offset, v
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		if (flags)
 			return -EINVAL;
 		/* Source and destination may possibly overlap, hence use memmove to
@@ -1634,6 +1636,7 @@ BPF_CALL_3(bpf_dynptr_data, const struct bpf_dynptr_kern *, ptr, u32, offset, u3
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		return (unsigned long)(ptr->data + ptr->offset + offset);
 	case BPF_DYNPTR_TYPE_SKB:
 	case BPF_DYNPTR_TYPE_XDP:
@@ -2261,6 +2264,7 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr_kern *ptr, u32 offset
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		return ptr->data + ptr->offset + offset;
 	case BPF_DYNPTR_TYPE_SKB:
 		if (buffer__opt)
@@ -2429,6 +2433,185 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+/* Create a buffer of the given size for a {set,get}sockopt BPF filter.
+ *
+ * This kfunc is only avaliabe for sleeplabe contexts. The dynptr should be
+ * released by bpf_sockopt_dynptr_install() or bpf_sockopt_release().
+ */
+__bpf_kfunc int bpf_sockopt_dynptr_alloc(struct bpf_sockopt *sopt, int size,
+					 struct bpf_dynptr_kern *ptr__uninit)
+{
+	void *optval;
+	int err;
+
+	bpf_dynptr_set_null(ptr__uninit);
+
+	err = bpf_dynptr_check_size(size);
+	if (err)
+		return err;
+
+	optval = kzalloc(size, GFP_KERNEL);
+	if (!optval)
+		return -ENOMEM;
+
+	bpf_dynptr_init(ptr__uninit, optval,
+			BPF_DYNPTR_TYPE_CGROUP_SOCKOPT, 0, size);
+
+	return size;
+}
+
+/* Install the buffer of the dynptr into the sockopt context.
+ *
+ * This kfunc is only avaliabe for sleeplabe contexts. The dynptr should be
+ * allocated by bpf_sockopt_dynptr_alloc().  The dynptr is invalid after
+ * returning from this function successfully.
+ */
+__bpf_kfunc int bpf_sockopt_dynptr_install(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+
+	if (!(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_REPLACE) ||
+	    bpf_dynptr_get_type(ptr) != BPF_DYNPTR_TYPE_CGROUP_SOCKOPT ||
+	    !ptr->data)
+		return -EINVAL;
+
+	if (sopt_kern->optval == ptr->data &&
+	    !(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER)) {
+		/* This dynptr is initialized by bpf_sockopt_dynptr_from()
+		 * and the optval is not overwritten by
+		 * bpf_sockopt_dynptr_install() yet.
+		 */
+		bpf_dynptr_set_null(ptr);
+		sopt_kern->flags &= ~BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR;
+		return 0;
+	}
+
+	if (sopt_kern->optval &&
+	    !(sopt_kern->flags & (BPF_SOCKOPT_FLAG_OPTVAL_USER |
+				  BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR)))
+		kfree(sopt_kern->optval);
+
+	sopt_kern->optval = ptr->data;
+	sopt_kern->optval_end = ptr->data + __bpf_dynptr_size(ptr);
+	sopt_kern->optlen = __bpf_dynptr_size(ptr);
+	sopt_kern->flags &= ~(BPF_SOCKOPT_FLAG_OPTVAL_USER |
+			      BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR);
+
+	bpf_dynptr_set_null(ptr);
+
+	return 0;
+}
+
+__bpf_kfunc int bpf_sockopt_dynptr_release(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+
+	if (bpf_dynptr_get_type(ptr) != BPF_DYNPTR_TYPE_CGROUP_SOCKOPT ||
+	    !ptr->data)
+		return -EINVAL;
+
+	if (sopt_kern->optval == ptr->data &&
+	    !(sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER))
+		/* This dynptr is initialized by bpf_sockopt_dynptr_from()
+		 * and the optval is not overwritten by
+		 * bpf_sockopt_dynptr_install() yet.
+		 */
+		sopt_kern->flags &= ~BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR;
+	else
+		kfree(ptr->data);
+	bpf_dynptr_set_null(ptr);
+
+	return 0;
+}
+
+/* Initialize a sockopt dynptr from a user or installed optval pointer.
+ *
+ * sopt->optval can be a user pointer or a kernel pointer. A kernel pointer
+ * can be a buffer allocated by the caller of the BPF program or a buffer
+ * installed by other BPF programs through bpf_sockopt_dynptr_install().
+ *
+ * Atmost one dynptr shall be created by this function at any moment, or
+ * it will return -EINVAL. You can create another dypptr by this function
+ * after release the previous one by bpf_sockopt_dynptr_release().
+ *
+ * A dynptr that is initialized when optval is a user pointer is an
+ * exception. In this case, the dynptr will point to a kernel buffer with
+ * the same content as the user buffer. To simplify the code, users should
+ * always make sure having only one dynptr initialized by this function at
+ * any moment.
+ */
+__bpf_kfunc int bpf_sockopt_dynptr_from(struct bpf_sockopt *sopt,
+					struct bpf_dynptr_kern *ptr__uninit,
+					unsigned int size)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+	int err;
+
+	bpf_dynptr_set_null(ptr__uninit);
+
+	if (size > (sopt_kern->optval_end - sopt_kern->optval))
+		return -EINVAL;
+
+	if (size == 0)
+		size = min(sopt_kern->optlen,
+			   (int)(sopt_kern->optval_end - sopt_kern->optval));
+
+	if (sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR)
+		return -EINVAL;
+
+	if (sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER) {
+		err = bpf_sockopt_dynptr_alloc(sopt, sopt_kern->optlen,
+					       ptr__uninit);
+		if (err >= 0)
+			err = copy_from_user(ptr__uninit->data,
+					     sopt_kern->optval,
+					     size);
+		return err;
+	}
+
+	bpf_dynptr_init(ptr__uninit, sopt_kern->optval,
+			BPF_DYNPTR_TYPE_CGROUP_SOCKOPT, 0,
+			size);
+	sopt_kern->flags |= BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR;
+
+	return size;
+}
+
+/**
+ * int bpf_sockopt_dynptr_copy_to(struct bpf_sockopt *sopt,
+ *				  struct bpf_dynptr_kern *ptr)
+ *     Description
+ *             Copy data from *ptr* to *sopt->optval*.
+ *     Return
+ *             >= 0 on success, or a negative error in case of failure.
+ */
+__bpf_kfunc int bpf_sockopt_dynptr_copy_to(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	__u32 size = bpf_dynptr_size(ptr);
+
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+	int ret;
+
+	if (size > (sopt_kern->optval_end - sopt_kern->optval))
+		return -EINVAL;
+
+	if (sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER) {
+		ret = copy_to_user(sopt_kern->optval, ptr->data,
+				   size);
+		if (unlikely(ret))
+			return -EFAULT;
+	} else {
+		/* Use memmove() in case of optval & ptr overlap. */
+		memmove(sopt_kern->optval, ptr->data, size);
+		ret = size;
+	}
+
+	return ret;
+}
+
 __diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
@@ -2494,6 +2677,19 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 	.set   = &common_btf_ids,
 };
 
+BTF_SET8_START(cgroup_common_btf_ids)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_copy_to, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_alloc, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_install, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_release, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_from, KF_SLEEPABLE)
+BTF_SET8_END(cgroup_common_btf_ids)
+
+static const struct btf_kfunc_id_set cgroup_kfunc_set = {
+	.owner	= THIS_MODULE,
+	.set	= &cgroup_common_btf_ids,
+};
+
 static int __init kfunc_init(void)
 {
 	int ret;
@@ -2513,6 +2709,7 @@ static int __init kfunc_init(void)
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCKOPT, &cgroup_kfunc_set);
 	ret = ret ?: register_btf_id_dtor_kfuncs(generic_dtors,
 						  ARRAY_SIZE(generic_dtors),
 						  THIS_MODULE);

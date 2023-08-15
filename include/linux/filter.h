@@ -1347,6 +1347,10 @@ struct bpf_sockopt_kern {
 enum bpf_sockopt_kern_flags {
 	/* optval is a pointer to user space memory */
 	BPF_SOCKOPT_FLAG_OPTVAL_USER    = (1U << 0),
+	/* able to install new optval */
+	BPF_SOCKOPT_FLAG_OPTVAL_REPLACE	= (1U << 1),
+	/* optval is referenced by a dynptr */
+	BPF_SOCKOPT_FLAG_OPTVAL_DYNPTR	= (1U << 2),
 };
 
 int copy_bpf_fprog_from_user(struct sock_fprog *dst, sockptr_t src, int len);
