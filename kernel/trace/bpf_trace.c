@@ -1224,6 +1224,8 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "kfuncs which will be used in BPF programs");
+__diag_ignore_all("-Wmissing-declarations",
+		  "kfuncs which will be used in BPF programs");
 
 /**
  * bpf_lookup_user_key - lookup a key by its serial

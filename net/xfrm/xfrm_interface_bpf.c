@@ -30,6 +30,8 @@ struct bpf_xfrm_info {
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in xfrm_interface BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in xfrm_interface BTF");
 
 /* bpf_skb_get_xfrm_info - Get XFRM metadata
  *

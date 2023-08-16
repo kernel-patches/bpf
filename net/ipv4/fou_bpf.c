@@ -25,6 +25,8 @@ enum bpf_fou_encap_type {
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in BTF");
 
 /* bpf_skb_set_fou_encap - Set FOU encap parameters
  *

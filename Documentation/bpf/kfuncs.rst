@@ -36,9 +36,11 @@ prototype in a header for the wrapper kfunc.
 
 An example is given below::
 
-        /* Disables missing prototype warnings */
+        /* Disables missing prototypes and declarations warnings */
         __diag_push();
         __diag_ignore_all("-Wmissing-prototypes",
+                          "Global kfuncs as their definitions will be in BTF");
+        __diag_ignore_all("-Wmissing-declarations",
                           "Global kfuncs as their definitions will be in BTF");
 
         __bpf_kfunc struct task_struct *bpf_find_get_task_by_vpid(pid_t nr)

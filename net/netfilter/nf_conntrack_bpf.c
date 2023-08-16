@@ -233,6 +233,8 @@ static int _nf_conntrack_btf_struct_access(struct bpf_verifier_log *log,
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in nf_conntrack BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in nf_conntrack BTF");
 
 /* bpf_xdp_ct_alloc - Allocate a new CT entry
  *

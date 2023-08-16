@@ -785,6 +785,8 @@ struct bpf_iter_num_kern {
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in vmlinux BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in vmlinux BTF");
 
 __bpf_kfunc int bpf_iter_num_new(struct bpf_iter_num *it, int start, int end)
 {

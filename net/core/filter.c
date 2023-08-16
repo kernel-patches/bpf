@@ -11727,6 +11727,8 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in vmlinux BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in vmlinux BTF");
 __bpf_kfunc int bpf_dynptr_from_skb(struct sk_buff *skb, u64 flags,
 				    struct bpf_dynptr_kern *ptr__uninit)
 {
@@ -11807,6 +11809,8 @@ late_initcall(bpf_kfunc_init);
 /* Disables missing prototype warnings */
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
+		  "Global functions as their definitions will be in vmlinux BTF");
+__diag_ignore_all("-Wmissing-declarations",
 		  "Global functions as their definitions will be in vmlinux BTF");
 
 /* bpf_sock_destroy: Destroy the given socket with ECONNABORTED error code.

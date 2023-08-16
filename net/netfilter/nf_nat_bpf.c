@@ -15,6 +15,8 @@
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in nf_nat BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in nf_nat BTF");
 
 /* bpf_ct_set_nat_info - Set source or destination nat address
  *

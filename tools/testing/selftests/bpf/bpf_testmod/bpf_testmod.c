@@ -42,6 +42,8 @@ struct bpf_testmod_struct_arg_4 {
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in bpf_testmod.ko BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in bpf_testmod.ko BTF");
 
 noinline int
 bpf_testmod_test_struct_arg_1(struct bpf_testmod_struct_arg_2 a, int b, int c) {

@@ -37,6 +37,8 @@ static bool cpu_valid(u32 cpu)
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global kfuncs as their definitions will be in BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global kfuncs as their definitions will be in BTF");
 
 /**
  * bpf_cpumask_create() - Create a mutable BPF cpumask.

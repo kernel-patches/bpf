@@ -699,6 +699,8 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in vmlinux BTF");
+__diag_ignore_all("-Wmissing-declarations",
+		  "Global functions as their definitions will be in vmlinux BTF");
 
 /**
  * bpf_xdp_metadata_rx_timestamp - Read XDP frame RX timestamp.
