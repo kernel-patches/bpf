@@ -1904,36 +1904,6 @@ static inline void bpf_reset_run_ctx(struct bpf_run_ctx *old_ctx)
 
 typedef u32 (*bpf_prog_run_fn)(const struct bpf_prog *prog, const void *ctx);
 
-static __always_inline u32
-bpf_prog_run_array(const struct bpf_prog_array *array,
-		   const void *ctx, bpf_prog_run_fn run_prog)
-{
-	const struct bpf_prog_array_item *item;
-	const struct bpf_prog *prog;
-	struct bpf_run_ctx *old_run_ctx;
-	struct bpf_trace_run_ctx run_ctx;
-	u32 ret = 1;
-
-	RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
-
-	if (unlikely(!array))
-		return ret;
-
-	run_ctx.is_uprobe = false;
-
-	migrate_disable();
-	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
-	item = &array->items[0];
-	while ((prog = READ_ONCE(item->prog))) {
-		run_ctx.bpf_cookie = item->bpf_cookie;
-		ret &= run_prog(prog, ctx);
-		item++;
-	}
-	bpf_reset_run_ctx(old_run_ctx);
-	migrate_enable();
-	return ret;
-}
-
 /* Notes on RCU design for bpf_prog_arrays containing sleepable programs:
  *
  * We use the tasks_trace rcu flavor read section to protect the bpf_prog_array
@@ -2741,6 +2711,36 @@ static inline void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr)
 {
 }
 #endif /* CONFIG_BPF_SYSCALL */
+
+static __always_inline u32
+bpf_prog_run_array(const struct bpf_prog_array *array,
+		   const void *ctx, bpf_prog_run_fn run_prog)
+{
+	const struct bpf_prog_array_item *item;
+	const struct bpf_prog *prog;
+	struct bpf_run_ctx *old_run_ctx;
+	struct bpf_trace_run_ctx run_ctx;
+	u32 ret = 1;
+
+	RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
+
+	if (unlikely(!array))
+		return ret;
+
+	run_ctx.is_uprobe = false;
+
+	migrate_disable();
+	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+	item = &array->items[0];
+	while ((prog = READ_ONCE(item->prog))) {
+		run_ctx.bpf_cookie = item->bpf_cookie;
+		ret &= run_prog(prog, ctx);
+		item++;
+	}
+	bpf_reset_run_ctx(old_run_ctx);
+	migrate_enable();
+	return ret;
+}
 
 static __always_inline int
 bpf_probe_read_kernel_common(void *dst, u32 size, const void *unsafe_ptr)
