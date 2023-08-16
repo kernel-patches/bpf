@@ -5120,7 +5120,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 
 		err = -errno;
 		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
-		pr_warn("Error in bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
+		pr_debug("bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
 			map->name, cp, err);
 		create_attr.btf_fd = 0;
 		create_attr.btf_key_type_id = 0;
