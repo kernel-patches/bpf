@@ -426,16 +426,6 @@ static void stats_print(struct stats_record *stats_rec,
 }
 
 
-/* Pointer swap trick */
-static inline void swap(struct stats_record **a, struct stats_record **b)
-{
-	struct stats_record *tmp;
-
-	tmp = *a;
-	*a = *b;
-	*b = tmp;
-}
-
 static void stats_poll(int interval, int action, __u32 cfg_opt)
 {
 	struct stats_record *record, *prev;
@@ -445,7 +435,7 @@ static void stats_poll(int interval, int action, __u32 cfg_opt)
 	stats_collect(record);
 
 	while (1) {
-		swap(&prev, &record);
+		swap(prev, record);
 		stats_collect(record);
 		stats_print(record, prev, action, cfg_opt);
 		sleep(interval);

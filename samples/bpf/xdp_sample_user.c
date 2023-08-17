@@ -1484,16 +1484,6 @@ static int sample_signal_cb(void)
 	return 0;
 }
 
-/* Pointer swap trick */
-static void swap(struct stats_record **a, struct stats_record **b)
-{
-	struct stats_record *tmp;
-
-	tmp = *a;
-	*a = *b;
-	*b = tmp;
-}
-
 static int sample_timer_cb(int timerfd, struct stats_record **rec,
 			   struct stats_record **prev)
 {
@@ -1505,7 +1495,7 @@ static int sample_timer_cb(int timerfd, struct stats_record **rec,
 	if (ret < 0)
 		return -errno;
 
-	swap(prev, rec);
+	swap(*prev, *rec);
 	ret = sample_stats_collect(*rec);
 	if (ret < 0)
 		return ret;

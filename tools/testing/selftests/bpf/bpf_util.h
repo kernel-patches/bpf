@@ -8,6 +8,9 @@
 #include <errno.h>
 #include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
 
+#define swap(a, b) \
+	do { typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
+
 static inline unsigned int bpf_num_possible_cpus(void)
 {
 	int possible_cpus = libbpf_num_possible_cpus();
