@@ -14,15 +14,11 @@ static int prepend_dummy_mac(struct __sk_buff *skb)
 	char mac[] = {0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0xf,
 		      0xe, 0xd, 0xc, 0xb, 0xa, 0x08, 0x00};
 
-	if (bpf_skb_change_head(skb, ETH_HLEN, 0)) {
-		bpf_printk("%s: fail to change head", __func__);
+	if (bpf_skb_change_head(skb, ETH_HLEN, 0))
 		return -1;
-	}
 
-	if (bpf_skb_store_bytes(skb, 0, mac, sizeof(mac), 0)) {
-		bpf_printk("%s: fail to update mac", __func__);
+	if (bpf_skb_store_bytes(skb, 0, mac, sizeof(mac), 0))
 		return -1;
-	}
 
 	return 0;
 }
