@@ -76,7 +76,7 @@ struct bpf_reg_state {
 	/* Fixed part of pointer offset, pointer types only */
 	s32 off;
 	union {
-		/* valid when type == PTR_TO_PACKET */
+		/* valid when type == PTR_TO_PACKET or PTR_TO_AUX */
 		int range;
 
 		/* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
@@ -154,8 +154,8 @@ struct bpf_reg_state {
 	s32 s32_max_value; /* maximum possible (s32)value */
 	u32 u32_min_value; /* minimum possible (u32)value */
 	u32 u32_max_value; /* maximum possible (u32)value */
-	/* For PTR_TO_PACKET, used to find other pointers with the same variable
-	 * offset, so they can share range knowledge.
+	/* For PTR_TO_PACKET and PTR_TO_AUX, used to find other pointers
+	 * with the same variable offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
 	 * came from, when one is tested for != NULL.
 	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
