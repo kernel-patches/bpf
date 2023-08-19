@@ -2495,12 +2495,24 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 	case offsetof(struct bpf_sockopt, optval):
 		if (size != sizeof(__u64))
 			return false;
-		info->reg_type = PTR_TO_PACKET;
+		if (prog->aux->sleepable)
+			/* Prohibit access to the memory pointed by optval
+			 * in sleepable programs.
+			 */
+			info->reg_type = PTR_TO_AUX | MEM_USER;
+		else
+			info->reg_type = PTR_TO_AUX;
 		break;
 	case offsetof(struct bpf_sockopt, optval_end):
 		if (size != sizeof(__u64))
 			return false;
-		info->reg_type = PTR_TO_PACKET_END;
+		if (prog->aux->sleepable)
+			/* Prohibit access to the memory pointed by
+			 * optval_end in sleepable programs.
+			 */
+			info->reg_type = PTR_TO_AUX_END | MEM_USER;
+		else
+			info->reg_type = PTR_TO_AUX_END;
 		break;
 	case offsetof(struct bpf_sockopt, retval):
 		if (size != size_default)
