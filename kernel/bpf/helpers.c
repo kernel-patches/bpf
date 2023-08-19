@@ -1519,6 +1519,51 @@ static const struct bpf_func_proto bpf_dynptr_from_mem_proto = {
 	.arg4_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL | MEM_UNINIT,
 };
 
+static int __bpf_sockopt_store_bytes(struct bpf_sockopt_kern *sopt, u32 offset,
+				     void *src, u32 len)
+{
+	int buf_len, err;
+	void *buf;
+
+	if (!src)
+		return 0;
+
+	if (sopt->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER) {
+		if (!(sopt->flags & BPF_SOCKOPT_FLAG_OPTVAL_REPLACE))
+			return copy_to_user(sopt->optval + offset, src, len) ?
+				-EFAULT : 0;
+		buf_len = sopt->optval_end - sopt->optval;
+		buf = kmalloc(buf_len, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+		err = copy_from_user(buf, sopt->optval, buf_len) ? -EFAULT : 0;
+		if (err < 0) {
+			kfree(buf);
+			return err;
+		}
+		sopt->optval = buf;
+		sopt->optval_end = buf + len;
+		sopt->flags &= ~BPF_SOCKOPT_FLAG_OPTVAL_USER;
+		memcpy(buf + offset, src, len);
+	}
+
+	memcpy(sopt->optval + offset, src, len);
+
+	return 0;
+}
+
+static int __bpf_sockopt_load_bytes(struct bpf_sockopt_kern *sopt, u32 offset,
+				    void *dst, u32 len)
+{
+	if (sopt->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER)
+		return copy_from_user(dst, sopt->optval + offset, len) ?
+			-EFAULT : 0;
+
+	memcpy(dst, sopt->optval + offset, len);
+
+	return 0;
+}
+
 BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, const struct bpf_dynptr_kern *, src,
 	   u32, offset, u64, flags)
 {
@@ -1547,6 +1592,8 @@ BPF_CALL_5(bpf_dynptr_read, void *, dst, u32, len, const struct bpf_dynptr_kern 
 		return __bpf_skb_load_bytes(src->data, src->offset + offset, dst, len);
 	case BPF_DYNPTR_TYPE_XDP:
 		return __bpf_xdp_load_bytes(src->data, src->offset + offset, dst, len);
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return __bpf_sockopt_load_bytes(src->data, src->offset + offset, dst, len);
 	default:
 		WARN_ONCE(true, "bpf_dynptr_read: unknown dynptr type %d\n", type);
 		return -EFAULT;
@@ -1597,6 +1644,10 @@ BPF_CALL_5(bpf_dynptr_write, const struct bpf_dynptr_kern *, dst, u32, offset, v
 		if (flags)
 			return -EINVAL;
 		return __bpf_xdp_store_bytes(dst->data, dst->offset + offset, src, len);
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return __bpf_sockopt_store_bytes(dst->data,
+						 dst->offset + offset,
+						 src, len);
 	default:
 		WARN_ONCE(true, "bpf_dynptr_write: unknown dynptr type %d\n", type);
 		return -EFAULT;
@@ -1634,6 +1685,7 @@ BPF_CALL_3(bpf_dynptr_data, const struct bpf_dynptr_kern *, ptr, u32, offset, u3
 	switch (type) {
 	case BPF_DYNPTR_TYPE_LOCAL:
 	case BPF_DYNPTR_TYPE_RINGBUF:
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
 		return (unsigned long)(ptr->data + ptr->offset + offset);
 	case BPF_DYNPTR_TYPE_SKB:
 	case BPF_DYNPTR_TYPE_XDP:
@@ -2278,6 +2330,8 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr_kern *ptr, u32 offset
 		bpf_xdp_copy_buf(ptr->data, ptr->offset + offset, buffer__opt, len, false);
 		return buffer__opt;
 	}
+	case BPF_DYNPTR_TYPE_CGROUP_SOCKOPT:
+		return NULL;
 	default:
 		WARN_ONCE(true, "unknown dynptr type %d\n", type);
 		return NULL;
@@ -2429,6 +2483,80 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+__bpf_kfunc int bpf_sockopt_dynptr_release(struct bpf_sockopt *sopt,
+					   struct bpf_dynptr_kern *ptr)
+{
+	bpf_dynptr_set_null(ptr);
+	return 0;
+}
+
+/* Initialize a sockopt dynptr from a user or installed optval pointer.
+ *
+ * sopt->optval can be a user pointer or a kernel pointer. A kernel pointer
+ * can be a buffer allocated by the caller of the BPF program or a buffer
+ * installed by other BPF programs through bpf_sockopt_dynptr_install().
+ *
+ * Atmost one dynptr shall be created by this function at any moment, or
+ * it will return -EINVAL. You can create another dypptr by this function
+ * after release the previous one by bpf_sockopt_dynptr_release().
+ *
+ * A dynptr that is initialized when optval is a user pointer is an
+ * exception. In this case, the dynptr will point to a kernel buffer with
+ * the same content as the user buffer. To simplify the code, users should
+ * always make sure having only one dynptr initialized by this function at
+ * any moment.
+ */
+__bpf_kfunc int bpf_dynptr_from_sockopt(struct bpf_sockopt *sopt,
+					struct bpf_dynptr_kern *ptr__uninit)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+	unsigned int size;
+
+	size = sopt_kern->optval_end - sopt_kern->optval;
+
+	bpf_dynptr_init(ptr__uninit, sopt,
+			BPF_DYNPTR_TYPE_CGROUP_SOCKOPT, 0,
+			size);
+
+	return size;
+}
+
+__bpf_kfunc int bpf_sockopt_grow_to(struct bpf_sockopt *sopt,
+				    u32 newsize)
+{
+	struct bpf_sockopt_kern *sopt_kern = (struct bpf_sockopt_kern *)sopt;
+	void *newoptval;
+	int err;
+
+	if (newsize > DYNPTR_MAX_SIZE)
+		return -EINVAL;
+
+	if (newsize <= sopt_kern->optlen)
+		return 0;
+
+	if (sopt_kern->flags & BPF_SOCKOPT_FLAG_OPTVAL_USER) {
+		newoptval = kmalloc(newsize, GFP_KERNEL);
+		if (!newoptval)
+			return -ENOMEM;
+		err = copy_from_user(newoptval, sopt_kern->optval,
+				     sopt_kern->optval_end - sopt_kern->optval);
+		if (err < 0) {
+			kfree(newoptval);
+			return err;
+		}
+		sopt_kern->flags &= ~BPF_SOCKOPT_FLAG_OPTVAL_USER;
+	} else {
+		newoptval = krealloc(sopt_kern->optval, newsize, GFP_KERNEL);
+		if (!newoptval)
+			return -ENOMEM;
+	}
+
+	sopt_kern->optval = newoptval;
+	sopt_kern->optval_end = newoptval + newsize;
+
+	return 0;
+}
+
 __diag_pop();
 
 BTF_SET8_START(generic_btf_ids)
@@ -2494,6 +2622,17 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 	.set   = &common_btf_ids,
 };
 
+BTF_SET8_START(cgroup_common_btf_ids)
+BTF_ID_FLAGS(func, bpf_sockopt_dynptr_release, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_dynptr_from_sockopt, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_sockopt_grow_to, KF_SLEEPABLE)
+BTF_SET8_END(cgroup_common_btf_ids)
+
+static const struct btf_kfunc_id_set cgroup_kfunc_set = {
+	.owner	= THIS_MODULE,
+	.set	= &cgroup_common_btf_ids,
+};
+
 static int __init kfunc_init(void)
 {
 	int ret;
@@ -2513,6 +2652,7 @@ static int __init kfunc_init(void)
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCKOPT, &cgroup_kfunc_set);
 	ret = ret ?: register_btf_id_dtor_kfuncs(generic_dtors,
 						  ARRAY_SIZE(generic_dtors),
 						  THIS_MODULE);

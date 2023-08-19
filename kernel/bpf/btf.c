@@ -217,6 +217,7 @@ enum btf_kfunc_hook {
 	BTF_KFUNC_HOOK_SOCKET_FILTER,
 	BTF_KFUNC_HOOK_LWT,
 	BTF_KFUNC_HOOK_NETFILTER,
+	BTF_KFUNC_HOOK_CGROUP_SOCKOPT,
 	BTF_KFUNC_HOOK_MAX,
 };
 
@@ -7846,6 +7847,8 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 		return BTF_KFUNC_HOOK_LWT;
 	case BPF_PROG_TYPE_NETFILTER:
 		return BTF_KFUNC_HOOK_NETFILTER;
+	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
+		return BTF_KFUNC_HOOK_CGROUP_SOCKOPT;
 	default:
 		return BTF_KFUNC_HOOK_MAX;
 	}
