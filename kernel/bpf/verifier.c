@@ -7745,7 +7745,18 @@ found:
 			verbose(env, "verifier internal error: unimplemented handling of MEM_ALLOC\n");
 			return -EFAULT;
 		}
-		/* Handled by helper specific checks */
+		if (meta->func_id == BPF_FUNC_kptr_xchg) {
+			struct btf_field *kptr_field = meta->kptr_field;
+
+			if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
+						  kptr_field->kptr.btf, kptr_field->kptr.btf_id,
+						  true)) {
+				verbose(env, "R%d is of type %s but %s is expected\n",
+					regno, btf_type_name(reg->btf, reg->btf_id),
+					btf_type_name(kptr_field->kptr.btf, kptr_field->kptr.btf_id));
+				return -EACCES;
+			}
+		}
 		break;
 	case PTR_TO_BTF_ID | MEM_PERCPU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
