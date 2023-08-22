@@ -6,6 +6,7 @@
 #include <linux/irq_work.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
+#include <linux/preempt.h>
 #include <asm/local.h>
 
 /* Any context (including NMI) BPF specific memory allocator.
@@ -725,6 +726,7 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	 * Use per-cpu 'active' counter to order free_list access between
 	 * unit_alloc/unit_free/bpf_mem_refill.
 	 */
+	preempt_disable_notrace();
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
 		llnode = __llist_del_first(&c->free_llist);
@@ -740,6 +742,12 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 
 	if (cnt < c->low_watermark)
 		irq_work_raise(c);
+	/* Enable preemption after the enqueue of irq work completes,
+	 * so free_llist may be refilled by irq work before other task
+	 * preempts current task.
+	 */
+	preempt_enable_notrace();
+
 	return llnode;
 }
 
