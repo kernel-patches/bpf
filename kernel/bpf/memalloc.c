@@ -769,6 +769,7 @@ static void notrace unit_free(struct bpf_mem_cache *c, void *ptr)
 	 */
 	c->tgt = *(struct bpf_mem_cache **)llnode;
 
+	preempt_disable_notrace();
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
 		__llist_add(llnode, &c->free_llist);
@@ -788,6 +789,7 @@ static void notrace unit_free(struct bpf_mem_cache *c, void *ptr)
 	if (cnt > c->high_watermark)
 		/* free few objects from current cpu into global kmalloc pool */
 		irq_work_raise(c);
+	preempt_enable_notrace();
 }
 
 static void notrace unit_free_rcu(struct bpf_mem_cache *c, void *ptr)
@@ -797,6 +799,7 @@ static void notrace unit_free_rcu(struct bpf_mem_cache *c, void *ptr)
 
 	c->tgt = *(struct bpf_mem_cache **)llnode;
 
+	preempt_disable_notrace();
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
 		if (__llist_add(llnode, &c->free_by_rcu))
@@ -809,6 +812,7 @@ static void notrace unit_free_rcu(struct bpf_mem_cache *c, void *ptr)
 
 	if (!atomic_read(&c->call_rcu_in_progress))
 		irq_work_raise(c);
+	preempt_enable_notrace();
 }
 
 /* Called from BPF program or from sys_bpf syscall.
