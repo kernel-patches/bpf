@@ -712,19 +712,6 @@ static void veth_xdp_rcv_bulk_skb(struct veth_rq *rq, void **frames,
 	}
 }
 
-static void veth_xdp_get(struct xdp_buff *xdp)
-{
-	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
-	int i;
-
-	get_page(virt_to_page(xdp->data));
-	if (likely(!xdp_buff_has_frags(xdp)))
-		return;
-
-	for (i = 0; i < sinfo->nr_frags; i++)
-		__skb_frag_ref(&sinfo->frags[i]);
-}
-
 static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 					struct xdp_buff *xdp,
 					struct sk_buff **pskb)
@@ -836,7 +823,7 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	struct veth_xdp_buff vxbuf;
 	struct xdp_buff *xdp = &vxbuf.xdp;
 	u32 act, metalen;
-	int off;
+	int off, err;
 
 	skb_prepare_for_gro(skb);
 
@@ -859,30 +846,10 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 
 	switch (act) {
 	case XDP_PASS:
-		break;
 	case XDP_TX:
-		veth_xdp_get(xdp);
-		consume_skb(skb);
-		xdp->rxq->mem = rq->xdp_mem;
-		if (unlikely(veth_xdp_tx(rq, xdp, bq) < 0)) {
-			trace_xdp_exception(rq->dev, xdp_prog, act);
-			stats->rx_drops++;
-			goto err_xdp;
-		}
-		stats->xdp_tx++;
-		rcu_read_unlock();
-		goto xdp_xmit;
 	case XDP_REDIRECT:
-		veth_xdp_get(xdp);
-		consume_skb(skb);
-		xdp->rxq->mem = rq->xdp_mem;
-		if (xdp_do_redirect(rq->dev, xdp, xdp_prog)) {
-			stats->rx_drops++;
-			goto err_xdp;
-		}
-		stats->xdp_redirect++;
-		rcu_read_unlock();
-		goto xdp_xmit;
+		/* Postpone actions to after potential SKB geometry update */
+		break;
 	default:
 		bpf_warn_invalid_xdp_action(rq->dev, xdp_prog, act);
 		fallthrough;
@@ -893,7 +860,6 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 		stats->xdp_drops++;
 		goto xdp_drop;
 	}
-	rcu_read_unlock();
 
 	/* check if bpf_xdp_adjust_head was used */
 	off = xdp->data - orig_data;
@@ -918,11 +884,32 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	else
 		skb->data_len = 0;
 
-	skb->protocol = eth_type_trans(skb, rq->dev);
-
 	metalen = xdp->data - xdp->data_meta;
 	if (metalen)
 		skb_metadata_set(skb, metalen);
+
+	switch (act) {
+	case XDP_PASS:
+		/* This skb_pull's off mac_len, __skb_push'ed above */
+		skb->protocol = eth_type_trans(skb, rq->dev);
+		break;
+	case XDP_REDIRECT:
+		err = xdp_do_generic_redirect(rq->dev, skb, xdp, xdp_prog);
+		if (unlikely(err)) {
+			trace_xdp_exception(rq->dev, xdp_prog, act);
+			goto xdp_drop;
+		}
+		stats->xdp_redirect++;
+		rcu_read_unlock();
+		goto xdp_xmit;
+	case XDP_TX:
+		/* TODO: this can be optimized to be veth specific */
+		generic_xdp_tx(skb, xdp_prog);
+		stats->xdp_tx++;
+		rcu_read_unlock();
+		goto xdp_xmit;
+	}
+	rcu_read_unlock();
 out:
 	return skb;
 drop:
@@ -930,10 +917,6 @@ drop:
 xdp_drop:
 	rcu_read_unlock();
 	kfree_skb(skb);
-	return NULL;
-err_xdp:
-	rcu_read_unlock();
-	xdp_return_buff(xdp);
 xdp_xmit:
 	return NULL;
 }
