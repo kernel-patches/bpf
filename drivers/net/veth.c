@@ -896,12 +896,13 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	rcu_read_unlock();
 
 	/* check if bpf_xdp_adjust_head was used */
-	off = orig_data - xdp->data;
-	if (off > 0)
-		__skb_push(skb, off);
-	else if (off < 0)
-		__skb_pull(skb, -off);
-
+	off = xdp->data - orig_data;
+	if (off) {
+		if (off > 0)
+			__skb_pull(skb, off);
+		else if (off < 0)
+			__skb_push(skb, -off);
+	}
 	skb_reset_mac_header(skb);
 
 	/* check if bpf_xdp_adjust_tail was used */
