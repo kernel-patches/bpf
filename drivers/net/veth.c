@@ -1649,6 +1649,7 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 		if (!old_prog) {
 			peer->hw_features &= ~NETIF_F_GSO_SOFTWARE;
 			peer->max_mtu = max_mtu;
+			veth_set_rx_headroom(dev, XDP_PACKET_HEADROOM);
 		}
 
 		xdp_features_set_redirect_target(peer, true);
@@ -1666,6 +1667,7 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 				peer->hw_features |= NETIF_F_GSO_SOFTWARE;
 				peer->max_mtu = ETH_MAX_MTU;
 			}
+			veth_set_rx_headroom(dev, -1);
 		}
 		bpf_prog_put(old_prog);
 	}
