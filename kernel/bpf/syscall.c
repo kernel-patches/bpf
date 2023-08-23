@@ -2164,8 +2164,37 @@ void bpf_prog_put(struct bpf_prog *prog)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_put);
 
+/* Whether this program type, when attached, take a uref on prog array maps */
+static bool bpf_prog_should_pin_uref(enum bpf_prog_type type)
+{
+	switch (type) {
+	case BPF_PROG_TYPE_SCHED_CLS:
+	case BPF_PROG_TYPE_SCHED_ACT:
+	case BPF_PROG_TYPE_XDP:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void __bpf_prog_add_prog_array_urefs(struct bpf_prog *prog, s64 cnt)
+{
+	struct bpf_map *map;
+	u32 i;
+
+	mutex_lock(&prog->aux->used_maps_mutex);
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		map = prog->aux->used_maps[i];
+		if (IS_FD_PROG_ARRAY(map))
+			atomic64_add(cnt, &map->usercnt);
+	}
+	mutex_unlock(&prog->aux->used_maps_mutex);
+}
+
 void bpf_prog_put_dev(struct bpf_prog *prog)
 {
+	if (bpf_prog_should_pin_uref(prog->type))
+		__bpf_prog_add_prog_array_urefs(prog, -1);
 	bpf_prog_put(prog);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_put_dev);
@@ -2366,7 +2395,16 @@ struct bpf_prog *bpf_prog_get(u32 ufd)
 struct bpf_prog *bpf_prog_get_type_dev(u32 ufd, enum bpf_prog_type type,
 				       bool attach_drv)
 {
-	return __bpf_prog_get(ufd, &type, attach_drv);
+	struct bpf_prog *prog;
+
+	prog = __bpf_prog_get(ufd, &type, attach_drv);
+	if (IS_ERR(prog))
+		goto out;
+
+	if (bpf_prog_should_pin_uref(type))
+		__bpf_prog_add_prog_array_urefs(prog, 1);
+out:
+	return prog;
 }
 EXPORT_SYMBOL_GPL(bpf_prog_get_type_dev);
 
