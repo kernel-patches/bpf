@@ -53,7 +53,7 @@ static inline void __fprobe_handler(unsigned long ip, unsigned long parent_ip,
 		if (ret)
 			rethook_recycle(rh);
 		else
-			rethook_hook(rh, ftrace_get_regs(fregs), true);
+			rethook_hook(rh, fregs, true);
 	}
 }
 
@@ -120,7 +120,7 @@ recursion_unlock:
 }
 
 static void fprobe_exit_handler(struct rethook_node *rh, void *data,
-				unsigned long ret_ip, struct pt_regs *regs)
+				unsigned long ret_ip, struct ftrace_regs *fregs)
 {
 	struct fprobe *fp = (struct fprobe *)data;
 	struct fprobe_rethook_node *fpr;
@@ -141,7 +141,7 @@ static void fprobe_exit_handler(struct rethook_node *rh, void *data,
 		return;
 	}
 
-	fp->exit_handler(fp, fpr->entry_ip, ret_ip, regs,
+	fp->exit_handler(fp, fpr->entry_ip, ret_ip, fregs,
 			 fp->entry_data_size ? (void *)fpr->data : NULL);
 	ftrace_test_recursion_unlock(bit);
 }
