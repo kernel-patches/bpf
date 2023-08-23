@@ -2164,6 +2164,12 @@ void bpf_prog_put(struct bpf_prog *prog)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_put);
 
+void bpf_prog_put_dev(struct bpf_prog *prog)
+{
+	bpf_prog_put(prog);
+}
+EXPORT_SYMBOL_GPL(bpf_prog_put_dev);
+
 static int bpf_prog_release(struct inode *inode, struct file *filp)
 {
 	struct bpf_prog *prog = filp->private_data;

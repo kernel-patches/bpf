@@ -212,7 +212,7 @@ static void dev_map_free(struct bpf_map *map)
 			hlist_for_each_entry_safe(dev, next, head, index_hlist) {
 				hlist_del_rcu(&dev->index_hlist);
 				if (dev->xdp_prog)
-					bpf_prog_put(dev->xdp_prog);
+					bpf_prog_put_dev(dev->xdp_prog);
 				dev_put(dev->dev);
 				kfree(dev);
 			}
@@ -228,7 +228,7 @@ static void dev_map_free(struct bpf_map *map)
 				continue;
 
 			if (dev->xdp_prog)
-				bpf_prog_put(dev->xdp_prog);
+				bpf_prog_put_dev(dev->xdp_prog);
 			dev_put(dev->dev);
 			kfree(dev);
 		}
@@ -800,7 +800,7 @@ static void __dev_map_entry_free(struct rcu_head *rcu)
 
 	dev = container_of(rcu, struct bpf_dtab_netdev, rcu);
 	if (dev->xdp_prog)
-		bpf_prog_put(dev->xdp_prog);
+		bpf_prog_put_dev(dev->xdp_prog);
 	dev_put(dev->dev);
 	kfree(dev);
 }
@@ -884,7 +884,7 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 
 	return dev;
 err_put_prog:
-	bpf_prog_put(prog);
+	bpf_prog_put_dev(prog);
 err_put_dev:
 	dev_put(dev->dev);
 err_out:

@@ -258,7 +258,7 @@ static int cls_bpf_init(struct tcf_proto *tp)
 static void cls_bpf_free_parms(struct cls_bpf_prog *prog)
 {
 	if (cls_bpf_is_ebpf(prog))
-		bpf_prog_put(prog->filter);
+		bpf_prog_put_dev(prog->filter);
 	else
 		bpf_prog_destroy(prog->filter);
 
@@ -391,7 +391,7 @@ static int cls_bpf_prog_from_efd(struct nlattr **tb, struct cls_bpf_prog *prog,
 	if (tb[TCA_BPF_NAME]) {
 		name = nla_memdup(tb[TCA_BPF_NAME], GFP_KERNEL);
 		if (!name) {
-			bpf_prog_put(fp);
+			bpf_prog_put_dev(fp);
 			return -ENOMEM;
 		}
 	}

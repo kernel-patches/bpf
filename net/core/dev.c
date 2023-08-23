@@ -5676,7 +5676,7 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 	case XDP_SETUP_PROG:
 		rcu_assign_pointer(dev->xdp_prog, new);
 		if (old)
-			bpf_prog_put(old);
+			bpf_prog_put_dev(old);
 
 		if (old && !new) {
 			static_branch_dec(&generic_xdp_needed_key);
@@ -9167,7 +9167,7 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 	err = bpf_op(dev, &xdp);
 	if (err) {
 		if (prog)
-			bpf_prog_put(prog);
+			bpf_prog_put_dev(prog);
 		return err;
 	}
 
@@ -9202,7 +9202,7 @@ static void dev_xdp_uninstall(struct net_device *dev)
 		if (link)
 			link->dev = NULL;
 		else
-			bpf_prog_put(prog);
+			bpf_prog_put_dev(prog);
 
 		dev_xdp_set_link(dev, mode, NULL);
 	}
@@ -9326,7 +9326,7 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 	else
 		dev_xdp_set_prog(dev, mode, new_prog);
 	if (cur_prog)
-		bpf_prog_put(cur_prog);
+		bpf_prog_put_dev(cur_prog);
 
 	return 0;
 }
@@ -9445,7 +9445,7 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 
 	if (old_prog == new_prog) {
 		/* no-op, don't disturb drivers */
-		bpf_prog_put(new_prog);
+		bpf_prog_put_dev(new_prog);
 		goto out_unlock;
 	}
 
@@ -9457,7 +9457,7 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 		goto out_unlock;
 
 	old_prog = xchg(&link->prog, new_prog);
-	bpf_prog_put(old_prog);
+	bpf_prog_put_dev(old_prog);
 
 out_unlock:
 	rtnl_unlock();
@@ -9568,9 +9568,9 @@ int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 
 err_out:
 	if (err && new_prog)
-		bpf_prog_put(new_prog);
+		bpf_prog_put_dev(new_prog);
 	if (old_prog)
-		bpf_prog_put(old_prog);
+		bpf_prog_put_dev(old_prog);
 	return err;
 }
 
