@@ -79,12 +79,15 @@
 #
 # List available tests
 #   ./test_xsk.sh -l
+#
+# Run a specific test from the test suite
+#   sudo ./test_xsk.sh -t TEST_NAME
 
 . xsk_prereqs.sh
 
 ETH=""
 
-while getopts "vi:dm:l" flag
+while getopts "vi:dm:lt:" flag
 do
 	case "${flag}" in
 		v) verbose=1;;
@@ -92,6 +95,7 @@ do
 		i) ETH=${OPTARG};;
 		m) XSKTEST_MODE=${OPTARG};;
 		l) list=1;;
+		t) XSKTEST_TEST=${OPTARG};;
 	esac
 done
 
@@ -168,6 +172,10 @@ fi
 
 if [ -n "$XSKTEST_MODE" ]; then
 	ARGS+="-m ${XSKTEST_MODE} "
+fi
+
+if [ -n "$XSKTEST_TEST" ]; then
+	ARGS+="-t ${XSKTEST_TEST} "
 fi
 
 retval=$?
