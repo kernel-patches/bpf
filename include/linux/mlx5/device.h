@@ -908,7 +908,7 @@ static inline bool cqe_is_tunneled(struct mlx5_cqe64 *cqe)
 	return cqe->tls_outer_l3_tunneled & 0x1;
 }
 
-static inline u8 get_cqe_tls_offload(struct mlx5_cqe64 *cqe)
+static inline u8 get_cqe_tls_offload(const struct mlx5_cqe64 *cqe)
 {
 	return (cqe->tls_outer_l3_tunneled >> 3) & 0x3;
 }

@@ -506,4 +506,14 @@ static inline struct mlx5e_mpw_info *mlx5e_get_mpw_info(struct mlx5e_rq *rq, int
 
 	return (struct mlx5e_mpw_info *)((char *)rq->mpwqe.info + array_size(i, isz));
 }
+
+static inline u8 get_ip_proto(void *data, int network_depth, __be16 proto)
+{
+	void *ip_p = data + network_depth;
+
+	return (proto == htons(ETH_P_IP)) ? ((struct iphdr *)ip_p)->protocol :
+					    ((struct ipv6hdr *)ip_p)->nexthdr;
+}
+
+#define short_frame(size) ((size) <= ETH_ZLEN + ETH_FCS_LEN)
 #endif
