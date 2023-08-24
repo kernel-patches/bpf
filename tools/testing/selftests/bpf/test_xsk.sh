@@ -88,14 +88,12 @@
 
 . xsk_prereqs.sh
 
-ETH=""
-
 while getopts "vi:dm:lt:h" flag
 do
 	case "${flag}" in
 		v) verbose=1;;
 		d) debug=1;;
-		i) ETH=${OPTARG};;
+		i) XSKTEST_ETH=${OPTARG};;
 		m) XSKTEST_MODE=${OPTARG};;
 		l) list=1;;
 		t) XSKTEST_TEST=${OPTARG};;
@@ -157,9 +155,9 @@ if [[ $help -eq 1 ]]; then
         exit
 fi
 
-if [ ! -z $ETH ]; then
-	VETH0=${ETH}
-	VETH1=${ETH}
+if [ -n "$XSKTEST_ETH" ]; then
+	VETH0=${XSKTEST_ETH}
+	VETH1=${XSKTEST_ETH}
 else
 	validate_root_exec
 	validate_veth_support ${VETH0}
@@ -203,10 +201,10 @@ fi
 
 exec_xskxceiver
 
-if [ -z $ETH ]; then
+if [ -z $XSKTEST_ETH ]; then
 	cleanup_exit ${VETH0} ${VETH1}
 else
-	cleanup_iface ${ETH} ${MTU}
+	cleanup_iface ${XSKTEST_ETH} ${MTU}
 fi
 
 if [[ $list -eq 1 ]]; then
@@ -216,17 +214,17 @@ fi
 TEST_NAME="XSK_SELFTESTS_${VETH0}_BUSY_POLL"
 busy_poll=1
 
-if [ -z $ETH ]; then
+if [ -z $XSKTEST_ETH ]; then
 	setup_vethPairs
 fi
 exec_xskxceiver
 
 ## END TESTS
 
-if [ -z $ETH ]; then
+if [ -z $XSKTEST_ETH ]; then
 	cleanup_exit ${VETH0} ${VETH1}
 else
-	cleanup_iface ${ETH} ${MTU}
+	cleanup_iface ${XSKTEST_ETH} ${MTU}
 fi
 
 failures=0
