@@ -237,7 +237,13 @@ static int64_t ringbuf_process_ring(struct ring *r)
 	do {
 		got_new_data = false;
 		prod_pos = smp_load_acquire(r->producer_pos);
-		while (cons_pos < prod_pos) {
+
+		/* Check if there's data available by computing the signed delta
+		 * between cons_pos and prod_pos; a negative delta indicates that the
+		 * consumer has not caught up. This formulation is robust to prod_pos
+		 * wrapping around.
+		 */
+		while ((long)(cons_pos - prod_pos) < 0) {
 			len_ptr = r->data + (cons_pos & r->mask);
 			len = smp_load_acquire(len_ptr);
 
@@ -482,8 +488,7 @@ void user_ring_buffer__submit(struct user_ring_buffer *rb, void *sample)
 void *user_ring_buffer__reserve(struct user_ring_buffer *rb, __u32 size)
 {
 	__u32 avail_size, total_size, max_size;
-	/* 64-bit to avoid overflow in case of extreme application behavior */
-	__u64 cons_pos, prod_pos;
+	unsigned long cons_pos, prod_pos;
 	struct ringbuf_hdr *hdr;
 
 	/* The top two bits are used as special flags */
@@ -498,6 +503,11 @@ void *user_ring_buffer__reserve(struct user_ring_buffer *rb, __u32 size)
 	prod_pos = smp_load_acquire(rb->producer_pos);
 
 	max_size = rb->mask + 1;
+
+	/* Note that this formulation is valid in the face of overflow of
+	 * prod_pos so long as the delta between prod_pos and cons_pos is
+	 * no greater than max_size.
+	 */
 	avail_size = max_size - (prod_pos - cons_pos);
 	/* Round up total size to a multiple of 8. */
 	total_size = (size + BPF_RINGBUF_HDR_SZ + 7) / 8 * 8;

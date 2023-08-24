@@ -658,7 +658,7 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 {
 	int err;
 	u32 hdr_len, sample_len, total_len, flags, *hdr;
-	u64 cons_pos, prod_pos;
+	unsigned long cons_pos, prod_pos;
 
 	/* Synchronizes with smp_store_release() in user-space producer. */
 	prod_pos = smp_load_acquire(&rb->producer_pos);
@@ -667,7 +667,12 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 
 	/* Synchronizes with smp_store_release() in __bpf_user_ringbuf_sample_release() */
 	cons_pos = smp_load_acquire(&rb->consumer_pos);
-	if (cons_pos >= prod_pos)
+
+	/* Check if there's data available by computing the signed delta between
+	 * cons_pos and prod_pos; a negative delta indicates that the consumer has
+	 * not caught up. This formulation is robust to prod_pos wrapping around.
+	 */
+	if ((long)(cons_pos - prod_pos) >= 0)
 		return -ENODATA;
 
 	hdr = (u32 *)((uintptr_t)rb->data + (uintptr_t)(cons_pos & rb->mask));
@@ -711,7 +716,7 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 
 static void __bpf_user_ringbuf_sample_release(struct bpf_ringbuf *rb, size_t size, u64 flags)
 {
-	u64 consumer_pos;
+	unsigned long consumer_pos;
 	u32 rounded_size = round_up(size + BPF_RINGBUF_HDR_SZ, 8);
 
 	/* Using smp_load_acquire() is unnecessary here, as the busy-bit
