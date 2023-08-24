@@ -3024,7 +3024,12 @@ union bpf_attr {
  * 		egress interfaces can be used for redirection. The
  * 		**BPF_F_INGRESS** value in *flags* is used to make the
  * 		distinction (ingress path is selected if the flag is present,
- * 		egress path otherwise). This is the only flag supported for now.
+ * 		egress path otherwise). The **BPF_F_PERMANENT** value in
+ *		*flags* is used to indicates whether the eBPF result is
+ *		permanently (please note that, BPF_F_PERMANENT does not work with
+ *		msg_apply_bytes() and msg_cork_bytes(), if msg_apply_bytes() or
+ *		msg_cork_bytes() is configured, the BPF_F_PERMANENT function is
+ *		automatically disabled).
  * 	Return
  * 		**SK_PASS** on success, or **SK_DROP** on error.
  *
@@ -3296,7 +3301,12 @@ union bpf_attr {
  *		egress interfaces can be used for redirection. The
  *		**BPF_F_INGRESS** value in *flags* is used to make the
  *		distinction (ingress path is selected if the flag is present,
- *		egress path otherwise). This is the only flag supported for now.
+ *		egress path otherwise). The **BPF_F_PERMANENT** value in
+ *		*flags* is used to indicates whether the eBPF result is
+ *		permanently (please note that, BPF_F_PERMANENT does not work with
+ *		msg_apply_bytes() and msg_cork_bytes(), if msg_apply_bytes() or
+ *		msg_cork_bytes() is configured, the BPF_F_PERMANENT function is
+ *		automatically disabled).
  *	Return
  *		**SK_PASS** on success, or **SK_DROP** on error.
  *
@@ -5897,6 +5907,7 @@ enum {
 /* BPF_FUNC_clone_redirect and BPF_FUNC_redirect flags. */
 enum {
 	BPF_F_INGRESS			= (1ULL << 0),
+	BPF_F_PERMANENT			= (1ULL << 1),
 };
 
 /* BPF_FUNC_skb_set_tunnel_key and BPF_FUNC_skb_get_tunnel_key flags. */

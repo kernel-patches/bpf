@@ -885,6 +885,11 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 			goto out;
 		}
 		psock->redir_ingress = sk_msg_to_ingress(msg);
+		if (!msg->apply_bytes && !msg->cork_bytes)
+			psock->redir_permanent =
+				msg->flags & BPF_F_PERMANENT;
+		else
+			psock->redir_permanent = false;
 		psock->sk_redir = msg->sk_redir;
 		sock_hold(psock->sk_redir);
 	}
