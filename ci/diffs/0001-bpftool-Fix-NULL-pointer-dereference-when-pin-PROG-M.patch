@@ -1,0 +1,45 @@
+From 0dd340f3549863e1289a872057743c9a177d1e3f Mon Sep 17 00:00:00 2001
+From: Pu Lehui <pulehui@huawei.com>
+Date: Wed, 2 Nov 2022 16:40:34 +0800
+Subject: [PATCH 1/2] bpftool: Fix NULL pointer dereference when pin {PROG,
+ MAP, LINK} without FILE
+
+When using bpftool to pin {PROG, MAP, LINK} without FILE,
+segmentation fault will occur. The reson is that the lack
+of FILE will cause strlen to trigger NULL pointer dereference.
+The corresponding stacktrace is shown below:
+
+do_pin
+  do_pin_any
+    do_pin_fd
+      mount_bpffs_for_pin
+        strlen(name) <- NULL pointer dereference
+
+Fix it by adding validation to the common process.
+
+Fixes: 75a1e792c335 ("tools: bpftool: Allow all prog/map handles for pinning objects")
+Signed-off-by: Pu Lehui <pulehui@huawei.com>
+Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+Reviewed-by: Quentin Monnet <quentin@isovalent.com>
+Link: https://lore.kernel.org/bpf/20221102084034.3342995-1-pulehui@huaweicloud.com
+---
+ tools/bpf/bpftool/common.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/tools/bpf/bpftool/common.c b/tools/bpf/bpftool/common.c
+index e4d33bc8bbbf..653c130a0aaa 100644
+--- a/tools/bpf/bpftool/common.c
++++ b/tools/bpf/bpftool/common.c
+@@ -302,6 +302,9 @@ int do_pin_any(int argc, char **argv, int (*get_fd)(int *, char ***))
+ 	int err;
+ 	int fd;
+ 
++	if (!REQ_ARGS(3))
++		return -EINVAL;
++
+ 	fd = get_fd(&argc, &argv);
+ 	if (fd < 0)
+ 		return fd;
+-- 
+2.30.2
+

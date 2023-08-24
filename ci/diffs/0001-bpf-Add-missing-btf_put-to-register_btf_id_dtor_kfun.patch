@@ -1,0 +1,41 @@
+From 74bc3a5acc82f020d2e126f56c535d02d1e74e37 Mon Sep 17 00:00:00 2001
+From: Jiri Olsa <jolsa@kernel.org>
+Date: Fri, 20 Jan 2023 13:21:48 +0100
+Subject: [PATCH] bpf: Add missing btf_put to register_btf_id_dtor_kfuncs
+
+We take the BTF reference before we register dtors and we need
+to put it back when it's done.
+
+We probably won't se a problem with kernel BTF, but module BTF
+would stay loaded (because of the extra ref) even when its module
+is removed.
+
+Cc: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+Fixes: 5ce937d613a4 ("bpf: Populate pairs of btf_id and destructor kfunc in btf")
+Acked-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+Signed-off-by: Jiri Olsa <jolsa@kernel.org>
+Link: https://lore.kernel.org/r/20230120122148.1522359-1-jolsa@kernel.org
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ kernel/bpf/btf.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/bpf/btf.c b/kernel/bpf/btf.c
+index f7dd8af06413..b7017cae6fd1 100644
+--- a/kernel/bpf/btf.c
++++ b/kernel/bpf/btf.c
+@@ -7782,9 +7782,9 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
+ 
+ 	sort(tab->dtors, tab->cnt, sizeof(tab->dtors[0]), btf_id_cmp_func, NULL);
+ 
+-	return 0;
+ end:
+-	btf_free_dtor_kfunc_tab(btf);
++	if (ret)
++		btf_free_dtor_kfunc_tab(btf);
+ 	btf_put(btf);
+ 	return ret;
+ }
+-- 
+2.39.1
+
