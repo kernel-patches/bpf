@@ -30,7 +30,7 @@ static void bpf_jit_fill_ill_insns(void *area, unsigned int size)
  * Patch 'len' bytes of instructions from opcode to addr, one instruction
  * at a time. Returns addr on success. ERR_PTR(-EINVAL), otherwise.
  */
-static void *bpf_patch_instructions(void *addr, void *opcode, size_t len)
+static void *bpf_patch_instructions(void *addr, void *opcode, size_t len, bool fill_insn)
 {
 	while (len > 0) {
 		ppc_inst_t insn = ppc_inst_read(opcode);
@@ -41,7 +41,8 @@ static void *bpf_patch_instructions(void *addr, void *opcode, size_t len)
 
 		len -= ilen;
 		addr = addr + ilen;
-		opcode = opcode + ilen;
+		if (!fill_insn)
+			opcode = opcode + ilen;
 	}
 
 	return addr;
@@ -307,7 +308,22 @@ void *bpf_arch_text_copy(void *dst, void *src, size_t len)
 		return ERR_PTR(-EINVAL);
 
 	mutex_lock(&text_mutex);
-	ret = bpf_patch_instructions(dst, src, len);
+	ret = bpf_patch_instructions(dst, src, len, false);
+	mutex_unlock(&text_mutex);
+
+	return ret;
+}
+
+int bpf_arch_text_invalidate(void *dst, size_t len)
+{
+	u32 insn = BREAKPOINT_INSTRUCTION;
+	int ret;
+
+	if (WARN_ON_ONCE(core_kernel_text((unsigned long)dst)))
+		return -EINVAL;
+
+	mutex_lock(&text_mutex);
+	ret = IS_ERR(bpf_patch_instructions(dst, &insn, len, true));
 	mutex_unlock(&text_mutex);
 
 	return ret;
