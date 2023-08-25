@@ -19241,6 +19241,21 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+static inline int find_subprog_index(const struct bpf_prog *prog,
+				     u32 btf_id)
+{
+	struct bpf_prog_aux *aux = prog->aux;
+	int i, subprog = -1;
+
+	for (i = 0; i < aux->func_info_cnt; i++)
+		if (aux->func_info[i].type_id == btf_id) {
+			subprog = i;
+			break;
+		}
+
+	return subprog;
+}
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
@@ -19249,9 +19264,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 {
 	bool prog_extension = prog->type == BPF_PROG_TYPE_EXT;
 	const char prefix[] = "btf_trace_";
-	int ret = 0, subprog = -1, i;
 	const struct btf_type *t;
 	bool conservative = true;
+	int ret = 0, subprog;
 	const char *tname;
 	struct btf *btf;
 	long addr = 0;
@@ -19286,11 +19301,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			return -EINVAL;
 		}
 
-		for (i = 0; i < aux->func_info_cnt; i++)
-			if (aux->func_info[i].type_id == btf_id) {
-				subprog = i;
-				break;
-			}
+		subprog = find_subprog_index(tgt_prog, btf_id);
 		if (subprog == -1) {
 			bpf_log(log, "Subprog %s doesn't exist\n", tname);
 			return -EINVAL;
@@ -19554,7 +19565,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	struct bpf_attach_target_info tgt_info = {};
 	u32 btf_id = prog->aux->attach_btf_id;
 	struct bpf_trampoline *tr;
-	int ret;
+	int ret, subprog;
 	u64 key;
 
 	if (prog->type == BPF_PROG_TYPE_SYSCALL) {
@@ -19623,6 +19634,11 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	tr = bpf_trampoline_get(key, &tgt_info);
 	if (!tr)
 		return -ENOMEM;
+
+	if (tgt_prog && tgt_prog->aux->tail_call_reachable) {
+		subprog = find_subprog_index(tgt_prog, btf_id);
+		tr->flags = subprog > 0 ? BPF_TRAMP_F_TAIL_CALL_CTX : 0;
+	}
 
 	prog->aux->dst_trampoline = tr;
 	return 0;
