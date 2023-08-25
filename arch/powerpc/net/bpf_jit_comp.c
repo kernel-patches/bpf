@@ -13,14 +13,38 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
-#include <asm/kprobes.h>
+#include <linux/memory.h>
 #include <linux/bpf.h>
+
+#include <asm/kprobes.h>
+#include <asm/code-patching.h>
 
 #include "bpf_jit.h"
 
 static void bpf_jit_fill_ill_insns(void *area, unsigned int size)
 {
 	memset32(area, BREAKPOINT_INSTRUCTION, size / 4);
+}
+
+/*
+ * Patch 'len' bytes of instructions from opcode to addr, one instruction
+ * at a time. Returns addr on success. ERR_PTR(-EINVAL), otherwise.
+ */
+static void *bpf_patch_instructions(void *addr, void *opcode, size_t len)
+{
+	while (len > 0) {
+		ppc_inst_t insn = ppc_inst_read(opcode);
+		int ilen = ppc_inst_len(insn);
+
+		if (patch_instruction(addr, insn))
+			return ERR_PTR(-EINVAL);
+
+		len -= ilen;
+		addr = addr + ilen;
+		opcode = opcode + ilen;
+	}
+
+	return addr;
 }
 
 int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx, int tmp_reg, long exit_addr)
@@ -273,4 +297,18 @@ int bpf_add_extable_entry(struct bpf_prog *fp, u32 *image, int pass, struct code
 
 	ctx->exentry_idx++;
 	return 0;
+}
+
+void *bpf_arch_text_copy(void *dst, void *src, size_t len)
+{
+	void *ret;
+
+	if (WARN_ON_ONCE(core_kernel_text((unsigned long)dst)))
+		return ERR_PTR(-EINVAL);
+
+	mutex_lock(&text_mutex);
+	ret = bpf_patch_instructions(dst, src, len);
+	mutex_unlock(&text_mutex);
+
+	return ret;
 }
