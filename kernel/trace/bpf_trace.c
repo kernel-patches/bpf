@@ -3042,6 +3042,7 @@ struct bpf_uprobe_multi_link {
 	u32 cnt;
 	struct bpf_uprobe *uprobes;
 	struct task_struct *task;
+	u32 flags;
 };
 
 struct bpf_uprobe_multi_run_ctx {
@@ -3081,9 +3082,75 @@ static void bpf_uprobe_multi_link_dealloc(struct bpf_link *link)
 	kfree(umulti_link);
 }
 
+static int bpf_uprobe_multi_link_fill_link_info(const struct bpf_link *link,
+						struct bpf_link_info *info)
+{
+	u64 __user *uref_ctr_offsets = u64_to_user_ptr(info->uprobe_multi.ref_ctr_offsets);
+	u64 __user *ucookies = u64_to_user_ptr(info->uprobe_multi.cookies);
+	u64 __user *uoffsets = u64_to_user_ptr(info->uprobe_multi.offsets);
+	u64 __user *upath = u64_to_user_ptr(info->uprobe_multi.path);
+	u32 upath_max = info->uprobe_multi.path_max;
+	struct bpf_uprobe_multi_link *umulti_link;
+	u32 ucount = info->uprobe_multi.count;
+	int err = 0, i;
+	char *p, *buf;
+	long left;
+
+	if (!upath ^ !upath_max)
+		return -EINVAL;
+
+	if (!uoffsets ^ !ucount)
+		return -EINVAL;
+
+	umulti_link = container_of(link, struct bpf_uprobe_multi_link, link);
+	info->uprobe_multi.count = umulti_link->cnt;
+	info->uprobe_multi.flags = umulti_link->flags;
+	info->uprobe_multi.pid = umulti_link->task ?
+				 task_pid_nr(umulti_link->task) : (u32) -1;
+
+	if (upath) {
+		if (upath_max > PATH_MAX)
+			return -E2BIG;
+		buf = kmalloc(upath_max, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+		p = d_path(&umulti_link->path, buf, upath_max);
+		if (IS_ERR(p)) {
+			kfree(buf);
+			return -ENOSPC;
+		}
+		left = copy_to_user(upath, p, buf + upath_max - p);
+		kfree(buf);
+		if (left)
+			return -EFAULT;
+	}
+
+	if (!uoffsets)
+		return 0;
+
+	if (ucount < umulti_link->cnt)
+		err = -ENOSPC;
+	else
+		ucount = umulti_link->cnt;
+
+	for (i = 0; i < ucount; i++) {
+		if (put_user(umulti_link->uprobes[i].offset, uoffsets + i))
+			return -EFAULT;
+		if (uref_ctr_offsets &&
+		    put_user(umulti_link->uprobes[i].ref_ctr_offset, uref_ctr_offsets + i))
+			return -EFAULT;
+		if (ucookies &&
+		    put_user(umulti_link->uprobes[i].cookie, ucookies + i))
+			return -EFAULT;
+	}
+
+	return err;
+}
+
 static const struct bpf_link_ops bpf_uprobe_multi_link_lops = {
 	.release = bpf_uprobe_multi_link_release,
 	.dealloc = bpf_uprobe_multi_link_dealloc,
+	.fill_link_info = bpf_uprobe_multi_link_fill_link_info,
 };
 
 static int uprobe_prog_run(struct bpf_uprobe *uprobe,
@@ -3272,6 +3339,7 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	link->uprobes = uprobes;
 	link->path = path;
 	link->task = task;
+	link->flags = flags;
 
 	bpf_link_init(&link->link, BPF_LINK_TYPE_UPROBE_MULTI,
 		      &bpf_uprobe_multi_link_lops, prog);
