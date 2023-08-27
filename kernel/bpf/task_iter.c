@@ -893,6 +893,45 @@ __bpf_kfunc void bpf_iter_process_destroy(struct bpf_iter_process *it)
 	rcu_read_unlock();
 }
 
+struct bpf_iter_css_kern {
+	struct cgroup_subsys_state *root;
+	struct cgroup_subsys_state *pos;
+	char flag;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc int bpf_iter_css_new(struct bpf_iter_css *it,
+		struct cgroup_subsys_state *root, char flag)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_css_kern) != sizeof(struct bpf_iter_css));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_kern) != __alignof__(struct bpf_iter_css));
+	kit->root = root;
+	kit->pos = NULL;
+	kit->flag = flag;
+	rcu_read_lock();
+	return 0;
+}
+
+__bpf_kfunc struct cgroup_subsys_state *bpf_iter_css_next(struct bpf_iter_css *it)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	if (!kit->pos)
+		kit->pos = kit->flag ? css_next_descendant_post(NULL, kit->root)
+					: css_next_descendant_pre(NULL, kit->root);
+	else
+		kit->pos = kit->flag ? css_next_descendant_post(kit->pos, kit->root)
+					: css_next_descendant_pre(kit->pos, kit->root);
+
+	return kit->pos;
+}
+
+__bpf_kfunc void bpf_iter_css_destroy(struct bpf_iter_css *it)
+{
+	rcu_read_unlock();
+}
+
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
 
 static void do_mmap_read_unlock(struct irq_work *entry)

@@ -7319,4 +7319,9 @@ struct bpf_iter_process {
 	__u64 __opaque[1];
 } __attribute__((aligned(8)));
 
+struct bpf_iter_css {
+	__u64 __opaque[2];
+	char __opaque_c[1];
+} __attribute__((aligned(8)));
+
 #endif /* _UAPI__LINUX_BPF_H__ */
