@@ -547,6 +547,83 @@ static bool btf_is_kernel_module(__u32 btf_id)
 	return btf_info.kernel_btf && strncmp(btf_name, "vmlinux", sizeof(btf_name)) != 0;
 }
 
+static int btf_id_by_name(char *name, __u32 *btf_id)
+{
+	bool found = false;
+	__u32 id = 0;
+	int fd, err;
+
+	while (true) {
+		struct bpf_btf_info info = {};
+		__u32 len = sizeof(info);
+		char btf_name[64];
+
+		err = bpf_btf_get_next_id(id, &id);
+		if (err) {
+			if (errno == ENOENT) {
+				if (found)
+					err = 0;
+				else
+					p_err("no BTF object match name %s", name);
+				break;
+			}
+
+			p_err("can't get next BTF object: %s%s",
+			      strerror(errno),
+			      errno == EINVAL ? " -- kernel too old?" : "");
+			return -1;
+		}
+
+		fd = bpf_btf_get_fd_by_id(id);
+		if (fd < 0) {
+			p_err("can't get BTF by id (%u): %s",
+			      id, strerror(errno));
+			return -1;
+		}
+
+		err = bpf_btf_get_info_by_fd(fd, &info, &len);
+		if (err) {
+			p_err("can't get BTF info (%u): %s",
+			      id, strerror(errno));
+			goto err_close_fd;
+		}
+
+		if (info.name_len) {
+			memset(&info, 0, sizeof(info));
+			info.name_len = sizeof(btf_name);
+			info.name = ptr_to_u64(btf_name);
+			len = sizeof(info);
+
+			err = bpf_btf_get_info_by_fd(fd, &info, &len);
+			if (err) {
+				p_err("can't get BTF info (%u): %s",
+				      id, strerror(errno));
+				goto err_close_fd;
+			}
+		}
+
+		close(fd);
+
+		if (strncmp(name, u64_to_ptr(info.name), BPF_OBJ_NAME_LEN))
+			continue;
+
+		if (found) {
+			p_err("multiple BTF object match name %s", name);
+			return -1;
+		}
+
+		*btf_id = id;
+		found = true;
+	}
+
+	return err;
+
+err_close_fd:
+	close(fd);
+	return err;
+}
+
+
 static int do_dump(int argc, char **argv)
 {
 	struct btf *btf = NULL, *base = NULL;
@@ -637,6 +714,19 @@ static int do_dump(int argc, char **argv)
 			      *argv, strerror(errno));
 			goto done;
 		}
+		NEXT_ARG();
+	} else if (is_prefix(src, "name")) {
+		char *name = *argv;
+
+		if (strlen(name) > BPF_OBJ_NAME_LEN - 1) {
+			p_err("can't parse name");
+			return -1;
+		}
+
+		err = btf_id_by_name(name, &btf_id);
+		if (err)
+			return -1;
+
 		NEXT_ARG();
 	} else {
 		err = -1;
@@ -1062,7 +1152,7 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s dump BTF_SRC [format FORMAT]\n"
 		"       %1$s %2$s help\n"
 		"\n"
-		"       BTF_SRC := { id BTF_ID | prog PROG | map MAP [{key | value | kv | all}] | file FILE }\n"
+		"       BTF_SRC := { id BTF_ID | name NAME | prog PROG | map MAP [{key | value | kv | all}] | file FILE }\n"
 		"       FORMAT  := { raw | c }\n"
 		"       " HELP_SPEC_MAP "\n"
 		"       " HELP_SPEC_PROGRAM "\n"
