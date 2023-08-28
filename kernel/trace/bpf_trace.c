@@ -117,6 +117,9 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 		 * and don't send kprobe event into ring-buffer,
 		 * so return zero here
 		 */
+		rcu_read_lock();
+		bpf_prog_missed_array(rcu_dereference(call->prog_array));
+		rcu_read_unlock();
 		ret = 0;
 		goto out;
 	}
