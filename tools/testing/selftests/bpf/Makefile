@@ -598,12 +598,14 @@ $(eval $(call DEFINE_TEST_RUNNER,test_progs))
 TRUNNER_BPF_BUILD_RULE := CLANG_NOALU32_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS)
 $(eval $(call DEFINE_TEST_RUNNER,test_progs,no_alu32))
+INSTDIRS := no_alu32
 
 # Define test_progs-cpuv4 test runner.
 ifneq ($(CLANG_CPUV4),)
 TRUNNER_BPF_BUILD_RULE := CLANG_CPUV4_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS)
 $(eval $(call DEFINE_TEST_RUNNER,test_progs,cpuv4))
+INSTDIRS += cpuv4
 endif
 
 # Define test_progs BPF-GCC-flavored test runner.
@@ -611,6 +613,7 @@ ifneq ($(BPF_GCC),)
 TRUNNER_BPF_BUILD_RULE := GCC_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(call get_sys_includes,gcc,)
 $(eval $(call DEFINE_TEST_RUNNER,test_progs,bpf_gcc))
+INSTDIRS += bpf_gcc
 endif
 
 # Define test_maps test runner.
@@ -714,3 +717,12 @@ EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 
 # Delete partially updated (corrupted) files on error
 .DELETE_ON_ERROR:
+
+DEFAULT_INSTALL_RULE := $(INSTALL_RULE)
+override define INSTALL_RULE
+	$(DEFAULT_INSTALL_RULE)
+	@for DIR in $(INSTDIRS); do		  \
+		mkdir -p $(INSTALL_PATH)/$$DIR;   \
+		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;\
+	done
+endef
