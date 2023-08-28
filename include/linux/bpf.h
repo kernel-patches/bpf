@@ -29,6 +29,9 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
+#include <linux/sched/clock.h>
+
+DECLARE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -2460,6 +2463,18 @@ static inline bool has_current_bpf_ctx(void)
 void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog);
 void notrace bpf_prog_update_prog_stats(struct bpf_prog *prog, u64 start);
 
+static __always_inline u64 notrace bpf_prog_start_time(void)
+{
+	u64 start = BPF_PROG_NO_START_TIME;
+
+	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
+		start = sched_clock();
+		if (unlikely(!start))
+			start = BPF_PROG_NO_START_TIME;
+	}
+	return start;
+}
+
 void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 		     enum bpf_dynptr_type type, u32 offset, u32 size);
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
@@ -2700,6 +2715,11 @@ static inline void bpf_prog_inc_misses_counter(struct bpf_prog *prog)
 
 static void bpf_prog_update_prog_stats(struct bpf_prog *prog, u64 start)
 {
+}
+
+static inline u64 notrace bpf_prog_start_time(void)
+{
+	return 0;
 }
 
 static inline void bpf_cgrp_storage_free(struct cgroup *cgroup)
