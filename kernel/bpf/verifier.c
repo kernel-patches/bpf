@@ -3110,7 +3110,9 @@ static void mark_insn_zext(struct bpf_verifier_env *env,
 {
 	s32 def_idx = reg->subreg_def;
 
-	if (def_idx == DEF_NOT_SUBREG)
+	if (def_idx == DEF_NOT_SUBREG ||
+	    (BPF_CLASS(env->prog->insnsi[def_idx - 1].code) == BPF_LDX &&
+	     BPF_MODE(env->prog->insnsi[def_idx - 1].code) == BPF_MEMSX))
 		return;
 
 	env->insn_aux_data[def_idx - 1].zext_dst = true;
