@@ -40,8 +40,8 @@ int BPF_PROG(prog_stat, struct path *path, struct kstat *stat,
 	return 0;
 }
 
-SEC("fentry/filp_close")
-int BPF_PROG(prog_close, struct file *file, void *id)
+SEC("fentry/filp_flush")
+int BPF_PROG(prog_close, struct file *file)
 {
 	pid_t pid = bpf_get_current_pid_tgid() >> 32;
 	__u32 cnt = cnt_close;
