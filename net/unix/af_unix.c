@@ -116,6 +116,7 @@
 #include <linux/freezer.h>
 #include <linux/file.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf-cgroup.h>
 
 #include "scm.h"
 
@@ -1323,6 +1324,12 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sock *sk = sock->sk;
 	int err;
 
+	if (cgroup_bpf_enabled(CGROUP_UNIX_BIND)) {
+		err = BPF_CGROUP_RUN_PROG_UNIX_BIND_LOCK(sk, uaddr, &addr_len);
+		if (err)
+			return err;
+	}
+
 	if (addr_len == offsetof(struct sockaddr_un, sun_path) &&
 	    sunaddr->sun_family == AF_UNIX)
 		return unix_autobind(sk);
@@ -1377,6 +1384,13 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 		goto out;
 
 	if (addr->sa_family != AF_UNSPEC) {
+		if (cgroup_bpf_enabled(CGROUP_UNIX_CONNECT)) {
+			err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, addr,
+								    &alen);
+			if (err)
+				goto out;
+		}
+
 		err = unix_validate_addr(sunaddr, alen);
 		if (err)
 			goto out;
@@ -1485,6 +1499,13 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	long timeo;
 	int err;
 	int st;
+
+	if (cgroup_bpf_enabled(CGROUP_UNIX_CONNECT)) {
+		err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, uaddr,
+							    &addr_len);
+		if (err)
+			goto out;
+	}
 
 	err = unix_validate_addr(sunaddr, addr_len);
 	if (err)
@@ -1749,7 +1770,7 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int peer)
 	struct sock *sk = sock->sk;
 	struct unix_address *addr;
 	DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr, uaddr);
-	int err = 0;
+	int addr_len = 0, err = 0;
 
 	if (peer) {
 		sk = unix_peer_get(sk);
@@ -1766,14 +1787,37 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int peer)
 	if (!addr) {
 		sunaddr->sun_family = AF_UNIX;
 		sunaddr->sun_path[0] = 0;
-		err = offsetof(struct sockaddr_un, sun_path);
+		addr_len = offsetof(struct sockaddr_un, sun_path);
 	} else {
-		err = addr->len;
+		addr_len = addr->len;
 		memcpy(sunaddr, addr->name, addr->len);
 	}
+
+	if (peer && cgroup_bpf_enabled(CGROUP_UNIX_GETPEERNAME)) {
+		err = BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &addr_len,
+					     CGROUP_UNIX_GETPEERNAME);
+		if (err)
+			goto out;
+
+		err = unix_validate_addr(sunaddr, addr_len);
+		if (err)
+			goto out;
+	}
+
+	if (!peer && cgroup_bpf_enabled(CGROUP_UNIX_GETSOCKNAME)) {
+		err = BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &addr_len,
+					     CGROUP_UNIX_GETSOCKNAME);
+		if (err)
+			goto out;
+
+		err = unix_validate_addr(sunaddr, addr_len);
+		if (err)
+			goto out;
+	}
+
 	sock_put(sk);
 out:
-	return err;
+	return err ?: addr_len;
 }
 
 static void unix_peek_fds(struct scm_cookie *scm, struct sk_buff *skb)
@@ -1919,6 +1963,15 @@ static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
 		goto out;
 
 	if (msg->msg_namelen) {
+		if (cgroup_bpf_enabled(CGROUP_UNIX_SENDMSG)) {
+			err = BPF_CGROUP_RUN_PROG_UNIX_SENDMSG_LOCK(sk,
+								    msg->msg_name,
+								    &msg->msg_namelen,
+								    NULL);
+			if (err)
+				goto out;
+		}
+
 		err = unix_validate_addr(sunaddr, msg->msg_namelen);
 		if (err)
 			goto out;
@@ -2328,14 +2381,30 @@ static int unix_seqpacket_recvmsg(struct socket *sock, struct msghdr *msg,
 	return unix_dgram_recvmsg(sock, msg, size, flags);
 }
 
-static void unix_copy_addr(struct msghdr *msg, struct sock *sk)
+static int unix_recvmsg_copy_addr(struct msghdr *msg, struct sock *sk)
 {
 	struct unix_address *addr = smp_load_acquire(&unix_sk(sk)->addr);
+	int err;
 
 	if (addr) {
 		msg->msg_namelen = addr->len;
 		memcpy(msg->msg_name, addr->name, addr->len);
+
+		if (cgroup_bpf_enabled(CGROUP_UNIX_RECVMSG)) {
+			err = BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
+								    msg->msg_name,
+								    &msg->msg_namelen);
+			if (err)
+				return err;
+
+			err = unix_validate_addr(msg->msg_name,
+						 msg->msg_namelen);
+			if (err)
+				return err;
+		}
 	}
+
+	return 0;
 }
 
 int __unix_dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t size,
@@ -2390,8 +2459,11 @@ int __unix_dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t size,
 						EPOLLOUT | EPOLLWRNORM |
 						EPOLLWRBAND);
 
-	if (msg->msg_name)
-		unix_copy_addr(msg, skb->sk);
+	if (msg->msg_name) {
+		err = unix_recvmsg_copy_addr(msg, skb->sk);
+		if (err)
+			goto out_free;
+	}
 
 	if (size > skb->len - skip)
 		size = skb->len - skip;
@@ -2743,7 +2815,9 @@ unlock:
 		if (state->msg && state->msg->msg_name) {
 			DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr,
 					 state->msg->msg_name);
-			unix_copy_addr(state->msg, skb->sk);
+			err = unix_recvmsg_copy_addr(state->msg, skb->sk);
+			if (err)
+				break;
 			sunaddr = NULL;
 		}
 
