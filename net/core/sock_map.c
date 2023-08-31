@@ -57,7 +57,7 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	return &stab->map;
 }
 
-int sock_map_get_from_fd(const union bpf_attr *attr, struct bpf_prog *prog)
+int sock_map_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	u32 ufd = attr->target_fd;
 	struct bpf_map *map;
