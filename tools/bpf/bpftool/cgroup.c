@@ -26,13 +26,16 @@
 	"       ATTACH_TYPE := { cgroup_inet_ingress | cgroup_inet_egress |\n" \
 	"                        cgroup_inet_sock_create | cgroup_sock_ops |\n" \
 	"                        cgroup_device | cgroup_inet4_bind |\n" \
-	"                        cgroup_inet6_bind | cgroup_inet4_post_bind |\n" \
-	"                        cgroup_inet6_post_bind | cgroup_inet4_connect |\n" \
-	"                        cgroup_inet6_connect | cgroup_inet4_getpeername |\n" \
-	"                        cgroup_inet6_getpeername | cgroup_inet4_getsockname |\n" \
-	"                        cgroup_inet6_getsockname | cgroup_udp4_sendmsg |\n" \
-	"                        cgroup_udp6_sendmsg | cgroup_udp4_recvmsg |\n" \
-	"                        cgroup_udp6_recvmsg | cgroup_sysctl |\n" \
+	"                        cgroup_inet6_bind | cgroup_unix_bind |\n" \
+	"                        cgroup_inet4_post_bind | cgroup_inet6_post_bind |\n" \
+	"                        cgroup_inet4_connect | cgroup_inet6_connect |\n" \
+	"                        cgroup_unix_connect | cgroup_inet4_getpeername |\n" \
+	"                        cgroup_inet6_getpeername | cgroup_unix_getpeername |\n" \
+	"                        cgroup_inet4_getsockname | cgroup_inet6_getsockname |\n" \
+	"                        cgroup_unix_getsockname | cgroup_udp4_sendmsg |\n" \
+	"                        cgroup_udp6_sendmsg | cgroup_unix_sendmsg |\n" \
+	"                        cgroup_udp4_recvmsg | cgroup_udp6_recvmsg |\n" \
+	"                        cgroup_unix_recvmsg | cgroup_sysctl |\n" \
 	"                        cgroup_getsockopt | cgroup_setsockopt |\n" \
 	"                        cgroup_inet_sock_release }"
 
