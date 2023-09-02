@@ -878,7 +878,11 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 	msg->sk = sk;
 	ret = bpf_prog_run_pin_on_cpu(prog, msg);
 	ret = sk_psock_map_verd(ret, msg->sk_redir);
-	psock->apply_bytes = msg->apply_bytes;
+	psock->redir_permanent = msg->flags & BPF_F_PERMANENT;
+	if (psock->redir_permanent)
+		msg->cork_bytes = msg->apply_bytes = 0;
+	else
+		psock->apply_bytes = msg->apply_bytes;
 	if (ret == __SK_REDIRECT) {
 		if (psock->sk_redir) {
 			sock_put(psock->sk_redir);
