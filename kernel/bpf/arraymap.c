@@ -1291,7 +1291,7 @@ static void *cgroup_fd_array_get_ptr(struct bpf_map *map,
 				     struct file *map_file /* not used */,
 				     int fd)
 {
-	return cgroup_get_from_fd(fd);
+	return cgroup_v1v2_get_from_fd(fd);
 }
 
 static void cgroup_fd_array_put_ptr(void *ptr)
