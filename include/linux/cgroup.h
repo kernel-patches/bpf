@@ -543,15 +543,33 @@ static inline struct cgroup *cgroup_ancestor(struct cgroup *cgrp,
  * @ancestor: possible ancestor of @task's cgroup
  *
  * Tests whether @task's default cgroup hierarchy is a descendant of @ancestor.
- * It follows all the same rules as cgroup_is_descendant, and only applies
- * to the default hierarchy.
+ * It follows all the same rules as cgroup_is_descendant.
  */
 static inline bool task_under_cgroup_hierarchy(struct task_struct *task,
 					       struct cgroup *ancestor)
 {
 	struct css_set *cset = task_css_set(task);
+	struct cgroup *cgrp;
+	bool ret = false;
+	int ssid;
 
-	return cgroup_is_descendant(cset->dfl_cgrp, ancestor);
+	if (ancestor->root == &cgrp_dfl_root)
+		return cgroup_is_descendant(cset->dfl_cgrp, ancestor);
+
+	for (ssid = 0; ssid < CGROUP_SUBSYS_COUNT; ssid++) {
+		if (!ancestor->subsys[ssid])
+			continue;
+
+		cgrp = task_css(task, ssid)->cgroup;
+		if (!cgrp)
+			continue;
+
+		if (!cgroup_is_descendant(cgrp, ancestor))
+			return false;
+		if (!ret)
+			ret = true;
+	}
+	return ret;
 }
 
 /* no synchronization, the result can only be used as a hint */
