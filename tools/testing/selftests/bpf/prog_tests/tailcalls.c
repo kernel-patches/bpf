@@ -274,7 +274,7 @@ static void test_tailcall_count(const char *which)
 		return;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (CHECK_FAIL(data_fd < 0))
 		return;
 
 	i = 0;
@@ -355,7 +355,7 @@ static void test_tailcall_4(void)
 		return;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (CHECK_FAIL(data_fd < 0))
 		return;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
@@ -445,7 +445,7 @@ static void test_tailcall_5(void)
 		return;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (CHECK_FAIL(data_fd < 0))
 		return;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
@@ -634,7 +634,7 @@ static void test_tailcall_bpf2bpf_2(void)
 		return;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (CHECK_FAIL(data_fd < 0))
 		return;
 
 	i = 0;
@@ -808,7 +808,7 @@ static void test_tailcall_bpf2bpf_4(bool noise)
 		return;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (CHECK_FAIL(data_fd < 0))
 		return;
 
 	i = 0;
@@ -872,7 +872,7 @@ static void test_tailcall_bpf2bpf_6(void)
 	ASSERT_EQ(topts.retval, 0, "tailcall retval");
 
 	data_fd = bpf_map__fd(obj->maps.bss);
-	if (!ASSERT_GE(map_fd, 0, "bss map fd"))
+	if (!ASSERT_GE(data_fd, 0, "bss map fd"))
 		goto out;
 
 	i = 0;
