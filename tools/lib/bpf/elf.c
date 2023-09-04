@@ -9,6 +9,7 @@
 #include "str_error.h"
 
 #define STRERR_BUFSIZE  128
+#define HIDDEN_BIT	16
 
 int elf_open(const char *binary_path, struct elf_fd *elf_fd)
 {
@@ -64,11 +65,14 @@ struct elf_sym {
 	const char *name;
 	GElf_Sym sym;
 	GElf_Shdr sh;
+	int ver;
+	bool hidden;
 };
 
 struct elf_sym_iter {
 	Elf *elf;
 	Elf_Data *syms;
+	Elf_Data *versyms;
 	size_t nr_syms;
 	size_t strtabidx;
 	size_t next_sym_idx;
@@ -111,6 +115,18 @@ static int elf_sym_iter_new(struct elf_sym_iter *iter,
 	iter->nr_syms = iter->syms->d_size / sh.sh_entsize;
 	iter->elf = elf;
 	iter->st_type = st_type;
+
+	/* Version symbol table only meaningful to dynsym only */
+	if (sh_type != SHT_DYNSYM)
+		return 0;
+
+	scn = elf_find_next_scn_by_type(elf, SHT_GNU_versym, NULL);
+	if (!scn)
+		return 0;
+	if (!gelf_getshdr(scn, &sh))
+		return -EINVAL;
+	iter->versyms = elf_getdata(scn, 0);
+
 	return 0;
 }
 
@@ -119,6 +135,7 @@ static struct elf_sym *elf_sym_iter_next(struct elf_sym_iter *iter)
 	struct elf_sym *ret = &iter->sym;
 	GElf_Sym *sym = &ret->sym;
 	const char *name = NULL;
+	GElf_Versym versym;
 	Elf_Scn *sym_scn;
 	size_t idx;
 
@@ -138,12 +155,57 @@ static struct elf_sym *elf_sym_iter_next(struct elf_sym_iter *iter)
 
 		iter->next_sym_idx = idx + 1;
 		ret->name = name;
+		ret->ver = 0;
+		ret->hidden = false;
+
+		if (iter->versyms) {
+			if (!gelf_getversym(iter->versyms, idx, &versym))
+				continue;
+			ret->ver = versym & ~(1 << HIDDEN_BIT);
+			ret->hidden = versym & (1 << HIDDEN_BIT);
+		}
 		return ret;
 	}
 
 	return NULL;
 }
 
+static const char *elf_get_vername(Elf *elf, int ver)
+{
+	GElf_Verdaux verdaux;
+	GElf_Verdef verdef;
+	Elf_Data *verdefs;
+	size_t strtabidx;
+	GElf_Shdr sh;
+	Elf_Scn *scn;
+	int offset;
+
+	scn = elf_find_next_scn_by_type(elf, SHT_GNU_verdef, NULL);
+	if (!scn)
+		return NULL;
+	if (!gelf_getshdr(scn, &sh))
+		return NULL;
+	strtabidx = sh.sh_link;
+	verdefs =  elf_getdata(scn, 0);
+
+	offset = 0;
+	while (gelf_getverdef(verdefs, offset, &verdef)) {
+		if (verdef.vd_ndx != ver) {
+			if (!verdef.vd_next)
+				break;
+
+			offset += verdef.vd_next;
+			continue;
+		}
+
+		if (!gelf_getverdaux(verdefs, offset + verdef.vd_aux, &verdaux))
+			break;
+
+		return elf_strptr(elf, strtabidx, verdaux.vda_name);
+
+	}
+	return NULL;
+}
 
 /* Transform symbol's virtual address (absolute for binaries and relative
  * for shared libs) into file offset, which is what kernel is expecting
@@ -191,6 +253,9 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 	for (i = 0; i < ARRAY_SIZE(sh_types); i++) {
 		struct elf_sym_iter iter;
 		struct elf_sym *sym;
+		size_t sname_len;
+		char sname[256];
+		const char *ver;
 		int last_bind = -1;
 		int cur_bind;
 
@@ -201,14 +266,31 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 			goto out;
 
 		while ((sym = elf_sym_iter_next(&iter))) {
-			/* User can specify func, func@@LIB or func@@LIB_VERSION. */
-			if (strncmp(sym->name, name, name_len) != 0)
-				continue;
-			/* ...but we don't want a search for "foo" to match 'foo2" also, so any
-			 * additional characters in sname should be of the form "@@LIB".
-			 */
-			if (!is_name_qualified && sym->name[name_len] != '\0' && sym->name[name_len] != '@')
-				continue;
+			if (sh_types[i] == SHT_DYNSYM && is_name_qualified) {
+				if (sym->hidden)
+					continue;
+
+				sname_len = strlen(sym->name);
+				if (strncmp(sym->name, name, sname_len) != 0)
+					continue;
+
+				ver = elf_get_vername(elf, sym->ver);
+				if (!ver)
+					continue;
+
+				snprintf(sname, sizeof(sname), "%s@@%s", sym->name, ver);
+				if (strncmp(sname, name, name_len) != 0)
+					continue;
+			} else {
+				/* User can specify func, func@@LIB or func@@LIB_VERSION. */
+				if (strncmp(sym->name, name, name_len) != 0)
+					continue;
+				/* ...but we don't want a search for "foo" to match 'foo2" also, so any
+				* additional characters in sname should be of the form "@@LIB".
+				*/
+				if (!is_name_qualified && sym->name[name_len] != '\0' && sym->name[name_len] != '@')
+					continue;
+			}
 
 			cur_bind = GELF_ST_BIND(sym->sym.st_info);
 
