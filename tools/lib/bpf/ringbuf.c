@@ -69,6 +69,15 @@ static void ringbuf_unmap_ring(struct ring_buffer *rb, struct ring *r)
 	}
 }
 
+static unsigned long ringbuf_avail_data_sz(struct ring *r)
+{
+	unsigned long cons_pos, prod_pos;
+
+	cons_pos = smp_load_acquire(r->consumer_pos);
+	prod_pos = smp_load_acquire(r->producer_pos);
+	return prod_pos - cons_pos;
+}
+
 /* Add extra RINGBUF maps to this ring buffer manager */
 int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 		     ring_buffer_sample_fn sample_cb, void *ctx)
@@ -321,6 +330,30 @@ int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms)
 int ring_buffer__epoll_fd(const struct ring_buffer *rb)
 {
 	return rb->epoll_fd;
+}
+
+/* A userspace analogue to bpf_ringbuf_query for a particular ringbuffer index
+ * managed by this ringbuffer manager. Flags has the same arguments as
+ * bpf_ringbuf_query, and the index given is a 0-based index tracking the order
+ * the ringbuffers were added via ring_buffer__add. Returns the data requested
+ * according to flags.
+ */
+__u64 ring_buffer__query(struct ring_buffer *rb, unsigned int index, __u64 flags)
+{
+	struct ring *ring = &rb->rings[index];
+
+	switch (flags) {
+	case BPF_RB_AVAIL_DATA:
+		return ringbuf_avail_data_sz(ring);
+	case BPF_RB_RING_SIZE:
+		return ring->mask + 1;
+	case BPF_RB_CONS_POS:
+		return smp_load_acquire(ring->consumer_pos);
+	case BPF_RB_PROD_POS:
+		return smp_load_acquire(ring->producer_pos);
+	default:
+		return 0;
+	}
 }
 
 static void user_ringbuf_unmap_ring(struct user_ring_buffer *rb)
