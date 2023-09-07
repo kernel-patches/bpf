@@ -91,6 +91,7 @@ static void ringbuf_subtest(void)
 	int err, cnt, rb_fd;
 	int page_size = getpagesize();
 	void *mmap_ptr, *tmp_ptr;
+	__u64 val;
 
 	skel = test_ringbuf_lskel__open();
 	if (CHECK(!skel, "skel_open", "skeleton open failed\n"))
@@ -175,6 +176,27 @@ static void ringbuf_subtest(void)
 	CHECK(skel->bss->prod_pos != 3 * rec_sz,
 	      "err_prod_pos", "exp %ld, got %ld\n",
 	      3L * rec_sz, skel->bss->prod_pos);
+
+	/* verify the same results from the usermode side */
+	val = ring_buffer__query(ringbuf, 0, BPF_RB_AVAIL_DATA);
+	CHECK(val != 3 * rec_sz,
+	      "err_query_avail_size", "exp %ld, got %llu\n",
+	      3L * rec_sz, val);
+
+	val = ring_buffer__query(ringbuf, 0, BPF_RB_RING_SIZE);
+	CHECK(val != page_size,
+	      "err_query_ring_size", "exp %ld, got %llu\n",
+	      (long)page_size, val);
+
+	val = ring_buffer__query(ringbuf, 0, BPF_RB_CONS_POS);
+	CHECK(val != 0,
+	      "err_query_cons_pos", "exp %ld, got %llu\n",
+	      0L, val);
+
+	val = ring_buffer__query(ringbuf, 0, BPF_RB_PROD_POS);
+	CHECK(val != 3 * rec_sz,
+	      "err_query_prod_pos", "exp %ld, got %llu\n",
+	      3L * rec_sz, val);
 
 	/* poll for samples */
 	err = ring_buffer__poll(ringbuf, -1);
