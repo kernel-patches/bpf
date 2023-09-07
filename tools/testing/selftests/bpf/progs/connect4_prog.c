@@ -41,10 +41,7 @@ int do_bind(struct bpf_sock_addr *ctx)
 	sa.sin_port = bpf_htons(0);
 	sa.sin_addr.s_addr = bpf_htonl(SRC_REWRITE_IP4);
 
-	if (bpf_bind(ctx, (struct sockaddr *)&sa, sizeof(sa)) != 0)
-		return 0;
-
-	return 1;
+	return bpf_bind(ctx, (struct sockaddr *)&sa, sizeof(sa));
 }
 
 static __inline int verify_cc(struct bpf_sock_addr *ctx,
@@ -194,7 +191,7 @@ int connect_v4_prog(struct bpf_sock_addr *ctx)
 	ctx->user_ip4 = bpf_htonl(DST_REWRITE_IP4);
 	ctx->user_port = bpf_htons(DST_REWRITE_PORT4);
 
-	return do_bind(ctx) ? 1 : 0;
+	return do_bind(ctx) ? 0 : 1;
 }
 
 char _license[] SEC("license") = "GPL";
