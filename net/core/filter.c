@@ -2129,6 +2129,9 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 	ret = dev_queue_xmit(skb);
 	dev_xmit_recursion_dec();
 
+	if (ret > 0)
+		ret = net_xmit_errno(ret);
+
 	return ret;
 }
 
