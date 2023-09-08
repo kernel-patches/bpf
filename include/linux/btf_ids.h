@@ -49,7 +49,7 @@ word							\
 	____BTF_ID(symbol, word)
 
 #define __ID(prefix) \
-	__PASTE(prefix, __COUNTER__)
+	__PASTE(__PASTE(prefix, __COUNTER__), BTF_ID_BASE)
 
 /*
  * The BTF_ID defines unique symbol for each ID pointing
