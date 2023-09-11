@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <libelf.h>
 #include <gelf.h>
 #include <fcntl.h>
@@ -9,6 +12,17 @@
 #include "str_error.h"
 
 #define STRERR_BUFSIZE  128
+
+/* A SHT_GNU_versym section holds 16-bit words. This bit is set if
+ * the symbol is hidden and can only be seen when referenced using an
+ * explicit version number. This is a GNU extension.
+ */
+#define VERSYM_HIDDEN	0x8000
+
+/* This is the mask for the rest of the data in a word read from a
+ * SHT_GNU_versym section.
+ */
+#define VERSYM_VERSION	0x7fff
 
 int elf_open(const char *binary_path, struct elf_fd *elf_fd)
 {
@@ -64,11 +78,14 @@ struct elf_sym {
 	const char *name;
 	GElf_Sym sym;
 	GElf_Shdr sh;
+	int ver;
+	bool hidden;
 };
 
 struct elf_sym_iter {
 	Elf *elf;
 	Elf_Data *syms;
+	Elf_Data *versyms;
 	size_t nr_syms;
 	size_t strtabidx;
 	size_t next_sym_idx;
@@ -111,6 +128,18 @@ static int elf_sym_iter_new(struct elf_sym_iter *iter,
 	iter->nr_syms = iter->syms->d_size / sh.sh_entsize;
 	iter->elf = elf;
 	iter->st_type = st_type;
+
+	/* Version symbol table is meaningful to dynsym only */
+	if (sh_type != SHT_DYNSYM)
+		return 0;
+
+	scn = elf_find_next_scn_by_type(elf, SHT_GNU_versym, NULL);
+	if (!scn)
+		return 0;
+	if (!gelf_getshdr(scn, &sh))
+		return -EINVAL;
+	iter->versyms = elf_getdata(scn, 0);
+
 	return 0;
 }
 
@@ -119,6 +148,7 @@ static struct elf_sym *elf_sym_iter_next(struct elf_sym_iter *iter)
 	struct elf_sym *ret = &iter->sym;
 	GElf_Sym *sym = &ret->sym;
 	const char *name = NULL;
+	GElf_Versym versym;
 	Elf_Scn *sym_scn;
 	size_t idx;
 
@@ -138,12 +168,113 @@ static struct elf_sym *elf_sym_iter_next(struct elf_sym_iter *iter)
 
 		iter->next_sym_idx = idx + 1;
 		ret->name = name;
+		ret->ver = 0;
+		ret->hidden = false;
+
+		if (iter->versyms) {
+			if (!gelf_getversym(iter->versyms, idx, &versym))
+				continue;
+			ret->ver = versym & VERSYM_VERSION;
+			ret->hidden = versym & VERSYM_HIDDEN;
+		}
 		return ret;
 	}
 
 	return NULL;
 }
 
+static const char *elf_get_vername(Elf *elf, int ver)
+{
+	GElf_Verdaux verdaux;
+	GElf_Verdef verdef;
+	Elf_Data *verdefs;
+	size_t strtabidx;
+	GElf_Shdr sh;
+	Elf_Scn *scn;
+	int offset;
+
+	scn = elf_find_next_scn_by_type(elf, SHT_GNU_verdef, NULL);
+	if (!scn)
+		return NULL;
+	if (!gelf_getshdr(scn, &sh))
+		return NULL;
+	strtabidx = sh.sh_link;
+	verdefs =  elf_getdata(scn, 0);
+
+	offset = 0;
+	while (gelf_getverdef(verdefs, offset, &verdef)) {
+		if (verdef.vd_ndx != ver) {
+			if (!verdef.vd_next)
+				break;
+
+			offset += verdef.vd_next;
+			continue;
+		}
+
+		if (!gelf_getverdaux(verdefs, offset + verdef.vd_aux, &verdaux))
+			break;
+
+		return elf_strptr(elf, strtabidx, verdaux.vda_name);
+
+	}
+	return NULL;
+}
+
+static bool symbol_match(Elf *elf, int sh_type, struct elf_sym *sym, const char *name)
+{
+	size_t name_len, sname_len;
+	bool is_name_qualified;
+	const char *ver;
+	char *sname;
+	int ret;
+
+	name_len = strlen(name);
+	/* Does name specify "@LIB" or "@@LIB" ? */
+	is_name_qualified = strstr(name, "@") != NULL;
+
+	/* If user specify a qualified name, for dynamic symbol,
+	 * it is in form of func, NOT func@LIB_VER or func@@LIB_VER.
+	 * So construct a full quailified symbol name using versym info
+	 * for comparison.
+	 */
+	if (is_name_qualified && sh_type == SHT_DYNSYM) {
+		/* Make sure func match func@LIB_VER */
+		sname_len = strlen(sym->name);
+		if (strncmp(sym->name, name, sname_len) != 0)
+			return false;
+
+		/* But not func2@LIB_VER */
+		if (name[sname_len] != '@')
+			return false;
+
+		ver = elf_get_vername(elf, sym->ver);
+		if (!ver)
+			return false;
+
+		ret = asprintf(&sname, "%s%s%s", sym->name,
+			       sym->hidden ? "@" : "@@", ver);
+		if (ret == -1)
+			return false;
+
+		sname_len = ret;
+		ret = strncmp(sname, name, sname_len);
+		free(sname);
+		return ret == 0;
+	}
+
+	/* Otherwise, for normal symbols or non-qualified names
+	 * User can specify func, func@@LIB or func@@LIB_VERSION.
+	 */
+	if (strncmp(sym->name, name, name_len) != 0)
+		return false;
+	/* ...but we don't want a search for "foo" to match 'foo2" also, so any
+	 * additional characters in sname should be of the form "@LIB" or "@@LIB".
+	 */
+	if (!is_name_qualified && sym->name[name_len] != '\0' && sym->name[name_len] != '@')
+		return false;
+
+	return true;
+}
 
 /* Transform symbol's virtual address (absolute for binaries and relative
  * for shared libs) into file offset, which is what kernel is expecting
@@ -166,9 +297,8 @@ static unsigned long elf_sym_offset(struct elf_sym *sym)
 long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 {
 	int i, sh_types[2] = { SHT_DYNSYM, SHT_SYMTAB };
-	bool is_shared_lib, is_name_qualified;
+	bool is_shared_lib;
 	long ret = -ENOENT;
-	size_t name_len;
 	GElf_Ehdr ehdr;
 
 	if (!gelf_getehdr(elf, &ehdr)) {
@@ -178,10 +308,6 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 	}
 	/* for shared lib case, we do not need to calculate relative offset */
 	is_shared_lib = ehdr.e_type == ET_DYN;
-
-	name_len = strlen(name);
-	/* Does name specify "@@LIB"? */
-	is_name_qualified = strstr(name, "@@") != NULL;
 
 	/* Search SHT_DYNSYM, SHT_SYMTAB for symbol. This search order is used because if
 	 * a binary is stripped, it may only have SHT_DYNSYM, and a fully-statically
@@ -201,13 +327,7 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 			goto out;
 
 		while ((sym = elf_sym_iter_next(&iter))) {
-			/* User can specify func, func@@LIB or func@@LIB_VERSION. */
-			if (strncmp(sym->name, name, name_len) != 0)
-				continue;
-			/* ...but we don't want a search for "foo" to match 'foo2" also, so any
-			 * additional characters in sname should be of the form "@@LIB".
-			 */
-			if (!is_name_qualified && sym->name[name_len] != '\0' && sym->name[name_len] != '@')
+			if (!symbol_match(elf, sh_types[i], sym, name))
 				continue;
 
 			cur_bind = GELF_ST_BIND(sym->sym.st_info);
