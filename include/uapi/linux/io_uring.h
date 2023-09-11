@@ -43,6 +43,10 @@ struct io_uring_sqe {
 	union {
 		__u64	addr;	/* pointer to buffer or iovecs */
 		__u64	splice_off_in;
+		struct {
+			__u32	level;
+			__u32	optname;
+		};
 	};
 	__u32	len;		/* buffer size or number of iovecs */
 	union {
@@ -88,6 +92,10 @@ struct io_uring_sqe {
 		struct {
 			__u64	addr3;
 			__u64	__pad2[1];
+		};
+		struct {
+			__u64	optval;
+			__u64	optlen;
 		};
 		/*
 		 * If the ring is initialized with IORING_SETUP_SQE128, then
@@ -734,6 +742,7 @@ struct io_uring_recvmsg_out {
 enum {
 	SOCKET_URING_OP_SIOCINQ		= 0,
 	SOCKET_URING_OP_SIOCOUTQ,
+	SOCKET_URING_OP_GETSOCKOPT,
 };
 
 #ifdef __cplusplus
