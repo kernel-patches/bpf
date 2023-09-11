@@ -21,6 +21,11 @@ void urand_read_without_sema(int iter_num, int iter_cnt, int read_sz);
 void urandlib_read_with_sema(int iter_num, int iter_cnt, int read_sz);
 void urandlib_read_without_sema(int iter_num, int iter_cnt, int read_sz);
 
+int urandlib_api(void);
+__asm__(".symver urandlib_api_old,urandlib_api@LIBURANDOM_READ_1.0.0");
+int urandlib_api_old(void);
+int urandlib_api_sameoffset(void);
+
 unsigned short urand_read_with_sema_semaphore SEC(".probes");
 
 static __attribute__((noinline))
@@ -82,6 +87,10 @@ int main(int argc, char *argv[])
 	}
 
 	urandom_read(fd, count);
+
+	urandlib_api();
+	urandlib_api_old();
+	urandlib_api_sameoffset();
 
 	close(fd);
 	return 0;
