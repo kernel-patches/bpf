@@ -880,6 +880,59 @@ __bpf_kfunc void bpf_iter_process_destroy(struct bpf_iter_process *it)
 {
 }
 
+struct bpf_iter_css_kern {
+	struct cgroup_subsys_state *root;
+	struct cgroup_subsys_state *pos;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc int bpf_iter_css_pre_new(struct bpf_iter_css_pre *it,
+		struct cgroup_subsys_state *root)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_css_kern) != sizeof(struct bpf_iter_css_pre));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_kern) != __alignof__(struct bpf_iter_css_pre));
+	kit->root = root;
+	kit->pos = NULL;
+	return 0;
+}
+
+__bpf_kfunc struct cgroup_subsys_state *bpf_iter_css_pre_next(struct bpf_iter_css_pre *it)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	kit->pos = css_next_descendant_pre(kit->pos, kit->root);
+	return kit->pos;
+}
+
+__bpf_kfunc void bpf_iter_css_pre_destroy(struct bpf_iter_css_pre *it)
+{
+}
+
+__bpf_kfunc int bpf_iter_css_post_new(struct bpf_iter_css_post *it,
+		struct cgroup_subsys_state *root)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_css_kern) != sizeof(struct bpf_iter_css_post));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_kern) != __alignof__(struct bpf_iter_css_post));
+	kit->root = root;
+	kit->pos = NULL;
+	return 0;
+}
+
+__bpf_kfunc struct cgroup_subsys_state *bpf_iter_css_post_next(struct bpf_iter_css_post *it)
+{
+	struct bpf_iter_css_kern *kit = (void *)it;
+
+	kit->pos = css_next_descendant_post(kit->pos, kit->root);
+	return kit->pos;
+}
+
+__bpf_kfunc void bpf_iter_css_post_destroy(struct bpf_iter_css_post *it)
+{
+}
+
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
 
 static void do_mmap_read_unlock(struct irq_work *entry)

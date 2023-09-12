@@ -315,6 +315,18 @@ extern int bpf_iter_process_new(struct bpf_iter_process *it) __weak __ksym;
 extern struct task_struct *bpf_iter_process_next(struct bpf_iter_process *it) __weak __ksym;
 extern void bpf_iter_process_destroy(struct bpf_iter_process *it) __weak __ksym;
 
+struct bpf_iter_css_pre;
+extern int bpf_iter_css_pre_new(struct bpf_iter_css_pre *it,
+		struct cgroup_subsys_state *root) __weak __ksym;
+extern struct cgroup_subsys_state *bpf_iter_css_pre_next(struct bpf_iter_css_pre *it) __weak __ksym;
+extern void bpf_iter_css_pre_destroy(struct bpf_iter_css_pre *it) __weak __ksym;
+
+struct bpf_iter_css_post;
+extern int bpf_iter_css_post_new(struct bpf_iter_css_post *it,
+		struct cgroup_subsys_state *root) __weak __ksym;
+extern struct cgroup_subsys_state *bpf_iter_css_post_next(struct bpf_iter_css_post *it) __weak __ksym;
+extern void bpf_iter_css_post_destroy(struct bpf_iter_css_post *it) __weak __ksym;
+
 #ifndef bpf_for_each
 /* bpf_for_each(iter_type, cur_elem, args...) provides generic construct for
  * using BPF open-coded iterators without having to write mundane explicit
