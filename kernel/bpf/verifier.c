@@ -1172,7 +1172,13 @@ static bool is_dynptr_type_expected(struct bpf_verifier_env *env, struct bpf_reg
 
 static void __mark_reg_known_zero(struct bpf_reg_state *reg);
 
+static bool in_rcu_cs(struct bpf_verifier_env *env);
+
+/* check whether we are using bpf_iter_process_*() or bpf_iter_css_*() */
+static bool is_iter_need_rcu(struct bpf_kfunc_call_arg_meta *meta);
+
 static int mark_stack_slots_iter(struct bpf_verifier_env *env,
+				 struct bpf_kfunc_call_arg_meta *meta,
 				 struct bpf_reg_state *reg, int insn_idx,
 				 struct btf *btf, u32 btf_id, int nr_slots)
 {
@@ -1193,6 +1199,12 @@ static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 
 		__mark_reg_known_zero(st);
 		st->type = PTR_TO_STACK; /* we don't have dedicated reg type */
+		if (is_iter_need_rcu(meta)) {
+			if (in_rcu_cs(env))
+				st->type |= MEM_RCU;
+			else
+				st->type |= PTR_UNTRUSTED;
+		}
 		st->live |= REG_LIVE_WRITTEN;
 		st->ref_obj_id = i == 0 ? id : 0;
 		st->iter.btf = btf;
@@ -1281,6 +1293,8 @@ static bool is_iter_reg_valid_init(struct bpf_verifier_env *env, struct bpf_reg_
 		struct bpf_stack_state *slot = &state->stack[spi - i];
 		struct bpf_reg_state *st = &slot->spilled_ptr;
 
+		if (st->type & PTR_UNTRUSTED)
+			return false;
 		/* only main (first) slot has ref_obj_id set */
 		if (i == 0 && !st->ref_obj_id)
 			return false;
@@ -7503,13 +7517,13 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 				return err;
 		}
 
-		err = mark_stack_slots_iter(env, reg, insn_idx, meta->btf, btf_id, nr_slots);
+		err = mark_stack_slots_iter(env, meta, reg, insn_idx, meta->btf, btf_id, nr_slots);
 		if (err)
 			return err;
 	} else {
 		/* iter_next() or iter_destroy() expect initialized iter state*/
 		if (!is_iter_reg_valid_init(env, reg, meta->btf, btf_id, nr_slots)) {
-			verbose(env, "expected an initialized iter_%s as arg #%d\n",
+			verbose(env, "expected an initialized iter_%s as arg #%d or without bpf_rcu_read_lock()\n",
 				iter_type_str(meta->btf, btf_id), regno);
 			return -EINVAL;
 		}
@@ -10381,6 +10395,18 @@ BTF_ID(func, bpf_dynptr_clone)
 BTF_ID(func, bpf_percpu_obj_new_impl)
 BTF_ID(func, bpf_percpu_obj_drop_impl)
 BTF_ID(func, bpf_iter_css_task_new)
+
+BTF_SET_START(rcu_protect_kfuns_set)
+BTF_ID(func, bpf_iter_process_new)
+BTF_ID(func, bpf_iter_css_pre_new)
+BTF_ID(func, bpf_iter_css_post_new)
+BTF_SET_END(rcu_protect_kfuns_set)
+
+static inline bool is_iter_need_rcu(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return btf_id_set_contains(&rcu_protect_kfuns_set, meta->func_id);
+}
+
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
