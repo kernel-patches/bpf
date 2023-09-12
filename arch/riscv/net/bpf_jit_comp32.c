@@ -847,18 +847,15 @@ static int emit_load_r64(const s8 *dst, const s8 *src, s16 off,
 	switch (size) {
 	case BPF_B:
 		emit(rv_lbu(lo(rd), 0, RV_REG_T0), ctx);
-		if (!ctx->prog->aux->verifier_zext)
-			emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
+		emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
 		break;
 	case BPF_H:
 		emit(rv_lhu(lo(rd), 0, RV_REG_T0), ctx);
-		if (!ctx->prog->aux->verifier_zext)
-			emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
+		emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
 		break;
 	case BPF_W:
 		emit(rv_lw(lo(rd), 0, RV_REG_T0), ctx);
-		if (!ctx->prog->aux->verifier_zext)
-			emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
+		emit(rv_addi(hi(rd), RV_REG_ZERO, 0), ctx);
 		break;
 	case BPF_DW:
 		emit(rv_lw(lo(rd), 0, RV_REG_T0), ctx);
