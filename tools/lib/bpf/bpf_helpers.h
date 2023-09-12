@@ -310,6 +310,11 @@ extern int bpf_iter_css_task_new(struct bpf_iter_css_task *it,
 extern struct task_struct *bpf_iter_css_task_next(struct bpf_iter_css_task *it) __weak __ksym;
 extern void bpf_iter_css_task_destroy(struct bpf_iter_css_task *it) __weak __ksym;
 
+struct bpf_iter_process;
+extern int bpf_iter_process_new(struct bpf_iter_process *it) __weak __ksym;
+extern struct task_struct *bpf_iter_process_next(struct bpf_iter_process *it) __weak __ksym;
+extern void bpf_iter_process_destroy(struct bpf_iter_process *it) __weak __ksym;
+
 #ifndef bpf_for_each
 /* bpf_for_each(iter_type, cur_elem, args...) provides generic construct for
  * using BPF open-coded iterators without having to write mundane explicit

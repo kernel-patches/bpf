@@ -851,6 +851,35 @@ __bpf_kfunc void bpf_iter_css_task_destroy(struct bpf_iter_css_task *it)
 	kfree(kit->css_it);
 }
 
+struct bpf_iter_process_kern {
+	struct task_struct *tsk;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc int bpf_iter_process_new(struct bpf_iter_process *it)
+{
+	struct bpf_iter_process_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_process_kern) != sizeof(struct bpf_iter_process));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_process_kern) !=
+					__alignof__(struct bpf_iter_process));
+
+	kit->tsk = &init_task;
+	return 0;
+}
+
+__bpf_kfunc struct task_struct *bpf_iter_process_next(struct bpf_iter_process *it)
+{
+	struct bpf_iter_process_kern *kit = (void *)it;
+
+	kit->tsk = next_task(kit->tsk);
+
+	return kit->tsk == &init_task ? NULL : kit->tsk;
+}
+
+__bpf_kfunc void bpf_iter_process_destroy(struct bpf_iter_process *it)
+{
+}
+
 DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
 
 static void do_mmap_read_unlock(struct irq_work *entry)
