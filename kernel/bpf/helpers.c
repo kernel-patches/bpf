@@ -2219,6 +2219,73 @@ __bpf_kfunc long bpf_task_under_cgroup(struct task_struct *task,
 	rcu_read_unlock();
 	return ret;
 }
+
+/**
+ * bpf_cgroup_id_from_task_within_controller - To get the associated cgroup_id from
+ * a task within a specific cgroup controller.
+ * @task: The target task
+ * @ssid: The id of cgroup controller, e.g. cpu_cgrp_id, memory_cgrp_id and etc.
+ */
+__bpf_kfunc u64 bpf_cgroup_id_from_task_within_controller(struct task_struct *task, int ssid)
+{
+	struct cgroup *cgroup;
+	int id = 0;
+
+	rcu_read_lock();
+	cgroup = task_cgroup(task, ssid);
+	if (!cgroup)
+		goto out;
+	id = cgroup_id(cgroup);
+
+out:
+	rcu_read_unlock();
+	return id;
+}
+
+/**
+ * bpf_cgroup_id_from_task_within_controller - To get the associated cgroup_id from
+ * a task within a specific cgroup controller.
+ * @task: The target task
+ * @ssid: The id of cgroup subsystem, e.g. cpu_cgrp_id, memory_cgrp_id and etc.
+ * @level: The level of ancestor to look up
+ */
+__bpf_kfunc u64 bpf_cgroup_ancestor_id_from_task_within_controller(struct task_struct *task,
+								   int ssid, int level)
+{
+	struct cgroup *cgrp, *ancestor;
+	int id = 0;
+
+	rcu_read_lock();
+	cgrp = task_cgroup(task, ssid);
+	if (!cgrp)
+		goto out;
+	ancestor = cgroup_ancestor(cgrp, level);
+	if (ancestor)
+		id = cgroup_id(ancestor);
+
+out:
+	rcu_read_unlock();
+	return id;
+}
+
+/**
+ * bpf_cgroup_acquire_from_id_within_controller - To acquire the cgroup from a
+ * cgroup id within specific cgroup controller. A cgroup acquired by this kfunc
+ * which is not stored in a map as a kptr, must be released by calling
+ * bpf_cgroup_release().
+ * @cgid: cgroup id
+ * @ssid: The id of a cgroup controller, e.g. cpu_cgrp_id, memory_cgrp_id and etc.
+ */
+__bpf_kfunc struct cgroup *bpf_cgroup_acquire_from_id_within_controller(u64 cgid, int ssid)
+{
+	struct cgroup *cgrp;
+
+	cgrp = cgroup_get_from_id_within_subsys(cgid, ssid);
+	if (IS_ERR(cgrp))
+		return NULL;
+	return cgrp;
+}
+
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -2525,6 +2592,9 @@ BTF_ID_FLAGS(func, bpf_cgroup_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
+BTF_ID_FLAGS(func, bpf_cgroup_id_from_task_within_controller)
+BTF_ID_FLAGS(func, bpf_cgroup_ancestor_id_from_task_within_controller)
+BTF_ID_FLAGS(func, bpf_cgroup_acquire_from_id_within_controller, KF_ACQUIRE | KF_RET_NULL)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
