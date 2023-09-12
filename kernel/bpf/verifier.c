@@ -3028,9 +3028,7 @@ static bool is_reg64(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return false;
 
 	if (class == BPF_LDX) {
-		if (t != SRC_OP)
-			return BPF_SIZE(code) == BPF_DW;
-		/* LDX source must be ptr. */
+		/* LDX source must be a ptr. and LDX destination is always zero-extended. */
 		return true;
 	}
 
