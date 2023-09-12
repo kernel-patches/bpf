@@ -936,14 +936,13 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *
 				PPC_BCC_SHORT(COND_GT, (ctx->idx + 4) * 4);
 				EMIT(PPC_RAW_LI(dst_reg, 0));
 				/*
-				 * For BPF_DW case, "li reg_h,0" would be needed when
-				 * !fp->aux->verifier_zext. Emit NOP otherwise.
+				 * For BPF_DW case, "li reg_h,0" would be needed emit NOP otherwise.
 				 *
 				 * Note that "li reg_h,0" is emitted for BPF_B/H/W case,
 				 * if necessary. So, jump there insted of emitting an
 				 * additional "li reg_h,0" instruction.
 				 */
-				if (size == BPF_DW && !fp->aux->verifier_zext)
+				if (size == BPF_DW)
 					EMIT(PPC_RAW_LI(dst_reg_h, 0));
 				else
 					EMIT(PPC_RAW_NOP());
@@ -974,7 +973,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *
 				break;
 			}
 
-			if (size != BPF_DW && !fp->aux->verifier_zext)
+			if (size != BPF_DW)
 				EMIT(PPC_RAW_LI(dst_reg_h, 0));
 
 			if (BPF_MODE(code) == BPF_PROBE_MEM) {
@@ -982,20 +981,12 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, struct codegen_context *
 				int jmp_off = 4;
 
 				/*
-				 * In case of BPF_DW, two lwz instructions are emitted, one
-				 * for higher 32-bit and another for lower 32-bit. So, set
-				 * ex->insn to the first of the two and jump over both
-				 * instructions in fixup.
-				 *
-				 * Similarly, with !verifier_zext, two instructions are
-				 * emitted for BPF_B/H/W case. So, set ex->insn to the
-				 * instruction that could fault and skip over both
-				 * instructions.
+				 * Two instructions are emitted for LDX.
+				 * So, set ex->insn to the instruction that could fault and skip
+				 * over both instructions.
 				 */
-				if (size == BPF_DW || !fp->aux->verifier_zext) {
-					insn_idx -= 1;
-					jmp_off += 4;
-				}
+				insn_idx -= 1;
+				jmp_off += 4;
 
 				ret = bpf_add_extable_entry(fp, image, pass, ctx, insn_idx,
 							    jmp_off, dst_reg);
