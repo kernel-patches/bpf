@@ -19750,6 +19750,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Subprog %s doesn't exist\n", tname);
 			return -EINVAL;
 		}
+		if (aux->func && aux->func[subprog]->aux->exception_cb) {
+			bpf_log(log,
+				"%s programs cannot attach to exception callback\n",
+				prog_extension ? "Extension" : "FENTRY/FEXIT");
+			return -EINVAL;
+		}
 		conservative = aux->func_info_aux[subprog].unreliable;
 		if (prog_extension) {
 			if (conservative) {
@@ -19760,6 +19766,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			if (!prog->jit_requested) {
 				bpf_log(log,
 					"Extension programs should be JITed\n");
+				return -EINVAL;
+			}
+			if (aux->func && aux->func[subprog]->aux->exception_cb) {
+				bpf_log(log,
+					"Extension programs cannot replace exception callback\n");
 				return -EINVAL;
 			}
 		}
