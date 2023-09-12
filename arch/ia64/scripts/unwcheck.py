@@ -21,7 +21,7 @@ if len(sys.argv) != 2:
 
 readelf = os.getenv("READELF", "readelf")
 
-start_pattern = re.compile("<([^>]*)>: \[0x([0-9a-f]+)-0x([0-9a-f]+)\]")
+start_pattern = re.compile(r"<([^>]*)>: \[0x([0-9a-f]+)-0x([0-9a-f]+)\]")
 rlen_pattern  = re.compile(".*rlen=([0-9]+)")
 
 def check_func (func, slots, rlen_sum):
