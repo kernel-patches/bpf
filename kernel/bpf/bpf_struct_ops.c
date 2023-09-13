@@ -101,6 +101,7 @@ static struct bpf_struct_ops *bpf_struct_ops_static[] = {
 static struct bpf_struct_ops **bpf_struct_ops;
 static int bpf_struct_ops_num;
 static int bpf_struct_ops_capacity;
+static DEFINE_MUTEX(bpf_struct_ops_mutex);
 
 const struct bpf_verifier_ops bpf_struct_ops_verifier_ops = {
 };
@@ -307,7 +308,10 @@ int register_bpf_struct_ops(struct bpf_struct_ops_mod *mod)
 	}
 
 	bpf_struct_ops_init_one(st_ops, btf, log);
+	st_ops->owner = mod->owner;
+	mutex_lock(&bpf_struct_ops_mutex);
 	err = add_struct_ops(st_ops);
+	mutex_unlock(&bpf_struct_ops_mutex);
 
 errout:
 	kfree(log);
@@ -321,7 +325,9 @@ int unregister_bpf_struct_ops(struct bpf_struct_ops_mod *mod)
 	struct bpf_struct_ops *st_ops = mod->st_ops;
 	int err;
 
+	mutex_lock(&bpf_struct_ops_mutex);
 	err = remove_struct_ops(st_ops);
+	mutex_unlock(&bpf_struct_ops_mutex);
 	if (!err && st_ops->uninit)
 		err = st_ops->uninit();
 
@@ -334,34 +340,44 @@ extern struct btf *btf_vmlinux;
 static const struct bpf_struct_ops *
 bpf_struct_ops_find_value(u32 value_id, struct btf *btf)
 {
+	struct bpf_struct_ops *st_ops = NULL;
 	unsigned int i;
 
 	if (!value_id || !btf_vmlinux)
 		return NULL;
 
+	mutex_lock(&bpf_struct_ops_mutex);
 	for (i = 0; i < bpf_struct_ops_num; i++) {
 		if (bpf_struct_ops[i]->value_id == value_id &&
-		    bpf_struct_ops[i]->btf == btf)
-			return bpf_struct_ops[i];
+		    bpf_struct_ops[i]->btf == btf) {
+			st_ops = bpf_struct_ops[i];
+			break;
+		}
 	}
+	mutex_unlock(&bpf_struct_ops_mutex);
 
-	return NULL;
+	return st_ops;
 }
 
 const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id, struct btf *btf)
 {
+	struct bpf_struct_ops *st_ops = NULL;
 	unsigned int i;
 
 	if (!type_id || !btf_vmlinux)
 		return NULL;
 
+	mutex_lock(&bpf_struct_ops_mutex);
 	for (i = 0; i < bpf_struct_ops_num; i++) {
 		if (bpf_struct_ops[i]->type_id == type_id &&
-		    bpf_struct_ops[i]->btf == btf)
-			return bpf_struct_ops[i];
+		    bpf_struct_ops[i]->btf == btf) {
+			st_ops = bpf_struct_ops[i];
+			break;
+		}
 	}
+	mutex_unlock(&bpf_struct_ops_mutex);
 
-	return NULL;
+	return st_ops;
 }
 
 static int bpf_struct_ops_map_get_next_key(struct bpf_map *map, void *key,
@@ -749,6 +765,8 @@ static void __bpf_struct_ops_map_free(struct bpf_map *map)
 
 static void bpf_struct_ops_map_free(struct bpf_map *map)
 {
+	struct bpf_struct_ops_map *st_map = (struct bpf_struct_ops_map *)map;
+
 	/* The struct_ops's function may switch to another struct_ops.
 	 *
 	 * For example, bpf_tcp_cc_x->init() may switch to
@@ -766,6 +784,7 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	 */
 	synchronize_rcu_mult(call_rcu, call_rcu_tasks);
 
+	module_put(st_map->st_ops->owner);
 	__bpf_struct_ops_map_free(map);
 }
 
@@ -798,6 +817,9 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id, btf);
 	if (!st_ops)
 		return ERR_PTR(-ENOTSUPP);
+
+	if (!try_module_get(st_ops->owner))
+		return ERR_PTR(-EINVAL);
 
 	vt = st_ops->value_type;
 	if (attr->value_size != vt->size)

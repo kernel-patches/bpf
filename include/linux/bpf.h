@@ -1626,6 +1626,7 @@ struct bpf_struct_ops {
 	int (*update)(void *kdata, void *old_kdata);
 	int (*validate)(void *kdata);
 	const struct btf *btf;
+	struct module *owner;
 	const struct btf_type *type;
 	const struct btf_type *value_type;
 	const char *name;
