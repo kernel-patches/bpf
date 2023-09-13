@@ -188,6 +188,10 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 			pr_warn("Error in init bpf_struct_ops %s\n",
 				st_ops->name);
 		} else {
+			/* XXX: We need a owner (module) here to company
+			 * with type_id and value_id.
+			 */
+			st_ops->btf = btf;
 			st_ops->type_id = type_id;
 			st_ops->type = t;
 			st_ops->value_id = value_id;
@@ -328,7 +332,7 @@ EXPORT_SYMBOL(unregister_bpf_struct_ops);
 extern struct btf *btf_vmlinux;
 
 static const struct bpf_struct_ops *
-bpf_struct_ops_find_value(u32 value_id)
+bpf_struct_ops_find_value(u32 value_id, struct btf *btf)
 {
 	unsigned int i;
 
@@ -336,14 +340,15 @@ bpf_struct_ops_find_value(u32 value_id)
 		return NULL;
 
 	for (i = 0; i < bpf_struct_ops_num; i++) {
-		if (bpf_struct_ops[i]->value_id == value_id)
+		if (bpf_struct_ops[i]->value_id == value_id &&
+		    bpf_struct_ops[i]->btf == btf)
 			return bpf_struct_ops[i];
 	}
 
 	return NULL;
 }
 
-const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id)
+const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id, struct btf *btf)
 {
 	unsigned int i;
 
@@ -351,7 +356,8 @@ const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id)
 		return NULL;
 
 	for (i = 0; i < bpf_struct_ops_num; i++) {
-		if (bpf_struct_ops[i]->type_id == type_id)
+		if (bpf_struct_ops[i]->type_id == type_id &&
+		    bpf_struct_ops[i]->btf == btf)
 			return bpf_struct_ops[i];
 	}
 
@@ -423,7 +429,7 @@ static void bpf_struct_ops_map_put_progs(struct bpf_struct_ops_map *st_map)
 	}
 }
 
-static int check_zero_holes(const struct btf_type *t, void *data)
+static int check_zero_holes(const struct btf *btf, const struct btf_type *t, void *data)
 {
 	const struct btf_member *member;
 	u32 i, moff, msize, prev_mend = 0;
@@ -435,8 +441,8 @@ static int check_zero_holes(const struct btf_type *t, void *data)
 		    memchr_inv(data + prev_mend, 0, moff - prev_mend))
 			return -EINVAL;
 
-		mtype = btf_type_by_id(btf_vmlinux, member->type);
-		mtype = btf_resolve_size(btf_vmlinux, mtype, &msize);
+		mtype = btf_type_by_id(btf, member->type);
+		mtype = btf_resolve_size(btf, mtype, &msize);
 		if (IS_ERR(mtype))
 			return PTR_ERR(mtype);
 		prev_mend = moff + msize;
@@ -489,7 +495,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	const struct bpf_struct_ops *st_ops = st_map->st_ops;
 	struct bpf_struct_ops_value *uvalue, *kvalue;
 	const struct btf_member *member;
-	const struct btf_type *t = st_ops->type;
+	const struct btf_type *t;
 	struct bpf_tramp_links *tlinks;
 	void *udata, *kdata;
 	int prog_fd, err;
@@ -499,15 +505,20 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	if (flags)
 		return -EINVAL;
 
+	if (!st_ops)
+		return -EINVAL;
+
+	t = st_ops->type;
+
 	if (*(u32 *)key != 0)
 		return -E2BIG;
 
-	err = check_zero_holes(st_ops->value_type, value);
+	err = check_zero_holes(st_ops->btf, st_ops->value_type, value);
 	if (err)
 		return err;
 
 	uvalue = value;
-	err = check_zero_holes(t, uvalue->data);
+	err = check_zero_holes(st_ops->btf, t, uvalue->data);
 	if (err)
 		return err;
 
@@ -773,8 +784,9 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	struct bpf_struct_ops_map *st_map;
 	const struct btf_type *t, *vt;
 	struct bpf_map *map;
+	struct btf *btf;
 
-	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id);
+	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id, btf_vmlinux);
 	if (!st_ops)
 		return ERR_PTR(-ENOTSUPP);
 
