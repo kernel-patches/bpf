@@ -2334,28 +2334,17 @@ SYSCALL_DEFINE5(setsockopt, int, fd, int, level, int, optname,
 INDIRECT_CALLABLE_DECLARE(bool tcp_bpf_bypass_getsockopt(int level,
 							 int optname));
 
-/*
- *	Get a socket option. Because we don't know the option lengths we have
- *	to pass a user mode parameter for the protocols to sort out.
- */
-int __sys_getsockopt(int fd, int level, int optname, char __user *optval,
-		int __user *optlen)
+int do_sock_getsockopt(struct socket *sock, bool compat, int level,
+		       int optname, char __user *optval,
+		       int __user *optlen)
 {
 	int max_optlen __maybe_unused;
 	const struct proto_ops *ops;
-	int err, fput_needed;
-	struct socket *sock;
-
-	sock = sockfd_lookup_light(fd, &err, &fput_needed);
-	if (!sock)
-		return err;
+	int err;
 
 	err = security_socket_getsockopt(sock, level, optname);
 	if (err)
-		goto out_put;
-
-	if (!in_compat_syscall())
-		max_optlen = BPF_CGROUP_GETSOCKOPT_MAX_OPTLEN(optlen);
+		return err;
 
 	ops = READ_ONCE(sock->ops);
 	if (level == SOL_SOCKET)
@@ -2366,11 +2355,34 @@ int __sys_getsockopt(int fd, int level, int optname, char __user *optval,
 		err = ops->getsockopt(sock, level, optname, optval,
 					    optlen);
 
-	if (!in_compat_syscall())
+	if (!compat) {
+		max_optlen = BPF_CGROUP_GETSOCKOPT_MAX_OPTLEN(optlen);
 		err = BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock->sk, level, optname,
 						     optval, optlen, max_optlen,
 						     err);
-out_put:
+	}
+
+	return err;
+}
+EXPORT_SYMBOL(do_sock_getsockopt);
+
+/* Get a socket option. Because we don't know the option lengths we have
+ * to pass a user mode parameter for the protocols to sort out.
+ */
+int __sys_getsockopt(int fd, int level, int optname, char __user *optval,
+		     int __user *optlen)
+{
+	bool compat = in_compat_syscall();
+	int err, fput_needed;
+	struct socket *sock;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = do_sock_getsockopt(sock, compat, level, optname, optval,
+				 optlen);
+
 	fput_light(sock->file, fput_needed);
 	return err;
 }
