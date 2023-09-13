@@ -92,12 +92,15 @@ enum {
 	__NR_BPF_STRUCT_OPS_TYPE,
 };
 
-static struct bpf_struct_ops * const bpf_struct_ops[] = {
+static struct bpf_struct_ops *bpf_struct_ops_static[] = {
 #define BPF_STRUCT_OPS_TYPE(_name)				\
 	[BPF_STRUCT_OPS_TYPE_##_name] = &bpf_##_name,
 #include "bpf_struct_ops_types.h"
 #undef BPF_STRUCT_OPS_TYPE
 };
+static struct bpf_struct_ops **bpf_struct_ops;
+static int bpf_struct_ops_num;
+static int bpf_struct_ops_capacity;
 
 const struct bpf_verifier_ops bpf_struct_ops_verifier_ops = {
 };
@@ -212,11 +215,115 @@ void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 	}
 	module_type = btf_type_by_id(btf, module_id);
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
+	bpf_struct_ops_num = ARRAY_SIZE(bpf_struct_ops_static);
+	bpf_struct_ops_capacity = bpf_struct_ops_num;
+	bpf_struct_ops = bpf_struct_ops_static;
+
+	for (i = 0; i < bpf_struct_ops_num; i++) {
 		st_ops = bpf_struct_ops[i];
 		bpf_struct_ops_init_one(st_ops, btf, log);
 	}
 }
+
+static int add_struct_ops(struct bpf_struct_ops *st_ops)
+{
+	struct bpf_struct_ops **new_ops;
+	int i;
+
+	for (i = 0; i < bpf_struct_ops_num; i++) {
+		if (bpf_struct_ops[i] == st_ops)
+			return -EEXIST;
+		if (strcmp(bpf_struct_ops[i]->name, st_ops->name) == 0)
+			return -EEXIST;
+	}
+
+	if (bpf_struct_ops_num == bpf_struct_ops_capacity) {
+		if (bpf_struct_ops == bpf_struct_ops_static) {
+			new_ops = kmalloc_array(((bpf_struct_ops_capacity + 0x7) & ~0x7) * 2,
+						sizeof(*new_ops),
+						GFP_KERNEL);
+			if (!new_ops)
+				return -ENOMEM;
+			memcpy(new_ops, bpf_struct_ops,
+			       sizeof(*new_ops) * bpf_struct_ops_num);
+		} else {
+			new_ops = krealloc_array(bpf_struct_ops,
+						 bpf_struct_ops_capacity * 2,
+						 sizeof(*new_ops),
+						 GFP_KERNEL);
+			if (!new_ops)
+				return -ENOMEM;
+		}
+		bpf_struct_ops = new_ops;
+		bpf_struct_ops_capacity *= 2;
+	}
+
+	bpf_struct_ops[bpf_struct_ops_num++] = st_ops;
+	return 0;
+}
+
+static int remove_struct_ops(struct bpf_struct_ops *st_ops)
+{
+	int i;
+
+	for (i = 0; i < bpf_struct_ops_num; i++) {
+		if (bpf_struct_ops[i] == st_ops) {
+			bpf_struct_ops_num--;
+			bpf_struct_ops[i] = bpf_struct_ops[bpf_struct_ops_num];
+			return 0;
+		}
+	}
+
+	return -ENOENT;
+}
+
+int register_bpf_struct_ops(struct bpf_struct_ops_mod *mod)
+{
+	struct bpf_struct_ops *st_ops = mod->st_ops;
+	struct bpf_verifier_log *log;
+	struct btf *btf;
+	int err;
+
+	if (mod->st_ops == NULL ||
+	    mod->owner == NULL)
+		return -EINVAL;
+
+	log = kzalloc(sizeof(*log), GFP_KERNEL | __GFP_NOWARN);
+	if (!log) {
+		err = -ENOMEM;
+		goto errout;
+	}
+
+	log->level = BPF_LOG_KERNEL;
+
+	btf = btf_get_module_btf(mod->owner);
+	if (!btf) {
+		err = -EINVAL;
+		goto errout;
+	}
+
+	bpf_struct_ops_init_one(st_ops, btf, log);
+	err = add_struct_ops(st_ops);
+
+errout:
+	kfree(log);
+
+	return err;
+}
+EXPORT_SYMBOL(register_bpf_struct_ops);
+
+int unregister_bpf_struct_ops(struct bpf_struct_ops_mod *mod)
+{
+	struct bpf_struct_ops *st_ops = mod->st_ops;
+	int err;
+
+	err = remove_struct_ops(st_ops);
+	if (!err && st_ops->uninit)
+		err = st_ops->uninit();
+
+	return err;
+}
+EXPORT_SYMBOL(unregister_bpf_struct_ops);
 
 extern struct btf *btf_vmlinux;
 
@@ -228,7 +335,7 @@ bpf_struct_ops_find_value(u32 value_id)
 	if (!value_id || !btf_vmlinux)
 		return NULL;
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
+	for (i = 0; i < bpf_struct_ops_num; i++) {
 		if (bpf_struct_ops[i]->value_id == value_id)
 			return bpf_struct_ops[i];
 	}
@@ -243,7 +350,7 @@ const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id)
 	if (!type_id || !btf_vmlinux)
 		return NULL;
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
+	for (i = 0; i < bpf_struct_ops_num; i++) {
 		if (bpf_struct_ops[i]->type_id == type_id)
 			return bpf_struct_ops[i];
 	}

@@ -1572,6 +1572,8 @@ struct btf_member;
  * @init: A callback that is invoked a single time, and before any other
  *	  callback, to initialize the structure. A nonzero return value means
  *	  the subsystem could not be initialized.
+ * @uninit: A callback that is invoked after any other
+ *	    callback to release resources used by the subsystem.
  * @check_member: When defined, a callback invoked by the verifier to allow
  *		  the subsystem to determine if an entry in the struct_ops map
  *		  is valid. A nonzero return value means that the map is
@@ -1612,6 +1614,7 @@ struct btf_member;
 struct bpf_struct_ops {
 	const struct bpf_verifier_ops *verifier_ops;
 	int (*init)(struct btf *btf);
+	int (*uninit)(void);
 	int (*check_member)(const struct btf_type *t,
 			    const struct btf_member *member,
 			    const struct bpf_prog *prog);
@@ -1628,6 +1631,11 @@ struct bpf_struct_ops {
 	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 	u32 type_id;
 	u32 value_id;
+};
+
+struct bpf_struct_ops_mod {
+	struct module *owner;
+	struct bpf_struct_ops *st_ops;
 };
 
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
@@ -3193,5 +3201,10 @@ static inline gfp_t bpf_memcg_flags(gfp_t flags)
 		return flags | __GFP_ACCOUNT;
 	return flags;
 }
+
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+int register_bpf_struct_ops(struct bpf_struct_ops_mod *mod);
+int unregister_bpf_struct_ops(struct bpf_struct_ops_mod *mod);
+#endif
 
 #endif /* _LINUX_BPF_H */
