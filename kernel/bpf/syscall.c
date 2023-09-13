@@ -1208,6 +1208,10 @@ static int map_create(union bpf_attr *attr)
 		return -EPERM;
 	}
 
+	/* XXX: attr->attach_btf_obj_fd should be initialized by the user
+	 *      space. We should use it to find type infor from
+	 *      attach_btf_id.
+	 */
 	map = ops->map_alloc(attr);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
@@ -2627,6 +2631,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 			return -EINVAL;
 		btf_get(attach_btf);
 	}
+
 
 	bpf_prog_load_fixup_attach_type(attr);
 	if (bpf_prog_load_check_attach(type, attr->expected_attach_type,
@@ -4580,6 +4585,7 @@ static int bpf_map_get_info_by_fd(struct file *file,
 		info.btf_value_type_id = map->btf_value_type_id;
 	}
 	info.btf_vmlinux_value_type_id = map->btf_vmlinux_value_type_id;
+	/* XXX: copy map->mod_btf->name as well? */
 
 	if (bpf_map_is_offloaded(map)) {
 		err = bpf_map_offload_info_fill(&info, map);

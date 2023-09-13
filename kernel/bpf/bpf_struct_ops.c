@@ -133,6 +133,9 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 	}
 	sprintf(value_name, "%s%s", VALUE_PREFIX, st_ops->name);
 
+	/* XXX: This ID is not unique across modules. We need to include
+	 * module or module ID as an unique ID.
+	 */
 	value_id = btf_find_by_name_kind(btf, value_name,
 					 BTF_KIND_STRUCT);
 	if (value_id < 0) {
@@ -141,6 +144,9 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 		return;
 	}
 
+	/* XXX: This ID is not unique across modules. We need to include
+	 * module or module ID as an unique ID.
+	 */
 	type_id = btf_find_by_name_kind(btf, st_ops->name,
 					BTF_KIND_STRUCT);
 	if (type_id < 0) {
@@ -569,6 +575,9 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		u32 moff;
 
 		moff = __btf_member_bit_offset(t, member) / 8;
+		/* XXX: Should resolve member types from module BTF, but
+		 * it's not available yet.
+		 */
 		ptype = btf_type_resolve_ptr(btf_vmlinux, member->type, NULL);
 		if (ptype == module_type) {
 			if (*(void **)(udata + moff))
@@ -837,6 +846,12 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	if (!st_map)
 		return ERR_PTR(-ENOMEM);
 
+	/* XXX: should sync with the unregister path */
+	/* XXX: Since we assign a st_ops, we need to do a rcu_synchronize()
+	 *      twice to make sure the st_ops is not freed while other
+	 *      tasks use this value. Or, we can find st_ops again holding
+	 *      the mutex to make sure it is not freed.
+	 */
 	st_map->st_ops = st_ops;
 	map = &st_map->map;
 

@@ -988,6 +988,7 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
 	 * find "struct bpf_struct_ops_tcp_congestion_ops" from the
 	 * btf_vmlinux.
 	 */
+	/* XXX: Should search module BTFs as well. */
 	kern_vtype_id = find_btf_by_prefix_kind(btf, STRUCT_OPS_VALUE_PREFIX,
 						tname, BTF_KIND_STRUCT);
 	if (kern_vtype_id < 0) {
@@ -5143,6 +5144,8 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 	return 0;
 }
 
+int turnon_kk = false;
+
 static void bpf_map__destroy(struct bpf_map *map);
 
 static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, bool is_inner)
@@ -7945,13 +7948,32 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 		bpf_gen__init(obj->gen_loader, extra_log_level, obj->nr_programs, obj->nr_maps);
 
 	err = bpf_object__probe_loading(obj);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
+	/* XXX: should correct module btf if needed.
+	 *      obj->btf_vmlinux provides the information of members of
+	 *      the struct_ops type required to load the object.
+	 *      (see bpf_object__init_kern_struct_ops_maps() and
+	 *      bpf_map__init_kern_struct_ops())
+	 */
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
 	err = err ? : bpf_object__sanitize_maps(obj);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
+	/* XXX: obj->btf_vmliux is not used for loading the object. */
 	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
 	err = err ? : bpf_object__create_maps(obj);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
 	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : target_btf_path);
+	if (turnon_kk)
+		printf("bpf_object__probe_loading err=%d\n", err);
 	err = err ? : bpf_object__load_progs(obj, extra_log_level);
 	err = err ? : bpf_object_init_prog_arrays(obj);
 	err = err ? : bpf_object_prepare_struct_ops(obj);
@@ -9230,6 +9252,7 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 		 * attach_btf_id and member_idx
 		 */
 		if (!prog->attach_btf_id) {
+			/* XXX: attach_btf_obj_fd is needed as well */
 			prog->attach_btf_id = st_ops->type_id;
 			prog->expected_attach_type = member_idx;
 		}
@@ -13124,7 +13147,9 @@ int bpf_object__load_skeleton(struct bpf_object_skeleton *s)
 {
 	int i, err;
 
+	printf("Loading BPF skeleton '%s'...\n", s->name);
 	err = bpf_object__load(*s->obj);
+	printf("bpf_object__load\n");
 	if (err) {
 		pr_warn("failed to load BPF skeleton '%s': %d\n", s->name, err);
 		return libbpf_err(err);
@@ -13169,6 +13194,7 @@ int bpf_object__load_skeleton(struct bpf_object_skeleton *s)
 		}
 	}
 
+	printf("BPF skeleton '%s' loaded successfully\n", s->name);
 	return 0;
 }
 
