@@ -1,0 +1,48 @@
+name: 'run-veristat'
+description: 'Run veristat benchmark'
+inputs:
+  arch_and_tool:
+    description: 'arch and build tool string'
+    required: true
+  veristat_output:
+    description: 'veristat output'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/upload-artifact@v3
+      with:
+        name: ${{ inputs.arch_and_tool }}-baseline-${{ inputs.veristat_output }}
+        if-no-files-found: error
+        path: ${{ github.workspace }}/${{ inputs.veristat_output }}
+
+    # For pull request:
+    # - get baseline log from cache
+    # - compare it to current run
+    - if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/cache/restore@v3
+      with:
+        key: ${{ env.CACHE_RESULT_KEY }}
+        restore-keys: |
+          ${{ env.CACHE_RESULT_KEY }}-
+        path: '${{ env.CACHE_RESULT_KEY }}'
+      env:
+        CACHE_RESULT_KEY: ${{ inputs.arch_and_tool }}-baseline-${{ inputs.veristat_output }}
+
+    - if: ${{ github.event_name == 'pull_request' }}
+      name: Show veristat comparison
+      shell: bash
+      run: ./.github/scripts/compare-veristat-results.sh
+      env:
+        CACHE_RESULT_KEY: ${{ inputs.arch_and_tool }}-baseline-${{ inputs.veristat_output }}
+        VERISTAT_OUTPUT: ${{ inputs.veristat_output }}
+
+    # For push: just put baseline log to cache
+    - if: ${{ github.event_name == 'push' }}
+      uses: actions/cache/save@v3
+      with:
+        key: ${{ env.CACHE_RESULT_KEY }}-${{ github.run_id }}
+        path: '${{ github.workspace }}/${{ inputs.veristat_output }}'
+      env:
+        CACHE_RESULT_KEY: ${{ inputs.arch_and_tool }}-baseline-${{ inputs.veristat_output }}
+
