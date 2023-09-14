@@ -118,10 +118,9 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	/* Map writable consumer page */
 	tmp = mmap(NULL, rb->page_size, PROT_READ | PROT_WRITE, MAP_SHARED, map_fd, 0);
 	if (tmp == MAP_FAILED) {
-		err = -errno;
 		pr_warn("ringbuf: failed to mmap consumer page for map fd=%d: %d\n",
 			map_fd, err);
-		return libbpf_err(err);
+		goto err_out;
 	}
 	r->consumer_pos = tmp;
 
@@ -131,16 +130,15 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	 */
 	mmap_sz = rb->page_size + 2 * (__u64)info.max_entries;
 	if (mmap_sz != (__u64)(size_t)mmap_sz) {
+		errno = E2BIG;
 		pr_warn("ringbuf: ring buffer size (%u) is too big\n", info.max_entries);
-		return libbpf_err(-E2BIG);
+		goto err_out;
 	}
 	tmp = mmap(NULL, (size_t)mmap_sz, PROT_READ, MAP_SHARED, map_fd, rb->page_size);
 	if (tmp == MAP_FAILED) {
-		err = -errno;
-		ringbuf_unmap_ring(rb, r);
 		pr_warn("ringbuf: failed to mmap data pages for map fd=%d: %d\n",
 			map_fd, err);
-		return libbpf_err(err);
+		goto err_out;
 	}
 	r->producer_pos = tmp;
 	r->data = tmp + rb->page_size;
@@ -151,15 +149,18 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	e->events = EPOLLIN;
 	e->data.fd = rb->ring_cnt;
 	if (epoll_ctl(rb->epoll_fd, EPOLL_CTL_ADD, map_fd, e) < 0) {
-		err = -errno;
-		ringbuf_unmap_ring(rb, r);
 		pr_warn("ringbuf: failed to epoll add map fd=%d: %d\n",
 			map_fd, err);
-		return libbpf_err(err);
+		goto err_out;
 	}
 
 	rb->ring_cnt++;
 	return 0;
+
+err_out:
+	err = -errno;
+	ringbuf_unmap_ring(rb, r);
+	return libbpf_err(err);
 }
 
 void ring_buffer__free(struct ring_buffer *rb)
