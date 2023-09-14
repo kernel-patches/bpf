@@ -91,6 +91,8 @@ static void ringbuf_subtest(void)
 	int err, cnt, rb_fd;
 	int page_size = getpagesize();
 	void *mmap_ptr, *tmp_ptr;
+	struct ring *ring;
+	unsigned long cons_pos, prod_pos;
 
 	skel = test_ringbuf_lskel__open();
 	if (CHECK(!skel, "skel_open", "skeleton open failed\n"))
@@ -162,6 +164,10 @@ static void ringbuf_subtest(void)
 
 	trigger_samples();
 
+	ring = ring_buffer__ring(ringbuf, 0);
+	if (CHECK(ring == NULL, "ringbuf_ring", "valid index returning NULL\n"))
+		goto cleanup;
+
 	/* 2 submitted + 1 discarded records */
 	CHECK(skel->bss->avail_data != 3 * rec_sz,
 	      "err_avail_size", "exp %ld, got %ld\n",
@@ -175,6 +181,18 @@ static void ringbuf_subtest(void)
 	CHECK(skel->bss->prod_pos != 3 * rec_sz,
 	      "err_prod_pos", "exp %ld, got %ld\n",
 	      3L * rec_sz, skel->bss->prod_pos);
+
+	/* verify getting this data directly via the ring object yields the same
+	 * results
+	 */
+	cons_pos = ring__consumer_pos(ring);
+	CHECK(cons_pos != 0,
+	      "err_ring_cons_pos", "exp %ld, got %ld\n",
+	      0L, cons_pos);
+	prod_pos = ring__producer_pos(ring);
+	CHECK(prod_pos != 3 * rec_sz,
+	      "err_ring_prod_pos", "exp %ld, got %ld\n",
+	      3L * rec_sz, prod_pos);
 
 	/* poll for samples */
 	err = ring_buffer__poll(ringbuf, -1);
