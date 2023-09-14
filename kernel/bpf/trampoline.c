@@ -697,8 +697,8 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 
 	bpf_lsm_find_cgroup_shim(prog, &bpf_func);
 	tr = bpf_trampoline_get(key, &tgt_info);
-	if (!tr)
-		return  -ENOMEM;
+	if (IS_ERR(tr))
+		return PTR_ERR(tr);
 
 	mutex_lock(&tr->mutex);
 
@@ -775,7 +775,7 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 
 	tr = bpf_trampoline_lookup(key);
 	if (!tr)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	mutex_lock(&tr->mutex);
 	if (tr->func.addr)
