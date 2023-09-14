@@ -42,6 +42,19 @@ definitions:
         doc:
           This feature informs if netdev implements non-linear XDP buffer
           support in ndo_xdp_xmit callback.
+  -
+    type: flags
+    name: xsk-flags
+    render-max: true
+    entries:
+      -
+        name: tx-timestamp
+        doc:
+          HW timestamping egress packets is supported by the driver.
+      -
+        name: tx-checksum
+        doc:
+          L3 checksum HW offload is supported by the driver.
 
 attribute-sets:
   -
@@ -68,6 +81,12 @@ attribute-sets:
         type: u32
         checks:
           min: 1
+      -
+        name: xsk-features
+        doc: Bitmask of enabled AF_XDP features.
+        type: u64
+        enum: xsk-flags
+        enum-as-flags: true
 
 operations:
   list:
@@ -84,6 +103,7 @@ operations:
             - ifindex
             - xdp-features
             - xdp-zc-max-segs
+            - xsk-features
       dump:
         reply: *dev-all
     -
