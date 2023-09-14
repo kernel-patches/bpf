@@ -1290,6 +1290,14 @@ LIBBPF_API unsigned long ring__producer_pos(const struct ring *r);
  */
 LIBBPF_API size_t ring__avail_data_size(const struct ring *r);
 
+/**
+ * @brief **ring__size()** returns the total size of the ringbuffer.
+ *
+ * @param r A ring object.
+ * @return The total size of the ringbuffer.
+ */
+LIBBPF_API size_t ring__size(const struct ring *r);
+
 struct user_ring_buffer_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */
 };
