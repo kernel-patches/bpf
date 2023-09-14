@@ -365,6 +365,19 @@ int ring__map_fd(const struct ring *r)
 	return r->map_fd;
 }
 
+int ring__consume(struct ring *r)
+{
+	int64_t res;
+
+	res = ringbuf_process_ring(r);
+	if (res < 0)
+		res = libbpf_err(res);
+	else if (res > INT_MAX)
+		res = INT_MAX;
+
+	return res;
+}
+
 static void user_ringbuf_unmap_ring(struct user_ring_buffer *rb)
 {
 	if (rb->consumer_pos) {
