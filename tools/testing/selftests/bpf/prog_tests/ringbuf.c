@@ -312,7 +312,11 @@ static void ringbuf_subtest(void)
 	 * samples, so consume them here to collect all the samples
 	 */
 	err = ring_buffer__consume(ringbuf);
-	CHECK(err < 0, "rb_consume", "failed: %d\b", err);
+	CHECK(err < 0, "ringbuffer_consume", "failed: %d\b", err);
+
+	/* also consume using ring__consume to make sure it works the same */
+	err = ring__consume(ring);
+	CHECK(err < 0, "ring_consume", "failed: %d\b", err);
 
 	/* 3 rounds, 2 samples each */
 	cnt = atomic_xchg(&sample_cnt, 0);
