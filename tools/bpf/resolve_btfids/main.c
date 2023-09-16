@@ -77,7 +77,10 @@
 #include <bpf/libbpf.h>
 #include <subcmd/parse-options.h>
 
-#define BTF_IDS_SECTION	".BTF_ids"
+#define BTF_IDS_SECTION		".BTF_ids"
+#define BTF_IDS_DATA_SECTION	".BTF_ids_data"
+#define BTF_IDS_DESC_SECTION	".BTF_ids_desc"
+
 #define BTF_ID		"__BTF_ID__"
 
 #define BTF_STRUCT	"struct"
@@ -112,10 +115,14 @@ struct object {
 		Elf		*elf;
 		Elf_Data	*symbols;
 		Elf_Data	*idlist;
+		Elf_Data	*iddata;
+		Elf_Data	*iddesc;
 		int		 symbols_shndx;
 		int		 idlist_shndx;
 		size_t		 strtabidx;
 		unsigned long	 idlist_addr;
+		unsigned long	 iddesc_addr;
+		unsigned long	 iddata_addr;
 	} efile;
 
 	struct rb_root	sets;
@@ -391,10 +398,71 @@ static int elf_collect(struct object *obj)
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
 			obj->efile.idlist_addr  = sh.sh_addr;
+		} else if (!strcmp(name, BTF_IDS_DATA_SECTION)) {
+			obj->efile.iddata       = data;
+			obj->efile.iddata_addr  = sh.sh_addr;
+		} else if (!strcmp(name, BTF_IDS_DESC_SECTION)) {
+			obj->efile.iddesc       = data;
+			obj->efile.iddesc_addr  = sh.sh_addr;
 		}
 
 		if (compressed_section_fix(elf, scn, &sh))
 			return -1;
+	}
+
+	return 0;
+}
+
+struct id_desc {
+	__u64 id;
+	__u64 type;
+	__u64 name;
+} __attribute__((packed));
+
+static int ids_collect(struct object *obj)
+{
+	Elf_Data *data = obj->efile.iddesc;
+	Elf_Data *str = obj->efile.iddata;
+	struct id_desc *end = data->d_buf + data->d_size;
+	struct id_desc *desc = data->d_buf;
+
+	while (desc < end) {
+		char *type = (char *) str->d_buf + (desc->type - obj->efile.iddata_addr);
+		char *name = (char *) str->d_buf + (desc->name - obj->efile.iddata_addr);
+		struct btf_id *id;
+
+		/* struct */
+		if (!strncmp(type, BTF_STRUCT, sizeof(BTF_STRUCT) - 1)) {
+			obj->nr_structs++;
+			id = btf_id__add(&obj->structs, name, false);
+		/* union  */
+		} else if (!strncmp(type, BTF_UNION, sizeof(BTF_UNION) - 1)) {
+			obj->nr_unions++;
+			id = btf_id__add(&obj->unions, name, false);
+		/* typedef */
+		} else if (!strncmp(type, BTF_TYPEDEF, sizeof(BTF_TYPEDEF) - 1)) {
+			obj->nr_typedefs++;
+			id = btf_id__add(&obj->typedefs, name, false);
+		/* func */
+		} else if (!strncmp(type, BTF_FUNC, sizeof(BTF_FUNC) - 1)) {
+			obj->nr_funcs++;
+			id = btf_id__add(&obj->funcs, name, false);
+		} else {
+			pr_err("FAILED unsupported type %s\n", type);
+			return -1;
+		}
+
+		if (!id)
+			return -ENOMEM;
+
+		if (id->addr_cnt >= ADDR_CNT) {
+			pr_err("FAILED symbol %s crossed the number of allowed lists\n",
+				id->name);
+			return -1;
+		}
+		id->addr[id->addr_cnt++] = desc->id;
+
+		desc++;
 	}
 
 	return 0;
@@ -765,6 +833,9 @@ int main(int argc, const char **argv)
 	}
 
 	if (symbols_collect(&obj))
+		goto out;
+
+	if (obj.efile.iddesc && ids_collect(&obj))
 		goto out;
 
 	if (symbols_resolve(&obj))
