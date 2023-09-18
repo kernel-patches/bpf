@@ -104,9 +104,6 @@
 #include "../kselftest.h"
 #include "xsk_xdp_common.h"
 
-static const char *MAC1 = "\x00\x0A\x56\x9E\xEE\x62";
-static const char *MAC2 = "\x00\x0A\x56\x9E\xEE\x61";
-
 static bool opt_verbose;
 static bool opt_print_tests;
 static enum test_mode opt_mode = TEST_MODE_ALL;
@@ -145,6 +142,18 @@ static void report_failure(struct test_spec *test)
 	test->fail = true;
 }
 
+static void generate_mac_addresses(const u8 *g_mac, u32 num_macs)
+{
+	u32 i, j;
+
+	for (i = 0; i < num_macs; i++) {
+		for (j = 0; j < ETH_ALEN; j++)
+			macs[i][j] = g_mac[j];
+
+		macs[i][ETH_ALEN - 1] += i;
+	}
+}
+
 /* The payload is a word consisting of a packet sequence number in the upper
  * 16-bits and a intra packet data sequence number in the lower 16 bits. So the 3rd packet's
  * 5th word of data will contain the number (2<<16) | 4 as they are numbered from 0.
@@ -159,10 +168,10 @@ static void write_payload(void *dest, u32 pkt_nb, u32 start, u32 size)
 		ptr[i] = htonl(pkt_nb << 16 | (i + start));
 }
 
-static void gen_eth_hdr(struct ifobject *ifobject, struct ethhdr *eth_hdr)
+static void gen_eth_hdr(struct xsk_socket_info *xsk, struct ethhdr *eth_hdr)
 {
-	memcpy(eth_hdr->h_dest, ifobject->dst_mac, ETH_ALEN);
-	memcpy(eth_hdr->h_source, ifobject->src_mac, ETH_ALEN);
+	memcpy(eth_hdr->h_dest, xsk->dst_mac, ETH_ALEN);
+	memcpy(eth_hdr->h_source, xsk->src_mac, ETH_ALEN);
 	eth_hdr->h_proto = htons(ETH_P_LOOPBACK);
 }
 
@@ -445,6 +454,9 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 				ifobj->xsk_arr[j].pkt_stream = test->tx_pkt_stream_default;
 			else
 				ifobj->xsk_arr[j].pkt_stream = test->rx_pkt_stream_default;
+
+			memcpy(ifobj->xsk_arr[j].src_mac, macs[j * 2 + i % 2], ETH_ALEN);
+			memcpy(ifobj->xsk_arr[j].dst_mac, macs[j * 2 + (i + 1) % 2], ETH_ALEN);
 		}
 	}
 
@@ -726,16 +738,16 @@ static void pkt_stream_cancel(struct pkt_stream *pkt_stream)
 	pkt_stream->current_pkt_nb--;
 }
 
-static void pkt_generate(struct ifobject *ifobject, u64 addr, u32 len, u32 pkt_nb,
-			 u32 bytes_written)
+static void pkt_generate(struct xsk_socket_info *xsk, struct xsk_umem_info *umem, u64 addr, u32 len,
+			 u32 pkt_nb, u32 bytes_written)
 {
-	void *data = xsk_umem__get_data(ifobject->umem->buffer, addr);
+	void *data = xsk_umem__get_data(umem->buffer, addr);
 
 	if (len < MIN_PKT_SIZE)
 		return;
 
 	if (!bytes_written) {
-		gen_eth_hdr(ifobject, data);
+		gen_eth_hdr(xsk, data);
 
 		len -= PKT_HDR_SIZE;
 		data += PKT_HDR_SIZE;
@@ -1209,7 +1221,7 @@ static int __send_pkts(struct ifobject *ifobject, struct pollfd *fds, bool timeo
 				tx_desc->options = 0;
 			}
 			if (pkt->valid)
-				pkt_generate(ifobject, tx_desc->addr, tx_desc->len, pkt->pkt_nb,
+				pkt_generate(xsk, umem, tx_desc->addr, tx_desc->len, pkt->pkt_nb,
 					     bytes_written);
 			bytes_written += tx_desc->len;
 
@@ -2120,14 +2132,10 @@ static bool hugepages_present(void)
 	return true;
 }
 
-static void init_iface(struct ifobject *ifobj, const char *dst_mac, const char *src_mac,
-		       thread_func_t func_ptr)
+static void init_iface(struct ifobject *ifobj, thread_func_t func_ptr)
 {
 	LIBBPF_OPTS(bpf_xdp_query_opts, query_opts);
 	int err;
-
-	memcpy(ifobj->dst_mac, dst_mac, ETH_ALEN);
-	memcpy(ifobj->src_mac, src_mac, ETH_ALEN);
 
 	ifobj->func_ptr = func_ptr;
 
@@ -2391,6 +2399,7 @@ int main(int argc, char **argv)
 		ksft_exit_xfail();
 	}
 
+	generate_mac_addresses(g_mac, NUM_MAC_ADDRESSES);
 	shared_netdev = (ifobj_tx->ifindex == ifobj_rx->ifindex);
 	ifobj_tx->shared_umem = shared_netdev;
 	ifobj_rx->shared_umem = shared_netdev;
@@ -2404,8 +2413,8 @@ int main(int argc, char **argv)
 			modes++;
 	}
 
-	init_iface(ifobj_rx, MAC1, MAC2, worker_testapp_validate_rx);
-	init_iface(ifobj_tx, MAC2, MAC1, worker_testapp_validate_tx);
+	init_iface(ifobj_rx, worker_testapp_validate_rx);
+	init_iface(ifobj_tx, worker_testapp_validate_tx);
 
 	test_spec_init(&test, ifobj_tx, ifobj_rx, 0, &tests[0]);
 	tx_pkt_stream_default = pkt_stream_generate(ifobj_tx->umem, DEFAULT_PKT_CNT, MIN_PKT_SIZE);
