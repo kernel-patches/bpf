@@ -1625,7 +1625,7 @@ static void thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 
 	xsk_populate_fill_ring(ifobject->umem, ifobject->xsk->pkt_stream, ifobject->use_fill_ring);
 
-	ret = xsk_update_xskmap(ifobject->xskmap, ifobject->xsk->xsk);
+	ret = xsk_update_xskmap(ifobject->xskmap, ifobject->xsk->xsk, 0);
 	if (ret)
 		exit_with_error(errno);
 }
@@ -1663,7 +1663,7 @@ static void *worker_testapp_validate_rx(void *arg)
 		thread_common_ops(test, ifobject);
 	} else {
 		xsk_clear_xskmap(ifobject->xskmap);
-		err = xsk_update_xskmap(ifobject->xskmap, ifobject->xsk->xsk);
+		err = xsk_update_xskmap(ifobject->xskmap, ifobject->xsk->xsk, 0);
 		if (err) {
 			ksft_print_msg("Error: Failed to update xskmap, error %s\n",
 				       strerror(-err));
@@ -1897,7 +1897,7 @@ static int swap_xsk_resources(struct ifobject *ifobj_tx, struct ifobject *ifobj_
 	ifobj_tx->xsk = &ifobj_tx->xsk_arr[1];
 	ifobj_rx->xsk = &ifobj_rx->xsk_arr[1];
 
-	ret = xsk_update_xskmap(ifobj_rx->xskmap, ifobj_rx->xsk->xsk);
+	ret = xsk_update_xskmap(ifobj_rx->xskmap, ifobj_rx->xsk->xsk, 0);
 	if (ret)
 		return TEST_FAILURE;
 
