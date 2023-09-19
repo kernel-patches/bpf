@@ -80,7 +80,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	}
 
 	ctx->prog = prog;
-	ctx->offset = kcalloc(prog->len, sizeof(int), GFP_KERNEL);
+	ctx->offset = kvcalloc(prog->len, sizeof(int), GFP_KERNEL);
 	if (!ctx->offset) {
 		prog = orig_prog;
 		goto out_offset;
@@ -188,7 +188,7 @@ skip_init_ctx:
 			ctx->offset[i] = ninsns_rvoff(ctx->offset[i]);
 		bpf_prog_fill_jited_linfo(prog, ctx->offset);
 out_offset:
-		kfree(ctx->offset);
+		kvfree(ctx->offset);
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
 	}
