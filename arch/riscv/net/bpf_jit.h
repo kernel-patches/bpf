@@ -76,6 +76,7 @@ struct rv_jit_context {
 	int nexentries;
 	unsigned long flags;
 	int stack_size;
+	int tcc_offset;
 };
 
 /* Convert from ninsns to bytes. */
