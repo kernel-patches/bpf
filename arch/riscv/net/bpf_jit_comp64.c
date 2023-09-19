@@ -326,12 +326,6 @@ static void emit_branch(u8 cond, u8 rd, u8 rs, int rvoff,
 	emit(rv_jalr(RV_REG_ZERO, RV_REG_T1, lower), ctx);
 }
 
-static void emit_zext_32(u8 reg, struct rv_jit_context *ctx)
-{
-	emit_slli(reg, reg, 32, ctx);
-	emit_srli(reg, reg, 32, ctx);
-}
-
 static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
 {
 	int tc_ninsn, off, start_insn = ctx->ninsns;
@@ -346,7 +340,7 @@ static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
 	 */
 	tc_ninsn = insn ? ctx->offset[insn] - ctx->offset[insn - 1] :
 		   ctx->offset[0];
-	emit_zext_32(RV_REG_A2, ctx);
+	emit_zextw(RV_REG_A2, RV_REG_A2, ctx);
 
 	off = offsetof(struct bpf_array, map.max_entries);
 	if (is_12b_check(off, insn))
@@ -408,9 +402,9 @@ static void init_regs(u8 *rd, u8 *rs, const struct bpf_insn *insn,
 static void emit_zext_32_rd_rs(u8 *rd, u8 *rs, struct rv_jit_context *ctx)
 {
 	emit_mv(RV_REG_T2, *rd, ctx);
-	emit_zext_32(RV_REG_T2, ctx);
+	emit_zextw(RV_REG_T2, RV_REG_T2, ctx);
 	emit_mv(RV_REG_T1, *rs, ctx);
-	emit_zext_32(RV_REG_T1, ctx);
+	emit_zextw(RV_REG_T1, RV_REG_T1, ctx);
 	*rd = RV_REG_T2;
 	*rs = RV_REG_T1;
 }
@@ -426,8 +420,8 @@ static void emit_sext_32_rd_rs(u8 *rd, u8 *rs, struct rv_jit_context *ctx)
 static void emit_zext_32_rd_t1(u8 *rd, struct rv_jit_context *ctx)
 {
 	emit_mv(RV_REG_T2, *rd, ctx);
-	emit_zext_32(RV_REG_T2, ctx);
-	emit_zext_32(RV_REG_T1, ctx);
+	emit_zextw(RV_REG_T2, RV_REG_T2, ctx);
+	emit_zextw(RV_REG_T1, RV_REG_T2, ctx);
 	*rd = RV_REG_T2;
 }
 
@@ -519,32 +513,32 @@ static void emit_atomic(u8 rd, u8 rs, s16 off, s32 imm, bool is64,
 		emit(is64 ? rv_amoadd_d(rs, rs, rd, 0, 0) :
 		     rv_amoadd_w(rs, rs, rd, 0, 0), ctx);
 		if (!is64)
-			emit_zext_32(rs, ctx);
+			emit_zextw(rs, rs, ctx);
 		break;
 	case BPF_AND | BPF_FETCH:
 		emit(is64 ? rv_amoand_d(rs, rs, rd, 0, 0) :
 		     rv_amoand_w(rs, rs, rd, 0, 0), ctx);
 		if (!is64)
-			emit_zext_32(rs, ctx);
+			emit_zextw(rs, rs, ctx);
 		break;
 	case BPF_OR | BPF_FETCH:
 		emit(is64 ? rv_amoor_d(rs, rs, rd, 0, 0) :
 		     rv_amoor_w(rs, rs, rd, 0, 0), ctx);
 		if (!is64)
-			emit_zext_32(rs, ctx);
+			emit_zextw(rs, rs, ctx);
 		break;
 	case BPF_XOR | BPF_FETCH:
 		emit(is64 ? rv_amoxor_d(rs, rs, rd, 0, 0) :
 		     rv_amoxor_w(rs, rs, rd, 0, 0), ctx);
 		if (!is64)
-			emit_zext_32(rs, ctx);
+			emit_zextw(rs, rs, ctx);
 		break;
 	/* src_reg = atomic_xchg(dst_reg + off16, src_reg); */
 	case BPF_XCHG:
 		emit(is64 ? rv_amoswap_d(rs, rs, rd, 0, 0) :
 		     rv_amoswap_w(rs, rs, rd, 0, 0), ctx);
 		if (!is64)
-			emit_zext_32(rs, ctx);
+			emit_zextw(rs, rs, ctx);
 		break;
 	/* r0 = atomic_cmpxchg(dst_reg + off16, r0, src_reg); */
 	case BPF_CMPXCHG:
@@ -1080,7 +1074,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_ALU64 | BPF_MOV | BPF_X:
 		if (imm == 1) {
 			/* Special mov32 for zext */
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 			break;
 		}
 		switch (insn->off) {
@@ -1097,7 +1091,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			break;
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 
 	/* dst = dst OP src */
@@ -1105,7 +1099,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_ALU64 | BPF_ADD | BPF_X:
 		emit_add(rd, rd, rs, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_SUB | BPF_X:
 	case BPF_ALU64 | BPF_SUB | BPF_X:
@@ -1115,31 +1109,31 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			emit_subw(rd, rd, rs, ctx);
 
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_AND | BPF_X:
 	case BPF_ALU64 | BPF_AND | BPF_X:
 		emit_and(rd, rd, rs, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_OR | BPF_X:
 	case BPF_ALU64 | BPF_OR | BPF_X:
 		emit_or(rd, rd, rs, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_XOR | BPF_X:
 	case BPF_ALU64 | BPF_XOR | BPF_X:
 		emit_xor(rd, rd, rs, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_MUL | BPF_X:
 	case BPF_ALU64 | BPF_MUL | BPF_X:
 		emit(is64 ? rv_mul(rd, rd, rs) : rv_mulw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_DIV | BPF_X:
 	case BPF_ALU64 | BPF_DIV | BPF_X:
@@ -1148,7 +1142,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		else
 			emit(is64 ? rv_divu(rd, rd, rs) : rv_divuw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_MOD | BPF_X:
 	case BPF_ALU64 | BPF_MOD | BPF_X:
@@ -1157,25 +1151,25 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		else
 			emit(is64 ? rv_remu(rd, rd, rs) : rv_remuw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_LSH | BPF_X:
 	case BPF_ALU64 | BPF_LSH | BPF_X:
 		emit(is64 ? rv_sll(rd, rd, rs) : rv_sllw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_RSH | BPF_X:
 	case BPF_ALU64 | BPF_RSH | BPF_X:
 		emit(is64 ? rv_srl(rd, rd, rs) : rv_srlw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_ARSH | BPF_X:
 	case BPF_ALU64 | BPF_ARSH | BPF_X:
 		emit(is64 ? rv_sra(rd, rd, rs) : rv_sraw(rd, rd, rs), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 
 	/* dst = -dst */
@@ -1183,7 +1177,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_ALU64 | BPF_NEG:
 		emit_sub(rd, RV_REG_ZERO, rd, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 
 	/* dst = BSWAP##imm(dst) */
@@ -1195,7 +1189,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			break;
 		case 32:
 			if (!aux->verifier_zext)
-				emit_zext_32(rd, ctx);
+				emit_zextw(rd, rd, ctx);
 			break;
 		case 64:
 			/* Do nothing */
@@ -1257,7 +1251,7 @@ out_be:
 	case BPF_ALU64 | BPF_MOV | BPF_K:
 		emit_imm(rd, imm, ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 
 	/* dst = dst OP imm */
@@ -1270,7 +1264,7 @@ out_be:
 			emit_add(rd, rd, RV_REG_T1, ctx);
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_SUB | BPF_K:
 	case BPF_ALU64 | BPF_SUB | BPF_K:
@@ -1281,7 +1275,7 @@ out_be:
 			emit_sub(rd, rd, RV_REG_T1, ctx);
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_AND | BPF_K:
 	case BPF_ALU64 | BPF_AND | BPF_K:
@@ -1292,7 +1286,7 @@ out_be:
 			emit_and(rd, rd, RV_REG_T1, ctx);
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_OR | BPF_K:
 	case BPF_ALU64 | BPF_OR | BPF_K:
@@ -1303,7 +1297,7 @@ out_be:
 			emit_or(rd, rd, RV_REG_T1, ctx);
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_XOR | BPF_K:
 	case BPF_ALU64 | BPF_XOR | BPF_K:
@@ -1314,7 +1308,7 @@ out_be:
 			emit_xor(rd, rd, RV_REG_T1, ctx);
 		}
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_MUL | BPF_K:
 	case BPF_ALU64 | BPF_MUL | BPF_K:
@@ -1322,7 +1316,7 @@ out_be:
 		emit(is64 ? rv_mul(rd, rd, RV_REG_T1) :
 		     rv_mulw(rd, rd, RV_REG_T1), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_DIV | BPF_K:
 	case BPF_ALU64 | BPF_DIV | BPF_K:
@@ -1334,7 +1328,7 @@ out_be:
 			emit(is64 ? rv_divu(rd, rd, RV_REG_T1) :
 			     rv_divuw(rd, rd, RV_REG_T1), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_MOD | BPF_K:
 	case BPF_ALU64 | BPF_MOD | BPF_K:
@@ -1346,14 +1340,14 @@ out_be:
 			emit(is64 ? rv_remu(rd, rd, RV_REG_T1) :
 			     rv_remuw(rd, rd, RV_REG_T1), ctx);
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_LSH | BPF_K:
 	case BPF_ALU64 | BPF_LSH | BPF_K:
 		emit_slli(rd, rd, imm, ctx);
 
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_RSH | BPF_K:
 	case BPF_ALU64 | BPF_RSH | BPF_K:
@@ -1363,7 +1357,7 @@ out_be:
 			emit(rv_srliw(rd, rd, imm), ctx);
 
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 	case BPF_ALU | BPF_ARSH | BPF_K:
 	case BPF_ALU64 | BPF_ARSH | BPF_K:
@@ -1373,7 +1367,7 @@ out_be:
 			emit(rv_sraiw(rd, rd, imm), ctx);
 
 		if (!is64 && !aux->verifier_zext)
-			emit_zext_32(rd, ctx);
+			emit_zextw(rd, rd, ctx);
 		break;
 
 	/* JUMP off */
