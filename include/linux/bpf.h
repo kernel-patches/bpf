@@ -1634,6 +1634,11 @@ struct bpf_struct_ops {
 	u32 value_id;
 };
 
+struct bpf_struct_ops_mod {
+	struct module *owner;
+	struct bpf_struct_ops *st_ops;
+};
+
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
 #define BPF_MODULE_OWNER ((void *)((0xeB9FUL << 2) + POISON_POINTER_DELTA))
 const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id);
@@ -3204,5 +3209,9 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 {
 	return prog->aux->func_idx != 0;
 }
+
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+int register_bpf_struct_ops(struct bpf_struct_ops_mod *mod);
+#endif
 
 #endif /* _LINUX_BPF_H */
