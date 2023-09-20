@@ -765,9 +765,19 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	struct bpf_struct_ops_map *st_map;
 	const struct btf_type *t, *vt;
 	struct bpf_map *map;
+	struct btf *btf;
 	int ret;
 
-	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id, btf_vmlinux);
+	/* XXX: We need a module name or ID to find a BTF type. */
+	/* XXX: should use btf from attr->btf_fd */
+	if (attr->mod_btf_fd) {
+		btf = btf_get_by_fd(attr->mod_btf_fd);
+		if (IS_ERR(btf))
+			return ERR_PTR(PTR_ERR(btf));
+	} else {
+		btf = btf_vmlinux;
+	}
+	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id, btf);
 	if (!st_ops)
 		return ERR_PTR(-ENOTSUPP);
 

@@ -1390,6 +1390,10 @@ union bpf_attr {
 		 * to using 5 hash functions).
 		 */
 		__u64	map_extra;
+
+		__u32   mod_btf_fd;	/* fd pointing to a BTF type data
+					 * for btf_vmlinux_value_type_id.
+					 */
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
