@@ -99,6 +99,79 @@ const struct bpf_prog_ops bpf_struct_ops_prog_ops = {
 
 static const struct btf_type *module_type;
 
+static bool check_value_member(struct btf *btf,
+			       const struct btf_member *member,
+			       int index,
+			       const char *value_name,
+			       const char *name, const char *type_name,
+			       u16 kind)
+{
+	const char *mname, *mtname;
+	const struct btf_type *mt;
+	s32 mtype_id;
+
+	mname = btf_name_by_offset(btf, member->name_off);
+	if (!*mname) {
+		pr_warn("The member %d of %s should have a name\n",
+			index, value_name);
+		return false;
+	}
+	if (strcmp(mname, name)) {
+		pr_warn("The member %d of %s should be refcnt\n",
+			index, value_name);
+		return false;
+	}
+	mtype_id = member->type;
+	mt = btf_type_by_id(btf, mtype_id);
+	mtname = btf_name_by_offset(btf, mt->name_off);
+	if (!*mtname) {
+		pr_warn("The type of the member %d of %s should have a name\n",
+			index, value_name);
+		return false;
+	}
+	if (strcmp(mtname, type_name)) {
+		pr_warn("The type of the member %d of %s should be refcount_t\n",
+			index, value_name);
+		return false;
+	}
+	if (btf_kind(mt) != kind) {
+		pr_warn("The type of the member %d of %s should be %d\n",
+			index, value_name, btf_kind(mt));
+		return false;
+	}
+
+	return true;
+}
+
+static bool is_valid_value_type(struct btf *btf, s32 value_id,
+				const char *type_name, const char *value_name)
+{
+	const struct btf_member *member;
+	const struct btf_type *vt;
+
+	vt = btf_type_by_id(btf, value_id);
+	if (btf_vlen(vt) != 3) {
+		pr_warn("The number of %s's members should be 3, but we get %d\n",
+			value_name, btf_vlen(vt));
+		return false;
+	}
+	member = btf_type_member(vt);
+	if (!check_value_member(btf, member, 0, value_name,
+				"refcnt", "refcount_t", BTF_KIND_TYPEDEF))
+		return false;
+	member++;
+	if (!check_value_member(btf, member, 1, value_name,
+				"state", "bpf_struct_ops_state",
+				BTF_KIND_ENUM))
+		return false;
+	member++;
+	if (!check_value_member(btf, member, 2, value_name,
+				"data", type_name, BTF_KIND_STRUCT))
+		return false;
+
+	return true;
+}
+
 static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 				    struct btf *btf,
 				    struct bpf_verifier_log *log)
@@ -125,6 +198,8 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 			value_name);
 		return;
 	}
+	if (!is_valid_value_type(btf, value_id, st_ops->name, value_name))
+		return;
 
 	type_id = btf_find_by_name_kind(btf, st_ops->name,
 					BTF_KIND_STRUCT);
