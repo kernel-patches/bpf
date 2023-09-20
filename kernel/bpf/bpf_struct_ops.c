@@ -59,35 +59,6 @@ static DEFINE_MUTEX(update_mutex);
 #define VALUE_PREFIX "bpf_struct_ops_"
 #define VALUE_PREFIX_LEN (sizeof(VALUE_PREFIX) - 1)
 
-/* bpf_struct_ops_##_name (e.g. bpf_struct_ops_tcp_congestion_ops) is
- * the map's value exposed to the userspace and its btf-type-id is
- * stored at the map->btf_vmlinux_value_type_id.
- *
- */
-#define BPF_STRUCT_OPS_TYPE(_name)				\
-extern struct bpf_struct_ops bpf_##_name;			\
-								\
-struct bpf_struct_ops_##_name {						\
-	BPF_STRUCT_OPS_COMMON_VALUE;				\
-	struct _name data ____cacheline_aligned_in_smp;		\
-};
-#include "bpf_struct_ops_types.h"
-#undef BPF_STRUCT_OPS_TYPE
-
-enum {
-#define BPF_STRUCT_OPS_TYPE(_name) BPF_STRUCT_OPS_TYPE_##_name,
-#include "bpf_struct_ops_types.h"
-#undef BPF_STRUCT_OPS_TYPE
-	__NR_BPF_STRUCT_OPS_TYPE,
-};
-
-static struct bpf_struct_ops * const bpf_struct_ops[] = {
-#define BPF_STRUCT_OPS_TYPE(_name)				\
-	[BPF_STRUCT_OPS_TYPE_##_name] = &bpf_##_name,
-#include "bpf_struct_ops_types.h"
-#undef BPF_STRUCT_OPS_TYPE
-};
-
 const struct bpf_verifier_ops bpf_struct_ops_verifier_ops = {
 };
 
@@ -264,14 +235,11 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 
 void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 {
-	struct bpf_struct_ops *st_ops;
+#if defined(CONFIG_BPF_JIT) && defined(CONFIG_NET)
+	extern struct bpf_struct_ops_mod bpf_testmod_struct_ops;
+	int ret;
+#endif
 	s32 module_id;
-	u32 i;
-
-	/* Ensure BTF type is emitted for "struct bpf_struct_ops_##_name" */
-#define BPF_STRUCT_OPS_TYPE(_name) BTF_TYPE_EMIT(struct bpf_struct_ops_##_name);
-#include "bpf_struct_ops_types.h"
-#undef BPF_STRUCT_OPS_TYPE
 
 	module_id = btf_find_by_name_kind(btf, "module", BTF_KIND_STRUCT);
 	if (module_id < 0) {
@@ -280,43 +248,95 @@ void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 	}
 	module_type = btf_type_by_id(btf, module_id);
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
-		st_ops = bpf_struct_ops[i];
-		bpf_struct_ops_init_one(st_ops, btf, log);
-	}
+#if defined(CONFIG_BPF_JIT) && defined(CONFIG_NET)
+	ret = register_bpf_struct_ops(&bpf_testmod_struct_ops);
+	if (ret)
+		pr_warn("Cannot register bpf_testmod_struct_ops\n");
+#endif
 }
+
+int register_bpf_struct_ops(struct bpf_struct_ops_mod *mod)
+{
+	struct bpf_struct_ops *st_ops = mod->st_ops;
+	struct bpf_verifier_log *log;
+	struct btf *btf;
+	int err;
+
+	if (mod->st_ops == NULL ||
+	    mod->owner == NULL)
+		return -EINVAL;
+
+	log = kzalloc(sizeof(*log), GFP_KERNEL | __GFP_NOWARN);
+	if (!log) {
+		err = -ENOMEM;
+		goto errout;
+	}
+
+	log->level = BPF_LOG_KERNEL;
+
+	btf = btf_get_module_btf(mod->owner);
+	if (!btf) {
+		err = -EINVAL;
+		goto errout;
+	}
+
+	bpf_struct_ops_init_one(st_ops, btf, log);
+
+	btf_put(btf);
+
+	st_ops->owner = mod->owner;
+	err = btf_add_struct_ops(st_ops, st_ops->owner);
+
+errout:
+	kfree(log);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(register_bpf_struct_ops);
 
 extern struct btf *btf_vmlinux;
 
 static const struct bpf_struct_ops *
 bpf_struct_ops_find_value(u32 value_id, struct btf *btf)
 {
+	const struct bpf_struct_ops *st_ops = NULL;
+	const struct bpf_struct_ops **st_ops_list;
 	unsigned int i;
+	u32 cnt = 0;
 
 	if (!value_id || !btf_vmlinux)
 		return NULL;
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
-		if (bpf_struct_ops[i]->value_id == value_id)
-			return bpf_struct_ops[i];
+	st_ops_list = btf_get_struct_ops(btf, &cnt);
+	for (i = 0; i < cnt; i++) {
+		if (st_ops_list[i]->value_id == value_id) {
+			st_ops = st_ops_list[i];
+			break;
+		}
 	}
 
-	return NULL;
+	return st_ops;
 }
 
 const struct bpf_struct_ops *bpf_struct_ops_find(u32 type_id, struct btf *btf)
 {
+	const struct bpf_struct_ops *st_ops = NULL;
+	const struct bpf_struct_ops **st_ops_list;
 	unsigned int i;
+	u32 cnt;
 
 	if (!type_id || !btf_vmlinux)
 		return NULL;
 
-	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
-		if (bpf_struct_ops[i]->type_id == type_id)
-			return bpf_struct_ops[i];
+	st_ops_list = btf_get_struct_ops(btf, &cnt);
+	for (i = 0; i < cnt; i++) {
+		if (st_ops_list[i]->type_id == type_id) {
+			st_ops = st_ops_list[i];
+			break;
+		}
 	}
 
-	return NULL;
+	return st_ops;
 }
 
 static int bpf_struct_ops_map_get_next_key(struct bpf_map *map, void *key,

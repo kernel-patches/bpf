@@ -7,7 +7,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 
-extern struct bpf_struct_ops bpf_bpf_dummy_ops;
+static struct bpf_struct_ops bpf_bpf_dummy_ops;
 
 /* A common type for test_N with return value in bpf_dummy_ops */
 typedef int (*dummy_ops_test_ret_fn)(struct bpf_dummy_ops_state *state, ...);
@@ -218,9 +218,12 @@ static int bpf_dummy_reg(void *kdata)
 
 static void bpf_dummy_unreg(void *kdata)
 {
+	BTF_STRUCT_OPS_TYPE_EMIT(bpf_dummy_ops);
 }
 
-struct bpf_struct_ops bpf_bpf_dummy_ops = {
+DEFINE_STRUCT_OPS_VALUE_TYPE(bpf_dummy_ops);
+
+static struct bpf_struct_ops bpf_bpf_dummy_ops = {
 	.verifier_ops = &bpf_dummy_verifier_ops,
 	.init = bpf_dummy_init,
 	.check_member = bpf_dummy_ops_check_member,
@@ -228,4 +231,9 @@ struct bpf_struct_ops bpf_bpf_dummy_ops = {
 	.reg = bpf_dummy_reg,
 	.unreg = bpf_dummy_unreg,
 	.name = "bpf_dummy_ops",
+};
+
+struct bpf_struct_ops_mod bpf_testmod_struct_ops = {
+	.st_ops = &bpf_bpf_dummy_ops,
+	.owner = THIS_MODULE,
 };
