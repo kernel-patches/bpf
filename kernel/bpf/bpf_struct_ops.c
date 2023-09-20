@@ -632,6 +632,8 @@ static void __bpf_struct_ops_map_free(struct bpf_map *map)
 
 static void bpf_struct_ops_map_free(struct bpf_map *map)
 {
+	struct bpf_struct_ops_map *st_map = (struct bpf_struct_ops_map *)map;
+
 	/* The struct_ops's function may switch to another struct_ops.
 	 *
 	 * For example, bpf_tcp_cc_x->init() may switch to
@@ -649,6 +651,7 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	 */
 	synchronize_rcu_mult(call_rcu, call_rcu_tasks);
 
+	module_put(st_map->st_ops->owner);
 	__bpf_struct_ops_map_free(map);
 }
 
@@ -672,6 +675,9 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	st_ops = bpf_struct_ops_find_value(attr->btf_vmlinux_value_type_id, btf_vmlinux);
 	if (!st_ops)
 		return ERR_PTR(-ENOTSUPP);
+
+	if (!try_module_get(st_ops->owner))
+		return ERR_PTR(-EINVAL);
 
 	vt = st_ops->value_type;
 	if (attr->value_size != vt->size)
