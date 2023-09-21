@@ -34,6 +34,39 @@ struct btf_id_set8 {
 
 #define BTF_IDS_SECTION ".BTF_ids"
 
+#ifdef CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION
+
+#define __BTF_ID(type, name, word)             \
+asm(                                           \
+".pushsection .BTF_ids,\"a\";        \n"       \
+"1:                                  \n"       \
+".zero 4                             \n"       \
+word                                           \
+".popsection;                        \n"       \
+".pushsection .BTF_ids.strtab,\"a\"; \n"       \
+"2:                                  \n"       \
+".string \"" #type "\"               \n"       \
+"3:                                  \n"       \
+".string \"" #name "\"               \n"       \
+".popsection;                        \n"       \
+".pushsection .BTF_ids.data,\"a\";   \n"       \
+".quad 1b                            \n"       \
+".quad 2b                            \n"       \
+".quad 3b                            \n"       \
+".popsection;                        \n");
+
+#define BTF_ID(type, name) \
+	__BTF_ID(type, name, "")
+
+#define ____BTF_ID_FLAGS(type, name, flags, ...) \
+	__BTF_ID(type, name, ".long " #flags "\n")
+#define __BTF_ID_FLAGS(type, name, flags, ...) \
+	____BTF_ID_FLAGS(type, name, flags)
+#define BTF_ID_FLAGS(type, name, ...) \
+	__BTF_ID_FLAGS(type, name, ##__VA_ARGS__, 0)
+
+#else
+
 #define ____BTF_ID(symbol, word)			\
 asm(							\
 ".pushsection " BTF_IDS_SECTION ",\"a\";       \n"	\
@@ -64,6 +97,8 @@ word							\
 	____BTF_ID_FLAGS(prefix, name, flags)
 #define BTF_ID_FLAGS(prefix, name, ...) \
 	__BTF_ID_FLAGS(prefix, name, ##__VA_ARGS__, 0)
+
+#endif /* CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION */
 
 /*
  * The BTF_ID_LIST macro defines pure (unsorted) list
