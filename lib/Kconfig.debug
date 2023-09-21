@@ -419,6 +419,12 @@ config MODULE_ALLOW_BTF_MISMATCH
 	  this option will still load module BTF where possible but ignore
 	  it when a mismatch is found.
 
+config DEBUG_INFO_BTF_IDS_DATA_SECTION
+	bool "Use elf ids_data section to gather BTF IDs"
+	depends on DEBUG_INFO_BTF_MODULES
+	help
+	  Use elf ids_data section to gather BTF IDs
+
 config GDB_SCRIPTS
 	bool "Provide GDB scripts for kernel debugging"
 	help

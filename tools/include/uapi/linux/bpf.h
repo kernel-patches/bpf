@@ -7341,4 +7341,13 @@ struct bpf_iter_num {
 	__u64 __opaque[1];
 } __attribute__((aligned(8)));
 
+#define BTF_IDS_DATA_ID		0x1
+#define BTF_IDS_DATA_ID_FLAGS	0x2
+#define BTF_IDS_DATA_ID_UNUSED  0x3
+#define BTF_IDS_DATA_LIST	0x4
+#define BTF_IDS_DATA_SET_START	0x5
+#define BTF_IDS_DATA_SET_END	0x6
+#define BTF_IDS_DATA_SET8_START	0x7
+#define BTF_IDS_DATA_SET8_END	0x8
+
 #endif /* _UAPI__LINUX_BPF_H__ */

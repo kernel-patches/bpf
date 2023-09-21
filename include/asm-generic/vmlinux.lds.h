@@ -659,6 +659,10 @@
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
 	}
+
+#define BTF_IDS_DATA							\
+	*(.BTF_ids.data)
+
 #else
 #define BTF
 #endif
@@ -1025,6 +1029,7 @@
 	EXIT_DISCARDS							\
 	EXIT_CALL							\
 	COMMON_DISCARDS							\
+	BTF_IDS_DATA							\
 	}
 
 /**

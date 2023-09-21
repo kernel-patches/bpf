@@ -32,7 +32,94 @@ struct btf_id_set8 {
  * tool logic.
  */
 
-#define BTF_IDS_SECTION ".BTF_ids"
+#define BTF_IDS_SECTION		".BTF_ids"
+#define BTF_IDS_DATA_SECTION	".BTF_ids.data"
+
+#ifdef CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION
+
+#include <uapi/linux/bpf.h>
+
+#define BTF_ID(type, name)				\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_ID) "       \n" 	\
+".string \"" #type "\"                        \n"	\
+".string \"" #name "\"                        \n"	\
+".popsection;                                 \n");
+
+#define ____BTF_ID_FLAGS(type, name, flags)		\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_ID_FLAGS) " \n"	\
+".string \"" #type"\"                         \n"	\
+".string \"" #name"\"                         \n"	\
+".long     " #flags "                         \n"	\
+".popsection;                                 \n");
+
+#define __BTF_ID_FLAGS(prefix, name, flags, ...) \
+	____BTF_ID_FLAGS(prefix, name, flags)
+#define BTF_ID_FLAGS(prefix, name, ...) \
+	__BTF_ID_FLAGS(prefix, name, ##__VA_ARGS__, 0)
+
+#define BTF_ID_UNUSED					\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\";  \n"	\
+".byte " __stringify(BTF_IDS_DATA_ID_UNUSED) " \n"	\
+".popsection;                                  \n");
+
+#define BTF_ID_LIST(name)				\
+extern u32 name[];					\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_LIST) "     \n"	\
+".string \"" #name"\"                         \n"	\
+".popsection;                                 \n");
+
+#define BTF_ID_LIST_SINGLE(name, prefix, typename)	\
+	BTF_ID_LIST(name) \
+	BTF_ID(prefix, typename)
+
+#define BTF_ID_LIST_GLOBAL(name, n)			\
+	BTF_ID_LIST(name)
+
+#define BTF_ID_LIST_GLOBAL_SINGLE(name, prefix, typename) \
+	BTF_ID_LIST_GLOBAL(name, 1)			  \
+	BTF_ID(prefix, typename)
+
+#define BTF_SET_START(name)				\
+extern struct btf_id_set name;				\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_SET_START) "\n"	\
+".string \"" #name"\"                         \n"	\
+".popsection;                                 \n");
+
+#define BTF_SET_START_GLOBAL(name) BTF_SET_START(name)
+
+#define BTF_SET_END(name)				\
+extern struct btf_id_set name;				\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_SET_END) "  \n"	\
+".string \"" #name"\"                         \n"	\
+".popsection;                                 \n");
+
+#define BTF_SET8_START(name)				\
+extern struct btf_id_set8 name;				\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\";  \n"	\
+".byte " __stringify(BTF_IDS_DATA_SET8_START) "\n"	\
+".string \"" #name"\"                          \n"	\
+".popsection;                                  \n");
+
+#define BTF_SET8_END(name)				\
+asm(							\
+".pushsection " BTF_IDS_DATA_SECTION ",\"a\"; \n"	\
+".byte " __stringify(BTF_IDS_DATA_SET8_END) " \n"	\
+".string \"" #name"\"                         \n"	\
+".popsection;                                 \n");
+
+#else /* CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION */
 
 #define ____BTF_ID(symbol, word)			\
 asm(							\
@@ -201,6 +288,8 @@ asm(							\
 ".size __BTF_ID__set8__" #name ", .-" #name "  \n"	\
 ".popsection;                                 \n");	\
 extern struct btf_id_set8 name;
+
+#endif /* CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION */
 
 #else
 
