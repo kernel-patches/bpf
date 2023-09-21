@@ -34,36 +34,34 @@ struct btf_id_set8 {
 
 #define BTF_IDS_SECTION ".BTF_ids"
 
-#define ____BTF_ID(symbol, word)			\
-asm(							\
-".pushsection " BTF_IDS_SECTION ",\"a\";       \n"	\
-".local " #symbol " ;                          \n"	\
-".type  " #symbol ", STT_OBJECT;               \n"	\
-".size  " #symbol ", 4;                        \n"	\
-#symbol ":                                     \n"	\
-".zero 4                                       \n"	\
-word							\
-".popsection;                                  \n");
+#define __BTF_ID(type, name, word)             \
+asm(                                           \
+".pushsection .BTF_ids,\"a\";        \n"       \
+"1:                                  \n"       \
+".zero 4                             \n"       \
+word                                           \
+".popsection;                        \n"       \
+".pushsection .BTF_ids_data,\"a\";   \n"       \
+"2:                                  \n"       \
+".string \"" #type "\"               \n"       \
+"3:                                  \n"       \
+".string \"" #name "\"               \n"       \
+".popsection;                        \n"       \
+".pushsection .BTF_ids_desc,\"a\";   \n"       \
+".quad 1b                            \n"       \
+".quad 2b                            \n"       \
+".quad 3b                            \n"       \
+".popsection;                        \n");
 
-#define __BTF_ID(symbol, word) \
-	____BTF_ID(symbol, word)
+#define BTF_ID(type, name) \
+	__BTF_ID(type, name, "")
 
-#define __ID(prefix) \
-	__PASTE(__PASTE(prefix, __COUNTER__), __LINE__)
-
-/*
- * The BTF_ID defines unique symbol for each ID pointing
- * to 4 zero bytes.
- */
-#define BTF_ID(prefix, name) \
-	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), "")
-
-#define ____BTF_ID_FLAGS(prefix, name, flags) \
-	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), ".long " #flags "\n")
-#define __BTF_ID_FLAGS(prefix, name, flags, ...) \
-	____BTF_ID_FLAGS(prefix, name, flags)
-#define BTF_ID_FLAGS(prefix, name, ...) \
-	__BTF_ID_FLAGS(prefix, name, ##__VA_ARGS__, 0)
+#define ____BTF_ID_FLAGS(type, name, flags, ...) \
+	__BTF_ID(type, name, ".long " #flags "\n")
+#define __BTF_ID_FLAGS(type, name, flags, ...) \
+	____BTF_ID_FLAGS(type, name, flags)
+#define BTF_ID_FLAGS(type, name, ...) \
+	__BTF_ID_FLAGS(type, name, ##__VA_ARGS__, 0)
 
 /*
  * The BTF_ID_LIST macro defines pure (unsorted) list
