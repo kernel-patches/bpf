@@ -658,6 +658,14 @@
 	. = ALIGN(4);							\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
+	}								\
+	. = ALIGN(4);							\
+	.BTF_ids_data : AT(ADDR(.BTF_ids_data) - LOAD_OFFSET) {		\
+		*(.BTF_ids_data)					\
+	}								\
+	. = ALIGN(4);							\
+	.BTF_ids_desc : AT(ADDR(.BTF_ids_desc) - LOAD_OFFSET) {		\
+		*(.BTF_ids_desc)					\
 	}
 #else
 #define BTF
