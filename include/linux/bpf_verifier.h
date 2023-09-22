@@ -388,7 +388,7 @@ struct bpf_verifier_state {
 
 #define bpf_get_spilled_reg(slot, frame)				\
 	(((slot < frame->allocated_stack / BPF_REG_SIZE) &&		\
-	  (frame->stack[slot].slot_type[0] == STACK_SPILL))		\
+	  (frame->stack[slot].slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)) \
 	 ? &frame->stack[slot].spilled_ptr : NULL)
 
 /* Iterate over 'frame', setting 'reg' to either NULL or a spilled register. */
