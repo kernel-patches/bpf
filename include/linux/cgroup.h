@@ -387,8 +387,8 @@ static inline void cgroup_unlock(void)
  * The caller can also specify additional allowed conditions via @__c, such
  * as locks used during the cgroup_subsys::attach() methods.
  */
-#ifdef CONFIG_PROVE_RCU
 extern spinlock_t css_set_lock;
+#ifdef CONFIG_PROVE_RCU
 #define task_css_set_check(task, __c)					\
 	rcu_dereference_check((task)->cgroups,				\
 		rcu_read_lock_sched_held() ||				\
@@ -543,15 +543,37 @@ static inline struct cgroup *cgroup_ancestor(struct cgroup *cgrp,
  * @ancestor: possible ancestor of @task's cgroup
  *
  * Tests whether @task's default cgroup hierarchy is a descendant of @ancestor.
- * It follows all the same rules as cgroup_is_descendant, and only applies
- * to the default hierarchy.
+ * It follows all the same rules as cgroup_is_descendant.
  */
 static inline bool task_under_cgroup_hierarchy(struct task_struct *task,
 					       struct cgroup *ancestor)
 {
 	struct css_set *cset = task_css_set(task);
+	struct cgrp_cset_link *link;
+	struct cgroup *cgrp = NULL;
+	bool ret = false;
 
-	return cgroup_is_descendant(cset->dfl_cgrp, ancestor);
+	if (ancestor->root == &cgrp_dfl_root)
+		return cgroup_is_descendant(cset->dfl_cgrp, ancestor);
+
+	if (cset == &init_css_set)
+		return ancestor == &ancestor->root->cgrp;
+
+	spin_lock_irq(&css_set_lock);
+	list_for_each_entry(link, &cset->cgrp_links, cgrp_link) {
+		struct cgroup *c = link->cgrp;
+
+		if (c->root == ancestor->root) {
+			cgrp = c;
+			break;
+		}
+	}
+	spin_unlock_irq(&css_set_lock);
+
+	WARN_ON_ONCE(!cgrp);
+	if (cgroup_is_descendant(cgrp, ancestor))
+		ret = true;
+	return ret;
 }
 
 /* no synchronization, the result can only be used as a hint */
