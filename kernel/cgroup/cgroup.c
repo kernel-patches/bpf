@@ -6195,17 +6195,28 @@ void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen)
 }
 
 /*
- * cgroup_get_from_id : get the cgroup associated with cgroup id
- * @id: cgroup id
+ * cgroup_get_from_id_within_subsys - get the cgroup associated with cgroup id
+ *                                    within specific subsystem
+ * @cgid: cgroup id
+ * @ssid: cgroup subsystem id, -1 for cgroup default tree
  * On success return the cgrp or ERR_PTR on failure
  * Only cgroups within current task's cgroup NS are valid.
  */
-struct cgroup *cgroup_get_from_id(u64 id)
+struct cgroup *cgroup_get_from_id_within_subsys(u64 cgid, int ssid)
 {
+	struct cgroup_root *root;
 	struct kernfs_node *kn;
-	struct cgroup *cgrp, *root_cgrp;
+	struct cgroup *cgrp;
 
-	kn = kernfs_find_and_get_node_by_id(cgrp_dfl_root.kf_root, id);
+	if (ssid == -1) {
+		root = &cgrp_dfl_root;
+	} else {
+		if (ssid >= CGROUP_SUBSYS_COUNT)
+			return ERR_PTR(-EINVAL);
+		root = cgroup_subsys[ssid]->root;
+	}
+
+	kn = kernfs_find_and_get_node_by_id(root->kf_root, cgid);
 	if (!kn)
 		return ERR_PTR(-ENOENT);
 
@@ -6225,6 +6236,17 @@ struct cgroup *cgroup_get_from_id(u64 id)
 
 	if (!cgrp)
 		return ERR_PTR(-ENOENT);
+
+	return cgrp;
+}
+
+struct cgroup *cgroup_get_from_id(u64 id)
+{
+	struct cgroup *root_cgrp, *cgrp;
+
+	cgrp = cgroup_get_from_id_within_subsys(id, -1);
+	if (IS_ERR(cgrp))
+		return cgrp;
 
 	root_cgrp = current_cgns_cgroup_dfl();
 	if (!cgroup_is_descendant(cgrp, root_cgrp)) {
