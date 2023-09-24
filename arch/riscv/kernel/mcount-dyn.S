@@ -20,6 +20,8 @@
 
 	/* Save t0 as epc for ftrace_regs_get_instruction_pointer() */
 	REG_S	t0, PT_EPC(sp)
+	/* Save s0  for reading frame pointer (read only) */
+	REG_S	s0, PT_S0(sp)
 	REG_S	a0, PT_A0(sp)
 	REG_S	a1, PT_A1(sp)
 	REG_S	a2, PT_A2(sp)

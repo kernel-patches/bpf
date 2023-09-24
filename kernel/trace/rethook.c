@@ -189,7 +189,7 @@ NOKPROBE_SYMBOL(rethook_try_get);
 /**
  * rethook_hook() - Hook the current function return.
  * @node: The struct rethook node to hook the function return.
- * @regs: The struct pt_regs for the function entry.
+ * @fregs: The struct ftrace_regs for the function entry.
  * @mcount: True if this is called from mcount(ftrace) context.
  *
  * Hook the current running function return. This must be called when the
@@ -199,9 +199,9 @@ NOKPROBE_SYMBOL(rethook_try_get);
  * from the real function entry (e.g. kprobes) @mcount must be set false.
  * This is because the way to hook the function return depends on the context.
  */
-void rethook_hook(struct rethook_node *node, struct pt_regs *regs, bool mcount)
+void rethook_hook(struct rethook_node *node, struct ftrace_regs *fregs, bool mcount)
 {
-	arch_rethook_prepare(node, regs, mcount);
+	arch_rethook_prepare(node, fregs, mcount);
 	__llist_add(&node->llist, &current->rethooks);
 }
 NOKPROBE_SYMBOL(rethook_hook);
@@ -269,7 +269,7 @@ unsigned long rethook_find_ret_addr(struct task_struct *tsk, unsigned long frame
 }
 NOKPROBE_SYMBOL(rethook_find_ret_addr);
 
-void __weak arch_rethook_fixup_return(struct pt_regs *regs,
+void __weak arch_rethook_fixup_return(struct ftrace_regs *fregs,
 				      unsigned long correct_ret_addr)
 {
 	/*
@@ -281,7 +281,7 @@ void __weak arch_rethook_fixup_return(struct pt_regs *regs,
 }
 
 /* This function will be called from each arch-defined trampoline. */
-unsigned long rethook_trampoline_handler(struct pt_regs *regs,
+unsigned long rethook_trampoline_handler(struct ftrace_regs *fregs,
 					 unsigned long frame)
 {
 	struct llist_node *first, *node = NULL;
@@ -295,7 +295,7 @@ unsigned long rethook_trampoline_handler(struct pt_regs *regs,
 		BUG_ON(1);
 	}
 
-	instruction_pointer_set(regs, correct_ret_addr);
+	ftrace_regs_set_instruction_pointer(fregs, correct_ret_addr);
 
 	/*
 	 * These loops must be protected from rethook_free_rcu() because those
@@ -315,7 +315,7 @@ unsigned long rethook_trampoline_handler(struct pt_regs *regs,
 		handler = READ_ONCE(rhn->rethook->handler);
 		if (handler)
 			handler(rhn, rhn->rethook->data,
-				correct_ret_addr, regs);
+				correct_ret_addr, fregs);
 
 		if (first == node)
 			break;
@@ -323,7 +323,7 @@ unsigned long rethook_trampoline_handler(struct pt_regs *regs,
 	}
 
 	/* Fixup registers for returning to correct address. */
-	arch_rethook_fixup_return(regs, correct_ret_addr);
+	arch_rethook_fixup_return(fregs, correct_ret_addr);
 
 	/* Unlink used shadow stack */
 	first = current->rethooks.first;

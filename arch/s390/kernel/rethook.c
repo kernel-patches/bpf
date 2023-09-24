@@ -3,8 +3,9 @@
 #include <linux/kprobes.h>
 #include "rethook.h"
 
-void arch_rethook_prepare(struct rethook_node *rh, struct pt_regs *regs, bool mcount)
+void arch_rethook_prepare(struct rethook_node *rh, struct ftrace_regs *fregs, bool mcount)
 {
+	struct pt_regs *regs = (struct pt_regs *)fregs;
 	rh->ret_addr = regs->gprs[14];
 	rh->frame = regs->gprs[15];
 
@@ -13,10 +14,11 @@ void arch_rethook_prepare(struct rethook_node *rh, struct pt_regs *regs, bool mc
 }
 NOKPROBE_SYMBOL(arch_rethook_prepare);
 
-void arch_rethook_fixup_return(struct pt_regs *regs,
+void arch_rethook_fixup_return(struct ftrace_regs *fregs,
 			       unsigned long correct_ret_addr)
 {
 	/* Replace fake return address with real one. */
+	struct pt_regs *regs = (struct pt_regs *)fregs;
 	regs->gprs[14] = correct_ret_addr;
 }
 NOKPROBE_SYMBOL(arch_rethook_fixup_return);
@@ -24,9 +26,9 @@ NOKPROBE_SYMBOL(arch_rethook_fixup_return);
 /*
  * Called from arch_rethook_trampoline
  */
-unsigned long arch_rethook_trampoline_callback(struct pt_regs *regs)
+unsigned long arch_rethook_trampoline_callback(struct ftrace_regs *fregs)
 {
-	return rethook_trampoline_handler(regs, regs->gprs[15]);
+	return rethook_trampoline_handler(fregs, fregs->regs.gprs[15]);
 }
 NOKPROBE_SYMBOL(arch_rethook_trampoline_callback);
 
