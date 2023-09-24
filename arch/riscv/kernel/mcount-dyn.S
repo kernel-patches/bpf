@@ -14,46 +14,37 @@
 	.text
 
 #define FENTRY_RA_OFFSET	8
-#define ABI_SIZE_ON_STACK	80
-#define ABI_A0			0
-#define ABI_A1			8
-#define ABI_A2			16
-#define ABI_A3			24
-#define ABI_A4			32
-#define ABI_A5			40
-#define ABI_A6			48
-#define ABI_A7			56
-#define ABI_T0			64
-#define ABI_RA			72
 
 	.macro SAVE_ABI
-	addi	sp, sp, -ABI_SIZE_ON_STACK
+	addi	sp, sp, -PT_SIZE_ON_STACK
 
-	REG_S	a0, ABI_A0(sp)
-	REG_S	a1, ABI_A1(sp)
-	REG_S	a2, ABI_A2(sp)
-	REG_S	a3, ABI_A3(sp)
-	REG_S	a4, ABI_A4(sp)
-	REG_S	a5, ABI_A5(sp)
-	REG_S	a6, ABI_A6(sp)
-	REG_S	a7, ABI_A7(sp)
-	REG_S	t0, ABI_T0(sp)
-	REG_S	ra, ABI_RA(sp)
+	/* Save t0 as epc for ftrace_regs_get_instruction_pointer() */
+	REG_S	t0, PT_EPC(sp)
+	REG_S	a0, PT_A0(sp)
+	REG_S	a1, PT_A1(sp)
+	REG_S	a2, PT_A2(sp)
+	REG_S	a3, PT_A3(sp)
+	REG_S	a4, PT_A4(sp)
+	REG_S	a5, PT_A5(sp)
+	REG_S	a6, PT_A6(sp)
+	REG_S	a7, PT_A7(sp)
+	REG_S	t0, PT_T0(sp)
+	REG_S	ra, PT_RA(sp)
 	.endm
 
 	.macro RESTORE_ABI
-	REG_L	a0, ABI_A0(sp)
-	REG_L	a1, ABI_A1(sp)
-	REG_L	a2, ABI_A2(sp)
-	REG_L	a3, ABI_A3(sp)
-	REG_L	a4, ABI_A4(sp)
-	REG_L	a5, ABI_A5(sp)
-	REG_L	a6, ABI_A6(sp)
-	REG_L	a7, ABI_A7(sp)
-	REG_L	t0, ABI_T0(sp)
-	REG_L	ra, ABI_RA(sp)
+	REG_L	a0, PT_A0(sp)
+	REG_L	a1, PT_A1(sp)
+	REG_L	a2, PT_A2(sp)
+	REG_L	a3, PT_A3(sp)
+	REG_L	a4, PT_A4(sp)
+	REG_L	a5, PT_A5(sp)
+	REG_L	a6, PT_A6(sp)
+	REG_L	a7, PT_A7(sp)
+	REG_L	t0, PT_T0(sp)
+	REG_L	ra, PT_RA(sp)
 
-	addi	sp, sp, ABI_SIZE_ON_STACK
+	addi	sp, sp, PT_SIZE_ON_STACK
 	.endm
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS
@@ -96,8 +87,8 @@ ftrace_call:
 	call	ftrace_stub
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	addi	a0, sp, ABI_RA
-	REG_L	a1, ABI_T0(sp)
+	addi	a0, sp, PT_RA
+	REG_L	a1, PT_T0(sp)
 	addi	a1, a1, -FENTRY_RA_OFFSET
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	mv	a2, s0
