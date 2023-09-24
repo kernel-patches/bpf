@@ -118,6 +118,14 @@ extern int ftrace_enabled;
 
 #ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
 
+/*
+ * The ftrace_regs will be just a wrapper of the pt_regs if
+ * CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS is not set. If it is set on an
+ * architecture, it has to define the ftrace_regs data structure.
+ * The ftrace_regs is expected to save the registers for the function
+ * arguments, the registers for stack dump (e.g. stack pointer and the
+ * frame pointer) and the instruction pointer for reference.
+ */
 struct ftrace_regs {
 	struct pt_regs		regs;
 };
