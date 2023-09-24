@@ -1067,11 +1067,29 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+static struct bpf_prog *find_subprog(struct bpf_prog *bpf_prog, s32 imm32)
+{
+	struct bpf_prog_aux *aux = bpf_prog->aux;
+	int i;
+
+	if (!aux->func_info_cnt || !bpf_prog->aux->func)
+		return NULL;
+
+	for (i = 0; i < aux->func_info_cnt; i++)
+		if (BPF_CALL_IMM(aux->func[i]->bpf_func) == imm32)
+			return aux->func[i];
+
+	return NULL;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
-/* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
-#define RESTORE_TAIL_CALL_CNT(stack)				\
-	EMIT3_off32(0x48, 0x8B, 0x85, -round_up(stack, 8) - 8)
+/* mov reg, qword ptr [rbp - rounded_stack_depth - 8] */
+#define LOAD_TAIL_CALL_CNT(prog, reg, stack)				\
+	emit_ldx(&prog, BPF_DW, reg, BPF_REG_FP, -round_up(stack, 8) - 8)
+/* mov qword ptr [rbp - rounded_stack_depth -8], reg */
+#define STORE_TAIL_CALL_CNT(prog, reg, stack)				\
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, reg, -round_up(stack, 8) - 8)
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image,
 		  int oldproglen, struct jit_context *ctx, bool jmp_padding)
@@ -1686,11 +1704,24 @@ st:			if (is_imm8(insn->off))
 
 			/* call */
 		case BPF_JMP | BPF_CALL: {
+			bool subprog_tail_call_reachable = false;
+			struct bpf_prog *subprog;
 			int offs;
 
+			if (insn->src_reg == BPF_PSEUDO_CALL) {
+				subprog = find_subprog(bpf_prog, imm32);
+				if (!subprog)
+					return -EINVAL;
+				subprog_tail_call_reachable = subprog->aux->tail_call_reachable;
+			}
+
 			func = (u8 *) __bpf_call_base + imm32;
-			if (tail_call_reachable) {
-				RESTORE_TAIL_CALL_CNT(bpf_prog->aux->stack_depth);
+			if (subprog_tail_call_reachable) {
+				/* Before calling subprog, tail_call_cnt is
+				 * loaded from stack to rax in order to be
+				 * propagated to subprog.
+				 */
+				LOAD_TAIL_CALL_CNT(prog, BPF_REG_0, bpf_prog->aux->stack_depth);
 				if (!imm32)
 					return -EINVAL;
 				offs = 7 + x86_call_depth_emit_accounting(&prog, func);
@@ -1701,6 +1732,12 @@ st:			if (is_imm8(insn->off))
 			}
 			if (emit_call(&prog, func, image + addrs[i - 1] + offs))
 				return -EINVAL;
+			if (subprog_tail_call_reachable)
+				/* After calling subprog, tail_call_cnt is
+				 * stored from rdi to stack. When calling next
+				 * subprog, tail_call_cnt can be propagated.
+				 */
+				STORE_TAIL_CALL_CNT(prog, BPF_REG_1, bpf_prog->aux->stack_depth);
 			break;
 		}
 
@@ -1973,6 +2010,12 @@ emit_jmp:
 			} else {
 				pop_callee_regs(&prog, callee_regs_used);
 			}
+			if (tail_call_reachable && bpf_is_subprog(bpf_prog))
+				/* Before returning to caller, tail_call_cnt is
+				 * loaded from stack to rdi in order to be back
+				 * propagated to caller.
+				 */
+				LOAD_TAIL_CALL_CNT(prog, BPF_REG_1, bpf_prog->aux->stack_depth);
 			EMIT1(0xC9);         /* leave */
 			emit_return(&prog, image + addrs[i - 1] + (prog - temp));
 			break;
@@ -2592,10 +2635,11 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 		save_args(m, &prog, arg_stack_off, true);
 
 		if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
-			/* Before calling the original function, restore the
-			 * tail_call_cnt from stack to rax.
+			/* Before calling the original function, tail_call_cnt
+			 * is loaded from stack to rax in order to be propagated
+			 * to tracee.
 			 */
-			RESTORE_TAIL_CALL_CNT(stack_size);
+			LOAD_TAIL_CALL_CNT(prog, BPF_REG_0, stack_size);
 
 		if (flags & BPF_TRAMP_F_ORIG_STACK) {
 			emit_ldx(&prog, BPF_DW, BPF_REG_6, BPF_REG_FP, 8);
@@ -2607,6 +2651,12 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 				goto cleanup;
 			}
 		}
+		if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
+			/* After calling the original function, tail_call_cnt
+			 * is stored from rdi to stack in order to be back
+			 * propagated to caller.
+			 */
+			STORE_TAIL_CALL_CNT(prog, BPF_REG_1, stack_size);
 		/* remember return value in a stack for bpf prog to access */
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 		im->ip_after_call = prog;
@@ -2650,11 +2700,17 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 			ret = -EINVAL;
 			goto cleanup;
 		}
+		if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
+			/* Before returning to caller, tail_call_cnt is loaded
+			 * from stack to rdi in order to be back propagated to
+			 * caller.
+			 */
+			LOAD_TAIL_CALL_CNT(prog, BPF_REG_1, stack_size);
 	} else if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
-		/* Before running the original function, restore the
-		 * tail_call_cnt from stack to rax.
+		/* Before running the original function, tail_call_cnt is loaded
+		 * from stack to rax in order to be propagated to tracee.
 		 */
-		RESTORE_TAIL_CALL_CNT(stack_size);
+		LOAD_TAIL_CALL_CNT(prog, BPF_REG_0, stack_size);
 
 	/* restore return value of orig_call or fentry prog back into RAX */
 	if (save_ret)
