@@ -37,4 +37,20 @@ int entry(struct __sk_buff *skb)
 	return 0;
 }
 
+static __noinline
+int subprog_tail2(struct __sk_buff *skb)
+{
+	volatile int retval = 1;
+	bpf_tail_call_static(skb, &jmp_table, 0);
+	return retval;
+}
+
+SEC("tc")
+int hierarchy(struct __sk_buff *skb)
+{
+	count++;
+	subprog_tail2(skb);
+	return subprog_tail2(skb);
+}
+
 char __license[] SEC("license") = "GPL";

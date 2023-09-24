@@ -219,7 +219,7 @@ out:
 }
 
 static void test_tailcall_count(const char *which, bool test_fentry,
-				bool test_fexit)
+				bool test_fexit, bool test_hierarchy)
 {
 	struct bpf_object *obj = NULL, *fentry_obj = NULL, *fexit_obj = NULL;
 	struct bpf_link *fentry_link = NULL, *fexit_link = NULL;
@@ -238,7 +238,8 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 	if (CHECK_FAIL(err))
 		return;
 
-	prog = bpf_object__find_program_by_name(obj, "entry");
+	which = test_hierarchy ? "hierarchy" : "entry";
+	prog = bpf_object__find_program_by_name(obj, which);
 	if (CHECK_FAIL(!prog))
 		goto out;
 
@@ -254,13 +255,17 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 	if (CHECK_FAIL(map_fd < 0))
 		goto out;
 
-	prog = bpf_object__find_program_by_name(obj, "classifier_0");
-	if (CHECK_FAIL(!prog))
-		goto out;
+	if (test_hierarchy) {
+		prog_fd = main_fd;
+	} else {
+		prog = bpf_object__find_program_by_name(obj, "classifier_0");
+		if (CHECK_FAIL(!prog))
+			goto out;
 
-	prog_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(prog_fd < 0))
-		goto out;
+		prog_fd = bpf_program__fd(prog);
+		if (CHECK_FAIL(prog_fd < 0))
+			goto out;
+	}
 
 	i = 0;
 	err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
@@ -277,8 +282,8 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 		if (!ASSERT_OK_PTR(prog, "find fentry prog"))
 			goto out;
 
-		err = bpf_program__set_attach_target(prog, prog_fd,
-						     "subprog_tail");
+		which = test_hierarchy ? "subprog_tail2" : "subprog_tail";
+		err = bpf_program__set_attach_target(prog, prog_fd, which);
 		if (!ASSERT_OK(err, "set_attach_target subprog_tail"))
 			goto out;
 
@@ -301,8 +306,8 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 		if (!ASSERT_OK_PTR(prog, "find fexit prog"))
 			goto out;
 
-		err = bpf_program__set_attach_target(prog, prog_fd,
-						     "subprog_tail");
+		which = test_hierarchy ? "subprog_tail2" : "subprog_tail";
+		err = bpf_program__set_attach_target(prog, prog_fd, which);
 		if (!ASSERT_OK(err, "set_attach_target subprog_tail"))
 			goto out;
 
@@ -346,7 +351,7 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 		i = 0;
 		err = bpf_map_lookup_elem(data_fd, &i, &val);
 		ASSERT_OK(err, "fentry count");
-		ASSERT_EQ(val, 33, "fentry count");
+		ASSERT_EQ(val, test_hierarchy ? 66 : 33, "fentry count");
 	}
 
 	if (test_fexit) {
@@ -363,7 +368,7 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 		i = 0;
 		err = bpf_map_lookup_elem(data_fd, &i, &val);
 		ASSERT_OK(err, "fexit count");
-		ASSERT_EQ(val, 33, "fexit count");
+		ASSERT_EQ(val, test_hierarchy ? 66 : 33, "fexit count");
 	}
 
 	i = 0;
@@ -387,7 +392,7 @@ out:
  */
 static void test_tailcall_3(void)
 {
-	test_tailcall_count("tailcall3.bpf.o", false, false);
+	test_tailcall_count("tailcall3.bpf.o", false, false, false);
 }
 
 /* test_tailcall_6 checks that the count value of the tail call limit
@@ -395,7 +400,7 @@ static void test_tailcall_3(void)
  */
 static void test_tailcall_6(void)
 {
-	test_tailcall_count("tailcall6.bpf.o", false, false);
+	test_tailcall_count("tailcall6.bpf.o", false, false, false);
 }
 
 /* test_tailcall_4 checks that the kernel properly selects indirect jump
@@ -978,7 +983,7 @@ out:
  */
 static void test_tailcall_bpf2bpf_fentry(void)
 {
-	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", true, false);
+	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", true, false, false);
 }
 
 /* test_tailcall_bpf2bpf_fexit checks that the count value of the tail call
@@ -987,7 +992,7 @@ static void test_tailcall_bpf2bpf_fentry(void)
  */
 static void test_tailcall_bpf2bpf_fexit(void)
 {
-	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", false, true);
+	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", false, true, false);
 }
 
 /* test_tailcall_bpf2bpf_fentry_fexit checks that the count value of the tail
@@ -996,7 +1001,7 @@ static void test_tailcall_bpf2bpf_fexit(void)
  */
 static void test_tailcall_bpf2bpf_fentry_fexit(void)
 {
-	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", true, true);
+	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", true, true, false);
 }
 
 /* test_tailcall_bpf2bpf_fentry_entry checks that the count value of the tail
@@ -1105,6 +1110,50 @@ out:
 	bpf_object__close(tgt_obj);
 }
 
+static void test_tailcall_bpf2bpf_hierarchy_count(bool test_fentry,
+						  bool test_fexit)
+{
+	test_tailcall_count("tailcall_bpf2bpf2.bpf.o", test_fentry, test_fexit,
+			    true);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy checks that the count values of the tail call
+ * limit enforcement matches with expectations when tailcalls are preceded with
+ * two bpf2bpf calls.
+ */
+static void test_tailcall_bpf2bpf_hierarchy(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_count(false, false);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy_fentry checks that the count values of the
+ * tail call limit enforcement matches with expectations when tailcalls are
+ * preceded with two bpf2bpf calls, and the bpf2bpf calls are traced by fentry.
+ */
+static void test_tailcall_bpf2bpf_hierarchy_fentry(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_count(true, false);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy_fexit checks that the count values of the
+ * tail call limit enforcement matches with expectations when tailcalls are
+ * preceded with two bpf2bpf calls, and the bpf2bpf calls are traced by fexit.
+ */
+static void test_tailcall_bpf2bpf_hierarchy_fexit(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_count(false, true);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy_fentry_fexit checks that the count values of
+ * the tail call limit enforcement matches with expectations when tailcalls are
+ * preceded with two bpf2bpf calls, and the bpf2bpf calls are traced by both
+ * fentry and fexit.
+ */
+static void test_tailcall_bpf2bpf_hierarchy_fentry_fexit(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_count(true, true);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1139,4 +1188,12 @@ void test_tailcalls(void)
 		test_tailcall_bpf2bpf_fentry_fexit();
 	if (test__start_subtest("tailcall_bpf2bpf_fentry_entry"))
 		test_tailcall_bpf2bpf_fentry_entry();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy"))
+		test_tailcall_bpf2bpf_hierarchy();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_fentry"))
+		test_tailcall_bpf2bpf_hierarchy_fentry();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_fexit"))
+		test_tailcall_bpf2bpf_hierarchy_fexit();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_fentry_fexit"))
+		test_tailcall_bpf2bpf_hierarchy_fentry_fexit();
 }
