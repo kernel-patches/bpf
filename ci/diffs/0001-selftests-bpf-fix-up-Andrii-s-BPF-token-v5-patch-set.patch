@@ -1,0 +1,32 @@
+From a1f2a6346646c057f1cb5fcf38578159533f85ca Mon Sep 17 00:00:00 2001
+From: Andrii Nakryiko <andrii@kernel.org>
+Date: Tue, 19 Sep 2023 15:18:56 -0700
+Subject: [PATCH] selftests/bpf: fix up Andrii's BPF token v5 patch set
+
+To avoid unnecessary v6 resubmission just for a potentially
+uninitialized err. Let's get some signal from BPF CI.
+
+Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+---
+ tools/testing/selftests/bpf/prog_tests/token.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/token.c b/tools/testing/selftests/bpf/prog_tests/token.c
+index a7b6839d81ac..41cee6b4731e 100644
+--- a/tools/testing/selftests/bpf/prog_tests/token.c
++++ b/tools/testing/selftests/bpf/prog_tests/token.c
+@@ -566,8 +566,10 @@ static int userns_prog_load(int mnt_fd)
+ 	prog_opts.token_fd = 0;
+ 	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, "token_prog", "GPL",
+ 				insns, insn_cnt, &prog_opts);
+-	if (!ASSERT_EQ(prog_fd, -EPERM, "prog_fd_eperm"))
++	if (!ASSERT_EQ(prog_fd, -EPERM, "prog_fd_eperm")) {
++		err = -EPERM;
+ 		goto cleanup;
++	}
+ 
+ 	err = drop_priv_caps(&old_caps);
+ 	if (!ASSERT_OK(err, "drop_caps"))
+-- 
+2.34.1
+
