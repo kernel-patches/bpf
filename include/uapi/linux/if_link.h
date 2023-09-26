@@ -756,6 +756,31 @@ struct tunnel_msg {
 	__u32 ifindex;
 };
 
+/* META section */
+enum meta_action {
+	META_NEXT	= -1,
+	META_PASS	= 0,
+	META_DROP	= 2,
+	META_REDIRECT	= 7,
+};
+
+enum meta_mode {
+	META_L2,
+	META_L3,
+};
+
+enum {
+	IFLA_META_UNSPEC,
+	IFLA_META_PEER_INFO,
+	IFLA_META_PRIMARY,
+	IFLA_META_POLICY,
+	IFLA_META_PEER_POLICY,
+	IFLA_META_MODE,
+	__IFLA_META_MAX,
+};
+
+#define IFLA_META_MAX	(__IFLA_META_MAX - 1)
+
 /* VXLAN section */
 
 /* include statistics in the dump */

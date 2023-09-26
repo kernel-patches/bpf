@@ -448,6 +448,15 @@ config NLMON
 	  diagnostics, etc. This is mostly intended for developers or support
 	  to debug netlink issues. If unsure, say N.
 
+config META
+	bool "BPF-programmable meta device"
+	depends on BPF_SYSCALL
+	help
+	  The virtual meta devices can be created in pairs and used to connect
+	  two network namespaces. A BPF program can be attached to the device(s)
+	  which then gets executed on transmission to implement the driver
+	  internal logic.
+
 config NET_VRF
 	tristate "Virtual Routing and Forwarding (Lite)"
 	depends on IP_MULTIPLE_TABLES
