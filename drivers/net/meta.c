@@ -27,6 +27,11 @@ struct meta {
 	u32 headroom;
 };
 
+struct meta_link {
+	struct bpf_link link;
+	struct net_device *dev;
+};
+
 static void meta_scrub_minimum(struct sk_buff *skb)
 {
 	skb->skb_iif = 0;
@@ -576,6 +581,207 @@ out:
 	return ret;
 }
 
+static struct meta_link *meta_link(struct bpf_link *link)
+{
+	return container_of(link, struct meta_link, link);
+}
+
+static const struct meta_link *meta_link_const(const struct bpf_link *link)
+{
+	return meta_link((struct bpf_link *)link);
+}
+
+static int meta_link_prog_attach(struct bpf_link *link, u32 flags,
+				 u32 id_or_fd, u64 revision)
+{
+	struct meta_link *meta = meta_link(link);
+	struct bpf_mprog_entry *entry, *entry_new;
+	struct net_device *dev = meta->dev;
+	int ret;
+
+	ASSERT_RTNL();
+	entry = meta_entry_fetch(dev, true);
+	ret = bpf_mprog_attach(entry, &entry_new, link->prog, link, NULL, flags,
+			       id_or_fd, revision);
+	if (!ret) {
+		if (entry != entry_new) {
+			meta_entry_update(dev, entry_new);
+			meta_entry_sync();
+		}
+		bpf_mprog_commit(entry);
+	}
+	return ret;
+}
+
+static void meta_link_release(struct bpf_link *link)
+{
+	struct meta_link *meta = meta_link(link);
+	struct bpf_mprog_entry *entry, *entry_new;
+	struct net_device *dev;
+	int ret = 0;
+
+	rtnl_lock();
+	dev = meta->dev;
+	if (!dev)
+		goto out;
+	entry = meta_entry_fetch(dev, false);
+	if (!entry) {
+		ret = -ENOENT;
+		goto out;
+	}
+	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0);
+	if (!ret) {
+		if (!bpf_mprog_total(entry_new))
+			entry_new = NULL;
+		meta_entry_update(dev, entry_new);
+		meta_entry_sync();
+		bpf_mprog_commit(entry);
+		meta->dev = NULL;
+	}
+out:
+	WARN_ON_ONCE(ret);
+	rtnl_unlock();
+}
+
+static int meta_link_update(struct bpf_link *link, struct bpf_prog *nprog,
+			    struct bpf_prog *oprog)
+{
+	struct meta_link *meta = meta_link(link);
+	struct bpf_mprog_entry *entry, *entry_new;
+	struct net_device *dev;
+	int ret = 0;
+
+	rtnl_lock();
+	dev = meta->dev;
+	if (!dev) {
+		ret = -ENOLINK;
+		goto out;
+	}
+	if (oprog && link->prog != oprog) {
+		ret = -EPERM;
+		goto out;
+	}
+	oprog = link->prog;
+	if (oprog == nprog) {
+		bpf_prog_put(nprog);
+		goto out;
+	}
+	entry = meta_entry_fetch(dev, false);
+	if (!entry) {
+		ret = -ENOENT;
+		goto out;
+	}
+	ret = bpf_mprog_attach(entry, &entry_new, nprog, link, oprog,
+			       BPF_F_REPLACE | BPF_F_ID,
+			       link->prog->aux->id, 0);
+	if (!ret) {
+		WARN_ON_ONCE(entry != entry_new);
+		oprog = xchg(&link->prog, nprog);
+		bpf_prog_put(oprog);
+		bpf_mprog_commit(entry);
+	}
+out:
+	rtnl_unlock();
+	return ret;
+}
+
+static void meta_link_dealloc(struct bpf_link *link)
+{
+	kfree(meta_link(link));
+}
+
+static void meta_link_fdinfo(const struct bpf_link *link, struct seq_file *seq)
+{
+	const struct meta_link *meta = meta_link_const(link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (meta->dev)
+		ifindex = meta->dev->ifindex;
+	rtnl_unlock();
+
+	seq_printf(seq, "ifindex:\t%u\n", ifindex);
+}
+
+static int meta_link_fill_info(const struct bpf_link *link,
+			       struct bpf_link_info *info)
+{
+	const struct meta_link *meta = meta_link_const(link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (meta->dev)
+		ifindex = meta->dev->ifindex;
+	rtnl_unlock();
+
+	info->meta.ifindex = ifindex;
+	return 0;
+}
+
+static int meta_link_detach(struct bpf_link *link)
+{
+	meta_link_release(link);
+	return 0;
+}
+
+static const struct bpf_link_ops meta_link_lops = {
+	.release	= meta_link_release,
+	.detach		= meta_link_detach,
+	.dealloc	= meta_link_dealloc,
+	.update_prog	= meta_link_update,
+	.show_fdinfo	= meta_link_fdinfo,
+	.fill_link_info	= meta_link_fill_info,
+};
+
+static int meta_link_init(struct meta_link *meta,
+			  struct bpf_link_primer *link_primer,
+			  struct net_device *dev, struct bpf_prog *prog)
+{
+	bpf_link_init(&meta->link, BPF_LINK_TYPE_META, &meta_link_lops, prog);
+	meta->dev = dev;
+	return bpf_link_prime(&meta->link, link_primer);
+}
+
+int meta_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct net_device *dev;
+	struct meta_link *meta;
+	int ret;
+
+	rtnl_lock();
+	dev = meta_dev_fetch(current->nsproxy->net_ns,
+			     attr->link_create.target_ifindex,
+			     attr->link_create.attach_type);
+	if (IS_ERR(dev)) {
+		ret = PTR_ERR(dev);
+		goto out;
+	}
+	meta = kzalloc(sizeof(*meta), GFP_USER);
+	if (!meta) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = meta_link_init(meta, &link_primer, dev, prog);
+	if (ret) {
+		kfree(meta);
+		goto out;
+	}
+	ret = meta_link_prog_attach(&meta->link,
+				    attr->link_create.flags,
+				    attr->link_create.meta.relative_fd,
+				    attr->link_create.meta.expected_revision);
+	if (ret) {
+		meta->dev = NULL;
+		bpf_link_cleanup(&link_primer);
+		goto out;
+	}
+	ret = bpf_link_settle(&link_primer);
+out:
+	rtnl_unlock();
+	return ret;
+}
+
 static void meta_release_all(struct net_device *dev)
 {
 	struct bpf_mprog_entry *entry;
@@ -589,7 +795,10 @@ static void meta_release_all(struct net_device *dev)
 	meta_entry_update(dev, NULL);
 	meta_entry_sync();
 	bpf_mprog_foreach_tuple(entry, fp, cp, tuple) {
-		bpf_prog_put(tuple.prog);
+		if (tuple.link)
+			meta_link(tuple.link)->dev = NULL;
+		else
+			bpf_prog_put(tuple.prog);
 	}
 }
 

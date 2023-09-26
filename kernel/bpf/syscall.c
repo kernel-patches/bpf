@@ -4971,7 +4971,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		    attr->link_create.attach_type == BPF_TCX_EGRESS)
 			ret = tcx_link_attach(attr, prog);
 		else
-			ret = -EINVAL;
+			ret = meta_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_NETFILTER:
 		ret = bpf_nf_link_attach(attr, prog);
