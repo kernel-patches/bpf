@@ -810,6 +810,22 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, tcx))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_META_PRIMARY:
+	case BPF_META_PEER:
+		relative_fd = OPTS_GET(opts, meta.relative_fd, 0);
+		relative_id = OPTS_GET(opts, meta.relative_id, 0);
+		if (relative_fd && relative_id)
+			return libbpf_err(-EINVAL);
+		if (relative_id) {
+			attr.link_create.meta.relative_id = relative_id;
+			attr.link_create.flags |= BPF_F_ID;
+		} else {
+			attr.link_create.meta.relative_fd = relative_fd;
+		}
+		attr.link_create.meta.expected_revision = OPTS_GET(opts, meta.expected_revision, 0);
+		if (!OPTS_ZEROED(opts, meta))
+			return libbpf_err(-EINVAL);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
