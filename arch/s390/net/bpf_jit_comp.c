@@ -2652,7 +2652,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 			return -E2BIG;
 	}
 
-	return ret;
+	return tjit.common.prg;
 }
 
 bool bpf_jit_supports_subprog_tailcalls(void)
