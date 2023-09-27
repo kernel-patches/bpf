@@ -3029,11 +3029,23 @@ union bpf_attr {
  * 		socket level. If the message *msg* is allowed to pass (i.e. if
  * 		the verdict eBPF program returns **SK_PASS**), redirect it to
  * 		the socket referenced by *map* (of type
- * 		**BPF_MAP_TYPE_SOCKMAP**) at index *key*. Both ingress and
- * 		egress interfaces can be used for redirection. The
- * 		**BPF_F_INGRESS** value in *flags* is used to make the
- * 		distinction (ingress path is selected if the flag is present,
- * 		egress path otherwise). This is the only flag supported for now.
+ * 		**BPF_MAP_TYPE_SOCKMAP**) at index *key*.
+ *
+ *		The following *flags* are supported:
+ *
+ *		**BPF_F_INGRESS**
+ *		        Both ingress and egress interfaces can be used for redirection.
+ *		        The **BPF_F_INGRESS** value in *flags* is used to make the
+ *		        distinction. Ingress path is selected if the flag is present,
+ *		        egress path otherwise.
+ *		**BPF_F_PERMANENT**
+ *		        Indicates that redirect verdict and the target socket should be
+ *		        remembered. The verdict program will not be run for subsequent
+ *		        packets, unless an error occurs when forwarding packets.
+ *
+ *		        **BPF_F_PERMANENT** cannot be use together with
+ *		        **bpf_msg_apply_bytes**\ () and **bpf_msg_cork_bytes**\ (). If
+ *			**BPF_F_PERMANENT** is set apply_bytes and cork_bytes are ignored.
  * 	Return
  * 		**SK_PASS** on success, or **SK_DROP** on error.
  *
@@ -3301,11 +3313,23 @@ union bpf_attr {
  *		socket level. If the message *msg* is allowed to pass (i.e. if
  *		the verdict eBPF program returns **SK_PASS**), redirect it to
  *		the socket referenced by *map* (of type
- *		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*. Both ingress and
- *		egress interfaces can be used for redirection. The
- *		**BPF_F_INGRESS** value in *flags* is used to make the
- *		distinction (ingress path is selected if the flag is present,
- *		egress path otherwise). This is the only flag supported for now.
+ *		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*.
+ *
+ *		The following *flags* are supported:
+ *
+ *		**BPF_F_INGRESS**
+ *		        Both ingress and egress interfaces can be used for redirection.
+ *		        The **BPF_F_INGRESS** value in *flags* is used to make the
+ *		        distinction. Ingress path is selected if the flag is present,
+ *		        egress path otherwise.
+ *		**BPF_F_PERMANENT**
+ *		        Indicates that redirect verdict and the target socket should be
+ *		        remembered. The verdict program will not be run for subsequent
+ *		        packets, unless an error occurs when forwarding packets.
+ *
+ *		        **BPF_F_PERMANENT** cannot be use together with
+ *		        **bpf_msg_apply_bytes**\ () and **bpf_msg_cork_bytes**\ (). If
+ *			**BPF_F_PERMANENT** is set apply_bytes and cork_bytes are ignored.
  *	Return
  *		**SK_PASS** on success, or **SK_DROP** on error.
  *
@@ -5906,6 +5930,7 @@ enum {
 /* BPF_FUNC_clone_redirect and BPF_FUNC_redirect flags. */
 enum {
 	BPF_F_INGRESS			= (1ULL << 0),
+	BPF_F_PERMANENT			= (1ULL << 1),
 };
 
 /* BPF_FUNC_skb_set_tunnel_key and BPF_FUNC_skb_get_tunnel_key flags. */
