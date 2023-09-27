@@ -1374,16 +1374,6 @@ static inline void mlx5e_enable_ecn(struct mlx5e_rq *rq, struct sk_buff *skb)
 	rq->stats->ecn_mark += !!rc;
 }
 
-static u8 get_ip_proto(struct sk_buff *skb, int network_depth, __be16 proto)
-{
-	void *ip_p = skb->data + network_depth;
-
-	return (proto == htons(ETH_P_IP)) ? ((struct iphdr *)ip_p)->protocol :
-					    ((struct ipv6hdr *)ip_p)->nexthdr;
-}
-
-#define short_frame(size) ((size) <= ETH_ZLEN + ETH_FCS_LEN)
-
 #define MAX_PADDING 8
 
 static void
@@ -1493,7 +1483,7 @@ static inline void mlx5e_handle_csum(struct net_device *netdev,
 		goto csum_unnecessary;
 
 	if (likely(is_last_ethertype_ip(skb, &network_depth, &proto))) {
-		if (unlikely(get_ip_proto(skb, network_depth, proto) == IPPROTO_SCTP))
+		if (unlikely(get_ip_proto(skb->data, network_depth, proto) == IPPROTO_SCTP))
 			goto csum_unnecessary;
 
 		stats->csum_complete++;

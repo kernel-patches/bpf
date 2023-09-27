@@ -270,10 +270,110 @@ static int mlx5e_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 	return 0;
 }
 
+static __be16 xdp_buff_last_ethertype(const struct xdp_buff *xdp,
+				      int *network_offset)
+{
+	__be16 proto = ((struct ethhdr *)xdp->data)->h_proto;
+	struct vlan_hdr *remaining_data = xdp->data + ETH_HLEN;
+	u8 allowed_depth = VLAN_MAX_DEPTH;
+
+	while (eth_type_vlan(proto)) {
+		struct vlan_hdr *next_data = remaining_data + 1;
+
+		if ((void *)next_data > xdp->data_end || !--allowed_depth)
+			return 0;
+		proto = remaining_data->h_vlan_encapsulated_proto;
+		remaining_data = next_data;
+	}
+
+	*network_offset = (void *)remaining_data - xdp->data;
+	return proto;
+}
+
+static bool xdp_csum_needs_fixup(const struct xdp_buff *xdp, int network_depth,
+				 __be16 proto)
+{
+	struct ipv6hdr *ip6;
+	struct iphdr   *ip4;
+	int pkt_len;
+
+	if (network_depth > ETH_HLEN)
+		return true;
+
+	switch (proto) {
+	case htons(ETH_P_IP):
+		ip4 = (struct iphdr *)(xdp->data + network_depth);
+		pkt_len = network_depth + ntohs(ip4->tot_len);
+		break;
+	case htons(ETH_P_IPV6):
+		ip6 = (struct ipv6hdr *)(xdp->data + network_depth);
+		pkt_len = network_depth + sizeof(*ip6) + ntohs(ip6->payload_len);
+		break;
+	default:
+		return true;
+	}
+
+	if (likely(pkt_len >= xdp->data_end - xdp->data))
+		return false;
+
+	return true;
+}
+
+static int mlx5e_xdp_rx_csum(const struct xdp_md *ctx,
+			     enum xdp_csum_status *csum_status,
+			     __wsum *csum)
+{
+	const struct mlx5e_xdp_buff *_ctx = (void *)ctx;
+	const struct mlx5_cqe64 *cqe = _ctx->cqe;
+	const struct mlx5e_rq *rq = _ctx->rq;
+	__be16 last_ethertype;
+	int network_offset;
+	u8 lro_num_seg;
+
+	lro_num_seg = be32_to_cpu(cqe->srqn) >> 24;
+	if (lro_num_seg) {
+		*csum_status = XDP_CHECKSUM_VERIFIED;
+		return 0;
+	}
+
+	if (test_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &rq->state) ||
+	    get_cqe_tls_offload(cqe))
+		goto csum_unnecessary;
+
+	if (short_frame(ctx->data_end - ctx->data))
+		goto csum_unnecessary;
+
+	last_ethertype = xdp_buff_last_ethertype(&_ctx->xdp, &network_offset);
+	if (last_ethertype != htons(ETH_P_IP) && last_ethertype != htons(ETH_P_IPV6))
+		goto csum_unnecessary;
+	if (unlikely(get_ip_proto(_ctx->xdp.data, network_offset,
+				  last_ethertype) == IPPROTO_SCTP))
+		goto csum_unnecessary;
+
+	*csum_status = XDP_CHECKSUM_COMPLETE;
+	*csum = csum_unfold((__force __sum16)cqe->check_sum);
+
+	if (test_bit(MLX5E_RQ_STATE_CSUM_FULL, &rq->state))
+		goto csum_unnecessary;
+
+	if (unlikely(xdp_csum_needs_fixup(&_ctx->xdp, network_offset,
+					  last_ethertype)))
+		*csum_status = 0;
+
+csum_unnecessary:
+	if (likely((cqe->hds_ip_ext & CQE_L3_OK) &&
+		   (cqe->hds_ip_ext & CQE_L4_OK))) {
+		*csum_status |= XDP_CHECKSUM_VERIFIED;
+	}
+
+	return *csum_status ? 0 : -ENODATA;
+}
+
 const struct xdp_metadata_ops mlx5e_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= mlx5e_xdp_rx_timestamp,
 	.xmo_rx_hash			= mlx5e_xdp_rx_hash,
 	.xmo_rx_vlan_tag		= mlx5e_xdp_rx_vlan_tag,
+	.xmo_rx_csum			= mlx5e_xdp_rx_csum,
 };
 
 /* returns true if packet was consumed by xdp */
