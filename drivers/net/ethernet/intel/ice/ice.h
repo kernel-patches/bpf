@@ -210,6 +210,7 @@ enum ice_feature {
 };
 
 DECLARE_STATIC_KEY_FALSE(ice_xdp_locking_key);
+DECLARE_STATIC_KEY_FALSE(ice_xdp_meta_key);
 
 struct ice_channel {
 	struct list_head list;
