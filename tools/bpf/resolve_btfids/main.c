@@ -120,10 +120,14 @@ struct object {
 		int		 fd;
 		Elf		*elf;
 
+		size_t		 sec_cnt;
+		size_t		 shdrstrndx;
+
 		struct sec_desc	 symbols;
 		struct sec_desc	 ids;
 		struct sec_desc	 ids_data;
 		struct sec_desc	 ids_desc;
+		struct sec_desc	 ids_relo;
 	} efile;
 
 	struct rb_root	sets;
@@ -353,8 +357,13 @@ static int elf_collect(struct object *obj)
 
 	elf_flagelf(elf, ELF_C_SET, ELF_F_LAYOUT);
 
-	if (elf_getshdrstrndx(elf, &shdrstrndx) != 0) {
+	if (elf_getshdrstrndx(elf, &obj->efile.shdrstrndx) != 0) {
 		pr_err("FAILED cannot get shdr str ndx\n");
+		return -1;
+	}
+
+	if (elf_getshdrnum(obj->efile.elf, &obj->efile.sec_cnt)) {
+		pr_err("FAILED cannot get the number of sections\n");
 		return -1;
 	}
 
@@ -373,7 +382,7 @@ static int elf_collect(struct object *obj)
 			return -1;
 		}
 
-		name = elf_strptr(elf, shdrstrndx, sh.sh_name);
+		name = elf_strptr(elf, obj->efile.shdrstrndx, sh.sh_name);
 		if (!name) {
 			pr_err("FAILED get section(%d) name\n", idx);
 			return -1;
@@ -391,7 +400,21 @@ static int elf_collect(struct object *obj)
 			  (int) sh.sh_link, (unsigned long) sh.sh_flags,
 			  (int) sh.sh_type);
 
-		if (sh.sh_type == SHT_SYMTAB) {
+		if (sh.sh_type == SHT_RELA) {
+			int targ_sec_idx = sh.sh_info; /* points to other section */
+
+			if (sh.sh_entsize != sizeof(Elf64_Rela) ||
+			    targ_sec_idx >= obj->efile.sec_cnt)
+				return -1;
+
+			/* Only do relo for section with .BTF_ids_desc */
+                        if (strcmp(name, ".rela" BTF_IDS_DESC_SECTION))
+                                continue;
+
+			obj->efile.ids_relo.data = data;
+			obj->efile.ids_relo.idx = idx;
+			obj->efile.ids_relo.sh = sh;
+		} else if (sh.sh_type == SHT_SYMTAB) {
 			obj->efile.symbols.data = data;
 			obj->efile.symbols.idx = idx;
 			obj->efile.symbols.sh = sh;
@@ -411,6 +434,155 @@ static int elf_collect(struct object *obj)
 
 		if (compressed_section_fix(elf, scn, &sh))
 			return -1;
+	}
+
+	return 0;
+}
+
+static size_t elf_obj_strtabidx(const struct object *obj)
+{
+	return obj->efile.symbols.sh.sh_link;
+}
+
+static const char *elf_sym_str(const struct object *obj, size_t off)
+{
+	const char *name;
+
+	name = elf_strptr(obj->efile.elf, elf_obj_strtabidx(obj), off);
+	if (!name) {
+		pr_err("elf: failed to get section name string at offset %zu from %s\n",
+			off, obj->path);
+		return NULL;
+	}
+
+	return name;
+}
+
+static Elf64_Shdr *elf_sec_hdr(const struct object *obj, Elf_Scn *scn)
+{
+	Elf64_Shdr *shdr;
+
+	if (!scn)
+		return NULL;
+
+	shdr = elf64_getshdr(scn);
+	if (!shdr) {
+		pr_err("elf: failed to get section(%zu) header from %s\n",
+			elf_ndxscn(scn), obj->path);
+		return NULL;
+	}
+
+	return shdr;
+}
+
+static const char *elf_sec_str(const struct object *obj, size_t off)
+{
+	const char *name;
+
+	name = elf_strptr(obj->efile.elf, obj->efile.shdrstrndx, off);
+	if (!name) {
+		pr_err("elf: failed to get section name string at offset %zu from %s\n",
+			off, obj->path);
+		return NULL;
+	}
+
+	return name;
+}
+
+static const char *elf_sec_name(const struct object *obj, Elf_Scn *scn)
+{
+	const char *name;
+	Elf64_Shdr *sh;
+
+	if (!scn)
+		return NULL;
+	sh = elf_sec_hdr(obj, scn);
+	if (!sh)
+		return NULL;
+
+	name = elf_sec_str(obj, sh->sh_name);
+	if (!name) {
+		pr_err("elf: failed to get section(%zu) name from %s: \n",
+			elf_ndxscn(scn), obj->path);
+		return NULL;
+	}
+
+	return name;
+}
+
+static Elf64_Sym *elf_sym_by_idx(const struct object *obj, size_t idx)
+{
+	if (idx >= obj->efile.symbols.data->d_size / sizeof(Elf64_Sym))
+		return NULL;
+
+	return (Elf64_Sym *)obj->efile.symbols.data->d_buf + idx;
+}
+
+static Elf64_Rela *elf_rela_by_idx(Elf_Data *data, size_t idx)
+{
+	if (idx >= data->d_size / sizeof(Elf64_Rela))
+		return NULL;
+
+	return (Elf64_Rela *)data->d_buf + idx;
+}
+
+static Elf_Scn *elf_sec_by_idx(const struct object *obj, size_t idx)
+{
+	Elf_Scn *scn;
+
+	scn = elf_getscn(obj->efile.elf, idx);
+	if (!scn) {
+		pr_err("elf: failed to get section(%zu) from %s\n",
+			idx, obj->path);
+		return NULL;
+	}
+	return scn;
+}
+
+static int elf_relocate(struct object *obj)
+{
+	__u64 *ptr = obj->efile.ids_desc.data->d_buf;
+	GElf_Shdr *sh = &obj->efile.ids_relo.sh;
+	const char *name;
+	Elf64_Rela *rela;
+	Elf64_Sym *sym;
+	int nrels, i;
+
+	nrels = sh->sh_size / sh->sh_entsize;
+
+	for (i = 0; i < nrels; i++) {
+		__u64 addr = 0;
+
+		rela = elf_rela_by_idx(obj->efile.ids_relo.data, i);
+		if (!rela) {
+                        pr_err("FAILED get relo #%d\n", i);
+                        return -1;
+                }
+
+		sym = elf_sym_by_idx(obj, ELF64_R_SYM(rela->r_info));
+		if (!sym) {
+			pr_err("FAILED symbol #%zu not found for relo #%d\n",
+				ELF64_R_SYM(rela->r_info), i);
+			return -1;
+		}
+
+		if (ELF64_ST_TYPE(sym->st_info) == STT_SECTION && sym->st_name == 0)
+			name = elf_sec_name(obj, elf_sec_by_idx(obj, sym->st_shndx));
+		else
+			name = elf_sym_str(obj, sym->st_name);
+
+		ptr = obj->efile.ids_desc.data->d_buf + rela->r_offset;
+
+		if (!strcmp(name, BTF_IDS_SECTION)) {
+			addr = obj->efile.ids.sh.sh_addr;
+		} else if (!strcmp(name, BTF_IDS_DATA_SECTION)) {
+			addr = obj->efile.ids_data.sh.sh_addr;
+		}
+
+		*ptr = addr + rela->r_addend;
+
+		pr_debug("relocating ids_desc + %x = '%s + %x\n",
+			rela->r_offset, name, rela->r_addend);
 	}
 
 	return 0;
@@ -790,6 +962,7 @@ int main(int argc, const char **argv)
 			.ids.idx = -1,
 			.ids_data.idx = -1,
 			.ids_desc.idx = -1,
+			.ids_relo.idx = -1,
 			.symbols.idx = -1,
 		},
 		.structs  = RB_ROOT,
@@ -817,6 +990,9 @@ int main(int argc, const char **argv)
 	obj.path = argv[0];
 
 	if (elf_collect(&obj))
+		goto out;
+
+	if (obj.efile.ids_relo.idx != -1 && elf_relocate(&obj))
 		goto out;
 
 	/*
