@@ -116,11 +116,9 @@ struct object {
 	struct {
 		int		 fd;
 		Elf		*elf;
-		Elf_Data	*idlist;
-		int		 idlist_shndx;
-		unsigned long	 idlist_addr;
 
 		struct sec_desc	 symbols;
+		struct sec_desc	 ids;
 	} efile;
 
 	struct rb_root	sets;
@@ -393,9 +391,9 @@ static int elf_collect(struct object *obj)
 			obj->efile.symbols.idx = idx;
 			obj->efile.symbols.sh = sh;
 		} else if (!strcmp(name, BTF_IDS_SECTION)) {
-			obj->efile.idlist       = data;
-			obj->efile.idlist_shndx = idx;
-			obj->efile.idlist_addr  = sh.sh_addr;
+			obj->efile.ids.data = data;
+			obj->efile.ids.idx = idx;
+			obj->efile.ids.sh = sh;
 		}
 
 		if (compressed_section_fix(elf, scn, &sh))
@@ -425,7 +423,7 @@ static int symbols_collect(struct object *obj)
 		if (!gelf_getsym(obj->efile.symbols.data, i, &sym))
 			return -1;
 
-		if (sym.st_shndx != obj->efile.idlist_shndx)
+		if (sym.st_shndx != obj->efile.ids.idx)
 			continue;
 
 		name = elf_strptr(obj->efile.elf, sh->sh_link,
@@ -591,7 +589,7 @@ out:
 
 static int id_patch(struct object *obj, struct btf_id *id)
 {
-	Elf_Data *data = obj->efile.idlist;
+	Elf_Data *data = obj->efile.ids.data;
 	int *ptr = data->d_buf;
 	int i;
 
@@ -601,7 +599,7 @@ static int id_patch(struct object *obj, struct btf_id *id)
 
 	for (i = 0; i < id->addr_cnt; i++) {
 		unsigned long addr = id->addr[i];
-		unsigned long idx = addr - obj->efile.idlist_addr;
+		unsigned long idx = addr - obj->efile.ids.sh.sh_addr;
 
 		pr_debug("patching addr %5lu: ID %7d [%s]\n",
 			 idx, id->id, id->name);
@@ -645,7 +643,7 @@ static int cmp_id(const void *pa, const void *pb)
 
 static int sets_patch(struct object *obj)
 {
-	Elf_Data *data = obj->efile.idlist;
+	Elf_Data *data = obj->efile.ids.data;
 	int *ptr = data->d_buf;
 	struct rb_node *next;
 
@@ -658,7 +656,7 @@ static int sets_patch(struct object *obj)
 
 		id   = rb_entry(next, struct btf_id, rb_node);
 		addr = id->addr[0];
-		idx  = addr - obj->efile.idlist_addr;
+		idx  = addr - obj->efile.ids.sh.sh_addr;
 
 		/* sets are unique */
 		if (id->addr_cnt != 1) {
@@ -696,9 +694,9 @@ static int symbols_patch(struct object *obj)
 		return -1;
 
 	/* Set type to ensure endian translation occurs. */
-	obj->efile.idlist->d_type = ELF_T_WORD;
+	obj->efile.ids.data->d_type = ELF_T_WORD;
 
-	elf_flagdata(obj->efile.idlist, ELF_C_SET, ELF_F_DIRTY);
+	elf_flagdata(obj->efile.ids.data, ELF_C_SET, ELF_F_DIRTY);
 
 	err = elf_update(obj->efile.elf, ELF_C_WRITE);
 	if (err < 0) {
@@ -720,7 +718,7 @@ int main(int argc, const char **argv)
 {
 	struct object obj = {
 		.efile = {
-			.idlist_shndx  = -1,
+			.ids.idx = -1,
 			.symbols.idx = -1,
 		},
 		.structs  = RB_ROOT,
@@ -754,7 +752,7 @@ int main(int argc, const char **argv)
 	 * We did not find .BTF_ids section or symbols section,
 	 * nothing to do..
 	 */
-	if (obj.efile.idlist_shndx == -1 ||
+	if (obj.efile.ids.idx == -1 ||
 	    obj.efile.symbols.idx == -1) {
 		pr_debug("Cannot find .BTF_ids or symbols sections, nothing to do\n");
 		err = 0;
