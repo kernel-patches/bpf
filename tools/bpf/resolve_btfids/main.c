@@ -102,6 +102,12 @@ struct btf_id {
 	Elf64_Addr	 addr[ADDR_CNT];
 };
 
+struct sec_desc {
+	GElf_Shdr sh;
+	Elf_Data *data;
+	int idx;
+};
+
 struct object {
 	const char *path;
 	const char *btf;
@@ -110,12 +116,11 @@ struct object {
 	struct {
 		int		 fd;
 		Elf		*elf;
-		Elf_Data	*symbols;
 		Elf_Data	*idlist;
-		int		 symbols_shndx;
 		int		 idlist_shndx;
-		size_t		 strtabidx;
 		unsigned long	 idlist_addr;
+
+		struct sec_desc	 symbols;
 	} efile;
 
 	struct rb_root	sets;
@@ -384,9 +389,9 @@ static int elf_collect(struct object *obj)
 			  (int) sh.sh_type);
 
 		if (sh.sh_type == SHT_SYMTAB) {
-			obj->efile.symbols       = data;
-			obj->efile.symbols_shndx = idx;
-			obj->efile.strtabidx     = sh.sh_link;
+			obj->efile.symbols.data = data;
+			obj->efile.symbols.idx = idx;
+			obj->efile.symbols.sh = sh;
 		} else if (!strcmp(name, BTF_IDS_SECTION)) {
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
@@ -402,19 +407,11 @@ static int elf_collect(struct object *obj)
 
 static int symbols_collect(struct object *obj)
 {
-	Elf_Scn *scn = NULL;
+	GElf_Shdr *sh = &obj->efile.symbols.sh;
 	int n, i;
-	GElf_Shdr sh;
 	char *name;
 
-	scn = elf_getscn(obj->efile.elf, obj->efile.symbols_shndx);
-	if (!scn)
-		return -1;
-
-	if (gelf_getshdr(scn, &sh) != &sh)
-		return -1;
-
-	n = sh.sh_size / sh.sh_entsize;
+	n = sh->sh_size / sh->sh_entsize;
 
 	/*
 	 * Scan symbols and look for the ones starting with
@@ -425,13 +422,13 @@ static int symbols_collect(struct object *obj)
 		struct btf_id *id;
 		GElf_Sym sym;
 
-		if (!gelf_getsym(obj->efile.symbols, i, &sym))
+		if (!gelf_getsym(obj->efile.symbols.data, i, &sym))
 			return -1;
 
 		if (sym.st_shndx != obj->efile.idlist_shndx)
 			continue;
 
-		name = elf_strptr(obj->efile.elf, obj->efile.strtabidx,
+		name = elf_strptr(obj->efile.elf, sh->sh_link,
 				  sym.st_name);
 
 		if (!is_btf_id(name))
@@ -724,7 +721,7 @@ int main(int argc, const char **argv)
 	struct object obj = {
 		.efile = {
 			.idlist_shndx  = -1,
-			.symbols_shndx = -1,
+			.symbols.idx = -1,
 		},
 		.structs  = RB_ROOT,
 		.unions   = RB_ROOT,
@@ -758,7 +755,7 @@ int main(int argc, const char **argv)
 	 * nothing to do..
 	 */
 	if (obj.efile.idlist_shndx == -1 ||
-	    obj.efile.symbols_shndx == -1) {
+	    obj.efile.symbols.idx == -1) {
 		pr_debug("Cannot find .BTF_ids or symbols sections, nothing to do\n");
 		err = 0;
 		goto out;
