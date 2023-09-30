@@ -128,6 +128,8 @@ struct object {
 		struct sec_desc	 ids_data;
 		struct sec_desc	 ids_desc;
 		struct sec_desc	 ids_relo;
+
+		void *ids_desc_data;
 	} efile;
 
 	struct rb_root	sets;
@@ -541,23 +543,30 @@ static Elf_Scn *elf_sec_by_idx(const struct object *obj, size_t idx)
 
 static int elf_relocate(struct object *obj)
 {
-	__u64 *ptr = obj->efile.ids_desc.data->d_buf;
 	GElf_Shdr *sh = &obj->efile.ids_relo.sh;
 	const char *name;
 	Elf64_Rela *rela;
 	Elf64_Sym *sym;
 	int nrels, i;
+	void *data;
+
+	data = malloc(obj->efile.ids_desc.data->d_size);
+	if (!data) {
+		pr_err("FAILED get relo #%d\n", i);
+		return -1;
+	}
+	memcpy(data, obj->efile.ids_desc.data->d_buf, obj->efile.ids_desc.data->d_size);
 
 	nrels = sh->sh_size / sh->sh_entsize;
 
 	for (i = 0; i < nrels; i++) {
-		__u64 addr = 0;
+		__u64 *ptr, addr = 0;
 
 		rela = elf_rela_by_idx(obj->efile.ids_relo.data, i);
 		if (!rela) {
-                        pr_err("FAILED get relo #%d\n", i);
-                        return -1;
-                }
+			pr_err("FAILED get relo #%d\n", i);
+			return -1;
+		}
 
 		sym = elf_sym_by_idx(obj, ELF64_R_SYM(rela->r_info));
 		if (!sym) {
@@ -571,7 +580,7 @@ static int elf_relocate(struct object *obj)
 		else
 			name = elf_sym_str(obj, sym->st_name);
 
-		ptr = obj->efile.ids_desc.data->d_buf + rela->r_offset;
+		ptr = data + rela->r_offset;
 
 		if (!strcmp(name, BTF_IDS_SECTION)) {
 			addr = obj->efile.ids.sh.sh_addr;
@@ -585,6 +594,7 @@ static int elf_relocate(struct object *obj)
 			rela->r_offset, name, rela->r_addend);
 	}
 
+	obj->efile.ids_desc_data = data;
 	return 0;
 }
 
@@ -597,9 +607,10 @@ struct id_desc {
 static int ids_collect(struct object *obj)
 {
 	Elf_Data *data = obj->efile.ids_desc.data;
+	void *ptr = obj->efile.ids_desc_data ?: data->d_buf;
 	Elf_Data *str = obj->efile.ids_data.data;
-	struct id_desc *end = data->d_buf + data->d_size;
-	struct id_desc *desc = data->d_buf;
+	struct id_desc *end = ptr + data->d_size;
+	struct id_desc *desc = ptr;
 	Elf64_Addr data_addr = obj->efile.ids_data.sh.sh_addr;
 
 	while (desc < end) {
@@ -1023,6 +1034,7 @@ out:
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);
 		close(obj.efile.fd);
+		free(obj.efile.ids_desc_data);
 	}
 	return err;
 }
