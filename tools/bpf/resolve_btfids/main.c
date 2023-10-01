@@ -566,24 +566,31 @@ static int elf_relocate(struct object *obj)
 	Elf64_Sym *sym;
 	int nrels, i;
 
+pr_debug("elf_relocate1 data->d_size %d\n", data->d_size);
+
 	ids_desc_data = malloc(data->d_size);
 	if (!ids_desc_data) {
 		pr_err("FAILED get relo #%d\n", i);
 		return -1;
 	}
+pr_debug("elf_relocate2 ids_desc_data %p\n", ids_desc_data);
 	memcpy(ids_desc_data, data->d_buf, data->d_size);
 
+pr_debug("elf_relocate3\n");
 	nrels = sh->sh_size / sh->sh_entsize;
 
+pr_debug("elf_relocate4\n");
 	for (i = 0; i < nrels; i++) {
 		__u64 *ptr, addr = 0;
 
+pr_debug("elf_relocate5 i %d\n", i);
 		rela = elf_rela_by_idx(obj->efile.ids_relo.data, i);
 		if (!rela) {
 			pr_err("FAILED get relo #%d\n", i);
 			return -1;
 		}
 
+pr_debug("elf_relocate6 ELF64_R_TYPE(rela->r_info) %d\n", ELF64_R_TYPE(rela->r_info));
 		sym = elf_sym_by_idx(obj, ELF64_R_SYM(rela->r_info));
 		if (!sym) {
 			pr_err("FAILED symbol #%zu not found for relo #%d\n",
@@ -591,11 +598,13 @@ static int elf_relocate(struct object *obj)
 			return -1;
 		}
 
+pr_debug("elf_relocate7\n");
 		if (ELF64_ST_TYPE(sym->st_info) == STT_SECTION && sym->st_name == 0)
 			name = elf_sec_name(obj, elf_sec_by_idx(obj, sym->st_shndx));
 		else
 			name = elf_sym_str(obj, sym->st_name);
 
+pr_debug("elf_relocate8 rela->r_offset %lu\n", rela->r_offset);
 		ptr = ids_desc_data + rela->r_offset;
 
 		if (!strcmp(name, BTF_IDS_SECTION)) {
@@ -604,6 +613,7 @@ static int elf_relocate(struct object *obj)
 			addr = obj->efile.ids_data.sh.sh_addr;
 		}
 
+pr_debug("elf_relocate9 %p\n", ptr);
 		*ptr = addr + rela->r_addend;
 
 		pr_debug("relocating ids_desc + %x = '%s + %x\n",
