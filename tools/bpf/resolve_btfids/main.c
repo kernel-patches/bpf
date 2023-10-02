@@ -133,6 +133,11 @@ struct object {
 	int nr_typedefs;
 };
 
+static bool has_ids(struct object *obj)
+{
+	return obj->efile.ids.idx != -1;
+}
+
 static unsigned long ids_addr(struct object *obj)
 {
 	return obj->efile.ids.sh.sh_addr;
@@ -753,13 +758,9 @@ int main(int argc, const char **argv)
 	if (elf_collect(&obj))
 		goto out;
 
-	/*
-	 * We did not find .BTF_ids section or symbols section,
-	 * nothing to do..
-	 */
-	if (obj.efile.ids.idx == -1 ||
-	    obj.efile.symbols.idx == -1) {
-		pr_debug("Cannot find .BTF_ids or symbols sections, nothing to do\n");
+	/* We did not find .BTF_ids section, nothing to do..  */
+	if (!has_ids(&obj)) {
+		pr_debug("Cannot find .BTF_ids section, nothing to do\n");
 		err = 0;
 		goto out;
 	}
