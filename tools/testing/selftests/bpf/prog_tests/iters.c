@@ -8,6 +8,7 @@
 #include "iters_looping.skel.h"
 #include "iters_num.skel.h"
 #include "iters_testmod_seq.skel.h"
+#include "iters_task_vma.skel.h"
 
 static void subtest_num_iters(void)
 {
@@ -90,6 +91,74 @@ cleanup:
 	iters_testmod_seq__destroy(skel);
 }
 
+static void subtest_task_vma_iters(void)
+{
+	unsigned long start, end, bpf_iter_start, bpf_iter_end;
+	struct iters_task_vma *skel;
+	char rest_of_line[1000];
+	unsigned int seen;
+	int err;
+	FILE *f;
+
+	skel = iters_task_vma__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	bpf_program__set_autoload(skel->progs.iter_task_vma_for_each, true);
+
+	err = iters_task_vma__load(skel);
+	if (!ASSERT_OK(err, "skel_load"))
+		goto cleanup;
+
+	skel->bss->target_pid = getpid();
+
+	err = iters_task_vma__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		goto cleanup;
+
+	getpgid(skel->bss->target_pid);
+	iters_task_vma__detach(skel);
+
+	if (!ASSERT_GT(skel->bss->vmas_seen, 0, "vmas_seen_gt_zero"))
+		goto cleanup;
+
+	f = fopen("/proc/self/maps", "r");
+	if (!ASSERT_OK_PTR(f, "proc_maps_fopen"))
+		goto cleanup;
+
+	seen = 0;
+	while (fscanf(f, "%lx-%lx %[^\n]\n", &start, &end, rest_of_line) == 3) {
+		/* [vsyscall] vma isn't _really_ part of task->mm vmas.
+		 * /proc/PID/maps returns it when out of vmas - see get_gate_vma
+		 * calls in fs/proc/task_mmu.c
+		 */
+		if (strstr(rest_of_line, "[vsyscall]"))
+			continue;
+
+		err = bpf_map_lookup_elem(bpf_map__fd(skel->maps.vm_start),
+					  &seen, &bpf_iter_start);
+		if (!ASSERT_OK(err, "vm_start map_lookup_elem"))
+			goto cleanup;
+
+		err = bpf_map_lookup_elem(bpf_map__fd(skel->maps.vm_end),
+					  &seen, &bpf_iter_end);
+		if (!ASSERT_OK(err, "vm_end map_lookup_elem"))
+			goto cleanup;
+
+		ASSERT_EQ(bpf_iter_start, start, "vma->vm_start match");
+		ASSERT_EQ(bpf_iter_end, end, "vma->vm_end match");
+		seen++;
+	}
+
+	fclose(f);
+
+	if (!ASSERT_EQ(skel->bss->vmas_seen, seen, "vmas_seen_eq"))
+		goto cleanup;
+
+cleanup:
+	iters_task_vma__destroy(skel);
+}
+
 void test_iters(void)
 {
 	RUN_TESTS(iters_state_safety);
@@ -103,4 +172,6 @@ void test_iters(void)
 		subtest_num_iters();
 	if (test__start_subtest("testmod_seq"))
 		subtest_testmod_seq_iters();
+	if (test__start_subtest("task_vma"))
+		subtest_task_vma_iters();
 }
