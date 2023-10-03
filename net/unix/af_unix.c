@@ -116,6 +116,7 @@
 #include <linux/freezer.h>
 #include <linux/file.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf-cgroup.h>
 
 #include "scm.h"
 
@@ -1377,6 +1378,10 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 		goto out;
 
 	if (addr->sa_family != AF_UNSPEC) {
+		err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, addr, &alen);
+		if (err)
+			goto out;
+
 		err = unix_validate_addr(sunaddr, alen);
 		if (err)
 			goto out;
@@ -1485,6 +1490,10 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	long timeo;
 	int err;
 	int st;
+
+	err = BPF_CGROUP_RUN_PROG_UNIX_CONNECT_LOCK(sk, uaddr, &addr_len);
+	if (err)
+		goto out;
 
 	err = unix_validate_addr(sunaddr, addr_len);
 	if (err)
@@ -1771,6 +1780,14 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int peer)
 		err = addr->len;
 		memcpy(sunaddr, addr->name, addr->len);
 	}
+
+	if (peer)
+		BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &err,
+				       CGROUP_UNIX_GETPEERNAME);
+	else
+		BPF_CGROUP_RUN_SA_PROG(sk, uaddr, &err,
+				       CGROUP_UNIX_GETSOCKNAME);
+
 	sock_put(sk);
 out:
 	return err;
@@ -1919,6 +1936,13 @@ static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
 		goto out;
 
 	if (msg->msg_namelen) {
+		err = BPF_CGROUP_RUN_PROG_UNIX_SENDMSG_LOCK(sk,
+							    msg->msg_name,
+							    &msg->msg_namelen,
+							    NULL);
+		if (err)
+			goto out;
+
 		err = unix_validate_addr(sunaddr, msg->msg_namelen);
 		if (err)
 			goto out;
@@ -2390,8 +2414,13 @@ int __unix_dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t size,
 						EPOLLOUT | EPOLLWRNORM |
 						EPOLLWRBAND);
 
-	if (msg->msg_name)
+	if (msg->msg_name) {
 		unix_copy_addr(msg, skb->sk);
+
+		BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
+						      msg->msg_name,
+						      &msg->msg_namelen);
+	}
 
 	if (size > skb->len - skip)
 		size = skb->len - skip;
@@ -2744,6 +2773,11 @@ unlock:
 			DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr,
 					 state->msg->msg_name);
 			unix_copy_addr(state->msg, skb->sk);
+
+			BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
+							      state->msg->msg_name,
+							      &state->msg->msg_namelen);
+
 			sunaddr = NULL;
 		}
 
