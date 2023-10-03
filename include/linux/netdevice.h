@@ -1650,6 +1650,31 @@ struct net_device_ops {
 						    struct netlink_ext_ack *extack);
 };
 
+/*
+ * This structure defines the AF_XDP TX metadata hooks for network devices.
+ * The following hooks can be defined; unless noted otherwise, they are
+ * optional and can be filled with a null pointer.
+ *
+ * int (*tmo_request_timestamp)(void *priv)
+ *     This function is called when AF_XDP frame requested egress timestamp.
+ *
+ * int (*tmo_fill_timestamp)(void *priv)
+ *     This function is called when AF_XDP frame, that had requested
+ *     egress timestamp, received a completion. The hook needs to return
+ *     the actual HW timestamp.
+ *
+ * int (*tmo_request_checksum)(u16 csum_start, u16 csum_offset, void *priv)
+ *     This function is called when AF_XDP frame requested HW checksum
+ *     offload. csum_start indicates position where checksumming should start.
+ *     csum_offset indicates position where checksum should be stored.
+ *
+ */
+struct xsk_tx_metadata_ops {
+	void	(*tmo_request_timestamp)(void *priv);
+	u64	(*tmo_fill_timestamp)(void *priv);
+	void	(*tmo_request_checksum)(u16 csum_start, u16 csum_offset, void *priv);
+};
+
 /**
  * enum netdev_priv_flags - &struct net_device priv_flags
  *
@@ -1838,6 +1863,7 @@ enum netdev_ml_priv_type {
  *	@netdev_ops:	Includes several pointers to callbacks,
  *			if one wants to override the ndo_*() functions
  *	@xdp_metadata_ops:	Includes pointers to XDP metadata callbacks.
+ *	@xsk_tx_metadata_ops:	Includes pointers to AF_XDP TX metadata callbacks.
  *	@ethtool_ops:	Management operations
  *	@l3mdev_ops:	Layer 3 master device operations
  *	@ndisc_ops:	Includes callbacks for different IPv6 neighbour
@@ -2097,6 +2123,7 @@ struct net_device {
 	unsigned long long	priv_flags;
 	const struct net_device_ops *netdev_ops;
 	const struct xdp_metadata_ops *xdp_metadata_ops;
+	const struct xsk_tx_metadata_ops *xsk_tx_metadata_ops;
 	int			ifindex;
 	unsigned short		gflags;
 	unsigned short		hard_header_len;

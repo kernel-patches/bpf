@@ -26,11 +26,11 @@
  */
 #define XDP_USE_NEED_WAKEUP (1 << 3)
 /* By setting this option, userspace application indicates that it can
- * handle multiple descriptors per packet thus enabling xsk core to split
+ * handle multiple descriptors per packet thus enabling AF_XDP to split
  * multi-buffer XDP frames into multiple Rx descriptors. Without this set
- * such frames will be dropped by xsk.
+ * such frames will be dropped.
  */
-#define XDP_USE_SG     (1 << 4)
+#define XDP_USE_SG	(1 << 4)
 
 /* Flags for xsk_umem_config flags */
 #define XDP_UMEM_UNALIGNED_CHUNK_FLAG (1 << 0)
@@ -106,6 +106,43 @@ struct xdp_options {
 #define XSK_UNALIGNED_BUF_ADDR_MASK \
 	((1ULL << XSK_UNALIGNED_BUF_OFFSET_SHIFT) - 1)
 
+/* Request transmit timestamp. Upon completion, put it into tx_timestamp
+ * field of union xsk_tx_metadata.
+ */
+#define XDP_TX_METADATA_TIMESTAMP		(1 << 0)
+
+/* Request transmit checksum offload. Checksum start position and offset
+ * are communicated via csum_start and csum_offset fields of union
+ * xsk_tx_metadata.
+ */
+#define XDP_TX_METADATA_CHECKSUM		(1 << 1)
+
+/* Force checksum calculation in software. Can be used for testing or
+ * working around potential HW issues. This option causes performance
+ * degradation and only works in XDP_COPY mode.
+ */
+#define XDP_TX_METADATA_CHECKSUM_SW		(1 << 2)
+
+struct xsk_tx_metadata {
+	union {
+		struct {
+			__u32 flags;
+
+			/* XDP_TX_METADATA_CHECKSUM */
+
+			/* Offset from desc->addr where checksumming should start. */
+			__u16 csum_start;
+			/* Offset from csum_start where checksum should be stored. */
+			__u16 csum_offset;
+		};
+
+		struct {
+			/* XDP_TX_METADATA_TIMESTAMP */
+			__u64 tx_timestamp;
+		} completion;
+	};
+};
+
 /* Rx/Tx descriptor */
 struct xdp_desc {
 	__u64 addr;
@@ -113,9 +150,16 @@ struct xdp_desc {
 	__u32 options;
 };
 
-/* Flag indicating packet constitutes of multiple buffers*/
+/* UMEM descriptor is __u64 */
+
+/* Flag indicating that the packet continues with the buffer pointed out by the
+ * next frame in the ring. The end of the packet is signalled by setting this
+ * bit to zero. For single buffer packets, every descriptor has 'options' set
+ * to 0 and this maintains backward compatibility.
+ */
 #define XDP_PKT_CONTD (1 << 0)
 
-/* UMEM descriptor is __u64 */
+/* TX packet carries valid metadata. */
+#define XDP_TX_METADATA (1 << 1)
 
 #endif /* _LINUX_IF_XDP_H */
