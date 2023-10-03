@@ -161,7 +161,8 @@ static inline int htab_lock_bucket(const struct bpf_htab *htab,
 		return -EBUSY;
 	}
 
-	raw_spin_lock_irqsave(&b->raw_lock, flags);
+	local_irq_save(flags);
+	raw_spin_lock(&b->raw_lock);
 	*pflags = flags;
 
 	return 0;
@@ -172,7 +173,8 @@ static inline void htab_unlock_bucket(const struct bpf_htab *htab,
 				      unsigned long flags)
 {
 	hash = hash & min_t(u32, HASHTAB_MAP_LOCK_MASK, htab->n_buckets - 1);
-	raw_spin_unlock_irqrestore(&b->raw_lock, flags);
+	raw_spin_unlock(&b->raw_lock);
+	local_irq_restore(flags);
 	__this_cpu_dec(*(htab->map_locked[hash]));
 	preempt_enable();
 }
