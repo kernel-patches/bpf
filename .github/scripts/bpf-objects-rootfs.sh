@@ -3,10 +3,10 @@
 eval "$(guestfish --listen)"
 
 guestfish --verbose --remote \
-    add /tmp/root.img label:img : \
+    add "${ROOTFS_PATH}" label:img : \
     launch : \
     mount /dev/disk/guestfs/img / : \
-    copy-in /tmp/bpf_objects / : \
+    copy-in "${BPF_OBJECTS_PATH}" / : \
     chmod 0755 /bpf_objects
 
 guestfish --remote exit

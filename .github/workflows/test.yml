@@ -216,6 +216,7 @@ jobs:
           role-session-name: github-action-bpf-ci
 
       - name: Download BPF objects
+        if: ${{ github.repository_owner == 'kernel-patches' }}
         run: |
           set -eux
           if [ -n "$AWS_ROLE_ARN" ]; then
@@ -226,8 +227,12 @@ jobs:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
       - name: Add BPF objects to rootfs
+        if: ${{ github.repository_owner == 'kernel-patches' }}
         shell: bash
         run: ./.github/scripts/bpf-objects-rootfs.sh
+        env:
+          ROOTFS_PATH: /tmp/root.img
+          BPF_OBJECTS_PATH: /tmp/bpf_objects
 
       - name: Run veristat
         uses: libbpf/ci/run-qemu@main
@@ -247,6 +252,7 @@ jobs:
           baseline_name: ${{ env.ARCH_AND_TOOL}}-baseline-veristat-kernel
 
       - name: Compare and save veristat.meta.csv
+        if: ${{ github.repository_owner == 'kernel-patches' }}
         uses: ./.github/actions/veristat_baseline_compare
         with:
           veristat_output: veristat-meta
