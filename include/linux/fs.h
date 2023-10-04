@@ -677,6 +677,7 @@ struct inode {
 	u32			i_atime_nsec;
 	u32			i_mtime_nsec;
 	u32			i_ctime_nsec;
+	u32			i_generation;
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
 	unsigned short          i_bytes;
 	u8			i_blkbits;
@@ -733,7 +734,6 @@ struct inode {
 		unsigned		i_dir_seq;
 	};
 
-	__u32			i_generation;
 
 #ifdef CONFIG_FSNOTIFY
 	__u32			i_fsnotify_mask; /* all events this inode cares about */
