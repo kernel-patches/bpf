@@ -38,33 +38,71 @@
 import io
 import os
 import sys
+import re
 import csv
 import logging
 import argparse
-from functools import reduce
+import enum
 from dataclasses import dataclass
+from typing import Dict, List, Final
 
-TRESHOLD_PCT = 0
 
-HEADERS = ['file_name', 'prog_name', 'verdict_base', 'verdict_comp',
-           'verdict_diff', 'total_states_base', 'total_states_comp',
-           'total_states_diff']
+TRESHOLD_PCT: Final[int] = 0
 
-FILE        = 0
-PROG        = 1
-VERDICT_OLD = 2
-VERDICT_NEW = 3
-STATES_OLD  = 5
-STATES_NEW  = 6
+SUMMARY_HEADERS = ["File", "Program", "Verdict", "States Diff (%)"]
 
-# Given a table row, compute relative increase in the number of
-# processed states.
-def compute_diff(v):
-    old = int(v[STATES_OLD]) if v[STATES_OLD] != 'N/A' else 0
-    new = int(v[STATES_NEW]) if v[STATES_NEW] != 'N/A' else 0
-    if old == 0:
-        return 1
-    return (new - old) / old
+# expected format: +0 (+0.00%) / -0 (-0.00%)
+TOTAL_STATES_DIFF_REGEX = \
+    r"(?P<absolute_diff>[+-]\d+) \((?P<percentage_diff>[+-]\d+\.\d+)\%\)"
+
+
+TEXT_SUMMARY_TEMPLATE: Final[str] = """
+# {title}
+
+{table}
+""".strip()
+
+HTML_SUMMARY_TEMPLATE: Final[str] = """
+# {title}
+
+<details>
+<summary>Click to expand</summary>
+
+{table}
+</details>
+""".strip()
+
+GITHUB_MARKUP_REPLACEMENTS: Final[Dict[str, str]] = {
+    "->": "&rarr;",
+    "(!!)": ":bangbang:",
+}
+
+NEW_FAILURE_SUFFIX: Final[str] = "(!!)"
+
+
+class VeristatFields(str, enum.Enum):
+    FILE_NAME = "file_name"
+    PROG_NAME = "prog_name"
+    VERDICT_OLD = "verdict_base"
+    VERDICT_NEW = "verdict_comp"
+    VERDICT_DIFF = "verdict_diff"
+    TOTAL_STATES_OLD = "total_states_base"
+    TOTAL_STATES_NEW = "total_states_comp"
+    TOTAL_STATES_DIFF = "total_states_diff"
+
+    @classmethod
+    def headers(cls) -> List[str]:
+        return [
+            cls.FILE_NAME,
+            cls.PROG_NAME,
+            cls.VERDICT_OLD,
+            cls.VERDICT_NEW,
+            cls.VERDICT_DIFF,
+            cls.TOTAL_STATES_OLD,
+            cls.TOTAL_STATES_NEW,
+            cls.TOTAL_STATES_DIFF,
+        ]
+
 
 @dataclass
 class VeristatInfo:
@@ -72,131 +110,147 @@ class VeristatInfo:
     changes: bool
     new_failures: bool
 
-# Read CSV table expecting the above described format.
-# Return VeristatInfo instance.
-def parse_table(csv_filename):
+    def get_results_title(self) -> str:
+        if self.new_failures:
+            return "There are new veristat failures"
+
+        if self.changes:
+            return "There are changes in verification performance"
+
+        return "No changes in verification performance"
+
+    def get_results_summary(self, markup: bool = False) -> str:
+        title = self.get_results_title()
+        if not self.table:
+            return f"# {title}\n"
+
+        template = TEXT_SUMMARY_TEMPLATE
+        table = format_table(headers=SUMMARY_HEADERS, rows=self.table)
+
+        if markup:
+            template = HTML_SUMMARY_TEMPLATE
+            table = github_markup_decorate(table)
+
+        return template.format(title=title, table=table)
+
+
+def get_state_diff(value: str) -> float:
+    matches = re.match(TOTAL_STATES_DIFF_REGEX, value)
+    if percentage_diff := matches.group("percentage_diff"):
+        return float(percentage_diff)
+
+    raise ValueError(
+        f"Invalid {VeristatFields.TOTAL_STATES_DIFF} field value: {value}"
+    )
+
+
+def parse_table(csv_file):
+    reader = csv.DictReader(csv_file)
+    assert reader.fieldnames == VeristatFields.headers()
+
     new_failures = False
     changes = False
     table = []
 
-    with open(csv_filename, newline='') as file:
-        reader = csv.reader(file)
-        headers = next(reader)
-        if headers != HEADERS:
-            raise Exception(f'Unexpected table header for {filename}: {headers}')
+    for record in reader:
+        add = False
 
-        for v in reader:
-            add = False
-            verdict = v[VERDICT_NEW]
-            diff = compute_diff(v)
+        verdict_old, verdict_new = (
+            record[VeristatFields.VERDICT_OLD],
+            record[VeristatFields.VERDICT_NEW],
+        )
 
-            if v[VERDICT_OLD] != v[VERDICT_NEW]:
-                changes = True
-                add = True
-                verdict = f'{v[VERDICT_OLD]} -> {v[VERDICT_NEW]}'
-                if v[VERDICT_NEW] == 'failure':
-                    new_failures = True
-                    verdict += ' (!!)'
+        if record[VeristatFields.VERDICT_DIFF] == "MISMATCH":
+            changes = True
+            add = True
+            verdict = f"{verdict_old} -> {verdict_new}"
+            if verdict_new == "failure":
+                new_failures = True
+                verdict += f" {NEW_FAILURE_SUFFIX}"
+        else:
+            verdict = record[VeristatFields.VERDICT_NEW]
 
-            if abs(diff * 100) > TRESHOLD_PCT:
-                changes = True
-                add = True
+        diff = get_state_diff(record[VeristatFields.TOTAL_STATES_DIFF])
+        if abs(diff) > TRESHOLD_PCT:
+            changes = True
+            add = True
 
-            if not add:
-                continue
+        if not add:
+            continue
 
-            diff_txt = '{:+.1f} %'.format(diff * 100)
-            table.append([v[FILE], v[PROG], verdict, diff_txt])
+        table.append([
+            record[VeristatFields.FILE_NAME],
+            record[VeristatFields.PROG_NAME],
+            verdict,
+            f"{diff:+.2f} %"
+        ])
 
-    return VeristatInfo(table=table,
-                        changes=changes,
-                        new_failures=new_failures)
+    return VeristatInfo(
+        table=table,
+        changes=changes,
+        new_failures=new_failures
+    )
 
-def format_table(headers, rows, html_mode):
-    def decorate(val, width):
-        s = str(val)
-        if html_mode:
-            s = s.replace(' -> ', ' &rarr; ');
-            s = s.replace(' (!!)', ' :bangbang: ');
-        return s.ljust(width)
 
-    column_widths = list(reduce(lambda acc, row: map(max, map(len, row), acc),
-                                rows,
-                                map(len, headers)))
+def github_markup_decorate(input_str: str) -> str:
+    for text, markup in GITHUB_MARKUP_REPLACEMENTS.items():
+        input_str = input_str.replace(text, markup)
+    return input_str
+
+
+def format_table(headers: List[str], rows: List[List[str]]) -> str:
+    column_width = [
+        max(len(row[column_idx]) for row in [headers] + rows)
+        for column_idx in range(len(headers))
+    ]
+
+    # Row template string in the following format:
+    # "{0:8}|{1:10}|{2:15}|{3:7}|{4:10}"
+    row_template = "|".join(
+        f"{{{idx}:{width}}}"
+        for idx, width in enumerate(column_width)
+    )
+    row_template_nl = f"|{row_template}|\n"
 
     with io.StringIO() as out:
-        def print_row(row):
-            out.write('| ')
-            out.write(' | '.join(map(decorate, row, column_widths)))
-            out.write(' |\n')
+        out.write(row_template_nl.format(*headers))
 
-        print_row(headers)
-
-        out.write('|')
-        out.write('|'.join(map(lambda w: '-' * (w + 2), column_widths)))
-        out.write('|\n')
+        separator_row = ["-" * width for width in column_width]
+        out.write(row_template_nl.format(*separator_row))
 
         for row in rows:
-            print_row(row)
+            row_str = row_template_nl.format(*row)
+            out.write(row_str)
 
         return out.getvalue()
 
-def format_section_name(info):
-    if info.new_failures:
-        return 'There are new veristat failures'
-    if info.changes:
-        return 'There are changes in verification performance'
-    return 'No changes in verification performance'
 
-SUMMARY_HEADERS = ['File', 'Program', 'Verdict', 'States Diff (%)']
+def main(
+    compare_csv_filename: os.PathLike,
+    output_filename: os.PathLike
+) -> None:
+    with open(compare_csv_filename, newline="", encoding="utf-8") as csv_file:
+        veristat_results = parse_table(csv_file)
 
-def format_html_summary(info):
-    section_name = format_section_name(info)
-    if not info.table:
-        return f'# {section_name}\n'
+    sys.stdout.write(veristat_results.get_results_summary())
 
-    table = format_table(SUMMARY_HEADERS, info.table, True)
-    return f'''
-# {section_name}
+    with open(output_filename, encoding="utf-8", mode="a") as file:
+        file.write(veristat_results.get_results_summary(markup=True))
 
-<details>
-<summary>Click to expand</summary>
-
-{table}
-</details>
-'''.lstrip()
-
-def format_text_summary(info):
-    section_name = format_section_name(info)
-    table = format_table(SUMMARY_HEADERS, info.table, False)
-    if not info.table:
-        return f'# {section_name}\n'
-
-    return f'''
-# {section_name}
-
-{table}
-'''.lstrip()
-
-def main(compare_csv_filename, summary_filename):
-    info = parse_table(compare_csv_filename)
-    sys.stdout.write(format_text_summary(info))
-    with open(summary_filename, 'a') as f:
-        f.write(format_html_summary(info))
-
-    if info.new_failures:
+    if veristat_results.new_failures:
         return 1
 
     return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="""Print veristat comparison output as markdown step summary"""
+        description="Print veristat comparison output as markdown step summary"
     )
-    parser.add_argument('filename')
+    parser.add_argument("filename")
     args = parser.parse_args()
-    summary_filename = os.getenv('GITHUB_STEP_SUMMARY')
+    summary_filename = os.getenv("GITHUB_STEP_SUMMARY")
     if not summary_filename:
-        logging.error('GITHUB_STEP_SUMMARY environment variable is not set')
+        logging.error("GITHUB_STEP_SUMMARY environment variable is not set")
         sys.exit(1)
     sys.exit(main(args.filename, summary_filename))
