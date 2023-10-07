@@ -2214,6 +2214,30 @@ __bpf_kfunc long bpf_task_under_cgroup(struct task_struct *task,
 {
 	return task_under_cgroup_hierarchy(task, ancestor);
 }
+
+/**
+ * bpf_task_cgroup_id_within_hierarchy - Retrieves the associated cgroup ID of a
+ * task within a specific cgroup1 hierarchy.
+ * @task: The target task
+ * @hierarchy_id: The ID of a cgroup1 hierarchy
+ */
+__bpf_kfunc u64 bpf_task_cgroup1_id_within_hierarchy(struct task_struct *task, int hierarchy_id)
+{
+	return task_cgroup1_id_within_hierarchy(task, hierarchy_id);
+}
+
+/**
+ * bpf_task_ancestor_cgroup_id_within_hierarchy - Retrieves the associated
+ * ancestor cgroup ID of a task within a specific cgroup1 hierarchy.
+ * @task: The target task
+ * @hierarchy_id: The ID of a cgroup1 hierarchy
+ * @ancestor_level: The cgroup level of the ancestor in the cgroup1 hierarchy
+ */
+__bpf_kfunc u64 bpf_task_ancestor_cgroup1_id_within_hierarchy(struct task_struct *task,
+							      int hierarchy_id, int ancestor_level)
+{
+	return task_ancestor_cgroup1_id_within_hierarchy(task, hierarchy_id, ancestor_level);
+}
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -2520,6 +2544,8 @@ BTF_ID_FLAGS(func, bpf_cgroup_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
+BTF_ID_FLAGS(func, bpf_task_cgroup1_id_within_hierarchy, KF_RCU)
+BTF_ID_FLAGS(func, bpf_task_ancestor_cgroup1_id_within_hierarchy, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
