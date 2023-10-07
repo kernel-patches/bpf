@@ -39,6 +39,8 @@
 
 #include <net/tcx.h>
 
+#include "internal.h"
+
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
@@ -625,8 +627,6 @@ void bpf_obj_free_timer(const struct btf_record *rec, void *obj)
 		return;
 	bpf_timer_cancel_and_free(obj + rec->timer_off);
 }
-
-extern void __bpf_obj_drop_impl(void *p, const struct btf_record *rec);
 
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
