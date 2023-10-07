@@ -1263,6 +1263,73 @@ int cgroup1_get_tree(struct fs_context *fc)
 	return ret;
 }
 
+/**
+ * task_cgroup_id_within_hierarchy - Retrieves the associated cgroup ID from
+ * a task within a specific cgroup1 hierarchy.
+ * @task: The task to be tested
+ * @hierarchy_id: The hierarchy ID of a cgroup1
+ *
+ * We limit it to cgroup1 only.
+ */
+u64 task_cgroup1_id_within_hierarchy(struct task_struct *tsk, int hierarchy_id)
+{
+	struct cgroup_root *root;
+	struct cgroup *cgrp;
+	u64 cgid = 0;
+
+	spin_lock_irq(&css_set_lock);
+	list_for_each_entry(root, &cgroup_roots, root_list) {
+		/* cgroup1 only*/
+		if (root == &cgrp_dfl_root)
+			continue;
+		if (root->hierarchy_id != hierarchy_id)
+			continue;
+		cgrp = task_cgroup_from_root(tsk, root);
+		WARN_ON_ONCE(!cgrp);
+		cgid = cgroup_id(cgrp);
+		break;
+	}
+	spin_unlock_irq(&css_set_lock);
+	return cgid;
+}
+
+/**
+ * task_ancestor_cgroup_id_within_hierarchy - Retrieves the associated ancestor
+ * cgroup ID from a task within a specific cgroup1 hierarchy.
+ * @task: The task to be tested
+ * @hierarchy_id: The hierarchy ID of a cgroup1
+ * @ancestor_level: level of ancestor to find starting from root
+ *
+ * We limit it to cgroup1 only.
+ */
+u64 task_ancestor_cgroup1_id_within_hierarchy(struct task_struct *tsk, int hierarchy_id,
+					      int ancestor_level)
+{
+	struct cgroup *cgrp, *ancestor;
+	struct cgroup_root *root;
+	u64 cgid = 0;
+
+	spin_lock_irq(&css_set_lock);
+	list_for_each_entry(root, &cgroup_roots, root_list) {
+		/* cgroup1 only*/
+		if (root == &cgrp_dfl_root)
+			continue;
+		if (root->hierarchy_id != hierarchy_id)
+			continue;
+
+		cgrp = task_cgroup_from_root(tsk, root);
+		WARN_ON_ONCE(!cgrp);
+		ancestor = cgroup_ancestor(cgrp, ancestor_level);
+		if (!ancestor)
+			break;
+
+		cgid = cgroup_id(ancestor);
+		break;
+	}
+	spin_unlock_irq(&css_set_lock);
+	return cgid;
+}
+
 static int __init cgroup1_wq_init(void)
 {
 	/*
