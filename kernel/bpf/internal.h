@@ -6,6 +6,6 @@
 
 struct btf_record;
 
-void __bpf_obj_drop_impl(void *p, const struct btf_record *rec);
+void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);
 
 #endif /* __BPF_INTERNAL_H_ */
