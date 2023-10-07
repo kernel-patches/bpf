@@ -1453,7 +1453,7 @@ static struct cgroup *cset_cgroup_from_root(struct css_set *cset,
 
 /*
  * Return the cgroup for "task" from the given hierarchy. Must be
- * called with cgroup_mutex and css_set_lock held.
+ * called with css_set_lock held.
  */
 struct cgroup *task_cgroup_from_root(struct task_struct *task,
 				     struct cgroup_root *root)
@@ -1462,7 +1462,8 @@ struct cgroup *task_cgroup_from_root(struct task_struct *task,
 	 * No need to lock the task - since we hold css_set_lock the
 	 * task can't change groups.
 	 */
-	return cset_cgroup_from_root(task_css_set(task), root);
+	lockdep_assert_held(&css_set_lock);
+	return __cset_cgroup_from_root(task_css_set(task), root);
 }
 
 /*
