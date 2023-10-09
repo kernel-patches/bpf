@@ -4735,6 +4735,26 @@ TEST(user_notification_wait_killable_fatal)
 	EXPECT_EQ(SIGTERM, WTERMSIG(status));
 }
 
+TEST(seccomp_filter_load_and_attach)
+{
+	struct sock_filter filter[] = {
+		BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW),
+	};
+	struct sock_fprog prog = {
+		.len = (unsigned short)ARRAY_SIZE(filter),
+		.filter = filter,
+	};
+	int fd, ret;
+
+	fd = seccomp(SECCOMP_LOAD_FILTER, 0, &prog);
+	ASSERT_GT(fd, -1);
+
+	ret = seccomp(SECCOMP_ATTACH_FILTER, 0, &fd);
+	ASSERT_EQ(ret, 0);
+
+	close(fd);
+}
+
 /*
  * TODO:
  * - expand NNP testing
