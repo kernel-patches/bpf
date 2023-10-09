@@ -284,14 +284,8 @@ static __always_inline void assign_bit(long nr, volatile unsigned long *addr,
 		clear_bit(nr, addr);
 }
 
-static __always_inline void __assign_bit(long nr, volatile unsigned long *addr,
-					 bool value)
-{
-	if (value)
-		__set_bit(nr, addr);
-	else
-		__clear_bit(nr, addr);
-}
+#define __assign_bit(nr, addr, value)				\
+	((value) ? __set_bit(nr, addr) : __clear_bit(nr, addr))
 
 /**
  * __ptr_set_bit - Set bit in a pointer's value
