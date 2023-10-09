@@ -1161,6 +1161,82 @@ static void __init test_bitmap_print_buf(void)
 	}
 }
 
+struct getset_test {
+	u16	offset;
+	u16	width;
+	union {
+		u32	expect;
+		u32	value;
+	};
+};
+
+#define GETSET_TEST(o, w, v) {	\
+	.offset	= (o),		\
+	.width	= (w),		\
+	.value	= (v),		\
+}
+
+static const unsigned long getset_src[] __initconst = {
+	BITMAP_FROM_U64(0x4329c918b472468eULL),
+	BITMAP_FROM_U64(0xb2c20a622474a119ULL),
+	BITMAP_FROM_U64(0x3a08cb5591cea40dULL),
+	BITMAP_FROM_U64(0xc9a7550384e145f8ULL),
+};
+
+static const struct getset_test get_bits_test[] __initconst = {
+	GETSET_TEST(208, 16, 0x84e1),
+	GETSET_TEST(104, 8, 0xa),
+	GETSET_TEST(224, 32, 0xc9a75503),
+	GETSET_TEST(64, 16, 0xa119),
+	GETSET_TEST(169, 1, 0x1),
+	GETSET_TEST(144, 8, 0xce),
+	GETSET_TEST(80, 4, 0x4),
+	GETSET_TEST(24, 4, 0x4),
+};
+
+static const struct getset_test set_bits_test[] __initconst = {
+	GETSET_TEST(56, 4, 0xa),
+	GETSET_TEST(80, 16, 0xb17a),
+	GETSET_TEST(112, 8, 0x1b),
+	GETSET_TEST(0, 32, 0xe8a555f2),
+	GETSET_TEST(16, 2, 0),
+	GETSET_TEST(72, 8, 0x7d),
+	GETSET_TEST(47, 1, 0),
+	GETSET_TEST(160, 16, 0x1622),
+};
+
+static const unsigned long getset_out[] __initconst = {
+	BITMAP_FROM_U64(0x4a294918e8a455f2ULL),
+	BITMAP_FROM_U64(0xb21b0a62b17a7d19ULL),
+	BITMAP_FROM_U64(0x3a08162291cea40dULL),
+	BITMAP_FROM_U64(0xc9a7550384e145f8ULL),
+};
+
+#define GETSET_TEST_BITS	BYTES_TO_BITS(sizeof(getset_out))
+
+static void __init test_bitmap_getset_bits(void)
+{
+	DECLARE_BITMAP(out, GETSET_TEST_BITS);
+
+	for (u32 i = 0; i < ARRAY_SIZE(get_bits_test); i++) {
+		const struct getset_test *test = &get_bits_test[i];
+		u32 val;
+
+		val = bitmap_get_bits(getset_src, test->offset, test->width);
+		expect_eq_uint(test->expect, val);
+	}
+
+	bitmap_copy(out, getset_src, GETSET_TEST_BITS);
+
+	for (u32 i = 0; i < ARRAY_SIZE(set_bits_test); i++) {
+		const struct getset_test *test = &set_bits_test[i];
+
+		bitmap_set_bits(out, test->offset, test->value, test->width);
+	}
+
+	expect_eq_bitmap(getset_out, out, GETSET_TEST_BITS);
+}
+
 /*
  * FIXME: Clang breaks compile-time evaluations when KASAN and GCOV are enabled.
  * To workaround it, GCOV is force-disabled in Makefile for this configuration.
@@ -1238,6 +1314,7 @@ static void __init selftest(void)
 	test_mem_optimisations();
 	test_bitmap_cut();
 	test_bitmap_print_buf();
+	test_bitmap_getset_bits();
 	test_bitmap_const_eval();
 
 	test_find_nth_bit();
