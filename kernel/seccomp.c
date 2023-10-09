@@ -523,7 +523,10 @@ static inline pid_t seccomp_can_sync_threads(void)
 static inline void seccomp_filter_free(struct seccomp_filter *filter)
 {
 	if (filter) {
-		bpf_prog_destroy(filter->prog);
+		if (filter->prog->type == BPF_PROG_TYPE_SECCOMP)
+			bpf_prog_put(filter->prog);
+		else
+			bpf_prog_destroy(filter->prog);
 		kfree(filter);
 	}
 }
@@ -894,7 +897,7 @@ static void seccomp_cache_prepare(struct seccomp_filter *sfilter)
 #endif /* SECCOMP_ARCH_NATIVE */
 
 /**
- * seccomp_attach_filter: validate and attach filter
+ * seccomp_do_attach_filter: validate and attach filter
  * @flags:  flags to change filter behavior
  * @filter: seccomp filter to add to the current process
  *
@@ -905,8 +908,8 @@ static void seccomp_cache_prepare(struct seccomp_filter *sfilter)
  *     seccomp mode or did not have an ancestral seccomp filter
  *   - in NEW_LISTENER mode: the fd of the new listener
  */
-static long seccomp_attach_filter(unsigned int flags,
-				  struct seccomp_filter *filter)
+static long seccomp_do_attach_filter(unsigned int flags,
+				     struct seccomp_filter *filter)
 {
 	unsigned long total_insns;
 	struct seccomp_filter *walker;
@@ -2001,7 +2004,7 @@ static long seccomp_set_mode_filter(unsigned int flags,
 		goto out;
 	}
 
-	ret = seccomp_attach_filter(flags, prepared);
+	ret = seccomp_do_attach_filter(flags, prepared);
 	if (ret)
 		goto out;
 	/* Do not free the successfully attached filter. */
@@ -2058,6 +2061,51 @@ static long seccomp_load_filter(const char __user *filter)
 		bpf_prog_put(prog);
 	return ret;
 }
+
+static long seccomp_attach_filter(const char __user *ufd)
+{
+	const unsigned long seccomp_mode = SECCOMP_MODE_FILTER;
+	struct seccomp_filter *sfilter;
+	struct bpf_prog *prog;
+	int flags = 0;
+	int fd, ret;
+
+	if (copy_from_user(&fd, ufd, sizeof(fd)))
+		return -EFAULT;
+
+	prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SECCOMP);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	sfilter = kzalloc(sizeof(*sfilter), GFP_KERNEL | __GFP_NOWARN);
+	if (!sfilter) {
+		bpf_prog_put(prog);
+		return -ENOMEM;
+	}
+
+	sfilter->prog = prog;
+	refcount_set(&sfilter->refs, 1);
+	refcount_set(&sfilter->users, 1);
+	mutex_init(&sfilter->notify_lock);
+	init_waitqueue_head(&sfilter->wqh);
+
+	spin_lock_irq(&current->sighand->siglock);
+
+	ret = -EINVAL;
+	if (!seccomp_may_assign_mode(seccomp_mode))
+		goto out;
+
+	ret = seccomp_do_attach_filter(flags, sfilter);
+	if (ret)
+		goto out;
+
+	sfilter = NULL;
+	seccomp_assign_mode(current, seccomp_mode, flags);
+out:
+	spin_unlock_irq(&current->sighand->siglock);
+	seccomp_filter_free(sfilter);
+	return ret;
+}
 #else
 static inline long seccomp_set_mode_filter(unsigned int flags,
 					   const char __user *filter)
@@ -2066,6 +2114,11 @@ static inline long seccomp_set_mode_filter(unsigned int flags,
 }
 
 static inline long seccomp_load_filter(const char __user *filter)
+{
+	return -EINVAL;
+}
+
+static inline long seccomp_attach_filter(const char __user *ufd)
 {
 	return -EINVAL;
 }
@@ -2135,6 +2188,11 @@ static long do_seccomp(unsigned int op, unsigned int flags,
 			return -EINVAL;
 
 		return seccomp_load_filter(uargs);
+	case SECCOMP_ATTACH_FILTER:
+		if (flags != 0)
+			return -EINVAL;
+
+		return seccomp_attach_filter(uargs);
 	default:
 		return -EINVAL;
 	}
