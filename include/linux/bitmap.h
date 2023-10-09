@@ -6,8 +6,10 @@
 
 #include <linux/align.h>
 #include <linux/bitops.h>
+#include <linux/bug.h>
 #include <linux/find.h>
 #include <linux/limits.h>
+#include <linux/log2.h>
 #include <linux/string.h>
 #include <linux/types.h>
 
@@ -569,37 +571,58 @@ static inline void bitmap_from_u64(unsigned long *dst, u64 mask)
 }
 
 /**
- * bitmap_get_value8 - get an 8-bit value within a memory region
+ * bitmap_get_bits - get a 8/16/32/64-bit value within a memory region
  * @map: address to the bitmap memory region
- * @start: bit offset of the 8-bit value; must be a multiple of 8
+ * @start: bit offset of the value; must be a multiple of @len
+ * @len: bit width of the value; must be a power of two
  *
- * Returns the 8-bit value located at the @start bit offset within the @src
- * memory region.
+ * Return: the 8/16/32/64-bit value located at the @start bit offset within
+ * the @src memory region. Its position (@start + @len) can't cross
+ * a ``BITS_PER_LONG`` boundary.
  */
-static inline unsigned long bitmap_get_value8(const unsigned long *map,
-					      unsigned long start)
+static inline unsigned long bitmap_get_bits(const unsigned long *map,
+					    unsigned long start, size_t len)
 {
 	const size_t index = BIT_WORD(start);
 	const unsigned long offset = start % BITS_PER_LONG;
 
-	return (map[index] >> offset) & 0xFF;
+	if (WARN_ON_ONCE(!is_power_of_2(len) || offset % len ||
+			 offset + len > BITS_PER_LONG))
+		return 0;
+
+	return (map[index] >> offset) & GENMASK(len - 1, 0);
 }
 
 /**
- * bitmap_set_value8 - set an 8-bit value within a memory region
+ * bitmap_set_bits - set a 8/16/32/64-bit value within a memory region
  * @map: address to the bitmap memory region
- * @value: the 8-bit value; values wider than 8 bits may clobber bitmap
- * @start: bit offset of the 8-bit value; must be a multiple of 8
+ * @start: bit offset of the value; must be a multiple of @len
+ * @value: new value to set
+ * @len: bit width of the value; must be a power of two
+ *
+ * Replaces the 8/16/32/64-bit value located at the @start bit offset within
+ * the @src memory region with the new @value. Its position (@start + @len)
+ * can't cross a ``BITS_PER_LONG`` boundary.
  */
-static inline void bitmap_set_value8(unsigned long *map, unsigned long value,
-				     unsigned long start)
+static inline void bitmap_set_bits(unsigned long *map, unsigned long start,
+				   unsigned long value, size_t len)
 {
 	const size_t index = BIT_WORD(start);
 	const unsigned long offset = start % BITS_PER_LONG;
+	unsigned long mask = GENMASK(len - 1, 0);
 
-	map[index] &= ~(0xFFUL << offset);
-	map[index] |= value << offset;
+	if (WARN_ON_ONCE(!is_power_of_2(len) || offset % len ||
+			 offset + len > BITS_PER_LONG))
+		return;
+
+	map[index] &= ~(mask << offset);
+	map[index] |= (value & mask) << offset;
 }
+
+#define bitmap_get_value8(map, start)				\
+	bitmap_get_bits(map, start, BITS_PER_BYTE)
+#define bitmap_set_value8(map, value, start)			\
+	bitmap_set_bits(map, start, value, BITS_PER_BYTE)
 
 #endif /* __ASSEMBLY__ */
 
