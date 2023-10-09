@@ -2028,9 +2028,44 @@ out_free:
 	seccomp_filter_free(prepared);
 	return ret;
 }
+
+static long seccomp_load_filter(const char __user *filter)
+{
+	struct sock_fprog fprog;
+	struct bpf_prog *prog;
+	int ret;
+
+	ret = seccomp_copy_user_filter(filter, &fprog);
+	if (ret)
+		return ret;
+
+	ret = seccomp_prepare_prog(&prog, &fprog);
+	if (ret)
+		return ret;
+
+	ret = security_bpf_prog_alloc(prog->aux);
+	if (ret) {
+		bpf_prog_free(prog);
+		return ret;
+	}
+
+	prog->aux->user = get_current_user();
+	atomic64_set(&prog->aux->refcnt, 1);
+	prog->type = BPF_PROG_TYPE_SECCOMP;
+
+	ret = bpf_prog_new_fd(prog);
+	if (ret < 0)
+		bpf_prog_put(prog);
+	return ret;
+}
 #else
 static inline long seccomp_set_mode_filter(unsigned int flags,
 					   const char __user *filter)
+{
+	return -EINVAL;
+}
+
+static inline long seccomp_load_filter(const char __user *filter)
 {
 	return -EINVAL;
 }
@@ -2095,6 +2130,11 @@ static long do_seccomp(unsigned int op, unsigned int flags,
 			return -EINVAL;
 
 		return seccomp_get_notif_sizes(uargs);
+	case SECCOMP_LOAD_FILTER:
+		if (flags != 0)
+			return -EINVAL;
+
+		return seccomp_load_filter(uargs);
 	default:
 		return -EINVAL;
 	}
