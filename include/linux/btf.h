@@ -507,6 +507,14 @@ btf_get_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_type);
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
+const struct btf_type *btf_find_func_proto(const char *func_name,
+					   struct btf **btf_p);
+const struct btf_param *btf_get_func_param(const struct btf_type *func_proto,
+					   s32 *nr);
+const struct btf_member *btf_find_struct_member(struct btf *btf,
+						const struct btf_type *type,
+						const char *member_name,
+						u32 *anon_offset);
 #else
 static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
 						    u32 type_id)
@@ -558,6 +566,22 @@ static inline bool btf_types_are_same(const struct btf *btf1, u32 id1,
 				      const struct btf *btf2, u32 id2)
 {
 	return false;
+}
+static inline const struct btf_type *btf_find_func_proto(const char *func_name,
+							 struct btf **btf_p)
+{
+	return NULL;
+}
+static inline const struct btf_param *
+btf_get_func_param(const struct btf_type *func_proto, s32 *nr)
+{
+	return NULL;
+}
+static inline const struct btf_member *
+btf_find_struct_member(struct btf *btf, const struct btf_type *type,
+		       const char *member_name, u32 *anon_offset)
+{
+	return NULL;
 }
 #endif
 

@@ -12,7 +12,7 @@
 #define pr_fmt(fmt)	"trace_probe: " fmt
 
 #include <linux/bpf.h>
-#include "trace_btf.h"
+#include <linux/btf.h>
 
 #include "trace_probe.h"
 
