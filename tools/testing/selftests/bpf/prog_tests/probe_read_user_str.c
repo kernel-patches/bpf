@@ -9,7 +9,7 @@ static const char str3[] = "mestringblubblubblubblubblub";
 static int test_one_str(struct test_probe_read_user_str *skel, const char *str,
 			size_t len)
 {
-	int err, duration = 0;
+	int err;
 	char buf[256];
 
 	/* Ensure bytes after string are ones */
@@ -44,7 +44,7 @@ static int test_one_str(struct test_probe_read_user_str *skel, const char *str,
 void test_probe_read_user_str(void)
 {
 	struct test_probe_read_user_str *skel;
-	int err, duration = 0;
+	int err;
 
 	skel = test_probe_read_user_str__open_and_load();
 	if (CHECK(!skel, "test_probe_read_user_str__open_and_load",
