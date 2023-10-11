@@ -9,8 +9,7 @@
 	BPF_MOV64_IMM(BPF_REG_0, 2),
 	BPF_EXIT_INSN(),
 	},
-	.errstr = "invalid BPF_LD_IMM insn",
-	.errstr_unpriv = "R1 pointer comparison",
+	.errstr = "jump to reserved code",
 	.result = REJECT,
 },
 {
@@ -23,8 +22,7 @@
 	BPF_LD_IMM64(BPF_REG_0, 1),
 	BPF_EXIT_INSN(),
 	},
-	.errstr = "invalid BPF_LD_IMM insn",
-	.errstr_unpriv = "R1 pointer comparison",
+	.errstr = "jump to reserved code",
 	.result = REJECT,
 },
 {
@@ -142,5 +140,15 @@
 	},
 	.fixup_map_hash_48b = { 1 },
 	.errstr = "unrecognized bpf_ld_imm64 insn",
+	.result = REJECT,
+},
+{
+	"test15 ld_imm64",
+	.insns = {
+	BPF_LD_IMM64(BPF_REG_0, 0),
+	BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, -2),
+	BPF_EXIT_INSN(),
+	},
+	.errstr = "jump to reserved code",
 	.result = REJECT,
 },
