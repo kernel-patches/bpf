@@ -14980,6 +14980,7 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
 {
 	int *insn_stack = env->cfg.insn_stack;
 	int *insn_state = env->cfg.insn_state;
+	struct bpf_insn *insns = env->prog->insnsi;
 
 	if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
 		return DONE_EXPLORING;
@@ -14990,6 +14991,12 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
 	if (w < 0 || w >= env->prog->len) {
 		verbose_linfo(env, t, "%d: ", t);
 		verbose(env, "jump out of range from insn %d to %d\n", t, w);
+		return -EINVAL;
+	}
+
+	if (e == BRANCH && insns[w].code == 0) {
+		verbose_linfo(env, t, "%d", t);
+		verbose(env, "jump to reserved code from insn %d to %d\n", t, w);
 		return -EINVAL;
 	}
 
