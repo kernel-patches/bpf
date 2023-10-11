@@ -274,7 +274,7 @@ vmlinux_link vmlinux "${kallsymso}" ${btf_vmlinux_bin_o}
 # fill in BTF IDs
 if is_enabled CONFIG_DEBUG_INFO_BTF && is_enabled CONFIG_BPF; then
 	info BTFIDS vmlinux
-	${RESOLVE_BTFIDS} vmlinux
+	${RESOLVE_BTFIDS} -vv vmlinux
 fi
 
 mksysmap vmlinux System.map ${kallsymso}
