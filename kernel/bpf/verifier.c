@@ -14532,8 +14532,8 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	int err;
 
 	if (BPF_SIZE(insn->code) != BPF_DW) {
-		verbose(env, "invalid BPF_LD_IMM insn\n");
-		return -EINVAL;
+		verbose(env, "verifier internal error: ld_imm64 size is not BPF_DW\n");
+		return -EFAULT;
 	}
 	if (insn->off != 0) {
 		verbose(env, "BPF_LD_IMM64 uses reserved fields\n");
