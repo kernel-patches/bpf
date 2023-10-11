@@ -133,6 +133,11 @@ struct object {
 	int nr_typedefs;
 };
 
+static unsigned long ids_addr(struct object *obj)
+{
+	return obj->efile.ids.sh.sh_addr;
+}
+
 static int verbose;
 
 static int eprintf(int level, int var, const char *fmt, ...)
@@ -599,7 +604,7 @@ static int id_patch(struct object *obj, struct btf_id *id)
 
 	for (i = 0; i < id->addr_cnt; i++) {
 		unsigned long addr = id->addr[i];
-		unsigned long idx = addr - obj->efile.ids.sh.sh_addr;
+		unsigned long idx = addr - ids_addr(obj);
 
 		pr_debug("patching addr %5lu: ID %7d [%s]\n",
 			 idx, id->id, id->name);
@@ -656,7 +661,7 @@ static int sets_patch(struct object *obj)
 
 		id   = rb_entry(next, struct btf_id, rb_node);
 		addr = id->addr[0];
-		idx  = addr - obj->efile.ids.sh.sh_addr;
+		idx  = addr - ids_addr(obj);
 
 		/* sets are unique */
 		if (id->addr_cnt != 1) {
