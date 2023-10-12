@@ -747,21 +747,50 @@ busy:
 }
 
 /**
+ * ice_prepare_pkt_ctx_zc - Prepare packet context for XDP hints
+ * @xdp: xdp_buff used as input to the XDP program
+ * @eop_desc: End of packet descriptor
+ * @rx_ring: Rx ring with packet context
+ *
+ * In regular XDP, xdp_buff is placed inside the ring structure,
+ * just before the packet context, so the latter can be accessed
+ * with xdp_buff address only at all times, but in ZC mode,
+ * xdp_buffs come from the pool, so we need to reinitialize
+ * context for every packet.
+ *
+ * We can safely convert xdp_buff_xsk to ice_xdp_buff,
+ * because there are XSK_PRIV_MAX bytes reserved in xdp_buff_xsk
+ * right after xdp_buff, for our private use.
+ * XSK_CHECK_PRIV_TYPE() ensures we do not go above the limit.
+ */
+static void ice_prepare_pkt_ctx_zc(struct xdp_buff *xdp,
+				   union ice_32b_rx_flex_desc *eop_desc,
+				   struct ice_rx_ring *rx_ring)
+{
+	XSK_CHECK_PRIV_TYPE(struct ice_xdp_buff);
+	((struct ice_xdp_buff *)xdp)->pkt_ctx = rx_ring->pkt_ctx;
+	ice_xdp_meta_set_desc(xdp, eop_desc);
+}
+
+/**
  * ice_run_xdp_zc - Executes an XDP program in zero-copy path
  * @rx_ring: Rx ring
  * @xdp: xdp_buff used as input to the XDP program
  * @xdp_prog: XDP program to run
  * @xdp_ring: ring to be used for XDP_TX action
+ * @rx_desc: packet descriptor
  *
  * Returns any of ICE_XDP_{PASS, CONSUMED, TX, REDIR}
  */
 static int
 ice_run_xdp_zc(struct ice_rx_ring *rx_ring, struct xdp_buff *xdp,
-	       struct bpf_prog *xdp_prog, struct ice_tx_ring *xdp_ring)
+	       struct bpf_prog *xdp_prog, struct ice_tx_ring *xdp_ring,
+	       union ice_32b_rx_flex_desc *rx_desc)
 {
 	int err, result = ICE_XDP_PASS;
 	u32 act;
 
+	ice_prepare_pkt_ctx_zc(xdp, rx_desc, rx_ring);
 	act = bpf_prog_run_xdp(xdp_prog, xdp);
 
 	if (likely(act == XDP_REDIRECT)) {
@@ -901,7 +930,8 @@ int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring, int budget)
 		if (ice_is_non_eop(rx_ring, rx_desc))
 			continue;
 
-		xdp_res = ice_run_xdp_zc(rx_ring, first, xdp_prog, xdp_ring);
+		xdp_res = ice_run_xdp_zc(rx_ring, first, xdp_prog, xdp_ring,
+					 rx_desc);
 		if (likely(xdp_res & (ICE_XDP_TX | ICE_XDP_REDIR))) {
 			xdp_xmit |= xdp_res;
 		} else if (xdp_res == ICE_XDP_EXIT) {
