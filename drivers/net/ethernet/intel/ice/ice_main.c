@@ -48,6 +48,9 @@ MODULE_PARM_DESC(debug, "netif level (0=none,...,16=all)");
 DEFINE_STATIC_KEY_FALSE(ice_xdp_locking_key);
 EXPORT_SYMBOL(ice_xdp_locking_key);
 
+DEFINE_STATIC_KEY_FALSE(ice_xdp_meta_key);
+EXPORT_SYMBOL(ice_xdp_meta_key);
+
 /**
  * ice_hw_to_dev - Get device pointer from the hardware structure
  * @hw: pointer to the device HW structure
@@ -2634,6 +2637,11 @@ free_xdp_rings:
 	return -ENOMEM;
 }
 
+static bool ice_xdp_prog_has_meta(struct bpf_prog *prog)
+{
+	return prog && prog->aux->dev_bound;
+}
+
 /**
  * ice_vsi_assign_bpf_prog - set or clear bpf prog pointer on VSI
  * @vsi: VSI to set the bpf prog on
@@ -2644,9 +2652,15 @@ static void ice_vsi_assign_bpf_prog(struct ice_vsi *vsi, struct bpf_prog *prog)
 	struct bpf_prog *old_prog;
 	int i;
 
+	if (ice_xdp_prog_has_meta(prog))
+		static_branch_inc(&ice_xdp_meta_key);
+
 	old_prog = xchg(&vsi->xdp_prog, prog);
 	ice_for_each_rxq(vsi, i)
 		WRITE_ONCE(vsi->rx_rings[i]->xdp_prog, vsi->xdp_prog);
+
+	if (ice_xdp_prog_has_meta(old_prog))
+		static_branch_dec(&ice_xdp_meta_key);
 
 	if (old_prog)
 		bpf_prog_put(old_prog);

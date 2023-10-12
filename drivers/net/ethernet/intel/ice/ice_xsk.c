@@ -767,6 +767,9 @@ static void ice_prepare_pkt_ctx_zc(struct xdp_buff *xdp,
 				   union ice_32b_rx_flex_desc *eop_desc,
 				   struct ice_rx_ring *rx_ring)
 {
+	if (!static_branch_unlikely(&ice_xdp_meta_key))
+		return;
+
 	XSK_CHECK_PRIV_TYPE(struct ice_xdp_buff);
 	((struct ice_xdp_buff *)xdp)->pkt_ctx = rx_ring->pkt_ctx;
 	ice_xdp_meta_set_desc(xdp, eop_desc);
