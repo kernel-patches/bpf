@@ -2416,9 +2416,10 @@ int __unix_dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t size,
 	if (msg->msg_name) {
 		unix_copy_addr(msg, skb->sk);
 
-		BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
-						      msg->msg_name,
-						      &msg->msg_namelen);
+		if (msg->msg_namelen > 0)
+			BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
+							      msg->msg_name,
+							      &msg->msg_namelen);
 	}
 
 	if (size > skb->len - skip)
@@ -2773,9 +2774,10 @@ unlock:
 					 state->msg->msg_name);
 			unix_copy_addr(state->msg, skb->sk);
 
-			BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
-							      state->msg->msg_name,
-							      &state->msg->msg_namelen);
+			if (state->msg->msg_namelen > 0)
+				BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk,
+								      state->msg->msg_name,
+								      &state->msg->msg_namelen);
 
 			sunaddr = NULL;
 		}
