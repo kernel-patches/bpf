@@ -13,7 +13,6 @@ static void check_good_sample(struct test_perf_branches *skel)
 	int required_size = skel->bss->required_size_out;
 	int written_stack = skel->bss->written_stack_out;
 	int pbe_size = sizeof(struct perf_branch_entry);
-	int duration = 0;
 
 	if (CHECK(!skel->bss->valid, "output not valid",
 		 "no valid sample from prog"))
@@ -43,7 +42,6 @@ static void check_bad_sample(struct test_perf_branches *skel)
 	int written_global = skel->bss->written_global_out;
 	int required_size = skel->bss->required_size_out;
 	int written_stack = skel->bss->written_stack_out;
-	int duration = 0;
 
 	if (CHECK(!skel->bss->valid, "output not valid",
 		 "no valid sample from prog"))
@@ -61,7 +59,7 @@ static void test_perf_branches_common(int perf_fd,
 				      void (*cb)(struct test_perf_branches *))
 {
 	struct test_perf_branches *skel;
-	int err, i, duration = 0;
+	int err, i;
 	bool detached = false;
 	struct bpf_link *link;
 	volatile int j = 0;
@@ -102,7 +100,6 @@ out_destroy_skel:
 static void test_perf_branches_hw(void)
 {
 	struct perf_event_attr attr = {0};
-	int duration = 0;
 	int pfd;
 
 	/* create perf event */
@@ -143,7 +140,6 @@ static void test_perf_branches_hw(void)
 static void test_perf_branches_no_hw(void)
 {
 	struct perf_event_attr attr = {0};
-	int duration = 0;
 	int pfd;
 
 	/* create perf event */

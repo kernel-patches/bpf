@@ -17,7 +17,7 @@ static __u64 time_get_ns(void)
 
 static int test_task_rename(const char *prog)
 {
-	int i, fd, duration = 0, err;
+	int i, fd, err;
 	char buf[] = "test_overhead";
 	__u64 start_time;
 
@@ -66,7 +66,7 @@ void test_test_overhead(void)
 	struct bpf_program *fentry_prog, *fexit_prog;
 	struct bpf_object *obj;
 	struct bpf_link *link;
-	int err, duration = 0;
+	int err;
 	char comm[16] = {};
 
 	if (CHECK_FAIL(prctl(PR_GET_NAME, comm, 0L, 0L, 0L)))

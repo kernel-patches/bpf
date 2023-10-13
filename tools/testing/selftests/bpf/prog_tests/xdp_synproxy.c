@@ -40,7 +40,6 @@ static bool expect_str(char *buf, size_t size, const char *str, const char *name
 {
 	static char escbuf_expected[CMD_OUT_BUF_SIZE * 4];
 	static char escbuf_actual[CMD_OUT_BUF_SIZE * 4];
-	static int duration = 0;
 	bool ok;
 
 	ok = size == strlen(str) && !memcmp(buf, str, size);

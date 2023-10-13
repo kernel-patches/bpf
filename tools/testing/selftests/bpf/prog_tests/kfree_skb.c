@@ -20,7 +20,6 @@ static void on_sample(void *ctx, int cpu, void *data, __u32 size)
 {
 	struct meta *meta = (struct meta *)data;
 	struct ipv6_packet *pkt_v6 = data + sizeof(*meta);
-	int duration = 0;
 
 	if (CHECK(size != 72 + sizeof(*meta), "check_size", "size %u != %zu\n",
 		  size, 72 + sizeof(*meta)))
@@ -65,7 +64,6 @@ void serial_test_kfree_skb(void)
 	struct perf_buffer *pb = NULL;
 	int err, prog_fd;
 	bool passed = false;
-	__u32 duration = 0;
 	const int zero = 0;
 	bool test_ok[2];
 
