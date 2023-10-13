@@ -52,7 +52,13 @@ struct linum_err {
 #define TCPOPT_NOP		1
 #define TCPOPT_MSS		2
 #define TCPOPT_WINDOW		3
+#define TCPOPT_SACK_PERM	4
+#define TCPOPT_TIMESTAMP	8
 #define TCPOPT_EXP		254
+
+#define TCPOLEN_WINDOW		3
+#define TCPOLEN_SACK_PERM	2
+#define TCPOLEN_TIMESTAMP	10
 
 #define TCP_BPF_EXPOPT_BASE_LEN 4
 #define MAX_TCP_HDR_LEN		60
@@ -81,7 +87,7 @@ struct tcp_opt {
 	__u8 kind;
 	__u8 len;
 	union {
-		__u8 data[4];
+		__u8 data[8];
 		__u32 data32;
 	};
 } __attribute__((packed));
