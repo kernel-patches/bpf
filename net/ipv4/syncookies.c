@@ -286,6 +286,7 @@ int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req, struct sk_
 {
 	struct bpf_sock_ops_kern sock_ops;
 	struct net *net = sock_net(sk);
+	u32 options;
 
 	if (tcp_opt->saw_tstamp) {
 		if (!READ_ONCE(net->ipv4.sysctl_tcp_timestamps))
@@ -308,6 +309,25 @@ int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req, struct sk_
 
 	if (!sock_ops.replylong[0])
 		goto err;
+
+	options = sock_ops.replylong[1];
+
+	if ((options & BPF_SYNCOOKIE_WSCALE_MASK) != BPF_SYNCOOKIE_WSCALE_MASK) {
+		if (!READ_ONCE(net->ipv4.sysctl_tcp_window_scaling))
+			goto err;
+
+		tcp_opt->wscale_ok = 1;
+		tcp_opt->snd_wscale = options & BPF_SYNCOOKIE_WSCALE_MASK;
+	}
+
+	if (options & BPF_SYNCOOKIE_SACK) {
+		if (!READ_ONCE(net->ipv4.sysctl_tcp_sack))
+			goto err;
+
+		tcp_opt->sack_ok = 1;
+	}
+
+	inet_rsk(req)->ecn_ok = options & BPF_SYNCOOKIE_ECN;
 
 	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESRECV);
 

@@ -6970,14 +6970,25 @@ EXPORT_SYMBOL_GPL(tcp_get_syncookie_mss);
 static int bpf_skops_cookie_init_sequence(struct sock *sk, struct request_sock *req,
 					  struct sk_buff *skb, __u32 *isn)
 {
+	struct inet_request_sock *ireq = inet_rsk(req);
 	struct bpf_sock_ops_kern sock_ops;
+	u32 options;
 	int ret;
+
+	options = ireq->wscale_ok ? ireq->snd_wscale : BPF_SYNCOOKIE_WSCALE_MASK;
+	if (ireq->sack_ok)
+		options |= BPF_SYNCOOKIE_SACK;
+	if (ireq->ecn_ok)
+		options |= BPF_SYNCOOKIE_ECN;
+	if (ireq->tstamp_ok)
+		options |= BPF_SYNCOOKIE_TS;
 
 	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
 
 	sock_ops.op = BPF_SOCK_OPS_GEN_SYNCOOKIE_CB;
 	sock_ops.sk = req_to_sk(req);
 	sock_ops.args[0] = req->mss;
+	sock_ops.args[1] = options;
 
 	bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
 

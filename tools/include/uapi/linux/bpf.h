@@ -6869,6 +6869,7 @@ enum {
 					 * option.
 					 *
 					 * args[0]: MSS
+					 * args[1]: BPF_SYNCOOKIE_XXX
 					 *
 					 * replylong[0]: ISN
 					 * replylong[1]: TS
@@ -6883,6 +6884,7 @@ enum {
 					 * args[1]: TS
 					 *
 					 * replylong[0]: MSS
+					 * replylong[1]: BPF_SYNCOOKIE_XXX
 					 */
 };
 
@@ -6968,6 +6970,22 @@ enum {
 	BPF_WRITE_HDR_TCP_SYNACK_COOKIE = 2,	/* Kernel is in syncookie mode
 						 * when sending a SYN.
 						 */
+};
+
+/* arg[1] value for BPF_SOCK_OPS_GEN_SYNCOOKIE_CB and
+ * replylong[1] for BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB.
+ *
+ * MSB                                LSB
+ * | 31 ... | 6  | 5   | 4    | 3 2 1 0 |
+ * |    ... | TS | ECN | SACK | WScale  |
+ */
+enum {
+	/* 0xf is invalid thus means that SYN did not have WScale. */
+	BPF_SYNCOOKIE_WSCALE_MASK	= (1 << 4) - 1,
+	BPF_SYNCOOKIE_SACK		= (1 << 4),
+	BPF_SYNCOOKIE_ECN		= (1 << 5),
+	/* Only available for BPF_SOCK_OPS_GEN_SYNCOOKIE_CB to check if SYN has TS */
+	BPF_SYNCOOKIE_TS		= (1 << 6),
 };
 
 struct bpf_perf_event_value {
