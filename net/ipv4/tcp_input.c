@@ -6966,6 +6966,37 @@ u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
 }
 EXPORT_SYMBOL_GPL(tcp_get_syncookie_mss);
 
+#if IS_ENABLED(CONFIG_CGROUP_BPF) && IS_ENABLED(CONFIG_SYN_COOKIES)
+static int bpf_skops_cookie_init_sequence(struct sock *sk, struct request_sock *req,
+					  struct sk_buff *skb, __u32 *isn)
+{
+	struct bpf_sock_ops_kern sock_ops;
+	int ret;
+
+	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
+
+	sock_ops.op = BPF_SOCK_OPS_GEN_SYNCOOKIE_CB;
+	sock_ops.sk = req_to_sk(req);
+	sock_ops.args[0] = req->mss;
+
+	bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
+
+	ret = BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
+	if (ret)
+		return ret;
+
+	*isn = sock_ops.replylong[0];
+
+	return 0;
+}
+#else
+static int bpf_skops_cookie_init_sequence(struct sock *sk, struct request_sock *req,
+					  struct sk_buff *skb, __u32 *isn)
+{
+	return 0;
+}
+#endif
+
 int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		     const struct tcp_request_sock_ops *af_ops,
 		     struct sock *sk, struct sk_buff *skb)
@@ -7062,7 +7093,12 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	tcp_ecn_create_request(req, skb, sk, dst);
 
 	if (want_cookie) {
-		isn = cookie_init_sequence(af_ops, sk, skb, &req->mss);
+		if (BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_SYNCOOKIE_CB_FLAG)) {
+			if (bpf_skops_cookie_init_sequence(sk, req, skb, &isn))
+				goto drop_and_release;
+		} else {
+			isn = cookie_init_sequence(af_ops, sk, skb, &req->mss);
+		}
 		if (!tmp_opt.tstamp_ok)
 			inet_rsk(req)->ecn_ok = 0;
 	}
