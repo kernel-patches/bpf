@@ -569,8 +569,35 @@ __u32 cookie_v4_init_sequence(const struct sk_buff *skb, __u16 *mss);
 u64 cookie_init_timestamp(struct request_sock *req, u64 now);
 bool cookie_timestamp_decode(const struct net *net,
 			     struct tcp_options_received *opt);
-bool cookie_ecn_ok(const struct tcp_options_received *opt,
-		   const struct net *net, const struct dst_entry *dst);
+
+/* TCP Timestamp: 6 lowest bits of timestamp sent in the cookie SYN-ACK
+ * stores TCP options:
+ *
+ * MSB                               LSB
+ * | 31 ...   6 |  5  |  4   | 3 2 1 0 |
+ * |  Timestamp | ECN | SACK | WScale  |
+ *
+ * When we receive a valid cookie-ACK, we look at the echoed tsval (if
+ * any) to figure out which TCP options we should use for the rebuilt
+ * connection.
+ *
+ * A WScale setting of '0xf' (which is an invalid scaling value)
+ * means that original syn did not include the TCP window scaling option.
+ */
+#define TS_OPT_WSCALE_MASK	0xf
+#define TS_OPT_SACK		BIT(4)
+#define TS_OPT_ECN		BIT(5)
+/* There is no TS_OPT_TIMESTAMP:
+ * if ACK contains timestamp option, we already know it was
+ * requested/supported by the syn/synack exchange.
+ */
+#define TSBITS	6
+#define TSMASK	(((__u32)1 << TSBITS) - 1)
+
+static inline bool cookie_ecn_ok(const struct tcp_options_received *tcp_opt)
+{
+	return tcp_opt->rcv_tsecr & TS_OPT_ECN;
+}
 
 /* From net/ipv6/syncookies.c */
 int __cookie_v6_check(const struct ipv6hdr *iph, const struct tcphdr *th,

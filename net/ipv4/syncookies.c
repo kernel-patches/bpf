@@ -19,30 +19,6 @@ static siphash_aligned_key_t syncookie_secret[2];
 #define COOKIEBITS 24	/* Upper bits store count */
 #define COOKIEMASK (((__u32)1 << COOKIEBITS) - 1)
 
-/* TCP Timestamp: 6 lowest bits of timestamp sent in the cookie SYN-ACK
- * stores TCP options:
- *
- * MSB                               LSB
- * | 31 ...   6 |  5  |  4   | 3 2 1 0 |
- * |  Timestamp | ECN | SACK | WScale  |
- *
- * When we receive a valid cookie-ACK, we look at the echoed tsval (if
- * any) to figure out which TCP options we should use for the rebuilt
- * connection.
- *
- * A WScale setting of '0xf' (which is an invalid scaling value)
- * means that original syn did not include the TCP window scaling option.
- */
-#define TS_OPT_WSCALE_MASK	0xf
-#define TS_OPT_SACK		BIT(4)
-#define TS_OPT_ECN		BIT(5)
-/* There is no TS_OPT_TIMESTAMP:
- * if ACK contains timestamp option, we already know it was
- * requested/supported by the syn/synack exchange.
- */
-#define TSBITS	6
-#define TSMASK	(((__u32)1 << TSBITS) - 1)
-
 static u32 cookie_hash(__be32 saddr, __be32 daddr, __be16 sport, __be16 dport,
 		       u32 count, int c)
 {
@@ -266,21 +242,6 @@ bool cookie_timestamp_decode(const struct net *net,
 }
 EXPORT_SYMBOL(cookie_timestamp_decode);
 
-bool cookie_ecn_ok(const struct tcp_options_received *tcp_opt,
-		   const struct net *net, const struct dst_entry *dst)
-{
-	bool ecn_ok = tcp_opt->rcv_tsecr & TS_OPT_ECN;
-
-	if (!ecn_ok)
-		return false;
-
-	if (READ_ONCE(net->ipv4.sysctl_tcp_ecn))
-		return true;
-
-	return dst_feature(dst, RTAX_FEATURE_ECN);
-}
-EXPORT_SYMBOL(cookie_ecn_ok);
-
 struct request_sock *cookie_tcp_reqsk_alloc(const struct request_sock_ops *ops,
 					    const struct tcp_request_sock_ops *af_ops,
 					    struct sock *sk,
@@ -438,6 +399,7 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 			goto out;
 		}
 	} else {
+		ireq->ecn_ok = cookie_ecn_ok(&tcp_opt);
 		treq->ts_off = tsoff;
 	}
 
@@ -498,7 +460,8 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 				  dst_metric(&rt->dst, RTAX_INITRWND));
 
 	ireq->rcv_wscale  = rcv_wscale;
-	ireq->ecn_ok = cookie_ecn_ok(&tcp_opt, net, &rt->dst);
+	ireq->ecn_ok &= READ_ONCE(net->ipv4.sysctl_tcp_ecn) ||
+		dst_feature(&rt->dst, RTAX_FEATURE_ECN);
 
 	ret = tcp_get_cookie_sock(sk, skb, req, &rt->dst);
 	/* ip_queue_xmit() depends on our flow being setup

@@ -198,6 +198,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 			goto out;
 		}
 	} else {
+		ireq->ecn_ok = cookie_ecn_ok(&tcp_opt);
 		treq->ts_off = tsoff;
 	}
 
@@ -272,7 +273,8 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 				  dst_metric(dst, RTAX_INITRWND));
 
 	ireq->rcv_wscale = rcv_wscale;
-	ireq->ecn_ok = cookie_ecn_ok(&tcp_opt, net, dst);
+	ireq->ecn_ok &= READ_ONCE(net->ipv4.sysctl_tcp_ecn) ||
+		dst_feature(dst, RTAX_FEATURE_ECN);
 
 	ret = tcp_get_cookie_sock(sk, skb, req, dst);
 out:
