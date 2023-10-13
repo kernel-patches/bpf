@@ -83,6 +83,13 @@
  */
 #define __bpf_kfunc __used noinline
 
+#define BPF_KFUNC_START_DEFS				\
+	__diag_push();					\
+	__diag_ignore_all("-Wmissing-prototypes",	\
+			  "Global kfuncs as their definitions will be in BTF");
+
+#define BPF_KFUNC_END_DEFS __diag_pop();
+
 /*
  * Return the name of the passed struct, if exists, or halt the build if for
  * example the structure gets renamed. In this way, developers have to revisit

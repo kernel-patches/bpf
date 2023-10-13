@@ -22,9 +22,7 @@ enum bpf_fou_encap_type {
 	FOU_BPF_ENCAP_GUE,
 };
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in BTF");
+BPF_KFUNC_START_DEFS
 
 /* bpf_skb_set_fou_encap - Set FOU encap parameters
  *
@@ -100,7 +98,7 @@ __bpf_kfunc int bpf_skb_get_fou_encap(struct __sk_buff *skb_ctx,
 	return 0;
 }
 
-__diag_pop()
+BPF_KFUNC_END_DEFS
 
 BTF_SET8_START(fou_kfunc_set)
 BTF_ID_FLAGS(func, bpf_skb_set_fou_encap)

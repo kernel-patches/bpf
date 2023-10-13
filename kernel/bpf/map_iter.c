@@ -193,9 +193,7 @@ static int __init bpf_map_iter_init(void)
 
 late_initcall(bpf_map_iter_init);
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in vmlinux BTF");
+BPF_KFUNC_START_DEFS
 
 __bpf_kfunc s64 bpf_map_sum_elem_count(const struct bpf_map *map)
 {
@@ -213,7 +211,7 @@ __bpf_kfunc s64 bpf_map_sum_elem_count(const struct bpf_map *map)
 	return ret;
 }
 
-__diag_pop();
+BPF_KFUNC_END_DEFS
 
 BTF_SET8_START(bpf_map_iter_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_map_sum_elem_count, KF_TRUSTED_ARGS)

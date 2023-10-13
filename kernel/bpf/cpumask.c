@@ -34,9 +34,7 @@ static bool cpu_valid(u32 cpu)
 	return cpu < nr_cpu_ids;
 }
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global kfuncs as their definitions will be in BTF");
+BPF_KFUNC_START_DEFS
 
 /**
  * bpf_cpumask_create() - Create a mutable BPF cpumask.
@@ -407,7 +405,7 @@ __bpf_kfunc u32 bpf_cpumask_any_and_distribute(const struct cpumask *src1,
 	return cpumask_any_and_distribute(src1, src2);
 }
 
-__diag_pop();
+BPF_KFUNC_END_DEFS
 
 BTF_SET8_START(cpumask_kfunc_btf_ids)
 BTF_ID_FLAGS(func, bpf_cpumask_create, KF_ACQUIRE | KF_RET_NULL)

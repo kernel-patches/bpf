@@ -1888,9 +1888,7 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 	}
 }
 
-__diag_push();
-__diag_ignore_all("-Wmissing-prototypes",
-		  "Global functions as their definitions will be in vmlinux BTF");
+BPF_KFUNC_START_DEFS
 
 __bpf_kfunc void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 {
@@ -2496,7 +2494,7 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	WARN(1, "A call to BPF exception callback should never return\n");
 }
 
-__diag_pop();
+BPF_KFUNC_END_DEFS
 
 BTF_SET8_START(generic_btf_ids)
 #ifdef CONFIG_KEXEC_CORE
