@@ -6865,16 +6865,22 @@ enum {
 					 * earlier bpf-progs.
 					 */
 	BPF_SOCK_OPS_GEN_SYNCOOKIE_CB,	/* Generate SYN Cookie (ISN of
-					 * SYN+ACK).
+					 * SYN+ACK) and value of Timestamps
+					 * option.
 					 *
 					 * args[0]: MSS
 					 *
 					 * replylong[0]: ISN
+					 * replylong[1]: TS
+					 *
+					 * TS value must look like random
+					 * for security reasons.
 					 */
-	BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB,/* Validate SYN Cookie and set
-					 * MSS.
+	BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB,/* Validate SYN Cookie and TS and
+					 * set MSS.
 					 *
 					 * args[0]: ISN
+					 * args[1]: TS
 					 *
 					 * replylong[0]: MSS
 					 */

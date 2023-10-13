@@ -62,11 +62,12 @@ static u32 cookie_hash(__be32 saddr, __be32 daddr, __be16 sport, __be16 dport,
  */
 u64 cookie_init_timestamp(struct request_sock *req, u64 now)
 {
-	struct inet_request_sock *ireq;
-	u32 ts, ts_now = tcp_ns_to_ts(now);
-	u32 options = 0;
+	struct inet_request_sock *ireq = inet_rsk(req);
+	u32 ts, ts_now;
+	u32 options;
 
-	ireq = inet_rsk(req);
+	if (ireq->bpf_cookie)
+		return ireq->bpf_cookie_tsval * (NSEC_PER_SEC / TCP_TS_HZ);
 
 	options = ireq->wscale_ok ? ireq->snd_wscale : TS_OPT_WSCALE_MASK;
 	if (ireq->sack_ok)
@@ -74,6 +75,7 @@ u64 cookie_init_timestamp(struct request_sock *req, u64 now)
 	if (ireq->ecn_ok)
 		options |= TS_OPT_ECN;
 
+	ts_now = tcp_ns_to_ts(now);
 	ts = ts_now & ~TSMASK;
 	ts |= options;
 	if (ts > ts_now) {
@@ -318,15 +320,25 @@ struct request_sock *cookie_tcp_reqsk_alloc(const struct request_sock_ops *ops,
 EXPORT_SYMBOL_GPL(cookie_tcp_reqsk_alloc);
 
 #if IS_ENABLED(CONFIG_CGROUP_BPF) && IS_ENABLED(CONFIG_SYN_COOKIES)
-int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req, struct sk_buff *skb)
+int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req, struct sk_buff *skb,
+			   struct tcp_options_received *tcp_opt)
 {
 	struct bpf_sock_ops_kern sock_ops;
+	struct net *net = sock_net(sk);
+
+	if (tcp_opt->saw_tstamp) {
+		if (!READ_ONCE(net->ipv4.sysctl_tcp_timestamps))
+			goto err;
+
+		tcp_rsk(req)->ts_off = tcp_opt->rcv_tsecr - tcp_ns_to_ts(tcp_clock_ns());
+	}
 
 	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
 
 	sock_ops.op = BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB;
 	sock_ops.sk = req_to_sk(req);
 	sock_ops.args[0] = tcp_rsk(req)->snt_isn;
+	sock_ops.args[1] = tcp_opt->rcv_tsecr;
 
 	bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
 
@@ -393,15 +405,17 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	memset(&tcp_opt, 0, sizeof(tcp_opt));
 	tcp_parse_options(net, skb, &tcp_opt, 0, NULL);
 
-	if (tcp_opt.saw_tstamp && tcp_opt.rcv_tsecr) {
-		tsoff = secure_tcp_ts_off(net,
-					  ip_hdr(skb)->daddr,
-					  ip_hdr(skb)->saddr);
-		tcp_opt.rcv_tsecr -= tsoff;
-	}
+	if (!bpf_cookie) {
+		if (tcp_opt.saw_tstamp && tcp_opt.rcv_tsecr) {
+			tsoff = secure_tcp_ts_off(net,
+						  ip_hdr(skb)->daddr,
+						  ip_hdr(skb)->saddr);
+			tcp_opt.rcv_tsecr -= tsoff;
+		}
 
-	if (!bpf_cookie && !cookie_timestamp_decode(net, &tcp_opt))
-		goto out;
+		if (!cookie_timestamp_decode(net, &tcp_opt))
+			goto out;
+	}
 
 	req = cookie_tcp_reqsk_alloc(&tcp_request_sock_ops,
 				     &tcp_request_sock_ipv4_ops, sk, skb);
@@ -418,11 +432,13 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	sk_daddr_set(req_to_sk(req), ip_hdr(skb)->saddr);
 
 	if (bpf_cookie) {
-		mss = bpf_skops_cookie_check(sk, req, skb);
+		mss = bpf_skops_cookie_check(sk, req, skb, &tcp_opt);
 		if (!mss) {
 			reqsk_free(req);
 			goto out;
 		}
+	} else {
+		treq->ts_off = tsoff;
 	}
 
 	req->mss		= mss;
@@ -433,7 +449,6 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	ireq->tstamp_ok		= tcp_opt.saw_tstamp;
 	req->ts_recent		= tcp_opt.saw_tstamp ? tcp_opt.rcv_tsval : 0;
 	treq->rcv_isn		= ntohl(th->seq) - 1;
-	treq->ts_off		= tsoff;
 	treq->txhash		= net_tx_rndhash();
 	treq->snt_synack	= 0;
 	treq->tfo_listener	= false;

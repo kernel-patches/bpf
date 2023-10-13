@@ -87,8 +87,10 @@ struct inet_request_sock {
 				ecn_ok	   : 1,
 				acked	   : 1,
 				no_srccheck: 1,
-				smc_ok	   : 1;
+				smc_ok	   : 1,
+				bpf_cookie : 1;
 	u32                     ir_mark;
+	u32			bpf_cookie_tsval;
 	union {
 		struct ip_options_rcu __rcu	*ireq_opt;
 #if IS_ENABLED(CONFIG_IPV6)

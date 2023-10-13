@@ -2161,10 +2161,11 @@ static inline __u32 cookie_init_sequence(const struct tcp_request_sock_ops *ops,
 
 #ifdef CONFIG_CGROUP_BPF
 int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req,
-			   struct sk_buff *skb);
+			   struct sk_buff *skb, struct tcp_options_received *tcp_opt);
 #else
 static inline int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req,
-					 struct sk_buff *skb)
+					 struct sk_buff *skb,
+					 struct tcp_options_received *tcp_opt)
 {
 	return 0;
 }

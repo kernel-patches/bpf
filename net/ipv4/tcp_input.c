@@ -6987,6 +6987,10 @@ static int bpf_skops_cookie_init_sequence(struct sock *sk, struct request_sock *
 
 	*isn = sock_ops.replylong[0];
 
+	inet_rsk(req)->bpf_cookie = 1;
+	inet_rsk(req)->bpf_cookie_tsval = sock_ops.replylong[1];
+	tcp_rsk(req)->ts_off = 0;
+
 	return 0;
 }
 #else
