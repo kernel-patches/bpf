@@ -139,6 +139,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 	struct dst_entry *dst;
 	struct sock *ret = sk;
 	int full_space, mss;
+	bool bpf_cookie;
 	__u8 rcv_wscale;
 	u32 tsoff = 0;
 
@@ -146,16 +147,19 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 	    !th->ack || th->rst)
 		goto out;
 
-	if (tcp_synq_no_recent_overflow(sk))
-		goto out;
+	bpf_cookie = BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_SYNCOOKIE_CB_FLAG);
+	if (!bpf_cookie) {
+		if (tcp_synq_no_recent_overflow(sk))
+			goto out;
 
-	mss = __cookie_v6_check(ipv6_hdr(skb), th, cookie);
-	if (mss == 0) {
-		__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESFAILED);
-		goto out;
+		mss = __cookie_v6_check(ipv6_hdr(skb), th, cookie);
+		if (mss == 0) {
+			__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESFAILED);
+			goto out;
+		}
+
+		__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESRECV);
 	}
-
-	__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESRECV);
 
 	/* check for timestamp cookie support */
 	memset(&tcp_opt, 0, sizeof(tcp_opt));
@@ -168,7 +172,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 		tcp_opt.rcv_tsecr -= tsoff;
 	}
 
-	if (!cookie_timestamp_decode(net, &tcp_opt))
+	if (!bpf_cookie && !cookie_timestamp_decode(net, &tcp_opt))
 		goto out;
 
 	req = cookie_tcp_reqsk_alloc(&tcp6_request_sock_ops,
@@ -177,17 +181,25 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 		goto out_drop;
 
 	ireq = inet_rsk(req);
-	treq = tcp_rsk(req);
-	treq->tfo_listener = false;
-
-	if (security_inet_conn_request(sk, skb, req))
-		goto out_free;
-
-	req->mss = mss;
 	ireq->ir_rmt_port = th->source;
 	ireq->ir_num = ntohs(th->dest);
 	ireq->ir_v6_rmt_addr = ipv6_hdr(skb)->saddr;
 	ireq->ir_v6_loc_addr = ipv6_hdr(skb)->daddr;
+
+	treq = tcp_rsk(req);
+	treq->snt_isn = cookie;
+
+	if (bpf_cookie) {
+		mss = bpf_skops_cookie_check(sk, req, skb);
+		if (!mss) {
+			reqsk_free(req);
+			goto out;
+		}
+	}
+
+	if (security_inet_conn_request(sk, skb, req))
+		goto out_free;
+
 	if (ipv6_opt_accepted(sk, skb, &TCP_SKB_CB(skb)->header.h6) ||
 	    np->rxopt.bits.rxinfo || np->rxopt.bits.rxoinfo ||
 	    np->rxopt.bits.rxhlim || np->rxopt.bits.rxohlim) {
@@ -203,6 +215,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 
 	ireq->ir_mark = inet_request_mark(sk, skb);
 
+	req->mss = mss;
 	req->num_retrans = 0;
 	ireq->snd_wscale	= tcp_opt.snd_wscale;
 	ireq->sack_ok		= tcp_opt.sack_ok;
@@ -210,6 +223,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 	ireq->tstamp_ok		= tcp_opt.saw_tstamp;
 	req->ts_recent		= tcp_opt.saw_tstamp ? tcp_opt.rcv_tsval : 0;
 	treq->snt_synack	= 0;
+	treq->tfo_listener = false;
 	treq->rcv_isn = ntohl(th->seq) - 1;
 	treq->snt_isn = cookie;
 	treq->ts_off = tsoff;

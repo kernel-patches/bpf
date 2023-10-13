@@ -317,6 +317,37 @@ struct request_sock *cookie_tcp_reqsk_alloc(const struct request_sock_ops *ops,
 }
 EXPORT_SYMBOL_GPL(cookie_tcp_reqsk_alloc);
 
+#if IS_ENABLED(CONFIG_CGROUP_BPF) && IS_ENABLED(CONFIG_SYN_COOKIES)
+int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req, struct sk_buff *skb)
+{
+	struct bpf_sock_ops_kern sock_ops;
+
+	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
+
+	sock_ops.op = BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB;
+	sock_ops.sk = req_to_sk(req);
+	sock_ops.args[0] = tcp_rsk(req)->snt_isn;
+
+	bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
+
+	if (BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk))
+		goto err;
+
+	if (!sock_ops.replylong[0])
+		goto err;
+
+	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESRECV);
+
+	return sock_ops.replylong[0];
+
+err:
+	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESFAILED);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(bpf_skops_cookie_check);
+#endif
+
 /* On input, sk is a listener.
  * Output is listener if incoming packet would not create a child
  *           NULL if memory could not be allocated.
@@ -336,6 +367,7 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	int full_space, mss;
 	struct flowi4 fl4;
 	struct rtable *rt;
+	bool bpf_cookie;
 	__u8 rcv_wscale;
 	u32 tsoff = 0;
 
@@ -343,16 +375,19 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	    !th->ack || th->rst)
 		goto out;
 
-	if (tcp_synq_no_recent_overflow(sk))
-		goto out;
+	bpf_cookie = BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_SYNCOOKIE_CB_FLAG);
+	if (!bpf_cookie) {
+		if (tcp_synq_no_recent_overflow(sk))
+			goto out;
 
-	mss = __cookie_v4_check(ip_hdr(skb), th, cookie);
-	if (mss == 0) {
-		__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESFAILED);
-		goto out;
+		mss = __cookie_v4_check(ip_hdr(skb), th, cookie);
+		if (mss == 0) {
+			__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESFAILED);
+			goto out;
+		}
+
+		__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESRECV);
 	}
-
-	__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESRECV);
 
 	/* check for timestamp cookie support */
 	memset(&tcp_opt, 0, sizeof(tcp_opt));
@@ -365,7 +400,7 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 		tcp_opt.rcv_tsecr -= tsoff;
 	}
 
-	if (!cookie_timestamp_decode(net, &tcp_opt))
+	if (!bpf_cookie && !cookie_timestamp_decode(net, &tcp_opt))
 		goto out;
 
 	req = cookie_tcp_reqsk_alloc(&tcp_request_sock_ops,
@@ -375,21 +410,31 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 
 	ireq = inet_rsk(req);
 	treq = tcp_rsk(req);
-	treq->rcv_isn		= ntohl(th->seq) - 1;
-	treq->snt_isn		= cookie;
-	treq->ts_off		= tsoff;
-	treq->txhash		= net_tx_rndhash();
-	req->mss		= mss;
 	ireq->ir_num		= ntohs(th->dest);
 	ireq->ir_rmt_port	= th->source;
+	treq->snt_isn		= cookie;
+
 	sk_rcv_saddr_set(req_to_sk(req), ip_hdr(skb)->daddr);
 	sk_daddr_set(req_to_sk(req), ip_hdr(skb)->saddr);
+
+	if (bpf_cookie) {
+		mss = bpf_skops_cookie_check(sk, req, skb);
+		if (!mss) {
+			reqsk_free(req);
+			goto out;
+		}
+	}
+
+	req->mss		= mss;
 	ireq->ir_mark		= inet_request_mark(sk, skb);
 	ireq->snd_wscale	= tcp_opt.snd_wscale;
 	ireq->sack_ok		= tcp_opt.sack_ok;
 	ireq->wscale_ok		= tcp_opt.wscale_ok;
 	ireq->tstamp_ok		= tcp_opt.saw_tstamp;
 	req->ts_recent		= tcp_opt.saw_tstamp ? tcp_opt.rcv_tsval : 0;
+	treq->rcv_isn		= ntohl(th->seq) - 1;
+	treq->ts_off		= tsoff;
+	treq->txhash		= net_tx_rndhash();
 	treq->snt_synack	= 0;
 	treq->tfo_listener	= false;
 

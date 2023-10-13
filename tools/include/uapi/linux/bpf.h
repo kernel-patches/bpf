@@ -6738,13 +6738,16 @@ enum {
 	 * options first before the BPF program does.
 	 */
 	BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG = (1<<6),
-	/* Call bpf when the kernel generates SYN Cookie (ISN) for SYN+ACK.
+	/* Call bpf when the kernel generates SYN Cookie (ISN) for SYN+ACK
+	 * and validates ACK for SYN Cookie.
 	 *
-	 * The bpf prog will be called to encode MSS into SYN Cookie with
-	 * sock_ops->op == BPF_SOCK_OPS_GEN_SYNCOOKIE_CB.
+	 * The bpf prog will be first called to encode MSS into SYN Cookie
+	 * with sock_ops->op == BPF_SOCK_OPS_GEN_SYNCOOKIE_CB.  Then, the
+	 * bpf prog will be called to decode MSS from SYN Cookie with
+	 * sock_ops->op == BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB.
 	 *
-	 * Please refer to the comment in BPF_SOCK_OPS_GEN_SYNCOOKIE_CB for
-	 * input and output.
+	 * Please refer to the comment in BPF_SOCK_OPS_GEN_SYNCOOKIE_CB and
+	 * BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB for input and output.
 	 */
 	BPF_SOCK_OPS_SYNCOOKIE_CB_FLAG = (1<<7),
 /* Mask of all currently supported cb flags */
@@ -6867,6 +6870,13 @@ enum {
 					 * args[0]: MSS
 					 *
 					 * replylong[0]: ISN
+					 */
+	BPF_SOCK_OPS_CHECK_SYNCOOKIE_CB,/* Validate SYN Cookie and set
+					 * MSS.
+					 *
+					 * args[0]: ISN
+					 *
+					 * replylong[0]: MSS
 					 */
 };
 

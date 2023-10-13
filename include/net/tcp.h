@@ -2158,6 +2158,18 @@ static inline __u32 cookie_init_sequence(const struct tcp_request_sock_ops *ops,
 	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESSENT);
 	return ops->cookie_init_seq(skb, mss);
 }
+
+#ifdef CONFIG_CGROUP_BPF
+int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req,
+			   struct sk_buff *skb);
+#else
+static inline int bpf_skops_cookie_check(struct sock *sk, struct request_sock *req,
+					 struct sk_buff *skb)
+{
+	return 0;
+}
+#endif
+
 #else
 static inline __u32 cookie_init_sequence(const struct tcp_request_sock_ops *ops,
 					 const struct sock *sk, struct sk_buff *skb,
