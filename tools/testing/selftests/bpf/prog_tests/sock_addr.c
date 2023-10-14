@@ -246,40 +246,6 @@ static struct sock_addr_test tests[] = {
 
 typedef int (*info_fn)(int, struct sockaddr *, socklen_t *);
 
-static int cmp_addr(const struct sockaddr_storage *addr1, socklen_t addr1_len,
-		    const struct sockaddr_storage *addr2, socklen_t addr2_len,
-		    bool cmp_port)
-{
-	const struct sockaddr_in *four1, *four2;
-	const struct sockaddr_in6 *six1, *six2;
-	const struct sockaddr_un *un1, *un2;
-
-	if (addr1->ss_family != addr2->ss_family)
-		return -1;
-
-	if (addr1_len != addr2_len)
-		return -1;
-
-	if (addr1->ss_family == AF_INET) {
-		four1 = (const struct sockaddr_in *)addr1;
-		four2 = (const struct sockaddr_in *)addr2;
-		return !((four1->sin_port == four2->sin_port || !cmp_port) &&
-			 four1->sin_addr.s_addr == four2->sin_addr.s_addr);
-	} else if (addr1->ss_family == AF_INET6) {
-		six1 = (const struct sockaddr_in6 *)addr1;
-		six2 = (const struct sockaddr_in6 *)addr2;
-		return !((six1->sin6_port == six2->sin6_port || !cmp_port) &&
-			 !memcmp(&six1->sin6_addr, &six2->sin6_addr,
-				 sizeof(struct in6_addr)));
-	} else if (addr1->ss_family == AF_UNIX) {
-		un1 = (const struct sockaddr_un *)addr1;
-		un2 = (const struct sockaddr_un *)addr2;
-		return memcmp(un1, un2, addr1_len);
-	}
-
-	return -1;
-}
-
 static int cmp_sock_addr(info_fn fn, int sock1,
 			 const struct sockaddr_storage *addr2,
 			 socklen_t addr2_len, bool cmp_port)
