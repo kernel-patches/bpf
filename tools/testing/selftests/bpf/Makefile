@@ -291,6 +291,7 @@ TEST_GEN_PROGS_EXTENDED += $(TRUNNER_BPFTOOL)
 
 $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED): $(BPFOBJ)
 
+SOCK_ADDR_HELPERS := $(OUTPUT)/sock_addr_helpers.o
 TESTING_HELPERS	:= $(OUTPUT)/testing_helpers.o
 CGROUP_HELPERS	:= $(OUTPUT)/cgroup_helpers.o
 UNPRIV_HELPERS  := $(OUTPUT)/unpriv_helpers.o
@@ -301,7 +302,7 @@ CAP_HELPERS	:= $(OUTPUT)/cap_helpers.o
 $(OUTPUT)/test_dev_cgroup: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_skb_cgroup_id_user: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_sock: $(CGROUP_HELPERS) $(TESTING_HELPERS)
-$(OUTPUT)/test_sock_addr: $(CGROUP_HELPERS) $(TESTING_HELPERS)
+$(OUTPUT)/test_sock_addr: $(CGROUP_HELPERS) $(TESTING_HELPERS) $(SOCK_ADDR_HELPERS)
 $(OUTPUT)/test_sockmap: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_tcpnotify_user: $(CGROUP_HELPERS) $(TESTING_HELPERS) $(TRACE_HELPERS)
 $(OUTPUT)/get_cgroup_id_user: $(CGROUP_HELPERS) $(TESTING_HELPERS)
@@ -628,21 +629,22 @@ endef
 # Define test_progs test runner.
 TRUNNER_TESTS_DIR := prog_tests
 TRUNNER_BPF_PROGS_DIR := progs
-TRUNNER_EXTRA_SOURCES := test_progs.c		\
-			 cgroup_helpers.c	\
-			 trace_helpers.c	\
-			 network_helpers.c	\
-			 testing_helpers.c	\
-			 btf_helpers.c		\
-			 cap_helpers.c		\
-			 unpriv_helpers.c 	\
-			 netlink_helpers.c	\
-			 test_loader.c		\
-			 xsk.c			\
-			 disasm.c		\
-			 json_writer.c 		\
-			 flow_dissector_load.h	\
-			 ip_check_defrag_frags.h
+TRUNNER_EXTRA_SOURCES := test_progs.c		 \
+			 cgroup_helpers.c	 \
+			 trace_helpers.c	 \
+			 network_helpers.c	 \
+			 testing_helpers.c	 \
+			 btf_helpers.c		 \
+			 cap_helpers.c		 \
+			 unpriv_helpers.c 	 \
+			 netlink_helpers.c	 \
+			 test_loader.c		 \
+			 xsk.c			 \
+			 disasm.c		 \
+			 json_writer.c 		 \
+			 flow_dissector_load.h	 \
+			 ip_check_defrag_frags.h \
+			 sock_addr_helpers.c
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
 		       $(OUTPUT)/bpf_test_no_cfi.ko			\
 		       $(OUTPUT)/sock_addr_testmod.ko	\
