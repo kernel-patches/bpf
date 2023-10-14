@@ -338,46 +338,66 @@ static int delete_module(const char *name, int flags)
 	return syscall(__NR_delete_module, name, flags);
 }
 
-int unload_bpf_testmod(bool verbose)
+static int unload_mod(char name[], bool verbose)
 {
 	if (kern_sync_rcu())
 		fprintf(stdout, "Failed to trigger kernel-side RCU sync!\n");
-	if (delete_module("bpf_testmod", 0)) {
+	if (delete_module(name, 0)) {
 		if (errno == ENOENT) {
 			if (verbose)
-				fprintf(stdout, "bpf_testmod.ko is already unloaded.\n");
+				fprintf(stdout, "%s is already unloaded.\n", name);
 			return -1;
 		}
-		fprintf(stdout, "Failed to unload bpf_testmod.ko from kernel: %d\n", -errno);
+		fprintf(stdout, "Failed to unload %so from kernel: %d\n", name, -errno);
 		return -1;
 	}
 	if (verbose)
-		fprintf(stdout, "Successfully unloaded bpf_testmod.ko.\n");
+		fprintf(stdout, "Successfully unloaded %s.\n", name);
 	return 0;
 }
 
-int load_bpf_testmod(bool verbose)
+int unload_bpf_testmod(bool verbose)
+{
+	return unload_mod("bpf_testmod", verbose);
+}
+
+int unload_bpf_sock_addr_testmod(bool verbose)
+{
+	return unload_mod("sock_addr_testmod", verbose);
+}
+
+static int load_mod(const char *name, const char *param_values, bool verbose)
 {
 	int fd;
 
 	if (verbose)
-		fprintf(stdout, "Loading bpf_testmod.ko...\n");
+		fprintf(stdout, "Loading %s...\n", name);
 
-	fd = open("bpf_testmod.ko", O_RDONLY);
+	fd = open(name, O_RDONLY);
 	if (fd < 0) {
-		fprintf(stdout, "Can't find bpf_testmod.ko kernel module: %d\n", -errno);
+		fprintf(stdout, "Can't find %s kernel module: %d\n", name, -errno);
 		return -ENOENT;
 	}
-	if (finit_module(fd, "", 0)) {
-		fprintf(stdout, "Failed to load bpf_testmod.ko into the kernel: %d\n", -errno);
+	if (finit_module(fd, param_values, 0)) {
+		fprintf(stdout, "Failed to load %s into the kernel: %d\n", name, -errno);
 		close(fd);
 		return -EINVAL;
 	}
 	close(fd);
 
 	if (verbose)
-		fprintf(stdout, "Successfully loaded bpf_testmod.ko.\n");
+		fprintf(stdout, "Successfully loaded %s.\n", name);
 	return 0;
+}
+
+int load_bpf_testmod(bool verbose)
+{
+	return load_mod("bpf_testmod.ko", "", verbose);
+}
+
+int load_bpf_sock_addr_testmod(const char *param_values, bool verbose)
+{
+	return load_mod("sock_addr_testmod.ko", param_values, verbose);
 }
 
 /*
