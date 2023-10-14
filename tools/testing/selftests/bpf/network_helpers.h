@@ -61,6 +61,10 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		  struct sockaddr_storage *addr, socklen_t *len);
 char *ping_command(int family);
 int get_socket_local_port(int sock_fd);
+int cmp_addr(const struct sockaddr_storage *addr1, socklen_t addr1_len,
+	     const struct sockaddr_storage *addr2, socklen_t addr2_len,
+	     bool cmp_port);
+
 
 struct nstoken;
 /**
