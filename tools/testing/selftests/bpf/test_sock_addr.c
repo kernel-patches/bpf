@@ -21,37 +21,13 @@
 #include "cgroup_helpers.h"
 #include "testing_helpers.h"
 #include "bpf_util.h"
+#include "sock_addr_helpers.h"
 
 #ifndef ENOTSUPP
 # define ENOTSUPP 524
 #endif
 
 #define CG_PATH	"/foo"
-#define CONNECT4_PROG_PATH	"./connect4_prog.bpf.o"
-#define CONNECT6_PROG_PATH	"./connect6_prog.bpf.o"
-#define SENDMSG4_PROG_PATH	"./sendmsg4_prog.bpf.o"
-#define SENDMSG6_PROG_PATH	"./sendmsg6_prog.bpf.o"
-#define RECVMSG4_PROG_PATH	"./recvmsg4_prog.bpf.o"
-#define RECVMSG6_PROG_PATH	"./recvmsg6_prog.bpf.o"
-#define BIND4_PROG_PATH		"./bind4_prog.bpf.o"
-#define BIND6_PROG_PATH		"./bind6_prog.bpf.o"
-
-#define SERV4_IP		"192.168.1.254"
-#define SERV4_REWRITE_IP	"127.0.0.1"
-#define SRC4_IP			"172.16.0.1"
-#define SRC4_REWRITE_IP		"127.0.0.4"
-#define SERV4_PORT		4040
-#define SERV4_REWRITE_PORT	4444
-
-#define SERV6_IP		"face:b00c:1234:5678::abcd"
-#define SERV6_REWRITE_IP	"::1"
-#define SERV6_V4MAPPED_IP	"::ffff:192.168.0.4"
-#define SRC6_IP			"::1"
-#define SRC6_REWRITE_IP		"::6"
-#define WILDCARD6_IP		"::"
-#define SERV6_PORT		6060
-#define SERV6_REWRITE_PORT	6666
-
 #define INET_NTOP_BUF	40
 
 struct sock_addr_test;
@@ -661,58 +637,30 @@ static int load_insns(const struct sock_addr_test *test,
 	return ret;
 }
 
-static int load_path(const struct sock_addr_test *test, const char *path)
+static int ld_path(const struct sock_addr_test *test, const char *path)
 {
-	struct bpf_object *obj;
-	struct bpf_program *prog;
-	int err;
-
-	obj = bpf_object__open_file(path, NULL);
-	err = libbpf_get_error(obj);
-	if (err) {
-		log_err(">>> Opening BPF object (%s) error.\n", path);
-		return -1;
-	}
-
-	prog = bpf_object__next_program(obj, NULL);
-	if (!prog)
-		goto err_out;
-
-	bpf_program__set_type(prog, BPF_PROG_TYPE_CGROUP_SOCK_ADDR);
-	bpf_program__set_expected_attach_type(prog, test->expected_attach_type);
-	bpf_program__set_flags(prog, testing_prog_flags());
-
-	err = bpf_object__load(obj);
-	if (err) {
-		if (test->expected_result != LOAD_REJECT)
-			log_err(">>> Loading program (%s) error.\n", path);
-		goto err_out;
-	}
-
-	return bpf_program__fd(prog);
-err_out:
-	bpf_object__close(obj);
-	return -1;
+	return load_path(path, test->expected_attach_type,
+			 test->expected_result == LOAD_REJECT);
 }
 
 static int bind4_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, BIND4_PROG_PATH);
+	return ld_path(test, BIND4_PROG_PATH);
 }
 
 static int bind6_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, BIND6_PROG_PATH);
+	return ld_path(test, BIND6_PROG_PATH);
 }
 
 static int connect4_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, CONNECT4_PROG_PATH);
+	return ld_path(test, CONNECT4_PROG_PATH);
 }
 
 static int connect6_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, CONNECT6_PROG_PATH);
+	return ld_path(test, CONNECT6_PROG_PATH);
 }
 
 static int xmsg_ret_only_prog_load(const struct sock_addr_test *test,
@@ -800,12 +748,12 @@ static int sendmsg4_rw_asm_prog_load(const struct sock_addr_test *test)
 
 static int recvmsg4_rw_c_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, RECVMSG4_PROG_PATH);
+	return ld_path(test, RECVMSG4_PROG_PATH);
 }
 
 static int sendmsg4_rw_c_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, SENDMSG4_PROG_PATH);
+	return ld_path(test, SENDMSG4_PROG_PATH);
 }
 
 static int sendmsg6_rw_dst_asm_prog_load(const struct sock_addr_test *test,
@@ -868,7 +816,7 @@ static int sendmsg6_rw_asm_prog_load(const struct sock_addr_test *test)
 
 static int recvmsg6_rw_c_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, RECVMSG6_PROG_PATH);
+	return ld_path(test, RECVMSG6_PROG_PATH);
 }
 
 static int sendmsg6_rw_v4mapped_prog_load(const struct sock_addr_test *test)
@@ -883,7 +831,7 @@ static int sendmsg6_rw_wildcard_prog_load(const struct sock_addr_test *test)
 
 static int sendmsg6_rw_c_prog_load(const struct sock_addr_test *test)
 {
-	return load_path(test, SENDMSG6_PROG_PATH);
+	return ld_path(test, SENDMSG6_PROG_PATH);
 }
 
 static int cmp_addr(const struct sockaddr_storage *addr1,
