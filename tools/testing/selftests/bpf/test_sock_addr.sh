@@ -55,4 +55,12 @@ TEST_IPv4="127.0.0.4/8"
 TEST_IPv6="::6/128"
 MAX_PING_TRIES=5
 
-main
+if [ $# = 0 ]; then
+	main
+elif [ $1 = "setup" ]; then
+	setup
+elif [ $1 = "cleanup" ]; then
+	cleanup
+else
+	echo "invalid option: $1"
+fi
