@@ -34,7 +34,9 @@ int parse_test_list_file(const char *path,
 
 __u64 read_perf_max_sample_freq(void);
 int load_bpf_testmod(bool verbose);
+int load_bpf_sock_addr_testmod(const char *param_values, bool verbose);
 int unload_bpf_testmod(bool verbose);
+int unload_bpf_sock_addr_testmod(bool verbose);
 int kern_sync_rcu(void);
 int finit_module(int fd, const char *param_values, int flags);
 int delete_module(const char *name, int flags);
