@@ -543,19 +543,37 @@ static u16 tun_automq_select_queue(struct tun_struct *tun, struct sk_buff *skb)
 
 static u16 tun_ebpf_select_queue(struct tun_struct *tun, struct sk_buff *skb)
 {
+	struct bpf_skb_vnet_hash_end *cb = (struct bpf_skb_vnet_hash_end *)skb->cb;
+	struct tun_vnet_hash *ext;
 	struct tun_prog *prog;
 	u32 numqueues;
-	u16 ret = 0;
+	u16 queue = 0;
+
+	BUILD_BUG_ON(sizeof(*cb) > sizeof(skb->cb));
 
 	numqueues = READ_ONCE(tun->numqueues);
 	if (!numqueues)
 		return 0;
 
 	prog = rcu_dereference(tun->steering_prog);
-	if (prog)
-		ret = bpf_prog_run_clear_cb(prog->prog, skb);
+	if (prog) {
+		if (prog->prog->type == BPF_PROG_TYPE_VNET_HASH) {
+			memset(skb->cb, 0, sizeof(*cb) - sizeof(struct qdisc_skb_cb));
+			bpf_prog_run_clear_cb(prog->prog, skb);
 
-	return ret % numqueues;
+			ext = skb_ext_add(skb, SKB_EXT_TUN_VNET_HASH);
+			if (ext) {
+				ext->value = cb->hash_value;
+				ext->report = cb->hash_report;
+			}
+
+			queue = cb->rss_queue;
+		} else {
+			queue = bpf_prog_run_clear_cb(prog->prog, skb);
+		}
+	}
+
+	return queue % numqueues;
 }
 
 static u16 tun_select_queue(struct net_device *dev, struct sk_buff *skb,
@@ -2116,31 +2134,74 @@ static ssize_t tun_put_user(struct tun_struct *tun,
 	}
 
 	if (vnet_hdr_sz) {
-		struct virtio_net_hdr gso;
+		struct bpf_skb_vnet_hash_end *cb = (struct bpf_skb_vnet_hash_end *)skb->cb;
+		struct tun_prog *prog;
+		struct tun_vnet_hash *vnet_hash_p;
+		struct tun_vnet_hash vnet_hash;
+		size_t vnet_hdr_content_sz = sizeof(struct virtio_net_hdr);
+		union {
+			struct virtio_net_hdr hdr;
+			struct virtio_net_hdr_v1_hash hdr_v1_hash;
+		} vnet_hdr;
+		int ret;
 
 		if (iov_iter_count(iter) < vnet_hdr_sz)
 			return -EINVAL;
 
-		if (virtio_net_hdr_from_skb(skb, &gso,
-					    tun_is_little_endian(tun), true,
-					    vlan_hlen)) {
+		if (vnet_hdr_sz >= sizeof(struct virtio_net_hdr_v1_hash)) {
+			vnet_hash_p = skb_ext_find(skb, SKB_EXT_TUN_VNET_HASH);
+			if (vnet_hash_p) {
+				vnet_hash = *vnet_hash_p;
+				vnet_hdr_content_sz = sizeof(struct virtio_net_hdr_v1_hash);
+			} else {
+				rcu_read_lock();
+				prog = rcu_dereference(tun->steering_prog);
+				if (prog && prog->prog->type == BPF_PROG_TYPE_VNET_HASH) {
+					memset(skb->cb, 0,
+					       sizeof(*cb) - sizeof(struct qdisc_skb_cb));
+					bpf_prog_run_clear_cb(prog->prog, skb);
+					vnet_hash.value = cb->hash_value;
+					vnet_hash.report = cb->hash_report;
+					vnet_hdr_content_sz =
+						sizeof(struct virtio_net_hdr_v1_hash);
+				}
+				rcu_read_unlock();
+			}
+		}
+
+		switch (vnet_hdr_content_sz) {
+		case sizeof(struct virtio_net_hdr):
+			ret = virtio_net_hdr_from_skb(skb, &vnet_hdr.hdr,
+						      tun_is_little_endian(tun), true,
+						      vlan_hlen);
+			break;
+
+		case sizeof(struct virtio_net_hdr_v1_hash):
+			ret = virtio_net_hdr_v1_hash_from_skb(skb, &vnet_hdr.hdr_v1_hash,
+							      tun_is_little_endian(tun), true,
+							      vlan_hlen,
+							      vnet_hash.value, vnet_hash.report);
+			break;
+		}
+
+		if (ret) {
 			struct skb_shared_info *sinfo = skb_shinfo(skb);
 			pr_err("unexpected GSO type: "
 			       "0x%x, gso_size %d, hdr_len %d\n",
-			       sinfo->gso_type, tun16_to_cpu(tun, gso.gso_size),
-			       tun16_to_cpu(tun, gso.hdr_len));
+			       sinfo->gso_type, tun16_to_cpu(tun, vnet_hdr.hdr.gso_size),
+			       tun16_to_cpu(tun, vnet_hdr.hdr.hdr_len));
 			print_hex_dump(KERN_ERR, "tun: ",
 				       DUMP_PREFIX_NONE,
 				       16, 1, skb->head,
-				       min((int)tun16_to_cpu(tun, gso.hdr_len), 64), true);
+				       min((int)tun16_to_cpu(tun, vnet_hdr.hdr.hdr_len), 64), true);
 			WARN_ON_ONCE(1);
 			return -EINVAL;
 		}
 
-		if (copy_to_iter(&gso, sizeof(gso), iter) != sizeof(gso))
+		if (copy_to_iter(&vnet_hdr, vnet_hdr_content_sz, iter) != vnet_hdr_content_sz)
 			return -EFAULT;
 
-		iov_iter_advance(iter, vnet_hdr_sz - sizeof(gso));
+		iov_iter_advance(iter, vnet_hdr_sz - vnet_hdr_content_sz);
 	}
 
 	if (vlan_hlen) {
@@ -2276,13 +2337,13 @@ static void tun_prog_free(struct rcu_head *rcu)
 {
 	struct tun_prog *prog = container_of(rcu, struct tun_prog, rcu);
 
-	bpf_prog_destroy(prog->prog);
+	bpf_prog_put(prog->prog);
 	kfree(prog);
 }
 
-static int __tun_set_ebpf(struct tun_struct *tun,
-			  struct tun_prog __rcu **prog_p,
-			  struct bpf_prog *prog)
+static int tun_set_ebpf(struct tun_struct *tun,
+			struct tun_prog __rcu **prog_p,
+			struct bpf_prog *prog)
 {
 	struct tun_prog *old, *new = NULL;
 
@@ -2314,8 +2375,8 @@ static void tun_free_netdev(struct net_device *dev)
 	free_percpu(dev->tstats);
 	tun_flow_uninit(tun);
 	security_tun_dev_free_security(tun->security);
-	__tun_set_ebpf(tun, &tun->steering_prog, NULL);
-	__tun_set_ebpf(tun, &tun->filter_prog, NULL);
+	tun_set_ebpf(tun, &tun->steering_prog, NULL);
+	tun_set_ebpf(tun, &tun->filter_prog, NULL);
 }
 
 static void tun_setup(struct net_device *dev)
@@ -3007,26 +3068,6 @@ unlock:
 	return ret;
 }
 
-static int tun_set_ebpf(struct tun_struct *tun, struct tun_prog __rcu **prog_p,
-			void __user *data)
-{
-	struct bpf_prog *prog;
-	int fd;
-
-	if (copy_from_user(&fd, data, sizeof(fd)))
-		return -EFAULT;
-
-	if (fd == -1) {
-		prog = NULL;
-	} else {
-		prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SOCKET_FILTER);
-		if (IS_ERR(prog))
-			return PTR_ERR(prog);
-	}
-
-	return __tun_set_ebpf(tun, prog_p, prog);
-}
-
 /* Return correct value for tun->dev->addr_len based on tun->dev->type. */
 static unsigned char tun_get_addr_len(unsigned short type)
 {
@@ -3077,6 +3118,8 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	struct ifreq ifr;
 	kuid_t owner;
 	kgid_t group;
+	struct bpf_prog *prog;
+	int fd;
 	int sndbuf;
 	int vnet_hdr_sz;
 	int le;
@@ -3360,11 +3403,44 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 		break;
 
 	case TUNSETSTEERINGEBPF:
-		ret = tun_set_ebpf(tun, &tun->steering_prog, argp);
+		if (copy_from_user(&fd, argp, sizeof(fd))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		if (fd == -1) {
+			prog = NULL;
+		} else {
+			prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_VNET_HASH);
+			if (IS_ERR(prog)) {
+				prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SOCKET_FILTER);
+				if (IS_ERR(prog)) {
+					ret = PTR_ERR(prog);
+					break;
+				}
+			}
+		}
+
+		ret = tun_set_ebpf(tun, &tun->steering_prog, prog);
 		break;
 
 	case TUNSETFILTEREBPF:
-		ret = tun_set_ebpf(tun, &tun->filter_prog, argp);
+		if (copy_from_user(&fd, argp, sizeof(fd))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		if (fd == -1) {
+			prog = NULL;
+		} else {
+			prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SOCKET_FILTER);
+			if (IS_ERR(prog)) {
+				ret = PTR_ERR(prog);
+				break;
+			}
+		}
+
+		ret = tun_set_ebpf(tun, &tun->filter_prog, prog);
 		break;
 
 	case TUNSETCARRIER:
