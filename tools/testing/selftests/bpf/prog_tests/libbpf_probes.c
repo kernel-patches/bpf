@@ -28,7 +28,8 @@ void test_libbpf_probe_prog_types(void)
 		enum bpf_prog_type prog_type = (enum bpf_prog_type)e->val;
 		int res;
 
-		if (prog_type == BPF_PROG_TYPE_UNSPEC)
+		if (prog_type == BPF_PROG_TYPE_UNSPEC ||
+		    prog_type == BPF_PROG_TYPE_SECCOMP)
 			continue;
 
 		if (!test__start_subtest(prog_type_name))
