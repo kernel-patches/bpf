@@ -155,9 +155,19 @@ ifdef CONFIG_LTO_CLANG
 cmd_ld_single_m = $(if $(is-single-obj-m), ; $(LD) $(ld_flags) -r -o $(tmp-target) $@; mv $(tmp-target) $@)
 endif
 
+cmd_btf_ids = \
+	; ${RESOLVE_BTFIDS} --generate $@.btf_ids.S $@; \
+	if [ -f $@.btf_ids.S ]; then \
+	  $(CC) -c -o $@.btf_ids.o $@.btf_ids.S ; \
+	  $(LD) $(ld_flags) -r -o $(tmp-target) $@ $@.btf_ids.o; mv $(tmp-target) $@; \
+	fi
+
+cmd_btf_ids_single_m = $(if $(is-single-obj-m), $(cmd_btf_ids))
+
 quiet_cmd_cc_o_c = CC $(quiet_modtag)  $@
       cmd_cc_o_c = $(CC) $(c_flags) -c -o $@ $< \
 		$(cmd_ld_single_m) \
+		$(cmd_btf_ids_single_m) \
 		$(cmd_objtool)
 
 ifdef CONFIG_MODVERSIONS
@@ -425,7 +435,7 @@ $(obj)/lib.a: $(lib-y) FORCE
 	$(call if_changed,ar)
 
 quiet_cmd_ld_multi_m = LD [M]  $@
-      cmd_ld_multi_m = $(LD) $(ld_flags) -r -o $@ @$(patsubst %.o,%.mod,$@) $(cmd_objtool)
+      cmd_ld_multi_m = $(LD) $(ld_flags) -r -o $@ @$(patsubst %.o,%.mod,$@) $(cmd_btf_ids) $(cmd_objtool)
 
 define rule_ld_multi_m
 	$(call cmd_and_savecmd,ld_multi_m)

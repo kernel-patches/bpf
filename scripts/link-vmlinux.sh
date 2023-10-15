@@ -107,6 +107,7 @@ vmlinux_link()
 # generate .BTF typeinfo from DWARF debuginfo
 # ${1} - vmlinux image
 # ${2} - file to dump raw BTF data into
+# ${3} - file to dump raw BTF_ids data into
 gen_btf()
 {
 	local pahole_ver
@@ -122,7 +123,11 @@ gen_btf()
 		return 1
 	fi
 
-	vmlinux_link ${1}
+	# generate .BTF_ds data without BTF data
+	${RESOLVE_BTFIDS} --generate .btf_ids.S vmlinux.o
+	${CC} -c -o ${3} .btf_ids.S
+
+	vmlinux_link ${1} ${3}
 
 	info "BTF" ${2}
 	LLVM_OBJCOPY="${OBJCOPY}" ${PAHOLE} -J ${PAHOLE_FLAGS} ${1}
@@ -137,6 +142,10 @@ gen_btf()
 	# Change e_type to ET_REL so that it can be used to link final vmlinux.
 	# Unlike GNU ld, lld does not allow an ET_EXEC input.
 	printf '\1' | dd of=${2} conv=notrunc bs=1 seek=16 status=none
+
+	# generate .BTF_ds data with BTF data
+	${RESOLVE_BTFIDS} --generate .btf_ids.S --btf ${btf_vmlinux_bin_o} vmlinux.o
+	${CC} -c -o ${3} .btf_ids.S
 }
 
 # Create ${2} .S file with all symbols from the ${1} object file
@@ -173,7 +182,7 @@ kallsyms_step()
 	kallsymso=${kallsyms_vmlinux}.o
 	kallsyms_S=${kallsyms_vmlinux}.S
 
-	vmlinux_link ${kallsyms_vmlinux} "${kallsymso_prev}" ${btf_vmlinux_bin_o}
+	vmlinux_link ${kallsyms_vmlinux} "${kallsymso_prev}" ${btf_vmlinux_bin_o} ${btf_ids_vmlinux_bin_o}
 	mksysmap ${kallsyms_vmlinux} ${kallsyms_vmlinux}.syms ${kallsymso_prev}
 	kallsyms ${kallsyms_vmlinux}.syms ${kallsyms_S}
 
@@ -220,9 +229,11 @@ fi
 ${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init init/version-timestamp.o
 
 btf_vmlinux_bin_o=""
+btf_ids_vmlinux_bin_o=""
 if is_enabled CONFIG_DEBUG_INFO_BTF; then
 	btf_vmlinux_bin_o=.btf.vmlinux.bin.o
-	if ! gen_btf .tmp_vmlinux.btf $btf_vmlinux_bin_o ; then
+	btf_ids_vmlinux_bin_o=.btf_ids.vmlinux.bin.o
+	if ! gen_btf .tmp_vmlinux.btf $btf_vmlinux_bin_o $btf_ids_vmlinux_bin_o ; then
 		echo >&2 "Failed to generate BTF for vmlinux"
 		echo >&2 "Try to disable CONFIG_DEBUG_INFO_BTF"
 		exit 1
@@ -269,13 +280,7 @@ if is_enabled CONFIG_KALLSYMS; then
 	fi
 fi
 
-vmlinux_link vmlinux "${kallsymso}" ${btf_vmlinux_bin_o}
-
-# fill in BTF IDs
-if is_enabled CONFIG_DEBUG_INFO_BTF && is_enabled CONFIG_BPF; then
-	info BTFIDS vmlinux
-	${RESOLVE_BTFIDS} vmlinux
-fi
+vmlinux_link vmlinux "${kallsymso}" ${btf_vmlinux_bin_o} ${btf_ids_vmlinux_bin_o}
 
 mksysmap vmlinux System.map ${kallsymso}
 

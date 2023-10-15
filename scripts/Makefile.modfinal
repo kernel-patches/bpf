@@ -43,7 +43,13 @@ quiet_cmd_btf_ko = BTF [M] $@
 		printf "Skipping BTF generation for %s due to unavailability of vmlinux\n" $@ 1>&2; \
 	else								\
 		LLVM_OBJCOPY="$(OBJCOPY)" $(PAHOLE) -J $(PAHOLE_FLAGS) --btf_base vmlinux $@; \
-		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
+		$(RESOLVE_BTFIDS) -b vmlinux --generate $@.btf_ids.S $@;\
+		if [ -f $@.btf_ids.S ]; then				\
+		  $(CC) -c -o $@.btf_ids.o $@.btf_ids.S;		\
+		  ${OBJCOPY} --dump-section .BTF_ids=$@.btf_ids.dump $@.btf_ids.o; \
+		  ${OBJCOPY} --update-section .BTF_ids=$@.btf_ids.dump $@; \
+		  ${OBJCOPY} --remove-section .BTF_ids.data $@;		\
+		fi							\
 	fi;
 
 # Same as newer-prereqs, but allows to exclude specified extra dependencies
