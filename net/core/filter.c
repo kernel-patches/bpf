@@ -10994,6 +10994,17 @@ const struct bpf_prog_ops flow_dissector_prog_ops = {
 	.test_run		= bpf_prog_test_run_flow_dissector,
 };
 
+const struct bpf_verifier_ops vnet_hash_verifier_ops = {
+	.get_func_proto		= sk_filter_func_proto,
+	.is_valid_access	= sk_filter_is_valid_access,
+	.convert_ctx_access	= bpf_convert_ctx_access,
+	.gen_ld_abs		= bpf_gen_ld_abs,
+};
+
+const struct bpf_prog_ops vnet_hash_prog_ops = {
+	.test_run		= bpf_prog_test_run_skb,
+};
+
 int sk_detach_filter(struct sock *sk)
 {
 	int ret = -ENOENT;

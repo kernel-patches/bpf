@@ -39,6 +39,7 @@ following types:
 - ``BPF_PROG_TYPE_STRUCT_OPS``
 - ``BPF_PROG_TYPE_RAW_TRACEPOINT``
 - ``BPF_PROG_TYPE_SYSCALL``
+- ``BPF_PROG_TYPE_VNET_HASH``
 
 When using the ``BPF_PROG_RUN`` command, userspace supplies an input context
 object and (for program types operating on network packets) a buffer containing

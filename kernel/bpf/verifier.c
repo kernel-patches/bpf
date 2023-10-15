@@ -14621,6 +14621,7 @@ static bool may_access_skb(enum bpf_prog_type type)
 	case BPF_PROG_TYPE_SOCKET_FILTER:
 	case BPF_PROG_TYPE_SCHED_CLS:
 	case BPF_PROG_TYPE_SCHED_ACT:
+	case BPF_PROG_TYPE_VNET_HASH:
 		return true;
 	default:
 		return false;
@@ -17316,6 +17317,11 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	if (btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
 		if (prog_type == BPF_PROG_TYPE_SOCKET_FILTER) {
 			verbose(env, "socket filter progs cannot use bpf_spin_lock yet\n");
+			return -EINVAL;
+		}
+
+		if (prog_type == BPF_PROG_TYPE_VNET_HASH) {
+			verbose(env, "vnet hash progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
 
