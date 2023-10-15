@@ -685,6 +685,13 @@ struct bpf_skb_data_end {
 	void *data_end;
 };
 
+struct bpf_skb_vnet_hash_end {
+	struct qdisc_skb_cb qdisc_cb;
+	u32 hash_value;
+	u16 hash_report;
+	u16 rss_queue;
+};
+
 struct bpf_nh_params {
 	u32 nh_family;
 	union {
