@@ -4735,6 +4735,50 @@ TEST(user_notification_wait_killable_fatal)
 	EXPECT_EQ(SIGTERM, WTERMSIG(status));
 }
 
+TEST(seccomp_filter_load_and_attach)
+{
+	struct sock_filter filter[] = {
+		BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW),
+	};
+	struct sock_fprog prog = {
+		.len = (unsigned short)ARRAY_SIZE(filter),
+		.filter = filter,
+	};
+	int fd, ret, flags;
+
+	flags = 0;
+	fd = seccomp(SECCOMP_LOAD_FILTER, flags, &prog);
+	ASSERT_GT(fd, -1);
+
+	flags = SECCOMP_FILTER_FLAG_BPF_PROG_FD;
+	ret = seccomp(SECCOMP_SET_MODE_FILTER, flags, &fd);
+	ASSERT_EQ(ret, 0);
+
+	close(fd);
+}
+
+TEST(seccomp_attach_fd_failed)
+{
+	int fd, ret, flags;
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	ASSERT_GT(fd, -1);
+
+	/* copy a sock_fprog from a fd */
+	flags = 0;
+	ret = seccomp(SECCOMP_SET_MODE_FILTER, flags, &fd);
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EFAULT);
+
+	/* pass a non seccomp bpf prog fd */
+	flags = SECCOMP_FILTER_FLAG_BPF_PROG_FD;
+	ret = seccomp(SECCOMP_SET_MODE_FILTER, flags, &fd);
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EBADF);
+
+	close(fd);
+}
+
 /*
  * TODO:
  * - expand NNP testing
