@@ -916,6 +916,67 @@ static int fixup_sets_sort(struct token *arr, int cnt)
 	return 0;
 }
 
+static u32 get_kind(const char *type)
+{
+	if (!strcmp(type, "func"))
+		return BTF_KIND_FUNC;
+	if (!strcmp(type, "struct"))
+		return BTF_KIND_STRUCT;
+	if (!strcmp(type, "union"))
+		return BTF_KIND_UNION;
+	if (!strcmp(type, "typedef"))
+		return BTF_KIND_TYPEDEF;
+	return BTF_KIND_UNKN;
+}
+
+static int resolve_ids(struct object *obj, struct token *arr, int cnt)
+{
+	struct token *set = NULL, *tok;
+	struct btf *base_btf = NULL;
+	int err, type_id;
+	struct btf *btf;
+	__u32 nr_types, kind;
+	__s32 btf_id;
+	int i;
+
+	if (obj->base_btf_path) {
+		base_btf = btf__parse(obj->base_btf_path, NULL);
+		err = libbpf_get_error(base_btf);
+		if (err) {
+			pr_err("FAILED: load base BTF from %s: %s\n",
+			       obj->base_btf_path, strerror(-err));
+			return -1;
+		}
+	}
+
+	btf = btf__parse_split(obj->btf ?: obj->path, base_btf);
+	err = libbpf_get_error(btf);
+	if (err) {
+		pr_err("FAILED: load BTF from %s: %s\n",
+			obj->btf ?: obj->path, strerror(-err));
+		return -1;
+	}
+
+
+	for (i = 0; i < cnt; i++) {
+		tok = &arr[i];
+		switch (tok->id) {
+		case BTF_IDS_DATA_ID:
+		case BTF_IDS_DATA_ID_FLAGS:
+			kind = get_kind(tok->type);
+			if (kind == BTF_KIND_UNKN)
+				return -1;
+			tok->btf_id = btf__find_by_name_kind(btf, tok->name, kind);
+		default:
+			break;
+		}
+	}
+
+	btf__free(base_btf);
+	btf__free(btf);
+	return 0;
+}
+
 static int generate(struct object *obj, const char *output)
 {
 	Elf_Data *data = obj->efile.ids_data.data;
@@ -934,6 +995,8 @@ static int generate(struct object *obj, const char *output)
 	if (err)
 		goto out_free;
 
+	resolve_ids(obj, arr, cnt);
+
 	err = fixup_sets_sort(arr, cnt);
 	if (err)
 		goto out_free;
@@ -951,10 +1014,10 @@ static int generate(struct object *obj, const char *output)
 
 		switch (tok->id) {
 		case BTF_IDS_DATA_ID:
-			fprintf(out, ".long %u\n", 0);
+			fprintf(out, ".long %u\n", tok->btf_id);
 			break;
 		case BTF_IDS_DATA_ID_FLAGS:
-			fprintf(out, ".long %u\n", 0);
+			fprintf(out, ".long %u\n", tok->btf_id);
 			fprintf(out, ".long 0x%x\n", tok->flags);
 			break;
 		case BTF_IDS_DATA_ID_UNUSED:
