@@ -525,7 +525,10 @@ static inline pid_t seccomp_can_sync_threads(void)
 static inline void seccomp_filter_free(struct seccomp_filter *filter)
 {
 	if (filter) {
-		bpf_prog_destroy(filter->prog);
+		if (filter->prog->type == BPF_PROG_TYPE_SECCOMP)
+			bpf_prog_put(filter->prog);
+		else
+			bpf_prog_destroy(filter->prog);
 		kfree(filter);
 	}
 }
@@ -753,6 +756,33 @@ seccomp_prepare_user_filter(const char __user *user_filter)
 	sfilter = seccomp_prepare_filter(prog);
 	if (IS_ERR(sfilter))
 		bpf_prog_destroy(prog);
+
+	return sfilter;
+}
+
+/**
+ * seccomp_prepare_filter_from_fd - prepares filter from a user-supplied fd
+ * @ufd: pointer to fd that refers to a seccomp bpf prog.
+ *
+ * Returns filter on success or an ERR_PTR on failure.
+ */
+static struct seccomp_filter *
+seccomp_prepare_filter_from_fd(const char __user *ufd)
+{
+	struct seccomp_filter *sfilter;
+	struct bpf_prog *prog;
+	int fd;
+
+	if (copy_from_user(&fd, ufd, sizeof(fd)))
+		return ERR_PTR(-EFAULT);
+
+	prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SECCOMP);
+	if (IS_ERR(prog))
+		return ERR_PTR(-EBADF);
+
+	sfilter = seccomp_prepare_filter(prog);
+	if (IS_ERR(sfilter))
+		bpf_prog_put(prog);
 
 	return sfilter;
 }
@@ -1970,7 +2000,10 @@ static long seccomp_set_mode_filter(unsigned int flags,
 		return -EINVAL;
 
 	/* Prepare the new filter before holding any locks. */
-	prepared = seccomp_prepare_user_filter(filter);
+	if (flags & SECCOMP_FILTER_FLAG_BPF_PROG_FD)
+		prepared = seccomp_prepare_filter_from_fd(filter);
+	else
+		prepared = seccomp_prepare_user_filter(filter);
 	if (IS_ERR(prepared))
 		return PTR_ERR(prepared);
 
