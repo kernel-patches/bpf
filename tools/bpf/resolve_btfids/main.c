@@ -1007,6 +1007,7 @@ static int generate(struct object *obj, const char *output)
 		goto out_free;
 	}
 
+	fprintf(out, ".section .note.GNU-stack,\"\",@progbits\n");
 	fprintf(out, ".section .BTF_ids, \"a\"\n");
 
 	for (i = 0; i < cnt; i++) {

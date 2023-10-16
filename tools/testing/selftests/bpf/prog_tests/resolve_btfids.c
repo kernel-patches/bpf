@@ -7,6 +7,7 @@
 #include <linux/btf.h>
 #include <linux/kernel.h>
 #define CONFIG_DEBUG_INFO_BTF
+#define CONFIG_DEBUG_INFO_BTF_IDS_DATA_SECTION
 #include <linux/btf_ids.h>
 #include "test_progs.h"
 
