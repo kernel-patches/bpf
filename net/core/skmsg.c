@@ -826,6 +826,8 @@ static void sk_psock_destroy(struct work_struct *work)
 
 	if (psock->sk_redir)
 		sock_put(psock->sk_redir);
+	if (psock->skpair)
+		sock_put(psock->skpair);
 	sock_put(psock->sk);
 	kfree(psock);
 }
