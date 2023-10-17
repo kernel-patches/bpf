@@ -1263,6 +1263,39 @@ int cgroup1_get_tree(struct fs_context *fc)
 	return ret;
 }
 
+/**
+ * task_cgroup_id_within_hierarchy - Acquires the associated cgroup of a task
+ * within a specific cgroup1 hierarchy. The cgroup1 hierarchy is identified by
+ * its hierarchy ID.
+ * @tsk: The target task
+ * @hierarchy_id: The ID of a cgroup1 hierarchy
+ *
+ * On success, the cgroup is returned. On failure, ERR_PTR is returned.
+ * We limit it to cgroup1 only.
+ */
+struct cgroup *task_get_cgroup1_within_hierarchy(struct task_struct *tsk, int hierarchy_id)
+{
+	struct cgroup *cgrp = ERR_PTR(-ENOENT);
+	struct cgroup_root *root;
+
+	rcu_read_lock();
+	list_for_each_entry(root, &cgroup_roots, root_list) {
+		/* cgroup1 only*/
+		if (root == &cgrp_dfl_root)
+			continue;
+		if (root->hierarchy_id != hierarchy_id)
+			continue;
+		spin_lock_irq(&css_set_lock);
+		cgrp = task_cgroup_from_root(tsk, root);
+		if (!cgrp || !cgroup_tryget(cgrp))
+			cgrp = ERR_PTR(-ENOENT);
+		spin_unlock_irq(&css_set_lock);
+		break;
+	}
+	rcu_read_unlock();
+	return cgrp;
+}
+
 static int __init cgroup1_wq_init(void)
 {
 	/*
