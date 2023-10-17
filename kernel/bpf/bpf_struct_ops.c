@@ -677,6 +677,7 @@ static void __bpf_struct_ops_map_free(struct bpf_map *map)
 		bpf_jit_uncharge_modmem(PAGE_SIZE);
 	}
 	bpf_map_area_free(st_map->uvalue);
+	btf_put(st_map->st_ops->btf);
 	module_put(st_map->st_ops->owner);
 	bpf_map_area_free(st_map);
 }
@@ -718,23 +719,36 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	struct bpf_struct_ops_map *st_map;
 	const struct btf_type *t, *vt;
 	struct bpf_map *map;
+	struct btf *btf;
 	int ret;
 
-	st_ops = bpf_struct_ops_find_value(btf_vmlinux, attr->btf_vmlinux_value_type_id);
-	if (!st_ops)
+	if (attr->value_type_btf_obj_fd) {
+		btf = btf_get_by_fd(attr->value_type_btf_obj_fd);
+		if (IS_ERR(btf))
+			return ERR_PTR(PTR_ERR(btf));
+	} else {
+		btf = btf_vmlinux;
+		btf_get(btf);
+	}
+	st_ops = bpf_struct_ops_find_value(btf, attr->btf_vmlinux_value_type_id);
+	if (!st_ops) {
+		btf_put(btf);
 		return ERR_PTR(-ENOTSUPP);
+	}
 
 	/* If st_ops->owner is NULL, it means the struct_ops is
 	 * statically defined in the kernel.  We don't need to
 	 * take a refcount on it.
 	 */
-	if (st_ops->owner && !btf_try_get_module(st_ops->btf))
+	if (st_ops->owner && !btf_try_get_module(st_ops->btf)) {
+		btf_put(btf);
 		return ERR_PTR(-EINVAL);
+	}
 
 	vt = st_ops->value_type;
 	if (attr->value_size != vt->size) {
-		module_put(st_ops->owner);
-		return ERR_PTR(-EINVAL);
+		ret = -EINVAL;
+		goto errout;
 	}
 
 	t = st_ops->type;
@@ -747,8 +761,8 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 
 	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
 	if (!st_map) {
-		module_put(st_ops->owner);
-		return ERR_PTR(-ENOMEM);
+		ret = -ENOMEM;
+		goto errout;
 	}
 
 	st_map->st_ops = st_ops;
@@ -784,6 +798,12 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	bpf_map_init_from_attr(map, attr);
 
 	return map;
+
+errout:
+	btf_put(btf);
+	module_put(st_ops->owner);
+
+	return ERR_PTR(ret);
 }
 
 static u64 bpf_struct_ops_map_mem_usage(const struct bpf_map *map)
