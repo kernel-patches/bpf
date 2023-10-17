@@ -571,4 +571,10 @@ static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type
 	return btf_type_is_struct(t);
 }
 
+struct bpf_struct_ops;
+
+int btf_add_struct_ops(struct bpf_struct_ops *st_ops);
+const struct bpf_struct_ops **
+btf_get_struct_ops(struct btf *btf, u32 *ret_cnt);
+
 #endif
