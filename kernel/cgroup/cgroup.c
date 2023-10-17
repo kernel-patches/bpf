@@ -6256,7 +6256,7 @@ int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 	if (!buf)
 		goto out;
 
-	cgroup_lock();
+	rcu_read_lock();
 	spin_lock_irq(&css_set_lock);
 
 	for_each_root(root) {
@@ -6279,6 +6279,10 @@ int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 		seq_putc(m, ':');
 
 		cgrp = task_cgroup_from_root(tsk, root);
+		if (!cgrp) {
+			seq_puts(m, " (deleted)\n");
+			continue;
+		}
 
 		/*
 		 * On traditional hierarchies, all zombie tasks show up as
@@ -6311,7 +6315,7 @@ int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 	retval = 0;
 out_unlock:
 	spin_unlock_irq(&css_set_lock);
-	cgroup_unlock();
+	rcu_read_unlock();
 	kfree(buf);
 out:
 	return retval;
