@@ -112,6 +112,7 @@ static const struct btf_type *module_type;
 
 static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 				    struct btf *btf,
+				    struct module *owner,
 				    struct bpf_verifier_log *log)
 {
 	const struct btf_member *member;
@@ -186,6 +187,7 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 				st_ops->name);
 		} else {
 			st_ops->btf = btf;
+			st_ops->owner = owner;
 			st_ops->type_id = type_id;
 			st_ops->type = t;
 			st_ops->value_id = value_id;
@@ -193,6 +195,7 @@ static void bpf_struct_ops_init_one(struct bpf_struct_ops *st_ops,
 							    value_id);
 		}
 	}
+
 }
 
 void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
@@ -215,7 +218,7 @@ void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 
 	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
 		st_ops = bpf_struct_ops[i];
-		bpf_struct_ops_init_one(st_ops, btf, log);
+		bpf_struct_ops_init_one(st_ops, btf, NULL, log);
 	}
 }
 
@@ -630,6 +633,7 @@ static void __bpf_struct_ops_map_free(struct bpf_map *map)
 		bpf_jit_uncharge_modmem(PAGE_SIZE);
 	}
 	bpf_map_area_free(st_map->uvalue);
+	module_put(st_map->st_ops->owner);
 	bpf_map_area_free(st_map);
 }
 
@@ -676,9 +680,18 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	if (!st_ops)
 		return ERR_PTR(-ENOTSUPP);
 
-	vt = st_ops->value_type;
-	if (attr->value_size != vt->size)
+	/* If st_ops->owner is NULL, it means the struct_ops is
+	 * statically defined in the kernel.  We don't need to
+	 * take a refcount on it.
+	 */
+	if (st_ops->owner && !btf_try_get_module(st_ops->btf))
 		return ERR_PTR(-EINVAL);
+
+	vt = st_ops->value_type;
+	if (attr->value_size != vt->size) {
+		module_put(st_ops->owner);
+		return ERR_PTR(-EINVAL);
+	}
 
 	t = st_ops->type;
 
@@ -689,8 +702,10 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		(vt->size - sizeof(struct bpf_struct_ops_value));
 
 	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
-	if (!st_map)
+	if (!st_map) {
+		module_put(st_ops->owner);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	st_map->st_ops = st_ops;
 	map = &st_map->map;
