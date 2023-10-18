@@ -14,6 +14,15 @@ include $(srctree)/scripts/Makefile.lib
 
 # find all modules listed in modules.order
 modules := $(call read-file, $(MODORDER))
+vmlinux :=
+
+ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+ifneq ($(wildcard vmlinux),)
+vmlinux := vmlinux
+else
+$(warning Skipping BTF generation due to unavailability of vmlinux)
+endif
+endif
 
 __modfinal: $(modules:%.o=%.ko)
 	@:
@@ -36,12 +45,8 @@ quiet_cmd_ld_ko_o = LD [M]  $@
 
 quiet_cmd_btf_ko = BTF [M] $@
       cmd_btf_ko = 							\
-	if [ ! -f vmlinux ]; then					\
-		printf "Skipping BTF generation for %s due to unavailability of vmlinux\n" $@ 1>&2; \
-	else								\
 		LLVM_OBJCOPY="$(OBJCOPY)" $(PAHOLE) -J $(PAHOLE_FLAGS) --btf_base vmlinux $@; \
-		$(RESOLVE_BTFIDS) -b vmlinux $@; 			\
-	fi;
+		$(RESOLVE_BTFIDS) -b vmlinux $@
 
 # Same as newer-prereqs, but allows to exclude specified extra dependencies
 newer_prereqs_except = $(filter-out $(PHONY) $(1),$?)
@@ -52,9 +57,9 @@ if_changed_except = $(if $(call newer_prereqs_except,$(2))$(cmd-check),      \
 	printf '%s\n' 'savedcmd_$@ := $(make-cmd)' > $(dot-target).cmd, @:)
 
 # Re-generate module BTFs if either module's .ko or vmlinux changed
-%.ko: %.o %.mod.o scripts/module.lds $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
+%.ko: %.o %.mod.o scripts/module.lds $(vmlinux) FORCE
 	+$(call if_changed_except,ld_ko_o,vmlinux)
-ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+ifdef vmlinux
 	+$(if $(newer-prereqs),$(call cmd,btf_ko))
 endif
 
