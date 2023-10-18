@@ -4034,6 +4034,37 @@ int security_dev_permission(umode_t mode, dev_t dev, int mask)
 }
 EXPORT_SYMBOL(security_dev_permission);
 
+/**
+ * security_inode_mknod_nscap() - Check if device is guarded
+ * @dir: parent directory
+ * @dentry: new file
+ * @mode: new file mode
+ * @dev: device number
+ *
+ * If access to the device is guarded by this hook, access to mknod may be granted by
+ * checking cap mknod for unprivileged user namespaces.
+ *
+ * Return: Returns 0 on success, error on failure.
+ */
+int security_inode_mknod_nscap(struct inode *dir, struct dentry *dentry,
+			       umode_t mode, dev_t dev)
+{
+	int thisrc;
+	int rc = LSM_RET_DEFAULT(inode_mknod_nscap);
+	struct security_hook_list *hp;
+
+	hlist_for_each_entry(hp, &security_hook_heads.inode_mknod_nscap, list) {
+		thisrc = hp->hook.inode_mknod_nscap(dir, dentry, mode, dev);
+		if (thisrc != LSM_RET_DEFAULT(inode_mknod_nscap)) {
+			rc = thisrc;
+			if (thisrc != 0)
+				break;
+		}
+	}
+	return rc;
+}
+EXPORT_SYMBOL(security_inode_mknod_nscap);
+
 #ifdef CONFIG_WATCH_QUEUE
 /**
  * security_post_notification() - Check if a watch notification can be posted
