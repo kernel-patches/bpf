@@ -4065,6 +4065,32 @@ int security_inode_mknod_nscap(struct inode *dir, struct dentry *dentry,
 }
 EXPORT_SYMBOL(security_inode_mknod_nscap);
 
+/**
+ * security_sb_alloc_userns() - Grand access to device nodes on sb in userns
+ *
+ * If device access is provided elsewere, this hook will grand access to device nodes
+ * on the allocated sb for unprivileged user namespaces.
+ *
+ * Return: Returns 0 on success, error on failure.
+ */
+int security_sb_alloc_userns(struct super_block *sb)
+{
+	int thisrc;
+	int rc = LSM_RET_DEFAULT(sb_alloc_userns);
+	struct security_hook_list *hp;
+
+	hlist_for_each_entry(hp, &security_hook_heads.sb_alloc_userns, list) {
+		thisrc = hp->hook.sb_alloc_userns(sb);
+		if (thisrc != LSM_RET_DEFAULT(sb_alloc_userns)) {
+			rc = thisrc;
+			if (thisrc != 0)
+				break;
+		}
+	}
+	return rc;
+}
+EXPORT_SYMBOL(security_sb_alloc_userns);
+
 #ifdef CONFIG_WATCH_QUEUE
 /**
  * security_post_notification() - Check if a watch notification can be posted
