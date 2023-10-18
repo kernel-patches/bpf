@@ -362,7 +362,11 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	}
 	s->s_bdi = &noop_backing_dev_info;
 	s->s_flags = flags;
-	if (s->s_user_ns != &init_user_ns)
+	/*
+	 * We still have to think about this here. Several concerns exist
+	 * about the security model, especially about malicious fuse.
+	 */
+	if (s->s_user_ns != &init_user_ns && security_sb_alloc_userns(s))
 		s->s_iflags |= SB_I_NODEV;
 	INIT_HLIST_NODE(&s->s_instances);
 	INIT_HLIST_BL_HEAD(&s->s_roots);

@@ -3949,6 +3949,20 @@ inline struct dentry *user_path_create(int dfd, const char __user *pathname,
 }
 EXPORT_SYMBOL(user_path_create);
 
+static bool mknod_capable(struct inode *dir, struct dentry *dentry,
+			  umode_t mode, dev_t dev)
+{
+	/*
+	 * In case of a security hook implementation check mknod in user
+	 * namespace. Otherwise just check global capability.
+	 */
+	int error = security_inode_mknod_nscap(dir, dentry, mode, dev);
+	if (!error)
+		return ns_capable(current_user_ns(), CAP_MKNOD);
+	else
+		return capable(CAP_MKNOD);
+}
+
 /**
  * vfs_mknod - create device node or file
  * @idmap:	idmap of the mount the inode was found from
@@ -3975,7 +3989,7 @@ int vfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 		return error;
 
 	if ((S_ISCHR(mode) || S_ISBLK(mode)) && !is_whiteout &&
-	    !capable(CAP_MKNOD))
+	    !mknod_capable(dir, dentry, mode, dev))
 		return -EPERM;
 
 	if (!dir->i_op->mknod)
