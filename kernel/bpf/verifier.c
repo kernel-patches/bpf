@@ -2151,6 +2151,13 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 
 static void __reg64_deduce_bounds(struct bpf_reg_state *reg)
 {
+	/* u64 range forms a valid s64 range (due to matching sign bit),
+	 * so try to learn from that
+	 */
+	if ((s64)reg->umin_value <= (s64)reg->umax_value) {
+		reg->smin_value = max_t(s64, reg->smin_value, reg->umin_value);
+		reg->smax_value = min_t(s64, reg->smax_value, reg->umax_value);
+	}
 	/* Learn sign from signed bounds.
 	 * If we cannot cross the sign boundary, then signed and unsigned bounds
 	 * are the same, so combine.  This works even in the negative case, e.g.
