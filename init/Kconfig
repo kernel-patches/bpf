@@ -1111,6 +1111,8 @@ config PROC_PID_CPUSET
 
 config CGROUP_DEVICE
 	bool "Device controller"
+	select SECURITY
+	select SECURITY_DEVICE_CGROUP
 	help
 	  Provides a cgroup controller implementing whitelists for
 	  devices which a process in the cgroup can mknod or open.
@@ -1136,6 +1138,8 @@ config CGROUP_BPF
 	bool "Support for eBPF programs attached to cgroups"
 	depends on BPF_SYSCALL
 	select SOCK_CGROUP_DATA
+	select SECURITY
+	select SECURITY_DEVICE_CGROUP
 	help
 	  Allow attaching eBPF programs to a cgroup using the bpf(2)
 	  syscall command BPF_PROG_ATTACH.

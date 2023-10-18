@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SECURITY_DEVICE_CGROUP
+	bool "Device Cgroup Support"
+	depends on SECURITY
+	help
+	  Provides the necessary security framework integration
+	  for cgroup device controller implementations.
