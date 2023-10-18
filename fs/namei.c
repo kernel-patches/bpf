@@ -34,7 +34,6 @@
 #include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fcntl.h>
-#include <linux/device_cgroup.h>
 #include <linux/fs_struct.h>
 #include <linux/posix_acl.h>
 #include <linux/hash.h>
@@ -526,10 +525,6 @@ int inode_permission(struct mnt_idmap *idmap,
 	}
 
 	retval = do_inode_permission(idmap, inode, mask);
-	if (retval)
-		return retval;
-
-	retval = devcgroup_inode_permission(inode, mask);
 	if (retval)
 		return retval;
 
@@ -3987,9 +3982,6 @@ int vfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 		return -EPERM;
 
 	mode = vfs_prepare_mode(idmap, dir, mode, mode, mode);
-	error = devcgroup_inode_mknod(mode, dev);
-	if (error)
-		return error;
 
 	error = security_inode_mknod(dir, dentry, mode, dev);
 	if (error)
