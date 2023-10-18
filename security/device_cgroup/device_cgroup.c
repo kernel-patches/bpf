@@ -6,7 +6,6 @@
  */
 
 #include <linux/bpf-cgroup.h>
-#include <linux/device_cgroup.h>
 #include <linux/cgroup.h>
 #include <linux/ctype.h>
 #include <linux/list.h>
@@ -15,6 +14,8 @@
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
 #include <linux/mutex.h>
+
+#include "device_cgroup.h"
 
 #ifdef CONFIG_CGROUP_DEVICE
 
