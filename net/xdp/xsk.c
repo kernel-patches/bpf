@@ -391,6 +391,16 @@ void __xsk_map_flush(void)
 	}
 }
 
+#ifdef CONFIG_DEBUG_NET
+bool xsk_map_check_flush(void)
+{
+	if (list_empty(this_cpu_ptr(&xskmap_flush_list)))
+		return false;
+	__xsk_map_flush();
+	return true;
+}
+#endif
+
 void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries)
 {
 	xskq_prod_submit_n(pool->cq, nb_entries);
@@ -684,7 +694,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 	}
 
 	skb->dev = dev;
-	skb->priority = xs->sk.sk_priority;
+	skb->priority = READ_ONCE(xs->sk.sk_priority);
 	skb->mark = READ_ONCE(xs->sk.sk_mark);
 	skb->destructor = xsk_destruct_skb;
 	xsk_set_destructor_arg(skb);
