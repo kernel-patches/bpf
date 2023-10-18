@@ -66,10 +66,37 @@ static int devcg_inode_mknod(struct inode *dir, struct dentry *dentry,
 	return __devcg_inode_mknod(mode, dev, DEVCG_ACC_MKNOD);
 }
 
+#ifdef CONFIG_CGROUP_BPF
+static int devcg_sb_alloc_userns(struct super_block *sb)
+{
+	if (cgroup_bpf_current_enabled(CGROUP_DEVICE))
+		return 0;
+
+	return -EPERM;
+}
+
+static int devcg_inode_mknod_nscap(struct inode *dir, struct dentry *dentry,
+				       umode_t mode, dev_t dev)
+{
+	if (!cgroup_bpf_current_enabled(CGROUP_DEVICE))
+		return -EPERM;
+
+	// avoid to create unusable inodes in user space
+	if (dentry->d_sb->s_iflags & SB_I_NODEV)
+		return -EPERM;
+
+	return __devcg_inode_mknod(mode, dev, BPF_DEVCG_ACC_MKNOD_UNS);
+}
+#endif /* CONFIG_CGROUP_BPF */
+
 static struct security_hook_list devcg_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(inode_permission, devcg_inode_permission),
 	LSM_HOOK_INIT(inode_mknod, devcg_inode_mknod),
 	LSM_HOOK_INIT(dev_permission, devcg_dev_permission),
+#ifdef CONFIG_CGROUP_BPF
+	LSM_HOOK_INIT(sb_alloc_userns, devcg_sb_alloc_userns),
+	LSM_HOOK_INIT(inode_mknod_nscap, devcg_inode_mknod_nscap),
+#endif
 };
 
 static int __init devcgroup_init(void)
