@@ -14,27 +14,30 @@
 #include <linux/device_cgroup.h>
 #include <linux/lsm_hooks.h>
 
-static int devcg_inode_permission(struct inode *inode, int mask)
+static int devcg_dev_permission(umode_t mode, dev_t dev, int mask)
 {
 	short type, access = 0;
 
-	if (likely(!inode->i_rdev))
-		return 0;
-
-	if (S_ISBLK(inode->i_mode))
+	if (S_ISBLK(mode))
 		type = DEVCG_DEV_BLOCK;
-	else if (S_ISCHR(inode->i_mode))
-		type = DEVCG_DEV_CHAR;
 	else
-		return 0;
+		type = DEVCG_DEV_CHAR;
 
 	if (mask & MAY_WRITE)
 		access |= DEVCG_ACC_WRITE;
 	if (mask & MAY_READ)
 		access |= DEVCG_ACC_READ;
 
-	return devcgroup_check_permission(type, imajor(inode), iminor(inode),
+	return devcgroup_check_permission(type, MAJOR(dev), MINOR(dev),
 					  access);
+}
+
+static int devcg_inode_permission(struct inode *inode, int mask)
+{
+	if (likely(!inode->i_rdev))
+		return 0;
+
+	return devcg_dev_permission(inode->i_mode, inode->i_rdev, mask);
 }
 
 static int __devcg_inode_mknod(int mode, dev_t dev, short access)
@@ -65,6 +68,7 @@ static int devcg_inode_mknod(struct inode *dir, struct dentry *dentry,
 static struct security_hook_list devcg_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(inode_permission, devcg_inode_permission),
 	LSM_HOOK_INIT(inode_mknod, devcg_inode_mknod),
+	LSM_HOOK_INIT(dev_permission, devcg_dev_permission),
 };
 
 static int __init devcgroup_init(void)
