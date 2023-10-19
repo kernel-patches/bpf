@@ -135,7 +135,15 @@ class VeristatInfo:
 
 
 def get_state_diff(value: str) -> float:
+    if value == 'N/A':
+        return 0.0
+
     matches = re.match(TOTAL_STATES_DIFF_REGEX, value)
+    if not matches:
+        raise ValueError(
+            f"Failed to parse total states diff field value '{value}'"
+        )
+
     if percentage_diff := matches.group("percentage_diff"):
         return float(percentage_diff)
 
@@ -159,6 +167,10 @@ def parse_table(csv_file):
             record[VeristatFields.VERDICT_OLD],
             record[VeristatFields.VERDICT_NEW],
         )
+
+        # Ignore results from completely new and removed programs
+        if "N/A" in [verdict_new, verdict_old]:
+            continue
 
         if record[VeristatFields.VERDICT_DIFF] == "MISMATCH":
             changes = True

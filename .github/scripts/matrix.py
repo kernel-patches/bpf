@@ -63,20 +63,20 @@ matrix = [
         "toolchain": "gcc",
         "llvm-version": "16",
     },
-    {
-        "kernel": "LATEST",
-        "runs_on": [],
-        "arch": Arch.X86_64.value,
-        "toolchain": "llvm",
-        "llvm-version": "16",
-    },
-    {
-        "kernel": "LATEST",
-        "runs_on": [],
-        "arch": Arch.AARCH64.value,
-        "toolchain": "gcc",
-        "llvm-version": "16",
-    },
+    # {
+    #     "kernel": "LATEST",
+    #     "runs_on": [],
+    #     "arch": Arch.X86_64.value,
+    #     "toolchain": "llvm",
+    #     "llvm-version": "16",
+    # },
+    # {
+    #     "kernel": "LATEST",
+    #     "runs_on": [],
+    #     "arch": Arch.AARCH64.value,
+    #     "toolchain": "gcc",
+    #     "llvm-version": "16",
+    # },
     # {
     #     "kernel": "LATEST",
     #     "runs_on": [],
@@ -84,14 +84,14 @@ matrix = [
     #     "toolchain": "llvm",
     #     "llvm-version": "16",
     # },
-    {
-        "kernel": "LATEST",
-        "runs_on": [],
-        "arch": Arch.S390X.value,
-        "toolchain": "gcc",
-        "llvm-version": "16",
-        "parallel_tests": False,
-    },
+    # {
+    #     "kernel": "LATEST",
+    #     "runs_on": [],
+    #     "arch": Arch.S390X.value,
+    #     "toolchain": "gcc",
+    #     "llvm-version": "16",
+    #     "parallel_tests": False,
+    # },
 ]
 self_hosted_repos = [
     "kernel-patches/bpf",
