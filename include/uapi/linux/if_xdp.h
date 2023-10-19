@@ -106,6 +106,43 @@ struct xdp_options {
 #define XSK_UNALIGNED_BUF_ADDR_MASK \
 	((1ULL << XSK_UNALIGNED_BUF_OFFSET_SHIFT) - 1)
 
+/* Request transmit timestamp. Upon completion, put it into tx_timestamp
+ * field of struct xsk_tx_metadata.
+ */
+#define XDP_TX_METADATA_TIMESTAMP		(1 << 0)
+
+/* Request transmit checksum offload. Checksum start position and offset
+ * are communicated via csum_start and csum_offset fields of struct
+ * xsk_tx_metadata.
+ */
+#define XDP_TX_METADATA_CHECKSUM		(1 << 1)
+
+/* Force checksum calculation in software. Can be used for testing or
+ * working around potential HW issues. This option causes performance
+ * degradation and only works in XDP_COPY mode.
+ */
+#define XDP_TX_METADATA_CHECKSUM_SW		(1 << 2)
+
+struct xsk_tx_metadata {
+	union {
+		struct {
+			__u32 flags;
+
+			/* XDP_TX_METADATA_CHECKSUM */
+
+			/* Offset from desc->addr where checksumming should start. */
+			__u16 csum_start;
+			/* Offset from csum_start where checksum should be stored. */
+			__u16 csum_offset;
+		};
+
+		struct {
+			/* XDP_TX_METADATA_TIMESTAMP */
+			__u64 tx_timestamp;
+		} completion;
+	};
+};
+
 /* Rx/Tx descriptor */
 struct xdp_desc {
 	__u64 addr;
@@ -121,5 +158,8 @@ struct xdp_desc {
  * to 0 and this maintains backward compatibility.
  */
 #define XDP_PKT_CONTD (1 << 0)
+
+/* TX packet carries valid metadata. */
+#define XDP_TX_METADATA (1 << 1)
 
 #endif /* _LINUX_IF_XDP_H */
