@@ -1154,7 +1154,7 @@ BPF_CALL_3(bpf_timer_init, struct bpf_timer_kern *, timer, struct bpf_map *, map
 	   u64, flags)
 {
 	clockid_t clockid = flags & (MAX_CLOCKS - 1);
-	struct bpf_hrtimer *t;
+	struct bpf_hrtimer *t, *to_free = NULL;
 	int ret = 0;
 
 	BUILD_BUG_ON(MAX_CLOCKS != 16);
@@ -1195,9 +1195,21 @@ BPF_CALL_3(bpf_timer_init, struct bpf_timer_kern *, timer, struct bpf_map *, map
 	rcu_assign_pointer(t->callback_fn, NULL);
 	hrtimer_init(&t->timer, clockid, HRTIMER_MODE_REL_SOFT);
 	t->timer.function = bpf_timer_cb;
-	timer->timer = t;
+	WRITE_ONCE(timer->timer, t);
+	/* Guarantee order between timer->timer and map->usercnt. So when
+	 * there are concurrent uref release and bpf timer init, either
+	 * bpf_timer_cancel_and_free() called by uref release reads a no-NULL
+	 * timer or atomic64_read() below reads a zero usercnt.
+	 */
+	smp_mb();
+	if (!atomic64_read(&map->usercnt)) {
+		WRITE_ONCE(timer->timer, NULL);
+		to_free = t;
+		ret = -EPERM;
+	}
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
+	kfree(to_free);
 	return ret;
 }
 
@@ -1370,7 +1382,7 @@ void bpf_timer_cancel_and_free(void *val)
 	/* The subsequent bpf_timer_start/cancel() helpers won't be able to use
 	 * this timer, since it won't be initialized.
 	 */
-	timer->timer = NULL;
+	WRITE_ONCE(timer->timer, NULL);
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	if (!t)
