@@ -3726,6 +3726,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 	u32 dreg = insn->dst_reg;
 	u32 sreg = insn->src_reg;
 	u32 spi, i;
+	u32 set_spi, set_sreg;
 
 	if (insn->code == 0)
 		return 0;
@@ -3743,6 +3744,11 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		if (!bt_is_reg_set(bt, dreg))
 			return 0;
 		if (opcode == BPF_MOV) {
+			if (dreg == BPF_REG_FP || sreg == BPF_REG_FP) {
+				verbose(env, "BUG: backtracking to r10\n");
+				WARN_ONCE(1, "verifier backtracking bug");
+				return -EFAULT;
+			}
 			if (BPF_SRC(insn->code) == BPF_X) {
 				/* dreg = sreg or dreg = (s8, s16, s32)sreg
 				 * dreg needs precision after this insn
@@ -3811,11 +3817,53 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			WARN_ONCE(1, "verifier backtracking bug");
 			return -EFAULT;
 		}
-		if (!bt_is_slot_set(bt, spi))
-			return 0;
-		bt_clear_slot(bt, spi);
-		if (class == BPF_STX)
-			bt_set_reg(bt, sreg);
+		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
+			switch (insn->imm) {
+				case BPF_ADD:
+				case BPF_AND:
+				case BPF_OR:
+				case BPF_XOR:
+					if (bt_is_slot_set(bt, spi)) {
+						bt_set_reg(bt, sreg);
+					}
+					break;
+				case BPF_ADD | BPF_FETCH:
+				case BPF_AND | BPF_FETCH:
+				case BPF_OR | BPF_FETCH:
+				case BPF_XOR | BPF_FETCH:
+					set_spi = bt_is_reg_set(bt, sreg);
+					set_sreg = bt_is_slot_set(bt, spi);
+					if (set_spi) {
+						bt_set_slot(bt, spi);
+						bt_clear_reg(bt, sreg);
+					}
+					if (set_sreg) {
+						bt_set_slot(bt, spi);
+						bt_set_reg(bt, sreg);
+					}
+					break;
+				case BPF_XCHG:
+				case BPF_CMPXCHG:
+					if (bt_is_reg_set(bt, sreg) && bt_is_slot_set(bt, spi))
+						return 0;
+					else if (bt_is_reg_set(bt, sreg)) {
+						bt_set_slot(bt, spi);
+						bt_clear_reg(bt, sreg);
+					} else if (bt_is_slot_set(bt, spi)) {
+						bt_set_reg(bt, sreg);
+						bt_clear_slot(bt, spi);
+					} else {
+						return 0;
+					}
+					break;
+			}
+        } else {
+               if (!bt_is_slot_set(bt, spi))
+                       return 0;
+               bt_clear_slot(bt, spi);
+               if (class == BPF_STX)
+                       bt_set_reg(bt, sreg);
+        }
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
 		if (bpf_pseudo_call(insn)) {
 			int subprog_insn_idx, subprog;

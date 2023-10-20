@@ -53,7 +53,8 @@ TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_lpm_map test
 	test_sock test_sockmap get_cgroup_id_user \
 	test_cgroup_storage \
 	test_tcpnotify_user test_sysctl \
-	test_progs-no_alu32
+	test_progs-no_alu32 \
+	test_precise
 TEST_INST_SUBDIRS := no_alu32
 
 # Also test bpf-gcc, if present
@@ -646,6 +647,9 @@ verifier/tests.h: verifier/*.c
 $(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
+
+$(OUTPUT)/test_precise: test_precise.c
+	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) -o $@
 
 # Include find_bit.c to compile xskxceiver.
 EXTRA_SRC := $(TOOLSDIR)/lib/find_bit.c
