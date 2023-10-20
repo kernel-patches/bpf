@@ -3726,6 +3726,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 	u32 dreg = insn->dst_reg;
 	u32 sreg = insn->src_reg;
 	u32 spi, i;
+	u32 reg_mask;
 
 	if (insn->code == 0)
 		return 0;
@@ -3852,7 +3853,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				 * precise, r0 and r6-r10 or any stack slot in
 				 * the current frame should be zero by now
 				 */
-				if (bt_reg_mask(bt) & ~BPF_REGMASK_ARGS) {
+				reg_mask = bt_reg_mask(bt) & ~BPF_REGMASK_ARGS;
+				if (reg_mask && !((reg_mask == 1 << BPF_REG_10) && env->allow_ptr_leaks)) {
 					verbose(env, "BUG regs %x\n", bt_reg_mask(bt));
 					WARN_ONCE(1, "verifier backtracking bug");
 					return -EFAULT;

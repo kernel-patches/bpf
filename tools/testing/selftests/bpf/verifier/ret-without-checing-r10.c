@@ -1,0 +1,16 @@
+{
+  "pointer arithmetic: when returning from subprog in priv, do not checking r10",
+  .insns = {
+	BPF_CALL_REL(2),
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+	BPF_MOV64_REG(BPF_REG_3, BPF_REG_10),
+	BPF_MOV32_REG(BPF_REG_0, BPF_REG_10),
+	BPF_ALU64_REG(BPF_ADD, BPF_REG_3, BPF_REG_0),
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+  },
+  .result  = ACCEPT,
+  .result_unpriv = REJECT,
+  .errstr_unpriv = "loading/calling other bpf or kernel functions are allowed for CAP_BPF and CAP_SYS_ADMIN",
+},
