@@ -201,6 +201,8 @@ static int kernel_sock_addr_testmod_init(void)
 		addr_len = offsetof(struct sockaddr_un, sun_path) + 1 + 
 			   strlen(ip);
 		proto = PF_UNIX;
+		pr_info("IP: %s\n", ip);
+		pr_info("Unix socket address: %s\n", ((struct sockaddr_un *)&addr)->sun_path + 1);
 		break;
 	default:
 		pr_err("invalid address family %d\n", af);
