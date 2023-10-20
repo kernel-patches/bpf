@@ -906,6 +906,7 @@ __diag_push();
 __diag_ignore_all("-Wmissing-prototypes",
 		  "Global functions as their definitions will be in vmlinux BTF");
 
+#ifdef CONFIG_CGROUPS
 __bpf_kfunc int bpf_iter_css_task_new(struct bpf_iter_css_task *it,
 		struct cgroup_subsys_state *css, unsigned int flags)
 {
@@ -949,6 +950,7 @@ __bpf_kfunc void bpf_iter_css_task_destroy(struct bpf_iter_css_task *it)
 	css_task_iter_end(kit->css_it);
 	bpf_mem_free(&bpf_global_ma, kit->css_it);
 }
+#endif
 
 __diag_pop();
 
