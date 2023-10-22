@@ -36,7 +36,7 @@ static void sanitize_identifier(char *name)
 
 static bool str_has_prefix(const char *str, const char *prefix)
 {
-	return strncmp(str, prefix, strlen(prefix)) == 0;
+	return (*str == *prefix) ? strncmp(str, prefix, strlen(prefix)) == 0 : (*prefix == '\0');
 }
 
 static bool str_has_suffix(const char *str, const char *suffix)
