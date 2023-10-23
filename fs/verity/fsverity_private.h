@@ -145,4 +145,14 @@ static inline void fsverity_init_signature(void)
 
 void __init fsverity_init_workqueue(void);
 
+/* measure.c */
+
+#ifdef CONFIG_BPF_SYSCALL
+int __init fsverity_init_bpf(void);
+#else
+static inline int fsverity_init_bpf(void)
+{
+}
+#endif
+
 #endif /* _FSVERITY_PRIVATE_H */
