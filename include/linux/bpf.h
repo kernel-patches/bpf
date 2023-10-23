@@ -171,8 +171,8 @@ struct bpf_map_ops {
 };
 
 enum {
-	/* Support at most 10 fields in a BTF type */
-	BTF_FIELDS_MAX	   = 10,
+	/* Support at most 256 fields in a BTF type */
+	BTF_FIELDS_MAX	   = 256,
 };
 
 enum btf_field_type {

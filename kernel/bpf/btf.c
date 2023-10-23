@@ -3257,24 +3257,93 @@ struct btf_field_info {
 	};
 };
 
+struct btf_field_info_search {
+	/* growable array. allocated in __next_field_infos
+	 * free'd in btf_parse_fields
+	 */
+	struct btf_field_info *infos;
+	/* size of infos */
+	int info_cnt;
+	/* index of next btf_field_info to populate */
+	int idx;
+
+	/* btf_field_types to search for */
+	u32 field_mask;
+	/* btf_field_types found earlier */
+	u32 seen_mask;
+};
+
+/* Reserve next_cnt contiguous btf_field_info's for caller to populate
+ * Returns ptr to first reserved btf_field_info
+ */
+static struct btf_field_info *__next_field_infos(struct btf_field_info_search *srch,
+						 u32 next_cnt)
+{
+	struct btf_field_info *new_infos, *ret;
+
+	if (!next_cnt)
+		return ERR_PTR(-EINVAL);
+
+	if (srch->idx + next_cnt < srch->info_cnt)
+		goto nogrow_out;
+
+	/* Need to grow */
+	if (srch->idx + next_cnt > BTF_FIELDS_MAX)
+		return ERR_PTR(-E2BIG);
+
+	while (srch->idx + next_cnt >= srch->info_cnt)
+		srch->info_cnt = srch->infos ? srch->info_cnt * 2 : 16;
+
+	new_infos = krealloc(srch->infos,
+			     srch->info_cnt * sizeof(struct btf_field_info),
+			     GFP_KERNEL | __GFP_NOWARN);
+	if (!new_infos)
+		return ERR_PTR(-ENOMEM);
+	srch->infos = new_infos;
+
+nogrow_out:
+	ret = &srch->infos[srch->idx];
+	srch->idx += next_cnt;
+	return ret;
+}
+
+/* Request srch's next free btf_field_info to populate, possibly growing
+ * srch->infos
+ */
+static struct btf_field_info *__next_field_info(struct btf_field_info_search *srch)
+{
+	return __next_field_infos(srch, 1);
+}
+
 static int btf_find_struct(const struct btf *btf, const struct btf_type *t,
 			   u32 off, int sz, enum btf_field_type field_type,
-			   struct btf_field_info *info)
+			   struct btf_field_info_search *srch)
 {
+	struct btf_field_info *info;
+
 	if (!__btf_type_is_struct(t))
 		return BTF_FIELD_IGNORE;
 	if (t->size != sz)
 		return BTF_FIELD_IGNORE;
+
+	info = __next_field_info(srch);
+	if (IS_ERR_OR_NULL(info))
+		return PTR_ERR(info);
+
 	info->type = field_type;
 	info->off = off;
 	return BTF_FIELD_FOUND;
 }
 
-static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
-			 u32 off, int sz, struct btf_field_info *info)
+static int btf_maybe_find_kptr(const struct btf *btf, const struct btf_type *t,
+			       u32 off, struct btf_field_info_search *srch)
 {
+	struct btf_field_info *info;
 	enum btf_field_type type;
 	u32 res_id;
+
+	if (!(srch->field_mask & BPF_KPTR))
+		return BTF_FIELD_IGNORE;
 
 	/* Permit modifiers on the pointer itself */
 	if (btf_type_is_volatile(t))
@@ -3303,6 +3372,10 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 	/* Only pointer to struct is allowed */
 	if (!__btf_type_is_struct(t))
 		return -EINVAL;
+
+	info = __next_field_info(srch);
+	if (IS_ERR_OR_NULL(info))
+		return PTR_ERR(info);
 
 	info->type = type;
 	info->off = off;
@@ -3340,9 +3413,10 @@ const char *btf_find_decl_tag_value(const struct btf *btf, const struct btf_type
 static int
 btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
 		    const struct btf_type *t, int comp_idx, u32 off,
-		    int sz, struct btf_field_info *info,
+		    int sz, struct btf_field_info_search *srch,
 		    enum btf_field_type head_type)
 {
+	struct btf_field_info *info;
 	const char *node_field_name;
 	const char *value_type;
 	s32 id;
@@ -3367,6 +3441,11 @@ btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
 	node_field_name++;
 	if (str_is_empty(node_field_name))
 		return -EINVAL;
+
+	info = __next_field_info(srch);
+	if (IS_ERR_OR_NULL(info))
+		return PTR_ERR(info);
+
 	info->type = head_type;
 	info->off = off;
 	info->graph_root.value_btf_id = id;
@@ -3374,25 +3453,24 @@ btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
 	return BTF_FIELD_FOUND;
 }
 
-#define field_mask_test_name(field_type, field_type_str)		\
-	if (field_mask & field_type && !strcmp(name, field_type_str)) {	\
-		type = field_type;					\
-		goto end;						\
+#define field_mask_test_name(field_type, field_type_str)			\
+	if (srch->field_mask & field_type && !strcmp(name, field_type_str)) {	\
+		return field_type;						\
 	}
 
-#define field_mask_test_name_check_seen(field_type, field_type_str)	\
-	if (field_mask & field_type && !strcmp(name, field_type_str)) {	\
-		if (*seen_mask & field_type)				\
-			return -E2BIG;					\
-		*seen_mask |= field_type;				\
-		type = field_type;					\
-		goto end;						\
+#define field_mask_test_name_check_seen(field_type, field_type_str)		\
+	if (srch->field_mask & field_type && !strcmp(name, field_type_str)) {	\
+		if (srch->seen_mask & field_type)				\
+			return -E2BIG;						\
+		srch->seen_mask |= field_type;					\
+		return field_type;						\
 	}
 
-static int btf_get_field_type(const char *name, u32 field_mask, u32 *seen_mask,
-			      int *align, int *sz)
+static int btf_get_field_type_by_name(const struct btf *btf,
+				      const struct btf_type *t,
+				      struct btf_field_info_search *srch)
 {
-	int type = 0;
+	const char *name = __btf_name_by_offset(btf, t->name_off);
 
 	field_mask_test_name_check_seen(BPF_SPIN_LOCK, "bpf_spin_lock");
 	field_mask_test_name_check_seen(BPF_TIMER,     "bpf_timer");
@@ -3403,47 +3481,58 @@ static int btf_get_field_type(const char *name, u32 field_mask, u32 *seen_mask,
 	field_mask_test_name(BPF_RB_ROOT,   "bpf_rb_root");
 	field_mask_test_name(BPF_RB_NODE,   "bpf_rb_node");
 
-	/* Only return BPF_KPTR when all other types with matchable names fail */
-	if (field_mask & BPF_KPTR) {
-		type = BPF_KPTR_REF;
-		goto end;
-	}
 	return 0;
-end:
-	*sz = btf_field_type_size(type);
-	*align = btf_field_type_align(type);
-	return type;
 }
 
 #undef field_mask_test_name_check_seen
 #undef field_mask_test_name
 
-static int btf_find_struct_field(const struct btf *btf,
-				 const struct btf_type *t, u32 field_mask,
-				 struct btf_field_info *info, int info_cnt)
+static int __struct_member_check_align(u32 off, enum btf_field_type field_type)
 {
-	int ret, idx = 0, align, sz, field_type;
+	u32 align = btf_field_type_align(field_type);
+
+	if (off % align)
+		return -EINVAL;
+	return 0;
+}
+
+static int btf_find_struct_field(const struct btf *btf,
+				 const struct btf_type *t,
+				 struct btf_field_info_search *srch)
+{
 	const struct btf_member *member;
-	struct btf_field_info tmp;
-	u32 i, off, seen_mask = 0;
+	int ret, field_type;
+	u32 i, off, sz;
 
 	for_each_member(i, t, member) {
 		const struct btf_type *member_type = btf_type_by_id(btf,
 								    member->type);
-
-		field_type = btf_get_field_type(__btf_name_by_offset(btf, member_type->name_off),
-						field_mask, &seen_mask, &align, &sz);
-		if (field_type == 0)
-			continue;
-		if (field_type < 0)
-			return field_type;
-
 		off = __btf_member_bit_offset(t, member);
 		if (off % 8)
 			/* valid C code cannot generate such BTF */
 			return -EINVAL;
 		off /= 8;
-		if (off % align)
+
+		field_type = btf_get_field_type_by_name(btf, member_type, srch);
+		if (field_type < 0)
+			return field_type;
+
+		if (field_type == 0) {
+			/* Maybe it's a kptr. Use BPF_KPTR_REF for align
+			 * checks, all ptrs have same align.
+			 * btf_maybe_find_kptr will find actual kptr type
+			 */
+			if (__struct_member_check_align(off, BPF_KPTR_REF))
+				continue;
+
+			ret = btf_maybe_find_kptr(btf, member_type, off, srch);
+			if (ret < 0)
+				return ret;
+			continue;
+		}
+
+		sz = btf_field_type_size(field_type);
+		if (__struct_member_check_align(off, field_type))
 			continue;
 
 		switch (field_type) {
@@ -3453,64 +3542,81 @@ static int btf_find_struct_field(const struct btf *btf,
 		case BPF_RB_NODE:
 		case BPF_REFCOUNT:
 			ret = btf_find_struct(btf, member_type, off, sz, field_type,
-					      idx < info_cnt ? &info[idx] : &tmp);
-			if (ret < 0)
-				return ret;
-			break;
-		case BPF_KPTR_UNREF:
-		case BPF_KPTR_REF:
-		case BPF_KPTR_PERCPU:
-			ret = btf_find_kptr(btf, member_type, off, sz,
-					    idx < info_cnt ? &info[idx] : &tmp);
+					      srch);
 			if (ret < 0)
 				return ret;
 			break;
 		case BPF_LIST_HEAD:
 		case BPF_RB_ROOT:
 			ret = btf_find_graph_root(btf, t, member_type,
-						  i, off, sz,
-						  idx < info_cnt ? &info[idx] : &tmp,
-						  field_type);
+						  i, off, sz, srch, field_type);
 			if (ret < 0)
 				return ret;
 			break;
+		/* kptr fields are not handled in this switch, see
+		 * btf_maybe_find_kptr above
+		 */
+		case BPF_KPTR_UNREF:
+		case BPF_KPTR_REF:
+		case BPF_KPTR_PERCPU:
 		default:
 			return -EFAULT;
 		}
-
-		if (ret == BTF_FIELD_IGNORE)
-			continue;
-		if (idx >= info_cnt)
-			return -E2BIG;
-		++idx;
 	}
-	return idx;
+	return srch->idx;
+}
+
+static int __datasec_vsi_check_align_sz(const struct btf_var_secinfo *vsi,
+					enum btf_field_type field_type,
+					u32 expected_sz)
+{
+	u32 off, align;
+
+	off = vsi->offset;
+	align = btf_field_type_align(field_type);
+
+	if (vsi->size != expected_sz)
+		return -EINVAL;
+	if (off % align)
+		return -EINVAL;
+
+	return 0;
 }
 
 static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
-				u32 field_mask, struct btf_field_info *info,
-				int info_cnt)
+				struct btf_field_info_search *srch)
 {
-	int ret, idx = 0, align, sz, field_type;
 	const struct btf_var_secinfo *vsi;
-	struct btf_field_info tmp;
-	u32 i, off, seen_mask = 0;
+	int ret, field_type;
+	u32 i, off, sz;
 
 	for_each_vsi(i, t, vsi) {
 		const struct btf_type *var = btf_type_by_id(btf, vsi->type);
 		const struct btf_type *var_type = btf_type_by_id(btf, var->type);
 
-		field_type = btf_get_field_type(__btf_name_by_offset(btf, var_type->name_off),
-						field_mask, &seen_mask, &align, &sz);
-		if (field_type == 0)
-			continue;
+		off = vsi->offset;
+		field_type = btf_get_field_type_by_name(btf, var_type, srch);
 		if (field_type < 0)
 			return field_type;
 
-		off = vsi->offset;
-		if (vsi->size != sz)
+		if (field_type == 0) {
+			/* Maybe it's a kptr. Use BPF_KPTR_REF for sz / align
+			 * checks, all ptrs have same sz / align.
+			 * btf_maybe_find_kptr will find actual kptr type
+			 */
+			sz = btf_field_type_size(BPF_KPTR_REF);
+			if (__datasec_vsi_check_align_sz(vsi, BPF_KPTR_REF, sz))
+				continue;
+
+			ret = btf_maybe_find_kptr(btf, var_type, off, srch);
+			if (ret < 0)
+				return ret;
 			continue;
-		if (off % align)
+		}
+
+		sz = btf_field_type_size(field_type);
+
+		if (__datasec_vsi_check_align_sz(vsi, field_type, sz))
 			continue;
 
 		switch (field_type) {
@@ -3520,48 +3626,38 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		case BPF_RB_NODE:
 		case BPF_REFCOUNT:
 			ret = btf_find_struct(btf, var_type, off, sz, field_type,
-					      idx < info_cnt ? &info[idx] : &tmp);
-			if (ret < 0)
-				return ret;
-			break;
-		case BPF_KPTR_UNREF:
-		case BPF_KPTR_REF:
-		case BPF_KPTR_PERCPU:
-			ret = btf_find_kptr(btf, var_type, off, sz,
-					    idx < info_cnt ? &info[idx] : &tmp);
+					      srch);
 			if (ret < 0)
 				return ret;
 			break;
 		case BPF_LIST_HEAD:
 		case BPF_RB_ROOT:
 			ret = btf_find_graph_root(btf, var, var_type,
-						  -1, off, sz,
-						  idx < info_cnt ? &info[idx] : &tmp,
+						  -1, off, sz, srch,
 						  field_type);
 			if (ret < 0)
 				return ret;
 			break;
+		/* kptr fields are not handled in this switch, see
+		 * btf_maybe_find_kptr above
+		 */
+		case BPF_KPTR_UNREF:
+		case BPF_KPTR_REF:
+		case BPF_KPTR_PERCPU:
 		default:
 			return -EFAULT;
 		}
-
-		if (ret == BTF_FIELD_IGNORE)
-			continue;
-		if (idx >= info_cnt)
-			return -E2BIG;
-		++idx;
 	}
-	return idx;
+	return srch->idx;
 }
 
 static int btf_find_field(const struct btf *btf, const struct btf_type *t,
-			  u32 field_mask, struct btf_field_info *info,
-			  int info_cnt)
+			  struct btf_field_info_search *srch)
 {
 	if (__btf_type_is_struct(t))
-		return btf_find_struct_field(btf, t, field_mask, info, info_cnt);
+		return btf_find_struct_field(btf, t, srch);
 	else if (btf_type_is_datasec(t))
-		return btf_find_datasec_var(btf, t, field_mask, info, info_cnt);
+		return btf_find_datasec_var(btf, t, srch);
 	return -EINVAL;
 }
 
@@ -3729,47 +3825,51 @@ static int btf_field_cmp(const void *_a, const void *_b, const void *priv)
 struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
 				    u32 field_mask, u32 value_size)
 {
-	struct btf_field_info info_arr[BTF_FIELDS_MAX];
+	struct btf_field_info_search srch;
 	u32 next_off = 0, field_type_size;
+	struct btf_field_info *info;
 	struct btf_record *rec;
 	int ret, i, cnt;
 
-	ret = btf_find_field(btf, t, field_mask, info_arr, ARRAY_SIZE(info_arr));
-	if (ret < 0)
-		return ERR_PTR(ret);
-	if (!ret)
-		return NULL;
+	memset(&srch, 0, sizeof(srch));
+	srch.field_mask = field_mask;
+	ret = btf_find_field(btf, t, &srch);
+	if (ret <= 0)
+		goto end_srch;
 
 	cnt = ret;
 	/* This needs to be kzalloc to zero out padding and unused fields, see
 	 * comment in btf_record_equal.
 	 */
 	rec = kzalloc(offsetof(struct btf_record, fields[cnt]), GFP_KERNEL | __GFP_NOWARN);
-	if (!rec)
-		return ERR_PTR(-ENOMEM);
+	if (!rec) {
+		ret = -ENOMEM;
+		goto end_srch;
+	}
 
 	rec->spin_lock_off = -EINVAL;
 	rec->timer_off = -EINVAL;
 	rec->refcount_off = -EINVAL;
 	for (i = 0; i < cnt; i++) {
-		field_type_size = btf_field_type_size(info_arr[i].type);
-		if (info_arr[i].off + field_type_size > value_size) {
-			WARN_ONCE(1, "verifier bug off %d size %d", info_arr[i].off, value_size);
+		info = &srch.infos[i];
+		field_type_size = btf_field_type_size(info->type);
+		if (info->off + field_type_size > value_size) {
+			WARN_ONCE(1, "verifier bug off %d size %d", info->off, value_size);
 			ret = -EFAULT;
 			goto end;
 		}
-		if (info_arr[i].off < next_off) {
+		if (info->off < next_off) {
 			ret = -EEXIST;
 			goto end;
 		}
-		next_off = info_arr[i].off + field_type_size;
+		next_off = info->off + field_type_size;
 
-		rec->field_mask |= info_arr[i].type;
-		rec->fields[i].offset = info_arr[i].off;
-		rec->fields[i].type = info_arr[i].type;
+		rec->field_mask |= info->type;
+		rec->fields[i].offset = info->off;
+		rec->fields[i].type = info->type;
 		rec->fields[i].size = field_type_size;
 
-		switch (info_arr[i].type) {
+		switch (info->type) {
 		case BPF_SPIN_LOCK:
 			WARN_ON_ONCE(rec->spin_lock_off >= 0);
 			/* Cache offset for faster lookup at runtime */
@@ -3788,17 +3888,17 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		case BPF_KPTR_UNREF:
 		case BPF_KPTR_REF:
 		case BPF_KPTR_PERCPU:
-			ret = btf_parse_kptr(btf, &rec->fields[i], &info_arr[i]);
+			ret = btf_parse_kptr(btf, &rec->fields[i], info);
 			if (ret < 0)
 				goto end;
 			break;
 		case BPF_LIST_HEAD:
-			ret = btf_parse_list_head(btf, &rec->fields[i], &info_arr[i]);
+			ret = btf_parse_list_head(btf, &rec->fields[i], info);
 			if (ret < 0)
 				goto end;
 			break;
 		case BPF_RB_ROOT:
-			ret = btf_parse_rb_root(btf, &rec->fields[i], &info_arr[i]);
+			ret = btf_parse_rb_root(btf, &rec->fields[i], info);
 			if (ret < 0)
 				goto end;
 			break;
@@ -3828,10 +3928,13 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 
 	sort_r(rec->fields, rec->cnt, sizeof(struct btf_field), btf_field_cmp,
 	       NULL, rec);
+	kfree(srch.infos);
 
 	return rec;
 end:
 	btf_record_free(rec);
+end_srch:
+	kfree(srch.infos);
 	return ERR_PTR(ret);
 }
 
