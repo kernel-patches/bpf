@@ -3374,8 +3374,17 @@ btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
 	return BTF_FIELD_FOUND;
 }
 
-#define field_mask_test_name(field_type, field_type_str) \
-	if (field_mask & field_type && !strcmp(name, field_type_str)) { \
+#define field_mask_test_name(field_type, field_type_str)		\
+	if (field_mask & field_type && !strcmp(name, field_type_str)) {	\
+		type = field_type;					\
+		goto end;						\
+	}
+
+#define field_mask_test_name_check_seen(field_type, field_type_str)	\
+	if (field_mask & field_type && !strcmp(name, field_type_str)) {	\
+		if (*seen_mask & field_type)				\
+			return -E2BIG;					\
+		*seen_mask |= field_type;				\
 		type = field_type;					\
 		goto end;						\
 	}
@@ -3385,29 +3394,14 @@ static int btf_get_field_type(const char *name, u32 field_mask, u32 *seen_mask,
 {
 	int type = 0;
 
-	if (field_mask & BPF_SPIN_LOCK) {
-		if (!strcmp(name, "bpf_spin_lock")) {
-			if (*seen_mask & BPF_SPIN_LOCK)
-				return -E2BIG;
-			*seen_mask |= BPF_SPIN_LOCK;
-			type = BPF_SPIN_LOCK;
-			goto end;
-		}
-	}
-	if (field_mask & BPF_TIMER) {
-		if (!strcmp(name, "bpf_timer")) {
-			if (*seen_mask & BPF_TIMER)
-				return -E2BIG;
-			*seen_mask |= BPF_TIMER;
-			type = BPF_TIMER;
-			goto end;
-		}
-	}
+	field_mask_test_name_check_seen(BPF_SPIN_LOCK, "bpf_spin_lock");
+	field_mask_test_name_check_seen(BPF_TIMER,     "bpf_timer");
+	field_mask_test_name_check_seen(BPF_REFCOUNT,  "bpf_refcount");
+
 	field_mask_test_name(BPF_LIST_HEAD, "bpf_list_head");
 	field_mask_test_name(BPF_LIST_NODE, "bpf_list_node");
 	field_mask_test_name(BPF_RB_ROOT,   "bpf_rb_root");
 	field_mask_test_name(BPF_RB_NODE,   "bpf_rb_node");
-	field_mask_test_name(BPF_REFCOUNT,  "bpf_refcount");
 
 	/* Only return BPF_KPTR when all other types with matchable names fail */
 	if (field_mask & BPF_KPTR) {
@@ -3421,6 +3415,7 @@ end:
 	return type;
 }
 
+#undef field_mask_test_name_check_seen
 #undef field_mask_test_name
 
 static int btf_find_struct_field(const struct btf *btf,
