@@ -3496,9 +3496,41 @@ static int __struct_member_check_align(u32 off, enum btf_field_type field_type)
 	return 0;
 }
 
+/* Return number of elems and elem_type of a btf_array
+ *
+ * If the array is multi-dimensional, return elem count of
+ * equivalent single-dimensional array
+ *   e.g. int x[10][10][10] has same layout as int x[1000]
+ */
+static u32 __multi_dim_elem_type_nelems(const struct btf *btf,
+					const struct btf_type *t,
+					const struct btf_type **elem_type)
+{
+	u32 nelems = btf_array(t)->nelems;
+
+	if (!nelems)
+		return 0;
+
+	*elem_type = btf_type_by_id(btf, btf_array(t)->type);
+
+	while (btf_type_is_array(*elem_type)) {
+		if (!btf_array(*elem_type)->nelems)
+			return 0;
+		nelems *= btf_array(*elem_type)->nelems;
+		*elem_type = btf_type_by_id(btf, btf_array(*elem_type)->type);
+	}
+	return nelems;
+}
+
+static int btf_find_aggregate_field(const struct btf *btf,
+				    const struct btf_type *t,
+				    struct btf_field_info_search *srch,
+				    int field_off, int rec);
+
 static int btf_find_struct_field(const struct btf *btf,
 				 const struct btf_type *t,
-				 struct btf_field_info_search *srch)
+				 struct btf_field_info_search *srch,
+				 int struct_field_off, int rec)
 {
 	const struct btf_member *member;
 	int ret, field_type;
@@ -3522,10 +3554,24 @@ static int btf_find_struct_field(const struct btf *btf,
 			 * checks, all ptrs have same align.
 			 * btf_maybe_find_kptr will find actual kptr type
 			 */
-			if (__struct_member_check_align(off, BPF_KPTR_REF))
+			if (srch->field_mask & BPF_KPTR &&
+			    !__struct_member_check_align(off, BPF_KPTR_REF)) {
+				ret = btf_maybe_find_kptr(btf, member_type,
+							  struct_field_off + off,
+							  srch);
+				if (ret < 0)
+					return ret;
+				if (ret == BTF_FIELD_FOUND)
+					continue;
+			}
+
+			if (!(btf_type_is_array(member_type) ||
+			      __btf_type_is_struct(member_type)))
 				continue;
 
-			ret = btf_maybe_find_kptr(btf, member_type, off, srch);
+			ret = btf_find_aggregate_field(btf, member_type, srch,
+						       struct_field_off + off,
+						       rec);
 			if (ret < 0)
 				return ret;
 			continue;
@@ -3541,15 +3587,17 @@ static int btf_find_struct_field(const struct btf *btf,
 		case BPF_LIST_NODE:
 		case BPF_RB_NODE:
 		case BPF_REFCOUNT:
-			ret = btf_find_struct(btf, member_type, off, sz, field_type,
-					      srch);
+			ret = btf_find_struct(btf, member_type,
+					      struct_field_off + off,
+					      sz, field_type, srch);
 			if (ret < 0)
 				return ret;
 			break;
 		case BPF_LIST_HEAD:
 		case BPF_RB_ROOT:
 			ret = btf_find_graph_root(btf, t, member_type,
-						  i, off, sz, srch, field_type);
+						  i, struct_field_off + off, sz,
+						  srch, field_type);
 			if (ret < 0)
 				return ret;
 			break;
@@ -3564,6 +3612,82 @@ static int btf_find_struct_field(const struct btf *btf,
 		}
 	}
 	return srch->idx;
+}
+
+static int btf_flatten_array_field(const struct btf *btf,
+				   const struct btf_type *t,
+				   struct btf_field_info_search *srch,
+				   int array_field_off, int rec)
+{
+	int ret, start_idx, elem_field_cnt;
+	const struct btf_type *elem_type;
+	struct btf_field_info *info;
+	u32 i, j, off, nelems;
+
+	if (!btf_type_is_array(t))
+		return -EINVAL;
+	nelems = __multi_dim_elem_type_nelems(btf, t, &elem_type);
+	if (!nelems || !__btf_type_is_struct(elem_type))
+		return srch->idx;
+
+	start_idx = srch->idx;
+	ret = btf_find_struct_field(btf, elem_type, srch, array_field_off + off, rec);
+	if (ret < 0)
+		return ret;
+
+	/* No btf_field_info's added */
+	if (srch->idx == start_idx)
+		return srch->idx;
+
+	elem_field_cnt = srch->idx - start_idx;
+	info = __next_field_infos(srch, elem_field_cnt * (nelems - 1));
+	if (IS_ERR_OR_NULL(info))
+		return PTR_ERR(info);
+
+	/* Array elems after the first can copy first elem's btf_field_infos
+	 * and adjust offset
+	 */
+	for (i = 1; i < nelems; i++) {
+		memcpy(info, &srch->infos[start_idx],
+		       elem_field_cnt * sizeof(struct btf_field_info));
+		for (j = 0; j < elem_field_cnt; j++) {
+			info->off += (i * elem_type->size);
+			info++;
+		}
+	}
+	return srch->idx;
+}
+
+static int btf_find_aggregate_field(const struct btf *btf,
+				    const struct btf_type *t,
+				    struct btf_field_info_search *srch,
+				    int field_off, int rec)
+{
+	u32 orig_field_mask;
+	int ret;
+
+	/* Dig up to 4 levels deep */
+	if (rec >= 4)
+		return -E2BIG;
+
+	orig_field_mask = srch->field_mask;
+	srch->field_mask &= BPF_KPTR;
+
+	if (!srch->field_mask) {
+		ret = 0;
+		goto reset_field_mask;
+	}
+
+	if (__btf_type_is_struct(t))
+		ret = btf_find_struct_field(btf, t, srch, field_off, rec + 1);
+	else if (btf_type_is_array(t))
+		ret = btf_flatten_array_field(btf, t, srch, field_off, rec + 1);
+	else
+		ret = -EINVAL;
+
+reset_field_mask:
+	srch->field_mask = orig_field_mask;
+	return ret;
 }
 
 static int __datasec_vsi_check_align_sz(const struct btf_var_secinfo *vsi,
@@ -3605,10 +3729,19 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			 * btf_maybe_find_kptr will find actual kptr type
 			 */
 			sz = btf_field_type_size(BPF_KPTR_REF);
-			if (__datasec_vsi_check_align_sz(vsi, BPF_KPTR_REF, sz))
+			if (srch->field_mask & BPF_KPTR &&
+			    !__datasec_vsi_check_align_sz(vsi, BPF_KPTR_REF, sz)) {
+				ret = btf_maybe_find_kptr(btf, var_type, off, srch);
+				if (ret < 0)
+					return ret;
+				if (ret == BTF_FIELD_FOUND)
+					continue;
+			}
+
+			if (!(btf_type_is_array(var_type) || __btf_type_is_struct(var_type)))
 				continue;
 
-			ret = btf_maybe_find_kptr(btf, var_type, off, srch);
+			ret = btf_find_aggregate_field(btf, var_type, srch, off, 0);
 			if (ret < 0)
 				return ret;
 			continue;
@@ -3655,7 +3788,7 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 			  struct btf_field_info_search *srch)
 {
 	if (__btf_type_is_struct(t))
-		return btf_find_struct_field(btf, t, srch);
+		return btf_find_struct_field(btf, t, srch, 0, 0);
 	else if (btf_type_is_datasec(t))
 		return btf_find_datasec_var(btf, t, srch);
 	return -EINVAL;
