@@ -3,12 +3,14 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <sched.h>
+#include <mntent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <test_progs.h>
 
 #define TDIR "/sys/kernel/debug"
+#define MTAB "/etc/mtab"
 
 static int read_iter(char *file)
 {
@@ -32,6 +34,8 @@ static int read_iter(char *file)
 
 static int fn(void)
 {
+	/* A buffer to store logging messages */
+	char buf[1024];
 	struct stat a, b, c;
 	int err, map;
 
@@ -42,6 +46,30 @@ static int fn(void)
 	err = mount("", "/", "", MS_REC | MS_PRIVATE, NULL);
 	if (!ASSERT_OK(err, "mount /"))
 		goto out;
+
+	/* TDIR may have mounts below. unount them first */
+	FILE *mtab = setmntent(MTAB, "r");
+
+	if (!ASSERT_TRUE(mtab != NULL, "accessing " MTAB)) {
+		err = errno;
+		goto out;
+	}
+
+	struct mntent *mnt = NULL;
+
+	while ((mnt = getmntent(mtab)) != NULL) {
+		if (strlen(mnt->mnt_dir) > strlen(TDIR) &&
+			strncmp(TDIR, mnt->mnt_dir, strlen(TDIR)) == 0) {
+			snprintf(buf, sizeof(buf) - 1, "umount %s", mnt->mnt_dir);
+			err = umount(mnt->mnt_dir);
+			if (!ASSERT_OK(err, buf)) {
+				endmntent(mtab);
+				goto out;
+			}
+		}
+	}
+	// Ignore any error here
+	endmntent(mtab);
 
 	err = umount(TDIR);
 	if (!ASSERT_OK(err, "umount " TDIR))
