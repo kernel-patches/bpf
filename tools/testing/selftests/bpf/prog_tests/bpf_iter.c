@@ -878,6 +878,11 @@ static void test_bpf_percpu_hash_map(void)
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
 	val = malloc(8 * bpf_num_possible_cpus());
+	if (CHECK(!val, "malloc", "memory allocation failed: %s",
+				strerror(errno))) {
+		bpf_iter_bpf_percpu_hash_map__destroy(skel);
+		return;
+	}
 
 	err = bpf_iter_bpf_percpu_hash_map__load(skel);
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_percpu_hash_map__load"))
@@ -1057,6 +1062,11 @@ static void test_bpf_percpu_array_map(void)
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
 	val = malloc(8 * bpf_num_possible_cpus());
+	if (CHECK(!val, "malloc", "memory allocation failed: %s",
+				strerror(errno))) {
+		bpf_iter_bpf_percpu_hash_map__destroy(skel);
+		return;
+	}
 
 	err = bpf_iter_bpf_percpu_array_map__load(skel);
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_percpu_array_map__load"))
