@@ -4016,6 +4016,24 @@ int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 }
 EXPORT_SYMBOL(security_inode_getsecctx);
 
+/**
+ * security_dev_permission() - Check if accessing a dev is allowed
+ * @mode: file mode holding device type
+ * @dev: device
+ * @mask: access mask
+ *
+ * Check permission before accessing an device by its major minor.
+ * This hook is called by drivers which may not have an inode but only
+ * the dev_t representation of a device to check permission.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_dev_permission(umode_t mode, dev_t dev, int mask)
+{
+	return call_int_hook(dev_permission, 0, mode, dev, mask);
+}
+EXPORT_SYMBOL(security_dev_permission);
+
 #ifdef CONFIG_WATCH_QUEUE
 /**
  * security_post_notification() - Check if a watch notification can be posted
