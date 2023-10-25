@@ -11,8 +11,9 @@
  */
 
 #include <linux/bpf-cgroup.h>
-#include <linux/device_cgroup.h>
 #include <linux/lsm_hooks.h>
+
+#include "device_cgroup.h"
 
 static int devcg_dev_permission(umode_t mode, dev_t dev, int mask)
 {
