@@ -16449,7 +16449,6 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			continue;
 		}
 
-#if 0
 		if (is_spilled_scalar_reg64(&old->stack[spi]) &&
 		    is_stack_zero64(&cur->stack[spi])) {
 			if (!regsafe(env, &old->stack[spi].spilled_ptr, &zero_reg, idmap, exact))
@@ -16465,7 +16464,6 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			i += BPF_REG_SIZE - 1;
 			continue;
 		}
-#endif
 
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
 			continue;
