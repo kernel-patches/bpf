@@ -10,7 +10,6 @@
 #include <linux/slab.h>
 #include <linux/kmod.h>
 #include <linux/major.h>
-#include <linux/device_cgroup.h>
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
 #include <linux/backing-dev.h>
@@ -27,6 +26,7 @@
 #include <linux/part_stat.h>
 #include <linux/uaccess.h>
 #include <linux/stat.h>
+#include <linux/security.h>
 #include "../fs/internal.h"
 #include "blk.h"
 
@@ -757,10 +757,9 @@ struct block_device *blkdev_get_by_dev(dev_t dev, blk_mode_t mode, void *holder,
 	struct gendisk *disk;
 	int ret;
 
-	ret = devcgroup_check_permission(DEVCG_DEV_BLOCK,
-			MAJOR(dev), MINOR(dev),
-			((mode & BLK_OPEN_READ) ? DEVCG_ACC_READ : 0) |
-			((mode & BLK_OPEN_WRITE) ? DEVCG_ACC_WRITE : 0));
+	ret = security_dev_permission(S_IFBLK, dev,
+			((mode & BLK_OPEN_READ) ? MAY_READ : 0) |
+			((mode & BLK_OPEN_WRITE) ? MAY_WRITE : 0));
 	if (ret)
 		return ERR_PTR(ret);
 
