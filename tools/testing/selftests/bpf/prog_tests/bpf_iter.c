@@ -705,7 +705,7 @@ static void test_overflow(bool test_e2big_overflow, bool ret1)
 		goto free_link;
 
 	buf = malloc(expected_read_len);
-	if (!buf)
+	if (!ASSERT_OK_PTR(buf, "malloc"))
 		goto close_iter;
 
 	/* do read */
@@ -878,6 +878,10 @@ static void test_bpf_percpu_hash_map(void)
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
 	val = malloc(8 * bpf_num_possible_cpus());
+	if (!ASSERT_OK_PTR(val, "malloc")) {
+		bpf_iter_bpf_percpu_hash_map__destroy(skel);
+		return;
+	}
 
 	err = bpf_iter_bpf_percpu_hash_map__load(skel);
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_percpu_hash_map__load"))
@@ -1057,6 +1061,10 @@ static void test_bpf_percpu_array_map(void)
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
 	val = malloc(8 * bpf_num_possible_cpus());
+	if (!ASSERT_OK_PTR(val, "malloc")) {
+		bpf_iter_bpf_percpu_array_map__destroy(skel);
+		return;
+	}
 
 	err = bpf_iter_bpf_percpu_array_map__load(skel);
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_percpu_array_map__load"))
