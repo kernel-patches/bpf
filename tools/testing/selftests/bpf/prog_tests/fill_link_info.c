@@ -22,6 +22,11 @@ static __u64 kmulti_addrs[KMULTI_CNT];
 #define KPROBE_FUNC "bpf_fentry_test1"
 static __u64 kprobe_addr;
 
+#define LINK_DESTROY(__link) ({		\
+	bpf_link__destroy(__link);	\
+	__link = NULL;			\
+})
+
 #define UPROBE_FILE "/proc/self/exe"
 static ssize_t uprobe_offset;
 /* uprobe attach point */
@@ -157,7 +162,7 @@ static void test_kprobe_fill_link_info(struct test_fill_link_info *skel,
 	} else {
 		kprobe_fill_invalid_user_buffer(link_fd);
 	}
-	bpf_link__detach(skel->links.kprobe_run);
+	LINK_DESTROY(skel->links.kprobe_run);
 }
 
 static void test_tp_fill_link_info(struct test_fill_link_info *skel)
@@ -171,7 +176,7 @@ static void test_tp_fill_link_info(struct test_fill_link_info *skel)
 	link_fd = bpf_link__fd(skel->links.tp_run);
 	err = verify_perf_link_info(link_fd, BPF_PERF_EVENT_TRACEPOINT, 0, 0, 0);
 	ASSERT_OK(err, "verify_perf_link_info");
-	bpf_link__detach(skel->links.tp_run);
+	LINK_DESTROY(skel->links.tp_run);
 }
 
 static void test_uprobe_fill_link_info(struct test_fill_link_info *skel,
@@ -189,7 +194,7 @@ static void test_uprobe_fill_link_info(struct test_fill_link_info *skel,
 	link_fd = bpf_link__fd(skel->links.uprobe_run);
 	err = verify_perf_link_info(link_fd, type, 0, uprobe_offset, 0);
 	ASSERT_OK(err, "verify_perf_link_info");
-	bpf_link__detach(skel->links.uprobe_run);
+	LINK_DESTROY(skel->links.uprobe_run);
 }
 
 static int verify_kmulti_link_info(int fd, bool retprobe)
@@ -295,7 +300,7 @@ static void test_kprobe_multi_fill_link_info(struct test_fill_link_info *skel,
 	} else {
 		verify_kmulti_invalid_user_buffer(link_fd);
 	}
-	bpf_link__detach(skel->links.kmulti_run);
+	LINK_DESTROY(skel->links.kmulti_run);
 }
 
 void test_fill_link_info(void)
