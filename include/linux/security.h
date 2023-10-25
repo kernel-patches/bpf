@@ -487,6 +487,7 @@ int security_locked_down(enum lockdown_reason what);
 int security_dev_permission(umode_t mode, dev_t dev, int mask);
 int security_inode_mknod_nscap(struct inode *dir, struct dentry *dentry,
 			       umode_t mode, dev_t dev);
+int security_sb_alloc_userns(struct super_block *sb);
 #else /* CONFIG_SECURITY */
 
 static inline int call_blocking_lsm_notifier(enum lsm_event event, void *data)
@@ -1405,6 +1406,10 @@ static inline int security_dev_permission(umode_t mode, dev_t dev, int mask)
 static inline int security_inode_mknod_nscap(struct inode *dir,
 					     struct dentry *dentry,
 					     umode_t mode, dev_t dev);
+{
+	return -EPERM;
+}
+static inline int security_sb_alloc_userns(struct super_block *sb)
 {
 	return -EPERM;
 }
