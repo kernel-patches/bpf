@@ -24,6 +24,20 @@
 DEFINE_STATIC_KEY_ARRAY_FALSE(cgroup_bpf_enabled_key, MAX_CGROUP_BPF_ATTACH_TYPE);
 EXPORT_SYMBOL(cgroup_bpf_enabled_key);
 
+bool cgroup_bpf_current_enabled(enum cgroup_bpf_attach_type type)
+{
+	struct cgroup *cgrp;
+	struct bpf_prog_array *array;
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(current);
+	rcu_read_unlock();
+
+	array = rcu_access_pointer(cgrp->bpf.effective[type]);
+	return array != &bpf_empty_prog_array.hdr;
+}
+EXPORT_SYMBOL(cgroup_bpf_current_enabled);
+
 /* __always_inline is necessary to prevent indirect call through run_prog
  * function pointer.
  */
