@@ -247,29 +247,39 @@ static struct net *netkit_get_link_net(const struct net_device *dev)
 	return peer ? dev_net(peer) : dev_net(dev);
 }
 
-static int netkit_check_policy(int policy, struct nlattr *tb,
+static int netkit_check_policy(const struct nlattr *attr,
 			       struct netlink_ext_ack *extack)
 {
-	switch (policy) {
+	if (nla_len(attr) != sizeof(u32)) {
+		NL_SET_ERR_MSG_ATTR(extack, attr, "Invalid policy attribute length");
+		return -EINVAL;
+	}
+
+	switch (nla_get_u32(attr)) {
 	case NETKIT_PASS:
 	case NETKIT_DROP:
 		return 0;
 	default:
-		NL_SET_ERR_MSG_ATTR(extack, tb,
+		NL_SET_ERR_MSG_ATTR(extack, attr,
 				    "Provided default xmit policy not supported");
 		return -EINVAL;
 	}
 }
 
-static int netkit_check_mode(int mode, struct nlattr *tb,
+static int netkit_check_mode(const struct nlattr *attr,
 			     struct netlink_ext_ack *extack)
 {
-	switch (mode) {
+	if (nla_len(attr) != sizeof(u32)) {
+		NL_SET_ERR_MSG_ATTR(extack, attr, "Invalid mode attribute length");
+		return -EINVAL;
+	}
+
+	switch (nla_get_u32(attr)) {
 	case NETKIT_L2:
 	case NETKIT_L3:
 		return 0;
 	default:
-		NL_SET_ERR_MSG_ATTR(extack, tb,
+		NL_SET_ERR_MSG_ATTR(extack, attr,
 				    "Provided device mode can only be L2 or L3");
 		return -EINVAL;
 	}
@@ -306,13 +316,8 @@ static int netkit_new_link(struct net *src_net, struct net_device *dev,
 	int err;
 
 	if (data) {
-		if (data[IFLA_NETKIT_MODE]) {
-			attr = data[IFLA_NETKIT_MODE];
-			mode = nla_get_u32(attr);
-			err = netkit_check_mode(mode, attr, extack);
-			if (err < 0)
-				return err;
-		}
+		if (data[IFLA_NETKIT_MODE])
+			mode = nla_get_u32(data[IFLA_NETKIT_MODE]);
 		if (data[IFLA_NETKIT_PEER_INFO]) {
 			attr = data[IFLA_NETKIT_PEER_INFO];
 			ifmp = nla_data(attr);
@@ -324,20 +329,10 @@ static int netkit_new_link(struct net *src_net, struct net_device *dev,
 				return err;
 			tbp = peer_tb;
 		}
-		if (data[IFLA_NETKIT_POLICY]) {
-			attr = data[IFLA_NETKIT_POLICY];
-			default_prim = nla_get_u32(attr);
-			err = netkit_check_policy(default_prim, attr, extack);
-			if (err < 0)
-				return err;
-		}
-		if (data[IFLA_NETKIT_PEER_POLICY]) {
-			attr = data[IFLA_NETKIT_PEER_POLICY];
-			default_peer = nla_get_u32(attr);
-			err = netkit_check_policy(default_peer, attr, extack);
-			if (err < 0)
-				return err;
-		}
+		if (data[IFLA_NETKIT_POLICY])
+			default_prim = nla_get_u32(data[IFLA_NETKIT_POLICY]);
+		if (data[IFLA_NETKIT_PEER_POLICY])
+			default_peer = nla_get_u32(data[IFLA_NETKIT_PEER_POLICY]);
 	}
 
 	if (ifmp && tbp[IFLA_IFNAME]) {
@@ -818,8 +813,6 @@ static int netkit_change_link(struct net_device *dev, struct nlattr *tb[],
 	struct netkit *nk = netkit_priv(dev);
 	struct net_device *peer = rtnl_dereference(nk->peer);
 	enum netkit_action policy;
-	struct nlattr *attr;
-	int err;
 
 	if (!nk->primary) {
 		NL_SET_ERR_MSG(extack,
@@ -834,22 +827,14 @@ static int netkit_change_link(struct net_device *dev, struct nlattr *tb[],
 	}
 
 	if (data[IFLA_NETKIT_POLICY]) {
-		attr = data[IFLA_NETKIT_POLICY];
-		policy = nla_get_u32(attr);
-		err = netkit_check_policy(policy, attr, extack);
-		if (err)
-			return err;
+		policy = nla_get_u32(data[IFLA_NETKIT_POLICY]);
 		WRITE_ONCE(nk->policy, policy);
 	}
 
 	if (data[IFLA_NETKIT_PEER_POLICY]) {
-		err = -EOPNOTSUPP;
-		attr = data[IFLA_NETKIT_PEER_POLICY];
-		policy = nla_get_u32(attr);
-		if (peer)
-			err = netkit_check_policy(policy, attr, extack);
-		if (err)
-			return err;
+		if (!peer)
+			return -EOPNOTSUPP;
+		policy = nla_get_u32(data[IFLA_NETKIT_PEER_POLICY]);
 		nk = netkit_priv(peer);
 		WRITE_ONCE(nk->policy, policy);
 	}
@@ -889,9 +874,15 @@ static int netkit_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 static const struct nla_policy netkit_policy[IFLA_NETKIT_MAX + 1] = {
 	[IFLA_NETKIT_PEER_INFO]		= { .len = sizeof(struct ifinfomsg) },
-	[IFLA_NETKIT_POLICY]		= { .type = NLA_U32 },
-	[IFLA_NETKIT_MODE]		= { .type = NLA_U32 },
-	[IFLA_NETKIT_PEER_POLICY]	= { .type = NLA_U32 },
+	[IFLA_NETKIT_POLICY]		= NLA_POLICY_VALIDATE_FN(NLA_BINARY,
+								 netkit_check_policy,
+								 sizeof(u32)),
+	[IFLA_NETKIT_MODE]		= NLA_POLICY_VALIDATE_FN(NLA_BINARY,
+								 netkit_check_mode,
+								 sizeof(u32)),
+	[IFLA_NETKIT_PEER_POLICY]	= NLA_POLICY_VALIDATE_FN(NLA_BINARY,
+								 netkit_check_policy,
+								 sizeof(u32)),
 	[IFLA_NETKIT_PRIMARY]		= { .type = NLA_REJECT,
 					    .reject_message = "Primary attribute is read-only" },
 };
