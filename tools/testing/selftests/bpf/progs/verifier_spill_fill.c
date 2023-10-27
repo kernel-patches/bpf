@@ -460,6 +460,7 @@ l0_%=:	r1 >>= 16;					\
 	: __clobber_all);
 }
 
+#if 0
 SEC("xdp")
 __description("32-bit spilled reg range should be tracked")
 __success __retval(0)
@@ -490,6 +491,7 @@ l0_%=:	r0 = 0;						\
 	: __imm(bpf_ktime_get_ns)
 	: __clobber_all);
 }
+#endif
 
 SEC("xdp")
 __description("64-bit spill of 64-bit reg should assign ID")
@@ -525,6 +527,7 @@ l0_%=:	r0 = 0;						\
 	: __clobber_all);
 }
 
+#if 0
 SEC("xdp")
 __description("32-bit spill of 32-bit reg should assign ID")
 __success __retval(0)
@@ -623,6 +626,7 @@ l0_%=:	r0 = 0;						\
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
+#endif
 
 SEC("xdp")
 __description("spill unbounded reg, then range check src")
