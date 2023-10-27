@@ -528,7 +528,7 @@ setup_xfrm_tunnel()
 	# at_ns0 -> root
 	ip netns exec at_ns0 \
 		ip xfrm state add src 172.16.1.100 dst 172.16.1.200 proto esp \
-			spi $spi_in_to_out reqid 1 mode tunnel \
+			spi $spi_in_to_out reqid 1 mode tunnel replay-window 42 \
 			auth-trunc 'hmac(sha1)' $auth 96 enc 'cbc(aes)' $enc
 	ip netns exec at_ns0 \
 		ip xfrm policy add src 10.1.1.100/32 dst 10.1.1.200/32 dir out \
@@ -537,7 +537,7 @@ setup_xfrm_tunnel()
 	# root -> at_ns0
 	ip netns exec at_ns0 \
 		ip xfrm state add src 172.16.1.200 dst 172.16.1.100 proto esp \
-			spi $spi_out_to_in reqid 2 mode tunnel \
+			spi $spi_out_to_in reqid 2 mode tunnel replay-window 42 \
 			auth-trunc 'hmac(sha1)' $auth 96 enc 'cbc(aes)' $enc
 	ip netns exec at_ns0 \
 		ip xfrm policy add src 10.1.1.200/32 dst 10.1.1.100/32 dir in \
@@ -553,14 +553,14 @@ setup_xfrm_tunnel()
 	# root namespace
 	# at_ns0 -> root
 	ip xfrm state add src 172.16.1.100 dst 172.16.1.200 proto esp \
-		spi $spi_in_to_out reqid 1 mode tunnel \
+		spi $spi_in_to_out reqid 1 mode tunnel replay-window 42 \
 		auth-trunc 'hmac(sha1)' $auth 96  enc 'cbc(aes)' $enc
 	ip xfrm policy add src 10.1.1.100/32 dst 10.1.1.200/32 dir in \
 		tmpl src 172.16.1.100 dst 172.16.1.200 proto esp reqid 1 \
 		mode tunnel
 	# root -> at_ns0
 	ip xfrm state add src 172.16.1.200 dst 172.16.1.100 proto esp \
-		spi $spi_out_to_in reqid 2 mode tunnel \
+		spi $spi_out_to_in reqid 2 mode tunnel replay-window 42 \
 		auth-trunc 'hmac(sha1)' $auth 96  enc 'cbc(aes)' $enc
 	ip xfrm policy add src 10.1.1.200/32 dst 10.1.1.100/32 dir out \
 		tmpl src 172.16.1.200 dst 172.16.1.100 proto esp reqid 2 \
@@ -585,6 +585,8 @@ test_xfrm_tunnel()
 	tc qdisc add dev veth1 clsact
 	tc filter add dev veth1 proto ip ingress bpf da object-pinned \
 		${BPF_PIN_TUNNEL_DIR}/xfrm_get_state
+	ip link set dev veth1 xdpdrv pinned \
+		${BPF_PIN_TUNNEL_DIR}/xfrm_get_state_xdp
 	ip netns exec at_ns0 ping $PING_ARG 10.1.1.200
 	sleep 1
 	grep "reqid 1" ${TRACE}
@@ -592,6 +594,8 @@ test_xfrm_tunnel()
 	grep "spi 0x1" ${TRACE}
 	check_err $?
 	grep "remote ip 0xac100164" ${TRACE}
+	check_err $?
+	grep "replay-window 42" ${TRACE}
 	check_err $?
 	cleanup
 
