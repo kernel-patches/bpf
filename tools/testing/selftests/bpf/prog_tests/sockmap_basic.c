@@ -525,9 +525,10 @@ out:
 	test_sockmap_pass_prog__destroy(pass);
 }
 
-static void test_sockmap_msg_verdict(bool is_ingress, bool is_permanent, bool is_self)
+static void test_sockmap_msg_verdict(bool is_ingress, bool is_permanent, bool is_self,
+				     bool target_shutdown)
 {
-	int key, sent, recvd, recv_fd;
+	int key, sent, recvd, recv_fd, target_fd;
 	int err, map, verdict, s, c0, c1, p0, p1;
 	struct test_sockmap_msg_verdict *skel;
 	char buf[256] = "0123456789";
@@ -571,18 +572,22 @@ static void test_sockmap_msg_verdict(bool is_ingress, bool is_permanent, bool is
 		skel->bss->skmsg_redir_flags = BPF_F_INGRESS;
 		if (is_self) {
 			skel->bss->skmsg_redir_key = 0;
+			target_fd = p1;
 			recv_fd = p1;
 		} else {
 			skel->bss->skmsg_redir_key = 1;
+			target_fd = c1;
 			recv_fd = c1;
 		}
 	} else {
 		skel->bss->skmsg_redir_flags = 0;
 		if (is_self) {
 			skel->bss->skmsg_redir_key = 0;
+			target_fd = p1;
 			recv_fd = c1;
 		} else {
 			skel->bss->skmsg_redir_key = 2;
+			target_fd = p0;
 			recv_fd = c0;
 		}
 	}
@@ -594,6 +599,19 @@ static void test_sockmap_msg_verdict(bool is_ingress, bool is_permanent, bool is
 	ASSERT_EQ(sent, sizeof(buf), "xsend(p1)");
 	recvd = recv_timeout(recv_fd, &buf, sizeof(buf), SOCK_NONBLOCK, IO_TIMEOUT_SEC);
 	ASSERT_EQ(recvd, sizeof(buf), "recv_timeout(recv_fd)");
+
+	if (target_shutdown) {
+		signal(SIGPIPE, SIG_IGN);
+		close(target_fd);
+		sent = send(p1, &buf, sizeof(buf), 0);
+		if (is_permanent) {
+			ASSERT_EQ(sent, -1, "xsend(p1)");
+			ASSERT_EQ(errno, EPIPE, "xsend(p1)");
+		} else {
+			ASSERT_EQ(sent, sizeof(buf), "xsend(p1)");
+		}
+		goto out_close;
+	}
 
 	sent = xsend(p1, &buf, sizeof(buf), 0);
 	ASSERT_EQ(sent, sizeof(buf), "xsend(p1)");
@@ -651,15 +669,23 @@ void test_sockmap_basic(void)
 	if (test__start_subtest("sockmap skb_verdict msg_f_peek"))
 		test_sockmap_skb_verdict_peek();
 	if (test__start_subtest("sockmap msg_verdict"))
-		test_sockmap_msg_verdict(false, false, false);
+		test_sockmap_msg_verdict(false, false, false, false);
 	if (test__start_subtest("sockmap msg_verdict ingress"))
-		test_sockmap_msg_verdict(true, false, false);
+		test_sockmap_msg_verdict(true, false, false, false);
 	if (test__start_subtest("sockmap msg_verdict permanent"))
-		test_sockmap_msg_verdict(false, true, false);
+		test_sockmap_msg_verdict(false, true, false, false);
 	if (test__start_subtest("sockmap msg_verdict ingress permanent"))
-		test_sockmap_msg_verdict(true, true, false);
+		test_sockmap_msg_verdict(true, true, false, false);
 	if (test__start_subtest("sockmap msg_verdict permanent self"))
-		test_sockmap_msg_verdict(false, true, true);
+		test_sockmap_msg_verdict(false, true, true, false);
 	if (test__start_subtest("sockmap msg_verdict ingress permanent self"))
-		test_sockmap_msg_verdict(true, true, true);
+		test_sockmap_msg_verdict(true, true, true, false);
+	if (test__start_subtest("sockmap msg_verdict permanent shutdown"))
+		test_sockmap_msg_verdict(false, true, false, true);
+	if (test__start_subtest("sockmap msg_verdict ingress permanent shutdown"))
+		test_sockmap_msg_verdict(true, true, false, true);
+	if (test__start_subtest("sockmap msg_verdict shutdown"))
+		test_sockmap_msg_verdict(false, false, false, true);
+	if (test__start_subtest("sockmap msg_verdict ingress shutdown"))
+		test_sockmap_msg_verdict(true, false, false, true);
 }
