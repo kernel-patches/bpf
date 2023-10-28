@@ -843,14 +843,11 @@ static noinline int bpf_jit_insn(struct bpf_jit *jit, struct bpf_prog *fp,
 		}
 		break;
 	case BPF_ALU | BPF_MOV | BPF_K: /* dst = (u32) imm */
-		/* llilf %dst,imm */
-		EMIT6_IMM(0xc00f0000, dst_reg, imm);
-		if (insn_is_zext(&insn[1]))
-			insn_count = 2;
-		break;
 	case BPF_ALU64 | BPF_MOV | BPF_K: /* dst = imm */
 		/* lgfi %dst,imm */
 		EMIT6_IMM(0xc0010000, dst_reg, imm);
+		if (insn_is_zext(&insn[1]))
+			insn_count = 2;
 		break;
 	/*
 	 * BPF_LD 64
