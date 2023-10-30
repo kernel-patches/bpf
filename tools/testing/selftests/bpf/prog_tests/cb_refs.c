@@ -21,12 +21,14 @@ void test_cb_refs(void)
 {
 	LIBBPF_OPTS(bpf_object_open_opts, opts, .kernel_log_buf = log_buf,
 						.kernel_log_size = sizeof(log_buf),
-						.kernel_log_level = 1);
+						.kernel_log_level = 1 | 2 | 4);
 	struct bpf_program *prog;
 	struct cb_refs *skel;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(cb_refs_tests); i++) {
+		if (!test__start_subtest(cb_refs_tests[i].prog_name))
+			continue;
 		LIBBPF_OPTS(bpf_test_run_opts, run_opts,
 			.data_in = &pkt_v4,
 			.data_size_in = sizeof(pkt_v4),
