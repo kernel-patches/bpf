@@ -15,6 +15,7 @@
  */
 #define pr_fmt(fmt) "seccomp: " fmt
 
+#include <linux/bpf.h>
 #include <linux/refcount.h>
 #include <linux/audit.h>
 #include <linux/compat.h>
@@ -2513,3 +2514,56 @@ int proc_pid_seccomp_cache(struct seq_file *m, struct pid_namespace *ns,
 	return 0;
 }
 #endif /* CONFIG_SECCOMP_CACHE_DEBUG */
+
+#if defined(CONFIG_SECCOMP_FILTER) && defined(CONFIG_BPF_SYSCALL)
+const struct bpf_prog_ops seccomp_prog_ops = {
+};
+
+static bool seccomp_is_valid_access(int off, int size, enum bpf_access_type type,
+				    const struct bpf_prog *prog,
+				    struct bpf_insn_access_aux *info)
+{
+	if (off < 0 || off >= sizeof(struct seccomp_data))
+		return false;
+
+	if (off % size != 0)
+		return false;
+
+	if (type == BPF_WRITE)
+		return false;
+
+	switch (off) {
+	case bpf_ctx_range(struct seccomp_data, nr):
+		if (size != sizeof_field(struct seccomp_data, nr))
+			return false;
+		return true;
+	case bpf_ctx_range(struct seccomp_data, arch):
+		if (size != sizeof_field(struct seccomp_data, arch))
+			return false;
+		return true;
+	case bpf_ctx_range(struct seccomp_data, instruction_pointer):
+		if (size != sizeof_field(struct seccomp_data, instruction_pointer))
+			return false;
+		return true;
+	case bpf_ctx_range(struct seccomp_data, args):
+		if (size != sizeof(__u64))
+			return false;
+		return true;
+	default:
+		return false;
+	}
+
+	return false;
+}
+
+static const struct bpf_func_proto *
+bpf_seccomp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return NULL;
+}
+
+const struct bpf_verifier_ops seccomp_verifier_ops = {
+	.is_valid_access = seccomp_is_valid_access,
+	.get_func_proto  = bpf_seccomp_func_proto,
+};
+#endif /* CONFIG_SECCOMP_FILTER && CONFIG_BPF_SYSCALL */
