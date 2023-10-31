@@ -309,12 +309,34 @@ struct bpf_func_state {
 	struct bpf_stack_state *stack;
 };
 
-struct bpf_insn_hist_entry {
-	u32 prev_idx;
-	u32 idx;
+#define MAX_CALL_FRAMES 8
+
+/* instruction history flags, used in bpf_insn_hist_entry.flags field */
+enum {
+	/* instruction references stack slot through PTR_TO_STACK register;
+	 * we also store stack's frame number in lower 3 bits (MAX_CALL_FRAMES is 8)
+	 * and accessed stack slot's index in next 6 bits (MAX_BPF_STACK is 512,
+	 * 8 bytes per slot, so slot index (spi) is [0, 63])
+	 */
+	INSN_F_FRAMENO_MASK = 0x7, /* 3 bits */
+
+	INSN_F_SPI_MASK = 0x3f, /* 6 bits */
+	INSN_F_SPI_SHIFT = 3, /* shifted 3 bits to the left */
+
+	INSN_F_STACK_ACCESS = BIT(9), /* we need 10 bits total */
 };
 
-#define MAX_CALL_FRAMES 8
+static_assert(INSN_F_FRAMENO_MASK + 1 >= MAX_CALL_FRAMES);
+static_assert(INSN_F_SPI_MASK + 1 >= MAX_BPF_STACK / 8);
+
+struct bpf_insn_hist_entry {
+	u32 idx;
+	/* insn idx can't be bigger than 1 million */
+	u32 prev_idx : 22;
+	/* special flags, e.g., whether insn is doing register stack spill/load */
+	u32 flags : 10;
+};
+
 /* Maximum number of register states that can exist at once */
 #define BPF_ID_MAP_SIZE ((MAX_BPF_REG + MAX_BPF_STACK / BPF_REG_SIZE) * MAX_CALL_FRAMES)
 struct bpf_verifier_state {
