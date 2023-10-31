@@ -641,14 +641,14 @@ static inline void seccomp_sync_threads(unsigned long flags)
 }
 
 /**
- * seccomp_prepare_filter: Prepares a seccomp filter for use.
- * @fprog: BPF program to install
+ * seccomp_prepare_prog - prepares a JITed BPF filter for use.
+ * @pfp: the unattached filter that is created
+ * @fprog: the filter program
  *
- * Returns filter on success or an ERR_PTR on failure.
+ * Returns 0 on success and non-zero otherwise.
  */
-static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
+static int seccomp_prepare_prog(struct bpf_prog **pfp, struct sock_fprog *fprog)
 {
-	struct seccomp_filter *sfilter;
 	int ret;
 	const bool save_orig =
 #if defined(CONFIG_CHECKPOINT_RESTORE) || defined(SECCOMP_ARCH_NATIVE)
@@ -658,9 +658,26 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 #endif
 
 	if (fprog->len == 0 || fprog->len > BPF_MAXINSNS)
-		return ERR_PTR(-EINVAL);
+		return -EINVAL;
 
 	BUG_ON(INT_MAX / fprog->len < sizeof(struct sock_filter));
+
+	ret = bpf_prog_create_from_user(pfp, fprog, seccomp_check_filter, save_orig);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+/**
+ * seccomp_prepare_filter: Prepares a seccomp filter for use.
+ * @prog: BPF program to install
+ *
+ * Returns filter on success or an ERR_PTR on failure.
+ */
+static struct seccomp_filter *seccomp_prepare_filter(struct bpf_prog *prog)
+{
+	struct seccomp_filter *sfilter;
 
 	/*
 	 * Installing a seccomp filter requires that the task has
@@ -678,13 +695,7 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 		return ERR_PTR(-ENOMEM);
 
 	mutex_init(&sfilter->notify_lock);
-	ret = bpf_prog_create_from_user(&sfilter->prog, fprog,
-					seccomp_check_filter, save_orig);
-	if (ret < 0) {
-		kfree(sfilter);
-		return ERR_PTR(ret);
-	}
-
+	sfilter->prog = prog;
 	refcount_set(&sfilter->refs, 1);
 	refcount_set(&sfilter->users, 1);
 	init_waitqueue_head(&sfilter->wqh);
@@ -701,8 +712,10 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 static struct seccomp_filter *
 seccomp_prepare_user_filter(const char __user *user_filter)
 {
-	struct sock_fprog fprog;
 	struct seccomp_filter *filter = ERR_PTR(-EFAULT);
+	struct sock_fprog fprog;
+	struct bpf_prog *prog;
+	int ret;
 
 #ifdef CONFIG_COMPAT
 	if (in_compat_syscall()) {
@@ -715,7 +728,14 @@ seccomp_prepare_user_filter(const char __user *user_filter)
 #endif
 	if (copy_from_user(&fprog, user_filter, sizeof(fprog)))
 		goto out;
-	filter = seccomp_prepare_filter(&fprog);
+
+	ret = seccomp_prepare_prog(&prog, &fprog);
+	if (ret)
+		return ERR_PTR(ret);
+
+	filter = seccomp_prepare_filter(prog);
+	if (IS_ERR(filter))
+		bpf_prog_destroy(prog);
 out:
 	return filter;
 }
