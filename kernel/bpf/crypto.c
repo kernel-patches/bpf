@@ -65,8 +65,9 @@ static void *__bpf_dynptr_data_ptr(const struct bpf_dynptr_kern *ptr)
  *
  * bpf_crypto_skcipher_ctx_create() allocates memory using the BPF memory
  * allocator, and will not block. It may return NULL if no memory is available.
- * @algo: bpf_dynptr which holds string representation of algorithm.
- * @key:  bpf_dynptr which holds cipher key to do crypto.
+ * @palgo: bpf_dynptr which holds string representation of algorithm.
+ * @pkey:  bpf_dynptr which holds cipher key to do crypto.
+ * @err:   integer to store error code when NULL is returned
  */
 __bpf_kfunc struct bpf_crypto_skcipher_ctx *
 bpf_crypto_skcipher_ctx_create(const struct bpf_dynptr_kern *palgo,
