@@ -2517,6 +2517,7 @@ int proc_pid_seccomp_cache(struct seq_file *m, struct pid_namespace *ns,
 
 #if defined(CONFIG_SECCOMP_FILTER) && defined(CONFIG_BPF_SYSCALL)
 const struct bpf_prog_ops seccomp_prog_ops = {
+	.test_run = bpf_prog_test_run_seccomp,
 };
 
 static bool seccomp_is_valid_access(int off, int size, enum bpf_access_type type,
