@@ -57,6 +57,7 @@
 #include "verifier_scalar_ids.skel.h"
 #include "verifier_sdiv.skel.h"
 #include "verifier_search_pruning.skel.h"
+#include "verifier_seccomp.skel.h"
 #include "verifier_sock.skel.h"
 #include "verifier_spill_fill.skel.h"
 #include "verifier_spin_lock.skel.h"
@@ -164,6 +165,7 @@ void test_verifier_runtime_jit(void)          { RUN(verifier_runtime_jit); }
 void test_verifier_scalar_ids(void)           { RUN(verifier_scalar_ids); }
 void test_verifier_sdiv(void)                 { RUN(verifier_sdiv); }
 void test_verifier_search_pruning(void)       { RUN(verifier_search_pruning); }
+void test_verifier_seccomp(void)              { RUN(verifier_seccomp); }
 void test_verifier_sock(void)                 { RUN(verifier_sock); }
 void test_verifier_spill_fill(void)           { RUN(verifier_spill_fill); }
 void test_verifier_spin_lock(void)            { RUN(verifier_spin_lock); }
