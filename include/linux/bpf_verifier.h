@@ -309,7 +309,7 @@ struct bpf_func_state {
 	struct bpf_stack_state *stack;
 };
 
-struct bpf_idx_pair {
+struct bpf_insn_hist_entry {
 	u32 prev_idx;
 	u32 idx;
 };
@@ -397,8 +397,8 @@ struct bpf_verifier_state {
 	 * For most states jmp_history_cnt is [0-3].
 	 * For loops can go up to ~40.
 	 */
-	struct bpf_idx_pair *jmp_history;
-	u32 jmp_history_cnt;
+	u32 insn_hist_start;
+	u32 insn_hist_end;
 	u32 dfs_depth;
 };
 
@@ -666,6 +666,8 @@ struct bpf_verifier_env {
 	 * e.g., in reg_type_str() to generate reg_type string
 	 */
 	char tmp_str_buf[TMP_STR_BUF_LEN];
+	struct bpf_insn_hist_entry *insn_hist;
+	u32 insn_hist_cap;
 };
 
 __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
