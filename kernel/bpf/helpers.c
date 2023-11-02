@@ -2309,7 +2309,7 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr_kern *ptr, u32 offset
 	{
 		void *xdp_ptr = bpf_xdp_pointer(ptr->data, ptr->offset + offset, len);
 		if (!IS_ERR_OR_NULL(xdp_ptr))
-			return xdp_ptr;
+			return NULL;
 
 		if (!buffer__opt)
 			return NULL;
