@@ -1,0 +1,168 @@
+bpf_sock_addr_set_sun_path Source
+--------------------------------
+__bpf_kfunc int bpf_sock_addr_set_sun_path(struct bpf_sock_addr_kern *sa_kern,
+					   const u8 *sun_path, u32 sun_path__sz)
+{
+	struct sockaddr_un *un;
+
+	if (sa_kern->sk->sk_family != AF_UNIX)
+		return -EINVAL;
+
+	/* We do not allow changing the address to unnamed or larger than the
+	 * maximum allowed address size for a unix sockaddr.
+	 */
+	if (sun_path__sz == 0 || sun_path__sz > UNIX_PATH_MAX)
+		return -EINVAL;
+
+	un = (struct sockaddr_un *)sa_kern->uaddr;
+	memcpy(un->sun_path, sun_path, sun_path__sz);
+	sa_kern->uaddrlen = offsetof(struct sockaddr_un, sun_path) + sun_path__sz;
+
+	return 0;
+}
+
+s390x Assembly
+--------------
+   0x963a08 <bpf_sock_addr_set_sun_path>:	jgnop	0xcfbda8 <__softirqentry_text_end+632592>
+   0x963a0e <bpf_sock_addr_set_sun_path+6>:	stmg	%r10,%r15,104(%r15)
+   0x963a14 <bpf_sock_addr_set_sun_path+12>:	lgr	%r14,%r15
+   0x963a18 <bpf_sock_addr_set_sun_path+16>:	lay	%r15,-56(%r15)
+=> 0x963a1e <bpf_sock_addr_set_sun_path+22>:	stg	%r14,152(%r15)
+
+   if (sa_kern->sk->sk_family != AF_UNIX)
+	return -EINVAL;
+
+   0x963a24 <bpf_sock_addr_set_sun_path+28>:	lg	%r1,0(%r2)
+   0x963a2a <bpf_sock_addr_set_sun_path+34>:	chhsi	16(%r1),1
+   0x963a30 <bpf_sock_addr_set_sun_path+40>:	jne	0x963a78 <bpf_sock_addr_set_sun_path+112>
+
+   if (sun_path__sz == 0 || sun_path__sz > UNIX_PATH_MAX)
+   	return -EINVAL;
+
+   0x963a34 <bpf_sock_addr_set_sun_path+44>:	ahik	%r1,%r4,-1             // r1 = (r4 & 0xffff) - 1 = 0x1d = 28
+   0x963a3a <bpf_sock_addr_set_sun_path+50>:	lgr	%r10,%r4               // r10 = r4 = 0xd46f6a2a0000001d
+   0x963a3e <bpf_sock_addr_set_sun_path+54>:	clfi	%r1,107                // compare r1 to 107 (UNIX_PATH_MAX-1)
+   0x963a44 <bpf_sock_addr_set_sun_path+60>:	jh	0x963a78 <bpf_sock_addr_set_sun_path+112>
+
+   un = (struct sockaddr_un *)sa_kern->uaddr;
+   memcpy(un->sun_path, sun_path, sun_path__sz);
+
+   0x963a48 <bpf_sock_addr_set_sun_path+64>:	lg	%r1,8(%r2)
+   0x963a4e <bpf_sock_addr_set_sun_path+70>:	lgr	%r11,%r2
+   0x963a52 <bpf_sock_addr_set_sun_path+74>:	aghik	%r2,%r1,2
+   0x963a58 <bpf_sock_addr_set_sun_path+80>:	brasl	%r14,0x73a0b0 <memcpy>
+
+   sa_kern->uaddrlen = offsetof(struct sockaddr_un, sun_path) + sun_path__sz
+
+   return 0;
+   0x963a5e <bpf_sock_addr_set_sun_path+86>:	ahik	%r1,%r10,2
+   0x963a64 <bpf_sock_addr_set_sun_path+92>:	lhi	%r2,0
+   0x963a68 <bpf_sock_addr_set_sun_path+96>:	st	%r1,32(%r11)
+   0x963a6c <bpf_sock_addr_set_sun_path+100>:	lgfr	%r2,%r2
+   0x963a70 <bpf_sock_addr_set_sun_path+104>:	lmg	%r10,%r15,160(%r15)
+   0x963a76 <bpf_sock_addr_set_sun_path+110>:	br	%r14
+   0x963a78 <bpf_sock_addr_set_sun_path+112>:	lhi	%r2,-22
+   0x963a7c <bpf_sock_addr_set_sun_path+116>:	j	0x963a6c <bpf_sock_addr_set_sun_path+100>
+
+memcpy Source
+------------
+/*
+ * memcpy implementation
+ *
+ * void *memcpy(void *dest, const void *src, size_t n)
+ */
+SYM_FUNC_START(__memcpy)
+	ltgr	%r4,%r4            // load and test r4 (size_t n parameter)
+	jz	.Lmemcpy_exit      // exit if n == 0
+	aghi	%r4,-1             // r4 = r4 - 1
+	srlg	%r5,%r4,8          // r5 = r4 / 256
+	ltgr	%r5,%r5            // test r5
+	lgr	%r1,%r2            // r1 = r2
+	jnz	.Lmemcpy_loop      // goto memcpy_loop if r5 != 0 (n > 256) - r5 counts number of 256 byte "chunks" remaining
+.Lmemcpy_remainder:
+	larl	%r5,.Lmemcpy_mvc   // r5 = address of mvc instruction
+	ex	%r4,0(%r5)         // copy last 255 bytes to dest
+.Lmemcpy_exit:
+	BR_EX	%r14               // return
+.Lmemcpy_loop:
+	mvc	0(256,%r1),0(%r3)  // copy 256 bytes from src to dst
+	la	%r1,256(%r1)       // r1 += 256
+	la	%r3,256(%r3)       // r3 += 256
+	brctg	%r5,.Lmemcpy_loop  // r5 -= 1; goto memcpy_loop if r5 != 0 else go to next instruction
+	j	.Lmemcpy_remainder // copy remaining bytes (if any)
+.Lmemcpy_mvc:
+	mvc	0(1,%r1),0(%r3)
+SYM_FUNC_END(__memcpy)
+EXPORT_SYMBOL(__memcpy)
+
+SYM_FUNC_ALIAS(memcpy, __memcpy)
+EXPORT_SYMBOL(memcpy)
+
+memcpy Assembly
+--------------
+   0x73a0b0 <memcpy>:	ltgr	%r4,%r4
+   0x73a0b4 <memcpy+4>:	je	0x73a0d8 <memcpy+40>
+   0x73a0b8 <memcpy+8>:	aghi	%r4,-1
+   0x73a0bc <memcpy+12>:	srlg	%r5,%r4,8
+   0x73a0c2 <memcpy+18>:	ltgr	%r5,%r5
+   0x73a0c6 <memcpy+22>:	lgr	%r1,%r2
+   0x73a0ca <memcpy+26>:	jne	0x73a0da <memcpy+42>
+   0x73a0ce <memcpy+30>:	larl	%r5,0x73a0f0 <memcpy+64>
+   0x73a0d4 <memcpy+36>:	ex	%r4,0(%r5)
+   0x73a0d8 <memcpy+40>:	br	%r14
+   0x73a0da <memcpy+42>:	mvc	0(256,%r1),0(%r3)
+   0x73a0e0 <memcpy+48>:	la	%r1,256(%r1)
+   0x73a0e4 <memcpy+52>:	la	%r3,256(%r3)
+   0x73a0e8 <memcpy+56>:	brctg	%r5,0x73a0da <memcpy+42>
+   0x73a0ec <memcpy+60>:	j	0x73a0ce <memcpy+30>
+   0x73a0f0 <memcpy+64>:	mvc	0(1,%r1),0(%r3)
+
+
+Execution
+---------
+   0x963a08 <bpf_sock_addr_set_sun_path>:	jgnop	0xcfbda8 <__softirqentry_text_end+632592>
+   0x963a0e <bpf_sock_addr_set_sun_path+6>:	stmg	%r10,%r15,104(%r15)
+   0x963a14 <bpf_sock_addr_set_sun_path+12>:	lgr	%r14,%r15
+   0x963a18 <bpf_sock_addr_set_sun_path+16>:	lay	%r15,-56(%r15)
+   0x963a1e <bpf_sock_addr_set_sun_path+22>:	stg	%r14,152(%r15)
+   0x963a24 <bpf_sock_addr_set_sun_path+28>:	lg	%r1,0(%r2)
+   0x963a2a <bpf_sock_addr_set_sun_path+34>:	chhsi	16(%r1),1
+   0x963a30 <bpf_sock_addr_set_sun_path+40>:	jne	0x963a78 <bpf_sock_addr_set_sun_path+112>
+   0x963a34 <bpf_sock_addr_set_sun_path+44>:	ahik	%r1,%r4,-1
+   0x963a3a <bpf_sock_addr_set_sun_path+50>:	lgr	%r10,%r4
+   0x963a3e <bpf_sock_addr_set_sun_path+54>:	clfi	%r1,107
+   0x963a44 <bpf_sock_addr_set_sun_path+60>:	jh	0x963a78 <bpf_sock_addr_set_sun_path+112>
+   0x963a48 <bpf_sock_addr_set_sun_path+64>:	lg	%r1,8(%r2)
+   0x963a4e <bpf_sock_addr_set_sun_path+70>:	lgr	%r11,%r2
+   0x963a52 <bpf_sock_addr_set_sun_path+74>:	aghik	%r2,%r1,2
+=> 0x963a58 <bpf_sock_addr_set_sun_path+80>:	brasl	%r14,0x73a0b0 <memcpy>
+   0x963a5e <bpf_sock_addr_set_sun_path+86>:	ahik	%r1,%r10,2
+   0x963a64 <bpf_sock_addr_set_sun_path+92>:	lhi	%r2,0
+   0x963a68 <bpf_sock_addr_set_sun_path+96>:	st	%r1,32(%r11)
+   0x963a6c <bpf_sock_addr_set_sun_path+100>:	lgfr	%r2,%r2
+   0x963a70 <bpf_sock_addr_set_sun_path+104>:	lmg	%r10,%r15,160(%r15)
+   0x963a76 <bpf_sock_addr_set_sun_path+110>:	br	%r14
+   0x963a78 <bpf_sock_addr_set_sun_path+112>:	lhi	%r2,-22
+   0x963a7c <bpf_sock_addr_set_sun_path+116>:	j	0x963a6c <bpf_sock_addr_set_sun_path+100>
+
+r4             0xd46f6a2a0000001d  15307570387076775965
+
+Problem
+-------
+Internally, GCC promotes SI (single int - u32) parameters to DI (double integer - u64) to fill a register.
+It is expected that the caller knows this, but in the case of BPF the caller is not aware and does not
+explicitly zero-extend the register before calling the function.
+
+s390x implementation of memcpy() treats r4, the register holding the length paramter, as a 64 bit value.
+However, the value is not explicitly zero-extended before calling memcpy, so it holds the random u32
+inserted by opt_subreg_zext_lo32_rnd_hi32().
+
+From GCC's perspective zero extension within the function is not necessary before calling memcpy(), because
+any calling code that it generated would have initialized the register appropriately. Explicit zero-extension
+is wasteful if we can get away with merely promoting all values everywhere. Things like integer underflow/overflow
+still operate as if it's a 32 bit value through explicit zero-extension.
+
+
+17 March 2024
+=============
+s390x CI tests are all failing: https://lore.kernel.org/bpf/c9923c1d-971d-4022-8dc8-1364e929d34c@gmail.com/T/#m04c355e83b837c6fc37173c25f6f7e914eb6b122
