@@ -83,6 +83,7 @@ struct btf_dump {
 	int ptr_sz;
 	bool strip_mods;
 	bool skip_anon_defs;
+	bool empty_struct_align8;
 	int last_id;
 
 	/* per-type auxiliary state */
@@ -167,6 +168,7 @@ struct btf_dump *btf_dump__new(const struct btf *btf,
 	d->printf_fn = printf_fn;
 	d->cb_ctx = ctx;
 	d->ptr_sz = btf__pointer_size(btf) ? : sizeof(void *);
+	d->empty_struct_align8 = OPTS_GET(opts, empty_struct_align8, false);
 
 	d->type_names = hashmap__new(str_hash_fn, str_equal_fn, NULL);
 	if (IS_ERR(d->type_names)) {
@@ -808,7 +810,10 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 
 		if (top_level_def) {
 			btf_dump_emit_struct_def(d, id, t, 0);
-			btf_dump_printf(d, ";\n\n");
+			if (kind == BTF_KIND_UNION || btf_vlen(t) || !d->empty_struct_align8)
+				btf_dump_printf(d, ";\n\n");
+			else
+				btf_dump_printf(d, " __attribute__((aligned(8)));\n\n");
 			tstate->emit_state = EMITTED;
 		} else {
 			tstate->emit_state = NOT_EMITTED;

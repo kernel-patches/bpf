@@ -235,8 +235,13 @@ struct btf_dump;
 
 struct btf_dump_opts {
 	size_t sz;
+	/* emit '__attribute__((aligned(8)))' for empty struct, i.e.,
+	 * the struct has no named member.
+	 */
+	bool empty_struct_align8;
+	size_t :0;
 };
-#define btf_dump_opts__last_field sz
+#define btf_dump_opts__last_field empty_struct_align8
 
 typedef void (*btf_dump_printf_fn_t)(void *ctx, const char *fmt, va_list args);
 

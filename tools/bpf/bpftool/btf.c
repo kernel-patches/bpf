@@ -463,10 +463,13 @@ static void __printf(2, 0) btf_dump_printf(void *ctx,
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt)
 {
+	LIBBPF_OPTS(btf_dump_opts, opts,
+		.empty_struct_align8 = true,
+	);
 	struct btf_dump *d;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
+	d = btf_dump__new(btf, btf_dump_printf, NULL, &opts);
 	if (!d)
 		return -errno;
 
