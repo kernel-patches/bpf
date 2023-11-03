@@ -68,6 +68,7 @@ static netdev_tx_t netkit_xmit(struct sk_buff *skb, struct net_device *dev)
 	netdev_tx_t ret_dev = NET_XMIT_SUCCESS;
 	const struct bpf_mprog_entry *entry;
 	struct net_device *peer;
+	int len = skb->len;
 
 	rcu_read_lock();
 	peer = rcu_dereference(nk->peer);
@@ -85,15 +86,22 @@ static netdev_tx_t netkit_xmit(struct sk_buff *skb, struct net_device *dev)
 	case NETKIT_PASS:
 		skb->protocol = eth_type_trans(skb, skb->dev);
 		skb_postpull_rcsum(skb, eth_hdr(skb), ETH_HLEN);
-		__netif_rx(skb);
+		if (likely(__netif_rx(skb) == NET_RX_SUCCESS)) {
+			dev_sw_netstats_tx_add(dev, 1, len);
+			dev_sw_netstats_rx_add(peer, len);
+		} else {
+			goto drop_stats;
+		}
 		break;
 	case NETKIT_REDIRECT:
+		dev_sw_netstats_tx_add(dev, 1, len);
 		skb_do_redirect(skb);
 		break;
 	case NETKIT_DROP:
 	default:
 drop:
 		kfree_skb(skb);
+drop_stats:
 		dev_core_stats_tx_dropped_inc(dev);
 		ret_dev = NET_XMIT_DROP;
 		break;
@@ -174,7 +182,25 @@ static struct net_device *netkit_peer_dev(struct net_device *dev)
 	return rcu_dereference(netkit_priv(dev)->peer);
 }
 
+static void netkit_get_stats(struct net_device *dev,
+			     struct rtnl_link_stats64 *stats)
+{
+	dev_fetch_sw_netstats(stats, dev->tstats);
+	stats->tx_dropped = DEV_STATS_READ(dev, tx_dropped);
+}
+
+static int netkit_init(struct net_device *dev)
+{
+	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
+	return !dev->tstats ? -ENOMEM : 0;
+}
+
 static void netkit_uninit(struct net_device *dev);
+
+static void netkit_free(struct net_device *dev)
+{
+	free_percpu(dev->tstats);
+}
 
 static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_open		= netkit_open,
@@ -184,6 +210,8 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_set_rx_headroom	= netkit_set_headroom,
 	.ndo_get_iflink		= netkit_get_iflink,
 	.ndo_get_peer_dev	= netkit_peer_dev,
+	.ndo_get_stats64	= netkit_get_stats,
+	.ndo_init		= netkit_init,
 	.ndo_uninit		= netkit_uninit,
 	.ndo_features_check	= passthru_features_check,
 };
@@ -235,6 +263,7 @@ static void netkit_setup(struct net_device *dev)
 	dev->vlan_features = dev->features & ~netkit_features_hw_vlan;
 
 	dev->needs_free_netdev = true;
+	dev->priv_destructor = netkit_free;
 
 	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 }
@@ -911,7 +940,7 @@ static struct rtnl_link_ops netkit_link_ops = {
 	.maxtype	= IFLA_NETKIT_MAX,
 };
 
-static __init int netkit_init(void)
+static __init int netkit_mod_init(void)
 {
 	BUILD_BUG_ON((int)NETKIT_NEXT != (int)TCX_NEXT ||
 		     (int)NETKIT_PASS != (int)TCX_PASS ||
@@ -921,13 +950,13 @@ static __init int netkit_init(void)
 	return rtnl_link_register(&netkit_link_ops);
 }
 
-static __exit void netkit_exit(void)
+static __exit void netkit_mod_exit(void)
 {
 	rtnl_link_unregister(&netkit_link_ops);
 }
 
-module_init(netkit_init);
-module_exit(netkit_exit);
+module_init(netkit_mod_init);
+module_exit(netkit_mod_exit);
 
 MODULE_DESCRIPTION("BPF-programmable network device");
 MODULE_AUTHOR("Daniel Borkmann <daniel@iogearbox.net>");
