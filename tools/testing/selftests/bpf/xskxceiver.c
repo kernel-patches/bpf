@@ -634,16 +634,35 @@ static u32 pkt_nb_frags(u32 frame_size, struct pkt_stream *pkt_stream, struct pk
 	return nb_frags;
 }
 
-static void pkt_set(struct pkt_stream *pkt_stream, struct pkt *pkt, int offset, u32 len)
+static bool pkt_valid(bool unaligned_mode, int offset, u32 len)
+{
+	if (len > MAX_ETH_JUMBO_SIZE || (!unaligned_mode && offset < 0))
+		return false;
+
+	return true;
+}
+
+static void pkt_set(struct pkt_stream *pkt_stream, struct xsk_umem_info *umem, struct pkt *pkt,
+		    int offset, u32 len)
 {
 	pkt->offset = offset;
 	pkt->len = len;
-	if (len > MAX_ETH_JUMBO_SIZE) {
-		pkt->valid = false;
-	} else {
-		pkt->valid = true;
+
+	pkt->valid = pkt_valid(umem->unaligned_mode, offset, len);
+	if (pkt->valid)
 		pkt_stream->nb_valid_entries++;
-	}
+}
+
+static void pkt_modify(struct pkt_stream *pkt_stream, struct xsk_umem_info *umem, struct pkt *pkt,
+		       int offset, u32 len)
+{
+	bool mod_valid;
+
+	pkt->offset = offset;
+	pkt->len = len;
+	mod_valid  = pkt_valid(umem->unaligned_mode, offset, len);
+	pkt_stream->nb_valid_entries += mod_valid - pkt->valid;
+	pkt->valid = mod_valid;
 }
 
 static u32 pkt_get_buffer_len(struct xsk_umem_info *umem, u32 len)
@@ -651,7 +670,8 @@ static u32 pkt_get_buffer_len(struct xsk_umem_info *umem, u32 len)
 	return ceil_u32(len, umem->frame_size) * umem->frame_size;
 }
 
-static struct pkt_stream *__pkt_stream_generate(u32 nb_pkts, u32 pkt_len, u32 nb_start, u32 nb_off)
+static struct pkt_stream *__pkt_stream_generate(struct xsk_umem_info *umem, u32 nb_pkts,
+						u32 pkt_len, u32 nb_start, u32 nb_off)
 {
 	struct pkt_stream *pkt_stream;
 	u32 i;
@@ -665,30 +685,31 @@ static struct pkt_stream *__pkt_stream_generate(u32 nb_pkts, u32 pkt_len, u32 nb
 	for (i = 0; i < nb_pkts; i++) {
 		struct pkt *pkt = &pkt_stream->pkts[i];
 
-		pkt_set(pkt_stream, pkt, 0, pkt_len);
+		pkt_set(pkt_stream, umem, pkt, 0, pkt_len);
 		pkt->pkt_nb = nb_start + i * nb_off;
 	}
 
 	return pkt_stream;
 }
 
-static struct pkt_stream *pkt_stream_generate(u32 nb_pkts, u32 pkt_len)
+static struct pkt_stream *pkt_stream_generate(struct xsk_umem_info *umem, u32 nb_pkts, u32 pkt_len)
 {
-	return __pkt_stream_generate(nb_pkts, pkt_len, 0, 1);
+	return __pkt_stream_generate(umem, nb_pkts, pkt_len, 0, 1);
 }
 
-static struct pkt_stream *pkt_stream_clone(struct pkt_stream *pkt_stream)
+static struct pkt_stream *pkt_stream_clone(struct pkt_stream *pkt_stream,
+					   struct xsk_umem_info *umem)
 {
-	return pkt_stream_generate(pkt_stream->nb_pkts, pkt_stream->pkts[0].len);
+	return pkt_stream_generate(umem, pkt_stream->nb_pkts, pkt_stream->pkts[0].len);
 }
 
 static void pkt_stream_replace(struct test_spec *test, u32 nb_pkts, u32 pkt_len)
 {
 	struct pkt_stream *pkt_stream;
 
-	pkt_stream = pkt_stream_generate(nb_pkts, pkt_len);
+	pkt_stream = pkt_stream_generate(test->ifobj_rx->umem, nb_pkts, pkt_len);
 	test->ifobj_tx->xsk->pkt_stream = pkt_stream;
-	pkt_stream = pkt_stream_generate(nb_pkts, pkt_len);
+	pkt_stream = pkt_stream_generate(test->ifobj_tx->umem, nb_pkts, pkt_len);
 	test->ifobj_rx->xsk->pkt_stream = pkt_stream;
 }
 
@@ -698,12 +719,11 @@ static void __pkt_stream_replace_half(struct ifobject *ifobj, u32 pkt_len,
 	struct pkt_stream *pkt_stream;
 	u32 i;
 
-	pkt_stream = pkt_stream_clone(ifobj->xsk->pkt_stream);
+	pkt_stream = pkt_stream_clone(ifobj->xsk->pkt_stream, ifobj->umem);
 	for (i = 1; i < ifobj->xsk->pkt_stream->nb_pkts; i += 2)
-		pkt_set(pkt_stream, &pkt_stream->pkts[i], offset, pkt_len);
+		pkt_modify(pkt_stream, ifobj->umem, &pkt_stream->pkts[i], offset, pkt_len);
 
 	ifobj->xsk->pkt_stream = pkt_stream;
-	pkt_stream->nb_valid_entries /= 2;
 }
 
 static void pkt_stream_replace_half(struct test_spec *test, u32 pkt_len, int offset)
@@ -715,9 +735,10 @@ static void pkt_stream_replace_half(struct test_spec *test, u32 pkt_len, int off
 static void pkt_stream_receive_half(struct test_spec *test)
 {
 	struct pkt_stream *pkt_stream = test->ifobj_tx->xsk->pkt_stream;
+	struct xsk_umem_info *umem = test->ifobj_rx->umem;
 	u32 i;
 
-	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(pkt_stream->nb_pkts,
+	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(umem, pkt_stream->nb_pkts,
 							      pkt_stream->pkts[0].len);
 	pkt_stream = test->ifobj_rx->xsk->pkt_stream;
 	for (i = 1; i < pkt_stream->nb_pkts; i += 2)
@@ -733,12 +754,12 @@ static void pkt_stream_even_odd_sequence(struct test_spec *test)
 
 	for (i = 0; i < test->nb_sockets; i++) {
 		pkt_stream = test->ifobj_tx->xsk_arr[i].pkt_stream;
-		pkt_stream = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
+		pkt_stream = __pkt_stream_generate(test->ifobj_tx->umem, pkt_stream->nb_pkts / 2,
 						   pkt_stream->pkts[0].len, i, 2);
 		test->ifobj_tx->xsk_arr[i].pkt_stream = pkt_stream;
 
 		pkt_stream = test->ifobj_rx->xsk_arr[i].pkt_stream;
-		pkt_stream = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
+		pkt_stream = __pkt_stream_generate(test->ifobj_rx->umem, pkt_stream->nb_pkts / 2,
 						   pkt_stream->pkts[0].len, i, 2);
 		test->ifobj_rx->xsk_arr[i].pkt_stream = pkt_stream;
 	}
@@ -1961,7 +1982,8 @@ static int testapp_stats_tx_invalid_descs(struct test_spec *test)
 static int testapp_stats_rx_full(struct test_spec *test)
 {
 	pkt_stream_replace(test, DEFAULT_UMEM_BUFFERS + DEFAULT_UMEM_BUFFERS / 2, MIN_PKT_SIZE);
-	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(DEFAULT_UMEM_BUFFERS, MIN_PKT_SIZE);
+	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(test->ifobj_rx->umem,
+							      DEFAULT_UMEM_BUFFERS, MIN_PKT_SIZE);
 
 	test->ifobj_rx->xsk->rxqsize = DEFAULT_UMEM_BUFFERS;
 	test->ifobj_rx->release_rx = false;
@@ -1972,7 +1994,8 @@ static int testapp_stats_rx_full(struct test_spec *test)
 static int testapp_stats_fill_empty(struct test_spec *test)
 {
 	pkt_stream_replace(test, DEFAULT_UMEM_BUFFERS + DEFAULT_UMEM_BUFFERS / 2, MIN_PKT_SIZE);
-	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(DEFAULT_UMEM_BUFFERS, MIN_PKT_SIZE);
+	test->ifobj_rx->xsk->pkt_stream = pkt_stream_generate(test->ifobj_rx->umem,
+							      DEFAULT_UMEM_BUFFERS, MIN_PKT_SIZE);
 
 	test->ifobj_rx->use_fill_ring = false;
 	test->ifobj_rx->validation_func = validate_fill_empty;
@@ -2526,8 +2549,8 @@ int main(int argc, char **argv)
 	init_iface(ifobj_tx, worker_testapp_validate_tx);
 
 	test_spec_init(&test, ifobj_tx, ifobj_rx, 0, &tests[0]);
-	tx_pkt_stream_default = pkt_stream_generate(DEFAULT_PKT_CNT, MIN_PKT_SIZE);
-	rx_pkt_stream_default = pkt_stream_generate(DEFAULT_PKT_CNT, MIN_PKT_SIZE);
+	tx_pkt_stream_default = pkt_stream_generate(ifobj_tx->umem, DEFAULT_PKT_CNT, MIN_PKT_SIZE);
+	rx_pkt_stream_default = pkt_stream_generate(ifobj_rx->umem, DEFAULT_PKT_CNT, MIN_PKT_SIZE);
 	if (!tx_pkt_stream_default || !rx_pkt_stream_default)
 		exit_with_error(ENOMEM);
 	test.tx_pkt_stream_default = tx_pkt_stream_default;
