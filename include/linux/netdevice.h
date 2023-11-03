@@ -1408,7 +1408,8 @@ struct netdev_net_notifier {
  *	Add, change, delete or get information on an IPv4 tunnel.
  * struct net_device *(*ndo_get_peer_dev)(struct net_device *dev);
  *	If a device is paired with a peer device, return the peer instance.
- *	The caller must be under RCU read context.
+ *	The caller must be under RCU read context. The driver implementing
+ *	ndo_get_peer_dev must support @tstats packet accounting!
  * int (*ndo_fill_forward_path)(struct net_device_path_ctx *ctx, struct net_device_path *path);
  *     Get the forwarding path to reach the real device from the HW destination address
  * ktime_t (*ndo_get_tstamp)(struct net_device *dev,
