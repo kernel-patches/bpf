@@ -570,7 +570,7 @@ int bpf_stackmap_copy(struct bpf_map *map, void *key, void *value)
 	u32 id = *(u32 *)key, trace_len;
 
 	if (unlikely(id >= smap->n_buckets))
-		return -ENOENT;
+		return -E2BIG;
 
 	bucket = xchg(&smap->buckets[id], NULL);
 	if (!bucket)
