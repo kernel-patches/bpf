@@ -131,14 +131,14 @@
 #define __diag_str(s)		__diag_str1(s)
 #define __diag(s)		_Pragma(__diag_str(GCC diagnostic s))
 
-#if GCC_VERSION >= 80000
-#define __diag_GCC_8(s)		__diag(s)
+#if GCC_VERSION >= 50100
+#define __diag_GCC_5(s)		__diag(s)
 #else
-#define __diag_GCC_8(s)
+#define __diag_GCC_5(s)
 #endif
 
 #define __diag_ignore_all(option, comment) \
-	__diag_GCC(8, ignore, option)
+	__diag_GCC(5, ignore, option)
 
 /*
  * Prior to 9.1, -Wno-alloc-size-larger-than (and therefore the "alloc_size"
