@@ -77,8 +77,13 @@
  * syntax as varargs can be provided as well to reinitialize options struct
  * specific members.
  */
-#define LIBBPF_OPTS_RESET(NAME, ...)					    \
+#define LIBBPF_OPTS_RESET(TYPE, NAME, ...)				    \
 	do {								    \
+		_Static_assert(						    \
+			sizeof(NAME) == offsetofend(struct TYPE,	    \
+						    TYPE##__last_field),    \
+			"Unexpected tail padding"			    \
+		);							    \
 		memset(&NAME, 0, sizeof(NAME));				    \
 		NAME = (typeof(NAME)) {					    \
 			.sz = sizeof(NAME),				    \

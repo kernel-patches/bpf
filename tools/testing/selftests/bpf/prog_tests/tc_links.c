@@ -197,7 +197,7 @@ static void test_tc_links_before_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = bpf_program__fd(skel->progs.tc2),
 	);
@@ -210,7 +210,7 @@ static void test_tc_links_before_target(int target)
 
 	lid3 = id_from_link_fd(bpf_link__fd(skel->links.tc3));
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_LINK,
 		.relative_id = lid1,
 	);
@@ -351,7 +351,7 @@ static void test_tc_links_after_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -364,7 +364,7 @@ static void test_tc_links_after_target(int target)
 
 	lid3 = id_from_link_fd(bpf_link__fd(skel->links.tc3));
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER | BPF_F_LINK,
 		.relative_fd = bpf_link__fd(skel->links.tc2),
 	);
@@ -670,7 +670,7 @@ static void test_tc_links_replace_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 		.relative_id = pid1,
 		.expected_revision = 2,
@@ -713,7 +713,7 @@ static void test_tc_links_replace_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc2, true, "seen_tc2");
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_REPLACE,
 		.relative_fd = bpf_program__fd(skel->progs.tc2),
 		.expected_revision = 3,
@@ -727,7 +727,7 @@ static void test_tc_links_replace_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_REPLACE | BPF_F_LINK,
 		.relative_fd = bpf_link__fd(skel->links.tc2),
 		.expected_revision = 3,
@@ -741,7 +741,7 @@ static void test_tc_links_replace_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_REPLACE | BPF_F_LINK | BPF_F_AFTER,
 		.relative_id = lid2,
 	);
@@ -889,7 +889,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_ID,
 	);
 
@@ -901,7 +901,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER | BPF_F_ID,
 	);
 
@@ -913,7 +913,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_ID,
 	);
 
@@ -925,7 +925,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_LINK,
 		.relative_fd = bpf_program__fd(skel->progs.tc2),
 	);
@@ -938,7 +938,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_LINK,
 	);
 
@@ -950,7 +950,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.relative_fd = bpf_program__fd(skel->progs.tc2),
 	);
 
@@ -962,7 +962,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_AFTER,
 		.relative_fd = bpf_program__fd(skel->progs.tc2),
 	);
@@ -975,7 +975,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -988,7 +988,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_ID,
 		.relative_id = pid2,
 	);
@@ -1001,7 +1001,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_ID,
 		.relative_id = 42,
 	);
@@ -1014,7 +1014,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1027,7 +1027,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_LINK,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1040,7 +1040,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1053,7 +1053,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl);
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl);
 
 	link = bpf_program__attach_tcx(skel->progs.tc1, 0, &optl);
 	if (!ASSERT_ERR_PTR(link, "link_attach_should_fail")) {
@@ -1063,7 +1063,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER | BPF_F_LINK,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1076,7 +1076,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optl);
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl);
 
 	link = bpf_program__attach_tcx(skel->progs.tc1, loopback, &optl);
 	if (!ASSERT_OK_PTR(link, "link_attach"))
@@ -1088,7 +1088,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER | BPF_F_LINK,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1101,7 +1101,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_LINK | BPF_F_ID,
 		.relative_id = ~0,
 	);
@@ -1114,7 +1114,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_LINK | BPF_F_ID,
 		.relative_id = lid1,
 	);
@@ -1127,7 +1127,7 @@ static void test_tc_links_invalid_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_ID,
 		.relative_id = pid1,
 	);
@@ -1139,7 +1139,7 @@ static void test_tc_links_invalid_target(int target)
 	}
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE | BPF_F_LINK | BPF_F_ID,
 		.relative_id = lid1,
 	);
@@ -1211,7 +1211,7 @@ static void test_tc_links_prepend_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1253,7 +1253,7 @@ static void test_tc_links_prepend_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1265,7 +1265,7 @@ static void test_tc_links_prepend_target(int target)
 
 	lid3 = id_from_link_fd(bpf_link__fd(skel->links.tc3));
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1367,7 +1367,7 @@ static void test_tc_links_append_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1409,7 +1409,7 @@ static void test_tc_links_append_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1421,7 +1421,7 @@ static void test_tc_links_append_target(int target)
 
 	lid3 = id_from_link_fd(bpf_link__fd(skel->links.tc3));
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_tcx_opts, optl,
 		.flags = BPF_F_AFTER,
 	);
 

@@ -328,7 +328,7 @@ static void serial_test_tc_netkit_multi_links_target(int mode, int target)
 	ASSERT_EQ(skel->bss->seen_eth, true, "seen_eth");
 	ASSERT_EQ(skel->bss->seen_tc2, false, "seen_tc2");
 
-	LIBBPF_OPTS_RESET(optl,
+	LIBBPF_OPTS_RESET(bpf_netkit_opts, optl,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -442,7 +442,7 @@ static void serial_test_tc_netkit_multi_opts_target(int mode, int target)
 	ASSERT_EQ(skel->bss->seen_eth, true, "seen_eth");
 	ASSERT_EQ(skel->bss->seen_tc2, false, "seen_tc2");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd1,
 	);

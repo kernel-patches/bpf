@@ -173,7 +173,7 @@ static void test_tc_opts_before_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd2,
 	);
@@ -196,7 +196,7 @@ static void test_tc_opts_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[2], id2, "prog_ids[2]");
 	ASSERT_EQ(optq.prog_ids[3], 0, "prog_ids[3]");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_id = id1,
 	);
@@ -325,7 +325,7 @@ static void test_tc_opts_after_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -348,7 +348,7 @@ static void test_tc_opts_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[2], id2, "prog_ids[2]");
 	ASSERT_EQ(optq.prog_ids[3], 0, "prog_ids[3]");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 		.relative_id = id2,
 	);
@@ -475,7 +475,7 @@ static void test_tc_opts_revision_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 1,
 	);
 
@@ -485,7 +485,7 @@ static void test_tc_opts_revision_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 1,
 	);
 
@@ -495,7 +495,7 @@ static void test_tc_opts_revision_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 2,
 	);
 
@@ -526,7 +526,7 @@ static void test_tc_opts_revision_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
 	ASSERT_EQ(skel->bss->seen_tc2, true, "seen_tc2");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.expected_revision = 2,
 	);
 
@@ -535,7 +535,7 @@ static void test_tc_opts_revision_target(int target)
 	assert_mprog_count(target, 2);
 
 cleanup_target2:
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.expected_revision = 3,
 	);
 
@@ -544,7 +544,7 @@ cleanup_target2:
 	assert_mprog_count(target, 1);
 
 cleanup_target:
-	LIBBPF_OPTS_RESET(optd);
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd);
 
 	err = bpf_prog_detach_opts(fd1, loopback, target, &optd);
 	ASSERT_OK(err, "prog_detach");
@@ -690,7 +690,7 @@ static void test_tc_opts_replace_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 1,
 	);
 
@@ -700,7 +700,7 @@ static void test_tc_opts_replace_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_id = id1,
 		.expected_revision = 2,
@@ -742,7 +742,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc2, true, "seen_tc2");
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = fd2,
 		.expected_revision = 3,
@@ -776,7 +776,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc2, false, "seen_tc2");
 	ASSERT_EQ(skel->bss->seen_tc3, true, "seen_tc3");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE | BPF_F_BEFORE,
 		.replace_prog_fd = fd3,
 		.relative_fd = fd1,
@@ -811,7 +811,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc2, true, "seen_tc2");
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = fd2,
 	);
@@ -820,7 +820,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(err, -EEXIST, "prog_attach");
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE | BPF_F_AFTER,
 		.replace_prog_fd = fd2,
 		.relative_fd = fd1,
@@ -831,7 +831,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_attach");
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE | BPF_F_AFTER | BPF_F_REPLACE,
 		.replace_prog_fd = fd2,
 		.relative_fd = fd1,
@@ -842,7 +842,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_attach");
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_id = id1,
 		.expected_revision = 5,
@@ -854,7 +854,7 @@ cleanup_target2:
 	assert_mprog_count(target, 1);
 
 cleanup_target:
-	LIBBPF_OPTS_RESET(optd);
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd);
 
 	err = bpf_prog_detach_opts(fd1, loopback, target, &optd);
 	ASSERT_OK(err, "prog_detach");
@@ -892,7 +892,7 @@ static void test_tc_opts_invalid_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE | BPF_F_AFTER,
 	);
 
@@ -900,7 +900,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE | BPF_F_ID,
 	);
 
@@ -908,7 +908,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER | BPF_F_ID,
 	);
 
@@ -916,7 +916,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.relative_fd = fd2,
 	);
 
@@ -924,7 +924,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -EINVAL, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE | BPF_F_AFTER,
 		.relative_fd = fd2,
 	);
@@ -933,7 +933,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_ID,
 		.relative_id = id2,
 	);
@@ -942,7 +942,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -EINVAL, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd1,
 	);
@@ -951,7 +951,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -960,7 +960,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_attach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta);
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta);
 
 	err = bpf_prog_attach_opts(fd1, loopback, target, &opta);
 	if (!ASSERT_EQ(err, 0, "prog_attach"))
@@ -968,13 +968,13 @@ static void test_tc_opts_invalid_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta);
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta);
 
 	err = bpf_prog_attach_opts(fd1, loopback, target, &opta);
 	ASSERT_EQ(err, -EEXIST, "prog_attach");
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd1,
 	);
@@ -983,7 +983,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -EEXIST, "prog_attach");
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -992,7 +992,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -EEXIST, "prog_attach");
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.relative_fd = fd1,
 	);
@@ -1001,7 +1001,7 @@ static void test_tc_opts_invalid_target(int target)
 	ASSERT_EQ(err, -EINVAL, "prog_attach_x1");
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = fd1,
 	);
@@ -1059,7 +1059,7 @@ static void test_tc_opts_prepend_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1092,7 +1092,7 @@ static void test_tc_opts_prepend_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1100,7 +1100,7 @@ static void test_tc_opts_prepend_target(int target)
 	if (!ASSERT_EQ(err, 0, "prog_attach"))
 		goto cleanup_target2;
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1199,7 +1199,7 @@ static void test_tc_opts_append_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1232,7 +1232,7 @@ static void test_tc_opts_append_target(int target)
 	ASSERT_EQ(skel->bss->seen_tc3, false, "seen_tc3");
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1240,7 +1240,7 @@ static void test_tc_opts_append_target(int target)
 	if (!ASSERT_EQ(err, 0, "prog_attach"))
 		goto cleanup_target2;
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1452,7 +1452,7 @@ static void test_tc_opts_mixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1463,7 +1463,7 @@ static void test_tc_opts_mixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = bpf_program__fd(skel->progs.tc2),
 	);
@@ -1474,7 +1474,7 @@ static void test_tc_opts_mixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = bpf_program__fd(skel->progs.tc2),
 	);
@@ -1485,7 +1485,7 @@ static void test_tc_opts_mixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = bpf_program__fd(skel->progs.tc1),
 	);
@@ -1508,7 +1508,7 @@ static void test_tc_opts_mixed_target(int target)
 
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = bpf_program__fd(skel->progs.tc4),
 	);
@@ -1612,7 +1612,7 @@ static void test_tc_opts_demixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1621,7 +1621,7 @@ static void test_tc_opts_demixed_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1719,7 +1719,7 @@ static void test_tc_opts_detach_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id4, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -1742,7 +1742,7 @@ static void test_tc_opts_detach_target(int target)
 	ASSERT_EQ(optq.prog_ids[2], id4, "prog_ids[2]");
 	ASSERT_EQ(optq.prog_ids[3], 0, "prog_ids[3]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1764,7 +1764,7 @@ static void test_tc_opts_detach_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id3, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	LIBBPF_OPTS_RESET(optd);
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd);
 
 	err = bpf_prog_detach_opts(fd3, loopback, target, &optd);
 	ASSERT_OK(err, "prog_detach");
@@ -1774,14 +1774,14 @@ static void test_tc_opts_detach_target(int target)
 	ASSERT_OK(err, "prog_detach");
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 	);
 
 	err = bpf_prog_detach_opts(0, loopback, target, &optd);
 	ASSERT_EQ(err, -ENOENT, "prog_detach");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -1890,7 +1890,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id4, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd2,
 	);
@@ -1914,7 +1914,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[2], id4, "prog_ids[2]");
 	ASSERT_EQ(optq.prog_ids[3], 0, "prog_ids[3]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd2,
 	);
@@ -1923,7 +1923,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd4,
 	);
@@ -1932,7 +1932,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd1,
 	);
@@ -1941,7 +1941,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd3,
 	);
@@ -1964,7 +1964,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id4, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 		.relative_fd = fd4,
 	);
@@ -1986,7 +1986,7 @@ static void test_tc_opts_detach_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[0], id4, "prog_ids[0]");
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_BEFORE,
 	);
 
@@ -2097,7 +2097,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id4, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -2121,7 +2121,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[2], id4, "prog_ids[2]");
 	ASSERT_EQ(optq.prog_ids[3], 0, "prog_ids[3]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -2130,7 +2130,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(err, -ENOENT, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd4,
 	);
@@ -2139,7 +2139,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd3,
 	);
@@ -2148,7 +2148,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -2157,7 +2157,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(err, -ERANGE, "prog_detach");
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -2180,7 +2180,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id4, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 		.relative_fd = fd1,
 	);
@@ -2202,7 +2202,7 @@ static void test_tc_opts_detach_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[0], id1, "prog_ids[0]");
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 
-	LIBBPF_OPTS_RESET(optd,
+	LIBBPF_OPTS_RESET(bpf_prog_detach_opts, optd,
 		.flags = BPF_F_AFTER,
 	);
 
@@ -2327,7 +2327,7 @@ static void test_tc_chain_mixed(int target)
 	ASSERT_EQ(skel->bss->seen_tc5, false, "seen_tc5");
 	ASSERT_EQ(skel->bss->seen_tc6, true, "seen_tc6");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.flags = BPF_F_REPLACE,
 		.replace_prog_fd = fd3,
 	);
@@ -2486,7 +2486,7 @@ static void test_tc_opts_query_target(int target)
 
 	assert_mprog_count(target, 0);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 1,
 	);
 
@@ -2496,7 +2496,7 @@ static void test_tc_opts_query_target(int target)
 
 	assert_mprog_count(target, 1);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 2,
 	);
 
@@ -2506,7 +2506,7 @@ static void test_tc_opts_query_target(int target)
 
 	assert_mprog_count(target, 2);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 3,
 	);
 
@@ -2516,7 +2516,7 @@ static void test_tc_opts_query_target(int target)
 
 	assert_mprog_count(target, 3);
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = 4,
 	);
 
@@ -2778,7 +2778,7 @@ static void test_tc_opts_query_attach_target(int target)
 	ASSERT_EQ(optq.count, 0, "count");
 	ASSERT_EQ(optq.revision, 1, "revision");
 
-	LIBBPF_OPTS_RESET(opta,
+	LIBBPF_OPTS_RESET(bpf_prog_attach_opts, opta,
 		.expected_revision = optq.revision,
 	);
 
