@@ -6555,6 +6555,7 @@ struct bpf_link_info {
 			__u32 count; /* in/out: kprobe_multi function count */
 			__u32 flags;
 			__u64 missed;
+			__aligned_u64 cookies;
 		} kprobe_multi;
 		struct {
 			__aligned_u64 path;

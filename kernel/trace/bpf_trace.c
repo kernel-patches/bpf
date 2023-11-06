@@ -2611,6 +2611,7 @@ static void bpf_kprobe_multi_link_dealloc(struct bpf_link *link)
 static int bpf_kprobe_multi_link_fill_link_info(const struct bpf_link *link,
 						struct bpf_link_info *info)
 {
+	u64 __user *ucookies = u64_to_user_ptr(info->kprobe_multi.cookies);
 	u64 __user *uaddrs = u64_to_user_ptr(info->kprobe_multi.addrs);
 	struct bpf_kprobe_multi_link *kmulti_link;
 	u32 ucount = info->kprobe_multi.count;
@@ -2618,11 +2619,17 @@ static int bpf_kprobe_multi_link_fill_link_info(const struct bpf_link *link,
 
 	if (!uaddrs ^ !ucount)
 		return -EINVAL;
+	if (ucookies && !ucount)
+		return -EINVAL;
 
 	kmulti_link = container_of(link, struct bpf_kprobe_multi_link, link);
 	info->kprobe_multi.count = kmulti_link->cnt;
 	info->kprobe_multi.flags = kmulti_link->flags;
 	info->kprobe_multi.missed = kmulti_link->fp.nmissed;
+
+	if (ucookies &&
+	    copy_to_user(ucookies, kmulti_link->cookies, ucount * sizeof(u64)))
+		return -EFAULT;
 
 	if (!uaddrs)
 		return 0;
