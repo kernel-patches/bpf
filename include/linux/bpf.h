@@ -1645,7 +1645,6 @@ struct bpf_struct_ops_desc {
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
 #define BPF_MODULE_OWNER ((void *)((0xeB9FUL << 2) + POISON_POINTER_DELTA))
 const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id);
-void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log);
 bool bpf_struct_ops_get(const void *kdata);
 void bpf_struct_ops_put(const void *kdata);
 int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map, void *key,
@@ -1690,10 +1689,6 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 static inline const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id)
 {
 	return NULL;
-}
-static inline void bpf_struct_ops_init(struct btf *btf,
-				       struct bpf_verifier_log *log)
-{
 }
 static inline bool bpf_try_module_get(const void *data, struct module *owner)
 {
@@ -3234,6 +3229,8 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 }
 
 #ifdef CONFIG_BPF_JIT
+int register_bpf_struct_ops(struct bpf_struct_ops *st_ops);
+
 enum bpf_struct_ops_state {
 	BPF_STRUCT_OPS_STATE_INIT,
 	BPF_STRUCT_OPS_STATE_INUSE,
@@ -3245,6 +3242,23 @@ struct bpf_struct_ops_common_value {
 	refcount_t refcnt;
 	enum bpf_struct_ops_state state;
 };
+
+/* bpf_struct_ops_##_name (e.g. bpf_struct_ops_tcp_congestion_ops) is
+ * the map's value exposed to the userspace and its btf-type-id is
+ * stored at the map->btf_vmlinux_value_type_id.
+ *
+ */
+#define DEFINE_STRUCT_OPS_VALUE_TYPE(_name)			\
+extern struct bpf_struct_ops bpf_##_name;			\
+								\
+struct bpf_struct_ops_##_name {					\
+	struct bpf_struct_ops_common_value common;		\
+	struct _name data ____cacheline_aligned_in_smp;		\
+}
+
+extern int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
+				    struct btf *btf,
+				    struct bpf_verifier_log *log);
 #endif /* CONFIG_BPF_JIT */
 
 #endif /* _LINUX_BPF_H */
