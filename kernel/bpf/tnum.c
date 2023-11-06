@@ -111,6 +111,11 @@ struct tnum tnum_xor(struct tnum a, struct tnum b)
 	return TNUM(v & ~mu, mu);
 }
 
+struct tnum tnum_not(struct tnum a)
+{
+	return TNUM(~a.value & ~a.mask, a.mask);
+}
+
 /* Generate partial products by multiplying each bit in the multiplier (tnum a)
  * with the multiplicand (tnum b), and add the partial products after
  * appropriately bit-shifting them. Instead of directly performing tnum addition

@@ -46,6 +46,8 @@ struct tnum tnum_and(struct tnum a, struct tnum b);
 struct tnum tnum_or(struct tnum a, struct tnum b);
 /* Bitwise-XOR, return @a ^ @b */
 struct tnum tnum_xor(struct tnum a, struct tnum b);
+/* Bitwise-NOT, return ~@a */
+struct tnum tnum_not(struct tnum a);
 /* Multiply two tnums, return @a * @b */
 struct tnum tnum_mul(struct tnum a, struct tnum b);
 
