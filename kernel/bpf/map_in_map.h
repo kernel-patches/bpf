@@ -10,6 +10,9 @@ struct file;
 struct bpf_map;
 
 struct bpf_inner_map_element {
+	/* map must be the first member, array_of_map_gen_lookup() depends on it
+	 * to dereference map correctly.
+	 */
 	struct bpf_map *map;
 	struct rcu_head rcu;
 };

@@ -1355,12 +1355,18 @@ static void array_of_map_free(struct bpf_map *map)
 
 static void *array_of_map_lookup_elem(struct bpf_map *map, void *key)
 {
-	struct bpf_map **inner_map = array_map_lookup_elem(map, key);
+	struct bpf_inner_map_element *element;
+	void **ptr;
 
-	if (!inner_map)
+	ptr = array_map_lookup_elem(map, key);
+	if (!ptr)
 		return NULL;
 
-	return READ_ONCE(*inner_map);
+	element = READ_ONCE(*ptr);
+	/* Uninitialized element ? */
+	if (!element)
+		return NULL;
+	return element->map;
 }
 
 static int array_of_map_gen_lookup(struct bpf_map *map,
@@ -1376,10 +1382,10 @@ static int array_of_map_gen_lookup(struct bpf_map *map,
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
 	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
 	if (!map->bypass_spec_v1) {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 6);
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 8);
 		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
 	} else {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 5);
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 7);
 	}
 	if (is_power_of_2(elem_size))
 		*insn++ = BPF_ALU64_IMM(BPF_LSH, ret, ilog2(elem_size));
@@ -1387,7 +1393,9 @@ static int array_of_map_gen_lookup(struct bpf_map *map,
 		*insn++ = BPF_ALU64_IMM(BPF_MUL, ret, elem_size);
 	*insn++ = BPF_ALU64_REG(BPF_ADD, ret, map_ptr);
 	*insn++ = BPF_LDX_MEM(BPF_DW, ret, ret, 0);
-	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 1);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 4);
+	*insn++ = BPF_LDX_MEM(BPF_DW, ret, ret, 0);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 2);
 	*insn++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
 	*insn++ = BPF_MOV64_IMM(ret, 0);
 
@@ -1401,9 +1409,9 @@ const struct bpf_map_ops array_of_maps_map_ops = {
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = array_of_map_lookup_elem,
 	.map_delete_elem = fd_array_map_delete_elem,
-	.map_fd_get_ptr = bpf_map_fd_get_ptr,
-	.map_fd_put_ptr = bpf_map_fd_put_ptr,
-	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
+	.map_fd_get_ptr = bpf_map_of_map_fd_get_ptr,
+	.map_fd_put_ptr = bpf_map_of_map_fd_put_ptr,
+	.map_fd_sys_lookup_elem = bpf_map_of_map_fd_sys_lookup_elem,
 	.map_gen_lookup = array_of_map_gen_lookup,
 	.map_lookup_batch = generic_map_lookup_batch,
 	.map_update_batch = generic_map_update_batch,
