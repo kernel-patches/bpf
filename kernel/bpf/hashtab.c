@@ -1813,10 +1813,10 @@ again_nocopy:
 		} else {
 			value = l->key + roundup_key_size;
 			if (map->map_type == BPF_MAP_TYPE_HASH_OF_MAPS) {
-				struct bpf_map **inner_map = value;
+				void *inner = READ_ONCE(*(void **)value);
 
-				 /* Actual value is the id of the inner map */
-				map_id = map->ops->map_fd_sys_lookup_elem(*inner_map);
+				/* Actual value is the id of the inner map */
+				map_id = map->ops->map_fd_sys_lookup_elem(inner);
 				value = &map_id;
 			}
 
@@ -2553,12 +2553,16 @@ static struct bpf_map *htab_of_map_alloc(union bpf_attr *attr)
 
 static void *htab_of_map_lookup_elem(struct bpf_map *map, void *key)
 {
-	struct bpf_map **inner_map  = htab_map_lookup_elem(map, key);
+	struct bpf_inner_map_element *element;
+	void **ptr;
 
-	if (!inner_map)
+	ptr = htab_map_lookup_elem(map, key);
+	if (!ptr)
 		return NULL;
 
-	return READ_ONCE(*inner_map);
+	/* element must be no-NULL */
+	element = READ_ONCE(*ptr);
+	return element->map;
 }
 
 static int htab_of_map_gen_lookup(struct bpf_map *map,
@@ -2570,10 +2574,11 @@ static int htab_of_map_gen_lookup(struct bpf_map *map,
 	BUILD_BUG_ON(!__same_type(&__htab_map_lookup_elem,
 		     (void *(*)(struct bpf_map *map, void *key))NULL));
 	*insn++ = BPF_EMIT_CALL(__htab_map_lookup_elem);
-	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 2);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 3);
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, ret,
 				offsetof(struct htab_elem, key) +
 				round_up(map->key_size, 8));
+	*insn++ = BPF_LDX_MEM(BPF_DW, ret, ret, 0);
 	*insn++ = BPF_LDX_MEM(BPF_DW, ret, ret, 0);
 
 	return insn - insn_buf;
@@ -2592,9 +2597,9 @@ const struct bpf_map_ops htab_of_maps_map_ops = {
 	.map_get_next_key = htab_map_get_next_key,
 	.map_lookup_elem = htab_of_map_lookup_elem,
 	.map_delete_elem = htab_map_delete_elem,
-	.map_fd_get_ptr = bpf_map_fd_get_ptr,
-	.map_fd_put_ptr = bpf_map_fd_put_ptr,
-	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
+	.map_fd_get_ptr = bpf_map_of_map_fd_get_ptr,
+	.map_fd_put_ptr = bpf_map_of_map_fd_put_ptr,
+	.map_fd_sys_lookup_elem = bpf_map_of_map_fd_sys_lookup_elem,
 	.map_gen_lookup = htab_of_map_gen_lookup,
 	.map_check_btf = map_check_no_btf,
 	.map_mem_usage = htab_map_mem_usage,
