@@ -4,6 +4,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/rcupdate.h>
 
 #include "map_in_map.h"
 
@@ -138,4 +139,54 @@ void bpf_map_fd_put_ptr(void *ptr, bool deferred)
 u32 bpf_map_fd_sys_lookup_elem(void *ptr)
 {
 	return ((struct bpf_map *)ptr)->id;
+}
+
+void *bpf_map_of_map_fd_get_ptr(struct bpf_map *map, struct file *map_file,
+			       int ufd)
+{
+	struct bpf_inner_map_element *element;
+	struct bpf_map *inner_map;
+
+	element = kmalloc(sizeof(*element), GFP_KERNEL);
+	if (!element)
+		return ERR_PTR(-ENOMEM);
+
+	inner_map = bpf_map_fd_get_ptr(map, map_file, ufd);
+	if (IS_ERR(inner_map)) {
+		kfree(element);
+		return inner_map;
+	}
+
+	element->map = inner_map;
+	return element;
+}
+
+static void bpf_inner_map_element_free_rcu(struct rcu_head *rcu)
+{
+	struct bpf_inner_map_element *elem = container_of(rcu, struct bpf_inner_map_element, rcu);
+
+	bpf_map_put(elem->map);
+	kfree(elem);
+}
+
+static void bpf_inner_map_element_free_tt_rcu(struct rcu_head *rcu)
+{
+	if (rcu_trace_implies_rcu_gp())
+		bpf_inner_map_element_free_rcu(rcu);
+	else
+		call_rcu(rcu, bpf_inner_map_element_free_rcu);
+}
+
+void bpf_map_of_map_fd_put_ptr(void *ptr, bool need_defer)
+{
+	struct bpf_inner_map_element *element = ptr;
+
+	/* Do bpf_map_put() after a RCU grace period and a tasks trace
+	 * RCU grace period, so it is certain that the bpf program which is
+	 * manipulating the map now has exited when bpf_map_put() is called.
+	 */
+	if (need_defer)
+		call_rcu_tasks_trace(&element->rcu, bpf_inner_map_element_free_tt_rcu);
+	else
+		bpf_inner_map_element_free_rcu(&element->rcu);
 }
