@@ -190,3 +190,9 @@ void bpf_map_of_map_fd_put_ptr(void *ptr, bool need_defer)
 	else
 		bpf_inner_map_element_free_rcu(&element->rcu);
 }
+
+u32 bpf_map_of_map_fd_sys_lookup_elem(void *ptr)
+{
+	rcu_read_lock_held();
+	return ((struct bpf_inner_map_element *)ptr)->map->id;
+}

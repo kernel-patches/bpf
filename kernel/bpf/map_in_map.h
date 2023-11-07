@@ -22,5 +22,6 @@ u32 bpf_map_fd_sys_lookup_elem(void *ptr);
 
 void *bpf_map_of_map_fd_get_ptr(struct bpf_map *map, struct file *map_file, int ufd);
 void bpf_map_of_map_fd_put_ptr(void *ptr, bool need_defer);
+u32 bpf_map_of_map_fd_sys_lookup_elem(void *ptr);
 
 #endif
