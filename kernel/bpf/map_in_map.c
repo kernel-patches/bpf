@@ -106,9 +106,7 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 		btf_record_equal(meta0->record, meta1->record);
 }
 
-void *bpf_map_fd_get_ptr(struct bpf_map *map,
-			 struct file *map_file /* not used */,
-			 int ufd)
+static void *bpf_map_fd_get_ptr(struct bpf_map *map, int ufd)
 {
 	struct bpf_map *inner_map, *inner_map_meta;
 	struct fd f;
@@ -128,19 +126,6 @@ void *bpf_map_fd_get_ptr(struct bpf_map *map,
 	return inner_map;
 }
 
-void bpf_map_fd_put_ptr(void *ptr, bool deferred)
-{
-	/* ptr->ops->map_free() has to go through one
-	 * rcu grace period by itself.
-	 */
-	bpf_map_put(ptr);
-}
-
-u32 bpf_map_fd_sys_lookup_elem(void *ptr)
-{
-	return ((struct bpf_map *)ptr)->id;
-}
-
 void *bpf_map_of_map_fd_get_ptr(struct bpf_map *map, struct file *map_file,
 			       int ufd)
 {
@@ -151,7 +136,7 @@ void *bpf_map_of_map_fd_get_ptr(struct bpf_map *map, struct file *map_file,
 	if (!element)
 		return ERR_PTR(-ENOMEM);
 
-	inner_map = bpf_map_fd_get_ptr(map, map_file, ufd);
+	inner_map = bpf_map_fd_get_ptr(map, ufd);
 	if (IS_ERR(inner_map)) {
 		kfree(element);
 		return inner_map;
