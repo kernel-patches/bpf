@@ -25,6 +25,10 @@ class Wrange(abc.ABC):
         return BoolVal(True)
 
     @property
+    def length(self):
+        return self.end - self.start
+
+    @property
     def uwrapping(self):
         # unsigned comparison, (u32)end < (u32)start
         return ULT(self.end, self.start)
