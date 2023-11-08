@@ -21,22 +21,31 @@ class Wrange(abc.ABC):
         assert(self.end.size() == self.SIZE)
 
     def wellformed(self):
-        # start <= end
-        return ULE(self.start, self.end)
+        # allow end < start, so any start/end combination is valid
+        return BoolVal(True)
+
+    @property
+    def uwrapping(self):
+        # unsigned comparison, (u32)end < (u32)start
+        return ULT(self.end, self.start)
 
     @property
     def umin(self):
-        return self.start
+        return If(self.uwrapping, BitVecVal(0, bv=self.SIZE), self.start)
 
     @property
     def umax(self):
-        return self.end
+        return If(self.uwrapping, BitVecVal(2**self.SIZE - 1, bv=self.SIZE), self.end)
 
     # Not used in wrange.c, but helps with checking later
     def contains(self, val: BitVecRef):
         assert(val.size() == self.SIZE)
-        # umin <= val <= umax
-        return And(ULE(self.umin, val), ULE(val, self.umax))
+        # start <= val <= end
+        nonwrapping_cond = And(ULE(self.start, val), ULE(val, self.end))
+        # 0 <= val <= end or start <= val <= 2**32-1
+        # (omit checking 0 <= val and val <= 2**32-1 since they're always true)
+        wrapping_cond = Or(ULE(val, self.end), ULE(self.start, val))
+        return If(self.uwrapping, wrapping_cond, nonwrapping_cond)
 
 
 class Wrange32(Wrange):
@@ -115,13 +124,59 @@ def main():
     # Right now our semantic doesn't allow umax/end < umin/start
     w3 = Wrange32('w3', start=BitVecVal32(2), end=BitVecVal32(0))
     print(f'\nGiven w3 start={w3.start} end={w3.end}')
-    print('\nChecking w3 is NOT wellformed')
+    print('\nChecking w3 is also wellformed')
     prove(
-        Not(w3.wellformed()),
+        w3.wellformed(),
+    )
+    print('\nChecking w3.umin is 0')
+    prove(
+        w3.umin == BitVecVal32(0),
+    )
+    print('\nChecking w3.umax is 2**32-1')
+    prove(
+        w3.umax == BitVecVal32(2**32 - 1),
+    )
+    print('\nChecking that w3 contains 0')
+    prove(
+        w3.contains(BitVecVal32(0)),
+    )
+    print('\nChecking that w3 does NOT contain 1')
+    prove(
+        Not(w3.contains(BitVecVal32(1))),
+    )
+    print('\nChecking that w3 is a union set of ({0} U {2..2**32-1})')
+    prove(
+        w3.contains(x) == Or(x == BitVecVal32(0), And(ULE(2, x), ULE(x, 2**32-1))),
     )
 
-    # General checks that does not assum the value of start/end, except that it
-    # meets the requirement that start <= end.
+    w4 = Wrange32('w4', start=BitVecVal32(2**32 - 1), end=BitVecVal32(1))
+    print(f'\nGiven w4 start={w4.start} end={w4.end}')
+    print('\nChecking w4 is also wellformed')
+    prove(
+        w4.wellformed(),
+    )
+    print('\nChecking w4.umin is 0')
+    prove(
+        w4.umin == BitVecVal32(0),
+    )
+    print('\nChecking w4.umax is 2**32-1')
+    prove(
+        w4.umax == BitVecVal32(2**32 - 1),
+    )
+    print('\nChecking that w4 contains 0')
+    prove(
+        w4.contains(BitVecVal32(0)),
+    )
+    print('\nChecking that w4 does contain 2**32-1')
+    prove(
+        w4.contains(BitVecVal32(2**32-1)),
+    )
+    print('\nChecking that w4 is a union set of ({2**32-1} U {0..1})')
+    prove(
+        w4.contains(x) == Or(x == BitVecVal32(2**32-1), x == BitVecVal32(0), x == BitVecVal32(1)),
+    )
+
+    # General checks for umin/umax
     w = Wrange32('w') # Given a Wrange32 called w
     x = BitVec32('x') # And an 32-bit integer x (redeclared for clarity)
     print(f'\nGiven any possible Wrange32 called w, and any possible 32-bit integer called x')
@@ -129,7 +184,7 @@ def main():
     prove(
         Implies(
             And(
-                w.wellformed(),
+                w.wellformed(), # Always true, but keeping it for now
                 w.contains(x),
             ),
             ULE(w.umin, x),
