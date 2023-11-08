@@ -37,6 +37,19 @@ class Wrange(abc.ABC):
     def umax(self):
         return If(self.uwrapping, BitVecVal(2**self.SIZE - 1, bv=self.SIZE), self.end)
 
+    @property
+    def swrapping(self):
+        # signed comparison, (s32)end < (s32)start
+        return self.end < self.start
+
+    @property
+    def smin(self):
+        return If(self.swrapping, BitVecVal(1 << (self.SIZE - 1), bv=self.SIZE), self.start)
+
+    @property
+    def smax(self):
+        return If(self.swrapping, BitVecVal((2**self.SIZE - 1) >> 1, bv=self.SIZE), self.end)
+
     # Not used in wrange.c, but helps with checking later
     def contains(self, val: BitVecRef):
         assert(val.size() == self.SIZE)
@@ -79,6 +92,14 @@ def main():
     prove(
         w1.umax == BitVecVal32(1),
     )
+    print('\nChecking w1.smin is 1')
+    prove(
+        w1.smin == BitVecVal32(1),
+    )
+    print('\nChecking w1.smax is 1')
+    prove(
+        w1.smax == BitVecVal32(1),
+    )
     print('\nChecking that w1 contains 1')
     prove(
         w1.contains(BitVecVal32(1)),
@@ -101,6 +122,14 @@ def main():
     print('\nChecking w2.umax is 2**32-1')
     prove(
         w2.umax == BitVecVal32(2**32 - 1),
+    )
+    print('\nChecking w2.smin is -2147483648/0x80000000')
+    prove(
+        w2.smin == BitVecVal32(0x80000000),
+    )
+    print('\nChecking w2.smax is 2147483647/0x7fffffff')
+    prove(
+        w2.smax == BitVecVal32(0x7fffffff),
     )
     print('\nChecking that w2 contains 2**32 - 1')
     prove(
@@ -136,6 +165,14 @@ def main():
     prove(
         w3.umax == BitVecVal32(2**32 - 1),
     )
+    print('\nChecking w3.smin is -2147483648/0x80000000')
+    prove(
+        w3.smin == BitVecVal32(0x80000000),
+    )
+    print('\nChecking w3.smax is 2147483647/0x7fffffff')
+    prove(
+        w3.smax == BitVecVal32(0x7fffffff),
+    )
     print('\nChecking that w3 contains 0')
     prove(
         w3.contains(BitVecVal32(0)),
@@ -163,6 +200,14 @@ def main():
     prove(
         w4.umax == BitVecVal32(2**32 - 1),
     )
+    print('\nChecking w4.smin is -1')
+    prove(
+        w4.smin == BitVecVal32(-1),
+    )
+    print('\nChecking w4.smax is 1')
+    prove(
+        w4.smax == BitVecVal32(1),
+    )
     print('\nChecking that w4 contains 0')
     prove(
         w4.contains(BitVecVal32(0)),
@@ -176,7 +221,7 @@ def main():
         w4.contains(x) == Or(x == BitVecVal32(2**32-1), x == BitVecVal32(0), x == BitVecVal32(1)),
     )
 
-    # General checks for umin/umax
+    # General checks for umin/umax/smin/smax
     w = Wrange32('w') # Given a Wrange32 called w
     x = BitVec32('x') # And an 32-bit integer x (redeclared for clarity)
     print(f'\nGiven any possible Wrange32 called w, and any possible 32-bit integer called x')
@@ -198,6 +243,26 @@ def main():
                 w.contains(x),
             ),
             ULE(x, w.umax),
+        )
+    )
+    print('\nChecking if w.contains(x) == True, then w.smin <= (s32)x is also true')
+    prove(
+        Implies(
+            And(
+                w.wellformed(),
+                w.contains(x),
+            ),
+            w.smin <= x,
+        )
+    )
+    print('\nChecking if w.contains(x) == True, then (s32)x <= w.smax is also true')
+    prove(
+        Implies(
+            And(
+                w.wellformed(),
+                w.contains(x),
+            ),
+            x <= w.smax,
         )
     )
 

@@ -29,4 +29,23 @@ static inline u32 wrange32_umax(struct wrange32 a) {
 		return a.end;
 }
 
+static inline bool wrange32_swrapping(struct wrange32 a) {
+	return (s32)a.end < (s32)a.start;
+}
+
+/* Helper functions that will be required later */
+static inline s32 wrange32_smin(struct wrange32 a) {
+	if (wrange32_swrapping(a))
+		return S32_MIN;
+	else
+		return a.start;
+}
+
+static inline s32 wrange32_smax(struct wrange32 a) {
+	if (wrange32_swrapping(a))
+		return S32_MAX;
+	else
+		return a.end;
+}
+
 #endif /* _LINUX_WRANGE_H */
