@@ -57,7 +57,7 @@ __naked void out_of_range_jump2(void)
 
 SEC("socket")
 __description("loop (back-edge)")
-__failure __msg("unreachable insn 1")
+__failure __msg("back-edge")
 __msg_unpriv("back-edge")
 __naked void loop_back_edge(void)
 {
@@ -69,7 +69,7 @@ l0_%=:	goto l0_%=;					\
 
 SEC("socket")
 __description("loop2 (back-edge)")
-__failure __msg("unreachable insn 4")
+__failure __msg("back-edge")
 __msg_unpriv("back-edge")
 __naked void loop2_back_edge(void)
 {

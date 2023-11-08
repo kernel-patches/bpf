@@ -15454,8 +15454,9 @@ static int check_return_code(struct bpf_verifier_env *env, int regno)
 enum {
 	DISCOVERED = 0x10,
 	EXPLORED = 0x20,
-	FALLTHROUGH = 1,
-	BRANCH = 2,
+	CONDITIONAL = 0x01,
+	FALLTHROUGH = 0x02,
+	BRANCH = 0x04,
 };
 
 static void mark_prune_point(struct bpf_verifier_env *env, int idx)
@@ -15489,16 +15490,15 @@ enum {
  * w - next instruction
  * e - edge
  */
-static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
-		     bool loop_ok)
+static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 {
 	int *insn_stack = env->cfg.insn_stack;
 	int *insn_state = env->cfg.insn_state;
 
-	if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
+	if ((e & FALLTHROUGH) && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
 		return DONE_EXPLORING;
 
-	if (e == BRANCH && insn_state[t] >= (DISCOVERED | BRANCH))
+	if ((e & BRANCH) && insn_state[t] >= (DISCOVERED | BRANCH))
 		return DONE_EXPLORING;
 
 	if (w < 0 || w >= env->prog->len) {
@@ -15507,7 +15507,7 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	if (e == BRANCH) {
+	if (e & BRANCH) {
 		/* mark branch target for state pruning */
 		mark_prune_point(env, w);
 		mark_jmp_point(env, w);
@@ -15516,13 +15516,13 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
 	if (insn_state[w] == 0) {
 		/* tree-edge */
 		insn_state[t] = DISCOVERED | e;
-		insn_state[w] = DISCOVERED;
+		insn_state[w] = DISCOVERED | (e & CONDITIONAL);
 		if (env->cfg.cur_stack >= env->prog->len)
 			return -E2BIG;
 		insn_stack[env->cfg.cur_stack++] = w;
 		return KEEP_EXPLORING;
-	} else if ((insn_state[w] & 0xF0) == DISCOVERED) {
-		if (loop_ok && env->bpf_capable)
+	} else if (insn_state[w] & DISCOVERED) {
+		if ((e & CONDITIONAL) && env->bpf_capable)
 			return DONE_EXPLORING;
 		verbose_linfo(env, t, "%d: ", t);
 		verbose_linfo(env, w, "%d: ", w);
@@ -15542,10 +15542,11 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 				struct bpf_verifier_env *env,
 				bool visit_callee)
 {
-	int ret, insn_sz;
+	int ret, insn_sz, cond;
 
+	cond = env->cfg.insn_state[t] & CONDITIONAL;
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
-	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env, false);
+	ret = push_insn(t, t + insn_sz, FALLTHROUGH | cond, env);
 	if (ret)
 		return ret;
 
@@ -15555,12 +15556,7 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 
 	if (visit_callee) {
 		mark_prune_point(env, t);
-		ret = push_insn(t, t + insns[t].imm + 1, BRANCH, env,
-				/* It's ok to allow recursion from CFG point of
-				 * view. __check_func_call() will do the actual
-				 * check.
-				 */
-				bpf_pseudo_func(insns + t));
+		ret = push_insn(t, t + insns[t].imm + 1, BRANCH | cond, env);
 	}
 	return ret;
 }
@@ -15573,16 +15569,18 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 static int visit_insn(int t, struct bpf_verifier_env *env)
 {
 	struct bpf_insn *insns = env->prog->insnsi, *insn = &insns[t];
-	int ret, off, insn_sz;
+	int ret, off, insn_sz, cond;
 
 	if (bpf_pseudo_func(insn))
 		return visit_func_call_insn(t, insns, env, true);
+
+	cond = env->cfg.insn_state[t] & CONDITIONAL;
 
 	/* All non-branch instructions have a single fall-through edge. */
 	if (BPF_CLASS(insn->code) != BPF_JMP &&
 	    BPF_CLASS(insn->code) != BPF_JMP32) {
 		insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
-		return push_insn(t, t + insn_sz, FALLTHROUGH, env, false);
+		return push_insn(t, t + insn_sz, FALLTHROUGH | cond, env);
 	}
 
 	switch (BPF_OP(insn->code)) {
@@ -15629,8 +15627,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			off = insn->imm;
 
 		/* unconditional jump with single edge */
-		ret = push_insn(t, t + off + 1, FALLTHROUGH, env,
-				true);
+		ret = push_insn(t, t + off + 1, FALLTHROUGH | cond, env);
 		if (ret)
 			return ret;
 
@@ -15643,11 +15640,11 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		/* conditional jump with two edges */
 		mark_prune_point(env, t);
 
-		ret = push_insn(t, t + 1, FALLTHROUGH, env, true);
+		ret = push_insn(t, t + 1, FALLTHROUGH | CONDITIONAL, env);
 		if (ret)
 			return ret;
 
-		return push_insn(t, t + insn->off + 1, BRANCH, env, true);
+		return push_insn(t, t + insn->off + 1, BRANCH | CONDITIONAL, env);
 	}
 }
 
