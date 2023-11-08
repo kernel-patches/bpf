@@ -3,6 +3,22 @@
 
 #define WRANGE32(_s, _e) ((struct wrange32) {.start = _s, .end = _e})
 
+struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
+				      u32 u32_min, u32 u32_max)
+{
+	/* To be implemented */
+	return WRANGE32(U32_MIN, U32_MAX);
+}
+
+void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
+			 u32 *u32_min, u32 *u32_max)
+{
+	*s32_min = wrange32_smin(w);
+	*s32_max = wrange32_smax(w);
+	*u32_min = wrange32_umin(w);
+	*u32_max = wrange32_umax(w);
+}
+
 struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b)
 {
 	u32 a_len = a.end - a.start;

@@ -11,6 +11,12 @@ struct wrange32 {
 	u32 end;
 };
 
+/* Create wrange32 from bpf_reg_state's s32_min/s32_max/u32_min/u32_max */
+struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
+		                      u32 u32_min, u32 u32_max);
+/* Turn wrange32 back into s32_min/s32_max/u32_min/u32_max */
+void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
+			 u32 *u32_min, u32 *u32_max);
 struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_sub(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_mul(struct wrange32 a, struct wrange32 b);
