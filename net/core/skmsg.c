@@ -811,6 +811,7 @@ static void sk_psock_destroy(struct work_struct *work)
 {
 	struct sk_psock *psock = container_of(to_rcu_work(work),
 					      struct sk_psock, rwork);
+	struct sock *sk_redir = sk_psock_get_redir(psock);
 	/* No sk_callback_lock since already detached. */
 
 	sk_psock_done_strp(psock);
@@ -824,8 +825,8 @@ static void sk_psock_destroy(struct work_struct *work)
 	sk_psock_link_destroy(psock);
 	sk_psock_cork_free(psock);
 
-	if (psock->sk_redir)
-		sock_put(psock->sk_redir);
+	if (sk_redir)
+		sock_put(sk_redir);
 	sock_put(psock->sk);
 	kfree(psock);
 }
@@ -865,6 +866,7 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 			 struct sk_msg *msg)
 {
 	struct bpf_prog *prog;
+	struct sock *sk_redir;
 	int ret;
 
 	rcu_read_lock();
@@ -880,17 +882,17 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 	ret = sk_psock_map_verd(ret, msg->sk_redir);
 	psock->apply_bytes = msg->apply_bytes;
 	if (ret == __SK_REDIRECT) {
-		if (psock->sk_redir) {
-			sock_put(psock->sk_redir);
-			psock->sk_redir = NULL;
+		sk_redir = sk_psock_get_redir(psock);
+		if (sk_redir) {
+			sock_put(sk_redir);
+			sk_psock_clear_redir(psock);
 		}
 		if (!msg->sk_redir) {
 			ret = __SK_DROP;
 			goto out;
 		}
-		psock->redir_ingress = sk_msg_to_ingress(msg);
-		psock->sk_redir = msg->sk_redir;
-		sock_hold(psock->sk_redir);
+		sk_psock_set_redir(psock, msg->sk_redir, sk_msg_to_ingress(msg));
+		sock_hold(msg->sk_redir);
 	}
 out:
 	rcu_read_unlock();

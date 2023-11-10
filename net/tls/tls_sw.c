@@ -854,8 +854,8 @@ more_data:
 		}
 		break;
 	case __SK_REDIRECT:
-		redir_ingress = psock->redir_ingress;
-		sk_redir = psock->sk_redir;
+		redir_ingress = sk_psock_ingress(psock);
+		sk_redir = sk_psock_get_redir(psock);
 		memcpy(&msg_redir, msg, sizeof(*msg));
 		if (msg->apply_bytes < send)
 			msg->apply_bytes = 0;
@@ -898,9 +898,10 @@ more_data:
 		}
 		if (reset_eval) {
 			psock->eval = __SK_NONE;
-			if (psock->sk_redir) {
-				sock_put(psock->sk_redir);
-				psock->sk_redir = NULL;
+			sk_redir = sk_psock_get_redir(psock);
+			if (sk_redir) {
+				sock_put(sk_redir);
+				sk_psock_clear_redir(psock);
 			}
 		}
 		if (rec)

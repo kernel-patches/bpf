@@ -78,11 +78,10 @@ struct sk_psock_work_state {
 
 struct sk_psock {
 	struct sock			*sk;
-	struct sock			*sk_redir;
+	unsigned long			_sk_redir;
 	u32				apply_bytes;
 	u32				cork_bytes;
 	u32				eval;
-	bool				redir_ingress; /* undefined if sk_redir is null */
 	struct sk_msg			*cork;
 	struct sk_psock_progs		progs;
 #if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
@@ -281,6 +280,33 @@ static inline struct sk_psock *sk_psock(const struct sock *sk)
 {
 	return __rcu_dereference_sk_user_data_with_flags(sk,
 							 SK_USER_DATA_PSOCK);
+}
+
+static inline bool sk_psock_ingress(const struct sk_psock *psock)
+{
+	unsigned long sk_redir = psock->_sk_redir;
+
+	return sk_redir & BPF_F_INGRESS;
+}
+
+static inline void sk_psock_set_redir(struct sk_psock *psock, struct sock *sk_redir,
+				      bool ingress)
+{
+	psock->_sk_redir = (unsigned long)sk_redir;
+	if (ingress)
+		psock->_sk_redir |= BPF_F_INGRESS;
+}
+
+static inline struct sock *sk_psock_get_redir(struct sk_psock *psock)
+{
+	unsigned long sk_redir = psock->_sk_redir;
+
+	return (struct sock *)(sk_redir & ~(BPF_F_INGRESS));
+}
+
+static inline void sk_psock_clear_redir(struct sk_psock *psock)
+{
+	psock->_sk_redir = 0;
 }
 
 static inline void sk_psock_set_state(struct sk_psock *psock,

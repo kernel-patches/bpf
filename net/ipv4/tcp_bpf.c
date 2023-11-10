@@ -427,14 +427,14 @@ more_data:
 		sk_msg_apply_bytes(psock, tosend);
 		break;
 	case __SK_REDIRECT:
-		redir_ingress = psock->redir_ingress;
-		sk_redir = psock->sk_redir;
+		redir_ingress = sk_psock_ingress(psock);
+		sk_redir = sk_psock_get_redir(psock);
 		sk_msg_apply_bytes(psock, tosend);
 		if (!psock->apply_bytes) {
 			/* Clean up before releasing the sock lock. */
 			eval = psock->eval;
 			psock->eval = __SK_NONE;
-			psock->sk_redir = NULL;
+			sk_psock_clear_redir(psock);
 		}
 		if (psock->cork) {
 			cork = true;
@@ -476,9 +476,10 @@ more_data:
 	if (likely(!ret)) {
 		if (!psock->apply_bytes) {
 			psock->eval =  __SK_NONE;
-			if (psock->sk_redir) {
-				sock_put(psock->sk_redir);
-				psock->sk_redir = NULL;
+			sk_redir = sk_psock_get_redir(psock);
+			if (sk_redir) {
+				sock_put(sk_redir);
+				sk_psock_clear_redir(psock);
 			}
 		}
 		if (msg &&
