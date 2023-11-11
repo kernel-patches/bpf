@@ -38,6 +38,10 @@
  * this isn't a real concern especially given the performance gain. Also, there
  * are ways to mitigate the problem further by e.g. introducing an extra
  * scheduling layer on cgroup delegation boundaries.
+ *
+ * The scheduler first picks the cgroup to run and then schedule the tasks
+ * within by using nested weighted vtime scheduling by default. The
+ * cgroup-internal scheduling can be switched to FIFO with the -f option.
  */
 #include "scx_common.bpf.h"
 #include "user_exit_info.h"
@@ -47,6 +51,7 @@ char _license[] SEC("license") = "GPL";
 
 const volatile u32 nr_cpus = 32;	/* !0 for veristat, set during init */
 const volatile u64 cgrp_slice_ns = SCX_SLICE_DFL;
+const volatile bool fifo_sched;
 const volatile bool switch_partial;
 
 u64 cvtime_now;
@@ -350,7 +355,21 @@ void BPF_STRUCT_OPS(fcg_enqueue, struct task_struct *p, u64 enq_flags)
 	if (!cgc)
 		goto out_release;
 
-	scx_bpf_dispatch(p, cgrp->kn->id, SCX_SLICE_DFL, enq_flags);
+	if (fifo_sched) {
+		scx_bpf_dispatch(p, cgrp->kn->id, SCX_SLICE_DFL, enq_flags);
+	} else {
+		u64 tvtime = p->scx.dsq_vtime;
+
+		/*
+		 * Limit the amount of budget that an idling task can accumulate
+		 * to one slice.
+		 */
+		if (vtime_before(tvtime, cgc->tvtime_now - SCX_SLICE_DFL))
+			tvtime = cgc->tvtime_now - SCX_SLICE_DFL;
+
+		scx_bpf_dispatch_vtime(p, cgrp->kn->id, SCX_SLICE_DFL,
+				       tvtime, enq_flags);
+	}
 
 	cgrp_enqueued(cgrp, cgc);
 out_release:
@@ -462,11 +481,47 @@ void BPF_STRUCT_OPS(fcg_runnable, struct task_struct *p, u64 enq_flags)
 	bpf_cgroup_release(cgrp);
 }
 
+void BPF_STRUCT_OPS(fcg_running, struct task_struct *p)
+{
+	struct cgroup *cgrp;
+	struct fcg_cgrp_ctx *cgc;
+
+	if (fifo_sched)
+		return;
+
+	cgrp = scx_bpf_task_cgroup(p);
+	cgc = find_cgrp_ctx(cgrp);
+	if (cgc) {
+		/*
+		 * @cgc->tvtime_now always progresses forward as tasks start
+		 * executing. The test and update can be performed concurrently
+		 * from multiple CPUs and thus racy. Any error should be
+		 * contained and temporary. Let's just live with it.
+		 */
+		if (vtime_before(cgc->tvtime_now, p->scx.dsq_vtime))
+			cgc->tvtime_now = p->scx.dsq_vtime;
+	}
+	bpf_cgroup_release(cgrp);
+}
+
 void BPF_STRUCT_OPS(fcg_stopping, struct task_struct *p, bool runnable)
 {
 	struct fcg_task_ctx *taskc;
 	struct cgroup *cgrp;
 	struct fcg_cgrp_ctx *cgc;
+
+	/*
+	 * Scale the execution time by the inverse of the weight and charge.
+	 *
+	 * Note that the default yield implementation yields by setting
+	 * @p->scx.slice to zero and the following would treat the yielding task
+	 * as if it has consumed all its slice. If this penalizes yielding tasks
+	 * too much, determine the execution time by taking explicit timestamps
+	 * instead of depending on @p->scx.slice.
+	 */
+	if (!fifo_sched)
+		p->scx.dsq_vtime +=
+			(SCX_SLICE_DFL - p->scx.slice) * 100 / p->scx.weight;
 
 	taskc = bpf_task_storage_get(&task_ctx, p, 0, 0);
 	if (!taskc) {
@@ -706,6 +761,7 @@ s32 BPF_STRUCT_OPS(fcg_prep_enable, struct task_struct *p,
 		   struct scx_enable_args *args)
 {
 	struct fcg_task_ctx *taskc;
+	struct fcg_cgrp_ctx *cgc;
 
 	/*
 	 * @p is new. Let's ensure that its task_ctx is available. We can sleep
@@ -717,6 +773,12 @@ s32 BPF_STRUCT_OPS(fcg_prep_enable, struct task_struct *p,
 		return -ENOMEM;
 
 	taskc->bypassed_at = 0;
+
+	if (!(cgc = find_cgrp_ctx(args->cgroup)))
+		return -ENOENT;
+
+	p->scx.dsq_vtime = cgc->tvtime_now;
+
 	return 0;
 }
 
@@ -804,6 +866,20 @@ void BPF_STRUCT_OPS(fcg_cgroup_exit, struct cgroup *cgrp)
 	scx_bpf_destroy_dsq(cgid);
 }
 
+void BPF_STRUCT_OPS(fcg_cgroup_move, struct task_struct *p,
+		    struct cgroup *from, struct cgroup *to)
+{
+	struct fcg_cgrp_ctx *from_cgc, *to_cgc;
+	s64 vtime_delta;
+
+	/* find_cgrp_ctx() triggers scx_ops_error() on lookup failures */
+	if (!(from_cgc = find_cgrp_ctx(from)) || !(to_cgc = find_cgrp_ctx(to)))
+		return;
+
+	vtime_delta = p->scx.dsq_vtime - from_cgc->tvtime_now;
+	p->scx.dsq_vtime = to_cgc->tvtime_now + vtime_delta;
+}
+
 s32 BPF_STRUCT_OPS(fcg_init)
 {
 	if (!switch_partial)
@@ -821,12 +897,14 @@ struct sched_ext_ops flatcg_ops = {
 	.enqueue		= (void *)fcg_enqueue,
 	.dispatch		= (void *)fcg_dispatch,
 	.runnable		= (void *)fcg_runnable,
+	.running		= (void *)fcg_running,
 	.stopping		= (void *)fcg_stopping,
 	.quiescent		= (void *)fcg_quiescent,
 	.prep_enable		= (void *)fcg_prep_enable,
 	.cgroup_set_weight	= (void *)fcg_cgroup_set_weight,
 	.cgroup_init		= (void *)fcg_cgroup_init,
 	.cgroup_exit		= (void *)fcg_cgroup_exit,
+	.cgroup_move		= (void *)fcg_cgroup_move,
 	.init			= (void *)fcg_init,
 	.exit			= (void *)fcg_exit,
 	.flags			= SCX_OPS_CGROUP_KNOB_WEIGHT | SCX_OPS_ENQ_EXITING,
