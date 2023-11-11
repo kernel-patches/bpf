@@ -201,7 +201,7 @@ $(c-sched-targets): %: $(BINDIR)/%
 ###################
 # Rust schedulers #
 ###################
-rust-sched-targets := scx_rusty
+rust-sched-targets := scx_rusty scx_layered
 
 # Separate build target that is available for build systems to use to fetch
 # dependencies in a separate step from building. This allows the scheduler
