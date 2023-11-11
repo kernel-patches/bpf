@@ -3,6 +3,7 @@ scx_qmap
 scx_central
 scx_pair
 scx_flatcg
+scx_userland
 *.skel.h
 *.subskel.h
 /tools/
