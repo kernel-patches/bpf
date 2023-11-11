@@ -309,6 +309,35 @@ top of sched_ext.
 
 --------------------------------------------------------------------------------
 
+## scx_rusty
+
+### Overview
+
+A multi-domain, BPF / user space hybrid scheduler. The BPF portion of the
+scheduler does a simple round robin in each domain, and the user space portion
+(written in Rust) calculates the load factor of each domain, and informs BPF of
+how tasks should be load balanced accordingly.
+
+### Typical Use Case
+
+Rusty is designed to be flexible, and accommodate different architectures and
+workloads. Various load balancing thresholds (e.g. greediness, frequenty, etc),
+as well as how Rusty should partition the system into scheduling domains, can
+be tuned to achieve the optimal configuration for any given system or workload.
+
+### Production Ready?
+
+Yes. If tuned correctly, rusty should be performant across various CPU
+architectures and workloads. Rusty by default creates a separate scheduling
+domain per-LLC, so its default configuration may be performant as well.
+
+That said, you may run into an issue with infeasible weights, where a task with
+a very high weight may cause the scheduler to incorrectly leave cores idle
+because it thinks they're necessary to accommodate the compute for a single
+task. This can also happen in CFS, and should soon be addressed for rusty.
+
+--------------------------------------------------------------------------------
+
 # Troubleshooting
 
 There are a number of common issues that you may run into when building the

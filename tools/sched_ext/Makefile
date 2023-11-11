@@ -93,6 +93,11 @@ CFLAGS += -g -O2 -rdynamic -pthread -Wall -Werror $(GENFLAGS)			\
 	  -I$(INCLUDE_DIR) -I$(GENDIR) -I$(LIBDIR)				\
 	  -I$(TOOLSINCDIR) -I$(APIDIR)
 
+CARGOFLAGS := --release --target-dir $(OUTPUT_DIR)
+ifneq ($(CARGO_OFFLINE),)
+CARGOFLAGS += --offline
+endif
+
 # Silence some warnings when compiled with clang
 ifneq ($(LLVM),)
 CFLAGS += -Wno-unused-command-line-argument
@@ -159,7 +164,7 @@ else
 endif
 
 $(SCXOBJ_DIR)/%.bpf.o: %.bpf.c $(INCLUDE_DIR)/vmlinux.h scx_common.bpf.h	\
-		       user_exit_info.h						\
+		       user_exit_info.h ravg.bpf.h ravg_impl.bpf.h		\
 		       | $(BPFOBJ) $(SCXOBJ_DIR)
 	$(call msg,CLNG-BPF,,$(notdir $@))
 	$(Q)$(CLANG) $(BPF_CFLAGS) -target bpf -c $< -o $@
@@ -192,11 +197,37 @@ $(addprefix $(BINDIR)/,$(c-sched-targets)): \
 	$(CC) -o $@ $(SCXOBJ_DIR)/$(sched).o $(HOST_BPFOBJ) $(LDFLAGS)
 $(c-sched-targets): %: $(BINDIR)/%
 
+
+###################
+# Rust schedulers #
+###################
+rust-sched-targets := scx_rusty
+
+# Separate build target that is available for build systems to use to fetch
+# dependencies in a separate step from building. This allows the scheduler
+# to be compiled without network access.
+#
+# If the regular rust scheduler Make target (e.g. scx_rusty) is invoked without
+# CARGO_OFFLINE=1 (e.g. if building locally), then cargo build will download
+# all of the necessary dependencies, and the deps target can be skipped.
+$(addsuffix _deps,$(rust-sched-targets)):
+	$(eval sched=$(@:_deps=))
+	$(Q)cargo fetch --manifest-path=$(sched)/Cargo.toml
+
+$(rust-sched-targets): %: $(INCLUDE_DIR)/vmlinux.h $(SCX_COMMON_DEPS)
+	$(eval export RUSTFLAGS = -C link-args=-lzstd -C link-args=-lz -C link-args=-lelf -L $(BPFOBJ_DIR))
+	$(eval export SCX_RUST_CLANG = $(CLANG))
+	$(eval export SCX_RUST_BPF_CFLAGS= $(BPF_CFLAGS))
+	$(eval sched=$(notdir $@))
+	$(Q)cargo build --manifest-path=$(sched)/Cargo.toml $(CARGOFLAGS)
+	$(Q)cp $(OUTPUT_DIR)/release/$(sched) $(BINDIR)/$@
+
 install: all
 	$(Q)mkdir -p $(DESTDIR)/usr/local/bin/
 	$(Q)cp $(BINDIR)/* $(DESTDIR)/usr/local/bin/
 
 clean:
+	$(foreach sched,$(rust-sched-targets),cargo clean --manifest-path=$(sched)/Cargo.toml;)
 	rm -rf $(OUTPUT_DIR) $(HOST_OUTPUT_DIR)
 	rm -f *.o *.bpf.o *.skel.h *.subskel.h
 	rm -f $(c-sched-targets)
@@ -218,6 +249,26 @@ help:
 	@echo   ''
 	@echo   'will compile all schedulers, and emit the build artifacts to'
 	@echo   '/tmp/sched_ext/build.'
+	@echo   ''
+	@echo   ''
+	@echo   'Rust scheduler targets'
+	@echo   '======================'
+	@echo   ''
+	@printf '  %s\n' $(rust-sched-targets)
+	@printf '  %s_deps\n' $(rust-sched-targets)
+	@echo   ''
+	@echo   'For any rust schedulers built with cargo, you can specify'
+	@echo   'CARGO_OFFLINE=1 to ensure the build portion does not access the'
+	@echo   'network (e.g. if the scheduler is being packaged).'
+	@echo   ''
+	@echo   'For such use cases, the build workflow will look something like this:'
+	@echo   ''
+	@echo   '   make scx_rusty_deps'
+	@echo   '   CARGO_OFFLINE=1 make scx_rusty'
+	@echo   ''
+	@echo   'If network access during build is allowed, you can just make scx_rusty'
+	@echo   'directly without CARGO_OFFLINE, and dependencies will be downloaded'
+	@echo   'during the build step.'
 	@echo   ''
 	@echo   ''
 	@echo   'Installing targets'
