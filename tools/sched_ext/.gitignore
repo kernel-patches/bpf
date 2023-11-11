@@ -1,0 +1,6 @@
+scx_simple
+scx_qmap
+*.skel.h
+*.subskel.h
+/tools/
+build/
