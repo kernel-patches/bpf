@@ -1404,7 +1404,8 @@ static int balance_scx(struct rq *rq, struct task_struct *prev,
 		 * emitted in scx_notify_pick_next_task().
 		 */
 		if (SCX_HAS_OP(cpu_acquire))
-			SCX_CALL_OP(0, cpu_acquire, cpu_of(rq), NULL);
+			SCX_CALL_OP(SCX_KF_UNLOCKED, cpu_acquire, cpu_of(rq),
+				    NULL);
 		rq->scx.cpu_released = false;
 	}
 
@@ -1862,6 +1863,18 @@ void __scx_update_idle(struct rq *rq, bool idle)
 		}
 	}
 #endif
+}
+
+static void rq_online_scx(struct rq *rq, enum rq_onoff_reason reason)
+{
+	if (SCX_HAS_OP(cpu_online) && reason == RQ_ONOFF_HOTPLUG)
+		SCX_CALL_OP(SCX_KF_REST, cpu_online, cpu_of(rq));
+}
+
+static void rq_offline_scx(struct rq *rq, enum rq_onoff_reason reason)
+{
+	if (SCX_HAS_OP(cpu_offline) && reason == RQ_ONOFF_HOTPLUG)
+		SCX_CALL_OP(SCX_KF_REST, cpu_offline, cpu_of(rq));
 }
 
 #else /* !CONFIG_SMP */
@@ -2381,6 +2394,9 @@ DEFINE_SCHED_CLASS(ext) = {
 	.balance		= balance_scx,
 	.select_task_rq		= select_task_rq_scx,
 	.set_cpus_allowed	= set_cpus_allowed_scx,
+
+	.rq_online		= rq_online_scx,
+	.rq_offline		= rq_offline_scx,
 #endif
 
 	.task_tick		= task_tick_scx,
