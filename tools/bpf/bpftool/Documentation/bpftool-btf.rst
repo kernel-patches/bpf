@@ -28,7 +28,7 @@ BTF COMMANDS
 |	**bpftool** **btf help**
 |
 |	*BTF_SRC* := { **id** *BTF_ID* | **prog** *PROG* | **map** *MAP* [{**key** | **value** | **kv** | **all**}] | **file** *FILE* }
-|	*FORMAT* := { **raw** | **c** }
+|	*FORMAT* := { **raw** | **c** | **meta** }
 |	*MAP* := { **id** *MAP_ID* | **pinned** *FILE* }
 |	*PROG* := { **id** *PROG_ID* | **pinned** *FILE* | **tag** *PROG_TAG* }
 
@@ -67,8 +67,8 @@ DESCRIPTION
 		  typically produced by clang or pahole.
 
 		  **format** option can be used to override default (raw)
-		  output format. Raw (**raw**) or C-syntax (**c**) output
-		  formats are supported.
+		  output format. Raw (**raw**), C-syntax (**c**) and
+                  BTF metadata (**meta**) formats are supported.
 
 	**bpftool btf help**
 		  Print short help message.
@@ -266,3 +266,27 @@ All the standard ways to specify map or program are supported:
   [104859] FUNC 'smbalert_work' type_id=9695 linkage=static
   [104860] FUNC 'smbus_alert' type_id=71367 linkage=static
   [104861] FUNC 'smbus_do_alert' type_id=84827 linkage=static
+
+
+**# bpftool btf dump file vmlinux format meta**
+
+::
+
+ size 5161076
+ magic 0xeb9f
+ version 1
+ flags 0x1
+ hdr_len 40
+ type_len 3036368
+ type_off 0
+ str_len 2124588
+ str_off 3036368
+ kind_layout_len 80
+ kind_layout_off 5160956
+ crc 0x64af901b
+ base_crc 0x0
+ kind 0    UNKNOWN    flags 0x0    info_sz 0    elem_sz 0
+ kind 1    INT        flags 0x0    info_sz 0    elem_sz 0
+ kind 2    PTR        flags 0x0    info_sz 0    elem_sz 0
+ kind 3    ARRAY      flags 0x0    info_sz 0    elem_sz 0
+ kind 4    STRUCT     flags 0x35   info_sz 0    elem_sz 0
