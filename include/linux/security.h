@@ -487,6 +487,8 @@ int security_locked_down(enum lockdown_reason what);
 int security_mbind(unsigned long start, unsigned long len,
 		   unsigned long mode, const unsigned long __user *nmask,
 		   unsigned long maxnode, unsigned int flags);
+int security_set_mempolicy(int mode, const unsigned long __user *nmask,
+			   unsigned long maxnode);
 #else /* CONFIG_SECURITY */
 
 static inline int call_blocking_lsm_notifier(enum lsm_event event, void *data)
@@ -1402,6 +1404,12 @@ static inline int security_locked_down(enum lockdown_reason what)
 static inline int security_mbind(unsigned long start, unsigned long len,
 				 unsigned long mode, const unsigned long __user *nmask,
 				 unsigned long maxnode, unsigned int flags)
+{
+	return 0;
+}
+
+static inline int security_set_mempolicy(int mode, const unsigned long __user *nmask,
+					 unsigned long maxnode)
 {
 	return 0;
 }

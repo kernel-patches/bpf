@@ -5344,3 +5344,8 @@ int security_mbind(unsigned long start, unsigned long len,
 {
 	return call_int_hook(mbind, 0, start, len, mode, nmask, maxnode, flags);
 }
+
+int security_set_mempolicy(int mode, const unsigned long __user *nmask, unsigned long maxnode)
+{
+	return call_int_hook(set_mempolicy, 0, mode, nmask, maxnode);
+}

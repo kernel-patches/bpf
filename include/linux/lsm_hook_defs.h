@@ -423,3 +423,5 @@ LSM_HOOK(int, 0, uring_cmd, struct io_uring_cmd *ioucmd)
 LSM_HOOK(int, 0, mbind, unsigned long start, unsigned long len,
 	 unsigned long mode, const unsigned long __user *nmask,
 	 unsigned long maxnode, unsigned int flags)
+LSM_HOOK(int, 0, set_mempolicy, int mode, const unsigned long __user *nmask,
+	 unsigned long maxnode)
