@@ -5337,3 +5337,10 @@ int security_uring_cmd(struct io_uring_cmd *ioucmd)
 	return call_int_hook(uring_cmd, 0, ioucmd);
 }
 #endif /* CONFIG_IO_URING */
+
+int security_mbind(unsigned long start, unsigned long len,
+		   unsigned long mode, const unsigned long __user *nmask,
+		   unsigned long maxnode, unsigned int flags)
+{
+	return call_int_hook(mbind, 0, start, len, mode, nmask, maxnode, flags);
+}
