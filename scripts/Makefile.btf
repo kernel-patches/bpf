@@ -19,3 +19,6 @@ pahole-flags-$(call test-ge, $(pahole-ver), 125)	+= --skip_encoding_btf_inconsis
 pahole-flags-$(call test-ge, $(pahole-ver), 126)	= -j --lang_exclude=rust --btf_features=encode_force,var,float,decl_tag,type_tag,enum64,optimized_func,consistent_func,crc,kind_layout
 
 export PAHOLE_FLAGS := $(pahole-flags-y)
+
+# Allow opt-out of split BTF by overriding BTF_BASE
+export BTF_BASE	:= --btf_base vmlinux
