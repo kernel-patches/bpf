@@ -267,6 +267,7 @@ struct btf {
 	u32 start_str_off; /* first string offset (0 for base BTF) */
 	char name[MODULE_NAME_LEN];
 	bool kernel_btf;
+	bool standalone_btf;
 };
 
 enum verifier_phase {
@@ -5882,6 +5883,253 @@ errout:
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 
+/* verify module BTF is self-contained:
+ * - if CRC is set and base CRC is not: or
+ *  - no string offset should exceed standalone str len; and
+ *  - the max id referenced should be <= the number of btf types in module BTF
+ *
+ * Taken together with the fact that the number of module types is much less
+ * than the number of types in vmliux BTF, these imply self-reference and hence
+ * standalone BTF.
+ */
+static bool btf_module_is_standalone(struct btf_verifier_env *env)
+{
+	u32 id_max = 0, num_ids = 0;
+	struct btf *btf = env->btf;
+	struct btf_header *hdr;
+	void *cur, *end;
+	u32 end_str_off;
+
+	hdr = &btf->hdr;
+	cur = btf->nohdr_data + hdr->type_off;
+	end = cur + hdr->type_len;
+	end_str_off = hdr->str_len;
+
+	/* Quick CRC test; if base CRC is absent while CRC is present,
+	 * we know BTF was generated without reference to base BTF.
+	 */
+	if (hdr->hdr_len >= sizeof(struct btf_header)) {
+		if ((hdr->flags & BTF_FLAG_CRC_SET) &&
+		    !(hdr->flags & BTF_FLAG_BASE_CRC_SET))
+			return true;
+	}
+
+	while (cur < end) {
+		struct btf_type *t = cur;
+		u32 meta_size = sizeof(*t);
+		struct btf_member *member;
+		struct btf_param *param;
+		struct btf_array *array;
+		struct btf_enum64 *e64;
+		struct btf_enum *e;
+		int i, vlen;
+
+		if (t->name_off >= end_str_off)
+			return false;
+
+		switch (btf_kind(t)) {
+		case BTF_KIND_FLOAT:
+			break;
+		case BTF_KIND_PTR:
+		case BTF_KIND_FWD:
+		case BTF_KIND_TYPEDEF:
+		case BTF_KIND_VOLATILE:
+		case BTF_KIND_CONST:
+		case BTF_KIND_RESTRICT:
+		case BTF_KIND_FUNC:
+		case BTF_KIND_TYPE_TAG:
+			if (t->type > id_max)
+				id_max = t->type;
+			break;
+		case BTF_KIND_VAR:
+			if (t->type > id_max)
+				id_max = t->type;
+			meta_size += sizeof(struct btf_var);
+			break;
+		case BTF_KIND_INT:
+			meta_size += sizeof(u32);
+			break;
+		case BTF_KIND_DATASEC:
+			meta_size += btf_vlen(t) * sizeof(struct btf_var_secinfo);
+			break;
+		case BTF_KIND_ARRAY:
+			array = (struct btf_array *)(t + 1);
+			if (array->type > id_max)
+				id_max = array->type;
+			if (array->index_type > id_max)
+				id_max = array->index_type;
+			meta_size += sizeof(*array);
+			break;
+		case BTF_KIND_STRUCT:
+		case BTF_KIND_UNION:
+			member = (struct btf_member *)(t + 1);
+			vlen = btf_type_vlen(t);
+			for (i = 0; i < vlen; i++, member++) {
+				if (member->name_off >= end_str_off)
+					return false;
+				if (member->type > id_max)
+					id_max = member->type;
+			}
+			meta_size += vlen * sizeof(*member);
+			break;
+		case BTF_KIND_ENUM:
+			e = (struct btf_enum *)(t + 1);
+			vlen = btf_type_vlen(t);
+			for (i = 0; i < vlen; i++, e++) {
+				if  (e->name_off > end_str_off)
+					return false;
+			}
+			meta_size +=  vlen * sizeof(*e);
+			break;
+		case BTF_KIND_ENUM64:
+			e64 = (struct btf_enum64 *)(t + 1);
+			vlen = btf_type_vlen(t);
+			for (i = 0; i < vlen; i++, e64++) {
+				if (e64->name_off > end_str_off)
+					return false;
+			}
+			meta_size += vlen * sizeof(*e64);
+			break;
+		case BTF_KIND_FUNC_PROTO:
+			param = (struct btf_param *)(t + 1);
+			vlen = btf_type_vlen(t);
+			for (i = 0; i < vlen; i++, param++) {
+				if (param->name_off > end_str_off)
+					return false;
+				if (param->type > id_max)
+					id_max = param->type;
+			}
+			meta_size += vlen * sizeof(*param);
+			break;
+		case BTF_KIND_DECL_TAG:
+			if (t->type > id_max)
+				id_max = t->type;
+			meta_size += sizeof(struct btf_decl_tag);
+			break;
+		}
+		cur += meta_size;
+		num_ids++;
+	}
+	/* if all standalone string checks look good and we found no references
+	 * to ids higher than the number present here, we can be sure it is
+	 * standalone BTF.
+	 */
+	return id_max <= num_ids;
+}
+
+static u32 btf_name_off_renumber(struct btf *btf, u32 name_off)
+{
+	/* no need to renumber empty string */
+	if (name_off == 0)
+		return name_off;
+	return name_off + btf->start_str_off;
+}
+
+static u32 btf_id_renumber(struct btf *btf, u32 id)
+{
+	/* no need to renumber void type id */
+	if (id == 0)
+		return id;
+
+	return id + btf->start_id - 1;
+}
+
+/* Renumber standalone BTF to appear as split BTF; name offsets must
+ * be relative to btf->start_str_offset and ids relative to btf->start_id.
+ * When user sees BTF it will appear as normal module split BTF, the only
+ * difference being it is fully self-referential and does not refer back
+ * to vmlinux BTF (aside from 0 "void" references).
+ */
+static void btf_type_renumber(struct btf_verifier_env *env, struct btf_type *t)
+{
+	struct btf_var_secinfo *secinfo;
+	struct btf *btf = env->btf;
+	struct btf_member *member;
+	struct btf_param *param;
+	struct btf_array *array;
+	struct btf_enum64 *e64;
+	struct btf_enum *e;
+	int i, vlen;
+
+	t->name_off = btf_name_off_renumber(btf, t->name_off);
+
+	switch (BTF_INFO_KIND(t->info)) {
+	case BTF_KIND_INT:
+	case BTF_KIND_FLOAT:
+		/* nothing to renumber here, no type references */
+		break;
+	case BTF_KIND_PTR:
+	case BTF_KIND_FWD:
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_CONST:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_FUNC:
+	case BTF_KIND_VAR:
+	case BTF_KIND_TYPE_TAG:
+	case BTF_KIND_DECL_TAG:
+		/* renumber the referenced type */
+		t->type = btf_id_renumber(btf, t->type);
+		break;
+	case BTF_KIND_ARRAY:
+		array = btf_array(t);
+		array->type = btf_id_renumber(btf, array->type);
+		array->index_type = btf_id_renumber(btf, array->index_type);
+		break;
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION:
+		member = (struct btf_member *)(t + 1);
+		vlen = btf_type_vlen(t);
+		for (i = 0; i < vlen; i++, member++) {
+			member->type = btf_id_renumber(btf, member->type);
+			member->name_off = btf_name_off_renumber(btf, member->name_off);
+		}
+		break;
+	case BTF_KIND_FUNC_PROTO:
+		param = (struct btf_param *)(t + 1);
+		vlen = btf_type_vlen(t);
+		for (i = 0; i < vlen; i++, param++) {
+			param->type = btf_id_renumber(btf, param->type);
+			param->name_off = btf_name_off_renumber(btf, param->name_off);
+		}
+		break;
+	case BTF_KIND_DATASEC:
+		vlen = btf_type_vlen(t);
+		secinfo = (struct btf_var_secinfo *)(t + 1);
+		for (i = 0; i < vlen; i++, secinfo++)
+			secinfo->type = btf_id_renumber(btf, secinfo->type);
+		break;
+	case BTF_KIND_ENUM:
+		e = (struct btf_enum *)(t + 1);
+		vlen = btf_type_vlen(t);
+		for (i = 0; i < vlen; i++, e++)
+			e->name_off = btf_name_off_renumber(btf, e->name_off);
+		break;
+	case BTF_KIND_ENUM64:
+		e64 = (struct btf_enum64 *)(t + 1);
+		vlen = btf_type_vlen(t);
+		for (i = 0; i < vlen; i++, e64++)
+			e64->name_off = btf_name_off_renumber(btf, e64->name_off);
+		break;
+	}
+}
+
+static void btf_renumber(struct btf_verifier_env *env, struct btf *base_btf)
+{
+	struct btf *btf = env->btf;
+	int i;
+
+	btf->start_id = base_btf->nr_types;
+	btf->start_str_off = base_btf->hdr.str_len;
+	btf->base_btf = base_btf;
+
+	for (i = 1; i < btf->nr_types; i++)
+		btf_type_renumber(env, btf->types[i]);
+	/* skip past unneeded void type (we use base id 0 instead) */
+	btf->types++;
+	btf->nr_types--;
+}
+
 static struct btf *btf_parse_module(const char *module_name, const void *data, unsigned int data_size)
 {
 	struct btf_verifier_env *env = NULL;
@@ -5933,9 +6181,28 @@ static struct btf *btf_parse_module(const char *module_name, const void *data, u
 	if (err)
 		goto errout;
 
+	if (btf_module_is_standalone(env)) {
+		/* BTF may be standalone; in that case BTF ids and strings
+		 * will all be self-referential.
+		 *
+		 * Later on, once we have checked all metas, we will
+		 * retain start id from  base BTF so it will look like
+		 * split BTF (but is self-contained); renumbering is done
+		 * also to give the split BTF-like appearance and not
+		 * confuse pahole which assumes split BTF for modules.
+		 */
+		btf->base_btf = NULL;
+		btf->start_id = 0;
+		btf->nr_types = 0;
+		btf->start_str_off = 0;
+		btf->standalone_btf = true;
+	}
 	err = btf_check_all_metas(env);
 	if (err)
 		goto errout;
+
+	if (btf->standalone_btf)
+		btf_renumber(env, base_btf);
 
 	err = btf_check_type_tags(env, btf, btf_nr_types(base_btf));
 	if (err)
@@ -7876,6 +8143,16 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 
 	/* Concatenate the two sets */
 	memcpy(set->pairs + set->cnt, add_set->pairs, add_set->cnt * sizeof(set->pairs[0]));
+	if (btf->standalone_btf) {
+		u32 i;
+
+		/* renumber BTF ids since BTF is standalone and has been mapped to look
+		 * like split BTF, while BTF kfunc ids are still old unmapped values.
+		 */
+		for (i = set->cnt; i < set->cnt + add_set->cnt; i++)
+			set->pairs[i].id = btf_id_renumber(btf, set->pairs[i].id);
+	}
+
 	set->cnt += add_set->cnt;
 
 	sort(set->pairs, set->cnt, sizeof(set->pairs[0]), btf_id_cmp_func, NULL);
@@ -7936,7 +8213,6 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 	case BPF_PROG_TYPE_SYSCALL:
 		return BTF_KFUNC_HOOK_SYSCALL;
 	case BPF_PROG_TYPE_CGROUP_SKB:
-	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
 		return BTF_KFUNC_HOOK_CGROUP_SKB;
 	case BPF_PROG_TYPE_SCHED_ACT:
 		return BTF_KFUNC_HOOK_SCHED_ACT;
@@ -8005,7 +8281,14 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 		return PTR_ERR(btf);
 
 	for (i = 0; i < kset->set->cnt; i++) {
-		ret = btf_check_kfunc_protos(btf, kset->set->pairs[i].id,
+		u32 kfunc_id = kset->set->pairs[i].id;
+
+		/* standalone BTF renumbers BTF ids to make them appear as split BTF;
+		 * resolve_btfids has the old BTF ids so we need to renumber here.
+		 */
+		if (btf->standalone_btf)
+			kfunc_id = btf_id_renumber(btf, kfunc_id);
+		ret = btf_check_kfunc_protos(btf, kfunc_id,
 					     kset->set->pairs[i].flags);
 		if (ret)
 			goto err_out;
@@ -8062,6 +8345,12 @@ static int btf_check_dtor_kfuncs(struct btf *btf, const struct btf_id_dtor_kfunc
 
 	for (i = 0; i < cnt; i++) {
 		dtor_btf_id = dtors[i].kfunc_btf_id;
+
+		/* standalone BTF renumbers BTF ids to make them appear as split BTF;
+		 * resolve_btfids has the old BTF ids so we need to renumber here.
+		 */
+		if (btf->standalone_btf)
+			dtor_btf_id = btf_id_renumber(btf, dtor_btf_id);
 
 		dtor_func = btf_type_by_id(btf, dtor_btf_id);
 		if (!dtor_func || !btf_type_is_func(dtor_func))
@@ -8156,6 +8445,17 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
 	btf->dtor_kfunc_tab = tab;
 
 	memcpy(tab->dtors + tab->cnt, dtors, add_cnt * sizeof(tab->dtors[0]));
+	if (btf->standalone_btf) {
+		u32 i;
+
+		/* renumber BTF ids since BTF is standalone and has been mapped to look
+		 * like split BTF, while BTF dtor ids are still old unmapped values.
+		 */
+		for (i = tab->cnt; i < tab->cnt + add_cnt; i++) {
+			tab->dtors[i].btf_id = btf_id_renumber(btf, tab->dtors[i].btf_id);
+			tab->dtors[i].kfunc_btf_id = btf_id_renumber(btf, tab->dtors[i].kfunc_btf_id);
+		}
+	}
 	tab->cnt += add_cnt;
 
 	sort(tab->dtors, tab->cnt, sizeof(tab->dtors[0]), btf_id_cmp_func, NULL);
