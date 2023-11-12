@@ -25,6 +25,7 @@
 #include <linux/bsearch.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+#include <linux/crc32.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 
@@ -5354,6 +5355,20 @@ static int btf_parse_hdr(struct btf_verifier_env *env)
 		return -ENOTSUPP;
 	}
 
+	if (hdr->flags & BTF_FLAG_CRC_SET) {
+		__u32 check, crc = hdr->crc;
+		struct btf_header *h = btf->data;
+
+		h->crc = 0;
+		check = crc32(0xffffffff, btf->data, btf_data_size);
+		check ^= ~0;
+		h->crc = crc;
+		if (check != crc) {
+			btf_verifier_log(env, "Invalid CRC; expected 0x%x ; actual 0x%x",
+					 crc, check);
+			return -EINVAL;
+		}
+	}
 	if (!btf->base_btf && btf_data_size == hdr->hdr_len) {
 		btf_verifier_log(env, "No data");
 		return -EINVAL;
