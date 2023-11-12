@@ -489,6 +489,8 @@ int security_mbind(unsigned long start, unsigned long len,
 		   unsigned long maxnode, unsigned int flags);
 int security_set_mempolicy(int mode, const unsigned long __user *nmask,
 			   unsigned long maxnode);
+int security_set_mempolicy_home_node(unsigned long start, unsigned long len,
+				     unsigned long home_node, unsigned long flags);
 #else /* CONFIG_SECURITY */
 
 static inline int call_blocking_lsm_notifier(enum lsm_event event, void *data)
@@ -1410,6 +1412,12 @@ static inline int security_mbind(unsigned long start, unsigned long len,
 
 static inline int security_set_mempolicy(int mode, const unsigned long __user *nmask,
 					 unsigned long maxnode)
+{
+	return 0;
+}
+
+static inline int security_set_mempolicy_home_node(unsigned long start, unsigned long len,
+						   unsigned long home_node, unsigned long flags)
 {
 	return 0;
 }

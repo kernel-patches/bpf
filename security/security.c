@@ -5349,3 +5349,10 @@ int security_set_mempolicy(int mode, const unsigned long __user *nmask, unsigned
 {
 	return call_int_hook(set_mempolicy, 0, mode, nmask, maxnode);
 }
+
+int security_set_mempolicy_home_node(unsigned long start, unsigned long len,
+				     unsigned long home_node, unsigned long flags)
+{
+
+	return call_int_hook(set_mempolicy_home_node, 0, start, len, home_node, flags);
+}

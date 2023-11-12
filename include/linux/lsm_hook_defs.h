@@ -425,3 +425,5 @@ LSM_HOOK(int, 0, mbind, unsigned long start, unsigned long len,
 	 unsigned long maxnode, unsigned int flags)
 LSM_HOOK(int, 0, set_mempolicy, int mode, const unsigned long __user *nmask,
 	 unsigned long maxnode)
+LSM_HOOK(int, 0, set_mempolicy_home_node, unsigned long start, unsigned long len,
+	 unsigned long home_node, unsigned long flags)

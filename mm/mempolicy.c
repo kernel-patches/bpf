@@ -1523,6 +1523,11 @@ SYSCALL_DEFINE4(set_mempolicy_home_node, unsigned long, start, unsigned long, le
 		return -EINVAL;
 	if (end == start)
 		return 0;
+
+	err = security_set_mempolicy_home_node(start, len, home_node, flags);
+	if (err)
+		return err;
+
 	mmap_write_lock(mm);
 	prev = vma_prev(&vmi);
 	for_each_vma_range(vmi, vma, end) {
