@@ -5369,6 +5369,24 @@ static int btf_parse_hdr(struct btf_verifier_env *env)
 			return -EINVAL;
 		}
 	}
+	if (hdr->flags & BTF_FLAG_BASE_CRC_SET) {
+		struct btf_header *base_hdr = &btf->base_btf->hdr;
+
+		if (!btf->base_btf) {
+			btf_verifier_log(env, "Specified base BTF CRC but no base BTF");
+			return -EINVAL;
+		}
+
+		if (!(base_hdr->flags & BTF_FLAG_CRC_SET)) {
+			btf_verifier_log(env, "Specified base BTF CRC but base BTF has no CRC");
+			return -EINVAL;
+		}
+		if (hdr->base_crc != base_hdr->crc) {
+			btf_verifier_log(env, "Specified base CRC 0x%x; differs from actual base CRC 0x%x\n",
+					 hdr->base_crc, base_hdr->crc);
+			return -EINVAL;
+		}
+	}
 	if (!btf->base_btf && btf_data_size == hdr->hdr_len) {
 		btf_verifier_log(env, "No data");
 		return -EINVAL;
