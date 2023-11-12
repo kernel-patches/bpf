@@ -164,4 +164,87 @@ int unsafe_find_vma(void *unused)
 	return choice_arr[loop_ctx.i];
 }
 
+static int iter_limit_cb(__u32 idx, struct num_context *ctx)
+{
+	ctx->i++;
+	return 0;
+}
+
+SEC("?raw_tp")
+__success
+int bpf_loop_iter_limit_ok(void *unused)
+{
+	struct num_context ctx = { .i = 0 };
+
+	bpf_loop(1, iter_limit_cb, &ctx, 0);
+	return choice_arr[ctx.i];
+}
+
+SEC("?raw_tp")
+__failure __msg("invalid access to map value, value_size=2 off=2 size=1")
+int bpf_loop_iter_limit_overflow(void *unused)
+{
+	struct num_context ctx = { .i = 0 };
+
+	bpf_loop(2, iter_limit_cb, &ctx, 0);
+	return choice_arr[ctx.i];
+}
+
+static int iter_limit_level2a_cb(__u32 idx, struct num_context *ctx)
+{
+	ctx->i += 100;
+	return 0;
+}
+
+static int iter_limit_level2b_cb(__u32 idx, struct num_context *ctx)
+{
+	ctx->i += 10;
+	return 0;
+}
+
+static int iter_limit_level1_cb(__u32 idx, struct num_context *ctx)
+{
+	ctx->i += 1;
+	bpf_loop(1, iter_limit_level2a_cb, ctx, 0);
+	bpf_loop(1, iter_limit_level2b_cb, ctx, 0);
+	return 0;
+}
+
+SEC("?raw_tp")
+__success __log_level(2)
+/* Check that path visiting every callback function once had been
+ * reached by verifier. Variable 'i' below (stored as r2) serves
+ * as a flag, with each decimal digit corresponding to a callback
+ * visit marker.
+ */
+__msg("(73) *(u8 *)(r1 +0) = r2          ; R1_w=map_value(off=0,ks=4,vs=2,imm=0) R2_w=111111")
+int bpf_loop_iter_limit_nested(void *unused)
+{
+	struct num_context ctx1 = { .i = 0 };
+	struct num_context ctx2 = { .i = 0 };
+	/* Set registers for 'i' and 'p' to get guaranteed asm
+	 * instruction shape for __msg matching.
+	 */
+	register unsigned i asm("r2");
+	register __u8 *p asm("r1");
+	unsigned a, b;
+
+	bpf_loop(1, iter_limit_level1_cb, &ctx1, 0);
+	bpf_loop(1, iter_limit_level1_cb, &ctx2, 0);
+	a = ctx1.i;
+	b = ctx2.i;
+	i = a * 1000 + b;
+	/* Force 'ctx1.i' and 'ctx2.i' precise. */
+	p = &choice_arr[(a % 2 + b % 2) % 2];
+	/* Make sure that verifier does not visit 'impossible' states:
+	 * enumerate all possible callback visit masks.
+	 */
+	if (a != 0 && a != 1 && a != 11 && a != 101 && a != 111 &&
+	    b != 0 && b != 1 && b != 11 && b != 101 && b != 111)
+		asm volatile ("r0 /= 0;" ::: "r0");
+	/* Instruction for match in __msg spec. */
+	asm volatile ("*(u8 *)(r1 + 0) = r2;" :: "r"(p), "r"(i) : "memory");
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
