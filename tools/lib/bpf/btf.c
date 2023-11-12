@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <gelf.h>
+#include <zlib.h>
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"
@@ -27,6 +28,35 @@
 #define BTF_MAX_STR_OFFSET 0x7fffffffU
 
 static struct btf_type btf_void;
+
+/* Describe how kinds are laid out; some have a singular element following the "struct btf_type",
+ * some have BTF_INFO_VLEN(t->info) elements.  Specify sizes for both.  Flags are currently unused.
+ * Kind layout can be optionally added to the BTF representation in a dedicated section to
+ * facilitate parsing.  New kinds must be added here.
+ */
+struct btf_kind_layout kind_layouts[NR_BTF_KINDS] = {
+/*	flags	singular element size		vlen element(s) size */
+{	0,	0,				0				}, /* _UNKN */
+{	0,	sizeof(__u32),			0				}, /* _INT */
+{	0,	0,				0				}, /* _PTR */
+{	0,	sizeof(struct btf_array),	0				}, /* _ARRAY */
+{	0,	0,				sizeof(struct btf_member)	}, /* _STRUCT */
+{	0,	0,				sizeof(struct btf_member)	}, /* _UNION */
+{	0,	0,				sizeof(struct btf_enum)		}, /* _ENUM */
+{	0,	0,				0				}, /* _FWD */
+{	0,	0,				0				}, /* _TYPEDEF */
+{	0,	0,				0				}, /* _VOLATILE */
+{	0,	0,				0				}, /* _CONST */
+{	0,	0,				0				}, /* _RESTRICT */
+{	0,	0,				0				}, /* _FUNC */
+{	0,	0,				sizeof(struct btf_param)	}, /* _FUNC_PROTO */
+{	0,	sizeof(struct btf_var),		0				}, /* _VAR */
+{	0,	0,				sizeof(struct btf_var_secinfo)	}, /* _DATASEC */
+{	0,	0,				0				}, /* _FLOAT */
+{	0,	sizeof(struct btf_decl_tag),	0				}, /* _DECL_TAG */
+{	0,	0,				0				}, /* _TYPE_TAG */
+{	0,	0,				sizeof(struct btf_enum64)	}, /* _ENUM64 */
+};
 
 struct btf {
 	/* raw BTF data in native endianness */
@@ -1063,8 +1093,9 @@ void btf__free(struct btf *btf)
 	free(btf);
 }
 
-static struct btf *btf_new_empty(struct btf *base_btf)
+static struct btf *btf_new_empty(struct btf_new_opts *opts)
 {
+	struct btf *base_btf = OPTS_GET(opts, base_btf, NULL);
 	struct btf_header *hdr;
 	struct btf *btf;
 
@@ -1106,6 +1137,29 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 		free(btf);
 		return ERR_PTR(-ENOMEM);
 	}
+
+	if (opts->add_kind_layout) {
+		hdr->kind_layout_len = sizeof(kind_layouts);
+		btf->kind_layout = malloc(hdr->kind_layout_len);
+		if (!btf->kind_layout) {
+			free(btf->hdr);
+			free(btf);
+			return ERR_PTR(-ENOMEM);
+		}
+		memcpy(btf->kind_layout, kind_layouts, sizeof(kind_layouts));
+	}
+	if (opts->add_crc) {
+		if (btf->base_btf) {
+			struct btf_header *base_hdr = btf->base_btf->hdr;
+
+			if (base_hdr->hdr_len >= sizeof(struct btf_header) &&
+			    base_hdr->flags & BTF_FLAG_CRC_SET) {
+				hdr->base_crc = base_hdr->crc;
+				hdr->flags |= BTF_FLAG_BASE_CRC_SET;
+			}
+		}
+		hdr->flags |= BTF_FLAG_CRC_SET;
+	}
 	memcpy(btf->hdr, hdr, sizeof(*hdr));
 
 	return btf;
@@ -1113,12 +1167,26 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 
 struct btf *btf__new_empty(void)
 {
-	return libbpf_ptr(btf_new_empty(NULL));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	return libbpf_ptr(btf_new_empty(&opts));
 }
 
 struct btf *btf__new_empty_split(struct btf *base_btf)
 {
-	return libbpf_ptr(btf_new_empty(base_btf));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	opts.base_btf = base_btf;
+
+	return libbpf_ptr(btf_new_empty(&opts));
+}
+
+struct btf *btf__new_empty_opts(struct btf_new_opts *opts)
+{
+	if (!OPTS_VALID(opts, btf_new_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	return libbpf_ptr(btf_new_empty(opts));
 }
 
 static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
@@ -1562,6 +1630,12 @@ static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endi
 		memcpy(p, btf->kind_layout, hdr->kind_layout_len);
 		if (swap_endian)
 			btf_bswap_kind_layout_sec(p, hdr->kind_layout_len);
+	}
+
+	if (hdr->flags & BTF_FLAG_CRC_SET) {
+		struct btf_header *h = data;
+
+		h->crc = crc32(0L, (const Bytef *)data, data_sz);
 	}
 
 	*size = data_sz;
