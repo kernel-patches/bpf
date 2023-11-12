@@ -301,6 +301,15 @@ struct bpf_func_state {
 	struct tnum callback_ret_range;
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
+	/* For callback calling functions that limit number of possible
+	 * callback executions (e.g. bpf_loop) keeps track of current
+	 * simulated iteration number. When non-zero either:
+	 * - current frame has a child frame, in such case it's callsite points
+	 *   to callback calling function;
+	 * - current frame is a topmost frame, in such case callback has just
+	 *   returned and env->insn_idx points to callback calling function.
+	 */
+	u32 callback_depth;
 
 	/* The following fields should be last. See copy_func_state() */
 	int acquired_refs;
