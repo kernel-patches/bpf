@@ -48,7 +48,7 @@ static _Atomic enum bpf_test_state state = _TS_INVALID;
 static void *load_module_thread(void *p)
 {
 
-	if (!ASSERT_NEQ(load_bpf_testmod(false), 0, "load_module_thread must fail"))
+	if (!ASSERT_NEQ(load_bpf_testmod("bpf_testmod", false), 0, "load_module_thread must fail"))
 		atomic_store(&state, TS_MODULE_LOAD);
 	else
 		atomic_store(&state, TS_MODULE_LOAD_FAIL);
@@ -100,7 +100,7 @@ static void test_bpf_mod_race_config(const struct test_config *config)
 	if (!ASSERT_NEQ(fault_addr, MAP_FAILED, "mmap for uffd registration"))
 		return;
 
-	if (!ASSERT_OK(unload_bpf_testmod(false), "unload bpf_testmod"))
+	if (!ASSERT_OK(unload_bpf_testmod("bpf_testmod", false), "unload bpf_testmod"))
 		goto end_mmap;
 
 	skel = bpf_mod_race__open();
@@ -178,8 +178,8 @@ end_destroy:
 	bpf_mod_race__destroy(skel);
 	ASSERT_OK(kern_sync_rcu(), "kern_sync_rcu");
 end_module:
-	unload_bpf_testmod(false);
-	ASSERT_OK(load_bpf_testmod(false), "restore bpf_testmod");
+	unload_bpf_testmod("bpf_testmod", false);
+	ASSERT_OK(load_bpf_testmod("bpf_testmod", false), "restore bpf_testmod");
 end_mmap:
 	munmap(fault_addr, 4096);
 	atomic_store(&state, _TS_INVALID);

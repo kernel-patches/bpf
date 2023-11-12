@@ -89,21 +89,21 @@ void test_module_attach(void)
 	if (!ASSERT_OK_PTR(link, "attach_fentry"))
 		goto cleanup;
 
-	ASSERT_ERR(unload_bpf_testmod(false), "unload_bpf_testmod");
+	ASSERT_ERR(unload_bpf_testmod("bpf_testmod", false), "unload_bpf_testmod");
 	bpf_link__destroy(link);
 
 	link = bpf_program__attach(skel->progs.handle_fexit);
 	if (!ASSERT_OK_PTR(link, "attach_fexit"))
 		goto cleanup;
 
-	ASSERT_ERR(unload_bpf_testmod(false), "unload_bpf_testmod");
+	ASSERT_ERR(unload_bpf_testmod("bpf_testmod", false), "unload_bpf_testmod");
 	bpf_link__destroy(link);
 
 	link = bpf_program__attach(skel->progs.kprobe_multi);
 	if (!ASSERT_OK_PTR(link, "attach_kprobe_multi"))
 		goto cleanup;
 
-	ASSERT_ERR(unload_bpf_testmod(false), "unload_bpf_testmod");
+	ASSERT_ERR(unload_bpf_testmod("bpf_testmod", false), "unload_bpf_testmod");
 	bpf_link__destroy(link);
 
 cleanup:

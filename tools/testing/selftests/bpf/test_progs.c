@@ -1659,9 +1659,9 @@ int main(int argc, char **argv)
 	env.has_testmod = true;
 	if (!env.list_test_names) {
 		/* ensure previous instance of the module is unloaded */
-		unload_bpf_testmod(verbose());
+		unload_bpf_testmod("bpf_testmod", verbose());
 
-		if (load_bpf_testmod(verbose())) {
+		if (load_bpf_testmod("bpf_testmod", verbose())) {
 			fprintf(env.stderr, "WARNING! Selftests relying on bpf_testmod.ko will be skipped.\n");
 			env.has_testmod = false;
 		}
@@ -1761,7 +1761,7 @@ int main(int argc, char **argv)
 	close(env.saved_netns_fd);
 out:
 	if (!env.list_test_names && env.has_testmod)
-		unload_bpf_testmod(verbose());
+		unload_bpf_testmod("bpf_testmod", verbose());
 
 	free_test_selector(&env.test_selector);
 	free_test_selector(&env.subtest_selector);

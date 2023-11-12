@@ -30,8 +30,8 @@ int parse_test_list_file(const char *path,
 			 bool is_glob_pattern);
 
 __u64 read_perf_max_sample_freq(void);
-int load_bpf_testmod(bool verbose);
-int unload_bpf_testmod(bool verbose);
+int load_bpf_testmod(const char *name, bool verbose);
+int unload_bpf_testmod(const char *name, bool verbose);
 int kern_sync_rcu(void);
 
 static inline __u64 get_time_ns(void)
