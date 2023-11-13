@@ -18051,12 +18051,17 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				return -E2BIG;
 			}
 
+			atomic_or(env->prog->aux->sleepable ? BPF_MAP_ACC_SLEEPABLE_PROG_CTX :
+							      BPF_MAP_ACC_NORMAL_PROG_CTX,
+				  &map->owned_prog_ctx);
 			/* hold the map. If the program is rejected by verifier,
 			 * the map will be released by release_maps() or it
 			 * will be used by the valid program until it's unloaded
 			 * and all maps are released in free_used_maps()
 			 */
 			bpf_map_inc(map);
+			/* Paired with smp_mb() in bpf_map_fd_put_ptr() */
+			smp_mb__after_atomic();
 
 			aux->map_index = env->used_map_cnt;
 			env->used_maps[env->used_map_cnt++] = map;

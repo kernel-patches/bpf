@@ -245,6 +245,12 @@ struct bpf_list_node_kern {
 	void *owner;
 } __attribute__((aligned(8)));
 
+enum {
+	BPF_MAP_ACC_NORMAL_PROG_CTX = 1,
+	BPF_MAP_ACC_SLEEPABLE_PROG_CTX = 2,
+	BPF_MAP_ACC_PROG_CTX_MASK = BPF_MAP_ACC_NORMAL_PROG_CTX | BPF_MAP_ACC_SLEEPABLE_PROG_CTX,
+};
+
 struct bpf_map {
 	/* The first two cachelines with read-mostly members of which some
 	 * are also accessed in fast-path (e.g. ops, max_entries).
@@ -292,7 +298,8 @@ struct bpf_map {
 	} owner;
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	bool free_after_mult_rcu_gp;
+	atomic_t owned_prog_ctx;
+	atomic_t may_be_accessed_prog_ctx;
 	s64 __percpu *elem_count;
 };
 

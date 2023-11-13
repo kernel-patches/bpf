@@ -695,12 +695,20 @@ static void bpf_map_free_deferred(struct work_struct *work)
 {
 	struct bpf_map *map = container_of(work, struct bpf_map, work);
 	struct btf_record *rec = map->record;
+	int acc_ctx;
 
 	security_bpf_map_free(map);
 	bpf_map_release_memcg(map);
 
-	if (READ_ONCE(map->free_after_mult_rcu_gp))
-		synchronize_rcu_mult(call_rcu, call_rcu_tasks_trace);
+	acc_ctx = atomic_read(&map->may_be_accessed_prog_ctx) & BPF_MAP_ACC_PROG_CTX_MASK;
+	if (acc_ctx) {
+		if (acc_ctx == BPF_MAP_ACC_NORMAL_PROG_CTX)
+			synchronize_rcu();
+		else if (acc_ctx == BPF_MAP_ACC_SLEEPABLE_PROG_CTX)
+			synchronize_rcu_tasks_trace();
+		else
+			synchronize_rcu_mult(call_rcu, call_rcu_tasks_trace);
+	}
 
 	/* implementation dependent freeing */
 	map->ops->map_free(map);
@@ -5327,6 +5335,9 @@ static int bpf_prog_bind_map(union bpf_attr *attr)
 		goto out_unlock;
 	}
 
+	/* No need to update owned_prog_ctx, because the bpf program doesn't
+	 * access the map.
+	 */
 	memcpy(used_maps_new, used_maps_old,
 	       sizeof(used_maps_old[0]) * prog->aux->used_map_cnt);
 	used_maps_new[prog->aux->used_map_cnt] = map;
