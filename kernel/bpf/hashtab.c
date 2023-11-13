@@ -2523,7 +2523,9 @@ int bpf_fd_htab_map_update_elem(struct bpf_map *map, struct file *map_file,
 	if (IS_ERR(ptr))
 		return PTR_ERR(ptr);
 
+	rcu_read_lock();
 	ret = htab_map_update_elem(map, key, &ptr, map_flags);
+	rcu_read_unlock();
 	if (ret)
 		map->ops->map_fd_put_ptr(ptr);
 
