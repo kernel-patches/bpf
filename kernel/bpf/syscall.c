@@ -2083,10 +2083,19 @@ static int bpf_prog_alloc_id(struct bpf_prog *prog)
 	return id > 0 ? 0 : id;
 }
 
-void bpf_prog_free_id(struct bpf_prog *prog)
+void bpf_prog_remove_from_idr(struct bpf_prog *prog)
 {
 	unsigned long flags;
 
+	spin_lock_irqsave(&prog_idr_lock, flags);
+	if (!prog->aux->skip_idr_remove)
+		idr_remove(&prog_idr, prog->aux->id);
+	prog->aux->skip_idr_remove = 1;
+	spin_unlock_irqrestore(&prog_idr_lock, flags);
+}
+
+void bpf_prog_free_id(struct bpf_prog *prog)
+{
 	/* cBPF to eBPF migrations are currently not in the idr store.
 	 * Offloaded programs are removed from the store when their device
 	 * disappears - even if someone grabs an fd to them they are unusable,
@@ -2095,10 +2104,8 @@ void bpf_prog_free_id(struct bpf_prog *prog)
 	if (!prog->aux->id)
 		return;
 
-	spin_lock_irqsave(&prog_idr_lock, flags);
-	idr_remove(&prog_idr, prog->aux->id);
+	bpf_prog_remove_from_idr(prog);
 	prog->aux->id = 0;
-	spin_unlock_irqrestore(&prog_idr_lock, flags);
 }
 
 static void __bpf_prog_put_rcu(struct rcu_head *rcu)
