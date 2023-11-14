@@ -20329,6 +20329,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
 
+		if (aux->attach_depth >= 32) {
+			bpf_log(log, "Target program attach depth is %d. Too large\n",
+					aux->attach_depth);
+			return -EINVAL;
+		}
+
 		if (bpf_prog_is_dev_bound(prog->aux) &&
 		    !bpf_prog_dev_bound_match(prog, tgt_prog)) {
 			bpf_log(log, "Target program bound device mismatch");
@@ -20367,9 +20373,16 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Can attach to only JITed progs\n");
 			return -EINVAL;
 		}
-		if (tgt_prog->type == prog->type) {
-			/* Cannot fentry/fexit another fentry/fexit program.
-			 * Cannot attach program extension to another extension.
+		if (tgt_prog->type == prog->type &&
+			(prog_extension || prog->aux->followed)) {
+			/*
+			 * To avoid potential call chain cycles, prevent attaching programs
+			 * of the same type. The only exception is standalone fentry/fexit
+			 * programs that themselves are not attachment targets.
+			 * That means:
+			 *  - Cannot attach followed fentry/fexit to another
+			 *    fentry/fexit program.
+			 *  - Cannot attach program extension to another extension.
 			 * It's ok to attach fentry/fexit to extension program.
 			 */
 			bpf_log(log, "Cannot recursively attach\n");
