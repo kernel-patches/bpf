@@ -17,9 +17,11 @@
 #define TEST_TAG_EXPECT_FAILURE "comment:test_expect_failure"
 #define TEST_TAG_EXPECT_SUCCESS "comment:test_expect_success"
 #define TEST_TAG_EXPECT_MSG_PFX "comment:test_expect_msg="
+#define TEST_TAG_DONT_EXPECT_MSG_PFX "comment:test_dont_expect_msg="
 #define TEST_TAG_EXPECT_FAILURE_UNPRIV "comment:test_expect_failure_unpriv"
 #define TEST_TAG_EXPECT_SUCCESS_UNPRIV "comment:test_expect_success_unpriv"
 #define TEST_TAG_EXPECT_MSG_PFX_UNPRIV "comment:test_expect_msg_unpriv="
+#define TEST_TAG_DONT_EXPECT_MSG_PFX_UNPRIV "comment:test_dont_expect_msg_unpriv="
 #define TEST_TAG_LOG_LEVEL_PFX "comment:test_log_level="
 #define TEST_TAG_PROG_FLAGS_PFX "comment:test_prog_flags="
 #define TEST_TAG_DESCRIPTION_PFX "comment:test_description="
@@ -45,10 +47,15 @@ enum mode {
 	UNPRIV = 2
 };
 
+struct pattern {
+	const char *str;
+	bool expected;
+};
+
 struct test_subspec {
 	char *name;
 	bool expect_failure;
-	const char **expect_msgs;
+	struct pattern *expect_msgs;
 	size_t expect_msg_cnt;
 	int retval;
 	bool execute;
@@ -98,17 +105,21 @@ static void free_test_spec(struct test_spec *spec)
 	spec->unpriv.expect_msgs = NULL;
 }
 
-static int push_msg(const char *msg, struct test_subspec *subspec)
+static int push_msg(const char *msg, struct test_subspec *subspec, bool expected)
 {
+	size_t cnt = subspec->expect_msg_cnt;
 	void *tmp;
 
-	tmp = realloc(subspec->expect_msgs, (1 + subspec->expect_msg_cnt) * sizeof(void *));
+	tmp = realloc(subspec->expect_msgs,
+		      (1 + subspec->expect_msg_cnt) * sizeof(*subspec->expect_msgs));
 	if (!tmp) {
 		ASSERT_FAIL("failed to realloc memory for messages\n");
 		return -ENOMEM;
 	}
 	subspec->expect_msgs = tmp;
-	subspec->expect_msgs[subspec->expect_msg_cnt++] = msg;
+	subspec->expect_msgs[cnt].str = msg;
+	subspec->expect_msgs[cnt].expected = expected;
+	subspec->expect_msg_cnt++;
 
 	return 0;
 }
@@ -231,13 +242,25 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX)) {
 			msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX) - 1;
-			err = push_msg(msg, &spec->priv);
+			err = push_msg(msg, &spec->priv, true);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= PRIV;
 		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX_UNPRIV)) {
 			msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX_UNPRIV) - 1;
-			err = push_msg(msg, &spec->unpriv);
+			err = push_msg(msg, &spec->unpriv, true);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= UNPRIV;
+		} else if (str_has_pfx(s, TEST_TAG_DONT_EXPECT_MSG_PFX)) {
+			msg = s + sizeof(TEST_TAG_DONT_EXPECT_MSG_PFX) - 1;
+			err = push_msg(msg, &spec->priv, false);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= PRIV;
+		} else if (str_has_pfx(s, TEST_TAG_DONT_EXPECT_MSG_PFX_UNPRIV)) {
+			msg = s + sizeof(TEST_TAG_DONT_EXPECT_MSG_PFX_UNPRIV) - 1;
+			err = push_msg(msg, &spec->unpriv, false);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
@@ -333,7 +356,7 @@ static int parse_test_spec(struct test_loader *tester,
 		}
 
 		if (!spec->unpriv.expect_msgs) {
-			size_t sz = spec->priv.expect_msg_cnt * sizeof(void *);
+			size_t sz = spec->priv.expect_msg_cnt * sizeof(*spec->priv.expect_msgs);
 
 			spec->unpriv.expect_msgs = malloc(sz);
 			if (!spec->unpriv.expect_msgs) {
@@ -392,33 +415,46 @@ static void emit_verifier_log(const char *log_buf, bool force)
 	fprintf(stdout, "VERIFIER LOG:\n=============\n%s=============\n", log_buf);
 }
 
+static void show_log_and_msgs(struct test_loader *tester, struct test_subspec *subspec, int n)
+{
+	struct pattern *pat;
+	int i;
+
+	if (env.verbosity == VERBOSE_NONE)
+		emit_verifier_log(tester->log_buf, true /*force*/);
+	for (i = 0; i < n; i++) {
+		pat = &subspec->expect_msgs[i];
+		fprintf(stderr, "   MATCHED MSG: %s'%s'\n", pat->expected ? "" : "!", pat->str);
+	}
+}
+
 static void validate_case(struct test_loader *tester,
 			  struct test_subspec *subspec,
 			  struct bpf_object *obj,
 			  struct bpf_program *prog,
 			  int load_err)
 {
-	int i, j;
+	int i;
 
 	for (i = 0; i < subspec->expect_msg_cnt; i++) {
+		struct pattern *pat = &subspec->expect_msgs[i];
 		char *match;
-		const char *expect_msg;
 
-		expect_msg = subspec->expect_msgs[i];
-
-		match = strstr(tester->log_buf + tester->next_match_pos, expect_msg);
-		if (!ASSERT_OK_PTR(match, "expect_msg")) {
-			/* if we are in verbose mode, we've already emitted log */
-			if (env.verbosity == VERBOSE_NONE)
-				emit_verifier_log(tester->log_buf, true /*force*/);
-			for (j = 0; j < i; j++)
-				fprintf(stderr,
-					"MATCHED  MSG: '%s'\n", subspec->expect_msgs[j]);
-			fprintf(stderr, "EXPECTED MSG: '%s'\n", expect_msg);
+		match = strstr(tester->log_buf + tester->next_match_pos, pat->str);
+		if (pat->expected && !match) {
+			PRINT_FAIL("Expected log message not found\n");
+			show_log_and_msgs(tester, subspec, i);
+			fprintf(stderr, "  EXPECTED MSG: '%s'\n", pat->str);
 			return;
 		}
-
-		tester->next_match_pos = match - tester->log_buf + strlen(expect_msg);
+		if (!pat->expected && match) {
+			PRINT_FAIL("Unexpected log message found\n");
+			show_log_and_msgs(tester, subspec, i);
+			fprintf(stderr, "UNEXPECTED MSG: '%s'\n", pat->str);
+			return;
+		}
+		if (pat->expected)
+			tester->next_match_pos = match - tester->log_buf + strlen(pat->str);
 	}
 }
 

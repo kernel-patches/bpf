@@ -22,7 +22,13 @@
  *
  * __msg             Message expected to be found in the verifier log.
  *                   Multiple __msg attributes could be specified.
+ *                   When multiple messages are specified they are
+ *                   matched one after another.
+ * __not_msg	     Message not expected to be found in the verifier log.
+ *                   Matched from the end of the last checked __msg or
+ *                   from log start, if no __msg had been matched yet.
  * __msg_unpriv      Same as __msg but for unprivileged mode.
+ * __not_msg_unpriv  Same as __not_msg but for unprivileged mode.
  *
  * __success         Expect program load success in privileged mode.
  * __success_unpriv  Expect program load success in unprivileged mode.
@@ -59,10 +65,13 @@
  * __auxiliary_unpriv  Same, but load program in unprivileged mode.
  */
 #define __msg(msg)		__attribute__((btf_decl_tag("comment:test_expect_msg=" msg)))
+#define __not_msg(msg)		__attribute__((btf_decl_tag("comment:test_dont_expect_msg=" msg)))
 #define __failure		__attribute__((btf_decl_tag("comment:test_expect_failure")))
 #define __success		__attribute__((btf_decl_tag("comment:test_expect_success")))
 #define __description(desc)	__attribute__((btf_decl_tag("comment:test_description=" desc)))
 #define __msg_unpriv(msg)	__attribute__((btf_decl_tag("comment:test_expect_msg_unpriv=" msg)))
+#define __not_msg_unpriv(msg)						\
+	__attribute__((btf_decl_tag("comment:test_dont_expect_msg_unpriv=" msg)))
 #define __failure_unpriv	__attribute__((btf_decl_tag("comment:test_expect_failure_unpriv")))
 #define __success_unpriv	__attribute__((btf_decl_tag("comment:test_expect_success_unpriv")))
 #define __log_level(lvl)	__attribute__((btf_decl_tag("comment:test_log_level="#lvl)))
