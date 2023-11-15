@@ -433,7 +433,7 @@ failure:
 
 /**
  * ice_fill_rx_descs - pick buffers from XSK buffer pool and use it
- * @pool: XSK Buffer pool to pull the buffers from
+ * @rx_ring: rx ring
  * @xdp: SW ring of xdp_buff that will hold the buffers
  * @rx_desc: Pointer to Rx descriptors that will be filled
  * @count: The number of buffers to allocate
@@ -445,18 +445,23 @@ failure:
  *
  * Returns the amount of allocated Rx descriptors
  */
-static u16 ice_fill_rx_descs(struct xsk_buff_pool *pool, struct xdp_buff **xdp,
+static u16 ice_fill_rx_descs(struct ice_rx_ring *rx_ring, struct xdp_buff **xdp,
 			     union ice_32b_rx_flex_desc *rx_desc, u16 count)
 {
 	dma_addr_t dma;
 	u16 buffs;
 	int i;
 
-	buffs = xsk_buff_alloc_batch(pool, xdp, count);
+	buffs = xsk_buff_alloc_batch(rx_ring->xsk_pool, xdp, count);
 	for (i = 0; i < buffs; i++) {
 		dma = xsk_buff_xdp_get_dma(*xdp);
 		rx_desc->read.pkt_addr = cpu_to_le64(dma);
 		rx_desc->wb.status_error0 = 0;
+
+		/* Put private info that changes on a per-packet basis
+		 * into xdp_buff_xsk->cb.
+		 */
+		ice_xdp_meta_set_desc(*xdp, rx_desc);
 
 		rx_desc++;
 		xdp++;
@@ -488,8 +493,7 @@ static bool __ice_alloc_rx_bufs_zc(struct ice_rx_ring *rx_ring, u16 count)
 	xdp = ice_xdp_buf(rx_ring, ntu);
 
 	if (ntu + count >= rx_ring->count) {
-		nb_buffs_extra = ice_fill_rx_descs(rx_ring->xsk_pool, xdp,
-						   rx_desc,
+		nb_buffs_extra = ice_fill_rx_descs(rx_ring, xdp, rx_desc,
 						   rx_ring->count - ntu);
 		if (nb_buffs_extra != rx_ring->count - ntu) {
 			ntu += nb_buffs_extra;
@@ -502,7 +506,7 @@ static bool __ice_alloc_rx_bufs_zc(struct ice_rx_ring *rx_ring, u16 count)
 		ice_release_rx_desc(rx_ring, 0);
 	}
 
-	nb_buffs = ice_fill_rx_descs(rx_ring->xsk_pool, xdp, rx_desc, count);
+	nb_buffs = ice_fill_rx_descs(rx_ring, xdp, rx_desc, count);
 
 	ntu += nb_buffs;
 	if (ntu == rx_ring->count)
@@ -752,6 +756,7 @@ busy:
  * @xdp: xdp_buff used as input to the XDP program
  * @xdp_prog: XDP program to run
  * @xdp_ring: ring to be used for XDP_TX action
+ * @rx_desc: packet descriptor
  *
  * Returns any of ICE_XDP_{PASS, CONSUMED, TX, REDIR}
  */
