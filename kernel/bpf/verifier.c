@@ -16406,14 +16406,23 @@ static bool regs_exact(const struct bpf_reg_state *rold,
 
 /* Returns true if (rold safe implies rcur safe) */
 static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
-		    struct bpf_reg_state *rcur, struct bpf_idmap *idmap, bool exact)
+		    struct bpf_reg_state *rcur, struct bpf_idmap *idmap, bool exact, bool test)
 {
 	if (exact)
 		return regs_exact(rold, rcur, idmap);
 
-	if (!(rold->live & REG_LIVE_READ))
-		/* explored state didn't use this */
+	// This condition gets triggered.
+	if (!(rold->live & REG_LIVE_READ)) {
+		if (test) {
+			verbose(env, "old reg: ");
+			print_register(env, rold);
+			verbose(env, "\nnew reg: ");
+			print_register(env, rcur);
+			verbose(env, "\n");
+			return false;
+		}
 		return true;
+	}
 	if (rold->type == NOT_INIT)
 		/* explored state can't have used this */
 		return true;
@@ -16543,7 +16552,7 @@ static bool is_stack_zero64(const struct bpf_stack_state *stack)
 }
 
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
-		      struct bpf_func_state *cur, struct bpf_idmap *idmap, bool exact)
+		      struct bpf_func_state *cur, struct bpf_idmap *idmap, bool exact, bool test)
 {
 	struct bpf_reg_state zero_reg = {};
 	int i, spi;
@@ -16579,7 +16588,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		if (is_spilled_scalar_reg64(&old->stack[spi]) &&
 		    is_stack_zero64(&cur->stack[spi])) {
-			if (!regsafe(env, &old->stack[spi].spilled_ptr, &zero_reg, idmap, exact))
+			if (!regsafe(env, &old->stack[spi].spilled_ptr, &zero_reg, idmap, exact,
+				     test))
 				return false;
 			i += BPF_REG_SIZE - 1;
 			continue;
@@ -16587,7 +16597,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		if (is_stack_zero64(&old->stack[spi]) &&
 		    is_spilled_scalar_reg64(&cur->stack[spi])) {
-			if (!regsafe(env, &zero_reg, &cur->stack[spi].spilled_ptr, idmap, exact))
+			if (!regsafe(env, &zero_reg, &cur->stack[spi].spilled_ptr, idmap, exact,
+				     test))
 				return false;
 			i += BPF_REG_SIZE - 1;
 			continue;
@@ -16637,7 +16648,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 * return false to continue verification of this path
 			 */
 			if (!regsafe(env, &old->stack[spi].spilled_ptr,
-				     &cur->stack[spi].spilled_ptr, idmap, exact))
+				     &cur->stack[spi].spilled_ptr, idmap, exact, false))
 				return false;
 			break;
 		case STACK_DYNPTR:
@@ -16719,16 +16730,16 @@ static bool refsafe(struct bpf_func_state *old, struct bpf_func_state *cur,
  * the current state will reach 'bpf_exit' instruction safely
  */
 static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			      struct bpf_func_state *cur, bool exact)
+			      struct bpf_func_state *cur, bool exact, bool test)
 {
 	int i;
 
 	for (i = 0; i < MAX_BPF_REG; i++)
 		if (!regsafe(env, &old->regs[i], &cur->regs[i],
-			     &env->idmap_scratch, exact))
+			     &env->idmap_scratch, exact, false))
 			return false;
 
-	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
+	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact, test))
 		return false;
 
 	if (!refsafe(old, cur, &env->idmap_scratch))
@@ -16746,7 +16757,7 @@ static void reset_idmap_scratch(struct bpf_verifier_env *env)
 static bool states_equal(struct bpf_verifier_env *env,
 			 struct bpf_verifier_state *old,
 			 struct bpf_verifier_state *cur,
-			 bool exact)
+			 bool exact, bool test)
 {
 	int i;
 
@@ -16783,7 +16794,7 @@ static bool states_equal(struct bpf_verifier_env *env,
 	for (i = 0; i <= old->curframe; i++) {
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], exact))
+		if (!func_states_equal(env, old->frame[i], cur->frame[i], exact, test))
 			return false;
 	}
 	return true;
@@ -17120,7 +17131,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			 * => unsafe memory access at 11 would not be caught.
 			 */
 			if (is_iter_next_insn(env, insn_idx)) {
-				if (states_equal(env, &sl->state, cur, true)) {
+				if (states_equal(env, &sl->state, cur, true, false)) {
 					struct bpf_func_state *cur_frame;
 					struct bpf_reg_state *iter_state, *iter_reg;
 					int spi;
@@ -17145,14 +17156,22 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			}
 			/* attempt to detect infinite loop to avoid unnecessary doomed work */
 			if (states_maybe_looping(&sl->state, cur) &&
-			    states_equal(env, &sl->state, cur, false) &&
+			    states_equal(env, &sl->state, cur, false, true) &&
 			    !iter_active_depths_differ(&sl->state, cur)) {
+				struct bpf_verifier_state *old = &sl->state;
+				int i = old->curframe;
+				bool eq1 = stacksafe(env, old->frame[i], cur->frame[i],
+						     &env->idmap_scratch, false, true);
+				bool eq2 = stacksafe(env, old->frame[i], cur->frame[i],
+						     &env->idmap_scratch, true, false);
+
 				verbose_linfo(env, insn_idx, "; ");
 				verbose(env, "infinite loop detected at insn %d\n", insn_idx);
 				verbose(env, "cur state:");
-				print_verifier_state(env, cur->frame[cur->curframe], true);
+				print_verifier_state(env, cur->frame[i], true);
 				verbose(env, "old state:");
-				print_verifier_state(env, sl->state.frame[cur->curframe], true);
+				print_verifier_state(env, old->frame[i], true);
+				verbose(env, "inexact eq %d, exact eq %d\n", eq1, eq2);
 				return -EINVAL;
 			}
 			/* if the verifier is processing a loop, avoid adding new state
@@ -17201,7 +17220,7 @@ skip_inf_loop_check:
 		 */
 		loop_entry = get_loop_entry(&sl->state);
 		force_exact = loop_entry && loop_entry->branches > 0;
-		if (states_equal(env, &sl->state, cur, force_exact)) {
+		if (states_equal(env, &sl->state, cur, force_exact, false)) {
 			if (force_exact)
 				update_loop_entry(cur, loop_entry);
 hit:
