@@ -7,6 +7,7 @@ use anyhow::Result;
 use bpftool_tests_skel::BpftoolTestsSkel;
 use bpftool_tests_skel::BpftoolTestsSkelBuilder;
 use libbpf_rs::skel::OpenSkel;
+use libbpf_rs::skel::Skel;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::Program;
 use serde::Deserialize;
@@ -16,6 +17,7 @@ use std::process::Command;
 
 const BPFTOOL_PATH_ENV: &str = "BPFTOOL_PATH";
 const BPFTOOL_PATH: &str = "/usr/sbin/bpftool";
+const STRUCT_OPS_MAP_NAME: &str = "bt_e2e_tco";
 
 /// A struct representing a pid entry from map/prog dump
 #[derive(Serialize, Deserialize, Debug)]
@@ -60,6 +62,34 @@ struct MapItem {
     key: MapVecString,
     value: MapVecString,
     formatted: Option<FormattedMapItem>,
+}
+
+/// A struct representing the map info from `bpftool struct_ops dump id <id>`
+#[derive(Serialize, Deserialize, Debug)]
+struct MapInfo {
+    name: String,
+    id: u64,
+}
+
+/// A struct representing a struct_ops entry from `bpftool struct_ops list -j`
+#[derive(Serialize, Deserialize, Debug)]
+struct StructOps {
+    name: String,
+    id: u64,
+    kernel_struct_ops: String,
+}
+
+/// A struct representing a struct_ops entry from `bpftool struct_ops dump id <id>`
+#[derive(Serialize, Deserialize, Debug)]
+struct StructOpsCongestion {}
+
+/// A struct representing a struct_ops entry from `bpftool struct_ops dump id <id>`
+/// The returned json seems to be a tuple of two elements.
+/// the first one being a MapInfo, the second one being a StructOpsCongestion.
+#[derive(Serialize, Deserialize, Debug)]
+struct StructOpsDump {
+    bpf_map_info: Option<MapInfo>,
+    bpf_struct_ops_tcp_congestion_ops: Option<StructOpsCongestion>,
 }
 
 /// A helper function to convert a vector of strings as returned by bpftool
@@ -263,4 +293,119 @@ fn run_bpftool_prog_show_id() {
             .expect("Program handle_tp_sys_enter_write has no name")
     );
     assert_eq!("tracepoint", prog.r#type);
+}
+
+/// A test to validate that we can list struct_ops using bpftool
+#[test]
+fn run_bpftool_struct_ops_list() {
+    let _skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&["struct_ops", "list", "--json"]);
+
+    let maps =
+        serde_json::from_slice::<Vec<StructOps>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert!(output.status.success(), "bpftool returned an error.");
+    assert!(!maps.is_empty(), "No maps were listed");
+}
+
+/// A test to validate that we can dump a struct_ops program using its name
+#[test]
+fn run_bpftool_struct_ops_dump_name() {
+    let _skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&[
+        "struct_ops",
+        "dump",
+        "name",
+        STRUCT_OPS_MAP_NAME,
+        "--pretty",
+    ]);
+
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    let struct_ops =
+        serde_json::from_slice::<Vec<StructOpsDump>>(&output.stdout).expect("Failed to parse JSON");
+    assert!(!struct_ops.is_empty(), "No struct_ops were found");
+
+    assert_eq!(
+        struct_ops[0]
+            .bpf_map_info
+            .as_ref()
+            .expect("Missing bpf_map_info field")
+            .name,
+        STRUCT_OPS_MAP_NAME
+    );
+}
+
+/// A test to validate that we can unregister a struct_ops using its id
+#[test]
+fn run_bpftool_struct_ops_can_unregister_id() {
+    let skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&[
+        "struct_ops",
+        "dump",
+        "name",
+        STRUCT_OPS_MAP_NAME,
+        "--pretty",
+    ]);
+
+    let _link = skel
+        .object()
+        .map(STRUCT_OPS_MAP_NAME)
+        .unwrap_or_else(|| panic!("Could not find map {}", STRUCT_OPS_MAP_NAME))
+        .attach_struct_ops()
+        .expect("Could not attach to struct_ops");
+
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    let struct_ops =
+        serde_json::from_slice::<Vec<StructOpsDump>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert!(!struct_ops.is_empty(), "No struct_ops were found");
+
+    let id = struct_ops[0]
+        .bpf_map_info
+        .as_ref()
+        .expect("Missing bpf_map_info field")
+        .id;
+
+    let output = run_bpftool_command(&["struct_ops", "unregister", "id", &id.to_string()]);
+    assert!(
+        output.status.success(),
+        "Failed to unregister struct_ops program: {:?}",
+        output
+    );
+}
+
+/// A test to validate that we can unregister a struct_ops using its name
+#[test]
+fn run_bpftool_struct_ops_can_unregister_name() {
+    let skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&[
+        "struct_ops",
+        "dump",
+        "name",
+        STRUCT_OPS_MAP_NAME,
+        "--pretty",
+    ]);
+
+    let _link = skel
+        .object()
+        .map(STRUCT_OPS_MAP_NAME)
+        .unwrap_or_else(|| panic!("Could not find map {}", STRUCT_OPS_MAP_NAME))
+        .attach_struct_ops()
+        .expect("Could not attach to struct_ops");
+
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    let struct_ops =
+        serde_json::from_slice::<Vec<StructOpsDump>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert!(!struct_ops.is_empty(), "No struct_ops were found");
+
+    let output = run_bpftool_command(&["struct_ops", "unregister", "name", STRUCT_OPS_MAP_NAME]);
+    assert!(
+        output.status.success(),
+        "Failed to unregister struct_ops program: {:?}",
+        output
+    );
 }
