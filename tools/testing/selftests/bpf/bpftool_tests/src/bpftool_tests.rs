@@ -8,9 +8,10 @@ use bpftool_tests_skel::BpftoolTestsSkel;
 use bpftool_tests_skel::BpftoolTestsSkelBuilder;
 use libbpf_rs::skel::OpenSkel;
 use libbpf_rs::skel::SkelBuilder;
+use libbpf_rs::Program;
 use serde::Deserialize;
 use serde::Serialize;
-
+use std::os::fd::AsFd;
 use std::process::Command;
 
 const BPFTOOL_PATH_ENV: &str = "BPFTOOL_PATH";
@@ -21,6 +22,17 @@ const BPFTOOL_PATH: &str = "/usr/sbin/bpftool";
 struct Pid {
     comm: String,
     pid: u64,
+}
+
+/// A struct representing a prog entry from `bpftool prog list -j`
+#[derive(Serialize, Deserialize, Debug)]
+struct Prog {
+    name: Option<String>,
+    id: u32,
+    r#type: String,
+    tag: String,
+    #[serde(default)]
+    pids: Vec<Pid>,
 }
 
 /// A struct representing a map entry from `bpftool map list -j`
@@ -100,4 +112,69 @@ fn run_bpftool_map_pids() {
         map_name,
         map.pids
     );
+}
+
+/// A test to validate that we can list programs using bpftool
+#[test]
+fn run_bpftool_prog_list() {
+    let _skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&["prog", "list", "--json"]);
+
+    let progs = serde_json::from_slice::<Vec<Prog>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert!(output.status.success());
+    assert!(!progs.is_empty(), "No programs were listed");
+}
+
+/// A test to validate that we can find PIDs associated with a program
+#[test]
+fn run_bpftool_prog_pids() {
+    let hook_name = "handle_tp_sys_enter_write";
+
+    let _skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&["prog", "list", "--json"]);
+
+    let progs = serde_json::from_slice::<Vec<Prog>>(&output.stdout).expect("Failed to parse JSON");
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    // `handle_tp_sys_enter_write` is a hook our bpftool_tests.bpf.c attaches
+    // to (tp/syscalls/sys_enter_write).
+    // It should have at least one entry for our current process.
+    let prog = progs
+        .iter()
+        .find(|m| m.name.is_some() && m.name.as_ref().unwrap() == hook_name)
+        .unwrap_or_else(|| panic!("Did not find {} prog", hook_name));
+
+    let mypid = std::process::id() as u64;
+    assert!(
+        prog.pids.iter().any(|p| p.pid == mypid),
+        "Did not find test runner pid ({}) in pids list associated with prog *{}*: {:?}",
+        mypid,
+        hook_name,
+        prog.pids
+    );
+}
+
+/// A test to validate that we can run `bpftool prog show <id>`
+/// an extract the expected information.
+#[test]
+fn run_bpftool_prog_show_id() {
+    let skel = setup().expect("Failed to set up BPF program");
+    let binding = skel.progs();
+    let handle_tp_sys_enter_write = binding.handle_tp_sys_enter_write();
+    let prog_id =
+        Program::get_id_by_fd(handle_tp_sys_enter_write.as_fd()).expect("Failed to get prog ID");
+
+    let output = run_bpftool_command(&["prog", "show", "id", &prog_id.to_string(), "--json"]);
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    let prog = serde_json::from_slice::<Prog>(&output.stdout).expect("Failed to parse JSON");
+
+    assert_eq!(prog_id, prog.id);
+    assert_eq!(
+        handle_tp_sys_enter_write.name(),
+        prog.name
+            .expect("Program handle_tp_sys_enter_write has no name")
+    );
+    assert_eq!("tracepoint", prog.r#type);
 }
