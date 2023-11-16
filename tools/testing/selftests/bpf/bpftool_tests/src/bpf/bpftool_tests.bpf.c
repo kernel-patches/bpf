@@ -11,6 +11,13 @@ struct {
 	__type(value, u64);
 } pid_write_calls SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 10);
+	__type(key, char[6]);
+	__type(value, char[6]);
+} bpftool_test_map SEC(".maps");
+
 int my_pid = 0;
 
 SEC("tp/syscalls/sys_enter_write")

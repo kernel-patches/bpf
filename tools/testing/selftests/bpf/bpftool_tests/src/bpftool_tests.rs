@@ -45,6 +45,37 @@ struct Map {
     pids: Vec<Pid>,
 }
 
+/// A struct representing a formatted map entry from `bpftool map dump -j`
+#[derive(Serialize, Deserialize, Debug)]
+struct FormattedMapItem {
+    key: String,
+    value: String,
+}
+
+type MapVecString = Vec<String>;
+
+/// A struct representing a map entry from `bpftool map dump -j`
+#[derive(Serialize, Deserialize, Debug)]
+struct MapItem {
+    key: MapVecString,
+    value: MapVecString,
+    formatted: Option<FormattedMapItem>,
+}
+
+/// A helper function to convert a vector of strings as returned by bpftool
+/// into a vector of bytes.
+/// bpftool returns key/value in the form of a sequence of strings
+/// hexadecimal numbers. We need to convert them back to bytes.
+/// for instance, the value of the key "key" is represented as ["0x6b","0x65","0x79"]
+fn to_vec_u8(m: &MapVecString) -> Vec<u8> {
+    m.iter()
+        .map(|s| {
+            u8::from_str_radix(s.trim_start_matches("0x"), 16)
+                .unwrap_or_else(|_| panic!("Failed to parse {:?}", s))
+        })
+        .collect()
+}
+
 /// Setup our bpftool_tests.bpf.c program.
 /// Open and load and return an opened object.
 fn setup() -> Result<BpftoolTestsSkel<'static>> {
@@ -111,6 +142,61 @@ fn run_bpftool_map_pids() {
         mypid,
         map_name,
         map.pids
+    );
+}
+
+/// A test to validate that we can run `bpftool map dump <id>`
+/// and extract the expected information.
+/// The test adds a key, value pair to the map and then dumps it.
+/// The test validates that the dumped data matches what was added.
+/// It also validate that bpftool was able to format the key/value pairs.
+#[test]
+fn run_bpftool_map_dump_id() {
+    // By having key/value null terminated, we can check that bpftool also returns the
+    // formatted content.
+    let key = b"key\0\0\0";
+    let value = b"value\0";
+    let skel = setup().expect("Failed to set up BPF program");
+    let binding = skel.maps();
+    let bpftool_test_map_map = binding.bpftool_test_map();
+    bpftool_test_map_map
+        .update(key, value, libbpf_rs::MapFlags::NO_EXIST)
+        .expect("Failed to update map");
+    let map_id = bpftool_test_map_map
+        .info()
+        .expect("Failed to get map info")
+        .info
+        .id;
+
+    let output = run_bpftool_command(&["map", "dump", "id", &map_id.to_string(), "--json"]);
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    let items =
+        serde_json::from_slice::<Vec<MapItem>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert_eq!(items.len(), 1);
+
+    let item = items.first().expect("Expected a map item");
+    assert_eq!(to_vec_u8(&item.key), key);
+    assert_eq!(to_vec_u8(&item.value), value);
+
+    // Validate "formatted" values.
+    // The keys and values are null terminated so we need to trim them before comparing.
+    let formatted = item
+        .formatted
+        .as_ref()
+        .expect("Formatted values are missing");
+    assert_eq!(
+        formatted.key,
+        std::str::from_utf8(key)
+            .expect("Invalid UTF-8")
+            .trim_end_matches('\0'),
+    );
+    assert_eq!(
+        formatted.value,
+        std::str::from_utf8(value)
+            .expect("Invalid UTF-8")
+            .trim_end_matches('\0'),
     );
 }
 
