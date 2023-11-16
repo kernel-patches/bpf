@@ -4,6 +4,13 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 10240);
+	__type(key, u32);
+	__type(value, u64);
+} pid_write_calls SEC(".maps");
+
 int my_pid = 0;
 
 SEC("tp/syscalls/sys_enter_write")

@@ -72,3 +72,32 @@ fn run_bpftool_map_list() {
     assert!(output.status.success(), "bpftool returned an error.");
     assert!(!maps.is_empty(), "No maps were listed");
 }
+
+/// A test to validate that we can find PIDs associated with a map
+#[test]
+fn run_bpftool_map_pids() {
+    let map_name = "pid_write_calls";
+
+    let _skel = setup().expect("Failed to set up BPF program");
+    let output = run_bpftool_command(&["map", "list", "--json"]);
+
+    let maps = serde_json::from_slice::<Vec<Map>>(&output.stdout).expect("Failed to parse JSON");
+
+    assert!(output.status.success(), "bpftool returned an error.");
+
+    // `pid_write_calls` is a map our bpftool_tests.bpf.c uses. It should have at least
+    // one entry for our current process.
+    let map = maps
+        .iter()
+        .find(|m| m.name.is_some() && m.name.as_ref().unwrap() == map_name)
+        .unwrap_or_else(|| panic!("Did not find {} map", map_name));
+
+    let mypid = std::process::id() as u64;
+    assert!(
+        map.pids.iter().any(|p| p.pid == mypid),
+        "Did not find test runner pid ({}) in pids list associated with map *{}*: {:?}",
+        mypid,
+        map_name,
+        map.pids
+    );
+}
