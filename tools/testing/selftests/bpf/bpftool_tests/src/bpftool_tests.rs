@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+mod bpftool_tests_skel {
+    include!(concat!(env!("OUT_DIR"), "/bpftool_tests.skel.rs"));
+}
+
 use std::process::Command;
 
 const BPFTOOL_PATH_ENV: &str = "BPFTOOL_PATH";
