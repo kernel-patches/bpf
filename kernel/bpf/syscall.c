@@ -404,7 +404,7 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 		obj_cgroup_put(map->objcg);
 }
 
-static struct mem_cgroup *bpf_map_get_memcg(const struct bpf_map *map)
+struct mem_cgroup *bpf_map_get_memcg(const struct bpf_map *map)
 {
 	if (map->objcg)
 		return get_mem_cgroup_from_objcg(map->objcg);

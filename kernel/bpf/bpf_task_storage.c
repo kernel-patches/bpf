@@ -90,6 +90,7 @@ void bpf_task_storage_free(struct task_struct *task)
 static void *bpf_pid_task_storage_lookup_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_local_storage_data *sdata;
+	struct bpf_local_storage_map *smap;
 	struct task_struct *task;
 	unsigned int f_flags;
 	struct pid *pid;
@@ -114,7 +115,8 @@ static void *bpf_pid_task_storage_lookup_elem(struct bpf_map *map, void *key)
 	sdata = task_storage_lookup(task, map, true);
 	bpf_task_storage_unlock();
 	put_pid(pid);
-	return sdata ? sdata->data : NULL;
+	smap = (struct bpf_local_storage_map *)map;
+	return sdata ? sdata_mapval(sdata) : NULL;
 out:
 	put_pid(pid);
 	return ERR_PTR(err);
@@ -209,18 +211,19 @@ static void *__bpf_task_storage_get(struct bpf_map *map,
 				    u64 flags, gfp_t gfp_flags, bool nobusy)
 {
 	struct bpf_local_storage_data *sdata;
+	struct bpf_local_storage_map *smap;
 
+	smap = (struct bpf_local_storage_map *)map;
 	sdata = task_storage_lookup(task, map, nobusy);
 	if (sdata)
-		return sdata->data;
+		return sdata_mapval(sdata);
 
 	/* only allocate new storage, when the task is refcounted */
 	if (refcount_read(&task->usage) &&
 	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) && nobusy) {
-		sdata = bpf_local_storage_update(
-			task, (struct bpf_local_storage_map *)map, value,
-			BPF_NOEXIST, gfp_flags);
-		return IS_ERR(sdata) ? NULL : sdata->data;
+		sdata = bpf_local_storage_update(task, smap, value,
+						 BPF_NOEXIST, gfp_flags);
+		return IS_ERR(sdata) ? NULL : sdata_mapval(sdata);
 	}
 
 	return NULL;
@@ -317,6 +320,25 @@ static void task_storage_map_free(struct bpf_map *map)
 	bpf_local_storage_map_free(map, &task_cache, &bpf_task_storage_busy);
 }
 
+static int task_storage_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
+{
+	void *data;
+
+	if (!(map->map_flags & BPF_F_MMAPABLE) || vma->vm_pgoff ||
+	    (vma->vm_end - vma->vm_start) < map->value_size)
+		return -EINVAL;
+
+	WARN_ON_ONCE(!bpf_rcu_lock_held());
+	bpf_task_storage_lock();
+	data = __bpf_task_storage_get(map, current, NULL, BPF_LOCAL_STORAGE_GET_F_CREATE,
+				      0, true);
+	bpf_task_storage_unlock();
+	if (!data)
+		return -EINVAL;
+
+	return remap_vmalloc_range(vma, data, vma->vm_pgoff);
+}
+
 BTF_ID_LIST_GLOBAL_SINGLE(bpf_local_storage_map_btf_id, struct, bpf_local_storage_map)
 const struct bpf_map_ops task_storage_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -331,6 +353,7 @@ const struct bpf_map_ops task_storage_map_ops = {
 	.map_mem_usage = bpf_local_storage_map_mem_usage,
 	.map_btf_id = &bpf_local_storage_map_btf_id[0],
 	.map_owner_storage_ptr = task_storage_ptr,
+	.map_mmap = task_storage_map_mmap,
 };
 
 const struct bpf_func_proto bpf_task_storage_get_recur_proto = {

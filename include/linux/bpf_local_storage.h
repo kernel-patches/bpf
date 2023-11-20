@@ -69,7 +69,17 @@ struct bpf_local_storage_data {
 	 * the number of cachelines accessed during the cache hit case.
 	 */
 	struct bpf_local_storage_map __rcu *smap;
-	u8 data[] __aligned(8);
+	/* Need to duplicate smap's map_flags as smap may be gone when
+	 * it's time to free bpf_local_storage_data
+	 */
+	u64 smap_map_flags;
+	/* If BPF_F_MMAPABLE, this is a void * to separately-alloc'd data
+	 * Otherwise the actual mapval data lives here
+	 */
+	union {
+		DECLARE_FLEX_ARRAY(u8, data) __aligned(8);
+		void *actual_data __aligned(8);
+	};
 };
 
 /* Linked to bpf_local_storage and bpf_local_storage_map */
@@ -123,6 +133,8 @@ static struct bpf_local_storage_cache name = {			\
 
 /* Helper functions for bpf_local_storage */
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr);
+
+void *sdata_mapval(struct bpf_local_storage_data *data);
 
 struct bpf_map *
 bpf_local_storage_map_alloc(union bpf_attr *attr,
