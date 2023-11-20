@@ -137,4 +137,13 @@ extern struct lsm_info __start_early_lsm_info[], __end_early_lsm_info[];
 
 extern int lsm_inode_alloc(struct inode *inode);
 
+/* Definition of all modular callbacks. */
+struct security_hook_mappings {
+#define LSM_HOOK(RET, DEFAULT, NAME, ...)	\
+	RET (*NAME)(__VA_ARGS__);
+#include <linux/lsm_hook_defs.h>
+} /* __randomize_layout is useless here, for this is a "const __initdata" struct. */;
+
+extern int mod_lsm_add_hooks(const struct security_hook_mappings *maps);
+
 #endif /* ! __LINUX_LSM_HOOKS_H */
