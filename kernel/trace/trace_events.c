@@ -532,9 +532,16 @@ int trace_event_reg(struct trace_event_call *call,
 	WARN_ON(!(call->flags & TRACE_EVENT_FL_TRACEPOINT));
 	switch (type) {
 	case TRACE_REG_REGISTER:
-		return tracepoint_probe_register(call->tp,
-						 call->class->probe,
-						 file);
+		if (call->tp->flags & TRACEPOINT_MAY_FAULT)
+			return tracepoint_probe_register_prio_flags(call->tp,
+								    call->class->probe,
+								    file,
+								    TRACEPOINT_DEFAULT_PRIO,
+								    TRACEPOINT_MAY_FAULT);
+		else
+			return tracepoint_probe_register(call->tp,
+							 call->class->probe,
+							 file);
 	case TRACE_REG_UNREGISTER:
 		tracepoint_probe_unregister(call->tp,
 					    call->class->probe,
@@ -543,9 +550,16 @@ int trace_event_reg(struct trace_event_call *call,
 
 #ifdef CONFIG_PERF_EVENTS
 	case TRACE_REG_PERF_REGISTER:
-		return tracepoint_probe_register(call->tp,
-						 call->class->perf_probe,
-						 call);
+		if (call->tp->flags & TRACEPOINT_MAY_FAULT)
+			return tracepoint_probe_register_prio_flags(call->tp,
+								    call->class->perf_probe,
+								    call,
+								    TRACEPOINT_DEFAULT_PRIO,
+								    TRACEPOINT_MAY_FAULT);
+		else
+			return tracepoint_probe_register(call->tp,
+							 call->class->perf_probe,
+							 call);
 	case TRACE_REG_PERF_UNREGISTER:
 		tracepoint_probe_unregister(call->tp,
 					    call->class->perf_probe,
