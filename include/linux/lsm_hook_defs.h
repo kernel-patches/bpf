@@ -23,7 +23,6 @@
  * struct security_hook_heads {
  *   #define LSM_HOOK(RET, DEFAULT, NAME, ...) struct hlist_head NAME;
  *   #include <linux/lsm_hook_defs.h>
- *   #undef LSM_HOOK
  * };
  */
 LSM_HOOK(int, 0, binder_set_context_mgr, const struct cred *mgr)
@@ -419,3 +418,5 @@ LSM_HOOK(int, 0, uring_override_creds, const struct cred *new)
 LSM_HOOK(int, 0, uring_sqpoll, void)
 LSM_HOOK(int, 0, uring_cmd, struct io_uring_cmd *ioucmd)
 #endif /* CONFIG_IO_URING */
+
+#undef LSM_HOOK

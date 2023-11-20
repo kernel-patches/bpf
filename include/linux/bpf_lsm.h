@@ -16,7 +16,6 @@
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 	RET bpf_lsm_##NAME(__VA_ARGS__);
 #include <linux/lsm_hook_defs.h>
-#undef LSM_HOOK
 
 struct bpf_storage_blob {
 	struct bpf_local_storage __rcu *storage;

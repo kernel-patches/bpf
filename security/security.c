@@ -407,7 +407,6 @@ int __init early_security_init(void)
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 	INIT_HLIST_HEAD(&security_hook_heads.NAME);
 #include "linux/lsm_hook_defs.h"
-#undef LSM_HOOK
 
 	for (lsm = __start_early_lsm_info; lsm < __end_early_lsm_info; lsm++) {
 		if (!lsm->enabled)
@@ -749,9 +748,7 @@ static int lsm_superblock_alloc(struct super_block *sb)
 	static const int __maybe_unused LSM_RET_DEFAULT(NAME) = (DEFAULT);
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 	DECLARE_LSM_RET_DEFAULT_##RET(DEFAULT, NAME)
-
 #include <linux/lsm_hook_defs.h>
-#undef LSM_HOOK
 
 /*
  * Hook list operation macros.
