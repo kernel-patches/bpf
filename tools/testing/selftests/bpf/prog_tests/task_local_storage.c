@@ -5,14 +5,19 @@
 #include <unistd.h>
 #include <sched.h>
 #include <pthread.h>
+#include <sys/mman.h>   /* For mmap and associated flags */
 #include <sys/syscall.h>   /* For SYS_xxx definitions */
 #include <sys/types.h>
 #include <test_progs.h>
+#include <network_helpers.h>
 #include "task_local_storage_helpers.h"
 #include "task_local_storage.skel.h"
 #include "task_local_storage_exit_creds.skel.h"
+#include "task_local_storage__mmap.skel.h"
+#include "task_local_storage__mmap_fail.skel.h"
 #include "task_ls_recursion.skel.h"
 #include "task_storage_nodeadlock.skel.h"
+#include "progs/task_local_storage__mmap.h"
 
 static void test_sys_enter_exit(void)
 {
@@ -38,6 +43,173 @@ static void test_sys_enter_exit(void)
 	ASSERT_EQ(skel->bss->mismatch_cnt, 0, "mismatch_cnt");
 out:
 	task_local_storage__destroy(skel);
+}
+
+static int basic_mmapable_read_write(struct task_local_storage__mmap *skel,
+				     long *mmaped_task_local)
+{
+	int err;
+
+	*mmaped_task_local = 42;
+
+	err = task_local_storage__mmap__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		return -1;
+
+	syscall(SYS_gettid);
+	ASSERT_EQ(skel->bss->mmaped_mapval, 42, "mmaped_mapval");
+
+	/* Incr from userspace should be visible when BPF prog reads */
+	*mmaped_task_local = *mmaped_task_local + 1;
+	syscall(SYS_gettid);
+	ASSERT_EQ(skel->bss->mmaped_mapval, 43, "mmaped_mapval_user_incr");
+
+	/* Incr from BPF prog should be visible from userspace */
+	skel->bss->read_and_incr = 1;
+	syscall(SYS_gettid);
+	ASSERT_EQ(skel->bss->mmaped_mapval, 44, "mmaped_mapval_bpf_incr");
+	ASSERT_EQ(skel->bss->mmaped_mapval, *mmaped_task_local, "bpf_incr_eq");
+	skel->bss->read_and_incr = 0;
+
+	return 0;
+}
+
+static void test_sys_enter_mmap(void)
+{
+	struct task_local_storage__mmap *skel;
+	long *task_local, *task_local2, value;
+	int err, task_fd, map_fd;
+
+	task_local = task_local2 = (long *)-1;
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_NEQ(task_fd, -1, "sys_pidfd_open"))
+		return;
+
+	skel = task_local_storage__mmap__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load")) {
+		close(task_fd);
+		return;
+	}
+
+	map_fd = bpf_map__fd(skel->maps.mmapable);
+	task_local = mmap(NULL, sizeof(long), PROT_READ | PROT_WRITE,
+			  MAP_SHARED, map_fd, 0);
+	if (!ASSERT_OK_PTR(task_local, "mmap_task_local_storage"))
+		goto out;
+
+	err = basic_mmapable_read_write(skel, task_local);
+	if (!ASSERT_OK(err, "basic_mmapable_read_write"))
+		goto out;
+
+	err = bpf_map_lookup_elem(map_fd, &task_fd, &value);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem") ||
+	    !ASSERT_EQ(value, 44, "bpf_map_lookup_elem value"))
+		goto out;
+
+	value = 148;
+	bpf_map_update_elem(map_fd, &task_fd, &value, BPF_EXIST);
+	if (!ASSERT_EQ(READ_ONCE(*task_local), 148, "mmaped_read_after_update"))
+		goto out;
+
+	err = bpf_map_lookup_elem(map_fd, &task_fd, &value);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem") ||
+	    !ASSERT_EQ(value, 148, "bpf_map_lookup_elem value"))
+		goto out;
+
+	/* The mmapable page is not released by map_delete_elem, but no longer
+	 * linked to local_storage
+	 */
+	err = bpf_map_delete_elem(map_fd, &task_fd);
+	if (!ASSERT_OK(err, "bpf_map_delete_elem") ||
+	    !ASSERT_EQ(READ_ONCE(*task_local), 148, "mmaped_read_after_delete"))
+		goto out;
+
+	err = bpf_map_lookup_elem(map_fd, &task_fd, &value);
+	if (!ASSERT_EQ(err, -ENOENT, "bpf_map_lookup_elem_after_delete"))
+		goto out;
+
+	task_local_storage__mmap__destroy(skel);
+
+	/* The mmapable page is not released when __destroy unloads the map.
+	 * It will stick around until we munmap it
+	 */
+	*task_local = -999;
+
+	/* Although task_local's page is still around, it won't be reused */
+	skel = task_local_storage__mmap__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load2"))
+		return;
+
+	map_fd = bpf_map__fd(skel->maps.mmapable);
+	err = task_local_storage__mmap__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach2"))
+		goto out;
+
+	skel->bss->read_and_incr = 1;
+	skel->bss->create_flag = BPF_LOCAL_STORAGE_GET_F_CREATE;
+	syscall(SYS_gettid);
+	ASSERT_EQ(skel->bss->mmaped_mapval, 1, "mmaped_mapval2");
+
+	skel->bss->read_and_incr = 0;
+	task_local2 = mmap(NULL, sizeof(long), PROT_READ | PROT_WRITE,
+			   MAP_SHARED, map_fd, 0);
+	if (!ASSERT_OK_PTR(task_local, "mmap_task_local_storage2"))
+		goto out;
+
+	if (!ASSERT_NEQ(task_local, task_local2, "second_mmap_address"))
+		goto out;
+
+	ASSERT_EQ(READ_ONCE(*task_local2), 1, "mmaped_mapval2_bpf_create_incr");
+
+out:
+	close(task_fd);
+	if (task_local > 0)
+		munmap(task_local, sizeof(long));
+	if (task_local2 > 0)
+		munmap(task_local2, sizeof(long));
+	task_local_storage__mmap__destroy(skel);
+}
+
+static void test_sys_enter_mmap_big_mapval(void)
+{
+	struct two_page_struct *task_local, value;
+	struct task_local_storage__mmap *skel;
+	int task_fd, map_fd, err;
+
+	task_local = (struct two_page_struct *)-1;
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_NEQ(task_fd, -1, "sys_pidfd_open"))
+		return;
+
+	skel = task_local_storage__mmap__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load")) {
+		close(task_fd);
+		return;
+	}
+	map_fd = bpf_map__fd(skel->maps.mmapable_two_pages);
+	task_local = mmap(NULL, sizeof(struct two_page_struct),
+			  PROT_READ | PROT_WRITE, MAP_SHARED,
+			  map_fd, 0);
+	if (!ASSERT_OK_PTR(task_local, "mmap_task_local_storage"))
+		goto out;
+
+	skel->bss->use_big_mapval = 1;
+	err = basic_mmapable_read_write(skel, &task_local->val);
+	if (!ASSERT_OK(err, "basic_mmapable_read_write"))
+		goto out;
+
+	task_local->c[4096] = 'z';
+
+	err = bpf_map_lookup_elem(map_fd, &task_fd, &value);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem") ||
+	    !ASSERT_EQ(value.val, 44, "bpf_map_lookup_elem value"))
+		goto out;
+
+out:
+	close(task_fd);
+	if (task_local > 0)
+		munmap(task_local, sizeof(struct two_page_struct));
+	task_local_storage__mmap__destroy(skel);
 }
 
 static void test_exit_creds(void)
@@ -237,10 +409,15 @@ void test_task_local_storage(void)
 {
 	if (test__start_subtest("sys_enter_exit"))
 		test_sys_enter_exit();
+	if (test__start_subtest("sys_enter_mmap"))
+		test_sys_enter_mmap();
+	if (test__start_subtest("sys_enter_mmap_big_mapval"))
+		test_sys_enter_mmap_big_mapval();
 	if (test__start_subtest("exit_creds"))
 		test_exit_creds();
 	if (test__start_subtest("recursion"))
 		test_recursion();
 	if (test__start_subtest("nodeadlock"))
 		test_nodeadlock();
+	RUN_TESTS(task_local_storage__mmap_fail);
 }
