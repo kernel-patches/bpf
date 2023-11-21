@@ -11,6 +11,7 @@
 #include <linux/inet_diag.h>
 
 #include <linux/tcp.h>
+#include <linux/skmsg.h>
 
 #include <net/netlink.h>
 #include <net/tcp.h>
@@ -28,6 +29,7 @@ static void tcp_diag_get_info(struct sock *sk, struct inet_diag_msg *r,
 
 		r->idiag_rqueue = max_t(int, READ_ONCE(tp->rcv_nxt) -
 					     READ_ONCE(tp->copied_seq), 0);
+		r->idiag_rqueue += sk_msg_queue_len(sk);
 		r->idiag_wqueue = READ_ONCE(tp->write_seq) - tp->snd_una;
 	}
 	if (info)
