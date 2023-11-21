@@ -267,6 +267,7 @@
 #include <linux/errqueue.h>
 #include <linux/static_key.h>
 #include <linux/btf.h>
+#include <linux/skmsg.h>
 
 #include <net/icmp.h>
 #include <net/inet_common.h>
@@ -613,7 +614,7 @@ int tcp_ioctl(struct sock *sk, int cmd, int *karg)
 			return -EINVAL;
 
 		slow = lock_sock_fast(sk);
-		answ = tcp_inq(sk);
+		answ = tcp_inq(sk) + sk_msg_queue_len(sk);
 		unlock_sock_fast(sk, slow);
 		break;
 	case SIOCATMARK:
