@@ -116,8 +116,22 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!sk)
 		return NULL;
 
-	if (!prefetched || !sk_fullsock(sk))
+	if (!prefetched)
 		return sk;
+
+	if (sk->sk_state == TCP_NEW_SYN_RECV) {
+#if IS_ENABLED(CONFIG_SYN_COOKIE)
+		if (inet_reqsk(sk)->syncookie) {
+			*refcounted = false;
+			skb->sk = sk;
+			skb->destructor = sock_pfree;
+			return inet_reqsk(sk)->rsk_listener;
+		}
+#endif
+		return sk;
+	} else if (sk->sk_state == TCP_TIME_WAIT) {
+		return sk;
+	}
 
 	if (sk->sk_protocol == IPPROTO_TCP) {
 		if (sk->sk_state != TCP_LISTEN)

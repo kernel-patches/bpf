@@ -591,6 +591,12 @@ static inline bool cookie_ecn_ok(const struct net *net, const struct dst_entry *
 }
 
 #if IS_ENABLED(CONFIG_BPF)
+struct tcp_cookie_attributes {
+	struct tcp_options_received tcp_opt;
+	bool ecn_ok;
+	bool usec_ts_ok;
+} __packed;
+
 static inline bool cookie_bpf_ok(struct sk_buff *skb)
 {
 	return skb->sk;
