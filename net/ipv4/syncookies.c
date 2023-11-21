@@ -305,6 +305,59 @@ static int cookie_tcp_reqsk_init(struct sock *sk, struct sk_buff *skb,
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_BPF)
+struct request_sock *cookie_bpf_check(struct net *net, struct sock *sk,
+				      struct sk_buff *skb)
+{
+	struct request_sock *req = inet_reqsk(skb->sk);
+	struct inet_request_sock *ireq = inet_rsk(req);
+	struct tcp_request_sock *treq = tcp_rsk(req);
+	struct tcp_options_received tcp_opt;
+	int ret;
+
+	skb->sk = NULL;
+	skb->destructor = NULL;
+	req->rsk_listener = NULL;
+
+	memset(&tcp_opt, 0, sizeof(tcp_opt));
+	tcp_parse_options(net, skb, &tcp_opt, 0, NULL);
+
+	if (ireq->tstamp_ok ^ tcp_opt.saw_tstamp) {
+		__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESFAILED);
+		goto reset;
+	}
+
+	__NET_INC_STATS(net, LINUX_MIB_SYNCOOKIESRECV);
+
+	if (ireq->tstamp_ok) {
+		if (!READ_ONCE(net->ipv4.sysctl_tcp_timestamps))
+			goto reset;
+
+		req->ts_recent = tcp_opt.rcv_tsval;
+		treq->ts_off = tcp_opt.rcv_tsecr - tcp_ns_to_ts(false, tcp_clock_ns());
+	}
+
+	if (ireq->sack_ok && !READ_ONCE(net->ipv4.sysctl_tcp_sack))
+		goto reset;
+
+	if (ireq->wscale_ok && !READ_ONCE(net->ipv4.sysctl_tcp_window_scaling))
+		goto reset;
+
+	ret = cookie_tcp_reqsk_init(sk, skb, req);
+	if (ret) {
+		reqsk_free(req);
+		req = NULL;
+	}
+
+	return req;
+
+reset:
+	reqsk_free(req);
+	return ERR_PTR(-EINVAL);
+}
+EXPORT_SYMBOL_GPL(cookie_bpf_check);
+#endif
+
 struct request_sock *cookie_tcp_reqsk_alloc(const struct request_sock_ops *ops,
 					    struct sock *sk, struct sk_buff *skb,
 					    struct tcp_options_received *tcp_opt,
@@ -405,7 +458,11 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	    !th->ack || th->rst)
 		goto out;
 
-	req = cookie_tcp_check(net, sk, skb);
+	if (cookie_bpf_ok(skb))
+		req = cookie_bpf_check(net, sk, skb);
+	else
+		req = cookie_tcp_check(net, sk, skb);
+
 	if (IS_ERR(req))
 		goto out;
 	if (!req)
