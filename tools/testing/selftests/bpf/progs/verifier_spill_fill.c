@@ -486,4 +486,66 @@ __naked void spill_subregs_preserve_stack_zero(void)
 	: __clobber_all);
 }
 
+char single_byte_buf[1] SEC(".data.single_byte_buf");
+
+SEC("raw_tp")
+__log_level(2)
+__success
+__naked void partial_stack_load_preserves_zeros(void)
+{
+	asm volatile (
+		/* fp-8 is all STACK_ZERO */
+		"*(u64 *)(r10 -8) = 0;"
+
+		/* fp-16 is const zero register */
+		"r0 = 0;"
+		"*(u64 *)(r10 -16) = r0;"
+
+		/* load single U8 from non-aligned STACK_ZERO slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u8 *)(r10 -1);"
+		"r1 += r2;" /* this should be fine */
+
+		/* load single U8 from non-aligned ZERO REG slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u8 *)(r10 -9);"
+		"r1 += r2;" /* this should be fine */
+
+		/* load single U16 from non-aligned STACK_ZERO slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u16 *)(r10 -2);"
+		"r1 += r2;" /* this should be fine */
+
+		/* load single U16 from non-aligned ZERO REG slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u16 *)(r10 -10);"
+		"r1 += r2;" /* this should be fine */
+
+		/* load single U32 from non-aligned STACK_ZERO slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u32 *)(r10 -4);"
+		"r1 += r2;" /* this should be fine */
+
+		/* load single U32 from non-aligned ZERO REG slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u32 *)(r10 -12);"
+		"r1 += r2;" /* this should be fine */
+
+		/* for completeness, load U64 from STACK_ZERO slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u64 *)(r10 -8);"
+		"r1 += r2;" /* this should be fine */
+
+		/* for completeness, load U64 from ZERO REG slot */
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u64 *)(r10 -16);"
+		"r1 += r2;" /* this should be fine */
+
+		"r0 = 0;"
+		"exit;"
+	:
+	: __imm_ptr(single_byte_buf)
+	: __clobber_common);
+}
+
 char _license[] SEC("license") = "GPL";
