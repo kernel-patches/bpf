@@ -47,6 +47,7 @@ struct sk_msg {
 	u32				apply_bytes;
 	u32				cork_bytes;
 	u32				flags;
+	bool				ingress_self;
 	struct sk_buff			*skb;
 	struct sock			*sk_redir;
 	struct sock			*sk;
@@ -82,6 +83,7 @@ struct sk_psock {
 	u32				apply_bytes;
 	u32				cork_bytes;
 	u32				eval;
+	u32				msg_len;
 	bool				redir_ingress; /* undefined if sk_redir is null */
 	struct sk_msg			*cork;
 	struct sk_psock_progs		progs;
@@ -312,9 +314,11 @@ static inline void sk_psock_queue_msg(struct sk_psock *psock,
 				      struct sk_msg *msg)
 {
 	spin_lock_bh(&psock->ingress_lock);
-	if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+	if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED)) {
 		list_add_tail(&msg->list, &psock->ingress_msg);
-	else {
+		if (!msg->ingress_self)
+			WRITE_ONCE(psock->msg_len, psock->msg_len + msg->sg.size);
+	} else {
 		sk_msg_free(psock->sk, msg);
 		kfree(msg);
 	}
@@ -367,6 +371,24 @@ static inline void kfree_sk_msg(struct sk_msg *msg)
 	if (msg->skb)
 		consume_skb(msg->skb);
 	kfree(msg);
+}
+
+static inline void sk_msg_queue_consumed(struct sk_psock *psock, u32 len)
+{
+	WRITE_ONCE(psock->msg_len, psock->msg_len - len);
+}
+
+static inline u32 sk_msg_queue_len(const struct sock *sk)
+{
+	struct sk_psock *psock;
+	u32 len = 0;
+
+	rcu_read_lock();
+	psock = sk_psock(sk);
+	if (psock)
+		len = READ_ONCE(psock->msg_len);
+	rcu_read_unlock();
+	return len;
 }
 
 static inline void sk_psock_report_error(struct sk_psock *psock, int err)
