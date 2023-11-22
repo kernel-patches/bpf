@@ -5337,3 +5337,16 @@ int security_uring_cmd(struct io_uring_cmd *ioucmd)
 	return call_int_hook(uring_cmd, 0, ioucmd);
 }
 #endif /* CONFIG_IO_URING */
+
+/**
+ * security_set_mempolicy() - Check if memory policy can be adjusted
+ * @mode: The memory policy mode to be set
+ * @mode_flags: optional mode flags
+ * @nmask: modemask to which the mode applies
+ * @flags: mode flags for mbind(2) only
+ */
+int security_set_mempolicy(unsigned long mode, unsigned short mode_flags,
+			   nodemask_t *nmask, unsigned int flags)
+{
+	return call_int_hook(set_mempolicy, 0, mode, mode_flags, nmask, flags);
+}
