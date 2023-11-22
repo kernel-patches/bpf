@@ -3039,9 +3039,12 @@ static void bpf_tracing_link_release(struct bpf_link *link)
 
 	bpf_trampoline_put(tr_link->trampoline);
 
+	link->prog->aux->attach_depth--;
 	/* tgt_prog is NULL if target is a kernel function */
-	if (tr_link->tgt_prog)
+	if (tr_link->tgt_prog) {
+		tr_link->tgt_prog->aux->follower_cnt--;
 		bpf_prog_put(tr_link->tgt_prog);
+	}
 }
 
 static void bpf_tracing_link_dealloc(struct bpf_link *link)
@@ -3235,6 +3238,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
 		goto out_unlock;
+
+	if (tgt_prog) {
+		/* Bookkeeping for managing the prog attachment chain. */
+		tgt_prog->aux->follower_cnt++;
+		prog->aux->attach_depth = tgt_prog->aux->attach_depth + 1;
+	}
 
 	err = bpf_trampoline_link_prog(&link->link, tr);
 	if (err) {
@@ -4510,6 +4519,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 	if (prog->aux->btf)
 		info.btf_id = btf_obj_id(prog->aux->btf);
 	info.attach_btf_id = prog->aux->attach_btf_id;
+	info.attach_depth = prog->aux->attach_depth;
 	if (attach_btf)
 		info.attach_btf_obj_id = btf_obj_id(attach_btf);
 

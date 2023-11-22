@@ -554,6 +554,8 @@ static void print_prog_plain(struct bpf_prog_info *info, int fd)
 		printf("  memlock %sB", memlock);
 	free(memlock);
 
+	printf("  attach depth %d", info->attach_depth);
+
 	if (info->nr_map_ids)
 		show_prog_maps(fd, info->nr_map_ids);
 
