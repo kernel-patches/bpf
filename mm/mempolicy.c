@@ -1259,8 +1259,15 @@ static long do_mbind(unsigned long start, unsigned long len,
 	if (!new)
 		flags |= MPOL_MF_DISCONTIG_OK;
 
-	if (flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL))
+	if (flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) {
+		err = security_task_movememory(current);
+		if (err) {
+			mpol_put(new);
+			return err;
+		}
 		lru_cache_disable();
+	}
+
 	{
 		NODEMASK_SCRATCH(scratch);
 		if (scratch) {
