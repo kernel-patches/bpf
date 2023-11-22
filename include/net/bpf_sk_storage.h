@@ -22,6 +22,7 @@ extern const struct bpf_func_proto bpf_sk_storage_get_proto;
 extern const struct bpf_func_proto bpf_sk_storage_delete_proto;
 extern const struct bpf_func_proto bpf_sk_storage_get_tracing_proto;
 extern const struct bpf_func_proto bpf_sk_storage_delete_tracing_proto;
+extern const struct bpf_func_proto bpf_sk_storage_get_cg_sock_proto;
 
 struct bpf_local_storage_elem;
 struct bpf_sk_storage_diag;
