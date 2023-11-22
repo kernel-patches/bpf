@@ -51,7 +51,7 @@ const struct security_class_mapping secclass_map[] = {
 	    "getattr", "setexec", "setfscreate", "noatsecure", "siginh",
 	    "setrlimit", "rlimitinh", "dyntransition", "setcurrent",
 	    "execmem", "execstack", "execheap", "setkeycreate",
-	    "setsockcreate", "getrlimit", NULL } },
+	    "setsockcreate", "getrlimit", "setmempolicy", NULL } },
 	{ "process2",
 	  { "nnp_transition", "nosuid_transition", NULL } },
 	{ "system",
