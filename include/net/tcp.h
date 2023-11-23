@@ -2660,6 +2660,15 @@ static inline void tcp_bpf_rtt(struct sock *sk)
 		tcp_call_bpf(sk, BPF_SOCK_OPS_RTT_CB, 0, NULL);
 }
 
+/* op must be one of BPF_SOCK_OPS_DATA_SEND_CB, BPF_SOCK_OPS_DATA_RECV_CB,
+ * or BPF_SOCK_OPS_DATA_ACKED_CB.
+ */
+static inline void tcp_bpf_data_event(struct sock *sk, int op)
+{
+	if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_DATA_EVENT_CB_FLAG))
+		tcp_call_bpf(sk, op, 0, NULL);
+}
+
 #if IS_ENABLED(CONFIG_SMC)
 extern struct static_key_false tcp_have_smc;
 #endif

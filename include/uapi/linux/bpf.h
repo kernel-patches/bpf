@@ -3019,6 +3019,7 @@ union bpf_attr {
  * 		* **BPF_SOCK_OPS_RETRANS_CB_FLAG** (retransmission)
  * 		* **BPF_SOCK_OPS_STATE_CB_FLAG** (TCP state change)
  * 		* **BPF_SOCK_OPS_RTT_CB_FLAG** (every RTT)
+ * 		* **BPF_SOCK_OPS_DATA_EVENT_CB_FLAG** (data packet send/recv/acked)
  *
  * 		Therefore, this function can be used to clear a callback flag by
  * 		setting the appropriate bit to zero. e.g. to disable the RTO
@@ -6758,8 +6759,10 @@ enum {
 	 * options first before the BPF program does.
 	 */
 	BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG = (1<<6),
+	/* Call bpf when data send/recv/acked. */
+	BPF_SOCK_OPS_DATA_EVENT_CB_FLAG = (1<<7),
 /* Mask of all currently supported cb flags */
-	BPF_SOCK_OPS_ALL_CB_FLAGS       = 0x7F,
+	BPF_SOCK_OPS_ALL_CB_FLAGS       = 0xFF,
 };
 
 /* List of known BPF sock_ops operators.
@@ -6871,6 +6874,15 @@ enum {
 					 * has already been written
 					 * by the kernel or the
 					 * earlier bpf-progs.
+					 */
+	BPF_SOCK_OPS_DATA_SEND_CB,		/* Calls BPF program when a
+					 * data packet is sent. Pure ack is ignored.
+					 */
+	BPF_SOCK_OPS_DATA_RECV_CB,		/* Calls BPF program when a
+					 * data packet is received. Pure ack is ignored.
+					 */
+	BPF_SOCK_OPS_DATA_ACKED_CB,		/* Calls BPF program when sent
+					 * data are acknowledged.
 					 */
 };
 
