@@ -1090,4 +1090,196 @@ l0_%=:	r1 >>= 32;					\
 	: __clobber_all);
 }
 
+/* stacksafe(): check if spill of unbound scalar in old state is
+ * considered equivalent to any state of the spill in the current state.
+ *
+ * On the first verification path an unbound scalar is written for
+ * fp-8 and later marked precise.
+ * On the second verification path a mix of STACK_MISC/ZERO/INVALID is
+ * written to fp-8. These should be considered equivalent.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("10: (79) r0 = *(u64 *)(r10 -8)")
+__msg("10: safe")
+__msg("processed 16 insns")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void old_unbound_scalar_vs_cur_anything(void)
+{
+	asm volatile(
+	/* get a random value for branching */
+	"call %[bpf_ktime_get_ns];"
+	"r7 = r0;"
+	/* get a random value for storing at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"if r7 == 0 goto 1f;"
+	/* unbound scalar written to fp-8 */
+	"*(u64*)(r10 - 8) = r0;"
+	"goto 2f;"
+"1:"
+	/* mark fp-8 as mix of STACK_MISC/ZERO/INVALID */
+	"r1 = 0;"
+	"*(u8*)(r10 - 8) = r0;"
+	"*(u8*)(r10 - 7) = r1;"
+	/* fp-2..fp-6 remain STACK_INVALID */
+	"*(u8*)(r10 - 1) = r0;"
+"2:"
+	/* read fp-8 and force it precise, should be considered safe
+	 * on second visit
+	 */
+	"r0 = *(u64*)(r10 - 8);"
+	"r0 &= 0xff;"
+	"r1 = r10;"
+	"r1 += r0;"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* stacksafe(): check if STACK_MISC in old state is considered
+ * equivalent to stack spill of unbound scalar in cur state.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("8: (79) r0 = *(u64 *)(r10 -8)         ; R0_w=scalar(id=1) R10=fp0 fp-8=scalar(id=1)")
+__msg("8: safe")
+__msg("processed 11 insns")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void old_unbound_scalar_vs_cur_stack_misc(void)
+{
+	asm volatile(
+	/* get a random value for branching */
+	"call %[bpf_ktime_get_ns];"
+	"if r0 == 0 goto 1f;"
+	/* conjure unbound scalar at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"*(u64*)(r10 - 8) = r0;"
+	"goto 2f;"
+"1:"
+	/* conjure STACK_MISC at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"*(u64*)(r10 - 8) = r0;"
+	"*(u32*)(r10 - 4) = r0;"
+"2:"
+	/* read fp-8, should be considered safe on second visit */
+	"r0 = *(u64*)(r10 - 8);"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* stacksafe(): check if stack spill of unbound scalar in old state is
+ * considered equivalent to STACK_MISC in cur state.
+ */
+SEC("socket")
+__success  __log_level(2)
+__msg("8: (79) r0 = *(u64 *)(r10 -8)         ; R0_w=scalar() R10=fp0 fp-8=mmmmmmmm")
+__msg("8: safe")
+__msg("processed 11 insns")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void old_stack_misc_vs_cur_unbound_scalar(void)
+{
+	asm volatile(
+	/* get a random value for branching */
+	"call %[bpf_ktime_get_ns];"
+	"if r0 == 0 goto 1f;"
+	/* conjure STACK_MISC at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"*(u64*)(r10 - 8) = r0;"
+	"*(u32*)(r10 - 4) = r0;"
+	"goto 2f;"
+"1:"
+	/* conjure unbound scalar at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"*(u64*)(r10 - 8) = r0;"
+"2:"
+	/* read fp-8, should be considered safe on second visit */
+	"r0 = *(u64*)(r10 - 8);"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* stacksafe(): check if spill of register with value 0 in old state
+ * is considered equivalent to STACK_ZERO.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("9: (79) r0 = *(u64 *)(r10 -8)")
+__msg("9: safe")
+__msg("processed 15 insns")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void old_spill_zero_vs_stack_zero(void)
+{
+	asm volatile(
+	/* get a random value for branching */
+	"call %[bpf_ktime_get_ns];"
+	"r7 = r0;"
+	/* get a random value for storing at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"if r7 == 0 goto 1f;"
+	/* conjure spilled register with value 0 at fp-8 */
+	"*(u64*)(r10 - 8) = r0;"
+	"if r0 != 0 goto 3f;"
+	"goto 2f;"
+"1:"
+	/* conjure STACK_ZERO at fp-8 */
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+"2:"
+	/* read fp-8 and force it precise, should be considered safe
+	 * on second visit
+	 */
+	"r0 = *(u64*)(r10 - 8);"
+	"r1 = r10;"
+	"r1 += r0;"
+"3:"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* stacksafe(): similar to old_spill_zero_vs_stack_zero() but the
+ * other way around: check if STACK_ZERO is considered equivalent to
+ * spill of register with value 0.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("8: (79) r0 = *(u64 *)(r10 -8)")
+__msg("8: safe")
+__msg("processed 14 insns")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void old_stack_zero_vs_spill_zero(void)
+{
+	asm volatile(
+	/* get a random value for branching */
+	"call %[bpf_ktime_get_ns];"
+	"if r0 == 0 goto 1f;"
+	/* conjure STACK_ZERO at fp-8 */
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	"goto 2f;"
+"1:"
+	/* conjure spilled register with value 0 at fp-8 */
+	"call %[bpf_ktime_get_ns];"
+	"*(u64*)(r10 - 8) = r0;"
+	"if r0 != 0 goto 3f;"
+"2:"
+	/* read fp-8 and force it precise, should be considered safe
+	 * on second visit
+	 */
+	"r0 = *(u64*)(r10 - 8);"
+	"r1 = r10;"
+	"r1 += r0;"
+"3:"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
