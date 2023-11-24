@@ -131,12 +131,21 @@ void bpf_map_fd_put_ptr(struct bpf_map *map, void *ptr, bool deferred)
 {
 	struct bpf_map *inner_map = ptr;
 
-	/* The inner map may still be used by both non-sleepable and sleepable
-	 * bpf program, so free it after one RCU grace period and one tasks
-	 * trace RCU grace period.
+	/* Defer the freeing of inner map according to the attribute of bpf
+	 * program which owns the outer map, so unnecessary multiple RCU GP
+	 * waitings can be avoided.
 	 */
-	if (deferred)
-		WRITE_ONCE(inner_map->free_after_mult_rcu_gp, true);
+	if (deferred) {
+		/* used_in_rcu_gp may be updated concurrently by new bpf
+		 * program, so add smp_mb() to guarantee the order between
+		 * used_in_rcu_gp and lookup/deletion operation of inner map.
+		 * If a new bpf program finds the inner map before it is
+		 * removed from outer map, reading used_in_rcu_gp below will
+		 * return the newly-set bit set by the new bpf program.
+		 */
+		smp_mb();
+		atomic_or(atomic_read(&map->used_in_rcu_gp), &inner_map->free_by_rcu_gp);
+	}
 	bpf_map_put(inner_map);
 }
 

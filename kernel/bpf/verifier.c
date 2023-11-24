@@ -18181,6 +18181,10 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				return -E2BIG;
 			}
 
+			atomic_or(env->prog->aux->sleepable ? BPF_MAP_RCU_TT_GP : BPF_MAP_RCU_GP,
+				  &map->used_in_rcu_gp);
+			/* Pairs with smp_mb() in bpf_map_fd_put_ptr() */
+			smp_mb__before_atomic();
 			/* hold the map. If the program is rejected by verifier,
 			 * the map will be released by release_maps() or it
 			 * will be used by the valid program until it's unloaded

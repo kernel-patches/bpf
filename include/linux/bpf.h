@@ -245,6 +245,11 @@ struct bpf_list_node_kern {
 	void *owner;
 } __attribute__((aligned(8)));
 
+enum {
+	BPF_MAP_RCU_GP = BIT(0),
+	BPF_MAP_RCU_TT_GP = BIT(1),
+};
+
 struct bpf_map {
 	/* The first two cachelines with read-mostly members of which some
 	 * are also accessed in fast-path (e.g. ops, max_entries).
@@ -296,7 +301,8 @@ struct bpf_map {
 	} owner;
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	bool free_after_mult_rcu_gp;
+	atomic_t used_in_rcu_gp;
+	atomic_t free_by_rcu_gp;
 	s64 __percpu *elem_count;
 };
 

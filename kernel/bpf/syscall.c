@@ -735,7 +735,10 @@ static void bpf_map_free_rcu_gp(struct rcu_head *rcu)
 
 static void bpf_map_free_mult_rcu_gp(struct rcu_head *rcu)
 {
-	if (rcu_trace_implies_rcu_gp())
+	struct bpf_map *map = container_of(rcu, struct bpf_map, rcu);
+
+	if (!(atomic_read(&map->free_by_rcu_gp) & BPF_MAP_RCU_GP) ||
+	    rcu_trace_implies_rcu_gp())
 		bpf_map_free_rcu_gp(rcu);
 	else
 		call_rcu(rcu, bpf_map_free_rcu_gp);
@@ -747,11 +750,16 @@ static void bpf_map_free_mult_rcu_gp(struct rcu_head *rcu)
 void bpf_map_put(struct bpf_map *map)
 {
 	if (atomic64_dec_and_test(&map->refcnt)) {
+		int free_by_rcu_gp;
+
 		/* bpf_map_free_id() must be called first */
 		bpf_map_free_id(map);
 		btf_put(map->btf);
 
-		if (READ_ONCE(map->free_after_mult_rcu_gp))
+		free_by_rcu_gp = atomic_read(&map->free_by_rcu_gp);
+		if (free_by_rcu_gp == BPF_MAP_RCU_GP)
+			call_rcu(&map->rcu, bpf_map_free_rcu_gp);
+		else if (free_by_rcu_gp)
 			call_rcu_tasks_trace(&map->rcu, bpf_map_free_mult_rcu_gp);
 		else
 			bpf_map_free_in_work(map);
@@ -5344,6 +5352,9 @@ static int bpf_prog_bind_map(union bpf_attr *attr)
 		goto out_unlock;
 	}
 
+	/* No need to update used_in_rcu_gp, because the bpf program doesn't
+	 * access the map.
+	 */
 	memcpy(used_maps_new, used_maps_old,
 	       sizeof(used_maps_old[0]) * prog->aux->used_map_cnt);
 	used_maps_new[prog->aux->used_map_cnt] = map;
