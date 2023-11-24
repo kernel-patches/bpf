@@ -1170,6 +1170,12 @@ static void mark_stack_slot_misc(struct bpf_verifier_env *env, u8 *stype)
 	*stype = STACK_MISC;
 }
 
+static bool is_spilled_scalar_reg64(const struct bpf_stack_state *stack)
+{
+	return stack->slot_type[0] == STACK_SPILL &&
+	       stack->spilled_ptr.type == SCALAR_VALUE;
+}
+
 static void scrub_spilled_slot(u8 *stype)
 {
 	if (*stype != STACK_INVALID)
@@ -16472,10 +16478,44 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 	}
 }
 
+static bool is_stack_zero64(struct bpf_stack_state *stack)
+{
+	u32 i;
+
+	for (i = 0; i < ARRAY_SIZE(stack->slot_type); ++i)
+		if (stack->slot_type[i] != STACK_ZERO)
+			return false;
+	return true;
+}
+
+static bool is_stack_unbound_slot64(struct bpf_verifier_env *env,
+				    struct bpf_stack_state *stack)
+{
+	u32 i;
+
+	for (i = 0; i < ARRAY_SIZE(stack->slot_type); ++i)
+		if (stack->slot_type[i] != STACK_ZERO &&
+		    stack->slot_type[i] != STACK_MISC &&
+		    (!env->allow_uninit_stack || stack->slot_type[i] != STACK_INVALID))
+			return false;
+	return true;
+}
+
+static bool is_spilled_unbound_scalar_reg64(struct bpf_stack_state *stack)
+{
+	return is_spilled_scalar_reg64(stack) && __is_scalar_unbounded(&stack->spilled_ptr);
+}
+
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		      struct bpf_func_state *cur, struct bpf_idmap *idmap, bool exact)
 {
+	struct bpf_reg_state unbound_reg = {};
+	struct bpf_reg_state zero_reg = {};
 	int i, spi;
+
+	__mark_reg_unknown(env, &unbound_reg);
+	__mark_reg_const_zero(env, &zero_reg);
+	zero_reg.precise = true;
 
 	/* walk slots of the explored stack and ignore any additional
 	 * slots in the current stack, since explored(safe) state
@@ -16494,6 +16534,49 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		if (!(old->stack[spi].spilled_ptr.live & REG_LIVE_READ) && !exact) {
 			i += BPF_REG_SIZE - 1;
 			/* explored state didn't use this */
+			continue;
+		}
+
+		/* load of stack value with all MISC and ZERO slots produces unbounded
+		 * scalar value, call regsafe to ensure scalar ids are compared.
+		 */
+		if (is_spilled_unbound_scalar_reg64(&old->stack[spi]) &&
+		    is_stack_unbound_slot64(env, &cur->stack[spi])) {
+			i += BPF_REG_SIZE - 1;
+			if (!regsafe(env, &old->stack[spi].spilled_ptr, &unbound_reg,
+				     idmap, exact))
+				return false;
+			continue;
+		}
+
+		if (is_stack_unbound_slot64(env, &old->stack[spi]) &&
+		    is_spilled_unbound_scalar_reg64(&cur->stack[spi])) {
+			i += BPF_REG_SIZE - 1;
+			if (!regsafe(env,  &unbound_reg, &cur->stack[spi].spilled_ptr,
+				     idmap, exact))
+				return false;
+			continue;
+		}
+
+		/* load of stack value with all ZERO slots produces scalar value 0,
+		 * call regsafe to ensure scalar ids are compared and precision
+		 * flags are taken into account.
+		 */
+		if (is_spilled_scalar_reg64(&old->stack[spi]) &&
+		    is_stack_zero64(&cur->stack[spi])) {
+			if (!regsafe(env, &old->stack[spi].spilled_ptr, &zero_reg,
+				     idmap, exact))
+				return false;
+			i += BPF_REG_SIZE - 1;
+			continue;
+		}
+
+		if (is_stack_zero64(&old->stack[spi]) &&
+		    is_spilled_scalar_reg64(&cur->stack[spi])) {
+			if (!regsafe(env, &zero_reg, &cur->stack[spi].spilled_ptr,
+				     idmap, exact))
+				return false;
+			i += BPF_REG_SIZE - 1;
 			continue;
 		}
 
