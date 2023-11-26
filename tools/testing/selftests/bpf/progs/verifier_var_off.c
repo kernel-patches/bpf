@@ -61,7 +61,7 @@ __naked void stack_read_priv_vs_unpriv(void)
 
 SEC("lwt_in")
 __description("variable-offset stack read, uninitialized")
-__failure __msg("invalid variable-offset read from stack R2")
+__success
 __naked void variable_offset_stack_read_uninitialized(void)
 {
 	asm volatile ("					\
@@ -255,7 +255,7 @@ __naked void access_min_out_of_bound(void)
 
 SEC("lwt_in")
 __description("indirect variable-offset stack access, min_off < min_initialized")
-__failure __msg("invalid indirect read from stack R2 var_off")
+__success
 __naked void access_min_off_min_initialized(void)
 {
 	asm volatile ("					\

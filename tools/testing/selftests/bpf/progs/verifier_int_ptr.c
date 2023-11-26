@@ -7,7 +7,7 @@
 
 SEC("cgroup/sysctl")
 __description("ARG_PTR_TO_LONG uninitialized")
-__failure __msg("invalid indirect read from stack R4 off -16+0 size 8")
+__success
 __naked void arg_ptr_to_long_uninitialized(void)
 {
 	asm volatile ("					\

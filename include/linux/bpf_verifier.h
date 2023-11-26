@@ -630,6 +630,10 @@ struct bpf_verifier_env {
 	int exception_callback_subprog;
 	bool explore_alu_limits;
 	bool allow_ptr_leaks;
+	/* Allow access to uninitialized stack memory. Writes with fixed offset are
+	 * always allowed, so this refers to reads (with fixed or variable offset),
+	 * to writes with variable offset and to indirect (helper) accesses.
+	 */
 	bool allow_uninit_stack;
 	bool bpf_capable;
 	bool bypass_spec_v1;

@@ -7,7 +7,7 @@
 
 SEC("tc")
 __description("raw_stack: no skb_load_bytes")
-__failure __msg("invalid read from stack R6 off=-8 size=8")
+__success
 __naked void stack_no_skb_load_bytes(void)
 {
 	asm volatile ("					\
