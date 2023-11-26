@@ -135,6 +135,10 @@ struct bpf_test {
 	const char *errstr;
 	const char *errstr_unpriv;
 	uint32_t insn_processed;
+	/* Expected maximum stack depth for the main subprogram. Not checked if 0.
+	 * Only checked if the program is accepted.
+	 */
+	uint16_t max_stack_depth;
 	int prog_len;
 	enum {
 		UNDEF,
@@ -1699,6 +1703,26 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 		if (test->insn_processed != insn_processed) {
 			printf("FAIL\nUnexpected insn_processed %u vs %u\n",
 			       insn_processed, test->insn_processed);
+			goto fail_log;
+		}
+	}
+
+	/* Check the stack size if the test configured an expecation and the program
+	 * was loaded successfully.
+	 */
+	if (test->max_stack_depth && fd_prog >= 0) {
+		uint32_t max_stack;
+		char *s;
+
+		s = strstr(bpf_vlog, "stack depth ");
+		if (s == NULL) {
+			printf("FAIL\nstack depth result not found in verifier output\n");
+			goto fail_log;
+		}
+		max_stack = atoi(s + 12);
+		if (test->max_stack_depth != max_stack) {
+			printf("FAIL\nUnexpected max stack %u vs %u\n",
+			       max_stack, test->max_stack_depth);
 			goto fail_log;
 		}
 	}
