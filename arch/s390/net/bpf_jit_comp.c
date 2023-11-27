@@ -2146,7 +2146,8 @@ bool bpf_jit_supports_far_kfunc_call(void)
 }
 
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-		       void *old_addr, void *new_addr)
+		       void *old_addr, void *new_addr,
+		       bool checkip __maybe_unused)
 {
 	struct {
 		u16 opc;

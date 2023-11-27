@@ -179,7 +179,7 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 	if (tr->func.ftrace_managed)
 		ret = unregister_ftrace_direct(tr->fops, (long)old_addr, false);
 	else
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL, true);
 
 	return ret;
 }
@@ -196,7 +196,7 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 		else
 			ret = modify_ftrace_direct_nolock(tr->fops, (long)new_addr);
 	} else {
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr, true);
 	}
 	return ret;
 }
@@ -219,7 +219,7 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 1);
 		ret = register_ftrace_direct(tr->fops, (long)new_addr);
 	} else {
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr, true);
 	}
 
 	return ret;
@@ -331,7 +331,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 */
 	if (im->ip_after_call) {
 		int err = bpf_arch_text_poke(im->ip_after_call, BPF_MOD_JUMP,
-					     NULL, im->ip_epilogue);
+					     NULL, im->ip_epilogue, true);
 		WARN_ON(err);
 		if (IS_ENABLED(CONFIG_PREEMPTION))
 			call_rcu_tasks(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
@@ -533,7 +533,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 			return -EBUSY;
 		tr->extension_prog = link->link.prog;
 		return bpf_arch_text_poke(tr->func.addr, BPF_MOD_JUMP, NULL,
-					  link->link.prog->bpf_func);
+					  link->link.prog->bpf_func, true);
 	}
 	if (cnt >= BPF_MAX_TRAMP_LINKS)
 		return -E2BIG;
@@ -576,7 +576,7 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_
 	if (kind == BPF_TRAMP_REPLACE) {
 		WARN_ON_ONCE(!tr->extension_prog);
 		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_JUMP,
-					 tr->extension_prog->bpf_func, NULL);
+					 tr->extension_prog->bpf_func, NULL, true);
 		tr->extension_prog = NULL;
 		return err;
 	}
