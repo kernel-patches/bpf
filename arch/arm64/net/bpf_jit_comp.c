@@ -2166,8 +2166,8 @@ static int gen_branch_or_nop(enum aarch64_insn_branch_type type, void *ip,
  * The dummy_tramp is used to prevent another CPU from jumping to unknown
  * locations during the patching process, making the patching process easier.
  */
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
-		       void *old_addr, void *new_addr)
+int bpf_arch_text_poke_nocheck(void *ip, enum bpf_text_poke_type poke_type,
+			       void *old_addr, void *new_addr)
 {
 	int ret;
 	u32 old_insn;
@@ -2181,13 +2181,6 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
 	void *image = NULL;
 	u64 plt_target = 0ULL;
 	bool poking_bpf_entry;
-
-	if (!__bpf_address_lookup((unsigned long)ip, &size, &offset, namebuf))
-		/* Only poking bpf text is supported. Since kernel function
-		 * entry is set up by ftrace, we reply on ftrace to poke kernel
-		 * functions.
-		 */
-		return -ENOTSUPP;
 
 	image = ip - offset;
 	/* zero offset means we're poking bpf prog entry */
@@ -2285,4 +2278,17 @@ out:
 	mutex_unlock(&text_mutex);
 
 	return ret;
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
+		       void *old_addr, void *new_addr)
+{
+	if (!__bpf_address_lookup((unsigned long)ip, &size, &offset, namebuf))
+		/* Only poking bpf text is supported. Since kernel function
+		 * entry is set up by ftrace, we reply on ftrace to poke kernel
+		 * functions.
+		 */
+		return -ENOTSUPP;
+
+	return bpf_arch_text_poke_nocheck(ip, poke_type, old_addr, new_addr);
 }

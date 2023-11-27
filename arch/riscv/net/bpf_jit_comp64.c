@@ -666,16 +666,12 @@ static int gen_jump_or_nops(void *target, void *ip, u32 *insns, bool is_call)
 	return emit_jump_and_link(is_call ? RV_REG_T0 : RV_REG_ZERO, rvoff, false, &ctx);
 }
 
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
-		       void *old_addr, void *new_addr)
+int bpf_arch_text_poke_nocheck(void *ip, enum bpf_text_poke_type poke_type,
+			       void *old_addr, void *new_addr)
 {
 	u32 old_insns[RV_FENTRY_NINSNS], new_insns[RV_FENTRY_NINSNS];
 	bool is_call = poke_type == BPF_MOD_CALL;
 	int ret;
-
-	if (!is_kernel_text((unsigned long)ip) &&
-	    !is_bpf_text_address((unsigned long)ip))
-		return -ENOTSUPP;
 
 	ret = gen_jump_or_nops(old_addr, ip, old_insns, is_call);
 	if (ret)
@@ -696,6 +692,16 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
 	cpus_read_unlock();
 
 	return ret;
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
+		       void *old_addr, void *new_addr)
+{
+	if (!is_kernel_text((unsigned long)ip) &&
+	    !is_bpf_text_address((unsigned long)ip))
+		return -ENOTSUPP;
+
+	return bpf_arch_text_poke_nocheck(ip, poke_type, old_addr, new_addr);
 }
 
 static void store_args(int nregs, int args_off, struct rv_jit_context *ctx)

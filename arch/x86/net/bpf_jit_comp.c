@@ -391,8 +391,8 @@ static int emit_jump(u8 **pprog, void *func, void *ip)
 	return emit_patch(pprog, func, ip, 0xE9);
 }
 
-static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-				void *old_addr, void *new_addr)
+int bpf_arch_text_poke_nocheck(void *ip, enum bpf_text_poke_type t,
+			       void *old_addr, void *new_addr)
 {
 	const u8 *nop_insn = x86_nops[5];
 	u8 old_insn[X86_PATCH_SIZE];
@@ -449,7 +449,7 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	if (is_endbr(*(u32 *)ip))
 		ip += ENDBR_INSN_SIZE;
 
-	return __bpf_arch_text_poke(ip, t, old_addr, new_addr);
+	return bpf_arch_text_poke_nocheck(ip, t, old_addr, new_addr);
 }
 
 #define EMIT_LFENCE()	EMIT3(0x0F, 0xAE, 0xE8)
@@ -656,15 +656,15 @@ static void bpf_tail_call_direct_fixup(struct bpf_prog *prog)
 		mutex_lock(&array->aux->poke_mutex);
 		target = array->ptrs[poke->tail_call.key];
 		if (target) {
-			ret = __bpf_arch_text_poke(poke->tailcall_target,
-						   BPF_MOD_JUMP, NULL,
-						   (u8 *)target->bpf_func +
-						   poke->adj_off);
+			ret = bpf_arch_text_poke_nocheck(poke->tailcall_target,
+							 BPF_MOD_JUMP, NULL,
+							 (u8 *)target->bpf_func +
+							 poke->adj_off);
 			BUG_ON(ret < 0);
-			ret = __bpf_arch_text_poke(poke->tailcall_bypass,
-						   BPF_MOD_JUMP,
-						   (u8 *)poke->tailcall_target +
-						   X86_PATCH_SIZE, NULL);
+			ret = bpf_arch_text_poke_nocheck(poke->tailcall_bypass,
+							 BPF_MOD_JUMP,
+							 (u8 *)poke->tailcall_target +
+							 X86_PATCH_SIZE, NULL);
 			BUG_ON(ret < 0);
 		}
 		WRITE_ONCE(poke->tailcall_target_stable, true);

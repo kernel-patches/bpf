@@ -2199,6 +2199,10 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	return 0;
 }
 
+int bpf_arch_text_poke_nocheck(void *ip, enum bpf_text_poke_type t,
+			       void *old_addr, void *new_addr)
+			       __alias(bpf_arch_text_poke);
+
 struct bpf_tramp_jit {
 	struct bpf_jit common;
 	int orig_stack_args_off;/* Offset of arguments placed on stack by the
