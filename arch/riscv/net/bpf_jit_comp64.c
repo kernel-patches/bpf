@@ -667,13 +667,14 @@ static int gen_jump_or_nops(void *target, void *ip, u32 *insns, bool is_call)
 }
 
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
-		       void *old_addr, void *new_addr)
+		       void *old_addr, void *new_addr, bool checkip)
 {
 	u32 old_insns[RV_FENTRY_NINSNS], new_insns[RV_FENTRY_NINSNS];
 	bool is_call = poke_type == BPF_MOD_CALL;
 	int ret;
 
-	if (!is_kernel_text((unsigned long)ip) &&
+	if (checkip &&
+	    !is_kernel_text((unsigned long)ip) &&
 	    !is_bpf_text_address((unsigned long)ip))
 		return -ENOTSUPP;
 

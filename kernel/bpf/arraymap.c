@@ -1075,20 +1075,20 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 			if (new) {
 				ret = bpf_arch_text_poke(poke->tailcall_target,
 							 BPF_MOD_JUMP,
-							 old_addr, new_addr);
+							 old_addr, new_addr, true);
 				BUG_ON(ret < 0 && ret != -EINVAL);
 				if (!old) {
 					ret = bpf_arch_text_poke(poke->tailcall_bypass,
 								 BPF_MOD_JUMP,
 								 poke->bypass_addr,
-								 NULL);
+								 NULL, true);
 					BUG_ON(ret < 0 && ret != -EINVAL);
 				}
 			} else {
 				ret = bpf_arch_text_poke(poke->tailcall_bypass,
 							 BPF_MOD_JUMP,
 							 old_bypass_addr,
-							 poke->bypass_addr);
+							 poke->bypass_addr, true);
 				BUG_ON(ret < 0 && ret != -EINVAL);
 				/* let other CPUs finish the execution of program
 				 * so that it will not possible to expose them
@@ -1098,7 +1098,7 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 					synchronize_rcu();
 				ret = bpf_arch_text_poke(poke->tailcall_target,
 							 BPF_MOD_JUMP,
-							 old_addr, NULL);
+							 old_addr, NULL, true);
 				BUG_ON(ret < 0 && ret != -EINVAL);
 			}
 		}

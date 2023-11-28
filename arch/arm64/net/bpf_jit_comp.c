@@ -2167,7 +2167,8 @@ static int gen_branch_or_nop(enum aarch64_insn_branch_type type, void *ip,
  * locations during the patching process, making the patching process easier.
  */
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
-		       void *old_addr, void *new_addr)
+		       void *old_addr, void *new_addr,
+		       bool checkip __maybe_unused)
 {
 	int ret;
 	u32 old_insn;
