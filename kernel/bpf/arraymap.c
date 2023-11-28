@@ -1044,20 +1044,11 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 			 *    activated, so tail call updates can arrive from here
 			 *    while JIT is still finishing its final fixup for
 			 *    non-activated poke entries.
-			 * 3) On program teardown, the program's kallsym entry gets
-			 *    removed out of RCU callback, but we can only untrack
-			 *    from sleepable context, therefore bpf_arch_text_poke()
-			 *    might not see that this is in BPF text section and
-			 *    bails out with -EINVAL. As these are unreachable since
-			 *    RCU grace period already passed, we simply skip them.
-			 * 4) Also programs reaching refcount of zero while patching
+			 * 3) Also programs reaching refcount of zero while patching
 			 *    is in progress is okay since we're protected under
 			 *    poke_mutex and untrack the programs before the JIT
-			 *    buffer is freed. When we're still in the middle of
-			 *    patching and suddenly kallsyms entry of the program
-			 *    gets evicted, we just skip the rest which is fine due
-			 *    to point 3).
-			 * 5) Any other error happening below from bpf_arch_text_poke()
+			 *    buffer is freed.
+			 * 4) Any error happening below from bpf_arch_text_poke()
 			 *    is a unexpected bug.
 			 */
 			if (!READ_ONCE(poke->tailcall_target_stable))
@@ -1075,21 +1066,21 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 			if (new) {
 				ret = bpf_arch_text_poke(poke->tailcall_target,
 							 BPF_MOD_JUMP,
-							 old_addr, new_addr, true);
-				BUG_ON(ret < 0 && ret != -EINVAL);
+							 old_addr, new_addr, false);
+				BUG_ON(ret < 0);
 				if (!old) {
 					ret = bpf_arch_text_poke(poke->tailcall_bypass,
 								 BPF_MOD_JUMP,
 								 poke->bypass_addr,
-								 NULL, true);
-					BUG_ON(ret < 0 && ret != -EINVAL);
+								 NULL, false);
+					BUG_ON(ret < 0);
 				}
 			} else {
 				ret = bpf_arch_text_poke(poke->tailcall_bypass,
 							 BPF_MOD_JUMP,
 							 old_bypass_addr,
-							 poke->bypass_addr, true);
-				BUG_ON(ret < 0 && ret != -EINVAL);
+							 poke->bypass_addr, false);
+				BUG_ON(ret < 0);
 				/* let other CPUs finish the execution of program
 				 * so that it will not possible to expose them
 				 * to invalid nop, stack unwind, nop state
@@ -1098,8 +1089,8 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 					synchronize_rcu();
 				ret = bpf_arch_text_poke(poke->tailcall_target,
 							 BPF_MOD_JUMP,
-							 old_addr, NULL, true);
-				BUG_ON(ret < 0 && ret != -EINVAL);
+							 old_addr, NULL, false);
+				BUG_ON(ret < 0);
 			}
 		}
 	}
