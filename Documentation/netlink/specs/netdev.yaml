@@ -66,6 +66,10 @@ definitions:
         name: tx-checksum
         doc:
           L3 checksum HW offload is supported by the driver.
+      -
+        name: launch-time
+        doc:
+          HW Time-Based Scheduling (TBS) is supported by the driver.
 
 attribute-sets:
   -
