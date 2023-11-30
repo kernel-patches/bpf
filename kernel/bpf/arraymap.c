@@ -1012,11 +1012,16 @@ static void prog_array_map_poke_untrack(struct bpf_map *map,
 	mutex_unlock(&aux->poke_mutex);
 }
 
+void __weak bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
+				      struct bpf_prog *new, struct bpf_prog *old)
+{
+	WARN_ON_ONCE(1);
+}
+
 static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 				    struct bpf_prog *old,
 				    struct bpf_prog *new)
 {
-	u8 *old_addr, *new_addr, *old_bypass_addr;
 	struct prog_poke_elem *elem;
 	struct bpf_array_aux *aux;
 
@@ -1025,7 +1030,7 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 
 	list_for_each_entry(elem, &aux->poke_progs, list) {
 		struct bpf_jit_poke_descriptor *poke;
-		int i, ret;
+		int i;
 
 		for (i = 0; i < elem->aux->size_poke_tab; i++) {
 			poke = &elem->aux->poke_tab[i];
@@ -1068,39 +1073,7 @@ static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 			    poke->tail_call.key != key)
 				continue;
 
-			old_bypass_addr = old ? NULL : poke->bypass_addr;
-			old_addr = old ? (u8 *)old->bpf_func + poke->adj_off : NULL;
-			new_addr = new ? (u8 *)new->bpf_func + poke->adj_off : NULL;
-
-			if (new) {
-				ret = bpf_arch_text_poke(poke->tailcall_target,
-							 BPF_MOD_JUMP,
-							 old_addr, new_addr);
-				BUG_ON(ret < 0 && ret != -EINVAL);
-				if (!old) {
-					ret = bpf_arch_text_poke(poke->tailcall_bypass,
-								 BPF_MOD_JUMP,
-								 poke->bypass_addr,
-								 NULL);
-					BUG_ON(ret < 0 && ret != -EINVAL);
-				}
-			} else {
-				ret = bpf_arch_text_poke(poke->tailcall_bypass,
-							 BPF_MOD_JUMP,
-							 old_bypass_addr,
-							 poke->bypass_addr);
-				BUG_ON(ret < 0 && ret != -EINVAL);
-				/* let other CPUs finish the execution of program
-				 * so that it will not possible to expose them
-				 * to invalid nop, stack unwind, nop state
-				 */
-				if (!ret)
-					synchronize_rcu();
-				ret = bpf_arch_text_poke(poke->tailcall_target,
-							 BPF_MOD_JUMP,
-							 old_addr, NULL);
-				BUG_ON(ret < 0 && ret != -EINVAL);
-			}
+			bpf_arch_poke_desc_update(poke, new, old);
 		}
 	}
 }
