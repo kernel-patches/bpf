@@ -17,6 +17,7 @@
 #include <asm/nospec-branch.h>
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
+#include <asm/cfi.h>
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
@@ -51,9 +52,11 @@ static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
 	do { EMIT4(b1, b2, b3, b4); EMIT(off, 4); } while (0)
 
 #ifdef CONFIG_X86_KERNEL_IBT
-#define EMIT_ENDBR()	EMIT(gen_endbr(), 4)
+#define EMIT_ENDBR()		EMIT(gen_endbr(), 4)
+#define EMIT_ENDBR_POISON()	EMIT(gen_endbr_poison(), 4)
 #else
 #define EMIT_ENDBR()
+#define EMIT_ENDBR_POISON()
 #endif
 
 static bool is_imm8(int value)
@@ -247,6 +250,7 @@ struct jit_context {
 	 */
 	int tail_call_direct_label;
 	int tail_call_indirect_label;
+	int prog_offset;
 };
 
 /* Maximum number of bytes emitted while JITing one eBPF insn */
@@ -305,20 +309,90 @@ static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
 }
 
 /*
+ * Emit the various CFI preambles, see asm/cfi.h and the comments about FineIBT
+ * in arch/x86/kernel/alternative.c
+ */
+
+static int emit_fineibt(u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	EMIT_ENDBR();
+	EMIT3_off32(0x41, 0x81, 0xea, cfi_bpf_hash);	/* subl $hash, %r10d	*/
+	EMIT2(0x74, 0x07);				/* jz.d8 +7		*/
+	EMIT2(0x0f, 0x0b);				/* ud2			*/
+	EMIT1(0x90);					/* nop			*/
+	EMIT_ENDBR_POISON();
+
+	*pprog = prog;
+	return 16;
+}
+
+static int emit_kcfi(u8 **pprog)
+{
+	u8 *prog = *pprog;
+	int offset = 5;
+
+	EMIT1_off32(0xb8, cfi_bpf_hash);		/* movl $hash, %eax	*/
+#ifdef CONFIG_CALL_PADDING
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	EMIT1(0x90);
+	offset += 11;
+#endif
+	EMIT_ENDBR();
+
+	*pprog = prog;
+	return offset;
+}
+
+static int emit_cfi(u8 **pprog)
+{
+	u8 *prog = *pprog;
+	int offset = 0;
+
+	switch (cfi_mode) {
+	case CFI_FINEIBT:
+		offset = emit_fineibt(&prog);
+		break;
+
+	case CFI_KCFI:
+		offset = emit_kcfi(&prog);
+		break;
+
+	default:
+		EMIT_ENDBR();
+		break;
+	}
+
+	*pprog = prog;
+	return offset;
+}
+
+/*
  * Emit x86-64 prologue code for BPF program.
  * bpf_tail_call helper will skip the first X86_TAIL_CALL_OFFSET bytes
  * while jumping to another program
  */
-static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
-			  bool tail_call_reachable, bool is_subprog,
-			  bool is_exception_cb)
+static int emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
+			 bool tail_call_reachable, bool is_subprog,
+			 bool is_exception_cb)
 {
 	u8 *prog = *pprog;
+	int offset;
 
+	offset = emit_cfi(&prog);
 	/* BPF trampoline can be made to work without these nops,
 	 * but let's waste 5 bytes for now and optimize later
 	 */
-	EMIT_ENDBR();
 	memcpy(prog, x86_nops[5], X86_PATCH_SIZE);
 	prog += X86_PATCH_SIZE;
 	if (!ebpf_from_cbpf) {
@@ -357,6 +431,8 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
 	if (tail_call_reachable)
 		EMIT1(0x50);         /* push rax */
 	*pprog = prog;
+
+	return offset;
 }
 
 static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
@@ -1083,8 +1159,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	bool tail_call_seen = false;
 	bool seen_exit = false;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
-	int i, excnt = 0;
 	int ilen, proglen = 0;
+	int i, excnt = 0;
 	u8 *prog = temp;
 	int err;
 
@@ -1094,9 +1170,12 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	/* tail call's presence in current prog implies it is reachable */
 	tail_call_reachable |= tail_call_seen;
 
-	emit_prologue(&prog, bpf_prog->aux->stack_depth,
-		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
-		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
+	ctx->prog_offset = emit_prologue(&prog, bpf_prog->aux->stack_depth,
+					 bpf_prog_was_classic(bpf_prog),
+					 tail_call_reachable,
+					 bpf_is_subprog(bpf_prog),
+					 bpf_prog->aux->exception_cb);
+
 	/* Exception callback will clobber callee regs for its own use, and
 	 * restore the original callee regs from main prog's stack frame.
 	 */
@@ -2935,9 +3014,16 @@ out_image:
 			jit_data->header = header;
 			jit_data->rw_header = rw_header;
 		}
-		prog->bpf_func = (void *)image;
+		/*
+		 * ctx.prog_offset is used when CFI preambles put code *before*
+		 * the function. See emit_cfi(). For FineIBT specifically this code
+		 * can also be executed and bpf_prog_kallsyms_add() will
+		 * generate an additional symbol to cover this, hence also
+		 * decrement proglen.
+		 */
+		prog->bpf_func = (void *)image + ctx.prog_offset;
 		prog->jited = 1;
-		prog->jited_len = proglen;
+		prog->jited_len = proglen - ctx.prog_offset;
 	} else {
 		prog = orig_prog;
 	}
