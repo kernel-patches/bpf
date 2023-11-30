@@ -13,6 +13,7 @@
  * - UDP 9091 packets trigger TX reply
  * - TX HW timestamp is requested and reported back upon completion
  * - TX checksum is requested
+ * - HW launch time is set for transmission
  */
 
 #include <test_progs.h>
@@ -61,6 +62,8 @@ int rxq;
 bool skip_tx;
 __u64 last_hw_rx_timestamp;
 __u64 last_xdp_rx_timestamp;
+__u64 last_launch_time;
+__u64 launch_time_offset = 1000000000; /* 1 second */
 
 void test__fail(void) { /* for network_helpers.c */ }
 
@@ -274,6 +277,8 @@ static bool complete_tx(struct xsk *xsk, clockid_t clock_id)
 	if (meta->completion.tx_timestamp) {
 		__u64 ref_tstamp = gettime(clock_id);
 
+		print_tstamp_delta("HW Launch-time", "HW TX-complete-time",
+				   last_launch_time, meta->completion.tx_timestamp);
 		print_tstamp_delta("HW TX-complete-time", "User TX-complete-time",
 				   meta->completion.tx_timestamp, ref_tstamp);
 		print_tstamp_delta("XDP RX-time", "User TX-complete-time",
@@ -370,6 +375,13 @@ static void ping_pong(struct xsk *xsk, void *rx_packet, clockid_t clock_id)
 	printf("%p: ping-pong with csum=%04x (want %04x) csum_start=%d csum_offset=%d\n",
 	       xsk, ntohs(udph->check), ntohs(want_csum),
 	       meta->request.csum_start, meta->request.csum_offset);
+
+	/* Set launch time at launch_time_offset ns later than HW Rx-time */
+	meta->flags |= XDP_TXMD_FLAGS_LAUNCH_TIME;
+	last_launch_time = last_hw_rx_timestamp + launch_time_offset;
+	meta->request.launch_time = last_launch_time;
+	print_tstamp_delta("HW RX-time", "HW Launch-time",
+			   last_hw_rx_timestamp, meta->request.launch_time);
 
 	memcpy(data, rx_packet, len); /* don't share umem chunk for simplicity */
 	tx_desc->options |= XDP_TX_METADATA;
@@ -595,6 +607,7 @@ static void print_usage(void)
 		"  -h    Display this help and exit\n\n"
 		"  -m    Enable multi-buffer XDP for larger MTU\n"
 		"  -r    Don't generate AF_XDP reply (rx metadata only)\n"
+		"  -l    Delta of HW launch time to HW RX-time in ns (default: 1s)\n"
 		"Generate test packets on the other machine with:\n"
 		"  echo -n xdp | nc -u -q1 <dst_ip> 9091\n";
 
@@ -605,7 +618,7 @@ static void read_args(int argc, char *argv[])
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "chmr")) != -1) {
+	while ((opt = getopt(argc, argv, "chmrl:")) != -1) {
 		switch (opt) {
 		case 'c':
 			bind_flags &= ~XDP_USE_NEED_WAKEUP;
@@ -620,6 +633,9 @@ static void read_args(int argc, char *argv[])
 			break;
 		case 'r':
 			skip_tx = true;
+			break;
+		case 'l':
+			launch_time_offset = atoll(optarg);
 			break;
 		case '?':
 			if (isprint(optopt))
