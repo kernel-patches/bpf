@@ -851,43 +851,44 @@ class PrinterHelpers(Printer):
 
 ###############################################################################
 
-# If script is launched from scripts/ from kernel tree and can access
-# ../include/uapi/linux/bpf.h, use it as a default name for the file to parse,
-# otherwise the --filename argument will be required from the command line.
-script = os.path.abspath(sys.argv[0])
-linuxRoot = os.path.dirname(os.path.dirname(script))
-bpfh = os.path.join(linuxRoot, 'include/uapi/linux/bpf.h')
+if __name__ == "__main__":
+    # If script is launched from scripts/ from kernel tree and can access
+    # ../include/uapi/linux/bpf.h, use it as a default name for the file to parse,
+    # otherwise the --filename argument will be required from the command line.
+    script = os.path.abspath(sys.argv[0])
+    linuxRoot = os.path.dirname(os.path.dirname(script))
+    bpfh = os.path.join(linuxRoot, 'include/uapi/linux/bpf.h')
 
-printers = {
-        'helpers': PrinterHelpersRST,
-        'syscall': PrinterSyscallRST,
-}
+    printers = {
+            'helpers': PrinterHelpersRST,
+            'syscall': PrinterSyscallRST,
+    }
 
-argParser = argparse.ArgumentParser(description="""
-Parse eBPF header file and generate documentation for the eBPF API.
-The RST-formatted output produced can be turned into a manual page with the
-rst2man utility.
-""")
-argParser.add_argument('--header', action='store_true',
-                       help='generate C header file')
-if (os.path.isfile(bpfh)):
-    argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h',
-                           default=bpfh)
-else:
-    argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h')
-argParser.add_argument('target', nargs='?', default='helpers',
-                       choices=printers.keys(), help='eBPF API target')
-args = argParser.parse_args()
+    argParser = argparse.ArgumentParser(description="""
+    Parse eBPF header file and generate documentation for the eBPF API.
+    The RST-formatted output produced can be turned into a manual page with the
+    rst2man utility.
+    """)
+    argParser.add_argument('--header', action='store_true',
+                           help='generate C header file')
+    if (os.path.isfile(bpfh)):
+        argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h',
+                               default=bpfh)
+    else:
+        argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h')
+    argParser.add_argument('target', nargs='?', default='helpers',
+                           choices=printers.keys(), help='eBPF API target')
+    args = argParser.parse_args()
 
-# Parse file.
-headerParser = HeaderParser(args.filename)
-headerParser.run()
+    # Parse file.
+    headerParser = HeaderParser(args.filename)
+    headerParser.run()
 
-# Print formatted output to standard output.
-if args.header:
-    if args.target != 'helpers':
-        raise NotImplementedError('Only helpers header generation is supported')
-    printer = PrinterHelpers(headerParser)
-else:
-    printer = printers[args.target](headerParser)
-printer.print_all()
+    # Print formatted output to standard output.
+    if args.header:
+        if args.target != 'helpers':
+            raise NotImplementedError('Only helpers header generation is supported')
+        printer = PrinterHelpers(headerParser)
+    else:
+        printer = printers[args.target](headerParser)
+    printer.print_all()
