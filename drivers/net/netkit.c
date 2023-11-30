@@ -34,6 +34,12 @@ struct netkit_link {
 	u32 location;
 };
 
+static struct {
+	const char string[ETH_GSTRING_LEN];
+} ethtool_stats_keys[] = {
+	{ "peer_ifindex" },
+};
+
 static __always_inline int
 netkit_run(const struct bpf_mprog_entry *entry, struct sk_buff *skb,
 	   enum netkit_action ret)
@@ -211,8 +217,55 @@ static void netkit_get_drvinfo(struct net_device *dev,
 	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
 }
 
+static void netkit_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
+{
+	u8 *p = buf;
+
+	switch (stringset) {
+	case ETH_SS_STATS:
+		memcpy(p, &ethtool_stats_keys, sizeof(ethtool_stats_keys));
+		p += sizeof(ethtool_stats_keys);
+		break;
+	}
+}
+
+static int netkit_get_sset_count(struct net_device *dev, int sset)
+{
+	switch (sset) {
+	case ETH_SS_STATS:
+		return ARRAY_SIZE(ethtool_stats_keys);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static void netkit_get_ethtool_stats(struct net_device *dev,
+				     struct ethtool_stats *stats, u64 *data)
+{
+	struct netkit *nk = netkit_priv(dev);
+	struct net_device *peer = rtnl_dereference(nk->peer);
+
+	data[0] = peer ? peer->ifindex : 0;
+}
+
+static int netkit_get_link_ksettings(struct net_device *dev,
+				     struct ethtool_link_ksettings *cmd)
+{
+	cmd->base.speed		= SPEED_10000;
+	cmd->base.duplex	= DUPLEX_FULL;
+	cmd->base.port		= PORT_TP;
+	cmd->base.autoneg	= AUTONEG_DISABLE;
+	return 0;
+}
+
 static const struct ethtool_ops netkit_ethtool_ops = {
 	.get_drvinfo		= netkit_get_drvinfo,
+	.get_link		= ethtool_op_get_link,
+	.get_strings		= netkit_get_strings,
+	.get_sset_count		= netkit_get_sset_count,
+	.get_ethtool_stats	= netkit_get_ethtool_stats,
+	.get_link_ksettings	= netkit_get_link_ksettings,
+	.get_ts_info		= ethtool_op_get_ts_info,
 };
 
 static void netkit_setup(struct net_device *dev)
