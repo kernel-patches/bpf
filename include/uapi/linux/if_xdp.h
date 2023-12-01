@@ -123,6 +123,12 @@ struct xdp_options {
  */
 #define XDP_TXMD_FLAGS_CHECKSUM			(1 << 1)
 
+/* Request Earliest TxTime First (ETF) HW offload to launch the packet at a
+ * pre-determined time. The time which the NIC should schedule the packet for
+ * transmission is communicated via txtime field of struct xsk_tx_metadata.
+ */
+#define XDP_TXMD_FLAGS_TXTIME			(1 << 2)
+
 /* AF_XDP offloads request. 'request' union member is consumed by the driver
  * when the packet is being transmitted. 'completion' union member is
  * filled by the driver when the transmit completion arrives.
@@ -138,6 +144,9 @@ struct xsk_tx_metadata {
 			__u16 csum_start;
 			/* Offset from csum_start where checksum should be stored. */
 			__u16 csum_offset;
+
+			/* XDP_TXMD_FLAGS_TXTIME */
+			__u64 txtime;
 		} request;
 
 		struct {

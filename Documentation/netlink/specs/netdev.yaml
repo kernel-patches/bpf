@@ -66,6 +66,10 @@ definitions:
         name: tx-checksum
         doc:
           L3 checksum HW offload is supported by the driver.
+      -
+        name: txtime
+        doc:
+          Earliest TxTime First (ETF) HW offload is supported by the driver.
 
 attribute-sets:
   -
