@@ -43,6 +43,9 @@ obj-${CONFIG_BPF_LSM} += bpf_lsm.o
 endif
 ifeq ($(CONFIG_CRYPTO),y)
 obj-$(CONFIG_BPF_SYSCALL) += crypto.o
+ifeq ($(CONFIG_CRYPTO_SKCIPHER),y)
+obj-$(CONFIG_BPF_SYSCALL) += crypto_skcipher.o
+endif
 endif
 obj-$(CONFIG_BPF_PRELOAD) += preload/
 
