@@ -66,6 +66,7 @@ const char *netdev_xdp_rx_metadata_str(enum netdev_xdp_rx_metadata value)
 static const char * const netdev_xsk_flags_strmap[] = {
 	[0] = "tx-timestamp",
 	[1] = "tx-checksum",
+	[2] = "launch-time"
 };
 
 const char *netdev_xsk_flags_str(enum netdev_xsk_flags value)

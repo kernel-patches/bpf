@@ -66,6 +66,10 @@ definitions:
         name: tx-checksum
         doc:
           L3 checksum HW offload is supported by the driver.
+      -
+        name: launch-time
+        doc:
+          Launch Time HW offload is supported by the driver.
 
 attribute-sets:
   -
