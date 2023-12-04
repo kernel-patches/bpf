@@ -694,11 +694,16 @@ static void bpf_map_free_deferred(struct work_struct *work)
 {
 	struct bpf_map *map = container_of(work, struct bpf_map, work);
 	struct btf_record *rec = map->record;
+	struct btf *btf = map->btf;
 
 	security_bpf_map_free(map);
 	bpf_map_release_memcg(map);
 	/* implementation dependent freeing */
 	map->ops->map_free(map);
+	/* Delay freeing of btf for maps, as map_free callback may need
+	 * struct_meta info which will be freed with btf_put().
+	 */
+	btf_put(btf);
 	/* Delay freeing of btf_record for maps, as map_free
 	 * callback usually needs access to them. It is better to do it here
 	 * than require each callback to do the free itself manually.
@@ -727,7 +732,6 @@ void bpf_map_put(struct bpf_map *map)
 	if (atomic64_dec_and_test(&map->refcnt)) {
 		/* bpf_map_free_id() must be called first */
 		bpf_map_free_id(map);
-		btf_put(map->btf);
 		INIT_WORK(&map->work, bpf_map_free_deferred);
 		/* Avoid spawning kworkers, since they all might contend
 		 * for the same mutex like slab_mutex.
