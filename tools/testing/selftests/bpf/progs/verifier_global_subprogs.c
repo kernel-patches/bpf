@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2023 Meta Platforms, Inc. and affiliates. */
 
-#include <stdbool.h>
-#include <errno.h>
-#include <string.h>
-#include <linux/bpf.h>
+#include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
+#include "xdp_metadata.h"
+#include "bpf_kfuncs.h"
 
 int arr[1];
 int unkn_idx;
@@ -87,6 +86,133 @@ int unguarded_unsupp_global_called(void)
 	int x = 0;
 
 	return global_unsupp(&x);
+}
+
+long stack[128];
+
+__weak int subprog_nullable_ptr_bad(int *p)
+{
+	return (*p) * 2; /* bad, missing null check */
+}
+
+SEC("?raw_tp")
+__failure __log_level(2)
+__msg("invalid mem access 'mem_or_null'")
+int arg_tag_nullable_ptr_fail(void *ctx)
+{
+	int x = 42;
+
+	return subprog_nullable_ptr_bad(&x);
+}
+
+__noinline __weak int subprog_nonnull_ptr_good(int *p1 __arg_nonnull, int *p2 __arg_nonnull)
+{
+	return (*p1) * (*p2); /* good, no need for NULL checks */
+}
+
+int x = 47;
+
+SEC("?raw_tp")
+__success __log_level(2)
+int arg_tag_nonnull_ptr_good(void *ctx)
+{
+	int y = 74;
+
+	return subprog_nonnull_ptr_good(&x, &y);
+}
+
+/* this global subprog can be now called from many types of entry progs, each
+ * with different context type
+ */
+__weak int subprog_ctx_tag(void *ctx __arg_ctx)
+{
+	return bpf_get_stack(ctx, stack, sizeof(stack), 0);
+}
+
+SEC("?raw_tp")
+__success __log_level(2)
+int arg_tag_ctx_raw_tp(void *ctx)
+{
+	return subprog_ctx_tag(ctx);
+}
+
+SEC("?tp")
+__success __log_level(2)
+int arg_tag_ctx_tp(void *ctx)
+{
+	return subprog_ctx_tag(ctx);
+}
+
+SEC("?kprobe")
+__success __log_level(2)
+int arg_tag_ctx_kprobe(void *ctx)
+{
+	return subprog_ctx_tag(ctx);
+}
+
+__weak int subprog_pkt(void *ctx __arg_ctx,
+		       void *pkt_meta __arg_pkt_meta,
+		       void *pkt_data __arg_pkt_data,
+		       void *pkt_end __arg_pkt_end)
+{
+	struct xdp_meta *meta;
+
+	/* use pkt_data + pkt_end */
+	if (pkt_data + 64 > pkt_end)
+		return XDP_DROP;
+
+	if (*(u8 *)(pkt_data + 63) > 0)
+		return XDP_DROP;
+
+	/* use pkt_meta + pkt_data */
+	if (pkt_meta + sizeof(*meta) > pkt_data)
+		return XDP_DROP;
+
+	meta = pkt_meta;
+	meta->rx_timestamp = 1;
+
+	return XDP_PASS;
+}
+
+SEC("?xdp")
+__success __log_level(2)
+int arg_tag_pkt_pointers(struct xdp_md *ctx)
+{
+	void *pkt_meta = (void *)(long)ctx->data_meta;
+	void *pkt_data = (void *)(long)ctx->data;
+	void *pkt_end = (void *)(long)ctx->data_end;
+
+	return subprog_pkt(ctx, pkt_meta, pkt_data, pkt_end);
+}
+
+__weak int subprog_dynptr(struct bpf_dynptr *dptr __arg_dynptr)
+{
+	long *d, t, buf[1] = {};
+
+	d = bpf_dynptr_data(dptr, 0, sizeof(long));
+	if (!d)
+		return 0;
+
+	t = *d + 1;
+
+	d = bpf_dynptr_slice(dptr, 0, &buf, sizeof(long));
+	if (!d)
+		return t;
+
+	t = *d + 2;
+
+	return t;
+}
+
+SEC("?xdp")
+__success __log_level(2)
+int arg_tag_dynptr(struct xdp_md *ctx)
+{
+	struct bpf_dynptr dptr;
+
+	bpf_dynptr_from_xdp(ctx, 0, &dptr);
+
+	return subprog_dynptr(&dptr);
 }
 
 char _license[] SEC("license") = "GPL";
