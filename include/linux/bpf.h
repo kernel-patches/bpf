@@ -732,6 +732,10 @@ enum bpf_arg_type {
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
 	ARG_PTR_TO_KPTR,	/* pointer to referenced kptr */
 	ARG_PTR_TO_DYNPTR,      /* pointer to bpf_dynptr. See bpf_type_flag for dynptr type */
+
+	ARG_PTR_TO_PACKET_DATA,
+	ARG_PTR_TO_PACKET_META,
+	ARG_PTR_TO_PACKET_END,
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */

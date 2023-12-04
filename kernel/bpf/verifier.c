@@ -9268,9 +9268,30 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE);
 			if (ret < 0)
 				return ret;
-
 			if (check_mem_reg(env, reg, regno, arg->mem_size))
 				return -EINVAL;
+			if (!(arg->arg_type & PTR_MAYBE_NULL) && (reg->type & PTR_MAYBE_NULL)) {
+				bpf_log(log, "arg#%d is expected to be non-NULL\n", i);
+				return -EINVAL;
+			}
+		} else if (arg->arg_type == ARG_PTR_TO_PACKET_META) {
+			if (reg->type != PTR_TO_PACKET_META) {
+				bpf_log(log, "arg#%d expected pkt_meta, but got %s\n",
+					i, reg_type_str(env, reg->type));
+				return -EINVAL;
+			}
+		} else if (arg->arg_type == ARG_PTR_TO_PACKET_DATA) {
+			if (reg->type != PTR_TO_PACKET) {
+				bpf_log(log, "arg#%d expected pkt, but got %s\n",
+					i, reg_type_str(env, reg->type));
+				return -EINVAL;
+			}
+		} else if (arg->arg_type == ARG_PTR_TO_PACKET_END) {
+			if (reg->type != PTR_TO_PACKET_END) {
+				bpf_log(log, "arg#%d expected pkt_end, but got %s\n",
+					i, reg_type_str(env, reg->type));
+				return -EINVAL;
+			}
 		} else {
 			bpf_log(log, "verifier bug: unrecognized arg#%d type %d\n",
 				i, arg->arg_type);
@@ -19985,6 +20006,15 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			} else if (arg->arg_type == ARG_SCALAR) {
 				reg->type = SCALAR_VALUE;
 				mark_reg_unknown(env, regs, i);
+			} else if (arg->arg_type == ARG_PTR_TO_PACKET_META) {
+				reg->type = PTR_TO_PACKET_META;
+				mark_reg_known_zero(env, regs, i);
+			} else if (arg->arg_type == ARG_PTR_TO_PACKET_DATA) {
+				reg->type = PTR_TO_PACKET;
+				mark_reg_known_zero(env, regs, i);
+			} else if (arg->arg_type == ARG_PTR_TO_PACKET_END) {
+				reg->type = PTR_TO_PACKET_END;
+				mark_reg_known_zero(env, regs, i);
 			} else if (base_type(arg->arg_type) == ARG_PTR_TO_MEM) {
 				reg->type = PTR_TO_MEM;
 				if (arg->arg_type & PTR_MAYBE_NULL)
