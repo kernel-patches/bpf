@@ -188,6 +188,15 @@ enum libbpf_tristate {
 	!!sym;											\
 })
 
+#define __arg_nonnull __attribute((btf_decl_tag("arg:nonnull")))
+
+#define __arg_ctx __attribute__((btf_decl_tag("arg:ctx")))
+#define __arg_dynptr __attribute__((btf_decl_tag("arg:dynptr")))
+
+#define __arg_pkt_meta __attribute__((btf_decl_tag("arg:pkt_meta")))
+#define __arg_pkt_data __attribute__((btf_decl_tag("arg:pkt_data")))
+#define __arg_pkt_end __attribute__((btf_decl_tag("arg:pkt_end")))
+
 #ifndef ___bpf_concat
 #define ___bpf_concat(a, b) a ## b
 #endif
