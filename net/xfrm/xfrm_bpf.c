@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Unstable XFRM Helpers for TC-BPF hook
+/* Unstable XFRM BPF helpers.
  *
- * These are called from SCHED_CLS BPF programs. Note that it is
- * allowed to break compatibility for these functions since the interface they
- * are exposed through to BPF programs is explicitly unstable.
+ * Note that it is allowed to break compatibility for these functions since the
+ * interface they are exposed through to BPF programs is explicitly unstable.
  */
 
 #include <linux/bpf.h>
@@ -11,6 +10,9 @@
 
 #include <net/dst_metadata.h>
 #include <net/xfrm.h>
+
+#if IS_BUILTIN(CONFIG_XFRM_INTERFACE) || \
+    (IS_MODULE(CONFIG_XFRM_INTERFACE) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
 
 /* bpf_xfrm_info - XFRM metadata information
  *
@@ -108,3 +110,5 @@ int __init register_xfrm_interface_bpf(void)
 	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
 					 &xfrm_interface_kfunc_set);
 }
+
+#endif /* xfrm interface */
