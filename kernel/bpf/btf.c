@@ -6870,6 +6870,10 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				sub->args[i].arg_type = ARG_PTR_TO_CTX;
 				continue;
 			}
+			if (strcmp(tag, "dynptr") == 0) {
+				sub->args[i].arg_type = ARG_PTR_TO_DYNPTR | MEM_RDONLY;
+				continue;
+			}
 			if (strcmp(tag, "pkt_meta") == 0) {
 				sub->args[i].arg_type = ARG_PTR_TO_PACKET_META;
 				continue;
