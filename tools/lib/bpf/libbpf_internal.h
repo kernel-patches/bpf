@@ -602,4 +602,6 @@ int elf_resolve_syms_offsets(const char *binary_path, int cnt,
 int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 				 unsigned long **poffsets, size_t *pcnt);
 
+int probe_kern_syscall_wrapper(void);
+
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */
