@@ -889,6 +889,7 @@ static struct tc_action_ops act_ife_ops = {
 	.init = tcf_ife_init,
 	.size =	sizeof(struct tcf_ife_info),
 };
+MODULE_ALIAS_TCA("ife");
 
 static __net_init int ife_init_net(struct net *net)
 {

@@ -1331,7 +1331,7 @@ struct tc_action_ops *tc_action_load_ops(struct nlattr *nla, bool police,
 #ifdef CONFIG_MODULES
 		if (rtnl_held)
 			rtnl_unlock();
-		request_module("act_%s", act_name);
+		request_module("tca-%s", act_name);
 		if (rtnl_held)
 			rtnl_lock();
 
