@@ -418,6 +418,7 @@ static struct Qdisc_ops prio_qdisc_ops __read_mostly = {
 	.dump		=	prio_dump,
 	.owner		=	THIS_MODULE,
 };
+MODULE_ALIAS_QD("prio");
 
 static int __init prio_module_init(void)
 {
