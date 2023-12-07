@@ -55,14 +55,22 @@ static int restore_priv_caps(__u64 old_caps)
 	return cap_enable_effective(old_caps, NULL);
 }
 
-static int set_delegate_mask(int fs_fd, const char *key, __u64 mask)
+static int set_delegate_mask(int fs_fd, const char *key, __u64 mask, const char *mask_str)
 {
 	char buf[32];
 	int err;
 
-	snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)mask);
+	if (!mask_str) {
+		if (mask == ~0ULL) {
+			mask_str = "any";
+		} else {
+			snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)mask);
+			mask_str = buf;
+		}
+	}
+
 	err = sys_fsconfig(fs_fd, FSCONFIG_SET_STRING, key,
-			   mask == ~0ULL ? "any" : buf, 0);
+			   mask_str, 0);
 	if (err < 0)
 		err = -errno;
 	return err;
@@ -72,6 +80,7 @@ static int set_delegate_mask(int fs_fd, const char *key, __u64 mask)
 
 struct bpffs_opts {
 	__u64 cmds;
+	const char *cmds_str;
 	__u64 maps;
 	__u64 progs;
 	__u64 attachs;
@@ -93,16 +102,16 @@ static int materialize_bpffs_fd(int fs_fd, struct bpffs_opts *opts)
 	int mnt_fd, err;
 
 	/* set up token delegation mount options */
-	err = set_delegate_mask(fs_fd, "delegate_cmds", opts->cmds);
+	err = set_delegate_mask(fs_fd, "delegate_cmds", opts->cmds, opts->cmds_str);
 	if (!ASSERT_OK(err, "fs_cfg_cmds"))
 		return err;
-	err = set_delegate_mask(fs_fd, "delegate_maps", opts->maps);
+	err = set_delegate_mask(fs_fd, "delegate_maps", opts->maps, NULL);
 	if (!ASSERT_OK(err, "fs_cfg_maps"))
 		return err;
-	err = set_delegate_mask(fs_fd, "delegate_progs", opts->progs);
+	err = set_delegate_mask(fs_fd, "delegate_progs", opts->progs, NULL);
 	if (!ASSERT_OK(err, "fs_cfg_progs"))
 		return err;
-	err = set_delegate_mask(fs_fd, "delegate_attachs", opts->attachs);
+	err = set_delegate_mask(fs_fd, "delegate_attachs", opts->attachs, NULL);
 	if (!ASSERT_OK(err, "fs_cfg_attachs"))
 		return err;
 
@@ -284,13 +293,13 @@ static void child(int sock_fd, struct bpffs_opts *opts, child_callback_fn callba
 	}
 
 	/* ensure unprivileged child cannot set delegation options */
-	err = set_delegate_mask(fs_fd, "delegate_cmds", 0x1);
+	err = set_delegate_mask(fs_fd, "delegate_cmds", 0x1, NULL);
 	ASSERT_EQ(err, -EPERM, "delegate_cmd_eperm");
-	err = set_delegate_mask(fs_fd, "delegate_maps", 0x1);
+	err = set_delegate_mask(fs_fd, "delegate_maps", 0x1, NULL);
 	ASSERT_EQ(err, -EPERM, "delegate_maps_eperm");
-	err = set_delegate_mask(fs_fd, "delegate_progs", 0x1);
+	err = set_delegate_mask(fs_fd, "delegate_progs", 0x1, NULL);
 	ASSERT_EQ(err, -EPERM, "delegate_progs_eperm");
-	err = set_delegate_mask(fs_fd, "delegate_attachs", 0x1);
+	err = set_delegate_mask(fs_fd, "delegate_attachs", 0x1, NULL);
 	ASSERT_EQ(err, -EPERM, "delegate_attachs_eperm");
 
 	/* pass BPF FS context object to parent */
@@ -314,22 +323,22 @@ static void child(int sock_fd, struct bpffs_opts *opts, child_callback_fn callba
 	}
 
 	/* ensure unprivileged child cannot reconfigure to set delegation options */
-	err = set_delegate_mask(fs_fd, "delegate_cmds", ~0ULL);
+	err = set_delegate_mask(fs_fd, "delegate_cmds", 0, "any");
 	if (!ASSERT_EQ(err, -EPERM, "delegate_cmd_eperm_reconfig")) {
 		err = -EINVAL;
 		goto cleanup;
 	}
-	err = set_delegate_mask(fs_fd, "delegate_maps", ~0ULL);
+	err = set_delegate_mask(fs_fd, "delegate_maps", 0, "any");
 	if (!ASSERT_EQ(err, -EPERM, "delegate_maps_eperm_reconfig")) {
 		err = -EINVAL;
 		goto cleanup;
 	}
-	err = set_delegate_mask(fs_fd, "delegate_progs", ~0ULL);
+	err = set_delegate_mask(fs_fd, "delegate_progs", 0, "any");
 	if (!ASSERT_EQ(err, -EPERM, "delegate_progs_eperm_reconfig")) {
 		err = -EINVAL;
 		goto cleanup;
 	}
-	err = set_delegate_mask(fs_fd, "delegate_attachs", ~0ULL);
+	err = set_delegate_mask(fs_fd, "delegate_attachs", 0, "any");
 	if (!ASSERT_EQ(err, -EPERM, "delegate_attachs_eperm_reconfig")) {
 		err = -EINVAL;
 		goto cleanup;
@@ -647,7 +656,7 @@ void test_token(void)
 {
 	if (test__start_subtest("map_token")) {
 		struct bpffs_opts opts = {
-			.cmds = 1ULL << BPF_MAP_CREATE,
+			.cmds_str = "BPF_MAP_CREATE",
 			.maps = 1ULL << BPF_MAP_TYPE_STACK,
 		};
 
@@ -662,7 +671,7 @@ void test_token(void)
 	}
 	if (test__start_subtest("prog_token")) {
 		struct bpffs_opts opts = {
-			.cmds = 1ULL << BPF_PROG_LOAD,
+			.cmds_str = "BPF_PROG_LOAD",
 			.progs = 1ULL << BPF_PROG_TYPE_XDP,
 			.attachs = 1ULL << BPF_XDP,
 		};
