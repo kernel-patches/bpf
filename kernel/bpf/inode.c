@@ -595,6 +595,54 @@ struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type typ
 }
 EXPORT_SYMBOL(bpf_prog_get_type_path);
 
+#define __BPF_KV_FN(name, val) { #name, val },
+static const struct constant_table cmd_kvs[] = {
+	__BPF_CMD_MAPPER(__BPF_KV_FN)
+	{}
+};
+static const struct constant_table map_kvs[] = {
+	{}
+};
+static const struct constant_table prog_kvs[] = {
+	{}
+};
+static const struct constant_table attach_kvs[] = {
+	{}
+};
+#undef __BPF_KV_FN
+
+static void seq_print_delegate_opts(struct seq_file *m,
+				    const char *opt_name,
+				    const struct constant_table *tbl,
+				    u64 delegate_msk, u64 any_msk)
+{
+	bool first = true;
+	u64 msk;
+	int i;
+
+	delegate_msk &= any_msk; /* clear unknown bits */
+
+	if (delegate_msk == 0)
+		return;
+
+	if (delegate_msk == any_msk) {
+		seq_printf(m, ",%s=any", opt_name);
+		return;
+	}
+
+	seq_printf(m, ",%s", opt_name);
+	for (i = 0; cmd_kvs[i].name; i++) {
+		msk = 1ULL << cmd_kvs[i].value;
+		if (delegate_msk & msk) {
+			seq_printf(m, "%c%s", first ? '=' : ':', cmd_kvs[i].name);
+			delegate_msk &= ~msk;
+			first = false;
+		}
+	}
+	if (delegate_msk)
+		seq_printf(m, "%c0x%llx", first ? '=' : ':', delegate_msk);
+}
+
 /*
  * Display the mount options in /proc/mounts.
  */
@@ -608,28 +656,17 @@ static int bpf_show_options(struct seq_file *m, struct dentry *root)
 		seq_printf(m, ",mode=%o", mode);
 
 	mask = (1ULL << __MAX_BPF_CMD) - 1;
-	if ((opts->delegate_cmds & mask) == mask)
-		seq_printf(m, ",delegate_cmds=any");
-	else if (opts->delegate_cmds)
-		seq_printf(m, ",delegate_cmds=0x%llx", opts->delegate_cmds);
+	seq_print_delegate_opts(m, "delegate_cmds", cmd_kvs, opts->delegate_cmds, mask);
 
 	mask = (1ULL << __MAX_BPF_MAP_TYPE) - 1;
-	if ((opts->delegate_maps & mask) == mask)
-		seq_printf(m, ",delegate_maps=any");
-	else if (opts->delegate_maps)
-		seq_printf(m, ",delegate_maps=0x%llx", opts->delegate_maps);
+	seq_print_delegate_opts(m, "delegate_maps", map_kvs, opts->delegate_maps, mask);
 
 	mask = (1ULL << __MAX_BPF_PROG_TYPE) - 1;
-	if ((opts->delegate_progs & mask) == mask)
-		seq_printf(m, ",delegate_progs=any");
-	else if (opts->delegate_progs)
-		seq_printf(m, ",delegate_progs=0x%llx", opts->delegate_progs);
+	seq_print_delegate_opts(m, "delegate_progs", prog_kvs, opts->delegate_progs, mask);
 
 	mask = (1ULL << __MAX_BPF_ATTACH_TYPE) - 1;
-	if ((opts->delegate_attachs & mask) == mask)
-		seq_printf(m, ",delegate_attachs=any");
-	else if (opts->delegate_attachs)
-		seq_printf(m, ",delegate_attachs=0x%llx", opts->delegate_attachs);
+	seq_print_delegate_opts(m, "delegate_attachs", attach_kvs, opts->delegate_attachs, mask);
+
 	return 0;
 }
 
@@ -673,7 +710,6 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	struct bpf_mount_opts *opts = fc->s_fs_info;
 	struct fs_parse_result result;
 	int opt, err;
-	u64 msk;
 
 	opt = fs_parse(fc, bpf_fs_parameters, param, &result);
 	if (opt < 0) {
@@ -700,25 +736,54 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	case OPT_DELEGATE_CMDS:
 	case OPT_DELEGATE_MAPS:
 	case OPT_DELEGATE_PROGS:
-	case OPT_DELEGATE_ATTACHS:
-		if (strcmp(param->string, "any") == 0) {
-			msk = ~0ULL;
-		} else {
-			err = kstrtou64(param->string, 0, &msk);
-			if (err)
-				return err;
+	case OPT_DELEGATE_ATTACHS: {
+		const struct constant_table *kvs;
+		u64 *delegate_msk, msk = 0;
+		char *p;
+		int val;
+
+		switch (opt) {
+		case OPT_DELEGATE_CMDS:
+			delegate_msk = &opts->delegate_cmds;
+			kvs = cmd_kvs;
+			break;
+		case OPT_DELEGATE_MAPS:
+			delegate_msk = &opts->delegate_maps;
+			kvs = map_kvs;
+			break;
+		case OPT_DELEGATE_PROGS:
+			delegate_msk = &opts->delegate_progs;
+			kvs = prog_kvs;
+			break;
+		case OPT_DELEGATE_ATTACHS:
+			delegate_msk = &opts->delegate_attachs;
+			kvs = attach_kvs;
+			break;
+		default:
+			return -EINVAL;
 		}
+
+		while ((p = strsep(&param->string, ":"))) {
+			if (strcmp(p, "any") == 0) {
+				msk |= ~0ULL;
+			} else if ((val = lookup_constant(kvs, p, -1)) >= 0) {
+				msk |= 1ULL << val;
+			} else {
+				err = kstrtou64(p, 0, &msk);
+				if (err)
+					return err;
+			}
+		}
+
 		/* Setting delegation mount options requires privileges */
 		if (msk && !capable(CAP_SYS_ADMIN))
 			return -EPERM;
-		switch (opt) {
-		case OPT_DELEGATE_CMDS: opts->delegate_cmds |= msk; break;
-		case OPT_DELEGATE_MAPS: opts->delegate_maps |= msk; break;
-		case OPT_DELEGATE_PROGS: opts->delegate_progs |= msk; break;
-		case OPT_DELEGATE_ATTACHS: opts->delegate_attachs |= msk; break;
-		default: return -EINVAL;
-		}
+
+		*delegate_msk |= msk;
 		break;
+	}
+	default:
+		/* ignore unknown mount options */
 	}
 
 	return 0;
