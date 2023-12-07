@@ -360,17 +360,29 @@ enum kern_feature_id {
 	__FEAT_CNT,
 };
 
-struct kern_feature_cache;
+enum kern_feature_result {
+	FEAT_UNKNOWN = 0,
+	FEAT_SUPPORTED = 1,
+	FEAT_MISSING = 2,
+};
+
+struct kern_feature_cache {
+	enum kern_feature_result res[__FEAT_CNT];
+	int token_fd;
+};
+
 bool feat_supported(struct kern_feature_cache *cache, enum kern_feature_id feat_id);
 bool kernel_supports(const struct bpf_object *obj, enum kern_feature_id feat_id);
 
-int probe_memcg_account(void);
+int probe_kern_syscall_wrapper(int token_fd);
+int probe_memcg_account(int token_fd);
 int bump_rlimit_memlock(void);
 
 int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz);
 int parse_cpu_mask_file(const char *fcpu, bool **mask, int *mask_sz);
 int libbpf__load_raw_btf(const char *raw_types, size_t types_len,
-			 const char *str_sec, size_t str_len);
+			 const char *str_sec, size_t str_len,
+			 int token_fd);
 int btf_load_into_kernel(struct btf *btf, char *log_buf, size_t log_sz, __u32 log_level);
 
 struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
@@ -601,7 +613,5 @@ int elf_resolve_syms_offsets(const char *binary_path, int cnt,
 			     int st_type);
 int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 				 unsigned long **poffsets, size_t *pcnt);
-
-int probe_kern_syscall_wrapper(void);
 
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */
