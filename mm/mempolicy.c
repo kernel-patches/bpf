@@ -1483,6 +1483,10 @@ static long kernel_mbind(unsigned long start, unsigned long len,
 	if (err)
 		return err;
 
+	err = security_set_mempolicy(lmode, mode_flags, &nodes, flags);
+	if (err)
+		return err;
+
 	return do_mbind(start, len, lmode, mode_flags, &nodes, flags);
 }
 
@@ -1574,6 +1578,10 @@ static long kernel_set_mempolicy(int mode, const unsigned long __user *nmask,
 		return err;
 
 	err = get_nodes(&nodes, nmask, maxnode);
+	if (err)
+		return err;
+
+	err = security_set_mempolicy(lmode, mode_flags, &nodes, 0);
 	if (err)
 		return err;
 
