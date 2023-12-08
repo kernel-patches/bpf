@@ -85,17 +85,17 @@ struct bpf_map_ops {
 	int (*map_get_next_key)(struct bpf_map *map, void *key, void *next_key);
 	void (*map_release_uref)(struct bpf_map *map);
 	void *(*map_lookup_elem_sys_only)(struct bpf_map *map, void *key);
-	int (*map_lookup_batch)(struct bpf_map *map, const union bpf_attr *attr,
+	int (*map_lookup_batch)(struct bpf_map *map, union bpf_attr *attr,
 				union bpf_attr __user *uattr);
 	int (*map_lookup_and_delete_elem)(struct bpf_map *map, void *key,
 					  void *value, u64 flags);
 	int (*map_lookup_and_delete_batch)(struct bpf_map *map,
-					   const union bpf_attr *attr,
+					   union bpf_attr *attr,
 					   union bpf_attr __user *uattr);
 	int (*map_update_batch)(struct bpf_map *map, struct file *map_file,
-				const union bpf_attr *attr,
+				union bpf_attr *attr,
 				union bpf_attr __user *uattr);
-	int (*map_delete_batch)(struct bpf_map *map, const union bpf_attr *attr,
+	int (*map_delete_batch)(struct bpf_map *map, union bpf_attr *attr,
 				union bpf_attr __user *uattr);
 
 	/* funcs callable from userspace and from eBPF programs */
@@ -2131,13 +2131,13 @@ void bpf_map_area_free(void *base);
 bool bpf_map_write_active(const struct bpf_map *map);
 void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);
 int  generic_map_lookup_batch(struct bpf_map *map,
-			      const union bpf_attr *attr,
+			      union bpf_attr *attr,
 			      union bpf_attr __user *uattr);
 int  generic_map_update_batch(struct bpf_map *map, struct file *map_file,
-			      const union bpf_attr *attr,
+			      union bpf_attr *attr,
 			      union bpf_attr __user *uattr);
 int  generic_map_delete_batch(struct bpf_map *map,
-			      const union bpf_attr *attr,
+			      union bpf_attr *attr,
 			      union bpf_attr __user *uattr);
 struct bpf_map *bpf_map_get_curr_or_next(u32 *id);
 struct bpf_prog *bpf_prog_get_curr_or_next(u32 *id);

@@ -1673,7 +1673,7 @@ static int htab_lru_percpu_map_lookup_and_delete_elem(struct bpf_map *map,
 
 static int
 __htab_map_lookup_and_delete_batch(struct bpf_map *map,
-				   const union bpf_attr *attr,
+				   union bpf_attr *attr,
 				   union bpf_attr __user *uattr,
 				   bool do_delete, bool is_lru_map,
 				   bool is_percpu)
@@ -1708,6 +1708,7 @@ __htab_map_lookup_and_delete_batch(struct bpf_map *map,
 	if (!max_count)
 		return 0;
 
+	attr->batch.count = 0;
 	if (put_user(0, &uattr->batch.count))
 		return -EFAULT;
 
@@ -1845,6 +1846,7 @@ again_nocopy:
 		}
 		dst_key += key_size;
 		dst_val += value_size;
+		attr->batch.count++;
 	}
 
 	htab_unlock_bucket(htab, b, batch, flags);
@@ -1900,7 +1902,7 @@ out:
 }
 
 static int
-htab_percpu_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
+htab_percpu_map_lookup_batch(struct bpf_map *map, union bpf_attr *attr,
 			     union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, false,
@@ -1909,7 +1911,7 @@ htab_percpu_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
 
 static int
 htab_percpu_map_lookup_and_delete_batch(struct bpf_map *map,
-					const union bpf_attr *attr,
+					union bpf_attr *attr,
 					union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, true,
@@ -1917,7 +1919,7 @@ htab_percpu_map_lookup_and_delete_batch(struct bpf_map *map,
 }
 
 static int
-htab_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
+htab_map_lookup_batch(struct bpf_map *map, union bpf_attr *attr,
 		      union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, false,
@@ -1926,7 +1928,7 @@ htab_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
 
 static int
 htab_map_lookup_and_delete_batch(struct bpf_map *map,
-				 const union bpf_attr *attr,
+				 union bpf_attr *attr,
 				 union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, true,
@@ -1935,7 +1937,7 @@ htab_map_lookup_and_delete_batch(struct bpf_map *map,
 
 static int
 htab_lru_percpu_map_lookup_batch(struct bpf_map *map,
-				 const union bpf_attr *attr,
+				 union bpf_attr *attr,
 				 union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, false,
@@ -1944,7 +1946,7 @@ htab_lru_percpu_map_lookup_batch(struct bpf_map *map,
 
 static int
 htab_lru_percpu_map_lookup_and_delete_batch(struct bpf_map *map,
-					    const union bpf_attr *attr,
+					    union bpf_attr *attr,
 					    union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, true,
@@ -1952,7 +1954,7 @@ htab_lru_percpu_map_lookup_and_delete_batch(struct bpf_map *map,
 }
 
 static int
-htab_lru_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
+htab_lru_map_lookup_batch(struct bpf_map *map, union bpf_attr *attr,
 			  union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, false,
@@ -1961,7 +1963,7 @@ htab_lru_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
 
 static int
 htab_lru_map_lookup_and_delete_batch(struct bpf_map *map,
-				     const union bpf_attr *attr,
+				     union bpf_attr *attr,
 				     union bpf_attr __user *uattr)
 {
 	return __htab_map_lookup_and_delete_batch(map, attr, uattr, true,

@@ -1711,7 +1711,7 @@ err_put:
 }
 
 int generic_map_delete_batch(struct bpf_map *map,
-			     const union bpf_attr *attr,
+			     union bpf_attr *attr,
 			     union bpf_attr __user *uattr)
 {
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
@@ -1731,6 +1731,7 @@ int generic_map_delete_batch(struct bpf_map *map,
 	if (!max_count)
 		return 0;
 
+	attr->batch.count = 0;
 	if (put_user(0, &uattr->batch.count))
 		return -EFAULT;
 
@@ -1758,6 +1759,8 @@ int generic_map_delete_batch(struct bpf_map *map,
 			break;
 		cond_resched();
 	}
+
+	attr->batch.count = cp;
 	if (copy_to_user(&uattr->batch.count, &cp, sizeof(cp)))
 		err = -EFAULT;
 
@@ -1767,7 +1770,7 @@ int generic_map_delete_batch(struct bpf_map *map,
 }
 
 int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
-			     const union bpf_attr *attr,
+			     union bpf_attr *attr,
 			     union bpf_attr __user *uattr)
 {
 	void __user *values = u64_to_user_ptr(attr->batch.values);
@@ -1790,6 +1793,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 	if (!max_count)
 		return 0;
 
+	attr->batch.count = 0;
 	if (put_user(0, &uattr->batch.count))
 		return -EFAULT;
 
@@ -1818,6 +1822,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 		cond_resched();
 	}
 
+	attr->batch.count = cp;
 	if (copy_to_user(&uattr->batch.count, &cp, sizeof(cp)))
 		err = -EFAULT;
 
@@ -1829,9 +1834,8 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 
 #define MAP_LOOKUP_RETRIES 3
 
-int generic_map_lookup_batch(struct bpf_map *map,
-				    const union bpf_attr *attr,
-				    union bpf_attr __user *uattr)
+int generic_map_lookup_batch(struct bpf_map *map, union bpf_attr *attr,
+			     union bpf_attr __user *uattr)
 {
 	void __user *uobatch = u64_to_user_ptr(attr->batch.out_batch);
 	void __user *ubatch = u64_to_user_ptr(attr->batch.in_batch);
@@ -1854,6 +1858,7 @@ int generic_map_lookup_batch(struct bpf_map *map,
 	if (!max_count)
 		return 0;
 
+	attr->batch.count = 0;
 	if (put_user(0, &uattr->batch.count))
 		return -EFAULT;
 
@@ -1919,6 +1924,7 @@ int generic_map_lookup_batch(struct bpf_map *map,
 	if (err == -EFAULT)
 		goto free_buf;
 
+	attr->batch.count = cp;
 	if ((copy_to_user(&uattr->batch.count, &cp, sizeof(cp)) ||
 		    (cp && copy_to_user(uobatch, prev_key, map->key_size))))
 		err = -EFAULT;
@@ -4998,7 +5004,7 @@ put_file:
 		err = fn(__VA_ARGS__);		\
 	} while (0)
 
-static int bpf_map_do_batch(const union bpf_attr *attr,
+static int bpf_map_do_batch(union bpf_attr *attr,
 			    union bpf_attr __user *uattr,
 			    int cmd)
 {
@@ -5038,7 +5044,8 @@ static int bpf_map_do_batch(const union bpf_attr *attr,
 		BPF_DO_BATCH(map->ops->map_delete_batch, map, attr, uattr);
 err_put:
 	if (has_write) {
-		maybe_wait_bpf_programs(map);
+		if (attr->batch.count)
+			maybe_wait_bpf_programs(map);
 		bpf_map_write_active_dec(map);
 	}
 	fdput(f);
