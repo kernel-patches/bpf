@@ -783,7 +783,7 @@ static void fgraph_call_retfunc(struct ftrace_regs *fregs,
 	trace.rettime = trace_clock_local();
 #ifdef CONFIG_FUNCTION_GRAPH_RETVAL
 	if (fregs)
-		trace.retval = ftrace_regs_return_value(fregs);
+		trace.retval = ftrace_regs_get_return_value(fregs);
 	else
 		trace.retval = fgraph_ret_regs_return_value(ret_regs);
 #endif
