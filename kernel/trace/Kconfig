@@ -296,11 +296,9 @@ config DYNAMIC_FTRACE_WITH_ARGS
 
 config FPROBE
 	bool "Kernel Function Probe (fprobe)"
-	depends on FUNCTION_TRACER
-	depends on DYNAMIC_FTRACE_WITH_REGS || DYNAMIC_FTRACE_WITH_ARGS
-	depends on HAVE_PT_REGS_TO_FTRACE_REGS_CAST || !HAVE_DYNAMIC_FTRACE_WITH_ARGS
-	depends on HAVE_RETHOOK
-	select RETHOOK
+	depends on FUNCTION_GRAPH_TRACER
+	depends on HAVE_FUNCTION_GRAPH_FREGS
+	depends on DYNAMIC_FTRACE_WITH_ARGS || !HAVE_DYNAMIC_FTRACE_WITH_ARGS
 	default n
 	help
 	  This option enables kernel function probe (fprobe) based on ftrace.
