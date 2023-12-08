@@ -35,6 +35,7 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
+#include <linux/rcupdate_wait.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -140,15 +141,24 @@ static u32 bpf_map_value_size(const struct bpf_map *map)
 		return  map->value_size;
 }
 
-static void maybe_wait_bpf_programs(struct bpf_map *map)
+static void maybe_wait_bpf_programs(struct bpf_map *map, bool rcu_trace_lock_held)
 {
-	/* Wait for any running BPF programs to complete so that
-	 * userspace, when we return to it, knows that all programs
-	 * that could be running use the new map value.
+	/* Wait for any running non-sleepable and sleepable BPF programs to
+	 * complete, so that userspace, when we return to it, knows that all
+	 * programs that could be running use the new map value. However
+	 * syscall program can also use bpf syscall to update or delete inner
+	 * map in outer map, and it holds rcu_read_lock_trace() before doing
+	 * the bpf syscall. If use synchronize_rcu_mult(call_rcu_tasks_trace)
+	 * to wait for the exit of running sleepable BPF programs, there will
+	 * be dead-lock, so skip the waiting for syscall program.
 	 */
 	if (map->map_type == BPF_MAP_TYPE_HASH_OF_MAPS ||
-	    map->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
-		synchronize_rcu();
+	    map->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS) {
+		if (atomic64_read(&map->sleepable_refcnt) && !rcu_trace_lock_held)
+			synchronize_rcu_mult(call_rcu, call_rcu_tasks_trace);
+		else
+			synchronize_rcu();
+	}
 }
 
 static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
@@ -1577,7 +1587,7 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 
 	err = bpf_map_update_value(map, f.file, key, value, attr->flags);
 	if (!err)
-		maybe_wait_bpf_programs(map);
+		maybe_wait_bpf_programs(map, bpfptr_is_kernel(uattr));
 
 	kvfree(value);
 free_key:
@@ -1634,7 +1644,7 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 	rcu_read_unlock();
 	bpf_enable_instrumentation();
 	if (!err)
-		maybe_wait_bpf_programs(map);
+		maybe_wait_bpf_programs(map, bpfptr_is_kernel(uattr));
 out:
 	kvfree(key);
 err_put:
@@ -5045,7 +5055,7 @@ static int bpf_map_do_batch(union bpf_attr *attr,
 err_put:
 	if (has_write) {
 		if (attr->batch.count)
-			maybe_wait_bpf_programs(map);
+			maybe_wait_bpf_programs(map, false);
 		bpf_map_write_active_dec(map);
 	}
 	fdput(f);
