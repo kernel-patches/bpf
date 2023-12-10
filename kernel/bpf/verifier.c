@@ -1764,6 +1764,40 @@ static void __mark_reg_const_zero(struct bpf_reg_state *reg)
 	reg->type = SCALAR_VALUE;
 }
 
+#define CHECK_REG_MIN(value)			\
+do {						\
+	if ((value) == (typeof(value))imm)	\
+		value++;			\
+} while (0)
+
+#define CHECK_REG_MAX(value)			\
+do {						\
+	if ((value) == (typeof(value))imm)	\
+		value--;			\
+} while (0)
+
+static void mark_reg32_not_equal(struct bpf_reg_state *reg, u64 imm)
+{
+		CHECK_REG_MIN(reg->s32_min_value);
+		CHECK_REG_MAX(reg->s32_max_value);
+		CHECK_REG_MIN(reg->u32_min_value);
+		CHECK_REG_MAX(reg->u32_max_value);
+}
+
+static void mark_reg_not_equal(struct bpf_reg_state *reg, u64 imm)
+{
+		CHECK_REG_MIN(reg->smin_value);
+		CHECK_REG_MAX(reg->smax_value);
+
+		CHECK_REG_MIN(reg->umin_value);
+		CHECK_REG_MAX(reg->umax_value);
+
+		CHECK_REG_MIN(reg->s32_min_value);
+		CHECK_REG_MAX(reg->s32_max_value);
+		CHECK_REG_MIN(reg->u32_min_value);
+		CHECK_REG_MAX(reg->u32_max_value);
+}
+
 static void mark_reg_known_zero(struct bpf_verifier_env *env,
 				struct bpf_reg_state *regs, u32 regno)
 {
@@ -14332,7 +14366,16 @@ again:
 		}
 		break;
 	case BPF_JNE:
-		/* we don't derive any new information for inequality yet */
+		/* try to recompute the bound of reg1 if reg2 is a const and
+		 * is exactly the edge of reg1.
+		 */
+		if (is_reg_const(reg2, is_jmp32)) {
+			val = reg_const_value(reg2, is_jmp32);
+			if (is_jmp32)
+				mark_reg32_not_equal(reg1, val);
+			else
+				mark_reg_not_equal(reg1, val);
+		}
 		break;
 	case BPF_JSET:
 		if (!is_reg_const(reg2, is_jmp32))
