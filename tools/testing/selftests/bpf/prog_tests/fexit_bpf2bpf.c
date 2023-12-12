@@ -374,6 +374,9 @@ static void test_obj_load_failure_common(const char *obj_file,
 	err = bpf_program__set_attach_target(prog, pkt_fd, NULL);
 	ASSERT_OK(err, "set_attach_target");
 
+	if (env.verbosity > VERBOSE_NONE)
+		bpf_program__set_log_level(prog, 2);
+
 	/* It should fail to load the program */
 	err = bpf_object__load(obj);
 	if (CHECK(!err, "bpf_obj_load should fail", "err %d\n", err))
@@ -396,6 +399,15 @@ static void test_func_map_prog_compatibility(void)
 	/* test with spin lock map value in the replaced program */
 	test_obj_load_failure_common("./freplace_attach_probe.bpf.o",
 				     "./test_attach_probe.bpf.o");
+}
+
+static void test_func_replace_unreliable(void)
+{
+	/* freplace'ing unreliable main prog should fail with error
+	 * "Cannot replace static functions"
+	 */
+	test_obj_load_failure_common("freplace_unreliable_prog.bpf.o",
+				     "./verifier_btf_unreliable_prog.bpf.o");
 }
 
 static void test_func_replace_global_func(void)
@@ -563,6 +575,8 @@ void serial_test_fexit_bpf2bpf(void)
 		test_func_replace_return_code();
 	if (test__start_subtest("func_map_prog_compatibility"))
 		test_func_map_prog_compatibility();
+	if (test__start_subtest("func_replace_unreliable"))
+		test_func_replace_unreliable();
 	if (test__start_subtest("func_replace_multi"))
 		test_func_replace_multi();
 	if (test__start_subtest("fmod_ret_freplace"))
