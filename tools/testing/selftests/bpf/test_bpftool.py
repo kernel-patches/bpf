@@ -3,10 +3,12 @@
 
 import collections
 import functools
+import io
 import json
 import os
 import socket
 import subprocess
+import tempfile
 import unittest
 
 
@@ -22,6 +24,10 @@ class IfaceNotFoundError(Exception):
 
 
 class UnprivilegedUserError(Exception):
+    pass
+
+
+class MissingDependencyError(Exception):
     pass
 
 
@@ -63,12 +69,26 @@ DMESG_EMITTING_HELPERS = [
         "bpf_trace_vprintk",
     ]
 
+BPFFS_MOUNT = "/sys/fs/bpf/"
+
+DUMMY_SK_BUFF_USER_OBJ = cur_dir + "/dummy_sk_buff_user.bpf.o"
+DUMMY_NO_CONTEXT_BTF_OBJ = cur_dir + "/dummy_no_context_btf.bpf.o"
+DUMMY_PROG_WITH_MAP_OBJ = cur_dir + "/dummy_prog_with_map.bpf.o"
+
 class TestBpftool(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if os.getuid() != 0:
             raise UnprivilegedUserError(
                 "This test suite needs root privileges")
+        objs = [DUMMY_SK_BUFF_USER_OBJ,
+                DUMMY_NO_CONTEXT_BTF_OBJ,
+                DUMMY_PROG_WITH_MAP_OBJ]
+        for obj in objs:
+            if os.path.exists(obj):
+                continue
+            raise MissingDependencyError(
+                "File " + obj + " does not exist, make sure progs/*.c are compiled")
 
     @default_iface
     def test_feature_dev_json(self, iface):
@@ -172,3 +192,91 @@ class TestBpftool(unittest.TestCase):
         res = bpftool(["feature", "probe", "macros"])
         for pattern in expected_patterns:
             self.assertRegex(res, pattern)
+
+    def assertStringsPresent(self, text, patterns):
+        pos = 0
+        for i, pat in enumerate(patterns):
+            m = text.find(pat, pos)
+            if m == -1:
+                with io.StringIO() as msg:
+                    print("Can't find expected string:", file=msg)
+                    for s in patterns[0:i]:
+                        print("    MATCHED: " + s, file=msg)
+                    print("NOT MATCHED: " + pat, file=msg)
+                    print("", file=msg)
+                    print("Searching in:", file=msg)
+                    print(text, file=msg)
+                    self.fail(msg.getvalue())
+            pos += len(pat)
+
+    def assertPreserveStaticOffset(self, btf_dump, types):
+        self.assertStringsPresent(btf_dump, [
+            "#if !defined(BPF_NO_PRESERVE_STATIC_OFFSET) && " +
+              "__has_attribute(preserve_static_offset)",
+            "#pragma clang attribute push " +
+              "(__attribute__((preserve_static_offset)), apply_to = record)"
+        ] + ["struct " + t + ";" for t in types] + [
+            "#endif /* BPF_NO_PRESERVE_STATIC_OFFSET */"
+        ])
+
+    # Load a small program that has some context types in it's BTF,
+    # verify that "bpftool btf dump file ... format c" emits
+    # preserve_static_offset attribute.
+    def test_c_dump_preserve_static_offset_present(self):
+        res = bpftool(["btf", "dump", "file", DUMMY_SK_BUFF_USER_OBJ, "format", "c"])
+        self.assertPreserveStaticOffset(res, ["__sk_buff"])
+
+    # Load a small program that has no context types in it's BTF,
+    # verify that "bpftool btf dump file ... format c" does not emit
+    # preserve_static_offset attribute.
+    def test_c_dump_no_preserve_static_offset(self):
+        res = bpftool(["btf", "dump", "file", DUMMY_NO_CONTEXT_BTF_OBJ, "format", "c"])
+        self.assertNotRegex(res, "preserve_static_offset")
+        self.assertStringsPresent(res, [
+            "preserve_access_index",
+            "typedef unsigned int __u32;"
+        ])
+
+    # When BTF is dumped for maps bpftool follows a slightly different
+    # code path, that filters which BTF types would be printed.
+    # Test this code path here:
+    # - load a program that uses a map, value type of which references
+    #   a number of structs annotated with preserve_static_offset;
+    # - dump BTF for that map and check preserve_static_offset annotation
+    #   for expected structs.
+    def test_c_dump_preserve_static_offset_map(self):
+        prog_pin = tempfile.mktemp(prefix="dummy_prog_with_map", dir=BPFFS_MOUNT)
+        maps_dir = tempfile.mktemp(prefix="dummy_prog_with_map_maps", dir=BPFFS_MOUNT)
+        map_pin1 = maps_dir + "/test_map1"
+        map_pin2 = maps_dir + "/test_map2"
+        map_pin3 = maps_dir + "/test_map3"
+
+        bpftool(["prog", "load", DUMMY_PROG_WITH_MAP_OBJ, prog_pin, "pinmaps", maps_dir])
+        try:
+            map1 = bpftool(["btf", "dump", "map", "pinned", map_pin1, "value", "format", "c"])
+            map2 = bpftool(["btf", "dump", "map", "pinned", map_pin2, "value", "format", "c"])
+            map3 = bpftool(["btf", "dump", "map", "pinned", map_pin3, "value", "format", "c"])
+        finally:
+            os.remove(prog_pin)
+            os.remove(map_pin1)
+            os.remove(map_pin2)
+            os.remove(map_pin3)
+            os.rmdir(maps_dir)
+
+        # test_map1 should have all types except struct test_struct_{f,h}
+        self.assertPreserveStaticOffset(map1, [
+            "test_struct_a", "test_struct_b", "test_struct_c",
+            "test_struct_d", "test_struct_e",
+        ])
+        self.assertNotRegex(map1, "test_struct_f")
+
+        # test_map2 should have only struct test_struct_f
+        self.assertPreserveStaticOffset(map2, [
+            "test_struct_f"
+        ])
+        self.assertNotRegex(map2, "struct test_struct_a")
+
+        # test_map3 should include pt_regs as a dependency
+        self.assertPreserveStaticOffset(map3, [
+            "pt_regs"
+        ])
