@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import unittest
+import io
 
 
 # Add the source tree of bpftool and /usr/local/sbin to PATH
@@ -22,6 +23,10 @@ class IfaceNotFoundError(Exception):
 
 
 class UnprivilegedUserError(Exception):
+    pass
+
+
+class MissingDependencyError(Exception):
     pass
 
 
@@ -63,12 +68,22 @@ DMESG_EMITTING_HELPERS = [
         "bpf_trace_vprintk",
     ]
 
+DUMMY_SK_BUFF_USER_OBJ = cur_dir + "/dummy_sk_buff_user.bpf.o"
+DUMMY_NO_CONTEXT_BTF_OBJ = cur_dir + "/dummy_no_context_btf.bpf.o"
+
 class TestBpftool(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if os.getuid() != 0:
             raise UnprivilegedUserError(
                 "This test suite needs root privileges")
+        objs = [DUMMY_SK_BUFF_USER_OBJ,
+                DUMMY_NO_CONTEXT_BTF_OBJ]
+        for obj in objs:
+            if os.path.exists(obj):
+                continue
+            raise MissingDependencyError(
+                "File " + obj + " does not exist, make sure progs/*.c are compiled")
 
     @default_iface
     def test_feature_dev_json(self, iface):
@@ -172,3 +187,49 @@ class TestBpftool(unittest.TestCase):
         res = bpftool(["feature", "probe", "macros"])
         for pattern in expected_patterns:
             self.assertRegex(res, pattern)
+
+    def assertStringsPresent(self, text, patterns):
+        pos = 0
+        for i, pat in enumerate(patterns):
+            m = text.find(pat, pos)
+            if m == -1:
+                with io.StringIO() as msg:
+                    print("Can't find expected string:", file=msg)
+                    for s in patterns[0:i]:
+                        print("    MATCHED: " + s, file=msg)
+                    print("NOT MATCHED: " + pat, file=msg)
+                    print("", file=msg)
+                    print("Searching in:", file=msg)
+                    print(text, file=msg)
+                    self.fail(msg.getvalue())
+            pos += len(pat)
+
+    # Load a small program that has some context types in it's BTF,
+    # verify that "bpftool btf dump file ... format c" emits
+    # preserve_static_offset attribute.
+    def test_c_dump_preserve_static_offset_present(self):
+        res = bpftool(["btf", "dump", "file", DUMMY_SK_BUFF_USER_OBJ, "format", "c"])
+        self.assertStringsPresent(res, [
+            "#if !defined(BPF_NO_PRESERVE_STATIC_OFFSET) && " +
+              "__has_attribute(preserve_static_offset)",
+            "#pragma clang attribute push " +
+              "(__attribute__((preserve_static_offset)), apply_to = record)",
+            "struct __sk_buff;",
+            "struct bpf_sock;",
+            "#pragma clang attribute pop",
+            "#endif /* BPF_NO_PRESERVE_STATIC_OFFSET */",
+            "#pragma clang attribute push " +
+              "(__attribute__((preserve_access_index)), apply_to = record)",
+            "struct __sk_buff {",
+        ])
+
+    # Load a small program that has no context types in it's BTF,
+    # verify that "bpftool btf dump file ... format c" does not emit
+    # preserve_static_offset attribute.
+    def test_c_dump_no_preserve_static_offset(self):
+        res = bpftool(["btf", "dump", "file", DUMMY_NO_CONTEXT_BTF_OBJ, "format", "c"])
+        self.assertNotRegex(res, "preserve_static_offset")
+        self.assertStringsPresent(res, [
+            "preserve_access_index",
+            "typedef unsigned int __u32;"
+        ])
