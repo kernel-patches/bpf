@@ -460,11 +460,118 @@ static void __printf(2, 0) btf_dump_printf(void *ctx,
 	vfprintf(stdout, fmt, args);
 }
 
+static const char * const context_types[] = {
+	"bpf_cgroup_dev_ctx",
+	"bpf_nf_ctx",
+	"bpf_perf_event_data",
+	"bpf_raw_tracepoint_args",
+	"bpf_sk_lookup",
+	"bpf_sock",
+	"bpf_sock_addr",
+	"bpf_sock_ops",
+	"bpf_sockopt",
+	"bpf_sysctl",
+	"__sk_buff",
+	"sk_msg_md",
+	"sk_reuseport_md",
+	"xdp_md",
+	"pt_regs",
+};
+
+static bool is_context_type_name(const struct btf *btf, const char *name)
+{
+	__u32 i;
+
+	for (i = 0; i < ARRAY_SIZE(context_types); ++i)
+		if (strcmp(name, context_types[i]) == 0)
+			return true;
+
+	return false;
+}
+
+/* When root_type_ids == NULL represents an iterator
+ * over all type ids in BTF: [1 .. btf__type_cnt(btf)].
+ *
+ * When root_type_ids != NULL represents an iterator
+ * over all type ids in root_type_ids array.
+ */
+struct root_type_iter {
+	__u32 *root_type_ids;
+	__u32 cnt;
+	__u32 pos;
+};
+
+static struct root_type_iter make_root_type_iter(const struct btf *btf,
+						 __u32 *root_type_ids, int root_type_cnt)
+{
+	if (root_type_cnt)
+		return (struct root_type_iter) { root_type_ids, root_type_cnt, 0 };
+
+	return (struct root_type_iter) { NULL, btf__type_cnt(btf), 1 };
+}
+
+static __u32 root_type_iter_next(struct root_type_iter *iter)
+{
+	if (iter->pos >= iter->cnt)
+		return 0;
+
+	if (iter->root_type_ids)
+		return iter->root_type_ids[iter->pos++];
+
+	return iter->pos++;
+}
+
+/* Iterate all types in 'btf', if there are types with name matching
+ * name of a BPF program context parameter type - emit a forward
+ * declaration for this type annotated with preserve_static_offset
+ * attribute [0].
+ *
+ * [0] https://clang.llvm.org/docs/AttributeReference.html#preserve-static-offset
+ */
+static void emit_static_offset_protos(const struct btf *btf, struct root_type_iter iter)
+{
+	bool first = true;
+	__u32 id;
+
+	while ((id = root_type_iter_next(&iter))) {
+		const struct btf_type *t;
+		const char *name;
+
+		t = btf__type_by_id(btf, id);
+		if (!t)
+			continue;
+
+		name = btf__name_by_offset(btf, t->name_off);
+		if (!name)
+			continue;
+
+		if (!btf_is_struct(t) || !is_context_type_name(btf, name))
+			continue;
+
+		if (first) {
+			first = false;
+			printf("#if !defined(BPF_NO_PRESERVE_STATIC_OFFSET) && __has_attribute(preserve_static_offset)\n");
+			printf("#pragma clang attribute push (__attribute__((preserve_static_offset)), apply_to = record)\n");
+			printf("\n");
+		}
+
+		printf("struct %s;\n", name);
+	}
+
+	if (!first) {
+		printf("\n");
+		printf("#pragma clang attribute pop\n");
+		printf("#endif /* BPF_NO_PRESERVE_STATIC_OFFSET */\n\n");
+	}
+}
+
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt)
 {
+	struct root_type_iter iter;
 	struct btf_dump *d;
-	int err = 0, i;
+	int err = 0;
+	__u32 id;
 
 	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
 	if (!d)
@@ -473,24 +580,18 @@ static int dump_btf_c(const struct btf *btf,
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
+
+	emit_static_offset_protos(btf, make_root_type_iter(btf, root_type_ids, root_type_cnt));
+
 	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
 	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
 	printf("#endif\n\n");
 
-	if (root_type_cnt) {
-		for (i = 0; i < root_type_cnt; i++) {
-			err = btf_dump__dump_type(d, root_type_ids[i]);
-			if (err)
-				goto done;
-		}
-	} else {
-		int cnt = btf__type_cnt(btf);
-
-		for (i = 1; i < cnt; i++) {
-			err = btf_dump__dump_type(d, i);
-			if (err)
-				goto done;
-		}
+	iter = make_root_type_iter(btf, root_type_ids, root_type_cnt);
+	while ((id = root_type_iter_next(&iter))) {
+		err = btf_dump__dump_type(d, id);
+		if (err)
+			goto done;
 	}
 
 	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
