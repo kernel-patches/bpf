@@ -1032,6 +1032,7 @@ static int sysctl_protected_symlinks __read_mostly;
 static int sysctl_protected_hardlinks __read_mostly;
 static int sysctl_protected_fifos __read_mostly;
 static int sysctl_protected_regular __read_mostly;
+static int sysctl_nscap_mknod __read_mostly;
 
 #ifdef CONFIG_SYSCTL
 static struct ctl_table namei_sysctls[] = {
@@ -1070,6 +1071,15 @@ static struct ctl_table namei_sysctls[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO,
+	},
+	{
+		.procname	= "nscap_mknod",
+		.data		= &sysctl_nscap_mknod,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
 	},
 	{ }
 };
@@ -3941,6 +3951,24 @@ inline struct dentry *user_path_create(int dfd, const char __user *pathname,
 EXPORT_SYMBOL(user_path_create);
 
 /**
+ * sb_mknod_capable - check userns of sb for CAP_MKNOD
+ * @sb:	super block to which userns CAP_MKNOD should be checked
+ *
+ * Check userns of sb for CAP_MKNOD
+ *
+ * Check CAP_MKNOD for owning user namespace of sb if corresponding sysctl is set.
+ * Otherwise just check global capability for current task. This allows
+ * lsm-based guarding of device node creation in non-initial user namespace.
+ */
+static bool sb_mknod_capable(struct super_block *sb)
+{
+	struct user_namespace *user_ns;
+
+	user_ns = sysctl_nscap_mknod ? sb->s_user_ns : &init_user_ns;
+	return ns_capable(user_ns, CAP_MKNOD);
+}
+
+/**
  * vfs_mknod - create device node or file
  * @idmap:	idmap of the mount the inode was found from
  * @dir:	inode of @dentry
@@ -3966,7 +3994,7 @@ int vfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 		return error;
 
 	if ((S_ISCHR(mode) || S_ISBLK(mode)) && !is_whiteout &&
-	    !capable(CAP_MKNOD))
+	    !sb_mknod_capable(dentry->d_sb))
 		return -EPERM;
 
 	if (!dir->i_op->mknod)
