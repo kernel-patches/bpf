@@ -3397,6 +3397,11 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 			goto error_free;
 		}
 
+		if (uprobes[i].offset < 0) {
+			err = -EINVAL;
+			goto error_free;
+		}
+
 		uprobes[i].link = link;
 
 		if (flags & BPF_F_UPROBE_MULTI_RETURN)
