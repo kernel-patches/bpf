@@ -326,6 +326,31 @@ void test_link_api(void)
 	__test_link_api(child);
 }
 
+static void test_attach_api_fails(void)
+{
+	LIBBPF_OPTS(bpf_link_create_opts, opts);
+	const char *path = "/proc/self/exe";
+	struct uprobe_multi *skel = NULL;
+	int prog_fd, link_fd;
+	long offset = -1;
+
+	skel = uprobe_multi__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
+		return;
+
+	/* fail_1 - attach on negative offset */
+	opts.uprobe_multi.path = path;
+	opts.uprobe_multi.offsets = (unsigned long *) &offset;
+	opts.uprobe_multi.cnt = 1;
+
+	prog_fd = bpf_program__fd(skel->progs.uprobe_extra);
+	link_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	if (!ASSERT_EQ(link_fd, -EINVAL, "link_fd"))
+		close(link_fd);
+
+	uprobe_multi__destroy(skel);
+}
+
 static void test_bench_attach_uprobe(void)
 {
 	long attach_start_ns = 0, attach_end_ns = 0;
@@ -412,4 +437,6 @@ void test_uprobe_multi_test(void)
 		test_bench_attach_uprobe();
 	if (test__start_subtest("bench_usdt"))
 		test_bench_attach_usdt();
+	if (test__start_subtest("attach_api_fails"))
+		test_attach_api_fails();
 }
