@@ -1,0 +1,12 @@
+config SECURITY_DEVGUARD
+	bool "Devguard for device node creation"
+	depends on SECURITY
+	depends on CGROUP_BPF
+	default n
+	help
+	  This enables devguard, an LSM that allows to guard device node
+	  creation in non-initial user namespace. It may allow mknod
+	  in cooperation of an attached cgroup device program.
+	  This security module stacks with other LSMs.
+
+	  If you are unsure how to answer this question, answer N.
