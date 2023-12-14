@@ -4232,6 +4232,13 @@ static int selinux_userns_create(const struct cred *cred)
 			USER_NAMESPACE__CREATE, NULL);
 }
 
+static int selinux_set_mempolicy(unsigned long mode, unsigned short mode_flags,
+				 nodemask_t *nmask, unsigned int flags)
+{
+	return avc_has_perm(current_sid(), task_sid_obj(current), SECCLASS_PROCESS,
+			    PROCESS__SETMEMPOLICY, NULL);
+}
+
 /* Returns error only if unable to parse addresses */
 static int selinux_parse_skb_ipv4(struct sk_buff *skb,
 			struct common_audit_data *ad, u8 *proto)
@@ -7066,6 +7073,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(task_kill, selinux_task_kill),
 	LSM_HOOK_INIT(task_to_inode, selinux_task_to_inode),
 	LSM_HOOK_INIT(userns_create, selinux_userns_create),
+	LSM_HOOK_INIT(set_mempolicy, selinux_set_mempolicy),
 
 	LSM_HOOK_INIT(ipc_permission, selinux_ipc_permission),
 	LSM_HOOK_INIT(ipc_getsecid, selinux_ipc_getsecid),
