@@ -365,4 +365,65 @@ int exception_bad_assert_range_with(struct __sk_buff *ctx)
 	return 1;
 }
 
+SEC("tc")
+int exception_assert_if_body_not_executed(struct __sk_buff *ctx)
+{
+	u64 time = bpf_ktime_get_ns();
+
+	bpf_assert_if(time != 0) {
+		return 1;
+	}
+
+	return 2;
+}
+
+SEC("tc")
+int exception_bad_assert_if_body_executed(struct __sk_buff *ctx)
+{
+	u64 time = bpf_ktime_get_ns();
+
+	bpf_assert_if(time == 0) {
+		return 1;
+	}
+
+	return 2;
+}
+
+SEC("tc")
+int exception_bad_assert_if_throws(struct __sk_buff *ctx)
+{
+	u64 time = bpf_ktime_get_ns();
+
+	bpf_assert_if(time == 0) {
+	}
+
+	return 2;
+}
+
+SEC("tc")
+int exception_assert_with_if_body_not_executed(struct __sk_buff *ctx)
+{
+	u64 time = bpf_ktime_get_ns();
+	int ret = 1;
+
+	bpf_assert_with_if(time != 0, ret) {
+		ret = 2;
+	}
+
+	return 3;
+}
+
+SEC("tc")
+int exception_bad_assert_with_if_body_executed(struct __sk_buff *ctx)
+{
+	u64 time = bpf_ktime_get_ns();
+	int ret = 1;
+
+	bpf_assert_with_if(time == 0, ret) {
+		ret = 2;
+	}
+
+	return 3;
+}
+
 char _license[] SEC("license") = "GPL";
