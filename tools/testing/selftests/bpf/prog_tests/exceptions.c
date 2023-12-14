@@ -83,6 +83,11 @@ static void test_exceptions_success(void)
 	RUN_SUCCESS(exception_assert_range_with, 1);
 	RUN_SUCCESS(exception_bad_assert_range, 0);
 	RUN_SUCCESS(exception_bad_assert_range_with, 10);
+	RUN_SUCCESS(exception_assert_if_body_not_executed, 2);
+	RUN_SUCCESS(exception_bad_assert_if_body_executed, 1);
+	RUN_SUCCESS(exception_bad_assert_if_throws, 0);
+	RUN_SUCCESS(exception_assert_with_if_body_not_executed, 3);
+	RUN_SUCCESS(exception_bad_assert_with_if_body_executed, 2);
 
 #define RUN_EXT(load_ret, attach_err, expr, msg, after_link)			  \
 	{									  \
