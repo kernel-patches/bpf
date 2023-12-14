@@ -1681,6 +1681,8 @@ int btf__find_str(struct btf *btf, const char *s)
 int btf__add_str(struct btf *btf, const char *s)
 {
 	int off;
+	if(!s || !btf)
+		return libbpf_err(-EINVAL);
 
 	if (btf->base_btf) {
 		off = btf__find_str(btf->base_btf, s);
