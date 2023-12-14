@@ -332,6 +332,33 @@ MPOL_F_RELATIVE_NODES
 	MPOL_PREFERRED policies that were created with an empty nodemask
 	(local allocation).
 
+MPOL_F_NUMA_BALANCING (since Linux 5.12)
+        When operating in MPOL_BIND mode, enables NUMA balancing for tasks,
+        contingent upon kernel support. This feature optimizes page
+        placement within the confines of the specified memory binding
+        policy. The addition of the MPOL_F_NUMA_BALANCING flag augments the
+        control mechanism for NUMA balancing:
+
+        - The sysctl knob numa_balancing governs global activation or
+          deactivation of NUMA balancing.
+
+        - Even if sysctl numa_balancing is enabled, NUMA balancing remains
+          disabled by default for memory areas or applications utilizing
+          explicit memory policies.
+
+        - The MPOL_F_NUMA_BALANCING flag facilitates NUMA balancing
+          activation for applications employing explicit memory policies
+          (MPOL_BIND).
+
+        This flags enables various optimizations for page placement through
+        NUMA balancing. For instance, when an application's memory is bound
+        to multiple nodes (MPOL_BIND), the hint page fault handler attempts
+        to migrate accessed pages to reduce cross-node access if the
+        accessing node aligns with the policy nodemask.
+
+        If the flag isn't supported by the kernel, or is used with mode
+        other than MPOL_BIND, -1 is returned and errno is set to EINVAL.
+
 Memory Policy Reference Counting
 ================================
 
