@@ -264,6 +264,17 @@ extern void bpf_throw(u64 cookie) __ksym;
 #define bpf_assert(cond) if (!(cond)) bpf_throw(0);
 
 /* Description
+ *	Assert that a conditional expression is true. If false, runs code in the
+ *	body before throwing.
+ * Returns
+ *	Void.
+ * Throws
+ *	An exception with the value zero when the assertion fails.
+ */
+#define bpf_assert_if(cond) \
+	for (int ___i = 0, ___j = !!(cond); !(___j) && !___i; bpf_throw(0), ___i++)
+
+/* Description
  *	Assert that a conditional expression is true.
  * Returns
  *	Void.
@@ -271,6 +282,17 @@ extern void bpf_throw(u64 cookie) __ksym;
  *	An exception with the specified value when the assertion fails.
  */
 #define bpf_assert_with(cond, value) if (!(cond)) bpf_throw(value);
+
+/* Description
+ *	Assert that a conditional expression is true. If false, runs code in the
+ *	body before throwing.
+ * Returns
+ *	Void.
+ * Throws
+ *	An exception with the given value when the assertion fails.
+ */
+#define bpf_assert_with_if(cond, value) \
+	for (int ___i = 0, ___j = !!(cond); !(___j) && !___i; bpf_throw(value), ___i++)
 
 /* Description
  *	Assert that LHS is equal to RHS. This statement updates the known value
