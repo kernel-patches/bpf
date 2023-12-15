@@ -65,7 +65,7 @@ __u64 test7_result = 0;
 SEC("fexit/bpf_fentry_test7")
 int BPF_PROG(test7, struct bpf_fentry_test_t *arg)
 {
-	if (!arg)
+	if (arg)
 		test7_result = 1;
 	return 0;
 }

@@ -543,7 +543,7 @@ struct bpf_fentry_test_t {
 int noinline bpf_fentry_test7(struct bpf_fentry_test_t *arg)
 {
 	asm volatile ("");
-	return (long)arg;
+	return 0;
 }
 
 int noinline bpf_fentry_test8(struct bpf_fentry_test_t *arg)
@@ -668,7 +668,7 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 		    bpf_fentry_test4((void *)7, 8, 9, 10) != 34 ||
 		    bpf_fentry_test5(11, (void *)12, 13, 14, 15) != 65 ||
 		    bpf_fentry_test6(16, (void *)17, 18, 19, (void *)20, 21) != 111 ||
-		    bpf_fentry_test7((struct bpf_fentry_test_t *)0) != 0 ||
+		    bpf_fentry_test7(&arg) != 0 ||
 		    bpf_fentry_test8(&arg) != 0 ||
 		    bpf_fentry_test9(&retval) != 0)
 			goto out;
