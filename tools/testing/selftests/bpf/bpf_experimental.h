@@ -254,6 +254,34 @@ extern void bpf_throw(u64 cookie) __ksym;
 		}									\
 	 })
 
+#define __eauality(x) \
+	__builtin_strcmp(#x, "==") == 0 || __builtin_strcmp(#x, "!=") == 0
+
+#define is_signed_type(type) (((type)(-1)) < (type)1)
+
+#define __CMP(LHS, OP, SIGN, RHS) \
+	({ \
+		__label__ l_true; \
+		bool ret = true; \
+		asm volatile goto("if %[lhs] " SIGN #OP " %[rhs] goto %l[l_true]" \
+				  :: [lhs] "r"(LHS), [rhs] "ri"(RHS) :: l_true); \
+		ret = false; \
+l_true:\
+		ret;\
+       })
+
+#define CMP(LHS, OP, RHS) \
+	({ \
+		bool ret; \
+		if (__eauality(OP)) \
+			ret = __CMP(LHS, OP, "", RHS); \
+		else if (is_signed_type(typeof(LHS))) \
+			ret = __CMP(LHS, OP, "s", RHS); \
+		else \
+			ret = __CMP(LHS, OP, "", RHS); \
+		ret; \
+       })
+
 /* Description
  *	Assert that a conditional expression is true.
  * Returns
