@@ -244,7 +244,11 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 	struct pt_regs *regs = &fregs->regs;
 	unsigned long *parent = (unsigned long *)&regs->regs[1];
 
-	prepare_ftrace_return(ip, (unsigned long *)parent);
+	if (unlikely(atomic_read(&current->tracing_graph_pause)))
+		return;
+
+	if (!function_graph_enter_regs(regs->regs[1], ip, 0, parent, fregs))
+		regs->regs[1] = (unsigned long)&return_to_handler;
 }
 #else
 static int ftrace_modify_graph_caller(bool enable)
