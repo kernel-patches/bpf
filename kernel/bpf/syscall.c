@@ -1137,12 +1137,19 @@ static int map_create(union bpf_attr *attr)
 	int numa_node = bpf_map_attr_numa_node(attr);
 	u32 map_type = attr->map_type;
 	struct bpf_map *map;
+	bool token_flag;
 	int f_flags;
 	int err;
 
 	err = CHECK_ATTR(BPF_MAP_CREATE);
 	if (err)
 		return -EINVAL;
+
+	/* check BPF_F_TOKEN_FD flag, remember if it's set, and then clear it
+	 * to avoid per-map type checks tripping on unknown flag
+	 */
+	token_flag = attr->map_flags & BPF_F_TOKEN_FD;
+	attr->map_flags &= ~BPF_F_TOKEN_FD;
 
 	if (attr->btf_vmlinux_value_type_id) {
 		if (attr->map_type != BPF_MAP_TYPE_STRUCT_OPS ||
@@ -1184,7 +1191,7 @@ static int map_create(union bpf_attr *attr)
 	if (!ops->map_mem_usage)
 		return -EINVAL;
 
-	if (attr->map_token_fd) {
+	if (token_flag) {
 		token = bpf_token_get_from_fd(attr->map_token_fd);
 		if (IS_ERR(token))
 			return PTR_ERR(token);
@@ -2641,12 +2648,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 				 BPF_F_TEST_RND_HI32 |
 				 BPF_F_XDP_HAS_FRAGS |
 				 BPF_F_XDP_DEV_BOUND_ONLY |
-				 BPF_F_TEST_REG_INVARIANTS))
+				 BPF_F_TEST_REG_INVARIANTS |
+				 BPF_F_TOKEN_FD))
 		return -EINVAL;
 
 	bpf_prog_load_fixup_attach_type(attr);
 
-	if (attr->prog_token_fd) {
+	if (attr->prog_flags & BPF_F_TOKEN_FD) {
 		token = bpf_token_get_from_fd(attr->prog_token_fd);
 		if (IS_ERR(token))
 			return PTR_ERR(token);
@@ -4837,7 +4845,10 @@ static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_
 	if (CHECK_ATTR(BPF_BTF_LOAD))
 		return -EINVAL;
 
-	if (attr->btf_token_fd) {
+	if (attr->btf_flags & ~BPF_F_TOKEN_FD)
+		return -EINVAL;
+
+	if (attr->btf_flags & BPF_F_TOKEN_FD) {
 		token = bpf_token_get_from_fd(attr->btf_token_fd);
 		if (IS_ERR(token))
 			return PTR_ERR(token);

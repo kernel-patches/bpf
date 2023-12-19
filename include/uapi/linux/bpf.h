@@ -1364,6 +1364,9 @@ enum {
 
 /* Get path from provided FD in BPF_OBJ_PIN/BPF_OBJ_GET commands */
 	BPF_F_PATH_FD		= (1U << 14),
+
+/* BPF token FD is passed in a corresponding command's token_fd field */
+	BPF_F_TOKEN_FD		= (1U << 15),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -1437,7 +1440,7 @@ union bpf_attr {
 		 * to using 5 hash functions).
 		 */
 		__u64	map_extra;
-		__u32	map_token_fd;
+		__s32	map_token_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
@@ -1507,7 +1510,7 @@ union bpf_attr {
 		 * truncated), or smaller (if log buffer wasn't filled completely).
 		 */
 		__u32		log_true_size;
-		__u32		prog_token_fd;
+		__s32		prog_token_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -1620,7 +1623,8 @@ union bpf_attr {
 		 * truncated), or smaller (if log buffer wasn't filled completely).
 		 */
 		__u32		btf_log_true_size;
-		__u32		btf_token_fd;
+		__u32		btf_flags;
+		__s32		btf_token_fd;
 	};
 
 	struct {
