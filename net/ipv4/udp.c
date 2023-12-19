@@ -3141,6 +3141,7 @@ static struct sock *bpf_iter_udp_batch(struct seq_file *seq)
 	unsigned int batch_sks = 0;
 	bool resized = false;
 	struct sock *sk;
+	int offset;
 
 	/* The current batch is done, so advance the bucket. */
 	if (iter->st_bucket_done) {
@@ -3162,6 +3163,7 @@ again:
 	iter->end_sk = 0;
 	iter->st_bucket_done = false;
 	batch_sks = 0;
+	offset = iter->offset;
 
 	for (; state->bucket <= udptable->mask; state->bucket++) {
 		struct udp_hslot *hslot2 = &udptable->hash2[state->bucket];
@@ -3177,8 +3179,8 @@ again:
 				/* Resume from the last iterated socket at the
 				 * offset in the bucket before iterator was stopped.
 				 */
-				if (iter->offset) {
-					--iter->offset;
+				if (offset) {
+					--offset;
 					continue;
 				}
 				if (iter->end_sk < iter->max_sk) {
