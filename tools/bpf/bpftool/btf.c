@@ -460,6 +460,136 @@ static void __printf(2, 0) btf_dump_printf(void *ctx,
 	vfprintf(stdout, fmt, args);
 }
 
+/* Recursively walk all dependencies of 'id' and mark those as true in
+ * array 'deps'. The goal is to find all types that would be printed by
+ * btf_dump if 'id' is dumped.
+ */
+static void mark_dependencies(const struct btf *btf, __u32 id, bool *deps)
+{
+	const struct btf_param *params;
+	const struct btf_array *arr;
+	const struct btf_type *t;
+	struct btf_member *m;
+	__u16 vlen, i;
+
+	if (id == 0 || deps[id])
+		return;
+
+	deps[id] = true;
+	t = btf__type_by_id(btf, id);
+	if (!t)
+		return;
+
+	switch (btf_kind(t)) {
+	case BTF_KIND_PTR:
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_CONST:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_TYPE_TAG:
+	case BTF_KIND_DECL_TAG:
+	case BTF_KIND_FUNC:
+		mark_dependencies(btf, t->type, deps);
+		break;
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION:
+		vlen = btf_vlen(t);
+		m = btf_members(t);
+		for (i = 0; i < vlen; ++i)
+			mark_dependencies(btf, m[i].type, deps);
+		break;
+	case BTF_KIND_ARRAY:
+		arr = btf_array(t);
+		mark_dependencies(btf, arr->type, deps);
+		break;
+	case BTF_KIND_FUNC_PROTO:
+		vlen = btf_vlen(t);
+		params = btf_params(t);
+		mark_dependencies(btf, t->type, deps);
+		for (i = 0; i < vlen; ++i)
+			mark_dependencies(btf, params[i].type, deps);
+		break;
+	default:
+		/* ignore */
+		break;
+	}
+}
+
+/* Iterate all types in 'btf', if there are BTF_DECL_TAG records R
+ * with "preserve_static_offset" tag - emit a forward declaration
+ * for R->type annotated with preserve_static_offset attribute [0].
+ *
+ * If root_type_ids/root_type_cnt is specified, filter generated declarations
+ * to only include root_type_ids and corresponding dependencies.
+ *
+ * [0] https://clang.llvm.org/docs/AttributeReference.html#preserve-static-offset
+ */
+static int emit_static_offset_protos(const struct btf *btf,
+				     __u32 *root_type_ids, int root_type_cnt)
+{
+	bool *root_type_deps = NULL;
+	bool first = true;
+	__u32 i, id, cnt;
+
+	cnt = btf__type_cnt(btf);
+	if (root_type_cnt) {
+		root_type_deps = calloc(cnt, sizeof(*root_type_deps));
+		if (!root_type_deps)
+			return -ENOMEM;
+
+		for (i = 0; i < (__u32)root_type_cnt; ++i)
+			mark_dependencies(btf, root_type_ids[i], root_type_deps);
+	}
+
+	for (id = 1; id < cnt; ++id) {
+		const struct btf_type *t, *s;
+		const char *name, *tag;
+
+		t = btf__type_by_id(btf, id);
+		if (!t)
+			continue;
+
+		if (!btf_is_decl_tag(t))
+			continue;
+
+		tag = btf__name_by_offset(btf, t->name_off);
+		if (strcmp(tag, "preserve_static_offset") != 0)
+			continue;
+
+		if (root_type_deps && !root_type_deps[t->type])
+			continue;
+
+		s = btf__type_by_id(btf, t->type);
+		if (!s)
+			continue;
+
+		if (!btf_is_struct(s) && !btf_is_union(s))
+			continue;
+
+		name = btf__name_by_offset(btf, s->name_off);
+		if (!name)
+			continue;
+
+		if (first) {
+			first = false;
+			printf("#if !defined(BPF_NO_PRESERVE_STATIC_OFFSET) && __has_attribute(preserve_static_offset)\n");
+			printf("#pragma clang attribute push (__attribute__((preserve_static_offset)), apply_to = record)\n");
+			printf("\n");
+		}
+
+		printf("struct %s;\n", name);
+	}
+
+	if (!first) {
+		printf("\n");
+		printf("#pragma clang attribute pop\n");
+		printf("#endif /* BPF_NO_PRESERVE_STATIC_OFFSET */\n\n");
+	}
+
+	free(root_type_deps);
+	return 0;
+}
+
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt)
 {
@@ -473,6 +603,11 @@ static int dump_btf_c(const struct btf *btf,
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
+
+	err = emit_static_offset_protos(btf, root_type_ids, root_type_cnt);
+	if (err)
+		goto done;
+
 	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
 	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
 	printf("#endif\n\n");
