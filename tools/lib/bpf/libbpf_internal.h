@@ -555,6 +555,30 @@ static inline int ensure_good_fd(int fd)
 	return fd;
 }
 
+static inline int create_placeholder_fd(void)
+{
+	int fd;
+
+	fd = ensure_good_fd(open("/dev/null", O_WRONLY | O_CLOEXEC));
+	if (fd < 0)
+		return -errno;
+	return fd;
+}
+
+/* Point *fixed_fd* to the same file that *tmp_fd* points to.
+ * Regardless of success, *tmp_fd* is closed.
+ * Whatever *fixed_fd* pointed to is closed silently.
+ */
+static inline int reuse_fd(int fixed_fd, int tmp_fd)
+{
+	int err;
+
+	err = dup2(tmp_fd, fixed_fd);
+	err = err < 0 ? -errno : 0;
+	close(tmp_fd); /* clean up temporary FD */
+	return err;
+}
+
 /* The following two functions are exposed to bpftool */
 int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 		       size_t local_essent_len,
