@@ -201,7 +201,7 @@ void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx)
 }
 
 /* Relative offset needs to be calculated based on final image location */
-int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
+void bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
 {
 	s32 rel = (s32)func - (s32)(fimage + ctx->idx);
 
@@ -214,8 +214,6 @@ int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *
 		EMIT(PPC_RAW_MTCTR(_R0));
 		EMIT(PPC_RAW_BCTRL());
 	}
-
-	return 0;
 }
 
 static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 out)
@@ -1054,9 +1052,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 				EMIT(PPC_RAW_STW(bpf_to_ppc(BPF_REG_5), _R1, 12));
 			}
 
-			ret = bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr);
-			if (ret)
-				return ret;
+			bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr);
 
 			EMIT(PPC_RAW_MR(bpf_to_ppc(BPF_REG_0) - 1, _R3));
 			EMIT(PPC_RAW_MR(bpf_to_ppc(BPF_REG_0), _R4));

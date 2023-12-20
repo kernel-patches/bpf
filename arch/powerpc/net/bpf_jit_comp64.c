@@ -126,11 +126,6 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 {
 	int i;
 
-#ifndef CONFIG_PPC_KERNEL_PCREL
-	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
-		EMIT(PPC_RAW_LD(_R2, _R13, offsetof(struct paca_struct, kernel_toc)));
-#endif
-
 	/*
 	 * Initialize tail_call_cnt if we do tail calls.
 	 * Otherwise, put in NOPs so that it can be skipped when we are
@@ -144,6 +139,8 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 		EMIT(PPC_RAW_NOP());
 		EMIT(PPC_RAW_NOP());
 	}
+
+#define BPF_TAILCALL_PROLOGUE_SIZE	8
 
 	if (bpf_has_stack_frame(ctx)) {
 		/*
@@ -204,14 +201,9 @@ void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx)
 
 static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u64 func)
 {
-	unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
-	long reladdr;
-
-	if (WARN_ON_ONCE(!core_kernel_text(func_addr)))
-		return -EINVAL;
-
 	if (IS_ENABLED(CONFIG_PPC_KERNEL_PCREL)) {
-		reladdr = func_addr - CTX_NIA(ctx);
+		unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
+		long reladdr = func_addr - CTX_NIA(ctx);
 
 		if (reladdr >= (long)SZ_8G || reladdr < -(long)SZ_8G) {
 			pr_err("eBPF: address of %ps out of range of pcrel address.\n",
@@ -225,30 +217,34 @@ static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u
 		EMIT(PPC_RAW_BCTR());
 
 	} else {
-		reladdr = func_addr - kernel_toc_addr();
-		if (reladdr > 0x7FFFFFFF || reladdr < -(0x80000000L)) {
-			pr_err("eBPF: address of %ps out of range of kernel_toc.\n", (void *)func);
-			return -ERANGE;
-		}
-
-		EMIT(PPC_RAW_ADDIS(_R12, _R2, PPC_HA(reladdr)));
-		EMIT(PPC_RAW_ADDI(_R12, _R12, PPC_LO(reladdr)));
-		EMIT(PPC_RAW_MTCTR(_R12));
+#ifdef PPC64_ELF_ABI_v1
+		/* func points to the function descriptor */
+		PPC_LI64(b2p[TMP_REG_2], func);
+		/* Load actual entry point from function descriptor */
+		PPC_BPF_LL(b2p[TMP_REG_1], b2p[TMP_REG_2], 0);
+		/* ... and move it to CTR */
+		EMIT(PPC_RAW_MTCTR(b2p[TMP_REG_1]));
+		/*
+		 * Load TOC from function descriptor at offset 8.
+		 * We can clobber r2 since we get called through a
+		 * function pointer (so caller will save/restore r2)
+		 * and since we don't use a TOC ourself.
+		 */
+		PPC_BPF_LL(2, b2p[TMP_REG_2], 8);
+#else
+		/* We can clobber r12 */
+		PPC_LI64(12, func);
+		EMIT(PPC_RAW_MTCTR(12));
+#endif
 		EMIT(PPC_RAW_BCTRL());
 	}
 
 	return 0;
 }
 
-int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
+void bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
 {
 	unsigned int i, ctx_idx = ctx->idx;
-
-	if (WARN_ON_ONCE(func && is_module_text_address(func)))
-		return -EINVAL;
-
-	/* skip past descriptor if elf v1 */
-	func += FUNCTION_DESCR_SIZE;
 
 	/* Load function address into r12 */
 	PPC_LI64(_R12, func);
@@ -267,10 +263,20 @@ int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *
 		for (i = ctx->idx - ctx_idx; i < 5; i++)
 			EMIT(PPC_RAW_NOP());
 
+#ifdef PPC64_ELF_ABI_v1
+	/*
+	 * Load TOC from function descriptor at offset 8.
+	 * We can clobber r2 since we get called through a
+	 * function pointer (so caller will save/restore r2)
+	 * and since we don't use a TOC ourself.
+	 */
+	PPC_BPF_LL(2, 12, 8);
+	/* Load actual entry point from function descriptor */
+	PPC_BPF_LL(12, 12, 0);
+#endif
+
 	EMIT(PPC_RAW_MTCTR(_R12));
 	EMIT(PPC_RAW_BCTRL());
-
-	return 0;
 }
 
 static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 out)
@@ -283,10 +289,6 @@ static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 o
 	 */
 	int b2p_bpf_array = bpf_to_ppc(BPF_REG_2);
 	int b2p_index = bpf_to_ppc(BPF_REG_3);
-	int bpf_tailcall_prologue_size = 8;
-
-	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
-		bpf_tailcall_prologue_size += 4; /* skip past the toc load */
 
 	/*
 	 * if (index >= array->map.max_entries)
@@ -325,8 +327,14 @@ static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 o
 
 	/* goto *(prog->bpf_func + prologue_size); */
 	EMIT(PPC_RAW_LD(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1), offsetof(struct bpf_prog, bpf_func)));
+#ifdef PPC64_ELF_ABI_v1
+	/* skip past the function descriptor */
 	EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
-			FUNCTION_DESCR_SIZE + bpf_tailcall_prologue_size));
+			FUNCTION_DESCR_SIZE + BPF_TAILCALL_PROLOGUE_SIZE));
+#else
+	EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
+			BPF_TAILCALL_PROLOGUE_SIZE));
+#endif
 	EMIT(PPC_RAW_MTCTR(bpf_to_ppc(TMP_REG_1)));
 
 	/* tear down stack, restore NVRs, ... */
@@ -992,13 +1000,13 @@ emit_clear:
 			if (ret < 0)
 				return ret;
 
-			if (func_addr_fixed)
+			if (func_addr_fixed) {
 				ret = bpf_jit_emit_func_call_hlp(image, ctx, func_addr);
-			else
-				ret = bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr);
-
-			if (ret)
-				return ret;
+				if (ret)
+					return ret;
+			} else {
+				bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr);
+			}
 
 			/* move return value from r3 to BPF_REG_0 */
 			EMIT(PPC_RAW_MR(bpf_to_ppc(BPF_REG_0), _R3));
