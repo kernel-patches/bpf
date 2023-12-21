@@ -53,6 +53,13 @@ struct bench_res {
 			unsigned long gp_ct;
 			unsigned int stime;
 		} rcu;
+		struct {
+			unsigned long alloc;
+			unsigned long free;
+			unsigned long alloc_ns;
+			unsigned long free_ns;
+			unsigned long mem_bytes;
+		} ma;
 	};
 };
 
