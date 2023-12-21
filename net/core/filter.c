@@ -83,6 +83,7 @@
 #include <net/netfilter/nf_conntrack_bpf.h>
 #include <net/netkit.h>
 #include <linux/un.h>
+#include <net/xdp_sock_drv.h>
 
 #include "dev.h"
 
@@ -4094,6 +4095,42 @@ static int bpf_xdp_frags_increase_tail(struct xdp_buff *xdp, int offset)
 	return 0;
 }
 
+static void __shrink_data(struct xdp_buff *xdp, struct xdp_mem_info *mem_info,
+			  skb_frag_t *frag, int shrink)
+{
+	if (mem_info->type == MEM_TYPE_XSK_BUFF_POOL) {
+		struct xdp_buff *tail = xsk_buff_get_tail(xdp);
+
+		if (tail)
+			tail->data_end -= shrink;
+	}
+	skb_frag_size_sub(frag, shrink);
+}
+
+static bool shrink_data(struct xdp_buff *xdp, skb_frag_t *frag, int shrink)
+{
+	struct xdp_mem_info *mem_info = &xdp->rxq->mem;
+
+	if (skb_frag_size(frag) == shrink) {
+		struct page *page = skb_frag_page(frag);
+		struct xdp_buff *zc_frag = NULL;
+
+		if (mem_info->type == MEM_TYPE_XSK_BUFF_POOL) {
+			zc_frag = xsk_buff_get_tail(xdp);
+
+			if (zc_frag) {
+				xdp_buff_clear_frags_flag(zc_frag);
+				xsk_buff_del_tail(zc_frag);
+			}
+		}
+
+		__xdp_return(page_address(page), mem_info, false, zc_frag);
+		return true;
+	}
+	__shrink_data(xdp, mem_info, frag, shrink);
+	return false;
+}
+
 static int bpf_xdp_frags_shrink_tail(struct xdp_buff *xdp, int offset)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
@@ -4108,17 +4145,10 @@ static int bpf_xdp_frags_shrink_tail(struct xdp_buff *xdp, int offset)
 
 		len_free += shrink;
 		offset -= shrink;
-
-		if (skb_frag_size(frag) == shrink) {
-			struct page *page = skb_frag_page(frag);
-
-			__xdp_return(page_address(page), &xdp->rxq->mem,
-				     false, NULL);
+		if (shrink_data(xdp, frag, shrink))
 			n_frags_free++;
-		} else {
-			skb_frag_size_sub(frag, shrink);
+		else
 			break;
-		}
 	}
 	sinfo->nr_frags -= n_frags_free;
 	sinfo->xdp_frags_size -= len_free;
