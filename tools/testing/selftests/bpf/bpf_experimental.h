@@ -254,6 +254,50 @@ extern void bpf_throw(u64 cookie) __ksym;
 		}									\
 	 })
 
+#define __cmp_cannot_be_signed(x) \
+	__builtin_strcmp(#x, "==") == 0 || __builtin_strcmp(#x, "!=") == 0 || \
+	__builtin_strcmp(#x, "&") == 0
+
+#define __is_signed_type(type) (((type)(-1)) < (type)1)
+
+#define __bpf_cmp(LHS, OP, SIGN, PRED, RHS) \
+	({ \
+		__label__ l_true; \
+		bool ret = true; \
+		asm volatile goto("if %[lhs] " SIGN #OP " %[rhs] goto %l[l_true]" \
+				  :: [lhs] "r"(LHS), [rhs] PRED (RHS) :: l_true); \
+		ret = false; \
+l_true:\
+		ret;\
+       })
+
+/* C type conversions coupled with comparison operator are tricky.
+ * Make sure BPF program is compiled with -Wsign-compre then
+ * __lhs OP __rhs below will catch the mistake.
+ * Be aware that we check only __lhs to figure out the sign of compare.
+ */
+#ifndef bpf_cmp
+#define bpf_cmp(LHS, OP, RHS) \
+	({ \
+		typeof(LHS) __lhs = (LHS); \
+		typeof(RHS) __rhs = (RHS); \
+		bool ret; \
+		(void)(__lhs OP __rhs); \
+		if (__cmp_cannot_be_signed(OP) || !__is_signed_type(typeof(__lhs))) {\
+			if (sizeof(__rhs) == 8) \
+				ret = __bpf_cmp(__lhs, OP, "", "r", __rhs); \
+			else \
+				ret = __bpf_cmp(__lhs, OP, "", "i", __rhs); \
+		} else { \
+			if (sizeof(__rhs) == 8) \
+				ret = __bpf_cmp(__lhs, OP, "s", "r", __rhs); \
+			else \
+				ret = __bpf_cmp(__lhs, OP, "s", "i", __rhs); \
+		} \
+		ret; \
+       })
+#endif
+
 /* Description
  *	Assert that a conditional expression is true.
  * Returns
