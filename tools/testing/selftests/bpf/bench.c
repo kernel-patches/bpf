@@ -88,9 +88,10 @@ grace_period_latency_basic_stats(struct bench_res res[], int res_cnt, struct bas
 	memset(gp_stat, 0, sizeof(struct basic_stats));
 
 	for (i = 0; i < res_cnt; i++)
-		gp_stat->mean += res[i].gp_ns / 1000.0 / (double)res[i].gp_ct / (0.0 + res_cnt);
+		gp_stat->mean += res[i].rcu.gp_ns / 1000.0 / (double)res[i].rcu.gp_ct /
+				 (0.0 + res_cnt);
 
-#define IT_MEAN_DIFF (res[i].gp_ns / 1000.0 / (double)res[i].gp_ct - gp_stat->mean)
+#define IT_MEAN_DIFF (res[i].rcu.gp_ns / 1000.0 / (double)res[i].rcu.gp_ct - gp_stat->mean)
 	if (res_cnt > 1) {
 		for (i = 0; i < res_cnt; i++)
 			gp_stat->stddev += (IT_MEAN_DIFF * IT_MEAN_DIFF) / (res_cnt - 1.0);
@@ -106,9 +107,9 @@ grace_period_ticks_basic_stats(struct bench_res res[], int res_cnt, struct basic
 
 	memset(gp_stat, 0, sizeof(struct basic_stats));
 	for (i = 0; i < res_cnt; i++)
-		gp_stat->mean += res[i].stime / (double)res[i].gp_ct / (0.0 + res_cnt);
+		gp_stat->mean += res[i].rcu.stime / (double)res[i].rcu.gp_ct / (0.0 + res_cnt);
 
-#define IT_MEAN_DIFF (res[i].stime / (double)res[i].gp_ct - gp_stat->mean)
+#define IT_MEAN_DIFF (res[i].rcu.stime / (double)res[i].rcu.gp_ct - gp_stat->mean)
 	if (res_cnt > 1) {
 		for (i = 0; i < res_cnt; i++)
 			gp_stat->stddev += (IT_MEAN_DIFF * IT_MEAN_DIFF) / (res_cnt - 1.0);

@@ -293,7 +293,7 @@ static void htab_mem_read_mem_cgrp_file(const char *name, unsigned long *value)
 static void htab_mem_measure(struct bench_res *res)
 {
 	res->hits = atomic_swap(&ctx.skel->bss->op_cnt, 0) / env.producer_cnt;
-	htab_mem_read_mem_cgrp_file("memory.current", &res->gp_ct);
+	htab_mem_read_mem_cgrp_file("memory.current", &res->htab.bytes);
 }
 
 static void htab_mem_report_progress(int iter, struct bench_res *res, long delta_ns)
@@ -301,7 +301,7 @@ static void htab_mem_report_progress(int iter, struct bench_res *res, long delta
 	double loop, mem;
 
 	loop = res->hits / 1000.0 / (delta_ns / 1000000000.0);
-	mem = res->gp_ct / 1048576.0;
+	mem = res->htab.bytes / 1048576.0;
 	printf("Iter %3d (%7.3lfus): ", iter, (delta_ns - 1000000000) / 1000.0);
 	printf("per-prod-op %7.2lfk/s, memory usage %7.2lfMiB\n", loop, mem);
 }
@@ -315,15 +315,15 @@ static void htab_mem_report_final(struct bench_res res[], int res_cnt)
 
 	for (i = 0; i < res_cnt; i++) {
 		loop_mean += res[i].hits / 1000.0 / (0.0 + res_cnt);
-		mem_mean += res[i].gp_ct / 1048576.0 / (0.0 + res_cnt);
+		mem_mean += res[i].htab.bytes / 1048576.0 / (0.0 + res_cnt);
 	}
 	if (res_cnt > 1)  {
 		for (i = 0; i < res_cnt; i++) {
 			loop_stddev += (loop_mean - res[i].hits / 1000.0) *
 				       (loop_mean - res[i].hits / 1000.0) /
 				       (res_cnt - 1.0);
-			mem_stddev += (mem_mean - res[i].gp_ct / 1048576.0) *
-				      (mem_mean - res[i].gp_ct / 1048576.0) /
+			mem_stddev += (mem_mean - res[i].htab.bytes / 1048576.0) *
+				      (mem_mean - res[i].htab.bytes / 1048576.0) /
 				      (res_cnt - 1.0);
 		}
 		loop_stddev = sqrt(loop_stddev);

@@ -42,9 +42,18 @@ struct bench_res {
 	long drops;
 	long false_hits;
 	long important_hits;
-	unsigned long gp_ns;
-	unsigned long gp_ct;
-	unsigned int stime;
+
+	/* benchmark specific metrics */
+	union {
+		struct {
+			unsigned long bytes;
+		} htab;
+		struct {
+			unsigned long gp_ns;
+			unsigned long gp_ct;
+			unsigned int stime;
+		} rcu;
+	};
 };
 
 struct bench {

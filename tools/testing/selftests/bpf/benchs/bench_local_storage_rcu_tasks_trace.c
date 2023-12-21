@@ -190,10 +190,10 @@ static void measure(struct bench_res *res)
 {
 	long ticks;
 
-	res->gp_ct = atomic_swap(&ctx.skel->bss->gp_hits, 0);
-	res->gp_ns = atomic_swap(&ctx.skel->bss->gp_times, 0);
+	res->rcu.gp_ct = atomic_swap(&ctx.skel->bss->gp_hits, 0);
+	res->rcu.gp_ns = atomic_swap(&ctx.skel->bss->gp_times, 0);
 	ticks = kthread_pid_ticks();
-	res->stime = ticks - ctx.prev_kthread_stime;
+	res->rcu.stime = ticks - ctx.prev_kthread_stime;
 	ctx.prev_kthread_stime = ticks;
 }
 
@@ -216,9 +216,9 @@ static void report_progress(int iter, struct bench_res *res, long delta_ns)
 		return;
 
 	printf("Iter %d\t avg tasks_trace grace period latency\t%lf ns\n",
-	       iter, res->gp_ns / (double)res->gp_ct);
+	       iter, res->rcu.gp_ns / (double)res->rcu.gp_ct);
 	printf("Iter %d\t avg ticks per tasks_trace grace period\t%lf\n",
-	       iter, res->stime / (double)res->gp_ct);
+	       iter, res->rcu.stime / (double)res->rcu.gp_ct);
 }
 
 static void report_final(struct bench_res res[], int res_cnt)
