@@ -3,4 +3,5 @@
 #define barrier_var(var) /**/
 #define UNROLL
 #define INLINE __noinline
+#define bpf_cmp(lhs, op, rhs) lhs op rhs
 #include "profiler.inc.h"
