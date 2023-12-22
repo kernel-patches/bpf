@@ -467,6 +467,22 @@ __bpf_kfunc void bpf_iter_cpumask_destroy(struct bpf_iter_cpumask *it)
 	bpf_mem_free(&bpf_global_ma, kit->cpu);
 }
 
+__bpf_kfunc bool bpf_cpumask_set_from_pid(struct cpumask *cpumask, u32 pid)
+{
+	struct task_struct *task;
+
+	if (!cpumask)
+		return false;
+
+	task = get_pid_task(find_vpid(pid), PIDTYPE_PID);
+	if (!task)
+		return false;
+
+	cpumask_copy(cpumask, task->cpus_ptr);
+	put_task_struct(task);
+	return true;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_SET8_START(cpumask_kfunc_btf_ids)
@@ -498,6 +514,7 @@ BTF_ID_FLAGS(func, bpf_cpumask_weight, KF_RCU)
 BTF_ID_FLAGS(func, bpf_iter_cpumask_new, KF_ITER_NEW | KF_RCU)
 BTF_ID_FLAGS(func, bpf_iter_cpumask_next, KF_ITER_NEXT | KF_RET_NULL | KF_RCU)
 BTF_ID_FLAGS(func, bpf_iter_cpumask_destroy, KF_ITER_DESTROY)
+BTF_ID_FLAGS(func, bpf_cpumask_set_from_pid, KF_RCU)
 BTF_SET8_END(cpumask_kfunc_btf_ids)
 
 static const struct btf_kfunc_id_set cpumask_kfunc_set = {
