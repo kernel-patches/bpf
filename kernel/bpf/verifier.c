@@ -19084,7 +19084,7 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 			 * have to be rejected, since interpreter doesn't support them yet.
 			 */
 			verbose(env, "callbacks are not allowed in non-JITed programs\n");
-			return -EINVAL;
+			return -ENOTSUPP;
 		}
 
 		if (!bpf_pseudo_call(insn))
