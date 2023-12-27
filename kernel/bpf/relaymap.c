@@ -6,6 +6,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/err.h>
+#include <linux/btf.h>
 
 #define RELAY_CREATE_FLAG_MASK (BPF_F_OVERWRITE)
 
@@ -197,3 +198,24 @@ const struct bpf_map_ops relay_map_ops = {
 	.map_mem_usage = relay_map_mem_usage,
 	.map_btf_id = &relay_map_btf_ids[0],
 };
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_relay_output(struct bpf_map *map,
+				   void *data, u64 data__sz, u32 flags)
+{
+	struct bpf_relay_map *rmap;
+
+	/* not support any flag now */
+	if (unlikely(!map || flags))
+		return -EINVAL;
+
+	rmap = container_of(map, struct bpf_relay_map, map);
+	if (!rmap->relay_chan->has_base_filename)
+		return -ENOENT;
+
+	relay_write(rmap->relay_chan, data, data__sz);
+	return 0;
+}
+
+__bpf_kfunc_end_defs();
