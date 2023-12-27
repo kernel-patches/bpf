@@ -951,6 +951,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_BLOOM_FILTER,
 	BPF_MAP_TYPE_USER_RINGBUF,
 	BPF_MAP_TYPE_CGRP_STORAGE,
+	BPF_MAP_TYPE_RELAY,
 };
 
 /* Note that tracing related programs such as
@@ -1330,6 +1331,9 @@ enum {
 
 /* Get path from provided FD in BPF_OBJ_PIN/BPF_OBJ_GET commands */
 	BPF_F_PATH_FD		= (1U << 14),
+
+/* Enable overwrite for relay map */
+	BPF_F_OVERWRITE		= (1U << 15),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -1401,6 +1405,9 @@ union bpf_attr {
 		 * BPF_MAP_TYPE_BLOOM_FILTER - the lowest 4 bits indicate the
 		 * number of hash functions (if 0, the bloom filter will default
 		 * to using 5 hash functions).
+		 *
+		 * BPF_MAP_TYPE_RELAY - the lowest 32 bits indicate the number of
+		 * relay subbufs (if 0, the number will be set to 8 by default).
 		 */
 		__u64	map_extra;
 	};
