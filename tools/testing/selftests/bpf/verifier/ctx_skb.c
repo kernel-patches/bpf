@@ -1193,3 +1193,46 @@
        .prog_type = BPF_PROG_TYPE_SK_SKB,
        .flags = F_NEEDS_EFFICIENT_UNALIGNED_ACCESS,
 },
+{
+	"valid access __sk_buff csum",
+	.insns = {
+	BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
+		    offsetof(struct __sk_buff, csum)),
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+},
+{
+	"valid access __sk_buff ip_summed",
+	.insns = {
+	BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
+		    offsetof(struct __sk_buff, ip_summed)),
+	BPF_EXIT_INSN(),
+	},
+	.result = ACCEPT,
+	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+},
+{
+	"check skb->csum is writeable by CLS/ACT",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+		    offsetof(struct __sk_buff, csum)),
+	BPF_EXIT_INSN(),
+	},
+	.result =  ACCEPT,
+	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
+	.errstr = "invalid bpf_context access",
+},
+{
+	"check skb->ip_summed is not writeable",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+		    offsetof(struct __sk_buff, csum)),
+	BPF_EXIT_INSN(),
+	},
+	.result =  REJECT,
+	.errstr = "invalid bpf_context access",
+},
