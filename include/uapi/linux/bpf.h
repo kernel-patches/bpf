@@ -6148,6 +6148,8 @@ struct __sk_buff {
 	__u8  tstamp_type;
 	__u32 :24;		/* Padding, future use. */
 	__u64 hwtstamp;
+	__u32 csum;
+	__u32 ip_summed;
 };
 
 struct bpf_tunnel_key {

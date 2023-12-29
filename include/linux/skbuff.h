@@ -1077,8 +1077,10 @@ struct sk_buff {
 /* if you move pkt_type around you also must adapt those constants */
 #ifdef __BIG_ENDIAN_BITFIELD
 #define PKT_TYPE_MAX	(7 << 5)
+#define IP_SUMMED_RSH	1
 #else
 #define PKT_TYPE_MAX	7
+#define IP_SUMMED_RSH	5
 #endif
 #define PKT_TYPE_OFFSET		offsetof(struct sk_buff, __pkt_type_offset)
 

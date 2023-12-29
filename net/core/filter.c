@@ -8858,6 +8858,7 @@ static bool tc_cls_act_is_valid_access(int off, int size,
 		case bpf_ctx_range_till(struct __sk_buff, cb[0], cb[4]):
 		case bpf_ctx_range(struct __sk_buff, tstamp):
 		case bpf_ctx_range(struct __sk_buff, queue_mapping):
+		case bpf_ctx_range(struct __sk_buff, csum):
 			break;
 		default:
 			return false;
@@ -8885,6 +8886,8 @@ static bool tc_cls_act_is_valid_access(int off, int size,
 		 */
 		((struct bpf_prog *)prog)->tstamp_type_access = 1;
 		return size == sizeof(__u8);
+	case bpf_ctx_range_till(struct __sk_buff, csum, ip_summed):
+		return size == sizeof(__u32);
 	}
 
 	return bpf_skb_is_valid_access(off, size, type, prog, info);
@@ -9511,6 +9514,25 @@ static u32 bpf_convert_ctx_access(enum bpf_access_type type,
 #ifdef __BIG_ENDIAN_BITFIELD
 		*insn++ = BPF_ALU32_IMM(BPF_RSH, si->dst_reg, 5);
 #endif
+		break;
+
+	case offsetof(struct __sk_buff, ip_summed):
+		*target_size = 1;
+		*insn++ = BPF_LDX_MEM(BPF_B, si->dst_reg, si->src_reg,
+				      PKT_TYPE_OFFSET);
+		*insn++ = BPF_ALU32_IMM(BPF_RSH, si->dst_reg, IP_SUMMED_RSH);
+		*insn++ = BPF_ALU32_IMM(BPF_AND, si->dst_reg, 3);
+		break;
+
+	case offsetof(struct __sk_buff, csum):
+		if (type == BPF_WRITE)
+			*insn++ = BPF_EMIT_STORE(BPF_W, si,
+						 bpf_target_off(struct sk_buff, csum, 4,
+								target_size));
+		else
+			*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->src_reg,
+					      bpf_target_off(struct sk_buff, csum, 4,
+							     target_size));
 		break;
 
 	case offsetof(struct __sk_buff, queue_mapping):
