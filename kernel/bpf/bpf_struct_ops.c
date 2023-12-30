@@ -898,8 +898,6 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 
-	st_map = (struct bpf_struct_ops_map *)map;
-
 	if (!bpf_struct_ops_valid_to_reg(map)) {
 		err = -EINVAL;
 		goto put_map;
@@ -916,6 +914,7 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	if (err)
 		goto err_out;
 
+	st_map = (struct bpf_struct_ops_map *)map;
 	err = st_map->st_ops->reg(st_map->kvalue.data);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
