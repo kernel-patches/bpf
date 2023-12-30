@@ -307,7 +307,7 @@ static long trie_update_elem(struct bpf_map *map,
 			     void *_key, void *value, u64 flags)
 {
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
-	struct lpm_trie_node *node, *im_node = NULL, *new_node = NULL;
+	struct lpm_trie_node *node, *im_node = NULL, *new_node;
 	struct lpm_trie_node __rcu **slot;
 	struct bpf_lpm_trie_key *key = _key;
 	unsigned long irq_flags;
@@ -327,13 +327,13 @@ static long trie_update_elem(struct bpf_map *map,
 
 	if (trie->n_entries == trie->map.max_entries) {
 		ret = -ENOSPC;
-		goto out;
+		goto unlock;
 	}
 
 	new_node = lpm_trie_node_alloc(trie, value);
 	if (!new_node) {
 		ret = -ENOMEM;
-		goto out;
+		goto unlock;
 	}
 
 	trie->n_entries++;
@@ -368,7 +368,7 @@ static long trie_update_elem(struct bpf_map *map,
 	 */
 	if (!node) {
 		rcu_assign_pointer(*slot, new_node);
-		goto out;
+		goto decrement_counter;
 	}
 
 	/* If the slot we picked already exists, replace it with @new_node
@@ -384,7 +384,7 @@ static long trie_update_elem(struct bpf_map *map,
 		rcu_assign_pointer(*slot, new_node);
 		kfree_rcu(node, rcu);
 
-		goto out;
+		goto decrement_counter;
 	}
 
 	/* If the new node matches the prefix completely, it must be inserted
@@ -394,13 +394,13 @@ static long trie_update_elem(struct bpf_map *map,
 		next_bit = extract_bit(node->data, matchlen);
 		rcu_assign_pointer(new_node->child[next_bit], node);
 		rcu_assign_pointer(*slot, new_node);
-		goto out;
+		goto decrement_counter;
 	}
 
 	im_node = lpm_trie_node_alloc(trie, NULL);
 	if (!im_node) {
 		ret = -ENOMEM;
-		goto out;
+		goto decrement_counter;
 	}
 
 	im_node->prefixlen = matchlen;
@@ -419,15 +419,13 @@ static long trie_update_elem(struct bpf_map *map,
 	/* Finally, assign the intermediate node to the determined slot */
 	rcu_assign_pointer(*slot, im_node);
 
-out:
 	if (ret) {
-		if (new_node)
-			trie->n_entries--;
-
-		kfree(new_node);
 		kfree(im_node);
+decrement_counter:
+		trie->n_entries--;
+		kfree(new_node);
 	}
-
+unlock:
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
 
 	return ret;
