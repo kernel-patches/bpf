@@ -8322,13 +8322,13 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 			bpf_log(ctx->log, "target candidate search failed for %d\n",
 				relo->type_id);
 			err = PTR_ERR(cc);
-			goto out;
+			goto unlock_mutex;
 		}
 		if (cc->cnt) {
 			cands.cands = kcalloc(cc->cnt, sizeof(*cands.cands), GFP_KERNEL);
 			if (!cands.cands) {
 				err = -ENOMEM;
-				goto out;
+				goto unlock_mutex;
 			}
 		}
 		for (i = 0; i < cc->cnt; i++) {
@@ -8355,13 +8355,15 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 				  &targ_res);
 
 out:
-	kfree(specs);
 	if (need_cands) {
 		kfree(cands.cands);
+unlock_mutex:
 		mutex_unlock(&cand_cache_mutex);
 		if (ctx->log->level & BPF_LOG_LEVEL2)
 			print_cand_cache(ctx->log);
 	}
+
+	kfree(specs);
 	return err;
 }
 
