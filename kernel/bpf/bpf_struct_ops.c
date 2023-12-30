@@ -888,7 +888,7 @@ static const struct bpf_link_ops bpf_struct_ops_map_lops = {
 
 int bpf_struct_ops_link_create(union bpf_attr *attr)
 {
-	struct bpf_struct_ops_link *link = NULL;
+	struct bpf_struct_ops_link *link;
 	struct bpf_link_primer link_primer;
 	struct bpf_struct_ops_map *st_map;
 	struct bpf_map *map;
@@ -902,13 +902,13 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 
 	if (!bpf_struct_ops_valid_to_reg(map)) {
 		err = -EINVAL;
-		goto err_out;
+		goto put_map;
 	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
 	if (!link) {
 		err = -ENOMEM;
-		goto err_out;
+		goto put_map;
 	}
 	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_map_lops, NULL);
 
@@ -927,7 +927,8 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	return bpf_link_settle(&link_primer);
 
 err_out:
-	bpf_map_put(map);
 	kfree(link);
+put_map:
+	bpf_map_put(map);
 	return err;
 }
