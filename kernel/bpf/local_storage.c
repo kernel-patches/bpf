@@ -514,7 +514,7 @@ struct bpf_cgroup_storage *bpf_cgroup_storage_alloc(struct bpf_prog *prog,
 	storage = bpf_map_kmalloc_node(map, sizeof(struct bpf_cgroup_storage),
 				       gfp, map->numa_node);
 	if (!storage)
-		goto enomem;
+		return ERR_PTR(-ENOMEM);
 
 	if (stype == BPF_CGROUP_STORAGE_SHARED) {
 		storage->buf = bpf_map_kmalloc_node(map, size, gfp,
