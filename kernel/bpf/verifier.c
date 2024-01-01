@@ -1677,7 +1677,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	int err;
 
-	elem = kzalloc(sizeof(struct bpf_verifier_stack_elem), GFP_KERNEL);
+	elem = kzalloc(sizeof(*elem), GFP_KERNEL);
 	if (!elem)
 		goto err;
 
@@ -2374,7 +2374,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	struct bpf_func_state *frame;
 
-	elem = kzalloc(sizeof(struct bpf_verifier_stack_elem), GFP_KERNEL);
+	elem = kzalloc(sizeof(*elem), GFP_KERNEL);
 	if (!elem)
 		goto err;
 
@@ -15911,8 +15911,7 @@ static int check_btf_line(struct bpf_verifier_env *env,
 	/* Need to zero it in case the userspace may
 	 * pass in a smaller bpf_line_info object.
 	 */
-	linfo = kvcalloc(nr_linfo, sizeof(struct bpf_line_info),
-			 GFP_KERNEL | __GFP_NOWARN);
+	linfo = kvcalloc(nr_linfo, sizeof(*linfo), GFP_KERNEL | __GFP_NOWARN);
 	if (!linfo)
 		return -ENOMEM;
 
@@ -17159,7 +17158,7 @@ next:
 	 * When looping the sl->state.branches will be > 0 and this state
 	 * will not be considered for equivalence until branches == 0.
 	 */
-	new_sl = kzalloc(sizeof(struct bpf_verifier_state_list), GFP_KERNEL);
+	new_sl = kzalloc(sizeof(*new_sl), GFP_KERNEL);
 	if (!new_sl)
 		return -ENOMEM;
 	env->total_states++;
@@ -20001,7 +20000,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	env->prev_linfo = NULL;
 	env->pass_cnt++;
 
-	state = kzalloc(sizeof(struct bpf_verifier_state), GFP_KERNEL);
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (!state)
 		return -ENOMEM;
 	state->curframe = 0;
@@ -20715,7 +20714,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
 	 * allocate/free it every time bpf_check() is called
 	 */
-	env = kzalloc(sizeof(struct bpf_verifier_env), GFP_KERNEL);
+	env = kzalloc(sizeof(*env), GFP_KERNEL);
 	if (!env)
 		return -ENOMEM;
 

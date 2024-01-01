@@ -827,7 +827,7 @@ static int bpf_init_fs_context(struct fs_context *fc)
 {
 	struct bpf_mount_opts *opts;
 
-	opts = kzalloc(sizeof(struct bpf_mount_opts), GFP_KERNEL);
+	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 	if (!opts)
 		return -ENOMEM;
 

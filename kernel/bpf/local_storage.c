@@ -313,7 +313,7 @@ static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 		/* max_entries is not used and enforced to be 0 */
 		return ERR_PTR(-EINVAL);
 
-	map = bpf_map_area_alloc(sizeof(struct bpf_cgroup_storage_map), numa_node);
+	map = bpf_map_area_alloc(sizeof(*map), numa_node);
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 
@@ -511,7 +511,7 @@ struct bpf_cgroup_storage *bpf_cgroup_storage_alloc(struct bpf_prog *prog,
 
 	size = bpf_cgroup_storage_calculate_size(map, &pages);
 
-	storage = bpf_map_kmalloc_node(map, sizeof(struct bpf_cgroup_storage),
+	storage = bpf_map_kmalloc_node(map, sizeof(*storage),
 				       gfp, map->numa_node);
 	if (!storage)
 		goto enomem;
