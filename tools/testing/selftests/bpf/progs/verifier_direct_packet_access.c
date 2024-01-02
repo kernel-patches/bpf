@@ -800,4 +800,142 @@ l0_%=:	/* exit(0) */					\
 	: __clobber_all);
 }
 
+SEC("tc")
+__success __log_level(2)
+__msg("if r3 != r2 goto pc+1         ; R2_w=pkt_end() R3_w=pkt(off=8,r=0xffffffffffffffff)")
+__naked void data_plus_const_neq_pkt_end(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r2 = *(u32*)(r9 + %[__sk_buff_data_end]);	\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r3 != r2 goto 1f;				\
+	r1 = *(u64 *)(r1 + 0);				\
+1:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__failure __log_level(2)
+__msg("8: R1=pkt(r=0) R2=pkt_end() R3=pkt(off=8,r=0)")
+__msg("invalid access to packet, off=0 size=8, R1(id=0,off=0,r=0)")
+__naked void data_plus_const_neq_pkt_end_negative(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r2 = *(u32*)(r9 + %[__sk_buff_data_end]);	\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r3 != r2 goto 1f;				\
+	r0 = 0;						\
+	exit;						\
+1:							\
+	r1 = *(u64 *)(r1 + 0);				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__success __log_level(2)
+__msg("8: R1=pkt(r=9) R2=pkt_end() R3=pkt(off=8,r=0xffffffffffffffff)")
+__naked void data_plus_const_eq_pkt_end(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r2 = *(u32*)(r9 + %[__sk_buff_data_end]);	\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r3 == r2 goto 1f;				\
+	r0 = 0;						\
+	exit;						\
+1:							\
+	r1 = *(u64 *)(r1 + 0);				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__failure __log_level(2)
+__msg("if r3 == r2 goto pc+3         ; R2_w=pkt_end() R3_w=pkt(off=8,r=0)")
+__msg("invalid access to packet, off=0 size=8, R1(id=0,off=0,r=0)")
+__naked void data_plus_const_eq_pkt_end_negative(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r2 = *(u32*)(r9 + %[__sk_buff_data_end]);	\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r3 == r2 goto 1f;				\
+	r1 = *(u64 *)(r1 + 0);				\
+	r0 = 0;						\
+	exit;						\
+1:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__success
+__naked void pkt_meta_plus_const_neq_pkt_data(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data_meta]);	\
+	r2 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r3 != r2 goto 1f;				\
+	r1 = *(u64 *)(r1 + 0);				\
+1:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_meta, offsetof(struct __sk_buff, data_meta))
+	: __clobber_all);
+}
+
+SEC("tc")
+__success
+__naked void pkt_data_neq_pkt_meta_plus_const(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r1 = *(u32*)(r9 + %[__sk_buff_data_meta]);	\
+	r2 = *(u32*)(r9 + %[__sk_buff_data]);		\
+	r3 = r1;					\
+	r3 += 8;					\
+	if r2 != r3 goto 1f;				\
+	r1 = *(u64 *)(r1 + 0);				\
+1:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_meta, offsetof(struct __sk_buff, data_meta))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
