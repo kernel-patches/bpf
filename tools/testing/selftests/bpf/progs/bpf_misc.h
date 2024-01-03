@@ -135,4 +135,47 @@
 /* make it look to compiler like value is read and written */
 #define __sink(expr) asm volatile("" : "+g"(expr))
 
+/*
+ * Access an array element within a bound, such that the verifier knows the
+ * access is safe.
+ *
+ * This macro asm is the equivalent of:
+ *
+ *	if (!arr)
+ *		return NULL;
+ *	if (idx >= arr_sz)
+ *		return NULL;
+ *	return &arr[idx];
+ *
+ * The index (___idx below) needs to be a u64, at least for certain versions of
+ * the BPF ISA, since there aren't u32 conditional jumps.
+ */
+#define bpf_array_elem(arr, arr_sz, idx) ({				\
+	typeof(&(arr)[0]) ___arr = arr;					\
+	__u64 ___idx = idx;						\
+	if (___arr) {							\
+		asm volatile("if %[__idx] >= %[__bound] goto 1f;	\
+			      %[__idx] *= %[__size];		\
+			      %[__arr] += %[__idx];		\
+			      goto 2f;				\
+			      1:;				\
+			      %[__arr] = 0;			\
+			      2:				\
+			      "						\
+			     : [__arr]"+r"(___arr), [__idx]"+r"(___idx)	\
+			     : [__bound]"r"((arr_sz)),		        \
+			       [__size]"i"(sizeof(typeof((arr)[0])))	\
+			     : "cc");					\
+	}								\
+	___arr;								\
+})
+
+/*
+ * Convenience wrapper for bpf_array_elem(), where we compute the size of the
+ * array.  Be sure to use an actual array, and not a pointer, just like with the
+ * ARRAY_SIZE macro.
+ */
+#define bpf_array_sz_elem(arr, idx) \
+	bpf_array_elem(arr, sizeof(arr) / sizeof((arr)[0]), idx)
+
 #endif
