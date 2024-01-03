@@ -996,6 +996,12 @@ LIBBPF_API int bpf_map__set_map_extra(struct bpf_map *map, __u64 map_extra);
 LIBBPF_API int bpf_map__set_initial_value(struct bpf_map *map,
 					  const void *data, size_t size);
 LIBBPF_API void *bpf_map__initial_value(struct bpf_map *map, size_t *psize);
+/* get the mmappable size of the map */
+LIBBPF_API size_t bpf_map__mmap_size(const struct bpf_map *map);
+/* mmap the map */
+LIBBPF_API void *bpf_map__mmap(const struct bpf_map *map);
+/* munmap the map at addr */
+LIBBPF_API int bpf_map__munmap(const struct bpf_map *map, void *addr);
 
 /**
  * @brief **bpf_map__is_internal()** tells the caller whether or not the
