@@ -4493,7 +4493,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		if (fls64(reg->umax_value) > BITS_PER_BYTE * size)
 			state->stack[spi].spilled_ptr.id = 0;
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
-		   insn->imm != 0 && env->bpf_capable) {
+		   env->bpf_capable) {
 		struct bpf_reg_state fake_reg = {};
 
 		__mark_reg_known(&fake_reg, insn->imm);
@@ -4615,11 +4615,28 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 
 	/* Variable offset writes destroy any spilled pointers in range. */
 	for (i = min_off; i < max_off; i++) {
+		struct bpf_reg_state *spill_reg;
 		u8 new_type, *stype;
-		int slot, spi;
+		int slot, spi, j;
 
 		slot = -i - 1;
 		spi = slot / BPF_REG_SIZE;
+
+		/* If writing_zero and the the spi slot contains a spill of value 0,
+		 * maintain the spill type.
+		 */
+		if (writing_zero && !(i % BPF_REG_SIZE) && is_spilled_scalar_reg(&state->stack[spi])) {
+			spill_reg = &state->stack[spi].spilled_ptr;
+			if (tnum_is_const(spill_reg->var_off) && spill_reg->var_off.value == 0) {
+				for (j = BPF_REG_SIZE; j > 0; j--) {
+					if (state->stack[spi].slot_type[j - 1] != STACK_SPILL)
+						break;
+				}
+				i += BPF_REG_SIZE - j - 1;
+				continue;
+			}
+		}
+
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
 		mark_stack_slot_scratched(env, spi);
 
