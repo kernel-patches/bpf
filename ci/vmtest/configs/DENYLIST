@@ -1,0 +1,10 @@
+# TEMPORARY
+btf_dump/btf_dump: syntax
+kprobe_multi_bench_attach
+core_reloc/enum64val
+core_reloc/size___diff_sz
+core_reloc/type_based___diff_sz
+test_ima	# All of CI is broken on it following 6.3-rc1 merge
+
+lwt_reroute      # crashes kernel after netnext merge from 2ab1efad60ad "net/sched: cls_api: complement tcf_tfilter_dump_policy"
+tc_links_ingress # started failing after net-next merge from 2ab1efad60ad "net/sched: cls_api: complement tcf_tfilter_dump_policy"
