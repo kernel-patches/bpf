@@ -8908,7 +8908,7 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 			goto error;
 		if (env->subprog_cnt > 1 && !allow_tail_call_in_subprogs(env)) {
 			verbose(env, "tail_calls are not allowed in non-JITed programs with bpf-to-bpf calls\n");
-			return -EINVAL;
+			return -ENOTSUPP;
 		}
 		break;
 	case BPF_FUNC_perf_event_read:
@@ -19069,14 +19069,14 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 	if (has_kfunc_call) {
 		verbose(env, "calling kernel functions are not allowed in non-JITed programs\n");
-		return -EINVAL;
+		return -ENOTSUPP;
 	}
 	if (env->subprog_cnt > 1 && env->prog->aux->tail_call_reachable) {
 		/* When JIT fails the progs with bpf2bpf calls and tail_calls
 		 * have to be rejected, since interpreter doesn't support them yet.
 		 */
 		verbose(env, "tail_calls are not allowed in non-JITed programs with bpf-to-bpf calls\n");
-		return -EINVAL;
+		return -ENOTSUPP;
 	}
 	for (i = 0; i < prog->len; i++, insn++) {
 		if (bpf_pseudo_func(insn)) {
@@ -19084,7 +19084,7 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 			 * have to be rejected, since interpreter doesn't support them yet.
 			 */
 			verbose(env, "callbacks are not allowed in non-JITed programs\n");
-			return -EINVAL;
+			return -ENOTSUPP;
 		}
 
 		if (!bpf_pseudo_call(insn))
