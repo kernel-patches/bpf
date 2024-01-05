@@ -53,7 +53,7 @@ extern int bpf_sock_addr_set_sun_path(struct bpf_sock_addr_kern *sa_kern,
 
 void *bpf_cast_to_kern_ctx(void *) __ksym;
 
-void *bpf_rdonly_cast(void *obj, __u32 btf_id) __ksym;
+extern void *bpf_rdonly_cast(const void *obj, __u32 btf_id) __ksym __weak;
 
 extern int bpf_get_file_xattr(struct file *file, const char *name,
 			      struct bpf_dynptr *value_ptr) __ksym;
