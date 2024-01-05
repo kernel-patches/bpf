@@ -190,6 +190,8 @@ enum libbpf_tristate {
 
 #define __arg_ctx __attribute__((btf_decl_tag("arg:ctx")))
 #define __arg_nonnull __attribute((btf_decl_tag("arg:nonnull")))
+#define __arg_trusted __attribute((btf_decl_tag("arg:trusted")))
+#define __arg_untrusted __attribute((btf_decl_tag("arg:untrusted")))
 
 #ifndef ___bpf_concat
 #define ___bpf_concat(a, b) a ## b
