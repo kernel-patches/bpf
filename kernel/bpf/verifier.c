@@ -8076,6 +8076,7 @@ static const struct bpf_reg_types btf_ptr_types = {
 		PTR_TO_BTF_ID,
 		PTR_TO_BTF_ID | PTR_TRUSTED,
 		PTR_TO_BTF_ID | MEM_RCU,
+		PTR_TO_BTF_ID | PTR_UNTRUSTED,
 	},
 };
 static const struct bpf_reg_types percpu_btf_ptr_types = {
@@ -8261,6 +8262,12 @@ found:
 	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
 		/* Handled by helper specific checks */
+		break;
+	case PTR_TO_BTF_ID | PTR_UNTRUSTED:
+		if (!(arg_type & PTR_UNTRUSTED)) {
+			verbose(env, "Passing unexpected untrusted pointer as arg#%d\n", regno);
+			return -EACCES;
+		}
 		break;
 	default:
 		verbose(env, "verifier internal error: invalid PTR_TO_BTF_ID register for type match\n");
@@ -9300,6 +9307,18 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			ret = process_dynptr_func(env, regno, -1, arg->arg_type, 0);
 			if (ret)
 				return ret;
+		} else if (base_type(arg->arg_type) == ARG_PTR_TO_BTF_ID) {
+			struct bpf_call_arg_meta meta;
+			int err;
+
+			if (register_is_null(reg) && type_may_be_null(arg->arg_type))
+				continue;
+
+			memset(&meta, 0, sizeof(meta)); /* leave func_id as zero */
+			err = check_reg_type(env, regno, arg->arg_type, &arg->btf_id, &meta);
+			err = err ?: check_func_arg_reg_off(env, reg, regno, arg->arg_type);
+			if (err)
+				return err;
 		} else {
 			bpf_log(log, "verifier bug: unrecognized arg#%d type %d\n",
 				i, arg->arg_type);
@@ -20096,6 +20115,18 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 					reg->type |= PTR_MAYBE_NULL;
 				mark_reg_known_zero(env, regs, i);
 				reg->mem_size = arg->mem_size;
+				reg->id = ++env->id_gen;
+			} else if (base_type(arg->arg_type) == ARG_PTR_TO_BTF_ID) {
+				reg->type = PTR_TO_BTF_ID;
+				if (arg->arg_type & PTR_MAYBE_NULL)
+					reg->type |= PTR_MAYBE_NULL;
+				if (arg->arg_type & PTR_UNTRUSTED)
+					reg->type |= PTR_UNTRUSTED;
+				if (arg->arg_type & PTR_TRUSTED)
+					reg->type |= PTR_TRUSTED;
+				mark_reg_known_zero(env, regs, i);
+				reg->btf = bpf_get_btf_vmlinux(); /* can't fail at this point */
+				reg->btf_id = arg->btf_id;
 				reg->id = ++env->id_gen;
 			} else {
 				WARN_ONCE(1, "BUG: unhandled arg#%d type %d\n",

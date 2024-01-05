@@ -41,7 +41,7 @@ int BPF_PROG(test_invalid_nested_offset, struct task_struct *task, u64 clone_fla
 
 /* Although R2 is of type sk_buff but sock_common is expected, we will hit untrusted ptr first. */
 SEC("tp_btf/tcp_probe")
-__failure __msg("R2 type=untrusted_ptr_ expected=ptr_, trusted_ptr_, rcu_ptr_")
+__failure __msg("Passing unexpected untrusted pointer as arg#2")
 int BPF_PROG(test_invalid_skb_field, struct sock *sk, struct sk_buff *skb)
 {
 	bpf_sk_storage_get(&sk_storage_map, skb->next, 0, 0);
