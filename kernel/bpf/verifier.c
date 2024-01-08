@@ -14677,6 +14677,7 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 				   struct bpf_verifier_state *this_branch,
 				   struct bpf_verifier_state *other_branch)
 {
+	struct bpf_verifier_state *eq_branch;
 	int opcode = BPF_OP(insn->code);
 	int dst_regno = insn->dst_reg;
 
@@ -14712,6 +14713,13 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 		/* pkt_data </<= pkt_end, pkt_meta </<= pkt_data */
 		find_good_pkt_pointers(other_branch, dst_reg, dst_reg->type, opcode == BPF_JLT);
 		mark_pkt_end(this_branch, dst_regno, opcode == BPF_JLE);
+		break;
+	case BPF_JEQ:
+	case BPF_JNE:
+		/* pkt_data ==/!= pkt_end, pkt_meta ==/!= pkt_data */
+		eq_branch = opcode == BPF_JEQ ? other_branch : this_branch;
+		find_good_pkt_pointers(eq_branch, dst_reg, dst_reg->type, true);
+		mark_pkt_end(eq_branch, dst_regno, false);
 		break;
 	default:
 		return false;
