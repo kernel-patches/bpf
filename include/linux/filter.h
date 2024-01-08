@@ -39,6 +39,8 @@ struct sock_reuseport;
 struct ctl_table;
 struct ctl_table_header;
 
+#define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
+
 /* ArgX, context and stack frame pointer register positions. Note,
  * Arg1, Arg2, Arg3, etc are used as argument mappings of function
  * calls in BPF_CALL instruction.
@@ -880,6 +882,16 @@ bpf_ctx_narrow_access_offset(u32 off, u32 size, u32 size_default)
 	off % sizeof(__u64) == 0)
 
 #define bpf_classic_proglen(fprog) (fprog->len * sizeof(fprog->filter[0]))
+
+static inline bool
+bpf_stack_narrow_access_ok(int off, int size, int spill_size)
+{
+#ifdef __BIG_ENDIAN
+	off -= spill_size - size;
+#endif
+
+	return !(off % BPF_REG_SIZE);
+}
 
 static inline void bpf_prog_lock_ro(struct bpf_prog *fp)
 {
