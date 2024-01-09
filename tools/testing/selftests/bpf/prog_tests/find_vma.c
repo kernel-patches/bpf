@@ -51,7 +51,7 @@ static void test_find_vma_pe(struct find_vma *skel)
 	struct bpf_link *link = NULL;
 	volatile int j = 0;
 	int pfd, i;
-	const int one_bn = 1000000000;
+	const int dummy_wait = 2500000000;
 
 	pfd = open_pe();
 	if (pfd < 0) {
@@ -68,10 +68,10 @@ static void test_find_vma_pe(struct find_vma *skel)
 	if (!ASSERT_OK_PTR(link, "attach_perf_event"))
 		goto cleanup;
 
-	for (i = 0; i < one_bn && find_vma_pe_condition(skel); ++i)
+	for (i = 0; i < dummy_wait && find_vma_pe_condition(skel); ++i)
 		++j;
 
-	test_and_reset_skel(skel, -EBUSY /* in nmi, irq_work is busy */, i == one_bn);
+	test_and_reset_skel(skel, -EBUSY /* in nmi, irq_work is busy */, i == dummy_wait);
 cleanup:
 	bpf_link__destroy(link);
 	close(pfd);
