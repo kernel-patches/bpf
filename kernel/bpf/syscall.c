@@ -2625,6 +2625,18 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 	}
 }
 
+static void *bpf_prog_alloc_orig_idx(u32 insn_cnt)
+{
+	u32 *orig_idx;
+	int i;
+
+	orig_idx = kcalloc(insn_cnt, sizeof(*orig_idx), GFP_KERNEL);
+	if (orig_idx)
+		for (i = 0; i < insn_cnt; i++)
+			orig_idx[i] = i;
+	return orig_idx;
+}
+
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_PROG_LOAD_LAST_FIELD prog_token_fd
 
@@ -2758,6 +2770,12 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 			btf_put(attach_btf);
 		err = -EINVAL;
 		goto put_token;
+	}
+
+	prog->aux->orig_idx = bpf_prog_alloc_orig_idx(attr->insn_cnt);
+	if (!prog->aux->orig_idx) {
+		err = -ENOMEM;
+		goto free_prog;
 	}
 
 	prog->expected_attach_type = attr->expected_attach_type;
@@ -4538,6 +4556,18 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 		fault = copy_to_user(uinsns, insns_sanitized, ulen);
 		kfree(insns_sanitized);
 		if (fault)
+			return -EFAULT;
+	}
+
+	ulen = info.orig_idx_len;
+	if (prog->aux->orig_idx)
+		info.orig_idx_len = prog->len * sizeof(*prog->aux->orig_idx);
+	else
+		info.orig_idx_len = 0;
+	if (info.orig_idx_len && ulen) {
+		if (copy_to_user(u64_to_user_ptr(info.orig_idx),
+				 prog->aux->orig_idx,
+				 min_t(u32, info.orig_idx_len, ulen)))
 			return -EFAULT;
 	}
 
