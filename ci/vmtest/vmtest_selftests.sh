@@ -17,8 +17,9 @@ ARCH=$(uname -m)
 STATUS_FILE=/mnt/vmtest/exitstatus
 OUTPUT_DIR=/mnt/vmtest
 
-BPF_SELFTESTS_DIR="/${PROJECT_NAME}/selftests/bpf"
-VMTEST_CONFIGS_PATH="/${PROJECT_NAME}/vmtest/configs"
+WORKING_DIR="/${PROJECT_NAME}"
+BPF_SELFTESTS_DIR="${WORKING_DIR}/selftests/bpf"
+VMTEST_CONFIGS_PATH="${WORKING_DIR}/ci/vmtest/configs"
 
 read_lists() {
 	(for path in "$@"; do
@@ -134,7 +135,7 @@ run_veristat_helper() {
     # shellcheck source=ci/vmtest/configs/run_veristat.default.cfg
     # shellcheck source=ci/vmtest/configs/run_veristat.meta.cfg
     source "${VMTEST_CONFIGS_PATH}/run_veristat.${mode}.cfg"
-    pushd "${PROJECT_NAME}/${VERISTAT_OBJECTS_DIR}"
+    pushd "${VERISTAT_OBJECTS_DIR}"
 
     "${BPF_SELFTESTS_DIR}/veristat" -o csv -q -e file,prog,verdict,states ${VERISTAT_OBJECTS_GLOB} > \
       "${OUTPUT_DIR}/${VERISTAT_OUTPUT}"

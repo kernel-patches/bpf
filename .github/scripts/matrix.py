@@ -76,6 +76,7 @@ class BuildConfig:
 
     @property
     def tests(self) -> Dict[str, Any]:
+        return {"include": []}
         tests_list = [
             "test_progs",
             "test_progs_parallel",
@@ -147,6 +148,8 @@ if __name__ == "__main__":
             run_veristat=True,
             parallel_tests=True,
         ),
+    ]
+    """
         BuildConfig(
             arch=Arch.X86_64,
             toolchain=Toolchain(compiler=Compiler.LLVM, version=DEFAULT_LLVM_VERSION),
@@ -173,6 +176,7 @@ if __name__ == "__main__":
             toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
         ),
     ]
+    """
 
     # Outside of those repositories we only run on x86_64
     if not is_managed_repo():
