@@ -48,16 +48,6 @@ jobs:
         # zstd is installed by default in the runner images.
         run: zstd -d -T0  vmlinux-${{ env.ARCH_AND_TOOL }}.tar.zst --stdout | tar -xf -
 
-      - name: Prepare rootfs
-        uses: libbpf/ci/prepare-rootfs@main
-        with:
-          project-name: 'libbpf'
-          arch: x86_64
-          kernel: LATEST
-          kernel-root: '.'
-          kbuild-output: ${{ env.KBUILD_OUTPUT }}
-          image-output: '/tmp/root.img'
-
       - name: Configure AWS Credentials
         # Disabling BPF objects download and veristat-meta benchmark for PRs
         # created from fork repositories. These won't have access to required
@@ -74,26 +64,22 @@ jobs:
         run: |
           set -eux
           if [ -n "$AWS_ROLE_ARN" ]; then
-            mkdir /tmp/bpf_objects
-            aws s3 sync s3://veristat-bpf-binaries /tmp/bpf_objects
+            mkdir ./bpf_objects
+            aws s3 sync s3://veristat-bpf-binaries ./bpf_objects
           fi
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
-      - name: Add BPF objects to rootfs
-        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-        shell: bash
-        run: ./.github/scripts/bpf-objects-rootfs.sh
-
       - name: Run veristat
-        uses: libbpf/ci/run-qemu@main
+        uses: libbpf/ci/run-vmtest@main
         with:
           arch: x86_64
           img: '/tmp/root.img'
           vmlinuz: '${{ github.workspace }}/vmlinuz'
           kernel-root: '.'
           max-cpu: 8
-          kernel-test: run_veristat_kernel,run_veristat_meta
+          # Don't run meta's veristat from forked repo.
+          kernel-test: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'run_veristat_kernel,run_veristat_meta' || 'run_veristat_kernel' }}
           output-dir: '${{ github.workspace }}'
 
       - name: Compare and save veristat.kernel.csv

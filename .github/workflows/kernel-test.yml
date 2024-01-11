@@ -54,18 +54,8 @@ jobs:
       - name: Untar artifacts
         # zstd is installed by default in the runner images.
         run: zstd -d -T0  vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
-      - name: Prepare rootfs
-        uses: libbpf/ci/prepare-rootfs@main
-        with:
-          project-name: 'libbpf'
-          arch: ${{ inputs.arch }}
-          kernel: ${{ inputs.kernel }}
-          kernel-root: '.'
-          kbuild-output: ${{ env.KBUILD_OUTPUT }}
-          image-output: '/tmp/root.img'
-          test: ${{ inputs.test }}
       - name: Run selftests
-        uses: libbpf/ci/run-qemu@main
+        uses: libbpf/ci/run-vmtest@main
         # https://github.com/actions/runner/issues/1483#issuecomment-1031671517
         # booleans are weird in GH.
         continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
