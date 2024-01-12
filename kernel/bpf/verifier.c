@@ -4380,6 +4380,7 @@ static u64 reg_const_value(struct bpf_reg_state *reg, bool subreg32)
 	return subreg32 ? tnum_subreg(reg->var_off).value : reg->var_off.value;
 }
 
+#if 0
 static bool __is_scalar_unbounded(struct bpf_reg_state *reg)
 {
 	return tnum_is_unknown(reg->var_off) &&
@@ -4388,6 +4389,7 @@ static bool __is_scalar_unbounded(struct bpf_reg_state *reg)
 	       reg->s32_min_value == S32_MIN && reg->s32_max_value == S32_MAX &&
 	       reg->u32_min_value == 0 && reg->u32_max_value == U32_MAX;
 }
+#endif
 
 static bool register_is_bounded(struct bpf_reg_state *reg)
 {
