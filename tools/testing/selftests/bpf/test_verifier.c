@@ -21,6 +21,7 @@
 #include <sched.h>
 #include <limits.h>
 #include <assert.h>
+#include <fcntl.h>
 
 #include <linux/unistd.h>
 #include <linux/filter.h>
@@ -1355,6 +1356,34 @@ static bool is_skip_insn(struct bpf_insn *insn)
 	return memcmp(insn, &skip_insn, sizeof(skip_insn)) == 0;
 }
 
+static bool is_ldimm64_insn(struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LD | BPF_IMM | BPF_DW);
+}
+
+static bool insn_is_pseudo_func(struct bpf_insn *insn)
+{
+	return is_ldimm64_insn(insn) && insn->src_reg == BPF_PSEUDO_FUNC;
+}
+
+static bool is_jit_enabled(void)
+{
+	const char *jit_sysctl = "/proc/sys/net/core/bpf_jit_enable";
+	bool enabled = false;
+	int sysctl_fd;
+
+	sysctl_fd = open(jit_sysctl, 0, O_RDONLY);
+	if (sysctl_fd != -1) {
+		char tmpc;
+
+		if (read(sysctl_fd, &tmpc, sizeof(tmpc)) == 1)
+			enabled = (tmpc != '0');
+		close(sysctl_fd);
+	}
+
+	return enabled;
+}
+
 static int null_terminated_insn_len(struct bpf_insn *seq, int max_len)
 {
 	int i;
@@ -1617,6 +1646,16 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 		printf("SKIP (program uses an unsupported feature)\n");
 		skips++;
 		goto close_fds;
+	}
+
+	if (!is_jit_enabled()) {
+		for (i = 0; i < prog_len; i++, prog++) {
+			if (insn_is_pseudo_func(prog)) {
+				printf("SKIP (callbacks are not allowed in non-JITed programs)\n");
+				skips++;
+				goto close_fds;
+			}
+		}
 	}
 
 	alignment_prevented_execution = 0;
