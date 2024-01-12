@@ -1390,6 +1390,7 @@ struct task_struct {
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	/* Index of current stored address in ret_stack: */
 	int				curr_ret_stack;
+	int				rsrv_ret_stack;
 	int				curr_ret_depth;
 
 	/* Stack of return addresses for return function tracing: */

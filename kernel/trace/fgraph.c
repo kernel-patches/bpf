@@ -298,9 +298,17 @@ void *fgraph_reserve_data(int idx, int size_bytes)
 	unsigned long val;
 	void *data;
 	int curr_ret_stack = current->curr_ret_stack;
+	int rsrv_ret_stack = current->rsrv_ret_stack;
 	int data_size;
 
 	if (size_bytes > FGRAPH_MAX_DATA_SIZE)
+		return NULL;
+
+	/*
+	 * Since this API is used after pushing ret_stack, curr_ret_stack
+	 * should be synchronized with rsrv_ret_stack.
+	 */
+	if (WARN_ON_ONCE(curr_ret_stack != rsrv_ret_stack))
 		return NULL;
 
 	/* Convert to number of longs + data word */
@@ -309,20 +317,28 @@ void *fgraph_reserve_data(int idx, int size_bytes)
 	val = get_fgraph_entry(current, curr_ret_stack - 1);
 	data = &current->ret_stack[curr_ret_stack];
 
-	curr_ret_stack += data_size + 1;
-	if (unlikely(curr_ret_stack >= SHADOW_STACK_MAX_INDEX))
+	rsrv_ret_stack += data_size + 1;
+	if (unlikely(rsrv_ret_stack >= SHADOW_STACK_MAX_INDEX))
 		return NULL;
 
 	val = make_fgraph_data(idx, data_size, __get_index(val) + data_size + 1);
 
-	/* Set the last word to be reserved */
-	current->ret_stack[curr_ret_stack - 1] = val;
-
-	/* Make sure interrupts see this */
+	/* Extend the reserved-ret_stack at first */
+	current->rsrv_ret_stack = rsrv_ret_stack;
+	/* And sync with interrupts, to see the new rsrv_ret_stack */
 	barrier();
-	current->curr_ret_stack = curr_ret_stack;
-	/* Again sync with interrupts, and reset reserve */
-	current->ret_stack[curr_ret_stack - 1] = val;
+	/*
+	 * The same reason as the push, this entry must be here before updating
+	 * the curr_ret_stack. But any interrupt comes before updating
+	 * curr_ret_stack, it may commit it with different reserve entry.
+	 * Thus we need to write the data entry after update the curr_ret_stack
+	 * again. And these operations must be ordered.
+	 */
+	current->ret_stack[rsrv_ret_stack - 1] = val;
+	barrier();
+	current->curr_ret_stack = rsrv_ret_stack;
+	barrier();
+	current->ret_stack[rsrv_ret_stack - 1] = val;
 
 	return data;
 }
@@ -403,7 +419,16 @@ get_ret_stack(struct task_struct *t, int offset, int *index)
 		return NULL;
 
 	idx = get_ret_stack_index(t, --offset);
-	if (WARN_ON_ONCE(idx <= 0 || idx > offset))
+	/*
+	 * This can happen if an interrupt comes just before the first push
+	 * increments the curr_ret_stack, and that interrupt pushes another
+	 * entry. In that case, the frist push is forcibly committed with a
+	 * reserved entry which points -1 stack index.
+	 */
+	if (unlikely(idx > offset))
+		return NULL;
+
+	if (WARN_ON_ONCE(idx <= 0))
 		return NULL;
 
 	offset -= idx;
@@ -473,7 +498,7 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 	struct ftrace_ret_stack *ret_stack;
 	unsigned long long calltime;
 	unsigned long val;
-	int index;
+	int index, rindex;
 
 	if (unlikely(ftrace_graph_is_dead()))
 		return -EBUSY;
@@ -481,18 +506,38 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 	if (!current->ret_stack)
 		return -EBUSY;
 
-	/*
-	 * At first, check whether the previous fgraph callback is pushed by
-	 * the fgraph on the same function entry.
-	 * But if @func is the self tail-call function, we also need to ensure
-	 * the ret_stack is not for the previous call by checking whether the
-	 * bit of @fgraph_idx is set or not.
-	 */
-	ret_stack = get_ret_stack(current, current->curr_ret_stack, &index);
-	if (ret_stack && ret_stack->func == func &&
-	    get_fgraph_type(current, index + FGRAPH_RET_INDEX) == FGRAPH_TYPE_BITMAP &&
-	    !is_fgraph_index_set(current, index + FGRAPH_RET_INDEX, fgraph_idx))
-		return index + FGRAPH_RET_INDEX;
+	index = READ_ONCE(current->curr_ret_stack);
+	rindex = READ_ONCE(current->rsrv_ret_stack);
+	if (unlikely(index != rindex)) {
+		/*
+		 * This interrupts the push operation. Commit previous push
+		 * temporarily with reserved entry.
+		 */
+		if (unlikely(index <= 0))
+			/* This will make ret_stack[index - 1] points -1 */
+			val = rindex - index;
+		else
+			val = get_ret_stack_index(current, index - 1) +
+			      rindex - index;
+		current->ret_stack[rindex - 1] = val;
+		/* Forcibly commit it */
+		current->curr_ret_stack = index = rindex;
+	} else {
+		/*
+		 * Check whether the previous fgraph callback is pushed by the fgraph
+		 * on the same function entry.
+		 * But if @func is the self tail-call function, we also need to ensure
+		 * the ret_stack is not for the previous call by checking whether the
+		 * bit of @fgraph_idx is set or not.
+		 */
+		ret_stack = get_ret_stack(current, index, &index);
+		if (ret_stack && ret_stack->func == func &&
+		    get_fgraph_type(current, index + FGRAPH_RET_INDEX) == FGRAPH_TYPE_BITMAP &&
+		    !is_fgraph_index_set(current, index + FGRAPH_RET_INDEX, fgraph_idx))
+			return index + FGRAPH_RET_INDEX;
+		/* Since get_ret_stack() overwrites 'index', recover it. */
+		index = rindex;
+	}
 
 	val = (FGRAPH_TYPE_RESERVED << FGRAPH_TYPE_SHIFT) | FGRAPH_RET_INDEX;
 
@@ -512,38 +557,45 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 
 	calltime = trace_clock_local();
 
-	index = READ_ONCE(current->curr_ret_stack);
 	ret_stack = RET_STACK(current, index);
 	index += FGRAPH_RET_INDEX;
 
-	/* ret offset = FGRAPH_RET_INDEX ; type = reserved */
+	/*
+	 * At first, reserve the ret_stack. Beyond this point, any interrupt
+	 * will only overwrite ret_stack[index] by a reserved entry which points
+	 * the previous ret_stack or -1.
+	 */
+	current->rsrv_ret_stack = index + 1;
+	/* And ensure that the following happens after reserved */
+	barrier();
+
 	current->ret_stack[index] = val;
 	ret_stack->ret = ret;
 	/*
 	 * The unwinders expect curr_ret_stack to point to either zero
-	 * or an index where to find the next ret_stack. Even though the
-	 * ret stack might be bogus, we want to write the ret and the
-	 * index to find the ret_stack before we increment the stack point.
-	 * If an interrupt comes in now before we increment the curr_ret_stack
-	 * it may blow away what we wrote. But that's fine, because the
-	 * index will still be correct (even though the 'ret' won't be).
-	 * What we worry about is the index being correct after we increment
-	 * the curr_ret_stack and before we update that index, as if an
-	 * interrupt comes in and does an unwind stack dump, it will need
-	 * at least a correct index!
+	 * or an index where to find the next ret_stack which has actual ret
+	 * address. Thus we want to write the ret and the index to find the
+	 * ret_stack before we increment the curr_ret_stack.
 	 */
 	barrier();
 	current->curr_ret_stack = index + 1;
 	/*
+	 * There are two possibilities here.
+	 * - More than one interrupts push/pop their entry between update
+	 *   rsrv_ret_stack and curr_ret_stack. In this case, curr_ret_stack
+	 *   is already equal to the rsrv_ret_stack and
+	 *   current->ret_stack[index] is overwritten by reserved entry which
+	 *   points the previous ret_stack. But ret_stack->ret is not.
+	 * - Or, no interrupts push/pop. So current->ret_stack[index] keeps
+	 *   its value.
 	 * This next barrier is to ensure that an interrupt coming in
-	 * will not corrupt what we are about to write.
+	 * will not overwrite what we are about to write anymore.
 	 */
 	barrier();
 
-	/* Still keep it reserved even if an interrupt came in */
+	/* Rewrite the entry again in case it was overwritten. */
 	current->ret_stack[index] = val;
 
-	ret_stack->ret = ret;
 	ret_stack->func = func;
 	ret_stack->calltime = calltime;
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
@@ -625,6 +677,7 @@ int function_graph_enter(unsigned long ret, unsigned long func,
 	return 0;
  out_ret:
 	current->curr_ret_stack -= FGRAPH_RET_INDEX + 1;
+	current->rsrv_ret_stack = current->curr_ret_stack;
  out:
 	current->curr_ret_depth--;
 	return -EBUSY;
@@ -668,6 +721,7 @@ int function_graph_enter_ops(unsigned long ret, unsigned long func,
 
 	if (type == FGRAPH_TYPE_RESERVED) {
 		current->curr_ret_stack -= FGRAPH_RET_INDEX + 1;
+		current->rsrv_ret_stack = current->curr_ret_stack;
 		current->curr_ret_depth--;
 	}
 	return -EBUSY;
@@ -810,6 +864,7 @@ static unsigned long __ftrace_return_to_handler(struct fgraph_ret_regs *ret_regs
 	 */
 	barrier();
 	current->curr_ret_stack = index - FGRAPH_RET_INDEX;
+	current->rsrv_ret_stack = current->curr_ret_stack;
 
 	current->curr_ret_depth--;
 	return ret;
@@ -998,6 +1053,7 @@ static int alloc_retstack_tasklist(unsigned long **ret_stack_list)
 			atomic_set(&t->trace_overrun, 0);
 			ret_stack_init_task_vars(ret_stack_list[start]);
 			t->curr_ret_stack = 0;
+			t->rsrv_ret_stack = 0;
 			t->curr_ret_depth = -1;
 			/* Make sure the tasks see the 0 first: */
 			smp_wmb();
@@ -1060,6 +1116,7 @@ graph_init_task(struct task_struct *t, unsigned long *ret_stack)
 	ret_stack_init_task_vars(ret_stack);
 	t->ftrace_timestamp = 0;
 	t->curr_ret_stack = 0;
+	t->rsrv_ret_stack = 0;
 	t->curr_ret_depth = -1;
 	/* make curr_ret_stack visible before we add the ret_stack */
 	smp_wmb();
@@ -1073,6 +1130,7 @@ graph_init_task(struct task_struct *t, unsigned long *ret_stack)
 void ftrace_graph_init_idle_task(struct task_struct *t, int cpu)
 {
 	t->curr_ret_stack = 0;
+	t->rsrv_ret_stack = 0;
 	t->curr_ret_depth = -1;
 	/*
 	 * The idle task has no parent, it either has its own
@@ -1101,6 +1159,7 @@ void ftrace_graph_init_task(struct task_struct *t)
 	/* Make sure we do not use the parent ret_stack */
 	t->ret_stack = NULL;
 	t->curr_ret_stack = 0;
+	t->rsrv_ret_stack = 0;
 	t->curr_ret_depth = -1;
 
 	if (ftrace_graph_active) {
