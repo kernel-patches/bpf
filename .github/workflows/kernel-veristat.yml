@@ -78,7 +78,8 @@ jobs:
           vmlinuz: '${{ github.workspace }}/vmlinuz'
           kernel-root: '.'
           max-cpu: 8
-          kernel-test: run_veristat_kernel,run_veristat_meta
+          # Don't run meta's veristat from forked repo.
+          kernel-test: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'run_veristat_kernel,run_veristat_meta' || 'run_veristat_kernel' }}
           output-dir: '${{ github.workspace }}'
 
       - name: Compare and save veristat.kernel.csv
