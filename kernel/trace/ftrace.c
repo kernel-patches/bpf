@@ -3016,6 +3016,8 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 	if (unlikely(ftrace_disabled))
 		return -ENODEV;
 
+	ftrace_ops_init(ops);
+
 	ret = __register_ftrace_function(ops);
 	if (ret)
 		return ret;
@@ -7323,7 +7325,7 @@ __init void ftrace_init_global_array_ops(struct trace_array *tr)
 	tr->ops = &global_ops;
 	tr->ops->private = tr;
 	ftrace_init_trace_array(tr);
-	init_array_fgraph_ops(tr);
+	init_array_fgraph_ops(tr, tr->ops);
 }
 
 void ftrace_init_array_ops(struct trace_array *tr, ftrace_func_t func)
@@ -8055,7 +8057,7 @@ static int register_ftrace_function_nolock(struct ftrace_ops *ops)
  */
 int register_ftrace_function(struct ftrace_ops *ops)
 {
-	int ret;
+	int ret = -1;
 
 	lock_direct_mutex();
 	ret = prepare_direct_functions_for_ipmodify(ops);

@@ -1070,7 +1070,9 @@ extern int ftrace_graph_entry_stub(struct ftrace_graph_ent *trace, struct fgraph
 struct fgraph_ops {
 	trace_func_graph_ent_t		entryfunc;
 	trace_func_graph_ret_t		retfunc;
+	struct ftrace_ops		ops; /* for the hash lists */
 	void				*private;
+	int				idx;
 };
 
 /*
@@ -1103,6 +1105,11 @@ extern void return_to_handler(void);
 extern int
 function_graph_enter(unsigned long ret, unsigned long func,
 		     unsigned long frame_pointer, unsigned long *retp);
+
+extern int
+function_graph_enter_ops(unsigned long ret, unsigned long func,
+			 unsigned long frame_pointer, unsigned long *retp,
+			 struct fgraph_ops *gops);
 
 struct ftrace_ret_stack *
 ftrace_graph_get_ret_stack(struct task_struct *task, int idx);
