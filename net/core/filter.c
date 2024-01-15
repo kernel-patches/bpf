@@ -5144,6 +5144,8 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 	case SO_MAX_PACING_RATE:
 	case SO_BINDTOIFINDEX:
 	case SO_TXREHASH:
+	case SO_TIMESTAMPING_NEW:
+	case SO_TIMESTAMPING_OLD:
 		if (*optlen != sizeof(int))
 			return -EINVAL;
 		break;
