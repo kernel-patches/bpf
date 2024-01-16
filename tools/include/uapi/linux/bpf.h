@@ -6493,6 +6493,11 @@ struct sk_reuseport_md {
 
 #define BPF_TAG_SIZE	8
 
+struct bpf_xlated_to_jit {
+	__u32 off;
+	__u32 len;
+};
+
 struct bpf_prog_info {
 	__u32 type;
 	__u32 id;
@@ -6535,6 +6540,8 @@ struct bpf_prog_info {
 	__u32 attach_btf_id;
 	__u32 orig_idx_len;
 	__aligned_u64 orig_idx;
+	__u32 xlated_to_jit_len;
+	__aligned_u64 xlated_to_jit;
 } __attribute__((aligned(8)));
 
 struct bpf_map_info {
