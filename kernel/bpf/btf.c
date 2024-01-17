@@ -5742,9 +5742,15 @@ static int btf_validate_prog_ctx_type(struct bpf_verifier_log *log, const struct
 			return 0;
 		break;
 	case BPF_PROG_TYPE_PERF_EVENT:
-		if (__builtin_types_compatible_p(bpf_user_pt_regs_t, struct pt_regs) &&
-		    __btf_type_is_struct(t) && strcmp(tname, "pt_regs") == 0)
+		/* check for canonical PERF_EVENT context first */
+		if (__btf_type_is_struct(t) && strcmp(tname, "bpf_perf_event_data") == 0)
 			return 0;
+		/* otherwise treat PERF_EVENT program as KPROBE program and
+		 * use canonical typedef resolution logic to check if user
+		 * provided correct type according to bpf_user_pt_regs_t
+		 * typedef's underlying type
+		 */
+		prog_type = BPF_PROG_TYPE_KPROBE;
 		break;
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
