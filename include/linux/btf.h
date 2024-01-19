@@ -496,6 +496,7 @@ static inline void *btf_id_set8_contains(const struct btf_id_set8 *set, u32 id)
 }
 
 struct bpf_verifier_log;
+struct bpf_struct_ops;
 
 #ifdef CONFIG_BPF_SYSCALL
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
@@ -520,6 +521,9 @@ btf_get_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_type);
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
+int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops);
+const struct bpf_struct_ops_desc *bpf_struct_ops_find_value(struct btf *btf, u32 value_id);
+const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id);
 #else
 static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
 						    u32 type_id)
@@ -571,6 +575,14 @@ static inline bool btf_types_are_same(const struct btf *btf1, u32 id1,
 				      const struct btf *btf2, u32 id2)
 {
 	return false;
+}
+static inline int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+{
+	return -ENOTSUPP;
+}
+static inline const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id)
+{
+	return NULL;
 }
 #endif
 
