@@ -13,8 +13,6 @@
 #include <limits.h>
 #include <errno.h>
 #include <linux/err.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <libelf.h>
 #include "relo_core.h"
 
@@ -532,42 +530,9 @@ static inline bool is_ldimm64_insn(struct bpf_insn *insn)
 	return insn->code == (BPF_LD | BPF_IMM | BPF_DW);
 }
 
-/* if fd is stdin, stdout, or stderr, dup to a fd greater than 2
- * Takes ownership of the fd passed in, and closes it if calling
- * fcntl(fd, F_DUPFD_CLOEXEC, 3).
- */
-static inline int ensure_good_fd(int fd)
-{
-	int old_fd = fd, saved_errno;
-
-	if (fd < 0)
-		return fd;
-	if (fd < 3) {
-		fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
-		saved_errno = errno;
-		close(old_fd);
-		errno = saved_errno;
-		if (fd < 0) {
-			pr_warn("failed to dup FD %d to FD > 2: %d\n", old_fd, -saved_errno);
-			errno = saved_errno;
-		}
-	}
-	return fd;
-}
-
-/* Point *fixed_fd* to the same file that *tmp_fd* points to.
- * Regardless of success, *tmp_fd* is closed.
- * Whatever *fixed_fd* pointed to is closed silently.
- */
-static inline int reuse_fd(int fixed_fd, int tmp_fd)
-{
-	int err;
-
-	err = dup2(tmp_fd, fixed_fd);
-	err = err < 0 ? -errno : 0;
-	close(tmp_fd); /* clean up temporary FD */
-	return err;
-}
+/* FD manipulation helpers */
+int ensure_good_fd(int fd);
+int reuse_fd(int fixed_fd, int tmp_fd);
 
 /* The following two functions are exposed to bpftool */
 int bpf_core_add_cands(struct bpf_core_cand *local_cand,

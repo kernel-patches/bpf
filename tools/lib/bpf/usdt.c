@@ -7,6 +7,7 @@
 #include <libelf.h>
 #include <gelf.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <linux/ptrace.h>
 #include <linux/kernel.h>
 

@@ -5,6 +5,7 @@
 #endif
 #include <libelf.h>
 #include <gelf.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <linux/kernel.h>
 
