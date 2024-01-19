@@ -2,6 +2,10 @@
 #ifndef __X86_MM_INTERNAL_H
 #define __X86_MM_INTERNAL_H
 
+#include <uapi/asm/vsyscall.h>
+
+#include <asm/page_types.h>
+
 void *alloc_low_pages(unsigned int num);
 static inline void *alloc_low_page(void)
 {
@@ -24,5 +28,14 @@ extern int after_bootmem;
 void update_cache_mode_entry(unsigned entry, enum page_cache_mode cache);
 
 extern unsigned long tlb_single_page_flush_ceiling;
+
+/*
+ * The (legacy) vsyscall page is the long page in the kernel portion
+ * of the address space that has user-accessible permissions.
+ */
+static inline bool is_vsyscall_vaddr(unsigned long vaddr)
+{
+	return unlikely((vaddr & PAGE_MASK) == VSYSCALL_ADDR);
+}
 
 #endif	/* __X86_MM_INTERNAL_H */
