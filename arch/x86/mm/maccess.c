@@ -3,6 +3,8 @@
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 
+#include "mm_internal.h"
+
 #ifdef CONFIG_X86_64
 bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size)
 {
@@ -13,6 +15,10 @@ bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size)
 	 * normal userspace and the userspace guard page:
 	 */
 	if (vaddr < TASK_SIZE_MAX + PAGE_SIZE)
+		return false;
+
+	/* vsyscall page is also considered as userspace address. */
+	if (is_vsyscall_vaddr(vaddr))
 		return false;
 
 	/*
