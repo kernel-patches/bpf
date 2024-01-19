@@ -71,6 +71,15 @@ static inline __u64 ptr_to_u64(const void *ptr)
 	return (__u64) (unsigned long) ptr;
 }
 
+static inline int sys_dup2(int oldfd, int newfd)
+{
+#ifdef __NR_dup2
+	return syscall(__NR_dup2, oldfd, newfd);
+#else
+	return syscall(__NR_dup3, oldfd, newfd, 0);
+#endif
+}
+
 /* if fd is stdin, stdout, or stderr, dup to a fd greater than 2
  * Takes ownership of the fd passed in, and closes it if calling
  * fcntl(fd, F_DUPFD_CLOEXEC, 3).
@@ -102,7 +111,7 @@ int reuse_fd(int fixed_fd, int tmp_fd)
 {
 	int err;
 
-	err = dup2(tmp_fd, fixed_fd);
+	err = sys_dup2(tmp_fd, fixed_fd);
 	err = err < 0 ? -errno : 0;
 	close(tmp_fd); /* clean up temporary FD */
 	return err;
