@@ -1131,6 +1131,15 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+static bool is_static_ja_nop(const struct bpf_insn *insn)
+{
+	u8 code = insn->code;
+
+	return (code == (BPF_JMP | BPF_JA) || code == (BPF_JMP32 | BPF_JA)) &&
+	       (insn->src_reg & BPF_STATIC_BRANCH_JA) &&
+	       (insn->src_reg & BPF_STATIC_BRANCH_NOP);
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
@@ -2016,9 +2025,15 @@ emit_jmp:
 					}
 					emit_nops(&prog, INSN_SZ_DIFF - 2);
 				}
-				EMIT2(0xEB, jmp_offset);
+				if (is_static_ja_nop(insn))
+					emit_nops(&prog, 2);
+				else
+					EMIT2(0xEB, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
-				EMIT1_off32(0xE9, jmp_offset);
+				if (is_static_ja_nop(insn))
+					emit_nops(&prog, 5);
+				else
+					EMIT1_off32(0xE9, jmp_offset);
 			} else {
 				pr_err("jmp gen bug %llx\n", jmp_offset);
 				return -EFAULT;
