@@ -168,6 +168,17 @@ else
         KBUILD_CFLAGS += -mcmodel=kernel
         KBUILD_RUSTFLAGS += -Cno-redzone=y
         KBUILD_RUSTFLAGS += -Ccode-model=kernel
+
+	PIE_CFLAGS := -fpie -mcmodel=small \
+		      -include $(srctree)/include/linux/hidden.h
+
+	ifeq ($(CONFIG_STACKPROTECTOR),y)
+		ifeq ($(CONFIG_SMP),y)
+			PIE_CFLAGS += -mstack-protector-guard-reg=gs
+		endif
+	endif
+
+	export PIE_CFLAGS
 endif
 
 #
