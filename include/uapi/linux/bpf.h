@@ -901,6 +901,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_STATIC_BRANCH_UPDATE,
 };
 
 enum bpf_map_type {
@@ -1723,6 +1724,12 @@ union bpf_attr {
 		__u32		map_fd;
 		__u32		flags;		/* extra flags */
 	} prog_bind_map;
+
+	struct { /* struct used by BPF_STATIC_BRANCH_UPDATE command */
+		__u32		prog_fd;
+		__u32		insn_off;
+		__u32		on;
+	} static_branch;
 
 } __attribute__((aligned(8)));
 

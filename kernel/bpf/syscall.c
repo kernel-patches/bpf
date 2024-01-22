@@ -1504,6 +1504,60 @@ err_put:
 	return err;
 }
 
+int parse_static_branch_insn(struct bpf_insn *insn, bool *inverse)
+{
+	__u8 code = insn->code;
+
+	if (code != (BPF_JMP | BPF_JA) && code != (BPF_JMP32 | BPF_JA))
+		return -EINVAL;
+
+	if (insn->src_reg & ~BPF_STATIC_BRANCH_MASK)
+		return -EINVAL;
+
+	if (!(insn->src_reg & BPF_STATIC_BRANCH_JA))
+		return -EINVAL;
+
+	if (insn->dst_reg)
+		return -EINVAL;
+
+	*inverse = !(insn->src_reg & BPF_STATIC_BRANCH_NOP);
+
+	return 0;
+}
+
+#define BPF_STATIC_BRANCH_UPDATE_LAST_FIELD static_branch.on
+
+static int bpf_static_branch_update(union bpf_attr *attr)
+{
+	bool on = attr->static_branch.on & 1;
+	struct bpf_prog *prog;
+	u32 insn_off;
+	bool inverse;
+	int ret;
+
+	if (CHECK_ATTR(BPF_STATIC_BRANCH_UPDATE))
+		return -EINVAL;
+
+	prog = bpf_prog_get(attr->static_branch.prog_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	insn_off = attr->static_branch.insn_off;
+	if (insn_off >= prog->len) {
+		ret = -ERANGE;
+		goto put_prog;
+	}
+
+	ret = parse_static_branch_insn(&prog->insnsi[insn_off], &inverse);
+	if (ret)
+		goto put_prog;
+
+	ret = bpf_arch_poke_static_branch(prog, insn_off, on ^ inverse);
+
+put_prog:
+	bpf_prog_put(prog);
+	return ret;
+}
 
 #define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
 
@@ -5577,6 +5631,9 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_MAP_DELETE_BATCH:
 		err = bpf_map_do_batch(&attr, uattr.user, BPF_MAP_DELETE_BATCH);
+		break;
+	case BPF_STATIC_BRANCH_UPDATE:
+		err = bpf_static_branch_update(&attr);
 		break;
 	case BPF_LINK_CREATE:
 		err = link_create(&attr, uattr);

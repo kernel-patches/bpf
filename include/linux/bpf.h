@@ -1524,8 +1524,10 @@ struct bpf_prog_aux {
 	 * instructions, if allocated
 	 */
 	struct {
+		void *ip;	/* the address of the jitted insn */
 		u32 off;	/* local offset in the jitted code */
 		u32 len;	/* the total len of generated jit code */
+		u32 jmp_offset;	/* jitted jump offset for BPF_JA insns */
 	} *xlated_to_jit;
 };
 
