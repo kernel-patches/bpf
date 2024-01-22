@@ -1518,6 +1518,8 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	/* an array of original indexes for all xlated instructions */
+	u32 *orig_idx;
 };
 
 struct bpf_prog {

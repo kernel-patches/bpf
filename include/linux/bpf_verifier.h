@@ -553,7 +553,6 @@ struct bpf_insn_aux_data {
 	u8 alu_state; /* used in combination with alu_limit */
 
 	/* below fields are initialized once */
-	unsigned int orig_idx; /* original instruction index */
 	bool jmp_point;
 	bool prune_point;
 	/* ensure we check state equivalence and save state checkpoint and

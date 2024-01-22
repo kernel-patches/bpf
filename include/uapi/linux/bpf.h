@@ -6470,6 +6470,8 @@ struct bpf_prog_info {
 	__u32 verified_insns;
 	__u32 attach_btf_obj_id;
 	__u32 attach_btf_id;
+	__u32 orig_idx_len;
+	__aligned_u64 orig_idx;
 } __attribute__((aligned(8)));
 
 struct bpf_map_info {
