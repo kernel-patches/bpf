@@ -4490,6 +4490,31 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 			return -EFAULT;
 	}
 
+	ulen = info.xlated_to_jit_len;
+	if (prog->aux->xlated_to_jit)
+		info.xlated_to_jit_len = prog->len * sizeof(struct xlated_to_jit);
+	else
+		info.xlated_to_jit_len = 0;
+	if (info.xlated_to_jit_len && ulen) {
+		struct xlated_to_jit *xlated_to_jit;
+		int i;
+
+		xlated_to_jit = kzalloc(info.xlated_to_jit_len, GFP_KERNEL);
+		if (!xlated_to_jit)
+			return -ENOMEM;
+		for (i = 0; i < prog->len; i++) {
+			xlated_to_jit[i].off = prog->aux->xlated_to_jit[i].off;
+			xlated_to_jit[i].len = prog->aux->xlated_to_jit[i].len;
+		}
+		if (copy_to_user(u64_to_user_ptr(info.xlated_to_jit),
+				 xlated_to_jit,
+				 min_t(u32, info.xlated_to_jit_len, ulen))) {
+			kfree(xlated_to_jit);
+			return -EFAULT;
+		}
+		kfree(xlated_to_jit);
+	}
+
 	if (bpf_prog_is_offloaded(prog->aux)) {
 		err = bpf_prog_offload_info_fill(&info, prog);
 		if (err)

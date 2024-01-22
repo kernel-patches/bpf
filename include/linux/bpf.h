@@ -1520,6 +1520,13 @@ struct bpf_prog_aux {
 	};
 	/* an array of original indexes for all xlated instructions */
 	u32 *orig_idx;
+	/* for every xlated instruction point to all generated jited
+	 * instructions, if allocated
+	 */
+	struct {
+		u32 off;	/* local offset in the jitted code */
+		u32 len;	/* the total len of generated jit code */
+	} *xlated_to_jit;
 };
 
 struct bpf_prog {
