@@ -877,6 +877,18 @@ union bpf_iter_link_info {
  *		A new file descriptor (a nonnegative integer), or -1 if an
  *		error occurred (in which case, *errno* is set appropriately).
  *
+ * BPF_STATIC_BRANCH_UPDATE
+ *	Description
+ *		Update jitted code for the specified jump instruction. Namely,
+ *		adjust binary code for the instruction at *insn_off* in the
+ *		program identified by *prog_fd*. Depending on the type of
+ *		instruction and the *on* parameter set the binary code to
+ *		either jump or nop.
+ *
+ *	Return
+ *		Returns zero on success. On error, -1 is returned and *errno*
+ *		is set appropriately.
+ *
  * NOTES
  *	eBPF objects (maps and programs) can be shared between processes.
  *
@@ -932,6 +944,7 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TOKEN_CREATE,
+	BPF_STATIC_BRANCH_UPDATE,
 	__MAX_BPF_CMD,
 };
 
@@ -1786,6 +1799,12 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
+
+	struct { /* struct used by BPF_STATIC_BRANCH_UPDATE command */
+		__u32		prog_fd;
+		__u32		insn_off;
+		__u32		on;
+	} static_branch;
 
 } __attribute__((aligned(8)));
 

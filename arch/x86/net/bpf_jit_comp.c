@@ -2099,8 +2099,17 @@ emit_jmp:
 				if (func_idx)
 					off += bpf_prog->aux->func_info[func_idx].insn_off;
 
+				bpf_prog->aux->xlated_to_jit[off].ip = image + proglen;
 				bpf_prog->aux->xlated_to_jit[off].off = proglen;
 				bpf_prog->aux->xlated_to_jit[off].len = ilen;
+
+				/*
+				 * Save the offset so that it can later be accessed
+				 * by the bpf(BPF_STATIC_BRANCH_UPDATE) syscall
+				 */
+				if (insn->code == (BPF_JMP | BPF_JA) ||
+				    insn->code == (BPF_JMP32 | BPF_JA))
+					bpf_prog->aux->xlated_to_jit[off].jmp_offset = jmp_offset;
 			}
 		}
 		proglen += ilen;
@@ -3275,4 +3284,35 @@ void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 bool bpf_jit_supports_ptr_xchg(void)
 {
 	return true;
+}
+
+int bpf_arch_poke_static_branch(struct bpf_prog *prog,
+				u32 insn_off,
+				bool on)
+{
+	int jmp_offset = prog->aux->xlated_to_jit[insn_off].jmp_offset;
+	u32 len = prog->aux->xlated_to_jit[insn_off].len;
+	u8 op[5];
+
+	if (WARN_ON_ONCE(is_imm8(jmp_offset) && len != 2))
+		return -EINVAL;
+
+	if (WARN_ON_ONCE(!is_imm8(jmp_offset) && len != 5))
+		return -EINVAL;
+
+	if (on) {
+		if (len == 2) {
+			op[0] = 0xEB;
+			op[1] = jmp_offset;
+		} else {
+			op[0] = 0xE9;
+			memcpy(&op[1], &jmp_offset, 4);
+		}
+	} else {
+		memcpy(op, x86_nops[len], len);
+	}
+
+	text_poke_bp(prog->aux->xlated_to_jit[insn_off].ip, op, len, NULL);
+
+	return 0;
 }
