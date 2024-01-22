@@ -165,11 +165,13 @@ else
         KBUILD_RUSTFLAGS += $(rustflags-y)
 
         KBUILD_CFLAGS += -mno-red-zone
-        KBUILD_CFLAGS += -mcmodel=kernel
+        KBUILD_CFLAGS_MODULE += -mcmodel=kernel
         KBUILD_RUSTFLAGS += -Cno-redzone=y
-        KBUILD_RUSTFLAGS += -Ccode-model=kernel
+        KBUILD_RUSTFLAGS_KERNEL += -Ccode-model=small
+        KBUILD_RUSTFLAGS_MODULE += -Ccode-model=kernel
 
 	PIE_CFLAGS := -fpie -mcmodel=small \
+		      $(call cc-option,-Wa$(comma)-mrelax-relocations=no) \
 		      -include $(srctree)/include/linux/hidden.h
 
 	ifeq ($(CONFIG_STACKPROTECTOR),y)
@@ -178,6 +180,7 @@ else
 		endif
 	endif
 
+	KBUILD_CFLAGS_KERNEL += $(PIE_CFLAGS)
 	export PIE_CFLAGS
 endif
 

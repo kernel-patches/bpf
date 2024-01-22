@@ -21,10 +21,6 @@ CFLAGS_REMOVE_sev.o = -pg
 CFLAGS_REMOVE_rethook.o = -pg
 endif
 
-# head64.c contains C code that may execute from a different virtual address
-# than it was linked at, so we always build it using PIE codegen
-CFLAGS_head64.o += $(PIE_CFLAGS)
-
 KASAN_SANITIZE_head$(BITS).o				:= n
 KASAN_SANITIZE_dumpstack.o				:= n
 KASAN_SANITIZE_dumpstack_$(BITS).o			:= n
