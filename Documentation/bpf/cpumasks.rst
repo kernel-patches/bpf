@@ -372,6 +372,23 @@ used.
 .. _tools/testing/selftests/bpf/progs/cpumask_success.c:
    https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/tools/testing/selftests/bpf/progs/cpumask_success.c
 
+3.3 cpumask iterator
+--------------------
+
+The cpumask iterator enables the iteration of percpu data, such as runqueues,
+system_group_pcpu, and more.
+
+.. kernel-doc:: kernel/bpf/cpumask.c
+   :identifiers: bpf_iter_cpumask_new bpf_iter_cpumask_next
+                 bpf_iter_cpumask_destroy
+
+----
+
+Some example usages of the cpumask iterator can be found in
+`tools/testing/selftests/bpf/progs/test_cpumask_iter.c`_.
+
+.. _tools/testing/selftests/bpf/progs/test_cpumask_iter.c:
+   https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/tools/testing/selftests/bpf/progs/test_cpumask_iter.c
 
 4. Adding BPF cpumask kfuncs
 ============================
