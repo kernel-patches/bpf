@@ -349,20 +349,15 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
+static int bpf_tramp_image_alloc(struct bpf_tramp_image *im, u64 key, int size)
 {
-	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
 	void *image;
-	int err = -ENOMEM;
-
-	im = kzalloc(sizeof(*im), GFP_KERNEL);
-	if (!im)
-		goto out;
+	int err;
 
 	err = bpf_jit_charge_modmem(size);
 	if (err)
-		goto out_free_im;
+		goto out;
 	im->size = size;
 
 	err = -ENOMEM;
@@ -378,16 +373,14 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
 	INIT_LIST_HEAD_RCU(&ksym->lnode);
 	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu", key);
 	bpf_image_ksym_add(image, size, ksym);
-	return im;
+	return 0;
 
 out_free_image:
 	arch_free_bpf_trampoline(im->image, im->size);
 out_uncharge:
 	bpf_jit_uncharge_modmem(size);
-out_free_im:
-	kfree(im);
 out:
-	return ERR_PTR(err);
+	return err;
 }
 
 static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex)
@@ -432,23 +425,27 @@ again:
 		tr->flags |= BPF_TRAMP_F_ORIG_STACK;
 #endif
 
-	size = arch_bpf_trampoline_size(&tr->func.model, tr->flags,
+	im = kzalloc(sizeof(*im), GFP_KERNEL);
+	if (!im) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	size = arch_bpf_trampoline_size(im, &tr->func.model, tr->flags,
 					tlinks, tr->func.addr);
 	if (size < 0) {
 		err = size;
-		goto out;
+		goto out_free_im;
 	}
 
 	if (size > PAGE_SIZE) {
 		err = -E2BIG;
-		goto out;
+		goto out_free_im;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, size);
-	if (IS_ERR(im)) {
-		err = PTR_ERR(im);
-		goto out;
-	}
+	err = bpf_tramp_image_alloc(im, tr->key, size);
+	if (err < 0)
+		goto out_free_im;
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tlinks,
@@ -496,6 +493,8 @@ out:
 
 out_free:
 	bpf_tramp_image_free(im);
+out_free_im:
+	kfree_rcu(im, rcu);
 	goto out;
 }
 
@@ -1085,8 +1084,8 @@ void __weak arch_unprotect_bpf_trampoline(void *image, unsigned int size)
 	set_memory_rw((long)image, 1);
 }
 
-int __weak arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
-				    struct bpf_tramp_links *tlinks, void *func_addr)
+int __weak arch_bpf_trampoline_size(struct bpf_tramp_image *im, const struct btf_func_model *m,
+				    u32 flags, struct bpf_tramp_links *tlinks, void *func_addr)
 {
 	return -ENOTSUPP;
 }

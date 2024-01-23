@@ -2638,16 +2638,15 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	return 0;
 }
 
-int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
-			     struct bpf_tramp_links *tlinks, void *orig_call)
+int arch_bpf_trampoline_size(struct bpf_tramp_image *im, const struct btf_func_model *m,
+			     u32 flags, struct bpf_tramp_links *tlinks, void *orig_call)
 {
-	struct bpf_tramp_image im;
 	struct bpf_tramp_jit tjit;
 	int ret;
 
 	memset(&tjit, 0, sizeof(tjit));
 
-	ret = __arch_prepare_bpf_trampoline(&im, &tjit, m, flags,
+	ret = __arch_prepare_bpf_trampoline(im, &tjit, m, flags,
 					    tlinks, orig_call);
 
 	return ret < 0 ? ret : tjit.common.prg;
