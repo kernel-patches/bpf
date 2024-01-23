@@ -331,7 +331,7 @@ int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_links *tlinks,
 		return size;
 	if (size > (unsigned long)image_end - (unsigned long)image)
 		return -E2BIG;
-	return arch_prepare_bpf_trampoline(NULL, image, image_end,
+	return arch_prepare_bpf_trampoline(NULL, image, image + size,
 					   model, flags, tlinks, stub_func);
 }
 
