@@ -21,7 +21,7 @@ struct msg_test_opts {
 
 #define POP_END -1
 
-static void cork_send(struct msg_test_opts *opts, int cork)
+static void cork_send(struct msg_test_opts *opts, int cork, int start, int len)
 {
 	struct test_sockmap_msg_helpers *skel = opts->skel;
 	char buf[] = "abcdefghijklmnopqrstuvwxyz";
@@ -29,8 +29,11 @@ static void cork_send(struct msg_test_opts *opts, int cork)
 	char *recvbuf;
 	int i;
 
-	skel->bss->pop = false;
+	skel->bss->pop = !!len;
 	skel->bss->cork = cork;
+
+	skel->bss->pop_start = start;
+	skel->bss->pop_len = len;
 
 	/* Send N bytes in 27B chunks */
 	for (i = 0; i < cork / sizeof(buf); i++) {
@@ -48,7 +51,7 @@ static void cork_send(struct msg_test_opts *opts, int cork)
 	ASSERT_EQ(skel->bss->size, cork, "cork did not receive all bytes");
 
 	recv = xrecv_nonblock(opts->server, recvbuf, total, 0);
-	if (recv != total)
+	if (recv != total - len)
 		FAIL("Received incorrect number of bytes");
 
 	free(recvbuf);
@@ -88,9 +91,15 @@ static void test_sockmap_cork()
 	opts.skel = skel;
 
 	/* Small cork */
-	cork_send(&opts, 54);
+	cork_send(&opts, 54, 0, 0);
 	/* Full cork */
-	cork_send(&opts, 270);
+	cork_send(&opts, 270, 0, 0);
+
+	/* Combine cork and pop small */
+	cork_send(&opts, 54, 0, 10);
+	/* Full cork and pop */
+	cork_send(&opts, 270, 200, 50);
+
 close_sockets:
 	close(client);
 	close(server);

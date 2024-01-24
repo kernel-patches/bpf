@@ -37,8 +37,19 @@ int msg_helpers(struct sk_msg_md *msg)
 {
 	size = msg->size;
 
-	if (cork)
+	/* If message is not yet fully cork'ed skip push, pull, pop */
+	if (cork && cork > msg->size) {
 		err = bpf_msg_cork_bytes(msg, cork);
+		goto out;
+	} else if (cork) {
+	/* If we previously corked the msg we need to clear the cork
+	 * otherwise next pop would cause datapath to wait for the
+	 * popped bytes to actually do the send.
+	 */
+		err = bpf_msg_cork_bytes(msg, 0);
+		if (err)
+			goto out;
+	}
 
 	if (pull)
 		err = bpf_msg_pull_data(msg, pull_start, pull_end, 0);
@@ -49,6 +60,7 @@ int msg_helpers(struct sk_msg_md *msg)
 	if (pop)
 		err = bpf_msg_pop_data(msg, pop_start, pop_len, 0);
 
+out:
 	return SK_PASS;
 }
 
