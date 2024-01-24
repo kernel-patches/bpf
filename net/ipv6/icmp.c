@@ -1110,7 +1110,7 @@ static const struct icmp6_err {
 		.fatal	= 0,
 	},
 	{	/* ADDR_UNREACH	*/
-		.err	= EHOSTUNREACH,
+		.err	= EACCES,
 		.fatal	= 0,
 	},
 	{	/* PORT_UNREACH	*/
