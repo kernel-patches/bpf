@@ -30,10 +30,13 @@ int pop_start = 0;
 int pop_len = 0;
 
 int err;
+int size;
 
 SEC("sk_msg")
 int msg_helpers(struct sk_msg_md *msg)
 {
+	size = msg->size;
+
 	if (cork)
 		err = bpf_msg_cork_bytes(msg, cork);
 

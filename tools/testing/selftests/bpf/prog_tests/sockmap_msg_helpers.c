@@ -21,6 +21,85 @@ struct msg_test_opts {
 
 #define POP_END -1
 
+static void cork_send(struct msg_test_opts *opts, int cork)
+{
+	struct test_sockmap_msg_helpers *skel = opts->skel;
+	char buf[] = "abcdefghijklmnopqrstuvwxyz";
+	size_t sent, total = 0, recv;
+	char *recvbuf;
+	int i;
+
+	skel->bss->pop = false;
+	skel->bss->cork = cork;
+
+	/* Send N bytes in 27B chunks */
+	for (i = 0; i < cork / sizeof(buf); i++) {
+		sent = xsend(opts->client, buf, sizeof(buf), 0);
+		if (sent < sizeof(buf))
+			FAIL("xsend failed");
+		total += sent;
+	}
+
+	recvbuf = malloc(total);
+	if (!recvbuf)
+		FAIL("cork send malloc failure\n");
+
+	ASSERT_OK(skel->bss->err, "cork error");
+	ASSERT_EQ(skel->bss->size, cork, "cork did not receive all bytes");
+
+	recv = xrecv_nonblock(opts->server, recvbuf, total, 0);
+	if (recv != total)
+		FAIL("Received incorrect number of bytes");
+
+	free(recvbuf);
+}
+
+static void test_sockmap_cork()
+{
+	struct test_sockmap_msg_helpers *skel;
+	struct msg_test_opts opts;
+	int s, client, server;
+	int err, map, prog;
+
+	skel = test_sockmap_msg_helpers__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	map = bpf_map__fd(skel->maps.sock_map);
+	prog = bpf_program__fd(skel->progs.msg_helpers);
+	err = bpf_prog_attach(prog, map, BPF_SK_MSG_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out;
+
+	s = socket_loopback(AF_INET, SOCK_STREAM);
+	if (s < 0)
+		goto out;
+
+	err = create_pair(s, AF_INET, SOCK_STREAM, &client, &server);
+	if (err < 0)
+		goto close_loopback;
+
+	err = add_to_sockmap(map, client, server);
+	if (err < 0)
+		goto close_sockets;
+
+	opts.client = client;
+	opts.server = server;
+	opts.skel = skel;
+
+	/* Small cork */
+	cork_send(&opts, 54);
+	/* Full cork */
+	cork_send(&opts, 270);
+close_sockets:
+	close(client);
+	close(server);
+close_loopback:
+	close(s);
+out:
+	test_sockmap_msg_helpers__destroy(skel);
+}
+
 static void pop_simple_send(struct msg_test_opts *opts, int start, int len)
 {
 	struct test_sockmap_msg_helpers *skel = opts->skel;
@@ -260,4 +339,6 @@ void test_sockmap_msg_helpers(void)
 		test_sockmap_pop();
 	if (test__start_subtest("sockmap pop errors"))
 		test_sockmap_pop_errors();
+	if (test__start_subtest("sockmap cork"))
+		test_sockmap_cork();
 }
