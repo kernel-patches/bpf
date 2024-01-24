@@ -411,4 +411,8 @@ LIBBPF_1.3.0 {
 } LIBBPF_1.2.0;
 
 LIBBPF_1.4.0 {
+	global:
+		bpf_map__struct_ops_data;
+		bpf_map__struct_ops_progs;
+		bpf_map__struct_ops_type;
 } LIBBPF_1.3.0;

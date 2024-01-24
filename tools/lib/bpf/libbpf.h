@@ -820,6 +820,10 @@ struct bpf_map;
 LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map);
 LIBBPF_API int bpf_link__update_map(struct bpf_link *link, const struct bpf_map *map);
 
+LIBBPF_API void *bpf_map__struct_ops_data(const struct bpf_map *map);
+LIBBPF_API __u32 bpf_map__struct_ops_type(const struct bpf_map *map);
+LIBBPF_API const struct bpf_program **bpf_map__struct_ops_progs(const struct bpf_map *map);
+
 struct bpf_iter_attach_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	union bpf_iter_link_info *link_info;

@@ -2129,7 +2129,7 @@ skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id)
 	return t;
 }
 
-static const struct btf_type *
+const struct btf_type *
 resolve_func_ptr(const struct btf *btf, __u32 id, __u32 *res_id)
 {
 	const struct btf_type *t;
@@ -13848,3 +13848,19 @@ void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 	free(s->progs);
 	free(s);
 }
+
+void *bpf_map__struct_ops_data(const struct bpf_map *map)
+{
+	return map->st_ops->data;
+}
+
+__u32 bpf_map__struct_ops_type(const struct bpf_map *map)
+{
+	return map->st_ops->type_id;
+}
+
+const struct bpf_program **bpf_map__struct_ops_progs(const struct bpf_map *map)
+{
+	return (const struct bpf_program **)map->st_ops->progs;
+}
+
