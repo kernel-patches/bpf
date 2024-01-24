@@ -4604,6 +4604,11 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 	    (!value_reg && is_bpf_st_mem(insn) && insn->imm == 0))
 		writing_zero = true;
 
+	if (value_reg && __is_pointer_value(env->allow_ptr_leaks, value_reg)) {
+		verbose(env, "spilling pointer with var-offset is disallowed\n");
+		return -EINVAL;
+	}
+
 	for (i = min_off; i < max_off; i++) {
 		int spi;
 
@@ -4635,7 +4640,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 			 * later for CAP_PERFMON, as the write may not happen to
 			 * that slot.
 			 */
-			verbose(env, "spilled ptr in range of var-offset stack write; insn %d, ptr off: %d",
+			verbose(env, "spilled ptr in range of var-offset stack write; insn %d, ptr off: %d\n",
 				insn_idx, i);
 			return -EINVAL;
 		}
@@ -4658,7 +4663,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		 * them, the error would be too confusing.
 		 */
 		if (*stype == STACK_INVALID && !env->allow_uninit_stack) {
-			verbose(env, "uninit stack in range of var-offset write prohibited for !root; insn %d, off: %d",
+			verbose(env, "uninit stack in range of var-offset write prohibited for !root; insn %d, off: %d\n",
 					insn_idx, i);
 			return -EINVAL;
 		}
