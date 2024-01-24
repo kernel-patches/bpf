@@ -52,6 +52,50 @@ static void pop_simple_send(struct msg_test_opts *opts, int start, int len)
 	ASSERT_OK(cmp, "pop cmp end bytes failed");
 }
 
+static void pop_complex_send(struct msg_test_opts *opts, int start, int len)
+{
+	struct test_sockmap_msg_helpers *skel = opts->skel;
+	char buf[] = "abcdefghijklmnopqrstuvwxyz";
+	size_t sent, recv, total = 0;
+	struct msghdr msg = {0};
+	struct iovec iov[15];
+	char *recvbuf;
+	int i;
+
+	for (i = 0; i < 15; i++) {
+		iov[i].iov_base = buf;
+		iov[i].iov_len = sizeof(buf);
+		total += sizeof(buf);
+	}
+
+	recvbuf = malloc(total);
+	if (!recvbuf)
+		FAIL("pop complex send malloc failure\n");
+
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 15;
+
+	skel->bss->pop = true;
+
+	if (start == -1)
+		start = sizeof(buf) - len - 1;
+
+	skel->bss->pop_start = start;
+	skel->bss->pop_len = len;
+
+	sent = xsendmsg(opts->client, &msg, 0);
+	if (sent != total)
+		FAIL("xsend failed");
+
+	ASSERT_OK(skel->bss->err, "pop error");
+
+	recv = xrecv_nonblock(opts->server, recvbuf, total, 0);
+	if (recv != sent - skel->bss->pop_len)
+		FAIL("Received incorrect number number of bytes after pop");
+
+	free(recvbuf);
+}
+
 static void test_sockmap_pop(void)
 {
 	struct msg_test_opts opts;
@@ -91,6 +135,15 @@ static void test_sockmap_pop(void)
 	pop_simple_send(&opts, 10, 5);
 	/* Pop from end */
 	pop_simple_send(&opts, POP_END, 5);
+
+	/* Empty pop from start of sendmsg */
+	pop_complex_send(&opts, 0, 0);
+	/* Pop from start of sendmsg */
+	pop_complex_send(&opts, 0, 10);
+	/* Pop from middle of sendmsg */
+	pop_complex_send(&opts, 100, 10);
+	/* Pop from end of sendmsg */
+	pop_complex_send(&opts, 394, 10);
 
 close_sockets:
 	close(client);

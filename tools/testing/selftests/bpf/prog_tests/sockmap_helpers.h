@@ -103,6 +103,14 @@
 		__ret;                                                         \
 	})
 
+#define xsendmsg(fd, msg, flags)                                               \
+	({                                                                     \
+		ssize_t __ret = sendmsg((fd), (msg), (flags));                 \
+		if (__ret == -1)                                               \
+			FAIL_ERRNO("sendmsg");                                 \
+		__ret;                                                         \
+	})
+
 #define xrecv_nonblock(fd, buf, len, flags)                                    \
 	({                                                                     \
 		ssize_t __ret = recv_timeout((fd), (buf), (len), (flags),      \
