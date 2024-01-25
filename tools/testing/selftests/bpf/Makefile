@@ -744,8 +744,20 @@ EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 DEFAULT_INSTALL_RULE := $(INSTALL_RULE)
 override define INSTALL_RULE
 	$(DEFAULT_INSTALL_RULE)
-	@for DIR in $(TEST_INST_SUBDIRS); do		  \
-		mkdir -p $(INSTALL_PATH)/$$DIR;   \
-		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;\
+	@for DIR in $(TEST_INST_SUBDIRS); do			\
+		mkdir -p $(INSTALL_PATH)/$$DIR;			\
+		rsync -a --copy-unsafe-links			\
+			$(OUTPUT)/$$DIR/bpf_testmod.ko		\
+			$(OUTPUT)/$$DIR/bpftool			\
+			$(OUTPUT)/$$DIR/ima_setup.sh		\
+			$(OUTPUT)/$$DIR/liburandom_read.so	\
+			$(OUTPUT)/$$DIR/sign-file		\
+			$(OUTPUT)/$$DIR/uprobe_multi		\
+			$(OUTPUT)/$$DIR/urandom_read		\
+			$(OUTPUT)/$$DIR/verify_sig_setup.sh	\
+			$(OUTPUT)/$$DIR/xdp_synproxy		\
+			$(OUTPUT)/$$DIR/btf_dump_test_case_*.c	\
+			$(OUTPUT)/$$DIR/*.bpf.o			\
+			$(INSTALL_PATH)/$$DIR;			\
 	done
 endef
