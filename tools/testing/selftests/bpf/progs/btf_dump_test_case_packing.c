@@ -134,7 +134,7 @@ struct outer_packed_struct {
 
 /* ------ END-EXPECTED-OUTPUT ------ */
 
-int f(struct {
+struct root {
 	struct packed_trailing_space _1;
 	struct non_packed_trailing_space _2;
 	struct packed_fields _3;
@@ -147,7 +147,8 @@ int f(struct {
 	struct usb_host_endpoint _10;
 	struct outer_nonpacked_struct _11;
 	struct outer_packed_struct _12;
-} *_)
+};
+int f(struct root *_)
 {
 	return 0;
 }

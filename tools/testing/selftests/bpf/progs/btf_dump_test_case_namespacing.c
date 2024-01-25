@@ -51,7 +51,7 @@ typedef int Z;
 
 /*------ END-EXPECTED-OUTPUT ------ */
 
-int f(struct {
+struct root {
 	struct S _1;
 	S _2;
 	union U _3;
@@ -67,7 +67,8 @@ int f(struct {
 	X xx;
 	Y yy;
 	Z zz;
-} *_)
+};
+int f(struct root *_)
 {
 	return 0;
 }

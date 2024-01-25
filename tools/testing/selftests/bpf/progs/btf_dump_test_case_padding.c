@@ -222,7 +222,7 @@ struct outer_mixed_but_unpacked {
 
 /* ------ END-EXPECTED-OUTPUT ------ */
 
-int f(struct {
+struct root {
 	struct padded_implicitly _1;
 	struct padded_explicitly _2;
 	struct padded_a_lot _3;
@@ -243,7 +243,8 @@ int f(struct {
 	struct ib_wc _201;
 	struct acpi_object_method _202;
 	struct outer_mixed_but_unpacked _203;
-} *_)
+};
+int f(struct root *_)
 {
 	return 0;
 }
