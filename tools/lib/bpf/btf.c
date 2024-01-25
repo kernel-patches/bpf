@@ -4926,10 +4926,9 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
  */
 struct btf *btf__load_vmlinux_btf(void)
 {
+	const char *canonical_vmlinux = "/sys/kernel/btf/vmlinux";
+	/* fall back locations, trying to find vmlinux on disk */
 	const char *locations[] = {
-		/* try canonical vmlinux BTF through sysfs first */
-		"/sys/kernel/btf/vmlinux",
-		/* fall back to trying to find vmlinux on disk otherwise */
 		"/boot/vmlinux-%1$s",
 		"/lib/modules/%1$s/vmlinux-%1$s",
 		"/lib/modules/%1$s/build/vmlinux",
@@ -4940,14 +4939,34 @@ struct btf *btf__load_vmlinux_btf(void)
 	};
 	char path[PATH_MAX + 1];
 	struct utsname buf;
-	struct btf *btf;
+	struct btf *btf = NULL;
 	int i, err;
 
-	uname(&buf);
+	/* is canonical sysfs location accessible? */
+	err = faccessat(AT_FDCWD, canonical_vmlinux, F_OK, AT_EACCESS);
+	if (err) {
+		pr_warn("access to canonical vmlinux (%s) to load BTF failed: %s\n",
+			canonical_vmlinux, strerror(errno));
+		pr_warn("was CONFIG_DEBUG_INFO_BTF enabled?\n");
+	} else {
+		err = faccessat(AT_FDCWD, canonical_vmlinux, R_OK, AT_EACCESS);
+		if (err) {
+			pr_warn("unable to read canonical vmlinux (%s): %s\n",
+				canonical_vmlinux, strerror(errno));
+		}
+	}
+	if (!err) {
+		/* load canonical and return any parsing failures */
+		btf = btf__parse(canonical_vmlinux, NULL);
+		err = libbpf_get_error(btf);
+		pr_debug("loading kernel BTF '%s': %d\n", canonical_vmlinux, err);
+		return btf;
+	}
 
+	/* try fallback locations */
+	uname(&buf);
 	for (i = 0; i < ARRAY_SIZE(locations); i++) {
 		snprintf(path, PATH_MAX, locations[i], buf.release);
-
 		if (faccessat(AT_FDCWD, path, R_OK, AT_EACCESS))
 			continue;
 
@@ -4959,9 +4978,9 @@ struct btf *btf__load_vmlinux_btf(void)
 
 		return btf;
 	}
-
 	pr_warn("failed to find valid kernel BTF\n");
-	return libbpf_err_ptr(-ESRCH);
+	/* return the last error or ESRCH if no fallback locations were found */
+	return btf ?: libbpf_err_ptr(-ESRCH);
 }
 
 struct btf *libbpf_find_kernel_btf(void) __attribute__((alias("btf__load_vmlinux_btf")));
