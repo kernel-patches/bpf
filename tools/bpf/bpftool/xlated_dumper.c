@@ -270,6 +270,24 @@ void dump_xlated_json(struct dump_data *dd, void *buf, unsigned int len,
 		jsonw_name(json_wtr, "disasm");
 		print_bpf_insn(&cbs, insn + i, true);
 
+		if (dd->orig_idx) {
+			jsonw_name(json_wtr, "orig_insn");
+			jsonw_printf(json_wtr, "\"0x%x\"", dd->orig_idx[i]);
+		}
+
+		if (dd->xlated_to_jit) {
+			jsonw_name(json_wtr, "jit");
+			jsonw_start_object(json_wtr);
+
+			jsonw_name(json_wtr, "off");
+			jsonw_printf(json_wtr, "\"0x%x\"", dd->xlated_to_jit[i].off);
+
+			jsonw_name(json_wtr, "len");
+			jsonw_printf(json_wtr, "\"%d\"", dd->xlated_to_jit[i].len);
+
+			jsonw_end_object(json_wtr);
+		}
+
 		if (opcodes) {
 			jsonw_name(json_wtr, "opcodes");
 			jsonw_start_object(json_wtr);

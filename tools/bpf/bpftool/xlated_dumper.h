@@ -26,6 +26,8 @@ struct dump_data {
 	__u32 finfo_rec_size;
 	const struct bpf_prog_linfo *prog_linfo;
 	char scratch_buff[SYM_MAX_NAME + 8];
+	unsigned int *orig_idx;
+	struct bpf_xlated_to_jit *xlated_to_jit;
 };
 
 void kernel_syms_load(struct dump_data *dd);
