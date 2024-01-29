@@ -628,14 +628,15 @@ TRUNNER_EXTRA_SOURCES := test_progs.c		\
 			 json_writer.c 		\
 			 flow_dissector_load.h	\
 			 ip_check_defrag_frags.h
-TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
-		       $(OUTPUT)/liburandom_read.so			\
-		       $(OUTPUT)/xdp_synproxy				\
-		       $(OUTPUT)/sign-file				\
-		       $(OUTPUT)/uprobe_multi				\
-		       ima_setup.sh 					\
-		       verify_sig_setup.sh				\
-		       $(wildcard progs/btf_dump_test_case_*.c)
+TRUNNER_PROGS_EXTRA_FILES:= $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
+			    $(OUTPUT)/liburandom_read.so			\
+			    $(OUTPUT)/xdp_synproxy				\
+			    $(OUTPUT)/sign-file					\
+			    $(OUTPUT)/uprobe_multi				\
+			    ima_setup.sh					\
+			    verify_sig_setup.sh					\
+			    $(wildcard progs/btf_dump_test_case_*.c)
+TRUNNER_EXTRA_FILES := $(TRUNNER_PROGS_EXTRA_FILES)
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
 $(eval $(call DEFINE_TEST_RUNNER,test_progs))
@@ -763,11 +764,17 @@ EXTRA_CLEAN := $(TEST_CUSTOM_PROGS) $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)	\
 # Delete partially updated (corrupted) files on error
 .DELETE_ON_ERROR:
 
+space := $(subst ,, )
+comma := ,
+EXTRA_FILES_GLOB := {$(subst $(space),$(comma),$(notdir $(TRUNNER_PROGS_EXTRA_FILES)))}
 DEFAULT_INSTALL_RULE := $(INSTALL_RULE)
 override define INSTALL_RULE
 	$(DEFAULT_INSTALL_RULE)
-	@for DIR in $(TEST_INST_SUBDIRS); do		  \
-		mkdir -p $(INSTALL_PATH)/$$DIR;   \
-		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;\
+	@for DIR in $(TEST_INST_SUBDIRS); do						\
+		mkdir -p $(INSTALL_PATH)/$$DIR;						\
+		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;			\
+		rsync -a --copy-unsafe-links						\
+			$$(/bin/bash -c "echo $(OUTPUT)/$$DIR/$(EXTRA_FILES_GLOB)")	\
+			$(INSTALL_PATH)/$$DIR;						\
 	done
 endef
