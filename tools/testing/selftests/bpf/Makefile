@@ -772,8 +772,9 @@ override define INSTALL_RULE
 	$(DEFAULT_INSTALL_RULE)
 	@for DIR in $(TEST_INST_SUBDIRS); do						\
 		mkdir -p $(INSTALL_PATH)/$$DIR;						\
-		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;			\
 		rsync -a --copy-unsafe-links						\
+			$(OUTPUT)/$$DIR/*.bpf.o						\
+			$(OUTPUT)/$$DIR/bpftool						\
 			$$(/bin/bash -c "echo $(OUTPUT)/$$DIR/$(EXTRA_FILES_GLOB)")	\
 			$(INSTALL_PATH)/$$DIR;						\
 	done
