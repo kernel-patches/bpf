@@ -1633,6 +1633,7 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
+		"                    {-B|--base-btf} |\n"
 		"                    {-L|--use-loader} }\n"
 		"",
 		bin_name, "gen");
@@ -1698,14 +1699,14 @@ btfgen_new_info(const char *targ_btf_path)
 	if (!info)
 		return NULL;
 
-	info->src_btf = btf__parse(targ_btf_path, NULL);
+	info->src_btf = btf__parse_split(targ_btf_path, base_btf);
 	if (!info->src_btf) {
 		err = -errno;
 		p_err("failed parsing '%s' BTF file: %s", targ_btf_path, strerror(errno));
 		goto err_out;
 	}
 
-	info->marked_btf = btf__parse(targ_btf_path, NULL);
+	info->marked_btf = btf__parse_split(targ_btf_path, base_btf);
 	if (!info->marked_btf) {
 		err = -errno;
 		p_err("failed parsing '%s' BTF file: %s", targ_btf_path, strerror(errno));
@@ -2142,12 +2143,29 @@ static int btfgen_remap_id(__u32 *type_id, void *ctx)
 /* Generate BTF from relocation information previously recorded */
 static struct btf *btfgen_get_btf(struct btfgen_info *info)
 {
-	struct btf *btf_new = NULL;
+	struct btf *btf_new = NULL, *src_base_btf_new = NULL;
 	unsigned int *ids = NULL;
+	const struct btf *src_base_btf;
 	unsigned int i, n = btf__type_cnt(info->marked_btf);
-	int err = 0;
+	int start_id, err = 0;
 
-	btf_new = btf__new_empty();
+	src_base_btf = btf__base_btf(info->src_btf);
+	start_id = src_base_btf ? btf__type_cnt(src_base_btf) : 1;
+
+	/* clone BTF to sanitize a copy and leave the original intact */
+	if (src_base_btf) {
+		const void *raw_data;
+		__u32 sz;
+
+		raw_data = btf__raw_data(src_base_btf, &sz);
+		src_base_btf_new = btf__new(raw_data, sz);
+		if (!src_base_btf_new) {
+			err = -errno;
+			goto err_out;
+		}
+	}
+
+	btf_new = btf__new_empty_split(src_base_btf_new);
 	if (!btf_new) {
 		err = -errno;
 		goto err_out;
@@ -2160,7 +2178,7 @@ static struct btf *btfgen_get_btf(struct btfgen_info *info)
 	}
 
 	/* first pass: add all marked types to btf_new and add their new ids to the ids map */
-	for (i = 1; i < n; i++) {
+	for (i = start_id; i < n; i++) {
 		const struct btf_type *cloned_type, *type;
 		const char *name;
 		int new_id;
@@ -2216,7 +2234,7 @@ static struct btf *btfgen_get_btf(struct btfgen_info *info)
 	}
 
 	/* second pass: fix up type ids */
-	for (i = 1; i < btf__type_cnt(btf_new); i++) {
+	for (i = start_id; i < btf__type_cnt(btf_new); i++) {
 		struct btf_type *btf_type = (struct btf_type *) btf__type_by_id(btf_new, i);
 
 		err = btf_type_visit_type_ids(btf_type, btfgen_remap_id, ids);
