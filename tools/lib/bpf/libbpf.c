@@ -8931,6 +8931,7 @@ static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf
 static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_ksyscall(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_usdt(const struct bpf_program *prog, long cookie, struct bpf_link **link);
+static int attach_urdt(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_tp(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_raw_tp(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_trace(const struct bpf_program *prog, long cookie, struct bpf_link **link);
@@ -8959,6 +8960,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kretsyscall+",		KPROBE, 0, SEC_NONE, attach_ksyscall),
 	SEC_DEF("usdt+",		KPROBE,	0, SEC_USDT, attach_usdt),
 	SEC_DEF("usdt.s+",		KPROBE,	0, SEC_USDT | SEC_SLEEPABLE, attach_usdt),
+	SEC_DEF("urdt+",		KPROBE, 0, SEC_USDT , attach_urdt),
 	SEC_DEF("tc/ingress",		SCHED_CLS, BPF_TCX_INGRESS, SEC_NONE), /* alias for tcx */
 	SEC_DEF("tc/egress",		SCHED_CLS, BPF_TCX_EGRESS, SEC_NONE),  /* alias for tcx */
 	SEC_DEF("tcx/ingress",		SCHED_CLS, BPF_TCX_INGRESS, SEC_NONE),
@@ -11832,6 +11834,98 @@ static int attach_usdt(const struct bpf_program *prog, long cookie, struct bpf_l
 	} else {
 		*link = bpf_program__attach_usdt(prog, -1 /* any process */, path,
 						 provider, name, NULL);
+		err = libbpf_get_error(*link);
+	}
+	free(path);
+	free(provider);
+	free(name);
+	return err;
+}
+
+/* 2 less than USDT_MAX_ARG_CNT */
+#define URDT_MAX_ARG_CNT	11
+
+struct bpf_link *bpf_program__attach_urdt(const struct bpf_program *prog, pid_t pid,
+					  const char *binary_path,
+					  const char *urdt_provider, const char *urdt_name,
+					  const struct bpf_urdt_opts *opts)
+{
+	DECLARE_LIBBPF_OPTS(bpf_usdt_opts, usdt_opts);
+	char resolved_path[512];
+	struct bpf_link *link;
+	char probename[16];
+	unsigned short nargs = 0;
+	int err;
+
+	if (!OPTS_VALID(opts, bpf_urdt_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	if (bpf_program__fd(prog) < 0) {
+		pr_warn("prog '%s': can't attach BPF program w/o FD (did you load it?)\n",
+			prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+	if (!binary_path)
+		return libbpf_err_ptr(-EINVAL);
+
+	if (!strchr(binary_path, '/')) {
+		err = resolve_full_path(binary_path, resolved_path, sizeof(resolved_path));
+		if (err) {
+			pr_warn("prog '%s': failed to resolve full path for '%s': %d\n",
+				prog->name, binary_path, err);
+			return libbpf_err_ptr(err);
+		}
+		binary_path = resolved_path;
+	}
+
+	/* High-order 32 bits of cookie identify the provider/probe.
+	 * When the shared USDT probe fires, we use these bits to
+	 * compare to final USDT arg to identify probe firing.
+	 */
+	usdt_opts.usdt_cookie = ((long)urdt_probe_hash(urdt_provider, urdt_name)) << 32;
+
+	if (opts) {
+		/* low-order 32 bits can be specified by user */
+		usdt_opts.usdt_cookie |= opts->urdt_cookie;
+		nargs = opts->urdt_nargs;
+		if (nargs > URDT_MAX_ARG_CNT)
+			return libbpf_err_ptr(-EINVAL);
+	}
+	snprintf(probename, sizeof(probename), "probe%hu", nargs);
+
+	/* attach to USDT probe urdt:probeN */
+	link = bpf_program__attach_usdt(prog, pid, binary_path, "urdt", probename,
+					&usdt_opts);
+	err = libbpf_get_error(link);
+	if (err)
+		return libbpf_err_ptr(err);
+	return link;
+}
+
+static int attach_urdt(const struct bpf_program *prog, long cookie, struct bpf_link **link)
+{
+	char *path = NULL, *provider = NULL, *name = NULL;
+	const char *sec_name;
+	short nargs = 0;
+	int n, err;
+
+	sec_name = bpf_program__section_name(prog);
+	if (strcmp(sec_name, "urdt") == 0) {
+		/* no auto-attach for just SEC("urdt") */
+		*link = NULL;
+		return 0;
+	}
+	n = sscanf(sec_name, "urdt/%m[^:]:%hd:%m[^:]:%m[^:]", &path, &nargs, &provider, &name);
+	if (n != 4) {
+		pr_warn("invalid section '%s', expected SEC(\"urdt/<path>:<nargs>:<provider>:<name>\")\n",
+			sec_name);
+		err = -EINVAL;
+	} else {
+		DECLARE_LIBBPF_OPTS(bpf_urdt_opts, urdt_opts);
+
+		urdt_opts.urdt_nargs = nargs;
+		*link = bpf_program__attach_urdt(prog, -1 /* any process */, path,
+						 provider, name, &urdt_opts);
 		err = libbpf_get_error(*link);
 	}
 	free(path);

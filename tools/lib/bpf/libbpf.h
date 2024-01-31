@@ -742,6 +742,100 @@ bpf_program__attach_usdt(const struct bpf_program *prog,
 			 const char *usdt_provider, const char *usdt_name,
 			 const struct bpf_usdt_opts *opts);
 
+struct bpf_urdt_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+	__u32 urdt_cookie;
+	unsigned short urdt_nargs;
+	size_t :0;
+};
+#define bpf_urdt_opts__last_field urdt_nargs
+
+/* API functions to dynamically fire URDT probes. */
+LIBBPF_API void bpf_urdt__probe0(const char *provider, const char *probe);
+LIBBPF_API void bpf_urdt__probe1(const char *provider, const char *probe, long arg1);
+LIBBPF_API void bpf_urdt__probe2(const char *provider, const char *probe, long arg1, long arg2);
+LIBBPF_API void bpf_urdt__probe3(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3);
+LIBBPF_API void bpf_urdt__probe4(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4);
+LIBBPF_API void bpf_urdt__probe5(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5);
+LIBBPF_API void bpf_urdt__probe6(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5, long arg6);
+LIBBPF_API void bpf_urdt__probe7(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5, long arg6, long arg7);
+LIBBPF_API void bpf_urdt__probe8(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5, long arg6, long arg7, long arg8);
+LIBBPF_API void bpf_urdt__probe9(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5, long arg6, long arg7, long arg8,
+		      long arg9);
+LIBBPF_API void bpf_urdt__probe10(const char *provider, const char *probe, long arg1, long arg2,
+		      long arg3, long arg4, long arg5, long arg6, long arg7, long arg8,
+		      long arg9, long arg10);
+LIBBPF_API void bpf_urdt__probe11(const char *provider, const char *probe, long arg1, long arg2,
+		       long arg3, long arg4, long arg5, long arg6, long arg7, long arg8,
+		       long arg9, long arg10, long arg11);
+
+#define BPF_URDT_PROBE0(provider, probe)						\
+	bpf_urdt__probe0(provider, probe)
+#define BPF_URDT_PROBE1(provider, probe, arg1)						\
+	bpf_urdt__probe1(provider, probe, (long)arg1)
+#define BPF_URDT_PROBE2(provider, probe, arg1, arg2)					\
+	bpf_urdt__probe2(provider, probe, (long)arg1, (long)arg2)
+#define BPF_URDT_PROBE3(provider, probe, arg1, arg2, arg3)				\
+	bpf_urdt__probe3(provider, probe, (long)arg1, (long)arg2, (long)arg3)
+#define BPF_URDT_PROBE4(provider, probe, arg1, arg2, arg3, arg4)			\
+	bpf_urdt__probe4(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4)
+#define BPF_URDT_PROBE5(provider, probe, arg1, arg2, arg3, arg4, arg5)			\
+	bpf_urdt__probe5(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5)
+#define BPF_URDT_PROBE6(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6)		\
+	bpf_urdt__probe6(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6)
+#define BPF_URDT_PROBE7(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6, arg7)	\
+	bpf_urdt__probe7(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6, (long)arg7)
+#define BPF_URDT_PROBE8(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) \
+	bpf_urdt__probe8(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6, (long)arg7, (long)arg8)
+#define BPF_URDT_PROBE9(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) \
+	bpf_urdt__probe9(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6, (long)arg7, (long)arg8, (long)arg9)
+#define BPF_URDT_PROBE10(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, \
+			 arg10) \
+	bpf_urdt__probe10(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6, (long)arg7, (long)arg8, (long)arg9, \
+			 (long)arg10)
+#define BPF_URDT_PROBE11(provider, probe, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, \
+			 arg10, arg11) \
+	bpf_urdt__probe11(provider, probe, (long)arg1, (long)arg2, (long)arg3, (long)arg4, \
+			 (long)arg5, (long)arg6, (long)arg7, (long)arg8, (long)arg9, \
+			 (long)arg10, (long)arg11)
+
+
+
+/**
+ * @brief **bpf_program__attach_urdt()** is just like
+ * bpf_program__attach_usdt() except it covers URDT (User-space
+ * Runtime-Defined Tracepoint) attachment, instead of attaching to
+ * statically defined tracepoints.
+ *
+ * @param prog BPF program to attach
+ * @param pid Process ID to attach the uprobe to, 0 for self (own process),
+ * -1 for all processes
+ * @param urdt_provider USDT provider name
+ * @param urdt_name USDT probe name
+ * @param opts Options for altering program attachment
+ * @return Reference to the newly created BPF link; or NULL is returned on error,
+ * error code is stored in errno
+ */
+LIBBPF_API struct bpf_link *
+bpf_program__attach_urdt(const struct bpf_program *prog,
+			 pid_t pid, const char *binary_path,
+			 const char *urdt_provider, const char *urdt_name,
+			 const struct bpf_urdt_opts *opts);
+
 struct bpf_tracepoint_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;

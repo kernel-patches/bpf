@@ -412,4 +412,17 @@ LIBBPF_1.3.0 {
 
 LIBBPF_1.4.0 {
 		bpf_token_create;
+		bpf_program__attach_urdt;
+		bpf_urdt__probe0;
+		bpf_urdt__probe1;
+		bpf_urdt__probe2;
+		bpf_urdt__probe3;
+		bpf_urdt__probe4;
+		bpf_urdt__probe5;
+		bpf_urdt__probe6;
+		bpf_urdt__probe7;
+		bpf_urdt__probe8;
+		bpf_urdt__probe9;
+		bpf_urdt__probe10;
+		bpf_urdt__probe11;
 } LIBBPF_1.3.0;
