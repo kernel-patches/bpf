@@ -652,13 +652,23 @@ static int sets_patch(struct object *obj)
 	Elf_Data *data = obj->efile.idlist;
 	int *ptr = data->d_buf;
 	struct rb_node *next;
+	GElf_Ehdr ehdr;
+	int need_bswap;
+
+	if (gelf_getehdr(obj->efile.elf, &ehdr) == NULL) {
+		pr_err("FAILED cannot get ELF header: %s\n",
+			elf_errmsg(-1));
+		return -1;
+	}
+	need_bswap = (__BYTE_ORDER == __LITTLE_ENDIAN) !=
+		     (ehdr.e_ident[EI_DATA] == ELFDATA2LSB);
 
 	next = rb_first(&obj->sets);
 	while (next) {
 		unsigned long addr, idx;
 		struct btf_id *id;
 		void *base;
-		int cnt, size;
+		int cnt, size, i;
 
 		id   = rb_entry(next, struct btf_id, rb_node);
 		addr = id->addr[0];
@@ -686,6 +696,21 @@ static int sets_patch(struct object *obj)
 			base = set8->pairs;
 			cnt = set8->cnt;
 			size = sizeof(set8->pairs[0]);
+
+			/*
+			 * When ELF endianness does not match endianness of the
+			 * host, libelf will do the translation when updating
+			 * the ELF. This, however, corrupts SET8 flags which are
+			 * already in the target endianness. So, let's bswap
+			 * them to the host endianness and libelf will then
+			 * correctly translate everything.
+			 */
+			if (need_bswap) {
+				for (i = 0; i < cnt; i++) {
+					set8->pairs[i].flags =
+						bswap_32(set8->pairs[i].flags);
+				}
+			}
 		}
 
 		pr_debug("sorting  addr %5lu: cnt %6d [%s]\n",
