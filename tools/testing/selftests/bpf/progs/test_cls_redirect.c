@@ -22,6 +22,10 @@
 
 #include "test_cls_redirect.h"
 
+#if !__clang__
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+
 #ifdef SUBPROGS
 #define INLINING __noinline
 #else

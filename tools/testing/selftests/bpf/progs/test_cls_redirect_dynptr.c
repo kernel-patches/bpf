@@ -23,6 +23,10 @@
 #include "test_cls_redirect.h"
 #include "bpf_kfuncs.h"
 
+#if !__clang__
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+
 #define offsetofend(TYPE, MEMBER) \
 	(offsetof(TYPE, MEMBER) + sizeof((((TYPE *)0)->MEMBER)))
 
