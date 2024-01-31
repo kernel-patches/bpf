@@ -372,6 +372,66 @@ used.
 .. _tools/testing/selftests/bpf/progs/cpumask_success.c:
    https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/tools/testing/selftests/bpf/progs/cpumask_success.c
 
+3.3 cpumask iterator
+--------------------
+
+The cpumask iterator facilitates the iteration of per-CPU data, including
+runqueues, system_group_pcpu, and other such structures. To leverage the cpumask
+iterator, one can employ the bpf_for_each() macro.
+
+Here's an example illustrating how to determine the number of running tasks on
+each CPU.
+
+.. code-block:: c
+
+        /**
+         * Here's an example demonstrating the functionality of the cpumask iterator.
+         * We retrieve the cpumask associated with the specified pid, iterate through
+         * its elements, and ultimately expose per-CPU data to userspace through a
+         * seq file.
+         */
+        const struct rq runqueues __ksym __weak;
+        u32 target_pid;
+
+        SEC("iter/cgroup")
+        int BPF_PROG(cpu_cgroup, struct bpf_iter_meta *meta, struct cgroup *cgrp)
+        {
+                u32 nr_running = 0, nr_cpus = 0, nr_null_rq = 0;
+                struct task_struct *p;
+                struct rq *rq;
+                int *cpu;
+
+                /* epilogue */
+                if (cgrp == NULL)
+                        return 0;
+
+                p = bpf_task_from_pid(target_pid);
+                if (!p)
+                        return 1;
+
+                BPF_SEQ_PRINTF(meta->seq, "%4s %s\n", "CPU", "nr_running");
+                bpf_for_each(cpumask, cpu, p->cpus_ptr) {
+                        rq = (struct rq *)bpf_per_cpu_ptr(&runqueues, *cpu);
+                        if (!rq) {
+                                nr_null_rq += 1;
+                                continue;
+                        }
+                        nr_cpus += 1;
+
+                        if (!rq->nr_running)
+                                continue;
+
+                        nr_running += rq->nr_running;
+                        BPF_SEQ_PRINTF(meta->seq, "%4u %u\n", *cpu, rq->nr_running);
+                }
+                BPF_SEQ_PRINTF(meta->seq, "Summary: nr_cpus %u, nr_running %u, nr_null_rq %u\n",
+                               nr_cpus, nr_running, nr_null_rq);
+
+                bpf_task_release(p);
+                return 0;
+        }
+
+----
 
 4. Adding BPF cpumask kfuncs
 ============================
