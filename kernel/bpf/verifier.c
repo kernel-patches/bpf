@@ -18737,6 +18737,23 @@ static void adjust_subprog_starts(struct bpf_verifier_env *env, u32 off, u32 len
 	}
 }
 
+static void adjust_subprog_frame_descs(struct bpf_verifier_env *env, u32 off, u32 len)
+{
+	if (len == 1)
+		return;
+	for (int i = 0; i <= env->subprog_cnt; i++) {
+		struct bpf_exception_frame_desc_tab *fdtab = subprog_info(env, i)->fdtab;
+
+		if (!fdtab)
+			continue;
+		for (int j = 0; j < fdtab->cnt; j++) {
+			if (fdtab->desc[j]->pc <= off)
+				continue;
+			fdtab->desc[j]->pc += len - 1;
+		}
+	}
+}
+
 static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 {
 	struct bpf_jit_poke_descriptor *tab = prog->aux->poke_tab;
@@ -18775,6 +18792,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 	}
 	adjust_insn_aux_data(env, new_data, new_prog, off, len);
 	adjust_subprog_starts(env, off, len);
+	adjust_subprog_frame_descs(env, off, len);
 	adjust_poke_descs(new_prog, off, len);
 	return new_prog;
 }
@@ -18805,6 +18823,10 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 		/* move fake 'exit' subprog as well */
 		move = env->subprog_cnt + 1 - j;
 
+		/* Free fdtab for subprog_info that we are going to destroy. */
+		for (int k = i; k < j; k++)
+			bpf_exception_frame_desc_tab_free(env->subprog_info[k].fdtab);
+
 		memmove(env->subprog_info + i,
 			env->subprog_info + j,
 			sizeof(*env->subprog_info) * move);
@@ -18832,6 +18854,30 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 	for (; i <= env->subprog_cnt; i++)
 		env->subprog_info[i].start -= cnt;
 
+	return 0;
+}
+
+static int adjust_subprog_frame_descs_after_remove(struct bpf_verifier_env *env, u32 off, u32 cnt)
+{
+	for (int i = 0; i < env->subprog_cnt; i++) {
+		struct bpf_exception_frame_desc_tab *fdtab = subprog_info(env, i)->fdtab;
+
+		if (!fdtab)
+			continue;
+		for (int j = 0; j < fdtab->cnt; j++) {
+			/* Part of a subprog_info whose instructions were removed partially, but the fdtab remained. */
+			if (fdtab->desc[j]->pc >= off && fdtab->desc[j]->pc < off + cnt) {
+				void *p = fdtab->desc[j];
+				if (j < fdtab->cnt - 1)
+					memmove(fdtab->desc + j, fdtab->desc + j + 1, sizeof(fdtab->desc[0]) * (fdtab->cnt - j - 1));
+				kfree(p);
+				fdtab->cnt--;
+				j--;
+			}
+			if (fdtab->desc[j]->pc >= off + cnt)
+				fdtab->desc[j]->pc -= cnt;
+		}
+	}
 	return 0;
 }
 
@@ -18913,6 +18959,10 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 		return err;
 
 	err = adjust_subprog_starts_after_remove(env, off, cnt);
+	if (err)
+		return err;
+
+	err = adjust_subprog_frame_descs_after_remove(env, off, cnt);
 	if (err)
 		return err;
 
