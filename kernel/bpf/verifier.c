@@ -10216,6 +10216,11 @@ static int gen_exception_frame_desc_reg_entry(struct bpf_verifier_env *env, stru
 	fd.off = off;
 	verbose(env, "frame_desc: frame%d: insn_idx=%d %s=%d size=%d ref_obj_id=%d type=%s\n",
 		frameno, env->insn_idx, off < 0 ? "off" : "regno", off, BPF_REG_SIZE, reg->ref_obj_id, reg_type_str(env, reg->type));
+
+	if (bpf_cleanup_resource_reg(&fd, NULL)) {
+		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
+		return -EFAULT;
+	}
 	return push_exception_frame_desc(env, frameno, &fd);
 }
 
@@ -10239,6 +10244,11 @@ static int gen_exception_frame_desc_dynptr_entry(struct bpf_verifier_env *env, s
 		break;
 	default:
 		verbose(env, "verifier internal error: refcounted dynptr type unhandled for exception frame descriptor entry\n");
+		return -EFAULT;
+	}
+
+	if (bpf_cleanup_resource_dynptr(&fd, NULL)) {
+		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
 		return -EFAULT;
 	}
 	return push_exception_frame_desc(env, frameno, &fd);
@@ -10267,6 +10277,11 @@ static int gen_exception_frame_desc_iter_entry(struct bpf_verifier_env *env, str
 	if (ret < 0) {
 		btf_put(btf);
 		return ret;
+	}
+
+	if (bpf_cleanup_resource_iter(&fd, NULL)) {
+		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
+		return -EFAULT;
 	}
 	return push_exception_frame_desc(env, frameno, &fd);
 }
@@ -10347,6 +10362,11 @@ static int gen_exception_frame_descs(struct bpf_verifier_env *env)
 	int ret;
 
 	__mark_reg_not_init(env, &not_init_reg);
+
+	if (!bpf_jit_supports_exceptions_cleanup()) {
+		verbose(env, "JIT does not support cleanup of resources when throwing exceptions\n");
+		return -ENOTSUPP;
+	}
 
 	for (int frameno = env->cur_state->curframe; frameno >= 0; frameno--) {
 		struct bpf_func_state *frame = env->cur_state->frame[frameno];

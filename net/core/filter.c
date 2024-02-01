@@ -6912,6 +6912,11 @@ static const struct bpf_func_proto bpf_sk_release_proto = {
 	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON | OBJ_RELEASE,
 };
 
+void bpf_sk_release_dtor(void *ptr)
+{
+	bpf_sk_release((u64)ptr, 0, 0, 0, 0);
+}
+
 BPF_CALL_5(bpf_xdp_sk_lookup_udp, struct xdp_buff *, ctx,
 	   struct bpf_sock_tuple *, tuple, u32, len, u32, netns_id, u64, flags)
 {

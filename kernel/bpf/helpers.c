@@ -2,6 +2,7 @@
 /* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
  */
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/cgroup.h>
@@ -2499,12 +2500,113 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
-struct bpf_throw_ctx {
-	struct bpf_prog_aux *aux;
-	u64 sp;
-	u64 bp;
-	int cnt;
-};
+int bpf_cleanup_resource_reg(struct bpf_frame_desc_reg_entry *fd, void *ptr)
+{
+	u64 reg_value = ptr ? *(u64 *)ptr : 0;
+	struct btf_struct_meta *meta;
+	const struct btf_type *t;
+	u32 dtor_id;
+
+	switch (fd->type) {
+	case PTR_TO_SOCKET:
+	case PTR_TO_TCP_SOCK:
+	case PTR_TO_SOCK_COMMON:
+		if (reg_value)
+			bpf_sk_release_dtor((void *)reg_value);
+		return 0;
+	case PTR_TO_MEM | MEM_RINGBUF:
+		if (reg_value)
+			bpf_ringbuf_discard_proto.func(reg_value, 0, 0, 0, 0);
+		return 0;
+	case PTR_TO_BTF_ID | MEM_ALLOC:
+	case PTR_TO_BTF_ID | MEM_ALLOC | MEM_PERCPU:
+		if (!reg_value)
+			return 0;
+		meta = btf_find_struct_meta(fd->btf, fd->btf_id);
+		if (fd->type & MEM_PERCPU)
+			bpf_percpu_obj_drop_impl((void *)reg_value, meta);
+		else
+			bpf_obj_drop_impl((void *)reg_value, meta);
+		return 0;
+	case PTR_TO_BTF_ID:
+#ifdef CONFIG_NET
+		if (bsearch(&fd->btf_id, btf_sock_ids, MAX_BTF_SOCK_TYPE, sizeof(btf_sock_ids[0]), btf_id_cmp_func)) {
+			if (reg_value)
+				bpf_sk_release_dtor((void *)reg_value);
+			return 0;
+		}
+#endif
+		dtor_id = btf_find_dtor_kfunc(fd->btf, fd->btf_id, BPF_DTOR_KPTR | BPF_DTOR_CLEANUP);
+		if (dtor_id < 0)
+			return -EINVAL;
+		t = btf_type_by_id(fd->btf, dtor_id);
+		if (!t)
+			return -EINVAL;
+		if (reg_value) {
+			void (*dtor)(void *) = (void *)kallsyms_lookup_name(btf_name_by_offset(fd->btf, t->name_off));
+			dtor((void *)reg_value);
+		}
+		return 0;
+	case SCALAR_VALUE:
+	case NOT_INIT:
+		return 0;
+	default:
+		break;
+	}
+	return -EINVAL;
+}
+
+int bpf_cleanup_resource_dynptr(struct bpf_frame_desc_reg_entry *fd, void *ptr)
+{
+	switch (fd->type) {
+	case BPF_DYNPTR_TYPE_RINGBUF:
+		if (ptr)
+			bpf_ringbuf_discard_dynptr_proto.func((u64)ptr, 0, 0, 0, 0);
+		return 0;
+	default:
+		break;
+	}
+	return -EINVAL;
+}
+
+int bpf_cleanup_resource_iter(struct bpf_frame_desc_reg_entry *fd, void *ptr)
+{
+	const struct btf_type *t;
+	void (*dtor)(void *);
+	u32 dtor_id;
+
+	dtor_id = btf_find_dtor_kfunc(fd->btf, fd->btf_id, BPF_DTOR_CLEANUP);
+	if (dtor_id < 0)
+		return -EINVAL;
+	t = btf_type_by_id(fd->btf, dtor_id);
+	if (!t)
+		return -EINVAL;
+	dtor = (void *)kallsyms_lookup_name(btf_name_by_offset(fd->btf, t->name_off));
+	if (ptr)
+		dtor(ptr);
+	return 0;
+}
+
+void bpf_cleanup_resource(struct bpf_frame_desc_reg_entry *fd, void *ptr)
+{
+	if (!ptr)
+		return;
+	switch (fd->spill_type) {
+	case STACK_DYNPTR:
+		bpf_cleanup_resource_dynptr(fd, ptr);
+		break;
+	case STACK_ITER:
+		bpf_cleanup_resource_iter(fd, ptr);
+		break;
+	case STACK_SPILL:
+	case STACK_INVALID:
+		bpf_cleanup_resource_reg(fd, ptr);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
+	}
+}
 
 static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 {
@@ -2514,13 +2616,12 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!is_bpf_text_address(ip))
 		return !ctx->cnt;
 	prog = bpf_prog_ksym_find(ip);
-	ctx->cnt++;
-	if (bpf_is_subprog(prog))
-		return true;
 	ctx->aux = prog->aux;
 	ctx->sp = sp;
 	ctx->bp = bp;
-	return false;
+	arch_bpf_cleanup_frame_resource(prog, ctx, ip, sp, bp);
+	ctx->cnt++;
+	return bpf_is_subprog(prog);
 }
 
 __bpf_kfunc void bpf_throw(u64 cookie)

@@ -3402,4 +3402,26 @@ struct bpf_exception_frame_desc_tab {
 
 void bpf_exception_frame_desc_tab_free(struct bpf_exception_frame_desc_tab *fdtab);
 
+struct bpf_throw_ctx {
+	struct bpf_prog_aux *aux;
+	u64 sp;
+	u64 bp;
+	union {
+		struct {
+			u64 saved_r6;
+			u64 saved_r7;
+			u64 saved_r8;
+			u64 saved_r9;
+		};
+		u64 saved_reg[4];
+	};
+	int cnt;
+};
+
+void arch_bpf_cleanup_frame_resource(struct bpf_prog *prog, struct bpf_throw_ctx *ctx, u64 ip, u64 sp, u64 bp);
+void bpf_cleanup_resource(struct bpf_frame_desc_reg_entry *fd, void *ptr);
+int bpf_cleanup_resource_reg(struct bpf_frame_desc_reg_entry *fd, void *ptr);
+int bpf_cleanup_resource_dynptr(struct bpf_frame_desc_reg_entry *fd, void *ptr);
+int bpf_cleanup_resource_iter(struct bpf_frame_desc_reg_entry *fd, void *ptr);
+
 #endif /* _LINUX_BPF_H */
