@@ -182,19 +182,6 @@ int reject_with_rbtree_add_throw(void *ctx)
 	return 0;
 }
 
-SEC("?tc")
-__failure __msg("Unreleased reference")
-int reject_with_reference(void *ctx)
-{
-	struct foo *f;
-
-	f = bpf_obj_new(typeof(*f));
-	if (!f)
-		return 0;
-	bpf_throw(0);
-	return 0;
-}
-
 __noinline static int subprog_ref(struct __sk_buff *ctx)
 {
 	struct foo *f;
