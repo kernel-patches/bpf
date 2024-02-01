@@ -911,7 +911,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	}
 
 	if (fmod_ret->nr_links) {
-		branches_off = kcalloc(fmod_ret->nr_links, sizeof(int), GFP_KERNEL);
+		branches_off = kvcalloc(fmod_ret->nr_links, sizeof(int), GFP_KERNEL);
 		if (!branches_off)
 			return -ENOMEM;
 
@@ -1001,7 +1001,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 
 	ret = ctx->ninsns;
 out:
-	kfree(branches_off);
+	kvfree(branches_off);
 	return ret;
 }
 
