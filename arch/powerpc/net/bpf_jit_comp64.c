@@ -122,12 +122,17 @@ void bpf_jit_realloc_regs(struct codegen_context *ctx)
 {
 }
 
-void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
+void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx, bool has_kfunc_call)
 {
 	int i;
 
 #ifndef CONFIG_PPC_KERNEL_PCREL
-	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
+	/*
+	 * If the program doesn't have a kfunc call, all BPF helpers are part of kernel text
+	 * and all BPF programs/functions utilize the kernel TOC. So, optimize the
+	 * instruction sequence by using kernel toc in r2 for that case.
+	 */
+	if (!has_kfunc_call && IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
 		EMIT(PPC_RAW_LD(_R2, _R13, offsetof(struct paca_struct, kernel_toc)));
 #endif
 
@@ -202,12 +207,17 @@ void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx)
 	EMIT(PPC_RAW_BLR());
 }
 
-static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u64 func)
+static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u64 func,
+				      bool has_kfunc_call)
 {
 	unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
 	long reladdr;
 
-	if (WARN_ON_ONCE(!core_kernel_text(func_addr)))
+	/*
+	 * If the program doesn't have a kfunc call, all BPF helpers are assumed to be part of
+	 * kernel text. Don't proceed if that assumption ever changes in future.
+	 */
+	if (!has_kfunc_call && WARN_ON_ONCE(!core_kernel_text(func_addr)))
 		return -EINVAL;
 
 	if (IS_ENABLED(CONFIG_PPC_KERNEL_PCREL)) {
@@ -225,30 +235,55 @@ static int bpf_jit_emit_func_call_hlp(u32 *image, struct codegen_context *ctx, u
 		EMIT(PPC_RAW_BCTR());
 
 	} else {
-		reladdr = func_addr - kernel_toc_addr();
-		if (reladdr > 0x7FFFFFFF || reladdr < -(0x80000000L)) {
-			pr_err("eBPF: address of %ps out of range of kernel_toc.\n", (void *)func);
-			return -ERANGE;
-		}
+		if (has_kfunc_call) {
+#ifdef PPC64_ELF_ABI_v1
+			/* func points to the function descriptor */
+			PPC_LI64(b2p[TMP_REG_2], func);
+			/* Load actual entry point from function descriptor */
+			PPC_BPF_LL(b2p[TMP_REG_1], b2p[TMP_REG_2], 0);
+			/* ... and move it to CTR */
+			EMIT(PPC_RAW_MTCTR(b2p[TMP_REG_1]));
+			/*
+			 * Load TOC from function descriptor at offset 8.
+			 * We can clobber r2 since we get called through a
+			 * function pointer (so caller will save/restore r2)
+			 * and since we don't use a TOC ourself.
+			 */
+			PPC_BPF_LL(2, b2p[TMP_REG_2], 8);
+#else
+			/* We can clobber r12 */
+			PPC_LI64(12, func);
+			EMIT(PPC_RAW_MTCTR(12));
+#endif
+		} else {
+			reladdr = func_addr - kernel_toc_addr();
+			if (reladdr > 0x7FFFFFFF || reladdr < -(0x80000000L)) {
+				pr_err("eBPF: address of %ps out of range of kernel_toc.\n",
+				       (void *)func);
+				return -ERANGE;
+			}
 
-		EMIT(PPC_RAW_ADDIS(_R12, _R2, PPC_HA(reladdr)));
-		EMIT(PPC_RAW_ADDI(_R12, _R12, PPC_LO(reladdr)));
-		EMIT(PPC_RAW_MTCTR(_R12));
+			EMIT(PPC_RAW_ADDIS(_R12, _R2, PPC_HA(reladdr)));
+			EMIT(PPC_RAW_ADDI(_R12, _R12, PPC_LO(reladdr)));
+			EMIT(PPC_RAW_MTCTR(_R12));
+		}
 		EMIT(PPC_RAW_BCTRL());
 	}
 
 	return 0;
 }
 
-int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
+int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func,
+			       bool has_kfunc_call)
 {
 	unsigned int i, ctx_idx = ctx->idx;
 
-	if (WARN_ON_ONCE(func && is_module_text_address(func)))
+	if (WARN_ON_ONCE(func && !has_kfunc_call && is_module_text_address(func)))
 		return -EINVAL;
 
 	/* skip past descriptor if elf v1 */
-	func += FUNCTION_DESCR_SIZE;
+	if (!has_kfunc_call)
+		func += FUNCTION_DESCR_SIZE;
 
 	/* Load function address into r12 */
 	PPC_LI64(_R12, func);
@@ -267,13 +302,28 @@ int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *
 		for (i = ctx->idx - ctx_idx; i < 5; i++)
 			EMIT(PPC_RAW_NOP());
 
+#ifdef PPC64_ELF_ABI_v1
+	if (has_kfunc_call) {
+		/*
+		 * Load TOC from function descriptor at offset 8.
+		 * We can clobber r2 since we get called through a
+		 * function pointer (so caller will save/restore r2)
+		 * and since we don't use a TOC ourself.
+		 */
+		PPC_BPF_LL(2, 12, 8);
+		/* Load actual entry point from function descriptor */
+		PPC_BPF_LL(12, 12, 0);
+	}
+#endif
+
 	EMIT(PPC_RAW_MTCTR(_R12));
 	EMIT(PPC_RAW_BCTRL());
 
 	return 0;
 }
 
-static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 out)
+static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 out,
+				  bool has_kfunc_call)
 {
 	/*
 	 * By now, the eBPF program has already setup parameters in r3, r4 and r5
@@ -285,7 +335,7 @@ static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 o
 	int b2p_index = bpf_to_ppc(BPF_REG_3);
 	int bpf_tailcall_prologue_size = 8;
 
-	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
+	if (!has_kfunc_call && IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2))
 		bpf_tailcall_prologue_size += 4; /* skip past the toc load */
 
 	/*
@@ -325,8 +375,20 @@ static int bpf_jit_emit_tail_call(u32 *image, struct codegen_context *ctx, u32 o
 
 	/* goto *(prog->bpf_func + prologue_size); */
 	EMIT(PPC_RAW_LD(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1), offsetof(struct bpf_prog, bpf_func)));
-	EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
-			FUNCTION_DESCR_SIZE + bpf_tailcall_prologue_size));
+	if (has_kfunc_call) {
+#ifdef PPC64_ELF_ABI_v1
+		/* skip past the function descriptor */
+		EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
+				FUNCTION_DESCR_SIZE + bpf_tailcall_prologue_size));
+#else
+		EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
+				bpf_tailcall_prologue_size));
+#endif
+	} else {
+		EMIT(PPC_RAW_ADDI(bpf_to_ppc(TMP_REG_1), bpf_to_ppc(TMP_REG_1),
+				FUNCTION_DESCR_SIZE + bpf_tailcall_prologue_size));
+	}
+
 	EMIT(PPC_RAW_MTCTR(bpf_to_ppc(TMP_REG_1)));
 
 	/* tear down stack, restore NVRs, ... */
@@ -365,6 +427,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 		       u32 *addrs, int pass, bool extra_pass)
 {
 	enum stf_barrier_type stf_barrier = stf_barrier_type_get();
+	bool has_kfunc_call = bpf_prog_has_kfunc_call(fp);
 	const struct bpf_insn *insn = fp->insnsi;
 	int flen = fp->len;
 	int i, ret;
@@ -993,9 +1056,11 @@ emit_clear:
 				return ret;
 
 			if (func_addr_fixed)
-				ret = bpf_jit_emit_func_call_hlp(image, ctx, func_addr);
+				ret = bpf_jit_emit_func_call_hlp(image, ctx, func_addr,
+								 has_kfunc_call);
 			else
-				ret = bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr);
+				ret = bpf_jit_emit_func_call_rel(image, fimage, ctx, func_addr,
+								 has_kfunc_call);
 
 			if (ret)
 				return ret;
@@ -1204,7 +1269,7 @@ cond_branch:
 		 */
 		case BPF_JMP | BPF_TAIL_CALL:
 			ctx->seen |= SEEN_TAILCALL;
-			ret = bpf_jit_emit_tail_call(image, ctx, addrs[i + 1]);
+			ret = bpf_jit_emit_tail_call(image, ctx, addrs[i + 1], has_kfunc_call);
 			if (ret < 0)
 				return ret;
 			break;

@@ -163,7 +163,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	 * update ctgtx.idx as it pretends to output instructions, then we can
 	 * calculate total size from idx.
 	 */
-	bpf_jit_build_prologue(NULL, &cgctx);
+	bpf_jit_build_prologue(NULL, &cgctx, bpf_prog_has_kfunc_call(fp));
 	addrs[fp->len] = cgctx.idx * 4;
 	bpf_jit_build_epilogue(NULL, &cgctx);
 
@@ -192,7 +192,7 @@ skip_init_ctx:
 		/* Now build the prologue, body code & epilogue for real. */
 		cgctx.idx = 0;
 		cgctx.alt_exit_addr = 0;
-		bpf_jit_build_prologue(code_base, &cgctx);
+		bpf_jit_build_prologue(code_base, &cgctx, bpf_prog_has_kfunc_call(fp));
 		if (bpf_jit_build_body(fp, code_base, fcode_base, &cgctx, addrs, pass,
 				       extra_pass)) {
 			bpf_arch_text_copy(&fhdr->size, &hdr->size, sizeof(hdr->size));
