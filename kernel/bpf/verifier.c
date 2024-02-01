@@ -19836,9 +19836,9 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	int cnt = env->subprog_cnt;
 	struct bpf_prog *prog;
 
-	/* We only reserve one slot for hidden subprogs in subprog_info. */
-	if (env->hidden_subprog_cnt) {
-		verbose(env, "verifier internal error: only one hidden subprog supported\n");
+	/* We only reserve two slots for hidden subprogs in subprog_info. */
+	if (env->hidden_subprog_cnt == 2) {
+		verbose(env, "verifier internal error: only two hidden subprogs supported\n");
 		return -EFAULT;
 	}
 	/* We're not patching any existing instruction, just appending the new
@@ -19890,6 +19890,42 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		env->exception_callback_subprog = env->subprog_cnt - 1;
 		/* Don't update insn_cnt, as add_hidden_subprog always appends insns */
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
+	}
+
+	if (env->seen_exception) {
+		struct bpf_insn patch[] = {
+			/* Use the correct insn_cnt here, as we want to append past the hidden subprog above. */
+			env->prog->insnsi[env->prog->len - 1],
+			/* Scratch R6-R9 so that the JIT spills them to the stack on entry. */
+			BPF_MOV64_IMM(BPF_REG_6, 0),
+			BPF_MOV64_IMM(BPF_REG_7, 0),
+			BPF_MOV64_IMM(BPF_REG_8, 0),
+			BPF_MOV64_IMM(BPF_REG_9, 0),
+			BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0, special_kfunc_list[KF_bpf_throw]),
+		};
+		const bool all_callee_regs_used[4] = {true, true, true, true};
+
+		ret = add_hidden_subprog(env, patch, ARRAY_SIZE(patch));
+		if (ret < 0)
+			return ret;
+		prog = env->prog;
+		insn = prog->insnsi;
+
+		env->bpf_throw_tramp_subprog = env->subprog_cnt - 1;
+		/* Ensure to mark callee_regs_used, so that we can collect any saved_regs if necessary. */
+		memcpy(env->subprog_info[env->bpf_throw_tramp_subprog].callee_regs_used, all_callee_regs_used, sizeof(all_callee_regs_used));
+		/* Certainly, we have seen a bpf_throw call in this program, as
+		 * seen_exception is true, therefore the bpf_kfunc_desc entry for it must
+		 * be populated and found here. We need to do the fixup now, otherwise
+		 * the loop over insn_cnt below won't see this kfunc call.
+		 */
+		ret = fixup_kfunc_call(env, &prog->insnsi[prog->len - 1], insn_buf, prog->len - 1, &cnt);
+		if (ret < 0)
+			return ret;
+		if (cnt != 0) {
+			verbose(env, "verifier internal error: unhandled patching for bpf_throw fixup in bpf_throw_tramp subprog\n");
+			return -EFAULT;
+		}
 	}
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
@@ -20012,6 +20048,19 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			/* All bpf_throw calls in this program must be patched to call the
+			 * bpf_throw_tramp subprog instead.  This ensures we correctly save
+			 * the R6-R9 before entry into kernel, and can clean them up if
+			 * needed.
+			 * Note: seen_exception must be set, otherwise no bpf_throw_tramp is
+			 * generated.
+			 */
+			if (env->seen_exception && is_bpf_throw_kfunc(insn)) {
+				*insn = BPF_CALL_REL(0);
+				insn->imm = (int)env->subprog_info[env->bpf_throw_tramp_subprog].start - (i + delta) - 1;
+				continue;
+			}
+
 			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
 			if (ret)
 				return ret;

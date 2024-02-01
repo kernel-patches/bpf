@@ -3369,6 +3369,11 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 	return prog->aux->func_idx != 0;
 }
 
+static inline bool bpf_is_hidden_subprog(const struct bpf_prog *prog)
+{
+	return prog->aux->func_idx >= prog->aux->func_cnt;
+}
+
 struct bpf_frame_desc_reg_entry {
 	u32 type;
 	s16 spill_type;
