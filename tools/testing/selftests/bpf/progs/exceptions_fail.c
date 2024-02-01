@@ -213,7 +213,7 @@ __noinline static int subprog_cb_ref(u32 i, void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference")
+__failure __msg("cannot be called from callback subprog 1")
 int reject_with_cb_reference(void *ctx)
 {
 	struct foo *f;
@@ -235,7 +235,7 @@ int reject_with_cb(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference")
+__success
 int reject_with_subprog_reference(void *ctx)
 {
 	return subprog_ref(ctx) + 1;

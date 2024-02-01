@@ -1424,6 +1424,7 @@ struct btf_mod_pair {
 };
 
 struct bpf_kfunc_desc_tab;
+struct bpf_exception_frame_desc_tab;
 
 struct bpf_prog_aux {
 	atomic64_t refcnt;
@@ -1518,6 +1519,7 @@ struct bpf_prog_aux {
 	struct module *mod;
 	u32 num_exentries;
 	struct exception_table_entry *extable;
+	struct bpf_exception_frame_desc_tab *fdtab;
 	union {
 		struct work_struct work;
 		struct rcu_head	rcu;
@@ -3366,5 +3368,30 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 {
 	return prog->aux->func_idx != 0;
 }
+
+struct bpf_frame_desc_reg_entry {
+	u32 type;
+	s16 spill_type;
+	union {
+		s16 off;
+		u16 regno;
+	};
+	struct btf *btf;
+	u32 btf_id;
+};
+
+struct bpf_exception_frame_desc {
+	u64 pc;
+	u32 stack_cnt;
+	struct bpf_frame_desc_reg_entry regs[4];
+	struct bpf_frame_desc_reg_entry stack[];
+};
+
+struct bpf_exception_frame_desc_tab {
+	u32 cnt;
+	struct bpf_exception_frame_desc **desc;
+};
+
+void bpf_exception_frame_desc_tab_free(struct bpf_exception_frame_desc_tab *fdtab);
 
 #endif /* _LINUX_BPF_H */

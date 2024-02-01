@@ -10004,6 +10004,366 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+static void print_frame_desc_reg_entry(struct bpf_verifier_env *env, struct bpf_frame_desc_reg_entry *fd, const char *pfx)
+{
+	const char *type = fd->off < 0 ? "stack" : "reg";
+	const char *key = fd->off < 0 ? "off" : "regno";
+	const char *spill_type;
+
+	switch (fd->spill_type) {
+	case STACK_INVALID:
+		spill_type = "<unknown>";
+		break;
+	case STACK_SPILL:
+		spill_type = "reg";
+		break;
+	case STACK_DYNPTR:
+		spill_type = "dynptr";
+		break;
+	case STACK_ITER:
+		spill_type = "iter";
+		break;
+	default:
+		spill_type = "???";
+		break;
+	}
+	verbose(env, "frame_desc: %s%s fde: %s=%d spill_type=%s ", pfx, type, key, fd->off, spill_type);
+	if (fd->btf) {
+		const struct btf_type *t = btf_type_by_id(fd->btf, fd->btf_id);
+
+		verbose(env, "type=%s%s btf=%s btf_id=%d\n", fd->off < 0 ? "" : "ptr_",
+			btf_name_by_offset(fd->btf, t->name_off), btf_get_name(fd->btf), fd->btf_id);
+	} else {
+		verbose(env, "type=%s\n", fd->spill_type == STACK_DYNPTR ? "ringbuf" : reg_type_str(env, fd->type));
+	}
+}
+
+static int merge_frame_desc(struct bpf_verifier_env *env, struct bpf_frame_desc_reg_entry *ofd, struct bpf_frame_desc_reg_entry *fd)
+{
+	int ofd_type, fd_type;
+
+	/* If ofd->off/regno is 0, this is uninitialized reg entry, just merge new entry. */
+	if (!ofd->off)
+		goto merge_new;
+	/* Exact merge for dynptr, iter, reg, stack. */
+	if (!memcmp(ofd, fd, sizeof(*ofd)))
+		goto none;
+	/* First, for a successful merge, both spill_type should be same.*/
+	if (ofd->spill_type != fd->spill_type)
+		goto fail;
+	/* Then, both should correspond to a reg or stack entry for non-exact merge. */
+	if (ofd->spill_type != STACK_SPILL && ofd->spill_type != STACK_INVALID)
+		goto fail;
+	ofd_type = ofd->type;
+	fd_type = fd->type;
+	/* One of the old or new entry must be NULL, if both are not same. */
+	if (ofd_type == fd_type)
+		goto none;
+	if (ofd_type != SCALAR_VALUE && fd_type != SCALAR_VALUE)
+		goto fail;
+	if (fd_type == SCALAR_VALUE)
+		goto none;
+	verbose(env, "frame_desc: merge: merging new frame desc entry into old\n");
+	print_frame_desc_reg_entry(env, ofd, "old ");
+merge_new:
+	if (!ofd->off)
+		verbose(env, "frame_desc: merge: creating new frame desc entry\n");
+	print_frame_desc_reg_entry(env, fd, "new ");
+	*ofd = *fd;
+	return 0;
+none:
+	verbose(env, "frame_desc: merge: no merging needed of new frame desc entry into old\n");
+	print_frame_desc_reg_entry(env, ofd, "old ");
+	print_frame_desc_reg_entry(env, fd, "new ");
+	return 0;
+fail:
+	verbose(env, "frame_desc: merge: failed to merge old and new frame desc entry\n");
+	print_frame_desc_reg_entry(env, ofd, "old ");
+	print_frame_desc_reg_entry(env, fd, "new ");
+	return -EINVAL;
+}
+
+static int find_and_merge_frame_desc(struct bpf_verifier_env *env, struct bpf_exception_frame_desc_tab *fdtab, u64 pc, struct bpf_frame_desc_reg_entry *fd)
+{
+	struct bpf_exception_frame_desc **descs = NULL, *desc = NULL, *p;
+	int ret = 0;
+
+	for (int i = 0; i < fdtab->cnt; i++) {
+		if (pc != fdtab->desc[i]->pc)
+			continue;
+		descs = &fdtab->desc[i];
+		desc = fdtab->desc[i];
+		break;
+	}
+
+	if (!desc) {
+		verbose(env, "frame_desc: find_and_merge: cannot find frame descriptor for pc=%llu, creating new entry\n", pc);
+		return -ENOENT;
+	}
+
+	if (fd->off < 0)
+		goto stack;
+	/* We didn't find a match for regno or offset, fill it into the frame descriptor. */
+	return merge_frame_desc(env, &desc->regs[fd->regno - BPF_REG_6], fd);
+
+stack:
+	for (int i = 0; i < desc->stack_cnt; i++) {
+		struct bpf_frame_desc_reg_entry *ofd = desc->stack + i;
+
+		if (ofd->off != fd->off)
+			continue;
+		ret = merge_frame_desc(env, ofd, fd);
+		if (ret < 0)
+			return ret;
+		return 0;
+	}
+	p = krealloc(desc, offsetof(typeof(*desc), stack[desc->stack_cnt + 1]), GFP_USER | __GFP_ZERO);
+	if (!p) {
+		return -ENOMEM;
+	}
+	verbose(env, "frame_desc: merge: creating new frame desc entry\n");
+	print_frame_desc_reg_entry(env, fd, "new ");
+	desc = p;
+	desc->stack[desc->stack_cnt] = *fd;
+	desc->stack_cnt++;
+	*descs = desc;
+	return 0;
+}
+
+/* Implementation details:
+ * This function is responsible for pushing a prepared bpf_frame_desc_reg_entry
+ * into the frame descriptor array tied to each subprog. The first step is
+ * ensuring the array is allocated and has enough capacity. Second, we must find
+ * if there is an existing descriptor already for the program counter under
+ * consideration, and try to report an error if we see conflicting frame
+ * descriptor generation requests for the same instruction in the program.
+ * Note that by default, we let NULL registers and stack slots occupy an entry.
+ * This is done so that any future non-NULL registers or stack slots at the same
+ * regno or offset can be satisfied by changing the type of entry to a "stronger"
+ * pointer type. The release handler can deal with NULL or valid values,
+ * therefore such a logic allows handling cases where the program may only have
+ * a pointer in some of the program paths and NULL in others while reaching the
+ * same instruction that causes an exception to be thrown.
+ * Likewise, a NULL entry merges into the stronger pointer type entry when a
+ * frame descriptor already exists before pushing a new one.
+ */
+static int push_exception_frame_desc(struct bpf_verifier_env *env, int frameno, struct bpf_frame_desc_reg_entry *fd)
+{
+	struct bpf_func_state *frame = env->cur_state->frame[frameno], *curframe = cur_func(env);
+	struct bpf_subprog_info *si = subprog_info(env, frame->subprogno);
+	struct bpf_exception_frame_desc_tab *fdtab = si->fdtab;
+	struct bpf_exception_frame_desc **desc;
+	u64 pc = env->insn_idx;
+	int ret;
+
+	/* If this is not the current frame, then we need to figure out the callsite
+	 * for its callee to identify the pc.
+	 */
+	if (frameno != curframe->frameno)
+		pc = env->cur_state->frame[frameno + 1]->callsite;
+
+	if (!fdtab) {
+		fdtab = kzalloc(sizeof(*si->fdtab), GFP_USER);
+		if (!fdtab)
+			return -ENOMEM;
+		fdtab->desc = kzalloc(sizeof(*fdtab->desc), GFP_USER);
+		if (!fdtab->desc) {
+			kfree(fdtab);
+			return -ENOMEM;
+		}
+		si->fdtab = fdtab;
+	}
+
+	ret = find_and_merge_frame_desc(env, fdtab, pc, fd);
+	if (!ret)
+		return 0;
+	if (ret < 0 && ret != -ENOENT)
+		return ret;
+	/* We didn't find a frame descriptor for pc, grow the array and insert it. */
+	desc = realloc_array(fdtab->desc, fdtab->cnt ?: 1, fdtab->cnt + 1, sizeof(*fdtab->desc));
+	if (!desc) {
+		return -ENOMEM;
+	}
+	fdtab->desc = desc;
+	fdtab->desc[fdtab->cnt] = kzalloc(sizeof(*fdtab->desc[0]), GFP_USER);
+	if (!fdtab->desc[fdtab->cnt])
+		return -ENOMEM;
+	fdtab->desc[fdtab->cnt]->pc = pc;
+	fdtab->cnt++;
+	return find_and_merge_frame_desc(env, fdtab, pc, fd);
+}
+
+static int gen_exception_frame_desc_reg_entry(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int off, int frameno)
+{
+	struct bpf_frame_desc_reg_entry fd = {};
+
+	if ((!reg->ref_obj_id && reg->type != NOT_INIT) || reg->type == SCALAR_VALUE)
+		return 0;
+	if (base_type(reg->type) == PTR_TO_BTF_ID)
+		fd.btf = reg->btf;
+	fd.type = reg->type & ~PTR_MAYBE_NULL;
+	fd.btf_id = fd.btf ? reg->btf_id : 0;
+	fd.spill_type = off < 0 ? STACK_SPILL : STACK_INVALID;
+	fd.off = off;
+	verbose(env, "frame_desc: frame%d: insn_idx=%d %s=%d size=%d ref_obj_id=%d type=%s\n",
+		frameno, env->insn_idx, off < 0 ? "off" : "regno", off, BPF_REG_SIZE, reg->ref_obj_id, reg_type_str(env, reg->type));
+	return push_exception_frame_desc(env, frameno, &fd);
+}
+
+static int gen_exception_frame_desc_dynptr_entry(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int off, int frameno)
+{
+	struct bpf_frame_desc_reg_entry fd = {};
+	int type = reg->dynptr.type;
+
+	/* We only need to generate an entry when the dynptr is refcounted,
+	 * otherwise it encapsulates no resource that needs to be released.
+	 */
+	if (!dynptr_type_refcounted(type))
+		return 0;
+	switch (type) {
+	case BPF_DYNPTR_TYPE_RINGBUF:
+		fd.type = BPF_DYNPTR_TYPE_RINGBUF;
+		fd.spill_type = STACK_DYNPTR;
+		fd.off = off;
+		verbose(env, "frame_desc: frame%d: insn_idx=%d off=%d size=%lu dynptr_ringbuf\n", frameno, env->insn_idx, off,
+			BPF_DYNPTR_NR_SLOTS * BPF_REG_SIZE);
+		break;
+	default:
+		verbose(env, "verifier internal error: refcounted dynptr type unhandled for exception frame descriptor entry\n");
+		return -EFAULT;
+	}
+	return push_exception_frame_desc(env, frameno, &fd);
+}
+
+static int add_used_btf(struct bpf_verifier_env *env, struct btf *btf);
+
+static int gen_exception_frame_desc_iter_entry(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int off, int frameno)
+{
+	struct bpf_frame_desc_reg_entry fd = {};
+	struct btf *btf = reg->iter.btf;
+	u32 btf_id = reg->iter.btf_id;
+	const struct btf_type *t;
+	int ret;
+
+	fd.btf = btf;
+	fd.type = reg->type;
+	fd.btf_id = btf_id;
+	fd.spill_type = STACK_ITER;
+	fd.off = off;
+	t = btf_type_by_id(btf, btf_id);
+	verbose(env, "frame_desc: frame%d: insn_idx=%d off=%d size=%u ref_obj_id=%d iter_%s\n",
+		frameno, env->insn_idx, off, t->size, reg->ref_obj_id, btf_name_by_offset(btf, t->name_off));
+	btf_get(btf);
+	ret = add_used_btf(env, btf);
+	if (ret < 0) {
+		btf_put(btf);
+		return ret;
+	}
+	return push_exception_frame_desc(env, frameno, &fd);
+}
+
+static int gen_exception_frame_desc_stack_entry(struct bpf_verifier_env *env, struct bpf_func_state *frame, int stack_off)
+{
+	int spi = stack_off / BPF_REG_SIZE, off = -stack_off - 1;
+	struct bpf_reg_state *reg, not_init_reg, null_reg;
+	int slot_type, ret;
+
+	__mark_reg_not_init(env, &not_init_reg);
+	__mark_reg_known_zero(&null_reg);
+
+	slot_type = frame->stack[spi].slot_type[BPF_REG_SIZE - 1];
+	reg = &frame->stack[spi].spilled_ptr;
+
+	switch (slot_type) {
+	case STACK_SPILL:
+		/* We skip all kinds of scalar registers, except NULL values, which consume a slot. */
+		if (is_spilled_scalar_reg(&frame->stack[spi]) && !register_is_null(&frame->stack[spi].spilled_ptr))
+			break;
+		ret = gen_exception_frame_desc_reg_entry(env, reg, off, frame->frameno);
+		if (ret < 0)
+			return ret;
+		break;
+	case STACK_DYNPTR:
+		/* Keep iterating until we find the first slot. */
+		if (!reg->dynptr.first_slot)
+			break;
+		ret = gen_exception_frame_desc_dynptr_entry(env, reg, off, frame->frameno);
+		if (ret < 0)
+			return ret;
+		break;
+	case STACK_ITER:
+		/* Keep iterating until we find the first slot. */
+		if (!reg->ref_obj_id)
+			break;
+		ret = gen_exception_frame_desc_iter_entry(env, reg, off, frame->frameno);
+		if (ret < 0)
+			return ret;
+		break;
+	case STACK_MISC:
+	case STACK_INVALID:
+		/* Create an invalid entry for MISC and INVALID */
+		ret = gen_exception_frame_desc_reg_entry(env, &not_init_reg, off, frame->frameno);
+		if (ret < 0)
+			return 0;
+		break;
+	case STACK_ZERO:
+		reg = &null_reg;
+		for (int i = BPF_REG_SIZE - 1; i >= 0; i--) {
+			if (frame->stack[spi].slot_type[i] != STACK_ZERO)
+				reg = &not_init_reg;
+		}
+		ret = gen_exception_frame_desc_reg_entry(env, &null_reg, off, frame->frameno);
+		if (ret < 0)
+			return ret;
+		break;
+	default:
+		verbose(env, "verifier internal error: frame%d stack off=%d slot_type=%d missing handling for exception frame generation\n",
+			frame->frameno, off, slot_type);
+		return -EFAULT;
+	}
+	return 0;
+}
+
+/* We generate exception descriptors for all frames at the current program
+ * counter.  For caller frames, we use their callsite as their program counter,
+ * and we go on generating it until the main frame.
+ *
+ * It's necessary to detect whether the stack layout is different, in that case
+ * frame descriptor generation should fail and we cannot really support runtime
+ * unwinding in that case.
+ */
+static int gen_exception_frame_descs(struct bpf_verifier_env *env)
+{
+	struct bpf_reg_state not_init_reg;
+	int ret;
+
+	__mark_reg_not_init(env, &not_init_reg);
+
+	for (int frameno = env->cur_state->curframe; frameno >= 0; frameno--) {
+		struct bpf_func_state *frame = env->cur_state->frame[frameno];
+
+		verbose(env, "frame_desc: frame%d: Stack:\n", frameno);
+		for (int i = BPF_REG_SIZE - 1; i < frame->allocated_stack; i += BPF_REG_SIZE) {
+			ret = gen_exception_frame_desc_stack_entry(env, frame, i);
+			if (ret < 0)
+				return ret;
+		}
+
+		verbose(env, "frame_desc: frame%d: Registers:\n", frameno);
+		for (int i = BPF_REG_6; i < BPF_REG_FP; i++) {
+			struct bpf_reg_state *reg = &frame->regs[i];
+
+			/* Treat havoc scalars as incompatible type. */
+			if (reg->type == SCALAR_VALUE && !register_is_null(reg))
+				reg = &not_init_reg;
+			ret = gen_exception_frame_desc_reg_entry(env, reg, i, frame->frameno);
+			if (ret < 0)
+				return ret;
+		}
+	}
+	return 0;
+}
+
 static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
 	struct bpf_func_state *state = cur_func(env);
@@ -17694,12 +18054,18 @@ static int do_check(struct bpf_verifier_env *env)
 					err = check_func_call(env, insn, &env->insn_idx);
 					if (!err && env->cur_state->global_subprog_call_exception) {
 						env->cur_state->global_subprog_call_exception = false;
+						err = gen_exception_frame_descs(env);
+						if (err < 0)
+							return err;
 						exception_exit = true;
 						goto process_bpf_exit_full;
 					}
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
 					if (!err && is_bpf_throw_kfunc(insn)) {
+						err = gen_exception_frame_descs(env);
+						if (err < 0)
+							return err;
 						exception_exit = true;
 						goto process_bpf_exit_full;
 					}
@@ -21184,6 +21550,8 @@ err_unlock:
 		mutex_unlock(&bpf_verifier_lock);
 	vfree(env->insn_aux_data);
 err_free_env:
+	for (int i = 0; i < env->subprog_cnt; i++)
+		bpf_exception_frame_desc_tab_free(env->subprog_info[i].fdtab);
 	kfree(env);
 	return ret;
 }

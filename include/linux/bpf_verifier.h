@@ -631,6 +631,8 @@ struct bpf_subprog_info {
 
 	u8 arg_cnt;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_REG_ARGS];
+
+	struct bpf_exception_frame_desc_tab *fdtab;
 };
 
 struct bpf_verifier_env;
