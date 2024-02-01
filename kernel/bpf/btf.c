@@ -3657,7 +3657,7 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 		 * can be used as a referenced pointer and be stored in a map at
 		 * the same time.
 		 */
-		dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id);
+		dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id, BPF_DTOR_KPTR);
 		if (dtor_btf_id < 0) {
 			ret = dtor_btf_id;
 			goto end_btf;
@@ -8144,7 +8144,7 @@ int register_btf_fmodret_id_set(const struct btf_kfunc_id_set *kset)
 }
 EXPORT_SYMBOL_GPL(register_btf_fmodret_id_set);
 
-s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id)
+s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id, u32 flags)
 {
 	struct btf_id_dtor_kfunc_tab *tab = btf->dtor_kfunc_tab;
 	struct btf_id_dtor_kfunc *dtor;
@@ -8156,7 +8156,7 @@ s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id)
 	 */
 	BUILD_BUG_ON(offsetof(struct btf_id_dtor_kfunc, btf_id) != 0);
 	dtor = bsearch(&btf_id, tab->dtors, tab->cnt, sizeof(tab->dtors[0]), btf_id_cmp_func);
-	if (!dtor)
+	if (!dtor || !(dtor->flags & flags))
 		return -ENOENT;
 	return dtor->kfunc_btf_id;
 }
@@ -8170,6 +8170,11 @@ static int btf_check_dtor_kfuncs(struct btf *btf, const struct btf_id_dtor_kfunc
 
 	for (i = 0; i < cnt; i++) {
 		dtor_btf_id = dtors[i].kfunc_btf_id;
+
+		if (!dtors[i].flags) {
+			pr_err("missing flag for btf_id_dtor_kfunc entry\n");
+			return -EINVAL;
+		}
 
 		dtor_func = btf_type_by_id(btf, dtor_btf_id);
 		if (!dtor_func || !btf_type_is_func(dtor_func))

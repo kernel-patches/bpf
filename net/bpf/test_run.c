@@ -1691,11 +1691,13 @@ static int __init bpf_prog_test_run_init(void)
 	const struct btf_id_dtor_kfunc bpf_prog_test_dtor_kfunc[] = {
 		{
 		  .btf_id       = bpf_prog_test_dtor_kfunc_ids[0],
-		  .kfunc_btf_id = bpf_prog_test_dtor_kfunc_ids[1]
+		  .kfunc_btf_id = bpf_prog_test_dtor_kfunc_ids[1],
+		  .flags = BPF_DTOR_KPTR,
 		},
 		{
 		  .btf_id	= bpf_prog_test_dtor_kfunc_ids[2],
 		  .kfunc_btf_id = bpf_prog_test_dtor_kfunc_ids[3],
+		  .flags = BPF_DTOR_KPTR,
 		},
 	};
 	int ret;

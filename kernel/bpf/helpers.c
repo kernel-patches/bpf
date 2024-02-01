@@ -2685,9 +2685,19 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 BTF_ID_LIST(generic_dtor_ids)
 BTF_ID(struct, task_struct)
 BTF_ID(func, bpf_task_release_dtor)
+BTF_ID(struct, bpf_iter_num)
+BTF_ID(func, bpf_iter_num_destroy)
+BTF_ID(struct, bpf_iter_task)
+BTF_ID(func, bpf_iter_task_destroy)
+BTF_ID(struct, bpf_iter_task_vma)
+BTF_ID(func, bpf_iter_task_vma_destroy)
 #ifdef CONFIG_CGROUPS
 BTF_ID(struct, cgroup)
 BTF_ID(func, bpf_cgroup_release_dtor)
+BTF_ID(struct, bpf_iter_css)
+BTF_ID(func, bpf_iter_css_destroy)
+BTF_ID(struct, bpf_iter_css_task)
+BTF_ID(func, bpf_iter_css_task_destroy)
 #endif
 
 BTF_KFUNCS_START(common_btf_ids)
@@ -2732,12 +2742,39 @@ static int __init kfunc_init(void)
 	const struct btf_id_dtor_kfunc generic_dtors[] = {
 		{
 			.btf_id       = generic_dtor_ids[0],
-			.kfunc_btf_id = generic_dtor_ids[1]
+			.kfunc_btf_id = generic_dtor_ids[1],
+			.flags        = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id       = generic_dtor_ids[2],
+			.kfunc_btf_id = generic_dtor_ids[3],
+			.flags        = BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id       = generic_dtor_ids[4],
+			.kfunc_btf_id = generic_dtor_ids[5],
+			.flags        = BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id       = generic_dtor_ids[6],
+			.kfunc_btf_id = generic_dtor_ids[7],
+			.flags        = BPF_DTOR_CLEANUP,
 		},
 #ifdef CONFIG_CGROUPS
 		{
-			.btf_id       = generic_dtor_ids[2],
-			.kfunc_btf_id = generic_dtor_ids[3]
+			.btf_id       = generic_dtor_ids[8],
+			.kfunc_btf_id = generic_dtor_ids[9],
+			.flags        = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id       = generic_dtor_ids[10],
+			.kfunc_btf_id = generic_dtor_ids[11],
+			.flags        = BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id       = generic_dtor_ids[12],
+			.kfunc_btf_id = generic_dtor_ids[13],
+			.flags        = BPF_DTOR_CLEANUP,
 		},
 #endif
 	};

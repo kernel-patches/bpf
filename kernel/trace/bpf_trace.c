@@ -1426,8 +1426,24 @@ static const struct btf_kfunc_id_set bpf_key_sig_kfunc_set = {
 	.set = &key_sig_kfunc_set,
 };
 
+BTF_ID_LIST(bpf_key_dtor_id_list)
+BTF_ID(struct, bpf_key)
+BTF_ID(func, bpf_key_put)
+
 static int __init bpf_key_sig_kfuncs_init(void)
 {
+	const struct btf_id_dtor_kfunc dtors[] = {
+		{
+			.btf_id = bpf_key_dtor_id_list[0],
+			.kfunc_btf_id = bpf_key_dtor_id_list[1],
+			.flags = BPF_DTOR_CLEANUP,
+		},
+	};
+	int ret;
+
+	ret = register_btf_id_dtor_kfuncs(dtors, ARRAY_SIZE(dtors), THIS_MODULE);
+	if (ret < 0)
+		return 0;
 	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
 					 &bpf_key_sig_kfunc_set);
 }

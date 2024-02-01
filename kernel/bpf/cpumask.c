@@ -467,7 +467,8 @@ static int __init cpumask_kfunc_init(void)
 	const struct btf_id_dtor_kfunc cpumask_dtors[] = {
 		{
 			.btf_id	      = cpumask_dtor_ids[0],
-			.kfunc_btf_id = cpumask_dtor_ids[1]
+			.kfunc_btf_id = cpumask_dtor_ids[1],
+			.flags = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
 		},
 	};
 

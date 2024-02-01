@@ -452,6 +452,10 @@ static const struct btf_kfunc_id_set hid_bpf_syscall_kfunc_set = {
 	.set   = &hid_bpf_syscall_kfunc_ids,
 };
 
+BTF_ID_LIST(hid_bpf_dtor_id_list)
+BTF_ID(struct, hid_bpf_ctx)
+BTF_ID(func, hid_bpf_release_context)
+
 int hid_bpf_connect_device(struct hid_device *hdev)
 {
 	struct hid_bpf_prog_list *prog_list;
@@ -496,6 +500,13 @@ EXPORT_SYMBOL_GPL(hid_bpf_device_init);
 
 static int __init hid_bpf_init(void)
 {
+	const struct btf_id_dtor_kfunc dtors[] = {
+		{
+			.btf_id = hid_bpf_dtor_id_list[0],
+			.kfunc_btf_id = hid_bpf_dtor_id_list[1],
+			.flags = BPF_DTOR_CLEANUP,
+		},
+	};
 	int err;
 
 	/* Note: if we exit with an error any time here, we would entirely break HID, which
@@ -504,6 +515,12 @@ static int __init hid_bpf_init(void)
 	 * This is not a big deal: the syscall allowing to attach a BPF program to a HID device
 	 * will not be available, so nobody will be able to use the functionality.
 	 */
+
+	err = register_btf_id_dtor_kfuncs(dtors, ARRAY_SIZE(dtors), THIS_MODULE);
+	if (err) {
+		pr_warn("error while registering hid_bpf cleanup dtors: %d", err);
+		return 0;
+	}
 
 	err = register_btf_fmodret_id_set(&hid_bpf_fmodret_set);
 	if (err) {

@@ -485,11 +485,23 @@ static const struct btf_kfunc_id_set nf_conntrack_kfunc_set = {
 	.set   = &nf_ct_kfunc_set,
 };
 
+BTF_ID_LIST(nf_dtor_id_list)
+BTF_ID(struct, nf_conn)
+BTF_ID(func, bpf_ct_release)
+
 int register_nf_conntrack_bpf(void)
 {
+	const struct btf_id_dtor_kfunc dtors[] = {
+		{
+			.btf_id = nf_dtor_id_list[0],
+			.kfunc_btf_id = nf_dtor_id_list[1],
+			.flags = BPF_DTOR_CLEANUP,
+		},
+	};
 	int ret;
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &nf_conntrack_kfunc_set);
+	ret = register_btf_id_dtor_kfuncs(dtors, ARRAY_SIZE(dtors), THIS_MODULE);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &nf_conntrack_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &nf_conntrack_kfunc_set);
 	if (!ret) {
 		mutex_lock(&nf_conn_btf_access_lock);

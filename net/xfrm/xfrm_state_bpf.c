@@ -127,8 +127,24 @@ static const struct btf_kfunc_id_set xfrm_state_xdp_kfunc_set = {
 	.set   = &xfrm_state_kfunc_set,
 };
 
+BTF_ID_LIST(dtor_id_list)
+BTF_ID(struct, xfrm_state)
+BTF_ID(func, bpf_xdp_xfrm_state_release)
+
 int __init register_xfrm_state_bpf(void)
 {
+	const struct btf_id_dtor_kfunc dtors[] = {
+		{
+			.btf_id = dtor_id_list[0],
+			.kfunc_btf_id = dtor_id_list[1],
+			.flags = BPF_DTOR_CLEANUP,
+		},
+	};
+	int ret;
+
+	ret = register_btf_id_dtor_kfuncs(dtors, ARRAY_SIZE(dtors), THIS_MODULE);
+	if (ret < 0)
+		return ret;
 	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
 					 &xfrm_state_xdp_kfunc_set);
 }
