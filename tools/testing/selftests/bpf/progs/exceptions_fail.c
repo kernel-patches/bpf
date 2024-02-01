@@ -354,7 +354,7 @@ int reject_exception_throw_cb_diff(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("exploring program path where exception is thrown")
+__success __log_level(2) __msg("exploring program path where exception is thrown")
 int reject_exception_throw_ref_call_throwing_global(struct __sk_buff *ctx)
 {
 	struct { long a; } *p = bpf_obj_new(typeof(*p));

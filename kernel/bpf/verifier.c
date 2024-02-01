@@ -10221,6 +10221,8 @@ static int gen_exception_frame_desc_reg_entry(struct bpf_verifier_env *env, stru
 		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
 		return -EFAULT;
 	}
+	if (reg->ref_obj_id && frameno == cur_func(env)->frameno)
+		WARN_ON_ONCE(release_reference(env, reg->ref_obj_id));
 	return push_exception_frame_desc(env, frameno, &fd);
 }
 
@@ -10251,6 +10253,8 @@ static int gen_exception_frame_desc_dynptr_entry(struct bpf_verifier_env *env, s
 		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
 		return -EFAULT;
 	}
+	if (frameno == cur_func(env)->frameno)
+		WARN_ON_ONCE(release_reference(env, reg->ref_obj_id));
 	return push_exception_frame_desc(env, frameno, &fd);
 }
 
@@ -10283,6 +10287,8 @@ static int gen_exception_frame_desc_iter_entry(struct bpf_verifier_env *env, str
 		verbose(env, "frame_desc: frame%d: failed to simulate cleanup for frame desc entry\n", frameno);
 		return -EFAULT;
 	}
+	if (frameno == cur_func(env)->frameno)
+		WARN_ON_ONCE(release_reference(env, reg->ref_obj_id));
 	return push_exception_frame_desc(env, frameno, &fd);
 }
 
@@ -10393,17 +10399,17 @@ static int gen_exception_frame_descs(struct bpf_verifier_env *env)
 	return 0;
 }
 
-static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
+static int check_reference_leak(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *state = cur_func(env);
 	bool refs_lingering = false;
 	int i;
 
-	if (!exception_exit && state->frameno && !state->in_callback_fn)
+	if (state->frameno && !state->in_callback_fn)
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (!exception_exit && state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
+		if (state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -10658,7 +10664,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
-		err = check_reference_leak(env, false);
+		err = check_reference_leak(env);
 		if (err) {
 			verbose(env, "tail_call would lead to reference leak\n");
 			return err;
@@ -15593,7 +15599,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	 * gen_ld_abs() may terminate the program at runtime, leading to
 	 * reference leak.
 	 */
-	err = check_reference_leak(env, false);
+	err = check_reference_leak(env);
 	if (err) {
 		verbose(env, "BPF_LD_[ABS|IND] cannot be mixed with socket references\n");
 		return err;
@@ -18149,7 +18155,7 @@ process_bpf_exit_full:
 				 * function, for which reference_state must
 				 * match caller reference state when it exits.
 				 */
-				err = check_reference_leak(env, exception_exit);
+				err = check_reference_leak(env);
 				if (err)
 					return err;
 
