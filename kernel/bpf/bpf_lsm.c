@@ -277,10 +277,13 @@ BTF_ID(func, bpf_lsm_bprm_creds_from_file)
 BTF_ID(func, bpf_lsm_capget)
 BTF_ID(func, bpf_lsm_capset)
 BTF_ID(func, bpf_lsm_cred_prepare)
+
 BTF_ID(func, bpf_lsm_file_ioctl)
 BTF_ID(func, bpf_lsm_file_lock)
 BTF_ID(func, bpf_lsm_file_open)
 BTF_ID(func, bpf_lsm_file_receive)
+BTF_ID(func, bpf_lsm_mmap_file)
+BTF_ID(func, bpf_lsm_file_mprotect)
 
 #ifdef CONFIG_SECURITY_NETWORK
 BTF_ID(func, bpf_lsm_inet_conn_established)
@@ -320,7 +323,6 @@ BTF_ID(func, bpf_lsm_path_chown)
 BTF_ID(func, bpf_lsm_key_free)
 #endif /* CONFIG_KEYS */
 
-BTF_ID(func, bpf_lsm_mmap_file)
 BTF_ID(func, bpf_lsm_netlink_send)
 BTF_ID(func, bpf_lsm_path_notify)
 BTF_ID(func, bpf_lsm_release_secctx)
