@@ -1,1 +1,2 @@
-timeout=0
+timeout=10800
+profile=1
