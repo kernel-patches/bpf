@@ -2942,6 +2942,15 @@ static int check_subprogs(struct bpf_verifier_env *env)
 		    insn[i].src_reg == 0 &&
 		    insn[i].imm == BPF_FUNC_tail_call)
 			subprog[cur_subprog].has_tail_call = true;
+		/* Collect callee regs used in the subprog. */
+		if (insn[i].dst_reg == BPF_REG_6 || insn[i].src_reg == BPF_REG_6)
+			subprog[cur_subprog].callee_regs_used[0] = true;
+		if (insn[i].dst_reg == BPF_REG_7 || insn[i].src_reg == BPF_REG_7)
+			subprog[cur_subprog].callee_regs_used[1] = true;
+		if (insn[i].dst_reg == BPF_REG_8 || insn[i].src_reg == BPF_REG_8)
+			subprog[cur_subprog].callee_regs_used[2] = true;
+		if (insn[i].dst_reg == BPF_REG_9 || insn[i].src_reg == BPF_REG_9)
+			subprog[cur_subprog].callee_regs_used[3] = true;
 		if (!env->seen_throw_insn && is_bpf_throw_kfunc(&insn[i]))
 			env->seen_throw_insn = true;
 		if (BPF_CLASS(code) == BPF_LD &&
@@ -19501,6 +19510,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		}
 		func[i]->aux->num_exentries = num_exentries;
 		func[i]->aux->tail_call_reachable = env->subprog_info[i].tail_call_reachable;
+		memcpy(&func[i]->aux->callee_regs_used, env->subprog_info[i].callee_regs_used, sizeof(func[i]->aux->callee_regs_used));
 		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
