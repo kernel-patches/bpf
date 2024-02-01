@@ -1418,6 +1418,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->dfs_depth = src->dfs_depth;
 	dst_state->callback_unroll_depth = src->callback_unroll_depth;
 	dst_state->used_as_loop_entry = src->used_as_loop_entry;
+	dst_state->global_subprog_call_exception = src->global_subprog_call_exception;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
 		if (!dst) {
@@ -9497,6 +9498,15 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 		verbose(env, "Func#%d ('%s') is global and assumed valid.\n",
 			subprog, sub_name);
+		if (subprog_info(env, subprog)->is_throw_reachable && !env->cur_state->global_subprog_call_exception) {
+			struct bpf_verifier_state *branch = push_stack(env, env->insn_idx, env->prev_insn_idx, false);
+
+			if (!branch) {
+				verbose(env, "verifier internal error: cannot push branch to explore exception of global subprog\n");
+				return -EFAULT;
+			}
+			branch->global_subprog_call_exception = true;
+		}
 		/* mark global subprog for verifying after main prog */
 		subprog_aux(env, subprog)->called = true;
 		clear_caller_saved_regs(env, caller->regs);
@@ -9505,6 +9515,9 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		mark_reg_unknown(env, caller->regs, BPF_REG_0);
 		caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
 
+		if (env->cur_state->global_subprog_call_exception)
+			verbose(env, "Func#%d ('%s') may throw exception, exploring program path where exception is thrown\n",
+				subprog, sub_name);
 		/* continue with next insn after call */
 		return 0;
 	}
@@ -16784,6 +16797,10 @@ static bool states_equal(struct bpf_verifier_env *env,
 	if (old->active_rcu_lock != cur->active_rcu_lock)
 		return false;
 
+	/* Prevent pruning to explore state where global subprog call throws an exception. */
+	if (cur->global_subprog_call_exception)
+		return false;
+
 	/* for states to be equal callsites have to be the same
 	 * and all frame states need to be equivalent
 	 */
@@ -17675,6 +17692,11 @@ static int do_check(struct bpf_verifier_env *env)
 				}
 				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
+					if (!err && env->cur_state->global_subprog_call_exception) {
+						env->cur_state->global_subprog_call_exception = false;
+						exception_exit = true;
+						goto process_bpf_exit_full;
+					}
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
 					if (!err && is_bpf_throw_kfunc(insn)) {
