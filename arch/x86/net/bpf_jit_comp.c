@@ -3112,6 +3112,17 @@ out_image:
 		prog = orig_prog;
 	}
 
+	if (prog->aux->fdtab && !prog->aux->fdtab->final && image) {
+		struct bpf_exception_frame_desc_tab *fdtab = prog->aux->fdtab;
+
+		for (int i = 0; i < fdtab->cnt; i++) {
+			struct bpf_exception_frame_desc *desc = fdtab->desc[i];
+
+			desc->pc = addrs[desc->pc];
+		}
+		prog->aux->fdtab->final = true;
+	}
+
 	if (!image || !prog->is_func || extra_pass) {
 		if (image)
 			bpf_prog_fill_jited_linfo(prog, addrs + 1);

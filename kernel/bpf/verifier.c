@@ -19514,6 +19514,20 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
+		if (i == env->bpf_throw_tramp_subprog)
+			func[i]->aux->bpf_throw_tramp = true;
+		/* Fix up pc of fdtab entries to be relative to subprog start before JIT. */
+		if (env->subprog_info[i].fdtab) {
+			for (int k = 0; k < env->subprog_info[i].fdtab->cnt; k++) {
+				struct bpf_exception_frame_desc *desc = env->subprog_info[i].fdtab->desc[k];
+				/* Add 1 to point to the next instruction, which will be the PC at runtime. */
+				desc->pc = desc->pc - subprog_start + 1;
+			}
+		}
+		/* Transfer fdtab to subprog->aux */
+		func[i]->aux->fdtab = env->subprog_info[i].fdtab;
+		env->subprog_info[i].fdtab = NULL;
+
 		func[i] = bpf_int_jit_compile(func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -19604,6 +19618,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->real_func_cnt = env->subprog_cnt;
 	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
 	prog->aux->exception_boundary = func[0]->aux->exception_boundary;
+	prog->aux->fdtab = func[0]->aux->fdtab;
 	bpf_prog_jit_attempt_done(prog);
 	return 0;
 out_free:
