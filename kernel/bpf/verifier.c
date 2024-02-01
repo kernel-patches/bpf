@@ -2941,6 +2941,8 @@ static int check_subprogs(struct bpf_verifier_env *env)
 		    insn[i].src_reg == 0 &&
 		    insn[i].imm == BPF_FUNC_tail_call)
 			subprog[cur_subprog].has_tail_call = true;
+		if (!env->seen_throw_insn && is_bpf_throw_kfunc(&insn[i]))
+			env->seen_throw_insn = true;
 		if (BPF_CLASS(code) == BPF_LD &&
 		    (BPF_MODE(code) == BPF_ABS || BPF_MODE(code) == BPF_IND))
 			subprog[cur_subprog].has_ld_abs = true;
@@ -5866,6 +5868,9 @@ continue_func:
 
 			if (!is_bpf_throw_kfunc(insn + i))
 				continue;
+			/* When this is allowed, don't forget to update logic for sync and
+			 * async callbacks in mark_exception_reachable_subprogs.
+			 */
 			if (subprog[idx].is_cb)
 				err = true;
 			for (int c = 0; c < frame && !err; c++) {
@@ -16205,6 +16210,83 @@ static int check_btf_info(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/* We walk the call graph of the program in this function, and mark everything in
+ * the call chain as 'is_throw_reachable'. This allows us to know which subprog
+ * calls may propagate an exception and generate exception frame descriptors for
+ * those call instructions. We already do that for bpf_throw calls made directly,
+ * but we need to mark the subprogs as we won't be able to see the call chains
+ * during symbolic execution in do_check_common due to global subprogs.
+ *
+ * Note that unlike check_max_stack_depth, we don't explore the async callbacks
+ * apart from main subprogs, as we don't support throwing from them for now, but
+ */
+static int mark_exception_reachable_subprogs(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *subprog = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int idx = 0, frame = 0, i, subprog_end;
+	int ret_insn[MAX_CALL_FRAMES];
+	int ret_prog[MAX_CALL_FRAMES];
+
+	/* No need if we never saw any bpf_throw() call in the program. */
+	if (!env->seen_throw_insn)
+		return 0;
+
+	i = subprog[idx].start;
+restart:
+	subprog_end = subprog[idx + 1].start;
+	for (; i < subprog_end; i++) {
+		int next_insn, sidx;
+
+		if (bpf_pseudo_kfunc_call(insn + i) && !insn[i].off) {
+			if (!is_bpf_throw_kfunc(insn + i))
+				continue;
+			subprog[idx].is_throw_reachable = true;
+			for (int j = 0; j < frame; j++)
+				subprog[ret_prog[j]].is_throw_reachable = true;
+		}
+
+		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
+			continue;
+		/* remember insn and function to return to */
+		ret_insn[frame] = i + 1;
+		ret_prog[frame] = idx;
+
+		/* find the callee */
+		next_insn = i + insn[i].imm + 1;
+		sidx = find_subprog(env, next_insn);
+		if (sidx < 0) {
+			WARN_ONCE(1, "verifier bug. No program starts at insn %d\n", next_insn);
+			return -EFAULT;
+		}
+		/* We cannot distinguish between sync or async cb, so we need to follow
+		 * both.  Async callbacks don't really propagate exceptions but calling
+		 * bpf_throw from them is not allowed anyway, so there is no harm in
+		 * exploring them.
+		 * TODO: To address this properly, we will have to move is_cb,
+		 * is_async_cb markings to the stage before do_check.
+		 */
+		i = next_insn;
+		idx = sidx;
+
+		frame++;
+		if (frame >= MAX_CALL_FRAMES) {
+			verbose(env, "the call stack of %d frames is too deep !\n", frame);
+			return -E2BIG;
+		}
+		goto restart;
+	}
+	/* end of for() loop means the last insn of the 'subprog'
+	 * was reached. Doesn't matter whether it was JA or EXIT
+	 */
+	if (frame == 0)
+		return 0;
+	frame--;
+	i = ret_insn[frame];
+	idx = ret_prog[frame];
+	goto restart;
+}
+
 /* check %cur's range satisfies %old's */
 static bool range_within(struct bpf_reg_state *old,
 			 struct bpf_reg_state *cur)
@@ -20936,6 +21018,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	}
 
 	ret = check_cfg(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	ret = mark_exception_reachable_subprogs(env);
 	if (ret < 0)
 		goto skip_full_check;
 
