@@ -6252,9 +6252,6 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		 */
 		return true;
 
-	if (is_int_ptr(btf, t))
-		return true;
-
 	/* this is a pointer to another type */
 	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
 		const struct bpf_ctx_arg_aux *ctx_arg_info = &prog->aux->ctx_arg_info[i];
@@ -6271,6 +6268,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			return true;
 		}
 	}
+
+	if (is_int_ptr(btf, t))
+		return true;
 
 	info->reg_type = PTR_TO_BTF_ID;
 	if (prog_args_trusted(prog))
