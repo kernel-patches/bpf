@@ -1412,6 +1412,16 @@ struct bpf_stack_build_id {
 	};
 };
 
+/* Flags for JA insn, passed in SRC_REG */
+enum {
+	BPF_STATIC_BRANCH_JA  = 1 << 0,
+	BPF_STATIC_BRANCH_NOP = 1 << 1,
+};
+
+#define BPF_STATIC_BRANCH_MASK (BPF_STATIC_BRANCH_JA | \
+				BPF_STATIC_BRANCH_NOP)
+
+
 #define BPF_OBJ_NAME_LEN 16U
 
 union bpf_attr {
