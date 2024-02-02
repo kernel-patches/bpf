@@ -469,6 +469,30 @@ static void bpf_adj_linfo(struct bpf_prog *prog, u32 off, u32 delta)
 		linfo[i].insn_off += delta;
 }
 
+static int bpf_prog_realloc_orig_idx(struct bpf_prog *prog, u32 off, u32 patch_len)
+{
+	u32 *old_idx = prog->aux->orig_idx, *new_idx;
+	u32 new_prog_len = prog->len + patch_len - 1;
+	int i;
+
+	if (patch_len <= 1)
+		return 0;
+
+	new_idx = kzalloc(array_size(new_prog_len, sizeof(u32)), GFP_KERNEL);
+	if (!new_idx)
+		return -ENOMEM;
+
+	memcpy(new_idx, old_idx, sizeof(*old_idx) * off);
+	for (i = off; i < off + patch_len; i++)
+		new_idx[i] = old_idx[off];
+	memcpy(new_idx + off + patch_len, old_idx + off + 1,
+			sizeof(*old_idx) * (prog->len - off));
+
+	prog->aux->orig_idx = new_idx;
+	kfree(old_idx);
+	return 0;
+}
+
 struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 				       const struct bpf_insn *patch, u32 len)
 {
@@ -492,6 +516,10 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	 */
 	if (insn_adj_cnt > cnt_max &&
 	    (err = bpf_adj_branches(prog, off, off + 1, off + len, true)))
+		return ERR_PTR(err);
+
+	err = bpf_prog_realloc_orig_idx(prog, off, len);
+	if (err)
 		return ERR_PTR(err);
 
 	/* Several new instructions need to be inserted. Make room
@@ -2778,6 +2806,7 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 	} else {
 		bpf_jit_free(aux->prog);
 	}
+	kfree(aux->orig_idx);
 }
 
 void bpf_prog_free(struct bpf_prog *fp)
