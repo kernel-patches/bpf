@@ -932,6 +932,7 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TOKEN_CREATE,
+	BPF_STATIC_BRANCH_UPDATE,
 	__MAX_BPF_CMD,
 };
 
@@ -1786,6 +1787,12 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
+
+	struct { /* struct used by BPF_STATIC_BRANCH_UPDATE command */
+		__u32		prog_fd;
+		__u32		insn_off;
+		__u32		on;
+	} static_branch;
 
 } __attribute__((aligned(8)));
 
