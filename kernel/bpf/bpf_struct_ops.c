@@ -116,17 +116,148 @@ static bool is_valid_value_type(struct btf *btf, s32 value_id,
 	return true;
 }
 
+#define MAYBE_NULL_SUFFIX "__nullable"
+#define MAX_STUB_NAME 128
+
+static int match_nullable_suffix(const char *name)
+{
+	int suffix_len, len;
+
+	if (!name)
+		return 0;
+
+	suffix_len = sizeof(MAYBE_NULL_SUFFIX) - 1;
+	len = strlen(name);
+	if (len < suffix_len)
+		return 0;
+
+	return !strcmp(name + len - suffix_len, MAYBE_NULL_SUFFIX);
+}
+
+/* Return the type info of a stub function, if it exists.
+ *
+ * The name of the stub function is made up of the name of the struct_ops
+ * and the name of the function pointer member, separated by "__". For
+ * example, if the struct_ops is named "foo_ops" and the function pointer
+ * member is named "bar", the stub function name would be "foo_ops__bar".
+ */
+static const  struct btf_type *
+find_stub_func_proto(struct btf *btf, const char *st_op_name,
+		     const char *member_name)
+{
+	char stub_func_name[MAX_STUB_NAME];
+	const struct btf_type *t, *func_proto;
+	s32 btf_id;
+
+	snprintf(stub_func_name, MAX_STUB_NAME, "%s__%s",
+		 st_op_name, member_name);
+	btf_id = btf_find_by_name_kind(btf, stub_func_name, BTF_KIND_FUNC);
+	if (btf_id < 0)
+		return NULL;
+	t = btf_type_by_id(btf, btf_id);
+	if (!t)
+		return NULL;
+	func_proto = btf_type_by_id(btf, t->type);
+
+	return func_proto;
+}
+
+/* Prepare argument info for every nullable argument of a member of a
+ * struct_ops type.
+ *
+ * Create and initialize a list of struct bpf_struct_ops_member_arg_info
+ * according to type info of the arguments of the stub functions. (Check
+ * kCFI for more information about stub functions.)
+ *
+ * Each member in the struct_ops type has a struct
+ * bpf_struct_ops_member_arg_info to provide an array of struct
+ * bpf_ctx_arg_aux, which in turn provides the information that used by the
+ * verifier to check the arguments of the BPF struct_ops program assigned
+ * to the member. Here, we only care about the arguments that are marked as
+ * __nullable.
+ *
+ * The array of struct bpf_ctx_arg_aux is eventually assigned to
+ * prog->aux->ctx_arg_info of BPF struct_ops programs and passed to the
+ * verifier. (See check_struct_ops_btf_id())
+ */
+static int prepare_arg_info(struct btf *btf,
+			    const char *st_ops_name,
+			    const char *member_name,
+			    struct bpf_struct_ops_member_arg_info *member_arg_info)
+{
+	const struct btf_type *stub_func_proto, *ptr_type;
+	struct bpf_ctx_arg_aux *arg_info, *ai_buf = NULL;
+	const struct btf_param *args;
+	u32 nargs, arg_no = 0;
+	const char *arg_name;
+	s32 arg_btf_id;
+
+	stub_func_proto = find_stub_func_proto(btf, st_ops_name, member_name);
+	if (!stub_func_proto)
+		return 0;
+
+	nargs = btf_type_vlen(stub_func_proto);
+	if (nargs > MAX_BPF_FUNC_REG_ARGS) {
+		pr_warn("Cannot support #%u args in stub func %s_stub_%s\n",
+			nargs, st_ops_name, member_name);
+		return -EINVAL;
+	}
+
+	ai_buf = kcalloc(nargs, sizeof(*ai_buf), GFP_KERNEL);
+	if (!ai_buf)
+		return -ENOMEM;
+
+	args = btf_params(stub_func_proto);
+	for (arg_no = 0; arg_no < nargs; arg_no++) {
+		/* Skip arguments that is not suffixed with
+		 * "__nullable".
+		 */
+		arg_name = btf_name_by_offset(btf,
+					      args[arg_no].name_off);
+		if (!match_nullable_suffix(arg_name))
+			continue;
+
+		/* Should be a pointer to struct, array, scalar, or enum */
+		ptr_type = btf_type_resolve_ptr(btf, args[arg_no].type,
+						&arg_btf_id);
+		if (!ptr_type ||
+		    (!btf_type_is_struct(ptr_type) &&
+		     !btf_type_is_array(ptr_type) &&
+		     !btf_type_is_scalar(ptr_type) &&
+		     !btf_is_any_enum(ptr_type))) {
+			kfree(ai_buf);
+			return -EINVAL;
+		}
+
+		/* Fill the information of the new argument */
+		arg_info = ai_buf + member_arg_info->arg_info_cnt++;
+		arg_info->reg_type =
+			PTR_TRUSTED | PTR_MAYBE_NULL | PTR_TO_BTF_ID;
+		arg_info->btf_id = arg_btf_id;
+		arg_info->btf = btf;
+		arg_info->offset = arg_no * sizeof(u64);
+	}
+
+	if (!member_arg_info->arg_info_cnt)
+		kfree(ai_buf);
+	else
+		member_arg_info->arg_info = ai_buf;
+
+	return 0;
+}
+
 int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			     struct btf *btf,
 			     struct bpf_verifier_log *log)
 {
+	struct bpf_struct_ops_member_arg_info *member_arg_info;
 	struct bpf_struct_ops *st_ops = st_ops_desc->st_ops;
 	const struct btf_member *member;
 	const struct btf_type *t;
 	s32 type_id, value_id;
 	char value_name[128];
 	const char *mname;
-	int i;
+	int i, err;
 
 	if (strlen(st_ops->name) + VALUE_PREFIX_LEN >=
 	    sizeof(value_name)) {
@@ -160,6 +291,11 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 	if (!is_valid_value_type(btf, value_id, t, value_name))
 		return -EINVAL;
 
+	member_arg_info = kcalloc(btf_type_vlen(t), sizeof(*member_arg_info),
+				  GFP_KERNEL);
+	if (!member_arg_info)
+		return -ENOMEM;
+
 	for_each_member(i, t, member) {
 		const struct btf_type *func_proto;
 
@@ -167,13 +303,15 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 		if (!*mname) {
 			pr_warn("anon member in struct %s is not supported\n",
 				st_ops->name);
-			return -EOPNOTSUPP;
+			err = -EOPNOTSUPP;
+			goto errout;
 		}
 
 		if (__btf_member_bitfield_size(t, member)) {
 			pr_warn("bit field member %s in struct %s is not supported\n",
 				mname, st_ops->name);
-			return -EOPNOTSUPP;
+			err = -EOPNOTSUPP;
+			goto errout;
 		}
 
 		func_proto = btf_type_resolve_func_ptr(btf,
@@ -185,14 +323,24 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 					   &st_ops->func_models[i])) {
 			pr_warn("Error in parsing func ptr %s in struct %s\n",
 				mname, st_ops->name);
-			return -EINVAL;
+			err = -EINVAL;
+			goto errout;
 		}
+
+		err = prepare_arg_info(btf, st_ops->name, mname,
+				       member_arg_info + i);
+		if (err)
+			goto errout;
 	}
+
+	st_ops_desc->member_arg_info = member_arg_info;
+	st_ops_desc->member_arg_info_cnt = btf_type_vlen(t);
 
 	if (st_ops->init(btf)) {
 		pr_warn("Error in init bpf_struct_ops %s\n",
 			st_ops->name);
-		return -EINVAL;
+		err = -EINVAL;
+		goto errout;
 	}
 
 	st_ops_desc->type_id = type_id;
@@ -201,6 +349,14 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 	st_ops_desc->value_type = btf_type_by_id(btf, value_id);
 
 	return 0;
+
+errout:
+	while (i > 0)
+		kfree(member_arg_info[--i].arg_info);
+	kfree(member_arg_info);
+	st_ops_desc->member_arg_info = NULL;
+
+	return err;
 }
 
 static int bpf_struct_ops_map_get_next_key(struct bpf_map *map, void *key,

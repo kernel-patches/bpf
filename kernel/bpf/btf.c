@@ -1699,6 +1699,20 @@ static void btf_free_struct_meta_tab(struct btf *btf)
 static void btf_free_struct_ops_tab(struct btf *btf)
 {
 	struct btf_struct_ops_tab *tab = btf->struct_ops_tab;
+	struct bpf_struct_ops_member_arg_info *ma_info;
+	int i, j;
+	u32 cnt;
+
+	if (tab)
+		for (i = 0; i < tab->cnt; i++) {
+			ma_info = tab->ops[i].member_arg_info;
+			if (ma_info) {
+				cnt = tab->ops[i].member_arg_info_cnt;
+				for (j = 0; j < cnt; j++)
+					kfree(ma_info[j].arg_info);
+			}
+			kfree(ma_info);
+		}
 
 	kfree(tab);
 	btf->struct_ops_tab = NULL;

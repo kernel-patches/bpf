@@ -1709,6 +1709,19 @@ struct bpf_struct_ops {
 	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 };
 
+/* Every member of a struct_ops type has an instance even the member is not
+ * an operator (function pointer). The "arg_info" field will be assigned to
+ * prog->aux->arg_info of BPF struct_ops programs to provide the argument
+ * information required by the verifier to verify the program.
+ *
+ * btf_ctx_access() will lookup prog->aux->arg_info to find the
+ * corresponding entry for an given argument.
+ */
+struct bpf_struct_ops_member_arg_info {
+	struct bpf_ctx_arg_aux *arg_info;
+	u32 arg_info_cnt;
+};
+
 struct bpf_struct_ops_desc {
 	struct bpf_struct_ops *st_ops;
 
@@ -1716,6 +1729,10 @@ struct bpf_struct_ops_desc {
 	const struct btf_type *value_type;
 	u32 type_id;
 	u32 value_id;
+
+	/* Collection of argument information for each member */
+	struct bpf_struct_ops_member_arg_info *member_arg_info;
+	u32 member_arg_info_cnt;
 };
 
 enum bpf_struct_ops_state {
