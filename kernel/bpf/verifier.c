@@ -19033,6 +19033,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
+		func[i]->aux->xlated_to_jit = prog->aux->xlated_to_jit;
 		func[i] = bpf_int_jit_compile(func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -20891,6 +20892,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	int len, ret = -EINVAL, err;
 	u32 log_true_size;
 	bool is_priv;
+	u32 size;
 
 	/* no program is valid */
 	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
@@ -21038,6 +21040,13 @@ skip_full_check:
 		ret = opt_subreg_zext_lo32_rnd_hi32(env, attr);
 		env->prog->aux->verifier_zext = bpf_jit_needs_zext() ? !ret
 								     : false;
+	}
+
+	if (ret == 0) {
+		size = array_size(sizeof(*env->prog->aux->xlated_to_jit), env->prog->len);
+		env->prog->aux->xlated_to_jit = kzalloc(size, GFP_KERNEL);
+		if (!env->prog->aux->xlated_to_jit)
+			ret = -ENOMEM;
 	}
 
 	if (ret == 0)

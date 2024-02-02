@@ -493,6 +493,26 @@ static int bpf_prog_realloc_orig_idx(struct bpf_prog *prog, u32 off, u32 patch_l
 	return 0;
 }
 
+static void adjust_func_info(struct bpf_prog *prog, u32 off, u32 insn_delta)
+{
+	int i;
+
+	if (insn_delta == 0)
+		return;
+
+	for (i = 0; i < prog->aux->func_info_cnt; i++) {
+		if (prog->aux->func_info[i].insn_off <= off)
+			continue;
+		prog->aux->func_info[i].insn_off += insn_delta;
+	}
+}
+
+static void bpf_prog_adj_orig_idx_after_remove(struct bpf_prog *prog, u32 off, u32 len)
+{
+	memmove(prog->aux->orig_idx + off, prog->aux->orig_idx + off + len,
+		sizeof(*prog->aux->orig_idx) * (prog->len - off));
+}
+
 struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 				       const struct bpf_insn *patch, u32 len)
 {
@@ -554,6 +574,7 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	BUG_ON(bpf_adj_branches(prog_adj, off, off + 1, off + len, false));
 
 	bpf_adj_linfo(prog_adj, off, insn_delta);
+	adjust_func_info(prog_adj, off, insn_delta);
 
 	return prog_adj;
 }
@@ -573,6 +594,8 @@ int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt)
 	WARN_ON_ONCE(err);
 	if (err)
 		return err;
+
+	bpf_prog_adj_orig_idx_after_remove(prog, off, cnt);
 
 	return 0;
 }
@@ -2807,6 +2830,7 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 		bpf_jit_free(aux->prog);
 	}
 	kfree(aux->orig_idx);
+	kfree(aux->xlated_to_jit);
 }
 
 void bpf_prog_free(struct bpf_prog *fp)
