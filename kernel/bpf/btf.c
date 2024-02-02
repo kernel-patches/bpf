@@ -6590,6 +6590,61 @@ error:
 	return -EINVAL;
 }
 
+/* Relocate the access relatively to the beginning of an element in an
+ * array.
+ *
+ * The offset is adjusted relatively to the beginning of the element and the
+ * type is adjusted to the type of the element.
+ *
+ * Return NULL for scalar, enum, and pointer type.
+ * Return a btf_type pointer for struct and union.
+ */
+static const struct btf_type *
+btf_reloc_array_access(struct bpf_verifier_log *log, const struct btf *btf,
+		       const struct btf_type *t, int *off, int size)
+{
+	const struct btf_type *rt, *elem_type;
+	u32 rt_size, elem_id, total_nelems, rt_id, elem_size;
+	u32 elem_idx;
+
+	rt = __btf_resolve_size(btf, t, &rt_size, &elem_type, &elem_id,
+				&total_nelems, &rt_id);
+	if (IS_ERR(rt))
+		return rt;
+	if (btf_type_is_array(rt)) {
+		if (*off >= rt_size) {
+			bpf_log(log, "access out of range of type %s with offset %d and size %u\n",
+				__btf_name_by_offset(btf, t->name_off), *off, rt_size);
+			return ERR_PTR(-EACCES);
+		}
+
+		/* Multi-dimensional arrays are flattened by
+		 * __btf_resolve_size(). Check the comment in
+		 * btf_struct_walk().
+		 */
+		elem_size = rt_size / total_nelems;
+		elem_idx = *off / elem_size;
+		/* Relocate the offset relatively to the start of the
+		 * element at elem_idx.
+		 */
+		*off -= elem_idx * elem_size;
+		rt = elem_type;
+		rt_size = elem_size;
+	}
+
+	if (btf_type_is_struct(rt))
+		return rt;
+
+	if (*off + size > rt_size) {
+		bpf_log(log, "access beyond the range of type %s with offset %d and size %d\n",
+			__btf_name_by_offset(btf, rt->name_off), *off, size);
+		return ERR_PTR(-EACCES);
+	}
+
+	/* The access is accepted as a scalar. */
+	return NULL;
+}
+
 int btf_struct_access(struct bpf_verifier_log *log,
 		      const struct bpf_reg_state *reg,
 		      int off, int size, enum bpf_access_type atype __maybe_unused,
@@ -6625,6 +6680,12 @@ int btf_struct_access(struct bpf_verifier_log *log,
 	}
 
 	t = btf_type_by_id(btf, id);
+	t = btf_reloc_array_access(log, btf, t, &off, size);
+	if (IS_ERR(t))
+		return PTR_ERR(t);
+	if (!t)
+		return SCALAR_VALUE;
+
 	do {
 		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag, field_name);
 
