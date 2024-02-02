@@ -119,6 +119,12 @@ static int prep_prog_info(struct bpf_prog_info *const info, enum dump_mode mode,
 	holder.jited_line_info_rec_size = info->jited_line_info_rec_size;
 	needed += info->nr_jited_line_info * info->jited_line_info_rec_size;
 
+	holder.orig_idx_len = info->orig_idx_len;
+	needed += info->orig_idx_len;
+
+	holder.xlated_to_jit_len = info->xlated_to_jit_len;
+	needed += info->xlated_to_jit_len;
+
 	if (needed > *info_data_sz) {
 		ptr = realloc(*info_data, needed);
 		if (!ptr)
@@ -151,6 +157,12 @@ static int prep_prog_info(struct bpf_prog_info *const info, enum dump_mode mode,
 
 	holder.jited_line_info = ptr_to_u64(ptr);
 	ptr += holder.nr_jited_line_info * holder.jited_line_info_rec_size;
+
+	holder.orig_idx = ptr_to_u64(ptr);
+	ptr += holder.orig_idx_len;
+
+	holder.xlated_to_jit = ptr_to_u64(ptr);
+	ptr += holder.xlated_to_jit_len;
 
 	*info = holder;
 	return 0;
@@ -852,6 +864,8 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 		dd.func_info = func_info;
 		dd.finfo_rec_size = info->func_info_rec_size;
 		dd.prog_linfo = prog_linfo;
+		dd.orig_idx = u64_to_ptr(info->orig_idx);
+		dd.xlated_to_jit = u64_to_ptr(info->xlated_to_jit);
 
 		if (json_output)
 			dump_xlated_json(&dd, buf, member_len, opcodes, linum);
