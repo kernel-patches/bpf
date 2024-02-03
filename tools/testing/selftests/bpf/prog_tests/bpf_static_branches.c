@@ -84,12 +84,6 @@ static void check_ops(void)
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
-	union bpf_attr attr = {
-		.prog_type = BPF_PROG_TYPE_XDP,
-		.insns     = ptr_to_u64(insns),
-		.insn_cnt  = ARRAY_SIZE(insns),
-		.license   = ptr_to_u64("GPL"),
-	};
 	bool stop = false;
 	int prog_fd[4];
 	int i;
@@ -185,12 +179,6 @@ static void check_syscall(void)
 		BPF_JMP_IMM(BPF_JA, 0, 0, -2),
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
-	};
-	union bpf_attr attr = {
-		.prog_type = BPF_PROG_TYPE_XDP,
-		.insns     = ptr_to_u64(insns),
-		.insn_cnt  = ARRAY_SIZE(insns),
-		.license   = ptr_to_u64("GPL"),
 	};
 	bool stop = false;
 	int prog_fd[4];
