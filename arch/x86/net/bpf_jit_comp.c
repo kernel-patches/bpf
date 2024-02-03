@@ -3312,7 +3312,9 @@ int bpf_arch_poke_static_branch(struct bpf_prog *prog,
 		memcpy(op, x86_nops[len], len);
 	}
 
+	mutex_lock(&text_mutex);
 	text_poke_bp(prog->aux->xlated_to_jit[insn_off].ip, op, len, NULL);
+	mutex_unlock(&text_mutex);
 
 	return 0;
 }
