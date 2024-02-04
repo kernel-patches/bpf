@@ -20,6 +20,8 @@
 #include "json_writer.h"
 #include "main.h"
 
+#define KFUNC_DECL_TAG		"bpf_kfunc"
+
 static const char * const btf_kind_str[NR_BTF_KINDS] = {
 	[BTF_KIND_UNKN]		= "UNKNOWN",
 	[BTF_KIND_INT]		= "INT",
@@ -454,6 +456,39 @@ static int dump_btf_raw(const struct btf *btf,
 	return 0;
 }
 
+static int dump_btf_kfuncs(struct btf_dump *d, const struct btf *btf)
+{
+	DECLARE_LIBBPF_OPTS(btf_dump_emit_type_decl_opts, opts);
+	int cnt = btf__type_cnt(btf);
+	int i;
+
+	for (i = 1; i < cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const struct btf_type *kft;
+		const char *name;
+		int err;
+
+		if (!btf_is_decl_tag(t))
+			continue;
+
+		name = btf__name_by_offset(btf, t->name_off);
+		if (strncmp(name, KFUNC_DECL_TAG, sizeof(KFUNC_DECL_TAG)))
+			continue;
+
+		printf("extern ");
+
+		kft = btf__type_by_id(btf, t->type);
+		opts.field_name = btf__name_by_offset(btf, kft->name_off);
+		err = btf_dump__emit_type_decl(d, kft->type, &opts);
+		if (err)
+			return err;
+
+		printf(" __weak __ksym;\n\n");
+	}
+
+	return 0;
+}
+
 static void __printf(2, 0) btf_dump_printf(void *ctx,
 					   const char *fmt, va_list args)
 {
@@ -476,6 +511,12 @@ static int dump_btf_c(const struct btf *btf,
 	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
 	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
 	printf("#endif\n\n");
+	printf("#ifndef __ksym\n");
+	printf("#define __ksym __attribute__((section(\".ksyms\")))\n");
+	printf("#endif\n\n");
+	printf("#ifndef __weak\n");
+	printf("#define __weak __attribute__((weak))\n");
+	printf("#endif\n\n");
 
 	if (root_type_cnt) {
 		for (i = 0; i < root_type_cnt; i++) {
@@ -491,6 +532,10 @@ static int dump_btf_c(const struct btf *btf,
 			if (err)
 				goto done;
 		}
+
+		err = dump_btf_kfuncs(d, btf);
+		if (err)
+			goto done;
 	}
 
 	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
