@@ -1764,6 +1764,19 @@ static const struct bpf_func_proto bpf_skb_load_bytes_proto = {
 	.arg4_type	= ARG_CONST_SIZE,
 };
 
+BTF_ID_LIST_SINGLE(bpf_skb_load_bytes_btf_ids, struct, sk_buff)
+
+const struct bpf_func_proto bpf_skb_load_bytes_trace_proto = {
+	.func		= bpf_skb_load_bytes,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &bpf_skb_load_bytes_btf_ids[0],
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg4_type	= ARG_CONST_SIZE,
+};
+
 int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset, void *to, u32 len)
 {
 	return ____bpf_skb_load_bytes(skb, offset, to, len);
