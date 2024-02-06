@@ -41,6 +41,8 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	unsigned long sreclaimable, sunreclaim;
 	int lru;
 
+	printk("test run\n");
+
 	si_meminfo(&i);
 	si_swapinfo(&i);
 	committed = vm_memory_committed();
