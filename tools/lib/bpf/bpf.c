@@ -771,6 +771,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 		attr.link_create.kprobe_multi.syms = ptr_to_u64(OPTS_GET(opts, kprobe_multi.syms, 0));
 		attr.link_create.kprobe_multi.addrs = ptr_to_u64(OPTS_GET(opts, kprobe_multi.addrs, 0));
 		attr.link_create.kprobe_multi.cookies = ptr_to_u64(OPTS_GET(opts, kprobe_multi.cookies, 0));
+		attr.link_create.kprobe_multi.return_prog_fd = OPTS_GET(opts, kprobe_multi.return_prog_fd, 0);
 		if (!OPTS_ZEROED(opts, kprobe_multi))
 			return libbpf_err(-EINVAL);
 		break;

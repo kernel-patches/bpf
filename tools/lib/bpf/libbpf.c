@@ -11073,6 +11073,11 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	lopts.kprobe_multi.cnt = cnt;
 	lopts.kprobe_multi.flags = retprobe ? BPF_F_KPROBE_MULTI_RETURN : 0;
 
+	if (OPTS_GET(opts, return_prog, false)) {
+		lopts.kprobe_multi.return_prog_fd = OPTS_GET(opts, return_prog_fd, 0);
+		lopts.kprobe_multi.flags |= BPF_F_KPROBE_MULTI_RETURN_PROG;
+	}
+
 	link = calloc(1, sizeof(*link));
 	if (!link) {
 		err = -ENOMEM;

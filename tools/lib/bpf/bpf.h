@@ -399,6 +399,7 @@ struct bpf_link_create_opts {
 			const char **syms;
 			const unsigned long *addrs;
 			const __u64 *cookies;
+			__u32 return_prog_fd;
 		} kprobe_multi;
 		struct {
 			__u32 flags;
