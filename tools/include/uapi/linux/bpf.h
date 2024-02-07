@@ -1243,7 +1243,8 @@ enum bpf_perf_event_type {
  * BPF_TRACE_KPROBE_MULTI attach type to create return probe.
  */
 enum {
-	BPF_F_KPROBE_MULTI_RETURN = (1U << 0)
+	BPF_F_KPROBE_MULTI_RETURN      = (1U << 0),
+	BPF_F_KPROBE_MULTI_RETURN_PROG = (1U << 1),
 };
 
 /* link_create.uprobe_multi.flags used in LINK_CREATE command for
@@ -1690,6 +1691,7 @@ union bpf_attr {
 				__aligned_u64	syms;
 				__aligned_u64	addrs;
 				__aligned_u64	cookies;
+				__u32           return_prog_fd;
 			} kprobe_multi;
 			struct {
 				/* this is overlaid with the target_btf_id above. */
