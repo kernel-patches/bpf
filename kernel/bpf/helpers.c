@@ -2802,7 +2802,7 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const void *unsafe_ptr__ign, u32 siz
 			return -EINVAL;
 		}
 
-		err = bpf_probe_read_kernel_common(&kit->bits_copy + offset, size, unsafe_ptr__ign);
+		err = bpf_probe_read_kernel_common(((char *)&kit->bits_copy) + offset, size, unsafe_ptr__ign);
 		if (err)
 			return -EFAULT;
 
