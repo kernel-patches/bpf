@@ -133,6 +133,15 @@
 # define __bpf_unreachable()	__builtin_trap()
 #endif
 
+#ifndef __must_check
+#define __must_check __attribute__((warn_unused_result))
+#endif
+
+static inline void * __must_check ERR_PTR(long error)
+{
+	return (void *) error;
+}
+
 /*
  * Helper function to perform a tail call with a constant/immediate map slot.
  */
@@ -340,14 +349,13 @@ extern void bpf_iter_num_destroy(struct bpf_iter_num *it) __weak __ksym;
 	/* initialize and define destructor */							\
 	struct bpf_iter_##type ___it __attribute__((aligned(8), /* enforce, just in case */,	\
 						    cleanup(bpf_iter_##type##_destroy))),	\
-	/* ___p pointer is just to call bpf_iter_##type##_new() *once* to init ___it */		\
 			       *___p __attribute__((unused)) = (				\
-					bpf_iter_##type##_new(&___it, ##args),			\
 	/* this is a workaround for Clang bug: it currently doesn't emit BTF */			\
 	/* for bpf_iter_##type##_destroy() when used from cleanup() attribute */		\
-					(void)bpf_iter_##type##_destroy, (void *)0);		\
+					(void)bpf_iter_##type##_destroy,			\
+					ERR_PTR(bpf_iter_##type##_new(&___it, ##args)));	\
 	/* iteration and termination check */							\
-	(((cur) = bpf_iter_##type##_next(&___it)));						\
+	((!___p) && ((cur) = bpf_iter_##type##_next(&___it)));					\
 )
 #endif /* bpf_for_each */
 
