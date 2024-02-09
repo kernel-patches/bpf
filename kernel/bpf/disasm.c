@@ -166,6 +166,12 @@ static bool is_movsx(const struct bpf_insn *insn)
 	       (insn->off == 8 || insn->off == 16 || insn->off == 32);
 }
 
+static bool is_arena_cast(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) &&
+		(insn->off == BPF_ARENA_CAST_KERN || insn->off == BPF_ARENA_CAST_USER);
+}
+
 void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 		    const struct bpf_insn *insn,
 		    bool allow_ptr_leaks)
@@ -184,6 +190,11 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->code, class == BPF_ALU ? 'w' : 'r',
 				insn->dst_reg, class == BPF_ALU ? 'w' : 'r',
 				insn->dst_reg);
+		} else if (is_arena_cast(insn)) {
+			verbose(cbs->private_data, "(%02x) r%d = cast_%s(r%d, %d)\n",
+				insn->code, insn->dst_reg,
+				insn->off == BPF_ARENA_CAST_KERN ? "kern" : "user",
+				insn->src_reg, insn->imm);
 		} else if (BPF_SRC(insn->code) == BPF_X) {
 			verbose(cbs->private_data, "(%02x) %c%d %s %s%c%d\n",
 				insn->code, class == BPF_ALU ? 'w' : 'r',

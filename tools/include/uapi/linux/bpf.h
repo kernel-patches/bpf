@@ -1313,6 +1313,11 @@ enum {
  */
 #define BPF_PSEUDO_KFUNC_CALL	2
 
+enum bpf_arena_cast_kinds {
+	BPF_ARENA_CAST_KERN = 1,
+	BPF_ARENA_CAST_USER = 2,
+};
+
 /* flags for BPF_MAP_UPDATE_ELEM command */
 enum {
 	BPF_ANY		= 0, /* create new element or update existing */
