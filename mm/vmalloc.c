@@ -625,8 +625,8 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
  * RETURNS:
  * 0 on success, -errno on failure.
  */
-static int vmap_pages_range(unsigned long addr, unsigned long end,
-		pgprot_t prot, struct page **pages, unsigned int page_shift)
+int vmap_pages_range(unsigned long addr, unsigned long end,
+		     pgprot_t prot, struct page **pages, unsigned int page_shift)
 {
 	int err;
 
