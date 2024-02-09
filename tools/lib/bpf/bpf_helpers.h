@@ -13,6 +13,11 @@
 #define __uint(name, val) int (*name)[val]
 #define __type(name, val) typeof(val) *name
 #define __array(name, val) typeof(val) *name[]
+#ifndef __PASTE
+#define ___PASTE(a,b) a##b
+#define __PASTE(a,b) ___PASTE(a,b)
+#endif
+#define __ulong(name, val) enum { __PASTE(__unique_value, __COUNTER__) = val } name
 
 /*
  * Helper macro to place programs, maps, license in
