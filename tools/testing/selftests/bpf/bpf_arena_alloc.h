@@ -10,14 +10,19 @@
 #define round_up(x, y) ((((x)-1) | __round_mask(x, y))+1)
 #endif
 
-void __arena *cur_page;
-int cur_offset;
+#ifdef __BPF__
+#define NR_CPUS (sizeof(struct cpumask) * 8)
+
+static void __arena * __arena page_frag_cur_page[NR_CPUS];
+static int __arena page_frag_cur_offset[NR_CPUS];
 
 /* Simple page_frag allocator */
 static inline void __arena* bpf_alloc(unsigned int size)
 {
 	__u64 __arena *obj_cnt;
-	void __arena *page = cur_page;
+	__u32 cpu = bpf_get_smp_processor_id();
+	void __arena *page = page_frag_cur_page[cpu];
+	int __arena *cur_offset = &page_frag_cur_offset[cpu];
 	int offset;
 
 	size = round_up(size, 8);
@@ -29,8 +34,8 @@ refill:
 		if (!page)
 			return NULL;
 		cast_kern(page);
-		cur_page = page;
-		cur_offset = PAGE_SIZE - 8;
+		page_frag_cur_page[cpu] = page;
+		*cur_offset = PAGE_SIZE - 8;
 		obj_cnt = page + PAGE_SIZE - 8;
 		*obj_cnt = 0;
 	} else {
@@ -38,12 +43,12 @@ refill:
 		obj_cnt = page + PAGE_SIZE - 8;
 	}
 
-	offset = cur_offset - size;
+	offset = *cur_offset - size;
 	if (offset < 0)
 		goto refill;
 
 	(*obj_cnt)++;
-	cur_offset = offset;
+	*cur_offset = offset;
 	return page + offset;
 }
 
@@ -56,3 +61,7 @@ static inline void bpf_free(void __arena *addr)
 	if (--(*obj_cnt) == 0)
 		bpf_arena_free_pages(&arena, addr, 1);
 }
+#else
+static inline void __arena* bpf_alloc(unsigned int size) { return NULL; }
+static inline void bpf_free(void __arena *addr) {}
+#endif
