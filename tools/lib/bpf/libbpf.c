@@ -487,6 +487,14 @@ struct bpf_struct_ops {
 	 * from "data".
 	 */
 	void *kern_vdata;
+	/* Description of the layout that a shadow copy should look like.
+	 */
+	const struct bpf_struct_ops_map_info *shadow_info;
+	/* A shadow copy of the struct_ops data created according to the
+	 * layout described by shadow_info.
+	 */
+	void *shadow_data;
+	__u32 shadow_data_size;
 	__u32 type_id;
 };
 
@@ -1027,7 +1035,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	struct module_btf *mod_btf;
 	void *data, *kern_data;
 	const char *tname;
-	int err;
+	int err, j;
 
 	st_ops = map->st_ops;
 	type = st_ops->type;
@@ -1083,9 +1091,18 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		}
 
 		moff = member->offset / 8;
-		kern_moff = kern_member->offset / 8;
-
 		mdata = data + moff;
+		if (st_ops->shadow_data) {
+			for (j = 0; j < st_ops->shadow_info->cnt; j++) {
+				if (strcmp(mname, st_ops->shadow_info->members[j].name))
+					continue;
+				moff = st_ops->shadow_info->members[j].offset;
+				mdata = st_ops->shadow_data + moff;
+				break;
+			}
+		}
+
+		kern_moff = kern_member->offset / 8;
 		kern_mdata = kern_data + kern_moff;
 
 		mtype = skip_mods_and_typedefs(btf, member->type, &mtype_id);
@@ -1102,6 +1119,9 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		if (btf_is_ptr(mtype)) {
 			struct bpf_program *prog;
 
+			if (st_ops->shadow_data)
+				st_ops->progs[i] =
+					*(struct bpf_program **)mdata;
 			prog = st_ops->progs[i];
 			if (!prog)
 				continue;
@@ -1172,8 +1192,108 @@ static int bpf_object__init_kern_struct_ops_maps(struct bpf_object *obj)
 	return 0;
 }
 
+static int init_struct_ops_shadow(struct bpf_map *map,
+				  const struct btf_type *t)
+{
+	struct btf *btf = map->obj->btf;
+	struct bpf_struct_ops *st_ops = map->st_ops;
+	const struct btf_member *m;
+	const struct btf_type *mt;
+	const struct bpf_struct_ops_member_info *info;
+	const char *name;
+	char *data;
+	int i, j, err;
+
+	data = calloc(1, st_ops->shadow_info->data_size);
+	if (!data)
+		return -ENOMEM;
+
+	for (i = 0, m = btf_members(t); i < btf_vlen(t); i++, m++) {
+		name = btf__name_by_offset(btf, m->name_off);
+		if (!name) {
+			pr_warn("struct_ops init_shadow %s: member %d has no name\n",
+				map->name, i);
+			err = -EINVAL;
+			goto err_out;
+		}
+		for (j = 0, info = st_ops->shadow_info->members;
+		     j < st_ops->shadow_info->cnt;
+		     j++, info++) {
+			if (strcmp(name, info->name) == 0)
+				break;
+		}
+		if (j == st_ops->shadow_info->cnt)
+			info = NULL;
+		mt = skip_mods_and_typedefs(btf, m->type, NULL);
+
+		switch (btf_kind(mt)) {
+		case BTF_KIND_INT:
+		case BTF_KIND_FLOAT:
+		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
+			if (!info) {
+				pr_warn("struct_ops init_shadow %s: member %s not found in map info\n",
+					map->name, name);
+				err = -EINVAL;
+				goto err_out;
+			}
+			if (info->size != mt->size) {
+				pr_warn("struct_ops init_shadow %s: member %s size mismatch: %u != %u\n",
+					map->name, name, info->size, mt->size);
+				err = -EINVAL;
+				goto err_out;
+			}
+			memcpy(data + info->offset, st_ops->data + m->offset / 8, mt->size);
+			break;
+
+		case BTF_KIND_PTR:
+			if (!resolve_func_ptr(btf, m->type, NULL)) {
+				if (!info)
+					break;
+				pr_warn("struct_ops init_shadow %s: member %s is not a func ptr\n",
+					map->name, name);
+				err = -ENOTSUP;
+				goto err_out;
+			}
+			if (!info) {
+				pr_warn("struct_ops init_shadow %s: member %s not found in map info\n",
+					map->name, name);
+				err = -EINVAL;
+				goto err_out;
+			}
+			if (info->size != sizeof(void *)) {
+				pr_warn("struct_ops init_shadow %s: member %s size mismatch: %u != %lu\n",
+					map->name, name, info->size, sizeof(void *));
+				err = -EINVAL;
+				goto err_out;
+			}
+			*((struct bpf_program **)(data + info->offset)) =
+				st_ops->progs[i];
+			break;
+
+		default:
+			if (info) {
+				pr_warn("struct_ops init_shadow %s: member %s not supported type\n",
+					map->name, name);
+				err = -ENOTSUP;
+				goto err_out;
+			}
+			break;
+		}
+	}
+
+	st_ops->shadow_data = data;
+
+	return 0;
+
+err_out:
+	free(data);
+	return err;
+}
+
 static int init_struct_ops_maps(struct bpf_object *obj, const char *sec_name,
-				int shndx, Elf_Data *data, __u32 map_flags)
+				int shndx, Elf_Data *data, __u32 map_flags,
+				const struct bpf_struct_ops_shadow_info *shadow)
 {
 	const struct btf_type *type, *datasec;
 	const struct btf_var_secinfo *vsi;
@@ -1182,7 +1302,7 @@ static int init_struct_ops_maps(struct bpf_object *obj, const char *sec_name,
 	__s32 type_id, datasec_id;
 	const struct btf *btf;
 	struct bpf_map *map;
-	__u32 i;
+	__u32 i, j;
 
 	if (shndx == -1)
 		return 0;
@@ -1260,6 +1380,16 @@ static int init_struct_ops_maps(struct bpf_object *obj, const char *sec_name,
 		st_ops->type = type;
 		st_ops->type_id = type_id;
 
+		if (shadow) {
+			for (j = 0; j < shadow->cnt; j++) {
+				if (strcmp(shadow->maps[j].name, var_name))
+					continue;
+				st_ops->shadow_info = &shadow->maps[j];
+				break;
+			}
+
+		}
+
 		pr_debug("struct_ops init: struct %s(type_id=%u) %s found at offset %u\n",
 			 tname, type_id, var_name, vsi->offset);
 	}
@@ -1267,16 +1397,19 @@ static int init_struct_ops_maps(struct bpf_object *obj, const char *sec_name,
 	return 0;
 }
 
-static int bpf_object_init_struct_ops(struct bpf_object *obj)
+static int bpf_object_init_struct_ops(struct bpf_object *obj,
+				      const struct bpf_struct_ops_shadow_info *shadow)
 {
 	int err;
 
 	err = init_struct_ops_maps(obj, STRUCT_OPS_SEC, obj->efile.st_ops_shndx,
-				   obj->efile.st_ops_data, 0);
+				   obj->efile.st_ops_data, 0, shadow);
 	err = err ?: init_struct_ops_maps(obj, STRUCT_OPS_LINK_SEC,
 					  obj->efile.st_ops_link_shndx,
 					  obj->efile.st_ops_link_data,
-					  BPF_F_LINK);
+					  BPF_F_LINK,
+					  shadow);
+
 	return err;
 }
 
@@ -2145,7 +2278,7 @@ skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id)
 	return t;
 }
 
-static const struct btf_type *
+const struct btf_type *
 resolve_func_ptr(const struct btf *btf, __u32 id, __u32 *res_id)
 {
 	const struct btf_type *t;
@@ -2736,17 +2869,19 @@ static int bpf_object__init_user_btf_maps(struct bpf_object *obj, bool strict,
 static int bpf_object__init_maps(struct bpf_object *obj,
 				 const struct bpf_object_open_opts *opts)
 {
+	const struct bpf_struct_ops_shadow_info *shadow_info;
 	const char *pin_root_path;
 	bool strict;
 	int err = 0;
 
 	strict = !OPTS_GET(opts, relaxed_maps, false);
 	pin_root_path = OPTS_GET(opts, pin_root_path, NULL);
+	shadow_info = OPTS_GET(opts, struct_ops_shadow, NULL);
 
 	err = bpf_object__init_user_btf_maps(obj, strict, pin_root_path);
 	err = err ?: bpf_object__init_global_data_maps(obj);
 	err = err ?: bpf_object__init_kconfig_map(obj);
-	err = err ?: bpf_object_init_struct_ops(obj);
+	err = err ?: bpf_object_init_struct_ops(obj, shadow_info);
 
 	return err;
 }
@@ -7528,6 +7663,33 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 	return 0;
 }
 
+/* Create a shadow copy for each struct_ops map if it has shadow info.
+ *
+ * The shadow copy should be created after bpf_object__collect_relos()
+ * since st_ops->progs is initialized in that function.
+ */
+static int bpf_object__init_shadow(struct bpf_object *obj)
+{
+	struct bpf_map *map;
+	int err;
+
+	bpf_object__for_each_map(map, obj) {
+		if (!bpf_map__is_struct_ops(map))
+			continue;
+
+		if (!map->st_ops->shadow_info)
+			continue;
+		err = init_struct_ops_shadow(map, map->st_ops->type);
+		if (err) {
+			pr_warn("map '%s': failed to init shadow: %d\n",
+				map->name, err);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
 static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf, size_t obj_buf_sz,
 					  const struct bpf_object_open_opts *opts)
 {
@@ -7624,6 +7786,7 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 	err = err ? : bpf_object__init_maps(obj, opts);
 	err = err ? : bpf_object_init_progs(obj, opts);
 	err = err ? : bpf_object__collect_relos(obj);
+	err = err ? : bpf_object__init_shadow(obj);
 	if (err)
 		goto out;
 
@@ -8588,6 +8751,7 @@ static void bpf_map__destroy(struct bpf_map *map)
 	}
 
 	if (map->st_ops) {
+		zfree(&map->st_ops->shadow_data);
 		zfree(&map->st_ops->data);
 		zfree(&map->st_ops->progs);
 		zfree(&map->st_ops->kern_func_off);
@@ -9877,6 +10041,12 @@ int bpf_map__set_initial_value(struct bpf_map *map,
 
 void *bpf_map__initial_value(struct bpf_map *map, size_t *psize)
 {
+	if (bpf_map__is_struct_ops(map)) {
+		if (psize)
+			*psize = map->st_ops->shadow_data_size;
+		return map->st_ops->shadow_data;
+	}
+
 	if (!map->mmaped)
 		return NULL;
 	*psize = map->def.value_size;
@@ -13461,4 +13631,9 @@ void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 	free(s->maps);
 	free(s->progs);
 	free(s);
+}
+
+__u32 bpf_map__struct_ops_type(const struct bpf_map *map)
+{
+	return map->st_ops->type_id;
 }

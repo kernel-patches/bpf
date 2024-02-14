@@ -109,6 +109,27 @@ LIBBPF_API libbpf_print_fn_t libbpf_set_print(libbpf_print_fn_t fn);
 /* Hide internal to user */
 struct bpf_object;
 
+/* Description of a member in the struct_ops type for a map. */
+struct bpf_struct_ops_member_info {
+	const char *name;
+	__u32 offset;
+	__u32 size;
+};
+
+/* Description of the layout of a shadow copy for a struct_ops map. */
+struct bpf_struct_ops_map_info {
+	/* The name of the struct_ops map */
+	const char *name;
+	const struct bpf_struct_ops_member_info *members;
+	__u32 cnt;
+	__u32 data_size;
+};
+
+struct bpf_struct_ops_shadow_info {
+	const struct bpf_struct_ops_map_info *maps;
+	__u32 cnt;
+};
+
 struct bpf_object_open_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;
@@ -197,9 +218,18 @@ struct bpf_object_open_opts {
 	 */
 	const char *bpf_token_path;
 
+	/* A list of shadow info for every struct_ops map.  A shadow info
+	 * provides the information used by libbpf to map the offsets of
+	 * struct members of a struct_ops type from BTF to the offsets of
+	 * the corresponding members in the shadow copy in the user
+	 * space. It ensures that the shadow copy provided by the libbpf
+	 * can be accessed by the user space program correctly.
+	 */
+	const struct bpf_struct_ops_shadow_info *struct_ops_shadow;
+
 	size_t :0;
 };
-#define bpf_object_open_opts__last_field bpf_token_path
+#define bpf_object_open_opts__last_field struct_ops_shadow
 
 /**
  * @brief **bpf_object__open()** creates a bpf_object by opening
@@ -838,6 +868,8 @@ struct bpf_map;
 
 LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map);
 LIBBPF_API int bpf_link__update_map(struct bpf_link *link, const struct bpf_map *map);
+
+LIBBPF_API __u32 bpf_map__struct_ops_type(const struct bpf_map *map);
 
 struct bpf_iter_attach_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
