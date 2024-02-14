@@ -163,7 +163,6 @@ static int xdp_test_run_setup(struct xdp_test_data *xdp, struct xdp_buff *orig_c
 	struct page_pool_params pp_params = {
 		.order = 0,
 		.flags = 0,
-		.pool_size = xdp->batch_size,
 		.nid = NUMA_NO_NODE,
 		.init_callback = xdp_test_run_init_page,
 		.init_arg = xdp,
