@@ -909,6 +909,281 @@ codegen_progs_skeleton(struct bpf_object *obj, size_t prog_cnt, bool populate_li
 	}
 }
 
+/* A callback (cb) will be called for each member that can have a shadow of
+ * a map.
+ *
+ * For now, it supports only scalar types and function pointers.
+ */
+static int walk_st_ops_shadow_vars(struct btf *btf,
+				   const char *ident,
+				   const struct bpf_map *map,
+				   int (*cb)(const struct btf *btf,
+					     const char *ident,
+					     const struct btf_member *m,
+					     __u32 member_type_id,
+					     bool func_ptr))
+{
+	const struct btf_type *map_type, *member_type;
+	const struct btf_member *m;
+	__u32 map_type_id, member_type_id;
+	int i, err;
+
+	map_type_id = bpf_map__struct_ops_type(map);
+	if (map_type_id == 0)
+		return -EINVAL;
+	map_type = btf__type_by_id(btf, map_type_id);
+	if (!map_type)
+		return -EINVAL;
+
+	for (i = 0, m = btf_members(map_type);
+	     i < btf_vlen(map_type);
+	     i++, m++) {
+		member_type = skip_mods_and_typedefs(btf, m->type,
+						     &member_type_id);
+		if (!member_type)
+			return -EINVAL;
+
+		switch (btf_kind(member_type)) {
+		case BTF_KIND_INT:
+		case BTF_KIND_FLOAT:
+		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
+			/* scalar type */
+			err = cb(btf, ident, m, member_type_id, false);
+			if (err)
+				return err;
+			break;
+
+		case BTF_KIND_PTR:
+			if (resolve_func_ptr(btf, m->type, NULL)) {
+				/* Function pointer */
+				err = cb(btf, ident, m, member_type_id, true);
+				if (err)
+					return err;
+			}
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	return 0;
+}
+
+static int gen_st_ops_sahdow_var(const struct btf *btf,
+				 const char *ident,
+				 const struct btf_member *m,
+				 __u32 member_type_id,
+				 bool func_ptr)
+{
+	DECLARE_LIBBPF_OPTS(btf_dump_emit_type_decl_opts, opts,
+			    .indent_level = 3,
+			    .strip_mods = false,
+			    );
+	struct btf_dump *d = NULL;
+	int err = 0;
+
+	if (func_ptr) {
+		printf("\t\t\tconst struct bpf_program *%s;\n",
+		       btf__name_by_offset(btf, m->name_off));
+	} else {
+		d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
+		if (!d) {
+			err = -errno;
+			goto out;
+		}
+
+		printf("\t\t\t");
+		opts.field_name = btf__name_by_offset(btf, m->name_off);
+		err = btf_dump__emit_type_decl(d, member_type_id, &opts);
+		if (err)
+			goto out;
+		printf(";\n");
+	}
+
+out:
+	btf_dump__free(d);
+
+	return err;
+}
+
+/* Add a pointer of a shadow copy to the skeleton for a struct_ops map.
+ *
+ * A shadow copy of a struct_ops map is used to store the sahdow variables.
+ * Shadow variables are a mirror of member fields in a struct_ops map
+ * defined in the BPF program. They serve as a way to access and change the
+ * values in the map. For example, in struct bpf_testmod_ops, it defines
+ * three fields: test_1, test_2, and data. And, it defines an instance as
+ * testmod_1 in the program. Then, the skeleton will have three shadow
+ * variables: test_1, test_2, and data in skel->st_ops.testmod_1.
+ *
+ * Now, it doesn't support pointer type fields except function pointers.
+ * For non-function pointer fields, the shadow variables will be in the
+ * same type as the original fields, but all modifiers (const,
+ * volatile,...) are removed.
+ *
+ * For function pointer fields, the shadow variables will be in the "struct
+ * bpf_program *" type.
+ */
+static int gen_st_ops_shadow_copy(struct btf *btf, const char *ident,
+				  const struct bpf_map *map)
+{
+	int err;
+
+	printf("\t\tstruct {\n");
+
+	err = walk_st_ops_shadow_vars(btf, ident, map, gen_st_ops_sahdow_var);
+	if (err)
+		return err;
+
+	printf("\t\t} *%s;\n", ident);
+
+	return 0;
+}
+
+static int gen_st_ops_member_info(const struct btf *btf,
+				  const char *ident,
+				  const struct btf_member *m,
+				  __u32 member_type_id,
+				  bool func_ptr)
+{
+	const char *member_name = btf__name_by_offset(btf, m->name_off);
+
+	codegen("\
+	\n\
+			{						    \n\
+				.name = \"%2$s\",			    \n\
+				.offset = (__u32)(uintptr_t)&((typeof(struct_ops->%1$s))0)->%2$s,\n\
+				.size = sizeof(((typeof(struct_ops->%1$s))0)->%2$s),\n\
+			},						    \n\
+	", ident, member_name);
+
+	return 0;
+}
+
+static int gen_st_ops_member_infos(struct btf *btf, const char *ident,
+				   const struct bpf_map *map)
+{
+	int err;
+
+	printf("\tstatic struct bpf_struct_ops_member_info member_info_%s[] = {\n",
+	       ident);
+
+	err = walk_st_ops_shadow_vars(btf, ident, map,
+				      gen_st_ops_member_info);
+	if (err)
+		return err;
+
+	printf("\t};\n");
+
+	return 0;
+}
+
+static void gen_st_ops_map_info(const char *ident)
+{
+	codegen("\
+		\n\
+			{						    \n\
+				.name = \"%1$s\",			    \n\
+				.members = member_info_%1$s,		    \n\
+				.cnt = ARRAY_SIZE(member_info_%1$s),	    \n\
+				.data_size = sizeof(*struct_ops->%1$s),	    \n\
+			},						    \n\
+		", ident);
+}
+
+/* Generate information of shadow variables for every struct_ops map.
+ *
+ * The shadow information of map includes the name, the offset, and the
+ * size of each supported member field in the struct_ops map to describe
+ * the layout of a shadow copy. The shadow info of struct_ops maps will be
+ * passed to libbpf to create a shadow copy for each struct_ops map.
+ *
+ * For example, in struct_ops_module.c, it defines "testmod_1" in struct
+ * bpf_testmod_ops, which has three fields: test_1, test_2, and data. Then,
+ * the shadow information will be:
+ *
+ * static struct bpf_struct_ops_member_info member_info_testmod_1[] = {
+ *	{
+ *		.name = "test_1",
+ *		.offset = .....,
+ *		.size = .....,
+ *	},
+ *	{
+ *		.name = "test_2",
+ *		.offset = .....,
+ *		.size = .....,
+ *	},
+ *	{
+ *		.name = "data",
+ *		.offset = .....,
+ *		.size = .....,
+ *	},
+ * };
+ * static struct bpf_struct_ops_map_info map_info[] = {
+ *	{
+ *		.name = "testmod_1",
+ *		.members = member_info_testmod_1,
+ *		.cnt = ARRAY_SIZE(member_info_testmod_1),
+ *		.data_size = sizeof(struct_ops->testmod_1),
+ *	},
+ * };
+ * static struct bpf_struct_ops_shadow_info shadow_info = {
+ *	.maps = map_info,
+ *	.cnt = ARRAY_SIZE(map_info),
+ * };
+ *
+ * testmod_1_shadow_info() will return the pointer of "sahdow_info" defined
+ * above.
+ */
+static int gen_st_ops_shadow_info(struct bpf_object *obj, const char *obj_name)
+{
+	struct btf *btf = bpf_object__btf(obj);
+	struct bpf_map *map;
+
+	codegen("\
+		\n\
+		static inline struct bpf_struct_ops_shadow_info *	    \n\
+		%1$s__shadow_info()					    \n\
+		{							    \n\
+			typeof(((struct %1$s *)0)->struct_ops) *struct_ops = NULL;\n\
+		", obj_name);
+	bpf_object__for_each_map(map, obj) {
+		const char *ident = bpf_map__name(map);
+		int err;
+
+		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+			continue;
+
+		err = gen_st_ops_member_infos(btf, ident, map);
+		if (err)
+			return err;
+	}
+	printf("\tstatic struct bpf_struct_ops_map_info map_info[] = {\n");
+	bpf_object__for_each_map(map, obj) {
+		const char *ident = bpf_map__name(map);
+
+		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+			continue;
+
+		gen_st_ops_map_info(ident);
+	}
+	codegen("\
+		\n\
+			};						    \n\
+			static struct bpf_struct_ops_shadow_info shadow_info = {\n\
+				.maps = map_info,			    \n\
+				.cnt = ARRAY_SIZE(map_info),		    \n\
+			};						    \n\
+		\n\
+			return &shadow_info;				    \n\
+		}							    \n\
+		\n");
+
+	return 0;
+}
+
 static int do_skeleton(int argc, char **argv)
 {
 	char header_guard[MAX_OBJ_NAME_LEN + sizeof("__SKEL_H__")];
@@ -923,6 +1198,7 @@ static int do_skeleton(int argc, char **argv)
 	struct bpf_map *map;
 	struct btf *btf;
 	struct stat st;
+	int st_ops_cnt = 0;
 
 	if (!REQ_ARGS(1)) {
 		usage();
@@ -1048,8 +1324,33 @@ static int do_skeleton(int argc, char **argv)
 				printf("\t\tstruct bpf_map_desc %s;\n", ident);
 			else
 				printf("\t\tstruct bpf_map *%s;\n", ident);
+			if (bpf_map__type(map) == BPF_MAP_TYPE_STRUCT_OPS)
+				st_ops_cnt++;
 		}
 		printf("\t} maps;\n");
+		if (st_ops_cnt) {
+			/* Generate the pointers to shadow copies of
+			 * struct_ops maps.
+			 */
+			btf = bpf_object__btf(obj);
+			if (!btf) {
+				err = -1;
+				p_err("need btf type information for %s", obj_name);
+				goto out;
+			}
+
+			printf("\tstruct {\n");
+			bpf_object__for_each_map(map, obj) {
+				if (!get_map_ident(map, ident, sizeof(ident)))
+					continue;
+				if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+					continue;
+				err = gen_st_ops_shadow_copy(btf, ident, map);
+				if (err)
+					goto out;
+			}
+			printf("\t} struct_ops;\n");
+		}
 	}
 
 	if (prog_cnt) {
@@ -1075,12 +1376,9 @@ static int do_skeleton(int argc, char **argv)
 		printf("\t} links;\n");
 	}
 
-	btf = bpf_object__btf(obj);
-	if (btf) {
-		err = codegen_datasecs(obj, obj_name);
-		if (err)
-			goto out;
-	}
+	err = codegen_datasecs(obj, obj_name);
+	if (err)
+		goto out;
 	if (use_loader) {
 		err = gen_trace(obj, obj_name, header_guard);
 		goto out;
@@ -1099,7 +1397,17 @@ static int do_skeleton(int argc, char **argv)
 			static inline const void *elf_bytes(size_t *sz);    \n\
 		#endif /* __cplusplus */				    \n\
 		};							    \n\
-									    \n\
+		\n\
+		", obj_name);
+
+	if (st_ops_cnt) {
+		err = gen_st_ops_shadow_info(obj, obj_name);
+		if (err)
+			goto out;
+	}
+
+	codegen("\
+		\n\
 		static void						    \n\
 		%1$s__destroy(struct %1$s *obj)				    \n\
 		{							    \n\
@@ -1133,6 +1441,24 @@ static int do_skeleton(int argc, char **argv)
 			if (err)					    \n\
 				goto err_out;				    \n\
 									    \n\
+		", obj_name);
+	if (st_ops_cnt) {
+		/* Initialize the pointers of struct_ops shadow copies */
+		bpf_object__for_each_map(map, obj) {
+			if (!get_map_ident(map, ident, sizeof(ident)))
+				continue;
+			if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+				continue;
+			codegen("\
+				\n\
+					obj->struct_ops.%1$s =		    \n\
+						bpf_map__initial_value(obj->maps.%1$s, NULL);\n\
+				\n\
+				", ident);
+		}
+	}
+	codegen("\
+		\n\
 			return obj;					    \n\
 		err_out:						    \n\
 			%1$s__destroy(obj);				    \n\
@@ -1143,7 +1469,23 @@ static int do_skeleton(int argc, char **argv)
 		static inline struct %1$s *				    \n\
 		%1$s__open(void)					    \n\
 		{							    \n\
-			return %1$s__open_opts(NULL);			    \n\
+		", obj_name);
+	if (st_ops_cnt)
+		codegen("\
+			\n\
+				DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);\n\
+			\n\
+				opts.struct_ops_shadow = %1$s__shadow_info();\n\
+			\n\
+				return %1$s__open_opts(&opts);	     \n\
+			", obj_name);
+	else
+		codegen("\
+			\n\
+				return %1$s__open_opts(NULL);		     \n\
+			", obj_name);
+	codegen("\
+		\n\
 		}							    \n\
 									    \n\
 		static inline int					    \n\
