@@ -321,6 +321,12 @@ static u32 bpf_tcp_ca_sndbuf_expand(struct sock *sk)
 	return 0;
 }
 
+static size_t bpf_tcp_ca_get_info(struct sock *sk, u32 ext, int *attr,
+				  union tcp_cc_info *info)
+{
+	return 0;
+}
+
 static void __bpf_tcp_ca_init(struct sock *sk)
 {
 }
@@ -340,6 +346,7 @@ static struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = {
 	.cong_control = bpf_tcp_ca_cong_control,
 	.undo_cwnd = bpf_tcp_ca_undo_cwnd,
 	.sndbuf_expand = bpf_tcp_ca_sndbuf_expand,
+	.get_info = bpf_tcp_ca_get_info,
 
 	.init = __bpf_tcp_ca_init,
 	.release = __bpf_tcp_ca_release,
