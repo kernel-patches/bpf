@@ -4,6 +4,7 @@
 #include "trace_helpers.h"
 #include "kprobe_multi_empty.skel.h"
 #include "kprobe_multi_override.skel.h"
+#include "kprobe_multi_session.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "bpf/hashmap.h"
 
@@ -324,6 +325,46 @@ static void test_attach_api_fails(void)
 cleanup:
 	bpf_link__destroy(link);
 	kprobe_multi__destroy(skel);
+}
+
+static void test_session_skel_api(void)
+{
+	struct kprobe_multi_session *skel = NULL;
+	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct bpf_link *link = NULL;
+	int err, prog_fd;
+
+	skel = kprobe_multi_session__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "kprobe_multi_session__open_and_load"))
+		return;
+
+	skel->bss->pid = getpid();
+
+	err = kprobe_multi_session__attach(skel);
+	if (!ASSERT_OK(err, " kprobe_multi_session__attach"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	/* bpf_fentry_test1-4 trigger return probe, result is 2 */
+	ASSERT_EQ(skel->bss->kprobe_session_result[0], 2, "kprobe_session_result[0]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[1], 2, "kprobe_session_result[1]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[2], 2, "kprobe_session_result[2]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[3], 2, "kprobe_session_result[3]");
+
+	/* bpf_fentry_test5-8 trigger only entry probe, result is 1 */
+	ASSERT_EQ(skel->bss->kprobe_session_result[4], 1, "kprobe_session_result[4]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[5], 1, "kprobe_session_result[5]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[6], 1, "kprobe_session_result[6]");
+	ASSERT_EQ(skel->bss->kprobe_session_result[7], 1, "kprobe_session_result[7]");
+
+cleanup:
+	bpf_link__destroy(link);
+	kprobe_multi_session__destroy(skel);
 }
 
 static size_t symbol_hash(long key, void *ctx __maybe_unused)
@@ -690,4 +731,6 @@ void test_kprobe_multi_test(void)
 		test_attach_api_fails();
 	if (test__start_subtest("attach_override"))
 		test_attach_override();
+	if (test__start_subtest("session"))
+		test_session_skel_api();
 }
