@@ -43,8 +43,7 @@ static void *__scs_alloc(int node)
 		}
 	}
 
-	s = __vmalloc_node_range(SCS_SIZE, 1, VMALLOC_START, VMALLOC_END,
-				    GFP_SCS, PAGE_KERNEL, 0, node,
+	s = __vmalloc_node(SCS_SIZE, 1, GFP_SCS, 0, node,
 				    __builtin_return_address(0));
 
 out:

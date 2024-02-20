@@ -205,7 +205,7 @@ static int __init arm64_efi_rt_init(void)
 		return 0;
 
 	p = __vmalloc_node(THREAD_SIZE, THREAD_ALIGN, GFP_KERNEL,
-			   NUMA_NO_NODE, &&l);
+			   0, NUMA_NO_NODE, &&l);
 l:	if (!p) {
 		pr_warn("Failed to allocate EFI runtime stack\n");
 		clear_bit(EFI_RUNTIME_SERVICES, &efi.flags);

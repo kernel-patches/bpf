@@ -61,7 +61,7 @@ static void __init init_irq_stacks(void)
 						       THREAD_SIZE_ORDER);
 		else
 			stack = __vmalloc_node(THREAD_SIZE, THREAD_ALIGN,
-					       THREADINFO_GFP, NUMA_NO_NODE,
+					       THREADINFO_GFP, 0, NUMA_NO_NODE,
 					       __builtin_return_address(0));
 
 		if (WARN_ON(!stack))

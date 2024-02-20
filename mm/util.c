@@ -639,8 +639,7 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 	 * about the resulting pointer, and cannot play
 	 * protection games.
 	 */
-	return __vmalloc_node_range(size, 1, VMALLOC_START, VMALLOC_END,
-			flags, PAGE_KERNEL, VM_ALLOW_HUGE_VMAP,
+	return __vmalloc_node(size, 1, flags, VM_ALLOW_HUGE_VMAP,
 			node, __builtin_return_address(0));
 }
 EXPORT_SYMBOL(kvmalloc_node);

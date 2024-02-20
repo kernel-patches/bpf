@@ -3119,7 +3119,7 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 
 	/* Please note that the recursion is strictly bounded. */
 	if (array_size > PAGE_SIZE) {
-		area->pages = __vmalloc_node(array_size, 1, nested_gfp, node,
+		area->pages = __vmalloc_node(array_size, 1, nested_gfp, 0, node,
 					area->caller);
 	} else {
 		area->pages = kmalloc_node(array_size, nested_gfp, node);
@@ -3379,11 +3379,12 @@ fail:
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
-void *__vmalloc_node(unsigned long size, unsigned long align,
-			    gfp_t gfp_mask, int node, const void *caller)
+__weak void *__vmalloc_node(unsigned long size, unsigned long align,
+			    gfp_t gfp_mask, unsigned long vm_flags, int node,
+			    const void *caller)
 {
 	return __vmalloc_node_range(size, align, VMALLOC_START, VMALLOC_END,
-				gfp_mask, PAGE_KERNEL, 0, node, caller);
+				gfp_mask, PAGE_KERNEL, vm_flags, node, caller);
 }
 /*
  * This is only for performance analysis of vmalloc and stress purpose.
@@ -3396,7 +3397,7 @@ EXPORT_SYMBOL_GPL(__vmalloc_node);
 
 void *__vmalloc(unsigned long size, gfp_t gfp_mask)
 {
-	return __vmalloc_node(size, 1, gfp_mask, NUMA_NO_NODE,
+	return __vmalloc_node(size, 1, gfp_mask, 0, NUMA_NO_NODE,
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(__vmalloc);
@@ -3415,7 +3416,7 @@ EXPORT_SYMBOL(__vmalloc);
  */
 void *vmalloc(unsigned long size)
 {
-	return __vmalloc_node(size, 1, GFP_KERNEL, NUMA_NO_NODE,
+	return __vmalloc_node(size, 1, GFP_KERNEL, 0, NUMA_NO_NODE,
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc);
@@ -3432,7 +3433,7 @@ EXPORT_SYMBOL(vmalloc);
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
-void *vmalloc_huge(unsigned long size, gfp_t gfp_mask)
+__weak void *vmalloc_huge(unsigned long size, gfp_t gfp_mask)
 {
 	return __vmalloc_node_range(size, 1, VMALLOC_START, VMALLOC_END,
 				    gfp_mask, PAGE_KERNEL, VM_ALLOW_HUGE_VMAP,
@@ -3455,7 +3456,7 @@ EXPORT_SYMBOL_GPL(vmalloc_huge);
  */
 void *vzalloc(unsigned long size)
 {
-	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_ZERO, NUMA_NO_NODE,
+	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_ZERO, 0, NUMA_NO_NODE,
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vzalloc);
@@ -3469,7 +3470,7 @@ EXPORT_SYMBOL(vzalloc);
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
-void *vmalloc_user(unsigned long size)
+__weak void *vmalloc_user(unsigned long size)
 {
 	return __vmalloc_node_range(size, SHMLBA,  VMALLOC_START, VMALLOC_END,
 				    GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL,
@@ -3493,7 +3494,7 @@ EXPORT_SYMBOL(vmalloc_user);
  */
 void *vmalloc_node(unsigned long size, int node)
 {
-	return __vmalloc_node(size, 1, GFP_KERNEL, node,
+	return __vmalloc_node(size, 1, GFP_KERNEL, 0, node,
 			__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc_node);
@@ -3511,22 +3512,10 @@ EXPORT_SYMBOL(vmalloc_node);
  */
 void *vzalloc_node(unsigned long size, int node)
 {
-	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_ZERO, node,
+	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_ZERO, 0, node,
 				__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vzalloc_node);
-
-#if defined(CONFIG_64BIT) && defined(CONFIG_ZONE_DMA32)
-#define GFP_VMALLOC32 (GFP_DMA32 | GFP_KERNEL)
-#elif defined(CONFIG_64BIT) && defined(CONFIG_ZONE_DMA)
-#define GFP_VMALLOC32 (GFP_DMA | GFP_KERNEL)
-#else
-/*
- * 64b systems should always have either DMA or DMA32 zones. For others
- * GFP_DMA32 should do the right thing and use the normal zone.
- */
-#define GFP_VMALLOC32 (GFP_DMA32 | GFP_KERNEL)
-#endif
 
 /**
  * vmalloc_32 - allocate virtually contiguous memory (32bit addressable)
@@ -3539,7 +3528,7 @@ EXPORT_SYMBOL(vzalloc_node);
  */
 void *vmalloc_32(unsigned long size)
 {
-	return __vmalloc_node(size, 1, GFP_VMALLOC32, NUMA_NO_NODE,
+	return __vmalloc_node(size, 1, GFP_VMALLOC32, 0, NUMA_NO_NODE,
 			__builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc_32);
@@ -3553,7 +3542,7 @@ EXPORT_SYMBOL(vmalloc_32);
  *
  * Return: pointer to the allocated memory or %NULL on error
  */
-void *vmalloc_32_user(unsigned long size)
+__weak void *vmalloc_32_user(unsigned long size)
 {
 	return __vmalloc_node_range(size, SHMLBA,  VMALLOC_START, VMALLOC_END,
 				    GFP_VMALLOC32 | __GFP_ZERO, PAGE_KERNEL,

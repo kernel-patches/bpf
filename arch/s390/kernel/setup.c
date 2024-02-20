@@ -254,7 +254,7 @@ static void __init conmode_default(void)
 		cpcmd("QUERY TERM", query_buffer, 1024, NULL);
 		ptr = strstr(query_buffer, "CONMODE");
 		/*
-		 * Set the conmode to 3215 so that the device recognition 
+		 * Set the conmode to 3215 so that the device recognition
 		 * will set the cu_type of the console to 3215. If the
 		 * conmode is 3270 and we don't set it back then both
 		 * 3215 and the 3270 driver will try to access the console
@@ -314,7 +314,7 @@ static inline void setup_zfcpdump(void) {}
 
  /*
  * Reboot, halt and power_off stubs. They just call _machine_restart,
- * _machine_halt or _machine_power_off. 
+ * _machine_halt or _machine_power_off.
  */
 
 void machine_restart(char *command)
@@ -364,7 +364,7 @@ unsigned long stack_alloc(void)
 	void *ret;
 
 	ret = __vmalloc_node(THREAD_SIZE, THREAD_SIZE, THREADINFO_GFP,
-			     NUMA_NO_NODE, __builtin_return_address(0));
+			     0, NUMA_NO_NODE, __builtin_return_address(0));
 	kmemleak_not_leak(ret);
 	return (unsigned long)ret;
 #else

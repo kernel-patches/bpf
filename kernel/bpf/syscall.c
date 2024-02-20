@@ -303,8 +303,8 @@ static void *__bpf_map_area_alloc(u64 size, int numa_node, bool mmapable)
 			return area;
 	}
 
-	return __vmalloc_node_range(size, align, VMALLOC_START, VMALLOC_END,
-			gfp | GFP_KERNEL | __GFP_RETRY_MAYFAIL, PAGE_KERNEL,
+	return __vmalloc_node(size, align,
+			gfp | GFP_KERNEL | __GFP_RETRY_MAYFAIL,
 			flags, numa_node, __builtin_return_address(0));
 }
 

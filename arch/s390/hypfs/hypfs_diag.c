@@ -70,7 +70,7 @@ void *diag204_get_buffer(enum diag204_format fmt, int *pages)
 			return ERR_PTR(-EOPNOTSUPP);
 	}
 	diag204_buf = __vmalloc_node(array_size(*pages, PAGE_SIZE),
-				     PAGE_SIZE, GFP_KERNEL, NUMA_NO_NODE,
+				     PAGE_SIZE, GFP_KERNEL, 0, NUMA_NO_NODE,
 				     __builtin_return_address(0));
 	if (!diag204_buf)
 		return ERR_PTR(-ENOMEM);

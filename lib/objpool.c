@@ -80,7 +80,7 @@ objpool_init_percpu_slots(struct objpool_head *pool, int nr_objs,
 			slot = kmalloc_node(size, pool->gfp, cpu_to_node(i));
 		else
 			slot = __vmalloc_node(size, sizeof(void *), pool->gfp,
-				cpu_to_node(i), __builtin_return_address(0));
+				0, cpu_to_node(i), __builtin_return_address(0));
 		if (!slot)
 			return -ENOMEM;
 		memset(slot, 0, size);
