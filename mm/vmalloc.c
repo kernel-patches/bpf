@@ -635,6 +635,52 @@ static int vmap_pages_range(unsigned long addr, unsigned long end,
 	return err;
 }
 
+/**
+ * vm_area_map_pages - map pages inside given vm_area
+ * @area: vm_area
+ * @addr: start address inside vm_area
+ * @count: number of pages
+ * @pages: pages to map (always PAGE_SIZE pages)
+ */
+int vm_area_map_pages(struct vm_struct *area, unsigned long addr, unsigned int count,
+		      struct page **pages)
+{
+	unsigned long size = ((unsigned long)count) * PAGE_SIZE;
+	unsigned long end = addr + size;
+
+	might_sleep();
+	if (WARN_ON_ONCE(area->flags & VM_FLUSH_RESET_PERMS))
+		return -EINVAL;
+	if (WARN_ON_ONCE(area->flags & VM_NO_GUARD))
+		return -EINVAL;
+	if (WARN_ON_ONCE(!(area->flags & VM_MAP)))
+		return -EINVAL;
+	if (count > totalram_pages())
+		return -E2BIG;
+	if (addr < (unsigned long)area->addr || (void *)end > area->addr + area->size)
+		return -ERANGE;
+
+	return vmap_pages_range(addr, end, PAGE_KERNEL, pages, PAGE_SHIFT);
+}
+
+/**
+ * vm_area_unmap_pages - unmap pages inside given vm_area
+ * @area: vm_area
+ * @addr: start address inside vm_area
+ * @count: number of pages to unmap
+ */
+int vm_area_unmap_pages(struct vm_struct *area, unsigned long addr, unsigned int count)
+{
+	unsigned long size = ((unsigned long)count) * PAGE_SIZE;
+	unsigned long end = addr + size;
+
+	if (addr < (unsigned long)area->addr || (void *)end > area->addr + area->size)
+		return -ERANGE;
+
+	vunmap_range(addr, end);
+	return 0;
+}
+
 int is_vmalloc_or_module_addr(const void *x)
 {
 	/*
