@@ -31,4 +31,7 @@ static inline pgprot_t arch_vmap_pgprot_tagged(pgprot_t prot)
 	return pgprot_tagged(prot);
 }
 
+extern unsigned long code_region_start __ro_after_init;
+extern unsigned long code_region_end __ro_after_init;
+
 #endif /* _ASM_ARM64_VMALLOC_H */

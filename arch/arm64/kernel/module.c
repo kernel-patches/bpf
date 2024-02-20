@@ -29,6 +29,10 @@
 static u64 module_direct_base __ro_after_init = 0;
 static u64 module_plt_base __ro_after_init = 0;
 
+/* For pre-init vmalloc, assume the worst-case code range */
+unsigned long code_region_start __ro_after_init = (u64) (_end - SZ_2G);
+unsigned long code_region_end __ro_after_init = (u64) (_text + SZ_2G);
+
 /*
  * Choose a random page-aligned base address for a window of 'size' bytes which
  * entirely contains the interval [start, end - 1].
@@ -100,6 +104,9 @@ static int __init module_init_limits(void)
 
 		module_plt_base = random_bounding_box(SZ_2G, min, max);
 	}
+
+	code_region_start = module_plt_base;
+	code_region_end = module_plt_base + SZ_2G;
 
 	pr_info("%llu pages in range for non-PLT usage",
 		module_direct_base ? (SZ_128M - kernel_size) / PAGE_SIZE : 0);
