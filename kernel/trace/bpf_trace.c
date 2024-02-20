@@ -1434,7 +1434,7 @@ static int __init bpf_key_sig_kfuncs_init(void)
 late_initcall(bpf_key_sig_kfuncs_init);
 #endif /* CONFIG_KEYS */
 
-/* filesystem kfuncs */
+/* A set of kfuncs that may only be called from BPF LSM programs. */
 __bpf_kfunc_start_defs();
 
 /**
@@ -1474,31 +1474,33 @@ __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
 
 __bpf_kfunc_end_defs();
 
-BTF_KFUNCS_START(fs_kfunc_set_ids)
+BTF_KFUNCS_START(lsm_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
-BTF_KFUNCS_END(fs_kfunc_set_ids)
+BTF_KFUNCS_END(lsm_kfunc_set_ids)
 
-static int bpf_get_file_xattr_filter(const struct bpf_prog *prog, u32 kfunc_id)
+static int bpf_lsm_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
-	if (!btf_id_set8_contains(&fs_kfunc_set_ids, kfunc_id))
+	if (!btf_id_set8_contains(&lsm_kfunc_set_ids, kfunc_id))
 		return 0;
 
-	/* Only allow to attach from LSM hooks, to avoid recursion */
+	/* To avoid recursion, only permit kfuncs included within
+	 * lsm_kfunc_set_ids to be called from BPF LSM programs.
+	 */
 	return prog->type != BPF_PROG_TYPE_LSM ? -EACCES : 0;
 }
 
-static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {
+static const struct btf_kfunc_id_set bpf_lsm_kfunc_set = {
 	.owner = THIS_MODULE,
-	.set = &fs_kfunc_set_ids,
-	.filter = bpf_get_file_xattr_filter,
+	.set = &lsm_kfunc_set_ids,
+	.filter = bpf_lsm_kfunc_filter,
 };
 
-static int __init bpf_fs_kfuncs_init(void)
+static int __init bpf_lsm_kfuncs_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_fs_kfunc_set);
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_lsm_kfunc_set);
 }
 
-late_initcall(bpf_fs_kfuncs_init);
+late_initcall(bpf_lsm_kfuncs_init);
 
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
