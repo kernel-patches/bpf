@@ -25,6 +25,7 @@
 #include <linux/verification.h>
 #include <linux/namei.h>
 #include <linux/fileattr.h>
+#include <linux/probe_read_d_path.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -923,14 +924,12 @@ BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
 	if (len < 0)
 		return len;
 
-	p = d_path(&copy, buf, sz);
-	if (IS_ERR(p)) {
-		len = PTR_ERR(p);
-	} else {
-		len = buf + sz - p;
-		memmove(buf, p, len);
-	}
+	p = probe_read_d_path(&copy, buf, sz);
+	if (IS_ERR(p))
+		return PTR_ERR(p);
 
+	len = buf + sz - p;
+	memmove(buf, p, len);
 	return len;
 }
 
