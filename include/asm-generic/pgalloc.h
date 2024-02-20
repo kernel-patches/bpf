@@ -142,6 +142,24 @@ static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
 }
 #endif
 
+#ifdef __HAVE_ARCH_ADDR_COND_PMD
+static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmdp,
+			pte_t *ptep, unsigned long address);
+#else
+static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmdp,
+			pte_t *ptep);
+#endif
+
+static inline void pmd_populate_kernel_at(struct mm_struct *mm, pmd_t *pmdp,
+			pte_t *ptep, unsigned long address)
+{
+#ifdef __HAVE_ARCH_ADDR_COND_PMD
+	pmd_populate_kernel(mm, pmdp, ptep, address);
+#else
+	pmd_populate_kernel(mm, pmdp, ptep);
+#endif
+}
+
 #ifndef __HAVE_ARCH_PMD_FREE
 static inline void pmd_free(struct mm_struct *mm, pmd_t *pmd)
 {
