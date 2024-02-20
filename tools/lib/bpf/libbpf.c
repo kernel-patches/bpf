@@ -9500,6 +9500,89 @@ int libbpf_find_vmlinux_btf_id(const char *name,
 	return libbpf_err(err);
 }
 
+int libbpf_find_kernel_btf_id(const char *name,
+			      enum bpf_attach_type attach_type,
+			      int *btf_obj_fd, int *btf_type_id)
+{
+	struct btf *btf, *vmlinux_btf;
+	struct bpf_btf_info info;
+	__u32 btf_id = 0, len;
+	char btf_name[64];
+	int err, fd;
+
+	vmlinux_btf = btf__load_vmlinux_btf();
+	err = libbpf_get_error(vmlinux_btf);
+	if (err)
+		return libbpf_err(err);
+
+	err = find_attach_btf_id(vmlinux_btf, name, attach_type);
+	if (err > 0) {
+		*btf_type_id = err;
+		*btf_obj_fd = 0;
+		err = 0;
+		goto out;
+	}
+
+	/* kernel too old to support module BTFs */
+	if (!feat_supported(NULL, FEAT_MODULE_BTF)) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+
+	while (true) {
+		err = bpf_btf_get_next_id(btf_id, &btf_id);
+		if (err) {
+			err = -errno;
+			goto out;
+		}
+
+		fd = bpf_btf_get_fd_by_id(btf_id);
+		if (fd < 0) {
+			if (errno == ENOENT)
+				continue;
+			err = -errno;
+			goto out;
+		}
+
+		len = sizeof(info);
+		memset(&info, 0, sizeof(info));
+		info.name = ptr_to_u64(btf_name);
+		info.name_len = sizeof(btf_name);
+
+		err = bpf_btf_get_info_by_fd(fd, &info, &len);
+		if (err) {
+			err = -errno;
+			goto fd_out;
+		}
+
+		if (!info.kernel_btf || strcmp(btf_name, "vmlinux") == 0) {
+			close(fd);
+			continue;
+		}
+
+		btf = btf_get_from_fd(fd, vmlinux_btf);
+		err = libbpf_get_error(btf);
+		if (err)
+			goto fd_out;
+
+		err = find_attach_btf_id(btf, name, attach_type);
+		if (err > 0) {
+			*btf_type_id = err;
+			*btf_obj_fd = fd;
+			err = 0;
+			break;
+		}
+		close(fd);
+		continue;
+fd_out:
+		close(fd);
+		break;
+	}
+out:
+	btf__free(vmlinux_btf);
+	return err;
+}
+
 static int libbpf_find_prog_btf_id(const char *name, __u32 attach_prog_fd)
 {
 	struct bpf_prog_info info;

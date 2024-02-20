@@ -413,4 +413,5 @@ LIBBPF_1.4.0 {
 		bpf_token_create;
 		btf__new_split;
 		btf_ext__raw_data;
+		libbpf_find_kernel_btf_id;
 } LIBBPF_1.3.0;
