@@ -1,22 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include "vmlinux.h"
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
-
-#define MAX_PATH_LEN		128
-#define MAX_FILES		8
-
-pid_t my_pid = 0;
-__u32 cnt_stat = 0;
-__u32 cnt_close = 0;
-char paths_stat[MAX_FILES][MAX_PATH_LEN] = {};
-char paths_close[MAX_FILES][MAX_PATH_LEN] = {};
-int rets_stat[MAX_FILES] = {};
-int rets_close[MAX_FILES] = {};
-
-int called_stat = 0;
-int called_close = 0;
+#include "d_path_common.h"
 
 SEC("fentry/security_inode_getattr")
 int BPF_PROG(prog_stat, struct path *path, struct kstat *stat,
@@ -61,5 +45,3 @@ int BPF_PROG(prog_close, struct file *file, void *id)
 	cnt_close++;
 	return 0;
 }
-
-char _license[] SEC("license") = "GPL";

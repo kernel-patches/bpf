@@ -11,6 +11,8 @@
 #include "test_d_path.skel.h"
 #include "test_d_path_check_rdonly_mem.skel.h"
 #include "test_d_path_check_types.skel.h"
+#include "d_path_kfunc_failure.skel.h"
+#include "d_path_kfunc_success.skel.h"
 
 /* sys_close_range is not around for long time, so let's
  * make sure we can call it on systems with older glibc
@@ -44,7 +46,7 @@ static int set_pathname(int fd, pid_t pid)
 	return readlink(buf, src.want[src.cnt++].path, MAX_PATH_LEN);
 }
 
-static int trigger_fstat_events(pid_t pid)
+static int trigger_fstat_events(pid_t pid, bool want_error)
 {
 	int sockfd = -1, procfd = -1, devfd = -1, mntnsfd = -1;
 	int localfd = -1, indicatorfd = -1;
@@ -85,25 +87,25 @@ static int trigger_fstat_events(pid_t pid)
 	 * safely resolve paths that are comprised of dentries that make use of
 	 * dynamic names. We expect to return -EOPNOTSUPP for such paths.
 	 */
-	src.want[src.cnt].err = true;
+	src.want[src.cnt].err = want_error;
 	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(pipefd[0], pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[0]\n"))
 		goto out_close;
 
-	src.want[src.cnt].err = true;
+	src.want[src.cnt].err = want_error;
 	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(pipefd[1], pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[1]\n"))
 		goto out_close;
 
-	src.want[src.cnt].err = true;
+	src.want[src.cnt].err = want_error;
 	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(sockfd, pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for socket\n"))
 		goto out_close;
 
-	src.want[src.cnt].err = true;
+	src.want[src.cnt].err = want_error;
 	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(mntnsfd, pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for mntnsfd\n"))
@@ -151,11 +153,18 @@ out_close:
 	return ret;
 }
 
-static void test_d_path_basic(void)
+static void test_bpf_d_path_basic(void)
 {
 	struct test_d_path__bss *bss;
 	struct test_d_path *skel;
 	int err;
+
+	/*
+	 * Carrying global state across test function invocations is super
+	 * gross, but it was late and I was tired and I just wanted to get the
+	 * darn test working. Zero'ing this out was a simple no brainer.
+	 */
+	memset(&src, 0, sizeof(src));
 
 	skel = test_d_path__open_and_load();
 	if (CHECK(!skel, "setup", "d_path skeleton failed\n"))
@@ -168,7 +177,7 @@ static void test_d_path_basic(void)
 	bss = skel->bss;
 	bss->my_pid = getpid();
 
-	err = trigger_fstat_events(bss->my_pid);
+	err = trigger_fstat_events(bss->my_pid, /*want_error=*/true);
 	if (err < 0)
 		goto cleanup;
 
@@ -225,7 +234,7 @@ cleanup:
 	test_d_path__destroy(skel);
 }
 
-static void test_d_path_check_rdonly_mem(void)
+static void test_bpf_d_path_check_rdonly_mem(void)
 {
 	struct test_d_path_check_rdonly_mem *skel;
 
@@ -235,7 +244,7 @@ static void test_d_path_check_rdonly_mem(void)
 	test_d_path_check_rdonly_mem__destroy(skel);
 }
 
-static void test_d_path_check_types(void)
+static void test_bpf_d_path_check_types(void)
 {
 	struct test_d_path_check_types *skel;
 
@@ -245,14 +254,87 @@ static void test_d_path_check_types(void)
 	test_d_path_check_types__destroy(skel);
 }
 
+static struct bpf_path_d_path_t {
+	const char *prog_name;
+} success_test_cases[] = {
+	{
+		.prog_name = "path_d_path_from_path_argument",
+	},
+};
+
+static void test_bpf_path_d_path(struct bpf_path_d_path_t *t)
+{
+	int i, ret;
+	struct bpf_link *link;
+	struct bpf_program *prog;
+	struct d_path_kfunc_success__bss *bss;
+	struct d_path_kfunc_success *skel;
+
+	/*
+	 * Carrying global state across function invocations is super gross, but
+	 * it was late and I was tired and I just wanted to get the darn test
+	 * working. Zero'ing this out was a simple no brainer.
+	 */
+	memset(&src, 0, sizeof(src));
+
+	skel = d_path_kfunc_success__open();
+	if (!ASSERT_OK_PTR(skel, "d_path_kfunc_success__open"))
+		return;
+
+	bss = skel->bss;
+	bss->my_pid = getpid();
+
+	ret = d_path_kfunc_success__load(skel);
+	if (CHECK(ret, "setup", "d_path_kfunc_success__load\n"))
+		goto cleanup;
+
+	link = NULL;
+	prog = bpf_object__find_program_by_name(skel->obj, t->prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto cleanup;
+
+	link = bpf_program__attach(prog);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach"))
+		goto cleanup;
+
+	ret = trigger_fstat_events(bss->my_pid, /*want_error=*/false);
+	if (ret < 0)
+		goto cleanup;
+
+	for (i = 0; i < MAX_FILES; i++) {
+		struct want want = src.want[i];
+		CHECK(strncmp(want.path, bss->paths_stat[i], MAX_PATH_LEN),
+		      "check", "failed to get stat path[%d]: %s vs %s\n", i,
+		      want.path, bss->paths_stat[i]);
+		CHECK(bss->rets_stat[i] != strlen(bss->paths_stat[i]) + 1,
+		      "check",
+		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
+		      i, bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1,
+		      bss->paths_stat[i]);
+	}
+cleanup:
+	bpf_link__destroy(link);
+	d_path_kfunc_success__destroy(skel);
+}
+
 void test_d_path(void)
 {
+	int i = 0;
+
 	if (test__start_subtest("basic"))
-		test_d_path_basic();
+		test_bpf_d_path_basic();
 
 	if (test__start_subtest("check_rdonly_mem"))
-		test_d_path_check_rdonly_mem();
+		test_bpf_d_path_check_rdonly_mem();
 
 	if (test__start_subtest("check_alloc_mem"))
-		test_d_path_check_types();
+		test_bpf_d_path_check_types();
+
+	for (; i < ARRAY_SIZE(success_test_cases); i++) {
+		if (!test__start_subtest(success_test_cases[i].prog_name))
+			continue;
+		test_bpf_path_d_path(&success_test_cases[i]);
+	}
+
+	RUN_TESTS(d_path_kfunc_failure);
 }

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2022 Google */
 
-#include "vmlinux.h"
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
+#include "d_path_common.h"
 
 extern const int bpf_prog_active __ksym;
 
@@ -24,5 +22,3 @@ int BPF_PROG(d_path_check_rdonly_mem, struct path *path, struct kstat *stat,
 	}
 	return 0;
 }
-
-char _license[] SEC("license") = "GPL";
