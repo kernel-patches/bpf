@@ -3178,6 +3178,9 @@ static void bpf_tracing_link_dealloc(struct bpf_link *link)
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link.link);
 
+
+	btf_put(tr_link->attach_btf);
+	module_put(tr_link->mod);
 	kfree(tr_link);
 }
 
@@ -3220,6 +3223,35 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.fill_link_info = bpf_tracing_link_fill_link_info,
 };
 
+static int bpf_tracing_check_multi(struct bpf_prog *prog,
+				   struct bpf_prog *tgt_prog,
+				   struct btf *btf2,
+				   const struct btf_type *t2)
+{
+	struct btf *btf1 = prog->aux->attach_btf;
+	const struct btf_type *t1;
+
+	/* this case is already valided in bpf_check_attach_target() */
+	if (prog->type == BPF_PROG_TYPE_EXT)
+		return 0;
+
+	/* For now, noly support multi attach for kernel function attach
+	 * point.
+	 */
+	if (!btf1)
+		return -EOPNOTSUPP;
+
+	btf2 = btf2 ?: tgt_prog->aux->btf;
+	t1 = prog->aux->attach_func_proto;
+
+	/* the target is the same as the origin one, this is a re-attach */
+	if (t1 == t2)
+		return 0;
+
+	return btf_check_func_part_match(btf1, t1, btf2, t2,
+					 prog->aux->accessed_args);
+}
+
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id,
@@ -3228,7 +3260,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
 	struct bpf_trampoline *tr = NULL;
+	struct btf *attach_btf = NULL;
 	struct bpf_tracing_link *link;
+	struct module *mod = NULL;
 	u64 key = 0;
 	int err;
 
@@ -3258,31 +3292,50 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		goto out_put_prog;
 	}
 
-	if (!!tgt_prog_fd != !!btf_id) {
-		err = -EINVAL;
-		goto out_put_prog;
-	}
-
 	if (tgt_prog_fd) {
-		/*
-		 * For now we only allow new targets for BPF_PROG_TYPE_EXT. If this
-		 * part would be changed to implement the same for
-		 * BPF_PROG_TYPE_TRACING, do not forget to update the way how
-		 * attach_tracing_prog flag is set.
-		 */
-		if (prog->type != BPF_PROG_TYPE_EXT) {
+		if (!btf_id) {
 			err = -EINVAL;
 			goto out_put_prog;
 		}
-
 		tgt_prog = bpf_prog_get(tgt_prog_fd);
 		if (IS_ERR(tgt_prog)) {
-			err = PTR_ERR(tgt_prog);
 			tgt_prog = NULL;
-			goto out_put_prog;
+			/* tgt_prog_fd is the fd of the kernel module BTF */
+			attach_btf = btf_get_by_fd(tgt_prog_fd);
+			if (IS_ERR(attach_btf)) {
+				attach_btf = NULL;
+				err = -EINVAL;
+				goto out_put_prog;
+			}
+			if (!btf_is_kernel(attach_btf)) {
+				btf_put(attach_btf);
+				err = -EOPNOTSUPP;
+				goto out_put_prog;
+			}
+		} else if (prog->type == BPF_PROG_TYPE_TRACING &&
+			   tgt_prog->type == BPF_PROG_TYPE_TRACING) {
+			prog->aux->attach_tracing_prog = true;
 		}
-
-		key = bpf_trampoline_compute_key(tgt_prog, NULL, btf_id);
+		key = bpf_trampoline_compute_key(tgt_prog, attach_btf,
+						 btf_id);
+	} else if (btf_id) {
+		attach_btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(attach_btf)) {
+			attach_btf = NULL;
+			err = PTR_ERR(attach_btf);
+			goto out_unlock;
+		}
+		if (!attach_btf) {
+			err = -EINVAL;
+			goto out_unlock;
+		}
+		btf_get(attach_btf);
+		key = bpf_trampoline_compute_key(NULL, attach_btf, btf_id);
+	} else {
+		attach_btf = prog->aux->attach_btf;
+		/* get the reference of the btf for bpf link */
+		if (attach_btf)
+			btf_get(attach_btf);
 	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
@@ -3319,7 +3372,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	 *   are NULL, then program was already attached and user did not provide
 	 *   tgt_prog_fd so we have no way to find out or create trampoline
 	 */
-	if (!prog->aux->dst_trampoline && !tgt_prog) {
+	if (!prog->aux->dst_trampoline && !tgt_prog && !btf_id) {
 		/*
 		 * Allow re-attach for TRACING and LSM programs. If it's
 		 * currently linked, bpf_trampoline_link_prog will fail.
@@ -3346,17 +3399,27 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 * different from the destination specified at load time, we
 		 * need a new trampoline and a check for compatibility
 		 */
+		struct btf *origin_btf = prog->aux->attach_btf;
 		struct bpf_attach_target_info tgt_info = {};
 
+		/* use the new attach_btf to check the target */
+		prog->aux->attach_btf = attach_btf;
 		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
 					      &tgt_info);
+		prog->aux->attach_btf = origin_btf;
 		if (err)
 			goto out_unlock;
 
-		if (tgt_info.tgt_mod) {
-			module_put(prog->aux->mod);
-			prog->aux->mod = tgt_info.tgt_mod;
-		}
+		mod = tgt_info.tgt_mod;
+		/* the new target and the previous target are in the same
+		 * module, release the reference once.
+		 */
+		if (mod && mod == prog->aux->mod)
+			module_put(mod);
+		err = bpf_tracing_check_multi(prog, tgt_prog, attach_btf,
+					      tgt_info.tgt_type);
+		if (err)
+			goto out_unlock;
 
 		tr = bpf_trampoline_get(key, &tgt_info);
 		if (!tr) {
@@ -3373,6 +3436,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 */
 		tr = prog->aux->dst_trampoline;
 		tgt_prog = prog->aux->dst_prog;
+		mod = prog->aux->mod;
 	}
 
 	err = bpf_link_prime(&link->link.link, &link_primer);
@@ -3388,6 +3452,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 
 	link->tgt_prog = tgt_prog;
 	link->trampoline = tr;
+	link->attach_btf = attach_btf;
+	link->mod = mod;
 
 	/* Always clear the trampoline and target prog from prog->aux to make
 	 * sure the original attach destination is not kept alive after a
@@ -3400,20 +3466,27 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (prog->aux->dst_trampoline && tr != prog->aux->dst_trampoline)
 		/* we allocated a new trampoline, so free the old one */
 		bpf_trampoline_put(prog->aux->dst_trampoline);
+	if (prog->aux->mod && mod != prog->aux->mod)
+		/* the mod in prog is not used anywhere, move it to link */
+		module_put(prog->aux->mod);
 
 	prog->aux->dst_prog = NULL;
 	prog->aux->dst_trampoline = NULL;
+	prog->aux->mod = NULL;
 	mutex_unlock(&prog->aux->dst_mutex);
 
 	return bpf_link_settle(&link_primer);
 out_unlock:
 	if (tr && tr != prog->aux->dst_trampoline)
 		bpf_trampoline_put(tr);
+	if (mod && mod != prog->aux->mod)
+		module_put(mod);
 	mutex_unlock(&prog->aux->dst_mutex);
 	kfree(link);
 out_put_prog:
 	if (tgt_prog_fd && tgt_prog)
 		bpf_prog_put(tgt_prog);
+	btf_put(attach_btf);
 	return err;
 }
 

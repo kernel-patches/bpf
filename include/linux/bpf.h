@@ -1606,6 +1606,8 @@ struct bpf_tracing_link {
 	enum bpf_attach_type attach_type;
 	struct bpf_trampoline *trampoline;
 	struct bpf_prog *tgt_prog;
+	struct btf *attach_btf;
+	struct module *mod;
 };
 
 struct bpf_link_primer {

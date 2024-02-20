@@ -1668,6 +1668,7 @@ union bpf_attr {
 		union {
 			__u32	target_fd;	/* target object to attach to or ... */
 			__u32	target_ifindex; /* target ifindex */
+			__u32	target_btf_obj_fd;
 		};
 		__u32		attach_type;	/* attach type */
 		__u32		flags;		/* extra flags */
