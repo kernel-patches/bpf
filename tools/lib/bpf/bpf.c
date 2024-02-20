@@ -737,23 +737,15 @@ int bpf_link_create(int prog_fd, int target_fd,
 	target_btf_id = OPTS_GET(opts, target_btf_id, 0);
 
 	/* validate we don't have unexpected combinations of non-zero fields */
-	if (iter_info_len || target_btf_id) {
-		if (iter_info_len && target_btf_id)
-			return libbpf_err(-EINVAL);
-		if (!OPTS_ZEROED(opts, target_btf_id))
-			return libbpf_err(-EINVAL);
-	}
+	if (iter_info_len && target_btf_id)
+		return libbpf_err(-EINVAL);
 
 	memset(&attr, 0, attr_sz);
 	attr.link_create.prog_fd = prog_fd;
 	attr.link_create.target_fd = target_fd;
 	attr.link_create.attach_type = attach_type;
 	attr.link_create.flags = OPTS_GET(opts, flags, 0);
-
-	if (target_btf_id) {
-		attr.link_create.target_btf_id = target_btf_id;
-		goto proceed;
-	}
+	attr.link_create.target_btf_id = target_btf_id;
 
 	switch (attach_type) {
 	case BPF_TRACE_ITER:
@@ -834,11 +826,10 @@ int bpf_link_create(int prog_fd, int target_fd,
 			return libbpf_err(-EINVAL);
 		break;
 	default:
-		if (!OPTS_ZEROED(opts, flags))
+		if (!target_btf_id && !OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);
 		break;
 	}
-proceed:
 	fd = sys_bpf_fd(BPF_LINK_CREATE, &attr, attr_sz);
 	if (fd >= 0)
 		return fd;
