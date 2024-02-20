@@ -1635,6 +1635,36 @@ __bpf_kfunc void bpf_put_path(struct path *path)
 	path_put(path);
 }
 
+/**
+ * bpf_path_d_path - resolve the pathname for a given path
+ * @path: path to resolve the pathname for
+ * @buf: buffer to return the resolved path value in
+ * @buflen: length of the supplied buffer
+ *
+ * Resolve the pathname for the supplied trusted *path* in *buf*. This kfunc is
+ * the trusted/safer variant of the legacy bpf_d_path() helper.
+ *
+ * Return: A strictly positive integer corresponding to the length of the string
+ * representing the resolved pathname, including the NUL termination
+ * character. On error, a negative integer is returned.
+ */
+__bpf_kfunc int bpf_path_d_path(struct path *path, char *buf, int buflen)
+{
+	int len;
+	char *ret;
+
+	if (buflen <= 0)
+		return -EINVAL;
+
+	ret = d_path(path, buf, buflen);
+	if (IS_ERR(ret))
+		return PTR_ERR(ret);
+
+	len = buf + buflen - ret;
+	memmove(buf, ret, len);
+	return len;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(lsm_kfunc_set_ids)
@@ -1651,6 +1681,7 @@ BTF_ID_FLAGS(func, bpf_get_task_fs_root,
 BTF_ID_FLAGS(func, bpf_get_task_fs_pwd,
 	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_path, KF_RELEASE | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_path_d_path, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_KFUNCS_END(lsm_kfunc_set_ids)
 
 static int bpf_lsm_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
