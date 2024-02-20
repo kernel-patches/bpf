@@ -34,4 +34,9 @@ static inline pgprot_t arch_vmap_pgprot_tagged(pgprot_t prot)
 extern unsigned long code_region_start __ro_after_init;
 extern unsigned long code_region_end __ro_after_init;
 
+#define IS_DATA_VMALLOC_ADDR(vaddr) (((vaddr) < code_region_start || \
+				      (vaddr) > code_region_end) && \
+				      ((vaddr) >= VMALLOC_START && \
+				       (vaddr) < VMALLOC_END))
+
 #endif /* _ASM_ARM64_VMALLOC_H */
