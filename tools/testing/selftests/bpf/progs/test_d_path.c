@@ -5,7 +5,7 @@
 #include <bpf/bpf_tracing.h>
 
 #define MAX_PATH_LEN		128
-#define MAX_FILES		7
+#define MAX_FILES		8
 
 pid_t my_pid = 0;
 __u32 cnt_stat = 0;

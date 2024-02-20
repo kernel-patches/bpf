@@ -6,7 +6,7 @@
 #include <sys/syscall.h>
 
 #define MAX_PATH_LEN		128
-#define MAX_FILES		7
+#define MAX_FILES		8
 
 #include "test_d_path.skel.h"
 #include "test_d_path_check_rdonly_mem.skel.h"
@@ -25,9 +25,15 @@
 
 static int duration;
 
+struct want {
+	bool err;
+	long err_code;
+	char path[MAX_PATH_LEN];
+};
+
 static struct {
 	__u32 cnt;
-	char paths[MAX_FILES][MAX_PATH_LEN];
+	struct want want[MAX_FILES];
 } src;
 
 static int set_pathname(int fd, pid_t pid)
@@ -35,12 +41,12 @@ static int set_pathname(int fd, pid_t pid)
 	char buf[MAX_PATH_LEN];
 
 	snprintf(buf, MAX_PATH_LEN, "/proc/%d/fd/%d", pid, fd);
-	return readlink(buf, src.paths[src.cnt++], MAX_PATH_LEN);
+	return readlink(buf, src.want[src.cnt++].path, MAX_PATH_LEN);
 }
 
 static int trigger_fstat_events(pid_t pid)
 {
-	int sockfd = -1, procfd = -1, devfd = -1;
+	int sockfd = -1, procfd = -1, devfd = -1, mntnsfd = -1;
 	int localfd = -1, indicatorfd = -1;
 	int pipefd[2] = { -1, -1 };
 	struct stat fileStat;
@@ -49,10 +55,15 @@ static int trigger_fstat_events(pid_t pid)
 	/* unmountable pseudo-filesystems */
 	if (CHECK(pipe(pipefd) < 0, "trigger", "pipe failed\n"))
 		return ret;
-	/* unmountable pseudo-filesystems */
+
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (CHECK(sockfd < 0, "trigger", "socket failed\n"))
 		goto out_close;
+
+	mntnsfd = open("/proc/self/ns/mnt", O_RDONLY);
+	if (CHECK(mntnsfd < 0, "trigger", "mntnsfd failed"))
+		goto out_close;
+
 	/* mountable pseudo-filesystems */
 	procfd = open("/proc/self/comm", O_RDONLY);
 	if (CHECK(procfd < 0, "trigger", "open /proc/self/comm failed\n"))
@@ -69,15 +80,35 @@ static int trigger_fstat_events(pid_t pid)
 	if (CHECK(indicatorfd < 0, "trigger", "open /tmp/ failed\n"))
 		goto out_close;
 
+	/*
+	 * With bpf_d_path() being backed by probe-read semantics, we cannot
+	 * safely resolve paths that are comprised of dentries that make use of
+	 * dynamic names. We expect to return -EOPNOTSUPP for such paths.
+	 */
+	src.want[src.cnt].err = true;
+	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(pipefd[0], pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[0]\n"))
 		goto out_close;
+
+	src.want[src.cnt].err = true;
+	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(pipefd[1], pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[1]\n"))
 		goto out_close;
+
+	src.want[src.cnt].err = true;
+	src.want[src.cnt].err_code = -EOPNOTSUPP;
 	ret = set_pathname(sockfd, pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for socket\n"))
 		goto out_close;
+
+	src.want[src.cnt].err = true;
+	src.want[src.cnt].err_code = -EOPNOTSUPP;
+	ret = set_pathname(mntnsfd, pid);
+	if (CHECK(ret < 0, "trigger", "set_pathname failed for mntnsfd\n"))
+		goto out_close;
+
 	ret = set_pathname(procfd, pid);
 	if (CHECK(ret < 0, "trigger", "set_pathname failed for proc\n"))
 		goto out_close;
@@ -95,6 +126,7 @@ static int trigger_fstat_events(pid_t pid)
 	fstat(pipefd[0], &fileStat);
 	fstat(pipefd[1], &fileStat);
 	fstat(sockfd, &fileStat);
+	fstat(mntnsfd, &fileStat);
 	fstat(procfd, &fileStat);
 	fstat(devfd, &fileStat);
 	fstat(localfd, &fileStat);
@@ -109,6 +141,7 @@ out_close:
 	close(pipefd[0]);
 	close(pipefd[1]);
 	close(sockfd);
+	close(mntnsfd);
 	close(procfd);
 	close(devfd);
 	close(localfd);
@@ -150,24 +183,41 @@ static void test_d_path_basic(void)
 		goto cleanup;
 
 	for (int i = 0; i < MAX_FILES; i++) {
-		CHECK(strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
-		      "check",
-		      "failed to get stat path[%d]: %s vs %s\n",
-		      i, src.paths[i], bss->paths_stat[i]);
-		CHECK(strncmp(src.paths[i], bss->paths_close[i], MAX_PATH_LEN),
-		      "check",
-		      "failed to get close path[%d]: %s vs %s\n",
-		      i, src.paths[i], bss->paths_close[i]);
+		struct want want = src.want[i];
+
+		/*
+		 * Assert that we get the correct error code from bpf_d_path()
+		 * when the underlying path contains a dentry that is backed by
+		 * a dynamic name.
+		 */
+		if (want.err) {
+			CHECK(want.err_code != bss->rets_stat[i], "check",
+			      "failed to match stat return[%d]: got=%d, want=%ld [%s]\n",
+			      i, bss->rets_stat[i], want.err_code,
+			      bss->paths_stat[i]);
+			CHECK(want.err_code != bss->rets_close[i], "check",
+			      "failed to match close return[%d]: got=%d, want=%ld [%s]\n",
+			      i, bss->rets_close[i], want.err_code,
+			      bss->paths_close[i]);
+			continue;
+		}
+
+		CHECK(strncmp(want.path, bss->paths_stat[i], MAX_PATH_LEN),
+		      "check", "failed to get stat path[%d]: %s vs %s\n", i,
+		      want.path, bss->paths_stat[i]);
+		CHECK(strncmp(want.path, bss->paths_close[i], MAX_PATH_LEN),
+		      "check", "failed to get close path[%d]: %s vs %s\n", i,
+		      want.path, bss->paths_close[i]);
 		/* The d_path helper returns size plus NUL char, hence + 1 */
 		CHECK(bss->rets_stat[i] != strlen(bss->paths_stat[i]) + 1,
 		      "check",
-		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
-		      i, bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1,
+		      "failed to match stat return [%d]: %d vs %zd [%s]\n", i,
+		      bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1,
 		      bss->paths_stat[i]);
 		CHECK(bss->rets_close[i] != strlen(bss->paths_stat[i]) + 1,
 		      "check",
-		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
-		      i, bss->rets_close[i], strlen(bss->paths_close[i]) + 1,
+		      "failed to match stat return [%d]: %d vs %zd [%s]\n", i,
+		      bss->rets_close[i], strlen(bss->paths_close[i]) + 1,
 		      bss->paths_stat[i]);
 	}
 
