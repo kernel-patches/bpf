@@ -679,7 +679,9 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			if (err)
 				goto reset_unlock;
 		}
-		arch_protect_bpf_trampoline(st_map->image, PAGE_SIZE);
+		err = arch_protect_bpf_trampoline(st_map->image, PAGE_SIZE);
+		if (err)
+			goto reset_unlock;
 		/* Let bpf_link handle registration & unregistration.
 		 *
 		 * Pair with smp_load_acquire() during lookup_elem().
@@ -688,7 +690,10 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		goto unlock;
 	}
 
-	arch_protect_bpf_trampoline(st_map->image, PAGE_SIZE);
+	err = arch_protect_bpf_trampoline(st_map->image, PAGE_SIZE);
+	if (err)
+		goto reset_unlock;
+
 	err = st_ops->reg(kdata);
 	if (likely(!err)) {
 		/* This refcnt increment on the map here after

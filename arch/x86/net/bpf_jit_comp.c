@@ -2780,12 +2780,14 @@ void arch_free_bpf_trampoline(void *image, unsigned int size)
 	bpf_prog_pack_free(image, size);
 }
 
-void arch_protect_bpf_trampoline(void *image, unsigned int size)
+int arch_protect_bpf_trampoline(void *image, unsigned int size)
 {
+	return 0;
 }
 
-void arch_unprotect_bpf_trampoline(void *image, unsigned int size)
+int arch_unprotect_bpf_trampoline(void *image, unsigned int size)
 {
+	return 0;
 }
 
 int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *image_end,
