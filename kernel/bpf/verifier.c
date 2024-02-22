@@ -3309,24 +3309,34 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 	return env->insn_aux_data[insn_idx].jmp_point;
 }
 
+static struct bpf_jmp_history_entry *get_jmp_hist_entry(struct bpf_verifier_state *st,
+							u32 hist_end, int insn_idx)
+{
+	if (hist_end > 0 && st->jmp_history[hist_end - 1].idx == insn_idx)
+		return &st->jmp_history[hist_end - 1];
+	return NULL;
+}
+
 /* for any branch, call, exit record the history of jmps in the given state */
 static int push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_state *cur,
 			    int insn_flags)
 {
+	struct bpf_jmp_history_entry *p, *cur_hist_ent;
 	u32 cnt = cur->jmp_history_cnt;
-	struct bpf_jmp_history_entry *p;
 	size_t alloc_size;
 
+	cur_hist_ent = get_jmp_hist_entry(cur, cnt, env->insn_idx);
+
 	/* combine instruction flags if we already recorded this instruction */
-	if (env->cur_hist_ent) {
+	if (cur_hist_ent) {
 		/* atomic instructions push insn_flags twice, for READ and
 		 * WRITE sides, but they should agree on stack slot
 		 */
-		WARN_ONCE((env->cur_hist_ent->flags & insn_flags) &&
-			  (env->cur_hist_ent->flags & insn_flags) != insn_flags,
+		WARN_ONCE((cur_hist_ent->flags & insn_flags) &&
+			  (cur_hist_ent->flags & insn_flags) != insn_flags,
 			  "verifier insn history bug: insn_idx %d cur flags %x new flags %x\n",
-			  env->insn_idx, env->cur_hist_ent->flags, insn_flags);
-		env->cur_hist_ent->flags |= insn_flags;
+			  env->insn_idx, cur_hist_ent->flags, insn_flags);
+		cur_hist_ent->flags |= insn_flags;
 		return 0;
 	}
 
@@ -3342,17 +3352,8 @@ static int push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_st
 	p->prev_idx = env->prev_insn_idx;
 	p->flags = insn_flags;
 	cur->jmp_history_cnt = cnt;
-	env->cur_hist_ent = p;
 
 	return 0;
-}
-
-static struct bpf_jmp_history_entry *get_jmp_hist_entry(struct bpf_verifier_state *st,
-						        u32 hist_end, int insn_idx)
-{
-	if (hist_end > 0 && st->jmp_history[hist_end - 1].idx == insn_idx)
-		return &st->jmp_history[hist_end - 1];
-	return NULL;
 }
 
 /* Backtrack one insn at a time. If idx is not at the top of recorded
@@ -17444,9 +17445,6 @@ static int do_check(struct bpf_verifier_env *env)
 		struct bpf_insn *insn;
 		u8 class;
 		int err;
-
-		/* reset current history entry on each new instruction */
-		env->cur_hist_ent = NULL;
 
 		env->prev_insn_idx = prev_insn_idx;
 		if (env->insn_idx >= insn_cnt) {
