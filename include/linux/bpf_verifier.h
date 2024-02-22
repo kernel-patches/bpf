@@ -361,6 +361,7 @@ struct bpf_jmp_history_entry {
 	u32 prev_idx : 22;
 	/* special flags, e.g., whether insn is doing register stack spill/load */
 	u32 flags : 10;
+	u64 equal_scalars;
 };
 
 /* Maximum number of register states that can exist at once */

@@ -3309,6 +3309,76 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 	return env->insn_aux_data[insn_idx].jmp_point;
 }
 
+#define ES_FRAMENO_BITS	3
+#define ES_SPI_BITS	6
+#define ES_ENTRY_BITS	(ES_SPI_BITS + ES_FRAMENO_BITS + 1)
+#define ES_SIZE_BITS	4
+#define ES_FRAMENO_MASK	((1ul << ES_FRAMENO_BITS) - 1)
+#define ES_SPI_MASK	((1ul << ES_SPI_BITS)     - 1)
+#define ES_SIZE_MASK	((1ul << ES_SIZE_BITS)    - 1)
+#define ES_SPI_OFF	ES_FRAMENO_BITS
+#define ES_IS_REG_OFF	(ES_SPI_BITS + ES_FRAMENO_BITS)
+
+/* Pack one history entry for equal scalars as 10 bits in the following format:
+ * - 3-bits frameno
+ * - 6-bits spi_or_reg
+ * - 1-bit  is_reg
+ */
+static u64 equal_scalars_pack(u32 frameno, u32 spi_or_reg, bool is_reg)
+{
+	u64 val = 0;
+
+	val |= frameno & ES_FRAMENO_MASK;
+	val |= (spi_or_reg & ES_SPI_MASK) << ES_SPI_OFF;
+	val |= (is_reg ? 1 : 0) << ES_IS_REG_OFF;
+	return val;
+}
+
+static void equal_scalars_unpack(u64 val, u32 *frameno, u32 *spi_or_reg, bool *is_reg)
+{
+	*frameno    =  val & ES_FRAMENO_MASK;
+	*spi_or_reg = (val >> ES_SPI_OFF) & ES_SPI_MASK;
+	*is_reg     = (val >> ES_IS_REG_OFF) & 0x1;
+}
+
+static u32 equal_scalars_size(u64 equal_scalars)
+{
+	return equal_scalars & ES_SIZE_MASK;
+}
+
+/* Use u64 as a stack of 6 10-bit values, use first 4-bits to track
+ * number of elements currently in stack.
+ */
+static bool equal_scalars_push(u64 *equal_scalars, u32 frameno, u32 spi_or_reg, bool is_reg)
+{
+	u32 num;
+
+	num = equal_scalars_size(*equal_scalars);
+	if (num == 6)
+		return false;
+	*equal_scalars >>= ES_SIZE_BITS;
+	*equal_scalars <<= ES_ENTRY_BITS;
+	*equal_scalars |= equal_scalars_pack(frameno, spi_or_reg, is_reg);
+	*equal_scalars <<= ES_SIZE_BITS;
+	*equal_scalars |= num + 1;
+	return true;
+}
+
+static bool equal_scalars_pop(u64 *equal_scalars, u32 *frameno, u32 *spi_or_reg, bool *is_reg)
+{
+	u32 num;
+
+	num = equal_scalars_size(*equal_scalars);
+	if (num == 0)
+		return false;
+	*equal_scalars >>= ES_SIZE_BITS;
+	equal_scalars_unpack(*equal_scalars, frameno, spi_or_reg, is_reg);
+	*equal_scalars >>= ES_ENTRY_BITS;
+	*equal_scalars <<= ES_SIZE_BITS;
+	*equal_scalars |= num - 1;
+	return true;
+}
+
 static struct bpf_jmp_history_entry *get_jmp_hist_entry(struct bpf_verifier_state *st,
 							u32 hist_end, int insn_idx)
 {
@@ -3319,7 +3389,7 @@ static struct bpf_jmp_history_entry *get_jmp_hist_entry(struct bpf_verifier_stat
 
 /* for any branch, call, exit record the history of jmps in the given state */
 static int push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_state *cur,
-			    int insn_flags)
+			    int insn_flags, u64 equal_scalars)
 {
 	struct bpf_jmp_history_entry *p, *cur_hist_ent;
 	u32 cnt = cur->jmp_history_cnt;
@@ -3337,6 +3407,12 @@ static int push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_st
 			  "verifier insn history bug: insn_idx %d cur flags %x new flags %x\n",
 			  env->insn_idx, cur_hist_ent->flags, insn_flags);
 		cur_hist_ent->flags |= insn_flags;
+		if (cur_hist_ent->equal_scalars != 0) {
+			verbose(env, "verifier bug: insn_idx %d equal_scalars != 0: %#llx\n",
+				env->insn_idx, cur_hist_ent->equal_scalars);
+			return -EFAULT;
+		}
+		cur_hist_ent->equal_scalars = equal_scalars;
 		return 0;
 	}
 
@@ -3351,6 +3427,7 @@ static int push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_st
 	p->idx = env->insn_idx;
 	p->prev_idx = env->prev_insn_idx;
 	p->flags = insn_flags;
+	p->equal_scalars = equal_scalars;
 	cur->jmp_history_cnt = cnt;
 
 	return 0;
@@ -3507,6 +3584,11 @@ static inline bool bt_is_reg_set(struct backtrack_state *bt, u32 reg)
 	return bt->reg_masks[bt->frame] & (1 << reg);
 }
 
+static inline bool bt_is_frame_reg_set(struct backtrack_state *bt, u32 frame, u32 reg)
+{
+	return bt->reg_masks[frame] & (1 << reg);
+}
+
 static inline bool bt_is_frame_slot_set(struct backtrack_state *bt, u32 frame, u32 slot)
 {
 	return bt->stack_masks[frame] & (1ull << slot);
@@ -3548,6 +3630,39 @@ static void fmt_stack_mask(char *buf, ssize_t buf_sz, u64 stack_mask)
 		buf_sz -= n;
 		if (buf_sz < 0)
 			break;
+	}
+}
+
+/* If any register R in hist->equal_scalars is marked as precise in bt,
+ * do bt_set_frame_{reg,slot}(bt, R) for all registers in hist->equal_scalars.
+ */
+static void bt_set_equal_scalars(struct backtrack_state *bt, struct bpf_jmp_history_entry *hist)
+{
+	bool is_reg, some_precise = false;
+	u64 equal_scalars;
+	u32 fr, spi;
+
+	if (!hist || hist->equal_scalars == 0)
+		return;
+
+	equal_scalars = hist->equal_scalars;
+	while (equal_scalars_pop(&equal_scalars, &fr, &spi, &is_reg)) {
+		if ((is_reg && bt_is_frame_reg_set(bt, fr, spi)) ||
+		    (!is_reg && bt_is_frame_slot_set(bt, fr, spi))) {
+			some_precise = true;
+			break;
+		}
+	}
+
+	if (!some_precise)
+		return;
+
+	equal_scalars = hist->equal_scalars;
+	while (equal_scalars_pop(&equal_scalars, &fr, &spi, &is_reg)) {
+		if (is_reg)
+			bt_set_frame_reg(bt, fr, spi);
+		else
+			bt_set_frame_slot(bt, fr, spi);
 	}
 }
 
@@ -3807,6 +3922,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 */
 			return 0;
 		} else if (BPF_SRC(insn->code) == BPF_X) {
+			bt_set_equal_scalars(bt, hist);
 			if (!bt_is_reg_set(bt, dreg) && !bt_is_reg_set(bt, sreg))
 				return 0;
 			/* dreg <cond> sreg
@@ -3817,6 +3933,9 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 */
 			bt_set_reg(bt, dreg);
 			bt_set_reg(bt, sreg);
+			bt_set_equal_scalars(bt, hist);
+		} else if (BPF_SRC(insn->code) == BPF_K) {
+			bt_set_equal_scalars(bt, hist);
 			 /* else dreg <cond> K
 			  * Only dreg still needs precision before
 			  * this insn, so for the K-based conditional
@@ -4584,7 +4703,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	}
 
 	if (insn_flags)
-		return push_jmp_history(env, env->cur_state, insn_flags);
+		return push_jmp_history(env, env->cur_state, insn_flags, 0);
 	return 0;
 }
 
@@ -4889,7 +5008,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 		insn_flags = 0; /* we are not restoring spilled register */
 	}
 	if (insn_flags)
-		return push_jmp_history(env, env->cur_state, insn_flags);
+		return push_jmp_history(env, env->cur_state, insn_flags, 0);
 	return 0;
 }
 
@@ -14843,16 +14962,58 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	return true;
 }
 
-static void find_equal_scalars(struct bpf_verifier_state *vstate,
-			       struct bpf_reg_state *known_reg)
+static void __find_equal_scalars(u64 *equal_scalars,
+				 struct bpf_reg_state *reg,
+				 u32 id, u32 frameno, u32 spi_or_reg, bool is_reg)
 {
-	struct bpf_func_state *state;
-	struct bpf_reg_state *reg;
+	if (reg->type != SCALAR_VALUE || reg->id != id)
+		return;
 
-	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
-		if (reg->type == SCALAR_VALUE && reg->id == known_reg->id)
+	if (!equal_scalars_push(equal_scalars, frameno, spi_or_reg, is_reg))
+		reg->id = 0;
+}
+
+/* For all R being scalar registers or spilled scalar registers
+ * in verifier state, save R in equal_scalars if R->id == id.
+ * If there are too many Rs sharing same id, reset id for leftover Rs.
+ */
+static void find_equal_scalars(struct bpf_verifier_state *vstate, u32 id, u64 *equal_scalars)
+{
+	struct bpf_func_state *func;
+	struct bpf_reg_state *reg;
+	int i, j;
+
+	for (i = vstate->curframe; i >= 0; i--) {
+		func = vstate->frame[i];
+		for (j = 0; j < BPF_REG_FP; j++) {
+			reg = &func->regs[j];
+			__find_equal_scalars(equal_scalars, reg, id, i, j, true);
+		}
+		for (j = 0; j < func->allocated_stack / BPF_REG_SIZE; j++) {
+			if (!is_spilled_reg(&func->stack[j]))
+				continue;
+			reg = &func->stack[j].spilled_ptr;
+			__find_equal_scalars(equal_scalars, reg, id, i, j, false);
+		}
+	}
+}
+
+/* For all R in equal_scalars, copy known_reg range into R
+ * if R->id == known_reg->id.
+ */
+static void copy_known_reg(struct bpf_verifier_state *vstate,
+			   struct bpf_reg_state *known_reg, u64 equal_scalars)
+{
+	struct bpf_reg_state *reg;
+	u32 fr, spi;
+	bool is_reg;
+
+	while (equal_scalars_pop(&equal_scalars, &fr, &spi, &is_reg)) {
+		reg = is_reg ? &vstate->frame[fr]->regs[spi]
+			     : &vstate->frame[fr]->stack[spi].spilled_ptr;
+		if (reg->id == known_reg->id)
 			copy_register_state(reg, known_reg);
-	}));
+	}
 }
 
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
@@ -14865,6 +15026,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	struct bpf_reg_state *eq_branch_regs;
 	struct bpf_reg_state fake_reg = {};
 	u8 opcode = BPF_OP(insn->code);
+	u64 equal_scalars = 0;
 	bool is_jmp32;
 	int pred = -1;
 	int err;
@@ -14952,6 +15114,21 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		return 0;
 	}
 
+	/* Push scalar registers sharing same ID to jump history,
+	 * do this before creating 'other_branch', so that both
+	 * 'this_branch' and 'other_branch' share this history
+	 * if parent state is created.
+	 */
+	if (BPF_SRC(insn->code) == BPF_X && src_reg->type == SCALAR_VALUE && src_reg->id)
+		find_equal_scalars(this_branch, src_reg->id, &equal_scalars);
+	if (dst_reg->type == SCALAR_VALUE && dst_reg->id)
+		find_equal_scalars(this_branch, dst_reg->id, &equal_scalars);
+	if (equal_scalars_size(equal_scalars) > 1) {
+		err = push_jmp_history(env, this_branch, 0, equal_scalars);
+		if (err)
+			return err;
+	}
+
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx,
 				  false);
 	if (!other_branch)
@@ -14976,13 +15153,13 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	if (BPF_SRC(insn->code) == BPF_X &&
 	    src_reg->type == SCALAR_VALUE && src_reg->id &&
 	    !WARN_ON_ONCE(src_reg->id != other_branch_regs[insn->src_reg].id)) {
-		find_equal_scalars(this_branch, src_reg);
-		find_equal_scalars(other_branch, &other_branch_regs[insn->src_reg]);
+		copy_known_reg(this_branch, src_reg, equal_scalars);
+		copy_known_reg(other_branch, &other_branch_regs[insn->src_reg], equal_scalars);
 	}
 	if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
 	    !WARN_ON_ONCE(dst_reg->id != other_branch_regs[insn->dst_reg].id)) {
-		find_equal_scalars(this_branch, dst_reg);
-		find_equal_scalars(other_branch, &other_branch_regs[insn->dst_reg]);
+		copy_known_reg(this_branch, dst_reg, equal_scalars);
+		copy_known_reg(other_branch, &other_branch_regs[insn->dst_reg], equal_scalars);
 	}
 
 	/* if one pointer register is compared to another pointer
@@ -17221,7 +17398,7 @@ hit:
 			 * the current state.
 			 */
 			if (is_jmp_point(env, env->insn_idx))
-				err = err ? : push_jmp_history(env, cur, 0);
+				err = err ? : push_jmp_history(env, cur, 0, 0);
 			err = err ? : propagate_precision(env, &sl->state);
 			if (err)
 				return err;
@@ -17485,7 +17662,7 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		if (is_jmp_point(env, env->insn_idx)) {
-			err = push_jmp_history(env, state, 0);
+			err = push_jmp_history(env, state, 0, 0);
 			if (err)
 				return err;
 		}
