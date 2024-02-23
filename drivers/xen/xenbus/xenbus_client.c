@@ -758,7 +758,7 @@ static int xenbus_map_ring_pv(struct xenbus_device *dev,
 	bool leaked = false;
 	int err = -ENOMEM;
 
-	area = get_vm_area(XEN_PAGE_SIZE * nr_grefs, VM_IOREMAP);
+	area = get_vm_area(XEN_PAGE_SIZE * nr_grefs, VM_XEN);
 	if (!area)
 		return -ENOMEM;
 	if (apply_to_page_range(&init_mm, (unsigned long)area->addr,

@@ -3822,9 +3822,9 @@ long vread_iter(struct iov_iter *iter, const char *addr, size_t count)
 
 		if (flags & VMAP_RAM)
 			copied = vmap_ram_vread_iter(iter, addr, n, flags);
-		else if (!(vm && (vm->flags & VM_IOREMAP)))
+		else if (!(vm && (vm->flags & (VM_IOREMAP | VM_XEN))))
 			copied = aligned_vread_iter(iter, addr, n);
-		else /* IOREMAP area is treated as memory hole */
+		else /* IOREMAP|XEN area is treated as memory hole */
 			copied = zero_iter(iter, n);
 
 		addr += copied;
@@ -4414,6 +4414,9 @@ static int s_show(struct seq_file *m, void *p)
 
 	if (v->flags & VM_IOREMAP)
 		seq_puts(m, " ioremap");
+
+	if (v->flags & VM_XEN)
+		seq_puts(m, " xen");
 
 	if (v->flags & VM_ALLOC)
 		seq_puts(m, " vmalloc");
