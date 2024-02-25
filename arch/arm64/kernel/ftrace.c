@@ -497,7 +497,7 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		return;
 
 	if (!function_graph_enter_ops(*parent, ip, frame_pointer,
-				      (void *)frame_pointer, gops))
+				      (void *)frame_pointer, fregs, gops))
 		*parent = (unsigned long)&return_to_handler;
 
 	ftrace_test_recursion_unlock(bit);

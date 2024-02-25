@@ -254,7 +254,7 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 
 	old = *parent;
 
-	if (!function_graph_enter_ops(old, ip, 0, parent, gops))
+	if (!function_graph_enter_ops(old, ip, 0, parent, fregs, gops))
 		*parent = return_hooker;
 }
 #else
