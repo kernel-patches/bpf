@@ -5,32 +5,56 @@
 
 #include <linux/compiler.h>
 #include <linux/ftrace.h>
-#include <linux/rethook.h>
+#include <linux/rcupdate.h>
+#include <linux/refcount.h>
+#include <linux/slab.h>
+
+struct fprobe;
+
+/**
+ * strcut fprobe_hlist_node - address based hash list node for fprobe.
+ *
+ * @hlist: The hlist node for address search hash table.
+ * @addr: The address represented by this.
+ * @fp: The fprobe which owns this.
+ */
+struct fprobe_hlist_node {
+	struct hlist_node	hlist;
+	unsigned long		addr;
+	struct fprobe		*fp;
+};
+
+/**
+ * struct fprobe_hlist - hash list nodes for fprobe.
+ *
+ * @hlist: The hlist node for existence checking hash table.
+ * @rcu: rcu_head for RCU deferred release.
+ * @fp: The fprobe which owns this fprobe_hlist.
+ * @size: The size of @array.
+ * @array: The fprobe_hlist_node for each address to probe.
+ */
+struct fprobe_hlist {
+	struct hlist_node		hlist;
+	struct rcu_head			rcu;
+	struct fprobe			*fp;
+	int				size;
+	struct fprobe_hlist_node	array[];
+};
 
 /**
  * struct fprobe - ftrace based probe.
- * @ops: The ftrace_ops.
+ *
  * @nmissed: The counter for missing events.
  * @flags: The status flag.
- * @rethook: The rethook data structure. (internal data)
  * @entry_data_size: The private data storage size.
- * @nr_maxactive: The max number of active functions.
+ * @nr_maxactive: The max number of active functions. (*deprecated)
  * @entry_handler: The callback function for function entry.
  * @exit_handler: The callback function for function exit.
+ * @hlist_array: The fprobe_hlist for fprobe search from IP hash table.
  */
 struct fprobe {
-#ifdef CONFIG_FUNCTION_TRACER
-	/*
-	 * If CONFIG_FUNCTION_TRACER is not set, CONFIG_FPROBE is disabled too.
-	 * But user of fprobe may keep embedding the struct fprobe on their own
-	 * code. To avoid build error, this will keep the fprobe data structure
-	 * defined here, but remove ftrace_ops data structure.
-	 */
-	struct ftrace_ops	ops;
-#endif
 	unsigned long		nmissed;
 	unsigned int		flags;
-	struct rethook		*rethook;
 	size_t			entry_data_size;
 	int			nr_maxactive;
 
@@ -40,6 +64,8 @@ struct fprobe {
 	void (*exit_handler)(struct fprobe *fp, unsigned long entry_ip,
 			     unsigned long ret_ip, struct ftrace_regs *fregs,
 			     void *entry_data);
+
+	struct fprobe_hlist	*hlist_array;
 };
 
 /* This fprobe is soft-disabled. */

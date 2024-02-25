@@ -254,6 +254,13 @@ static __always_inline bool ftrace_regs_has_args(struct ftrace_regs *fregs)
 	regs_query_register_offset(name)
 #define ftrace_regs_get_frame_pointer(fregs) \
 	frame_pointer(&(fregs)->regs)
+
+#ifdef CONFIG_HAVE_FUNCTION_GRAPH_FREGS
+/* This function works correctly in ftrace entry function. */
+static __always_inline unsigned long
+ftrace_regs_get_return_address(struct ftrace_regs *fregs);
+#endif
+
 #endif
 
 #ifdef CONFIG_HAVE_REGS_AND_STACK_ACCESS_API
