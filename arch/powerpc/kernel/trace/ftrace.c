@@ -409,6 +409,7 @@ int __init ftrace_dyn_arch_init(void)
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
+	struct fgraph_ops *gops = container_of(op, struct fgraph_ops, ops);
 	unsigned long sp = fregs->regs.gpr[1];
 	int bit;
 
@@ -422,7 +423,7 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 	if (bit < 0)
 		goto out;
 
-	if (!function_graph_enter(parent_ip, ip, 0, (unsigned long *)sp))
+	if (!function_graph_enter_ops(parent_ip, ip, 0, (unsigned long *)sp, gops))
 		parent_ip = ppc_function_entry(return_to_handler);
 
 	ftrace_test_recursion_unlock(bit);

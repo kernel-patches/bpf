@@ -182,10 +182,23 @@ void prepare_ftrace_return(unsigned long *parent, unsigned long self_addr,
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
+	struct fgraph_ops *gops = container_of(op, struct fgraph_ops, ops);
+	unsigned long return_hooker = (unsigned long)&return_to_handler;
 	struct pt_regs *regs = arch_ftrace_get_regs(fregs);
 	unsigned long *parent = (unsigned long *)&regs->ra;
+	unsigned long old;
 
-	prepare_ftrace_return(parent, ip, frame_pointer(regs));
+	if (unlikely(atomic_read(&current->tracing_graph_pause)))
+		return;
+
+	/*
+	 * We don't suffer access faults, so no extra fault-recovery assembly
+	 * is needed here.
+	 */
+	old = *parent;
+
+	if (!function_graph_enter_ops(old, ip, frame_pointer(regs), parent, gops))
+		*parent = return_hooker;
 }
 #else /* CONFIG_DYNAMIC_FTRACE_WITH_REGS */
 extern void ftrace_graph_call(void);
