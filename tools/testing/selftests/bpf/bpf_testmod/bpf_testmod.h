@@ -37,4 +37,8 @@ struct bpf_testmod_ops {
 	int (*test_maybe_null)(int dummy, struct task_struct *task);
 };
 
+struct bpf_testmod_ops2 {
+	int (*test_1)(void);
+};
+
 #endif /* _BPF_TESTMOD_H */
