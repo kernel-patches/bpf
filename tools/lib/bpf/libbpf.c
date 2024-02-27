@@ -446,13 +446,18 @@ struct bpf_program {
 	struct bpf_object *obj;
 
 	int fd;
-	bool autoload;
+	bool autoload:1;
+	bool autoload_user_set:1;
 	bool autoattach;
 	bool sym_global;
 	bool mark_btf_static;
 	enum bpf_prog_type type;
 	enum bpf_attach_type expected_attach_type;
 	int exception_cb_idx;
+	/* total number of struct_ops maps with autocreate == true
+	 * that reference this program
+	 */
+	__u32 struct_ops_refs;
 
 	int prog_ifindex;
 	__u32 attach_btf_obj_fd;
@@ -4509,6 +4514,28 @@ static int bpf_get_map_info_from_fdinfo(int fd, struct bpf_map_info *info)
 	return 0;
 }
 
+/* Sync autoload and autocreate state between struct_ops map and
+ * referenced programs.
+ */
+static void bpf_map__struct_ops_toggle_progs_autoload(struct bpf_map *map, bool autocreate)
+{
+	struct bpf_program *prog;
+	int i;
+
+	for (i = 0; i < btf_vlen(map->st_ops->type); ++i) {
+		prog = map->st_ops->progs[i];
+
+		if (!prog || prog->autoload_user_set)
+			continue;
+
+		if (autocreate)
+			prog->struct_ops_refs++;
+		else
+			prog->struct_ops_refs--;
+		prog->autoload = prog->struct_ops_refs != 0;
+	}
+}
+
 bool bpf_map__autocreate(const struct bpf_map *map)
 {
 	return map->autocreate;
@@ -4518,6 +4545,9 @@ int bpf_map__set_autocreate(struct bpf_map *map, bool autocreate)
 {
 	if (map->obj->loaded)
 		return libbpf_err(-EBUSY);
+
+	if (map->st_ops && map->autocreate != autocreate)
+		bpf_map__struct_ops_toggle_progs_autoload(map, autocreate);
 
 	map->autocreate = autocreate;
 	return 0;
@@ -8801,6 +8831,7 @@ int bpf_program__set_autoload(struct bpf_program *prog, bool autoload)
 		return libbpf_err(-EINVAL);
 
 	prog->autoload = autoload;
+	prog->autoload_user_set = 1;
 	return 0;
 }
 
@@ -9428,6 +9459,8 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 			return -EINVAL;
 		}
 
+		if (map->autocreate)
+			prog->struct_ops_refs++;
 		st_ops->progs[member_idx] = prog;
 	}
 
