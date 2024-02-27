@@ -46,10 +46,6 @@ static void can_load_partial_object(void)
 	if (!ASSERT_OK_PTR(skel, "struct_ops_autocreate__open_opts"))
 		return;
 
-	err = bpf_program__set_autoload(skel->progs.test_2, false);
-	if (!ASSERT_OK(err, "bpf_program__set_autoload"))
-		goto cleanup;
-
 	err = bpf_map__set_autocreate(skel->maps.testmod_2, false);
 	if (!ASSERT_OK(err, "bpf_map__set_autocreate"))
 		goto cleanup;
@@ -70,8 +66,69 @@ cleanup:
 	struct_ops_autocreate__destroy(skel);
 }
 
+static void autoload_toggles(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);
+	struct bpf_map *testmod_1, *testmod_2;
+	struct bpf_program *test_1, *test_2;
+	struct struct_ops_autocreate *skel;
+
+	skel = struct_ops_autocreate__open_opts(&opts);
+	if (!ASSERT_OK_PTR(skel, "struct_ops_autocreate__open_opts"))
+		return;
+
+	testmod_1 = skel->maps.testmod_1;
+	testmod_2 = skel->maps.testmod_2;
+	test_1 = skel->progs.test_1;
+	test_2 = skel->progs.test_2;
+
+	/* testmod_1 on, testmod_2 on */
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #1");
+	ASSERT_TRUE(bpf_program__autoload(test_2), "autoload(test_2) #1");
+
+	/* testmod_1 off, testmod_2 on */
+	bpf_map__set_autocreate(testmod_1, false);
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #2");
+	ASSERT_TRUE(bpf_program__autoload(test_2), "autoload(test_2) #2");
+
+	/* testmod_1 off, testmod_2 off,
+	 * setting same state several times should not confuse internal state.
+	 */
+	bpf_map__set_autocreate(testmod_2, false);
+	bpf_map__set_autocreate(testmod_2, false);
+	ASSERT_FALSE(bpf_program__autoload(test_1), "autoload(test_1) #3");
+	ASSERT_FALSE(bpf_program__autoload(test_2), "autoload(test_2) #3");
+
+	/* testmod_1 on, testmod_2 off */
+	bpf_map__set_autocreate(testmod_1, true);
+	bpf_map__set_autocreate(testmod_1, true);
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #4");
+	ASSERT_FALSE(bpf_program__autoload(test_2), "autoload(test_2) #4");
+
+	/* testmod_1 on, testmod_2 on */
+	bpf_map__set_autocreate(testmod_2, true);
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #5");
+	ASSERT_TRUE(bpf_program__autoload(test_2), "autoload(test_2) #5");
+
+	/* testmod_1 on, testmod_2 off */
+	bpf_map__set_autocreate(testmod_2, false);
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #6");
+	ASSERT_FALSE(bpf_program__autoload(test_2), "autoload(test_2) #6");
+
+	/* setting autoload manually overrides automatic toggling */
+	bpf_program__set_autoload(test_2, false);
+	/* testmod_1 on, testmod_2 off */
+	bpf_map__set_autocreate(testmod_2, true);
+	ASSERT_TRUE(bpf_program__autoload(test_1), "autoload(test_1) #7");
+	ASSERT_FALSE(bpf_program__autoload(test_2), "autoload(test_2) #7");
+
+	struct_ops_autocreate__destroy(skel);
+}
+
 void serial_test_struct_ops_autocreate(void)
 {
+	if (test__start_subtest("autoload_toggles"))
+		autoload_toggles();
 	if (test__start_subtest("cant_load_full_object"))
 		cant_load_full_object();
 	if (test__start_subtest("can_load_partial_object"))
