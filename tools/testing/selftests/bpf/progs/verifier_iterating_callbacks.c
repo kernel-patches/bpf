@@ -239,4 +239,51 @@ int bpf_loop_iter_limit_nested(void *unused)
 	return 1000 * a + b + c;
 }
 
+SEC("socket")
+__success __retval(0xd495cdc0)
+int can_loop1(const void *ctx)
+{
+	volatile int i;
+	int sum = 0;
+
+	for (i = 0; i < 1000000 && bpf_can_loop(0); i++)
+		sum += i;
+	for (i = 0; i < 1000000 && bpf_can_loop(0); i++)
+		sum += i;
+
+	return sum;
+}
+
+SEC("socket")
+__success __retval(999000000)
+int can_loop2(const void *ctx)
+{
+	volatile int i, j;
+	int sum = 0;
+
+	for (i = 0; i < 1000 && bpf_can_loop(0); i++)
+		for (j = 0; j < 1000 && bpf_can_loop(0); j++)
+			sum += i + j;
+
+	return sum;
+}
+
+static __noinline int loop(void)
+{
+	volatile int i;
+	int sum = 0;
+
+	for (i = 0; i <= 1000 && bpf_can_loop(0); i++)
+		sum += i;
+
+	return sum;
+}
+
+SEC("socket")
+__success __retval(500500)
+int can_loop3(const void *ctx)
+{
+	return loop();
+}
+
 char _license[] SEC("license") = "GPL";
