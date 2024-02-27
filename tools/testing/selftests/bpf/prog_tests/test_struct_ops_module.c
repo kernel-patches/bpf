@@ -30,12 +30,30 @@ cleanup:
 	close(fd);
 }
 
+static int attach_ops_and_check(struct struct_ops_module *skel,
+				struct bpf_map *map,
+				int expected_test_2_result)
+{
+	struct bpf_link *link;
+
+	link = bpf_map__attach_struct_ops(map);
+	ASSERT_OK_PTR(link, "attach_test_mod_1");
+	if (!link)
+		return -1;
+
+	/* test_{1,2}() would be called from bpf_dummy_reg() in bpf_testmod.c */
+	ASSERT_EQ(skel->bss->test_1_result, 0xdeadbeef, "test_1_result");
+	ASSERT_EQ(skel->bss->test_2_result, expected_test_2_result, "test_2_result");
+
+	bpf_link__destroy(link);
+	return 0;
+}
+
 static void test_struct_ops_load(void)
 {
 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);
 	struct struct_ops_module *skel;
 	struct bpf_map_info info = {};
-	struct bpf_link *link;
 	int err;
 	u32 len;
 
@@ -53,15 +71,11 @@ static void test_struct_ops_load(void)
 	if (!ASSERT_OK(err, "bpf_map_get_info_by_fd"))
 		goto cleanup;
 
-	link = bpf_map__attach_struct_ops(skel->maps.testmod_1);
-	ASSERT_OK_PTR(link, "attach_test_mod_1");
-
-	/* test_2() will be called from bpf_dummy_reg() in bpf_testmod.c */
-	ASSERT_EQ(skel->bss->test_2_result, 7, "test_2_result");
-
-	bpf_link__destroy(link);
-
 	check_map_info(&info);
+	if (!attach_ops_and_check(skel, skel->maps.testmod_1, 7))
+		goto cleanup;
+	if (!attach_ops_and_check(skel, skel->maps.testmod_2, 12))
+		goto cleanup;
 
 cleanup:
 	struct_ops_module__destroy(skel);
