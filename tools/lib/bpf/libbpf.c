@@ -948,7 +948,7 @@ static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
 				   const char *name, __u32 kind);
 
 static int
-find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
+find_struct_ops_kern_types(struct bpf_object *obj, const char *tname_raw,
 			   struct module_btf **mod_btf,
 			   const struct btf_type **type, __u32 *type_id,
 			   const struct btf_type **vtype, __u32 *vtype_id,
@@ -957,15 +957,21 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
 	const struct btf_type *kern_type, *kern_vtype;
 	const struct btf_member *kern_data_member;
 	struct btf *btf;
-	__s32 kern_vtype_id, kern_type_id;
+	__s32 kern_vtype_id, kern_type_id, err;
+	char *tname;
 	__u32 i;
+
+	tname = strndup(tname_raw, bpf_core_essential_name_len(tname_raw));
+	if (!tname)
+		return -ENOMEM;
 
 	kern_type_id = find_ksym_btf_id(obj, tname, BTF_KIND_STRUCT,
 					&btf, mod_btf);
 	if (kern_type_id < 0) {
 		pr_warn("struct_ops init_kern: struct %s is not found in kernel BTF\n",
 			tname);
-		return kern_type_id;
+		err = kern_type_id;
+		goto err_out;
 	}
 	kern_type = btf__type_by_id(btf, kern_type_id);
 
@@ -979,7 +985,8 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
 	if (kern_vtype_id < 0) {
 		pr_warn("struct_ops init_kern: struct %s%s is not found in kernel BTF\n",
 			STRUCT_OPS_VALUE_PREFIX, tname);
-		return kern_vtype_id;
+		err = kern_vtype_id;
+		goto err_out;
 	}
 	kern_vtype = btf__type_by_id(btf, kern_vtype_id);
 
@@ -997,7 +1004,8 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
 	if (i == btf_vlen(kern_vtype)) {
 		pr_warn("struct_ops init_kern: struct %s data is not found in struct %s%s\n",
 			tname, STRUCT_OPS_VALUE_PREFIX, tname);
-		return -EINVAL;
+		err = -EINVAL;
+		goto err_out;
 	}
 
 	*type = kern_type;
@@ -1007,6 +1015,10 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname,
 	*data_member = kern_data_member;
 
 	return 0;
+
+err_out:
+	free(tname);
+	return err;
 }
 
 static bool bpf_map__is_struct_ops(const struct bpf_map *map)
