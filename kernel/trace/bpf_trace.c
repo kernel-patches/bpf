@@ -2594,6 +2594,7 @@ struct bpf_kprobe_multi_run_ctx {
 	struct bpf_run_ctx run_ctx;
 	struct bpf_kprobe_multi_link *link;
 	unsigned long entry_ip;
+	bool is_return;
 };
 
 struct user_syms {
@@ -2793,11 +2794,13 @@ static u64 bpf_kprobe_multi_entry_ip(struct bpf_run_ctx *ctx)
 
 static int
 kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
-			   unsigned long entry_ip, struct pt_regs *regs)
+			   unsigned long entry_ip, struct pt_regs *regs,
+			   bool is_return)
 {
 	struct bpf_kprobe_multi_run_ctx run_ctx = {
 		.link = link,
 		.entry_ip = entry_ip,
+		.is_return = is_return,
 	};
 	struct bpf_run_ctx *old_run_ctx;
 	int err;
@@ -2830,7 +2833,7 @@ kprobe_multi_link_handler(struct fprobe *fp, unsigned long fentry_ip,
 	int err;
 
 	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
-	err = kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs);
+	err = kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs, false);
 	return link->is_wrapper ? err : 0;
 }
 
@@ -2842,7 +2845,7 @@ kprobe_multi_link_exit_handler(struct fprobe *fp, unsigned long fentry_ip,
 	struct bpf_kprobe_multi_link *link;
 
 	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
-	kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs);
+	kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs, true);
 }
 
 static int symbols_cmp_r(const void *a, const void *b, const void *priv)
@@ -3111,6 +3114,46 @@ error:
 	kvfree(cookies);
 	return err;
 }
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc bool bpf_kprobe_multi_is_return(void)
+{
+	struct bpf_kprobe_multi_run_ctx *run_ctx;
+
+	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx, run_ctx);
+	return run_ctx->is_return;
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(kprobe_multi_kfunc_set_ids)
+BTF_ID_FLAGS(func, bpf_kprobe_multi_is_return)
+BTF_KFUNCS_END(kprobe_multi_kfunc_set_ids)
+
+static int bpf_kprobe_multi_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&kprobe_multi_kfunc_set_ids, kfunc_id))
+		return 0;
+
+	if (prog->expected_attach_type != BPF_TRACE_KPROBE_MULTI)
+		return -EACCES;
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set bpf_kprobe_multi_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &kprobe_multi_kfunc_set_ids,
+	.filter = bpf_kprobe_multi_filter,
+};
+
+static int __init bpf_kprobe_multi_kfuncs_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_KPROBE, &bpf_kprobe_multi_kfunc_set);
+}
+
+late_initcall(bpf_kprobe_multi_kfuncs_init);
 #else /* !CONFIG_FPROBE */
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
