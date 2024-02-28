@@ -2587,6 +2587,7 @@ struct bpf_kprobe_multi_link {
 	u32 mods_cnt;
 	struct module **mods;
 	u32 flags;
+	bool is_wrapper;
 };
 
 struct bpf_kprobe_multi_run_ctx {
@@ -2826,10 +2827,11 @@ kprobe_multi_link_handler(struct fprobe *fp, unsigned long fentry_ip,
 			  void *data)
 {
 	struct bpf_kprobe_multi_link *link;
+	int err;
 
 	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
-	kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs);
-	return 0;
+	err = kprobe_multi_link_prog_run(link, get_entry_ip(fentry_ip), regs);
+	return link->is_wrapper ? err : 0;
 }
 
 static void
@@ -2967,6 +2969,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	void __user *uaddrs;
 	u64 *cookies = NULL;
 	void __user *usyms;
+	bool is_wrapper;
 	int err;
 
 	/* no support for 32bit archs yet */
@@ -2977,8 +2980,11 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return -EINVAL;
 
 	flags = attr->link_create.kprobe_multi.flags;
-	if (flags & ~BPF_F_KPROBE_MULTI_RETURN)
+	if (flags & ~(BPF_F_KPROBE_MULTI_RETURN|
+		      BPF_F_KPROBE_MULTI_WRAPPER))
 		return -EINVAL;
+
+	is_wrapper = flags & BPF_F_KPROBE_MULTI_WRAPPER;
 
 	uaddrs = u64_to_user_ptr(attr->link_create.kprobe_multi.addrs);
 	usyms = u64_to_user_ptr(attr->link_create.kprobe_multi.syms);
@@ -3054,15 +3060,21 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (err)
 		goto error;
 
-	if (flags & BPF_F_KPROBE_MULTI_RETURN)
-		link->fp.exit_handler = kprobe_multi_link_exit_handler;
-	else
+	if (is_wrapper) {
 		link->fp.entry_handler = kprobe_multi_link_handler;
+		link->fp.exit_handler = kprobe_multi_link_exit_handler;
+	} else {
+		if (flags & BPF_F_KPROBE_MULTI_RETURN)
+			link->fp.exit_handler = kprobe_multi_link_exit_handler;
+		else
+			link->fp.entry_handler = kprobe_multi_link_handler;
+	}
 
 	link->addrs = addrs;
 	link->cookies = cookies;
 	link->cnt = cnt;
 	link->flags = flags;
+	link->is_wrapper = is_wrapper;
 
 	if (cookies) {
 		/*
