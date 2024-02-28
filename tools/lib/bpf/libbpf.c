@@ -8944,6 +8944,7 @@ static int attach_tp(const struct bpf_program *prog, long cookie, struct bpf_lin
 static int attach_raw_tp(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_trace(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_kprobe_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link);
+static int attach_kprobe_wrapper(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_uprobe_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_iter(const struct bpf_program *prog, long cookie, struct bpf_link **link);
@@ -8960,6 +8961,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("uretprobe.s+",		KPROBE, 0, SEC_SLEEPABLE, attach_uprobe),
 	SEC_DEF("kprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kretprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
+	SEC_DEF("kprobe.wrapper+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_wrapper),
 	SEC_DEF("uprobe.multi+",	KPROBE,	BPF_TRACE_UPROBE_MULTI, SEC_NONE, attach_uprobe_multi),
 	SEC_DEF("uretprobe.multi+",	KPROBE,	BPF_TRACE_UPROBE_MULTI, SEC_NONE, attach_uprobe_multi),
 	SEC_DEF("uprobe.multi.s+",	KPROBE,	BPF_TRACE_UPROBE_MULTI, SEC_SLEEPABLE, attach_uprobe_multi),
@@ -11034,7 +11036,7 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	int err, link_fd, prog_fd;
 	const __u64 *cookies;
 	const char **syms;
-	bool retprobe;
+	__u32 flags = 0;
 	size_t cnt;
 
 	if (!OPTS_VALID(opts, bpf_kprobe_multi_opts))
@@ -11065,13 +11067,16 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 		cnt = res.cnt;
 	}
 
-	retprobe = OPTS_GET(opts, retprobe, false);
+	if (OPTS_GET(opts, retprobe, false))
+		flags |= BPF_F_KPROBE_MULTI_RETURN;
+	if (OPTS_GET(opts, wrapper, false))
+		flags |= BPF_F_KPROBE_MULTI_WRAPPER;
 
 	lopts.kprobe_multi.syms = syms;
 	lopts.kprobe_multi.addrs = addrs;
 	lopts.kprobe_multi.cookies = cookies;
 	lopts.kprobe_multi.cnt = cnt;
-	lopts.kprobe_multi.flags = retprobe ? BPF_F_KPROBE_MULTI_RETURN : 0;
+	lopts.kprobe_multi.flags = flags;
 
 	link = calloc(1, sizeof(*link));
 	if (!link) {
@@ -11179,6 +11184,33 @@ static int attach_kprobe_multi(const struct bpf_program *prog, long cookie, stru
 	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &pattern);
 	if (n < 1) {
 		pr_warn("kprobe multi pattern is invalid: %s\n", pattern);
+		return -EINVAL;
+	}
+
+	*link = bpf_program__attach_kprobe_multi_opts(prog, pattern, &opts);
+	free(pattern);
+	return libbpf_get_error(*link);
+}
+
+static int attach_kprobe_wrapper(const struct bpf_program *prog, long cookie, struct bpf_link **link)
+{
+	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts,
+		.wrapper = true,
+	);
+	const char *spec;
+	char *pattern;
+	int n;
+
+	*link = NULL;
+
+	/* no auto-attach for SEC("kprobe.wrapper") */
+	if (strcmp(prog->sec_name, "kprobe.wrapper") == 0)
+		return 0;
+
+	spec = prog->sec_name + sizeof("kprobe.wrapper/") - 1;
+	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &pattern);
+	if (n < 1) {
+		pr_warn("kprobe wrapper pattern is invalid: %s\n", pattern);
 		return -EINVAL;
 	}
 
