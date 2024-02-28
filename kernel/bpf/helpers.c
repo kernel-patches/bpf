@@ -2263,6 +2263,23 @@ bpf_task_get_cgroup1(struct task_struct *task, int hierarchy_id)
 		return NULL;
 	return cgrp;
 }
+
+/**
+ * bpf_task_get_cgroup_id - Get the cgroup ID of a task.
+ * @task: The target task
+
+ */
+__bpf_kfunc u64 bpf_task_get_cgroup_id(struct task_struct *task)
+{
+    struct cgroup *cgrp;
+	u64 cgrp_id;
+
+    rcu_read_lock();
+	cgrp = task_dfl_cgroup(task);
+    cgrp_id = cgroup_id(cgrp);
+    rcu_read_unlock();
+	return cgrp_id;
+}
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -2570,6 +2587,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_task_get_cgroup_id, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
