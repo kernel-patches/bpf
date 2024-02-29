@@ -254,6 +254,17 @@ int mount_bpffs_for_pin(const char *name, bool is_dir)
 	if (is_dir && is_bpffs(name))
 		return err;
 
+	if (is_dir && access(name, F_OK) != -1) {
+		err = mnt_fs(name, "bpf", err_str, ERR_MAX_LEN);
+		if (err) {
+			err_str[ERR_MAX_LEN - 1] = '\0';
+			p_err("can't mount BPF file system to pin the object (%s): %s",
+				name, err_str);
+		}
+
+		return err;
+	}
+
 	file = malloc(strlen(name) + 1);
 	if (!file) {
 		p_err("mem alloc failed");
@@ -273,7 +284,17 @@ int mount_bpffs_for_pin(const char *name, bool is_dir)
 		goto out_free;
 	}
 
-	err = mnt_fs(dir, "bpf", err_str, ERR_MAX_LEN);
+	if (is_dir) {
+		err = mkdir(name, 0700);
+		if (err) {
+			err_str[ERR_MAX_LEN - 1] = '\0';
+			p_err("failed to mkdir (%s): %s",
+				name, err_str);
+			goto out_free;
+		}
+	}
+
+	err = mnt_fs(is_dir ? name : dir, "bpf", err_str, ERR_MAX_LEN);
 	if (err) {
 		err_str[ERR_MAX_LEN - 1] = '\0';
 		p_err("can't mount BPF file system to pin the object (%s): %s",
