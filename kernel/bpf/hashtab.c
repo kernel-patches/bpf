@@ -499,8 +499,6 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 							  num_possible_cpus());
 	}
 
-	/* hash table size must be power of 2 */
-	htab->n_buckets = roundup_pow_of_two(htab->map.max_entries);
 
 	htab->elem_size = sizeof(struct htab_elem) +
 			  round_up(htab->map.key_size, 8);
@@ -510,10 +508,12 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		htab->elem_size += round_up(htab->map.value_size, 8);
 
 	err = -E2BIG;
-	/* prevent zero size kmalloc and check for u32 overflow */
-	if (htab->n_buckets == 0 ||
-	    htab->n_buckets > U32_MAX / sizeof(struct bucket))
+	/* prevent overflow in roundup below */
+	if (htab->map.max_entries > U32_MAX / 2 + 1)
 		goto free_htab;
+
+	/* hash table size must be power of 2 */
+	htab->n_buckets = roundup_pow_of_two(htab->map.max_entries);
 
 	err = bpf_map_init_elem_count(&htab->map);
 	if (err)
