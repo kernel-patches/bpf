@@ -104,7 +104,7 @@ static int arch_gnttab_valloc(struct gnttab_vm_area *area, unsigned nr_frames)
 	area->ptes = kmalloc_array(nr_frames, sizeof(*area->ptes), GFP_KERNEL);
 	if (area->ptes == NULL)
 		return -ENOMEM;
-	area->area = get_vm_area(PAGE_SIZE * nr_frames, VM_IOREMAP);
+	area->area = get_vm_area(PAGE_SIZE * nr_frames, VM_XEN);
 	if (!area->area)
 		goto out_free_ptes;
 	if (apply_to_page_range(&init_mm, (unsigned long)area->area->addr,
