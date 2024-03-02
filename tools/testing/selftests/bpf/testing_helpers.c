@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <zlib.h>
+#include <sys/utsname.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include "test_progs.h"
@@ -474,4 +476,49 @@ bool is_jit_enabled(void)
 	}
 
 	return enabled;
+}
+
+int check_lto_kernel(void)
+{
+	static int check_lto = 2;
+	char buf[PATH_MAX];
+	struct utsname uts;
+	gzFile file;
+	int len;
+
+	if (check_lto != 2)
+		return check_lto;
+
+	uname(&uts);
+	len = snprintf(buf, PATH_MAX, "/boot/config-%s", uts.release);
+	if (len < 0) {
+		check_lto = -EINVAL;
+		goto out;
+	} else if (len >= PATH_MAX) {
+		check_lto = -ENAMETOOLONG;
+		goto out;
+	}
+
+	/* gzopen also accepts uncompressed files. */
+	file = gzopen(buf, "re");
+	if (!file)
+		file = gzopen("/proc/config.gz", "re");
+
+	if (!file) {
+		check_lto = -ENOENT;
+		goto out;
+	}
+
+	check_lto = 0;
+	while (gzgets(file, buf, sizeof(buf))) {
+		/* buf also contains '\n', skip it during comparison. */
+		if (!strncmp(buf, "CONFIG_LTO=y", 12)) {
+			check_lto = 1;
+			break;
+		}
+	}
+
+	gzclose(file);
+out:
+	return check_lto;
 }

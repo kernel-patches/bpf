@@ -55,5 +55,6 @@ struct bpf_insn;
 int get_xlated_program(int fd_prog, struct bpf_insn **buf, __u32 *cnt);
 int testing_prog_flags(void);
 bool is_jit_enabled(void);
+int check_lto_kernel(void);
 
 #endif /* __TESTING_HELPERS_H */
