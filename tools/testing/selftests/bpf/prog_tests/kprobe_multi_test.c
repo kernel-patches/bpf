@@ -341,9 +341,14 @@ static int get_syms(char ***symsp, size_t *cntp, bool kernel)
 	size_t cap = 0, cnt = 0, i;
 	char *name = NULL, **syms = NULL;
 	struct hashmap *map;
+	bool lto_kernel;
 	char buf[256];
 	FILE *f;
 	int err = 0;
+
+	lto_kernel = kernel && check_lto_kernel() == 1;
+	if (lto_kernel && !ASSERT_OK(load_kallsyms(), "load_kallsyms"))
+		return -EINVAL;
 
 	/*
 	 * The available_filter_functions contains many duplicates,
@@ -392,6 +397,8 @@ static int get_syms(char ***symsp, size_t *cntp, bool kernel)
 			continue;
 		if (!strncmp(name, "__ftrace_invalid_address__",
 			     sizeof("__ftrace_invalid_address__") - 1))
+			continue;
+		if (lto_kernel && ksym_get_addr(name) == 0)
 			continue;
 
 		err = hashmap__add(map, name, 0);
