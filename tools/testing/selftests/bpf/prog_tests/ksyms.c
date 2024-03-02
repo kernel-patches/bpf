@@ -21,7 +21,11 @@ void test_ksyms(void)
 		return;
 	}
 	if (err == -ENOENT) {
-		ASSERT_TRUE(false, "ksym_find for bpf_link_fops");
+		/* bpf_link_fops might be renamed to bpf_link_fops.llvm.<hash> in LTO kernel. */
+		if (check_lto_kernel() == 1)
+			test__skip();
+		else
+			ASSERT_TRUE(false, "ksym_find for bpf_link_fops");
 		return;
 	}
 
