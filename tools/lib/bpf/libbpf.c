@@ -12151,11 +12151,10 @@ static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_li
 }
 
 static struct bpf_link *
-bpf_program_attach_fd(const struct bpf_program *prog,
-		      int target_fd, const char *target_name,
-		      const struct bpf_link_create_opts *opts)
+__bpf_program_attach_fd(const struct bpf_program *prog, int target_fd,
+			enum bpf_attach_type attach_type, const char *target_name,
+			const struct bpf_link_create_opts *opts)
 {
-	enum bpf_attach_type attach_type;
 	char errmsg[STRERR_BUFSIZE];
 	struct bpf_link *link;
 	int prog_fd, link_fd;
@@ -12171,7 +12170,6 @@ bpf_program_attach_fd(const struct bpf_program *prog,
 		return libbpf_err_ptr(-ENOMEM);
 	link->detach = &bpf_link__detach_fd;
 
-	attach_type = bpf_program__expected_attach_type(prog);
 	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, opts);
 	if (link_fd < 0) {
 		link_fd = -errno;
@@ -12183,6 +12181,16 @@ bpf_program_attach_fd(const struct bpf_program *prog,
 	}
 	link->fd = link_fd;
 	return link;
+}
+
+static struct bpf_link *
+bpf_program_attach_fd(const struct bpf_program *prog,
+		      int target_fd, const char *target_name,
+		      const struct bpf_link_create_opts *opts)
+{
+	return __bpf_program_attach_fd(prog, target_fd,
+				       bpf_program__expected_attach_type(prog),
+				       target_name, opts);
 }
 
 struct bpf_link *
