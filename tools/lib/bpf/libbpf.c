@@ -149,6 +149,7 @@ static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_TCX]			= "tcx",
 	[BPF_LINK_TYPE_UPROBE_MULTI]		= "uprobe_multi",
 	[BPF_LINK_TYPE_NETKIT]			= "netkit",
+	[BPF_LINK_TYPE_SK_MSG]			= "sk_msg",
 };
 
 static const char * const map_type_name[] = {
@@ -12278,6 +12279,13 @@ bpf_program__attach_netkit(const struct bpf_program *prog, int ifindex,
 	link_create_opts.flags = OPTS_GET(opts, flags, 0);
 
 	return bpf_program_attach_fd(prog, ifindex, "netkit", &link_create_opts);
+}
+
+struct bpf_link *
+bpf_program__attach_sk_msg(const struct bpf_program *prog, int map_fd,
+			   enum bpf_attach_type attach_type)
+{
+	return __bpf_program_attach_fd(prog, map_fd, attach_type, "sk_msg", NULL);
 }
 
 struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
