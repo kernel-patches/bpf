@@ -131,6 +131,29 @@ out:
 	test_skmsg_load_helpers__destroy(skel);
 }
 
+static void test_skmsg_helpers_with_link(enum bpf_map_type map_type)
+{
+	struct test_skmsg_load_helpers *skel;
+	struct bpf_program *prog;
+	struct bpf_link *link;
+	int map;
+
+	skel = test_skmsg_load_helpers__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_skmsg_load_helpers__open_and_load"))
+		return;
+
+	prog = skel->progs.prog_msg_verdict;
+	map = bpf_map__fd(skel->maps.sock_map);
+
+	link = bpf_program__attach_sk_msg(prog, map, BPF_SK_MSG_VERDICT);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_sk_msg"))
+		goto out;
+
+	close(bpf_link__fd(link));
+out:
+	test_skmsg_load_helpers__destroy(skel);
+}
+
 static void test_sockmap_update(enum bpf_map_type map_type)
 {
 	int err, prog, src;
@@ -812,4 +835,8 @@ void test_sockmap_basic(void)
 		test_sockmap_many_maps();
 	if (test__start_subtest("sockmap same socket replace"))
 		test_sockmap_same_sock();
+	if (test__start_subtest("sockmap sk_msg attach helpers with link"))
+		test_skmsg_helpers_with_link(BPF_MAP_TYPE_SOCKMAP);
+	if (test__start_subtest("sockhash sk_msg attach helpers with link"))
+		test_skmsg_helpers_with_link(BPF_MAP_TYPE_SOCKHASH);
 }
