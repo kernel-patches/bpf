@@ -1518,12 +1518,68 @@ __bpf_kfunc void bpf_mm_drop(struct mm_struct *mm)
 	mmdrop(mm);
 }
 
+/**
+ * bpf_get_task_exe_file - get a reference on the exe_file associated with the
+ * 	       		   mm_struct that is nested within the supplied
+ * 	       		   task_struct
+ * @task: task_struct of which the nested mm_struct's exe_file is to be
+ * referenced
+ *
+ * Get a reference on the exe_file that is associated with the mm_struct nested
+ * within the supplied *task*. A reference on a file pointer acquired by this
+ * kfunc must be released using bpf_put_file(). Internally, this kfunc leans on
+ * get_task_exe_file(), such that calling bpf_get_task_exe_file() would be
+ * analogous to calling get_task_exe_file() outside of BPF program context.
+ *
+ * Return: A referenced pointer to the exe_file associated with the mm_struct
+ * nested in the supplied *task*, or NULL.
+ */
+__bpf_kfunc struct file *bpf_get_task_exe_file(struct task_struct *task)
+{
+	return get_task_exe_file(task);
+}
+
+/**
+ * bpf_get_mm_exe_file - get a reference on the exe_file for the supplied
+ * 			 mm_struct.
+ * @mm: mm_struct of which the exe_file to get a reference on
+ *
+ * Get a reference on the exe_file associated with the supplied *mm*. A
+ * reference on a file pointer acquired by this kfunc must be released using
+ * bpf_put_file(). Internally, this kfunc leans on get_mm_exe_file(), such that
+ * calling bpf_get_mm_exe_file() would be analogous to calling get_mm_exe_file()
+ * outside of BPF program context.
+ *
+ * Return: A referenced file pointer to the exe_file for the supplied *mm*, or
+ * NULL.
+ */
+__bpf_kfunc struct file *bpf_get_mm_exe_file(struct mm_struct *mm)
+{
+	return get_mm_exe_file(mm);
+}
+
+/**
+ * bpf_put_file - put a reference on the supplied file
+ * @f: file of which to put a reference on
+ *
+ * Put a reference on the supplied *f*.
+ */
+__bpf_kfunc void bpf_put_file(struct file *f)
+{
+	fput(f);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(lsm_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_task_mm_grab, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL);
 BTF_ID_FLAGS(func, bpf_mm_drop, KF_RELEASE);
+BTF_ID_FLAGS(func, bpf_get_task_exe_file,
+	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_get_mm_exe_file,
+	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE | KF_SLEEPABLE)
 BTF_KFUNCS_END(lsm_kfunc_set_ids)
 
 static int bpf_lsm_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
