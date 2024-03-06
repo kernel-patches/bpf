@@ -668,7 +668,7 @@ static void __init proc_kcore_text_init(void)
 }
 #endif
 
-#if defined(CONFIG_MODULES) && defined(MODULES_VADDR)
+#if defined(CONFIG_MODULE_ALLOC) && defined(MODULES_VADDR)
 /*
  * MODULES_VADDR has no intersection with VMALLOC_ADDR.
  */

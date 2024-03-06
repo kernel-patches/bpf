@@ -1305,7 +1305,7 @@ config ARCH_HAS_STRICT_MODULE_RWX
 
 config STRICT_MODULE_RWX
 	bool "Set loadable kernel module data as NX and text as RO" if ARCH_OPTIONAL_KERNEL_RWX
-	depends on ARCH_HAS_STRICT_MODULE_RWX && MODULES
+	depends on ARCH_HAS_STRICT_MODULE_RWX && MODULE_ALLOC
 	default !ARCH_OPTIONAL_KERNEL_RWX || ARCH_OPTIONAL_KERNEL_RWX_DEFAULT
 	help
 	  If this is set, module text and rodata memory will be made read-only,

@@ -13,3 +13,5 @@ obj-y	+= mmu_context.o
 obj-y	+= pgtable.o
 obj-y	+= tlb.o
 obj-y	+= uaccess.o
+
+obj-$(CONFIG_MODULE_ALLOC)	+= module_alloc.o

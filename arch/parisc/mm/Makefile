@@ -5,3 +5,4 @@
 
 obj-y	 := init.o fault.o ioremap.o fixmap.o
 obj-$(CONFIG_HUGETLB_PAGE) += hugetlbpage.o
+obj-$(CONFIG_MODULE_ALLOC) += module_alloc.o

@@ -100,3 +100,5 @@ obj-$(CONFIG_CACHE_UNIPHIER)	+= cache-uniphier.o
 
 KASAN_SANITIZE_kasan_init.o	:= n
 obj-$(CONFIG_KASAN)		+= kasan_init.o
+
+obj-$(CONFIG_MODULE_ALLOC)	+= module_alloc.o

@@ -10,3 +10,5 @@ obj-$(CONFIG_HUGETLB_PAGE)	+= hugetlbpage.o
 obj-$(CONFIG_KASAN)		+= kasan_init.o
 
 KASAN_SANITIZE_kasan_init.o     := n
+
+obj-$(CONFIG_MODULE_ALLOC)	+= module_alloc.o

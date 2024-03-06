@@ -45,3 +45,5 @@ obj-$(CONFIG_MIPS_CPU_SCACHE)	+= sc-mips.o
 obj-$(CONFIG_SCACHE_DEBUGFS)	+= sc-debugfs.o
 
 obj-$(CONFIG_DEBUG_VIRTUAL)	+= physaddr.o
+
+obj-$(CONFIG_MODULE_ALLOC)	+= module_alloc.o
