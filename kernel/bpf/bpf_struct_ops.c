@@ -108,11 +108,30 @@ const struct bpf_prog_ops bpf_struct_ops_prog_ops = {
 #endif
 };
 
+#if IS_ENABLED(CONFIG_MODULES)
 static const struct btf_type *module_type;
+
+static int bpf_struct_module_type_init(struct btf *btf)
+{
+	s32 module_id;
+
+	module_id = btf_find_by_name_kind(btf, "module", BTF_KIND_STRUCT);
+	if (module_id < 0)
+		return 1;
+
+	module_type = btf_type_by_id(btf, module_id);
+	return 0;
+}
+#else
+static int bpf_struct_module_type_init(struct btf *btf)
+{
+	return 0;
+}
+#endif
 
 void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 {
-	s32 type_id, value_id, module_id;
+	s32 type_id, value_id;
 	const struct btf_member *member;
 	struct bpf_struct_ops *st_ops;
 	const struct btf_type *t;
@@ -125,12 +144,10 @@ void bpf_struct_ops_init(struct btf *btf, struct bpf_verifier_log *log)
 #include "bpf_struct_ops_types.h"
 #undef BPF_STRUCT_OPS_TYPE
 
-	module_id = btf_find_by_name_kind(btf, "module", BTF_KIND_STRUCT);
-	if (module_id < 0) {
+	if (bpf_struct_module_type_init(btf)) {
 		pr_warn("Cannot find struct module in btf_vmlinux\n");
 		return;
 	}
-	module_type = btf_type_by_id(btf, module_id);
 
 	for (i = 0; i < ARRAY_SIZE(bpf_struct_ops); i++) {
 		st_ops = bpf_struct_ops[i];
@@ -433,12 +450,15 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 
 		moff = __btf_member_bit_offset(t, member) / 8;
 		ptype = btf_type_resolve_ptr(btf_vmlinux, member->type, NULL);
+
+#if IS_ENABLED(CONFIG_MODULES)
 		if (ptype == module_type) {
 			if (*(void **)(udata + moff))
 				goto reset_unlock;
 			*(void **)(kdata + moff) = BPF_MODULE_OWNER;
 			continue;
 		}
+#endif
 
 		err = st_ops->init_member(t, member, kdata, udata);
 		if (err < 0)
