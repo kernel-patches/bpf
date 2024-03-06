@@ -10,6 +10,7 @@
 #include <linux/bpf_perf_event.h>
 #include <linux/btf.h>
 #include <linux/filter.h>
+#include <linux/fs_struct.h>
 #include <linux/uaccess.h>
 #include <linux/ctype.h>
 #include <linux/kprobes.h>
@@ -1569,6 +1570,83 @@ __bpf_kfunc void bpf_put_file(struct file *f)
 	fput(f);
 }
 
+/**
+ * bpf_get_task_fs_root - get a reference on the fs_struct's root path for the
+ * 			  supplied task_struct
+ * @Task: task_struct of which the fs_struct's root path to get a reference on
+ *
+ * Get a reference on the root path nested within the fs_struct of the
+ * associated *task*. The referenced path retruned from this kfunc must be
+ * released using bpf_put_path().
+ *
+ * Return: A referenced path pointer to the root path nested within the
+ * fs_struct of the supplied *task*, or NULL.
+ */
+__bpf_kfunc struct path *bpf_get_task_fs_root(struct task_struct *task)
+{
+	struct path *root;
+	struct fs_struct *fs;
+
+	task_lock(task);
+	fs = task->fs;
+	if (unlikely(fs)) {
+		task_unlock(task);
+		return NULL;
+	}
+
+	spin_lock(&fs->lock);
+	root = &fs->root;
+	path_get(root);
+	spin_unlock(&fs->lock);
+	task_unlock(task);
+
+	return root;
+}
+
+/**
+ * bpf_get_task_fs_pwd - get a reference on the fs_struct's pwd path for the
+ * 			 supplied task_struct
+ * @task: task_struct of which the fs_struct's pwd path to get a reference on
+ *
+ * Get a reference on the pwd path nested within the fs_struct of the associated
+ * *task*. The referenced path retruned from this kfunc must be released using
+ * bpf_put_path().
+ *
+ * Return: A referenced path pointer to the root path nested within the
+ * fs_struct of the supplied *task*, or NULL.
+ */
+__bpf_kfunc struct path *bpf_get_task_fs_pwd(struct task_struct *task)
+{
+	struct path *pwd;
+	struct fs_struct *fs;
+
+	task_lock(task);
+	fs = task->fs;
+	if (unlikely(fs)) {
+		task_unlock(task);
+		return NULL;
+	}
+
+	spin_lock(&fs->lock);
+	pwd = &fs->pwd;
+	path_get(pwd);
+	spin_unlock(&fs->lock);
+	task_unlock(task);
+
+	return pwd;
+}
+
+/**
+ * bpf_put_path - put a reference on the supplied path
+ * @path: path of which to put a reference on
+ *
+ * Put a reference on the supplied *path*.
+  */
+__bpf_kfunc void bpf_put_path(struct path *path)
+{
+	path_put(path);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(lsm_kfunc_set_ids)
@@ -1580,6 +1658,11 @@ BTF_ID_FLAGS(func, bpf_get_task_exe_file,
 BTF_ID_FLAGS(func, bpf_get_mm_exe_file,
 	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_get_task_fs_root,
+	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_get_task_fs_pwd,
+	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_put_path, KF_RELEASE | KF_SLEEPABLE)
 BTF_KFUNCS_END(lsm_kfunc_set_ids)
 
 static int bpf_lsm_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
