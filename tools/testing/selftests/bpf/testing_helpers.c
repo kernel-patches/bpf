@@ -342,6 +342,12 @@ int unload_bpf_testmod(bool verbose)
 {
 	if (kern_sync_rcu())
 		fprintf(stdout, "Failed to trigger kernel-side RCU sync!\n");
+
+	if (access("/proc/modules", F_OK)) {
+		fprintf(stdout, "Modules are disabled, fake unload success\n");
+		return 0;
+	}
+
 	if (delete_module("bpf_testmod", 0)) {
 		if (errno == ENOENT) {
 			if (verbose)
@@ -362,6 +368,14 @@ int load_bpf_testmod(bool verbose)
 
 	if (verbose)
 		fprintf(stdout, "Loading bpf_testmod.ko...\n");
+
+	if (access("/proc/modules", F_OK)) {
+		if (!access("/sys/kernel/debug/tracing/events/bpf_testmod", F_OK))
+			return 0;
+
+		fprintf(stdout, "Modules are disabled, testmod not built-in\n");
+		return -ENOENT;
+	}
 
 	fd = open("bpf_testmod.ko", O_RDONLY);
 	if (fd < 0) {

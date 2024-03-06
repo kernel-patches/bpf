@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2020 Facebook */
+
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM bpf_testmod
 
@@ -7,7 +8,10 @@
 #define _BPF_TESTMOD_EVENTS_H
 
 #include <linux/tracepoint.h>
+
+#ifdef BPF_TESTMOD_EXTERNAL
 #include "bpf_testmod.h"
+#endif
 
 TRACE_EVENT(bpf_testmod_test_read,
 	TP_PROTO(struct task_struct *task, struct bpf_testmod_test_read_ctx *ctx),
@@ -51,7 +55,9 @@ BPF_TESTMOD_DECLARE_TRACE(bpf_testmod_test_writable_bare,
 
 #endif /* _BPF_TESTMOD_EVENTS_H */
 
+#ifdef BPF_TESTMOD_EXTERNAL
 #undef TRACE_INCLUDE_PATH
 #define TRACE_INCLUDE_PATH .
 #define TRACE_INCLUDE_FILE bpf_testmod-events
+#endif
 #include <trace/define_trace.h>

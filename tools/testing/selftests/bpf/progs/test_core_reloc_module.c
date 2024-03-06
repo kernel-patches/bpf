@@ -8,12 +8,14 @@
 
 char _license[] SEC("license") = "GPL";
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_testmod_test_read_ctx {
 	/* field order is mixed up */
 	size_t len;
 	char *buf;
 	loff_t off;
 } __attribute__((preserve_access_index));
+#endif
 
 struct {
 	char in[256];

@@ -100,4 +100,13 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_TEST_MODULE
+	bool "Build the module for BPF selftests as a built-in"
+	depends on BPF_SYSCALL
+	depends on BPF_JIT
+	depends on !MODULES
+	default n
+	help
+	  This allows most of the bpf selftests to run without modules.
+
 endmenu # "BPF subsystem"

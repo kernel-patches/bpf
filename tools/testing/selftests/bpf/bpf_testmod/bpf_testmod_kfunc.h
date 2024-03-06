@@ -26,6 +26,7 @@ struct prog_test_ref_kfunc {
 };
 #endif
 
+#if defined(BPF_TESTMOD_EXTERNAL) || defined(__KERNEL__)
 struct prog_test_pass1 {
 	int x0;
 	struct {
@@ -63,6 +64,7 @@ struct prog_test_fail3 {
 	char arr1[2];
 	char arr2[];
 };
+#endif
 
 struct prog_test_ref_kfunc *
 bpf_kfunc_call_test_acquire(unsigned long *scalar_ptr) __ksym;

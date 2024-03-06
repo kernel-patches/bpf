@@ -5,7 +5,10 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+
+#ifdef BPF_TESTMOD_EXTERNAL
 #include "../bpf_testmod/bpf_testmod.h"
+#endif
 
 __u32 raw_tp_read_sz = 0;
 

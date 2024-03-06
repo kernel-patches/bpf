@@ -1,0 +1,1 @@
+../../../tools/testing/selftests/bpf/bpf_testmod/bpf_testmod_kfunc.h

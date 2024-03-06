@@ -44,11 +44,12 @@ NUM_COMPILE_JOBS="$(nproc)"
 LOG_FILE_BASE="$(date +"bpf_selftests.%Y-%m-%d_%H-%M-%S")"
 LOG_FILE="${LOG_FILE_BASE}.log"
 EXIT_STATUS_FILE="${LOG_FILE_BASE}.exit_status"
+MODULES="yes"
 
 usage()
 {
 	cat <<EOF
-Usage: $0 [-i] [-s] [-d <output_dir>] -- [<command>]
+Usage: $0 [-i] [-s] [-n] [-d <output_dir>] -- [<command>]
 
 <command> is the command you would normally run when you are in
 tools/testing/selftests/bpf. e.g:
@@ -76,6 +77,7 @@ Options:
 	-s)		Instead of powering off the VM, start an interactive
 			shell. If <command> is specified, the shell runs after
 			the command finishes executing
+	-n)		Run tests with CONFIG_MODULES=n
 EOF
 }
 
@@ -341,7 +343,7 @@ main()
 	local exit_command="poweroff -f"
 	local debug_shell="no"
 
-	while getopts ':hskid:j:' opt; do
+	while getopts ':hskid:j:n' opt; do
 		case ${opt} in
 		i)
 			update_image="yes"
@@ -356,6 +358,9 @@ main()
 			command=""
 			debug_shell="yes"
 			exit_command="bash"
+			;;
+		n)
+			MODULES="no"
 			;;
 		h)
 			usage
@@ -409,11 +414,26 @@ main()
 
 	echo "Output directory: ${OUTPUT_DIR}"
 
+	if [[ "${MODULES}" == "yes" ]]; then
+		KCONFIG_REL_PATHS+=("tools/testing/selftests/bpf/config.mods")
+	else
+		make_command="${make_command} RUN_TESTS_WITHOUT_MODULES=1"
+		KCONFIG_REL_PATHS+=("tools/testing/selftests/bpf/config.nomods")
+	fi
+
 	mkdir -p "${OUTPUT_DIR}"
 	mkdir -p "${mount_dir}"
 	update_kconfig "${kernel_checkout}" "${kconfig_file}"
 
 	recompile_kernel "${kernel_checkout}" "${make_command}"
+
+	# Touch the opposite mods/nomods config we used to ensure the
+	# kernel is rebuilt when the user adds or drops the -n flag.
+	if [[ "${MODULES}" == "yes" ]]; then
+		touch -m "tools/testing/selftests/bpf/config.nomods"
+	else
+		touch -m "tools/testing/selftests/bpf/config.mods"
+	fi
 
 	if [[ "${update_image}" == "no" && ! -f "${rootfs_img}" ]]; then
 		echo "rootfs image not found in ${rootfs_img}"

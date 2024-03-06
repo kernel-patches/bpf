@@ -67,9 +67,11 @@ struct __sk_bUfF /* it will not exist in vmlinux */ {
 	int len;
 } __attribute__((preserve_access_index));
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_testmod_test_read_ctx /* it exists in bpf_testmod */ {
 	size_t len;
 } __attribute__((preserve_access_index));
+#endif
 
 SEC("tc")
 int balancer_ingress(struct __sk_buff *ctx)

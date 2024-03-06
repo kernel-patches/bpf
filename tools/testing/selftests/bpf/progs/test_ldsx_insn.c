@@ -48,9 +48,11 @@ int map_val_prog(const void *ctx)
 
 }
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_testmod_struct_arg_1 {
 	int a;
 };
+#endif
 
 long long int_member;
 

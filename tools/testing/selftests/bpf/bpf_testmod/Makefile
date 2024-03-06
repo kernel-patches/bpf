@@ -10,7 +10,7 @@ endif
 MODULES = bpf_testmod.ko
 
 obj-m += bpf_testmod.o
-CFLAGS_bpf_testmod.o = -I$(src)
+CFLAGS_bpf_testmod.o = -I$(src) -DBPF_TESTMOD_EXTERNAL
 
 all:
 	+$(Q)make -C $(KDIR) M=$(BPF_TESTMOD_DIR) modules

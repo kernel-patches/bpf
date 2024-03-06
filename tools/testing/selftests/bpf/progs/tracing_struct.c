@@ -5,6 +5,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_testmod_struct_arg_1 {
 	int a;
 };
@@ -22,6 +23,7 @@ struct bpf_testmod_struct_arg_4 {
 	u64 a;
 	int b;
 };
+#endif
 
 long t1_a_a, t1_a_b, t1_b, t1_c, t1_ret, t1_nregs;
 __u64 t1_reg0, t1_reg1, t1_reg2, t1_reg3;

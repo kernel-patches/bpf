@@ -12,7 +12,11 @@
 #include "bpf_testmod_kfunc.h"
 
 #define CREATE_TRACE_POINTS
+#ifdef BPF_TESTMOD_EXTERNAL
 #include "bpf_testmod-events.h"
+#else
+#include "trace/events/bpf_testmod.h"
+#endif
 
 typedef int (*func_proto_typedef)(long);
 typedef int (*func_proto_typedef_nested1)(func_proto_typedef);

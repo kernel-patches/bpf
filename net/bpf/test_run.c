@@ -573,10 +573,12 @@ __bpf_kfunc int bpf_modify_return_test2(int a, int *b, short c, int d,
 	return a + *b + c + d + (long)e + f + g;
 }
 
+#if !IS_ENABLED(CONFIG_BPF_TEST_MODULE)
 int noinline bpf_fentry_shadow_test(int a)
 {
 	return a + 1;
 }
+#endif
 
 struct prog_test_member1 {
 	int a;

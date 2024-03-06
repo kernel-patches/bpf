@@ -4,6 +4,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_testmod_btf_type_tag_1 {
 	int a;
 };
@@ -11,6 +12,7 @@ struct bpf_testmod_btf_type_tag_1 {
 struct bpf_testmod_btf_type_tag_2 {
 	struct bpf_testmod_btf_type_tag_1 *p;
 };
+#endif
 
 int g;
 

@@ -5,10 +5,12 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 
+#ifdef BPF_TESTMOD_EXTERNAL
 struct bpf_iter_testmod_seq {
 	u64 :64;
 	u64 :64;
 };
+#endif
 
 extern int bpf_iter_testmod_seq_new(struct bpf_iter_testmod_seq *it, s64 value, int cnt) __ksym;
 extern s64 *bpf_iter_testmod_seq_next(struct bpf_iter_testmod_seq *it) __ksym;
