@@ -52,8 +52,8 @@ config GENERIC_ENTRY
 
 config KPROBES
 	bool "Kprobes"
-	depends on MODULES
 	depends on HAVE_KPROBES
+	select MODULE_ALLOC
 	select KALLSYMS
 	select TASKS_RCU if PREEMPTION
 	help

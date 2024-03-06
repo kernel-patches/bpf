@@ -1556,8 +1556,12 @@ static bool is_cfi_preamble_symbol(unsigned long addr)
 		str_has_prefix("__pfx_", symbuf);
 }
 
+#if IS_ENABLED(CONFIG_MODULES)
 static int check_kprobe_address_safe(struct kprobe *p,
 				     struct module **probed_mod)
+#else
+static int check_kprobe_address_safe(struct kprobe *p)
+#endif
 {
 	int ret;
 
@@ -1580,6 +1584,7 @@ static int check_kprobe_address_safe(struct kprobe *p,
 		goto out;
 	}
 
+#if IS_ENABLED(CONFIG_MODULES)
 	/* Check if 'p' is probing a module. */
 	*probed_mod = __module_text_address((unsigned long) p->addr);
 	if (*probed_mod) {
@@ -1603,6 +1608,8 @@ static int check_kprobe_address_safe(struct kprobe *p,
 			ret = -ENOENT;
 		}
 	}
+#endif
+
 out:
 	preempt_enable();
 	jump_label_unlock();
@@ -1614,7 +1621,9 @@ int register_kprobe(struct kprobe *p)
 {
 	int ret;
 	struct kprobe *old_p;
+#if IS_ENABLED(CONFIG_MODULES)
 	struct module *probed_mod;
+#endif
 	kprobe_opcode_t *addr;
 	bool on_func_entry;
 
@@ -1633,7 +1642,11 @@ int register_kprobe(struct kprobe *p)
 	p->nmissed = 0;
 	INIT_LIST_HEAD(&p->list);
 
+#if IS_ENABLED(CONFIG_MODULES)
 	ret = check_kprobe_address_safe(p, &probed_mod);
+#else
+	ret = check_kprobe_address_safe(p);
+#endif
 	if (ret)
 		return ret;
 
@@ -1676,8 +1689,10 @@ int register_kprobe(struct kprobe *p)
 out:
 	mutex_unlock(&kprobe_mutex);
 
+#if IS_ENABLED(CONFIG_MODULES)
 	if (probed_mod)
 		module_put(probed_mod);
+#endif
 
 	return ret;
 }
@@ -2482,6 +2497,7 @@ int kprobe_add_area_blacklist(unsigned long start, unsigned long end)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_MODULES)
 /* Remove all symbols in given area from kprobe blacklist */
 static void kprobe_remove_area_blacklist(unsigned long start, unsigned long end)
 {
@@ -2499,6 +2515,7 @@ static void kprobe_remove_ksym_blacklist(unsigned long entry)
 {
 	kprobe_remove_area_blacklist(entry, entry + 1);
 }
+#endif
 
 int __weak arch_kprobe_get_kallsym(unsigned int *symnum, unsigned long *value,
 				   char *type, char *sym)
@@ -2564,6 +2581,7 @@ static int __init populate_kprobe_blacklist(unsigned long *start,
 	return ret ? : arch_populate_kprobe_blacklist();
 }
 
+#if IS_ENABLED(CONFIG_MODULES)
 static void add_module_kprobe_blacklist(struct module *mod)
 {
 	unsigned long start, end;
@@ -2665,6 +2683,7 @@ static struct notifier_block kprobe_module_nb = {
 	.notifier_call = kprobes_module_callback,
 	.priority = 0
 };
+#endif /* IS_ENABLED(CONFIG_MODULES) */
 
 void kprobe_free_init_mem(void)
 {
@@ -2724,8 +2743,11 @@ static int __init init_kprobes(void)
 	err = arch_init_kprobes();
 	if (!err)
 		err = register_die_notifier(&kprobe_exceptions_nb);
+
+#if IS_ENABLED(CONFIG_MODULES)
 	if (!err)
 		err = register_module_notifier(&kprobe_module_nb);
+#endif
 
 	kprobes_initialized = (err == 0);
 	kprobe_sysctls_init();
