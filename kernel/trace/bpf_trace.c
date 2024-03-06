@@ -1473,10 +1473,57 @@ __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
 	return __vfs_getxattr(dentry, dentry->d_inode, name__str, value, value_len);
 }
 
+/**
+ * bpf_task_mm_grab - get a reference on the mm_struct nested within the
+ * 		      supplied task_struct
+ * @task: task_struct nesting the mm_struct that is to be referenced
+ *
+ * Grab a reference on the mm_struct that is nested within the supplied
+ * *task*. This kfunc will return NULL for threads that do not possess a valid
+ * mm_struct. For example, those that are flagged as PF_KTHREAD. A reference on
+ * a mm_struct acquired by this kfunc must be released using bpf_mm_drop().
+ *
+ * This helper only pins the mm_struct and not necessarily the address space
+ * associated with the referenced mm_struct that is returned from this
+ * kfunc. Internally, this kfunc leans on mmgrab(), such that calling
+ * bpf_task_mm_grab() would be analogous to calling mmgrab() outside of BPF
+ * program context.
+ *
+ * Return: A referenced pointer to the mm_struct nested within the supplied
+ * *task*, or NULL.
+ */
+__bpf_kfunc struct mm_struct *bpf_task_mm_grab(struct task_struct *task)
+{
+	struct mm_struct *mm;
+
+	task_lock(task);
+	mm = task->mm;
+	if (likely(mm))
+		mmgrab(mm);
+	task_unlock(task);
+
+	return mm;
+}
+
+/**
+ * bpf_mm_drop - put a reference on the supplied mm_struct
+ * @mm: mm_struct of which to put a reference on
+ *
+ * Put a reference on the supplied *mm*. This kfunc internally leans on
+ * mmdrop(), such that calling bpf_mm_drop() would be analogous to calling
+ * mmdrop() outside of BPF program context.
+ */
+__bpf_kfunc void bpf_mm_drop(struct mm_struct *mm)
+{
+	mmdrop(mm);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(lsm_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_task_mm_grab, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_mm_drop, KF_RELEASE);
 BTF_KFUNCS_END(lsm_kfunc_set_ids)
 
 static int bpf_lsm_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
