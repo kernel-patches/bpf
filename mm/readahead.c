@@ -113,6 +113,7 @@
  * ->read_folio() which may be less efficient.
  */
 
+#include "linux/bpf.h"
 #include <linux/blkdev.h>
 #include <linux/kernel.h>
 #include <linux/dax.h>
@@ -143,6 +144,28 @@ file_ra_state_init(struct file_ra_state *ra, struct address_space *mapping)
 }
 EXPORT_SYMBOL_GPL(file_ra_state_init);
 
+static struct bpf_fs_readahead_ops *bpf_fs_ra_ops;
+
+int bpf_fs_ra_register(struct bpf_fs_readahead_ops *ops)
+{
+	if (bpf_fs_ra_ops)
+		return -EBUSY;
+
+	bpf_fs_ra_ops = ops;
+	return 0;
+}
+
+void bpf_fs_ra_unregister(struct bpf_fs_readahead_ops *ops)
+{
+	if (bpf_fs_ra_ops == ops)
+		bpf_fs_ra_ops = NULL;
+}
+
+/*
+ * There are two ways to get here: from the filemap_read path, or from the
+ * page fault handler for memory-mapped files (filemap_fault). The first will 
+ * set up readahead with ondemand_readahead, the second will do ???
+*/
 static void read_pages(struct readahead_control *rac)
 {
 	const struct address_space_operations *aops = rac->mapping->a_ops;
@@ -155,6 +178,25 @@ static void read_pages(struct readahead_control *rac)
 	if (unlikely(rac->_workingset))
 		psi_memstall_enter(&rac->_pflags);
 	blk_start_plug(&plug);
+
+	// there are two possible places to put this:
+	// 1. In both the filemap_read and filemap_fault paths, after the call
+	// determine readahead
+	// 2. Here, where they both converge after determining readahead.
+	// Not sure which is better, so I'm leaving it here for now
+	if (bpf_fs_ra_ops) {
+		struct bpf_fs_readahead_state state = {
+			.i_ino = rac->mapping->host->i_ino,
+			.size = rac->ra->size,
+			.async_size = rac->ra->async_size,
+			.ra_pages = rac->ra->ra_pages,
+			.mmap_miss = rac->ra->mmap_miss,
+			.prev_pos = rac->ra->prev_pos,
+		};
+
+		rac->ra->ra_pages = bpf_fs_ra_ops->get_max_ra(&state);
+		// rac->ra->size = bpf_fs_ra_ops->get_ra(&state);
+	}
 
 	if (aops->readahead) {
 		aops->readahead(rac);

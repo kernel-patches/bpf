@@ -1798,6 +1798,27 @@ struct bpf_dummy_ops {
 	int (*test_sleepable)(struct bpf_dummy_ops_state *cb);
 };
 
+// KNN: put it here for now for lack of a better place
+
+struct bpf_fs_readahead_state {
+	int i_ino;
+	unsigned int size;
+	unsigned int async_size;
+	unsigned int ra_pages;
+	unsigned int mmap_miss;
+	loff_t prev_pos;
+};
+
+struct bpf_fs_readahead_ops {
+	int (*get_max_ra)(struct bpf_fs_readahead_state *cb);
+	int (*get_ra)(struct bpf_fs_readahead_state *cb);
+};
+
+// temporarily globals as we get this working
+
+int bpf_fs_ra_register(struct bpf_fs_readahead_ops *ops);
+void bpf_fs_ra_unregister(struct bpf_fs_readahead_ops *ops);
+
 int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 			    union bpf_attr __user *uattr);
 #endif
