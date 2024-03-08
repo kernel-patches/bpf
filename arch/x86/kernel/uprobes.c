@@ -12,6 +12,7 @@
 #include <linux/ptrace.h>
 #include <linux/uprobes.h>
 #include <linux/uaccess.h>
+#include <linux/syscalls.h>
 
 #include <linux/kdebug.h>
 #include <asm/processor.h>
@@ -308,6 +309,53 @@ static int uprobe_init_insn(struct arch_uprobe *auprobe, struct insn *insn, bool
 }
 
 #ifdef CONFIG_X86_64
+
+asm (
+	".pushsection .rodata\n"
+	".global uretprobe_syscall_entry\n"
+	"uretprobe_syscall_entry:\n"
+	"pushq %rax\n"
+	"pushq %rcx\n"
+	"pushq %r11\n"
+	"movq $462, %rax\n"
+	"syscall\n"
+	".global uretprobe_syscall_end\n"
+	"uretprobe_syscall_end:\n"
+	".popsection\n"
+);
+
+extern u8 uretprobe_syscall_entry[];
+extern u8 uretprobe_syscall_end[];
+
+void *arch_uprobe_trampoline(unsigned long *psize)
+{
+	*psize = uretprobe_syscall_end - uretprobe_syscall_entry;
+	return uretprobe_syscall_entry;
+}
+
+SYSCALL_DEFINE0(uretprobe)
+{
+	struct pt_regs *regs = task_pt_regs(current);
+	unsigned long sregs[3], err;
+
+	/*
+	 * We set rax and syscall itself changes rcx and r11, so the syscall
+	 * trampoline saves their original values on stack. We need to read
+	 * them and set original register values and fix the rsp pointer back.
+	 */
+	err = copy_from_user((void *) &sregs, (void *) regs->sp, sizeof(sregs));
+	WARN_ON_ONCE(err);
+
+	regs->r11 = sregs[0];
+	regs->cx = sregs[1];
+	regs->ax = sregs[2];
+	regs->orig_ax = -1;
+	regs->sp += sizeof(sregs);
+
+	uprobe_handle_trampoline(regs);
+	return regs->ax;
+}
+
 /*
  * If arch_uprobe->insn doesn't use rip-relative addressing, return
  * immediately.  Otherwise, rewrite the instruction so that it accesses
