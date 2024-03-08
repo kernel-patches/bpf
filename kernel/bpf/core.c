@@ -893,7 +893,16 @@ static LIST_HEAD(pack_list);
  * CONFIG_MMU=n. Use PAGE_SIZE in these cases.
  */
 #ifdef PMD_SIZE
+/*
+ * PMD_SIZE is really big for some archs. It doesn't make sense to
+ * reserve too much memory in one allocation. Cap BPF_PROG_PACK_SIZE to
+ * 2MiB * num_possible_nodes().
+ */
+#if PMD_SIZE <= (1 << 21)
 #define BPF_PROG_PACK_SIZE (PMD_SIZE * num_possible_nodes())
+#else
+#define BPF_PROG_PACK_SIZE ((1 << 21) * num_possible_nodes())
+#endif
 #else
 #define BPF_PROG_PACK_SIZE PAGE_SIZE
 #endif
