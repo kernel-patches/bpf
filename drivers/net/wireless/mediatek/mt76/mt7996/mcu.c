@@ -341,7 +341,7 @@ mt7996_mcu_csa_finish(void *priv, u8 *mac, struct ieee80211_vif *vif)
 	if (!vif->bss_conf.csa_active || vif->type == NL80211_IFTYPE_STATION)
 		return;
 
-	ieee80211_csa_finish(vif);
+	ieee80211_csa_finish(vif, 0);
 }
 
 static void
@@ -4477,7 +4477,8 @@ int mt7996_mcu_set_txpower_sku(struct mt7996_phy *phy)
 
 	skb_put_data(skb, &req, sizeof(req));
 	/* cck and ofdm */
-	skb_put_data(skb, &la.cck, sizeof(la.cck) + sizeof(la.ofdm));
+	skb_put_data(skb, &la.cck, sizeof(la.cck));
+	skb_put_data(skb, &la.ofdm, sizeof(la.ofdm));
 	/* ht20 */
 	skb_put_data(skb, &la.mcs[0], 8);
 	/* ht40 */
