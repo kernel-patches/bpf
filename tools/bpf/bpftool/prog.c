@@ -1778,7 +1778,10 @@ offload_dev:
 		goto err_close_obj;
 	}
 
-	err = mount_bpffs_for_pin(pinfile, !first_prog_only);
+	if (first_prog_only)
+		err = mount_bpffs_given_file(pinfile);
+	else
+		err = mount_bpffs_on_dir(pinfile);
 	if (err)
 		goto err_close_obj;
 
