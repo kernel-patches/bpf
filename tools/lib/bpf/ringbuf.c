@@ -265,6 +265,14 @@ static int64_t ringbuf_process_ring(struct ring *r)
 					return err;
 				}
 				cnt++;
+				if (err > 0) {
+					/* update consumer pos and return the
+					 * total amount of items consumed.
+					 */
+					smp_store_release(r->consumer_pos,
+							  cons_pos);
+					goto done;
+				}
 			}
 
 			smp_store_release(r->consumer_pos, cons_pos);
