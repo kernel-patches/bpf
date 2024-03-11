@@ -3273,6 +3273,34 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.fill_link_info = bpf_tracing_link_fill_link_info,
 };
 
+static int bpf_tracing_check_multi(struct bpf_prog *prog,
+				   struct bpf_prog *tgt_prog,
+				   struct btf *btf2,
+				   const struct btf_type *t2)
+{
+	const struct btf_type *t1;
+	struct btf *btf1;
+
+	/* this case is already valided in bpf_check_attach_target() */
+	if (prog->type == BPF_PROG_TYPE_EXT)
+		return 0;
+
+	btf1 = prog->aux->dst_prog ? prog->aux->dst_prog->aux->btf :
+				     prog->aux->attach_btf;
+	if (!btf1)
+		return -EOPNOTSUPP;
+
+	btf2 = btf2 ?: tgt_prog->aux->btf;
+	t1 = prog->aux->attach_func_proto;
+
+	/* the target is the same as the origin one, this is a re-attach */
+	if (t1 == t2)
+		return 0;
+
+	return btf_check_func_part_match(btf1, t1, btf2, t2,
+					 prog->aux->accessed_args);
+}
+
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id,
@@ -3470,6 +3498,350 @@ out_unlock:
 out_put_prog:
 	if (tgt_prog_fd && tgt_prog)
 		bpf_prog_put(tgt_prog);
+	return err;
+}
+
+static void __bpf_tracing_multi_link_release(struct bpf_tracing_multi_link *link)
+{
+	int i;
+
+	if (link->mods_cnt) {
+		for (i = 0; i < link->mods_cnt; i++)
+			module_put(link->mods[i]);
+		kfree(link->mods);
+	}
+
+	if (link->prog_cnt) {
+		for (i = 0; i < link->prog_cnt; i++)
+			bpf_prog_put(link->tgt_progs[i]);
+		kfree(link->tgt_progs);
+	}
+
+	if (link->btf_cnt) {
+		for (i = 0; i < link->btf_cnt; i++)
+			btf_put(link->tgt_btfs[i]);
+		kfree(link->tgt_btfs);
+	}
+
+	if (link->link.cnt) {
+		for (i = 0; i < link->link.cnt; i++)
+			bpf_trampoline_put(link->link.entries[i].trampoline);
+		kfree(link->link.entries);
+	}
+}
+
+static void bpf_tracing_multi_link_release(struct bpf_link *link)
+{
+	struct bpf_tracing_multi_link *multi_link =
+		container_of(link, struct bpf_tracing_multi_link, link.link);
+
+	bpf_trampoline_multi_unlink_prog(&multi_link->link);
+	__bpf_tracing_multi_link_release(multi_link);
+}
+
+static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link.link);
+
+	kfree(tr_link);
+}
+
+static void bpf_tracing_multi_link_show_fdinfo(const struct bpf_link *link,
+					 struct seq_file *seq)
+{
+	struct bpf_tracing_multi_link *tr_link =
+		container_of(link, struct bpf_tracing_multi_link, link.link);
+	u32 target_btf_id, target_obj_id;
+	int i;
+
+	for (i = 0; i < tr_link->link.cnt; i++) {
+		bpf_trampoline_unpack_key(tr_link->link.entries[i].trampoline->key,
+					  &target_obj_id, &target_btf_id);
+		seq_printf(seq,
+			   "attach_type:\t%d\n"
+			   "target_obj_id:\t%u\n"
+			   "target_btf_id:\t%u\n",
+			   tr_link->attach_type,
+			   target_obj_id,
+			   target_btf_id);
+	}
+}
+
+static const struct bpf_link_ops bpf_tracing_multi_link_lops = {
+	.release = bpf_tracing_multi_link_release,
+	.dealloc = bpf_tracing_multi_link_dealloc,
+	.show_fdinfo = bpf_tracing_multi_link_show_fdinfo,
+};
+
+#define MAX_TRACING_MULTI_CNT	1024
+
+static int bpf_tracing_get_target(u32 fd, struct bpf_prog **tgt_prog,
+				  struct btf **tgt_btf)
+{
+	struct bpf_prog *prog = NULL;
+	struct btf *btf = NULL;
+	int err = 0;
+
+	if (fd) {
+		prog = bpf_prog_get(fd);
+		if (!IS_ERR(prog))
+			goto found;
+
+		prog = NULL;
+		/* "fd" is the fd of the kernel module BTF */
+		btf = btf_get_by_fd(fd);
+		if (IS_ERR(btf)) {
+			err = PTR_ERR(btf);
+			goto err;
+		}
+		if (!btf_is_kernel(btf)) {
+			btf_put(btf);
+			err = -EOPNOTSUPP;
+			goto err;
+		}
+	} else {
+		btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(btf)) {
+			err = PTR_ERR(btf);
+			goto err;
+		}
+		if (!btf) {
+			err = -EINVAL;
+			goto err;
+		}
+		btf_get(btf);
+	}
+found:
+	*tgt_prog = prog;
+	*tgt_btf = btf;
+	return 0;
+err:
+	*tgt_prog = NULL;
+	*tgt_btf = NULL;
+	return err;
+}
+
+static int bpf_tracing_multi_link_check(const union bpf_attr *attr, u32 **btf_ids,
+					u32 **tgt_fds, u64 **cookies,
+					u32 cnt)
+{
+	void __user *ubtf_ids;
+	void __user *utgt_fds;
+	void __user *ucookies;
+	void *tmp;
+	int i;
+
+	if (!cnt)
+		return -EINVAL;
+
+	if (cnt > MAX_TRACING_MULTI_CNT)
+		return -E2BIG;
+
+	ucookies = u64_to_user_ptr(attr->link_create.tracing_multi.cookies);
+	if (ucookies) {
+		tmp = kvmalloc_array(cnt, sizeof(**cookies), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		*cookies = tmp;
+		if (copy_from_user(tmp, ucookies, cnt * sizeof(**cookies)))
+			return -EFAULT;
+	}
+
+	utgt_fds = u64_to_user_ptr(attr->link_create.tracing_multi.tgt_fds);
+	if (utgt_fds) {
+		tmp = kvmalloc_array(cnt, sizeof(**tgt_fds), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		*tgt_fds = tmp;
+		if (copy_from_user(tmp, utgt_fds, cnt * sizeof(**tgt_fds)))
+			return -EFAULT;
+	}
+
+	ubtf_ids = u64_to_user_ptr(attr->link_create.tracing_multi.btf_ids);
+	if (!ubtf_ids)
+		return -EINVAL;
+
+	tmp = kvmalloc_array(cnt, sizeof(**btf_ids), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	*btf_ids = tmp;
+	if (copy_from_user(tmp, ubtf_ids, cnt * sizeof(**btf_ids)))
+		return -EFAULT;
+
+	for (i = 0; i < cnt; i++) {
+		if (!(*btf_ids)[i])
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void bpf_tracing_multi_link_ptr_fill(struct bpf_tracing_multi_link *link,
+					    struct ptr_array *progs,
+					    struct ptr_array *mods,
+					    struct ptr_array *btfs)
+{
+	link->mods = (struct module **) mods->ptrs;
+	link->mods_cnt = mods->cnt;
+	link->tgt_btfs = (struct btf **) btfs->ptrs;
+	link->btf_cnt = btfs->cnt;
+	link->tgt_progs = (struct bpf_prog **) progs->ptrs;
+	link->prog_cnt = progs->cnt;
+}
+
+static int bpf_tracing_prog_attach_multi(const union bpf_attr *attr,
+					 struct bpf_prog *prog)
+{
+	struct bpf_tracing_multi_link *link = NULL;
+	u32 cnt, *btf_ids = NULL, *tgt_fds = NULL;
+	struct bpf_link_primer link_primer;
+	struct ptr_array prog_array = { };
+	struct ptr_array btf_array = { };
+	struct ptr_array mod_array = { };
+	u64 *cookies = NULL;
+	int err = 0, i;
+
+	if ((prog->expected_attach_type != BPF_TRACE_FENTRY_MULTI &&
+	     prog->expected_attach_type != BPF_TRACE_FEXIT_MULTI &&
+	     prog->expected_attach_type != BPF_MODIFY_RETURN_MULTI) ||
+	    prog->type != BPF_PROG_TYPE_TRACING)
+		return -EINVAL;
+
+	cnt = attr->link_create.tracing_multi.cnt;
+	err = bpf_tracing_multi_link_check(attr, &btf_ids, &tgt_fds, &cookies,
+					   cnt);
+	if (err)
+		goto err_out;
+
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+	link->link.entries = kzalloc(sizeof(*link->link.entries) * cnt,
+				     GFP_USER);
+	if (!link->link.entries) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	bpf_link_init(&link->link.link, BPF_LINK_TYPE_TRACING_MULTI,
+		      &bpf_tracing_multi_link_lops, prog);
+	link->attach_type = prog->expected_attach_type;
+
+	mutex_lock(&prog->aux->dst_mutex);
+
+	/* program is already attached, re-attach is not supported here yet */
+	if (!prog->aux->dst_trampoline) {
+		err = -EEXIST;
+		goto err_out_unlock;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_attach_target_info tgt_info = {};
+		struct bpf_tramp_multi_link_entry *entry;
+		struct bpf_prog *tgt_prog = NULL;
+		struct bpf_trampoline *tr = NULL;
+		u32 tgt_fd, btf_id = btf_ids[i];
+		struct btf *tgt_btf = NULL;
+		struct module *mod = NULL;
+		u64 key = 0;
+
+		entry = &link->link.entries[i];
+		tgt_fd = tgt_fds ? tgt_fds[i] : 0;
+		err = bpf_tracing_get_target(tgt_fd, &tgt_prog, &tgt_btf);
+		if (err)
+			goto err_out_unlock;
+
+		if (tgt_prog) {
+			err = bpf_try_add_ptr(&prog_array, tgt_prog);
+			if (err) {
+				bpf_prog_put(tgt_prog);
+				if (err != -EEXIST)
+					goto err_out_unlock;
+			}
+		}
+
+		if (tgt_btf) {
+			err = bpf_try_add_ptr(&btf_array, tgt_btf);
+			if (err) {
+				btf_put(tgt_btf);
+				if (err != -EEXIST)
+					goto err_out_unlock;
+			}
+		}
+
+		prog->aux->attach_tracing_prog = tgt_prog &&
+			tgt_prog->type == BPF_PROG_TYPE_TRACING &&
+			prog->type == BPF_PROG_TYPE_TRACING;
+
+		err = bpf_check_attach_target(NULL, prog, tgt_prog, tgt_btf,
+					      btf_id, &tgt_info);
+		if (err)
+			goto err_out_unlock;
+
+		mod = tgt_info.tgt_mod;
+		if (mod) {
+			err = bpf_try_add_ptr(&mod_array, mod);
+			if (err) {
+				module_put(mod);
+				if (err != -EEXIST)
+					goto err_out_unlock;
+			}
+		}
+
+		err = bpf_tracing_check_multi(prog, tgt_prog, tgt_btf,
+					      tgt_info.tgt_type);
+		if (err)
+			goto err_out_unlock;
+
+		key = bpf_trampoline_compute_key(tgt_prog, tgt_btf, btf_id);
+		tr = bpf_trampoline_get(key, &tgt_info);
+		if (!tr) {
+			err = -ENOMEM;
+			goto err_out_unlock;
+		}
+
+		entry->conn.cookie = cookies ? cookies[i] : 0;
+		entry->conn.link = &link->link.link;
+		entry->trampoline = tr;
+		link->link.cnt++;
+	}
+
+	err = bpf_trampoline_multi_link_prog(&link->link);
+	if (err)
+		goto err_out_unlock;
+
+	err = bpf_link_prime(&link->link.link, &link_primer);
+	if (err) {
+		bpf_trampoline_multi_unlink_prog(&link->link);
+		goto err_out_unlock;
+	}
+
+	bpf_tracing_multi_link_ptr_fill(link, &prog_array, &mod_array,
+					&btf_array);
+	bpf_trampoline_put(prog->aux->dst_trampoline);
+	prog->aux->dst_trampoline = NULL;
+	mutex_unlock(&prog->aux->dst_mutex);
+
+	kfree(btf_ids);
+	kfree(tgt_fds);
+	kfree(cookies);
+	return bpf_link_settle(&link_primer);
+err_out_unlock:
+	bpf_tracing_multi_link_ptr_fill(link, &prog_array, &mod_array,
+					&btf_array);
+	__bpf_tracing_multi_link_release(link);
+	mutex_unlock(&prog->aux->dst_mutex);
+err_out:
+	kfree(btf_ids);
+	kfree(tgt_fds);
+	kfree(cookies);
+	kfree(link);
 	return err;
 }
 
@@ -3924,6 +4296,9 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
 	case BPF_MODIFY_RETURN:
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
+	case BPF_MODIFY_RETURN_MULTI:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_LSM_MAC:
 		return BPF_PROG_TYPE_LSM;
@@ -5201,6 +5576,10 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			ret = bpf_iter_link_attach(attr, uattr, prog);
 		else if (prog->expected_attach_type == BPF_LSM_CGROUP)
 			ret = cgroup_bpf_link_attach(attr, prog);
+		else if (prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
+			 prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI ||
+			 prog->expected_attach_type == BPF_MODIFY_RETURN_MULTI)
+			ret = bpf_tracing_prog_attach_multi(attr, prog);
 		else
 			ret = bpf_tracing_prog_attach(prog,
 						      attr->link_create.target_fd,

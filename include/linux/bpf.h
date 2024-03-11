@@ -1635,6 +1635,17 @@ struct bpf_tracing_link {
 	struct bpf_prog *tgt_prog;
 };
 
+struct bpf_tracing_multi_link {
+	struct bpf_tramp_multi_link link;
+	enum bpf_attach_type attach_type;
+	u32 prog_cnt;
+	u32 btf_cnt;
+	struct bpf_prog **tgt_progs;
+	struct btf **tgt_btfs;
+	u32 mods_cnt;
+	struct module **mods;
+};
+
 struct bpf_link_primer {
 	struct bpf_link *link;
 	struct file *file;

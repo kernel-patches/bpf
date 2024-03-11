@@ -15405,10 +15405,13 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		switch (env->prog->expected_attach_type) {
 		case BPF_TRACE_FENTRY:
 		case BPF_TRACE_FEXIT:
+		case BPF_TRACE_FENTRY_MULTI:
+		case BPF_TRACE_FEXIT_MULTI:
 			range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
 		case BPF_MODIFY_RETURN:
+		case BPF_MODIFY_RETURN_MULTI:
 			return 0;
 		case BPF_TRACE_ITER:
 			break;
@@ -20709,7 +20712,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (tgt_prog->type == BPF_PROG_TYPE_TRACING &&
 		    prog_extension &&
 		    (tgt_prog->expected_attach_type == BPF_TRACE_FENTRY ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT)) {
+		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT ||
+		     tgt_prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
+		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI)) {
 			/* Program extensions can extend all program types
 			 * except fentry/fexit. The reason is the following.
 			 * The fentry/fexit programs are used for performance
@@ -20784,6 +20789,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	case BPF_LSM_CGROUP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN_MULTI:
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
 		if (!btf_type_is_func(t)) {
 			bpf_log(log, "attach_btf_id %u is not a function\n",
 				btf_id);
@@ -20869,7 +20877,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				bpf_log(log, "%s is not sleepable\n", tname);
 				return ret;
 			}
-		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN) {
+		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN ||
+			   prog->expected_attach_type == BPF_MODIFY_RETURN_MULTI) {
 			if (tgt_prog) {
 				module_put(mod);
 				bpf_log(log, "can't modify return codes of BPF programs\n");
@@ -20922,6 +20931,9 @@ static bool can_be_sleepable(struct bpf_prog *prog)
 		case BPF_TRACE_FEXIT:
 		case BPF_MODIFY_RETURN:
 		case BPF_TRACE_ITER:
+		case BPF_TRACE_FENTRY_MULTI:
+		case BPF_TRACE_FEXIT_MULTI:
+		case BPF_MODIFY_RETURN_MULTI:
 			return true;
 		default:
 			return false;

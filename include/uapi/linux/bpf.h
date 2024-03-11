@@ -1114,6 +1114,9 @@ enum bpf_attach_type {
 	BPF_CGROUP_UNIX_GETSOCKNAME,
 	BPF_NETKIT_PRIMARY,
 	BPF_NETKIT_PEER,
+	BPF_TRACE_FENTRY_MULTI,
+	BPF_TRACE_FEXIT_MULTI,
+	BPF_MODIFY_RETURN_MULTI,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1134,6 +1137,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_TCX = 11,
 	BPF_LINK_TYPE_UPROBE_MULTI = 12,
 	BPF_LINK_TYPE_NETKIT = 13,
+	BPF_LINK_TYPE_TRACING_MULTI = 14,
 	__MAX_BPF_LINK_TYPE,
 };
 
@@ -1726,6 +1730,12 @@ union bpf_attr {
 				 */
 				__u64		cookie;
 			} tracing;
+			struct {
+				__u32		cnt;
+				__aligned_u64	tgt_fds;
+				__aligned_u64	btf_ids;
+				__aligned_u64	cookies;
+			} tracing_multi;
 			struct {
 				__u32		pf;
 				__u32		hooknum;

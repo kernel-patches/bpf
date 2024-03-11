@@ -371,6 +371,8 @@ static bool bpf_sk_storage_tracing_allowed(const struct bpf_prog *prog)
 		return true;
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
 		btf_vmlinux = bpf_get_btf_vmlinux();
 		if (IS_ERR_OR_NULL(btf_vmlinux))
 			return false;
