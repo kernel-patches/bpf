@@ -56,6 +56,7 @@ struct bpf_token;
 struct user_namespace;
 struct super_block;
 struct inode;
+struct bpf_tramp_link;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
@@ -1090,7 +1091,7 @@ enum {
 };
 
 struct bpf_tramp_links {
-	struct bpf_tramp_link *links[BPF_MAX_TRAMP_LINKS];
+	struct bpf_tramp_link_conn *links[BPF_MAX_TRAMP_LINKS];
 	int nr_links;
 };
 
@@ -1597,10 +1598,15 @@ struct bpf_link_ops {
 			  struct bpf_map *old_map);
 };
 
-struct bpf_tramp_link {
-	struct bpf_link link;
+struct bpf_tramp_link_conn {
+	struct bpf_link *link;
 	struct hlist_node tramp_hlist;
 	u64 cookie;
+};
+
+struct bpf_tramp_link {
+	struct bpf_link link;
+	struct bpf_tramp_link_conn conn;
 };
 
 struct bpf_shim_tramp_link {

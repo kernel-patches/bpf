@@ -3339,6 +3339,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	}
 
 	link = kzalloc(sizeof(*link), GFP_USER);
+	link->link.conn.link = &link->link.link;
 	if (!link) {
 		err = -ENOMEM;
 		goto out_put_prog;
@@ -3346,7 +3347,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	bpf_link_init(&link->link.link, BPF_LINK_TYPE_TRACING,
 		      &bpf_tracing_link_lops, prog);
 	link->attach_type = prog->expected_attach_type;
-	link->link.cookie = bpf_cookie;
+	link->link.conn.cookie = bpf_cookie;
 
 	mutex_lock(&prog->aux->dst_mutex);
 

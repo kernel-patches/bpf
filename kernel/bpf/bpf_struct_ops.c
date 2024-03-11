@@ -549,7 +549,7 @@ int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_links *tlinks,
 	void *image = *_image;
 	int size;
 
-	tlinks[BPF_TRAMP_FENTRY].links[0] = link;
+	tlinks[BPF_TRAMP_FENTRY].links[0] = &link->conn;
 	tlinks[BPF_TRAMP_FENTRY].nr_links = 1;
 
 	if (model->ret_size > 0)
@@ -710,6 +710,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			err = -ENOMEM;
 			goto reset_unlock;
 		}
+		link->conn.link = &link->link;
 		bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS,
 			      &bpf_struct_ops_link_lops, prog);
 		st_map->links[i] = &link->link;

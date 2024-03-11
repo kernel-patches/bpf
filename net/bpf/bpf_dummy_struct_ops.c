@@ -120,6 +120,7 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 		err = -ENOMEM;
 		goto out;
 	}
+	link->conn.link = &link->link;
 	/* prog doesn't take the ownership of the reference from caller */
 	bpf_prog_inc(prog);
 	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_link_lops, prog);
