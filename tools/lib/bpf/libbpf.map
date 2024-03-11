@@ -414,4 +414,5 @@ LIBBPF_1.4.0 {
 		btf__new_split;
 		btf_ext__raw_data;
 		bpf_object__free_btfs;
+		bpf_program__attach_trace_multi_opts;
 } LIBBPF_1.3.0;
