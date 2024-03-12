@@ -1351,6 +1351,10 @@ static bool uprobe_perf_filter(struct uprobe_consumer *uc,
 	tu = container_of(uc, struct trace_uprobe, consumer);
 	filter = tu->tp.event->filter;
 
+	/* speculative check */
+	if (READ_ONCE(filter->nr_systemwide))
+		return true;
+
 	read_lock(&filter->rwlock);
 	ret = __uprobe_perf_filter(filter, mm);
 	read_unlock(&filter->rwlock);
