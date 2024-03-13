@@ -944,7 +944,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 			break;
 		case 32:
 			emit(A64_REV32(is64, dst, dst), ctx);
-			/* upper 32 bits already cleared */
+			/* zero-extend 32 bits into 64 bits */
+			emit(A64_UXTW(is64, dst, dst), ctx);
 			break;
 		case 64:
 			emit(A64_REV64(dst, dst), ctx);
