@@ -82,6 +82,7 @@ struct jit_ctx {
 	__le32 *ro_image;
 	u32 stack_size;
 	int fpb_offset;
+	u64 user_vm_start;
 };
 
 struct bpf_plt {
@@ -868,6 +869,34 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	/* dst = src */
 	case BPF_ALU | BPF_MOV | BPF_X:
 	case BPF_ALU64 | BPF_MOV | BPF_X:
+		if (insn->off == BPF_ADDR_SPACE_CAST &&
+		    insn->imm == 1U << 16) {
+			/* Zero out tmp2 */
+			emit(A64_EOR(1, tmp2, tmp2, tmp2), ctx);
+
+			/* Move lo_32_bits(src) to dst */
+			if (dst != src)
+				emit(A64_MOV(0, dst, src), ctx);
+
+			/* Logical shift left by 32 bits */
+			emit(A64_LSL(1, dst, dst, 32), ctx);
+
+			/* Get upper 32 bits of user_vm_start in tmp */
+			emit_a64_mov_i(0, tmp, ctx->user_vm_start >> 32, ctx);
+
+			/* dst |= up_32_bits(user_vm_start) */
+			emit(A64_ORR(1, dst, dst, tmp), ctx);
+
+			/* Rotate by 32 bits to get final result */
+			emit_a64_mov_i(0, tmp, 32, ctx);
+			emit(A64_RORV(1, dst, dst, tmp), ctx);
+
+			/* If lo_32_bits(dst) == 0, set dst = tmp2(0) */
+			emit(A64_CBZ(0, dst, 2), ctx);
+			emit(A64_MOV(1, tmp2, dst), ctx);
+			emit(A64_MOV(1, dst, tmp2), ctx);
+		break;
+		}
 		switch (insn->off) {
 		case 0:
 			emit(A64_MOV(is64, dst, src), ctx);
@@ -1690,6 +1719,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	}
 
 	ctx.fpb_offset = find_fpb_offset(prog);
+	ctx.user_vm_start = bpf_arena_get_user_vm_start(prog->aux->arena);
 
 	/*
 	 * 1. Initial fake pass to compute ctx->idx and ctx->offset.
@@ -2508,6 +2538,11 @@ bool bpf_jit_supports_exceptions(void)
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 * ARM64 kernel is aways compiled with CONFIG_FRAME_POINTER=y
 	 */
+	return true;
+}
+
+bool bpf_jit_supports_arena(void)
+{
 	return true;
 }
 
