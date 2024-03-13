@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "struct_ops_module.skel.h"
+#include "struct_ops_extra_arg.skel.h"
 
 static void check_map_info(struct bpf_map_info *info)
 {
@@ -138,11 +139,66 @@ static void test_struct_ops_not_zeroed(void)
 	struct_ops_module__destroy(skel);
 }
 
+/* Handle BPF programs with additional arguments that don't appear in the
+ * function pointer prototype in the kernel.
+ */
+static void test_struct_ops_extra_arg(void)
+{
+	struct struct_ops_extra_arg *skel;
+	int err;
+
+	/* test_extra_arg() has an extra argument, so testmod_1 should fail
+	 * to load.
+	 *
+	 * Since extra_arg is used in test_extra_arg(), it should be
+	 * rejected by the verifier.
+	 */
+	skel = struct_ops_extra_arg__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_extra_arg_open_extra_arg"))
+		return;
+
+	err = struct_ops_extra_arg__load(skel);
+	ASSERT_ERR(err, "struct_ops_extra_arg_load_extra_arg");
+
+	struct_ops_extra_arg__destroy(skel);
+
+	/* Switch to test_2() */
+	skel = struct_ops_extra_arg__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_extra_arg_open"))
+		return;
+
+	skel->struct_ops.testmod_1->test_2 = skel->progs.test_2;
+
+	err = struct_ops_extra_arg__load(skel);
+	ASSERT_OK(err, "struct_ops_extra_arg_load");
+
+	struct_ops_extra_arg__destroy(skel);
+
+	/* Switch to test_extra_arg_unused()
+	 *
+	 * Since extra_arg is never used, it should be accepted by the
+	 * verifier. The verifier would accept a program with extra
+	 * arguments as long as they are not used.
+	 */
+	skel = struct_ops_extra_arg__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_extra_arg_open_unused"))
+		return;
+
+	skel->struct_ops.testmod_1->test_2 = skel->progs.test_extra_arg_unused;
+
+	err = struct_ops_extra_arg__load(skel);
+	ASSERT_OK(err, "struct_ops_extra_arg_load_unused");
+
+	struct_ops_extra_arg__destroy(skel);
+}
+
 void serial_test_struct_ops_module(void)
 {
 	if (test__start_subtest("test_struct_ops_load"))
 		test_struct_ops_load();
 	if (test__start_subtest("test_struct_ops_not_zeroed"))
 		test_struct_ops_not_zeroed();
+	if (test__start_subtest("test_struct_ops_extra_arg"))
+		test_struct_ops_extra_arg();
 }
 
