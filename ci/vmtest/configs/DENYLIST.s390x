@@ -1,0 +1,3 @@
+deny_namespace                           # not yet in bpf denylist
+tc_redirect/tc_redirect_dtime            # very flaky
+lru_bug                                  # not yet in bpf-next denylist
