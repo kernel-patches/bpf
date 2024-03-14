@@ -45,7 +45,8 @@ struct bpf_ct_opts___local {
 	s32 netns_id;
 	s32 error;
 	u8 l4proto;
-	u8 reserved[3];
+	u8 dir;
+	u16 ct_zone;
 } __attribute__((preserve_access_index));
 
 struct nf_conn *bpf_xdp_ct_alloc(struct xdp_md *, struct bpf_sock_tuple *, u32,
@@ -83,16 +84,6 @@ nf_ct_test(struct nf_conn *(*lookup_fn)(void *, struct bpf_sock_tuple *, u32,
 		bpf_ct_release(ct);
 	else
 		test_einval_bpf_tuple = opts_def.error;
-
-	opts_def.reserved[0] = 1;
-	ct = lookup_fn(ctx, &bpf_tuple, sizeof(bpf_tuple.ipv4), &opts_def,
-		       sizeof(opts_def));
-	opts_def.reserved[0] = 0;
-	opts_def.l4proto = IPPROTO_TCP;
-	if (ct)
-		bpf_ct_release(ct);
-	else
-		test_einval_reserved = opts_def.error;
 
 	opts_def.netns_id = -2;
 	ct = lookup_fn(ctx, &bpf_tuple, sizeof(bpf_tuple.ipv4), &opts_def,
