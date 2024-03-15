@@ -204,18 +204,17 @@ extern bool file_ns_capable(const struct file *file, struct user_namespace *ns, 
 extern bool ptracer_capable(struct task_struct *tsk, struct user_namespace *ns);
 static inline bool perfmon_capable(void)
 {
-	return capable(CAP_PERFMON) || capable(CAP_SYS_ADMIN);
+	return capable_any(CAP_PERFMON, CAP_SYS_ADMIN);
 }
 
 static inline bool bpf_capable(void)
 {
-	return capable(CAP_BPF) || capable(CAP_SYS_ADMIN);
+	return capable_any(CAP_BPF, CAP_SYS_ADMIN);
 }
 
 static inline bool checkpoint_restore_ns_capable(struct user_namespace *ns)
 {
-	return ns_capable(ns, CAP_CHECKPOINT_RESTORE) ||
-		ns_capable(ns, CAP_SYS_ADMIN);
+	return ns_capable_any(ns, CAP_CHECKPOINT_RESTORE, CAP_SYS_ADMIN);
 }
 
 /* audit system wants to get cap info from files as well */
