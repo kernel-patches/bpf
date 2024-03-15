@@ -441,6 +441,41 @@ static int get_hw_ring_size(struct ifobject *ifobj)
 	return 0;
 }
 
+static int set_hw_ring_size(struct ifobject *ifobj, u32 tx, u32 rx)
+{
+	struct ethtool_ringparam ring_param = {0};
+	struct ifreq ifr = {0};
+	int sockfd, ret;
+	u32 ctr = 0;
+
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sockfd < 0)
+		return errno;
+
+	memcpy(ifr.ifr_name, ifobj->ifname, sizeof(ifr.ifr_name));
+
+	ring_param.tx_pending = tx;
+	ring_param.rx_pending = rx;
+
+	ring_param.cmd = ETHTOOL_SRINGPARAM;
+	ifr.ifr_data = (char *)&ring_param;
+
+	while (ctr++ < SOCK_RECONF_CTR) {
+		ret = ioctl(sockfd, SIOCETHTOOL, &ifr);
+		if (!ret)
+			break;
+		/* Retry if it fails */
+		if (ctr >= SOCK_RECONF_CTR) {
+			close(sockfd);
+			return errno;
+		}
+		usleep(USLEEP_MAX);
+	}
+
+	close(sockfd);
+	return 0;
+}
+
 static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 			     struct ifobject *ifobj_rx)
 {
