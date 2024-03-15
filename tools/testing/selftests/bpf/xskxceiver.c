@@ -476,6 +476,12 @@ static int set_hw_ring_size(struct ifobject *ifobj, u32 tx, u32 rx)
 	return 0;
 }
 
+static int hw_ring_size_reset(struct ifobject *ifobj)
+{
+	return set_hw_ring_size(ifobj, ifobj->ring.default_tx,
+				ifobj->ring.default_rx);
+}
+
 static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 			     struct ifobject *ifobj_rx)
 {
@@ -519,6 +525,9 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 		}
 	}
 
+	if (ifobj_tx->hw_ring_size_supp)
+		hw_ring_size_reset(ifobj_tx);
+
 	test->ifobj_tx = ifobj_tx;
 	test->ifobj_rx = ifobj_rx;
 	test->current_step = 0;
@@ -530,6 +539,8 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 	test->xskmap_rx = ifobj_rx->xdp_progs->maps.xsk;
 	test->xdp_prog_tx = ifobj_tx->xdp_progs->progs.xsk_def_prog;
 	test->xskmap_tx = ifobj_tx->xdp_progs->maps.xsk;
+	test->ifobj_tx->ring.set_tx = 0;
+	test->ifobj_tx->ring.set_rx = 0;
 }
 
 static void test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
@@ -1929,6 +1940,16 @@ static int testapp_validate_traffic(struct test_spec *test)
 		return TEST_SKIP;
 	}
 
+	if (ifobj_tx->ring.set_tx) {
+		if (ifobj_tx->hw_ring_size_supp) {
+			return set_hw_ring_size(ifobj_tx, ifobj_tx->ring.set_tx,
+						ifobj_tx->ring.set_rx);
+		} else {
+			ksft_test_result_skip("Changing HW ring size not supported.\n");
+			return TEST_SKIP;
+		}
+	}
+
 	xsk_attach_xdp_progs(test, ifobj_rx, ifobj_tx);
 	return __testapp_validate_traffic(test, ifobj_rx, ifobj_tx);
 }
@@ -2442,6 +2463,23 @@ static int testapp_xdp_metadata_mb(struct test_spec *test)
 	return testapp_xdp_metadata_copy(test);
 }
 
+static int testapp_hw_sw_min_ring_size(struct test_spec *test)
+{
+	int ret;
+
+	test->total_steps = 2;
+	test->ifobj_tx->ring.set_tx = DEFAULT_BATCH_SIZE;
+	test->ifobj_tx->ring.set_rx = DEFAULT_BATCH_SIZE;
+	test->ifobj_rx->xsk->batch_size = 1;
+	ret = testapp_validate_traffic(test);
+	if (ret)
+		return ret;
+
+	/* Set batch size to hw_ring_size - 1 */
+	test->ifobj_rx->xsk->batch_size = DEFAULT_BATCH_SIZE - 1;
+	return testapp_validate_traffic(test);
+}
+
 static void run_pkt_test(struct test_spec *test)
 {
 	int ret;
@@ -2546,6 +2584,7 @@ static const struct test_spec tests[] = {
 	{.name = "ALIGNED_INV_DESC_MULTI_BUFF", .test_func = testapp_aligned_inv_desc_mb},
 	{.name = "UNALIGNED_INV_DESC_MULTI_BUFF", .test_func = testapp_unaligned_inv_desc_mb},
 	{.name = "TOO_MANY_FRAGS", .test_func = testapp_too_many_frags},
+	{.name = "HW_SW_MIN_RING_SIZE", .test_func = testapp_hw_sw_min_ring_size},
 };
 
 static void print_tests(void)
@@ -2566,6 +2605,7 @@ int main(int argc, char **argv)
 	int modes = TEST_MODE_SKB + 1;
 	struct test_spec test;
 	bool shared_netdev;
+	int ret;
 
 	/* Use libbpf 1.0 API mode */
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -2602,6 +2642,10 @@ int main(int argc, char **argv)
 		if (ifobj_zc_avail(ifobj_tx))
 			modes++;
 	}
+
+	ret = get_hw_ring_size(ifobj_tx);
+	if (!ret)
+		ifobj_tx->hw_ring_size_supp = true;
 
 	init_iface(ifobj_rx, worker_testapp_validate_rx);
 	init_iface(ifobj_tx, worker_testapp_validate_tx);
@@ -2649,6 +2693,9 @@ int main(int argc, char **argv)
 				failed_tests++;
 		}
 	}
+
+	if (ifobj_tx->hw_ring_size_supp)
+		hw_ring_size_reset(ifobj_tx);
 
 	pkt_stream_delete(tx_pkt_stream_default);
 	pkt_stream_delete(rx_pkt_stream_default);

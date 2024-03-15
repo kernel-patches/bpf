@@ -119,6 +119,8 @@ struct hw_ring {
 	u32 default_rx;
 	u32 max_tx;
 	u32 max_rx;
+	u32 set_tx;
+	u32 set_rx;
 };
 
 struct ifobject;
@@ -154,6 +156,7 @@ struct ifobject {
 	bool unaligned_supp;
 	bool multi_buff_supp;
 	bool multi_buff_zc_supp;
+	bool hw_ring_size_supp;
 };
 
 struct test_spec {
