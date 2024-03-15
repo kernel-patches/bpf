@@ -108,7 +108,8 @@ static int audit_caps(struct apparmor_audit_data *ad, struct aa_profile *profile
  * profile_capable - test if profile allows use of capability @cap
  * @profile: profile being enforced    (NOT NULL, NOT unconfined)
  * @cap: capability to test if allowed
- * @opts: CAP_OPT_NOAUDIT bit determines whether audit record is generated
+ * @opts: CAP_OPT_NOAUDIT/CAP_OPT_NOAUDIT_ONDENY bit determines whether audit
+ *	record is generated
  * @ad: audit data (MAY BE NULL indicating no auditing)
  *
  * Returns: 0 if allowed else -EPERM
@@ -126,7 +127,7 @@ static int profile_capable(struct aa_profile *profile, int cap,
 	else
 		error = -EPERM;
 
-	if (opts & CAP_OPT_NOAUDIT) {
+	if ((opts & CAP_OPT_NOAUDIT) || ((opts & CAP_OPT_NOAUDIT_ONDENY) && error)) {
 		if (!COMPLAIN_MODE(profile))
 			return error;
 		/* audit the cap request in complain mode but note that it
@@ -143,7 +144,8 @@ static int profile_capable(struct aa_profile *profile, int cap,
  * @subj_cred: cred we are testing capability against
  * @label: label being tested for capability (NOT NULL)
  * @cap: capability to be tested
- * @opts: CAP_OPT_NOAUDIT bit determines whether audit record is generated
+ * @opts: CAP_OPT_NOAUDIT/CAP_OPT_NOAUDIT_ONDENY bit determines whether audit
+ *	record is generated
  *
  * Look up capability in profile capability set.
  *

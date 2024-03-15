@@ -70,6 +70,8 @@ struct lsm_ctx;
 #define CAP_OPT_NOAUDIT BIT(1)
 /* If capable is being called by a setid function */
 #define CAP_OPT_INSETID BIT(2)
+/* If capable should audit the security request for authorized requests only */
+#define CAP_OPT_NOAUDIT_ONDENY BIT(3)
 
 /* LSM Agnostic defines for security_sb_set_mnt_opts() flags */
 #define SECURITY_LSM_NATIVE_LABELS	1

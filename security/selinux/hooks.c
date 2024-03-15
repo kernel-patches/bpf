@@ -1624,7 +1624,7 @@ static int cred_has_capability(const struct cred *cred,
 	u16 sclass;
 	u32 sid = cred_sid(cred);
 	u32 av = CAP_TO_MASK(cap);
-	int rc;
+	int rc, rc2;
 
 	ad.type = LSM_AUDIT_DATA_CAP;
 	ad.u.cap = cap;
@@ -1643,11 +1643,13 @@ static int cred_has_capability(const struct cred *cred,
 	}
 
 	rc = avc_has_perm_noaudit(sid, sid, sclass, av, 0, &avd);
-	if (!(opts & CAP_OPT_NOAUDIT)) {
-		int rc2 = avc_audit(sid, sid, sclass, av, &avd, rc, &ad);
-		if (rc2)
-			return rc2;
-	}
+	if ((opts & CAP_OPT_NOAUDIT) || ((opts & CAP_OPT_NOAUDIT_ONDENY) && rc))
+		return rc;
+
+	rc2 = avc_audit(sid, sid, sclass, av, &avd, rc, &ad);
+	if (rc2)
+		return rc2;
+
 	return rc;
 }
 
