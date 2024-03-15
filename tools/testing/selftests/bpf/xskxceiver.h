@@ -114,6 +114,13 @@ struct pkt_stream {
 	bool verbatim;
 };
 
+struct hw_ring {
+	u32 default_tx;
+	u32 default_rx;
+	u32 max_tx;
+	u32 max_rx;
+};
+
 struct ifobject;
 struct test_spec;
 typedef int (*validation_func_t)(struct ifobject *ifobj);
@@ -130,6 +137,7 @@ struct ifobject {
 	struct xsk_xdp_progs *xdp_progs;
 	struct bpf_map *xskmap;
 	struct bpf_program *xdp_prog;
+	struct hw_ring ring;
 	enum test_mode mode;
 	int ifindex;
 	int mtu;

@@ -81,6 +81,8 @@
 #include <linux/mman.h>
 #include <linux/netdev.h>
 #include <linux/bitmap.h>
+#include <linux/sockios.h>
+#include <linux/ethtool.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <locale.h>
@@ -95,6 +97,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "xsk_xdp_progs.skel.h"
@@ -407,6 +410,35 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 			print_usage(argv);
 		}
 	}
+}
+
+static int get_hw_ring_size(struct ifobject *ifobj)
+{
+	struct ethtool_ringparam ring_param = {0};
+	struct ifreq ifr = {0};
+	int sockfd;
+
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sockfd < 0)
+		return errno;
+
+	memcpy(ifr.ifr_name, ifobj->ifname, sizeof(ifr.ifr_name));
+
+	ring_param.cmd = ETHTOOL_GRINGPARAM;
+	ifr.ifr_data = (char *)&ring_param;
+
+	if (ioctl(sockfd, SIOCETHTOOL, &ifr) < 0) {
+		close(sockfd);
+		return errno;
+	}
+
+	ifobj->ring.default_tx = ring_param.tx_pending;
+	ifobj->ring.default_rx = ring_param.rx_pending;
+	ifobj->ring.max_tx = ring_param.tx_max_pending;
+	ifobj->ring.max_rx = ring_param.rx_max_pending;
+
+	close(sockfd);
+	return 0;
 }
 
 static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
