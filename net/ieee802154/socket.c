@@ -902,8 +902,7 @@ static int dgram_setsockopt(struct sock *sk, int level, int optname,
 		ro->want_lqi = !!val;
 		break;
 	case WPAN_SECURITY:
-		if (!ns_capable(net->user_ns, CAP_NET_ADMIN) &&
-		    !ns_capable(net->user_ns, CAP_NET_RAW)) {
+		if (!ns_capable_any(net->user_ns, CAP_NET_ADMIN, CAP_NET_RAW)) {
 			err = -EPERM;
 			break;
 		}
@@ -926,8 +925,7 @@ static int dgram_setsockopt(struct sock *sk, int level, int optname,
 		}
 		break;
 	case WPAN_SECURITY_LEVEL:
-		if (!ns_capable(net->user_ns, CAP_NET_ADMIN) &&
-		    !ns_capable(net->user_ns, CAP_NET_RAW)) {
+		if (!ns_capable_any(net->user_ns, CAP_NET_ADMIN, CAP_NET_RAW)) {
 			err = -EPERM;
 			break;
 		}

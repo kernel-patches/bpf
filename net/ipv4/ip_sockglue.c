@@ -1008,8 +1008,9 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 		inet_assign_bit(MC_ALL, sk, val);
 		return 0;
 	case IP_TRANSPARENT:
-		if (!!val && !sockopt_ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) &&
-		    !sockopt_ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+		if (!!val &&
+		    !sockopt_ns_capable_any(sock_net(sk)->user_ns,
+					    CAP_NET_RAW, CAP_NET_ADMIN))
 			return -EPERM;
 		if (optlen < 1)
 			return -EINVAL;
