@@ -403,6 +403,23 @@ bool ns_capable_noaudit(struct user_namespace *ns, int cap)
 EXPORT_SYMBOL(ns_capable_noaudit);
 
 /**
+ * ns_capable_noauditondeny - Determine if the current task has a superior capability
+ * (unaudited when unauthorized) in effect
+ * @ns:  The usernamespace we want the capability in
+ * @cap: The capability to be tested for
+ *
+ * Return true if the current task has the given superior capability currently
+ * available for use, false if not.
+ *
+ * This sets PF_SUPERPRIV on the task if the capability is available on the
+ * assumption that it's about to be used.
+ */
+static bool ns_capable_noauditondeny(struct user_namespace *ns, int cap)
+{
+	return ns_capable_common(ns, cap, CAP_OPT_NOAUDIT_ONDENY);
+}
+
+/**
  * ns_capable_setid - Determine if the current task has a superior capability
  * in effect, while signalling that this check is being done from within a
  * setid or setgroups syscall.
@@ -420,6 +437,62 @@ bool ns_capable_setid(struct user_namespace *ns, int cap)
 	return ns_capable_common(ns, cap, CAP_OPT_INSETID);
 }
 EXPORT_SYMBOL(ns_capable_setid);
+
+/**
+ * ns_capable_any - Determine if the current task has one of two superior capabilities in effect
+ * @ns:  The usernamespace we want the capability in
+ * @cap1: The capabilities to be tested for first
+ * @cap2: The capabilities to be tested for secondly
+ *
+ * Return true if the current task has at least one of the two given superior
+ * capabilities currently available for use, false if not.
+ *
+ * In contrast to or'ing capable() this call will create exactly one audit
+ * message, either for @cap1, if it is granted or both are not permitted,
+ * or @cap2, if it is granted while the other one is not.
+ *
+ * The capabilities should be ordered from least to most invasive, i.e. CAP_SYS_ADMIN last.
+ *
+ * This sets PF_SUPERPRIV on the task if the capability is available on the
+ * assumption that it's about to be used.
+ */
+bool ns_capable_any(struct user_namespace *ns, int cap1, int cap2)
+{
+	if (cap1 == cap2)
+		return ns_capable(ns, cap1);
+
+	if (ns_capable_noauditondeny(ns, cap1))
+		return true;
+
+	if (ns_capable_noauditondeny(ns, cap2))
+		return true;
+
+	return ns_capable(ns, cap1);
+}
+EXPORT_SYMBOL(ns_capable_any);
+
+/**
+ * capable_any - Determine if the current task has one of two superior capabilities in effect
+ * @cap1: The capabilities to be tested for first
+ * @cap2: The capabilities to be tested for secondly
+ *
+ * Return true if the current task has at least one of the two given superior
+ * capabilities currently available for use, false if not.
+ *
+ * In contrast to or'ing capable() this call will create exactly one audit
+ * message, either for @cap1, if it is granted or both are not permitted,
+ * or @cap2, if it is granted while the other one is not.
+ *
+ * The capabilities should be ordered from least to most invasive, i.e. CAP_SYS_ADMIN last.
+ *
+ * This sets PF_SUPERPRIV on the task if the capability is available on the
+ * assumption that it's about to be used.
+ */
+bool capable_any(int cap1, int cap2)
+{
+	return ns_capable_any(&init_user_ns, cap1, cap2);
+}
+EXPORT_SYMBOL(capable_any);
 
 /**
  * capable - Determine if the current task has a superior capability in effect
