@@ -2701,7 +2701,7 @@ static inline int bpf_obj_get_user(const char __user *pathname, int flags)
 
 static inline bool bpf_token_capable(const struct bpf_token *token, int cap)
 {
-	return capable(cap) || (cap != CAP_SYS_ADMIN && capable(CAP_SYS_ADMIN));
+	return capable_any(cap, CAP_SYS_ADMIN);
 }
 
 static inline void bpf_token_inc(struct bpf_token *token)

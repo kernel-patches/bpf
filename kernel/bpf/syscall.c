@@ -1175,7 +1175,7 @@ free_map_tab:
 
 static bool bpf_net_capable(void)
 {
-	return capable(CAP_NET_ADMIN) || capable(CAP_SYS_ADMIN);
+	return capable_any(CAP_NET_ADMIN, CAP_SYS_ADMIN);
 }
 
 #define BPF_MAP_CREATE_LAST_FIELD map_token_fd

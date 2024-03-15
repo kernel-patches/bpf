@@ -11,7 +11,7 @@
 
 static bool bpf_ns_capable(struct user_namespace *ns, int cap)
 {
-	return ns_capable(ns, cap) || (cap != CAP_SYS_ADMIN && ns_capable(ns, CAP_SYS_ADMIN));
+	return ns_capable_any(ns, cap, CAP_SYS_ADMIN);
 }
 
 bool bpf_token_capable(const struct bpf_token *token, int cap)
