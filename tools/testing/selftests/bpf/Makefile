@@ -723,6 +723,14 @@ $(OUTPUT)/test_cpp: test_cpp.cpp $(OUTPUT)/test_core_extern.skel.h $(BPFOBJ)
 	$(call msg,CXX,,$@)
 	$(Q)$(CXX) $(CFLAGS) $(filter %.a %.o %.cpp,$^) $(LDLIBS) -o $@
 
+ifeq ($(SRCARCH),x86)
+$(OUTPUT)/bench_trigger_arch.o: benchs/bench_trigger_x86.S
+	$(call msg,CC,,$@)
+	$(Q)$(CC) $(CFLAGS) -c $< $(LDLIBS) -o $@
+
+BENCH_ARCH_OBJS := $(OUTPUT)/bench_trigger_arch.o
+endif
+
 # Benchmark runner
 $(OUTPUT)/bench_%.o: benchs/bench_%.c bench.h $(BPFOBJ)
 	$(call msg,CC,,$@)
@@ -746,6 +754,7 @@ $(OUTPUT)/bench: $(OUTPUT)/bench.o \
 		 $(TESTING_HELPERS) \
 		 $(TRACE_HELPERS) \
 		 $(CGROUP_HELPERS) \
+		 $(BENCH_ARCH_OBJS) \
 		 $(OUTPUT)/bench_count.o \
 		 $(OUTPUT)/bench_rename.o \
 		 $(OUTPUT)/bench_trigger.o \
