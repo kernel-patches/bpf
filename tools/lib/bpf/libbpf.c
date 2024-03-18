@@ -3944,7 +3944,7 @@ static int find_extern_btf_id(const struct btf *btf, const char *ext_name)
 			continue;
 
 		tname = btf__name_by_offset(btf, t->name_off);
-		if (strcmp(tname, ext_name))
+		if (tname && strcmp(tname, ext_name))
 			continue;
 
 		if (btf_is_var(t) &&
