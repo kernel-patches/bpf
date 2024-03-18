@@ -137,7 +137,7 @@ static void trigger_fmodret_setup(void)
  * GCC doesn't generate stack setup preample for these functions due to them
  * having no input arguments and doing nothing in the body.
  */
-__weak void uprobe_target_nop(void)
+__nocfcheck __weak void uprobe_target_nop(void)
 {
 	asm volatile ("nop");
 }
@@ -146,7 +146,7 @@ __weak void opaque_noop_func(void)
 {
 }
 
-__weak int uprobe_target_push(void)
+__nocfcheck __weak int uprobe_target_push(void)
 {
 	/* overhead of function call is negligible compared to uprobe
 	 * triggering, so this shouldn't affect benchmark results much
@@ -155,7 +155,7 @@ __weak int uprobe_target_push(void)
 	return 1;
 }
 
-__weak void uprobe_target_ret(void)
+__nocfcheck __weak void uprobe_target_ret(void)
 {
 	asm volatile ("");
 }
