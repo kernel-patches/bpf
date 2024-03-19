@@ -526,6 +526,14 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 		show_link_ifindex_json(info->netkit.ifindex, json_wtr);
 		show_link_attach_type_json(info->netkit.attach_type, json_wtr);
 		break;
+	case BPF_LINK_TYPE_SK_MSG:
+		jsonw_uint_field(json_wtr, "map_id", info->skmsg.map_id);
+		show_link_attach_type_json(info->skmsg.attach_type, json_wtr);
+		break;
+	case BPF_LINK_TYPE_SK_SKB:
+		jsonw_uint_field(json_wtr, "map_id", info->skskb.map_id);
+		show_link_attach_type_json(info->skskb.attach_type, json_wtr);
+		break;
 	case BPF_LINK_TYPE_XDP:
 		show_link_ifindex_json(info->xdp.ifindex, json_wtr);
 		break;
@@ -914,6 +922,16 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 		printf("\n\t");
 		show_link_ifindex_plain(info->netkit.ifindex);
 		show_link_attach_type_plain(info->netkit.attach_type);
+		break;
+	case BPF_LINK_TYPE_SK_MSG:
+		printf("\n\t");
+		printf("map_id %u  ", info->skmsg.map_id);
+		show_link_attach_type_plain(info->skmsg.attach_type);
+		break;
+	case BPF_LINK_TYPE_SK_SKB:
+		printf("\n\t");
+		printf("map_id %u  ", info->skskb.map_id);
+		show_link_attach_type_plain(info->skskb.attach_type);
 		break;
 	case BPF_LINK_TYPE_XDP:
 		printf("\n\t");
