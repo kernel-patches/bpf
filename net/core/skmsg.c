@@ -1256,3 +1256,167 @@ void sk_psock_stop_verdict(struct sock *sk, struct sk_psock *psock)
 	sk->sk_data_ready = psock->saved_data_ready;
 	psock->saved_data_ready = NULL;
 }
+
+struct bpf_sk_msg_skb_link {
+	struct bpf_link link;
+	struct bpf_map *map;
+	enum bpf_attach_type attach_type;
+};
+
+static DEFINE_MUTEX(link_mutex);
+
+static struct bpf_sk_msg_skb_link *bpf_sk_msg_skb_link(const struct bpf_link *link)
+{
+	return container_of(link, struct bpf_sk_msg_skb_link, link);
+}
+
+static void bpf_sk_msg_skb_link_release(struct bpf_link *link)
+{
+	struct bpf_sk_msg_skb_link *sk_link = bpf_sk_msg_skb_link(link);
+
+	mutex_lock(&link_mutex);
+	if (sk_link->map) {
+		(void)sock_map_prog_update(sk_link->map, NULL, link->prog,
+					   sk_link->attach_type);
+		bpf_map_put_with_uref(sk_link->map);
+		sk_link->map = NULL;
+	}
+	mutex_unlock(&link_mutex);
+}
+
+static int bpf_sk_msg_skb_link_detach(struct bpf_link *link)
+{
+	bpf_sk_msg_skb_link_release(link);
+	return 0;
+}
+
+static void bpf_sk_msg_skb_link_dealloc(struct bpf_link *link)
+{
+	kfree(bpf_sk_msg_skb_link(link));
+}
+
+static int bpf_sk_msg_skb_link_update_prog(struct bpf_link *link,
+					   struct bpf_prog *new_prog,
+					   struct bpf_prog *old_prog)
+{
+	const struct bpf_sk_msg_skb_link *sk_link = bpf_sk_msg_skb_link(link);
+	int ret = 0;
+
+	mutex_lock(&link_mutex);
+	if (old_prog && link->prog != old_prog) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (link->prog->type != new_prog->type) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = sock_map_prog_update(sk_link->map, new_prog, old_prog,
+				   sk_link->attach_type);
+	if (!ret)
+		bpf_prog_inc(new_prog);
+
+out:
+	mutex_unlock(&link_mutex);
+	return ret;
+}
+
+static int bpf_sk_msg_skb_link_fill_info(const struct bpf_link *link,
+					 struct bpf_link_info *info)
+{
+	const struct bpf_sk_msg_skb_link *sk_link = bpf_sk_msg_skb_link(link);
+	u32 map_id = 0;
+
+	mutex_lock(&link_mutex);
+	if (sk_link->map)
+		map_id = sk_link->map->id;
+	mutex_unlock(&link_mutex);
+
+	if (link->type == BPF_LINK_TYPE_SK_MSG) {
+		info->skmsg.map_id = map_id;
+		info->skmsg.attach_type = sk_link->attach_type;
+	} else {
+		info->skskb.map_id = map_id;
+		info->skskb.attach_type = sk_link->attach_type;
+	}
+	return 0;
+}
+
+static void bpf_sk_msg_skb_link_show_fdinfo(const struct bpf_link *link,
+					    struct seq_file *seq)
+{
+	const struct bpf_sk_msg_skb_link *sk_link = bpf_sk_msg_skb_link(link);
+	u32 map_id = 0;
+
+	mutex_lock(&link_mutex);
+	if (sk_link->map)
+		map_id = sk_link->map->id;
+	mutex_unlock(&link_mutex);
+
+	seq_printf(seq, "map_id:\t%u\n", map_id);
+	seq_printf(seq, "attach_type:\t%u (...)\n", sk_link->attach_type);
+}
+
+static const struct bpf_link_ops bpf_sk_msg_skb_link_ops = {
+	.release = bpf_sk_msg_skb_link_release,
+	.dealloc = bpf_sk_msg_skb_link_dealloc,
+	.detach = bpf_sk_msg_skb_link_detach,
+	.update_prog = bpf_sk_msg_skb_link_update_prog,
+	.fill_link_info = bpf_sk_msg_skb_link_fill_info,
+	.show_fdinfo = bpf_sk_msg_skb_link_show_fdinfo,
+};
+
+int bpf_sk_msg_skb_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct bpf_sk_msg_skb_link *sk_link;
+	enum bpf_attach_type attach_type;
+	enum bpf_link_type link_type;
+	struct bpf_map *map;
+	int ret;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+
+	map = bpf_map_get_with_uref(attr->link_create.target_fd);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	sk_link = kzalloc(sizeof(*sk_link), GFP_USER);
+	if (!sk_link) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (prog->type == BPF_PROG_TYPE_SK_MSG)
+		link_type = BPF_LINK_TYPE_SK_MSG;
+	else
+		link_type = BPF_LINK_TYPE_SK_SKB;
+
+	attach_type = attr->link_create.attach_type;
+	bpf_link_init(&sk_link->link, link_type, &bpf_sk_msg_skb_link_ops, prog);
+	sk_link->map = map;
+	sk_link->attach_type = attach_type;
+
+	ret = bpf_link_prime(&sk_link->link, &link_primer);
+	if (ret) {
+		kfree(sk_link);
+		goto out;
+	}
+
+	ret = sock_map_prog_update(map, prog, NULL, attach_type);
+	if (ret) {
+		bpf_link_cleanup(&link_primer);
+		goto out;
+	}
+
+	bpf_prog_inc(prog);
+
+	return bpf_link_settle(&link_primer);
+
+out:
+	bpf_map_put_with_uref(map);
+	return ret;
+}

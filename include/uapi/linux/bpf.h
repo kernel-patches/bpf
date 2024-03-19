@@ -1135,6 +1135,8 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_TCX = 11,
 	BPF_LINK_TYPE_UPROBE_MULTI = 12,
 	BPF_LINK_TYPE_NETKIT = 13,
+	BPF_LINK_TYPE_SK_MSG = 14,
+	BPF_LINK_TYPE_SK_SKB = 15,
 	__MAX_BPF_LINK_TYPE,
 };
 
@@ -6718,6 +6720,14 @@ struct bpf_link_info {
 			__u32 ifindex;
 			__u32 attach_type;
 		} netkit;
+		struct {
+			__u32 map_id;
+			__u32 attach_type;
+		} skmsg;
+		struct {
+			__u32 map_id;
+			__u32 attach_type;
+		} skskb;
 	};
 } __attribute__((aligned(8)));
 
