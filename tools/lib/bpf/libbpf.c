@@ -5596,7 +5596,8 @@ err_out:
 }
 
 static struct bpf_core_cand_list *
-bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 local_type_id)
+bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 local_type_id,
+		    const char *targ_btf_path)
 {
 	struct bpf_core_cand local_cand = {};
 	struct bpf_core_cand_list *cands;
@@ -5623,7 +5624,8 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 
 	/* Attempt to find target candidates in vmlinux BTF first */
 	main_btf = obj->btf_vmlinux_override ?: obj->btf_vmlinux;
-	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf, "vmlinux", 1, cands);
+	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf,
+				 targ_btf_path ?: "vmlinux", 1, cands);
 	if (err)
 		goto err_out;
 
@@ -5736,7 +5738,8 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 				 int relo_idx,
 				 const struct btf *local_btf,
 				 struct hashmap *cand_cache,
-				 struct bpf_core_relo_res *targ_res)
+				 struct bpf_core_relo_res *targ_res,
+				 const char *targ_btf_path)
 {
 	struct bpf_core_spec specs_scratch[3] = {};
 	struct bpf_core_cand_list *cands = NULL;
@@ -5756,7 +5759,7 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 
 	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
 	    !hashmap__find(cand_cache, local_id, &cands)) {
-		cands = bpf_core_find_cands(prog->obj, local_btf, local_id);
+		cands = bpf_core_find_cands(prog->obj, local_btf, local_id, targ_btf_path);
 		if (IS_ERR(cands)) {
 			pr_warn("prog '%s': relo #%d: target candidate search failed for [%d] %s %s: %ld\n",
 				prog_name, relo_idx, local_id, btf_kind_str(local_type),
@@ -5863,7 +5866,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			if (prog->obj->gen_loader)
 				continue;
 
-			err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache, &targ_res);
+			err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache, &targ_res,
+						    targ_btf_path);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to relocate: %d\n",
 					prog->name, i, err);
