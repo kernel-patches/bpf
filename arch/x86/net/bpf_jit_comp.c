@@ -457,6 +457,9 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
 	*pprog = prog;
 }
 
+/* reference to bpf_get_smp_processor_id() helper implementation to detect it for inlining */
+extern u64 bpf_get_smp_processor_id(u64, u64, u64, u64, u64);
+
 static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
 {
 	u8 *prog = *pprog;
@@ -467,7 +470,28 @@ static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
 		pr_err("Target call %p is out of range\n", func);
 		return -ERANGE;
 	}
-	EMIT1_off32(opcode, offset);
+
+	/* inline bpf_get_smp_processor_id() to avoid calls */
+	if (opcode == 0xE8 && func == &bpf_get_smp_processor_id) {
+		/* 7 to account for the mov instruction itself,
+		 * as rip value *after* mov instruction is used
+		 */
+		offset = (void *)&pcpu_hot.cpu_number - ip - 7;
+		if (is_simm32(offset)) {
+			/* mov eax,DWORD PTR gs:[rip+<offset>] ; <pcpu_hot+12> */
+			EMIT3_off32(0x65, 0x8b, 0x05, (u32)offset);
+		} else {
+			/* mov eax,DWORD PTR gs:<offset> ; <pcpu_hot+12> */
+			offset = (s64)(void *)&pcpu_hot.cpu_number;
+			EMIT2(0x65, 0xa1);
+			EMIT((u32)offset, 4);
+			EMIT((u64)offset >> 32, 4);
+		}
+		EMIT2(0x48, 0x98); /* cdqe, zero-extend eax to rax */
+	} else {
+		EMIT1_off32(opcode, offset);
+	}
+
 	*pprog = prog;
 	return 0;
 }
