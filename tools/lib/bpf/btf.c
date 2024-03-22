@@ -2418,7 +2418,7 @@ int btf__add_enum64_value(struct btf *btf, const char *name, __u64 value)
  * Append new BTF_KIND_FWD type with:
  *   - *name*, non-empty/non-NULL name;
  *   - *fwd_kind*, kind of forward declaration, one of BTF_FWD_STRUCT,
- *     BTF_FWD_UNION, or BTF_FWD_ENUM;
+ *     BTF_FWD_UNION, BTF_FWD_ENUM or BTF_FWD_ENUM64;
  * Returns:
  *   - >0, type ID of newly added BTF type;
  *   - <0, on error.
@@ -2446,6 +2446,11 @@ int btf__add_fwd(struct btf *btf, const char *name, enum btf_fwd_kind fwd_kind)
 		 * values; we also assume a standard 4-byte size for it
 		 */
 		return btf__add_enum(btf, name, sizeof(int));
+	case BTF_FWD_ENUM64:
+		/* enum64 forward is similarly just an enum64 with no enum
+		 * values; assume 8 byte size, signed.
+		 */
+		return btf__add_enum64(btf, name, 8, true);
 	default:
 		return libbpf_err(-EINVAL);
 	}

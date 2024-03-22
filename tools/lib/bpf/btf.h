@@ -194,6 +194,7 @@ enum btf_fwd_kind {
 	BTF_FWD_STRUCT = 0,
 	BTF_FWD_UNION = 1,
 	BTF_FWD_ENUM = 2,
+	BTF_FWD_ENUM64 = 3,
 };
 
 LIBBPF_API int btf__add_fwd(struct btf *btf, const char *name, enum btf_fwd_kind fwd_kind);
