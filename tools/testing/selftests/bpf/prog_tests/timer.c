@@ -3,6 +3,7 @@
 #include <test_progs.h>
 #include "timer.skel.h"
 #include "timer_failure.skel.h"
+#include "timer_sleepable.skel.h"
 
 #define NUM_THR 8
 
@@ -94,4 +95,37 @@ void serial_test_timer(void)
 	timer__destroy(timer_skel);
 
 	RUN_TESTS(timer_failure);
+}
+
+/* isolate sleepable tests from main timer tests
+ * because if test_timer fails, it spews the console
+ * with 10000 * 5 "spin_lock_thread:PASS:test_run_opts retval 0 nsec"
+ */
+void serial_test_sleepable_timer(void)
+{
+	struct timer_sleepable *timer_sleepable_skel = NULL;
+	int err, prog_fd;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+
+	RUN_TESTS(timer_sleepable);
+
+	/* re-run the success test to check if the timer was actually executed */
+
+	timer_sleepable_skel = timer_sleepable__open_and_load();
+	if (!ASSERT_OK_PTR(timer_sleepable_skel, "timer_sleepable_skel_load"))
+		return;
+
+	err = timer_sleepable__attach(timer_sleepable_skel);
+	if (!ASSERT_OK(err, "timer_sleepable_attach"))
+		return;
+
+	prog_fd = bpf_program__fd(timer_sleepable_skel->progs.test_call_sleepable);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	usleep(50); /* 10 usecs should be enough, but give it extra */
+
+	ASSERT_EQ(timer_sleepable_skel->bss->ok_sleepable, 1, "ok_sleepable");
 }
