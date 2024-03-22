@@ -19606,7 +19606,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	for (i = 0; i < insn_cnt;) {
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
-			    (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV)) {
+			    (env->prog->aux->arena &&
+			     (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV))) {
 				/* convert to 32-bit mov that clears upper 32-bit */
 				insn->code = BPF_ALU | BPF_MOV | BPF_X;
 				/* clear off, so it's a normal 'wX = wY' from JIT pov */
