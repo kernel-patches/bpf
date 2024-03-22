@@ -1108,6 +1108,7 @@ struct bpf_hrtimer {
 	void *value;
 	struct rcu_head rcu;
 	spinlock_t sleepable_lock;
+	bool is_sleepable;
 };
 
 /* the actual struct hidden inside uapi struct bpf_timer */
@@ -1273,8 +1274,8 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callback_fn,
-	   struct bpf_prog_aux *, aux)
+static int __bpf_timer_set_callback(struct bpf_timer_kern *timer, void *callback_fn,
+				    struct bpf_prog_aux *aux, bool is_sleepable)
 {
 	struct bpf_prog *prev, *prog = aux->prog;
 	struct bpf_hrtimer *t;
@@ -1314,11 +1315,18 @@ BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callb
 		t->prog = prog;
 	}
 	rcu_assign_pointer(t->callback_fn, callback_fn);
+	t->is_sleepable = is_sleepable;
 out:
 	if (t)
 		spin_unlock(&t->sleepable_lock);
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	return ret;
+}
+
+BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callback_fn,
+	   struct bpf_prog_aux *, aux)
+{
+	return __bpf_timer_set_callback(timer, callback_fn, aux, false);
 }
 
 static const struct bpf_func_proto bpf_timer_set_callback_proto = {
@@ -1346,6 +1354,11 @@ BPF_CALL_3(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs, u64, fla
 	__bpf_spin_lock_irqsave(&timer->lock);
 	t = timer->timer;
 	if (!t || !t->prog) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (t->is_sleepable && flags != BPF_F_TIMER_SLEEPABLE) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -2631,6 +2644,34 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	WARN(1, "A call to BPF exception callback should never return\n");
 }
 
+/**
+ * bpf_timer_set_sleepable_cb_impl() - Configure the timer to call %callback_fn
+ * static function in a sleepable context.
+ * @timer: The bpf_timer that needs to be configured
+ * @callback_fn: a static bpf function
+ *
+ * @returns %0 on success. %-EINVAL if %timer was not initialized with
+ * bpf_timer_init() earlier. %-EPERM if %timer is in a map that doesn't
+ * have any user references.
+ * The user space should either hold a file descriptor to a map with timers
+ * or pin such map in bpffs. When map is unpinned or file descriptor is
+ * closed all timers in the map will be cancelled and freed.
+ *
+ * This kfunc is equivalent to %bpf_timer_set_callback except that it tells
+ * the verifier that the target callback is run in a sleepable context.
+ */
+__bpf_kfunc int bpf_timer_set_sleepable_cb_impl(struct bpf_timer_kern *timer,
+						int (callback_fn)(void *map, int *key, struct bpf_timer *timer),
+						void *aux__ign)
+{
+	struct bpf_prog_aux *aux = (struct bpf_prog_aux *)aux__ign;
+
+	if (!aux)
+		return -EINVAL;
+
+	return __bpf_timer_set_callback(timer, (void *)callback_fn, aux, true);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -2707,6 +2748,7 @@ BTF_ID_FLAGS(func, bpf_dynptr_is_null)
 BTF_ID_FLAGS(func, bpf_dynptr_is_rdonly)
 BTF_ID_FLAGS(func, bpf_dynptr_size)
 BTF_ID_FLAGS(func, bpf_dynptr_clone)
+BTF_ID_FLAGS(func, bpf_timer_set_sleepable_cb_impl)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
