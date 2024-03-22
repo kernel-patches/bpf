@@ -1094,14 +1094,20 @@ const struct bpf_func_proto bpf_snprintf_proto = {
  * bpf_timer_cancel() cancels the timer and decrements prog's refcnt.
  * Inner maps can contain bpf timers as well. ops->map_release_uref is
  * freeing the timers when inner map is replaced or deleted by user space.
+ *
+ * sleepable_lock protects only the setup of the workqueue, not the callback
+ * itself. This is done to ensure we don't run concurrently a free of the
+ * callback or the associated program.
  */
 struct bpf_hrtimer {
 	struct hrtimer timer;
+	struct work_struct work;
 	struct bpf_map *map;
 	struct bpf_prog *prog;
 	void __rcu *callback_fn;
 	void *value;
 	struct rcu_head rcu;
+	spinlock_t sleepable_lock;
 };
 
 /* the actual struct hidden inside uapi struct bpf_timer */
@@ -1113,6 +1119,49 @@ struct bpf_timer_kern {
 	 */
 	struct bpf_spin_lock lock;
 } __attribute__((aligned(8)));
+
+static void bpf_timer_work_cb(struct work_struct *work)
+{
+	struct bpf_hrtimer *t = container_of(work, struct bpf_hrtimer, work);
+	struct bpf_map *map = t->map;
+	bpf_callback_t callback_fn;
+	void *value = t->value;
+	unsigned long flags;
+	void *key;
+	u32 idx;
+
+	BTF_TYPE_EMIT(struct bpf_timer);
+
+	spin_lock_irqsave(&t->sleepable_lock, flags);
+
+	callback_fn = READ_ONCE(t->callback_fn);
+	if (!callback_fn) {
+		spin_unlock_irqrestore(&t->sleepable_lock, flags);
+		return;
+	}
+
+	if (map->map_type == BPF_MAP_TYPE_ARRAY) {
+		struct bpf_array *array = container_of(map, struct bpf_array, map);
+
+		/* compute the key */
+		idx = ((char *)value - array->value) / array->elem_size;
+		key = &idx;
+	} else { /* hash or lru */
+		key = value - round_up(map->key_size, 8);
+	}
+
+	/* prevent the callback to be freed by bpf_timer_cancel() while running
+	 * so we can release the sleepable lock
+	 */
+	bpf_prog_inc(t->prog);
+
+	spin_unlock_irqrestore(&t->sleepable_lock, flags);
+
+	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
+	/* The verifier checked that return value is zero. */
+
+	bpf_prog_put(t->prog);
+}
 
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
 
@@ -1192,6 +1241,8 @@ BPF_CALL_3(bpf_timer_init, struct bpf_timer_kern *, timer, struct bpf_map *, map
 	t->prog = NULL;
 	rcu_assign_pointer(t->callback_fn, NULL);
 	hrtimer_init(&t->timer, clockid, HRTIMER_MODE_REL_SOFT);
+	INIT_WORK(&t->work, bpf_timer_work_cb);
+	spin_lock_init(&t->sleepable_lock);
 	t->timer.function = bpf_timer_cb;
 	WRITE_ONCE(timer->timer, t);
 	/* Guarantee the order between timer->timer and map->usercnt. So
@@ -1237,6 +1288,7 @@ BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callb
 		ret = -EINVAL;
 		goto out;
 	}
+	spin_lock(&t->sleepable_lock);
 	if (!atomic64_read(&t->map->usercnt)) {
 		/* maps with timers must be either held by user space
 		 * or pinned in bpffs. Otherwise timer might still be
@@ -1263,6 +1315,8 @@ BPF_CALL_3(bpf_timer_set_callback, struct bpf_timer_kern *, timer, void *, callb
 	}
 	rcu_assign_pointer(t->callback_fn, callback_fn);
 out:
+	if (t)
+		spin_unlock(&t->sleepable_lock);
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	return ret;
 }
@@ -1283,8 +1337,12 @@ BPF_CALL_3(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs, u64, fla
 
 	if (in_nmi())
 		return -EOPNOTSUPP;
-	if (flags & ~(BPF_F_TIMER_ABS | BPF_F_TIMER_CPU_PIN))
+	if (flags & ~(BPF_F_TIMER_ABS | BPF_F_TIMER_CPU_PIN | BPF_F_TIMER_SLEEPABLE))
 		return -EINVAL;
+
+	if ((flags & BPF_F_TIMER_SLEEPABLE) && nsecs)
+		return -EINVAL;
+
 	__bpf_spin_lock_irqsave(&timer->lock);
 	t = timer->timer;
 	if (!t || !t->prog) {
@@ -1300,7 +1358,10 @@ BPF_CALL_3(bpf_timer_start, struct bpf_timer_kern *, timer, u64, nsecs, u64, fla
 	if (flags & BPF_F_TIMER_CPU_PIN)
 		mode |= HRTIMER_MODE_PINNED;
 
-	hrtimer_start(&t->timer, ns_to_ktime(nsecs), mode);
+	if (flags & BPF_F_TIMER_SLEEPABLE)
+		schedule_work(&t->work);
+	else
+		hrtimer_start(&t->timer, ns_to_ktime(nsecs), mode);
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	return ret;
@@ -1348,13 +1409,22 @@ BPF_CALL_1(bpf_timer_cancel, struct bpf_timer_kern *, timer)
 		ret = -EDEADLK;
 		goto out;
 	}
+	spin_lock(&t->sleepable_lock);
 	drop_prog_refcnt(t);
+	spin_unlock(&t->sleepable_lock);
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	/* Cancel the timer and wait for associated callback to finish
 	 * if it was running.
 	 */
 	ret = ret ?: hrtimer_cancel(&t->timer);
+
+	/* also cancel the sleepable work, but *do not* wait for
+	 * it to finish if it was running as we might not be in a
+	 * sleepable context
+	 */
+	ret = ret ?: cancel_work(&t->work);
+
 	rcu_read_unlock();
 	return ret;
 }
@@ -1383,11 +1453,13 @@ void bpf_timer_cancel_and_free(void *val)
 	t = timer->timer;
 	if (!t)
 		goto out;
+	spin_lock(&t->sleepable_lock);
 	drop_prog_refcnt(t);
 	/* The subsequent bpf_timer_start/cancel() helpers won't be able to use
 	 * this timer, since it won't be initialized.
 	 */
 	WRITE_ONCE(timer->timer, NULL);
+	spin_unlock(&t->sleepable_lock);
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	if (!t)
@@ -1410,6 +1482,16 @@ out:
 	 */
 	if (this_cpu_read(hrtimer_running) != t)
 		hrtimer_cancel(&t->timer);
+
+	/* also cancel the sleepable work, but *do not* wait for
+	 * it to finish if it was running as we might not be in a
+	 * sleepable context. Same reason as above, it's fine to
+	 * free 't': the subprog callback will never access it anymore
+	 * and can not reschedule itself since timer->timer = NULL was
+	 * already done.
+	 */
+	cancel_work(&t->work);
+
 	kfree_rcu(t, rcu);
 }
 
