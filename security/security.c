@@ -828,6 +828,7 @@ out:
  * The macros below define static constants for the default value of each
  * LSM hook.
  */
+#define LSM_RET_INT(defval) defval
 #define LSM_RET_DEFAULT(NAME) (NAME##_default)
 #define DECLARE_LSM_RET_DEFAULT_void(DEFAULT, NAME)
 #define DECLARE_LSM_RET_DEFAULT_int(DEFAULT, NAME) \

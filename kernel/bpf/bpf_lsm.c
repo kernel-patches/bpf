@@ -18,6 +18,14 @@
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
 
+/*
+ * LSM_RET_VOID is used as the default value in LSM_HOOK definitions for void
+ * LSM hooks (in include/linux/lsm_hook_defs.h).
+ */
+#define LSM_RET_VOID ((void) 0)
+
+#define LSM_RET_INT(defval) defval
+
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
  */
@@ -29,6 +37,8 @@ noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
 
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
+#undef LSM_RET_INT
+#undef LSM_RET_VOID
 
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
 BTF_SET_START(bpf_lsm_hooks)
