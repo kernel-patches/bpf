@@ -3024,6 +3024,14 @@ void bpf_link_inc(struct bpf_link *link)
 	atomic64_inc(&link->refcnt);
 }
 
+static void bpf_link_dealloc_deferred(struct rcu_head *rcu)
+{
+	struct bpf_link *link = container_of(rcu, struct bpf_link, rcu);
+
+	/* free bpf_link and its containing memory */
+	link->ops->dealloc(link);
+}
+
 /* bpf_link_free is guaranteed to be called from process context */
 static void bpf_link_free(struct bpf_link *link)
 {
@@ -3033,8 +3041,8 @@ static void bpf_link_free(struct bpf_link *link)
 		link->ops->release(link);
 		bpf_prog_put(link->prog);
 	}
-	/* free bpf_link and its containing memory */
-	link->ops->dealloc(link);
+	/* schedule BPF link deallocation after RCU grace period */
+	call_rcu(&link->rcu, bpf_link_dealloc_deferred);
 }
 
 static void bpf_link_put_deferred(struct work_struct *work)
