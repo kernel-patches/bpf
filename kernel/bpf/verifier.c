@@ -9864,7 +9864,7 @@ static bool in_rbtree_lock_required_cb(struct bpf_verifier_env *env)
 
 static bool retval_range_within(struct bpf_retval_range range, const struct bpf_reg_state *reg)
 {
-	return range.minval <= reg->smin_value && reg->smax_value <= range.maxval;
+	return range.minval <= reg->s32_min_value && reg->s32_max_value <= range.maxval;
 }
 
 static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
