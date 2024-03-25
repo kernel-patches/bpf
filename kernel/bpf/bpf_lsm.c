@@ -24,7 +24,7 @@
  */
 #define LSM_RET_VOID ((void) 0)
 
-#define LSM_RET_INT(defval) defval
+#define LSM_RET_INT(defval, ...) defval
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
