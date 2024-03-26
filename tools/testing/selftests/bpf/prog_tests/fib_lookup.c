@@ -222,6 +222,9 @@ static int set_lookup_params(struct bpf_fib_lookup *params,
 	params->tbid = test->tbid;
 	params->mark = test->mark;
 
+	if (test->lookup_flags & BPF_FIB_LOOKUP_MARK)
+		params->mark = test->mark;
+
 	if (inet_pton(AF_INET6, test->daddr, params->ipv6_dst) == 1) {
 		params->family = AF_INET6;
 		if (!(test->lookup_flags & BPF_FIB_LOOKUP_SRC)) {
