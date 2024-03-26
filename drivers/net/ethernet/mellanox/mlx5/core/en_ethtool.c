@@ -451,6 +451,17 @@ int mlx5e_ethtool_set_channels(struct mlx5e_priv *priv,
 
 	mutex_lock(&priv->state_lock);
 
+	/* Don't allow changing the number of channels if RXFH was previously configured.
+	 * Changing the channels number after configuring the RXFH may alter the RSS table size,
+	 * the previous configuration may no longer be compatible with the new RSS table.
+	 */
+	if (netif_is_rxfh_configured(priv->netdev)) {
+		err = -EINVAL;
+		netdev_err(priv->netdev, "%s: RXFH is configured, cannot change the number of channels\n",
+			   __func__);
+		goto out;
+	}
+
 	/* Don't allow changing the number of channels if HTB offload is active,
 	 * because the numeration of the QoS SQs will change, while per-queue
 	 * qdiscs are attached.
