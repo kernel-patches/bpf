@@ -11,12 +11,19 @@
 #include <linux/lsm_hooks.h>
 #include <linux/bpf_lsm.h>
 #include <linux/kallsyms.h>
-#include <linux/bpf_verifier.h>
 #include <net/bpf_sk_storage.h>
 #include <linux/bpf_local_storage.h>
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+
+/*
+ * LSM_RET_VOID is used as the default value in LSM_HOOK definitions for void
+ * LSM hooks (in include/linux/lsm_hook_defs.h).
+ */
+#define LSM_RET_VOID ((void) 0)
+
+#define LSM_RET_INT(defval, ...) defval
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached.
@@ -29,6 +36,33 @@ noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
 
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
+#undef LSM_RET_INT
+#undef LSM_RET_VOID
+
+struct lsm_retval_desc {
+	unsigned long func_addr;
+	int minval;
+	int maxval;
+};
+
+#define LSM_RET_INT_ERRNO -MAX_ERRNO, 0
+#define LSM_RET_INT_ANY INT_MIN, INT_MAX
+#define LSM_RET_INT(defval, range_desc) LSM_RET_INT_##range_desc
+
+#define LSM_HOOK_RETVAL_int(NAME, ...) \
+{ (unsigned long)&bpf_lsm_##NAME, __VA_ARGS__ },
+
+#define LSM_HOOK_RETVAL_void(NAME, ...)
+
+#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
+LSM_HOOK_RETVAL_##RET(NAME, DEFAULT)
+
+static struct lsm_retval_desc lsm_retvalues[]  = {
+#include <linux/lsm_hook_defs.h>
+};
+#undef LSM_HOOK
+#undef LSM_RET_INT
+#undef LSM_RET_VOID
 
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
 BTF_SET_START(bpf_lsm_hooks)
@@ -389,3 +423,33 @@ const struct bpf_verifier_ops lsm_verifier_ops = {
 	.get_func_proto = bpf_lsm_func_proto,
 	.is_valid_access = btf_ctx_access,
 };
+
+static struct lsm_retval_desc *find_retval_desc(const char *func_name)
+{
+	unsigned long addr;
+	struct lsm_retval_desc *desc;
+
+	addr = kallsyms_lookup_name(func_name);
+	for (unsigned int i = 0U; i < ARRAY_SIZE(lsm_retvalues); i++) {
+		desc = &lsm_retvalues[i];
+		if (addr == desc->func_addr)
+			return desc;
+	}
+
+	return NULL;
+}
+
+int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
+			      struct bpf_retval_range *retval_range)
+{
+	struct lsm_retval_desc *desc;
+
+	desc = find_retval_desc(prog->aux->attach_func_name);
+	if (desc == NULL)
+		return -ENODEV;
+
+	retval_range->minval = desc->minval;
+	retval_range->maxval = desc->maxval;
+
+	return 0;
+}
