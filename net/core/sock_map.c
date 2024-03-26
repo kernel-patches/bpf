@@ -24,8 +24,12 @@ struct bpf_stab {
 #define SOCK_CREATE_FLAG_MASK				\
 	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
 
+static DEFINE_MUTEX(sockmap_prog_update_mutex);
+static DEFINE_MUTEX(sockmap_link_mutex);
+
 static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
-				struct bpf_prog *old, u32 which);
+				struct bpf_prog *old, struct bpf_link *link,
+				u32 which);
 static struct sk_psock_progs *sock_map_progs(struct bpf_map *map);
 
 static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
@@ -71,7 +75,7 @@ int sock_map_get_from_fd(const union bpf_attr *attr, struct bpf_prog *prog)
 	map = __bpf_map_get(f);
 	if (IS_ERR(map))
 		return PTR_ERR(map);
-	ret = sock_map_prog_update(map, prog, NULL, attr->attach_type);
+	ret = sock_map_prog_update(map, prog, NULL, NULL, attr->attach_type);
 	fdput(f);
 	return ret;
 }
@@ -103,7 +107,7 @@ int sock_map_prog_detach(const union bpf_attr *attr, enum bpf_prog_type ptype)
 		goto put_prog;
 	}
 
-	ret = sock_map_prog_update(map, NULL, prog, attr->attach_type);
+	ret = sock_map_prog_update(map, NULL, prog, NULL, attr->attach_type);
 put_prog:
 	bpf_prog_put(prog);
 put_map:
@@ -1488,21 +1492,90 @@ static int sock_map_prog_lookup(struct bpf_map *map, struct bpf_prog ***pprog,
 	return 0;
 }
 
+static int sock_map_link_lookup(struct bpf_map *map, struct bpf_link ***plink,
+				struct bpf_link *link, bool skip_check, u32 which)
+{
+	struct sk_psock_progs *progs = sock_map_progs(map);
+
+	switch (which) {
+	case BPF_SK_MSG_VERDICT:
+		if (!skip_check &&
+		    ((!link && progs->msg_parser_link) ||
+		     (link && link != progs->msg_parser_link)))
+			return -EBUSY;
+		*plink = &progs->msg_parser_link;
+		break;
+#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
+	case BPF_SK_SKB_STREAM_PARSER:
+		if (!skip_check &&
+		    ((!link && progs->stream_parser_link) ||
+		     (link && link != progs->stream_parser_link)))
+			return -EBUSY;
+		*plink = &progs->stream_parser_link;
+		break;
+#endif
+	case BPF_SK_SKB_STREAM_VERDICT:
+		if (!skip_check &&
+		    ((!link && progs->stream_verdict_link) ||
+		     (link && link != progs->stream_verdict_link)))
+			return -EBUSY;
+		*plink = &progs->stream_verdict_link;
+		break;
+	case BPF_SK_SKB_VERDICT:
+		if (!skip_check &&
+		    ((!link && progs->skb_verdict_link) ||
+		     (link && link != progs->skb_verdict_link)))
+			return -EBUSY;
+		*plink = &progs->skb_verdict_link;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+/* Handle the following four cases:
+ * prog_attach: prog != NULL, old == NULL, link == NULL
+ * prog_detach: prog == NULL, old != NULL, link == NULL
+ * link_attach: prog != NULL, old == NULL, link != NULL
+ * link_detach: prog == NULL, old != NULL, link != NULL
+ */
 static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
-				struct bpf_prog *old, u32 which)
+				struct bpf_prog *old, struct bpf_link *link,
+				u32 which)
 {
 	struct bpf_prog **pprog;
+	struct bpf_link **plink;
 	int ret;
+
+	mutex_lock(&sockmap_prog_update_mutex);
 
 	ret = sock_map_prog_lookup(map, &pprog, which);
 	if (ret)
-		return ret;
+		goto out;
 
-	if (old)
-		return psock_replace_prog(pprog, prog, old);
+	if (!link || prog)
+		ret = sock_map_link_lookup(map, &plink, NULL, false, which);
+	else
+		ret = sock_map_link_lookup(map, &plink, NULL, true, which);
+	if (ret)
+		goto out;
+
+	if (old) {
+		ret = psock_replace_prog(pprog, prog, old);
+		if (!ret)
+			*plink = NULL;
+		goto out;
+	}
 
 	psock_set_prog(pprog, prog);
-	return 0;
+	if (link)
+		*plink = link;
+
+out:
+	mutex_unlock(&sockmap_prog_update_mutex);
+	return ret;
 }
 
 int sock_map_bpf_prog_query(const union bpf_attr *attr,
@@ -1656,6 +1729,180 @@ void sock_map_close(struct sock *sk, long timeout)
 	saved_close(sk, timeout);
 }
 EXPORT_SYMBOL_GPL(sock_map_close);
+
+struct sockmap_link {
+	struct bpf_link link;
+	struct bpf_map *map;
+	enum bpf_attach_type attach_type;
+};
+
+static struct sockmap_link *get_sockmap_link(const struct bpf_link *link)
+{
+	return container_of(link, struct sockmap_link, link);
+}
+
+static void sock_map_link_release(struct bpf_link *link)
+{
+	struct sockmap_link *sockmap_link = get_sockmap_link(link);
+
+	mutex_lock(&sockmap_link_mutex);
+	if (sockmap_link->map) {
+		(void)sock_map_prog_update(sockmap_link->map, NULL, link->prog, link,
+					   sockmap_link->attach_type);
+		bpf_map_put_with_uref(sockmap_link->map);
+		sockmap_link->map = NULL;
+	}
+	mutex_unlock(&sockmap_link_mutex);
+}
+
+static int sock_map_link_detach(struct bpf_link *link)
+{
+	sock_map_link_release(link);
+	return 0;
+}
+
+static void sock_map_link_dealloc(struct bpf_link *link)
+{
+	kfree(get_sockmap_link(link));
+}
+
+/* Handle the following two cases:
+ * case 1: link != NULL, prog != NULL, old != NULL
+ * case 2: link != NULL, prog != NULL, old == NULL
+ */
+static int sock_map_link_update_prog(struct bpf_link *link,
+				     struct bpf_prog *prog,
+				     struct bpf_prog *old)
+{
+	const struct sockmap_link *sockmap_link = get_sockmap_link(link);
+	struct bpf_prog **pprog;
+	struct bpf_link **plink;
+	int ret = 0;
+
+	mutex_lock(&sockmap_prog_update_mutex);
+
+	/* If old prog not NULL, ensure old prog the same as link->prog. */
+	if (old && link->prog != old) {
+		ret = -EINVAL;
+		goto out;
+	}
+	/* Ensure link->prog has the same type/attach_type as the new prog. */
+	if (link->prog->type != prog->type ||
+	    link->prog->expected_attach_type != prog->expected_attach_type) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = sock_map_prog_lookup(sockmap_link->map, &pprog,
+				   sockmap_link->attach_type);
+	if (ret)
+		goto out;
+
+	/* Ensure the same link between the one in map and the passed-in. */
+	ret = sock_map_link_lookup(sockmap_link->map, &plink, link, false,
+				   sockmap_link->attach_type);
+	if (ret)
+		goto out;
+
+	if (old)
+		return psock_replace_prog(pprog, prog, old);
+
+	psock_set_prog(pprog, prog);
+
+out:
+	if (!ret)
+		bpf_prog_inc(prog);
+	mutex_unlock(&sockmap_prog_update_mutex);
+	return ret;
+}
+
+static u32 sock_map_link_get_map_id(const struct sockmap_link *sockmap_link)
+{
+	u32 map_id = 0;
+
+	mutex_lock(&sockmap_link_mutex);
+	if (sockmap_link->map)
+		map_id = sockmap_link->map->id;
+	mutex_unlock(&sockmap_link_mutex);
+	return map_id;
+}
+
+static int sock_map_link_fill_info(const struct bpf_link *link,
+				   struct bpf_link_info *info)
+{
+	const struct sockmap_link *sockmap_link = get_sockmap_link(link);
+	u32 map_id = sock_map_link_get_map_id(sockmap_link);
+
+	info->sockmap.map_id = map_id;
+	info->sockmap.attach_type = sockmap_link->attach_type;
+	return 0;
+}
+
+static void sock_map_link_show_fdinfo(const struct bpf_link *link,
+				      struct seq_file *seq)
+{
+	const struct sockmap_link *sockmap_link = get_sockmap_link(link);
+	u32 map_id = sock_map_link_get_map_id(sockmap_link);
+
+	seq_printf(seq, "map_id:\t%u\n", map_id);
+	seq_printf(seq, "attach_type:\t%u\n", sockmap_link->attach_type);
+}
+
+static const struct bpf_link_ops sock_map_link_ops = {
+	.release = sock_map_link_release,
+	.dealloc = sock_map_link_dealloc,
+	.detach = sock_map_link_detach,
+	.update_prog = sock_map_link_update_prog,
+	.fill_link_info = sock_map_link_fill_info,
+	.show_fdinfo = sock_map_link_show_fdinfo,
+};
+
+int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct sockmap_link *sockmap_link;
+	enum bpf_attach_type attach_type;
+	struct bpf_map *map;
+	int ret;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+
+	map = bpf_map_get_with_uref(attr->link_create.target_fd);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	sockmap_link = kzalloc(sizeof(*sockmap_link), GFP_USER);
+	if (!sockmap_link) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	attach_type = attr->link_create.attach_type;
+	bpf_link_init(&sockmap_link->link, BPF_LINK_TYPE_SOCKMAP, &sock_map_link_ops, prog);
+	sockmap_link->map = map;
+	sockmap_link->attach_type = attach_type;
+
+	ret = bpf_link_prime(&sockmap_link->link, &link_primer);
+	if (ret) {
+		kfree(sockmap_link);
+		goto out;
+	}
+
+	ret = sock_map_prog_update(map, prog, NULL, &sockmap_link->link, attach_type);
+	if (ret) {
+		bpf_link_cleanup(&link_primer);
+		goto out;
+	}
+
+	bpf_prog_inc(prog);
+
+	return bpf_link_settle(&link_primer);
+
+out:
+	bpf_map_put_with_uref(map);
+	return ret;
+}
 
 static int sock_map_iter_attach_target(struct bpf_prog *prog,
 				       union bpf_iter_link_info *linfo,
