@@ -152,4 +152,14 @@ config LEDS_TRIGGER_TTY
 
 	  When build as a module this driver will be called ledtrig-tty.
 
+config LEDS_TRIGGER_BPF
+	tristate "LED BPF Trigger"
+	depends on BPF
+	depends on BPF_SYSCALL
+	help
+	  This allows LEDs to be controlled by the BPF subsystem. This trigger
+	  must be used with a loaded BPF program in order to control LED state.
+	  BPF programs can control LED state with kfuncs.
+	  If unsure, say N.
+
 endif # LEDS_TRIGGERS
