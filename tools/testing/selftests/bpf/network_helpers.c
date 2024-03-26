@@ -497,3 +497,68 @@ int get_socket_local_port(int sock_fd)
 
 	return -1;
 }
+
+int recvmsg_from_client(int sockfd, struct sockaddr_storage *src_addr)
+{
+	struct timeval tv;
+	struct msghdr hdr;
+	struct iovec iov;
+	char data[64];
+	fd_set rfds;
+
+	FD_ZERO(&rfds);
+	FD_SET(sockfd, &rfds);
+
+	tv.tv_sec = 2;
+	tv.tv_usec = 0;
+
+	if (select(sockfd + 1, &rfds, NULL, NULL, &tv) <= 0 ||
+	    !FD_ISSET(sockfd, &rfds))
+		return -1;
+
+	memset(&iov, 0, sizeof(iov));
+	iov.iov_base = data;
+	iov.iov_len = sizeof(data);
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.msg_name = src_addr;
+	hdr.msg_namelen = sizeof(struct sockaddr_storage);
+	hdr.msg_iov = &iov;
+	hdr.msg_iovlen = 1;
+
+	return recvmsg(sockfd, &hdr, 0);
+}
+
+int cmp_addr(const struct sockaddr_storage *addr1, socklen_t addr1_len,
+	     const struct sockaddr_storage *addr2, socklen_t addr2_len,
+	     bool cmp_port)
+{
+	const struct sockaddr_in *four1, *four2;
+	const struct sockaddr_in6 *six1, *six2;
+	const struct sockaddr_un *un1, *un2;
+
+	if (addr1->ss_family != addr2->ss_family)
+		return -1;
+
+	if (addr1_len != addr2_len)
+		return -1;
+
+	if (addr1->ss_family == AF_INET) {
+		four1 = (const struct sockaddr_in *)addr1;
+		four2 = (const struct sockaddr_in *)addr2;
+		return !((four1->sin_port == four2->sin_port || !cmp_port) &&
+			 four1->sin_addr.s_addr == four2->sin_addr.s_addr);
+	} else if (addr1->ss_family == AF_INET6) {
+		six1 = (const struct sockaddr_in6 *)addr1;
+		six2 = (const struct sockaddr_in6 *)addr2;
+		return !((six1->sin6_port == six2->sin6_port || !cmp_port) &&
+			 !memcmp(&six1->sin6_addr, &six2->sin6_addr,
+				 sizeof(struct in6_addr)));
+	} else if (addr1->ss_family == AF_UNIX) {
+		un1 = (const struct sockaddr_un *)addr1;
+		un2 = (const struct sockaddr_un *)addr2;
+		return memcmp(un1, un2, addr1_len);
+	}
+
+	return -1;
+}

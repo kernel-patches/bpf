@@ -132,7 +132,7 @@ TEST_GEN_PROGS_EXTENDED = test_sock_addr test_skb_cgroup_id_user \
 	flow_dissector_load test_flow_dissector test_tcp_check_syncookie_user \
 	test_lirc_mode2_user xdping test_cpp runqslower bench bpf_testmod.ko \
 	xskxceiver xdp_redirect_multi xdp_synproxy veristat xdp_hw_metadata \
-	xdp_features bpf_test_no_cfi.ko
+	xdp_features bpf_test_no_cfi.ko sock_addr_testmod.ko
 
 TEST_GEN_FILES += liburandom_read.so urandom_read sign-file uprobe_multi
 
@@ -160,6 +160,7 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
 	$(Q)$(MAKE) -C bpf_testmod clean
+	$(Q)$(MAKE) -C sock_addr_testmod clean
 	$(Q)$(MAKE) docs-clean
 endef
 
@@ -260,6 +261,12 @@ $(OUTPUT)/bpf_test_no_cfi.ko: $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard bpf_te
 	$(Q)$(MAKE) $(submake_extras) RESOLVE_BTFIDS=$(RESOLVE_BTFIDS) -C bpf_test_no_cfi
 	$(Q)cp bpf_test_no_cfi/bpf_test_no_cfi.ko $@
 
+$(OUTPUT)/sock_addr_testmod.ko: $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard sock_addr_testmod/Makefile sock_addr_testmod/*.[ch])
+	$(call msg,MOD,,$@)
+	$(Q)$(RM) sock_addr_testmod/sock_addr_testmod.ko # force re-compilation
+	$(Q)$(MAKE) $(submake_extras) RESOLVE_BTFIDS=$(RESOLVE_BTFIDS) -C sock_addr_testmod
+	$(Q)cp sock_addr_testmod/sock_addr_testmod.ko $@
+
 DEFAULT_BPFTOOL := $(HOST_SCRATCH_DIR)/sbin/bpftool
 ifneq ($(CROSS_COMPILE),)
 CROSS_BPFTOOL := $(SCRATCH_DIR)/sbin/bpftool
@@ -284,6 +291,7 @@ TEST_GEN_PROGS_EXTENDED += $(TRUNNER_BPFTOOL)
 
 $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED): $(BPFOBJ)
 
+SOCK_ADDR_HELPERS := $(OUTPUT)/sock_addr_helpers.o
 TESTING_HELPERS	:= $(OUTPUT)/testing_helpers.o
 CGROUP_HELPERS	:= $(OUTPUT)/cgroup_helpers.o
 UNPRIV_HELPERS  := $(OUTPUT)/unpriv_helpers.o
@@ -294,7 +302,7 @@ CAP_HELPERS	:= $(OUTPUT)/cap_helpers.o
 $(OUTPUT)/test_dev_cgroup: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_skb_cgroup_id_user: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_sock: $(CGROUP_HELPERS) $(TESTING_HELPERS)
-$(OUTPUT)/test_sock_addr: $(CGROUP_HELPERS) $(TESTING_HELPERS)
+$(OUTPUT)/test_sock_addr: $(CGROUP_HELPERS) $(TESTING_HELPERS) $(SOCK_ADDR_HELPERS)
 $(OUTPUT)/test_sockmap: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_tcpnotify_user: $(CGROUP_HELPERS) $(TESTING_HELPERS) $(TRACE_HELPERS)
 $(OUTPUT)/get_cgroup_id_user: $(CGROUP_HELPERS) $(TESTING_HELPERS)
@@ -621,29 +629,32 @@ endef
 # Define test_progs test runner.
 TRUNNER_TESTS_DIR := prog_tests
 TRUNNER_BPF_PROGS_DIR := progs
-TRUNNER_EXTRA_SOURCES := test_progs.c		\
-			 cgroup_helpers.c	\
-			 trace_helpers.c	\
-			 network_helpers.c	\
-			 testing_helpers.c	\
-			 btf_helpers.c		\
-			 cap_helpers.c		\
-			 unpriv_helpers.c 	\
-			 netlink_helpers.c	\
-			 test_loader.c		\
-			 xsk.c			\
-			 disasm.c		\
-			 json_writer.c 		\
-			 flow_dissector_load.h	\
-			 ip_check_defrag_frags.h
+TRUNNER_EXTRA_SOURCES := test_progs.c		 \
+			 cgroup_helpers.c	 \
+			 trace_helpers.c	 \
+			 network_helpers.c	 \
+			 testing_helpers.c	 \
+			 btf_helpers.c		 \
+			 cap_helpers.c		 \
+			 unpriv_helpers.c 	 \
+			 netlink_helpers.c	 \
+			 test_loader.c		 \
+			 xsk.c			 \
+			 disasm.c		 \
+			 json_writer.c 		 \
+			 flow_dissector_load.h	 \
+			 ip_check_defrag_frags.h \
+			 sock_addr_helpers.c
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read $(OUTPUT)/bpf_testmod.ko	\
 		       $(OUTPUT)/bpf_test_no_cfi.ko			\
+		       $(OUTPUT)/sock_addr_testmod.ko	\
 		       $(OUTPUT)/liburandom_read.so			\
 		       $(OUTPUT)/xdp_synproxy				\
 		       $(OUTPUT)/sign-file				\
 		       $(OUTPUT)/uprobe_multi				\
 		       ima_setup.sh 					\
 		       verify_sig_setup.sh				\
+		       test_sock_addr.sh				\
 		       $(wildcard progs/btf_dump_test_case_*.c)		\
 		       $(wildcard progs/*.bpf.o)
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
@@ -767,6 +778,7 @@ EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 	$(addprefix $(OUTPUT)/,*.o *.skel.h *.lskel.h *.subskel.h	\
 			       no_alu32 cpuv4 bpf_gcc bpf_testmod.ko	\
 			       bpf_test_no_cfi.ko			\
+				   sock_addr_testmod.ko	\
 			       liburandom_read.so)
 
 .PHONY: docs docs-clean
