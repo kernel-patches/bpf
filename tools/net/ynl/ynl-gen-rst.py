@@ -82,9 +82,9 @@ def rst_subsubsection(title: str) -> str:
     return f"{title}\n" + "~" * len(title)
 
 
-def rst_section(title: str) -> str:
+def rst_section(prefix: str, title: str) -> str:
     """Add a section to the document"""
-    return f"\n{title}\n" + "=" * len(title)
+    return f".. _{family}-{prefix}-{title}:\n\n{title}\n" + "=" * len(title)
 
 
 def rst_subtitle(title: str) -> str:
@@ -100,6 +100,16 @@ def rst_title(title: str) -> str:
 def rst_list_inline(list_: List[str], level: int = 0) -> str:
     """Format a list using inlines"""
     return headroom(level) + "[" + ", ".join(inline(i) for i in list_) + "]"
+
+def rst_ref(prefix: str, name: str) -> str:
+    """Add a hyperlink to the document"""
+    mappings = {'enum': 'definition',
+                'fixed-header': 'definition',
+                'nested-attributes': 'attribute-set',
+                'struct': 'definition'}
+    if prefix in mappings:
+        prefix = mappings[prefix]
+    return f":ref:`{family}-{prefix}-{name}`"
 
 
 def rst_header() -> str:
@@ -162,17 +172,21 @@ def parse_do_attributes(attrs: Dict[str, Any], level: int = 0) -> str:
 def parse_operations(operations: List[Dict[str, Any]]) -> str:
     """Parse operations block"""
     preprocessed = ["name", "doc", "title", "do", "dump"]
+    linkable = ["fixed-header", "attribute-set"]
     lines = []
 
     for operation in operations:
-        lines.append(rst_section(operation["name"]))
+        lines.append(rst_section('operation', operation["name"]))
         lines.append(rst_paragraph(sanitize(operation["doc"])) + "\n")
 
         for key in operation.keys():
             if key in preprocessed:
                 # Skip the special fields
                 continue
-            lines.append(rst_fields(key, operation[key], 0))
+            value = operation[key]
+            if key in linkable:
+                value = rst_ref(key, value)
+            lines.append(rst_fields(key, value, 0))
 
         if "do" in operation:
             lines.append(rst_paragraph(":do:", 0))
@@ -219,7 +233,7 @@ def parse_definitions(defs: Dict[str, Any]) -> str:
     lines = []
 
     for definition in defs:
-        lines.append(rst_section(definition["name"]))
+        lines.append(rst_section('definition', definition["name"]))
         for k in definition.keys():
             if k in preprocessed + ignored:
                 continue
@@ -240,11 +254,12 @@ def parse_definitions(defs: Dict[str, Any]) -> str:
 def parse_attr_sets(entries: List[Dict[str, Any]]) -> str:
     """Parse attribute from attribute-set"""
     preprocessed = ["name", "type"]
+    linkable = ["enum", "nested-attributes", "struct", "sub-message"]
     ignored = ["checks"]
     lines = []
 
     for entry in entries:
-        lines.append(rst_section(entry["name"]))
+        lines.append(rst_section('attribute-set', entry["name"]))
         for attr in entry["attributes"]:
             type_ = attr.get("type")
             attr_line = attr["name"]
@@ -257,7 +272,11 @@ def parse_attr_sets(entries: List[Dict[str, Any]]) -> str:
             for k in attr.keys():
                 if k in preprocessed + ignored:
                     continue
-                lines.append(rst_fields(k, sanitize(attr[k]), 0))
+                if k in linkable:
+                    value = rst_ref(k, attr[k])
+                else:
+                    value = sanitize(attr[k])
+                lines.append(rst_fields(k, value, 0))
             lines.append("\n")
 
     return "\n".join(lines)
@@ -268,14 +287,14 @@ def parse_sub_messages(entries: List[Dict[str, Any]]) -> str:
     lines = []
 
     for entry in entries:
-        lines.append(rst_section(entry["name"]))
+        lines.append(rst_section('sub-message', entry["name"]))
         for fmt in entry["formats"]:
             value = fmt["value"]
 
             lines.append(rst_bullet(bold(value)))
             for attr in ['fixed-header', 'attribute-set']:
                 if attr in fmt:
-                    lines.append(rst_fields(attr, fmt[attr], 1))
+                    lines.append(rst_fields(attr, rst_ref(attr, fmt[attr]), 1))
             lines.append("\n")
 
     return "\n".join(lines)
@@ -289,7 +308,11 @@ def parse_yaml(obj: Dict[str, Any]) -> str:
 
     lines.append(rst_header())
 
-    title = f"Family ``{obj['name']}`` netlink specification"
+    # Save the family for use in ref labels
+    global family
+    family = obj['name']
+
+    title = f"Family ``{family}`` netlink specification"
     lines.append(rst_title(title))
     lines.append(rst_paragraph(".. contents:: :depth: 3\n"))
 
@@ -397,7 +420,6 @@ def generate_main_index_rst(output: str) -> None:
 
     logging.debug("Writing an index file at %s", output)
     write_to_rstfile("".join(lines), output)
-
 
 def main() -> None:
     """Main function that reads the YAML files and generates the RST files"""
