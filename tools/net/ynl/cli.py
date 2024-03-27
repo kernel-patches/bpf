@@ -19,13 +19,23 @@ class YnlEncoder(json.JSONEncoder):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='YNL CLI sample')
+    description = """
+    YNL CLI utility - a general purpose netlink utility that uses YNL specs
+    to drive protocol encoding and decoding.
+    """
+    epilog = """
+    The --multi option can be repeated to include several operations
+    in the same netlink payload.
+    """
+
+    parser = argparse.ArgumentParser(description=description,
+                                     epilog=epilog)
     parser.add_argument('--spec', dest='spec', type=str, required=True)
     parser.add_argument('--schema', dest='schema', type=str)
     parser.add_argument('--no-schema', action='store_true')
     parser.add_argument('--json', dest='json_text', type=str)
-    parser.add_argument('--do', dest='do', type=str)
-    parser.add_argument('--dump', dest='dump', type=str)
+    parser.add_argument('--do', dest='do', metavar='OPERATION', type=str)
+    parser.add_argument('--dump', dest='dump', metavar='OPERATION', type=str)
     parser.add_argument('--sleep', dest='sleep', type=int)
     parser.add_argument('--subscribe', dest='ntf', type=str)
     parser.add_argument('--replace', dest='flags', action='append_const',
@@ -40,6 +50,8 @@ def main():
     parser.add_argument('--output-json', action='store_true')
     parser.add_argument('--dbg-small-recv', default=0, const=4000,
                         action='store', nargs='?', type=int)
+    parser.add_argument('--multi', dest='multi', nargs=2, action='append',
+                        metavar=('OPERATION', 'JSON_TEXT'), type=str)
     args = parser.parse_args()
 
     def output(msg):
@@ -72,6 +84,10 @@ def main():
             output(reply)
         if args.dump:
             reply = ynl.dump(args.dump, attrs)
+            output(reply)
+        if args.multi:
+            ops = [ (item[0], json.loads(item[1]), args.flags) for item in args.multi ]
+            reply = ynl.do_multi(ops)
             output(reply)
     except NlError as e:
         print(e)
