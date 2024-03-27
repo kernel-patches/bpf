@@ -1596,6 +1596,26 @@ static u16 cgroup_calc_subtree_ss_mask(u16 subtree_control, u16 this_ss_mask)
 }
 
 /**
+ * cgroup_dfl_write_no_kn - check if direct writes to cgroup without going
+ * through kernfs is allowed.
+ * @cgrp: the target cgroup
+ *
+ * This helper ensures that the cgroup is on the default hierarchy and it
+ * is not a root cgroup.
+ *
+ * Return: %0 on success or a negative errno code on failure.
+ */
+static int cgroup_dfl_write_no_kn(struct cgroup *cgrp)
+{
+	lockdep_assert_held(&cgroup_mutex);
+
+	if (!cgroup_on_dfl(cgrp) || !cgroup_parent(cgrp))
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+/**
  * cgroup_kn_unlock - unlocking helper for cgroup kernfs methods
  * @kn: the kernfs_node being serviced
  *
@@ -1665,6 +1685,25 @@ struct cgroup *cgroup_kn_lock_live(struct kernfs_node *kn, bool drain_offline)
 		return cgrp;
 
 	cgroup_kn_unlock(kn);
+	return NULL;
+}
+
+/**
+ * cgroup_lock_live_no_kn - locking helper for direct writes to cgroup without
+ * going through kernfs interface.
+ * @cgrp: the target cgroup
+ *
+ * This helper performs cgroup locking and verifies that the associated cgroup
+ * is alive. Returns the cgroup if alive; otherwise, %NULL.
+ * A successful return should be undone by a matching cgroup_unlock()
+ * invocation.
+ */
+static struct cgroup *cgroup_lock_live_no_kn(struct cgroup *cgrp)
+{
+	cgroup_lock();
+	if (!cgroup_is_dead(cgrp))
+		return cgrp;
+	cgroup_unlock();
 	return NULL;
 }
 
@@ -3928,6 +3967,36 @@ static int cgroup_freeze_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "%d\n", cgrp->freezer.freeze);
 
 	return 0;
+}
+
+/**
+ * cgroup_freeze_no_kn - Freeze a cgroup that is on the default hierarchy
+ * without going through kernfs interface.
+ *
+ * @cgrp: the target cgroup
+ * @freeze: freeze state, passing value 1 causes the freezing of the cgroup
+ * and all descendant cgroups. Processes under this cgroup hierarchy will
+ * be stopped and will not run until the cgroup is explicitly unfrozen.
+ * Passing value 0 unthaws the cgroup hierarchy.
+ *
+ * Return: %0 on success or a negative errno code on failure.
+ */
+int cgroup_freeze_no_kn(struct cgroup *cgrp, int freeze)
+{
+	int ret = 0;
+
+	if (freeze < 0 || freeze > 1)
+		return -ERANGE;
+
+	if (!cgroup_lock_live_no_kn(cgrp))
+		return -ENOENT;
+
+	ret = cgroup_dfl_write_no_kn(cgrp);
+	if (!ret)
+		cgroup_freeze(cgrp, freeze);
+
+	cgroup_unlock();
+	return ret;
 }
 
 static ssize_t cgroup_freeze_write(struct kernfs_open_file *of,
