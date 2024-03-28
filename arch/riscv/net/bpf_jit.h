@@ -20,7 +20,7 @@ static inline bool rvc_enabled(void)
 
 static inline bool rvzbb_enabled(void)
 {
-	return IS_ENABLED(CONFIG_RISCV_ISA_ZBB) && riscv_has_extension_likely(RISCV_ISA_EXT_ZBB);
+	return riscv_has_extension_likely(RISCV_ISA_EXT_ZBB);
 }
 
 enum {
