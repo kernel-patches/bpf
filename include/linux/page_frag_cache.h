@@ -9,7 +9,18 @@
 #define PAGE_FRAG_CACHE_MAX_ORDER	get_order(PAGE_FRAG_CACHE_MAX_SIZE)
 
 struct page_frag_cache {
-	void *va;
+	union {
+		void *va;
+		/* we maintain a pagecount bias, so that we dont dirty cache
+		 * line containing page->_refcount every time we allocate a
+		 * fragment. As 'va' is always aligned with the order of the
+		 * page allocated, we can reuse the LSB bits for the pagecount
+		 * bias, and its bit width happens to be indicated by the
+		 * 'size_mask' below.
+		 */
+		unsigned long pagecnt_bias;
+
+	};
 #if (PAGE_SIZE < PAGE_FRAG_CACHE_MAX_SIZE)
 	__u16 offset;
 	__u16 size_mask:15;
@@ -18,10 +29,6 @@ struct page_frag_cache {
 	__u32 offset:31;
 	__u32 pfmemalloc:1;
 #endif
-	/* we maintain a pagecount bias, so that we dont dirty cache line
-	 * containing page->_refcount every time we allocate a fragment.
-	 */
-	unsigned int		pagecnt_bias;
 };
 
 static inline void page_frag_cache_init(struct page_frag_cache *nc)
@@ -56,7 +63,8 @@ static inline void *page_frag_alloc_va_align(struct page_frag_cache *nc,
 					     gfp_t gfp_mask,
 					     unsigned int align)
 {
-	WARN_ON_ONCE(!is_power_of_2(align) || align >= PAGE_SIZE);
+	WARN_ON_ONCE(!is_power_of_2(align) || align >= PAGE_SIZE ||
+		     fragsz < sizeof(unsigned int));
 
 	return __page_frag_alloc_va_align(nc, fragsz, gfp_mask, align);
 }

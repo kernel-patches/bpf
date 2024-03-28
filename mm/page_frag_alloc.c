@@ -18,8 +18,8 @@
 #include <linux/page_frag_cache.h>
 #include "internal.h"
 
-static struct page *__page_frag_cache_refill(struct page_frag_cache *nc,
-					     gfp_t gfp_mask)
+static bool __page_frag_cache_refill(struct page_frag_cache *nc,
+				     gfp_t gfp_mask)
 {
 	struct page *page = NULL;
 	gfp_t gfp = gfp_mask;
@@ -35,9 +35,26 @@ static struct page *__page_frag_cache_refill(struct page_frag_cache *nc,
 	if (unlikely(!page))
 		page = alloc_pages_node(NUMA_NO_NODE, gfp, 0);
 
-	nc->va = page ? page_address(page) : NULL;
+	if (unlikely(!page)) {
+		nc->va = NULL;
+		return false;
+	}
 
-	return page;
+	nc->va = page_address(page);
+
+#if (PAGE_SIZE < PAGE_FRAG_CACHE_MAX_SIZE)
+	VM_BUG_ON(nc->pagecnt_bias & nc->size_mask);
+	page_ref_add(page, nc->size_mask - 1);
+	nc->pagecnt_bias |= nc->size_mask;
+#else
+	VM_BUG_ON(nc->pagecnt_bias & (PAGE_SIZE - 1));
+	page_ref_add(page, PAGE_SIZE - 2);
+	nc->pagecnt_bias |= (PAGE_SIZE - 1);
+#endif
+
+	nc->pfmemalloc = page_is_pfmemalloc(page);
+	nc->offset = 0;
+	return true;
 }
 
 void page_frag_cache_drain(struct page_frag_cache *nc)
@@ -67,38 +84,31 @@ EXPORT_SYMBOL(__page_frag_cache_drain);
 void *page_frag_alloc_va(struct page_frag_cache *nc, unsigned int fragsz,
 			 gfp_t gfp_mask)
 {
-	unsigned int size, offset;
+	unsigned long size_mask;
+	unsigned int offset;
 	struct page *page;
+	void *va;
 
 	if (unlikely(!nc->va)) {
 refill:
-		page = __page_frag_cache_refill(nc, gfp_mask);
-		if (!page)
+		if (!__page_frag_cache_refill(nc, gfp_mask))
 			return NULL;
-
-		/* Even if we own the page, we do not use atomic_set().
-		 * This would break get_page_unless_zero() users.
-		 */
-		page_ref_add(page, PAGE_FRAG_CACHE_MAX_SIZE);
-
-		/* reset page count bias and offset to start of new frag */
-		nc->pfmemalloc = page_is_pfmemalloc(page);
-		nc->pagecnt_bias = PAGE_FRAG_CACHE_MAX_SIZE + 1;
-		nc->offset = 0;
 	}
 
 #if (PAGE_SIZE < PAGE_FRAG_CACHE_MAX_SIZE)
 	/* if size can vary use size else just use PAGE_SIZE */
-	size = nc->size_mask + 1;
+	size_mask = nc->size_mask;
 #else
-	size = PAGE_SIZE;
+	size_mask = PAGE_SIZE - 1;
 #endif
 
+	va = (void *)((unsigned long)nc->va & ~size_mask);
 	offset = nc->offset;
-	if (unlikely(offset + fragsz > size)) {
-		page = virt_to_page(nc->va);
 
-		if (!page_ref_sub_and_test(page, nc->pagecnt_bias))
+	if (unlikely(offset + fragsz > (size_mask + 1))) {
+		page = virt_to_page(va);
+
+		if (!page_ref_sub_and_test(page, nc->pagecnt_bias & size_mask))
 			goto refill;
 
 		if (unlikely(nc->pfmemalloc)) {
@@ -107,12 +117,11 @@ refill:
 		}
 
 		/* OK, page count is 0, we can safely set it */
-		set_page_count(page, PAGE_FRAG_CACHE_MAX_SIZE + 1);
+		set_page_count(page, size_mask);
+		nc->pagecnt_bias |= size_mask;
 
-		/* reset page count bias and offset to start of new frag */
-		nc->pagecnt_bias = PAGE_FRAG_CACHE_MAX_SIZE + 1;
 		offset = 0;
-		if (unlikely(fragsz > size)) {
+		if (unlikely(fragsz > (size_mask + 1))) {
 			/*
 			 * The caller is trying to allocate a fragment
 			 * with fragsz > PAGE_SIZE but the cache isn't big
@@ -129,7 +138,7 @@ refill:
 	nc->pagecnt_bias--;
 	nc->offset = offset + fragsz;
 
-	return nc->va + offset;
+	return va + offset;
 }
 EXPORT_SYMBOL(page_frag_alloc_va);
 
