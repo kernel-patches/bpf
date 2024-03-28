@@ -510,6 +510,10 @@ extern const struct bench bench_trig_fmodret;
 extern const struct bench bench_trig_tp;
 extern const struct bench bench_trig_rawtp;
 
+extern const struct bench bench_trig_arr_inc;
+extern const struct bench bench_trig_hash_inc;
+extern const struct bench bench_trig_glob_arr_inc;
+
 /* uprobe/uretprobe benchmarks */
 extern const struct bench bench_trig_uprobe_nop;
 extern const struct bench bench_trig_uretprobe_nop;
@@ -562,6 +566,11 @@ static const struct bench *benchs[] = {
 	&bench_trig_fmodret,
 	&bench_trig_tp,
 	&bench_trig_rawtp,
+
+	&bench_trig_arr_inc,
+	&bench_trig_hash_inc,
+	&bench_trig_glob_arr_inc,
+
 	/* uprobes */
 	&bench_trig_uprobe_nop,
 	&bench_trig_uretprobe_nop,
