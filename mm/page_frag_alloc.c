@@ -81,8 +81,8 @@ void __page_frag_cache_drain(struct page *page, unsigned int count)
 }
 EXPORT_SYMBOL(__page_frag_cache_drain);
 
-void *page_frag_alloc_va(struct page_frag_cache *nc, unsigned int fragsz,
-			 gfp_t gfp_mask)
+void *__page_frag_alloc_prepare(struct page_frag_cache *nc, unsigned int fragsz,
+				gfp_t gfp_mask)
 {
 	unsigned long size_mask;
 	unsigned int offset;
@@ -120,7 +120,7 @@ refill:
 		set_page_count(page, size_mask);
 		nc->pagecnt_bias |= size_mask;
 
-		offset = 0;
+		nc->offset = 0;
 		if (unlikely(fragsz > (size_mask + 1))) {
 			/*
 			 * The caller is trying to allocate a fragment
@@ -135,12 +135,9 @@ refill:
 		}
 	}
 
-	nc->pagecnt_bias--;
-	nc->offset = offset + fragsz;
-
-	return va + offset;
+	return va;
 }
-EXPORT_SYMBOL(page_frag_alloc_va);
+EXPORT_SYMBOL(__page_frag_alloc_prepare);
 
 /*
  * Frees a page fragment allocated out of either a compound or order 0 page.
