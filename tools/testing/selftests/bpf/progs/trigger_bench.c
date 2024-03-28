@@ -25,6 +25,50 @@ static __always_inline void inc_counter(void)
 	__sync_add_and_fetch(&hits[cpu & CPU_MASK].value, 1);
 }
 
+static __always_inline void inc_counter2(int amount)
+{
+	int cpu = bpf_get_smp_processor_id();
+
+	__sync_add_and_fetch(&hits[cpu & CPU_MASK].value, amount);
+}
+
+struct {
+        __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+        __type(key, int);
+        __type(value, int);
+        __uint(max_entries, 1);
+} hash_map SEC(".maps");
+
+struct {
+        __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+        __type(key, int);
+        __type(value, int);
+        __uint(max_entries, 1);
+} array_map SEC(".maps");
+
+static int zero = 0;
+
+static void __always_inline hash_inc(void *map) {
+        int *p;
+
+        p = bpf_map_lookup_elem(map, &zero);
+        if (!p) {
+                bpf_map_update_elem(map, &zero, &zero, BPF_ANY);
+                p = bpf_map_lookup_elem(map, &zero);
+                if (!p)
+                        return;
+        }
+        *p += 1;
+}
+
+struct counter arr[256];
+
+static void __always_inline glob_arr_inc(void) {
+	int cpu = bpf_get_smp_processor_id();
+
+	arr[cpu].value += 1;
+}
+
 SEC("?uprobe")
 int bench_trigger_uprobe(void *ctx)
 {
@@ -33,6 +77,45 @@ int bench_trigger_uprobe(void *ctx)
 }
 
 const volatile int batch_iters = 0;
+
+SEC("?raw_tp")
+int trigger_arr_inc(void *ctx)
+{
+	int i;
+
+	for (i = 0; i < batch_iters; i++)
+		hash_inc(&array_map);
+
+	inc_counter2(batch_iters);
+
+	return 0;
+}
+
+SEC("?raw_tp")
+int trigger_hash_inc(void *ctx)
+{
+	int i;
+
+	for (i = 0; i < batch_iters; i++)
+		hash_inc(&hash_map);
+
+	inc_counter2(batch_iters);
+
+	return 0;
+}
+
+SEC("?raw_tp")
+int trigger_glob_arr_inc(void *ctx)
+{
+	int i;
+
+	for (i = 0; i < batch_iters; i++)
+		glob_arr_inc();
+
+	inc_counter2(batch_iters);
+
+	return 0;
+}
 
 SEC("?raw_tp")
 int trigger_count(void *ctx)
