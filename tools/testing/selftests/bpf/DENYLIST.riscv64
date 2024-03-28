@@ -1,0 +1,5 @@
+# riscv64 deny list for BPF CI and local vmtest
+exceptions					# JIT does not support exceptions
+fentry_test/fentry_many_args			# JIT does not support 12 args of bpf trampoline
+fexit_test/fexit_many_args			# JIT does not support 12 args of bpf trampoline
+tailcalls/tailcall_bpf2bpf*			# JIT does not support mixing bpf2bpf and tailcalls
