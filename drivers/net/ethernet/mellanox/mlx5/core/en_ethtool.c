@@ -451,6 +451,28 @@ int mlx5e_ethtool_set_channels(struct mlx5e_priv *priv,
 
 	mutex_lock(&priv->state_lock);
 
+	if (mlx5e_rx_res_get_current_hash(priv->rx_res).hfunc == ETH_RSS_HASH_XOR) {
+		unsigned int xor8_max_channels = mlx5e_rqt_max_num_channels_allowed_for_xor8();
+
+		if (count > xor8_max_channels) {
+			err = -EINVAL;
+			netdev_err(priv->netdev, "%s: Requested number of channels (%d) exceeds the maximum allowed by the XOR8 RSS hfunc (%d)\n",
+				   __func__, count, xor8_max_channels);
+			goto out;
+		}
+	}
+
+	/* Don't allow changing the number of channels if RXFH was previously configured.
+	 * Changing the channels number after configuring the RXFH may alter the RSS table size,
+	 * the previous configuration may no longer be compatible with the new RSS table.
+	 */
+	if (netif_is_rxfh_configured(priv->netdev)) {
+		err = -EINVAL;
+		netdev_err(priv->netdev, "%s: RXFH is configured, cannot change the number of channels\n",
+			   __func__);
+		goto out;
+	}
+
 	/* Don't allow changing the number of channels if HTB offload is active,
 	 * because the numeration of the QoS SQs will change, while per-queue
 	 * qdiscs are attached.
@@ -1281,17 +1303,30 @@ int mlx5e_set_rxfh(struct net_device *dev, struct ethtool_rxfh_param *rxfh,
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	u32 *rss_context = &rxfh->rss_context;
 	u8 hfunc = rxfh->hfunc;
+	unsigned int count;
 	int err;
 
 	mutex_lock(&priv->state_lock);
+
+	count = priv->channels.params.num_channels;
+
+	if (hfunc == ETH_RSS_HASH_XOR) {
+		unsigned int xor8_max_channels = mlx5e_rqt_max_num_channels_allowed_for_xor8();
+
+		if (count > xor8_max_channels) {
+			err = -EINVAL;
+			netdev_err(priv->netdev, "%s: Cannot set RSS hash function to XOR, current number of channels (%d) exceeds the maximum allowed for XOR8 RSS hfunc (%d)\n",
+				   __func__, count, xor8_max_channels);
+			goto unlock;
+		}
+	}
+
 	if (*rss_context && rxfh->rss_delete) {
 		err = mlx5e_rx_res_rss_destroy(priv->rx_res, *rss_context);
 		goto unlock;
 	}
 
 	if (*rss_context == ETH_RXFH_CONTEXT_ALLOC) {
-		unsigned int count = priv->channels.params.num_channels;
-
 		err = mlx5e_rx_res_rss_init(priv->rx_res, rss_context, count);
 		if (err)
 			goto unlock;

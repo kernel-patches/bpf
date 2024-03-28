@@ -157,6 +157,7 @@
 #include <net/page_pool/types.h>
 #include <net/page_pool/helpers.h>
 #include <net/rps.h>
+#include <linux/sched/isolation.h>
 
 #include "dev.h"
 #include "net-sysfs.h"
@@ -2083,6 +2084,11 @@ void net_dec_egress_queue(void)
 EXPORT_SYMBOL_GPL(net_dec_egress_queue);
 #endif
 
+#ifdef CONFIG_NET_CLS_ACT
+DEFINE_STATIC_KEY_FALSE(tcf_bypass_check_needed_key);
+EXPORT_SYMBOL(tcf_bypass_check_needed_key);
+#endif
+
 DEFINE_STATIC_KEY_FALSE(netstamp_needed_key);
 EXPORT_SYMBOL(netstamp_needed_key);
 #ifdef CONFIG_JUMP_LABEL
@@ -3936,6 +3942,11 @@ static int tc_run(struct tcx_entry *entry, struct sk_buff *skb,
 
 	if (!miniq)
 		return ret;
+
+	if (static_branch_unlikely(&tcf_bypass_check_needed_key)) {
+		if (tcf_block_bypass_sw(miniq->block))
+			return ret;
+	}
 
 	tc_skb_cb(skb)->mru = 0;
 	tc_skb_cb(skb)->post_ct = false;
@@ -11890,6 +11901,10 @@ static int __init net_dev_init(void)
 				       NULL, dev_cpu_dead);
 	WARN_ON(rc < 0);
 	rc = 0;
+
+	/* avoid static key IPIs to isolated CPUs */
+	if (housekeeping_enabled(HK_TYPE_MISC))
+		net_enable_timestamp();
 out:
 	if (rc < 0) {
 		for_each_possible_cpu(i) {

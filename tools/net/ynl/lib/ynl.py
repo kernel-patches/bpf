@@ -819,7 +819,10 @@ class YnlFamily(SpecFamily):
         if display_hint == 'mac':
             formatted = ':'.join('%02x' % b for b in raw)
         elif display_hint == 'hex':
-            formatted = bytes.hex(raw, ' ')
+            if isinstance(raw, int):
+                formatted = hex(raw)
+            else:
+                formatted = bytes.hex(raw, ' ')
         elif display_hint in [ 'ipv4', 'ipv6' ]:
             formatted = format(ipaddress.ip_address(raw))
         elif display_hint == 'uuid':
@@ -877,16 +880,11 @@ class YnlFamily(SpecFamily):
 
       return op['do']['request']['attributes'].copy()
 
-    def _op(self, method, vals, flags=None, dump=False):
-        op = self.ops[method]
-
+    def _encode_message(self, op, vals, flags, req_seq):
         nl_flags = Netlink.NLM_F_REQUEST | Netlink.NLM_F_ACK
         for flag in flags or []:
             nl_flags |= flag
-        if dump:
-            nl_flags |= Netlink.NLM_F_DUMP
 
-        req_seq = random.randint(1024, 65535)
         msg = self.nlproto.message(nl_flags, op.req_value, 1, req_seq)
         if op.fixed_header:
             msg += self._encode_struct(op.fixed_header, vals)
@@ -894,8 +892,20 @@ class YnlFamily(SpecFamily):
         for name, value in vals.items():
             msg += self._add_attr(op.attr_set.name, name, value, search_attrs)
         msg = _genl_msg_finalize(msg)
+        return msg
 
-        self.sock.send(msg, 0)
+    def _ops(self, ops):
+        reqs_by_seq = {}
+        req_seq = random.randint(1024, 65535)
+        payload = b''
+        for (method, vals, flags) in ops:
+            op = self.ops[method]
+            msg = self._encode_message(op, vals, flags, req_seq)
+            reqs_by_seq[req_seq] = (op, msg)
+            payload += msg
+            req_seq += 1
+
+        self.sock.send(payload, 0)
 
         done = False
         rsp = []
@@ -904,8 +914,9 @@ class YnlFamily(SpecFamily):
             nms = NlMsgs(reply, attr_space=op.attr_set)
             self._recv_dbg_print(reply, nms)
             for nl_msg in nms:
-                if nl_msg.extack:
-                    self._decode_extack(msg, op, nl_msg.extack)
+                if nl_msg.extack and nl_msg.nl_seq in reqs_by_seq:
+                    (req_op, req_msg) = reqs_by_seq[nl_msg.nl_seq]
+                    self._decode_extack(req_msg, req_op, nl_msg.extack)
 
                 if nl_msg.error:
                     raise NlError(nl_msg)
@@ -913,13 +924,15 @@ class YnlFamily(SpecFamily):
                     if nl_msg.extack:
                         print("Netlink warning:")
                         print(nl_msg)
+                    del reqs_by_seq[nl_msg.nl_seq]
                     done = True
                     break
 
                 decoded = self.nlproto.decode(self, nl_msg)
+                rsp_op = self.rsp_by_value[decoded.cmd()]
 
                 # Check if this is a reply to our request
-                if nl_msg.nl_seq != req_seq or decoded.cmd() != op.rsp_value:
+                if nl_msg.nl_seq not in reqs_by_seq or decoded.cmd() != rsp_op.rsp_value:
                     if decoded.cmd() in self.async_msg_ids:
                         self.handle_ntf(decoded)
                         continue
@@ -927,19 +940,26 @@ class YnlFamily(SpecFamily):
                         print('Unexpected message: ' + repr(decoded))
                         continue
 
-                rsp_msg = self._decode(decoded.raw_attrs, op.attr_set.name)
+                rsp_msg = self._decode(decoded.raw_attrs, rsp_op.attr_set.name)
                 if op.fixed_header:
-                    rsp_msg.update(self._decode_struct(decoded.raw, op.fixed_header))
+                    rsp_msg.update(self._decode_struct(decoded.raw, rsp_op.fixed_header))
                 rsp.append(rsp_msg)
 
         if not rsp:
             return None
-        if not dump and len(rsp) == 1:
+        if not Netlink.NLM_F_DUMP in flags and len(rsp) == 1:
             return rsp[0]
         return rsp
 
+    def _op(self, method, vals, flags):
+        ops = [(method, vals, flags)]
+        return self._ops(ops)
+
     def do(self, method, vals, flags=None):
-        return self._op(method, vals, flags)
+        return self._op(method, vals, flags or [])
 
     def dump(self, method, vals):
-        return self._op(method, vals, [], dump=True)
+        return self._op(method, vals, [Netlink.NLM_F_DUMP])
+
+    def do_multi(self, ops):
+        return self._ops(ops)

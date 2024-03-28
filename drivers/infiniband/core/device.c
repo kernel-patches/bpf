@@ -2026,9 +2026,12 @@ static int iw_query_port(struct ib_device *device,
 
 	memset(port_attr, 0, sizeof(*port_attr));
 
+	rtnl_lock();
 	netdev = ib_device_get_netdev(device, port_num);
-	if (!netdev)
+	if (!netdev) {
+		rtnl_unlock();
 		return -ENODEV;
+	}
 
 	port_attr->max_mtu = IB_MTU_4096;
 	port_attr->active_mtu = ib_mtu_int_to_enum(netdev->mtu);
@@ -2052,6 +2055,7 @@ static int iw_query_port(struct ib_device *device,
 		rcu_read_unlock();
 	}
 
+	rtnl_unlock();
 	dev_put(netdev);
 	return device->ops.query_port(device, port_num, port_attr);
 }
@@ -2220,6 +2224,8 @@ struct net_device *ib_device_get_netdev(struct ib_device *ib_dev,
 	struct ib_port_data *pdata;
 	struct net_device *res;
 
+	ASSERT_RTNL();
+
 	if (!rdma_is_port_valid(ib_dev, port))
 		return NULL;
 
@@ -2306,12 +2312,15 @@ void ib_enum_roce_netdev(struct ib_device *ib_dev,
 
 	rdma_for_each_port (ib_dev, port)
 		if (rdma_protocol_roce(ib_dev, port)) {
-			struct net_device *idev =
-				ib_device_get_netdev(ib_dev, port);
+			struct net_device *idev;
+
+			rtnl_lock();
+			idev = ib_device_get_netdev(ib_dev, port);
 
 			if (filter(ib_dev, port, idev, filter_cookie))
 				cb(ib_dev, port, idev, cookie);
 
+			rtnl_unlock();
 			if (idev)
 				dev_put(idev);
 		}

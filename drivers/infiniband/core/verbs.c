@@ -1976,11 +1976,13 @@ int ib_get_eth_speed(struct ib_device *dev, u32 port_num, u16 *speed, u8 *width)
 	if (rdma_port_get_link_layer(dev, port_num) != IB_LINK_LAYER_ETHERNET)
 		return -EINVAL;
 
-	netdev = ib_device_get_netdev(dev, port_num);
-	if (!netdev)
-		return -ENODEV;
-
 	rtnl_lock();
+	netdev = ib_device_get_netdev(dev, port_num);
+	if (!netdev) {
+		rtnl_unlock();
+		return -ENODEV;
+	}
+
 	rc = __ethtool_get_link_ksettings(netdev, &lksettings);
 	rtnl_unlock();
 

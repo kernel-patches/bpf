@@ -63,6 +63,7 @@
 #include <linux/string.h>
 #include <linux/hash.h>
 
+#include <net/ip_tunnels.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/snmp.h>
@@ -2917,7 +2918,7 @@ put:
 static int addrconf_set_sit_dstaddr(struct net *net, struct net_device *dev,
 		struct in6_ifreq *ireq)
 {
-	struct ip_tunnel_parm p = { };
+	struct ip_tunnel_parm_kern p = { };
 	int err;
 
 	if (!(ipv6_addr_type(&ireq->ifr6_addr) & IPV6_ADDR_COMPATv4))
@@ -5416,10 +5417,11 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 
 		err = 0;
 		if (fillargs.ifindex) {
-			err = -ENODEV;
 			dev = dev_get_by_index_rcu(tgt_net, fillargs.ifindex);
-			if (!dev)
+			if (!dev) {
+				err = -ENODEV;
 				goto done;
+			}
 			idev = __in6_dev_get(dev);
 			if (idev)
 				err = in6_dump_addrs(idev, skb, cb,
