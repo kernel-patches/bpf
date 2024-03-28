@@ -360,6 +360,7 @@ static int fill_port_info(struct sk_buff *msg,
 	if (nla_put_u8(msg, RDMA_NLDEV_ATTR_PORT_PHYS_STATE, attr.phys_state))
 		return -EMSGSIZE;
 
+	rtnl_lock();
 	netdev = ib_device_get_netdev(device, port);
 	if (netdev && net_eq(dev_net(netdev), net)) {
 		ret = nla_put_u32(msg,
@@ -371,6 +372,7 @@ static int fill_port_info(struct sk_buff *msg,
 	}
 
 out:
+	rtnl_unlock();
 	dev_put(netdev);
 	return ret;
 }
