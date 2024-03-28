@@ -1461,7 +1461,9 @@ static int config_non_roce_gid_cache(struct ib_device *device,
 		if (rdma_protocol_iwarp(device, port)) {
 			struct net_device *ndev;
 
+			rtnl_lock();
 			ndev = ib_device_get_netdev(device, port);
+			rtnl_unlock();
 			if (!ndev)
 				continue;
 			RCU_INIT_POINTER(gid_attr.ndev, ndev);
