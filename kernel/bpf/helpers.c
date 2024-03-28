@@ -2270,6 +2270,36 @@ bpf_task_get_cgroup1(struct task_struct *task, int hierarchy_id)
 		return NULL;
 	return cgrp;
 }
+
+/**
+ * bpf_task_freeze_cgroup - Freeze the task cgroup and all its descendant cgroups.
+ *
+ * @task: The target task
+ * @freeze: freeze state, passing value 1 causes the freezing of the cgroup
+ * and all descendant cgroups. Processes under this cgroup hierarchy will
+ * be stopped and will not run until the cgroup is explicitly unfrozen.
+ * Passing value 0 unthaws the task cgroup and its descendant cgroups.
+ *
+ * Return: %0 on success or a negative errno code on failure.
+ */
+__bpf_kfunc int bpf_task_freeze_cgroup(struct task_struct *task, int freeze)
+{
+	int ret;
+	struct cgroup *cgrp;
+
+	rcu_read_lock();
+	cgrp = task_dfl_cgroup(task);
+	if (!cgrp || !cgroup_tryget(cgrp)) {
+		rcu_read_unlock();
+		return -ENOENT;
+	}
+	rcu_read_unlock();
+
+	ret = cgroup_freeze_no_kn(cgrp, freeze);
+	cgroup_put(cgrp);
+
+	return ret;
+}
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -2577,6 +2607,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_task_freeze_cgroup, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)

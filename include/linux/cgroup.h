@@ -137,6 +137,8 @@ int cgroup_init(void);
 
 int cgroup_parse_float(const char *input, unsigned dec_shift, s64 *v);
 
+int cgroup_freeze_no_kn(struct cgroup *cgrp, int freeze);
+
 /*
  * Iteration helpers and macros.
  */
