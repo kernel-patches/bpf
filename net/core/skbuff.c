@@ -3017,23 +3017,24 @@ static void sock_spd_release(struct splice_pipe_desc *spd, unsigned int i)
 	put_page(spd->pages[i]);
 }
 
-static struct page *linear_to_page(struct page *page, unsigned int *len,
-				   unsigned int *offset,
-				   struct sock *sk)
+static struct page *linear_to_page(struct page_frag_cache *pfrag,
+				   struct page *page, unsigned int *offset,
+				   unsigned int *len, struct sock *sk)
 {
-	struct page_frag *pfrag = sk_page_frag(sk);
+	unsigned int new_len, new_offset;
+	void *va;
 
-	if (!sk_page_frag_refill(sk, pfrag))
+	va = sk_page_frag_alloc_prepare(sk, pfrag, &new_offset, &new_len);
+	if (!va)
 		return NULL;
 
-	*len = min_t(unsigned int, *len, pfrag->size - pfrag->offset);
+	*len = min_t(unsigned int, *len, new_len);
 
-	memcpy(page_address(pfrag->page) + pfrag->offset,
+	memcpy(va + new_offset,
 	       page_address(page) + *offset, *len);
-	*offset = pfrag->offset;
-	pfrag->offset += *len;
+	*offset = new_offset;
 
-	return pfrag->page;
+	return virt_to_page(va);
 }
 
 static bool spd_can_coalesce(const struct splice_pipe_desc *spd,
@@ -3055,19 +3056,23 @@ static bool spd_fill_page(struct splice_pipe_desc *spd,
 			  bool linear,
 			  struct sock *sk)
 {
+	struct page_frag_cache *pfrag = sk_page_frag(sk);
+
 	if (unlikely(spd->nr_pages == MAX_SKB_FRAGS))
 		return true;
 
 	if (linear) {
-		page = linear_to_page(page, len, &offset, sk);
+		page = linear_to_page(pfrag, page, &offset, len,  sk);
 		if (!page)
 			return true;
 	}
 	if (spd_can_coalesce(spd, page, offset)) {
 		spd->partial[spd->nr_pages - 1].len += *len;
+		page_frag_alloc_commit_noref(pfrag, offset, *len);
 		return false;
 	}
-	get_page(page);
+
+	page_frag_alloc_commit(pfrag, offset, *len);
 	spd->pages[spd->nr_pages] = page;
 	spd->partial[spd->nr_pages].len = *len;
 	spd->partial[spd->nr_pages].offset = offset;
