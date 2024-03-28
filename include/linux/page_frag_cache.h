@@ -12,15 +12,16 @@ struct page_frag_cache {
 	void *va;
 #if (PAGE_SIZE < PAGE_FRAG_CACHE_MAX_SIZE)
 	__u16 offset;
-	__u16 size;
+	__u16 size_mask:15;
+	__u16 pfmemalloc:1;
 #else
-	__u32 offset;
+	__u32 offset:31;
+	__u32 pfmemalloc:1;
 #endif
 	/* we maintain a pagecount bias, so that we dont dirty cache line
 	 * containing page->_refcount every time we allocate a fragment.
 	 */
 	unsigned int		pagecnt_bias;
-	bool pfmemalloc;
 };
 
 static inline void page_frag_cache_init(struct page_frag_cache *nc)
@@ -43,7 +44,9 @@ static inline void *__page_frag_alloc_va_align(struct page_frag_cache *nc,
 					       gfp_t gfp_mask,
 					       unsigned int align)
 {
-	nc->offset = ALIGN(nc->offset, align);
+	unsigned int offset = nc->offset;
+
+	nc->offset = ALIGN(offset, align);
 
 	return page_frag_alloc_va(nc, fragsz, gfp_mask);
 }
@@ -53,7 +56,7 @@ static inline void *page_frag_alloc_va_align(struct page_frag_cache *nc,
 					     gfp_t gfp_mask,
 					     unsigned int align)
 {
-	WARN_ON_ONCE(!is_power_of_2(align));
+	WARN_ON_ONCE(!is_power_of_2(align) || align >= PAGE_SIZE);
 
 	return __page_frag_alloc_va_align(nc, fragsz, gfp_mask, align);
 }
