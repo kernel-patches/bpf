@@ -63,9 +63,8 @@ void __page_frag_cache_drain(struct page *page, unsigned int count)
 }
 EXPORT_SYMBOL(__page_frag_cache_drain);
 
-void *__page_frag_alloc_align(struct page_frag_cache *nc,
-			      unsigned int fragsz, gfp_t gfp_mask,
-			      unsigned int align_mask)
+void *page_frag_alloc(struct page_frag_cache *nc, unsigned int fragsz,
+		      gfp_t gfp_mask)
 {
 	unsigned int size, offset;
 	struct page *page;
@@ -94,7 +93,7 @@ refill:
 	size = PAGE_SIZE;
 #endif
 
-	offset = ALIGN(nc->offset, -align_mask);
+	offset = nc->offset;
 	if (unlikely(offset + fragsz > size)) {
 		page = virt_to_page(nc->va);
 
@@ -131,7 +130,7 @@ refill:
 
 	return nc->va + offset;
 }
-EXPORT_SYMBOL(__page_frag_alloc_align);
+EXPORT_SYMBOL(page_frag_alloc);
 
 /*
  * Frees a page fragment allocated out of either a compound or order 0 page.
