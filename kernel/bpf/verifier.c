@@ -18099,6 +18099,12 @@ static bool is_tracing_prog_type(enum bpf_prog_type type)
 	}
 }
 
+static bool bpf_map_is_cgroup_storage(struct bpf_map *map)
+{
+	return (map->map_type == BPF_MAP_TYPE_CGROUP_STORAGE ||
+		map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE);
+}
+
 static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 					struct bpf_map *map,
 					struct bpf_prog *prog)
@@ -18170,13 +18176,77 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
+	if (bpf_map_is_cgroup_storage(map) &&
+			bpf_cgroup_storage_assign(env->prog->aux, map)) {
+		verbose(env, "only one cgroup storage of each type is allowed\n");
+		return -EBUSY;
+	}
+
+	if (map->map_type == BPF_MAP_TYPE_ARENA) {
+		if (env->prog->aux->arena) {
+			verbose(env, "Only one arena per program\n");
+			return -EBUSY;
+		}
+		if (!env->allow_ptr_leaks || !env->bpf_capable) {
+			verbose(env, "CAP_BPF and CAP_PERFMON are required to use arena\n");
+			return -EPERM;
+		}
+		if (!env->prog->jit_requested) {
+			verbose(env, "JIT is required to use arena\n");
+			return -EOPNOTSUPP;
+		}
+		if (!bpf_jit_supports_arena()) {
+			verbose(env, "JIT doesn't support arena\n");
+			return -EOPNOTSUPP;
+		}
+		env->prog->aux->arena = (void *)map;
+		if (!bpf_arena_get_user_vm_start(env->prog->aux->arena)) {
+			verbose(env, "arena's user address must be set via map_extra or mmap()\n");
+			return -EINVAL;
+		}
+	}
+
 	return 0;
 }
 
-static bool bpf_map_is_cgroup_storage(struct bpf_map *map)
+static int env_record_map(struct bpf_verifier_env *env, struct bpf_map *map,
+			  int *map_index_ptr)
 {
-	return (map->map_type == BPF_MAP_TYPE_CGROUP_STORAGE ||
-		map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE);
+	int map_index;
+	int err;
+
+	/* check whether we recorded this map already */
+	for (map_index = 0; map_index < env->used_map_cnt; map_index++) {
+		if (env->used_maps[map_index] == map)
+			goto ret_index;
+	}
+
+	err = check_map_prog_compatibility(env, map, env->prog);
+	if (err)
+		return err;
+
+	if (env->used_map_cnt >= MAX_USED_MAPS) {
+		verbose(env, "The map usage limit of %u is reached\n",
+			MAX_USED_MAPS);
+		return -E2BIG;
+	}
+
+	if (env->prog->sleepable)
+		atomic64_inc(&map->sleepable_refcnt);
+
+	/* hold the map. If the program is rejected by verifier,
+	 * the map will be released by release_maps() or it
+	 * will be used by the valid program until it's unloaded
+	 * and all maps are released in bpf_free_used_maps()
+	 */
+	bpf_map_inc(map);
+
+	env->used_maps[env->used_map_cnt++] = map;
+
+ret_index:
+	if (map_index_ptr)
+		*map_index_ptr = map_index;
+	return 0;
 }
 
 /* find and rewrite pseudo imm in ld_imm64 instructions:
@@ -18190,7 +18260,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 {
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
-	int i, j, err;
+	int i, err;
 
 	err = bpf_prog_calc_tag(env->prog);
 	if (err)
@@ -18278,13 +18348,12 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				return PTR_ERR(map);
 			}
 
-			err = check_map_prog_compatibility(env, map, env->prog);
-			if (err) {
-				fdput(f);
-				return err;
-			}
-
 			aux = &env->insn_aux_data[i];
+			err = env_record_map(env, map, &aux->map_index);
+			fdput(f);
+			if (err < 0)
+				return err;
+
 			if (insn[0].src_reg == BPF_PSEUDO_MAP_FD ||
 			    insn[0].src_reg == BPF_PSEUDO_MAP_IDX) {
 				addr = (unsigned long)map;
@@ -18293,13 +18362,11 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 
 				if (off >= BPF_MAX_VAR_OFF) {
 					verbose(env, "direct value offset of %u is not allowed\n", off);
-					fdput(f);
 					return -EINVAL;
 				}
 
 				if (!map->ops->map_direct_value_addr) {
 					verbose(env, "no direct value access support for this map type\n");
-					fdput(f);
 					return -EINVAL;
 				}
 
@@ -18307,7 +18374,6 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				if (err) {
 					verbose(env, "invalid access to map value pointer, value_size=%u off=%u\n",
 						map->value_size, off);
-					fdput(f);
 					return err;
 				}
 
@@ -18318,66 +18384,8 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 			insn[0].imm = (u32)addr;
 			insn[1].imm = addr >> 32;
 
-			/* check whether we recorded this map already */
-			for (j = 0; j < env->used_map_cnt; j++) {
-				if (env->used_maps[j] == map) {
-					aux->map_index = j;
-					fdput(f);
-					goto next_insn;
-				}
-			}
-
-			if (env->used_map_cnt >= MAX_USED_MAPS) {
-				fdput(f);
-				return -E2BIG;
-			}
-
-			if (env->prog->sleepable)
-				atomic64_inc(&map->sleepable_refcnt);
-			/* hold the map. If the program is rejected by verifier,
-			 * the map will be released by release_maps() or it
-			 * will be used by the valid program until it's unloaded
-			 * and all maps are released in bpf_free_used_maps()
-			 */
-			bpf_map_inc(map);
-
-			aux->map_index = env->used_map_cnt;
-			env->used_maps[env->used_map_cnt++] = map;
-
-			if (bpf_map_is_cgroup_storage(map) &&
-			    bpf_cgroup_storage_assign(env->prog->aux, map)) {
-				verbose(env, "only one cgroup storage of each type is allowed\n");
-				fdput(f);
-				return -EBUSY;
-			}
-			if (map->map_type == BPF_MAP_TYPE_ARENA) {
-				if (env->prog->aux->arena) {
-					verbose(env, "Only one arena per program\n");
-					fdput(f);
-					return -EBUSY;
-				}
-				if (!env->allow_ptr_leaks || !env->bpf_capable) {
-					verbose(env, "CAP_BPF and CAP_PERFMON are required to use arena\n");
-					fdput(f);
-					return -EPERM;
-				}
-				if (!env->prog->jit_requested) {
-					verbose(env, "JIT is required to use arena\n");
-					return -EOPNOTSUPP;
-				}
-				if (!bpf_jit_supports_arena()) {
-					verbose(env, "JIT doesn't support arena\n");
-					return -EOPNOTSUPP;
-				}
-				env->prog->aux->arena = (void *)map;
-				if (!bpf_arena_get_user_vm_start(env->prog->aux->arena)) {
-					verbose(env, "arena's user address must be set via map_extra or mmap()\n");
-					return -EINVAL;
-				}
-			}
-
-			fdput(f);
 next_insn:
+			/* jump over insn[1] */
 			insn++;
 			i++;
 			continue;
