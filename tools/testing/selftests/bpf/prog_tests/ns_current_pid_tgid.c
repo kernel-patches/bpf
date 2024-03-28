@@ -11,7 +11,7 @@
 #include <sched.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 
 #define STACK_SIZE (1024 * 1024)
 static char child_stack[STACK_SIZE];
