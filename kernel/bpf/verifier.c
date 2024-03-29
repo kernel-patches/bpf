@@ -18348,6 +18348,8 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 			}
 
 			if (env->used_map_cnt >= MAX_USED_MAPS) {
+				verbose(env, "The map usage limit of %u is reached\n",
+					MAX_USED_MAPS);
 				fdput(f);
 				return -E2BIG;
 			}
