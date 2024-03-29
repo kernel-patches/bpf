@@ -20072,6 +20072,23 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 
+		/* Implement bpf_get_smp_processor_id() inline. */
+		if (insn->imm == BPF_FUNC_get_smp_processor_id &&
+		    prog->jit_requested && bpf_jit_supports_percpu_insns()) {
+			insn_buf[0] = BPF_MOV32_IMM(BPF_REG_0, (u32)(long)&pcpu_hot.cpu_number);
+			insn_buf[1] = BPF_LDX_MEM_PERCPU(BPF_W, BPF_REG_0, BPF_REG_0, 0);
+			cnt = 2;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			goto next_insn;
+		}
+
 		/* Implement bpf_get_func_arg inline. */
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg) {
