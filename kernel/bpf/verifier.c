@@ -13331,18 +13331,19 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->u32_min_value = var32_off.value;
 	dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
-	if (dst_reg->s32_min_value < 0 || smin_val < 0) {
+	if (dst_reg->s32_min_value >= 0 && smin_val >= 0 &&
+		(s32)dst_reg->u32_min_value < (s32)dst_reg->u32_max_value) {
+		/* ANDing two positives gives a positive, so safe to cast
+		 * u32 result into s32 when u32 doesn't cross sign boundary.
+		 */
+		dst_reg->s32_min_value = dst_reg->u32_min_value;
+		dst_reg->s32_max_value = dst_reg->u32_max_value;
+	} else {
 		/* Lose signed bounds when ANDing negative numbers,
 		 * ain't nobody got time for that.
 		 */
 		dst_reg->s32_min_value = S32_MIN;
 		dst_reg->s32_max_value = S32_MAX;
-	} else {
-		/* ANDing two positives gives a positive, so safe to
-		 * cast result into s64.
-		 */
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
 	}
 }
 
@@ -13364,18 +13365,19 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->umin_value = dst_reg->var_off.value;
 	dst_reg->umax_value = min(dst_reg->umax_value, umax_val);
-	if (dst_reg->smin_value < 0 || smin_val < 0) {
+	if (dst_reg->smin_value >= 0 && smin_val >= 0 &&
+		(s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
+		/* ANDing two positives gives a positive, so safe to cast
+		 * u64 result into s64, when u64 doesn't cross sign boundary.
+		 */
+		dst_reg->smin_value = dst_reg->umin_value;
+		dst_reg->smax_value = dst_reg->umax_value;
+	} else {
 		/* Lose signed bounds when ANDing negative numbers,
 		 * ain't nobody got time for that.
 		 */
 		dst_reg->smin_value = S64_MIN;
 		dst_reg->smax_value = S64_MAX;
-	} else {
-		/* ANDing two positives gives a positive, so safe to
-		 * cast result into s64.
-		 */
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
@@ -13400,18 +13402,19 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->u32_min_value = max(dst_reg->u32_min_value, umin_val);
 	dst_reg->u32_max_value = var32_off.value | var32_off.mask;
-	if (dst_reg->s32_min_value < 0 || smin_val < 0) {
+	if (dst_reg->s32_min_value > 0 && smin_val > 0 &&
+		(s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
+		/* ORing two positives gives a positive, so safe to cast
+		 * u32 result into s32 when u32 doesn't cross sign boundary.
+		 */
+		dst_reg->s32_min_value = dst_reg->u32_min_value;
+		dst_reg->s32_max_value = dst_reg->u32_max_value;
+	} else {
 		/* Lose signed bounds when ORing negative numbers,
 		 * ain't nobody got time for that.
 		 */
 		dst_reg->s32_min_value = S32_MIN;
 		dst_reg->s32_max_value = S32_MAX;
-	} else {
-		/* ORing two positives gives a positive, so safe to
-		 * cast result into s64.
-		 */
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
 	}
 }
 
@@ -13433,18 +13436,19 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->umin_value = max(dst_reg->umin_value, umin_val);
 	dst_reg->umax_value = dst_reg->var_off.value | dst_reg->var_off.mask;
-	if (dst_reg->smin_value < 0 || smin_val < 0) {
+	if (dst_reg->smin_value >= 0 && smin_val >= 0 &&
+		(s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
+		/* ORing two positives gives a positive, so safe to cast
+		 * u64 result into s64 when u64 doesn't cross sign boundary.
+		 */
+		dst_reg->smin_value = dst_reg->umin_value;
+		dst_reg->smax_value = dst_reg->umax_value;
+	} else {
 		/* Lose signed bounds when ORing negative numbers,
 		 * ain't nobody got time for that.
 		 */
 		dst_reg->smin_value = S64_MIN;
 		dst_reg->smax_value = S64_MAX;
-	} else {
-		/* ORing two positives gives a positive, so safe to
-		 * cast result into s64.
-		 */
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
@@ -13466,10 +13470,10 @@ static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 	/* We get both minimum and maximum from the var32_off. */
 	dst_reg->u32_min_value = var32_off.value;
 	dst_reg->u32_max_value = var32_off.value | var32_off.mask;
-
-	if (dst_reg->s32_min_value >= 0 && smin_val >= 0) {
-		/* XORing two positive sign numbers gives a positive,
-		 * so safe to cast u32 result into s32.
+	if (dst_reg->s32_min_value > 0 && smin_val > 0 &&
+		(s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
+		/* XORing two positives gives a positive, so safe to cast
+		 * u32 result into s32 when u32 doesn't cross sign boundary.
 		 */
 		dst_reg->s32_min_value = dst_reg->u32_min_value;
 		dst_reg->s32_max_value = dst_reg->u32_max_value;
@@ -13495,10 +13499,10 @@ static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
 	/* We get both minimum and maximum from the var_off. */
 	dst_reg->umin_value = dst_reg->var_off.value;
 	dst_reg->umax_value = dst_reg->var_off.value | dst_reg->var_off.mask;
-
-	if (dst_reg->smin_value >= 0 && smin_val >= 0) {
-		/* XORing two positive sign numbers gives a positive,
-		 * so safe to cast u64 result into s64.
+	if (dst_reg->smin_value >= 0 && smin_val >= 0 &&
+		(s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
+		/* XORing two positives gives a positive, so safe to cast
+		 * u64 result into s64 when u64 doesn't cross sign boundary.
 		 */
 		dst_reg->smin_value = dst_reg->umin_value;
 		dst_reg->smax_value = dst_reg->umax_value;
