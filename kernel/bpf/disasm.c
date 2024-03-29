@@ -13,6 +13,13 @@ static const char * const func_id_str[] = {
 };
 #undef __BPF_FUNC_STR_FN
 
+#ifndef BPF_MEM_PERCPU
+#define BPF_MEM_PERCPU		0xc0
+#endif
+#ifndef BPF_ADDR_PERCPU
+#define BPF_ADDR_PERCPU		0xe0
+#endif
+
 static const char *__func_get_name(const struct bpf_insn_cbs *cbs,
 				   const struct bpf_insn *insn,
 				   char *buff, size_t len)
@@ -178,6 +185,7 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 {
 	const bpf_insn_print_t verbose = cbs->cb_print;
 	u8 class = BPF_CLASS(insn->code);
+	u8 mode = BPF_MODE(insn->code);
 
 	if (class == BPF_ALU || class == BPF_ALU64) {
 		if (BPF_OP(insn->code) == BPF_END) {
@@ -269,16 +277,27 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 			verbose(cbs->private_data, "BUG_st_%02x\n", insn->code);
 		}
 	} else if (class == BPF_LDX) {
-		if (BPF_MODE(insn->code) != BPF_MEM && BPF_MODE(insn->code) != BPF_MEMSX) {
+		switch (BPF_MODE(insn->code)) {
+		case BPF_ADDR_PERCPU:
+			verbose(cbs->private_data, "(%02x) r%d = &(void __percpu *)(r%d %+d)\n",
+				insn->code, insn->dst_reg,
+				insn->src_reg, insn->off);
+			break;
+		case BPF_MEM:
+		case BPF_MEMSX:
+		case BPF_MEM_PERCPU:
+			verbose(cbs->private_data, "(%02x) r%d = *(%s%s *)(r%d %+d)\n",
+				insn->code, insn->dst_reg,
+				mode == BPF_MEM || mode == BPF_MEM_PERCPU ?
+					 bpf_ldst_string[BPF_SIZE(insn->code) >> 3] :
+					 bpf_ldsx_string[BPF_SIZE(insn->code) >> 3],
+				mode == BPF_MEM_PERCPU ? " __percpu" : "",
+				insn->src_reg, insn->off);
+			break;
+		default:
 			verbose(cbs->private_data, "BUG_ldx_%02x\n", insn->code);
 			return;
 		}
-		verbose(cbs->private_data, "(%02x) r%d = *(%s *)(r%d %+d)\n",
-			insn->code, insn->dst_reg,
-			BPF_MODE(insn->code) == BPF_MEM ?
-				 bpf_ldst_string[BPF_SIZE(insn->code) >> 3] :
-				 bpf_ldsx_string[BPF_SIZE(insn->code) >> 3],
-			insn->src_reg, insn->off);
 	} else if (class == BPF_LD) {
 		if (BPF_MODE(insn->code) == BPF_ABS) {
 			verbose(cbs->private_data, "(%02x) r0 = *(%s *)skb[%d]\n",

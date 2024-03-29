@@ -1910,6 +1910,30 @@ populate_extable:
 			}
 			break;
 
+		/* internal-only per-cpu zero-extending memory load */
+		case BPF_LDX | BPF_MEM_PERCPU | BPF_B:
+		case BPF_LDX | BPF_MEM_PERCPU | BPF_H:
+		case BPF_LDX | BPF_MEM_PERCPU | BPF_W:
+		case BPF_LDX | BPF_MEM_PERCPU | BPF_DW:
+			insn_off = insn->off;
+			EMIT1(0x65); /* gs segment modifier */
+			emit_ldx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
+			break;
+
+		/* internal-only load-effective-address-of per-cpu offset */
+		case BPF_LDX | BPF_ADDR_PERCPU | BPF_DW: {
+			u32 off = (u32)(void *)&this_cpu_off;
+
+			/* mov <dst>, <src> (if necessary) */
+			EMIT_mov(dst_reg, src_reg);
+
+			/* add <dst>, gs:[<off>] */
+			EMIT2(0x65, add_1mod(0x48, dst_reg));
+			EMIT3(0x03, add_1reg(0x04, dst_reg), 0x25);
+			EMIT(off, 4);
+
+			break;
+		}
 		case BPF_STX | BPF_ATOMIC | BPF_W:
 		case BPF_STX | BPF_ATOMIC | BPF_DW:
 			if (insn->imm == (BPF_AND | BPF_FETCH) ||
@@ -3361,6 +3385,11 @@ void *bpf_arch_text_copy(void *dst, void *src, size_t len)
 
 /* Indicate the JIT backend supports mixing bpf2bpf and tailcalls. */
 bool bpf_jit_supports_subprog_tailcalls(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_percpu_insns(void)
 {
 	return true;
 }

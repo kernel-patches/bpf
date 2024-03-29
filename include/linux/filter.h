@@ -75,6 +75,14 @@ struct ctl_table_header;
 /* unused opcode to mark special load instruction. Same as BPF_MSH */
 #define BPF_PROBE_MEM32	0xa0
 
+/* unused opcode to mark special zero-extending per-cpu load instruction. */
+#define BPF_MEM_PERCPU	0xc0
+
+/* unused opcode to mark special load-effective-address-of instruction for
+ * a given per-CPU offset
+ */
+#define BPF_ADDR_PERCPU	0xe0
+
 /* unused opcode to mark call to interpreter with arguments */
 #define BPF_CALL_ARGS	0xe0
 
@@ -313,6 +321,24 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 #define BPF_LDX_MEMSX(SIZE, DST, SRC, OFF)			\
 	((struct bpf_insn) {					\
 		.code  = BPF_LDX | BPF_SIZE(SIZE) | BPF_MEMSX,	\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = 0 })
+
+/* Per-CPU zero-extending memory load (internal-only) */
+#define BPF_LDX_MEM_PERCPU(SIZE, DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_LDX | BPF_SIZE(SIZE) | BPF_MEM_PERCPU,\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = 0 })
+
+/* Load effective address of a given per-CPU offset */
+#define BPF_LDX_ADDR_PERCPU(DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_LDX | BPF_DW | BPF_ADDR_PERCPU,	\
 		.dst_reg = DST,					\
 		.src_reg = SRC,					\
 		.off   = OFF,					\
@@ -970,6 +996,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_jit_supports_subprog_tailcalls(void);
+bool bpf_jit_supports_percpu_insns(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_far_kfunc_call(void);
 bool bpf_jit_supports_exceptions(void);
