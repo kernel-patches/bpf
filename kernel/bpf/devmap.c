@@ -86,6 +86,7 @@ struct bpf_dtab {
 static DEFINE_PER_CPU(struct list_head, dev_flush_list);
 static DEFINE_SPINLOCK(dev_map_lock);
 static LIST_HEAD(dev_map_list);
+static bool is_valid_dst(struct bpf_dtab_netdev *obj, struct xdp_frame *xdpf);
 
 static struct hlist_head *dev_map_create_hash(unsigned int entries,
 					      int numa_node)
@@ -536,7 +537,10 @@ int dev_xdp_enqueue(struct net_device *dev, struct xdp_frame *xdpf,
 int dev_map_enqueue(struct bpf_dtab_netdev *dst, struct xdp_frame *xdpf,
 		    struct net_device *dev_rx)
 {
-	struct net_device *dev = dst->dev;
+	struct net_device *dev;
+	if (!is_valid_dst(dst, xdpf))
+		return -EINVAL;
+	dev = dst->dev;
 
 	return __xdp_enqueue(dev, xdpf, dev_rx, dst->xdp_prog);
 }
