@@ -281,6 +281,32 @@ done:
 	return cnt;
 }
 
+/* Consume available ring buffer(s) data without event polling up to max_items.
+ *
+ * Returns number of records consumed across all registered ring buffers (or
+ * max_items, whichever is less), or negative number if any of the callbacks
+ * return error.
+ */
+int ring_buffer__consume_max(struct ring_buffer *rb, size_t max_items)
+{
+	int64_t err, res = 0;
+	int i;
+
+	for (i = 0; i < rb->ring_cnt; i++) {
+		struct ring *ring = rb->rings[i];
+
+		err = ringbuf_process_ring(ring, max_items);
+		if (err < 0)
+			return libbpf_err(err);
+		res += err;
+		max_items -= err;
+
+		if (!max_items)
+			break;
+	}
+	return res;
+}
+
 /* Consume available ring buffer(s) data without event polling.
  * Returns number of records consumed across all registered ring buffers (or
  * INT_MAX, whichever is less), or negative number if any of the callbacks
@@ -376,15 +402,20 @@ int ring__map_fd(const struct ring *r)
 	return r->map_fd;
 }
 
-int ring__consume(struct ring *r)
+int ring__consume_max(struct ring *r, size_t max_items)
 {
 	int64_t res;
 
-	res = ringbuf_process_ring(r, INT_MAX);
+	res = ringbuf_process_ring(r, max_items);
 	if (res < 0)
 		return libbpf_err(res);
 
 	return res;
+}
+
+int ring__consume(struct ring *r)
+{
+	return ring__consume_max(r, INT_MAX);
 }
 
 static void user_ringbuf_unmap_ring(struct user_ring_buffer *rb)

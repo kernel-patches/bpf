@@ -415,4 +415,6 @@ LIBBPF_1.4.0 {
 		bpf_token_create;
 		btf__new_split;
 		btf_ext__raw_data;
+		ring__consume_max;
+		ring_buffer__consume_max;
 } LIBBPF_1.3.0;

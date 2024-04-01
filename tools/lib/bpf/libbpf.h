@@ -1293,6 +1293,8 @@ LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 				ring_buffer_sample_fn sample_cb, void *ctx);
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
+LIBBPF_API int ring_buffer__consume_max(struct ring_buffer *rb,
+					size_t max_items);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 
 /**
@@ -1366,6 +1368,17 @@ LIBBPF_API int ring__map_fd(const struct ring *r);
  * a negative number if any of the callbacks return an error.
  */
 LIBBPF_API int ring__consume(struct ring *r);
+
+/**
+ * @brief **ring__consume_max()** consumes up to a certain amount of items from
+ * a ringbuffer without event polling.
+ *
+ * @param r A ringbuffer object.
+ * @param max_items Maximum amount of items to consume.
+ * @return The number of items consumed (or max_items, whichever is less), or a
+ * negative number if any of the callbacks return an error.
+ */
+LIBBPF_API int ring__consume_max(struct ring *r, size_t max_items);
 
 struct user_ring_buffer_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */
