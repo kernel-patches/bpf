@@ -336,6 +336,12 @@ int mount_bpffs_for_file(const char *file_name)
 		/* nothing to do if already mounted */
 		goto out_free;
 
+	if (access(dir, F_OK) == -1) {
+		p_err("can't pin BPF object: dir '%s' doesn't exist", dir);
+		free(temp_name);
+		return -1;
+	}
+
 	if (block_mount) {
 		p_err("no BPF file system found, not mounting it due to --nomount option");
 		err = -1;
