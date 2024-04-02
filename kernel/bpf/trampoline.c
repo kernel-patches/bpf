@@ -886,11 +886,12 @@ static void notrace update_prog_stats(struct bpf_prog *prog,
 	     */
 	    start > NO_START_TIME) {
 		unsigned long flags;
+		u64 duration = sched_clock() - start;
 
 		stats = this_cpu_ptr(prog->stats);
 		flags = u64_stats_update_begin_irqsave(&stats->syncp);
 		u64_stats_inc(&stats->cnt);
-		u64_stats_add(&stats->nsecs, sched_clock() - start);
+		u64_stats_add(&stats->nsecs, duration);
 		u64_stats_update_end_irqrestore(&stats->syncp, flags);
 	}
 }
