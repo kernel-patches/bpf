@@ -41,7 +41,9 @@ void serial_test_dev_cgroup(void)
 
 	/* /dev/zero is whitelisted */
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
-	ASSERT_EQ(system("mknod /tmp/test_dev_cgroup_zero c 1 5"), 0, "mknod");
+	int out = system("mknod /tmp/test_dev_cgroup_zero c 1 5");
+	printf("\nout is %d expected 0 %d %m\n\n", out, errno);
+	ASSERT_EQ(out, 0, "mknod"); //???
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
 
 	ASSERT_EQ(system("dd if=/dev/urandom of=/dev/zero count=64"), 0, "dd");

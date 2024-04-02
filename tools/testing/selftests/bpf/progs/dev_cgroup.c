@@ -8,14 +8,16 @@
 #include <linux/bpf.h>
 #include <linux/version.h>
 #include <bpf/bpf_helpers.h>
-
+#define DEBUG
 SEC("cgroup/dev")
 int bpf_prog1(struct bpf_cgroup_dev_ctx *ctx)
 {
 	short type = ctx->access_type & 0xFFFF;
+	char fmt2[] = "returned 1  %d    \n";
+
 #ifdef DEBUG
 	short access = ctx->access_type >> 16;
-	char fmt[] = "  %d:%d    \n";
+	char fmt[] = "usama  %d:%d    \n";
 
 	switch (type) {
 	case BPF_DEVCG_DEV_BLOCK:
@@ -50,6 +52,7 @@ int bpf_prog1(struct bpf_cgroup_dev_ctx *ctx)
 	switch (ctx->minor) {
 	case 5: /* 1:5 /dev/zero */
 	case 9: /* 1:9 /dev/urandom */
+		bpf_trace_printk(fmt2, sizeof(fmt), ctx->minor);
 		return 1;
 	}
 
@@ -57,3 +60,5 @@ int bpf_prog1(struct bpf_cgroup_dev_ctx *ctx)
 }
 
 char _license[] SEC("license") = "GPL";
+char LICENSE[] SEC("license") = "GPL";
+
