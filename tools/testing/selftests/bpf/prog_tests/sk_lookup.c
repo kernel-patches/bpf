@@ -282,19 +282,6 @@ static int fill_sk_lookup_ctx(struct bpf_sk_lookup *ctx, const char *local_ip, _
 	return 0;
 }
 
-static int send_byte(int fd)
-{
-	ssize_t n;
-
-	errno = 0;
-	n = send(fd, "a", 1, 0);
-	if (CHECK(n <= 0, "send_byte", "send")) {
-		log_err("failed/partial send");
-		return -1;
-	}
-	return 0;
-}
-
 static int recv_byte(int fd)
 {
 	char buf[1];

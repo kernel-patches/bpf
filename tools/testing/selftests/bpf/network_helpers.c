@@ -497,3 +497,12 @@ int get_socket_local_port(int sock_fd)
 
 	return -1;
 }
+
+int send_byte(int fd)
+{
+	char b = 0x55;
+
+	if (!ASSERT_EQ(write(fd, &b, sizeof(b)), 1, "send single byte"))
+		return -1;
+	return 0;
+}

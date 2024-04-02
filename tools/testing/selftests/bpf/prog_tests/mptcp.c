@@ -225,13 +225,6 @@ fail:
 	close(cgroup_fd);
 }
 
-static void send_byte(int fd)
-{
-	char b = 0x55;
-
-	ASSERT_EQ(write(fd, &b, sizeof(b)), 1, "send single byte");
-}
-
 static int verify_mptcpify(int server_fd, int client_fd)
 {
 	struct __mptcp_info info;
