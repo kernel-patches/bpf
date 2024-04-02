@@ -9,6 +9,53 @@
 
 #define TEST_CGROUP "/test-bpf-based-device-cgroup/"
 
+#include <dirent.h>
+#include <sys/types.h>
+
+void print_all_dir(char *path) {
+	DIR *directory;
+	struct dirent *entry;
+
+	directory = opendir(path);
+
+	printf("directory %s:\n", path);
+	if (directory == NULL) {
+		perror("Error opening directory");
+		return;
+	}
+
+	entry = readdir(directory);
+	// Read directory entries
+	while (entry != NULL) {
+//		if (entry->d_type == DT_DIR)
+		printf("%s\t", entry->d_name);
+		entry = readdir(directory);
+	}
+	printf("\n");
+
+	closedir(directory);
+}
+
+void readAndOutputFile(const char *filename) {
+    // Open the file for reading
+    FILE *file = fopen(filename, "r");
+
+    // Check if the file was opened successfully
+    if (file == NULL) {
+        perror("Error opening file");
+        return;
+    }
+
+    // Read and output each line of the file
+    char buffer[1024]; // Buffer to hold each line
+    while (fgets(buffer, sizeof(buffer), file) != NULL) {
+        printf("%s", buffer); // Output the line
+    }
+
+    // Close the file
+    fclose(file);
+}
+
 void serial_test_dev_cgroup(void)
 {
 	struct dev_cgroup *skel;
@@ -35,14 +82,27 @@ void serial_test_dev_cgroup(void)
 	/* All operations with /dev/zero and /dev/urandom are allowed,
 	 * everything else is forbidden.
 	 */
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
-	ASSERT_NEQ(system("mknod /tmp/test_dev_cgroup_null c 1 3"), 0, "mknod");
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_null"), 0, "rm");
+	ASSERT_EQ(system("mknod --help"), 0, "mknod help");
+	ASSERT_NEQ(system("mknod test_dev_cgroup_null c 1 3"), 0, "mknod");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_null"), 0, "rm");
+
+
+	readAndOutputFile("/proc/mounts");
 
 	/* /dev/zero is whitelisted */
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
-	ASSERT_EQ(system("mknod /tmp/test_dev_cgroup_zero c 1 5"), 0, "mknod");
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
+//	print_all_dir("/");
+//	print_all_dir("/temporary");
+//	print_all_dir("/tmp");
+//	print_all_dir("/usr/bin");
+	errno = 0;
+	int out = system("mknod test_dev_cgroup_zero c 1 5");
+	printf("\nout is %d expected 0 %m\n\n", out);
+	ASSERT_EQ(out, 0, "mknod"); //???
+//	print_all_dir("/temporary");
+//	print_all_dir("/tmp");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
 
 	ASSERT_EQ(system("dd if=/dev/urandom of=/dev/zero count=64"), 0, "dd");
 
