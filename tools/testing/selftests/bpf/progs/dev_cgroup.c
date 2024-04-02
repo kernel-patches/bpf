@@ -13,11 +13,12 @@ SEC("cgroup/dev")
 int bpf_prog1(struct bpf_cgroup_dev_ctx *ctx)
 {
 	short type = ctx->access_type & 0xFFFF;
-	char fmt2[] = "returned 1  %d    \n";
+	char fmt00[] = "       returned 0 not allowed\n";
+	char fmt11[] = "       returned 1 allowed\n";
 
 #ifdef DEBUG
 	short access = ctx->access_type >> 16;
-	char fmt[] = "usama  %d:%d    \n";
+	char fmt[] = "       %d:%d    \n";
 
 	switch (type) {
 	case BPF_DEVCG_DEV_BLOCK:
@@ -46,16 +47,19 @@ int bpf_prog1(struct bpf_cgroup_dev_ctx *ctx)
 	/* Allow access to /dev/zero and /dev/random.
 	 * Forbid everything else.
 	 */
-	if (ctx->major != 1 || type != BPF_DEVCG_DEV_CHAR)
+	if (ctx->major != 1 || type != BPF_DEVCG_DEV_CHAR) {
+		bpf_trace_printk(fmt00, sizeof(fmt00));
 		return 0;
+	}
 
 	switch (ctx->minor) {
 	case 5: /* 1:5 /dev/zero */
 	case 9: /* 1:9 /dev/urandom */
-		bpf_trace_printk(fmt2, sizeof(fmt), ctx->minor);
+	bpf_trace_printk(fmt11, sizeof(fmt11));
 		return 1;
 	}
 
+	bpf_trace_printk(fmt00, sizeof(fmt00));
 	return 0;
 }
 
