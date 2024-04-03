@@ -62,23 +62,24 @@ void serial_test_dev_cgroup(void)
 	/* All operations with /dev/zero and /dev/urandom are allowed,
 	 * everything else is forbidden.
 	 */
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_null"), 0, "rm");
 	ASSERT_EQ(system("mknod --help"), 0, "mknod help");
-	ASSERT_NEQ(system("mknod /tmp/test_dev_cgroup_null c 1 3"), 0, "mknod");
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
+	ASSERT_NEQ(system("mknod test_dev_cgroup_null c 1 3"), 0, "mknod");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_null"), 0, "rm");
 
 	/* /dev/zero is whitelisted */
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
-	ASSERT_EQ(system("rmfdfsffsd"), 0, "rmfdasfd");
-	print_all_dir("/");
-	print_all_dir("/tmp");
-	print_all_dir("/usr/bin");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
+//	print_all_dir("/");
+//	print_all_dir("/temporary");
+//	print_all_dir("/tmp");
+//	print_all_dir("/usr/bin");
 	errno = 0;
-	int out = system("mknod /tmp/test_dev_cgroup_zero c 1 5");
-	printf("\nout is %d expected 0 %d %m\n\n", out, errno);
+	int out = system("mknod test_dev_cgroup_zero c 1 5");
+	printf("\nout is %d expected 0 %m\n\n", out);
 	ASSERT_EQ(out, 0, "mknod"); //???
-	print_all_dir("/tmp");
-	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
+//	print_all_dir("/temporary");
+//	print_all_dir("/tmp");
+	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
 
 	ASSERT_EQ(system("dd if=/dev/urandom of=/dev/zero count=64"), 0, "dd");
 
