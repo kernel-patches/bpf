@@ -133,6 +133,7 @@ static const char * const attach_type_name[] = {
 	[BPF_NETKIT_PRIMARY]		= "netkit_primary",
 	[BPF_NETKIT_PEER]		= "netkit_peer",
 	[BPF_TRACE_KPROBE_MULTI_SESSION]	= "trace_kprobe_multi_session",
+	[BPF_TRACE_UPROBE_MULTI_SESSION]	= "trace_uprobe_multi_session",
 };
 
 static const char * const link_type_name[] = {
