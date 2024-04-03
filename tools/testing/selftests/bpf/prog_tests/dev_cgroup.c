@@ -63,6 +63,7 @@ void serial_test_dev_cgroup(void)
 	 * everything else is forbidden.
 	 */
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
+	ASSERT_EQ(system("mknod --help"), 0, "mknod help");
 	ASSERT_NEQ(system("mknod /tmp/test_dev_cgroup_null c 1 3"), 0, "mknod");
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_null"), 0, "rm");
 
