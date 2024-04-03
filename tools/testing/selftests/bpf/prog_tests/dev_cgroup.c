@@ -9,6 +9,33 @@
 
 #define TEST_CGROUP "/test-bpf-based-device-cgroup/"
 
+#include <dirent.h>
+#include <sys/types.h>
+
+void print_all_dir(char *path) {
+	DIR *directory;
+	struct dirent *entry;
+
+	directory = opendir(path);
+
+	printf("directory %s:\n", path);
+	if (directory == NULL) {
+		perror("Error opening directory");
+		return;
+	}
+
+	entry = readdir(directory);
+	// Read directory entries
+	while (entry != NULL) {
+//		if (entry->d_type == DT_DIR)
+		printf("%s\t", entry->d_name);
+		entry = readdir(directory);
+	}
+	printf("\n");
+
+	closedir(directory);
+}
+
 void serial_test_dev_cgroup(void)
 {
 	struct dev_cgroup *skel;
@@ -41,11 +68,15 @@ void serial_test_dev_cgroup(void)
 
 	/* /dev/zero is whitelisted */
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
-	system("ls /tmp");
+	ASSERT_EQ(system("rmfdfsffsd"), 0, "rmfdasfd");
+	print_all_dir("/");
+	print_all_dir("/tmp");
+	print_all_dir("/usr/bin");
 	errno = 0;
 	int out = system("mknod /tmp/test_dev_cgroup_zero c 1 5");
 	printf("\nout is %d expected 0 %d %m\n\n", out, errno);
 	ASSERT_EQ(out, 0, "mknod"); //???
+	print_all_dir("/tmp");
 	ASSERT_EQ(system("rm -f /tmp/test_dev_cgroup_zero"), 0, "rm");
 
 	ASSERT_EQ(system("dd if=/dev/urandom of=/dev/zero count=64"), 0, "dd");
