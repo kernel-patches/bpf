@@ -1474,7 +1474,7 @@ static int verify_case_opt(struct ctx *ctx, enum num_t init_t, enum num_t cond_t
 			u64 elapsed_ns = get_time_ns() - ctx->start_ns;
 			double remain_ns = elapsed_ns / progress * (1 - progress);
 
-			fprintf(env.stderr, "PROGRESS (%s): %d/%d (%.2lf%%), "
+			fprintf(stderr, "PROGRESS (%s): %d/%d (%.2lf%%), "
 					    "elapsed %llu mins (%.2lf hrs), "
 					    "ETA %.0lf mins (%.2lf hrs)\n",
 				ctx->progress_ctx,
