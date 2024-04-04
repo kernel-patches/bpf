@@ -82,6 +82,181 @@ static struct bpf_raw_event_map *bpf_get_raw_tracepoint_module(const char *name)
 }
 #endif /* CONFIG_MODULES */
 
+/* Memory region writable with bpf_probe_write_user_registered(). */
+struct bpf_user_writable_entry {
+	void __user *start;
+	size_t size;
+	u32 tag;
+};
+
+struct bpf_user_writable {
+	u32 capacity;
+	u32 size;
+	struct bpf_user_writable_entry entries[];
+};
+
+static inline int bpf_user_writable_entry_cmp(const void *_key, const void *_ent)
+{
+	const struct bpf_user_writable_entry *key = (const struct bpf_user_writable_entry *)_key;
+	const struct bpf_user_writable_entry *ent = (const struct bpf_user_writable_entry *)_ent;
+	void __user *key_end = key->start + key->size - 1;
+	void __user *ent_end = ent->start + ent->size - 1;
+
+	if (ent->start <= key->start && key_end <= ent_end)
+		return 0; /* key memory range contained in entry */
+
+	return key->start < ent->start ? -1 : 1;
+}
+
+/*
+ * Returns true if the memory region from @ptr with size @size is a subset of
+ * any registered region of the current task.
+ */
+static const struct bpf_user_writable_entry *bpf_user_writable_find(void __user *ptr, size_t size)
+{
+	const struct bpf_user_writable_entry key = {.start = ptr, .size = size};
+	const struct bpf_user_writable *uw = current->bpf_user_writable;
+
+	if (!uw)
+		return NULL;
+
+	/*
+	 * We want bpf_probe_write_user_registered() to be as fast as the
+	 * non-registered version (for small uw->size): regular bsearch() does
+	 * too many calls, esp. because bpf_user_writable_entry_cmp() needs to
+	 * be outlined. Use the inline version instead, which also gives the
+	 * compiler a chance to inline bpf_user_writable_entry_cmp().
+	 */
+	return __inline_bsearch(&key, uw->entries, uw->size, sizeof(key), bpf_user_writable_entry_cmp);
+}
+
+int bpf_user_writable_register(void __user *start, size_t size, u32 tag)
+{
+	const struct bpf_user_writable_entry *exist;
+	struct bpf_user_writable_entry *ent;
+	struct bpf_user_writable *uw;
+
+	/*
+	 * Sanity check the user didn't try to register inaccessible memory.
+	 */
+	if (!start || !size || !access_ok(start, size))
+		return -EFAULT;
+
+	/*
+	 * Trying to add a range with the same address as already added is most
+	 * likely a bug - ensure the range was unregistered before re-adding.
+	 *
+	 * This also ensures that we always retain the property that no two
+	 * entries have the same start and we can sort them based on the start
+	 * address alone.
+	 */
+	exist = bpf_user_writable_find(start, 1);
+	if (exist && exist->start == start)
+		return -EEXIST;
+
+	if (current->bpf_user_writable) {
+		uw = current->bpf_user_writable;
+	} else { /* initial alloc */
+		uw = kmalloc(struct_size(uw, entries, 1), GFP_KERNEL);
+		if (!uw)
+			return -ENOMEM;
+		uw->capacity = 1;
+		uw->size = 0;
+		current->bpf_user_writable = uw;
+	}
+
+	if (uw->size == uw->capacity) { /* grow exponentially */
+		const u32 ncap = uw->capacity * 2;
+		struct bpf_user_writable *new_uw;
+
+		/* Upper bound of 2^31 entries - should be more than enough. */
+		if (uw->capacity > S32_MAX)
+			return -ENOMEM;
+
+		new_uw = krealloc(uw, struct_size(uw, entries, ncap), GFP_KERNEL);
+		if (!new_uw)
+			return -ENOMEM;
+
+		current->bpf_user_writable = uw = new_uw;
+		uw->capacity = ncap;
+	}
+
+	/* Insert new entry and sort. */
+	ent = &uw->entries[uw->size++];
+	ent->start = start;
+	ent->size = size;
+	ent->tag = tag;
+
+	sort(uw->entries, uw->size, sizeof(*ent), bpf_user_writable_entry_cmp, NULL);
+
+	return 0;
+}
+
+int bpf_user_writable_unregister(void __user *start, size_t size)
+{
+	const struct bpf_user_writable_entry *ent = bpf_user_writable_find(start, size);
+	struct bpf_user_writable *uw = current->bpf_user_writable;
+	size_t del_idx;
+
+	if (!ent)
+		return -ENOENT;
+
+	/* To unregister, require the precise range as used on registration. */
+	if (ent->start != start || ent->size != size)
+		return -ENOENT;
+
+	/*
+	 * Shift all entries after the to-be-deleted one left by one. The array
+	 * remains sorted.
+	 */
+	del_idx = ent - uw->entries;
+	for (size_t i = del_idx + 1; i < uw->size; ++i)
+		uw->entries[i - 1] = uw->entries[i];
+	uw->size--;
+
+	return 0;
+}
+
+int bpf_user_writable_copy(struct task_struct *t, u64 clone_flags)
+{
+	const struct bpf_user_writable *src;
+	struct bpf_user_writable *dst;
+
+	if (WARN_ON_ONCE(t == current))
+		return 0;
+
+	t->bpf_user_writable = NULL;
+
+	src = current->bpf_user_writable;
+	if (!src || (clone_flags & CLONE_VM)) {
+		/*
+		 * Shared VM: this thread gets its own user writable regions.
+		 */
+		return 0;
+	}
+
+	/*
+	 * A fork()'ed task (with separate VM) should behave as closely to the
+	 * original task as possible, and we will copy the writable regions.
+	 */
+	dst = kmalloc(struct_size(dst, entries, src->capacity), GFP_KERNEL);
+	if (!dst)
+		return -ENOMEM;
+	memcpy(dst, src, struct_size(dst, entries, src->size));
+	t->bpf_user_writable = dst;
+
+	return 0;
+}
+
+void bpf_user_writable_free(struct task_struct *t)
+{
+	if (!t->bpf_user_writable)
+		return;
+
+	kfree(t->bpf_user_writable);
+	t->bpf_user_writable = NULL;
+}
+
 u64 bpf_get_stackid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 bpf_get_stack(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 
@@ -324,8 +499,8 @@ static const struct bpf_func_proto bpf_probe_read_compat_str_proto = {
 };
 #endif /* CONFIG_ARCH_HAS_NON_OVERLAPPING_ADDRESS_SPACE */
 
-BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
-	   u32, size)
+static __always_inline int
+bpf_probe_write_user_common(void __user *unsafe_ptr, const void *src, u32 size)
 {
 	/*
 	 * Ensure we're in user context which is safe for the helper to
@@ -349,6 +524,12 @@ BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
 	return copy_to_user_nofault(unsafe_ptr, src, size);
 }
 
+BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
+	   u32, size)
+{
+	return bpf_probe_write_user_common(unsafe_ptr, src, size);
+}
+
 static const struct bpf_func_proto bpf_probe_write_user_proto = {
 	.func		= bpf_probe_write_user,
 	.gpl_only	= true,
@@ -367,6 +548,39 @@ static const struct bpf_func_proto *bpf_get_probe_write_proto(void)
 			    current->comm, task_pid_nr(current));
 
 	return &bpf_probe_write_user_proto;
+}
+
+BPF_CALL_4(bpf_probe_write_user_registered, void __user *, unsafe_ptr, const void *, src,
+	   u32, size, u32, tag)
+{
+	const struct bpf_user_writable_entry *ent = bpf_user_writable_find(unsafe_ptr, size);
+
+	if (!ent)
+		return -EPERM;
+
+	/* A region with tag 0 matches any tag. */
+	if (ent->tag && ent->tag != tag)
+		return -EPERM;
+
+	return bpf_probe_write_user_common(unsafe_ptr, src, size);
+}
+
+static const struct bpf_func_proto bpf_probe_write_user_registered_proto = {
+	.func		= bpf_probe_write_user_registered,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg3_type	= ARG_CONST_SIZE,
+	.arg4_type      = ARG_ANYTHING,
+};
+
+static const struct bpf_func_proto *bpf_get_probe_write_registered_proto(void)
+{
+	if (!capable(CAP_SYS_ADMIN))
+		return NULL;
+
+	return &bpf_probe_write_user_registered_proto;
 }
 
 #define MAX_TRACE_PRINTK_VARARGS	3
@@ -1552,6 +1766,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_probe_write_user:
 		return security_locked_down(LOCKDOWN_BPF_WRITE_USER) < 0 ?
 		       NULL : bpf_get_probe_write_proto();
+	case BPF_FUNC_probe_write_user_registered:
+		return bpf_get_probe_write_registered_proto();
 	case BPF_FUNC_probe_read_user:
 		return &bpf_probe_read_user_proto;
 	case BPF_FUNC_probe_read_kernel:

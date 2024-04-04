@@ -5788,6 +5788,21 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_probe_write_user_registered(void *dst, const void *src, u32 len, u32 tag)
+ *	Description
+ *		Attempt in a safe way to write *len* bytes from the buffer *src*
+ *		to *dst* in memory. Writes are permitted for threads that have
+ *		registered the target memory region as writable via the prctl()
+ *		PR_BPF_REGISTER_WRITABLE. If the region was registered with a
+ *		non-zero tag, a matching *tag* must be provided.
+ *
+ *		This helper should not be used to implement any kind of
+ *		security mechanism because of TOC-TOU attacks, but rather to
+ *		debug, divert, and manipulate execution of cooperative
+ *		processes.
+ *	Return
+ *		0 on success, or a negative error in case of failure.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6002,6 +6017,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(probe_write_user_registered, 212, ##ctx)	\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

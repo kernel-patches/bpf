@@ -254,7 +254,8 @@ A: Sort-of.
 Tracing BPF programs can overwrite the user memory
 of the current task with bpf_probe_write_user(). Every time such
 program is loaded the kernel will print warning message, so
-this helper is only useful for experiments and prototypes.
+this helper is only useful for experiments and prototypes. A safer,
+but more limited, alternative is bpf_probe_write_user_registered().
 Tracing BPF programs are root only.
 
 Q: New functionality via kernel modules?

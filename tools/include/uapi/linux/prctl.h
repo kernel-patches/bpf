@@ -306,4 +306,9 @@ struct prctl_mm_map {
 # define PR_RISCV_V_VSTATE_CTRL_NEXT_MASK	0xc
 # define PR_RISCV_V_VSTATE_CTRL_MASK		0x1f
 
+/* Register tagged writable memory region for the current task. */
+#define PR_BPF_REGISTER_WRITABLE		71
+/* Unregister tagged writable memory region for the current task. */
+#define PR_BPF_UNREGISTER_WRITABLE		72
+
 #endif /* _LINUX_PRCTL_H */

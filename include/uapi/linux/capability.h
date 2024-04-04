@@ -401,7 +401,8 @@ struct vfs_ns_cap_data {
  * - bpf_probe_read to read arbitrary kernel memory is allowed
  * - bpf_trace_printk to print kernel memory is allowed
  *
- * CAP_SYS_ADMIN is required to use bpf_probe_write_user.
+ * CAP_SYS_ADMIN is required to use bpf_probe_write_user and
+ * bpf_probe_write_user_registered.
  *
  * CAP_SYS_ADMIN is required to iterate system wide loaded
  * programs, maps, links, BTFs and convert their IDs to file descriptors.

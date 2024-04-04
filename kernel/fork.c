@@ -98,6 +98,7 @@
 #include <linux/io_uring.h>
 #include <linux/bpf.h>
 #include <linux/stackprotector.h>
+#include <linux/trace_events.h>
 #include <linux/user_events.h>
 #include <linux/iommu.h>
 #include <linux/rseq.h>
@@ -606,6 +607,7 @@ void free_task(struct task_struct *tsk)
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
 	bpf_task_storage_free(tsk);
+	bpf_user_writable_free(tsk);
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -2353,6 +2355,9 @@ __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_BPF_SYSCALL
 	RCU_INIT_POINTER(p->bpf_storage, NULL);
 	p->bpf_ctx = NULL;
+	retval = bpf_user_writable_copy(p, clone_flags);
+	if (retval)
+		goto bad_fork_cleanup_policy;
 #endif
 
 	/* Perform scheduler related setup. Assign this task to a CPU. */
@@ -2664,6 +2669,7 @@ bad_fork_cleanup_audit:
 bad_fork_cleanup_perf:
 	perf_event_free_task(p);
 bad_fork_cleanup_policy:
+	bpf_user_writable_free(p);
 	lockdep_free_task(p);
 #ifdef CONFIG_NUMA
 	mpol_put(p->mempolicy);

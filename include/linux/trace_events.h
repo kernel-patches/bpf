@@ -778,6 +778,10 @@ int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 			    unsigned long *missed);
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int bpf_user_writable_register(void __user *start, size_t size, u32 tag);
+int bpf_user_writable_unregister(void __user *start, size_t size);
+int bpf_user_writable_copy(struct task_struct *t, u64 clone_flags);
+void bpf_user_writable_free(struct task_struct *t);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -829,6 +833,21 @@ static inline int
 bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	return -EOPNOTSUPP;
+}
+static inline int bpf_user_writable_register(void __user *start, size_t size, u32 tag)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_user_writable_unregister(void __user *start, size_t size)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_user_writable_copy(struct task_struct *t, u64 clone_flags)
+{
+	return 0;
+}
+static inline void bpf_user_writable_free(struct task_struct *t)
+{
 }
 #endif
 
