@@ -225,6 +225,33 @@ static void trigger_fentry_setup(void)
 	attach_bpf(ctx.skel->progs.bench_trigger_fentry);
 }
 
+static void trigger_arr_inc_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, false);
+	bpf_program__set_autoload(ctx.skel->progs.trigger_arr_inc, true);
+	load_ctx();
+	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_arr_inc);
+}
+
+static void trigger_hash_inc_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, false);
+	bpf_program__set_autoload(ctx.skel->progs.trigger_hash_inc, true);
+	load_ctx();
+	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_hash_inc);
+}
+
+static void trigger_glob_arr_inc_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, false);
+	bpf_program__set_autoload(ctx.skel->progs.trigger_glob_arr_inc, true);
+	load_ctx();
+	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_glob_arr_inc);
+}
+
 static void trigger_fexit_setup(void)
 {
 	setup_ctx();
@@ -434,6 +461,10 @@ BENCH_TRIG_KERNEL(fexit, "fexit");
 BENCH_TRIG_KERNEL(fmodret, "fmodret");
 BENCH_TRIG_KERNEL(tp, "tp");
 BENCH_TRIG_KERNEL(rawtp, "rawtp");
+
+BENCH_TRIG_KERNEL(arr_inc, "arr-inc");
+BENCH_TRIG_KERNEL(hash_inc, "hash-inc");
+BENCH_TRIG_KERNEL(glob_arr_inc, "glob-arr-inc");
 
 /* uprobe benchmarks */
 #define BENCH_TRIG_USERMODE(KIND, PRODUCER, NAME)			\
