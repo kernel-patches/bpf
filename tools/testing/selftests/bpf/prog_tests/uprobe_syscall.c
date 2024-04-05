@@ -7,7 +7,10 @@
 #include <unistd.h>
 #include <asm/ptrace.h>
 #include <linux/compiler.h>
+#include <linux/stringify.h>
+#include <sys/wait.h>
 #include "uprobe_syscall.skel.h"
+#include "uprobe_syscall_call.skel.h"
 
 __naked unsigned long uretprobe_regs_trigger(void)
 {
@@ -209,6 +212,85 @@ static void test_uretprobe_regs_change(void)
 	}
 }
 
+#ifndef __NR_uretprobe
+#define __NR_uretprobe 462
+#endif
+
+__naked unsigned long uretprobe_syscall_call_1(void)
+{
+	/*
+	 * Pretend we are uretprobe trampoline to trigger the return
+	 * probe invocation in order to verify we get SIGILL.
+	 */
+	asm volatile (
+		"pushq %rax\n"
+		"pushq %rcx\n"
+		"pushq %r11\n"
+		"movq $" __stringify(__NR_uretprobe) ", %rax\n"
+		"syscall\n"
+		"popq %r11\n"
+		"popq %rcx\n"
+		"retq\n"
+	);
+}
+
+__naked unsigned long uretprobe_syscall_call(void)
+{
+	asm volatile (
+		"call uretprobe_syscall_call_1\n"
+		"retq\n"
+	);
+}
+
+static void __test_uretprobe_syscall_call(void)
+{
+	struct uprobe_syscall_call *skel = NULL;
+	int err;
+
+	skel = uprobe_syscall_call__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_call__open_and_load"))
+		goto cleanup;
+
+	err = uprobe_syscall_call__attach(skel);
+	if (!ASSERT_OK(err, "uprobe_syscall_call__attach"))
+		goto cleanup;
+
+	uretprobe_syscall_call();
+
+cleanup:
+	uprobe_syscall_call__destroy(skel);
+}
+
+static void trace_pipe_cb(const char *str, void *data)
+{
+	if (strstr(str, "uretprobe called") != NULL)
+		(*(int *)data)++;
+}
+
+static void test_uretprobe_syscall_call(void)
+{
+	int pid, status, found = 0;
+
+	pid = fork();
+	if (!ASSERT_GE(pid, 0, "fork"))
+		return;
+
+	if (pid == 0) {
+		__test_uretprobe_syscall_call();
+		_exit(0);
+	}
+
+	waitpid(pid, &status, 0);
+
+	/* verify the child got killed with SIGILL */
+	ASSERT_EQ(WIFSIGNALED(status), 1, "WIFSIGNALED");
+	ASSERT_EQ(WTERMSIG(status), SIGILL, "WTERMSIG");
+
+	/* verify the uretprobe program wasn't called */
+	ASSERT_OK(read_trace_pipe_iter(trace_pipe_cb, &found, 1000),
+		 "read_trace_pipe_iter");
+	ASSERT_EQ(found, 0, "found");
+}
 #else
 static void test_uretprobe_regs_equal(void)
 {
@@ -216,6 +298,11 @@ static void test_uretprobe_regs_equal(void)
 }
 
 static void test_uretprobe_regs_change(void)
+{
+	test__skip();
+}
+
+static void test_uretprobe_syscall_call(void)
 {
 	test__skip();
 }
@@ -227,4 +314,9 @@ void test_uprobe_syscall(void)
 		test_uretprobe_regs_equal();
 	if (test__start_subtest("uretprobe_regs_change"))
 		test_uretprobe_regs_change();
+}
+
+void serial_test_uprobe_syscall_call(void)
+{
+	test_uretprobe_syscall_call();
 }
