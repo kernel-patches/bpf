@@ -13756,7 +13756,8 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	}
 
 	if (!src_known &&
-	    opcode != BPF_ADD && opcode != BPF_SUB && opcode != BPF_AND) {
+	    opcode != BPF_ADD && opcode != BPF_SUB && opcode != BPF_AND
+	    && opcode != BPF_XOR) {
 		__mark_reg_unknown(env, dst_reg);
 		return 0;
 	}
