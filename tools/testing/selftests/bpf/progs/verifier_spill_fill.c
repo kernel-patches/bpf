@@ -5,6 +5,7 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include <../../../tools/include/linux/filter.h>
+#include "../cap_helpers.h"
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -1241,6 +1242,23 @@ __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 	"exit;"
 	:
 	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("32-bit scalars should be able to overwrite 64-bit scalar spilled slots")
+__log_level(2)
+__success __success_unpriv
+__success_caps(CAP_BPF) __retval_caps(0)
+__naked void spill_32bit_onto_64bit_slot(void)
+{
+	asm volatile("					\
+	*(u64*)(r10 - 8) = 1;				\
+	*(u32*)(r10 - 8) = 1;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	:
 	: __clobber_all);
 }
 

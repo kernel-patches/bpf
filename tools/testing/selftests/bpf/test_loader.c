@@ -20,11 +20,15 @@
 #define TEST_TAG_EXPECT_FAILURE_UNPRIV "comment:test_expect_failure_unpriv"
 #define TEST_TAG_EXPECT_SUCCESS_UNPRIV "comment:test_expect_success_unpriv"
 #define TEST_TAG_EXPECT_MSG_PFX_UNPRIV "comment:test_expect_msg_unpriv="
+#define TEST_TAG_EXPECT_FAILURE_CAPS "comment:test_expect_failure_caps="
+#define TEST_TAG_EXPECT_SUCCESS_CAPS "comment:test_expect_success_caps="
+#define TEST_TAG_EXPECT_MSG_PFX_CAPS "comment:test_expect_msg_caps="
 #define TEST_TAG_LOG_LEVEL_PFX "comment:test_log_level="
 #define TEST_TAG_PROG_FLAGS_PFX "comment:test_prog_flags="
 #define TEST_TAG_DESCRIPTION_PFX "comment:test_description="
 #define TEST_TAG_RETVAL_PFX "comment:test_retval="
 #define TEST_TAG_RETVAL_PFX_UNPRIV "comment:test_retval_unpriv="
+#define TEST_TAG_RETVAL_PFX_CAPS "comment:test_retval_caps="
 #define TEST_TAG_AUXILIARY "comment:test_auxiliary"
 #define TEST_TAG_AUXILIARY_UNPRIV "comment:test_auxiliary_unpriv"
 #define TEST_BTF_PATH "comment:test_btf_path="
@@ -43,7 +47,8 @@ static int sysctl_unpriv_disabled = -1;
 
 enum mode {
 	PRIV = 1,
-	UNPRIV = 2
+	UNPRIV = 2,
+	CUSTCAPS = 4
 };
 
 struct test_subspec {
@@ -59,6 +64,8 @@ struct test_spec {
 	const char *prog_name;
 	struct test_subspec priv;
 	struct test_subspec unpriv;
+	struct test_subspec custom_caps;
+	__u64 caps;
 	const char *btf_custom_path;
 	int log_level;
 	int prog_flags;
@@ -133,6 +140,33 @@ static int parse_int(const char *str, int *val, const char *name)
 	return 0;
 }
 
+static int parse_caps(const char *str, __u64 *val, const char *name)
+{
+	int cap_flag = 0;
+	char *token = NULL, *saveptr = NULL;
+
+	char *str_cpy = strdup(str);
+	if (str_cpy == NULL) {
+		PRINT_FAIL("Memory allocation failed\n");
+		return -EINVAL;
+	}
+
+	token = strtok_r(str_cpy, "|", &saveptr);
+	while (token != NULL) {
+		errno = 0;
+		cap_flag = strtol(token, NULL, 10);
+		if (errno) {
+			PRINT_FAIL("failed to parse caps %s\n", name);
+			return -EINVAL;
+		}
+		*val |= (1ULL << cap_flag);
+		token = strtok_r(NULL, "|", &saveptr);
+	}
+
+	free(str_cpy);
+	return 0;
+}
+
 static int parse_retval(const char *str, int *val, const char *name)
 {
 	struct {
@@ -161,6 +195,22 @@ static void update_flags(int *flags, int flag, bool clear)
 		*flags &= ~flag;
 	else
 		*flags |= flag;
+}
+
+static char *create_desc(const char *description, const char *suffix)
+{
+	int descr_len = strlen(description);
+	char *name;
+
+	name = malloc(descr_len + strlen(suffix) + 1);
+	if (!name) {
+		PRINT_FAIL("failed to allocate memory for unpriv.name\n");
+		return NULL;
+	}
+
+	strcpy(name, description);
+	strcpy(&name[descr_len], suffix);
+	return name;
 }
 
 /* Uses btf_decl_tag attributes to describe the expected test
@@ -225,6 +275,20 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->unpriv.expect_failure = false;
 			spec->mode_mask |= UNPRIV;
 			has_unpriv_result = true;
+		} else if (str_has_pfx(s, TEST_TAG_EXPECT_FAILURE_CAPS)) {
+			val = s + sizeof(TEST_TAG_EXPECT_FAILURE_CAPS) - 1;
+			err = parse_caps(val, &spec->caps, "test caps");
+			if (err)
+				goto cleanup;
+			spec->custom_caps.expect_failure = true;
+			spec->mode_mask |= CUSTCAPS;
+                } else if (str_has_pfx(s, TEST_TAG_EXPECT_SUCCESS_CAPS)) {
+			val = s + sizeof(TEST_TAG_EXPECT_SUCCESS_CAPS) - 1;
+			err = parse_caps(val, &spec->caps, "test caps");
+			if (err)
+				goto cleanup;
+			spec->custom_caps.expect_failure = false;
+			spec->mode_mask |= CUSTCAPS;
 		} else if (strcmp(s, TEST_TAG_AUXILIARY) == 0) {
 			spec->auxiliary = true;
 			spec->mode_mask |= PRIV;
@@ -243,6 +307,12 @@ static int parse_test_spec(struct test_loader *tester,
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
+		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX_CAPS)) {
+			msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX_CAPS) - 1;
+			err = push_msg(msg, &spec->custom_caps);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= CUSTCAPS;
 		} else if (str_has_pfx(s, TEST_TAG_RETVAL_PFX)) {
 			val = s + sizeof(TEST_TAG_RETVAL_PFX) - 1;
 			err = parse_retval(val, &spec->priv.retval, "__retval");
@@ -258,6 +328,13 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 			spec->unpriv.execute = true;
 			has_unpriv_retval = true;
+		} else if (str_has_pfx(s, TEST_TAG_RETVAL_PFX_CAPS)) {
+			val = s + sizeof(TEST_TAG_RETVAL_PFX_CAPS) - 1;
+			err = parse_retval(val, &spec->custom_caps.retval, "__retval_caps");
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= CUSTCAPS;
+			spec->custom_caps.execute = true;
 		} else if (str_has_pfx(s, TEST_TAG_LOG_LEVEL_PFX)) {
 			val = s + sizeof(TEST_TAG_LOG_LEVEL_PFX) - 1;
 			err = parse_int(val, &spec->log_level, "test log level");
@@ -311,20 +388,21 @@ static int parse_test_spec(struct test_loader *tester,
 	}
 
 	if (spec->mode_mask & UNPRIV) {
-		int descr_len = strlen(description);
-		const char *suffix = " @unpriv";
-		char *name;
-
-		name = malloc(descr_len + strlen(suffix) + 1);
+		char *name = create_desc(description, " @unpriv");
 		if (!name) {
-			PRINT_FAIL("failed to allocate memory for unpriv.name\n");
 			err = -ENOMEM;
 			goto cleanup;
 		}
-
-		strcpy(name, description);
-		strcpy(&name[descr_len], suffix);
 		spec->unpriv.name = name;
+	}
+
+	if (spec->mode_mask & CUSTCAPS) {
+		char *name = create_desc(description, " @caps");
+		if (!name) {
+			err = -ENOMEM;
+			goto cleanup;
+		}
+		spec->custom_caps.name = name;
 	}
 
 	if (spec->mode_mask & (PRIV | UNPRIV)) {
@@ -461,6 +539,28 @@ static int restore_capabilities(struct cap_state *caps)
 	return err;
 }
 
+static int set_capabilities(__u64 new_caps, struct cap_state *save_caps) {
+
+	int err;
+
+	/* Drop all bpf related caps */
+	err = drop_capabilities(save_caps);
+	if (err) {
+		PRINT_FAIL("failed to drop capabilities: %i, %s\n", err, strerror(err));
+		return err;
+	}
+
+	/* Set the specified caps */
+	err = cap_enable_effective(new_caps, NULL);
+	if (err) {
+		PRINT_FAIL("failed to set capabilities: %i, %s\n", err, strerror(err));
+		return err;
+	}
+
+	save_caps->initialized = true;
+	return 0;
+}
+
 static bool can_execute_unpriv(struct test_loader *tester, struct test_spec *spec)
 {
 	if (sysctl_unpriv_disabled < 0)
@@ -560,27 +660,45 @@ void run_subtest(struct test_loader *tester,
 		 size_t obj_byte_cnt,
 		 struct test_spec *specs,
 		 struct test_spec *spec,
-		 bool unpriv)
+		 int priv_level)
 {
-	struct test_subspec *subspec = unpriv ? &spec->unpriv : &spec->priv;
+	struct test_subspec *subspec = NULL;
 	struct bpf_program *tprog = NULL, *tprog_iter;
 	struct test_spec *spec_iter;
 	struct cap_state caps = {};
 	struct bpf_object *tobj;
 	struct bpf_map *map;
 	int retval, err, i;
-	bool should_load;
+	bool should_load, unpriv = (priv_level != PRIV);
+
+	switch (priv_level) {
+		case PRIV:
+			subspec = &spec->priv;
+			break;
+		case UNPRIV:
+			subspec = &spec->unpriv;
+			break;
+		case CUSTCAPS:
+			subspec = &spec->custom_caps;
+			break;
+		default:
+	}
 
 	if (!test__start_subtest(subspec->name))
 		return;
 
-	if (unpriv) {
+	if (priv_level == UNPRIV) {
 		if (!can_execute_unpriv(tester, spec)) {
 			test__skip();
 			test__end_subtest();
 			return;
 		}
 		if (drop_capabilities(&caps)) {
+			test__end_subtest();
+			return;
+		}
+	} else if (priv_level == CUSTCAPS) {
+		if (set_capabilities(spec->caps, &caps)) {
 			test__end_subtest();
 			return;
 		}
@@ -714,11 +832,13 @@ static void process_subtest(struct test_loader *tester,
 
 		if (spec->mode_mask & PRIV)
 			run_subtest(tester, &open_opts, obj_bytes, obj_byte_cnt,
-				    specs, spec, false);
+				    specs, spec, PRIV);
 		if (spec->mode_mask & UNPRIV)
 			run_subtest(tester, &open_opts, obj_bytes, obj_byte_cnt,
-				    specs, spec, true);
-
+				    specs, spec, UNPRIV);
+		if (spec->mode_mask & CUSTCAPS)
+			run_subtest(tester, &open_opts, obj_bytes, obj_byte_cnt,
+				    specs, spec, CUSTCAPS);
 	}
 
 	for (i = 0; i < nr_progs; ++i)

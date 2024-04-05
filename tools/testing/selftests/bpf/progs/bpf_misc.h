@@ -2,6 +2,10 @@
 #ifndef __BPF_MISC_H__
 #define __BPF_MISC_H__
 
+/* Expand a macro and then stringize the expansion */
+#define QUOTE(str) #str
+#define EXPAND_QUOTE(str) QUOTE(str)
+
 /* This set of attributes controls behavior of the
  * test_loader.c:test_loader__run_subtests().
  *
@@ -24,11 +28,15 @@
  *                   Multiple __msg attributes could be specified.
  * __msg_unpriv      Same as __msg but for unprivileged mode.
  *
+ * __msg_caps        Same as __msg but for specified capabilities.
+ *
  * __success         Expect program load success in privileged mode.
  * __success_unpriv  Expect program load success in unprivileged mode.
+ * __success_caps    Expect program load success in specified cap mode.
  *
  * __failure         Expect program load failure in privileged mode.
  * __failure_unpriv  Expect program load failure in unprivileged mode.
+ * __failure_caps    Expect program load failure in specified cap mode.
  *
  * __retval          Execute the program using BPF_PROG_TEST_RUN command,
  *                   expect return value to match passed parameter:
@@ -38,6 +46,7 @@
  *                   - literal POINTER_VALUE (see definition below)
  *                   - literal TEST_DATA_LEN (see definition below)
  * __retval_unpriv   Same, but load program in unprivileged mode.
+ * __retval_caps     Same, but load program in specified cap mode.
  *
  * __description     Text to be used instead of a program name for display
  *                   and filtering purposes.
@@ -63,12 +72,16 @@
 #define __success		__attribute__((btf_decl_tag("comment:test_expect_success")))
 #define __description(desc)	__attribute__((btf_decl_tag("comment:test_description=" desc)))
 #define __msg_unpriv(msg)	__attribute__((btf_decl_tag("comment:test_expect_msg_unpriv=" msg)))
+#define __msg_caps(msg)	__attribute__((btf_decl_tag("comment:test_expect_msg_caps=" msg)))
 #define __failure_unpriv	__attribute__((btf_decl_tag("comment:test_expect_failure_unpriv")))
 #define __success_unpriv	__attribute__((btf_decl_tag("comment:test_expect_success_unpriv")))
+#define __failure_caps(caps)	__attribute__((btf_decl_tag("comment:test_expect_failure_caps="EXPAND_QUOTE(caps))))
+#define __success_caps(caps)	__attribute__((btf_decl_tag("comment:test_expect_success_caps="EXPAND_QUOTE(caps))))
 #define __log_level(lvl)	__attribute__((btf_decl_tag("comment:test_log_level="#lvl)))
 #define __flag(flag)		__attribute__((btf_decl_tag("comment:test_prog_flags="#flag)))
 #define __retval(val)		__attribute__((btf_decl_tag("comment:test_retval="#val)))
 #define __retval_unpriv(val)	__attribute__((btf_decl_tag("comment:test_retval_unpriv="#val)))
+#define __retval_caps(val)	__attribute__((btf_decl_tag("comment:test_retval_caps="#val)))
 #define __auxiliary		__attribute__((btf_decl_tag("comment:test_auxiliary")))
 #define __auxiliary_unpriv	__attribute__((btf_decl_tag("comment:test_auxiliary_unpriv")))
 #define __btf_path(path)	__attribute__((btf_decl_tag("comment:test_btf_path=" path)))
