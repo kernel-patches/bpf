@@ -304,9 +304,17 @@ static void ringbuf_subtest(void)
 	err = ring_buffer__consume(ringbuf);
 	CHECK(err < 0, "rb_consume", "failed: %d\b", err);
 
+	/* try to consume up to one item */
+	err = ring_buffer__consume_n(ringbuf, 1);
+	CHECK(err < 0 || err > 1, "rb_consume_n", "failed: %d\b", err);
+
 	/* also consume using ring__consume to make sure it works the same */
 	err = ring__consume(ring);
 	ASSERT_GE(err, 0, "ring_consume");
+
+	/* try to consume up to one item */
+	err = ring__consume_n(ring, 1);
+	CHECK(err < 0 || err > 1, "ring_consume_n", "failed: %d\b", err);
 
 	/* 3 rounds, 2 samples each */
 	cnt = atomic_xchg(&sample_cnt, 0);
