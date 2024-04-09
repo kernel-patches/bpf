@@ -456,6 +456,7 @@
  * independent code.
  */
 #define PRELIMINARY_SYMBOL_DEFINITIONS					\
+	PRELIMINARY_BTF_DEFINITIONS					\
 	PROVIDE(kallsyms_addresses = .);				\
 	PROVIDE(kallsyms_offsets = .);					\
 	PROVIDE(kallsyms_names = .);					\
@@ -465,6 +466,14 @@
 	PROVIDE(kallsyms_token_index = .);				\
 	PROVIDE(kallsyms_markers = .);					\
 	PROVIDE(kallsyms_seqs_of_names = .);
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+#define PRELIMINARY_BTF_DEFINITIONS					\
+	PROVIDE(__start_BTF = .);					\
+	PROVIDE(__stop_BTF = .);
+#else
+#define PRELIMINARY_BTF_DEFINITIONS
+#endif
 
 /*
  * Read only Data
