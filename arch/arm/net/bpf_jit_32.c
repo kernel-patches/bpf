@@ -878,6 +878,13 @@ static inline void emit_a32_mov_r(const s8 dst, const s8 src, const u8 off,
 
 	rt = arm_bpf_get_reg32(src, tmp[0], ctx);
 	if (off && off != 32) {
+		/* If rt is not a stacked register, move it to tmp, so it doesn't get clobbered by
+		 * the shift operations.
+		 */
+		if (rt == src) {
+			emit(ARM_MOV_R(tmp[0], rt), ctx);
+			rt = tmp[0];
+		}
 		emit(ARM_LSL_I(rt, rt, 32 - off), ctx);
 		emit(ARM_ASR_I(rt, rt, 32 - off), ctx);
 	}
@@ -919,15 +926,15 @@ static inline void emit_a32_movsx_r64(const bool is64, const u8 off, const s8 ds
 	const s8 *tmp = bpf2a32[TMP_REG_1];
 	const s8 *rt;
 
-	rt = arm_bpf_get_reg64(dst, tmp, ctx);
-
 	emit_a32_mov_r(dst_lo, src_lo, off, ctx);
 	if (!is64) {
 		if (!ctx->prog->aux->verifier_zext)
 			/* Zero out high 4 bytes */
 			emit_a32_mov_i(dst_hi, 0, ctx);
 	} else {
+		rt = arm_bpf_get_reg64(dst, tmp, ctx);
 		emit(ARM_ASR_I(rt[0], rt[1], 31), ctx);
+		arm_bpf_put_reg64(dst, rt, ctx);
 	}
 }
 
