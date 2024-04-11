@@ -13530,6 +13530,29 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 		return;
 	}
 
+	if (src_known &&
+		dst_reg->s32_min_value < 0 && dst_reg->s32_min_value >= -256 &&
+		dst_reg->s32_max_value >= 0 && dst_reg->s32_max_value <= 256 &&
+		dst_reg->s32_min_value == dst_reg->smin_value &&
+		dst_reg->s32_max_value == dst_reg->smax_value) {
+		s32 s32_min = S32_MAX;
+		s32 s32_max = S32_MIN;
+		s32 v = dst_reg->s32_min_value;
+		while (v <= dst_reg->s32_max_value) {
+			s32 w = (v & src_reg->s32_min_value);
+			if (w < s32_min)
+				s32_min = w;
+			if (w > s32_max)
+				s32_max = w;
+			v++;
+		}
+		dst_reg->s32_min_value = s32_min;
+		dst_reg->s32_max_value = s32_max;
+		dst_reg->u32_min_value = var32_off.value;
+		dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
+		return;
+	}
+
 	/* We get our minimum from the var_off, since that's inherently
 	 * bitwise.  Our maximum is the minimum of the operands' maxima.
 	 */
