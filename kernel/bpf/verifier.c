@@ -13741,15 +13741,17 @@ static bool is_const_reg_and_valid(struct bpf_reg_state reg, bool alu32,
 }
 
 static bool is_safe_to_compute_dst_reg_ranges(struct bpf_insn *insn,
+					      struct bpf_reg_state dst_reg,
 					      struct bpf_reg_state src_reg)
 {
-	bool src_known;
+	bool src_known, dst_known;
 	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	u8 opcode = BPF_OP(insn->code);
 
 	bool valid_known = true;
 	src_known = is_const_reg_and_valid(src_reg, alu32, &valid_known);
+	dst_known = is_const_reg_and_valid(dst_reg, alu32, &valid_known);
 
 	/* Taint dst register if offset had invalid bounds
 	 * derived from e.g. dead branches.
@@ -13765,10 +13767,10 @@ static bool is_safe_to_compute_dst_reg_ranges(struct bpf_insn *insn,
 	case BPF_OR:
 		return true;
 
-	/* Compute range for MUL if the src_reg is known.
+	/* Compute range for MUL if at least one of its registers is know.
 	 */
 	case BPF_MUL:
-		return src_known;
+		return src_known || dst_known;
 
 	/* Shift operators range is only computable if shift dimension operand
 	 * is known. Also, shifts greater than 31 or 63 are undefined. This
@@ -13799,7 +13801,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	int ret;
 
-	if (!is_safe_to_compute_dst_reg_ranges(insn, src_reg)) {
+	if (!is_safe_to_compute_dst_reg_ranges(insn, *dst_reg, src_reg)) {
 		__mark_reg_unknown(env, dst_reg);
 		return 0;
 	}
