@@ -95,6 +95,9 @@ static struct execmem_info execmem_info __ro_after_init = {
 		[EXECMEM_DEFAULT] = {
 			.alignment = 1,
 		},
+		[EXECMEM_KPROBES] = {
+			.alignment = 1,
+		},
 		[EXECMEM_MODULE_DATA] = {
 			.alignment = 1,
 		},
@@ -136,6 +139,14 @@ struct execmem_info __init *execmem_arch_setup(void)
 #endif
 
 	text->pgprot = prot;
+
+	execmem_info.ranges[EXECMEM_KPROBES].start = VMALLOC_START;
+	execmem_info.ranges[EXECMEM_KPROBES].start = VMALLOC_END;
+
+	if (strict_module_rwx_enabled())
+		execmem_info.ranges[EXECMEM_KPROBES].pgprot = PAGE_KERNEL_ROX;
+	else
+		execmem_info.ranges[EXECMEM_KPROBES].pgprot = PAGE_KERNEL_EXEC;
 
 	return &execmem_info;
 }
