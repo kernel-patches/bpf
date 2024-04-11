@@ -99,12 +99,6 @@ static inline struct xattr *lsm_get_xattr_slot(struct xattr *xattrs,
 }
 
 /*
- * LSM_RET_VOID is used as the default value in LSM_HOOK definitions for void
- * LSM hooks (in include/linux/lsm_hook_defs.h).
- */
-#define LSM_RET_VOID ((void) 0)
-
-/*
  * Initializing a security_hook_list structure takes
  * up a lot of space in a source file. This macro takes
  * care of the common case and reduces the amount of
