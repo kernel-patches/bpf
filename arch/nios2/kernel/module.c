@@ -13,30 +13,12 @@
 #include <linux/moduleloader.h>
 #include <linux/elf.h>
 #include <linux/mm.h>
-#include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/kernel.h>
-#include <linux/execmem.h>
 
 #include <asm/cacheflush.h>
-
-static struct execmem_info execmem_info __ro_after_init = {
-	.ranges = {
-		[EXECMEM_DEFAULT] = {
-			.start = MODULES_VADDR,
-			.end = MODULES_END,
-			.pgprot = PAGE_KERNEL_EXEC,
-			.alignment = 1,
-		},
-	},
-};
-
-struct execmem_info __init *execmem_arch_setup(void)
-{
-	return &execmem_info;
-}
 
 int apply_relocate_add(Elf32_Shdr *sechdrs, const char *strtab,
 			unsigned int symindex, unsigned int relsec,

@@ -11,10 +11,8 @@
 #include <linux/kernel.h>
 #include <linux/log2.h>
 #include <linux/moduleloader.h>
-#include <linux/vmalloc.h>
 #include <linux/sizes.h>
 #include <linux/pgtable.h>
-#include <linux/execmem.h>
 #include <asm/alternative.h>
 #include <asm/sections.h>
 
@@ -905,44 +903,6 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 
 	return 0;
 }
-
-#ifdef CONFIG_MMU
-static struct execmem_info execmem_info __ro_after_init = {
-	.ranges = {
-		[EXECMEM_DEFAULT] = {
-			.pgprot = PAGE_KERNEL,
-			.alignment = 1,
-		},
-		[EXECMEM_KPROBES] = {
-			.pgprot = PAGE_KERNEL_READ_EXEC,
-			.alignment = 1,
-		},
-		[EXECMEM_BPF] = {
-			.pgprot = PAGE_KERNEL,
-			.alignment = PAGE_SIZE,
-		},
-	},
-};
-
-struct execmem_info __init *execmem_arch_setup(void)
-{
-#ifdef CONFIG_64BIT
-	execmem_info.ranges[EXECMEM_DEFAULT].start = MODULES_VADDR;
-	execmem_info.ranges[EXECMEM_DEFAULT].end = MODULES_END;
-#else
-	execmem_info.ranges[EXECMEM_DEFAULT].start = VMALLOC_START;
-	execmem_info.ranges[EXECMEM_DEFAULT].end = VMALLOC_END;
-#endif
-
-	execmem_info.ranges[EXECMEM_KPROBES].start = VMALLOC_START;
-	execmem_info.ranges[EXECMEM_KPROBES].end = VMALLOC_END;
-
-	execmem_info.ranges[EXECMEM_BPF].start = BPF_JIT_REGION_START;
-	execmem_info.ranges[EXECMEM_BPF].end = BPF_JIT_REGION_END;
-
-	return &execmem_info;
-}
-#endif
 
 int module_finalize(const Elf_Ehdr *hdr,
 		    const Elf_Shdr *sechdrs,

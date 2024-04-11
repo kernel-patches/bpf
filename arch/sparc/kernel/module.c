@@ -14,35 +14,12 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/mm.h>
-#include <linux/execmem.h>
 
 #include <asm/processor.h>
 #include <asm/spitfire.h>
 #include <asm/cacheflush.h>
 
 #include "entry.h"
-
-static struct execmem_info execmem_info __ro_after_init = {
-	.ranges = {
-		[EXECMEM_DEFAULT] = {
-#ifdef CONFIG_SPARC64
-			.start = MODULES_VADDR,
-			.end = MODULES_END,
-#else
-			.start = VMALLOC_START,
-			.end = VMALLOC_END,
-#endif
-			.alignment = 1,
-		},
-	},
-};
-
-struct execmem_info __init *execmem_arch_setup(void)
-{
-	execmem_info.ranges[EXECMEM_DEFAULT].pgprot = PAGE_KERNEL;
-
-	return &execmem_info;
-}
 
 /* Make generic code ignore STT_REGISTER dummy undefined symbols.  */
 int module_frob_arch_sections(Elf_Ehdr *hdr,
