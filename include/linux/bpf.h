@@ -226,6 +226,7 @@ struct btf_field_graph_root {
 struct btf_field {
 	u32 offset;
 	u32 size;
+	u32 nelems;
 	enum btf_field_type type;
 	union {
 		struct btf_field_kptr kptr;

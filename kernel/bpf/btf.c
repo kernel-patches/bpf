@@ -3289,6 +3289,7 @@ enum {
 struct btf_field_info {
 	enum btf_field_type type;
 	u32 off;
+	u32 nelems;
 	union {
 		struct {
 			u32 type_id;
@@ -3548,6 +3549,7 @@ static int btf_find_struct_field(const struct btf *btf,
 			continue;
 		if (idx >= info_cnt)
 			return -E2BIG;
+		info[idx].nelems = 1;
 		++idx;
 	}
 	return idx;
@@ -3565,6 +3567,19 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 	for_each_vsi(i, t, vsi) {
 		const struct btf_type *var = btf_type_by_id(btf, vsi->type);
 		const struct btf_type *var_type = btf_type_by_id(btf, var->type);
+		const struct btf_array *array;
+		u32 j, nelems = 1;
+
+		/* Walk into array types to find the element type and the
+		 * number of elements in the (flattened) array.
+		 */
+		for (j = 0; j < MAX_RESOLVE_DEPTH && btf_type_is_array(var_type); j++) {
+			array = btf_array(var_type);
+			nelems *= array->nelems;
+			var_type = btf_type_by_id(btf, array->type);
+		}
+		if (nelems == 0)
+			continue;
 
 		field_type = btf_get_field_type(__btf_name_by_offset(btf, var_type->name_off),
 						field_mask, &seen_mask, &align, &sz);
@@ -3574,7 +3589,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			return field_type;
 
 		off = vsi->offset;
-		if (vsi->size != sz)
+		if (vsi->size != sz * nelems)
 			continue;
 		if (off % align)
 			continue;
@@ -3582,9 +3597,11 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		switch (field_type) {
 		case BPF_SPIN_LOCK:
 		case BPF_TIMER:
+		case BPF_REFCOUNT:
 		case BPF_LIST_NODE:
 		case BPF_RB_NODE:
-		case BPF_REFCOUNT:
+			if (nelems != 1)
+				continue;
 			ret = btf_find_struct(btf, var_type, off, sz, field_type,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3615,7 +3632,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			continue;
 		if (idx >= info_cnt)
 			return -E2BIG;
-		++idx;
+		info[idx++].nelems = nelems;
 	}
 	return idx;
 }
@@ -3834,6 +3851,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		rec->fields[i].offset = info_arr[i].off;
 		rec->fields[i].type = info_arr[i].type;
 		rec->fields[i].size = field_type_size;
+		rec->fields[i].nelems = 1;
 
 		switch (info_arr[i].type) {
 		case BPF_SPIN_LOCK:
