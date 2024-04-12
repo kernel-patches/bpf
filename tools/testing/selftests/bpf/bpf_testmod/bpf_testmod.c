@@ -10,11 +10,21 @@
 #include <linux/percpu-defs.h>
 #include <linux/sysfs.h>
 #include <linux/tracepoint.h>
+#include <linux/net.h>
+#include <linux/socket.h>
+#include <linux/nsproxy.h>
+#include <linux/inet.h>
+#include <linux/in.h>
+#include <linux/in6.h>
+#include <linux/un.h>
+#include <net/sock.h>
 #include "bpf_testmod.h"
 #include "bpf_testmod_kfunc.h"
 
 #define CREATE_TRACE_POINTS
 #include "bpf_testmod-events.h"
+
+#define CONNECT_TIMEOUT_SEC 1
 
 typedef int (*func_proto_typedef)(long);
 typedef int (*func_proto_typedef_nested1)(func_proto_typedef);
@@ -22,6 +32,7 @@ typedef int (*func_proto_typedef_nested2)(func_proto_typedef_nested1);
 
 DEFINE_PER_CPU(int, bpf_testmod_ksym_percpu) = 123;
 long bpf_testmod_test_struct_arg_result;
+static struct socket *sock;
 
 struct bpf_testmod_struct_arg_1 {
 	int a;
@@ -494,6 +505,124 @@ __bpf_kfunc static u32 bpf_kfunc_call_test_static_unused_arg(u32 arg, u32 unused
 	return arg;
 }
 
+__bpf_kfunc int bpf_kfunc_init_sock(struct init_sock_args *args)
+{
+	int proto;
+
+	if (sock)
+		pr_warn("%s called without releasing old sock", __func__);
+
+	switch (args->af) {
+	case AF_INET:
+	case AF_INET6:
+		proto = args->type == SOCK_STREAM ? IPPROTO_TCP : IPPROTO_UDP;
+		break;
+	case AF_UNIX:
+		proto = PF_UNIX;
+		break;
+	default:
+		pr_err("invalid address family %d\n", args->af);
+		return -EINVAL;
+	}
+
+	return sock_create_kern(&init_net, args->af, args->type, proto, &sock);
+}
+
+__bpf_kfunc void bpf_kfunc_close_sock(void)
+{
+	if (sock) {
+		sock_release(sock);
+		sock = NULL;
+	}
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_connect(struct addr_args *args)
+{
+	/* Set timeout for call to kernel_connect() to prevent it from hanging,
+	 * and consider the connection attempt failed if it returns
+	 * -EINPROGRESS.
+	 */
+	sock->sk->sk_sndtimeo = CONNECT_TIMEOUT_SEC * HZ;
+
+	return kernel_connect(sock, (struct sockaddr *)&args->addr,
+			      args->addrlen, 0);
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_bind(struct addr_args *args)
+{
+	return kernel_bind(sock, (struct sockaddr *)&args->addr, args->addrlen);
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_listen(void)
+{
+	return kernel_listen(sock, 128);
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_sendmsg(struct sendmsg_args *args)
+{
+	struct msghdr msg = {
+		.msg_name	= &args->addr.addr,
+		.msg_namelen	= args->addr.addrlen,
+	};
+	struct kvec iov;
+	int err;
+
+	iov.iov_base = args->msg;
+	iov.iov_len  = args->msglen;
+
+	err = kernel_sendmsg(sock, &msg, &iov, 1, args->msglen);
+	args->addr.addrlen = msg.msg_namelen;
+
+	return err;
+}
+
+__bpf_kfunc int bpf_kfunc_call_sock_sendmsg(struct sendmsg_args *args)
+{
+	struct msghdr msg = {
+		.msg_name	= &args->addr.addr,
+		.msg_namelen	= args->addr.addrlen,
+	};
+	struct kvec iov;
+	int err;
+
+	iov.iov_base = args->msg;
+	iov.iov_len  = args->msglen;
+
+	iov_iter_kvec(&msg.msg_iter, ITER_SOURCE, &iov, 1, args->msglen);
+	err = sock_sendmsg(sock, &msg);
+	args->addr.addrlen = msg.msg_namelen;
+
+	return err;
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_getsockname(struct addr_args *args)
+{
+	int err;
+
+	err = kernel_getsockname(sock, (struct sockaddr *)&args->addr);
+	if (err < 0)
+		goto out;
+
+	args->addrlen = err;
+	err = 0;
+out:
+	return err;
+}
+
+__bpf_kfunc int bpf_kfunc_call_kernel_getpeername(struct addr_args *args)
+{
+	int err;
+
+	err = kernel_getpeername(sock, (struct sockaddr *)&args->addr);
+	if (err < 0)
+		goto out;
+
+	args->addrlen = err;
+	err = 0;
+out:
+	return err;
+}
+
 BTF_KFUNCS_START(bpf_testmod_check_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_testmod_test_mod_kfunc)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test1)
@@ -520,6 +649,15 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ref, KF_TRUSTED_ARGS | KF_RCU)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_destructive, KF_DESTRUCTIVE)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_static_unused_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_offset)
+BTF_ID_FLAGS(func, bpf_kfunc_init_sock)
+BTF_ID_FLAGS(func, bpf_kfunc_close_sock)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_connect)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_bind)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_listen)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_sendmsg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_sock_sendmsg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_getsockname)
+BTF_ID_FLAGS(func, bpf_kfunc_call_kernel_getpeername)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
 static int bpf_testmod_ops_init(struct btf *btf)
@@ -650,6 +788,7 @@ static int bpf_testmod_init(void)
 		return ret;
 	if (bpf_fentry_test1(0) < 0)
 		return -EINVAL;
+	sock = NULL;
 	return sysfs_create_bin_file(kernel_kobj, &bin_attr_bpf_testmod_file);
 }
 
