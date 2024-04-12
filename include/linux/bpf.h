@@ -390,6 +390,9 @@ static inline u32 btf_field_type_align(enum btf_field_type type)
 
 static inline void bpf_obj_init_field(const struct btf_field *field, void *addr)
 {
+	u32 elem_size;
+	int i;
+
 	memset(addr, 0, field->size);
 
 	switch (field->type) {
@@ -400,6 +403,10 @@ static inline void bpf_obj_init_field(const struct btf_field *field, void *addr)
 		RB_CLEAR_NODE((struct rb_node *)addr);
 		break;
 	case BPF_LIST_HEAD:
+		elem_size = field->size / field->nelems;
+		for (i = 0; i < field->nelems; i++, addr += elem_size)
+			INIT_LIST_HEAD((struct list_head *)addr);
+		break;
 	case BPF_LIST_NODE:
 		INIT_LIST_HEAD((struct list_head *)addr);
 		break;

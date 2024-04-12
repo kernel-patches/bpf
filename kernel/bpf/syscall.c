@@ -672,6 +672,8 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 		const struct btf_field *field = &fields[i];
 		void *field_ptr = obj + field->offset;
 		void *xchgd_field;
+		u32 elem_size = field->size / field->nelems;
+		int j;
 
 		switch (fields[i].type) {
 		case BPF_SPIN_LOCK:
@@ -680,35 +682,42 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			bpf_timer_cancel_and_free(field_ptr);
 			break;
 		case BPF_KPTR_UNREF:
-			WRITE_ONCE(*(u64 *)field_ptr, 0);
+			for (j = 0; j < field->nelems; j++, field_ptr += elem_size)
+				WRITE_ONCE(*(u64 *)field_ptr, 0);
 			break;
 		case BPF_KPTR_REF:
 		case BPF_KPTR_PERCPU:
-			xchgd_field = (void *)xchg((unsigned long *)field_ptr, 0);
-			if (!xchgd_field)
-				break;
-
-			if (!btf_is_kernel(field->kptr.btf)) {
+			if (!btf_is_kernel(field->kptr.btf))
 				pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,
 									   field->kptr.btf_id);
-				migrate_disable();
-				__bpf_obj_drop_impl(xchgd_field, pointee_struct_meta ?
-								 pointee_struct_meta->record : NULL,
-								 fields[i].type == BPF_KPTR_PERCPU);
-				migrate_enable();
-			} else {
-				field->kptr.dtor(xchgd_field);
+
+			for (j = 0; j < field->nelems; j++, field_ptr += elem_size) {
+				xchgd_field = (void *)xchg((unsigned long *)field_ptr, 0);
+				if (!xchgd_field)
+					continue;
+
+				if (!btf_is_kernel(field->kptr.btf)) {
+					migrate_disable();
+					__bpf_obj_drop_impl(xchgd_field, pointee_struct_meta ?
+							    pointee_struct_meta->record : NULL,
+							    fields[i].type == BPF_KPTR_PERCPU);
+					migrate_enable();
+				} else {
+					field->kptr.dtor(xchgd_field);
+				}
 			}
 			break;
 		case BPF_LIST_HEAD:
 			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
-			bpf_list_head_free(field, field_ptr, obj + rec->spin_lock_off);
+			for (j = 0; j < field->nelems; j++, field_ptr += elem_size)
+				bpf_list_head_free(field, field_ptr, obj + rec->spin_lock_off);
 			break;
 		case BPF_RB_ROOT:
 			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
-			bpf_rb_root_free(field, field_ptr, obj + rec->spin_lock_off);
+			for (j = 0; j < field->nelems; j++, field_ptr += elem_size)
+				bpf_rb_root_free(field, field_ptr, obj + rec->spin_lock_off);
 			break;
 		case BPF_LIST_NODE:
 		case BPF_RB_NODE:
