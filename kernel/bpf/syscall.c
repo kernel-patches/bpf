@@ -516,11 +516,16 @@ int bpf_map_alloc_pages(const struct bpf_map *map, gfp_t gfp, int nid,
 static int btf_field_cmp(const void *a, const void *b)
 {
 	const struct btf_field *f1 = a, *f2 = b;
+	int gt = 1, lt = -1;
 
+	if (f2->nelems == 0) {
+		swap(f1, f2);
+		swap(gt, lt);
+	}
 	if (f1->offset < f2->offset)
-		return -1;
-	else if (f1->offset > f2->offset)
-		return 1;
+		return lt;
+	else if (f1->offset >= f2->offset + f2->size)
+		return gt;
 	return 0;
 }
 
@@ -528,11 +533,18 @@ struct btf_field *btf_record_find(const struct btf_record *rec, u32 offset,
 				  u32 field_mask)
 {
 	struct btf_field *field;
+	struct btf_field key = {
+		.offset = offset,
+		.size = 0,	/* as a label for this key */
+	};
 
 	if (IS_ERR_OR_NULL(rec) || !(rec->field_mask & field_mask))
 		return NULL;
-	field = bsearch(&offset, rec->fields, rec->cnt, sizeof(rec->fields[0]), btf_field_cmp);
+	field = bsearch(&key, rec->fields, rec->cnt, sizeof(rec->fields[0]), btf_field_cmp);
 	if (!field || !(field->type & field_mask))
+		return NULL;
+	if ((offset - field->offset) % (field->size / field->nelems))
+		/* not aligned with an array element */
 		return NULL;
 	return field;
 }
