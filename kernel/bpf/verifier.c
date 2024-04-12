@@ -5349,18 +5349,19 @@ static u32 btf_ld_kptr_type(struct bpf_verifier_env *env, struct btf_field *kptr
 }
 
 static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
-				 int value_regno, int insn_idx,
+				 u32 offset, int value_regno, int insn_idx,
 				 struct btf_field *kptr_field)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	int class = BPF_CLASS(insn->code);
-	struct bpf_reg_state *val_reg;
+	struct bpf_reg_state *val_reg, *reg;
 
 	/* Things we already checked for in check_map_access and caller:
 	 *  - Reject cases where variable offset may touch kptr
 	 *  - size of access (must be BPF_DW)
 	 *  - tnum_is_const(reg->var_off)
-	 *  - kptr_field->offset == off + reg->var_off.value
+	 *  - kptr_field->offset + kptr_field->size * i / kptr_field->nelems
+	 *    == off + reg->var_off.value where n is an index into the array
 	 */
 	/* Only BPF_[LDX,STX,ST] | BPF_MEM | BPF_DW is supported */
 	if (BPF_MODE(insn->code) != BPF_MEM) {
@@ -5393,8 +5394,9 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 			return -EACCES;
 	} else if (class == BPF_ST) {
 		if (insn->imm) {
-			verbose(env, "BPF_ST imm must be 0 when storing to kptr at off=%u\n",
-				kptr_field->offset);
+			reg = reg_state(env, regno);
+			verbose(env, "BPF_ST imm must be 0 when storing to kptr at off=%llu\n",
+				reg->var_off.value + offset);
 			return -EACCES;
 		}
 	} else {
@@ -6784,7 +6786,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			kptr_field = btf_record_find(reg->map_ptr->record,
 						     off + reg->var_off.value, BPF_KPTR);
 		if (kptr_field) {
-			err = check_map_kptr_access(env, regno, value_regno, insn_idx, kptr_field);
+			err = check_map_kptr_access(env, regno, off, value_regno,
+						    insn_idx, kptr_field);
 		} else if (t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
