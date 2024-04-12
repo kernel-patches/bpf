@@ -5426,7 +5426,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 	rec = map->record;
 	for (i = 0; i < rec->cnt; i++) {
 		struct btf_field *field = &rec->fields[i];
-		u32 p = field->offset;
+		u32 p = field->offset, var_p, elem_size;
 
 		/* If any part of a field  can be touched by load/store, reject
 		 * this program. To check that [x1, x2) overlaps with [y1, y2),
@@ -5446,7 +5446,10 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 					verbose(env, "kptr access cannot have variable offset\n");
 					return -EACCES;
 				}
-				if (p != off + reg->var_off.value) {
+				var_p = off + reg->var_off.value;
+				elem_size = field->size / field->nelems;
+				if (var_p < p || var_p >= p + field->size ||
+				    (var_p - p) % elem_size) {
 					verbose(env, "kptr access misaligned expected=%u off=%llu\n",
 						p, off + reg->var_off.value);
 					return -EACCES;
