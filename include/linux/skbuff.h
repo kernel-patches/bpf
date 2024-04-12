@@ -827,7 +827,8 @@ enum skb_tstamp_type {
  *	@tstamp_type: When set, skb->tstamp has the
  *		delivery_time in mono clock base (i.e. EDT).  Otherwise, the
  *		skb->tstamp has the (rcv) timestamp at ingress and
- *		delivery_time at egress.
+ *		delivery_time at egress or skb->tstamp defined by skb->sk->sk_clockid
+ *		coming from userspace
  *	@napi_id: id of the NAPI struct this skb came from
  *	@sender_cpu: (aka @napi_id) source CPU in XPS
  *	@alloc_cpu: CPU which did the skb allocation.
@@ -955,7 +956,7 @@ struct sk_buff {
 	/* private: */
 	__u8			__mono_tc_offset[0];
 	/* public: */
-	__u8			tstamp_type:1;	/* See SKB_MONO_DELIVERY_TIME_MASK */
+	__u8			tstamp_type:2;	/* See SKB_MONO_DELIVERY_TIME_MASK */
 #ifdef CONFIG_NET_XGRESS
 	__u8			tc_at_ingress:1;	/* See TC_AT_INGRESS_MASK */
 	__u8			tc_skip_classify:1;
@@ -1090,10 +1091,10 @@ struct sk_buff {
  */
 #ifdef __BIG_ENDIAN_BITFIELD
 #define SKB_MONO_DELIVERY_TIME_MASK	(1 << 7)
-#define TC_AT_INGRESS_MASK		(1 << 6)
+#define TC_AT_INGRESS_MASK		(1 << 5)
 #else
 #define SKB_MONO_DELIVERY_TIME_MASK	(1 << 0)
-#define TC_AT_INGRESS_MASK		(1 << 1)
+#define TC_AT_INGRESS_MASK		(1 << 2)
 #endif
 #define SKB_BF_MONO_TC_OFFSET		offsetof(struct sk_buff, __mono_tc_offset)
 
@@ -4271,6 +4272,16 @@ static inline void skb_set_delivery_time(struct sk_buff *skb, ktime_t kt,
 	case CLOCK_MONO:
 		skb->tstamp_type = kt && tstamp_type;
 		break;
+	/* if any other time base, must be from userspace
+	 * so set userspace tstamp_type bit
+	 * See skbuff tstamp_type:2
+	 * 0x0 => real timestamp_type
+	 * 0x1 => mono timestamp_type
+	 * 0x2 => timestamp_type set from userspace
+	 */
+	default:
+		if (kt && tstamp_type)
+			skb->tstamp_type = 0x2;
 	}
 }
 
