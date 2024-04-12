@@ -3835,7 +3835,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 	rec->timer_off = -EINVAL;
 	rec->refcount_off = -EINVAL;
 	for (i = 0; i < cnt; i++) {
-		field_type_size = btf_field_type_size(info_arr[i].type);
+		field_type_size = btf_field_type_size(info_arr[i].type) * info_arr[i].nelems;
 		if (info_arr[i].off + field_type_size > value_size) {
 			WARN_ONCE(1, "verifier bug off %d size %d", info_arr[i].off, value_size);
 			ret = -EFAULT;
@@ -3851,7 +3851,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		rec->fields[i].offset = info_arr[i].off;
 		rec->fields[i].type = info_arr[i].type;
 		rec->fields[i].size = field_type_size;
-		rec->fields[i].nelems = 1;
+		rec->fields[i].nelems = info_arr[i].nelems;
 
 		switch (info_arr[i].type) {
 		case BPF_SPIN_LOCK:
