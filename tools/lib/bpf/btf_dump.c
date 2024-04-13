@@ -67,6 +67,7 @@ struct btf_dump_data {
 	bool compact;
 	bool skip_names;
 	bool emit_zeroes;
+	bool print_strings;
 	__u8 indent_lvl;	/* base indent level */
 	char indent_str[BTF_DATA_INDENT_STR_LEN];
 	/* below are used during iteration */
@@ -2021,6 +2022,21 @@ static int btf_dump_var_data(struct btf_dump *d,
 	return btf_dump_dump_type_data(d, NULL, t, type_id, data, 0, 0);
 }
 
+static bool btf_dump_isprint_str(const char *data, unsigned int len)
+{
+	unsigned int i;
+
+	for (i = 0; i < len; ++i) {
+		if (data[i] == '\0')
+			return true;
+
+		if (!isprint(data[i]))
+			return false;
+	}
+
+	return false;
+}
+
 static int btf_dump_array_data(struct btf_dump *d,
 			       const struct btf_type *t,
 			       __u32 id,
@@ -2047,8 +2063,14 @@ static int btf_dump_array_data(struct btf_dump *d,
 		 * char arrays, so if size is 1 and element is
 		 * printable as a char, we'll do that.
 		 */
-		if (elem_size == 1)
+		if (elem_size == 1) {
 			d->typed_dump->is_array_char = true;
+			if (d->typed_dump->print_strings &&
+					btf_dump_isprint_str(data, array->nelems)) {
+				btf_dump_type_values(d, "\"%s\"", data);
+				return 0;
+			}
+		}
 	}
 
 	/* note that we increment depth before calling btf_dump_print() below;
@@ -2533,6 +2555,7 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 	d->typed_dump->compact = OPTS_GET(opts, compact, false);
 	d->typed_dump->skip_names = OPTS_GET(opts, skip_names, false);
 	d->typed_dump->emit_zeroes = OPTS_GET(opts, emit_zeroes, false);
+	d->typed_dump->print_strings = OPTS_GET(opts, print_strings, false);
 
 	ret = btf_dump_dump_type_data(d, NULL, t, id, data, 0, 0);
 
