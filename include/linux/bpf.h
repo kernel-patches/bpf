@@ -1225,12 +1225,31 @@ struct bpf_dispatcher {
 #define __bpfcall __nocfi
 #endif
 
-static __always_inline __bpfcall unsigned int bpf_dispatcher_nop_func(
+static notrace __used __bpfcall unsigned int bpf_dispatcher_nop_func(
 	const void *ctx,
 	const struct bpf_insn *insnsi,
 	bpf_func_t bpf_func)
 {
 	return bpf_func(ctx, insnsi);
+}
+
+struct bpf_tail_call_run_ctx {
+	const void *ctx;
+	u32 *tail_call_cnt;
+};
+
+static notrace __used __bpfcall unsigned int bpf_dispatcher_tail_call_func(
+	const void *ctx,
+	const struct bpf_insn *insnsi,
+	bpf_func_t bpf_func)
+{
+	struct bpf_tail_call_run_ctx run_ctx = {};
+	u32 tail_call_cnt = 0;
+
+	run_ctx.ctx = ctx;
+	run_ctx.tail_call_cnt = &tail_call_cnt;
+
+	return bpf_func(&run_ctx, insnsi);
 }
 
 /* the implementation of the opaque uapi struct bpf_dynptr */
@@ -1425,6 +1444,10 @@ struct btf_mod_pair {
 
 struct bpf_kfunc_desc_tab;
 
+typedef unsigned int (*bpf_dispatcher_func)(const void *ctx,
+					    const struct bpf_insn *insnsi,
+					    bpf_func_t bpf_func);
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1485,6 +1508,7 @@ struct bpf_prog_aux {
 	struct bpf_map *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	char name[BPF_OBJ_NAME_LEN];
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
+	bpf_dispatcher_func dfunc;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
