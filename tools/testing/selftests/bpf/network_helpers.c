@@ -258,7 +258,7 @@ static int connect_fd_to_addr(int fd,
 	return 0;
 }
 
-int connect_to_addr(const struct sockaddr_storage *addr, socklen_t addrlen, int type)
+int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen)
 {
 	int fd;
 
