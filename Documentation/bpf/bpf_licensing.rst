@@ -89,4 +89,8 @@ Packaging BPF programs with user space applications
 
 Generally, proprietary-licensed applications and GPL licensed BPF programs
 written for the Linux kernel in the same package can co-exist because they are
-separate executable processes. This applies to both cBPF and eBPF programs.
+separate executable processes. In particular, BPF code bundled inside a libbpf
+skeleton header may have a different license than that of its surrounding
+skeleton. In other words, the license of the bundled BPF code does not alter the
+license of the skeleton header nor of a program including the header. This
+paragraph applies to both cBPF and eBPF programs.
