@@ -150,11 +150,13 @@ void inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 }
 EXPORT_SYMBOL_GPL(inet_twsk_hashdance);
 
-static void tw_timer_handler(struct timer_list *t)
+static void tw_expiry_workfn(struct work_struct *work)
 {
-	struct inet_timewait_sock *tw = from_timer(tw, t, tw_timer);
-
+	struct inet_timewait_sock *tw = container_of(
+		work, struct inet_timewait_sock, tw_expiry_work.work);
+	local_bh_disable();
 	inet_twsk_kill(tw);
+	local_bh_enable();
 }
 
 struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
@@ -192,7 +194,7 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 		tw->tw_prot	    = sk->sk_prot_creator;
 		atomic64_set(&tw->tw_cookie, atomic64_read(&sk->sk_cookie));
 		twsk_net_set(tw, sock_net(sk));
-		timer_setup(&tw->tw_timer, tw_timer_handler, TIMER_PINNED);
+		INIT_DELAYED_WORK(&tw->tw_expiry_work, tw_expiry_workfn);
 		/*
 		 * Because we use RCU lookups, we should not set tw_refcnt
 		 * to a non null value before everything is setup for this
@@ -217,7 +219,7 @@ EXPORT_SYMBOL_GPL(inet_twsk_alloc);
  */
 void inet_twsk_deschedule_put(struct inet_timewait_sock *tw)
 {
-	if (del_timer_sync(&tw->tw_timer))
+	if (cancel_delayed_work_sync(&tw->tw_expiry_work))
 		inet_twsk_kill(tw);
 	inet_twsk_put(tw);
 }
@@ -255,10 +257,10 @@ void __inet_twsk_schedule(struct inet_timewait_sock *tw, int timeo, bool rearm)
 
 		__NET_INC_STATS(twsk_net(tw), kill ? LINUX_MIB_TIMEWAITKILLED :
 						     LINUX_MIB_TIMEWAITED);
-		BUG_ON(mod_timer(&tw->tw_timer, jiffies + timeo));
+		BUG_ON(!queue_delayed_work(system_unbound_wq, &tw->tw_expiry_work, timeo));
 		refcount_inc(&tw->tw_dr->tw_refcount);
 	} else {
-		mod_timer_pending(&tw->tw_timer, jiffies + timeo);
+		mod_delayed_work(system_unbound_wq, &tw->tw_expiry_work, timeo);
 	}
 }
 EXPORT_SYMBOL_GPL(__inet_twsk_schedule);

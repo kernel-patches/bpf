@@ -72,7 +72,7 @@ struct inet_timewait_sock {
 				tw_tos		: 8;
 	u32			tw_txhash;
 	u32			tw_priority;
-	struct timer_list	tw_timer;
+	struct delayed_work     tw_expiry_work;
 	struct inet_bind_bucket	*tw_tb;
 	struct inet_bind2_bucket	*tw_tb2;
 };

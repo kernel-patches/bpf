@@ -444,7 +444,7 @@ static int inet_twsk_diag_fill(struct sock *sk,
 
 	r->idiag_state	      = tw->tw_substate;
 	r->idiag_timer	      = 3;
-	tmo = tw->tw_timer.expires - jiffies;
+	tmo = tw->tw_expiry_work.timer.expires - jiffies;
 	r->idiag_expires      = jiffies_delta_to_msecs(tmo);
 	r->idiag_rqueue	      = 0;
 	r->idiag_wqueue	      = 0;

@@ -2920,7 +2920,7 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 static void get_timewait4_sock(const struct inet_timewait_sock *tw,
 			       struct seq_file *f, int i)
 {
-	long delta = tw->tw_timer.expires - jiffies;
+	long delta = tw->tw_expiry_work.timer.expires - jiffies;
 	__be32 dest, src;
 	__u16 destp, srcp;
 

@@ -152,7 +152,7 @@ static int dump_tw_sock(struct seq_file *seq, struct tcp_timewait_sock *ttw,
 	__be32 dest, src;
 	long delta;
 
-	delta = tw->tw_timer.expires - bpf_jiffies64();
+	delta = tw->tw_expiry_work.timer.expires - bpf_jiffies64();
 	dest = tw->tw_daddr;
 	src  = tw->tw_rcv_saddr;
 	destp = bpf_ntohs(tw->tw_dport);

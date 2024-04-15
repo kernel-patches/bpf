@@ -2242,7 +2242,7 @@ static void get_tcp6_sock(struct seq_file *seq, struct sock *sp, int i)
 static void get_timewait6_sock(struct seq_file *seq,
 			       struct inet_timewait_sock *tw, int i)
 {
-	long delta = tw->tw_timer.expires - jiffies;
+	long delta = tw->tw_expiry_work.timer.expires - jiffies;
 	const struct in6_addr *dest, *src;
 	__u16 destp, srcp;
 
