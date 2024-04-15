@@ -185,6 +185,22 @@ close_fds:
 	return NULL;
 }
 
+int start_server_addr_opts(int type, const struct sockaddr_storage *addr, socklen_t len,
+			   const struct network_helper_opts *opts)
+{
+	return __start_server(type, 0, (struct sockaddr *)addr, len,
+			      opts->timeout_ms, 0);
+}
+
+int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t len)
+{
+	struct network_helper_opts opts = {
+		.timeout_ms = 0,
+	};
+
+	return start_server_addr_opts(type, addr, len, &opts);
+}
+
 void free_fds(int *fds, unsigned int nr_close_fds)
 {
 	if (fds) {

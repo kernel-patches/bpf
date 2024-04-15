@@ -53,6 +53,9 @@ int start_mptcp_server(int family, const char *addr, __u16 port,
 int *start_reuseport_server(int family, int type, const char *addr_str,
 			    __u16 port, int timeout_ms,
 			    unsigned int nr_listens);
+int start_server_addr_opts(int type, const struct sockaddr_storage *addr, socklen_t len,
+			   const struct network_helper_opts *opts);
+int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t len);
 void free_fds(int *fds, unsigned int nr_close_fds);
 int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t len);
 int connect_to_fd(int server_fd, int timeout_ms);
