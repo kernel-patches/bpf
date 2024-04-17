@@ -13695,6 +13695,90 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 	__update_reg_bounds(dst_reg);
 }
 
+static bool is_const_reg_and_valid(struct bpf_reg_state reg, bool alu32,
+				   bool *valid)
+{
+	s64 smin_val = reg.smin_value;
+	s64 smax_val = reg.smax_value;
+	u64 umin_val = reg.umin_value;
+	u64 umax_val = reg.umax_value;
+
+	s32 s32_min_val = reg.s32_min_value;
+	s32 s32_max_val = reg.s32_max_value;
+	u32 u32_min_val = reg.u32_min_value;
+	u32 u32_max_val = reg.u32_max_value;
+
+	bool known = alu32 ? tnum_subreg_is_const(reg.var_off) :
+			     tnum_is_const(reg.var_off);
+
+	if (alu32) {
+		if ((known &&
+		     (s32_min_val != s32_max_val || u32_min_val != u32_max_val)) ||
+		      s32_min_val > s32_max_val || u32_min_val > u32_max_val)
+			*valid = false;
+	} else {
+		if ((known &&
+		     (smin_val != smax_val || umin_val != umax_val)) ||
+		    smin_val > smax_val || umin_val > umax_val)
+			*valid = false;
+	}
+
+	return known;
+}
+
+enum {
+	COMPUTABLE_RANGE    =  1,
+	UNCOMPUTABLE_RANGE  =  0,
+	UNDEFINED_BEHAVIOUR = -1,
+};
+
+static int is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
+					    struct bpf_reg_state src_reg)
+{
+	bool src_known;
+	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
+	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
+	u8 opcode = BPF_OP(insn->code);
+
+	bool valid_known = true;
+	src_known = is_const_reg_and_valid(src_reg, alu32, &valid_known);
+
+	/* Taint dst register if offset had invalid bounds
+	 * derived from e.g. dead branches.
+	 */
+	if (valid_known == false)
+		return UNCOMPUTABLE_RANGE;
+
+	switch (opcode) {
+	case BPF_ADD:
+	case BPF_SUB:
+	case BPF_AND:
+		return COMPUTABLE_RANGE;
+
+	/* Compute range for the following only if the src_reg is known.
+	 */
+	case BPF_XOR:
+	case BPF_OR:
+	case BPF_MUL:
+		return src_known ? COMPUTABLE_RANGE : UNCOMPUTABLE_RANGE;
+
+	/* Shift operators range is only computable if shift dimension operand
+	 * is known. Also, shifts greater than 31 or 63 are undefined. This
+	 * includes shifts by a negative number.
+	 */
+	case BPF_LSH:
+	case BPF_RSH:
+	case BPF_ARSH:
+		if (src_reg.umax_value >= insn_bitness)
+			return UNDEFINED_BEHAVIOUR;
+		return src_known ? COMPUTABLE_RANGE : UNCOMPUTABLE_RANGE;
+	default:
+		break;
+	}
+
+	return UNCOMPUTABLE_RANGE;
+}
+
 /* WARNING: This function does calculations on 64-bit values, but the actual
  * execution may occur on 32-bit values. Therefore, things like bitshifts
  * need extra checks in the 32-bit case.
@@ -13706,53 +13790,19 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	u8 opcode = BPF_OP(insn->code);
-	bool src_known;
-	s64 smin_val, smax_val;
-	u64 umin_val, umax_val;
-	s32 s32_min_val, s32_max_val;
-	u32 u32_min_val, u32_max_val;
-	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	int ret;
 
-	smin_val = src_reg.smin_value;
-	smax_val = src_reg.smax_value;
-	umin_val = src_reg.umin_value;
-	umax_val = src_reg.umax_value;
-
-	s32_min_val = src_reg.s32_min_value;
-	s32_max_val = src_reg.s32_max_value;
-	u32_min_val = src_reg.u32_min_value;
-	u32_max_val = src_reg.u32_max_value;
-
-	if (alu32) {
-		src_known = tnum_subreg_is_const(src_reg.var_off);
-		if ((src_known &&
-		     (s32_min_val != s32_max_val || u32_min_val != u32_max_val)) ||
-		    s32_min_val > s32_max_val || u32_min_val > u32_max_val) {
-			/* Taint dst register if offset had invalid bounds
-			 * derived from e.g. dead branches.
-			 */
-			__mark_reg_unknown(env, dst_reg);
-			return 0;
-		}
-	} else {
-		src_known = tnum_is_const(src_reg.var_off);
-		if ((src_known &&
-		     (smin_val != smax_val || umin_val != umax_val)) ||
-		    smin_val > smax_val || umin_val > umax_val) {
-			/* Taint dst register if offset had invalid bounds
-			 * derived from e.g. dead branches.
-			 */
-			__mark_reg_unknown(env, dst_reg);
-			return 0;
-		}
-	}
-
-	if (!src_known &&
-	    opcode != BPF_ADD && opcode != BPF_SUB && opcode != BPF_AND) {
+	int is_safe = is_safe_to_compute_dst_reg_range(insn, src_reg);
+	switch (is_safe) {
+	case UNCOMPUTABLE_RANGE:
 		__mark_reg_unknown(env, dst_reg);
 		return 0;
+	case UNDEFINED_BEHAVIOUR:
+		mark_reg_unknown(env, regs, insn->dst_reg);
+		return 0;
+	default:
+		break;
 	}
 
 	if (sanitize_needed(opcode)) {
@@ -13807,39 +13857,18 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		scalar_min_max_xor(dst_reg, &src_reg);
 		break;
 	case BPF_LSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_lsh(dst_reg, &src_reg);
 		else
 			scalar_min_max_lsh(dst_reg, &src_reg);
 		break;
 	case BPF_RSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_rsh(dst_reg, &src_reg);
 		else
 			scalar_min_max_rsh(dst_reg, &src_reg);
 		break;
 	case BPF_ARSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
 		if (alu32)
 			scalar32_min_max_arsh(dst_reg, &src_reg);
 		else
