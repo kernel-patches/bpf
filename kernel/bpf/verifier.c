@@ -13753,12 +13753,12 @@ static int is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_ADD:
 	case BPF_SUB:
 	case BPF_AND:
+	case BPF_XOR:
+	case BPF_OR:
 		return COMPUTABLE_RANGE;
 
 	/* Compute range for the following only if the src_reg is known.
 	 */
-	case BPF_XOR:
-	case BPF_OR:
 	case BPF_MUL:
 		return src_known ? COMPUTABLE_RANGE : UNCOMPUTABLE_RANGE;
 
