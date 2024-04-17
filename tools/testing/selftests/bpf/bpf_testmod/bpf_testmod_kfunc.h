@@ -70,7 +70,7 @@ struct init_sock_args {
 };
 
 struct addr_args {
-	char addr[sizeof(struct __kernel_sockaddr_storage)];
+	struct __kernel_sockaddr_storage addr;
 	int addrlen;
 };
 
