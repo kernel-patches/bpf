@@ -6938,6 +6938,8 @@ enum {
 					 * Arg2: # segments
 					 * Arg3: return value of
 					 *       tcp_transmit_skb (0 => success)
+					 * Arg4: TCP_SKB_CB(skb)->sacked before
+					 *       TCPCB_EVER_RETRANS marking
 					 */
 	BPF_SOCK_OPS_STATE_CB,		/* Called when TCP changes state.
 					 * Arg1: old_state

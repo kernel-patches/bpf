@@ -2660,6 +2660,14 @@ static inline int tcp_call_bpf_3arg(struct sock *sk, int op, u32 arg1, u32 arg2,
 	return tcp_call_bpf(sk, op, 3, args);
 }
 
+static inline int tcp_call_bpf_4arg(struct sock *sk, int op, u32 arg1, u32 arg2,
+				    u32 arg3, u32 arg4)
+{
+	u32 args[4] = {arg1, arg2, arg3, arg4};
+
+	return tcp_call_bpf(sk, op, 4, args);
+}
+
 #else
 static inline int tcp_call_bpf(struct sock *sk, int op, u32 nargs, u32 *args)
 {
@@ -2673,6 +2681,12 @@ static inline int tcp_call_bpf_2arg(struct sock *sk, int op, u32 arg1, u32 arg2)
 
 static inline int tcp_call_bpf_3arg(struct sock *sk, int op, u32 arg1, u32 arg2,
 				    u32 arg3)
+{
+	return -EPERM;
+}
+
+static inline int tcp_call_bpf_4arg(struct sock *sk, int op, u32 arg1, u32 arg2,
+				    u32 arg3, u32 arg4)
 {
 	return -EPERM;
 }
