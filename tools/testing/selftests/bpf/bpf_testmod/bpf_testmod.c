@@ -584,6 +584,11 @@ static void bpf_dummy_unreg(void *kdata)
 {
 }
 
+static int bpf_dummy_update(void *kdata, void *old_kdata)
+{
+	return bpf_dummy_reg(kdata);
+}
+
 static int bpf_testmod_test_1(void)
 {
 	return 0;
@@ -611,6 +616,7 @@ struct bpf_struct_ops bpf_bpf_testmod_ops = {
 	.init_member = bpf_testmod_ops_init_member,
 	.reg = bpf_dummy_reg,
 	.unreg = bpf_dummy_unreg,
+	.update = bpf_dummy_update,
 	.cfi_stubs = &__bpf_testmod_ops,
 	.name = "bpf_testmod_ops",
 	.owner = THIS_MODULE,

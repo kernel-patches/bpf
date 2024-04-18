@@ -160,6 +160,60 @@ static void test_struct_ops_incompatible(void)
 	struct_ops_module__destroy(skel);
 }
 
+/* Applications should be able to open a pinned path of a struct_ops link
+ * to get a file descriptor of the link and to update the link through the
+ * file descriptor.
+ */
+static void test_struct_ops_pinning_and_open(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_update_opts, opts);
+	struct struct_ops_module *skel;
+	int err, link_fd = -1, map_fd;
+	struct bpf_link *link;
+
+	/* Create and pin a struct_ops link */
+	skel = struct_ops_module__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	link = bpf_map__attach_struct_ops(skel->maps.testmod_1);
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops"))
+		goto cleanup;
+
+	err = bpf_link__pin(link, "/sys/fs/bpf/test_struct_ops_pinning");
+	if (!ASSERT_OK(err, "bpf_link__pin"))
+		goto cleanup;
+
+	/* Open the pinned path */
+	link_fd = open("/sys/fs/bpf/test_struct_ops_pinning", O_RDONLY);
+	bpf_link__unpin(link);
+	if (!ASSERT_GE(link_fd, 0, "open_pinned"))
+		goto cleanup;
+
+	skel->bss->test_1_result = 0;
+	skel->bss->test_2_result = 0;
+
+	map_fd = bpf_map__fd(skel->maps.testmod_1);
+	if (!ASSERT_GE(map_fd, 0, "map_fd"))
+		goto cleanup;
+
+	/* Update the link. test_1 and test_2 should be called again. */
+	err = bpf_link_update(link_fd, map_fd, &opts);
+	if (!ASSERT_OK(err, "bpf_link_update"))
+		goto cleanup;
+
+	/* Check if test_1 and test_2 have been called */
+	ASSERT_EQ(skel->bss->test_1_result, 0xdeadbeef,
+		  "bpf_link_update_test_1_result");
+	ASSERT_EQ(skel->bss->test_2_result, 5,
+		  "bpf_link_update_test_2_result");
+
+cleanup:
+	close(link_fd);
+	bpf_link__destroy(link);
+	struct_ops_module__destroy(skel);
+}
+
 void serial_test_struct_ops_module(void)
 {
 	if (test__start_subtest("test_struct_ops_load"))
@@ -168,5 +222,7 @@ void serial_test_struct_ops_module(void)
 		test_struct_ops_not_zeroed();
 	if (test__start_subtest("test_struct_ops_incompatible"))
 		test_struct_ops_incompatible();
+	if (test__start_subtest("test_struct_ops_pinning_and_open"))
+		test_struct_ops_pinning_and_open();
 }
 
