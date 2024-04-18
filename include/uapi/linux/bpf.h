@@ -6209,6 +6209,7 @@ union {					\
 enum {
 	BPF_SKB_TSTAMP_UNSPEC,
 	BPF_SKB_TSTAMP_DELIVERY_MONO,	/* tstamp has mono delivery time */
+	BPF_SKB_TSTAMP_DELIVERY_TAI,	/* tstamp has tai delivery time */
 	/* For any BPF_SKB_TSTAMP_* that the bpf prog cannot handle,
 	 * the bpf prog should handle it like BPF_SKB_TSTAMP_UNSPEC
 	 * and try to deduce it by ingress, egress or skb->sk->sk_clockid.

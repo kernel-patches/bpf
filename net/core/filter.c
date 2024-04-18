@@ -7709,6 +7709,12 @@ BPF_CALL_3(bpf_skb_set_tstamp, struct sk_buff *, skb,
 		skb->tstamp = tstamp;
 		skb->tstamp_type = SKB_CLOCK_MONO;
 		break;
+	case BPF_SKB_TSTAMP_DELIVERY_TAI:
+		if (!tstamp)
+			return -EINVAL;
+		skb->tstamp = tstamp;
+		skb->tstamp_type = SKB_CLOCK_TAI;
+		break;
 	case BPF_SKB_TSTAMP_UNSPEC:
 		if (tstamp)
 			return -EINVAL;
@@ -9370,10 +9376,16 @@ static struct bpf_insn *bpf_convert_tstamp_type_read(const struct bpf_insn *si,
 	*insn++ = BPF_LDX_MEM(BPF_B, tmp_reg, skb_reg,
 			      SKB_BF_MONO_TC_OFFSET);
 	*insn++ = BPF_JMP32_IMM(BPF_JSET, tmp_reg,
-				SKB_MONO_DELIVERY_TIME_MASK, 2);
+				SKB_MONO_DELIVERY_TIME_MASK | SKB_TAI_DELIVERY_TIME_MASK, 2);
+	*insn++ = BPF_JMP32_IMM(BPF_JSET, tmp_reg,
+				SKB_MONO_DELIVERY_TIME_MASK, 3);
+	*insn++ = BPF_JMP32_IMM(BPF_JSET, tmp_reg,
+				SKB_TAI_DELIVERY_TIME_MASK, 4);
 	*insn++ = BPF_MOV32_IMM(value_reg, BPF_SKB_TSTAMP_UNSPEC);
 	*insn++ = BPF_JMP_A(1);
 	*insn++ = BPF_MOV32_IMM(value_reg, BPF_SKB_TSTAMP_DELIVERY_MONO);
+	*insn++ = BPF_JMP_A(1);
+	*insn++ = BPF_MOV32_IMM(value_reg, BPF_SKB_TSTAMP_DELIVERY_TAI);
 
 	return insn;
 }
@@ -9416,10 +9428,26 @@ static struct bpf_insn *bpf_convert_tstamp_read(const struct bpf_prog *prog,
 		__u8 tmp_reg = BPF_REG_AX;
 
 		*insn++ = BPF_LDX_MEM(BPF_B, tmp_reg, skb_reg, SKB_BF_MONO_TC_OFFSET);
+		/*check if all three bits are set*/
 		*insn++ = BPF_ALU32_IMM(BPF_AND, tmp_reg,
-					TC_AT_INGRESS_MASK | SKB_MONO_DELIVERY_TIME_MASK);
-		*insn++ = BPF_JMP32_IMM(BPF_JNE, tmp_reg,
-					TC_AT_INGRESS_MASK | SKB_MONO_DELIVERY_TIME_MASK, 2);
+					TC_AT_INGRESS_MASK | SKB_MONO_DELIVERY_TIME_MASK |
+					SKB_TAI_DELIVERY_TIME_MASK);
+		/*if all 3 bits are set jump 3 instructions and clear the register */
+		*insn++ = BPF_JMP32_IMM(BPF_JEQ, tmp_reg,
+					TC_AT_INGRESS_MASK | SKB_MONO_DELIVERY_TIME_MASK |
+					SKB_TAI_DELIVERY_TIME_MASK, 4);
+		/*Now check Mono is set with ingress mask if so clear */
+		*insn++ = BPF_JMP32_IMM(BPF_JEQ, tmp_reg,
+					TC_AT_INGRESS_MASK | SKB_MONO_DELIVERY_TIME_MASK, 3);
+		/*Now Check tai is set with ingress mask if so clear */
+		*insn++ = BPF_JMP32_IMM(BPF_JEQ, tmp_reg,
+					TC_AT_INGRESS_MASK | SKB_TAI_DELIVERY_TIME_MASK, 2);
+		/*Now Check tai and mono are set if so clear */
+		*insn++ = BPF_JMP32_IMM(BPF_JEQ, tmp_reg,
+					SKB_MONO_DELIVERY_TIME_MASK |
+					SKB_TAI_DELIVERY_TIME_MASK, 1);
+		/* goto <store> */
+		*insn++ = BPF_JMP_A(2);
 		/* skb->tc_at_ingress && skb->tstamp_type:1,
 		 * read 0 as the (rcv) timestamp.
 		 */
@@ -9454,9 +9482,11 @@ static struct bpf_insn *bpf_convert_tstamp_write(const struct bpf_prog *prog,
 		/* Writing __sk_buff->tstamp as ingress, goto <clear> */
 		*insn++ = BPF_JMP32_IMM(BPF_JSET, tmp_reg, TC_AT_INGRESS_MASK, 1);
 		/* goto <store> */
-		*insn++ = BPF_JMP_A(2);
+		*insn++ = BPF_JMP_A(3);
 		/* <clear>: mono_delivery_time or (skb->tstamp_type:1) */
 		*insn++ = BPF_ALU32_IMM(BPF_AND, tmp_reg, ~SKB_MONO_DELIVERY_TIME_MASK);
+		/* <clear>: tai delivery_time or (skb->tstamp_type:2) */
+		*insn++ = BPF_ALU32_IMM(BPF_AND, tmp_reg, ~SKB_TAI_DELIVERY_TIME_MASK);
 		*insn++ = BPF_STX_MEM(BPF_B, skb_reg, tmp_reg, SKB_BF_MONO_TC_OFFSET);
 	}
 #endif

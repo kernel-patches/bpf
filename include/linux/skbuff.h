@@ -703,14 +703,17 @@ typedef unsigned char *sk_buff_data_t;
 #endif
 
 /**
- * tstamp_type:1 can take 2 values each
+ * tstamp_type:2 can take 4 values each
  * represented by time base in skb
  * 0x0 => real timestamp_type
  * 0x1 => mono timestamp_type
+ * 0x2 => tai timestamp_type
+ * 0x3 => undefined timestamp_type
  */
 enum skb_tstamp_type {
 	SKB_CLOCK_REAL,	/* Time base is skb is REALTIME */
 	SKB_CLOCK_MONO,	/* Time base is skb is MONOTONIC */
+	SKB_CLOCK_TAI,	/* Time base in skb is TAI */
 };
 
 /**
@@ -833,7 +836,8 @@ enum skb_tstamp_type {
  *	@tstamp_type: When set, skb->tstamp has the
  *		delivery_time in mono clock base (i.e. EDT).  Otherwise, the
  *		skb->tstamp has the (rcv) timestamp at ingress and
- *		delivery_time at egress.
+ *		delivery_time at egress or skb->tstamp defined by skb->sk->sk_clockid
+ *		coming from userspace
  *	@napi_id: id of the NAPI struct this skb came from
  *	@sender_cpu: (aka @napi_id) source CPU in XPS
  *	@alloc_cpu: CPU which did the skb allocation.
@@ -961,7 +965,7 @@ struct sk_buff {
 	/* private: */
 	__u8			__mono_tc_offset[0];
 	/* public: */
-	__u8			tstamp_type:1;	/* See SKB_CLOCK_*_MASK */
+	__u8			tstamp_type:2;	/* See skb_tstamp_type enum */
 #ifdef CONFIG_NET_XGRESS
 	__u8			tc_at_ingress:1;	/* See TC_AT_INGRESS_MASK */
 	__u8			tc_skip_classify:1;
@@ -1096,10 +1100,12 @@ struct sk_buff {
  */
 #ifdef __BIG_ENDIAN_BITFIELD
 #define SKB_MONO_DELIVERY_TIME_MASK	(1 << 7)
-#define TC_AT_INGRESS_MASK		(1 << 6)
+#define SKB_TAI_DELIVERY_TIME_MASK	(1 << 6)
+#define TC_AT_INGRESS_MASK		(1 << 5)
 #else
 #define SKB_MONO_DELIVERY_TIME_MASK	(1 << 0)
-#define TC_AT_INGRESS_MASK		(1 << 1)
+#define SKB_TAI_DELIVERY_TIME_MASK	(1 << 1)
+#define TC_AT_INGRESS_MASK		(1 << 2)
 #endif
 #define SKB_BF_MONO_TC_OFFSET		offsetof(struct sk_buff, __mono_tc_offset)
 
@@ -4282,6 +4288,11 @@ static inline void skb_set_delivery_time(struct sk_buff *skb, ktime_t kt,
 	case CLOCK_MONOTONIC:
 		skb->tstamp_type = SKB_CLOCK_MONO;
 		break;
+	case CLOCK_TAI:
+		skb->tstamp_type = SKB_CLOCK_TAI;
+		break;
+	default:
+		WARN_ONCE(true, "clockid %d not supported", tstamp_type);
 	}
 }
 
