@@ -1198,3 +1198,13 @@ void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map
 
 	info->btf_vmlinux_id = btf_obj_id(st_map->btf);
 }
+
+int bpffs_struct_ops_link_open(struct inode *inode, struct file *filp)
+{
+	struct bpf_struct_ops_link *link = inode->i_private;
+
+	/* Paired with bpf_link_put_direct() in bpf_link_release(). */
+	bpf_link_inc(&link->link);
+	filp->private_data = link;
+	return 0;
+}

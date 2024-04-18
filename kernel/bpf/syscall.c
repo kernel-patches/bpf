@@ -3121,7 +3121,21 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 }
 #endif
 
-static const struct file_operations bpf_link_fops = {
+/* Support opening pinned links */
+static int bpf_link_open(struct inode *inode, struct file *filp)
+{
+#ifdef CONFIG_BPF_JIT
+	struct bpf_link *link = inode->i_private;
+
+	if (link->type == BPF_LINK_TYPE_STRUCT_OPS)
+		return bpffs_struct_ops_link_open(inode, filp);
+#endif
+
+	return -EOPNOTSUPP;
+}
+
+const struct file_operations bpf_link_fops = {
+	.open = bpf_link_open,
 #ifdef CONFIG_PROC_FS
 	.show_fdinfo	= bpf_link_show_fdinfo,
 #endif
