@@ -1425,6 +1425,10 @@ struct btf_mod_pair {
 
 struct bpf_kfunc_desc_tab;
 
+typedef unsigned int (*bpf_dispatcher_func)(const void *ctx,
+					    const struct bpf_insn *insnsi,
+					    bpf_func_t bpf_func);
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1458,6 +1462,7 @@ struct bpf_prog_aux {
 	bool xdp_has_frags;
 	bool exception_cb;
 	bool exception_boundary;
+	bool use_tail_call_run_ctx;
 	struct bpf_arena *arena;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
