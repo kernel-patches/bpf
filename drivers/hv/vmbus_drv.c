@@ -2610,7 +2610,7 @@ static struct syscore_ops hv_synic_syscore_ops = {
 	.resume = hv_synic_resume,
 };
 
-static int __init hv_acpi_init(void)
+static int __init vmbus_init(void)
 {
 	int ret;
 
@@ -2621,7 +2621,7 @@ static int __init hv_acpi_init(void)
 		return 0;
 
 	/*
-	 * Get ACPI resources first.
+	 * Get VMBus resources first.
 	 */
 	ret = platform_driver_register(&vmbus_platform_driver);
 	if (ret)
@@ -2708,5 +2708,5 @@ static void __exit vmbus_exit(void)
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Microsoft Hyper-V VMBus Driver");
 
-subsys_initcall(hv_acpi_init);
+subsys_initcall(vmbus_init);
 module_exit(vmbus_exit);
