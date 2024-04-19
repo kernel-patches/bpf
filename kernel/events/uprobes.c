@@ -750,12 +750,29 @@ static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset,
 	return uprobe;
 }
 
-static void consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
+static int consumer_check(struct uprobe_consumer *curr, struct uprobe_consumer *uc)
 {
+	if (!curr)
+		return 0;
+	if (!!curr->handler == !!uc->handler)
+		return 0;
+	if (!!curr->handler2 == !!uc->handler2)
+		return 0;
+	return -EINVAL;
+}
+
+static int consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
+{
+	int err;
+
 	down_write(&uprobe->consumer_rwsem);
-	uc->next = uprobe->consumers;
-	uprobe->consumers = uc;
+	err = consumer_check(uprobe->consumers, uc);
+	if (!err) {
+		uc->next = uprobe->consumers;
+		uprobe->consumers = uc;
+	}
 	up_write(&uprobe->consumer_rwsem);
+	return err;
 }
 
 /*
@@ -1114,6 +1131,16 @@ void uprobe_unregister(struct inode *inode, loff_t offset, struct uprobe_consume
 }
 EXPORT_SYMBOL_GPL(uprobe_unregister);
 
+static int __uprobe_register_consumer(struct uprobe *uprobe, struct uprobe_consumer *uc)
+{
+	int ret;
+
+	ret = consumer_add(uprobe, uc);
+	if (ret)
+		return ret;
+	return register_for_each_vma(uprobe, uc);
+}
+
 /*
  * __uprobe_register - register a probe
  * @inode: the file in which the probe has to be placed.
@@ -1139,7 +1166,9 @@ static int __uprobe_register(struct inode *inode, loff_t offset,
 	int ret;
 
 	/* Uprobe must have at least one set consumer */
-	if (!uc->handler && !uc->ret_handler)
+	if (!uc->handler && !uc->handler2 && !uc->ret_handler)
+		return -EINVAL;
+	if (uc->handler && uc->handler2)
 		return -EINVAL;
 
 	/* copy_insn() uses read_mapping_page() or shmem_read_mapping_page() */
@@ -1173,8 +1202,7 @@ static int __uprobe_register(struct inode *inode, loff_t offset,
 	down_write(&uprobe->register_rwsem);
 	ret = -EAGAIN;
 	if (likely(uprobe_is_active(uprobe))) {
-		consumer_add(uprobe, uc);
-		ret = register_for_each_vma(uprobe, uc);
+		ret = __uprobe_register_consumer(uprobe, uc);
 		if (ret)
 			__uprobe_unregister(uprobe, uc);
 	}
@@ -2081,6 +2109,12 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 				"bad rc=0x%x from %ps()\n", rc, uc->handler);
 		}
 
+		if (uc->handler2) {
+			rc = uc->handler2(uc, regs);
+			WARN(rc & ~UPROBE_HANDLER_MASK,
+				"bad rc=0x%x from %ps()\n", rc, uc->handler2);
+		}
+
 		if (uc->ret_handler)
 			need_prep = true;
 
@@ -2089,6 +2123,10 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 
 	if (need_prep && !remove)
 		prepare_uretprobe(uprobe, regs); /* put bp at return */
+
+	/* remove uprobe only for 'handler' consumers */
+	if (uprobe->consumers && remove)
+		remove &= !!uprobe->consumers->handler;
 
 	if (remove && uprobe->consumers) {
 		WARN_ON(!uprobe_is_active(uprobe));
