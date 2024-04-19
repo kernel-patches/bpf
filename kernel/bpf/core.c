@@ -2358,6 +2358,13 @@ out:
 	return ret;
 }
 
+static void bpf_check_tail_call_run_ctx(struct bpf_prog *fp)
+{
+	if (fp->aux->tail_call_reachable && fp->jited &&
+	    bpf_jit_supports_tail_call_cnt_ptr())
+		fp->aux->use_tail_call_run_ctx = true;
+}
+
 static void bpf_prog_select_func(struct bpf_prog *fp)
 {
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
@@ -2430,6 +2437,10 @@ finalize:
 	 * all eBPF JITs might immediately support all features.
 	 */
 	*err = bpf_check_tail_call(fp);
+	if (*err)
+		return fp;
+
+	bpf_check_tail_call_run_ctx(fp);
 
 	return fp;
 }
@@ -2937,6 +2948,14 @@ bool __weak bpf_helper_changes_pkt_data(void *func)
  * them using insn_is_zext.
  */
 bool __weak bpf_jit_needs_zext(void)
+{
+	return false;
+}
+
+/* Return TRUE if the JIT backend supports tail call count pointer in tailcall
+ * context.
+ */
+bool __weak bpf_jit_supports_tail_call_cnt_ptr(void)
 {
 	return false;
 }
