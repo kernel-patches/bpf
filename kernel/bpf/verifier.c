@@ -6000,7 +6000,7 @@ continue_func:
 			}
 			subprog[ret_prog[j]].tail_call_reachable = true;
 		}
-	if (subprog[0].tail_call_reachable)
+	if (subprog[0].tail_call_reachable || subprog[0].has_tail_call)
 		env->prog->aux->tail_call_reachable = true;
 
 	/* end of for() loop means the last insn of the 'subprog'
