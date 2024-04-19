@@ -662,6 +662,11 @@ extern int (*nfct_btf_struct_access)(struct bpf_verifier_log *log,
 				     const struct bpf_reg_state *reg,
 				     int off, int size);
 
+struct bpf_tail_call_run_ctx {
+	const void *ctx;
+	u32 *tail_call_cnt;
+};
+
 typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
 					  const struct bpf_insn *insnsi,
 					  unsigned int (*bpf_func)(const void *,
@@ -671,7 +676,13 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 					  const void *ctx,
 					  bpf_dispatcher_fn dfunc)
 {
-	u32 ret;
+	struct bpf_tail_call_run_ctx tc_ctx = {};
+	u32 ret, tail_call_cnt = 0;
+	const void *run_ctx;
+
+	tc_ctx.ctx = ctx;
+	tc_ctx.tail_call_cnt = &tail_call_cnt;
+	run_ctx = prog->aux->use_tail_call_run_ctx ? &tc_ctx : ctx;
 
 	cant_migrate();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
@@ -679,7 +690,7 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 		u64 duration, start = sched_clock();
 		unsigned long flags;
 
-		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
+		ret = dfunc(run_ctx, prog->insnsi, prog->bpf_func);
 
 		duration = sched_clock() - start;
 		stats = this_cpu_ptr(prog->stats);
@@ -688,7 +699,7 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 		u64_stats_add(&stats->nsecs, duration);
 		u64_stats_update_end_irqrestore(&stats->syncp, flags);
 	} else {
-		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
+		ret = dfunc(run_ctx, prog->insnsi, prog->bpf_func);
 	}
 	return ret;
 }
@@ -994,6 +1005,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_jit_supports_subprog_tailcalls(void);
+bool bpf_jit_supports_tail_call_cnt_ptr(void);
 bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_far_kfunc_call(void);
