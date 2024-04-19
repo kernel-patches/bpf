@@ -40,6 +40,7 @@ struct dpll_device_registration {
 
 struct dpll_pin_registration {
 	struct list_head list;
+	refcount_t refcount;
 	const struct dpll_pin_ops *ops;
 	void *priv;
 };
@@ -81,6 +82,7 @@ dpll_xa_ref_pin_add(struct xarray *xa_pins, struct dpll_pin *pin,
 		reg = dpll_pin_registration_find(ref, ops, priv);
 		if (reg) {
 			refcount_inc(&ref->refcount);
+			refcount_inc(&reg->refcount);
 			return 0;
 		}
 		ref_exists = true;
@@ -113,6 +115,7 @@ dpll_xa_ref_pin_add(struct xarray *xa_pins, struct dpll_pin *pin,
 	reg->priv = priv;
 	if (ref_exists)
 		refcount_inc(&ref->refcount);
+	refcount_set(&reg->refcount, 1);
 	list_add_tail(&reg->list, &ref->registration_list);
 
 	return 0;
@@ -131,8 +134,10 @@ static int dpll_xa_ref_pin_del(struct xarray *xa_pins, struct dpll_pin *pin,
 		reg = dpll_pin_registration_find(ref, ops, priv);
 		if (WARN_ON(!reg))
 			return -EINVAL;
-		list_del(&reg->list);
-		kfree(reg);
+		if (refcount_dec_and_test(&reg->refcount)) {
+			list_del(&reg->list);
+			kfree(reg);
+		}
 		if (refcount_dec_and_test(&ref->refcount)) {
 			xa_erase(xa_pins, i);
 			WARN_ON(!list_empty(&ref->registration_list));
@@ -160,6 +165,7 @@ dpll_xa_ref_dpll_add(struct xarray *xa_dplls, struct dpll_device *dpll,
 		reg = dpll_pin_registration_find(ref, ops, priv);
 		if (reg) {
 			refcount_inc(&ref->refcount);
+			refcount_inc(&reg->refcount);
 			return 0;
 		}
 		ref_exists = true;
@@ -192,6 +198,7 @@ dpll_xa_ref_dpll_add(struct xarray *xa_dplls, struct dpll_device *dpll,
 	reg->priv = priv;
 	if (ref_exists)
 		refcount_inc(&ref->refcount);
+	refcount_set(&reg->refcount, 1);
 	list_add_tail(&reg->list, &ref->registration_list);
 
 	return 0;
@@ -211,8 +218,10 @@ dpll_xa_ref_dpll_del(struct xarray *xa_dplls, struct dpll_device *dpll,
 		reg = dpll_pin_registration_find(ref, ops, priv);
 		if (WARN_ON(!reg))
 			return;
-		list_del(&reg->list);
-		kfree(reg);
+		if (refcount_dec_and_test(&reg->refcount)) {
+			list_del(&reg->list);
+			kfree(reg);
+		}
 		if (refcount_dec_and_test(&ref->refcount)) {
 			xa_erase(xa_dplls, i);
 			WARN_ON(!list_empty(&ref->registration_list));
