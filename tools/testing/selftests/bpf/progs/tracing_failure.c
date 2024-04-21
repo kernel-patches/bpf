@@ -18,3 +18,9 @@ int BPF_PROG(test_spin_unlock, struct bpf_spin_lock *lock)
 {
 	return 0;
 }
+
+SEC("?fentry/queued_spin_lock_slowpath")
+int BPF_PROG(test_queued_spin_lock, struct qspinlock *lock, u32 val)
+{
+	return 0;
+}

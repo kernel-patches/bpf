@@ -28,10 +28,34 @@ out:
 	tracing_failure__destroy(skel);
 }
 
+static void test_queued_spin_lock(void)
+{
+	struct tracing_failure *skel;
+	int err;
+
+	skel = tracing_failure__open();
+	if (!ASSERT_OK_PTR(skel, "tracing_failure__open"))
+		return;
+
+	bpf_program__set_autoload(skel->progs.test_queued_spin_lock, true);
+
+	err = tracing_failure__load(skel);
+	if (!ASSERT_OK(err, "tracing_failure__load"))
+		goto out;
+
+	err = tracing_failure__attach(skel);
+	ASSERT_ERR(err, "tracing_failure__attach");
+
+out:
+	tracing_failure__destroy(skel);
+}
+
 void test_tracing_failure(void)
 {
 	if (test__start_subtest("bpf_spin_lock"))
 		test_bpf_spin_lock(true);
 	if (test__start_subtest("bpf_spin_unlock"))
 		test_bpf_spin_lock(false);
+	if (test__start_subtest("queued_spin_lock_slowpath"))
+		test_queued_spin_lock();
 }
