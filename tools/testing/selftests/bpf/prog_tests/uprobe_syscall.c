@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include "uprobe_syscall.skel.h"
 #include "uprobe_syscall_call.skel.h"
+#include "uprobe_syscall_compat.skel.h"
 
 __naked unsigned long uretprobe_regs_trigger(void)
 {
@@ -291,6 +292,35 @@ static void test_uretprobe_syscall_call(void)
 		 "read_trace_pipe_iter");
 	ASSERT_EQ(found, 0, "found");
 }
+
+static void trace_pipe_compat_cb(const char *str, void *data)
+{
+	if (strstr(str, "uretprobe compat") != NULL)
+		(*(int *)data)++;
+}
+
+static void test_uretprobe_compat(void)
+{
+	struct uprobe_syscall_compat *skel = NULL;
+	int err, found = 0;
+
+	skel = uprobe_syscall_compat__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_compat__open_and_load"))
+		goto cleanup;
+
+	err = uprobe_syscall_compat__attach(skel);
+	if (!ASSERT_OK(err, "uprobe_syscall_compat__attach"))
+		goto cleanup;
+
+	system("./uprobe_compat");
+
+	ASSERT_OK(read_trace_pipe_iter(trace_pipe_compat_cb, &found, 1000),
+		 "read_trace_pipe_iter");
+	ASSERT_EQ(found, 1, "found");
+
+cleanup:
+	uprobe_syscall_compat__destroy(skel);
+}
 #else
 static void test_uretprobe_regs_equal(void)
 {
@@ -303,6 +333,11 @@ static void test_uretprobe_regs_change(void)
 }
 
 static void test_uretprobe_syscall_call(void)
+{
+	test__skip();
+}
+
+static void test_uretprobe_compat(void)
 {
 	test__skip();
 }
@@ -319,4 +354,9 @@ void test_uprobe_syscall(void)
 void serial_test_uprobe_syscall_call(void)
 {
 	test_uretprobe_syscall_call();
+}
+
+void serial_test_uprobe_syscall_compat(void)
+{
+	test_uretprobe_compat();
 }
