@@ -896,13 +896,9 @@ static void virtnet_rq_set_premapped(struct virtnet_info *vi)
 {
 	int i;
 
-	/* disable for big mode */
-	if (!vi->mergeable_rx_bufs && vi->big_packets)
-		return;
-
 	for (i = 0; i < vi->max_queue_pairs; i++) {
-		if (virtqueue_set_dma_premapped(vi->rq[i].vq))
-			continue;
+		/* error never happen */
+		BUG_ON(virtqueue_set_dma_premapped(vi->rq[i].vq));
 
 		vi->rq[i].do_dma = true;
 	}
