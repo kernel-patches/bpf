@@ -2190,9 +2190,13 @@ void pn533_recv_frame(struct pn533 *dev, struct sk_buff *skb, int status)
 
 	if (!dev->ops->rx_is_frame_valid(skb->data, dev)) {
 		nfc_err(dev->dev, "Received an invalid frame\n");
+		if (!dev->cmd)
+			goto sched_wq;
 		dev->cmd->status = -EIO;
 	} else if (!pn533_rx_frame_is_cmd_response(dev, skb->data)) {
 		nfc_err(dev->dev, "It it not the response to the last command\n");
+		if (!dev->cmd)
+			goto sched_wq;
 		dev->cmd->status = -EIO;
 	}
 
