@@ -48,6 +48,14 @@ module_param(napi_tx, bool, 0644);
 
 #define VIRTIO_XDP_FLAG	BIT(0)
 
+/* In big mode, we use a page chain to manage multiple pages submitted to the
+ * ring. These pages are connected using page.pp. The following two macros are
+ * used to obtain the next page in a page chain and set the next page in the
+ * page chain.
+ */
+#define page_chain_next(p)	((struct page *)((p)->pp))
+#define page_chain_add(p, n)	((p)->pp = (void *)n)
+
 /* RX packet size EWMA. The average packet size is used to determine the packet
  * buffer size when refilling RX rings. As the entire RX ring may be refilled
  * at once, the weight is chosen so that the EWMA will be insensitive to short-
@@ -191,7 +199,7 @@ struct receive_queue {
 
 	struct virtnet_interrupt_coalesce intr_coal;
 
-	/* Chain pages by the private ptr. */
+	/* Chain pages by the page's pp struct. */
 	struct page *pages;
 
 	/* Average packet length for mergeable receive buffers. */
@@ -432,16 +440,16 @@ skb_vnet_common_hdr(struct sk_buff *skb)
 }
 
 /*
- * private is used to chain pages for big packets, put the whole
- * most recent used list in the beginning for reuse
+ * put the whole most recent used list in the beginning for reuse
  */
 static void give_pages(struct receive_queue *rq, struct page *page)
 {
 	struct page *end;
 
 	/* Find end of list, sew whole thing into vi->rq.pages. */
-	for (end = page; end->private; end = (struct page *)end->private);
-	end->private = (unsigned long)rq->pages;
+	for (end = page; page_chain_next(end); end = page_chain_next(end));
+
+	page_chain_add(end, rq->pages);
 	rq->pages = page;
 }
 
@@ -450,9 +458,9 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask)
 	struct page *p = rq->pages;
 
 	if (p) {
-		rq->pages = (struct page *)p->private;
-		/* clear private here, it is used to chain pages */
-		p->private = 0;
+		rq->pages = page_chain_next(p);
+		/* clear chain here, it is used to chain pages */
+		page_chain_add(p, NULL);
 	} else
 		p = alloc_page(gfp_mask);
 	return p;
@@ -609,7 +617,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		if (unlikely(!skb))
 			return NULL;
 
-		page = (struct page *)page->private;
+		page = page_chain_next(page);
 		if (page)
 			give_pages(rq, page);
 		goto ok;
@@ -657,7 +665,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, offset,
 				frag_size, truesize);
 		len -= frag_size;
-		page = (struct page *)page->private;
+		page = page_chain_next(page);
 		offset = 0;
 	}
 
@@ -1909,7 +1917,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 		sg_set_buf(&rq->sg[i], page_address(first), PAGE_SIZE);
 
 		/* chain new page in list head to match sg */
-		first->private = (unsigned long)list;
+		page_chain_add(first, list);
 		list = first;
 	}
 
@@ -1929,7 +1937,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 	sg_set_buf(&rq->sg[1], p + offset, PAGE_SIZE - offset);
 
 	/* chain first in list head */
-	first->private = (unsigned long)list;
+	page_chain_add(first, list);
 	err = virtqueue_add_inbuf(rq->vq, rq->sg, vi->big_packets_num_skbfrags + 2,
 				  first, gfp);
 	if (err < 0)
