@@ -960,6 +960,12 @@ config ARCH_WANTS_MODULES_DATA_IN_VMALLOC
 	  For architectures like powerpc/32 which have constraints on module
 	  allocation and need to allocate module data outside of module area.
 
+config ARCH_WANTS_EXECMEM_EARLY
+	bool
+	help
+	  For architectures that might allocate executable memory early on
+	  boot, for instance ftrace on x86.
+
 config HAVE_IRQ_EXIT_ON_IRQ_STACK
 	bool
 	help
