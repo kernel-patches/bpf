@@ -178,7 +178,7 @@ static int gve_alloc_page_dqo(struct gve_rx_ring *rx,
 			return err;
 	} else {
 		idx = rx->dqo.next_qpl_page_idx;
-		if (idx >= priv->rx_pages_per_qpl) {
+		if (idx >= gve_get_rx_pages_per_qpl_dqo(priv->rx_desc_cnt)) {
 			net_err_ratelimited("%s: Out of QPL pages\n",
 					    priv->dev->name);
 			return -ENOMEM;
@@ -247,10 +247,8 @@ static void gve_rx_free_ring_dqo(struct gve_priv *priv, struct gve_rx_ring *rx,
 		if (bs->page_info.page)
 			gve_free_page_dqo(priv, bs, !rx->dqo.qpl);
 	}
-	if (rx->dqo.qpl) {
-		gve_unassign_qpl(cfg->qpl_cfg, rx->dqo.qpl->id);
-		rx->dqo.qpl = NULL;
-	}
+
+	rx->dqo.qpl = NULL;
 
 	if (rx->dqo.bufq.desc_ring) {
 		size = sizeof(rx->dqo.bufq.desc_ring[0]) * buffer_queue_slots;
@@ -305,8 +303,7 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 	size_t size;
 	int i;
 
-	const u32 buffer_queue_slots = cfg->raw_addressing ?
-		priv->options_dqo_rda.rx_buff_ring_entries : cfg->ring_size;
+	const u32 buffer_queue_slots = cfg->ring_size;
 	const u32 completion_queue_slots = cfg->ring_size;
 
 	netif_dbg(priv, drv, priv->dev, "allocating rx ring DQO\n");
@@ -322,7 +319,7 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 
 	rx->dqo.num_buf_states = cfg->raw_addressing ?
 		min_t(s16, S16_MAX, buffer_queue_slots * 4) :
-		priv->rx_pages_per_qpl;
+		gve_get_rx_pages_per_qpl_dqo(cfg->ring_size);
 	rx->dqo.buf_states = kvcalloc(rx->dqo.num_buf_states,
 				      sizeof(rx->dqo.buf_states[0]),
 				      GFP_KERNEL);
@@ -360,9 +357,9 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 		goto err;
 
 	if (!cfg->raw_addressing) {
-		rx->dqo.qpl = gve_assign_rx_qpl(cfg, rx->q_num);
-		if (!rx->dqo.qpl)
-			goto err;
+		u32 qpl_id = gve_get_rx_qpl_id(cfg->qcfg_tx, rx->q_num);
+
+		rx->dqo.qpl = &cfg->qpls[qpl_id];
 		rx->dqo.next_qpl_page_idx = 0;
 	}
 

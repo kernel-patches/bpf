@@ -20,6 +20,7 @@
 #include <net/udp.h>
 #include <net/tcp.h>
 #include <net/espintcp.h>
+#include <linux/skbuff_ref.h>
 
 #include <linux/highmem.h>
 
@@ -114,7 +115,7 @@ static void esp_ssg_unref(struct xfrm_state *x, void *tmp, struct sk_buff *skb)
 	 */
 	if (req->src != req->dst)
 		for (sg = sg_next(req->src); sg; sg = sg_next(sg))
-			skb_page_unref(skb, sg_page(sg), false);
+			skb_page_unref(sg_page(sg), skb->pp_recycle);
 }
 
 #ifdef CONFIG_INET_ESPINTCP

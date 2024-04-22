@@ -236,10 +236,7 @@ static void gve_tx_free_ring_dqo(struct gve_priv *priv, struct gve_tx_ring *tx,
 	kvfree(tx->dqo.tx_qpl_buf_next);
 	tx->dqo.tx_qpl_buf_next = NULL;
 
-	if (tx->dqo.qpl) {
-		gve_unassign_qpl(cfg->qpl_cfg, tx->dqo.qpl->id);
-		tx->dqo.qpl = NULL;
-	}
+	tx->dqo.qpl = NULL;
 
 	netif_dbg(priv, drv, priv->dev, "freed tx queue %d\n", idx);
 }
@@ -295,9 +292,7 @@ static int gve_tx_alloc_ring_dqo(struct gve_priv *priv,
 
 	/* Queue sizes must be a power of 2 */
 	tx->mask = cfg->ring_size - 1;
-	tx->dqo.complq_mask = priv->queue_format == GVE_DQO_RDA_FORMAT ?
-		priv->options_dqo_rda.tx_comp_ring_entries - 1 :
-		tx->mask;
+	tx->dqo.complq_mask = tx->mask;
 
 	/* The max number of pending packets determines the maximum number of
 	 * descriptors which maybe written to the completion queue.
@@ -354,9 +349,9 @@ static int gve_tx_alloc_ring_dqo(struct gve_priv *priv,
 		goto err;
 
 	if (!cfg->raw_addressing) {
-		tx->dqo.qpl = gve_assign_tx_qpl(cfg, idx);
-		if (!tx->dqo.qpl)
-			goto err;
+		u32 qpl_id = gve_tx_qpl_id(priv, tx->q_num);
+
+		tx->dqo.qpl = &cfg->qpls[qpl_id];
 
 		if (gve_tx_qpl_buf_init(tx))
 			goto err;

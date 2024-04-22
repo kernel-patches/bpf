@@ -27,6 +27,8 @@
 #include "hclge_devlink.h"
 #include "hclge_comm_cmd.h"
 
+#include "hclge_trace.h"
+
 #define HCLGE_NAME			"hclge"
 
 #define HCLGE_BUF_SIZE_UNIT	256U
@@ -390,6 +392,48 @@ int hclge_cmd_send(struct hclge_hw *hw, struct hclge_desc *desc, int num)
 {
 	return hclge_comm_cmd_send(&hw->hw, desc, num);
 }
+
+static void hclge_trace_cmd_send(struct hclge_comm_hw *hw, struct hclge_desc *desc,
+				 int num, bool is_special)
+{
+	int i;
+
+	trace_hclge_pf_cmd_send(hw, desc, 0, num);
+
+	if (!is_special) {
+		for (i = 1; i < num; i++)
+			trace_hclge_pf_cmd_send(hw, &desc[i], i, num);
+	} else {
+		for (i = 1; i < num; i++)
+			trace_hclge_pf_special_cmd_send(hw, (__le32 *)&desc[i],
+							i, num);
+	}
+}
+
+static void hclge_trace_cmd_get(struct hclge_comm_hw *hw, struct hclge_desc *desc,
+				int num, bool is_special)
+{
+	int i;
+
+	if (!HCLGE_COMM_SEND_SYNC(le16_to_cpu(desc->flag)))
+		return;
+
+	trace_hclge_pf_cmd_get(hw, desc, 0, num);
+
+	if (!is_special) {
+		for (i = 1; i < num; i++)
+			trace_hclge_pf_cmd_get(hw, &desc[i], i, num);
+	} else {
+		for (i = 1; i < num; i++)
+			trace_hclge_pf_special_cmd_get(hw, (__le32 *)&desc[i],
+						       i, num);
+	}
+}
+
+static const struct hclge_comm_cmq_ops hclge_cmq_ops = {
+	.trace_cmd_send = hclge_trace_cmd_send,
+	.trace_cmd_get = hclge_trace_cmd_get,
+};
 
 static int hclge_mac_update_stats_defective(struct hclge_dev *hdev)
 {
@@ -1537,6 +1581,9 @@ static int hclge_configure(struct hclge_dev *hdev)
 			cfg.default_speed, ret);
 		return ret;
 	}
+	hdev->hw.mac.req_speed = hdev->hw.mac.speed;
+	hdev->hw.mac.req_autoneg = AUTONEG_ENABLE;
+	hdev->hw.mac.req_duplex = DUPLEX_FULL;
 
 	hclge_parse_link_mode(hdev, cfg.speed_ability);
 
@@ -1766,7 +1813,8 @@ static int hclge_vport_setup(struct hclge_vport *vport, u16 num_tqps)
 
 	nic->pdev = hdev->pdev;
 	nic->ae_algo = &ae_algo;
-	nic->numa_node_mask = hdev->numa_node_mask;
+	bitmap_copy(nic->numa_node_mask.bits, hdev->numa_node_mask.bits,
+		    MAX_NUMNODES);
 	nic->kinfo.io_base = hdev->hw.hw.io_base;
 
 	ret = hclge_knic_setup(vport, num_tqps,
@@ -2458,7 +2506,8 @@ static int hclge_init_roce_base_info(struct hclge_vport *vport)
 
 	roce->pdev = nic->pdev;
 	roce->ae_algo = nic->ae_algo;
-	roce->numa_node_mask = nic->numa_node_mask;
+	bitmap_copy(roce->numa_node_mask.bits, nic->numa_node_mask.bits,
+		    MAX_NUMNODES);
 
 	return 0;
 }
@@ -3342,9 +3391,9 @@ hclge_set_phy_link_ksettings(struct hnae3_handle *handle,
 		return ret;
 	}
 
-	hdev->hw.mac.autoneg = cmd->base.autoneg;
-	hdev->hw.mac.speed = cmd->base.speed;
-	hdev->hw.mac.duplex = cmd->base.duplex;
+	hdev->hw.mac.req_autoneg = cmd->base.autoneg;
+	hdev->hw.mac.req_speed = cmd->base.speed;
+	hdev->hw.mac.req_duplex = cmd->base.duplex;
 	linkmode_copy(hdev->hw.mac.advertising, cmd->link_modes.advertising);
 
 	return 0;
@@ -3362,9 +3411,9 @@ static int hclge_update_tp_port_info(struct hclge_dev *hdev)
 	if (ret)
 		return ret;
 
-	hdev->hw.mac.autoneg = cmd.base.autoneg;
-	hdev->hw.mac.speed = cmd.base.speed;
-	hdev->hw.mac.duplex = cmd.base.duplex;
+	cmd.base.autoneg = hdev->hw.mac.req_autoneg;
+	cmd.base.speed = hdev->hw.mac.req_speed;
+	cmd.base.duplex = hdev->hw.mac.req_duplex;
 	linkmode_copy(hdev->hw.mac.advertising, cmd.link_modes.advertising);
 
 	return 0;
@@ -7952,8 +8001,7 @@ static void hclge_set_timer_task(struct hnae3_handle *handle, bool enable)
 		/* Set the DOWN flag here to disable link updating */
 		set_bit(HCLGE_STATE_DOWN, &hdev->state);
 
-		/* flush memory to make sure DOWN is seen by service task */
-		smp_mb__before_atomic();
+		smp_mb__after_atomic(); /* flush memory to make sure DOWN is seen by service task */
 		hclge_flush_link_update(hdev);
 	}
 }
@@ -9906,6 +9954,7 @@ static int hclge_set_vlan_protocol_type(struct hclge_dev *hdev)
 static int hclge_init_vlan_filter(struct hclge_dev *hdev)
 {
 	struct hclge_vport *vport;
+	bool enable = true;
 	int ret;
 	int i;
 
@@ -9925,8 +9974,12 @@ static int hclge_init_vlan_filter(struct hclge_dev *hdev)
 		vport->cur_vlan_fltr_en = true;
 	}
 
+	if (test_bit(HNAE3_DEV_SUPPORT_VLAN_FLTR_MDF_B, hdev->ae_dev->caps) &&
+	    !test_bit(HNAE3_DEV_SUPPORT_PORT_VLAN_BYPASS_B, hdev->ae_dev->caps))
+		enable = false;
+
 	return hclge_set_vlan_filter_ctrl(hdev, HCLGE_FILTER_TYPE_PORT,
-					  HCLGE_FILTER_FE_INGRESS, true, 0);
+					  HCLGE_FILTER_FE_INGRESS, enable, 0);
 }
 
 static int hclge_init_vlan_type(struct hclge_dev *hdev)
@@ -10839,6 +10892,24 @@ static u32 hclge_get_fw_version(struct hnae3_handle *handle)
 	return hdev->fw_version;
 }
 
+int hclge_query_scc_version(struct hclge_dev *hdev, u32 *scc_version)
+{
+	struct hclge_comm_query_scc_cmd *resp;
+	struct hclge_desc desc;
+	int ret;
+
+	hclge_cmd_setup_basic_desc(&desc, HCLGE_OPC_QUERY_SCC_VER, 1);
+	resp = (struct hclge_comm_query_scc_cmd *)desc.data;
+
+	ret = hclge_cmd_send(&hdev->hw, &desc, 1);
+	if (ret)
+		return ret;
+
+	*scc_version = le32_to_cpu(resp->scc_version);
+
+	return 0;
+}
+
 static void hclge_set_flowctrl_adv(struct hclge_dev *hdev, u32 rx_en, u32 tx_en)
 {
 	struct phy_device *phydev = hdev->hw.mac.phydev;
@@ -11634,6 +11705,7 @@ static int hclge_init_ae_dev(struct hnae3_ae_dev *ae_dev)
 		goto err_devlink_uninit;
 
 	/* Firmware command initialize */
+	hclge_comm_cmd_init_ops(&hdev->hw.hw, &hclge_cmq_ops);
 	ret = hclge_comm_cmd_init(hdev->ae_dev, &hdev->hw.hw, &hdev->fw_version,
 				  true, hdev->reset_pending);
 	if (ret)
@@ -11759,7 +11831,7 @@ static int hclge_init_ae_dev(struct hnae3_ae_dev *ae_dev)
 
 	ret = hclge_update_port_info(hdev);
 	if (ret)
-		goto err_mdiobus_unreg;
+		goto err_ptp_uninit;
 
 	INIT_KFIFO(hdev->mac_tnl_log);
 
@@ -11810,6 +11882,8 @@ static int hclge_init_ae_dev(struct hnae3_ae_dev *ae_dev)
 	devl_unlock(hdev->devlink);
 	return 0;
 
+err_ptp_uninit:
+	hclge_ptp_uninit(hdev);
 err_mdiobus_unreg:
 	if (hdev->hw.mac.phydev)
 		mdiobus_unregister(hdev->hw.mac.mdio_bus);

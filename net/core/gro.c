@@ -3,6 +3,7 @@
 #include <net/dst_metadata.h>
 #include <net/busy_poll.h>
 #include <trace/events/net.h>
+#include <linux/skbuff_ref.h>
 
 #define MAX_GRO_SKBS 8
 
@@ -192,8 +193,9 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	}
 
 merge:
-	/* sk owenrship - if any - completely transferred to the aggregated packet */
+	/* sk ownership - if any - completely transferred to the aggregated packet */
 	skb->destructor = NULL;
+	skb->sk = NULL;
 	delta_truesize = skb->truesize;
 	if (offset > headlen) {
 		unsigned int eat = offset - headlen;

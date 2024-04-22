@@ -866,11 +866,10 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb)
 	 * routing might fail in this case. No choice here, if we choose to force
 	 * input interface, we will misroute in case of asymmetric route.
 	 */
-	if (sk) {
+	if (sk)
 		arg.bound_dev_if = sk->sk_bound_dev_if;
-		if (sk_fullsock(sk))
-			trace_tcp_send_reset(sk, skb);
-	}
+
+	trace_tcp_send_reset(sk, skb);
 
 	BUILD_BUG_ON(offsetof(struct sock, sk_bound_dev_if) !=
 		     offsetof(struct inet_timewait_sock, tw_bound_dev_if));
@@ -1667,7 +1666,8 @@ static void tcp_v4_init_req(struct request_sock *req,
 static struct dst_entry *tcp_v4_route_req(const struct sock *sk,
 					  struct sk_buff *skb,
 					  struct flowi *fl,
-					  struct request_sock *req)
+					  struct request_sock *req,
+					  u32 tw_isn)
 {
 	tcp_v4_init_req(req, sk, skb);
 
@@ -2045,10 +2045,8 @@ bool tcp_add_backlog(struct sock *sk, struct sk_buff *skb,
 	      TCP_SKB_CB(skb)->tcp_flags) & TCPHDR_ACK) ||
 	    ((TCP_SKB_CB(tail)->tcp_flags ^
 	      TCP_SKB_CB(skb)->tcp_flags) & (TCPHDR_ECE | TCPHDR_CWR)) ||
-#ifdef CONFIG_TLS_DEVICE
-	    tail->decrypted != skb->decrypted ||
-#endif
 	    !mptcp_skb_can_collapse(tail, skb) ||
+	    skb_cmp_decrypted(tail, skb) ||
 	    thtail->doff != th->doff ||
 	    memcmp(thtail + 1, th + 1, hdrlen - sizeof(*th)))
 		goto no_coalesce;
@@ -2148,7 +2146,6 @@ static void tcp_v4_fill_cb(struct sk_buff *skb, const struct iphdr *iph,
 				    skb->len - th->doff * 4);
 	TCP_SKB_CB(skb)->ack_seq = ntohl(th->ack_seq);
 	TCP_SKB_CB(skb)->tcp_flags = tcp_flag_byte(th);
-	TCP_SKB_CB(skb)->tcp_tw_isn = 0;
 	TCP_SKB_CB(skb)->ip_dsfield = ipv4_get_dsfield(iph);
 	TCP_SKB_CB(skb)->sacked	 = 0;
 	TCP_SKB_CB(skb)->has_rxtstamp =
@@ -2170,6 +2167,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	bool refcounted;
 	struct sock *sk;
 	int ret;
+	u32 isn;
 
 	drop_reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	if (skb->pkt_type != PACKET_HOST)
@@ -2207,7 +2205,6 @@ lookup:
 	if (!sk)
 		goto no_tcp_socket;
 
-process:
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
@@ -2287,6 +2284,7 @@ process:
 		}
 	}
 
+process:
 	if (static_branch_unlikely(&ip4_min_ttl)) {
 		/* min_ttl can be changed concurrently from do_ip_setsockopt() */
 		if (unlikely(iph->ttl < READ_ONCE(inet_sk(sk)->min_ttl))) {
@@ -2385,7 +2383,7 @@ do_time_wait:
 		inet_twsk_put(inet_twsk(sk));
 		goto csum_error;
 	}
-	switch (tcp_timewait_state_process(inet_twsk(sk), skb, th)) {
+	switch (tcp_timewait_state_process(inet_twsk(sk), skb, th, &isn)) {
 	case TCP_TW_SYN: {
 		struct sock *sk2 = inet_lookup_listener(net,
 							net->ipv4.tcp_death_row.hashinfo,
@@ -2399,6 +2397,7 @@ do_time_wait:
 			sk = sk2;
 			tcp_v4_restore_cb(skb);
 			refcounted = false;
+			__this_cpu_write(tcp_tw_isn, isn);
 			goto process;
 		}
 	}
@@ -3501,7 +3500,7 @@ static void __net_exit tcp_sk_exit_batch(struct list_head *net_exit_list)
 {
 	struct net *net;
 
-	tcp_twsk_purge(net_exit_list, AF_INET);
+	tcp_twsk_purge(net_exit_list);
 
 	list_for_each_entry(net, net_exit_list, exit_list) {
 		inet_pernet_hashinfo_free(net->ipv4.tcp_death_row.hashinfo);

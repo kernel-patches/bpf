@@ -52,9 +52,9 @@ config GENERIC_ENTRY
 
 config KPROBES
 	bool "Kprobes"
-	depends on MODULES
 	depends on HAVE_KPROBES
 	select KALLSYMS
+	select EXECMEM
 	select TASKS_RCU if PREEMPTION
 	help
 	  Kprobes allows you to trap at almost any kernel address and
@@ -960,6 +960,12 @@ config ARCH_WANTS_MODULES_DATA_IN_VMALLOC
 	  For architectures like powerpc/32 which have constraints on module
 	  allocation and need to allocate module data outside of module area.
 
+config ARCH_WANTS_EXECMEM_EARLY
+	bool
+	help
+	  For architectures that might allocate executable memory early on
+	  boot, for instance ftrace on x86.
+
 config HAVE_IRQ_EXIT_ON_IRQ_STACK
 	bool
 	help
@@ -1172,12 +1178,12 @@ config PAGE_SIZE_LESS_THAN_256KB
 
 config PAGE_SHIFT
 	int
-	default 12 if PAGE_SIZE_4KB
-	default 13 if PAGE_SIZE_8KB
-	default 14 if PAGE_SIZE_16KB
-	default 15 if PAGE_SIZE_32KB
-	default 16 if PAGE_SIZE_64KB
-	default 18 if PAGE_SIZE_256KB
+	default	12 if PAGE_SIZE_4KB
+	default	13 if PAGE_SIZE_8KB
+	default	14 if PAGE_SIZE_16KB
+	default	15 if PAGE_SIZE_32KB
+	default	16 if PAGE_SIZE_64KB
+	default	18 if PAGE_SIZE_256KB
 
 # This allows to use a set of generic functions to determine mmap base
 # address by giving priority to top-down scheme only if the process

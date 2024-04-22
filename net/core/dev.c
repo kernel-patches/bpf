@@ -77,6 +77,7 @@
 #include <linux/hash.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/sched/isolation.h>
 #include <linux/sched/mm.h>
 #include <linux/smpboot.h>
 #include <linux/mutex.h>
@@ -157,6 +158,7 @@
 #include <net/page_pool/types.h>
 #include <net/page_pool/helpers.h>
 #include <net/rps.h>
+#include <linux/phy_link_topology_core.h>
 
 #include "dev.h"
 #include "net-sysfs.h"
@@ -455,7 +457,7 @@ EXPORT_PER_CPU_SYMBOL(softnet_data);
  * PP consumers must pay attention to run APIs in the appropriate context
  * (e.g. NAPI context).
  */
-static DEFINE_PER_CPU_ALIGNED(struct page_pool *, system_page_pool);
+static DEFINE_PER_CPU(struct page_pool *, system_page_pool);
 
 #ifdef CONFIG_LOCKDEP
 /*
@@ -2081,6 +2083,11 @@ void net_dec_egress_queue(void)
 	static_branch_dec(&egress_needed_key);
 }
 EXPORT_SYMBOL_GPL(net_dec_egress_queue);
+#endif
+
+#ifdef CONFIG_NET_CLS_ACT
+DEFINE_STATIC_KEY_FALSE(tcf_bypass_check_needed_key);
+EXPORT_SYMBOL(tcf_bypass_check_needed_key);
 #endif
 
 DEFINE_STATIC_KEY_FALSE(netstamp_needed_key);
@@ -3801,6 +3808,10 @@ no_lock_out:
 		return rc;
 	}
 
+	if (unlikely(READ_ONCE(q->owner) == smp_processor_id())) {
+		kfree_skb_reason(skb, SKB_DROP_REASON_TC_RECLASSIFY_LOOP);
+		return NET_XMIT_DROP;
+	}
 	/*
 	 * Heuristic to force contended enqueues to serialize on a
 	 * separate lock before trying to get qdisc main lock.
@@ -3840,7 +3851,9 @@ no_lock_out:
 		qdisc_run_end(q);
 		rc = NET_XMIT_SUCCESS;
 	} else {
+		WRITE_ONCE(q->owner, smp_processor_id());
 		rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
+		WRITE_ONCE(q->owner, -1);
 		if (qdisc_run_begin(q)) {
 			if (unlikely(contended)) {
 				spin_unlock(&q->busylock);
@@ -3936,6 +3949,11 @@ static int tc_run(struct tcx_entry *entry, struct sk_buff *skb,
 
 	if (!miniq)
 		return ret;
+
+	if (static_branch_unlikely(&tcf_bypass_check_needed_key)) {
+		if (tcf_block_bypass_sw(miniq->block))
+			return ret;
+	}
 
 	tc_skb_cb(skb)->mru = 0;
 	tc_skb_cb(skb)->post_ct = false;
@@ -4489,7 +4507,7 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		struct netdev_rx_queue *rxqueue;
 		struct rps_dev_flow_table *flow_table;
 		struct rps_dev_flow *old_rflow;
-		u32 flow_id;
+		u32 flow_id, head;
 		u16 rxq_index;
 		int rc;
 
@@ -4512,16 +4530,16 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 			goto out;
 		old_rflow = rflow;
 		rflow = &flow_table->flows[flow_id];
-		rflow->filter = rc;
-		if (old_rflow->filter == rflow->filter)
-			old_rflow->filter = RPS_NO_FILTER;
+		WRITE_ONCE(rflow->filter, rc);
+		if (old_rflow->filter == rc)
+			WRITE_ONCE(old_rflow->filter, RPS_NO_FILTER);
 	out:
 #endif
-		rflow->last_qtail =
-			per_cpu(softnet_data, next_cpu).input_queue_head;
+		head = READ_ONCE(per_cpu(softnet_data, next_cpu).input_queue_head);
+		rps_input_queue_tail_save(&rflow->last_qtail, head);
 	}
 
-	rflow->cpu = next_cpu;
+	WRITE_ONCE(rflow->cpu, next_cpu);
 	return rflow;
 }
 
@@ -4600,7 +4618,7 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		 */
 		if (unlikely(tcpu != next_cpu) &&
 		    (tcpu >= nr_cpu_ids || !cpu_online(tcpu) ||
-		     ((int)(per_cpu(softnet_data, tcpu).input_queue_head -
+		     ((int)(READ_ONCE(per_cpu(softnet_data, tcpu).input_queue_head) -
 		      rflow->last_qtail)) >= 0)) {
 			tcpu = next_cpu;
 			rflow = set_rps_cpu(dev, skb, rflow, next_cpu);
@@ -4654,9 +4672,9 @@ bool rps_may_expire_flow(struct net_device *dev, u16 rxq_index,
 	if (flow_table && flow_id <= flow_table->mask) {
 		rflow = &flow_table->flows[flow_id];
 		cpu = READ_ONCE(rflow->cpu);
-		if (rflow->filter == filter_id && cpu < nr_cpu_ids &&
-		    ((int)(per_cpu(softnet_data, cpu).input_queue_head -
-			   rflow->last_qtail) <
+		if (READ_ONCE(rflow->filter) == filter_id && cpu < nr_cpu_ids &&
+		    ((int)(READ_ONCE(per_cpu(softnet_data, cpu).input_queue_head) -
+			   READ_ONCE(rflow->last_qtail)) <
 		     (int)(10 * flow_table->mask)))
 			expire = false;
 	}
@@ -4790,37 +4808,45 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	struct softnet_data *sd;
 	unsigned long flags;
 	unsigned int qlen;
+	int max_backlog;
+	u32 tail;
 
-	reason = SKB_DROP_REASON_NOT_SPECIFIED;
+	reason = SKB_DROP_REASON_DEV_READY;
+	if (!netif_running(skb->dev))
+		goto bad_dev;
+
+	reason = SKB_DROP_REASON_CPU_BACKLOG;
 	sd = &per_cpu(softnet_data, cpu);
 
+	qlen = skb_queue_len_lockless(&sd->input_pkt_queue);
+	max_backlog = READ_ONCE(net_hotdata.max_backlog);
+	if (unlikely(qlen > max_backlog))
+		goto cpu_backlog_drop;
 	backlog_lock_irq_save(sd, &flags);
-	if (!netif_running(skb->dev))
-		goto drop;
 	qlen = skb_queue_len(&sd->input_pkt_queue);
-	if (qlen <= READ_ONCE(net_hotdata.max_backlog) &&
-	    !skb_flow_limit(skb, qlen)) {
-		if (qlen) {
-enqueue:
-			__skb_queue_tail(&sd->input_pkt_queue, skb);
-			input_queue_tail_incr_save(sd, qtail);
-			backlog_unlock_irq_restore(sd, &flags);
-			return NET_RX_SUCCESS;
+	if (qlen <= max_backlog && !skb_flow_limit(skb, qlen)) {
+		if (!qlen) {
+			/* Schedule NAPI for backlog device. We can use
+			 * non atomic operation as we own the queue lock.
+			 */
+			if (!__test_and_set_bit(NAPI_STATE_SCHED,
+						&sd->backlog.state))
+				napi_schedule_rps(sd);
 		}
+		__skb_queue_tail(&sd->input_pkt_queue, skb);
+		tail = rps_input_queue_tail_incr(sd);
+		backlog_unlock_irq_restore(sd, &flags);
 
-		/* Schedule NAPI for backlog device
-		 * We can use non atomic operation since we own the queue lock
-		 */
-		if (!__test_and_set_bit(NAPI_STATE_SCHED, &sd->backlog.state))
-			napi_schedule_rps(sd);
-		goto enqueue;
+		/* save the tail outside of the critical section */
+		rps_input_queue_tail_save(qtail, tail);
+		return NET_RX_SUCCESS;
 	}
-	reason = SKB_DROP_REASON_CPU_BACKLOG;
 
-drop:
-	sd->dropped++;
 	backlog_unlock_irq_restore(sd, &flags);
 
+cpu_backlog_drop:
+	atomic_inc(&sd->dropped);
+bad_dev:
 	dev_core_stats_rx_dropped_inc(skb->dev);
 	kfree_skb_reason(skb, reason);
 	return NET_RX_DROP;
@@ -5890,7 +5916,7 @@ static void flush_backlog(struct work_struct *work)
 		if (skb->dev->reg_state == NETREG_UNREGISTERING) {
 			__skb_unlink(skb, &sd->input_pkt_queue);
 			dev_kfree_skb_irq(skb);
-			input_queue_head_incr(sd);
+			rps_input_queue_head_incr(sd);
 		}
 	}
 	backlog_unlock_irq_enable(sd);
@@ -5899,7 +5925,7 @@ static void flush_backlog(struct work_struct *work)
 		if (skb->dev->reg_state == NETREG_UNREGISTERING) {
 			__skb_unlink(skb, &sd->process_queue);
 			kfree_skb(skb);
-			input_queue_head_incr(sd);
+			rps_input_queue_head_incr(sd);
 		}
 	}
 	local_bh_enable();
@@ -6027,9 +6053,10 @@ static int process_backlog(struct napi_struct *napi, int quota)
 			rcu_read_lock();
 			__netif_receive_skb(skb);
 			rcu_read_unlock();
-			input_queue_head_incr(sd);
-			if (++work >= quota)
+			if (++work >= quota) {
+				rps_input_queue_head_add(sd, work);
 				return work;
+			}
 
 		}
 
@@ -6052,6 +6079,8 @@ static int process_backlog(struct napi_struct *napi, int quota)
 		backlog_unlock_irq_enable(sd);
 	}
 
+	if (work)
+		rps_input_queue_head_add(sd, work);
 	return work;
 }
 
@@ -10940,6 +10969,12 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 #ifdef CONFIG_NET_SCHED
 	hash_init(dev->qdisc_hash);
 #endif
+	dev->link_topo = phy_link_topo_create(dev);
+	if (IS_ERR(dev->link_topo)) {
+		dev->link_topo = NULL;
+		goto free_all;
+	}
+
 	dev->priv_flags = IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM;
 	setup(dev);
 
@@ -11027,6 +11062,8 @@ void free_netdev(struct net_device *dev)
 	dev->core_stats = NULL;
 	free_percpu(dev->xdp_bulkq);
 	dev->xdp_bulkq = NULL;
+
+	phy_link_topo_destroy(dev->link_topo);
 
 	/*  Compatibility with error handling in drivers */
 	if (dev->reg_state == NETREG_UNINITIALIZED) {
@@ -11441,11 +11478,11 @@ static int dev_cpu_dead(unsigned int oldcpu)
 	/* Process offline CPU's input_pkt_queue */
 	while ((skb = __skb_dequeue(&oldsd->process_queue))) {
 		netif_rx(skb);
-		input_queue_head_incr(oldsd);
+		rps_input_queue_head_incr(oldsd);
 	}
 	while ((skb = skb_dequeue(&oldsd->input_pkt_queue))) {
 		netif_rx(skb);
-		input_queue_head_incr(oldsd);
+		rps_input_queue_head_incr(oldsd);
 	}
 
 	return 0;
@@ -11890,6 +11927,10 @@ static int __init net_dev_init(void)
 				       NULL, dev_cpu_dead);
 	WARN_ON(rc < 0);
 	rc = 0;
+
+	/* avoid static key IPIs to isolated CPUs */
+	if (housekeeping_enabled(HK_TYPE_MISC))
+		net_enable_timestamp();
 out:
 	if (rc < 0) {
 		for_each_possible_cpu(i) {

@@ -51,6 +51,7 @@
 #endif
 #include <linux/string.h>
 #include <linux/skbuff.h>
+#include <linux/skbuff_ref.h>
 #include <linux/splice.h>
 #include <linux/cache.h>
 #include <linux/rtnetlink.h>
@@ -775,10 +776,9 @@ skb_fail:
 EXPORT_SYMBOL(__netdev_alloc_skb);
 
 /**
- *	__napi_alloc_skb - allocate skbuff for rx in a specific NAPI instance
+ *	napi_alloc_skb - allocate skbuff for rx in a specific NAPI instance
  *	@napi: napi instance this buffer was allocated for
  *	@len: length to allocate
- *	@gfp_mask: get_free_pages mask, passed to alloc_skb and alloc_pages
  *
  *	Allocate a new sk_buff for use in NAPI receive.  This buffer will
  *	attempt to allocate the head from a special reserved region used
@@ -787,9 +787,9 @@ EXPORT_SYMBOL(__netdev_alloc_skb);
  *
  *	%NULL is returned if there is no free memory.
  */
-struct sk_buff *__napi_alloc_skb(struct napi_struct *napi, unsigned int len,
-				 gfp_t gfp_mask)
+struct sk_buff *napi_alloc_skb(struct napi_struct *napi, unsigned int len)
 {
+	gfp_t gfp_mask = GFP_ATOMIC | __GFP_NOWARN;
 	struct napi_alloc_cache *nc;
 	struct sk_buff *skb;
 	bool pfmemalloc;
@@ -860,7 +860,7 @@ skb_success:
 skb_fail:
 	return skb;
 }
-EXPORT_SYMBOL(__napi_alloc_skb);
+EXPORT_SYMBOL(napi_alloc_skb);
 
 void skb_add_rx_frag_netmem(struct sk_buff *skb, int i, netmem_ref netmem,
 			    int off, int size, unsigned int truesize)
@@ -905,11 +905,6 @@ static void skb_clone_fraglist(struct sk_buff *skb)
 
 	skb_walk_frags(skb, list)
 		skb_get(list);
-}
-
-static bool is_pp_page(struct page *page)
-{
-	return (page->pp_magic & ~0x3UL) == PP_SIGNATURE;
 }
 
 int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
@@ -1005,11 +1000,8 @@ int skb_cow_data_for_xdp(struct page_pool *pool, struct sk_buff **pskb,
 EXPORT_SYMBOL(skb_cow_data_for_xdp);
 
 #if IS_ENABLED(CONFIG_PAGE_POOL)
-bool napi_pp_put_page(struct page *page, bool napi_safe)
+bool napi_pp_put_page(struct page *page)
 {
-	bool allow_direct = false;
-	struct page_pool *pp;
-
 	page = compound_head(page);
 
 	/* page->pp_magic is OR'ed with PP_SIGNATURE after the allocation
@@ -1022,70 +1014,18 @@ bool napi_pp_put_page(struct page *page, bool napi_safe)
 	if (unlikely(!is_pp_page(page)))
 		return false;
 
-	pp = page->pp;
-
-	/* Allow direct recycle if we have reasons to believe that we are
-	 * in the same context as the consumer would run, so there's
-	 * no possible race.
-	 * __page_pool_put_page() makes sure we're not in hardirq context
-	 * and interrupts are enabled prior to accessing the cache.
-	 */
-	if (napi_safe || in_softirq()) {
-		const struct napi_struct *napi = READ_ONCE(pp->p.napi);
-		unsigned int cpuid = smp_processor_id();
-
-		allow_direct = napi && READ_ONCE(napi->list_owner) == cpuid;
-		allow_direct |= READ_ONCE(pp->cpuid) == cpuid;
-	}
-
-	/* Driver set this to memory recycling info. Reset it on recycle.
-	 * This will *not* work for NIC using a split-page memory model.
-	 * The page will be returned to the pool here regardless of the
-	 * 'flipped' fragment being in use or not.
-	 */
-	page_pool_put_full_page(pp, page, allow_direct);
+	page_pool_put_full_page(page->pp, page, false);
 
 	return true;
 }
 EXPORT_SYMBOL(napi_pp_put_page);
 #endif
 
-static bool skb_pp_recycle(struct sk_buff *skb, void *data, bool napi_safe)
+static bool skb_pp_recycle(struct sk_buff *skb, void *data)
 {
 	if (!IS_ENABLED(CONFIG_PAGE_POOL) || !skb->pp_recycle)
 		return false;
-	return napi_pp_put_page(virt_to_page(data), napi_safe);
-}
-
-/**
- * skb_pp_frag_ref() - Increase fragment references of a page pool aware skb
- * @skb:	page pool aware skb
- *
- * Increase the fragment reference count (pp_ref_count) of a skb. This is
- * intended to gain fragment references only for page pool aware skbs,
- * i.e. when skb->pp_recycle is true, and not for fragments in a
- * non-pp-recycling skb. It has a fallback to increase references on normal
- * pages, as page pool aware skbs may also have normal page fragments.
- */
-static int skb_pp_frag_ref(struct sk_buff *skb)
-{
-	struct skb_shared_info *shinfo;
-	struct page *head_page;
-	int i;
-
-	if (!skb->pp_recycle)
-		return -EINVAL;
-
-	shinfo = skb_shinfo(skb);
-
-	for (i = 0; i < shinfo->nr_frags; i++) {
-		head_page = compound_head(skb_frag_page(&shinfo->frags[i]));
-		if (likely(is_pp_page(head_page)))
-			page_pool_ref_page(head_page);
-		else
-			page_ref_inc(head_page);
-	}
-	return 0;
+	return napi_pp_put_page(virt_to_page(data));
 }
 
 static void skb_kfree_head(void *head, unsigned int end_offset)
@@ -1096,12 +1036,12 @@ static void skb_kfree_head(void *head, unsigned int end_offset)
 		kfree(head);
 }
 
-static void skb_free_head(struct sk_buff *skb, bool napi_safe)
+static void skb_free_head(struct sk_buff *skb)
 {
 	unsigned char *head = skb->head;
 
 	if (skb->head_frag) {
-		if (skb_pp_recycle(skb, head, napi_safe))
+		if (skb_pp_recycle(skb, head))
 			return;
 		skb_free_frag(head);
 	} else {
@@ -1109,8 +1049,7 @@ static void skb_free_head(struct sk_buff *skb, bool napi_safe)
 	}
 }
 
-static void skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason,
-			     bool napi_safe)
+static void skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
 	int i;
@@ -1127,13 +1066,13 @@ static void skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason,
 	}
 
 	for (i = 0; i < shinfo->nr_frags; i++)
-		napi_frag_unref(&shinfo->frags[i], skb->pp_recycle, napi_safe);
+		__skb_frag_unref(&shinfo->frags[i], skb->pp_recycle);
 
 free_head:
 	if (shinfo->frag_list)
 		kfree_skb_list_reason(shinfo->frag_list, reason);
 
-	skb_free_head(skb, napi_safe);
+	skb_free_head(skb);
 exit:
 	/* When we clone an SKB we copy the reycling bit. The pp_recycle
 	 * bit is only set on the head though, so in order to avoid races
@@ -1194,12 +1133,11 @@ void skb_release_head_state(struct sk_buff *skb)
 }
 
 /* Free everything but the sk_buff shell. */
-static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason,
-			    bool napi_safe)
+static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason)
 {
 	skb_release_head_state(skb);
 	if (likely(skb->head))
-		skb_release_data(skb, reason, napi_safe);
+		skb_release_data(skb, reason);
 }
 
 /**
@@ -1213,7 +1151,7 @@ static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason,
 
 void __kfree_skb(struct sk_buff *skb)
 {
-	skb_release_all(skb, SKB_DROP_REASON_NOT_SPECIFIED, false);
+	skb_release_all(skb, SKB_DROP_REASON_NOT_SPECIFIED);
 	kfree_skbmem(skb);
 }
 EXPORT_SYMBOL(__kfree_skb);
@@ -1270,7 +1208,7 @@ static void kfree_skb_add_bulk(struct sk_buff *skb,
 		return;
 	}
 
-	skb_release_all(skb, reason, false);
+	skb_release_all(skb, reason);
 	sa->skb_array[sa->skb_count++] = skb;
 
 	if (unlikely(sa->skb_count == KFREE_SKB_BULK_SIZE)) {
@@ -1331,22 +1269,28 @@ void skb_dump(const char *level, const struct sk_buff *skb, bool full_pkt)
 	has_trans = skb_transport_header_was_set(skb);
 
 	printk("%sskb len=%u headroom=%u headlen=%u tailroom=%u\n"
-	       "mac=(%d,%d) net=(%d,%d) trans=%d\n"
+	       "mac=(%d,%d) mac_len=%u net=(%d,%d) trans=%d\n"
 	       "shinfo(txflags=%u nr_frags=%u gso(size=%hu type=%u segs=%hu))\n"
-	       "csum(0x%x ip_summed=%u complete_sw=%u valid=%u level=%u)\n"
-	       "hash(0x%x sw=%u l4=%u) proto=0x%04x pkttype=%u iif=%d\n",
+	       "csum(0x%x start=%u offset=%u ip_summed=%u complete_sw=%u valid=%u level=%u)\n"
+	       "hash(0x%x sw=%u l4=%u) proto=0x%04x pkttype=%u iif=%d\n"
+	       "priority=0x%x mark=0x%x alloc_cpu=%u vlan_all=0x%x\n"
+	       "encapsulation=%d inner(proto=0x%04x, mac=%u, net=%u, trans=%u)\n",
 	       level, skb->len, headroom, skb_headlen(skb), tailroom,
 	       has_mac ? skb->mac_header : -1,
 	       has_mac ? skb_mac_header_len(skb) : -1,
+	       skb->mac_len,
 	       skb->network_header,
 	       has_trans ? skb_network_header_len(skb) : -1,
 	       has_trans ? skb->transport_header : -1,
 	       sh->tx_flags, sh->nr_frags,
 	       sh->gso_size, sh->gso_type, sh->gso_segs,
-	       skb->csum, skb->ip_summed, skb->csum_complete_sw,
-	       skb->csum_valid, skb->csum_level,
+	       skb->csum, skb->csum_start, skb->csum_offset, skb->ip_summed,
+	       skb->csum_complete_sw, skb->csum_valid, skb->csum_level,
 	       skb->hash, skb->sw_hash, skb->l4_hash,
-	       ntohs(skb->protocol), skb->pkt_type, skb->skb_iif);
+	       ntohs(skb->protocol), skb->pkt_type, skb->skb_iif,
+	       skb->priority, skb->mark, skb->alloc_cpu, skb->vlan_all,
+	       skb->encapsulation, skb->inner_protocol, skb->inner_mac_header,
+	       skb->inner_network_header, skb->inner_transport_header);
 
 	if (dev)
 		printk("%sdev name=%s feat=%pNF\n",
@@ -1444,7 +1388,7 @@ EXPORT_SYMBOL(consume_skb);
 void __consume_stateless_skb(struct sk_buff *skb)
 {
 	trace_consume_skb(skb, __builtin_return_address(0));
-	skb_release_data(skb, SKB_CONSUMED, false);
+	skb_release_data(skb, SKB_CONSUMED);
 	kfree_skbmem(skb);
 }
 
@@ -1471,7 +1415,7 @@ static void napi_skb_cache_put(struct sk_buff *skb)
 
 void __napi_kfree_skb(struct sk_buff *skb, enum skb_drop_reason reason)
 {
-	skb_release_all(skb, reason, true);
+	skb_release_all(skb, reason);
 	napi_skb_cache_put(skb);
 }
 
@@ -1509,7 +1453,7 @@ void napi_consume_skb(struct sk_buff *skb, int budget)
 		return;
 	}
 
-	skb_release_all(skb, SKB_CONSUMED, !!budget);
+	skb_release_all(skb, SKB_CONSUMED);
 	napi_skb_cache_put(skb);
 }
 EXPORT_SYMBOL(napi_consume_skb);
@@ -1640,7 +1584,7 @@ EXPORT_SYMBOL_GPL(alloc_skb_for_msg);
  */
 struct sk_buff *skb_morph(struct sk_buff *dst, struct sk_buff *src)
 {
-	skb_release_all(dst, SKB_CONSUMED, false);
+	skb_release_all(dst, SKB_CONSUMED);
 	return __skb_clone(dst, src);
 }
 EXPORT_SYMBOL_GPL(skb_morph);
@@ -2272,9 +2216,9 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 		if (skb_has_frag_list(skb))
 			skb_clone_fraglist(skb);
 
-		skb_release_data(skb, SKB_CONSUMED, false);
+		skb_release_data(skb, SKB_CONSUMED);
 	} else {
-		skb_free_head(skb, false);
+		skb_free_head(skb);
 	}
 	off = (data + nhead) - skb->head;
 
@@ -4196,7 +4140,7 @@ int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen)
 			to++;
 
 		} else {
-			__skb_frag_ref(fragfrom);
+			__skb_frag_ref(fragfrom, skb->pp_recycle);
 			skb_frag_page_copy(fragto, fragfrom);
 			skb_frag_off_copy(fragto, fragfrom);
 			skb_frag_size_set(fragto, todo);
@@ -4846,7 +4790,7 @@ normal:
 			}
 
 			*nskb_frag = (i < 0) ? skb_head_frag_to_page_desc(frag_skb) : *frag;
-			__skb_frag_ref(nskb_frag);
+			__skb_frag_ref(nskb_frag, nskb->pp_recycle);
 			size = skb_frag_size(nskb_frag);
 
 			if (pos < offset) {
@@ -5977,10 +5921,8 @@ bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
 	/* if the skb is not cloned this does nothing
 	 * since we set nr_frags to 0.
 	 */
-	if (skb_pp_frag_ref(from)) {
-		for (i = 0; i < from_shinfo->nr_frags; i++)
-			__skb_frag_ref(&from_shinfo->frags[i]);
-	}
+	for (i = 0; i < from_shinfo->nr_frags; i++)
+		__skb_frag_ref(&from_shinfo->frags[i], from->pp_recycle);
 
 	to->truesize += delta;
 	to->len += len;
@@ -6575,12 +6517,12 @@ static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 			skb_frag_ref(skb, i);
 		if (skb_has_frag_list(skb))
 			skb_clone_fraglist(skb);
-		skb_release_data(skb, SKB_CONSUMED, false);
+		skb_release_data(skb, SKB_CONSUMED);
 	} else {
 		/* we can reuse existing recount- all we did was
 		 * relocate values
 		 */
-		skb_free_head(skb, false);
+		skb_free_head(skb);
 	}
 
 	skb->head = data;
@@ -6715,7 +6657,7 @@ static int pskb_carve_inside_nonlinear(struct sk_buff *skb, const u32 off,
 		skb_kfree_head(data, size);
 		return -ENOMEM;
 	}
-	skb_release_data(skb, SKB_CONSUMED, false);
+	skb_release_data(skb, SKB_CONSUMED);
 
 	skb->head = data;
 	skb->head_frag = 0;
@@ -6995,6 +6937,19 @@ free_now:
 EXPORT_SYMBOL(__skb_ext_put);
 #endif /* CONFIG_SKB_EXTENSIONS */
 
+static void kfree_skb_napi_cache(struct sk_buff *skb)
+{
+	/* if SKB is a clone, don't handle this case */
+	if (skb->fclone != SKB_FCLONE_UNAVAILABLE) {
+		__kfree_skb(skb);
+		return;
+	}
+
+	local_bh_disable();
+	__napi_kfree_skb(skb, SKB_CONSUMED);
+	local_bh_enable();
+}
+
 /**
  * skb_attempt_defer_free - queue skb for remote freeing
  * @skb: buffer
@@ -7010,10 +6965,10 @@ void skb_attempt_defer_free(struct sk_buff *skb)
 	unsigned int defer_max;
 	bool kick;
 
-	if (WARN_ON_ONCE(cpu >= nr_cpu_ids) ||
-	    !cpu_online(cpu) ||
-	    cpu == raw_smp_processor_id()) {
-nodefer:	__kfree_skb(skb);
+	if (cpu == raw_smp_processor_id() ||
+	    WARN_ON_ONCE(cpu >= nr_cpu_ids) ||
+	    !cpu_online(cpu)) {
+nodefer:	kfree_skb_napi_cache(skb);
 		return;
 	}
 

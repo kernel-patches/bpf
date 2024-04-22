@@ -219,6 +219,13 @@ void mlx5e_build_ptys2ethtool_map(void)
 				       ETHTOOL_LINK_MODE_400000baseLR4_ER4_FR4_Full_BIT,
 				       ETHTOOL_LINK_MODE_400000baseDR4_Full_BIT,
 				       ETHTOOL_LINK_MODE_400000baseCR4_Full_BIT);
+	MLX5_BUILD_PTYS2ETHTOOL_CONFIG(MLX5E_800GAUI_8_800GBASE_CR8_KR8, ext,
+				       ETHTOOL_LINK_MODE_800000baseCR8_Full_BIT,
+				       ETHTOOL_LINK_MODE_800000baseKR8_Full_BIT,
+				       ETHTOOL_LINK_MODE_800000baseDR8_Full_BIT,
+				       ETHTOOL_LINK_MODE_800000baseDR8_2_Full_BIT,
+				       ETHTOOL_LINK_MODE_800000baseSR8_Full_BIT,
+				       ETHTOOL_LINK_MODE_800000baseVR8_Full_BIT);
 }
 
 static void mlx5e_ethtool_get_speed_arr(struct mlx5_core_dev *mdev,
@@ -269,8 +276,7 @@ void mlx5e_ethtool_get_strings(struct mlx5e_priv *priv, u32 stringset, u8 *data)
 	switch (stringset) {
 	case ETH_SS_PRIV_FLAGS:
 		for (i = 0; i < MLX5E_NUM_PFLAGS; i++)
-			strcpy(data + i * ETH_GSTRING_LEN,
-			       mlx5e_priv_flags[i].name);
+			ethtool_puts(&data, mlx5e_priv_flags[i].name);
 		break;
 
 	case ETH_SS_TEST:
@@ -451,6 +457,34 @@ int mlx5e_ethtool_set_channels(struct mlx5e_priv *priv,
 
 	mutex_lock(&priv->state_lock);
 
+	if (mlx5e_rx_res_get_current_hash(priv->rx_res).hfunc == ETH_RSS_HASH_XOR) {
+		unsigned int xor8_max_channels = mlx5e_rqt_max_num_channels_allowed_for_xor8();
+
+		if (count > xor8_max_channels) {
+			err = -EINVAL;
+			netdev_err(priv->netdev, "%s: Requested number of channels (%d) exceeds the maximum allowed by the XOR8 RSS hfunc (%d)\n",
+				   __func__, count, xor8_max_channels);
+			goto out;
+		}
+	}
+
+	/* If RXFH is configured, changing the channels number is allowed only if
+	 * it does not require resizing the RSS table. This is because the previous
+	 * configuration may no longer be compatible with the new RSS table.
+	 */
+	if (netif_is_rxfh_configured(priv->netdev)) {
+		int cur_rqt_size = mlx5e_rqt_size(priv->mdev, cur_params->num_channels);
+		int new_rqt_size = mlx5e_rqt_size(priv->mdev, count);
+
+		if (new_rqt_size != cur_rqt_size) {
+			err = -EINVAL;
+			netdev_err(priv->netdev,
+				   "%s: RXFH is configured, block changing channels number that affects RSS table size (new: %d, current: %d)\n",
+				   __func__, new_rqt_size, cur_rqt_size);
+			goto out;
+		}
+	}
+
 	/* Don't allow changing the number of channels if HTB offload is active,
 	 * because the numeration of the QoS SQs will change, while per-queue
 	 * qdiscs are attached.
@@ -561,12 +595,12 @@ static int mlx5e_get_coalesce(struct net_device *netdev,
 static void
 mlx5e_set_priv_channels_tx_coalesce(struct mlx5e_priv *priv, struct ethtool_coalesce *coal)
 {
-	struct mlx5_core_dev *mdev = priv->mdev;
 	int tc;
 	int i;
 
 	for (i = 0; i < priv->channels.num; ++i) {
 		struct mlx5e_channel *c = priv->channels.c[i];
+		struct mlx5_core_dev *mdev = c->mdev;
 
 		for (tc = 0; tc < c->num_tc; tc++) {
 			mlx5_core_modify_cq_moderation(mdev,
@@ -580,11 +614,11 @@ mlx5e_set_priv_channels_tx_coalesce(struct mlx5e_priv *priv, struct ethtool_coal
 static void
 mlx5e_set_priv_channels_rx_coalesce(struct mlx5e_priv *priv, struct ethtool_coalesce *coal)
 {
-	struct mlx5_core_dev *mdev = priv->mdev;
 	int i;
 
 	for (i = 0; i < priv->channels.num; ++i) {
 		struct mlx5e_channel *c = priv->channels.c[i];
+		struct mlx5_core_dev *mdev = c->mdev;
 
 		mlx5_core_modify_cq_moderation(mdev, &c->rq.cq.mcq,
 					       coal->rx_coalesce_usecs,
@@ -990,8 +1024,8 @@ static void get_lp_advertising(struct mlx5_core_dev *mdev, u32 eth_proto_lp,
 	ptys2ethtool_adver_link(lp_advertising, eth_proto_lp, ext);
 }
 
-int mlx5e_ethtool_get_link_ksettings(struct mlx5e_priv *priv,
-				     struct ethtool_link_ksettings *link_ksettings)
+static int mlx5e_ethtool_get_link_ksettings(struct mlx5e_priv *priv,
+					    struct ethtool_link_ksettings *link_ksettings)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
 	u32 out[MLX5_ST_SZ_DW(ptys_reg)] = {};
@@ -1161,8 +1195,8 @@ static bool ext_requested(u8 autoneg, const unsigned long *adver, bool ext_suppo
 	return  autoneg == AUTONEG_ENABLE ? ext_link_mode : ext_supported;
 }
 
-int mlx5e_ethtool_set_link_ksettings(struct mlx5e_priv *priv,
-				     const struct ethtool_link_ksettings *link_ksettings)
+static int mlx5e_ethtool_set_link_ksettings(struct mlx5e_priv *priv,
+					    const struct ethtool_link_ksettings *link_ksettings)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
 	struct mlx5_port_eth_proto eproto;
@@ -1262,7 +1296,7 @@ static u32 mlx5e_get_rxfh_indir_size(struct net_device *netdev)
 	return mlx5e_ethtool_get_rxfh_indir_size(priv);
 }
 
-int mlx5e_get_rxfh(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
+static int mlx5e_get_rxfh(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
 {
 	struct mlx5e_priv *priv = netdev_priv(netdev);
 	u32 rss_context = rxfh->rss_context;
@@ -1275,23 +1309,36 @@ int mlx5e_get_rxfh(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
 	return err;
 }
 
-int mlx5e_set_rxfh(struct net_device *dev, struct ethtool_rxfh_param *rxfh,
-		   struct netlink_ext_ack *extack)
+static int mlx5e_set_rxfh(struct net_device *dev, struct ethtool_rxfh_param *rxfh,
+			  struct netlink_ext_ack *extack)
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	u32 *rss_context = &rxfh->rss_context;
 	u8 hfunc = rxfh->hfunc;
+	unsigned int count;
 	int err;
 
 	mutex_lock(&priv->state_lock);
+
+	count = priv->channels.params.num_channels;
+
+	if (hfunc == ETH_RSS_HASH_XOR) {
+		unsigned int xor8_max_channels = mlx5e_rqt_max_num_channels_allowed_for_xor8();
+
+		if (count > xor8_max_channels) {
+			err = -EINVAL;
+			netdev_err(priv->netdev, "%s: Cannot set RSS hash function to XOR, current number of channels (%d) exceeds the maximum allowed for XOR8 RSS hfunc (%d)\n",
+				   __func__, count, xor8_max_channels);
+			goto unlock;
+		}
+	}
+
 	if (*rss_context && rxfh->rss_delete) {
 		err = mlx5e_rx_res_rss_destroy(priv->rx_res, *rss_context);
 		goto unlock;
 	}
 
 	if (*rss_context == ETH_RXFH_CONTEXT_ALLOC) {
-		unsigned int count = priv->channels.params.num_channels;
-
 		err = mlx5e_rx_res_rss_init(priv->rx_res, rss_context, count);
 		if (err)
 			goto unlock;
@@ -1405,8 +1452,8 @@ static void mlx5e_get_pause_stats(struct net_device *netdev,
 	mlx5e_stats_pause_get(priv, pause_stats);
 }
 
-void mlx5e_ethtool_get_pauseparam(struct mlx5e_priv *priv,
-				  struct ethtool_pauseparam *pauseparam)
+static void mlx5e_ethtool_get_pauseparam(struct mlx5e_priv *priv,
+					 struct ethtool_pauseparam *pauseparam)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
 	int err;
@@ -1427,8 +1474,8 @@ static void mlx5e_get_pauseparam(struct net_device *netdev,
 	mlx5e_ethtool_get_pauseparam(priv, pauseparam);
 }
 
-int mlx5e_ethtool_set_pauseparam(struct mlx5e_priv *priv,
-				 struct ethtool_pauseparam *pauseparam)
+static int mlx5e_ethtool_set_pauseparam(struct mlx5e_priv *priv,
+					struct ethtool_pauseparam *pauseparam)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
 	int err;
@@ -2381,6 +2428,14 @@ static void mlx5e_get_rmon_stats(struct net_device *netdev,
 	mlx5e_stats_rmon_get(priv, rmon_stats, ranges);
 }
 
+static void mlx5e_get_ts_stats(struct net_device *netdev,
+			       struct ethtool_ts_stats *ts_stats)
+{
+	struct mlx5e_priv *priv = netdev_priv(netdev);
+
+	mlx5e_stats_ts_get(priv, ts_stats);
+}
+
 const struct ethtool_ops mlx5e_ethtool_ops = {
 	.cap_rss_ctx_supported	= true,
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
@@ -2430,5 +2485,6 @@ const struct ethtool_ops mlx5e_ethtool_ops = {
 	.get_eth_mac_stats = mlx5e_get_eth_mac_stats,
 	.get_eth_ctrl_stats = mlx5e_get_eth_ctrl_stats,
 	.get_rmon_stats    = mlx5e_get_rmon_stats,
+	.get_ts_stats      = mlx5e_get_ts_stats,
 	.get_link_ext_stats = mlx5e_get_link_ext_stats
 };

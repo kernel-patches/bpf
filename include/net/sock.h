@@ -1410,32 +1410,34 @@ sk_memory_allocated(const struct sock *sk)
 #define SK_MEMORY_PCPU_RESERVE (1 << (20 - PAGE_SHIFT))
 extern int sysctl_mem_pcpu_rsv;
 
-static inline void
-sk_memory_allocated_add(struct sock *sk, int amt)
+static inline void proto_memory_pcpu_drain(struct proto *proto)
 {
-	int local_reserve;
+	int val = this_cpu_xchg(*proto->per_cpu_fw_alloc, 0);
 
-	preempt_disable();
-	local_reserve = __this_cpu_add_return(*sk->sk_prot->per_cpu_fw_alloc, amt);
-	if (local_reserve >= READ_ONCE(sysctl_mem_pcpu_rsv)) {
-		__this_cpu_sub(*sk->sk_prot->per_cpu_fw_alloc, local_reserve);
-		atomic_long_add(local_reserve, sk->sk_prot->memory_allocated);
-	}
-	preempt_enable();
+	if (val)
+		atomic_long_add(val, proto->memory_allocated);
 }
 
 static inline void
-sk_memory_allocated_sub(struct sock *sk, int amt)
+sk_memory_allocated_add(const struct sock *sk, int val)
 {
-	int local_reserve;
+	struct proto *proto = sk->sk_prot;
 
-	preempt_disable();
-	local_reserve = __this_cpu_sub_return(*sk->sk_prot->per_cpu_fw_alloc, amt);
-	if (local_reserve <= -READ_ONCE(sysctl_mem_pcpu_rsv)) {
-		__this_cpu_sub(*sk->sk_prot->per_cpu_fw_alloc, local_reserve);
-		atomic_long_add(local_reserve, sk->sk_prot->memory_allocated);
-	}
-	preempt_enable();
+	val = this_cpu_add_return(*proto->per_cpu_fw_alloc, val);
+
+	if (unlikely(val >= READ_ONCE(sysctl_mem_pcpu_rsv)))
+		proto_memory_pcpu_drain(proto);
+}
+
+static inline void
+sk_memory_allocated_sub(const struct sock *sk, int val)
+{
+	struct proto *proto = sk->sk_prot;
+
+	val = this_cpu_sub_return(*proto->per_cpu_fw_alloc, val);
+
+	if (unlikely(val <= -READ_ONCE(sysctl_mem_pcpu_rsv)))
+		proto_memory_pcpu_drain(proto);
 }
 
 #define SK_ALLOC_PERCPU_COUNTER_BATCH 16
@@ -2513,6 +2515,12 @@ static inline void sk_wake_async(const struct sock *sk, int how, int band)
 	}
 }
 
+static inline void sk_wake_async_rcu(const struct sock *sk, int how, int band)
+{
+	if (unlikely(sock_flag(sk, SOCK_FASYNC)))
+		sock_wake_async(rcu_dereference(sk->sk_wq), how, band);
+}
+
 /* Since sk_{r,w}mem_alloc sums skb->truesize, even a small frame might
  * need sizeof(sk_buff) + MTU + padding, unless net driver perform copybreak.
  * Note: for send buffers, TCP works better if we can build two skbs at
@@ -2829,12 +2837,10 @@ static inline struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 
 	if (sk && sk_fullsock(sk) && sk->sk_validate_xmit_skb) {
 		skb = sk->sk_validate_xmit_skb(sk, dev, skb);
-#ifdef CONFIG_TLS_DEVICE
-	} else if (unlikely(skb->decrypted)) {
+	} else if (unlikely(skb_is_decrypted(skb))) {
 		pr_warn_ratelimited("unencrypted skb with no associated socket - dropping\n");
 		kfree_skb(skb);
 		skb = NULL;
-#endif
 	}
 #endif
 

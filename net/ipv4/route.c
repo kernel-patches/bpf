@@ -106,9 +106,6 @@
 
 #include "fib_lookup.h"
 
-#define RT_FL_TOS(oldflp4) \
-	((oldflp4)->flowi4_tos & (IPTOS_RT_MASK | RTO_ONLINK))
-
 #define RT_GC_TIMEOUT (300*HZ)
 
 #define DEFAULT_MIN_PMTU (512 + 20 + 20)
@@ -497,15 +494,6 @@ void __ip_select_ident(struct net *net, struct iphdr *iph, int segs)
 	iph->id = htons(id);
 }
 EXPORT_SYMBOL(__ip_select_ident);
-
-static void ip_rt_fix_tos(struct flowi4 *fl4)
-{
-	__u8 tos = RT_FL_TOS(fl4);
-
-	fl4->flowi4_tos = tos & IPTOS_RT_MASK;
-	if (tos & RTO_ONLINK)
-		fl4->flowi4_scope = RT_SCOPE_LINK;
-}
 
 static void __build_flow_key(const struct net *net, struct flowi4 *fl4,
 			     const struct sock *sk, const struct iphdr *iph,
@@ -926,13 +914,11 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 		icmp_send(skb, ICMP_REDIRECT, ICMP_REDIR_HOST, gw);
 		peer->rate_last = jiffies;
 		++peer->n_redirects;
-#ifdef CONFIG_IP_ROUTE_VERBOSE
-		if (log_martians &&
+		if (IS_ENABLED(CONFIG_IP_ROUTE_VERBOSE) && log_martians &&
 		    peer->n_redirects == ip_rt_redirect_number)
 			net_warn_ratelimited("host %pI4/if%d ignores redirects for %pI4 to %pI4\n",
 					     &ip_hdr(skb)->saddr, inet_iif(skb),
 					     &ip_hdr(skb)->daddr, &gw);
-#endif
 	}
 out_put_peer:
 	inet_putpeer(peer);
@@ -2168,6 +2154,9 @@ int ip_route_use_hint(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	int err = -EINVAL;
 	u32 tag = 0;
 
+	if (!in_dev)
+		return -EINVAL;
+
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr))
 		goto martian_source;
 
@@ -2638,7 +2627,7 @@ struct rtable *ip_route_output_key_hash(struct net *net, struct flowi4 *fl4,
 	struct rtable *rth;
 
 	fl4->flowi4_iif = LOOPBACK_IFINDEX;
-	ip_rt_fix_tos(fl4);
+	fl4->flowi4_tos &= IPTOS_RT_MASK;
 
 	rcu_read_lock();
 	rth = ip_route_output_key_hash_rcu(net, fl4, &res, skb);
@@ -3590,7 +3579,7 @@ err_dup:
 
 static __net_exit void sysctl_route_net_exit(struct net *net)
 {
-	struct ctl_table *tbl;
+	const struct ctl_table *tbl;
 
 	tbl = net->ipv4.route_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->ipv4.route_hdr);

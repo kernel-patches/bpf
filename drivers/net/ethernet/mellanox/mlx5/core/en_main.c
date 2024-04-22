@@ -209,8 +209,8 @@ static int mlx5e_devcom_init_mpv(struct mlx5e_priv *priv, u64 *data)
 						      *data,
 						      mlx5e_devcom_event_mpv,
 						      priv);
-	if (IS_ERR_OR_NULL(priv->devcom))
-		return -EOPNOTSUPP;
+	if (IS_ERR(priv->devcom))
+		return PTR_ERR(priv->devcom);
 
 	if (mlx5_core_is_mp_master(priv->mdev)) {
 		mlx5_devcom_send_event(priv->devcom, MPV_DEVCOM_MASTER_UP,
@@ -4950,10 +4950,7 @@ static int mlx5e_bridge_setlink(struct net_device *dev, struct nlmsghdr *nlh,
 	if (!br_spec)
 		return -EINVAL;
 
-	nla_for_each_nested(attr, br_spec, rem) {
-		if (nla_type(attr) != IFLA_BRIDGE_MODE)
-			continue;
-
+	nla_for_each_nested_type(attr, IFLA_BRIDGE_MODE, br_spec, rem) {
 		mode = nla_get_u16(attr);
 		if (mode > BRIDGE_MODE_VEPA)
 			return -EINVAL;
@@ -5565,7 +5562,7 @@ static void mlx5e_nic_disable(struct mlx5e_priv *priv)
 	mlx5e_ipsec_cleanup(priv);
 }
 
-int mlx5e_update_nic_rx(struct mlx5e_priv *priv)
+static int mlx5e_update_nic_rx(struct mlx5e_priv *priv)
 {
 	return mlx5e_refresh_tirs(priv, false, false);
 }
@@ -5726,9 +5723,7 @@ void mlx5e_priv_cleanup(struct mlx5e_priv *priv)
 	kfree(priv->tx_rates);
 	kfree(priv->txq2sq);
 	destroy_workqueue(priv->wq);
-	mutex_lock(&priv->state_lock);
 	mlx5e_selq_cleanup(&priv->selq);
-	mutex_unlock(&priv->state_lock);
 	free_cpumask_var(priv->scratchpad.cpumask);
 
 	for (i = 0; i < priv->htb_max_qos_sqs; i++)
