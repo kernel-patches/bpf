@@ -11049,6 +11049,7 @@ enum special_kfunc_type {
 	KF_bpf_preempt_disable,
 	KF_bpf_preempt_enable,
 	KF_bpf_iter_css_task_new,
+	KF_bpf_session_cookie,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11076,6 +11077,7 @@ BTF_ID(func, bpf_wq_set_callback_impl)
 #ifdef CONFIG_CGROUPS
 BTF_ID(func, bpf_iter_css_task_new)
 #endif
+BTF_ID(func, bpf_session_cookie)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -11109,6 +11111,7 @@ BTF_ID(func, bpf_iter_css_task_new)
 #else
 BTF_ID_UNUSED
 #endif
+BTF_ID(func, bpf_session_cookie)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -12571,6 +12574,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				 * because packet slices are not refcounted (see
 				 * dynptr_type_refcounted)
 				 */
+			} else if (meta.func_id == special_kfunc_list[KF_bpf_session_cookie]) {
+				mark_reg_known_zero(env, regs, BPF_REG_0);
+				regs[BPF_REG_0].type = PTR_TO_MEM;
+				regs[BPF_REG_0].mem_size = sizeof(u64);
 			} else {
 				verbose(env, "kernel function %s unhandled dynamic return type\n",
 					meta.func_name);
