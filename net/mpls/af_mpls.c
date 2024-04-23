@@ -1363,7 +1363,7 @@ done:
 #define MPLS_PERDEV_SYSCTL_OFFSET(field)	\
 	(&((struct mpls_dev *)0)->field)
 
-static int mpls_conf_proc(struct ctl_table *ctl, int write,
+static int mpls_conf_proc(const struct ctl_table *ctl, int write,
 			  void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int oval = *(int *)ctl->data;
@@ -2617,7 +2617,7 @@ nolabels:
 	return -ENOMEM;
 }
 
-static int mpls_platform_labels(struct ctl_table *table, int write,
+static int mpls_platform_labels(const struct ctl_table *table, int write,
 				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = table->data;

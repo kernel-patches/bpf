@@ -94,7 +94,7 @@ static struct cpumask *rps_default_mask_cow_alloc(struct net *net)
 	return rps_default_mask;
 }
 
-static int rps_default_mask_sysctl(struct ctl_table *table, int write,
+static int rps_default_mask_sysctl(const struct ctl_table *table, int write,
 				   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = (struct net *)table->data;
@@ -125,7 +125,7 @@ done:
 	return err;
 }
 
-static int rps_sock_flow_sysctl(struct ctl_table *table, int write,
+static int rps_sock_flow_sysctl(const struct ctl_table *table, int write,
 				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	unsigned int orig_size, size;
@@ -197,7 +197,7 @@ static int rps_sock_flow_sysctl(struct ctl_table *table, int write,
 #ifdef CONFIG_NET_FLOW_LIMIT
 static DEFINE_MUTEX(flow_limit_update_mutex);
 
-static int flow_limit_cpu_sysctl(struct ctl_table *table, int write,
+static int flow_limit_cpu_sysctl(const struct ctl_table *table, int write,
 				 void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct sd_flow_limit *cur;
@@ -254,7 +254,7 @@ done:
 	return ret;
 }
 
-static int flow_limit_table_len_sysctl(struct ctl_table *table, int write,
+static int flow_limit_table_len_sysctl(const struct ctl_table *table, int write,
 				       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	unsigned int old, *ptr;
@@ -276,7 +276,7 @@ static int flow_limit_table_len_sysctl(struct ctl_table *table, int write,
 #endif /* CONFIG_NET_FLOW_LIMIT */
 
 #ifdef CONFIG_NET_SCHED
-static int set_default_qdisc(struct ctl_table *table, int write,
+static int set_default_qdisc(const struct ctl_table *table, int write,
 			     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	char id[IFNAMSIZ];
@@ -295,7 +295,7 @@ static int set_default_qdisc(struct ctl_table *table, int write,
 }
 #endif
 
-static int proc_do_dev_weight(struct ctl_table *table, int write,
+static int proc_do_dev_weight(const struct ctl_table *table, int write,
 			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	static DEFINE_MUTEX(dev_weight_mutex);
@@ -313,7 +313,7 @@ static int proc_do_dev_weight(struct ctl_table *table, int write,
 	return ret;
 }
 
-static int proc_do_rss_key(struct ctl_table *table, int write,
+static int proc_do_rss_key(const struct ctl_table *table, int write,
 			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table fake_table;
@@ -326,7 +326,7 @@ static int proc_do_rss_key(struct ctl_table *table, int write,
 }
 
 #ifdef CONFIG_BPF_JIT
-static int proc_dointvec_minmax_bpf_enable(struct ctl_table *table, int write,
+static int proc_dointvec_minmax_bpf_enable(const struct ctl_table *table, int write,
 					   void *buffer, size_t *lenp,
 					   loff_t *ppos)
 {
@@ -359,7 +359,7 @@ static int proc_dointvec_minmax_bpf_enable(struct ctl_table *table, int write,
 
 # ifdef CONFIG_HAVE_EBPF_JIT
 static int
-proc_dointvec_minmax_bpf_restricted(struct ctl_table *table, int write,
+proc_dointvec_minmax_bpf_restricted(const struct ctl_table *table, int write,
 				    void *buffer, size_t *lenp, loff_t *ppos)
 {
 	if (!capable(CAP_SYS_ADMIN))
@@ -370,7 +370,7 @@ proc_dointvec_minmax_bpf_restricted(struct ctl_table *table, int write,
 # endif /* CONFIG_HAVE_EBPF_JIT */
 
 static int
-proc_dolongvec_minmax_bpf_restricted(struct ctl_table *table, int write,
+proc_dolongvec_minmax_bpf_restricted(const struct ctl_table *table, int write,
 				     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	if (!capable(CAP_SYS_ADMIN))

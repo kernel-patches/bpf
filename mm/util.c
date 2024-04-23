@@ -835,8 +835,8 @@ int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
 unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 
-int overcommit_ratio_handler(struct ctl_table *table, int write, void *buffer,
-		size_t *lenp, loff_t *ppos)
+int overcommit_ratio_handler(const struct ctl_table *table, int write,
+		void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
 
@@ -851,8 +851,8 @@ static void sync_overcommit_as(struct work_struct *dummy)
 	percpu_counter_sync(&vm_committed_as);
 }
 
-int overcommit_policy_handler(struct ctl_table *table, int write, void *buffer,
-		size_t *lenp, loff_t *ppos)
+int overcommit_policy_handler(const struct ctl_table *table, int write,
+		void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table t;
 	int new_policy = -1;
@@ -887,8 +887,8 @@ int overcommit_policy_handler(struct ctl_table *table, int write, void *buffer,
 	return ret;
 }
 
-int overcommit_kbytes_handler(struct ctl_table *table, int write, void *buffer,
-		size_t *lenp, loff_t *ppos)
+int overcommit_kbytes_handler(const struct ctl_table *table, int write,
+		void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
 

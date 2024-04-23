@@ -2334,7 +2334,7 @@ static bool seccomp_actions_logged_from_names(u32 *actions_logged, char *names)
 	return true;
 }
 
-static int read_actions_logged(struct ctl_table *ro_table, void *buffer,
+static int read_actions_logged(const struct ctl_table *ro_table, void *buffer,
 			       size_t *lenp, loff_t *ppos)
 {
 	char names[sizeof(seccomp_actions_avail)];
@@ -2352,7 +2352,7 @@ static int read_actions_logged(struct ctl_table *ro_table, void *buffer,
 	return proc_dostring(&table, 0, buffer, lenp, ppos);
 }
 
-static int write_actions_logged(struct ctl_table *ro_table, void *buffer,
+static int write_actions_logged(const struct ctl_table *ro_table, void *buffer,
 				size_t *lenp, loff_t *ppos, u32 *actions_logged)
 {
 	char names[sizeof(seccomp_actions_avail)];
@@ -2413,9 +2413,9 @@ static void audit_actions_logged(u32 actions_logged, u32 old_actions_logged,
 	return audit_seccomp_actions_logged(new, old, !ret);
 }
 
-static int seccomp_actions_logged_handler(struct ctl_table *ro_table, int write,
-					  void *buffer, size_t *lenp,
-					  loff_t *ppos)
+static int seccomp_actions_logged_handler(const struct ctl_table *ro_table,
+					  int write, void *buffer,
+					  size_t *lenp, loff_t *ppos)
 {
 	int ret;
 

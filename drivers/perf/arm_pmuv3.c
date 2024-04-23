@@ -1253,8 +1253,8 @@ static void armv8pmu_disable_user_access_ipi(void *unused)
 	armv8pmu_disable_user_access();
 }
 
-static int armv8pmu_proc_user_access_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *lenp, loff_t *ppos)
+static int armv8pmu_proc_user_access_handler(const struct ctl_table *table,
+		int write, void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	if (ret || !write || sysctl_perf_user_access)

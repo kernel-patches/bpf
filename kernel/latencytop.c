@@ -65,8 +65,8 @@ static struct latency_record latency_record[MAXLR];
 int latencytop_enabled;
 
 #ifdef CONFIG_SYSCTL
-static int sysctl_latencytop(struct ctl_table *table, int write, void *buffer,
-		size_t *lenp, loff_t *ppos)
+static int sysctl_latencytop(const struct ctl_table *table, int write,
+			     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int err;
 
