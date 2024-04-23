@@ -680,7 +680,8 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 				}
 			}
 
-			s->bytes_recvd += recv;
+			if (recv > 0)
+				s->bytes_recvd += recv;
 
 			if (opt->check_recved_len && s->bytes_recvd > total_bytes) {
 				errno = EMSGSIZE;
@@ -694,12 +695,14 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 						iov_length * cnt :
 						iov_length * iov_count;
 
-				errno = msg_verify_data(&msg, recv, chunk_sz);
-				if (errno) {
-					perror("data verify msg failed");
-					goto out_errno;
+				if (recv > 0) {
+					errno = msg_verify_data(&msg, recv, chunk_sz);
+					if (errno) {
+						perror("data verify msg failed");
+						goto out_errno;
+					}
 				}
-				if (recvp) {
+				if (recvp > 0) {
 					errno = msg_verify_data(&msg_peek,
 								recvp,
 								chunk_sz);
