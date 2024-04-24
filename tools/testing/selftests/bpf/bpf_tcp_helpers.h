@@ -21,6 +21,15 @@ BPF_PROG(name, args)
 #endif
 
 #define tcp_jiffies32 ((__u32)bpf_jiffies64())
+#define TCP_INFINITE_SSTHRESH 0x7fffffff
+
+#define FLAG_DATA_ACKED 0x04 /* This ACK acknowledged new data.		*/
+#define FLAG_SYN_ACKED 0x10 /* This ACK acknowledged SYN.		*/
+#define FLAG_DATA_SACKED 0x20 /* New SACK.				*/
+#define FLAG_SND_UNA_ADVANCED \
+	0x400 /* Snd_una was changed (!= FLAG_DATA_ACKED) */
+#define FLAG_ACKED (FLAG_DATA_ACKED | FLAG_SYN_ACKED)
+#define FLAG_FORWARD_PROGRESS (FLAG_ACKED | FLAG_DATA_SACKED)
 
 struct sock_common {
 	unsigned char	skc_state;
@@ -37,6 +46,7 @@ struct sock {
 	struct sock_common	__sk_common;
 #define sk_state		__sk_common.skc_state
 	unsigned long		sk_pacing_rate;
+	unsigned long		sk_max_pacing_rate;
 	__u32			sk_pacing_status; /* see enum sk_pacing */
 } __attribute__((preserve_access_index));
 
@@ -86,6 +96,19 @@ struct tcp_sock {
 	__u32	prior_cwnd;
 	__u64	tcp_mstamp;	/* most recent packet received/sent */
 	bool	is_mptcp;
+	__u32	snd_cwnd_stamp;
+	__u32	mss_cache;	/* Cached effective mss, not including SACKS */
+	__u32	high_seq;	/* snd_nxt at onset of congestion	*/
+	__u32	packets_out;	/* Packets which are "in flight"	*/
+	__u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
+	__u32	retrans_out;	/* Retransmitted packets out */
+	__u32	lost_out;	/* Lost packets */
+	__u32	sacked_out;	/* SACK'd packets */
+	__u32	prr_delivered;	/* Number of newly delivered packets to
+				 * receiver in Recovery.
+				 */
+	__u32	prr_out;	/* Total number of pkts sent during Recovery. */
+	__u32	reordering;	/* Packet reordering metric. */
 } __attribute__((preserve_access_index));
 
 static __always_inline struct inet_connection_sock *inet_csk(const struct sock *sk)
