@@ -1,10 +1,39 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024, Oracle and/or its affiliates. */
 
+#ifdef __KERNEL__
+#include <linux/bpf.h>
+#include <linux/btf.h>
+#include <linux/string.h>
+#include <linux/bpf_verifier.h>
+
+#define btf__type_by_id		btf_type_by_id
+#define btf__type_cnt		btf_nr_types
+#define btf__base_btf		btf_base_btf
+#define btf__name_by_offset	btf_name_by_offset
+#define btf_kflag		btf_type_kflag
+
+#define calloc(nmemb, size)	kvcalloc(nmemb, size, GFP_KERNEL | __GFP_NOWARN)
+#define free(ptr)		kvfree(ptr)
+
+static inline __u8 btf_int_bits(const struct btf_type *t)
+{
+	return BTF_INT_BITS(*(__u32 *)(t + 1));
+}
+
+static inline struct btf_decl_tag *btf_decl_tag(const struct btf_type *t)
+{
+	return (struct btf_decl_tag *)(t + 1);
+}
+
+#else
+
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
+
+#endif /* __KERNEL__ */
 
 struct btf;
 
