@@ -115,6 +115,7 @@ struct object {
 	const char *path;
 	const char *btf;
 	const char *base_btf_path;
+	int base;
 
 	struct {
 		int		 fd;
@@ -532,11 +533,26 @@ static int symbols_resolve(struct object *obj)
 	__u32 nr_types;
 
 	if (obj->base_btf_path) {
-		base_btf = btf__parse(obj->base_btf_path, NULL);
+		LIBBPF_OPTS(btf_parse_opts, optp);
+		const char *path;
+
+		if (obj->base) {
+			optp.btf_sec = BTF_BASE_ELF_SEC;
+			path = obj->path;
+			base_btf = btf__parse_opts(path, &optp);
+			/* fall back to normal base parsing if no BTF_BASE_ELF_SEC */
+			if (libbpf_get_error(base_btf))
+				base_btf = NULL;
+		}
+		if (!base_btf) {
+			optp.btf_sec = BTF_ELF_SEC;
+			path = obj->base_btf_path;
+			base_btf = btf__parse_opts(path, &optp);
+		}
 		err = libbpf_get_error(base_btf);
 		if (err) {
 			pr_err("FAILED: load base BTF from %s: %s\n",
-			       obj->base_btf_path, strerror(-err));
+			       path, strerror(-err));
 			return -1;
 		}
 	}
@@ -781,6 +797,8 @@ int main(int argc, const char **argv)
 			   "BTF data"),
 		OPT_STRING('b', "btf_base", &obj.base_btf_path, "file",
 			   "path of file providing base BTF"),
+		OPT_INCR('B', "base", &obj.base,
+			 "use " BTF_BASE_ELF_SEC " ELF section BTF as base"),
 		OPT_END()
 	};
 	int err = -1;
