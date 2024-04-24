@@ -13912,12 +13912,8 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_AND:
 	case BPF_XOR:
 	case BPF_OR:
-		return true;
-
-	/* Compute range for the following only if the src_reg is known.
-	 */
 	case BPF_MUL:
-		return src_known;
+		return true;
 
 	/* Shift operators range is only computable if shift dimension operand
 	 * is known. Also, shifts greater than 31 or 63 are undefined. This
