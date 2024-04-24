@@ -5541,3 +5541,61 @@ err_out:
 	errno = -ret;
 	return ret;
 }
+
+struct btf_rewrite_strs {
+	struct btf *btf;
+	const struct btf *old_base_btf;
+	int str_start;
+	int str_diff;
+};
+
+static int btf_rewrite_strs(__u32 *str_off, void *ctx)
+{
+	struct btf_rewrite_strs *r = ctx;
+	const char *s;
+	int off;
+
+	if (!*str_off)
+		return 0;
+	if (*str_off >= r->str_start) {
+		*str_off += r->str_diff;
+	} else {
+		s = btf__str_by_offset(r->old_base_btf, *str_off);
+		if (!s)
+			return -ENOENT;
+		off = btf__add_str(r->btf, s);
+		if (off < 0)
+			return off;
+		*str_off = off;
+	}
+	return 0;
+}
+
+int btf_set_base_btf(struct btf *btf, struct btf *base_btf)
+{
+	struct btf_rewrite_strs r = {};
+	struct btf_type *t;
+	int i, err;
+
+	r.old_base_btf = btf__base_btf(btf);
+	if (!r.old_base_btf)
+		return -EINVAL;
+	r.btf = btf;
+	r.str_start = r.old_base_btf->hdr->str_len;
+	r.str_diff = base_btf->hdr->str_len - r.old_base_btf->hdr->str_len;
+	btf->base_btf = base_btf;
+	btf->start_id = btf__type_cnt(base_btf);
+	btf->start_str_off = base_btf->hdr->str_len;
+	for (i = 0; i < btf->nr_types; i++) {
+		t = (struct btf_type *)btf__type_by_id(btf, i + btf->start_id);
+		err = btf_type_visit_str_offs(t, btf_rewrite_strs, &r);
+		if (err)
+			break;
+	}
+	return err;
+}
+
+int btf__relocate(struct btf *btf, const struct btf *base_btf)
+{
+	return btf_relocate(btf, base_btf, NULL);
+}
