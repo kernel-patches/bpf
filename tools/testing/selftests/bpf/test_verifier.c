@@ -762,6 +762,8 @@ static int load_btf_spec(__u32 *types, int types_len,
 	);
 
 	raw_btf = malloc(sizeof(hdr) + types_len + strings_len);
+	if (!raw_btf)
+		return -ENOMEM;
 
 	ptr = raw_btf;
 	memcpy(ptr, &hdr, sizeof(hdr));
