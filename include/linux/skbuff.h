@@ -705,6 +705,8 @@ typedef unsigned char *sk_buff_data_t;
 enum skb_tstamp_type {
 	SKB_CLOCK_REALTIME,
 	SKB_CLOCK_MONOTONIC,
+	SKB_CLOCK_TAI,
+	__SKB_CLOCK_MAX = SKB_CLOCK_TAI,
 };
 
 /**
@@ -825,8 +827,8 @@ enum skb_tstamp_type {
  *	@decrypted: Decrypted SKB
  *	@slow_gro: state present at GRO time, slower prepare step required
  *	@tstamp_type: When set, skb->tstamp has the
- *		delivery_time in mono clock base Otherwise, the
- *		timestamp is considered real clock base.
+ *		delivery_time in mono clock base or clock base of skb->tstamp.
+ *		Otherwise, the timestamp is considered real clock base
  *	@napi_id: id of the NAPI struct this skb came from
  *	@sender_cpu: (aka @napi_id) source CPU in XPS
  *	@alloc_cpu: CPU which did the skb allocation.
@@ -954,7 +956,7 @@ struct sk_buff {
 	/* private: */
 	__u8			__mono_tc_offset[0];
 	/* public: */
-	__u8			tstamp_type:1;	/* See skb_tstamp_type */
+	__u8			tstamp_type:2;	/* See skb_tstamp_type */
 #ifdef CONFIG_NET_XGRESS
 	__u8			tc_at_ingress:1;	/* See TC_AT_INGRESS_MASK */
 	__u8			tc_skip_classify:1;
@@ -1084,15 +1086,17 @@ struct sk_buff {
 #endif
 #define PKT_TYPE_OFFSET		offsetof(struct sk_buff, __pkt_type_offset)
 
-/* if you move tc_at_ingress or mono_delivery_time
+/* if you move tc_at_ingress or tstamp_type:2
  * around, you also must adapt these constants.
  */
 #ifdef __BIG_ENDIAN_BITFIELD
-#define SKB_MONO_DELIVERY_TIME_MASK	(1 << 7)
-#define TC_AT_INGRESS_MASK		(1 << 6)
+#define SKB_TSTAMP_TYPE_MASK		(3 << 6)
+#define SKB_TSTAMP_TYPE_RSH		(6)
+#define TC_AT_INGRESS_RSH		(5)
+#define TC_AT_INGRESS_MASK		(1 << 5)
 #else
-#define SKB_MONO_DELIVERY_TIME_MASK	(1 << 0)
-#define TC_AT_INGRESS_MASK		(1 << 1)
+#define SKB_TSTAMP_TYPE_MASK		(3)
+#define TC_AT_INGRESS_MASK		(1 << 2)
 #endif
 #define SKB_BF_MONO_TC_OFFSET		offsetof(struct sk_buff, __mono_tc_offset)
 
@@ -4275,6 +4279,12 @@ static inline void skb_set_tstamp_type_frm_clkid(struct sk_buff *skb,
 	case CLOCK_MONOTONIC:
 		skb->tstamp_type = SKB_CLOCK_MONOTONIC;
 		break;
+	case CLOCK_TAI:
+		skb->tstamp_type = SKB_CLOCK_TAI;
+		break;
+	default:
+		WARN_ONCE(true, "clockid %d not supported", clockid);
+		skb->tstamp_type = SKB_CLOCK_REALTIME;
 	}
 }
 
