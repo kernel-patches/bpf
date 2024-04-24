@@ -20273,7 +20273,6 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 
-#ifdef CONFIG_X86_64
 		/* Implement bpf_get_smp_processor_id() inline. */
 		if (insn->imm == BPF_FUNC_get_smp_processor_id &&
 		    prog->jit_requested && bpf_jit_supports_percpu_insn()) {
@@ -20282,11 +20281,23 @@ patch_map_ops_generic:
 			 * changed in some incompatible and hard to support
 			 * way, it's fine to back out this inlining logic
 			 */
-			insn_buf[0] = BPF_MOV32_IMM(BPF_REG_0, (u32)(unsigned long)&pcpu_hot.cpu_number);
-			insn_buf[1] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
-			insn_buf[2] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_0, 0);
-			cnt = 3;
+			u64 cpu_number_addr;
 
+#if defined(CONFIG_X86_64)
+			cpu_number_addr = (u64)&pcpu_hot.cpu_number;
+#elif defined(CONFIG_ARM64)
+			cpu_number_addr = (u64)&cpu_number;
+#else
+			goto next_insn;
+#endif
+			struct bpf_insn ld_cpu_number_addr[2] = {
+				BPF_LD_IMM64(BPF_REG_0, cpu_number_addr)
+			};
+			insn_buf[0] = ld_cpu_number_addr[0];
+			insn_buf[1] = ld_cpu_number_addr[1];
+			insn_buf[2] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
+			insn_buf[3] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_0, 0);
+			cnt = 4;
 			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
 			if (!new_prog)
 				return -ENOMEM;
@@ -20296,7 +20307,6 @@ patch_map_ops_generic:
 			insn      = new_prog->insnsi + i + delta;
 			goto next_insn;
 		}
-#endif
 		/* Implement bpf_get_func_arg inline. */
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg) {
