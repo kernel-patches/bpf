@@ -52,6 +52,8 @@ struct ipv6_packet pkt_v6 = {
 	.tcp.doff = 5,
 };
 
+static const struct network_helper_opts default_opts;
+
 int settimeo(int fd, int timeout_ms)
 {
 	struct timeval timeout = { .tv_sec = 3 };
@@ -185,6 +187,16 @@ close_fds:
 	return NULL;
 }
 
+int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t len,
+		      const struct network_helper_opts *opts)
+{
+	if (!opts)
+		opts = &default_opts;
+
+	return __start_server(type, 0, (struct sockaddr *)addr, len,
+			      opts->timeout_ms, 0);
+}
+
 void free_fds(int *fds, unsigned int nr_close_fds)
 {
 	if (fds) {
@@ -258,17 +270,24 @@ static int connect_fd_to_addr(int fd,
 	return 0;
 }
 
-int connect_to_addr(const struct sockaddr_storage *addr, socklen_t addrlen, int type)
+int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen,
+		    const struct network_helper_opts *opts)
 {
 	int fd;
 
-	fd = socket(addr->ss_family, type, 0);
+	if (!opts)
+		opts = &default_opts;
+
+	fd = socket(addr->ss_family, type, opts->proto);
 	if (fd < 0) {
 		log_err("Failed to create client socket");
 		return -1;
 	}
 
-	if (connect_fd_to_addr(fd, addr, addrlen, false))
+	if (settimeo(fd, opts->timeout_ms))
+		goto error_close;
+
+	if (connect_fd_to_addr(fd, addr, addrlen, opts->must_fail))
 		goto error_close;
 
 	return fd;
@@ -277,8 +296,6 @@ error_close:
 	save_errno_close(fd);
 	return -1;
 }
-
-static const struct network_helper_opts default_opts;
 
 int connect_to_fd_opts(int server_fd, const struct network_helper_opts *opts)
 {
@@ -442,25 +459,35 @@ struct nstoken *open_netns(const char *name)
 	struct nstoken *token;
 
 	token = calloc(1, sizeof(struct nstoken));
-	if (!ASSERT_OK_PTR(token, "malloc token"))
+	if (!token) {
+		log_err("Failed to malloc token");
 		return NULL;
+	}
 
 	token->orig_netns_fd = open("/proc/self/ns/net", O_RDONLY);
-	if (!ASSERT_GE(token->orig_netns_fd, 0, "open /proc/self/ns/net"))
+	if (token->orig_netns_fd == -1) {
+		log_err("Failed to open(/proc/self/ns/net)");
 		goto fail;
+	}
 
 	snprintf(nspath, sizeof(nspath), "%s/%s", "/var/run/netns", name);
 	nsfd = open(nspath, O_RDONLY | O_CLOEXEC);
-	if (!ASSERT_GE(nsfd, 0, "open netns fd"))
+	if (nsfd == -1) {
+		log_err("Failed to open(%s)", nspath);
 		goto fail;
+	}
 
 	err = setns(nsfd, CLONE_NEWNET);
 	close(nsfd);
-	if (!ASSERT_OK(err, "setns"))
+	if (err) {
+		log_err("Failed to setns(nsfd)");
 		goto fail;
+	}
 
 	return token;
 fail:
+	if (token->orig_netns_fd != -1)
+		close(token->orig_netns_fd);
 	free(token);
 	return NULL;
 }
@@ -470,7 +497,8 @@ void close_netns(struct nstoken *token)
 	if (!token)
 		return;
 
-	ASSERT_OK(setns(token->orig_netns_fd, CLONE_NEWNET), "setns");
+	if (setns(token->orig_netns_fd, CLONE_NEWNET))
+		log_err("Failed to setns(orig_netns_fd)");
 	close(token->orig_netns_fd);
 	free(token);
 }
