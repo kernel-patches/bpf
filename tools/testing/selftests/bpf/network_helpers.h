@@ -28,6 +28,9 @@ struct network_helper_opts {
 	bool noconnect;
 	int type;
 	int proto;
+	int (*setsockopt)(int fd, const void *optval, socklen_t optlen);
+	const void *optval;
+	socklen_t optlen;
 };
 
 /* ipv4 test vector */

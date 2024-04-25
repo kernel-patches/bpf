@@ -81,9 +81,8 @@ int settimeo(int fd, int timeout_ms)
 #define save_errno_close(fd) ({ int __save = errno; close(fd); errno = __save; })
 
 static int __start_server(int type, const struct sockaddr *addr, socklen_t addrlen,
-			  bool reuseport, const struct network_helper_opts *opts)
+			  const struct network_helper_opts *opts)
 {
-	int on = 1;
 	int fd;
 
 	fd = socket(addr->sa_family, type, opts->proto);
@@ -95,9 +94,9 @@ static int __start_server(int type, const struct sockaddr *addr, socklen_t addrl
 	if (settimeo(fd, opts->timeout_ms))
 		goto error_close;
 
-	if (reuseport &&
-	    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on))) {
-		log_err("Failed to set SO_REUSEPORT");
+	if (opts->setsockopt &&
+	    opts->setsockopt(fd, opts->optval, opts->optlen)) {
+		log_err("Failed to set sockopt");
 		goto error_close;
 	}
 
@@ -132,14 +131,23 @@ int start_server(int family, int type, const char *addr_str, __u16 port,
 	if (make_sockaddr(family, addr_str, port, &addr, &addrlen))
 		return -1;
 
-	return __start_server(type, (struct sockaddr *)&addr, addrlen, false, &opts);
+	return __start_server(type, (struct sockaddr *)&addr, addrlen, &opts);
+}
+
+static int setsockopt_reuseport(int fd, const void *optval, socklen_t optlen)
+{
+	return setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, optval, optlen);
 }
 
 int *start_reuseport_server(int family, int type, const char *addr_str,
 			    __u16 port, int timeout_ms, unsigned int nr_listens)
 {
+	int on = 1;
 	struct network_helper_opts opts = {
 		.timeout_ms = timeout_ms,
+		.setsockopt = setsockopt_reuseport,
+		.optval = &on,
+		.optlen = sizeof(on),
 	};
 	struct sockaddr_storage addr;
 	unsigned int nr_fds = 0;
@@ -156,7 +164,7 @@ int *start_reuseport_server(int family, int type, const char *addr_str,
 	if (!fds)
 		return NULL;
 
-	fds[0] = __start_server(type, (struct sockaddr *)&addr, addrlen, true, &opts);
+	fds[0] = __start_server(type, (struct sockaddr *)&addr, addrlen, &opts);
 	if (fds[0] == -1)
 		goto close_fds;
 	nr_fds = 1;
@@ -165,7 +173,7 @@ int *start_reuseport_server(int family, int type, const char *addr_str,
 		goto close_fds;
 
 	for (; nr_fds < nr_listens; nr_fds++) {
-		fds[nr_fds] = __start_server(type, (struct sockaddr *)&addr, addrlen, true, &opts);
+		fds[nr_fds] = __start_server(type, (struct sockaddr *)&addr, addrlen, &opts);
 		if (fds[nr_fds] == -1)
 			goto close_fds;
 	}
@@ -183,7 +191,7 @@ int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t l
 	if (!opts)
 		opts = &default_opts;
 
-	return __start_server(type, (struct sockaddr *)addr, len, 0, opts);
+	return __start_server(type, (struct sockaddr *)addr, len, opts);
 }
 
 void free_fds(int *fds, unsigned int nr_close_fds)
