@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
 #include "cgroup_helpers.h"
+#include "network_helpers.h"
 
 #include "sockopt_inherit.skel.h"
 
@@ -98,22 +99,11 @@ static void *server_thread(void *arg)
 	return (void *)(long)err;
 }
 
-static int start_server(void)
+static int setsockopt_custom(int fd, const void *optval, socklen_t optlen)
 {
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-	};
 	char buf;
 	int err;
-	int fd;
 	int i;
-
-	fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) {
-		log_err("Failed to create server socket");
-		return -1;
-	}
 
 	for (i = CUSTOM_INHERIT1; i <= CUSTOM_LISTENER; i++) {
 		buf = 0x01;
@@ -125,20 +115,21 @@ static int start_server(void)
 		}
 	}
 
-	if (bind(fd, (const struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		log_err("Failed to bind socket");
-		close(fd);
-		return -1;
-	}
-
-	return fd;
+	return 0;
 }
 
 static void run_test(int cgroup_fd)
 {
 	struct bpf_link *link_getsockopt = NULL;
 	struct bpf_link *link_setsockopt = NULL;
+	struct network_helper_opts opts = {
+		.setsockopt = setsockopt_custom,
+	};
 	int server_fd = -1, client_fd;
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
 	struct sockopt_inherit *obj;
 	void *server_err;
 	pthread_t tid;
@@ -160,8 +151,9 @@ static void run_test(int cgroup_fd)
 	if (!ASSERT_OK_PTR(link_setsockopt, "cg-attach-setsockopt"))
 		goto close_bpf_object;
 
-	server_fd = start_server();
-	if (!ASSERT_GE(server_fd, 0, "start_server"))
+	server_fd = start_server_addr(SOCK_STREAM, (struct sockaddr_storage *)&addr,
+				      sizeof(addr), &opts);
+	if (!ASSERT_GE(server_fd, 0, "start_server_addr"))
 		goto close_bpf_object;
 
 	pthread_mutex_lock(&server_started_mtx);
