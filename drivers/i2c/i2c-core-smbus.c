@@ -596,7 +596,7 @@ s32 __i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
 				break;
 		}
 
-		if (res != -EOPNOTSUPP || !adapter->algo->master_xfer)
+		if (res != -EOPNOTSUPP)
 			goto trace;
 		/*
 		 * Fall back to i2c_smbus_xfer_emulated if the adapter doesn't
