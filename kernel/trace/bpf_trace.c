@@ -2176,6 +2176,11 @@ static bool pe_prog_is_valid_access(int off, int size, enum bpf_access_type type
 		if (!bpf_ctx_narrow_access_ok(off, size, size_u64))
 			return false;
 		break;
+	case bpf_ctx_range(struct bpf_perf_event_data, cpu_entry):
+		bpf_ctx_record_field_size(info, size_u64);
+		if (!bpf_ctx_narrow_access_ok(off, size, size_u64))
+			return false;
+		break;
 	default:
 		if (size != sizeof(long))
 			return false;
@@ -2206,6 +2211,14 @@ static u32 pe_prog_convert_ctx_access(enum bpf_access_type type,
 				      offsetof(struct bpf_perf_event_data_kern, data));
 		*insn++ = BPF_LDX_MEM(BPF_DW, si->dst_reg, si->dst_reg,
 				      bpf_target_off(struct perf_sample_data, addr, 8,
+						     target_size));
+		break;
+	case offsetof(struct bpf_perf_event_data, cpu_entry):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_perf_event_data_kern,
+						       data), si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_perf_event_data_kern, data));
+		*insn++ = BPF_LDX_MEM(BPF_DW, si->dst_reg, si->dst_reg,
+				      bpf_target_off(struct perf_sample_data, cpu_entry, 8,
 						     target_size));
 		break;
 	default:

@@ -14,6 +14,10 @@ struct bpf_perf_event_data {
 	bpf_user_pt_regs_t regs;
 	__u64 sample_period;
 	__u64 addr;
+	struct {
+		u32	cpu;
+		u32	reserved;
+	}			cpu_entry;
 };
 
 #endif /* _UAPI__LINUX_BPF_PERF_EVENT_H__ */
