@@ -18,6 +18,7 @@ struct bpf_queue_stack {
 	raw_spinlock_t lock;
 	u32 head, tail;
 	u32 size; /* max_entries + 1 */
+	int __percpu *map_locked;
 
 	char elements[] __aligned(8);
 };
@@ -78,6 +79,16 @@ static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 
 	qs->size = size;
 
+	qs->map_locked = bpf_map_alloc_percpu(&qs->map,
+						sizeof(int),
+						sizeof(int),
+						GFP_USER);
+	if (!qs->map_locked) {
+		bpf_map_area_free(qs);
+		return ERR_PTR(-ENOMEM);
+	}
+
+
 	raw_spin_lock_init(&qs->lock);
 
 	return &qs->map;
@@ -97,6 +108,16 @@ static long __queue_map_get(struct bpf_map *map, void *value, bool delete)
 	unsigned long flags;
 	int err = 0;
 	void *ptr;
+
+	preempt_disable();
+	local_irq_save(flags);
+	if (unlikely(__this_cpu_inc_return(*(qs->map_locked)) != 1)) {
+		__this_cpu_dec(*(qs->map_locked));
+		local_irq_restore(flags);
+		preempt_enable();
+		return -EBUSY;
+	}
+	preempt_enable();
 
 	if (in_nmi()) {
 		if (!raw_spin_trylock_irqsave(&qs->lock, flags))
@@ -132,6 +153,17 @@ static long __stack_map_get(struct bpf_map *map, void *value, bool delete)
 	int err = 0;
 	void *ptr;
 	u32 index;
+
+	preempt_disable();
+	local_irq_save(flags);
+	if (unlikely(__this_cpu_inc_return(*(qs->map_locked)) != 1)) {
+		__this_cpu_dec(*(qs->map_locked));
+		local_irq_restore(flags);
+		preempt_enable();
+		return -EBUSY;
+	}
+	preempt_enable();
+
 
 	if (in_nmi()) {
 		if (!raw_spin_trylock_irqsave(&qs->lock, flags))
@@ -193,6 +225,16 @@ static long queue_stack_map_push_elem(struct bpf_map *map, void *value,
 	unsigned long irq_flags;
 	int err = 0;
 	void *dst;
+
+	preempt_disable();
+	local_irq_save(irq_flags);
+	if (unlikely(__this_cpu_inc_return(*(qs->map_locked)) != 1)) {
+		__this_cpu_dec(*(qs->map_locked));
+		local_irq_restore(irq_flags);
+		preempt_enable();
+		return -EBUSY;
+	}
+	preempt_enable();
 
 	/* BPF_EXIST is used to force making room for a new element in case the
 	 * map is full
