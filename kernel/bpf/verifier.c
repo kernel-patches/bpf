@@ -20658,6 +20658,49 @@ static int optimize_bpf_loop(struct bpf_verifier_env *env)
 	return 0;
 }
 
+static bool is_sext32(struct bpf_insn *insn1, struct bpf_insn *insn2)
+{
+	if (insn1->code != (BPF_ALU64 | BPF_K | BPF_LSH) || insn1->imm != 32)
+		return false;
+
+	if (insn2->code != (BPF_ALU64 | BPF_K | BPF_ARSH) || insn2->imm != 32)
+		return false;
+
+	if (insn1->dst_reg != insn2->dst_reg)
+		return false;
+
+	return true;
+}
+
+/* LLVM generates sign-extension with LSH and ARSH pair, replace it with MOVSX.
+ *
+ * Before:
+ * DST <<= 32
+ * DST s>>= 32
+ *
+ * After:
+ * DST = (s32)DST
+ */
+static int optimize_sext32_insns(struct bpf_verifier_env *env)
+{
+	int i, err;
+	int insn_cnt = env->prog->len;
+	struct bpf_insn *insn = env->prog->insnsi;
+
+	for (i = 0; i < insn_cnt; i++, insn++) {
+		if (i + 1 >= insn_cnt || !is_sext32(insn, insn + 1))
+			continue;
+		/* patch current insn to MOVSX */
+		*insn = BPF_MOV64_SEXT_REG(insn->dst_reg, insn->dst_reg, 32);
+		/* remove next insn */
+		err = verifier_remove_insns(env, i + 1, 1);
+		if (err)
+			return err;
+		insn_cnt--;
+	}
+	return 0;
+}
+
 static void free_states(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state_list *sl, *sln;
@@ -21575,6 +21618,9 @@ skip_full_check:
 	/* instruction rewrites happen after this point */
 	if (ret == 0)
 		ret = optimize_bpf_loop(env);
+
+	if (ret == 0)
+		ret = optimize_sext32_insns(env);
 
 	if (is_priv) {
 		if (ret == 0)

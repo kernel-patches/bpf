@@ -173,6 +173,14 @@ struct ctl_table_header;
 		.off   = 0,					\
 		.imm   = 0 })
 
+#define BPF_MOV64_SEXT_REG(DST, SRC, OFF)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_ALU64 | BPF_MOV | BPF_X,		\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = OFF,					\
+		.imm   = 0 })
+
 #define BPF_MOV32_REG(DST, SRC)					\
 	((struct bpf_insn) {					\
 		.code  = BPF_ALU | BPF_MOV | BPF_X,		\
