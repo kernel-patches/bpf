@@ -13871,33 +13871,19 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 	__update_reg_bounds(dst_reg);
 }
 
-static bool is_const_reg_and_valid(const struct bpf_reg_state *reg, bool alu32,
-				   bool *valid)
+static bool is_valid_const_reg(const struct bpf_reg_state *reg, bool alu32)
 {
-	s64 smin_val = reg->smin_value;
-	s64 smax_val = reg->smax_value;
-	u64 umin_val = reg->umin_value;
-	u64 umax_val = reg->umax_value;
-	s32 s32_min_val = reg->s32_min_value;
-	s32 s32_max_val = reg->s32_max_value;
-	u32 u32_min_val = reg->u32_min_value;
-	u32 u32_max_val = reg->u32_max_value;
-	bool is_const = alu32 ? tnum_subreg_is_const(reg->var_off) :
-				tnum_is_const(reg->var_off);
-
 	if (alu32) {
-		if ((is_const &&
-		     (s32_min_val != s32_max_val || u32_min_val != u32_max_val)) ||
-		      s32_min_val > s32_max_val || u32_min_val > u32_max_val)
-			*valid = false;
+		if (tnum_subreg_is_const(reg->var_off))
+			return reg->s32_min_value == reg->s32_max_value &&
+			       reg->u32_min_value == reg->u32_max_value;
 	} else {
-		if ((is_const &&
-		     (smin_val != smax_val || umin_val != umax_val)) ||
-		    smin_val > smax_val || umin_val > umax_val)
-			*valid = false;
+		if (tnum_is_const(reg->var_off))
+			return reg->smin_value == reg->smax_value &&
+			       reg->umin_value == reg->umax_value;
 	}
 
-	return is_const;
+	return false;
 }
 
 static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
@@ -13905,16 +13891,8 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 {
 	bool src_is_const;
 	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
-	bool valid_const = true;
 
-	src_is_const = is_const_reg_and_valid(src_reg, insn_bitness == 32,
-					      &valid_const);
-
-	/* Taint dst register if offset had invalid bounds
-	 * derived from e.g. dead branches.
-	 */
-	if (valid_const == false)
-		return false;
+	src_is_const = is_valid_const_reg(src_reg, insn_bitness == 32);
 
 	switch (BPF_OP(insn->code)) {
 	case BPF_ADD:
