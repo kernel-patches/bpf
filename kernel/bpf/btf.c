@@ -3494,6 +3494,41 @@ end:
 
 #undef field_mask_test_name
 
+/* Repeat a field for a specified number of times.
+ *
+ * Copy and repeat a field for repeat_cnt
+ * times. The field is repeated by adding the offset of each field
+ * with
+ *   (i + 1) * elem_size
+ * where i is the repeat index and elem_size is the size of the element.
+ */
+static int btf_repeat_field(struct btf_field_info *info, u32 field,
+			    u32 repeat_cnt, u32 elem_size)
+{
+	u32 i;
+	u32 cur;
+
+	/* Ensure not repeating fields that should not be repeated. */
+	switch (info[field].type) {
+	case BPF_KPTR_UNREF:
+	case BPF_KPTR_REF:
+	case BPF_KPTR_PERCPU:
+	case BPF_LIST_HEAD:
+	case BPF_RB_ROOT:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	cur = field + 1;
+	for (i = 0; i < repeat_cnt; i++) {
+		memcpy(&info[cur], &info[field], sizeof(info[0]));
+		info[cur++].off += (i + 1) * elem_size;
+	}
+
+	return 0;
+}
+
 static int btf_find_struct_field(const struct btf *btf,
 				 const struct btf_type *t, u32 field_mask,
 				 struct btf_field_info *info, int info_cnt)
@@ -3506,6 +3541,19 @@ static int btf_find_struct_field(const struct btf *btf,
 	for_each_member(i, t, member) {
 		const struct btf_type *member_type = btf_type_by_id(btf,
 								    member->type);
+		const struct btf_array *array;
+		u32 j, nelems = 1;
+
+		/* Walk into array types to find the element type and the
+		 * number of elements in the (flattened) array.
+		 */
+		for (j = 0; j < MAX_RESOLVE_DEPTH && btf_type_is_array(member_type); j++) {
+			array = btf_array(member_type);
+			nelems *= array->nelems;
+			member_type = btf_type_by_id(btf, array->type);
+		}
+		if (nelems == 0)
+			continue;
 
 		field_type = btf_get_field_type(__btf_name_by_offset(btf, member_type->name_off),
 						field_mask, &seen_mask, &align, &sz);
@@ -3557,9 +3605,14 @@ static int btf_find_struct_field(const struct btf *btf,
 
 		if (ret == BTF_FIELD_IGNORE)
 			continue;
-		if (idx >= info_cnt)
+		if (idx + nelems > info_cnt)
 			return -E2BIG;
-		++idx;
+		if (nelems > 1) {
+			ret = btf_repeat_field(info, idx, nelems - 1, sz);
+			if (ret < 0)
+				return ret;
+		}
+		idx += nelems;
 	}
 	return idx;
 }
@@ -3576,6 +3629,19 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 	for_each_vsi(i, t, vsi) {
 		const struct btf_type *var = btf_type_by_id(btf, vsi->type);
 		const struct btf_type *var_type = btf_type_by_id(btf, var->type);
+		const struct btf_array *array;
+		u32 j, nelems = 1;
+
+		/* Walk into array types to find the element type and the
+		 * number of elements in the (flattened) array.
+		 */
+		for (j = 0; j < MAX_RESOLVE_DEPTH && btf_type_is_array(var_type); j++) {
+			array = btf_array(var_type);
+			nelems *= array->nelems;
+			var_type = btf_type_by_id(btf, array->type);
+		}
+		if (nelems == 0)
+			continue;
 
 		field_type = btf_get_field_type(__btf_name_by_offset(btf, var_type->name_off),
 						field_mask, &seen_mask, &align, &sz);
@@ -3585,7 +3651,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 			return field_type;
 
 		off = vsi->offset;
-		if (vsi->size != sz)
+		if (vsi->size != sz * nelems)
 			continue;
 		if (off % align)
 			continue;
@@ -3625,9 +3691,14 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 
 		if (ret == BTF_FIELD_IGNORE)
 			continue;
-		if (idx >= info_cnt)
+		if (idx + nelems > info_cnt)
 			return -E2BIG;
-		++idx;
+		if (nelems > 1) {
+			ret = btf_repeat_field(info, idx, nelems - 1, sz);
+			if (ret < 0)
+				return ret;
+		}
+		idx += nelems;
 	}
 	return idx;
 }
