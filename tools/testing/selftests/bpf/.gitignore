@@ -45,6 +45,7 @@ test_cpp
 /veristat
 /sign-file
 /uprobe_multi
+/uprobe_compat
 *.ko
 *.tmp
 xskxceiver

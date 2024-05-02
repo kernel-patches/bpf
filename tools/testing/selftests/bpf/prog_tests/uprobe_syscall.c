@@ -5,6 +5,7 @@
 #ifdef __x86_64__
 
 #include <unistd.h>
+#include <stdlib.h>
 #include <asm/ptrace.h>
 #include <linux/compiler.h>
 #include <linux/stringify.h>
@@ -297,6 +298,58 @@ cleanup:
 	close(go[1]);
 	close(go[0]);
 }
+
+static void test_uretprobe_compat(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts,
+		.retprobe = true,
+	);
+	struct uprobe_syscall_executed *skel;
+	int err, go[2], pid, c, status;
+
+	if (pipe(go))
+		return;
+
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_executed__open_and_load"))
+		goto cleanup;
+
+	pid = fork();
+	if (pid < 0)
+		goto cleanup;
+
+	/* child */
+	if (pid == 0) {
+		close(go[1]);
+
+		/* wait for parent's kick */
+		err = read(go[0], &c, 1);
+		if (err != 1)
+			exit(-1);
+		execl("./uprobe_compat", "./uprobe_compat", NULL);
+		exit(-1);
+	}
+
+	skel->links.test = bpf_program__attach_uprobe_multi(skel->progs.test, pid,
+							    "./uprobe_compat", "main", &opts);
+	if (!ASSERT_OK_PTR(skel->links.test, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	/* kick the child */
+	write(go[1], &c, 1);
+	err = waitpid(pid, &status, 0);
+	ASSERT_EQ(err, pid, "waitpid");
+
+	/* verify the child exited normally and the bpf program got executed */
+	ASSERT_EQ(WIFEXITED(status), 1, "WIFEXITED");
+	ASSERT_EQ(WEXITSTATUS(status), 0, "WEXITSTATUS");
+	ASSERT_EQ(skel->bss->executed, 1, "executed");
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+	close(go[0]);
+	close(go[1]);
+}
 #else
 static void test_uretprobe_regs_equal(void)
 {
@@ -312,6 +365,11 @@ static void test_uretprobe_syscall_call(void)
 {
 	test__skip();
 }
+
+static void test_uretprobe_compat(void)
+{
+	test__skip();
+}
 #endif
 
 void test_uprobe_syscall(void)
@@ -322,4 +380,6 @@ void test_uprobe_syscall(void)
 		test_uretprobe_regs_change();
 	if (test__start_subtest("uretprobe_syscall_call"))
 		test_uretprobe_syscall_call();
+	if (test__start_subtest("uretprobe_compat"))
+		test_uretprobe_compat();
 }
