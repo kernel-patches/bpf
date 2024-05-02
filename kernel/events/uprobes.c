@@ -470,7 +470,8 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
  * Return 0 (success) or a negative errno.
  */
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
-			unsigned long vaddr, uprobe_opcode_t opcode, bool orig)
+			unsigned long vaddr, uprobe_opcode_t *insn, int nbytes,
+			bool orig)
 {
 	struct uprobe *uprobe;
 	struct page *old_page, *new_page;
@@ -489,7 +490,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = verify_opcode(old_page, vaddr, &opcode);
+	ret = verify_opcode(old_page, vaddr, insn);
 	if (ret <= 0)
 		goto put_old;
 
@@ -514,7 +515,7 @@ retry:
 
 	__SetPageUptodate(new_page);
 	copy_highpage(new_page, old_page);
-	uprobe_copy_to_page(new_page, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE);
+	uprobe_copy_to_page(new_page, vaddr, insn, nbytes);
 
 	if (orig) {
 		struct page *orig_page;
@@ -567,7 +568,9 @@ put_old:
  */
 int __weak set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 {
-	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN, false);
+	uprobe_opcode_t insn = UPROBE_SWBP_INSN;
+
+	return uprobe_write_opcode(auprobe, mm, vaddr, &insn, UPROBE_SWBP_INSN_SIZE, false);
 }
 
 static int set_swbp_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
@@ -602,7 +605,7 @@ int __weak
 set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 {
 	return uprobe_write_opcode(auprobe, mm, vaddr,
-			*(uprobe_opcode_t *)&auprobe->insn, true);
+			(uprobe_opcode_t *)&auprobe->insn, UPROBE_SWBP_INSN_SIZE, true);
 }
 
 static int set_orig_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
