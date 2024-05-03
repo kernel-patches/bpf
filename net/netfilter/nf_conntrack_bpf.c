@@ -124,8 +124,6 @@ __bpf_nf_ct_alloc_entry(struct net *net, struct bpf_sock_tuple *bpf_tuple,
 	} else {
 		if (opts->ct_zone_id)
 			return ERR_PTR(-EINVAL);
-		else
-			return ERR_PTR(-1 * opts->ct_zone_id)
 	}
 
 	if (unlikely(opts->netns_id < BPF_F_CURRENT_NETNS))
@@ -192,6 +190,8 @@ static struct nf_conn *__bpf_nf_ct_lookup(struct net *net,
 	} else {
 		if (opts->ct_zone_id)
 			return ERR_PTR(-EINVAL);
+		else
+			return ERR_PTR(-1 * opts->ct_zone_id);
 	}
 	if (unlikely(opts->l4proto != IPPROTO_TCP && opts->l4proto != IPPROTO_UDP))
 		return ERR_PTR(-EPROTO);
