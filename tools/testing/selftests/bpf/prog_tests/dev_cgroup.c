@@ -90,6 +90,16 @@ void serial_test_dev_cgroup(void)
 
 	readAndOutputFile("/proc/mounts");
 
+	ASSERT_EQ(system("mkdir /tmp"), 0, "mkdir /tmp");
+
+	ASSERT_EQ(system("mkdir abc123"), 0, "mkdir");
+	ASSERT_EQ(system("touch abc12345"), 0, "touch");
+	ASSERT_EQ(system("touch abc123/abc12345"), 0, "touch");
+
+	ASSERT_EQ(system("mknod abc123/test_dev_cgroup_zero c 1 5"), 0, "mknod abc123/test_dev_cgroup_zero");
+	ASSERT_EQ(system("mknod abc123/test c 1 5"), 0, "mknod abc123/test");
+	ASSERT_EQ(system("mknod abc123test c 1 5"), 0, "mknod abc123test");
+
 	/* /dev/zero is whitelisted */
 	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
 //	print_all_dir("/");
@@ -100,6 +110,7 @@ void serial_test_dev_cgroup(void)
 	int out = system("mknod test_dev_cgroup_zero c 1 5");
 	printf("\nout is %d expected 0 %m\n\n", out);
 	ASSERT_EQ(out, 0, "mknod"); //???
+
 //	print_all_dir("/temporary");
 //	print_all_dir("/tmp");
 	ASSERT_EQ(system("rm -f test_dev_cgroup_zero"), 0, "rm");
