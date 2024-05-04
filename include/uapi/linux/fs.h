@@ -393,4 +393,36 @@ struct pm_scan_arg {
 	__u64 return_mask;
 };
 
+/* /proc/<pid>/maps ioctl */
+#define PROCFS_IOCTL_MAGIC 0x9f
+#define PROCFS_PROCMAP_QUERY	_IOWR(PROCFS_IOCTL_MAGIC, 1, struct procfs_procmap_query)
+
+enum procmap_query_flags {
+	PROCFS_PROCMAP_EXACT_OR_NEXT_VMA = 0x01,
+};
+
+enum procmap_vma_flags {
+	PROCFS_PROCMAP_VMA_READABLE = 0x01,
+	PROCFS_PROCMAP_VMA_WRITABLE = 0x02,
+	PROCFS_PROCMAP_VMA_EXECUTABLE = 0x04,
+	PROCFS_PROCMAP_VMA_SHARED = 0x08,
+};
+
+struct procfs_procmap_query {
+	__u64 size;
+	__u64 query_flags;		/* in */
+	__u64 query_addr;		/* in */
+	__u64 vma_start;		/* out */
+	__u64 vma_end;			/* out */
+	__u64 vma_flags;		/* out */
+	__u64 vma_offset;		/* out */
+	__u64 inode;			/* out */
+	__u32 dev_major;		/* out */
+	__u32 dev_minor;		/* out */
+	__u32 vma_name_size;		/* in/out */
+	__u32 build_id_size;		/* in/out */
+	__u64 vma_name_addr;		/* in */
+	__u64 build_id_addr;		/* in */
+};
+
 #endif /* _UAPI_LINUX_FS_H */
