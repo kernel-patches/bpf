@@ -116,6 +116,11 @@ struct btf_dump {
 	 * data for typed display; allocated if needed.
 	 */
 	struct btf_dump_data *typed_dump;
+	/*
+	 * string with C attributes to be used in record
+	 * types.
+         */
+	const char *record_attrs_str;
 };
 
 static size_t str_hash_fn(long key, void *ctx)
@@ -167,6 +172,7 @@ struct btf_dump *btf_dump__new(const struct btf *btf,
 	d->printf_fn = printf_fn;
 	d->cb_ctx = ctx;
 	d->ptr_sz = btf__pointer_size(btf) ? : sizeof(void *);
+	d->record_attrs_str = OPTS_GET(opts, record_attrs_str, NULL);
 
 	d->type_names = hashmap__new(str_hash_fn, str_equal_fn, NULL);
 	if (IS_ERR(d->type_names)) {
@@ -1024,6 +1030,8 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 	}
 	if (packed)
 		btf_dump_printf(d, " __attribute__((packed))");
+	if (d->record_attrs_str)
+		btf_dump_printf(d, " %s", d->record_attrs_str);
 }
 
 static const char *missing_base_types[][2] = {

@@ -463,19 +463,24 @@ static void __printf(2, 0) btf_dump_printf(void *ctx,
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt)
 {
+	DECLARE_LIBBPF_OPTS(btf_dump_opts, opts);
 	struct btf_dump *d;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
+	opts.record_attrs_str = "ATTR_PRESERVE_ACCESS_INDEX";
+	d = btf_dump__new(btf, btf_dump_printf, NULL, &opts);
 	if (!d)
 		return -errno;
 
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
+	printf("#ifdef BPF_NO_PRESERVE_ACCESS_INDEX\n");
+	printf("#define ATTR_PRESERVE_ACCESS_INDEX\n");
+	printf("#else\n");
+	printf("#define ATTR_PRESERVE_ACCESS_INDEX __attribute__((preserve_access_index))\n");
 	printf("#endif\n\n");
+	printf("\n");
 
 	if (root_type_cnt) {
 		for (i = 0; i < root_type_cnt; i++) {
@@ -493,9 +498,7 @@ static int dump_btf_c(const struct btf *btf,
 		}
 	}
 
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute pop\n");
-	printf("#endif\n");
+	printf("#undef ATTR_PRESERVE_ACCESS_INDEX\n");
 	printf("\n");
 	printf("#endif /* __VMLINUX_H__ */\n");
 

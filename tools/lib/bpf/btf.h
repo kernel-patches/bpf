@@ -234,9 +234,16 @@ LIBBPF_API int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts);
 struct btf_dump;
 
 struct btf_dump_opts {
+	/* size of this struct, for forward/backward compatibility */
 	size_t sz;
+	/* String to be inserted at the point where compiler
+	 * attributes are expected in each emitted C struct and
+	 * union type.
+	 */
+	const char *record_attrs_str;
+	size_t :0;
 };
-#define btf_dump_opts__last_field sz
+#define btf_dump_opts__last_field record_attrs_str
 
 typedef void (*btf_dump_printf_fn_t)(void *ctx, const char *fmt, va_list args);
 
