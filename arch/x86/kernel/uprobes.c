@@ -406,6 +406,11 @@ SYSCALL_DEFINE0(uretprobe)
 	 * trampoline's ret instruction
 	 */
 	r11_cx_ax[2] = regs->ip;
+
+	/* make the shadow stack follow that */
+	if (shstk_push_frame(regs->ip))
+		goto sigill;
+
 	regs->ip = ip;
 
 	err = copy_to_user((void __user *)regs->sp, r11_cx_ax, sizeof(r11_cx_ax));
@@ -1191,8 +1196,13 @@ arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr, struct pt_regs
 		return orig_ret_vaddr;
 
 	nleft = copy_to_user((void __user *)regs->sp, &trampoline_vaddr, rasize);
-	if (likely(!nleft))
+	if (likely(!nleft)) {
+		if (shstk_update_last_frame(trampoline_vaddr)) {
+			force_sig(SIGSEGV);
+			return -1;
+		}
 		return orig_ret_vaddr;
+	}
 
 	if (nleft != rasize) {
 		pr_err("return address clobbered: pid=%d, %%sp=%#lx, %%ip=%#lx\n",
