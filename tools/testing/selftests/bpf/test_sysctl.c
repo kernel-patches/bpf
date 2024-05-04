@@ -35,6 +35,7 @@ struct sysctl_test {
 	int seek;
 	const char *newval;
 	const char *oldval;
+	const char *updval;
 	enum {
 		LOAD_REJECT,
 		ATTACH_REJECT,
@@ -1395,6 +1396,16 @@ static struct sysctl_test tests[] = {
 		.open_flags = O_RDONLY,
 		.result = SUCCESS,
 	},
+	{
+		"C prog: override write to ip_local_reserved_ports",
+		.prog_file = "./test_sysctl_overwrite.bpf.o",
+		.attach_type = BPF_CGROUP_SYSCTL,
+		.sysctl = "net/ipv4/ip_local_reserved_ports",
+		.open_flags = O_RDWR,
+		.newval = "11111",
+		.updval = "31337",
+		.result = SUCCESS,
+	},
 };
 
 static size_t probe_prog_length(const struct bpf_insn *fp)
@@ -1520,13 +1531,33 @@ static int access_sysctl(const char *sysctl_path,
 			log_err("Read value %s != %s", buf, test->oldval);
 			goto err;
 		}
-	} else if (test->open_flags == O_WRONLY) {
+	} else if (test->open_flags == O_WRONLY || test->open_flags == O_RDWR) {
 		if (!test->newval) {
 			log_err("New value for sysctl is not set");
 			goto err;
 		}
-		if (write(fd, test->newval, strlen(test->newval)) == -1)
+		if (write(fd, test->newval, strlen(test->newval)) == -1) {
+			log_err("Unable to write sysctl value");
 			goto err;
+		}
+		if (test->open_flags == O_RDWR) {
+			char buf[128];
+
+			if (!test->updval) {
+				log_err("Expected value for sysctl is not set");
+				goto err;
+			}
+
+			lseek(fd, 0, SEEK_SET);
+			if (read(fd, buf, sizeof(buf)) == -1) {
+				log_err("Unable to read updated value");
+				goto err;
+			}
+			if (strncmp(buf, test->updval, strlen(test->updval))) {
+				log_err("Overwritten value %s != %s", buf, test->updval);
+				goto err;
+			}
+		}
 	} else {
 		log_err("Unexpected sysctl access: neither read nor write");
 		goto err;
