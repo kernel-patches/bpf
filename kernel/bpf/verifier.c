@@ -21619,6 +21619,10 @@ skip_full_check:
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 
+        /* max stack depth verification must be done after rewrites as well */
+        if (ret == 0)
+                ret = check_max_stack_depth(env);
+
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.
 	 */
