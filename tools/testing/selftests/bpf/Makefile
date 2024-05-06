@@ -86,6 +86,7 @@ progs/btf_dump_test_case_namespacing.c-bpf_gcc-CFLAGS := -Wno-error
 progs/btf_dump_test_case_packing.c-bpf_gcc-CFLAGS := -Wno-error
 progs/btf_dump_test_case_padding.c-bpf_gcc-CFLAGS := -Wno-error
 progs/btf_dump_test_case_syntax.c-bpf_gcc-CFLAGS := -Wno-error
+progs/test_xdp_noinline.c-bpf_gcc-CFLAGS := -fno-ipa-sra
 endif
 
 ifneq ($(CLANG_CPUV4),)
