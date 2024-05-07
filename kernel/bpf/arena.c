@@ -557,13 +557,13 @@ BTF_ID_FLAGS(func, bpf_arena_alloc_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_arena_free_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_KFUNCS_END(arena_kfuncs)
 
-static const struct btf_kfunc_id_set common_kfunc_set = {
+static const struct btf_kfunc_id_set arena_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &arena_kfuncs,
 };
 
 static int __init kfunc_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &arena_kfunc_set);
 }
 late_initcall(kfunc_init);
