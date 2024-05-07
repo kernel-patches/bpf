@@ -247,7 +247,7 @@ int perf_debug_option(const char *str)
 	/* Allow only verbose value in range (0, 10), otherwise set 0. */
 	verbose = (verbose < 0) || (verbose > 10) ? 0 : verbose;
 
-#if LIBTRACEEVENT_VERSION >= MAKE_LIBTRACEEVENT_VERSION(1, 3, 0)
+#if defined(LIBTRACEEVENT_VERSION) && LIBTRACEEVENT_VERSION >= MAKE_LIBTRACEEVENT_VERSION(1, 3, 0)
 	if (verbose == 1)
 		tep_set_loglevel(TEP_LOG_INFO);
 	else if (verbose == 2)

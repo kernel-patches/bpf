@@ -23,6 +23,7 @@
 #include <linux/string.h>
 #include <linux/zalloc.h>
 #include <linux/perf_event.h>
+#include <linux/fs.h>
 #include <asm/bug.h>
 #include <perf/evsel.h>
 #include <perf/cpumap.h>
@@ -40,6 +41,7 @@
 #include <api/io.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -290,11 +292,67 @@ static int perf_event__synthesize_fork(struct perf_tool *tool,
 	return 0;
 }
 
+#if defined(PROCMAP_QUERY)
 static bool read_proc_maps_line(struct io *io, __u64 *start, __u64 *end,
 				u32 *prot, u32 *flags, __u64 *offset,
 				u32 *maj, u32 *min,
 				__u64 *inode,
-				ssize_t pathname_size, char *pathname)
+				ssize_t pathname_size, char *pathname,
+				__u64 *next, bool *done)
+{
+	struct procmap_query q;
+	int err;
+
+	q.size = sizeof(q);
+	q.query_flags = PROCMAP_QUERY_COVERING_OR_NEXT_VMA;
+	q.query_addr = (__u64)*next;
+	q.vma_name_addr = (__u64)(long)pathname;
+	q.vma_name_size = pathname_size;
+	q.build_id_size = 0;
+	q.build_id_addr = 0;
+
+	err = ioctl(io->fd, PROCMAP_QUERY, &q);
+	if (err < 0 && errno == ENOENT) {
+		*done = true;
+		return false;
+	}
+	if (err < 0) {
+		*done = true;
+		return false;
+	}
+
+	*start = q.vma_start;
+	*end = q.vma_end;
+	*offset = q.vma_offset;
+
+	*prot = 0;
+	if (q.vma_flags & PROCMAP_QUERY_VMA_READABLE)
+		*prot |= PROT_READ;
+	if (q.vma_flags & PROCMAP_QUERY_VMA_WRITABLE)
+		*prot |= PROT_WRITE;
+	if (q.vma_flags & PROCMAP_QUERY_VMA_EXECUTABLE)
+		*prot |= PROT_EXEC;
+
+	if (q.vma_flags & PROCMAP_QUERY_VMA_SHARED)
+		*flags = MAP_SHARED;
+	else
+		*flags = MAP_PRIVATE;
+
+	*inode = q.inode;
+	*maj = q.dev_major;
+	*min = q.dev_minor;
+
+	*next = q.vma_end;
+
+	return true;
+}
+#else
+static bool read_proc_maps_line(struct io *io, __u64 *start, __u64 *end,
+				u32 *prot, u32 *flags, __u64 *offset,
+				u32 *maj, u32 *min,
+				__u64 *inode,
+				ssize_t pathname_size, char *pathname,
+				__u64 *next __maybe_unused, bool *done __maybe_unused)
 {
 	__u64 temp;
 	int ch;
@@ -362,6 +420,7 @@ static bool read_proc_maps_line(struct io *io, __u64 *start, __u64 *end,
 		ch = io__get_char(io);
 	}
 }
+#endif
 
 static void perf_record_mmap2__read_build_id(struct perf_record_mmap2 *event,
 					     struct machine *machine,
@@ -433,6 +492,8 @@ int perf_event__synthesize_mmap_events(struct perf_tool *tool,
 	int rc = 0;
 	const char *hugetlbfs_mnt = hugetlbfs__mountpoint();
 	int hugetlbfs_mnt_len = hugetlbfs_mnt ? strlen(hugetlbfs_mnt) : 0;
+	__u64 next = 0;
+	bool done = false;
 
 	if (machine__is_default_guest(machine))
 		return 0;
@@ -453,7 +514,7 @@ int perf_event__synthesize_mmap_events(struct perf_tool *tool,
 	event->header.type = PERF_RECORD_MMAP2;
 	t = rdclock();
 
-	while (!io.eof) {
+	while (!done && !io.eof) {
 		static const char anonstr[] = "//anon";
 		size_t size, aligned_size;
 
@@ -471,7 +532,8 @@ int perf_event__synthesize_mmap_events(struct perf_tool *tool,
 					&event->mmap2.min,
 					&event->mmap2.ino,
 					sizeof(event->mmap2.filename),
-					event->mmap2.filename))
+					event->mmap2.filename,
+					&next, &done))
 			continue;
 
 		if ((rdclock() - t) > timeout) {
