@@ -1,0 +1,50 @@
+.\" Copyright (C) 2024, Jiri Olsa <jolsa@kernel.org>
+.\"
+.\" SPDX-License-Identifier: Linux-man-pages-copyleft
+.\"
+.TH uretprobe 2 (date) "Linux man-pages (unreleased)"
+.SH NAME
+uretprobe \- execute pending return uprobes
+.SH SYNOPSIS
+.nf
+.B int uretprobe(void)
+.fi
+.SH DESCRIPTION
+The
+.BR uretprobe ()
+syscall is an alternative to breakpoint instructions for
+triggering return uprobe consumers.
+.P
+Calls to
+.BR uretprobe ()
+suscall are only made from the user-space trampoline provided by the kernel.
+Calls from any other place result in a
+.BR SIGILL .
+
+.SH RETURN VALUE
+The
+.BR uretprobe ()
+syscall return value is architecture-specific.
+
+.SH VERSIONS
+This syscall is not specified in POSIX,
+and details of its behavior vary across systems.
+.SH STANDARDS
+None.
+.SH HISTORY
+TBD
+.SH NOTES
+The
+.BR uretprobe ()
+syscall was initially introduced for the x86_64 architecture where it was shown
+to be faster than breakpoint traps. It might be extended to other architectures.
+.P
+The
+.BR uretprobe ()
+syscall exists only to allow the invocation of return uprobe consumers.
+It should
+.B never
+be called directly.
+Details of the arguments (if any) passed to
+.BR uretprobe ()
+and the return value are architecture-specific.
