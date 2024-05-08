@@ -6285,20 +6285,19 @@ static bool is_block_group_to_copy(struct btrfs_fs_info *fs_info, u64 logical)
 	return ret;
 }
 
-static void handle_ops_on_dev_replace(enum btrfs_map_op op,
-				      struct btrfs_io_context *bioc,
+static void handle_ops_on_dev_replace(struct btrfs_io_context *bioc,
 				      struct btrfs_dev_replace *dev_replace,
 				      u64 logical,
-				      int *num_stripes_ret, int *max_errors_ret)
+				      struct btrfs_io_geometry *io_geom)
 {
 	u64 srcdev_devid = dev_replace->srcdev->devid;
 	/*
 	 * At this stage, num_stripes is still the real number of stripes,
 	 * excluding the duplicated stripes.
 	 */
-	int num_stripes = *num_stripes_ret;
+	int num_stripes = io_geom->num_stripes;
+	int max_errors = io_geom->max_errors;
 	int nr_extra_stripes = 0;
-	int max_errors = *max_errors_ret;
 	int i;
 
 	/*
@@ -6339,7 +6338,7 @@ static void handle_ops_on_dev_replace(enum btrfs_map_op op,
 	 * replace.
 	 * If we have 2 extra stripes, only choose the one with smaller physical.
 	 */
-	if (op == BTRFS_MAP_GET_READ_MIRRORS && nr_extra_stripes == 2) {
+	if (io_geom->op == BTRFS_MAP_GET_READ_MIRRORS && nr_extra_stripes == 2) {
 		struct btrfs_io_stripe *first = &bioc->stripes[num_stripes];
 		struct btrfs_io_stripe *second = &bioc->stripes[num_stripes + 1];
 
@@ -6357,8 +6356,8 @@ static void handle_ops_on_dev_replace(enum btrfs_map_op op,
 		}
 	}
 
-	*num_stripes_ret = num_stripes + nr_extra_stripes;
-	*max_errors_ret = max_errors + nr_extra_stripes;
+	io_geom->num_stripes = num_stripes + nr_extra_stripes;
+	io_geom->max_errors = max_errors + nr_extra_stripes;
 	bioc->replace_nr_stripes = nr_extra_stripes;
 }
 
@@ -6796,8 +6795,7 @@ again:
 
 	if (dev_replace_is_ongoing && dev_replace->tgtdev != NULL &&
 	    op != BTRFS_MAP_READ)
-		handle_ops_on_dev_replace(op, bioc, dev_replace, logical,
-					  &io_geom.num_stripes, &io_geom.max_errors);
+		handle_ops_on_dev_replace(bioc, dev_replace, logical, &io_geom);
 
 	up_read(&dev_replace->rwsem);
 
