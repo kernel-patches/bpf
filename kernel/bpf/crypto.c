@@ -275,7 +275,7 @@ static int bpf_crypto_crypt(const struct bpf_crypto_ctx *ctx,
 	if (__bpf_dynptr_is_rdonly(dst))
 		return -EINVAL;
 
-	siv_len = __bpf_dynptr_size(siv);
+	siv_len = siv ? __bpf_dynptr_size(siv) : 0;
 	src_len = __bpf_dynptr_size(src);
 	dst_len = __bpf_dynptr_size(dst);
 	if (!src_len || !dst_len)
@@ -313,9 +313,9 @@ static int bpf_crypto_crypt(const struct bpf_crypto_ctx *ctx,
 __bpf_kfunc int bpf_crypto_decrypt(struct bpf_crypto_ctx *ctx,
 				   const struct bpf_dynptr_kern *src,
 				   const struct bpf_dynptr_kern *dst,
-				   const struct bpf_dynptr_kern *siv)
+				   const struct bpf_dynptr_kern *siv__nullable)
 {
-	return bpf_crypto_crypt(ctx, src, dst, siv, true);
+	return bpf_crypto_crypt(ctx, src, dst, siv__nullable, true);
 }
 
 /**
@@ -330,9 +330,9 @@ __bpf_kfunc int bpf_crypto_decrypt(struct bpf_crypto_ctx *ctx,
 __bpf_kfunc int bpf_crypto_encrypt(struct bpf_crypto_ctx *ctx,
 				   const struct bpf_dynptr_kern *src,
 				   const struct bpf_dynptr_kern *dst,
-				   const struct bpf_dynptr_kern *siv)
+				   const struct bpf_dynptr_kern *siv__nullable)
 {
-	return bpf_crypto_crypt(ctx, src, dst, siv, false);
+	return bpf_crypto_crypt(ctx, src, dst, siv__nullable, false);
 }
 
 __bpf_kfunc_end_defs();
