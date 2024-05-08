@@ -8,6 +8,10 @@
 
 #include "cpumask_common.h"
 
+#ifndef __clang__
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
+
 char _license[] SEC("license") = "GPL";
 
 /* Prototype for all of the program trace events below:

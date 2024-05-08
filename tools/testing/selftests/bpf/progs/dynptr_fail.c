@@ -10,6 +10,10 @@
 #include "bpf_misc.h"
 #include "bpf_kfuncs.h"
 
+#ifndef __clang__
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 char _license[] SEC("license") = "GPL";
 
 struct test_info {

@@ -13,6 +13,10 @@
 #include "bpf_kfuncs.h"
 #include "bpf_tracing_net.h"
 
+#ifndef __clang__
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+
 #define log_err(__ret) bpf_printk("ERROR line:%d ret:%d\n", __LINE__, __ret)
 
 #define VXLAN_UDP_PORT		4789
