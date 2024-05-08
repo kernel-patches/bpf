@@ -89,7 +89,7 @@ static void validate_stack(__u64 *ips, int stack_len, int cnt, ...)
 	if (!ASSERT_GE(stack_len, cnt, "stack_len2"))
 		return;
 
-	if (env.verbosity >= VERBOSE_NORMAL) {
+	if (true || env.verbosity >= VERBOSE_NORMAL) {
 		printf("caller: %#lx - %#lx\n", caller.start, caller.stop);
 		for (i = 1; i < ARRAY_SIZE(targets); i++)
 			printf("target_%d: %#lx - %#lx\n", i, targets[i].start, targets[i].stop);
@@ -122,7 +122,7 @@ static void validate_stack(__u64 *ips, int stack_len, int cnt, ...)
 }
 
 __attribute__((section("uretprobe_stack_sec")))
-void test_uretprobe_stack(void)
+__weak void test_uretprobe_stack(void)
 {
 	LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
 	struct uretprobe_stack *skel;
