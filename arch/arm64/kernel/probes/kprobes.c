@@ -131,9 +131,16 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 
 void *alloc_insn_page(void)
 {
-	return __vmalloc_node_range(PAGE_SIZE, 1, VMALLOC_START, VMALLOC_END,
-			GFP_KERNEL, PAGE_KERNEL_ROX, VM_FLUSH_RESET_PERMS,
-			NUMA_NO_NODE, __builtin_return_address(0));
+	if (IS_ENABLED(CONFIG_ARCH_FORCE_CODE_PARTITIONING))
+		return __vmalloc_node_range(PAGE_SIZE, 1, get_modules_base(),
+				get_modules_end() + SZ_2G, GFP_KERNEL,
+				PAGE_KERNEL_ROX, VM_FLUSH_RESET_PERMS,
+				NUMA_NO_NODE, __builtin_return_address(0));
+	else
+		return __vmalloc_node_range(PAGE_SIZE, 1, VMALLOC_START,
+				VMALLOC_END, GFP_KERNEL, PAGE_KERNEL_ROX,
+				VM_FLUSH_RESET_PERMS, NUMA_NO_NODE,
+				__builtin_return_address(0));
 }
 
 /* arm kprobe: install breakpoint in text */

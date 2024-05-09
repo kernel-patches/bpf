@@ -31,4 +31,7 @@ static inline pgprot_t arch_vmap_pgprot_tagged(pgprot_t prot)
 	return pgprot_tagged(prot);
 }
 
+#define arch_init_checked_vmap_ranges arch_init_checked_vmap_ranges
+inline void __init arch_init_checked_vmap_ranges(void);
+
 #endif /* _ASM_ARM64_VMALLOC_H */

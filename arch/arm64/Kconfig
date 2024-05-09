@@ -1321,6 +1321,22 @@ config ARM64_VA_BITS_52
 
 endchoice
 
+config ARM64_FORCE_CODE_PARTITIONING
+	bool "Force the partitioning of code from vmalloc space"
+	default n
+	help
+	  Restricts the allocation of BPF programs and kprobe instruction
+	  pages such that they do not overlap with vmalloc region memory
+	  and are contained within module code region defined by
+	  module_init_limits + SZ_2G. Ensures other vmalloc data pages
+	  cannot be allocated within this region.
+
+	  This configuration option is incompatible with BPF and kprobe
+	  deployments which require more than 128MB (or 2GB, depending on PLT
+	  support) of memory, such as when hosting multiple VMs. Enabling this
+	  option ensures granular segregation of code from data pages in
+	  ARM64 architecture code. If unsure say N here.
+
 config ARM64_FORCE_52BIT
 	bool "Force 52-bit virtual addresses for userspace"
 	depends on ARM64_VA_BITS_52 && EXPERT

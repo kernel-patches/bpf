@@ -13,6 +13,8 @@
 #include <linux/memory.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
+#include <linux/module.h>
+#include <linux/moduleloader.h>
 
 #include <asm/asm-extable.h>
 #include <asm/byteorder.h>
@@ -1870,13 +1872,27 @@ void *bpf_arch_text_copy(void *dst, void *src, size_t len)
 
 u64 bpf_jit_alloc_exec_limit(void)
 {
-	return VMALLOC_END - VMALLOC_START;
+	if (IS_ENABLED(CONFIG_ARM64_FORCE_CODE_PARTITIONING))
+		return get_modules_end() - get_modules_base() + SZ_2G;
+	else
+		return VMALLOC_END - VMALLOC_START;
 }
 
 void *bpf_jit_alloc_exec(unsigned long size)
 {
+	void *p = NULL;
+
+	if (IS_ENABLED(CONFIG_ARM64_FORCE_CODE_PARTITIONING)) {
+		p = __vmalloc_node_range(size, MODULE_ALIGN,
+				get_modules_base(), get_modules_end() + SZ_2G,
+				GFP_KERNEL, PAGE_KERNEL, 0, NUMA_NO_NODE,
+				__builtin_return_address(0));
+	} else {
+		p = vmalloc(size);
+	}
+
 	/* Memory is intended to be executable, reset the pointer tag. */
-	return kasan_reset_tag(vmalloc(size));
+	return kasan_reset_tag(p);
 }
 
 void bpf_jit_free_exec(void *addr)

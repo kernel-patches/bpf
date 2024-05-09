@@ -65,4 +65,11 @@ static inline const Elf_Shdr *find_section(const Elf_Ehdr *hdr,
 	return NULL;
 }
 
+extern u64 module_direct_base __ro_after_init;
+extern u64 module_plt_base __ro_after_init;
+
+inline u64 get_modules_base(void);
+inline u64 get_modules_end(void);
+void *module_alloc(unsigned long size);
+
 #endif /* __ASM_MODULE_H */

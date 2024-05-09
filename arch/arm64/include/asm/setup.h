@@ -41,4 +41,6 @@ static inline bool arch_parse_debug_rodata(char *arg)
 }
 #define arch_parse_debug_rodata arch_parse_debug_rodata
 
+int __init module_init_limits(void);
+
 #endif
