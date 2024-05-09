@@ -2057,6 +2057,8 @@ struct bpf_tramp_run_ctx {
 	struct bpf_run_ctx run_ctx;
 	u64 bpf_cookie;
 	struct bpf_run_ctx *saved_run_ctx;
+	struct bpf_tail_call_run_ctx tail_call_run_ctx;
+	u32 tail_call_cnt;
 };
 
 static inline struct bpf_run_ctx *bpf_set_run_ctx(struct bpf_run_ctx *new_ctx)
