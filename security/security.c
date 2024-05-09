@@ -407,7 +407,9 @@ static void __init lsm_static_call_init(struct security_hook_list *hl)
 			__static_call_update(scall->key, scall->trampoline,
 					     hl->hook.lsm_func_addr);
 			scall->hl = hl;
-			static_branch_enable(scall->active);
+			/* Toggleable hooks are inactive by default */
+			if (!hl->toggleable)
+				static_branch_enable(scall->active);
 			return;
 		}
 		scall++;
@@ -883,6 +885,39 @@ out:
 	kfree(nctx);
 	*uctx_len = nctx_len;
 	return rc;
+}
+
+/**
+ * security_toggle_hook - Toggle the state of the LSM hook.
+ * @hook_addr: The address of the hook to be toggled.
+ * @state: Whether to enable for disable the hook.
+ *
+ * Returns 0 on success, -EINVAL if the address is not found.
+ */
+int security_toggle_hook(void *hook_addr, bool state)
+{
+	struct lsm_static_call *scalls = ((void *)&static_calls_table);
+	unsigned long num_entries =
+		(sizeof(static_calls_table) / sizeof(struct lsm_static_call));
+	int i;
+
+	for (i = 0; i < num_entries; i++) {
+		if (!scalls[i].hl->toggleable)
+			continue;
+
+		if (!scalls[i].hl)
+			continue;
+
+		if (scalls[i].hl->hook.lsm_func_addr != hook_addr)
+			continue;
+
+		if (state)
+			static_branch_enable(scalls[i].active);
+		else
+			static_branch_disable(scalls[i].active);
+		return 0;
+	}
+	return -EINVAL;
 }
 
 /*

@@ -110,11 +110,14 @@ struct lsm_id {
  * @scalls: The beginning of the array of static calls assigned to this hook.
  * @hook: The callback for the hook.
  * @lsm: The name of the lsm that owns this hook.
+ * @default_state: The state of the LSM hook when initialized. If set to false,
+ * the static key guarding the hook will be set to disabled.
  */
 struct security_hook_list {
 	struct lsm_static_call	*scalls;
 	union security_list_options	hook;
 	const struct lsm_id		*lsmid;
+	bool				toggleable;
 } __randomize_layout;
 
 /*
@@ -164,7 +167,19 @@ static inline struct xattr *lsm_get_xattr_slot(struct xattr *xattrs,
 #define LSM_HOOK_INIT(NAME, HOOK)			\
 	{						\
 		.scalls = static_calls_table.NAME,	\
-		.hook = { .NAME = HOOK }		\
+		.hook = { .NAME = HOOK },		\
+		.toggleable = false			\
+	}
+
+/*
+ * Toggleable LSM hooks are enabled at runtime with
+ * security_toggle_hook and are initialized as inactive.
+ */
+#define LSM_HOOK_INIT_TOGGLEABLE(NAME, HOOK)		\
+	{						\
+		.scalls = static_calls_table.NAME,	\
+		.hook = { .NAME = HOOK },		\
+		.toggleable = true			\
 	}
 
 extern char *lsm_names;
@@ -205,5 +220,18 @@ extern struct lsm_info __start_early_lsm_info[], __end_early_lsm_info[];
 
 extern int lsm_inode_alloc(struct inode *inode);
 extern struct lsm_static_calls_table static_calls_table __ro_after_init;
+
+#ifdef CONFIG_SECURITY
+
+int security_toggle_hook(void *addr, bool value);
+
+#else
+
+static inline int security_toggle_hook(void *addr, bool value)
+{
+	return -EINVAL;
+}
+
+#endif /* CONFIG_SECURITY */
 
 #endif /* ! __LINUX_LSM_HOOKS_H */
