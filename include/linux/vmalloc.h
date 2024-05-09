@@ -81,6 +81,12 @@ struct vmap_area {
 	unsigned long flags; /* mark type of vm_map_ram area */
 };
 
+struct checked_vmap_range {
+	unsigned long va_start;
+	unsigned long va_end;
+	struct list_head list;
+};
+
 /* archs that select HAVE_ARCH_HUGE_VMAP should override one or more of these */
 #ifndef arch_vmap_p4d_supported
 static inline bool arch_vmap_p4d_supported(pgprot_t prot)
@@ -122,6 +128,12 @@ static inline int arch_vmap_pte_supported_shift(unsigned long size)
 static inline pgprot_t arch_vmap_pgprot_tagged(pgprot_t prot)
 {
 	return prot;
+}
+#endif
+
+#ifndef arch_init_checked_vmap_ranges
+inline void __init arch_init_checked_vmap_ranges(void)
+{
 }
 #endif
 
@@ -211,6 +223,8 @@ extern struct vm_struct *__get_vm_area_caller(unsigned long size,
 					unsigned long flags,
 					unsigned long start, unsigned long end,
 					const void *caller);
+int __init create_vmalloc_range_check(unsigned long start_vaddr,
+					unsigned long end_vaddr);
 void free_vm_area(struct vm_struct *area);
 extern struct vm_struct *remove_vm_area(const void *addr);
 extern struct vm_struct *find_vm_area(const void *addr);

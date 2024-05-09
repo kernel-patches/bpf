@@ -817,6 +817,16 @@ static struct kmem_cache *vmap_area_cachep;
  */
 static LIST_HEAD(free_vmap_area_list);
 
+static struct kmem_cache *vmap_checked_range_cachep;
+
+/*
+ * This linked list is used to record ranges of the vmalloc
+ * region which are checked at allocation time to ensure they
+ * are only allocated within when an explicit allocation
+ * request to that range is made.
+ */
+static LIST_HEAD(checked_range_list);
+
 /*
  * This augment red-black tree represents the free vmap space.
  * All vmap_area objects in this tree are sorted by va->va_start
@@ -1455,6 +1465,23 @@ merge_or_add_vmap_area_augment(struct vmap_area *va,
 }
 
 static __always_inline bool
+va_is_range_restricted(struct vmap_area *va, unsigned long vstart)
+{
+	struct checked_vmap_range *range, *tmp;
+
+	if (list_empty(&checked_range_list))
+		return false;
+
+	list_for_each_entry_safe(range, tmp, &checked_range_list, list)
+		if (va->va_start >= range->va_start &&
+		    va->va_end <= range->va_end &&
+		    vstart != range->va_start)
+			return true;
+
+	return false;
+}
+
+static __always_inline bool
 is_within_this_va(struct vmap_area *va, unsigned long size,
 	unsigned long align, unsigned long vstart)
 {
@@ -1501,7 +1528,8 @@ find_vmap_lowest_match(struct rb_root *root, unsigned long size,
 				vstart < va->va_start) {
 			node = node->rb_left;
 		} else {
-			if (is_within_this_va(va, size, align, vstart))
+			if (!va_is_range_restricted(va, vstart) &&
+			    is_within_this_va(va, size, align, vstart))
 				return va;
 
 			/*
@@ -1522,7 +1550,8 @@ find_vmap_lowest_match(struct rb_root *root, unsigned long size,
 			 */
 			while ((node = rb_parent(node))) {
 				va = rb_entry(node, struct vmap_area, rb_node);
-				if (is_within_this_va(va, size, align, vstart))
+				if (!va_is_range_restricted(va, vstart) &&
+				    is_within_this_va(va, size, align, vstart))
 					return va;
 
 				if (get_subtree_max_size(node->rb_right) >= length &&
@@ -1554,7 +1583,8 @@ find_vmap_lowest_linear_match(struct list_head *head, unsigned long size,
 	struct vmap_area *va;
 
 	list_for_each_entry(va, head, list) {
-		if (!is_within_this_va(va, size, align, vstart))
+		if (va_is_range_restricted(va, vstart) ||
+		    !is_within_this_va(va, size, align, vstart))
 			continue;
 
 		return va;
@@ -1714,6 +1744,36 @@ va_clip(struct rb_root *root, struct list_head *head,
 			insert_vmap_area_augment(lva, &va->rb_node, root, head);
 	}
 
+	return 0;
+}
+
+static inline int
+split_and_alloc_va(struct rb_root *root, struct list_head *head, unsigned long addr)
+{
+	struct vmap_area *va;
+	int ret;
+	struct vmap_area *lva = NULL;
+
+	va = __find_vmap_area(addr, root);
+	if (!va) {
+		pr_err("%s: could not find vmap\n", __func__);
+		return -1;
+	}
+
+	lva = kmem_cache_alloc(vmap_area_cachep, GFP_NOWAIT);
+	if (!lva) {
+		pr_err("%s: unable to allocate va for range\n", __func__);
+		return -1;
+	}
+	lva->va_start = addr;
+	lva->va_end = va->va_end;
+	ret = va_clip(root, head, va, addr, va->va_end - addr);
+	if (WARN_ON_ONCE(ret)) {
+		pr_err("%s: unable to clip code base region\n", __func__);
+		kmem_cache_free(vmap_area_cachep, lva);
+		return -1;
+	}
+	insert_vmap_area_augment(lva, NULL, root, head);
 	return 0;
 }
 
@@ -4424,6 +4484,35 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
 }
 EXPORT_SYMBOL(remap_vmalloc_range);
 
+/**
+ * create_vmalloc_range_check - create a checked range of vmalloc memory
+ * @start_vaddr:	The starting vaddr of the code range
+ * @end_vaddr:		The ending vaddr of the code range
+ *
+ * Returns:	0 for success, -1 on failure
+ *
+ * This function marks regions within or overlapping the vmalloc region for
+ * requested range checking during allocation. When requesting virtual memory,
+ * if the requested starting vaddr does not explicitly match the starting vaddr
+ * of this range, this range will not be allocated from.
+ */
+int __init create_vmalloc_range_check(unsigned long start_vaddr,
+					unsigned long end_vaddr)
+{
+	struct checked_vmap_range *range;
+
+	range = kmem_cache_alloc(vmap_checked_range_cachep, GFP_NOWAIT);
+	if (split_and_alloc_va(&free_vmap_area_root, &free_vmap_area_list, start_vaddr) ||
+	    split_and_alloc_va(&free_vmap_area_root, &free_vmap_area_list, end_vaddr))
+		return -1;
+
+	range->va_start = start_vaddr;
+	range->va_end = end_vaddr;
+
+	list_add(&range->list, &checked_range_list);
+	return 0;
+}
+
 void free_vm_area(struct vm_struct *area)
 {
 	struct vm_struct *ret;
@@ -5082,6 +5171,11 @@ void __init vmalloc_init(void)
 	 */
 	vmap_area_cachep = KMEM_CACHE(vmap_area, SLAB_PANIC);
 
+	/*
+	 * Create the cache for checked vmap ranges.
+	 */
+	vmap_checked_range_cachep = KMEM_CACHE(checked_vmap_range, SLAB_PANIC);
+
 	for_each_possible_cpu(i) {
 		struct vmap_block_queue *vbq;
 		struct vfree_deferred *p;
@@ -5129,4 +5223,6 @@ void __init vmalloc_init(void)
 	vmap_node_shrinker->count_objects = vmap_node_shrink_count;
 	vmap_node_shrinker->scan_objects = vmap_node_shrink_scan;
 	shrinker_register(vmap_node_shrinker);
+
+	arch_init_checked_vmap_ranges();
 }
