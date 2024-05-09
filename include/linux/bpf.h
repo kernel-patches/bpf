@@ -1466,6 +1466,7 @@ struct bpf_prog_aux {
 	bool attach_tracing_prog; /* true if tracing another tracing program */
 	bool func_proto_unreliable;
 	bool tail_call_reachable;
+	bool use_tail_call_run_ctx;
 	bool xdp_has_frags;
 	bool exception_cb;
 	bool exception_boundary;
@@ -2045,6 +2046,11 @@ struct bpf_trace_run_ctx {
 	struct bpf_run_ctx run_ctx;
 	u64 bpf_cookie;
 	bool is_uprobe;
+};
+
+struct bpf_tail_call_run_ctx {
+	const void *ctx;
+	u32 *tail_call_cnt_ptr;
 };
 
 struct bpf_tramp_run_ctx {
