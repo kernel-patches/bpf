@@ -39,6 +39,9 @@ void serial_test_tp_attach_query(void)
 	attr.wakeup_events = 1;
 
 	query = malloc(sizeof(*query) + sizeof(__u32) * num_progs);
+	if (!ASSERT_OK_PTR(query, "malloc"))
+		return;
+
 	for (i = 0; i < num_progs; i++) {
 		err = bpf_prog_test_load(file, BPF_PROG_TYPE_TRACEPOINT, &obj[i],
 				    &prog_fd[i]);
