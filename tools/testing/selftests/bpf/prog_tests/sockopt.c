@@ -1100,6 +1100,12 @@ static int run_test(int cgroup_fd, struct sockopt_test *test, bool use_io_uring)
 		}
 
 		optval = malloc(test->get_optlen);
+		if (!optval) {
+			log_err("Failed to allocate memory");
+			ret = -1;
+			goto close_sock_fd;
+		}
+
 		memset(optval, 0, test->get_optlen);
 		socklen_t optlen = test->get_optlen;
 		socklen_t expected_get_optlen = test->get_optlen_ret ?:
