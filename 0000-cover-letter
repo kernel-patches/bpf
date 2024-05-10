@@ -1,0 +1,77 @@
+From 73692fdffe0dcc653f3534ec6724c11946efec50 Mon Sep 17 00:00:00 2001
+From: Jordan Rife <jrife0@gmail.com>
+Date: Thu, 9 May 2024 17:43:37 -0700
+Subject: [PATCH 00/15] *** SUBJECT HERE ***
+
+This patch series migrates remaining tests from bpf/test_sock_addr.c to
+prog_tests/sock_addr.c and progs/verifier_sock_addr.c in order to fully
+retire the old-style test program and expands test coverage to test
+previously untested scenarios related to sockaddr hooks.
+
+This is a continuation of the work started recently during the expansion
+of prog_tests/sock_addr.c.
+
+Link: https://lore.kernel.org/bpf/20240429214529.2644801-1-jrife@google.com/T/#u
+
+=======
+Patches
+=======
+* Patch 1 moves tests that check valid return values for recvmsg hooks
+  into progs/verifier_sock_addr.c, a new addition to the verifier test
+  suite.
+* Patches 2-4 lay the groundwork for test migration, enabling
+  prog_tests/sock_addr.c to handle more test dimensions.
+* Patches 5-9 move existing tests to prog_tests/sock_addr.c.
+* Patches 10-11 remove certain test cases that are either redundant or
+  obsolete.
+* Patches 12-15 expand on existing test coverage.
+
+Jordan Rife (15):
+  selftests/bpf: Migrate recvmsg* return code tests to
+    verifier_sock_addr.c
+  selftests/bpf: Use program name for skel load/destroy functions
+  selftests/bpf: Handle LOAD_REJECT test cases
+  selftests/bpf: Handle SYSCALL_EPERM and SYSCALL_ENOTSUPP test cases
+  selftests/bpf: Migrate WILDCARD_IP test
+  selftests/bpf: Migrate sendmsg deny test cases
+  selftests/bpf: Migrate sendmsg6 v4 mapped address tests
+  selftests/bpf: Migrate wildcard destination rewrite test
+  selftests/bpf: Migrate expected_attach_type tests
+  selftests/bpf: Remove redundant sendmsg test cases
+  selftests/bpf: Remove ATTACH_REJECT test cases
+  selftests/bpf: Retire test_sock_addr.(c|sh)
+  selftests/bpf: Expand sockaddr program return value tests
+  sefltests/bpf: Expand sockaddr hook deny tests
+  selftests/bpf: Expand getsockname and getpeername tests
+
+ tools/testing/selftests/bpf/.gitignore        |    1 -
+ tools/testing/selftests/bpf/Makefile          |    4 +-
+ .../selftests/bpf/prog_tests/sock_addr.c      | 1200 ++++++++++++++++-
+ .../selftests/bpf/prog_tests/verifier.c       |    2 +
+ .../testing/selftests/bpf/progs/bind4_prog.c  |    6 +
+ .../testing/selftests/bpf/progs/bind6_prog.c  |    6 +
+ .../selftests/bpf/progs/connect4_prog.c       |    6 +
+ .../selftests/bpf/progs/connect6_prog.c       |    6 +
+ .../selftests/bpf/progs/connect_unix_prog.c   |    6 +
+ .../selftests/bpf/progs/getpeername4_prog.c   |   24 +
+ .../selftests/bpf/progs/getpeername6_prog.c   |   31 +
+ .../selftests/bpf/progs/getsockname4_prog.c   |   24 +
+ .../selftests/bpf/progs/getsockname6_prog.c   |   31 +
+ .../selftests/bpf/progs/sendmsg4_prog.c       |    6 +
+ .../selftests/bpf/progs/sendmsg6_prog.c       |   57 +
+ .../selftests/bpf/progs/sendmsg_unix_prog.c   |    6 +
+ .../selftests/bpf/progs/verifier_sock_addr.c  |  331 +++++
+ tools/testing/selftests/bpf/test_sock_addr.c  | 1140 ----------------
+ tools/testing/selftests/bpf/test_sock_addr.sh |   58 -
+ 19 files changed, 1670 insertions(+), 1275 deletions(-)
+ create mode 100644 tools/testing/selftests/bpf/progs/getpeername4_prog.c
+ create mode 100644 tools/testing/selftests/bpf/progs/getpeername6_prog.c
+ create mode 100644 tools/testing/selftests/bpf/progs/getsockname4_prog.c
+ create mode 100644 tools/testing/selftests/bpf/progs/getsockname6_prog.c
+ create mode 100644 tools/testing/selftests/bpf/progs/verifier_sock_addr.c
+ delete mode 100644 tools/testing/selftests/bpf/test_sock_addr.c
+ delete mode 100755 tools/testing/selftests/bpf/test_sock_addr.sh
+
+-- 
+2.34.1
+
