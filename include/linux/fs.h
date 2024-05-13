@@ -121,8 +121,10 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 #define FMODE_PWRITE		((__force fmode_t)(1 << 4))
 /* File is opened for execution with sys_execve / sys_uselib */
 #define FMODE_EXEC		((__force fmode_t)(1 << 5))
+/* File writes are restricted (block device specific) */
+#define FMODE_WRITE_RESTRICTED  ((__force fmode_t)(1 << 6))
 
-/* FMODE_* bits 6 to 8 */
+/* FMODE_* bits 7 to 8 */
 
 /* 32bit hashes as llseek() offset (for directories) */
 #define FMODE_32BITHASH         ((__force fmode_t)(1 << 9))
