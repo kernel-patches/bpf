@@ -19,7 +19,6 @@ DEFINE_STATIC_KEY_MAYBE(CONFIG_MEM_ALLOC_PROFILING_ENABLED_BY_DEFAULT,
 struct allocinfo_private {
 	struct codetag_iterator iter;
 	bool print_header;
-
 };
 
 static void *allocinfo_start(struct seq_file *m, loff_t *pos)
