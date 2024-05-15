@@ -5,13 +5,13 @@
 
 char _license[] SEC("license") = "GPL";
 
-extern const void bpf_fentry_test1 __ksym;
-extern const void bpf_fentry_test2 __ksym;
-extern const void bpf_fentry_test3 __ksym;
-extern const void bpf_fentry_test4 __ksym;
-extern const void bpf_modify_return_test __ksym;
-extern const void bpf_fentry_test6 __ksym;
-extern const void bpf_fentry_test7 __ksym;
+extern int bpf_fentry_test1(int a) __ksym;
+extern int bpf_fentry_test2(int a, __u64 b) __ksym;
+extern int bpf_fentry_test3(char a, int b, __u64 c) __ksym;
+extern int bpf_fentry_test4(void *a, char b, int c, __u64 d) __ksym;
+extern int bpf_modify_return_test(int a, int *b) __ksym;
+extern int bpf_fentry_test6(__u64 a, void *b, short c, int d, void *e, __u64 f) __ksym;
+extern int bpf_fentry_test7(struct bpf_fentry_test_t *arg) __ksym;
 
 extern bool CONFIG_X86_KERNEL_IBT __kconfig __weak;
 
