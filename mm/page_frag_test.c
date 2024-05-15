@@ -273,7 +273,7 @@ static int page_frag_pop_thread(void *arg)
 
 		if (obj) {
 			nr--;
-			page_frag_free(obj);
+			page_frag_free_va(obj);
 		} else {
 			cond_resched();
 		}
@@ -303,17 +303,18 @@ static int page_frag_push_thread(void *arg)
 
 		size = clamp(size, 1U, PAGE_SIZE);
 		if (test_align)
-			va = page_frag_alloc_align(&test_frag, size, GFP_KERNEL,
-						   SMP_CACHE_BYTES);
+			va = page_frag_alloc_va_align(&test_frag, size,
+						      GFP_KERNEL,
+						      SMP_CACHE_BYTES);
 		else
-			va = page_frag_alloc(&test_frag, size, GFP_KERNEL);
+			va = page_frag_alloc_va(&test_frag, size, GFP_KERNEL);
 
 		if (!va)
 			continue;
 
 		ret = objpool_push(va, pool);
 		if (ret) {
-			page_frag_free(va);
+			page_frag_free_va(va);
 			cond_resched();
 		} else {
 			nr--;
