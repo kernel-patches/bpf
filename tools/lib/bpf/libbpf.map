@@ -422,4 +422,8 @@ LIBBPF_1.5.0 {
 		bpf_program__attach_sockmap;
 		ring__consume_n;
 		ring_buffer__consume_n;
+		btf_dump__emit_queue;
+		btf_dump__emit_queue_cnt;
+		btf_dump__order_type;
+		btf_dump__dump_one_type;
 } LIBBPF_1.4.0;

@@ -249,6 +249,39 @@ LIBBPF_API void btf_dump__free(struct btf_dump *d);
 
 LIBBPF_API int btf_dump__dump_type(struct btf_dump *d, __u32 id);
 
+/* Dumps C language definition or forward declaration for type **id**:
+ * - returns 1 if type is printable;
+ * - returns 0 if type is non-printable.
+ */
+LIBBPF_API int btf_dump__dump_one_type(struct btf_dump *d, __u32 id, bool fwd);
+
+/* **struct btf_dump** tracks a list of types that should be dumped,
+ * these types are sorted in the topological order satisfying C language semantics:
+ * - if type A includes type B (e.g. A is a struct with a field of type B),
+ *   then B comes before A;
+ * - if type A references type B via a pointer
+ *   (e.g. A is a struct with a field of type pointer to B),
+ *   then B's forward declaration comes before A.
+ *
+ * **struct btf_dump_emit_queue_item** represents a single entry of the emit queue.
+ */
+struct btf_dump_emit_queue_item {
+	__u32 id:31;
+	__u32 fwd:1;
+};
+
+/* Adds type **id** and it's dependencies to the emit queue. */
+LIBBPF_API int btf_dump__order_type(struct btf_dump *d, __u32 id);
+
+/* Provides access to currently accumulated emit queue,
+ * returned pointer is owned by **struct btf_dump** and should not be
+ * freed explicitly.
+ */
+LIBBPF_API struct btf_dump_emit_queue_item *btf_dump__emit_queue(struct btf_dump *d);
+
+/* Returns the size of currently accumulated emit queue */
+LIBBPF_API __u32 btf_dump__emit_queue_cnt(struct btf_dump *d);
+
 struct btf_dump_emit_type_decl_opts {
 	/* size of this struct, for forward/backward compatiblity */
 	size_t sz;
