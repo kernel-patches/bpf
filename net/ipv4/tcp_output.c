@@ -489,11 +489,20 @@ static void bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 {
 	struct bpf_sock_ops_kern sock_ops;
 	int err;
+	struct tcp_sock *th = (struct tcp_sock *)sk;
 
-	if (likely(!BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
+	if (likely(!BPF_SOCK_OPS_TEST_FLAG(th,
 					   BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG)) ||
 	    !*remaining)
 		return;
+
+	if (likely(BPF_SOCK_OPS_TEST_FLAG(th,
+					  BPF_SOCK_OPS_HDR_OPT_LEN_CACHE_CB_FLAG)) &&
+	    th->bpf_opt_len) {
+		*remaining -= th->bpf_opt_len;
+		opts->bpf_opt_len = th->bpf_opt_len;
+		return;
+	}
 
 	/* *remaining has already been aligned to 4 bytes, so *remaining >= 4 */
 
@@ -539,6 +548,7 @@ static void bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 	opts->bpf_opt_len = *remaining - sock_ops.remaining_opt_len;
 	/* round up to 4 bytes */
 	opts->bpf_opt_len = (opts->bpf_opt_len + 3) & ~3;
+	th->bpf_opt_len = opts->bpf_opt_len;
 
 	*remaining -= opts->bpf_opt_len;
 }

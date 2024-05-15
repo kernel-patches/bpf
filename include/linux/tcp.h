@@ -455,6 +455,9 @@ struct tcp_sock {
 					  * to recur itself by calling
 					  * bpf_setsockopt(TCP_CONGESTION, "itself").
 					  */
+	u8	bpf_opt_len;		/* save tcp opt len implementation
+					 * BPF_SOCK_OPS_HDR_OPT_LEN_CB fast path
+					 */
 #define BPF_SOCK_OPS_TEST_FLAG(TP, ARG) (TP->bpf_sock_ops_cb_flags & ARG)
 #else
 #define BPF_SOCK_OPS_TEST_FLAG(TP, ARG) 0
