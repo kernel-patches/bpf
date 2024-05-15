@@ -294,6 +294,12 @@ void btrfs_add_ordered_sum(struct btrfs_ordered_extent *entry,
 	spin_unlock_irq(&inode->ordered_tree_lock);
 }
 
+void btrfs_mark_ordered_extent_error(struct btrfs_ordered_extent *ordered)
+{
+	if (!test_and_set_bit(BTRFS_ORDERED_IOERR, &ordered->flags))
+		mapping_set_error(ordered->inode->i_mapping, -EIO);
+}
+
 static void finish_ordered_fn(struct btrfs_work *work)
 {
 	struct btrfs_ordered_extent *ordered_extent;
@@ -332,7 +338,7 @@ static bool can_finish_ordered_extent(struct btrfs_ordered_extent *ordered,
 	if (WARN_ON_ONCE(len > ordered->bytes_left)) {
 		btrfs_crit(fs_info,
 "bad ordered extent accounting, root=%llu ino=%llu OE offset=%llu OE len=%llu to_dec=%llu left=%llu",
-			   inode->root->root_key.objectid, btrfs_ino(inode),
+			   btrfs_root_id(inode->root), btrfs_ino(inode),
 			   ordered->file_offset, ordered->num_bytes,
 			   len, ordered->bytes_left);
 		ordered->bytes_left = 0;
@@ -589,7 +595,7 @@ void btrfs_remove_ordered_extent(struct btrfs_inode *btrfs_inode,
 	freespace_inode = btrfs_is_free_space_inode(btrfs_inode);
 
 	btrfs_lockdep_acquire(fs_info, btrfs_trans_pending_ordered);
-	/* This is paired with btrfs_alloc_ordered_extent. */
+	/* This is paired with alloc_ordered_extent(). */
 	spin_lock(&btrfs_inode->lock);
 	btrfs_mod_outstanding_extents(btrfs_inode, -1);
 	spin_unlock(&btrfs_inode->lock);
