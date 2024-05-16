@@ -523,6 +523,21 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 	}
 }
 
+static int bpf_trampoline_toggle_lsm(struct bpf_trampoline *tr,
+				      enum bpf_tramp_prog_type kind)
+{
+	struct bpf_tramp_link *link;
+	bool found = false;
+
+	hlist_for_each_entry(link, &tr->progs_hlist[kind], tramp_hlist) {
+		if (link->link.prog->type == BPF_PROG_TYPE_LSM) {
+			found  = true;
+			break;
+		}
+	}
+	return security_toggle_hook(tr->func.addr, found);
+}
+
 static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_trampoline *tr)
 {
 	enum bpf_tramp_prog_type kind;
@@ -562,11 +577,22 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 
 	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
-	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
-	if (err) {
-		hlist_del_init(&link->tramp_hlist);
-		tr->progs_cnt[kind]--;
+
+	if (link->link.prog->type == BPF_PROG_TYPE_LSM) {
+		err = bpf_trampoline_toggle_lsm(tr, kind);
+		if (err)
+			goto cleanup;
 	}
+
+	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
+	if (err)
+		goto cleanup;
+
+	return 0;
+
+cleanup:
+	hlist_del_init(&link->tramp_hlist);
+	tr->progs_cnt[kind]--;
 	return err;
 }
 
@@ -595,6 +621,12 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_
 	}
 	hlist_del_init(&link->tramp_hlist);
 	tr->progs_cnt[kind]--;
+
+	if (link->link.prog->type == BPF_PROG_TYPE_LSM) {
+		err = bpf_trampoline_toggle_lsm(tr, kind);
+		WARN(err, "BUG: unable to toggle BPF LSM hook");
+	}
+
 	return bpf_trampoline_update(tr, true /* lock_direct_mutex */);
 }
 
