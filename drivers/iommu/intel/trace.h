@@ -32,7 +32,7 @@ TRACE_EVENT(qi_submit,
 	),
 
 	TP_fast_assign(
-		__assign_str(iommu, iommu->name);
+		__assign_str(iommu);
 		__entry->qw0 = qw0;
 		__entry->qw1 = qw1;
 		__entry->qw2 = qw2;
@@ -79,8 +79,8 @@ TRACE_EVENT(prq_report,
 		__entry->dw2 = dw2;
 		__entry->dw3 = dw3;
 		__entry->seq = seq;
-		__assign_str(iommu, iommu->name);
-		__assign_str(dev, dev_name(dev));
+		__assign_str(iommu);
+		__assign_str(dev);
 	),
 
 	TP_printk("%s/%s seq# %ld: %s",
