@@ -18,6 +18,7 @@ extern "C" {
 
 #define BTF_ELF_SEC ".BTF"
 #define BTF_EXT_ELF_SEC ".BTF.ext"
+#define BTF_BASE_ELF_SEC ".BTF.base"
 #define MAPS_ELF_SEC ".maps"
 
 struct btf;
@@ -133,6 +134,36 @@ LIBBPF_API struct btf *btf__parse_elf(const char *path, struct btf_ext **btf_ext
 LIBBPF_API struct btf *btf__parse_elf_split(const char *path, struct btf *base_btf);
 LIBBPF_API struct btf *btf__parse_raw(const char *path);
 LIBBPF_API struct btf *btf__parse_raw_split(const char *path, struct btf *base_btf);
+
+struct btf_parse_opts {
+	size_t sz;
+	/* use base BTF to parse split BTF */
+	struct btf *base_btf;
+	/* retrieve optional .BTF.ext info */
+	struct btf_ext **btf_ext;
+	/* BTF section name; if NULL, try parsing raw BTF, falling back to parsing
+	 * .BTF ELF section if that fails also.  If set, parse named ELF section.
+	 */
+	const char *btf_sec;
+	size_t :0;
+};
+
+#define btf_parse_opts__last_field btf_sec
+
+/* @brief **btf__parse_opts()** parses BTF information from either a
+ * raw BTF file (*btf_sec* is NULL) or from the specified BTF section,
+ * also retrieving  .BTF.ext info if *btf_ext* is non-NULL.  If
+ * *base_btf* is specified, use it to parse split BTF from the
+ * specified location.
+ *
+ * @return new BTF object instance which has to be eventually freed with
+ * **btf__free()**
+ *
+ * On error, NULL is returned, with the `errno` variable set to the
+ * error code.
+ */
+
+LIBBPF_API struct btf *btf__parse_opts(const char *path, struct btf_parse_opts *opts);
 
 LIBBPF_API struct btf *btf__load_vmlinux_btf(void);
 LIBBPF_API struct btf *btf__load_module_btf(const char *module_name, struct btf *vmlinux_btf);

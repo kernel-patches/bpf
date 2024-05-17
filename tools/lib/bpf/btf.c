@@ -1084,7 +1084,7 @@ struct btf *btf__new_split(const void *data, __u32 size, struct btf *base_btf)
 	return libbpf_ptr(btf_new(data, size, base_btf));
 }
 
-static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
+static struct btf *btf_parse_elf(const char *path, const char *btf_sec, struct btf *base_btf,
 				 struct btf_ext **btf_ext)
 {
 	Elf_Data *btf_data = NULL, *btf_ext_data = NULL;
@@ -1146,7 +1146,7 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 				idx, path);
 			goto done;
 		}
-		if (strcmp(name, BTF_ELF_SEC) == 0) {
+		if (strcmp(name, btf_sec) == 0) {
 			btf_data = elf_getdata(scn, 0);
 			if (!btf_data) {
 				pr_warn("failed to get section(%d, %s) data from %s\n",
@@ -1166,7 +1166,7 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 	}
 
 	if (!btf_data) {
-		pr_warn("failed to find '%s' ELF section in %s\n", BTF_ELF_SEC, path);
+		pr_warn("failed to find '%s' ELF section in %s\n", btf_sec, path);
 		err = -ENODATA;
 		goto done;
 	}
@@ -1212,12 +1212,12 @@ done:
 
 struct btf *btf__parse_elf(const char *path, struct btf_ext **btf_ext)
 {
-	return libbpf_ptr(btf_parse_elf(path, NULL, btf_ext));
+	return libbpf_ptr(btf_parse_elf(path, BTF_ELF_SEC, NULL, btf_ext));
 }
 
 struct btf *btf__parse_elf_split(const char *path, struct btf *base_btf)
 {
-	return libbpf_ptr(btf_parse_elf(path, base_btf, NULL));
+	return libbpf_ptr(btf_parse_elf(path, BTF_ELF_SEC, base_btf, NULL));
 }
 
 static struct btf *btf_parse_raw(const char *path, struct btf *base_btf)
@@ -1293,31 +1293,48 @@ struct btf *btf__parse_raw_split(const char *path, struct btf *base_btf)
 	return libbpf_ptr(btf_parse_raw(path, base_btf));
 }
 
-static struct btf *btf_parse(const char *path, struct btf *base_btf, struct btf_ext **btf_ext)
+struct btf *btf__parse_opts(const char *path, struct btf_parse_opts *opts)
 {
-	struct btf *btf;
+	struct btf *btf, *base_btf;
+	const char *btf_sec;
+	struct btf_ext **btf_ext;
 	int err;
+
+	if (!OPTS_VALID(opts, btf_parse_opts))
+		return libbpf_err_ptr(-EINVAL);
+	base_btf = OPTS_GET(opts, base_btf, NULL);
+	btf_sec = OPTS_GET(opts, btf_sec, NULL);
+	btf_ext = OPTS_GET(opts, btf_ext, NULL);
 
 	if (btf_ext)
 		*btf_ext = NULL;
-
-	btf = btf_parse_raw(path, base_btf);
+	if (!btf_sec) {
+		btf = btf_parse_raw(path, base_btf);
+		err = libbpf_get_error(btf);
+		if (!err)
+			return btf;
+		if (err != -EPROTO)
+			return libbpf_err_ptr(err);
+	}
+	btf = btf_parse_elf(path, btf_sec ?: BTF_ELF_SEC, base_btf, btf_ext);
 	err = libbpf_get_error(btf);
-	if (!err)
-		return btf;
-	if (err != -EPROTO)
-		return ERR_PTR(err);
-	return btf_parse_elf(path, base_btf, btf_ext);
+	if (err)
+		return libbpf_err_ptr(err);
+	return btf;
 }
 
 struct btf *btf__parse(const char *path, struct btf_ext **btf_ext)
 {
-	return libbpf_ptr(btf_parse(path, NULL, btf_ext));
+	LIBBPF_OPTS(btf_parse_opts, opts, .btf_ext = btf_ext);
+
+	return btf__parse_opts(path, &opts);
 }
 
 struct btf *btf__parse_split(const char *path, struct btf *base_btf)
 {
-	return libbpf_ptr(btf_parse(path, base_btf, NULL));
+	LIBBPF_OPTS(btf_parse_opts, opts, .base_btf = base_btf);
+
+	return btf__parse_opts(path, &opts);
 }
 
 static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endian);
