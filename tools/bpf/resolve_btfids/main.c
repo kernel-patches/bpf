@@ -115,6 +115,7 @@ struct object {
 	const char *path;
 	const char *btf;
 	const char *base_btf_path;
+	int base;
 
 	struct {
 		int		 fd;
@@ -527,22 +528,37 @@ static int symbols_resolve(struct object *obj)
 	int nr_unions   = obj->nr_unions;
 	int nr_funcs    = obj->nr_funcs;
 	struct btf *base_btf = NULL;
-	int err, type_id;
+	int err = 0, type_id;
 	struct btf *btf;
 	__u32 nr_types;
 
 	if (obj->base_btf_path) {
-		base_btf = btf__parse(obj->base_btf_path, NULL);
-		err = libbpf_get_error(base_btf);
+		LIBBPF_OPTS(btf_parse_opts, optp);
+		const char *path;
+
+		if (obj->base) {
+			optp.btf_sec = BTF_BASE_ELF_SEC;
+			path = obj->path;
+			base_btf = btf__parse_opts(path, &optp);
+			/* fall back to normal base parsing if no BTF_BASE_ELF_SEC */
+		}
+		if (!base_btf) {
+			optp.btf_sec = BTF_ELF_SEC;
+			path = obj->base_btf_path;
+			base_btf = btf__parse_opts(path, &optp);
+		}
+		if (!base_btf)
+			err = -errno;
 		if (err) {
 			pr_err("FAILED: load base BTF from %s: %s\n",
-			       obj->base_btf_path, strerror(-err));
+			       path, strerror(-err));
 			return -1;
 		}
 	}
 
 	btf = btf__parse_split(obj->btf ?: obj->path, base_btf);
-	err = libbpf_get_error(btf);
+	if (!btf)
+		err = -errno;
 	if (err) {
 		pr_err("FAILED: load BTF from %s: %s\n",
 			obj->btf ?: obj->path, strerror(-err));
@@ -781,6 +797,8 @@ int main(int argc, const char **argv)
 			   "BTF data"),
 		OPT_STRING('b', "btf_base", &obj.base_btf_path, "file",
 			   "path of file providing base BTF"),
+		OPT_INCR('B', "base", &obj.base,
+			 "use " BTF_BASE_ELF_SEC " ELF section BTF as base"),
 		OPT_END()
 	};
 	int err = -1;
