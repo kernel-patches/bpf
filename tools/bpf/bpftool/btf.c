@@ -756,6 +756,14 @@ static int do_dump(int argc, char **argv)
 			base = get_vmlinux_btf_from_sysfs();
 
 		btf = btf__parse_split(*argv, base ?: base_btf);
+		/* Finally check for presence of base BTF section */
+		if (!btf && !base && !base_btf) {
+			LIBBPF_OPTS(btf_parse_opts, optp, .btf_sec = BTF_BASE_ELF_SEC);
+
+			base_btf = btf__parse_opts(*argv, &optp);
+			if (base_btf)
+				btf = btf__parse_split(*argv, base_btf);
+		}
 		if (!btf) {
 			err = -errno;
 			p_err("failed to load BTF from %s: %s",
