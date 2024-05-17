@@ -83,6 +83,8 @@ extern bool verifier_logs;
 extern bool relaxed_maps;
 extern bool use_loader;
 extern struct btf *base_btf;
+extern struct btf *relocate_base_btf;
+extern const char *relocate_base_btf_path;
 extern struct hashmap *refs_table;
 
 void __printf(1, 2) p_err(const char *fmt, ...);

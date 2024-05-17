@@ -763,6 +763,14 @@ static int do_dump(int argc, char **argv)
 			base_btf = btf__parse_opts(*argv, &optp);
 			if (base_btf)
 				btf = btf__parse_split(*argv, base_btf);
+			if (btf && relocate_base_btf) {
+				err = btf__relocate(btf, relocate_base_btf);
+				if (err) {
+					p_err("could not relocate BTF from '%s' with base BTF '%s': %s\n",
+					      *argv, relocate_base_btf_path, strerror(-err));
+					goto done;
+				}
+			}
 		}
 		if (!btf) {
 			err = -errno;
@@ -1203,7 +1211,8 @@ static int do_help(int argc, char **argv)
 		"       " HELP_SPEC_MAP "\n"
 		"       " HELP_SPEC_PROGRAM "\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
-		"                    {-B|--base-btf} }\n"
+		"                    {-B|--base-btf} |\n"
+		"                    {-R|--relocate-base-btf} }\n"
 		"",
 		bin_name, "btf");
 

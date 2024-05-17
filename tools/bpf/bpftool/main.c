@@ -32,6 +32,8 @@ bool verifier_logs;
 bool relaxed_maps;
 bool use_loader;
 struct btf *base_btf;
+struct btf *relocate_base_btf;
+const char *relocate_base_btf_path;
 struct hashmap *refs_table;
 
 static void __noreturn clean_and_exit(int i)
@@ -448,6 +450,7 @@ int main(int argc, char **argv)
 		{ "debug",	no_argument,	NULL,	'd' },
 		{ "use-loader",	no_argument,	NULL,	'L' },
 		{ "base-btf",	required_argument, NULL, 'B' },
+		{ "relocate-base-btf", required_argument, NULL, 'R' },
 		{ 0 }
 	};
 	bool version_requested = false;
@@ -473,7 +476,7 @@ int main(int argc, char **argv)
 	bin_name = "bpftool";
 
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:l",
+	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:lR:",
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -518,6 +521,15 @@ int main(int argc, char **argv)
 			break;
 		case 'L':
 			use_loader = true;
+			break;
+		case 'R':
+			relocate_base_btf_path = optarg;
+			relocate_base_btf = btf__parse(optarg, NULL);
+			if (!relocate_base_btf) {
+				p_err("failed to parse base BTF for relocation at '%s': %d\n",
+				      optarg, -errno);
+				return -1;
+			}
 			break;
 		default:
 			p_err("unrecognized option '%s'", argv[optind - 1]);

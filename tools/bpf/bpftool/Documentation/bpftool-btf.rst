@@ -16,7 +16,7 @@ SYNOPSIS
 
 **bpftool** [*OPTIONS*] **btf** *COMMAND*
 
-*OPTIONS* := { |COMMON_OPTIONS| | { **-B** | **--base-btf** } }
+*OPTIONS* := { |COMMON_OPTIONS| | { **-B** | **--base-btf** } { **-R** | **relocate-base-btf** } }
 
 *COMMANDS* := { **dump** | **help** }
 
@@ -86,6 +86,19 @@ OPTIONS
     for the base object, and passing this option is optional. When the main
     BTF object is passed through other handles, this option becomes
     necessary.
+
+-R, --relocate-base-btf *FILE*
+    When split BTF is generated with distilled base BTF for relocation,
+    the latter is stored in a .BTF.base section and allows us to later
+    relocate split BTF and a potentially-changed base BTF by using
+    information in the .BTF.base section about the base types referenced
+    from split BTF.  Relocation is carried out against the split BTF
+    supplied via this parameter and the split BTF will then refer to
+    the base types supplied in *FILE*.
+
+    If this option is not used, split BTF is shown relative to the
+    .BTF.base, which contains just enough information to support later
+    relocation.
 
 EXAMPLES
 ========
