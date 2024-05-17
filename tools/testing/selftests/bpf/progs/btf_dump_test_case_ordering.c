@@ -47,12 +47,22 @@ struct callback_head {
 	void (*func)(struct callback_head *);
 };
 
+typedef struct foo foo_alias;
+
+struct foo {};
+
+struct typedef_ptr_and_full {
+	foo_alias *a;
+	foo_alias b;
+};
+
 struct root_struct {
 	struct s4 s4;
 	struct list_head l;
 	struct hlist_node n;
 	struct hlist_head h;
 	struct callback_head cb;
+	struct typedef_ptr_and_full td;
 };
 
 /*------ END-EXPECTED-OUTPUT ------ */
