@@ -371,12 +371,12 @@ static void verbose_invalid_scalar(struct bpf_verifier_env *env,
 	bool unknown = true;
 
 	verbose(env, "%s the register %s has", ctx, reg_name);
-	if (reg->smin_value > S64_MIN) {
-		verbose(env, " smin=%lld", reg->smin_value);
+	if (reg->val.smin > S64_MIN) {
+		verbose(env, " smin=%lld", reg->val.smin);
 		unknown = false;
 	}
-	if (reg->smax_value < S64_MAX) {
-		verbose(env, " smax=%lld", reg->smax_value);
+	if (reg->val.smax < S64_MAX) {
+		verbose(env, " smax=%lld", reg->val.smax);
 		unknown = false;
 	}
 	if (unknown)
@@ -1758,15 +1758,15 @@ static const int caller_saved[CALLER_SAVED_REGS] = {
 static void ___mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 {
 	reg->var_off = tnum_const(imm);
-	reg->smin_value = (s64)imm;
-	reg->smax_value = (s64)imm;
-	reg->umin_value = imm;
-	reg->umax_value = imm;
+	reg->val.smin = (s64)imm;
+	reg->val.smax = (s64)imm;
+	reg->val.umin = imm;
+	reg->val.umax = imm;
 
-	reg->s32_min_value = (s32)imm;
-	reg->s32_max_value = (s32)imm;
-	reg->u32_min_value = (u32)imm;
-	reg->u32_max_value = (u32)imm;
+	reg->val.s32_min = (s32)imm;
+	reg->val.s32_max = (s32)imm;
+	reg->val.u32_min = (u32)imm;
+	reg->val.u32_max = (u32)imm;
 }
 
 /* Mark the unknown part of a register (variable offset or scalar value) as
@@ -1785,10 +1785,10 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
 	reg->var_off = tnum_const_subreg(reg->var_off, imm);
-	reg->s32_min_value = (s32)imm;
-	reg->s32_max_value = (s32)imm;
-	reg->u32_min_value = (u32)imm;
-	reg->u32_max_value = (u32)imm;
+	reg->val.s32_min = (s32)imm;
+	reg->val.s32_max = (s32)imm;
+	reg->val.u32_min = (u32)imm;
+	reg->val.u32_max = (u32)imm;
 }
 
 /* Mark the 'variable offset' part of a register as zero.  This should be
@@ -1913,31 +1913,31 @@ static bool reg_is_init_pkt_pointer(const struct bpf_reg_state *reg,
  */
 static void __mark_reg_unbounded(struct bpf_reg_state *reg)
 {
-	reg->smin_value = S64_MIN;
-	reg->smax_value = S64_MAX;
-	reg->umin_value = 0;
-	reg->umax_value = U64_MAX;
+	reg->val.smin = S64_MIN;
+	reg->val.smax = S64_MAX;
+	reg->val.umin = 0;
+	reg->val.umax = U64_MAX;
 
-	reg->s32_min_value = S32_MIN;
-	reg->s32_max_value = S32_MAX;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
+	reg->val.s32_min = S32_MIN;
+	reg->val.s32_max = S32_MAX;
+	reg->val.u32_min = 0;
+	reg->val.u32_max = U32_MAX;
 }
 
 static void __mark_reg64_unbounded(struct bpf_reg_state *reg)
 {
-	reg->smin_value = S64_MIN;
-	reg->smax_value = S64_MAX;
-	reg->umin_value = 0;
-	reg->umax_value = U64_MAX;
+	reg->val.smin = S64_MIN;
+	reg->val.smax = S64_MAX;
+	reg->val.umin = 0;
+	reg->val.umax = U64_MAX;
 }
 
 static void __mark_reg32_unbounded(struct bpf_reg_state *reg)
 {
-	reg->s32_min_value = S32_MIN;
-	reg->s32_max_value = S32_MAX;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
+	reg->val.s32_min = S32_MIN;
+	reg->val.s32_max = S32_MAX;
+	reg->val.u32_min = 0;
+	reg->val.u32_max = U32_MAX;
 }
 
 static void __update_reg32_bounds(struct bpf_reg_state *reg)
@@ -1945,27 +1945,27 @@ static void __update_reg32_bounds(struct bpf_reg_state *reg)
 	struct tnum var32_off = tnum_subreg(reg->var_off);
 
 	/* min signed is max(sign bit) | min(other bits) */
-	reg->s32_min_value = max_t(s32, reg->s32_min_value,
-			var32_off.value | (var32_off.mask & S32_MIN));
+	reg->val.s32_min = max_t(s32, reg->val.s32_min,
+				 var32_off.value | (var32_off.mask & S32_MIN));
 	/* max signed is min(sign bit) | max(other bits) */
-	reg->s32_max_value = min_t(s32, reg->s32_max_value,
-			var32_off.value | (var32_off.mask & S32_MAX));
-	reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)var32_off.value);
-	reg->u32_max_value = min(reg->u32_max_value,
-				 (u32)(var32_off.value | var32_off.mask));
+	reg->val.s32_max = min_t(s32, reg->val.s32_max,
+				 var32_off.value | (var32_off.mask & S32_MAX));
+	reg->val.u32_min = max_t(u32, reg->val.u32_min, (u32)var32_off.value);
+	reg->val.u32_max = min(reg->val.u32_max,
+			       (u32)(var32_off.value | var32_off.mask));
 }
 
 static void __update_reg64_bounds(struct bpf_reg_state *reg)
 {
 	/* min signed is max(sign bit) | min(other bits) */
-	reg->smin_value = max_t(s64, reg->smin_value,
-				reg->var_off.value | (reg->var_off.mask & S64_MIN));
+	reg->val.smin = max_t(s64, reg->val.smin,
+			      reg->var_off.value | (reg->var_off.mask & S64_MIN));
 	/* max signed is min(sign bit) | max(other bits) */
-	reg->smax_value = min_t(s64, reg->smax_value,
-				reg->var_off.value | (reg->var_off.mask & S64_MAX));
-	reg->umin_value = max(reg->umin_value, reg->var_off.value);
-	reg->umax_value = min(reg->umax_value,
-			      reg->var_off.value | reg->var_off.mask);
+	reg->val.smax = min_t(s64, reg->val.smax,
+			      reg->var_off.value | (reg->var_off.mask & S64_MAX));
+	reg->val.umin = max(reg->val.umin, reg->var_off.value);
+	reg->val.umax = min(reg->val.umax,
+			    reg->var_off.value | reg->var_off.mask);
 }
 
 static void __update_reg_bounds(struct bpf_reg_state *reg)
@@ -1998,28 +1998,28 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 	 *
 	 * So we use all these insights to derive bounds for subregisters here.
 	 */
-	if ((reg->umin_value >> 32) == (reg->umax_value >> 32)) {
+	if ((reg->val.umin >> 32) == (reg->val.umax >> 32)) {
 		/* u64 to u32 casting preserves validity of low 32 bits as
 		 * a range, if upper 32 bits are the same
 		 */
-		reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)reg->umin_value);
-		reg->u32_max_value = min_t(u32, reg->u32_max_value, (u32)reg->umax_value);
+		reg->val.u32_min = max_t(u32, reg->val.u32_min, (u32)reg->val.umin);
+		reg->val.u32_max = min_t(u32, reg->val.u32_max, (u32)reg->val.umax);
 
-		if ((s32)reg->umin_value <= (s32)reg->umax_value) {
-			reg->s32_min_value = max_t(s32, reg->s32_min_value, (s32)reg->umin_value);
-			reg->s32_max_value = min_t(s32, reg->s32_max_value, (s32)reg->umax_value);
+		if ((s32)reg->val.umin <= (s32)reg->val.umax) {
+			reg->val.s32_min = max_t(s32, reg->val.s32_min, (s32)reg->val.umin);
+			reg->val.s32_max = min_t(s32, reg->val.s32_max, (s32)reg->val.umax);
 		}
 	}
-	if ((reg->smin_value >> 32) == (reg->smax_value >> 32)) {
+	if ((reg->val.smin >> 32) == (reg->val.smax >> 32)) {
 		/* low 32 bits should form a proper u32 range */
-		if ((u32)reg->smin_value <= (u32)reg->smax_value) {
-			reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)reg->smin_value);
-			reg->u32_max_value = min_t(u32, reg->u32_max_value, (u32)reg->smax_value);
+		if ((u32)reg->val.smin <= (u32)reg->val.smax) {
+			reg->val.u32_min = max_t(u32, reg->val.u32_min, (u32)reg->val.smin);
+			reg->val.u32_max = min_t(u32, reg->val.u32_max, (u32)reg->val.smax);
 		}
 		/* low 32 bits should form a proper s32 range */
-		if ((s32)reg->smin_value <= (s32)reg->smax_value) {
-			reg->s32_min_value = max_t(s32, reg->s32_min_value, (s32)reg->smin_value);
-			reg->s32_max_value = min_t(s32, reg->s32_max_value, (s32)reg->smax_value);
+		if ((s32)reg->val.smin <= (s32)reg->val.smax) {
+			reg->val.s32_min = max_t(s32, reg->val.s32_min, (s32)reg->val.smin);
+			reg->val.s32_max = min_t(s32, reg->val.s32_max, (s32)reg->val.smax);
 		}
 	}
 	/* Special case where upper bits form a small sequence of two
@@ -2035,30 +2035,30 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 	 * [0xfffffff0fffffff0; 0xfffffff100000010], forms a valid s32 range
 	 * [-16, 16] ([0xfffffff0; 0x00000010]) in its 32 bit subregister.
 	 */
-	if ((u32)(reg->umin_value >> 32) + 1 == (u32)(reg->umax_value >> 32) &&
-	    (s32)reg->umin_value < 0 && (s32)reg->umax_value >= 0) {
-		reg->s32_min_value = max_t(s32, reg->s32_min_value, (s32)reg->umin_value);
-		reg->s32_max_value = min_t(s32, reg->s32_max_value, (s32)reg->umax_value);
+	if ((u32)(reg->val.umin >> 32) + 1 == (u32)(reg->val.umax >> 32) &&
+	    (s32)reg->val.umin < 0 && (s32)reg->val.umax >= 0) {
+		reg->val.s32_min = max_t(s32, reg->val.s32_min, (s32)reg->val.umin);
+		reg->val.s32_max = min_t(s32, reg->val.s32_max, (s32)reg->val.umax);
 	}
-	if ((u32)(reg->smin_value >> 32) + 1 == (u32)(reg->smax_value >> 32) &&
-	    (s32)reg->smin_value < 0 && (s32)reg->smax_value >= 0) {
-		reg->s32_min_value = max_t(s32, reg->s32_min_value, (s32)reg->smin_value);
-		reg->s32_max_value = min_t(s32, reg->s32_max_value, (s32)reg->smax_value);
+	if ((u32)(reg->val.smin >> 32) + 1 == (u32)(reg->val.smax >> 32) &&
+	    (s32)reg->val.smin < 0 && (s32)reg->val.smax >= 0) {
+		reg->val.s32_min = max_t(s32, reg->val.s32_min, (s32)reg->val.smin);
+		reg->val.s32_max = min_t(s32, reg->val.s32_max, (s32)reg->val.smax);
 	}
 	/* if u32 range forms a valid s32 range (due to matching sign bit),
 	 * try to learn from that
 	 */
-	if ((s32)reg->u32_min_value <= (s32)reg->u32_max_value) {
-		reg->s32_min_value = max_t(s32, reg->s32_min_value, reg->u32_min_value);
-		reg->s32_max_value = min_t(s32, reg->s32_max_value, reg->u32_max_value);
+	if ((s32)reg->val.u32_min <= (s32)reg->val.u32_max) {
+		reg->val.s32_min = max_t(s32, reg->val.s32_min, reg->val.u32_min);
+		reg->val.s32_max = min_t(s32, reg->val.s32_max, reg->val.u32_max);
 	}
 	/* If we cannot cross the sign boundary, then signed and unsigned bounds
 	 * are the same, so combine.  This works even in the negative case, e.g.
 	 * -3 s<= x s<= -1 implies 0xf...fd u<= x u<= 0xf...ff.
 	 */
-	if ((u32)reg->s32_min_value <= (u32)reg->s32_max_value) {
-		reg->u32_min_value = max_t(u32, reg->s32_min_value, reg->u32_min_value);
-		reg->u32_max_value = min_t(u32, reg->s32_max_value, reg->u32_max_value);
+	if ((u32)reg->val.s32_min <= (u32)reg->val.s32_max) {
+		reg->val.u32_min = max_t(u32, reg->val.s32_min, reg->val.u32_min);
+		reg->val.u32_max = min_t(u32, reg->val.s32_max, reg->val.u32_max);
 	}
 }
 
@@ -2131,17 +2131,17 @@ static void __reg64_deduce_bounds(struct bpf_reg_state *reg)
 	 * casting umin/umax as smin/smax and checking if they form valid
 	 * range, and vice versa. Those are equivalent checks.
 	 */
-	if ((s64)reg->umin_value <= (s64)reg->umax_value) {
-		reg->smin_value = max_t(s64, reg->smin_value, reg->umin_value);
-		reg->smax_value = min_t(s64, reg->smax_value, reg->umax_value);
+	if ((s64)reg->val.umin <= (s64)reg->val.umax) {
+		reg->val.smin = max_t(s64, reg->val.smin, reg->val.umin);
+		reg->val.smax = min_t(s64, reg->val.smax, reg->val.umax);
 	}
 	/* If we cannot cross the sign boundary, then signed and unsigned bounds
 	 * are the same, so combine.  This works even in the negative case, e.g.
 	 * -3 s<= x s<= -1 implies 0xf...fd u<= x u<= 0xf...ff.
 	 */
-	if ((u64)reg->smin_value <= (u64)reg->smax_value) {
-		reg->umin_value = max_t(u64, reg->smin_value, reg->umin_value);
-		reg->umax_value = min_t(u64, reg->smax_value, reg->umax_value);
+	if ((u64)reg->val.smin <= (u64)reg->val.smax) {
+		reg->val.umin = max_t(u64, reg->val.smin, reg->val.umin);
+		reg->val.umax = min_t(u64, reg->val.smax, reg->val.umax);
 	}
 }
 
@@ -2163,28 +2163,28 @@ static void __reg_deduce_mixed_bounds(struct bpf_reg_state *reg)
 	__s64 new_smin, new_smax;
 
 	/* u32 -> u64 tightening, it's always well-formed */
-	new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->umin_value = max_t(u64, reg->umin_value, new_umin);
-	reg->umax_value = min_t(u64, reg->umax_value, new_umax);
+	new_umin = (reg->val.umin & ~0xffffffffULL) | reg->val.u32_min;
+	new_umax = (reg->val.umax & ~0xffffffffULL) | reg->val.u32_max;
+	reg->val.umin = max_t(u64, reg->val.umin, new_umin);
+	reg->val.umax = min_t(u64, reg->val.umax, new_umax);
 	/* u32 -> s64 tightening, u32 range embedded into s64 preserves range validity */
-	new_smin = (reg->smin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_smax = (reg->smax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->smin_value = max_t(s64, reg->smin_value, new_smin);
-	reg->smax_value = min_t(s64, reg->smax_value, new_smax);
+	new_smin = (reg->val.smin & ~0xffffffffULL) | reg->val.u32_min;
+	new_smax = (reg->val.smax & ~0xffffffffULL) | reg->val.u32_max;
+	reg->val.smin = max_t(s64, reg->val.smin, new_smin);
+	reg->val.smax = min_t(s64, reg->val.smax, new_smax);
 
 	/* if s32 can be treated as valid u32 range, we can use it as well */
-	if ((u32)reg->s32_min_value <= (u32)reg->s32_max_value) {
+	if ((u32)reg->val.s32_min <= (u32)reg->val.s32_max) {
 		/* s32 -> u64 tightening */
-		new_umin = (reg->umin_value & ~0xffffffffULL) | (u32)reg->s32_min_value;
-		new_umax = (reg->umax_value & ~0xffffffffULL) | (u32)reg->s32_max_value;
-		reg->umin_value = max_t(u64, reg->umin_value, new_umin);
-		reg->umax_value = min_t(u64, reg->umax_value, new_umax);
+		new_umin = (reg->val.umin & ~0xffffffffULL) | (u32)reg->val.s32_min;
+		new_umax = (reg->val.umax & ~0xffffffffULL) | (u32)reg->val.s32_max;
+		reg->val.umin = max_t(u64, reg->val.umin, new_umin);
+		reg->val.umax = min_t(u64, reg->val.umax, new_umax);
 		/* s32 -> s64 tightening */
-		new_smin = (reg->smin_value & ~0xffffffffULL) | (u32)reg->s32_min_value;
-		new_smax = (reg->smax_value & ~0xffffffffULL) | (u32)reg->s32_max_value;
-		reg->smin_value = max_t(s64, reg->smin_value, new_smin);
-		reg->smax_value = min_t(s64, reg->smax_value, new_smax);
+		new_smin = (reg->val.smin & ~0xffffffffULL) | (u32)reg->val.s32_min;
+		new_smax = (reg->val.smax & ~0xffffffffULL) | (u32)reg->val.s32_max;
+		reg->val.smin = max_t(s64, reg->val.smin, new_smin);
+		reg->val.smax = min_t(s64, reg->val.smax, new_smax);
 	}
 }
 
@@ -2199,11 +2199,11 @@ static void __reg_deduce_bounds(struct bpf_reg_state *reg)
 static void __reg_bound_offset(struct bpf_reg_state *reg)
 {
 	struct tnum var64_off = tnum_intersect(reg->var_off,
-					       tnum_range(reg->umin_value,
-							  reg->umax_value));
+					       tnum_range(reg->val.umin,
+							  reg->val.umax));
 	struct tnum var32_off = tnum_intersect(tnum_subreg(var64_off),
-					       tnum_range(reg->u32_min_value,
-							  reg->u32_max_value));
+					       tnum_range(reg->val.u32_min,
+							  reg->val.u32_max));
 
 	reg->var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
 }
@@ -2229,10 +2229,10 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 {
 	const char *msg;
 
-	if (reg->umin_value > reg->umax_value ||
-	    reg->smin_value > reg->smax_value ||
-	    reg->u32_min_value > reg->u32_max_value ||
-	    reg->s32_min_value > reg->s32_max_value) {
+	if (reg->val.umin > reg->val.umax ||
+	    reg->val.smin > reg->val.smax ||
+	    reg->val.u32_min > reg->val.u32_max ||
+	    reg->val.s32_min > reg->val.s32_max) {
 		    msg = "range bounds violation";
 		    goto out;
 	}
@@ -2241,8 +2241,8 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		u64 uval = reg->var_off.value;
 		s64 sval = (s64)uval;
 
-		if (reg->umin_value != uval || reg->umax_value != uval ||
-		    reg->smin_value != sval || reg->smax_value != sval) {
+		if (reg->val.umin != uval || reg->val.umax != uval ||
+		    reg->val.smin != sval || reg->val.smax != sval) {
 			msg = "const tnum out of sync with range bounds";
 			goto out;
 		}
@@ -2252,8 +2252,8 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		u32 uval32 = tnum_subreg(reg->var_off).value;
 		s32 sval32 = (s32)uval32;
 
-		if (reg->u32_min_value != uval32 || reg->u32_max_value != uval32 ||
-		    reg->s32_min_value != sval32 || reg->s32_max_value != sval32) {
+		if (reg->val.u32_min != uval32 || reg->val.u32_max != uval32 ||
+		    reg->val.s32_min != sval32 || reg->val.s32_max != sval32) {
 			msg = "const subreg tnum out of sync with range bounds";
 			goto out;
 		}
@@ -2263,10 +2263,10 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 out:
 	verbose(env, "REG INVARIANTS VIOLATION (%s): %s u64=[%#llx, %#llx] "
 		"s64=[%#llx, %#llx] u32=[%#x, %#x] s32=[%#x, %#x] var_off=(%#llx, %#llx)\n",
-		ctx, msg, reg->umin_value, reg->umax_value,
-		reg->smin_value, reg->smax_value,
-		reg->u32_min_value, reg->u32_max_value,
-		reg->s32_min_value, reg->s32_max_value,
+		ctx, msg, reg->val.umin, reg->val.umax,
+		reg->val.smin, reg->val.smax,
+		reg->val.u32_min, reg->val.u32_max,
+		reg->val.s32_min, reg->val.s32_max,
 		reg->var_off.value, reg->var_off.mask);
 	if (env->test_reg_invariants)
 		return -EFAULT;
@@ -2281,20 +2281,20 @@ static bool __reg32_bound_s64(s32 a)
 
 static void __reg_assign_32_into_64(struct bpf_reg_state *reg)
 {
-	reg->umin_value = reg->u32_min_value;
-	reg->umax_value = reg->u32_max_value;
+	reg->val.umin = reg->val.u32_min;
+	reg->val.umax = reg->val.u32_max;
 
 	/* Attempt to pull 32-bit signed bounds into 64-bit bounds but must
 	 * be positive otherwise set to worse case bounds and refine later
 	 * from tnum.
 	 */
-	if (__reg32_bound_s64(reg->s32_min_value) &&
-	    __reg32_bound_s64(reg->s32_max_value)) {
-		reg->smin_value = reg->s32_min_value;
-		reg->smax_value = reg->s32_max_value;
+	if (__reg32_bound_s64(reg->val.s32_min) &&
+	    __reg32_bound_s64(reg->val.s32_max)) {
+		reg->val.smin = reg->val.s32_min;
+		reg->val.smax = reg->val.s32_max;
 	} else {
-		reg->smin_value = 0;
-		reg->smax_value = U32_MAX;
+		reg->val.smin = 0;
+		reg->val.smax = U32_MAX;
 	}
 }
 
@@ -4500,7 +4500,7 @@ static bool is_bpf_st_mem(struct bpf_insn *insn)
 
 static int get_reg_width(struct bpf_reg_state *reg)
 {
-	return fls64(reg->umax_value);
+	return fls64(reg->val.umax);
 }
 
 /* check_stack_{read,write}_fixed_off functions track spill/fill of registers,
@@ -4667,8 +4667,8 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 
 	cur = env->cur_state->frame[env->cur_state->curframe];
 	ptr_reg = &cur->regs[ptr_regno];
-	min_off = ptr_reg->smin_value + off;
-	max_off = ptr_reg->smax_value + off + size;
+	min_off = ptr_reg->val.smin + off;
+	max_off = ptr_reg->val.smax + off + size;
 	if (value_regno >= 0)
 		value_reg = &cur->regs[value_regno];
 	if ((value_reg && register_is_null(value_reg)) ||
@@ -4979,8 +4979,8 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
-	min_off = reg->smin_value + off;
-	max_off = reg->smax_value + off;
+	min_off = reg->val.smin + off;
+	max_off = reg->val.smax + off;
 	mark_reg_stack_read(env, ptr_state, min_off, max_off + size, dst_regno);
 	return 0;
 }
@@ -5152,15 +5152,15 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 	 * index'es we need to make sure that whatever we use
 	 * will have a set floor within our range.
 	 */
-	if (reg->smin_value < 0 &&
-	    (reg->smin_value == S64_MIN ||
-	     (off + reg->smin_value != (s64)(s32)(off + reg->smin_value)) ||
-	      reg->smin_value + off < 0)) {
+	if (reg->val.smin < 0 &&
+	    (reg->val.smin == S64_MIN ||
+	     (off + reg->val.smin != (s64)(s32)(off + reg->val.smin)) ||
+	      reg->val.smin + off < 0)) {
 		verbose(env, "R%d min value is negative, either use unsigned index or do a if (index >=0) check.\n",
 			regno);
 		return -EACCES;
 	}
-	err = __check_mem_access(env, regno, reg->smin_value + off, size,
+	err = __check_mem_access(env, regno, reg->val.smin + off, size,
 				 mem_size, zero_size_allowed);
 	if (err) {
 		verbose(env, "R%d min value is outside of the allowed memory range\n",
@@ -5170,14 +5170,14 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 
 	/* If we haven't set a max value then we need to bail since we can't be
 	 * sure we won't do bad things.
-	 * If reg->umax_value + off could overflow, treat that as unbounded too.
+	 * If reg->val.umax + off could overflow, treat that as unbounded too.
 	 */
-	if (reg->umax_value >= BPF_MAX_VAR_OFF) {
+	if (reg->val.umax >= BPF_MAX_VAR_OFF) {
 		verbose(env, "R%d unbounded memory access, make sure to bounds check any such access\n",
 			regno);
 		return -EACCES;
 	}
-	err = __check_mem_access(env, regno, reg->umax_value + off, size,
+	err = __check_mem_access(env, regno, reg->val.umax + off, size,
 				 mem_size, zero_size_allowed);
 	if (err) {
 		verbose(env, "R%d max value is outside of the allowed memory range\n",
@@ -5464,8 +5464,8 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 		 * this program. To check that [x1, x2) overlaps with [y1, y2),
 		 * it is sufficient to check x1 < y2 && y1 < x2.
 		 */
-		if (reg->smin_value + off < p + field->size &&
-		    p < reg->umax_value + off + size) {
+		if (reg->val.smin + off < p + field->size &&
+		    p < reg->val.umax + off + size) {
 			switch (field->type) {
 			case BPF_KPTR_UNREF:
 			case BPF_KPTR_REF:
@@ -5557,7 +5557,7 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 	/* We don't allow negative numbers, because we aren't tracking enough
 	 * detail to prove they're safe.
 	 */
-	if (reg->smin_value < 0) {
+	if (reg->val.smin < 0) {
 		verbose(env, "R%d min value is negative, either use unsigned index or do a if (index >=0) check.\n",
 			regno);
 		return -EACCES;
@@ -5572,14 +5572,14 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 	}
 
 	/* __check_mem_access has made sure "off + size - 1" is within u16.
-	 * reg->umax_value can't be bigger than MAX_PACKET_OFF which is 0xffff,
+	 * reg->val.umax can't be bigger than MAX_PACKET_OFF which is 0xffff,
 	 * otherwise find_good_pkt_pointers would have refused to set range info
 	 * that __check_mem_access would have rejected this pkt access.
-	 * Therefore, "off + reg->umax_value + size - 1" won't overflow u32.
+	 * Therefore, "off + reg->val.umax + size - 1" won't overflow u32.
 	 */
 	env->prog->aux->max_pkt_offset =
 		max_t(u32, env->prog->aux->max_pkt_offset,
-		      off + reg->umax_value + size - 1);
+		      off + reg->val.umax + size - 1);
 
 	return err;
 }
@@ -5642,7 +5642,7 @@ static int check_sock_access(struct bpf_verifier_env *env, int insn_idx,
 	struct bpf_insn_access_aux info = {};
 	bool valid;
 
-	if (reg->smin_value < 0) {
+	if (reg->val.smin < 0) {
 		verbose(env, "R%d min value is negative, either use unsigned index or do a if (index >=0) check.\n",
 			regno);
 		return -EACCES;
@@ -6141,15 +6141,15 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 
 	/* fix arithmetic bounds */
 	mask = ((u64)1 << (size * 8)) - 1;
-	if ((reg->umin_value & ~mask) == (reg->umax_value & ~mask)) {
-		reg->umin_value &= mask;
-		reg->umax_value &= mask;
+	if ((reg->val.umin & ~mask) == (reg->val.umax & ~mask)) {
+		reg->val.umin &= mask;
+		reg->val.umax &= mask;
 	} else {
-		reg->umin_value = 0;
-		reg->umax_value = mask;
+		reg->val.umin = 0;
+		reg->val.umax = mask;
 	}
-	reg->smin_value = reg->umin_value;
-	reg->smax_value = reg->umax_value;
+	reg->val.smin = reg->val.umin;
+	reg->val.smax = reg->val.umax;
 
 	/* If size is smaller than 32bit register the 32bit register
 	 * values are also truncated so we push 64-bit bounds into
@@ -6164,19 +6164,19 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 {
 	if (size == 1) {
-		reg->smin_value = reg->s32_min_value = S8_MIN;
-		reg->smax_value = reg->s32_max_value = S8_MAX;
+		reg->val.smin = reg->val.s32_min = S8_MIN;
+		reg->val.smax = reg->val.s32_max = S8_MAX;
 	} else if (size == 2) {
-		reg->smin_value = reg->s32_min_value = S16_MIN;
-		reg->smax_value = reg->s32_max_value = S16_MAX;
+		reg->val.smin = reg->val.s32_min = S16_MIN;
+		reg->val.smax = reg->val.s32_max = S16_MAX;
 	} else {
 		/* size == 4 */
-		reg->smin_value = reg->s32_min_value = S32_MIN;
-		reg->smax_value = reg->s32_max_value = S32_MAX;
+		reg->val.smin = reg->val.s32_min = S32_MIN;
+		reg->val.smax = reg->val.s32_max = S32_MAX;
 	}
-	reg->umin_value = reg->u32_min_value = 0;
-	reg->umax_value = U64_MAX;
-	reg->u32_max_value = U32_MAX;
+	reg->val.umin = reg->val.u32_min = 0;
+	reg->val.umax = U64_MAX;
+	reg->val.u32_max = U32_MAX;
 	reg->var_off = tnum_unknown;
 }
 
@@ -6197,29 +6197,29 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 			reg->var_off = tnum_const((s32)u64_cval);
 
 		u64_cval = reg->var_off.value;
-		reg->smax_value = reg->smin_value = u64_cval;
-		reg->umax_value = reg->umin_value = u64_cval;
-		reg->s32_max_value = reg->s32_min_value = u64_cval;
-		reg->u32_max_value = reg->u32_min_value = u64_cval;
+		reg->val.smax = reg->val.smin = u64_cval;
+		reg->val.umax = reg->val.umin = u64_cval;
+		reg->val.s32_max = reg->val.s32_min = u64_cval;
+		reg->val.u32_max = reg->val.u32_min = u64_cval;
 		return;
 	}
 
-	top_smax_value = ((u64)reg->smax_value >> num_bits) << num_bits;
-	top_smin_value = ((u64)reg->smin_value >> num_bits) << num_bits;
+	top_smax_value = ((u64)reg->val.smax >> num_bits) << num_bits;
+	top_smin_value = ((u64)reg->val.smin >> num_bits) << num_bits;
 
 	if (top_smax_value != top_smin_value)
 		goto out;
 
 	/* find the s64_min and s64_min after sign extension */
 	if (size == 1) {
-		init_s64_max = (s8)reg->smax_value;
-		init_s64_min = (s8)reg->smin_value;
+		init_s64_max = (s8)reg->val.smax;
+		init_s64_min = (s8)reg->val.smin;
 	} else if (size == 2) {
-		init_s64_max = (s16)reg->smax_value;
-		init_s64_min = (s16)reg->smin_value;
+		init_s64_max = (s16)reg->val.smax;
+		init_s64_min = (s16)reg->val.smin;
 	} else {
-		init_s64_max = (s32)reg->smax_value;
-		init_s64_min = (s32)reg->smin_value;
+		init_s64_max = (s32)reg->val.smax;
+		init_s64_min = (s32)reg->val.smin;
 	}
 
 	s64_max = max(init_s64_max, init_s64_min);
@@ -6227,10 +6227,10 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 
 	/* both of s64_max/s64_min positive or negative */
 	if ((s64_max >= 0) == (s64_min >= 0)) {
-		reg->smin_value = reg->s32_min_value = s64_min;
-		reg->smax_value = reg->s32_max_value = s64_max;
-		reg->umin_value = reg->u32_min_value = s64_min;
-		reg->umax_value = reg->u32_max_value = s64_max;
+		reg->val.smin = reg->val.s32_min = s64_min;
+		reg->val.smax = reg->val.s32_max = s64_max;
+		reg->val.umin = reg->val.u32_min = s64_min;
+		reg->val.umax = reg->val.u32_max = s64_max;
 		reg->var_off = tnum_range(s64_min, s64_max);
 		return;
 	}
@@ -6242,15 +6242,15 @@ out:
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 {
 	if (size == 1) {
-		reg->s32_min_value = S8_MIN;
-		reg->s32_max_value = S8_MAX;
+		reg->val.s32_min = S8_MIN;
+		reg->val.s32_max = S8_MAX;
 	} else {
 		/* size == 2 */
-		reg->s32_min_value = S16_MIN;
-		reg->s32_max_value = S16_MAX;
+		reg->val.s32_min = S16_MIN;
+		reg->val.s32_max = S16_MAX;
 	}
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
+	reg->val.u32_min = 0;
+	reg->val.u32_max = U32_MAX;
 }
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
@@ -6267,34 +6267,34 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 			reg->var_off = tnum_const((s16)u32_val);
 
 		u32_val = reg->var_off.value;
-		reg->s32_min_value = reg->s32_max_value = u32_val;
-		reg->u32_min_value = reg->u32_max_value = u32_val;
+		reg->val.s32_min = reg->val.s32_max = u32_val;
+		reg->val.u32_min = reg->val.u32_max = u32_val;
 		return;
 	}
 
-	top_smax_value = ((u32)reg->s32_max_value >> num_bits) << num_bits;
-	top_smin_value = ((u32)reg->s32_min_value >> num_bits) << num_bits;
+	top_smax_value = ((u32)reg->val.s32_max >> num_bits) << num_bits;
+	top_smin_value = ((u32)reg->val.s32_min >> num_bits) << num_bits;
 
 	if (top_smax_value != top_smin_value)
 		goto out;
 
 	/* find the s32_min and s32_min after sign extension */
 	if (size == 1) {
-		init_s32_max = (s8)reg->s32_max_value;
-		init_s32_min = (s8)reg->s32_min_value;
+		init_s32_max = (s8)reg->val.s32_max;
+		init_s32_min = (s8)reg->val.s32_min;
 	} else {
 		/* size == 2 */
-		init_s32_max = (s16)reg->s32_max_value;
-		init_s32_min = (s16)reg->s32_min_value;
+		init_s32_max = (s16)reg->val.s32_max;
+		init_s32_min = (s16)reg->val.s32_min;
 	}
 	s32_max = max(init_s32_max, init_s32_min);
 	s32_min = min(init_s32_max, init_s32_min);
 
 	if ((s32_min >= 0) == (s32_max >= 0)) {
-		reg->s32_min_value = s32_min;
-		reg->s32_max_value = s32_max;
-		reg->u32_min_value = (u32)s32_min;
-		reg->u32_max_value = (u32)s32_max;
+		reg->val.s32_min = s32_min;
+		reg->val.s32_max = s32_max;
+		reg->val.u32_min = (u32)s32_min;
+		reg->val.u32_max = (u32)s32_max;
 		return;
 	}
 
@@ -6731,14 +6731,14 @@ static int check_stack_access_within_bounds(
 		min_off = (s64)reg->var_off.value + off;
 		max_off = min_off + access_size;
 	} else {
-		if (reg->smax_value >= BPF_MAX_VAR_OFF ||
-		    reg->smin_value <= -BPF_MAX_VAR_OFF) {
+		if (reg->val.smax >= BPF_MAX_VAR_OFF ||
+		    reg->val.smin <= -BPF_MAX_VAR_OFF) {
 			verbose(env, "invalid unbounded variable-offset%s stack R%d\n",
 				err_extra, regno);
 			return -EACCES;
 		}
-		min_off = reg->smin_value + off;
-		max_off = reg->smax_value + off + access_size;
+		min_off = reg->val.smin + off;
+		max_off = reg->val.smax + off + access_size;
 	}
 
 	err = check_stack_slot_within_bounds(env, min_off, state, type);
@@ -7198,8 +7198,8 @@ static int check_stack_range_initialized(
 		if (meta && meta->raw_mode)
 			meta = NULL;
 
-		min_off = reg->smin_value + off;
-		max_off = reg->smax_value + off;
+		min_off = reg->val.smin + off;
+		max_off = reg->val.smax + off;
 	}
 
 	if (meta && meta->raw_mode) {
@@ -7403,11 +7403,11 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	 * that enforce this value as an upper bound on return values.
 	 * See do_refine_retval_range() for helpers that can refine
 	 * the return value. C type of helper is u32 so we pull register
-	 * bound from umax_value however, if negative verifier errors
+	 * bound from val.umax however, if negative verifier errors
 	 * out. Only upper bounds can be learned because retval is an
 	 * int type and negative retvals are allowed.
 	 */
-	meta->msize_max_value = reg->umax_value;
+	meta->msize_max_value = reg->val.umax;
 
 	/* The register is SCALAR_VALUE; the access check
 	 * happens using its boundaries.
@@ -7420,25 +7420,25 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 		 */
 		meta = NULL;
 
-	if (reg->smin_value < 0) {
+	if (reg->val.smin < 0) {
 		verbose(env, "R%d min value is negative, either use unsigned or 'var &= const'\n",
 			regno);
 		return -EACCES;
 	}
 
-	if (reg->umin_value == 0 && !zero_size_allowed) {
+	if (reg->val.umin == 0 && !zero_size_allowed) {
 		verbose(env, "R%d invalid zero-sized read: u64=[%lld,%lld]\n",
-			regno, reg->umin_value, reg->umax_value);
+			regno, reg->val.umin, reg->val.umax);
 		return -EACCES;
 	}
 
-	if (reg->umax_value >= BPF_MAX_VAR_SIZ) {
+	if (reg->val.umax >= BPF_MAX_VAR_SIZ) {
 		verbose(env, "R%d unbounded memory access, use 'var &= const' or 'if (var < const)'\n",
 			regno);
 		return -EACCES;
 	}
 	err = check_helper_mem_access(env, regno - 1,
-				      reg->umax_value,
+				      reg->val.umax,
 				      zero_size_allowed, meta);
 	if (!err)
 		err = mark_chain_precision(env, regno);
@@ -9912,7 +9912,7 @@ static bool in_rbtree_lock_required_cb(struct bpf_verifier_env *env)
 
 static bool retval_range_within(struct bpf_retval_range range, const struct bpf_reg_state *reg)
 {
-	return range.minval <= reg->smin_value && reg->smax_value <= range.maxval;
+	return range.minval <= reg->val.smin && reg->val.smax <= range.maxval;
 }
 
 static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
@@ -10034,21 +10034,21 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 	case BPF_FUNC_probe_read_str:
 	case BPF_FUNC_probe_read_kernel_str:
 	case BPF_FUNC_probe_read_user_str:
-		ret_reg->smax_value = meta->msize_max_value;
-		ret_reg->s32_max_value = meta->msize_max_value;
-		ret_reg->smin_value = -MAX_ERRNO;
-		ret_reg->s32_min_value = -MAX_ERRNO;
+		ret_reg->val.smax = meta->msize_max_value;
+		ret_reg->val.s32_max = meta->msize_max_value;
+		ret_reg->val.smin = -MAX_ERRNO;
+		ret_reg->val.s32_min = -MAX_ERRNO;
 		reg_bounds_sync(ret_reg);
 		break;
 	case BPF_FUNC_get_smp_processor_id:
-		ret_reg->umax_value = nr_cpu_ids - 1;
-		ret_reg->u32_max_value = nr_cpu_ids - 1;
-		ret_reg->smax_value = nr_cpu_ids - 1;
-		ret_reg->s32_max_value = nr_cpu_ids - 1;
-		ret_reg->umin_value = 0;
-		ret_reg->u32_min_value = 0;
-		ret_reg->smin_value = 0;
-		ret_reg->s32_min_value = 0;
+		ret_reg->val.umax = nr_cpu_ids - 1;
+		ret_reg->val.u32_max = nr_cpu_ids - 1;
+		ret_reg->val.smax = nr_cpu_ids - 1;
+		ret_reg->val.s32_max = nr_cpu_ids - 1;
+		ret_reg->val.umin = 0;
+		ret_reg->val.u32_min = 0;
+		ret_reg->val.smin = 0;
+		ret_reg->val.s32_min = 0;
 		reg_bounds_sync(ret_reg);
 		break;
 	}
@@ -10453,7 +10453,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = mark_chain_precision(env, BPF_REG_1);
 		if (err)
 			return err;
-		if (cur_func(env)->callback_depth < regs[BPF_REG_1].umax_value) {
+		if (cur_func(env)->callback_depth < regs[BPF_REG_1].val.umax) {
 			err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 						 set_loop_callback_state);
 		} else {
@@ -12728,7 +12728,7 @@ static bool check_reg_sane_offset(struct bpf_verifier_env *env,
 {
 	bool known = tnum_is_const(reg->var_off);
 	s64 val = reg->var_off.value;
-	s64 smin = reg->smin_value;
+	s64 smin = reg->val.smin;
 
 	if (known && (val >= BPF_MAX_VAR_OFF || val <= -BPF_MAX_VAR_OFF)) {
 		verbose(env, "math between %s pointer and %lld is not allowed\n",
@@ -12783,8 +12783,8 @@ static int retrieve_ptr_limit(const struct bpf_reg_state *ptr_reg,
 	case PTR_TO_MAP_VALUE:
 		max = ptr_reg->map_ptr->value_size;
 		ptr_limit = (mask_to_left ?
-			     ptr_reg->smin_value :
-			     ptr_reg->umax_value) + ptr_reg->off;
+			     ptr_reg->val.smin :
+			     ptr_reg->val.umax) + ptr_reg->off;
 		break;
 	default:
 		return REASON_TYPE;
@@ -12872,7 +12872,7 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 	struct bpf_insn_aux_data *aux = commit_window ? cur_aux(env) : &info->aux;
 	struct bpf_verifier_state *vstate = env->cur_state;
 	bool off_is_imm = tnum_is_const(off_reg->var_off);
-	bool off_is_neg = off_reg->smin_value < 0;
+	bool off_is_neg = off_reg->val.smin < 0;
 	bool ptr_is_dst_reg = ptr_reg == dst_reg;
 	u8 opcode = BPF_OP(insn->code);
 	u32 alu_state, alu_limit;
@@ -12892,7 +12892,7 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 
 	if (!commit_window) {
 		if (!tnum_is_const(off_reg->var_off) &&
-		    (off_reg->smin_value < 0) != (off_reg->smax_value < 0))
+		    (off_reg->val.smin < 0) != (off_reg->val.smax < 0))
 			return REASON_BOUNDS;
 
 		info->mask_to_left = (opcode == BPF_ADD &&  off_is_neg) ||
@@ -13089,10 +13089,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg;
 	bool known = tnum_is_const(off_reg->var_off);
-	s64 smin_val = off_reg->smin_value, smax_val = off_reg->smax_value,
-	    smin_ptr = ptr_reg->smin_value, smax_ptr = ptr_reg->smax_value;
-	u64 umin_val = off_reg->umin_value, umax_val = off_reg->umax_value,
-	    umin_ptr = ptr_reg->umin_value, umax_ptr = ptr_reg->umax_value;
+	s64 smin_val = off_reg->val.smin, smax_val = off_reg->val.smax,
+	    smin_ptr = ptr_reg->val.smin, smax_ptr = ptr_reg->val.smax;
+	u64 umin_val = off_reg->val.umin, umax_val = off_reg->val.umax,
+	    umin_ptr = ptr_reg->val.umin, umax_ptr = ptr_reg->val.umax;
 	struct bpf_sanitize_info info = {};
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
@@ -13187,10 +13187,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		if (known && (ptr_reg->off + smin_val ==
 			      (s64)(s32)(ptr_reg->off + smin_val))) {
 			/* pointer += K.  Accumulate it into fixed offset */
-			dst_reg->smin_value = smin_ptr;
-			dst_reg->smax_value = smax_ptr;
-			dst_reg->umin_value = umin_ptr;
-			dst_reg->umax_value = umax_ptr;
+			dst_reg->val.smin = smin_ptr;
+			dst_reg->val.smax = smax_ptr;
+			dst_reg->val.umin = umin_ptr;
+			dst_reg->val.umax = umax_ptr;
 			dst_reg->var_off = ptr_reg->var_off;
 			dst_reg->off = ptr_reg->off + smin_val;
 			dst_reg->raw = ptr_reg->raw;
@@ -13207,19 +13207,19 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		 */
 		if (check_add_overflow(smin_ptr, smin_val, &smin_cur) ||
 		    check_add_overflow(smax_ptr, smax_val, &smax_cur)) {
-			dst_reg->smin_value = S64_MIN;
-			dst_reg->smax_value = S64_MAX;
+			dst_reg->val.smin = S64_MIN;
+			dst_reg->val.smax = S64_MAX;
 		} else {
-			dst_reg->smin_value = smin_cur;
-			dst_reg->smax_value = smax_cur;
+			dst_reg->val.smin = smin_cur;
+			dst_reg->val.smax = smax_cur;
 		}
 		if (check_add_overflow(umin_ptr, umin_val, &umin_cur) ||
 		    check_add_overflow(umax_ptr, umax_val, &umax_cur)) {
-			dst_reg->umin_value = 0;
-			dst_reg->umax_value = U64_MAX;
+			dst_reg->val.umin = 0;
+			dst_reg->val.umax = U64_MAX;
 		} else {
-			dst_reg->umin_value = umin_cur;
-			dst_reg->umax_value = umax_cur;
+			dst_reg->val.umin = umin_cur;
+			dst_reg->val.umax = umax_cur;
 		}
 		dst_reg->var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
 		dst_reg->off = ptr_reg->off;
@@ -13249,10 +13249,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		if (known && (ptr_reg->off - smin_val ==
 			      (s64)(s32)(ptr_reg->off - smin_val))) {
 			/* pointer -= K.  Subtract it from fixed offset */
-			dst_reg->smin_value = smin_ptr;
-			dst_reg->smax_value = smax_ptr;
-			dst_reg->umin_value = umin_ptr;
-			dst_reg->umax_value = umax_ptr;
+			dst_reg->val.smin = smin_ptr;
+			dst_reg->val.smax = smax_ptr;
+			dst_reg->val.umin = umin_ptr;
+			dst_reg->val.umax = umax_ptr;
 			dst_reg->var_off = ptr_reg->var_off;
 			dst_reg->id = ptr_reg->id;
 			dst_reg->off = ptr_reg->off - smin_val;
@@ -13265,20 +13265,20 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		if (check_sub_overflow(smin_ptr, smax_val, &smin_cur) ||
 		    check_sub_overflow(smax_ptr, smin_val, &smax_cur)) {
 			/* Overflow possible, we know nothing */
-			dst_reg->smin_value = S64_MIN;
-			dst_reg->smax_value = S64_MAX;
+			dst_reg->val.smin = S64_MIN;
+			dst_reg->val.smax = S64_MAX;
 		} else {
-			dst_reg->smin_value = smin_cur;
-			dst_reg->smax_value = smax_cur;
+			dst_reg->val.smin = smin_cur;
+			dst_reg->val.smax = smax_cur;
 		}
 		if (umin_ptr < umax_val) {
 			/* Overflow possible, we know nothing */
-			dst_reg->umin_value = 0;
-			dst_reg->umax_value = U64_MAX;
+			dst_reg->val.umin = 0;
+			dst_reg->val.umax = U64_MAX;
 		} else {
 			/* Cannot overflow (as long as bounds are consistent) */
-			dst_reg->umin_value = umin_ptr - umax_val;
-			dst_reg->umax_value = umax_ptr - umin_val;
+			dst_reg->val.umin = umin_ptr - umax_val;
+			dst_reg->val.umax = umax_ptr - umin_val;
 		}
 		dst_reg->var_off = tnum_sub(ptr_reg->var_off, off_reg->var_off);
 		dst_reg->off = ptr_reg->off;
@@ -13322,125 +13322,125 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	s32 smin_val = src_reg->s32_min_value;
-	s32 smax_val = src_reg->s32_max_value;
-	u32 umin_val = src_reg->u32_min_value;
-	u32 umax_val = src_reg->u32_max_value;
+	s32 smin_val = src_reg->val.s32_min;
+	s32 smax_val = src_reg->val.s32_max;
+	u32 umin_val = src_reg->val.u32_min;
+	u32 umax_val = src_reg->val.u32_max;
 	s32 smin_cur, smax_cur;
 	u32 umin_cur, umax_cur;
 
-	if (check_add_overflow(dst_reg->s32_min_value, smin_val, &smin_cur) ||
-	    check_add_overflow(dst_reg->s32_max_value, smax_val, &smax_cur)) {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+	if (check_add_overflow(dst_reg->val.s32_min, smin_val, &smin_cur) ||
+	    check_add_overflow(dst_reg->val.s32_max, smax_val, &smax_cur)) {
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	} else {
-		dst_reg->s32_min_value = smin_cur;
-		dst_reg->s32_max_value = smax_cur;
+		dst_reg->val.s32_min = smin_cur;
+		dst_reg->val.s32_max = smax_cur;
 	}
-	if (check_add_overflow(dst_reg->u32_min_value, umin_val, &umin_cur) ||
-	    check_add_overflow(dst_reg->u32_max_value, umax_val, &umax_cur)) {
-		dst_reg->u32_min_value = 0;
-		dst_reg->u32_max_value = U32_MAX;
+	if (check_add_overflow(dst_reg->val.u32_min, umin_val, &umin_cur) ||
+	    check_add_overflow(dst_reg->val.u32_max, umax_val, &umax_cur)) {
+		dst_reg->val.u32_min = 0;
+		dst_reg->val.u32_max = U32_MAX;
 	} else {
-		dst_reg->u32_min_value = umin_cur;
-		dst_reg->u32_max_value = umax_cur;
+		dst_reg->val.u32_min = umin_cur;
+		dst_reg->val.u32_max = umax_cur;
 	}
 }
 
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	s64 smin_val = src_reg->smin_value;
-	s64 smax_val = src_reg->smax_value;
-	u64 umin_val = src_reg->umin_value;
-	u64 umax_val = src_reg->umax_value;
+	s64 smin_val = src_reg->val.smin;
+	s64 smax_val = src_reg->val.smax;
+	u64 umin_val = src_reg->val.umin;
+	u64 umax_val = src_reg->val.umax;
 	s64 smin_cur, smax_cur;
 	u64 umin_cur, umax_cur;
 
-	if (check_add_overflow(dst_reg->smin_value, smin_val, &smin_cur) ||
-	    check_add_overflow(dst_reg->smax_value, smax_val, &smax_cur)) {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+	if (check_add_overflow(dst_reg->val.smin, smin_val, &smin_cur) ||
+	    check_add_overflow(dst_reg->val.smax, smax_val, &smax_cur)) {
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	} else {
-		dst_reg->smin_value = smin_cur;
-		dst_reg->smax_value = smax_cur;
+		dst_reg->val.smin = smin_cur;
+		dst_reg->val.smax = smax_cur;
 	}
-	if (check_add_overflow(dst_reg->umin_value, umin_val, &umin_cur) ||
-	    check_add_overflow(dst_reg->umax_value, umax_val, &umax_cur)) {
-		dst_reg->umin_value = 0;
-		dst_reg->umax_value = U64_MAX;
+	if (check_add_overflow(dst_reg->val.umin, umin_val, &umin_cur) ||
+	    check_add_overflow(dst_reg->val.umax, umax_val, &umax_cur)) {
+		dst_reg->val.umin = 0;
+		dst_reg->val.umax = U64_MAX;
 	} else {
-		dst_reg->umin_value = umin_cur;
-		dst_reg->umax_value = umax_cur;
+		dst_reg->val.umin = umin_cur;
+		dst_reg->val.umax = umax_cur;
 	}
 }
 
 static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	s32 smin_val = src_reg->s32_min_value;
-	s32 smax_val = src_reg->s32_max_value;
-	u32 umin_val = src_reg->u32_min_value;
-	u32 umax_val = src_reg->u32_max_value;
+	s32 smin_val = src_reg->val.s32_min;
+	s32 smax_val = src_reg->val.s32_max;
+	u32 umin_val = src_reg->val.u32_min;
+	u32 umax_val = src_reg->val.u32_max;
 	s32 smin_cur, smax_cur;
 
-	if (check_sub_overflow(dst_reg->s32_min_value, smax_val, &smin_cur) ||
-	    check_sub_overflow(dst_reg->s32_max_value, smin_val, &smax_cur)) {
+	if (check_sub_overflow(dst_reg->val.s32_min, smax_val, &smin_cur) ||
+	    check_sub_overflow(dst_reg->val.s32_max, smin_val, &smax_cur)) {
 		/* Overflow possible, we know nothing */
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	} else {
-		dst_reg->s32_min_value = smin_cur;
-		dst_reg->s32_max_value = smax_cur;
+		dst_reg->val.s32_min = smin_cur;
+		dst_reg->val.s32_max = smax_cur;
 	}
-	if (dst_reg->u32_min_value < umax_val) {
+	if (dst_reg->val.u32_min < umax_val) {
 		/* Overflow possible, we know nothing */
-		dst_reg->u32_min_value = 0;
-		dst_reg->u32_max_value = U32_MAX;
+		dst_reg->val.u32_min = 0;
+		dst_reg->val.u32_max = U32_MAX;
 	} else {
 		/* Cannot overflow (as long as bounds are consistent) */
-		dst_reg->u32_min_value -= umax_val;
-		dst_reg->u32_max_value -= umin_val;
+		dst_reg->val.u32_min -= umax_val;
+		dst_reg->val.u32_max -= umin_val;
 	}
 }
 
 static void scalar_min_max_sub(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	s64 smin_val = src_reg->smin_value;
-	s64 smax_val = src_reg->smax_value;
-	u64 umin_val = src_reg->umin_value;
-	u64 umax_val = src_reg->umax_value;
+	s64 smin_val = src_reg->val.smin;
+	s64 smax_val = src_reg->val.smax;
+	u64 umin_val = src_reg->val.umin;
+	u64 umax_val = src_reg->val.umax;
 	s64 smin_cur, smax_cur;
 
-	if (check_sub_overflow(dst_reg->smin_value, smax_val, &smin_cur) ||
-	    check_sub_overflow(dst_reg->smax_value, smin_val, &smax_cur)) {
+	if (check_sub_overflow(dst_reg->val.smin, smax_val, &smin_cur) ||
+	    check_sub_overflow(dst_reg->val.smax, smin_val, &smax_cur)) {
 		/* Overflow possible, we know nothing */
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	} else {
-		dst_reg->smin_value = smin_cur;
-		dst_reg->smax_value = smax_cur;
+		dst_reg->val.smin = smin_cur;
+		dst_reg->val.smax = smax_cur;
 	}
-	if (dst_reg->umin_value < umax_val) {
+	if (dst_reg->val.umin < umax_val) {
 		/* Overflow possible, we know nothing */
-		dst_reg->umin_value = 0;
-		dst_reg->umax_value = U64_MAX;
+		dst_reg->val.umin = 0;
+		dst_reg->val.umax = U64_MAX;
 	} else {
 		/* Cannot overflow (as long as bounds are consistent) */
-		dst_reg->umin_value -= umax_val;
-		dst_reg->umax_value -= umin_val;
+		dst_reg->val.umin -= umax_val;
+		dst_reg->val.umax -= umin_val;
 	}
 }
 
 static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	s32 smin_val = src_reg->s32_min_value;
-	u32 umin_val = src_reg->u32_min_value;
-	u32 umax_val = src_reg->u32_max_value;
+	s32 smin_val = src_reg->val.s32_min;
+	u32 umin_val = src_reg->val.u32_min;
+	u32 umax_val = src_reg->val.u32_max;
 
-	if (smin_val < 0 || dst_reg->s32_min_value < 0) {
+	if (smin_val < 0 || dst_reg->val.s32_min < 0) {
 		/* Ain't nobody got time to multiply that sign */
 		__mark_reg32_unbounded(dst_reg);
 		return;
@@ -13448,31 +13448,31 @@ static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 	/* Both values are positive, so we can work with unsigned and
 	 * copy the result to signed (unless it exceeds S32_MAX).
 	 */
-	if (umax_val > U16_MAX || dst_reg->u32_max_value > U16_MAX) {
+	if (umax_val > U16_MAX || dst_reg->val.u32_max > U16_MAX) {
 		/* Potential overflow, we know nothing */
 		__mark_reg32_unbounded(dst_reg);
 		return;
 	}
-	dst_reg->u32_min_value *= umin_val;
-	dst_reg->u32_max_value *= umax_val;
-	if (dst_reg->u32_max_value > S32_MAX) {
+	dst_reg->val.u32_min *= umin_val;
+	dst_reg->val.u32_max *= umax_val;
+	if (dst_reg->val.u32_max > S32_MAX) {
 		/* Overflow possible, we know nothing */
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	} else {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
+		dst_reg->val.s32_min = dst_reg->val.u32_min;
+		dst_reg->val.s32_max = dst_reg->val.u32_max;
 	}
 }
 
 static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	s64 smin_val = src_reg->smin_value;
-	u64 umin_val = src_reg->umin_value;
-	u64 umax_val = src_reg->umax_value;
+	s64 smin_val = src_reg->val.smin;
+	u64 umin_val = src_reg->val.umin;
+	u64 umax_val = src_reg->val.umax;
 
-	if (smin_val < 0 || dst_reg->smin_value < 0) {
+	if (smin_val < 0 || dst_reg->val.smin < 0) {
 		/* Ain't nobody got time to multiply that sign */
 		__mark_reg64_unbounded(dst_reg);
 		return;
@@ -13480,20 +13480,20 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	/* Both values are positive, so we can work with unsigned and
 	 * copy the result to signed (unless it exceeds S64_MAX).
 	 */
-	if (umax_val > U32_MAX || dst_reg->umax_value > U32_MAX) {
+	if (umax_val > U32_MAX || dst_reg->val.umax > U32_MAX) {
 		/* Potential overflow, we know nothing */
 		__mark_reg64_unbounded(dst_reg);
 		return;
 	}
-	dst_reg->umin_value *= umin_val;
-	dst_reg->umax_value *= umax_val;
-	if (dst_reg->umax_value > S64_MAX) {
+	dst_reg->val.umin *= umin_val;
+	dst_reg->val.umax *= umax_val;
+	if (dst_reg->val.umax > S64_MAX) {
 		/* Overflow possible, we know nothing */
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	} else {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
+		dst_reg->val.smin = dst_reg->val.umin;
+		dst_reg->val.smax = dst_reg->val.umax;
 	}
 }
 
@@ -13503,7 +13503,7 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	bool src_known = tnum_subreg_is_const(src_reg->var_off);
 	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
 	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
-	u32 umax_val = src_reg->u32_max_value;
+	u32 umax_val = src_reg->val.u32_max;
 
 	if (src_known && dst_known) {
 		__mark_reg32_known(dst_reg, var32_off.value);
@@ -13513,18 +13513,18 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	/* We get our minimum from the var_off, since that's inherently
 	 * bitwise.  Our maximum is the minimum of the operands' maxima.
 	 */
-	dst_reg->u32_min_value = var32_off.value;
-	dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
+	dst_reg->val.u32_min = var32_off.value;
+	dst_reg->val.u32_max = min(dst_reg->val.u32_max, umax_val);
 
 	/* Safe to set s32 bounds by casting u32 result into s32 when u32
 	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
 	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
+	if ((s32)dst_reg->val.u32_min <= (s32)dst_reg->val.u32_max) {
+		dst_reg->val.s32_min = dst_reg->val.u32_min;
+		dst_reg->val.s32_max = dst_reg->val.u32_max;
 	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	}
 }
 
@@ -13533,7 +13533,7 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 {
 	bool src_known = tnum_is_const(src_reg->var_off);
 	bool dst_known = tnum_is_const(dst_reg->var_off);
-	u64 umax_val = src_reg->umax_value;
+	u64 umax_val = src_reg->val.umax;
 
 	if (src_known && dst_known) {
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
@@ -13543,18 +13543,18 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	/* We get our minimum from the var_off, since that's inherently
 	 * bitwise.  Our maximum is the minimum of the operands' maxima.
 	 */
-	dst_reg->umin_value = dst_reg->var_off.value;
-	dst_reg->umax_value = min(dst_reg->umax_value, umax_val);
+	dst_reg->val.umin = dst_reg->var_off.value;
+	dst_reg->val.umax = min(dst_reg->val.umax, umax_val);
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
 	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
 	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
+	if ((s64)dst_reg->val.umin <= (s64)dst_reg->val.umax) {
+		dst_reg->val.smin = dst_reg->val.umin;
+		dst_reg->val.smax = dst_reg->val.umax;
 	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
@@ -13566,7 +13566,7 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 	bool src_known = tnum_subreg_is_const(src_reg->var_off);
 	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
 	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
-	u32 umin_val = src_reg->u32_min_value;
+	u32 umin_val = src_reg->val.u32_min;
 
 	if (src_known && dst_known) {
 		__mark_reg32_known(dst_reg, var32_off.value);
@@ -13576,18 +13576,18 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 	/* We get our maximum from the var_off, and our minimum is the
 	 * maximum of the operands' minima
 	 */
-	dst_reg->u32_min_value = max(dst_reg->u32_min_value, umin_val);
-	dst_reg->u32_max_value = var32_off.value | var32_off.mask;
+	dst_reg->val.u32_min = max(dst_reg->val.u32_min, umin_val);
+	dst_reg->val.u32_max = var32_off.value | var32_off.mask;
 
 	/* Safe to set s32 bounds by casting u32 result into s32 when u32
 	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
 	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
+	if ((s32)dst_reg->val.u32_min <= (s32)dst_reg->val.u32_max) {
+		dst_reg->val.s32_min = dst_reg->val.u32_min;
+		dst_reg->val.s32_max = dst_reg->val.u32_max;
 	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	}
 }
 
@@ -13596,7 +13596,7 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 {
 	bool src_known = tnum_is_const(src_reg->var_off);
 	bool dst_known = tnum_is_const(dst_reg->var_off);
-	u64 umin_val = src_reg->umin_value;
+	u64 umin_val = src_reg->val.umin;
 
 	if (src_known && dst_known) {
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
@@ -13606,18 +13606,18 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 	/* We get our maximum from the var_off, and our minimum is the
 	 * maximum of the operands' minima
 	 */
-	dst_reg->umin_value = max(dst_reg->umin_value, umin_val);
-	dst_reg->umax_value = dst_reg->var_off.value | dst_reg->var_off.mask;
+	dst_reg->val.umin = max(dst_reg->val.umin, umin_val);
+	dst_reg->val.umax = dst_reg->var_off.value | dst_reg->var_off.mask;
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
 	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
 	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
+	if ((s64)dst_reg->val.umin <= (s64)dst_reg->val.umax) {
+		dst_reg->val.smin = dst_reg->val.umin;
+		dst_reg->val.smax = dst_reg->val.umax;
 	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
@@ -13636,18 +13636,18 @@ static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 	}
 
 	/* We get both minimum and maximum from the var32_off. */
-	dst_reg->u32_min_value = var32_off.value;
-	dst_reg->u32_max_value = var32_off.value | var32_off.mask;
+	dst_reg->val.u32_min = var32_off.value;
+	dst_reg->val.u32_max = var32_off.value | var32_off.mask;
 
 	/* Safe to set s32 bounds by casting u32 result into s32 when u32
 	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
 	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
+	if ((s32)dst_reg->val.u32_min <= (s32)dst_reg->val.u32_max) {
+		dst_reg->val.s32_min = dst_reg->val.u32_min;
+		dst_reg->val.s32_max = dst_reg->val.u32_max;
 	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
+		dst_reg->val.s32_min = S32_MIN;
+		dst_reg->val.s32_max = S32_MAX;
 	}
 }
 
@@ -13664,18 +13664,18 @@ static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
 	}
 
 	/* We get both minimum and maximum from the var_off. */
-	dst_reg->umin_value = dst_reg->var_off.value;
-	dst_reg->umax_value = dst_reg->var_off.value | dst_reg->var_off.mask;
+	dst_reg->val.umin = dst_reg->var_off.value;
+	dst_reg->val.umax = dst_reg->var_off.value | dst_reg->var_off.mask;
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
 	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
 	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
+	if ((s64)dst_reg->val.umin <= (s64)dst_reg->val.umax) {
+		dst_reg->val.smin = dst_reg->val.umin;
+		dst_reg->val.smax = dst_reg->val.umax;
 	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smin = S64_MIN;
+		dst_reg->val.smax = S64_MAX;
 	}
 
 	__update_reg_bounds(dst_reg);
@@ -13687,23 +13687,23 @@ static void __scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 	/* We lose all sign bit information (except what we can pick
 	 * up from var_off)
 	 */
-	dst_reg->s32_min_value = S32_MIN;
-	dst_reg->s32_max_value = S32_MAX;
+	dst_reg->val.s32_min = S32_MIN;
+	dst_reg->val.s32_max = S32_MAX;
 	/* If we might shift our top bit out, then we know nothing */
-	if (umax_val > 31 || dst_reg->u32_max_value > 1ULL << (31 - umax_val)) {
-		dst_reg->u32_min_value = 0;
-		dst_reg->u32_max_value = U32_MAX;
+	if (umax_val > 31 || dst_reg->val.u32_max > 1ULL << (31 - umax_val)) {
+		dst_reg->val.u32_min = 0;
+		dst_reg->val.u32_max = U32_MAX;
 	} else {
-		dst_reg->u32_min_value <<= umin_val;
-		dst_reg->u32_max_value <<= umax_val;
+		dst_reg->val.u32_min <<= umin_val;
+		dst_reg->val.u32_max <<= umax_val;
 	}
 }
 
 static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	u32 umax_val = src_reg->u32_max_value;
-	u32 umin_val = src_reg->u32_min_value;
+	u32 umax_val = src_reg->val.u32_max;
+	u32 umin_val = src_reg->val.u32_min;
 	/* u32 alu operation will zext upper bits */
 	struct tnum subreg = tnum_subreg(dst_reg->var_off);
 
@@ -13727,31 +13727,31 @@ static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
 	 * what we can pick up from var_off. Perhaps we can generalize this
 	 * later to shifts of any length.
 	 */
-	if (umin_val == 32 && umax_val == 32 && dst_reg->s32_max_value >= 0)
-		dst_reg->smax_value = (s64)dst_reg->s32_max_value << 32;
+	if (umin_val == 32 && umax_val == 32 && dst_reg->val.s32_max >= 0)
+		dst_reg->val.smax = (s64)dst_reg->val.s32_max << 32;
 	else
-		dst_reg->smax_value = S64_MAX;
+		dst_reg->val.smax = S64_MAX;
 
-	if (umin_val == 32 && umax_val == 32 && dst_reg->s32_min_value >= 0)
-		dst_reg->smin_value = (s64)dst_reg->s32_min_value << 32;
+	if (umin_val == 32 && umax_val == 32 && dst_reg->val.s32_min >= 0)
+		dst_reg->val.smin = (s64)dst_reg->val.s32_min << 32;
 	else
-		dst_reg->smin_value = S64_MIN;
+		dst_reg->val.smin = S64_MIN;
 
 	/* If we might shift our top bit out, then we know nothing */
-	if (dst_reg->umax_value > 1ULL << (63 - umax_val)) {
-		dst_reg->umin_value = 0;
-		dst_reg->umax_value = U64_MAX;
+	if (dst_reg->val.umax > 1ULL << (63 - umax_val)) {
+		dst_reg->val.umin = 0;
+		dst_reg->val.umax = U64_MAX;
 	} else {
-		dst_reg->umin_value <<= umin_val;
-		dst_reg->umax_value <<= umax_val;
+		dst_reg->val.umin <<= umin_val;
+		dst_reg->val.umax <<= umax_val;
 	}
 }
 
 static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	u64 umax_val = src_reg->umax_value;
-	u64 umin_val = src_reg->umin_value;
+	u64 umax_val = src_reg->val.umax;
+	u64 umin_val = src_reg->val.umin;
 
 	/* scalar64 calc uses 32bit unshifted bounds so must be called first */
 	__scalar64_min_max_lsh(dst_reg, umin_val, umax_val);
@@ -13766,8 +13766,8 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
 	struct tnum subreg = tnum_subreg(dst_reg->var_off);
-	u32 umax_val = src_reg->u32_max_value;
-	u32 umin_val = src_reg->u32_min_value;
+	u32 umax_val = src_reg->val.u32_max;
+	u32 umin_val = src_reg->val.u32_min;
 
 	/* BPF_RSH is an unsigned shift.  If the value in dst_reg might
 	 * be negative, then either:
@@ -13783,12 +13783,12 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 * and rely on inferring new ones from the unsigned bounds and
 	 * var_off of the result.
 	 */
-	dst_reg->s32_min_value = S32_MIN;
-	dst_reg->s32_max_value = S32_MAX;
+	dst_reg->val.s32_min = S32_MIN;
+	dst_reg->val.s32_max = S32_MAX;
 
 	dst_reg->var_off = tnum_rshift(subreg, umin_val);
-	dst_reg->u32_min_value >>= umax_val;
-	dst_reg->u32_max_value >>= umin_val;
+	dst_reg->val.u32_min >>= umax_val;
+	dst_reg->val.u32_max >>= umin_val;
 
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
@@ -13797,8 +13797,8 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	u64 umax_val = src_reg->umax_value;
-	u64 umin_val = src_reg->umin_value;
+	u64 umax_val = src_reg->val.umax;
+	u64 umin_val = src_reg->val.umin;
 
 	/* BPF_RSH is an unsigned shift.  If the value in dst_reg might
 	 * be negative, then either:
@@ -13814,11 +13814,11 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 * and rely on inferring new ones from the unsigned bounds and
 	 * var_off of the result.
 	 */
-	dst_reg->smin_value = S64_MIN;
-	dst_reg->smax_value = S64_MAX;
+	dst_reg->val.smin = S64_MIN;
+	dst_reg->val.smax = S64_MAX;
 	dst_reg->var_off = tnum_rshift(dst_reg->var_off, umin_val);
-	dst_reg->umin_value >>= umax_val;
-	dst_reg->umax_value >>= umin_val;
+	dst_reg->val.umin >>= umax_val;
+	dst_reg->val.umax >>= umin_val;
 
 	/* Its not easy to operate on alu32 bounds here because it depends
 	 * on bits being shifted in. Take easy way out and mark unbounded
@@ -13831,21 +13831,21 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
 				  struct bpf_reg_state *src_reg)
 {
-	u64 umin_val = src_reg->u32_min_value;
+	u64 umin_val = src_reg->val.u32_min;
 
 	/* Upon reaching here, src_known is true and
 	 * umax_val is equal to umin_val.
 	 */
-	dst_reg->s32_min_value = (u32)(((s32)dst_reg->s32_min_value) >> umin_val);
-	dst_reg->s32_max_value = (u32)(((s32)dst_reg->s32_max_value) >> umin_val);
+	dst_reg->val.s32_min = (u32)(((s32)dst_reg->val.s32_min) >> umin_val);
+	dst_reg->val.s32_max = (u32)(((s32)dst_reg->val.s32_max) >> umin_val);
 
 	dst_reg->var_off = tnum_arshift(tnum_subreg(dst_reg->var_off), umin_val, 32);
 
-	/* blow away the dst_reg umin_value/umax_value and rely on
+	/* blow away the dst_reg val.umin/val.umax and rely on
 	 * dst_reg var_off to refine the result.
 	 */
-	dst_reg->u32_min_value = 0;
-	dst_reg->u32_max_value = U32_MAX;
+	dst_reg->val.u32_min = 0;
+	dst_reg->val.u32_max = U32_MAX;
 
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
@@ -13854,21 +13854,21 @@ static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 				struct bpf_reg_state *src_reg)
 {
-	u64 umin_val = src_reg->umin_value;
+	u64 umin_val = src_reg->val.umin;
 
 	/* Upon reaching here, src_known is true and umax_val is equal
 	 * to umin_val.
 	 */
-	dst_reg->smin_value >>= umin_val;
-	dst_reg->smax_value >>= umin_val;
+	dst_reg->val.smin >>= umin_val;
+	dst_reg->val.smax >>= umin_val;
 
 	dst_reg->var_off = tnum_arshift(dst_reg->var_off, umin_val, 64);
 
-	/* blow away the dst_reg umin_value/umax_value and rely on
+	/* blow away the dst_reg val.umin/val.umax and rely on
 	 * dst_reg var_off to refine the result.
 	 */
-	dst_reg->umin_value = 0;
-	dst_reg->umax_value = U64_MAX;
+	dst_reg->val.umin = 0;
+	dst_reg->val.umax = U64_MAX;
 
 	/* Its not easy to operate on alu32 bounds here because it depends
 	 * on bits being shifted in from upper 32-bits. Take easy way out
@@ -13886,13 +13886,13 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 
 	if (insn_bitness == 32) {
 		if (tnum_subreg_is_const(src_reg->var_off)
-		    && src_reg->s32_min_value == src_reg->s32_max_value
-		    && src_reg->u32_min_value == src_reg->u32_max_value)
+		    && src_reg->val.s32_min == src_reg->val.s32_max
+		    && src_reg->val.u32_min == src_reg->val.u32_max)
 			src_is_const = true;
 	} else {
 		if (tnum_is_const(src_reg->var_off)
-		    && src_reg->smin_value == src_reg->smax_value
-		    && src_reg->umin_value == src_reg->umax_value)
+		    && src_reg->val.smin == src_reg->val.smax
+		    && src_reg->val.umin == src_reg->val.umax)
 			src_is_const = true;
 	}
 
@@ -13912,7 +13912,7 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_LSH:
 	case BPF_RSH:
 	case BPF_ARSH:
-		return (src_is_const && src_reg->umax_value < insn_bitness);
+		return (src_is_const && src_reg->val.umax < insn_bitness);
 	default:
 		return false;
 	}
@@ -14266,7 +14266,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					} else if (src_reg->type == SCALAR_VALUE) {
 						bool no_sext;
 
-						no_sext = src_reg->umax_value < (1ULL << (insn->off - 1));
+						no_sext = src_reg->val.umax < (1ULL << (insn->off - 1));
 						if (no_sext)
 							assign_scalar_id_before_mov(env, src_reg);
 						copy_register_state(dst_reg, src_reg);
@@ -14303,7 +14303,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						dst_reg->subreg_def = env->insn_idx + 1;
 					} else {
 						/* case: W1 = (s8, s16)W2 */
-						bool no_sext = src_reg->umax_value < (1ULL << (insn->off - 1));
+						bool no_sext = src_reg->val.umax < (1ULL << (insn->off - 1));
 
 						if (no_sext)
 							assign_scalar_id_before_mov(env, src_reg);
@@ -14406,8 +14406,8 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 		/* This doesn't give us any range */
 		return;
 
-	if (dst_reg->umax_value > MAX_PACKET_OFF ||
-	    dst_reg->umax_value + dst_reg->off > MAX_PACKET_OFF)
+	if (dst_reg->val.umax > MAX_PACKET_OFF ||
+	    dst_reg->val.umax + dst_reg->off > MAX_PACKET_OFF)
 		/* Risk of overflow.  For instance, ptr + (1<<63) may be less
 		 * than pkt_end, but that's because it's also less than pkt.
 		 */
@@ -14479,14 +14479,14 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 {
 	struct tnum t1 = is_jmp32 ? tnum_subreg(reg1->var_off) : reg1->var_off;
 	struct tnum t2 = is_jmp32 ? tnum_subreg(reg2->var_off) : reg2->var_off;
-	u64 umin1 = is_jmp32 ? (u64)reg1->u32_min_value : reg1->umin_value;
-	u64 umax1 = is_jmp32 ? (u64)reg1->u32_max_value : reg1->umax_value;
-	s64 smin1 = is_jmp32 ? (s64)reg1->s32_min_value : reg1->smin_value;
-	s64 smax1 = is_jmp32 ? (s64)reg1->s32_max_value : reg1->smax_value;
-	u64 umin2 = is_jmp32 ? (u64)reg2->u32_min_value : reg2->umin_value;
-	u64 umax2 = is_jmp32 ? (u64)reg2->u32_max_value : reg2->umax_value;
-	s64 smin2 = is_jmp32 ? (s64)reg2->s32_min_value : reg2->smin_value;
-	s64 smax2 = is_jmp32 ? (s64)reg2->s32_max_value : reg2->smax_value;
+	u64 umin1 = is_jmp32 ? (u64)reg1->val.u32_min : reg1->val.umin;
+	u64 umax1 = is_jmp32 ? (u64)reg1->val.u32_max : reg1->val.umax;
+	s64 smin1 = is_jmp32 ? (s64)reg1->val.s32_min : reg1->val.smin;
+	s64 smax1 = is_jmp32 ? (s64)reg1->val.s32_max : reg1->val.smax;
+	u64 umin2 = is_jmp32 ? (u64)reg2->val.u32_min : reg2->val.umin;
+	u64 umax2 = is_jmp32 ? (u64)reg2->val.u32_max : reg2->val.umax;
+	s64 smin2 = is_jmp32 ? (s64)reg2->val.s32_min : reg2->val.smin;
+	s64 smax2 = is_jmp32 ? (s64)reg2->val.s32_max : reg2->val.smax;
 
 	switch (opcode) {
 	case BPF_JEQ:
@@ -14505,11 +14505,11 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 			 * utilize 32-bit subrange knowledge to eliminate
 			 * branches that can't be taken a priori
 			 */
-			if (reg1->u32_min_value > reg2->u32_max_value ||
-			    reg1->u32_max_value < reg2->u32_min_value)
+			if (reg1->val.u32_min > reg2->val.u32_max ||
+			    reg1->val.u32_max < reg2->val.u32_min)
 				return 0;
-			if (reg1->s32_min_value > reg2->s32_max_value ||
-			    reg1->s32_max_value < reg2->s32_min_value)
+			if (reg1->val.s32_min > reg2->val.s32_max ||
+			    reg1->val.s32_max < reg2->val.s32_min)
 				return 0;
 		}
 		break;
@@ -14529,11 +14529,11 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 			 * utilize 32-bit subrange knowledge to eliminate
 			 * branches that can't be taken a priori
 			 */
-			if (reg1->u32_min_value > reg2->u32_max_value ||
-			    reg1->u32_max_value < reg2->u32_min_value)
+			if (reg1->val.u32_min > reg2->val.u32_max ||
+			    reg1->val.u32_max < reg2->val.u32_min)
 				return 1;
-			if (reg1->s32_min_value > reg2->s32_max_value ||
-			    reg1->s32_max_value < reg2->s32_min_value)
+			if (reg1->val.s32_min > reg2->val.s32_max ||
+			    reg1->val.s32_max < reg2->val.s32_min)
 				return 1;
 		}
 		break;
@@ -14760,27 +14760,27 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 	switch (opcode) {
 	case BPF_JEQ:
 		if (is_jmp32) {
-			reg1->u32_min_value = max(reg1->u32_min_value, reg2->u32_min_value);
-			reg1->u32_max_value = min(reg1->u32_max_value, reg2->u32_max_value);
-			reg1->s32_min_value = max(reg1->s32_min_value, reg2->s32_min_value);
-			reg1->s32_max_value = min(reg1->s32_max_value, reg2->s32_max_value);
-			reg2->u32_min_value = reg1->u32_min_value;
-			reg2->u32_max_value = reg1->u32_max_value;
-			reg2->s32_min_value = reg1->s32_min_value;
-			reg2->s32_max_value = reg1->s32_max_value;
+			reg1->val.u32_min = max(reg1->val.u32_min, reg2->val.u32_min);
+			reg1->val.u32_max = min(reg1->val.u32_max, reg2->val.u32_max);
+			reg1->val.s32_min = max(reg1->val.s32_min, reg2->val.s32_min);
+			reg1->val.s32_max = min(reg1->val.s32_max, reg2->val.s32_max);
+			reg2->val.u32_min = reg1->val.u32_min;
+			reg2->val.u32_max = reg1->val.u32_max;
+			reg2->val.s32_min = reg1->val.s32_min;
+			reg2->val.s32_max = reg1->val.s32_max;
 
 			t = tnum_intersect(tnum_subreg(reg1->var_off), tnum_subreg(reg2->var_off));
 			reg1->var_off = tnum_with_subreg(reg1->var_off, t);
 			reg2->var_off = tnum_with_subreg(reg2->var_off, t);
 		} else {
-			reg1->umin_value = max(reg1->umin_value, reg2->umin_value);
-			reg1->umax_value = min(reg1->umax_value, reg2->umax_value);
-			reg1->smin_value = max(reg1->smin_value, reg2->smin_value);
-			reg1->smax_value = min(reg1->smax_value, reg2->smax_value);
-			reg2->umin_value = reg1->umin_value;
-			reg2->umax_value = reg1->umax_value;
-			reg2->smin_value = reg1->smin_value;
-			reg2->smax_value = reg1->smax_value;
+			reg1->val.umin = max(reg1->val.umin, reg2->val.umin);
+			reg1->val.umax = min(reg1->val.umax, reg2->val.umax);
+			reg1->val.smin = max(reg1->val.smin, reg2->val.smin);
+			reg1->val.smax = min(reg1->val.smax, reg2->val.smax);
+			reg2->val.umin = reg1->val.umin;
+			reg2->val.umax = reg1->val.umax;
+			reg2->val.smin = reg1->val.smin;
+			reg2->val.smax = reg1->val.smax;
 
 			reg1->var_off = tnum_intersect(reg1->var_off, reg2->var_off);
 			reg2->var_off = reg1->var_off;
@@ -14797,8 +14797,8 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 		 */
 		val = reg_const_value(reg2, is_jmp32);
 		if (is_jmp32) {
-			/* u32_min_value is not equal to 0xffffffff at this point,
-			 * because otherwise u32_max_value is 0xffffffff as well,
+			/* val.u32_min is not equal to 0xffffffff at this point,
+			 * because otherwise val.u32_max is 0xffffffff as well,
 			 * in such a case both reg1 and reg2 would be constants,
 			 * jump would be predicted and reg_set_min_max() won't
 			 * be called.
@@ -14806,23 +14806,23 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 			 * Same reasoning works for all {u,s}{min,max}{32,64} cases
 			 * below.
 			 */
-			if (reg1->u32_min_value == (u32)val)
-				reg1->u32_min_value++;
-			if (reg1->u32_max_value == (u32)val)
-				reg1->u32_max_value--;
-			if (reg1->s32_min_value == (s32)val)
-				reg1->s32_min_value++;
-			if (reg1->s32_max_value == (s32)val)
-				reg1->s32_max_value--;
+			if (reg1->val.u32_min == (u32)val)
+				reg1->val.u32_min++;
+			if (reg1->val.u32_max == (u32)val)
+				reg1->val.u32_max--;
+			if (reg1->val.s32_min == (s32)val)
+				reg1->val.s32_min++;
+			if (reg1->val.s32_max == (s32)val)
+				reg1->val.s32_max--;
 		} else {
-			if (reg1->umin_value == (u64)val)
-				reg1->umin_value++;
-			if (reg1->umax_value == (u64)val)
-				reg1->umax_value--;
-			if (reg1->smin_value == (s64)val)
-				reg1->smin_value++;
-			if (reg1->smax_value == (s64)val)
-				reg1->smax_value--;
+			if (reg1->val.umin == (u64)val)
+				reg1->val.umin++;
+			if (reg1->val.umax == (u64)val)
+				reg1->val.umax--;
+			if (reg1->val.smin == (s64)val)
+				reg1->val.smin++;
+			if (reg1->val.smax == (s64)val)
+				reg1->val.smax--;
 		}
 		break;
 	case BPF_JSET:
@@ -14865,38 +14865,38 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 		break;
 	case BPF_JLE:
 		if (is_jmp32) {
-			reg1->u32_max_value = min(reg1->u32_max_value, reg2->u32_max_value);
-			reg2->u32_min_value = max(reg1->u32_min_value, reg2->u32_min_value);
+			reg1->val.u32_max = min(reg1->val.u32_max, reg2->val.u32_max);
+			reg2->val.u32_min = max(reg1->val.u32_min, reg2->val.u32_min);
 		} else {
-			reg1->umax_value = min(reg1->umax_value, reg2->umax_value);
-			reg2->umin_value = max(reg1->umin_value, reg2->umin_value);
+			reg1->val.umax = min(reg1->val.umax, reg2->val.umax);
+			reg2->val.umin = max(reg1->val.umin, reg2->val.umin);
 		}
 		break;
 	case BPF_JLT:
 		if (is_jmp32) {
-			reg1->u32_max_value = min(reg1->u32_max_value, reg2->u32_max_value - 1);
-			reg2->u32_min_value = max(reg1->u32_min_value + 1, reg2->u32_min_value);
+			reg1->val.u32_max = min(reg1->val.u32_max, reg2->val.u32_max - 1);
+			reg2->val.u32_min = max(reg1->val.u32_min + 1, reg2->val.u32_min);
 		} else {
-			reg1->umax_value = min(reg1->umax_value, reg2->umax_value - 1);
-			reg2->umin_value = max(reg1->umin_value + 1, reg2->umin_value);
+			reg1->val.umax = min(reg1->val.umax, reg2->val.umax - 1);
+			reg2->val.umin = max(reg1->val.umin + 1, reg2->val.umin);
 		}
 		break;
 	case BPF_JSLE:
 		if (is_jmp32) {
-			reg1->s32_max_value = min(reg1->s32_max_value, reg2->s32_max_value);
-			reg2->s32_min_value = max(reg1->s32_min_value, reg2->s32_min_value);
+			reg1->val.s32_max = min(reg1->val.s32_max, reg2->val.s32_max);
+			reg2->val.s32_min = max(reg1->val.s32_min, reg2->val.s32_min);
 		} else {
-			reg1->smax_value = min(reg1->smax_value, reg2->smax_value);
-			reg2->smin_value = max(reg1->smin_value, reg2->smin_value);
+			reg1->val.smax = min(reg1->val.smax, reg2->val.smax);
+			reg2->val.smin = max(reg1->val.smin, reg2->val.smin);
 		}
 		break;
 	case BPF_JSLT:
 		if (is_jmp32) {
-			reg1->s32_max_value = min(reg1->s32_max_value, reg2->s32_max_value - 1);
-			reg2->s32_min_value = max(reg1->s32_min_value + 1, reg2->s32_min_value);
+			reg1->val.s32_max = min(reg1->val.s32_max, reg2->val.s32_max - 1);
+			reg2->val.s32_min = max(reg1->val.s32_min + 1, reg2->val.s32_min);
 		} else {
-			reg1->smax_value = min(reg1->smax_value, reg2->smax_value - 1);
-			reg2->smin_value = max(reg1->smin_value + 1, reg2->smin_value);
+			reg1->val.smax = min(reg1->val.smax, reg2->val.smax - 1);
+			reg2->val.smin = max(reg1->val.smin + 1, reg2->val.smin);
 		}
 		break;
 	default:
@@ -14958,7 +14958,7 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 		 * advance offset for the returned pointer. In those cases, it
 		 * is fine to expect to see reg->off.
 		 */
-		if (WARN_ON_ONCE(reg->smin_value || reg->smax_value || !tnum_equals_const(reg->var_off, 0)))
+		if (WARN_ON_ONCE(reg->val.smin || reg->val.smax || !tnum_equals_const(reg->var_off, 0)))
 			return;
 		if (!(type_is_ptr_alloc_obj(reg->type) || type_is_non_owning_ref(reg->type)) &&
 		    WARN_ON_ONCE(reg->off))
@@ -16559,14 +16559,14 @@ static int check_btf_info(struct bpf_verifier_env *env,
 static bool range_within(const struct bpf_reg_state *old,
 			 const struct bpf_reg_state *cur)
 {
-	return old->umin_value <= cur->umin_value &&
-	       old->umax_value >= cur->umax_value &&
-	       old->smin_value <= cur->smin_value &&
-	       old->smax_value >= cur->smax_value &&
-	       old->u32_min_value <= cur->u32_min_value &&
-	       old->u32_max_value >= cur->u32_max_value &&
-	       old->s32_min_value <= cur->s32_min_value &&
-	       old->s32_max_value >= cur->s32_max_value;
+	return old->val.umin <= cur->val.umin &&
+	       old->val.umax >= cur->val.umax &&
+	       old->val.smin <= cur->val.smin &&
+	       old->val.smax >= cur->val.smax &&
+	       old->val.u32_min <= cur->val.u32_min &&
+	       old->val.u32_max >= cur->val.u32_max &&
+	       old->val.s32_min <= cur->val.s32_min &&
+	       old->val.s32_max >= cur->val.s32_max;
 }
 
 /* If in the old state two registers had the same id, then they need to have
