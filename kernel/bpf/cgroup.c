@@ -1742,7 +1742,10 @@ int __cgroup_bpf_run_filter_sysctl(struct ctl_table_header *head,
 	if (ret == 0 && ctx.new_updated) {
 		kfree(*buf);
 		*buf = ctx.new_val;
-		*pcount = ctx.new_len;
+		if (!(*buf)[ctx.new_len])
+			*pcount = ctx.new_len - 1;
+		else
+			*pcount = ctx.new_len;
 	} else {
 		kfree(ctx.new_val);
 	}
