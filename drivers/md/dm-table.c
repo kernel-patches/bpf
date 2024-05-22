@@ -1961,6 +1961,7 @@ int dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 			      struct queue_limits *limits)
 {
 	bool wc = false, fua = false;
+	unsigned int max_hw_sectors;
 	int r;
 
 	if (dm_table_supports_nowait(t))
@@ -1981,9 +1982,16 @@ int dm_table_set_restrictions(struct dm_table *t, struct request_queue *q,
 	if (!dm_table_supports_secure_erase(t))
 		limits->max_secure_erase_sectors = 0;
 
+	/* Don't allow queue_limits_set() to throw-away stacked max_sectors */
+	max_hw_sectors = limits->max_hw_sectors;
+	limits->max_hw_sectors = limits->max_sectors;
 	r = queue_limits_set(q, limits);
 	if (r)
 		return r;
+	/* Restore stacked max_hw_sectors */
+	mutex_lock(&q->limits_lock);
+	limits->max_hw_sectors = max_hw_sectors;
+	mutex_unlock(&q->limits_lock);
 
 	if (dm_table_supports_flush(t, (1UL << QUEUE_FLAG_WC))) {
 		wc = true;
