@@ -436,7 +436,6 @@ struct amdgpu_gfx {
 
 	/* IP reg dump */
 	uint32_t			*ip_dump;
-	uint32_t			reg_count;
 };
 
 struct amdgpu_gfx_ras_reg_entry {
@@ -555,8 +554,6 @@ static inline const char *amdgpu_gfx_compute_mode_desc(int mode)
 	default:
 		return "UNKNOWN";
 	}
-
-	return "UNKNOWN";
 }
 
 #endif
