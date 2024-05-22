@@ -65,6 +65,18 @@ int map_fd[9];
 struct bpf_map *maps[9];
 int prog_fd[9];
 
+int prog_attach_type[] = {
+	BPF_SK_SKB_STREAM_PARSER,
+	BPF_SK_SKB_STREAM_VERDICT,
+	BPF_SK_SKB_STREAM_VERDICT,
+	BPF_CGROUP_SOCK_OPS,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+};
+
 int txmsg_pass;
 int txmsg_redir;
 int txmsg_drop;
@@ -961,7 +973,7 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 	/* Attach programs to sockmap */
 	if (!txmsg_omit_skb_parser) {
 		err = bpf_prog_attach(prog_fd[0], map_fd[0],
-				      BPF_SK_SKB_STREAM_PARSER, 0);
+				      prog_attach_type[0], 0);
 		if (err) {
 			fprintf(stderr,
 				"ERROR: bpf_prog_attach (sockmap %i->%i): %d (%s)\n",
@@ -971,7 +983,7 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 	}
 
 	err = bpf_prog_attach(prog_fd[1], map_fd[0],
-				BPF_SK_SKB_STREAM_VERDICT, 0);
+			      prog_attach_type[1], 0);
 	if (err) {
 		fprintf(stderr, "ERROR: bpf_prog_attach (sockmap): %d (%s)\n",
 			err, strerror(errno));
@@ -982,7 +994,7 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 	if (txmsg_ktls_skb) {
 		if (!txmsg_omit_skb_parser) {
 			err = bpf_prog_attach(prog_fd[0], map_fd[8],
-					      BPF_SK_SKB_STREAM_PARSER, 0);
+					      prog_attach_type[0], 0);
 			if (err) {
 				fprintf(stderr,
 					"ERROR: bpf_prog_attach (TLS sockmap %i->%i): %d (%s)\n",
@@ -992,7 +1004,7 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 		}
 
 		err = bpf_prog_attach(prog_fd[2], map_fd[8],
-				      BPF_SK_SKB_STREAM_VERDICT, 0);
+				      prog_attach_type[2], 0);
 		if (err) {
 			fprintf(stderr, "ERROR: bpf_prog_attach (TLS sockmap): %d (%s)\n",
 				err, strerror(errno));
@@ -1001,7 +1013,7 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 	}
 
 	/* Attach to cgroups */
-	err = bpf_prog_attach(prog_fd[3], cg_fd, BPF_CGROUP_SOCK_OPS, 0);
+	err = bpf_prog_attach(prog_fd[3], cg_fd, prog_attach_type[3], 0);
 	if (err) {
 		fprintf(stderr, "ERROR: bpf_prog_attach (groups): %d (%s)\n",
 			err, strerror(errno));
@@ -1279,11 +1291,11 @@ run:
 		fprintf(stderr, "unknown test\n");
 out:
 	/* Detatch and zero all the maps */
-	bpf_prog_detach2(prog_fd[3], cg_fd, BPF_CGROUP_SOCK_OPS);
-	bpf_prog_detach2(prog_fd[0], map_fd[0], BPF_SK_SKB_STREAM_PARSER);
-	bpf_prog_detach2(prog_fd[1], map_fd[0], BPF_SK_SKB_STREAM_VERDICT);
-	bpf_prog_detach2(prog_fd[0], map_fd[8], BPF_SK_SKB_STREAM_PARSER);
-	bpf_prog_detach2(prog_fd[2], map_fd[8], BPF_SK_SKB_STREAM_VERDICT);
+	bpf_prog_detach2(prog_fd[3], cg_fd, prog_attach_type[3]);
+	bpf_prog_detach2(prog_fd[0], map_fd[0], prog_attach_type[0]);
+	bpf_prog_detach2(prog_fd[1], map_fd[0], prog_attach_type[1]);
+	bpf_prog_detach2(prog_fd[0], map_fd[8], prog_attach_type[0]);
+	bpf_prog_detach2(prog_fd[2], map_fd[8], prog_attach_type[2]);
 
 	if (tx_prog_fd >= 0)
 		bpf_prog_detach2(tx_prog_fd, map_fd[1], BPF_SK_MSG_VERDICT);
@@ -1781,18 +1793,6 @@ char *map_names[] = {
 	"sock_redir_flags",
 	"sock_skb_opts",
 	"tls_sock_map",
-};
-
-int prog_attach_type[] = {
-	BPF_SK_SKB_STREAM_PARSER,
-	BPF_SK_SKB_STREAM_VERDICT,
-	BPF_SK_SKB_STREAM_VERDICT,
-	BPF_CGROUP_SOCK_OPS,
-	BPF_SK_MSG_VERDICT,
-	BPF_SK_MSG_VERDICT,
-	BPF_SK_MSG_VERDICT,
-	BPF_SK_MSG_VERDICT,
-	BPF_SK_MSG_VERDICT,
 };
 
 int prog_type[] = {
