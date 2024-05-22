@@ -771,6 +771,12 @@ static const struct intel_display_device_info xe2_lpd_display = {
 		BIT(INTEL_FBC_C) | BIT(INTEL_FBC_D),
 };
 
+static const struct intel_display_device_info xe2_hpd_display = {
+	XE_LPDP_FEATURES,
+	.__runtime_defaults.port_mask = BIT(PORT_A) |
+		BIT(PORT_TC1) | BIT(PORT_TC2) | BIT(PORT_TC3) | BIT(PORT_TC4),
+};
+
 __diag_pop();
 
 /*
@@ -809,14 +815,11 @@ static const struct {
 	INTEL_I965GM_IDS(&i965gm_display),
 	INTEL_GM45_IDS(&gm45_display),
 	INTEL_G45_IDS(&g45_display),
-	INTEL_PINEVIEW_G_IDS(&pnv_display),
-	INTEL_PINEVIEW_M_IDS(&pnv_display),
-	INTEL_IRONLAKE_D_IDS(&ilk_d_display),
-	INTEL_IRONLAKE_M_IDS(&ilk_m_display),
-	INTEL_SNB_D_IDS(&snb_display),
-	INTEL_SNB_M_IDS(&snb_display),
-	INTEL_IVB_M_IDS(&ivb_display),
-	INTEL_IVB_D_IDS(&ivb_display),
+	INTEL_PNV_IDS(&pnv_display),
+	INTEL_ILK_D_IDS(&ilk_d_display),
+	INTEL_ILK_M_IDS(&ilk_m_display),
+	INTEL_SNB_IDS(&snb_display),
+	INTEL_IVB_IDS(&ivb_display),
 	INTEL_HSW_IDS(&hsw_display),
 	INTEL_VLV_IDS(&vlv_display),
 	INTEL_BDW_IDS(&bdw_display),
@@ -826,16 +829,19 @@ static const struct {
 	INTEL_GLK_IDS(&glk_display),
 	INTEL_KBL_IDS(&skl_display),
 	INTEL_CFL_IDS(&skl_display),
-	INTEL_ICL_11_IDS(&icl_display),
+	INTEL_WHL_IDS(&skl_display),
+	INTEL_CML_IDS(&skl_display),
+	INTEL_ICL_IDS(&icl_display),
 	INTEL_EHL_IDS(&jsl_ehl_display),
 	INTEL_JSL_IDS(&jsl_ehl_display),
-	INTEL_TGL_12_IDS(&tgl_display),
+	INTEL_TGL_IDS(&tgl_display),
 	INTEL_DG1_IDS(&dg1_display),
 	INTEL_RKL_IDS(&rkl_display),
 	INTEL_ADLS_IDS(&adl_s_display),
 	INTEL_RPLS_IDS(&adl_s_display),
 	INTEL_ADLP_IDS(&xe_lpd_display),
 	INTEL_ADLN_IDS(&xe_lpd_display),
+	INTEL_RPLU_IDS(&xe_lpd_display),
 	INTEL_RPLP_IDS(&xe_lpd_display),
 	INTEL_DG2_IDS(&xe_hpd_display),
 
@@ -852,6 +858,7 @@ static const struct {
 	const struct intel_display_device_info *display;
 } gmdid_display_map[] = {
 	{ 14,  0, &xe_lpdp_display },
+	{ 14,  1, &xe2_hpd_display },
 	{ 20,  0, &xe2_lpd_display },
 };
 

@@ -108,17 +108,25 @@
 	INTEL_VGA_DEVICE(0x2e42, info), /* B43_G */ \
 	INTEL_VGA_DEVICE(0x2e92, info)	/* B43_G.1 */
 
-#define INTEL_PINEVIEW_G_IDS(info) \
+#define INTEL_PNV_G_IDS(info) \
 	INTEL_VGA_DEVICE(0xa001, info)
 
-#define INTEL_PINEVIEW_M_IDS(info) \
+#define INTEL_PNV_M_IDS(info) \
 	INTEL_VGA_DEVICE(0xa011, info)
 
-#define INTEL_IRONLAKE_D_IDS(info) \
+#define INTEL_PNV_IDS(info) \
+	INTEL_PNV_G_IDS(info), \
+	INTEL_PNV_M_IDS(info)
+
+#define INTEL_ILK_D_IDS(info) \
 	INTEL_VGA_DEVICE(0x0042, info)
 
-#define INTEL_IRONLAKE_M_IDS(info) \
+#define INTEL_ILK_M_IDS(info) \
 	INTEL_VGA_DEVICE(0x0046, info)
+
+#define INTEL_ILK_IDS(info) \
+	INTEL_ILK_D_IDS(info), \
+	INTEL_ILK_M_IDS(info)
 
 #define INTEL_SNB_D_GT1_IDS(info) \
 	INTEL_VGA_DEVICE(0x0102, info), \
@@ -143,6 +151,10 @@
 	INTEL_SNB_M_GT1_IDS(info), \
 	INTEL_SNB_M_GT2_IDS(info)
 
+#define INTEL_SNB_IDS(info) \
+	INTEL_SNB_D_IDS(info), \
+	INTEL_SNB_M_IDS(info)
+
 #define INTEL_IVB_M_GT1_IDS(info) \
 	INTEL_VGA_DEVICE(0x0156, info) /* GT1 mobile */
 
@@ -164,6 +176,10 @@
 #define INTEL_IVB_D_IDS(info) \
 	INTEL_IVB_D_GT1_IDS(info), \
 	INTEL_IVB_D_GT2_IDS(info)
+
+#define INTEL_IVB_IDS(info) \
+	INTEL_IVB_M_IDS(info), \
+	INTEL_IVB_D_IDS(info)
 
 #define INTEL_IVB_Q_IDS(info) \
 	INTEL_QUANTA_VGA_DEVICE(info) /* Quanta transcode */
@@ -472,6 +488,12 @@
 	INTEL_VGA_DEVICE(0x9BCA, info), \
 	INTEL_VGA_DEVICE(0x9BCC, info)
 
+#define INTEL_CML_IDS(info) \
+	INTEL_CML_GT1_IDS(info), \
+	INTEL_CML_GT2_IDS(info), \
+	INTEL_CML_U_GT1_IDS(info), \
+	INTEL_CML_U_GT2_IDS(info)
+
 #define INTEL_KBL_IDS(info) \
 	INTEL_KBL_GT1_IDS(info), \
 	INTEL_KBL_GT2_IDS(info), \
@@ -511,6 +533,15 @@
 	INTEL_VGA_DEVICE(0x3EA7, info), /* ULT GT3 */ \
 	INTEL_VGA_DEVICE(0x3EA8, info)  /* ULT GT3 */
 
+#define INTEL_CFL_IDS(info)	   \
+	INTEL_CFL_S_GT1_IDS(info), \
+	INTEL_CFL_S_GT2_IDS(info), \
+	INTEL_CFL_H_GT1_IDS(info), \
+	INTEL_CFL_H_GT2_IDS(info), \
+	INTEL_CFL_U_GT2_IDS(info), \
+	INTEL_CFL_U_GT3_IDS(info), \
+	INTEL_AML_CFL_GT2_IDS(info)
+
 /* WHL/CFL U GT1 */
 #define INTEL_WHL_U_GT1_IDS(info) \
 	INTEL_VGA_DEVICE(0x3EA1, info), \
@@ -525,21 +556,10 @@
 #define INTEL_WHL_U_GT3_IDS(info) \
 	INTEL_VGA_DEVICE(0x3EA2, info)
 
-#define INTEL_CFL_IDS(info)	   \
-	INTEL_CFL_S_GT1_IDS(info), \
-	INTEL_CFL_S_GT2_IDS(info), \
-	INTEL_CFL_H_GT1_IDS(info), \
-	INTEL_CFL_H_GT2_IDS(info), \
-	INTEL_CFL_U_GT2_IDS(info), \
-	INTEL_CFL_U_GT3_IDS(info), \
+#define INTEL_WHL_IDS(info) \
 	INTEL_WHL_U_GT1_IDS(info), \
 	INTEL_WHL_U_GT2_IDS(info), \
-	INTEL_WHL_U_GT3_IDS(info), \
-	INTEL_AML_CFL_GT2_IDS(info), \
-	INTEL_CML_GT1_IDS(info), \
-	INTEL_CML_GT2_IDS(info), \
-	INTEL_CML_U_GT1_IDS(info), \
-	INTEL_CML_U_GT2_IDS(info)
+	INTEL_WHL_U_GT3_IDS(info)
 
 /* CNL */
 #define INTEL_CNL_PORT_F_IDS(info) \
@@ -577,7 +597,7 @@
 	INTEL_VGA_DEVICE(0x8A70, info), \
 	INTEL_VGA_DEVICE(0x8A71, info)
 
-#define INTEL_ICL_11_IDS(info) \
+#define INTEL_ICL_IDS(info) \
 	INTEL_ICL_PORT_F_IDS(info), \
 	INTEL_VGA_DEVICE(0x8A51, info), \
 	INTEL_VGA_DEVICE(0x8A5D, info)
@@ -600,12 +620,12 @@
 	INTEL_VGA_DEVICE(0x4E71, info)
 
 /* TGL */
-#define INTEL_TGL_12_GT1_IDS(info) \
+#define INTEL_TGL_GT1_IDS(info) \
 	INTEL_VGA_DEVICE(0x9A60, info), \
 	INTEL_VGA_DEVICE(0x9A68, info), \
 	INTEL_VGA_DEVICE(0x9A70, info)
 
-#define INTEL_TGL_12_GT2_IDS(info) \
+#define INTEL_TGL_GT2_IDS(info) \
 	INTEL_VGA_DEVICE(0x9A40, info), \
 	INTEL_VGA_DEVICE(0x9A49, info), \
 	INTEL_VGA_DEVICE(0x9A59, info), \
@@ -615,9 +635,9 @@
 	INTEL_VGA_DEVICE(0x9AD9, info), \
 	INTEL_VGA_DEVICE(0x9AF8, info)
 
-#define INTEL_TGL_12_IDS(info) \
-	INTEL_TGL_12_GT1_IDS(info), \
-	INTEL_TGL_12_GT2_IDS(info)
+#define INTEL_TGL_IDS(info) \
+	INTEL_TGL_GT1_IDS(info), \
+	INTEL_TGL_GT2_IDS(info)
 
 /* RKL */
 #define INTEL_RKL_IDS(info) \
@@ -697,7 +717,6 @@
 
 /* RPL-P */
 #define INTEL_RPLP_IDS(info) \
-	INTEL_RPLU_IDS(info), \
 	INTEL_VGA_DEVICE(0xA720, info), \
 	INTEL_VGA_DEVICE(0xA7A0, info), \
 	INTEL_VGA_DEVICE(0xA7A8, info), \
