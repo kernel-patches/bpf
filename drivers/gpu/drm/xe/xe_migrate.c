@@ -14,8 +14,8 @@
 
 #include <generated/xe_wa_oob.h>
 
+#include "instructions/xe_gpu_commands.h"
 #include "instructions/xe_mi_commands.h"
-#include "regs/xe_gpu_commands.h"
 #include "regs/xe_gtt_defs.h"
 #include "tests/xe_test.h"
 #include "xe_assert.h"
@@ -34,7 +34,6 @@
 #include "xe_sync.h"
 #include "xe_trace.h"
 #include "xe_vm.h"
-#include "xe_wa.h"
 
 /**
  * struct xe_migrate - migrate context.
@@ -300,10 +299,6 @@ static int xe_migrate_prepare_vm(struct xe_tile *tile, struct xe_migrate *m,
 }
 
 /*
- * Due to workaround 16017236439, odd instance hardware copy engines are
- * faster than even instance ones.
- * This function returns the mask involving all fast copy engines and the
- * reserved copy engine to be used as logical mask for migrate engine.
  * Including the reserved copy engine is required to avoid deadlocks due to
  * migrate jobs servicing the faults gets stuck behind the job that faulted.
  */
@@ -317,8 +312,7 @@ static u32 xe_migrate_usm_logical_mask(struct xe_gt *gt)
 		if (hwe->class != XE_ENGINE_CLASS_COPY)
 			continue;
 
-		if (!XE_WA(gt, 16017236439) ||
-		    xe_gt_is_usm_hwe(gt, hwe) || hwe->instance & 1)
+		if (xe_gt_is_usm_hwe(gt, hwe))
 			logical_mask |= BIT(hwe->logical_instance);
 	}
 
@@ -369,6 +363,10 @@ struct xe_migrate *xe_migrate_init(struct xe_tile *tile)
 		if (!hwe || !logical_mask)
 			return ERR_PTR(-EINVAL);
 
+		/*
+		 * XXX: Currently only reserving 1 (likely slow) BCS instance on
+		 * PVC, may want to revisit if performance is needed.
+		 */
 		m->q = xe_exec_queue_create(xe, vm, logical_mask, 1, hwe,
 					    EXEC_QUEUE_FLAG_KERNEL |
 					    EXEC_QUEUE_FLAG_PERMANENT |
@@ -936,8 +934,8 @@ static bool has_service_copy_support(struct xe_gt *gt)
 	 * all of the actual service copy engines (BCS1-BCS8) have been fused
 	 * off.
 	 */
-	return gt->info.__engine_mask & GENMASK(XE_HW_ENGINE_BCS8,
-						XE_HW_ENGINE_BCS1);
+	return gt->info.engine_mask & GENMASK(XE_HW_ENGINE_BCS8,
+					      XE_HW_ENGINE_BCS1);
 }
 
 static u32 emit_clear_cmd_len(struct xe_gt *gt)
