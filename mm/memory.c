@@ -5825,6 +5825,68 @@ fail:
 
 #ifdef CONFIG_PER_VMA_LOCK
 /*
+ * find_and_lock_vma_rcu() - Find and lock the VMA for a given address, or the
+ * next VMA. Search is done under RCU protection, without taking or assuming
+ * mmap_lock. Returned VMA is guaranteed to be stable and not isolated.
+
+ * @mm: The mm_struct to check
+ * @addr: The address
+ *
+ * Returns: The VMA associated with addr, or the next VMA.
+ * May return %NULL in the case of no VMA at addr or above.
+ * If the VMA is being modified and can't be locked, -EBUSY is returned.
+ */
+struct vm_area_struct *find_and_lock_vma_rcu(struct mm_struct *mm,
+					     unsigned long address)
+{
+	MA_STATE(mas, &mm->mm_mt, address, address);
+	struct vm_area_struct *vma;
+	int err;
+
+	rcu_read_lock();
+retry:
+	vma = mas_find(&mas, ULONG_MAX);
+	if (!vma) {
+		err = 0; /* no VMA, return NULL */
+		goto inval;
+	}
+
+	if (!vma_start_read(vma)) {
+		err = -EBUSY;
+		goto inval;
+	}
+
+	/*
+	 * Check since vm_start/vm_end might change before we lock the VMA.
+	 * Note, unlike lock_vma_under_rcu() we are searching for VMA covering
+	 * address or the next one, so we only make sure VMA wasn't updated to
+	 * end before the address.
+	 */
+	if (unlikely(vma->vm_end <= address)) {
+		err = -EBUSY;
+		goto inval_end_read;
+	}
+
+	/* Check if the VMA got isolated after we found it */
+	if (vma->detached) {
+		vma_end_read(vma);
+		count_vm_vma_lock_event(VMA_LOCK_MISS);
+		/* The area was replaced with another one */
+		goto retry;
+	}
+
+	rcu_read_unlock();
+	return vma;
+
+inval_end_read:
+	vma_end_read(vma);
+inval:
+	rcu_read_unlock();
+	count_vm_vma_lock_event(VMA_LOCK_ABORT);
+	return ERR_PTR(err);
+}
+
+/*
  * Lookup and lock a VMA under RCU protection. Returned VMA is guaranteed to be
  * stable and not isolated. If the VMA is not found or is being modified the
  * function returns NULL.
