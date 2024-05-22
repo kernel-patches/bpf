@@ -15,6 +15,7 @@
 #include "regs/xe_regs.h"
 #include "xe_bo.h"
 #include "xe_device.h"
+#include "xe_force_wake.h"
 #include "xe_gt.h"
 #include "xe_gt_idle.h"
 #include "xe_gt_sysfs.h"
@@ -901,6 +902,9 @@ static void xe_guc_pc_fini(struct drm_device *drm, void *arg)
 		xe_gt_idle_disable_c6(pc_to_gt(pc));
 		return;
 	}
+
+	if (xe_device_wedged(xe))
+		return;
 
 	XE_WARN_ON(xe_force_wake_get(gt_to_fw(pc_to_gt(pc)), XE_FORCEWAKE_ALL));
 	XE_WARN_ON(xe_guc_pc_gucrc_disable(pc));

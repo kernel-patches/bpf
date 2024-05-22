@@ -19,8 +19,10 @@
 #include "xe_force_wake.h"
 #include "xe_gt.h"
 #include "xe_gt_printk.h"
+#include "xe_gt_sriov_vf.h"
 #include "xe_guc_ads.h"
 #include "xe_guc_ct.h"
+#include "xe_guc_db_mgr.h"
 #include "xe_guc_hwconfig.h"
 #include "xe_guc_log.h"
 #include "xe_guc_pc.h"
@@ -356,6 +358,14 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 
 	guc_init_params_post_hwconfig(guc);
 
+	ret = xe_guc_submit_init(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
+	if (ret)
+		return ret;
+
 	ret = xe_guc_pc_init(&guc->pc);
 	if (ret)
 		return ret;
@@ -451,7 +461,7 @@ static int guc_xfer_rsa(struct xe_guc *guc)
 	return 0;
 }
 
-static int guc_wait_ucode(struct xe_guc *guc)
+static void guc_wait_ucode(struct xe_guc *guc)
 {
 	struct xe_gt *gt = guc_to_gt(guc);
 	u32 status;
@@ -479,30 +489,26 @@ static int guc_wait_ucode(struct xe_guc *guc)
 			     200000, &status, false);
 
 	if (ret) {
-		xe_gt_info(gt, "GuC load failed: status = 0x%08X\n", status);
-		xe_gt_info(gt, "GuC status: Reset = %u, BootROM = %#X, UKernel = %#X, MIA = %#X, Auth = %#X\n",
-			   REG_FIELD_GET(GS_MIA_IN_RESET, status),
-			   REG_FIELD_GET(GS_BOOTROM_MASK, status),
-			   REG_FIELD_GET(GS_UKERNEL_MASK, status),
-			   REG_FIELD_GET(GS_MIA_MASK, status),
-			   REG_FIELD_GET(GS_AUTH_STATUS_MASK, status));
+		xe_gt_err(gt, "GuC load failed: status = 0x%08X\n", status);
+		xe_gt_err(gt, "GuC status: Reset = %u, BootROM = %#X, UKernel = %#X, MIA = %#X, Auth = %#X\n",
+			  REG_FIELD_GET(GS_MIA_IN_RESET, status),
+			  REG_FIELD_GET(GS_BOOTROM_MASK, status),
+			  REG_FIELD_GET(GS_UKERNEL_MASK, status),
+			  REG_FIELD_GET(GS_MIA_MASK, status),
+			  REG_FIELD_GET(GS_AUTH_STATUS_MASK, status));
 
-		if ((status & GS_BOOTROM_MASK) == GS_BOOTROM_RSA_FAILED) {
-			xe_gt_info(gt, "GuC firmware signature verification failed\n");
-			ret = -ENOEXEC;
-		}
+		if ((status & GS_BOOTROM_MASK) == GS_BOOTROM_RSA_FAILED)
+			xe_gt_err(gt, "GuC firmware signature verification failed\n");
 
 		if (REG_FIELD_GET(GS_UKERNEL_MASK, status) ==
-		    XE_GUC_LOAD_STATUS_EXCEPTION) {
-			xe_gt_info(gt, "GuC firmware exception. EIP: %#x\n",
-				   xe_mmio_read32(gt, SOFT_SCRATCH(13)));
-			ret = -ENXIO;
-		}
+		    XE_GUC_LOAD_STATUS_EXCEPTION)
+			xe_gt_err(gt, "GuC firmware exception. EIP: %#x\n",
+				  xe_mmio_read32(gt, SOFT_SCRATCH(13)));
+
+		xe_device_declare_wedged(gt_to_xe(gt));
 	} else {
 		xe_gt_dbg(gt, "GuC successfully loaded\n");
 	}
-
-	return ret;
 }
 
 static int __xe_guc_upload(struct xe_guc *guc)
@@ -532,9 +538,7 @@ static int __xe_guc_upload(struct xe_guc *guc)
 		goto out;
 
 	/* Wait for authentication */
-	ret = guc_wait_ucode(guc);
-	if (ret)
-		goto out;
+	guc_wait_ucode(guc);
 
 	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_RUNNING);
 	return 0;
@@ -542,6 +546,38 @@ static int __xe_guc_upload(struct xe_guc *guc)
 out:
 	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_LOAD_FAIL);
 	return 0	/* FIXME: ret, don't want to stop load currently */;
+}
+
+static int vf_guc_min_load_for_hwconfig(struct xe_guc *guc)
+{
+	struct xe_gt *gt = guc_to_gt(guc);
+	int ret;
+
+	ret = xe_gt_sriov_vf_bootstrap(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_query_config(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_hwconfig_init(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_enable_communication(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_connect(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_query_runtime(gt);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 /**
@@ -558,6 +594,9 @@ out:
 int xe_guc_min_load_for_hwconfig(struct xe_guc *guc)
 {
 	int ret;
+
+	if (IS_SRIOV_VF(guc_to_xe(guc)))
+		return vf_guc_min_load_for_hwconfig(guc);
 
 	xe_guc_ads_populate_minimal(&guc->ads);
 
@@ -891,17 +930,11 @@ void xe_guc_stop_prepare(struct xe_guc *guc)
 	XE_WARN_ON(xe_guc_pc_stop(&guc->pc));
 }
 
-int xe_guc_stop(struct xe_guc *guc)
+void xe_guc_stop(struct xe_guc *guc)
 {
-	int ret;
-
 	xe_guc_ct_stop(&guc->ct);
 
-	ret = xe_guc_submit_stop(guc);
-	if (ret)
-		return ret;
-
-	return 0;
+	xe_guc_submit_stop(guc);
 }
 
 int xe_guc_start(struct xe_guc *guc)
