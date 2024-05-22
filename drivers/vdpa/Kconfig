@@ -126,4 +126,13 @@ config PDS_VDPA
 	  With this driver, the VirtIO dataplane can be
 	  offloaded to an AMD/Pensando DSC device.
 
+config OCTEONEP_VDPA
+	tristate "vDPA driver for Octeon DPU devices"
+	depends on m
+	depends on PCI_MSI
+	help
+	  vDPA driver for Marvell's Octeon DPU devices.
+	  With this driver, the VirtIO dataplane can be
+	  offloaded to a Octeon DPU device.
+
 endif # VDPA
