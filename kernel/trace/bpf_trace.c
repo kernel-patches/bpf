@@ -767,6 +767,7 @@ const struct bpf_func_proto bpf_get_current_task_proto = {
 	.func		= bpf_get_current_task,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
+	.nocsr		= true,
 };
 
 BPF_CALL_0(bpf_get_current_task_btf)

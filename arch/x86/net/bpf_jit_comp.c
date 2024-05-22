@@ -2027,6 +2027,24 @@ populate_extable:
 
 			/* call */
 		case BPF_JMP | BPF_CALL: {
+			if (IS_ENABLED(CONFIG_X86_64) &&
+			    IS_ENABLED(CONFIG_USE_X86_SEG_SUPPORT) &&
+			    insn->src_reg == 0 && imm32 == BPF_FUNC_get_current_task) {
+				/* Emit 'mov rax, QWORD PTR gs:[<&const_percpu_hot.current_task>]',
+				 * e.g.: 65 48 a1 77 66 55 44 33 22 11 00
+				 *       ^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^
+				 *       mov      constant 0x0011223344556677
+				 */
+				u64 p = (u64)&const_pcpu_hot.current_task;
+				u32 hi = p >> 32;
+				u32 lo = (u32) p;
+
+				EMIT3(0x65, 0x48, 0xa1);
+				EMIT(lo, 4);
+				EMIT(hi, 4);
+				break;
+			}
+
 			u8 *ip = image + addrs[i - 1];
 
 			func = (u8 *) __bpf_call_base + imm32;
@@ -3421,6 +3439,18 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 bool bpf_jit_supports_percpu_insn(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_helper_call(int imm)
+{
+	switch (imm) {
+#if CONFIG_X86_64 && CONFIG_USE_X86_SEG_SUPPORT
+	case BPF_FUNC_get_current_task:
+		return true;
+#endif
+	default:
+		return false;
+	}
 }
 
 void bpf_jit_free(struct bpf_prog *prog)
