@@ -389,12 +389,30 @@ static int pid_maps_open(struct inode *inode, struct file *file)
 )
 
 static struct vm_area_struct *query_matching_vma(struct mm_struct *mm,
-						 unsigned long addr, u32 flags)
+						 unsigned long addr, u32 flags,
+						 bool *mm_locked)
 {
 	struct vm_area_struct *vma;
+	bool mmap_locked;
+
+	*mm_locked = mmap_locked = false;
 
 next_vma:
-	vma = find_vma(mm, addr);
+	if (!mmap_locked) {
+		/* if we haven't yet acquired mmap_lock, try to use less disruptive per-VMA */
+		vma = find_and_lock_vma_rcu(mm, addr);
+		if (IS_ERR(vma)) {
+			/* failed to take per-VMA lock, fallback to mmap_lock */
+			if (mmap_read_lock_killable(mm))
+				return ERR_PTR(-EINTR);
+
+			*mm_locked = mmap_locked = true;
+			vma = find_vma(mm, addr);
+		}
+	} else {
+		/* if we have mmap_lock, get through the search as fast as possible */
+		vma = find_vma(mm, addr);
+	}
 
 	/* no VMA found */
 	if (!vma)
@@ -428,18 +446,25 @@ next_vma:
 skip_vma:
 	/*
 	 * If the user needs closest matching VMA, keep iterating.
+	 * But before we proceed we might need to unlock current VMA.
 	 */
 	addr = vma->vm_end;
+	if (!mmap_locked)
+		vma_end_read(vma);
 	if (flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA)
 		goto next_vma;
 no_vma:
-	mmap_read_unlock(mm);
+	if (mmap_locked)
+		mmap_read_unlock(mm);
 	return ERR_PTR(-ENOENT);
 }
 
-static void unlock_vma(struct vm_area_struct *vma)
+static void unlock_vma(struct vm_area_struct *vma, bool mm_locked)
 {
-	mmap_read_unlock(vma->vm_mm);
+	if (mm_locked)
+		mmap_read_unlock(vma->vm_mm);
+	else
+		vma_end_read(vma);
 }
 
 static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
@@ -447,6 +472,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	struct procmap_query karg;
 	struct vm_area_struct *vma;
 	struct mm_struct *mm;
+	bool mm_locked;
 	const char *name = NULL;
 	char *name_buf = NULL;
 	__u64 usize;
@@ -475,7 +501,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	if (!mm || !mmget_not_zero(mm))
 		return -ESRCH;
 
-	vma = query_matching_vma(mm, karg.query_addr, karg.query_flags);
+	vma = query_matching_vma(mm, karg.query_addr, karg.query_flags, &mm_locked);
 	if (IS_ERR(vma)) {
 		mmput(mm);
 		return PTR_ERR(vma);
@@ -542,7 +568,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	}
 
 	/* unlock vma/mm_struct and put mm_struct before copying data to user */
-	unlock_vma(vma);
+	unlock_vma(vma, mm_locked);
 	mmput(mm);
 
 	if (karg.vma_name_size && copy_to_user((void __user *)karg.vma_name_addr,
@@ -558,7 +584,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	return 0;
 
 out:
-	unlock_vma(vma);
+	unlock_vma(vma, mm_locked);
 	mmput(mm);
 	kfree(name_buf);
 	return err;
