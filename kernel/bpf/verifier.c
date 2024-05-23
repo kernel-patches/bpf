@@ -7284,6 +7284,9 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	u32 *max_access;
 
+	if (access_size < 0)
+		return -EINVAL;
+
 	switch (base_type(reg->type)) {
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
@@ -8778,6 +8781,7 @@ skip_type_check:
 			return -EACCES;
 		}
 		meta->raw_mode = arg_type & MEM_UNINIT;
+		/* This can overflow int access_size */
 		err = check_helper_mem_access(env, regno,
 					      meta->map_ptr->value_size, false,
 					      meta);
