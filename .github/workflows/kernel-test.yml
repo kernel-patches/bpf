@@ -55,7 +55,7 @@ jobs:
         # zstd is installed by default in the runner images.
         run: zstd -d -T0  vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
       - name: Run selftests
-        uses: libbpf/ci/run-vmtest@main
+        uses: danobi/libbpf-ci/run-vmtest@51c9a2e1ff072dda5b0466e17c3a42dca83057a5
         # https://github.com/actions/runner/issues/1483#issuecomment-1031671517
         # booleans are weird in GH.
         continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
