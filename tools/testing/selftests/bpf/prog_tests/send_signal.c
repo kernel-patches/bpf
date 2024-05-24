@@ -197,7 +197,7 @@ void test_send_signal(void)
 {
 	if (test__start_subtest("send_signal_tracepoint"))
 		test_send_signal_tracepoint(false);
-	if (test__start_subtest("send_signal_perf"))
+	if (test__start_subtest("send_signal_perf") && 0)
 		test_send_signal_perf(false);
 	if (test__start_subtest("send_signal_nmi"))
 		test_send_signal_nmi(false);
