@@ -353,9 +353,14 @@ int connect_to_fd_opts(int server_fd, const struct network_helper_opts *opts)
 	    opts->post_socket_cb(fd, opts->cb_opts))
 		goto error_close;
 
-	if (!opts->noconnect)
+	if (!opts->noconnect) {
 		if (connect_fd_to_addr(fd, &addr, addrlen, opts->must_fail))
 			goto error_close;
+
+		if (opts->post_connect_cb &&
+		    opts->post_connect_cb(fd, opts->cb_opts))
+			goto error_close;
+	}
 
 	return fd;
 

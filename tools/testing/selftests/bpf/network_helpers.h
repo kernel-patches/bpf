@@ -28,6 +28,7 @@ struct network_helper_opts {
 	int type;
 	int proto;
 	int (*post_socket_cb)(int fd, void *opts);
+	int (*post_connect_cb)(int fd, void *opts);
 	void *cb_opts;
 };
 
