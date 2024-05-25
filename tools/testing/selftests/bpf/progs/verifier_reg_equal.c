@@ -55,4 +55,33 @@ l1_%=:	exit;						\
 	: __clobber_all);
 }
 
+/*
+ * The tests checks that the verifier doesn't WARN_ON in:
+ * if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
+ *     !WARN_ON_ONCE(dst_reg->id != other_dst_reg->id)) {
+ */
+SEC("socket")
+__description("check this_branch_reg->id == other_branch_reg->id")
+__success
+__naked void reg_id(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	1:.byte 0xe5; /* may_goto */			\
+	.byte 0;					\
+	.long ((l0_%= - 1b - 8) / 8) & 0xffff;	\
+	.short 0;					\
+	r0 &= 1;					\
+	r2 = r0;					\
+	/* is_branch_taken will predict fallthrough */	\
+	if r2 == 2 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
