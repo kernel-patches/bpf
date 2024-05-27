@@ -32,7 +32,7 @@ endif
 # Enable -Werror in CI and development
 subdir-ccflags-$(CONFIG_DRM_XE_WERROR) += -Werror
 
-subdir-ccflags-y += -I$(obj) -I$(srctree)/$(src)
+subdir-ccflags-y += -I$(obj) -I$(src)
 
 # generated sources
 hostprogs := xe_gen_wa_oob
@@ -43,7 +43,7 @@ quiet_cmd_wa_oob = GEN     $(notdir $(generated_oob))
       cmd_wa_oob = mkdir -p $(@D); $^ $(generated_oob)
 
 $(obj)/generated/%_wa_oob.c $(obj)/generated/%_wa_oob.h: $(obj)/xe_gen_wa_oob \
-		 $(srctree)/$(src)/xe_wa_oob.rules
+		 $(src)/xe_wa_oob.rules
 	$(call cmd,wa_oob)
 
 uses_generated_oob := \
@@ -155,6 +155,8 @@ xe-$(CONFIG_HWMON) += xe_hwmon.o
 
 # graphics virtualization (SR-IOV) support
 xe-y += \
+	xe_gt_sriov_vf.o \
+	xe_gt_sriov_vf_debugfs.o \
 	xe_guc_relay.o \
 	xe_memirq.o \
 	xe_sriov.o
@@ -163,10 +165,14 @@ xe-$(CONFIG_PCI_IOV) += \
 	xe_gt_sriov_pf.o \
 	xe_gt_sriov_pf_config.o \
 	xe_gt_sriov_pf_control.o \
+	xe_gt_sriov_pf_debugfs.o \
+	xe_gt_sriov_pf_monitor.o \
 	xe_gt_sriov_pf_policy.o \
+	xe_gt_sriov_pf_service.o \
 	xe_lmtt.o \
 	xe_lmtt_2l.o \
 	xe_lmtt_ml.o \
+	xe_pci_sriov.o \
 	xe_sriov_pf.o
 
 # include helpers for tests even when XE is built-in
@@ -176,8 +182,8 @@ endif
 
 # i915 Display compat #defines and #includes
 subdir-ccflags-$(CONFIG_DRM_XE_DISPLAY) += \
-	-I$(srctree)/$(src)/display/ext \
-	-I$(srctree)/$(src)/compat-i915-headers \
+	-I$(src)/display/ext \
+	-I$(src)/compat-i915-headers \
 	-I$(srctree)/drivers/gpu/drm/i915/display/ \
 	-Ddrm_i915_gem_object=xe_bo \
 	-Ddrm_i915_private=xe_device
@@ -204,7 +210,8 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	display/xe_dsb_buffer.o \
 	display/xe_fb_pin.o \
 	display/xe_hdcp_gsc.o \
-	display/xe_plane_initial.o
+	display/xe_plane_initial.o \
+	display/xe_tdf.o
 
 # SOC code shared with i915
 xe-$(CONFIG_DRM_XE_DISPLAY) += \
@@ -319,7 +326,7 @@ ifneq ($(CONFIG_DRM_XE_DISPLAY),y)
 endif
 
 always-$(CONFIG_DRM_XE_WERROR) += \
-	$(patsubst %.h,%.hdrtest, $(shell cd $(srctree)/$(src) && find * -name '*.h' $(hdrtest_find_args)))
+	$(patsubst %.h,%.hdrtest, $(shell cd $(src) && find * -name '*.h' $(hdrtest_find_args)))
 
 quiet_cmd_hdrtest = HDRTEST $(patsubst %.hdrtest,%.h,$@)
       cmd_hdrtest = $(CC) -DHDRTEST $(filter-out $(CFLAGS_GCOV), $(c_flags)) -S -o /dev/null -x c /dev/null -include $<; touch $@
