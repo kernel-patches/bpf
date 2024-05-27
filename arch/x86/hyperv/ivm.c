@@ -291,16 +291,18 @@ static void snp_cleanup_vmsa(struct sev_es_save_area *vmsa)
 
 int hv_snp_boot_ap(u32 cpu, unsigned long start_ip)
 {
-	struct sev_es_save_area *vmsa = (struct sev_es_save_area *)
-		__get_free_page(GFP_KERNEL | __GFP_ZERO);
-	struct sev_es_save_area *cur_vmsa;
-	struct desc_ptr gdtr;
-	u64 ret, retry = 5;
 	struct hv_enable_vp_vtl *start_vp_input;
+	struct sev_es_save_area *cur_vmsa;
+	struct sev_es_save_area *vmsa;
+	struct desc_ptr gdtr;
 	unsigned long flags;
+	u64 ret, retry = 5;
+	struct page *p;
 
-	if (!vmsa)
+	p = alloc_pages_node(cpu_to_node(cpu), GFP_KERNEL | __GFP_ZERO, 0);
+	if (!p)
 		return -ENOMEM;
+	vmsa = (struct sev_es_save_area *)page_address(p);
 
 	native_store_gdt(&gdtr);
 

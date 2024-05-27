@@ -19,8 +19,10 @@
 #include "xe_force_wake.h"
 #include "xe_gt.h"
 #include "xe_gt_printk.h"
+#include "xe_gt_sriov_vf.h"
 #include "xe_guc_ads.h"
 #include "xe_guc_ct.h"
+#include "xe_guc_db_mgr.h"
 #include "xe_guc_hwconfig.h"
 #include "xe_guc_log.h"
 #include "xe_guc_pc.h"
@@ -239,7 +241,7 @@ static void guc_write_params(struct xe_guc *guc)
 		xe_mmio_write32(gt, SOFT_SCRATCH(1 + i), guc->params[i]);
 }
 
-static void guc_fini(struct drm_device *drm, void *arg)
+static void guc_fini_hw(void *arg)
 {
 	struct xe_guc *guc = arg;
 	struct xe_gt *gt = guc_to_gt(guc);
@@ -293,6 +295,23 @@ static int xe_guc_realloc_post_hwconfig(struct xe_guc *guc)
 	return 0;
 }
 
+static int vf_guc_init(struct xe_guc *guc)
+{
+	int err;
+
+	xe_guc_comm_init_early(guc);
+
+	err = xe_guc_ct_init(&guc->ct);
+	if (err)
+		return err;
+
+	err = xe_guc_relay_init(&guc->relay);
+	if (err)
+		return err;
+
+	return 0;
+}
+
 int xe_guc_init(struct xe_guc *guc)
 {
 	struct xe_device *xe = guc_to_xe(guc);
@@ -306,6 +325,13 @@ int xe_guc_init(struct xe_guc *guc)
 
 	if (!xe_uc_fw_is_enabled(&guc->fw))
 		return 0;
+
+	if (IS_SRIOV_VF(xe)) {
+		ret = vf_guc_init(guc);
+		if (ret)
+			goto out;
+		return 0;
+	}
 
 	ret = xe_guc_log_init(&guc->log);
 	if (ret)
@@ -323,7 +349,7 @@ int xe_guc_init(struct xe_guc *guc)
 	if (ret)
 		goto out;
 
-	ret = drmm_add_action_or_reset(&xe->drm, guc_fini, guc);
+	ret = devm_add_action_or_reset(xe->drm.dev, guc_fini_hw, guc);
 	if (ret)
 		goto out;
 
@@ -340,6 +366,19 @@ out:
 	return ret;
 }
 
+static int vf_guc_init_post_hwconfig(struct xe_guc *guc)
+{
+	int err;
+
+	err = xe_guc_submit_init(guc, xe_gt_sriov_vf_guc_ids(guc_to_gt(guc)));
+	if (err)
+		return err;
+
+	/* XXX xe_guc_db_mgr_init not needed for now */
+
+	return 0;
+}
+
 /**
  * xe_guc_init_post_hwconfig - initialize GuC post hwconfig load
  * @guc: The GuC object
@@ -350,11 +389,22 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 {
 	int ret;
 
+	if (IS_SRIOV_VF(guc_to_xe(guc)))
+		return vf_guc_init_post_hwconfig(guc);
+
 	ret = xe_guc_realloc_post_hwconfig(guc);
 	if (ret)
 		return ret;
 
 	guc_init_params_post_hwconfig(guc);
+
+	ret = xe_guc_submit_init(guc, ~0);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
+	if (ret)
+		return ret;
 
 	ret = xe_guc_pc_init(&guc->pc);
 	if (ret)
@@ -451,7 +501,7 @@ static int guc_xfer_rsa(struct xe_guc *guc)
 	return 0;
 }
 
-static int guc_wait_ucode(struct xe_guc *guc)
+static void guc_wait_ucode(struct xe_guc *guc)
 {
 	struct xe_gt *gt = guc_to_gt(guc);
 	u32 status;
@@ -479,30 +529,26 @@ static int guc_wait_ucode(struct xe_guc *guc)
 			     200000, &status, false);
 
 	if (ret) {
-		xe_gt_info(gt, "GuC load failed: status = 0x%08X\n", status);
-		xe_gt_info(gt, "GuC status: Reset = %u, BootROM = %#X, UKernel = %#X, MIA = %#X, Auth = %#X\n",
-			   REG_FIELD_GET(GS_MIA_IN_RESET, status),
-			   REG_FIELD_GET(GS_BOOTROM_MASK, status),
-			   REG_FIELD_GET(GS_UKERNEL_MASK, status),
-			   REG_FIELD_GET(GS_MIA_MASK, status),
-			   REG_FIELD_GET(GS_AUTH_STATUS_MASK, status));
+		xe_gt_err(gt, "GuC load failed: status = 0x%08X\n", status);
+		xe_gt_err(gt, "GuC status: Reset = %u, BootROM = %#X, UKernel = %#X, MIA = %#X, Auth = %#X\n",
+			  REG_FIELD_GET(GS_MIA_IN_RESET, status),
+			  REG_FIELD_GET(GS_BOOTROM_MASK, status),
+			  REG_FIELD_GET(GS_UKERNEL_MASK, status),
+			  REG_FIELD_GET(GS_MIA_MASK, status),
+			  REG_FIELD_GET(GS_AUTH_STATUS_MASK, status));
 
-		if ((status & GS_BOOTROM_MASK) == GS_BOOTROM_RSA_FAILED) {
-			xe_gt_info(gt, "GuC firmware signature verification failed\n");
-			ret = -ENOEXEC;
-		}
+		if ((status & GS_BOOTROM_MASK) == GS_BOOTROM_RSA_FAILED)
+			xe_gt_err(gt, "GuC firmware signature verification failed\n");
 
 		if (REG_FIELD_GET(GS_UKERNEL_MASK, status) ==
-		    XE_GUC_LOAD_STATUS_EXCEPTION) {
-			xe_gt_info(gt, "GuC firmware exception. EIP: %#x\n",
-				   xe_mmio_read32(gt, SOFT_SCRATCH(13)));
-			ret = -ENXIO;
-		}
+		    XE_GUC_LOAD_STATUS_EXCEPTION)
+			xe_gt_err(gt, "GuC firmware exception. EIP: %#x\n",
+				  xe_mmio_read32(gt, SOFT_SCRATCH(13)));
+
+		xe_device_declare_wedged(gt_to_xe(gt));
 	} else {
 		xe_gt_dbg(gt, "GuC successfully loaded\n");
 	}
-
-	return ret;
 }
 
 static int __xe_guc_upload(struct xe_guc *guc)
@@ -532,9 +578,7 @@ static int __xe_guc_upload(struct xe_guc *guc)
 		goto out;
 
 	/* Wait for authentication */
-	ret = guc_wait_ucode(guc);
-	if (ret)
-		goto out;
+	guc_wait_ucode(guc);
 
 	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_RUNNING);
 	return 0;
@@ -542,6 +586,38 @@ static int __xe_guc_upload(struct xe_guc *guc)
 out:
 	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_LOAD_FAIL);
 	return 0	/* FIXME: ret, don't want to stop load currently */;
+}
+
+static int vf_guc_min_load_for_hwconfig(struct xe_guc *guc)
+{
+	struct xe_gt *gt = guc_to_gt(guc);
+	int ret;
+
+	ret = xe_gt_sriov_vf_bootstrap(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_query_config(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_hwconfig_init(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_enable_communication(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_connect(gt);
+	if (ret)
+		return ret;
+
+	ret = xe_gt_sriov_vf_query_runtime(gt);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 /**
@@ -558,6 +634,9 @@ out:
 int xe_guc_min_load_for_hwconfig(struct xe_guc *guc)
 {
 	int ret;
+
+	if (IS_SRIOV_VF(guc_to_xe(guc)))
+		return vf_guc_min_load_for_hwconfig(guc);
 
 	xe_guc_ads_populate_minimal(&guc->ads);
 
@@ -891,17 +970,11 @@ void xe_guc_stop_prepare(struct xe_guc *guc)
 	XE_WARN_ON(xe_guc_pc_stop(&guc->pc));
 }
 
-int xe_guc_stop(struct xe_guc *guc)
+void xe_guc_stop(struct xe_guc *guc)
 {
-	int ret;
-
 	xe_guc_ct_stop(&guc->ct);
 
-	ret = xe_guc_submit_stop(guc);
-	if (ret)
-		return ret;
-
-	return 0;
+	xe_guc_submit_stop(guc);
 }
 
 int xe_guc_start(struct xe_guc *guc)
