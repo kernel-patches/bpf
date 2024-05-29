@@ -19,6 +19,39 @@
 
 #include "main.h"
 
+static const bool cgroup_attach_types[] = {
+	[BPF_CGROUP_INET_INGRESS] = true,
+	[BPF_CGROUP_INET_EGRESS] = true,
+	[BPF_CGROUP_INET_SOCK_CREATE] = true,
+	[BPF_CGROUP_INET_SOCK_RELEASE] = true,
+	[BPF_CGROUP_INET4_BIND] = true,
+	[BPF_CGROUP_INET6_BIND] = true,
+	[BPF_CGROUP_INET4_POST_BIND] = true,
+	[BPF_CGROUP_INET6_POST_BIND] = true,
+	[BPF_CGROUP_INET4_CONNECT] = true,
+	[BPF_CGROUP_INET6_CONNECT] = true,
+	[BPF_CGROUP_UNIX_CONNECT] = true,
+	[BPF_CGROUP_INET4_GETPEERNAME] = true,
+	[BPF_CGROUP_INET6_GETPEERNAME] = true,
+	[BPF_CGROUP_UNIX_GETPEERNAME] = true,
+	[BPF_CGROUP_INET4_GETSOCKNAME] = true,
+	[BPF_CGROUP_INET6_GETSOCKNAME] = true,
+	[BPF_CGROUP_UNIX_GETSOCKNAME] = true,
+	[BPF_CGROUP_UDP4_SENDMSG] = true,
+	[BPF_CGROUP_UDP6_SENDMSG] = true,
+	[BPF_CGROUP_UNIX_SENDMSG] = true,
+	[BPF_CGROUP_UDP4_RECVMSG] = true,
+	[BPF_CGROUP_UDP6_RECVMSG] = true,
+	[BPF_CGROUP_UNIX_RECVMSG] = true,
+	[BPF_CGROUP_SOCK_OPS] = true,
+	[BPF_CGROUP_DEVICE] = true,
+	[BPF_CGROUP_SYSCTL] = true,
+	[BPF_CGROUP_GETSOCKOPT] = true,
+	[BPF_CGROUP_SETSOCKOPT] = true,
+	[BPF_LSM_CGROUP] = true,
+	[__MAX_BPF_ATTACH_TYPE] = false,
+};
+
 #define HELP_SPEC_ATTACH_FLAGS						\
 	"ATTACH_FLAGS := { multi | override }"
 
@@ -187,14 +220,16 @@ static int cgroup_has_attached_progs(int cgroup_fd)
 	bool no_prog = true;
 
 	for (type = 0; type < __MAX_BPF_ATTACH_TYPE; type++) {
-		int count = count_attached_bpf_progs(cgroup_fd, type);
+		if (cgroup_attach_types[type]) {
+			int count = count_attached_bpf_progs(cgroup_fd, type);
 
-		if (count < 0 && errno != EINVAL)
-			return -1;
+			if (count < 0 && errno != EINVAL)
+				return -1;
 
-		if (count > 0) {
-			no_prog = false;
-			break;
+			if (count > 0) {
+				no_prog = false;
+				break;
+			}
 		}
 	}
 
