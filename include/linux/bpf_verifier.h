@@ -750,6 +750,8 @@ struct bpf_verifier_env {
 	 * e.g., in reg_type_str() to generate reg_type string
 	 */
 	char tmp_str_buf[TMP_STR_BUF_LEN];
+	/* temp variables that are too big to keep on stack */
+	struct bpf_reg_state saved_src_reg, saved_dst_reg;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
