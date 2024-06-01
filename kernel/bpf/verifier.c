@@ -4714,7 +4714,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		    is_spilled_scalar_reg(&state->stack[spi])) {
 			struct bpf_reg_state *spill_reg = &state->stack[spi].spilled_ptr;
 
-			if (tnum_is_const(spill_reg->var_off) && spill_reg->var_off.value == 0) {
+			if (tnum_equals_const(spill_reg->var_off, 0)) {
 				zero_used = true;
 				continue;
 			}
@@ -4874,7 +4874,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				}
 
 				if (spill_cnt == size &&
-				    tnum_is_const(reg->var_off) && reg->var_off.value == 0) {
+				    tnum_equals_const(reg->var_off, 0)) {
 					__mark_reg_const_zero(env, &state->regs[dst_regno]);
 					/* this IS register fill, so keep insn_flags */
 				} else if (zero_cnt == size) {
