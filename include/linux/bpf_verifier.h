@@ -140,8 +140,7 @@ struct bpf_reg_state {
 	/* For scalar types (SCALAR_VALUE), this represents our knowledge of
 	 * the actual value.
 	 * For pointer types, this represents the variable part of the offset
-	 * from the pointed-to object, and is shared with all bpf_reg_states
-	 * with the same id as us.
+	 * from the pointed-to object.
 	 */
 	struct tnum var_off;
 	/* Used to determine if any memory access using this register will
