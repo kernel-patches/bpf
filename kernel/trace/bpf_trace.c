@@ -2383,31 +2383,6 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 	preempt_enable();
 }
 
-static __always_inline
-void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
-{
-	struct bpf_prog *prog = link->link.prog;
-	struct bpf_run_ctx *old_run_ctx;
-	struct bpf_trace_run_ctx run_ctx;
-
-	cant_sleep();
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
-		bpf_prog_inc_misses_counter(prog);
-		goto out;
-	}
-
-	run_ctx.bpf_cookie = link->cookie;
-	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
-
-	rcu_read_lock();
-	(void) bpf_prog_run(prog, args);
-	rcu_read_unlock();
-
-	bpf_reset_run_ctx(old_run_ctx);
-out:
-	this_cpu_dec(*(prog->active));
-}
-
 #define UNPACK(...)			__VA_ARGS__
 #define REPEAT_1(FN, DL, X, ...)	FN(X)
 #define REPEAT_2(FN, DL, X, ...)	FN(X) UNPACK DL REPEAT_1(FN, DL, __VA_ARGS__)
@@ -2437,7 +2412,8 @@ out:
 	{								\
 		u64 args[x];						\
 		REPEAT(x, COPY, __DL_SEM, __SEQ_0_11);			\
-		__bpf_trace_run(link, args);				\
+		(void) bpf_prog_run_trace(link->link.prog, link->cookie,\
+					  args, bpf_prog_run);		\
 	}								\
 	EXPORT_SYMBOL_GPL(bpf_trace_run##x)
 BPF_TRACE_DEFN_x(1);
