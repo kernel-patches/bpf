@@ -20,7 +20,7 @@ TRACE_EVENT(thread_noise,
 	),
 
 	TP_fast_assign(
-		memcpy(__entry->comm, t->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, t);
 		__entry->pid = t->pid;
 		__entry->start = start;
 		__entry->duration = duration;

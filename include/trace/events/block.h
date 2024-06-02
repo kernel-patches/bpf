@@ -193,7 +193,7 @@ DECLARE_EVENT_CLASS(block_rq,
 
 		blk_fill_rwbs(__entry->rwbs, rq->cmd_flags);
 		__get_str(cmd)[0] = '\0';
-		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, current);
 	),
 
 	TP_printk("%d,%d %s %u (%s) %llu + %u [%s]",
@@ -328,7 +328,7 @@ DECLARE_EVENT_CLASS(block_bio,
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->nr_sector	= bio_sectors(bio);
 		blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
-		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, current);
 	),
 
 	TP_printk("%d,%d %s %llu + %u [%s]",
@@ -415,7 +415,7 @@ TRACE_EVENT(block_plug,
 	),
 
 	TP_fast_assign(
-		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, current);
 	),
 
 	TP_printk("[%s]", __entry->comm)
@@ -434,7 +434,7 @@ DECLARE_EVENT_CLASS(block_unplug,
 
 	TP_fast_assign(
 		__entry->nr_rq = depth;
-		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, current);
 	),
 
 	TP_printk("[%s] %d", __entry->comm, __entry->nr_rq)
@@ -485,7 +485,7 @@ TRACE_EVENT(block_split,
 		__entry->sector		= bio->bi_iter.bi_sector;
 		__entry->new_sector	= new_sector;
 		blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
-		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, current);
 	),
 
 	TP_printk("%d,%d %s %llu / %llu [%s]",

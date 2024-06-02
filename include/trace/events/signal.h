@@ -67,7 +67,7 @@ TRACE_EVENT(signal_generate,
 	TP_fast_assign(
 		__entry->sig	= sig;
 		TP_STORE_SIGINFO(__entry, info);
-		memcpy(__entry->comm, task->comm, TASK_COMM_LEN);
+		__get_task_comm(__entry->comm, TASK_COMM_LEN, task);
 		__entry->pid	= task->pid;
 		__entry->group	= group;
 		__entry->result	= result;
