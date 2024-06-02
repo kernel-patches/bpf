@@ -1906,7 +1906,10 @@ static bool reg_is_init_pkt_pointer(const struct bpf_reg_state *reg,
 	       tnum_equals_const(reg->var_off, 0);
 }
 
-/* Reset the min/max bounds of a register */
+/* Reset the min/max bounds of a register. var_off is not touched and handled
+ * separately because sometimes we may be able to inferred min/max from them
+ * later in reg_bounds_sync(), e.g after bitwise operations.
+ */
 static void __mark_reg_unbounded(struct bpf_reg_state *reg)
 {
 	reg->smin_value = S64_MIN;
