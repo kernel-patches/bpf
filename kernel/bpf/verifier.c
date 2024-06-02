@@ -28,6 +28,7 @@
 #include <linux/cpumask.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/overflow.h>
+#include <linux/tval.h>
 #include <net/xdp.h>
 
 #include "disasm.h"
@@ -13319,62 +13320,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
-				 struct bpf_reg_state *src_reg)
-{
-	s32 smin_val = src_reg->val.s32_min;
-	s32 smax_val = src_reg->val.s32_max;
-	u32 umin_val = src_reg->val.u32_min;
-	u32 umax_val = src_reg->val.u32_max;
-	s32 smin_cur, smax_cur;
-	u32 umin_cur, umax_cur;
-
-	if (check_add_overflow(dst_reg->val.s32_min, smin_val, &smin_cur) ||
-	    check_add_overflow(dst_reg->val.s32_max, smax_val, &smax_cur)) {
-		dst_reg->val.s32_min = S32_MIN;
-		dst_reg->val.s32_max = S32_MAX;
-	} else {
-		dst_reg->val.s32_min = smin_cur;
-		dst_reg->val.s32_max = smax_cur;
-	}
-	if (check_add_overflow(dst_reg->val.u32_min, umin_val, &umin_cur) ||
-	    check_add_overflow(dst_reg->val.u32_max, umax_val, &umax_cur)) {
-		dst_reg->val.u32_min = 0;
-		dst_reg->val.u32_max = U32_MAX;
-	} else {
-		dst_reg->val.u32_min = umin_cur;
-		dst_reg->val.u32_max = umax_cur;
-	}
-}
-
-static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
-{
-	s64 smin_val = src_reg->val.smin;
-	s64 smax_val = src_reg->val.smax;
-	u64 umin_val = src_reg->val.umin;
-	u64 umax_val = src_reg->val.umax;
-	s64 smin_cur, smax_cur;
-	u64 umin_cur, umax_cur;
-
-	if (check_add_overflow(dst_reg->val.smin, smin_val, &smin_cur) ||
-	    check_add_overflow(dst_reg->val.smax, smax_val, &smax_cur)) {
-		dst_reg->val.smin = S64_MIN;
-		dst_reg->val.smax = S64_MAX;
-	} else {
-		dst_reg->val.smin = smin_cur;
-		dst_reg->val.smax = smax_cur;
-	}
-	if (check_add_overflow(dst_reg->val.umin, umin_val, &umin_cur) ||
-	    check_add_overflow(dst_reg->val.umax, umax_val, &umax_cur)) {
-		dst_reg->val.umin = 0;
-		dst_reg->val.umax = U64_MAX;
-	} else {
-		dst_reg->val.umin = umin_cur;
-		dst_reg->val.umax = umax_cur;
-	}
-}
-
 static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -13958,9 +13903,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 */
 	switch (opcode) {
 	case BPF_ADD:
-		scalar32_min_max_add(dst_reg, &src_reg);
-		scalar_min_max_add(dst_reg, &src_reg);
-		dst_reg->val.var_off = tnum_add(dst_reg->val.var_off, src_reg.val.var_off);
+		tval_add(&dst_reg->val, &src_reg.val);
 		break;
 	case BPF_SUB:
 		scalar32_min_max_sub(dst_reg, &src_reg);
@@ -15147,8 +15090,7 @@ static void find_equal_scalars(struct bpf_verifier_state *vstate,
 			 */
 			reg->off = saved_off;
 
-			scalar32_min_max_add(reg, &fake_reg);
-			scalar_min_max_add(reg, &fake_reg);
+			tval_add(&reg->val, &fake_reg.val);
 			reg->val.var_off = tnum_add(reg->val.var_off, fake_reg.val.var_off);
 		}
 	}));
