@@ -7,7 +7,6 @@
 #include <linux/bpf.h> /* for enum bpf_reg_type */
 #include <linux/btf.h> /* for struct btf and btf_id() */
 #include <linux/filter.h> /* for MAX_BPF_STACK */
-#include <linux/tnum.h>
 #include <linux/tval.h>
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
@@ -143,7 +142,6 @@ struct bpf_reg_state {
 	 * For pointer types, this represents the variable part of the offset
 	 * from the pointed-to object.
 	 */
-	struct tnum var_off;
 	struct tval val;
 	/* For PTR_TO_PACKET, used to find other pointers with the same variable
 	 * offset, so they can share range knowledge.

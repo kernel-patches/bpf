@@ -611,12 +611,12 @@ static int stack_slot_obj_get_spi(struct bpf_verifier_env *env, struct bpf_reg_s
 {
 	int off, spi;
 
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		verbose(env, "%s has to be at a constant offset\n", obj_kind);
 		return -EINVAL;
 	}
 
-	off = reg->off + reg->var_off.value;
+	off = reg->off + reg->val.var_off.value;
 	if (off % BPF_REG_SIZE) {
 		verbose(env, "cannot pass in %s at an offset=%d\n", obj_kind, off);
 		return -EINVAL;
@@ -1757,7 +1757,7 @@ static const int caller_saved[CALLER_SAVED_REGS] = {
 /* This helper doesn't clear reg->id */
 static void ___mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 {
-	reg->var_off = tnum_const(imm);
+	reg->val.var_off = tnum_const(imm);
 	reg->val.smin = (s64)imm;
 	reg->val.smax = (s64)imm;
 	reg->val.umin = imm;
@@ -1776,7 +1776,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 {
 	/* Clear off and union(map_ptr, range) */
 	memset(((u8 *)reg) + sizeof(reg->type), 0,
-	       offsetof(struct bpf_reg_state, var_off) - sizeof(reg->type));
+	       offsetof(struct bpf_reg_state, val) - sizeof(reg->type));
 	reg->id = 0;
 	reg->ref_obj_id = 0;
 	___mark_reg_known(reg, imm);
@@ -1784,7 +1784,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
-	reg->var_off = tnum_const_subreg(reg->var_off, imm);
+	reg->val.var_off = tnum_const_subreg(reg->val.var_off, imm);
 	reg->val.s32_min = (s32)imm;
 	reg->val.s32_max = (s32)imm;
 	reg->val.u32_min = (u32)imm;
@@ -1904,7 +1904,7 @@ static bool reg_is_init_pkt_pointer(const struct bpf_reg_state *reg,
 	return reg->type == which &&
 	       reg->id == 0 &&
 	       reg->off == 0 &&
-	       tnum_equals_const(reg->var_off, 0);
+	       tnum_equals_const(reg->val.var_off, 0);
 }
 
 /* Reset the min/max bounds of a register. var_off is not touched and handled
@@ -1942,7 +1942,7 @@ static void __mark_reg32_unbounded(struct bpf_reg_state *reg)
 
 static void __update_reg32_bounds(struct bpf_reg_state *reg)
 {
-	struct tnum var32_off = tnum_subreg(reg->var_off);
+	struct tnum var32_off = tnum_subreg(reg->val.var_off);
 
 	/* min signed is max(sign bit) | min(other bits) */
 	reg->val.s32_min = max_t(s32, reg->val.s32_min,
@@ -1959,13 +1959,13 @@ static void __update_reg64_bounds(struct bpf_reg_state *reg)
 {
 	/* min signed is max(sign bit) | min(other bits) */
 	reg->val.smin = max_t(s64, reg->val.smin,
-			      reg->var_off.value | (reg->var_off.mask & S64_MIN));
+			      reg->val.var_off.value | (reg->val.var_off.mask & S64_MIN));
 	/* max signed is min(sign bit) | max(other bits) */
 	reg->val.smax = min_t(s64, reg->val.smax,
-			      reg->var_off.value | (reg->var_off.mask & S64_MAX));
-	reg->val.umin = max(reg->val.umin, reg->var_off.value);
+			      reg->val.var_off.value | (reg->val.var_off.mask & S64_MAX));
+	reg->val.umin = max(reg->val.umin, reg->val.var_off.value);
 	reg->val.umax = min(reg->val.umax,
-			    reg->var_off.value | reg->var_off.mask);
+			    reg->val.var_off.value | reg->val.var_off.mask);
 }
 
 static void __update_reg_bounds(struct bpf_reg_state *reg)
@@ -2198,14 +2198,14 @@ static void __reg_deduce_bounds(struct bpf_reg_state *reg)
 /* Attempts to improve var_off based on unsigned min/max information */
 static void __reg_bound_offset(struct bpf_reg_state *reg)
 {
-	struct tnum var64_off = tnum_intersect(reg->var_off,
+	struct tnum var64_off = tnum_intersect(reg->val.var_off,
 					       tnum_range(reg->val.umin,
 							  reg->val.umax));
 	struct tnum var32_off = tnum_intersect(tnum_subreg(var64_off),
 					       tnum_range(reg->val.u32_min,
 							  reg->val.u32_max));
 
-	reg->var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
+	reg->val.var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
 }
 
 static void reg_bounds_sync(struct bpf_reg_state *reg)
@@ -2237,8 +2237,8 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		    goto out;
 	}
 
-	if (tnum_is_const(reg->var_off)) {
-		u64 uval = reg->var_off.value;
+	if (tnum_is_const(reg->val.var_off)) {
+		u64 uval = reg->val.var_off.value;
 		s64 sval = (s64)uval;
 
 		if (reg->val.umin != uval || reg->val.umax != uval ||
@@ -2248,8 +2248,8 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		}
 	}
 
-	if (tnum_subreg_is_const(reg->var_off)) {
-		u32 uval32 = tnum_subreg(reg->var_off).value;
+	if (tnum_subreg_is_const(reg->val.var_off)) {
+		u32 uval32 = tnum_subreg(reg->val.var_off).value;
 		s32 sval32 = (s32)uval32;
 
 		if (reg->val.u32_min != uval32 || reg->val.u32_max != uval32 ||
@@ -2267,7 +2267,7 @@ out:
 		reg->val.smin, reg->val.smax,
 		reg->val.u32_min, reg->val.u32_max,
 		reg->val.s32_min, reg->val.s32_max,
-		reg->var_off.value, reg->var_off.mask);
+		reg->val.var_off.value, reg->val.var_off.mask);
 	if (env->test_reg_invariants)
 		return -EFAULT;
 	__mark_reg_unbounded(reg);
@@ -2305,11 +2305,11 @@ static void __mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 	 * Clear type, off, and union(map_ptr, range) and
 	 * padding between 'type' and union
 	 */
-	memset(reg, 0, offsetof(struct bpf_reg_state, var_off));
+	memset(reg, 0, offsetof(struct bpf_reg_state, val));
 	reg->type = SCALAR_VALUE;
 	reg->id = 0;
 	reg->ref_obj_id = 0;
-	reg->var_off = tnum_unknown;
+	reg->val.var_off = tnum_unknown;
 	reg->frameno = 0;
 	reg->precise = false;
 	__mark_reg_unbounded(reg);
@@ -3041,7 +3041,7 @@ static int mark_reg_read(struct bpf_verifier_env *env,
 		if (parent->live & REG_LIVE_DONE) {
 			verbose(env, "verifier BUG type %s var_off %lld off %d\n",
 				reg_type_str(env, parent->type),
-				parent->var_off.value, parent->off);
+				parent->val.var_off.value, parent->off);
 			return -EFAULT;
 		}
 		/* The first condition is more likely to be true than the
@@ -4414,20 +4414,20 @@ static bool is_spillable_regtype(enum bpf_reg_type type)
 /* Does this register contain a constant zero? */
 static bool register_is_null(struct bpf_reg_state *reg)
 {
-	return reg->type == SCALAR_VALUE && tnum_equals_const(reg->var_off, 0);
+	return reg->type == SCALAR_VALUE && tnum_equals_const(reg->val.var_off, 0);
 }
 
 /* check if register is a constant scalar value */
 static bool is_reg_const(struct bpf_reg_state *reg, bool subreg32)
 {
 	return reg->type == SCALAR_VALUE &&
-	       tnum_is_const(subreg32 ? tnum_subreg(reg->var_off) : reg->var_off);
+	       tnum_is_const(subreg32 ? tnum_subreg(reg->val.var_off) : reg->val.var_off);
 }
 
 /* assuming is_reg_const() is true, return constant value of a register */
 static u64 reg_const_value(struct bpf_reg_state *reg, bool subreg32)
 {
-	return subreg32 ? tnum_subreg(reg->var_off).value : reg->var_off.value;
+	return subreg32 ? tnum_subreg(reg->val.var_off).value : reg->val.var_off.value;
 }
 
 static bool __is_pointer_value(bool allow_ptr_leaks,
@@ -4455,7 +4455,7 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 		src_reg->off = 0;
 	}
 
-	if (!src_reg->id && !tnum_is_const(src_reg->var_off))
+	if (!src_reg->id && !tnum_is_const(src_reg->val.var_off))
 		/* Ensure that src_reg has a valid ID that will be copied to
 		 * dst_reg and then will be used by find_equal_scalars() to
 		 * propagate min/max range.
@@ -4718,7 +4718,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		    is_spilled_scalar_reg(&state->stack[spi])) {
 			struct bpf_reg_state *spill_reg = &state->stack[spi].spilled_ptr;
 
-			if (tnum_equals_const(spill_reg->var_off, 0)) {
+			if (tnum_equals_const(spill_reg->val.var_off, 0)) {
 				zero_used = true;
 				continue;
 			}
@@ -4878,7 +4878,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				}
 
 				if (spill_cnt == size &&
-				    tnum_equals_const(reg->var_off, 0)) {
+				    tnum_equals_const(reg->val.var_off, 0)) {
 					__mark_reg_const_zero(env, &state->regs[dst_regno]);
 					/* this IS register fill, so keep insn_flags */
 				} else if (zero_cnt == size) {
@@ -5002,7 +5002,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = func(env, reg);
 	int err;
 	/* Some accesses are only permitted with a static offset. */
-	bool var_off = !tnum_is_const(reg->var_off);
+	bool var_off = !tnum_is_const(reg->val.var_off);
 
 	/* The offset is required to be static when reads don't go to a
 	 * register, in order to not leak pointers (see
@@ -5011,7 +5011,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	if (dst_regno < 0 && var_off) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env, "variable offset stack pointer cannot be passed into helper function; var_off=%s off=%d size=%d\n",
 			tn_buf, off, size);
 		return -EACCES;
@@ -5026,7 +5026,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	 * writes could still lead to unsafe speculative behaviour.
 	 */
 	if (!var_off) {
-		off += reg->var_off.value;
+		off += reg->val.var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
 						 dst_regno);
 	} else {
@@ -5059,8 +5059,8 @@ static int check_stack_write(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = func(env, reg);
 	int err;
 
-	if (tnum_is_const(reg->var_off)) {
-		off += reg->var_off.value;
+	if (tnum_is_const(reg->val.var_off)) {
+		off += reg->val.var_off.value;
 		err = check_stack_write_fixed_off(env, state, off, size,
 						  value_regno, insn_idx);
 	} else {
@@ -5208,10 +5208,10 @@ static int __check_ptr_off_reg(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+	if (!tnum_is_const(reg->val.var_off) || reg->val.var_off.value) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env, "variable %s access var_off=%s disallowed\n",
 			reg_type_str(env, reg->type), tn_buf);
 		return -EACCES;
@@ -5393,8 +5393,8 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	/* Things we already checked for in check_map_access and caller:
 	 *  - Reject cases where variable offset may touch kptr
 	 *  - size of access (must be BPF_DW)
-	 *  - tnum_is_const(reg->var_off)
-	 *  - kptr_field->offset == off + reg->var_off.value
+	 *  - tnum_is_const(reg->val.var_off)
+	 *  - kptr_field->offset == off + reg->val.var_off.value
 	 */
 	/* Only BPF_[LDX,STX,ST] | BPF_MEM | BPF_DW is supported */
 	if (BPF_MODE(insn->code) != BPF_MEM) {
@@ -5474,13 +5474,13 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 					verbose(env, "kptr cannot be accessed indirectly by helper\n");
 					return -EACCES;
 				}
-				if (!tnum_is_const(reg->var_off)) {
+				if (!tnum_is_const(reg->val.var_off)) {
 					verbose(env, "kptr access cannot have variable offset\n");
 					return -EACCES;
 				}
-				if (p != off + reg->var_off.value) {
+				if (p != off + reg->val.var_off.value) {
 					verbose(env, "kptr access misaligned expected=%u off=%llu\n",
-						p, off + reg->var_off.value);
+						p, off + reg->val.var_off.value);
 					return -EACCES;
 				}
 				if (size != bpf_size_to_bytes(BPF_DW)) {
@@ -5783,11 +5783,11 @@ static int check_pkt_ptr_alignment(struct bpf_verifier_env *env,
 	 */
 	ip_align = 2;
 
-	reg_off = tnum_add(reg->var_off, tnum_const(ip_align + reg->off + off));
+	reg_off = tnum_add(reg->val.var_off, tnum_const(ip_align + reg->off + off));
 	if (!tnum_is_aligned(reg_off, size)) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env,
 			"misaligned packet access off %d+%s+%d+%d size %d\n",
 			ip_align, tn_buf, reg->off, off, size);
@@ -5808,11 +5808,11 @@ static int check_generic_ptr_alignment(struct bpf_verifier_env *env,
 	if (!strict || size == 1)
 		return 0;
 
-	reg_off = tnum_add(reg->var_off, tnum_const(reg->off + off));
+	reg_off = tnum_add(reg->val.var_off, tnum_const(reg->off + off));
 	if (!tnum_is_aligned(reg_off, size)) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env, "misaligned %saccess off %s+%d+%d size %d\n",
 			pointer_desc, tn_buf, reg->off, off, size);
 		return -EACCES;
@@ -6074,10 +6074,10 @@ static int __check_buffer_access(struct bpf_verifier_env *env,
 			regno, buf_info, off, size);
 		return -EACCES;
 	}
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+	if (!tnum_is_const(reg->val.var_off) || reg->val.var_off.value) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env,
 			"R%d invalid variable buffer offset: off=%d, var_off=%s\n",
 			regno, off, tn_buf);
@@ -6125,7 +6125,7 @@ static int check_buffer_access(struct bpf_verifier_env *env,
 /* BPF architecture zero extends alu32 ops into 64-bit registesr */
 static void zext_32_to_64(struct bpf_reg_state *reg)
 {
-	reg->var_off = tnum_subreg(reg->var_off);
+	reg->val.var_off = tnum_subreg(reg->val.var_off);
 	__reg_assign_32_into_64(reg);
 }
 
@@ -6137,7 +6137,7 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 	u64 mask;
 
 	/* clear high bits in bit representation */
-	reg->var_off = tnum_cast(reg->var_off, size);
+	reg->val.var_off = tnum_cast(reg->val.var_off, size);
 
 	/* fix arithmetic bounds */
 	mask = ((u64)1 << (size * 8)) - 1;
@@ -6177,7 +6177,7 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 	reg->val.umin = reg->val.u32_min = 0;
 	reg->val.umax = U64_MAX;
 	reg->val.u32_max = U32_MAX;
-	reg->var_off = tnum_unknown;
+	reg->val.var_off = tnum_unknown;
 }
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
@@ -6186,17 +6186,17 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 	u64 top_smax_value, top_smin_value;
 	u64 num_bits = size * 8;
 
-	if (tnum_is_const(reg->var_off)) {
-		u64_cval = reg->var_off.value;
+	if (tnum_is_const(reg->val.var_off)) {
+		u64_cval = reg->val.var_off.value;
 		if (size == 1)
-			reg->var_off = tnum_const((s8)u64_cval);
+			reg->val.var_off = tnum_const((s8)u64_cval);
 		else if (size == 2)
-			reg->var_off = tnum_const((s16)u64_cval);
+			reg->val.var_off = tnum_const((s16)u64_cval);
 		else
 			/* size == 4 */
-			reg->var_off = tnum_const((s32)u64_cval);
+			reg->val.var_off = tnum_const((s32)u64_cval);
 
-		u64_cval = reg->var_off.value;
+		u64_cval = reg->val.var_off.value;
 		reg->val.smax = reg->val.smin = u64_cval;
 		reg->val.umax = reg->val.umin = u64_cval;
 		reg->val.s32_max = reg->val.s32_min = u64_cval;
@@ -6231,7 +6231,7 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 		reg->val.smax = reg->val.s32_max = s64_max;
 		reg->val.umin = reg->val.u32_min = s64_min;
 		reg->val.umax = reg->val.u32_max = s64_max;
-		reg->var_off = tnum_range(s64_min, s64_max);
+		reg->val.var_off = tnum_range(s64_min, s64_max);
 		return;
 	}
 
@@ -6259,14 +6259,14 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 	u32 top_smax_value, top_smin_value;
 	u32 num_bits = size * 8;
 
-	if (tnum_is_const(reg->var_off)) {
-		u32_val = reg->var_off.value;
+	if (tnum_is_const(reg->val.var_off)) {
+		u32_val = reg->val.var_off.value;
 		if (size == 1)
-			reg->var_off = tnum_const((s8)u32_val);
+			reg->val.var_off = tnum_const((s8)u32_val);
 		else
-			reg->var_off = tnum_const((s16)u32_val);
+			reg->val.var_off = tnum_const((s16)u32_val);
 
-		u32_val = reg->var_off.value;
+		u32_val = reg->val.var_off.value;
 		reg->val.s32_min = reg->val.s32_max = u32_val;
 		reg->val.u32_min = reg->val.u32_max = u32_val;
 		return;
@@ -6501,10 +6501,10 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			regno, tname, off);
 		return -EACCES;
 	}
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+	if (!tnum_is_const(reg->val.var_off) || reg->val.var_off.value) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env,
 			"R%d is ptr_%s invalid variable offset: off=%d, var_off=%s\n",
 			regno, tname, off, tn_buf);
@@ -6727,8 +6727,8 @@ static int check_stack_access_within_bounds(
 	else
 		err_extra = " write to";
 
-	if (tnum_is_const(reg->var_off)) {
-		min_off = (s64)reg->var_off.value + off;
+	if (tnum_is_const(reg->val.var_off)) {
+		min_off = (s64)reg->val.var_off.value + off;
 		max_off = min_off + access_size;
 	} else {
 		if (reg->val.smax >= BPF_MAX_VAR_OFF ||
@@ -6751,13 +6751,13 @@ static int check_stack_access_within_bounds(
 		err = -EFAULT; /* invalid negative access size; integer overflow? */
 
 	if (err) {
-		if (tnum_is_const(reg->var_off)) {
+		if (tnum_is_const(reg->val.var_off)) {
 			verbose(env, "invalid%s stack R%d off=%d size=%d\n",
 				err_extra, regno, off, access_size);
 		} else {
 			char tn_buf[48];
 
-			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+			tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 			verbose(env, "invalid variable-offset%s stack R%d var_off=%s off=%d size=%d\n",
 				err_extra, regno, tn_buf, off, access_size);
 		}
@@ -6822,19 +6822,19 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_map_access(env, regno, off, size, false, ACCESS_DIRECT);
 		if (err)
 			return err;
-		if (tnum_is_const(reg->var_off))
+		if (tnum_is_const(reg->val.var_off))
 			kptr_field = btf_record_find(reg->map_ptr->record,
-						     off + reg->var_off.value, BPF_KPTR);
+						     off + reg->val.var_off.value, BPF_KPTR);
 		if (kptr_field) {
 			err = check_map_kptr_access(env, regno, value_regno, insn_idx, kptr_field);
 		} else if (t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
 			/* if map is read-only, track its contents as scalars */
-			if (tnum_is_const(reg->var_off) &&
+			if (tnum_is_const(reg->val.var_off) &&
 			    bpf_map_is_rdonly(map) &&
 			    map->ops->map_direct_value_addr) {
-				int map_off = off + reg->var_off.value;
+				int map_off = off + reg->val.var_off.value;
 				u64 val = 0;
 
 				err = bpf_map_direct_read(map, map_off, size,
@@ -7173,8 +7173,8 @@ static int check_stack_range_initialized(
 		return err;
 
 
-	if (tnum_is_const(reg->var_off)) {
-		min_off = max_off = reg->var_off.value + off;
+	if (tnum_is_const(reg->val.var_off)) {
+		min_off = max_off = reg->val.var_off.value + off;
 	} else {
 		/* Variable offset is prohibited for unprivileged mode for
 		 * simplicity since it requires corresponding support in
@@ -7184,7 +7184,7 @@ static int check_stack_range_initialized(
 		if (!env->bypass_spec_v1) {
 			char tn_buf[48];
 
-			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+			tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 			verbose(env, "R%d%s variable offset stack access prohibited for !root, var_off=%s\n",
 				regno, err_extra, tn_buf);
 			return -EACCES;
@@ -7266,13 +7266,13 @@ static int check_stack_range_initialized(
 			goto mark;
 		}
 
-		if (tnum_is_const(reg->var_off)) {
+		if (tnum_is_const(reg->val.var_off)) {
 			verbose(env, "invalid%s read from stack R%d off %d+%d size %d\n",
 				err_extra, regno, min_off, i - min_off, access_size);
 		} else {
 			char tn_buf[48];
 
-			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+			tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 			verbose(env, "invalid%s read from stack R%d var_off %s+%d size %d\n",
 				err_extra, regno, tn_buf, i - min_off, access_size);
 		}
@@ -7412,7 +7412,7 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	/* The register is SCALAR_VALUE; the access check
 	 * happens using its boundaries.
 	 */
-	if (!tnum_is_const(reg->var_off))
+	if (!tnum_is_const(reg->val.var_off))
 		/* For unprivileged variable accesses, disable raw
 		 * mode so that the program is required to
 		 * initialize all the memory that the helper could
@@ -7532,8 +7532,8 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	struct bpf_verifier_state *cur = env->cur_state;
-	bool is_const = tnum_is_const(reg->var_off);
-	u64 val = reg->var_off.value;
+	bool is_const = tnum_is_const(reg->val.var_off);
+	u64 val = reg->val.var_off.value;
 	struct bpf_map *map = NULL;
 	struct btf *btf = NULL;
 	struct btf_record *rec;
@@ -7608,9 +7608,9 @@ static int process_timer_func(struct bpf_verifier_env *env, int regno,
 			      struct bpf_call_arg_meta *meta)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
-	bool is_const = tnum_is_const(reg->var_off);
+	bool is_const = tnum_is_const(reg->val.var_off);
 	struct bpf_map *map = reg->map_ptr;
-	u64 val = reg->var_off.value;
+	u64 val = reg->val.var_off.value;
 
 	if (!is_const) {
 		verbose(env,
@@ -7646,7 +7646,7 @@ static int process_wq_func(struct bpf_verifier_env *env, int regno,
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	struct bpf_map *map = reg->map_ptr;
-	u64 val = reg->var_off.value;
+	u64 val = reg->val.var_off.value;
 
 	if (map->record->wq_off != val + reg->off) {
 		verbose(env, "off %lld doesn't point to 'struct bpf_wq' that is at %d\n",
@@ -7666,7 +7666,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 	struct btf_field *kptr_field;
 	u32 kptr_off;
 
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		verbose(env,
 			"R%d doesn't have constant offset. kptr has to be at the constant offset\n",
 			regno);
@@ -7683,7 +7683,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 	}
 
 	meta->map_ptr = map_ptr;
-	kptr_off = reg->off + reg->var_off.value;
+	kptr_off = reg->off + reg->val.var_off.value;
 	kptr_field = btf_record_find(map_ptr->record, kptr_off, BPF_KPTR);
 	if (!kptr_field) {
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
@@ -8603,7 +8603,7 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		verbose(env, "R%d is not a constant address'\n", regno);
 		return -EACCES;
 	}
@@ -8619,7 +8619,7 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
-	map_off = reg->off + reg->var_off.value;
+	map_off = reg->off + reg->val.var_off.value;
 	err = map->ops->map_direct_value_addr(map, &map_addr, map_off);
 	if (err) {
 		verbose(env, "direct value access on string failed\n");
@@ -8855,12 +8855,12 @@ skip_type_check:
 			return err;
 		break;
 	case ARG_CONST_ALLOC_SIZE_OR_ZERO:
-		if (!tnum_is_const(reg->var_off)) {
+		if (!tnum_is_const(reg->val.var_off)) {
 			verbose(env, "R%d is not a known constant'\n",
 				regno);
 			return -EACCES;
 		}
-		meta->mem_size = reg->var_off.value;
+		meta->mem_size = reg->val.var_off.value;
 		err = mark_chain_precision(env, regno);
 		if (err)
 			return err;
@@ -10120,7 +10120,7 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	}
 
 	reg = &regs[BPF_REG_3];
-	val = reg->var_off.value;
+	val = reg->val.var_off.value;
 	max = map->max_entries;
 
 	if (!(is_reg_const(reg, false) && val < max)) {
@@ -10170,14 +10170,14 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 	char *fmt;
 
 	/* data must be an array of u64 */
-	if (data_len_reg->var_off.value % 8)
+	if (data_len_reg->val.var_off.value % 8)
 		return -EINVAL;
-	num_args = data_len_reg->var_off.value / 8;
+	num_args = data_len_reg->val.var_off.value / 8;
 
 	/* fmt being ARG_PTR_TO_CONST_STR guarantees that var_off is const
 	 * and map_direct_value_addr is set.
 	 */
-	fmt_map_off = fmt_reg->off + fmt_reg->var_off.value;
+	fmt_map_off = fmt_reg->off + fmt_reg->val.var_off.value;
 	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
 						  fmt_map_off);
 	if (err) {
@@ -11595,7 +11595,7 @@ __process_kf_arg_ptr_to_graph_root(struct bpf_verifier_env *env,
 		return -EFAULT;
 
 	head_type_name = btf_field_type_name(head_field_type);
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		verbose(env,
 			"R%d doesn't have constant offset. %s has to be at the constant offset\n",
 			regno, head_type_name);
@@ -11603,7 +11603,7 @@ __process_kf_arg_ptr_to_graph_root(struct bpf_verifier_env *env,
 	}
 
 	rec = reg_btf_record(reg);
-	head_off = reg->off + reg->var_off.value;
+	head_off = reg->off + reg->val.var_off.value;
 	field = btf_record_find(rec, head_off, head_field_type);
 	if (!field) {
 		verbose(env, "%s not found at offset=%u\n", head_type_name, head_off);
@@ -11663,14 +11663,14 @@ __process_kf_arg_ptr_to_graph_node(struct bpf_verifier_env *env,
 		return -EFAULT;
 
 	node_type_name = btf_field_type_name(node_field_type);
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		verbose(env,
 			"R%d doesn't have constant offset. %s has to be at the constant offset\n",
 			regno, node_type_name);
 		return -EINVAL;
 	}
 
-	node_off = reg->off + reg->var_off.value;
+	node_off = reg->off + reg->val.var_off.value;
 	field = reg_find_field_offset(reg, node_off, node_field_type);
 	if (!field) {
 		verbose(env, "%s not found at offset=%u\n", node_type_name, node_off);
@@ -11791,7 +11791,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					verbose(env, "verifier internal error: only one constant argument permitted\n");
 					return -EFAULT;
 				}
-				if (!tnum_is_const(reg->var_off)) {
+				if (!tnum_is_const(reg->val.var_off)) {
 					verbose(env, "R%d must be a known constant\n", regno);
 					return -EINVAL;
 				}
@@ -11799,7 +11799,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				if (ret < 0)
 					return ret;
 				meta->arg_constant.found = true;
-				meta->arg_constant.value = reg->var_off.value;
+				meta->arg_constant.value = reg->val.var_off.value;
 			} else if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdonly_buf_size")) {
 				meta->r0_rdonly = true;
 				is_ret_buf_sz = true;
@@ -11813,12 +11813,12 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 
-				if (!tnum_is_const(reg->var_off)) {
+				if (!tnum_is_const(reg->val.var_off)) {
 					verbose(env, "R%d is not a const\n", regno);
 					return -EINVAL;
 				}
 
-				meta->r0_size = reg->var_off.value;
+				meta->r0_size = reg->val.var_off.value;
 				ret = mark_chain_precision(env, regno);
 				if (ret)
 					return ret;
@@ -12158,12 +12158,12 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					verbose(env, "verifier internal error: only one constant argument permitted\n");
 					return -EFAULT;
 				}
-				if (!tnum_is_const(size_reg->var_off)) {
+				if (!tnum_is_const(size_reg->val.var_off)) {
 					verbose(env, "R%d must be a known constant\n", regno + 1);
 					return -EINVAL;
 				}
 				meta->arg_constant.found = true;
-				meta->arg_constant.value = size_reg->var_off.value;
+				meta->arg_constant.value = size_reg->val.var_off.value;
 			}
 
 			/* Skip next '__sz' or '__szk' argument */
@@ -12726,8 +12726,8 @@ static bool check_reg_sane_offset(struct bpf_verifier_env *env,
 				  const struct bpf_reg_state *reg,
 				  enum bpf_reg_type type)
 {
-	bool known = tnum_is_const(reg->var_off);
-	s64 val = reg->var_off.value;
+	bool known = tnum_is_const(reg->val.var_off);
+	s64 val = reg->val.var_off.value;
 	s64 smin = reg->val.smin;
 
 	if (known && (val >= BPF_MAX_VAR_OFF || val <= -BPF_MAX_VAR_OFF)) {
@@ -12778,7 +12778,7 @@ static int retrieve_ptr_limit(const struct bpf_reg_state *ptr_reg,
 		 * currently prohibited for unprivileged.
 		 */
 		max = MAX_BPF_STACK + mask_to_left;
-		ptr_limit = -(ptr_reg->var_off.value + ptr_reg->off);
+		ptr_limit = -(ptr_reg->val.var_off.value + ptr_reg->off);
 		break;
 	case PTR_TO_MAP_VALUE:
 		max = ptr_reg->map_ptr->value_size;
@@ -12871,7 +12871,7 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 {
 	struct bpf_insn_aux_data *aux = commit_window ? cur_aux(env) : &info->aux;
 	struct bpf_verifier_state *vstate = env->cur_state;
-	bool off_is_imm = tnum_is_const(off_reg->var_off);
+	bool off_is_imm = tnum_is_const(off_reg->val.var_off);
 	bool off_is_neg = off_reg->val.smin < 0;
 	bool ptr_is_dst_reg = ptr_reg == dst_reg;
 	u8 opcode = BPF_OP(insn->code);
@@ -12891,7 +12891,7 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 		goto do_sim;
 
 	if (!commit_window) {
-		if (!tnum_is_const(off_reg->var_off) &&
+		if (!tnum_is_const(off_reg->val.var_off) &&
 		    (off_reg->val.smin < 0) != (off_reg->val.smax < 0))
 			return REASON_BOUNDS;
 
@@ -13025,10 +13025,10 @@ static int check_stack_access_for_ptr_arithmetic(
 				const struct bpf_reg_state *reg,
 				int off)
 {
-	if (!tnum_is_const(reg->var_off)) {
+	if (!tnum_is_const(reg->val.var_off)) {
 		char tn_buf[48];
 
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+		tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 		verbose(env, "R%d variable stack access prohibited for !root, var_off=%s off=%d\n",
 			regno, tn_buf, off);
 		return -EACCES;
@@ -13058,7 +13058,7 @@ static int sanitize_check_bounds(struct bpf_verifier_env *env,
 	switch (dst_reg->type) {
 	case PTR_TO_STACK:
 		if (check_stack_access_for_ptr_arithmetic(env, dst, dst_reg,
-					dst_reg->off + dst_reg->var_off.value))
+					dst_reg->off + dst_reg->val.var_off.value))
 			return -EACCES;
 		break;
 	case PTR_TO_MAP_VALUE:
@@ -13088,7 +13088,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg;
-	bool known = tnum_is_const(off_reg->var_off);
+	bool known = tnum_is_const(off_reg->val.var_off);
 	s64 smin_val = off_reg->val.smin, smax_val = off_reg->val.smax,
 	    smin_ptr = ptr_reg->val.smin, smax_ptr = ptr_reg->val.smax;
 	u64 umin_val = off_reg->val.umin, umax_val = off_reg->val.umax,
@@ -13191,7 +13191,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->val.smax = smax_ptr;
 			dst_reg->val.umin = umin_ptr;
 			dst_reg->val.umax = umax_ptr;
-			dst_reg->var_off = ptr_reg->var_off;
+			dst_reg->val.var_off = ptr_reg->val.var_off;
 			dst_reg->off = ptr_reg->off + smin_val;
 			dst_reg->raw = ptr_reg->raw;
 			break;
@@ -13221,7 +13221,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->val.umin = umin_cur;
 			dst_reg->val.umax = umax_cur;
 		}
-		dst_reg->var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
+		dst_reg->val.var_off = tnum_add(ptr_reg->val.var_off, off_reg->val.var_off);
 		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
 		if (reg_is_pkt_pointer(ptr_reg)) {
@@ -13253,7 +13253,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->val.smax = smax_ptr;
 			dst_reg->val.umin = umin_ptr;
 			dst_reg->val.umax = umax_ptr;
-			dst_reg->var_off = ptr_reg->var_off;
+			dst_reg->val.var_off = ptr_reg->val.var_off;
 			dst_reg->id = ptr_reg->id;
 			dst_reg->off = ptr_reg->off - smin_val;
 			dst_reg->raw = ptr_reg->raw;
@@ -13280,7 +13280,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->val.umin = umin_ptr - umax_val;
 			dst_reg->val.umax = umax_ptr - umin_val;
 		}
-		dst_reg->var_off = tnum_sub(ptr_reg->var_off, off_reg->var_off);
+		dst_reg->val.var_off = tnum_sub(ptr_reg->val.var_off, off_reg->val.var_off);
 		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
 		if (reg_is_pkt_pointer(ptr_reg)) {
@@ -13500,9 +13500,9 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
-	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
+	bool src_known = tnum_subreg_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_subreg_is_const(dst_reg->val.var_off);
+	struct tnum var32_off = tnum_subreg(dst_reg->val.var_off);
 	u32 umax_val = src_reg->val.u32_max;
 
 	if (src_known && dst_known) {
@@ -13531,19 +13531,19 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
+	bool src_known = tnum_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_is_const(dst_reg->val.var_off);
 	u64 umax_val = src_reg->val.umax;
 
 	if (src_known && dst_known) {
-		__mark_reg_known(dst_reg, dst_reg->var_off.value);
+		__mark_reg_known(dst_reg, dst_reg->val.var_off.value);
 		return;
 	}
 
 	/* We get our minimum from the var_off, since that's inherently
 	 * bitwise.  Our maximum is the minimum of the operands' maxima.
 	 */
-	dst_reg->val.umin = dst_reg->var_off.value;
+	dst_reg->val.umin = dst_reg->val.var_off.value;
 	dst_reg->val.umax = min(dst_reg->val.umax, umax_val);
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
@@ -13563,9 +13563,9 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 				struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
-	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
+	bool src_known = tnum_subreg_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_subreg_is_const(dst_reg->val.var_off);
+	struct tnum var32_off = tnum_subreg(dst_reg->val.var_off);
 	u32 umin_val = src_reg->val.u32_min;
 
 	if (src_known && dst_known) {
@@ -13594,12 +13594,12 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 			      struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
+	bool src_known = tnum_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_is_const(dst_reg->val.var_off);
 	u64 umin_val = src_reg->val.umin;
 
 	if (src_known && dst_known) {
-		__mark_reg_known(dst_reg, dst_reg->var_off.value);
+		__mark_reg_known(dst_reg, dst_reg->val.var_off.value);
 		return;
 	}
 
@@ -13607,7 +13607,7 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 	 * maximum of the operands' minima
 	 */
 	dst_reg->val.umin = max(dst_reg->val.umin, umin_val);
-	dst_reg->val.umax = dst_reg->var_off.value | dst_reg->var_off.mask;
+	dst_reg->val.umax = dst_reg->val.var_off.value | dst_reg->val.var_off.mask;
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
 	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
@@ -13626,9 +13626,9 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
-	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
+	bool src_known = tnum_subreg_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_subreg_is_const(dst_reg->val.var_off);
+	struct tnum var32_off = tnum_subreg(dst_reg->val.var_off);
 
 	if (src_known && dst_known) {
 		__mark_reg32_known(dst_reg, var32_off.value);
@@ -13654,18 +13654,18 @@ static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
+	bool src_known = tnum_is_const(src_reg->val.var_off);
+	bool dst_known = tnum_is_const(dst_reg->val.var_off);
 
 	if (src_known && dst_known) {
-		/* dst_reg->var_off.value has been updated earlier */
-		__mark_reg_known(dst_reg, dst_reg->var_off.value);
+		/* dst_reg->val.var_off.value has been updated earlier */
+		__mark_reg_known(dst_reg, dst_reg->val.var_off.value);
 		return;
 	}
 
 	/* We get both minimum and maximum from the var_off. */
-	dst_reg->val.umin = dst_reg->var_off.value;
-	dst_reg->val.umax = dst_reg->var_off.value | dst_reg->var_off.mask;
+	dst_reg->val.umin = dst_reg->val.var_off.value;
+	dst_reg->val.umax = dst_reg->val.var_off.value | dst_reg->val.var_off.mask;
 
 	/* Safe to set s64 bounds by casting u64 result into s64 when u64
 	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
@@ -13705,10 +13705,10 @@ static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 	u32 umax_val = src_reg->val.u32_max;
 	u32 umin_val = src_reg->val.u32_min;
 	/* u32 alu operation will zext upper bits */
-	struct tnum subreg = tnum_subreg(dst_reg->var_off);
+	struct tnum subreg = tnum_subreg(dst_reg->val.var_off);
 
 	__scalar32_min_max_lsh(dst_reg, umin_val, umax_val);
-	dst_reg->var_off = tnum_subreg(tnum_lshift(subreg, umin_val));
+	dst_reg->val.var_off = tnum_subreg(tnum_lshift(subreg, umin_val));
 	/* Not required but being careful mark reg64 bounds as unknown so
 	 * that we are forced to pick them up from tnum and zext later and
 	 * if some path skips this step we are still safe.
@@ -13757,7 +13757,7 @@ static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
 	__scalar64_min_max_lsh(dst_reg, umin_val, umax_val);
 	__scalar32_min_max_lsh(dst_reg, umin_val, umax_val);
 
-	dst_reg->var_off = tnum_lshift(dst_reg->var_off, umin_val);
+	dst_reg->val.var_off = tnum_lshift(dst_reg->val.var_off, umin_val);
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
 }
@@ -13765,7 +13765,7 @@ static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	struct tnum subreg = tnum_subreg(dst_reg->var_off);
+	struct tnum subreg = tnum_subreg(dst_reg->val.var_off);
 	u32 umax_val = src_reg->val.u32_max;
 	u32 umin_val = src_reg->val.u32_min;
 
@@ -13786,7 +13786,7 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 	dst_reg->val.s32_min = S32_MIN;
 	dst_reg->val.s32_max = S32_MAX;
 
-	dst_reg->var_off = tnum_rshift(subreg, umin_val);
+	dst_reg->val.var_off = tnum_rshift(subreg, umin_val);
 	dst_reg->val.u32_min >>= umax_val;
 	dst_reg->val.u32_max >>= umin_val;
 
@@ -13816,7 +13816,7 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->val.smin = S64_MIN;
 	dst_reg->val.smax = S64_MAX;
-	dst_reg->var_off = tnum_rshift(dst_reg->var_off, umin_val);
+	dst_reg->val.var_off = tnum_rshift(dst_reg->val.var_off, umin_val);
 	dst_reg->val.umin >>= umax_val;
 	dst_reg->val.umax >>= umin_val;
 
@@ -13839,7 +13839,7 @@ static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
 	dst_reg->val.s32_min = (u32)(((s32)dst_reg->val.s32_min) >> umin_val);
 	dst_reg->val.s32_max = (u32)(((s32)dst_reg->val.s32_max) >> umin_val);
 
-	dst_reg->var_off = tnum_arshift(tnum_subreg(dst_reg->var_off), umin_val, 32);
+	dst_reg->val.var_off = tnum_arshift(tnum_subreg(dst_reg->val.var_off), umin_val, 32);
 
 	/* blow away the dst_reg val.umin/val.umax and rely on
 	 * dst_reg var_off to refine the result.
@@ -13862,7 +13862,7 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 	dst_reg->val.smin >>= umin_val;
 	dst_reg->val.smax >>= umin_val;
 
-	dst_reg->var_off = tnum_arshift(dst_reg->var_off, umin_val, 64);
+	dst_reg->val.var_off = tnum_arshift(dst_reg->val.var_off, umin_val, 64);
 
 	/* blow away the dst_reg val.umin/val.umax and rely on
 	 * dst_reg var_off to refine the result.
@@ -13885,12 +13885,12 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
 
 	if (insn_bitness == 32) {
-		if (tnum_subreg_is_const(src_reg->var_off)
+		if (tnum_subreg_is_const(src_reg->val.var_off)
 		    && src_reg->val.s32_min == src_reg->val.s32_max
 		    && src_reg->val.u32_min == src_reg->val.u32_max)
 			src_is_const = true;
 	} else {
-		if (tnum_is_const(src_reg->var_off)
+		if (tnum_is_const(src_reg->val.var_off)
 		    && src_reg->val.smin == src_reg->val.smax
 		    && src_reg->val.umin == src_reg->val.umax)
 			src_is_const = true;
@@ -13960,30 +13960,30 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	case BPF_ADD:
 		scalar32_min_max_add(dst_reg, &src_reg);
 		scalar_min_max_add(dst_reg, &src_reg);
-		dst_reg->var_off = tnum_add(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_add(dst_reg->val.var_off, src_reg.val.var_off);
 		break;
 	case BPF_SUB:
 		scalar32_min_max_sub(dst_reg, &src_reg);
 		scalar_min_max_sub(dst_reg, &src_reg);
-		dst_reg->var_off = tnum_sub(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_sub(dst_reg->val.var_off, src_reg.val.var_off);
 		break;
 	case BPF_MUL:
-		dst_reg->var_off = tnum_mul(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_mul(dst_reg->val.var_off, src_reg.val.var_off);
 		scalar32_min_max_mul(dst_reg, &src_reg);
 		scalar_min_max_mul(dst_reg, &src_reg);
 		break;
 	case BPF_AND:
-		dst_reg->var_off = tnum_and(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_and(dst_reg->val.var_off, src_reg.val.var_off);
 		scalar32_min_max_and(dst_reg, &src_reg);
 		scalar_min_max_and(dst_reg, &src_reg);
 		break;
 	case BPF_OR:
-		dst_reg->var_off = tnum_or(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_or(dst_reg->val.var_off, src_reg.val.var_off);
 		scalar32_min_max_or(dst_reg, &src_reg);
 		scalar_min_max_or(dst_reg, &src_reg);
 		break;
 	case BPF_XOR:
-		dst_reg->var_off = tnum_xor(dst_reg->var_off, src_reg.var_off);
+		dst_reg->val.var_off = tnum_xor(dst_reg->val.var_off, src_reg.val.var_off);
 		scalar32_min_max_xor(dst_reg, &src_reg);
 		scalar_min_max_xor(dst_reg, &src_reg);
 		break;
@@ -14477,8 +14477,8 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
 				  u8 opcode, bool is_jmp32)
 {
-	struct tnum t1 = is_jmp32 ? tnum_subreg(reg1->var_off) : reg1->var_off;
-	struct tnum t2 = is_jmp32 ? tnum_subreg(reg2->var_off) : reg2->var_off;
+	struct tnum t1 = is_jmp32 ? tnum_subreg(reg1->val.var_off) : reg1->val.var_off;
+	struct tnum t2 = is_jmp32 ? tnum_subreg(reg2->val.var_off) : reg2->val.var_off;
 	u64 umin1 = is_jmp32 ? (u64)reg1->val.u32_min : reg1->val.umin;
 	u64 umax1 = is_jmp32 ? (u64)reg1->val.u32_max : reg1->val.umax;
 	s64 smin1 = is_jmp32 ? (s64)reg1->val.s32_min : reg1->val.smin;
@@ -14769,9 +14769,9 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 			reg2->val.s32_min = reg1->val.s32_min;
 			reg2->val.s32_max = reg1->val.s32_max;
 
-			t = tnum_intersect(tnum_subreg(reg1->var_off), tnum_subreg(reg2->var_off));
-			reg1->var_off = tnum_with_subreg(reg1->var_off, t);
-			reg2->var_off = tnum_with_subreg(reg2->var_off, t);
+			t = tnum_intersect(tnum_subreg(reg1->val.var_off), tnum_subreg(reg2->val.var_off));
+			reg1->val.var_off = tnum_with_subreg(reg1->val.var_off, t);
+			reg2->val.var_off = tnum_with_subreg(reg2->val.var_off, t);
 		} else {
 			reg1->val.umin = max(reg1->val.umin, reg2->val.umin);
 			reg1->val.umax = min(reg1->val.umax, reg2->val.umax);
@@ -14782,8 +14782,8 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 			reg2->val.smin = reg1->val.smin;
 			reg2->val.smax = reg1->val.smax;
 
-			reg1->var_off = tnum_intersect(reg1->var_off, reg2->var_off);
-			reg2->var_off = reg1->var_off;
+			reg1->val.var_off = tnum_intersect(reg1->val.var_off, reg2->val.var_off);
+			reg2->val.var_off = reg1->val.var_off;
 		}
 		break;
 	case BPF_JNE:
@@ -14844,10 +14844,10 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 		if (!is_power_of_2(val))
 			break;
 		if (is_jmp32) {
-			t = tnum_or(tnum_subreg(reg1->var_off), tnum_const(val));
-			reg1->var_off = tnum_with_subreg(reg1->var_off, t);
+			t = tnum_or(tnum_subreg(reg1->val.var_off), tnum_const(val));
+			reg1->val.var_off = tnum_with_subreg(reg1->val.var_off, t);
 		} else {
-			reg1->var_off = tnum_or(reg1->var_off, tnum_const(val));
+			reg1->val.var_off = tnum_or(reg1->val.var_off, tnum_const(val));
 		}
 		break;
 	case BPF_JSET | BPF_X: /* reverse of BPF_JSET, see rev_opcode() */
@@ -14857,10 +14857,10 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 			break;
 		val = reg_const_value(reg2, is_jmp32);
 		if (is_jmp32) {
-			t = tnum_and(tnum_subreg(reg1->var_off), tnum_const(~val));
-			reg1->var_off = tnum_with_subreg(reg1->var_off, t);
+			t = tnum_and(tnum_subreg(reg1->val.var_off), tnum_const(~val));
+			reg1->val.var_off = tnum_with_subreg(reg1->val.var_off, t);
 		} else {
-			reg1->var_off = tnum_and(reg1->var_off, tnum_const(~val));
+			reg1->val.var_off = tnum_and(reg1->val.var_off, tnum_const(~val));
 		}
 		break;
 	case BPF_JLE:
@@ -14958,7 +14958,7 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 		 * advance offset for the returned pointer. In those cases, it
 		 * is fine to expect to see reg->off.
 		 */
-		if (WARN_ON_ONCE(reg->val.smin || reg->val.smax || !tnum_equals_const(reg->var_off, 0)))
+		if (WARN_ON_ONCE(reg->val.smin || reg->val.smax || !tnum_equals_const(reg->val.var_off, 0)))
 			return;
 		if (!(type_is_ptr_alloc_obj(reg->type) || type_is_non_owning_ref(reg->type)) &&
 		    WARN_ON_ONCE(reg->off))
@@ -15149,7 +15149,7 @@ static void find_equal_scalars(struct bpf_verifier_state *vstate,
 
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
-			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
+			reg->val.var_off = tnum_add(reg->val.var_off, fake_reg.val.var_off);
 		}
 	}));
 }
@@ -15745,7 +15745,7 @@ enforce_retval:
 	}
 
 	if (!tnum_is_unknown(enforce_attach_type_range) &&
-	    tnum_in(enforce_attach_type_range, reg->var_off))
+	    tnum_in(enforce_attach_type_range, reg->val.var_off))
 		env->prog->enforce_expected_attach_type = 1;
 	return 0;
 }
@@ -16808,7 +16808,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * Also verify that new value satisfies old value range knowledge.
 		 */
 		return range_within(rold, rcur) &&
-		       tnum_in(rold->var_off, rcur->var_off) &&
+		       tnum_in(rold->val.var_off, rcur->val.var_off) &&
 		       check_scalar_ids(rold->id, rcur->id, idmap);
 	case PTR_TO_MAP_KEY:
 	case PTR_TO_MAP_VALUE:
@@ -16818,9 +16818,9 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		/* If the new min/max/var_off satisfy the old ones and
 		 * everything else matches, we are OK.
 		 */
-		return memcmp(rold, rcur, offsetof(struct bpf_reg_state, var_off)) == 0 &&
+		return memcmp(rold, rcur, offsetof(struct bpf_reg_state, val)) == 0 &&
 		       range_within(rold, rcur) &&
-		       tnum_in(rold->var_off, rcur->var_off) &&
+		       tnum_in(rold->val.var_off, rcur->val.var_off) &&
 		       check_ids(rold->id, rcur->id, idmap) &&
 		       check_ids(rold->ref_obj_id, rcur->ref_obj_id, idmap);
 	case PTR_TO_PACKET_META:
@@ -16843,7 +16843,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 			return false;
 		/* new val must satisfy old val knowledge */
 		return range_within(rold, rcur) &&
-		       tnum_in(rold->var_off, rcur->var_off);
+		       tnum_in(rold->val.var_off, rcur->val.var_off);
 	case PTR_TO_STACK:
 		/* two stack pointers are equal only if they're pointing to
 		 * the same stack frame, since fp-8 in foo != fp-8 in bar
@@ -17484,7 +17484,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 					 * so we can assume valid iter and reg state,
 					 * no need for extra (re-)validations
 					 */
-					spi = __get_spi(iter_reg->off + iter_reg->var_off.value);
+					spi = __get_spi(iter_reg->off + iter_reg->val.var_off.value);
 					iter_state = &func(env, iter_reg)->stack[spi].spilled_ptr;
 					if (iter_state->iter.state == BPF_ITER_STATE_ACTIVE) {
 						update_loop_entry(cur, &sl->state);

@@ -687,9 +687,9 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	t = reg->type;
 	if (t == SCALAR_VALUE && reg->precise)
 		verbose(env, "P");
-	if (t == SCALAR_VALUE && tnum_is_const(reg->var_off)) {
+	if (t == SCALAR_VALUE && tnum_is_const(reg->val.var_off)) {
 		/* reg->off should be 0 for SCALAR_VALUE */
-		verbose_snum(env, reg->var_off.value + reg->off);
+		verbose_snum(env, reg->val.var_off.value + reg->off);
 		return;
 	}
 
@@ -699,8 +699,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	if (t == PTR_TO_STACK) {
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
-		if (tnum_is_const(reg->var_off)) {
-			verbose_snum(env, reg->var_off.value + reg->off);
+		if (tnum_is_const(reg->val.var_off)) {
+			verbose_snum(env, reg->val.var_off.value + reg->off);
 			return;
 		}
 	}
@@ -736,18 +736,18 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	}
 	if (t == CONST_PTR_TO_DYNPTR)
 		verbose_a("type=%s",  dynptr_type_str(reg->dynptr.type));
-	if (tnum_is_const(reg->var_off)) {
+	if (tnum_is_const(reg->val.var_off)) {
 		/* a pointer register with fixed offset */
-		if (reg->var_off.value) {
+		if (reg->val.var_off.value) {
 			verbose_a("imm=");
-			verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->val.var_off.value);
 		}
 	} else {
 		print_scalar_ranges(env, reg, &sep);
-		if (!tnum_is_unknown(reg->var_off)) {
+		if (!tnum_is_unknown(reg->val.var_off)) {
 			char tn_buf[48];
 
-			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
+			tnum_strn(tn_buf, sizeof(tn_buf), reg->val.var_off);
 			verbose_a("var_off=%s", tn_buf);
 		}
 	}
