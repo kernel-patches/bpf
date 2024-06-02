@@ -24,4 +24,6 @@ struct tval {
 	u32 u32_max; /* maximum possible (u32)value */
 };
 
+void tval_add(struct tval *a, struct tval *b);
+
 #endif /* _LINUX_TVAL_H */
