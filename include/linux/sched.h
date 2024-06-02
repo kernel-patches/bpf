@@ -1088,7 +1088,7 @@ struct task_struct {
 	 *
 	 * - normally initialized setup_new_exec()
 	 * - access it with [gs]et_task_comm()
-	 * - lock it with task_lock()
+	 * - lock it with task_lock() for writing
 	 */
 	char				comm[TASK_COMM_LEN];
 
