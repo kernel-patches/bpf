@@ -3,9 +3,12 @@
 #ifndef _LINUX_TVAL_H
 #define _LINUX_TVAL_H
 
+#include <linux/tnum.h>
 #include <linux/types.h>
 
 struct tval {
+	/* Used to determine the bit pattern of the value in this register */
+	struct tnum var_off;
 	/* Used to determine if any memory access using this register will
 	 * result in a bad access.
 	 * These refer to the same value as var_off, not necessarily the actual
