@@ -2915,6 +2915,33 @@ static inline void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr)
 #endif /* CONFIG_BPF_SYSCALL */
 
 static __always_inline int
+bpf_prog_run_trace(struct bpf_prog *prog, u64 cookie, u64 *ctx,
+		   bpf_prog_run_fn run_prog)
+{
+	struct bpf_run_ctx *old_run_ctx;
+	struct bpf_trace_run_ctx run_ctx;
+	int ret = -1;
+
+	cant_sleep();
+	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
+		bpf_prog_inc_misses_counter(prog);
+		goto out;
+	}
+
+	run_ctx.bpf_cookie = cookie;
+	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+
+	rcu_read_lock();
+	ret = run_prog(prog, ctx);
+	rcu_read_unlock();
+
+	bpf_reset_run_ctx(old_run_ctx);
+out:
+	this_cpu_dec(*(prog->active));
+	return ret;
+}
+
+static __always_inline int
 bpf_probe_read_kernel_common(void *dst, u32 size, const void *unsafe_ptr)
 {
 	int ret = -EFAULT;

@@ -728,9 +728,7 @@ __bpf_prog_test_run_raw_tp(void *data)
 {
 	struct bpf_raw_tp_test_run_info *info = data;
 
-	rcu_read_lock();
-	info->retval = bpf_prog_run(info->prog, info->ctx);
-	rcu_read_unlock();
+	info->retval = bpf_prog_run_trace(info->prog, 0, info->ctx, bpf_prog_run);
 }
 
 int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
