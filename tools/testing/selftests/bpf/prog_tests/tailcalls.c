@@ -3,6 +3,8 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include "tailcall_poke.skel.h"
+#include "tailcall_freplace.skel.h"
+#include "tc_bpf2bpf.skel.h"
 
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
@@ -1187,6 +1189,84 @@ out:
 	tailcall_poke__destroy(call);
 }
 
+static void test_tailcall_freplace(void)
+{
+	struct tailcall_freplace *skel = NULL;
+	struct tc_bpf2bpf *tgt_skel = NULL;
+	struct bpf_link *freplace = NULL;
+	struct bpf_map *data_map;
+	int prog_fd, data_fd;
+	char buff[128] = {};
+	__u32 key = 0;
+	int err, val;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	skel = tailcall_freplace__open();
+	if (!ASSERT_OK_PTR(skel, "open skel"))
+		goto out;
+
+	tgt_skel = tc_bpf2bpf__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "open tgt_skel"))
+		goto out;
+
+	err = bpf_program__set_attach_target(skel->progs.entry,
+					     bpf_program__fd(tgt_skel->progs.entry),
+					     "subprog");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = tailcall_freplace__load(skel);
+	if (!ASSERT_OK(err, "load skel"))
+		goto out;
+
+	freplace = bpf_program__attach_freplace(skel->progs.entry,
+						bpf_program__fd(tgt_skel->progs.entry),
+						"subprog");
+	if (!ASSERT_OK_PTR(freplace, "attatch_freplace"))
+		goto out;
+
+	prog_fd = bpf_program__fd(skel->progs.entry);
+	if (!ASSERT_GE(prog_fd, 0, "prog_fd"))
+		goto out;
+
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.jmp_table), &key,
+				  &prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update jmp_table"))
+		goto out;
+
+	prog_fd = bpf_program__fd(tgt_skel->progs.entry);
+	if (!ASSERT_GE(prog_fd, 0, "prog_fd"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 1, "test_run retval");
+
+	data_map = bpf_object__find_map_by_name(skel->obj, ".bss");
+	if (!ASSERT_FALSE(!data_map || !bpf_map__is_internal(data_map),
+			  "find .bss map"))
+		goto out;
+
+	data_fd = bpf_map__fd(data_map);
+	if (!ASSERT_GE(data_fd, 0, ".bss map_fd"))
+		goto out;
+
+	key = 0;
+	err = bpf_map_lookup_elem(data_fd, &key, &val);
+	ASSERT_OK(err, "tailcall count");
+	ASSERT_EQ(val, 34, "tailcall count");
+
+out:
+	bpf_link__destroy(freplace);
+	tc_bpf2bpf__destroy(tgt_skel);
+	tailcall_freplace__destroy(skel);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1223,4 +1303,6 @@ void test_tailcalls(void)
 		test_tailcall_bpf2bpf_fentry_entry();
 	if (test__start_subtest("tailcall_poke"))
 		test_tailcall_poke();
+	if (test__start_subtest("tailcall_freplace"))
+		test_tailcall_freplace();
 }
