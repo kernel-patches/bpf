@@ -13098,7 +13098,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
 	s64 smin_cur, smax_cur;
-	u64 umin_cur, umax_cur;
 	int ret;
 
 	dst_reg = &regs[dst];
@@ -13206,23 +13205,8 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		 * added into the variable offset, and we copy the fixed offset
 		 * from ptr_reg.
 		 */
-		if (check_add_overflow(smin_ptr, smin_val, &smin_cur) ||
-		    check_add_overflow(smax_ptr, smax_val, &smax_cur)) {
-			dst_reg->val.smin = S64_MIN;
-			dst_reg->val.smax = S64_MAX;
-		} else {
-			dst_reg->val.smin = smin_cur;
-			dst_reg->val.smax = smax_cur;
-		}
-		if (check_add_overflow(umin_ptr, umin_val, &umin_cur) ||
-		    check_add_overflow(umax_ptr, umax_val, &umax_cur)) {
-			dst_reg->val.umin = 0;
-			dst_reg->val.umax = U64_MAX;
-		} else {
-			dst_reg->val.umin = umin_cur;
-			dst_reg->val.umax = umax_cur;
-		}
-		dst_reg->val.var_off = tnum_add(ptr_reg->val.var_off, off_reg->val.var_off);
+		tval_add(&dst_reg->val,
+			 dst_reg == off_reg ? &ptr_reg->val : &off_reg->val);
 		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
 		if (reg_is_pkt_pointer(ptr_reg)) {
