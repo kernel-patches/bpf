@@ -42,6 +42,7 @@ static int create_netns(void)
 static void test_tcp(int family)
 {
 	struct setget_sockopt__bss *bss = skel->bss;
+	int cb_flags = BPF_SOCK_OPS_STATE_CB_FLAG | BPF_SOCK_OPS_RTO_CB_FLAG;
 	int sfd, cfd;
 
 	memset(bss, 0, sizeof(*bss));
@@ -56,6 +57,9 @@ static void test_tcp(int family)
 		close(sfd);
 		return;
 	}
+	ASSERT_EQ(setsockopt(sfd, SOL_TCP, TCP_BPF_SOCK_OPS_CB_FLAGS,
+			     &cb_flags, sizeof(cb_flags)),
+		  0, "setsockopt cb_flags");
 	close(sfd);
 	close(cfd);
 
@@ -65,6 +69,8 @@ static void test_tcp(int family)
 	ASSERT_EQ(bss->nr_passive, 1, "nr_passive");
 	ASSERT_EQ(bss->nr_socket_post_create, 2, "nr_socket_post_create");
 	ASSERT_EQ(bss->nr_binddev, 2, "nr_bind");
+	ASSERT_GE(bss->nr_state, 1, "nr_state");
+	ASSERT_EQ(bss->nr_setsockopt, 1, "nr_setsockopt");
 }
 
 static void test_udp(int family)
@@ -183,6 +189,11 @@ void test_setget_sockopt(void)
 	skel->links.socket_post_create =
 		bpf_program__attach_cgroup(skel->progs.socket_post_create, cg_fd);
 	if (!ASSERT_OK_PTR(skel->links.socket_post_create, "attach_cgroup"))
+		goto done;
+
+	skel->links.tcp_setsockopt =
+		bpf_program__attach_cgroup(skel->progs.tcp_setsockopt, cg_fd);
+	if (!ASSERT_OK_PTR(skel->links.tcp_setsockopt, "attach_setsockopt"))
 		goto done;
 
 	test_tcp(AF_INET6);

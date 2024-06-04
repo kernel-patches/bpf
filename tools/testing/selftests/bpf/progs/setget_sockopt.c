@@ -20,6 +20,8 @@ int nr_connect;
 int nr_binddev;
 int nr_socket_post_create;
 int nr_fin_wait1;
+int nr_state;
+int nr_setsockopt;
 
 struct sockopt_test {
 	int opt;
@@ -59,6 +61,8 @@ static const struct sockopt_test sol_tcp_tests[] = {
 	{ .opt = TCP_THIN_LINEAR_TIMEOUTS, .flip = 1, },
 	{ .opt = TCP_USER_TIMEOUT, .new = 123400, .expected = 123400, },
 	{ .opt = TCP_NOTSENT_LOWAT, .new = 1314, .expected = 1314, },
+	{ .opt = TCP_BPF_SOCK_OPS_CB_FLAGS, .new = BPF_SOCK_OPS_ALL_CB_FLAGS,
+	  .expected = BPF_SOCK_OPS_ALL_CB_FLAGS, .restore = BPF_SOCK_OPS_STATE_CB_FLAG, },
 	{ .opt = 0, },
 };
 
@@ -124,6 +128,7 @@ static int bpf_test_sockopt_int(void *ctx, struct sock *sk,
 
 	if (bpf_setsockopt(ctx, level, opt, &new, sizeof(new)))
 		return 1;
+
 	if (bpf_getsockopt(ctx, level, opt, &tmp, sizeof(tmp)) ||
 	    tmp != expected)
 		return 1;
@@ -384,16 +389,42 @@ int skops_sockopt(struct bpf_sock_ops *skops)
 		nr_passive += !(bpf_test_sockopt(skops, sk) ||
 				test_tcp_maxseg(skops, sk) ||
 				test_tcp_saved_syn(skops, sk));
-		bpf_sock_ops_cb_flags_set(skops,
-					  skops->bpf_sock_ops_cb_flags |
-					  BPF_SOCK_OPS_STATE_CB_FLAG);
+
+		/* no need to set sockops cb flags here as sockopt
+		 * tests and user-space originated setsockopt() will
+		 * set flags to include BPF_SOCK_OPS_STATE_CB.
+		 */
 		break;
 	case BPF_SOCK_OPS_STATE_CB:
+		nr_state++;
 		if (skops->args[1] == BPF_TCP_CLOSE_WAIT)
 			nr_fin_wait1 += !bpf_test_sockopt(skops, sk);
 		break;
 	}
 
+	return 1;
+}
+
+SEC("cgroup/setsockopt")
+int tcp_setsockopt(struct bpf_sockopt *ctx)
+{
+	struct bpf_sock *sk = ctx->sk;
+	__u8 *optval_end = ctx->optval_end;
+	__u8 *optval = ctx->optval;
+	int val = 0;
+
+	if (!sk || ctx->level != SOL_TCP || ctx->optname != TCP_BPF_SOCK_OPS_CB_FLAGS)
+		return 1;
+	if (optval + sizeof(int) > optval_end)
+		return 0;
+	if (ctx->optlen != sizeof(int))
+		return 0;
+	val = *(int *)optval;
+	if (bpf_setsockopt(sk, ctx->level, ctx->optname, &val, sizeof(val)))
+		return 0;
+	nr_setsockopt++;
+	/* BPF has handled this no need to call "real" setsockopt() */
+	ctx->optlen = -1;
 	return 1;
 }
 
