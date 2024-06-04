@@ -1,0 +1,96 @@
+name: Reusable veristat workflow
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+        description: The architecture to build against, e.g x86_64, aarch64, s390x...
+      toolchain:
+        required: true
+        type: string
+        description: The toolchain, e.g gcc, llvm
+      runs_on:
+        required: true
+        type: string
+        description: The runners to run the test on. This is a json string representing an array of labels.
+      aws_region:
+        required: true
+        type: string
+        description: The AWS region where we pull bpf objects to run against veristat.
+    secrets:
+        AWS_ROLE_ARN:
+            required: true
+            description: The AWS role used by GH to pull BPF objects from AWS.
+
+jobs:
+  veristat:
+    name: veristat on ${{ inputs.arch }} with ${{ inputs.toolchain }}
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 100
+    permissions:
+        id-token: write
+        contents: read
+    env:
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+      ARCH_AND_TOOL: ${{ inputs.arch }}-${{ inputs.toolchain }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vmlinux-${{ env.ARCH_AND_TOOL }}
+          path: .
+      - name: Untar artifacts
+        # zstd is installed by default in the runner images.
+        run: zstd -d -T0  vmlinux-${{ env.ARCH_AND_TOOL }}.tar.zst --stdout | tar -xf -
+
+      - name: Configure AWS Credentials
+        # Disabling BPF objects download and veristat-meta benchmark for PRs
+        # created from fork repositories. These won't have access to required
+        # enviroment variables and secrets, and otherwise would consistently fail
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-action-bpf-ci
+
+      - name: Download BPF objects
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -eux
+          if [ -n "$AWS_ROLE_ARN" ]; then
+            mkdir ./bpf_objects
+            aws s3 sync s3://veristat-bpf-binaries ./bpf_objects
+          fi
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Run veristat
+        uses: libbpf/ci/run-vmtest@main
+        with:
+          arch: x86_64
+          img: '/tmp/root.img'
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+          max-cpu: 8
+          # Don't run meta's veristat from forked repo.
+          kernel-test: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'run_veristat_kernel,run_veristat_meta' || 'run_veristat_kernel' }}
+          output-dir: '${{ github.workspace }}'
+
+      - name: Compare and save veristat.kernel.csv
+        uses: ./.github/actions/veristat_baseline_compare
+        with:
+          veristat_output: veristat-kernel
+          baseline_name: ${{ env.ARCH_AND_TOOL}}-baseline-veristat-kernel
+
+      - name: Compare and save veristat.meta.csv
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/veristat_baseline_compare
+        with:
+          veristat_output: veristat-meta
+          baseline_name: ${{ env.ARCH_AND_TOOL}}-baseline-veristat-meta
