@@ -533,6 +533,31 @@ cleanup:
 	uprobe_multi_session__destroy(skel);
 }
 
+static void test_session_error_multiple_instances(void)
+{
+	struct uprobe_multi_session *skel_1 = NULL, *skel_2 = NULL;
+	int err;
+
+	skel_1 = uprobe_multi_session__open_and_load();
+	if (!ASSERT_OK_PTR(skel_1, "fentry_raw_skel_load"))
+		goto cleanup;
+
+	err = uprobe_multi_session__attach(skel_1);
+	if (!ASSERT_OK(err, " kprobe_multi_session__attach"))
+		goto cleanup;
+
+	skel_2 = uprobe_multi_session__open_and_load();
+	if (!ASSERT_OK_PTR(skel_2, "fentry_raw_skel_load"))
+		goto cleanup;
+
+	err = uprobe_multi_session__attach(skel_2);
+	ASSERT_EQ(err, -EBUSY, " kprobe_multi_session__attach");
+
+cleanup:
+	uprobe_multi_session__destroy(skel_1);
+	uprobe_multi_session__destroy(skel_2);
+}
+
 static void test_bench_attach_uprobe(void)
 {
 	long attach_start_ns = 0, attach_end_ns = 0;
@@ -623,4 +648,6 @@ void test_uprobe_multi_test(void)
 		test_attach_api_fails();
 	if (test__start_subtest("session"))
 		test_session_skel_api();
+	if (test__start_subtest("session_errors"))
+		test_session_error_multiple_instances();
 }
