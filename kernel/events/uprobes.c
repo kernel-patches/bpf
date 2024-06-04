@@ -750,12 +750,32 @@ static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset,
 	return uprobe;
 }
 
-static void consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
+/*
+ * Make sure all the uprobe consumers have only one type of entry
+ * callback registered (either handler or handler_session) due to
+ * different return value actions.
+ */
+static int consumer_check(struct uprobe_consumer *curr, struct uprobe_consumer *uc)
 {
+	if (!curr)
+		return 0;
+	if (curr->handler_session || uc->handler_session)
+		return -EBUSY;
+	return 0;
+}
+
+static int consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
+{
+	int err;
+
 	down_write(&uprobe->consumer_rwsem);
-	uc->next = uprobe->consumers;
-	uprobe->consumers = uc;
+	err = consumer_check(uprobe->consumers, uc);
+	if (!err) {
+		uc->next = uprobe->consumers;
+		uprobe->consumers = uc;
+	}
 	up_write(&uprobe->consumer_rwsem);
+	return err;
 }
 
 /*
@@ -1114,6 +1134,21 @@ void uprobe_unregister(struct inode *inode, loff_t offset, struct uprobe_consume
 }
 EXPORT_SYMBOL_GPL(uprobe_unregister);
 
+static int check_handler(struct uprobe_consumer *uc)
+{
+	/* Uprobe must have at least one set consumer. */
+	if (!uc->handler && !uc->ret_handler &&
+	    !uc->handler_session && !uc->ret_handler_session)
+		return -1;
+	/* Session consumer is exclusive. */
+	if (uc->handler && uc->handler_session)
+		return -1;
+	/* Session consumer must have both entry and return handler. */
+	if (!!uc->handler_session != !!uc->ret_handler_session)
+		return -1;
+	return 0;
+}
+
 /*
  * __uprobe_register - register a probe
  * @inode: the file in which the probe has to be placed.
@@ -1138,8 +1173,7 @@ static int __uprobe_register(struct inode *inode, loff_t offset,
 	struct uprobe *uprobe;
 	int ret;
 
-	/* Uprobe must have at least one set consumer */
-	if (!uc->handler && !uc->ret_handler)
+	if (check_handler(uc))
 		return -EINVAL;
 
 	/* copy_insn() uses read_mapping_page() or shmem_read_mapping_page() */
@@ -1173,11 +1207,14 @@ static int __uprobe_register(struct inode *inode, loff_t offset,
 	down_write(&uprobe->register_rwsem);
 	ret = -EAGAIN;
 	if (likely(uprobe_is_active(uprobe))) {
-		consumer_add(uprobe, uc);
+		ret = consumer_add(uprobe, uc);
+		if (ret)
+			goto fail;
 		ret = register_for_each_vma(uprobe, uc);
 		if (ret)
 			__uprobe_unregister(uprobe, uc);
 	}
+ fail:
 	up_write(&uprobe->register_rwsem);
 	put_uprobe(uprobe);
 
@@ -1853,7 +1890,7 @@ static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
 	utask->return_instances = ri;
 }
 
-static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
+static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs, unsigned long data)
 {
 	struct return_instance *ri;
 	struct uprobe_task *utask;
@@ -1909,6 +1946,7 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 	ri->stack = user_stack_pointer(regs);
 	ri->orig_ret_vaddr = orig_ret_vaddr;
 	ri->chained = chained;
+	ri->data = data;
 
 	utask->depth++;
 	ri->next = utask->return_instances;
@@ -2070,6 +2108,7 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 	struct uprobe_consumer *uc;
 	int remove = UPROBE_HANDLER_REMOVE;
 	bool need_prep = false; /* prepare return uprobe, when needed */
+	unsigned long data = 0;
 
 	down_read(&uprobe->register_rwsem);
 	for (uc = uprobe->consumers; uc; uc = uc->next) {
@@ -2081,14 +2120,24 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 				"bad rc=0x%x from %ps()\n", rc, uc->handler);
 		}
 
-		if (uc->ret_handler)
+		if (uc->handler_session) {
+			rc = uc->handler_session(uc, regs, &data);
+			WARN(rc & ~UPROBE_HANDLER_MASK,
+				"bad rc=0x%x from %ps()\n", rc, uc->handler_session);
+		}
+
+		if (uc->ret_handler || uc->ret_handler_session)
 			need_prep = true;
 
 		remove &= rc;
 	}
 
 	if (need_prep && !remove)
-		prepare_uretprobe(uprobe, regs); /* put bp at return */
+		prepare_uretprobe(uprobe, regs, data); /* put bp at return */
+
+	/* remove uprobe only for non-session consumers */
+	if (uprobe->consumers && remove)
+		remove &= !!uprobe->consumers->handler;
 
 	if (remove && uprobe->consumers) {
 		WARN_ON(!uprobe_is_active(uprobe));
@@ -2107,6 +2156,8 @@ handle_uretprobe_chain(struct return_instance *ri, struct pt_regs *regs)
 	for (uc = uprobe->consumers; uc; uc = uc->next) {
 		if (uc->ret_handler)
 			uc->ret_handler(uc, ri->func, regs);
+		if (uc->ret_handler_session)
+			uc->ret_handler_session(uc, ri->func, regs, &ri->data);
 	}
 	up_read(&uprobe->register_rwsem);
 }

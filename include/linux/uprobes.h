@@ -34,6 +34,12 @@ enum uprobe_filter_ctx {
 };
 
 struct uprobe_consumer {
+	/*
+	 * The handler callback return value controls removal of the uprobe.
+	 *  0 on success, uprobe stays
+	 *  1 on failure, remove the uprobe
+	 *    console warning for anything else
+	 */
 	int (*handler)(struct uprobe_consumer *self, struct pt_regs *regs);
 	int (*ret_handler)(struct uprobe_consumer *self,
 				unsigned long func,
@@ -41,6 +47,17 @@ struct uprobe_consumer {
 	bool (*filter)(struct uprobe_consumer *self,
 				enum uprobe_filter_ctx ctx,
 				struct mm_struct *mm);
+
+	/* The handler_session callback return value controls execution of
+	 * the return uprobe and ret_handler_session callback.
+	 *  0 on success
+	 *  1 on failure, DO NOT install/execute the return uprobe
+	 *    console warning for anything else
+	 */
+	int (*handler_session)(struct uprobe_consumer *self, struct pt_regs *regs,
+			       unsigned long *data);
+	int (*ret_handler_session)(struct uprobe_consumer *self, unsigned long func,
+				   struct pt_regs *regs, unsigned long *data);
 
 	struct uprobe_consumer *next;
 };
@@ -85,6 +102,7 @@ struct return_instance {
 	unsigned long		func;
 	unsigned long		stack;		/* stack pointer */
 	unsigned long		orig_ret_vaddr; /* original return address */
+	unsigned long		data;
 	bool			chained;	/* true, if instance is nested */
 
 	struct return_instance	*next;		/* keep as stack */
