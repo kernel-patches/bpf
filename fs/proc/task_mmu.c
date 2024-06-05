@@ -388,6 +388,49 @@ static int pid_maps_open(struct inode *inode, struct file *file)
 		PROCMAP_QUERY_VMA_FLAGS				\
 )
 
+#ifdef CONFIG_PER_VMA_LOCK
+static int query_vma_setup(struct mm_struct *mm)
+{
+	/* in the presence of per-VMA lock we don't need any setup/teardown */
+	return 0;
+}
+
+static void query_vma_teardown(struct mm_struct *mm, struct vm_area_struct *vma)
+{
+	/* in the presence of per-VMA lock we need to unlock vma, if present */
+	if (vma)
+		vma_end_read(vma);
+}
+
+static struct vm_area_struct *query_vma_find_by_addr(struct mm_struct *mm, unsigned long addr)
+{
+	struct vm_area_struct *vma;
+
+	/* try to use less disruptive per-VMA lock */
+	vma = find_and_lock_vma_rcu(mm, addr);
+	if (IS_ERR(vma)) {
+		/* failed to take per-VMA lock, fallback to mmap_lock */
+		if (mmap_read_lock_killable(mm))
+			return ERR_PTR(-EINTR);
+
+		vma = find_vma(mm, addr);
+		if (vma) {
+			/*
+			 * We cannot use vma_start_read() as it may fail due to
+			 * false locked (see comment in vma_start_read()). We
+			 * can avoid that by directly locking vm_lock under
+			 * mmap_lock, which guarantees that nobody can lock the
+			 * vma for write (vma_start_write()) under us.
+			 */
+			down_read(&vma->vm_lock->lock);
+		}
+
+		mmap_read_unlock(mm);
+	}
+
+	return vma;
+}
+#else
 static int query_vma_setup(struct mm_struct *mm)
 {
 	return mmap_read_lock_killable(mm);
@@ -402,6 +445,7 @@ static struct vm_area_struct *query_vma_find_by_addr(struct mm_struct *mm, unsig
 {
 	return find_vma(mm, addr);
 }
+#endif
 
 static struct vm_area_struct *query_matching_vma(struct mm_struct *mm,
 						 unsigned long addr, u32 flags)
@@ -441,8 +485,10 @@ next_vma:
 skip_vma:
 	/*
 	 * If the user needs closest matching VMA, keep iterating.
+	 * But before we proceed we might need to unlock current VMA.
 	 */
 	addr = vma->vm_end;
+	vma_end_read(vma); /* no-op under !CONFIG_PER_VMA_LOCK */
 	if (flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA)
 		goto next_vma;
 no_vma:
