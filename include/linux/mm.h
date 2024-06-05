@@ -776,6 +776,8 @@ static inline void assert_fault_locked(struct vm_fault *vmf)
 		mmap_assert_locked(vmf->vma->vm_mm);
 }
 
+struct vm_area_struct *find_and_lock_vma_rcu(struct mm_struct *mm,
+					  unsigned long address);
 struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 					  unsigned long address);
 
@@ -789,6 +791,12 @@ static inline void vma_assert_write_locked(struct vm_area_struct *vma)
 		{ mmap_assert_write_locked(vma->vm_mm); }
 static inline void vma_mark_detached(struct vm_area_struct *vma,
 				     bool detached) {}
+
+struct vm_area_struct *find_and_lock_vma_rcu(struct mm_struct *mm,
+					     unsigned long address)
+{
+	return -EOPNOTSUPP;
+}
 
 static inline struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 		unsigned long address)
