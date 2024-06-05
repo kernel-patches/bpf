@@ -95,6 +95,8 @@ struct test_state {
 	FILE *stdout;
 };
 
+extern int env_verbosity;
+
 struct test_env {
 	struct test_selector test_selector;
 	struct test_selector subtest_selector;
