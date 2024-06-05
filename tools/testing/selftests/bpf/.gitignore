@@ -44,6 +44,7 @@ test_cpp
 /veristat
 /sign-file
 /uprobe_multi
+/procfs_query
 *.ko
 *.tmp
 xskxceiver
