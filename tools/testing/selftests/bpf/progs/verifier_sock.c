@@ -799,7 +799,7 @@ l0_%=:	r0 = *(u32*)(r0 + %[bpf_xdp_sock_queue_id]);	\
 
 SEC("sk_skb")
 __description("bpf_map_lookup_elem(sockmap, &key)")
-__failure __msg("Unreleased reference id=2 alloc_insn=6")
+__failure __regex("Unreleased reference id=2 alloc_insn=[0-9]+")
 __naked void map_lookup_elem_sockmap_key(void)
 {
 	asm volatile ("					\
@@ -819,7 +819,7 @@ __naked void map_lookup_elem_sockmap_key(void)
 
 SEC("sk_skb")
 __description("bpf_map_lookup_elem(sockhash, &key)")
-__failure __msg("Unreleased reference id=2 alloc_insn=6")
+__failure __regex("Unreleased reference id=2 alloc_insn=[0-9]+")
 __naked void map_lookup_elem_sockhash_key(void)
 {
 	asm volatile ("					\

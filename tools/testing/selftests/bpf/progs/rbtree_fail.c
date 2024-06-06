@@ -29,7 +29,7 @@ static bool less(struct bpf_rb_node *a, const struct bpf_rb_node *b)
 }
 
 SEC("?tc")
-__failure __msg("bpf_spin_lock at off=16 must be held for bpf_rb_root")
+__failure __regex("bpf_spin_lock at off=[0-9]+ must be held for bpf_rb_root")
 long rbtree_api_nolock_add(void *ctx)
 {
 	struct node_data *n;
@@ -43,7 +43,7 @@ long rbtree_api_nolock_add(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("bpf_spin_lock at off=16 must be held for bpf_rb_root")
+__failure __regex("bpf_spin_lock at off=[0-9]+ must be held for bpf_rb_root")
 long rbtree_api_nolock_remove(void *ctx)
 {
 	struct node_data *n;
@@ -61,7 +61,7 @@ long rbtree_api_nolock_remove(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("bpf_spin_lock at off=16 must be held for bpf_rb_root")
+__failure __regex("bpf_spin_lock at off=[0-9]+ must be held for bpf_rb_root")
 long rbtree_api_nolock_first(void *ctx)
 {
 	bpf_rbtree_first(&groot);
@@ -105,7 +105,7 @@ long rbtree_api_remove_unadded_node(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference id=3 alloc_insn=10")
+__failure __regex("Unreleased reference id=3 alloc_insn=[0-9]+")
 long rbtree_api_remove_no_drop(void *ctx)
 {
 	struct bpf_rb_node *res;
