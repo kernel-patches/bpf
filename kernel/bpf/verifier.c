@@ -8385,21 +8385,25 @@ found:
 		}
 
 		if (!arg_btf_id) {
-			if (!compatible->btf_id) {
-				verbose(env, "verifier internal error: missing arg compatible BTF ID\n");
-				return -EFAULT;
-			}
-			arg_btf_id = compatible->btf_id;
+			verbose(env,
+				"verifier internal error: missing BTF ID for BPF helper argument %d of type %d\n",
+				regno - BPF_REG_1, base_type(arg_type));
+			return -EFAULT;
 		}
 
+		/* arg_btf_id is allowed to be BPF_PTR_POISON at this point as
+		 * map_kptr_match_type() dynamically fetches the BTF ID for the
+		 * backing argument via the kptr_field residing in
+		 * bpf_call_arg_meta.
+		 */
 		if (meta->func_id == BPF_FUNC_kptr_xchg) {
 			if (map_kptr_match_type(env, meta->kptr_field, reg, regno))
 				return -EACCES;
 		} else {
 			if (arg_btf_id == BPF_PTR_POISON) {
-				verbose(env, "verifier internal error:");
-				verbose(env, "R%d has non-overwritten BPF_PTR_POISON type\n",
-					regno);
+				verbose(env,
+					"verifier internal error: BPF helper argument %d has non-overwritten BPF_PTR_POISON type\n",
+					regno - BPF_REG_1);
 				return -EACCES;
 			}
 
@@ -8455,41 +8459,119 @@ reg_find_field_offset(const struct bpf_reg_state *reg, s32 off, u32 fields)
 	return field;
 }
 
-static int check_func_arg_reg_off(struct bpf_verifier_env *env,
-				  const struct bpf_reg_state *reg, int regno,
-				  enum bpf_arg_type arg_type)
+static int check_release_arg_reg_off(struct bpf_verifier_env *env,
+				     const enum bpf_arg_type arg_type,
+				     const struct btf *arg_btf,
+				     const u32 *arg_btf_id, const int regno,
+				     const struct bpf_reg_state *reg)
 {
-	u32 type = reg->type;
+	int ret;
+	bool fixed_off_ok;
+	const struct btf_type *arg_ref_t;
 
-	/* When referenced register is passed to release function, its fixed
-	 * offset must be 0.
-	 *
-	 * We will check arg_type_is_release reg has ref_obj_id when storing
-	 * meta->release_regno.
+	/* ARG_PTR_TO_DYNPTR with OBJ_RELEASE is a bit special, as it may not
+	 * directly point to the object being released, but to a dynptr pointing
+	 * to such object, which might be at some offset on the stack. In that
+	 * case, we simply to fallback to the default handling.
 	 */
-	if (arg_type_is_release(arg_type)) {
-		/* ARG_PTR_TO_DYNPTR with OBJ_RELEASE is a bit special, as it
-		 * may not directly point to the object being released, but to
-		 * dynptr pointing to such object, which might be at some offset
-		 * on the stack. In that case, we simply to fallback to the
-		 * default handling.
-		 */
-		if (arg_type_is_dynptr(arg_type) && type == PTR_TO_STACK)
-			return 0;
+	if (arg_type_is_dynptr(arg_type) && reg->type == PTR_TO_STACK)
+		return 0;
 
-		/* Doing check_ptr_off_reg check for the offset will catch this
-		 * because fixed_off_ok is false, but checking here allows us
-		 * to give the user a better error message.
-		 */
+	if (!reg->ref_obj_id) {
+		verbose(env,
+			"R%d must be referenced when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc\n",
+			regno);
+		return -EINVAL;
+	}
+
+	if (!arg_btf_id || arg_btf_id == BPF_PTR_POISON) {
 		if (reg->off) {
-			verbose(env, "R%d must have zero offset when passed to release func or trusted arg to kfunc\n",
+			verbose(env,
+				"R%d must have a fixed offset of 0 when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc which takes a void *\n",
 				regno);
 			return -EINVAL;
 		}
-		return __check_ptr_off_reg(env, reg, regno, false);
+		/* We have no suporting BTF type ID to work with, so just
+		 * perform the conventional pointer offset register checks.
+		 */
+		return check_ptr_off_reg(env, reg, regno);
 	}
 
-	switch (type) {
+	arg_btf = !arg_btf ? btf_vmlinux : arg_btf;
+	arg_ref_t = btf_type_skip_modifiers(arg_btf, *arg_btf_id, NULL);
+	if (!arg_ref_t) {
+		verbose(env,
+			"verifier internal error: failed to get argument BTF type information for BTF type ID %d",
+			*arg_btf_id);
+		return -EFAULT;
+	}
+
+	/* For OBJ_RELEASE/KF_RELEASE flagged BPF helpers and kfuncs which
+	 * take a void pointer as an argument, we must ensure that the supplied
+	 * pointer is in its original unmodified form, or else we could end up
+	 * in a situation where we pass the wrong pointer into the callee.
+	 */
+	if (reg->off && btf_type_is_void(arg_ref_t)) {
+		verbose(env,
+			"R%d must have a fixed offset of 0 when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc which takes a void *\n",
+			regno);
+		return -EINVAL;
+	}
+
+	fixed_off_ok = false;
+	/* Don't attempt to perform a btf_struct_ids_match() on a MEM_ALLOC
+	 * tagged register type as it will always result in a failed match. This
+	 * is due to using 2 fundamentally unrelated BTF sources, being local
+	 * and kernel.
+	 */
+	if (reg->off && ((base_type(reg->type) == PTR_TO_BTF_ID ||
+			  reg2btf_ids[reg->type]) &&
+			 !type_is_alloc(reg->type))) {
+		u32 reg_btf_id;
+		const struct btf *reg_btf;
+
+		if (base_type(reg->type) == PTR_TO_BTF_ID) {
+			reg_btf = reg->btf;
+			reg_btf_id = reg->btf_id;
+		} else {
+			reg_btf = btf_vmlinux;
+			reg_btf_id = *reg2btf_ids[reg->type];
+		}
+
+		fixed_off_ok =
+			btf_struct_ids_match(&env->log, reg_btf, reg_btf_id,
+					     reg->off, arg_btf, *arg_btf_id,
+					     /*strict_type_match=*/false);
+	}
+
+	ret = __check_ptr_off_reg(env, reg, regno, fixed_off_ok);
+	if (reg->off && ret) {
+		verbose(env,
+			"R%d must have a fixed offset of 0 when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc which takes a void *\n",
+			regno);
+	}
+	return ret;
+}
+
+static int check_func_arg_reg_off(struct bpf_verifier_env *env,
+				  const enum bpf_arg_type arg_type,
+				  const struct btf *arg_btf,
+				  const u32 *arg_btf_id, const u8 regno,
+				  const struct bpf_reg_state *reg)
+{
+	const u32 reg_type = reg->type;
+
+	if (arg_type_is_release(arg_type)) {
+		/* BPF_FUNC_sk_release is rather polymorphic as it can accept
+		 * mulitple types. Therefore, we make an exception for it when
+		 * determining whether we should enforce strict type matching
+		 * between BPF helper/kfunc argument and register.
+		 */
+		return check_release_arg_reg_off(
+			env, arg_type, arg_btf, arg_btf_id, regno, reg);
+	}
+
+	switch (reg_type) {
 	/* Pointer types where both fixed and variable offset is explicitly allowed: */
 	case PTR_TO_STACK:
 	case PTR_TO_PACKET:
@@ -8640,6 +8722,41 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static inline struct btf *
+get_helper_arg_btf(const struct bpf_call_arg_meta *meta)
+{
+	if (meta->func_id == BPF_FUNC_kptr_xchg && meta->kptr_field)
+		return meta->kptr_field->kptr.btf;
+	return btf_vmlinux;
+}
+
+static int *get_helper_arg_btf_id(const struct bpf_func_proto *fn,
+				  const struct bpf_call_arg_meta *meta,
+				  const u32 arg,
+				  const enum bpf_arg_type arg_type)
+{
+	u32 *arg_btf_id = NULL;
+	const enum bpf_arg_type base_arg_type = base_type(arg_type);
+
+	if (base_arg_type == ARG_PTR_TO_BTF_ID ||
+	    base_arg_type == ARG_PTR_TO_SPIN_LOCK) {
+		arg_btf_id = fn->arg_btf_id[arg];
+	}
+
+	if (arg_btf_id == BPF_PTR_POISON &&
+	    meta->func_id == BPF_FUNC_kptr_xchg) {
+		arg_btf_id = &meta->kptr_field->kptr.btf_id;
+	}
+
+	if (!arg_btf_id) {
+		const struct bpf_reg_types *reg_types =
+			compatible_reg_types[base_arg_type];
+		if (reg_types)
+			arg_btf_id = reg_types->btf_id;
+	}
+	return arg_btf_id;
+}
+
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
 			  const struct bpf_func_proto *fn,
@@ -8649,7 +8766,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
 	enum bpf_reg_type type = reg->type;
-	u32 *arg_btf_id = NULL;
+	u32 *arg_btf_id;
 	int err = 0;
 
 	if (arg_type == ARG_DONTCARE)
@@ -8686,16 +8803,13 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		 */
 		goto skip_type_check;
 
-	/* arg_btf_id and arg_size are in a union. */
-	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID ||
-	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
-		arg_btf_id = fn->arg_btf_id[arg];
-
+	arg_btf_id = get_helper_arg_btf_id(fn, meta, arg, arg_type);
 	err = check_reg_type(env, regno, arg_type, arg_btf_id, meta);
 	if (err)
 		return err;
 
-	err = check_func_arg_reg_off(env, reg, regno, arg_type);
+	err = check_func_arg_reg_off(env, arg_type, get_helper_arg_btf(meta),
+				     arg_btf_id, regno, reg);
 	if (err)
 		return err;
 
@@ -9443,6 +9557,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 		u32 regno = i + 1;
 		struct bpf_reg_state *reg = &regs[regno];
 		struct bpf_subprog_arg_info *arg = &sub->args[i];
+		const u32 arg_btf_id = arg->btf_id;
 
 		if (arg->arg_type == ARG_ANYTHING) {
 			if (reg->type != SCALAR_VALUE) {
@@ -9450,7 +9565,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				return -EINVAL;
 			}
 		} else if (arg->arg_type == ARG_PTR_TO_CTX) {
-			ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE);
+			ret = check_func_arg_reg_off(env, ARG_DONTCARE, btf,
+						     &arg_btf_id, regno, reg);
 			if (ret < 0)
 				return ret;
 			/* If function expects ctx type in BTF check that caller
@@ -9461,7 +9577,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				return -EINVAL;
 			}
 		} else if (base_type(arg->arg_type) == ARG_PTR_TO_MEM) {
-			ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE);
+			ret = check_func_arg_reg_off(env, ARG_DONTCARE, btf,
+						     &arg_btf_id, regno, reg);
 			if (ret < 0)
 				return ret;
 			if (check_mem_reg(env, reg, regno, arg->mem_size))
@@ -9483,7 +9600,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				return -EINVAL;
 			}
 		} else if (arg->arg_type == (ARG_PTR_TO_DYNPTR | MEM_RDONLY)) {
-			ret = check_func_arg_reg_off(env, reg, regno, ARG_PTR_TO_DYNPTR);
+			ret = check_func_arg_reg_off(env, ARG_DONTCARE, btf,
+						     &arg_btf_id, regno, reg);
 			if (ret)
 				return ret;
 
@@ -9499,7 +9617,10 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 
 			memset(&meta, 0, sizeof(meta)); /* leave func_id as zero */
 			err = check_reg_type(env, regno, arg->arg_type, &arg->btf_id, &meta);
-			err = err ?: check_func_arg_reg_off(env, reg, regno, arg->arg_type);
+			err = err   ?:
+				      check_func_arg_reg_off(env, arg->arg_type,
+							     btf, &arg_btf_id,
+							     regno, reg);
 			if (err)
 				return err;
 		} else {
@@ -11295,6 +11416,16 @@ static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
 	bool struct_same;
 	u32 reg_ref_id;
 
+	/*
+	 * For a BPF kfunc that posseses KF_RELEASE semantics, we should only
+	 * allow a register with a non-zero fixed offset to be accepted if we
+	 * can successfully type match between the type held by the register and
+	 * the type associated with the given BPF kfunc argument.
+	 */
+	WARN_ON_ONCE(is_kfunc_release(meta) && btf_type_is_void(ref_t) &&
+		     (reg->off || !tnum_is_const(reg->var_off) ||
+		      reg->var_off.value));
+
 	if (base_type(reg->type) == PTR_TO_BTF_ID) {
 		reg_btf = reg->btf;
 		reg_ref_id = reg->btf_id;
@@ -11303,9 +11434,9 @@ static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
 		reg_ref_id = *reg2btf_ids[base_type(reg->type)];
 	}
 
-	/* Enforce strict type matching for calls to kfuncs that are acquiring
-	 * or releasing a reference, or are no-cast aliases. We do _not_
-	 * enforce strict matching for plain KF_TRUSTED_ARGS kfuncs by default,
+	/* Enforce strict type matching for calls to kfuncs that are acquiring a
+	 * reference, or are no-cast aliases. We do _not_ enforce strict
+	 * matching for plain KF_TRUSTED_ARGS or KF_RELEASE kfuncs by default,
 	 * as we want to enable BPF programs to pass types that are bitwise
 	 * equivalent without forcing them to explicitly cast with something
 	 * like bpf_cast_to_kern_ctx().
@@ -11328,11 +11459,9 @@ static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
 	 * resolve types.
 	 */
 	if (is_kfunc_acquire(meta) ||
-	    (is_kfunc_release(meta) && reg->ref_obj_id) ||
-	    btf_type_ids_nocast_alias(&env->log, reg_btf, reg_ref_id, meta->btf, ref_id))
+	    btf_type_ids_nocast_alias(&env->log, reg_btf, reg_ref_id, meta->btf,
+				      ref_id))
 		strict_type_match = true;
-
-	WARN_ON_ONCE(is_kfunc_trusted_args(meta) && reg->off);
 
 	reg_ref_t = btf_type_skip_modifiers(reg_btf, reg_ref_id, &reg_ref_id);
 	reg_ref_tname = btf_name_by_offset(reg_btf, reg_ref_t->name_off);
@@ -11898,6 +12027,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			}
 			meta->map.ptr = reg->map_ptr;
 			meta->map.uid = reg->map_uid;
+
+			/* If a BPF kfunc argument in suffixed with __map,
+			 * expect a struct bpf_map *.
+			 */
+			ref_id = *reg2btf_ids[CONST_PTR_TO_MAP];
+			ref_t = btf_type_by_id(btf_vmlinux, ref_id);
+			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 			fallthrough;
 		case KF_ARG_PTR_TO_ALLOC_BTF_ID:
 		case KF_ARG_PTR_TO_BTF_ID:
@@ -11914,12 +12050,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 			}
-
 			fallthrough;
 		case KF_ARG_PTR_TO_CTX:
-			/* Trusted arguments have the same offset checks as release arguments */
-			arg_type |= OBJ_RELEASE;
-			break;
 		case KF_ARG_PTR_TO_DYNPTR:
 		case KF_ARG_PTR_TO_ITER:
 		case KF_ARG_PTR_TO_LIST_HEAD:
@@ -11932,7 +12064,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
-			/* Trusted by default */
 			break;
 		default:
 			WARN_ON_ONCE(1);
@@ -11941,7 +12072,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 
 		if (is_kfunc_release(meta) && reg->ref_obj_id)
 			arg_type |= OBJ_RELEASE;
-		ret = check_func_arg_reg_off(env, reg, regno, arg_type);
+		ret = check_func_arg_reg_off(env, arg_type, btf, &ref_id, regno,
+					     reg);
 		if (ret < 0)
 			return ret;
 
@@ -12111,11 +12243,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_MAP:
-			/* If argument has '__map' suffix expect 'struct bpf_map *' */
-			ref_id = *reg2btf_ids[CONST_PTR_TO_MAP];
-			ref_t = btf_type_by_id(btf_vmlinux, ref_id);
-			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
-			fallthrough;
 		case KF_ARG_PTR_TO_BTF_ID:
 			/* Only base_type is checked, further checks are done here */
 			if ((base_type(reg->type) != PTR_TO_BTF_ID ||

@@ -76,7 +76,7 @@
 	},
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.result = REJECT,
-	.errstr = "R1 must have zero offset when passed to release func or trusted arg to kfunc",
+	.errstr = "arg#0 expected pointer to ctx, but got PTR",
 	.fixup_kfunc_btf_id = {
 		{ "bpf_kfunc_call_test_pass_ctx", 2 },
 	},
@@ -113,49 +113,6 @@
 	.fixup_kfunc_btf_id = {
 		{ "bpf_kfunc_call_test_acquire", 3 },
 		{ "bpf_kfunc_call_test_release", 5 },
-	},
-},
-{
-	"calls: invalid kfunc call: reg->off must be zero when passed to release kfunc",
-	.insns = {
-	BPF_MOV64_REG(BPF_REG_1, BPF_REG_10),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, -8),
-	BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0),
-	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0, 0),
-	BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
-	BPF_EXIT_INSN(),
-	BPF_ALU64_IMM(BPF_ADD, BPF_REG_0, 8),
-	BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
-	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0, 0),
-	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_EXIT_INSN(),
-	},
-	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
-	.result = REJECT,
-	.errstr = "R1 must have zero offset when passed to release func",
-	.fixup_kfunc_btf_id = {
-		{ "bpf_kfunc_call_test_acquire", 3 },
-		{ "bpf_kfunc_call_memb_release", 8 },
-	},
-},
-{
-	"calls: invalid kfunc call: don't match first member type when passed to release kfunc",
-	.insns = {
-	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0, 0),
-	BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
-	BPF_EXIT_INSN(),
-	BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),
-	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0, 0),
-	BPF_MOV64_IMM(BPF_REG_0, 0),
-	BPF_EXIT_INSN(),
-	},
-	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
-	.result = REJECT,
-	.errstr = "kernel function bpf_kfunc_call_memb1_release args#0 expected pointer",
-	.fixup_kfunc_btf_id = {
-		{ "bpf_kfunc_call_memb_acquire", 1 },
-		{ "bpf_kfunc_call_memb1_release", 5 },
 	},
 },
 {

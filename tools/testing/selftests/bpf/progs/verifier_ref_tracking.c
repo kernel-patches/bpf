@@ -1288,7 +1288,7 @@ l1_%=:	r1 = r6;					\
 
 SEC("tc")
 __description("reference tracking: bpf_sk_release(listen_sk)")
-__failure __msg("R1 must be referenced when passed to release function")
+__failure __msg("R1 must be referenced when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc")
 __naked void bpf_sk_release_listen_sk(void)
 {
 	asm volatile (

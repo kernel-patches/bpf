@@ -600,7 +600,7 @@ l2_%=:	r0 = *(u32*)(r0 + %[bpf_tcp_sock_snd_cwnd]);	\
 
 SEC("tc")
 __description("bpf_sk_release(skb->sk)")
-__failure __msg("R1 must be referenced when passed to release function")
+__failure __msg("R1 must be referenced when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc")
 __naked void bpf_sk_release_skb_sk(void)
 {
 	asm volatile ("					\
@@ -617,7 +617,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("bpf_sk_release(bpf_sk_fullsock(skb->sk))")
-__failure __msg("R1 must be referenced when passed to release function")
+__failure __msg("R1 must be referenced when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc")
 __naked void bpf_sk_fullsock_skb_sk(void)
 {
 	asm volatile ("					\
@@ -641,7 +641,7 @@ l1_%=:	r1 = r0;					\
 
 SEC("tc")
 __description("bpf_sk_release(bpf_tcp_sock(skb->sk))")
-__failure __msg("R1 must be referenced when passed to release function")
+__failure __msg("R1 must be referenced when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc")
 __naked void bpf_tcp_sock_skb_sk(void)
 {
 	asm volatile ("					\
