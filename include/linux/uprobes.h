@@ -34,15 +34,18 @@ enum uprobe_filter_ctx {
 };
 
 struct uprobe_consumer {
-	int (*handler)(struct uprobe_consumer *self, struct pt_regs *regs);
+	int (*handler)(struct uprobe_consumer *self, struct pt_regs *regs, __u64 *data);
 	int (*ret_handler)(struct uprobe_consumer *self,
 				unsigned long func,
-				struct pt_regs *regs);
+				struct pt_regs *regs, __u64 *data);
 	bool (*filter)(struct uprobe_consumer *self,
 				enum uprobe_filter_ctx ctx,
 				struct mm_struct *mm);
 
 	struct uprobe_consumer *next;
+
+	bool			session;	/* marks uprobe session consumer */
+	unsigned int		session_id;	/* set when uprobe_consumer is registered */
 };
 
 #ifdef CONFIG_UPROBES
@@ -80,6 +83,12 @@ struct uprobe_task {
 	unsigned int			depth;
 };
 
+struct session_consumer {
+	__u64		cookie;
+	unsigned int	id;
+	int		rc;
+};
+
 struct return_instance {
 	struct uprobe		*uprobe;
 	unsigned long		func;
@@ -88,6 +97,9 @@ struct return_instance {
 	bool			chained;	/* true, if instance is nested */
 
 	struct return_instance	*next;		/* keep as stack */
+
+	int			sessions_cnt;
+	struct session_consumer	sessions[];
 };
 
 enum rp_check {

@@ -63,6 +63,8 @@ struct uprobe {
 	loff_t			ref_ctr_offset;
 	unsigned long		flags;
 
+	unsigned int		sessions_cnt;
+
 	/*
 	 * The generic code assumes that it has two members of unknown type
 	 * owned by the arch-specific code:
@@ -750,11 +752,30 @@ static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset,
 	return uprobe;
 }
 
+static void
+uprobe_consumer_account(struct uprobe *uprobe, struct uprobe_consumer *uc)
+{
+	static unsigned int session_id;
+
+	if (uc->session) {
+		uprobe->sessions_cnt++;
+		uc->session_id = ++session_id ?: ++session_id;
+	}
+}
+
+static void
+uprobe_consumer_unaccount(struct uprobe *uprobe, struct uprobe_consumer *uc)
+{
+	if (uc->session)
+		uprobe->sessions_cnt--;
+}
+
 static void consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
 {
 	down_write(&uprobe->consumer_rwsem);
 	uc->next = uprobe->consumers;
 	uprobe->consumers = uc;
+	uprobe_consumer_account(uprobe, uc);
 	up_write(&uprobe->consumer_rwsem);
 }
 
@@ -773,6 +794,7 @@ static bool consumer_del(struct uprobe *uprobe, struct uprobe_consumer *uc)
 		if (*con == uc) {
 			*con = uc->next;
 			ret = true;
+			uprobe_consumer_unaccount(uprobe, uc);
 			break;
 		}
 	}
@@ -1744,6 +1766,23 @@ static struct uprobe_task *get_utask(void)
 	return current->utask;
 }
 
+static size_t ri_size(int sessions_cnt)
+{
+	struct return_instance *ri __maybe_unused;
+
+	return sizeof(*ri) + sessions_cnt * sizeof(ri->sessions[0]);
+}
+
+static struct return_instance *alloc_return_instance(int sessions_cnt)
+{
+	struct return_instance *ri;
+
+	ri = kzalloc(ri_size(sessions_cnt), GFP_KERNEL);
+	if (ri)
+		ri->sessions_cnt = sessions_cnt;
+	return ri;
+}
+
 static int dup_utask(struct task_struct *t, struct uprobe_task *o_utask)
 {
 	struct uprobe_task *n_utask;
@@ -1756,11 +1795,11 @@ static int dup_utask(struct task_struct *t, struct uprobe_task *o_utask)
 
 	p = &n_utask->return_instances;
 	for (o = o_utask->return_instances; o; o = o->next) {
-		n = kmalloc(sizeof(struct return_instance), GFP_KERNEL);
+		n = alloc_return_instance(o->sessions_cnt);
 		if (!n)
 			return -ENOMEM;
 
-		*n = *o;
+		memcpy(n, o, ri_size(o->sessions_cnt));
 		get_uprobe(n->uprobe);
 		n->next = NULL;
 
@@ -1853,9 +1892,9 @@ static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
 	utask->return_instances = ri;
 }
 
-static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
+static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs,
+			      struct return_instance *ri)
 {
-	struct return_instance *ri;
 	struct uprobe_task *utask;
 	unsigned long orig_ret_vaddr, trampoline_vaddr;
 	bool chained;
@@ -1874,9 +1913,11 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 		return;
 	}
 
-	ri = kmalloc(sizeof(struct return_instance), GFP_KERNEL);
-	if (!ri)
-		return;
+	if (!ri) {
+		ri = alloc_return_instance(0);
+		if (!ri)
+			return;
+	}
 
 	trampoline_vaddr = get_trampoline_vaddr();
 	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs);
@@ -2065,35 +2106,85 @@ static struct uprobe *find_active_uprobe(unsigned long bp_vaddr, int *is_swbp)
 	return uprobe;
 }
 
+static struct session_consumer *
+session_consumer_next(struct return_instance *ri, struct session_consumer *sc,
+		      int session_id)
+{
+	struct session_consumer *next;
+
+	next = sc ? sc + 1 : &ri->sessions[0];
+	next->id = session_id;
+	return next;
+}
+
+static struct session_consumer *
+session_consumer_find(struct return_instance *ri, int *iter, int session_id)
+{
+	struct session_consumer *sc;
+	int idx = *iter;
+
+	for (sc = &ri->sessions[idx]; idx < ri->sessions_cnt; idx++, sc++) {
+		if (sc->id == session_id) {
+			*iter = idx + 1;
+			return sc;
+		}
+	}
+	return NULL;
+}
+
 static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 {
 	struct uprobe_consumer *uc;
 	int remove = UPROBE_HANDLER_REMOVE;
+	struct session_consumer *sc = NULL;
+	struct return_instance *ri = NULL;
 	bool need_prep = false; /* prepare return uprobe, when needed */
 
 	down_read(&uprobe->register_rwsem);
+	if (uprobe->sessions_cnt) {
+		ri = alloc_return_instance(uprobe->sessions_cnt);
+		if (!ri)
+			goto out;
+	}
+
 	for (uc = uprobe->consumers; uc; uc = uc->next) {
+		__u64 *cookie = NULL;
 		int rc = 0;
 
+		if (uc->session) {
+			sc = session_consumer_next(ri, sc, uc->session_id);
+			cookie = &sc->cookie;
+		}
+
 		if (uc->handler) {
-			rc = uc->handler(uc, regs);
+			rc = uc->handler(uc, regs, cookie);
 			WARN(rc & ~UPROBE_HANDLER_MASK,
 				"bad rc=0x%x from %ps()\n", rc, uc->handler);
 		}
 
-		if (uc->ret_handler)
+		if (uc->session) {
+			sc->rc = rc;
+			need_prep |= !rc;
+		} else if (uc->ret_handler) {
 			need_prep = true;
+		}
 
 		remove &= rc;
 	}
 
+	/* no removal if there's at least one session consumer */
+	remove &= !uprobe->sessions_cnt;
+
 	if (need_prep && !remove)
-		prepare_uretprobe(uprobe, regs); /* put bp at return */
+		prepare_uretprobe(uprobe, regs, ri); /* put bp at return */
+	else
+		kfree(ri);
 
 	if (remove && uprobe->consumers) {
 		WARN_ON(!uprobe_is_active(uprobe));
 		unapply_uprobe(uprobe, current->mm);
 	}
+ out:
 	up_read(&uprobe->register_rwsem);
 }
 
@@ -2101,12 +2192,28 @@ static void
 handle_uretprobe_chain(struct return_instance *ri, struct pt_regs *regs)
 {
 	struct uprobe *uprobe = ri->uprobe;
+	struct session_consumer *sc;
 	struct uprobe_consumer *uc;
+	int session_iter = 0;
 
 	down_read(&uprobe->register_rwsem);
 	for (uc = uprobe->consumers; uc; uc = uc->next) {
+		__u64 *cookie = NULL;
+
+		if (uc->session) {
+			/*
+			 * Consumers could be added and removed, but they will not
+			 * change position, so we can iterate sessions just once
+			 * and keep the last found session as base for next search.
+			 */
+			sc = session_consumer_find(ri, &session_iter, uc->session_id);
+			if (!sc || sc->rc)
+				continue;
+			cookie = &sc->cookie;
+		}
+
 		if (uc->ret_handler)
-			uc->ret_handler(uc, ri->func, regs);
+			uc->ret_handler(uc, ri->func, regs, cookie);
 	}
 	up_read(&uprobe->register_rwsem);
 }
