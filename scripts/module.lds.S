@@ -36,7 +36,7 @@ SECTIONS {
 	__kcfi_traps 		: { KEEP(*(.kcfi_traps)) }
 #endif
 
-#ifdef CONFIG_LTO_CLANG
+#if defined(CONFIG_LD_DEAD_CODE_DATA_ELIMINATION) || defined(CONFIG_LTO_CLANG)
 	/*
 	 * With CONFIG_LTO_CLANG, LLD always enables -fdata-sections and
 	 * -ffunction-sections, which increases the size of the final module.
@@ -56,6 +56,14 @@ SECTIONS {
 	.rodata : {
 		*(.rodata .rodata.[0-9a-zA-Z_]*)
 		*(.rodata..L*)
+	}
+
+	.text : {
+		*(.text .text.[0-9a-zA-Z_]*)
+	}
+
+	.rela.text : {
+		*(.rela.text .rela.text.[0-9a-zA-Z_]*)
 	}
 #else
 	.data : {
