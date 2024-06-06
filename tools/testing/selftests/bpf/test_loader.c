@@ -2,6 +2,7 @@
 /* Copyright (c) 2022 Meta Platforms, Inc. and affiliates. */
 #include <linux/capability.h>
 #include <stdlib.h>
+#include <regex.h>
 #include <test_progs.h>
 #include <bpf/btf.h>
 
@@ -17,9 +18,11 @@
 #define TEST_TAG_EXPECT_FAILURE "comment:test_expect_failure"
 #define TEST_TAG_EXPECT_SUCCESS "comment:test_expect_success"
 #define TEST_TAG_EXPECT_MSG_PFX "comment:test_expect_msg="
+#define TEST_TAG_EXPECT_REGEX_PFX "comment:test_expect_regex="
 #define TEST_TAG_EXPECT_FAILURE_UNPRIV "comment:test_expect_failure_unpriv"
 #define TEST_TAG_EXPECT_SUCCESS_UNPRIV "comment:test_expect_success_unpriv"
 #define TEST_TAG_EXPECT_MSG_PFX_UNPRIV "comment:test_expect_msg_unpriv="
+#define TEST_TAG_EXPECT_REGEX_PFX_UNPRIV "comment:test_expect_regex_unpriv="
 #define TEST_TAG_LOG_LEVEL_PFX "comment:test_log_level="
 #define TEST_TAG_PROG_FLAGS_PFX "comment:test_prog_flags="
 #define TEST_TAG_DESCRIPTION_PFX "comment:test_description="
@@ -46,10 +49,26 @@ enum mode {
 	UNPRIV = 2
 };
 
+enum message_type {
+	SUBSTRING = 0,
+	REGEX
+};
+struct expect_msg {
+	union {
+		const char *substring;
+		struct {
+			const char *expr;
+			regex_t regex;
+			bool failed_to_compile;
+		} regex;
+	};
+	enum message_type type;
+};
+
 struct test_subspec {
 	char *name;
 	bool expect_failure;
-	const char **expect_msgs;
+	struct expect_msg *expect_msg;
 	size_t expect_msg_cnt;
 	int retval;
 	bool execute;
@@ -89,28 +108,58 @@ void test_loader_fini(struct test_loader *tester)
 
 static void free_test_spec(struct test_spec *spec)
 {
+	int i;
+
+	/* Delalocate regex from expect_msg array. */
+	for (i = 0; i < spec->priv.expect_msg_cnt; i++)
+		if (spec->priv.expect_msg[i].type == REGEX)
+			regfree(&spec->priv.expect_msg[i].regex.regex);
+
 	free(spec->priv.name);
 	free(spec->unpriv.name);
-	free(spec->priv.expect_msgs);
-	free(spec->unpriv.expect_msgs);
+	free(spec->priv.expect_msg);
+	free(spec->unpriv.expect_msg);
 
 	spec->priv.name = NULL;
 	spec->unpriv.name = NULL;
-	spec->priv.expect_msgs = NULL;
-	spec->unpriv.expect_msgs = NULL;
+	spec->priv.expect_msg = NULL;
+	spec->unpriv.expect_msg = NULL;
 }
 
-static int push_msg(const char *msg, struct test_subspec *subspec)
+static int push_msg(const char *match, enum message_type msg_type, struct test_subspec *subspec)
 {
 	void *tmp;
+	int regcomp_res;
+	char error_msg[100];
+	struct expect_msg *em;
 
-	tmp = realloc(subspec->expect_msgs, (1 + subspec->expect_msg_cnt) * sizeof(void *));
+	tmp = realloc(subspec->expect_msg,
+		      (1 + subspec->expect_msg_cnt) * sizeof(struct expect_msg));
 	if (!tmp) {
 		ASSERT_FAIL("failed to realloc memory for messages\n");
 		return -ENOMEM;
 	}
-	subspec->expect_msgs = tmp;
-	subspec->expect_msgs[subspec->expect_msg_cnt++] = msg;
+	subspec->expect_msg = tmp;
+	em = &subspec->expect_msg[subspec->expect_msg_cnt];
+	subspec->expect_msg_cnt += 1;
+
+	em->type = msg_type;
+	switch (msg_type) {
+	case SUBSTRING:
+		em->substring = match;
+		break;
+	case REGEX:
+		em->regex.expr = match;
+		regcomp_res = regcomp(&em->regex.regex, match, REG_EXTENDED|REG_NEWLINE);
+		if (regcomp_res != 0) {
+			regerror(regcomp_res, &em->regex.regex, error_msg, 100);
+			fprintf(stderr, "Regexp compilation error in '%s': '%s'\n",
+				match, error_msg);
+			ASSERT_FAIL("failed to compile regex\n");
+			return -EINVAL;
+		}
+		break;
+	}
 
 	return 0;
 }
@@ -233,13 +282,25 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX)) {
 			msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX) - 1;
-			err = push_msg(msg, &spec->priv);
+			err = push_msg(msg, SUBSTRING, &spec->priv);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= PRIV;
 		} else if (str_has_pfx(s, TEST_TAG_EXPECT_MSG_PFX_UNPRIV)) {
 			msg = s + sizeof(TEST_TAG_EXPECT_MSG_PFX_UNPRIV) - 1;
-			err = push_msg(msg, &spec->unpriv);
+			err = push_msg(msg, SUBSTRING, &spec->unpriv);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= UNPRIV;
+		} else if (str_has_pfx(s, TEST_TAG_EXPECT_REGEX_PFX)) {
+			msg = s + sizeof(TEST_TAG_EXPECT_REGEX_PFX) - 1;
+			err = push_msg(msg, REGEX, &spec->priv);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= PRIV;
+		} else if (str_has_pfx(s, TEST_TAG_EXPECT_REGEX_PFX_UNPRIV)) {
+			msg = s + sizeof(TEST_TAG_EXPECT_REGEX_PFX_UNPRIV) - 1;
+			err = push_msg(msg, REGEX, &spec->unpriv);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
@@ -336,16 +397,16 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->unpriv.execute = spec->priv.execute;
 		}
 
-		if (!spec->unpriv.expect_msgs) {
-			size_t sz = spec->priv.expect_msg_cnt * sizeof(void *);
+		if (!spec->unpriv.expect_msg) {
+			size_t sz = spec->priv.expect_msg_cnt * sizeof(struct expect_msg);
 
-			spec->unpriv.expect_msgs = malloc(sz);
-			if (!spec->unpriv.expect_msgs) {
-				PRINT_FAIL("failed to allocate memory for unpriv.expect_msgs\n");
+			spec->unpriv.expect_msg = malloc(sz);
+			if (!spec->unpriv.expect_msg) {
+				PRINT_FAIL("failed to allocate memory for unpriv.expect\n");
 				err = -ENOMEM;
 				goto cleanup;
 			}
-			memcpy(spec->unpriv.expect_msgs, spec->priv.expect_msgs, sz);
+			memcpy(spec->unpriv.expect_msg, spec->priv.expect_msg, sz);
 			spec->unpriv.expect_msg_cnt = spec->priv.expect_msg_cnt;
 		}
 	}
@@ -402,27 +463,49 @@ static void validate_case(struct test_loader *tester,
 			  struct bpf_program *prog,
 			  int load_err)
 {
-	int i, j;
+	int i, j, reg_error;
+	char *match;
+	regmatch_t reg_match[1];
 
 	for (i = 0; i < subspec->expect_msg_cnt; i++) {
-		char *match;
-		const char *expect_msg;
+		struct expect_msg *em = &subspec->expect_msg[i];
 
-		expect_msg = subspec->expect_msgs[i];
-
-		match = strstr(tester->log_buf + tester->next_match_pos, expect_msg);
-		if (!ASSERT_OK_PTR(match, "expect_msg")) {
-			/* if we are in verbose mode, we've already emitted log */
-			if (env.verbosity == VERBOSE_NONE)
-				emit_verifier_log(tester->log_buf, true /*force*/);
-			for (j = 0; j < i; j++)
-				fprintf(stderr,
-					"MATCHED  MSG: '%s'\n", subspec->expect_msgs[j]);
-			fprintf(stderr, "EXPECTED MSG: '%s'\n", expect_msg);
-			return;
+		match = NULL;
+		switch (em->type) {
+		case SUBSTRING:
+			match = strstr(tester->log_buf + tester->next_match_pos, em->substring);
+			tester->next_match_pos = match - tester->log_buf + strlen(em->substring);
+			break;
+		case REGEX:
+			reg_error = regexec(&em->regex.regex,
+					    tester->log_buf + tester->next_match_pos,
+					    1, reg_match, 0);
+			if (reg_error == 0)
+				match = tester->log_buf + tester->next_match_pos + reg_match[0].rm_so;
+			tester->next_match_pos += reg_match[0].rm_eo;
+			break;
 		}
 
-		tester->next_match_pos = match - tester->log_buf + strlen(expect_msg);
+		if (!ASSERT_OK_PTR(match, "expect_msg")) {
+			if (env.verbosity == VERBOSE_NONE)
+				emit_verifier_log(tester->log_buf, true /*force*/);
+			for (j = 0; j <= i; j++) {
+				const char *header = (j < i) ? "MATCHED" : "EXPECTED";
+				struct expect_msg *tmp = &subspec->expect_msg[j];
+
+				switch (tmp->type) {
+				case SUBSTRING:
+					fprintf(stderr,
+						"%s  MSG: '%s'\n", header, tmp->substring);
+					break;
+				case REGEX:
+					fprintf(stderr,
+						"%s  REGEX: '%s'\n", header, tmp->regex.expr);
+					break;
+				}
+			}
+			return;
+		}
 	}
 }
 
