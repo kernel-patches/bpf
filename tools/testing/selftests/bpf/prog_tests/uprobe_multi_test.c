@@ -6,6 +6,7 @@
 #include "uprobe_multi.skel.h"
 #include "uprobe_multi_bench.skel.h"
 #include "uprobe_multi_usdt.skel.h"
+#include "uprobe_multi_consumers.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "testing_helpers.h"
 #include "../sdt.h"
@@ -747,6 +748,180 @@ static void test_link_api(void)
 	__test_link_api(child);
 }
 
+static int uprobe_attach(struct uprobe_multi_consumers *skel, int bit)
+{
+	struct bpf_program **prog = &skel->progs.uprobe_0 + bit;
+	struct bpf_link **link = &skel->links.uprobe_0 + bit;
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+
+	/*
+	 * bit: 0,1 uprobe entry
+	 * bit: 2,3 uprobe return
+	 */
+	opts.retprobe = bit == 2 || bit == 3;
+
+	*link = bpf_program__attach_uprobe_multi(*prog, 0, "/proc/self/exe",
+						 "uprobe_session_consumer_test",
+						 &opts);
+	if (!ASSERT_OK_PTR(*link, "bpf_program__attach_uprobe_multi"))
+		return -1;
+	return 0;
+}
+
+static void uprobe_detach(struct uprobe_multi_consumers *skel, int bit)
+{
+	struct bpf_link **link = &skel->links.uprobe_0 + bit;
+
+	bpf_link__destroy(*link);
+	*link = NULL;
+}
+
+static bool test_bit(int bit, unsigned long val)
+{
+	return val & (1 << bit);
+}
+
+noinline int
+uprobe_session_consumer_test(struct uprobe_multi_consumers *skel,
+			     unsigned long before, unsigned long after)
+{
+	int bit;
+
+	/* detach uprobe for each unset bit in 'before' state ... */
+	for (bit = 0; bit < 4; bit++) {
+		if (test_bit(bit, before) && !test_bit(bit, after))
+			uprobe_detach(skel, bit);
+	}
+
+	/* ... and attach all new bits in 'after' state */
+	for (bit = 0; bit < 4; bit++) {
+		if (!test_bit(bit, before) && test_bit(bit, after)) {
+			if (!ASSERT_OK(uprobe_attach(skel, bit), "uprobe_attach_after"))
+				return -1;
+		}
+	}
+	return 0;
+}
+
+static void session_consumer_test(struct uprobe_multi_consumers *skel,
+				  unsigned long before, unsigned long after)
+{
+	int err, bit;
+
+	printf("session_consumer_test before %lu after %lu\n", before, after);
+
+	/* 'before' is each, we attach uprobe for every set bit */
+	for (bit = 0; bit < 4; bit++) {
+		if (test_bit(bit, before)) {
+			if (!ASSERT_OK(uprobe_attach(skel, bit), "uprobe_attach_before"))
+				goto cleanup;
+		}
+	}
+
+	err = uprobe_session_consumer_test(skel, before, after);
+	if (!ASSERT_EQ(err, 0, "uprobe_session_consumer_test"))
+		goto cleanup;
+
+	for (bit = 0; bit < 4; bit++) {
+		const char *fmt = "BUG";
+		__u64 val = 0;
+
+		if (bit < 2) {
+			/*
+			 * uprobe entry
+			 *   +1 if define in 'before'
+			 */
+			if (test_bit(bit, before))
+				val++;
+			fmt = "bit 0/1: uprobe";
+		} else {
+			/* uprobe return is tricky ;-)
+			 *
+			 * to trigger uretprobe consumer, the uretprobe needs to be installed,
+			 * which means one of the 'return' uprobes was alive when probe was hit:
+			 *
+			 *   bits: 2/3 uprobe return in 'installed' mask
+			 *
+			 * in addition if 'after' state removes everything that was installed in
+			 * 'before' state, then uprobe kernel object goes away and return uprobe
+			 * is not installed and we won't hit it even if it's in 'after' state.
+			 */
+			unsigned long installed = before & 0b1100; // is uretprobe installed
+			unsigned long exists    = before & after;  // did uprobe go away
+
+			if (installed && exists && test_bit(bit, after))
+				val++;
+			fmt = "bit 2/3: uretprobe";
+		}
+
+		ASSERT_EQ(skel->bss->uprobe_result[bit], val, fmt);
+		skel->bss->uprobe_result[bit] = 0;
+	}
+
+cleanup:
+	for (bit = 0; bit < 4; bit++) {
+		struct bpf_link **link = &skel->links.uprobe_0 + bit;
+
+		if (*link)
+			uprobe_detach(skel, bit);
+	}
+}
+
+static void test_consumers(void)
+{
+	struct uprobe_multi_consumers *skel;
+	int before, after;
+
+	skel = uprobe_multi_consumers__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi_consumers__open_and_load"))
+		return;
+
+	/*
+	 * The idea of this test is to try all possible combinations of
+	 * uprobes consumers attached on single function.
+	 *
+	 *  - 2 uprobe entry consumer
+	 *  - 2 uprobe exit consumers
+	 *
+	 * The test uses 4 uprobes attached on single function, but that
+	 * translates into single uprobe with 4 consumers in kernel.
+	 *
+	 * The before/after values present the state of attached consumers
+	 * before and after the probed function:
+	 *
+	 *  bit 0,1 : uprobe entry
+	 *  bit 2,3 : uprobe return
+	 *
+	 * For example for:
+	 *
+	 *   before = 0b0101
+	 *   after  = 0b0110
+	 *
+	 * it means that before we call 'uprobe_session_consumer_test' we
+	 * attach uprobes defined in 'before' value:
+	 *
+	 *   - bit 0: uprobe entry
+	 *   - bit 2: uprobe return
+	 *
+	 * uprobe_session_consumer_test is called and inside it we attach
+	 * and detach * uprobes based on 'after' value:
+	 *
+	 *   - bit 0: stays untouched
+	 *   - bit 2: uprobe return is detached
+	 *
+	 * uprobe_session_consumer_test returs and we check counters values
+	 * increased by bpf programs on each uprobe to match the expected
+	 * count based on before/after bits.
+	 */
+
+	for (before = 0; before < 16; before++) {
+		for (after = 0; after < 16; after++)
+			session_consumer_test(skel, before, after);
+	}
+
+	uprobe_multi_consumers__destroy(skel);
+}
+
 static void test_bench_attach_uprobe(void)
 {
 	long attach_start_ns = 0, attach_end_ns = 0;
@@ -837,4 +1012,6 @@ void test_uprobe_multi_test(void)
 		test_attach_api_fails();
 	if (test__start_subtest("attach_fails"))
 		test_attach_fails();
+	if (test__start_subtest("consumers"))
+		test_consumers();
 }
