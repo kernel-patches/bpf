@@ -2394,7 +2394,9 @@ void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 	struct bpf_trace_run_ctx run_ctx;
 
 	cant_sleep();
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
+
+	// if the instrumentation is not disabled disable recurrence and go
+	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
 		bpf_prog_inc_misses_counter(prog);
 		goto out;
 	}
@@ -2408,7 +2410,7 @@ void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 
 	bpf_reset_run_ctx(old_run_ctx);
 out:
-	this_cpu_dec(*(prog->active));
+	__this_cpu_dec(bpf_prog_active);
 }
 
 #define UNPACK(...)			__VA_ARGS__
