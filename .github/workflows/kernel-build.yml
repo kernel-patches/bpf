@@ -91,6 +91,7 @@ jobs:
       - name: Setup build environment
         uses: libbpf/ci/setup-build-env@main
         with:
+          pahole: next
           arch: ${{ inputs.arch }}
           llvm-version: ${{ inputs.llvm-version }}
       - name: Build kernel image
