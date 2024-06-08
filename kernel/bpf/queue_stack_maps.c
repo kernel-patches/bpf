@@ -234,7 +234,8 @@ out:
 /* Called from syscall or from eBPF program */
 static void *queue_stack_map_lookup_elem(struct bpf_map *map, void *key)
 {
-	return NULL;
+	/* The eBPF program should use map_peek_elem instead */
+	return ERR_PTR(-EINVAL);
 }
 
 /* Called from syscall or from eBPF program */
