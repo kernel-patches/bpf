@@ -26,7 +26,13 @@ static inline bool bpf_mmap_unlock_get_irq_work(struct mmap_unlock_irq_work **wo
 	struct mmap_unlock_irq_work *work = NULL;
 	bool irq_work_busy = false;
 
-	if (irqs_disabled()) {
+	if (in_hardirq()) {
+		/*
+		 * IRQ context does not allow to trylock mmap sem.
+		 * Force the fallback code.
+		 */
+		irq_work_busy = true;
+	} else if (irqs_disabled()) {
 		if (!IS_ENABLED(CONFIG_PREEMPT_RT)) {
 			work = this_cpu_ptr(&mmap_unlock_work);
 			if (irq_work_is_busy(&work->irq_work)) {
