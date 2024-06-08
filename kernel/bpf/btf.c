@@ -262,6 +262,7 @@ struct btf {
 	u32 data_size;
 	refcount_t refcnt;
 	u32 id;
+	u32 nr_types_sorted;
 	struct rcu_head rcu;
 	struct btf_kfunc_set_tab *kfunc_set_tab;
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
@@ -542,22 +543,101 @@ u32 btf_nr_types(const struct btf *btf)
 	return total;
 }
 
+u32 btf_type_cnt(const struct btf *btf)
+{
+	return btf->start_id + btf->nr_types;
+}
+
+static s32 btf_find_by_name_bsearch(const struct btf *btf, const char *name,
+				    int *start, int *end)
+{
+	const struct btf_type *t;
+	const char *name_buf;
+	int low, low_start, mid, high, high_end;
+	int ret, start_id;
+
+	start_id = btf->base_btf ? btf->start_id : 1;
+	low_start = low = start_id;
+	high_end = high = start_id + btf->nr_types_sorted - 1;
+
+	while (low <= high) {
+		mid = low + (high - low) / 2;
+		t = btf_type_by_id(btf, mid);
+		name_buf = btf_name_by_offset(btf, t->name_off);
+		ret = strcmp(name, name_buf);
+		if (ret > 0)
+			low = mid + 1;
+		else if (ret < 0)
+			high = mid - 1;
+		else
+			break;
+	}
+
+	if (low > high)
+		return -ESRCH;
+
+	if (start) {
+		low = mid;
+		while (low > low_start) {
+			t = btf_type_by_id(btf, low-1);
+			name_buf = btf_name_by_offset(btf, t->name_off);
+			if (strcmp(name, name_buf))
+				break;
+			low--;
+		}
+		*start = low;
+	}
+
+	if (end) {
+		high = mid;
+		while (high < high_end) {
+			t = btf_type_by_id(btf, high+1);
+			name_buf = btf_name_by_offset(btf, t->name_off);
+			if (strcmp(name, name_buf))
+				break;
+			high++;
+		}
+		*end = high;
+	}
+
+	return mid;
+}
+
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 {
 	const struct btf_type *t;
 	const char *tname;
-	u32 i, total;
+	int start, end;
+	s32 id, total;
 
-	total = btf_nr_types(btf);
-	for (i = 1; i < total; i++) {
-		t = btf_type_by_id(btf, i);
-		if (BTF_INFO_KIND(t->info) != kind)
-			continue;
+	do {
+		if (btf->nr_types_sorted) {
+			/* binary search */
+			id = btf_find_by_name_bsearch(btf, name, &start, &end);
+			if (id > 0) {
+				while (start <= end) {
+					t = btf_type_by_id(btf, start);
+					if (BTF_INFO_KIND(t->info) == kind)
+						return start;
+					start++;
+				}
+			}
+		} else {
+			/* linear search */
+			total = btf_type_cnt(btf);
+			for (id = btf->base_btf ? btf->start_id : 1;
+				id < total; id++) {
+				t = btf_type_by_id(btf, id);
+				if (BTF_INFO_KIND(t->info) != kind)
+					continue;
 
-		tname = btf_name_by_offset(btf, t->name_off);
-		if (!strcmp(tname, name))
-			return i;
-	}
+				tname = btf_name_by_offset(btf, t->name_off);
+				if (!strcmp(tname, name))
+					return id;
+			}
+		}
+		btf = btf->base_btf;
+	} while (btf);
 
 	return -ENOENT;
 }
@@ -6073,6 +6153,56 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 	return kctx_type_id;
 }
 
+static int btf_check_sort(struct btf *btf, int start_id)
+{
+	int i, n, nr_names = 0;
+
+	n = btf_nr_types(btf);
+	for (i = start_id; i < n; i++) {
+		const struct btf_type *t;
+		const char *name;
+
+		t = btf_type_by_id(btf, i);
+		if (!t)
+			return -EINVAL;
+
+		name = btf_str_by_offset(btf, t->name_off);
+		if (!str_is_empty(name))
+			nr_names++;
+	}
+
+	if (nr_names < 3)
+		goto out;
+
+	for (i = 0; i < nr_names - 1; i++) {
+		const struct btf_type *t1, *t2;
+		const char *s1, *s2;
+
+		t1 = btf_type_by_id(btf, start_id + i);
+		if (!t1)
+			return -EINVAL;
+
+		s1 = btf_str_by_offset(btf, t1->name_off);
+		if (str_is_empty(s1))
+			goto out;
+
+		t2 = btf_type_by_id(btf, start_id + i + 1);
+		if (!t2)
+			return -EINVAL;
+
+		s2 = btf_str_by_offset(btf, t2->name_off);
+		if (str_is_empty(s2))
+			goto out;
+
+		if (strcmp(s1, s2) > 0)
+			goto out;
+	}
+
+	btf->nr_types_sorted = nr_names;
+out:
+	return 0;
+}
+
 BTF_ID_LIST(bpf_ctx_convert_btf_id)
 BTF_ID(struct, bpf_ctx_convert)
 
@@ -6120,6 +6250,10 @@ struct btf *btf_parse_vmlinux(void)
 		goto errout;
 
 	err = btf_check_type_tags(env, btf, 1);
+	if (err)
+		goto errout;
+
+	err = btf_check_sort(btf, 1);
 	if (err)
 		goto errout;
 
@@ -6202,6 +6336,10 @@ static struct btf *btf_parse_module(const char *module_name, const void *data, u
 		goto errout;
 
 	err = btf_check_type_tags(env, btf, btf_nr_types(base_btf));
+	if (err)
+		goto errout;
+
+	err = btf_check_sort(btf, btf_nr_types(base_btf));
 	if (err)
 		goto errout;
 
