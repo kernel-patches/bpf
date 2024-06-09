@@ -214,10 +214,10 @@ int cap_capget(const struct task_struct *target, kernel_cap_t *effective,
 }
 
 /*
- * Determine whether the inheritable capabilities are limited to the old
+ * Determine whether the capabilities are limited to the old
  * permitted set.  Returns 1 if they are limited, 0 if they are not.
  */
-static inline int cap_inh_is_capped(void)
+static inline int cap_is_capped(void)
 {
 	/* they are so limited unless the current task has the CAP_SETPCAP
 	 * capability
@@ -227,6 +227,29 @@ static inline int cap_inh_is_capped(void)
 		return 0;
 	return 1;
 }
+
+/*
+ * Determine whether a userns capability can be raised.
+ * Returns 1 if it can, 0 otherwise.
+ */
+#ifdef CONFIG_USER_NS
+static inline int cap_uns_is_raiseable(unsigned long cap)
+{
+	if (!!cap_raised(current_cred()->cap_userns, cap))
+		return 1;
+
+	/*
+	 * A capability cannot be raised unless the current task has it in
+	 * its bounding set and, without CAP_SETPCAP, its permitted set.
+	 */
+	if (!cap_raised(current_cred()->cap_bset, cap))
+		return 0;
+	if (cap_is_capped() && !cap_raised(current_cred()->cap_permitted, cap))
+		return 0;
+
+	return 1;
+}
+#endif
 
 /**
  * cap_capset - Validate and apply proposed changes to current's capabilities
@@ -246,7 +269,7 @@ int cap_capset(struct cred *new,
 	       const kernel_cap_t *inheritable,
 	       const kernel_cap_t *permitted)
 {
-	if (cap_inh_is_capped() &&
+	if (cap_is_capped() &&
 	    !cap_issubset(*inheritable,
 			  cap_combine(old->cap_inheritable,
 				      old->cap_permitted)))
@@ -1381,6 +1404,39 @@ int cap_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 				cap_lower(new->cap_ambient, arg3);
 			return commit_creds(new);
 		}
+
+#ifdef CONFIG_USER_NS
+	case PR_CAP_USERNS:
+		if (arg2 == PR_CAP_USERNS_CLEAR_ALL) {
+			if (arg3 | arg4 | arg5)
+				return -EINVAL;
+
+			new = prepare_creds();
+			if (!new)
+				return -ENOMEM;
+			cap_clear(new->cap_userns);
+			return commit_creds(new);
+		}
+
+		if (((!cap_valid(arg3)) | arg4 | arg5))
+			return -EINVAL;
+
+		if (arg2 == PR_CAP_USERNS_IS_SET)
+			return !!cap_raised(current_cred()->cap_userns, arg3);
+		if (arg2 != PR_CAP_USERNS_RAISE && arg2 != PR_CAP_USERNS_LOWER)
+			return -EINVAL;
+		if (arg2 == PR_CAP_USERNS_RAISE && !cap_uns_is_raiseable(arg3))
+			return -EPERM;
+
+		new = prepare_creds();
+		if (!new)
+			return -ENOMEM;
+		if (arg2 == PR_CAP_USERNS_RAISE)
+			cap_raise(new->cap_userns, arg3);
+		else
+			cap_lower(new->cap_userns, arg3);
+		return commit_creds(new);
+#endif
 
 	default:
 		/* No functionality available - continue with default */

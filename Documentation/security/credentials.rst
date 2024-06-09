@@ -148,6 +148,7 @@ The Linux kernel supports the following types of credentials:
 	- Set of permitted capabilities
 	- Set of inheritable capabilities
 	- Set of effective capabilities
+	- Set of user namespace capabilities
 	- Capability bounding set
 
      These are only carried by tasks.  They indicate superior capabilities
@@ -169,6 +170,11 @@ The Linux kernel supports the following types of credentials:
      The bounding set limits the capabilities that may be inherited across
      ``execve()``, especially when a binary is executed that will execute as
      UID 0.
+
+     The user namespace set limits the capabilities granted to user namespaces.
+     It defines what capabilities will be available in the other sets after
+     creating a new user namespace, such as when calling ``clone()`` or
+     ``unshare()`` with ``CLONE_NEWUSER``.
 
  3. Secure management flags (securebits).
 

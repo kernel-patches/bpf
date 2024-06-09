@@ -32,6 +32,9 @@
 
 #include <trace/events/module.h>
 
+#ifdef CONFIG_USER_NS
+static kernel_cap_t usermodehelper_userns = CAP_FULL_SET;
+#endif
 static kernel_cap_t usermodehelper_bset = CAP_FULL_SET;
 static kernel_cap_t usermodehelper_inheritable = CAP_FULL_SET;
 static DEFINE_SPINLOCK(umh_sysctl_lock);
@@ -94,6 +97,9 @@ static int call_usermodehelper_exec_async(void *data)
 	new->cap_bset = cap_intersect(usermodehelper_bset, new->cap_bset);
 	new->cap_inheritable = cap_intersect(usermodehelper_inheritable,
 					     new->cap_inheritable);
+#ifdef CONFIG_USER_NS
+	new->cap_userns = cap_intersect(usermodehelper_userns, new->cap_userns);
+#endif
 	spin_unlock(&umh_sysctl_lock);
 
 	if (sub_info->init) {
@@ -560,6 +566,15 @@ static struct ctl_table usermodehelper_table[] = {
 		.mode		= 0600,
 		.proc_handler	= proc_cap_handler,
 	},
+#ifdef CONFIG_USER_NS
+	{
+		.procname	= "userns",
+		.data		= &usermodehelper_userns,
+		.maxlen		= 2 * sizeof(unsigned long),
+		.mode		= 0600,
+		.proc_handler	= proc_cap_handler,
+	},
+#endif
 };
 
 static int __init init_umh_sysctls(void)

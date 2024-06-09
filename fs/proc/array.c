@@ -313,6 +313,9 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	const struct cred *cred;
 	kernel_cap_t cap_inheritable, cap_permitted, cap_effective,
 			cap_bset, cap_ambient;
+#ifdef CONFIG_USER_NS
+	kernel_cap_t cap_userns;
+#endif
 
 	rcu_read_lock();
 	cred = __task_cred(p);
@@ -321,6 +324,9 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	cap_effective	= cred->cap_effective;
 	cap_bset	= cred->cap_bset;
 	cap_ambient	= cred->cap_ambient;
+#ifdef CONFIG_USER_NS
+	cap_userns	= cred->cap_userns;
+#endif
 	rcu_read_unlock();
 
 	render_cap_t(m, "CapInh:\t", &cap_inheritable);
@@ -328,6 +334,9 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	render_cap_t(m, "CapEff:\t", &cap_effective);
 	render_cap_t(m, "CapBnd:\t", &cap_bset);
 	render_cap_t(m, "CapAmb:\t", &cap_ambient);
+#ifdef CONFIG_USER_NS
+	render_cap_t(m, "CapUNs:\t", &cap_userns);
+#endif
 }
 
 static inline void task_seccomp(struct seq_file *m, struct task_struct *p)

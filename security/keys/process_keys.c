@@ -944,6 +944,9 @@ void key_change_session_keyring(struct callback_head *twork)
 	new->cap_effective	= old->cap_effective;
 	new->cap_ambient	= old->cap_ambient;
 	new->cap_bset		= old->cap_bset;
+#ifdef CONFIG_USER_NS
+	new->cap_userns		= old->cap_userns;
+#endif
 
 	new->jit_keyring	= old->jit_keyring;
 	new->thread_keyring	= key_get(old->thread_keyring);

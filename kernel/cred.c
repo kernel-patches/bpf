@@ -56,6 +56,9 @@ struct cred init_cred = {
 	.cap_permitted		= CAP_FULL_SET,
 	.cap_effective		= CAP_FULL_SET,
 	.cap_bset		= CAP_FULL_SET,
+#ifdef CONFIG_USER_NS
+	.cap_userns		= CAP_FULL_SET,
+#endif
 	.user			= INIT_USER,
 	.user_ns		= &init_user_ns,
 	.group_info		= &init_groups,

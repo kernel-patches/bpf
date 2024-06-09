@@ -198,6 +198,13 @@ struct prctl_mm_map {
 # define PR_CAP_AMBIENT_LOWER		3
 # define PR_CAP_AMBIENT_CLEAR_ALL	4
 
+/* Control the userns capability set */
+#define PR_CAP_USERNS			48
+# define PR_CAP_USERNS_IS_SET		1
+# define PR_CAP_USERNS_RAISE		2
+# define PR_CAP_USERNS_LOWER		3
+# define PR_CAP_USERNS_CLEAR_ALL	4
+
 /* arm64 Scalable Vector Extension controls */
 /* Flag values must be kept in sync with ptrace NT_ARM_SVE interface */
 #define PR_SVE_SET_VL			50	/* set task vector length */

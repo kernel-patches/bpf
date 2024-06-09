@@ -42,15 +42,13 @@ static void dec_user_namespaces(struct ucounts *ucounts)
 
 static void set_cred_user_ns(struct cred *cred, struct user_namespace *user_ns)
 {
-	/* Start with the same capabilities as init but useless for doing
-	 * anything as the capabilities are bound to the new user namespace.
-	 */
-	cred->securebits = SECUREBITS_DEFAULT;
+	/* Start with the capabilities defined in the userns set. */
+	cred->cap_bset = cred->cap_userns;
+	cred->cap_permitted = cred->cap_userns;
+	cred->cap_effective = cred->cap_userns;
 	cred->cap_inheritable = CAP_EMPTY_SET;
-	cred->cap_permitted = CAP_FULL_SET;
-	cred->cap_effective = CAP_FULL_SET;
 	cred->cap_ambient = CAP_EMPTY_SET;
-	cred->cap_bset = CAP_FULL_SET;
+	cred->securebits = SECUREBITS_DEFAULT;
 #ifdef CONFIG_KEYS
 	key_put(cred->request_key_auth);
 	cred->request_key_auth = NULL;
