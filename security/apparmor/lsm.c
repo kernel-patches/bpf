@@ -1036,7 +1036,7 @@ static int apparmor_task_kill(struct task_struct *target, struct kernel_siginfo 
 	return error;
 }
 
-static int apparmor_userns_create(const struct cred *cred)
+static int apparmor_userns_create(struct cred *cred)
 {
 	struct aa_label *label;
 	struct aa_profile *profile;

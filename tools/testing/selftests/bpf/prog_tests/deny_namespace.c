@@ -5,6 +5,8 @@
 #include <sched.h>
 #include "cap_helpers.h"
 #include <stdio.h>
+#include <stdbool.h>
+#include <sys/prctl.h>
 
 static int wait_for_pid(pid_t pid)
 {
@@ -29,7 +31,7 @@ again:
  * positive return value -> userns creation failed
  * 0                     -> userns creation succeeded
  */
-static int create_user_ns(void)
+static int create_user_ns(bool bpf)
 {
 	pid_t pid;
 
@@ -39,6 +41,8 @@ static int create_user_ns(void)
 
 	if (pid == 0) {
 		if (unshare(CLONE_NEWUSER))
+			_exit(EXIT_FAILURE);
+		if (bpf && prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN))
 			_exit(EXIT_FAILURE);
 		_exit(EXIT_SUCCESS);
 	}
@@ -53,11 +57,11 @@ static void test_userns_create_bpf(void)
 
 	cap_enable_effective(cap_mask, &old_caps);
 
-	ASSERT_OK(create_user_ns(), "priv new user ns");
+	ASSERT_OK(create_user_ns(true), "priv new user ns");
 
 	cap_disable_effective(cap_mask, &old_caps);
 
-	ASSERT_EQ(create_user_ns(), EPERM, "unpriv new user ns");
+	ASSERT_EQ(create_user_ns(true), EPERM, "unpriv new user ns");
 
 	if (cap_mask & old_caps)
 		cap_enable_effective(cap_mask, NULL);
@@ -70,7 +74,7 @@ static void test_unpriv_userns_create_no_bpf(void)
 
 	cap_disable_effective(cap_mask, &old_caps);
 
-	ASSERT_OK(create_user_ns(), "no-bpf unpriv new user ns");
+	ASSERT_OK(create_user_ns(false), "no-bpf unpriv new user ns");
 
 	if (cap_mask & old_caps)
 		cap_enable_effective(cap_mask, NULL);

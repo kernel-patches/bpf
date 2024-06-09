@@ -9,12 +9,13 @@ typedef struct { unsigned long long val; } kernel_cap_t;
 
 struct cred {
 	kernel_cap_t cap_effective;
+	kernel_cap_t cap_userns;
 } __attribute__((preserve_access_index));
 
 char _license[] SEC("license") = "GPL";
 
 SEC("lsm.s/userns_create")
-int BPF_PROG(test_userns_create, const struct cred *cred, int ret)
+int BPF_PROG(test_userns_create, struct cred *cred, int ret)
 {
 	kernel_cap_t caps = cred->cap_effective;
 	__u64 cap_mask = 1ULL << CAP_SYS_ADMIN;
@@ -23,8 +24,10 @@ int BPF_PROG(test_userns_create, const struct cred *cred, int ret)
 		return 0;
 
 	ret = -EPERM;
-	if (caps.val & cap_mask)
+	if (caps.val & cap_mask) {
+		cred->cap_userns.val &= ~cap_mask;
 		return 0;
+	}
 
 	return -EPERM;
 }

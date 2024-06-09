@@ -3558,14 +3558,14 @@ void security_task_to_inode(struct task_struct *p, struct inode *inode)
 }
 
 /**
- * security_create_user_ns() - Check if creating a new userns is allowed
+ * security_create_user_ns() - Review permissions prior to userns creation
  * @cred: prepared creds
  *
- * Check permission prior to creating a new user namespace.
+ * Check and/or modify permissions prior to creating a new user namespace.
  *
  * Return: Returns 0 if successful, otherwise < 0 error code.
  */
-int security_create_user_ns(const struct cred *cred)
+int security_create_user_ns(struct cred *cred)
 {
 	return call_int_hook(userns_create, cred);
 }

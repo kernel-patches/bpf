@@ -4263,7 +4263,7 @@ static void selinux_task_to_inode(struct task_struct *p,
 	spin_unlock(&isec->lock);
 }
 
-static int selinux_userns_create(const struct cred *cred)
+static int selinux_userns_create(struct cred *cred)
 {
 	u32 sid = current_sid();
 

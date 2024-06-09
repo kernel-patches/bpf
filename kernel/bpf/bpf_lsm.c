@@ -382,10 +382,65 @@ bool bpf_lsm_is_trusted(const struct bpf_prog *prog)
 	return !btf_id_set_contains(&untrusted_lsm_hooks, prog->aux->attach_btf_id);
 }
 
+static int bpf_lsm_btf_struct_access(struct bpf_verifier_log *log,
+				     const struct bpf_reg_state *reg,
+				     int off, int size)
+{
+	const struct btf_type *cred;
+	const struct btf_type *t;
+	s32 type_id;
+	size_t end;
+
+	type_id = btf_find_by_name_kind(reg->btf, "cred", BTF_KIND_STRUCT);
+	if (type_id < 0)
+		return -EINVAL;
+
+	t = btf_type_by_id(reg->btf, reg->btf_id);
+	cred = btf_type_by_id(reg->btf, type_id);
+	if (t != cred) {
+		bpf_log(log, "only read is supported\n");
+		return -EACCES;
+	}
+
+	switch (off) {
+	case offsetof(struct cred, cap_inheritable):
+		end = offsetofend(struct cred, cap_inheritable);
+		break;
+	case offsetof(struct cred, cap_permitted):
+		end = offsetofend(struct cred, cap_permitted);
+		break;
+	case offsetof(struct cred, cap_effective):
+		end = offsetofend(struct cred, cap_effective);
+		break;
+	case offsetof(struct cred, cap_bset):
+		end = offsetofend(struct cred, cap_bset);
+		break;
+	case offsetof(struct cred, cap_ambient):
+		end = offsetofend(struct cred, cap_ambient);
+		break;
+	case offsetof(struct cred, cap_userns):
+		end = offsetofend(struct cred, cap_userns);
+		break;
+	default:
+		bpf_log(log, "no write support to cred at off %d\n", off);
+		return -EACCES;
+	}
+
+	if (off + size > end) {
+		bpf_log(log,
+			"write access at off %d with size %d beyond the member of cred ended at %zu\n",
+			off, size, end);
+		return -EACCES;
+	}
+
+	return 0;
+}
+
 const struct bpf_prog_ops lsm_prog_ops = {
 };
 
 const struct bpf_verifier_ops lsm_verifier_ops = {
 	.get_func_proto = bpf_lsm_func_proto,
 	.is_valid_access = btf_ctx_access,
+	.btf_struct_access = bpf_lsm_btf_struct_access,
 };
