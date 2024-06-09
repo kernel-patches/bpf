@@ -5,4 +5,5 @@
 #include <uapi/linux/securebits.h>
 
 #define issecure(X)		(issecure_mask(X) & current_cred_xxx(securebits))
+#define iscredsecure(cred, X)	(issecure_mask(X) & cred->securebits)
 #endif /* !_LINUX_SECUREBITS_H */

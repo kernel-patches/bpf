@@ -52,10 +52,19 @@
 #define SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED \
 			(issecure_mask(SECURE_NO_CAP_AMBIENT_RAISE_LOCKED))
 
+/* When set, user namespace capabilities are restricted to their parent's bounding set. */
+#define SECURE_USERNS_STRICT_CAPS			8
+#define SECURE_USERNS_STRICT_CAPS_LOCKED		9  /* make bit-8 immutable */
+
+#define SECBIT_USERNS_STRICT_CAPS (issecure_mask(SECURE_USERNS_STRICT_CAPS))
+#define SECBIT_USERNS_STRICT_CAPS_LOCKED \
+			(issecure_mask(SECURE_USERNS_STRICT_CAPS_LOCKED))
+
 #define SECURE_ALL_BITS		(issecure_mask(SECURE_NOROOT) | \
 				 issecure_mask(SECURE_NO_SETUID_FIXUP) | \
 				 issecure_mask(SECURE_KEEP_CAPS) | \
-				 issecure_mask(SECURE_NO_CAP_AMBIENT_RAISE))
+				 issecure_mask(SECURE_NO_CAP_AMBIENT_RAISE) | \
+				 issecure_mask(SECURE_USERNS_STRICT_CAPS))
 #define SECURE_ALL_LOCKS	(SECURE_ALL_BITS << 1)
 
 #endif /* _UAPI_LINUX_SECUREBITS_H */

@@ -10,6 +10,7 @@
 #include <linux/cred.h>
 #include <linux/securebits.h>
 #include <linux/security.h>
+#include <linux/capability.h>
 #include <linux/keyctl.h>
 #include <linux/key-type.h>
 #include <keys/user-type.h>
@@ -42,6 +43,10 @@ static void dec_user_namespaces(struct ucounts *ucounts)
 
 static void set_cred_user_ns(struct cred *cred, struct user_namespace *user_ns)
 {
+	/* Limit userns capabilities to our parent's bounding set. */
+	if (iscredsecure(cred, SECURE_USERNS_STRICT_CAPS))
+		cred->cap_userns = cap_intersect(cred->cap_userns, cred->cap_bset);
+
 	/* Start with the capabilities defined in the userns set. */
 	cred->cap_bset = cred->cap_userns;
 	cred->cap_permitted = cred->cap_userns;
