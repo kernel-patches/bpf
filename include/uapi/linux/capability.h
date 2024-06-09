@@ -418,7 +418,11 @@ struct vfs_ns_cap_data {
 
 #define CAP_CHECKPOINT_RESTORE	40
 
-#define CAP_LAST_CAP         CAP_CHECKPOINT_RESTORE
+/* Allow setting the system userns capability mask. */
+
+#define CAP_SYS_CONTROL		41
+
+#define CAP_LAST_CAP         CAP_SYS_CONTROL
 
 #define cap_valid(x) ((x) >= 0 && (x) <= CAP_LAST_CAP)
 

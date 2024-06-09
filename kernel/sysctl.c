@@ -62,6 +62,7 @@
 #include <linux/sched/sysctl.h>
 #include <linux/mount.h>
 #include <linux/userfaultfd_k.h>
+#include <linux/user_namespace.h>
 #include <linux/pid.h>
 
 #include "../lib/kstrtox.h"
@@ -1846,6 +1847,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0444,
 		.proc_handler	= proc_dointvec,
 	},
+#ifdef CONFIG_USER_NS
+	{
+		.procname	= "cap_userns_mask",
+		.data		= &cap_userns_mask,
+		.maxlen		= sizeof(kernel_cap_t),
+		.mode		= 0644,
+		.proc_handler	= cap_userns_sysctl_handler,
+	},
+#endif
 #if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_X86)
 	{
 		.procname       = "unknown_nmi_panic",

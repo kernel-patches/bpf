@@ -26,6 +26,63 @@
 static struct kmem_cache *user_ns_cachep __ro_after_init;
 static DEFINE_MUTEX(userns_state_mutex);
 
+#ifdef CONFIG_SYSCTL
+static DEFINE_SPINLOCK(cap_userns_lock);
+kernel_cap_t cap_userns_mask = CAP_FULL_SET;
+
+int cap_userns_sysctl_handler(const struct ctl_table *table, int write,
+			      void *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct ctl_table t;
+	unsigned long mask_array[2];
+	kernel_cap_t new_mask, *mask;
+	int err;
+
+	if (write && !capable(CAP_SYS_CONTROL))
+		return -EPERM;
+
+	/*
+	 * convert from the global kernel_cap_t to the ulong array to print to
+	 * userspace if this is a read.
+	 *
+	 * capabilities are exposed as one 64-bit value or two 32-bit values
+	 * depending on the architecture
+	 */
+	mask = table->data;
+	spin_lock(&cap_userns_lock);
+	mask_array[0] = (unsigned long) mask->val;
+	if (BITS_PER_LONG != 64)
+		mask_array[1] = mask->val >> BITS_PER_LONG;
+	spin_unlock(&cap_userns_lock);
+
+	t = *table;
+	t.data = &mask_array;
+
+	/*
+	 * actually read or write and array of ulongs from userspace.  Remember
+	 * these are least significant bits first
+	 */
+	err = proc_doulongvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+
+	new_mask.val = mask_array[0];
+	if (BITS_PER_LONG != 64)
+		new_mask.val += (u64)mask_array[1] << BITS_PER_LONG;
+
+	/*
+	 * Drop everything not in the new_mask (but don't add things)
+	 */
+	if (write) {
+		spin_lock(&cap_userns_lock);
+		*mask = cap_intersect(*mask, new_mask);
+		spin_unlock(&cap_userns_lock);
+	}
+
+	return 0;
+}
+#endif
+
 static bool new_idmap_permitted(const struct file *file,
 				struct user_namespace *ns, int cap_setid,
 				struct uid_gid_map *map);
@@ -46,6 +103,12 @@ static void set_cred_user_ns(struct cred *cred, struct user_namespace *user_ns)
 	/* Limit userns capabilities to our parent's bounding set. */
 	if (iscredsecure(cred, SECURE_USERNS_STRICT_CAPS))
 		cred->cap_userns = cap_intersect(cred->cap_userns, cred->cap_bset);
+#ifdef CONFIG_SYSCTL
+	/* Mask off userns capabilities that are not permitted by the system-wide mask. */
+	spin_lock(&cap_userns_lock);
+	cred->cap_userns = cap_intersect(cred->cap_userns, cap_userns_mask);
+	spin_unlock(&cap_userns_lock);
+#endif
 
 	/* Start with the capabilities defined in the userns set. */
 	cred->cap_bset = cred->cap_userns;

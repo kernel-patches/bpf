@@ -2,6 +2,7 @@
 #ifndef _LINUX_USER_NAMESPACE_H
 #define _LINUX_USER_NAMESPACE_H
 
+#include <linux/capability.h>
 #include <linux/kref.h>
 #include <linux/nsproxy.h>
 #include <linux/ns_common.h>
@@ -13,6 +14,12 @@
 
 #define UID_GID_MAP_MAX_BASE_EXTENTS 5
 #define UID_GID_MAP_MAX_EXTENTS 340
+
+#ifdef CONFIG_SYSCTL
+extern kernel_cap_t cap_userns_mask;
+int cap_userns_sysctl_handler(const struct ctl_table *table, int write,
+			      void *buffer, size_t *lenp, loff_t *ppos);
+#endif
 
 struct uid_gid_extent {
 	u32 first;
