@@ -19,6 +19,8 @@
 #include <asm/unwind.h>
 #include <asm/cfi.h>
 
+static const int global_enable_shadow_stack = 1;
+
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
 static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
@@ -1311,6 +1313,22 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+static void emit_percpu_shadow_frame_ptr(u8 **pprog, void *shadow_frame_ptr)
+{
+	u8 *prog = *pprog;
+
+	/* movabs r9, shadow_frame_ptr */
+	emit_mov_imm64(&prog, X86_REG_R9, (long) shadow_frame_ptr >> 32,
+		       (u32) (long) shadow_frame_ptr);
+
+	/* add <r9>, gs:[<off>] */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x03, 0x0c, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
@@ -1326,12 +1344,30 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int insn_cnt = bpf_prog->len;
 	bool tail_call_seen = false;
 	bool seen_exit = false;
+	void *percpu_shadow_stack_ptr, *shadow_frame_ptr = NULL;
+	bool enable_shadow_stack = global_enable_shadow_stack;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
+	u32 stack_depth = bpf_prog->aux->stack_depth;
 	u64 arena_vm_start, user_vm_start;
 	int i, excnt = 0;
 	int ilen, proglen = 0;
 	u8 *prog = temp;
 	int err;
+
+	if (stack_depth && enable_shadow_stack) {
+		if (bpf_prog->percpu_shadow_stack_ptr) {
+			percpu_shadow_stack_ptr = bpf_prog->percpu_shadow_stack_ptr;
+		} else {
+			percpu_shadow_stack_ptr = __alloc_percpu_gfp(stack_depth, 8, GFP_KERNEL);
+			if (!percpu_shadow_stack_ptr)
+				return -ENOMEM;
+			bpf_prog->percpu_shadow_stack_ptr = percpu_shadow_stack_ptr;
+		}
+		shadow_frame_ptr = percpu_shadow_stack_ptr + round_up(stack_depth, 8);
+		stack_depth = 0;
+	} else {
+		enable_shadow_stack = 0;
+	}
 
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
@@ -1342,7 +1378,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	/* tail call's presence in current prog implies it is reachable */
 	tail_call_reachable |= tail_call_seen;
 
-	emit_prologue(&prog, bpf_prog->aux->stack_depth,
+	emit_prologue(&prog, stack_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
 		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
 	/* Exception callback will clobber callee regs for its own use, and
@@ -1364,6 +1400,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
 
+	if (enable_shadow_stack)
+		emit_percpu_shadow_frame_ptr(&prog, shadow_frame_ptr);
+
 	ilen = prog - temp;
 	if (rw_image)
 		memcpy(rw_image + proglen, temp, ilen);
@@ -1382,6 +1421,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
+
+		if (enable_shadow_stack) {
+			if (src_reg == BPF_REG_FP)
+				src_reg = X86_REG_R9;
+
+			if (dst_reg == BPF_REG_FP)
+				dst_reg = X86_REG_R9;
+		}
 
 		switch (insn->code) {
 			/* ALU */
@@ -2014,6 +2061,7 @@ populate_extable:
 				emit_mov_reg(&prog, is64, real_src_reg, BPF_REG_0);
 				/* Restore R0 after clobbering RAX */
 				emit_mov_reg(&prog, true, BPF_REG_0, BPF_REG_AX);
+
 				break;
 			}
 
@@ -2038,14 +2086,20 @@ populate_extable:
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (tail_call_reachable) {
-				RESTORE_TAIL_CALL_CNT(bpf_prog->aux->stack_depth);
+				RESTORE_TAIL_CALL_CNT(stack_depth);
 				ip += 7;
 			}
 			if (!imm32)
 				return -EINVAL;
+			if (enable_shadow_stack) {
+				EMIT2(0x41, 0x51);
+				ip += 2;
+			}
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (enable_shadow_stack)
+				EMIT2(0x41, 0x59);
 			break;
 		}
 
@@ -2055,13 +2109,13 @@ populate_extable:
 							  &bpf_prog->aux->poke_tab[imm32 - 1],
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
-							  bpf_prog->aux->stack_depth,
+							  stack_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
 							    &prog,
 							    callee_regs_used,
-							    bpf_prog->aux->stack_depth,
+							    stack_depth,
 							    image + addrs[i - 1],
 							    ctx);
 			break;
