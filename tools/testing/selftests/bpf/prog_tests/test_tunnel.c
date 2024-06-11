@@ -448,14 +448,20 @@ static void test_vxlan_tunnel(void)
 	if (!ASSERT_OK_PTR(nstoken, "setns src"))
 		goto done;
 	ifindex = if_nametoindex(VXLAN_TUNL_DEV0);
-	if (!ASSERT_NEQ(ifindex, 0, "vxlan00 ifindex"))
+	if (!ASSERT_NEQ(ifindex, 0, "vxlan00 ifindex")) {
+		close_netns(nstoken);
 		goto done;
+	}
 	tc_hook.ifindex = ifindex;
 	set_dst_prog_fd = bpf_program__fd(skel->progs.vxlan_set_tunnel_dst);
-	if (!ASSERT_GE(set_dst_prog_fd, 0, "bpf_program__fd"))
+	if (!ASSERT_GE(set_dst_prog_fd, 0, "bpf_program__fd")) {
+		close_netns(nstoken);
 		goto done;
-	if (attach_tc_prog(&tc_hook, -1, set_dst_prog_fd))
+	}
+	if (attach_tc_prog(&tc_hook, -1, set_dst_prog_fd)) {
+		close_netns(nstoken);
 		goto done;
+	}
 	close_netns(nstoken);
 
 	/* use veth1 ip 2 as tunnel source ip */
@@ -521,14 +527,20 @@ static void test_ip6vxlan_tunnel(void)
 	if (!ASSERT_OK_PTR(nstoken, "setns src"))
 		goto done;
 	ifindex = if_nametoindex(IP6VXLAN_TUNL_DEV0);
-	if (!ASSERT_NEQ(ifindex, 0, "ip6vxlan00 ifindex"))
+	if (!ASSERT_NEQ(ifindex, 0, "ip6vxlan00 ifindex")) {
+		close_netns(nstoken);
 		goto done;
+	}
 	tc_hook.ifindex = ifindex;
 	set_dst_prog_fd = bpf_program__fd(skel->progs.ip6vxlan_set_tunnel_dst);
-	if (!ASSERT_GE(set_dst_prog_fd, 0, "bpf_program__fd"))
+	if (!ASSERT_GE(set_dst_prog_fd, 0, "bpf_program__fd")) {
+		close_netns(nstoken);
 		goto done;
-	if (attach_tc_prog(&tc_hook, -1, set_dst_prog_fd))
+	}
+	if (attach_tc_prog(&tc_hook, -1, set_dst_prog_fd)) {
+		close_netns(nstoken);
 		goto done;
+	}
 	close_netns(nstoken);
 
 	/* use veth1 ip 2 as tunnel source ip */
@@ -615,8 +627,7 @@ static void test_ipip_tunnel(enum ipip_encap encap)
 	if (!ASSERT_OK_PTR(nstoken, "setns"))
 		goto done;
 	err = test_ping(AF_INET, IP4_ADDR_TUNL_DEV1);
-	if (!ASSERT_OK(err, "test_ping"))
-		goto done;
+	ASSERT_OK(err, "test_ping");
 	close_netns(nstoken);
 
 done:
