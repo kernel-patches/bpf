@@ -22,6 +22,7 @@
 #include <linux/pkeys.h>
 #include <linux/minmax.h>
 #include <linux/overflow.h>
+#include <linux/buildid.h>
 
 #include <asm/elf.h>
 #include <asm/tlb.h>
@@ -445,6 +446,7 @@ skip_vma:
 	addr = vma->vm_end;
 	if (flags & PROCMAP_QUERY_COVERING_OR_NEXT_VMA)
 		goto next_vma;
+
 no_vma:
 	return ERR_PTR(-ENOENT);
 }
@@ -455,7 +457,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	struct vm_area_struct *vma;
 	struct mm_struct *mm;
 	const char *name = NULL;
-	char *name_buf = NULL;
+	char build_id_buf[BUILD_ID_SIZE_MAX], *name_buf = NULL;
 	__u64 usize;
 	int err;
 
@@ -476,6 +478,8 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 		return -EINVAL;
 	/* either both buffer address and size are set, or both should be zero */
 	if (!!karg.vma_name_size != !!karg.vma_name_addr)
+		return -EINVAL;
+	if (!!karg.build_id_size != !!karg.build_id_addr)
 		return -EINVAL;
 
 	mm = priv->mm;
@@ -522,6 +526,21 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	if (vma->vm_flags & VM_MAYSHARE)
 		karg.vma_flags |= PROCMAP_QUERY_VMA_SHARED;
 
+	if (karg.build_id_size) {
+		__u32 build_id_sz;
+
+		err = build_id_parse(vma, build_id_buf, &build_id_sz);
+		if (err) {
+			karg.build_id_size = 0;
+		} else {
+			if (karg.build_id_size < build_id_sz) {
+				err = -ENAMETOOLONG;
+				goto out;
+			}
+			karg.build_id_size = build_id_sz;
+		}
+	}
+
 	if (karg.vma_name_size) {
 		size_t name_buf_sz = min_t(size_t, PATH_MAX, karg.vma_name_size);
 		const struct path *path;
@@ -565,6 +584,10 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 		return -EFAULT;
 	}
 	kfree(name_buf);
+
+	if (karg.build_id_size && copy_to_user((void __user *)karg.build_id_addr,
+					       build_id_buf, karg.build_id_size))
+		return -EFAULT;
 
 	if (copy_to_user(uarg, &karg, min_t(size_t, sizeof(karg), usize)))
 		return -EFAULT;
