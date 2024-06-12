@@ -207,7 +207,6 @@ static inline void emit_ia32_mov_i(const u8 dst, const u32 val, bool dstk,
 				   u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 	if (dstk) {
 		if (val == 0) {
@@ -235,7 +234,6 @@ static inline void emit_ia32_mov_r(const u8 dst, const u8 src, bool dstk,
 				   bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 sreg = sstk ? IA32_EAX : src;
 
 	if (sstk)
@@ -286,7 +284,6 @@ static inline void emit_ia32_mul_r(const u8 dst, const u8 src, bool dstk,
 				   bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 sreg = sstk ? IA32_ECX : src;
 
 	if (sstk)
@@ -319,7 +316,6 @@ static inline void emit_ia32_to_le_r64(const u8 dst[], s32 val,
 					 const struct bpf_prog_aux *aux)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -367,7 +363,6 @@ static inline void emit_ia32_to_be_r64(const u8 dst[], s32 val,
 				       const struct bpf_prog_aux *aux)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -436,7 +431,6 @@ static inline void emit_ia32_div_mod_r(const u8 op, const u8 dst, const u8 src,
 				       bool dstk, bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 	if (sstk)
 		/* mov ecx,dword ptr [ebp+off] */
@@ -483,7 +477,6 @@ static inline void emit_ia32_shift_r(const u8 op, const u8 dst, const u8 src,
 				     bool dstk, bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg = dstk ? IA32_EAX : dst;
 	u8 b2;
 
@@ -525,7 +518,6 @@ static inline void emit_ia32_alu_r(const bool is64, const bool hi, const u8 op,
 				   bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 sreg = sstk ? IA32_EAX : src;
 	u8 dreg = dstk ? IA32_EDX : dst;
 
@@ -599,7 +591,6 @@ static inline void emit_ia32_alu_i(const bool is64, const bool hi, const u8 op,
 				   u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg = dstk ? IA32_EAX : dst;
 	u8 sreg = IA32_EDX;
 
@@ -698,7 +689,6 @@ static inline void emit_ia32_alu_i64(const bool is64, const u8 op,
 static inline void emit_ia32_neg64(const u8 dst[], bool dstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -732,7 +722,6 @@ static inline void emit_ia32_lsh_r64(const u8 dst[], const u8 src[],
 				     bool dstk, bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -785,7 +774,6 @@ static inline void emit_ia32_arsh_r64(const u8 dst[], const u8 src[],
 				      bool dstk, bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -838,7 +826,6 @@ static inline void emit_ia32_rsh_r64(const u8 dst[], const u8 src[], bool dstk,
 				     bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -891,7 +878,6 @@ static inline void emit_ia32_lsh_i64(const u8 dst[], const u32 val,
 				     bool dstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -939,7 +925,6 @@ static inline void emit_ia32_rsh_i64(const u8 dst[], const u32 val,
 				     bool dstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -988,7 +973,6 @@ static inline void emit_ia32_arsh_i64(const u8 dst[], const u32 val,
 				      bool dstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u8 dreg_lo = dstk ? IA32_EAX : dst_lo;
 	u8 dreg_hi = dstk ? IA32_EDX : dst_hi;
 
@@ -1036,7 +1020,6 @@ static inline void emit_ia32_mul_r64(const u8 dst[], const u8 src[], bool dstk,
 				     bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 	if (dstk)
 		/* mov eax,dword ptr [ebp+off] */
@@ -1113,7 +1096,6 @@ static inline void emit_ia32_mul_i64(const u8 dst[], const u32 val,
 				     bool dstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	u32 hi;
 
 	hi = val & (1<<31) ? (u32)~0 : 0;
@@ -1200,7 +1182,6 @@ struct jit_context {
 static void emit_prologue(u8 **pprog, u32 stack_depth)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 	const u8 *r1 = bpf2ia32[BPF_REG_1];
 	const u8 fplo = bpf2ia32[BPF_REG_FP][0];
 	const u8 fphi = bpf2ia32[BPF_REG_FP][1];
@@ -1237,7 +1218,6 @@ static void emit_prologue(u8 **pprog, u32 stack_depth)
 	EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EBX), STACK_VAR(tcc[0]));
 	EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EBX), STACK_VAR(tcc[1]));
 
-	BUILD_BUG_ON(cnt != PROLOGUE_SIZE);
 	*pprog = prog;
 }
 
@@ -1246,7 +1226,6 @@ static void emit_epilogue(u8 **pprog, u32 stack_depth)
 {
 	u8 *prog = *pprog;
 	const u8 *r0 = bpf2ia32[BPF_REG_0];
-	int cnt = 0;
 
 	/* mov eax,dword ptr [ebp+off]*/
 	EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_EAX), STACK_VAR(r0[0]));
@@ -1391,7 +1370,6 @@ static void emit_bpf_tail_call(u8 **pprog, u8 *ip)
 static inline void emit_push_r64(const u8 src[], u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 	/* mov ecx,dword ptr [ebp+off] */
 	EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_ECX), STACK_VAR(src_hi));
@@ -1409,7 +1387,6 @@ static inline void emit_push_r64(const u8 src[], u8 **pprog)
 static void emit_push_r32(const u8 src[], u8 **pprog)
 {
 	u8 *prog = *pprog;
-	int cnt = 0;
 
 	/* mov ecx,dword ptr [ebp+off] */
 	EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_ECX), STACK_VAR(src_lo));
@@ -1570,7 +1547,7 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 			   const struct bpf_insn *insn, u8 **pprog)
 {
 	const u8 arg_regs[] = { IA32_EAX, IA32_EDX, IA32_ECX };
-	int i, cnt = 0, first_stack_regno, last_stack_regno;
+	int i, first_stack_regno, last_stack_regno;
 	int free_arg_regs = ARRAY_SIZE(arg_regs);
 	const struct btf_func_model *fm;
 	int bytes_in_stack = 0;
@@ -1663,7 +1640,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 	int insn_cnt = bpf_prog->len;
 	bool seen_exit = false;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
-	int i, cnt = 0;
+	int i;
 	int proglen = 0;
 	u8 *prog = temp;
 
