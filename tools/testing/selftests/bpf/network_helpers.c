@@ -303,21 +303,20 @@ error_close:
 	return -1;
 }
 
-int connect_to_fd_opts(int server_fd, const struct network_helper_opts *opts)
+int connect_to_fd_opts(int server_fd, int type,
+		       const struct network_helper_opts *opts)
 {
 	struct sockaddr_storage addr;
 	struct sockaddr_in *addr_in;
 	socklen_t addrlen, optlen;
-	int fd, type, protocol;
+	int fd, protocol;
 
 	if (!opts)
 		opts = &default_opts;
 
 	optlen = sizeof(type);
 
-	if (opts->type) {
-		type = opts->type;
-	} else {
+	if (!type) {
 		if (getsockopt(server_fd, SOL_SOCKET, SO_TYPE, &type, &optlen)) {
 			log_err("getsockopt(SOL_TYPE)");
 			return -1;
@@ -370,7 +369,7 @@ int connect_to_fd(int server_fd, int timeout_ms)
 		.timeout_ms = timeout_ms,
 	};
 
-	return connect_to_fd_opts(server_fd, &opts);
+	return connect_to_fd_opts(server_fd, 0, &opts);
 }
 
 int connect_fd_to_fd(int client_fd, int server_fd, int timeout_ms)
