@@ -303,8 +303,8 @@ error_close:
 	return -1;
 }
 
-int connect_to_fd_opts(int server_fd, int type,
-		       const struct network_helper_opts *opts)
+int start_client(int server_fd, int type,
+		 const struct network_helper_opts *opts)
 {
 	struct sockaddr_storage addr;
 	struct sockaddr_in *addr_in;
@@ -352,9 +352,37 @@ int connect_to_fd_opts(int server_fd, int type,
 	    opts->post_socket_cb(fd, opts->cb_opts))
 		goto error_close;
 
-	if (!opts->noconnect)
-		if (connect_fd_to_addr(fd, &addr, addrlen, opts->must_fail))
-			goto error_close;
+	return fd;
+
+error_close:
+	save_errno_close(fd);
+	return -1;
+}
+
+int connect_to_fd_opts(int server_fd, int type,
+		       const struct network_helper_opts *opts)
+{
+	struct sockaddr_storage addr;
+	socklen_t addrlen;
+	int fd;
+
+	if (!opts)
+		opts = &default_opts;
+
+	addrlen = sizeof(addr);
+	if (getsockname(server_fd, (struct sockaddr *)&addr, &addrlen)) {
+		log_err("Failed to get server addr");
+		return -1;
+	}
+
+	fd = start_client(server_fd, type, opts);
+	if (fd < 0) {
+		log_err("Failed to create client socket");
+		return -1;
+	}
+
+	if (connect_fd_to_addr(fd, &addr, addrlen, opts->must_fail))
+		goto error_close;
 
 	return fd;
 
