@@ -67,3 +67,68 @@ void tval_add(struct tval *dst_val, const struct tval *src_val)
 	scalar_min_max_add(dst_val, src_val);
 	dst_val->var_off = tnum_add(dst_val->var_off, src_val->var_off);
 }
+
+static void scalar32_min_max_sub(struct tval *dst_val,
+				 struct tval *src_val)
+{
+	s32 smin_val = src_val->s32_min;
+	s32 smax_val = src_val->s32_max;
+	u32 umin_val = src_val->u32_min;
+	u32 umax_val = src_val->u32_max;
+	s32 smin_cur, smax_cur;
+
+	if (check_sub_overflow(dst_val->s32_min, smax_val, &smin_cur) ||
+	    check_sub_overflow(dst_val->s32_max, smin_val, &smax_cur)) {
+		/* Overflow possible, we know nothing */
+		dst_val->s32_min = S32_MIN;
+		dst_val->s32_max = S32_MAX;
+	} else {
+		dst_val->s32_min = smin_cur;
+		dst_val->s32_max = smax_cur;
+	}
+	if (dst_val->u32_min < umax_val) {
+		/* Overflow possible, we know nothing */
+		dst_val->u32_min = 0;
+		dst_val->u32_max = U32_MAX;
+	} else {
+		/* Cannot overflow (as long as bounds are consistent) */
+		dst_val->u32_min -= umax_val;
+		dst_val->u32_max -= umin_val;
+	}
+}
+
+static void scalar_min_max_sub(struct tval *dst_val,
+			       struct tval *src_val)
+{
+	s64 smin_val = src_val->smin;
+	s64 smax_val = src_val->smax;
+	u64 umin_val = src_val->umin;
+	u64 umax_val = src_val->umax;
+	s64 smin_cur, smax_cur;
+
+	if (check_sub_overflow(dst_val->smin, smax_val, &smin_cur) ||
+	    check_sub_overflow(dst_val->smax, smin_val, &smax_cur)) {
+		/* Overflow possible, we know nothing */
+		dst_val->smin = S64_MIN;
+		dst_val->smax = S64_MAX;
+	} else {
+		dst_val->smin = smin_cur;
+		dst_val->smax = smax_cur;
+	}
+	if (dst_val->umin < umax_val) {
+		/* Overflow possible, we know nothing */
+		dst_val->umin = 0;
+		dst_val->umax = U64_MAX;
+	} else {
+		/* Cannot overflow (as long as bounds are consistent) */
+		dst_val->umin -= umax_val;
+		dst_val->umax -= umin_val;
+	}
+}
+
+void tval_sub(struct tval *dst_val, struct tval *src_val)
+{
+	scalar32_min_max_sub(dst_val, src_val);
+	scalar_min_max_sub(dst_val, src_val);
+	dst_val->var_off = tnum_sub(dst_val->var_off, src_val->var_off);
+}

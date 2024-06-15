@@ -13304,64 +13304,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,
-				 struct bpf_reg_state *src_reg)
-{
-	s32 smin_val = src_reg->val.s32_min;
-	s32 smax_val = src_reg->val.s32_max;
-	u32 umin_val = src_reg->val.u32_min;
-	u32 umax_val = src_reg->val.u32_max;
-	s32 smin_cur, smax_cur;
-
-	if (check_sub_overflow(dst_reg->val.s32_min, smax_val, &smin_cur) ||
-	    check_sub_overflow(dst_reg->val.s32_max, smin_val, &smax_cur)) {
-		/* Overflow possible, we know nothing */
-		dst_reg->val.s32_min = S32_MIN;
-		dst_reg->val.s32_max = S32_MAX;
-	} else {
-		dst_reg->val.s32_min = smin_cur;
-		dst_reg->val.s32_max = smax_cur;
-	}
-	if (dst_reg->val.u32_min < umax_val) {
-		/* Overflow possible, we know nothing */
-		dst_reg->val.u32_min = 0;
-		dst_reg->val.u32_max = U32_MAX;
-	} else {
-		/* Cannot overflow (as long as bounds are consistent) */
-		dst_reg->val.u32_min -= umax_val;
-		dst_reg->val.u32_max -= umin_val;
-	}
-}
-
-static void scalar_min_max_sub(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
-{
-	s64 smin_val = src_reg->val.smin;
-	s64 smax_val = src_reg->val.smax;
-	u64 umin_val = src_reg->val.umin;
-	u64 umax_val = src_reg->val.umax;
-	s64 smin_cur, smax_cur;
-
-	if (check_sub_overflow(dst_reg->val.smin, smax_val, &smin_cur) ||
-	    check_sub_overflow(dst_reg->val.smax, smin_val, &smax_cur)) {
-		/* Overflow possible, we know nothing */
-		dst_reg->val.smin = S64_MIN;
-		dst_reg->val.smax = S64_MAX;
-	} else {
-		dst_reg->val.smin = smin_cur;
-		dst_reg->val.smax = smax_cur;
-	}
-	if (dst_reg->val.umin < umax_val) {
-		/* Overflow possible, we know nothing */
-		dst_reg->val.umin = 0;
-		dst_reg->val.umax = U64_MAX;
-	} else {
-		/* Cannot overflow (as long as bounds are consistent) */
-		dst_reg->val.umin -= umax_val;
-		dst_reg->val.umax -= umin_val;
-	}
-}
-
 static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -13890,9 +13832,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		tval_add(&dst_reg->val, &src_reg.val);
 		break;
 	case BPF_SUB:
-		scalar32_min_max_sub(dst_reg, &src_reg);
-		scalar_min_max_sub(dst_reg, &src_reg);
-		dst_reg->val.var_off = tnum_sub(dst_reg->val.var_off, src_reg.val.var_off);
+		tval_sub(&dst_reg->val, &src_reg.val);
 		break;
 	case BPF_MUL:
 		dst_reg->val.var_off = tnum_mul(dst_reg->val.var_off, src_reg.val.var_off);
