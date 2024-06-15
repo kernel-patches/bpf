@@ -69,7 +69,7 @@ void tval_add(struct tval *dst_val, const struct tval *src_val)
 }
 
 static void scalar32_min_max_sub(struct tval *dst_val,
-				 struct tval *src_val)
+				 const struct tval *src_val)
 {
 	s32 smin_val = src_val->s32_min;
 	s32 smax_val = src_val->s32_max;
@@ -98,7 +98,7 @@ static void scalar32_min_max_sub(struct tval *dst_val,
 }
 
 static void scalar_min_max_sub(struct tval *dst_val,
-			       struct tval *src_val)
+			       const struct tval *src_val)
 {
 	s64 smin_val = src_val->smin;
 	s64 smax_val = src_val->smax;
@@ -126,7 +126,7 @@ static void scalar_min_max_sub(struct tval *dst_val,
 	}
 }
 
-void tval_sub(struct tval *dst_val, struct tval *src_val)
+void tval_sub(struct tval *dst_val, const struct tval *src_val)
 {
 	scalar32_min_max_sub(dst_val, src_val);
 	scalar_min_max_sub(dst_val, src_val);

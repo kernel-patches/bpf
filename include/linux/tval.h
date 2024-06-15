@@ -25,6 +25,6 @@ struct tval {
 };
 
 void tval_add(struct tval *a, const struct tval *b);
-void tval_sub(struct tval *a, struct tval *b);
+void tval_sub(struct tval *a, const struct tval *b);
 
 #endif /* _LINUX_TVAL_H */

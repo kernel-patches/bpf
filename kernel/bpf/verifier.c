@@ -13097,7 +13097,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_sanitize_info info = {};
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
-	s64 smin_cur, smax_cur;
 	int ret;
 
 	dst_reg = &regs[dst];
@@ -13247,25 +13246,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		/* A new variable offset is created.  If the subtrahend is known
 		 * nonnegative, then any reg->range we had before is still good.
 		 */
-		if (check_sub_overflow(smin_ptr, smax_val, &smin_cur) ||
-		    check_sub_overflow(smax_ptr, smin_val, &smax_cur)) {
-			/* Overflow possible, we know nothing */
-			dst_reg->val.smin = S64_MIN;
-			dst_reg->val.smax = S64_MAX;
-		} else {
-			dst_reg->val.smin = smin_cur;
-			dst_reg->val.smax = smax_cur;
-		}
-		if (umin_ptr < umax_val) {
-			/* Overflow possible, we know nothing */
-			dst_reg->val.umin = 0;
-			dst_reg->val.umax = U64_MAX;
-		} else {
-			/* Cannot overflow (as long as bounds are consistent) */
-			dst_reg->val.umin = umin_ptr - umax_val;
-			dst_reg->val.umax = umax_ptr - umin_val;
-		}
-		dst_reg->val.var_off = tnum_sub(ptr_reg->val.var_off, off_reg->val.var_off);
+		tval_sub(&dst_reg->val, &off_reg->val);
 		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
 		if (reg_is_pkt_pointer(ptr_reg)) {
