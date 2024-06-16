@@ -3328,7 +3328,7 @@ struct btf_dedup {
 
 static long hash_combine(long h, long value)
 {
-	return h * 31 + value;
+	return (long)((unsigned long)h * 31 + (unsigned long)value);
 }
 
 #define for_each_dedup_cand(d, node, hash) \
