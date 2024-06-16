@@ -855,7 +855,7 @@ static inline u32 type_flag(u32 type)
 static inline enum bpf_prog_type resolve_prog_type(const struct bpf_prog *prog)
 {
 	return prog->type == BPF_PROG_TYPE_EXT ?
-		prog->aux->dst_prog->type : prog->type;
+		prog->aux->saved_dst_prog_type : prog->type;
 }
 
 static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
