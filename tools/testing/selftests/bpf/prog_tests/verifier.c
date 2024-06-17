@@ -87,6 +87,7 @@
 #include "verifier_xdp.skel.h"
 #include "verifier_xdp_direct_packet_access.skel.h"
 #include "verifier_bits_iter.skel.h"
+#include "verifier_arg_reg_off_reject.skel.h"
 
 #define MAX_ENTRIES 11
 
@@ -204,6 +205,7 @@ void test_verifier_xadd(void)                 { RUN(verifier_xadd); }
 void test_verifier_xdp(void)                  { RUN(verifier_xdp); }
 void test_verifier_xdp_direct_packet_access(void) { RUN(verifier_xdp_direct_packet_access); }
 void test_verifier_bits_iter(void) { RUN(verifier_bits_iter); }
+void test_verifier_arg_reg_off_reject(void) { RUN(verifier_arg_reg_off_reject); }
 
 static int init_test_val_map(struct bpf_object *obj, char *map_name)
 {
