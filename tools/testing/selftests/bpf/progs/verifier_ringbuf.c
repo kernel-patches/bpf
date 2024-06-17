@@ -12,7 +12,7 @@ struct {
 
 SEC("socket")
 __description("ringbuf: invalid reservation offset 1")
-__failure __msg("R1 must have zero offset when passed to release func")
+__failure __msg("R1 must have a fixed offset of 0 when passed to a OBJ_RELEASE/KF_RELEASE flagged BPF helper/kfunc which takes a void *")
 __failure_unpriv
 __naked void ringbuf_invalid_reservation_offset_1(void)
 {
