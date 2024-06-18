@@ -307,6 +307,61 @@ int iter_limit_bug(struct __sk_buff *skb)
 	return 0;
 }
 
+SEC("socket")
+__success __retval(0)
+__naked void ja_and_may_goto(void)
+{
+	asm volatile ("			\
+l0_%=:	.byte 0xe5; /* may_goto */	\
+	.byte 0; /* regs */		\
+	.short 1; /* off 1 */		\
+	.long 0; /* imm */		\
+	goto l0_%=;			\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_common);
+}
+
+SEC("socket")
+__success __retval(0)
+__naked void ja_and_may_goto2(void)
+{
+	asm volatile ("			\
+l0_%=:	r0 = 0;				\
+	.byte 0xe5; /* may_goto */	\
+	.byte 0; /* regs */		\
+	.short 1; /* off 1 */		\
+	.long 0; /* imm */		\
+	goto l0_%=;			\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_common);
+}
+
+SEC("socket")
+__success __retval(0)
+__naked void ja_and_may_goto_subprog(void)
+{
+	asm volatile ("			\
+	call subprog_with_may_goto;	\
+	exit;				\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __used
+void subprog_with_may_goto(void)
+{
+	asm volatile ("			\
+l0_%=:	.byte 0xe5; /* may_goto */	\
+	.byte 0; /* regs */		\
+	.short 1; /* off 1 */		\
+	.long 0; /* imm */		\
+	goto l0_%=;			\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_all);
+}
+
 #define ARR_SZ 1000000
 int zero;
 char arr[ARR_SZ];
