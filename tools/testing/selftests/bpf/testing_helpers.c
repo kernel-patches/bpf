@@ -219,15 +219,15 @@ int parse_test_list(const char *s,
 		    struct test_filter_set *set,
 		    bool is_glob_pattern)
 {
-	char *input, *state = NULL, *test_spec;
+	char *input, *state = NULL, *test;
 	int err = 0;
 
 	input = strdup(s);
 	if (!input)
 		return -ENOMEM;
 
-	while ((test_spec = strtok_r(state ? NULL : input, ",", &state))) {
-		err = insert_test(set, test_spec, is_glob_pattern);
+	for (test = strtok_r(input, ",", &state); test; test = strtok_r(NULL, ",", &state)) {
+		err = insert_test(set, test, is_glob_pattern);
 		if (err)
 			break;
 	}
