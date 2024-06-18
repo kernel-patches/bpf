@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-#include <error.h>
-#include <errno.h>
+#include <err.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,15 +29,15 @@ static void load_and_attach_program(void)
 	ret = bpf_flow_load(&obj, cfg_path_name, cfg_prog_name,
 			    cfg_map_name, NULL, &prog_fd, NULL);
 	if (ret)
-		error(1, 0, "bpf_flow_load %s", cfg_path_name);
+		errx(1, "bpf_flow_load %s", cfg_path_name);
 
 	ret = bpf_prog_attach(prog_fd, 0 /* Ignore */, BPF_FLOW_DISSECTOR, 0);
 	if (ret)
-		error(1, 0, "bpf_prog_attach %s", cfg_path_name);
+		errx(1, "bpf_prog_attach %s", cfg_path_name);
 
 	ret = bpf_object__pin(obj, cfg_pin_path);
 	if (ret)
-		error(1, 0, "bpf_object__pin %s", cfg_pin_path);
+		errx(1, "bpf_object__pin %s", cfg_pin_path);
 }
 
 static void detach_program(void)
@@ -48,13 +47,13 @@ static void detach_program(void)
 
 	ret = bpf_prog_detach(0, BPF_FLOW_DISSECTOR);
 	if (ret)
-		error(1, 0, "bpf_prog_detach");
+		errx(1, "bpf_prog_detach");
 
 	/* To unpin, it is necessary and sufficient to just remove this dir */
 	sprintf(command, "rm -r %s", cfg_pin_path);
 	ret = system(command);
 	if (ret)
-		error(1, errno, "%s", command);
+		err(1, "%s", command);
 }
 
 static void parse_opts(int argc, char **argv)
@@ -67,23 +66,23 @@ static void parse_opts(int argc, char **argv)
 		switch (c) {
 		case 'a':
 			if (detach)
-				error(1, 0, "attach/detach are exclusive");
+				errx(1, "attach/detach are exclusive");
 			attach = true;
 			break;
 		case 'd':
 			if (attach)
-				error(1, 0, "attach/detach are exclusive");
+				errx(1, "attach/detach are exclusive");
 			detach = true;
 			break;
 		case 'p':
 			if (cfg_path_name)
-				error(1, 0, "only one path can be given");
+				errx(1, "only one path can be given");
 
 			cfg_path_name = optarg;
 			break;
 		case 's':
 			if (cfg_prog_name)
-				error(1, 0, "only one prog can be given");
+				errx(1, "only one prog can be given");
 
 			cfg_prog_name = optarg;
 			break;
@@ -94,10 +93,10 @@ static void parse_opts(int argc, char **argv)
 		cfg_attach = false;
 
 	if (cfg_attach && !cfg_path_name)
-		error(1, 0, "must provide a path to the BPF program");
+		errx(1, "must provide a path to the BPF program");
 
 	if (cfg_attach && !cfg_prog_name)
-		error(1, 0, "must provide a section name");
+		errx(1, "must provide a section name");
 }
 
 int main(int argc, char **argv)

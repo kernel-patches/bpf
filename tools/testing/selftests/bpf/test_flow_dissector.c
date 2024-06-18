@@ -12,7 +12,7 @@
 #include <stddef.h>
 #include <arpa/inet.h>
 #include <asm/byteorder.h>
-#include <error.h>
+#include <err.h>
 #include <errno.h>
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
@@ -129,13 +129,13 @@ static void util_printaddr(const char *msg, struct sockaddr *addr)
 		off = __builtin_offsetof(struct sockaddr_in6, sin6_addr);
 		break;
 	default:
-		error(1, 0, "printaddr: unsupported family %u\n",
+		errx(1, "printaddr: unsupported family %u\n",
 		      addr->sa_family);
 	}
 
 	if (!inet_ntop(addr->sa_family, ((void *) addr) + off, nbuf,
 		       sizeof(nbuf)))
-		error(1, errno, "inet_ntop");
+		err(1, "inet_ntop");
 
 	fprintf(stderr, "%s: %s\n", msg, nbuf);
 }
@@ -296,7 +296,7 @@ static int build_packet(void)
 
 	if (el3_len + ol3_len + ol4_len + il3_len + il4_len + cfg_payload_len >=
 	    sizeof(buf))
-		error(1, 0, "packet too large\n");
+		errx(1, "packet too large\n");
 
 	/*
 	 * Fill packet from inside out, to calculate correct checksums.
@@ -404,7 +404,7 @@ static int setup_tx(void)
 
 	fd = socket(family, SOCK_RAW, IPPROTO_RAW);
 	if (fd == -1)
-		error(1, errno, "socket tx");
+		err(1, "socket tx");
 
 	if (cfg_l3_extra) {
 		if (cfg_l3_extra == PF_INET)
@@ -414,7 +414,7 @@ static int setup_tx(void)
 			ret = connect(fd, (void *) &extra_daddr6,
 				      sizeof(extra_daddr6));
 		if (ret)
-			error(1, errno, "connect tx");
+			err(1, "connect tx");
 	} else if (cfg_l3_outer) {
 		/* connect to destination if not encapsulated */
 		if (cfg_l3_outer == PF_INET)
@@ -424,7 +424,7 @@ static int setup_tx(void)
 			ret = connect(fd, (void *) &out_daddr6,
 				      sizeof(out_daddr6));
 		if (ret)
-			error(1, errno, "connect tx");
+			err(1, "connect tx");
 	} else {
 		/* otherwise using loopback */
 		if (cfg_l3_inner == PF_INET)
@@ -434,7 +434,7 @@ static int setup_tx(void)
 			ret = connect(fd, (void *) &in_daddr6,
 				      sizeof(in_daddr6));
 		if (ret)
-			error(1, errno, "connect tx");
+			err(1, "connect tx");
 	}
 
 	return fd;
@@ -447,14 +447,14 @@ static int setup_rx(void)
 
 	fd = socket(cfg_l3_inner, SOCK_DGRAM, 0);
 	if (fd == -1)
-		error(1, errno, "socket rx");
+		err(1, "socket rx");
 
 	if (cfg_l3_inner == PF_INET)
 		ret = bind(fd, (void *) &in_daddr4, sizeof(in_daddr4));
 	else
 		ret = bind(fd, (void *) &in_daddr6, sizeof(in_daddr6));
 	if (ret)
-		error(1, errno, "bind rx");
+		err(1, "bind rx");
 
 	return fd;
 }
@@ -465,9 +465,9 @@ static int do_tx(int fd, const char *pkt, int len)
 
 	ret = write(fd, pkt, len);
 	if (ret == -1)
-		error(1, errno, "send");
+		err(1, "send");
 	if (ret != len)
-		error(1, errno, "send: len (%d < %d)\n", ret, len);
+		err(1, "send: len (%d < %d)\n", ret, len);
 
 	return 1;
 }
@@ -482,9 +482,9 @@ static int do_poll(int fd, short events, int timeout)
 
 	ret = poll(&pfd, 1, timeout);
 	if (ret == -1)
-		error(1, errno, "poll");
+		err(1, "poll");
 	if (ret && !(pfd.revents & POLLIN))
-		error(1, errno, "poll: unexpected event 0x%x\n", pfd.revents);
+		err(1, "poll: unexpected event 0x%x\n", pfd.revents);
 
 	return ret;
 }
@@ -499,9 +499,9 @@ static int do_rx(int fd)
 		if (ret == -1 && errno == EAGAIN)
 			break;
 		if (ret == -1)
-			error(1, errno, "recv");
+			err(1, "recv");
 		if (rbuf != cfg_payload_char)
-			error(1, 0, "recv: payload mismatch");
+			errx(1, "recv: payload mismatch");
 		num++;
 	}
 
@@ -563,9 +563,9 @@ static int do_main(void)
 	fprintf(stderr, "pkts: tx=%u rx=%u\n", tx, rx);
 
 	if (fdr != -1 && close(fdr))
-		error(1, errno, "close rx");
+		err(1, "close rx");
 	if (fdt != -1 && close(fdt))
-		error(1, errno, "close tx");
+		err(1, "close tx");
 
 	/*
 	 * success (== 0) only if received all packets
@@ -594,9 +594,9 @@ static void parse_addr(int family, void *addr, const char *optarg)
 
 	ret = inet_pton(family, optarg, addr);
 	if (ret == -1)
-		error(1, errno, "inet_pton");
+		err(1, "inet_pton");
 	if (ret == 0)
-		error(1, 0, "inet_pton: bad string");
+		errx(1, "inet_pton: bad string");
 }
 
 static void parse_addr4(struct sockaddr_in *addr, const char *optarg)
@@ -627,7 +627,7 @@ static void parse_opts(int argc, char **argv)
 		switch (c) {
 		case 'd':
 			if (cfg_l3_outer == AF_UNSPEC)
-				error(1, 0, "-d must be preceded by -o");
+				errx(1, "-d must be preceded by -o");
 			if (cfg_l3_outer == AF_INET)
 				parse_addr4(&out_daddr4, optarg);
 			else
@@ -635,7 +635,7 @@ static void parse_opts(int argc, char **argv)
 			break;
 		case 'D':
 			if (cfg_l3_inner == AF_UNSPEC)
-				error(1, 0, "-D must be preceded by -i");
+				errx(1, "-D must be preceded by -i");
 			if (cfg_l3_inner == AF_INET)
 				parse_addr4(&in_daddr4, optarg);
 			else
@@ -713,14 +713,14 @@ static void parse_opts(int argc, char **argv)
 	}
 
 	if (cfg_only_rx && cfg_only_tx)
-		error(1, 0, "options: cannot combine rx-only and tx-only");
+		errx(1, "options: cannot combine rx-only and tx-only");
 
 	if (cfg_encap_proto && cfg_l3_outer == AF_UNSPEC)
-		error(1, 0, "options: must specify outer with encap");
+		errx(1, "options: must specify outer with encap");
 	else if ((!cfg_encap_proto) && cfg_l3_outer != AF_UNSPEC)
-		error(1, 0, "options: cannot combine no-encap and outer");
+		errx(1, "options: cannot combine no-encap and outer");
 	else if ((!cfg_encap_proto) && cfg_l3_extra != AF_UNSPEC)
-		error(1, 0, "options: cannot combine no-encap and extra");
+		errx(1, "options: cannot combine no-encap and extra");
 
 	if (cfg_l3_inner == AF_UNSPEC)
 		cfg_l3_inner = AF_INET6;
