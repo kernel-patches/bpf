@@ -49,6 +49,8 @@ struct tnum tnum_xor(struct tnum a, struct tnum b);
 /* Multiply two tnums, return @a * @b */
 struct tnum tnum_mul(struct tnum a, struct tnum b);
 
+/* Checks whether two tnums may represent the same number */
+bool tnum_has_intersection(struct tnum a, struct tnum b);
 /* Return a tnum representing numbers satisfying both @a and @b */
 struct tnum tnum_intersect(struct tnum a, struct tnum b);
 

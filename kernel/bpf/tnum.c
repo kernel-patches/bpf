@@ -138,6 +138,14 @@ struct tnum tnum_mul(struct tnum a, struct tnum b)
 	return tnum_add(TNUM(acc_v, 0), acc_m);
 }
 
+bool tnum_has_intersection(struct tnum a, struct tnum b)
+{
+	u64 same_value =  ~(a.value ^ b.value);
+	u64 unknown =  a.mask | b.value;
+
+	return (same_value | unknown) == -1;
+}
+
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has
  * a 'known 0' - this will return a 'known 1' for that bit.
  */
