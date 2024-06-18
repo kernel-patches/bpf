@@ -791,7 +791,7 @@ static int parse_stats(const char *stats_str, struct stat_specs *specs)
 	if (!input)
 		return -ENOMEM;
 
-	while ((next = strtok_r(state ? NULL : input, ",", &state))) {
+	for (next = strtok_r(input, ",", &state); next; next = strtok_r(NULL, ",", &state)) {
 		err = parse_stat(next, specs);
 		if (err) {
 			free(input);
@@ -1513,7 +1513,7 @@ static int parse_stats_csv(const char *filename, struct stat_specs *specs,
 			*stat_cntp += 1;
 		}
 
-		while ((next = strtok_r(state ? NULL : input, ",\n", &state))) {
+		for (next = strtok_r(input, ",\n", &state); next; next = strtok_r(NULL, ",\n", &state)) {
 			if (header) {
 				/* for the first line, set up spec stats */
 				err = parse_stat(next, specs);
