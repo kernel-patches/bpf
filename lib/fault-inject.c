@@ -35,6 +35,9 @@ int setup_fault_attr(struct fault_attr *attr, char *str)
 	atomic_set(&attr->times, times);
 	atomic_set(&attr->space, space);
 
+	if (probability != 0 && attr->active)
+		static_key_slow_inc(attr->active);
+
 	return 1;
 }
 EXPORT_SYMBOL_GPL(setup_fault_attr);
@@ -166,6 +169,12 @@ EXPORT_SYMBOL_GPL(should_fail);
 
 #ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
 
+/*
+ * Protect updating probability from debugfs as that may trigger static key
+ * changes when changing between zero and non-zero.
+ */
+static DEFINE_MUTEX(probability_mutex);
+
 static int debugfs_ul_set(void *data, u64 val)
 {
 	*(unsigned long *)data = val;
@@ -185,6 +194,38 @@ static void debugfs_create_ul(const char *name, umode_t mode,
 {
 	debugfs_create_file(name, mode, parent, value, &fops_ul);
 }
+
+static int debugfs_prob_set(void *data, u64 val)
+{
+	struct fault_attr *attr = data;
+
+	mutex_lock(&probability_mutex);
+
+	if (attr->active) {
+		if (attr->probability != 0 && val == 0) {
+			static_key_slow_dec(attr->active);
+		} else if (attr->probability == 0 && val != 0) {
+			static_key_slow_inc(attr->active);
+		}
+	}
+
+	attr->probability = val;
+
+	mutex_unlock(&probability_mutex);
+
+	return 0;
+}
+
+static int debugfs_prob_get(void *data, u64 *val)
+{
+	struct fault_attr *attr = data;
+
+	*val = attr->probability;
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_prob, debugfs_prob_get, debugfs_prob_set, "%llu\n");
 
 #ifdef CONFIG_FAULT_INJECTION_STACKTRACE_FILTER
 
@@ -218,7 +259,7 @@ struct dentry *fault_create_debugfs_attr(const char *name,
 	if (IS_ERR(dir))
 		return dir;
 
-	debugfs_create_ul("probability", mode, dir, &attr->probability);
+	debugfs_create_file("probability", mode, dir, attr, &fops_prob);
 	debugfs_create_ul("interval", mode, dir, &attr->interval);
 	debugfs_create_atomic_t("times", mode, dir, &attr->times);
 	debugfs_create_atomic_t("space", mode, dir, &attr->space);

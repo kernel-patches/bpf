@@ -9,6 +9,7 @@
 #include <linux/configfs.h>
 #include <linux/ratelimit.h>
 #include <linux/atomic.h>
+#include <linux/jump_label.h>
 
 /*
  * For explanation of the elements of this struct, see
@@ -30,13 +31,14 @@ struct fault_attr {
 	unsigned long count;
 	struct ratelimit_state ratelimit_state;
 	struct dentry *dname;
+	struct static_key *active;
 };
 
 enum fault_flags {
 	FAULT_NOWARN =	1 << 0,
 };
 
-#define FAULT_ATTR_INITIALIZER {					\
+#define FAULT_ATTR_INITIALIZER_KEY(_key) {				\
 		.interval = 1,						\
 		.times = ATOMIC_INIT(1),				\
 		.require_end = ULONG_MAX,				\
@@ -44,7 +46,10 @@ enum fault_flags {
 		.ratelimit_state = RATELIMIT_STATE_INIT_DISABLED,	\
 		.verbose = 2,						\
 		.dname = NULL,						\
+		.active = (_key),					\
 	}
+
+#define FAULT_ATTR_INITIALIZER		FAULT_ATTR_INITIALIZER_KEY(NULL)
 
 #define DECLARE_FAULT_ATTR(name) struct fault_attr name = FAULT_ATTR_INITIALIZER
 int setup_fault_attr(struct fault_attr *attr, char *str);
