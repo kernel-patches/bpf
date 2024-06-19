@@ -96,8 +96,9 @@ static inline void fault_config_init(struct fault_config *config,
 
 struct kmem_cache;
 
+#ifdef CONFIG_FUNCTION_ERROR_INJECTION
 bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order);
-
+#endif
 #ifdef CONFIG_FAIL_PAGE_ALLOC
 bool __should_fail_alloc_page(gfp_t gfp_mask, unsigned int order);
 #else

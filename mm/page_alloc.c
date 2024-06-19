@@ -3008,11 +3008,35 @@ out:
 	return page;
 }
 
-noinline bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
+#if defined(CONFIG_FUNCTION_ERROR_INJECTION) || defined(CONFIG_FAIL_PAGE_ALLOC)
+DEFINE_STATIC_KEY_FALSE(should_fail_alloc_page_active);
+
+#ifdef CONFIG_FUNCTION_ERROR_INJECTION
+noinline
+#else
+static inline
+#endif
+bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
 {
 	return __should_fail_alloc_page(gfp_mask, order);
 }
-ALLOW_ERROR_INJECTION(should_fail_alloc_page, TRUE);
+ALLOW_ERROR_INJECTION_KEY(should_fail_alloc_page, TRUE, &should_fail_alloc_page_active);
+
+static __always_inline bool
+should_fail_alloc_page_wrapped(gfp_t gfp_mask, unsigned int order)
+{
+	if (static_branch_unlikely(&should_fail_alloc_page_active))
+		return should_fail_alloc_page(gfp_mask, order);
+
+	return false;
+}
+#else
+static __always_inline bool
+should_fail_alloc_page_wrapped(gfp_t gfp_mask, unsigned int order)
+{
+	return false;
+}
+#endif
 
 static inline long __zone_watermark_unusable_free(struct zone *z,
 				unsigned int order, unsigned int alloc_flags)
@@ -4430,7 +4454,7 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 
 	might_alloc(gfp_mask);
 
-	if (should_fail_alloc_page(gfp_mask, order))
+	if (should_fail_alloc_page_wrapped(gfp_mask, order))
 		return false;
 
 	*alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, *alloc_flags);

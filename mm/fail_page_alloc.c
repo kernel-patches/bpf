@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/fault-inject.h>
 #include <linux/mm.h>
+#include "internal.h"
 
 static struct {
 	struct fault_attr attr;
@@ -9,7 +10,7 @@ static struct {
 	bool ignore_gfp_reclaim;
 	u32 min_order;
 } fail_page_alloc = {
-	.attr = FAULT_ATTR_INITIALIZER,
+	.attr = FAULT_ATTR_INITIALIZER_KEY(&should_fail_alloc_page_active.key),
 	.ignore_gfp_reclaim = true,
 	.ignore_gfp_highmem = true,
 	.min_order = 1,
