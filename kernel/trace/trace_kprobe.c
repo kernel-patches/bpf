@@ -61,6 +61,7 @@ struct trace_kprobe {
 	unsigned long __percpu *nhit;
 	const char		*symbol;	/* symbol name */
 	struct trace_probe	tp;
+	struct static_key	*ei_key;
 };
 
 static bool is_trace_kprobe(struct dyn_event *ev)
@@ -235,9 +236,34 @@ bool trace_kprobe_on_func_entry(struct trace_event_call *call)
 bool trace_kprobe_error_injectable(struct trace_event_call *call)
 {
 	struct trace_kprobe *tk = trace_kprobe_primary_from_call(call);
+	struct static_key *ei_key;
 
-	return tk ? within_error_injection_list(trace_kprobe_address(tk)) :
-	       false;
+	if (!tk)
+		return false;
+
+	ei_key = get_injection_key(trace_kprobe_address(tk));
+	if (IS_ERR(ei_key))
+		return false;
+
+	tk->ei_key = ei_key;
+	return true;
+}
+
+void trace_kprobe_error_injection_control(struct trace_event_call *call,
+					  bool enable)
+{
+	struct trace_kprobe *tk = trace_kprobe_primary_from_call(call);
+
+	if (!tk)
+		return;
+
+	if (!tk->ei_key)
+		return;
+
+	if (enable)
+		static_key_slow_inc(tk->ei_key);
+	else
+		static_key_slow_dec(tk->ei_key);
 }
 
 static int register_kprobe_event(struct trace_kprobe *tk);

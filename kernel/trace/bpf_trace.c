@@ -2286,6 +2286,9 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 	rcu_assign_pointer(event->tp_event->prog_array, new_array);
 	bpf_prog_array_free_sleepable(old_array);
 
+	if (prog->kprobe_override)
+		trace_kprobe_error_injection_control(event->tp_event, true);
+
 unlock:
 	mutex_unlock(&bpf_event_mutex);
 	return ret;
@@ -2301,6 +2304,9 @@ void perf_event_detach_bpf_prog(struct perf_event *event)
 
 	if (!event->prog)
 		goto unlock;
+
+	if (event->prog->kprobe_override)
+		trace_kprobe_error_injection_control(event->tp_event, false);
 
 	old_array = bpf_event_rcu_dereference(event->tp_event->prog_array);
 	ret = bpf_prog_array_copy(old_array, event->prog, NULL, 0, &new_array);
