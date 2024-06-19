@@ -17,6 +17,7 @@ struct ei_entry {
 	struct list_head list;
 	unsigned long start_addr;
 	unsigned long end_addr;
+	struct static_key *key;
 	int etype;
 	void *priv;
 };
@@ -54,6 +55,23 @@ int get_injectable_error_type(unsigned long addr)
 	return ei_type;
 }
 
+struct static_key *get_injection_key(unsigned long addr)
+{
+	struct ei_entry *ent;
+	struct static_key *ei_key = ERR_PTR(-EINVAL);
+
+	mutex_lock(&ei_mutex);
+	list_for_each_entry(ent, &error_injection_list, list) {
+		if (addr >= ent->start_addr && addr < ent->end_addr) {
+			ei_key = ent->key;
+			break;
+		}
+	}
+	mutex_unlock(&ei_mutex);
+
+	return ei_key;
+}
+
 /*
  * Lookup and populate the error_injection_list.
  *
@@ -86,6 +104,7 @@ static void populate_error_injection_list(struct error_injection_entry *start,
 		ent->start_addr = entry;
 		ent->end_addr = entry + size;
 		ent->etype = iter->etype;
+		ent->key = (struct static_key *) iter->static_key_addr;
 		ent->priv = priv;
 		INIT_LIST_HEAD(&ent->list);
 		list_add_tail(&ent->list, &error_injection_list);

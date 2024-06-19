@@ -12,6 +12,7 @@ enum {
 
 struct error_injection_entry {
 	unsigned long	addr;
+	unsigned long	static_key_addr;
 	int		etype;
 };
 
@@ -25,16 +26,26 @@ struct pt_regs;
  * 'Error Injectable Functions' section.
  */
 #define ALLOW_ERROR_INJECTION(fname, _etype)				\
-static struct error_injection_entry __used				\
+static struct error_injection_entry __used __aligned(8)			\
 	__section("_error_injection_whitelist")				\
 	_eil_addr_##fname = {						\
 		.addr = (unsigned long)fname,				\
 		.etype = EI_ETYPE_##_etype,				\
 	}
 
+#define ALLOW_ERROR_INJECTION_KEY(fname, _etype, key)			\
+static struct error_injection_entry __used __aligned(8)			\
+	__section("_error_injection_whitelist")				\
+	_eil_addr_##fname = {						\
+		.addr = (unsigned long)fname,				\
+		.static_key_addr = (unsigned long)key,			\
+		.etype = EI_ETYPE_##_etype,				\
+	}
+
 void override_function_with_return(struct pt_regs *regs);
 #else
 #define ALLOW_ERROR_INJECTION(fname, _etype)
+#define ALLOW_ERROR_INJECTION_KEY(fname, _etype, key)
 
 static inline void override_function_with_return(struct pt_regs *regs) { }
 #endif

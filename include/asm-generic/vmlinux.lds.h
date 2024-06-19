@@ -248,7 +248,7 @@
 
 #ifdef CONFIG_FUNCTION_ERROR_INJECTION
 #define ERROR_INJECT_WHITELIST()			\
-	STRUCT_ALIGN();					\
+	. = ALIGN(8);					\
 	BOUNDED_SECTION(_error_injection_whitelist)
 #else
 #define ERROR_INJECT_WHITELIST()

@@ -27,6 +27,7 @@ struct fei_attr {
 	struct list_head list;
 	struct kprobe kp;
 	unsigned long retval;
+	struct static_key *key;
 };
 static DEFINE_MUTEX(fei_lock);
 static LIST_HEAD(fei_attr_list);
@@ -67,6 +68,11 @@ static struct fei_attr *fei_attr_new(const char *sym, unsigned long addr)
 		attr->kp.pre_handler = fei_kprobe_handler;
 		attr->kp.post_handler = fei_post_handler;
 		attr->retval = adjust_error_retval(addr, 0);
+
+		attr->key = get_injection_key(addr);
+		if (IS_ERR(attr->key))
+			attr->key = NULL;
+
 		INIT_LIST_HEAD(&attr->list);
 	}
 	return attr;
@@ -218,6 +224,8 @@ static int fei_open(struct inode *inode, struct file *file)
 
 static void fei_attr_remove(struct fei_attr *attr)
 {
+	if (attr->key)
+		static_key_slow_dec(attr->key);
 	fei_debugfs_remove_attr(attr);
 	unregister_kprobe(&attr->kp);
 	list_del(&attr->list);
@@ -295,6 +303,8 @@ static ssize_t fei_write(struct file *file, const char __user *buffer,
 		fei_attr_free(attr);
 		goto out;
 	}
+	if (attr->key)
+		static_key_slow_inc(attr->key);
 	fei_debugfs_add_attr(attr);
 	list_add_tail(&attr->list, &fei_attr_list);
 	ret = count;
