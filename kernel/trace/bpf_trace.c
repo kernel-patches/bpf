@@ -2616,6 +2616,7 @@ struct bpf_kprobe_multi_link {
 	struct bpf_link link;
 	struct fprobe fp;
 	unsigned long *addrs;
+	struct static_key **ei_keys;
 	u64 *cookies;
 	u32 cnt;
 	u32 mods_cnt;
@@ -2690,11 +2691,30 @@ static void free_user_syms(struct user_syms *us)
 	kvfree(us->buf);
 }
 
+static void bpf_kprobe_ei_keys_control(struct bpf_kprobe_multi_link *link, bool enable)
+{
+	u32 i;
+
+	for (i = 0; i < link->cnt; i++) {
+		if (!link->ei_keys[i])
+			break;
+
+		if (enable)
+			static_key_slow_inc(link->ei_keys[i]);
+		else
+			static_key_slow_dec(link->ei_keys[i]);
+	}
+}
+
 static void bpf_kprobe_multi_link_release(struct bpf_link *link)
 {
 	struct bpf_kprobe_multi_link *kmulti_link;
 
 	kmulti_link = container_of(link, struct bpf_kprobe_multi_link, link);
+
+	if (kmulti_link->ei_keys)
+		bpf_kprobe_ei_keys_control(kmulti_link, false);
+
 	unregister_fprobe(&kmulti_link->fp);
 	kprobe_multi_put_modules(kmulti_link->mods, kmulti_link->mods_cnt);
 }
@@ -2706,6 +2726,7 @@ static void bpf_kprobe_multi_link_dealloc(struct bpf_link *link)
 	kmulti_link = container_of(link, struct bpf_kprobe_multi_link, link);
 	kvfree(kmulti_link->addrs);
 	kvfree(kmulti_link->cookies);
+	kvfree(kmulti_link->ei_keys);
 	kfree(kmulti_link->mods);
 	kfree(kmulti_link);
 }
@@ -2988,13 +3009,19 @@ static int get_modules_for_addrs(struct module ***mods, unsigned long *addrs, u3
 	return arr.mods_cnt;
 }
 
-static int addrs_check_error_injection_list(unsigned long *addrs, u32 cnt)
+static int addrs_check_error_injection_list(unsigned long *addrs, struct static_key **ei_keys,
+					    u32 cnt)
 {
-	u32 i;
+	struct static_key *ei_key;
+	u32 i, j = 0;
 
 	for (i = 0; i < cnt; i++) {
-		if (!within_error_injection_list(addrs[i]))
+		ei_key = get_injection_key(addrs[i]);
+		if (IS_ERR(ei_key))
 			return -EINVAL;
+
+		if (ei_key)
+			ei_keys[j++] = ei_key;
 	}
 	return 0;
 }
@@ -3003,6 +3030,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 {
 	struct bpf_kprobe_multi_link *link = NULL;
 	struct bpf_link_primer link_primer;
+	struct static_key **ei_keys = NULL;
 	void __user *ucookies;
 	unsigned long *addrs;
 	u32 flags, cnt, size;
@@ -3078,9 +3106,24 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 			goto error;
 	}
 
-	if (prog->kprobe_override && addrs_check_error_injection_list(addrs, cnt)) {
-		err = -EINVAL;
-		goto error;
+	if (prog->kprobe_override) {
+		ei_keys = kvcalloc(cnt, sizeof(*ei_keys), GFP_KERNEL);
+		if (!ei_keys) {
+			err = -ENOMEM;
+			goto error;
+		}
+
+		if (addrs_check_error_injection_list(addrs, ei_keys, cnt)) {
+			err = -EINVAL;
+			goto error;
+		}
+
+		if (ei_keys[0]) {
+			link->ei_keys = ei_keys;
+		} else {
+			kvfree(ei_keys);
+			ei_keys = NULL;
+		}
 	}
 
 	link = kzalloc(sizeof(*link), GFP_KERNEL);
@@ -3135,10 +3178,14 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return err;
 	}
 
+	if (link->ei_keys)
+		bpf_kprobe_ei_keys_control(link, true);
+
 	return bpf_link_settle(&link_primer);
 
 error:
 	kfree(link);
+	kvfree(ei_keys);
 	kvfree(addrs);
 	kvfree(cookies);
 	return err;
