@@ -3874,13 +3874,37 @@ static __always_inline void maybe_wipe_obj_freeptr(struct kmem_cache *s,
 			0, sizeof(void *));
 }
 
-noinline int should_failslab(struct kmem_cache *s, gfp_t gfpflags)
+#if defined(CONFIG_FUNCTION_ERROR_INJECTION) || defined(CONFIG_FAILSLAB)
+DEFINE_STATIC_KEY_FALSE(should_failslab_active);
+
+#ifdef CONFIG_FUNCTION_ERROR_INJECTION
+noinline
+#else
+static inline
+#endif
+int should_failslab(struct kmem_cache *s, gfp_t gfpflags)
 {
 	if (__should_failslab(s, gfpflags))
 		return -ENOMEM;
 	return 0;
 }
-ALLOW_ERROR_INJECTION(should_failslab, ERRNO);
+ALLOW_ERROR_INJECTION_KEY(should_failslab, ERRNO, &should_failslab_active);
+
+static __always_inline int should_failslab_wrapped(struct kmem_cache *s,
+						   gfp_t gfp)
+{
+	if (static_branch_unlikely(&should_failslab_active))
+		return should_failslab(s, gfp);
+	else
+		return 0;
+}
+#else
+static __always_inline int should_failslab_wrapped(struct kmem_cache *s,
+						   gfp_t gfp)
+{
+	return false;
+}
+#endif
 
 static __fastpath_inline
 struct kmem_cache *slab_pre_alloc_hook(struct kmem_cache *s, gfp_t flags)
@@ -3889,7 +3913,7 @@ struct kmem_cache *slab_pre_alloc_hook(struct kmem_cache *s, gfp_t flags)
 
 	might_alloc(flags);
 
-	if (unlikely(should_failslab(s, flags)))
+	if (should_failslab_wrapped(s, flags))
 		return NULL;
 
 	return s;

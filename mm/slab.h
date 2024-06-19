@@ -11,6 +11,7 @@
 #include <linux/memcontrol.h>
 #include <linux/kfence.h>
 #include <linux/kasan.h>
+#include <linux/jump_label.h>
 
 /*
  * Internal slab definitions
@@ -159,6 +160,8 @@ static_assert(IS_ALIGNED(offsetof(struct slab, freelist), sizeof(freelist_aba_t)
  * struct slab.
  */
 #define slab_page(s) folio_page(slab_folio(s), 0)
+
+DECLARE_STATIC_KEY_FALSE(should_failslab_active);
 
 /*
  * If network-based swap is enabled, sl*b must keep track of whether pages

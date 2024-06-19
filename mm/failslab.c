@@ -9,7 +9,7 @@ static struct {
 	bool ignore_gfp_reclaim;
 	bool cache_filter;
 } failslab = {
-	.attr = FAULT_ATTR_INITIALIZER,
+	.attr = FAULT_ATTR_INITIALIZER_KEY(&should_failslab_active.key),
 	.ignore_gfp_reclaim = true,
 	.cache_filter = false,
 };
