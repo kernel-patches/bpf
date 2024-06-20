@@ -2632,8 +2632,11 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 			return 0;
 		return -EINVAL;
 	case BPF_PROG_TYPE_SYSCALL:
-	case BPF_PROG_TYPE_EXT:
 		if (expected_attach_type)
+			return -EINVAL;
+		return 0;
+	case BPF_PROG_TYPE_EXT:
+		if (expected_attach_type || !dst_prog)
 			return -EINVAL;
 		fallthrough;
 	default:
