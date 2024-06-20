@@ -21,6 +21,9 @@
 
 #define CTX_NIA(ctx) ((unsigned long)ctx->idx * 4)
 
+#define SZL			sizeof(unsigned long)
+#define BPF_INSN_SAFETY		64
+
 #define PLANT_INSTR(d, idx, instr)					      \
 	do { if (d) { (d)[idx] = instr; } idx++; } while (0)
 #define EMIT(instr)		PLANT_INSTR(image, ctx->idx, instr)
@@ -81,6 +84,13 @@
 				EMIT(PPC_RAW_ORI(d, d, (uintptr_t)(i) &       \
 							0xffff));             \
 		} } while (0)
+#define PPC_LI_ADDR	PPC_LI64
+#define PPC64_LOAD_PACA()						      \
+	EMIT(PPC_RAW_LD(_R2, _R13, offsetof(struct paca_struct, kernel_toc)))
+#else
+#define PPC_LI64	BUILD_BUG
+#define PPC_LI_ADDR	PPC_LI32
+#define PPC64_LOAD_PACA() BUILD_BUG()
 #endif
 
 /*
@@ -165,6 +175,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 		       u32 *addrs, int pass, bool extra_pass);
 void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx);
 void bpf_jit_build_epilogue(u32 *image, struct codegen_context *ctx);
+void bpf_jit_build_fentry_stubs(u32 *image, struct codegen_context *ctx);
 void bpf_jit_realloc_regs(struct codegen_context *ctx);
 int bpf_jit_emit_exit_insn(u32 *image, struct codegen_context *ctx, int tmp_reg, long exit_addr);
 
