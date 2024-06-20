@@ -47,6 +47,11 @@ struct mod_arch_specific {
 #ifdef CONFIG_DYNAMIC_FTRACE
 	unsigned long tramp;
 	unsigned long tramp_regs;
+#ifdef CONFIG_FTRACE_PFE_OUT_OF_LINE
+	struct ftrace_pfe_stub *pfe_stubs;
+	unsigned int pfe_stub_count;
+	unsigned int pfe_stub_index;
+#endif
 #endif
 };
 

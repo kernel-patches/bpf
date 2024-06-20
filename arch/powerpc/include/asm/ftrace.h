@@ -26,6 +26,9 @@ unsigned long prepare_ftrace_return(unsigned long parent, unsigned long ip,
 struct module;
 struct dyn_ftrace;
 struct dyn_arch_ftrace {
+#ifdef CONFIG_FTRACE_PFE_OUT_OF_LINE
+	unsigned long pfe_stub;
+#endif
 };
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_ARGS
@@ -132,6 +135,13 @@ static inline u8 this_cpu_get_ftrace_enabled(void) { return 1; }
 
 #ifdef CONFIG_FUNCTION_TRACER
 extern unsigned int ftrace_tramp_text[], ftrace_tramp_init[];
+#ifdef CONFIG_FTRACE_PFE_OUT_OF_LINE
+struct ftrace_pfe_stub {
+	u32	insn[4];
+};
+extern struct ftrace_pfe_stub ftrace_pfe_stub_text[], ftrace_pfe_stub_inittext[];
+extern unsigned long ftrace_pfe_stub_text_count, ftrace_pfe_stub_inittext_count;
+#endif
 void ftrace_free_init_tramp(void);
 unsigned long ftrace_call_adjust(unsigned long addr);
 #else
