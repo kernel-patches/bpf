@@ -24,12 +24,13 @@ num_pfe_stubs_inittext=$(${CROSS_COMPILE}objdump -r -j __patchable_function_entr
 
 cat > ${arch_vmlinux_S} <<EOF
 #include <asm/asm-offsets.h>
+#include <asm/ppc_asm.h>
 #include <linux/linkage.h>
 
 .pushsection .tramp.ftrace.text,"aw"
 SYM_DATA(ftrace_pfe_stub_text_count, .long ${num_pfe_stubs_text})
 
-SYM_CODE_START(ftrace_pfe_stub_text)
+SYM_START(ftrace_pfe_stub_text, SYM_L_GLOBAL, .balign SZL)
 	.space ${num_pfe_stubs_text} * FTRACE_PFE_STUB_SIZE
 SYM_CODE_END(ftrace_pfe_stub_text)
 .popsection
@@ -37,7 +38,7 @@ SYM_CODE_END(ftrace_pfe_stub_text)
 .pushsection .tramp.ftrace.init,"aw"
 SYM_DATA(ftrace_pfe_stub_inittext_count, .long ${num_pfe_stubs_inittext})
 
-SYM_CODE_START(ftrace_pfe_stub_inittext)
+SYM_START(ftrace_pfe_stub_inittext, SYM_L_GLOBAL, .balign SZL)
 	.space ${num_pfe_stubs_inittext} * FTRACE_PFE_STUB_SIZE
 SYM_CODE_END(ftrace_pfe_stub_inittext)
 .popsection
