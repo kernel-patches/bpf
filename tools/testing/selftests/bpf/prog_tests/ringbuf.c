@@ -12,9 +12,11 @@
 #include <sys/sysinfo.h>
 #include <linux/perf_event.h>
 #include <linux/ring_buffer.h>
+
 #include "test_ringbuf.lskel.h"
 #include "test_ringbuf_n.lskel.h"
 #include "test_ringbuf_map_key.lskel.h"
+#include "test_ringbuf_write.lskel.h"
 
 #define EDONE 7777
 
@@ -82,6 +84,49 @@ static void *poll_thread(void *input)
 	long timeout = (long)input;
 
 	return (void *)(long)ring_buffer__poll(ringbuf, timeout);
+}
+
+static void ringbuf_write_subtest(void)
+{
+	struct test_ringbuf_write_lskel *skel;
+	int page_size = getpagesize();
+	size_t *mmap_ptr;
+	int err, rb_fd;
+
+	skel = test_ringbuf_write_lskel__open();
+	if (!ASSERT_OK_PTR(skel, "skel_load"))
+		return;
+
+	skel->maps.ringbuf.max_entries = 0x4000;
+
+	err = test_ringbuf_write_lskel__load(skel);
+	if (!ASSERT_OK(err, "ringbuf_write"))
+		goto cleanup;
+
+	rb_fd = skel->maps.ringbuf.map_fd;
+
+	mmap_ptr = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, rb_fd, 0);
+	if (!ASSERT_OK_PTR(mmap_ptr, "rw_cons_pos"))
+		goto cleanup;
+	*mmap_ptr = 0x3000;
+	ASSERT_OK(munmap(mmap_ptr, page_size), "unmap_rw");
+
+	skel->bss->pid = getpid();
+
+	ringbuf = ring_buffer__new(rb_fd, process_sample, NULL, NULL);
+	if (!ASSERT_OK_PTR(ringbuf, "ringbuf_create"))
+		goto cleanup;
+
+	err = test_ringbuf_write_lskel__attach(skel);
+	if (!ASSERT_OK(err, "ringbuf_write"))
+		goto cleanup;
+
+	trigger_samples();
+	ASSERT_GE(skel->bss->discarded, 1, "discarded");
+	ASSERT_EQ(skel->bss->passed, 0, "passed");
+cleanup:
+	ring_buffer__free(ringbuf);
+	test_ringbuf_write_lskel__destroy(skel);
 }
 
 static void ringbuf_subtest(void)
@@ -451,4 +496,6 @@ void test_ringbuf(void)
 		ringbuf_n_subtest();
 	if (test__start_subtest("ringbuf_map_key"))
 		ringbuf_map_key_subtest();
+	if (test__start_subtest("ringbuf_write"))
+		ringbuf_write_subtest();
 }
