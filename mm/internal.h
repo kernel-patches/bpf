@@ -1521,4 +1521,28 @@ static inline void shrinker_debugfs_remove(struct dentry *debugfs_entry,
 void workingset_update_node(struct xa_node *node);
 extern struct list_lru shadow_nodes;
 
+/**
+ * __kstrndup - Create a NUL-terminated string from @s, which might be unterminated.
+ * @s: The data to stringify
+ * @len: The size of the data, including the null terminator
+ * @gfp: the GFP mask used in the kmalloc() call when allocating memory
+ *
+ * Return: newly allocated copy of @s with NUL-termination or %NULL in
+ * case of error
+ */
+static __always_inline char *__kstrndup(const char *s, size_t len, gfp_t gfp)
+{
+	char *buf;
+
+	buf = kmalloc_track_caller(len, gfp);
+	if (!buf)
+		return NULL;
+
+	memcpy(buf, s, len);
+	/* Ensure the buf is always NUL-terminated, regardless of @s. */
+	buf[len - 1] = '\0';
+	return buf;
+}
+
+
 #endif	/* __MM_INTERNAL_H */

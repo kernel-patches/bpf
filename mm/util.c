@@ -58,17 +58,8 @@ char *kstrdup(const char *s, gfp_t gfp)
 	if (!s)
 		return NULL;
 
-	len = strlen(s) + 1;
-	buf = kmalloc_track_caller(len, gfp);
-	if (buf) {
-		memcpy(buf, s, len);
-		/* During memcpy(), the string might be updated to a new value,
-		 * which could be longer than the string when strlen() is
-		 * called. Therefore, we need to add a null termimator.
-		 */
-		buf[len - 1] = '\0';
-	}
-	return buf;
+	len = strlen(s);
+	return __kstrndup(s, len + 1, gfp);
 }
 EXPORT_SYMBOL(kstrdup);
 
@@ -111,12 +102,7 @@ char *kstrndup(const char *s, size_t max, gfp_t gfp)
 		return NULL;
 
 	len = strnlen(s, max);
-	buf = kmalloc_track_caller(len+1, gfp);
-	if (buf) {
-		memcpy(buf, s, len);
-		buf[len] = '\0';
-	}
-	return buf;
+	return __kstrndup(s, len + 1, gfp);
 }
 EXPORT_SYMBOL(kstrndup);
 
@@ -195,12 +181,7 @@ char *kmemdup_nul(const char *s, size_t len, gfp_t gfp)
 	if (!s)
 		return NULL;
 
-	buf = kmalloc_track_caller(len + 1, gfp);
-	if (buf) {
-		memcpy(buf, s, len);
-		buf[len] = '\0';
-	}
-	return buf;
+	return __kstrndup(s, len + 1, gfp);
 }
 EXPORT_SYMBOL(kmemdup_nul);
 
