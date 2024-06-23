@@ -41,7 +41,7 @@ on:
 
 jobs:
   build:
-    name: build for ${{ inputs.arch }} with ${{ inputs.toolchain_full }}${{ inputs.release && ' and -O2 optimization' || '' }}
+    name: build for ${{ inputs.arch }} with ${{ inputs.toolchain_full }}${{ inputs.release && '-O2' || '' }}
     runs-on: ${{ fromJSON(inputs.runs_on) }}
     timeout-minutes: 100
     env:
