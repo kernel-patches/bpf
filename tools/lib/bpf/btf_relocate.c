@@ -58,8 +58,8 @@ struct btf_relocate {
 struct btf_name_info {
 	const char *name;
 	/* set when search requires a size match */
-	int needs_size:1,
-	    size:31;
+	unsigned int needs_size:1,
+		     size:31;
 	__u32 id;
 };
 
@@ -203,7 +203,7 @@ static int btf_relocate_map_distilled_base(struct btf_relocate *r)
 		info[id].name = btf__name_by_offset(r->dist_base_btf, dist_t->name_off);
 		info[id].id = id;
 		info[id].size = dist_t->size;
-		info[id].needs_size = true;
+		info[id].needs_size = 1;
 	}
 	qsort(info, r->nr_dist_base_types, sizeof(*info), cmp_btf_name_size);
 
@@ -253,7 +253,7 @@ static int btf_relocate_map_distilled_base(struct btf_relocate *r)
 		case BTF_KIND_ENUM:
 		case BTF_KIND_ENUM64:
 			/* These types should match both name and size */
-			base_info.needs_size = true;
+			base_info.needs_size = 1;
 			base_info.size = base_t->size;
 			break;
 		case BTF_KIND_FWD:
