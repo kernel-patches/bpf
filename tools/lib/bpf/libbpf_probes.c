@@ -112,6 +112,7 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 	int fd, err, exp_err = 0;
 	const char *exp_msg = NULL;
 	char buf[4096];
+	int attach_prog_fd = -1;
 
 	switch (prog_type) {
 	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
@@ -148,9 +149,17 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 		opts.log_size = sizeof(buf);
 		opts.log_level = 1;
 		opts.attach_btf_id = 1;
+		/* choose socket_filter as the target program to attach, since it
+		 * is the earliest and most likely BPF program to be supported.
+		 */
+		attach_prog_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL,
+					       "GPL", insns, insns_cnt, NULL);
+		if (attach_prog_fd < 0)
+			return attach_prog_fd;
+		opts.attach_prog_fd = attach_prog_fd;
 
 		exp_err = -EINVAL;
-		exp_msg = "Cannot replace kernel functions";
+		exp_msg = "FENTRY/FEXIT program can only be attached to another program annotated with BTF";
 		break;
 	case BPF_PROG_TYPE_SYSCALL:
 		opts.prog_flags = BPF_F_SLEEPABLE;
@@ -192,6 +201,8 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 	err = -errno;
 	if (fd >= 0)
 		close(fd);
+	if (attach_prog_fd >= 0)
+		close(attach_prog_fd);
 	if (exp_err) {
 		if (fd >= 0 || err != exp_err)
 			return 0;
