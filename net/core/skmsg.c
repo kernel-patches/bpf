@@ -375,6 +375,8 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 
 	do {
 		sge = sk_msg_elem(msg, i);
+		if (!sg_page(sge))
+			goto out;
 		/* This is possible if a trim operation shrunk the buffer */
 		if (msg->sg.copybreak >= sge->length) {
 			msg->sg.copybreak = 0;
