@@ -674,6 +674,10 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 	u32 ret;
 
 	cant_migrate();
+#ifndef CONFIG_PREEMPT_RT
+	preempt_disable();
+#endif
+	printk_deferred_enter();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
 		struct bpf_prog_stats *stats;
 		u64 duration, start = sched_clock();
@@ -690,6 +694,10 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 	} else {
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
 	}
+	printk_deferred_exit();
+#ifndef CONFIG_PREEMPT_RT
+	preempt_enable();
+#endif
 	return ret;
 }
 
