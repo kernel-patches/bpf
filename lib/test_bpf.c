@@ -15059,6 +15059,63 @@ err_skb0:
 	return NULL;
 }
 
+static __init struct sk_buff *build_test_skb_head_frag(void)
+{
+	u32 headroom = 192, doffset = 66, alloc_size = 1536;
+	struct sk_buff *skb[2];
+	struct page *page[17];
+	int i, data_size = 125;
+	int j;
+
+	skb[0] = dev_alloc_skb(headroom + alloc_size);
+	if (!skb[0])
+		return NULL;
+
+	skb_reserve(skb[0], headroom + doffset);
+	skb_put(skb[0], data_size);
+	skb[0]->mac_header = 192;
+
+	skb[0]->protocol = htons(ETH_P_IP);
+	skb[0]->network_header = 206;
+
+	for (i = 0; i < 17; i++) {
+		page[i] = alloc_page(GFP_KERNEL);
+		if (!page[i])
+			goto err_page;
+
+		skb_add_rx_frag(skb[0], i, page[i], 0, data_size, data_size);
+	}
+
+	skb[1] = dev_alloc_skb(headroom + alloc_size);
+	if (!skb[1])
+		goto err_page;
+
+	skb_reserve(skb[1], headroom + doffset);
+	skb_put(skb[1], data_size);
+
+	/* setup shinfo */
+	skb_shinfo(skb[0])->gso_size = 75;
+	skb_shinfo(skb[0])->gso_type = SKB_GSO_TCPV4;
+	skb_shinfo(skb[0])->gso_type |= SKB_GSO_UDP_TUNNEL|SKB_GSO_TCP_FIXEDID|SKB_GSO_DODGY;
+	skb_shinfo(skb[0])->gso_segs = 0;
+	skb_shinfo(skb[0])->frag_list = skb[1];
+	skb_shinfo(skb[0])->hwtstamps.hwtstamp = 1000;
+
+	/* adjust skb[0]'s len */
+	skb[0]->len += skb[1]->len;
+	skb[0]->data_len += skb[1]->len;
+	skb[0]->truesize += skb[1]->truesize;
+
+	return skb[0];
+
+err_page:
+	kfree_skb(skb[0]);
+	for (j = 0; j < i; j++)
+		__free_page(page[j]);
+
+	return NULL;
+}
+
 struct skb_segment_test {
 	const char *descr;
 	struct sk_buff *(*build_skb)(void);
@@ -15080,6 +15137,13 @@ static struct skb_segment_test skb_segment_tests[] __initconst = {
 			    NETIF_F_LLTX | NETIF_F_GRO |
 			    NETIF_F_IPV6_CSUM | NETIF_F_RXCSUM |
 			    NETIF_F_HW_VLAN_STAG_TX
+	},
+	{
+		.descr = "gso_with_head_frag",
+		.build_skb = build_test_skb_head_frag,
+		.features = NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_GSO_SHIFT |
+			    NETIF_F_TSO_ECN | NETIF_F_TSO_MANGLEID | NETIF_F_TSO6 |
+			    NETIF_F_GSO_SCTP | NETIF_F_GSO_UDP_L4 | NETIF_F_GSO_FRAGLIST
 	}
 };
 
