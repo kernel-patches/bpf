@@ -4710,7 +4710,7 @@ normal:
 		hsize = skb_headlen(head_skb) - offset;
 
 		if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&
-		    (skb_headlen(list_skb) == len || sg)) {
+		    (skb_headlen(list_skb) == len)) {
 			BUG_ON(skb_headlen(list_skb) > len);
 
 			nskb = skb_clone(list_skb, GFP_ATOMIC);
