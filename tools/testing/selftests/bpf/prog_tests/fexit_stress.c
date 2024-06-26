@@ -49,11 +49,14 @@ void serial_test_fexit_stress(void)
 	ASSERT_OK(err, "bpf_prog_test_run_opts");
 
 out:
-	for (i = 0; i < bpf_max_tramp_links; i++) {
+	if (i >= bpf_max_tramp_links)
+		i = bpf_max_tramp_links - 1;
+	while (i >= 0) {
 		if (link_fd[i])
 			close(link_fd[i]);
 		if (fexit_fd[i])
 			close(fexit_fd[i]);
+		i--;
 	}
 	free(fd);
 }
