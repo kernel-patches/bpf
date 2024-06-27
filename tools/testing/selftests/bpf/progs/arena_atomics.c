@@ -176,3 +176,46 @@ int xchg(const void *ctx)
 
 	return 0;
 }
+
+SEC("syscall")
+int uaf(const void *ctx)
+{
+	if (pid != (bpf_get_current_pid_tgid() >> 32))
+		return 0;
+#ifdef ENABLE_ATOMICS_TESTS
+	void __arena *page;
+
+	page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	bpf_arena_free_pages(&arena, page, 1);
+
+	__sync_fetch_and_add((__u32 __arena *)page, 1);
+	__sync_add_and_fetch((__u32 __arena *)page, 1);
+	__sync_fetch_and_sub((__u32 __arena *)page, 1);
+	__sync_sub_and_fetch((__u32 __arena *)page, 1);
+	__sync_fetch_and_and((__u32 __arena *)page, 1);
+	__sync_and_and_fetch((__u32 __arena *)page, 1);
+	__sync_fetch_and_or((__u32 __arena *)page, 1);
+	__sync_or_and_fetch((__u32 __arena *)page, 1);
+	__sync_fetch_and_xor((__u32 __arena *)page, 1);
+	__sync_xor_and_fetch((__u32 __arena *)page, 1);
+	__sync_val_compare_and_swap((__u32 __arena *)page, 0, 1);
+	__sync_lock_test_and_set((__u32 __arena *)page, 1);
+
+	__sync_fetch_and_add((__u64 __arena *)page, 1);
+	__sync_add_and_fetch((__u64 __arena *)page, 1);
+	__sync_fetch_and_sub((__u64 __arena *)page, 1);
+	__sync_sub_and_fetch((__u64 __arena *)page, 1);
+	__sync_fetch_and_and((__u64 __arena *)page, 1);
+	__sync_and_and_fetch((__u64 __arena *)page, 1);
+	__sync_fetch_and_or((__u64 __arena *)page, 1);
+	__sync_or_and_fetch((__u64 __arena *)page, 1);
+	__sync_fetch_and_xor((__u64 __arena *)page, 1);
+	__sync_xor_and_fetch((__u64 __arena *)page, 1);
+	__sync_val_compare_and_swap((__u64 __arena *)page, 0, 1);
+	__sync_lock_test_and_set((__u64 __arena *)page, 1);
+#endif
+
+	return 0;
+}
+
+char _license[] SEC("license") = "GPL";
