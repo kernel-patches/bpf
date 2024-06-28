@@ -1676,6 +1676,11 @@ int main(int argc, char **argv)
 	if (err)
 		return err;
 
+	err = parse_test_list("verifier_nocsr/simple", &env.test_selector.whitelist, false);
+	if (err)
+		return err;
+	env.verbosity = VERBOSE_SUPER;
+
 	err = cd_flavor_subdir(argv[0]);
 	if (err)
 		return err;
