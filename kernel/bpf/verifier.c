@@ -4538,6 +4538,7 @@ static void check_nocsr_stack_contract(struct bpf_verifier_env *env, struct bpf_
 	 * disable nocsr rewrites for current subprogram by setting
 	 * nocsr_stack_off to a value smaller than any possible offset.
 	 */
+	verbose(env, "check_nocsr_stack_contract: contract broken at %d\n", insn_idx);
 	subprog->nocsr_stack_off = S16_MIN;
 }
 
@@ -16030,8 +16031,16 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
  */
 static u32 call_csr_mask(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
-	const struct bpf_func_proto *fn;
+	const struct bpf_func_proto *fn = NULL;
 
+	verbose(env, "call_csr_mask:\n");
+	verbose(env, "  idx=%ld\n", insn - env->prog->insnsi);
+	verbose(env, "  bpf_helper_call(insn)=%d\n", bpf_helper_call(insn));
+	verbose(env, "  bpf_jit_inlines_helper_call(%d)=%d\n",
+		insn->imm, bpf_jit_inlines_helper_call(insn->imm));
+	verbose(env, "  get_helper_proto(env, insn->imm, &fn)=%d\n",
+		get_helper_proto(env, insn->imm, &fn));
+	verbose(env, "  fn->nocsr=%d\n", fn && fn->nocsr);
 	if (bpf_helper_call(insn) &&
 	    bpf_jit_inlines_helper_call(insn->imm) &&
 	    get_helper_proto(env, insn->imm, &fn) == 0 &&
@@ -16125,6 +16134,8 @@ static int match_and_mark_nocsr_pattern(struct bpf_verifier_env *env, int t, boo
 	if (csr_mask == ALL_CALLER_SAVED_REGS)
 		return false;
 
+	verbose(env, "match_and_mark_nocsr_pattern:\n");
+	verbose(env, "  t=%d, reg_mask=0x%x:\n", t, reg_mask);
 	for (i = 1, off = 0; i <= ARRAY_SIZE(caller_saved); ++i, off += BPF_REG_SIZE) {
 		if (t - i < 0 || t + i >= env->prog->len)
 			break;
@@ -16135,6 +16146,8 @@ static int match_and_mark_nocsr_pattern(struct bpf_verifier_env *env, int t, boo
 			if (off % BPF_REG_SIZE != 0)
 				break;
 		}
+		verbose(env, "  looking at %d/%d off=%d, reg_mask=0x%x\n",
+			t - i, t + i, off, reg_mask);
 		if (/* *(u64 *)(r10 - off) = r[0-5]? */
 		    stx->code != (BPF_STX | BPF_MEM | BPF_DW) ||
 		    stx->dst_reg != BPF_REG_10 ||
@@ -16154,14 +16167,22 @@ static int match_and_mark_nocsr_pattern(struct bpf_verifier_env *env, int t, boo
 			env->insn_aux_data[t + i].nocsr_pattern = true;
 		}
 	}
+	verbose(env, "  i == %d\n", i);
 	if (i == 1)
 		return 0;
 	if (mark) {
 		s = find_containing_subprog(env, t);
+		verbose(env, "  s == %d\n", s);
+		if (s < 0)
+			for (i = 0; i < env->subprog_cnt; ++i)
+				verbose(env, "    subprog_info[%d].start = %d\n",
+					i, env->subprog_info[i].start);
 		/* can't happen */
 		if (WARN_ON_ONCE(s < 0))
 			return 0;
 		subprog = &env->subprog_info[s];
+		verbose(env, "  min(%d, %d) -> %d\n",
+			subprog->nocsr_stack_off, off, min(subprog->nocsr_stack_off, off));
 		subprog->nocsr_stack_off = min(subprog->nocsr_stack_off, off);
 	}
 	return i - 1;
@@ -21965,6 +21986,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	ret = check_cfg(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	verbose(env, "bpf_check: CONFIG_USE_X86_SEG_SUPPORT=%d\n",
+		IS_ENABLED(CONFIG_USE_X86_SEG_SUPPORT));
+	verbose(env, "bpf_check: env->subprog_info[0].nocsr_stack_off=%d\n",
+		env->subprog_info[0].nocsr_stack_off);
 
 	ret = do_check_main(env);
 	ret = ret ?: do_check_subprogs(env);
