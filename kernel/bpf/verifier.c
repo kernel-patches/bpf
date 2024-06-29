@@ -16029,7 +16029,14 @@ static u8 get_helper_reg_mask(const struct bpf_func_proto *fn)
  */
 static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 {
-	return false;
+	switch (imm) {
+#ifdef CONFIG_X86_64
+	case BPF_FUNC_get_smp_processor_id:
+		return env->prog->jit_requested && bpf_jit_supports_percpu_insn();
+#endif
+	default:
+		return false;
+	}
 }
 
 /* If 'insn' is a call that follows no_caller_saved_registers contract
@@ -20703,7 +20710,7 @@ patch_map_ops_generic:
 #ifdef CONFIG_X86_64
 		/* Implement bpf_get_smp_processor_id() inline. */
 		if (insn->imm == BPF_FUNC_get_smp_processor_id &&
-		    prog->jit_requested && bpf_jit_supports_percpu_insn()) {
+		    verifier_inlines_helper_call(env, insn->imm)) {
 			/* BPF_FUNC_get_smp_processor_id inlining is an
 			 * optimization, so if pcpu_hot.cpu_number is ever
 			 * changed in some incompatible and hard to support
