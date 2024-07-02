@@ -307,7 +307,10 @@ static void test_update_ca(void)
 		return;
 
 	link = bpf_map__attach_struct_ops(skel->maps.ca_update_1);
-	ASSERT_OK_PTR(link, "attach_struct_ops");
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops")) {
+		tcp_ca_update__destroy(skel);
+		return;
+	}
 
 	do_test("tcp_ca_update", NULL);
 	saved_ca1_cnt = skel->bss->ca1_cnt;
@@ -336,7 +339,10 @@ static void test_update_wrong(void)
 		return;
 
 	link = bpf_map__attach_struct_ops(skel->maps.ca_update_1);
-	ASSERT_OK_PTR(link, "attach_struct_ops");
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops")) {
+		tcp_ca_update__destroy(skel);
+		return;
+	}
 
 	do_test("tcp_ca_update", NULL);
 	saved_ca1_cnt = skel->bss->ca1_cnt;
@@ -355,7 +361,7 @@ static void test_update_wrong(void)
 static void test_mixed_links(void)
 {
 	struct tcp_ca_update *skel;
-	struct bpf_link *link, *link_nl;
+	struct bpf_link *link = NULL, *link_nl = NULL;
 	int err;
 
 	skel = tcp_ca_update__open_and_load();
@@ -363,17 +369,19 @@ static void test_mixed_links(void)
 		return;
 
 	link_nl = bpf_map__attach_struct_ops(skel->maps.ca_no_link);
-	ASSERT_OK_PTR(link_nl, "attach_struct_ops_nl");
+	if (!ASSERT_OK_PTR(link_nl, "attach_struct_ops_nl"))
+		goto done;
 
 	link = bpf_map__attach_struct_ops(skel->maps.ca_update_1);
-	ASSERT_OK_PTR(link, "attach_struct_ops");
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops"))
+		goto done;
 
 	do_test("tcp_ca_update", NULL);
 	ASSERT_GT(skel->bss->ca1_cnt, 0, "ca1_ca1_cnt");
 
 	err = bpf_link__update_map(link, skel->maps.ca_no_link);
 	ASSERT_ERR(err, "update_map");
-
+done:
 	bpf_link__destroy(link);
 	bpf_link__destroy(link_nl);
 	tcp_ca_update__destroy(skel);
@@ -418,7 +426,10 @@ static void test_link_replace(void)
 	bpf_link__destroy(link);
 
 	link = bpf_map__attach_struct_ops(skel->maps.ca_update_2);
-	ASSERT_OK_PTR(link, "attach_struct_ops_2nd");
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops_2nd")) {
+		tcp_ca_update__destroy(skel);
+		return;
+	}
 
 	/* BPF_F_REPLACE with a wrong old map Fd. It should fail!
 	 *
