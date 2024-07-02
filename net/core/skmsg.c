@@ -421,7 +421,7 @@ int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 	while (copied != len) {
 		struct scatterlist *sge;
 
-		if (unlikely(!msg_rx))
+		if (unlikely(!msg_rx || !msg_rx->sg.end))
 			break;
 
 		i = msg_rx->sg.start;
