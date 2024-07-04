@@ -294,9 +294,13 @@ int test__join_cgroup(const char *path);
 	typeof(actual) ___act = (actual);				\
 	typeof(expected) ___exp = (expected);				\
 	bool ___ok = ___act >= ___exp;					\
-	CHECK(!___ok, (name),						\
-	      "unexpected %s: actual %lld < expected %lld\n",		\
-	      (name), (long long)(___act), (long long)(___exp));	\
+	if (___act == -ENOTSUPP || ___act == -ENOTSUP ||		\
+	    errno == ENOTSUPP || errno == ENOTSUP)			\
+		test__skip();						\
+	else								\
+		CHECK(!___ok, (name),					\
+		      "unexpected %s: actual %lld < expected %lld\n",	\
+		      (name), (long long)(___act), (long long)(___exp));\
 	___ok;								\
 })
 
