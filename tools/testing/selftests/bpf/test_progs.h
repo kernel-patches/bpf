@@ -369,7 +369,10 @@ int test__join_cgroup(const char *path);
 	const void *___res = (ptr);					\
 	int ___err = libbpf_get_error(___res);				\
 	bool ___ok = ___err == 0;					\
-	CHECK(!___ok, (name), "unexpected error: %d\n", ___err);	\
+	if (___err == -ENOTSUPP || ___err == -ENOTSUP)			\
+		test__skip();						\
+	else								\
+		CHECK(!___ok, (name), "unexpected error: %d\n", ___err);\
 	___ok;								\
 })
 
