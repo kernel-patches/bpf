@@ -60,7 +60,7 @@ void test_trace_ext(void)
 	}
 
 	err = test_trace_ext__attach(skel_ext);
-	if (CHECK(err, "setup", "freplace/test_pkt_md_access attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "setup replace/test_pkt_md_access attach"))
 		goto cleanup;
 
 	prog = skel_ext->progs.test_pkt_md_access_new;
