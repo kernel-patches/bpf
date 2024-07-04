@@ -338,8 +338,13 @@ int test__join_cgroup(const char *path);
 	static int duration = 0;					\
 	long long ___res = (res);					\
 	bool ___ok = ___res == 0;					\
-	CHECK(!___ok, (name), "unexpected error: %lld (errno %d)\n",	\
-	      ___res, errno);						\
+	if (___res == -ENOTSUPP || ___res == -ENOTSUP ||		\
+	    errno == ENOTSUPP || errno == ENOTSUP)			\
+		test__skip();						\
+	else								\
+		CHECK(!___ok, (name),					\
+		      "unexpected error: %lld (errno %d)\n",		\
+		      ___res, errno);					\
 	___ok;								\
 })
 
