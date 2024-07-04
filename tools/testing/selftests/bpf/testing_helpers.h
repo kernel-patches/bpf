@@ -9,6 +9,10 @@
 #include <bpf/libbpf.h>
 #include <time.h>
 
+#ifndef ENOTSUPP
+#define ENOTSUPP 524
+#endif
+
 #define __TO_STR(x) #x
 #define TO_STR(x) __TO_STR(x)
 
