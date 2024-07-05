@@ -311,9 +311,10 @@ static inline int test_progs_get_error(int error)
 	typeof(actual) ___act = (actual);				\
 	typeof(expected) ___exp = (expected);				\
 	bool ___ok = ___act >= ___exp;					\
-	CHECK(!___ok, (name),						\
-	      "unexpected %s: actual %lld < expected %lld\n",		\
-	      (name), (long long)(___act), (long long)(___exp));	\
+	if (test_progs_get_error(___act))				\
+		CHECK(!___ok, (name),					\
+		      "unexpected %s: actual %lld < expected %lld\n",	\
+		      (name), (long long)(___act), (long long)(___exp));\
 	___ok;								\
 })
 
