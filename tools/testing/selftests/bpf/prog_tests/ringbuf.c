@@ -161,7 +161,7 @@ static void ringbuf_subtest(void)
 		goto cleanup;
 
 	err = test_ringbuf_lskel__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attachment failed: %d\n", err))
+	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
 
 	trigger_samples();

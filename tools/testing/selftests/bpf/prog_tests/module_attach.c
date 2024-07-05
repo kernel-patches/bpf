@@ -62,7 +62,7 @@ void test_module_attach(void)
 	bss = skel->bss;
 
 	err = test_module_attach__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
 
 	/* trigger tracepoint */

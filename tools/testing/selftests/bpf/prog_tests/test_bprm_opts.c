@@ -88,7 +88,7 @@ void test_test_bprm_opts(void)
 		goto close_prog;
 
 	err = bprm_opts__attach(skel);
-	if (CHECK(err, "attach", "attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "attach"))
 		goto close_prog;
 
 	/* Run the test with the secureexec bit unset */

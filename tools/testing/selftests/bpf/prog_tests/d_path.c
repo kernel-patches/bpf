@@ -129,7 +129,7 @@ static void test_d_path_basic(void)
 		goto cleanup;
 
 	err = test_d_path__attach(skel);
-	if (CHECK(err, "setup", "attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "setup"))
 		goto cleanup;
 
 	bss = skel->bss;

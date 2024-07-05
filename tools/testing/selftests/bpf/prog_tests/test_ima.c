@@ -83,7 +83,7 @@ void test_test_ima(void)
 		goto close_prog;
 
 	err = ima__attach(skel);
-	if (CHECK(err, "attach", "attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "attach"))
 		goto close_prog;
 
 	measured_dir = mkdtemp(measured_dir_template);
