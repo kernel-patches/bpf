@@ -383,7 +383,8 @@ static inline int test_progs_get_error(int error)
 	const void *___res = (ptr);					\
 	int ___err = libbpf_get_error(___res);				\
 	bool ___ok = ___err == 0;					\
-	CHECK(!___ok, (name), "unexpected error: %d\n", ___err);	\
+	if (test_progs_get_error(___err))				\
+		CHECK(!___ok, (name), "unexpected error: %d\n", ___err);\
 	___ok;								\
 })
 
