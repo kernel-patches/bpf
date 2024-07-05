@@ -102,12 +102,8 @@ static void test_lsm_cgroup_functional(void)
 	ASSERT_EQ(query_prog_cnt(cgroup_fd, "bpf_lsm_sk_alloc_security"), 0, "prog count");
 	ASSERT_EQ(query_prog_cnt(cgroup_fd, NULL), 0, "total prog count");
 	err = bpf_prog_attach(alloc_prog_fd, cgroup_fd, BPF_LSM_CGROUP, 0);
-	if (err == -ENOTSUPP) {
-		test__skip();
-		goto close_cgroup;
-	}
 	if (!ASSERT_OK(err, "attach alloc_prog_fd"))
-		goto detach_cgroup;
+		goto close_cgroup;
 	ASSERT_EQ(query_prog_cnt(cgroup_fd, "bpf_lsm_sk_alloc_security"), 1, "prog count");
 	ASSERT_EQ(query_prog_cnt(cgroup_fd, NULL), 1, "total prog count");
 

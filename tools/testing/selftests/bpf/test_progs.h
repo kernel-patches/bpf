@@ -176,6 +176,23 @@ void test__skip(void);
 void test__fail(void);
 int test__join_cgroup(const char *path);
 
+static inline bool test_progs_check_errno(int error, int check)
+{
+	return error == -check ||
+	       (error && errno == check);
+}
+
+static inline int test_progs_get_error(int error)
+{
+	if (test_progs_check_errno(error, ENOTSUP) ||
+	    test_progs_check_errno(error, ENOTSUPP)) {
+		test__skip();
+		return 0;
+	} else {
+		return error;
+	}
+}
+
 #define PRINT_FAIL(format...)                                                  \
 	({                                                                     \
 		test__fail();                                                  \
@@ -338,8 +355,10 @@ int test__join_cgroup(const char *path);
 	static int duration = 0;					\
 	long long ___res = (res);					\
 	bool ___ok = ___res == 0;					\
-	CHECK(!___ok, (name), "unexpected error: %lld (errno %d)\n",	\
-	      ___res, errno);						\
+	if (test_progs_get_error(___res))				\
+		CHECK(!___ok, (name),					\
+		      "unexpected error: %lld (errno %d)\n",		\
+		      ___res, errno);					\
 	___ok;								\
 })
 
