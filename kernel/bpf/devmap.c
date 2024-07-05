@@ -574,6 +574,8 @@ static int dev_map_enqueue_clone(struct bpf_dtab_netdev *obj,
 	if (!nxdpf)
 		return -ENOMEM;
 
+	nxdpf->map_key = obj->idx;
+
 	bq_enqueue(obj->dev, nxdpf, dev_rx, obj->xdp_prog);
 
 	return 0;
@@ -670,8 +672,10 @@ int dev_map_enqueue_multi(struct xdp_frame *xdpf, struct net_device *dev_rx,
 	}
 
 	/* consume the last copy of the frame */
-	if (last_dst)
+	if (last_dst) {
+		xdpf->map_key = last_dst->idx;
 		bq_enqueue(last_dst->dev, xdpf, dev_rx, last_dst->xdp_prog);
+	}
 	else
 		xdp_return_frame_rx_napi(xdpf); /* dtab is empty */
 

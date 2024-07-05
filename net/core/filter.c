@@ -4394,10 +4394,12 @@ static __always_inline int __xdp_do_redirect_frame(struct bpf_redirect_info *ri,
 			err = dev_map_enqueue_multi(xdpf, dev, map,
 						    flags & BPF_F_EXCLUDE_INGRESS);
 		} else {
+			xdpf->map_key = ri->tgt_index;
 			err = dev_map_enqueue(fwd, xdpf, dev);
 		}
 		break;
 	case BPF_MAP_TYPE_CPUMAP:
+		xdpf->map_key = ri->tgt_index;
 		err = cpu_map_enqueue(fwd, xdpf, dev);
 		break;
 	case BPF_MAP_TYPE_UNSPEC:
@@ -4407,6 +4409,7 @@ static __always_inline int __xdp_do_redirect_frame(struct bpf_redirect_info *ri,
 				err = -EINVAL;
 				break;
 			}
+			xdpf->map_key = ri->tgt_index;
 			err = dev_xdp_enqueue(fwd, xdpf, dev);
 			break;
 		}
@@ -9022,6 +9025,16 @@ static bool xdp_is_valid_access(int off, int size,
 	case offsetof(struct xdp_md, data_end):
 		info->reg_type = PTR_TO_PACKET_END;
 		break;
+	case offsetof(struct xdp_md, map_key):
+		if (prog->expected_attach_type != BPF_XDP_DEVMAP &&
+		    prog->expected_attach_type != BPF_XDP_CPUMAP) {
+			return false;
+		}
+
+		if (size != sizeof(__u64))
+			return false;
+
+		return true;
 	}
 
 	return __is_valid_xdp_access(off, size);
@@ -10115,6 +10128,11 @@ static u32 xdp_convert_ctx_access(enum bpf_access_type type,
 				      offsetof(struct xdp_txq_info, dev));
 		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
 				      offsetof(struct net_device, ifindex));
+		break;
+	case offsetof(struct xdp_md, map_key):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct xdp_buff, map_key),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct xdp_buff, map_key));
 		break;
 	}
 
