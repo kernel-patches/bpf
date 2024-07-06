@@ -779,7 +779,7 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 
 	nbuckets = roundup_pow_of_two(num_possible_cpus());
 	/* Use at least 2 buckets, select_bucket() is undefined behavior with 1 bucket */
-	nbuckets = max_t(u32, 2, nbuckets);
+	nbuckets = max(2, nbuckets);
 	smap->bucket_log = ilog2(nbuckets);
 
 	smap->buckets = bpf_map_kvcalloc(&smap->map, nbuckets,
