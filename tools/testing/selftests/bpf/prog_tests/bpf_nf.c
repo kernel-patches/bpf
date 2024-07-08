@@ -33,13 +33,16 @@ enum {
 
 static int connect_to_server(int srv_fd)
 {
+	struct network_helper_opts opts = {
+		.timeout_ms = TIMEOUT_MS,
+	};
 	int fd = -1;
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (!ASSERT_GE(fd, 0, "socket"))
 		goto out;
 
-	if (!ASSERT_EQ(connect_fd_to_fd(fd, srv_fd, TIMEOUT_MS), 0, "connect_fd_to_fd")) {
+	if (!ASSERT_EQ(connect_fd_to_fd(fd, srv_fd, &opts), 0, "connect_fd_to_fd")) {
 		close(fd);
 		fd = -1;
 	}

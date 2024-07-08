@@ -369,12 +369,16 @@ int connect_to_fd(int server_fd, int timeout_ms)
 	return connect_to_fd_opts(server_fd, type, &opts);
 }
 
-int connect_fd_to_fd(int client_fd, int server_fd, int timeout_ms)
+int connect_fd_to_fd(int client_fd, int server_fd,
+		     const struct network_helper_opts *opts)
 {
 	struct sockaddr_storage addr;
 	socklen_t len = sizeof(addr);
 
-	if (settimeo(client_fd, timeout_ms))
+	if (!opts)
+		opts = &default_opts;
+
+	if (settimeo(client_fd, opts->timeout_ms))
 		return -1;
 
 	if (getsockname(server_fd, (struct sockaddr *)&addr, &len)) {
@@ -382,7 +386,7 @@ int connect_fd_to_fd(int client_fd, int server_fd, int timeout_ms)
 		return -1;
 	}
 
-	if (connect_fd_to_addr(client_fd, &addr, len, false))
+	if (connect_fd_to_addr(client_fd, &addr, len, opts->must_fail))
 		return -1;
 
 	return 0;

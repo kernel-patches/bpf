@@ -86,7 +86,7 @@ static int talk_to_cgroup(int *client_fd, int *listen_fd, int *service_fd,
 	skel->bss->g_sock_port = ntohs(port);
 
 	/* Connect client to server */
-	err = connect_fd_to_fd(*client_fd, *listen_fd, 0);
+	err = connect_fd_to_fd(*client_fd, *listen_fd, NULL);
 	if (!ASSERT_OK(err, "connect_fd_to_fd"))
 		return -1;
 	*service_fd = accept(*listen_fd, NULL, NULL);
@@ -136,7 +136,7 @@ static int talk_to_outside(int *client_fd, int *listen_fd, int *service_fd,
 	skel->bss->g_sock_port = ntohs(port);
 
 	/* Connect client to server */
-	err = connect_fd_to_fd(*client_fd, *listen_fd, 0);
+	err = connect_fd_to_fd(*client_fd, *listen_fd, NULL);
 	if (!ASSERT_OK(err, "connect_fd_to_fd"))
 		return -1;
 	*service_fd = accept(*listen_fd, NULL, NULL);
