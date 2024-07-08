@@ -1419,7 +1419,8 @@ SEC("raw_tp")
 __success
 int iter_arr_with_actual_elem_count(const void *ctx)
 {
-	int i, n = loop_data.n, sum = 0;
+	unsigned i;
+	int n = loop_data.n, sum = 0;
 
 	if (n > ARRAY_SIZE(loop_data.data))
 		return 0;
