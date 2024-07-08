@@ -279,7 +279,8 @@ error_close:
 
 static int connect_fd_to_addr(int fd,
 			      const struct sockaddr_storage *addr,
-			      socklen_t addrlen, const bool must_fail)
+			      socklen_t addrlen, const bool must_fail,
+			      const int expect_errno)
 {
 	int ret;
 
@@ -290,7 +291,7 @@ static int connect_fd_to_addr(int fd,
 			log_err("Unexpected success to connect to server");
 			return -1;
 		}
-		if (errno != EPERM) {
+		if (errno != expect_errno) {
 			log_err("Unexpected error from connect to server");
 			return -1;
 		}
@@ -318,7 +319,8 @@ int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t add
 		return -1;
 	}
 
-	if (connect_fd_to_addr(fd, addr, addrlen, opts->must_fail))
+	if (connect_fd_to_addr(fd, addr, addrlen, opts->must_fail,
+			       opts->expect_errno))
 		goto error_close;
 
 	return fd;
@@ -386,7 +388,8 @@ int connect_fd_to_fd(int client_fd, int server_fd,
 		return -1;
 	}
 
-	if (connect_fd_to_addr(client_fd, &addr, len, opts->must_fail))
+	if (connect_fd_to_addr(client_fd, &addr, len, opts->must_fail,
+			       opts->expect_errno))
 		return -1;
 
 	return 0;

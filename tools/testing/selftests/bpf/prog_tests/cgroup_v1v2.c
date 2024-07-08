@@ -11,6 +11,7 @@ static int run_test(int cgroup_fd, int server_fd, bool classid)
 {
 	struct network_helper_opts opts = {
 		.must_fail = true,
+		.expect_errno = EPERM,
 	};
 	struct connect4_dropper *skel;
 	int fd, err = 0;

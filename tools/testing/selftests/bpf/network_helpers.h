@@ -24,6 +24,7 @@ typedef __u16 __sum16;
 struct network_helper_opts {
 	int timeout_ms;
 	bool must_fail;
+	int expect_errno;
 	int proto;
 	/* The backlog argument for listen(), defines the maximum length to which
 	 * the queue of pending connections for sockfd may grow.
