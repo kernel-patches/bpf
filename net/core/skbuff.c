@@ -4631,23 +4631,8 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 
 	if ((skb_shinfo(head_skb)->gso_type & SKB_GSO_DODGY) &&
 	    mss != GSO_BY_FRAGS && mss != skb_headlen(head_skb)) {
-		struct sk_buff *check_skb;
-
-		for (check_skb = list_skb; check_skb; check_skb = check_skb->next) {
-			if (skb_headlen(check_skb) && !check_skb->head_frag) {
-				/* gso_size is untrusted, and we have a frag_list with
-				 * a linear non head_frag item.
-				 *
-				 * If head_skb's headlen does not fit requested gso_size,
-				 * it means that the frag_list members do NOT terminate
-				 * on exact gso_size boundaries. Hence we cannot perform
-				 * skb_frag_t page sharing. Therefore we must fallback to
-				 * copying the frag_list skbs; we do so by disabling SG.
-				 */
-				features &= ~NETIF_F_SG;
-				break;
-			}
-		}
+		if (skb_is_nonsg(head_skb))
+			features &= ~NETIF_F_SG;
 	}
 
 	__skb_push(head_skb, doffset);
