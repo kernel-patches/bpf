@@ -296,7 +296,7 @@ static int connect_fd_to_addr(int fd,
 			return -1;
 		}
 	} else {
-		if (ret) {
+		if (ret && errno != expect_errno) {
 			log_err("Failed to connect to server");
 			return -1;
 		}

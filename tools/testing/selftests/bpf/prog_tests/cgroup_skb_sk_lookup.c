@@ -10,6 +10,7 @@ static void run_lookup_test(__u16 *g_serv_port, int out_sk)
 {
 	struct network_helper_opts opts = {
 		.timeout_ms	= 1000,
+		.expect_errno	= EINPROGRESS,
 	};
 	int serv_sk = -1, in_sk = -1, serv_in_sk = -1, err;
 	struct sockaddr_in6 addr = {};
@@ -28,6 +29,8 @@ static void run_lookup_test(__u16 *g_serv_port, int out_sk)
 
 	/* Client outside of test cgroup should fail to connect by timeout. */
 	err = connect_fd_to_fd(out_sk, serv_sk, &opts);
+	if (!err)
+		err = -errno;
 	if (CHECK(!err || errno != EINPROGRESS, "connect_fd_to_fd",
 		  "unexpected result err %d errno %d\n", err, errno))
 		goto cleanup;
