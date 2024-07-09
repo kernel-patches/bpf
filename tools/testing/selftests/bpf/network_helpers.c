@@ -388,6 +388,27 @@ int connect_fd_to_fd(int client_fd, int server_fd, int timeout_ms)
 	return 0;
 }
 
+int connect_fd_to_addr_str(int client_fd, int family, int type,
+			   const char *addr_str, __u16 port,
+			   const struct network_helper_opts *opts)
+{
+	struct sockaddr_storage addr;
+	socklen_t len;
+
+	if (!opts)
+		opts = &default_opts;
+
+	if (settimeo(client_fd, opts->timeout_ms))
+		return -1;
+
+	if (make_sockaddr(family, addr_str, port, &addr, &len)) {
+		log_err("Failed to make server addr");
+		return -1;
+	}
+
+	return connect_fd_to_addr(client_fd, &addr, len, false);
+}
+
 int make_sockaddr(int family, const char *addr_str, __u16 port,
 		  struct sockaddr_storage *addr, socklen_t *len)
 {
