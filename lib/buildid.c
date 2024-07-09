@@ -152,9 +152,8 @@ static void freader_cleanup(struct freader *r)
  * 32-bit and 64-bit system, because Elf32_Nhdr and Elf64_Nhdr are
  * identical.
  */
-static int parse_build_id_buf(struct freader *r,
-			      unsigned char *build_id, __u32 *size,
-			      u64 note_offs, Elf32_Word note_size)
+static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *size,
+			  u64 note_offs, Elf32_Word note_size)
 {
 	const char note_name[] = "GNU";
 	const size_t note_name_sz = sizeof(note_name);
@@ -162,6 +161,10 @@ static int parse_build_id_buf(struct freader *r,
 	u32 build_id_sz;
 	const Elf32_Nhdr *nhdr;
 	const char *data;
+
+	/* check for overflow */
+	if (note_offs + note_size < note_offs)
+		return -EINVAL;
 
 	while (note_offs + sizeof(Elf32_Nhdr) < note_end) {
 		nhdr = freader_fetch(r, note_offs, sizeof(Elf32_Nhdr) + note_name_sz);
@@ -197,23 +200,6 @@ static int parse_build_id_buf(struct freader *r,
 	}
 
 	return -EINVAL;
-}
-
-static inline int parse_build_id(struct freader *r,
-				 unsigned char *build_id,
-				 __u32 *size,
-				 u64 note_start_off,
-				 Elf32_Word note_size)
-{
-	/* check for overflow */
-	if (note_start_off + note_size < note_start_off)
-		return -EINVAL;
-
-	/* only supports note that fits in the first page */
-	if (note_start_off + note_size > PAGE_SIZE)
-		return -EINVAL;
-
-	return parse_build_id_buf(r, build_id, size, note_start_off, note_size);
 }
 
 /* Parse build ID from 32-bit ELF */
@@ -369,7 +355,7 @@ int build_id_parse_buf(const void *buf, unsigned char *build_id, u32 buf_size)
 
 	freader_init_from_mem(&r, buf, buf_size);
 
-	return parse_build_id_buf(&r, build_id, NULL, 0, buf_size);
+	return parse_build_id(&r, build_id, NULL, 0, buf_size);
 }
 
 #if IS_ENABLED(CONFIG_STACKTRACE_BUILD_ID) || IS_ENABLED(CONFIG_VMCORE_INFO)
