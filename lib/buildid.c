@@ -158,7 +158,7 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 	const char note_name[] = "GNU";
 	const size_t note_name_sz = sizeof(note_name);
 	u64 build_id_off, new_offs, note_end = note_offs + note_size;
-	u32 build_id_sz;
+	u32 build_id_sz, name_sz, desc_sz;
 	const Elf32_Nhdr *nhdr;
 	const char *data;
 
@@ -171,14 +171,15 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 		if (!nhdr)
 			return r->err;
 
-		if (nhdr->n_type == BUILD_ID &&
-		    nhdr->n_namesz == note_name_sz &&
-		    !strcmp((char *)(nhdr + 1), note_name) &&
-		    nhdr->n_descsz > 0 &&
-		    nhdr->n_descsz <= BUILD_ID_SIZE_MAX) {
+		name_sz = READ_ONCE(nhdr->n_namesz);
+		desc_sz = READ_ONCE(nhdr->n_descsz);
+		if (READ_ONCE(nhdr->n_type) == BUILD_ID &&
+		    name_sz == note_name_sz &&
+		    !strncmp((char *)(nhdr + 1), note_name, note_name_sz) &&
+		    desc_sz > 0 && desc_sz <= BUILD_ID_SIZE_MAX) {
 
 			build_id_off = note_offs + sizeof(Elf32_Nhdr) + ALIGN(note_name_sz, 4);
-			build_id_sz = nhdr->n_descsz;
+			build_id_sz = desc_sz;
 
 			/* freader_fetch() will invalidate nhdr pointer */
 			data = freader_fetch(r, build_id_off, build_id_sz);
@@ -192,8 +193,7 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 			return 0;
 		}
 
-		new_offs = note_offs + sizeof(Elf32_Nhdr) +
-			   ALIGN(nhdr->n_namesz, 4) + ALIGN(nhdr->n_descsz, 4);
+		new_offs = note_offs + sizeof(Elf32_Nhdr) + ALIGN(name_sz, 4) + ALIGN(desc_sz, 4);
 		if (new_offs <= note_offs)  /* overflow */
 			break;
 		note_offs = new_offs;
@@ -214,7 +214,7 @@ static int get_build_id_32(struct freader *r, unsigned char *build_id, __u32 *si
 		return r->err;
 
 	/* subsequent freader_fetch() calls invalidate pointers, so remember locally */
-	phnum = ehdr->e_phnum;
+	phnum = READ_ONCE(ehdr->e_phnum);
 	phoff = READ_ONCE(ehdr->e_phoff);
 
 	/* set upper bound on amount of segments (phdrs) we iterate */
@@ -226,8 +226,9 @@ static int get_build_id_32(struct freader *r, unsigned char *build_id, __u32 *si
 		if (!phdr)
 			return r->err;
 
-		if (phdr->p_type == PT_NOTE &&
-		    !parse_build_id(r, build_id, size, phdr->p_offset, phdr->p_filesz))
+		if (READ_ONCE(phdr->p_type) == PT_NOTE &&
+		    !parse_build_id(r, build_id, size,
+				    READ_ONCE(phdr->p_offset), READ_ONCE(phdr->p_filesz)))
 			return 0;
 	}
 	return -EINVAL;
@@ -246,7 +247,7 @@ static int get_build_id_64(struct freader *r, unsigned char *build_id, __u32 *si
 		return r->err;
 
 	/* subsequent freader_fetch() calls invalidate pointers, so remember locally */
-	phnum = ehdr->e_phnum;
+	phnum = READ_ONCE(ehdr->e_phnum);
 	phoff = READ_ONCE(ehdr->e_phoff);
 
 	/* set upper bound on amount of segments (phdrs) we iterate */
@@ -258,8 +259,9 @@ static int get_build_id_64(struct freader *r, unsigned char *build_id, __u32 *si
 		if (!phdr)
 			return r->err;
 
-		if (phdr->p_type == PT_NOTE &&
-		    !parse_build_id(r, build_id, size, phdr->p_offset, phdr->p_filesz))
+		if (READ_ONCE(phdr->p_type) == PT_NOTE &&
+		    !parse_build_id(r, build_id, size,
+				    READ_ONCE(phdr->p_offset), READ_ONCE(phdr->p_filesz)))
 			return 0;
 	}
 
