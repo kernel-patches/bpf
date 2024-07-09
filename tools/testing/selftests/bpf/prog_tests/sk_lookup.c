@@ -229,17 +229,17 @@ fail:
 	return -1;
 }
 
-static int make_client(int sotype, const char *ip, int port)
+static int make_client(int sotype, const char *ip, int port, int expect_errno)
 {
-	struct sockaddr_storage addr = {0};
+	int family = is_ipv6(ip) ? AF_INET6 : AF_INET;
 	int err, fd;
 
-	fd = make_socket(sotype, ip, port, &addr);
+	fd = socket(family, sotype, 0);
 	if (fd < 0)
 		return -1;
 
-	err = connect(fd, (void *)&addr, inetaddr_len(&addr));
-	if (CHECK(err, "make_client", "connect")) {
+	err = connect_fd_to_addr_str(fd, family, sotype, ip, port, NULL);
+	if (CHECK(err && (!expect_errno || errno != expect_errno), "make_client", "connect")) {
 		log_err("failed to connect client socket");
 		goto fail;
 	}
@@ -645,7 +645,7 @@ static void run_lookup_prog(const struct test *t)
 			goto close;
 	}
 
-	client_fd = make_client(t->sotype, t->connect_to.ip, t->connect_to.port);
+	client_fd = make_client(t->sotype, t->connect_to.ip, t->connect_to.port, 0);
 	if (client_fd < 0)
 		goto close;
 
@@ -1151,7 +1151,7 @@ static void run_sk_assign_connected(struct test_sk_lookup *skel,
 	if (server_fd < 0)
 		return;
 
-	connected_fd = make_client(sotype, EXT_IP4, EXT_PORT);
+	connected_fd = make_client(sotype, EXT_IP4, EXT_PORT, 0);
 	if (connected_fd < 0)
 		goto out_close_server;
 
@@ -1165,7 +1165,7 @@ static void run_sk_assign_connected(struct test_sk_lookup *skel,
 		goto out_close_connected;
 
 	/* Try to redirect TCP SYN / UDP packet to a connected socket */
-	client_fd = make_client(sotype, EXT_IP4, EXT_PORT);
+	client_fd = make_client(sotype, EXT_IP4, EXT_PORT, 0);
 	if (client_fd < 0)
 		goto out_unlink_prog;
 	if (sotype == SOCK_DGRAM) {
