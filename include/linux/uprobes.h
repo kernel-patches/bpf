@@ -55,6 +55,12 @@ enum uprobe_task_state {
 	UTASK_SSTEP_TRAPPED,
 };
 
+struct return_frame {
+	/* the frames of return instances */
+	struct return_instance	*return_instance;
+	struct return_instance	*vaddr;
+};
+
 /*
  * uprobe_task: Metadata of a task while it singlesteps.
  */
@@ -76,7 +82,7 @@ struct uprobe_task {
 	struct uprobe			*active_uprobe;
 	unsigned long			xol_vaddr;
 
-	struct return_instance		*return_instances;
+	struct return_frame		frame;
 	unsigned int			depth;
 };
 
@@ -86,8 +92,6 @@ struct return_instance {
 	unsigned long		stack;		/* stack pointer */
 	unsigned long		orig_ret_vaddr; /* original return address */
 	bool			chained;	/* true, if instance is nested */
-
-	struct return_instance	*next;		/* keep as stack */
 };
 
 enum rp_check {

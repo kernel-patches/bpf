@@ -1697,12 +1697,89 @@ unsigned long uprobe_get_trap_addr(struct pt_regs *regs)
 	return instruction_pointer(regs);
 }
 
-static struct return_instance *free_ret_instance(struct return_instance *ri)
+static inline
+struct return_instance *next_ret_instance(struct return_frame *frame,
+					  struct return_instance *ri)
 {
-	struct return_instance *next = ri->next;
+	return ri == frame->vaddr ? NULL : ri - 1;
+}
+
+static inline
+struct return_instance *curr_ret_instance(struct uprobe_task *task)
+{
+	return task->frame.return_instance;
+}
+
+static struct return_instance *find_next_ret_chain(struct uprobe_task *utask,
+						   struct return_instance *ri)
+{
+	bool chained;
+
+	do {
+		chained = ri->chained;
+		ri = next_ret_instance(&utask->frame, ri);
+	} while (chained);
+
+	return ri;
+}
+
+static inline
+struct return_instance *free_ret_instance(struct uprobe_task *utask,
+					  struct return_instance *ri)
+{
 	put_uprobe(ri->uprobe);
-	kfree(ri);
-	return next;
+	return next_ret_instance(&utask->frame, ri);
+}
+
+static void free_return_instances(struct uprobe_task *task)
+{
+	struct return_frame *frame = &task->frame;
+	struct return_instance *ri = frame->return_instance;
+
+	while (ri) {
+		put_uprobe(ri->uprobe);
+		ri = next_ret_instance(frame, ri);
+	}
+
+	kfree(frame->vaddr);
+}
+
+static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
+				     struct pt_regs *regs)
+{
+	struct return_frame *frame = &utask->frame;
+	struct return_instance *ri = frame->return_instance;
+	enum rp_check ctx = chained ? RP_CHECK_CHAIN_CALL : RP_CHECK_CALL;
+
+	while (ri && !arch_uretprobe_is_alive(ri, ctx, regs)) {
+		ri = next_ret_instance(frame, ri);
+		utask->depth--;
+	}
+	frame->return_instance = ri;
+}
+
+static struct return_instance *alloc_return_instance(struct uprobe_task *task)
+{
+	struct return_frame *frame = &task->frame;
+
+	if (!frame->vaddr) {
+		frame->vaddr = kcalloc(MAX_URETPROBE_DEPTH,
+				sizeof(struct return_instance), GFP_KERNEL);
+		if (!frame->vaddr)
+			return NULL;
+	}
+
+	if (!frame->return_instance) {
+		frame->return_instance = frame->vaddr;
+		return frame->return_instance;
+	}
+
+	return ++frame->return_instance;
+}
+
+static inline bool return_frame_empty(struct uprobe_task *task)
+{
+	return !task->frame.return_instance;
 }
 
 /*
@@ -1712,7 +1789,6 @@ static struct return_instance *free_ret_instance(struct return_instance *ri)
 void uprobe_free_utask(struct task_struct *t)
 {
 	struct uprobe_task *utask = t->utask;
-	struct return_instance *ri;
 
 	if (!utask)
 		return;
@@ -1720,10 +1796,7 @@ void uprobe_free_utask(struct task_struct *t)
 	if (utask->active_uprobe)
 		put_uprobe(utask->active_uprobe);
 
-	ri = utask->return_instances;
-	while (ri)
-		ri = free_ret_instance(ri);
-
+	free_return_instances(utask);
 	xol_free_insn_slot(t);
 	kfree(utask);
 	t->utask = NULL;
@@ -1747,26 +1820,20 @@ static struct uprobe_task *get_utask(void)
 static int dup_utask(struct task_struct *t, struct uprobe_task *o_utask)
 {
 	struct uprobe_task *n_utask;
-	struct return_instance **p, *o, *n;
+	struct return_instance *o, *n;
 
 	n_utask = kzalloc(sizeof(struct uprobe_task), GFP_KERNEL);
 	if (!n_utask)
 		return -ENOMEM;
 	t->utask = n_utask;
 
-	p = &n_utask->return_instances;
-	for (o = o_utask->return_instances; o; o = o->next) {
-		n = kmalloc(sizeof(struct return_instance), GFP_KERNEL);
-		if (!n)
-			return -ENOMEM;
-
+	o = curr_ret_instance(o_utask);
+	while (o) {
+		n = alloc_return_instance(n_utask);
+		n_utask->depth++;
 		*n = *o;
 		get_uprobe(n->uprobe);
-		n->next = NULL;
-
-		*p = n;
-		p = &n->next;
-		n_utask->depth++;
+		o = next_ret_instance(&o_utask->frame, o);
 	}
 
 	return 0;
@@ -1799,7 +1866,7 @@ void uprobe_copy_process(struct task_struct *t, unsigned long flags)
 
 	t->utask = NULL;
 
-	if (!utask || !utask->return_instances)
+	if (!utask || return_frame_empty(utask))
 		return;
 
 	if (mm == t->mm && !(flags & CLONE_VFORK))
@@ -1840,19 +1907,6 @@ static unsigned long get_trampoline_vaddr(void)
 	return trampoline_vaddr;
 }
 
-static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
-					struct pt_regs *regs)
-{
-	struct return_instance *ri = utask->return_instances;
-	enum rp_check ctx = chained ? RP_CHECK_CHAIN_CALL : RP_CHECK_CALL;
-
-	while (ri && !arch_uretprobe_is_alive(ri, ctx, regs)) {
-		ri = free_ret_instance(ri);
-		utask->depth--;
-	}
-	utask->return_instances = ri;
-}
-
 static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 {
 	struct return_instance *ri;
@@ -1874,10 +1928,6 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 		return;
 	}
 
-	ri = kmalloc(sizeof(struct return_instance), GFP_KERNEL);
-	if (!ri)
-		return;
-
 	trampoline_vaddr = get_trampoline_vaddr();
 	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs);
 	if (orig_ret_vaddr == -1)
@@ -1893,7 +1943,7 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 	 * instances. This also makes breakpoint unwrapping easier.
 	 */
 	if (chained) {
-		if (!utask->return_instances) {
+		if (return_frame_empty(utask)) {
 			/*
 			 * This situation is not possible. Likely we have an
 			 * attack from user-space.
@@ -1901,22 +1951,19 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs)
 			uprobe_warn(current, "handle tail call");
 			goto fail;
 		}
-		orig_ret_vaddr = utask->return_instances->orig_ret_vaddr;
+		orig_ret_vaddr = curr_ret_instance(utask)->orig_ret_vaddr;
 	}
 
+	ri = alloc_return_instance(utask);
 	ri->uprobe = get_uprobe(uprobe);
 	ri->func = instruction_pointer(regs);
 	ri->stack = user_stack_pointer(regs);
 	ri->orig_ret_vaddr = orig_ret_vaddr;
 	ri->chained = chained;
-
 	utask->depth++;
-	ri->next = utask->return_instances;
-	utask->return_instances = ri;
 
-	return;
  fail:
-	kfree(ri);
+	return;
 }
 
 /* Prepare to single-step probed instruction out of line. */
@@ -2111,18 +2158,6 @@ handle_uretprobe_chain(struct return_instance *ri, struct pt_regs *regs)
 	up_read(&uprobe->register_rwsem);
 }
 
-static struct return_instance *find_next_ret_chain(struct return_instance *ri)
-{
-	bool chained;
-
-	do {
-		chained = ri->chained;
-		ri = ri->next;	/* can't be NULL if chained */
-	} while (chained);
-
-	return ri;
-}
-
 static void handle_trampoline(struct pt_regs *regs)
 {
 	struct uprobe_task *utask;
@@ -2133,7 +2168,7 @@ static void handle_trampoline(struct pt_regs *regs)
 	if (!utask)
 		goto sigill;
 
-	ri = utask->return_instances;
+	ri = curr_ret_instance(utask);
 	if (!ri)
 		goto sigill;
 
@@ -2144,25 +2179,24 @@ static void handle_trampoline(struct pt_regs *regs)
 		 * or NULL; the latter case means that nobody but ri->func
 		 * could hit this trampoline on return. TODO: sigaltstack().
 		 */
-		next = find_next_ret_chain(ri);
+		next = find_next_ret_chain(utask, ri);
 		valid = !next || arch_uretprobe_is_alive(next, RP_CHECK_RET, regs);
 
 		instruction_pointer_set(regs, ri->orig_ret_vaddr);
 		do {
 			if (valid)
 				handle_uretprobe_chain(ri, regs);
-			ri = free_ret_instance(ri);
+			ri = free_ret_instance(utask, ri);
 			utask->depth--;
 		} while (ri != next);
 	} while (!valid);
 
-	utask->return_instances = ri;
+	utask->frame.return_instance = ri;
 	return;
 
  sigill:
 	uprobe_warn(current, "handle uretprobe, sending SIGILL.");
 	force_sig(SIGILL);
-
 }
 
 bool __weak arch_uprobe_ignore(struct arch_uprobe *aup, struct pt_regs *regs)
@@ -2315,7 +2349,7 @@ int uprobe_pre_sstep_notifier(struct pt_regs *regs)
 		return 0;
 
 	if (!test_bit(MMF_HAS_UPROBES, &current->mm->flags) &&
-	    (!current->utask || !current->utask->return_instances))
+	    (!current->utask || return_frame_empty(current->utask)))
 		return 0;
 
 	set_thread_flag(TIF_UPROBE);
