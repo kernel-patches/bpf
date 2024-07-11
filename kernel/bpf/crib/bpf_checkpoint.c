@@ -14,6 +14,10 @@
 
 extern void bpf_file_release(struct file *file);
 
+extern struct sk_buff *bpf_skb_acquire(struct sk_buff *skb);
+
+extern void bpf_skb_release(struct sk_buff *skb);
+
 __bpf_kfunc_start_defs();
 
 /**
@@ -160,6 +164,81 @@ __bpf_kfunc int bpf_inet6_dst_addr_from_socket(struct socket *sock, struct socka
 __bpf_kfunc int bpf_cal_skb_size(struct sk_buff *skb)
 {
 	return skb_end_offset(skb) + skb->data_len;
+}
+
+/**
+ * bpf_iter_skb_new() - Initialize a new skb iterator for a socket
+ * queue (sk_buff_head), used to iterates over all skb in the specified
+ * socket queue
+ *
+ * @it: The new bpf_iter_skb to be created
+ * @head: A pointer pointing to a sk_buff_head to be iterated over
+ */
+__bpf_kfunc int bpf_iter_skb_new(struct bpf_iter_skb *it,
+		struct sk_buff_head *head)
+{
+	struct bpf_iter_skb_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_skb_kern) != sizeof(struct bpf_iter_skb));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_skb_kern) != __alignof__(struct bpf_iter_skb));
+
+	kit->head = head;
+	kit->skb = NULL;
+
+	return 0;
+}
+
+/**
+ * bpf_iter_skb_next() - Get the next skb in bpf_iter_skb
+ *
+ * bpf_iter_skb_next() acquires a reference to the returned struct sk_buff.
+ *
+ * The reference to struct sk_buff acquired by the previous bpf_iter_skb_next()
+ * is released in the next bpf_iter_skb_next(), and the last reference is
+ * released in the last bpf_iter_skb_next() that returns NULL.
+ *
+ * @it: bpf_iter_skb to be checked
+ *
+ * @returns a pointer to the struct sk_buff of the next skb if further skbs
+ * are available, otherwise returns NULL.
+ */
+__bpf_kfunc struct sk_buff *bpf_iter_skb_next(struct bpf_iter_skb *it)
+{
+	struct bpf_iter_skb_kern *kit = (void *)it;
+	unsigned long flags;
+
+	if (kit->skb)
+		bpf_skb_release(kit->skb);
+
+	spin_lock_irqsave(&kit->head->lock, flags);
+
+	if (!kit->skb)
+		kit->skb = skb_peek(kit->head);
+	else
+		kit->skb = skb_peek_next(kit->skb, kit->head);
+
+	spin_unlock_irqrestore(&kit->head->lock, flags);
+
+	if (kit->skb)
+		bpf_skb_acquire(kit->skb);
+
+	return kit->skb;
+}
+
+/**
+ * bpf_iter_skb_destroy() - Destroy a bpf_iter_skb
+ *
+ * If the iterator does not iterate to the end, then the last
+ * struct sk_buff reference is released at this time.
+ *
+ * @it: bpf_iter_skb to be destroyed
+ */
+__bpf_kfunc void bpf_iter_skb_destroy(struct bpf_iter_skb *it)
+{
+	struct bpf_iter_skb_kern *kit = (void *)it;
+
+	if (kit->skb)
+		bpf_skb_release(kit->skb);
 }
 
 __bpf_kfunc_end_defs();

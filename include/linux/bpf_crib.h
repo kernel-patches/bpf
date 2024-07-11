@@ -23,4 +23,13 @@ struct bpf_iter_task_file_kern {
 	int fd;
 } __aligned(8);
 
+struct bpf_iter_skb {
+	__u64 __opaque[2];
+} __aligned(8);
+
+struct bpf_iter_skb_kern {
+	struct sk_buff_head *head;
+	struct sk_buff *skb;
+} __aligned(8);
+
 #endif /* _BPF_CRIB_H */
