@@ -241,4 +241,120 @@ __bpf_kfunc void bpf_iter_skb_destroy(struct bpf_iter_skb *it)
 		bpf_skb_release(kit->skb);
 }
 
+/**
+ * bpf_iter_skb_data_new() - Initialize a new skb data iterator for a skb
+ * (sk_buff), used to iterates over all skb data in the specified skb
+ *
+ * @it: new bpf_iter_skb_data to be created
+ * @skb: a pointer to a sk_buff to be iterated over
+ * @buf: buffer for dumping skb data
+ * @buflen: buffer length
+ */
+__bpf_kfunc int bpf_iter_skb_data_new(struct bpf_iter_skb_data *it,
+		struct sk_buff *skb, char *buf, int buflen)
+{
+	struct bpf_iter_skb_data_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_skb_data_kern) > sizeof(struct bpf_iter_skb_data));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_skb_data_kern) !=
+		     __alignof__(struct bpf_iter_skb_data));
+
+	int headerlen = skb_headroom(skb);
+
+	kit->skb = skb;
+	kit->headerlen = headerlen;
+	kit->offset = 0;
+	kit->chunklen = 0;
+	kit->size = headerlen + skb->len;
+	kit->buf = buf;
+	kit->buflen = buflen;
+
+	return 0;
+}
+
+/**
+ * bpf_iter_skb_data_next() - Dumps the corresponding data in skb to
+ * the buffer based on the current offset and buffer size, and updates
+ * the offset after copying the data
+ *
+ * @it: bpf_iter_skb_data to be checked
+ *
+ * @returns a pointer to the buffer if further data is available,
+ * otherwise returns NULL
+ */
+__bpf_kfunc char *bpf_iter_skb_data_next(struct bpf_iter_skb_data *it)
+{
+	struct bpf_iter_skb_data_kern *kit = (void *)it;
+
+	if (!kit->buf || kit->buflen <= 0)
+		return NULL;
+
+	if (kit->offset >= kit->size)
+		return NULL;
+
+	kit->chunklen = (kit->offset + kit->buflen > kit->size) ?
+			kit->size - kit->offset : kit->buflen;
+
+	skb_copy_bits(kit->skb, kit->offset - kit->headerlen, kit->buf, kit->chunklen);
+
+	kit->offset += kit->chunklen;
+
+	return kit->buf;
+}
+
+/**
+ * bpf_iter_skb_data_set_buf() - Set the buffer for dumping the skb data
+ * during iteration
+ *
+ * @it: bpf_iter_skb_data to be set
+ * @buf: buffer
+ * @buflen: buffer length
+ */
+__bpf_kfunc void bpf_iter_skb_data_set_buf(struct bpf_iter_skb_data *it, char *buf, int buflen)
+{
+	struct bpf_iter_skb_data_kern *kit = (void *)it;
+
+	kit->buf = buf;
+	kit->buflen = buflen;
+}
+
+/**
+ * bpf_iter_skb_data_get_chunk_len() - get the size of the chunk read
+ * in the current iteration
+ *
+ * @it: bpf_iter_skb_data to be checked
+ *
+ * @returns read size in the current iteration
+ */
+__bpf_kfunc int bpf_iter_skb_data_get_chunk_len(struct bpf_iter_skb_data *it)
+{
+	struct bpf_iter_skb_data_kern *kit = (void *)it;
+
+	return kit->chunklen;
+}
+
+/**
+ * bpf_iter_skb_data_get_offset() - get the offset of the chunk read
+ * in the current iteration
+ *
+ * @it: bpf_iter_skb_data to be checked
+ *
+ * @returns offset in the current iteration
+ */
+__bpf_kfunc int bpf_iter_skb_data_get_offset(struct bpf_iter_skb_data *it)
+{
+	struct bpf_iter_skb_data_kern *kit = (void *)it;
+
+	return kit->offset - kit->chunklen;
+}
+
+/**
+ * bpf_iter_skb_destroy() - Destroy a bpf_iter_skb_data
+ *
+ * @it: bpf_iter_skb_data to be destroyed
+ */
+__bpf_kfunc void bpf_iter_skb_data_destroy(struct bpf_iter_skb_data *it)
+{
+}
+
 __bpf_kfunc_end_defs();

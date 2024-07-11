@@ -32,4 +32,18 @@ struct bpf_iter_skb_kern {
 	struct sk_buff *skb;
 } __aligned(8);
 
+struct bpf_iter_skb_data {
+	__u64 __opaque[5];
+} __aligned(8);
+
+struct bpf_iter_skb_data_kern {
+	struct sk_buff *skb;
+	char *buf;
+	unsigned int buflen;
+	int offset;
+	unsigned int headerlen;
+	unsigned int size;
+	unsigned int chunklen;
+} __aligned(8);
+
 #endif /* _BPF_CRIB_H */
