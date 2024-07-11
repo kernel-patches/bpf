@@ -77,6 +77,7 @@
 #define KF_RCU_PROTECTED (1 << 11) /* kfunc should be protected by rcu cs when they are invoked */
 #define KF_ITER_GETTER   (1 << 12) /* kfunc implements BPF iter getter */
 #define KF_ITER_SETTER   (1 << 13) /* kfunc implements BPF iter setter */
+#define KF_OBTAIN        (1 << 14) /* kfunc is an obtain function */
 
 /*
  * Tag marking a kernel function as a kfunc. This is meant to minimize the
