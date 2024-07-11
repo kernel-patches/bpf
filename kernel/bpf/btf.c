@@ -8054,14 +8054,15 @@ BTF_TRACING_TYPE_xxx
 static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 				 const struct btf_type *func, u32 func_flags)
 {
-	u32 flags = func_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY);
+	u32 flags = func_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY |
+				  KF_ITER_GETTER | KF_ITER_SETTER);
 	const char *name, *sfx, *iter_name;
 	const struct btf_param *arg;
 	const struct btf_type *t;
 	char exp_name[128];
 	u32 nr_args;
 
-	/* exactly one of KF_ITER_{NEW,NEXT,DESTROY} can be set */
+	/* exactly one of KF_ITER_{NEW,NEXT,DESTROY,GETTER,SETTER} can be set */
 	if (!flags || (flags & (flags - 1)))
 		return -EINVAL;
 
@@ -8088,7 +8089,7 @@ static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 	if (t->size == 0 || (t->size % 8))
 		return -EINVAL;
 
-	/* validate bpf_iter_<type>_{new,next,destroy}(struct bpf_iter_<type> *)
+	/* validate bpf_iter_<type>_{new,next,destroy,get,set}(struct bpf_iter_<type> *)
 	 * naming pattern
 	 */
 	iter_name = name + sizeof(ITER_PREFIX) - 1;
@@ -8096,15 +8097,25 @@ static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 		sfx = "new";
 	else if (flags & KF_ITER_NEXT)
 		sfx = "next";
-	else /* (flags & KF_ITER_DESTROY) */
+	else if (flags & KF_ITER_DESTROY)
 		sfx = "destroy";
+	else if (flags & KF_ITER_GETTER)
+		sfx = "get";
+	else /* (flags & KF_ITER_SETTER) */
+		sfx = "set";
 
 	snprintf(exp_name, sizeof(exp_name), "bpf_iter_%s_%s", iter_name, sfx);
-	if (strcmp(func_name, exp_name))
-		return -EINVAL;
+	if (flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY)) {
+		if (strcmp(func_name, exp_name))
+			return -EINVAL;
+	} else { /* (flags & (KF_ITER_GETTER | KF_ITER_SETTER)) */
+		/* only check prefix */
+		if (strncmp(func_name, exp_name, strlen(exp_name)))
+			return -EINVAL;
+	}
 
-	/* only iter constructor should have extra arguments */
-	if (!(flags & KF_ITER_NEW) && nr_args != 1)
+	/* only iter constructor and setter should have extra arguments */
+	if (!(flags & (KF_ITER_NEW | KF_ITER_SETTER)) && nr_args != 1)
 		return -EINVAL;
 
 	if (flags & KF_ITER_NEXT) {
@@ -8144,7 +8155,8 @@ static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
 	if (!func || !btf_type_is_func_proto(func))
 		return -EINVAL;
 
-	if (func_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY)) {
+	if (func_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY |
+			  KF_ITER_GETTER | KF_ITER_SETTER)) {
 		err = btf_check_iter_kfuncs(btf, func_name, func, func_flags);
 		if (err)
 			return err;

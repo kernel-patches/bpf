@@ -7813,7 +7813,8 @@ static u32 iter_ref_obj_id(struct bpf_verifier_env *env, struct bpf_reg_state *r
 
 static bool is_iter_kfunc(struct bpf_kfunc_call_arg_meta *meta)
 {
-	return meta->kfunc_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY);
+	return meta->kfunc_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY |
+				    KF_ITER_GETTER | KF_ITER_SETTER);
 }
 
 static bool is_iter_new_kfunc(struct bpf_kfunc_call_arg_meta *meta)
