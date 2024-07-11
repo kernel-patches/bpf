@@ -101,4 +101,6 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+source "kernel/bpf/crib/Kconfig"
+
 endmenu # "BPF subsystem"

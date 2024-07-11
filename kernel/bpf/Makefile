@@ -58,3 +58,5 @@ vpath %.c $(srctree)/kernel/bpf:$(srctree)/tools/lib/bpf
 
 $(obj)/%.o: %.c FORCE
 	$(call if_changed_rule,cc_o_c)
+
+obj-$(CONFIG_BPF_CRIB) += crib/

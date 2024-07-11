@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config BPF_CRIB
+	bool "Checkpoint/Restore In eBPF (CRIB)"
+	depends on BPF_SYSCALL
+	depends on BPF_JIT
+	depends on DEBUG_INFO_BTF
+	help
+	  Enable CRIB (Checkpoint/Restore In eBPF), which allows
+	  checkpointing/restoring of processes through BPF programs.
+
+	  Compared to procfs and system call interfaces, CRIB achieves
+	  higher performance and supports dumping/restoring more
+	  comprehensive process status information.

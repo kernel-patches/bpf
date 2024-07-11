@@ -219,6 +219,7 @@ enum btf_kfunc_hook {
 	BTF_KFUNC_HOOK_LWT,
 	BTF_KFUNC_HOOK_NETFILTER,
 	BTF_KFUNC_HOOK_KPROBE,
+	BTF_KFUNC_HOOK_CRIB,
 	BTF_KFUNC_HOOK_MAX,
 };
 
@@ -6037,6 +6038,7 @@ static int btf_validate_prog_ctx_type(struct bpf_verifier_log *log, const struct
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_SYSCALL:
 	case BPF_PROG_TYPE_EXT:
+	case BPF_PROG_TYPE_CRIB:
 		return 0; /* anything goes */
 	default:
 		break;
@@ -8326,6 +8328,8 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 		return BTF_KFUNC_HOOK_NETFILTER;
 	case BPF_PROG_TYPE_KPROBE:
 		return BTF_KFUNC_HOOK_KPROBE;
+	case BPF_PROG_TYPE_CRIB:
+		return BTF_KFUNC_HOOK_CRIB;
 	default:
 		return BTF_KFUNC_HOOK_MAX;
 	}
