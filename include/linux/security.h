@@ -496,7 +496,8 @@ int security_setselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 			 u32 size, u32 flags);
 int security_getprocattr(struct task_struct *p, int lsmid, const char *name,
 			 char **value);
-int security_setprocattr(int lsmid, const char *name, void *value, size_t size);
+int security_setprocattr(int lsmid, const char *name, void *value, size_t size,
+			 size_t *wbytes);
 int security_netlink_send(struct sock *sk, struct sk_buff *skb);
 int security_ismaclabel(const char *name);
 int security_secid_to_secctx(u32 secid, char **secdata, u32 *seclen);
@@ -1440,7 +1441,7 @@ static inline int security_getprocattr(struct task_struct *p, int lsmid,
 }
 
 static inline int security_setprocattr(int lsmid, char *name, void *value,
-				       size_t size)
+				       size_t size, size_t *wbytes)
 {
 	return -EINVAL;
 }

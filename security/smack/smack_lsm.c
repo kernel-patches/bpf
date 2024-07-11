@@ -3797,19 +3797,25 @@ static int smack_setselfattr(unsigned int attr, struct lsm_ctx *ctx,
  * @name: the name of the attribute in /proc/.../attr
  * @value: the value to set
  * @size: the size of the value
+ * @wbytes: the length of the smack label written
  *
  * Sets the Smack value of the task. Only setting self
  * is permitted and only with privilege
  *
- * Returns the length of the smack label or an error code
+ * Returns 0 on success or a negative error code
  */
-static int smack_setprocattr(const char *name, void *value, size_t size)
+static int smack_setprocattr(const char *name, void *value, size_t size,
+			     size_t *wbytes)
 {
+	int rc = -EINVAL;
 	int attr = lsm_name_to_attr(name);
 
 	if (attr != LSM_ATTR_UNDEF)
-		return do_setattr(attr, value, size);
-	return -EINVAL;
+		rc = do_setattr(attr, value, size);
+	if (rc < 0)
+		return rc;
+	*wbytes = rc;
+	return 0;
 }
 
 /**

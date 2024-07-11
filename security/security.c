@@ -4141,20 +4141,22 @@ int security_getprocattr(struct task_struct *p, int lsmid, const char *name,
  * @name: attribute name
  * @value: attribute value
  * @size: attribute value size
+ * @wbytes: bytes written on success
  *
  * Write (set) the current task's attribute @name to @value, size @size if
  * allowed.
  *
- * Return: Returns bytes written on success, a negative value otherwise.
+ * Return: Returns 0 on success, a negative error code otherwise.
  */
-int security_setprocattr(int lsmid, const char *name, void *value, size_t size)
+int security_setprocattr(int lsmid, const char *name, void *value, size_t size,
+			 size_t *wbytes)
 {
 	struct security_hook_list *hp;
 
 	hlist_for_each_entry(hp, &security_hook_heads.setprocattr, list) {
 		if (lsmid != 0 && lsmid != hp->lsmid->id)
 			continue;
-		return hp->hook.setprocattr(name, value, size);
+		return hp->hook.setprocattr(name, value, size, wbytes);
 	}
 	return LSM_RET_DEFAULT(setprocattr);
 }

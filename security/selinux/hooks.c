@@ -6589,13 +6589,18 @@ static int selinux_getprocattr(struct task_struct *p,
 	return -EINVAL;
 }
 
-static int selinux_setprocattr(const char *name, void *value, size_t size)
+static int selinux_setprocattr(const char *name, void *value, size_t size,
+			       size_t *wbytes)
 {
+	int rc = -EINVAL;
 	int attr = lsm_name_to_attr(name);
 
 	if (attr)
-		return selinux_lsm_setattr(attr, value, size);
-	return -EINVAL;
+		rc = selinux_lsm_setattr(attr, value, size);
+	if (rc < 0)
+		return rc;
+	*wbytes = rc;
+	return 0;
 }
 
 static int selinux_ismaclabel(const char *name)

@@ -2740,6 +2740,7 @@ static ssize_t proc_pid_attr_write(struct file * file, const char __user * buf,
 {
 	struct inode * inode = file_inode(file);
 	struct task_struct *task;
+	size_t wbytes;
 	void *page;
 	int rv;
 
@@ -2785,12 +2786,12 @@ static ssize_t proc_pid_attr_write(struct file * file, const char __user * buf,
 
 	rv = security_setprocattr(PROC_I(inode)->op.lsmid,
 				  file->f_path.dentry->d_name.name, page,
-				  count);
+				  count, &wbytes);
 	mutex_unlock(&current->signal->cred_guard_mutex);
 out_free:
 	kfree(page);
 out:
-	return rv;
+	return rv < 0 ? rv : wbytes;
 }
 
 static const struct file_operations proc_pid_attr_operations = {

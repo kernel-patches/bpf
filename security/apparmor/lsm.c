@@ -939,13 +939,17 @@ static int apparmor_setselfattr(unsigned int attr, struct lsm_ctx *ctx,
 }
 
 static int apparmor_setprocattr(const char *name, void *value,
-				size_t size)
+				size_t size, size_t *wbytes)
 {
+	int rc = -EINVAL;
 	int attr = lsm_name_to_attr(name);
 
 	if (attr)
-		return do_setattr(attr, value, size);
-	return -EINVAL;
+		rc = do_setattr(attr, value, size);
+	if (rc < 0)
+		return rc;
+	*wbytes = rc;
+	return 0;
 }
 
 /**
