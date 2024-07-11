@@ -13632,6 +13632,39 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 		return;
 	}
 
+	/* special case: dst_reg is in range [-1, 0] */
+	if (dst_reg->s32_min_value == -1 && dst_reg->s32_max_value == 0) {
+		/* the result is equivalent to adding 0 to src_reg */
+		var32_off = tnum_union(src_reg->var_off, tnum_const(0));
+		dst_reg->var_off = tnum_with_subreg(dst_reg->var_off, var32_off);
+		/* update signed min/max to include 0 */
+		dst_reg->s32_min_value = min_t(s32, src_reg->s32_min_value, 0);
+		dst_reg->s32_max_value = max_t(s32, src_reg->s32_max_value, 0);
+		/* since we're adding 0 to src_reg and 0 is the smallest
+		 * unsigned integer, dst_reg->u32_min_value should be 0,
+		 * and dst->u32_max_value should be src_reg->u32_max_value.
+		 */
+		dst_reg->u32_min_value = 0;
+		dst_reg->u32_max_value = src_reg->u32_max_value;
+		return;
+	}
+
+	/* special case: src_reg is in range [-1, 0] */
+	if (src_reg->s32_min_value == -1 && src_reg->s32_max_value == 0) {
+		/* the result is equivalent to adding 0 to dst_reg */
+		var32_off = tnum_union(dst_reg->var_off, tnum_const(0));
+		dst_reg->var_off = tnum_with_subreg(dst_reg->var_off, var32_off);
+		/* update signed min/max to include 0 */
+		dst_reg->s32_min_value = min_t(s32, dst_reg->s32_min_value, 0);
+		dst_reg->s32_max_value = max_t(s32, dst_reg->s32_max_value, 0);
+		/* since we're adding 0 to dst_reg and 0 is the smallest
+		 * unsigned integer, dst_reg->u32_min_value should be 0,
+		 * and dst->u32_max_value should remain unchanged.
+		 */
+		dst_reg->u32_min_value = 0;
+		return;
+	}
+
 	/* We get our minimum from the var_off, since that's inherently
 	 * bitwise.  Our maximum is the minimum of the operands' maxima.
 	 */
@@ -13659,6 +13692,37 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 
 	if (src_known && dst_known) {
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
+		return;
+	}
+
+	/* special case: dst_reg is in range [-1, 0] */
+	if (dst_reg->smin_value == -1 && dst_reg->smax_value == 0) {
+		/* the result is equivalent to adding 0 to src_reg */
+		dst_reg->var_off = tnum_union(src_reg->var_off, tnum_const(0));
+		/* update signed min/max to include 0 */
+		dst_reg->smin_value = min_t(s64, src_reg->smin_value, 0);
+		dst_reg->smax_value = max_t(s64, src_reg->smax_value, 0);
+		/* since we're adding 0 to src_reg and 0 is the smallest
+		 * unsigned integer, dst_reg->umin_value should be 0,
+		 * and dst->umax_value should be src_reg->umax_value.
+		 */
+		dst_reg->umin_value = 0;
+		dst_reg->umax_value = src_reg->umax_value;
+		return;
+	}
+
+	/* special case: src_reg is in range [-1, 0] */
+	if (src_reg->smin_value == -1 && src_reg->smax_value == 0) {
+		/* the result is equivalent to adding 0 to dst_reg */
+		dst_reg->var_off = tnum_union(dst_reg->var_off, tnum_const(0));
+		/* update signed min/max to include 0 */
+		dst_reg->smin_value = min_t(s64, dst_reg->smin_value, 0);
+		dst_reg->smax_value = max_t(s64, dst_reg->smax_value, 0);
+		/* since we're adding 0 to dst_reg and 0 is the smallest
+		 * unsigned integer, dst_reg->min_value should be 0,
+		 * and dst->umax_value should remain unchanged.
+		 */
+		dst_reg->umin_value = 0;
 		return;
 	}
 

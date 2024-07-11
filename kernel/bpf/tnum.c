@@ -150,6 +150,31 @@ struct tnum tnum_intersect(struct tnum a, struct tnum b)
 	return TNUM(v & ~mu, mu);
 }
 
+/* Each bit has 3 states: unknown, known 0, known 1. Using x to represent
+ * unknown state, the result of the union of two bits is as follows:
+ *
+ *         | x    0    1
+ *    -----+------------
+ *     x   | x    x    x
+ *     0   | x    0    x
+ *     1   | x    x    1
+ *
+ * For tnum a and b, only the bits that are both known 0 or known 1 in a
+ * and b are known in the result of union a and b.
+ */
+struct tnum tnum_union(struct tnum a, struct tnum b)
+{
+	u64 v0, v1, mu;
+
+	/* unknown bits either in a or b */
+	mu = a.mask | b.mask;
+	/* "known 1" bits in both a and b */
+	v1 = (a.value & b.value) & ~mu;
+	/* "known 0" bits in both a and b */
+	v0 = (~a.value & ~b.value) & ~mu;
+	return TNUM(v1, ~(v0 | v1));
+}
+
 struct tnum tnum_cast(struct tnum a, u8 size)
 {
 	a.value &= (1ULL << (size * 8)) - 1;
