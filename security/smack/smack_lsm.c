@@ -3648,15 +3648,17 @@ static void smack_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
  * @ctx: buffer to receive the result
  * @size: available size in, actual size out
  * @flags: unused
+ * @nattr: number of attributes found on success
  *
  * Fill the passed user space @ctx with the details of the requested
  * attribute.
  *
- * Returns the number of attributes on success, an error code otherwise.
- * There will only ever be one attribute.
+ * Returns 0 on success or a ngetaive error code on failure.
+ * There will only ever be one attribute, so @nattr is set to
+ * 1 on success.
  */
 static int smack_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
-			     u32 *size, u32 flags)
+			     u32 *size, u32 flags, u32 *nattr)
 {
 	int rc;
 	struct smack_known *skp;
@@ -3668,7 +3670,10 @@ static int smack_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 	rc = lsm_fill_user_ctx(ctx, size,
 			       skp->smk_known, strlen(skp->smk_known) + 1,
 			       LSM_ID_SMACK, 0);
-	return (!rc ? 1 : rc);
+	if (rc < 0)
+		return rc;
+	*nattr = 1;
+	return 0;
 }
 
 /**

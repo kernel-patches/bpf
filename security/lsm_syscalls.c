@@ -77,7 +77,11 @@ SYSCALL_DEFINE4(lsm_set_self_attr, unsigned int, attr, struct lsm_ctx __user *,
 SYSCALL_DEFINE4(lsm_get_self_attr, unsigned int, attr, struct lsm_ctx __user *,
 		ctx, u32 __user *, size, u32, flags)
 {
-	return security_getselfattr(attr, ctx, size, flags);
+	int rc;
+	u32 nattr;
+
+	rc = security_getselfattr(attr, ctx, size, flags, &nattr);
+	return rc < 0 ? rc : nattr;
 }
 
 /**

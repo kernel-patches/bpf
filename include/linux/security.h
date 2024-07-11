@@ -491,7 +491,7 @@ int security_sem_semop(struct kern_ipc_perm *sma, struct sembuf *sops,
 			unsigned nsops, int alter);
 void security_d_instantiate(struct dentry *dentry, struct inode *inode);
 int security_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
-			 u32 __user *size, u32 flags);
+			 u32 __user *size, u32 flags, u32 *nattr);
 int security_setselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 			 u32 size, u32 flags);
 int security_getprocattr(struct task_struct *p, int lsmid, const char *name,
@@ -1420,7 +1420,8 @@ static inline void security_d_instantiate(struct dentry *dentry,
 
 static inline int security_getselfattr(unsigned int attr,
 				       struct lsm_ctx __user *ctx,
-				       size_t __user *size, u32 flags)
+				       size_t __user *size, u32 flags,
+				       u32 *nattr)
 {
 	return -EOPNOTSUPP;
 }

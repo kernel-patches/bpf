@@ -779,7 +779,7 @@ static int apparmor_sb_pivotroot(const struct path *old_path,
 }
 
 static int apparmor_getselfattr(unsigned int attr, struct lsm_ctx __user *lx,
-				u32 *size, u32 flags)
+				u32 *size, u32 flags, u32 *nattr)
 {
 	int error = -ENOENT;
 	struct aa_task_ctx *ctx = task_ctx(current);
@@ -815,7 +815,8 @@ static int apparmor_getselfattr(unsigned int attr, struct lsm_ctx __user *lx,
 
 	if (error < 0)
 		return error;
-	return 1;
+	*nattr = 1;
+	return 0;
 }
 
 static int apparmor_getprocattr(struct task_struct *task, const char *name,

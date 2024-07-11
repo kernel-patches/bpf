@@ -3969,21 +3969,23 @@ EXPORT_SYMBOL(security_d_instantiate);
  * @flags: special handling options. LSM_FLAG_SINGLE indicates that only
  * attributes associated with the LSM identified in the passed @ctx be
  * reported.
+ * @nattr: number of attributes found on success
  *
  * A NULL value for @uctx can be used to get both the number of attributes
  * and the size of the data.
  *
- * Returns the number of attributes found on success, negative value
- * on error. @size is reset to the total size of the data.
- * If @size is insufficient to contain the data -E2BIG is returned.
+ * Returns 0 on success, a negative error code on failure. @size is reset
+ * to the total size of the data. If @size is insufficient to contain the
+ * data -E2BIG is returned.
  */
 int security_getselfattr(unsigned int attr, struct lsm_ctx __user *uctx,
-			 u32 __user *size, u32 flags)
+			 u32 __user *size, u32 flags, u32 *nattr)
 {
 	struct security_hook_list *hp;
 	struct lsm_ctx lctx = { .id = LSM_ID_UNDEF, };
 	u8 __user *base = (u8 __user *)uctx;
 	u32 entrysize;
+	u32 entrycount;
 	u32 total = 0;
 	u32 left;
 	bool toobig = false;
@@ -4024,7 +4026,8 @@ int security_getselfattr(unsigned int attr, struct lsm_ctx __user *uctx,
 		entrysize = left;
 		if (base)
 			uctx = (struct lsm_ctx __user *)(base + total);
-		rc = hp->hook.getselfattr(attr, uctx, &entrysize, flags);
+		rc = hp->hook.getselfattr(attr, uctx, &entrysize, flags,
+					  &entrycount);
 		if (rc == -EOPNOTSUPP) {
 			rc = 0;
 			continue;
@@ -4039,7 +4042,7 @@ int security_getselfattr(unsigned int attr, struct lsm_ctx __user *uctx,
 			left -= entrysize;
 
 		total += entrysize;
-		count += rc;
+		count += entrycount;
 		if (single)
 			break;
 	}
@@ -4047,9 +4050,10 @@ int security_getselfattr(unsigned int attr, struct lsm_ctx __user *uctx,
 		return -EFAULT;
 	if (toobig)
 		return -E2BIG;
+	*nattr = count;
 	if (count == 0)
 		return LSM_RET_DEFAULT(getselfattr);
-	return count;
+	return 0;
 }
 
 /*

@@ -6536,15 +6536,17 @@ abort_change:
  * @ctx: buffer to receive the result
  * @size: buffer size (input), buffer size used (output)
  * @flags: unused
+ * @nattr: number of attributes found on success.
  *
  * Fill the passed user space @ctx with the details of the requested
  * attribute.
  *
- * Returns the number of attributes on success, an error code otherwise.
- * There will only ever be one attribute.
+ * Returns 0 on success or a negative error code on failure.
+ * There will only ever be one attribute, so @nattr is set to
+ * 1 on success.
  */
 static int selinux_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
-			       u32 *size, u32 flags)
+			       u32 *size, u32 flags, u32 *nattr)
 {
 	int rc;
 	char *val = NULL;
@@ -6555,7 +6557,10 @@ static int selinux_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 		return val_len;
 	rc = lsm_fill_user_ctx(ctx, size, val, val_len, LSM_ID_SELINUX, 0);
 	kfree(val);
-	return (!rc ? 1 : rc);
+	if (rc < 0)
+		return rc;
+	*nattr = 1;
+	return 0;
 }
 
 static int selinux_setselfattr(unsigned int attr, struct lsm_ctx *ctx,
