@@ -46,4 +46,17 @@ struct bpf_iter_skb_data_kern {
 	unsigned int chunklen;
 } __aligned(8);
 
+struct bpf_crib_skb_info {
+	int headerlen;
+	int len;
+	int size;
+	int tstamp;
+	int dev_scratch;
+	int protocol;
+	int csum;
+	int transport_header;
+	int network_header;
+	int mac_header;
+} __aligned(8);
+
 #endif /* _BPF_CRIB_H */
