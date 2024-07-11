@@ -485,6 +485,7 @@ vfs_listxattr(struct dentry *dentry, char *list, size_t size)
 {
 	struct inode *inode = d_inode(dentry);
 	ssize_t error;
+	size_t bytes;
 
 	error = security_inode_listxattr(dentry);
 	if (error)
@@ -493,7 +494,9 @@ vfs_listxattr(struct dentry *dentry, char *list, size_t size)
 	if (inode->i_op->listxattr) {
 		error = inode->i_op->listxattr(dentry, list, size);
 	} else {
-		error = security_inode_listsecurity(inode, list, size);
+		error = security_inode_listsecurity(inode, list, size, &bytes);
+		if (!error)
+			error = bytes;
 		if (size && error > size)
 			error = -ERANGE;
 	}

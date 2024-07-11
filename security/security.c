@@ -2597,20 +2597,41 @@ int security_inode_setsecurity(struct inode *inode, const char *name,
  * @inode: inode
  * @buffer: buffer
  * @buffer_size: size of buffer
+ * @bytes: number of bytes used/required
  *
  * Copy the extended attribute names for the security labels associated with
  * @inode into @buffer.  The maximum size of @buffer is specified by
  * @buffer_size.  @buffer may be NULL to request the size of the buffer
  * required.
  *
- * Return: Returns number of bytes used/required on success.
+ * Return: Returns 0 on success or a negative error code on failure.
  */
 int security_inode_listsecurity(struct inode *inode,
-				char *buffer, size_t buffer_size)
+				char *buffer, size_t buffer_size,
+				size_t *bytes)
 {
+	int rc;
+	size_t used;
+	struct security_hook_list *hp;
+
 	if (unlikely(IS_PRIVATE(inode)))
-		return 0;
-	return call_int_hook(inode_listsecurity, inode, buffer, buffer_size);
+		return *bytes = 0;
+
+	used = 0;
+	hlist_for_each_entry(hp, &security_hook_heads.inode_listsecurity,
+			     list) {
+		rc = hp->hook.inode_listsecurity(inode, buffer, buffer_size,
+						 &used);
+		if (rc < 0)
+			return rc;
+		if (used != 0)
+			break;
+	}
+
+	*bytes = used;
+
+	return 0;
+
 }
 EXPORT_SYMBOL(security_inode_listsecurity);
 

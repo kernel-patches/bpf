@@ -571,12 +571,13 @@ static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
 static ssize_t sockfs_listxattr(struct dentry *dentry, char *buffer,
 				size_t size)
 {
-	ssize_t len;
+	int err;
+	size_t len;
 	ssize_t used = 0;
 
-	len = security_inode_listsecurity(d_inode(dentry), buffer, size);
-	if (len < 0)
-		return len;
+	err = security_inode_listsecurity(d_inode(dentry), buffer, size, &len);
+	if (err < 0)
+		return err;
 	used += len;
 	if (buffer) {
 		if (size < used)

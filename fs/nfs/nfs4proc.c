@@ -7848,10 +7848,13 @@ static int nfs4_xattr_get_nfs4_label(const struct xattr_handler *handler,
 static ssize_t
 nfs4_listxattr_nfs4_label(struct inode *inode, char *list, size_t list_len)
 {
+	size_t bytes;
 	int len = 0;
 
 	if (nfs_server_capable(inode, NFS_CAP_SECURITY_LABEL)) {
-		len = security_inode_listsecurity(inode, list, list_len);
+		len = security_inode_listsecurity(inode, list, list_len, &bytes);
+		if (!len)
+			len = bytes;
 		if (len >= 0 && list_len && len > list_len)
 			return -ERANGE;
 	}

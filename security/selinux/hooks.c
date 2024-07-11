@@ -3481,16 +3481,18 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
 	return 0;
 }
 
-static int selinux_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size)
+static int selinux_inode_listsecurity(struct inode *inode, char *buffer,
+				      size_t buffer_size, size_t *bytes)
 {
 	const int len = sizeof(XATTR_NAME_SELINUX);
 
 	if (!selinux_initialized())
-		return 0;
+		return *bytes = 0;
 
 	if (buffer && len <= buffer_size)
 		memcpy(buffer, XATTR_NAME_SELINUX, len);
-	return len;
+	*bytes = len;
+	return 0;
 }
 
 static void selinux_inode_getsecid(struct inode *inode, u32 *secid)
