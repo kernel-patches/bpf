@@ -13,4 +13,14 @@
 #include <linux/btf_ids.h>
 #include <linux/filter.h>
 
+struct bpf_iter_task_file {
+	__u64 __opaque[3];
+} __aligned(8);
+
+struct bpf_iter_task_file_kern {
+	struct task_struct *task;
+	struct file *file;
+	int fd;
+} __aligned(8);
+
 #endif /* _BPF_CRIB_H */
