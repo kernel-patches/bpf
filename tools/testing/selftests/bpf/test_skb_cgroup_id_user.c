@@ -176,7 +176,8 @@ int main(int argc, char **argv)
 err:
 	err = -1;
 out:
-	close(cgfd);
+	if (cgfd >= 0)
+		close(cgfd);
 	cleanup_cgroup_environment();
 	printf("[%s]\n", err ? "FAIL" : "PASS");
 	return err;
