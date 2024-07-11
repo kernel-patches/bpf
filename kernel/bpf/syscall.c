@@ -2244,6 +2244,7 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 
 	kvfree(aux->func_info);
 	kfree(aux->func_info_aux);
+	free_percpu(aux->prog->private_stack_ptr);
 	free_uid(aux->user);
 	security_bpf_prog_free(aux->prog);
 	bpf_prog_free(aux->prog);
