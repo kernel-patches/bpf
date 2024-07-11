@@ -13,6 +13,8 @@
 #include <linux/net.h>
 #include <linux/udp.h>
 #include <linux/tcp.h>
+#include <linux/skbuff.h>
+#include <linux/spinlock.h>
 
 __bpf_kfunc_start_defs();
 
@@ -209,6 +211,49 @@ __bpf_kfunc struct sk_buff_head *bpf_reader_queue_from_udp_sock(struct udp_sock 
 	return &up->reader_queue;
 }
 
+/**
+ * bpf_skb_acquire() - Acquire a reference to struct sk_buff
+ *
+ * @skb: struct sk_buff that needs to acquire a reference
+ *
+ * @returns struct sk_buff that has acquired the reference
+ */
+__bpf_kfunc struct sk_buff *bpf_skb_acquire(struct sk_buff *skb)
+{
+	return skb_get(skb);
+}
+
+/**
+ * bpf_skb_release() - Release the reference acquired on struct sk_buff
+ *
+ * @skb: struct sk_buff that has acquired the reference
+ */
+__bpf_kfunc void bpf_skb_release(struct sk_buff *skb)
+{
+	consume_skb(skb);
+}
+
+/**
+ * bpf_skb_peek_tail() - peek at the tail of socket queue (sk_buff_head)
+ *
+ * Note that this function acquires a reference to struct sk_buff.
+ *
+ * @head: socket queue
+ *
+ * @returns pointer to the tail skb (sk_buff)
+ */
+__bpf_kfunc struct sk_buff *bpf_skb_peek_tail(struct sk_buff_head *head)
+{
+	struct sk_buff *skb;
+	unsigned long flags;
+
+	spin_lock_irqsave(&head->lock, flags);
+	skb = skb_peek_tail(head);
+	spin_unlock_irqrestore(&head->lock, flags);
+
+	return bpf_skb_acquire(skb);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_crib_kfuncs)
@@ -238,6 +283,11 @@ BTF_ID_FLAGS(func, bpf_inet_src_addr_from_socket, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_inet_dst_addr_from_socket, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_inet6_src_addr_from_socket, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_inet6_dst_addr_from_socket, KF_TRUSTED_ARGS)
+
+BTF_ID_FLAGS(func, bpf_skb_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_skb_release, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_cal_skb_size, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_skb_peek_tail, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 
 BTF_KFUNCS_END(bpf_crib_kfuncs)
 

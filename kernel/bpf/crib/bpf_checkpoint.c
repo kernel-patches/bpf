@@ -10,6 +10,7 @@
 #include <linux/fdtable.h>
 #include <net/inet_common.h>
 #include <net/ipv6.h>
+#include <linux/skbuff.h>
 
 extern void bpf_file_release(struct file *file);
 
@@ -146,6 +147,19 @@ __bpf_kfunc int bpf_inet6_src_addr_from_socket(struct socket *sock, struct socka
 __bpf_kfunc int bpf_inet6_dst_addr_from_socket(struct socket *sock, struct sockaddr_in6 *addr)
 {
 	return inet6_getname(sock, (struct sockaddr *)addr, 1);
+}
+
+/**
+ * bpf_cal_skb_size() - Calculate the overall size of the data of specified skb
+ * (starting from the head)
+ *
+ * @skb: specified skb
+ *
+ * @returns the overall size of the data
+ */
+__bpf_kfunc int bpf_cal_skb_size(struct sk_buff *skb)
+{
+	return skb_end_offset(skb) + skb->data_len;
 }
 
 __bpf_kfunc_end_defs();
