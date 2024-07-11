@@ -6527,7 +6527,38 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (env->ops->btf_struct_access && !type_is_alloc(reg->type) && atype == BPF_WRITE) {
+	if (btf_type_is_int(t)) {
+		u32 tsize;
+		const char *tname;
+		const struct btf_type *err;
+		const char *access = atype == BPF_READ ? "read" : "write";
+
+		/* only BPF LSM is allowed */
+		if (WARN_ON_ONCE(env->prog->expected_attach_type != BPF_LSM_MAC)) {
+			verbose(env, "verifier internal error: not BPF LSM\n");
+			return -EACCES;
+		}
+
+		tname = btf_name_by_offset(reg->btf, t->name_off);
+		if (off != 0) {
+			verbose(env, "invalid %s offset: %d (expected 0, type=%s)\n",
+				access, off, tname);
+			return -EACCES;
+		}
+
+		err = btf_resolve_size(reg->btf, t, &tsize);
+		if (IS_ERR(err)) {
+			verbose(env, "unable to resolve the size of type '%s': %ld\n",
+				tname, PTR_ERR(err));
+			return PTR_ERR(err);
+		}
+		if (size != tsize) {
+			verbose(env, "invalid %s size: %d (expected %u, type=%s)\n",
+				access, size, tsize, tname);
+			return -EACCES;
+		}
+		ret = SCALAR_VALUE;
+	} else if (env->ops->btf_struct_access && !type_is_alloc(reg->type) && atype == BPF_WRITE) {
 		if (!btf_is_kernel(reg->btf)) {
 			verbose(env, "verifier internal error: reg->btf must be kernel btf\n");
 			return -EFAULT;

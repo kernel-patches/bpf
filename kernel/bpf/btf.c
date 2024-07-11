@@ -6499,8 +6499,22 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		 */
 		return true;
 
-	if (is_int_ptr(btf, t))
+
+	if (is_int_ptr(btf, t)) {
+		/* the retval param for LSM hook is always the last param. */
+		if (arg == nr_args - 1 &&
+		    prog->expected_attach_type == BPF_LSM_MAC &&
+		    bpf_lsm_has_retval_param(prog)) {
+			u32 id;
+
+			btf_type_skip_modifiers(btf, t->type, &id);
+			info->btf = btf;
+			/* the retval param should never be NULL */
+			info->reg_type = PTR_TO_BTF_ID | PTR_TRUSTED;
+			info->btf_id = id;
+		}
 		return true;
+	}
 
 	/* this is a pointer to another type */
 	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {

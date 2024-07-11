@@ -405,3 +405,18 @@ const struct bpf_verifier_ops lsm_verifier_ops = {
 	.get_func_proto = bpf_lsm_func_proto,
 	.is_valid_access = btf_ctx_access,
 };
+
+BTF_SET_START(retval_param_lsm_hooks)
+BTF_ID(func, bpf_lsm_inode_need_killpriv)
+BTF_ID(func, bpf_lsm_inode_getsecurity)
+BTF_ID(func, bpf_lsm_inode_listsecurity)
+BTF_ID(func, bpf_lsm_getselfattr)
+BTF_ID(func, bpf_lsm_key_getsecurity)
+BTF_ID(func, bpf_lsm_audit_rule_match)
+BTF_SET_END(retval_param_lsm_hooks)
+
+bool bpf_lsm_has_retval_param(const struct bpf_prog *prog)
+{
+	return btf_id_set_contains(&retval_param_lsm_hooks,
+				   prog->aux->attach_btf_id);
+}
