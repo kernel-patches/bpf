@@ -79,6 +79,8 @@ int main(int argc, char **argv)
 	}
 
 	cgroup_fd = cgroup_setup_and_join(TEST_CGROUP);
+	if (cgroup_fd < 0)
+		goto out;
 
 	/* Attach the bpf program */
 	if (bpf_prog_attach(prog_fd, cgroup_fd, BPF_CGROUP_INET_EGRESS, 0)) {
@@ -170,5 +172,7 @@ err:
 	free(percpu_value);
 
 out:
+	if (cgroup_fd >= 0)
+		close(cgroup_fd);
 	return error;
 }
