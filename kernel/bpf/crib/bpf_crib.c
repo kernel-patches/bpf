@@ -10,6 +10,9 @@
 #include <linux/init.h>
 #include <linux/fdtable.h>
 #include <net/sock.h>
+#include <linux/net.h>
+#include <linux/udp.h>
+#include <linux/tcp.h>
 
 __bpf_kfunc_start_defs();
 
@@ -122,6 +125,90 @@ __bpf_kfunc struct sock *bpf_sock_from_task_fd(struct task_struct *task, int fd)
 	return sk;
 }
 
+/**
+ * bpf_socket_from_file() - Get struct socket from struct file
+ *
+ * @file: specified struct file
+ *
+ * @returns struct socket from struct file
+ */
+__bpf_kfunc struct socket *bpf_socket_from_file(struct file *file)
+{
+	return sock_from_file(file);
+}
+
+/**
+ * bpf_sock_common_from_sock() - Get struct sock_common from struct sock
+ *
+ * @sk: specified struct sock
+ *
+ * @returns struct sock_common from struct sock
+ */
+__bpf_kfunc struct sock_common *bpf_sock_common_from_sock(struct sock *sk)
+{
+	return &sk->__sk_common;
+}
+
+/**
+ * bpf_tcp_sock_from_sock() - Get struct tcp_sock from struct sock
+ *
+ * @sk: specified struct sock
+ *
+ * @returns struct tcp_sock from struct sock
+ */
+__bpf_kfunc struct tcp_sock *bpf_tcp_sock_from_sock(struct sock *sk)
+{
+	return tcp_sk(sk);
+}
+
+/**
+ * bpf_udp_sock_from_sock() - Get struct udp_sock from struct sock
+ *
+ * @sk: specified struct sock
+ *
+ * @returns struct udp_sock from struct sock
+ */
+__bpf_kfunc struct udp_sock *bpf_udp_sock_from_sock(struct sock *sk)
+{
+	return udp_sk(sk);
+}
+
+/**
+ * bpf_receive_queue_from_sock() - Get receive queue in struct sock
+ *
+ * @sk: specified struct sock
+ *
+ * @returns receive queue in struct sock
+ */
+__bpf_kfunc struct sk_buff_head *bpf_receive_queue_from_sock(struct sock *sk)
+{
+	return &sk->sk_receive_queue;
+}
+
+/**
+ * bpf_write_queue_from_sock() - Get write queue in struct sock
+ *
+ * @sk: specified struct sock
+ *
+ * @returns write queue in struct sock
+ */
+__bpf_kfunc struct sk_buff_head *bpf_write_queue_from_sock(struct sock *sk)
+{
+	return &sk->sk_write_queue;
+}
+
+/**
+ * bpf_reader_queue_from_udp_sock() - Get reader queue in struct udp_sock
+ *
+ * @up: specified struct udp_sock
+ *
+ * @returns reader queue in struct udp_sock
+ */
+__bpf_kfunc struct sk_buff_head *bpf_reader_queue_from_udp_sock(struct udp_sock *up)
+{
+	return &up->reader_queue;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_crib_kfuncs)
@@ -138,6 +225,14 @@ BTF_ID_FLAGS(func, bpf_sock_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_sock_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_sock_from_socket, KF_ACQUIRE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_sock_from_task_fd, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+
+BTF_ID_FLAGS(func, bpf_socket_from_file, KF_OBTAIN | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_sock_common_from_sock, KF_OBTAIN)
+BTF_ID_FLAGS(func, bpf_tcp_sock_from_sock, KF_OBTAIN)
+BTF_ID_FLAGS(func, bpf_udp_sock_from_sock, KF_OBTAIN)
+BTF_ID_FLAGS(func, bpf_receive_queue_from_sock, KF_OBTAIN)
+BTF_ID_FLAGS(func, bpf_write_queue_from_sock, KF_OBTAIN)
+BTF_ID_FLAGS(func, bpf_reader_queue_from_udp_sock, KF_OBTAIN)
 
 BTF_KFUNCS_END(bpf_crib_kfuncs)
 
