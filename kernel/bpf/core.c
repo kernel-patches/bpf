@@ -2815,7 +2815,7 @@ EXPORT_SYMBOL_GPL(bpf_prog_free);
 
 bool bpf_enable_private_stack(struct bpf_prog *prog)
 {
-	if (prog->aux->stack_depth <= 64)
+	if (prog->disable_private_stack || prog->aux->stack_depth <= 64)
 		return false;
 
 	switch (prog->aux->prog->type) {
