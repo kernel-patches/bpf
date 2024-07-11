@@ -8,12 +8,49 @@
 
 #include <linux/bpf_crib.h>
 #include <linux/init.h>
+#include <linux/fdtable.h>
 
 __bpf_kfunc_start_defs();
+
+/**
+ * bpf_file_from_task_fd() - Get a pointer to the struct file
+ * corresponding to the task file descriptor.
+ *
+ * Note that this function acquires a reference to struct file.
+ *
+ * @task: specified struct task_struct
+ * @fd: file descriptor
+ *
+ * @returns the corresponding struct file pointer if found,
+ * otherwise returns NULL.
+ */
+__bpf_kfunc struct file *bpf_file_from_task_fd(struct task_struct *task, int fd)
+{
+	struct file *file;
+
+	rcu_read_lock();
+	file = task_lookup_fdget_rcu(task, fd);
+	rcu_read_unlock();
+
+	return file;
+}
+
+/**
+ * bpf_file_release() - Release the reference acquired on struct file.
+ *
+ * @file: struct file that has acquired the reference
+ */
+__bpf_kfunc void bpf_file_release(struct file *file)
+{
+	fput(file);
+}
 
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_crib_kfuncs)
+
+BTF_ID_FLAGS(func, bpf_file_from_task_fd, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_file_release, KF_RELEASE)
 
 BTF_KFUNCS_END(bpf_crib_kfuncs)
 
