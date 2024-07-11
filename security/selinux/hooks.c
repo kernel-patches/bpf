@@ -3407,7 +3407,7 @@ static int selinux_path_notify(const struct path *path, u64 mask,
  */
 static int selinux_inode_getsecurity(struct mnt_idmap *idmap,
 				     struct inode *inode, const char *name,
-				     void **buffer, bool alloc)
+				     bool alloc, void **buffer, u32 *len)
 {
 	u32 size;
 	int error;
@@ -3440,14 +3440,14 @@ static int selinux_inode_getsecurity(struct mnt_idmap *idmap,
 						&context, &size);
 	if (error)
 		return error;
-	error = size;
+	*len = size;
 	if (alloc) {
 		*buffer = context;
 		goto out_nofree;
 	}
 	kfree(context);
 out_nofree:
-	return error;
+	return 0;
 }
 
 static int selinux_inode_setsecurity(struct inode *inode, const char *name,
@@ -6644,13 +6644,9 @@ static int selinux_inode_setsecctx(struct dentry *dentry, void *ctx, u32 ctxlen)
 
 static int selinux_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 {
-	int len = 0;
-	len = selinux_inode_getsecurity(&nop_mnt_idmap, inode,
-					XATTR_SELINUX_SUFFIX, ctx, true);
-	if (len < 0)
-		return len;
-	*ctxlen = len;
-	return 0;
+	return selinux_inode_getsecurity(&nop_mnt_idmap, inode,
+					 XATTR_SELINUX_SUFFIX,
+					 true, ctx, ctxlen);
 }
 #ifdef CONFIG_KEYS
 

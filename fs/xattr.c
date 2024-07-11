@@ -339,27 +339,28 @@ xattr_getsecurity(struct mnt_idmap *idmap, struct inode *inode,
 		  const char *name, void *value, size_t size)
 {
 	void *buffer = NULL;
-	ssize_t len;
+	int error;
+	u32 len;
 
 	if (!value || !size) {
-		len = security_inode_getsecurity(idmap, inode, name,
-						 &buffer, false);
+		error = security_inode_getsecurity(idmap, inode, name,
+						   false, &buffer, &len);
 		goto out_noalloc;
 	}
 
-	len = security_inode_getsecurity(idmap, inode, name, &buffer,
-					 true);
-	if (len < 0)
-		return len;
+	error = security_inode_getsecurity(idmap, inode, name, true,
+					   &buffer, &len);
+	if (error)
+		return error;
 	if (size < len) {
-		len = -ERANGE;
+		error = -ERANGE;
 		goto out;
 	}
 	memcpy(value, buffer, len);
 out:
 	kfree(buffer);
 out_noalloc:
-	return len;
+	return error < 0 ? error : len;
 }
 
 /*

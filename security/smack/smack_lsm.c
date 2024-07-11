@@ -1543,14 +1543,15 @@ static int smack_inode_remove_acl(struct mnt_idmap *idmap,
  * @idmap: idmap of the mount
  * @inode: the object
  * @name: attribute name
- * @buffer: where to put the result
  * @alloc: duplicate memory
+ * @buffer: where to put the result
+ * @len: where to put the result length
  *
- * Returns the size of the attribute or an error code
+ * Returns 0 on success or a negative error code on failure
  */
 static int smack_inode_getsecurity(struct mnt_idmap *idmap,
 				   struct inode *inode, const char *name,
-				   void **buffer, bool alloc)
+				   bool alloc, void **buffer, u32 *len)
 {
 	struct socket_smack *ssp;
 	struct socket *sock;
@@ -1558,7 +1559,6 @@ static int smack_inode_getsecurity(struct mnt_idmap *idmap,
 	struct inode *ip = inode;
 	struct smack_known *isp;
 	struct inode_smack *ispp;
-	size_t label_len;
 	char *label = NULL;
 
 	if (strcmp(name, XATTR_SMACK_SUFFIX) == 0) {
@@ -1594,15 +1594,15 @@ static int smack_inode_getsecurity(struct mnt_idmap *idmap,
 	if (!label)
 		label = isp->smk_known;
 
-	label_len = strlen(label);
-
 	if (alloc) {
 		*buffer = kstrdup(label, GFP_KERNEL);
 		if (*buffer == NULL)
 			return -ENOMEM;
 	}
 
-	return label_len;
+	*len = strlen(label);
+
+	return 0;
 }
 
 

@@ -164,8 +164,8 @@ int cap_inode_removexattr(struct mnt_idmap *idmap,
 int cap_inode_need_killpriv(struct dentry *dentry, bool *need);
 int cap_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry);
 int cap_inode_getsecurity(struct mnt_idmap *idmap,
-			  struct inode *inode, const char *name, void **buffer,
-			  bool alloc);
+			  struct inode *inode, const char *name, bool alloc,
+			  void **buffer, u32 *len);
 extern int cap_mmap_addr(unsigned long addr);
 extern int cap_mmap_file(struct file *file, unsigned long reqprot,
 			 unsigned long prot, unsigned long flags);
@@ -393,7 +393,7 @@ int security_inode_need_killpriv(struct dentry *dentry, int *attr);
 int security_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry);
 int security_inode_getsecurity(struct mnt_idmap *idmap,
 			       struct inode *inode, const char *name,
-			       void **buffer, bool alloc);
+			       bool alloc, void **buffer, u32 *len);
 int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags);
 int security_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size);
 void security_inode_getsecid(struct inode *inode, u32 *secid);
@@ -996,10 +996,10 @@ static inline int security_inode_killpriv(struct mnt_idmap *idmap,
 
 static inline int security_inode_getsecurity(struct mnt_idmap *idmap,
 					     struct inode *inode,
-					     const char *name, void **buffer,
-					     bool alloc)
+					     const char *name, bool alloc,
+					     void **buffer, u32 *len)
 {
-	return cap_inode_getsecurity(idmap, inode, name, buffer, alloc);
+	return cap_inode_getsecurity(idmap, inode, name, alloc, buffer, len);
 }
 
 static inline int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)

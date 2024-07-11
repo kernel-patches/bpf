@@ -383,8 +383,8 @@ static bool is_v3header(int size, const struct vfs_cap_data *cap)
  * so that's good.
  */
 int cap_inode_getsecurity(struct mnt_idmap *idmap,
-			  struct inode *inode, const char *name, void **buffer,
-			  bool alloc)
+			  struct inode *inode, const char *name,
+			  bool alloc, void **buffer, u32 *len)
 {
 	int size;
 	kuid_t kroot;
@@ -485,7 +485,10 @@ int cap_inode_getsecurity(struct mnt_idmap *idmap,
 	}
 out_free:
 	kfree(tmpbuf);
-	return size;
+	if (size < 0)
+		return size;
+	*len = size;
+	return 0;
 }
 
 /**

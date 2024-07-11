@@ -2544,8 +2544,9 @@ int security_inode_killpriv(struct mnt_idmap *idmap,
  * @idmap: idmap of the mount
  * @inode: inode
  * @name: xattr name
- * @buffer: security label buffer
  * @alloc: allocation flag
+ * @buffer: security label buffer
+ * @len: security label length
  *
  * Retrieve a copy of the extended attribute representation of the security
  * label associated with @name for @inode via @buffer.  Note that @name is the
@@ -2553,17 +2554,17 @@ int security_inode_killpriv(struct mnt_idmap *idmap,
  * @alloc is used to specify if the call should return a value via the buffer
  * or just the value length.
  *
- * Return: Returns size of buffer on success.
+ * Return: Returns 0 on success or a negative error code on failure.
  */
 int security_inode_getsecurity(struct mnt_idmap *idmap,
 			       struct inode *inode, const char *name,
-			       void **buffer, bool alloc)
+			       bool alloc, void **buffer, u32 *len)
 {
 	if (unlikely(IS_PRIVATE(inode)))
 		return LSM_RET_DEFAULT(inode_getsecurity);
 
-	return call_int_hook(inode_getsecurity, idmap, inode, name, buffer,
-			     alloc);
+	return call_int_hook(inode_getsecurity, idmap, inode, name, alloc,
+			     buffer, len);
 }
 
 /**
