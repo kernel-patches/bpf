@@ -6574,19 +6574,21 @@ static int selinux_setselfattr(unsigned int attr, struct lsm_ctx *ctx,
 	return rc;
 }
 
-static int selinux_getprocattr(struct task_struct *p,
-			       const char *name, char **value)
+static int selinux_getprocattr(struct task_struct *p, const char *name,
+			       char **value, u32 *len)
 {
 	unsigned int attr = lsm_name_to_attr(name);
-	int rc;
+	int rc = -EINVAL;
 
 	if (attr) {
 		rc = selinux_lsm_getattr(attr, p, value);
-		if (rc != -EOPNOTSUPP)
-			return rc;
+		if (rc == -EOPNOTSUPP)
+			rc = -EINVAL;
 	}
-
-	return -EINVAL;
+	if (rc < 0)
+		return rc;
+	*len = rc;
+	return 0;
 }
 
 static int selinux_setprocattr(const char *name, void *value, size_t size,

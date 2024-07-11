@@ -2721,13 +2721,16 @@ static ssize_t proc_pid_attr_read(struct file * file, char __user * buf,
 	char *p = NULL;
 	ssize_t length;
 	struct task_struct *task = get_proc_task(inode);
+	u32 n;
 
 	if (!task)
 		return -ESRCH;
 
 	length = security_getprocattr(task, PROC_I(inode)->op.lsmid,
 				      file->f_path.dentry->d_name.name,
-				      &p);
+				      &p, &n);
+	if (!length)
+		length = n;
 	put_task_struct(task);
 	if (length > 0)
 		length = simple_read_from_buffer(buf, count, ppos, p, length);

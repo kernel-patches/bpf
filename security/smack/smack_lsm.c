@@ -3681,16 +3681,17 @@ static int smack_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
  * @p: the object task
  * @name: the name of the attribute in /proc/.../attr
  * @value: where to put the result
+ * @len: where to put the length of the result
  *
  * Places a copy of the task Smack into value
  *
- * Returns the length of the smack label or an error code
+ * Returns 0 on success or a negative error code on failure.
  */
-static int smack_getprocattr(struct task_struct *p, const char *name, char **value)
+static int smack_getprocattr(struct task_struct *p, const char *name,
+			     char **value, u32 *len)
 {
 	struct smack_known *skp = smk_of_task_struct_obj(p);
 	char *cp;
-	int slen;
 
 	if (strcmp(name, "current") != 0)
 		return -EINVAL;
@@ -3699,9 +3700,9 @@ static int smack_getprocattr(struct task_struct *p, const char *name, char **val
 	if (cp == NULL)
 		return -ENOMEM;
 
-	slen = strlen(cp);
+	*len = strlen(cp);
 	*value = cp;
-	return slen;
+	return 0;
 }
 
 /**

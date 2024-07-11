@@ -286,7 +286,7 @@ LSM_HOOK(int, -EOPNOTSUPP, getselfattr, unsigned int attr,
 LSM_HOOK(int, -EOPNOTSUPP, setselfattr, unsigned int attr,
 	 struct lsm_ctx *ctx, u32 size, u32 flags)
 LSM_HOOK(int, -EINVAL, getprocattr, struct task_struct *p, const char *name,
-	 char **value)
+	 char **value, u32 *len)
 LSM_HOOK(int, -EINVAL, setprocattr, const char *name, void *value, size_t size,
 	 size_t *wbytes)
 LSM_HOOK(int, 0, ismaclabel, const char *name)

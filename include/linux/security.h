@@ -495,7 +495,7 @@ int security_getselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 int security_setselfattr(unsigned int attr, struct lsm_ctx __user *ctx,
 			 u32 size, u32 flags);
 int security_getprocattr(struct task_struct *p, int lsmid, const char *name,
-			 char **value);
+			 char **value, u32 *len);
 int security_setprocattr(int lsmid, const char *name, void *value, size_t size,
 			 size_t *wbytes);
 int security_netlink_send(struct sock *sk, struct sk_buff *skb);
@@ -1435,7 +1435,8 @@ static inline int security_setselfattr(unsigned int attr,
 }
 
 static inline int security_getprocattr(struct task_struct *p, int lsmid,
-				       const char *name, char **value)
+				       const char *name, char **value,
+				       u32 *len)
 {
 	return -EINVAL;
 }

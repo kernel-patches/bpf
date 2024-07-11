@@ -4117,20 +4117,22 @@ free_out:
  * @lsmid: LSM identification
  * @name: attribute name
  * @value: attribute value
+ * @len: length of @value
  *
  * Read attribute @name for task @p and store it into @value if allowed.
  *
- * Return: Returns the length of @value on success, a negative value otherwise.
+ * Return: Returns 0 on success or a negative error code on failure.
+ *         @len is set to the length of @value on success.
  */
 int security_getprocattr(struct task_struct *p, int lsmid, const char *name,
-			 char **value)
+			 char **value, u32 *len)
 {
 	struct security_hook_list *hp;
 
 	hlist_for_each_entry(hp, &security_hook_heads.getprocattr, list) {
 		if (lsmid != 0 && lsmid != hp->lsmid->id)
 			continue;
-		return hp->hook.getprocattr(p, name, value);
+		return hp->hook.getprocattr(p, name, value, len);
 	}
 	return LSM_RET_DEFAULT(getprocattr);
 }

@@ -820,7 +820,7 @@ static int apparmor_getselfattr(unsigned int attr, struct lsm_ctx __user *lx,
 }
 
 static int apparmor_getprocattr(struct task_struct *task, const char *name,
-				char **value)
+				char **value, u32 *len)
 {
 	int error = -ENOENT;
 	/* released below */
@@ -843,7 +843,10 @@ static int apparmor_getprocattr(struct task_struct *task, const char *name,
 	aa_put_label(label);
 	put_cred(cred);
 
-	return error;
+	if (error < 0)
+		return error;
+	*len = error;
+	return 0;
 }
 
 static int do_setattr(u64 attr, void *value, size_t size)
