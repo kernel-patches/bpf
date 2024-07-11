@@ -9,6 +9,7 @@
 #include <linux/bpf_crib.h>
 #include <linux/init.h>
 #include <linux/fdtable.h>
+#include <net/sock.h>
 
 __bpf_kfunc_start_defs();
 
@@ -45,6 +46,82 @@ __bpf_kfunc void bpf_file_release(struct file *file)
 	fput(file);
 }
 
+/**
+ * bpf_sock_acquire() - Acquire a reference to struct sock
+ *
+ * @sk: struct sock that needs to acquire a reference
+ *
+ * @returns struct sock that has acquired the reference
+ */
+__bpf_kfunc struct sock *bpf_sock_acquire(struct sock *sk)
+{
+	sock_hold(sk);
+	return sk;
+}
+
+/**
+ * bpf_sock_release() - Release the reference acquired on struct sock.
+ *
+ * @sk: struct sock that has acquired the reference
+ */
+__bpf_kfunc void bpf_sock_release(struct sock *sk)
+{
+	sock_put(sk);
+}
+
+/**
+ * bpf_sock_from_socket() - Get struct sock from struct socket, and acquire
+ * a reference to struct sock.
+ *
+ * Note that this function acquires a reference to struct sock.
+ *
+ * @sock: specified struct socket
+ *
+ * @returns a pointer to the struct sock
+ */
+__bpf_kfunc struct sock *bpf_sock_from_socket(struct socket *sock)
+{
+	struct sock *sk = sock->sk;
+
+	bpf_sock_acquire(sk);
+	return sk;
+}
+
+/**
+ * bpf_sock_from_task_fd() - Get a pointer to the struct sock
+ * corresponding to the task file descriptor.
+ *
+ * Note that this function acquires a reference to struct sock.
+ *
+ * @task: specified struct task_struct
+ * @fd: file descriptor
+ *
+ * @returns the corresponding struct sock pointer if found,
+ * otherwise returns NULL.
+ */
+__bpf_kfunc struct sock *bpf_sock_from_task_fd(struct task_struct *task, int fd)
+{
+	struct file *file;
+	struct socket *sock;
+	struct sock *sk;
+
+	file = bpf_file_from_task_fd(task, fd);
+	if (!file)
+		return NULL;
+
+	sock = sock_from_file(file);
+	if (!sock) {
+		bpf_file_release(file);
+		return NULL;
+	}
+
+	sk = sock->sk;
+
+	bpf_sock_acquire(sk);
+	bpf_file_release(file);
+	return sk;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_crib_kfuncs)
@@ -56,6 +133,11 @@ BTF_ID_FLAGS(func, bpf_iter_task_file_new, KF_ITER_NEW | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_iter_task_file_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_task_file_get_fd, KF_ITER_GETTER)
 BTF_ID_FLAGS(func, bpf_iter_task_file_destroy, KF_ITER_DESTROY)
+
+BTF_ID_FLAGS(func, bpf_sock_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_sock_release, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_sock_from_socket, KF_ACQUIRE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_sock_from_task_fd, KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 
 BTF_KFUNCS_END(bpf_crib_kfuncs)
 
