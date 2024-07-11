@@ -234,6 +234,11 @@ BTF_ID_FLAGS(func, bpf_receive_queue_from_sock, KF_OBTAIN)
 BTF_ID_FLAGS(func, bpf_write_queue_from_sock, KF_OBTAIN)
 BTF_ID_FLAGS(func, bpf_reader_queue_from_udp_sock, KF_OBTAIN)
 
+BTF_ID_FLAGS(func, bpf_inet_src_addr_from_socket, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_inet_dst_addr_from_socket, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_inet6_src_addr_from_socket, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_inet6_dst_addr_from_socket, KF_TRUSTED_ARGS)
+
 BTF_KFUNCS_END(bpf_crib_kfuncs)
 
 static int bpf_prog_run_crib(struct bpf_prog *prog,

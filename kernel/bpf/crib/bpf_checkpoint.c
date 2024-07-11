@@ -8,6 +8,8 @@
 
 #include <linux/bpf_crib.h>
 #include <linux/fdtable.h>
+#include <net/inet_common.h>
+#include <net/ipv6.h>
 
 extern void bpf_file_release(struct file *file);
 
@@ -96,6 +98,54 @@ __bpf_kfunc void bpf_iter_task_file_destroy(struct bpf_iter_task_file *it)
 
 	if (kit->file)
 		bpf_file_release(kit->file);
+}
+
+/**
+ * bpf_inet_src_addr_from_socket() - Wrap inet_getname to get the source
+ * IPv4 address and source port of the specified socket
+ *
+ * @sock: specified socket
+ * @addr: buffer
+ */
+__bpf_kfunc int bpf_inet_src_addr_from_socket(struct socket *sock, struct sockaddr_in *addr)
+{
+	return inet_getname(sock, (struct sockaddr *)addr, 0);
+}
+
+/**
+ * bpf_inet_dst_addr_from_socket() - Wrap inet_getname to get the destination
+ * IPv4 address and destination port of the specified socket
+ *
+ * @sock: specified socket
+ * @addr: buffer
+ */
+__bpf_kfunc int bpf_inet_dst_addr_from_socket(struct socket *sock, struct sockaddr_in *addr)
+{
+	return inet_getname(sock, (struct sockaddr *)addr, 1);
+}
+
+/**
+ * bpf_inet6_src_addr_from_socket() - Wrap inet6_getname to get the source
+ * IPv6 address and source port of the specified socket
+ *
+ * @sock: specified socket
+ * @addr: buffer
+ */
+__bpf_kfunc int bpf_inet6_src_addr_from_socket(struct socket *sock, struct sockaddr_in6 *addr)
+{
+	return inet6_getname(sock, (struct sockaddr *)addr, 0);
+}
+
+/**
+ * bpf_inet6_dst_addr_from_socket() - Wrap inet6_getname to get the destination
+ * IPv6 address and destination port of the specified socket
+ *
+ * @sock: specified socket
+ * @addr: buffer
+ */
+__bpf_kfunc int bpf_inet6_dst_addr_from_socket(struct socket *sock, struct sockaddr_in6 *addr)
+{
+	return inet6_getname(sock, (struct sockaddr *)addr, 1);
 }
 
 __bpf_kfunc_end_defs();
