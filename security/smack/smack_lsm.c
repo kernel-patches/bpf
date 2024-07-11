@@ -4764,11 +4764,15 @@ static int smack_audit_rule_known(struct audit_krule *krule)
  * @field: audit rule flags given from user-space
  * @op: required testing operator
  * @vrule: smack internal rule presentation
+ * @match: the match result
  *
  * The core Audit hook. It's used to take the decision of
  * whether to audit or not to audit a given object.
+ *
+ * Returns 0 on success or negative error code on failure.
  */
-static int smack_audit_rule_match(u32 secid, u32 field, u32 op, void *vrule)
+static int smack_audit_rule_match(u32 secid, u32 field, u32 op, void *vrule,
+				  bool *match)
 {
 	struct smack_known *skp;
 	char *rule = vrule;
@@ -4778,8 +4782,10 @@ static int smack_audit_rule_match(u32 secid, u32 field, u32 op, void *vrule)
 		return -ENOENT;
 	}
 
-	if (field != AUDIT_SUBJ_USER && field != AUDIT_OBJ_USER)
+	if (field != AUDIT_SUBJ_USER && field != AUDIT_OBJ_USER) {
+		*match = false;
 		return 0;
+	}
 
 	skp = smack_from_secid(secid);
 
@@ -4789,10 +4795,11 @@ static int smack_audit_rule_match(u32 secid, u32 field, u32 op, void *vrule)
 	 * label.
 	 */
 	if (op == Audit_equal)
-		return (rule == skp->smk_known);
-	if (op == Audit_not_equal)
-		return (rule != skp->smk_known);
-
+		*match = (rule == skp->smk_known);
+	else if (op == Audit_not_equal)
+		*match = (rule != skp->smk_known);
+	else
+		*match = false;
 	return 0;
 }
 

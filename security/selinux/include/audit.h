@@ -45,11 +45,13 @@ void selinux_audit_rule_free(void *rule);
  *	@field: the field this rule refers to
  *	@op: the operator the rule uses
  *	@rule: pointer to the audit rule to check against
+ *	@match: if the context id matches the rule
  *
- *	Returns 1 if the context id matches the rule, 0 if it does not, and
- *	-errno on failure.
+ *	Returns 0 on success and -errno on failure. @match holds the match
+ *	result.
  */
-int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *rule);
+int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *rule,
+			     bool *match);
 
 /**
  *	selinux_audit_rule_known - check to see if rule contains selinux fields.

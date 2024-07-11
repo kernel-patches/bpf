@@ -264,11 +264,11 @@ int aa_audit_rule_known(struct audit_krule *rule)
 	return 0;
 }
 
-int aa_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
+int aa_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule, bool *match)
 {
 	struct aa_audit_rule *rule = vrule;
 	struct aa_label *label;
-	int found = 0;
+	bool found = false;
 
 	label = aa_secid_to_label(sid);
 
@@ -276,16 +276,14 @@ int aa_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 		return -ENOENT;
 
 	if (aa_label_is_subset(label, rule->label))
-		found = 1;
+		found = true;
 
-	switch (field) {
-	case AUDIT_SUBJ_ROLE:
-		switch (op) {
-		case Audit_equal:
-			return found;
-		case Audit_not_equal:
-			return !found;
-		}
-	}
+	if (field == AUDIT_SUBJ_ROLE && op == Audit_equal)
+		*match = found;
+	else if (field == AUDIT_SUBJ_ROLE && op == Audit_not_equal)
+		*match = !found;
+	else
+		*match = false;
+
 	return 0;
 }

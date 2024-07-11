@@ -3633,29 +3633,32 @@ int selinux_audit_rule_known(struct audit_krule *rule)
 	return 0;
 }
 
-int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
+int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule,
+			     bool *match)
 {
 	struct selinux_state *state = &selinux_state;
 	struct selinux_policy *policy;
 	struct context *ctxt;
 	struct mls_level *level;
 	struct selinux_audit_rule *rule = vrule;
-	int match = 0;
+	int rc = 0;
 
 	if (unlikely(!rule)) {
 		WARN_ONCE(1, "selinux_audit_rule_match: missing rule\n");
 		return -ENOENT;
 	}
 
-	if (!selinux_initialized())
+	if (!selinux_initialized()) {
+		*match = false;
 		return 0;
+	}
 
 	rcu_read_lock();
 
 	policy = rcu_dereference(state->policy);
 
 	if (rule->au_seqno < policy->latest_granting) {
-		match = -ESTALE;
+		rc = -ESTALE;
 		goto out;
 	}
 
@@ -3663,7 +3666,7 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 	if (unlikely(!ctxt)) {
 		WARN_ONCE(1, "selinux_audit_rule_match: unrecognized SID %d\n",
 			  sid);
-		match = -ENOENT;
+		rc = -ENOENT;
 		goto out;
 	}
 
@@ -3674,10 +3677,10 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 	case AUDIT_OBJ_USER:
 		switch (op) {
 		case Audit_equal:
-			match = (ctxt->user == rule->au_ctxt.user);
+			rc = (ctxt->user == rule->au_ctxt.user);
 			break;
 		case Audit_not_equal:
-			match = (ctxt->user != rule->au_ctxt.user);
+			rc = (ctxt->user != rule->au_ctxt.user);
 			break;
 		}
 		break;
@@ -3685,10 +3688,10 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 	case AUDIT_OBJ_ROLE:
 		switch (op) {
 		case Audit_equal:
-			match = (ctxt->role == rule->au_ctxt.role);
+			rc = (ctxt->role == rule->au_ctxt.role);
 			break;
 		case Audit_not_equal:
-			match = (ctxt->role != rule->au_ctxt.role);
+			rc = (ctxt->role != rule->au_ctxt.role);
 			break;
 		}
 		break;
@@ -3696,10 +3699,10 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 	case AUDIT_OBJ_TYPE:
 		switch (op) {
 		case Audit_equal:
-			match = (ctxt->type == rule->au_ctxt.type);
+			rc = (ctxt->type == rule->au_ctxt.type);
 			break;
 		case Audit_not_equal:
-			match = (ctxt->type != rule->au_ctxt.type);
+			rc = (ctxt->type != rule->au_ctxt.type);
 			break;
 		}
 		break;
@@ -3712,39 +3715,42 @@ int selinux_audit_rule_match(u32 sid, u32 field, u32 op, void *vrule)
 			 &ctxt->range.level[0] : &ctxt->range.level[1]);
 		switch (op) {
 		case Audit_equal:
-			match = mls_level_eq(&rule->au_ctxt.range.level[0],
-					     level);
+			rc = mls_level_eq(&rule->au_ctxt.range.level[0],
+					  level);
 			break;
 		case Audit_not_equal:
-			match = !mls_level_eq(&rule->au_ctxt.range.level[0],
-					      level);
+			rc = !mls_level_eq(&rule->au_ctxt.range.level[0],
+					   level);
 			break;
 		case Audit_lt:
-			match = (mls_level_dom(&rule->au_ctxt.range.level[0],
-					       level) &&
+			rc = (mls_level_dom(&rule->au_ctxt.range.level[0],
+					    level) &&
 				 !mls_level_eq(&rule->au_ctxt.range.level[0],
 					       level));
 			break;
 		case Audit_le:
-			match = mls_level_dom(&rule->au_ctxt.range.level[0],
-					      level);
+			rc = mls_level_dom(&rule->au_ctxt.range.level[0],
+					   level);
 			break;
 		case Audit_gt:
-			match = (mls_level_dom(level,
-					      &rule->au_ctxt.range.level[0]) &&
+			rc = (mls_level_dom(level,
+					    &rule->au_ctxt.range.level[0]) &&
 				 !mls_level_eq(level,
 					       &rule->au_ctxt.range.level[0]));
 			break;
 		case Audit_ge:
-			match = mls_level_dom(level,
-					      &rule->au_ctxt.range.level[0]);
+			rc = mls_level_dom(level,
+					   &rule->au_ctxt.range.level[0]);
 			break;
 		}
 	}
 
 out:
 	rcu_read_unlock();
-	return match;
+	if (rc < 0)
+		return rc;
+	*match = !!rc;
+	return 0;
 }
 
 static int aurule_avc_callback(u32 event)

@@ -5450,7 +5450,20 @@ void security_audit_rule_free(void *lsmrule)
  */
 int security_audit_rule_match(u32 secid, u32 field, u32 op, void *lsmrule)
 {
-	return call_int_hook(audit_rule_match, secid, field, op, lsmrule);
+	int rc;
+	bool match = false;
+	struct security_hook_list *hp;
+
+	hlist_for_each_entry(hp, &security_hook_heads.audit_rule_match, list) {
+		rc = hp->hook.audit_rule_match(secid, field, op, lsmrule,
+					       &match);
+		if (rc < 0)
+			return rc;
+		if (match)
+			break;
+	}
+
+	return match;
 }
 #endif /* CONFIG_AUDIT */
 
