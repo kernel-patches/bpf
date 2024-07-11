@@ -161,7 +161,7 @@ int cap_inode_setxattr(struct dentry *dentry, const char *name,
 		       const void *value, size_t size, int flags);
 int cap_inode_removexattr(struct mnt_idmap *idmap,
 			  struct dentry *dentry, const char *name);
-int cap_inode_need_killpriv(struct dentry *dentry);
+int cap_inode_need_killpriv(struct dentry *dentry, bool *need);
 int cap_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry);
 int cap_inode_getsecurity(struct mnt_idmap *idmap,
 			  struct inode *inode, const char *name, void **buffer,
@@ -389,7 +389,7 @@ int security_inode_listxattr(struct dentry *dentry);
 int security_inode_removexattr(struct mnt_idmap *idmap,
 			       struct dentry *dentry, const char *name);
 void security_inode_post_removexattr(struct dentry *dentry, const char *name);
-int security_inode_need_killpriv(struct dentry *dentry);
+int security_inode_need_killpriv(struct dentry *dentry, int *attr);
 int security_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry);
 int security_inode_getsecurity(struct mnt_idmap *idmap,
 			       struct inode *inode, const char *name,
@@ -971,9 +971,21 @@ static inline void security_inode_post_removexattr(struct dentry *dentry,
 						   const char *name)
 { }
 
-static inline int security_inode_need_killpriv(struct dentry *dentry)
+static inline int security_inode_need_killpriv(struct dentry *dentry, int *attr)
 {
-	return cap_inode_need_killpriv(dentry);
+	int rc;
+	bool need = false;
+
+	rc = cap_inode_need_killpriv(dentry, &need);
+	if (rc < 0)
+		return rc;
+
+	if (need)
+		*attr |= ATTR_KILL_PRIV;
+	else
+		*attr &= ~ATTR_KILL_PRIV;
+
+	return 0;
 }
 
 static inline int security_inode_killpriv(struct mnt_idmap *idmap,

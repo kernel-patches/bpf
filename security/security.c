@@ -2490,17 +2490,36 @@ void security_inode_post_removexattr(struct dentry *dentry, const char *name)
 /**
  * security_inode_need_killpriv() - Check if security_inode_killpriv() required
  * @dentry: associated dentry
+ * @attr: attribute flags
  *
  * Called when an inode has been changed to determine if
  * security_inode_killpriv() should be called.
  *
- * Return: Return <0 on error to abort the inode change operation, return 0 if
- *         security_inode_killpriv() does not need to be called, return >0 if
- *         security_inode_killpriv() does need to be called.
+ * Return: Return 0 on success, negative error code on failure.
+ *         On success, set ATTR_KILL_PRIV flag in @attr when @need is true,
+ *         clears it when false.
  */
-int security_inode_need_killpriv(struct dentry *dentry)
+int security_inode_need_killpriv(struct dentry *dentry, int *attr)
 {
-	return call_int_hook(inode_need_killpriv, dentry);
+	int rc;
+	bool need = false;
+	struct security_hook_list *hp;
+
+	hlist_for_each_entry(hp, &security_hook_heads.inode_need_killpriv,
+			     list) {
+		rc = hp->hook.inode_need_killpriv(dentry, &need);
+		if (rc < 0)
+			return rc;
+		if (need)
+			break;
+	}
+
+	if (need)
+		*attr |= ATTR_KILL_PRIV;
+	else
+		*attr &= ~ATTR_KILL_PRIV;
+
+	return 0;
 }
 
 /**

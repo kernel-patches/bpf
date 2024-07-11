@@ -427,11 +427,10 @@ int notify_change(struct mnt_idmap *idmap, struct dentry *dentry,
 		attr->ia_mtime = timestamp_truncate(attr->ia_mtime, inode);
 
 	if (ia_valid & ATTR_KILL_PRIV) {
-		error = security_inode_need_killpriv(dentry);
+		error = security_inode_need_killpriv(dentry, &ia_valid);
 		if (error < 0)
 			return error;
-		if (error == 0)
-			ia_valid = attr->ia_valid &= ~ATTR_KILL_PRIV;
+		attr->ia_valid = ia_valid;
 	}
 
 	/*

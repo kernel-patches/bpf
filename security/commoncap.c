@@ -286,21 +286,25 @@ int cap_capset(struct cred *new,
 /**
  * cap_inode_need_killpriv - Determine if inode change affects privileges
  * @dentry: The inode/dentry in being changed with change marked ATTR_KILL_PRIV
+ * @need: If inode_killpriv() is needed
  *
  * Determine if an inode having a change applied that's marked ATTR_KILL_PRIV
  * affects the security markings on that inode, and if it is, should
  * inode_killpriv() be invoked or the change rejected.
  *
- * Return: 1 if security.capability has a value, meaning inode_killpriv()
- * is required, 0 otherwise, meaning inode_killpriv() is not required.
+ * Return: Always returns 0. If security.capability has a value, meaning
+ * inode_killpriv() is required, @need is set to true.
  */
-int cap_inode_need_killpriv(struct dentry *dentry)
+int cap_inode_need_killpriv(struct dentry *dentry, bool *need)
 {
 	struct inode *inode = d_backing_inode(dentry);
 	int error;
 
 	error = __vfs_getxattr(dentry, inode, XATTR_NAME_CAPS, NULL, 0);
-	return error > 0;
+	if (error > 0)
+		*need = true;
+
+	return 0;
 }
 
 /**

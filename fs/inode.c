@@ -2012,11 +2012,9 @@ int dentry_needs_remove_privs(struct mnt_idmap *idmap,
 		return 0;
 
 	mask = setattr_should_drop_suidgid(idmap, inode);
-	ret = security_inode_need_killpriv(dentry);
+	ret = security_inode_need_killpriv(dentry, &mask);
 	if (ret < 0)
 		return ret;
-	if (ret)
-		mask |= ATTR_KILL_PRIV;
 	return mask;
 }
 
