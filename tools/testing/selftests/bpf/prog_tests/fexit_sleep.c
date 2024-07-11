@@ -29,6 +29,7 @@ void test_fexit_sleep(void)
 	int wstatus, duration = 0;
 	pid_t cpid;
 	int err, fexit_cnt;
+	int t=0;
 
 	fexit_skel = fexit_sleep_lskel__open_and_load();
 	if (CHECK(!fexit_skel, "fexit_skel_load", "fexit skeleton failed\n"))
@@ -43,7 +44,12 @@ void test_fexit_sleep(void)
 		goto cleanup;
 
 	/* wait until first sys_nanosleep ends and second sys_nanosleep starts */
-	while (READ_ONCE(fexit_skel->bss->fentry_cnt) != 2);
+	t = READ_ONCE(fexit_skel->bss->fentry_cnt);
+	while (t != 2) {
+		CHECK(0 != 1, "fentry_cnt", "%d", t);
+		sleep(1);
+		t = READ_ONCE(fexit_skel->bss->fentry_cnt);
+	}
 	fexit_cnt = READ_ONCE(fexit_skel->bss->fexit_cnt);
 	if (CHECK(fexit_cnt != 1, "fexit_cnt", "%d", fexit_cnt))
 		goto cleanup;
