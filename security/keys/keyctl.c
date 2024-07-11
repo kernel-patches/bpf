@@ -1565,6 +1565,7 @@ long keyctl_get_security(key_serial_t keyid,
 	struct key *key, *instkey;
 	key_ref_t key_ref;
 	char *context;
+	size_t len;
 	long ret;
 
 	key_ref = lookup_user_key(keyid, KEY_LOOKUP_PARTIAL, KEY_NEED_VIEW);
@@ -1586,15 +1587,18 @@ long keyctl_get_security(key_serial_t keyid,
 	}
 
 	key = key_ref_to_ptr(key_ref);
-	ret = security_key_getsecurity(key, &context);
-	if (ret == 0) {
+	ret = security_key_getsecurity(key, &context, &len);
+	if (ret < 0)
+		goto error;
+	if (len == 0) {
 		/* if no information was returned, give userspace an empty
 		 * string */
 		ret = 1;
 		if (buffer && buflen > 0 &&
 		    copy_to_user(buffer, "", 1) != 0)
 			ret = -EFAULT;
-	} else if (ret > 0) {
+	} else {
+		ret = len;
 		/* return as much data as there's room for */
 		if (buffer && buflen > 0) {
 			if (buflen > ret)
@@ -1607,6 +1611,7 @@ long keyctl_get_security(key_serial_t keyid,
 		kfree(context);
 	}
 
+error:
 	key_ref_put(key_ref);
 	return ret;
 }

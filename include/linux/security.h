@@ -2020,7 +2020,7 @@ int security_key_alloc(struct key *key, const struct cred *cred, unsigned long f
 void security_key_free(struct key *key);
 int security_key_permission(key_ref_t key_ref, const struct cred *cred,
 			    enum key_need_perm need_perm);
-int security_key_getsecurity(struct key *key, char **_buffer);
+int security_key_getsecurity(struct key *key, char **_buffer, size_t *_len);
 void security_key_post_create_or_update(struct key *keyring, struct key *key,
 					const void *payload, size_t payload_len,
 					unsigned long flags, bool create);
@@ -2045,9 +2045,11 @@ static inline int security_key_permission(key_ref_t key_ref,
 	return 0;
 }
 
-static inline int security_key_getsecurity(struct key *key, char **_buffer)
+static inline int security_key_getsecurity(struct key *key, char **_buffer,
+					   size_t *_len)
 {
 	*_buffer = NULL;
+	*_len = 0;
 	return 0;
 }
 

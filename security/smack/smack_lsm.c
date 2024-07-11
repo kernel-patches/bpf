@@ -4585,30 +4585,31 @@ static int smack_key_permission(key_ref_t key_ref,
 /*
  * smack_key_getsecurity - Smack label tagging the key
  * @key points to the key to be queried
- * @_buffer points to a pointer that should be set to point to the
- * resulting string (if no label or an error occurs).
- * Return the length of the string (including terminating NUL) or -ve if
- * an error.
- * May also return 0 (and a NULL buffer pointer) if there is no label.
+ * @_buffer points to a pointer that should be set to point to the resulting
+ *          string (if no label or an error occurs).
+ * @_len  the length of the @_buffer (including terminating NUL)
+ *
+ * Return 0 on success or -ve if an error.
+ * If there is no label, @_buffer will be set to NULL and @_len will be set to
+ * 0.
  */
-static int smack_key_getsecurity(struct key *key, char **_buffer)
+static int smack_key_getsecurity(struct key *key, char **_buffer, size_t *_len)
 {
 	struct smack_known *skp = key->security;
-	size_t length;
 	char *copy;
 
 	if (key->security == NULL) {
 		*_buffer = NULL;
+		*_len = 0;
 		return 0;
 	}
 
 	copy = kstrdup(skp->smk_known, GFP_KERNEL);
 	if (copy == NULL)
 		return -ENOMEM;
-	length = strlen(copy) + 1;
-
+	*_len = strlen(copy) + 1;
 	*_buffer = copy;
-	return length;
+	return 0;
 }
 
 

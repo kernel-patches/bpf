@@ -6737,18 +6737,17 @@ static int selinux_key_permission(key_ref_t key_ref,
 	return avc_has_perm(sid, ksec->sid, SECCLASS_KEY, perm, NULL);
 }
 
-static int selinux_key_getsecurity(struct key *key, char **_buffer)
+static int selinux_key_getsecurity(struct key *key, char **_buffer,
+				   size_t *_len)
 {
 	struct key_security_struct *ksec = key->security;
 	char *context = NULL;
-	unsigned len;
+	u32 context_len;
 	int rc;
 
-	rc = security_sid_to_context(ksec->sid,
-				     &context, &len);
-	if (!rc)
-		rc = len;
+	rc = security_sid_to_context(ksec->sid, &context, &context_len);
 	*_buffer = context;
+	*_len = context_len;
 	return rc;
 }
 
