@@ -15,7 +15,8 @@
  */
 char *libbpf_strerror_r(int err, char *dst, int len)
 {
-	int ret = strerror_r(err < 0 ? -err : err, dst, len);
+	unsigned int no = err < 0 ? -err : err;
+	int ret = strerror_r(no, dst, len);
 	/* on glibc <2.13, ret == -1 and errno is set, if strerror_r() can't
 	 * handle the error, on glibc >=2.13 *positive* (errno-like) error
 	 * code is returned directly
@@ -23,11 +24,18 @@ char *libbpf_strerror_r(int err, char *dst, int len)
 	if (ret == -1)
 		ret = errno;
 	if (ret) {
-		if (ret == EINVAL)
-			/* strerror_r() doesn't recognize this specific error */
-			snprintf(dst, len, "unknown error (%d)", err < 0 ? err : -err);
-		else
+		if (ret == EINVAL) {
+			switch (no) {
+			case ENOTSUPP:
+				snprintf(dst, len, "Operation not supported");
+				break;
+			default:
+				/* strerror_r() doesn't recognize this specific error */
+				snprintf(dst, len, "unknown error (-%u)", no);
+			}
+		} else {
 			snprintf(dst, len, "ERROR: strerror_r(%d)=%d", err, ret);
+		}
 	}
 	return dst;
 }

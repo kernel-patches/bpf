@@ -4,6 +4,10 @@
 
 #define STRERR_BUFSIZE  128
 
+#ifndef ENOTSUPP
+#define ENOTSUPP 524
+#endif
+
 char *libbpf_strerror_r(int err, char *dst, int len);
 
 #endif /* __LIBBPF_STR_ERROR_H */
