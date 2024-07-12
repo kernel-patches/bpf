@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <bpf/str_error.h>
 #include <time.h>
 
 #define __TO_STR(x) #x
