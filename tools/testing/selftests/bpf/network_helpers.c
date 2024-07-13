@@ -12,6 +12,8 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include <linux/err.h>
 #include <linux/in.h>
@@ -573,6 +575,248 @@ int set_hw_ring_size(char *ifname, struct ethtool_ringparam *ring_param)
 
 	close(sockfd);
 	return 0;
+}
+
+struct tmonitor_ctx {
+	pid_t pid;
+	const char *netns;
+	char log_name[PATH_MAX];
+};
+
+/* Make sure that tcpdump has handled all previous packets.
+ *
+ * Send one or more UDP packets to the loopback interface. The packet
+ * contains a mark string. The mark is used to check if tcpdump has handled
+ * the packet. The function waits for tcpdump to print a message for the
+ * packet containing the mark (by checking the payload length and the
+ * destination). This is not a perfect solution, but it should be enough
+ * for testing purposes.
+ *
+ * log_name is the file name where tcpdump writes its output.
+ * mark is the string that is sent in the UDP packet.
+ * repeat specifies if the function should send multiple packets.
+ *
+ * Device "lo" should be up in the namespace for this to work.  This
+ * function should be called in the same network namespace as a
+ * tmonitor_ctx created for in order to create a socket for sending mark
+ * packets.
+ */
+static int traffic_monitor_sync(const char *log_name, const char *mark,
+				bool repeat)
+{
+	const int max_loop = 1000; /* 10s */
+	char mark_pkt_pattern[64];
+	struct sockaddr_in addr;
+	int sock, log_fd, rd_pos = 0;
+	int pattern_size;
+	struct stat st;
+	char buf[4096];
+	int send_cnt = repeat ? max_loop : 1;
+	bool found;
+	int i, n;
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		log_err("Failed to create socket");
+		return -1;
+	}
+
+	/* Check only the destination and the payload length */
+	pattern_size = snprintf(mark_pkt_pattern, sizeof(mark_pkt_pattern),
+				" > 127.0.0.241.4321: UDP, length %ld",
+				strlen(mark));
+
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = inet_addr("127.0.0.241");
+	addr.sin_port = htons(4321);
+
+	/* Wait for the log file to be created */
+	for (i = 0; i < max_loop; i++) {
+		log_fd = open(log_name, O_RDONLY);
+		if (log_fd >= 0) {
+			fstat(log_fd, &st);
+			rd_pos = st.st_size;
+			break;
+		}
+		usleep(10000);
+	}
+	/* Wait for the mark packet */
+	for (found = false; i < max_loop && !found; i++) {
+		if (send_cnt-- > 0) {
+			/* Send an UDP packet */
+			if (sendto(sock, mark, strlen(mark), 0,
+				   (struct sockaddr *)&addr,
+				   sizeof(addr)) != strlen(mark))
+				log_err("Failed to sendto");
+		}
+
+		usleep(10000);
+		fstat(log_fd, &st);
+		/* Check the content of the log file */
+		while (rd_pos + pattern_size <= st.st_size) {
+			lseek(log_fd, rd_pos, SEEK_SET);
+			n = read(log_fd, buf, sizeof(buf) - 1);
+			if (n < pattern_size)
+				break;
+			buf[n] = 0;
+			if (strstr(buf, mark_pkt_pattern)) {
+				found = true;
+				break;
+			}
+			rd_pos += n - pattern_size + 1;
+		}
+	}
+
+	close(log_fd);
+	close(sock);
+
+	if (!found) {
+		log_err("Waited too long for synchronizing traffic monitor");
+		return -1;
+	}
+
+	return 0;
+}
+
+/* Start a tcpdump process to monitor traffic.
+ *
+ * netns specifies what network namespace you want to monitor. It will
+ * monitor the current namespace if netns is NULL.
+ */
+struct tmonitor_ctx *traffic_monitor_start(const char *netns)
+{
+	struct tmonitor_ctx *ctx = NULL;
+	struct nstoken *nstoken = NULL;
+	char log_name[PATH_MAX];
+	int status, log_fd;
+	pid_t pid;
+
+	if (netns) {
+		nstoken = open_netns(netns);
+		if (!nstoken)
+			return NULL;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		log_err("Failed to fork");
+		goto error;
+	}
+
+	if (pid == 0) {
+		/* Child */
+		pid = getpid();
+		snprintf(log_name, sizeof(log_name), "/tmp/tmon_tcpdump_%d.log", pid);
+		log_fd = open(log_name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		dup2(log_fd, STDOUT_FILENO);
+		dup2(log_fd, STDERR_FILENO);
+		if (log_fd != STDOUT_FILENO && log_fd != STDERR_FILENO)
+			close(log_fd);
+
+		/* -n don't convert addresses to hostnames.
+		 *
+		 * --immediate-mode handle captured packets immediately.
+		 *
+		 * -l print messages with line buffer. With this option,
+		 * the output will be written at the end of each line
+		 * rather than when the output buffer is full. This is
+		 * needed to sync with tcpdump efficiently.
+		 */
+		execlp("tcpdump", "tcpdump", "-i", "any", "-n", "--immediate-mode", "-l", NULL);
+		log_err("Failed to exec tcpdump");
+		exit(1);
+	}
+
+	ctx = malloc(sizeof(*ctx));
+	if (!ctx) {
+		log_err("Failed to malloc ctx");
+		goto error;
+	}
+
+	ctx->pid = pid;
+	ctx->netns = netns;
+	snprintf(ctx->log_name, sizeof(ctx->log_name), "/tmp/tmon_tcpdump_%d.log", pid);
+
+	/* Wait for tcpdump to be ready */
+	if (traffic_monitor_sync(ctx->log_name, "hello", true)) {
+		status = 0;
+		if (waitpid(pid, &status, WNOHANG) >= 0 &&
+		    !WIFEXITED(status) && !WIFSIGNALED(status))
+			log_err("Wait too long for tcpdump");
+		else
+			log_err("Fail to start tcpdump");
+		goto error;
+	}
+
+	close_netns(nstoken);
+
+	return ctx;
+
+error:
+	close_netns(nstoken);
+	if (pid > 0) {
+		kill(pid, SIGTERM);
+		waitpid(pid, NULL, 0);
+		snprintf(log_name, sizeof(log_name), "/tmp/tmon_tcpdump_%d.log", pid);
+		unlink(log_name);
+	}
+	free(ctx);
+
+	return NULL;
+}
+
+void traffic_monitor_stop(struct tmonitor_ctx *ctx)
+{
+	if (!ctx)
+		return;
+	kill(ctx->pid, SIGTERM);
+	/* Wait the tcpdump process in case that the log file is created
+	 * after this line.
+	 */
+	waitpid(ctx->pid, NULL, 0);
+	unlink(ctx->log_name);
+	free(ctx);
+}
+
+/* Report the traffic monitored by tcpdump.
+ *
+ * The function reads the log file created by tcpdump and writes the
+ * content to stderr.
+ */
+void traffic_monitor_report(struct tmonitor_ctx *ctx)
+{
+	struct nstoken *nstoken = NULL;
+	char buf[4096];
+	int log_fd, n;
+
+	if (!ctx)
+		return;
+
+	/* Make sure all previous packets have been handled by
+	 * tcpdump.
+	 */
+	if (ctx->netns) {
+		nstoken = open_netns(ctx->netns);
+		if (!nstoken) {
+			log_err("Failed to open netns: %s", ctx->netns);
+			goto out;
+		}
+	}
+	traffic_monitor_sync(ctx->log_name, "sync for report", false);
+	close_netns(nstoken);
+
+	/* Read the log file and write to stderr */
+	log_fd = open(ctx->log_name, O_RDONLY);
+	if (log_fd < 0) {
+		log_err("Failed to open log file");
+		return;
+	}
+
+	while ((n = read(log_fd, buf, sizeof(buf))) > 0)
+		fwrite(buf, n, 1, stderr);
+
+out:
+	close(log_fd);
 }
 
 struct send_recv_arg {

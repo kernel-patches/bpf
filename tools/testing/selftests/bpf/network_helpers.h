@@ -82,6 +82,11 @@ int get_socket_local_port(int sock_fd);
 int get_hw_ring_size(char *ifname, struct ethtool_ringparam *ring_param);
 int set_hw_ring_size(char *ifname, struct ethtool_ringparam *ring_param);
 
+struct tmonitor_ctx;
+struct tmonitor_ctx *traffic_monitor_start(const char *netns);
+void traffic_monitor_stop(struct tmonitor_ctx *ctx);
+void traffic_monitor_report(struct tmonitor_ctx *ctx);
+
 struct nstoken;
 /**
  * open_netns() - Switch to specified network namespace by name.
