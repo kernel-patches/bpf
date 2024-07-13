@@ -22,6 +22,7 @@
 
 #include "test_progs.h"
 #include "test_select_reuseport_common.h"
+#include "network_helpers.h"
 
 #define MAX_TEST_NAME 80
 #define MIN_TCPHDR_LEN 20
@@ -795,6 +796,7 @@ static void test_config(int sotype, sa_family_t family, bool inany)
 	};
 	char s[MAX_TEST_NAME];
 	const struct test *t;
+	struct tmonitor_ctx *tmon;
 
 	for (t = tests; t < tests + ARRAY_SIZE(tests); t++) {
 		if (t->need_sotype && t->need_sotype != sotype)
@@ -808,9 +810,16 @@ static void test_config(int sotype, sa_family_t family, bool inany)
 		if (!test__start_subtest(s))
 			continue;
 
+		tmon = traffic_monitor_start(NULL);
+		ASSERT_TRUE(tmon, "traffic_monitor_start");
+
 		setup_per_test(sotype, family, inany, t->no_inner_map);
 		t->fn(sotype, family);
 		cleanup_per_test(t->no_inner_map);
+
+		if (env.subtest_state->error_cnt)
+			traffic_monitor_report(tmon);
+		traffic_monitor_stop(tmon);
 	}
 }
 
