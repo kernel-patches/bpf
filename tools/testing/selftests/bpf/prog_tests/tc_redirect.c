@@ -900,6 +900,7 @@ static void test_udp_dtime(struct test_tc_dtime *skel, int family, bool bpf_fwd)
 static void test_tc_redirect_dtime(struct netns_setup_result *setup_result)
 {
 	struct test_tc_dtime *skel;
+	struct tmonitor_ctx *tmon = NULL;
 	struct nstoken *nstoken;
 	int hold_tstamp_fd, err;
 
@@ -934,6 +935,9 @@ static void test_tc_redirect_dtime(struct netns_setup_result *setup_result)
 	if (!ASSERT_OK(err, "disable forwarding"))
 		goto done;
 
+	tmon = traffic_monitor_start(NS_DST);
+	ASSERT_NEQ(tmon, NULL, "traffic_monitor_start");
+
 	test_tcp_clear_dtime(skel);
 
 	test_tcp_dtime(skel, AF_INET, true);
@@ -958,6 +962,9 @@ static void test_tc_redirect_dtime(struct netns_setup_result *setup_result)
 	test_udp_dtime(skel, AF_INET6, false);
 
 done:
+	if (env.subtest_state->error_cnt)
+		traffic_monitor_report(tmon);
+	traffic_monitor_stop(tmon);
 	test_tc_dtime__destroy(skel);
 	close(hold_tstamp_fd);
 }
