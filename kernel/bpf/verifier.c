@@ -13469,12 +13469,11 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
 	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
 	u32 umax_val = src_reg->u32_max_value;
 
-	if (src_known && dst_known) {
+	/* dst_reg->var_off (and thus var32_off) has already been updated */
+	if (tnum_is_const(var32_off)) {
 		__mark_reg32_known(dst_reg, var32_off.value);
 		return;
 	}
@@ -13500,11 +13499,10 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
 	u64 umax_val = src_reg->umax_value;
 
-	if (src_known && dst_known) {
+	/* dst_reg->var_off has already been updated */
+	if (tnum_is_const(dst_reg->var_off)) {
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
 		return;
 	}
@@ -13532,12 +13530,11 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 				struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
 	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
 	u32 umin_val = src_reg->u32_min_value;
 
-	if (src_known && dst_known) {
+	/* dst_reg->var_off (and thus var32_off) has already been updated */
+	if (tnum_is_const(var32_off)) {
 		__mark_reg32_known(dst_reg, var32_off.value);
 		return;
 	}
@@ -13563,11 +13560,10 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 			      struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
 	u64 umin_val = src_reg->umin_value;
 
-	if (src_known && dst_known) {
+	/* dst_reg->var_off has already been updated */
+	if (tnum_is_const(dst_reg->var_off)) {
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
 		return;
 	}
@@ -13595,11 +13591,10 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_subreg_is_const(src_reg->var_off);
-	bool dst_known = tnum_subreg_is_const(dst_reg->var_off);
 	struct tnum var32_off = tnum_subreg(dst_reg->var_off);
 
-	if (src_known && dst_known) {
+	/* dst_reg->var_off (and thus var32_off) has already been updated */
+	if (tnum_is_const(var32_off)) {
 		__mark_reg32_known(dst_reg, var32_off.value);
 		return;
 	}
@@ -13623,10 +13618,8 @@ static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	bool src_known = tnum_is_const(src_reg->var_off);
-	bool dst_known = tnum_is_const(dst_reg->var_off);
-
-	if (src_known && dst_known) {
+	/* dst_reg->var_off has already been updated */
+	if (tnum_is_const(dst_reg->var_off)) {
 		/* dst_reg->var_off.value has been updated earlier */
 		__mark_reg_known(dst_reg, dst_reg->var_off.value);
 		return;
