@@ -28,6 +28,7 @@
 #include "test_sockmap_listen.skel.h"
 
 #include "sockmap_helpers.h"
+#include "network_helpers.h"
 
 static void test_insert_invalid(struct test_sockmap_listen *skel __always_unused,
 				int family, int sotype, int mapfd)
@@ -1893,14 +1894,23 @@ static void test_udp_unix_redir(struct test_sockmap_listen *skel, struct bpf_map
 {
 	const char *family_name, *map_name;
 	char s[MAX_TEST_NAME];
+	struct tmonitor_ctx *tmon;
 
 	family_name = family_str(family);
 	map_name = map_type_str(map);
 	snprintf(s, sizeof(s), "%s %s %s", map_name, family_name, __func__);
 	if (!test__start_subtest(s))
 		return;
+
+	tmon = traffic_monitor_start(NULL);
+	ASSERT_TRUE(tmon, "traffic_monitor_start");
+
 	inet_unix_skb_redir_to_connected(skel, map, family);
 	unix_inet_skb_redir_to_connected(skel, map, family);
+
+	if (env.subtest_state->error_cnt)
+		traffic_monitor_report(tmon);
+	traffic_monitor_stop(tmon);
 }
 
 static void run_tests(struct test_sockmap_listen *skel, struct bpf_map *map,
