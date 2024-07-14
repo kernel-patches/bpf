@@ -8,8 +8,8 @@ is_enabled() {
 	grep -q "^$1=y" include/config/auto.conf
 }
 
-vmlinux_o=${1}
-arch_vmlinux_o=${2}
+vmlinux_o=${2}
+arch_vmlinux_o=${3}
 arch_vmlinux_S=$(dirname ${arch_vmlinux_o})/$(basename ${arch_vmlinux_o} .o).S
 
 RELOCATION=R_PPC64_ADDR64
@@ -22,15 +22,18 @@ num_ool_stubs_text=$(${CROSS_COMPILE}objdump -r -j __patchable_function_entries 
 num_ool_stubs_inittext=$(${CROSS_COMPILE}objdump -r -j __patchable_function_entries ${vmlinux_o} |
 			 grep ".init.text" | grep "${RELOCATION}" | wc -l)
 
+num_ool_stubs_text_builtin=${1}
+num_ool_stubs_text_end=$(expr ${num_ool_stubs_text} - ${num_ool_stubs_text_builtin})
+
 cat > ${arch_vmlinux_S} <<EOF
 #include <asm/asm-offsets.h>
 #include <linux/linkage.h>
 
 .pushsection .tramp.ftrace.text,"aw"
-SYM_DATA(ftrace_ool_stub_text_end_count, .long ${num_ool_stubs_text})
+SYM_DATA(ftrace_ool_stub_text_end_count, .long ${num_ool_stubs_text_end})
 
 SYM_CODE_START(ftrace_ool_stub_text_end)
-	.space ${num_ool_stubs_text} * FTRACE_OOL_STUB_SIZE
+	.space ${num_ool_stubs_text_end} * FTRACE_OOL_STUB_SIZE
 SYM_CODE_END(ftrace_ool_stub_text_end)
 .popsection
 

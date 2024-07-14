@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 quiet_cmd_gen_ftrace_ool_stubs = FTRACE  $@
-      cmd_gen_ftrace_ool_stubs = $< $(objtree)/vmlinux.o $@
+      cmd_gen_ftrace_ool_stubs = $< $(CONFIG_PPC_FTRACE_OUT_OF_LINE_NUM_RESERVE) $(objtree)/vmlinux.o $@
 
 targets += .arch.vmlinux.o
 .arch.vmlinux.o: $(srctree)/arch/powerpc/tools/ftrace-gen-ool-stubs.sh $(objtree)/vmlinux.o FORCE
