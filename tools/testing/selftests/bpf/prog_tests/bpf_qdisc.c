@@ -6,6 +6,13 @@
 #include "bpf_qdisc_fifo.skel.h"
 #include "bpf_qdisc_fq.skel.h"
 
+struct crndstate {
+	u32 last;
+	u32 rho;
+};
+
+#include "bpf_qdisc_netem.skel.h"
+
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
 #endif
@@ -176,10 +183,33 @@ static void test_fq(void)
 	bpf_qdisc_fq__destroy(fq_skel);
 }
 
+static void test_netem(void)
+{
+	struct bpf_qdisc_netem *netem_skel;
+	struct bpf_link *link;
+
+	netem_skel = bpf_qdisc_netem__open_and_load();
+	if (!ASSERT_OK_PTR(netem_skel, "bpf_qdisc_netem__open_and_load"))
+		return;
+
+	link = bpf_map__attach_struct_ops(netem_skel->maps.netem);
+	if (!ASSERT_OK_PTR(link, "bpf_map__attach_struct_ops")) {
+		bpf_qdisc_netem__destroy(netem_skel);
+		return;
+	}
+
+	do_test("bpf_netem");
+
+	bpf_link__destroy(link);
+	bpf_qdisc_netem__destroy(netem_skel);
+}
+
 void test_bpf_qdisc(void)
 {
 	if (test__start_subtest("fifo"))
 		test_fifo();
 	if (test__start_subtest("fq"))
 		test_fq();
+	if (test__start_subtest("netem"))
+		test_netem();
 }
