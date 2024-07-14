@@ -6313,7 +6313,7 @@ static bool is_int_ptr(struct btf *btf, const struct btf_type *t)
 	return btf_type_is_int(t);
 }
 
-static u32 get_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto,
+u32 get_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto,
 			   int off)
 {
 	const struct btf_param *args;
