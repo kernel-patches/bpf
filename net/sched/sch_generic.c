@@ -1033,6 +1033,10 @@ void qdisc_reset(struct Qdisc *qdisc)
 
 	if (ops->reset)
 		ops->reset(qdisc);
+#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_BPF_JIT)
+	if (qdisc->flags & TCQ_F_BPF)
+		bpf_qdisc_reset_post_op(qdisc);
+#endif
 
 	__skb_queue_purge(&qdisc->gso_skb);
 	__skb_queue_purge(&qdisc->skb_bad_txq);
@@ -1076,6 +1080,10 @@ static void __qdisc_destroy(struct Qdisc *qdisc)
 
 	if (ops->destroy)
 		ops->destroy(qdisc);
+#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_BPF_JIT)
+	if (qdisc->flags & TCQ_F_BPF)
+		bpf_qdisc_destroy_post_op(qdisc);
+#endif
 
 	lockdep_unregister_key(&qdisc->root_lock_key);
 	bpf_module_put(ops, ops->owner);

@@ -9,9 +9,6 @@
 static struct bpf_struct_ops bpf_Qdisc_ops;
 
 static u32 unsupported_ops[] = {
-	offsetof(struct Qdisc_ops, init),
-	offsetof(struct Qdisc_ops, reset),
-	offsetof(struct Qdisc_ops, destroy),
 	offsetof(struct Qdisc_ops, change),
 	offsetof(struct Qdisc_ops, attach),
 	offsetof(struct Qdisc_ops, change_real_num_tx),
@@ -36,8 +33,8 @@ static int bpf_qdisc_init(struct btf *btf)
 	return 0;
 }
 
-static int bpf_qdisc_init_op(struct Qdisc *sch, struct nlattr *opt,
-			     struct netlink_ext_ack *extack)
+int bpf_qdisc_init_pre_op(struct Qdisc *sch, struct nlattr *opt,
+			  struct netlink_ext_ack *extack)
 {
 	struct bpf_sched_data *q = qdisc_priv(sch);
 
@@ -45,14 +42,14 @@ static int bpf_qdisc_init_op(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
-static void bpf_qdisc_reset_op(struct Qdisc *sch)
+void bpf_qdisc_reset_post_op(struct Qdisc *sch)
 {
 	struct bpf_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
 }
 
-static void bpf_qdisc_destroy_op(struct Qdisc *sch)
+void bpf_qdisc_destroy_post_op(struct Qdisc *sch)
 {
 	struct bpf_sched_data *q = qdisc_priv(sch);
 
@@ -234,15 +231,6 @@ static int bpf_qdisc_init_member(const struct btf_type *t,
 		if (uqdisc_ops->static_flags)
 			return -EINVAL;
 		qdisc_ops->static_flags = TCQ_F_BPF;
-		return 1;
-	case offsetof(struct Qdisc_ops, init):
-		qdisc_ops->init = bpf_qdisc_init_op;
-		return 1;
-	case offsetof(struct Qdisc_ops, reset):
-		qdisc_ops->reset = bpf_qdisc_reset_op;
-		return 1;
-	case offsetof(struct Qdisc_ops, destroy):
-		qdisc_ops->destroy = bpf_qdisc_destroy_op;
 		return 1;
 	case offsetof(struct Qdisc_ops, peek):
 		if (!uqdisc_ops->peek)
