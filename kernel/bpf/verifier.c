@@ -10174,15 +10174,35 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 
 static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
+	enum bpf_prog_type type = resolve_prog_type(env->prog);
+	u32 regno = exception_exit ? BPF_REG_1 : BPF_REG_0;
+	struct bpf_reg_state *reg = reg_state(env, regno);
 	struct bpf_func_state *state = cur_func(env);
+	const struct bpf_prog *prog = env->prog;
+	const struct btf_type *ret_type = NULL;
 	bool refs_lingering = false;
+	struct btf *btf;
 	int i;
 
 	if (!exception_exit && state->frameno && !state->in_callback_fn)
 		return 0;
 
+	if (type == BPF_PROG_TYPE_STRUCT_OPS &&
+	    reg->type & PTR_TO_BTF_ID && reg->ref_obj_id) {
+		btf = bpf_prog_get_target_btf(prog);
+		ret_type = btf_type_by_id(btf, prog->aux->attach_func_proto->type);
+		if (reg->btf_id != ret_type->type) {
+			verbose(env, "Return kptr type, struct %s, doesn't match function prototype, struct %s\n",
+				btf_type_name(reg->btf, reg->btf_id),
+				btf_type_name(btf, ret_type->type));
+			return -EINVAL;
+		}
+	}
+
 	for (i = 0; i < state->acquired_refs; i++) {
 		if (!exception_exit && state->in_callback_fn && state->refs[i].callback_ref != state->frameno)
+			continue;
+		if (ret_type && reg->ref_obj_id == state->refs[i].id)
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -15583,12 +15603,15 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 	const char *exit_ctx = "At program exit";
 	struct tnum enforce_attach_type_range = tnum_unknown;
 	const struct bpf_prog *prog = env->prog;
-	struct bpf_reg_state *reg;
+	struct bpf_reg_state *reg = reg_state(env, regno);
 	struct bpf_retval_range range = retval_range(0, 1);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	int err;
 	struct bpf_func_state *frame = env->cur_state->frame[0];
 	const bool is_subprog = frame->subprogno;
+	struct btf *btf = bpf_prog_get_target_btf(prog);
+	bool st_ops_ret_is_kptr = false;
+	const struct btf_type *t;
 
 	/* LSM and struct_ops func-ptr's return type could be "void" */
 	if (!is_subprog || frame->in_exception_callback_fn) {
@@ -15597,10 +15620,26 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 			if (prog->expected_attach_type == BPF_LSM_CGROUP)
 				/* See below, can be 0 or 0-1 depending on hook. */
 				break;
-			fallthrough;
+			if (!prog->aux->attach_func_proto->type)
+				return 0;
+			break;
 		case BPF_PROG_TYPE_STRUCT_OPS:
 			if (!prog->aux->attach_func_proto->type)
 				return 0;
+
+			t = btf_type_by_id(btf, prog->aux->attach_func_proto->type);
+			if (btf_type_is_ptr(t)) {
+				/* Allow struct_ops programs to return kptr or null if
+				 * the return type is a pointer type.
+				 * check_reference_leak has ensured the returning kptr
+				 * matches the type of the function prototype and is
+				 * the only leaking reference. Thus, we can safely return
+				 * if the pointer is in its unmodified form
+				 */
+				if (reg->type & PTR_TO_BTF_ID)
+					return __check_ptr_off_reg(env, reg, regno, false);
+				st_ops_ret_is_kptr = true;
+			}
 			break;
 		default:
 			break;
@@ -15621,8 +15660,6 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		verbose(env, "R%d leaks addr as return value\n", regno);
 		return -EACCES;
 	}
-
-	reg = cur_regs(env) + regno;
 
 	if (frame->in_async_callback_fn) {
 		/* enforce return zero from async callbacks like timer */
@@ -15709,6 +15746,11 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 
 	case BPF_PROG_TYPE_NETFILTER:
 		range = retval_range(NF_DROP, NF_ACCEPT);
+		break;
+	case BPF_PROG_TYPE_STRUCT_OPS:
+		if (!st_ops_ret_is_kptr)
+			return 0;
+		range = retval_range(0, 0);
 		break;
 	case BPF_PROG_TYPE_EXT:
 		/* freplace program can return anything as its return value
