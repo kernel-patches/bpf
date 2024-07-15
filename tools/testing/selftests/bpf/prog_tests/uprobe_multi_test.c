@@ -32,6 +32,13 @@ noinline void usdt_trigger(void)
 	STAP_PROBE(test, pid_filter_usdt);
 }
 
+#ifdef __x86_64__
+noinline __attribute__((naked)) void uprobe_multi_error_func(void)
+{
+	asm volatile ("int3");
+}
+#endif
+
 struct child {
 	int go[2];
 	int c2p[2]; /* child -> parent channel */
@@ -516,6 +523,131 @@ cleanup:
 	uprobe_multi__destroy(skel);
 }
 
+#ifdef __x86_64__
+static void attach_fail_partial(struct uprobe_multi *skel)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+	const char *syms[4] = {
+		"uprobe_multi_func_1",
+		"uprobe_multi_func_2",
+		"uprobe_multi_func_3",
+		"uprobe_multi_error_func",
+	};
+
+	opts.syms = syms;
+	opts.cnt = ARRAY_SIZE(syms);
+
+	skel->links.uprobe = bpf_program__attach_uprobe_multi(skel->progs.uprobe, -1,
+							      "/proc/self/exe", NULL, &opts);
+	if (!ASSERT_ERR_PTR(skel->links.uprobe, "bpf_program__attach_uprobe_multi"))
+		bpf_link__destroy(skel->links.uprobe);
+}
+#else
+static void attach_fail_partial(struct uprobe_multi *skel) { }
+#endif
+
+static void attach_fail_wrong_ref_ctr(struct uprobe_multi *skel)
+{
+	unsigned long offset, ref_ctr_offset = 0;
+	const char *sym = "uprobe_multi_func_1";
+	LIBBPF_OPTS(bpf_link_create_opts, opts);
+	const char *path = "/proc/self/exe";
+	int prog_fd, link_fd, err;
+
+	/* wrong ref_ctr_offset */
+	prog_fd = bpf_program__fd(skel->progs.uprobe_extra);
+
+	err = elf_resolve_syms_offsets("/proc/self/exe", 1, &sym,
+				       (unsigned long **) &offset, STT_FUNC);
+	if (!ASSERT_OK(err, "elf_resolve_syms_offsets_func"))
+		return;
+
+	opts.uprobe_multi.path = path;
+	opts.uprobe_multi.offsets = &offset;
+	opts.uprobe_multi.ref_ctr_offsets = &ref_ctr_offset;
+	opts.uprobe_multi.cnt = 1;
+
+	link_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	ASSERT_ERR(link_fd, "link_fd");
+
+	if (link_fd >= 0)
+		close(link_fd);
+}
+
+static short sema_1 __maybe_unused, sema_2 __maybe_unused;
+
+static void attach_fail_different_ref_ctr(struct uprobe_multi *skel)
+{
+	unsigned long *offset = NULL, *ref_ctr_offset_1 = NULL, *ref_ctr_offset_2 = NULL;
+	int prog_fd, link_fd_1 = -1, link_fd_2 = -1, err;
+	LIBBPF_OPTS(bpf_link_create_opts, opts);
+	const char *sym = "uprobe_multi_func_1";
+	const char *path = "/proc/self/exe";
+	const char *ref_1 = "sema_1";
+	const char *ref_2 = "sema_2";
+
+	/* wrong ref_ctr_offset */
+	prog_fd = bpf_program__fd(skel->progs.uprobe_extra);
+
+	err = elf_resolve_syms_offsets("/proc/self/exe", 1, &sym,
+				       &offset, STT_FUNC);
+	if (!ASSERT_OK(err, "elf_resolve_syms_offsets_func"))
+		goto cleanup;
+
+	err = elf_resolve_syms_offsets("/proc/self/exe", 1, &ref_1,
+				       &ref_ctr_offset_1, STT_OBJECT);
+	if (!ASSERT_OK(err, "elf_resolve_syms_offsets_sema_1"))
+		goto cleanup;
+
+	err = elf_resolve_syms_offsets("/proc/self/exe", 1, &ref_2,
+				       &ref_ctr_offset_2, STT_OBJECT);
+	if (!ASSERT_OK(err, "elf_resolve_syms_offsets_sema_2"))
+		goto cleanup;
+
+	opts.uprobe_multi.path = path;
+	opts.uprobe_multi.offsets = offset;
+	opts.uprobe_multi.ref_ctr_offsets = ref_ctr_offset_1;
+	opts.uprobe_multi.cnt = 1;
+
+	link_fd_1 = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	if (!ASSERT_GE(link_fd_1, 0, "link_fd_1"))
+		goto cleanup;
+
+	opts.uprobe_multi.ref_ctr_offsets = ref_ctr_offset_2;
+	link_fd_2 = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	ASSERT_ERR(link_fd_2, "link_fd_2");
+
+cleanup:
+	if (link_fd_2 >= 0)
+		close(link_fd_2);
+	if (link_fd_1 >= 0)
+		close(link_fd_1);
+
+	free(ref_ctr_offset_1);
+	free(ref_ctr_offset_2);
+	free(offset);
+}
+
+static void test_attach_fails(void)
+{
+	struct uprobe_multi *skel = NULL;
+
+	skel = uprobe_multi__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
+		return;
+
+	/* partial attach fail, x86_64 only so far */
+	attach_fail_partial(skel);
+
+	/* attach uprobe with wrong ref_ctr_offs */
+	attach_fail_wrong_ref_ctr(skel);
+
+	/* attach same uprobe with different ref_ctr_offs */
+	attach_fail_different_ref_ctr(skel);
+
+	uprobe_multi__destroy(skel);
+}
+
 static void __test_link_api(struct child *child)
 {
 	int prog_fd, link1_fd = -1, link2_fd = -1, link3_fd = -1, link4_fd = -1;
@@ -703,4 +835,6 @@ void test_uprobe_multi_test(void)
 		test_bench_attach_usdt();
 	if (test__start_subtest("attach_api_fails"))
 		test_attach_api_fails();
+	if (test__start_subtest("attach_fails"))
+		test_attach_fails();
 }
