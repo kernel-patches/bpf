@@ -37,3 +37,9 @@ int uprobe_3(struct pt_regs *ctx)
 	uprobe_result[3]++;
 	return 0;
 }
+
+SEC("uprobe.multi")
+int uprobe_error(struct pt_regs *ctx)
+{
+	return 0;
+}

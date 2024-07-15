@@ -781,6 +781,32 @@ static bool test_bit(int bit, unsigned long val)
 	return val & (1 << bit);
 }
 
+#define ERROR_BIT 4
+#define SUCCESS_MASK ((1 << ERROR_BIT) - 1)
+
+#ifdef __x86_64__
+static int uprobe_attach_error(struct uprobe_multi_consumers *skel)
+{
+	struct bpf_program **prog = &skel->progs.uprobe_error;
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+	struct bpf_link *link;
+
+	link = bpf_program__attach_uprobe_multi(*prog, 0, "/proc/self/exe",
+						"uprobe_multi_error_func",
+						&opts);
+	if (!ASSERT_ERR_PTR(link, "bpf_program__attach_uprobe_multi")) {
+		bpf_link__destroy(link);
+		return -1;
+	}
+	return 0;
+}
+#else
+static void uprobe_attach_error(struct uprobe_multi_consumers *skel)
+{
+	return 0;
+}
+#endif
+
 noinline int
 uprobe_session_consumer_test(struct uprobe_multi_consumers *skel,
 			     unsigned long before, unsigned long after)
@@ -800,6 +826,9 @@ uprobe_session_consumer_test(struct uprobe_multi_consumers *skel,
 				return -1;
 		}
 	}
+
+	if (test_bit(ERROR_BIT, after) && uprobe_attach_error(skel))
+		return -1;
 	return 0;
 }
 
@@ -808,7 +837,7 @@ static void session_consumer_test(struct uprobe_multi_consumers *skel,
 {
 	int err, bit;
 
-	printf("session_consumer_test before %lu after %lu\n", before, after);
+	printf("session_consumer_test:before %lu after %lu\n", before, after);
 
 	/* 'before' is each, we attach uprobe for every set bit */
 	for (bit = 0; bit < 4; bit++) {
@@ -818,9 +847,21 @@ static void session_consumer_test(struct uprobe_multi_consumers *skel,
 		}
 	}
 
+	if (test_bit(ERROR_BIT, before) && uprobe_attach_error(skel))
+		goto cleanup;
+
 	err = uprobe_session_consumer_test(skel, before, after);
 	if (!ASSERT_EQ(err, 0, "uprobe_session_consumer_test"))
 		goto cleanup;
+
+	if (test_bit(ERROR_BIT, before) || test_bit(ERROR_BIT, after)) {
+		printf("session_consumer_test:with error %s %s\n",
+			test_bit(ERROR_BIT, before) ? "before" : "",
+			test_bit(ERROR_BIT, after)  ? "after" : "");
+	}
+
+	before &= SUCCESS_MASK;
+	after  &= SUCCESS_MASK;
 
 	for (bit = 0; bit < 4; bit++) {
 		const char *fmt = "BUG";
@@ -914,8 +955,8 @@ static void test_consumers(void)
 	 * count based on before/after bits.
 	 */
 
-	for (before = 0; before < 16; before++) {
-		for (after = 0; after < 16; after++)
+	for (before = 0; before < 32; before++) {
+		for (after = 0; after < 32; after++)
 			session_consumer_test(skel, before, after);
 	}
 
