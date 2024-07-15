@@ -464,6 +464,95 @@ __naked void bad_helper_write(void)
 
 SEC("raw_tp")
 __arch_x86_64
+__xlated("1: *(u64 *)(r10 -16) = r1")
+__xlated("3: r0 = &(void __percpu *)(r0)")
+__xlated("5: r1 = *(u64 *)(r10 -16)")
+__success
+__naked void bad_probe_read_kernel_fixed_off(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	/* nocsr pattern with stack offset -24 */
+	"*(u64 *)(r10 - 16) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 16);"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = 1;"
+	"r3 = r10;"
+	"r3 += -16;"
+	/* read src is fp[-16], thus nocsr rewrite not applied */
+	"call %[bpf_probe_read_kernel];"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_probe_read_kernel)
+	: __clobber_all);
+}
+
+SEC("raw_tp")
+__arch_x86_64
+__xlated("2: r0 = &(void __percpu *)(r0)")
+__success
+__naked void good_probe_read_kernel_fixed_off(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	/* nocsr pattern with stack offset -24 */
+	"*(u64 *)(r10 - 24) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 24);"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = 1;"
+	"r3 = r10;"
+	"r3 += -16;"
+	/* read src is fp[-16], nocsr rewrite should be ok */
+	"call %[bpf_probe_read_kernel];"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_probe_read_kernel)
+	: __clobber_all);
+}
+
+SEC("raw_tp")
+__arch_x86_64
+__xlated("6: *(u64 *)(r10 -16) = r1")
+__xlated("8: r0 = &(void __percpu *)(r0)")
+__xlated("10: r1 = *(u64 *)(r10 -16)")
+__success
+__naked void bad_probe_read_kernel_var_off(void)
+{
+	asm volatile (
+	"r6 = *(u64 *)(r1 + 0);" /* random scalar value */
+	"r6 &= 0x7;"		 /* r6 range [0..7] */
+	"r6 += 0x2;"		 /* r6 range [2..9] */
+	"r7 = 0;"
+	"r7 -= r6;"		 /* r7 range [-9..-2] */
+	"r1 = 1;"
+	/* nocsr pattern with stack offset -24 */
+	"*(u64 *)(r10 - 16) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 16);"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = 1;"
+	"r3 = r10;"
+	"r3 += r7;"
+	/* read src is fp[-9..-2],
+	 * which touches range [-16..-9] reserved for nocsr rewrite
+	 */
+	"call %[bpf_probe_read_kernel_str];"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_probe_read_kernel_str)
+	: __clobber_all);
+}
+
+SEC("raw_tp")
+__arch_x86_64
 /* main, not patched */
 __xlated("1: *(u64 *)(r10 -8) = r1")
 __xlated("3: r0 = &(void __percpu *)(r0)")
