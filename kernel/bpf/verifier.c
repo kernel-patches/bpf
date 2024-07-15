@@ -8684,11 +8684,15 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 	if (arg_type == ARG_ANYTHING) {
+		/* return value depends on env->allow_ptr_leaks */
 		if (is_pointer_value(env, regno)) {
 			verbose(env, "R%d leaks addr into helper function\n",
 				regno);
 			return -EACCES;
 		}
+		if (reg->type == PTR_TO_STACK)
+			check_nocsr_stack_contract(env, cur_func(env), insn_idx,
+						   reg->smin_value + reg->off);
 		return 0;
 	}
 
