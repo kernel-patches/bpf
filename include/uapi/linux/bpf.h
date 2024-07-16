@@ -5792,6 +5792,41 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_send_signal_pid(u32 sig, u32 pid)
+ *	Description
+ *		Send signal *sig* to the thread corresponding to the
+ *		process id *pid*.
+ *	Return
+ *		0 on success or successfully queued.
+ *
+ *		**-EBUSY** if work queue under nmi is full.
+ *
+ *		**-EINVAL** if *sig* is invalid.
+ *
+ *		**-EPERM** if no permission to send the *sig*.
+ *
+ *		**-EAGAIN** if bpf program can try again.
+ *
+ *		**-ESRCH** if *pid* is invalid.
+ *
+ * long bpf_send_signal_tgid(u32 sig, u32 tgid)
+ *	Description
+ *		Send signal *sig* to the process corresponding to the
+ *		thread group id *tgid*.
+ *		The signal may be delivered to any of this process's threads.
+ *	Return
+ *		0 on success or successfully queued.
+ *
+ *		**-EBUSY** if work queue under nmi is full.
+ *
+ *		**-EINVAL** if *sig* is invalid.
+ *
+ *		**-EPERM** if no permission to send the *sig*.
+ *
+ *		**-EAGAIN** if bpf program can try again.
+ *
+ *		**-ESRCH** if *tgid* is invalid.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6006,6 +6041,8 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(send_signal_pid, 212, ##ctx)		\
+	FN(send_signal_tgid, 213, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
