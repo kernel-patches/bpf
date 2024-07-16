@@ -1563,6 +1563,7 @@ struct bpf_prog {
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	void __percpu		*private_stack_ptr;
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
@@ -1819,6 +1820,7 @@ static inline void bpf_module_put(const void *data, struct module *owner)
 		module_put(owner);
 }
 int bpf_struct_ops_link_create(union bpf_attr *attr);
+bool bpf_enable_private_stack(struct bpf_prog *prog);
 
 #ifdef CONFIG_NET
 /* Define it here to avoid the use of forward declaration */

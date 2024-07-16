@@ -1309,6 +1309,22 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+static void emit_private_frame_ptr(u8 **pprog, void *private_frame_ptr)
+{
+	u8 *prog = *pprog;
+
+	/* movabs r9, private_frame_ptr */
+	emit_mov_imm64(&prog, X86_REG_R9, (long) private_frame_ptr >> 32,
+		       (u32) (long) private_frame_ptr);
+
+	/* add <r9>, gs:[<off>] */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x03, 0x0c, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
@@ -1324,18 +1340,25 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int insn_cnt = bpf_prog->len;
 	bool seen_exit = false;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
+	u32 stack_depth = bpf_prog->aux->stack_depth;
+	void __percpu *private_frame_ptr = NULL;
 	u64 arena_vm_start, user_vm_start;
 	int i, excnt = 0;
 	int ilen, proglen = 0;
 	u8 *prog = temp;
 	int err;
 
+	if (bpf_prog->private_stack_ptr) {
+		private_frame_ptr = bpf_prog->private_stack_ptr + round_up(stack_depth, 8);
+		stack_depth = 0;
+	}
+
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
-	emit_prologue(&prog, bpf_prog->aux->stack_depth,
+	emit_prologue(&prog, stack_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
 		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
 	/* Exception callback will clobber callee regs for its own use, and
@@ -1357,6 +1380,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
 
+	if (private_frame_ptr)
+		emit_private_frame_ptr(&prog, private_frame_ptr);
+
 	ilen = prog - temp;
 	if (rw_image)
 		memcpy(rw_image + proglen, temp, ilen);
@@ -1375,6 +1401,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
+
+		if (private_frame_ptr) {
+			if (src_reg == BPF_REG_FP)
+				src_reg = X86_REG_R9;
+
+			if (dst_reg == BPF_REG_FP)
+				dst_reg = X86_REG_R9;
+		}
 
 		switch (insn->code) {
 			/* ALU */
@@ -2007,6 +2041,7 @@ populate_extable:
 				emit_mov_reg(&prog, is64, real_src_reg, BPF_REG_0);
 				/* Restore R0 after clobbering RAX */
 				emit_mov_reg(&prog, true, BPF_REG_0, BPF_REG_AX);
+
 				break;
 			}
 
@@ -2031,14 +2066,20 @@ populate_extable:
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (tail_call_reachable) {
-				RESTORE_TAIL_CALL_CNT(bpf_prog->aux->stack_depth);
+				RESTORE_TAIL_CALL_CNT(stack_depth);
 				ip += 7;
 			}
 			if (!imm32)
 				return -EINVAL;
+			if (private_frame_ptr) {
+				EMIT2(0x41, 0x51); /* push r9 */
+				ip += 2;
+			}
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (private_frame_ptr)
+				EMIT2(0x41, 0x59); /* pop r9 */
 			break;
 		}
 
@@ -2048,13 +2089,13 @@ populate_extable:
 							  &bpf_prog->aux->poke_tab[imm32 - 1],
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
-							  bpf_prog->aux->stack_depth,
+							  stack_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
 							    &prog,
 							    callee_regs_used,
-							    bpf_prog->aux->stack_depth,
+							    stack_depth,
 							    image + addrs[i - 1],
 							    ctx);
 			break;
@@ -3218,6 +3259,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	struct bpf_binary_header *rw_header = NULL;
 	struct bpf_binary_header *header = NULL;
+	void __percpu *private_stack_ptr = NULL;
 	struct bpf_prog *tmp, *orig_prog = prog;
 	struct x64_jit_data *jit_data;
 	int proglen, oldproglen = 0;
@@ -3284,6 +3326,15 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	ctx.cleanup_addr = proglen;
 skip_init_addrs:
 
+	if (bpf_enable_private_stack(prog) && !prog->private_stack_ptr) {
+		private_stack_ptr = __alloc_percpu_gfp(prog->aux->stack_depth, 8, GFP_KERNEL);
+		if (!private_stack_ptr) {
+			prog = orig_prog;
+			goto out_addrs;
+		}
+		prog->private_stack_ptr = private_stack_ptr;
+	}
+
 	/*
 	 * JITed image shrinks with every pass and the loop iterates
 	 * until the image stops shrinking. Very large BPF programs
@@ -3308,6 +3359,10 @@ out_image:
 				prog->bpf_func = NULL;
 				prog->jited = 0;
 				prog->jited_len = 0;
+			}
+			if (private_stack_ptr) {
+				free_percpu(private_stack_ptr);
+				prog->private_stack_ptr = NULL;
 			}
 			goto out_addrs;
 		}

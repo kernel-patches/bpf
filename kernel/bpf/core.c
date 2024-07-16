@@ -2813,6 +2813,26 @@ void bpf_prog_free(struct bpf_prog *fp)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_free);
 
+bool bpf_enable_private_stack(struct bpf_prog *prog)
+{
+	if (prog->aux->stack_depth <= 64)
+		return false;
+
+	switch (prog->aux->prog->type) {
+	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_TRACEPOINT:
+	case BPF_PROG_TYPE_PERF_EVENT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+		return true;
+	case BPF_PROG_TYPE_TRACING:
+		if (prog->expected_attach_type != BPF_TRACE_ITER)
+			return true;
+		fallthrough;
+	default:
+		return false;
+	}
+}
+
 /* RNG for unprivileged user space with separated state from prandom_u32(). */
 static DEFINE_PER_CPU(struct rnd_state, bpf_user_rnd_state);
 
