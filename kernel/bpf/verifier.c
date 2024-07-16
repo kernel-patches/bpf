@@ -13466,6 +13466,40 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 }
 
+/* Clears all trailing bits after the most significant unset bit.
+ *
+ * Used for estimating the minimum possible value after BPF_AND. This
+ * effectively rounds a negative value down to a negative power-of-2 value
+ * (except for -1, which just return -1) and returning 0 for non-negative
+ * values. E.g. negative32_bit_floor(0xff0ff0ff) == 0xff000000.
+ */
+static inline s32 negative32_bit_floor(s32 v)
+{
+	u8 bits = fls(~v); /* find most-significant unset bit */
+	u32 delta;
+
+	/* special case, needed because 1UL << 32 is undefined */
+	if (bits > 31)
+		return 0;
+
+	delta = (1UL << bits) - 1;
+	return ~delta;
+}
+
+/* Same as negative32_bit_floor() above, but for 64-bit signed value */
+static inline s64 negative_bit_floor(s64 v)
+{
+	u8 bits = fls64(~v); /* find most-significant unset bit */
+	u64 delta;
+
+	/* special case, needed because 1ULL << 64 is undefined */
+	if (bits > 63)
+		return 0;
+
+	delta = (1ULL << bits) - 1;
+	return ~delta;
+}
+
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -13485,16 +13519,10 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	dst_reg->u32_min_value = var32_off.value;
 	dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
 
-	/* Safe to set s32 bounds by casting u32 result into s32 when u32
-	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
-	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
-	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
-	}
+	/* Rough estimate tuned for [-1, 0] & -CONSTANT cases. */
+	dst_reg->s32_min_value = negative32_bit_floor(min(dst_reg->s32_min_value,
+							  src_reg->s32_min_value));
+	dst_reg->s32_max_value = max(dst_reg->s32_max_value, src_reg->s32_max_value);
 }
 
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
@@ -13515,16 +13543,11 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	dst_reg->umin_value = dst_reg->var_off.value;
 	dst_reg->umax_value = min(dst_reg->umax_value, umax_val);
 
-	/* Safe to set s64 bounds by casting u64 result into s64 when u64
-	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
-	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
-	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
-	}
+	/* Rough estimate tuned for [-1, 0] & -CONSTANT cases. */
+	dst_reg->smin_value = negative_bit_floor(min(dst_reg->smin_value,
+						     src_reg->smin_value));
+	dst_reg->smax_value = max(dst_reg->smax_value, src_reg->smax_value);
+
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
 }
