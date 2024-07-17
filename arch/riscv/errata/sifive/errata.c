@@ -112,8 +112,8 @@ void sifive_errata_patch_func(struct alt_entry *begin, struct alt_entry *end,
 		tmp = (1U << alt->patch_id);
 		if (cpu_req_errata & tmp) {
 			mutex_lock(&text_mutex);
-			patch_text_nosync(ALT_OLD_PTR(alt), ALT_ALT_PTR(alt),
-					  alt->alt_len);
+			patch_insn_write(ALT_OLD_PTR(alt), ALT_ALT_PTR(alt),
+					 alt->alt_len);
 			mutex_unlock(&text_mutex);
 			cpu_apply_errata |= tmp;
 		}

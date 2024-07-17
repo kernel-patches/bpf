@@ -36,6 +36,6 @@ void arch_jump_label_transform(struct jump_entry *entry,
 	}
 
 	mutex_lock(&text_mutex);
-	patch_text_nosync(addr, &insn, sizeof(insn));
+	patch_insn_write(addr, &insn, sizeof(insn));
 	mutex_unlock(&text_mutex);
 }

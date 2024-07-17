@@ -177,7 +177,7 @@ static int __patch_insn_write(void *addr, const void *insn, size_t len)
 NOKPROBE_SYMBOL(__patch_insn_write);
 #endif /* CONFIG_MMU */
 
-static int patch_insn_set(void *addr, u8 c, size_t len)
+int patch_insn_set(void *addr, u8 c, size_t len)
 {
 	size_t patched = 0;
 	size_t size;
@@ -197,17 +197,6 @@ static int patch_insn_set(void *addr, u8 c, size_t len)
 	return ret;
 }
 NOKPROBE_SYMBOL(patch_insn_set);
-
-int patch_text_set_nosync(void *addr, u8 c, size_t len)
-{
-	u32 *tp = addr;
-	int ret;
-
-	ret = patch_insn_set(tp, c, len);
-
-	return ret;
-}
-NOKPROBE_SYMBOL(patch_text_set_nosync);
 
 int patch_insn_write(void *addr, const void *insn, size_t len)
 {
@@ -229,17 +218,6 @@ int patch_insn_write(void *addr, const void *insn, size_t len)
 	return ret;
 }
 NOKPROBE_SYMBOL(patch_insn_write);
-
-int patch_text_nosync(void *addr, const void *insns, size_t len)
-{
-	u32 *tp = addr;
-	int ret;
-
-	ret = patch_insn_write(tp, insns, len);
-
-	return ret;
-}
-NOKPROBE_SYMBOL(patch_text_nosync);
 
 static int patch_text_cb(void *data)
 {

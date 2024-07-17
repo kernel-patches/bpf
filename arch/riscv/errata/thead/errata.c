@@ -182,7 +182,7 @@ void thead_errata_patch_func(struct alt_entry *begin, struct alt_entry *end,
 				memcpy(oldptr, altptr, alt->alt_len);
 			} else {
 				mutex_lock(&text_mutex);
-				patch_text_nosync(oldptr, altptr, alt->alt_len);
+				patch_insn_write(oldptr, altptr, alt->alt_len);
 				mutex_unlock(&text_mutex);
 			}
 		}

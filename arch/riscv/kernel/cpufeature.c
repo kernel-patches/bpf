@@ -795,7 +795,7 @@ void __init_or_module riscv_cpufeature_patch_func(struct alt_entry *begin,
 		altptr = ALT_ALT_PTR(alt);
 
 		mutex_lock(&text_mutex);
-		patch_text_nosync(oldptr, altptr, alt->alt_len);
+		patch_insn_write(oldptr, altptr, alt->alt_len);
 		riscv_alternative_fix_offsets(oldptr, alt->alt_len, oldptr - altptr);
 		mutex_unlock(&text_mutex);
 	}
