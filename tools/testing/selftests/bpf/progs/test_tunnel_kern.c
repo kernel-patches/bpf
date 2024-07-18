@@ -26,10 +26,20 @@
  */
 #define ASSIGNED_ADDR_VETH1 0xac1001c8
 
+struct bpf_fou_encap___local {
+       __be16 sport;
+       __be16 dport;
+};
+
+enum bpf_fou_encap_type___local {
+       FOU_BPF_ENCAP_FOU___local,
+       FOU_BPF_ENCAP_GUE___local,
+};
+
 int bpf_skb_set_fou_encap(struct __sk_buff *skb_ctx,
-			  struct bpf_fou_encap *encap, int type) __ksym;
+			  struct bpf_fou_encap___local *encap, int type) __ksym;
 int bpf_skb_get_fou_encap(struct __sk_buff *skb_ctx,
-			  struct bpf_fou_encap *encap) __ksym;
+			  struct bpf_fou_encap___local *encap) __ksym;
 struct xfrm_state *
 bpf_xdp_get_xfrm_state(struct xdp_md *ctx, struct bpf_xfrm_state_opts *opts,
 		       u32 opts__sz) __ksym;
@@ -745,7 +755,7 @@ SEC("tc")
 int ipip_gue_set_tunnel(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key key = {};
-	struct bpf_fou_encap encap = {};
+	struct bpf_fou_encap___local encap = {};
 	void *data = (void *)(long)skb->data;
 	struct iphdr *iph = data;
 	void *data_end = (void *)(long)skb->data_end;
@@ -769,7 +779,7 @@ int ipip_gue_set_tunnel(struct __sk_buff *skb)
 	encap.sport = 0;
 	encap.dport = bpf_htons(5555);
 
-	ret = bpf_skb_set_fou_encap(skb, &encap, FOU_BPF_ENCAP_GUE);
+	ret = bpf_skb_set_fou_encap(skb, &encap, FOU_BPF_ENCAP_GUE___local);
 	if (ret < 0) {
 		log_err(ret);
 		return TC_ACT_SHOT;
@@ -782,7 +792,7 @@ SEC("tc")
 int ipip_fou_set_tunnel(struct __sk_buff *skb)
 {
 	struct bpf_tunnel_key key = {};
-	struct bpf_fou_encap encap = {};
+	struct bpf_fou_encap___local encap = {};
 	void *data = (void *)(long)skb->data;
 	struct iphdr *iph = data;
 	void *data_end = (void *)(long)skb->data_end;
@@ -806,7 +816,7 @@ int ipip_fou_set_tunnel(struct __sk_buff *skb)
 	encap.sport = 0;
 	encap.dport = bpf_htons(5555);
 
-	ret = bpf_skb_set_fou_encap(skb, &encap, FOU_BPF_ENCAP_FOU);
+	ret = bpf_skb_set_fou_encap(skb, &encap, FOU_BPF_ENCAP_FOU___local);
 	if (ret < 0) {
 		log_err(ret);
 		return TC_ACT_SHOT;
@@ -820,7 +830,7 @@ int ipip_encap_get_tunnel(struct __sk_buff *skb)
 {
 	int ret;
 	struct bpf_tunnel_key key = {};
-	struct bpf_fou_encap encap = {};
+	struct bpf_fou_encap___local encap = {};
 
 	ret = bpf_skb_get_tunnel_key(skb, &key, sizeof(key), 0);
 	if (ret < 0) {
