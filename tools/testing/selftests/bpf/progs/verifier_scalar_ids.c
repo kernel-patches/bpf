@@ -25,7 +25,7 @@ __msg("frame0: regs=r0 stack= before 4: (25) if r1 > 0x7 goto pc+0")
 /* parent state already has r{0,1,2} as precise */
 __msg("frame0: parent state regs= stack=:")
 __flag(BPF_F_TEST_STATE_FREQ)
-__naked void equal_scalars_bpf_k(void)
+__naked void linked_regs_bpf_k(void)
 {
 	asm volatile (
 	/* r0 = random number up to 0xff */
@@ -124,7 +124,7 @@ __msg("frame0: parent state regs=r0 stack=:")
 __msg("frame0: regs=r0 stack= before 5: (25) if r0 > 0x7 goto pc+0")
 __msg("frame0: parent state regs=r0,r2 stack=:")
 __flag(BPF_F_TEST_STATE_FREQ)
-__naked void equal_scalars_broken_link(void)
+__naked void linked_regs_broken_link(void)
 {
 	asm volatile (
 	/* r0 = random number up to 0xff */
