@@ -5792,6 +5792,25 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_file_d_path(void *file, char *dst, u32 size)
+ *	Description
+ *		Return full path for the given *file* object.
+ *
+ *		In order to solve issues where certain eBPF programs can not include
+ *		the definition of struct file or vmlinux.h
+ *		due to their complexity and conflicts on some operating system,
+ *		the variable *file* here is declared as type void*
+ *		instead of the traditional struct file*.
+ *		It will be forcibly converted into type struct file* later.
+ *
+ *		If the path is larger than *size*, then only *size*
+ *		bytes will be copied to *dst*
+ *
+ *	Return
+ *		On success, the strictly positive length of the string,
+ *		including the trailing NULL character. On error, a negative
+ *		value.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6006,6 +6025,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(file_d_path, 212, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

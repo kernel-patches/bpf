@@ -1257,6 +1257,38 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_3(bpf_file_d_path, void *, file, char*, dst, u32, size)
+{
+	long len;
+	struct file copy;
+	char *ptr;
+
+	if (!size)
+		return 0;
+
+	len = copy_from_kernel_nofault(&copy, (struct file *)file, sizeof(struct file));
+	if (len < 0)
+		return len;
+
+	ptr = d_path(&(copy.f_path), dst, size);
+	if (IS_ERR(ptr)) {
+		len = PTR_ERR(ptr);
+	} else {
+		len = dst + size - ptr;
+		memmove(dst, ptr, len);
+	}
+	return len;
+}
+
+const struct bpf_func_proto bpf_file_d_path_proto = {
+	.func		= bpf_file_d_path,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_PTR_TO_MEM,
+	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
+};
+
 #ifdef CONFIG_KEYS
 __bpf_kfunc_start_defs();
 
@@ -1629,6 +1661,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_find_vma_proto;
 	case BPF_FUNC_trace_vprintk:
 		return bpf_get_trace_vprintk_proto();
+	case BPF_FUNC_file_d_path:
+		return &bpf_file_d_path_proto;
 	default:
 		return bpf_base_func_proto(func_id, prog);
 	}
