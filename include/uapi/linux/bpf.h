@@ -1409,6 +1409,9 @@ enum {
 
 /* Do not translate kernel bpf_arena pointers to user pointers */
 	BPF_F_NO_USER_CONV	= (1U << 18),
+
+/* Disable private stack */
+	BPF_F_DISABLE_PRIVATE_STACK	= (1U << 19),
 };
 
 /* Flags for BPF_PROG_QUERY. */

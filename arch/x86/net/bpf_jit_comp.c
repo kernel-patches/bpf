@@ -3327,7 +3327,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 skip_init_addrs:
 
 	if (bpf_enable_private_stack(prog) && !prog->private_stack_ptr) {
-		private_stack_ptr = __alloc_percpu_gfp(prog->aux->stack_depth, 8, GFP_KERNEL);
+		if (prog->aux->stack_depth == 0)
+			private_stack_ptr = __alloc_percpu_gfp(8, 8, GFP_KERNEL);
+		else
+			private_stack_ptr = __alloc_percpu_gfp(prog->aux->stack_depth, 8, GFP_KERNEL);
 		if (!private_stack_ptr) {
 			prog = orig_prog;
 			goto out_addrs;
