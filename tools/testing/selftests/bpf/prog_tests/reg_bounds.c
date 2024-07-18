@@ -441,6 +441,20 @@ static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t,
 	if (t_is_32(y_t) && !t_is_32(x_t)) {
 		struct range x_swap;
 
+		/* If we know that
+		 *   - *x* is in the range of signed 32bit value
+		 *   - *y_cast* range is 32-bit sign non-negative, and
+		 * then *x* range can be narrowed to the interaction of
+		 * *x* and *y_cast*. Otherwise, if the new range for *x*
+		 * allows upper 32-bit 0xffffffff then the eventual new
+		 * range for *x* will be out of signed 32-bit range
+		 * which violates the origin *x* range.
+		 */
+		if (x_t == S64 && y_t == S32 &&
+		    !(y_cast.a & 0xffffffff80000000ULL) && !(y_cast.b & 0xffffffff80000000) &&
+		    (long long)x.a >= S32_MIN && (long long)x.b <= S32_MAX)
+			return range_improve(x_t, x, y_cast);
+
 		/* some combinations of upper 32 bits and sign bit can lead to
 		 * invalid ranges, in such cases it's easier to detect them
 		 * after cast/swap than try to enumerate all the conditions
@@ -2108,6 +2122,9 @@ static struct subtest_case crafted_cases[] = {
 	{S32, U32, {(u32)S32_MIN, 0}, {0, 0}},
 	{S32, U32, {(u32)S32_MIN, 0}, {(u32)S32_MIN, (u32)S32_MIN}},
 	{S32, U32, {(u32)S32_MIN, S32_MAX}, {S32_MAX, S32_MAX}},
+	{S64, U32, {0x0, 0x1f}, {0xffffffff80000000ULL, 0x000000007fffffffULL}},
+	{S64, U32, {0x0, 0x1f}, {0xffffffffffff8000ULL, 0x0000000000007fffULL}},
+	{S64, U32, {0x0, 0x1f}, {0xffffffffffffff80ULL, 0x000000000000007fULL}},
 };
 
 /* Go over crafted hard-coded cases. This is fast, so we do it as part of
