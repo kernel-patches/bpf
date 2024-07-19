@@ -6,7 +6,6 @@
  * Copyright: linyunsheng@huawei.com
  */
 
-#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -16,6 +15,7 @@
 #include <linux/log2.h>
 #include <linux/completion.h>
 #include <linux/kthread.h>
+#include <linux/page_frag_cache.h>
 
 #define OBJPOOL_NR_OBJECT_MAX	BIT(24)
 
