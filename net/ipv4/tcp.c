@@ -1189,13 +1189,17 @@ new_segment:
 		if (zc == 0) {
 			bool merge = true;
 			int i = skb_shinfo(skb)->nr_frags;
-			struct page_frag *pfrag = sk_page_frag(sk);
+			struct page_frag_cache *pfrag = sk_page_frag(sk);
+			unsigned int frag_offset, frag_size;
+			struct page *page;
+			void *va;
 
-			if (!sk_page_frag_refill(sk, pfrag))
+			page = sk_page_frag_alloc_prepare(sk, pfrag, &frag_offset,
+							  &frag_size, &va);
+			if (!page)
 				goto wait_for_space;
 
-			if (!skb_can_coalesce(skb, i, pfrag->page,
-					      pfrag->offset)) {
+			if (!skb_can_coalesce(skb, i, page, frag_offset)) {
 				if (i >= READ_ONCE(net_hotdata.sysctl_max_skb_frags)) {
 					tcp_mark_push(tp, skb);
 					goto new_segment;
@@ -1203,7 +1207,7 @@ new_segment:
 				merge = false;
 			}
 
-			copy = min_t(int, copy, pfrag->size - pfrag->offset);
+			copy = min_t(int, copy, frag_size);
 
 			if (unlikely(skb_zcopy_pure(skb) || skb_zcopy_managed(skb))) {
 				if (tcp_downgrade_zcopy_pure(sk, skb))
@@ -1216,20 +1220,18 @@ new_segment:
 				goto wait_for_space;
 
 			err = skb_copy_to_va_nocache(sk, &msg->msg_iter, skb,
-						     page_address(pfrag->page) +
-						     pfrag->offset, copy);
+						     va, copy);
 			if (err)
 				goto do_error;
 
 			/* Update the skb. */
 			if (merge) {
 				skb_frag_size_add(&skb_shinfo(skb)->frags[i - 1], copy);
+				page_frag_alloc_commit_noref(pfrag, copy);
 			} else {
-				skb_fill_page_desc(skb, i, pfrag->page,
-						   pfrag->offset, copy);
-				page_ref_inc(pfrag->page);
+				skb_fill_page_desc(skb, i, page, frag_offset, copy);
+				page_frag_alloc_commit(pfrag, copy);
 			}
-			pfrag->offset += copy;
 		} else if (zc == MSG_ZEROCOPY)  {
 			/* First append to a fragless skb builds initial
 			 * pure zerocopy skb
@@ -3131,11 +3133,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 
 	WARN_ON(inet->inet_num && !icsk->icsk_bind_hash);
 
-	if (sk->sk_frag.page) {
-		put_page(sk->sk_frag.page);
-		sk->sk_frag.page = NULL;
-		sk->sk_frag.offset = 0;
-	}
+	page_frag_cache_drain(&sk->sk_frag);
 	sk_error_report(sk);
 	return 0;
 }

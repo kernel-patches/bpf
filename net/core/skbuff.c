@@ -3037,25 +3037,6 @@ static void sock_spd_release(struct splice_pipe_desc *spd, unsigned int i)
 	put_page(spd->pages[i]);
 }
 
-static struct page *linear_to_page(struct page *page, unsigned int *len,
-				   unsigned int *offset,
-				   struct sock *sk)
-{
-	struct page_frag *pfrag = sk_page_frag(sk);
-
-	if (!sk_page_frag_refill(sk, pfrag))
-		return NULL;
-
-	*len = min_t(unsigned int, *len, pfrag->size - pfrag->offset);
-
-	memcpy(page_address(pfrag->page) + pfrag->offset,
-	       page_address(page) + *offset, *len);
-	*offset = pfrag->offset;
-	pfrag->offset += *len;
-
-	return pfrag->page;
-}
-
 static bool spd_can_coalesce(const struct splice_pipe_desc *spd,
 			     struct page *page,
 			     unsigned int offset)
@@ -3064,6 +3045,38 @@ static bool spd_can_coalesce(const struct splice_pipe_desc *spd,
 		spd->pages[spd->nr_pages - 1] == page &&
 		(spd->partial[spd->nr_pages - 1].offset +
 		 spd->partial[spd->nr_pages - 1].len == offset);
+}
+
+static bool spd_fill_linear_page(struct splice_pipe_desc *spd,
+				 struct page *page, unsigned int offset,
+				 unsigned int *len, struct sock *sk)
+{
+	struct page_frag_cache *pfrag = sk_page_frag(sk);
+	unsigned int frag_len, frag_offset;
+	struct page *frag_page;
+	void *va;
+
+	frag_page = sk_page_frag_alloc_prepare(sk, pfrag, &frag_offset,
+					       &frag_len, &va);
+	if (!frag_page)
+		return true;
+
+	*len = min_t(unsigned int, *len, frag_len);
+	memcpy(va, page_address(page) + offset, *len);
+
+	if (spd_can_coalesce(spd, frag_page, frag_offset)) {
+		spd->partial[spd->nr_pages - 1].len += *len;
+		page_frag_alloc_commit_noref(pfrag, *len);
+		return false;
+	}
+
+	page_frag_alloc_commit(pfrag, *len);
+	spd->pages[spd->nr_pages] = frag_page;
+	spd->partial[spd->nr_pages].len = *len;
+	spd->partial[spd->nr_pages].offset = frag_offset;
+	spd->nr_pages++;
+
+	return false;
 }
 
 /*
@@ -3078,11 +3091,9 @@ static bool spd_fill_page(struct splice_pipe_desc *spd,
 	if (unlikely(spd->nr_pages == MAX_SKB_FRAGS))
 		return true;
 
-	if (linear) {
-		page = linear_to_page(page, len, &offset, sk);
-		if (!page)
-			return true;
-	}
+	if (linear)
+		return spd_fill_linear_page(spd, page, offset, len,  sk);
+
 	if (spd_can_coalesce(spd, page, offset)) {
 		spd->partial[spd->nr_pages - 1].len += *len;
 		return false;
