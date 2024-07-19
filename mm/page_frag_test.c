@@ -276,7 +276,7 @@ static int page_frag_pop_thread(void *arg)
 
 		if (obj) {
 			nr--;
-			page_frag_free(obj);
+			page_frag_free_va(obj);
 		} else {
 			cond_resched();
 		}
@@ -304,13 +304,16 @@ static int page_frag_push_thread(void *arg)
 		int ret;
 
 		if (test_align) {
-			va = page_frag_alloc_align(&test_frag, test_alloc_len,
-						   GFP_KERNEL, SMP_CACHE_BYTES);
+			va = page_frag_alloc_va_align(&test_frag,
+						      test_alloc_len,
+						      GFP_KERNEL,
+						      SMP_CACHE_BYTES);
 
 			WARN_ONCE((unsigned long)va & (SMP_CACHE_BYTES - 1),
 				  "unaligned va returned\n");
 		} else {
-			va = page_frag_alloc(&test_frag, test_alloc_len, GFP_KERNEL);
+			va = page_frag_alloc_va(&test_frag, test_alloc_len,
+						GFP_KERNEL);
 		}
 
 		if (!va)
@@ -318,7 +321,7 @@ static int page_frag_push_thread(void *arg)
 
 		ret = objpool_push(va, pool);
 		if (ret) {
-			page_frag_free(va);
+			page_frag_free_va(va);
 			cond_resched();
 		} else {
 			nr--;
