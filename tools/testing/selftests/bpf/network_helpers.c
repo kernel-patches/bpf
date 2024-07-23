@@ -206,41 +206,62 @@ void free_fds(int *fds, unsigned int nr_close_fds)
 	}
 }
 
-int fastopen_connect(int server_fd, const char *data, unsigned int data_len,
-		     int timeout_ms)
+static int send_to_addr(int type, const void *data, size_t datalen, int flags,
+			const struct sockaddr_storage *addr, socklen_t addrlen,
+			const struct network_helper_opts *opts)
 {
-	struct sockaddr_storage addr;
-	socklen_t addrlen = sizeof(addr);
-	struct sockaddr_in *addr_in;
 	int fd, ret;
 
-	if (getsockname(server_fd, (struct sockaddr *)&addr, &addrlen)) {
-		log_err("Failed to get server addr");
-		return -1;
-	}
-
-	addr_in = (struct sockaddr_in *)&addr;
-	fd = socket(addr_in->sin_family, SOCK_STREAM, 0);
+	fd = client_socket(addr->ss_family, type, opts);
 	if (fd < 0) {
 		log_err("Failed to create client socket");
 		return -1;
 	}
 
-	if (settimeo(fd, timeout_ms))
-		goto error_close;
-
-	ret = sendto(fd, data, data_len, MSG_FASTOPEN, (struct sockaddr *)&addr,
-		     addrlen);
-	if (ret != data_len) {
-		log_err("sendto(data, %u) != %d\n", data_len, ret);
-		goto error_close;
+	ret = sendto(fd, data, datalen, flags,
+		     (const struct sockaddr *)addr, addrlen);
+	if (ret != datalen) {
+		log_err("Failed to send to server");
+		save_errno_close(fd);
+		return -1;
 	}
 
 	return fd;
+}
 
-error_close:
-	save_errno_close(fd);
-	return -1;
+int send_to_fd_opts(int server_fd, const void *data, size_t datalen, int flags,
+		    const struct network_helper_opts *opts)
+{
+	struct sockaddr_storage addr;
+	socklen_t addrlen, optlen;
+	int type;
+
+	if (!opts)
+		opts = &default_opts;
+
+	optlen = sizeof(type);
+	if (getsockopt(server_fd, SOL_SOCKET, SO_TYPE, &type, &optlen)) {
+		log_err("getsockopt(SOL_TYPE)");
+		return -1;
+	}
+
+	addrlen = sizeof(addr);
+	if (getsockname(server_fd, (struct sockaddr *)&addr, &addrlen)) {
+		log_err("Failed to get server addr");
+		return -1;
+	}
+
+	return send_to_addr(type, data, datalen, flags, &addr, addrlen, opts);
+}
+
+int fastopen_connect(int server_fd, const char *data, unsigned int data_len,
+		     int timeout_ms)
+{
+	struct network_helper_opts opts = {
+		.timeout_ms = timeout_ms,
+	};
+
+	return send_to_fd_opts(server_fd, data, data_len, MSG_FASTOPEN, &opts);
 }
 
 int client_socket(int family, int type,
