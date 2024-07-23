@@ -765,6 +765,10 @@ get_program(struct uprobe_multi_consumers *skel, int prog)
 		return skel->progs.uprobe_2;
 	case 3:
 		return skel->progs.uprobe_3;
+	case 4:
+		return skel->progs.uprobe_4;
+	case 5:
+		return skel->progs.uprobe_5;
 	default:
 		ASSERT_FAIL("get_program");
 		return NULL;
@@ -783,6 +787,10 @@ get_link(struct uprobe_multi_consumers *skel, int link)
 		return &skel->links.uprobe_2;
 	case 3:
 		return &skel->links.uprobe_3;
+	case 4:
+		return &skel->links.uprobe_4;
+	case 5:
+		return &skel->links.uprobe_5;
 	default:
 		ASSERT_FAIL("get_link");
 		return NULL;
@@ -801,8 +809,10 @@ static int uprobe_attach(struct uprobe_multi_consumers *skel, int idx)
 	/*
 	 * bit/prog: 0,1 uprobe entry
 	 * bit/prog: 2,3 uprobe return
+	 * bit/prog: 4,5 uprobe session
 	 */
 	opts.retprobe = idx == 2 || idx == 3;
+	opts.session  = idx == 4 || idx == 5;
 
 	*link = bpf_program__attach_uprobe_multi(prog, 0, "/proc/self/exe",
 						"uprobe_consumer_test",
@@ -832,13 +842,13 @@ uprobe_consumer_test(struct uprobe_multi_consumers *skel,
 	int idx;
 
 	/* detach uprobe for each unset programs in 'before' state ... */
-	for (idx = 0; idx < 4; idx++) {
+	for (idx = 0; idx < 6; idx++) {
 		if (test_bit(idx, before) && !test_bit(idx, after))
 			uprobe_detach(skel, idx);
 	}
 
 	/* ... and attach all new programs in 'after' state */
-	for (idx = 0; idx < 4; idx++) {
+	for (idx = 0; idx < 6; idx++) {
 		if (!test_bit(idx, before) && test_bit(idx, after)) {
 			if (!ASSERT_OK(uprobe_attach(skel, idx), "uprobe_attach_after"))
 				return -1;
@@ -855,7 +865,7 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	printf("consumer_test before %lu after %lu\n", before, after);
 
 	/* 'before' is each, we attach uprobe for every set idx */
-	for (idx = 0; idx < 4; idx++) {
+	for (idx = 0; idx < 6; idx++) {
 		if (test_bit(idx, before)) {
 			if (!ASSERT_OK(uprobe_attach(skel, idx), "uprobe_attach_before"))
 				goto cleanup;
@@ -866,7 +876,7 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	if (!ASSERT_EQ(err, 0, "uprobe_consumer_test"))
 		goto cleanup;
 
-	for (idx = 0; idx < 4; idx++) {
+	for (idx = 0; idx < 6; idx++) {
 		const char *fmt = "BUG";
 		__u64 val = 0;
 
@@ -878,18 +888,38 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 			if (test_bit(idx, before))
 				val++;
 			fmt = "prog 0/1: uprobe";
-		} else {
+		} else if (idx < 4) {
 			/*
 			 * to trigger uretprobe consumer, the uretprobe needs to be installed,
 			 * which means one of the 'return' uprobes was alive when probe was hit:
 			 *
-			 *   idxs: 2/3 uprobe return in 'installed' mask
+			 *   idxs: 2/3/4 uprobe return in 'installed' mask
 			 */
-			unsigned long had_uretprobes  = before & 0b1100; /* is uretprobe installed */
+			unsigned long had_uretprobes  = before & 0b011100; /* is uretprobe installed */
 
 			if (had_uretprobes && test_bit(idx, after))
 				val++;
 			fmt = "idx 2/3: uretprobe";
+		} else if (idx == 4) {
+			/*
+			 * session with return
+			 *  +1 if defined in 'before'
+			 *  +1 if defined in 'after'
+			 */
+			if (test_bit(idx, before)) {
+				val++;
+				if (test_bit(idx, after))
+					val++;
+			}
+			fmt = "idx 4  : session with return";
+		} else if (idx == 5) {
+			/*
+			 * session without return
+			 *   +1 if defined in 'before'
+			 */
+			if (test_bit(idx, before))
+				val++;
+			fmt = "idx 5  : session with NO return";
 		}
 
 		if (!ASSERT_EQ(skel->bss->uprobe_result[idx], val, fmt))
@@ -900,7 +930,7 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	ret = 0;
 
 cleanup:
-	for (idx = 0; idx < 4; idx++)
+	for (idx = 0; idx < 6; idx++)
 		uprobe_detach(skel, idx);
 	return ret;
 }
@@ -920,40 +950,45 @@ static void test_consumers(void)
 	 *
 	 *  - 2 uprobe entry consumer
 	 *  - 2 uprobe exit consumers
+	 *  - 2 uprobe session consumers
 	 *
-	 * The test uses 4 uprobes attached on single function, but that
-	 * translates into single uprobe with 4 consumers in kernel.
+	 * The test uses 6 uprobes attached on single function, but that
+	 * translates into single uprobe with 6 consumers in kernel.
 	 *
 	 * The before/after values present the state of attached consumers
 	 * before and after the probed function:
 	 *
 	 *  bit/prog 0,1 : uprobe entry
 	 *  bit/prog 2,3 : uprobe return
+	 *  bit/prog 4   : uprobe session with return
+	 *  bit/prog 5   : uprobe session without return
 	 *
 	 * For example for:
 	 *
-	 *   before = 0b0101
-	 *   after  = 0b0110
+	 *   before = 0b010101
+	 *   after  = 0b000110
 	 *
 	 * it means that before we call 'uprobe_consumer_test' we attach
 	 * uprobes defined in 'before' value:
 	 *
 	 *   - bit/prog 0: uprobe entry
 	 *   - bit/prog 2: uprobe return
+	 *   - bit/prog 4: uprobe session with return
 	 *
 	 * uprobe_consumer_test is called and inside it we attach and detach
 	 * uprobes based on 'after' value:
 	 *
 	 *   - bit/prog 0: stays untouched
 	 *   - bit/prog 2: uprobe return is detached
+	 *   - bit/prog 4: uprobe session is detached
 	 *
 	 * uprobe_consumer_test returns and we check counters values increased
 	 * by bpf programs on each uprobe to match the expected count based on
 	 * before/after bits.
 	 */
 
-	for (before = 0; before < 16; before++) {
-		for (after = 0; after < 16; after++)
+	for (before = 0; before < 64; before++) {
+		for (after = 0; after < 64; after++)
 			if (consumer_test(skel, before, after))
 				goto out;
 	}
