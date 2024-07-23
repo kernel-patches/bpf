@@ -761,6 +761,10 @@ get_program(struct uprobe_multi_consumers *skel, int prog)
 		return skel->progs.uprobe_0;
 	case 1:
 		return skel->progs.uprobe_1;
+	case 2:
+		return skel->progs.uprobe_2;
+	case 3:
+		return skel->progs.uprobe_3;
 	default:
 		ASSERT_FAIL("get_program");
 		return NULL;
@@ -775,6 +779,10 @@ get_link(struct uprobe_multi_consumers *skel, int link)
 		return &skel->links.uprobe_0;
 	case 1:
 		return &skel->links.uprobe_1;
+	case 2:
+		return &skel->links.uprobe_2;
+	case 3:
+		return &skel->links.uprobe_3;
 	default:
 		ASSERT_FAIL("get_link");
 		return NULL;
@@ -793,8 +801,11 @@ static int uprobe_attach(struct uprobe_multi_consumers *skel, int idx)
 	/*
 	 * bit/prog: 0 uprobe entry
 	 * bit/prog: 1 uprobe return
+	 * bit/prog: 2 uprobe session without return
+	 * bit/prog: 3 uprobe session with return
 	 */
 	opts.retprobe = idx == 1;
+	opts.session  = idx == 2 || idx == 3;
 
 	*link = bpf_program__attach_uprobe_multi(prog, 0, "/proc/self/exe",
 						"uprobe_consumer_test",
@@ -824,7 +835,7 @@ uprobe_consumer_test(struct uprobe_multi_consumers *skel,
 	int idx;
 
 	/* detach uprobe for each unset programs in 'before' state ... */
-	for (idx = 0; idx < 1; idx++) {
+	for (idx = 0; idx < 4; idx++) {
 		if (test_bit(idx, before) && !test_bit(idx, after))
 			uprobe_detach(skel, idx);
 	}
@@ -847,7 +858,7 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	printf("consumer_test before %lu after %lu\n", before, after);
 
 	/* 'before' is each, we attach uprobe for every set idx */
-	for (idx = 0; idx < 1; idx++) {
+	for (idx = 0; idx < 4; idx++) {
 		if (test_bit(idx, before)) {
 			if (!ASSERT_OK(uprobe_attach(skel, idx), "uprobe_attach_before"))
 				goto cleanup;
@@ -858,11 +869,13 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	if (!ASSERT_EQ(err, 0, "uprobe_consumer_test"))
 		goto cleanup;
 
-	for (idx = 0; idx < 1; idx++) {
+	for (idx = 0; idx < 4; idx++) {
+		unsigned long had_uretprobes;
 		const char *fmt = "BUG";
 		__u64 val = 0;
 
-		if (idx == 0) {
+		switch (idx) {
+		case 0:
 			/*
 			 * uprobe entry
 			 *   +1 if define in 'before'
@@ -870,18 +883,42 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 			if (test_bit(idx, before))
 				val++;
 			fmt = "prog 0: uprobe";
-		} else {
+			break;
+		case 1:
 			/*
 			 * to trigger uretprobe consumer, the uretprobe needs to be installed,
 			 * which means one of the 'return' uprobes was alive when probe was hit:
 			 *
-			 *   idxs: 2/3 uprobe return in 'installed' mask
+			 *   idxs: 1/2 uprobe return in 'installed' mask
 			 */
-			unsigned long had_uretprobes = before & 0b10; /* is uretprobe installed */
+			had_uretprobes = before & 0b0110; /* is uretprobe installed */
 
 			if (had_uretprobes && test_bit(idx, after))
 				val++;
 			fmt = "prog 1: uretprobe";
+			break;
+		case 2:
+			/*
+			 * session with return
+			 *  +1 if defined in 'before'
+			 *  +1 if defined in 'after'
+			 */
+			if (test_bit(idx, before)) {
+				val++;
+				if (test_bit(idx, after))
+					val++;
+			}
+			fmt = "prog 2  : session with return";
+			break;
+		case 3:
+			/*
+			 * session without return
+			 *   +1 if defined in 'before'
+			 */
+			if (test_bit(idx, before))
+				val++;
+			fmt = "prog 3  : session with NO return";
+			break;
 		}
 
 		if (!ASSERT_EQ(skel->bss->uprobe_result[idx], val, fmt))
@@ -892,7 +929,7 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 	ret = 0;
 
 cleanup:
-	for (idx = 0; idx < 1; idx++)
+	for (idx = 0; idx < 4; idx++)
 		uprobe_detach(skel, idx);
 	return ret;
 }
@@ -912,9 +949,11 @@ static void test_consumers(void)
 	 *
 	 *  - 1 uprobe entry consumer
 	 *  - 1 uprobe exit consumers
+	 *  - 1 uprobe session with return
+	 *  - 1 uprobe session without return
 	 *
-	 * The test uses 2 uprobes attached on single function, but that
-	 * translates into single uprobe with 2 consumers in kernel.
+	 * The test uses 4 uprobes attached on single function, but that
+	 * translates into single uprobe with 4 consumers in kernel.
 	 *
 	 * The before/after values present the state of attached consumers
 	 * before and after the probed function:
@@ -943,8 +982,8 @@ static void test_consumers(void)
 	 * before/after bits.
 	 */
 
-	for (before = 0; before < 4; before++) {
-		for (after = 0; after < 4; after++)
+	for (before = 0; before < 16; before++) {
+		for (after = 0; after < 16; after++)
 			if (consumer_test(skel, before, after))
 				goto out;
 	}
