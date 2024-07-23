@@ -82,6 +82,17 @@ int settimeo(int fd, int timeout_ms)
 
 #define save_errno_close(fd) ({ int __save = errno; close(fd); errno = __save; })
 
+static bool listen_support(int type)
+{
+	switch (type) {
+	case SOCK_STREAM:
+	case SOCK_SEQPACKET:
+		return true;
+	default:
+		return false;
+	}
+}
+
 int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen,
 		      const struct network_helper_opts *opts)
 {
@@ -110,7 +121,7 @@ int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t a
 		goto error_close;
 	}
 
-	if (!opts->nolisten && type == SOCK_STREAM) {
+	if (!opts->nolisten && listen_support(type)) {
 		if (listen(fd, opts->backlog ? MAX(opts->backlog, 0) : 1) < 0) {
 			log_err("Failed to listed on socket");
 			goto error_close;
