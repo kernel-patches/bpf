@@ -101,6 +101,9 @@ void test_cgroup_dev(void)
 	if (test__start_subtest("allow-mknod"))
 		test_mknod("/tmp/test_dev_cgroup_null", S_IFCHR, 1, 3, 0);
 
+	if (test__start_subtest("deny-mknod-wrong-type"))
+		test_mknod("/tmp/test_dev_cgroup_null_block", S_IFBLK, 1, 3, 1);
+
 	if (test__start_subtest("allow-read"))
 		test_read("/dev/urandom", 0);
 
