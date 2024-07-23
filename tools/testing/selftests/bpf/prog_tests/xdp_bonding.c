@@ -206,6 +206,9 @@ static void bonding_cleanup(struct skeletons *skeletons)
 
 static int send_udp_packets(int vary_dst_ip)
 {
+	struct network_helper_opts opts = {
+		.proto = IPPROTO_RAW,
+	};
 	struct ethhdr eh = {
 		.h_source = BOND1_MAC,
 		.h_dest = BOND2_MAC,
@@ -213,17 +216,15 @@ static int send_udp_packets(int vary_dst_ip)
 	};
 	struct iphdr iph = {};
 	struct udphdr uh = {};
+	char addr_str[32];
 	uint8_t buf[128];
 	int i, s = -1;
 	int ifindex;
 
-	s = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
-	if (!ASSERT_GE(s, 0, "socket"))
-		goto err;
-
 	ifindex = if_nametoindex("bond1");
 	if (!ASSERT_GT(ifindex, 0, "get bond1 ifindex"))
 		goto err;
+	sprintf(addr_str, "%d %c %s", ifindex, ETH_ALEN, BOND2_MAC_STR);
 
 	iph.ihl = 5;
 	iph.version = 4;
@@ -237,13 +238,6 @@ static int send_udp_packets(int vary_dst_ip)
 	iph.check = 0;
 
 	for (i = 1; i <= NPACKETS; i++) {
-		int n;
-		struct sockaddr_ll saddr_ll = {
-			.sll_ifindex = ifindex,
-			.sll_halen = ETH_ALEN,
-			.sll_addr = BOND2_MAC,
-		};
-
 		/* vary the UDP destination port for even distribution with roundrobin/xor modes */
 		uh.dest++;
 
@@ -255,8 +249,8 @@ static int send_udp_packets(int vary_dst_ip)
 		memcpy(buf + sizeof(eh), &iph, sizeof(iph));
 		memcpy(buf + sizeof(eh) + sizeof(iph), &uh, sizeof(uh));
 
-		n = sendto(s, buf, sizeof(buf), 0, (struct sockaddr *)&saddr_ll, sizeof(saddr_ll));
-		if (!ASSERT_EQ(n, sizeof(buf), "sendto"))
+		s = send_to_addr_str(AF_PACKET, SOCK_RAW, addr_str, 0, buf, sizeof(buf), 0, &opts);
+		if (!ASSERT_OK_FD(s, "send_to_addr_str"))
 			goto err;
 	}
 
