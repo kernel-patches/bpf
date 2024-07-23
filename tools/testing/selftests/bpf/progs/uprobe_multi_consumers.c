@@ -8,7 +8,7 @@
 
 char _license[] SEC("license") = "GPL";
 
-__u64 uprobe_result[4];
+__u64 uprobe_result[6];
 
 SEC("uprobe.multi")
 int uprobe_0(struct pt_regs *ctx)
@@ -36,4 +36,18 @@ int uprobe_3(struct pt_regs *ctx)
 {
 	uprobe_result[3]++;
 	return 0;
+}
+
+SEC("uprobe.session")
+int uprobe_4(struct pt_regs *ctx)
+{
+	uprobe_result[4]++;
+	return 0;
+}
+
+SEC("uprobe.session")
+int uprobe_5(struct pt_regs *ctx)
+{
+	uprobe_result[5]++;
+	return 1;
 }
