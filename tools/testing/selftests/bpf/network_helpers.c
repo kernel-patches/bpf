@@ -28,6 +28,9 @@
 #define IPPROTO_MPTCP 262
 #endif
 
+#define SOCK_MAX (SOCK_PACKET + 1)
+#define SOCK_TYPE_MASK 0xf
+
 #define clean_errno() (errno == 0 ? "None" : strerror(errno))
 #define log_err(MSG, ...) ({						\
 			int __save = errno;				\
@@ -120,6 +123,9 @@ int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t a
 		log_err("Failed to bind socket");
 		goto error_close;
 	}
+
+	if (type > SOCK_MAX)
+		type &= SOCK_TYPE_MASK;
 
 	if (!opts->nolisten && listen_support(type)) {
 		if (listen(fd, opts->backlog ? MAX(opts->backlog, 0) : 1) < 0) {
