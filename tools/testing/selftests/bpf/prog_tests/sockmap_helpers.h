@@ -1,16 +1,11 @@
 #ifndef __SOCKMAP_HELPERS__
 #define __SOCKMAP_HELPERS__
 
-#include <linux/vm_sockets.h>
+#include "network_helpers.h"
 
 #define IO_TIMEOUT_SEC 30
 #define MAX_STRERR_LEN 256
 #define MAX_TEST_NAME 80
-
-/* workaround for older vm_sockets.h */
-#ifndef VMADDR_CID_LOCAL
-#define VMADDR_CID_LOCAL 1
-#endif
 
 #define __always_unused	__attribute__((__unused__))
 
@@ -239,55 +234,10 @@ static inline int recv_timeout(int fd, void *buf, size_t len, int flags,
 	return recv(fd, buf, len, flags);
 }
 
-static inline void init_addr_loopback4(struct sockaddr_storage *ss,
-				       socklen_t *len)
-{
-	struct sockaddr_in *addr4 = memset(ss, 0, sizeof(*ss));
-
-	addr4->sin_family = AF_INET;
-	addr4->sin_port = 0;
-	addr4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	*len = sizeof(*addr4);
-}
-
-static inline void init_addr_loopback6(struct sockaddr_storage *ss,
-				       socklen_t *len)
-{
-	struct sockaddr_in6 *addr6 = memset(ss, 0, sizeof(*ss));
-
-	addr6->sin6_family = AF_INET6;
-	addr6->sin6_port = 0;
-	addr6->sin6_addr = in6addr_loopback;
-	*len = sizeof(*addr6);
-}
-
-static inline void init_addr_loopback_vsock(struct sockaddr_storage *ss,
-					    socklen_t *len)
-{
-	struct sockaddr_vm *addr = memset(ss, 0, sizeof(*ss));
-
-	addr->svm_family = AF_VSOCK;
-	addr->svm_port = VMADDR_PORT_ANY;
-	addr->svm_cid = VMADDR_CID_LOCAL;
-	*len = sizeof(*addr);
-}
-
 static inline void init_addr_loopback(int family, struct sockaddr_storage *ss,
 				      socklen_t *len)
 {
-	switch (family) {
-	case AF_INET:
-		init_addr_loopback4(ss, len);
-		return;
-	case AF_INET6:
-		init_addr_loopback6(ss, len);
-		return;
-	case AF_VSOCK:
-		init_addr_loopback_vsock(ss, len);
-		return;
-	default:
-		FAIL("unsupported address family %d", family);
-	}
+	make_sockaddr(family, loopback_addr_str(family), 0, ss, len);
 }
 
 static inline struct sockaddr *sockaddr(struct sockaddr_storage *ss)
