@@ -4,7 +4,7 @@
 #include <linux/version.h>
 #include <bpf/bpf_helpers.h>
 
-__u32 sig = 0, pid = 0, status = 0, signal_thread = 0;
+__u32 sig = 0, pid = 0, status = 0, signal_thread = 0, target_pid = 0;
 
 static __always_inline int bpf_send_signal_test(void *ctx)
 {
@@ -14,10 +14,17 @@ static __always_inline int bpf_send_signal_test(void *ctx)
 		return 0;
 
 	if ((bpf_get_current_pid_tgid() >> 32) == pid) {
-		if (signal_thread)
-			ret = bpf_send_signal_thread(sig);
-		else
-			ret = bpf_send_signal(sig);
+		if (signal_thread) {
+			if (target_pid != 0)
+				ret = bpf_send_signal_pid(sig, target_pid);
+			else
+				ret = bpf_send_signal_thread(sig);
+		} else {
+			if (target_pid != 0)
+				ret = bpf_send_signal_tgid(sig, target_pid);
+			else
+				ret = bpf_send_signal(sig);
+		}
 		if (ret == 0)
 			status = 1;
 	}
