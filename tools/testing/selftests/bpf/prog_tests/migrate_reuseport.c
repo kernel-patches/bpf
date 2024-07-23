@@ -221,7 +221,7 @@ static int start_servers(struct migrate_reuseport_test_case *test_case,
 	prog_fd = bpf_program__fd(skel->progs.migrate_reuseport);
 
 	make_sockaddr(test_case->family,
-		      test_case->family == AF_INET ? "127.0.0.1" : "::1", 0,
+		      loopback_addr_str(test_case->family), 0,
 		      &test_case->addr, &test_case->addrlen);
 
 	for (i = 0; i < NR_SERVERS; i++) {

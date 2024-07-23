@@ -55,6 +55,21 @@ struct ipv6_packet {
 } __packed;
 extern struct ipv6_packet pkt_v6;
 
+static inline char *loopback_addr_str(int family)
+{
+	switch (family) {
+	case AF_INET:
+		return "127.0.0.1";
+	case AF_INET6:
+		return "::1";
+	case AF_VSOCK:
+		return "1"; /* VMADDR_CID_LOCAL */
+	default:
+		fprintf(stderr, "unsupported address family %d", family);
+		return NULL;
+	}
+}
+
 int settimeo(int fd, int timeout_ms);
 int start_server_str(int family, int type, const char *addr_str, __u16 port,
 		     const struct network_helper_opts *opts);
