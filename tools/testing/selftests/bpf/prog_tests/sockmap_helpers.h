@@ -310,8 +310,14 @@ static inline int create_socket_pairs(int s, int family, int sotype,
 	return err;
 }
 
-static inline int enable_reuseport(int s, int progfd)
+struct cb_opts {
+	int progfd;
+};
+
+static int enable_reuseport(int s, void *opts)
 {
+	struct cb_opts *co = (struct cb_opts *)opts;
+	int progfd = co->progfd;
 	int err, one = 1;
 
 	err = xsetsockopt(s, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
@@ -327,34 +333,19 @@ static inline int enable_reuseport(int s, int progfd)
 
 static inline int socket_loopback_reuseport(int family, int sotype, int progfd)
 {
-	struct sockaddr_storage addr;
-	socklen_t len = 0;
-	int err, s;
+	struct cb_opts cb_opts = {
+		.progfd = progfd,
+	};
+	struct network_helper_opts opts = {
+		.backlog = SOMAXCONN,
+	};
 
-	init_addr_loopback(family, &addr, &len);
+	if (progfd >= 0) {
+		opts.post_socket_cb = enable_reuseport;
+		opts.cb_opts = &cb_opts;
+	}
 
-	s = xsocket(family, sotype, 0);
-	if (s == -1)
-		return -1;
-
-	if (progfd >= 0)
-		enable_reuseport(s, progfd);
-
-	err = xbind(s, sockaddr(&addr), len);
-	if (err)
-		goto close;
-
-	if (sotype & SOCK_DGRAM)
-		return s;
-
-	err = xlisten(s, SOMAXCONN);
-	if (err)
-		goto close;
-
-	return s;
-close:
-	xclose(s);
-	return -1;
+	return start_server_str(family, sotype, loopback_addr_str(family), 0, &opts);
 }
 
 static inline int socket_loopback(int family, int sotype)
