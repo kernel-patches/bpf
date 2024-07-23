@@ -17,6 +17,7 @@
 #include <linux/in.h>
 #include <linux/in6.h>
 #include <linux/limits.h>
+#include <linux/if_alg.h>
 
 #include "bpf_util.h"
 #include "network_helpers.h"
@@ -467,6 +468,20 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		}
 		if (len)
 			*len = sizeof(*sll);
+		return 0;
+	} else if (family == AF_ALG) {
+		struct sockaddr_alg *salg = (void *)addr;
+
+		memset(addr, 0, sizeof(*salg));
+		salg->salg_family = family;
+		if (addr_str &&
+		    sscanf(addr_str, "%s %s",
+			   salg->salg_type, salg->salg_name) == -1) {
+			log_err("AF_ALG sscanf(%s)", addr_str);
+			return -1;
+		}
+		if (len)
+			*len = sizeof(*salg);
 		return 0;
 	}
 	return -1;
