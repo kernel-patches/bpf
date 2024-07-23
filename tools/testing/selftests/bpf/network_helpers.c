@@ -109,11 +109,14 @@ int start_server_addr(int type, const struct sockaddr_storage *addr, socklen_t a
 		goto error_close;
 	}
 
-	if (type == SOCK_STREAM) {
+	if (!opts->nolisten && type == SOCK_STREAM) {
 		if (listen(fd, opts->backlog ? MAX(opts->backlog, 0) : 1) < 0) {
 			log_err("Failed to listed on socket");
 			goto error_close;
 		}
+	} else if (opts->backlog) {
+		log_err("Useless network helper opts: backlog %d",
+			opts->backlog);
 	}
 
 	return fd;

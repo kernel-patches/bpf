@@ -34,6 +34,7 @@ struct network_helper_opts {
 	 *	changing the "tcp_syncookies" sysctl from 1 to 2.
 	 */
 	int backlog;
+	bool nolisten;
 	int (*post_socket_cb)(int fd, void *opts);
 	void *cb_opts;
 };
