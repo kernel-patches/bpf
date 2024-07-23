@@ -4,13 +4,16 @@
 #include <test_progs.h>
 #include <sys/un.h>
 #include "test_skc_to_unix_sock.skel.h"
+#include "network_helpers.h"
 
 static const char *sock_path = "@skc_to_unix_sock";
 
 void test_skc_to_unix_sock(void)
 {
+	struct network_helper_opts opts = {
+		.backlog = 1,
+	};
 	struct test_skc_to_unix_sock *skel;
-	struct sockaddr_un sockaddr;
 	int err, sockfd = 0;
 
 	skel = test_skc_to_unix_sock__open();
@@ -28,21 +31,8 @@ void test_skc_to_unix_sock(void)
 		goto cleanup;
 
 	/* trigger unix_listen */
-	sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (!ASSERT_GT(sockfd, 0, "socket failed"))
-		goto cleanup;
-
-	memset(&sockaddr, 0, sizeof(sockaddr));
-	sockaddr.sun_family = AF_UNIX;
-	strncpy(sockaddr.sun_path, sock_path, strlen(sock_path));
-	sockaddr.sun_path[0] = '\0';
-
-	err = bind(sockfd, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
-	if (!ASSERT_OK(err, "bind failed"))
-		goto cleanup;
-
-	err = listen(sockfd, 1);
-	if (!ASSERT_OK(err, "listen failed"))
+	sockfd = start_server_str(AF_UNIX, SOCK_STREAM, sock_path + 1, 0, &opts);
+	if (!ASSERT_OK_FD(sockfd, "start_server_str"))
 		goto cleanup;
 
 	ASSERT_EQ(strcmp(skel->bss->path, sock_path), 0, "bpf_skc_to_unix_sock failed");
