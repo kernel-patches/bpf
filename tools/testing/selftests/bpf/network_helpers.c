@@ -416,6 +416,21 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		if (len)
 			*len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(addr_str);
 		return 0;
+	} else if (family == AF_PACKET) {
+		struct sockaddr_ll *sll = (void *)addr;
+
+		memset(addr, 0, sizeof(*sll));
+		sll->sll_family = family;
+		sll->sll_protocol = htons(ETH_P_ALL);
+		if (addr_str &&
+		    sscanf(addr_str, "%d %c %s", &sll->sll_ifindex,
+			   &sll->sll_halen, sll->sll_addr) == -1) {
+			log_err("AF_PACKET sscanf(%s)", addr_str);
+			return -1;
+		}
+		if (len)
+			*len = sizeof(*sll);
+		return 0;
 	}
 	return -1;
 }
