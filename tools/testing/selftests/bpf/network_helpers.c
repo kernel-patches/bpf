@@ -18,6 +18,7 @@
 #include <linux/in6.h>
 #include <linux/limits.h>
 #include <linux/if_alg.h>
+#include <linux/vm_sockets.h>
 
 #include "bpf_util.h"
 #include "network_helpers.h"
@@ -485,6 +486,16 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		}
 		if (len)
 			*len = sizeof(*salg);
+		return 0;
+	} else if (family == AF_VSOCK) {
+		struct sockaddr_vm *svm = (void *)addr;
+
+		memset(addr, 0, sizeof(*svm));
+		svm->svm_family = family;
+		svm->svm_port = port ?: VMADDR_PORT_ANY;
+		svm->svm_cid = addr_str ? atoi(addr_str) : 0;
+		if (len)
+			*len = sizeof(*svm);
 		return 0;
 	}
 	return -1;
