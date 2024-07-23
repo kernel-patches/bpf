@@ -93,30 +93,19 @@ static int new_packet_sock(const char *ifname)
 {
 	int err = 0;
 	int ignore_outgoing = 1;
+	char addr_str[32];
 	int ifindex = -1;
 	int s = -1;
 
-	s = socket(AF_PACKET, SOCK_RAW, 0);
-	if (!ASSERT_GE(s, 0, "socket(AF_PACKET)"))
-		return -1;
-
 	ifindex = if_nametoindex(ifname);
-	if (!ASSERT_GE(ifindex, 0, "if_nametoindex")) {
-		close(s);
+	if (!ASSERT_GE(ifindex, 0, "if_nametoindex"))
 		return -1;
-	}
 
-	struct sockaddr_ll addr = {
-		.sll_family = AF_PACKET,
-		.sll_protocol = htons(ETH_P_IP),
-		.sll_ifindex = ifindex,
-	};
+	sprintf(addr_str, "%d", ifindex);
 
-	err = bind(s, (struct sockaddr *)&addr, sizeof(addr));
-	if (!ASSERT_OK(err, "bind(AF_PACKET)")) {
-		close(s);
+	s = start_server_str(AF_PACKET, SOCK_RAW, addr_str, 0, NULL);
+	if (!ASSERT_OK_FD(s, "start_server_str"))
 		return -1;
-	}
 
 	/* Use packet socket to capture only the ingress, so we can distinguish
 	 * the case where a regression that actually redirects the packet to
