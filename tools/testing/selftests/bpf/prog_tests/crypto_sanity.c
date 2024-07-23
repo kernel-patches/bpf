@@ -19,16 +19,12 @@ static int opfd = -1, tfmfd = -1;
 static const char algo[] = "ecb(aes)";
 static int init_afalg(void)
 {
-	struct sockaddr_alg sa = {
-		.salg_family = AF_ALG,
-		.salg_type = "skcipher",
-		.salg_name = "ecb(aes)"
+	struct network_helper_opts opts = {
+		.nolisten = true,
 	};
 
-	tfmfd = socket(AF_ALG, SOCK_SEQPACKET, 0);
-	if (tfmfd == -1)
-		return errno;
-	if (bind(tfmfd, (struct sockaddr *)&sa, sizeof(sa)) == -1)
+	tfmfd = start_server_str(AF_ALG, SOCK_SEQPACKET, "skcipher ecb(aes)", 0, &opts);
+	if (!ASSERT_OK_FD(tfmfd, "start_server_addr"))
 		return errno;
 	if (setsockopt(tfmfd, SOL_ALG, ALG_SET_KEY, crypto_key, 16) == -1)
 		return errno;
