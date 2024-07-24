@@ -839,21 +839,30 @@ static void do_bpf_send_signal(struct irq_work *entry)
 	put_task_struct(work->task);
 }
 
-static int bpf_send_signal_common(u32 sig, enum pid_type type)
+static int bpf_send_signal_common(u32 sig, enum pid_type type, u32 pid)
 {
 	struct send_signal_irq_work *work = NULL;
+	struct task_struct *tsk;
+
+	if (pid) {
+		tsk = find_task_by_vpid(pid);
+		if (!tsk)
+			return -ESRCH;
+	} else {
+		tsk = current;
+	}
 
 	/* Similar to bpf_probe_write_user, task needs to be
 	 * in a sound condition and kernel memory access be
 	 * permitted in order to send signal to the current
 	 * task.
 	 */
-	if (unlikely(current->flags & (PF_KTHREAD | PF_EXITING)))
+	if (unlikely(tsk->flags & (PF_KTHREAD | PF_EXITING)))
 		return -EPERM;
 	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
 	/* Task should not be pid=1 to avoid kernel panic. */
-	if (unlikely(is_global_init(current)))
+	if (unlikely(is_global_init(tsk)))
 		return -EPERM;
 
 	if (irqs_disabled()) {
@@ -871,19 +880,19 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type)
 		 * to the irq_work. The current task may change when queued
 		 * irq works get executed.
 		 */
-		work->task = get_task_struct(current);
+		work->task = get_task_struct(tsk);
 		work->sig = sig;
 		work->type = type;
 		irq_work_queue(&work->irq_work);
 		return 0;
 	}
 
-	return group_send_sig_info(sig, SEND_SIG_PRIV, current, type);
+	return group_send_sig_info(sig, SEND_SIG_PRIV, tsk, type);
 }
 
 BPF_CALL_1(bpf_send_signal, u32, sig)
 {
-	return bpf_send_signal_common(sig, PIDTYPE_TGID);
+	return bpf_send_signal_common(sig, PIDTYPE_TGID, 0);
 }
 
 static const struct bpf_func_proto bpf_send_signal_proto = {
@@ -895,7 +904,7 @@ static const struct bpf_func_proto bpf_send_signal_proto = {
 
 BPF_CALL_1(bpf_send_signal_thread, u32, sig)
 {
-	return bpf_send_signal_common(sig, PIDTYPE_PID);
+	return bpf_send_signal_common(sig, PIDTYPE_PID, 0);
 }
 
 static const struct bpf_func_proto bpf_send_signal_thread_proto = {
@@ -903,6 +912,32 @@ static const struct bpf_func_proto bpf_send_signal_thread_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_send_signal_pid, u32, sig, u32, pid)
+{
+	return bpf_send_signal_common(sig, PIDTYPE_PID, pid);
+}
+
+static const struct bpf_func_proto bpf_send_signal_pid_proto = {
+	.func		= bpf_send_signal_pid,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_send_signal_tgid, u32, sig, u32, tgid)
+{
+	return bpf_send_signal_common(sig, PIDTYPE_TGID, tgid);
+}
+
+static const struct bpf_func_proto bpf_send_signal_tgid_proto = {
+	.func		= bpf_send_signal_tgid,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
 };
 
 BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
@@ -1583,6 +1618,10 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_send_signal_proto;
 	case BPF_FUNC_send_signal_thread:
 		return &bpf_send_signal_thread_proto;
+	case BPF_FUNC_send_signal_pid:
+		return &bpf_send_signal_pid_proto;
+	case BPF_FUNC_send_signal_tgid:
+		return &bpf_send_signal_tgid_proto;
 	case BPF_FUNC_perf_event_read_value:
 		return &bpf_perf_event_read_value_proto;
 	case BPF_FUNC_ringbuf_output:
