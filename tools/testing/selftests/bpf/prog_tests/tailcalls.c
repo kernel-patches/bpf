@@ -5,7 +5,8 @@
 #include "tailcall_poke.skel.h"
 #include "tailcall_bpf2bpf_hierarchy2.skel.h"
 #include "tailcall_bpf2bpf_hierarchy3.skel.h"
-
+#include "tailcall_freplace.skel.h"
+#include "tc_bpf2bpf.skel.h"
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
  * in a single program for a single tail call slot with nop->jmp, jmp->nop
@@ -1495,6 +1496,77 @@ static void test_tailcall_bpf2bpf_hierarchy_3(void)
 	RUN_TESTS(tailcall_bpf2bpf_hierarchy3);
 }
 
+/* test_tailcall_freplace checks that the attached freplace prog is OK to
+ * update to PROG_ARRAY map.
+ */
+static void test_tailcall_freplace(void)
+{
+	struct tailcall_freplace *fr_skel = NULL;
+	struct tc_bpf2bpf *tc_skel = NULL;
+	struct bpf_link *fr_link = NULL;
+	int prog_fd, map_fd;
+	char buff[128] = {};
+	int err, key;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	fr_skel = tailcall_freplace__open();
+	if (!ASSERT_OK_PTR(fr_skel, "open fr_skel"))
+		goto out;
+
+	tc_skel = tc_bpf2bpf__open_and_load();
+	if (!ASSERT_OK_PTR(tc_skel, "open tc_skel"))
+		goto out;
+
+	prog_fd = bpf_program__fd(tc_skel->progs.entry);
+	if (!ASSERT_GE(prog_fd, 0, "tc_skel entry prog_id"))
+		goto out;
+
+	err = bpf_program__set_attach_target(fr_skel->progs.entry,
+					     prog_fd, "subprog");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = tailcall_freplace__load(fr_skel);
+	if (!ASSERT_OK(err, "load fr_skel"))
+		goto out;
+
+	fr_link = bpf_program__attach_freplace(fr_skel->progs.entry,
+					       prog_fd, "subprog");
+	if (!ASSERT_OK_PTR(fr_link, "attach_freplace"))
+		goto out;
+
+	prog_fd = bpf_program__fd(fr_skel->progs.entry);
+	if (!ASSERT_GE(prog_fd, 0, "fr_skel entry prog_fd"))
+		goto out;
+
+	map_fd = bpf_map__fd(fr_skel->maps.jmp_table);
+	if (!ASSERT_GE(map_fd, 0, "fr_skel jmp_table map_fd"))
+		goto out;
+
+	key = 0;
+	err = bpf_map_update_elem(map_fd, &key, &prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update jmp_table"))
+		goto out;
+
+	prog_fd = bpf_program__fd(tc_skel->progs.entry);
+	if (!ASSERT_GE(prog_fd, 0, "prog_fd"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 34, "test_run retval");
+
+out:
+	bpf_link__destroy(fr_link);
+	tc_bpf2bpf__destroy(tc_skel);
+	tailcall_freplace__destroy(fr_skel);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1543,4 +1615,6 @@ void test_tailcalls(void)
 		test_tailcall_bpf2bpf_hierarchy_fentry_entry();
 	test_tailcall_bpf2bpf_hierarchy_2();
 	test_tailcall_bpf2bpf_hierarchy_3();
+	if (test__start_subtest("tailcall_freplace"))
+		test_tailcall_freplace();
 }
