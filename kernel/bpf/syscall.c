@@ -3464,8 +3464,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 */
 		struct bpf_attach_target_info tgt_info = {};
 
-		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
+		err = bpf_check_attach_target_with_kernel_log(prog, tgt_prog, btf_id,
 					      &tgt_info);
+
 		if (err)
 			goto out_unlock;
 
