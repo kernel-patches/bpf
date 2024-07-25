@@ -227,7 +227,7 @@ int parse_test_list(const char *s,
 	if (!input)
 		return -ENOMEM;
 
-	while ((test_spec = strtok_r(state ? NULL : input, ",", &state))) {
+	for (test_spec = strtok_r(input, ",", &state); test_spec; test_spec = strtok_r(NULL, ",", &state)) {
 		err = insert_test(set, test_spec, is_glob_pattern);
 		if (err)
 			break;
