@@ -2,17 +2,19 @@
 /* Copyright (c) 2023 Meta Platforms, Inc. and affiliates. */
 
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <linux/fsverity.h>
 #include <unistd.h>
 #include <test_progs.h>
 #include "test_get_xattr.skel.h"
+#include "test_dentry_xattr.skel.h"
 #include "test_fsverity.skel.h"
 
 static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
 
-static void test_xattr(void)
+static void test_file_xattr(void)
 {
 	struct test_get_xattr *skel = NULL;
 	int fd = -1, err;
@@ -50,13 +52,61 @@ static void test_xattr(void)
 	if (!ASSERT_GE(fd, 0, "open_file"))
 		goto out;
 
-	ASSERT_EQ(skel->bss->found_xattr, 1, "found_xattr");
+	ASSERT_EQ(skel->bss->found_xattr_from_file, 1, "found_xattr_from_file");
+	ASSERT_EQ(skel->bss->found_xattr_from_dentry, 1, "found_xattr_from_dentry");
 
 out:
 	close(fd);
 	test_get_xattr__destroy(skel);
 	remove(testfile);
 }
+
+static void test_directory_xattr(void)
+{
+	struct test_dentry_xattr *skel = NULL;
+	static const char * const paths[] = {
+		"/tmp/a",
+		"/tmp/a/b",
+		"/tmp/a/b/c",
+	};
+	const char *file = "/tmp/a/b/c/d";
+	int i, j, err, fd;
+
+	for (i = 0; i < sizeof(paths) / sizeof(char *); i++) {
+		err = mkdir(paths[i], 0755);
+		if (!ASSERT_OK(err, "mkdir"))
+			goto out;
+		err = setxattr(paths[i], "user.kfunc", "hello", sizeof("hello"), 0);
+		if (!ASSERT_OK(err, "setxattr")) {
+			i++;
+			goto out;
+		}
+	}
+
+	skel = test_dentry_xattr__open_and_load();
+
+	if (!ASSERT_OK_PTR(skel, "test_dentry_xattr__open_and_load"))
+		goto out;
+
+	skel->bss->monitored_pid = getpid();
+	err = test_dentry_xattr__attach(skel);
+
+	if (!ASSERT_OK(err, "test_dentry__xattr__attach"))
+		goto out;
+
+	fd = open(file, O_CREAT | O_RDONLY, 0644);
+	if (!ASSERT_GE(fd, 0, "open_file"))
+		goto out;
+
+	ASSERT_EQ(skel->bss->number_of_xattr_found, 3, "number_of_xattr_found");
+	close(fd);
+out:
+	test_dentry_xattr__destroy(skel);
+	remove(file);
+	for (j = i - 1; j >= 0; j--)
+		rmdir(paths[j]);
+}
+
 
 #ifndef SHA256_DIGEST_SIZE
 #define SHA256_DIGEST_SIZE      32
@@ -134,8 +184,11 @@ out:
 
 void test_fs_kfuncs(void)
 {
-	if (test__start_subtest("xattr"))
-		test_xattr();
+	if (test__start_subtest("file_xattr"))
+		test_file_xattr();
+
+	if (test__start_subtest("dentry_xattr"))
+		test_directory_xattr();
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();

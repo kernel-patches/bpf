@@ -9,7 +9,8 @@
 char _license[] SEC("license") = "GPL";
 
 __u32 monitored_pid;
-__u32 found_xattr;
+__u32 found_xattr_from_file;
+__u32 found_xattr_from_dentry;
 
 static const char expected_value[] = "hello";
 char value[32];
@@ -18,6 +19,7 @@ SEC("lsm.s/file_open")
 int BPF_PROG(test_file_open, struct file *f)
 {
 	struct bpf_dynptr value_ptr;
+	struct dentry *dentry;
 	__u32 pid;
 	int ret;
 
@@ -32,6 +34,16 @@ int BPF_PROG(test_file_open, struct file *f)
 		return 0;
 	if (bpf_strncmp(value, ret, expected_value))
 		return 0;
-	found_xattr = 1;
+	found_xattr_from_file = 1;
+
+	dentry = bpf_file_dentry(f);
+	ret = bpf_get_dentry_xattr(dentry, "user.kfuncs", &value_ptr);
+	bpf_dput(dentry);
+	if (ret != sizeof(expected_value))
+		return 0;
+	if (bpf_strncmp(value, ret, expected_value))
+		return 0;
+	found_xattr_from_dentry = 1;
+
 	return 0;
 }
