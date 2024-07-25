@@ -21643,6 +21643,25 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+int bpf_check_attach_target_with_klog(const struct bpf_prog *prog,
+					    const struct bpf_prog *tgt_prog,
+					    u32 btf_id,
+					    struct bpf_attach_target_info *tgt_info);
+{
+	struct bpf_verifier_log *log;
+	int err;
+
+	log = kzalloc(sizeof(*log), GFP_KERNEL | __GFP_NOWARN);
+	if (!log) {
+		err = -ENOMEM;
+		return err;
+	}
+	log->level = BPF_LOG_KERNEL;
+	err = bpf_check_attach_target(log, prog, tgt_prog, btf_id, tgt_info);
+	kfree(log);
+	return err;
+}
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,

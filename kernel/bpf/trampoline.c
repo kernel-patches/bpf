@@ -699,9 +699,9 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 	u64 key;
 	int err;
 
-	err = bpf_check_attach_target(NULL, prog, NULL,
-				      prog->aux->attach_btf_id,
-				      &tgt_info);
+	err = bpf_check_attach_target_with_klog(prog, NULL,
+						      prog->aux->attach_btf_id,
+						      &tgt_info);
 	if (err)
 		return err;
 
