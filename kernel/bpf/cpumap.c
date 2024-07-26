@@ -59,6 +59,9 @@ struct bpf_cpu_map_entry {
 	u32 cpu;    /* kthread CPU and map index */
 	int map_id; /* Back reference to map */
 
+	/* Used to end ownership transfer transaction */
+	struct bpf_map *parent_map;
+
 	/* XDP can run multiple RX-ring queues, need __percpu enqueue store */
 	struct xdp_bulk_queue __percpu *bulkq;
 
@@ -428,6 +431,7 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 	rcpu->cpu    = cpu;
 	rcpu->map_id = map->id;
 	rcpu->value.qsize  = value->qsize;
+	rcpu->parent_map = map;
 
 	if (fd > 0 && __cpu_map_load_bpf_program(rcpu, map, fd))
 		goto free_ptr_ring;
@@ -640,6 +644,14 @@ static int cpu_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 
 static long cpu_map_redirect(struct bpf_map *map, u64 index, u64 flags)
 {
+	/*
+	 * Redirection is a transfer of ownership of the bpf_cpu_map_entry
+	 * During the transfer the bpf_cpu_map_entry is still in the map,
+	 * so we need to prevent it from being freed.
+	 * The bpf_map_inc() increments the refcnt of the map, so the
+	 * bpf_cpu_map_entry will not be freed until the refcnt is decremented.
+	 */
+	bpf_map_inc(map);
 	return __bpf_xdp_redirect_map(map, index, flags, 0,
 				      __cpu_map_lookup_elem);
 }
@@ -765,6 +777,16 @@ void __cpu_map_flush(struct list_head *flush_list)
 
 	list_for_each_entry_safe(bq, tmp, flush_list, flush_node) {
 		bq_flush_to_queue(bq);
+
+		/*
+		 * Flush operation is the last operation of ownership transfer
+		 * transaction. Thus, we can safely clear the parent_map, decrement
+		 * the refcnt of the map and free the bpf_cpu_map_entry if needed.
+		 */
+		struct bpf_map *map = bq->obj->parent_map;
+
+		if (map)
+			bpf_map_put(map);
 
 		/* If already running, costs spin_lock_irqsave + smb_mb */
 		wake_up_process(bq->obj->kthread);
