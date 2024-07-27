@@ -15,7 +15,7 @@
 #include <internal/tests.h>
 #include "tests.h"
 
-#define WAIT_COUNT 10000000UL
+#define WAIT_COUNT 100000000UL
 static struct signal_counts {
 	int in;
 	int hup;
@@ -380,7 +380,7 @@ static void sig_handler(int signo, siginfo_t *info, void *uc)
 
 static int test_stat_overflow(int owner)
 {
-	static struct sigaction sig;
+	static struct sigaction sigact;
 	u64 period = 1000000;
 	int overflow_limit = 3;
 
@@ -396,16 +396,16 @@ static int test_stat_overflow(int owner)
 	int err = 0, i;
 
 	LIBPERF_OPTS(perf_evsel_open_opts, opts,
-		     .open_flags = PERF_FLAG_FD_CLOEXEC,
-		     .flags	 = (O_RDWR | O_NONBLOCK | O_ASYNC),
-		     .signal	 = SIGRTMIN + 1,
-		     .owner_type = owner,
-		     .sig	 = &sig);
+		     .open_flags	= PERF_FLAG_FD_CLOEXEC,
+		     .fcntl_flags	= (O_RDWR | O_NONBLOCK | O_ASYNC),
+		     .signal		= SIGRTMIN + 1,
+		     .owner_type	= owner,
+		     .sigact		= &sigact);
 
 	/* setup signal handler */
-	memset(&sig, 0, sizeof(struct sigaction));
-	sig.sa_sigaction = (void *)sig_handler;
-	sig.sa_flags = SA_SIGINFO;
+	memset(&sigact, 0, sizeof(struct sigaction));
+	sigact.sa_sigaction = (void *)sig_handler;
+	sigact.sa_flags = SA_SIGINFO;
 
 	threads = perf_thread_map__new_dummy();
 	__T("failed to create threads", threads);
