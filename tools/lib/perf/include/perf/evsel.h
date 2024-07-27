@@ -73,5 +73,6 @@ LIBPERF_API int perf_evsel__open_opts(struct perf_evsel *evsel,
 				      struct perf_cpu_map *cpus,
 				      struct perf_thread_map *threads,
 				      struct perf_evsel_open_opts *opts);
+LIBPERF_API bool perf_evsel__has_fd(struct perf_evsel *evsel, int fd);
 
 #endif /* __LIBPERF_EVSEL_H */

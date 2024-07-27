@@ -38,6 +38,7 @@ LIBPERF_0.0.1 {
 		perf_evsel__cpus;
 		perf_evsel__threads;
 		perf_evsel__attr;
+		perf_evsel__has_fd;
 		perf_evlist__new;
 		perf_evlist__delete;
 		perf_evlist__open;

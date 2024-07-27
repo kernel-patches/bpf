@@ -658,3 +658,21 @@ int perf_evsel__open_opts(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 
 	return err;
 }
+
+bool perf_evsel__has_fd(struct perf_evsel *evsel, int fd)
+{
+	int cpu_map_idx;
+	int thread;
+	int *evsel_fd;
+
+	for (cpu_map_idx = 0; cpu_map_idx < xyarray__max_x(evsel->fd); ++cpu_map_idx) {
+		for (thread = 0; thread < xyarray__max_y(evsel->fd); ++thread) {
+			evsel_fd = FD(evsel, cpu_map_idx, thread);
+
+			if (fd == *evsel_fd)
+				return true;
+		}
+	}
+
+	return false;
+}
