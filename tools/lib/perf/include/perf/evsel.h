@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <perf/core.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <linux/types.h>
 
 struct perf_evsel;
@@ -24,6 +25,24 @@ struct perf_counts_values {
 		uint64_t values[5];
 	};
 };
+
+struct perf_evsel_open_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+
+	unsigned long open_flags;	/* perf_event_open flags */
+};
+
+#define perf_evsel_open_opts__last_field open_flags
+
+#define LIBPERF_OPTS(TYPE, NAME, ...)			\
+	struct TYPE NAME = ({				\
+		memset(&NAME, 0, sizeof(struct TYPE));	\
+		(struct TYPE) {				\
+			.sz = sizeof(struct TYPE),	\
+			__VA_ARGS__			\
+		};					\
+	})
 
 LIBPERF_API struct perf_evsel *perf_evsel__new(struct perf_event_attr *attr);
 LIBPERF_API void perf_evsel__delete(struct perf_evsel *evsel);
@@ -46,5 +65,9 @@ LIBPERF_API struct perf_thread_map *perf_evsel__threads(struct perf_evsel *evsel
 LIBPERF_API struct perf_event_attr *perf_evsel__attr(struct perf_evsel *evsel);
 LIBPERF_API void perf_counts_values__scale(struct perf_counts_values *count,
 					   bool scale, __s8 *pscaled);
+LIBPERF_API int perf_evsel__open_opts(struct perf_evsel *evsel,
+				      struct perf_cpu_map *cpus,
+				      struct perf_thread_map *threads,
+				      struct perf_evsel_open_opts *opts);
 
 #endif /* __LIBPERF_EVSEL_H */

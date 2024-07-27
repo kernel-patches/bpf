@@ -753,3 +753,23 @@ void perf_evlist__go_system_wide(struct perf_evlist *evlist, struct perf_evsel *
 			__perf_evlist__propagate_maps(evlist, evsel);
 	}
 }
+
+int perf_evlist__open_opts(struct perf_evlist *evlist,
+			   struct perf_evsel_open_opts *opts)
+{
+	struct perf_evsel *evsel;
+	int err;
+
+	perf_evlist__for_each_entry(evlist, evsel) {
+		err = perf_evsel__open_opts(evsel, evsel->cpus,
+					    evsel->threads, opts);
+		if (err < 0)
+			goto out_err;
+	}
+
+	return 0;
+
+out_err:
+	perf_evlist__close(evlist);
+	return err;
+}

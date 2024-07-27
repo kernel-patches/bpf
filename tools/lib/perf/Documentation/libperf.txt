@@ -132,6 +132,16 @@ SYNOPSIS
           };
   };
 
+  struct perf_evsel_open_opts {
+          /* size of this struct, for forward/backward compatibility */
+          size_t sz;
+
+          unsigned long open_flags;       /* perf_event_open flags */
+  };
+  #define perf_evsel_open_opts__last_field open_flags
+
+  #define LIBPERF_OPTS(TYPE, NAME, ...)
+
   struct perf_evsel *perf_evsel__new(struct perf_event_attr *attr);
   void perf_evsel__delete(struct perf_evsel *evsel);
   int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,

@@ -9,6 +9,7 @@ struct perf_evlist;
 struct perf_evsel;
 struct perf_cpu_map;
 struct perf_thread_map;
+struct perf_evsel_open_opts;
 
 LIBPERF_API void perf_evlist__add(struct perf_evlist *evlist,
 				  struct perf_evsel *evsel);
@@ -48,4 +49,6 @@ LIBPERF_API struct perf_mmap *perf_evlist__next_mmap(struct perf_evlist *evlist,
 
 LIBPERF_API void perf_evlist__set_leader(struct perf_evlist *evlist);
 LIBPERF_API int perf_evlist__nr_groups(struct perf_evlist *evlist);
+LIBPERF_API int perf_evlist__open_opts(struct perf_evlist *evlist,
+				       struct perf_evsel_open_opts *opts);
 #endif /* __LIBPERF_EVLIST_H */

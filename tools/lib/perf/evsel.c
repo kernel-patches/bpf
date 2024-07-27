@@ -16,8 +16,13 @@
 #include <internal/lib.h>
 #include <linux/string.h>
 #include <sys/ioctl.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <sys/types.h>
 #include <sys/mman.h>
 #include <asm/bug.h>
+#include <tools/opts.h>
+#include "internal.h"
 
 void perf_evsel__init(struct perf_evsel *evsel, struct perf_event_attr *attr,
 		      int idx)
@@ -26,6 +31,7 @@ void perf_evsel__init(struct perf_evsel *evsel, struct perf_event_attr *attr,
 	evsel->attr = *attr;
 	evsel->idx  = idx;
 	evsel->leader = evsel;
+	evsel->open_flags = 0;
 }
 
 struct perf_evsel *perf_evsel__new(struct perf_event_attr *attr)
@@ -160,7 +166,7 @@ int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 
 			fd = sys_perf_event_open(&evsel->attr,
 						 threads->map[thread].pid,
-						 cpu, group_fd, 0);
+						 cpu, group_fd, evsel->open_flags);
 
 			if (fd < 0) {
 				err = -errno;
@@ -554,4 +560,22 @@ void perf_counts_values__scale(struct perf_counts_values *count,
 
 	if (pscaled)
 		*pscaled = scaled;
+}
+
+int perf_evsel__open_opts(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
+			  struct perf_thread_map *threads,
+			  struct perf_evsel_open_opts *opts)
+{
+	int err = 0;
+
+	if (!OPTS_VALID(opts, perf_evsel_open_opts)) {
+		err = -EINVAL;
+		return err;
+	}
+
+	evsel->open_flags = OPTS_GET(opts, open_flags, 0);
+
+	err = perf_evsel__open(evsel, cpus, threads);
+
+	return err;
 }
