@@ -165,7 +165,6 @@ struct evsel {
 		struct bperf_follower_bpf *follower_skel;
 		void *bpf_skel;
 	};
-	unsigned long		open_flags;
 	int			precise_ip_original;
 
 	/* for missing_features */
