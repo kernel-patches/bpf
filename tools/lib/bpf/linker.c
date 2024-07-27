@@ -16,6 +16,7 @@
 #include <elf.h>
 #include <libelf.h>
 #include <fcntl.h>
+#include <tools/opts.h>
 #include "libbpf.h"
 #include "btf.h"
 #include "libbpf_internal.h"

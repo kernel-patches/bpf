@@ -32,6 +32,7 @@
 #include <linux/kernel.h>
 #include <limits.h>
 #include <sys/resource.h>
+#include <tools/opts.h>
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"

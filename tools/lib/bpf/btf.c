@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <gelf.h>
+#include <tools/opts.h>
 #include "btf.h"
 #include "bpf.h"
 #include "libbpf.h"

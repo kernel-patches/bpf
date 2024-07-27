@@ -16,6 +16,7 @@
 #include <asm/barrier.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
+#include <tools/opts.h>
 #include <time.h>
 
 #include "libbpf.h"

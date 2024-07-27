@@ -43,6 +43,7 @@
 #include <sys/vfs.h>
 #include <sys/utsname.h>
 #include <sys/resource.h>
+#include <tools/opts.h>
 #include <libelf.h>
 #include <gelf.h>
 #include <zlib.h>
@@ -1171,7 +1172,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 
 		kern_member = find_member_by_name(kern_btf, kern_type, mname);
 		if (!kern_member) {
-			if (!libbpf_is_mem_zeroed(mdata, msize)) {
+			if (!lib_is_mem_zeroed(mdata, msize)) {
 				pr_warn("struct_ops init_kern %s: Cannot find member %s in kernel BTF\n",
 					map->name, mname);
 				return -ENOTSUP;

@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <linux/kernel.h>
+#include <tools/opts.h>
 #include "btf.h"
 #include "hashmap.h"
 #include "libbpf.h"

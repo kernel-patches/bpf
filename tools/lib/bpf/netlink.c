@@ -11,6 +11,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/netdev.h>
 #include <sys/socket.h>
+#include <tools/opts.h>
 #include <errno.h>
 #include <time.h>
 
