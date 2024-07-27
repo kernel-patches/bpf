@@ -562,6 +562,79 @@ void perf_counts_values__scale(struct perf_counts_values *count,
 		*pscaled = scaled;
 }
 
+static int perf_evsel__run_fcntl(struct perf_evsel *evsel,
+				 unsigned int cmd, unsigned long arg,
+				 int cpu_map_idx)
+{
+	int thread;
+
+	for (thread = 0; thread < xyarray__max_y(evsel->fd); thread++) {
+		int err;
+		int *fd = FD(evsel, cpu_map_idx, thread);
+
+		if (!fd || *fd < 0)
+			return -1;
+
+		err = fcntl(*fd, cmd, arg);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static int perf_evsel__set_signal_handler(struct perf_evsel *evsel,
+					  struct perf_evsel_open_opts *opts)
+{
+	unsigned int fcntl_flags;
+	unsigned int signal;
+	struct f_owner_ex owner;
+	struct sigaction *sigact;
+	int cpu_map_idx;
+	int err = 0;
+
+	fcntl_flags = OPTS_GET(opts, fcntl_flags, (O_RDWR | O_NONBLOCK | O_ASYNC));
+	signal = OPTS_GET(opts, signal, SIGIO);
+	owner.type = OPTS_GET(opts, owner_type, F_OWNER_PID);
+	sigact = OPTS_GET(opts, sigact, NULL);
+
+	if (fcntl_flags == 0 && signal == 0 && !owner.type == 0 && sigact == 0)
+		return err;
+
+	err = sigaction(signal, sigact, NULL);
+	if (err)
+		return err;
+
+	switch (owner.type) {
+	case F_OWNER_PID:
+		owner.pid = getpid();
+		break;
+	case F_OWNER_TID:
+		owner.pid = syscall(SYS_gettid);
+		break;
+	case F_OWNER_PGRP:
+	default:
+		return -1;
+	}
+
+	for (cpu_map_idx = 0; cpu_map_idx < xyarray__max_x(evsel->fd); cpu_map_idx++) {
+		err = perf_evsel__run_fcntl(evsel, F_SETFL, fcntl_flags, cpu_map_idx);
+		if (err)
+			return err;
+
+		err = perf_evsel__run_fcntl(evsel, F_SETSIG, signal, cpu_map_idx);
+		if (err)
+			return err;
+
+		err = perf_evsel__run_fcntl(evsel, F_SETOWN_EX,
+					    (unsigned long)&owner, cpu_map_idx);
+		if (err)
+			return err;
+	}
+
+	return err;
+}
+
 int perf_evsel__open_opts(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 			  struct perf_thread_map *threads,
 			  struct perf_evsel_open_opts *opts)
@@ -576,6 +649,12 @@ int perf_evsel__open_opts(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 	evsel->open_flags = OPTS_GET(opts, open_flags, 0);
 
 	err = perf_evsel__open(evsel, cpus, threads);
+	if (err)
+		return err;
+
+	err = perf_evsel__set_signal_handler(evsel, opts);
+	if (err)
+		return err;
 
 	return err;
 }

@@ -31,9 +31,13 @@ struct perf_evsel_open_opts {
 	size_t sz;
 
 	unsigned long open_flags;	/* perf_event_open flags */
+	int fcntl_flags;
+	int signal;
+	int owner_type;			/* value for F_SETOWN_EX */
+	struct sigaction *sigact;
 };
 
-#define perf_evsel_open_opts__last_field open_flags
+#define perf_evsel_open_opts__last_field sigact
 
 #define LIBPERF_OPTS(TYPE, NAME, ...)			\
 	struct TYPE NAME = ({				\
