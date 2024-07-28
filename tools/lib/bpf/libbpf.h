@@ -1257,6 +1257,7 @@ LIBBPF_API int bpf_xdp_query_id(int ifindex, int flags, __u32 *prog_id);
 enum bpf_tc_attach_point {
 	BPF_TC_INGRESS = 1 << 0,
 	BPF_TC_EGRESS  = 1 << 1,
+	BPF_TC_BOTH    = BPF_TC_INGRESS | BPF_TC_EGRESS,
 	BPF_TC_CUSTOM  = 1 << 2,
 };
 
