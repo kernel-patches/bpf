@@ -6,8 +6,9 @@
 #include <time.h>
 #include <net/if.h>
 #include <linux/if_tun.h>
-#include "test_progs.h" /* between <net/if.h> and <linux/icmp.h> or errors */
 #include <linux/icmp.h>
+
+#include "test_progs.h"
 
 #define log_err(MSG, ...) \
 	fprintf(stderr, "(%s:%d: errno: %s) " MSG "\n", \
