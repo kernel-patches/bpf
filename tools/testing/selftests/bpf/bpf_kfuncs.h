@@ -78,4 +78,13 @@ extern int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr,
 
 extern bool bpf_session_is_return(void) __ksym __weak;
 extern __u64 *bpf_session_cookie(void) __ksym __weak;
+
+struct dentry;
+/* Description
+ *  Returns xattr of a dentry
+ * Returns__bpf_kfunc
+ *  Error code
+ */
+extern int bpf_get_dentry_xattr(struct dentry *dentry, const char *name,
+			      struct bpf_dynptr *value_ptr) __ksym __weak;
 #endif
