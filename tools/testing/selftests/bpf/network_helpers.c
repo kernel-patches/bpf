@@ -432,6 +432,32 @@ char *ping_command(int family)
 	return "ping";
 }
 
+int make_netns(const char *name)
+{
+	char cmd[128];
+	int r;
+
+	snprintf(cmd, sizeof(cmd), "ip netns add %s", name);
+	r = system(cmd);
+	if (r > 0)
+		/* exit code */
+		return -r;
+	return r;
+}
+
+int remove_netns(const char *name)
+{
+	char cmd[128];
+	int r;
+
+	snprintf(cmd, sizeof(cmd), "ip netns del %s >/dev/null 2>&1", name);
+	r = system(cmd);
+	if (r > 0)
+		/* exit code */
+		return -r;
+	return r;
+}
+
 struct nstoken {
 	int orig_netns_fd;
 };
