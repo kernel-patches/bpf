@@ -10,22 +10,14 @@
 
 #define NUM_CGROUP_LEVELS	4
 
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, __u64);
-	__uint(max_entries, NUM_CGROUP_LEVELS);
-} cgroup_ids SEC(".maps");
+__u64 cgroup_ids[NUM_CGROUP_LEVELS];
 
 static __always_inline void log_nth_level(struct __sk_buff *skb, __u32 level)
 {
-	__u64 id;
-
 	/* [1] &level passed to external function that may change it, it's
 	 *     incompatible with loop unroll.
 	 */
-	id = bpf_skb_ancestor_cgroup_id(skb, level);
-	bpf_map_update_elem(&cgroup_ids, &level, &id, 0);
+	cgroup_ids[level] = bpf_skb_ancestor_cgroup_id(skb, level);
 }
 
 SEC("tc")
