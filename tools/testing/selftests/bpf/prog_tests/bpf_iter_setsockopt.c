@@ -4,9 +4,12 @@
 #include <sched.h>
 #include <test_progs.h>
 #include "network_helpers.h"
+#include "cgroup_helpers.h"
 #include "bpf_dctcp.skel.h"
 #include "bpf_cubic.skel.h"
 #include "bpf_iter_setsockopt.skel.h"
+
+#define TEST_CGROUP "/test-iter-setsockopt"
 
 static int create_netns(void)
 {
@@ -32,17 +35,26 @@ static unsigned int set_bpf_cubic(int *fds, unsigned int nr_fds)
 	return nr_fds;
 }
 
-static unsigned int check_bpf_dctcp(int *fds, unsigned int nr_fds)
+static unsigned int check_bpf_val(int *fds, unsigned int nr_fds, bool cong)
 {
 	char tcp_cc[16];
-	socklen_t optlen = sizeof(tcp_cc);
+	socklen_t cc_optlen = sizeof(tcp_cc);
+	int flags;
+	socklen_t flags_optlen = sizeof(flags);
 	unsigned int i;
 
 	for (i = 0; i < nr_fds; i++) {
-		if (getsockopt(fds[i], SOL_TCP, TCP_CONGESTION,
-			       tcp_cc, &optlen) ||
-		    strcmp(tcp_cc, "bpf_dctcp"))
-			return i;
+		if (cong) {
+			if (getsockopt(fds[i], SOL_TCP, TCP_CONGESTION,
+				       tcp_cc, &cc_optlen) ||
+			    strcmp(tcp_cc, "bpf_dctcp"))
+				return i;
+		} else {
+			if (getsockopt(fds[i], SOL_TCP, TCP_BPF_SOCK_OPS_CB_FLAGS,
+				       &flags, &flags_optlen) ||
+			    flags != BPF_SOCK_OPS_ALL_CB_FLAGS)
+				return i;
+		}
 	}
 
 	return nr_fds;
@@ -102,7 +114,7 @@ static unsigned short get_local_port(int fd)
 }
 
 static void do_bpf_iter_setsockopt(struct bpf_iter_setsockopt *iter_skel,
-				   bool random_retry)
+				   bool random_retry, bool cong)
 {
 	int *reuse_listen_fds = NULL, *accepted_fds = NULL, *est_fds = NULL;
 	unsigned int nr_reuse_listens = 256, nr_est = 256;
@@ -140,9 +152,16 @@ static void do_bpf_iter_setsockopt(struct bpf_iter_setsockopt *iter_skel,
 			"get_local_port(reuse_listen_fds[0])"))
 		goto done;
 
-	/* Run bpf tcp iter to switch from bpf_cubic to bpf_dctcp */
+	/* Run bpf tcp iter to change tcp value:
+	 *
+	 * - If cong is true, switch from bpf_cubic to bpf_dctcp;
+	 * - If cong is false, use bpf_setsockopt() to set TCP sockops flags.
+	 */
+
 	iter_skel->bss->random_retry = random_retry;
-	iter_fd = bpf_iter_create(bpf_link__fd(iter_skel->links.change_tcp_cc));
+	iter_skel->bss->cong = cong;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(iter_skel->links.change_tcp_val));
 	if (!ASSERT_GE(iter_fd, 0, "create iter_fd"))
 		goto done;
 
@@ -152,22 +171,21 @@ static void do_bpf_iter_setsockopt(struct bpf_iter_setsockopt *iter_skel,
 	if (!ASSERT_OK(err, "read iter error"))
 		goto done;
 
-	/* Check reuseport listen fds for dctcp */
-	ASSERT_EQ(check_bpf_dctcp(reuse_listen_fds, nr_reuse_listens),
+	/* Check reuseport listen fds */
+	ASSERT_EQ(check_bpf_val(reuse_listen_fds, nr_reuse_listens, cong),
 		  nr_reuse_listens,
-		  "check reuse_listen_fds dctcp");
+		  "check reuse_listen_fds");
+	/* Check non reuseport listen fd */
+	ASSERT_EQ(check_bpf_val(&listen_fd, 1, cong), 1,
+		  "check listen_fd");
 
-	/* Check non reuseport listen fd for dctcp */
-	ASSERT_EQ(check_bpf_dctcp(&listen_fd, 1), 1,
-		  "check listen_fd dctcp");
+	/* Check established fds */
+	ASSERT_EQ(check_bpf_val(est_fds, nr_est, cong), nr_est,
+		  "check est_fds");
 
-	/* Check established fds for dctcp */
-	ASSERT_EQ(check_bpf_dctcp(est_fds, nr_est), nr_est,
-		  "check est_fds dctcp");
-
-	/* Check accepted fds for dctcp */
-	ASSERT_EQ(check_bpf_dctcp(accepted_fds, nr_est), nr_est,
-		  "check accepted_fds dctcp");
+	/* Check accepted fds */
+	ASSERT_EQ(check_bpf_val(accepted_fds, nr_est, cong), nr_est,
+		  "check accepted_fds");
 
 done:
 	if (iter_fd != -1)
@@ -186,6 +204,8 @@ void serial_test_bpf_iter_setsockopt(void)
 	struct bpf_dctcp *dctcp_skel = NULL;
 	struct bpf_link *cubic_link = NULL;
 	struct bpf_link *dctcp_link = NULL;
+	struct bpf_link *getsockopt_link = NULL;
+	int cgroup_fd;
 
 	if (create_netns())
 		return;
@@ -194,8 +214,9 @@ void serial_test_bpf_iter_setsockopt(void)
 	iter_skel = bpf_iter_setsockopt__open_and_load();
 	if (!ASSERT_OK_PTR(iter_skel, "iter_skel"))
 		return;
-	iter_skel->links.change_tcp_cc = bpf_program__attach_iter(iter_skel->progs.change_tcp_cc, NULL);
-	if (!ASSERT_OK_PTR(iter_skel->links.change_tcp_cc, "attach iter"))
+	iter_skel->links.change_tcp_val = bpf_program__attach_iter(iter_skel->progs.change_tcp_val,
+								   NULL);
+	if (!ASSERT_OK_PTR(iter_skel->links.change_tcp_val, "attach iter"))
 		goto done;
 
 	/* Load bpf_cubic */
@@ -214,13 +235,23 @@ void serial_test_bpf_iter_setsockopt(void)
 	if (!ASSERT_OK_PTR(dctcp_link, "dctcp_link"))
 		goto done;
 
-	do_bpf_iter_setsockopt(iter_skel, true);
-	do_bpf_iter_setsockopt(iter_skel, false);
+	cgroup_fd = cgroup_setup_and_join(TEST_CGROUP);
+	if (!ASSERT_OK_FD(cgroup_fd, "cgroup switch"))
+		goto done;
+	getsockopt_link = bpf_program__attach_cgroup(iter_skel->progs._getsockopt, cgroup_fd);
+	if (!ASSERT_OK_PTR(getsockopt_link, "getsockopt prog"))
+		goto done;
 
+	do_bpf_iter_setsockopt(iter_skel, true, true);
+	do_bpf_iter_setsockopt(iter_skel, false, true);
+	do_bpf_iter_setsockopt(iter_skel, true, false);
+	do_bpf_iter_setsockopt(iter_skel, false, false);
 done:
 	bpf_link__destroy(cubic_link);
 	bpf_link__destroy(dctcp_link);
+	bpf_link__destroy(getsockopt_link);
 	bpf_cubic__destroy(cubic_skel);
 	bpf_dctcp__destroy(dctcp_skel);
 	bpf_iter_setsockopt__destroy(iter_skel);
+	cleanup_cgroup_environment();
 }
