@@ -30,19 +30,9 @@ struct xdp_cpumap_stats {
 	unsigned int drop;
 };
 
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(max_entries, 1);
-} stats SEC(".maps");
+__u32 tester_stats;
+__u32 dut_stats;
 
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(max_entries, 1);
-} dut_stats SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_CPUMAP);
@@ -67,7 +57,7 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 	void *data_end = (void *)(long)xdp->data_end;
 	void *data = (void *)(long)xdp->data;
 	struct ethhdr *eh = data;
-	struct tlv_hdr *tlv;
+	__u32 *magic;
 	struct udphdr *uh;
 	__be16 port;
 
@@ -124,28 +114,23 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 	if (port != bpf_ntohs(DUT_ECHO_PORT))
 		return -EINVAL;
 
-	tlv = (struct tlv_hdr *)(uh + 1);
-	if (tlv + 1 > data_end)
+	magic = (__u32 *)(uh + 1);
+	if (magic + 1 > data_end)
 		return -EINVAL;
 
-	return tlv->type == bpf_ntohs(CMD_ECHO) ? 0 : -EINVAL;
+	return *magic == bpf_htonl(CMD_ECHO) ? 0 : -EINVAL;
 }
 
 static __always_inline int
 xdp_update_stats(struct xdp_md *xdp, bool tx, bool dut)
 {
-	__u32 *val, key = 0;
-
 	if (xdp_process_echo_packet(xdp, tx))
 		return -EINVAL;
 
 	if (dut)
-		val = bpf_map_lookup_elem(&dut_stats, &key);
+		__sync_add_and_fetch(&dut_stats, 1);
 	else
-		val = bpf_map_lookup_elem(&stats, &key);
-
-	if (val)
-		__sync_add_and_fetch(val, 1);
+		__sync_add_and_fetch(&tester_stats, 1);
 
 	return 0;
 }
@@ -204,7 +189,7 @@ int xdp_do_tx(struct xdp_md *xdp)
 	__u8 tmp_mac[ETH_ALEN];
 
 	if (xdp_update_stats(xdp, true, true))
-		return XDP_PASS;
+		return XDP_DROP;
 
 	__builtin_memcpy(tmp_mac, eh->h_source, ETH_ALEN);
 	__builtin_memcpy(eh->h_source, eh->h_dest, ETH_ALEN);
@@ -217,7 +202,7 @@ SEC("xdp")
 int xdp_do_redirect(struct xdp_md *xdp)
 {
 	if (xdp_process_echo_packet(xdp, true))
-		return XDP_PASS;
+		return XDP_DROP;
 
 	return bpf_redirect_map(&cpu_map, 0, 0);
 }
@@ -226,11 +211,7 @@ SEC("tp_btf/xdp_exception")
 int BPF_PROG(xdp_exception, const struct net_device *dev,
 	     const struct bpf_prog *xdp, __u32 act)
 {
-	__u32 *val, key = 0;
-
-	val = bpf_map_lookup_elem(&dut_stats, &key);
-	if (val)
-		__sync_add_and_fetch(val, 1);
+	__sync_add_and_fetch(&dut_stats, 1);
 
 	return 0;
 }
@@ -239,11 +220,7 @@ SEC("tp_btf/xdp_cpumap_kthread")
 int BPF_PROG(tp_xdp_cpumap_kthread, int map_id, unsigned int processed,
 	     unsigned int drops, int sched, struct xdp_cpumap_stats *xdp_stats)
 {
-	__u32 *val, key = 0;
-
-	val = bpf_map_lookup_elem(&dut_stats, &key);
-	if (val)
-		__sync_add_and_fetch(val, 1);
+	__sync_add_and_fetch(&dut_stats, 1);
 
 	return 0;
 }
@@ -256,7 +233,7 @@ int xdp_do_redirect_cpumap(struct xdp_md *xdp)
 	__u8 tmp_mac[ETH_ALEN];
 
 	if (xdp_process_echo_packet(xdp, true))
-		return XDP_PASS;
+		return XDP_DROP;
 
 	__builtin_memcpy(tmp_mac, eh->h_source, ETH_ALEN);
 	__builtin_memcpy(eh->h_source, eh->h_dest, ETH_ALEN);
