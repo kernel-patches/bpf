@@ -5,6 +5,7 @@
 #include <bpf/bpf_tracing.h>
 #include <stdbool.h>
 #include "bpf_arena_common.h"
+#include "bpf_misc.h"
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
@@ -85,10 +86,24 @@ int and(const void *ctx)
 {
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
-#ifdef ENABLE_ATOMICS_TESTS
+#if defined(ENABLE_ATOMICS_TESTS) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 
-	__sync_fetch_and_and(&and64_value, 0x011ull << 32);
-	__sync_fetch_and_and(&and32_value, 0x011);
+	asm volatile(
+		"r1 = addr_space_cast(%[and64_value], 0, 1);"
+		"lock *(u64 *)(r1 + 0) &= %[val]"
+		:
+		: __imm_ptr(and64_value),
+		  [val]"r"(0x011ull << 32)
+		: "r1"
+	);
+	asm volatile(
+		"r1 = addr_space_cast(%[and32_value], 0, 1);"
+		"lock *(u32 *)(r1 + 0) &= %[val]"
+		:
+		: __imm_ptr(and32_value),
+		  [val]"w"(0x011)
+		: "r1"
+	);
 #endif
 
 	return 0;
@@ -102,9 +117,24 @@ int or(const void *ctx)
 {
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
-#ifdef ENABLE_ATOMICS_TESTS
-	__sync_fetch_and_or(&or64_value, 0x011ull << 32);
-	__sync_fetch_and_or(&or32_value, 0x011);
+#if defined(ENABLE_ATOMICS_TESTS) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+
+	asm volatile(
+		"r1 = addr_space_cast(%[or64_value], 0, 1);"
+		"lock *(u64 *)(r1 + 0) |= %[val]"
+		:
+		: __imm_ptr(or64_value),
+		  [val]"r"(0x011ull << 32)
+		: "r1"
+	);
+	asm volatile(
+		"r1 = addr_space_cast(%[or32_value], 0, 1);"
+		"lock *(u32 *)(r1 + 0) |= %[val]"
+		:
+		: __imm_ptr(or32_value),
+		  [val]"w"(0x011)
+		: "r1"
+	);
 #endif
 
 	return 0;
@@ -118,9 +148,24 @@ int xor(const void *ctx)
 {
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
-#ifdef ENABLE_ATOMICS_TESTS
-	__sync_fetch_and_xor(&xor64_value, 0x011ull << 32);
-	__sync_fetch_and_xor(&xor32_value, 0x011);
+#if defined(ENABLE_ATOMICS_TESTS) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+
+	asm volatile(
+		"r1 = addr_space_cast(%[xor64_value], 0, 1);"
+		"lock *(u64 *)(r1 + 0) ^= %[val]"
+		:
+		: __imm_ptr(xor64_value),
+		  [val]"r"(0x011ull << 32)
+		: "r1"
+	);
+	asm volatile(
+		"r1 = addr_space_cast(%[xor32_value], 0, 1);"
+		"lock *(u32 *)(r1 + 0) ^= %[val]"
+		:
+		: __imm_ptr(xor32_value),
+		  [val]"w"(0x011)
+		: "r1"
+	);
 #endif
 
 	return 0;
