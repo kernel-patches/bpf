@@ -11,6 +11,7 @@
 struct node_data {
 	long key;
 	long data;
+	struct prog_test_ref_kfunc __kptr *stashed_in_node;
 	struct bpf_rb_node node;
 };
 
@@ -85,17 +86,34 @@ static bool less(struct bpf_rb_node *a, const struct bpf_rb_node *b)
 
 static int create_and_stash(int idx, int val)
 {
+	struct prog_test_ref_kfunc *inner;
 	struct map_value *mapval;
 	struct node_data *res;
+	unsigned long dummy;
 
 	mapval = bpf_map_lookup_elem(&some_nodes, &idx);
 	if (!mapval)
 		return 1;
 
+	dummy = 0;
+	inner = bpf_kfunc_call_test_acquire(&dummy);
+	if (!inner)
+		return 2;
+
 	res = bpf_obj_new(typeof(*res));
-	if (!res)
-		return 1;
+	if (!res) {
+		bpf_kfunc_call_test_release(inner);
+		return 3;
+	}
 	res->key = val;
+
+	inner = bpf_kptr_xchg(&res->stashed_in_node, inner);
+	if (inner) {
+		/* Should never happen, we just obj_new'd res */
+		bpf_kfunc_call_test_release(inner);
+		bpf_obj_drop(res);
+		return 4;
+	}
 
 	res = bpf_kptr_xchg(&mapval->node, res);
 	if (res)
