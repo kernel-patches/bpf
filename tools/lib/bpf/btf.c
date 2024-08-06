@@ -601,7 +601,7 @@ static int btf_sanity_check(const struct btf *btf)
 	__u32 i, n = btf__type_cnt(btf);
 	int err;
 
-	for (i = 1; i < n; i++) {
+	for (i = btf->start_id; i < n; i++) {
 		t = btf_type_by_id(btf, i);
 		err = btf_validate_type(btf, t, i);
 		if (err)
@@ -5431,7 +5431,7 @@ int btf__distill_base(const struct btf *src_btf, struct btf **new_base_btf,
 	 * BTF available.
 	 */
 	new_split = btf__new_empty_split(new_base);
-	if (!new_split_btf) {
+	if (!new_split) {
 		err = -errno;
 		goto done;
 	}
