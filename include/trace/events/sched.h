@@ -559,9 +559,9 @@ DEFINE_EVENT(sched_stat_runtime, sched_stat_runtime,
  */
 TRACE_EVENT(sched_pi_setprio,
 
-	TP_PROTO(struct task_struct *tsk, struct task_struct *pi_task),
+	TP_PROTO(struct task_struct *tsk, struct task_struct *pi_task__nullable),
 
-	TP_ARGS(tsk, pi_task),
+	TP_ARGS(tsk, pi_task__nullable),
 
 	TP_STRUCT__entry(
 		__array( char,	comm,	TASK_COMM_LEN	)
@@ -574,8 +574,8 @@ TRACE_EVENT(sched_pi_setprio,
 		memcpy(__entry->comm, tsk->comm, TASK_COMM_LEN);
 		__entry->pid		= tsk->pid;
 		__entry->oldprio	= tsk->prio;
-		__entry->newprio	= pi_task ?
-				min(tsk->normal_prio, pi_task->prio) :
+		__entry->newprio	= pi_task__nullable ?
+				min(tsk->normal_prio, pi_task__nullable->prio) :
 				tsk->normal_prio;
 		/* XXX SCHED_DEADLINE bits missing */
 	),
