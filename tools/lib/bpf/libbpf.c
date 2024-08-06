@@ -13853,6 +13853,9 @@ int bpf_object__open_subskeleton(struct bpf_object_subskeleton *s)
 		var = btf_var_secinfos(map_type);
 		for (i = 0; i < len; i++, var++) {
 			var_type = btf__type_by_id(btf, var->type);
+			if (!var_type)
+				return libbpf_err(-ENOENT);
+
 			var_name = btf__name_by_offset(btf, var_type->name_off);
 			if (strcmp(var_name, var_skel->name) == 0) {
 				*var_skel->addr = map->mmaped + var->offset;
