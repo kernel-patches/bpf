@@ -6385,8 +6385,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
 	struct btf *btf = bpf_prog_get_target_btf(prog);
 	const char *tname = prog->aux->attach_func_name;
+	const struct btf_param *args, *parg = NULL;
 	struct bpf_verifier_log *log = info->log;
-	const struct btf_param *args;
 	const char *tag_value;
 	u32 nr_args, arg;
 	int i, ret;
@@ -6463,7 +6463,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		if (!t)
 			/* Default prog with MAX_BPF_FUNC_REG_ARGS args */
 			return true;
-		t = btf_type_by_id(btf, args[arg].type);
+		parg = &args[arg];
+		t = btf_type_by_id(btf, parg->type);
 	}
 
 	/* skip modifiers */
@@ -6543,6 +6544,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			return false;
 		}
 	}
+
+	if (parg && btf_param_match_suffix(btf, parg, "__nullable"))
+		info->reg_type |= PTR_MAYBE_NULL;
 
 	info->btf = btf;
 	info->btf_id = t->type;
