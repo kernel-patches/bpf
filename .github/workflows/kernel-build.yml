@@ -89,7 +89,7 @@ jobs:
           patches-root: '${{ github.workspace }}/ci/diffs'
           repo-root: '${{ github.workspace }}'
       - name: Setup build environment
-        uses: libbpf/ci/setup-build-env@main
+        uses: eddyz87/libbpf-ci/setup-build-env@selftests-disasm-support
         with:
           arch: ${{ inputs.arch }}
           llvm-version: ${{ inputs.llvm-version }}
