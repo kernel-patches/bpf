@@ -73,7 +73,7 @@ static bool selem_linked_to_map(const struct bpf_local_storage_elem *selem)
 
 struct bpf_local_storage_elem *
 bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
-		void *value, bool charge_mem, gfp_t gfp_flags)
+		void *value, bool charge_mem, gfp_t gfp_flags, bool from_user)
 {
 	struct bpf_local_storage_elem *selem;
 
@@ -100,7 +100,7 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 
 	if (selem) {
 		if (value)
-			copy_map_value(&smap->map, SDATA(selem)->data, value);
+			copy_map_value_user(&smap->map, SDATA(selem)->data, value, from_user);
 		/* No need to call check_and_init_map_value as memory is zero init */
 		return selem;
 	}
@@ -530,9 +530,11 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	struct bpf_local_storage_elem *alloc_selem, *selem = NULL;
 	struct bpf_local_storage *local_storage;
 	unsigned long flags;
+	bool from_user = map_flags & BPF_FROM_USER;
 	int err;
 
 	/* BPF_EXIST and BPF_NOEXIST cannot be both set */
+	map_flags &= ~BPF_FROM_USER;
 	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST) ||
 	    /* BPF_F_LOCK can only be used in a value with spin_lock */
 	    unlikely((map_flags & BPF_F_LOCK) &&
@@ -550,7 +552,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		if (err)
 			return ERR_PTR(err);
 
-		selem = bpf_selem_alloc(smap, owner, value, true, gfp_flags);
+		selem = bpf_selem_alloc(smap, owner, value, true, gfp_flags, from_user);
 		if (!selem)
 			return ERR_PTR(-ENOMEM);
 
@@ -575,8 +577,8 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		if (err)
 			return ERR_PTR(err);
 		if (old_sdata && selem_linked_to_storage_lockless(SELEM(old_sdata))) {
-			copy_map_value_locked(&smap->map, old_sdata->data,
-					      value, false);
+			copy_map_value_locked_user(&smap->map, old_sdata->data,
+						   value, false, from_user);
 			return old_sdata;
 		}
 	}
@@ -584,7 +586,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	/* A lookup has just been done before and concluded a new selem is
 	 * needed. The chance of an unnecessary alloc is unlikely.
 	 */
-	alloc_selem = selem = bpf_selem_alloc(smap, owner, value, true, gfp_flags);
+	alloc_selem = selem = bpf_selem_alloc(smap, owner, value, true, gfp_flags, from_user);
 	if (!alloc_selem)
 		return ERR_PTR(-ENOMEM);
 
@@ -607,8 +609,8 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		goto unlock;
 
 	if (old_sdata && (map_flags & BPF_F_LOCK)) {
-		copy_map_value_locked(&smap->map, old_sdata->data, value,
-				      false);
+		copy_map_value_locked_user(&smap->map, old_sdata->data, value,
+					   false, from_user);
 		selem = SELEM(old_sdata);
 		goto unlock;
 	}

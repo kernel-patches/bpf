@@ -155,8 +155,134 @@ static void maybe_wait_bpf_programs(struct bpf_map *map)
 		synchronize_rcu();
 }
 
-static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
-				void *key, void *value, __u64 flags)
+static void *trans_addr_pages(struct page **pages, int npages)
+{
+	if (npages == 1)
+		return page_address(pages[0]);
+	/* For multiple pages, we need to use vmap() to get a contiguous
+	 * virtual address range.
+	 */
+	return vmap(pages, npages, VM_MAP, PAGE_KERNEL);
+}
+
+#define KPTR_USER_MAX_PAGES 16
+
+static int bpf_obj_trans_pin_uaddr(struct btf_field *field, void **addr)
+{
+	const struct btf_type *t;
+	struct page *pages[KPTR_USER_MAX_PAGES];
+	void *ptr, *kern_addr;
+	u32 type_id, tsz;
+	int r, npages;
+
+	ptr = *addr;
+	type_id = field->kptr.btf_id;
+	t = btf_type_id_size(field->kptr.btf, &type_id, &tsz);
+	if (!t)
+		return -EINVAL;
+	if (tsz == 0) {
+		*addr = NULL;
+		return 0;
+	}
+
+	npages = (((intptr_t)ptr + tsz + ~PAGE_MASK) -
+		  ((intptr_t)ptr & PAGE_MASK)) >> PAGE_SHIFT;
+	if (npages > KPTR_USER_MAX_PAGES)
+		return -E2BIG;
+	r = pin_user_pages_fast((intptr_t)ptr & PAGE_MASK, npages, 0, pages);
+	if (r != npages)
+		return -EINVAL;
+	kern_addr = trans_addr_pages(pages, npages);
+	if (!kern_addr)
+		return -ENOMEM;
+	*addr = kern_addr + ((intptr_t)ptr & ~PAGE_MASK);
+	return 0;
+}
+
+void bpf_obj_unpin_uaddr(const struct btf_field *field, void *addr)
+{
+	struct page *pages[KPTR_USER_MAX_PAGES];
+	int npages, i;
+	u32 size, type_id;
+	void *ptr;
+
+	type_id = field->kptr.btf_id;
+	btf_type_id_size(field->kptr.btf, &type_id, &size);
+	if (size == 0)
+		return;
+
+	ptr = (void *)((intptr_t)addr & PAGE_MASK);
+	npages = (((intptr_t)addr + size + ~PAGE_MASK) - (intptr_t)ptr) >> PAGE_SHIFT;
+	for (i = 0; i < npages; i++) {
+		pages[i] = virt_to_page(ptr);
+		ptr += PAGE_SIZE;
+	}
+	if (npages > 1)
+		/* Paired with vmap() in trans_addr_pages() */
+		vunmap((void *)((intptr_t)addr & PAGE_MASK));
+	unpin_user_pages(pages, npages);
+}
+
+static int bpf_obj_trans_pin_uaddrs(struct btf_record *rec, void *src, u32 size)
+{
+	u32 next_off;
+	int i, err;
+
+	if (IS_ERR_OR_NULL(rec))
+		return 0;
+
+	if (!btf_record_has_field(rec, BPF_KPTR_USER))
+		return 0;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type != BPF_KPTR_USER)
+			continue;
+
+		next_off = rec->fields[i].offset;
+		if (next_off + sizeof(void *) > size)
+			return -EINVAL;
+		err = bpf_obj_trans_pin_uaddr(&rec->fields[i], src + next_off);
+		if (!err)
+			continue;
+
+		/* Rollback */
+		for (i--; i >= 0; i--) {
+			if (rec->fields[i].type != BPF_KPTR_USER)
+				continue;
+			next_off = rec->fields[i].offset;
+			bpf_obj_unpin_uaddr(&rec->fields[i], *(void **)(src + next_off));
+			*(void **)(src + next_off) = NULL;
+		}
+
+		return err;
+	}
+
+	return 0;
+}
+
+static void bpf_obj_unpin_uaddrs(struct btf_record *rec, void *src)
+{
+	u32 next_off;
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	if (!btf_record_has_field(rec, BPF_KPTR_USER))
+		return;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type != BPF_KPTR_USER)
+			continue;
+
+		next_off = rec->fields[i].offset;
+		bpf_obj_unpin_uaddr(&rec->fields[i], *(void **)(src + next_off));
+		*(void **)(src + next_off) = NULL;
+	}
+}
+
+static int bpf_map_update_value_inner(struct bpf_map *map, struct file *map_file,
+				      void *key, void *value, __u64 flags)
 {
 	int err;
 
@@ -204,6 +330,29 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 		rcu_read_unlock();
 	}
 	bpf_enable_instrumentation();
+
+	return err;
+}
+
+static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
+				void *key, void *value, __u64 flags)
+{
+	int err;
+
+	if (flags & BPF_FROM_USER) {
+		/* Pin user memory can lead to context switch, so we need
+		 * to do it before potential RCU lock.
+		 */
+		err = bpf_obj_trans_pin_uaddrs(map->record, value,
+					       bpf_map_value_size(map));
+		if (err)
+			return err;
+	}
+
+	err = bpf_map_update_value_inner(map, map_file, key, value, flags);
+
+	if (err && (flags & BPF_FROM_USER))
+		bpf_obj_unpin_uaddrs(map->record, value);
 
 	return err;
 }
@@ -714,6 +863,11 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 				field->kptr.dtor(xchgd_field);
 			}
 			break;
+		case BPF_KPTR_USER:
+			if (virt_addr_valid(*(void **)field_ptr))
+				bpf_obj_unpin_uaddr(field, *(void **)field_ptr);
+			*(void **)field_ptr = NULL;
+			break;
 		case BPF_LIST_HEAD:
 			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
@@ -1151,6 +1305,12 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				    map->map_type != BPF_MAP_TYPE_INODE_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE) {
+					ret = -EOPNOTSUPP;
+					goto free_map_tab;
+				}
+				break;
+			case BPF_KPTR_USER:
+				if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}
@@ -1618,10 +1778,14 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 	struct bpf_map *map;
 	void *key, *value;
 	u32 value_size;
+	u64 extra_flags = 0;
 	struct fd f;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_UPDATE_ELEM))
+		return -EINVAL;
+	/* Prevent userspace from setting any internal flags */
+	if (attr->flags & ~(BIT(BPF_MAP_UPDATE_FLAG_BITS) - 1))
 		return -EINVAL;
 
 	f = fdget(ufd);
@@ -1653,7 +1817,9 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto free_key;
 	}
 
-	err = bpf_map_update_value(map, f.file, key, value, attr->flags);
+	if (map->map_type == BPF_MAP_TYPE_TASK_STORAGE)
+		extra_flags |= BPF_FROM_USER;
+	err = bpf_map_update_value(map, f.file, key, value, attr->flags | extra_flags);
 	if (!err)
 		maybe_wait_bpf_programs(map);
 
@@ -1852,6 +2018,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
 	u32 value_size, cp, max_count;
 	void *key, *value;
+	u64 extra_flags = 0;
 	int err = 0;
 
 	if (attr->batch.elem_flags & ~BPF_F_LOCK)
@@ -1881,6 +2048,8 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 		return -ENOMEM;
 	}
 
+	if (map->map_type == BPF_MAP_TYPE_TASK_STORAGE)
+		extra_flags |= BPF_FROM_USER;
 	for (cp = 0; cp < max_count; cp++) {
 		err = -EFAULT;
 		if (copy_from_user(key, keys + cp * map->key_size,
@@ -1889,7 +2058,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 			break;
 
 		err = bpf_map_update_value(map, map_file, key, value,
-					   attr->batch.elem_flags);
+					   attr->batch.elem_flags | extra_flags);
 
 		if (err)
 			break;

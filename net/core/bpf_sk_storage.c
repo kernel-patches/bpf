@@ -137,7 +137,7 @@ bpf_sk_storage_clone_elem(struct sock *newsk,
 {
 	struct bpf_local_storage_elem *copy_selem;
 
-	copy_selem = bpf_selem_alloc(smap, newsk, NULL, true, GFP_ATOMIC);
+	copy_selem = bpf_selem_alloc(smap, newsk, NULL, true, GFP_ATOMIC, false);
 	if (!copy_selem)
 		return NULL;
 

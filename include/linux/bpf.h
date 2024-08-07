@@ -30,6 +30,7 @@
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
 #include <linux/cfi.h>
+#include <linux/mm.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -477,10 +478,12 @@ static inline void bpf_long_memcpy(void *dst, const void *src, u32 size)
 		data_race(*ldst++ = *lsrc++);
 }
 
+void bpf_obj_unpin_uaddr(const struct btf_field *field, void *addr);
+
 /* copy everything but bpf_spin_lock, bpf_timer, and kptrs. There could be one of each. */
 static inline void bpf_obj_memcpy(struct btf_record *rec,
 				  void *dst, void *src, u32 size,
-				  bool long_memcpy)
+				  bool long_memcpy, bool from_user)
 {
 	u32 curr_off = 0;
 	int i;
@@ -496,21 +499,40 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 	for (i = 0; i < rec->cnt; i++) {
 		u32 next_off = rec->fields[i].offset;
 		u32 sz = next_off - curr_off;
+		void *addr;
 
 		memcpy(dst + curr_off, src + curr_off, sz);
+		if (from_user && rec->fields[i].type == BPF_KPTR_USER) {
+			/* Unpin old address.
+			 *
+			 * Alignments are guaranteed by btf_find_field_one().
+			 */
+			addr = *(void **)(dst + next_off);
+			if (virt_addr_valid(addr))
+				bpf_obj_unpin_uaddr(&rec->fields[i], addr);
+			else if (addr)
+				WARN_ON_ONCE(1);
+
+			*(void **)(dst + next_off) = *(void **)(src + next_off);
+		}
 		curr_off += rec->fields[i].size + sz;
 	}
 	memcpy(dst + curr_off, src + curr_off, size - curr_off);
 }
 
+static inline void copy_map_value_user(struct bpf_map *map, void *dst, void *src, bool from_user)
+{
+	bpf_obj_memcpy(map->record, dst, src, map->value_size, false, from_user);
+}
+
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 {
-	bpf_obj_memcpy(map->record, dst, src, map->value_size, false);
+	bpf_obj_memcpy(map->record, dst, src, map->value_size, false, false);
 }
 
 static inline void copy_map_value_long(struct bpf_map *map, void *dst, void *src)
 {
-	bpf_obj_memcpy(map->record, dst, src, map->value_size, true);
+	bpf_obj_memcpy(map->record, dst, src, map->value_size, true, false);
 }
 
 static inline void bpf_obj_memzero(struct btf_record *rec, void *dst, u32 size)
@@ -538,6 +560,8 @@ static inline void zero_map_value(struct bpf_map *map, void *dst)
 	bpf_obj_memzero(map->record, dst, map->value_size);
 }
 
+void copy_map_value_locked_user(struct bpf_map *map, void *dst, void *src,
+				bool lock_src, bool from_user);
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src);
 void bpf_timer_cancel_and_free(void *timer);
@@ -774,6 +798,11 @@ enum bpf_arg_type {
 	__BPF_ARG_TYPE_LIMIT	= BPF_TYPE_LIMIT,
 };
 static_assert(__BPF_ARG_TYPE_MAX <= BPF_BASE_TYPE_LIMIT);
+
+#define BPF_MAP_UPDATE_FLAG_BITS 3
+enum bpf_map_update_flag {
+	BPF_FROM_USER = BIT(0 + BPF_MAP_UPDATE_FLAG_BITS)
+};
 
 /* type of values returned from helper functions */
 enum bpf_return_type {

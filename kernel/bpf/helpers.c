@@ -372,8 +372,8 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_btf_id    = BPF_PTR_POISON,
 };
 
-void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
-			   bool lock_src)
+void copy_map_value_locked_user(struct bpf_map *map, void *dst, void *src,
+				bool lock_src, bool from_user)
 {
 	struct bpf_spin_lock *lock;
 
@@ -383,9 +383,15 @@ void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 		lock = dst + map->record->spin_lock_off;
 	preempt_disable();
 	__bpf_spin_lock_irqsave(lock);
-	copy_map_value(map, dst, src);
+	copy_map_value_user(map, dst, src, from_user);
 	__bpf_spin_unlock_irqrestore(lock);
 	preempt_enable();
+}
+
+void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
+			   bool lock_src)
+{
+	copy_map_value_locked_user(map, dst, src, lock_src, false);
 }
 
 BPF_CALL_0(bpf_jiffies64)

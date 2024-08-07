@@ -147,7 +147,7 @@ static long cgroup_storage_update_elem(struct bpf_map *map, void *key,
 	struct bpf_cgroup_storage *storage;
 	struct bpf_storage_buffer *new;
 
-	if (unlikely(flags & ~(BPF_F_LOCK | BPF_EXIST)))
+	if (unlikely(flags & ~BPF_F_LOCK))
 		return -EINVAL;
 
 	if (unlikely((flags & BPF_F_LOCK) &&
