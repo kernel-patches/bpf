@@ -353,11 +353,30 @@ int BPF_PROG(socket_post_create, struct socket *sock, int family,
 	return 1;
 }
 
+SEC("cgroup/getsockopt")
+int _getsockopt(struct bpf_sockopt *ctx)
+{
+	struct bpf_sock *sk = ctx->sk;
+	int *optval = ctx->optval;
+	struct tcp_sock *tp;
+
+	if (!sk || ctx->level != SOL_TCP || ctx->optname != TCP_BPF_SOCK_OPS_CB_FLAGS)
+		return 1;
+
+	tp = bpf_core_cast(sk, struct tcp_sock);
+	if (ctx->optval + sizeof(int) <= ctx->optval_end) {
+		*optval = tp->bpf_sock_ops_cb_flags;
+		ctx->retval = 0;
+	}
+	return 1;
+}
+
 SEC("sockops")
 int skops_sockopt(struct bpf_sock_ops *skops)
 {
 	struct bpf_sock *bpf_sk = skops->sk;
 	struct sock *sk;
+	int flags;
 
 	if (!bpf_sk)
 		return 1;
@@ -384,9 +403,8 @@ int skops_sockopt(struct bpf_sock_ops *skops)
 		nr_passive += !(bpf_test_sockopt(skops, sk) ||
 				test_tcp_maxseg(skops, sk) ||
 				test_tcp_saved_syn(skops, sk));
-		bpf_sock_ops_cb_flags_set(skops,
-					  skops->bpf_sock_ops_cb_flags |
-					  BPF_SOCK_OPS_STATE_CB_FLAG);
+		flags = skops->bpf_sock_ops_cb_flags | BPF_SOCK_OPS_STATE_CB_FLAG;
+		bpf_setsockopt(skops, SOL_TCP, TCP_BPF_SOCK_OPS_CB_FLAGS, &flags, sizeof(flags));
 		break;
 	case BPF_SOCK_OPS_STATE_CB:
 		if (skops->args[1] == BPF_TCP_CLOSE_WAIT)
