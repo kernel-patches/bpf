@@ -5340,6 +5340,10 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	int perm_flags;
 	const char *reg_name = "";
 
+	if (kptr_field->type == BPF_KPTR_USER)
+		/* BPF programs should not change any user kptr */
+		return -EACCES;
+
 	if (btf_is_kernel(reg->btf)) {
 		perm_flags = PTR_MAYBE_NULL | PTR_TRUSTED | MEM_RCU;
 
@@ -5483,6 +5487,12 @@ static u32 btf_ld_kptr_type(struct bpf_verifier_env *env, struct btf_field *kptr
 			ret |= NON_OWN_REF;
 	} else {
 		ret |= PTR_UNTRUSTED;
+		if (kptr_field->type == BPF_KPTR_USER)
+			/* In oder to access directly from bpf
+			 * programs. NON_OWN_REF make the memory
+			 * writable. Check check_ptr_to_btf_access().
+			 */
+			ret |= MEM_ALLOC | NON_OWN_REF;
 	}
 
 	return ret;
@@ -5576,6 +5586,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			case BPF_KPTR_UNREF:
 			case BPF_KPTR_REF:
 			case BPF_KPTR_PERCPU:
+			case BPF_KPTR_USER:
 				if (src != ACCESS_DIRECT) {
 					verbose(env, "kptr cannot be accessed indirectly by helper\n");
 					return -EACCES;
