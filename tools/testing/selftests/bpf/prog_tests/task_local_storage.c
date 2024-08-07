@@ -5,14 +5,31 @@
 #include <unistd.h>
 #include <sched.h>
 #include <pthread.h>
+#include <sys/eventfd.h>
 #include <sys/syscall.h>   /* For SYS_xxx definitions */
 #include <sys/types.h>
+#include <sys/mman.h>
 #include <test_progs.h>
 #include "task_local_storage_helpers.h"
 #include "task_local_storage.skel.h"
 #include "task_local_storage_exit_creds.skel.h"
 #include "task_ls_recursion.skel.h"
 #include "task_storage_nodeadlock.skel.h"
+
+struct user_data {
+	int a;
+	int b;
+	int result;
+};
+
+struct value_type {
+	struct user_data *udata_mmap;
+	struct user_data *udata;
+};
+
+#define MAGIC_VALUE 0xabcd1234
+
+#include "task_ls_kptr_user.skel.h"
 
 static void test_sys_enter_exit(void)
 {
@@ -38,6 +55,109 @@ static void test_sys_enter_exit(void)
 	ASSERT_EQ(skel->bss->mismatch_cnt, 0, "mismatch_cnt");
 out:
 	task_local_storage__destroy(skel);
+}
+
+static void test_kptr_user(void)
+{
+	struct user_data user_data = { .a = 1, .b = 2, .result = 0 };
+	struct user_data user_data_mmap_v = { .a = 7, .b = 7 };
+	struct task_ls_kptr_user *skel = NULL;
+	struct user_data *user_data_mmap;
+	int task_fd = -1, ev_fd = -1;
+	struct value_type value;
+	pid_t pid;
+	int err, wstatus;
+	__u64 dummy = 1;
+
+	user_data_mmap = mmap(NULL, sizeof(*user_data_mmap), PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (!ASSERT_NEQ(user_data_mmap, MAP_FAILED, "mmap"))
+		return;
+
+	memcpy(user_data_mmap, &user_data_mmap_v, sizeof(*user_data_mmap));
+	value.udata_mmap = user_data_mmap;
+	value.udata = &user_data;
+
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_NEQ(task_fd, -1, "sys_pidfd_open"))
+		goto out;
+
+	ev_fd = eventfd(0, 0);
+	if (!ASSERT_NEQ(ev_fd, -1, "eventfd"))
+		goto out;
+
+	skel = task_ls_kptr_user__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		goto out;
+
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.datamap), &task_fd, &value, 0);
+	if (!ASSERT_OK(err, "update_datamap"))
+		exit(1);
+
+	/* Make sure the BPF program can access the user_data_mmap even if
+	 * it's munmapped already.
+	 */
+	munmap(user_data_mmap, sizeof(*user_data_mmap));
+	user_data_mmap = NULL;
+
+	err = task_ls_kptr_user__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		goto out;
+
+	fflush(stdout);
+	fflush(stderr);
+
+	pid = fork();
+	if (pid < 0)
+		goto out;
+
+	/* Call syscall in the child process, but access the map value of
+	 * the parent process in the BPF program to check if the user kptr
+	 * is translated/mapped correctly.
+	 */
+	if (pid == 0) {
+		/* child */
+
+		/* Overwrite the user_data in the child process to check if
+		 * the BPF program accesses the user_data of the parent.
+		 */
+		user_data.a = 0;
+		user_data.b = 0;
+
+		/* Wait for the parent to set child_pid */
+		read(ev_fd, &dummy, sizeof(dummy));
+
+		exit(0);
+	}
+
+	skel->bss->parent_pid = syscall(SYS_gettid);
+	skel->bss->child_pid = pid;
+
+	write(ev_fd, &dummy, sizeof(dummy));
+
+	err = waitpid(pid, &wstatus, 0);
+	ASSERT_EQ(err, pid, "waitpid");
+	skel->bss->child_pid = 0;
+
+	ASSERT_EQ(MAGIC_VALUE + user_data.a + user_data.b +
+		  user_data_mmap_v.a + user_data_mmap_v.b,
+		  user_data.result, "result");
+
+	/* Check if user programs can access the value of user kptrs
+	 * through bpf_map_lookup_elem(). Make sure the kernel value is not
+	 * leaked.
+	 */
+	err = bpf_map_lookup_elem(bpf_map__fd(skel->maps.datamap), &task_fd, &value);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem"))
+		goto out;
+	ASSERT_EQ(value.udata_mmap, NULL, "lookup_udata_mmap");
+	ASSERT_EQ(value.udata, NULL, "lookup_udata");
+
+out:
+	task_ls_kptr_user__destroy(skel);
+	close(ev_fd);
+	close(task_fd);
+	munmap(user_data_mmap, sizeof(*user_data_mmap));
 }
 
 static void test_exit_creds(void)
@@ -237,4 +357,6 @@ void test_task_local_storage(void)
 		test_recursion();
 	if (test__start_subtest("nodeadlock"))
 		test_nodeadlock();
+	if (test__start_subtest("kptr_user"))
+		test_kptr_user();
 }
