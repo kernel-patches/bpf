@@ -13,6 +13,7 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/helpers.sh"
 
 ARCH=$(uname -m)
+DEPLOYMENT=$(if [[ "$GITHUB_REPOSITORY" == *"-rc" ]]; then echo "rc"; else echo "prod"; fi)
 
 STATUS_FILE=/mnt/vmtest/exitstatus
 OUTPUT_DIR=/mnt/vmtest
@@ -34,6 +35,7 @@ DENYLIST=$(read_lists \
 	"$BPF_SELFTESTS_DIR/DENYLIST.${ARCH}" \
 	"$VMTEST_CONFIGS_PATH/DENYLIST" \
 	"$VMTEST_CONFIGS_PATH/DENYLIST.${ARCH}" \
+	"$VMTEST_CONFIGS_PATH/DENYLIST.${DEPLOYMENT}" \
 )
 ALLOWLIST=$(read_lists \
 	"$BPF_SELFTESTS_DIR/ALLOWLIST" \
