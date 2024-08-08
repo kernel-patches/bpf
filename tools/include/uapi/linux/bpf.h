@@ -4217,6 +4217,8 @@ union bpf_attr {
  * 		*current*\ **->mm->arg_start** and *current*\
  * 		**->mm->env_start**: using this helper and the return value,
  * 		one can quickly iterate at the right offset of the memory area.
+ *
+ *		For sleepable programs use **bpf_copy_from_user_str**\ ().
  * 	Return
  * 		On success, the strictly positive length of the output string,
  * 		including the trailing NUL character. On error, a negative
@@ -5792,6 +5794,25 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_copy_from_user_str(void *dst, u32 size, const void *user_ptr)
+ *	Description
+ *		Copy a NUL terminated string from an unsafe user address
+ *		*unsafe_ptr* to *dst*. The *size* should include the
+ *		terminating NUL byte. In case the string length is smaller than
+ *		*size*, the target is not padded with further NUL bytes. If the
+ *		string length is larger than *size*, just *size*-1 bytes are
+ *		copied and the last byte is set to NUL.
+ *
+ *		On success, returns the number of bytes that were written,
+ *		including the terminal NUL. See **bpf_probe_read_user_str**\ () for
+ *		examples of why this is better than **bpf_copy_from_user**\ ().
+ *
+ *		This helper can only be used by sleepable programs.
+ *	Return
+ *		On success, the strictly positive length of the output string,
+ *		including the trailing NUL character. On error, a negative
+ *		value.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6006,6 +6027,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(copy_from_user_str, 212, ##ctx)		\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't

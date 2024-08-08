@@ -7,7 +7,7 @@
 
 int target_pid = 0;
 void *user_ptr = 0;
-int read_ret[8];
+int read_ret[9];
 
 char _license[] SEC("license") = "GPL";
 
@@ -40,6 +40,7 @@ int do_copy_from_user(void *ctx)
 	read_ret[6] = bpf_copy_from_user(buf, sizeof(buf), user_ptr);
 	read_ret[7] = bpf_copy_from_user_task(buf, sizeof(buf), user_ptr,
 					      bpf_get_current_task_btf(), 0);
+	read_ret[8] = bpf_copy_from_user_str(buf, sizeof(buf), user_ptr);
 
 	return 0;
 }

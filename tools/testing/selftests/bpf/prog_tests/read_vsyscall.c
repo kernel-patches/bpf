@@ -22,6 +22,7 @@ struct read_ret_desc {
 	{ .name = "probe_read_user", .ret = -EFAULT },
 	{ .name = "probe_read_user_str", .ret = -EFAULT },
 	{ .name = "copy_from_user", .ret = -EFAULT },
+	{ .name = "copy_from_user_str", .ret = -EFAULT },
 	{ .name = "copy_from_user_task", .ret = -EFAULT },
 };
 

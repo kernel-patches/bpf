@@ -14,8 +14,10 @@ int uretprobe_byname_res = 0;
 int uprobe_byname2_res = 0;
 int uretprobe_byname2_res = 0;
 int uprobe_byname3_sleepable_res = 0;
+int uprobe_byname3_sleepable_res_str = 0;
 int uprobe_byname3_res = 0;
 int uretprobe_byname3_sleepable_res = 0;
+int uretprobe_byname3_sleepable_res_str = 0;
 int uretprobe_byname3_res = 0;
 void *user_ptr = 0;
 
@@ -87,11 +89,24 @@ static __always_inline bool verify_sleepable_user_copy(void)
 	return bpf_strncmp(data, sizeof(data), "test_data") == 0;
 }
 
+static __always_inline bool verify_sleepable_user_str_copy(void)
+{
+	int ret;
+	char data[9];
+
+	ret = bpf_copy_from_user_str(data, sizeof(data), user_ptr);
+
+	return bpf_strncmp(data, sizeof(data), "test_data") == 0 && ret == 9;
+}
+
+
 SEC("uprobe.s//proc/self/exe:trigger_func3")
 int handle_uprobe_byname3_sleepable(struct pt_regs *ctx)
 {
 	if (verify_sleepable_user_copy())
 		uprobe_byname3_sleepable_res = 9;
+	if (verify_sleepable_user_str_copy())
+		uprobe_byname3_sleepable_res_str = 13;
 	return 0;
 }
 
@@ -111,6 +126,8 @@ int handle_uretprobe_byname3_sleepable(struct pt_regs *ctx)
 {
 	if (verify_sleepable_user_copy())
 		uretprobe_byname3_sleepable_res = 11;
+	if (verify_sleepable_user_str_copy())
+		uretprobe_byname3_sleepable_res_str = 14;
 	return 0;
 }
 

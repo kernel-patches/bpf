@@ -286,6 +286,8 @@ static void test_uprobe_sleepable(struct test_attach_probe *skel)
 	ASSERT_EQ(skel->bss->uprobe_byname3_res, 10, "check_uprobe_byname3_res");
 	ASSERT_EQ(skel->bss->uretprobe_byname3_sleepable_res, 11, "check_uretprobe_byname3_sleepable_res");
 	ASSERT_EQ(skel->bss->uretprobe_byname3_res, 12, "check_uretprobe_byname3_res");
+	ASSERT_EQ(skel->bss->uprobe_byname3_sleepable_res_str, 13, "check_uprobe_byname3_sleepable_res_str");
+	ASSERT_EQ(skel->bss->uretprobe_byname3_sleepable_res_str, 14, "check_uretprobe_byname3_sleepable_res_str");
 }
 
 void test_attach_probe(void)
