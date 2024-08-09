@@ -2939,6 +2939,47 @@ __bpf_kfunc void bpf_iter_bits_destroy(struct bpf_iter_bits *it)
 	bpf_mem_free(&bpf_global_ma, kit->bits);
 }
 
+/**
+ * bpf_copy_from_user_str() - Copy a string from an unsafe user address
+ * @dst:             Destination address, in kernel space.  This buffer must be at
+ *                   least @dst__szk bytes long.
+ * @dst__szk:        Maximum number of bytes to copy, including the trailing NUL.
+ * @unsafe_ptr__ign: Source address, in user space.
+ * @flags:           The only supported flag is BPF_ZERO_BUFFER
+ *
+ * Copies a NUL-terminated string from userspace to BPF space. If user string is
+ * too long this will still ensure zero termination in the dst buffer unless
+ * buffer size is 0.
+ *
+ * If BPF_ZERO_BUFFER flag is set, memset the tail of @dst to 0 on success.
+ */
+__bpf_kfunc int bpf_copy_from_user_str(void *dst, u32 dst__szk, const void __user *unsafe_ptr__ign, u64 flags)
+{
+	int ret;
+	int count;
+
+	if (unlikely(!dst__szk))
+		return 0;
+
+	count = dst__szk - 1;
+	if (unlikely(!count)) {
+		((char *)dst)[0] = '\0';
+		return 1;
+	}
+
+	ret = strncpy_from_user(dst, unsafe_ptr__ign, count);
+	if (ret >= 0) {
+		if (flags & BPF_ZERO_BUFFER) {
+			memset((char *)dst + ret, 0, dst__szk - ret);
+		} else {
+			((char *)dst)[ret] = '\0';
+		}
+		ret++;
+	}
+
+	return ret;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3024,6 +3065,7 @@ BTF_ID_FLAGS(func, bpf_preempt_enable)
 BTF_ID_FLAGS(func, bpf_iter_bits_new, KF_ITER_NEW)
 BTF_ID_FLAGS(func, bpf_iter_bits_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_bits_destroy, KF_ITER_DESTROY)
+BTF_ID_FLAGS(func, bpf_copy_from_user_str, KF_SLEEPABLE)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
