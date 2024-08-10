@@ -5,6 +5,9 @@
 #include "tailcall_poke.skel.h"
 #include "tailcall_bpf2bpf_hierarchy2.skel.h"
 #include "tailcall_bpf2bpf_hierarchy3.skel.h"
+#include "tailcall_bpf2bpf_hierarchy_freplace.skel.h"
+#include "tailcall_bpf2bpf_freplace1.skel.h"
+#include "tc_bpf2bpf.skel.h"
 
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
@@ -1495,6 +1498,170 @@ static void test_tailcall_bpf2bpf_hierarchy_3(void)
 	RUN_TESTS(tailcall_bpf2bpf_hierarchy3);
 }
 
+static void test_tailcall_bpf2bpf_hierarchy_freplace(bool freplace_subprog,
+						     bool tailcall_tc,
+						     bool target_entry2)
+{
+	struct tailcall_bpf2bpf_hierarchy_freplace *freplace_skel = NULL;
+	struct bpf_link *freplace_link = NULL;
+	int freplace_prog_fd, prog_fd, map_fd;
+	struct tc_bpf2bpf *tc_skel = NULL;
+	char buff[128] = {};
+	int err, i, val;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	tc_skel = tc_bpf2bpf__open_and_load();
+	if (!ASSERT_OK_PTR(tc_skel, "tc_bpf2bpf__open_and_load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(target_entry2 ? tc_skel->progs.entry2 :
+				  tc_skel->progs.entry);
+	freplace_skel = tailcall_bpf2bpf_hierarchy_freplace__open();
+	if (!ASSERT_OK_PTR(freplace_skel, "tailcall_bpf2bpf_hierarchy_freplace__open"))
+		goto out;
+
+	err = bpf_program__set_attach_target(freplace_skel->progs.entry, prog_fd,
+					     freplace_subprog ?
+					     "subprog" : "entry");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = tailcall_bpf2bpf_hierarchy_freplace__load(freplace_skel);
+	if (!ASSERT_OK(err, "tailcall_bpf2bpf_hierarchy_freplace__load"))
+		goto out;
+
+	freplace_prog_fd = bpf_program__fd(freplace_skel->progs.entry);
+	map_fd = bpf_map__fd(freplace_skel->maps.jmp_table);
+	val = tailcall_tc ? prog_fd : freplace_prog_fd;
+	i = 0;
+	err = bpf_map_update_elem(map_fd, &i, &val, BPF_ANY);
+	if (!ASSERT_OK(err, "update jmp_table"))
+		goto out;
+
+	freplace_link = bpf_program__attach_freplace(freplace_skel->progs.entry,
+						     prog_fd, freplace_subprog ?
+						     "subprog" : "entry");
+	if (!ASSERT_OK_PTR(freplace_link, "attach_freplace"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "tc prog run");
+	ASSERT_EQ(topts.retval, 34, "tc prog run retval");
+
+	i = 0;
+	err = bpf_map_delete_elem(map_fd, &i);
+	if (!ASSERT_OK(err, "delete_elem from jmp_table"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "tc prog run again");
+	ASSERT_EQ(topts.retval, 35, "tc prog run retval again");
+
+out:
+	bpf_link__destroy(freplace_link);
+	tailcall_bpf2bpf_hierarchy_freplace__destroy(freplace_skel);
+	tc_bpf2bpf__destroy(tc_skel);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy_freplace_1 checks the count value of tail
+ * call limit enforcement matches with expectations, when the entry function
+ * of a tc bpf prog is replaced by a freplace bpf prog, and there is no tail
+ * call in tc bpf prog and there are tail calls in freplace bpf prog.
+ */
+static void test_tailcall_bpf2bpf_hierarchy_freplace_1(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_freplace(false, false, false);
+}
+
+/* test_tailcall_bpf2bpf_hierarchy_freplace_1 checks the count value of tail
+ * call limit enforcement matches with expectations, when the subprog function
+ * of a tc bpf prog is replaced by a freplace bpf prog, and there is no tail
+ * call in tc bpf prog and there are tail calls in freplace bpf prog.
+ */
+static void test_tailcall_bpf2bpf_hierarchy_freplace_2(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_freplace(true, false, false);
+}
+
+static void test_tailcall_bpf2bpf_hierarchy_freplace_3(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_freplace(true, true, false);
+}
+
+static void test_tailcall_bpf2bpf_hierarchy_freplace_4(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_freplace(true, false, true);
+}
+
+static void test_tailcall_bpf2bpf_hierarchy_freplace_5(void)
+{
+	test_tailcall_bpf2bpf_hierarchy_freplace(true, true, true);
+}
+
+/* test_tailcall_bpf2bpf_freplace_1 checks that the count value of the tail
+ * call limit enforcement matches with expectations:
+ *
+ * entry --> freplace --tailcall-> entry
+ */
+static void test_tailcall_bpf2bpf_freplace_1(void)
+{
+	struct tailcall_bpf2bpf_freplace1 *freplace_skel = NULL;
+	struct tc_bpf2bpf *tc_skel = NULL;
+	struct bpf_link *freplace_link = NULL;
+	char buff[128] = {};
+	int prog_fd, map_fd;
+	int err, i;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	tc_skel = tc_bpf2bpf__open_and_load();
+	if (!ASSERT_OK_PTR(tc_skel, "open tc_skel"))
+		goto out;
+
+	prog_fd = bpf_program__fd(tc_skel->progs.entry);
+	freplace_skel = tailcall_bpf2bpf_freplace1__open();
+	if (!ASSERT_OK_PTR(freplace_skel, "tailcall_bpf2bpf_freplace1__open"))
+		goto out;
+
+	err = bpf_program__set_attach_target(freplace_skel->progs.entry,
+					     prog_fd, "subprog");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = tailcall_bpf2bpf_freplace1__load(freplace_skel);
+	if (!ASSERT_OK(err, "tailcall_bpf2bpf_freplace1__load"))
+		goto out;
+
+	i = 0;
+	map_fd = bpf_map__fd(freplace_skel->maps.jmp_table);
+	err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update jmp_table"))
+		goto out;
+
+	freplace_link = bpf_program__attach_freplace(freplace_skel->progs.entry,
+						     prog_fd, "subprog");
+	if (!ASSERT_OK_PTR(freplace_link, "attach_freplace"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run_opts");
+	ASSERT_EQ(topts.retval, 34, "test_run_opts retval");
+
+out:
+	bpf_link__destroy(freplace_link);
+	tailcall_bpf2bpf_freplace1__destroy(freplace_skel);
+	tc_bpf2bpf__destroy(tc_skel);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1543,4 +1710,16 @@ void test_tailcalls(void)
 		test_tailcall_bpf2bpf_hierarchy_fentry_entry();
 	test_tailcall_bpf2bpf_hierarchy_2();
 	test_tailcall_bpf2bpf_hierarchy_3();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_freplace_1"))
+		test_tailcall_bpf2bpf_hierarchy_freplace_1();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_freplace_2"))
+		test_tailcall_bpf2bpf_hierarchy_freplace_2();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_freplace_3"))
+		test_tailcall_bpf2bpf_hierarchy_freplace_3();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_freplace_4"))
+		test_tailcall_bpf2bpf_hierarchy_freplace_4();
+	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_freplace_5"))
+		test_tailcall_bpf2bpf_hierarchy_freplace_5();
+	if (test__start_subtest("tailcall_bpf2bpf_freplace_1"))
+		test_tailcall_bpf2bpf_freplace_1();
 }
