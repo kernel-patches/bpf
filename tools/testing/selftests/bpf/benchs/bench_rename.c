@@ -106,6 +106,12 @@ static void setup_fexit(void)
 	attach_bpf(ctx.skel->progs.prog5);
 }
 
+static void setup_tp(void)
+{
+	setup_ctx();
+	attach_bpf(ctx.skel->progs.prog6);
+}
+
 const struct bench bench_rename_base = {
 	.name = "rename-base",
 	.validate = validate,
@@ -130,6 +136,16 @@ const struct bench bench_rename_kretprobe = {
 	.name = "rename-kretprobe",
 	.validate = validate,
 	.setup = setup_kretprobe,
+	.producer_thread = producer,
+	.measure = measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_rename_tp = {
+	.name = "rename-tp",
+	.validate = validate,
+	.setup = setup_tp,
 	.producer_thread = producer,
 	.measure = measure,
 	.report_progress = hits_drops_report_progress,

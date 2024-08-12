@@ -496,6 +496,7 @@ extern const struct bench bench_rename_kretprobe;
 extern const struct bench bench_rename_rawtp;
 extern const struct bench bench_rename_fentry;
 extern const struct bench bench_rename_fexit;
+extern const struct bench bench_rename_tp;
 
 /* pure counting benchmarks to establish theoretical lmits */
 extern const struct bench bench_trig_usermode_count;
@@ -553,6 +554,7 @@ static const struct bench *benchs[] = {
 	&bench_rename_rawtp,
 	&bench_rename_fentry,
 	&bench_rename_fexit,
+	&bench_rename_tp,
 	/* pure counting benchmarks for establishing theoretical limits */
 	&bench_trig_usermode_count,
 	&bench_trig_kernel_count,
