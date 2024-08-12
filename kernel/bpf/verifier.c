@@ -16159,7 +16159,8 @@ static u32 kfunc_nocsr_clobber_mask(struct bpf_kfunc_call_arg_meta *meta)
 /* Same as verifier_inlines_helper_call() but for kfuncs, see comment above */
 static bool verifier_inlines_kfunc_call(struct bpf_kfunc_call_arg_meta *meta)
 {
-	return false;
+	return meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
+	       meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast];
 }
 
 /* GCC and LLVM define a no_caller_saved_registers function attribute.
