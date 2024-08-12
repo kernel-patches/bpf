@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2019 Facebook */
-#include <stdbool.h>
-#include <stddef.h>
-#include <linux/bpf.h>
-#include <linux/ptrace.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
@@ -35,6 +32,12 @@ int BPF_PROG(prog4, struct task_struct *tsk, const char *buf, bool exec)
 
 SEC("fexit/__set_task_comm")
 int BPF_PROG(prog5, struct task_struct *tsk, const char *buf, bool exec)
+{
+	return 0;
+}
+
+SEC("tracepoint/task/task_rename")
+int prog6(struct trace_event_raw_task_rename *ctx)
 {
 	return 0;
 }

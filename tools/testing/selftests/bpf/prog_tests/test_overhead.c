@@ -61,9 +61,10 @@ void test_test_overhead(void)
 	const char *raw_tp_name = "prog3";
 	const char *fentry_name = "prog4";
 	const char *fexit_name = "prog5";
+	const char *tp_name = "prog6";
 	const char *kprobe_func = "__set_task_comm";
 	struct bpf_program *kprobe_prog, *kretprobe_prog, *raw_tp_prog;
-	struct bpf_program *fentry_prog, *fexit_prog;
+	struct bpf_program *fentry_prog, *fexit_prog, *tp_prog;
 	struct bpf_object *obj;
 	struct bpf_link *link;
 	int err, duration = 0;
@@ -95,6 +96,10 @@ void test_test_overhead(void)
 	fexit_prog = bpf_object__find_program_by_name(obj, fexit_name);
 	if (CHECK(!fexit_prog, "find_probe",
 		  "prog '%s' not found\n", fexit_name))
+		goto cleanup;
+	tp_prog = bpf_object__find_program_by_name(obj, tp_name);
+	if (CHECK(!tp_prog, "find_probe",
+		  "prog '%s' not found\n", tp_name))
 		goto cleanup;
 	err = bpf_object__load(obj);
 	if (CHECK(err, "obj_load", "err %d\n", err))
@@ -140,6 +145,13 @@ void test_test_overhead(void)
 	if (!ASSERT_OK_PTR(link, "attach_fexit"))
 		goto cleanup;
 	test_run("fexit");
+	bpf_link__destroy(link);
+
+	/* attach tp */
+	link = bpf_program__attach_tracepoint(tp_prog, "task", "task_rename");
+	if (!ASSERT_OK_PTR(link, "attach_tp"))
+		goto cleanup;
+	test_run("tp");
 	bpf_link__destroy(link);
 
 cleanup:
