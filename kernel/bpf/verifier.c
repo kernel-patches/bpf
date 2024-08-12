@@ -16140,6 +16140,28 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 	}
 }
 
+/* Same as helper_nocsr_clobber_mask() but for kfuncs, see comment above */
+static u32 kfunc_nocsr_clobber_mask(struct bpf_kfunc_call_arg_meta *meta)
+{
+	const struct btf_param *params;
+	u32 vlen, i, mask;
+
+	params = btf_params(meta->func_proto);
+	vlen = btf_type_vlen(meta->func_proto);
+	mask = 0;
+	if (!btf_type_is_void(btf_type_by_id(meta->btf, meta->func_proto->type)))
+		mask |= BIT(BPF_REG_0);
+	for (i = 0; i < vlen; ++i)
+		mask |= BIT(BPF_REG_1 + i);
+	return mask;
+}
+
+/* Same as verifier_inlines_helper_call() but for kfuncs, see comment above */
+static bool verifier_inlines_kfunc_call(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return false;
+}
+
 /* GCC and LLVM define a no_caller_saved_registers function attribute.
  * This attribute means that function scratches only some of
  * the caller saved registers defined by ABI.
@@ -16236,6 +16258,20 @@ static void mark_nocsr_pattern_for_call(struct bpf_verifier_env *env,
 		can_be_inlined = fn->allow_nocsr &&
 				 (verifier_inlines_helper_call(env, call->imm) ||
 				  bpf_jit_inlines_helper_call(call->imm));
+	}
+
+	if (bpf_pseudo_kfunc_call(call)) {
+		struct bpf_kfunc_call_arg_meta meta;
+		int err;
+
+		err = fetch_kfunc_meta(env, call, &meta, NULL);
+		if (err < 0)
+			/* error would be reported later */
+			return;
+
+		clobbered_regs_mask = kfunc_nocsr_clobber_mask(&meta);
+		can_be_inlined = (meta.kfunc_flags & KF_NOCSR) &&
+				 verifier_inlines_kfunc_call(&meta);
 	}
 
 	if (clobbered_regs_mask == ALL_CALLER_SAVED_REGS)
