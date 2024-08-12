@@ -88,6 +88,7 @@ void serial_test_bpf_obj_id(void)
 				!ASSERT_EQ(map_infos[i].value_size, sizeof(__u64), "value_size") ||
 				!ASSERT_EQ(map_infos[i].max_entries, 1, "max_entries") ||
 				!ASSERT_EQ(map_infos[i].map_flags, 0, "map_flags") ||
+				!ASSERT_GT(map_infos[i].memlock, 0, "memlock") ||
 				!ASSERT_EQ(info_len, sizeof(struct bpf_map_info), "map_info_len") ||
 				!ASSERT_STREQ((char *)map_infos[i].name, expected_map_name, "map_name"))
 			goto done;

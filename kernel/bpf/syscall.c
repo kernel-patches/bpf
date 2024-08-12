@@ -4891,6 +4891,7 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	info.max_entries = map->max_entries;
 	info.map_flags = map->map_flags;
 	info.map_extra = map->map_extra;
+	info.memlock = bpf_map_memory_usage(map);
 	memcpy(info.name, map->name, sizeof(map->name));
 
 	if (map->btf) {
