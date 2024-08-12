@@ -21647,6 +21647,35 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+static const struct btf_type *
+btf_find_tracepoint_proto(struct btf *btf, const char *name)
+{
+	const char prefix[] = "__bpf_trace_";
+	size_t size, len = strlen(name);
+	const struct btf_type *t = NULL;
+	char *buf;
+	s32 id;
+
+	size = sizeof(prefix) + len + 1;
+	buf = kmalloc(size, GFP_KERNEL);
+	if (!buf)
+		return NULL;
+
+	snprintf(buf, size, "%s%s", prefix, name);
+	id = btf_find_by_name_kind(btf, buf, BTF_KIND_FUNC);
+	if (id < 0)
+		goto out;
+	t = btf_type_by_id(btf, id);
+	if (!t)
+		goto out;
+	t = btf_type_by_id(btf, t->type);
+	if (!btf_type_is_func_proto(t))
+		t = NULL;
+out:
+	kfree(buf);
+	return t;
+}
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
@@ -21798,7 +21827,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (!btf_type_is_func_proto(t))
 			/* should never happen in valid vmlinux build */
 			return -EINVAL;
-
+		t = btf_find_tracepoint_proto(btf, tname);
+		if (!t)
+			return -EINVAL;
 		break;
 	case BPF_TRACE_ITER:
 		if (!btf_type_is_func(t)) {
