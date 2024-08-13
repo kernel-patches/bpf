@@ -8844,7 +8844,7 @@ static bool sock_filter_is_valid_access(int off, int size,
 }
 
 static int bpf_noop_prologue(struct bpf_insn *insn_buf, bool direct_write,
-			     const struct bpf_prog *prog)
+			     const struct bpf_prog *prog, struct module **module)
 {
 	/* Neither direct read nor direct write requires any preliminary
 	 * action.
@@ -8927,7 +8927,7 @@ static int bpf_gen_ld_abs(const struct bpf_insn *orig,
 }
 
 static int tc_cls_act_prologue(struct bpf_insn *insn_buf, bool direct_write,
-			       const struct bpf_prog *prog)
+			       const struct bpf_prog *prog, struct module **module)
 {
 	return bpf_unclone_prologue(insn_buf, direct_write, prog, TC_ACT_SHOT);
 }
@@ -9263,7 +9263,7 @@ static bool sock_ops_is_valid_access(int off, int size,
 }
 
 static int sk_skb_prologue(struct bpf_insn *insn_buf, bool direct_write,
-			   const struct bpf_prog *prog)
+			   const struct bpf_prog *prog, struct module **module)
 {
 	return bpf_unclone_prologue(insn_buf, direct_write, prog, SK_DROP);
 }

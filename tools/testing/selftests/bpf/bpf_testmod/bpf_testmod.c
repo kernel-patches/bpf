@@ -1141,7 +1141,7 @@ static int bpf_test_mod_st_ops__test_pro_epilogue(struct st_ops_args *args)
 }
 
 static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
-			       const struct bpf_prog *prog)
+			       const struct bpf_prog *prog, struct module **module)
 {
 	struct bpf_insn *insn = insn_buf;
 
@@ -1164,7 +1164,7 @@ static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 }
 
 static int st_ops_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_prog *prog,
-			       s16 ctx_stack_off)
+			       s16 ctx_stack_off, struct module **module)
 {
 	struct bpf_insn *insn = insn_buf;
 

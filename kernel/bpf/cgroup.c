@@ -2503,7 +2503,8 @@ static u32 cg_sockopt_convert_ctx_access(enum bpf_access_type type,
 
 static int cg_sockopt_get_prologue(struct bpf_insn *insn_buf,
 				   bool direct_write,
-				   const struct bpf_prog *prog)
+				   const struct bpf_prog *prog,
+				   struct module **module)
 {
 	/* Nothing to do for sockopt argument. The data is kzalloc'ated.
 	 */
