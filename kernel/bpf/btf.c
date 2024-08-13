@@ -7243,7 +7243,7 @@ struct bpf_cand_cache {
 	struct {
 		const struct btf *btf;
 		u32 id;
-	} cands[];
+	} cands[] __counted_by(cnt);
 };
 
 static DEFINE_MUTEX(cand_cache_mutex);
@@ -8787,9 +8787,9 @@ bpf_core_add_cands(struct bpf_cand_cache *cands, const struct btf *targ_btf,
 		memcpy(new_cands, cands, sizeof_cands(cands->cnt));
 		bpf_free_cands(cands);
 		cands = new_cands;
-		cands->cands[cands->cnt].btf = targ_btf;
-		cands->cands[cands->cnt].id = i;
 		cands->cnt++;
+		cands->cands[cands->cnt - 1].btf = targ_btf;
+		cands->cands[cands->cnt - 1].id = i;
 	}
 	return cands;
 }
