@@ -3,10 +3,11 @@
 #include <test_progs.h>
 #include "struct_ops_syscall.skel.h"
 
-#define EPILOGUE_A  10000
-#define PROLOGUE_A   1000
+#define KFUNC_A100    100
 #define KFUNC_A10      10
 #define SUBPROG_A       1
+#define EPILOGUE_A (10000 + KFUNC_A100 + KFUNC_A10)
+#define PROLOGUE_A  (1000 + KFUNC_A100 + KFUNC_A10)
 
 #define SUBPROG_TEST_MAIN	SUBPROG_A
 #define KFUNC_TEST_MAIN		(KFUNC_A10 + SUBPROG_A)

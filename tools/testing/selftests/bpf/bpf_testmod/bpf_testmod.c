@@ -966,6 +966,16 @@ __bpf_kfunc int bpf_kfunc_st_ops_inc10(struct st_ops_args *args)
 	return args->a;
 }
 
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_kfunc_st_ops_inc100(struct st_ops_args *args)
+{
+	args->a += 100;
+	return args->a;
+}
+
+__bpf_kfunc_end_defs();
+
 BTF_KFUNCS_START(bpf_testmod_check_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_testmod_test_mod_kfunc)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test1)
@@ -1140,6 +1150,10 @@ static int bpf_test_mod_st_ops__test_pro_epilogue(struct st_ops_args *args)
 	return 0;
 }
 
+BTF_ID_LIST(st_ops_epilogue_kfunc_list)
+BTF_ID(func, bpf_kfunc_st_ops_inc10)
+BTF_ID(func, bpf_kfunc_st_ops_inc100)
+
 static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 			       const struct bpf_prog *prog, struct module **module)
 {
@@ -1153,13 +1167,28 @@ static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 	 * r7 = r6->a;
 	 * r7 += 1000;
 	 * r6->a = r7;
+	 * r7 = r1;
+	 * r1 = r6;
+	 * bpf_kfunc_st_ops_in10(r1)
+	 * r1 = r6;
+	 * bpf_kfunc_st_ops_in100(r1)
+	 * r1 = r7;
 	 */
 	*insn++ = BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_1, 0);
 	*insn++ = BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6, offsetof(struct st_ops_args, a));
 	*insn++ = BPF_ALU32_IMM(BPF_ADD, BPF_REG_7, 1000);
 	*insn++ = BPF_STX_MEM(BPF_W, BPF_REG_6, BPF_REG_7, offsetof(struct st_ops_args, a));
+	*insn++ = BPF_MOV64_REG(BPF_REG_7, BPF_REG_1);
+	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
+	*insn++ = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0,
+			       st_ops_epilogue_kfunc_list[0]);
+	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
+	*insn++ = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0,
+			       st_ops_epilogue_kfunc_list[1]);
+	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_7);
 	*insn++ = prog->insnsi[0];
 
+	*module = THIS_MODULE;
 	return insn - insn_buf;
 }
 
@@ -1177,7 +1206,10 @@ static int st_ops_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_prog 
 	 * r6 = r1->a;
 	 * r6 += 10000;
 	 * r1->a = r6;
-	 * r0 = r6;
+	 * r6 = r1;
+	 * bpf_kfunc_st_ops_in10(r1)
+	 * r1 = r6;
+	 * bpf_kfunc_st_ops_in100(r1)
 	 * r0 *= 2;
 	 * BPF_EXIT;
 	 */
@@ -1186,10 +1218,16 @@ static int st_ops_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_prog 
 	*insn++ = BPF_LDX_MEM(BPF_W, BPF_REG_6, BPF_REG_1, offsetof(struct st_ops_args, a));
 	*insn++ = BPF_ALU32_IMM(BPF_ADD, BPF_REG_6, 10000);
 	*insn++ = BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_6, offsetof(struct st_ops_args, a));
-	*insn++ = BPF_MOV32_REG(BPF_REG_0, BPF_REG_6);
+	*insn++ = BPF_MOV64_REG(BPF_REG_6, BPF_REG_1);
+	*insn++ = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0,
+			       st_ops_epilogue_kfunc_list[0]);
+	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
+	*insn++ = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 0,
+			       st_ops_epilogue_kfunc_list[1]);
 	*insn++ = BPF_ALU32_IMM(BPF_MUL, BPF_REG_0, 2);
 	*insn++ = BPF_EXIT_INSN();
 
+	*module = THIS_MODULE;
 	return insn - insn_buf;
 }
 
