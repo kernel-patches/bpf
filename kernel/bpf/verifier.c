@@ -2787,6 +2787,61 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
+static int find_kfunc_desc_btf_offset(struct bpf_verifier_env *env, struct btf *btf,
+				      struct module *module, s16 *offset)
+{
+	struct bpf_kfunc_btf_tab *tab;
+	struct bpf_kfunc_btf *b;
+	s16 new_offset = S16_MAX;
+	u32 i;
+
+	if (btf_is_vmlinux(btf)) {
+		*offset = 0;
+		return 0;
+	}
+
+	tab = env->prog->aux->kfunc_btf_tab;
+	if (!tab) {
+		tab = kzalloc(sizeof(*tab), GFP_KERNEL);
+		if (!tab)
+			return -ENOMEM;
+		env->prog->aux->kfunc_btf_tab = tab;
+	}
+
+	b = tab->descs;
+	for (i = tab->nr_descs; i > 0; i--) {
+		if (b[i - 1].btf == btf) {
+			*offset = b[i - 1].offset;
+			return 0;
+		}
+		/* Search new_offset from backward S16_MAX, S16_MAX-1, ...
+		 * tab->nr_descs max out at MAX_KFUNC_BTFS which is
+		 * smaller than S16_MAX, so it will be able to find
+		 * a non-zero new_offset to use.
+		 */
+		if (new_offset == b[i - 1].offset)
+			new_offset--;
+	}
+
+	if (tab->nr_descs == MAX_KFUNC_BTFS) {
+		verbose(env, "too many different module BTFs\n");
+		return -E2BIG;
+	}
+
+	if (!try_module_get(module))
+		return -ENXIO;
+
+	b = &tab->descs[tab->nr_descs++];
+	btf_get(btf);
+	b->btf = btf;
+	b->module = module;
+	b->offset = new_offset;
+	*offset = new_offset;
+	sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
+	     kfunc_btf_cmp_by_off, NULL);
+	return 0;
+}
+
 static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 {
 	const struct btf_type *func, *func_proto;
@@ -19603,6 +19658,50 @@ apply_patch_buffer:
 	return 0;
 }
 
+static int fixup_pro_epilogue_kfunc(struct bpf_verifier_env *env, struct bpf_insn *insns,
+				    int cnt, struct module *module)
+{
+	struct btf *btf;
+	u32 func_id;
+	int i, err;
+	s16 offset;
+
+	for (i = 0; i < cnt; i++) {
+		if (!bpf_pseudo_kfunc_call(&insns[i]))
+			continue;
+
+		/* The kernel may not have BTF available, so only
+		 * try to get a btf if the pro/epilogue calls a kfunc.
+		 */
+		btf = btf_get_module_btf(module);
+		if (IS_ERR_OR_NULL(btf)) {
+			verbose(env, "cannot find BTF from %s for kfunc used in pro/epilogue\n",
+				module_name(module));
+			return -EINVAL;
+		}
+
+		func_id = insns[i].imm;
+		if (btf_is_vmlinux(btf) &&
+		    btf_id_set_contains(&special_kfunc_set, func_id)) {
+			verbose(env, "pro/epilogue cannot use special kfunc\n");
+			btf_put(btf);
+			return -EINVAL;
+		}
+
+		err = find_kfunc_desc_btf_offset(env, btf, module, &offset);
+		btf_put(btf);
+		if (err)
+			return err;
+
+		insns[i].off = offset;
+		err = add_kfunc_call(env, func_id, offset);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 /* convert load instructions that access fields of a context type into a
  * sequence of instructions that access fields of the underlying structure:
  *     struct __sk_buff    -> struct sk_buff
@@ -19612,21 +19711,27 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprogs = env->subprog_info;
 	const struct bpf_verifier_ops *ops = env->ops;
-	int i, cnt, size, ctx_field_size, delta = 0, epilogue_cnt = 0;
+	int err, i, cnt, size, ctx_field_size, delta = 0, epilogue_cnt = 0;
 	const int insn_cnt = env->prog->len;
 	struct bpf_insn insn_buf[16], epilogue_buf[16], *insn;
 	u32 target_size, size_default, off;
 	struct bpf_prog *new_prog;
 	enum bpf_access_type type;
 	bool is_narrower_load;
+	struct module *module;
 
 	if (ops->gen_epilogue) {
+		module = NULL;
 		epilogue_cnt = ops->gen_epilogue(epilogue_buf, env->prog,
-						 -(subprogs[0].stack_depth + 8), NULL);
+						 -(subprogs[0].stack_depth + 8), &module);
 		if (epilogue_cnt >= ARRAY_SIZE(epilogue_buf)) {
 			verbose(env, "bpf verifier is misconfigured\n");
 			return -EINVAL;
 		} else if (epilogue_cnt) {
+			err = fixup_pro_epilogue_kfunc(env, epilogue_buf, epilogue_cnt, module);
+			if (err)
+				return err;
+
 			/* Save the ARG_PTR_TO_CTX for the epilogue to use */
 			cnt = 0;
 			subprogs[0].stack_depth += 8;
@@ -19646,12 +19751,17 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			verbose(env, "bpf verifier is misconfigured\n");
 			return -EINVAL;
 		}
+		module = NULL;
 		cnt = ops->gen_prologue(insn_buf, env->seen_direct_write,
-					env->prog, NULL);
+					env->prog, &module);
 		if (cnt >= ARRAY_SIZE(insn_buf)) {
 			verbose(env, "bpf verifier is misconfigured\n");
 			return -EINVAL;
 		} else if (cnt) {
+			err = fixup_pro_epilogue_kfunc(env, insn_buf, cnt, module);
+			if (err)
+				return err;
+
 			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
 			if (!new_prog)
 				return -ENOMEM;
