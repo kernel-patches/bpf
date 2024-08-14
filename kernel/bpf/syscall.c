@@ -287,8 +287,8 @@ static void bpf_obj_unpin_uptrs(struct btf_record *rec, void *src)
 	bpf_obj_unpin_uptrs_cnt(rec, rec->cnt, src);
 }
 
-static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
-				void *key, void *value, __u64 flags)
+static int bpf_map_update_value_inner(struct bpf_map *map, struct file *map_file,
+				      void *key, void *value, __u64 flags)
 {
 	int err;
 
@@ -336,6 +336,29 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 		rcu_read_unlock();
 	}
 	bpf_enable_instrumentation();
+
+	return err;
+}
+
+static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
+				void *key, void *value, __u64 flags)
+{
+	int err;
+
+	if (map->map_type == BPF_MAP_TYPE_TASK_STORAGE) {
+		/* Pin user memory can lead to context switch, so we need
+		 * to do it before potential RCU lock.
+		 */
+		err = bpf_obj_trans_pin_uptrs(map->record, value,
+					      bpf_map_value_size(map));
+		if (err)
+			return err;
+	}
+
+	err = bpf_map_update_value_inner(map, map_file, key, value, flags);
+
+	if (err && map->map_type == BPF_MAP_TYPE_TASK_STORAGE)
+		bpf_obj_unpin_uptrs(map->record, value);
 
 	return err;
 }
@@ -846,6 +869,11 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 				field->kptr.dtor(xchgd_field);
 			}
 			break;
+		case BPF_UPTR:
+			if (*(void **)field_ptr)
+				bpf_obj_unpin_uptr(field, *(void **)field_ptr);
+			*(void **)field_ptr = NULL;
+			break;
 		case BPF_LIST_HEAD:
 			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
@@ -1231,7 +1259,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD |
-				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE,
+				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR,
 				       map->value_size);
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
@@ -1283,6 +1311,12 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				    map->map_type != BPF_MAP_TYPE_INODE_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE) {
+					ret = -EOPNOTSUPP;
+					goto free_map_tab;
+				}
+				break;
+			case BPF_UPTR:
+				if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}

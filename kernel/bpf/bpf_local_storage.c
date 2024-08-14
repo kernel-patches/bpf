@@ -99,8 +99,11 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 	}
 
 	if (selem) {
-		if (value)
+		if (value) {
 			copy_map_value(&smap->map, SDATA(selem)->data, value);
+			if (smap->map.map_type == BPF_MAP_TYPE_TASK_STORAGE)
+				bpf_obj_uptrcpy(smap->map.record, SDATA(selem)->data, value);
+		}
 		/* No need to call check_and_init_map_value as memory is zero init */
 		return selem;
 	}
@@ -575,8 +578,13 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		if (err)
 			return ERR_PTR(err);
 		if (old_sdata && selem_linked_to_storage_lockless(SELEM(old_sdata))) {
-			copy_map_value_locked(&smap->map, old_sdata->data,
-					      value, false);
+			if (smap->map.map_type == BPF_MAP_TYPE_TASK_STORAGE &&
+			    btf_record_has_field(smap->map.record, BPF_UPTR))
+				copy_map_uptr_locked(&smap->map, old_sdata->data,
+						     value, false);
+			else
+				copy_map_value_locked(&smap->map, old_sdata->data,
+						      value, false);
 			return old_sdata;
 		}
 	}
@@ -607,8 +615,13 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		goto unlock;
 
 	if (old_sdata && (map_flags & BPF_F_LOCK)) {
-		copy_map_value_locked(&smap->map, old_sdata->data, value,
-				      false);
+		if (smap->map.map_type == BPF_MAP_TYPE_TASK_STORAGE &&
+		    btf_record_has_field(smap->map.record, BPF_UPTR))
+			copy_map_uptr_locked(&smap->map, old_sdata->data,
+					     value, false);
+		else
+			copy_map_value_locked(&smap->map, old_sdata->data,
+					      value, false);
 		selem = SELEM(old_sdata);
 		goto unlock;
 	}
