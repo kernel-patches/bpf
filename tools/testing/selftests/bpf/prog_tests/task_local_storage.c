@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sched.h>
 #include <pthread.h>
+#include <sys/eventfd.h>
 #include <sys/syscall.h>   /* For SYS_xxx definitions */
 #include <sys/types.h>
 #include <test_progs.h>
@@ -13,6 +14,20 @@
 #include "task_local_storage_exit_creds.skel.h"
 #include "task_ls_recursion.skel.h"
 #include "task_storage_nodeadlock.skel.h"
+
+struct user_data {
+	int a;
+	int b;
+	int result;
+};
+
+struct value_type {
+	struct user_data *udata;
+};
+
+#define MAGIC_VALUE 0xabcd1234
+
+#include "task_ls_uptr.skel.h"
 
 static void test_sys_enter_exit(void)
 {
@@ -38,6 +53,95 @@ static void test_sys_enter_exit(void)
 	ASSERT_EQ(skel->bss->mismatch_cnt, 0, "mismatch_cnt");
 out:
 	task_local_storage__destroy(skel);
+}
+
+static struct user_data user_data __attribute__((aligned(16))) = {
+	.a = 1,
+	.b = 2,
+};
+
+static void test_uptr(void)
+{
+	struct task_ls_uptr *skel = NULL;
+	int task_fd = -1, ev_fd = -1;
+	struct value_type value;
+	int err, wstatus;
+	__u64 dummy = 1;
+	pid_t pid;
+
+	value.udata = &user_data;
+
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_NEQ(task_fd, -1, "sys_pidfd_open"))
+		goto out;
+
+	ev_fd = eventfd(0, 0);
+	if (!ASSERT_NEQ(ev_fd, -1, "eventfd"))
+		goto out;
+
+	skel = task_ls_uptr__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		goto out;
+
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.datamap), &task_fd, &value, 0);
+	if (!ASSERT_OK(err, "update_datamap"))
+		exit(1);
+
+	err = task_ls_uptr__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		goto out;
+
+	fflush(stdout);
+	fflush(stderr);
+
+	pid = fork();
+	if (pid < 0)
+		goto out;
+
+	/* Call syscall in the child process, but access the map value of
+	 * the parent process in the BPF program to check if the user kptr
+	 * is translated/mapped correctly.
+	 */
+	if (pid == 0) {
+		/* child */
+
+		/* Overwrite the user_data in the child process to check if
+		 * the BPF program accesses the user_data of the parent.
+		 */
+		user_data.a = 0;
+		user_data.b = 0;
+
+		/* Wait for the parent to set child_pid */
+		read(ev_fd, &dummy, sizeof(dummy));
+
+		exit(0);
+	}
+
+	skel->bss->parent_pid = syscall(SYS_gettid);
+	skel->bss->child_pid = pid;
+
+	write(ev_fd, &dummy, sizeof(dummy));
+
+	err = waitpid(pid, &wstatus, 0);
+	ASSERT_EQ(err, pid, "waitpid");
+	skel->bss->child_pid = 0;
+
+	ASSERT_EQ(MAGIC_VALUE + user_data.a + user_data.b,
+		  user_data.result, "result");
+
+	/* Check if user programs can access the value of user kptrs
+	 * through bpf_map_lookup_elem(). Make sure the kernel value is not
+	 * leaked.
+	 */
+	err = bpf_map_lookup_elem(bpf_map__fd(skel->maps.datamap), &task_fd, &value);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem"))
+		goto out;
+	ASSERT_EQ(value.udata, NULL, "lookup_udata");
+
+out:
+	task_ls_uptr__destroy(skel);
+	close(ev_fd);
+	close(task_fd);
 }
 
 static void test_exit_creds(void)
@@ -237,4 +341,6 @@ void test_task_local_storage(void)
 		test_recursion();
 	if (test__start_subtest("nodeadlock"))
 		test_nodeadlock();
+	if (test__start_subtest("uptr"))
+		test_uptr();
 }
