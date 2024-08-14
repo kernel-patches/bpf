@@ -388,6 +388,26 @@ void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 	preempt_enable();
 }
 
+/* Copy map value and uptr from src to dst, with lock_src indicating
+ * whether src or dst is locked.
+ */
+void copy_map_uptr_locked(struct bpf_map *map, void *src, void *dst,
+			  bool lock_src)
+{
+	struct bpf_spin_lock *lock;
+
+	if (lock_src)
+		lock = src + map->record->spin_lock_off;
+	else
+		lock = dst + map->record->spin_lock_off;
+	preempt_disable();
+	__bpf_spin_lock_irqsave(lock);
+	copy_map_value(map, dst, src);
+	bpf_obj_uptrcpy(map->record, dst, src);
+	__bpf_spin_unlock_irqrestore(lock);
+	preempt_enable();
+}
+
 BPF_CALL_0(bpf_jiffies64)
 {
 	return get_jiffies_64();
