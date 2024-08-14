@@ -106,9 +106,11 @@ int prog_msg_verdict(struct sk_msg_md *msg)
 	int verdict;
 
 	if (test_sockmap)
-		verdict = bpf_msg_redirect_map(msg, &sock_map, zero, 0);
+		verdict = bpf_msg_redirect_map(msg, &sock_map, zero,
+					       test_ingress ? BPF_F_INGRESS : 0);
 	else
-		verdict = bpf_msg_redirect_hash(msg, &sock_hash, &zero, 0);
+		verdict = bpf_msg_redirect_hash(msg, &sock_hash, &zero,
+						test_ingress ? BPF_F_INGRESS : 0);
 
 	count = bpf_map_lookup_elem(&verdict_map, &verdict);
 	if (count)

@@ -1850,6 +1850,8 @@ static void test_udp_unix_redir(struct test_sockmap_listen *skel, struct bpf_map
 static void run_tests(struct test_sockmap_listen *skel, struct bpf_map *map,
 		      int family)
 {
+	skel->bss->test_ingress = false;
+
 	test_ops(skel, map, family, SOCK_STREAM);
 	test_ops(skel, map, family, SOCK_DGRAM);
 	test_redir(skel, map, family, SOCK_STREAM);
