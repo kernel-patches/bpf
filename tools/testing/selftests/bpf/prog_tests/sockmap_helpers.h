@@ -16,6 +16,9 @@
 #define VMADDR_CID_LOCAL 1
 #endif
 
+#define u32(v) ((u32){(v)})
+#define u64(v) ((u64){(v)})
+
 #define __always_unused	__attribute__((__unused__))
 
 /* include/linux/cleanup.h */
@@ -483,6 +486,61 @@ static inline int create_socket_pairs(int family, int sotype, int *c0, int *c1,
 	}
 
 	return err;
+}
+
+static inline const char *socket_kind_to_str(int sock_fd)
+{
+	int domain = 0, type = 0;
+	socklen_t opt_len;
+
+	opt_len = sizeof(domain);
+	if (getsockopt(sock_fd, SOL_SOCKET, SO_DOMAIN, &domain, &opt_len))
+		FAIL_ERRNO("getsockopt(SO_DOMAIN)");
+
+	opt_len = sizeof(type);
+	if (getsockopt(sock_fd, SOL_SOCKET, SO_TYPE, &type, &opt_len))
+		FAIL_ERRNO("getsockopt(SO_TYPE)");
+
+	switch (domain) {
+	case AF_INET:
+		switch (type) {
+		case SOCK_STREAM:
+			return "tcp4";
+		case SOCK_DGRAM:
+			return "udp4";
+		}
+		break;
+	case AF_INET6:
+		switch (type) {
+		case SOCK_STREAM:
+			return "tcp6";
+		case SOCK_DGRAM:
+			return "udp6";
+		}
+		break;
+	case AF_UNIX:
+		switch (type) {
+		case SOCK_STREAM:
+			return "u_str";
+		case SOCK_DGRAM:
+			return "u_dgr";
+		case SOCK_SEQPACKET:
+			return "u_seq";
+		}
+		break;
+	case AF_VSOCK:
+		switch (type) {
+		case SOCK_STREAM:
+			return "v_str";
+		case SOCK_DGRAM:
+			return "v_dgr";
+		case SOCK_SEQPACKET:
+			return "v_seq";
+		}
+		break;
+	}
+
+	return "???";
 }
 
 #endif // __SOCKMAP_HELPERS__
