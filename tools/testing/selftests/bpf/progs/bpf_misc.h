@@ -90,6 +90,8 @@
 #define __arch_x86_64		__arch("X86_64")
 #define __arch_arm64		__arch("ARM64")
 #define __arch_riscv64		__arch("RISCV64")
+#define __jit_x86(basic_regex)	__attribute__((btf_decl_tag("comment:test_jit_x86=" basic_regex)))
+#define __jit_x86_unpriv(basic_regex)	__attribute__((btf_decl_tag("comment:test_jit_x86_unpriv=" basic_regex)))
 
 /* Convenience macro for use with 'asm volatile' blocks */
 #define __naked __attribute__((naked))
