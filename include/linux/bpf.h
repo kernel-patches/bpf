@@ -477,6 +477,8 @@ static inline void bpf_long_memcpy(void *dst, const void *src, u32 size)
 		data_race(*ldst++ = *lsrc++);
 }
 
+void bpf_obj_unpin_uptr(const struct btf_field *field, void *addr);
+
 /* copy everything but bpf_spin_lock, bpf_timer, and kptrs. There could be one of each. */
 static inline void bpf_obj_memcpy(struct btf_record *rec,
 				  void *dst, void *src, u32 size,
@@ -502,6 +504,34 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 	}
 	memcpy(dst + curr_off, src + curr_off, size - curr_off);
 }
+
+static inline void bpf_obj_uptrcpy(struct btf_record *rec,
+				   void *dst, void *src)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	for (i = 0; i < rec->cnt; i++) {
+		u32 next_off = rec->fields[i].offset;
+		void *addr;
+
+		if (rec->fields[i].type == BPF_UPTR) {
+			/* Unpin old address.
+			 *
+			 * Alignments are guaranteed by btf_find_field_one().
+			 */
+			addr = *(void **)(dst + next_off);
+			if (addr)
+				bpf_obj_unpin_uptr(&rec->fields[i], addr);
+
+			*(void **)(dst + next_off) = *(void **)(src + next_off);
+		}
+	}
+}
+
+void copy_map_uptr_locked(struct bpf_map *map, void *dst, void *src, bool lock_src);
 
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 {

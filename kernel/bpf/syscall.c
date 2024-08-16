@@ -155,8 +155,140 @@ static void maybe_wait_bpf_programs(struct bpf_map *map)
 		synchronize_rcu();
 }
 
-static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
-				void *key, void *value, __u64 flags)
+void bpf_obj_unpin_uptr(const struct btf_field *field, void *addr)
+{
+	struct page *pages[1];
+	u32 size, type_id;
+	int npages;
+	void *ptr;
+
+	type_id = field->kptr.btf_id;
+	btf_type_id_size(field->kptr.btf, &type_id, &size);
+	if (size == 0)
+		return;
+
+	ptr = (void *)((intptr_t)addr & PAGE_MASK);
+
+	npages = (((intptr_t)addr + size + ~PAGE_MASK) - (intptr_t)ptr) >> PAGE_SHIFT;
+	if (WARN_ON_ONCE(npages > 1))
+		return;
+
+	pages[0] = virt_to_page(ptr);
+	unpin_user_pages(pages, 1);
+}
+
+/* Unpin uptr fields in the record up to cnt */
+static void bpf_obj_unpin_uptrs_cnt(struct btf_record *rec, int cnt, void *src)
+{
+	u32 next_off;
+	void **kaddr_ptr;
+	int i;
+
+	for (i = 0; i < cnt; i++) {
+		if (rec->fields[i].type != BPF_UPTR)
+			continue;
+
+		next_off = rec->fields[i].offset;
+		kaddr_ptr = src + next_off;
+		if (*kaddr_ptr) {
+			bpf_obj_unpin_uptr(&rec->fields[i], *kaddr_ptr);
+			*kaddr_ptr = NULL;
+		}
+	}
+}
+
+/* Find all BPF_UPTR fields in the record, pin the user memory, map it
+ * to kernel space, and update the addresses in the source memory.
+ *
+ * The map value passing from userspace may contain user kptrs pointing to
+ * user memory. This function pins the user memory and maps it to kernel
+ * memory so that BPF programs can access it.
+ */
+static int bpf_obj_trans_pin_uptrs(struct btf_record *rec, void *src, u32 size)
+{
+	u32 type_id, tsz, npages, next_off;
+	void *uaddr, *kaddr, **uaddr_ptr;
+	const struct btf_type *t;
+	struct page *pages[1];
+	int i, err;
+
+	if (IS_ERR_OR_NULL(rec))
+		return 0;
+
+	if (!btf_record_has_field(rec, BPF_UPTR))
+		return 0;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type != BPF_UPTR)
+			continue;
+
+		next_off = rec->fields[i].offset;
+		if (next_off + sizeof(void *) > size) {
+			err = -EFAULT;
+			goto rollback;
+		}
+		uaddr_ptr = src + next_off;
+		uaddr = *uaddr_ptr;
+		if (!uaddr)
+			continue;
+
+		/* Make sure the user memory takes up at most one page */
+		type_id = rec->fields[i].kptr.btf_id;
+		t = btf_type_id_size(rec->fields[i].kptr.btf, &type_id, &tsz);
+		if (!t) {
+			err = -EFAULT;
+			goto rollback;
+		}
+		if (tsz == 0) {
+			*uaddr_ptr = NULL;
+			continue;
+		}
+		npages = (((intptr_t)uaddr + tsz + ~PAGE_MASK) -
+			  ((intptr_t)uaddr & PAGE_MASK)) >> PAGE_SHIFT;
+		if (npages > 1) {
+			/* Allow only one page */
+			err = -EFAULT;
+			goto rollback;
+		}
+
+		/* Pin the user memory */
+		err = pin_user_pages_fast((intptr_t)uaddr, 1, FOLL_LONGTERM | FOLL_WRITE, pages);
+		if (err < 0)
+			goto rollback;
+
+		/* Map to kernel space */
+		kaddr = page_address(pages[0]);
+		if (unlikely(!kaddr)) {
+			WARN_ON_ONCE(1);
+			unpin_user_pages(pages, 1);
+			err = -EFAULT;
+			goto rollback;
+		}
+		*uaddr_ptr = kaddr + ((intptr_t)uaddr & ~PAGE_MASK);
+	}
+
+	return 0;
+
+rollback:
+	/* Unpin the user memory of earlier fields */
+	bpf_obj_unpin_uptrs_cnt(rec, i, src);
+
+	return err;
+}
+
+static void bpf_obj_unpin_uptrs(struct btf_record *rec, void *src)
+{
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	if (!btf_record_has_field(rec, BPF_UPTR))
+		return;
+
+	bpf_obj_unpin_uptrs_cnt(rec, rec->cnt, src);
+}
+
+static int bpf_map_update_value_inner(struct bpf_map *map, struct file *map_file,
+				      void *key, void *value, __u64 flags)
 {
 	int err;
 
@@ -204,6 +336,29 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 		rcu_read_unlock();
 	}
 	bpf_enable_instrumentation();
+
+	return err;
+}
+
+static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
+				void *key, void *value, __u64 flags)
+{
+	int err;
+
+	if (map->map_type == BPF_MAP_TYPE_TASK_STORAGE) {
+		/* Pin user memory can lead to context switch, so we need
+		 * to do it before potential RCU lock.
+		 */
+		err = bpf_obj_trans_pin_uptrs(map->record, value,
+					      bpf_map_value_size(map));
+		if (err)
+			return err;
+	}
+
+	err = bpf_map_update_value_inner(map, map_file, key, value, flags);
+
+	if (err && map->map_type == BPF_MAP_TYPE_TASK_STORAGE)
+		bpf_obj_unpin_uptrs(map->record, value);
 
 	return err;
 }
@@ -714,6 +869,11 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 				field->kptr.dtor(xchgd_field);
 			}
 			break;
+		case BPF_UPTR:
+			if (*(void **)field_ptr)
+				bpf_obj_unpin_uptr(field, *(void **)field_ptr);
+			*(void **)field_ptr = NULL;
+			break;
 		case BPF_LIST_HEAD:
 			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
@@ -1099,7 +1259,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD |
-				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE,
+				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR,
 				       map->value_size);
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
@@ -1151,6 +1311,12 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				    map->map_type != BPF_MAP_TYPE_INODE_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE) {
+					ret = -EOPNOTSUPP;
+					goto free_map_tab;
+				}
+				break;
+			case BPF_UPTR:
+				if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}
