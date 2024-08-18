@@ -1160,6 +1160,8 @@ struct fgraph_ops {
 	void				*private;
 	trace_func_graph_ent_t		saved_func;
 	int				idx;
+	/* If skip_timestamp is true, this does not record timestamps. */
+	bool				skip_timestamp;
 };
 
 void *fgraph_reserve_data(int idx, int size_bytes);
