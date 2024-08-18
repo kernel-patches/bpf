@@ -84,6 +84,12 @@ ftrace_regs_get_frame_pointer(struct ftrace_regs *fregs)
 	return sp[0];	/* return backchain */
 }
 
+static __always_inline unsigned long
+ftrace_regs_get_return_address(const struct ftrace_regs *fregs)
+{
+	return fregs->regs.gprs[14];
+}
+
 #define arch_ftrace_fill_perf_regs(fregs, _regs)	 do {		\
 		(_regs)->psw.addr = (fregs)->regs.psw.addr;		\
 		(_regs)->gprs[15] = (fregs)->regs.gprs[15];		\

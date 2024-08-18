@@ -75,6 +75,12 @@ ftrace_regs_get_instruction_pointer(struct ftrace_regs *fregs)
 #define ftrace_regs_query_register_offset(name) \
 	regs_query_register_offset(name)
 
+static __always_inline unsigned long
+ftrace_regs_get_return_address(struct ftrace_regs *fregs)
+{
+	return fregs->regs.link;
+}
+
 struct ftrace_ops;
 
 #define ftrace_graph_func ftrace_graph_func

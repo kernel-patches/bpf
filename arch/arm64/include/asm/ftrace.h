@@ -132,6 +132,12 @@ ftrace_regs_get_frame_pointer(const struct ftrace_regs *fregs)
 	return fregs->fp;
 }
 
+static __always_inline unsigned long
+ftrace_regs_get_return_address(const struct ftrace_regs *fregs)
+{
+	return fregs->lr;
+}
+
 static __always_inline struct pt_regs *
 ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
 {
