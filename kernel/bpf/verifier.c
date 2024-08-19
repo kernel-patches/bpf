@@ -8233,6 +8233,12 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 			verbose(env, "bug: bad parent state for iter next call");
 			return -EFAULT;
 		}
+
+		if (cur_iter->type & MEM_RCU) /* KF_RCU_PROTECTED */
+			cur_fr->regs[BPF_REG_0].type |= MEM_RCU;
+		else
+			cur_fr->regs[BPF_REG_0].type |= PTR_TRUSTED;
+
 		/* Note cur_st->parent in the call below, it is necessary to skip
 		 * checkpoint created for cur_st by is_state_visited()
 		 * right at this instruction.
