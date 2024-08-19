@@ -487,12 +487,12 @@ static int tcp_validate_cookie(struct tcp_syncookie *ctx)
 
 	mssind = (cookie & (3 << 6)) >> 6;
 	if (ctx->ipv4) {
-		if (mssind > ARRAY_SIZE(msstab4))
+		if (mssind >= ARRAY_SIZE(msstab4))
 			goto err;
 
 		ctx->attrs.mss = msstab4[mssind];
 	} else {
-		if (mssind > ARRAY_SIZE(msstab6))
+		if (mssind >= ARRAY_SIZE(msstab6))
 			goto err;
 
 		ctx->attrs.mss = msstab6[mssind];
