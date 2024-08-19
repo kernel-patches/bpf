@@ -2365,13 +2365,16 @@ int do_sock_getsockopt(struct socket *sock, bool compat, int level,
 	int max_optlen __maybe_unused;
 	const struct proto_ops *ops;
 	int err;
+	bool enabled;
 
 	err = security_socket_getsockopt(sock, level, optname);
 	if (err)
 		return err;
 
-	if (!compat)
-		max_optlen = BPF_CGROUP_GETSOCKOPT_MAX_OPTLEN(optlen);
+	if (!compat) {
+		enabled = cgroup_bpf_enabled(CGROUP_GETSOCKOPT);
+		max_optlen = BPF_CGROUP_GETSOCKOPT_MAX_OPTLEN(optlen, enabled);
+	}
 
 	ops = READ_ONCE(sock->ops);
 	if (level == SOL_SOCKET) {
@@ -2390,7 +2393,7 @@ int do_sock_getsockopt(struct socket *sock, bool compat, int level,
 	if (!compat)
 		err = BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock->sk, level, optname,
 						     optval, optlen, max_optlen,
-						     err);
+						     err, enabled);
 
 	return err;
 }
