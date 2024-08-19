@@ -368,7 +368,7 @@ No additional type data follow ``btf_type``.
   * ``info.kind_flag``: 0
   * ``info.kind``: BTF_KIND_FUNC
   * ``info.vlen``: linkage information (BTF_FUNC_STATIC, BTF_FUNC_GLOBAL
-                   or BTF_FUNC_EXTERN)
+                   or BTF_FUNC_EXTERN - see :ref:`BTF_Function_Linkage_Constants`)
   * ``type``: a BTF_KIND_FUNC_PROTO type
 
 No additional type data follow ``btf_type``.
@@ -424,9 +424,9 @@ following data::
         __u32   linkage;
     };
 
-``struct btf_var`` encoding:
-  * ``linkage``: currently only static variable 0, or globally allocated
-                 variable in ELF sections 1
+``btf_var.linkage`` may take the values: BTF_VAR_STATIC (for a static variable),
+or BTF_VAR_GLOBAL_ALLOCATED (for a globally allocated variable stored in ELF sections 1) -
+see :ref:`BTF_Var_Linkage_Constants`.
 
 Not all type of global variables are supported by LLVM at this point.
 The following is currently available:
@@ -548,6 +548,42 @@ The ``btf_enum64`` encoding:
 
 If the original enum value is signed and the size is less than 8,
 that value will be sign extended into 8 bytes.
+
+2.3 Constant Values
+-------------------
+
+.. _BTF_Function_Linkage_Constants:
+
+2.3.1 Function Linkage Constant Values
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. list-table::
+   :widths: 1 1
+   :header-rows: 1
+
+   * - Name
+     - Value
+   * - ``BTF_FUNC_STATIC``
+     - ``0``
+   * - ``BTF_FUNC_GLOBAL``
+     - ``1``
+   * - ``BTF_FUNC_EXTERN``
+     - ``2``
+
+.. _BTF_Var_Linkage_Constants:
+
+2.3.2 Variable Linkage Constant Values
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. list-table::
+   :widths: 1 1
+   :header-rows: 1
+
+   * - Name
+     - Value
+   * - ``BTF_VAR_STATIC``
+     - ``0``
+   * - ``BTF_VAR_GLOBAL_ALLOCATED``
+     - ``1``
+
 
 3. BTF Kernel API
 =================
