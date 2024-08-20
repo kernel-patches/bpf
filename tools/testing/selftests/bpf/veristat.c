@@ -16,10 +16,12 @@
 #include <sys/stat.h>
 #include <bpf/libbpf.h>
 #include <bpf/btf.h>
+#include <bpf/hashmap.h>
 #include <libelf.h>
 #include <gelf.h>
 #include <float.h>
 #include <math.h>
+#include <linux/err.h>
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -179,7 +181,15 @@ static struct env {
 	int files_skipped;
 	int progs_processed;
 	int progs_skipped;
+	int top_lines;
+	bool include_insn;
 } env;
+
+struct line_cnt {
+	long cnt;
+	char *line;
+	char *insn;
+};
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
@@ -206,6 +216,8 @@ const char argp_program_doc[] =
 enum {
 	OPT_LOG_FIXED = 1000,
 	OPT_LOG_SIZE = 1001,
+	OPT_TOP_LINES = 1002,
+	OPT_INCLUDE_INSN = 1003,
 };
 
 static const struct argp_option opts[] = {
@@ -228,6 +240,9 @@ static const struct argp_option opts[] = {
 	  "Force frequent BPF verifier state checkpointing (set BPF_F_TEST_STATE_FREQ program flag)" },
 	{ "test-reg-invariants", 'r', NULL, 0,
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
+	{ "top-lines", OPT_TOP_LINES, "N", 0, "Emit N the most frequent C source code lines." },
+	{ "include-instructions", OPT_INCLUDE_INSN, NULL, OPTION_HIDDEN,
+	  "If emitting the most frequent C source code lines, include their BPF instructions." },
 	{},
 };
 
@@ -336,6 +351,17 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		if (!env.filenames[env.filename_cnt])
 			return -ENOMEM;
 		env.filename_cnt++;
+		break;
+	case OPT_TOP_LINES:
+		errno = 0;
+		env.top_lines = strtol(arg, NULL, 10);
+		if (errno) {
+			fprintf(stderr, "invalid top lines N specifier: %s\n", arg);
+			argp_usage(state);
+		}
+		break;
+	case OPT_INCLUDE_INSN:
+		env.include_insn = true;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -817,6 +843,24 @@ static void free_verif_stats(struct verif_stats *stats, size_t stat_cnt)
 	free(stats);
 }
 
+static int line_cnt_cmp(const void *a, const void *b)
+{
+	const struct line_cnt **a_cnt = (const struct line_cnt **)a;
+	const struct line_cnt **b_cnt = (const struct line_cnt **)b;
+
+	return (*b_cnt)->cnt - (*a_cnt)->cnt;
+}
+
+static size_t str_hash_fn(long key, void *ctx)
+{
+	return str_hash((void *)key);
+}
+
+static bool str_equal_fn(long a, long b, void *ctx)
+{
+	return strcmp((void *)a, (void *)b) == 0;
+}
+
 static char verif_log_buf[64 * 1024];
 
 #define MAX_PARSED_LOG_LINES 100
@@ -852,6 +896,120 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 	}
 
 	return 0;
+}
+
+static char *parse_instructions(char *buf, char *buf_end)
+{
+	char *start = buf;
+
+	while (buf && buf < buf_end && *buf && *buf != ';') {
+		char *num_end = NULL;
+
+		strtol(buf, &num_end, 10);
+		if (!num_end || *num_end != ':')
+			break;
+
+		buf = strchr(num_end, '\n');
+	}
+
+	return start == buf ? NULL : strndup(start, buf - start);
+}
+
+static int print_top_lines(char * const buf, size_t buf_sz)
+{
+	struct hashmap *lines_map;
+	struct line_cnt **lines_cnt = NULL;
+	struct hashmap_entry *entry;
+	char *buf_end;
+	char *line;
+	int err = 0;
+	int unique_lines;
+	int bkt;
+	int i;
+
+	if (!buf || !buf_sz)
+		return -EINVAL;
+
+	buf_end = buf + buf_sz - 1;
+	*buf_end = '\0';
+	lines_map = hashmap__new(str_hash_fn, str_equal_fn, NULL);
+	if (IS_ERR(lines_map))
+		return PTR_ERR(lines_map);
+
+	for (char *line_start = buf; line_start < buf_end;) {
+		char *line_end = strchr(line_start, '\n');
+
+		if (!line_end)
+			line_end = buf_end;
+
+		if (*line_start == ';') {
+			struct line_cnt *line_cnt;
+
+			line_start++; /* skip semicolon */
+			*line_end = '\0';
+			if (hashmap__find(lines_map, line_start, &line_cnt)) {
+				line_cnt->cnt++;
+			} else {
+				char *insn = NULL;
+
+				line_cnt = malloc(sizeof(struct line_cnt));
+				if (!line_cnt) {
+					*line_end = '\n';
+					goto cleanup;
+				}
+				line = strdup(line_start);
+				if (!line) {
+					*line_end = '\n';
+					free(line_cnt);
+					goto cleanup;
+				}
+				if (env.include_insn)
+					insn = parse_instructions(line_end + 1, buf_end);
+				line_cnt->insn = insn;
+				line_cnt->line = line;
+				line_cnt->cnt = 1;
+				err = hashmap__add(lines_map, line, line_cnt);
+			}
+			*line_end = '\n';
+
+			if (err)
+				goto cleanup;
+		}
+		line_start = line_end + 1;
+	}
+	unique_lines = hashmap__size(lines_map);
+	if (!unique_lines)
+		goto cleanup;
+
+	lines_cnt = calloc(unique_lines, sizeof(struct line_cnt *));
+	if (!lines_cnt)
+		goto cleanup;
+
+	i = 0;
+	hashmap__for_each_entry(lines_map, entry, bkt)
+		lines_cnt[i++] = (struct line_cnt *)entry->value;
+
+	qsort(lines_cnt, unique_lines, sizeof(struct line_cnt *), line_cnt_cmp);
+
+	printf("Top C source code lines:\n");
+	for (i = 0; i  < min(unique_lines, env.top_lines); i++) {
+		printf("; [Count: %ld] %s\n", lines_cnt[i]->cnt, lines_cnt[i]->line);
+		if (env.include_insn)
+			printf("%s\n", lines_cnt[i]->insn);
+	}
+	printf("\n");
+
+cleanup:
+	hashmap__for_each_entry(lines_map, entry, bkt) {
+		struct line_cnt *line_cnt = (struct line_cnt *)entry->value;
+
+		free(line_cnt->insn);
+		free(line_cnt->line);
+		free(line_cnt);
+	}
+	hashmap__free(lines_map);
+	free(lines_cnt);
+	return err;
 }
 
 static int guess_prog_type_by_ctx_name(const char *ctx_name,
@@ -1048,6 +1206,8 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 		       filename, prog_name, stats->stats[DURATION],
 		       err ? "failure" : "success", buf);
 	}
+	if (env.top_lines)
+		print_top_lines(buf, buf_sz);
 
 	if (verif_log_buf != buf)
 		free(buf);
