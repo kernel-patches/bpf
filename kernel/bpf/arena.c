@@ -576,6 +576,6 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 
 static int __init kfunc_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_COMMON, &common_kfunc_set);
 }
 late_initcall(kfunc_init);

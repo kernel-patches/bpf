@@ -1177,7 +1177,7 @@ static int __init bbr_register(void)
 
 	BUILD_BUG_ON(sizeof(struct bbr) > ICSK_CA_PRIV_SIZE);
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &tcp_bbr_kfunc_set);
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS, &tcp_bbr_kfunc_set);
 	if (ret < 0)
 		return ret;
 	return tcp_register_congestion_control(&tcp_bbr_cong_ops);

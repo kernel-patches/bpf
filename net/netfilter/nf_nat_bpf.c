@@ -67,11 +67,11 @@ int register_nf_nat_bpf(void)
 {
 	int ret;
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_XDP,
 					&nf_bpf_nat_kfunc_set);
 	if (ret)
 		return ret;
 
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC,
 					 &nf_bpf_nat_kfunc_set);
 }

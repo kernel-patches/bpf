@@ -341,7 +341,7 @@ static int __init bpf_tcp_ca_kfunc_init(void)
 {
 	int ret;
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_tcp_ca_kfunc_set);
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS, &bpf_tcp_ca_kfunc_set);
 	ret = ret ?: register_bpf_struct_ops(&bpf_tcp_congestion_ops, tcp_congestion_ops);
 
 	return ret;

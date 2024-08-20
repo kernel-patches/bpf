@@ -797,7 +797,7 @@ bool bpf_dev_bound_kfunc_id(u32 btf_id)
 
 static int __init xdp_metadata_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_metadata_kfunc_set);
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_XDP, &xdp_metadata_kfunc_set);
 }
 late_initcall(xdp_metadata_init);
 

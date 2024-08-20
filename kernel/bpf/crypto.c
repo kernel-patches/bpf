@@ -380,10 +380,10 @@ static int __init crypto_kfunc_init(void)
 		},
 	};
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &crypt_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT, &crypt_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &crypt_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC, &crypt_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BTF_KFUNC_HOOK_SCHED_ACT, &crypt_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BTF_KFUNC_HOOK_XDP, &crypt_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BTF_KFUNC_HOOK_SYSCALL,
 					       &crypt_init_kfunc_set);
 	return  ret ?: register_btf_id_dtor_kfuncs(bpf_crypto_dtors,
 						   ARRAY_SIZE(bpf_crypto_dtors),

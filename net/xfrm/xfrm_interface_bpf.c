@@ -105,6 +105,6 @@ static const struct btf_kfunc_id_set xfrm_interface_kfunc_set = {
 
 int __init register_xfrm_interface_bpf(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC,
 					 &xfrm_interface_kfunc_set);
 }

@@ -115,7 +115,7 @@ static const struct btf_kfunc_id_set nf_flow_kfunc_set = {
 
 int nf_flow_register_bpf(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_XDP,
 					 &nf_flow_kfunc_set);
 }
 EXPORT_SYMBOL_GPL(nf_flow_register_bpf);
