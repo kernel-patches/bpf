@@ -1297,6 +1297,11 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 
 	local_id = relo->type_id;
 	local_type = btf_type_by_id(local_btf, local_id);
+	if (!local_type) {
+		pr_warn("prog '%s': relo #%d: bad type id %u\n",
+			prog_name, relo_idx, local_id);
+		return -EINVAL;
+	}
 	local_name = btf__name_by_offset(local_btf, local_type->name_off);
 	if (!local_name)
 		return -EINVAL;
