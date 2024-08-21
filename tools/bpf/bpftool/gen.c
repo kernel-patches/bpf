@@ -334,6 +334,9 @@ static int codegen_subskel_datasecs(struct bpf_object *obj, const char *obj_name
 	const char *sec_name, *var_name;
 	__u32 var_type_id;
 
+	if (!btf)
+		return -EINVAL;
+
 	d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
 	if (!d)
 		return -errno;
