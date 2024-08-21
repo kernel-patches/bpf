@@ -496,7 +496,7 @@ struct bpf_program {
 };
 
 struct bpf_struct_ops {
-	const char *tname;
+	char *tname;
 	const struct btf_type *type;
 	struct bpf_program **progs;
 	__u32 *kern_func_off;
@@ -1423,7 +1423,9 @@ static int init_struct_ops_maps(struct bpf_object *obj, const char *sec_name,
 		memcpy(st_ops->data,
 		       data->d_buf + vsi->offset,
 		       type->size);
-		st_ops->tname = tname;
+		st_ops->tname = strdup(tname);
+		if (!st_ops->tname)
+			return -ENOMEM;
 		st_ops->type = type;
 		st_ops->type_id = type_id;
 
@@ -8984,6 +8986,7 @@ static void bpf_map__destroy(struct bpf_map *map)
 	map->mmaped = NULL;
 
 	if (map->st_ops) {
+		zfree(&map->st_ops->tname);
 		zfree(&map->st_ops->data);
 		zfree(&map->st_ops->progs);
 		zfree(&map->st_ops->kern_func_off);
