@@ -16,6 +16,10 @@ on:
         required: true
         type: string
         description: The toolchain, e.g gcc, llvm
+      bpf-toolchain:
+        required: true
+        type: string
+        description: The toolchain, e.g gcc, llvm
       runs_on:
         required: true
         type: string
@@ -94,6 +98,7 @@ jobs:
           arch: ${{ inputs.arch }}
           llvm-version: ${{ inputs.llvm-version }}
           pahole: c2f89dab3f2b0ebb53bab3ed8be32f41cb743c37
+          bpf-toolchain: ${{ inputs.bpf-toolchain }}
       - name: Build kernel image
         uses: libbpf/ci/build-linux@main
         with:
@@ -107,6 +112,7 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
           toolchain: ${{ inputs.toolchain }}
+          bpf-toolchain: ${{ inputs.bpf-toolchain }}
           kbuild-output: ${{ env.KBUILD_OUTPUT }}
           max-make-jobs: 32
           llvm-version: ${{ inputs.llvm-version }}
@@ -115,7 +121,7 @@ jobs:
           # RELEASE=0 adds -O0 make flag
           # RELEASE=1 adds -O2 make flag
           RELEASE: ${{ inputs.release && '1' || '' }}
-      - if: ${{ github.event_name != 'push' }}
+      - if: ${{ inputs.bpf-toolchain != 'gcc' && github.event_name != 'push' }}
         name: Build samples
         uses: libbpf/ci/build-samples@main
         with:
@@ -127,7 +133,7 @@ jobs:
       - name: Tar artifacts
         run: |
           bash .github/scripts/tar-artifact.sh ${{ inputs.arch }} ${{ inputs.toolchain_full }}
-      - if: ${{ github.event_name != 'push' }}
+      - if: ${{ inputs.bpf-toolchain != 'gcc' && github.event_name != 'push' }}
         name: Remove KBUILD_OUTPUT content
         shell: bash
         run: |

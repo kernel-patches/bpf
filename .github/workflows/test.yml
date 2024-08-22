@@ -43,6 +43,7 @@ jobs:
       arch: ${{ matrix.arch }}
       toolchain_full: ${{ matrix.toolchain.fullname }}
       toolchain: ${{ matrix.toolchain.name }}
+      bpf-toolchain: ${{ matrix.bpf_toolchain.name }}
       runs_on: ${{ toJSON(matrix.runs_on) }}
       build_runs_on: ${{ toJSON(matrix.build_runs_on) }}
       llvm-version: ${{ matrix.toolchain.version }}
@@ -50,7 +51,7 @@ jobs:
       tests: ${{ toJSON(matrix.tests) }}
       run_veristat: ${{ matrix.run_veristat }}
       # We only run tests on pull requests.
-      run_tests: ${{ github.event_name != 'push' }}
+      run_tests: ${{ matrix.bpf_toolchain.name != 'gcc' && github.event_name != 'push' }}
       # Download sources
       download_sources: ${{ github.repository == 'kernel-patches/vmtest' }}
       build_release: ${{ matrix.build_release }}

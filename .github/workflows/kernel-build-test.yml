@@ -15,6 +15,10 @@ on:
         required: true
         type: string
         description: The toolchain, e.g gcc, llvm
+      bpf-toolchain:
+        required: true
+        type: string
+        description: The toolchain, e.g gcc, llvm
       runs_on:
         required: true
         type: string
@@ -65,6 +69,7 @@ jobs:
       arch: ${{ inputs.arch }}
       toolchain_full: ${{ inputs.toolchain_full }}
       toolchain: ${{ inputs.toolchain }}
+      bpf-toolchain: ${{ inputs.bpf-toolchain }}
       runs_on: ${{ inputs.build_runs_on }}
       llvm-version: ${{ inputs.llvm-version }}
       kernel: ${{ inputs.kernel }}
@@ -76,6 +81,7 @@ jobs:
       arch: ${{ inputs.arch }}
       toolchain_full: ${{ inputs.toolchain_full }}
       toolchain: ${{ inputs.toolchain }}
+      bpf-toolchain: ${{ inputs.bpf-toolchain }}
       runs_on: ${{ inputs.runs_on }}
       llvm-version: ${{ inputs.llvm-version }}
       kernel: ${{ inputs.kernel }}

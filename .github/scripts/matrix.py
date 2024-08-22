@@ -39,7 +39,8 @@ class Compiler(str, Enum):
 class Toolchain:
     compiler: Compiler
     # This is relevant ONLY for LLVM and should not be required for GCC
-    version: int
+    version: int = 0
+    extra_name: str = ""
 
     @property
     def short_name(self) -> str:
@@ -48,9 +49,15 @@ class Toolchain:
     @property
     def full_name(self) -> str:
         if self.compiler == Compiler.GCC:
-            return self.short_name
+            if self.extra_name != '':
+                return f"{self.short_name}-{self.extra_name}"
+            else:
+                return f"{self.short_name}"
 
-        return f"{self.short_name}-{self.version}"
+        if self.extra_name != '':
+            return f"{self.short_name}-{self.version}-{self.extra_name}"
+        else:
+            return f"{self.short_name}-{self.version}"
 
     def to_dict(self) -> Dict[str, Union[str, int]]:
         return {
@@ -64,6 +71,7 @@ class Toolchain:
 class BuildConfig:
     arch: Arch
     toolchain: Toolchain
+    bpf_toolchain: Toolchain = dataclasses.field(default_factory=lambda: Toolchain(compiler=Compiler.LLVM, version=DEFAULT_LLVM_VERSION))
     kernel: str = "LATEST"
     run_veristat: bool = False
     parallel_tests: bool = False
@@ -100,6 +108,9 @@ class BuildConfig:
         if self.toolchain.version >= 18:
             tests_list.append("test_progs_cpuv4")
 
+        if self.bpf_toolchain == "gcc":
+            tests_list = [ "test_progs-bpf_gcc" ]
+
         if not self.parallel_tests:
             tests_list = [test for test in tests_list if not test.endswith("parallel")]
 
@@ -109,6 +120,7 @@ class BuildConfig:
         return {
             "arch": self.arch.value,
             "toolchain": self.toolchain.to_dict(),
+            "bpf_toolchain": self.bpf_toolchain.to_dict(),
             "kernel": self.kernel,
             "run_veristat": self.run_veristat,
             "parallel_tests": self.parallel_tests,
@@ -184,6 +196,11 @@ if __name__ == "__main__":
         BuildConfig(
             arch=Arch.S390X,
             toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
+        ),
+        BuildConfig(
+            arch=Arch.X86_64,
+            toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION, extra_name="bpfgcc"),
+            bpf_toolchain=Toolchain(compiler=Compiler.GCC),
         ),
     ]
 
