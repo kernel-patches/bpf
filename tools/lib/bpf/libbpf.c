@@ -940,6 +940,21 @@ bpf_object__add_programs(struct bpf_object *obj, Elf_Data *sec_data,
 	return 0;
 }
 
+static void bpf_object_bswap_progs(struct bpf_object *obj)
+{
+	struct bpf_program *prog = obj->programs;
+	struct bpf_insn *insn;
+	int p, i;
+
+	for (p = 0; p < obj->nr_programs; p++, prog++) {
+		insn = prog->insns;
+		for (i = 0; i < prog->insns_cnt; i++, insn++)
+			bpf_insn_bswap(insn);
+		pr_debug("prog '%s': converted %zu insns to native byteorder\n",
+			 prog->name, prog->insns_cnt);
+	}
+}
+
 static const struct btf_member *
 find_member_by_offset(const struct btf_type *t, __u32 bit_offset)
 {
@@ -1610,7 +1625,6 @@ static int bpf_object__check_endianness(struct bpf_object *obj)
 #else
 # error "Unrecognized __BYTE_ORDER__"
 #endif
-	pr_warn("elf: endianness mismatch in %s.\n", obj->path);
 	return -LIBBPF_ERRNO__ENDIAN;
 }
 
@@ -3952,6 +3966,10 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 		pr_warn("elf: symbol strings section missing or invalid in %s\n", obj->path);
 		return -LIBBPF_ERRNO__FORMAT;
 	}
+
+	/* change BPF program insns to native endianness for introspection */
+	if (bpf_object__check_endianness(obj))
+		bpf_object_bswap_progs(obj);
 
 	/* sort BPF programs by section name and in-section instruction offset
 	 * for faster search
@@ -7993,7 +8011,6 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 	}
 
 	err = bpf_object__elf_init(obj);
-	err = err ? : bpf_object__check_endianness(obj);
 	err = err ? : bpf_object__elf_collect(obj);
 	err = err ? : bpf_object__collect_externs(obj);
 	err = err ? : bpf_object_fixup_btf(obj);

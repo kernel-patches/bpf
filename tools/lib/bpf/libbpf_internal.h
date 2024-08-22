@@ -11,6 +11,7 @@
 
 #include <stdlib.h>
 #include <limits.h>
+#include <byteswap.h>
 #include <errno.h>
 #include <linux/err.h>
 #include <fcntl.h>
@@ -588,6 +589,16 @@ static inline bool str_is_empty(const char *s)
 static inline bool is_ldimm64_insn(struct bpf_insn *insn)
 {
 	return insn->code == (BPF_LD | BPF_IMM | BPF_DW);
+}
+
+static inline void bpf_insn_bswap(struct bpf_insn *insn)
+{
+	/* dst_reg & src_reg nibbles */
+	__u8 *regs = (__u8 *)insn + offsetofend(struct bpf_insn, code);
+
+	*regs = (*regs >> 4) | (*regs << 4);
+	insn->off = bswap_16(insn->off);
+	insn->imm = bswap_32(insn->imm);
 }
 
 /* Unconditionally dup FD, ensuring it doesn't use [0, 2] range.
