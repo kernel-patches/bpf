@@ -5399,7 +5399,11 @@ static int sol_ip_sockopt(struct sock *sk, int optname,
 			  char *optval, int *optlen,
 			  bool getopt)
 {
-	if (sk->sk_family != AF_INET)
+	if (sk->sk_family != AF_INET
+#if IS_BUILTIN(CONFIG_IPV6)
+	    && !is_tcp_sock_ipv6_mapped(sk)
+#endif
+	    )
 		return -EINVAL;
 
 	switch (optname) {
