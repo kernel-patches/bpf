@@ -8877,8 +8877,9 @@ skip_type_check:
 	case ARG_PTR_TO_INT:
 	case ARG_PTR_TO_LONG:
 	{
-		int size = int_ptr_type_to_size(arg_type);
+		int size = int_ptr_type_to_size(base_type(arg_type));
 
+		meta->raw_mode = arg_type & MEM_UNINIT;
 		err = check_helper_mem_access(env, regno, size, false, meta);
 		if (err)
 			return err;
