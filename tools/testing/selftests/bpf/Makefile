@@ -408,6 +408,14 @@ else
 	$(Q)cp "$(VMLINUX_H)" $@
 endif
 
+VMLINUX_H_CHECKSUM := $(INCLUDE_DIR)/vmlinux.h.md5
+
+$(VMLINUX_H_CHECKSUM): $(INCLUDE_DIR)/vmlinux.h
+	$(shell md5sum $(INCLUDE_DIR)/vmlinux.h > .tmp.md5)
+	$(shell md5sum -c .tmp.md5 $(VMLINUX_H_CHECKSUM) --status \
+		|| cp -f .tmp.md5 $(VMLINUX_H_CHECKSUM))
+	$(shell rm .tmp.md5)
+
 $(RESOLVE_BTFIDS): $(HOST_BPFOBJ) | $(HOST_BUILD_DIR)/resolve_btfids	\
 		       $(TOOLSDIR)/bpf/resolve_btfids/main.c	\
 		       $(TOOLSDIR)/lib/rbtree.c			\
@@ -516,6 +524,12 @@ xdp_features.skel.h-deps := xdp_features.bpf.o
 LINKED_BPF_OBJS := $(foreach skel,$(LINKED_SKELS),$($(skel)-deps))
 LINKED_BPF_SRCS := $(patsubst %.bpf.o,%.c,$(LINKED_BPF_OBJS))
 
+HEADERS_FOR_BPF_OBJS := $(wildcard $(BPFDIR)/*.bpf.h)		\
+			$(addprefix $(BPFDIR)/,	bpf_core_read.h	\
+			                        bpf_endian.h	\
+						bpf_helpers.h	\
+			                        bpf_tracing.h)
+
 # Set up extra TRUNNER_XXX "temporary" variables in the environment (relies on
 # $eval()) and pass control to DEFINE_TEST_RUNNER_RULES.
 # Parameters:
@@ -565,9 +579,8 @@ $(TRUNNER_BPF_PROGS_DIR)$(if $2,-)$2-bpfobjs := y
 $(TRUNNER_BPF_OBJS): $(TRUNNER_OUTPUT)/%.bpf.o:				\
 		     $(TRUNNER_BPF_PROGS_DIR)/%.c			\
 		     $(TRUNNER_BPF_PROGS_DIR)/*.h			\
-		     $$(INCLUDE_DIR)/vmlinux.h				\
-		     $(wildcard $(BPFDIR)/bpf_*.h)			\
-		     $(wildcard $(BPFDIR)/*.bpf.h)			\
+		     $(VMLINUX_H_CHECKSUM)				\
+		     $(HEADERS_FOR_BPF_OBJS)				\
 		     | $(TRUNNER_OUTPUT) $$(BPFOBJ)
 	$$(call $(TRUNNER_BPF_BUILD_RULE),$$<,$$@,			\
 					  $(TRUNNER_BPF_CFLAGS)         \
