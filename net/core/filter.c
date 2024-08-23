@@ -6264,6 +6264,8 @@ BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
 	int skb_len, dev_len;
 	int mtu;
 
+	*mtu_len = 0;
+
 	if (unlikely(flags & ~(BPF_MTU_CHK_SEGS)))
 		return -EINVAL;
 
@@ -6312,6 +6314,8 @@ BPF_CALL_5(bpf_xdp_check_mtu, struct xdp_buff *, xdp,
 	int xdp_len = xdp->data_end - xdp->data;
 	int ret = BPF_MTU_CHK_RET_SUCCESS;
 	int mtu, dev_len;
+
+	*mtu_len = 0;
 
 	/* XDP variant doesn't support multi-buffer segment check (yet) */
 	if (unlikely(flags))
