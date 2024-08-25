@@ -1074,10 +1074,10 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_SHARE_IPMODIFY	BIT(6)
 
-/* Indicate that current trampoline is in a tail call context. Then, it has to
- * cache and restore tail_call_cnt to avoid infinite tail call loop.
+/* Indicate that current trampoline is required to cache and restore
+ * tail_call_cnt or tail_call_cnt_ptr to avoid infinite tail call loop.
  */
-#define BPF_TRAMP_F_TAIL_CALL_CTX	BIT(7)
+#define BPF_TRAMP_F_TAIL_CALL		BIT(7)
 
 /*
  * Indicate the trampoline should be suitable to receive indirect calls;

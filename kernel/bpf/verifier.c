@@ -22112,8 +22112,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	if (!tr)
 		return -ENOMEM;
 
-	if (tgt_prog && tgt_prog->aux->tail_call_reachable)
-		tr->flags = BPF_TRAMP_F_TAIL_CALL_CTX;
+	if (tgt_prog)
+		tr->flags = BPF_TRAMP_F_TAIL_CALL;
 
 	prog->aux->dst_trampoline = tr;
 	return 0;
