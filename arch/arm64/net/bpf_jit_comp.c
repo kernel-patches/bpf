@@ -276,6 +276,7 @@ static bool is_lsi_offset(int offset, int scale)
 /* generated prologue:
  *      bti c // if CONFIG_ARM64_BTI_KERNEL
  *      mov x9, lr
+ *      mov x7, 1 // if not-freplace main prog
  *      nop  // POKE_OFFSET
  *      paciasp // if CONFIG_ARM64_PTR_AUTH_KERNEL
  *      stp x29, lr, [sp, #-16]!
@@ -293,13 +294,14 @@ static bool is_lsi_offset(int offset, int scale)
 static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx)
 {
 	const struct bpf_prog *prog = ctx->prog;
+	const bool is_ext = prog->type == BPF_PROG_TYPE_EXT;
 	const bool is_main_prog = !bpf_is_subprog(prog);
 	const u8 ptr = bpf2a64[TCCNT_PTR];
 	const u8 fp = bpf2a64[BPF_REG_FP];
 	const u8 tcc = ptr;
 
 	emit(A64_PUSH(ptr, fp, A64_SP), ctx);
-	if (is_main_prog) {
+	if (is_main_prog && !is_ext) {
 		/* Initialize tail_call_cnt. */
 		emit(A64_MOVZ(1, tcc, 0, 0), ctx);
 		emit(A64_PUSH(tcc, fp, A64_SP), ctx);
@@ -315,22 +317,26 @@ static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx)
 #define PAC_INSNS (IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL) ? 1 : 0)
 
 /* Offset of nop instruction in bpf prog entry to be poked */
-#define POKE_OFFSET (BTI_INSNS + 1)
+#define POKE_OFFSET (BTI_INSNS + 2)
 
 /* Tail call offset to jump into */
-#define PROLOGUE_OFFSET (BTI_INSNS + 2 + PAC_INSNS + 10)
+#define PROLOGUE_OFFSET (BTI_INSNS + 3 + PAC_INSNS + 10)
 
 static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf,
 			  bool is_exception_cb, u64 arena_vm_start)
 {
 	const struct bpf_prog *prog = ctx->prog;
+	const bool is_ext = prog->type == BPF_PROG_TYPE_EXT;
 	const bool is_main_prog = !bpf_is_subprog(prog);
+	const u8 r0 = bpf2a64[BPF_REG_0];
 	const u8 r6 = bpf2a64[BPF_REG_6];
 	const u8 r7 = bpf2a64[BPF_REG_7];
 	const u8 r8 = bpf2a64[BPF_REG_8];
 	const u8 r9 = bpf2a64[BPF_REG_9];
 	const u8 fp = bpf2a64[BPF_REG_FP];
 	const u8 fpb = bpf2a64[FP_BOTTOM];
+	const u8 ptr = bpf2a64[TCCNT_PTR];
+	const u8 tmp = bpf2a64[TMP_REG_1];
 	const u8 arena_vm_base = bpf2a64[ARENA_VM_START];
 	const int idx0 = ctx->idx;
 	int cur_offset;
@@ -367,6 +373,10 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf,
 	emit_bti(A64_BTI_JC, ctx);
 
 	emit(A64_MOV(1, A64_R(9), A64_LR), ctx);
+	if (!is_ext)
+		emit(A64_MOVZ(1, r0, is_main_prog, 0), ctx);
+	else
+		emit(A64_NOP, ctx);
 	emit(A64_NOP, ctx);
 
 	if (!is_exception_cb) {
@@ -413,6 +423,19 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf,
 		emit_bti(A64_BTI_J, ctx);
 	}
 
+	/* If freplace's target prog is main prog, it has to make x26 as
+	 * tail_call_cnt_ptr, and then initialize tail_call_cnt via the
+	 * tail_call_cnt_ptr.
+	 */
+	if (is_main_prog && is_ext) {
+		emit(A64_MOVZ(1, tmp, 1, 0), ctx);
+		emit(A64_CMP(1, r0, tmp), ctx);
+		emit(A64_B_(A64_COND_NE, 4), ctx);
+		emit(A64_ADD_I(1, ptr, A64_SP, 16), ctx);
+		emit(A64_MOVZ(1, r0, 0, 0), ctx);
+		emit(A64_STR64I(r0, ptr, 0), ctx);
+	}
+
 	/*
 	 * Program acting as exception boundary should save all ARM64
 	 * Callee-saved registers as the exception callback needs to recover
@@ -444,6 +467,7 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf,
 static int out_offset = -1; /* initialized on the first pass of build_body() */
 static int emit_bpf_tail_call(struct jit_ctx *ctx)
 {
+	const u8 r0 = bpf2a64[BPF_REG_0];
 	/* bpf_tail_call(void *prog_ctx, struct bpf_array *array, u64 index) */
 	const u8 r2 = bpf2a64[BPF_REG_2];
 	const u8 r3 = bpf2a64[BPF_REG_3];
@@ -491,6 +515,11 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 
 	/* Update tail_call_cnt if the slot is populated. */
 	emit(A64_STR64I(tcc, ptr, 0), ctx);
+	/* When freplace prog tail calls freplace prog, setting r0 as 0 is to
+	 * prevent re-initializing tail_call_cnt at the prologue of target
+	 * freplace prog.
+	 */
+	emit(A64_MOVZ(1, r0, 0, 0), ctx);
 
 	/* goto *(prog->bpf_func + prologue_offset); */
 	off = offsetof(struct bpf_prog, bpf_func);
@@ -2199,8 +2228,9 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 		emit(A64_RET(A64_R(10)), ctx);
 		/* store return value */
 		emit(A64_STR64I(A64_R(0), A64_SP, retval_off), ctx);
-		/* reserve a nop for bpf_tramp_image_put */
+		/* reserve two nops for bpf_tramp_image_put */
 		im->ip_after_call = ctx->ro_image + ctx->idx;
+		emit(A64_NOP, ctx);
 		emit(A64_NOP, ctx);
 	}
 
@@ -2484,6 +2514,7 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
 		/* skip to the nop instruction in bpf prog entry:
 		 * bti c // if BTI enabled
 		 * mov x9, x30
+		 * mov x7, 1 // if not-freplace main prog
 		 * nop
 		 */
 		ip = image + POKE_OFFSET * AARCH64_INSN_SIZE;
