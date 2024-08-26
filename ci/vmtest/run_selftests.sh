@@ -17,7 +17,8 @@ ARCH=$(uname -m)
 STATUS_FILE=/exitstatus
 OUTPUT_DIR=/command_output
 
-declare -a TEST_NAMES=()
+BPF_SELFTESTS_DIR="/${PROJECT_NAME}/selftests/bpf"
+VMTEST_CONFIGS_PATH="/${PROJECT_NAME}/vmtest/configs"
 
 read_lists() {
 	(for path in "$@"; do
@@ -85,6 +86,10 @@ test_progs_no_alu32_parallel() {
   test_progs_helper "-no_alu32" "-j"
 }
 
+test_progs_cpuv4() {
+  test_progs_helper "-cpuv4" ""
+}
+
 test_maps() {
   foldable start test_maps "Testing test_maps"
   taskset 0xF ./test_maps && true
@@ -99,15 +104,49 @@ test_verifier() {
   foldable end test_verifier
 }
 
-run_veristat() {
-  foldable start run_veristat "Running veristat"
+run_veristat_helper() {
+  local mode="${1}"
 
-  globs=$(awk '/^#/ { next; } { print $0 ".bpf.o"; }' ./veristat.cfg)
-  mkdir -p ${OUTPUT_DIR}
-  ./veristat -o csv -q -e file,prog,verdict,states ${globs} > ${OUTPUT_DIR}/veristat.csv
-  echo "run_veristat:$?" >> ${STATUS_FILE}
+  # Make veristat commands visible in the log
+  if [ -o xtrace ]; then
+      xtrace_was_on="1"
+  else
+      xtrace_was_on=""
+      set -x
+  fi
 
-  foldable end run_veristat
+  (
+    # shellcheck source=ci/vmtest/configs/run_veristat.default.cfg
+    # shellcheck source=ci/vmtest/configs/run_veristat.meta.cfg
+    source "${VMTEST_CONFIGS_PATH}/run_veristat.${mode}.cfg"
+    mkdir -p ${OUTPUT_DIR}
+    pushd "${VERISTAT_OBJECTS_DIR}"
+
+    "${BPF_SELFTESTS_DIR}/veristat" -o csv -q -e file,prog,verdict,states \
+      -f "@${VERISTAT_CFG_FILE}" ${VERISTAT_OBJECTS_GLOB} > \
+      "${OUTPUT_DIR}/${VERISTAT_OUTPUT}"
+
+    echo "run_veristat_${mode}:$?" >> ${STATUS_FILE}
+    popd
+  )
+
+  # Hide commands again
+  if [ -z "$xtrace_was_on" ]; then
+      set +x
+  fi
+
+}
+
+run_veristat_kernel() {
+  foldable start run_veristat_kernel "Running veristat.kernel"
+  run_veristat_helper "kernel"
+  foldable end run_veristat_kernel
+}
+
+run_veristat_meta() {
+  foldable start run_veristat_meta "Running veristat.meta"
+  run_veristat_helper "meta"
+  foldable end run_veristat_meta
 }
 
 foldable end vm_init
@@ -117,21 +156,6 @@ foldable start kernel_config "Kconfig"
 zcat /proc/config.gz
 
 foldable end kernel_config
-
-configs_path=${PROJECT_NAME}/selftests/bpf
-local_configs_path=${PROJECT_NAME}/vmtest/configs
-DENYLIST=$(read_lists \
-	"$configs_path/DENYLIST" \
-	"$configs_path/DENYLIST.${ARCH}" \
-	"$local_configs_path/DENYLIST" \
-	"$local_configs_path/DENYLIST.${ARCH}" \
-)
-ALLOWLIST=$(read_lists \
-	"$configs_path/ALLOWLIST" \
-	"$configs_path/ALLOWLIST.${ARCH}" \
-	"$local_configs_path/ALLOWLIST" \
-	"$local_configs_path/ALLOWLIST.${ARCH}" \
-)
 
 echo "DENYLIST: ${DENYLIST}"
 echo "ALLOWLIST: ${ALLOWLIST}"
@@ -144,6 +168,7 @@ read_test_names "$@"
 if [ ${#TEST_NAMES[@]} -eq 0 ]; then
 	test_progs
 	test_progs_no_alu32
+	test_progs_cpuv4
 	test_maps
 	test_verifier
 else

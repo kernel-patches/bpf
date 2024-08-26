@@ -4579,28 +4579,28 @@ static int get_reg_width(struct bpf_reg_state *reg)
 	return fls64(reg->umax_value);
 }
 
-/* See comment for mark_nocsr_pattern_for_call() */
-static void check_nocsr_stack_contract(struct bpf_verifier_env *env, struct bpf_func_state *state,
-				       int insn_idx, int off)
+/* See comment for mark_fastcall_pattern_for_call() */
+static void check_fastcall_stack_contract(struct bpf_verifier_env *env,
+					  struct bpf_func_state *state, int insn_idx, int off)
 {
 	struct bpf_subprog_info *subprog = &env->subprog_info[state->subprogno];
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	int i;
 
-	if (subprog->nocsr_stack_off <= off || aux[insn_idx].nocsr_pattern)
+	if (subprog->fastcall_stack_off <= off || aux[insn_idx].fastcall_pattern)
 		return;
-	/* access to the region [max_stack_depth .. nocsr_stack_off)
-	 * from something that is not a part of the nocsr pattern,
-	 * disable nocsr rewrites for current subprogram by setting
-	 * nocsr_stack_off to a value smaller than any possible offset.
+	/* access to the region [max_stack_depth .. fastcall_stack_off)
+	 * from something that is not a part of the fastcall pattern,
+	 * disable fastcall rewrites for current subprogram by setting
+	 * fastcall_stack_off to a value smaller than any possible offset.
 	 */
-	subprog->nocsr_stack_off = S16_MIN;
-	/* reset nocsr aux flags within subprogram,
+	subprog->fastcall_stack_off = S16_MIN;
+	/* reset fastcall aux flags within subprogram,
 	 * happens at most once per subprogram
 	 */
 	for (i = subprog->start; i < (subprog + 1)->start; ++i) {
-		aux[i].nocsr_spills_num = 0;
-		aux[i].nocsr_pattern = 0;
+		aux[i].fastcall_spills_num = 0;
+		aux[i].fastcall_pattern = 0;
 	}
 }
 
@@ -4652,7 +4652,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
-	check_nocsr_stack_contract(env, state, insn_idx, off);
+	check_fastcall_stack_contract(env, state, insn_idx, off);
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
 		bool reg_value_fits;
@@ -4787,7 +4787,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 			return err;
 	}
 
-	check_nocsr_stack_contract(env, state, insn_idx, min_off);
+	check_fastcall_stack_contract(env, state, insn_idx, min_off);
 	/* Variable offset writes destroy any spilled pointers in range. */
 	for (i = min_off; i < max_off; i++) {
 		u8 new_type, *stype;
@@ -4926,7 +4926,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 	reg = &reg_state->stack[spi].spilled_ptr;
 
 	mark_stack_slot_scratched(env, spi);
-	check_nocsr_stack_contract(env, state, env->insn_idx, off);
+	check_fastcall_stack_contract(env, state, env->insn_idx, off);
 
 	if (is_spilled_reg(&reg_state->stack[spi])) {
 		u8 spill_size = 1;
@@ -5087,7 +5087,7 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env,
 	min_off = reg->smin_value + off;
 	max_off = reg->smax_value + off;
 	mark_reg_stack_read(env, ptr_state, min_off, max_off + size, dst_regno);
-	check_nocsr_stack_contract(env, ptr_state, env->insn_idx, min_off);
+	check_fastcall_stack_contract(env, ptr_state, env->insn_idx, min_off);
 	return 0;
 }
 
@@ -6804,13 +6804,13 @@ static int check_stack_slot_within_bounds(struct bpf_verifier_env *env,
 	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
 	int min_valid_off, max_bpf_stack;
 
-	/* If accessing instruction is a spill/fill from nocsr pattern,
+	/* If accessing instruction is a spill/fill from bpf_fastcall pattern,
 	 * add room for all caller saved registers below MAX_BPF_STACK.
-	 * In case if nocsr rewrite won't happen maximal stack depth
+	 * In case if bpf_fastcall rewrite won't happen maximal stack depth
 	 * would be checked by check_max_stack_depth_subprog().
 	 */
 	max_bpf_stack = MAX_BPF_STACK;
-	if (aux->nocsr_pattern)
+	if (aux->fastcall_pattern)
 		max_bpf_stack += CALLER_SAVED_REGS * BPF_REG_SIZE;
 
 	if (t == BPF_WRITE || env->allow_uninit_stack)
@@ -7803,9 +7803,23 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 			     struct bpf_call_arg_meta *meta)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
-	struct bpf_map *map_ptr = reg->map_ptr;
 	struct btf_field *kptr_field;
+	struct bpf_map *map_ptr;
+	struct btf_record *rec;
 	u32 kptr_off;
+
+	if (type_is_ptr_alloc_obj(reg->type)) {
+		rec = reg_btf_record(reg);
+	} else { /* PTR_TO_MAP_VALUE */
+		map_ptr = reg->map_ptr;
+		if (!map_ptr->btf) {
+			verbose(env, "map '%s' has to have BTF in order to use bpf_kptr_xchg\n",
+				map_ptr->name);
+			return -EINVAL;
+		}
+		rec = map_ptr->record;
+		meta->map_ptr = map_ptr;
+	}
 
 	if (!tnum_is_const(reg->var_off)) {
 		verbose(env,
@@ -7813,19 +7827,14 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 			regno);
 		return -EINVAL;
 	}
-	if (!map_ptr->btf) {
-		verbose(env, "map '%s' has to have BTF in order to use bpf_kptr_xchg\n",
-			map_ptr->name);
-		return -EINVAL;
-	}
-	if (!btf_record_has_field(map_ptr->record, BPF_KPTR)) {
-		verbose(env, "map '%s' has no valid kptr\n", map_ptr->name);
+
+	if (!btf_record_has_field(rec, BPF_KPTR)) {
+		verbose(env, "R%d has no valid kptr\n", regno);
 		return -EINVAL;
 	}
 
-	meta->map_ptr = map_ptr;
 	kptr_off = reg->off + reg->var_off.value;
-	kptr_field = btf_record_find(map_ptr->record, kptr_off, BPF_KPTR);
+	kptr_field = btf_record_find(rec, kptr_off, BPF_KPTR);
 	if (!kptr_field) {
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
 		return -EACCES;
@@ -7970,12 +7979,17 @@ static bool is_iter_destroy_kfunc(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_ITER_DESTROY;
 }
 
-static bool is_kfunc_arg_iter(struct bpf_kfunc_call_arg_meta *meta, int arg)
+static bool is_kfunc_arg_iter(struct bpf_kfunc_call_arg_meta *meta, int arg_idx,
+			      const struct btf_param *arg)
 {
 	/* btf_check_iter_kfuncs() guarantees that first argument of any iter
 	 * kfunc is iter state pointer
 	 */
-	return arg == 0 && is_iter_kfunc(meta);
+	if (is_iter_kfunc(meta))
+		return arg_idx == 0;
+
+	/* iter passed as an argument to a generic kfunc */
+	return btf_param_match_suffix(meta->btf, arg, "__iter");
 }
 
 static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_idx,
@@ -7983,14 +7997,20 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	const struct btf_type *t;
-	const struct btf_param *arg;
-	int spi, err, i, nr_slots;
-	u32 btf_id;
+	int spi, err, i, nr_slots, btf_id;
 
-	/* btf_check_iter_kfuncs() ensures we don't need to validate anything here */
-	arg = &btf_params(meta->func_proto)[0];
-	t = btf_type_skip_modifiers(meta->btf, arg->type, NULL);	/* PTR */
-	t = btf_type_skip_modifiers(meta->btf, t->type, &btf_id);	/* STRUCT */
+	/* For iter_{new,next,destroy} functions, btf_check_iter_kfuncs()
+	 * ensures struct convention, so we wouldn't need to do any BTF
+	 * validation here. But given iter state can be passed as a parameter
+	 * to any kfunc, if arg has "__iter" suffix, we need to be a bit more
+	 * conservative here.
+	 */
+	btf_id = btf_check_iter_arg(meta->btf, meta->func_proto, regno - 1);
+	if (btf_id < 0) {
+		verbose(env, "expected valid iter pointer as arg #%d\n", regno);
+		return -EINVAL;
+	}
+	t = btf_type_by_id(meta->btf, btf_id);
 	nr_slots = t->size / BPF_REG_SIZE;
 
 	if (is_iter_new_kfunc(meta)) {
@@ -8012,7 +8032,9 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 		if (err)
 			return err;
 	} else {
-		/* iter_next() or iter_destroy() expect initialized iter state*/
+		/* iter_next() or iter_destroy(), as well as any kfunc
+		 * accepting iter argument, expect initialized iter state
+		 */
 		err = is_iter_reg_valid_init(env, reg, meta->btf, btf_id, nr_slots);
 		switch (err) {
 		case 0:
@@ -8399,7 +8421,12 @@ static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
 static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } };
 static const struct bpf_reg_types const_str_ptr_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types timer_types = { .types = { PTR_TO_MAP_VALUE } };
-static const struct bpf_reg_types kptr_types = { .types = { PTR_TO_MAP_VALUE } };
+static const struct bpf_reg_types kptr_xchg_dest_types = {
+	.types = {
+		PTR_TO_MAP_VALUE,
+		PTR_TO_BTF_ID | MEM_ALLOC
+	}
+};
 static const struct bpf_reg_types dynptr_types = {
 	.types = {
 		PTR_TO_STACK,
@@ -8431,7 +8458,7 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_STACK]		= &stack_ptr_types,
 	[ARG_PTR_TO_CONST_STR]		= &const_str_ptr_types,
 	[ARG_PTR_TO_TIMER]		= &timer_types,
-	[ARG_PTR_TO_KPTR]		= &kptr_types,
+	[ARG_KPTR_XCHG_DEST]		= &kptr_xchg_dest_types,
 	[ARG_PTR_TO_DYNPTR]		= &dynptr_types,
 };
 
@@ -8470,7 +8497,8 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	if (base_type(arg_type) == ARG_PTR_TO_MEM)
 		type &= ~DYNPTR_TYPE_FLAG_MASK;
 
-	if (meta->func_id == BPF_FUNC_kptr_xchg && type_is_alloc(type)) {
+	/* Local kptr types are allowed as the source argument of bpf_kptr_xchg */
+	if (meta->func_id == BPF_FUNC_kptr_xchg && type_is_alloc(type) && regno == BPF_REG_2) {
 		type &= ~MEM_ALLOC;
 		type &= ~MEM_PERCPU;
 	}
@@ -8563,7 +8591,8 @@ found:
 			verbose(env, "verifier internal error: unimplemented handling of MEM_ALLOC\n");
 			return -EFAULT;
 		}
-		if (meta->func_id == BPF_FUNC_kptr_xchg) {
+		/* Check if local kptr in src arg matches kptr in dst arg */
+		if (meta->func_id == BPF_FUNC_kptr_xchg && regno == BPF_REG_2) {
 			if (map_kptr_match_type(env, meta->kptr_field, reg, regno))
 				return -EACCES;
 		}
@@ -8874,7 +8903,7 @@ skip_type_check:
 		meta->release_regno = regno;
 	}
 
-	if (reg->ref_obj_id) {
+	if (reg->ref_obj_id && base_type(arg_type) != ARG_KPTR_XCHG_DEST) {
 		if (meta->ref_obj_id) {
 			verbose(env, "verifier internal error: more than one arg with ref_obj_id R%d %u %u\n",
 				regno, reg->ref_obj_id,
@@ -9031,7 +9060,7 @@ skip_type_check:
 			return err;
 		break;
 	}
-	case ARG_PTR_TO_KPTR:
+	case ARG_KPTR_XCHG_DEST:
 		err = process_kptr_func(env, regno, meta);
 		if (err)
 			return err;
@@ -11382,7 +11411,7 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 	if (is_kfunc_arg_dynptr(meta->btf, &args[argno]))
 		return KF_ARG_PTR_TO_DYNPTR;
 
-	if (is_kfunc_arg_iter(meta, argno))
+	if (is_kfunc_arg_iter(meta, argno, &args[argno]))
 		return KF_ARG_PTR_TO_ITER;
 
 	if (is_kfunc_arg_list_head(meta->btf, &args[argno]))
@@ -16105,14 +16134,14 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 
 /* Return a bitmask specifying which caller saved registers are
  * clobbered by a call to a helper *as if* this helper follows
- * no_caller_saved_registers contract:
+ * bpf_fastcall contract:
  * - includes R0 if function is non-void;
  * - includes R1-R5 if corresponding parameter has is described
  *   in the function prototype.
  */
-static u32 helper_nocsr_clobber_mask(const struct bpf_func_proto *fn)
+static u32 helper_fastcall_clobber_mask(const struct bpf_func_proto *fn)
 {
-	u8 mask;
+	u32 mask;
 	int i;
 
 	mask = 0;
@@ -16125,8 +16154,8 @@ static u32 helper_nocsr_clobber_mask(const struct bpf_func_proto *fn)
 }
 
 /* True if do_misc_fixups() replaces calls to helper number 'imm',
- * replacement patch is presumed to follow no_caller_saved_registers contract
- * (see mark_nocsr_pattern_for_call() below).
+ * replacement patch is presumed to follow bpf_fastcall contract
+ * (see mark_fastcall_pattern_for_call() below).
  */
 static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 {
@@ -16140,7 +16169,30 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 	}
 }
 
-/* GCC and LLVM define a no_caller_saved_registers function attribute.
+/* Same as helper_fastcall_clobber_mask() but for kfuncs, see comment above */
+static u32 kfunc_fastcall_clobber_mask(struct bpf_kfunc_call_arg_meta *meta)
+{
+	u32 vlen, i, mask;
+
+	vlen = btf_type_vlen(meta->func_proto);
+	mask = 0;
+	if (!btf_type_is_void(btf_type_by_id(meta->btf, meta->func_proto->type)))
+		mask |= BIT(BPF_REG_0);
+	for (i = 0; i < vlen; ++i)
+		mask |= BIT(BPF_REG_1 + i);
+	return mask;
+}
+
+/* Same as verifier_inlines_helper_call() but for kfuncs, see comment above */
+static bool is_fastcall_kfunc_call(struct bpf_kfunc_call_arg_meta *meta)
+{
+	if (meta->btf == btf_vmlinux)
+		return meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
+		       meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast];
+	return false;
+}
+
+/* LLVM define a bpf_fastcall function attribute.
  * This attribute means that function scratches only some of
  * the caller saved registers defined by ABI.
  * For BPF the set of such registers could be defined as follows:
@@ -16150,13 +16202,12 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
  *
  * The contract between kernel and clang allows to simultaneously use
  * such functions and maintain backwards compatibility with old
- * kernels that don't understand no_caller_saved_registers calls
- * (nocsr for short):
+ * kernels that don't understand bpf_fastcall calls:
  *
- * - for nocsr calls clang allocates registers as-if relevant r0-r5
+ * - for bpf_fastcall calls clang allocates registers as-if relevant r0-r5
  *   registers are not scratched by the call;
  *
- * - as a post-processing step, clang visits each nocsr call and adds
+ * - as a post-processing step, clang visits each bpf_fastcall call and adds
  *   spill/fill for every live r0-r5;
  *
  * - stack offsets used for the spill/fill are allocated as lowest
@@ -16164,11 +16215,11 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
  *   purposes;
  *
  * - when kernel loads a program, it looks for such patterns
- *   (nocsr function surrounded by spills/fills) and checks if
- *   spill/fill stack offsets are used exclusively in nocsr patterns;
+ *   (bpf_fastcall function surrounded by spills/fills) and checks if
+ *   spill/fill stack offsets are used exclusively in fastcall patterns;
  *
  * - if so, and if verifier or current JIT inlines the call to the
- *   nocsr function (e.g. a helper call), kernel removes unnecessary
+ *   bpf_fastcall function (e.g. a helper call), kernel removes unnecessary
  *   spill/fill pairs;
  *
  * - when old kernel loads a program, presence of spill/fill pairs
@@ -16187,22 +16238,22 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
  *   r0 += r2;
  *   exit;
  *
- * The purpose of mark_nocsr_pattern_for_call is to:
+ * The purpose of mark_fastcall_pattern_for_call is to:
  * - look for such patterns;
- * - mark spill and fill instructions in env->insn_aux_data[*].nocsr_pattern;
- * - mark set env->insn_aux_data[*].nocsr_spills_num for call instruction;
- * - update env->subprog_info[*]->nocsr_stack_off to find an offset
- *   at which nocsr spill/fill stack slots start;
- * - update env->subprog_info[*]->keep_nocsr_stack.
+ * - mark spill and fill instructions in env->insn_aux_data[*].fastcall_pattern;
+ * - mark set env->insn_aux_data[*].fastcall_spills_num for call instruction;
+ * - update env->subprog_info[*]->fastcall_stack_off to find an offset
+ *   at which bpf_fastcall spill/fill stack slots start;
+ * - update env->subprog_info[*]->keep_fastcall_stack.
  *
- * The .nocsr_pattern and .nocsr_stack_off are used by
- * check_nocsr_stack_contract() to check if every stack access to
- * nocsr spill/fill stack slot originates from spill/fill
- * instructions, members of nocsr patterns.
+ * The .fastcall_pattern and .fastcall_stack_off are used by
+ * check_fastcall_stack_contract() to check if every stack access to
+ * fastcall spill/fill stack slot originates from spill/fill
+ * instructions, members of fastcall patterns.
  *
- * If such condition holds true for a subprogram, nocsr patterns could
- * be rewritten by remove_nocsr_spills_fills().
- * Otherwise nocsr patterns are not changed in the subprogram
+ * If such condition holds true for a subprogram, fastcall patterns could
+ * be rewritten by remove_fastcall_spills_fills().
+ * Otherwise bpf_fastcall patterns are not changed in the subprogram
  * (code, presumably, generated by an older clang version).
  *
  * For example, it is *not* safe to remove spill/fill below:
@@ -16215,9 +16266,9 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
  *   r0 += r1;                           exit;
  *   exit;
  */
-static void mark_nocsr_pattern_for_call(struct bpf_verifier_env *env,
-					struct bpf_subprog_info *subprog,
-					int insn_idx, s16 lowest_off)
+static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
+					   struct bpf_subprog_info *subprog,
+					   int insn_idx, s16 lowest_off)
 {
 	struct bpf_insn *insns = env->prog->insnsi, *stx, *ldx;
 	struct bpf_insn *call = &env->prog->insnsi[insn_idx];
@@ -16232,10 +16283,23 @@ static void mark_nocsr_pattern_for_call(struct bpf_verifier_env *env,
 		if (get_helper_proto(env, call->imm, &fn) < 0)
 			/* error would be reported later */
 			return;
-		clobbered_regs_mask = helper_nocsr_clobber_mask(fn);
-		can_be_inlined = fn->allow_nocsr &&
+		clobbered_regs_mask = helper_fastcall_clobber_mask(fn);
+		can_be_inlined = fn->allow_fastcall &&
 				 (verifier_inlines_helper_call(env, call->imm) ||
 				  bpf_jit_inlines_helper_call(call->imm));
+	}
+
+	if (bpf_pseudo_kfunc_call(call)) {
+		struct bpf_kfunc_call_arg_meta meta;
+		int err;
+
+		err = fetch_kfunc_meta(env, call, &meta, NULL);
+		if (err < 0)
+			/* error would be reported later */
+			return;
+
+		clobbered_regs_mask = kfunc_fastcall_clobber_mask(&meta);
+		can_be_inlined = is_fastcall_kfunc_call(&meta);
 	}
 
 	if (clobbered_regs_mask == ALL_CALLER_SAVED_REGS)
@@ -16276,36 +16340,36 @@ static void mark_nocsr_pattern_for_call(struct bpf_verifier_env *env,
 		if (stx->off != off || ldx->off != off)
 			break;
 		expected_regs_mask &= ~BIT(stx->src_reg);
-		env->insn_aux_data[insn_idx - i].nocsr_pattern = 1;
-		env->insn_aux_data[insn_idx + i].nocsr_pattern = 1;
+		env->insn_aux_data[insn_idx - i].fastcall_pattern = 1;
+		env->insn_aux_data[insn_idx + i].fastcall_pattern = 1;
 	}
 	if (i == 1)
 		return;
 
-	/* Conditionally set 'nocsr_spills_num' to allow forward
+	/* Conditionally set 'fastcall_spills_num' to allow forward
 	 * compatibility when more helper functions are marked as
-	 * nocsr at compile time than current kernel supports, e.g:
+	 * bpf_fastcall at compile time than current kernel supports, e.g:
 	 *
 	 *   1: *(u64 *)(r10 - 8) = r1
-	 *   2: call A                  ;; assume A is nocsr for current kernel
+	 *   2: call A                  ;; assume A is bpf_fastcall for current kernel
 	 *   3: r1 = *(u64 *)(r10 - 8)
 	 *   4: *(u64 *)(r10 - 8) = r1
-	 *   5: call B                  ;; assume B is not nocsr for current kernel
+	 *   5: call B                  ;; assume B is not bpf_fastcall for current kernel
 	 *   6: r1 = *(u64 *)(r10 - 8)
 	 *
-	 * There is no need to block nocsr rewrite for such program.
-	 * Set 'nocsr_pattern' for both calls to keep check_nocsr_stack_contract() happy,
-	 * don't set 'nocsr_spills_num' for call B so that remove_nocsr_spills_fills()
+	 * There is no need to block bpf_fastcall rewrite for such program.
+	 * Set 'fastcall_pattern' for both calls to keep check_fastcall_stack_contract() happy,
+	 * don't set 'fastcall_spills_num' for call B so that remove_fastcall_spills_fills()
 	 * does not remove spill/fill pair {4,6}.
 	 */
 	if (can_be_inlined)
-		env->insn_aux_data[insn_idx].nocsr_spills_num = i - 1;
+		env->insn_aux_data[insn_idx].fastcall_spills_num = i - 1;
 	else
-		subprog->keep_nocsr_stack = 1;
-	subprog->nocsr_stack_off = min(subprog->nocsr_stack_off, off);
+		subprog->keep_fastcall_stack = 1;
+	subprog->fastcall_stack_off = min(subprog->fastcall_stack_off, off);
 }
 
-static int mark_nocsr_patterns(struct bpf_verifier_env *env)
+static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn;
@@ -16322,12 +16386,12 @@ static int mark_nocsr_patterns(struct bpf_verifier_env *env)
 				continue;
 			lowest_off = min(lowest_off, insn->off);
 		}
-		/* use this offset to find nocsr patterns */
+		/* use this offset to find fastcall patterns */
 		for (i = subprog->start; i < (subprog + 1)->start; ++i) {
 			insn = env->prog->insnsi + i;
 			if (insn->code != (BPF_JMP | BPF_CALL))
 				continue;
-			mark_nocsr_pattern_for_call(env, subprog, i, lowest_off);
+			mark_fastcall_pattern_for_call(env, subprog, i, lowest_off);
 		}
 	}
 	return 0;
@@ -17342,8 +17406,9 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		spi = i / BPF_REG_SIZE;
 
 		if (exact != NOT_EXACT &&
-		    old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
-		    cur->stack[spi].slot_type[i % BPF_REG_SIZE])
+		    (i >= cur->allocated_stack ||
+		     old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
+		     cur->stack[spi].slot_type[i % BPF_REG_SIZE]))
 			return false;
 
 		if (!(old->stack[spi].spilled_ptr.live & REG_LIVE_READ)
@@ -21231,10 +21296,10 @@ static int optimize_bpf_loop(struct bpf_verifier_env *env)
 	return 0;
 }
 
-/* Remove unnecessary spill/fill pairs, members of nocsr pattern,
+/* Remove unnecessary spill/fill pairs, members of fastcall pattern,
  * adjust subprograms stack depth when possible.
  */
-static int remove_nocsr_spills_fills(struct bpf_verifier_env *env)
+static int remove_fastcall_spills_fills(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
@@ -21245,8 +21310,8 @@ static int remove_nocsr_spills_fills(struct bpf_verifier_env *env)
 	int i, j;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
-		if (aux[i].nocsr_spills_num > 0) {
-			spills_num = aux[i].nocsr_spills_num;
+		if (aux[i].fastcall_spills_num > 0) {
+			spills_num = aux[i].fastcall_spills_num;
 			/* NOPs would be removed by opt_remove_nops() */
 			for (j = 1; j <= spills_num; ++j) {
 				*(insn - j) = NOP;
@@ -21255,8 +21320,8 @@ static int remove_nocsr_spills_fills(struct bpf_verifier_env *env)
 			modified = true;
 		}
 		if ((subprog + 1)->start == i + 1) {
-			if (modified && !subprog->keep_nocsr_stack)
-				subprog->stack_depth = -subprog->nocsr_stack_off;
+			if (modified && !subprog->keep_fastcall_stack)
+				subprog->stack_depth = -subprog->fastcall_stack_off;
 			subprog++;
 			modified = false;
 		}
@@ -22179,7 +22244,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = mark_nocsr_patterns(env);
+	ret = mark_fastcall_patterns(env);
 	if (ret < 0)
 		goto skip_full_check;
 
@@ -22196,7 +22261,7 @@ skip_full_check:
 	 * allocate additional slots.
 	 */
 	if (ret == 0)
-		ret = remove_nocsr_spills_fills(env);
+		ret = remove_fastcall_spills_fills(env);
 
 	if (ret == 0)
 		ret = check_max_stack_depth(env);
