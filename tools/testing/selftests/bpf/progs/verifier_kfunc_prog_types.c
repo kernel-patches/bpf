@@ -120,3 +120,27 @@ int BPF_PROG(cpumask_kfunc_syscall)
 	cpumask_kfunc_load_test();
 	return 0;
 }
+
+SEC("tracepoint")
+__success
+int BPF_PROG(cpumask_kfunc_tracepoint)
+{
+	cpumask_kfunc_load_test();
+	return 0;
+}
+
+SEC("kprobe")
+__success
+int BPF_PROG(cpumask_kfunc_kprobe)
+{
+	cpumask_kfunc_load_test();
+	return 0;
+}
+
+SEC("perf_event")
+__success
+int BPF_PROG(cpumask_kfunc_perf_event)
+{
+	cpumask_kfunc_load_test();
+	return 0;
+}
