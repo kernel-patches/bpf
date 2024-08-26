@@ -367,12 +367,23 @@ enum mod_mem_type {
 
 struct module_memory {
 	void *base;
+	void *rw_copy;
+	bool is_rox;
 	unsigned int size;
 
 #ifdef CONFIG_MODULES_TREE_LOOKUP
 	struct mod_tree_node mtn;
 #endif
 };
+
+#ifdef CONFIG_MODULES
+void *module_writable_address(struct module *mod, void *loc);
+#else
+static inline void *module_writable_address(struct module *mod, void *loc)
+{
+	return loc;
+}
+#endif
 
 #ifdef CONFIG_MODULES_TREE_LOOKUP
 /* Only touch one cacheline for common rbtree-for-core-layout case. */
