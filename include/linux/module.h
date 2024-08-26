@@ -376,15 +376,6 @@ struct module_memory {
 #endif
 };
 
-#ifdef CONFIG_MODULES
-void *module_writable_address(struct module *mod, void *loc);
-#else
-static inline void *module_writable_address(struct module *mod, void *loc)
-{
-	return loc;
-}
-#endif
-
 #ifdef CONFIG_MODULES_TREE_LOOKUP
 /* Only touch one cacheline for common rbtree-for-core-layout case. */
 #define __module_memory_align ____cacheline_aligned
@@ -778,6 +769,8 @@ static inline bool is_livepatch_module(struct module *mod)
 
 void set_module_sig_enforced(void);
 
+void *module_writable_address(struct module *mod, void *loc);
+
 #else /* !CONFIG_MODULES... */
 
 static inline struct module *__module_address(unsigned long addr)
@@ -884,6 +877,11 @@ void *dereference_module_function_descriptor(struct module *mod, void *ptr)
 static inline bool module_is_coming(struct module *mod)
 {
 	return false;
+}
+
+static inline void *module_writable_address(struct module *mod, void *loc)
+{
+	return loc;
 }
 #endif /* CONFIG_MODULES */
 
