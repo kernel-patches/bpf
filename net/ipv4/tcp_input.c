@@ -1550,14 +1550,6 @@ static bool tcp_shifted_skb(struct sock *sk, struct sk_buff *prev,
 	return true;
 }
 
-/* I wish gso_size would have a bit more sane initialization than
- * something-or-zero which complicates things
- */
-static int tcp_skb_seglen(const struct sk_buff *skb)
-{
-	return tcp_skb_pcount(skb) == 1 ? skb->len : tcp_skb_mss(skb);
-}
-
 /* Shifting pages past head area doesn't work */
 static int skb_can_shift(const struct sk_buff *skb)
 {

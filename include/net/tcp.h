@@ -1058,6 +1058,14 @@ static inline int tcp_skb_mss(const struct sk_buff *skb)
 	return TCP_SKB_CB(skb)->tcp_gso_size;
 }
 
+/* I wish gso_size would have a bit more sane initialization than
+ * something-or-zero which complicates things
+ */
+static inline int tcp_skb_seglen(const struct sk_buff *skb)
+{
+	return tcp_skb_pcount(skb) == 1 ? skb->len : tcp_skb_mss(skb);
+}
+
 static inline bool tcp_skb_can_collapse_to(const struct sk_buff *skb)
 {
 	return likely(!TCP_SKB_CB(skb)->eor);

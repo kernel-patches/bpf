@@ -1033,10 +1033,19 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 	if (unlikely(BPF_SOCK_OPS_TEST_FLAG(tp,
 					    BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG))) {
 		unsigned int remaining = MAX_TCP_OPTION_SPACE - size;
+		unsigned int old_remaining;
 
+		if (skb) {
+			unsigned int reserved_opt_spc;
+
+			reserved_opt_spc = tp->mss_cache - tcp_skb_seglen(skb);
+			if (reserved_opt_spc < remaining)
+				remaining = reserved_opt_spc;
+		}
+
+		old_remaining = remaining;
 		bpf_skops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts, &remaining);
-
-		size = MAX_TCP_OPTION_SPACE - remaining;
+		size += old_remaining - remaining;
 	}
 
 	return size;
