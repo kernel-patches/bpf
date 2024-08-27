@@ -14,6 +14,7 @@
 #include "test_tcp_hdr_options.h"
 #include "test_tcp_hdr_options.skel.h"
 #include "test_misc_tcp_hdr_options.skel.h"
+#include "test_reserve_tcp_hdr_options.skel.h"
 
 #define LO_ADDR6 "::1"
 #define CG_NAME "/tcpbpf-hdr-opt-test"
@@ -25,6 +26,7 @@ static struct bpf_test_option exp_active_fin_in;
 static struct hdr_stg exp_passive_hdr_stg;
 static struct hdr_stg exp_active_hdr_stg = { .active = true, };
 
+static struct test_reserve_tcp_hdr_options *reserve_skel;
 static struct test_misc_tcp_hdr_options *misc_skel;
 static struct test_tcp_hdr_options *skel;
 static int lport_linum_map_fd;
@@ -513,6 +515,49 @@ check_linum:
 	bpf_link__destroy(link);
 }
 
+static void reserve_hdr_opt(void)
+{
+	struct bpf_link *link;
+	struct sk_fds sk_fds;
+	char send_msg[1500];
+	char recv_msg[sizeof(send_msg)];
+	int ret;
+
+	if (!ASSERT_OK(system("ip link set dev lo mtu 1500"), "set dev lo mtu to 1500"))
+		return;
+
+	lport_linum_map_fd = bpf_map__fd(reserve_skel->maps.lport_linum_map);
+
+	link = bpf_program__attach_cgroup(reserve_skel->progs.reserve_tcp_hdr_options, cg_fd);
+	if (!ASSERT_OK_PTR(link, "attach_cgroup(reserve_tcp_hdr_options)"))
+		return;
+
+	if (sk_fds_connect(&sk_fds, false)) {
+		bpf_link__destroy(link);
+		return;
+	}
+
+	ret = send(sk_fds.active_fd, send_msg, sizeof(send_msg),
+			   MSG_EOR);
+	if (!ASSERT_EQ(ret, sizeof(send_msg), "send(msg)"))
+		goto check_linum;
+
+	ret = read(sk_fds.passive_fd, recv_msg, sizeof(recv_msg));
+	if (!ASSERT_EQ(ret, sizeof(send_msg), "read(msg)"))
+		goto check_linum;
+
+	if (sk_fds_shutdown(&sk_fds))
+		goto check_linum;
+
+	ASSERT_FALSE(reserve_skel->bss->nr_err_reserve, "unexpected nr_err_reserve");
+	ASSERT_TRUE(reserve_skel->bss->nr_nospc, "unexpected nr_nospc");
+
+check_linum:
+	ASSERT_FALSE(check_error_linum(&sk_fds), "check_error_linum");
+	sk_fds_close(&sk_fds);
+	bpf_link__destroy(link);
+}
+
 struct test {
 	const char *desc;
 	void (*run)(void);
@@ -526,6 +571,7 @@ static struct test tests[] = {
 	DEF_TEST(fastopen_estab),
 	DEF_TEST(fin),
 	DEF_TEST(misc),
+	DEF_TEST(reserve_hdr_opt),
 };
 
 void test_tcp_hdr_options(void)
@@ -538,6 +584,10 @@ void test_tcp_hdr_options(void)
 
 	misc_skel = test_misc_tcp_hdr_options__open_and_load();
 	if (!ASSERT_OK_PTR(misc_skel, "open and load misc test skel"))
+		goto skel_destroy;
+
+	reserve_skel = test_reserve_tcp_hdr_options__open_and_load();
+	if (!ASSERT_OK_PTR(reserve_skel, "open and load reserve test skel"))
 		goto skel_destroy;
 
 	cg_fd = test__join_cgroup(CG_NAME);
@@ -558,6 +608,7 @@ void test_tcp_hdr_options(void)
 
 	close(cg_fd);
 skel_destroy:
+	test_reserve_tcp_hdr_options__destroy(reserve_skel);
 	test_misc_tcp_hdr_options__destroy(misc_skel);
 	test_tcp_hdr_options__destroy(skel);
 }
