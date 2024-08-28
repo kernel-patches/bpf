@@ -1443,6 +1443,8 @@ static void uretprobe_perf_func(struct trace_uprobe *tu, unsigned long func,
 				struct pt_regs *regs,
 				struct uprobe_cpu_buffer **ucbp)
 {
+	if (!uprobe_perf_filter(&tu->consumer, 0, current->mm))
+		return;
 	__uprobe_perf_func(tu, func, regs, ucbp);
 }
 
