@@ -217,12 +217,12 @@ obj-y					+= omap_phy_internal.o
 
 obj-$(CONFIG_MACH_OMAP2_TUSB6010)	+= usb-tusb6010.o
 
-$(obj)/pm-asm-offsets.h: $(obj)/pm-asm-offsets.s FORCE
+$(obj)/pm-asm-offsets.h: $(obj)/pm-asm-offsets.o FORCE
 	$(call filechk,offsets,__TI_PM_ASM_OFFSETS_H__)
 
 $(obj)/sleep33xx.o $(obj)/sleep43xx.o: $(obj)/pm-asm-offsets.h
 
-targets += pm-asm-offsets.s
+targets += pm-asm-offsets.o
 clean-files += pm-asm-offsets.h
 
 obj-$(CONFIG_OMAP_IOMMU)		+= omap-iommu.o

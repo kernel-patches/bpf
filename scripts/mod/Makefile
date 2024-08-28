@@ -8,10 +8,10 @@ modpost-objs	:= modpost.o file2alias.o sumversion.o symsearch.o
 
 devicetable-offsets-file := devicetable-offsets.h
 
-$(obj)/$(devicetable-offsets-file): $(obj)/devicetable-offsets.s FORCE
+$(obj)/$(devicetable-offsets-file): $(obj)/devicetable-offsets.o FORCE
 	$(call filechk,offsets,__DEVICETABLE_OFFSETS_H__)
 
-targets += $(devicetable-offsets-file) devicetable-offsets.s
+targets += $(devicetable-offsets-file) devicetable-offsets.o
 
 # dependencies on generated files need to be listed explicitly
 

@@ -274,10 +274,10 @@ $(LIBBPF_OUTPUT) $(BPFTOOL_OUTPUT):
 	$(call msg,MKDIR,$@)
 	$(Q)mkdir -p $@
 
-$(obj)/syscall_nrs.h:	$(obj)/syscall_nrs.s FORCE
+$(obj)/syscall_nrs.h:	$(obj)/syscall_nrs.o FORCE
 	$(call filechk,offsets,__SYSCALL_NRS_H__)
 
-targets += syscall_nrs.s
+targets += syscall_nrs.o
 clean-files += syscall_nrs.h
 
 FORCE:

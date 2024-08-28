@@ -2,15 +2,22 @@
 #ifndef __LINUX_KBUILD_H
 #define __LINUX_KBUILD_H
 
-#define DEFINE(sym, val) \
-	asm volatile("\n.ascii \"->" #sym " %0 " #val "\"" : : "i" (val))
+#define _LINE(x, ...) \
+	asm volatile( \
+		".pushsection \".data.kbuild\"; "\
+		".ascii \"" x "\\n\"; "\
+		".popsection" : : __VA_ARGS__)
 
-#define BLANK() asm volatile("\n.ascii \"->\"" : : )
+#define DEFINE(sym, val) \
+	_LINE("#define " #sym " %c0 /* " #val " */", "i" (val))
 
 #define OFFSET(sym, str, mem) \
 	DEFINE(sym, offsetof(struct str, mem))
 
+#define BLANK() \
+	_LINE("")
+
 #define COMMENT(x) \
-	asm volatile("\n.ascii \"->#" x "\"")
+	_LINE("/* " #x " */")
 
 #endif

@@ -9,9 +9,9 @@
 
 bounds-file := include/generated/bounds.h
 
-targets := kernel/bounds.s
+targets := kernel/bounds.o
 
-$(bounds-file): kernel/bounds.s FORCE
+$(bounds-file): kernel/bounds.o FORCE
 	$(call filechk,offsets,__LINUX_BOUNDS_H__)
 
 # Generate timeconst.h
@@ -27,11 +27,11 @@ $(timeconst-file): kernel/time/timeconst.bc FORCE
 
 offsets-file := include/generated/asm-offsets.h
 
-targets += arch/$(SRCARCH)/kernel/asm-offsets.s
+targets += arch/$(SRCARCH)/kernel/asm-offsets.o
 
-arch/$(SRCARCH)/kernel/asm-offsets.s: $(timeconst-file) $(bounds-file)
+arch/$(SRCARCH)/kernel/asm-offsets.o: $(timeconst-file) $(bounds-file)
 
-$(offsets-file): arch/$(SRCARCH)/kernel/asm-offsets.s FORCE
+$(offsets-file): arch/$(SRCARCH)/kernel/asm-offsets.o FORCE
 	$(call filechk,offsets,__ASM_OFFSETS_H__)
 
 # Check for missing system calls

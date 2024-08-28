@@ -18,10 +18,10 @@ ifeq ($(CONFIG_PM_DEBUG),y)
 CFLAGS_pm.o += -DDEBUG
 endif
 
-$(obj)/pm_data-offsets.h: $(obj)/pm_data-offsets.s FORCE
+$(obj)/pm_data-offsets.h: $(obj)/pm_data-offsets.o FORCE
 	$(call filechk,offsets,__PM_DATA_OFFSETS_H__)
 
 $(obj)/pm_suspend.o: $(obj)/pm_data-offsets.h
 
-targets += pm_data-offsets.s
+targets += pm_data-offsets.o
 clean-files += pm_data-offsets.h

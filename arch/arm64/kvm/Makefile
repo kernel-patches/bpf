@@ -28,17 +28,18 @@ kvm-y += arm.o mmu.o mmio.o psci.o hypercalls.o pvtime.o \
 kvm-$(CONFIG_HW_PERF_EVENTS)  += pmu-emul.o pmu.o
 kvm-$(CONFIG_ARM64_PTR_AUTH)  += pauth.o
 
-always-y := hyp_constants.h hyp-constants.s
+always-y := hyp_constants.h hyp-constants.o
 
 define rule_gen_hyp_constants
 	$(call filechk,offsets,__HYP_CONSTANTS_H__)
 endef
 
 CFLAGS_hyp-constants.o = -I $(src)/hyp/include
-$(obj)/hyp-constants.s: $(src)/hyp/hyp-constants.c FORCE
-	$(call if_changed_dep,cc_s_c)
 
-$(obj)/hyp_constants.h: $(obj)/hyp-constants.s FORCE
+$(obj)/hyp-constants.o: $(src)/hyp/hyp-constants.c FORCE
+	$(call if_changed_dep,cc_o_c)
+
+$(obj)/hyp_constants.h: $(obj)/hyp-constants.o FORCE
 	$(call if_changed_rule,gen_hyp_constants)
 
 obj-kvm := $(addprefix $(obj)/, $(kvm-y))

@@ -34,8 +34,8 @@ ti-emif-sram-objs		:= ti-emif-pm.o ti-emif-sram-pm.o
 
 $(obj)/ti-emif-sram-pm.o: $(obj)/ti-emif-asm-offsets.h
 
-$(obj)/ti-emif-asm-offsets.h: $(obj)/emif-asm-offsets.s FORCE
+$(obj)/ti-emif-asm-offsets.h: $(obj)/emif-asm-offsets.o FORCE
 	$(call filechk,offsets,__TI_EMIF_ASM_OFFSETS_H__)
 
-targets += emif-asm-offsets.s
+targets += emif-asm-offsets.o
 clean-files += ti-emif-asm-offsets.h
