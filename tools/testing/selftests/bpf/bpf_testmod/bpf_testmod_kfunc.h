@@ -144,4 +144,7 @@ void bpf_kfunc_dynptr_test(struct bpf_dynptr *ptr, struct bpf_dynptr *ptr__nulla
 struct bpf_testmod_ctx *bpf_testmod_ctx_create(int *err) __ksym;
 void bpf_testmod_ctx_release(struct bpf_testmod_ctx *ctx) __ksym;
 
+struct mm_struct *bpf_kfunc_obtain_test(struct task_struct *task) __ksym;
+struct task_struct *bpf_get_untrusted_task_test(struct task_struct *task) __ksym;
+
 #endif /* _BPF_TESTMOD_KFUNC_H */
