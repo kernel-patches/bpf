@@ -29,6 +29,19 @@ struct tracepoint_func {
 	int prio;
 };
 
+/**
+ * enum tracepoint_flags - Tracepoint flags
+ * @TRACEPOINT_MAY_EXIST: On registration, don't warn if the tracepoint is
+ *                        already registered.
+ * @TRACEPOINT_MAY_FAULT: The tracepoint probe callback will be called with
+ *                        preemption enabled, and is allowed to take page
+ *                        faults.
+ */
+enum tracepoint_flags {
+	TRACEPOINT_MAY_EXIST = (1 << 0),
+	TRACEPOINT_MAY_FAULT = (1 << 1),
+};
+
 struct tracepoint {
 	const char *name;		/* Tracepoint name */
 	struct static_key key;
@@ -39,6 +52,7 @@ struct tracepoint {
 	int (*regfunc)(void);
 	void (*unregfunc)(void);
 	struct tracepoint_func __rcu *funcs;
+	unsigned int flags;
 };
 
 #ifdef CONFIG_HAVE_ARCH_PREL32_RELOCATIONS

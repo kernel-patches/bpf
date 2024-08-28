@@ -705,8 +705,9 @@ static int __register_trace_fprobe(struct trace_fprobe *tf)
 		 * At first, put __probestub_##TP function on the tracepoint
 		 * and put a fprobe on the stub function.
 		 */
-		ret = tracepoint_probe_register_prio_may_exist(tpoint,
-					tpoint->probestub, NULL, 0);
+		ret = tracepoint_probe_register_prio_flags(tpoint,
+					tpoint->probestub, NULL, 0,
+					TRACEPOINT_MAY_EXIST);
 		if (ret < 0)
 			return ret;
 		return register_fprobe_ips(&tf->fp, &ip, 1);
