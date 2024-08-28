@@ -79,13 +79,22 @@ In case of linker errors when running selftests, try using static linking:
 
   $ LDLIBS=-static PKG_CONFIG='pkg-config --static' vmtest.sh
 
+If you want to make corss-compile, such as compile arm64 on x86_64, you can try:
+
+.. code-block:: console
+
+  $ export PATH=$PATH:{The corss-compile's path}/bin
+  $ export ARCH=arm64
+  $ export CROSS_COMPILE=aarch64-linux-gnu-
+  $ LDLIBS=-static vmtest.sh
+
 .. note:: Some distros may not support static linking.
 
 .. note:: The script uses pahole and clang based on host environment setting.
           If you want to change pahole and llvm, you can change `PATH` environment
           variable in the beginning of script.
 
-.. note:: The script currently only supports x86_64 and s390x architectures.
+.. note:: The script currently only supports x86_64, s390x and arm64 architectures.
 
 Additional information about selftest failures are
 documented here.

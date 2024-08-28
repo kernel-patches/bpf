@@ -4,11 +4,11 @@
 set -u
 set -e
 
-# This script currently only works for x86_64 and s390x, as
+# This script currently only works for x86_64, s390x and arm64, as
 # it is based on the VM image used by the BPF CI, which is
 # available only for these architectures.
-ARCH="$(uname -m)"
-case "${ARCH}" in
+HOST_ARCH="$(uname -m)"
+case "${HOST_ARCH}" in
 s390x)
 	QEMU_BINARY=qemu-system-s390x
 	QEMU_CONSOLE="ttyS1"
@@ -32,13 +32,38 @@ aarch64)
 	exit 1
 	;;
 esac
+
+# process CROSS_COMPILE setting to enable cross-compilation
+process_cross_compile() {
+	if [ -z "${CROSS_COMPILE+x}" ]; then
+		return
+	fi
+	case "$1" in
+		x86_64)
+			#Cross-compiling for arm64 on an x86_64 host
+			if [[ $CROSS_COMPILE == *aarch64* ]]; then
+				VM_ARCH=aarch64
+				QEMU_CONSOLE="ttyAMA0,115200"
+				QEMU_BINARY=qemu-system-aarch64
+				QEMU_FLAGS=(-M virt,gic-version=3 -cpu cortex-a57 -smp 8)
+				BZIMAGE="arch/arm64/boot/Image"
+				echo "Setting VM_ARCH from $HOST_ARCH to $VM_ARCH as specified by CROSS_COMPILE"
+			fi
+			;;
+	esac
+}
+
+VM_ARCH=${HOST_ARCH}
+process_cross_compile "$VM_ARCH"
+
+
 DEFAULT_COMMAND="./test_progs"
 MOUNT_DIR="mnt"
 ROOTFS_IMAGE="root.img"
 OUTPUT_DIR="$HOME/.bpf_selftests"
 KCONFIG_REL_PATHS=("tools/testing/selftests/bpf/config"
 	"tools/testing/selftests/bpf/config.vm"
-	"tools/testing/selftests/bpf/config.${ARCH}")
+	"tools/testing/selftests/bpf/config.${VM_ARCH}")
 INDEX_URL="https://raw.githubusercontent.com/libbpf/ci/master/INDEX"
 NUM_COMPILE_JOBS="$(nproc)"
 LOG_FILE_BASE="$(date +"bpf_selftests.%Y-%m-%d_%H-%M-%S")"
@@ -109,7 +134,7 @@ newest_rootfs_version()
 {
 	{
 	for file in "${!URLS[@]}"; do
-		if [[ $file =~ ^"${ARCH}"/libbpf-vmtest-rootfs-(.*)\.tar\.zst$ ]]; then
+		if [[ $file =~ ^"${VM_ARCH}"/libbpf-vmtest-rootfs-(.*)\.tar\.zst$ ]]; then
 			echo "${BASH_REMATCH[1]}"
 		fi
 	done
@@ -126,7 +151,7 @@ download_rootfs()
 		exit 1
 	fi
 
-	download "${ARCH}/libbpf-vmtest-rootfs-$rootfsversion.tar.zst" |
+	download "${VM_ARCH}/libbpf-vmtest-rootfs-$rootfsversion.tar.zst" |
 		zstd -d | sudo tar -C "$dir" -x
 }
 
