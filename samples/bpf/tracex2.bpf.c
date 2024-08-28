@@ -17,20 +17,15 @@ struct {
 	__uint(max_entries, 1024);
 } my_map SEC(".maps");
 
-/* kprobe is NOT a stable ABI. If kernel internals change this bpf+kprobe
- * example will no longer be meaningful
- */
-SEC("kprobe/kfree_skb_reason")
-int bpf_prog2(struct pt_regs *ctx)
+SEC("tracepoint/skb/kfree_skb")
+int bpf_prog1(struct trace_event_raw_kfree_skb *ctx)
 {
 	long loc = 0;
 	long init_val = 1;
 	long *value;
 
-	/* read ip of kfree_skb_reason caller.
-	 * non-portable version of __builtin_return_address(0)
-	 */
-	BPF_KPROBE_READ_RET_IP(loc, ctx);
+	/* read ip */
+	loc = (long)ctx->location;
 
 	value = bpf_map_lookup_elem(&my_map, &loc);
 	if (value)
