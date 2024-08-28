@@ -2382,7 +2382,7 @@ int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_raw_tp_link *li
 
 	return tracepoint_probe_register_prio_flags(tp, (void *)btp->bpf_func,
 						    link, TRACEPOINT_DEFAULT_PRIO,
-						    TRACEPOINT_MAY_EXIST);
+						    TRACEPOINT_MAY_EXIST | (tp->flags & TRACEPOINT_MAY_FAULT));
 }
 
 int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_raw_tp_link *link)
