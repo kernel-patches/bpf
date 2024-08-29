@@ -45,10 +45,15 @@ LOG_FILE_BASE="$(date +"bpf_selftests.%Y-%m-%d_%H-%M-%S")"
 LOG_FILE="${LOG_FILE_BASE}.log"
 EXIT_STATUS_FILE="${LOG_FILE_BASE}.exit_status"
 
+DEBUG_CMD_INIT=""
+DEBUG_FILE_INIT="S20-testDebug"
+QEMU_FLAG_VIRTFS=""
+
+
 usage()
 {
 	cat <<EOF
-Usage: $0 [-i] [-s] [-d <output_dir>] -- [<command>]
+Usage: $0 [-i] [-s] [-v] [-d <output_dir>] -- [<command>]
 
 <command> is the command you would normally run when you are in
 tools/testing/selftests/bpf. e.g:
@@ -76,6 +81,8 @@ Options:
 	-s)		Instead of powering off the VM, start an interactive
 			shell. If <command> is specified, the shell runs after
 			the command finishes executing
+	-v)		enable virtFS (9p virtio) for sharing directory
+			of "/mnt/shared" on the VM
 EOF
 }
 
@@ -250,6 +257,7 @@ EOF
 		-serial mon:stdio \
 		"${QEMU_FLAGS[@]}" \
 		-enable-kvm \
+		${QEMU_FLAG_VIRTFS} \
 		-m 4G \
 		-drive file="${rootfs_img}",format=raw,index=1,media=disk,if=virtio,cache=none \
 		-kernel "${kernel_bzimage}" \
@@ -329,6 +337,60 @@ catch()
 	exit ${exit_code}
 }
 
+update_debug_init()
+{
+	#You can do something else just for debuging on qemu.
+	#The init script will be reset every time before vm running on host,
+	#and be executed on qemu before test_progs.
+	local init_script_dir="${OUTPUT_DIR}/${MOUNT_DIR}/etc/rcS.d"
+	local init_script_file="${init_script_dir}/${DEBUG_FILE_INIT}"
+
+	mount_image
+	if [[ "${DEBUG_CMD_INIT}" == "" ]]; then
+		sudo rm -rf ${init_script_file}
+		unmount_image
+		return
+	fi
+
+	if [[ ! -d "${init_script_dir}" ]]; then
+		cat <<EOF
+Could not find ${init_script_dir} in the mounted image.
+This likely indicates a bad or not default rootfs image,
+You need to change debug init manually
+according to the actual situation of the rootfs image.
+EOF
+		unmount_image
+		exit 1
+	fi
+
+	sudo bash -c "cat > ${init_script_file}" <<EOF
+#!/bin/sh
+set -x
+${DEBUG_CMD_INIT}
+EOF
+	sudo chmod 755 "${init_script_file}"
+	unmount_image
+}
+
+#Establish shared dir access by 9p virtfs
+#between "/mnt/shared" on qemu with *${OUTPUT_DIR}/${MOUNT_DIR}/shared* on local host.
+debug_by_virtfs_shared()
+{
+	local qemu_shared_dir="/mnt/shared"
+	local host_shared_dir="${OUTPUT_DIR}/${MOUNT_DIR}/shared"
+
+	#append virtfs shared flag for qemu
+	local flag="-virtfs local,mount_tag=host0,security_model=passthrough,id=host0,path=${host_shared_dir}"
+	mkdir -p "${host_shared_dir}"
+	QEMU_FLAG_VIRTFS="${QEMU_FLAG_VIRTFS} ${flag}"
+
+	#append mount cmd into init
+	DEBUG_CMD_INIT="${DEBUG_CMD_INIT}\
+rm -rf ${qemu_shared_dir}
+mkdir -p ${qemu_shared_dir}
+/bin/mount -t 9p -o trans=virtio,version=9p2000.L host0 ${qemu_shared_dir}"
+}
+
 main()
 {
 	local script_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -340,8 +402,9 @@ main()
 	local update_image="no"
 	local exit_command="poweroff -f"
 	local debug_shell="no"
+	local enable_virtfs_shared="no"
 
-	while getopts ':hskid:j:' opt; do
+	while getopts ':vhskid:j:' opt; do
 		case ${opt} in
 		i)
 			update_image="yes"
@@ -356,6 +419,9 @@ main()
 			command=""
 			debug_shell="yes"
 			exit_command="bash"
+			;;
+		v)
+			enable_virtfs_shared="yes"
 			;;
 		h)
 			usage
@@ -423,6 +489,11 @@ main()
 	if [[ "${update_image}" == "yes" ]]; then
 		create_vm_image
 	fi
+
+	if [[ "${enable_virtfs_shared}" == "yes" ]]; then
+		debug_by_virtfs_shared
+	fi
+	update_debug_init
 
 	update_selftests "${kernel_checkout}" "${make_command}"
 	update_init_script "${command}" "${exit_command}"
