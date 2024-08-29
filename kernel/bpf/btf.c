@@ -6253,6 +6253,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		base_btf = btf_parse_base(env, ".BTF.base", base_data, base_data_size);
 		if (IS_ERR(base_btf)) {
 			err = PTR_ERR(base_btf);
+			pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 			goto errout;
 		}
 	} else {
@@ -6262,6 +6263,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 	btf = kzalloc(sizeof(*btf), GFP_KERNEL | __GFP_NOWARN);
 	if (!btf) {
 		err = -ENOMEM;
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
 	}
 	env->btf = btf;
@@ -6275,33 +6277,44 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 	btf->data = kvmalloc(data_size, GFP_KERNEL | __GFP_NOWARN);
 	if (!btf->data) {
 		err = -ENOMEM;
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
 	}
 	memcpy(btf->data, data, data_size);
 	btf->data_size = data_size;
 
 	err = btf_parse_hdr(env);
-	if (err)
+	if (err) {
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
+	}
 
 	btf->nohdr_data = btf->data + btf->hdr.hdr_len;
 
 	err = btf_parse_str_sec(env);
-	if (err)
+	if (err) {
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
+	}
 
 	err = btf_check_all_metas(env);
-	if (err)
+	if (err) {
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
+	}
 
 	err = btf_check_type_tags(env, btf, btf_nr_types(base_btf));
-	if (err)
+	if (err) {
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		goto errout;
+	}
 
 	if (base_btf != vmlinux_btf) {
 		err = btf_relocate(btf, vmlinux_btf, &btf->base_id_map);
-		if (err)
+		if (err) {
+			pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 			goto errout;
+		}
 		btf_free(base_btf);
 		base_btf = vmlinux_btf;
 	}
@@ -6312,8 +6325,10 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 
 errout:
 	btf_verifier_env_free(env);
-	if (base_btf != vmlinux_btf)
+	if (base_btf != vmlinux_btf) {
+		pr_err("%s:%d %s %d\n", __func__, __LINE__, module_name, err);
 		btf_free(base_btf);
+	}
 	if (btf) {
 		kvfree(btf->data);
 		kvfree(btf->types);
