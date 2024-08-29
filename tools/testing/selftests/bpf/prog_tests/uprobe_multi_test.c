@@ -7,6 +7,7 @@
 #include "uprobe_multi_bench.skel.h"
 #include "uprobe_multi_usdt.skel.h"
 #include "uprobe_multi_consumers.skel.h"
+#include "uprobe_multi_pid_filter.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "testing_helpers.h"
 #include "../sdt.h"
@@ -935,6 +936,106 @@ static void test_consumers(void)
 	uprobe_multi_consumers__destroy(skel);
 }
 
+typedef struct bpf_link *(create_link_t)(struct uprobe_multi_pid_filter *, int, int, bool);
+
+static struct bpf_program *uprobe_program(struct uprobe_multi_pid_filter *skel, int idx)
+{
+	switch (idx) {
+	case 0: return skel->progs.uprobe_0;
+	case 1: return skel->progs.uprobe_1;
+	case 2: return skel->progs.uprobe_2;
+	}
+	return NULL;
+}
+
+static struct bpf_link *create_link_uprobe(struct uprobe_multi_pid_filter *skel,
+					   int idx, int pid, bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, opts,
+		.retprobe  = retprobe,
+		.func_name = "uprobe_multi_func_1",
+	);
+
+	return bpf_program__attach_uprobe_opts(uprobe_program(skel, idx), pid,
+					       "/proc/self/exe", 0, &opts);
+}
+
+static struct bpf_program *uprobe_multi_program(struct uprobe_multi_pid_filter *skel, int idx)
+{
+	switch (idx) {
+	case 0: return skel->progs.uprobe_multi_0;
+	case 1: return skel->progs.uprobe_multi_1;
+	case 2: return skel->progs.uprobe_multi_2;
+	}
+	return NULL;
+}
+
+static struct bpf_link *create_link_uprobe_multi(struct uprobe_multi_pid_filter *skel,
+						 int idx, int pid, bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts, .retprobe = retprobe);
+
+	return bpf_program__attach_uprobe_multi(uprobe_multi_program(skel, idx), pid,
+						"/proc/self/exe", "uprobe_multi_func_1", &opts);
+}
+
+#define TASKS 3
+
+static void run_pid_filter(struct uprobe_multi_pid_filter *skel,
+			   create_link_t create_link, bool retprobe)
+{
+	struct bpf_link *link[TASKS] = {};
+	struct child child[TASKS] = {};
+	int i;
+
+	printf("%s retprobe %d\n", create_link == create_link_uprobe ? "uprobe" : "uprobe_multi",
+		retprobe);
+
+	memset(skel->bss->test, 0, sizeof(skel->bss->test));
+
+	for (i = 0; i < TASKS; i++) {
+		if (!ASSERT_OK(spawn_child(&child[i]), "spawn_child"))
+			goto cleanup;
+		skel->bss->pids[i] = child[i].pid;
+	}
+
+	for (i = 0; i < TASKS; i++) {
+		link[i] = create_link(skel, i, child[i].pid, retprobe);
+		if (!ASSERT_OK_PTR(link[i], "create_link"))
+			goto cleanup;
+	}
+
+	for (i = 0; i < TASKS; i++)
+		kick_child(&child[i]);
+
+	for (i = 0; i < TASKS; i++) {
+		ASSERT_EQ(skel->bss->test[i][0], 1, "pid");
+		ASSERT_EQ(skel->bss->test[i][1], 0, "unknown");
+	}
+
+cleanup:
+	for (i = 0; i < TASKS; i++)
+		bpf_link__destroy(link[i]);
+	for (i = 0; i < TASKS; i++)
+		release_child(&child[i]);
+}
+
+static void test_pid_filter_process(void)
+{
+	struct uprobe_multi_pid_filter *skel;
+
+	skel = uprobe_multi_pid_filter__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi_pid_filter__open_and_load"))
+		return;
+
+	run_pid_filter(skel, create_link_uprobe, false);
+	run_pid_filter(skel, create_link_uprobe, true);
+	run_pid_filter(skel, create_link_uprobe_multi, false);
+	run_pid_filter(skel, create_link_uprobe_multi, true);
+
+	uprobe_multi_pid_filter__destroy(skel);
+}
+
 static void test_bench_attach_uprobe(void)
 {
 	long attach_start_ns = 0, attach_end_ns = 0;
@@ -1027,4 +1128,6 @@ void test_uprobe_multi_test(void)
 		test_attach_uprobe_fails();
 	if (test__start_subtest("consumers"))
 		test_consumers();
+	if (test__start_subtest("filter_process"))
+		test_pid_filter_process();
 }
