@@ -274,6 +274,8 @@ struct jit_context {
 #define X86_PATCH_SIZE		5
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	(12 + ENDBR_INSN_SIZE)
+/* Number of extra bytes that will be skipped on poke */
+#define X86_POKE_EXTRA		3
 
 static void push_r12(u8 **pprog)
 {
@@ -441,17 +443,13 @@ static void emit_prologue_tail_call(u8 **pprog, bool is_subprog)
  */
 static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
 			  bool tail_call_reachable, bool is_subprog,
-			  bool is_exception_cb)
+			  bool is_exception_cb, bool is_extension)
 {
 	u8 *prog = *pprog;
 
 	emit_cfi(&prog, is_subprog ? cfi_bpf_subprog_hash : cfi_bpf_hash);
-	/* BPF trampoline can be made to work without these nops,
-	 * but let's waste 5 bytes for now and optimize later
-	 */
-	emit_nops(&prog, X86_PATCH_SIZE);
 	if (!ebpf_from_cbpf) {
-		if (tail_call_reachable && !is_subprog)
+		if (tail_call_reachable && !is_extension && !is_subprog)
 			/* When it's the entry of the whole tailcall context,
 			 * zeroing rax means initialising tail_call_cnt.
 			 */
@@ -460,6 +458,10 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
 			/* Keep the same instruction layout. */
 			emit_nops(&prog, 3);     /* nop3 */
 	}
+	/* BPF trampoline can be made to work without these nops,
+	 * but let's waste 5 bytes for now and optimize later
+	 */
+	emit_nops(&prog, X86_PATCH_SIZE);
 	/* Exception callback receives FP as third parameter */
 	if (is_exception_cb) {
 		EMIT3(0x48, 0x89, 0xF4); /* mov rsp, rsi */
@@ -573,10 +575,13 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 
 	/*
 	 * See emit_prologue(), for IBT builds the trampoline hook is preceded
-	 * with an ENDBR instruction.
+	 * with an ENDBR instruction and 3 bytes tail_call_cnt initialization
+	 * instruction.
 	 */
 	if (is_endbr(*(u32 *)ip))
 		ip += ENDBR_INSN_SIZE;
+	if (is_bpf_text_address((long)ip))
+		ip += X86_POKE_EXTRA;
 
 	return __bpf_arch_text_poke(ip, t, old_addr, new_addr);
 }
@@ -1366,6 +1371,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		  int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
 	bool tail_call_reachable = bpf_prog->aux->tail_call_reachable;
+	bool is_extension = bpf_prog->type == BPF_PROG_TYPE_EXT;
 	struct bpf_insn *insn = bpf_prog->insnsi;
 	bool callee_regs_used[4] = {};
 	int insn_cnt = bpf_prog->len;
@@ -1384,7 +1390,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 	emit_prologue(&prog, bpf_prog->aux->stack_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
-		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
+		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb,
+		      is_extension);
 	/* Exception callback will clobber callee regs for its own use, and
 	 * restore the original callee regs from main prog's stack frame.
 	 */
@@ -2923,6 +2930,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		 */
 		if (is_endbr(*(u32 *)orig_call))
 			orig_call += ENDBR_INSN_SIZE;
+		if (is_bpf_text_address((long)orig_call))
+			orig_call += X86_POKE_EXTRA;
 		orig_call += X86_PATCH_SIZE;
 	}
 
@@ -3025,6 +3034,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		/* remember return value in a stack for bpf prog to access */
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 		im->ip_after_call = image + (prog - (u8 *)rw_image);
+		emit_nops(&prog, X86_POKE_EXTRA);
 		emit_nops(&prog, X86_PATCH_SIZE);
 	}
 

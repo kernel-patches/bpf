@@ -21898,6 +21898,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Cannot extend fentry/fexit\n");
 			return -EINVAL;
 		}
+		if (prog_extension && prog->aux->tail_call_reachable &&
+		    !(aux->func ? aux->func[subprog]->aux->tail_call_reachable :
+		      aux->tail_call_reachable)) {
+			bpf_log(log, "Cannot extend no-tailcall target with tailcall ext prog\n");
+			return -EINVAL;
+		}
 	} else {
 		if (prog_extension) {
 			bpf_log(log, "Cannot replace kernel functions\n");
