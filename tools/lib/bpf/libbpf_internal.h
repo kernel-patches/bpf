@@ -484,6 +484,8 @@ struct btf_ext {
 		struct btf_ext_header *hdr;
 		void *data;
 	};
+	void *data_swapped;
+	bool swapped_endian;
 	struct btf_ext_info func_info;
 	struct btf_ext_info line_info;
 	struct btf_ext_info core_relo_info;
@@ -510,6 +512,37 @@ struct bpf_line_info_min {
 	__u32	line_off;
 	__u32	line_col;
 };
+
+/* Functions/typedef to help byte-swap info records, returning their size */
+
+typedef int (*anon_info_bswap_fn_t)(void *);
+
+static inline int bpf_func_info_bswap(struct bpf_func_info *i)
+{
+	i->insn_off = bswap_32(i->insn_off);
+	i->type_id = bswap_32(i->type_id);
+	return sizeof(*i);
+}
+
+static inline int bpf_line_info_bswap(struct bpf_line_info *i)
+{
+	i->insn_off = bswap_32(i->insn_off);
+	i->file_name_off = bswap_32(i->file_name_off);
+	i->line_off = bswap_32(i->line_off);
+	i->line_col = bswap_32(i->line_col);
+	return sizeof(*i);
+}
+
+static inline int bpf_core_relo_bswap(struct bpf_core_relo *i)
+{
+	_Static_assert(sizeof(i->kind) == sizeof(__u32),
+		       "enum bpf_core_relo_kind is not 32-bit\n");
+	i->insn_off = bswap_32(i->insn_off);
+	i->type_id = bswap_32(i->type_id);
+	i->access_str_off = bswap_32(i->access_str_off);
+	i->kind = bswap_32(i->kind);
+	return sizeof(*i);
+}
 
 enum btf_field_iter_kind {
 	BTF_FIELD_ITER_IDS,

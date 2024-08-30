@@ -3023,25 +3023,102 @@ static int btf_ext_setup_core_relos(struct btf_ext *btf_ext)
 	return btf_ext_setup_info(btf_ext, &param);
 }
 
-static int btf_ext_parse_hdr(__u8 *data, __u32 data_size)
+/* Swap byte-order of BTF.ext header with any endianness */
+static void btf_ext_bswap_hdr(struct btf_ext *btf_ext, __u32 hdr_len)
 {
-	const struct btf_ext_header *hdr = (struct btf_ext_header *)data;
+	struct btf_ext_header *h = btf_ext->hdr;
 
-	if (data_size < offsetofend(struct btf_ext_header, hdr_len) ||
-	    data_size < hdr->hdr_len) {
-		pr_debug("BTF.ext header not found\n");
+	h->magic = bswap_16(h->magic);
+	h->hdr_len = bswap_32(h->hdr_len);
+	h->func_info_off = bswap_32(h->func_info_off);
+	h->func_info_len = bswap_32(h->func_info_len);
+	h->line_info_off = bswap_32(h->line_info_off);
+	h->line_info_len = bswap_32(h->line_info_len);
+
+	if (hdr_len < offsetofend(struct btf_ext_header, core_relo_len))
+		return;
+
+	h->core_relo_off = bswap_32(h->core_relo_off);
+	h->core_relo_len = bswap_32(h->core_relo_len);
+}
+
+/* Swap byte-order of a generic info subsection */
+static void info_subsec_bswap(const struct btf_ext_header *hdr, bool native,
+			      __u32 off, __u32 len, anon_info_bswap_fn_t bswap)
+{
+	__u32 left, i, *rs, rec_size, num_info;
+	struct btf_ext_info_sec *si;
+	void *p;
+
+	if (len == 0)
+		return;
+
+	rs = (void *)hdr + hdr->hdr_len + off;	/* record size */
+	si = (void *)rs + sizeof(__u32);	/* sec info #1 */
+	rec_size = native ? *rs : bswap_32(*rs);
+	*rs = bswap_32(*rs);
+	left = len - sizeof(__u32);
+	while (left > 0) {
+		num_info = native ? si->num_info : bswap_32(si->num_info);
+		si->sec_name_off = bswap_32(si->sec_name_off);
+		si->num_info = bswap_32(si->num_info);
+		left -= offsetof(struct btf_ext_info_sec, data);
+		p = si->data;
+		for (i = 0; i < num_info; i++)	/* list of records */
+			p += bswap(p);
+		si = p;
+		left -=  rec_size * num_info;
+	}
+}
+
+/*
+ * Swap endianness of the whole info segment in a BTF.ext data section:
+ *   - requires BTF.ext header data in native byte order
+ *   - only support info structs from BTF version 1
+ *   - native: current info data is native endianness
+ */
+static void btf_ext_bswap_info(struct btf_ext *btf_ext, bool native)
+{
+	const struct btf_ext_header *hdr = btf_ext->hdr;
+
+	/* Swap func_info subsection byte-order */
+	info_subsec_bswap(hdr, native, hdr->func_info_off, hdr->func_info_len,
+			  (anon_info_bswap_fn_t)bpf_func_info_bswap);
+
+	/* Swap line_info subsection byte-order */
+	info_subsec_bswap(hdr, native, hdr->line_info_off, hdr->line_info_len,
+			  (anon_info_bswap_fn_t)bpf_line_info_bswap);
+
+	/* Swap core_relo subsection byte-order (if present) */
+	if (hdr->hdr_len < offsetofend(struct btf_ext_header, core_relo_len))
+		return;
+
+	info_subsec_bswap(hdr, native, hdr->core_relo_off, hdr->core_relo_len,
+			  (anon_info_bswap_fn_t)bpf_core_relo_bswap);
+}
+
+/* Validate hdr data & info sections, convert to native endianness */
+static int btf_ext_parse(struct btf_ext *btf_ext)
+{
+	struct btf_ext_header *hdr = btf_ext->hdr;
+	__u32 hdr_len, info_size, data_size = btf_ext->data_size;
+
+	if (data_size < offsetofend(struct btf_ext_header, hdr_len)) {
+		pr_debug("BTF.ext header too short\n");
 		return -EINVAL;
 	}
 
+	hdr_len = hdr->hdr_len;
 	if (hdr->magic == bswap_16(BTF_MAGIC)) {
-		pr_warn("BTF.ext in non-native endianness is not supported\n");
-		return -ENOTSUP;
+		btf_ext->swapped_endian = true;
+		hdr_len = bswap_32(hdr_len);
 	} else if (hdr->magic != BTF_MAGIC) {
 		pr_debug("Invalid BTF.ext magic:%x\n", hdr->magic);
 		return -EINVAL;
 	}
 
-	if (hdr->version != BTF_VERSION) {
+	/* Ensure known version of structs, current BTF_VERSION == 1 */
+	if (hdr->version != 1) {
 		pr_debug("Unsupported BTF.ext version:%u\n", hdr->version);
 		return -ENOTSUP;
 	}
@@ -3051,10 +3128,41 @@ static int btf_ext_parse_hdr(__u8 *data, __u32 data_size)
 		return -ENOTSUP;
 	}
 
-	if (data_size == hdr->hdr_len) {
+	if (data_size < hdr_len) {
+		pr_debug("BTF.ext header not found\n");
+		return -EINVAL;
+	} else if (data_size == hdr_len) {
 		pr_debug("BTF.ext has no data\n");
 		return -EINVAL;
 	}
+
+	/* Verify mandatory hdr info details present */
+	if (hdr_len < offsetofend(struct btf_ext_header, line_info_len)) {
+		pr_warn("BTF.ext header missing func_info, line_info\n");
+		return -EINVAL;
+	}
+
+	/* Keep hdr native byte-order in memory for introspection */
+	if (btf_ext->swapped_endian)
+		btf_ext_bswap_hdr(btf_ext, hdr_len);
+
+	/* Basic info section consistency checks*/
+	info_size = btf_ext->data_size - hdr_len;
+	if (info_size & 0x03) {
+		pr_warn("BTF.ext info size not 4-byte multiple\n");
+		return -EINVAL;
+	}
+	info_size -= hdr->func_info_len + hdr->line_info_len;
+	if (hdr_len >= offsetofend(struct btf_ext_header, core_relo_len))
+		info_size -= hdr->core_relo_len;
+	if (info_size) {
+		pr_warn("BTF.ext info size mismatch with header data\n");
+		return -EINVAL;
+	}
+
+	/* Keep infos native byte-order in memory for introspection */
+	if (btf_ext->swapped_endian)
+		btf_ext_bswap_info(btf_ext, !btf_ext->swapped_endian);
 
 	return 0;
 }
@@ -3067,6 +3175,7 @@ void btf_ext__free(struct btf_ext *btf_ext)
 	free(btf_ext->line_info.sec_idxs);
 	free(btf_ext->core_relo_info.sec_idxs);
 	free(btf_ext->data);
+	free(btf_ext->data_swapped);
 	free(btf_ext);
 }
 
@@ -3087,14 +3196,9 @@ struct btf_ext *btf_ext__new(const __u8 *data, __u32 size)
 	}
 	memcpy(btf_ext->data, data, size);
 
-	err = btf_ext_parse_hdr(btf_ext->data, size);
+	err = btf_ext_parse(btf_ext);
 	if (err)
 		goto done;
-
-	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, line_info_len)) {
-		err = -EINVAL;
-		goto done;
-	}
 
 	err = btf_ext_setup_func_info(btf_ext);
 	if (err)
@@ -3120,15 +3224,71 @@ done:
 	return btf_ext;
 }
 
+static void *btf_ext_raw_data(const struct btf_ext *btf_ext_ro, __u32 *size,
+			      bool swap_endian)
+{
+	struct btf_ext *btf_ext = (struct btf_ext *)btf_ext_ro;
+	const __u32 data_sz = btf_ext->data_size;
+	void *data;
+
+	data = swap_endian ? btf_ext->data_swapped : btf_ext->data;
+	if (data) {
+		*size = data_sz;
+		return data;
+	}
+
+	data = calloc(1, data_sz);
+	if (!data)
+		return NULL;
+	memcpy(data, btf_ext->data, data_sz);
+
+	if (swap_endian) {
+		btf_ext_bswap_info(btf_ext, true);
+		btf_ext_bswap_hdr(btf_ext, btf_ext->hdr->hdr_len);
+		btf_ext->data_swapped = data;
+	}
+
+	*size = data_sz;
+	return data;
+}
+
 const void *btf_ext__raw_data(const struct btf_ext *btf_ext, __u32 *size)
 {
+	__u32 data_sz;
+	void *data;
+
+	data = btf_ext_raw_data(btf_ext, &data_sz, btf_ext->swapped_endian);
+	if (!data)
+		return errno = ENOMEM, NULL;
+
 	*size = btf_ext->data_size;
-	return btf_ext->data;
+	return data;
 }
 
 __attribute__((alias("btf_ext__raw_data")))
 const void *btf_ext__get_raw_data(const struct btf_ext *btf_ext, __u32 *size);
 
+enum btf_endianness btf_ext__endianness(const struct btf_ext *btf_ext)
+{
+	if (is_host_big_endian())
+		return btf_ext->swapped_endian ? BTF_LITTLE_ENDIAN : BTF_BIG_ENDIAN;
+	else
+		return btf_ext->swapped_endian ? BTF_BIG_ENDIAN : BTF_LITTLE_ENDIAN;
+}
+
+int btf_ext__set_endianness(struct btf_ext *btf_ext, enum btf_endianness endian)
+{
+	if (endian != BTF_LITTLE_ENDIAN && endian != BTF_BIG_ENDIAN)
+		return libbpf_err(-EINVAL);
+
+	btf_ext->swapped_endian = is_host_big_endian() != (endian == BTF_BIG_ENDIAN);
+
+	if (!btf_ext->swapped_endian) {
+		free(btf_ext->data_swapped);
+		btf_ext->data_swapped = NULL;
+	}
+	return 0;
+}
 
 struct btf_dedup;
 
