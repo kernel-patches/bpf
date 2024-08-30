@@ -150,21 +150,23 @@ static void __cpu_map_ring_cleanup(struct ptr_ring *ring)
 }
 
 static void cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
-				     struct list_head *listp,
+				     void **skbs, u32 skb_n,
 				     struct xdp_cpumap_stats *stats)
 {
-	struct sk_buff *skb, *tmp;
 	struct xdp_buff xdp;
 	u32 act;
 	int err;
 
-	list_for_each_entry_safe(skb, tmp, listp, list) {
+	for (u32 i = 0; i < skb_n; i++) {
+		struct sk_buff *skb = skbs[i];
+
 		act = bpf_prog_run_generic_xdp(skb, &xdp, rcpu->prog);
 		switch (act) {
 		case XDP_PASS:
+			napi_gro_receive(&rcpu->napi, skb);
+			stats->pass++;
 			break;
 		case XDP_REDIRECT:
-			skb_list_del_init(skb);
 			err = xdp_do_generic_redirect(skb->dev, skb, &xdp,
 						      rcpu->prog);
 			if (unlikely(err)) {
@@ -181,8 +183,7 @@ static void cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
 			trace_xdp_exception(skb->dev, rcpu->prog, act);
 			fallthrough;
 		case XDP_DROP:
-			skb_list_del_init(skb);
-			kfree_skb(skb);
+			napi_consume_skb(skb, true);
 			stats->drop++;
 			return;
 		}
@@ -251,8 +252,8 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 #define CPUMAP_BATCH 8
 
 static int cpu_map_bpf_prog_run(struct bpf_cpu_map_entry *rcpu, void **frames,
-				int xdp_n, struct xdp_cpumap_stats *stats,
-				struct list_head *list)
+				int xdp_n, void **skbs, u32 skb_n,
+				struct xdp_cpumap_stats *stats)
 {
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
 	int nframes;
@@ -267,8 +268,8 @@ static int cpu_map_bpf_prog_run(struct bpf_cpu_map_entry *rcpu, void **frames,
 	if (stats->redirect)
 		xdp_do_flush();
 
-	if (unlikely(!list_empty(list)))
-		cpu_map_bpf_prog_run_skb(rcpu, list, stats);
+	if (unlikely(skb_n))
+		cpu_map_bpf_prog_run_skb(rcpu, skbs, skb_n, stats);
 
 	bpf_net_ctx_clear(bpf_net_ctx);
 
@@ -288,9 +289,7 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 		gfp_t gfp = __GFP_ZERO | GFP_ATOMIC;
 		int i, n, m, nframes, xdp_n;
 		void *frames[CPUMAP_BATCH];
-		struct sk_buff *skb, *tmp;
 		void *skbs[CPUMAP_BATCH];
-		LIST_HEAD(list);
 
 		if (__ptr_ring_empty(rcpu->queue))
 			break;
@@ -304,15 +303,15 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 		n = __ptr_ring_consume_batched(rcpu->queue, frames, n);
 		done += n;
 
-		for (i = 0, xdp_n = 0; i < n; i++) {
+		for (i = 0, xdp_n = 0, m = 0; i < n; i++) {
 			void *f = frames[i];
 			struct page *page;
 
 			if (unlikely(__ptr_test_bit(0, &f))) {
-				skb = f;
+				struct sk_buff *skb = f;
 
 				__ptr_clear_bit(0, &skb);
-				list_add_tail(&skb->list, &list);
+				skbs[m++] = skb;
 				continue;
 			}
 
@@ -327,19 +326,22 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 		}
 
 		/* Support running another XDP prog on this CPU */
-		nframes = cpu_map_bpf_prog_run(rcpu, frames, xdp_n, &stats, &list);
-		if (nframes) {
-			m = kmem_cache_alloc_bulk(net_hotdata.skbuff_cache,
-						  gfp, nframes, skbs);
-			if (unlikely(m == 0)) {
-				for (i = 0; i < nframes; i++)
-					skbs[i] = NULL; /* effect: xdp_return_frame */
-				kmem_alloc_drops += nframes;
-			}
+		nframes = cpu_map_bpf_prog_run(rcpu, frames, xdp_n, skbs, m,
+					       &stats);
+		if (!nframes)
+			continue;
+
+		m = kmem_cache_alloc_bulk(net_hotdata.skbuff_cache, gfp,
+					  nframes, skbs);
+		if (unlikely(!m)) {
+			for (i = 0; i < nframes; i++)
+				skbs[i] = NULL; /* effect: xdp_return_frame */
+			kmem_alloc_drops += nframes;
 		}
 
 		for (i = 0; i < nframes; i++) {
 			struct xdp_frame *xdpf = frames[i];
+			struct sk_buff *skb;
 
 			skb = __xdp_build_skb_from_frame(xdpf, skbs[i],
 							 xdpf->dev_rx);
@@ -348,11 +350,6 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 				continue;
 			}
 
-			list_add_tail(&skb->list, &list);
-		}
-
-		list_for_each_entry_safe(skb, tmp, &list, list) {
-			skb_list_del_init(skb);
 			napi_gro_receive(napi, skb);
 		}
 	}
