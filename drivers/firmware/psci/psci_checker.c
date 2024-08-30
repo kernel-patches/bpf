@@ -398,7 +398,7 @@ static int suspend_tests(void)
 
 		thread = kthread_create_on_cpu(suspend_test_thread,
 					       (void *)(long)cpu, cpu,
-					       "psci_suspend_test");
+					       "psci_suspend_test-%u");
 		if (IS_ERR(thread))
 			pr_err("Failed to create kthread on CPU %d\n", cpu);
 		else
