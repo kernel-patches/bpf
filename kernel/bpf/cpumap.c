@@ -286,7 +286,6 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 	rcpu = container_of(napi, typeof(*rcpu), napi);
 
 	while (likely(done < budget)) {
-		gfp_t gfp = __GFP_ZERO | GFP_ATOMIC;
 		int i, n, m, nframes, xdp_n;
 		void *frames[CPUMAP_BATCH];
 		void *skbs[CPUMAP_BATCH];
@@ -331,8 +330,7 @@ static int cpu_map_napi_poll(struct napi_struct *napi, int budget)
 		if (!nframes)
 			continue;
 
-		m = kmem_cache_alloc_bulk(net_hotdata.skbuff_cache, gfp,
-					  nframes, skbs);
+		m = napi_skb_cache_get_bulk(skbs, nframes);
 		if (unlikely(!m)) {
 			for (i = 0; i < nframes; i++)
 				skbs[i] = NULL; /* effect: xdp_return_frame */
