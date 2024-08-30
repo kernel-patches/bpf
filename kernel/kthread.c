@@ -559,23 +559,27 @@ void kthread_bind(struct task_struct *p, unsigned int cpu)
 EXPORT_SYMBOL(kthread_bind);
 
 /**
- * kthread_create_on_cpu - Create a cpu bound kthread
+ * __kthread_create_on_cpu - Create a cpu bound kthread
  * @threadfn: the function to run until signal_pending(current).
  * @data: data ptr for @threadfn.
  * @cpu: The cpu on which the thread should be bound,
- * @namefmt: printf-style name for the thread. Format is restricted
- *	     to "name.*%u". Code fills in cpu number.
+ * @namefmt: printf-style name for the thread. Must have an excess '%u'
+ *	     at the end as kthread_create_on_cpu() fills in CPU number.
  *
  * Description: This helper function creates and names a kernel thread
  */
-struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
-					  void *data, unsigned int cpu,
-					  const char *namefmt)
+struct task_struct *__kthread_create_on_cpu(int (*threadfn)(void *data),
+					    void *data, unsigned int cpu,
+					    const char *namefmt, ...)
 {
 	struct task_struct *p;
+	va_list args;
 
-	p = kthread_create_on_node(threadfn, data, cpu_to_node(cpu), namefmt,
-				   cpu);
+	va_start(args, namefmt);
+	p = __kthread_create_on_node(threadfn, data, cpu_to_node(cpu), namefmt,
+				     args);
+	va_end(args);
+
 	if (IS_ERR(p))
 		return p;
 	kthread_bind(p, cpu);
@@ -583,7 +587,7 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 	to_kthread(p)->cpu = cpu;
 	return p;
 }
-EXPORT_SYMBOL(kthread_create_on_cpu);
+EXPORT_SYMBOL(__kthread_create_on_cpu);
 
 void kthread_set_per_cpu(struct task_struct *k, int cpu)
 {

@@ -27,11 +27,21 @@ struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 #define kthread_create(threadfn, data, namefmt, arg...) \
 	kthread_create_on_node(threadfn, data, NUMA_NO_NODE, namefmt, ##arg)
 
+__printf(4, 5)
+struct task_struct *__kthread_create_on_cpu(int (*threadfn)(void *data),
+					    void *data, unsigned int cpu,
+					    const char *namefmt, ...);
 
-struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
-					  void *data,
-					  unsigned int cpu,
-					  const char *namefmt);
+#define kthread_create_on_cpu(threadfn, data, cpu, namefmt, ...)	   \
+	_kthread_create_on_cpu(threadfn, data, cpu, __UNIQUE_ID(cpu_),	   \
+			       namefmt, ##__VA_ARGS__)
+
+#define _kthread_create_on_cpu(threadfn, data, cpu, uc, namefmt, ...) ({   \
+	u32 uc = (cpu);							   \
+									   \
+	__kthread_create_on_cpu(threadfn, data, uc, namefmt,		   \
+				##__VA_ARGS__, uc);			   \
+})
 
 void get_kthread_comm(char *buf, size_t buf_size, struct task_struct *tsk);
 bool set_kthread_struct(struct task_struct *p);
@@ -62,25 +72,28 @@ bool kthread_is_per_cpu(struct task_struct *k);
  * @threadfn: the function to run until signal_pending(current).
  * @data: data ptr for @threadfn.
  * @cpu: The cpu on which the thread should be bound,
- * @namefmt: printf-style name for the thread. Format is restricted
- *	     to "name.*%u". Code fills in cpu number.
+ * @namefmt: printf-style name for the thread. Must have an excess '%u'
+ *	     at the end as kthread_create_on_cpu() fills in CPU number.
  *
  * Description: Convenient wrapper for kthread_create_on_cpu()
  * followed by wake_up_process().  Returns the kthread or
  * ERR_PTR(-ENOMEM).
  */
-static inline struct task_struct *
-kthread_run_on_cpu(int (*threadfn)(void *data), void *data,
-			unsigned int cpu, const char *namefmt)
-{
-	struct task_struct *p;
+#define kthread_run_on_cpu(threadfn, data, cpu, namefmt, ...)		   \
+	_kthread_run_on_cpu(threadfn, data, cpu, __UNIQUE_ID(task_),	   \
+			    namefmt, ##__VA_ARGS__)
 
-	p = kthread_create_on_cpu(threadfn, data, cpu, namefmt);
-	if (!IS_ERR(p))
-		wake_up_process(p);
-
-	return p;
-}
+#define _kthread_run_on_cpu(threadfn, data, cpu, ut, namefmt, ...)	   \
+({									   \
+	struct task_struct *ut;						   \
+									   \
+	ut = kthread_create_on_cpu(threadfn, data, cpu, namefmt,	   \
+				   ##__VA_ARGS__);			   \
+	if (!IS_ERR(ut))						   \
+		wake_up_process(ut);					   \
+									   \
+	ut;								   \
+})
 
 void free_kthread_struct(struct task_struct *k);
 void kthread_bind(struct task_struct *k, unsigned int cpu);
