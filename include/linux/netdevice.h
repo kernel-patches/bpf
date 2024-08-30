@@ -377,6 +377,7 @@ struct napi_struct {
 	struct list_head	dev_list;
 	struct hlist_node	napi_hash_node;
 	int			irq;
+	int			thread_cpuid;
 };
 
 enum {
@@ -2628,8 +2629,18 @@ static inline void netif_napi_set_irq(struct napi_struct *napi, int irq)
  */
 #define NAPI_POLL_WEIGHT 64
 
-void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
-			   int (*poll)(struct napi_struct *, int), int weight);
+void netif_napi_add_weight_percpu(struct net_device *dev,
+				  struct napi_struct *napi,
+				  int (*poll)(struct napi_struct *, int),
+				  int weight, int thread_cpuid);
+
+static inline void netif_napi_add_weight(struct net_device *dev,
+					 struct napi_struct *napi,
+					 int (*poll)(struct napi_struct *, int),
+					 int weight)
+{
+	netif_napi_add_weight_percpu(dev, napi, poll, weight, -1);
+}
 
 /**
  * netif_napi_add() - initialize a NAPI context
@@ -2672,6 +2683,26 @@ static inline void netif_napi_add_tx(struct net_device *dev,
 				     int (*poll)(struct napi_struct *, int))
 {
 	netif_napi_add_tx_weight(dev, napi, poll, NAPI_POLL_WEIGHT);
+}
+
+/**
+ * netif_napi_add_percpu() - initialize a CPU-pinned threaded NAPI context
+ * @dev:  network device
+ * @napi: NAPI context
+ * @poll: polling function
+ * @thread_cpuid: CPU which this NAPI will be pinned to
+ *
+ * Variant of netif_napi_add() which pins the NAPI to the specified CPU. No
+ * changes in the "standard" mode, but in case with the threaded one, this
+ * NAPI will always be run on the passed CPU no matter where scheduled.
+ */
+static inline void netif_napi_add_percpu(struct net_device *dev,
+					 struct napi_struct *napi,
+					 int (*poll)(struct napi_struct *, int),
+					 int thread_cpuid)
+{
+	netif_napi_add_weight_percpu(dev, napi, poll, NAPI_POLL_WEIGHT,
+				     thread_cpuid);
 }
 
 /**
