@@ -33,8 +33,8 @@ __success
 __arch_x86_64
 /* program entry for main(), regular function prologue */
 __jited("	endbr64")
-__jited("	nopl	(%rax,%rax)")
 __jited("	xorq	%rax, %rax")
+__jited("	nopl	(%rax,%rax)")
 __jited("	pushq	%rbp")
 __jited("	movq	%rsp, %rbp")
 /* tail call prologue for program:
@@ -63,8 +63,8 @@ __jited("	{{(retq|jmp	0x)}}")		/* return or jump to rethunk */
 __jited("...")
 /* subprogram entry for sub(), regular function prologue */
 __jited("	endbr64")
-__jited("	nopl	(%rax,%rax)")
 __jited("	nopl	(%rax)")
+__jited("	nopl	(%rax,%rax)")
 __jited("	pushq	%rbp")
 __jited("	movq	%rsp, %rbp")
 /* tail call prologue for subprogram address of tail call counter
