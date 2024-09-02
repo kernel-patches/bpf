@@ -1688,6 +1688,34 @@ static bool btf_is_non_static(const struct btf_type *t)
 	       || (btf_is_func(t) && btf_func_linkage(t) != BTF_FUNC_STATIC);
 }
 
+static Elf64_Sym *find_sym_by_name(struct src_obj *obj, size_t sec_idx,
+				   int sym_type, const char *sym_name)
+{
+	struct src_sec *symtab = &obj->secs[obj->symtab_sec_idx];
+	Elf64_Sym *sym = symtab->data->d_buf;
+	int i, n = symtab->shdr->sh_size / symtab->shdr->sh_entsize;
+	int str_sec_idx = symtab->shdr->sh_link;
+	const char *name;
+
+	for (i = 0; i < n; i++, sym++) {
+		if (sym->st_shndx != sec_idx)
+			continue;
+		if (ELF64_ST_TYPE(sym->st_info) != sym_type)
+			continue;
+
+		name = elf_strptr(obj->elf, str_sec_idx, sym->st_name);
+		if (!name)
+			return NULL;
+
+		if (strcmp(sym_name, name) != 0)
+			continue;
+
+		return sym;
+	}
+
+	return NULL;
+}
+
 static int find_glob_sym_btf(struct src_obj *obj, Elf64_Sym *sym, const char *sym_name,
 			     int *out_btf_sec_id, int *out_btf_id)
 {
@@ -1695,6 +1723,7 @@ static int find_glob_sym_btf(struct src_obj *obj, Elf64_Sym *sym, const char *sy
 	const struct btf_type *t;
 	const struct btf_var_secinfo *vi;
 	const char *name;
+	Elf64_Sym *s;
 
 	if (!obj->btf) {
 		pr_warn("failed to find BTF info for object '%s'\n", obj->filename);
@@ -1710,8 +1739,15 @@ static int find_glob_sym_btf(struct src_obj *obj, Elf64_Sym *sym, const char *sy
 		 */
 		if (btf_is_non_static(t)) {
 			name = btf__str_by_offset(obj->btf, t->name_off);
-			if (strcmp(name, sym_name) != 0)
-				continue;
+			if (strcmp(name, sym_name) != 0) {
+				/* the symbol that we look for may not have BTF as it may
+				 * be an alias of another symbol; we check if this is
+				 * the original symbol and if so, we use its BTF id
+				 */
+				s = find_sym_by_name(obj, sym->st_shndx, STT_FUNC, name);
+				if (!s || s->st_value != sym->st_value)
+					continue;
+			}
 
 			/* remember and still try to find DATASEC */
 			btf_id = i;
@@ -2130,34 +2166,6 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 	}
 
 	return 0;
-}
-
-static Elf64_Sym *find_sym_by_name(struct src_obj *obj, size_t sec_idx,
-				   int sym_type, const char *sym_name)
-{
-	struct src_sec *symtab = &obj->secs[obj->symtab_sec_idx];
-	Elf64_Sym *sym = symtab->data->d_buf;
-	int i, n = symtab->shdr->sh_size / symtab->shdr->sh_entsize;
-	int str_sec_idx = symtab->shdr->sh_link;
-	const char *name;
-
-	for (i = 0; i < n; i++, sym++) {
-		if (sym->st_shndx != sec_idx)
-			continue;
-		if (ELF64_ST_TYPE(sym->st_info) != sym_type)
-			continue;
-
-		name = elf_strptr(obj->elf, str_sec_idx, sym->st_name);
-		if (!name)
-			return NULL;
-
-		if (strcmp(sym_name, name) != 0)
-			continue;
-
-		return sym;
-	}
-
-	return NULL;
 }
 
 static int linker_fixup_btf(struct src_obj *obj)
