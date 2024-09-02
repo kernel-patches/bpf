@@ -4612,14 +4612,15 @@ static bool prog_contains_insn(const struct bpf_program *prog, size_t insn_idx)
 	       insn_idx < prog->sec_insn_off + prog->sec_insn_cnt;
 }
 
-static struct bpf_program *find_prog_by_sec_insn(const struct bpf_object *obj,
-						 size_t sec_idx, size_t insn_idx)
+static int find_progs_by_sec_insn(const struct bpf_object *obj,
+				     size_t sec_idx, size_t insn_idx,
+				     struct bpf_program **progs)
 {
-	int l = 0, r = obj->nr_programs - 1, m;
+	int l = 0, r = obj->nr_programs - 1, m, nr_progs = 0;
 	struct bpf_program *prog;
 
 	if (!obj->nr_programs)
-		return NULL;
+		return 0;
 
 	while (l < r) {
 		m = l + (r - l + 1) / 2;
@@ -4631,13 +4632,20 @@ static struct bpf_program *find_prog_by_sec_insn(const struct bpf_object *obj,
 		else
 			r = m - 1;
 	}
-	/* matching program could be at index l, but it still might be the
-	 * wrong one, so we need to double check conditions for the last time
+	/* there may be multiple (aliasing) programs sharing the same instructions,
+	 * index l will contain the last one so we search for the first one,
+	 * set *progs to point to it, and return the number of matching programs
+	 *
+	 * note that there may be no matching programs so we may return 0 here
 	 */
 	prog = &obj->programs[l];
-	if (prog->sec_idx == sec_idx && prog_contains_insn(prog, insn_idx))
-		return prog;
-	return NULL;
+	while (l >= 0 && prog->sec_idx == sec_idx && prog_contains_insn(prog, insn_idx)) {
+		prog = &obj->programs[--l];
+		nr_progs++;
+	}
+	if (nr_progs)
+		*progs = &obj->programs[l + 1];
+	return nr_progs;
 }
 
 static int
@@ -4647,7 +4655,7 @@ bpf_object__collect_prog_relos(struct bpf_object *obj, Elf64_Shdr *shdr, Elf_Dat
 	size_t sec_idx = shdr->sh_info, sym_idx;
 	struct bpf_program *prog;
 	struct reloc_desc *relos;
-	int err, i, nrels;
+	int err, i, j, nrels, nr_progs;
 	const char *sym_name;
 	__u32 insn_idx;
 	Elf_Scn *scn;
@@ -4715,27 +4723,33 @@ bpf_object__collect_prog_relos(struct bpf_object *obj, Elf64_Shdr *shdr, Elf_Dat
 		pr_debug("sec '%s': relo #%d: insn #%u against '%s'\n",
 			 relo_sec_name, i, insn_idx, sym_name);
 
-		prog = find_prog_by_sec_insn(obj, sec_idx, insn_idx);
-		if (!prog) {
+		nr_progs = find_progs_by_sec_insn(obj, sec_idx, insn_idx, &prog);
+		if (!nr_progs) {
 			pr_debug("sec '%s': relo #%d: couldn't find program in section '%s' for insn #%u, probably overridden weak function, skipping...\n",
 				relo_sec_name, i, sec_name, insn_idx);
 			continue;
 		}
 
-		relos = libbpf_reallocarray(prog->reloc_desc,
-					    prog->nr_reloc + 1, sizeof(*relos));
-		if (!relos)
-			return -ENOMEM;
-		prog->reloc_desc = relos;
-
-		/* adjust insn_idx to local BPF program frame of reference */
+		/* adjust insn_idx to local BPF program frame of reference
+		 * we can just do it once as all progs have the same sec_insn_off
+		 */
 		insn_idx -= prog->sec_insn_off;
-		err = bpf_program__record_reloc(prog, &relos[prog->nr_reloc],
-						insn_idx, sym_name, sym, rel);
-		if (err)
-			return err;
 
-		prog->nr_reloc++;
+		for (j = 0; j < nr_progs; j++, prog++) {
+			relos = libbpf_reallocarray(prog->reloc_desc,
+						    prog->nr_reloc + 1, sizeof(*relos));
+			if (!relos)
+				return -ENOMEM;
+			prog->reloc_desc = relos;
+
+			/* adjust insn_idx to local BPF program frame of reference */
+			err = bpf_program__record_reloc(prog, &relos[prog->nr_reloc],
+							insn_idx, sym_name, sym, rel);
+			if (err)
+				return err;
+
+			prog->nr_reloc++;
+		}
 	}
 	return 0;
 }
@@ -5861,7 +5875,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 	struct bpf_program *prog;
 	struct bpf_insn *insn;
 	const char *sec_name;
-	int i, err = 0, insn_idx, sec_idx, sec_num;
+	int i, j, err = 0, insn_idx, sec_idx, sec_num, nr_progs;
 
 	if (obj->btf_ext->core_relo_info.len == 0)
 		return 0;
@@ -5899,8 +5913,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			if (rec->insn_off % BPF_INSN_SZ)
 				return -EINVAL;
 			insn_idx = rec->insn_off / BPF_INSN_SZ;
-			prog = find_prog_by_sec_insn(obj, sec_idx, insn_idx);
-			if (!prog) {
+			nr_progs = find_progs_by_sec_insn(obj, sec_idx, insn_idx, &prog);
+			if (!nr_progs) {
 				/* When __weak subprog is "overridden" by another instance
 				 * of the subprog from a different object file, linker still
 				 * appends all the .BTF.ext info that used to belong to that
@@ -5913,43 +5927,48 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 					 sec_name, i, insn_idx);
 				continue;
 			}
-			/* no need to apply CO-RE relocation if the program is
-			 * not going to be loaded
-			 */
-			if (!prog->autoload)
-				continue;
 
 			/* adjust insn_idx from section frame of reference to the local
 			 * program's frame of reference; (sub-)program code is not yet
-			 * relocated, so it's enough to just subtract in-section offset
+			 * relocated, so it's enough to just subtract in-section offset;
+			 * we can just do it once as all progs have the same sec_insn_off
 			 */
 			insn_idx = insn_idx - prog->sec_insn_off;
 			if (insn_idx >= prog->insns_cnt)
 				return -EINVAL;
-			insn = &prog->insns[insn_idx];
 
-			err = record_relo_core(prog, rec, insn_idx);
-			if (err) {
-				pr_warn("prog '%s': relo #%d: failed to record relocation: %d\n",
-					prog->name, i, err);
-				goto out;
-			}
+			for (j = 0; j < nr_progs; j++, prog++) {
+				/* no need to apply CO-RE relocation if the program is
+				 * not going to be loaded
+				 */
+				if (!prog->autoload)
+					continue;
 
-			if (prog->obj->gen_loader)
-				continue;
+				insn = &prog->insns[insn_idx];
 
-			err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache, &targ_res);
-			if (err) {
-				pr_warn("prog '%s': relo #%d: failed to relocate: %d\n",
-					prog->name, i, err);
-				goto out;
-			}
+				err = record_relo_core(prog, rec, insn_idx);
+				if (err) {
+					pr_warn("prog '%s': relo #%d: failed to record relocation: %d\n",
+						prog->name, i, err);
+					goto out;
+				}
 
-			err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
-			if (err) {
-				pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %d\n",
-					prog->name, i, insn_idx, err);
-				goto out;
+				if (prog->obj->gen_loader)
+					continue;
+
+				err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache, &targ_res);
+				if (err) {
+					pr_warn("prog '%s': relo #%d: failed to relocate: %d\n",
+						prog->name, i, err);
+					goto out;
+				}
+
+				err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
+				if (err) {
+					pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %d\n",
+						prog->name, i, insn_idx, err);
+					goto out;
+				}
 			}
 		}
 	}
@@ -6350,7 +6369,7 @@ bpf_object__reloc_code(struct bpf_object *obj, struct bpf_program *main_prog,
 	struct bpf_program *subprog;
 	struct reloc_desc *relo;
 	struct bpf_insn *insn;
-	int err;
+	int err, nr_subprogs;
 
 	err = reloc_prog_func_and_line_info(obj, main_prog, prog);
 	if (err)
@@ -6406,12 +6425,15 @@ bpf_object__reloc_code(struct bpf_object *obj, struct bpf_program *main_prog,
 		}
 
 		/* we enforce that sub-programs should be in .text section */
-		subprog = find_prog_by_sec_insn(obj, obj->efile.text_shndx, sub_insn_idx);
-		if (!subprog) {
+		nr_subprogs = find_progs_by_sec_insn(obj, obj->efile.text_shndx, sub_insn_idx, &subprog);
+		if (!nr_subprogs) {
 			pr_warn("prog '%s': no .text section found yet sub-program call exists\n",
 				prog->name);
 			return -LIBBPF_ERRNO__RELOC;
 		}
+		/* there may be multiple aliasing subprogs but it doesn't matter
+		 * which one we use here as they must all have the same insns
+		 */
 
 		/* if it's the first call instruction calling into this
 		 * subprogram (meaning this subprog hasn't been processed
@@ -9727,7 +9749,7 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 	__u32 member_idx;
 	Elf64_Sym *sym;
 	Elf64_Rel *rel;
-	int i, nrels;
+	int i, nrels, nr_progs;
 
 	btf = obj->btf;
 	nrels = shdr->sh_size / shdr->sh_entsize;
@@ -9791,12 +9813,15 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 			return -EINVAL;
 		}
 
-		prog = find_prog_by_sec_insn(obj, shdr_idx, insn_idx);
-		if (!prog) {
+		nr_progs = find_progs_by_sec_insn(obj, shdr_idx, insn_idx, &prog);
+		if (!nr_progs) {
 			pr_warn("struct_ops reloc %s: cannot find prog at shdr_idx %u to relocate func ptr %s\n",
 				map->name, shdr_idx, name);
 			return -EINVAL;
 		}
+		/* there may be multiple aliasing progs but it doesn't matter
+		 * which one we use here as they must all have the same insns
+		 */
 
 		/* prevent the use of BPF prog with invalid type */
 		if (prog->type != BPF_PROG_TYPE_STRUCT_OPS) {
