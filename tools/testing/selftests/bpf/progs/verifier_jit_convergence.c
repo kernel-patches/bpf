@@ -22,7 +22,7 @@ SEC("socket")
 __description("bpf_jit_convergence je <-> jmp")
 __success __retval(0)
 __arch_x86_64
-__jited("       pushq   %rbp")
+__jited("	pushq	%rbp")
 __naked void btf_jit_convergence_je_jmp(void)
 {
 	asm volatile (
