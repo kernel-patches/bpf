@@ -2729,6 +2729,111 @@ __bpf_kfunc int bpf_dynptr_clone(const struct bpf_dynptr *p,
 	return 0;
 }
 
+struct bpf_iter_dynptr {
+	__u64 __opaque[4];
+} __aligned(8);
+
+struct bpf_iter_dynptr_kern {
+	struct bpf_dynptr_kern *dynptr;
+	void *buffer;
+	u32 buffer_len;
+	u32 offset;
+	int read_len;
+} __aligned(8);
+
+__bpf_kfunc int bpf_iter_dynptr_new(struct bpf_iter_dynptr *it, struct bpf_dynptr *p,
+				    u32 offset, void *buffer, u32 buffer__szk)
+{
+	struct bpf_iter_dynptr_kern *kit = (void *)it;
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_dynptr_kern) > sizeof(struct bpf_iter_dynptr));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_dynptr_kern) !=
+		     __alignof__(struct bpf_iter_dynptr));
+
+	if (!ptr->data)
+		return -EINVAL;
+
+	if (!buffer || buffer__szk <= 0)
+		return -EINVAL;
+
+	if (offset >= __bpf_dynptr_size(ptr))
+		return -E2BIG;
+
+	kit->dynptr = ptr;
+	kit->buffer = buffer;
+	kit->buffer_len = buffer__szk;
+	kit->offset = offset;
+	kit->read_len = 0;
+
+	return 0;
+}
+
+__bpf_kfunc int *bpf_iter_dynptr_next(struct bpf_iter_dynptr *it)
+{
+	struct bpf_iter_dynptr_kern *kit = (void *)it;
+	int read_len, ret;
+	u32 size;
+
+	if (!kit->dynptr)
+		return NULL;
+
+	if (!kit->dynptr->data)
+		return NULL;
+
+	if (unlikely(kit->read_len < 0))
+		return NULL;
+
+	size = __bpf_dynptr_size(kit->dynptr);
+
+	if (kit->offset >= size)
+		return NULL;
+
+	read_len = (kit->offset + kit->buffer_len > size) ? size - kit->offset : kit->buffer_len;
+
+	ret = bpf_dynptr_read((u64)kit->buffer, read_len, (u64)kit->dynptr, kit->offset, 0);
+	if (unlikely(ret != 0)) {
+		/* if errors occur in bpf_dynptr_read, the errno is returned via read_len
+		 * and NULL is returned in the next iteration to exit the iteration loop.
+		 */
+		kit->read_len = ret;
+		goto out;
+	}
+
+	kit->read_len = read_len;
+	kit->offset += read_len;
+out:
+	return &kit->read_len;
+}
+
+__bpf_kfunc int bpf_iter_dynptr_set_buffer(struct bpf_iter_dynptr *it__iter,
+					   void *buffer, u32 buffer__szk)
+{
+	struct bpf_iter_dynptr_kern *kit = (void *)it__iter;
+
+	if (!buffer || buffer__szk <= 0)
+		return -EINVAL;
+
+	kit->buffer = buffer;
+	kit->buffer_len = buffer__szk;
+
+	return 0;
+}
+
+__bpf_kfunc u32 bpf_iter_dynptr_get_last_offset(struct bpf_iter_dynptr *it__iter)
+{
+	struct bpf_iter_dynptr_kern *kit = (void *)it__iter;
+
+	if (!kit->dynptr)
+		return 0;
+
+	return kit->offset - kit->read_len;
+}
+
+__bpf_kfunc void bpf_iter_dynptr_destroy(struct bpf_iter_dynptr *it)
+{
+}
+
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -3080,6 +3185,11 @@ BTF_ID_FLAGS(func, bpf_dynptr_is_null)
 BTF_ID_FLAGS(func, bpf_dynptr_is_rdonly)
 BTF_ID_FLAGS(func, bpf_dynptr_size)
 BTF_ID_FLAGS(func, bpf_dynptr_clone)
+BTF_ID_FLAGS(func, bpf_iter_dynptr_new, KF_ITER_NEW)
+BTF_ID_FLAGS(func, bpf_iter_dynptr_next, KF_ITER_NEXT | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_iter_dynptr_get_last_offset)
+BTF_ID_FLAGS(func, bpf_iter_dynptr_set_buffer)
+BTF_ID_FLAGS(func, bpf_iter_dynptr_destroy, KF_ITER_DESTROY)
 BTF_ID_FLAGS(func, bpf_modify_return_test_tp)
 BTF_ID_FLAGS(func, bpf_wq_init)
 BTF_ID_FLAGS(func, bpf_wq_set_callback_impl)
