@@ -5,8 +5,6 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 
-#if defined(__TARGET_ARCH_x86)
-
 struct value_t {
 	long long a[32];
 };
@@ -22,7 +20,7 @@ SEC("socket")
 __description("bpf_jit_convergence je <-> jmp")
 __success __retval(0)
 __arch_x86_64
-__jited("       pushq   %rbp")
+__jited("	pushq	%rbp")
 __naked void btf_jit_convergence_je_jmp(void)
 {
 	asm volatile (
@@ -112,17 +110,5 @@ __naked void btf_jit_convergence_je_jmp(void)
 	  __imm_addr(map_hash)
 	: __clobber_all);
 }
-
-#else
-
-SEC("socket")
-__description("non-x86 has no jit convergence issue, use a dummy test")
-__success
-int dummy_test(void)
-{
-	return 0;
-}
-
-#endif
 
 char _license[] SEC("license") = "GPL";
