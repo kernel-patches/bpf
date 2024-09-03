@@ -575,6 +575,15 @@ extern int bpf_iter_css_new(struct bpf_iter_css *it,
 extern struct cgroup_subsys_state *bpf_iter_css_next(struct bpf_iter_css *it) __weak __ksym;
 extern void bpf_iter_css_destroy(struct bpf_iter_css *it) __weak __ksym;
 
+struct bpf_iter_dynptr;
+extern int bpf_iter_dynptr_new(struct bpf_iter_dynptr *it, struct bpf_dynptr *p,
+			       u32 offset, void *buffer, u32 buffer__szk) __ksym;
+extern int *bpf_iter_dynptr_next(struct bpf_iter_dynptr *it) __ksym;
+extern int bpf_iter_dynptr_set_buffer(struct bpf_iter_dynptr *it__iter,
+				      void *buffer, u32 buffer__szk) __ksym;
+extern u32 bpf_iter_dynptr_get_last_offset(struct bpf_iter_dynptr *it__iter) __ksym;
+extern void bpf_iter_dynptr_destroy(struct bpf_iter_dynptr *it) __ksym;
+
 extern int bpf_wq_init(struct bpf_wq *wq, void *p__map, unsigned int flags) __weak __ksym;
 extern int bpf_wq_start(struct bpf_wq *wq, unsigned int flags) __weak __ksym;
 extern int bpf_wq_set_callback_impl(struct bpf_wq *wq,

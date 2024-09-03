@@ -21,6 +21,8 @@
 #include "iters_css_task.skel.h"
 #include "iters_css.skel.h"
 #include "iters_task_failure.skel.h"
+#include "iters_dynptr.skel.h"
+#include "iters_dynptr_failure.skel.h"
 
 static void subtest_num_iters(void)
 {
@@ -291,6 +293,50 @@ cleanup:
 	iters_css__destroy(skel);
 }
 
+static int subtest_dynptr_iters(struct iters_dynptr *skel, const char *prog_name)
+{
+	struct bpf_program *prog;
+	int prog_fd;
+
+	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		return -1;
+
+	prog_fd = bpf_program__fd(prog);
+	if (!ASSERT_GT(prog_fd, 0, "bpf_program__fd"))
+		return -1;
+
+	if (test__start_subtest(prog_name)) {
+		bpf_prog_test_run_opts(prog_fd, NULL);
+		ASSERT_EQ(skel->bss->iter_step_match, 0, "step_match");
+		ASSERT_EQ(skel->bss->iter_content_match, 0, "content_match");
+	}
+
+	return 0;
+}
+
+const char *dynptr_iter_tests[] = {
+	"bpf_iter_dynptr_buffer_fit",
+	"bpf_iter_dynptr_buffer_remain"
+};
+
+static void test_dynptr_iters(void)
+{
+	struct iters_dynptr *skel = NULL;
+	int i;
+
+	skel = iters_dynptr__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(dynptr_iter_tests); i++) {
+		if (subtest_dynptr_iters(skel, dynptr_iter_tests[i]))
+			break;
+	}
+
+	iters_dynptr__destroy(skel);
+}
+
 void test_iters(void)
 {
 	RUN_TESTS(iters_state_safety);
@@ -315,5 +361,9 @@ void test_iters(void)
 		subtest_css_task_iters();
 	if (test__start_subtest("css"))
 		subtest_css_iters();
+
+	test_dynptr_iters();
+
 	RUN_TESTS(iters_task_failure);
+	RUN_TESTS(iters_dynptr_failure);
 }
