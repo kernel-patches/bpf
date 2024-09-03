@@ -112,7 +112,7 @@ static bool is_imm8(int value)
  */
 static bool is_imm8_jmp_offset(int value)
 {
-	return value <= 123 && value >= -128;
+	return value <= 127 && value >= -128;
 }
 
 static bool is_simm32(s64 value)
