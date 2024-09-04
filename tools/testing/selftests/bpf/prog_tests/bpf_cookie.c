@@ -456,6 +456,7 @@ static void pe_subtest(struct test_bpf_cookie *skel)
 	if (!ASSERT_GE(pfd, 0, "perf_fd"))
 		goto cleanup;
 
+	skel->bss->res_valid = false;
 	opts.bpf_cookie = 0x100000;
 	link = bpf_program__attach_perf_event_opts(skel->progs.handle_pe, pfd, &opts);
 	if (!ASSERT_OK_PTR(link, "link1"))
@@ -463,6 +464,12 @@ static void pe_subtest(struct test_bpf_cookie *skel)
 
 	burn_cpu(); /* trigger BPF prog */
 
+	if (!skel->bss->res_valid) {
+		printf("%s:SKIP:the corresponding perf event was not sampled.\n",
+		        __func__);
+		test__skip();
+		goto cleanup;
+	}
 	ASSERT_EQ(skel->bss->pe_res, 0x100000, "pe_res1");
 
 	/* prevent bpf_link__destroy() closing pfd itself */
@@ -474,6 +481,7 @@ static void pe_subtest(struct test_bpf_cookie *skel)
 	link = NULL;
 	kern_sync_rcu();
 	skel->bss->pe_res = 0;
+	skel->bss->res_valid = false;
 
 	opts.bpf_cookie = 0x200000;
 	link = bpf_program__attach_perf_event_opts(skel->progs.handle_pe, pfd, &opts);
@@ -481,6 +489,13 @@ static void pe_subtest(struct test_bpf_cookie *skel)
 		goto cleanup;
 
 	burn_cpu(); /* trigger BPF prog */
+
+	if (!skel->bss->res_valid) {
+		printf("%s:SKIP:the corresponding perf event was not sampled.\n",
+		        __func__);
+		test__skip();
+		goto cleanup;
+	}
 
 	ASSERT_EQ(skel->bss->pe_res, 0x200000, "pe_res2");
 

@@ -7,6 +7,7 @@
 #include <errno.h>
 
 int my_tid;
+bool res_valid;
 
 __u64 kprobe_res;
 __u64 kprobe_multi_res;
@@ -27,6 +28,7 @@ static void update(void *ctx, __u64 *res)
 	if (my_tid != (u32)bpf_get_current_pid_tgid())
 		return;
 
+	res_valid = true;
 	*res |= bpf_get_attach_cookie(ctx);
 }
 
