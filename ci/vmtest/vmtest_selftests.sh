@@ -13,12 +13,14 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/helpers.sh"
 
 ARCH=$(uname -m)
+DEPLOYMENT=$(if [[ "$GITHUB_REPOSITORY" == *"-rc" ]]; then echo "rc"; else echo "prod"; fi)
 
-STATUS_FILE=/exitstatus
-OUTPUT_DIR=/command_output
+STATUS_FILE=/mnt/vmtest/exitstatus
+OUTPUT_DIR=/mnt/vmtest
 
-BPF_SELFTESTS_DIR="/${PROJECT_NAME}/selftests/bpf"
-VMTEST_CONFIGS_PATH="/${PROJECT_NAME}/vmtest/configs"
+WORKING_DIR="/${PROJECT_NAME}"
+BPF_SELFTESTS_DIR="${WORKING_DIR}/selftests/bpf"
+VMTEST_CONFIGS_PATH="${WORKING_DIR}/ci/vmtest/configs"
 
 read_lists() {
 	(for path in "$@"; do
@@ -33,6 +35,7 @@ DENYLIST=$(read_lists \
 	"$BPF_SELFTESTS_DIR/DENYLIST.${ARCH}" \
 	"$VMTEST_CONFIGS_PATH/DENYLIST" \
 	"$VMTEST_CONFIGS_PATH/DENYLIST.${ARCH}" \
+	"$VMTEST_CONFIGS_PATH/DENYLIST.${DEPLOYMENT}" \
 )
 ALLOWLIST=$(read_lists \
 	"$BPF_SELFTESTS_DIR/ALLOWLIST" \
@@ -74,7 +77,7 @@ test_progs_helper() {
   then
     json_file+="_parallel"
   fi
-  json_file="/${json_file}.json"
+  json_file="${OUTPUT_DIR}/${json_file}.json"
 
   foldable start ${selftest} "Testing ${selftest}"
   # "&& true" does not change the return code (it is not executed
@@ -134,11 +137,9 @@ run_veristat_helper() {
     # shellcheck source=ci/vmtest/configs/run_veristat.default.cfg
     # shellcheck source=ci/vmtest/configs/run_veristat.meta.cfg
     source "${VMTEST_CONFIGS_PATH}/run_veristat.${mode}.cfg"
-    mkdir -p ${OUTPUT_DIR}
     pushd "${VERISTAT_OBJECTS_DIR}"
 
-    "${BPF_SELFTESTS_DIR}/veristat" -o csv -q -e file,prog,verdict,states \
-      -f "@${VERISTAT_CFG_FILE}" ${VERISTAT_OBJECTS_GLOB} > \
+    "${BPF_SELFTESTS_DIR}/veristat" -o csv -q -e file,prog,verdict,states ${VERISTAT_OBJECTS_GLOB} > \
       "${OUTPUT_DIR}/${VERISTAT_OUTPUT}"
 
     echo "run_veristat_${mode}:$?" >> ${STATUS_FILE}
