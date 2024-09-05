@@ -802,6 +802,9 @@ struct send_signal_irq_work {
 	struct task_struct *task;
 	u32 sig;
 	enum pid_type type;
+	bool is_siginfo;
+	kernel_siginfo_t info;
+	int value;
 };
 
 static DEFINE_PER_CPU(struct send_signal_irq_work, send_signal_work);
@@ -811,7 +814,11 @@ static void do_bpf_send_signal(struct irq_work *entry)
 	struct send_signal_irq_work *work;
 
 	work = container_of(entry, struct send_signal_irq_work, irq_work);
-	group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, work->type);
+	if (work->is_siginfo)
+		group_send_sig_info(work->sig, &work->info, work->task, work->type);
+	else
+		group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, work->type);
+
 	put_task_struct(work->task);
 }
 
@@ -848,6 +855,7 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type)
 		 * irq works get executed.
 		 */
 		work->task = get_task_struct(current);
+		work->is_siginfo = false;
 		work->sig = sig;
 		work->type = type;
 		irq_work_queue(&work->irq_work);
@@ -3484,3 +3492,71 @@ static int __init bpf_kprobe_multi_kfuncs_init(void)
 }
 
 late_initcall(bpf_kprobe_multi_kfuncs_init);
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_send_signal_remote(struct task_struct *task, int sig, enum pid_type type,
+				       int value)
+{
+	struct send_signal_irq_work *work = NULL;
+	kernel_siginfo_t info;
+
+	if (type != PIDTYPE_PID && type != PIDTYPE_TGID)
+		return -EINVAL;
+	if (unlikely(task->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	/* Task should not be pid=1 to avoid kernel panic. */
+	if (unlikely(is_global_init(task)))
+		return -EPERM;
+
+	clear_siginfo(&info);
+	info.si_signo = sig;
+	info.si_errno = 0;
+	info.si_code = SI_KERNEL;
+	info.si_pid = 0;
+	info.si_uid = 0;
+	info.si_value.sival_int = value;
+
+	if (irqs_disabled()) {
+		/* Do an early check on signal validity. Otherwise,
+		 * the error is lost in deferred irq_work.
+		 */
+		if (unlikely(!valid_signal(sig)))
+			return -EINVAL;
+
+		work = this_cpu_ptr(&send_signal_work);
+		if (irq_work_is_busy(&work->irq_work))
+			return -EBUSY;
+
+		work->task = get_task_struct(task);
+		work->is_siginfo = true;
+		work->info = info;
+		work->sig = sig;
+		work->type = type;
+		work->value = value;
+		irq_work_queue(&work->irq_work);
+		return 0;
+	}
+
+	return group_send_sig_info(sig, &info, task, type);
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(send_signal_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_send_signal_remote, KF_TRUSTED_ARGS)
+BTF_KFUNCS_END(send_signal_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_send_signal_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &send_signal_kfunc_ids,
+};
+
+static int __init bpf_send_signal_kfuncs_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_send_signal_kfunc_set);
+}
+
+late_initcall(bpf_send_signal_kfuncs_init);
