@@ -802,6 +802,7 @@ struct send_signal_irq_work {
 	struct task_struct *task;
 	u32 sig;
 	enum pid_type type;
+	bool put_task;
 };
 
 static DEFINE_PER_CPU(struct send_signal_irq_work, send_signal_work);
@@ -812,7 +813,8 @@ static void do_bpf_send_signal(struct irq_work *entry)
 
 	work = container_of(entry, struct send_signal_irq_work, irq_work);
 	group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, work->type);
-	put_task_struct(work->task);
+	if (work->put_task)
+		put_task_struct(work->task);
 }
 
 static int bpf_send_signal_common(u32 sig, enum pid_type type)
@@ -848,6 +850,7 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type)
 		 * irq works get executed.
 		 */
 		work->task = get_task_struct(current);
+		work->put_task = true;
 		work->sig = sig;
 		work->type = type;
 		irq_work_queue(&work->irq_work);
@@ -3477,3 +3480,61 @@ static int __init bpf_kprobe_multi_kfuncs_init(void)
 }
 
 late_initcall(bpf_kprobe_multi_kfuncs_init);
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_send_signal_remote(struct task_struct *task, int sig, enum pid_type type)
+{
+	struct send_signal_irq_work *work = NULL;
+
+	if (unlikely(task->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	/* Task should not be pid=1 to avoid kernel panic. */
+	if (unlikely(is_global_init(task)))
+		return -EPERM;
+
+	if (irqs_disabled()) {
+		/* Do an early check on signal validity. Otherwise,
+		 * the error is lost in deferred irq_work.
+		 */
+		if (unlikely(!valid_signal(sig)))
+			return -EINVAL;
+
+		work = this_cpu_ptr(&send_signal_work);
+		if (irq_work_is_busy(&work->irq_work))
+			return -EBUSY;
+
+		/* Add the current task, which is the target of sending signal,
+		 * to the irq_work. The current task may change when queued
+		 * irq works get executed.
+		 */
+		work->task = task;
+		work->put_task = false;
+		work->sig = sig;
+		work->type = type;
+		irq_work_queue(&work->irq_work);
+		return 0;
+	}
+
+	return group_send_sig_info(sig, SEND_SIG_PRIV, current, type);
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(send_signal_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_send_signal_remote)
+BTF_KFUNCS_END(send_signal_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_send_signal_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &send_signal_kfunc_ids,
+};
+
+static int __init bpf_send_signal_kfuncs_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_send_signal_kfunc_set);
+}
+
+late_initcall(bpf_send_signal_kfuncs_init);
