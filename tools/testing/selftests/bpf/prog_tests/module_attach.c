@@ -4,6 +4,7 @@
 #include <test_progs.h>
 #include <stdbool.h>
 #include "test_module_attach.skel.h"
+#include "test_module_attach_fail.skel.h"
 #include "testing_helpers.h"
 
 static int duration;
@@ -33,7 +34,7 @@ static int trigger_module_test_writable(int *val)
 	return 0;
 }
 
-void test_module_attach(void)
+static void module_attach_succ(void)
 {
 	const int READ_SZ = 456;
 	const int WRITE_SZ = 457;
@@ -114,4 +115,15 @@ void test_module_attach(void)
 
 cleanup:
 	test_module_attach__destroy(skel);
+}
+
+static void module_attach_fail(void)
+{
+	RUN_TESTS(test_module_attach_fail);
+}
+
+void test_module_attach(void)
+{
+	module_attach_succ();
+	module_attach_fail();
 }
