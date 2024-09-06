@@ -6264,18 +6264,19 @@ BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
 	int skb_len, dev_len;
 	int mtu;
 
-	if (unlikely(flags & ~(BPF_MTU_CHK_SEGS)))
+	if (unlikely((flags & ~(BPF_MTU_CHK_SEGS)) ||
+		     (flags & BPF_MTU_CHK_SEGS && (len_diff || *mtu_len)))) {
+		*mtu_len = 0;
 		return -EINVAL;
-
-	if (unlikely(flags & BPF_MTU_CHK_SEGS && (len_diff || *mtu_len)))
-		return -EINVAL;
+	}
 
 	dev = __dev_via_ifindex(dev, ifindex);
-	if (unlikely(!dev))
+	if (unlikely(!dev)) {
+		*mtu_len = 0;
 		return -ENODEV;
+	}
 
 	mtu = READ_ONCE(dev->mtu);
-
 	dev_len = mtu + dev->hard_header_len;
 
 	/* If set use *mtu_len as input, L3 as iph->tot_len (like fib_lookup) */
@@ -6286,10 +6287,10 @@ BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
 		ret = BPF_MTU_CHK_RET_SUCCESS;
 		goto out;
 	}
-	/* At this point, skb->len exceed MTU, but as it include length of all
-	 * segments, it can still be below MTU.  The SKB can possibly get
-	 * re-segmented in transmit path (see validate_xmit_skb).  Thus, user
-	 * must choose if segs are to be MTU checked.
+	/* At this point, skb->len exceeds MTU, but as it includes the length
+	 * of all segments, it can still be below MTU. The skb can possibly
+	 * get re-segmented in transmit path (see validate_xmit_skb). Thus,
+	 * the user must choose if segments are to be MTU checked.
 	 */
 	if (skb_is_gso(skb)) {
 		ret = BPF_MTU_CHK_RET_SUCCESS;
@@ -6299,9 +6300,7 @@ BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
 			ret = BPF_MTU_CHK_RET_SEGS_TOOBIG;
 	}
 out:
-	/* BPF verifier guarantees valid pointer */
 	*mtu_len = mtu;
-
 	return ret;
 }
 
@@ -6314,16 +6313,18 @@ BPF_CALL_5(bpf_xdp_check_mtu, struct xdp_buff *, xdp,
 	int mtu, dev_len;
 
 	/* XDP variant doesn't support multi-buffer segment check (yet) */
-	if (unlikely(flags))
+	if (unlikely(flags)) {
+		*mtu_len = 0;
 		return -EINVAL;
+	}
 
 	dev = __dev_via_ifindex(dev, ifindex);
-	if (unlikely(!dev))
+	if (unlikely(!dev)) {
+		*mtu_len = 0;
 		return -ENODEV;
+	}
 
 	mtu = READ_ONCE(dev->mtu);
-
-	/* Add L2-header as dev MTU is L3 size */
 	dev_len = mtu + dev->hard_header_len;
 
 	/* Use *mtu_len as input, L3 as iph->tot_len (like fib_lookup) */
@@ -6334,9 +6335,7 @@ BPF_CALL_5(bpf_xdp_check_mtu, struct xdp_buff *, xdp,
 	if (xdp_len > dev_len)
 		ret = BPF_MTU_CHK_RET_FRAG_NEEDED;
 
-	/* BPF verifier guarantees valid pointer */
 	*mtu_len = mtu;
-
 	return ret;
 }
 
