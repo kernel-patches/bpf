@@ -74,7 +74,7 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 	if (eh + 1 > (struct ethhdr *)data_end)
 		return -EINVAL;
 
-	if (eh->h_proto == bpf_htons(ETH_P_IP)) {
+	if (eh->h_proto == bpf_ntohs(ETH_P_IP)) {
 		struct iphdr *ih = (struct iphdr *)(eh + 1);
 		__be32 saddr = dut ? tester_addr.s6_addr32[3]
 				   : dut_addr.s6_addr32[3];
@@ -95,7 +95,7 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 			return -EINVAL;
 
 		uh = (struct udphdr *)(ih + 1);
-	} else if (eh->h_proto == bpf_htons(ETH_P_IPV6)) {
+	} else if (eh->h_proto == bpf_ntohs(ETH_P_IPV6)) {
 		struct in6_addr saddr = dut ? tester_addr : dut_addr;
 		struct in6_addr daddr = dut ? dut_addr : tester_addr;
 		struct ipv6hdr *ih6 = (struct ipv6hdr *)(eh + 1);
@@ -121,14 +121,14 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 		return -EINVAL;
 
 	port = dut ? uh->dest : uh->source;
-	if (port != bpf_htons(DUT_ECHO_PORT))
+	if (port != bpf_ntohs(DUT_ECHO_PORT))
 		return -EINVAL;
 
 	tlv = (struct tlv_hdr *)(uh + 1);
 	if (tlv + 1 > data_end)
 		return -EINVAL;
 
-	return bpf_htons(tlv->type) == CMD_ECHO ? 0 : -EINVAL;
+	return tlv->type == bpf_ntohs(CMD_ECHO) ? 0 : -EINVAL;
 }
 
 static __always_inline int
