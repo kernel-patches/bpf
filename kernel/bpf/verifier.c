@@ -9142,7 +9142,8 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_ringbuf_query &&
 		    func_id != BPF_FUNC_ringbuf_reserve_dynptr &&
 		    func_id != BPF_FUNC_ringbuf_submit_dynptr &&
-		    func_id != BPF_FUNC_ringbuf_discard_dynptr)
+		    func_id != BPF_FUNC_ringbuf_discard_dynptr &&
+		    func_id != BPF_FUNC_user_ringbuf_drain)
 			goto error;
 		break;
 	case BPF_MAP_TYPE_USER_RINGBUF:
@@ -9276,7 +9277,8 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 			goto error;
 		break;
 	case BPF_FUNC_user_ringbuf_drain:
-		if (map->map_type != BPF_MAP_TYPE_USER_RINGBUF)
+		if (map->map_type != BPF_MAP_TYPE_USER_RINGBUF &&
+		    map->map_type != BPF_MAP_TYPE_RINGBUF)
 			goto error;
 		break;
 	case BPF_FUNC_get_stackid:
