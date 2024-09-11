@@ -3592,6 +3592,12 @@ static int btf_find_nested_struct(const struct btf *btf, const struct btf_type *
 		info[i].off += off;
 
 	if (nelems > 1) {
+		/* The type of struct size or variable size is u32,
+		 * so the multiplication will not overflow.
+		 */
+		if (ret * nelems > info_cnt)
+			return -E2BIG;
+
 		err = btf_repeat_fields(info, ret, nelems - 1, t->size);
 		if (err == 0)
 			ret *= nelems;
