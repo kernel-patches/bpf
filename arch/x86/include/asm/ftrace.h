@@ -74,6 +74,12 @@ arch_ftrace_get_regs(struct ftrace_regs *fregs)
 #define ftrace_regs_get_frame_pointer(fregs) \
 	frame_pointer(&(fregs)->regs)
 
+static __always_inline unsigned long
+ftrace_regs_get_return_address(struct ftrace_regs *fregs)
+{
+	return *(unsigned long *)ftrace_regs_get_stack_pointer(fregs);
+}
+
 struct ftrace_ops;
 #define ftrace_graph_func ftrace_graph_func
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,

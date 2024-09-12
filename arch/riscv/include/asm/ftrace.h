@@ -182,6 +182,11 @@ static __always_inline unsigned long ftrace_regs_get_return_value(const struct f
 	return fregs->a0;
 }
 
+static __always_inline unsigned long ftrace_regs_get_return_address(const struct ftrace_regs *fregs)
+{
+	return fregs->ra;
+}
+
 static __always_inline void ftrace_regs_set_return_value(struct ftrace_regs *fregs,
 							 unsigned long ret)
 {
