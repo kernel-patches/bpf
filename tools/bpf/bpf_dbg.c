@@ -1394,5 +1394,11 @@ int main(int argc, char **argv)
 	if (argc >= 3)
 		fout = fopen(argv[2], "w");
 
-	return run_shell_loop(fin ? : stdin, fout ? : stdout);
+	run_shell_loop(fin ? : stdin, fout ? : stdout);
+
+	if (fin)
+		fclose(fin);
+	if (fout)
+		fclose(fout);
+	return 0;
 }
