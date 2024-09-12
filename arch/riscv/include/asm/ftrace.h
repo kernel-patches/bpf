@@ -193,6 +193,18 @@ static __always_inline void ftrace_override_function_with_return(struct ftrace_r
 	fregs->epc = fregs->ra;
 }
 
+static __always_inline struct pt_regs *
+ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
+{
+	memcpy(&regs->a0, fregs->args, sizeof(u64) * 8);
+	regs->epc = fregs->epc;
+	regs->ra = fregs->ra;
+	regs->sp = fregs->sp;
+	regs->s0 = fregs->s0;
+	regs->t1 = fregs->t1;
+	return regs;
+}
+
 int ftrace_regs_query_register_offset(const char *name);
 
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
