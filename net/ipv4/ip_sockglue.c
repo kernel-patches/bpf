@@ -297,6 +297,17 @@ int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
 			ipc->addr = info->ipi_spec_dst.s_addr;
 			break;
 		}
+		case IP_ORIGDSTADDR:
+		{
+			struct sockaddr_in *dst_addr;
+
+			if (cmsg->cmsg_len != CMSG_LEN(sizeof(struct sockaddr_in)))
+				return -EINVAL;
+			dst_addr = (struct sockaddr_in *)CMSG_DATA(cmsg);
+			ipc->port = dst_addr->sin_port;
+			ipc->addr = dst_addr->sin_addr.s_addr;
+			break;
+		}
 		case IP_TTL:
 			if (cmsg->cmsg_len != CMSG_LEN(sizeof(int)))
 				return -EINVAL;
