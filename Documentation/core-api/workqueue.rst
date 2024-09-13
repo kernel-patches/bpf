@@ -356,6 +356,10 @@ Guidelines
   special attribute, can use one of the system wq.  There is no
   difference in execution characteristics between using a dedicated wq
   and a system wq.
+  Note: If something is expected to generate large number of concurrent
+  works, it should utilize its own dedicated workqueue rather than
+  system wq. Because this may saturate system_wq and potentially block
+  other's works. eg, cgroup release work.
 
 * Unless work items are expected to consume a huge amount of CPU
   cycles, using a bound wq is usually beneficial due to the increased
