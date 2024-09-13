@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <test_progs.h>
+#include <time.h>
 #include "uprobe_multi.skel.h"
 #include "uprobe_multi_bench.skel.h"
 #include "uprobe_multi_usdt.skel.h"
@@ -12,6 +13,7 @@
 #include "uprobe_multi_session_single.skel.h"
 #include "uprobe_multi_session_cookie.skel.h"
 #include "uprobe_multi_session_recursive.skel.h"
+#include "uprobe_multi_consumer_stress.skel.h"
 #include "uprobe_multi_verifier.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "testing_helpers.h"
@@ -1248,6 +1250,84 @@ cleanup:
 	printf("%s: detached in %7.3lfs\n", __func__, detach_delta);
 }
 
+static int done;
+
+static void *worker(void *p)
+{
+	struct uprobe_multi_consumer_stress *skel = p;
+	struct bpf_link *link = NULL;
+
+	srand(time(NULL));
+
+	while (!done) {
+		LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+		struct bpf_program *prog;
+
+		switch (rand() % 4) {
+		case 0:
+			prog = skel->progs.uprobe_session_0;
+			opts.session = true;
+			break;
+		case 1:
+			prog = skel->progs.uprobe_session_1;
+			opts.session = true;
+			break;
+		case 2:
+			prog = skel->progs.uprobe;
+			break;
+		case 3:
+			prog = skel->progs.uretprobe;
+			opts.retprobe = true;
+			break;
+		}
+
+		link = bpf_program__attach_uprobe_multi(prog, -1, "/proc/self/exe",
+							"uprobe_multi_func_1", &opts);
+		bpf_link__destroy(link);
+	}
+
+	return NULL;
+}
+
+#define THREAD_COUNT 4
+
+static void test_session_consumer_stress(void)
+{
+	struct uprobe_multi_consumer_stress *skel;
+	pthread_t threads[THREAD_COUNT];
+	time_t start;
+	int i, err;
+
+	/*
+	 * We create multiple threads each trying to attach and detach uprobe
+	 * consumer on the same uprobe, while main thread is hitting on that
+	 * uprobe. All that for 5 seconds.
+	 */
+	skel = uprobe_multi_consumer_stress__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi_consumer_stress"))
+		goto cleanup;
+
+	for (i = 0; i < THREAD_COUNT; i++) {
+		err = pthread_create(threads + i, NULL, worker, skel);
+		if (!ASSERT_OK(err, "pthread_create"))
+			goto join;
+	}
+
+	start = time(NULL);
+
+	while (start + 5 > time(NULL))
+		uprobe_multi_func_1();
+
+	done = 1;
+
+join:
+	for (i = 0; i < THREAD_COUNT; i++)
+		pthread_join(threads[i], NULL);
+
+cleanup:
+	uprobe_multi_consumer_stress__destroy(skel);
+}
+
 void test_uprobe_multi_test(void)
 {
 	if (test__start_subtest("skel_api"))
@@ -1280,5 +1360,7 @@ void test_uprobe_multi_test(void)
 		test_session_cookie_skel_api();
 	if (test__start_subtest("session_cookie_recursive"))
 		test_session_recursive_skel_api();
+	if (test__start_subtest("consumer_stress"))
+		test_session_consumer_stress();
 	RUN_TESTS(uprobe_multi_verifier);
 }
