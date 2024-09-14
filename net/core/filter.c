@@ -5399,7 +5399,12 @@ static int sol_ip_sockopt(struct sock *sk, int optname,
 			  char *optval, int *optlen,
 			  bool getopt)
 {
-	if (sk->sk_family != AF_INET)
+
+	/*
+	 * SOL_IP socket options are available on AF_INET and AF_INET6, for
+	 * example, TCP over IPv4 via INET6 API.
+	 */
+	if (!sk_is_inet(sk))
 		return -EINVAL;
 
 	switch (optname) {
