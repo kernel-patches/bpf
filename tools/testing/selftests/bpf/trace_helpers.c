@@ -17,6 +17,10 @@
 #include <linux/limits.h>
 #include <libelf.h>
 #include <gelf.h>
+#include <stdbool.h>
+#include <linux/capability.h>
+#include <linux/compiler.h>
+#include <sys/types.h>
 #include "bpf/libbpf_internal.h"
 
 #define TRACEFS_PIPE	"/sys/kernel/tracing/trace_pipe"
@@ -30,6 +34,55 @@ struct ksyms {
 
 static struct ksyms *ksyms;
 static pthread_mutex_t ksyms_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#ifdef HAVE_LIBCAP_SUPPORT
+#include <sys/capability.h>
+static bool bpf_cap__capable(cap_value_t cap)
+{
+	cap_flag_value_t val;
+	cap_t caps = cap_get_proc();
+
+	if (!caps)
+		return false;
+
+	if (cap_get_flag(caps, cap, CAP_EFFECTIVE, &val) != 0)
+		val = CAP_CLEAR;
+
+	if (cap_free(caps) != 0)
+		return false;
+
+	return val == CAP_SET;
+}
+#else
+static inline bool bpf_cap__capable(int cap __maybe_unused)
+{
+	return geteuid() == 0;
+}
+#endif /* HAVE_LIBCAP_SUPPORT */
+
+/* For older systems */
+#ifndef CAP_SYSLOG
+#define CAP_SYSLOG	34
+#endif
+
+static bool ksyms__kptr_restrict(void)
+{
+	bool value = false;
+	FILE *fp = fopen("/proc/sys/kernel/kptr_restrict", "r");
+
+	if (fp != NULL) {
+		char line[8];
+
+		if (fgets(line, sizeof(line), fp) != NULL)
+			value = bpf_cap__capable(CAP_SYSLOG) ?
+					(atoi(line) >= 2) :
+					(atoi(line) != 0);
+
+		fclose(fp);
+	}
+
+	return value;
+}
 
 static int ksyms__add_symbol(struct ksyms *ksyms, const char *name,
 			     unsigned long addr)
@@ -71,6 +124,11 @@ static struct ksyms *load_kallsyms_local_common(ksym_cmp_t cmp_cb)
 	void *addr;
 	int ret;
 	struct ksyms *ksyms;
+
+	if (ksyms__kptr_restrict()) {
+		printf("ksyms restricted, please check /proc/sys/kernel/kptr_restrict\n");
+		return NULL;
+	}
 
 	f = fopen("/proc/kallsyms", "r");
 	if (!f)
@@ -217,6 +275,11 @@ int kallsyms_find(const char *sym, unsigned long long *addr)
 	unsigned long long value;
 	int err = 0;
 	FILE *f;
+
+	if (ksyms__kptr_restrict()) {
+		printf("ksyms restricted, please check /proc/sys/kernel/kptr_restrict\n");
+		return -EINVAL;
+	}
 
 	f = fopen("/proc/kallsyms", "r");
 	if (!f)

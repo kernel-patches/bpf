@@ -182,7 +182,7 @@ NON_CHECK_FEAT_TARGETS := clean docs-clean
 CHECK_FEAT := $(filter-out $(NON_CHECK_FEAT_TARGETS),$(or $(MAKECMDGOALS), "none"))
 ifneq ($(CHECK_FEAT),)
 FEATURE_USER := .selftests
-FEATURE_TESTS := llvm
+FEATURE_TESTS := llvm libcap
 FEATURE_DISPLAY := $(FEATURE_TESTS)
 
 # Makefile.feature expects OUTPUT to end with a slash
@@ -205,6 +205,11 @@ ifeq ($(feature-llvm),1)
   LLVM_LDLIBS  += $(shell $(LLVM_CONFIG) --link-static --system-libs $(LLVM_CONFIG_LIB_COMPONENTS))
   LLVM_LDLIBS  += -lstdc++
   LLVM_LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags)
+endif
+
+ifeq ($(feature-libcap), 1)
+  CFLAGS += -DHAVE_LIBCAP_SUPPORT
+  LDLIBS += -lcap
 endif
 
 SCRATCH_DIR := $(OUTPUT)/tools
