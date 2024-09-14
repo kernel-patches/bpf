@@ -20,6 +20,7 @@ int nr_connect;
 int nr_binddev;
 int nr_socket_post_create;
 int nr_fin_wait1;
+int test_tcp_over_ipv4_via_ipv6;
 
 struct sockopt_test {
 	int opt;
@@ -262,9 +263,15 @@ static int bpf_test_sockopt(void *ctx, struct sock *sk)
 		if (n != ARRAY_SIZE(sol_ip_tests))
 			return -1;
 	} else {
-		n = bpf_loop(ARRAY_SIZE(sol_ipv6_tests), bpf_test_ipv6_sockopt, &lc, 0);
-		if (n != ARRAY_SIZE(sol_ipv6_tests))
-			return -1;
+		if (test_tcp_over_ipv4_via_ipv6) {
+			n = bpf_loop(ARRAY_SIZE(sol_ip_tests), bpf_test_ip_sockopt, &lc, 0);
+			if (n != ARRAY_SIZE(sol_ip_tests))
+				return -1;
+		} else {
+			n = bpf_loop(ARRAY_SIZE(sol_ipv6_tests), bpf_test_ipv6_sockopt, &lc, 0);
+			if (n != ARRAY_SIZE(sol_ipv6_tests))
+				return -1;
+		}
 	}
 
 	return 0;

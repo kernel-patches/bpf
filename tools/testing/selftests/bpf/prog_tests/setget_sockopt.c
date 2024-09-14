@@ -15,8 +15,11 @@
 
 #define CG_NAME "/setget-sockopt-test"
 
+#define INT_PORT	8008
+
 static const char addr4_str[] = "127.0.0.1";
 static const char addr6_str[] = "::1";
+static const char addr6_any_str[] = "::";
 static struct setget_sockopt *skel;
 static int cg_fd;
 
@@ -53,6 +56,35 @@ static void test_tcp(int family)
 
 	cfd = connect_to_fd(sfd, 0);
 	if (!ASSERT_GE(cfd, 0, "connect_to_fd_server")) {
+		close(sfd);
+		return;
+	}
+	close(sfd);
+	close(cfd);
+
+	ASSERT_EQ(bss->nr_listen, 1, "nr_listen");
+	ASSERT_EQ(bss->nr_connect, 1, "nr_connect");
+	ASSERT_EQ(bss->nr_active, 1, "nr_active");
+	ASSERT_EQ(bss->nr_passive, 1, "nr_passive");
+	ASSERT_EQ(bss->nr_socket_post_create, 2, "nr_socket_post_create");
+	ASSERT_EQ(bss->nr_binddev, 2, "nr_bind");
+}
+
+static void test_tcp_over_ipv4_via_ipv6(void)
+{
+	struct setget_sockopt__bss *bss = skel->bss;
+	int sfd, cfd;
+
+	memset(bss, 0, sizeof(*bss));
+	skel->bss->test_tcp_over_ipv4_via_ipv6 = 1;
+
+	sfd = start_server(AF_INET6, SOCK_STREAM,
+			   addr6_any_str, INT_PORT, 0);
+	if (!ASSERT_GE(sfd, 0, "start_server"))
+		return;
+
+	cfd = connect_to_addr_str(AF_INET, SOCK_STREAM, addr4_str, INT_PORT, NULL);
+	if (!ASSERT_GE(cfd, 0, "connect_to_addr_str")) {
 		close(sfd);
 		return;
 	}
@@ -191,6 +223,7 @@ void test_setget_sockopt(void)
 	test_udp(AF_INET);
 	test_ktls(AF_INET6);
 	test_ktls(AF_INET);
+	test_tcp_over_ipv4_via_ipv6();
 
 done:
 	setget_sockopt__destroy(skel);
