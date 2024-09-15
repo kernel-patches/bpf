@@ -951,18 +951,27 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 	if (IS_ERR(prog))
 		return prog;
 
-	if (!bpf_prog_map_compatible(map, prog)) {
+	if (!bpf_prog_map_compatible(map, prog) || prog->aux->is_extended) {
+		/* Extended prog can not be tail callee. It's to prevent a
+		 * potention infinite loop like:
+		 * tail callee prog entry -> tail callee prog subprog ->
+		 * freplace prog entry --tailcall-> tail callee prog entry.
+		 */
 		bpf_prog_put(prog);
 		return ERR_PTR(-EINVAL);
 	}
 
+	atomic_inc(&prog->aux->tail_callee_cnt);
 	return prog;
 }
 
 static void prog_fd_array_put_ptr(struct bpf_map *map, void *ptr, bool need_defer)
 {
+	struct bpf_prog *prog = ptr;
+
 	/* bpf_prog is freed after one RCU or tasks trace grace period */
-	bpf_prog_put(ptr);
+	atomic_dec(&prog->aux->tail_callee_cnt);
+	bpf_prog_put(prog);
 }
 
 static u32 prog_fd_array_sys_lookup_elem(void *ptr)

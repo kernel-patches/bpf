@@ -3292,8 +3292,11 @@ static void bpf_tracing_link_release(struct bpf_link *link)
 	bpf_trampoline_put(tr_link->trampoline);
 
 	/* tgt_prog is NULL if target is a kernel function */
-	if (tr_link->tgt_prog)
+	if (tr_link->tgt_prog) {
+		if (link->prog->type == BPF_PROG_TYPE_EXT)
+			tr_link->tgt_prog->aux->is_extended = false;
 		bpf_prog_put(tr_link->tgt_prog);
+	}
 }
 
 static void bpf_tracing_link_dealloc(struct bpf_link *link)
@@ -3498,6 +3501,18 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		tgt_prog = prog->aux->dst_prog;
 	}
 
+	if (prog->type == BPF_PROG_TYPE_EXT &&
+	    atomic_read(&tgt_prog->aux->tail_callee_cnt)) {
+		/* Program extensions can not extend target prog when the target
+		 * prog has been updated to any prog_array map as tail callee.
+		 * It's to prevent a potential infinite loop like:
+		 * tgt prog entry -> tgt prog subprog -> freplace prog entry
+		 * --tailcall-> tgt prog entry.
+		 */
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
 		goto out_unlock;
@@ -3523,6 +3538,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (prog->aux->dst_trampoline && tr != prog->aux->dst_trampoline)
 		/* we allocated a new trampoline, so free the old one */
 		bpf_trampoline_put(prog->aux->dst_trampoline);
+	if (prog->type == BPF_PROG_TYPE_EXT)
+		tgt_prog->aux->is_extended = true;
 
 	prog->aux->dst_prog = NULL;
 	prog->aux->dst_trampoline = NULL;
