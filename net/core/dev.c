@@ -1417,8 +1417,6 @@ void netdev_notify_peers(struct net_device *dev)
 }
 EXPORT_SYMBOL(netdev_notify_peers);
 
-static int napi_threaded_poll(void *data);
-
 static int napi_kthread_create(struct napi_struct *n)
 {
 	int err = 0;
@@ -6922,7 +6920,7 @@ static void napi_threaded_poll_loop(struct napi_struct *napi)
 	}
 }
 
-static int napi_threaded_poll(void *data)
+int napi_threaded_poll(void *data)
 {
 	struct napi_struct *napi = data;
 
