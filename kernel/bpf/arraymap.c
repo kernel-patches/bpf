@@ -961,13 +961,17 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 		return ERR_PTR(-EINVAL);
 	}
 
+	atomic_inc(&prog->aux->tail_callee_cnt);
 	return prog;
 }
 
 static void prog_fd_array_put_ptr(struct bpf_map *map, void *ptr, bool need_defer)
 {
+	struct bpf_prog *prog = ptr;
+
 	/* bpf_prog is freed after one RCU or tasks trace grace period */
-	bpf_prog_put(ptr);
+	atomic_dec(&prog->aux->tail_callee_cnt);
+	bpf_prog_put(prog);
 }
 
 static u32 prog_fd_array_sys_lookup_elem(void *ptr)
