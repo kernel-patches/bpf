@@ -90,14 +90,6 @@
 
 #define ADDR_CNT	100
 
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-# define ELFDATANATIVE	ELFDATA2LSB
-#elif __BYTE_ORDER == __BIG_ENDIAN
-# define ELFDATANATIVE	ELFDATA2MSB
-#else
-# error "Unknown machine endianness!"
-#endif
-
 struct btf_id {
 	struct rb_node	 rb_node;
 	char		*name;
@@ -423,6 +415,21 @@ static int elf_collect(struct object *obj)
 			return -1;
 	}
 
+	/* Set .BTF_ids section type to enable output endian translation, and
+	 * manually invoke translation since it was disabled on input.
+	 */
+	if (obj->efile.idlist) {
+		Elf_Data *btfids = obj->efile.idlist;
+		int byteorder = obj->efile.encoding;
+
+		btfids->d_type = ELF_T_WORD;
+		if (gelf_xlatetom(elf, btfids, btfids, byteorder) == NULL) {
+			pr_err("FAILED xlatetom() on .BTF_ids data: %s\n",
+				elf_errmsg(-1));
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
@@ -706,24 +713,6 @@ static int sets_patch(struct object *obj)
 			 */
 			BUILD_BUG_ON((u32 *)set8->pairs != &set8->pairs[0].id);
 			qsort(set8->pairs, set8->cnt, sizeof(set8->pairs[0]), cmp_id);
-
-			/*
-			 * When ELF endianness does not match endianness of the
-			 * host, libelf will do the translation when updating
-			 * the ELF. This, however, corrupts SET8 flags which are
-			 * already in the target endianness. So, let's bswap
-			 * them to the host endianness and libelf will then
-			 * correctly translate everything.
-			 */
-			if (obj->efile.encoding != ELFDATANATIVE) {
-				int i;
-
-				set8->flags = bswap_32(set8->flags);
-				for (i = 0; i < set8->cnt; i++) {
-					set8->pairs[i].flags =
-						bswap_32(set8->pairs[i].flags);
-				}
-			}
 		}
 
 		pr_debug("sorting  addr %5lu: cnt %6d [%s]\n",
@@ -747,9 +736,6 @@ static int symbols_patch(struct object *obj)
 
 	if (sets_patch(obj))
 		return -1;
-
-	/* Set type to ensure endian translation occurs. */
-	obj->efile.idlist->d_type = ELF_T_WORD;
 
 	elf_flagdata(obj->efile.idlist, ELF_C_SET, ELF_F_DIRTY);
 
