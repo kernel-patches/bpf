@@ -39,4 +39,17 @@ int entry_tc(struct __sk_buff *skb)
 	return subprog_tailcall_tc(skb);
 }
 
+SEC("tc")
+int entry_tc_2(struct __sk_buff *skb)
+{
+	int ret, i;
+
+	for (i = 0; i < 10; i++) {
+		ret = subprog_tailcall_tc(skb);
+		__sink(ret);
+	}
+
+	return ret;
+}
+
 char __license[] SEC("license") = "GPL";
