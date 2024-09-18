@@ -143,6 +143,7 @@ static struct env {
 	char **filenames;
 	int filename_cnt;
 	bool verbose;
+	bool print_verbose;
 	bool debug;
 	bool quiet;
 	bool force_checkpoints;
@@ -179,11 +180,12 @@ static struct env {
 	int files_skipped;
 	int progs_processed;
 	int progs_skipped;
+	int top_src_lines;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
-	if (!env.verbose)
+	if (!env.print_verbose)
 		return 0;
 	if (level == LIBBPF_DEBUG  && !env.debug)
 		return 0;
@@ -206,6 +208,7 @@ const char argp_program_doc[] =
 enum {
 	OPT_LOG_FIXED = 1000,
 	OPT_LOG_SIZE = 1001,
+	OPT_TOP_SRC_LINES = 1002,
 };
 
 static const struct argp_option opts[] = {
@@ -228,6 +231,7 @@ static const struct argp_option opts[] = {
 	  "Force frequent BPF verifier state checkpointing (set BPF_F_TEST_STATE_FREQ program flag)" },
 	{ "test-reg-invariants", 'r', NULL, 0,
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
+	{ "top-src-lines", OPT_TOP_SRC_LINES, "N", 0, "Emit N most frequent source code lines" },
 	{},
 };
 
@@ -249,10 +253,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case 'v':
 		env.verbose = true;
+		env.print_verbose = true;
 		break;
 	case 'd':
 		env.debug = true;
 		env.verbose = true;
+		env.print_verbose = true;
 		break;
 	case 'q':
 		env.quiet = true;
@@ -336,6 +342,15 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		if (!env.filenames[env.filename_cnt])
 			return -ENOMEM;
 		env.filename_cnt++;
+		break;
+	case OPT_TOP_SRC_LINES:
+		errno = 0;
+		env.verbose = true;
+		env.top_src_lines = strtol(arg, NULL, 10);
+		if (errno) {
+			fprintf(stderr, "invalid top lines N specifier: %s\n", arg);
+			argp_usage(state);
+		}
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -854,6 +869,109 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 	return 0;
 }
 
+struct line_cnt {
+	char *line;
+	int cnt;
+};
+
+static int str_cmp(const void *a, const void *b)
+{
+	const char **str1 = (const char **)a;
+	const char **str2 = (const char **)b;
+
+	return strcmp(*str1, *str2);
+}
+
+static int line_cnt_cmp(const void *a, const void *b)
+{
+	const struct line_cnt *a_cnt = (const struct line_cnt *)a;
+	const struct line_cnt *b_cnt = (const struct line_cnt *)b;
+
+	return b_cnt->cnt - a_cnt->cnt;
+}
+
+static int print_top_src_lines(char * const buf, size_t buf_sz, const char *prog_name)
+{
+	int lines_cap = 1;
+	int lines_size = 0;
+	char **lines;
+	char *line = NULL;
+	char *state;
+	struct line_cnt *freq = NULL;
+	struct line_cnt *cur;
+	int unique_lines;
+	int err;
+	int i;
+
+	lines = calloc(lines_cap, sizeof(char *));
+	if (!lines)
+		return -ENOMEM;
+
+	while ((line = strtok_r(line ? NULL : buf, "\n", &state))) {
+		if (strncmp(line, "; ", 2))
+			continue;
+		line += 2;
+
+		if (lines_size == lines_cap) {
+			char **tmp;
+
+			lines_cap *= 2;
+			tmp = realloc(lines, lines_cap * sizeof(char *));
+			if (!tmp) {
+				err = -ENOMEM;
+				goto cleanup;
+			}
+			lines = tmp;
+		}
+		lines[lines_size] = line;
+		lines_size++;
+	}
+
+	if (!lines_size)
+		goto cleanup;
+
+	qsort(lines, lines_size, sizeof(char *), str_cmp);
+
+	freq = calloc(lines_size, sizeof(struct line_cnt));
+	if (!freq) {
+		err = -ENOMEM;
+		goto cleanup;
+	}
+
+	cur = freq;
+	cur->line = lines[0];
+	cur->cnt = 1;
+	for (i = 1; i < lines_size; ++i) {
+		if (strcmp(lines[i], cur->line)) {
+			cur++;
+			cur->line = lines[i];
+			cur->cnt = 0;
+		}
+		cur->cnt++;
+	}
+	unique_lines = cur - freq + 1;
+
+	qsort(freq, unique_lines, sizeof(struct line_cnt), line_cnt_cmp);
+
+	printf("Top source lines (%s):\n", prog_name);
+	for (i = 0; i < min(unique_lines, env.top_src_lines); ++i) {
+		char *src_code;
+		char *src_line;
+
+		src_code = strtok_r(freq[i].line, "@", &state);
+		src_line = strtok_r(NULL, "\0", &state);
+		if (src_line)
+			printf("%5d: (%s)\t%s\n", freq[i].cnt, src_line + 1, src_code);
+		else
+			printf("%5d: %s\n", freq[i].cnt, src_code);
+	}
+
+cleanup:
+	free(freq);
+	free(lines);
+	return err;
+}
+
 static int guess_prog_type_by_ctx_name(const char *ctx_name,
 				       enum bpf_prog_type *prog_type,
 				       enum bpf_attach_type *attach_type)
@@ -1043,11 +1161,13 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	stats->stats[VERDICT] = err == 0; /* 1 - success, 0 - failure */
 	parse_verif_log(buf, buf_sz, stats);
 
-	if (env.verbose) {
+	if (env.print_verbose) {
 		printf("PROCESSING %s/%s, DURATION US: %ld, VERDICT: %s, VERIFIER LOG:\n%s\n",
 		       filename, prog_name, stats->stats[DURATION],
 		       err ? "failure" : "success", buf);
 	}
+	if (env.top_src_lines)
+		print_top_src_lines(buf, buf_sz, stats->prog_name);
 
 	if (verif_log_buf != buf)
 		free(buf);
@@ -1065,13 +1185,13 @@ static int process_obj(const char *filename)
 	int err = 0, prog_cnt = 0;
 
 	if (!should_process_file_prog(base_filename, NULL)) {
-		if (env.verbose)
+		if (env.print_verbose)
 			printf("Skipping '%s' due to filters...\n", filename);
 		env.files_skipped++;
 		return 0;
 	}
 	if (!is_bpf_obj_file(filename)) {
-		if (env.verbose)
+		if (env.print_verbose)
 			printf("Skipping '%s' as it's not a BPF object file...\n", filename);
 		env.files_skipped++;
 		return 0;
@@ -2116,13 +2236,15 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (env.verbose && env.quiet) {
+	if (env.print_verbose && env.quiet) {
 		fprintf(stderr, "Verbose and quiet modes are incompatible, please specify just one or neither!\n\n");
 		argp_help(&argp, stderr, ARGP_HELP_USAGE, "veristat");
 		return 1;
 	}
 	if (env.verbose && env.log_level == 0)
 		env.log_level = 1;
+	if (env.top_src_lines && env.log_level < 2)
+		env.log_level = 2;
 
 	if (env.output_spec.spec_cnt == 0) {
 		if (env.out_fmt == RESFMT_CSV)
