@@ -4,6 +4,8 @@
 
 #define SYSNR(_NR) DEFINE(SYS ## _NR, _NR)
 
+void syscall_defines(void);
+
 void syscall_defines(void)
 {
 	COMMENT("Linux system call numbers.");
