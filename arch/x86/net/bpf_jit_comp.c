@@ -2126,7 +2126,7 @@ populate_extable:
 		case BPF_JMP | BPF_CALL: {
 			u8 *ip = image + addrs[i - 1];
 
-			func = (u8 *) __bpf_call_base + imm32;
+			func = BPF_CALL_FUNC(imm32);
 			if (tail_call_reachable) {
 				LOAD_TAIL_CALL_CNT_PTR(bpf_prog->aux->stack_depth);
 				ip += 7;

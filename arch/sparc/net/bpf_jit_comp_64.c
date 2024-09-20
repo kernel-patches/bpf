@@ -1213,7 +1213,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	/* function call */
 	case BPF_JMP | BPF_CALL:
 	{
-		u8 *func = ((u8 *)__bpf_call_base) + imm;
+		u8 *func = BPF_CALL_FUNC(imm);
 
 		ctx->saw_call = true;
 

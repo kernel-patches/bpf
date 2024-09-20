@@ -1627,8 +1627,7 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 	/* mov dword ptr [ebp+off],eax */
 	if (fm->ret_size)
 		end_addr -= 3;
-
-	jmp_offset = (u8 *)__bpf_call_base + insn->imm - end_addr;
+	jmp_offset = BPF_CALL_FUNC(insn->imm) - end_addr;
 	if (!is_simm32(jmp_offset)) {
 		pr_err("unsupported BPF kernel function jmp_offset:%lld\n",
 		       jmp_offset);
@@ -2103,7 +2102,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 				break;
 			}
 
-			func = (u8 *) __bpf_call_base + imm32;
+			func = BPF_CALL_FUNC(imm32);
 			jmp_offset = func - (image + addrs[i]);
 
 			if (!imm32 || !is_simm32(jmp_offset)) {
