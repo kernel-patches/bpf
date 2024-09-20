@@ -1060,6 +1060,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	DECLARE_SOCKADDR(struct sockaddr_in *, usin, msg->msg_name);
 	struct flowi4 fl4_stack;
 	struct flowi4 *fl4;
+	__u8 flow_flags = inet_sk_flowi_flags(sk);
 	int ulen = len;
 	struct ipcm_cookie ipc;
 	struct rtable *rt = NULL;
@@ -1179,6 +1180,39 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		}
 	}
 
+	/* If we're egressing with a different source address and/or port, we
+	 * perform a reverse socket lookup.  The rationale behind this is that
+	 * we can allow return UDP traffic that has ingressed through sk_lookup
+	 * to also egress correctly. In case this the reverse lookup fails.
+	 *
+	 * The lookup is performed if either source address and/or port
+	 * changed, and neither is "0".
+	 */
+	if (static_branch_unlikely(&bpf_sk_lookup_enabled) &&
+	    !connected &&
+	    (ipc.port && ipc.addr) &&
+	    (inet->inet_saddr != ipc.addr || inet->inet_sport != ipc.port)) {
+		struct sock *sk_egress;
+
+		bpf_sk_lookup_run_v4(sock_net(sk), IPPROTO_UDP,
+				     daddr, dport, ipc.addr, ntohs(ipc.port),
+				     1, &sk_egress);
+		if (IS_ERR_OR_NULL(sk_egress) || sk_egress != sk) {
+			net_info_ratelimited("No reverse socket lookup match for local addr %pI4:%d remote addr %pI4:%d\n",
+					     &ipc.addr, ntohs(ipc.port), &daddr,
+					     ntohs(dport));
+		} else {
+			/* Override the source port to use with the one we got
+			 * in cmsg, and tell routing to let us use a non-local
+			 * address. Otherwise route lookups will fail with
+			 * non-local source address when IP_TRANSPARENT isn't
+			 * set.
+			 */
+			inet->inet_sport = ipc.port;
+			flow_flags |= FLOWI_FLAG_ANYSRC;
+		}
+	}
+
 	saddr = ipc.addr;
 	ipc.addr = faddr = daddr;
 
@@ -1223,7 +1257,6 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 	if (!rt) {
 		struct net *net = sock_net(sk);
-		__u8 flow_flags = inet_sk_flowi_flags(sk);
 
 		fl4 = &fl4_stack;
 
