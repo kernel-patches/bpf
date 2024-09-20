@@ -89,6 +89,7 @@ word							\
 #define __BTF_ID_LIST(name, scope)			\
 asm(							\
 ".pushsection " BTF_IDS_SECTION ",\"a\";       \n"	\
+".balign 4, 0;                                 \n"	\
 "." #scope " " #name ";                        \n"	\
 #name ":;                                      \n"	\
 ".popsection;                                  \n");
