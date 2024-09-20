@@ -90,14 +90,6 @@
 
 #define ADDR_CNT	100
 
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-# define ELFDATANATIVE	ELFDATA2LSB
-#elif __BYTE_ORDER == __BIG_ENDIAN
-# define ELFDATANATIVE	ELFDATA2MSB
-#else
-# error "Unknown machine endianness!"
-#endif
-
 struct btf_id {
 	struct rb_node	 rb_node;
 	char		*name;
@@ -125,7 +117,6 @@ struct object {
 		int		 idlist_shndx;
 		size_t		 strtabidx;
 		unsigned long	 idlist_addr;
-		int		 encoding;
 	} efile;
 
 	struct rb_root	sets;
@@ -325,11 +316,30 @@ static int compressed_section_fix(Elf *elf, Elf_Scn *scn, GElf_Shdr *sh)
 	return 0;
 }
 
+static int btfids_endian_fix(struct object *obj)
+{
+	Elf_Data *btfids = obj->efile.idlist;
+	Elf *elf = obj->efile.elf;
+	int file_byteorder;
+
+	/* This should always succeed due to prior ELF checks */
+	file_byteorder = elf_getident(elf, NULL)[EI_DATA];
+
+	/* Set type to ensure endian translation occurs, and manually invoke
+	 * translation on input since .BTF_ids section as created disables it.
+	 */
+	btfids->d_type = ELF_T_WORD;
+	if (gelf_xlatetom(elf, btfids, btfids, file_byteorder) == NULL) {
+		pr_err("FAILED xlatetom .BTF_ids data: %s\n", elf_errmsg(-1));
+		return -1;
+	}
+	return 0;
+}
+
 static int elf_collect(struct object *obj)
 {
 	Elf_Scn *scn = NULL;
 	size_t shdrstrndx;
-	GElf_Ehdr ehdr;
 	int idx = 0;
 	Elf *elf;
 	int fd;
@@ -360,13 +370,6 @@ static int elf_collect(struct object *obj)
 		pr_err("FAILED cannot get shdr str ndx\n");
 		return -1;
 	}
-
-	if (gelf_getehdr(obj->efile.elf, &ehdr) == NULL) {
-		pr_err("FAILED cannot get ELF header: %s\n",
-			elf_errmsg(-1));
-		return -1;
-	}
-	obj->efile.encoding = ehdr.e_ident[EI_DATA];
 
 	/*
 	 * Scan all the elf sections and look for save data
@@ -409,6 +412,8 @@ static int elf_collect(struct object *obj)
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
 			obj->efile.idlist_addr  = sh.sh_addr;
+			if (btfids_endian_fix(obj))
+				return -1;
 		} else if (!strcmp(name, BTF_BASE_ELF_SEC)) {
 			/* If a .BTF.base section is found, do not resolve
 			 * BTF ids relative to vmlinux; resolve relative
@@ -706,24 +711,6 @@ static int sets_patch(struct object *obj)
 			 */
 			BUILD_BUG_ON((u32 *)set8->pairs != &set8->pairs[0].id);
 			qsort(set8->pairs, set8->cnt, sizeof(set8->pairs[0]), cmp_id);
-
-			/*
-			 * When ELF endianness does not match endianness of the
-			 * host, libelf will do the translation when updating
-			 * the ELF. This, however, corrupts SET8 flags which are
-			 * already in the target endianness. So, let's bswap
-			 * them to the host endianness and libelf will then
-			 * correctly translate everything.
-			 */
-			if (obj->efile.encoding != ELFDATANATIVE) {
-				int i;
-
-				set8->flags = bswap_32(set8->flags);
-				for (i = 0; i < set8->cnt; i++) {
-					set8->pairs[i].flags =
-						bswap_32(set8->pairs[i].flags);
-				}
-			}
 		}
 
 		pr_debug("sorting  addr %5lu: cnt %6d [%s]\n",
@@ -747,9 +734,6 @@ static int symbols_patch(struct object *obj)
 
 	if (sets_patch(obj))
 		return -1;
-
-	/* Set type to ensure endian translation occurs. */
-	obj->efile.idlist->d_type = ELF_T_WORD;
 
 	elf_flagdata(obj->efile.idlist, ELF_C_SET, ELF_F_DIRTY);
 
