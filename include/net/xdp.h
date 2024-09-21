@@ -70,12 +70,27 @@ struct xdp_txq_info {
 	struct net_device *dev;
 };
 
+struct xdp_rx_meta {
+	struct {
+		u32 val;
+		u32 type;
+	} hash;
+	struct {
+		__be16 proto;
+		u16 tci;
+	} vlan;
+};
+
 enum xdp_buff_flags {
 	XDP_FLAGS_HAS_FRAGS		= BIT(0), /* non-linear xdp buff */
 	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
 						   * pressure
 						   */
+	XDP_FLAGS_META_RX_HASH		= BIT(2), /* hw rx hash */
+	XDP_FLAGS_META_RX_VLAN		= BIT(3), /* hw rx vlan */
 };
+#define XDP_FLAGS_META_RX		(XDP_FLAGS_META_RX_HASH |	\
+					 XDP_FLAGS_META_RX_VLAN)
 
 struct xdp_buff {
 	void *data;
@@ -86,6 +101,7 @@ struct xdp_buff {
 	struct xdp_txq_info *txq;
 	u32 frame_sz; /* frame size to deduce data_hard_end/reserved tailroom*/
 	u32 flags; /* supported values defined in xdp_buff_flags */
+	struct xdp_rx_meta rx_meta; /* rx hw metadata */
 };
 
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
@@ -111,6 +127,11 @@ static __always_inline bool xdp_buff_is_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 {
 	xdp->flags |= XDP_FLAGS_FRAGS_PF_MEMALLOC;
+}
+
+static __always_inline bool xdp_buff_has_rx_meta(struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_META_RX);
 }
 
 static __always_inline void
@@ -175,6 +196,7 @@ struct xdp_frame {
 	struct net_device *dev_rx; /* used by cpumap */
 	u32 frame_sz;
 	u32 flags; /* supported values defined in xdp_buff_flags */
+	struct xdp_rx_meta rx_meta; /* rx hw metadata */
 };
 
 static __always_inline bool xdp_frame_has_frags(struct xdp_frame *frame)
@@ -185,6 +207,11 @@ static __always_inline bool xdp_frame_has_frags(struct xdp_frame *frame)
 static __always_inline bool xdp_frame_is_frag_pfmemalloc(struct xdp_frame *frame)
 {
 	return !!(frame->flags & XDP_FLAGS_FRAGS_PF_MEMALLOC);
+}
+
+static __always_inline bool xdp_frame_has_rx_meta(struct xdp_frame *frame)
+{
+	return !!(frame->flags & XDP_FLAGS_META_RX);
 }
 
 #define XDP_BULK_QUEUE_SIZE	16
@@ -257,6 +284,8 @@ void xdp_convert_frame_to_buff(struct xdp_frame *frame, struct xdp_buff *xdp)
 	xdp->data_meta = frame->data - frame->metasize;
 	xdp->frame_sz = frame->frame_sz;
 	xdp->flags = frame->flags;
+	if (xdp_frame_has_rx_meta(frame))
+		xdp->rx_meta = frame->rx_meta;
 }
 
 static inline
@@ -284,6 +313,8 @@ int xdp_update_frame_from_buff(struct xdp_buff *xdp,
 	xdp_frame->metasize = metasize;
 	xdp_frame->frame_sz = xdp->frame_sz;
 	xdp_frame->flags = xdp->flags;
+	if (xdp_buff_has_rx_meta(xdp))
+		xdp_frame->rx_meta = xdp->rx_meta;
 
 	return 0;
 }
