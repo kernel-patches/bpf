@@ -619,10 +619,14 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	unsigned int headroom, frame_size;
 	void *hard_start;
 	u8 nr_frags;
+	u64 ts;
 
 	/* xdp frags frame */
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		nr_frags = sinfo->nr_frags;
+
+	if (unlikely(xdp_frame_has_rx_meta_ts(xdpf)))
+		ts = sinfo->hwtstamps.hwtstamp;
 
 	/* Part of headroom was reserved to xdpf */
 	headroom = sizeof(*xdpf) + xdpf->headroom;
@@ -655,6 +659,8 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	if (xdp_frame_has_rx_meta_vlan(xdpf))
 		__vlan_hwaccel_put_tag(skb, xdpf->rx_meta.vlan.proto,
 				       xdpf->rx_meta.vlan.tci);
+	if (unlikely(xdp_frame_has_rx_meta_ts(xdpf)))
+		skb_hwtstamps(skb)->hwtstamp = ts;
 
 	/* Optional SKB info, currently missing:
 	 * - HW checksum info		(skb->ip_summed)

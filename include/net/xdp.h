@@ -88,6 +88,7 @@ enum xdp_buff_flags {
 						   */
 	XDP_FLAGS_META_RX_HASH		= BIT(2), /* hw rx hash */
 	XDP_FLAGS_META_RX_VLAN		= BIT(3), /* hw rx vlan */
+	XDP_FLAGS_META_RX_TS		= BIT(4), /* hw rx timestamp */
 };
 #define XDP_FLAGS_META_RX		(XDP_FLAGS_META_RX_HASH |	\
 					 XDP_FLAGS_META_RX_VLAN)
@@ -132,6 +133,11 @@ static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline bool xdp_buff_has_rx_meta(struct xdp_buff *xdp)
 {
 	return !!(xdp->flags & XDP_FLAGS_META_RX);
+}
+
+static __always_inline void xdp_buff_set_rx_meta_ts_flag(struct xdp_buff *xdp)
+{
+	xdp->flags |= XDP_FLAGS_META_RX_TS;
 }
 
 static __always_inline void
@@ -222,6 +228,11 @@ static __always_inline bool xdp_frame_has_rx_meta_hash(struct xdp_frame *frame)
 static __always_inline bool xdp_frame_has_rx_meta_vlan(struct xdp_frame *frame)
 {
 	return !!(frame->flags & XDP_FLAGS_META_RX_VLAN);
+}
+
+static __always_inline bool xdp_frame_has_rx_meta_ts(struct xdp_frame *frame)
+{
+	return !!(frame->flags & XDP_FLAGS_META_RX_TS);
 }
 
 #define XDP_BULK_QUEUE_SIZE	16
@@ -530,6 +541,15 @@ xdp_set_rx_meta_vlan(struct xdp_buff *xdp, __be16 vlan_proto,
 	xdp->rx_meta.vlan.proto = vlan_proto;
 	xdp->rx_meta.vlan.tci = vlan_tci;
 	xdp->flags |= XDP_FLAGS_META_RX_VLAN;
+}
+
+static __always_inline void xdp_set_rx_meta_ts(struct xdp_buff *xdp, u64 ts)
+{
+	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
+	struct skb_shared_hwtstamps *shwt = &sinfo->hwtstamps;
+
+	shwt->hwtstamp = ts;
+	xdp->flags |= XDP_FLAGS_META_RX_TS;
 }
 
 #ifdef CONFIG_NET

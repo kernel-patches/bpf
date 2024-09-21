@@ -7458,9 +7458,12 @@ static int stmmac_xdp_rx_timestamp(const struct xdp_md *_ctx, u64 *timestamp)
 
 	/* Check if timestamp is available */
 	if (stmmac_get_rx_timestamp_status(priv, desc, ndesc, priv->adv_ts)) {
+		struct xdp_buff *xdp = (void *)&(ctx->xdp);
+
 		stmmac_get_timestamp(priv, desc_contains_ts, priv->adv_ts, &ns);
 		ns -= priv->plat->cdc_error_adj;
 		*timestamp = ns_to_ktime(ns);
+		xdp_set_rx_meta_ts(xdp, *timestamp);
 		return 0;
 	}
 

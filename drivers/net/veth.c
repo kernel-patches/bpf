@@ -1619,6 +1619,11 @@ static int veth_xdp_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
 		return -ENODATA;
 
 	*timestamp = skb_hwtstamps(_ctx->skb)->hwtstamp;
+	/* Here we just need to set the XDP_FLAGS_META_RX_TS bit in the
+	 * xdp_buff flags.
+	 */
+	xdp_buff_set_rx_meta_ts_flag(&(_ctx->xdp));
+
 	return 0;
 }
 

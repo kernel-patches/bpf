@@ -489,11 +489,14 @@ void ice_finalize_xdp_rx(struct ice_tx_ring *xdp_ring, unsigned int xdp_res,
 static int ice_xdp_rx_hw_ts(const struct xdp_md *ctx, u64 *ts_ns)
 {
 	const struct ice_xdp_buff *xdp_ext = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(xdp_ext->xdp_buff);
 
 	*ts_ns = ice_ptp_get_rx_hwts(xdp_ext->eop_desc,
 				     xdp_ext->pkt_ctx);
 	if (!*ts_ns)
 		return -ENODATA;
+
+	xdp_set_rx_meta_ts(xdp, *ts_ns);
 
 	return 0;
 }

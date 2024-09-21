@@ -681,6 +681,8 @@ int mlx4_en_xdp_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
 
 	*timestamp = mlx4_en_get_hwtstamp(_ctx->mdev,
 					  mlx4_en_get_cqe_ts(_ctx->cqe));
+	xdp_set_rx_meta_ts(&(_ctx->xdp), *timestamp);
+
 	return 0;
 }
 

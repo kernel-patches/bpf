@@ -6795,7 +6795,10 @@ static int igc_xdp_rx_timestamp(const struct xdp_md *_ctx, u64 *timestamp)
 	struct igc_inline_rx_tstamps *tstamp = ctx->rx_ts;
 
 	if (igc_test_staterr(ctx->rx_desc, IGC_RXDADV_STAT_TSIP)) {
+		struct xdp_buff *xdp = (void *)&(ctx->xdp);
+
 		*timestamp = igc_ptp_rx_pktstamp(adapter, tstamp->timer0);
+		xdp_set_rx_meta_ts(xdp, *timestamp);
 
 		return 0;
 	}
