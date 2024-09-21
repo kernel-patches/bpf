@@ -238,6 +238,7 @@ static int mlx5e_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 			     enum xdp_rss_hash_type *rss_type)
 {
 	const struct mlx5e_xdp_buff *_ctx = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(_ctx->xdp);
 	const struct mlx5_cqe64 *cqe = _ctx->cqe;
 	u32 hash_type, l4_type, ip_type, lookup;
 
@@ -252,6 +253,7 @@ static int mlx5e_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	l4_type = FIELD_GET(CQE_RSS_HTYPE_L4, hash_type);
 	lookup = ip_type | l4_type;
 	*rss_type = mlx5_xdp_rss_type[lookup];
+	xdp_set_rx_meta_hash(xdp, *hash, *rss_type);
 
 	return 0;
 }

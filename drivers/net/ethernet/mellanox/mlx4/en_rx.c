@@ -708,6 +708,7 @@ int mlx4_en_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 		if (cqe->ipv6_ext_mask)
 			xht |= XDP_RSS_L3_DYNHDR;
 	}
+	xdp_set_rx_meta_hash(&(_ctx->xdp), *hash, xht);
 	*rss_type = xht;
 
 	return 0;

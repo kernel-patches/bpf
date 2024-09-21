@@ -6776,12 +6776,14 @@ static int igc_xdp_rx_hash(const struct xdp_md *_ctx, u32 *hash,
 			   enum xdp_rss_hash_type *rss_type)
 {
 	const struct igc_xdp_buff *ctx = (void *)_ctx;
+	struct xdp_buff *xdp = (void *)&(ctx->xdp);
 
 	if (!(ctx->xdp.rxq->dev->features & NETIF_F_RXHASH))
 		return -ENODATA;
 
 	*hash = le32_to_cpu(ctx->rx_desc->wb.lower.hi_dword.rss);
 	*rss_type = igc_xdp_rss_type[igc_rss_type(ctx->rx_desc)];
+	xdp_set_rx_meta_hash(xdp, *hash, *rss_type);
 
 	return 0;
 }

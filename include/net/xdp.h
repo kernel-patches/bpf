@@ -214,6 +214,11 @@ static __always_inline bool xdp_frame_has_rx_meta(struct xdp_frame *frame)
 	return !!(frame->flags & XDP_FLAGS_META_RX);
 }
 
+static __always_inline bool xdp_frame_has_rx_meta_hash(struct xdp_frame *frame)
+{
+	return !!(frame->flags & XDP_FLAGS_META_RX_HASH);
+}
+
 #define XDP_BULK_QUEUE_SIZE	16
 struct xdp_frame_bulk {
 	int count;
@@ -503,6 +508,15 @@ struct xdp_metadata_ops {
 	int	(*xmo_rx_vlan_tag)(const struct xdp_md *ctx, __be16 *vlan_proto,
 				   u16 *vlan_tci);
 };
+
+static __always_inline void
+xdp_set_rx_meta_hash(struct xdp_buff *xdp, u32 hash,
+		     enum xdp_rss_hash_type rss_type)
+{
+	xdp->rx_meta.hash.val = hash;
+	xdp->rx_meta.hash.type = rss_type;
+	xdp->flags |= XDP_FLAGS_META_RX_HASH;
+}
 
 #ifdef CONFIG_NET
 u32 bpf_xdp_metadata_kfunc_id(int id);

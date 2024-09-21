@@ -1633,6 +1633,7 @@ static int veth_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 
 	*hash = skb_get_hash(skb);
 	*rss_type = skb->l4_hash ? XDP_RSS_TYPE_L4_ANY : XDP_RSS_TYPE_NONE;
+	xdp_set_rx_meta_hash(&(_ctx->xdp), *hash, *rss_type);
 
 	return 0;
 }

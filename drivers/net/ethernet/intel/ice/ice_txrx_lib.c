@@ -520,11 +520,14 @@ static int ice_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 			   enum xdp_rss_hash_type *rss_type)
 {
 	const struct ice_xdp_buff *xdp_ext = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(xdp_ext->xdp_buff);
 
 	*hash = ice_get_rx_hash(xdp_ext->eop_desc);
 	*rss_type = ice_xdp_rx_hash_type(xdp_ext->eop_desc);
 	if (!likely(*hash))
 		return -ENODATA;
+
+	xdp_set_rx_meta_hash(xdp, *hash, *rss_type);
 
 	return 0;
 }

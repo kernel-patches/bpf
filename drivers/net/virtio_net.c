@@ -6250,8 +6250,8 @@ virtnet_xdp_rss_type[VIRTIO_NET_HASH_REPORT_MAX_TABLE] = {
 static int virtnet_xdp_rx_hash(const struct xdp_md *_ctx, u32 *hash,
 			       enum xdp_rss_hash_type *rss_type)
 {
-	const struct xdp_buff *xdp = (void *)_ctx;
 	struct virtio_net_hdr_v1_hash *hdr_hash;
+	struct xdp_buff *xdp = (void *)_ctx;
 	struct virtnet_info *vi;
 	u16 hash_report;
 
@@ -6267,6 +6267,7 @@ static int virtnet_xdp_rx_hash(const struct xdp_md *_ctx, u32 *hash,
 
 	*rss_type = virtnet_xdp_rss_type[hash_report];
 	*hash = __le32_to_cpu(hdr_hash->hash_value);
+	xdp_set_rx_meta_hash(xdp, *hash, *rss_type);
 	return 0;
 }
 
