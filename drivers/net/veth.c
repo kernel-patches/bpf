@@ -1642,6 +1642,7 @@ static int veth_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 				u16 *vlan_tci)
 {
 	const struct veth_xdp_buff *_ctx = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(_ctx->xdp);
 	const struct sk_buff *skb = _ctx->skb;
 	int err;
 
@@ -1653,6 +1654,8 @@ static int veth_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 		return err;
 
 	*vlan_proto = skb->vlan_proto;
+	xdp_set_rx_meta_vlan(xdp, skb->vlan_proto, *vlan_tci);
+
 	return err;
 }
 

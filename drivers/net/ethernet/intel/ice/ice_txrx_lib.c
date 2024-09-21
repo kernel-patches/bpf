@@ -545,6 +545,7 @@ static int ice_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 			       u16 *vlan_tci)
 {
 	const struct ice_xdp_buff *xdp_ext = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(xdp_ext->xdp_buff);
 
 	*vlan_proto = xdp_ext->pkt_ctx->vlan_proto;
 	if (!*vlan_proto)
@@ -553,6 +554,8 @@ static int ice_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 	*vlan_tci = ice_get_vlan_tci(xdp_ext->eop_desc);
 	if (!*vlan_tci)
 		return -ENODATA;
+
+	xdp_set_rx_meta_vlan(xdp, *vlan_proto, *vlan_tci);
 
 	return 0;
 }

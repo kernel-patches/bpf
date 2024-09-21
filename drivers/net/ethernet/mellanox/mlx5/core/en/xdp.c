@@ -262,6 +262,7 @@ static int mlx5e_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 				 u16 *vlan_tci)
 {
 	const struct mlx5e_xdp_buff *_ctx = (void *)ctx;
+	struct xdp_buff *xdp = (void *)&(_ctx->xdp);
 	const struct mlx5_cqe64 *cqe = _ctx->cqe;
 
 	if (!cqe_has_vlan(cqe))
@@ -269,6 +270,8 @@ static int mlx5e_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 
 	*vlan_proto = htons(ETH_P_8021Q);
 	*vlan_tci = be16_to_cpu(cqe->vlan_info);
+	xdp_set_rx_meta_vlan(xdp, *vlan_proto, *vlan_tci);
+
 	return 0;
 }
 

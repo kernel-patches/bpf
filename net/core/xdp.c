@@ -652,6 +652,9 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	skb->protocol = eth_type_trans(skb, dev);
 
 	xdp_set_skb_rx_hash_from_meta(xdpf, skb);
+	if (xdp_frame_has_rx_meta_vlan(xdpf))
+		__vlan_hwaccel_put_tag(skb, xdpf->rx_meta.vlan.proto,
+				       xdpf->rx_meta.vlan.tci);
 
 	/* Optional SKB info, currently missing:
 	 * - HW checksum info		(skb->ip_summed)

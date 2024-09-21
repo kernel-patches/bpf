@@ -219,6 +219,11 @@ static __always_inline bool xdp_frame_has_rx_meta_hash(struct xdp_frame *frame)
 	return !!(frame->flags & XDP_FLAGS_META_RX_HASH);
 }
 
+static __always_inline bool xdp_frame_has_rx_meta_vlan(struct xdp_frame *frame)
+{
+	return !!(frame->flags & XDP_FLAGS_META_RX_VLAN);
+}
+
 #define XDP_BULK_QUEUE_SIZE	16
 struct xdp_frame_bulk {
 	int count;
@@ -516,6 +521,15 @@ xdp_set_rx_meta_hash(struct xdp_buff *xdp, u32 hash,
 	xdp->rx_meta.hash.val = hash;
 	xdp->rx_meta.hash.type = rss_type;
 	xdp->flags |= XDP_FLAGS_META_RX_HASH;
+}
+
+static __always_inline void
+xdp_set_rx_meta_vlan(struct xdp_buff *xdp, __be16 vlan_proto,
+		     u16 vlan_tci)
+{
+	xdp->rx_meta.vlan.proto = vlan_proto;
+	xdp->rx_meta.vlan.tci = vlan_tci;
+	xdp->flags |= XDP_FLAGS_META_RX_VLAN;
 }
 
 #ifdef CONFIG_NET
