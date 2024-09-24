@@ -284,6 +284,7 @@ struct bpf_call_arg_meta {
 	u32 ret_btf_id;
 	u32 subprogno;
 	struct btf_field *kptr_field;
+	long const_map_key;
 };
 
 struct bpf_kfunc_call_arg_meta {
@@ -10416,6 +10417,54 @@ static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno
 				 state->callback_subprogno == subprogno);
 }
 
+/* Returns whether or not the given map type can potentially elide
+ * lookup return value nullness check. This is possible if the key
+ * is statically known.
+ */
+static bool can_elide_value_nullness(enum bpf_map_type type)
+{
+	switch (type) {
+	case BPF_MAP_TYPE_ARRAY:
+	case BPF_MAP_TYPE_PERCPU_ARRAY:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Returns constant key value if possible, else -1 */
+static long get_constant_map_key(struct bpf_verifier_env *env,
+				 struct bpf_reg_state *key)
+{
+	struct bpf_func_state *state = func(env, key);
+	struct bpf_reg_state *reg;
+	int stack_off;
+	int slot;
+	int spi;
+
+	if (key->type != PTR_TO_STACK)
+		return -1;
+	if (!tnum_is_const(key->var_off))
+		return -1;
+
+	stack_off = key->off + key->var_off.value;
+	slot = -stack_off - 1;
+	if (slot < 0)
+		/* Stack grew upwards */
+		return -1;
+	else if (slot >= state->allocated_stack)
+		/* Stack uninitialized */
+		return -1;
+
+	spi = slot / BPF_REG_SIZE;
+	reg = &state->stack[spi].spilled_ptr;
+	if (!tnum_is_const(reg->var_off))
+		/* Stack value not statically known */
+		return -1;
+
+	return reg->var_off.value;
+}
+
 static int get_helper_proto(struct bpf_verifier_env *env, int func_id,
 			    const struct bpf_func_proto **ptr)
 {
@@ -10512,6 +10561,15 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (in_sleepable(env) && is_storage_get_function(func_id))
 			env->insn_aux_data[insn_idx].storage_get_func_atomic = true;
 	}
+
+	/* Logically we are trying to check on key register state before
+	 * the helper is called, so process here. Otherwise argument processing
+	 * may clobber the spilled key values.
+	 */
+	regs = cur_regs(env);
+	if (func_id == BPF_FUNC_map_lookup_elem)
+		meta.const_map_key = get_constant_map_key(env, &regs[BPF_REG_2]);
+
 
 	meta.func_id = func_id;
 	/* check args */
@@ -10773,10 +10831,17 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 				"kernel subsystem misconfigured verifier\n");
 			return -EINVAL;
 		}
+
+		if (func_id == BPF_FUNC_map_lookup_elem &&
+		    can_elide_value_nullness(meta.map_ptr->map_type) &&
+		    meta.const_map_key >= 0 &&
+		    meta.const_map_key < meta.map_ptr->max_entries)
+			ret_flag &= ~PTR_MAYBE_NULL;
+
 		regs[BPF_REG_0].map_ptr = meta.map_ptr;
 		regs[BPF_REG_0].map_uid = meta.map_uid;
 		regs[BPF_REG_0].type = PTR_TO_MAP_VALUE | ret_flag;
-		if (!type_may_be_null(ret_type) &&
+		if (!type_may_be_null(regs[BPF_REG_0].type) &&
 		    btf_record_has_field(meta.map_ptr->record, BPF_SPIN_LOCK)) {
 			regs[BPF_REG_0].id = ++env->id_gen;
 		}
