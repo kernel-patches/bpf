@@ -1550,6 +1550,12 @@ struct bpf_prog_aux {
 	};
 };
 
+enum bpf_pstack_state {
+	PSTACK_TREE_NO,
+	PSTACK_TREE_INTERNAL,
+	PSTACK_TREE_ROOT,
+};
+
 struct bpf_prog {
 	u16			pages;		/* Number of allocated pages */
 	u16			jited:1,	/* Is our filter JIT'ed? */
@@ -1570,15 +1576,18 @@ struct bpf_prog {
 				pstack_eligible:1; /* Candidate for private stacks */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
+	enum bpf_pstack_state	pstack:2;	/* Private stack state */
 	u32			len;		/* Number of filter blocks */
 	u32			jited_len;	/* Size of jited insns in bytes */
 	u8			tag[BPF_TAG_SIZE];
+	u16			subtree_stack_depth; /* Subtree stack depth if PSTACK_TREE_ROOT prog, 0 otherwise */
 	struct bpf_prog_stats __percpu *stats;
 	int __percpu		*active;
 	unsigned int		(*bpf_func)(const void *ctx,
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	void __percpu		*private_stack_ptr;
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
