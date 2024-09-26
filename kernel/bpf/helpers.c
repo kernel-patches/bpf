@@ -3004,6 +3004,61 @@ __bpf_kfunc int bpf_copy_from_user_str(void *dst, u32 dst__sz, const void __user
 	return ret + 1;
 }
 
+__bpf_kfunc int bpf_strcmp(const char *cs, const char *ct)
+{
+	return strcmp(cs, ct);
+}
+
+__bpf_kfunc char *bpf_strchr(const char *s, int c)
+{
+	return strchr(s, c);
+}
+
+__bpf_kfunc char *bpf_strrchr(const char *s, int c)
+{
+	return strrchr(s, c);
+}
+
+__bpf_kfunc char *bpf_strnchr(const char *s, size_t count, int c)
+{
+	return strnchr(s, count, c);
+}
+
+__bpf_kfunc char *bpf_strstr(const char *s1, const char *s2)
+{
+	return strstr(s1, s2);
+}
+
+__bpf_kfunc char *bpf_strnstr(const char *s1, const char *s2, size_t len)
+{
+	return strnstr(s1, s2, len);
+}
+
+__bpf_kfunc size_t bpf_strlen(const char *s)
+{
+	return strlen(s);
+}
+
+__bpf_kfunc size_t bpf_strnlen(const char *s, size_t count)
+{
+	return strnlen(s, count);
+}
+
+__bpf_kfunc char *bpf_strpbrk(const char *cs, const char *ct)
+{
+	return strpbrk(cs, ct);
+}
+
+__bpf_kfunc size_t bpf_strspn(const char *s, const char *accept)
+{
+	return strspn(s, accept);
+}
+
+__bpf_kfunc size_t bpf_strcspn(const char *s, const char *reject)
+{
+	return strcspn(s, reject);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3090,6 +3145,17 @@ BTF_ID_FLAGS(func, bpf_iter_bits_new, KF_ITER_NEW)
 BTF_ID_FLAGS(func, bpf_iter_bits_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_bits_destroy, KF_ITER_DESTROY)
 BTF_ID_FLAGS(func, bpf_copy_from_user_str, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_strcmp)
+BTF_ID_FLAGS(func, bpf_strchr)
+BTF_ID_FLAGS(func, bpf_strrchr)
+BTF_ID_FLAGS(func, bpf_strnchr)
+BTF_ID_FLAGS(func, bpf_strstr)
+BTF_ID_FLAGS(func, bpf_strnstr)
+BTF_ID_FLAGS(func, bpf_strlen)
+BTF_ID_FLAGS(func, bpf_strnlen)
+BTF_ID_FLAGS(func, bpf_strpbrk)
+BTF_ID_FLAGS(func, bpf_strspn)
+BTF_ID_FLAGS(func, bpf_strcspn)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
