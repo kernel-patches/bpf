@@ -5999,7 +5999,8 @@ static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
  * Since recursion is prevented by check_cfg() this algorithm
  * only needs a local stack of MAX_CALL_FRAMES to remember callsites
  */
-static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx)
+static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx,
+					 bool pstack_enabled)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
@@ -6007,8 +6008,9 @@ static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx)
 	bool tail_call_reachable = false;
 	int ret_insn[MAX_CALL_FRAMES];
 	int ret_prog[MAX_CALL_FRAMES];
-	int j;
+	int j, subprog_stack_depth, stack_limit;
 
+	stack_limit = pstack_enabled ? U16_MAX : MAX_BPF_STACK;
 	i = subprog[idx].start;
 process_func:
 	/* protect against potential stack overflow that might happen when
@@ -6036,10 +6038,16 @@ process_func:
 			depth);
 		return -EACCES;
 	}
-	depth += round_up_stack_depth(env, subprog[idx].stack_depth);
-	if (depth > MAX_BPF_STACK) {
+	subprog_stack_depth = round_up_stack_depth(env, subprog[idx].stack_depth);
+	depth += subprog_stack_depth;
+	if (depth > stack_limit) {
 		verbose(env, "combined stack size of %d calls is %d. Too large\n",
 			frame + 1, depth);
+		return -EACCES;
+	}
+	if (pstack_enabled && subprog_stack_depth > MAX_BPF_STACK) {
+		verbose(env, "stack size of subprog %d is %d. Too large\n",
+			idx, subprog_stack_depth);
 		return -EACCES;
 	}
 continue_func:
@@ -6137,14 +6145,45 @@ continue_func:
 	goto continue_func;
 }
 
+static bool bpf_enable_private_stack(struct bpf_prog *prog)
+{
+	if (!bpf_jit_supports_private_stack())
+		return false;
+
+	switch (prog->aux->prog->type) {
+	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_TRACEPOINT:
+	case BPF_PROG_TYPE_PERF_EVENT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+		return true;
+	case BPF_PROG_TYPE_TRACING:
+		if (prog->expected_attach_type != BPF_TRACE_ITER)
+			return true;
+		fallthrough;
+	default:
+		return false;
+	}
+}
+
 static int check_max_stack_depth(struct bpf_verifier_env *env)
 {
+	bool has_tail_call = false, pstack_enabled = false;
 	struct bpf_subprog_info *si = env->subprog_info;
 	int ret;
 
 	for (int i = 0; i < env->subprog_cnt; i++) {
+		if (si[i].has_tail_call) {
+			has_tail_call = true;
+			break;
+		}
+	}
+
+	if (!has_tail_call && bpf_enable_private_stack(env->prog))
+		env->prog->aux->pstack_enabled = pstack_enabled = true;
+
+	for (int i = 0; i < env->subprog_cnt; i++) {
 		if (!i || si[i].is_async_cb) {
-			ret = check_max_stack_depth_subprog(env, i);
+			ret = check_max_stack_depth_subprog(env, i, pstack_enabled);
 			if (ret < 0)
 				return ret;
 		}
