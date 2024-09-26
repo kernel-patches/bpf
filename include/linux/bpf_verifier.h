@@ -659,6 +659,8 @@ struct bpf_subprog_info {
 	 * are used for bpf_fastcall spills and fills.
 	 */
 	s16 fastcall_stack_off;
+	u16 subtree_stack_depth;
+	u16 subtree_top_idx;
 	bool has_tail_call: 1;
 	bool tail_call_reachable: 1;
 	bool has_ld_abs: 1;
@@ -668,6 +670,7 @@ struct bpf_subprog_info {
 	bool args_cached: 1;
 	/* true if bpf_fastcall stack region is used by functions that can't be inlined */
 	bool keep_fastcall_stack: 1;
+	bool pstack_eligible:1;
 
 	u8 arg_cnt;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_REG_ARGS];

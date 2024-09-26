@@ -194,6 +194,8 @@ struct bpf_verifier_stack_elem {
 
 #define BPF_GLOBAL_PERCPU_MA_MAX_SIZE  512
 
+#define BPF_PSTACK_MIN_SUBTREE_SIZE	128
+
 static int acquire_reference_state(struct bpf_verifier_env *env, int insn_idx);
 static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env);
@@ -6188,6 +6190,82 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 				return ret;
 		}
 		continue;
+	}
+	return 0;
+}
+
+static int calc_private_stack_alloc_subprog(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_subprog_info *subprog = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int depth = 0, frame = 0, i, subprog_end;
+	int ret_insn[MAX_CALL_FRAMES];
+	int ret_prog[MAX_CALL_FRAMES];
+	int ps_eligible = 0;
+	int orig_idx = idx;
+
+	subprog[idx].subtree_top_idx = idx;
+	i = subprog[idx].start;
+
+process_func:
+	depth += round_up_stack_depth(env, subprog[idx].stack_depth);
+	if (depth > U16_MAX)
+		return -EACCES;
+
+	if (!ps_eligible && depth >= BPF_PSTACK_MIN_SUBTREE_SIZE) {
+		subprog[orig_idx].pstack_eligible = true;
+		ps_eligible = true;
+	}
+	subprog[orig_idx].subtree_stack_depth =
+		max_t(u16, subprog[orig_idx].subtree_stack_depth, depth);
+
+continue_func:
+	subprog_end = subprog[idx + 1].start;
+	for (; i < subprog_end; i++) {
+		int next_insn, sidx;
+
+		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
+			continue;
+		/* remember insn and function to return to */
+		ret_insn[frame] = i + 1;
+		ret_prog[frame] = idx;
+
+		/* find the callee */
+		next_insn = i + insn[i].imm + 1;
+		sidx = find_subprog(env, next_insn);
+		if (subprog[sidx].is_cb) {
+			if (!bpf_pseudo_call(insn + i))
+				continue;
+		}
+		i = next_insn;
+		idx = sidx;
+		subprog[idx].subtree_top_idx = orig_idx;
+
+		frame++;
+		goto process_func;
+	}
+	if (frame == 0)
+		return ps_eligible;
+	depth -= round_up_stack_depth(env, subprog[idx].stack_depth);
+	frame--;
+	i = ret_insn[frame];
+	idx = ret_prog[frame];
+	goto continue_func;
+}
+
+static int calc_private_stack_alloc_size(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *si = env->subprog_info;
+	int ret;
+
+	for (int i = 0; i < env->subprog_cnt; i++) {
+		if (!i || si[i].is_cb) {
+			ret = calc_private_stack_alloc_subprog(env, i);
+			if (ret < 0)
+				return ret;
+			if (ret)
+				env->prog->pstack_eligible = true;
+		}
 	}
 	return 0;
 }
@@ -22498,6 +22576,9 @@ skip_full_check:
 		env->prog->aux->verifier_zext = bpf_jit_needs_zext() ? !ret
 								     : false;
 	}
+
+	if (ret == 0 && env->prog->aux->pstack_enabled)
+		ret = calc_private_stack_alloc_size(env);
 
 	if (ret == 0)
 		ret = fixup_call_args(env);
