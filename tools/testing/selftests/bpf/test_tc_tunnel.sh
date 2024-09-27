@@ -102,6 +102,20 @@ wait_for_port() {
 	return 1
 }
 
+skip_mac() {
+	if [ "$1" = "mpls" ]; then
+		modprobe mpls_iptunnel || true
+		modprobe mpls_gso || true
+
+		if [ ! -e /proc/sys/net/mpls/platform_labels ]; then
+			echo -e "skip:    mpls tunnel not supported by kernel\n"
+			return # true
+		fi
+	fi
+
+	false
+}
+
 set -e
 
 # no arguments: automated test, run all
@@ -125,6 +139,8 @@ if [[ "$#" -eq "0" ]]; then
 	$0 ipv6 ip6vxlan eth 2000
 
 	for mac in none mpls eth ; do
+		! skip_mac "$mac" || continue
+
 		echo "ip gre $mac"
 		$0 ipv4 gre $mac 100
 
@@ -192,6 +208,10 @@ esac
 readonly tuntype=$2
 readonly mac=$3
 readonly datalen=$4
+
+if skip_mac "$mac"; then
+	exit 4 # KSFT_SKIP=4
+fi
 
 echo "encap ${addr1} to ${addr2}, type ${tuntype}, mac ${mac} len ${datalen}"
 
@@ -278,8 +298,6 @@ elif [[ "$tuntype" =~ (gre|vxlan) && "$mac" == "eth" ]]; then
 		  awk '/ether/ { print $2 }')
 	ip netns exec "${ns2}" ip link set testtun0 address $ethaddr
 elif [[ "$mac" == "mpls" ]]; then
-	modprobe mpls_iptunnel ||true
-	modprobe mpls_gso ||true
 	ip netns exec "${ns2}" sysctl -qw net.mpls.platform_labels=65536
 	ip netns exec "${ns2}" ip -f mpls route add 1000 dev lo
 	ip netns exec "${ns2}" ip link set lo up
