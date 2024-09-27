@@ -347,11 +347,26 @@ register.
   =====  =====  =======  ==========================================================
 
 Underflow and overflow are allowed during arithmetic operations, meaning
-the 64-bit or 32-bit value will wrap. If BPF program execution would
-result in division by zero, the destination register is instead set to zero.
-If execution would result in modulo by zero, for ``ALU64`` the value of
-the destination register is unchanged whereas for ``ALU`` the upper
-32 bits of the destination register are zeroed.
+the 64-bit or 32-bit value will wrap. There are also a few arithmetic operations
+which may cause exception for certain architectures. Since crashing the kernel
+is not an option, those operations are replaced with alternative operations.
+
+.. table:: Arithmetic operations with possible exceptions
+
+  =====  ==========  =============================  ==========================
+  name   class       original                       replacement
+  =====  ==========  =============================  ==========================
+  DIV    ALU64/ALU   dst /= 0                       dst = 0
+  SDIV   ALU64/ALU   dst s/= 0                      dst = 0
+  MOD    ALU64       dst %= 0                       dst = dst (no replacement)
+  MOD    ALU         dst %= 0                       dst = (u32)dst
+  SMOD   ALU64       dst s%= 0                      dst = dst (no replacement)
+  SMOD   ALU         dst s%= 0                      dst = (u32)dst
+  SDIV   ALU64       dst s/= -1 (dst = LLONG_MIN)   dst = LLONG_MIN
+  SDIV   ALU         dst s/= -1 (dst = INT_MIN)     dst = (u32)INT_MIN
+  SMOD   ALU64       dst s%= -1 (dst = LLONG_MIN)   dst = 0
+  SMOD   ALU         dst s%= -1 (dst = INT_MIN)     dst = 0
+  =====  ==========  =============================  ===========================
 
 ``{ADD, X, ALU}``, where 'code' = ``ADD``, 'source' = ``X``, and 'class' = ``ALU``, means::
 
