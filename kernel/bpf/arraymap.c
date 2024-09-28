@@ -947,6 +947,7 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 				   struct file *map_file, int fd)
 {
 	struct bpf_prog *prog = bpf_prog_get(fd);
+	struct bpf_prog_aux *aux;
 
 	if (IS_ERR(prog))
 		return prog;
@@ -956,13 +957,33 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 		return ERR_PTR(-EINVAL);
 	}
 
+	aux = prog->aux;
+	mutex_lock(&aux->ext_mutex);
+	if (!aux->is_extended) {
+		aux->prog_array_member_cnt++;
+	} else {
+		/* Extended prog can not be tail callee. It's to prevent a
+		 * potential infinite loop like:
+		 * tail callee prog entry -> tail callee prog subprog ->
+		 * freplace prog entry --tailcall-> tail callee prog entry.
+		 */
+		bpf_prog_put(prog);
+		prog = ERR_PTR(-EINVAL);
+	}
+	mutex_unlock(&aux->ext_mutex);
+
 	return prog;
 }
 
 static void prog_fd_array_put_ptr(struct bpf_map *map, void *ptr, bool need_defer)
 {
+	struct bpf_prog *prog = ptr;
+
+	mutex_lock(&prog->aux->ext_mutex);
+	prog->aux->prog_array_member_cnt--;
+	mutex_unlock(&prog->aux->ext_mutex);
 	/* bpf_prog is freed after one RCU or tasks trace grace period */
-	bpf_prog_put(ptr);
+	bpf_prog_put(prog);
 }
 
 static u32 prog_fd_array_sys_lookup_elem(void *ptr)
