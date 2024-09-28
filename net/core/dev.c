@@ -5455,6 +5455,7 @@ static int __netif_receive_skb_core(struct sk_buff **pskb, bool pfmemalloc,
 	struct net_device *orig_dev;
 	bool deliver_exact = false;
 	int ret = NET_RX_DROP;
+	int loops = 0;
 	__be16 type;
 
 	net_timestamp_check(!READ_ONCE(net_hotdata.tstamp_prequeue), skb);
@@ -5521,8 +5522,16 @@ skip_taps:
 		nf_skip_egress(skb, true);
 		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev,
 					 &another);
-		if (another)
+		if (another) {
+			loops++;
+			if (unlikely(loops == RX_LOOP_LIMIT)) {
+				ret = NET_RX_DROP;
+				net_crit_ratelimited("bpf: loop limit reached on datapath, buggy bpf program?\n");
+				goto out;
+			}
+
 			goto another_round;
+		}
 		if (!skb)
 			goto out;
 
