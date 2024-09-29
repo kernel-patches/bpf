@@ -7,6 +7,7 @@
 #include <sys/syscall.h>
 #include <bpf/libbpf.h>
 #include <bpf/btf.h>
+#include <linux/kernel.h>
 
 #include "test_progs.h"
 #include "test_btf.h"
@@ -90,15 +91,15 @@ static void test_bad_local_id(void)
 	attr.prog_type = BPF_TRACE_RAW_TP;
 	attr.license = (__u64)"GPL";
 	attr.insns = (__u64)&insns;
-	attr.insn_cnt = sizeof(insns) / sizeof(*insns);
+	attr.insn_cnt = ARRAY_SIZE(insns);
 	attr.log_buf = (__u64)log;
 	attr.log_size = sizeof(log);
 	attr.log_level = log_level;
 	attr.func_info = (__u64)funcs;
-	attr.func_info_cnt = sizeof(funcs) / sizeof(*funcs);
+	attr.func_info_cnt = ARRAY_SIZE(funcs);
 	attr.func_info_rec_size = sizeof(*funcs);
 	attr.core_relos = (__u64)relos;
-	attr.core_relo_cnt = sizeof(relos) / sizeof(*relos);
+	attr.core_relo_cnt = ARRAY_SIZE(relos);
 	attr.core_relo_rec_size = sizeof(*relos);
 	prog_fd = sys_bpf_prog_load(&attr, sizeof(attr), 1);
 	saved_errno = errno;
