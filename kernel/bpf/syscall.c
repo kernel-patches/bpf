@@ -3287,6 +3287,17 @@ static int bpf_extend_prog(struct bpf_tracing_link *link,
 	int err = 0;
 
 	mutex_lock(&aux->ext_mutex);
+	if (aux->prog_array_member_cnt) {
+		/* Program extensions can not extend target prog when the target
+		 * prog has been updated to any prog_array map as tail callee.
+		 * It's to prevent a potential infinite loop like:
+		 * tgt prog entry -> tgt prog subprog -> freplace prog entry
+		 * --tailcall-> tgt prog entry.
+		 */
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	err = bpf_trampoline_link_prog(&link->link, tr);
 	if (err)
 		goto out_unlock;
