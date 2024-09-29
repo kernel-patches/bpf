@@ -2452,17 +2452,20 @@ static int linker_append_btf(struct bpf_linker *linker, struct src_obj *obj)
 				__s64 sz;
 
 				dst_var = &dst_sec->sec_vars[glob_sym->var_idx];
-				/* Because underlying BTF type might have
-				 * changed, so might its size have changed, so
-				 * re-calculate and update it in sec_var.
-				 */
-				sz = btf__resolve_size(linker->btf, glob_sym->underlying_btf_id);
-				if (sz < 0) {
-					pr_warn("global '%s': failed to resolve size of underlying type: %d\n",
-						name, (int)sz);
-					return -EINVAL;
+				t = btf__type_by_id(linker->btf, glob_sym->underlying_btf_id);
+				if (btf_kind(t) != BTF_KIND_FUNC && btf_kind(t) != BTF_KIND_FUNC_PROTO) {
+					/* Because underlying BTF type might have
+					 * changed, so might its size have changed, so
+					 * re-calculate and update it in sec_var.
+					 */
+					sz = btf__resolve_size(linker->btf, glob_sym->underlying_btf_id);
+					if (sz < 0) {
+						pr_warn("global '%s': failed to resolve size of underlying type: %d\n",
+							name, (int)sz);
+						return -EINVAL;
+					}
+					dst_var->size = sz;
 				}
-				dst_var->size = sz;
 				continue;
 			}
 
