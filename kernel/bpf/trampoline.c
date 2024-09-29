@@ -580,6 +580,35 @@ int bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_trampoline 
 	return err;
 }
 
+int bpf_extension_link_prog(struct bpf_tramp_link *link,
+			    struct bpf_trampoline *tr,
+			    struct bpf_prog *tgt_prog)
+{
+	struct bpf_prog_aux *aux = tgt_prog->aux;
+	int err;
+
+	mutex_lock(&aux->ext_mutex);
+	if (aux->prog_array_member_cnt) {
+		/* Program extensions can not extend target prog when the target
+		 * prog has been updated to any prog_array map as tail callee.
+		 * It's to prevent a potential infinite loop like:
+		 * tgt prog entry -> tgt prog subprog -> freplace prog entry
+		 * --tailcall-> tgt prog entry.
+		 */
+		err = -EBUSY;
+		goto out_unlock;
+	}
+
+	err = bpf_trampoline_link_prog(link, tr);
+	if (err)
+		goto out_unlock;
+
+	aux->is_extended = true;
+out_unlock:
+	mutex_unlock(&aux->ext_mutex);
+	return err;
+}
+
 static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_trampoline *tr)
 {
 	enum bpf_tramp_prog_type kind;
@@ -606,6 +635,20 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link, struct bpf_trampolin
 	mutex_lock(&tr->mutex);
 	err = __bpf_trampoline_unlink_prog(link, tr);
 	mutex_unlock(&tr->mutex);
+	return err;
+}
+
+int bpf_extension_unlink_prog(struct bpf_tramp_link *link,
+			      struct bpf_trampoline *tr,
+			      struct bpf_prog *tgt_prog)
+{
+	struct bpf_prog_aux *aux = tgt_prog->aux;
+	int err;
+
+	mutex_lock(&aux->ext_mutex);
+	err = bpf_trampoline_unlink_prog(link, tr);
+	aux->is_extended = false;
+	mutex_unlock(&aux->ext_mutex);
 	return err;
 }
 
