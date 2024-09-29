@@ -10,6 +10,7 @@
 
 #include <bpf/bpf_helpers.h>
 
+volatile const __u32 IFINDEX_SRC_FWD;
 volatile const __u32 IFINDEX_SRC;
 volatile const __u32 IFINDEX_DST;
 
@@ -32,6 +33,18 @@ SEC("tc")
 int tc_src(struct __sk_buff *skb)
 {
 	return bpf_redirect_peer(IFINDEX_DST, 0);
+}
+
+SEC("tc")
+int tc_src_self(struct __sk_buff *skb)
+{
+	return bpf_redirect_peer(IFINDEX_SRC, 0);
+}
+
+SEC("tc")
+int tc_src_fwd_self(struct __sk_buff *skb)
+{
+	return bpf_redirect_peer(IFINDEX_SRC_FWD, 0);
 }
 
 SEC("tc")

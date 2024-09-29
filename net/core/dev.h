@@ -150,6 +150,7 @@ struct napi_struct *napi_by_id(unsigned int napi_id);
 void kick_defer_list_purge(struct softnet_data *sd, unsigned int cpu);
 
 #define XMIT_RECURSION_LIMIT	8
+#define RX_LOOP_LIMIT	        8
 
 #ifndef CONFIG_PREEMPT_RT
 static inline bool dev_xmit_recursion(void)

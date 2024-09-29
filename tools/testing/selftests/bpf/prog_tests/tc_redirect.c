@@ -1081,6 +1081,55 @@ done:
 	close_netns(nstoken);
 }
 
+static void test_tc_redirect_peer_loop(struct netns_setup_result *setup_result)
+{
+	LIBBPF_OPTS(bpf_tc_hook, qdisc_src_fwd);
+	LIBBPF_OPTS(bpf_tc_hook, qdisc_src);
+	struct test_tc_peer *skel;
+	struct nstoken *nstoken;
+	int err;
+
+	/* Set up an infinite redirect loop using bpf_redirect_peer with ingress
+	 * hooks on either side of a veth/netkit pair redirecting to its own
+	 * peer. This should not lock up the kernel.
+	 */
+	nstoken = open_netns(NS_SRC);
+	if (!ASSERT_OK_PTR(nstoken, "setns src"))
+		return;
+
+	skel = test_tc_peer__open();
+	if (!ASSERT_OK_PTR(skel, "test_tc_peer__open"))
+		goto done;
+
+	skel->rodata->IFINDEX_SRC = setup_result->ifindex_src;
+	skel->rodata->IFINDEX_SRC_FWD = setup_result->ifindex_src_fwd;
+
+	err = test_tc_peer__load(skel);
+	if (!ASSERT_OK(err, "test_tc_peer__load"))
+		goto done;
+
+	QDISC_CLSACT_CREATE(&qdisc_src, setup_result->ifindex_src);
+	XGRESS_FILTER_ADD(&qdisc_src, BPF_TC_INGRESS, skel->progs.tc_src_self, 0);
+	close_netns(nstoken);
+
+	nstoken = open_netns(NS_FWD);
+	if (!ASSERT_OK_PTR(nstoken, "setns fwd"))
+		return;
+	QDISC_CLSACT_CREATE(&qdisc_src_fwd, setup_result->ifindex_src_fwd);
+	XGRESS_FILTER_ADD(&qdisc_src_fwd, BPF_TC_INGRESS, skel->progs.tc_src_fwd_self, 0);
+
+	if (!ASSERT_OK(set_forwarding(false), "disable forwarding"))
+		goto done;
+
+	SYS_NOFAIL("ip netns exec " NS_SRC " %s -c 1 -W 1 -q %s > /dev/null",
+		   ping_command(AF_INET), IP4_DST);
+fail:
+done:
+	if (skel)
+		test_tc_peer__destroy(skel);
+	close_netns(nstoken);
+}
+
 static int tun_open(char *name)
 {
 	struct ifreq ifr;
@@ -1280,6 +1329,8 @@ static void *test_tc_redirect_run_tests(void *arg)
 	RUN_TEST(tc_redirect_peer, MODE_VETH);
 	RUN_TEST(tc_redirect_peer, MODE_NETKIT);
 	RUN_TEST(tc_redirect_peer_l3, MODE_VETH);
+	RUN_TEST(tc_redirect_peer_loop, MODE_VETH);
+	RUN_TEST(tc_redirect_peer_loop, MODE_NETKIT);
 	RUN_TEST(tc_redirect_peer_l3, MODE_NETKIT);
 	RUN_TEST(tc_redirect_neigh, MODE_VETH);
 	RUN_TEST(tc_redirect_neigh_fib, MODE_VETH);
