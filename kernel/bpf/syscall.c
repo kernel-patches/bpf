@@ -3212,14 +3212,20 @@ static void bpf_tracing_link_release(struct bpf_link *link)
 {
 	struct bpf_tracing_link *tr_link =
 		container_of(link, struct bpf_tracing_link, link.link);
+	struct bpf_prog *tgt_prog = tr_link->tgt_prog;
 
-	WARN_ON_ONCE(bpf_trampoline_unlink_prog(&tr_link->link,
-						tr_link->trampoline));
+	if (link->prog->type == BPF_PROG_TYPE_EXT)
+		WARN_ON_ONCE(bpf_extension_unlink_prog(&tr_link->link,
+						       tr_link->trampoline,
+						       tgt_prog));
+	else
+		WARN_ON_ONCE(bpf_trampoline_unlink_prog(&tr_link->link,
+							tr_link->trampoline));
 
 	bpf_trampoline_put(tr_link->trampoline);
 
 	/* tgt_prog is NULL if target is a kernel function */
-	if (tr_link->tgt_prog)
+	if (tgt_prog)
 		bpf_prog_put(tr_link->tgt_prog);
 }
 
@@ -3354,7 +3360,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	 *   in prog->aux
 	 *
 	 * - if prog->aux->dst_trampoline is NULL, the program has already been
-         *   attached to a target and its initial target was cleared (below)
+	 *   attached to a target and its initial target was cleared (below)
 	 *
 	 * - if tgt_prog != NULL, the caller specified tgt_prog_fd +
 	 *   target_btf_id using the link_create API.
@@ -3429,7 +3435,10 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (err)
 		goto out_unlock;
 
-	err = bpf_trampoline_link_prog(&link->link, tr);
+	if (prog->type == BPF_PROG_TYPE_EXT)
+		err = bpf_extension_link_prog(&link->link, tr, tgt_prog);
+	else
+		err = bpf_trampoline_link_prog(&link->link, tr);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
