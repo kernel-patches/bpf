@@ -56,7 +56,7 @@ static struct bpf_struct_ops test_no_cif_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int bpf_test_no_cfi_init(void)
+static int __init bpf_test_no_cfi_init(void)
 {
 	int ret;
 
@@ -71,7 +71,7 @@ static int bpf_test_no_cfi_init(void)
 	return ret;
 }
 
-static void bpf_test_no_cfi_exit(void)
+static void __exit bpf_test_no_cfi_exit(void)
 {
 }
 
