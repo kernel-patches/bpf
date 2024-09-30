@@ -1257,7 +1257,6 @@ struct bpf_trampoline {
 	struct hlist_node hlist_key;
 	/* hlist for trampoline_ip_table */
 	struct hlist_node hlist_ip;
-	struct ftrace_ops *fops;
 	/* serializes access to fields of this trampoline */
 	struct mutex mutex;
 	refcount_t refcnt;
