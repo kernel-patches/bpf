@@ -157,6 +157,37 @@ struct tnum tnum_cast(struct tnum a, u8 size)
 	return a;
 }
 
+struct tnum tnum_scast(struct tnum a, u8 size)
+{
+	u64 s = size * 8 - 1;
+	u64 sign_mask;
+	u64 value_mask;
+	u64 new_value, new_mask;
+	u64 sign_bit_unknown, sign_bit_value;
+	u64 mask;
+
+	if (size >= 8) {
+		return a;
+	}
+
+	sign_mask = 1ULL << s;
+	value_mask = (1ULL << (s + 1)) - 1;
+
+	new_value = a.value & value_mask;
+	new_mask = a.mask & value_mask;
+
+	sign_bit_unknown = (a.mask >> s) & 1;
+	sign_bit_value = (a.value >> s) & 1;
+
+	mask = ~value_mask;
+
+	new_mask |= mask & (0 - sign_bit_unknown);
+
+	new_value |= mask & (0 - ((sign_bit_unknown ^ 1) & sign_bit_value));
+
+	return TNUM(new_value, new_mask);
+}
+
 bool tnum_is_aligned(struct tnum a, u64 size)
 {
 	if (!size)

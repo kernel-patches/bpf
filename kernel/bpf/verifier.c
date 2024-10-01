@@ -6288,61 +6288,28 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	s64 init_s64_max, init_s64_min, s64_max, s64_min, u64_cval;
-	u64 top_smax_value, top_smin_value;
-	u64 num_bits = size * 8;
+	s64 smin, smax;
+	u64 umax, umin;
 
-	if (tnum_is_const(reg->var_off)) {
-		u64_cval = reg->var_off.value;
-		if (size == 1)
-			reg->var_off = tnum_const((s8)u64_cval);
-		else if (size == 2)
-			reg->var_off = tnum_const((s16)u64_cval);
-		else
-			/* size == 4 */
-			reg->var_off = tnum_const((s32)u64_cval);
+	reg->var_off = tnum_scast(reg->var_off, size);
 
-		u64_cval = reg->var_off.value;
-		reg->smax_value = reg->smin_value = u64_cval;
-		reg->umax_value = reg->umin_value = u64_cval;
-		reg->s32_max_value = reg->s32_min_value = u64_cval;
-		reg->u32_max_value = reg->u32_min_value = u64_cval;
-		return;
+	reg->smin_value = reg->var_off.value;
+	reg->smax_value = reg->var_off.value | reg->var_off.mask;
+
+	reg->umin_value = (u64)reg->smin_value;
+	reg->umax_value = (u64)reg->smax_value;
+
+	if (size <= 4) {
+		reg->s32_min_value = (s32)reg->smin_value;
+		reg->s32_max_value = (s32)reg->smax_value;
+		reg->u32_min_value = (u32)reg->umin_value;
+		reg->u32_max_value = (u32)reg->umax_value;
 	}
 
-	top_smax_value = ((u64)reg->smax_value >> num_bits) << num_bits;
-	top_smin_value = ((u64)reg->smin_value >> num_bits) << num_bits;
+	if (size < 4)
+		__mark_reg32_unbounded(reg);
 
-	if (top_smax_value != top_smin_value)
-		goto out;
-
-	/* find the s64_min and s64_min after sign extension */
-	if (size == 1) {
-		init_s64_max = (s8)reg->smax_value;
-		init_s64_min = (s8)reg->smin_value;
-	} else if (size == 2) {
-		init_s64_max = (s16)reg->smax_value;
-		init_s64_min = (s16)reg->smin_value;
-	} else {
-		init_s64_max = (s32)reg->smax_value;
-		init_s64_min = (s32)reg->smin_value;
-	}
-
-	s64_max = max(init_s64_max, init_s64_min);
-	s64_min = min(init_s64_max, init_s64_min);
-
-	/* both of s64_max/s64_min positive or negative */
-	if ((s64_max >= 0) == (s64_min >= 0)) {
-		reg->smin_value = reg->s32_min_value = s64_min;
-		reg->smax_value = reg->s32_max_value = s64_max;
-		reg->umin_value = reg->u32_min_value = s64_min;
-		reg->umax_value = reg->u32_max_value = s64_max;
-		reg->var_off = tnum_range(s64_min, s64_max);
-		return;
-	}
-
-out:
-	set_sext64_default_val(reg, size);
+	reg_bounds_sync(reg);
 }
 
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
