@@ -311,10 +311,7 @@ $(OUTPUT)/bpf_test_modorder_x.ko: $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard bp
 	$(Q)$(MAKE) $(submake_extras) RESOLVE_BTFIDS=$(RESOLVE_BTFIDS) -C bpf_test_modorder
 	$(Q)cp bpf_test_modorder/bpf_test_modorder_x.ko $@
 
-$(OUTPUT)/bpf_test_modorder_y.ko: $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard bpf_test_modorder/Makefile bpf_test_modorder/*.[ch])
-	$(call msg,MOD,,$@)
-	$(Q)$(RM) bpf_test_modorder/bpf_test_modorder_y.ko # force re-compilation
-	$(Q)$(MAKE) $(submake_extras) RESOLVE_BTFIDS=$(RESOLVE_BTFIDS) -C bpf_test_modorder
+$(OUTPUT)/bpf_test_modorder_y.ko: $(OUTPUT)/bpf_test_modorder_x.ko
 	$(Q)cp bpf_test_modorder/bpf_test_modorder_y.ko $@
 
 DEFAULT_BPFTOOL := $(HOST_SCRATCH_DIR)/sbin/bpftool
