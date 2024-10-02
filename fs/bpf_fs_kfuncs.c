@@ -93,6 +93,23 @@ __bpf_kfunc int bpf_path_d_path(struct path *path, char *buf, size_t buf__sz)
 	return len;
 }
 
+static bool bpf_xattr_name_allowed(const char *name__str)
+{
+	/* Allow xattr names with user. prefix */
+	if (!strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
+		return true;
+
+	/* Allow security.bpf. prefix or just security.bpf */
+	if (!strncmp(name__str, XATTR_NAME_BPF_LSM, XATTR_NAME_BPF_LSM_LEN) &&
+	    (name__str[XATTR_NAME_BPF_LSM_LEN] == '\0' ||
+	     name__str[XATTR_NAME_BPF_LSM_LEN] == '.')) {
+		return true;
+	}
+
+	/* Disallow anything else */
+	return false;
+}
+
 /**
  * bpf_get_dentry_xattr - get xattr of a dentry
  * @dentry: dentry to get xattr from
@@ -117,7 +134,7 @@ __bpf_kfunc int bpf_get_dentry_xattr(struct dentry *dentry, const char *name__st
 	if (WARN_ON(!inode))
 		return -EINVAL;
 
-	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
+	if (!bpf_xattr_name_allowed(name__str))
 		return -EPERM;
 
 	value_len = __bpf_dynptr_size(value_ptr);
