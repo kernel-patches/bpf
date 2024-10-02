@@ -6288,13 +6288,13 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	s64 smin, smax;
-	u64 umax, umin;
+	s64 smin_value, smax_value;
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	reg->smin_value = reg->var_off.value;
-	reg->smax_value = reg->var_off.value | reg->var_off.mask;
+	tnum_get_smin_max(reg->var_off, &smin_value, &smax_value);
+	reg->smin_value = smin_value;
+	reg->smax_value = smax_value;
 
 	reg->umin_value = (u64)reg->smin_value;
 	reg->umax_value = (u64)reg->smax_value;
