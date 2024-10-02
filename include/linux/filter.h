@@ -461,6 +461,8 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 
 #define BPF_CALL_IMM(x)	((void *)(x) - (void *)__bpf_call_base)
 
+#define BPF_CALL_FUNC(x)	((x) + (u8 *)__bpf_call_base)
+
 #define BPF_EMIT_CALL(FUNC)					\
 	((struct bpf_insn) {					\
 		.code  = BPF_JMP | BPF_CALL,			\

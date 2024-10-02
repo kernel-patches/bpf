@@ -1278,7 +1278,7 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 		 * and the helper with imm relative to it are both in core
 		 * kernel.
 		 */
-		addr = (u8 *)__bpf_call_base + imm;
+		addr = BPF_CALL_FUNC(imm);
 	}
 
 	*func_addr = (unsigned long)addr;
