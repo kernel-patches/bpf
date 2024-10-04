@@ -287,6 +287,26 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("Sign extension, umin/umax bad truncation")
+__success __retval(0)
+__naked void sign_extension_umin_umax_bug(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 0x1;					\
+	r0 += 0xfe;					\
+	r0 = (s8)r0;					\
+	if r0 < 0xfffffffffffffffe goto label_%=;	\
+	r0 = 0;						\
+	exit;						\
+label_%=:						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #else
 
 SEC("socket")
