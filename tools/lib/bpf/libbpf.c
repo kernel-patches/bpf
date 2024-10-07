@@ -8492,6 +8492,9 @@ static void bpf_map_prepare_vdata(const struct bpf_map *map)
 			continue;
 
 		prog_fd = bpf_program__fd(prog);
+		if (prog_fd < 0)
+			continue;
+
 		kern_data = st_ops->kern_vdata + st_ops->kern_func_off[i];
 		*(unsigned long *)kern_data = prog_fd;
 	}
