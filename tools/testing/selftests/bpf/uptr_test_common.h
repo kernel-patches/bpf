@@ -5,6 +5,7 @@
 #define _UPTR_TEST_COMMON_H
 
 #define MAGIC_VALUE 0xabcd1234
+#define PAGE_SIZE 4096
 
 #ifndef __BPF__
 struct cgroup {
@@ -34,6 +35,19 @@ struct value_type {
 struct value_lock_type {
 	struct user_data __uptr *udata;
 	struct bpf_spin_lock lock;
+};
+
+struct large_data {
+	__u8 one_page[PAGE_SIZE];
+	int a;
+};
+
+struct large_uptr {
+	struct large_data __uptr *udata;
+};
+
+struct kstruct_uptr {
+	struct cgroup __uptr *cgrp;
 };
 
 #endif
