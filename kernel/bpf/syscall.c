@@ -1540,7 +1540,7 @@ int __weak bpf_stackmap_copy(struct bpf_map *map, void *key, void *value)
 	return -ENOTSUPP;
 }
 
-static void *bpf_copy_from_dynptr_ukey(const struct bpf_map *map, bpfptr_t ukey)
+static void *bpf_copy_from_dynptr_ukey(const struct bpf_map *map, bpfptr_t ukey, bool copy_data)
 {
 	const struct btf_record *record;
 	const struct btf_field *field;
@@ -1548,7 +1548,6 @@ static void *bpf_copy_from_dynptr_ukey(const struct bpf_map *map, bpfptr_t ukey)
 	struct bpf_dynptr_kern *kptr;
 	void *key, *new_key, *kdata;
 	unsigned int key_size, size;
-	bpfptr_t udata;
 	unsigned int i;
 	int err;
 
@@ -1563,6 +1562,7 @@ static void *bpf_copy_from_dynptr_ukey(const struct bpf_map *map, bpfptr_t ukey)
 		field = &record->fields[i];
 		if (field->type != BPF_DYNPTR)
 			continue;
+
 		uptr = key + field->offset;
 		if (!uptr->size || uptr->size > map->map_extra || uptr->rsvd) {
 			err = -EINVAL;
@@ -1593,10 +1593,13 @@ static void *bpf_copy_from_dynptr_ukey(const struct bpf_map *map, bpfptr_t ukey)
 
 		uptr = key + field->offset;
 		size = uptr->size;
-		udata = make_bpfptr(uptr->data, bpfptr_is_kernel(ukey));
-		if (copy_from_bpfptr(kdata, udata, size)) {
-			err = -EFAULT;
-			goto free_key;
+		if (copy_data) {
+			bpfptr_t udata = make_bpfptr(uptr->data, bpfptr_is_kernel(ukey));
+
+			if (copy_from_bpfptr(kdata, udata, size)) {
+				err = -EFAULT;
+				goto free_key;
+			}
 		}
 		kptr = (struct bpf_dynptr_kern *)uptr;
 		bpf_dynptr_init(kptr, kdata, BPF_DYNPTR_TYPE_LOCAL, 0, size);
@@ -1613,7 +1616,7 @@ free_key:
 static void *__bpf_copy_key(const struct bpf_map *map, void __user *ukey)
 {
 	if (bpf_map_has_dynptr_key(map))
-		return bpf_copy_from_dynptr_ukey(map, USER_BPFPTR(ukey));
+		return bpf_copy_from_dynptr_ukey(map, USER_BPFPTR(ukey), true);
 
 	if (map->key_size)
 		return vmemdup_user(ukey, map->key_size);
@@ -1627,7 +1630,7 @@ static void *__bpf_copy_key(const struct bpf_map *map, void __user *ukey)
 static void *___bpf_copy_key(const struct bpf_map *map, bpfptr_t ukey)
 {
 	if (bpf_map_has_dynptr_key(map))
-		return bpf_copy_from_dynptr_ukey(map, ukey);
+		return bpf_copy_from_dynptr_ukey(map, ukey, true);
 
 	if (map->key_size)
 		return kvmemdup_bpfptr(ukey, map->key_size);
@@ -1636,6 +1639,51 @@ static void *___bpf_copy_key(const struct bpf_map *map, bpfptr_t ukey)
 		return ERR_PTR(-EINVAL);
 
 	return NULL;
+}
+
+static int bpf_copy_to_dynptr_ukey(const struct bpf_map *map,
+				   void __user *ukey, void *key)
+{
+	struct bpf_dynptr_user __user *uptr;
+	struct bpf_dynptr_kern *kptr;
+	struct btf_record *record;
+	unsigned int i, offset;
+
+	offset = 0;
+	record = map->key_record;
+	for (i = 0; i < record->cnt; i++) {
+		struct btf_field *field;
+		unsigned int size;
+		u64 udata;
+
+		field = &record->fields[i];
+		if (field->type != BPF_DYNPTR)
+			continue;
+
+		/* Any no-dynptr part before the dynptr ? */
+		if (offset < field->offset &&
+		    copy_to_user(ukey + offset, key + offset, field->offset - offset))
+			return -EFAULT;
+
+		/* dynptr part */
+		uptr = ukey + field->offset;
+		if (copy_from_user(&udata, &uptr->data, sizeof(udata)))
+			return -EFAULT;
+
+		kptr = key + field->offset;
+		size = __bpf_dynptr_size(kptr);
+		if (copy_to_user(u64_to_user_ptr(udata), __bpf_dynptr_data(kptr, size), size) ||
+		    put_user(size, &uptr->size) || put_user(0, &uptr->rsvd))
+			return -EFAULT;
+
+		offset = field->offset + field->size;
+	}
+
+	if (offset < map->key_size &&
+	    copy_to_user(ukey + offset, key + offset, map->key_size - offset))
+		return -EFAULT;
+
+	return 0;
 }
 
 /* last field in 'union bpf_attr' used by this command */
@@ -1840,10 +1888,19 @@ static int map_get_next_key(union bpf_attr *attr)
 		key = NULL;
 	}
 
-	err = -ENOMEM;
-	next_key = kvmalloc(map->key_size, GFP_USER);
-	if (!next_key)
+	if (bpf_map_has_dynptr_key(map))
+		next_key = bpf_copy_from_dynptr_ukey(map, USER_BPFPTR(unext_key), false);
+	else
+		next_key = kvmalloc(map->key_size, GFP_USER);
+	if (IS_ERR_OR_NULL(next_key)) {
+		if (!next_key) {
+			err = -ENOMEM;
+		} else {
+			err = PTR_ERR(next_key);
+			next_key = NULL;
+		}
 		goto free_key;
+	}
 
 	if (bpf_map_is_offloaded(map)) {
 		err = bpf_map_offload_get_next_key(map, key, next_key);
@@ -1857,11 +1914,12 @@ out:
 	if (err)
 		goto free_next_key;
 
-	err = -EFAULT;
-	if (copy_to_user(unext_key, next_key, map->key_size) != 0)
+	if (bpf_map_has_dynptr_key(map))
+		err = bpf_copy_to_dynptr_ukey(map, unext_key, next_key);
+	else
+		err = copy_to_user(unext_key, next_key, map->key_size) ? -EFAULT : 0;
+	if (err)
 		goto free_next_key;
-
-	err = 0;
 
 free_next_key:
 	kvfree(next_key);
