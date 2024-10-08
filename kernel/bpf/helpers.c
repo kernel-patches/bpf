@@ -2856,7 +2856,8 @@ struct bpf_iter_bits_kern {
 		unsigned long *bits;
 		unsigned long bits_copy;
 	};
-	u32 nr_bits;
+	u32 allocated:1;
+	u32 nr_bits:31;
 	int bit;
 } __aligned(8);
 
@@ -2886,6 +2887,7 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_w
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_bits_kern) !=
 		     __alignof__(struct bpf_iter_bits));
 
+	kit->allocated = 0;
 	kit->nr_bits = 0;
 	kit->bits_copy = 0;
 	kit->bit = -1;
@@ -2914,6 +2916,7 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_w
 		return err;
 	}
 
+	kit->allocated = 1;
 	kit->nr_bits = nr_bits;
 	return 0;
 }
@@ -2937,7 +2940,7 @@ __bpf_kfunc int *bpf_iter_bits_next(struct bpf_iter_bits *it)
 	if (nr_bits == 0)
 		return NULL;
 
-	bits = nr_bits == 64 ? &kit->bits_copy : kit->bits;
+	bits = !kit->allocated ? &kit->bits_copy : kit->bits;
 	bit = find_next_bit(bits, nr_bits, kit->bit + 1);
 	if (bit >= nr_bits) {
 		kit->nr_bits = 0;
@@ -2958,7 +2961,7 @@ __bpf_kfunc void bpf_iter_bits_destroy(struct bpf_iter_bits *it)
 {
 	struct bpf_iter_bits_kern *kit = (void *)it;
 
-	if (kit->nr_bits <= 64)
+	if (!kit->allocated)
 		return;
 	bpf_mem_free(&bpf_global_ma, kit->bits);
 }
