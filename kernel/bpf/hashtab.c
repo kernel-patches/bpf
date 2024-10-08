@@ -969,7 +969,8 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	return l == tgt_l;
 }
 
-static int htab_copy_dynptr_key(struct bpf_htab *htab, void *dst_key, const void *key, u32 key_size)
+static int htab_copy_dynptr_key(struct bpf_htab *htab, void *dst_key, const void *key, u32 key_size,
+				bool copy_in)
 {
 	const struct btf_record *rec = htab->map.key_record;
 	struct bpf_dynptr_kern *dst_kptr;
@@ -994,22 +995,32 @@ static int htab_copy_dynptr_key(struct bpf_htab *htab, void *dst_key, const void
 
 		/* Doesn't support nullified dynptr in map key */
 		kptr = key + field->offset;
-		if (!kptr->data) {
+		if (copy_in && !kptr->data) {
 			err = -EINVAL;
 			goto out;
 		}
 		len = __bpf_dynptr_size(kptr);
 		data = __bpf_dynptr_data(kptr, len);
 
-		dst_data = bpf_mem_alloc(&htab->dynptr_ma, len);
-		if (!dst_data) {
-			err = -ENOMEM;
-			goto out;
-		}
-
-		memcpy(dst_data, data, len);
 		dst_kptr = dst_key + field->offset;
-		bpf_dynptr_init(dst_kptr, dst_data, BPF_DYNPTR_TYPE_LOCAL, 0, len);
+		if (copy_in) {
+			dst_data = bpf_mem_alloc(&htab->dynptr_ma, len);
+			if (!dst_data) {
+				err = -ENOMEM;
+				goto out;
+			}
+			bpf_dynptr_init(dst_kptr, dst_data, BPF_DYNPTR_TYPE_LOCAL, 0, len);
+		} else {
+			dst_data = __bpf_dynptr_data_rw(dst_kptr, len);
+			if (!dst_data) {
+				err = -ENOSPC;
+				goto out;
+			}
+
+			if (__bpf_dynptr_size(dst_kptr) > len)
+				bpf_dynptr_set_size(dst_kptr, len);
+		}
+		memcpy(dst_data, data, len);
 
 		offset = field->offset + field->size;
 	}
@@ -1020,7 +1031,7 @@ static int htab_copy_dynptr_key(struct bpf_htab *htab, void *dst_key, const void
 	return 0;
 
 out:
-	for (; i > 0; i--) {
+	for (; i > 0 && copy_in; i--) {
 		field = &rec->fields[i - 1];
 		if (field->type != BPF_DYNPTR)
 			continue;
@@ -1031,10 +1042,22 @@ out:
 	return err;
 }
 
+static inline int htab_copy_next_key(struct bpf_htab *htab, void *next_key, const void *key,
+				     u32 key_size)
+{
+	if (!bpf_map_has_dynptr_key(&htab->map)) {
+		memcpy(next_key, key, key_size);
+		return 0;
+	}
+
+	return htab_copy_dynptr_key(htab, next_key, key, key_size, false);
+}
+
 /* Called from syscall */
 static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	const struct btf_record *key_record = map->key_record;
 	struct hlist_nulls_head *head;
 	struct htab_elem *l, *next_l;
 	u32 hash, key_size;
@@ -1047,12 +1070,12 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 	if (!key)
 		goto find_first_elem;
 
-	hash = htab_map_hash(key, key_size, htab->hashrnd, NULL);
+	hash = htab_map_hash(key, key_size, htab->hashrnd, key_record);
 
 	head = select_bucket(htab, hash);
 
 	/* lookup the key */
-	l = lookup_nulls_elem_raw(head, hash, key, key_size, htab->n_buckets, NULL);
+	l = lookup_nulls_elem_raw(head, hash, key, key_size, htab->n_buckets, key_record);
 
 	if (!l)
 		goto find_first_elem;
@@ -1063,8 +1086,7 @@ static int htab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 
 	if (next_l) {
 		/* if next elem in this hash list is non-zero, just return it */
-		memcpy(next_key, next_l->key, key_size);
-		return 0;
+		return htab_copy_next_key(htab, next_key, next_l->key, key_size);
 	}
 
 	/* no more elements in this hash list, go to the next bucket */
@@ -1081,8 +1103,7 @@ find_first_elem:
 					  struct htab_elem, hash_node);
 		if (next_l) {
 			/* if it's not empty, just return it */
-			memcpy(next_key, next_l->key, key_size);
-			return 0;
+			return htab_copy_next_key(htab, next_key, next_l->key, key_size);
 		}
 	}
 
@@ -1263,7 +1284,7 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	if (bpf_map_has_dynptr_key(&htab->map)) {
 		int copy_err;
 
-		copy_err = htab_copy_dynptr_key(htab, l_new->key, key, key_size);
+		copy_err = htab_copy_dynptr_key(htab, l_new->key, key, key_size, true);
 		if (copy_err) {
 			bpf_mem_cache_free(&htab->ma, l_new);
 			l_new = ERR_PTR(copy_err);
