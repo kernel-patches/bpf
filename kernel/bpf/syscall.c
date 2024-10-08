@@ -5316,6 +5316,10 @@ static int bpf_map_do_batch(const union bpf_attr *attr,
 		err = -EPERM;
 		goto err_put;
 	}
+	if (bpf_map_has_dynptr_key(map)) {
+		err = -EOPNOTSUPP;
+		goto err_put;
+	}
 
 	if (cmd == BPF_MAP_LOOKUP_BATCH)
 		BPF_DO_BATCH(map->ops->map_lookup_batch, map, attr, uattr);

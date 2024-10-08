@@ -592,7 +592,8 @@ static inline bool bpf_map_offload_neutral(const struct bpf_map *map)
 static inline bool bpf_map_support_seq_show(const struct bpf_map *map)
 {
 	return (map->btf_value_type_id || map->btf_vmlinux_value_type_id) &&
-		map->ops->map_seq_show_elem;
+		map->ops->map_seq_show_elem &&
+		!bpf_map_has_dynptr_key(map);
 }
 
 int map_check_no_btf(const struct bpf_map *map,
