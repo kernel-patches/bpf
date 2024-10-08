@@ -10,7 +10,7 @@
 
 char _license[] SEC("license") = "GPL";
 
-int bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign,
+int bpf_iter_bits_new(struct bpf_iter_bits *it, const unsigned long *unsafe_ptr__ign,
 		      u32 nr_bits) __ksym __weak;
 int *bpf_iter_bits_next(struct bpf_iter_bits *it) __ksym __weak;
 void bpf_iter_bits_destroy(struct bpf_iter_bits *it) __ksym __weak;
@@ -21,7 +21,7 @@ __failure __msg("Unreleased reference")
 int BPF_PROG(no_destroy, struct bpf_iter_meta *meta, struct cgroup *cgrp)
 {
 	struct bpf_iter_bits it;
-	u64 data = 1;
+	unsigned long data = 1;
 
 	bpf_iter_bits_new(&it, &data, 1);
 	bpf_iter_bits_next(&it);
@@ -68,7 +68,7 @@ __description("bits copy")
 __success __retval(10)
 int bits_copy(void)
 {
-	u64 data = 0xf7310UL; /* 4 + 3 + 2 + 1 + 0*/
+	unsigned long data = 0xf7310UL; /* 4 + 3 + 2 + 1 + 0*/
 	int nr = 0;
 	int *bit;
 
@@ -79,17 +79,17 @@ int bits_copy(void)
 
 SEC("syscall")
 __description("bits memalloc")
-__success __retval(64)
+__success __retval(1)
 int bits_memalloc(void)
 {
-	u64 data[2];
-	int nr = 0;
+	unsigned long data[2];
+	volatile int nr = 0;
 	int *bit;
 
-	__builtin_memset(&data, 0xf0, sizeof(data)); /* 4 * 16 */
+	__builtin_memset(&data, 0xf0, sizeof(data));
 	bpf_for_each(bits, bit, &data[0], ARRAY_SIZE(data))
 		nr++;
-	return nr;
+	return nr == 4 * sizeof(data);
 }
 
 SEC("syscall")
@@ -97,7 +97,7 @@ __description("bit index")
 __success __retval(8)
 int bit_index(void)
 {
-	u64 data = 0x100;
+	unsigned long data = 0x100;
 	int bit_idx = 0;
 	int *bit;
 
@@ -114,12 +114,12 @@ __description("bits nomem")
 __success __retval(0)
 int bits_nomem(void)
 {
-	u64 data[4];
+	unsigned long data[4];
 	int nr = 0;
 	int *bit;
 
 	__builtin_memset(&data, 0xff, sizeof(data));
-	bpf_for_each(bits, bit, &data[0], 513) /* Be greater than 512 */
+	bpf_for_each(bits, bit, &data[0], 4096 / sizeof(data[0]) + 1)
 		nr++;
 	return nr;
 }
@@ -129,7 +129,7 @@ __description("fewer words")
 __success __retval(1)
 int fewer_words(void)
 {
-	u64 data[2] = {0x1, 0xff};
+	unsigned long data[2] = {0x1, 0xff};
 	int nr = 0;
 	int *bit;
 
@@ -143,7 +143,7 @@ __description("zero words")
 __success __retval(0)
 int zero_words(void)
 {
-	u64 data[2] = {0x1, 0xff};
+	unsigned long data[2] = {0x1, 0xff};
 	int nr = 0;
 	int *bit;
 
@@ -157,7 +157,7 @@ __description("big words")
 __success __retval(0)
 int big_words(void)
 {
-	u64 data[8] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1};
+	unsigned long data[8] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1};
 	int nr = 0;
 	int *bit;
 
