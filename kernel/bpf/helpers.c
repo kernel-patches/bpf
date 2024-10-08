@@ -2852,7 +2852,7 @@ struct bpf_iter_bits {
 } __aligned(8);
 
 /* nr_bits only has 31 bits */
-#define BITS_ITER_NR_WORDS_MAX ((1U << 31) / BITS_PER_TYPE(u64))
+#define BITS_ITER_NR_WORDS_MAX ((1U << 31) / BITS_PER_TYPE(unsigned long))
 
 struct bpf_iter_bits_kern {
 	union {
@@ -2868,8 +2868,9 @@ struct bpf_iter_bits_kern {
  * bpf_iter_bits_new() - Initialize a new bits iterator for a given memory area
  * @it: The new bpf_iter_bits to be created
  * @unsafe_ptr__ign: A pointer pointing to a memory area to be iterated over
- * @nr_words: The size of the specified memory area, measured in 8-byte units.
- * Due to the limitation of memalloc, it can't be greater than 512.
+ * @nr_words: The size of the specified memory area, measured in units of
+ * sizeof(unsigned long). Due to the limitation of memalloc, it can't be
+ * greater than 512.
  *
  * This function initializes a new bpf_iter_bits structure for iterating over
  * a memory area which is specified by the @unsafe_ptr__ign and @nr_words. It
@@ -2879,17 +2880,18 @@ struct bpf_iter_bits_kern {
  * On success, 0 is returned. On failure, ERR is returned.
  */
 __bpf_kfunc int
-bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_words)
+bpf_iter_bits_new(struct bpf_iter_bits *it, const unsigned long *unsafe_ptr__ign, u32 nr_words)
 {
-	struct bpf_iter_bits_kern *kit = (void *)it;
-	u32 nr_bytes = nr_words * sizeof(u64);
+	u32 nr_bytes = nr_words * sizeof(*unsafe_ptr__ign);
 	u32 nr_bits = BYTES_TO_BITS(nr_bytes);
+	struct bpf_iter_bits_kern *kit;
 	int err;
 
 	BUILD_BUG_ON(sizeof(struct bpf_iter_bits_kern) != sizeof(struct bpf_iter_bits));
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_bits_kern) !=
 		     __alignof__(struct bpf_iter_bits));
 
+	kit = (void *)it;
 	kit->allocated = 0;
 	kit->nr_bits = 0;
 	kit->bits_copy = 0;
@@ -2900,8 +2902,8 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_w
 	if (nr_words > BITS_ITER_NR_WORDS_MAX)
 		return -E2BIG;
 
-	/* Optimization for u64 mask */
-	if (nr_bits == 64) {
+	/* Optimization for unsigned long mask */
+	if (nr_words == 1) {
 		err = bpf_probe_read_kernel_common(&kit->bits_copy, nr_bytes, unsafe_ptr__ign);
 		if (err)
 			return -EFAULT;
