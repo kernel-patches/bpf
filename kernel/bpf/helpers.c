@@ -1674,7 +1674,7 @@ u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr)
 	return ptr->size & DYNPTR_SIZE_MASK;
 }
 
-static void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
+void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
 {
 	u32 metadata = ptr->size & ~DYNPTR_SIZE_MASK;
 
