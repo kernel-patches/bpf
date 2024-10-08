@@ -561,6 +561,7 @@ void btf_record_free(struct btf_record *rec)
 		case BPF_TIMER:
 		case BPF_REFCOUNT:
 		case BPF_WORKQUEUE:
+		case BPF_DYNPTR:
 			/* Nothing to release */
 			break;
 		default:
@@ -574,7 +575,9 @@ void btf_record_free(struct btf_record *rec)
 void bpf_map_free_record(struct bpf_map *map)
 {
 	btf_record_free(map->record);
+	btf_record_free(map->key_record);
 	map->record = NULL;
+	map->key_record = NULL;
 }
 
 struct btf_record *btf_record_dup(const struct btf_record *rec)
@@ -612,6 +615,7 @@ struct btf_record *btf_record_dup(const struct btf_record *rec)
 		case BPF_TIMER:
 		case BPF_REFCOUNT:
 		case BPF_WORKQUEUE:
+		case BPF_DYNPTR:
 			/* Nothing to acquire */
 			break;
 		default:
@@ -728,6 +732,8 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 		case BPF_RB_NODE:
 		case BPF_REFCOUNT:
 			break;
+		case BPF_DYNPTR:
+			break;
 		default:
 			WARN_ON_ONCE(1);
 			continue;
@@ -737,6 +743,7 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 
 static void bpf_map_free(struct bpf_map *map)
 {
+	struct btf_record *key_rec = map->key_record;
 	struct btf_record *rec = map->record;
 	struct btf *btf = map->btf;
 
@@ -751,6 +758,7 @@ static void bpf_map_free(struct bpf_map *map)
 	 * eventually calls bpf_map_free_meta, since inner_map_meta is only a
 	 * template bpf_map struct used during verification.
 	 */
+	btf_record_free(key_rec);
 	btf_record_free(rec);
 	/* Delay freeing of btf for maps, as map_free callback may need
 	 * struct_meta info which will be freed with btf_put().
@@ -1081,6 +1089,8 @@ int map_check_no_btf(const struct bpf_map *map,
 	return -ENOTSUPP;
 }
 
+#define MAX_DYNPTR_CNT_IN_MAP_KEY 4
+
 static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 			 const struct btf *btf, u32 btf_key_id, u32 btf_value_id)
 {
@@ -1102,6 +1112,40 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 	value_type = btf_type_id_size(btf, &btf_value_id, &value_size);
 	if (!value_type || value_size != map->value_size)
 		return -EINVAL;
+
+	if (btf_type_is_dynptr(btf, key_type))
+		map->key_record = btf_new_bpf_dynptr_record();
+	else
+		map->key_record = btf_parse_fields(btf, key_type, BPF_DYNPTR, map->key_size);
+	if (!IS_ERR_OR_NULL(map->key_record)) {
+		if (map->key_record->cnt > MAX_DYNPTR_CNT_IN_MAP_KEY) {
+			ret = -E2BIG;
+			goto free_map_tab;
+		}
+		if (!bpf_map_has_dynptr_key(map)) {
+			ret = -EINVAL;
+			goto free_map_tab;
+		}
+		if (map->map_type != BPF_MAP_TYPE_HASH) {
+			ret = -EOPNOTSUPP;
+			goto free_map_tab;
+		}
+		if (!bpf_token_capable(token, CAP_BPF)) {
+			ret = -EPERM;
+			goto free_map_tab;
+		}
+		/* Disallow key with dynptr for special map */
+		if (map->map_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)) {
+			ret = -EACCES;
+			goto free_map_tab;
+		}
+	} else if (bpf_map_has_dynptr_key(map)) {
+		ret = -EINVAL;
+		goto free_map_tab;
+	} else {
+		/* Ensure key_record is either a valid btf_record or NULL */
+		map->key_record = NULL;
+	}
 
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD |
@@ -1229,6 +1273,9 @@ static int map_create(union bpf_attr *attr)
 	} else if (attr->btf_key_type_id && !attr->btf_value_type_id) {
 		return -EINVAL;
 	}
+
+	if ((attr->map_flags & BPF_F_DYNPTR_IN_KEY) && !attr->btf_key_type_id)
+		return -EINVAL;
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
 	    attr->map_type != BPF_MAP_TYPE_ARENA &&

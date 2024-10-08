@@ -9,7 +9,7 @@
 
 struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 {
-	struct bpf_map *inner_map, *inner_map_meta;
+	struct bpf_map *inner_map, *inner_map_meta, *ret;
 	u32 inner_map_meta_size;
 	CLASS(fd, f)(inner_map_ufd);
 
@@ -45,9 +45,13 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		 * invalid/empty/valid, but ERR_PTR in case of errors. During
 		 * equality NULL or IS_ERR is equivalent.
 		 */
-		struct bpf_map *ret = ERR_CAST(inner_map_meta->record);
-		kfree(inner_map_meta);
-		return ret;
+		ret = ERR_CAST(inner_map_meta->record);
+		goto free;
+	}
+	inner_map_meta->key_record = btf_record_dup(inner_map->key_record);
+	if (IS_ERR(inner_map_meta->key_record)) {
+		ret = ERR_CAST(inner_map_meta->key_record);
+		goto free;
 	}
 	/* Note: We must use the same BTF, as we also used btf_record_dup above
 	 * which relies on BTF being same for both maps, as some members like
@@ -71,6 +75,10 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		inner_map_meta->bypass_spec_v1 = inner_map->bypass_spec_v1;
 	}
 	return inner_map_meta;
+
+free:
+	bpf_map_meta_free(inner_map_meta);
+	return ret;
 }
 
 void bpf_map_meta_free(struct bpf_map *map_meta)
@@ -88,7 +96,8 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 		meta0->key_size == meta1->key_size &&
 		meta0->value_size == meta1->value_size &&
 		meta0->map_flags == meta1->map_flags &&
-		btf_record_equal(meta0->record, meta1->record);
+		btf_record_equal(meta0->record, meta1->record) &&
+		btf_record_equal(meta0->key_record, meta1->key_record);
 }
 
 void *bpf_map_fd_get_ptr(struct bpf_map *map,
