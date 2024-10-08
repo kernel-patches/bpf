@@ -5042,6 +5042,7 @@ enum bpf_access_src {
 };
 
 #define ACCESS_F_ZERO_SIZE_ALLOWED BIT(0)
+#define ACCESS_F_DYNPTR_READ_ALLOWED BIT(1)
 
 static int check_stack_range_initialized(struct bpf_verifier_env *env,
 					 int regno, int off, int access_size,
@@ -7267,6 +7268,86 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	return 0;
 }
 
+struct dynptr_key_state {
+	const struct btf_record *rec;
+	const struct btf_field *cur_dynptr;
+	bool valid_dynptr_id;
+	int cur_dynptr_id;
+};
+
+static int init_dynptr_key_state(struct bpf_verifier_env *env, const struct btf_record *rec,
+				 struct dynptr_key_state *state)
+{
+	unsigned int i;
+
+	/* Find the first dynptr in the dynptr-key */
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type == BPF_DYNPTR)
+			break;
+	}
+	if (i >= rec->cnt) {
+		verbose(env, "verifier bug: dynptr not found\n");
+		return -EFAULT;
+	}
+
+	state->rec = rec;
+	state->cur_dynptr = &rec->fields[i];
+	state->valid_dynptr_id = false;
+
+	return 0;
+}
+
+static int check_dynptr_key_access(struct bpf_verifier_env *env, struct dynptr_key_state *state,
+				   struct bpf_reg_state *reg, u8 stype, int offset)
+{
+	const struct btf_field *dynptr = state->cur_dynptr;
+
+	/* Non-dynptr part before a dynptr or non-dynptr part after
+	 * the last dynptr.
+	 */
+	if (offset < dynptr->offset || offset >= dynptr->offset + dynptr->size) {
+		if (stype == STACK_DYNPTR) {
+			verbose(env,
+				"dynptr-key expects non-dynptr at offset %d cur_dynptr_offset %u\n",
+				offset, dynptr->offset);
+			return -EACCES;
+		}
+	} else {
+		if (stype != STACK_DYNPTR) {
+			verbose(env,
+				"dynptr-key expects dynptr at offset %d cur_dynptr_offset %u\n",
+				offset, dynptr->offset);
+			return -EACCES;
+		}
+
+		/* A dynptr is composed of parts from two dynptrs */
+		if (state->valid_dynptr_id && reg->id != state->cur_dynptr_id) {
+			verbose(env, "malformed dynptr-key at offset %d cur_dynptr_offset %u\n",
+				offset, dynptr->offset);
+			return -EACCES;
+		}
+		if (!state->valid_dynptr_id) {
+			state->valid_dynptr_id = true;
+			state->cur_dynptr_id = reg->id;
+		}
+
+		if (offset == dynptr->offset + dynptr->size - 1) {
+			const struct btf_record *rec = state->rec;
+			unsigned int i;
+
+			for (i = dynptr - rec->fields + 1; i < rec->cnt; i++) {
+				if (rec->fields[i].type == BPF_DYNPTR) {
+					state->cur_dynptr = &rec->fields[i];
+					state->valid_dynptr_id = false;
+					break;
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
 /* When register 'regno' is used to read the stack (either directly or through
  * a helper function) make sure that it's within stack boundary and, depending
  * on the access type and privileges, that all elements of the stack are
@@ -7287,6 +7368,8 @@ static int check_stack_range_initialized(
 	int err, min_off, max_off, i, j, slot, spi;
 	char *err_extra = type == ACCESS_HELPER ? " indirect" : "";
 	enum bpf_access_type bounds_check_type;
+	struct dynptr_key_state dynptr_key;
+	bool dynptr_read_allowed;
 	/* Some accesses can write anything into the stack, others are
 	 * read-only.
 	 */
@@ -7312,9 +7395,14 @@ static int check_stack_range_initialized(
 	if (err)
 		return err;
 
-
+	dynptr_read_allowed = access_flags & ACCESS_F_DYNPTR_READ_ALLOWED;
 	if (tnum_is_const(reg->var_off)) {
 		min_off = max_off = reg->var_off.value + off;
+
+		if (dynptr_read_allowed && (min_off % BPF_REG_SIZE)) {
+			verbose(env, "R%d misaligned offset %d for dynptr-key\n", regno, min_off);
+			return -EACCES;
+		}
 	} else {
 		/* Variable offset is prohibited for unprivileged mode for
 		 * simplicity since it requires corresponding support in
@@ -7329,6 +7417,12 @@ static int check_stack_range_initialized(
 				regno, err_extra, tn_buf);
 			return -EACCES;
 		}
+
+		if (dynptr_read_allowed) {
+			verbose(env, "R%d variable offset prohibited for dynptr-key\n", regno);
+			return -EACCES;
+		}
+
 		/* Only initialized buffer on stack is allowed to be accessed
 		 * with variable offset. With uninitialized buffer it's hard to
 		 * guarantee that whole memory is marked as initialized on
@@ -7373,18 +7467,25 @@ static int check_stack_range_initialized(
 		return 0;
 	}
 
+	if (dynptr_read_allowed) {
+		err = init_dynptr_key_state(env, meta->map_ptr->key_record, &dynptr_key);
+		if (err)
+			return err;
+	}
 	for (i = min_off; i < max_off + access_size; i++) {
 		u8 *stype;
 
 		slot = -i - 1;
 		spi = slot / BPF_REG_SIZE;
 		if (state->allocated_stack <= slot) {
-			verbose(env, "verifier bug: allocated_stack too small");
+			verbose(env, "verifier bug: allocated_stack too small\n");
 			return -EFAULT;
 		}
 
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
 		if (*stype == STACK_MISC)
+			goto mark;
+		if (dynptr_read_allowed && *stype == STACK_DYNPTR)
 			goto mark;
 		if ((*stype == STACK_ZERO) ||
 		    (*stype == STACK_INVALID && env->allow_uninit_stack)) {
@@ -7418,18 +7519,28 @@ static int check_stack_range_initialized(
 		}
 		return -EACCES;
 mark:
+		if (dynptr_read_allowed) {
+			err = check_dynptr_key_access(env, &dynptr_key,
+						      &state->stack[spi].spilled_ptr, *stype,
+						      i - min_off);
+			if (err)
+				return err;
+		}
+
 		/* reading any byte out of 8-byte 'spill_slot' will cause
 		 * the whole slot to be marked as 'read'
-		 */
-		mark_reg_read(env, &state->stack[spi].spilled_ptr,
-			      state->stack[spi].spilled_ptr.parent,
-			      REG_LIVE_READ64);
-		/* We do not set REG_LIVE_WRITTEN for stack slot, as we can not
+		 *
+		 * We do not set REG_LIVE_WRITTEN for stack slot, as we can not
 		 * be sure that whether stack slot is written to or not. Hence,
 		 * we must still conservatively propagate reads upwards even if
 		 * helper may write to the entire memory range.
 		 */
+		mark_reg_read(env, &state->stack[spi].spilled_ptr,
+			      state->stack[spi].spilled_ptr.parent,
+			      REG_LIVE_READ64);
+
 	}
+
 	return 0;
 }
 
@@ -8933,6 +9044,9 @@ skip_type_check:
 		meta->map_uid = reg->map_uid;
 		break;
 	case ARG_PTR_TO_MAP_KEY:
+	{
+		u32 access_flags = 0;
+
 		/* bpf_map_xxx(..., map_ptr, ..., key) call:
 		 * check that [key, key + map->key_size) are within
 		 * stack limits and initialized
@@ -8946,10 +9060,21 @@ skip_type_check:
 			verbose(env, "invalid map_ptr to access map->key\n");
 			return -EACCES;
 		}
+		/* Only allow PTR_TO_STACK for dynptr-key */
+		if (bpf_map_has_dynptr_key(meta->map_ptr)) {
+			if (base_type(reg->type) != PTR_TO_STACK) {
+				verbose(env, "map dynptr-key requires stack ptr but got %s\n",
+					reg_type_str(env, reg->type));
+				return -EACCES;
+			}
+			access_flags |= ACCESS_F_DYNPTR_READ_ALLOWED;
+		}
+		meta->raw_mode = false;
 		err = check_helper_mem_access(env, regno,
-					      meta->map_ptr->key_size, 0,
-					      NULL);
+					      meta->map_ptr->key_size, access_flags,
+					      meta);
 		break;
+	}
 	case ARG_PTR_TO_MAP_VALUE:
 		if (type_may_be_null(arg_type) && register_is_null(reg))
 			return 0;
