@@ -3917,6 +3917,16 @@ static int btf_field_cmp(const void *_a, const void *_b, const void *priv)
 	return 0;
 }
 
+static void btf_init_btf_record(struct btf_record *record)
+{
+	record->cnt = 0;
+	record->field_mask = 0;
+	record->spin_lock_off = -EINVAL;
+	record->timer_off = -EINVAL;
+	record->wq_off = -EINVAL;
+	record->refcount_off = -EINVAL;
+}
+
 struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
 				    u32 field_mask, u32 value_size)
 {
@@ -3935,14 +3945,11 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 	/* This needs to be kzalloc to zero out padding and unused fields, see
 	 * comment in btf_record_equal.
 	 */
-	rec = kzalloc(offsetof(struct btf_record, fields[cnt]), GFP_KERNEL | __GFP_NOWARN);
+	rec = kzalloc(struct_size(rec, fields, cnt), GFP_KERNEL | __GFP_NOWARN);
 	if (!rec)
 		return ERR_PTR(-ENOMEM);
 
-	rec->spin_lock_off = -EINVAL;
-	rec->timer_off = -EINVAL;
-	rec->wq_off = -EINVAL;
-	rec->refcount_off = -EINVAL;
+	btf_init_btf_record(rec);
 	for (i = 0; i < cnt; i++) {
 		field_type_size = btf_field_type_size(info_arr[i].type);
 		if (info_arr[i].off + field_type_size > value_size) {
@@ -4030,6 +4037,25 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 end:
 	btf_record_free(rec);
 	return ERR_PTR(ret);
+}
+
+struct btf_record *btf_new_bpf_dynptr_record(void)
+{
+	struct btf_record *record;
+
+	record = kzalloc(struct_size(record, fields, 1), GFP_KERNEL | __GFP_NOWARN);
+	if (!record)
+		return ERR_PTR(-ENOMEM);
+
+	btf_init_btf_record(record);
+
+	record->cnt = 1;
+	record->field_mask = BPF_DYNPTR;
+	record->fields[0].offset = 0;
+	record->fields[0].size = sizeof(struct bpf_dynptr);
+	record->fields[0].type = BPF_DYNPTR;
+
+	return record;
 }
 
 int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec)
@@ -7268,6 +7294,12 @@ static bool btf_is_dynptr_ptr(const struct btf *btf, const struct btf_type *t)
 	}
 
 	return false;
+}
+
+bool btf_type_is_dynptr(const struct btf *btf, const struct btf_type *t)
+{
+	return __btf_type_is_struct(t) && t->size == sizeof(struct bpf_dynptr) &&
+	       !strcmp(__btf_name_by_offset(btf, t->name_off), "bpf_dynptr");
 }
 
 struct bpf_cand_cache {
