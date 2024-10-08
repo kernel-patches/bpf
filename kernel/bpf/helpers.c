@@ -2851,6 +2851,9 @@ struct bpf_iter_bits {
 	__u64 __opaque[2];
 } __aligned(8);
 
+/* nr_bits only has 31 bits */
+#define BITS_ITER_NR_WORDS_MAX ((1U << 31) / BITS_PER_TYPE(u64))
+
 struct bpf_iter_bits_kern {
 	union {
 		unsigned long *bits;
@@ -2894,6 +2897,8 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_w
 
 	if (!unsafe_ptr__ign || !nr_words)
 		return -EINVAL;
+	if (nr_words > BITS_ITER_NR_WORDS_MAX)
+		return -E2BIG;
 
 	/* Optimization for u64 mask */
 	if (nr_bits == 64) {
