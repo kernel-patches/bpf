@@ -700,6 +700,33 @@ struct bpf_token_create_opts {
 LIBBPF_API int bpf_token_create(int bpffs_fd,
 				struct bpf_token_create_opts *opts);
 
+/* sys_bpf() will check the validity of data and size */
+static inline void bpf_dynptr_user_init(void *data, __u32 size,
+					struct bpf_dynptr_user *dynptr)
+{
+	dynptr->data = (__u64)(unsigned long)data;
+	dynptr->size = size;
+	dynptr->rsvd = 0;
+}
+
+static inline void bpf_dynptr_user_set_size(struct bpf_dynptr_user *dynptr,
+					    __u32 new_size)
+{
+	dynptr->size = new_size;
+}
+
+static inline __u32
+bpf_dynptr_user_size(const struct bpf_dynptr_user *dynptr)
+{
+	return dynptr->size;
+}
+
+static inline void *
+bpf_dynptr_user_data(const struct bpf_dynptr_user *dynptr)
+{
+	return (void *)(unsigned long)dynptr->data;
+}
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
