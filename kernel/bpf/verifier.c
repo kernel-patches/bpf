@@ -8362,6 +8362,7 @@ static const struct bpf_reg_types btf_id_sock_common_types = {
 		PTR_TO_XDP_SOCK,
 		PTR_TO_BTF_ID,
 		PTR_TO_BTF_ID | PTR_TRUSTED,
+		PTR_TO_BTF_ID | MEM_RCU,
 	},
 	.btf_id = &btf_sock_ids[BTF_SOCK_TYPE_SOCK_COMMON],
 };
