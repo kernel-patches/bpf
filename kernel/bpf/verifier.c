@@ -5041,9 +5041,11 @@ enum bpf_access_src {
 	ACCESS_HELPER = 2,  /* the access is performed by a helper */
 };
 
+#define ACCESS_F_ZERO_SIZE_ALLOWED BIT(0)
+
 static int check_stack_range_initialized(struct bpf_verifier_env *env,
 					 int regno, int off, int access_size,
-					 bool zero_size_allowed,
+					 unsigned int access_flags,
 					 enum bpf_access_src type,
 					 struct bpf_call_arg_meta *meta);
 
@@ -5077,7 +5079,7 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env,
 	/* Note that we pass a NULL meta, so raw access will not be permitted.
 	 */
 	err = check_stack_range_initialized(env, ptr_regno, off, size,
-					    false, ACCESS_DIRECT, NULL);
+					    0, ACCESS_DIRECT, NULL);
 	if (err)
 		return err;
 
@@ -7277,7 +7279,7 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
  */
 static int check_stack_range_initialized(
 		struct bpf_verifier_env *env, int regno, int off,
-		int access_size, bool zero_size_allowed,
+		int access_size, unsigned int access_flags,
 		enum bpf_access_src type, struct bpf_call_arg_meta *meta)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno);
@@ -7290,7 +7292,7 @@ static int check_stack_range_initialized(
 	 */
 	bool clobber = false;
 
-	if (access_size == 0 && !zero_size_allowed) {
+	if (access_size == 0 && !(access_flags & ACCESS_F_ZERO_SIZE_ALLOWED)) {
 		verbose(env, "invalid zero-sized read\n");
 		return -EACCES;
 	}
@@ -7432,9 +7434,10 @@ mark:
 }
 
 static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
-				   int access_size, bool zero_size_allowed,
+				   int access_size, unsigned int access_flags,
 				   struct bpf_call_arg_meta *meta)
 {
+	bool zero_size_allowed = access_flags & ACCESS_F_ZERO_SIZE_ALLOWED;
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	u32 *max_access;
 
@@ -7488,7 +7491,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 		return check_stack_range_initialized(
 				env,
 				regno, reg->off, access_size,
-				zero_size_allowed, ACCESS_HELPER, meta);
+				access_flags, ACCESS_HELPER, meta);
 	case PTR_TO_BTF_ID:
 		return check_ptr_to_btf_access(env, regs, regno, reg->off,
 					       access_size, BPF_READ, -1);
@@ -7532,9 +7535,10 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
  */
 static int check_mem_size_reg(struct bpf_verifier_env *env,
 			      struct bpf_reg_state *reg, u32 regno,
-			      bool zero_size_allowed,
+			      unsigned int access_flags,
 			      struct bpf_call_arg_meta *meta)
 {
+	bool zero_size_allowed = access_flags & ACCESS_F_ZERO_SIZE_ALLOWED;
 	int err;
 
 	/* This is used to refine r0 return value bounds for helpers
@@ -7577,7 +7581,7 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	}
 	err = check_helper_mem_access(env, regno - 1,
 				      reg->umax_value,
-				      zero_size_allowed, meta);
+				      access_flags, meta);
 	if (!err)
 		err = mark_chain_precision(env, regno);
 	return err;
@@ -7604,11 +7608,11 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 		mark_ptr_not_null_reg(reg);
 	}
 
-	err = check_helper_mem_access(env, regno, mem_size, true, &meta);
+	err = check_helper_mem_access(env, regno, mem_size, ACCESS_F_ZERO_SIZE_ALLOWED, &meta);
 	/* Check access for BPF_WRITE */
 	meta.raw_mode = true;
-	err = err ?: check_helper_mem_access(env, regno, mem_size, true, &meta);
-
+	err = err ?: check_helper_mem_access(env, regno, mem_size, ACCESS_F_ZERO_SIZE_ALLOWED,
+					     &meta);
 	if (may_be_null)
 		*reg = saved_reg;
 
@@ -7633,10 +7637,10 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
 		mark_ptr_not_null_reg(mem_reg);
 	}
 
-	err = check_mem_size_reg(env, reg, regno, true, &meta);
+	err = check_mem_size_reg(env, reg, regno, ACCESS_F_ZERO_SIZE_ALLOWED, &meta);
 	/* Check access for BPF_WRITE */
 	meta.raw_mode = true;
-	err = err ?: check_mem_size_reg(env, reg, regno, true, &meta);
+	err = err ?: check_mem_size_reg(env, reg, regno, ACCESS_F_ZERO_SIZE_ALLOWED, &meta);
 
 	if (may_be_null)
 		*mem_reg = saved_reg;
@@ -8943,7 +8947,7 @@ skip_type_check:
 			return -EACCES;
 		}
 		err = check_helper_mem_access(env, regno,
-					      meta->map_ptr->key_size, false,
+					      meta->map_ptr->key_size, 0,
 					      NULL);
 		break;
 	case ARG_PTR_TO_MAP_VALUE:
@@ -8960,7 +8964,7 @@ skip_type_check:
 		}
 		meta->raw_mode = arg_type & MEM_UNINIT;
 		err = check_helper_mem_access(env, regno,
-					      meta->map_ptr->value_size, false,
+					      meta->map_ptr->value_size, 0,
 					      meta);
 		break;
 	case ARG_PTR_TO_PERCPU_BTF_ID:
@@ -9003,7 +9007,9 @@ skip_type_check:
 		 */
 		meta->raw_mode = arg_type & MEM_UNINIT;
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_helper_mem_access(env, regno, fn->arg_size[arg], false, meta);
+			err = check_helper_mem_access(env, regno,
+						      fn->arg_size[arg], 0,
+						      meta);
 			if (err)
 				return err;
 			if (arg_type & MEM_ALIGNED)
@@ -9011,10 +9017,10 @@ skip_type_check:
 		}
 		break;
 	case ARG_CONST_SIZE:
-		err = check_mem_size_reg(env, reg, regno, false, meta);
+		err = check_mem_size_reg(env, reg, regno, 0, meta);
 		break;
 	case ARG_CONST_SIZE_OR_ZERO:
-		err = check_mem_size_reg(env, reg, regno, true, meta);
+		err = check_mem_size_reg(env, reg, regno, ACCESS_F_ZERO_SIZE_ALLOWED, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
 		err = process_dynptr_func(env, regno, insn_idx, arg_type, 0);
