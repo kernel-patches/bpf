@@ -62,8 +62,11 @@ static void test_xdp_with_cpumap_helpers(void)
 	err = bpf_prog_test_run_opts(prog_redir_fd, &opts);
 	ASSERT_OK(err, "XDP test run");
 
-	/* wait for the packets to be flushed */
+	/* wait for the packets to be flushed, then check that redirect has been
+	 * performed
+	 */
 	kern_sync_rcu();
+	ASSERT_NEQ(skel->bss->redirect_count, 0, "redirected packets");
 
 	err = bpf_xdp_detach(IFINDEX_LO, XDP_FLAGS_SKB_MODE, NULL);
 	ASSERT_OK(err, "XDP program detach");
@@ -203,8 +206,11 @@ static void test_xdp_with_cpumap_helpers_veth(void)
 	err = bpf_prog_test_run_opts(cm_fd_redir, &opts);
 	ASSERT_OK(err, "XDP test run");
 
-	/* wait for the packets to be flushed */
+	/* wait for the packets to be flushed, then check that redirect has been
+	 * performed
+	 */
 	kern_sync_rcu();
+	ASSERT_NEQ(skel->bss->redirect_count, 0, "redirected packets");
 
 	err = bpf_xdp_detach(ifindex_src, XDP_FLAGS_DRV_MODE, NULL);
 	ASSERT_OK(err, "XDP program detach");
