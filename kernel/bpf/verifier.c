@@ -16055,9 +16055,11 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 	int *insn_state = env->cfg.insn_state;
 
 	if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
+		/* FALLTHROUGH from t already processed */
 		return DONE_EXPLORING;
 
 	if (e == BRANCH && insn_state[t] >= (DISCOVERED | BRANCH))
+		/* BRANCH from t already processed */
 		return DONE_EXPLORING;
 
 	if (w < 0 || w >= env->prog->len) {
@@ -16081,6 +16083,8 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 		insn_stack[env->cfg.cur_stack++] = w;
 		return KEEP_EXPLORING;
 	} else if ((insn_state[w] & 0xF0) == DISCOVERED) {
+		/* back-edge */
+		mark_force_checkpoint(env, w);
 		if (env->bpf_capable)
 			return DONE_EXPLORING;
 		verbose_linfo(env, t, "%d: ", t);
