@@ -325,6 +325,22 @@ struct jit_context {
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	(12 + ENDBR_INSN_SIZE)
 
+static void push_r9(u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	EMIT2(0x41, 0x51);   /* push r9 */
+	*pprog = prog;
+}
+
+static void pop_r9(u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	EMIT2(0x41, 0x59);   /* pop r9 */
+	*pprog = prog;
+}
+
 static void push_r12(u8 **pprog)
 {
 	u8 *prog = *pprog;
@@ -484,13 +500,17 @@ static void emit_prologue_tail_call(u8 **pprog, bool is_subprog)
 	*pprog = prog;
 }
 
+static void emit_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
+				enum bpf_priv_stack_mode priv_stack_mode);
+
 /*
  * Emit x86-64 prologue code for BPF program.
  * bpf_tail_call helper will skip the first X86_TAIL_CALL_OFFSET bytes
  * while jumping to another program
  */
 static void emit_prologue(u8 **pprog, u32 stack_depth, struct bpf_prog *bpf_prog,
-			  bool tail_call_reachable)
+			  bool tail_call_reachable,
+			  enum bpf_priv_stack_mode priv_stack_mode)
 {
 	bool ebpf_from_cbpf = bpf_prog_was_classic(bpf_prog);
 	bool is_exception_cb = bpf_prog->aux->exception_cb;
@@ -520,6 +540,8 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, struct bpf_prog *bpf_prog
 		 * first restore those callee-saved regs from stack, before
 		 * reusing the stack frame.
 		 */
+		if (priv_stack_mode != NO_PRIV_STACK)
+			pop_r9(&prog);
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
 		/* Reset the stack frame. */
@@ -531,6 +553,8 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, struct bpf_prog *bpf_prog
 
 	/* X86_TAIL_CALL_OFFSET is here */
 	EMIT_ENDBR();
+
+	emit_priv_frame_ptr(&prog, bpf_prog, priv_stack_mode);
 
 	/* sub rsp, rounded_stack_depth */
 	if (stack_depth)
@@ -1451,6 +1475,42 @@ static void emit_alu_helper_1(u8 **pprog, u8 insn_code, u32 dst_reg, s32 imm32)
 	*pprog = prog;
 }
 
+static void emit_root_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
+				     u32 orig_stack_depth)
+{
+	void __percpu *priv_frame_ptr;
+	u8 *prog = *pprog;
+
+	priv_frame_ptr = bpf_prog->aux->priv_stack_ptr + orig_stack_depth;
+
+	/* movabs r9, priv_frame_ptr */
+	emit_mov_imm64(&prog, X86_REG_R9, (long) priv_frame_ptr >> 32,
+		       (u32) (long) priv_frame_ptr);
+#ifdef CONFIG_SMP
+	/* add <r9>, gs:[<off>] */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x03, 0x0c, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	*pprog = prog;
+}
+
+static void emit_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
+				enum bpf_priv_stack_mode priv_stack_mode)
+{
+	u32 orig_stack_depth = round_up(bpf_prog->aux->stack_depth, 8);
+	u8 *prog = *pprog;
+
+	if (priv_stack_mode == PRIV_STACK_ROOT_PROG)
+		emit_root_priv_frame_ptr(&prog, bpf_prog, orig_stack_depth);
+	else if (priv_stack_mode == PRIV_STACK_SUB_PROG && orig_stack_depth)
+		/* r9 += orig_stack_depth */
+		emit_alu_helper_1(&prog, BPF_ALU64 | BPF_ADD | BPF_K, X86_REG_R9,
+				  orig_stack_depth);
+
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -1464,6 +1524,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 {
 	bool tail_call_reachable = bpf_prog->aux->tail_call_reachable;
 	struct bpf_insn *insn = bpf_prog->insnsi;
+	enum bpf_priv_stack_mode priv_stack_mode;
 	bool callee_regs_used[4] = {};
 	int insn_cnt = bpf_prog->len;
 	bool seen_exit = false;
@@ -1476,13 +1537,17 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int err;
 
 	stack_depth = bpf_prog->aux->stack_depth;
+	priv_stack_mode = bpf_prog->aux->priv_stack_mode;
+	if (priv_stack_mode != NO_PRIV_STACK)
+		stack_depth = 0;
 
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
-	emit_prologue(&prog, stack_depth, bpf_prog, tail_call_reachable);
+	emit_prologue(&prog, stack_depth, bpf_prog, tail_call_reachable,
+		      priv_stack_mode);
 	/* Exception callback will clobber callee regs for its own use, and
 	 * restore the original callee regs from main prog's stack frame.
 	 */
@@ -1520,6 +1585,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
+
+		if (priv_stack_mode != NO_PRIV_STACK) {
+			if (src_reg == BPF_REG_FP)
+				src_reg = X86_REG_R9;
+
+			if (dst_reg == BPF_REG_FP)
+				dst_reg = X86_REG_R9;
+		}
 
 		switch (insn->code) {
 			/* ALU */
@@ -2146,9 +2219,15 @@ populate_extable:
 			}
 			if (!imm32)
 				return -EINVAL;
+			if (priv_stack_mode != NO_PRIV_STACK) {
+				push_r9(&prog);
+				ip += 2;
+			}
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (priv_stack_mode != NO_PRIV_STACK)
+				pop_r9(&prog);
 			break;
 		}
 
@@ -3570,6 +3649,11 @@ bool bpf_jit_supports_exceptions(void)
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 */
 	return IS_ENABLED(CONFIG_UNWINDER_ORC);
+}
+
+bool bpf_jit_supports_private_stack(void)
+{
+	return true;
 }
 
 void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
