@@ -1475,6 +1475,37 @@ static void emit_alu_helper_1(u8 **pprog, u8 insn_code, u32 dst_reg, s32 imm32)
 	*pprog = prog;
 }
 
+/* emit ADD/SUB/AND/OR/XOR 'reg1 <op>= reg2' operations */
+static void emit_alu_helper_2(u8 **pprog, u8 insn_code, u32 dst_reg, u32 src_reg)
+{
+	u8 b2 = 0;
+	u8 *prog = *pprog;
+
+	maybe_emit_mod(&prog, dst_reg, src_reg,
+		       BPF_CLASS(insn_code) == BPF_ALU64);
+	b2 = simple_alu_opcodes[BPF_OP(insn_code)];
+	EMIT2(b2, add_2reg(0xC0, dst_reg, src_reg));
+
+	*pprog = prog;
+}
+
+/* emit 'reg *= imm' operations */
+static void emit_alu_helper_3(u8 **pprog, u8 insn_code, u32 dst_reg, s32 imm32)
+{
+	u8 *prog = *pprog;
+
+	maybe_emit_mod(&prog, dst_reg, dst_reg, BPF_CLASS(insn_code) == BPF_ALU64);
+
+	if (is_imm8(imm32))
+		/* imul dst_reg, dst_reg, imm8 */
+		EMIT3(0x6B, add_2reg(0xC0, dst_reg, dst_reg), imm32);
+	else
+		/* imul dst_reg, dst_reg, imm32 */
+		EMIT2_off32(0x69, add_2reg(0xC0, dst_reg, dst_reg), imm32);
+
+	*pprog = prog;
+}
+
 static void emit_root_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
 				     u32 orig_stack_depth)
 {
@@ -1578,7 +1609,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
-		u8 b2 = 0, b3 = 0;
+		u8 b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
 		s16 insn_off;
@@ -1606,10 +1637,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ALU64 | BPF_AND | BPF_X:
 		case BPF_ALU64 | BPF_OR | BPF_X:
 		case BPF_ALU64 | BPF_XOR | BPF_X:
-			maybe_emit_mod(&prog, dst_reg, src_reg,
-				       BPF_CLASS(insn->code) == BPF_ALU64);
-			b2 = simple_alu_opcodes[BPF_OP(insn->code)];
-			EMIT2(b2, add_2reg(0xC0, dst_reg, src_reg));
+			emit_alu_helper_2(&prog, insn->code, dst_reg, src_reg);
 			break;
 
 		case BPF_ALU64 | BPF_MOV | BPF_X:
@@ -1772,18 +1800,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 		case BPF_ALU | BPF_MUL | BPF_K:
 		case BPF_ALU64 | BPF_MUL | BPF_K:
-			maybe_emit_mod(&prog, dst_reg, dst_reg,
-				       BPF_CLASS(insn->code) == BPF_ALU64);
-
-			if (is_imm8(imm32))
-				/* imul dst_reg, dst_reg, imm8 */
-				EMIT3(0x6B, add_2reg(0xC0, dst_reg, dst_reg),
-				      imm32);
-			else
-				/* imul dst_reg, dst_reg, imm32 */
-				EMIT2_off32(0x69,
-					    add_2reg(0xC0, dst_reg, dst_reg),
-					    imm32);
+			emit_alu_helper_3(&prog, insn->code, dst_reg, imm32);
 			break;
 
 		case BPF_ALU | BPF_MUL | BPF_X:
