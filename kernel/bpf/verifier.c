@@ -5986,6 +5986,9 @@ static int check_ptr_alignment(struct bpf_verifier_env *env,
 
 static bool bpf_enable_private_stack(struct bpf_prog *prog)
 {
+	if (prog->aux->has_prog_call)
+		return true;
+
 	if (!bpf_jit_supports_private_stack())
 		return false;
 
@@ -6092,7 +6095,9 @@ process_func:
 			return -EACCES;
 		}
 
-		if (!priv_stack_eligible && depth >= BPF_PRIV_STACK_MIN_SUBTREE_SIZE) {
+		if (!priv_stack_eligible &&
+		    (depth >= BPF_PRIV_STACK_MIN_SUBTREE_SIZE ||
+		     env->prog->aux->has_prog_call)) {
 			subprog[orig_idx].priv_stack_eligible = true;
 			env->prog->aux->priv_stack_eligible = priv_stack_eligible = true;
 		}
@@ -6181,8 +6186,13 @@ continue_func:
 			}
 			subprog[ret_prog[j]].tail_call_reachable = true;
 		}
-	if (!check_priv_stack && subprog[0].tail_call_reachable)
+	if (!check_priv_stack && subprog[0].tail_call_reachable) {
+		if (env->prog->aux->has_prog_call) {
+			verbose(env, "cannot do prog call and tail call in the same prog\n");
+			return -EINVAL;
+		}
 		env->prog->aux->tail_call_reachable = true;
+	}
 
 	/* end of for() loop means the last insn of the 'subprog'
 	 * was reached. Doesn't matter whether it was JA or EXIT
@@ -11322,6 +11332,7 @@ enum special_kfunc_type {
 	KF_bpf_preempt_enable,
 	KF_bpf_iter_css_task_new,
 	KF_bpf_session_cookie,
+	KF_bpf_prog_call,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11387,6 +11398,7 @@ BTF_ID(func, bpf_session_cookie)
 #else
 BTF_ID_UNUSED
 #endif
+BTF_ID(func, bpf_prog_call)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -11432,6 +11444,11 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 
 	if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx])
 		return KF_ARG_PTR_TO_CTX;
+
+	if (meta->func_id == special_kfunc_list[KF_bpf_prog_call] && argno == 0) {
+		env->prog->aux->has_prog_call = true;
+		return KF_ARG_PTR_TO_CTX;
+	}
 
 	/* In this function, we verify the kfunc's BTF as per the argument type,
 	 * leaving the rest of the verification with respect to the register
@@ -20009,6 +20026,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	struct bpf_insn *insn;
 	void *old_bpf_func;
 	int err, num_exentries;
+	int nest_level = 1;
 
 	if (env->subprog_cnt <= 1)
 		return 0;
@@ -20099,9 +20117,13 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			} else if (!subtree_stack_depth) {
 				func[i]->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
 			} else {
+				if (env->prog->aux->has_prog_call) {
+					func[i]->aux->has_prog_call = true;
+					nest_level = BPF_MAX_PRIV_STACK_NEST_LEVEL;
+				}
 				func[i]->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
-				priv_stack_ptr =
-					__alloc_percpu_gfp(subtree_stack_depth, 8, GFP_KERNEL);
+				priv_stack_ptr = __alloc_percpu_gfp(
+					subtree_stack_depth * nest_level, 8, GFP_KERNEL);
 				if (!priv_stack_ptr) {
 					err = -ENOMEM;
 					goto out_free;

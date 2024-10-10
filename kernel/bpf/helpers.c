@@ -2749,6 +2749,25 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+__bpf_kfunc int bpf_prog_call(void *ctx, struct bpf_map *p__map, u32 index)
+{
+	struct bpf_array *array;
+	struct bpf_prog *prog;
+
+	if (p__map->map_type != BPF_MAP_TYPE_PROG_ARRAY)
+		return -EINVAL;
+
+	array = container_of(p__map, struct bpf_array, map);
+	if (unlikely(index >= array->map.max_entries))
+		return -E2BIG;
+
+	prog = READ_ONCE(array->ptrs[index]);
+	if (!prog)
+		return -ENOENT;
+
+	return bpf_prog_run(prog, ctx);
+}
+
 struct bpf_throw_ctx {
 	struct bpf_prog_aux *aux;
 	u64 sp;
@@ -3035,6 +3054,7 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_prog_call)
 BTF_KFUNCS_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

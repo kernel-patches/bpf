@@ -1493,6 +1493,7 @@ struct bpf_prog_aux {
 	bool exception_cb;
 	bool exception_boundary;
 	bool priv_stack_eligible;
+	bool has_prog_call;
 	struct bpf_arena *arena;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
@@ -1929,6 +1930,7 @@ struct bpf_array {
 
 #define BPF_COMPLEXITY_LIMIT_INSNS      1000000 /* yes. 1M insns */
 #define MAX_TAIL_CALL_CNT 33
+#define BPF_MAX_PRIV_STACK_NEST_LEVEL	4
 
 /* Maximum number of loops for bpf_loop and bpf_iter_num.
  * It's enum to expose it (and thus make it discoverable) through BTF.

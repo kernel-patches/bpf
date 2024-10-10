@@ -2426,10 +2426,13 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 				fp->aux->priv_stack_mode = NO_PRIV_STACK;
 			} else {
 				void __percpu *priv_stack_ptr;
+				int nest_level = 1;
 
+				if (fp->aux->has_prog_call)
+					nest_level = BPF_MAX_PRIV_STACK_NEST_LEVEL;
 				fp->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
-				priv_stack_ptr =
-					__alloc_percpu_gfp(fp->aux->stack_depth, 8, GFP_KERNEL);
+				priv_stack_ptr = __alloc_percpu_gfp(
+					fp->aux->stack_depth * nest_level, 8, GFP_KERNEL);
 				if (!priv_stack_ptr) {
 					*err = -ENOMEM;
 					return fp;
