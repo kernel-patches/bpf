@@ -1148,6 +1148,8 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 					     struct bpf_tramp_run_ctx *run_ctx);
 void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 					     struct bpf_tramp_run_ctx *run_ctx);
+int notrace __bpf_prog_enter_recur_limited(struct bpf_prog *prog);
+void notrace __bpf_prog_exit_recur_limited(struct bpf_prog *prog);
 void notrace __bpf_tramp_enter(struct bpf_tramp_image *tr);
 void notrace __bpf_tramp_exit(struct bpf_tramp_image *tr);
 typedef u64 (*bpf_trampoline_enter_t)(struct bpf_prog *prog,

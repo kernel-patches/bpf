@@ -960,6 +960,22 @@ void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 	rcu_read_unlock_trace();
 }
 
+int notrace __bpf_prog_enter_recur_limited(struct bpf_prog *prog)
+{
+	int cnt = this_cpu_inc_return(*(prog->active));
+
+	if (cnt > BPF_MAX_PRIV_STACK_NEST_LEVEL) {
+		bpf_prog_inc_misses_counter(prog);
+		return 0;
+	}
+	return cnt;
+}
+
+void notrace __bpf_prog_exit_recur_limited(struct bpf_prog *prog)
+{
+	this_cpu_dec(*(prog->active));
+}
+
 static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
 					      struct bpf_tramp_run_ctx *run_ctx)
 {

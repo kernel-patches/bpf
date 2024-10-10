@@ -501,7 +501,8 @@ static void emit_prologue_tail_call(u8 **pprog, bool is_subprog)
 }
 
 static void emit_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
-				enum bpf_priv_stack_mode priv_stack_mode);
+				enum bpf_priv_stack_mode priv_stack_mode,
+				bool is_subprog, u8 *image, u8 *temp);
 
 /*
  * Emit x86-64 prologue code for BPF program.
@@ -510,7 +511,8 @@ static void emit_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
  */
 static void emit_prologue(u8 **pprog, u32 stack_depth, struct bpf_prog *bpf_prog,
 			  bool tail_call_reachable,
-			  enum bpf_priv_stack_mode priv_stack_mode)
+			  enum bpf_priv_stack_mode priv_stack_mode, u8 *image,
+			  u8 *temp)
 {
 	bool ebpf_from_cbpf = bpf_prog_was_classic(bpf_prog);
 	bool is_exception_cb = bpf_prog->aux->exception_cb;
@@ -554,7 +556,7 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, struct bpf_prog *bpf_prog
 	/* X86_TAIL_CALL_OFFSET is here */
 	EMIT_ENDBR();
 
-	emit_priv_frame_ptr(&prog, bpf_prog, priv_stack_mode);
+	emit_priv_frame_ptr(&prog, bpf_prog, priv_stack_mode, is_subprog, image, temp);
 
 	/* sub rsp, rounded_stack_depth */
 	if (stack_depth)
@@ -694,6 +696,15 @@ static void emit_return(u8 **pprog, u8 *ip)
 	}
 
 	*pprog = prog;
+}
+
+static int num_bytes_of_emit_return(void)
+{
+	if (cpu_feature_enabled(X86_FEATURE_RETHUNK))
+		return 5;
+	if (IS_ENABLED(CONFIG_MITIGATION_SLS))
+		return 2;
+	return 1;
 }
 
 #define BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack)	(-16 - round_up(stack, 8))
@@ -1527,17 +1538,67 @@ static void emit_root_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
 }
 
 static void emit_priv_frame_ptr(u8 **pprog, struct bpf_prog *bpf_prog,
-				enum bpf_priv_stack_mode priv_stack_mode)
+				enum bpf_priv_stack_mode priv_stack_mode,
+				bool is_subprog, u8 *image, u8 *temp)
 {
 	u32 orig_stack_depth = round_up(bpf_prog->aux->stack_depth, 8);
 	u8 *prog = *pprog;
 
-	if (priv_stack_mode == PRIV_STACK_ROOT_PROG)
-		emit_root_priv_frame_ptr(&prog, bpf_prog, orig_stack_depth);
-	else if (priv_stack_mode == PRIV_STACK_SUB_PROG && orig_stack_depth)
+	if (priv_stack_mode == PRIV_STACK_ROOT_PROG) {
+		int offs;
+		u8 *func;
+
+		if (!bpf_prog->aux->has_prog_call) {
+			emit_root_priv_frame_ptr(&prog, bpf_prog, orig_stack_depth);
+		} else {
+			EMIT1(0x57);		/* push rdi */
+			if (is_subprog) {
+				/* subprog may have up to 5 arguments */
+				EMIT1(0x56);		/* push rsi */
+				EMIT1(0x52);		/* push rdx */
+				EMIT1(0x51);		/* push rcx */
+				EMIT2(0x41, 0x50);	/* push r8 */
+			}
+			emit_mov_imm64(&prog, BPF_REG_1, (long) bpf_prog >> 32,
+				       (u32) (long) bpf_prog);
+			func = (u8 *)__bpf_prog_enter_recur_limited;
+			offs = prog - temp;
+			offs += x86_call_depth_emit_accounting(&prog, func, image + offs);
+			emit_call(&prog, func, image + offs);
+			if (is_subprog) {
+				EMIT2(0x41, 0x58);	/* pop r8 */
+				EMIT1(0x59);		/* pop rcx */
+				EMIT1(0x5a);		/* pop rdx */
+				EMIT1(0x5e);		/* pop rsi */
+			}
+			EMIT1(0x5f);		/* pop rdi */
+
+			EMIT4(0x48, 0x83, 0xf8, 0x0);   /* cmp rax,0x0 */
+			EMIT2(X86_JNE, num_bytes_of_emit_return() + 1);
+
+			/* return if stack recursion has been reached */
+			EMIT1(0xC9);    /* leave */
+			emit_return(&prog, image + (prog - temp));
+
+			/* cnt -= 1 */
+			emit_alu_helper_1(&prog, BPF_ALU64 | BPF_SUB | BPF_K,
+					  BPF_REG_0, 1);
+
+			/* accum_stack_depth = cnt * subtree_stack_depth */
+			emit_alu_helper_3(&prog, BPF_ALU64 | BPF_MUL | BPF_K, BPF_REG_0,
+					  bpf_prog->aux->subtree_stack_depth);
+
+			emit_root_priv_frame_ptr(&prog, bpf_prog, orig_stack_depth);
+
+			/* r9 += accum_stack_depth */
+			emit_alu_helper_2(&prog, BPF_ALU64 | BPF_ADD | BPF_X, X86_REG_R9,
+					  BPF_REG_0);
+		}
+	} else if (priv_stack_mode == PRIV_STACK_SUB_PROG && orig_stack_depth) {
 		/* r9 += orig_stack_depth */
 		emit_alu_helper_1(&prog, BPF_ALU64 | BPF_ADD | BPF_K, X86_REG_R9,
 				  orig_stack_depth);
+	}
 
 	*pprog = prog;
 }
@@ -1578,7 +1639,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
 	emit_prologue(&prog, stack_depth, bpf_prog, tail_call_reachable,
-		      priv_stack_mode);
+		      priv_stack_mode, image, temp);
 	/* Exception callback will clobber callee regs for its own use, and
 	 * restore the original callee regs from main prog's stack frame.
 	 */
@@ -2519,6 +2580,23 @@ emit_jmp:
 				if (arena_vm_start)
 					pop_r12(&prog);
 			}
+
+			if (bpf_prog->aux->has_prog_call) {
+				u8 *func, *ip;
+				int offs;
+
+				ip = image + addrs[i - 1];
+				/* save and restore the return value */
+				EMIT1(0x50);    /* push rax */
+				emit_mov_imm64(&prog, BPF_REG_1, (long) bpf_prog >> 32,
+					       (u32) (long) bpf_prog);
+				func = (u8 *)__bpf_prog_exit_recur_limited;
+				offs = prog - temp;
+				offs += x86_call_depth_emit_accounting(&prog, func, ip + offs);
+				emit_call(&prog, func, ip + offs);
+				EMIT1(0x58);    /* pop rax */
+			}
+
 			EMIT1(0xC9);         /* leave */
 			emit_return(&prog, image + addrs[i - 1] + (prog - temp));
 			break;
