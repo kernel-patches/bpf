@@ -6,5 +6,11 @@
 
 char _license[] SEC("license") = "GPL";
 
+int dangling_subprog(void)
+{
+	/* do nothing, just be here */
+	return 0;
+}
+
 SEC(".struct_ops.link")
 struct bpf_testmod_ops testmod_do_detach;
