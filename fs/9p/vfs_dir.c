@@ -74,6 +74,14 @@ static struct p9_rdir *v9fs_alloc_rdir_buf(struct file *filp, int buflen)
 	return fid->rdir;
 }
 
+static void v9fs_free_rdir_buf(struct file *filp)
+{
+	struct p9_fid *fid = filp->private_data;
+
+	kfree(fid->rdir);
+	fid->rdir = NULL;
+}
+
 /**
  * v9fs_dir_readdir - iterate through a directory
  * @file: opened file structure
@@ -129,8 +137,10 @@ static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 			over = !dir_emit(ctx, st.name, strlen(st.name),
 					QID2INO(&st.qid), dt_type(&st));
 			p9stat_free(&st);
-			if (over)
+			if (over) {
+				v9fs_free_rdir_buf(file);
 				return 0;
+			}
 
 			rdir->head += err;
 			ctx->pos += err;
@@ -185,8 +195,10 @@ static int v9fs_dir_readdir_dotl(struct file *file, struct dir_context *ctx)
 			if (!dir_emit(ctx, curdirent.d_name,
 				      strlen(curdirent.d_name),
 				      QID2INO(&curdirent.qid),
-				      curdirent.d_type))
+				      curdirent.d_type)) {
+				v9fs_free_rdir_buf(file);
 				return 0;
+			}
 
 			ctx->pos = curdirent.d_off;
 			rdir->head += err;
