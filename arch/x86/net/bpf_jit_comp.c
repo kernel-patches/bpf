@@ -1406,6 +1406,51 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+/* emit ADD/SUB/AND/OR/XOR 'reg <op>= imm' operations */
+static void emit_alu_helper_1(u8 **pprog, u8 insn_code, u32 dst_reg, s32 imm32)
+{
+	u8 b2 = 0, b3 = 0;
+	u8 *prog = *pprog;
+
+	maybe_emit_1mod(&prog, dst_reg, BPF_CLASS(insn_code) == BPF_ALU64);
+
+	/*
+	 * b3 holds 'normal' opcode, b2 short form only valid
+	 * in case dst is eax/rax.
+	 */
+	switch (BPF_OP(insn_code)) {
+	case BPF_ADD:
+		b3 = 0xC0;
+		b2 = 0x05;
+		break;
+	case BPF_SUB:
+		b3 = 0xE8;
+		b2 = 0x2D;
+		break;
+	case BPF_AND:
+		b3 = 0xE0;
+		b2 = 0x25;
+		break;
+	case BPF_OR:
+		b3 = 0xC8;
+		b2 = 0x0D;
+		break;
+	case BPF_XOR:
+		b3 = 0xF0;
+		b2 = 0x35;
+		break;
+	}
+
+	if (is_imm8(imm32))
+		EMIT3(0x83, add_1reg(b3, dst_reg), imm32);
+	else if (is_axreg(dst_reg))
+		EMIT1_off32(b2, imm32);
+	else
+		EMIT2_off32(0x81, add_1reg(b3, dst_reg), imm32);
+
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -1567,42 +1612,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ALU64 | BPF_AND | BPF_K:
 		case BPF_ALU64 | BPF_OR | BPF_K:
 		case BPF_ALU64 | BPF_XOR | BPF_K:
-			maybe_emit_1mod(&prog, dst_reg,
-					BPF_CLASS(insn->code) == BPF_ALU64);
-
-			/*
-			 * b3 holds 'normal' opcode, b2 short form only valid
-			 * in case dst is eax/rax.
-			 */
-			switch (BPF_OP(insn->code)) {
-			case BPF_ADD:
-				b3 = 0xC0;
-				b2 = 0x05;
-				break;
-			case BPF_SUB:
-				b3 = 0xE8;
-				b2 = 0x2D;
-				break;
-			case BPF_AND:
-				b3 = 0xE0;
-				b2 = 0x25;
-				break;
-			case BPF_OR:
-				b3 = 0xC8;
-				b2 = 0x0D;
-				break;
-			case BPF_XOR:
-				b3 = 0xF0;
-				b2 = 0x35;
-				break;
-			}
-
-			if (is_imm8(imm32))
-				EMIT3(0x83, add_1reg(b3, dst_reg), imm32);
-			else if (is_axreg(dst_reg))
-				EMIT1_off32(b2, imm32);
-			else
-				EMIT2_off32(0x81, add_1reg(b3, dst_reg), imm32);
+			emit_alu_helper_1(&prog, insn->code, dst_reg, imm32);
 			break;
 
 		case BPF_ALU64 | BPF_MOV | BPF_K:
