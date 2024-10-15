@@ -1324,16 +1324,22 @@ extern const struct of_device_id of_mtk_match[];
 
 static inline bool mtk_is_netsys_v1(struct mtk_eth *eth)
 {
+	if (IS_ENABLED(CONFIG_SOC_MT7621))
+		return true;
 	return eth->soc->version == 1;
 }
 
 static inline bool mtk_is_netsys_v2_or_greater(struct mtk_eth *eth)
 {
+	if (IS_ENABLED(CONFIG_SOC_MT7621))
+		return false;
 	return eth->soc->version > 1;
 }
 
 static inline bool mtk_is_netsys_v3_or_greater(struct mtk_eth *eth)
 {
+	if (IS_ENABLED(CONFIG_SOC_MT7621))
+		return false;
 	return eth->soc->version > 2;
 }
 
