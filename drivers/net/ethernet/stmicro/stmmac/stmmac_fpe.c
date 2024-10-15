@@ -332,8 +332,8 @@ static void dwxgmac3_fpe_configure(void __iomem *ioaddr,
 	}
 
 	value = readl(ioaddr + XGMAC_RXQ_CTRL1);
-	value &= ~XGMAC_RQ;
-	value |= (num_rxq - 1) << XGMAC_RQ_SHIFT;
+	value &= ~XGMAC_FPRQ;
+	value |= (num_rxq - 1) << XGMAC_FPRQ_SHIFT;
 	writel(value, ioaddr + XGMAC_RXQ_CTRL1);
 
 	value = readl(ioaddr + XGMAC_MAC_FPE_CTRL_STS);
