@@ -158,10 +158,9 @@ static int get_vendor_id(int ifindex)
 
 	len = read(fd, buf, sizeof(buf));
 	close(fd);
-	if (len < 0)
+	if ((len < 0) || (len >= (ssize_t)sizeof(buf)))
 		return -1;
-	if (len >= (ssize_t)sizeof(buf))
-		return -1;
+
 	buf[len] = '\0';
 
 	return strtol(buf, NULL, 0);
