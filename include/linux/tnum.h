@@ -57,7 +57,6 @@ struct tnum tnum_cast(struct tnum a, u8 size);
 
 /* Return @a sign-extended from @size bytes */
 struct tnum tnum_scast(struct tnum a, u8 size);
-void tnum_get_smin_max(struct tnum t, s64 *smin_ptr, s64 *smax_ptr);
 
 /* Returns true if @a is a known constant */
 static inline bool tnum_is_const(struct tnum a)

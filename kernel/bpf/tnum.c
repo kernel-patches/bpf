@@ -157,23 +157,6 @@ struct tnum tnum_cast(struct tnum a, u8 size)
 	return a;
 }
 
-void tnum_get_smin_max(struct tnum t, s64 *smin_ptr, s64 *smax_ptr)
-{
-	s64 smin, smax;
-
-	if (t.mask & (1ULL << 63)) {
-		*smin_ptr = S64_MIN;
-		*smax_ptr = S64_MAX;
-		return;
-	}
-
-	smin = (s64)(t.value | (t.mask & ~(1ULL << 63)));
-	smax = (s64)(t.value & ~(t.mask & ~(1ULL << 63)));
-
-	*smin_ptr = smin;
-	*smax_ptr = smax;
-}
-
 struct tnum tnum_scast(struct tnum a, u8 size)
 {
 	u64 s = size * 8 - 1;
