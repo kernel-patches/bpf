@@ -150,7 +150,7 @@ config LOONGARCH
 	select HAVE_LIVEPATCH
 	select HAVE_MOD_ARCH_SPECIFIC
 	select HAVE_NMI
-	select HAVE_OBJTOOL if AS_HAS_EXPLICIT_RELOCS && AS_HAS_THIN_ADD_SUB
+	select HAVE_OBJTOOL if TOOLCHAIN_SUPPORTS_OBJTOOL
 	select HAVE_PCI
 	select HAVE_PERF_EVENTS
 	select HAVE_PERF_REGS
@@ -283,6 +283,12 @@ config AS_HAS_LBT_EXTENSION
 
 config AS_HAS_LVZ_EXTENSION
 	def_bool $(as-instr,hvcl 0)
+
+config CC_HAS_ANNOTATE_TABLEJUMP
+	def_bool $(cc-option,-mannotate-tablejump)
+
+config TOOLCHAIN_SUPPORTS_OBJTOOL
+	def_bool AS_HAS_EXPLICIT_RELOCS && AS_HAS_THIN_ADD_SUB && CC_HAS_ANNOTATE_TABLEJUMP
 
 menu "Kernel type and options"
 
