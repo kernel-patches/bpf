@@ -1707,6 +1707,14 @@ bool bpf_opcode_in_insntable(u8 code)
 }
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
+/*
+ * This symbol is an empty weak definition and is only overridden
+ * by archs that have special requirements.
+ */
+#ifndef arch_prepare_goto
+#define arch_prepare_goto()
+#endif
+
 /**
  *	___bpf_prog_run - run eBPF program on a given context
  *	@regs: is the array of MAX_BPF_EXT_REG eBPF pseudo-registers
@@ -1744,6 +1752,7 @@ static u64 ___bpf_prog_run(u64 *regs, const struct bpf_insn *insn)
 #define CONT_JMP ({ insn++; goto select_insn; })
 
 select_insn:
+	arch_prepare_goto();
 	goto *jumptable[insn->code];
 
 	/* Explicitly mask the register-based shift amounts with 63 or 31
