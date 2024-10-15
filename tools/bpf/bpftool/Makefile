@@ -147,7 +147,13 @@ ifeq ($(feature-llvm),1)
   # If LLVM is available, use it for JIT disassembly
   CFLAGS  += -DHAVE_LLVM_SUPPORT
   LLVM_CONFIG_LIB_COMPONENTS := mcdisassembler all-targets
-  CFLAGS  += $(shell $(LLVM_CONFIG) --cflags)
+  # When bpftool build is called from another Makefile which already sets
+  # -D_GNU_SOURCE, do not let llvm-config add it again as it will cause conflict.
+  ifneq ($(filter -D_GNU_SOURCE=,$(CFLAGS)),)
+    CFLAGS += $(filter-out -D_GNU_SOURCE,$(shell $(LLVM_CONFIG) --cflags))
+  else
+    CFLAGS += $(shell $(LLVM_CONFIG) --cflags)
+  endif
   LIBS    += $(shell $(LLVM_CONFIG) --libs $(LLVM_CONFIG_LIB_COMPONENTS))
   ifeq ($(shell $(LLVM_CONFIG) --shared-mode),static)
     LIBS += $(shell $(LLVM_CONFIG) --system-libs $(LLVM_CONFIG_LIB_COMPONENTS))
