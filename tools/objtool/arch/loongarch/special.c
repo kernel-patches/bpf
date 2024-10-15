@@ -47,8 +47,18 @@ struct reloc *arch_find_switch_table(struct objtool_file *file,
 	unsigned long table_offset;
 
 	annotate_reloc = find_reloc_by_table_annotate(file, insn);
-	if (!annotate_reloc)
-		return NULL;
+	if (!annotate_reloc) {
+		annotate_reloc = find_reloc_by_dest_range(file->elf, insn->sec,
+							  insn->offset, insn->len);
+		if (!annotate_reloc)
+			return NULL;
+
+		if (!annotate_reloc->sym->sec->rodata)
+			return NULL;
+
+		if (reloc_type(annotate_reloc) != R_LARCH_NONE)
+			return NULL;
+	}
 
 	table_sec = annotate_reloc->sym->sec;
 	table_offset = annotate_reloc->sym->offset;
