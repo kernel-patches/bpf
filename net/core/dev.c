@@ -9579,6 +9579,7 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 
 	/* don't call drivers if the effective program didn't change */
 	if (new_prog != cur_prog) {
+reinstall:
 		bpf_op = dev_xdp_bpf_op(dev, mode);
 		if (!bpf_op) {
 			NL_SET_ERR_MSG(extack, "Underlying driver does not support XDP in native mode");
@@ -9586,8 +9587,17 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		}
 
 		err = dev_xdp_install(dev, mode, bpf_op, extack, flags, new_prog);
-		if (err)
+		if (err) {
+			/* The driver returns not supported even .ndo_bpf
+			 * implemented, fall back to SKB mode.
+			 */
+			if (err == -EOPNOTSUPP && mode == XDP_MODE_DRV &&
+			    !(flags & XDP_FLAGS_DRV_MODE)) {
+				mode = XDP_MODE_SKB;
+				goto reinstall;
+			}
 			return err;
+		}
 	}
 
 	if (link)
