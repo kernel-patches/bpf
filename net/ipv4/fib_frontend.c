@@ -341,10 +341,11 @@ EXPORT_SYMBOL_GPL(fib_info_nh_uses_dev);
  * - check, that packet arrived from expected physical interface.
  * called with rcu_read_lock()
  */
-static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
-				 dscp_t dscp, int oif, struct net_device *dev,
-				 int rpf, struct in_device *idev, u32 *itag)
+int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
+			  dscp_t dscp, int oif, struct net_device *dev,
+			  struct in_device *idev, u32 *itag)
 {
+	int rpf = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(idev);
 	struct net *net = dev_net(dev);
 	struct flow_keys flkeys;
 	int ret, no_addr;
@@ -352,6 +353,28 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	struct flowi4 fl4;
 	bool dev_match;
 
+	/* Ignore rp_filter for packets protected by IPsec. */
+	if (!rpf && !fib_num_tclassid_users(net) &&
+	    (dev->ifindex != oif || !IN_DEV_TX_REDIRECTS(idev))) {
+		if (IN_DEV_ACCEPT_LOCAL(idev))
+			goto last_resort;
+		/* with custom local routes in place, checking local addresses
+		 * only will be too optimistic, with custom rules, checking
+		 * local addresses only can be too strict, e.g. due to vrf
+		 */
+		if (net->ipv4.fib_has_custom_local_routes ||
+		    fib4_has_custom_rules(net))
+			goto full_check;
+		/* Within the same container, it is regarded as a martian source,
+		 * and the same host but different containers are not.
+		 */
+		if (inet_lookup_ifaddr_rcu(net, src))
+			return -EINVAL;
+
+		goto last_resort;
+	}
+
+full_check:
 	fl4.flowi4_oif = 0;
 	fl4.flowi4_l3mdev = l3mdev_master_ifindex_rcu(dev);
 	fl4.flowi4_iif = oif ? : LOOPBACK_IFINDEX;
@@ -415,41 +438,6 @@ e_inval:
 	return -EINVAL;
 e_rpf:
 	return -EXDEV;
-}
-
-/* Ignore rp_filter for packets protected by IPsec. */
-int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
-			dscp_t dscp, int oif, struct net_device *dev,
-			struct in_device *idev, u32 *itag)
-{
-	int r = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(idev);
-	struct net *net = dev_net(dev);
-
-	if (!r && !fib_num_tclassid_users(net) &&
-	    (dev->ifindex != oif || !IN_DEV_TX_REDIRECTS(idev))) {
-		if (IN_DEV_ACCEPT_LOCAL(idev))
-			goto ok;
-		/* with custom local routes in place, checking local addresses
-		 * only will be too optimistic, with custom rules, checking
-		 * local addresses only can be too strict, e.g. due to vrf
-		 */
-		if (net->ipv4.fib_has_custom_local_routes ||
-		    fib4_has_custom_rules(net))
-			goto full_check;
-		/* Within the same container, it is regarded as a martian source,
-		 * and the same host but different containers are not.
-		 */
-		if (inet_lookup_ifaddr_rcu(net, src))
-			return -EINVAL;
-
-ok:
-		*itag = 0;
-		return 0;
-	}
-
-full_check:
-	return __fib_validate_source(skb, src, dst, dscp, oif, dev, r, idev,
-				     itag);
 }
 
 static inline __be32 sk_extract_addr(struct sockaddr *addr)
