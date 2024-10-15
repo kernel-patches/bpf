@@ -839,11 +839,22 @@ void page_pool_put_unrefed_page(struct page_pool *pool, struct page *page,
 }
 EXPORT_SYMBOL(page_pool_put_unrefed_page);
 
+static void page_pool_bulk_rec_add(struct xdp_frame_bulk *bulk,
+				   struct page *page)
+{
+	bulk->q[bulk->count++] = page;
+
+	if (unlikely(bulk->count == ARRAY_SIZE(bulk->q))) {
+		page_pool_put_page_bulk(bulk->q, ARRAY_SIZE(bulk->q), true);
+		bulk->count = 0;
+	}
+}
+
 /**
  * page_pool_put_page_bulk() - release references on multiple pages
- * @pool:	pool from which pages were allocated
  * @data:	array holding page pointers
  * @count:	number of pages in @data
+ * @rec:	whether it's called recursively by itself
  *
  * Tries to refill a number of pages into the ptr_ring cache holding ptr_ring
  * producer lock. If the ptr_ring is full, page_pool_put_page_bulk()
@@ -854,27 +865,52 @@ EXPORT_SYMBOL(page_pool_put_unrefed_page);
  * Please note the caller must not use data area after running
  * page_pool_put_page_bulk(), as this function overwrites it.
  */
-void page_pool_put_page_bulk(struct page_pool *pool, struct page **data,
-			     u32 count)
+void page_pool_put_page_bulk(struct page **data, u32 count, bool rec)
 {
+	struct page_pool *pool = NULL;
+	struct xdp_frame_bulk sub;
 	int i, bulk_len = 0;
 	bool allow_direct;
 	bool in_softirq;
 
-	allow_direct = page_pool_napi_local(pool);
+	xdp_frame_bulk_init(&sub);
 
 	for (i = 0; i < count; i++) {
-		netmem_ref netmem = page_to_netmem(compound_head(data[i]));
+		struct page *page;
+		netmem_ref netmem;
 
-		/* It is not the last user for the page frag case */
-		if (!page_pool_is_last_ref(netmem))
+		if (!rec) {
+			page = compound_head(data[i]);
+			netmem = page_to_netmem(page);
+
+			/* It is not the last user for the page frag case */
+			if (!page_pool_is_last_ref(netmem))
+				continue;
+		} else {
+			page = data[i];
+			netmem = page_to_netmem(page);
+		}
+
+		if (unlikely(!pool)) {
+			pool = page->pp;
+			allow_direct = page_pool_napi_local(pool);
+		} else if (page->pp != pool) {
+			/*
+			 * If the page belongs to a different page_pool, save
+			 * it to handle recursively after the main loop.
+			 */
+			page_pool_bulk_rec_add(&sub, page);
 			continue;
+		}
 
 		netmem = __page_pool_put_page(pool, netmem, -1, allow_direct);
 		/* Approved for bulk recycling in ptr_ring cache */
 		if (netmem)
 			data[bulk_len++] = (__force void *)netmem;
 	}
+
+	if (sub.count)
+		page_pool_put_page_bulk(sub.q, sub.count, true);
 
 	if (!bulk_len)
 		return;
