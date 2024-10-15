@@ -1141,7 +1141,7 @@ struct mtk_reg_map {
  * @foe_entry_size		Foe table entry size.
  * @has_accounting		Bool indicating support for accounting of
  *				offloaded flows.
- * @desc_size			Tx/Rx DMA descriptor size.
+ * @desc_shift			Tx/Rx DMA descriptor size (in power-of-2).
  * @irq_done_mask		Rx irq done register mask.
  * @dma_l4_valid		Rx DMA valid register mask.
  * @dma_max_len			Max DMA tx/rx buffer length.
@@ -1162,14 +1162,14 @@ struct mtk_soc_data {
 	bool		has_accounting;
 	bool		disable_pll_modes;
 	struct {
-		u32	desc_size;
+		u32	desc_shift;
 		u32	dma_max_len;
 		u32	dma_len_offset;
 		u32	dma_size;
 		u32	fq_dma_size;
 	} tx;
 	struct {
-		u32	desc_size;
+		u32	desc_shift;
 		u32	irq_done_mask;
 		u32	dma_l4_valid;
 		u32	dma_max_len;
