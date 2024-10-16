@@ -6288,31 +6288,35 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	s64 smin_bound, smax_bound;
-	struct tnum t;
+	u64 s = size * 8 - 1;
+	u64 sign_mask = 1ULL << s;
+	s64 smin_value, smax_value;
+	u64 umax_value;
+
+	if (size >= 8)
+		return;
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	smin_bound = -(1LL << (size * 8 - 1));
-	smax_bound = (1LL << (size * 8 - 1)) - 1;
-
-	t = tnum_range(smin_bound, smax_bound);
-
-	reg->var_off = tnum_intersect(reg->var_off, t);
-
-	reg_bounds_sync(reg);
-
-	if (size <= 4) {
-		reg->s32_min_value = (s32)reg->smin_value;
-		reg->s32_max_value = (s32)reg->smax_value;
-		reg->u32_min_value = (u32)reg->umin_value;
-		reg->u32_max_value = (u32)reg->umax_value;
+	if (reg->var_off.mask & sign_mask) {
+		smin_value = -(1LL << s);
+		smax_value = (1LL << s) - 1;
 	} else {
-		reg->s32_min_value = S32_MIN;
-		reg->s32_max_value = S32_MAX;
-		reg->u32_min_value = 0;
-		reg->u32_max_value = U32_MAX;
+		smin_value = (s64)(reg->var_off.value);
+		smax_value = (s64)(reg->var_off.value | reg->var_off.mask);
 	}
+
+	reg->smin_value = smin_value;
+	reg->smax_value = smax_value;
+
+	reg->umin_value = reg->var_off.value;
+	umax_value = reg->var_off.value | reg->var_off.mask;
+	reg->umax_value = umax_value;
+
+	reg->s32_min_value = (s32)smin_value;
+	reg->s32_max_value = (s32)smax_value;
+	reg->u32_min_value = (u32)reg->umin_value;
+	reg->u32_max_value = (u32)umax_value;
 }
 
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
