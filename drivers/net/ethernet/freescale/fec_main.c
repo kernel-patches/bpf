@@ -157,7 +157,7 @@ static const struct fec_devinfo fec_imx8mq_info = {
 		  FEC_QUIRK_ERR007885 | FEC_QUIRK_BUG_CAPTURE |
 		  FEC_QUIRK_HAS_RACC | FEC_QUIRK_HAS_COALESCE |
 		  FEC_QUIRK_CLEAR_SETUP_MII | FEC_QUIRK_HAS_MULTI_QUEUES |
-		  FEC_QUIRK_HAS_EEE | FEC_QUIRK_WAKEUP_FROM_INT2 |
+		  FEC_QUIRK_HAS_EEE | FEC_QUIRK_DT_IRQ2_IS_MAIN_IRQ |
 		  FEC_QUIRK_HAS_MDIO_C45,
 };
 
@@ -4260,10 +4260,7 @@ static void fec_enet_get_wakeup_irq(struct platform_device *pdev)
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct fec_enet_private *fep = netdev_priv(ndev);
 
-	if (fep->quirks & FEC_QUIRK_WAKEUP_FROM_INT2)
-		fep->wake_irq = fep->irq[2];
-	else
-		fep->wake_irq = fep->irq[0];
+	fep->wake_irq = fep->irq[0];
 }
 
 static int fec_enet_init_stop_mode(struct fec_enet_private *fep,
@@ -4495,10 +4492,17 @@ fec_probe(struct platform_device *pdev)
 		goto failed_init;
 
 	for (i = 0; i < irq_cnt; i++) {
-		snprintf(irq_name, sizeof(irq_name), "int%d", i);
+		int irq_num;
+
+		if (fep->quirks & FEC_QUIRK_DT_IRQ2_IS_MAIN_IRQ)
+			irq_num = (i + irq_cnt - 1) % irq_cnt;
+		else
+			irq_num = i;
+
+		snprintf(irq_name, sizeof(irq_name), "int%d", irq_num);
 		irq = platform_get_irq_byname_optional(pdev, irq_name);
 		if (irq < 0)
-			irq = platform_get_irq(pdev, i);
+			irq = platform_get_irq(pdev, irq_num);
 		if (irq < 0) {
 			ret = irq;
 			goto failed_irq;

@@ -504,8 +504,28 @@ struct bufdesc_ex {
  */
 #define FEC_QUIRK_DELAYED_CLKS_SUPPORT	(1 << 21)
 
-/* i.MX8MQ SoC integration mix wakeup interrupt signal into "int2" interrupt line. */
-#define FEC_QUIRK_WAKEUP_FROM_INT2	(1 << 22)
+/* With i.MX8MQ and compatible SoCs, the order of the IRQs in the
+ * device tree is not optimal. The driver expects the first three IRQs
+ * to match their corresponding queue, while the last (fourth) IRQ is
+ * used for the PPS:
+ *
+ * - 1st IRQ: "int0": queue0 + other IRQs
+ * - 2nd IRQ: "int1": queue1
+ * - 3rd IRQ: "int2": queue2
+ * - 4th IRQ: "pps": pps
+ *
+ * However, the i.MX8MQ and compatible SoCs do not use the
+ * "interrupt-names" property and specify the IRQs in the wrong order:
+ *
+ * - 1st IRQ: queue1
+ * - 2nd IRQ: queue2
+ * - 3rd IRQ: queue0 + other IRQs
+ * - 4th IRQ: pps
+ *
+ * If the following quirk is active, put the IRQs back in the correct
+ * order, this is done in fec_probe().
+ */
+#define FEC_QUIRK_DT_IRQ2_IS_MAIN_IRQ	BIT(22)
 
 /* i.MX6Q adds pm_qos support */
 #define FEC_QUIRK_HAS_PMQOS			BIT(23)
