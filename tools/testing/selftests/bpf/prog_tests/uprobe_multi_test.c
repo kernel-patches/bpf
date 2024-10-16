@@ -836,10 +836,10 @@ uprobe_consumer_test(struct uprobe_multi_consumers *skel,
 	return 0;
 }
 
-static void consumer_test(struct uprobe_multi_consumers *skel,
-			  unsigned long before, unsigned long after)
+static int consumer_test(struct uprobe_multi_consumers *skel,
+			 unsigned long before, unsigned long after)
 {
-	int err, idx;
+	int err, idx, ret = -1;
 
 	printf("consumer_test before %lu after %lu\n", before, after);
 
@@ -869,32 +869,29 @@ static void consumer_test(struct uprobe_multi_consumers *skel,
 			fmt = "prog 0/1: uprobe";
 		} else {
 			/*
-			 * uprobe return is tricky ;-)
-			 *
 			 * to trigger uretprobe consumer, the uretprobe needs to be installed,
 			 * which means one of the 'return' uprobes was alive when probe was hit:
 			 *
 			 *   idxs: 2/3 uprobe return in 'installed' mask
-			 *
-			 * in addition if 'after' state removes everything that was installed in
-			 * 'before' state, then uprobe kernel object goes away and return uprobe
-			 * is not installed and we won't hit it even if it's in 'after' state.
 			 */
 			unsigned long had_uretprobes  = before & 0b1100; /* is uretprobe installed */
-			unsigned long probe_preserved = before & after;  /* did uprobe go away */
 
-			if (had_uretprobes && probe_preserved && test_bit(idx, after))
+			if (had_uretprobes && test_bit(idx, after))
 				val++;
 			fmt = "idx 2/3: uretprobe";
 		}
 
-		ASSERT_EQ(skel->bss->uprobe_result[idx], val, fmt);
+		if (!ASSERT_EQ(skel->bss->uprobe_result[idx], val, fmt))
+			goto cleanup;
 		skel->bss->uprobe_result[idx] = 0;
 	}
+
+	ret = 0;
 
 cleanup:
 	for (idx = 0; idx < 4; idx++)
 		uprobe_detach(skel, idx);
+	return ret;
 }
 
 static void test_consumers(void)
@@ -946,9 +943,11 @@ static void test_consumers(void)
 
 	for (before = 0; before < 16; before++) {
 		for (after = 0; after < 16; after++)
-			consumer_test(skel, before, after);
+			if (consumer_test(skel, before, after))
+				goto out;
 	}
 
+out:
 	uprobe_multi_consumers__destroy(skel);
 }
 
