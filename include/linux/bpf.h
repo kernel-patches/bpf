@@ -1220,6 +1220,7 @@ struct bpf_attach_target_info {
 	struct module *tgt_mod;
 	const char *tgt_name;
 	const struct btf_type *tgt_type;
+	bool tgt_tail_call_reachable;
 };
 
 #define BPF_DISPATCHER_MAX 48 /* Fits in 2048B */
