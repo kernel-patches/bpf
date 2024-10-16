@@ -73,6 +73,27 @@ def test_autonegotiation(cfg, link_config) -> None:
         time.sleep(time_delay)
         verify_autonegotiation(cfg, state, link_config)
 
+def test_network_speed(cfg, link_config) -> None:
+    common_link_modes = link_config.common_link_modes
+    if not common_link_modes:
+        KsftSkipEx("No common link modes exist")
+    speeds, duplex_modes = link_config.get_speed_duplex_values(common_link_modes)
+
+    if speeds and duplex_modes and len(speeds) == len(duplex_modes):
+        for idx in range(len(speeds)):
+            speed = speeds[idx]
+            duplex = duplex_modes[idx]
+            if link_config.set_speed_and_duplex(speed, duplex) == False:
+                raise KsftFailEx(f"Unable to set speed and duplex parameters for {cfg.ifname}")
+            time.sleep(time_delay)
+            if link_config.verify_speed_and_duplex(speed, duplex) == False:
+                raise KsftSkipEx(f"Unable to verify speed and duplex states for interface {cfg.ifname}")
+    else:
+        if not speeds or not duplex_modes:
+            KsftSkipEx(f"No supported speeds or duplex modes found for interface {cfg.ifname}")
+        else:
+            KsftSkipEx("Mismatch in the number of speeds and duplex modes")
+
 def main() -> None:
     with NetDrvEpEnv(__file__, nsim_test=False) as cfg:
         link_config = LinkConfig(cfg)
