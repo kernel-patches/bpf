@@ -749,8 +749,11 @@ void fec_ptp_init(struct platform_device *pdev, int irq_idx)
 	 * only the PTP_CLOCK_PPS clock events should stop
 	 */
 	if (irq >= 0) {
+		const char *dev_name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
+						      "%s-PPS", pdev->name);
+
 		ret = devm_request_irq(&pdev->dev, irq, fec_pps_interrupt,
-				       0, pdev->name, ndev);
+				       0, dev_name ? dev_name : pdev->name, ndev);
 		if (ret < 0)
 			dev_warn(&pdev->dev, "request for pps irq failed(%d)\n",
 				 ret);

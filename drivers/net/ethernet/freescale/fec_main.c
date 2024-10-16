@@ -4492,7 +4492,14 @@ fec_probe(struct platform_device *pdev)
 		goto failed_init;
 
 	for (i = 0; i < irq_cnt; i++) {
+		const char *dev_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s-RxTx%d%s",
+						      pdev->name, i, i == 0 ? "+misc" : "");
 		int irq_num;
+
+		if (!dev_name) {
+			ret = -ENOMEM;
+			goto failed_irq;
+		}
 
 		if (fep->quirks & FEC_QUIRK_DT_IRQ2_IS_MAIN_IRQ)
 			irq_num = (i + irq_cnt - 1) % irq_cnt;
@@ -4508,7 +4515,7 @@ fec_probe(struct platform_device *pdev)
 			goto failed_irq;
 		}
 		ret = devm_request_irq(&pdev->dev, irq, fec_enet_interrupt,
-				       0, pdev->name, ndev);
+				       0, dev_name, ndev);
 		if (ret)
 			goto failed_irq;
 
