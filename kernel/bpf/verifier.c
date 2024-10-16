@@ -19990,6 +19990,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			insn[0].imm = (u32)addr;
 			insn[1].imm = addr >> 32;
 		}
+
+		/* In the x86_64 JIT, tailcall information can only be
+		 * propagated if the subprog is tail_call_reachable.
+		 */
+		insn->dst_reg = bpf_pseudo_call(insn) ?
+				env->subprog_info[subprog].tail_call_reachable : 0;
 	}
 
 	err = bpf_prog_alloc_jited_linfo(prog);
