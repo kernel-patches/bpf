@@ -163,6 +163,8 @@ struct tnum tnum_scast(struct tnum a, u8 size)
 	u64 sign_mask;
 	u64 value_mask;
 	u64 new_value, new_mask;
+	u64 sign_bit_unknown, sign_bit_value;
+	u64 mask;
 
 	if (size >= 8) {
 		return a;
@@ -174,11 +176,12 @@ struct tnum tnum_scast(struct tnum a, u8 size)
 	new_value = a.value & value_mask;
 	new_mask = a.mask & value_mask;
 
-	if (a.mask & sign_mask) {
-		new_mask |= ~value_mask;
-	} else if (a.value & sign_mask) {
-		new_value |= ~value_mask;
-	}
+	sign_bit_unknown = (a.mask >> s) & 1;
+	sign_bit_value = (a.value >> s) & 1;
+
+	mask = ~value_mask;
+	new_mask |= mask & (0 - sign_bit_unknown);
+	new_value |= mask & (0 - ((sign_bit_unknown ^ 1) & sign_bit_value));
 
 	return TNUM(new_value, new_mask);
 }
