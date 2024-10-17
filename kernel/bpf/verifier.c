@@ -5995,6 +5995,8 @@ static bool bpf_enable_private_stack(struct bpf_verifier_env *env)
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 		return true;
+	case BPF_PROG_TYPE_STRUCT_OPS:
+		return env->ops->priv_stack_allowed && env->ops->priv_stack_allowed();
 	case BPF_PROG_TYPE_TRACING:
 		if (env->prog->expected_attach_type != BPF_TRACE_ITER)
 			return true;
