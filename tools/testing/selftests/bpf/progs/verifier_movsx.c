@@ -287,6 +287,79 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("MOV64SX, S8, unknown value")
+__success __success_unpriv __retval(1)
+__naked void mov64sx_s8_unknown(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = r0;                                             \
+	r1 &= 0xFF;      /* Keep only 8 bits */              \
+	r1 = (s8)r1;     /* Sign-extend to 64 bits */        \
+	if r1 s>= -128 goto l0_%=;                           \
+	r0 = 0;                                              \
+	exit;                                                \
+l0_%=:                                                       \
+	if r1 s<= 127 goto l1_%=;                            \
+	r0 = 0;                                              \
+	exit;                                                \
+l1_%=:                                                       \
+	r0 = 1;                                              \
+	exit;                                                \
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+	__description("MOV64SX, S8, sign bit unknown")
+	__success __success_unpriv __retval(1)
+__naked void mov64sx_s8_sign_unknown(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = r0;                                             \
+	r1 &= 0x7F;                 			     \
+	r1 |= 0x80;        				     \
+	r1 = (s8)r1;       				     \
+	if r1 s>= -128 goto l0_%=;                           \
+	r0 = 0;                                              \
+	exit;                                                \
+l0_%=:                                                       \
+	if r1 s<= 127 goto l1_%=;                            \
+	r0 = 0;                                              \
+	exit;                                                \
+l1_%=:                                                       \
+	r0 = 1;                                              \
+	exit;                                                \
+	"   :
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+	__description("MOV64SX, S8, value crossing zero")
+	__success __success_unpriv __retval(1)
+__naked void mov64sx_s8_cross_zero(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = r0;                                             \
+	r1 &= 0xFF;      			             \
+	r1 = (s8)r1;             			     \
+	if r1 s> -10 goto l0_%=;                             \
+	if r1 s< 10 goto l0_%=;                              \
+	r0 = 0;                                              \
+	exit;                                                \
+l0_%=:                                               	     \
+	r0 = 1;                                              \
+	exit;                                                \
+	"   :
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #else
 
 SEC("socket")
