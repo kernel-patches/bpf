@@ -20,10 +20,13 @@ maintainers:
 
 properties:
   compatible:
-    items:
+    oneOf:
+      - items:
+          - enum:
+              - pci1957,e100
+          - const: fsl,enetc
       - enum:
-          - pci1957,e100
-      - const: fsl,enetc
+          - pci1131,e101
 
   reg:
     maxItems: 1
@@ -40,6 +43,19 @@ required:
 allOf:
   - $ref: /schemas/pci/pci-device.yaml
   - $ref: ethernet-controller.yaml
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - pci1131,e101
+    then:
+      properties:
+        clocks:
+          maxItems: 1
+          description: MAC transmit/receiver reference clock
+        clock-names:
+          const: ref
 
 unevaluatedProperties: false
 
