@@ -4746,7 +4746,11 @@ static irqreturn_t rtl8169_interrupt(int irq, void *dev_instance)
 	struct rtl8169_private *tp = dev_instance;
 	u32 status = rtl_get_events(tp);
 
-	if ((status & 0xffff) == 0xffff || !(status & tp->irq_mask))
+	if ((status & 0xffff) == 0xffff)
+		return IRQ_NONE;
+
+	status &= tp->irq_mask | RxFIFOOver;
+	if (!status)
 		return IRQ_NONE;
 
 	if (unlikely(status & SYSErr)) {
