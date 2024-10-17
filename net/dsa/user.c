@@ -1377,11 +1377,17 @@ dsa_user_add_cls_matchall_mirred(struct net_device *dev,
 	struct dsa_port *to_dp;
 	int err;
 
-	if (cls->common.protocol != htons(ETH_P_ALL))
+	if (cls->common.protocol != htons(ETH_P_ALL)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Can only offload \"protocol all\" matchall filter");
 		return -EOPNOTSUPP;
+	}
 
-	if (!ds->ops->port_mirror_add)
+	if (!ds->ops->port_mirror_add) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Switch does not support mirroring operation");
 		return -EOPNOTSUPP;
+	}
 
 	if (!flow_action_basic_hw_stats_check(&cls->rule->action, extack))
 		return -EOPNOTSUPP;
@@ -1488,9 +1494,13 @@ static int dsa_user_add_cls_matchall(struct net_device *dev,
 				     bool ingress)
 {
 	const struct flow_action *action = &cls->rule->action;
+	struct netlink_ext_ack *extack = cls->common.extack;
 
-	if (!flow_offload_has_one_action(action))
+	if (!flow_offload_has_one_action(action)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Cannot offload matchall filter with more than one action");
 		return -EOPNOTSUPP;
+	}
 
 	switch (action->entries[0].id) {
 	case FLOW_ACTION_MIRRED:
@@ -1498,6 +1508,7 @@ static int dsa_user_add_cls_matchall(struct net_device *dev,
 	case FLOW_ACTION_POLICE:
 		return dsa_user_add_cls_matchall_police(dev, cls, ingress);
 	default:
+		NL_SET_ERR_MSG_MOD(extack, "Unknown action");
 		break;
 	}
 
