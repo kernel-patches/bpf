@@ -44,6 +44,9 @@ static int enetc_get_reglen(struct net_device *ndev)
 	struct enetc_hw *hw = &priv->si->hw;
 	int len;
 
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
+
 	len = ARRAY_SIZE(enetc_si_regs);
 	len += ARRAY_SIZE(enetc_txbdr_regs) * priv->num_tx_rings;
 	len += ARRAY_SIZE(enetc_rxbdr_regs) * priv->num_rx_rings;
@@ -67,6 +70,9 @@ static void enetc_get_regs(struct net_device *ndev, struct ethtool_regs *regs,
 	u32 *buf = (u32 *)regbuf;
 	int i, j;
 	u32 addr;
+
+	if (is_enetc_rev4(priv->si))
+		return;
 
 	for (i = 0; i < ARRAY_SIZE(enetc_si_regs); i++) {
 		*buf++ = enetc_si_regs[i];
@@ -229,6 +235,9 @@ static int enetc_get_sset_count(struct net_device *ndev, int sset)
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	int len;
 
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
+
 	if (sset != ETH_SS_STATS)
 		return -EOPNOTSUPP;
 
@@ -249,6 +258,9 @@ static void enetc_get_strings(struct net_device *ndev, u32 stringset, u8 *data)
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	u8 *p = data;
 	int i, j;
+
+	if (is_enetc_rev4(priv->si))
+		return;
 
 	switch (stringset) {
 	case ETH_SS_STATS:
@@ -290,6 +302,9 @@ static void enetc_get_ethtool_stats(struct net_device *ndev,
 	struct enetc_hw *hw = &priv->si->hw;
 	int i, o = 0;
 
+	if (is_enetc_rev4(priv->si))
+		return;
+
 	for (i = 0; i < ARRAY_SIZE(enetc_si_counters); i++)
 		data[o++] = enetc_rd64(hw, enetc_si_counters[i].reg);
 
@@ -330,6 +345,9 @@ static void enetc_get_pause_stats(struct net_device *ndev,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_hw *hw = &priv->si->hw;
 	struct enetc_si *si = priv->si;
+
+	if (is_enetc_rev4(si))
+		return;
 
 	switch (pause_stats->src) {
 	case ETHTOOL_MAC_STATS_SRC_EMAC:
@@ -418,6 +436,9 @@ static void enetc_get_eth_mac_stats(struct net_device *ndev,
 	struct enetc_hw *hw = &priv->si->hw;
 	struct enetc_si *si = priv->si;
 
+	if (is_enetc_rev4(si))
+		return;
+
 	switch (mac_stats->src) {
 	case ETHTOOL_MAC_STATS_SRC_EMAC:
 		enetc_mac_stats(hw, 0, mac_stats);
@@ -438,6 +459,9 @@ static void enetc_get_eth_ctrl_stats(struct net_device *ndev,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_hw *hw = &priv->si->hw;
 	struct enetc_si *si = priv->si;
+
+	if (is_enetc_rev4(si))
+		return;
 
 	switch (ctrl_stats->src) {
 	case ETHTOOL_MAC_STATS_SRC_EMAC:
@@ -460,6 +484,9 @@ static void enetc_get_rmon_stats(struct net_device *ndev,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_hw *hw = &priv->si->hw;
 	struct enetc_si *si = priv->si;
+
+	if (is_enetc_rev4(si))
+		return;
 
 	*ranges = enetc_rmon_ranges;
 
@@ -593,6 +620,9 @@ static int enetc_get_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *rxnfc,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	int i, j;
 
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
+
 	switch (rxnfc->cmd) {
 	case ETHTOOL_GRXRINGS:
 		rxnfc->data = priv->num_rx_rings;
@@ -643,6 +673,9 @@ static int enetc_set_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *rxnfc)
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	int err;
 
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
+
 	switch (rxnfc->cmd) {
 	case ETHTOOL_SRXCLSRLINS:
 		if (rxnfc->fs.location >= priv->si->num_fs_entries)
@@ -678,6 +711,9 @@ static u32 enetc_get_rxfh_key_size(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 
+	if (is_enetc_rev4(priv->si))
+		return 0;
+
 	/* return the size of the RX flow hash key.  PF only */
 	return (priv->si->hw.port) ? ENETC_RSSHASH_KEY_SIZE : 0;
 }
@@ -685,6 +721,9 @@ static u32 enetc_get_rxfh_key_size(struct net_device *ndev)
 static u32 enetc_get_rxfh_indir_size(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+
+	if (is_enetc_rev4(priv->si))
+		return 0;
 
 	/* return the size of the RX flow hash indirection table */
 	return priv->si->num_rss;
@@ -696,6 +735,9 @@ static int enetc_get_rxfh(struct net_device *ndev,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_hw *hw = &priv->si->hw;
 	int err = 0, i;
+
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
 
 	/* return hash function */
 	rxfh->hfunc = ETH_RSS_HASH_TOP;
@@ -730,6 +772,9 @@ static int enetc_set_rxfh(struct net_device *ndev,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_hw *hw = &priv->si->hw;
 	int err = 0;
+
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
 
 	/* set hash key, if PF */
 	if (rxfh->key && hw->port)
@@ -775,9 +820,10 @@ static int enetc_get_coalesce(struct net_device *ndev,
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct enetc_int_vector *v = priv->int_vector[0];
+	u64 clk_freq = priv->si->clk_freq;
 
-	ic->tx_coalesce_usecs = enetc_cycles_to_usecs(priv->tx_ictt);
-	ic->rx_coalesce_usecs = enetc_cycles_to_usecs(v->rx_ictt);
+	ic->tx_coalesce_usecs = enetc_cycles_to_usecs(priv->tx_ictt, clk_freq);
+	ic->rx_coalesce_usecs = enetc_cycles_to_usecs(v->rx_ictt, clk_freq);
 
 	ic->tx_max_coalesced_frames = ENETC_TXIC_PKTTHR;
 	ic->rx_max_coalesced_frames = ENETC_RXIC_PKTTHR;
@@ -793,12 +839,13 @@ static int enetc_set_coalesce(struct net_device *ndev,
 			      struct netlink_ext_ack *extack)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	u64 clk_freq = priv->si->clk_freq;
 	u32 rx_ictt, tx_ictt;
 	int i, ic_mode;
 	bool changed;
 
-	tx_ictt = enetc_usecs_to_cycles(ic->tx_coalesce_usecs);
-	rx_ictt = enetc_usecs_to_cycles(ic->rx_coalesce_usecs);
+	tx_ictt = enetc_usecs_to_cycles(ic->tx_coalesce_usecs, clk_freq);
+	rx_ictt = enetc_usecs_to_cycles(ic->rx_coalesce_usecs, clk_freq);
 
 	if (ic->rx_max_coalesced_frames != ENETC_RXIC_PKTTHR)
 		return -EOPNOTSUPP;
@@ -843,7 +890,11 @@ static int enetc_set_coalesce(struct net_device *ndev,
 static int enetc_get_ts_info(struct net_device *ndev,
 			     struct kernel_ethtool_ts_info *info)
 {
+	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	int *phc_idx;
+
+	if (is_enetc_rev4(priv->si))
+		return -EOPNOTSUPP;
 
 	phc_idx = symbol_get(enetc_phc_index);
 	if (phc_idx) {
@@ -942,6 +993,9 @@ static void enetc_get_mm_stats(struct net_device *ndev,
 	struct enetc_hw *hw = &priv->si->hw;
 	struct enetc_si *si = priv->si;
 
+	if (is_enetc_rev4(si))
+		return;
+
 	if (!(si->hw_features & ENETC_SI_F_QBU))
 		return;
 
@@ -959,6 +1013,9 @@ static int enetc_get_mm(struct net_device *ndev, struct ethtool_mm_state *state)
 	struct enetc_si *si = priv->si;
 	struct enetc_hw *hw = &si->hw;
 	u32 lafs, rafs, val;
+
+	if (is_enetc_rev4(si))
+		return -EOPNOTSUPP;
 
 	if (!(si->hw_features & ENETC_SI_F_QBU))
 		return -EOPNOTSUPP;
@@ -1089,6 +1146,9 @@ static int enetc_set_mm(struct net_device *ndev, struct ethtool_mm_cfg *cfg,
 	struct enetc_si *si = priv->si;
 	u32 val, add_frag_size;
 	int err;
+
+	if (is_enetc_rev4(si))
+		return -EOPNOTSUPP;
 
 	if (!(si->hw_features & ENETC_SI_F_QBU))
 		return -EOPNOTSUPP;
