@@ -271,6 +271,50 @@ static int __maybe_unused cn_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
+int cn_del_get_exval(pid_t pid)
+{
+	struct cn_dev *dev = &cdev;
+
+	if (!cn_already_initialized)
+		return 0;
+
+	return cn_hash_del_get_exval(dev->hdev, pid);
+}
+EXPORT_SYMBOL_GPL(cn_del_get_exval);
+
+int cn_add_elem(__u32 uexit_code, pid_t pid)
+{
+	struct cn_dev *dev = &cdev;
+
+	if (!cn_already_initialized)
+		return 0;
+
+	return cn_hash_add_elem(dev->hdev, uexit_code, pid);
+}
+EXPORT_SYMBOL_GPL(cn_add_elem);
+
+int cn_get_exval(pid_t pid)
+{
+	struct cn_dev *dev = &cdev;
+
+	if (!cn_already_initialized)
+		return 0;
+
+	return cn_hash_get_exval(dev->hdev, pid);
+}
+EXPORT_SYMBOL_GPL(cn_get_exval);
+
+bool cn_table_empty(void)
+{
+	struct cn_dev *dev = &cdev;
+
+	if (!cn_already_initialized)
+		return 0;
+
+	return cn_hash_table_empty(dev->hdev);
+}
+EXPORT_SYMBOL_GPL(cn_table_empty);
+
 static int cn_init(void)
 {
 	struct cn_dev *dev = &cdev;
@@ -283,14 +327,30 @@ static int cn_init(void)
 	};
 
 	dev->nls = netlink_kernel_create(&init_net, NETLINK_CONNECTOR, &cfg);
-	if (!dev->nls)
+	if (!dev->nls) {
+		pr_err("%s: netlink_kernel_create failed, connector not initialized\n",
+				__func__);
 		return -EIO;
+	}
 
 	dev->cbdev = cn_queue_alloc_dev("cqueue", dev->nls);
 	if (!dev->cbdev) {
+		pr_err("%s: Allocation of dev->cbdev failed, connector not initialized\n",
+				__func__);
 		netlink_kernel_release(dev->nls);
 		return -EINVAL;
 	}
+
+	dev->hdev = cn_hash_alloc_dev("pid hash table");
+	if (!dev->hdev) {
+		pr_err("%s: Allocation of dev->hdev failed, connector not initialized\n",
+				__func__);
+		netlink_kernel_release(dev->nls);
+		cn_queue_free_dev(dev->cbdev);
+		return -ENOMEM;
+	}
+
+	pr_debug("Connector initialized, allocated hdev %p\n", dev->hdev);
 
 	cn_already_initialized = 1;
 
@@ -308,6 +368,7 @@ static void cn_fini(void)
 	remove_proc_entry("connector", init_net.proc_net);
 
 	cn_queue_free_dev(dev->cbdev);
+	cn_hash_free_dev(dev->hdev);
 	netlink_kernel_release(dev->nls);
 }
 

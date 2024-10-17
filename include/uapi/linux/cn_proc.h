@@ -27,7 +27,8 @@
  */
 enum proc_cn_mcast_op {
 	PROC_CN_MCAST_LISTEN = 1,
-	PROC_CN_MCAST_IGNORE = 2
+	PROC_CN_MCAST_IGNORE = 2,
+	PROC_CN_MCAST_NOTIFY = 3
 };
 
 #define PROC_EVENT_ALL (PROC_EVENT_FORK | PROC_EVENT_EXEC | PROC_EVENT_UID |  \
@@ -65,6 +66,7 @@ enum proc_cn_event {
 struct proc_input {
 	enum proc_cn_mcast_op mcast_op;
 	enum proc_cn_event event_type;
+	__u32 uexit_code;
 };
 
 static inline enum proc_cn_event valid_event(enum proc_cn_event ev_type)
@@ -151,6 +153,7 @@ struct proc_event {
 			__u32 exit_code, exit_signal;
 			__kernel_pid_t parent_pid;
 			__kernel_pid_t parent_tgid;
+			char           comm[16];
 		} exit;
 
 	} event_data;
