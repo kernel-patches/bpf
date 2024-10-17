@@ -5370,10 +5370,16 @@ bpf_scx_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+static bool bpf_scx_priv_stack_allowed(void)
+{
+	return true;
+}
+
 static const struct bpf_verifier_ops bpf_scx_verifier_ops = {
 	.get_func_proto = bpf_scx_get_func_proto,
 	.is_valid_access = bpf_scx_is_valid_access,
 	.btf_struct_access = bpf_scx_btf_struct_access,
+	.priv_stack_allowed = bpf_scx_priv_stack_allowed,
 };
 
 static int bpf_scx_init_member(const struct btf_type *t,
