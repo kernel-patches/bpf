@@ -6336,52 +6336,32 @@ static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	s32 init_s32_max, init_s32_min, s32_max, s32_min, u32_val;
-	u32 top_smax_value, top_smin_value;
-	u32 num_bits = size * 8;
+	u32 s = size * 8 - 1;
+	u32 sign_mask = 1U << s;
+	s32 smin_value, smax_value;
+	u32 umax_value;
 
-	if (tnum_is_const(reg->var_off)) {
-		u32_val = reg->var_off.value;
-		if (size == 1)
-			reg->var_off = tnum_const((s8)u32_val);
-		else
-			reg->var_off = tnum_const((s16)u32_val);
-
-		u32_val = reg->var_off.value;
-		reg->s32_min_value = reg->s32_max_value = u32_val;
-		reg->u32_min_value = reg->u32_max_value = u32_val;
+	if (size >= 4)
 		return;
-	}
 
-	top_smax_value = ((u32)reg->s32_max_value >> num_bits) << num_bits;
-	top_smin_value = ((u32)reg->s32_min_value >> num_bits) << num_bits;
+	reg->var_off = tnum_scast(reg->var_off, size);
 
-	if (top_smax_value != top_smin_value)
-		goto out;
-
-	/* find the s32_min and s32_min after sign extension */
-	if (size == 1) {
-		init_s32_max = (s8)reg->s32_max_value;
-		init_s32_min = (s8)reg->s32_min_value;
+	if (reg->var_off.mask & sign_mask) {
+		smin_value = -(1 << s);
+		smax_value = (1 << s) - 1;
 	} else {
-		/* size == 2 */
-		init_s32_max = (s16)reg->s32_max_value;
-		init_s32_min = (s16)reg->s32_min_value;
-	}
-	s32_max = max(init_s32_max, init_s32_min);
-	s32_min = min(init_s32_max, init_s32_min);
-
-	if ((s32_min >= 0) == (s32_max >= 0)) {
-		reg->s32_min_value = s32_min;
-		reg->s32_max_value = s32_max;
-		reg->u32_min_value = (u32)s32_min;
-		reg->u32_max_value = (u32)s32_max;
-		reg->var_off = tnum_subreg(tnum_range(s32_min, s32_max));
-		return;
+		smin_value = (s32)(reg->var_off.value);
+		smax_value = (s32)(reg->var_off.value | reg->var_off.mask);
 	}
 
-out:
-	set_sext32_default_val(reg, size);
+	reg->s32_min_value = smin_value;
+	reg->s32_max_value = smax_value;
+
+	reg->u32_min_value = reg->var_off.value;
+	umax_value = reg->var_off.value | reg->var_off.mask;
+	reg->u32_max_value = umax_value;
+
+	reg->var_off = tnum_subreg(reg->var_off);
 }
 
 static bool bpf_map_is_rdonly(const struct bpf_map *map)
