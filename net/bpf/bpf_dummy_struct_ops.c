@@ -130,10 +130,10 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 			    union bpf_attr __user *uattr)
 {
 	const struct bpf_struct_ops *st_ops = &bpf_bpf_dummy_ops;
+	struct bpf_struct_ops_tramp_link *st_link = NULL;
 	const struct btf_type *func_proto;
 	struct bpf_dummy_ops_test_args *args;
 	struct bpf_tramp_links *tlinks = NULL;
-	struct bpf_tramp_link *link = NULL;
 	void *image = NULL;
 	unsigned int op_idx;
 	u32 image_off = 0;
@@ -164,18 +164,18 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 		goto out;
 	}
 
-	link = kzalloc(sizeof(*link), GFP_USER);
-	if (!link) {
+	st_link = kzalloc(sizeof(*st_link), GFP_USER);
+	if (!st_link) {
 		err = -ENOMEM;
 		goto out;
 	}
 	/* prog doesn't take the ownership of the reference from caller */
 	bpf_prog_inc(prog);
-	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_link_lops, prog,
+	bpf_link_init(&st_link->link.link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_link_lops, prog,
 		      prog->expected_attach_type);
 
 	op_idx = prog->expected_attach_type;
-	err = bpf_struct_ops_prepare_trampoline(tlinks, link,
+	err = bpf_struct_ops_prepare_trampoline(tlinks, &st_link->link,
 						&st_ops->func_models[op_idx],
 						&dummy_ops_test_ret_function,
 						&image, &image_off,
@@ -196,8 +196,8 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 out:
 	kfree(args);
 	bpf_struct_ops_image_free(image);
-	if (link)
-		bpf_link_put(&link->link);
+	if (st_link)
+		bpf_link_put(&st_link->link.link);
 	kfree(tlinks);
 	return err;
 }
