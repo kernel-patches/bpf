@@ -98,6 +98,7 @@ static int mall_replace_hw_filter(struct tcf_proto *tp,
 	tc_cls_common_offload_init(&cls_mall.common, tp, head->flags, extack);
 	cls_mall.command = TC_CLSMATCHALL_REPLACE;
 	cls_mall.cookie = cookie;
+	cls_mall.skip_sw = skip_sw;
 
 	err = tc_setup_offload_action(&cls_mall.rule->action, &head->exts,
 				      cls_mall.common.extack);
