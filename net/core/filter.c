@@ -2019,6 +2019,12 @@ static const struct bpf_func_proto bpf_l4_csum_replace_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+static inline unsigned short from32to16(unsigned int x)
+{
+	x += (x >> 16) | (x << 16);
+	return x >> 16;
+}
+
 BPF_CALL_5(bpf_csum_diff, __be32 *, from, u32, from_size,
 	   __be32 *, to, u32, to_size, __wsum, seed)
 {
@@ -2045,7 +2051,7 @@ BPF_CALL_5(bpf_csum_diff, __be32 *, from, u32, from_size,
 	for (i = 0; i <   to_size / sizeof(__be32); i++, j++)
 		sp->diff[j] = to[i];
 
-	ret = csum_partial(sp->diff, diff_size, seed);
+	ret = from32to16(csum_partial(sp->diff, diff_size, seed));
 	local_unlock_nested_bh(&bpf_sp.bh_lock);
 	return ret;
 }
