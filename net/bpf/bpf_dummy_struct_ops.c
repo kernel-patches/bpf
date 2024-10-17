@@ -133,7 +133,7 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 	struct bpf_struct_ops_tramp_link *st_link = NULL;
 	const struct btf_type *func_proto;
 	struct bpf_dummy_ops_test_args *args;
-	struct bpf_tramp_links *tlinks = NULL;
+	struct bpf_tramp_nodes *tnodes = NULL;
 	void *image = NULL;
 	unsigned int op_idx;
 	u32 image_off = 0;
@@ -158,8 +158,8 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 	if (err)
 		goto out;
 
-	tlinks = kcalloc(BPF_TRAMP_MAX, sizeof(*tlinks), GFP_KERNEL);
-	if (!tlinks) {
+	tnodes = kcalloc(BPF_TRAMP_MAX, sizeof(*tnodes), GFP_KERNEL);
+	if (!tnodes) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -173,9 +173,10 @@ int bpf_struct_ops_test_run(struct bpf_prog *prog, const union bpf_attr *kattr,
 	bpf_prog_inc(prog);
 	bpf_link_init(&st_link->link.link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_link_lops, prog,
 		      prog->expected_attach_type);
+	st_link->link.node.prog = prog;
 
 	op_idx = prog->expected_attach_type;
-	err = bpf_struct_ops_prepare_trampoline(tlinks, &st_link->link,
+	err = bpf_struct_ops_prepare_trampoline(tnodes, &st_link->link.node,
 						&st_ops->func_models[op_idx],
 						&dummy_ops_test_ret_function,
 						&image, &image_off,
@@ -198,7 +199,7 @@ out:
 	bpf_struct_ops_image_free(image);
 	if (st_link)
 		bpf_link_put(&st_link->link.link);
-	kfree(tlinks);
+	kfree(tnodes);
 	return err;
 }
 
