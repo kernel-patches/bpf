@@ -549,63 +549,101 @@ static void run_tests_skb_less(int tap_fd, struct bpf_map *keys)
 	}
 }
 
-static void test_skb_less_prog_attach(struct bpf_flow *skel, int tap_fd)
+void serial_test_flow_dissector_skb_less_direct_attach(void)
 {
-	int err, prog_fd;
-
-	prog_fd = bpf_program__fd(skel->progs._dissect);
-	if (!ASSERT_OK_FD(prog_fd, "bpf_program__fd"))
-		return;
-
-	err = bpf_prog_attach(prog_fd, 0, BPF_FLOW_DISSECTOR, 0);
-	if (!ASSERT_OK(err, "bpf_prog_attach"))
-		return;
-
-	run_tests_skb_less(tap_fd, skel->maps.last_dissection);
-
-	err = bpf_prog_detach2(prog_fd, 0, BPF_FLOW_DISSECTOR);
-	ASSERT_OK(err, "bpf_prog_detach2");
-}
-
-static void test_skb_less_link_create(struct bpf_flow *skel, int tap_fd)
-{
-	struct bpf_link *link;
-	int err, net_fd;
-
-	net_fd = open("/proc/self/ns/net", O_RDONLY);
-	if (!ASSERT_OK_FD(net_fd, "open(/proc/self/ns/net"))
-		return;
-
-	link = bpf_program__attach_netns(skel->progs._dissect, net_fd);
-	if (!ASSERT_OK_PTR(link, "attach_netns"))
-		goto out_close;
-
-	run_tests_skb_less(tap_fd, skel->maps.last_dissection);
-
-	err = bpf_link__destroy(link);
-	ASSERT_OK(err, "bpf_link__destroy");
-out_close:
-	close(net_fd);
-}
-
-void test_flow_dissector(void)
-{
-	int i, err, prog_fd, keys_fd = -1, tap_fd;
+	int err, prog_fd, tap_fd;
 	struct bpf_flow *skel;
 
 	skel = bpf_flow__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "open/load skeleton"))
 		return;
 
-	prog_fd = bpf_program__fd(skel->progs._dissect);
-	if (!ASSERT_OK_FD(prog_fd, "bpf_program__fd"))
-		return;
-	keys_fd = bpf_map__fd(skel->maps.last_dissection);
-	if (!ASSERT_OK_FD(keys_fd, "bpf_map__fd"))
-		return;
 	err = init_prog_array(skel->obj, skel->maps.jmp_table);
 	if (!ASSERT_OK(err, "init_prog_array"))
+		goto out_destroy_skel;
+
+	prog_fd = bpf_program__fd(skel->progs._dissect);
+	if (!ASSERT_OK_FD(prog_fd, "bpf_program__fd"))
+		goto out_destroy_skel;
+
+	err = bpf_prog_attach(prog_fd, 0, BPF_FLOW_DISSECTOR, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out_destroy_skel;
+
+	tap_fd = create_tap("tap0");
+	if (!ASSERT_OK_FD(tap_fd, "create_tap"))
+		goto out_destroy_skel;
+	err = ifup("tap0");
+	if (!ASSERT_OK(err, "ifup"))
+		goto out_close_tap;
+
+	run_tests_skb_less(tap_fd, skel->maps.last_dissection);
+
+	err = bpf_prog_detach2(prog_fd, 0, BPF_FLOW_DISSECTOR);
+	ASSERT_OK(err, "bpf_prog_detach2");
+
+out_close_tap:
+	close(tap_fd);
+out_destroy_skel:
+	bpf_flow__destroy(skel);
+}
+
+void serial_test_flow_dissector_skb_less_indirect_attach(void)
+{
+	int err, net_fd, tap_fd;
+	struct bpf_flow *skel;
+	struct bpf_link *link;
+
+	skel = bpf_flow__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open/load skeleton"))
 		return;
+
+	net_fd = open("/proc/self/ns/net", O_RDONLY);
+	if (!ASSERT_OK_FD(net_fd, "open(/proc/self/ns/net"))
+		goto out_destroy_skel;
+
+	err = init_prog_array(skel->obj, skel->maps.jmp_table);
+	if (!ASSERT_OK(err, "init_prog_array"))
+		goto out_destroy_skel;
+
+	tap_fd = create_tap("tap0");
+	if (!ASSERT_OK_FD(tap_fd, "create_tap"))
+		goto out_clean_ns;
+	err = ifup("tap0");
+	if (!ASSERT_OK(err, "ifup"))
+		goto out_clean_ns;
+
+	link = bpf_program__attach_netns(skel->progs._dissect, net_fd);
+	if (!ASSERT_OK_PTR(link, "attach_netns"))
+		goto out_clean_ns;
+
+	run_tests_skb_less(tap_fd, skel->maps.last_dissection);
+
+	err = bpf_link__destroy(link);
+	ASSERT_OK(err, "bpf_link__destroy");
+
+out_clean_ns:
+	close(net_fd);
+out_destroy_skel:
+	bpf_flow__destroy(skel);
+}
+
+void serial_test_flow_dissector_skb(void)
+{
+	struct bpf_flow *skel;
+	int i, err, prog_fd;
+
+	skel = bpf_flow__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open/load skeleton"))
+		return;
+
+	err = init_prog_array(skel->obj, skel->maps.jmp_table);
+	if (!ASSERT_OK(err, "init_prog_array"))
+		goto out_destroy_skel;
+
+	prog_fd = bpf_program__fd(skel->progs._dissect);
+	if (!ASSERT_OK_FD(prog_fd, "bpf_program__fd"))
+		goto out_destroy_skel;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		struct bpf_flow_keys flow_keys;
@@ -635,24 +673,8 @@ void test_flow_dissector(void)
 			     sizeof(struct bpf_flow_keys),
 			     "returned flow keys");
 	}
-	/* Do the same tests but for skb-less flow dissector.
-	 * We use a known path in the net/tun driver that calls
-	 * eth_get_headlen and we manually export bpf_flow_keys
-	 * via BPF map in this case.
-	 */
-	tap_fd = create_tap("tap0");
-	if (!ASSERT_OK_FD(tap_fd, "create_tap"))
-		goto out_destroy_skel;
-	err = ifup("tap0");
-	if (!ASSERT_OK(err, "ifup"))
-		goto out_destroy_skel;
 
-	/* Test direct prog attachment */
-	test_skb_less_prog_attach(skel, tap_fd);
-	/* Test indirect prog attachment via link */
-	test_skb_less_link_create(skel, tap_fd);
-
-	close(tap_fd);
 out_destroy_skel:
 	bpf_flow__destroy(skel);
 }
+
