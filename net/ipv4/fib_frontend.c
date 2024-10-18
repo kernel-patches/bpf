@@ -341,23 +341,47 @@ EXPORT_SYMBOL_GPL(fib_info_nh_uses_dev);
  * - check, that packet arrived from expected physical interface.
  * called with rcu_read_lock()
  */
-static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
-				 u8 tos, int oif, struct net_device *dev,
-				 int rpf, struct in_device *idev, u32 *itag)
+int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
+			  dscp_t dscp, int oif, struct net_device *dev,
+			  struct in_device *idev, u32 *itag)
 {
+	int rpf = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(idev);
 	struct net *net = dev_net(dev);
+	enum skb_drop_reason reason;
 	struct flow_keys flkeys;
 	int ret, no_addr;
 	struct fib_result res;
 	struct flowi4 fl4;
 	bool dev_match;
 
+	/* Ignore rp_filter for packets protected by IPsec. */
+	if (!rpf && !fib_num_tclassid_users(net) &&
+	    (dev->ifindex != oif || !IN_DEV_TX_REDIRECTS(idev))) {
+		if (IN_DEV_ACCEPT_LOCAL(idev))
+			goto last_resort;
+		/* with custom local routes in place, checking local addresses
+		 * only will be too optimistic, with custom rules, checking
+		 * local addresses only can be too strict, e.g. due to vrf
+		 */
+		if (net->ipv4.fib_has_custom_local_routes ||
+		    fib4_has_custom_rules(net))
+			goto full_check;
+		/* Within the same container, it is regarded as a martian source,
+		 * and the same host but different containers are not.
+		 */
+		if (inet_lookup_ifaddr_rcu(net, src))
+			return -SKB_DROP_REASON_IP_LOCAL_SOURCE;
+
+		goto last_resort;
+	}
+
+full_check:
 	fl4.flowi4_oif = 0;
 	fl4.flowi4_l3mdev = l3mdev_master_ifindex_rcu(dev);
 	fl4.flowi4_iif = oif ? : LOOPBACK_IFINDEX;
 	fl4.daddr = src;
 	fl4.saddr = dst;
-	fl4.flowi4_tos = tos;
+	fl4.flowi4_tos = inet_dscp_to_dsfield(dscp);
 	fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
 	fl4.flowi4_tun_key.tun_id = 0;
 	fl4.flowi4_flags = 0;
@@ -377,9 +401,15 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 
 	if (fib_lookup(net, &fl4, &res, 0))
 		goto last_resort;
-	if (res.type != RTN_UNICAST &&
-	    (res.type != RTN_LOCAL || !IN_DEV_ACCEPT_LOCAL(idev)))
-		goto e_inval;
+	if (res.type != RTN_UNICAST) {
+		if (res.type != RTN_LOCAL) {
+			reason = SKB_DROP_REASON_IP_INVALID_SOURCE;
+			goto e_inval;
+		} else if (!IN_DEV_ACCEPT_LOCAL(idev)) {
+			reason = SKB_DROP_REASON_IP_LOCAL_SOURCE;
+			goto e_inval;
+		}
+	}
 	fib_combine_itag(itag, &res);
 
 	dev_match = fib_info_nh_uses_dev(res.fi, dev);
@@ -412,43 +442,9 @@ last_resort:
 	return 0;
 
 e_inval:
-	return -EINVAL;
+	return -reason;
 e_rpf:
-	return -EXDEV;
-}
-
-/* Ignore rp_filter for packets protected by IPsec. */
-int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
-			u8 tos, int oif, struct net_device *dev,
-			struct in_device *idev, u32 *itag)
-{
-	int r = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(idev);
-	struct net *net = dev_net(dev);
-
-	if (!r && !fib_num_tclassid_users(net) &&
-	    (dev->ifindex != oif || !IN_DEV_TX_REDIRECTS(idev))) {
-		if (IN_DEV_ACCEPT_LOCAL(idev))
-			goto ok;
-		/* with custom local routes in place, checking local addresses
-		 * only will be too optimistic, with custom rules, checking
-		 * local addresses only can be too strict, e.g. due to vrf
-		 */
-		if (net->ipv4.fib_has_custom_local_routes ||
-		    fib4_has_custom_rules(net))
-			goto full_check;
-		/* Within the same container, it is regarded as a martian source,
-		 * and the same host but different containers are not.
-		 */
-		if (inet_lookup_ifaddr_rcu(net, src))
-			return -EINVAL;
-
-ok:
-		*itag = 0;
-		return 0;
-	}
-
-full_check:
-	return __fib_validate_source(skb, src, dst, tos, oif, dev, r, idev, itag);
+	return -SKB_DROP_REASON_IP_RPFILTER;
 }
 
 static inline __be32 sk_extract_addr(struct sockaddr *addr)
@@ -1648,6 +1644,15 @@ static struct pernet_operations fib_net_ops = {
 	.exit_batch = fib_net_exit_batch,
 };
 
+static const struct rtnl_msg_handler fib_rtnl_msg_handlers[] __initconst = {
+	{.protocol = PF_INET, .msgtype = RTM_NEWROUTE,
+	 .doit = inet_rtm_newroute},
+	{.protocol = PF_INET, .msgtype = RTM_DELROUTE,
+	 .doit = inet_rtm_delroute},
+	{.protocol = PF_INET, .msgtype = RTM_GETROUTE, .dumpit = inet_dump_fib,
+	 .flags = RTNL_FLAG_DUMP_UNLOCKED | RTNL_FLAG_DUMP_SPLIT_NLM_DONE},
+};
+
 void __init ip_fib_init(void)
 {
 	fib_trie_init();
@@ -1657,8 +1662,5 @@ void __init ip_fib_init(void)
 	register_netdevice_notifier(&fib_netdev_notifier);
 	register_inetaddr_notifier(&fib_inetaddr_notifier);
 
-	rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL, 0);
-	rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL, 0);
-	rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib,
-		      RTNL_FLAG_DUMP_UNLOCKED | RTNL_FLAG_DUMP_SPLIT_NLM_DONE);
+	rtnl_register_many(fib_rtnl_msg_handlers);
 }
