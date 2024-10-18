@@ -30,6 +30,7 @@
 #include <asm/byteorder.h>
 #include <asm/local.h>
 
+#include <linux/netdev_features.h>
 #include <linux/percpu.h>
 #include <linux/rculist.h>
 #include <linux/workqueue.h>
