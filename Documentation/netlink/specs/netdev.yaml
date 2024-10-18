@@ -62,6 +62,10 @@ definitions:
         name: csum
         doc:
           Device is capable of exposing receive packet checksum via bpf_xdp_metadata_rx_csum().
+      -
+        name: gso
+        doc:
+          Device is capable of exposing receive packet GSO via bpf_xdp_metadata_rx_gso().
   -
     type: flags
     name: xsk-flags

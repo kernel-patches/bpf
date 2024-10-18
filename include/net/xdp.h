@@ -412,6 +412,10 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 			   NETDEV_XDP_RX_METADATA_CSUM, \
 			   bpf_xdp_metadata_rx_csum, \
 			   xmo_rx_csum) \
+	XDP_METADATA_KFUNC(XDP_METADATA_KFUNC_RX_GSO, \
+			   NETDEV_XDP_RX_METADATA_GSO, \
+			   bpf_xdp_metadata_rx_gso, \
+			   xmo_rx_gso) \
 
 enum xdp_rx_metadata {
 #define XDP_METADATA_KFUNC(name, _, __, ___) name,
@@ -501,6 +505,13 @@ union xdp_csum_info {
 	};
 };
 
+struct xdp_gso_info {
+	/* GSO info in skb_shared_info */
+
+	unsigned int	gso_type;
+	unsigned short	gso_size;
+};
+
 struct xdp_metadata_ops {
 	int	(*xmo_rx_timestamp)(const struct xdp_md *ctx, u64 *timestamp);
 	int	(*xmo_rx_hash)(const struct xdp_md *ctx, u32 *hash,
@@ -509,6 +520,7 @@ struct xdp_metadata_ops {
 				   u16 *vlan_tci);
 	int (*xmo_rx_csum)(const struct xdp_md *ctx, enum xdp_csum_status *csum_status,
 				   union xdp_csum_info *csum_info);
+	int	(*xmo_rx_gso)(const struct xdp_md *ctx, struct xdp_gso_info *gso_info);
 };
 
 #ifdef CONFIG_NET

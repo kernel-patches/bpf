@@ -789,6 +789,24 @@ __bpf_kfunc int bpf_xdp_metadata_rx_csum(const struct xdp_md *ctx,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_metadata_rx_gso - Read XDP frame GSO info.
+ * @ctx: XDP context pointer.
+ * @gso_info: Destination pointer for GSO info.
+ *
+ * Info (@gso_info) includes GSO type and size from skb_shared_info.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-EOPNOTSUPP`` : means device driver doesn't implement kfunc
+ * * ``-ENODATA``    : means no GSO info available for this frame
+ */
+__bpf_kfunc int bpf_xdp_metadata_rx_gso(const struct xdp_md *ctx,
+					 struct xdp_gso_info *gso_info)
+{
+	return -EOPNOTSUPP;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(xdp_metadata_kfunc_ids)
