@@ -303,7 +303,7 @@ struct sk_filter;
   *	@sk_stamp: time stamp of last packet received
   *	@sk_stamp_seq: lock for accessing sk_stamp on 32 bit architectures only
   *	@sk_tsflags: SO_TIMESTAMPING flags
-  *	@sk_use_task_frag: allow sk_page_frag() to use current->task_frag.
+  *	@sk_use_task_frag: allow sk_page_frag_cache() to use current->task_frag.
   *			   Sockets that can be used under memory reclaim should
   *			   set this to false.
   *	@sk_bind_phc: SO_TIMESTAMPING bind PHC index of PTP virtual clock
@@ -462,7 +462,7 @@ struct sock {
 	struct sk_buff_head	sk_write_queue;
 	u32			sk_dst_pending_confirm;
 	u32			sk_pacing_status; /* see enum sk_pacing */
-	struct page_frag	sk_frag;
+	struct page_frag_cache	sk_frag;
 	struct timer_list	sk_timer;
 
 	unsigned long		sk_pacing_rate; /* bytes per second */
@@ -2491,22 +2491,22 @@ static inline void sk_stream_moderate_sndbuf(struct sock *sk)
 }
 
 /**
- * sk_page_frag - return an appropriate page_frag
+ * sk_page_frag_cache - return an appropriate page_frag_cache
  * @sk: socket
  *
- * Use the per task page_frag instead of the per socket one for
+ * Use the per task page_frag_cache instead of the per socket one for
  * optimization when we know that we're in process context and own
  * everything that's associated with %current.
  *
  * Both direct reclaim and page faults can nest inside other
- * socket operations and end up recursing into sk_page_frag()
- * while it's already in use: explicitly avoid task page_frag
+ * socket operations and end up recursing into sk_page_frag_cache()
+ * while it's already in use: explicitly avoid task page_frag_cache
  * when users disable sk_use_task_frag.
  *
  * Return: a per task page_frag if context allows that,
  * otherwise a per socket one.
  */
-static inline struct page_frag *sk_page_frag(struct sock *sk)
+static inline struct page_frag_cache *sk_page_frag_cache(struct sock *sk)
 {
 	if (sk->sk_use_task_frag)
 		return &current->task_frag;
@@ -2514,7 +2514,12 @@ static inline struct page_frag *sk_page_frag(struct sock *sk)
 	return &sk->sk_frag;
 }
 
-bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag);
+bool sk_page_frag_refill_prepare(struct sock *sk, struct page_frag_cache *nc,
+				 struct page_frag *pfrag);
+
+void *sk_page_frag_alloc_refill_prepare(struct sock *sk,
+					struct page_frag_cache *nc,
+					struct page_frag *pfrag);
 
 /*
  *	Default write policy as shown to user space via poll/select/SIGIO

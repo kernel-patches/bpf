@@ -253,8 +253,29 @@ static void tls_device_resync_tx(struct sock *sk, struct tls_context *tls_ctx,
 }
 
 static void tls_append_frag(struct tls_record_info *record,
-			    struct page_frag *pfrag,
-			    int size)
+			    struct page_frag_cache *nc,
+			    struct page_frag *pfrag, int size)
+{
+	skb_frag_t *frag;
+
+	frag = &record->frags[record->num_frags - 1];
+	if (skb_frag_page(frag) == pfrag->page &&
+	    skb_frag_off(frag) + skb_frag_size(frag) == pfrag->offset) {
+		skb_frag_size_add(frag, size);
+		page_frag_commit_noref(nc, pfrag, size);
+	} else {
+		++frag;
+		skb_frag_fill_page_desc(frag, pfrag->page, pfrag->offset,
+					size);
+		++record->num_frags;
+		page_frag_commit(nc, pfrag, size);
+	}
+
+	record->len += size;
+}
+
+static void tls_append_dummy_frag(struct tls_record_info *record,
+				  struct page_frag *pfrag, int size)
 {
 	skb_frag_t *frag;
 
@@ -264,13 +285,11 @@ static void tls_append_frag(struct tls_record_info *record,
 		skb_frag_size_add(frag, size);
 	} else {
 		++frag;
-		skb_frag_fill_page_desc(frag, pfrag->page, pfrag->offset,
-					size);
+		skb_frag_fill_page_desc(frag, pfrag->page, pfrag->offset, size);
 		++record->num_frags;
 		get_page(pfrag->page);
 	}
 
-	pfrag->offset += size;
 	record->len += size;
 }
 
@@ -311,11 +330,11 @@ static int tls_push_record(struct sock *sk,
 static void tls_device_record_close(struct sock *sk,
 				    struct tls_context *ctx,
 				    struct tls_record_info *record,
-				    struct page_frag *pfrag,
+				    struct page_frag_cache *nc,
 				    unsigned char record_type)
 {
 	struct tls_prot_info *prot = &ctx->prot_info;
-	struct page_frag dummy_tag_frag;
+	struct page_frag dummy_tag_frag, *pfrag;
 
 	/* append tag
 	 * device will fill in the tag, we just need to append a placeholder
@@ -323,13 +342,16 @@ static void tls_device_record_close(struct sock *sk,
 	 * increases frag count)
 	 * if we can't allocate memory now use the dummy page
 	 */
-	if (unlikely(pfrag->size - pfrag->offset < prot->tag_size) &&
-	    !skb_page_frag_refill(prot->tag_size, pfrag, sk->sk_allocation)) {
+	pfrag = &dummy_tag_frag;
+	if (unlikely(!page_frag_refill_probe(nc, prot->tag_size, pfrag) &&
+		     !page_frag_refill_prepare(nc, prot->tag_size, pfrag,
+					       sk->sk_allocation))) {
 		dummy_tag_frag.page = dummy_page;
 		dummy_tag_frag.offset = 0;
-		pfrag = &dummy_tag_frag;
+		tls_append_dummy_frag(record, pfrag, prot->tag_size);
+	} else {
+		tls_append_frag(record, nc, pfrag, prot->tag_size);
 	}
-	tls_append_frag(record, pfrag, prot->tag_size);
 
 	/* fill prepend */
 	tls_fill_prepend(ctx, skb_frag_address(&record->frags[0]),
@@ -338,6 +360,7 @@ static void tls_device_record_close(struct sock *sk,
 }
 
 static int tls_create_new_record(struct tls_offload_context_tx *offload_ctx,
+				 struct page_frag_cache *nc,
 				 struct page_frag *pfrag,
 				 size_t prepend_size)
 {
@@ -352,8 +375,7 @@ static int tls_create_new_record(struct tls_offload_context_tx *offload_ctx,
 	skb_frag_fill_page_desc(frag, pfrag->page, pfrag->offset,
 				prepend_size);
 
-	get_page(pfrag->page);
-	pfrag->offset += prepend_size;
+	page_frag_commit(nc, pfrag, prepend_size);
 
 	record->num_frags = 1;
 	record->len = prepend_size;
@@ -361,33 +383,34 @@ static int tls_create_new_record(struct tls_offload_context_tx *offload_ctx,
 	return 0;
 }
 
-static int tls_do_allocation(struct sock *sk,
-			     struct tls_offload_context_tx *offload_ctx,
-			     struct page_frag *pfrag,
-			     size_t prepend_size)
+static void *tls_do_allocation(struct sock *sk,
+			       struct tls_offload_context_tx *offload_ctx,
+			       struct page_frag_cache *nc,
+			       size_t prepend_size, struct page_frag *pfrag)
 {
 	int ret;
 
 	if (!offload_ctx->open_record) {
-		if (unlikely(!skb_page_frag_refill(prepend_size, pfrag,
-						   sk->sk_allocation))) {
+		void *va;
+
+		if (unlikely(!page_frag_refill_prepare(nc, prepend_size, pfrag,
+						       sk->sk_allocation))) {
 			READ_ONCE(sk->sk_prot)->enter_memory_pressure(sk);
 			sk_stream_moderate_sndbuf(sk);
-			return -ENOMEM;
+			return NULL;
 		}
 
-		ret = tls_create_new_record(offload_ctx, pfrag, prepend_size);
+		ret = tls_create_new_record(offload_ctx, nc, pfrag,
+					    prepend_size);
 		if (ret)
-			return ret;
+			return NULL;
 
-		if (pfrag->size > pfrag->offset)
-			return 0;
+		va = page_frag_alloc_refill_probe(nc, 1, pfrag);
+		if (va)
+			return va;
 	}
 
-	if (!sk_page_frag_refill(sk, pfrag))
-		return -ENOMEM;
-
-	return 0;
+	return sk_page_frag_alloc_refill_prepare(sk, nc, pfrag);
 }
 
 static int tls_device_copy_data(void *addr, size_t bytes, struct iov_iter *i)
@@ -424,8 +447,8 @@ static int tls_push_data(struct sock *sk,
 	struct tls_prot_info *prot = &tls_ctx->prot_info;
 	struct tls_offload_context_tx *ctx = tls_offload_ctx_tx(tls_ctx);
 	struct tls_record_info *record;
+	struct page_frag_cache *nc;
 	int tls_push_record_flags;
-	struct page_frag *pfrag;
 	size_t orig_size = size;
 	u32 max_open_record_len;
 	bool more = false;
@@ -454,7 +477,7 @@ static int tls_push_data(struct sock *sk,
 			return rc;
 	}
 
-	pfrag = sk_page_frag(sk);
+	nc = sk_page_frag_cache(sk);
 
 	/* TLS_HEADER_SIZE is not counted as part of the TLS record, and
 	 * we need to leave room for an authentication tag.
@@ -462,8 +485,12 @@ static int tls_push_data(struct sock *sk,
 	max_open_record_len = TLS_MAX_PAYLOAD_SIZE +
 			      prot->prepend_size;
 	do {
-		rc = tls_do_allocation(sk, ctx, pfrag, prot->prepend_size);
-		if (unlikely(rc)) {
+		struct page_frag page_frag, *pfrag;
+		void *va;
+
+		pfrag = &page_frag;
+		va = tls_do_allocation(sk, ctx, nc, prot->prepend_size, pfrag);
+		if (unlikely(!va)) {
 			rc = sk_stream_wait_memory(sk, &timeo);
 			if (!rc)
 				continue;
@@ -512,16 +539,15 @@ handle_error:
 
 			zc_pfrag.offset = off;
 			zc_pfrag.size = copy;
-			tls_append_frag(record, &zc_pfrag, copy);
+			tls_append_dummy_frag(record, &zc_pfrag, copy);
 		} else if (copy) {
-			copy = min_t(size_t, copy, pfrag->size - pfrag->offset);
+			copy = min_t(size_t, copy, pfrag->size);
 
-			rc = tls_device_copy_data(page_address(pfrag->page) +
-						  pfrag->offset, copy,
-						  iter);
+			rc = tls_device_copy_data(va, copy, iter);
 			if (rc)
 				goto handle_error;
-			tls_append_frag(record, pfrag, copy);
+
+			tls_append_frag(record, nc, pfrag, copy);
 		}
 
 		size -= copy;
@@ -539,7 +565,7 @@ last_record:
 		if (done || record->len >= max_open_record_len ||
 		    (record->num_frags >= MAX_SKB_FRAGS - 1)) {
 			tls_device_record_close(sk, tls_ctx, record,
-						pfrag, record_type);
+						nc, record_type);
 
 			rc = tls_push_record(sk,
 					     tls_ctx,
