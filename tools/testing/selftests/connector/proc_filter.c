@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Author: Anjali Kulkarni <anjali.k.kulkarni@oracle.com>
+ *
+ * Copyright (c) 2024 Oracle and/or its affiliates.
+ */
 
 #include <sys/types.h>
 #include <sys/epoll.h>
@@ -28,6 +33,7 @@
 volatile static int interrupted;
 static int nl_sock, ret_errno, tcount;
 static struct epoll_event evn;
+FILE *file;
 
 static int filter;
 
@@ -36,6 +42,8 @@ static int filter;
 #else
 #define Printf ksft_print_msg
 #endif
+
+#define EXIT_LOG
 
 int send_message(void *pinp)
 {
@@ -146,6 +154,12 @@ int handle_packet(char *buff, int fd, struct proc_event *event)
 		tcount++;
 		switch (event->what) {
 		case PROC_EVENT_EXIT:
+#ifdef EXIT_LOG
+			fprintf(file, "pid %d tgid %d code %d\n",
+				event->event_data.exit.process_pid,
+				event->event_data.exit.process_tgid,
+				event->event_data.exit.exit_code);
+#endif
 			Printf("Exit process %d (tgid %d) with code %d, signal %d\n",
 			       event->event_data.exit.process_pid,
 			       event->event_data.exit.process_tgid,
@@ -279,17 +293,24 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+#ifdef EXIT_LOG
+	file = fopen("exit.log", "w");
+	if (file == NULL) {
+		perror("Error opening file exit.log");
+		close(nl_sock);
+		close(epoll_fd);
+		exit(1);
+	}
+#endif
+
 	while (!interrupted) {
 		err = handle_events(epoll_fd, &proc_ev);
 		if (err < 0) {
 			if (ret_errno == EINTR)
 				continue;
-			if (err == -2)
-				close(nl_sock);
-			if (err == -3) {
-				close(nl_sock);
-				close(epoll_fd);
-			}
+			close(nl_sock);
+			close(epoll_fd);
+			fclose(file);
 			exit(1);
 		}
 	}
@@ -304,6 +325,7 @@ int main(int argc, char *argv[])
 
 	close(epoll_fd);
 	close(nl_sock);
+	fclose(file);
 
 	printf("Done total count: %d\n", tcount);
 	exit(0);

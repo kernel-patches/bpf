@@ -480,6 +480,7 @@ static int fl_hw_replace_filter(struct tcf_proto *tp,
 	cls_flower.rule->match.mask = &f->mask->key;
 	cls_flower.rule->match.key = &f->mkey;
 	cls_flower.classid = f->res.classid;
+	cls_flower.skip_sw = skip_sw;
 
 	err = tc_setup_offload_action(&cls_flower.rule->action, &f->exts,
 				      cls_flower.common.extack);

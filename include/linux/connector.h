@@ -18,6 +18,8 @@
 #include <uapi/linux/connector.h>
 
 #define CN_CBQ_NAMELEN		32
+#define HASHT_NAMELEN		32
+#define PID_HASH_TABLE_BITS	10
 
 struct cn_queue_dev {
 	atomic_t refcnt;
@@ -45,6 +47,19 @@ struct cn_callback_entry {
 	u32 seq, group;
 };
 
+struct uexit_pid_hnode {
+	__u32 uexit_code;
+	pid_t pid;
+	struct hlist_node uexit_pid_hlist;
+};
+
+struct cn_hash_dev {
+	atomic_t hrefcnt;
+	unsigned char name[HASHT_NAMELEN];
+	struct mutex uexit_hash_lock;
+	DECLARE_HASHTABLE(uexit_pid_htable, PID_HASH_TABLE_BITS);
+};
+
 struct cn_dev {
 	struct cb_id id;
 
@@ -52,6 +67,7 @@ struct cn_dev {
 	struct sock *nls;
 
 	struct cn_queue_dev *cbdev;
+	struct cn_hash_dev *hdev;
 };
 
 /**
@@ -136,5 +152,24 @@ struct cn_queue_dev *cn_queue_alloc_dev(const char *name, struct sock *);
 void cn_queue_free_dev(struct cn_queue_dev *dev);
 
 int cn_cb_equal(const struct cb_id *, const struct cb_id *);
+
+struct cn_hash_dev *cn_hash_alloc_dev(const char *name);
+void cn_hash_free_dev(struct cn_hash_dev *hdev);
+struct uexit_pid_hnode *cn_hash_find_pid_node(struct cn_hash_dev *hdev,
+						pid_t pid);
+int cn_hash_add_elem(struct cn_hash_dev *hdev, __u32 uexit_code, pid_t pid);
+int cn_hash_del_get_exval(struct cn_hash_dev *hdev, pid_t pid);
+int cn_hash_get_exval(struct cn_hash_dev *hdev, pid_t pid);
+
+int cn_add_elem(__u32 uexit_code, pid_t pid);
+int cn_del_get_exval(pid_t pid);
+int cn_get_exval(pid_t pid);
+
+bool cn_table_empty(void);
+bool cn_hash_table_empty(struct cn_hash_dev *hdev);
+
+int cn_display_hlist(pid_t pid, int max_len, int *hkey, int *key_display);
+int cn_hash_display_hlist(struct cn_hash_dev *hdev, pid_t pid, int max_len,
+				int *hkey, int *key_display);
 
 #endif				/* __CONNECTOR_H */

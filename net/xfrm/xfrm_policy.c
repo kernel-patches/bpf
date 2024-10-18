@@ -4429,6 +4429,81 @@ EXPORT_SYMBOL_GPL(xfrm_audit_policy_delete);
 #endif
 
 #ifdef CONFIG_XFRM_MIGRATE
+static bool xfrm_migrate_selector_match(const struct xfrm_selector *sel_cmp,
+					const struct xfrm_selector *sel_tgt)
+{
+	if (sel_cmp->proto == IPSEC_ULPROTO_ANY) {
+		if (sel_tgt->family == sel_cmp->family &&
+		    xfrm_addr_equal(&sel_tgt->daddr, &sel_cmp->daddr,
+				    sel_cmp->family) &&
+		    xfrm_addr_equal(&sel_tgt->saddr, &sel_cmp->saddr,
+				    sel_cmp->family) &&
+		    sel_tgt->prefixlen_d == sel_cmp->prefixlen_d &&
+		    sel_tgt->prefixlen_s == sel_cmp->prefixlen_s) {
+			return true;
+		}
+	} else {
+		if (memcmp(sel_tgt, sel_cmp, sizeof(*sel_tgt)) == 0)
+			return true;
+	}
+	return false;
+}
+
+/* Ugly workaround for userspace that wants to migrate policies for
+ * xfrm interfaces but does not provide the interface if_id.
+ *
+ * Old code used to search the lists and handled if_id == 0 as 'does match'.
+ * New xfrm_migrate code uses the packet-path lookup which uses the if_id
+ * as part of hash key and won't find correct policies.
+ *
+ * Walk entire policy list to see if there is a matching selector without
+ * checking if_id.
+ */
+static u32 xfrm_migrate_policy_find_slow(const struct xfrm_selector *sel,
+					 u8 dir, u8 type, struct net *net)
+{
+	const struct xfrm_policy *policy, *cand = NULL;
+	const struct hlist_head *chain;
+	u32 if_id = 0;
+
+	chain = policy_hash_direct(net, &sel->daddr, &sel->saddr, sel->family, dir);
+	hlist_for_each_entry(policy, chain, bydst) {
+		if (policy->type != type)
+			continue;
+
+		if (xfrm_migrate_selector_match(sel, &policy->selector)) {
+			if_id = policy->if_id;
+			cand = policy;
+			break;
+		}
+	}
+
+	spin_lock_bh(&net->xfrm.xfrm_policy_lock);
+
+	list_for_each_entry(policy, &net->xfrm.policy_all, walk.all) {
+		if (xfrm_policy_is_dead_or_sk(policy))
+			continue;
+
+		if (policy->type != type)
+			continue;
+
+		/* candidate has better priority */
+		if (cand && policy->priority >= cand->priority)
+			continue;
+
+		if (dir != xfrm_policy_id2dir(policy->index))
+			continue;
+
+		if (xfrm_migrate_selector_match(sel, &policy->selector)) {
+			if_id = policy->if_id;
+			cand = policy;
+		}
+	}
+	spin_unlock_bh(&net->xfrm.xfrm_policy_lock);
+
+	return if_id;
+}
+
 static struct xfrm_policy *xfrm_migrate_policy_find(const struct xfrm_selector *sel,
 						    u8 dir, u8 type, struct net *net, u32 if_id)
 {
@@ -4583,6 +4658,19 @@ static int xfrm_migrate_check(const struct xfrm_migrate *m, int num_migrate,
 	return 0;
 }
 
+static void xfrm_migrate_warn_workaround(void)
+{
+	char name[sizeof(current->comm)];
+	static bool warned;
+
+	if (warned)
+		return;
+
+	warned = true;
+	pr_warn_once("warning: `%s' is migrating xfrm interface policies with if_id 0, this is slow.\n",
+		     get_task_comm(name, current));
+}
+
 int xfrm_migrate(const struct xfrm_selector *sel, u8 dir, u8 type,
 		 struct xfrm_migrate *m, int num_migrate,
 		 struct xfrm_kmaddress *k, struct net *net,
@@ -4610,11 +4698,24 @@ int xfrm_migrate(const struct xfrm_selector *sel, u8 dir, u8 type,
 	/* Stage 1 - find policy */
 	pol = xfrm_migrate_policy_find(sel, dir, type, net, if_id);
 	if (IS_ERR_OR_NULL(pol)) {
+		if (if_id == 0) {
+			if_id = xfrm_migrate_policy_find_slow(sel, dir, type, net);
+
+			if (if_id) {
+				pol = xfrm_migrate_policy_find(sel, dir, type, net, if_id);
+				if (!IS_ERR_OR_NULL(pol)) {
+					xfrm_migrate_warn_workaround();
+					goto found;
+				}
+			}
+		}
+
 		NL_SET_ERR_MSG(extack, "Target policy not found");
 		err = IS_ERR(pol) ? PTR_ERR(pol) : -ENOENT;
 		goto out;
 	}
 
+found:
 	/* Stage 2 - find and update state(s) */
 	for (i = 0, mp = m; i < num_migrate; i++, mp++) {
 		if ((x = xfrm_migrate_state_find(mp, net, if_id))) {

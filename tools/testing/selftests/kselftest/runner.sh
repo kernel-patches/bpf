@@ -89,7 +89,7 @@ run_one()
 			fi
 			field=$(echo "$line" | cut -d= -f1)
 			value=$(echo "$line" | cut -d= -f2-)
-			eval "kselftest_$field"="$value"
+			eval "export kselftest_$field"="$value"
 		done < "$settings"
 	fi
 
