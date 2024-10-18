@@ -58,6 +58,10 @@ definitions:
         name: vlan-tag
         doc:
           Device is capable of exposing receive packet VLAN tag via bpf_xdp_metadata_rx_vlan_tag().
+      -
+        name: csum
+        doc:
+          Device is capable of exposing receive packet checksum via bpf_xdp_metadata_rx_csum().
   -
     type: flags
     name: xsk-flags

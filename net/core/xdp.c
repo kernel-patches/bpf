@@ -766,6 +766,29 @@ __bpf_kfunc int bpf_xdp_metadata_rx_vlan_tag(const struct xdp_md *ctx,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_metadata_rx_csum - Read XDP frame checksum status and info.
+ * @ctx: XDP context pointer.
+ * @csum_status: Destination pointer for checksum status.
+ * @csum_info: Destination pointer for complete checksum or partial checksum offset.
+ *
+ * Status (@csum_status) is an enum that informs what checksum processing was
+ * performed, same as sk_buff.ip_summed. Additional results of such processing,
+ * such as complete checksum or partial checksum offsets, are passed as
+ * info (@csum_info).
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-EOPNOTSUPP`` : means device driver doesn't implement kfunc
+ * * ``-ENODATA``    : means checksum status is unknown for this frame
+ */
+__bpf_kfunc int bpf_xdp_metadata_rx_csum(const struct xdp_md *ctx,
+					 enum xdp_csum_status *csum_status,
+					 union xdp_csum_info *csum_info)
+{
+	return -EOPNOTSUPP;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(xdp_metadata_kfunc_ids)
