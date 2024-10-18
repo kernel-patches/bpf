@@ -988,6 +988,7 @@ struct bpf_verifier_ops {
 	int (*btf_struct_access)(struct bpf_verifier_log *log,
 				 const struct bpf_reg_state *reg,
 				 int off, int size);
+	bool (*priv_stack_allowed)(void);
 };
 
 struct bpf_prog_offload_ops {
@@ -1456,6 +1457,12 @@ struct btf_mod_pair {
 
 struct bpf_kfunc_desc_tab;
 
+enum bpf_priv_stack_mode {
+	NO_PRIV_STACK,
+	PRIV_STACK_SUB_PROG,
+	PRIV_STACK_ROOT_PROG,
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1472,6 +1479,9 @@ struct bpf_prog_aux {
 	u32 ctx_arg_info_size;
 	u32 max_rdonly_access;
 	u32 max_rdwr_access;
+	enum bpf_priv_stack_mode priv_stack_mode;
+	u16 subtree_stack_depth; /* Subtree stack depth if PRIV_STACK_ROOT_PROG, 0 otherwise */
+	void __percpu *priv_stack_ptr;
 	struct btf *attach_btf;
 	const struct bpf_ctx_arg_aux *ctx_arg_info;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
@@ -1490,6 +1500,7 @@ struct bpf_prog_aux {
 	bool exception_cb;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
+	bool priv_stack_eligible;
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
