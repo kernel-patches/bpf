@@ -15,7 +15,9 @@
 /****************************************************************************/
 
 #include <linux/clocksource.h>
+#include <linux/ethtool.h>
 #include <linux/net_tstamp.h>
+#include <linux/phy.h>
 #include <linux/pm_qos.h>
 #include <linux/bpf.h>
 #include <linux/ptp_clock_kernel.h>
@@ -115,7 +117,7 @@
 #define IEEE_T_MCOL		0x254 /* Frames tx'd with multiple collision */
 #define IEEE_T_DEF		0x258 /* Frames tx'd after deferral delay */
 #define IEEE_T_LCOL		0x25c /* Frames tx'd with late collision */
-#define IEEE_T_EXCOL		0x260 /* Frames tx'd with excesv collisions */
+#define IEEE_T_EXCOL		0x260 /* Frames tx'd with excessive collisions */
 #define IEEE_T_MACERR		0x264 /* Frames tx'd with TX FIFO underrun */
 #define IEEE_T_CSERR		0x268 /* Frames tx'd with carrier sense err */
 #define IEEE_T_SQE		0x26c /* Frames tx'd with SQE err */
@@ -342,7 +344,7 @@ struct bufdesc_ex {
 #define FEC_TX_BD_FTYPE(X)	(((X) & 0xf) << 20)
 
 /* The number of Tx and Rx buffers.  These are allocated from the page
- * pool.  The code may assume these are power of two, so it it best
+ * pool.  The code may assume these are power of two, so it is best
  * to keep them that size.
  * We don't need to allocate pages for the transmitter.  We just use
  * the skbuffer directly.
@@ -460,7 +462,7 @@ struct bufdesc_ex {
 #define FEC_QUIRK_SINGLE_MDIO		(1 << 11)
 /* Controller supports RACC register */
 #define FEC_QUIRK_HAS_RACC		(1 << 12)
-/* Controller supports interrupt coalesc */
+/* Controller supports interrupt coalesce */
 #define FEC_QUIRK_HAS_COALESCE		(1 << 13)
 /* Interrupt doesn't wake CPU from deep idle */
 #define FEC_QUIRK_ERR006687		(1 << 14)
@@ -495,15 +497,35 @@ struct bufdesc_ex {
  */
 #define FEC_QUIRK_HAS_EEE		(1 << 20)
 
-/* i.MX8QM ENET IP version add new feture to generate delayed TXC/RXC
+/* i.MX8QM ENET IP version add new feature to generate delayed TXC/RXC
  * as an alternative option to make sure it works well with various PHYs.
  * For the implementation of delayed clock, ENET takes synchronized 250MHz
  * clocks to generate 2ns delay.
  */
 #define FEC_QUIRK_DELAYED_CLKS_SUPPORT	(1 << 21)
 
-/* i.MX8MQ SoC integration mix wakeup interrupt signal into "int2" interrupt line. */
-#define FEC_QUIRK_WAKEUP_FROM_INT2	(1 << 22)
+/* With i.MX8MQ and compatible SoCs, the order of the IRQs in the
+ * device tree is not optimal. The driver expects the first three IRQs
+ * to match their corresponding queue, while the last (fourth) IRQ is
+ * used for the PPS:
+ *
+ * - 1st IRQ: "int0": queue0 + other IRQs
+ * - 2nd IRQ: "int1": queue1
+ * - 3rd IRQ: "int2": queue2
+ * - 4th IRQ: "pps": pps
+ *
+ * However, the i.MX8MQ and compatible SoCs do not use the
+ * "interrupt-names" property and specify the IRQs in the wrong order:
+ *
+ * - 1st IRQ: queue1
+ * - 2nd IRQ: queue2
+ * - 3rd IRQ: queue0 + other IRQs
+ * - 4th IRQ: pps
+ *
+ * If the following quirk is active, put the IRQs back in the correct
+ * order, this is done in fec_probe().
+ */
+#define FEC_QUIRK_DT_IRQ2_IS_MAIN_IRQ	BIT(22)
 
 /* i.MX6Q adds pm_qos support */
 #define FEC_QUIRK_HAS_PMQOS			BIT(23)
@@ -614,7 +636,6 @@ struct fec_enet_private {
 	unsigned int num_tx_queues;
 	unsigned int num_rx_queues;
 
-	/* The saved address of a sent-in-place packet/buffer, for skfree(). */
 	struct fec_enet_priv_tx_q *tx_queue[FEC_ENET_MAX_TX_QS];
 	struct fec_enet_priv_rx_q *rx_queue[FEC_ENET_MAX_RX_QS];
 
