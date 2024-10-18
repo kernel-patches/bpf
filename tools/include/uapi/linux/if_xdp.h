@@ -127,6 +127,11 @@ struct xdp_options {
  */
 #define XDP_TXMD_FLAGS_CHECKSUM			(1 << 1)
 
+/* Request transmit GSO info. GSO type and size are communicated via
+ * csum_start and csum_offset fields of struct xsk_tx_metadata.
+ */
+#define XDP_TXMD_FLAGS_GSO				(1 << 2)
+
 /* AF_XDP offloads request. 'request' union member is consumed by the driver
  * when the packet is being transmitted. 'completion' union member is
  * filled by the driver when the transmit completion arrives.
@@ -142,6 +147,12 @@ struct xsk_tx_metadata {
 			__u16 csum_start;
 			/* Offset from csum_start where checksum should be stored. */
 			__u16 csum_offset;
+
+			/* XDP_TXMD_FLAGS_GSO */
+			/* Identical to skb_shared_info.gso_type*/
+			__u32 gso_type;
+			/* Identical to skb_shared_info.gso_size*/
+			__u16 gso_size;
 		} request;
 
 		struct {

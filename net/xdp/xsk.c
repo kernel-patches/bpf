@@ -745,6 +745,11 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 						goto free_err;
 				}
 			}
+
+			if (meta->flags & XDP_TXMD_FLAGS_GSO) {
+				skb_shinfo(skb)->gso_type = meta->request.gso_type;
+				skb_shinfo(skb)->gso_size = meta->request.gso_size;
+			}
 		}
 	}
 

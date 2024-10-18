@@ -110,11 +110,14 @@ struct xdp_sock {
  *     indicates position where checksumming should start.
  *     csum_offset indicates position where checksum should be stored.
  *
+ * void (*tmo_request_gso)(u32 gso_type, u16 gso_size, void *priv)
+ *     Called when AF_XDP frame requested GSO info.
  */
 struct xsk_tx_metadata_ops {
 	void	(*tmo_request_timestamp)(void *priv);
 	u64	(*tmo_fill_timestamp)(void *priv);
 	void	(*tmo_request_checksum)(u16 csum_start, u16 csum_offset, void *priv);
+	void	(*tmo_request_gso)(u32 gso_type, u16 gso_size, void *priv);
 };
 
 #ifdef CONFIG_XDP_SOCKETS
@@ -170,6 +173,11 @@ static inline void xsk_tx_metadata_request(const struct xsk_tx_metadata *meta,
 		if (meta->flags & XDP_TXMD_FLAGS_CHECKSUM)
 			ops->tmo_request_checksum(meta->request.csum_start,
 						  meta->request.csum_offset, priv);
+
+	if (ops->tmo_request_gso)
+		if (meta->flags & XDP_TXMD_FLAGS_GSO)
+			ops->tmo_request_gso(meta->request.gso_type,
+						  meta->request.gso_size, priv);
 }
 
 /**

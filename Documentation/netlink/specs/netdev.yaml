@@ -78,6 +78,10 @@ definitions:
         name: tx-checksum
         doc:
           L3 checksum HW offload is supported by the driver.
+      -
+        name: tx-gso
+        doc:
+          GSO type and size is supported by the driver.
   -
     name: queue-type
     type: enum
