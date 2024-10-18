@@ -145,6 +145,93 @@ static const struct bpf_iter_seq_info kmem_cache_iter_seq_info = {
 	.seq_ops		= &kmem_cache_iter_seq_ops,
 };
 
+/* open-coded version */
+struct bpf_iter_kmem_cache {
+	__u64 __opaque[1];
+} __attribute__((aligned(8)));
+
+struct bpf_iter_kmem_cache_kern {
+	struct kmem_cache *pos;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_kmem_cache_new(struct bpf_iter_kmem_cache *it)
+{
+	struct bpf_iter_kmem_cache_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(*kit) > sizeof(*it));
+	BUILD_BUG_ON(__alignof__(*kit) != __alignof__(*it));
+
+	kit->pos = NULL;
+	return 0;
+}
+
+__bpf_kfunc struct kmem_cache *bpf_iter_kmem_cache_next(struct bpf_iter_kmem_cache *it)
+{
+	struct bpf_iter_kmem_cache_kern *kit = (void *)it;
+	struct kmem_cache *prev = kit->pos;
+	struct kmem_cache *next;
+	bool destroy = false;
+
+	mutex_lock(&slab_mutex);
+
+	if (list_empty(&slab_caches)) {
+		mutex_unlock(&slab_mutex);
+		return NULL;
+	}
+
+	if (prev == NULL)
+		next = list_first_entry(&slab_caches, struct kmem_cache, list);
+	else if (list_last_entry(&slab_caches, struct kmem_cache, list) == prev)
+		next = NULL;
+	else
+		next = list_next_entry(prev, list);
+
+	/* boot_caches have negative refcount, don't touch them */
+	if (next && next->refcount > 0)
+		next->refcount++;
+
+	/* Skip kmem_cache_destroy() for active entries */
+	if (prev && prev->refcount > 1)
+		prev->refcount--;
+	else if (prev && prev->refcount == 1)
+		destroy = true;
+
+	mutex_unlock(&slab_mutex);
+
+	if (destroy)
+		kmem_cache_destroy(prev);
+
+	kit->pos = next;
+	return next;
+}
+
+__bpf_kfunc void bpf_iter_kmem_cache_destroy(struct bpf_iter_kmem_cache *it)
+{
+	struct bpf_iter_kmem_cache_kern *kit = (void *)it;
+	struct kmem_cache *s = kit->pos;
+	bool destroy = false;
+
+	if (s == NULL)
+		return;
+
+	mutex_lock(&slab_mutex);
+
+	/* Skip kmem_cache_destroy() for active entries */
+	if (s->refcount > 1)
+		s->refcount--;
+	else if (s->refcount == 1)
+		destroy = true;
+
+	mutex_unlock(&slab_mutex);
+
+	if (destroy)
+		kmem_cache_destroy(s);
+}
+
+__bpf_kfunc_end_defs();
+
 static void bpf_iter_kmem_cache_show_fdinfo(const struct bpf_iter_aux_info *aux,
 					    struct seq_file *seq)
 {
