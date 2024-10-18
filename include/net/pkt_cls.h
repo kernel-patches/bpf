@@ -782,6 +782,7 @@ struct tc_cls_matchall_offload {
 	struct flow_rule *rule;
 	struct flow_stats stats;
 	bool use_act_stats;
+	bool skip_sw;
 	unsigned long cookie;
 };
 

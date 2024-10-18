@@ -1906,7 +1906,12 @@ static int ftgmac100_probe(struct platform_device *pdev)
 			goto err_phy_connect;
 		}
 
-		phydev = fixed_phy_register(PHY_POLL, &ncsi_phy_status, NULL);
+		phydev = fixed_phy_register(PHY_POLL, &ncsi_phy_status, np);
+		if (IS_ERR(phydev)) {
+			dev_err(&pdev->dev, "failed to register fixed PHY device\n");
+			err = PTR_ERR(phydev);
+			goto err_phy_connect;
+		}
 		err = phy_connect_direct(netdev, phydev, ftgmac100_adjust_link,
 					 PHY_INTERFACE_MODE_MII);
 		if (err) {
@@ -2084,7 +2089,7 @@ MODULE_DEVICE_TABLE(of, ftgmac100_of_match);
 
 static struct platform_driver ftgmac100_driver = {
 	.probe	= ftgmac100_probe,
-	.remove_new = ftgmac100_remove,
+	.remove = ftgmac100_remove,
 	.driver	= {
 		.name		= DRV_NAME,
 		.of_match_table	= ftgmac100_of_match,
