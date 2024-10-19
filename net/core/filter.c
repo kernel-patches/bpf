@@ -2191,6 +2191,13 @@ static int __bpf_redirect_common(struct sk_buff *skb, struct net_device *dev,
 		return -ERANGE;
 	}
 
+	if (unlikely(skb->len < dev->min_header_len ||
+		     skb_mac_header_len(skb) < dev->min_header_len ||
+		     skb_mac_header_len(skb) > dev->hard_header_len)) {
+		kfree_skb(skb);
+		return -ERANGE;
+	}
+
 	bpf_push_mac_rcsum(skb);
 	return flags & BPF_F_INGRESS ?
 	       __bpf_rx_skb(dev, skb) : __bpf_tx_skb(dev, skb);
