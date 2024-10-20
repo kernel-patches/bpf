@@ -1456,6 +1456,12 @@ struct btf_mod_pair {
 
 struct bpf_kfunc_desc_tab;
 
+enum bpf_priv_stack_mode {
+	NO_PRIV_STACK,
+	PRIV_STACK_SUB_PROG,
+	PRIV_STACK_ROOT_PROG,
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1472,6 +1478,9 @@ struct bpf_prog_aux {
 	u32 ctx_arg_info_size;
 	u32 max_rdonly_access;
 	u32 max_rdwr_access;
+	enum bpf_priv_stack_mode priv_stack_mode;
+	u16 subtree_stack_depth; /* Subtree stack depth if PRIV_STACK_ROOT_PROG, 0 otherwise */
+	void __percpu *priv_stack_ptr;
 	struct btf *attach_btf;
 	const struct bpf_ctx_arg_aux *ctx_arg_info;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
@@ -1490,6 +1499,8 @@ struct bpf_prog_aux {
 	bool exception_cb;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
+	bool priv_stack_eligible;
+	bool priv_stack_always;
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
@@ -1772,9 +1783,10 @@ struct bpf_struct_ops {
  * btf_ctx_access() will lookup prog->aux->ctx_arg_info to find the
  * corresponding entry for an given argument.
  */
-struct bpf_struct_ops_arg_info {
+struct bpf_struct_ops_func_info {
 	struct bpf_ctx_arg_aux *info;
 	u32 cnt;
+	bool priv_stack_always;
 };
 
 struct bpf_struct_ops_desc {
@@ -1786,7 +1798,7 @@ struct bpf_struct_ops_desc {
 	u32 value_id;
 
 	/* Collection of argument information for each member */
-	struct bpf_struct_ops_arg_info *arg_info;
+	struct bpf_struct_ops_func_info *func_info;
 };
 
 enum bpf_struct_ops_state {
