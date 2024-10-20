@@ -1240,6 +1240,7 @@ void __weak bpf_jit_free(struct bpf_prog *fp)
 		struct bpf_binary_header *hdr = bpf_jit_binary_hdr(fp);
 
 		bpf_jit_binary_free(hdr);
+		free_percpu(fp->aux->priv_stack_ptr);
 		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(fp));
 	}
 
@@ -2420,6 +2421,24 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 		*err = bpf_prog_alloc_jited_linfo(fp);
 		if (*err)
 			return fp;
+
+		if (fp->aux->priv_stack_eligible) {
+			if (!fp->aux->stack_depth) {
+				fp->aux->priv_stack_mode = NO_PRIV_STACK;
+			} else {
+				void __percpu *priv_stack_ptr;
+
+				fp->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
+				priv_stack_ptr =
+					__alloc_percpu_gfp(fp->aux->stack_depth, 8, GFP_KERNEL);
+				if (!priv_stack_ptr) {
+					*err = -ENOMEM;
+					return fp;
+				}
+				fp->aux->subtree_stack_depth = fp->aux->stack_depth;
+				fp->aux->priv_stack_ptr = priv_stack_ptr;
+			}
+		}
 
 		fp = bpf_int_jit_compile(fp);
 		bpf_prog_jit_attempt_done(fp);
