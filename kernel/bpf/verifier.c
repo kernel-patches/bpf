@@ -20018,6 +20018,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
 	int i, j, subprog_start, subprog_end = 0, len, subprog;
+	int subtree_top_idx, subtree_stack_depth;
+	void __percpu *priv_stack_ptr;
 	struct bpf_map *map_ptr;
 	struct bpf_insn *insn;
 	void *old_bpf_func;
@@ -20096,6 +20098,33 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;
 		func[i]->aux->func_idx = i;
+
+		subtree_top_idx = env->subprog_info[i].subtree_top_idx;
+		if (env->subprog_info[subtree_top_idx].priv_stack_eligible) {
+			if (subtree_top_idx == i)
+				func[i]->aux->subtree_stack_depth =
+					env->subprog_info[i].subtree_stack_depth;
+
+			subtree_stack_depth = func[i]->aux->subtree_stack_depth;
+			if (subtree_top_idx != i) {
+				if (env->subprog_info[subtree_top_idx].subtree_stack_depth)
+					func[i]->aux->priv_stack_mode = PRIV_STACK_SUB_PROG;
+				else
+					func[i]->aux->priv_stack_mode = NO_PRIV_STACK;
+			} else if (!subtree_stack_depth) {
+				func[i]->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
+			} else {
+				func[i]->aux->priv_stack_mode = PRIV_STACK_ROOT_PROG;
+				priv_stack_ptr =
+					__alloc_percpu_gfp(subtree_stack_depth, 8, GFP_KERNEL);
+				if (!priv_stack_ptr) {
+					err = -ENOMEM;
+					goto out_free;
+				}
+				func[i]->aux->priv_stack_ptr = priv_stack_ptr;
+			}
+		}
+
 		/* Below members will be freed only at prog->aux */
 		func[i]->aux->btf = prog->aux->btf;
 		func[i]->aux->func_info = prog->aux->func_info;
