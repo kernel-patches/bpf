@@ -182,11 +182,11 @@ find_stub_func_proto(const struct btf *btf, const char *st_op_name,
 /* Prepare argument info for every nullable argument of a member of a
  * struct_ops type.
  *
- * Initialize a struct bpf_struct_ops_arg_info according to type info of
+ * Initialize a struct bpf_struct_ops_func_info according to type info of
  * the arguments of a stub function. (Check kCFI for more information about
  * stub functions.)
  *
- * Each member in the struct_ops type has a struct bpf_struct_ops_arg_info
+ * Each member in the struct_ops type has a struct bpf_struct_ops_func_info
  * to provide an array of struct bpf_ctx_arg_aux, which in turn provides
  * the information that used by the verifier to check the arguments of the
  * BPF struct_ops program assigned to the member. Here, we only care about
@@ -196,14 +196,14 @@ find_stub_func_proto(const struct btf *btf, const char *st_op_name,
  * prog->aux->ctx_arg_info of BPF struct_ops programs and passed to the
  * verifier. (See check_struct_ops_btf_id())
  *
- * arg_info->info will be the list of struct bpf_ctx_arg_aux if success. If
+ * func_info->info will be the list of struct bpf_ctx_arg_aux if success. If
  * fails, it will be kept untouched.
  */
-static int prepare_arg_info(struct btf *btf,
+static int prepare_func_info(struct btf *btf,
 			    const char *st_ops_name,
 			    const char *member_name,
 			    const struct btf_type *func_proto,
-			    struct bpf_struct_ops_arg_info *arg_info)
+			    struct bpf_struct_ops_func_info *func_info)
 {
 	const struct btf_type *stub_func_proto, *pointed_type;
 	const struct btf_param *stub_args, *args;
@@ -282,8 +282,8 @@ static int prepare_arg_info(struct btf *btf,
 	}
 
 	if (info_cnt) {
-		arg_info->info = info_buf;
-		arg_info->cnt = info_cnt;
+		func_info->info = info_buf;
+		func_info->cnt = info_cnt;
 	} else {
 		kfree(info_buf);
 	}
@@ -296,17 +296,17 @@ err_out:
 	return -EINVAL;
 }
 
-/* Clean up the arg_info in a struct bpf_struct_ops_desc. */
+/* Clean up the func_info in a struct bpf_struct_ops_desc. */
 void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_ops_desc)
 {
-	struct bpf_struct_ops_arg_info *arg_info;
+	struct bpf_struct_ops_func_info *func_info;
 	int i;
 
-	arg_info = st_ops_desc->arg_info;
+	func_info = st_ops_desc->func_info;
 	for (i = 0; i < btf_type_vlen(st_ops_desc->type); i++)
-		kfree(arg_info[i].info);
+		kfree(func_info[i].info);
 
-	kfree(arg_info);
+	kfree(func_info);
 }
 
 int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
@@ -314,7 +314,7 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			     struct bpf_verifier_log *log)
 {
 	struct bpf_struct_ops *st_ops = st_ops_desc->st_ops;
-	struct bpf_struct_ops_arg_info *arg_info;
+	struct bpf_struct_ops_func_info *func_info;
 	const struct btf_member *member;
 	const struct btf_type *t;
 	s32 type_id, value_id;
@@ -359,12 +359,12 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 	if (!is_valid_value_type(btf, value_id, t, value_name))
 		return -EINVAL;
 
-	arg_info = kcalloc(btf_type_vlen(t), sizeof(*arg_info),
+	func_info = kcalloc(btf_type_vlen(t), sizeof(*func_info),
 			   GFP_KERNEL);
-	if (!arg_info)
+	if (!func_info)
 		return -ENOMEM;
 
-	st_ops_desc->arg_info = arg_info;
+	st_ops_desc->func_info = func_info;
 	st_ops_desc->type = t;
 	st_ops_desc->type_id = type_id;
 	st_ops_desc->value_id = value_id;
@@ -403,9 +403,9 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			goto errout;
 		}
 
-		err = prepare_arg_info(btf, st_ops->name, mname,
+		err = prepare_func_info(btf, st_ops->name, mname,
 				       func_proto,
-				       arg_info + i);
+				       func_info + i);
 		if (err)
 			goto errout;
 	}
