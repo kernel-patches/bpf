@@ -194,6 +194,8 @@ struct bpf_verifier_stack_elem {
 
 #define BPF_GLOBAL_PERCPU_MA_MAX_SIZE  512
 
+#define BPF_PRIV_STACK_MIN_SUBTREE_SIZE	128
+
 static int acquire_reference_state(struct bpf_verifier_env *env, int insn_idx);
 static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env);
@@ -5982,6 +5984,41 @@ static int check_ptr_alignment(struct bpf_verifier_env *env,
 					   strict);
 }
 
+static bool bpf_enable_private_stack(struct bpf_verifier_env *env)
+{
+	if (!bpf_jit_supports_private_stack())
+		return false;
+
+	switch (env->prog->type) {
+	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_TRACEPOINT:
+	case BPF_PROG_TYPE_PERF_EVENT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+		return true;
+	case BPF_PROG_TYPE_TRACING:
+		if (env->prog->expected_attach_type != BPF_TRACE_ITER)
+			return true;
+		fallthrough;
+	default:
+		return false;
+	}
+}
+
+static bool is_priv_stack_supported(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *si = env->subprog_info;
+	bool has_tail_call = false;
+
+	for (int i = 0; i < env->subprog_cnt; i++) {
+		if (si[i].has_tail_call) {
+			has_tail_call = true;
+			break;
+		}
+	}
+
+	return !has_tail_call && bpf_enable_private_stack(env);
+}
+
 static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
 {
 	if (env->prog->jit_requested)
@@ -5999,16 +6036,21 @@ static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
  * Since recursion is prevented by check_cfg() this algorithm
  * only needs a local stack of MAX_CALL_FRAMES to remember callsites
  */
-static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx)
+static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx,
+					 bool check_priv_stack, bool priv_stack_supported)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
 	int depth = 0, frame = 0, i, subprog_end;
 	bool tail_call_reachable = false;
+	bool priv_stack_eligible = false;
 	int ret_insn[MAX_CALL_FRAMES];
 	int ret_prog[MAX_CALL_FRAMES];
-	int j;
+	int j, subprog_stack_depth;
+	int orig_idx = idx;
 
+	if (check_priv_stack)
+		subprog[idx].subtree_top_idx = idx;
 	i = subprog[idx].start;
 process_func:
 	/* protect against potential stack overflow that might happen when
@@ -6030,17 +6072,32 @@ process_func:
 	 * tailcall will unwind the current stack frame but it will not get rid
 	 * of caller's stack as shown on the example above.
 	 */
-	if (idx && subprog[idx].has_tail_call && depth >= 256) {
+	if (!check_priv_stack && idx && subprog[idx].has_tail_call && depth >= 256) {
 		verbose(env,
 			"tail_calls are not allowed when call stack of previous frames is %d bytes. Too large\n",
 			depth);
 		return -EACCES;
 	}
-	depth += round_up_stack_depth(env, subprog[idx].stack_depth);
-	if (depth > MAX_BPF_STACK) {
+	subprog_stack_depth = round_up_stack_depth(env, subprog[idx].stack_depth);
+	depth += subprog_stack_depth;
+	if (!check_priv_stack && !priv_stack_supported && depth > MAX_BPF_STACK) {
 		verbose(env, "combined stack size of %d calls is %d. Too large\n",
 			frame + 1, depth);
 		return -EACCES;
+	}
+	if (check_priv_stack) {
+		if (subprog_stack_depth > MAX_BPF_STACK) {
+			verbose(env, "stack size of subprog %d is %d. Too large\n",
+				idx, subprog_stack_depth);
+			return -EACCES;
+		}
+
+		if (!priv_stack_eligible && depth >= BPF_PRIV_STACK_MIN_SUBTREE_SIZE) {
+			subprog[orig_idx].priv_stack_eligible = true;
+			env->prog->aux->priv_stack_eligible = priv_stack_eligible = true;
+		}
+		subprog[orig_idx].subtree_stack_depth =
+			max_t(u16, subprog[orig_idx].subtree_stack_depth, depth);
 	}
 continue_func:
 	subprog_end = subprog[idx + 1].start;
@@ -6078,6 +6135,12 @@ continue_func:
 		next_insn = i + insn[i].imm + 1;
 		sidx = find_subprog(env, next_insn);
 		if (sidx < 0) {
+			/* It is possible that callback func has been removed as dead code after
+			 * instruction rewrites, e.g. bpf_loop with cnt 0.
+			 */
+			if (check_priv_stack)
+				continue;
+
 			WARN_ONCE(1, "verifier bug. No program starts at insn %d\n",
 				  next_insn);
 			return -EFAULT;
@@ -6097,8 +6160,10 @@ continue_func:
 		}
 		i = next_insn;
 		idx = sidx;
+		if (check_priv_stack)
+			subprog[idx].subtree_top_idx = orig_idx;
 
-		if (subprog[idx].has_tail_call)
+		if (!check_priv_stack && subprog[idx].has_tail_call)
 			tail_call_reachable = true;
 
 		frame++;
@@ -6122,7 +6187,7 @@ continue_func:
 			}
 			subprog[ret_prog[j]].tail_call_reachable = true;
 		}
-	if (subprog[0].tail_call_reachable)
+	if (!check_priv_stack && subprog[0].tail_call_reachable)
 		env->prog->aux->tail_call_reachable = true;
 
 	/* end of for() loop means the last insn of the 'subprog'
@@ -6137,14 +6202,18 @@ continue_func:
 	goto continue_func;
 }
 
-static int check_max_stack_depth(struct bpf_verifier_env *env)
+static int check_max_stack_depth(struct bpf_verifier_env *env, bool check_priv_stack,
+				 bool priv_stack_supported)
 {
 	struct bpf_subprog_info *si = env->subprog_info;
+	bool check_subprog;
 	int ret;
 
 	for (int i = 0; i < env->subprog_cnt; i++) {
-		if (!i || si[i].is_async_cb) {
-			ret = check_max_stack_depth_subprog(env, i);
+		check_subprog = !i || (check_priv_stack ? si[i].is_cb : si[i].is_async_cb);
+		if (check_subprog) {
+			ret = check_max_stack_depth_subprog(env, i, check_priv_stack,
+							    priv_stack_supported);
 			if (ret < 0)
 				return ret;
 		}
@@ -22303,7 +22372,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	struct bpf_verifier_env *env;
 	int i, len, ret = -EINVAL, err;
 	u32 log_true_size;
-	bool is_priv;
+	bool is_priv, priv_stack_supported = false;
 
 	/* no program is valid */
 	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
@@ -22430,8 +22499,10 @@ skip_full_check:
 	if (ret == 0)
 		ret = remove_fastcall_spills_fills(env);
 
-	if (ret == 0)
-		ret = check_max_stack_depth(env);
+	if (ret == 0) {
+		priv_stack_supported = is_priv_stack_supported(env);
+		ret = check_max_stack_depth(env, false, priv_stack_supported);
+	}
 
 	/* instruction rewrites happen after this point */
 	if (ret == 0)
@@ -22464,6 +22535,9 @@ skip_full_check:
 		env->prog->aux->verifier_zext = bpf_jit_needs_zext() ? !ret
 								     : false;
 	}
+
+	if (ret == 0 && priv_stack_supported)
+		ret = check_max_stack_depth(env, true, true);
 
 	if (ret == 0)
 		ret = fixup_call_args(env);
