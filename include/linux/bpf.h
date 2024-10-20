@@ -1773,7 +1773,7 @@ struct bpf_struct_ops {
  * btf_ctx_access() will lookup prog->aux->ctx_arg_info to find the
  * corresponding entry for an given argument.
  */
-struct bpf_struct_ops_arg_info {
+struct bpf_struct_ops_func_info {
 	struct bpf_ctx_arg_aux *info;
 	u32 cnt;
 };
@@ -1787,7 +1787,7 @@ struct bpf_struct_ops_desc {
 	u32 value_id;
 
 	/* Collection of argument information for each member */
-	struct bpf_struct_ops_arg_info *arg_info;
+	struct bpf_struct_ops_func_info *func_info;
 };
 
 enum bpf_struct_ops_state {
