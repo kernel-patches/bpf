@@ -5995,6 +5995,8 @@ static bool bpf_enable_private_stack(struct bpf_verifier_env *env)
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 		return true;
+	case BPF_PROG_TYPE_STRUCT_OPS:
+		return env->prog->aux->priv_stack_always;
 	case BPF_PROG_TYPE_TRACING:
 		if (env->prog->expected_attach_type != BPF_TRACE_ITER)
 			return true;
@@ -6092,7 +6094,9 @@ process_func:
 			return -EACCES;
 		}
 
-		if (!priv_stack_eligible && depth >= BPF_PRIV_STACK_MIN_SUBTREE_SIZE) {
+		if (!priv_stack_eligible &&
+		    (env->prog->aux->priv_stack_always ||
+		     depth >= BPF_PRIV_STACK_MIN_SUBTREE_SIZE)) {
 			subprog[orig_idx].priv_stack_eligible = true;
 			env->prog->aux->priv_stack_eligible = priv_stack_eligible = true;
 		}
@@ -21883,6 +21887,8 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 		st_ops_desc->func_info[member_idx].info;
 	prog->aux->ctx_arg_info_size =
 		st_ops_desc->func_info[member_idx].cnt;
+	prog->aux->priv_stack_always =
+		st_ops_desc->func_info[member_idx].priv_stack_always;
 
 	prog->aux->attach_func_proto = func_proto;
 	prog->aux->attach_func_name = mname;
