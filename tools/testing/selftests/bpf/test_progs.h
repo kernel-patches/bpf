@@ -186,6 +186,19 @@ void test__skip(void);
 void test__fail(void);
 int test__join_cgroup(const char *path);
 
+#define DUMP_BUFFER(name, buf, len)						\
+	({									\
+		fprintf(stdout, "%s:\n", name);					\
+		for (int i = 0; i < len; i++) {					\
+			if (i && !(i % 16))					\
+				fprintf(stdout, "\n");				\
+			if (i && !(i % 8) && (i % 16))				\
+				fprintf(stdout, "\t");				\
+			fprintf(stdout, "%02X ", ((uint8_t *)(buf))[i]);	\
+		}								\
+		fprintf(stdout, "\n");						\
+	})
+
 #define PRINT_FAIL(format...)                                                  \
 	({                                                                     \
 		test__fail();                                                  \
@@ -341,6 +354,18 @@ int test__join_cgroup(const char *path);
 	CHECK(!___ok, (name),						\
 	      "unexpected %s: '%s' is not a substring of '%s'\n",	\
 	      (name), ___substr, ___str);				\
+	___ok;								\
+})
+
+#define ASSERT_MEMEQ(actual, expected, len, name) ({			\
+	static int duration = 0;					\
+	const void *__act = actual;					\
+	const void *__exp = expected;					\
+	int __len = len;						\
+	bool ___ok = memcmp(__act, __exp, __len) == 0;			\
+	CHECK(!___ok, (name), "unexpected memory mismatch\n");		\
+	DUMP_BUFFER("actual", __act, __len);				\
+	DUMP_BUFFER("expected:", __exp, __len);				\
 	___ok;								\
 })
 
