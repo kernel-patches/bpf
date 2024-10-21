@@ -2888,7 +2888,7 @@ bpf_iter_bits_new(struct bpf_iter_bits *it, const u64 *unsafe_ptr__ign, u32 nr_w
 
 	kit->nr_bits = 0;
 	kit->bits_copy = 0;
-	kit->bit = -1;
+	kit->bit = 0;
 
 	if (!unsafe_ptr__ign || !nr_words)
 		return -EINVAL;
@@ -2934,15 +2934,13 @@ __bpf_kfunc int *bpf_iter_bits_next(struct bpf_iter_bits *it)
 	const unsigned long *bits;
 	int bit;
 
-	if (nr_bits == 0)
+	if (kit->bit >= nr_bits)
 		return NULL;
 
 	bits = nr_bits == 64 ? &kit->bits_copy : kit->bits;
 	bit = find_next_bit(bits, nr_bits, kit->bit + 1);
-	if (bit >= nr_bits) {
-		kit->nr_bits = 0;
+	if (bit >= nr_bits)
 		return NULL;
-	}
 
 	kit->bit = bit;
 	return &kit->bit;
