@@ -1234,17 +1234,41 @@ static int bond_option_arp_ip_targets_set(struct bonding *bond,
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
+/* convert IPv6 address to link-local solicited-node multicast mac address */
+static void ipv6_addr_to_solicited_mac(const struct in6_addr *addr,
+				       unsigned char mac[ETH_ALEN])
+{
+	mac[0] = 0x33;
+	mac[1] = 0x33;
+	mac[2] = 0xFF;
+	mac[3] = addr->s6_addr[13];
+	mac[4] = addr->s6_addr[14];
+	mac[5] = addr->s6_addr[15];
+}
+
 static void _bond_options_ns_ip6_target_set(struct bonding *bond, int slot,
 					    struct in6_addr *target,
 					    unsigned long last_rx)
 {
+	unsigned char target_maddr[ETH_ALEN], slot_maddr[ETH_ALEN];
 	struct in6_addr *targets = bond->params.ns_targets;
 	struct list_head *iter;
 	struct slave *slave;
 
+	if (!ipv6_addr_any(target))
+		ipv6_addr_to_solicited_mac(target, target_maddr);
 	if (slot >= 0 && slot < BOND_MAX_NS_TARGETS) {
-		bond_for_each_slave(bond, slave, iter)
+		if (!ipv6_addr_any(&targets[slot]))
+			ipv6_addr_to_solicited_mac(&targets[slot], slot_maddr);
+		bond_for_each_slave(bond, slave, iter) {
 			slave->target_last_arp_rx[slot] = last_rx;
+			/* remove the previous maddr on salve */
+			if (!ipv6_addr_any(&targets[slot]))
+				dev_mc_del(slave->dev, slot_maddr);
+			/* add new maddr on slave if target is set */
+			if (!ipv6_addr_any(target))
+				dev_mc_add(slave->dev, target_maddr);
+		}
 		targets[slot] = *target;
 	}
 }
@@ -1289,6 +1313,24 @@ static int bond_option_ns_ip6_targets_set(struct bonding *bond,
 	_bond_options_ns_ip6_target_set(bond, index, target, jiffies);
 
 	return 0;
+}
+
+void slave_set_ns_maddr(struct bonding *bond, struct net_device *slave_dev,
+			bool add)
+{
+	struct in6_addr *targets = bond->params.ns_targets;
+	unsigned char slot_maddr[ETH_ALEN];
+	int i;
+
+	for (i = 0; i < BOND_MAX_NS_TARGETS; i++) {
+		if (!ipv6_addr_any(&targets[i])) {
+			ipv6_addr_to_solicited_mac(&targets[i], slot_maddr);
+			if (add)
+				dev_mc_add(slave_dev, slot_maddr);
+			else
+				dev_mc_del(slave_dev, slot_maddr);
+		}
+	}
 }
 #else
 static int bond_option_ns_ip6_targets_set(struct bonding *bond,

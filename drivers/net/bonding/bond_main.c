@@ -2350,6 +2350,11 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	if (bond_mode_can_use_xmit_hash(bond))
 		bond_update_slave_arr(bond, NULL);
 
+#if IS_ENABLED(CONFIG_IPV6)
+	if (slave_dev->flags & IFF_MULTICAST)
+		/* set target NS maddrs for new slave */
+		slave_set_ns_maddr(bond, slave_dev, true);
+#endif
 
 	if (!slave_dev->netdev_ops->ndo_bpf ||
 	    !slave_dev->netdev_ops->ndo_xdp_xmit) {
@@ -2502,6 +2507,12 @@ static int __bond_release_one(struct net_device *bond_dev,
 
 	/* recompute stats just before removing the slave */
 	bond_get_stats(bond->dev, &bond->bond_stats);
+
+#if IS_ENABLED(CONFIG_IPV6)
+	if (slave_dev->flags & IFF_MULTICAST)
+		/* clear all target NS maddrs */
+		slave_set_ns_maddr(bond, slave_dev, false);
+#endif
 
 	if (bond->xdp_prog) {
 		struct netdev_bpf xdp = {
