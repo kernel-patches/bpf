@@ -3071,6 +3071,8 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 	const struct bpf_prog *prog = link->prog;
 	char prog_tag[sizeof(prog->tag) * 2 + 1] = { };
 
+	BUILD_BUG_ON(ARRAY_SIZE(bpf_link_type_strs) != __MAX_BPF_LINK_TYPE);
+
 	seq_printf(m,
 		   "link_type:\t%s\n"
 		   "link_id:\t%u\n",
