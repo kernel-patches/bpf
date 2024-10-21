@@ -16,10 +16,12 @@
 #include <sys/stat.h>
 #include <bpf/libbpf.h>
 #include <bpf/btf.h>
+#include <bpf/bpf.h>
 #include <libelf.h>
 #include <gelf.h>
 #include <float.h>
 #include <math.h>
+#include <linux/filter.h>
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -1109,6 +1111,42 @@ skip_freplace_fixup:
 	return;
 }
 
+static int max_verifier_log_size(void)
+{
+	const int big_log_size = UINT_MAX >> 2;
+	const int small_log_size = UINT_MAX >> 8;
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int ret, insn_cnt = ARRAY_SIZE(insns);
+	char *log_buf;
+	static int log_size;
+
+	if (log_size != 0)
+		return log_size;
+
+	log_size = small_log_size;
+	log_buf = malloc(big_log_size);
+
+	if (!log_buf)
+		return log_size;
+
+	LIBBPF_OPTS(bpf_prog_load_opts, opts,
+		    .log_buf = log_buf,
+		    .log_size = big_log_size,
+		    .log_level = 2
+	);
+	ret = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL", insns, insn_cnt, &opts);
+	free(log_buf);
+
+	if (ret > 0) {
+		log_size = big_log_size;
+		close(ret);
+	}
+	return log_size;
+}
+
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1132,7 +1170,7 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	memset(stats, 0, sizeof(*stats));
 
 	if (env.verbose || env.top_src_lines > 0) {
-		buf_sz = env.log_size ? env.log_size : 16 * 1024 * 1024;
+		buf_sz = env.log_size ? env.log_size : max_verifier_log_size();
 		buf = malloc(buf_sz);
 		if (!buf)
 			return -ENOMEM;
