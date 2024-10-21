@@ -337,6 +337,7 @@ struct sparx5 {
 	struct device *dev;
 	u32 chip_id;
 	enum spx5_target_chiptype target_ct;
+	enum spx5_target_chiptype target_dt; /* target from devicetree */
 	void __iomem *regs[NUM_TARGETS];
 	int port_count;
 	struct mutex lock; /* MAC reg lock */

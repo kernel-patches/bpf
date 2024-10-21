@@ -24,6 +24,8 @@
 #include <linux/types.h>
 #include <linux/reset.h>
 
+#include "lan969x.h" /* lan969x_desc */
+
 #include "sparx5_main_regs.h"
 #include "sparx5_main.h"
 #include "sparx5_port.h"
@@ -225,6 +227,168 @@ bool is_sparx5(struct sparx5 *sparx5)
 	default:
 		return false;
 	}
+}
+
+/* Set the devicetree target based on the compatible string */
+static int sparx5_set_target_dt(struct sparx5 *sparx5)
+{
+	struct device_node *node = sparx5->pdev->dev.of_node;
+
+	if (is_sparx5(sparx5))
+		/* For Sparx5 the devicetree target is always the chip target */
+		sparx5->target_dt = sparx5->target_ct;
+	else if (of_device_is_compatible(node, "microchip,lan9691-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9691VAO;
+	else if (of_device_is_compatible(node, "microchip,lan9692-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9692VAO;
+	else if (of_device_is_compatible(node, "microchip,lan9693-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9693VAO;
+	else if (of_device_is_compatible(node, "microchip,lan9694-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9694;
+	else if (of_device_is_compatible(node, "microchip,lan9695-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9694TSN;
+	else if (of_device_is_compatible(node, "microchip,lan9696-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9696;
+	else if (of_device_is_compatible(node, "microchip,lan9697-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9696TSN;
+	else if (of_device_is_compatible(node, "microchip,lan9698-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9698;
+	else if (of_device_is_compatible(node, "microchip,lan9699-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9698TSN;
+	else if (of_device_is_compatible(node, "microchip,lan969a-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9694RED;
+	else if (of_device_is_compatible(node, "microchip,lan969b-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9696RED;
+	else if (of_device_is_compatible(node, "microchip,lan969c-switch"))
+		sparx5->target_dt = SPX5_TARGET_CT_LAN9698RED;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
+/* Compare the devicetree target with the chip target.
+ * Make sure the chip target supports the features and bandwidth requested
+ * from the devicetree target.
+ */
+static int sparx5_verify_target(struct sparx5 *sparx5)
+{
+	switch (sparx5->target_dt) {
+	case SPX5_TARGET_CT_7546:
+	case SPX5_TARGET_CT_7549:
+	case SPX5_TARGET_CT_7552:
+	case SPX5_TARGET_CT_7556:
+	case SPX5_TARGET_CT_7558:
+	case SPX5_TARGET_CT_7546TSN:
+	case SPX5_TARGET_CT_7549TSN:
+	case SPX5_TARGET_CT_7552TSN:
+	case SPX5_TARGET_CT_7556TSN:
+	case SPX5_TARGET_CT_7558TSN:
+		return 0;
+	case SPX5_TARGET_CT_LAN9698RED:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9696RED:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9694RED:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9694RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9698TSN:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9696TSN:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9696TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9694TSN:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9694TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9694RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9693VAO:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9693VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9692VAO:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9692VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9693VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9691VAO:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9691VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9692VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9693VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9694TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9694RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9698:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9698 ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9693VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9696:
+		if (sparx5->target_ct == SPX5_TARGET_CT_LAN9696 ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698 ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9692VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9693VAO ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698RED ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9696TSN ||
+		    sparx5->target_ct == SPX5_TARGET_CT_LAN9698TSN)
+			return 0;
+		break;
+
+	case SPX5_TARGET_CT_LAN9694:
+		return 0;
+
+	default:
+		pr_err("Unknown target: %x", sparx5->target_dt);
+		return -EINVAL;
+	}
+
+	pr_err("Chip target: %x does not support the target: %x",
+	       sparx5->target_ct, sparx5->target_dt);
+
+	return -EINVAL;
 }
 
 static int sparx5_create_targets(struct sparx5 *sparx5)
@@ -441,7 +605,7 @@ static int sparx5_init_coreclock(struct sparx5 *sparx5)
 	 * If 'VTSS_CORE_CLOCK_DEFAULT' then the highest supported
 	 * freq. is used
 	 */
-	switch (sparx5->target_ct) {
+	switch (sparx5->target_dt) {
 	case SPX5_TARGET_CT_7546:
 		if (sparx5->coreclock == SPX5_CORE_CLOCK_DEFAULT)
 			freq = SPX5_CORE_CLOCK_250MHZ;
@@ -491,7 +655,7 @@ static int sparx5_init_coreclock(struct sparx5 *sparx5)
 		break;
 	default:
 		dev_err(sparx5->dev, "Target (%#04x) not supported\n",
-			sparx5->target_ct);
+			sparx5->target_dt);
 		return -ENODEV;
 	}
 
@@ -512,7 +676,7 @@ static int sparx5_init_coreclock(struct sparx5 *sparx5)
 		default:
 			dev_err(sparx5->dev,
 				"%d coreclock not supported on (%#04x)\n",
-				sparx5->coreclock, sparx5->target_ct);
+				sparx5->coreclock, sparx5->target_dt);
 			return -EINVAL;
 		}
 
@@ -914,6 +1078,16 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 	sparx5->target_ct = (enum spx5_target_chiptype)
 		GCB_CHIP_ID_PART_ID_GET(sparx5->chip_id);
 
+	/* Set the devicetree target based on the compatible string. */
+	err = sparx5_set_target_dt(sparx5);
+	if (err)
+		goto cleanup_config;
+
+	/* Verify that the chip target supports the devicetree target */
+	err = sparx5_verify_target(sparx5);
+	if (err)
+		goto cleanup_config;
+
 	/* Initialize Switchcore and internal RAMs */
 	err = sparx5_init_switchcore(sparx5);
 	if (err) {
@@ -1051,6 +1225,20 @@ static const struct sparx5_match_data sparx5_desc = {
 
 static const struct of_device_id mchp_sparx5_match[] = {
 	{ .compatible = "microchip,sparx5-switch", .data = &sparx5_desc },
+#ifdef CONFIG_LAN969X_SWITCH
+	{ .compatible = "microchip,lan9691-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9692-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9693-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9694-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9695-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9696-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9697-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9698-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan9699-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan969a-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan969b-switch", .data = &lan969x_desc },
+	{ .compatible = "microchip,lan969c-switch", .data = &lan969x_desc },
+#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mchp_sparx5_match);
