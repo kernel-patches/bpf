@@ -3463,9 +3463,6 @@ static int stmmac_hw_setup(struct net_device *dev, bool ptp_register)
 		priv->hw->rx_csum = 0;
 	}
 
-	/* Enable the MAC Rx/Tx */
-	stmmac_mac_set(priv, priv->ioaddr, true);
-
 	/* Set the HW DMA mode and the COE */
 	stmmac_dma_operation_mode(priv);
 
@@ -3548,6 +3545,9 @@ static int stmmac_hw_setup(struct net_device *dev, bool ptp_register)
 
 	/* Start the ball rolling... */
 	stmmac_start_all_dma(priv);
+
+	/* Enable the MAC Rx/Tx */
+	stmmac_mac_set(priv, priv->ioaddr, true);
 
 	stmmac_set_hw_vlan_mode(priv, priv->hw);
 
