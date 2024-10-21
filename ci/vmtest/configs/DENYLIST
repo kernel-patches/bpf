@@ -6,8 +6,6 @@ core_reloc/size___diff_sz
 core_reloc/type_based___diff_sz
 test_ima	# All of CI is broken on it following 6.3-rc1 merge
 
-build_id/nofault-paged-out # Under investigation for why it started failing (10/21/2024)
-
 lwt_reroute      # crashes kernel after netnext merge from 2ab1efad60ad "net/sched: cls_api: complement tcf_tfilter_dump_policy"
 tc_links_ingress # started failing after net-next merge from 2ab1efad60ad "net/sched: cls_api: complement tcf_tfilter_dump_policy"
 xdp_bonding/xdp_bonding_features     # started failing after net merge from 359e54a93ab4 "l2tp: pass correct message length to ip6_append_data"
