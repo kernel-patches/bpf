@@ -34,7 +34,6 @@ static DEFINE_MUTEX(notify_mutex);
 static RAW_NOTIFIER_HEAD(listen_notify_list);
 static struct proto chtls_cpl_prot, chtls_cpl_protv6;
 struct request_sock_ops chtls_rsk_ops, chtls_rsk_opsv6;
-static uint send_page_order = (14 - PAGE_SHIFT < 0) ? 0 : 14 - PAGE_SHIFT;
 
 static void register_listen_notifier(struct notifier_block *nb)
 {
@@ -273,8 +272,6 @@ static void *chtls_uld_add(const struct cxgb4_lld_info *info)
 	INIT_WORK(&cdev->deferq_task, process_deferq);
 	spin_lock_init(&cdev->listen_lock);
 	spin_lock_init(&cdev->idr_lock);
-	cdev->send_page_order = min_t(uint, get_order(32768),
-				      send_page_order);
 	cdev->max_host_sndbuf = 48 * 1024;
 
 	if (lldi->vr->key.size)
@@ -342,8 +339,8 @@ static struct sk_buff *copy_gl_to_skb_pkt(const struct pkt_gl *gl,
 {
 	struct sk_buff *skb;
 
-	/* Allocate space for cpl_pass_accpet_req which will be synthesized by
-	 * driver. Once driver synthesizes cpl_pass_accpet_req the skb will go
+	/* Allocate space for cpl_pass_accept_req which will be synthesized by
+	 * driver. Once driver synthesizes cpl_pass_accept_req the skb will go
 	 * through the regular cpl_pass_accept_req processing in TOM.
 	 */
 	skb = alloc_skb(gl->tot_len + sizeof(struct cpl_pass_accept_req)

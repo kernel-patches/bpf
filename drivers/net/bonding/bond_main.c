@@ -1476,7 +1476,7 @@ static void bond_netpoll_cleanup(struct net_device *bond_dev)
 			slave_disable_netpoll(slave);
 }
 
-static int bond_netpoll_setup(struct net_device *dev, struct netpoll_info *ni)
+static int bond_netpoll_setup(struct net_device *dev)
 {
 	struct bonding *bond = netdev_priv(dev);
 	struct list_head *iter;
@@ -2350,6 +2350,11 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	if (bond_mode_can_use_xmit_hash(bond))
 		bond_update_slave_arr(bond, NULL);
 
+#if IS_ENABLED(CONFIG_IPV6)
+	if (slave_dev->flags & IFF_MULTICAST)
+		/* set target NS maddrs for new slave */
+		slave_set_ns_maddr(bond, slave_dev, true);
+#endif
 
 	if (!slave_dev->netdev_ops->ndo_bpf ||
 	    !slave_dev->netdev_ops->ndo_xdp_xmit) {
@@ -2502,6 +2507,12 @@ static int __bond_release_one(struct net_device *bond_dev,
 
 	/* recompute stats just before removing the slave */
 	bond_get_stats(bond->dev, &bond->bond_stats);
+
+#if IS_ENABLED(CONFIG_IPV6)
+	if (slave_dev->flags & IFF_MULTICAST)
+		/* clear all target NS maddrs */
+		slave_set_ns_maddr(bond, slave_dev, false);
+#endif
 
 	if (bond->xdp_prog) {
 		struct netdev_bpf xdp = {
@@ -5676,8 +5687,11 @@ static int bond_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 
 	ASSERT_RTNL();
 
-	if (!bond_xdp_check(bond))
+	if (!bond_xdp_check(bond)) {
+		BOND_NL_ERR(dev, extack,
+			    "No native XDP support for the current bonding mode");
 		return -EOPNOTSUPP;
+	}
 
 	old_prog = bond->xdp_prog;
 	bond->xdp_prog = prog;

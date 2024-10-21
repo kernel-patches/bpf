@@ -804,9 +804,13 @@ start:
 	while (msg_data_left(msg)) {
 		bool merge = true;
 		int i = skb_shinfo(skb)->nr_frags;
-		struct page_frag *pfrag = sk_page_frag(sk);
+		struct page_frag_cache *nc = sk_page_frag_cache(sk);
+		struct page_frag page_frag, *pfrag;
+		void *va;
 
-		if (!sk_page_frag_refill(sk, pfrag))
+		pfrag = &page_frag;
+		va = sk_page_frag_alloc_refill_prepare(sk, nc, pfrag);
+		if (!va)
 			goto wait_for_memory;
 
 		if (!skb_can_coalesce(skb, i, pfrag->page,
@@ -851,15 +855,12 @@ start:
 			if (head != skb)
 				head->truesize += copy;
 		} else {
-			copy = min_t(int, msg_data_left(msg),
-				     pfrag->size - pfrag->offset);
+			copy = min_t(int, msg_data_left(msg), pfrag->size);
 			if (!sk_wmem_schedule(sk, copy))
 				goto wait_for_memory;
 
-			err = skb_copy_to_page_nocache(sk, &msg->msg_iter, skb,
-						       pfrag->page,
-						       pfrag->offset,
-						       copy);
+			err = skb_copy_to_frag_nocache(sk, &msg->msg_iter, skb,
+						       va, copy);
 			if (err)
 				goto out_error;
 
@@ -867,13 +868,13 @@ start:
 			if (merge) {
 				skb_frag_size_add(
 					&skb_shinfo(skb)->frags[i - 1], copy);
+				page_frag_commit_noref(nc, pfrag, copy);
 			} else {
 				skb_fill_page_desc(skb, i, pfrag->page,
 						   pfrag->offset, copy);
-				get_page(pfrag->page);
+				page_frag_commit(nc, pfrag, copy);
 			}
 
-			pfrag->offset += copy;
 		}
 
 		copied += copy;
@@ -1584,14 +1585,6 @@ static int kcm_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	return err;
 }
 
-static void free_mux(struct rcu_head *rcu)
-{
-	struct kcm_mux *mux = container_of(rcu,
-	    struct kcm_mux, rcu);
-
-	kmem_cache_free(kcm_muxp, mux);
-}
-
 static void release_mux(struct kcm_mux *mux)
 {
 	struct kcm_net *knet = mux->knet;
@@ -1619,7 +1612,7 @@ static void release_mux(struct kcm_mux *mux)
 	knet->count--;
 	mutex_unlock(&knet->mutex);
 
-	call_rcu(&mux->rcu, free_mux);
+	kfree_rcu(mux, rcu);
 }
 
 static void kcm_done(struct kcm_sock *kcm)
