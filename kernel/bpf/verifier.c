@@ -17873,13 +17873,23 @@ static bool iter_active_depths_differ(struct bpf_verifier_state *old, struct bpf
 	return false;
 }
 
+#define MAX_JMPS_PER_STATE 20
+
 static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state_list *new_sl;
 	struct bpf_verifier_state_list *sl, **pprev;
 	struct bpf_verifier_state *cur = env->cur_state, *new, *loop_entry;
 	int i, j, n, err, states_cnt = 0;
-	bool force_new_state = env->test_state_freq || is_force_checkpoint(env, insn_idx);
+	bool force_new_state = env->test_state_freq || is_force_checkpoint(env, insn_idx) ||
+			       /* - Long jmp history hinders mark_chain_precision performance,
+				*   so force new state if jmp history of current state exceeds
+				*   a threshold.
+				* - Jmp history records not only jumps, but also stack access,
+				*   so keep this constant 2x times the limit imposed on
+				*   env->jmps_processed for loop cases (see skip_inf_loop_check).
+				*/
+			       cur->jmp_history_cnt > MAX_JMPS_PER_STATE * 2;
 	bool add_new_state = force_new_state;
 	bool force_exact;
 
@@ -18023,7 +18033,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			 */
 skip_inf_loop_check:
 			if (!force_new_state &&
-			    env->jmps_processed - env->prev_jmps_processed < 20 &&
+			    env->jmps_processed - env->prev_jmps_processed < MAX_JMPS_PER_STATE &&
 			    env->insn_processed - env->prev_insn_processed < 100)
 				add_new_state = false;
 			goto miss;
