@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <linux/mman.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sdt.h>
