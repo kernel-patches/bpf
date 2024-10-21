@@ -150,12 +150,12 @@ extern __be16 vlan_dev_vlan_proto(const struct net_device *dev);
 /**
  *	struct vlan_priority_tci_mapping - vlan egress priority mappings
  *	@priority: skb priority
- *	@vlan_qos: vlan priority: (skb->priority << 13) & 0xE000
+ *	@vlan_prio: vlan priority
  *	@next: pointer to next struct
  */
 struct vlan_priority_tci_mapping {
 	u32					priority;
-	u16					vlan_qos;
+	u8					vlan_prio;
 	struct vlan_priority_tci_mapping	*next;
 };
 
@@ -204,8 +204,8 @@ static inline struct vlan_dev_priv *vlan_dev_priv(const struct net_device *dev)
 	return netdev_priv(dev);
 }
 
-static inline u16
-vlan_dev_get_egress_qos_mask(struct net_device *dev, u32 skprio)
+static inline u8
+vlan_dev_get_egress_priority(struct net_device *dev, u32 skprio)
 {
 	struct vlan_priority_tci_mapping *mp;
 
@@ -214,13 +214,19 @@ vlan_dev_get_egress_qos_mask(struct net_device *dev, u32 skprio)
 	mp = vlan_dev_priv(dev)->egress_priority_map[(skprio & 0xF)];
 	while (mp) {
 		if (mp->priority == skprio) {
-			return mp->vlan_qos; /* This should already be shifted
-					      * to mask correctly with the
-					      * VLAN's TCI */
+			return mp->vlan_prio;
 		}
 		mp = mp->next;
 	}
 	return 0;
+}
+
+static inline u16
+vlan_dev_get_egress_qos_mask(struct net_device *dev, u32 skprio)
+{
+	u8 vlan_prio = vlan_dev_get_egress_priority(dev, skprio);
+
+	return (vlan_prio << VLAN_PRIO_SHIFT) & VLAN_PRIO_MASK;
 }
 
 extern bool vlan_do_receive(struct sk_buff **skb);
@@ -266,6 +272,12 @@ static inline u16 vlan_dev_vlan_id(const struct net_device *dev)
 static inline __be16 vlan_dev_vlan_proto(const struct net_device *dev)
 {
 	BUG();
+	return 0;
+}
+
+static inline u8 vlan_dev_get_egress_priority(struct net_device *dev,
+					      u32 skprio)
+{
 	return 0;
 }
 

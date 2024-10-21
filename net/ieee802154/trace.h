@@ -35,8 +35,6 @@
 #define WPAN_CCA_PR_FMT	"cca_mode: %d, cca_opt: %d"
 #define WPAN_CCA_PR_ARG __entry->cca_mode, __entry->cca_opt
 
-#define BOOL_TO_STR(bo) (bo) ? "true" : "false"
-
 /*************************************************************
  *			rdev->ops traces		     *
  *************************************************************/
@@ -273,7 +271,7 @@ TRACE_EVENT(802154_rdev_set_lbt_mode,
 	),
 	TP_printk(WPAN_PHY_PR_FMT ", " WPAN_DEV_PR_FMT
 		", lbt mode: %s", WPAN_PHY_PR_ARG,
-		WPAN_DEV_PR_ARG, BOOL_TO_STR(__entry->mode))
+		WPAN_DEV_PR_ARG, str_true_false(__entry->mode))
 );
 
 TRACE_EVENT(802154_rdev_set_ackreq_default,
@@ -292,7 +290,7 @@ TRACE_EVENT(802154_rdev_set_ackreq_default,
 	),
 	TP_printk(WPAN_PHY_PR_FMT ", " WPAN_DEV_PR_FMT
 		", ackreq default: %s", WPAN_PHY_PR_ARG,
-		WPAN_DEV_PR_ARG, BOOL_TO_STR(__entry->ackreq))
+		WPAN_DEV_PR_ARG, str_true_false(__entry->ackreq))
 );
 
 TRACE_EVENT(802154_rdev_trigger_scan,

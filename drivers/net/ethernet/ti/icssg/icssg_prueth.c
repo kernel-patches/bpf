@@ -1442,6 +1442,7 @@ static int prueth_probe(struct platform_device *pdev)
 		icss_iep_init_fw(prueth->iep1);
 	}
 
+	spin_lock_init(&prueth->vtbl_lock);
 	/* setup netdev interfaces */
 	if (eth0_node) {
 		ret = prueth_netdev_init(prueth, eth0_node);
@@ -1645,7 +1646,7 @@ MODULE_DEVICE_TABLE(of, prueth_dt_match);
 
 static struct platform_driver prueth_driver = {
 	.probe = prueth_probe,
-	.remove_new = prueth_remove,
+	.remove = prueth_remove,
 	.driver = {
 		.name = "icssg-prueth",
 		.of_match_table = prueth_dt_match,

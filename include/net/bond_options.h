@@ -160,6 +160,8 @@ static inline void __bond_opt_init(struct bond_opt_value *optval,
 void bond_option_arp_ip_targets_clear(struct bonding *bond);
 #if IS_ENABLED(CONFIG_IPV6)
 void bond_option_ns_ip6_targets_clear(struct bonding *bond);
+void slave_set_ns_maddr(struct bonding *bond, struct net_device *slave_dev,
+			bool add);
 #endif
 
 #endif /* _NET_BOND_OPTIONS_H */

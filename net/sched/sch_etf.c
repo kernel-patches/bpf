@@ -369,8 +369,8 @@ static int etf_init(struct Qdisc *sch, struct nlattr *opt,
 
 	pr_debug("delta %d clockid %d offload %s deadline %s\n",
 		 qopt->delta, qopt->clockid,
-		 OFFLOAD_IS_ON(qopt) ? "on" : "off",
-		 DEADLINE_MODE_IS_ON(qopt) ? "on" : "off");
+		 str_on_off(OFFLOAD_IS_ON(qopt)),
+		 str_on_off(DEADLINE_MODE_IS_ON(qopt)));
 
 	err = validate_input_params(qopt, extack);
 	if (err < 0)

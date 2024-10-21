@@ -119,11 +119,9 @@ struct inet_fill_args {
 #define IN4_ADDR_HSIZE_SHIFT	8
 #define IN4_ADDR_HSIZE		(1U << IN4_ADDR_HSIZE_SHIFT)
 
-static struct hlist_head inet_addr_lst[IN4_ADDR_HSIZE];
-
 static u32 inet_addr_hash(const struct net *net, __be32 addr)
 {
-	u32 val = (__force u32) addr ^ net_hash_mix(net);
+	u32 val = __ipv4_addr_hash(addr, net_hash_mix(net));
 
 	return hash_32(val, IN4_ADDR_HSIZE_SHIFT);
 }
@@ -133,13 +131,13 @@ static void inet_hash_insert(struct net *net, struct in_ifaddr *ifa)
 	u32 hash = inet_addr_hash(net, ifa->ifa_local);
 
 	ASSERT_RTNL();
-	hlist_add_head_rcu(&ifa->hash, &inet_addr_lst[hash]);
+	hlist_add_head_rcu(&ifa->addr_lst, &net->ipv4.inet_addr_lst[hash]);
 }
 
 static void inet_hash_remove(struct in_ifaddr *ifa)
 {
 	ASSERT_RTNL();
-	hlist_del_init_rcu(&ifa->hash);
+	hlist_del_init_rcu(&ifa->addr_lst);
 }
 
 /**
@@ -186,9 +184,8 @@ struct in_ifaddr *inet_lookup_ifaddr_rcu(struct net *net, __be32 addr)
 	u32 hash = inet_addr_hash(net, addr);
 	struct in_ifaddr *ifa;
 
-	hlist_for_each_entry_rcu(ifa, &inet_addr_lst[hash], hash)
-		if (ifa->ifa_local == addr &&
-		    net_eq(dev_net(ifa->ifa_dev->dev), net))
+	hlist_for_each_entry_rcu(ifa, &net->ipv4.inet_addr_lst[hash], addr_lst)
+		if (ifa->ifa_local == addr)
 			return ifa;
 
 	return NULL;
@@ -227,7 +224,7 @@ static struct in_ifaddr *inet_alloc_ifa(struct in_device *in_dev)
 	in_dev_hold(in_dev);
 	ifa->ifa_dev = in_dev;
 
-	INIT_HLIST_NODE(&ifa->hash);
+	INIT_HLIST_NODE(&ifa->addr_lst);
 
 	return ifa;
 }
@@ -298,17 +295,19 @@ static struct in_device *inetdev_init(struct net_device *dev)
 	/* Account for reference dev->ip_ptr (below) */
 	refcount_set(&in_dev->refcnt, 1);
 
-	err = devinet_sysctl_register(in_dev);
-	if (err) {
-		in_dev->dead = 1;
-		neigh_parms_release(&arp_tbl, in_dev->arp_parms);
-		in_dev_put(in_dev);
-		in_dev = NULL;
-		goto out;
+	if (dev != blackhole_netdev) {
+		err = devinet_sysctl_register(in_dev);
+		if (err) {
+			in_dev->dead = 1;
+			neigh_parms_release(&arp_tbl, in_dev->arp_parms);
+			in_dev_put(in_dev);
+			in_dev = NULL;
+			goto out;
+		}
+		ip_mc_init_dev(in_dev);
+		if (dev->flags & IFF_UP)
+			ip_mc_up(in_dev);
 	}
-	ip_mc_init_dev(in_dev);
-	if (dev->flags & IFF_UP)
-		ip_mc_up(in_dev);
 
 	/* we can receive as soon as ip_ptr is set -- do this last */
 	rcu_assign_pointer(dev->ip_ptr, in_dev);
@@ -346,6 +345,19 @@ static void inetdev_destroy(struct in_device *in_dev)
 
 	in_dev_put(in_dev);
 }
+
+static int __init inet_blackhole_dev_init(void)
+{
+	int err = 0;
+
+	rtnl_lock();
+	if (!inetdev_init(blackhole_netdev))
+		err = -ENOMEM;
+	rtnl_unlock();
+
+	return err;
+}
+late_initcall(inet_blackhole_dev_init);
 
 int inet_addr_onlink(struct in_device *in_dev, __be32 a, __be32 b)
 {
@@ -484,15 +496,12 @@ static void inet_del_ifa(struct in_device *in_dev,
 	__inet_del_ifa(in_dev, ifap, destroy, NULL, 0);
 }
 
-static void check_lifetime(struct work_struct *work);
-
-static DECLARE_DELAYED_WORK(check_lifetime_work, check_lifetime);
-
 static int __inet_insert_ifa(struct in_ifaddr *ifa, struct nlmsghdr *nlh,
 			     u32 portid, struct netlink_ext_ack *extack)
 {
 	struct in_ifaddr __rcu **last_primary, **ifap;
 	struct in_device *in_dev = ifa->ifa_dev;
+	struct net *net = dev_net(in_dev->dev);
 	struct in_validator_info ivi;
 	struct in_ifaddr *ifa1;
 	int ret;
@@ -561,8 +570,8 @@ static int __inet_insert_ifa(struct in_ifaddr *ifa, struct nlmsghdr *nlh,
 
 	inet_hash_insert(dev_net(in_dev->dev), ifa);
 
-	cancel_delayed_work(&check_lifetime_work);
-	queue_delayed_work(system_power_efficient_wq, &check_lifetime_work, 0);
+	cancel_delayed_work(&net->ipv4.addr_chk_work);
+	queue_delayed_work(system_power_efficient_wq, &net->ipv4.addr_chk_work, 0);
 
 	/* Send message first, then call notifier.
 	   Notifier will trigger FIB update, so that
@@ -708,16 +717,19 @@ static void check_lifetime(struct work_struct *work)
 	unsigned long now, next, next_sec, next_sched;
 	struct in_ifaddr *ifa;
 	struct hlist_node *n;
+	struct net *net;
 	int i;
 
+	net = container_of(to_delayed_work(work), struct net, ipv4.addr_chk_work);
 	now = jiffies;
 	next = round_jiffies_up(now + ADDR_CHECK_FREQUENCY);
 
 	for (i = 0; i < IN4_ADDR_HSIZE; i++) {
+		struct hlist_head *head = &net->ipv4.inet_addr_lst[i];
 		bool change_needed = false;
 
 		rcu_read_lock();
-		hlist_for_each_entry_rcu(ifa, &inet_addr_lst[i], hash) {
+		hlist_for_each_entry_rcu(ifa, head, addr_lst) {
 			unsigned long age, tstamp;
 			u32 preferred_lft;
 			u32 valid_lft;
@@ -755,7 +767,7 @@ static void check_lifetime(struct work_struct *work)
 		if (!change_needed)
 			continue;
 		rtnl_lock();
-		hlist_for_each_entry_safe(ifa, n, &inet_addr_lst[i], hash) {
+		hlist_for_each_entry_safe(ifa, n, head, addr_lst) {
 			unsigned long age;
 
 			if (ifa->ifa_flags & IFA_F_PERMANENT)
@@ -804,8 +816,8 @@ static void check_lifetime(struct work_struct *work)
 	if (time_before(next_sched, now + ADDRCONF_TIMER_FUZZ_MAX))
 		next_sched = now + ADDRCONF_TIMER_FUZZ_MAX;
 
-	queue_delayed_work(system_power_efficient_wq, &check_lifetime_work,
-			next_sched - now);
+	queue_delayed_work(system_power_efficient_wq, &net->ipv4.addr_chk_work,
+			   next_sched - now);
 }
 
 static void set_ifa_lifetime(struct in_ifaddr *ifa, __u32 valid_lft,
@@ -1002,9 +1014,9 @@ static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh,
 		ifa->ifa_proto = new_proto;
 
 		set_ifa_lifetime(ifa, valid_lft, prefered_lft);
-		cancel_delayed_work(&check_lifetime_work);
+		cancel_delayed_work(&net->ipv4.addr_chk_work);
 		queue_delayed_work(system_power_efficient_wq,
-				&check_lifetime_work, 0);
+				   &net->ipv4.addr_chk_work, 0);
 		rtmsg_ifa(RTM_NEWADDR, ifa, nlh, NETLINK_CB(skb).portid);
 	}
 	return 0;
@@ -2663,14 +2675,21 @@ static struct ctl_table ctl_forward_entry[] = {
 
 static __net_init int devinet_init_net(struct net *net)
 {
-	int err;
-	struct ipv4_devconf *all, *dflt;
 #ifdef CONFIG_SYSCTL
-	struct ctl_table *tbl;
 	struct ctl_table_header *forw_hdr;
+	struct ctl_table *tbl;
 #endif
+	struct ipv4_devconf *all, *dflt;
+	int err;
+	int i;
 
 	err = -ENOMEM;
+	net->ipv4.inet_addr_lst = kmalloc_array(IN4_ADDR_HSIZE,
+						sizeof(struct hlist_head),
+						GFP_KERNEL);
+	if (!net->ipv4.inet_addr_lst)
+		goto err_alloc_hash;
+
 	all = kmemdup(&ipv4_devconf, sizeof(ipv4_devconf), GFP_KERNEL);
 	if (!all)
 		goto err_alloc_all;
@@ -2731,6 +2750,11 @@ static __net_init int devinet_init_net(struct net *net)
 	net->ipv4.forw_hdr = forw_hdr;
 #endif
 
+	for (i = 0; i < IN4_ADDR_HSIZE; i++)
+		INIT_HLIST_HEAD(&net->ipv4.inet_addr_lst[i]);
+
+	INIT_DEFERRABLE_WORK(&net->ipv4.addr_chk_work, check_lifetime);
+
 	net->ipv4.devconf_all = all;
 	net->ipv4.devconf_dflt = dflt;
 	return 0;
@@ -2748,6 +2772,8 @@ err_alloc_ctl:
 err_alloc_dflt:
 	kfree(all);
 err_alloc_all:
+	kfree(net->ipv4.inet_addr_lst);
+err_alloc_hash:
 	return err;
 }
 
@@ -2755,7 +2781,11 @@ static __net_exit void devinet_exit_net(struct net *net)
 {
 #ifdef CONFIG_SYSCTL
 	const struct ctl_table *tbl;
+#endif
 
+	cancel_delayed_work_sync(&net->ipv4.addr_chk_work);
+
+#ifdef CONFIG_SYSCTL
 	tbl = net->ipv4.forw_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->ipv4.forw_hdr);
 	__devinet_sysctl_unregister(net, net->ipv4.devconf_dflt,
@@ -2766,6 +2796,7 @@ static __net_exit void devinet_exit_net(struct net *net)
 #endif
 	kfree(net->ipv4.devconf_dflt);
 	kfree(net->ipv4.devconf_all);
+	kfree(net->ipv4.inet_addr_lst);
 }
 
 static __net_initdata struct pernet_operations devinet_ops = {
@@ -2781,25 +2812,22 @@ static struct rtnl_af_ops inet_af_ops __read_mostly = {
 	.set_link_af	  = inet_set_link_af,
 };
 
+static const struct rtnl_msg_handler devinet_rtnl_msg_handlers[] __initconst = {
+	{.protocol = PF_INET, .msgtype = RTM_NEWADDR, .doit = inet_rtm_newaddr},
+	{.protocol = PF_INET, .msgtype = RTM_DELADDR, .doit = inet_rtm_deladdr},
+	{.protocol = PF_INET, .msgtype = RTM_GETADDR, .dumpit = inet_dump_ifaddr,
+	 .flags = RTNL_FLAG_DUMP_UNLOCKED | RTNL_FLAG_DUMP_SPLIT_NLM_DONE},
+	{.protocol = PF_INET, .msgtype = RTM_GETNETCONF,
+	 .doit = inet_netconf_get_devconf, .dumpit = inet_netconf_dump_devconf,
+	 .flags = RTNL_FLAG_DOIT_UNLOCKED | RTNL_FLAG_DUMP_UNLOCKED},
+};
+
 void __init devinet_init(void)
 {
-	int i;
-
-	for (i = 0; i < IN4_ADDR_HSIZE; i++)
-		INIT_HLIST_HEAD(&inet_addr_lst[i]);
-
 	register_pernet_subsys(&devinet_ops);
 	register_netdevice_notifier(&ip_netdev_notifier);
 
-	queue_delayed_work(system_power_efficient_wq, &check_lifetime_work, 0);
-
 	rtnl_af_register(&inet_af_ops);
 
-	rtnl_register(PF_INET, RTM_NEWADDR, inet_rtm_newaddr, NULL, 0);
-	rtnl_register(PF_INET, RTM_DELADDR, inet_rtm_deladdr, NULL, 0);
-	rtnl_register(PF_INET, RTM_GETADDR, NULL, inet_dump_ifaddr,
-		      RTNL_FLAG_DUMP_UNLOCKED | RTNL_FLAG_DUMP_SPLIT_NLM_DONE);
-	rtnl_register(PF_INET, RTM_GETNETCONF, inet_netconf_get_devconf,
-		      inet_netconf_dump_devconf,
-		      RTNL_FLAG_DOIT_UNLOCKED | RTNL_FLAG_DUMP_UNLOCKED);
+	rtnl_register_many(devinet_rtnl_msg_handlers);
 }

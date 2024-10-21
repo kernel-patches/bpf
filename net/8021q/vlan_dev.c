@@ -155,35 +155,36 @@ static int vlan_dev_change_mtu(struct net_device *dev, int new_mtu)
 }
 
 void vlan_dev_set_ingress_priority(const struct net_device *dev,
-				   u32 skb_prio, u16 vlan_prio)
+				   u32 skb_prio, u8 vlan_prio)
 {
 	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 
-	if (vlan->ingress_priority_map[vlan_prio & 0x7] && !skb_prio)
+	vlan_prio = vlan_prio & 0x7;
+	if (vlan->ingress_priority_map[vlan_prio] && !skb_prio)
 		vlan->nr_ingress_mappings--;
-	else if (!vlan->ingress_priority_map[vlan_prio & 0x7] && skb_prio)
+	else if (!vlan->ingress_priority_map[vlan_prio] && skb_prio)
 		vlan->nr_ingress_mappings++;
 
-	vlan->ingress_priority_map[vlan_prio & 0x7] = skb_prio;
+	vlan->ingress_priority_map[vlan_prio] = skb_prio;
 }
 
 int vlan_dev_set_egress_priority(const struct net_device *dev,
-				 u32 skb_prio, u16 vlan_prio)
+				 u32 skb_prio, u8 vlan_prio)
 {
 	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct vlan_priority_tci_mapping *mp = NULL;
 	struct vlan_priority_tci_mapping *np;
-	u32 vlan_qos = (vlan_prio << VLAN_PRIO_SHIFT) & VLAN_PRIO_MASK;
 
+	vlan_prio = vlan_prio & 0x7;
 	/* See if a priority mapping exists.. */
 	mp = vlan->egress_priority_map[skb_prio & 0xF];
 	while (mp) {
 		if (mp->priority == skb_prio) {
-			if (mp->vlan_qos && !vlan_qos)
+			if (mp->vlan_prio && !vlan_prio)
 				vlan->nr_egress_mappings--;
-			else if (!mp->vlan_qos && vlan_qos)
+			else if (!mp->vlan_prio && vlan_prio)
 				vlan->nr_egress_mappings++;
-			mp->vlan_qos = vlan_qos;
+			mp->vlan_prio = vlan_prio;
 			return 0;
 		}
 		mp = mp->next;
@@ -197,14 +198,14 @@ int vlan_dev_set_egress_priority(const struct net_device *dev,
 
 	np->next = mp;
 	np->priority = skb_prio;
-	np->vlan_qos = vlan_qos;
+	np->vlan_prio = vlan_prio;
 	/* Before inserting this element in hash table, make sure all its fields
 	 * are committed to memory.
 	 * coupled with smp_rmb() in vlan_dev_get_egress_qos_mask()
 	 */
 	smp_wmb();
 	vlan->egress_priority_map[skb_prio & 0xF] = np;
-	if (vlan_qos)
+	if (vlan_prio)
 		vlan->nr_egress_mappings++;
 	return 0;
 }
@@ -725,7 +726,7 @@ static void vlan_dev_poll_controller(struct net_device *dev)
 	return;
 }
 
-static int vlan_dev_netpoll_setup(struct net_device *dev, struct netpoll_info *npinfo)
+static int vlan_dev_netpoll_setup(struct net_device *dev)
 {
 	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct net_device *real_dev = vlan->real_dev;

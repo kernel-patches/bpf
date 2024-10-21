@@ -16,6 +16,7 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/ethtool.h>
+#include <linux/hwmon.h>
 #include <linux/phy.h>
 #include <linux/if_vlan.h>
 #include <linux/in.h>
@@ -617,7 +618,6 @@ struct rtl8169_tc_offsets {
 };
 
 enum rtl_flag {
-	RTL_FLAG_TASK_ENABLED = 0,
 	RTL_FLAG_TASK_RESET_PENDING,
 	RTL_FLAG_TASK_RESET_NO_QUEUE_WAKE,
 	RTL_FLAG_TASK_TX_TIMEOUT,
@@ -1346,40 +1346,19 @@ static void rtl8168ep_stop_cmac(struct rtl8169_private *tp)
 	RTL_W8(tp, IBCR0, RTL_R8(tp, IBCR0) & ~0x01);
 }
 
-static void rtl_dash_loop_wait(struct rtl8169_private *tp,
-			       const struct rtl_cond *c,
-			       unsigned long usecs, int n, bool high)
-{
-	if (!tp->dash_enabled)
-		return;
-	rtl_loop_wait(tp, c, usecs, n, high);
-}
-
-static void rtl_dash_loop_wait_high(struct rtl8169_private *tp,
-				    const struct rtl_cond *c,
-				    unsigned long d, int n)
-{
-	rtl_dash_loop_wait(tp, c, d, n, true);
-}
-
-static void rtl_dash_loop_wait_low(struct rtl8169_private *tp,
-				   const struct rtl_cond *c,
-				   unsigned long d, int n)
-{
-	rtl_dash_loop_wait(tp, c, d, n, false);
-}
-
 static void rtl8168dp_driver_start(struct rtl8169_private *tp)
 {
 	r8168dp_oob_notify(tp, OOB_CMD_DRIVER_START);
-	rtl_dash_loop_wait_high(tp, &rtl_dp_ocp_read_cond, 10000, 10);
+	if (tp->dash_enabled)
+		rtl_loop_wait_high(tp, &rtl_dp_ocp_read_cond, 10000, 10);
 }
 
 static void rtl8168ep_driver_start(struct rtl8169_private *tp)
 {
 	r8168ep_ocp_write(tp, 0x01, 0x180, OOB_CMD_DRIVER_START);
 	r8168ep_ocp_write(tp, 0x01, 0x30, r8168ep_ocp_read(tp, 0x30) | 0x01);
-	rtl_dash_loop_wait_high(tp, &rtl_ep_ocp_read_cond, 10000, 30);
+	if (tp->dash_enabled)
+		rtl_loop_wait_high(tp, &rtl_ep_ocp_read_cond, 10000, 30);
 }
 
 static void rtl8168_driver_start(struct rtl8169_private *tp)
@@ -1393,7 +1372,8 @@ static void rtl8168_driver_start(struct rtl8169_private *tp)
 static void rtl8168dp_driver_stop(struct rtl8169_private *tp)
 {
 	r8168dp_oob_notify(tp, OOB_CMD_DRIVER_STOP);
-	rtl_dash_loop_wait_low(tp, &rtl_dp_ocp_read_cond, 10000, 10);
+	if (tp->dash_enabled)
+		rtl_loop_wait_low(tp, &rtl_dp_ocp_read_cond, 10000, 10);
 }
 
 static void rtl8168ep_driver_stop(struct rtl8169_private *tp)
@@ -1401,7 +1381,8 @@ static void rtl8168ep_driver_stop(struct rtl8169_private *tp)
 	rtl8168ep_stop_cmac(tp);
 	r8168ep_ocp_write(tp, 0x01, 0x180, OOB_CMD_DRIVER_STOP);
 	r8168ep_ocp_write(tp, 0x01, 0x30, r8168ep_ocp_read(tp, 0x30) | 0x01);
-	rtl_dash_loop_wait_low(tp, &rtl_ep_ocp_read_cond, 10000, 10);
+	if (tp->dash_enabled)
+		rtl_loop_wait_low(tp, &rtl_ep_ocp_read_cond, 10000, 10);
 }
 
 static void rtl8168_driver_stop(struct rtl8169_private *tp)
@@ -2160,6 +2141,19 @@ static void rtl8169_get_ringparam(struct net_device *dev,
 	data->tx_pending = NUM_TX_DESC;
 }
 
+static void rtl8169_get_pause_stats(struct net_device *dev,
+				    struct ethtool_pause_stats *pause_stats)
+{
+	struct rtl8169_private *tp = netdev_priv(dev);
+
+	if (!rtl_is_8125(tp))
+		return;
+
+	rtl8169_update_counters(tp);
+	pause_stats->tx_pause_frames = le32_to_cpu(tp->counters->tx_pause_on);
+	pause_stats->rx_pause_frames = le32_to_cpu(tp->counters->rx_pause_on);
+}
+
 static void rtl8169_get_pauseparam(struct net_device *dev,
 				   struct ethtool_pauseparam *data)
 {
@@ -2186,6 +2180,69 @@ static int rtl8169_set_pauseparam(struct net_device *dev,
 	return 0;
 }
 
+static void rtl8169_get_eth_mac_stats(struct net_device *dev,
+				      struct ethtool_eth_mac_stats *mac_stats)
+{
+	struct rtl8169_private *tp = netdev_priv(dev);
+
+	rtl8169_update_counters(tp);
+
+	mac_stats->FramesTransmittedOK =
+		le64_to_cpu(tp->counters->tx_packets);
+	mac_stats->SingleCollisionFrames =
+		le32_to_cpu(tp->counters->tx_one_collision);
+	mac_stats->MultipleCollisionFrames =
+		le32_to_cpu(tp->counters->tx_multi_collision);
+	mac_stats->FramesReceivedOK =
+		le64_to_cpu(tp->counters->rx_packets);
+	mac_stats->AlignmentErrors =
+		le16_to_cpu(tp->counters->align_errors);
+	mac_stats->FramesLostDueToIntMACXmitError =
+		le64_to_cpu(tp->counters->tx_errors);
+	mac_stats->BroadcastFramesReceivedOK =
+		le64_to_cpu(tp->counters->rx_broadcast);
+	mac_stats->MulticastFramesReceivedOK =
+		le32_to_cpu(tp->counters->rx_multicast);
+
+	if (!rtl_is_8125(tp))
+		return;
+
+	mac_stats->AlignmentErrors =
+		le32_to_cpu(tp->counters->align_errors32);
+	mac_stats->OctetsTransmittedOK =
+		le64_to_cpu(tp->counters->tx_octets);
+	mac_stats->LateCollisions =
+		le32_to_cpu(tp->counters->tx_late_collision);
+	mac_stats->FramesAbortedDueToXSColls =
+		le32_to_cpu(tp->counters->tx_aborted32);
+	mac_stats->OctetsReceivedOK =
+		le64_to_cpu(tp->counters->rx_octets);
+	mac_stats->FramesLostDueToIntMACRcvError =
+		le32_to_cpu(tp->counters->rx_mac_error);
+	mac_stats->MulticastFramesXmittedOK =
+		le64_to_cpu(tp->counters->tx_multicast64);
+	mac_stats->BroadcastFramesXmittedOK =
+		le64_to_cpu(tp->counters->tx_broadcast64);
+	mac_stats->MulticastFramesReceivedOK =
+		le64_to_cpu(tp->counters->rx_multicast64);
+	 mac_stats->FrameTooLongErrors =
+		le32_to_cpu(tp->counters->rx_frame_too_long);
+}
+
+static void rtl8169_get_eth_ctrl_stats(struct net_device *dev,
+				       struct ethtool_eth_ctrl_stats *ctrl_stats)
+{
+	struct rtl8169_private *tp = netdev_priv(dev);
+
+	if (!rtl_is_8125(tp))
+		return;
+
+	rtl8169_update_counters(tp);
+
+	ctrl_stats->UnsupportedOpcodesReceived =
+		le32_to_cpu(tp->counters->rx_unknown_opcode);
+}
+
 static const struct ethtool_ops rtl8169_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES,
@@ -2207,8 +2264,11 @@ static const struct ethtool_ops rtl8169_ethtool_ops = {
 	.get_link_ksettings	= phy_ethtool_get_link_ksettings,
 	.set_link_ksettings	= phy_ethtool_set_link_ksettings,
 	.get_ringparam		= rtl8169_get_ringparam,
+	.get_pause_stats	= rtl8169_get_pause_stats,
 	.get_pauseparam		= rtl8169_get_pauseparam,
 	.set_pauseparam		= rtl8169_set_pauseparam,
+	.get_eth_mac_stats	= rtl8169_get_eth_mac_stats,
+	.get_eth_ctrl_stats	= rtl8169_get_eth_ctrl_stats,
 };
 
 static enum mac_version rtl8169_get_mac_version(u16 xid, bool gmii)
@@ -2423,11 +2483,9 @@ u16 rtl8168h_2_get_adc_bias_ioffset(struct rtl8169_private *tp)
 
 static void rtl_schedule_task(struct rtl8169_private *tp, enum rtl_flag flag)
 {
-	if (!test_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags))
-		return;
-
 	set_bit(flag, tp->wk.flags);
-	schedule_work(&tp->wk.work);
+	if (!schedule_work(&tp->wk.work))
+		clear_bit(flag, tp->wk.flags);
 }
 
 static void rtl8169_init_phy(struct rtl8169_private *tp)
@@ -3893,6 +3951,9 @@ static void rtl_hw_start_8125(struct rtl8169_private *tp)
 		break;
 	}
 
+	/* enable extended tally counter */
+	r8168_mac_ocp_modify(tp, 0xea84, 0, BIT(1) | BIT(0));
+
 	rtl_hw_config(tp);
 }
 
@@ -4233,8 +4294,8 @@ static unsigned int rtl8125_quirk_udp_padto(struct rtl8169_private *tp,
 {
 	unsigned int padto = 0, len = skb->len;
 
-	if (rtl_is_8125(tp) && len < 128 + RTL_MIN_PATCH_LEN &&
-	    rtl_skb_is_udp(skb) && skb_transport_header_was_set(skb)) {
+	if (len < 128 + RTL_MIN_PATCH_LEN && rtl_skb_is_udp(skb) &&
+	    skb_transport_header_was_set(skb)) {
 		unsigned int trans_data_len = skb_tail_pointer(skb) -
 					      skb_transport_header(skb);
 
@@ -4258,9 +4319,15 @@ static unsigned int rtl8125_quirk_udp_padto(struct rtl8169_private *tp,
 static unsigned int rtl_quirk_packet_padto(struct rtl8169_private *tp,
 					   struct sk_buff *skb)
 {
-	unsigned int padto;
+	unsigned int padto = 0;
 
-	padto = rtl8125_quirk_udp_padto(tp, skb);
+	switch (tp->mac_version) {
+	case RTL_GIGA_MAC_VER_61 ... RTL_GIGA_MAC_VER_63:
+		padto = rtl8125_quirk_udp_padto(tp, skb);
+		break;
+	default:
+		break;
+	}
 
 	switch (tp->mac_version) {
 	case RTL_GIGA_MAC_VER_34:
@@ -4682,7 +4749,9 @@ static irqreturn_t rtl8169_interrupt(int irq, void *dev_instance)
 	if ((status & 0xffff) == 0xffff || !(status & tp->irq_mask))
 		return IRQ_NONE;
 
-	if (unlikely(status & SYSErr)) {
+	/* At least RTL8168fp may unexpectedly set the SYSErr bit */
+	if (unlikely(status & SYSErr &&
+	    tp->mac_version <= RTL_GIGA_MAC_VER_06)) {
 		rtl8169_pcierr_interrupt(tp->dev);
 		goto out;
 	}
@@ -4710,11 +4779,6 @@ static void rtl_task(struct work_struct *work)
 		container_of(work, struct rtl8169_private, wk.work);
 	int ret;
 
-	rtnl_lock();
-
-	if (!test_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags))
-		goto out_unlock;
-
 	if (test_and_clear_bit(RTL_FLAG_TASK_TX_TIMEOUT, tp->wk.flags)) {
 		/* if chip isn't accessible, reset bus to revive it */
 		if (RTL_R32(tp, TxConfig) == ~0) {
@@ -4722,7 +4786,7 @@ static void rtl_task(struct work_struct *work)
 			if (ret < 0) {
 				netdev_err(tp->dev, "Can't reset secondary PCI bus, detach NIC\n");
 				netif_device_detach(tp->dev);
-				goto out_unlock;
+				return;
 			}
 		}
 
@@ -4741,8 +4805,6 @@ reset:
 	} else if (test_and_clear_bit(RTL_FLAG_TASK_RESET_NO_QUEUE_WAKE, tp->wk.flags)) {
 		rtl_reset_work(tp);
 	}
-out_unlock:
-	rtnl_unlock();
 }
 
 static int rtl8169_poll(struct napi_struct *napi, int budget)
@@ -4769,11 +4831,7 @@ static void r8169_phylink_handler(struct net_device *ndev)
 	if (netif_carrier_ok(ndev)) {
 		rtl_link_chg_patch(tp);
 		pm_request_resume(d);
-		netif_wake_queue(tp->dev);
 	} else {
-		/* In few cases rx is broken after link-down otherwise */
-		if (rtl_is_8125(tp))
-			rtl_schedule_task(tp, RTL_FLAG_TASK_RESET_NO_QUEUE_WAKE);
 		pm_runtime_idle(d);
 	}
 
@@ -4804,6 +4862,7 @@ static int r8169_phy_connect(struct rtl8169_private *tp)
 
 static void rtl8169_down(struct rtl8169_private *tp)
 {
+	disable_work_sync(&tp->wk.work);
 	/* Clear all task flags */
 	bitmap_zero(tp->wk.flags, RTL_FLAG_MAX);
 
@@ -4832,7 +4891,7 @@ static void rtl8169_up(struct rtl8169_private *tp)
 	phy_resume(tp->phydev);
 	rtl8169_init_phy(tp);
 	napi_enable(&tp->napi);
-	set_bit(RTL_FLAG_TASK_ENABLED, tp->wk.flags);
+	enable_work(&tp->wk.work);
 	rtl_reset_work(tp);
 
 	phy_start(tp->phydev);
@@ -4848,8 +4907,6 @@ static int rtl8169_close(struct net_device *dev)
 	netif_stop_queue(dev);
 	rtl8169_down(tp);
 	rtl8169_rx_clear(tp);
-
-	cancel_work(&tp->wk.work);
 
 	free_irq(tp->irq, tp);
 
@@ -5083,7 +5140,7 @@ static void rtl_remove_one(struct pci_dev *pdev)
 	if (pci_dev_run_wake(pdev))
 		pm_runtime_get_noresume(&pdev->dev);
 
-	cancel_work_sync(&tp->wk.work);
+	disable_work_sync(&tp->wk.work);
 
 	if (IS_ENABLED(CONFIG_R8169_LEDS))
 		r8169_remove_leds(tp->leds);
@@ -5363,6 +5420,43 @@ static bool rtl_aspm_is_safe(struct rtl8169_private *tp)
 	return false;
 }
 
+static umode_t r8169_hwmon_is_visible(const void *drvdata,
+				      enum hwmon_sensor_types type,
+				      u32 attr, int channel)
+{
+	return 0444;
+}
+
+static int r8169_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
+			    u32 attr, int channel, long *val)
+{
+	struct rtl8169_private *tp = dev_get_drvdata(dev);
+	int val_raw;
+
+	val_raw = phy_read_paged(tp->phydev, 0xbd8, 0x12) & 0x3ff;
+	if (val_raw >= 512)
+		val_raw -= 1024;
+
+	*val = 1000 * val_raw / 2;
+
+	return 0;
+}
+
+static const struct hwmon_ops r8169_hwmon_ops = {
+	.is_visible =  r8169_hwmon_is_visible,
+	.read = r8169_hwmon_read,
+};
+
+static const struct hwmon_channel_info * const r8169_hwmon_info[] = {
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
+	NULL
+};
+
+static const struct hwmon_chip_info r8169_hwmon_chip_info = {
+	.ops = &r8169_hwmon_ops,
+	.info = r8169_hwmon_info,
+};
+
 static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	struct rtl8169_private *tp;
@@ -5460,6 +5554,7 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	tp->irq = pci_irq_vector(pdev, 0);
 
 	INIT_WORK(&tp->wk.work, rtl_task);
+	disable_work(&tp->wk.work);
 
 	rtl_init_mac_address(tp);
 
@@ -5485,11 +5580,6 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	dev->features |= dev->hw_features;
 
-	/* There has been a number of reports that using SG/TSO results in
-	 * tx timeouts. However for a lot of people SG/TSO works fine.
-	 * Therefore disable both features by default, but allow users to
-	 * enable them. Use at own risk!
-	 */
 	if (rtl_chip_supports_csum_v2(tp)) {
 		dev->hw_features |= NETIF_F_SG | NETIF_F_TSO | NETIF_F_TSO6;
 		netif_set_tso_max_size(dev, RTL_GSO_MAX_SIZE_V2);
@@ -5499,6 +5589,17 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		netif_set_tso_max_size(dev, RTL_GSO_MAX_SIZE_V1);
 		netif_set_tso_max_segs(dev, RTL_GSO_MAX_SEGS_V1);
 	}
+
+	/* There has been a number of reports that using SG/TSO results in
+	 * tx timeouts. However for a lot of people SG/TSO works fine.
+	 * It's not fully clear which chip versions are affected. Vendor
+	 * drivers enable SG/TSO for certain chip versions per default,
+	 * let's mimic this here. On other chip versions users can
+	 * use ethtool to enable SG/TSO, use at own risk!
+	 */
+	if (tp->mac_version >= RTL_GIGA_MAC_VER_46 &&
+	    tp->mac_version != RTL_GIGA_MAC_VER_61)
+		dev->features |= dev->hw_features;
 
 	dev->hw_features |= NETIF_F_RXALL;
 	dev->hw_features |= NETIF_F_RXFCS;
@@ -5537,6 +5638,12 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (rc)
 		return rc;
 
+	/* The temperature sensor is available from RTl8125B */
+	if (IS_REACHABLE(CONFIG_HWMON) && tp->mac_version >= RTL_GIGA_MAC_VER_63)
+		/* ignore errors */
+		devm_hwmon_device_register_with_info(&pdev->dev, "nic_temp", tp,
+						     &r8169_hwmon_chip_info,
+						     NULL);
 	rc = register_netdev(dev);
 	if (rc)
 		return rc;
