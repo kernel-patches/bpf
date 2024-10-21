@@ -151,3 +151,17 @@ int zero_words(void)
 		nr++;
 	return nr;
 }
+
+SEC("syscall")
+__description("big words")
+__success __retval(0)
+int big_words(void)
+{
+	u64 data[8] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1};
+	int nr = 0;
+	int *bit;
+
+	bpf_for_each(bits, bit, &data[0], 67108865)
+		nr++;
+	return nr;
+}
