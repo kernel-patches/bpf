@@ -19990,6 +19990,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			insn[0].imm = (u32)addr;
 			insn[1].imm = addr >> 32;
 		}
+
+		if (bpf_pseudo_call(insn))
+			/* In the x86_64 JIT, tailcall information can only be
+			 * propagated if the subprog is tail_call_reachable.
+			 */
+			insn->dst_reg = env->subprog_info[subprog].tail_call_reachable;
 	}
 
 	err = bpf_prog_alloc_jited_linfo(prog);
@@ -21910,6 +21916,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Subprog %s doesn't exist\n", tname);
 			return -EINVAL;
 		}
+		tgt_info->tgt_tail_call_reachable = subprog &&
+						    aux->func[subprog]->aux->tail_call_reachable;
 		if (aux->func && aux->func[subprog]->aux->exception_cb) {
 			bpf_log(log,
 				"%s programs cannot attach to exception callback\n",
@@ -22279,7 +22287,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	if (!tr)
 		return -ENOMEM;
 
-	if (tgt_prog && tgt_prog->aux->tail_call_reachable)
+	if (tgt_prog && tgt_info.tgt_tail_call_reachable)
 		tr->flags = BPF_TRAMP_F_TAIL_CALL_CTX;
 
 	prog->aux->dst_trampoline = tr;
