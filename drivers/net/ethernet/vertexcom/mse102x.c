@@ -216,7 +216,7 @@ static inline void mse102x_put_footer(struct sk_buff *skb)
 	*footer = cpu_to_be16(DET_DFT);
 }
 
-static int mse102x_tx_frame_spi(struct mse102x_net *mse, struct sk_buff *txp,
+static int mse102x_tx_frame_spi(struct mse102x_net *mse, struct sk_buff **txp,
 				unsigned int pad)
 {
 	struct mse102x_net_spi *mses = to_mse102x_spi(mse);
@@ -226,29 +226,29 @@ static int mse102x_tx_frame_spi(struct mse102x_net *mse, struct sk_buff *txp,
 	int ret;
 
 	netif_dbg(mse, tx_queued, mse->ndev, "%s: skb %p, %d@%p\n",
-		  __func__, txp, txp->len, txp->data);
+		  __func__, *txp, (*txp)->len, (*txp)->data);
 
-	if ((skb_headroom(txp) < DET_SOF_LEN) ||
-	    (skb_tailroom(txp) < DET_DFT_LEN + pad)) {
-		tskb = skb_copy_expand(txp, DET_SOF_LEN, DET_DFT_LEN + pad,
+	if ((skb_headroom(*txp) < DET_SOF_LEN) ||
+	    (skb_tailroom(*txp) < DET_DFT_LEN + pad)) {
+		tskb = skb_copy_expand(*txp, DET_SOF_LEN, DET_DFT_LEN + pad,
 				       GFP_KERNEL);
 		if (!tskb)
 			return -ENOMEM;
 
-		dev_kfree_skb(txp);
-		txp = tskb;
+		dev_kfree_skb(*txp);
+		*txp = tskb;
 	}
 
-	mse102x_push_header(txp);
+	mse102x_push_header(*txp);
 
 	if (pad)
-		skb_put_zero(txp, pad);
+		skb_put_zero(*txp, pad);
 
-	mse102x_put_footer(txp);
+	mse102x_put_footer(*txp);
 
-	xfer->tx_buf = txp->data;
+	xfer->tx_buf = (*txp)->data;
 	xfer->rx_buf = NULL;
-	xfer->len = txp->len;
+	xfer->len = (*txp)->len;
 
 	ret = spi_sync(mses->spidev, msg);
 	if (ret < 0) {
@@ -368,7 +368,7 @@ static void mse102x_rx_pkt_spi(struct mse102x_net *mse)
 	mse->ndev->stats.rx_bytes += rxlen;
 }
 
-static int mse102x_tx_pkt_spi(struct mse102x_net *mse, struct sk_buff *txb,
+static int mse102x_tx_pkt_spi(struct mse102x_net *mse, struct sk_buff **txb,
 			      unsigned long work_timeout)
 {
 	unsigned int pad = 0;
@@ -377,11 +377,11 @@ static int mse102x_tx_pkt_spi(struct mse102x_net *mse, struct sk_buff *txb,
 	int ret;
 	bool first = true;
 
-	if (txb->len < ETH_ZLEN)
-		pad = ETH_ZLEN - txb->len;
+	if ((*txb)->len < ETH_ZLEN)
+		pad = ETH_ZLEN - (*txb)->len;
 
 	while (1) {
-		mse102x_tx_cmd_spi(mse, CMD_RTS | (txb->len + pad));
+		mse102x_tx_cmd_spi(mse, CMD_RTS | ((*txb)->len + pad));
 		ret = mse102x_rx_cmd_spi(mse, (u8 *)&rx);
 		cmd_resp = be16_to_cpu(rx);
 
@@ -437,7 +437,7 @@ static void mse102x_tx_work(struct work_struct *work)
 
 	while ((txb = skb_dequeue(&mse->txq))) {
 		mutex_lock(&mses->lock);
-		ret = mse102x_tx_pkt_spi(mse, txb, work_timeout);
+		ret = mse102x_tx_pkt_spi(mse, &txb, work_timeout);
 		mutex_unlock(&mses->lock);
 		if (ret) {
 			mse->ndev->stats.tx_dropped++;
