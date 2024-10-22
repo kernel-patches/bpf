@@ -9923,7 +9923,7 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 {
 	/* bpf_loop(u32 nr_loops, void *callback_fn, void *callback_ctx,
 	 *	    u64 flags);
-	 * callback_fn(u32 index, void *callback_ctx);
+	 * callback_fn(u64 index, void *callback_ctx);
 	 */
 	callee->regs[BPF_REG_1].type = SCALAR_VALUE;
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
@@ -11265,6 +11265,7 @@ enum special_kfunc_type {
 	KF_bpf_preempt_enable,
 	KF_bpf_iter_css_task_new,
 	KF_bpf_session_cookie,
+	KF_bpf_get_kmem_cache,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11330,6 +11331,7 @@ BTF_ID(func, bpf_session_cookie)
 #else
 BTF_ID_UNUSED
 #endif
+BTF_ID(func, bpf_get_kmem_cache)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -12839,6 +12841,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].btf = desc_btf;
 			regs[BPF_REG_0].type = PTR_TO_BTF_ID;
 			regs[BPF_REG_0].btf_id = ptr_type_id;
+
+			if (meta.func_id == special_kfunc_list[KF_bpf_get_kmem_cache])
+				regs[BPF_REG_0].type |= PTR_UNTRUSTED;
 
 			if (is_iter_next_kfunc(&meta)) {
 				struct bpf_reg_state *cur_iter;
@@ -16188,10 +16193,7 @@ static u32 kfunc_fastcall_clobber_mask(struct bpf_kfunc_call_arg_meta *meta)
 /* Same as verifier_inlines_helper_call() but for kfuncs, see comment above */
 static bool is_fastcall_kfunc_call(struct bpf_kfunc_call_arg_meta *meta)
 {
-	if (meta->btf == btf_vmlinux)
-		return meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
-		       meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast];
-	return false;
+	return meta->kfunc_flags & KF_FASTCALL;
 }
 
 /* LLVM define a bpf_fastcall function attribute.

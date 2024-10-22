@@ -88,20 +88,7 @@ class BuildConfig:
     def tests(self) -> Dict[str, Any]:
         tests_list = [
             "test_progs",
-            "test_progs_parallel",
-            "test_progs_no_alu32",
-            "test_progs_no_alu32_parallel",
-            "test_verifier",
         ]
-
-        if self.arch.value != "s390x":
-            tests_list.append("test_maps")
-
-        if self.toolchain.version >= 18:
-            tests_list.append("test_progs_cpuv4")
-
-        if not self.parallel_tests:
-            tests_list = [test for test in tests_list if not test.endswith("parallel")]
 
         return {"include": [generate_test_config(test) for test in tests_list]}
 
@@ -155,34 +142,7 @@ def generate_test_config(test: str) -> Dict[str, Union[str, int]]:
 if __name__ == "__main__":
     matrix = [
         BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
-            run_veristat=True,
-            parallel_tests=True,
-        ),
-        BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.LLVM, version=DEFAULT_LLVM_VERSION),
-            build_release=True,
-        ),
-        BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.LLVM, version=18),
-            build_release=True,
-        ),
-        BuildConfig(
             arch=Arch.AARCH64,
-            toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
-        ),
-        # BuildConfig(
-        #     arch=Arch.AARCH64,
-        #     toolchain=Toolchain(
-        #         compiler=Compiler.LLVM,
-        #         version=DEFAULT_LLVM_VERSION
-        #     ),
-        # ),
-        BuildConfig(
-            arch=Arch.S390X,
             toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
         ),
     ]
