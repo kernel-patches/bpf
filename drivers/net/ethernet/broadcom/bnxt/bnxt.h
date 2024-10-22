@@ -2361,6 +2361,8 @@ struct bnxt {
 	u8			q_ids[BNXT_MAX_QUEUE];
 	u8			max_q;
 	u8			num_tc;
+#define BNXT_HDS_THRESHOLD_MAX	256
+	u16			hds_threshold;
 
 	unsigned int		current_interval;
 #define BNXT_TIMER_INTERVAL	HZ
