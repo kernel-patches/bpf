@@ -220,6 +220,12 @@ attribute-sets:
       -
         name: tx-push-buf-len-max
         type: u32
+      -
+        name: header-data-split-thresh
+        type: u32
+      -
+        name: header-data-split-thresh-max
+        type: u32
 
   -
     name: mm-stat
@@ -1398,6 +1404,8 @@ operations:
             - rx-push
             - tx-push-buf-len
             - tx-push-buf-len-max
+            - header-data-split-thresh
+            - header-data-split-thresh-max
       dump: *ring-get-op
     -
       name: rings-set
