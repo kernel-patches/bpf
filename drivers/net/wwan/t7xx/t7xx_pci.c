@@ -482,6 +482,10 @@ abort_suspend:
 	iowrite32(T7XX_L1_BIT(0), IREG_BASE(t7xx_dev) + ENABLE_ASPM_LOWPWR);
 	atomic_set(&t7xx_dev->md_pm_state, MTK_PM_RESUMED);
 	t7xx_pcie_mac_set_int(t7xx_dev, SAP_RGU_INT);
+	if (pci_channel_offline(pdev)) {
+		dev_err(&pdev->dev, "Device offline, reset to recover\n");
+		t7xx_reset_device(t7xx_dev, PLDR);
+	}
 	return ret;
 }
 
