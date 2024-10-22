@@ -86,7 +86,7 @@ test_progs_helper() {
 }
 
 test_progs() {
-  test_progs_helper "" ""
+  test_progs_helper "" "-t build_id"
 }
 
 test_progs_parallel() {
@@ -182,10 +182,6 @@ read_test_names "$@"
 # if we don't have any test name provided to the script, we run all tests.
 if [ ${#TEST_NAMES[@]} -eq 0 ]; then
 	test_progs
-	test_progs_no_alu32
-	test_progs_cpuv4
-	test_maps
-	test_verifier
 else
 	# else we run the tests passed as command-line arguments and through boot
 	# parameter.
