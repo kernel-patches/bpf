@@ -894,7 +894,7 @@ struct bnxt_sw_rx_bd {
 };
 
 struct bnxt_sw_rx_agg_bd {
-	struct page		*page;
+	netmem_ref		netmem;
 	unsigned int		offset;
 	dma_addr_t		mapping;
 };
