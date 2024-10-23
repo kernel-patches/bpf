@@ -18,6 +18,7 @@
 #include <asm/processor.h>
 #include <asm/insn.h>
 #include <asm/mmu_context.h>
+#include <asm/nops.h>
 
 /* Post-execution fixups. */
 
@@ -819,7 +820,6 @@ static struct uprobe_trampoline *create_uprobe_trampoline(unsigned long vaddr)
 	return NULL;
 }
 
-__maybe_unused
 static struct uprobe_trampoline *uprobe_trampoline_get(unsigned long vaddr)
 {
 	struct uprobes_state *state = &current->mm->uprobes_state;
@@ -846,7 +846,6 @@ static void destroy_uprobe_trampoline(struct uprobe_trampoline *tramp)
 	kfree(tramp);
 }
 
-__maybe_unused
 static void uprobe_trampoline_put(struct uprobe_trampoline *tramp)
 {
 	if (tramp == NULL)
@@ -854,6 +853,212 @@ static void uprobe_trampoline_put(struct uprobe_trampoline *tramp)
 
 	if (atomic64_dec_and_test(&tramp->ref))
 		destroy_uprobe_trampoline(tramp);
+}
+
+enum {
+	OPT_PART,
+	OPT_INSN,
+	UNOPT_INT3,
+	UNOPT_PART,
+};
+
+struct write_opcode_ctx {
+	unsigned long base;
+	int update;
+};
+
+static int is_call_insn(uprobe_opcode_t *insn)
+{
+	return *insn == CALL_INSN_OPCODE;
+}
+
+static int verify_insn(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode,
+		       int nbytes, void *data)
+{
+	struct write_opcode_ctx *ctx = data;
+	uprobe_opcode_t old_opcode[5];
+
+	uprobe_copy_from_page(page, ctx->base, (uprobe_opcode_t *) &old_opcode, 5);
+
+	switch (ctx->update) {
+	case OPT_PART:
+	case OPT_INSN:
+		if (is_swbp_insn(&old_opcode[0]))
+			return 1;
+		break;
+	case UNOPT_INT3:
+		if (is_call_insn(&old_opcode[0]))
+			return 1;
+		break;
+	case UNOPT_PART:
+		if (is_swbp_insn(&old_opcode[0]))
+			return 1;
+		break;
+	}
+
+	return -1;
+}
+
+static int write_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr,
+		      uprobe_opcode_t *insn, int nbytes, void *ctx)
+{
+	return uprobe_write(auprobe, mm, vaddr, insn, nbytes, verify_insn, false, ctx);
+}
+
+static void relative_call(void *dest, long from, long to)
+{
+	struct __packed __arch_relative_insn {
+		u8 op;
+		s32 raddr;
+	} *insn;
+
+	insn = (struct __arch_relative_insn *)dest;
+	insn->raddr = (s32)(to - (from + 5));
+	insn->op = CALL_INSN_OPCODE;
+}
+
+static int swbp_optimize(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr,
+			 unsigned long tramp)
+{
+	struct write_opcode_ctx ctx = {
+		.base = vaddr,
+	};
+	char call[5];
+	int err;
+
+	relative_call(call, vaddr, tramp);
+
+	/*
+	 * We are in state where breakpoint (int3) is installed on top of first
+	 * byte of the nop5 instruction. We will do following steps to overwrite
+	 * this to call instruction:
+	 *
+	 * - sync cores
+	 * - write last 4 bytes of the call instruction
+	 * - sync cores
+	 * - update the call instruction opcode
+	 */
+
+	text_poke_sync();
+
+	ctx.update = OPT_PART;
+	err = write_insn(auprobe, mm, vaddr + 1, call + 1, 4, &ctx);
+	if (err)
+		return err;
+
+	text_poke_sync();
+
+	ctx.update = OPT_INSN;
+	return write_insn(auprobe, mm, vaddr, call, 1, &ctx);
+}
+
+static int swbp_unoptimize(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	uprobe_opcode_t int3 = UPROBE_SWBP_INSN;
+	struct write_opcode_ctx ctx = {
+		.base = vaddr,
+	};
+	int err;
+
+	/*
+	 * We need to overwrite call instruction into nop5 instruction with
+	 * breakpoint (int3) installed on top of its first byte. We will:
+	 *
+	 * - overwrite call opcode with breakpoint (int3)
+	 * - sync cores
+	 * - write last 4 bytes of the nop5 instruction
+	 * - sync cores
+	 */
+
+	ctx.update = UNOPT_INT3;
+	err = write_insn(auprobe, mm, vaddr, &int3, 1, &ctx);
+	if (err)
+		return err;
+
+	text_poke_sync();
+
+	ctx.update = UNOPT_PART;
+	err = write_insn(auprobe, mm, vaddr + 1, (uprobe_opcode_t *) auprobe->insn + 1, 4, &ctx);
+
+	text_poke_sync();
+	return err;
+}
+
+static int copy_from_vaddr(struct mm_struct *mm, unsigned long vaddr, void *dst, int len)
+{
+	unsigned int gup_flags = FOLL_FORCE|FOLL_SPLIT_PMD;
+	struct vm_area_struct *vma;
+	struct page *page;
+
+	page = get_user_page_vma_remote(mm, vaddr, gup_flags, &vma);
+	if (IS_ERR(page))
+		return PTR_ERR(page);
+	uprobe_copy_from_page(page, vaddr, dst, len);
+	put_page(page);
+	return 0;
+}
+
+static bool __is_optimized(uprobe_opcode_t *insn, unsigned long vaddr)
+{
+	struct __packed __arch_relative_insn {
+		u8 op;
+		s32 raddr;
+	} *call = (struct __arch_relative_insn *) insn;
+
+	if (!is_call_insn(insn))
+		return false;
+	return __in_uprobe_trampoline(vaddr + 5 + call->raddr);
+}
+
+static int is_optimized(struct mm_struct *mm, unsigned long vaddr, bool *optimized)
+{
+	uprobe_opcode_t insn[5];
+	int err;
+
+	err = copy_from_vaddr(mm, vaddr, &insn, 5);
+	if (err)
+		return err;
+	*optimized = __is_optimized((uprobe_opcode_t *)&insn, vaddr);
+	return 0;
+}
+
+static bool should_optimize(struct arch_uprobe *auprobe)
+{
+	return !test_bit(ARCH_UPROBE_FLAG_OPTIMIZE_FAIL, &auprobe->flags) &&
+		test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
+}
+
+int set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	if (should_optimize(auprobe)) {
+		bool optimized = false;
+		int err;
+
+		err = is_optimized(mm, vaddr, &optimized);
+		if (err || optimized)
+			return err;
+	}
+	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN, false);
+}
+
+int set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	/*
+	 * We might be in race where we have optimized uprobe, but the uprobe
+	 * was flagged as failed from another task, so we try to unoptimize
+	 * the uprobe regardless the failed flag.
+	 */
+	if (test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags)) {
+		bool optimized = false;
+		int err;
+
+		err = is_optimized(mm, vaddr, &optimized);
+		if (err)
+			return err;
+		if (optimized)
+			WARN_ON_ONCE(swbp_unoptimize(auprobe, mm, vaddr));
+	}
+	return uprobe_write_opcode(auprobe, mm, vaddr, *(uprobe_opcode_t *)&auprobe->insn, true);
 }
 
 void arch_uprobe_init_state(struct mm_struct *mm)
@@ -875,6 +1080,59 @@ static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
 {
 	return is_nop5_insn((uprobe_opcode_t *) &auprobe->insn);
 }
+
+static int __arch_uprobe_optimize(struct mm_struct *mm, struct arch_uprobe *auprobe,
+				  unsigned long vaddr)
+{
+	struct uprobe_trampoline *tramp;
+	int err = 0;
+
+	tramp = uprobe_trampoline_get(vaddr);
+	if (!tramp)
+		return -1;
+	err = swbp_optimize(auprobe, mm, vaddr, tramp->vaddr);
+	if (WARN_ON_ONCE(err))
+		uprobe_trampoline_put(tramp);
+	return err;
+}
+
+void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+	struct mm_struct *mm = current->mm;
+	uprobe_opcode_t insn[5];
+
+	if (!should_optimize(auprobe))
+		return;
+
+	mmap_write_lock(mm);
+
+	/*
+	 * Check if some other thread already optimized the uprobe for us,
+	 * if it's the case just go away silently.
+	 */
+	if (copy_from_vaddr(mm, vaddr, &insn, 5))
+		goto unlock;
+	if (!is_swbp_insn((uprobe_opcode_t*) &insn))
+		goto unlock;
+
+	/*
+	 * If we fail to optimize the uprobe we set the fail bit so the
+	 * above should_optimize will fail from now on.
+	 */
+	if (__arch_uprobe_optimize(mm, auprobe, vaddr))
+		set_bit(ARCH_UPROBE_FLAG_OPTIMIZE_FAIL, &auprobe->flags);
+
+unlock:
+	mmap_write_unlock(mm);
+}
+
+static bool can_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+	if (!is_nop5_insn((uprobe_opcode_t *) &auprobe->insn))
+		return false;
+	/* We can't do cross page atomic writes yet. */
+	return PAGE_SIZE - (vaddr & ~PAGE_MASK) >= 5;
+}
 #else /* 32-bit: */
 /*
  * No RIP-relative addressing on 32-bit
@@ -889,6 +1147,10 @@ static void riprel_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 }
 static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
+{
+	return false;
+}
+static bool can_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
 {
 	return false;
 }
@@ -1254,6 +1516,9 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 	ret = uprobe_init_insn(auprobe, &insn, is_64bit_mm(mm));
 	if (ret)
 		return ret;
+
+	if (can_optimize(auprobe, addr))
+		set_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
 
 	ret = branch_setup_xol_ops(auprobe, &insn);
 	if (ret != -ENOSYS)
