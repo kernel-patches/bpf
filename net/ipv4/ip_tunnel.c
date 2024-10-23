@@ -1213,17 +1213,17 @@ void ip_tunnel_delete_nets(struct list_head *net_list, unsigned int id,
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_delete_nets);
 
-int ip_tunnel_newlink(struct net_device *dev, struct nlattr *tb[],
-		      struct ip_tunnel_parm_kern *p, __u32 fwmark)
+int ip_tunnel_newlink_net(struct net *src_net, struct net_device *dev,
+			  struct nlattr *tb[], struct ip_tunnel_parm_kern *p,
+			  __u32 fwmark)
 {
 	struct ip_tunnel *nt;
-	struct net *net = dev_net(dev);
 	struct ip_tunnel_net *itn;
 	int mtu;
 	int err;
 
 	nt = netdev_priv(dev);
-	itn = net_generic(net, nt->ip_tnl_net_id);
+	itn = net_generic(src_net, nt->ip_tnl_net_id);
 
 	if (nt->collect_md) {
 		if (rtnl_dereference(itn->collect_md_tun))
@@ -1233,7 +1233,7 @@ int ip_tunnel_newlink(struct net_device *dev, struct nlattr *tb[],
 			return -EEXIST;
 	}
 
-	nt->net = net;
+	nt->net = src_net;
 	nt->parms = *p;
 	nt->fwmark = fwmark;
 	err = register_netdevice(dev);
@@ -1264,6 +1264,13 @@ err_dev_set_mtu:
 	unregister_netdevice(dev);
 err_register_netdevice:
 	return err;
+}
+EXPORT_SYMBOL_GPL(ip_tunnel_newlink_net);
+
+int ip_tunnel_newlink(struct net_device *dev, struct nlattr *tb[],
+		      struct ip_tunnel_parm_kern *p, __u32 fwmark)
+{
+	return ip_tunnel_newlink_net(dev_net(dev), dev, tb, p, fwmark);
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_newlink);
 
@@ -1326,7 +1333,9 @@ int ip_tunnel_init(struct net_device *dev)
 	}
 
 	tunnel->dev = dev;
-	tunnel->net = dev_net(dev);
+	if (!tunnel->net)
+		tunnel->net = dev_net(dev);
+
 	strscpy(tunnel->parms.name, dev->name);
 	iph->version		= 4;
 	iph->ihl		= 5;
