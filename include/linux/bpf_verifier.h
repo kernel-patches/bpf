@@ -773,8 +773,11 @@ struct bpf_verifier_env {
 	 * since the last time the function state was printed
 	 */
 	u32 scratched_regs;
-	/* Same as scratched_regs but for stack slots */
-	u64 scratched_stack_slots;
+	/* Same as scratched_regs but for stack slots. The stack size may
+	 * temporarily exceed MAX_BPF_STACK (e.g., due to fastcall pattern
+	 * in check_stack_slot_within_bounds()), so two u64 values are used.
+	 */
+	u64 scratched_stack_slots[2];
 	u64 prev_log_pos, prev_insn_print_pos;
 	/* buffer used to temporary hold constants as scalar registers */
 	struct bpf_reg_state fake_reg[2];
@@ -939,7 +942,7 @@ static inline void mark_reg_scratched(struct bpf_verifier_env *env, u32 regno)
 
 static inline void mark_stack_slot_scratched(struct bpf_verifier_env *env, u32 spi)
 {
-	env->scratched_stack_slots |= 1ULL << spi;
+	env->scratched_stack_slots[spi / 64] |= 1ULL << (spi & 63);
 }
 
 static inline bool reg_scratched(const struct bpf_verifier_env *env, u32 regno)
@@ -949,25 +952,28 @@ static inline bool reg_scratched(const struct bpf_verifier_env *env, u32 regno)
 
 static inline bool stack_slot_scratched(const struct bpf_verifier_env *env, u64 regno)
 {
-	return (env->scratched_stack_slots >> regno) & 1;
+	return (env->scratched_stack_slots[regno / 64] >> (regno & 63)) & 1;
 }
 
 static inline bool verifier_state_scratched(const struct bpf_verifier_env *env)
 {
-	return env->scratched_regs || env->scratched_stack_slots;
+	return env->scratched_regs || env->scratched_stack_slots[0] ||
+	       env->scratched_stack_slots[1];
 }
 
 static inline void mark_verifier_state_clean(struct bpf_verifier_env *env)
 {
 	env->scratched_regs = 0U;
-	env->scratched_stack_slots = 0ULL;
+	env->scratched_stack_slots[0] = 0ULL;
+	env->scratched_stack_slots[1] = 0ULL;
 }
 
 /* Used for printing the entire verifier state. */
 static inline void mark_verifier_state_scratched(struct bpf_verifier_env *env)
 {
 	env->scratched_regs = ~0U;
-	env->scratched_stack_slots = ~0ULL;
+	env->scratched_stack_slots[0] = ~0ULL;
+	env->scratched_stack_slots[1] = ~0ULL;
 }
 
 static inline bool bpf_stack_narrow_access_ok(int off, int fill_size, int spill_size)
