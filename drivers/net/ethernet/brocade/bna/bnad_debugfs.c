@@ -521,13 +521,12 @@ bnad_debugfs_init(struct bnad *bnad)
 
 		for (i = 0; i < ARRAY_SIZE(bnad_debugfs_files); i++) {
 			file = &bnad_debugfs_files[i];
-			bnad->bnad_dentry_files[i] =
-					debugfs_create_file(file->name,
-							file->mode,
-							bnad->port_debugfs_root,
-							bnad,
-							file->fops);
-			if (IS_ERR(bnad->bnad_dentry_files[i])) {
+			de = debugfs_create_file(file->name,
+						 file->mode,
+						 bnad->port_debugfs_root,
+						 bnad,
+						 file->fops);
+			if (IS_ERR(de)) {
 				netdev_warn(bnad->netdev,
 					    "create %s entry failed\n",
 					    file->name);
@@ -541,15 +540,6 @@ bnad_debugfs_init(struct bnad *bnad)
 void
 bnad_debugfs_uninit(struct bnad *bnad)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(bnad_debugfs_files); i++) {
-		if (bnad->bnad_dentry_files[i]) {
-			debugfs_remove(bnad->bnad_dentry_files[i]);
-			bnad->bnad_dentry_files[i] = NULL;
-		}
-	}
-
 	/* Remove the pci_dev debugfs directory for the port */
 	if (bnad->port_debugfs_root) {
 		debugfs_remove(bnad->port_debugfs_root);
