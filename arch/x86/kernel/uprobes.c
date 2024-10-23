@@ -18,6 +18,7 @@
 #include <asm/processor.h>
 #include <asm/insn.h>
 #include <asm/mmu_context.h>
+#include <asm/nops.h>
 
 /* Post-execution fixups. */
 
@@ -311,6 +312,11 @@ static int uprobe_init_insn(struct arch_uprobe *auprobe, struct insn *insn, bool
 static int is_nop5_insn(uprobe_opcode_t *insn)
 {
 	return !memcmp(insn, x86_nops[5], 5);
+}
+
+static int is_call_insn(uprobe_opcode_t *insn)
+{
+	return *insn == CALL_INSN_OPCODE;
 }
 
 #ifdef CONFIG_X86_64
@@ -708,6 +714,147 @@ static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
 {
 	return is_nop5_insn((uprobe_opcode_t *) &auprobe->insn);
 }
+
+enum {
+	UPDATE_OFFSET,
+	UPDATE_CALL,
+	UPDATE_INT3,
+	UPDATE_NOP5,
+};
+
+struct write_opcode_ctx {
+	unsigned long base;
+	int update;
+};
+
+int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
+			      unsigned long vaddr, uprobe_opcode_t *new_opcode,
+			      int nbytes, void *data)
+{
+	struct write_opcode_ctx *ctx = data;
+	uprobe_opcode_t old_opcode[5];
+
+	if (!ctx || !test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags))
+		return uprobe_verify_opcode(page, vaddr, new_opcode);
+
+	/*
+	 * The ARCH_UPROBE_FLAG_CAN_OPTIMIZE flag guarantees the following
+	 * 5 bytes read won't cross the page boundary.
+	 */
+	uprobe_copy_from_page(page, ctx->base, (uprobe_opcode_t *) &old_opcode, 5);
+
+	switch (ctx->update) {
+	case UPDATE_OFFSET:
+	case UPDATE_CALL:
+	case UPDATE_NOP5:
+		if (is_swbp_insn((uprobe_opcode_t *) &old_opcode))
+			return 1;
+		break;
+	case UPDATE_INT3:
+		if (is_call_insn((uprobe_opcode_t *) &old_opcode))
+			return 1;
+		break;
+	}
+
+	return -1;
+}
+
+#define write_opcode(__vaddr, __insns, __nbytes, __orig, __update)			\
+	({										\
+		ctx.update = __update;							\
+		uprobe_write_opcode(auprobe, mm, (__vaddr), (uprobe_opcode_t *) __insns,\
+				   __nbytes, false, &ctx);				\
+	})
+
+static void __arch_uprobe_optimize(struct arch_uprobe *auprobe, struct mm_struct *mm,
+				   unsigned long vaddr)
+{
+	struct write_opcode_ctx ctx = {
+		.base = vaddr,
+	};
+	struct uprobe_trampoline *tramp;
+	char op = CALL_INSN_OPCODE;
+	int err;
+	s32 off;
+
+	tramp = uprobe_trampoline_get(vaddr);
+	if (!tramp)
+		goto fail;
+
+	off = (s32)((long)(tramp->vaddr) - ((long)(vaddr) + 5));
+
+	err = write_opcode(vaddr + 1, &off, 4, false, UPDATE_OFFSET);
+	if (err)
+		goto fail;
+
+	text_poke_sync();
+
+	err = write_opcode(vaddr, &op, 1, false, UPDATE_CALL);
+	if (err)
+		goto fail;
+
+	set_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags);
+	return;
+
+fail:
+	/* Once we fail we never try again. */
+	clear_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
+	uprobe_trampoline_put(tramp);
+}
+
+static bool should_optimize(struct arch_uprobe *auprobe)
+{
+	if (!test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags))
+		return false;
+	if (test_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags))
+		return false;
+	return true;
+}
+
+void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+	struct mm_struct *mm = current->mm;
+
+	if (!should_optimize(auprobe))
+		return;
+
+	mmap_write_lock(mm);
+	if (should_optimize(auprobe))
+		__arch_uprobe_optimize(auprobe, mm, vaddr);
+	mmap_write_unlock(mm);
+}
+
+int set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	uprobe_opcode_t *insn = (uprobe_opcode_t *) auprobe->insn;
+	uprobe_opcode_t int3 = UPROBE_SWBP_INSN;
+	struct write_opcode_ctx ctx = {
+		.base = vaddr,
+	};
+
+	if (!test_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags))
+		return uprobe_write_opcode(auprobe, mm, vaddr, insn, UPROBE_SWBP_INSN_SIZE, true, NULL);
+
+	write_opcode(vaddr, &int3, 1, false, UPDATE_INT3);
+	text_poke_sync();
+	write_opcode(vaddr, insn, 5, true, UPDATE_NOP5);
+	clear_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags);
+	return 0;
+}
+
+bool arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr)
+{
+	long delta = (long)(vaddr + 5 - vtramp);
+	return delta >= INT_MIN && delta <= INT_MAX;
+}
+
+static bool can_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+	if (!is_nop5_insn((uprobe_opcode_t *) &auprobe->insn))
+		return false;
+	/* We can't do cross page atomic writes yet. */
+	return PAGE_SIZE - (vaddr & ~PAGE_MASK) >= 5;
+}
 #else /* 32-bit: */
 /*
  * No RIP-relative addressing on 32-bit
@@ -722,6 +869,10 @@ static void riprel_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 }
 static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
+{
+	return false;
+}
+static bool can_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
 {
 	return false;
 }
@@ -938,7 +1089,8 @@ static const struct uprobe_xol_ops push_xol_ops = {
 };
 
 /* Returns -ENOSYS if branch_xol_ops doesn't handle this insn */
-static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
+static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn,
+				unsigned long vaddr)
 {
 	u8 opc1 = OPCODE1(insn);
 	insn_byte_t p;
@@ -956,6 +1108,8 @@ static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 		break;
 
 	case 0x0f:
+		if (can_optimize(auprobe, vaddr))
+			set_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
 		if (emulate_nop5_insn(auprobe))
 			goto setup;
 		if (insn->opcode.nbytes != 2)
@@ -1088,7 +1242,7 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 	if (ret)
 		return ret;
 
-	ret = branch_setup_xol_ops(auprobe, &insn);
+	ret = branch_setup_xol_ops(auprobe, &insn, addr);
 	if (ret != -ENOSYS)
 		return ret;
 
@@ -1295,15 +1449,23 @@ arch_uretprobe_hijack_return_addr(struct arch_uprobe *auprobe, unsigned long tra
 {
 	int rasize = sizeof_long(regs), nleft;
 	unsigned long orig_ret_vaddr = 0; /* clear high bits for 32-bit apps */
+	unsigned long off = 0;
 
-	if (copy_from_user(&orig_ret_vaddr, (void __user *)regs->sp, rasize))
+	/*
+	 * Optimized uprobe goes through uprobe trampoline which adds 4 8-byte
+	 * values on stack, check uprobe_trampoline_entry for details.
+	 */
+	if (test_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags))
+		off = 4*8;
+
+	if (copy_from_user(&orig_ret_vaddr, (void __user *)regs->sp + off, rasize))
 		return -1;
 
 	/* check whether address has been already hijacked */
 	if (orig_ret_vaddr == trampoline_vaddr)
 		return orig_ret_vaddr;
 
-	nleft = copy_to_user((void __user *)regs->sp, &trampoline_vaddr, rasize);
+	nleft = copy_to_user((void __user *)regs->sp + off, &trampoline_vaddr, rasize);
 	if (likely(!nleft)) {
 		if (shstk_update_last_frame(trampoline_vaddr)) {
 			force_sig(SIGSEGV);

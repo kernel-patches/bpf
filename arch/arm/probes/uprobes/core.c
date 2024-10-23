@@ -31,7 +31,7 @@ int set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm,
 {
 	uprobe_opcode_t opcode = __opcode_to_mem_arm(auprobe->bpinsn);
 
-	return uprobe_write_opcode(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, false);
+	return uprobe_write_opcode(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, false, NULL);
 }
 
 bool arch_uprobe_ignore(struct arch_uprobe *auprobe, struct pt_regs *regs)

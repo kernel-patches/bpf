@@ -200,7 +200,7 @@ extern bool is_trap_insn(uprobe_opcode_t *insn);
 extern unsigned long uprobe_get_swbp_addr(struct pt_regs *regs);
 extern unsigned long uprobe_get_trap_addr(struct pt_regs *regs);
 extern int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr,
-			       uprobe_opcode_t *insn, int nbytes, bool);
+			       uprobe_opcode_t *insn, int nbytes, bool, void*);
 extern struct uprobe *uprobe_register(struct inode *inode, loff_t offset, loff_t ref_ctr_offset, struct uprobe_consumer *uc);
 extern int uprobe_apply(struct uprobe *uprobe, struct uprobe_consumer *uc, bool);
 extern void uprobe_unregister_nosync(struct uprobe *uprobe, struct uprobe_consumer *uc);
@@ -237,12 +237,13 @@ extern void uprobe_copy_from_page(struct page *page, unsigned long vaddr, void *
 extern int uprobe_verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode);
 extern int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
 				     unsigned long vaddr, uprobe_opcode_t *new_opcode,
-				     int nbytes);
+				     int nbytes, void *data);
 extern struct uprobe_trampoline *uprobe_trampoline_get(unsigned long vaddr);
 extern void uprobe_trampoline_put(struct uprobe_trampoline *area);
 extern bool arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr);
 extern const struct vm_special_mapping *arch_uprobe_trampoline_mapping(void);
 extern void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr);
+extern void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr);
 #else /* !CONFIG_UPROBES */
 struct uprobes_state {
 };

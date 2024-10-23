@@ -293,7 +293,7 @@ int uprobe_verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t
 
 __weak int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
 				     unsigned long vaddr, uprobe_opcode_t *new_opcode,
-				     int nbytes)
+				     int nbytes, void *data)
 {
 	return uprobe_verify_opcode(page, vaddr, new_opcode);
 }
@@ -478,7 +478,7 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
  */
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
 			unsigned long vaddr, uprobe_opcode_t *insn, int nbytes,
-			bool orig)
+			bool orig, void *data)
 {
 	struct uprobe *uprobe;
 	struct page *old_page, *new_page;
@@ -497,7 +497,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = arch_uprobe_verify_opcode(auprobe, old_page, vaddr, insn, nbytes);
+	ret = arch_uprobe_verify_opcode(auprobe, old_page, vaddr, insn, nbytes, data);
 	if (ret <= 0)
 		goto put_old;
 
@@ -577,7 +577,7 @@ int __weak set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned 
 {
 	uprobe_opcode_t insn = UPROBE_SWBP_INSN;
 
-	return uprobe_write_opcode(auprobe, mm, vaddr, &insn, UPROBE_SWBP_INSN_SIZE, false);
+	return uprobe_write_opcode(auprobe, mm, vaddr, &insn, UPROBE_SWBP_INSN_SIZE, false, NULL);
 }
 
 static int set_swbp_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
@@ -611,8 +611,8 @@ static int set_swbp_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned
 int __weak
 set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 {
-	return uprobe_write_opcode(auprobe, mm, vaddr,
-			(uprobe_opcode_t *)&auprobe->insn, UPROBE_SWBP_INSN_SIZE, true);
+	return uprobe_write_opcode(auprobe, mm, vaddr, (uprobe_opcode_t *)&auprobe->insn,
+				   UPROBE_SWBP_INSN_SIZE, true, NULL);
 }
 
 static int set_orig_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
@@ -2775,6 +2775,10 @@ bool __weak arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check c
 	return true;
 }
 
+void __weak arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+}
+
 /*
  * Run handler and ask thread to singlestep.
  * Ensure all non-fatal signals cannot interrupt thread while it singlesteps.
@@ -2838,6 +2842,9 @@ static void handle_swbp(struct pt_regs *regs)
 		goto out;
 
 	handler_chain(uprobe, regs);
+
+	/* Try to optimize after first hit. */
+	arch_uprobe_optimize(&uprobe->arch, bp_vaddr);
 
 	if (arch_uprobe_skip_sstep(&uprobe->arch, regs))
 		goto out;
