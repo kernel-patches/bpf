@@ -1008,6 +1008,9 @@ static void bond_hw_addr_swap(struct bonding *bond, struct slave *new_active,
 
 		if (bond->dev->flags & IFF_UP)
 			bond_hw_addr_flush(bond->dev, old_active->dev);
+
+		/* add target NS maddrs for backup slave */
+		slave_set_ns_maddrs(bond, old_active, true);
 	}
 
 	if (new_active) {
@@ -1024,6 +1027,9 @@ static void bond_hw_addr_swap(struct bonding *bond, struct slave *new_active,
 			dev_mc_sync(new_active->dev, bond->dev);
 			netif_addr_unlock_bh(bond->dev);
 		}
+
+		/* clear target NS maddrs for active slave */
+		slave_set_ns_maddrs(bond, new_active, false);
 	}
 }
 
@@ -2341,6 +2347,12 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	bond_compute_features(bond);
 	bond_set_carrier(bond);
 
+	/* set target NS maddrs for new slave, need to be called before
+	 * bond_select_active_slave(), which will remove the maddr if
+	 * the slave is selected as active slave
+	 */
+	slave_set_ns_maddrs(bond, new_slave, true);
+
 	if (bond_uses_primary(bond)) {
 		block_netpoll_tx();
 		bond_select_active_slave(bond);
@@ -2349,7 +2361,6 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 
 	if (bond_mode_can_use_xmit_hash(bond))
 		bond_update_slave_arr(bond, NULL);
-
 
 	if (!slave_dev->netdev_ops->ndo_bpf ||
 	    !slave_dev->netdev_ops->ndo_xdp_xmit) {
@@ -2547,6 +2558,11 @@ static int __bond_release_one(struct net_device *bond_dev,
 
 	if (oldcurrent == slave)
 		bond_change_active_slave(bond, NULL);
+
+	/* clear target NS maddrs, must after bond_change_active_slave()
+	 * as we need to clear the maddrs on backup slave
+	 */
+	slave_set_ns_maddrs(bond, slave, false);
 
 	if (bond_is_lb(bond)) {
 		/* Must be called only after the slave has been
