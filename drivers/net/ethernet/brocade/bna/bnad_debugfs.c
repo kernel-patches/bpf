@@ -493,25 +493,29 @@ void
 bnad_debugfs_init(struct bnad *bnad)
 {
 	const struct bnad_debugfs_entry *file;
+	struct dentry *de;
 	char name[64];
 	int i;
 
 	/* Setup the BNA debugfs root directory*/
 	if (!bna_debugfs_root) {
-		bna_debugfs_root = debugfs_create_dir("bna", NULL);
+		de = debugfs_create_dir("bna", NULL);
 		atomic_set(&bna_debugfs_port_count, 0);
-		if (!bna_debugfs_root) {
+		if (IS_ERR(de)) {
 			netdev_warn(bnad->netdev,
 				    "debugfs root dir creation failed\n");
 			return;
 		}
+		bna_debugfs_root = de;
 	}
 
 	/* Setup the pci_dev debugfs directory for the port */
 	snprintf(name, sizeof(name), "pci_dev:%s", pci_name(bnad->pcidev));
 	if (!bnad->port_debugfs_root) {
-		bnad->port_debugfs_root =
-			debugfs_create_dir(name, bna_debugfs_root);
+		de = debugfs_create_dir(name, bna_debugfs_root);
+		if (IS_ERR(de))
+			return;
+		bnad->port_debugfs_root = de;
 
 		atomic_inc(&bna_debugfs_port_count);
 
@@ -523,7 +527,7 @@ bnad_debugfs_init(struct bnad *bnad)
 							bnad->port_debugfs_root,
 							bnad,
 							file->fops);
-			if (!bnad->bnad_dentry_files[i]) {
+			if (IS_ERR(bnad->bnad_dentry_files[i])) {
 				netdev_warn(bnad->netdev,
 					    "create %s entry failed\n",
 					    file->name);
