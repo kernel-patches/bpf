@@ -1412,6 +1412,8 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 #define LOAD_TAIL_CALL_CNT_PTR(stack)				\
 	__LOAD_TCC_PTR(BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack))
 
+u64 bpf_get_hw_counter(void);
+
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image,
 		  int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
@@ -2125,6 +2127,26 @@ populate_extable:
 			/* call */
 		case BPF_JMP | BPF_CALL: {
 			u8 *ip = image + addrs[i - 1];
+
+			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+			    imm32 == BPF_CALL_IMM(bpf_get_hw_counter)) {
+				/* Save RDX because RDTSC will use EDX:EAX to return u64 */
+				emit_mov_reg(&prog, true, AUX_REG, BPF_REG_3);
+				if (boot_cpu_has(X86_FEATURE_LFENCE_RDTSC))
+					EMIT_LFENCE();
+				EMIT2(0x0F, 0x31);
+
+				/* shl RDX, 32 */
+				maybe_emit_1mod(&prog, BPF_REG_3, true);
+				EMIT3(0xC1, add_1reg(0xE0, BPF_REG_3), 32);
+				/* or RAX, RDX */
+				maybe_emit_mod(&prog, BPF_REG_0, BPF_REG_3, true);
+				EMIT2(0x09, add_2reg(0xC0, BPF_REG_0, BPF_REG_3));
+				/* restore RDX from R11 */
+				emit_mov_reg(&prog, true, BPF_REG_3, AUX_REG);
+
+				break;
+			}
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (tail_call_reachable) {
@@ -3651,4 +3673,12 @@ bool bpf_jit_supports_ptr_xchg(void)
 u64 bpf_arch_uaddress_limit(void)
 {
 	return 0;
+}
+
+/* x86-64 JIT can inline kfunc */
+bool bpf_jit_inlines_helper_call(s32 imm)
+{
+	if (imm == BPF_CALL_IMM(bpf_get_hw_counter))
+		return true;
+	return false;
 }
