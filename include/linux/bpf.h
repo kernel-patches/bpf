@@ -1012,6 +1012,7 @@ struct bpf_verifier_ops {
 				  struct bpf_prog *prog, u32 *target_size);
 	int (*btf_struct_access)(struct bpf_verifier_log *log,
 				 const struct bpf_reg_state *reg,
+				 const struct bpf_prog *prog,
 				 int off, int size);
 };
 

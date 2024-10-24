@@ -1243,6 +1243,7 @@ static int st_ops_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_prog 
 
 static int st_ops_btf_struct_access(struct bpf_verifier_log *log,
 				    const struct bpf_reg_state *reg,
+					const struct bpf_prog *prog,
 				    int off, int size)
 {
 	if (off < 0 || off + size > sizeof(struct st_ops_args))

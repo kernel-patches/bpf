@@ -6665,7 +6665,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			verbose(env, "verifier internal error: reg->btf must be kernel btf\n");
 			return -EFAULT;
 		}
-		ret = env->ops->btf_struct_access(&env->log, reg, off, size);
+		ret = env->ops->btf_struct_access(&env->log, reg, env->prog, off, size);
 	} else {
 		/* Writes are permitted with default btf_struct_access for
 		 * program allocated objects (which always have ref_obj_id > 0),

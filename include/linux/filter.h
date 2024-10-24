@@ -670,6 +670,7 @@ DECLARE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 extern struct mutex nf_conn_btf_access_lock;
 extern int (*nfct_btf_struct_access)(struct bpf_verifier_log *log,
 				     const struct bpf_reg_state *reg,
+					 const struct bpf_prog *prog,
 				     int off, int size);
 
 typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
