@@ -33,3 +33,15 @@ config SMC_LO
 	  of architecture or hardware.
 
 	  if unsure, say N.
+
+config SMC_BPF
+	bool "eBPF support for SMC subsystem"
+	depends on SMC && BPF_SYSCALL
+	default n
+	help
+	  This option enables support for eBPF programs for SMC
+	  subsystem. eBPF programs offer much greater flexibility
+	  in modifying the behavior of the SMC protocol stack compared
+	  to a complete kernel-based approach.
+
+	  if unsure, say N.

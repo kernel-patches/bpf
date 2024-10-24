@@ -55,6 +55,7 @@
 #include "smc_sysctl.h"
 #include "smc_loopback.h"
 #include "smc_inet.h"
+#include "smc_bpf.h"
 
 static DEFINE_MUTEX(smc_server_lgr_pending);	/* serialize link group
 						 * creation on server
@@ -156,19 +157,25 @@ drop:
 	return NULL;
 }
 
-static bool smc_hs_congested(const struct sock *sk)
+static void smc_set_tcp_option_cond(const struct tcp_sock *tp, struct inet_request_sock *ireq)
 {
 	const struct smc_sock *smc;
 
-	smc = smc_clcsock_user_data(sk);
+	smc = smc_clcsock_user_data(&tp->inet_conn.icsk_inet.sk);
 
 	if (!smc)
-		return true;
+		goto no_smc;
 
-	if (workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
-		return true;
+	if (smc->limit_smc_hs && workqueue_congested(WORK_CPU_UNBOUND, smc_hs_wq))
+		goto no_smc;
 
-	return false;
+#if IS_ENABLED(CONFIG_SMC_BPF)
+	bpf_smc_set_tcp_option_cond(tp, ireq);
+#endif /* CONFIG_SMC_BPF */
+
+	return;
+no_smc:
+	ireq->smc_ok = 0;
 }
 
 struct smc_hashinfo smc_v4_hashinfo = {
@@ -2650,9 +2657,6 @@ int smc_listen(struct socket *sock, int backlog)
 
 	inet_csk(smc->clcsock->sk)->icsk_af_ops = &smc->af_ops;
 
-	if (smc->limit_smc_hs)
-		tcp_sk(smc->clcsock->sk)->smc_hs_congested = smc_hs_congested;
-
 	rc = kernel_listen(smc->clcsock, backlog);
 	if (rc) {
 		write_lock_bh(&smc->clcsock->sk->sk_callback_lock);
@@ -3324,6 +3328,13 @@ int smc_create_clcsk(struct net *net, struct sock *sk, int family)
 	sk->sk_net_refcnt = 1;
 	get_net_track(net, &sk->ns_tracker, GFP_KERNEL);
 	sock_inuse_add(net, 1);
+
+	/* init tcp_smc_ctx */
+#if IS_ENABLED(CONFIG_SMC_BPF)
+	smc->tcp_smc_ctx.set_option = bpf_smc_set_tcp_option;
+#endif /* CONFIG_SMC_BPF */
+	smc->tcp_smc_ctx.set_option_cond = smc_set_tcp_option_cond;
+	tcp_sk(sk)->smc = &smc->tcp_smc_ctx;
 	return 0;
 }
 
@@ -3574,8 +3585,17 @@ static int __init smc_init(void)
 		pr_err("%s: smc_inet_init fails with %d\n", __func__, rc);
 		goto out_ulp;
 	}
+
+	rc = smc_bpf_struct_ops_init();
+	if (rc) {
+		pr_err("%s: smc_bpf_struct_ops_init fails with %d\n", __func__, rc);
+		goto out_inet;
+	}
+
 	static_branch_enable(&tcp_have_smc);
 	return 0;
+out_inet:
+	smc_inet_exit();
 out_ulp:
 	tcp_unregister_ulp(&smc_ulp_ops);
 out_lo:

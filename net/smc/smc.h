@@ -16,6 +16,7 @@
 #include <linux/compiler.h> /* __aligned */
 #include <net/genetlink.h>
 #include <net/sock.h>
+#include <net/tcp.h>
 
 #include "smc_ib.h"
 
@@ -328,6 +329,9 @@ struct smc_sock {				/* smc sock container */
 						/* protects clcsock of a listen
 						 * socket
 						 * */
+
+	/* smc context for tcp stack */
+	struct tcpsmc_ctx	tcp_smc_ctx;
 };
 
 #define smc_sk(ptr) container_of_const(ptr, struct smc_sock, sk)

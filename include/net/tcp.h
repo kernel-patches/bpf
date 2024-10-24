@@ -2730,6 +2730,12 @@ static inline void tcp_bpf_rtt(struct sock *sk, long mrtt, u32 srtt)
 
 #if IS_ENABLED(CONFIG_SMC)
 extern struct static_key_false tcp_have_smc;
+struct tcpsmc_ctx {
+	/* Invoked before computing SMC option for SYN packets. */
+	void (*set_option)(struct tcp_sock *tp);
+	/* Invoked before Set up SMC options for SYN-ACK packets */
+	void (*set_option_cond)(const struct tcp_sock *tp, struct inet_request_sock *ireq);
+};
 #endif
 
 #if IS_ENABLED(CONFIG_TLS_DEVICE)

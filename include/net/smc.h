@@ -18,6 +18,8 @@
 #include "linux/ism.h"
 
 struct sock;
+struct tcp_sock;
+struct inet_request_sock;
 
 #define SMC_MAX_PNETID_LEN	16	/* Max. length of PNET id */
 
@@ -95,6 +97,51 @@ struct smcd_dev {
 	atomic_t lgr_cnt;
 	wait_queue_head_t lgrs_deleted;
 	u8 going_away : 1;
+};
+
+/*
+ * This structure is used to store the parameters passed to the member of struct_ops.
+ * Due to the BPF verifier cannot restrict the writing of bit fields, such as limiting
+ * it to only write ireq->smc_ok. Using kfunc can solve this issue, but we don't want
+ * to introduce a kfunc with such a narrow function.
+ *
+ * Moreover, using this structure for unified parameters also addresses another
+ * potential issue. Currently, kfunc cannot recognize the calling context
+ * through BPF's existing structure. In the future, we can solve this problem
+ * by passing this ctx to kfunc.
+ */
+struct smc_bpf_ops_ctx {
+	struct {
+		struct tcp_sock *tp;
+	} set_option;
+	struct {
+		const struct tcp_sock *tp;
+		struct inet_request_sock *ireq;
+		int smc_ok;
+	} set_option_cond;
+};
+
+struct smc_bpf_ops {
+	/* priavte */
+
+	struct list_head	list;
+
+	/* public */
+
+	/* Invoked before computing SMC option for SYN packets.
+	 * We can control whether to set SMC options by modifying
+	 * ctx->set_option->tp->syn_smc.
+	 * This's also the only member that can be modified now.
+	 * Only member in ctx->set_option is valid for this callback.
+	 */
+	void (*set_option)(struct smc_bpf_ops_ctx *ctx);
+
+	/* Invoked before Set up SMC options for SYN-ACK packets
+	 * We can control whether to respond SMC options by modifying
+	 * ctx->set_option_cond.smc_ok.
+	 * Only member in ctx->set_option_cond is valid for this callback.
+	 */
+	void (*set_option_cond)(struct smc_bpf_ops_ctx *ctx);
 };
 
 #endif	/* _SMC_H */
