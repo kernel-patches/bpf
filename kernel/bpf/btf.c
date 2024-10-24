@@ -567,6 +567,7 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 
 	return -ENOENT;
 }
+EXPORT_SYMBOL_GPL(btf_find_by_name_kind);
 
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
 {
@@ -789,6 +790,7 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(btf_str_by_offset);
 
 static bool btf_name_valid_identifier(const struct btf *btf, u32 offset)
 {
