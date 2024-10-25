@@ -16,6 +16,7 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 #include <linux/timer.h>
+#include <linux/mutex.h>
 
 struct uprobe;
 struct vm_area_struct;
@@ -172,6 +173,13 @@ struct xol_area;
 
 struct uprobes_state {
 	struct xol_area		*xol_area;
+	struct hlist_head	tramp_head;
+};
+
+struct uprobe_trampoline {
+	struct hlist_node	node;
+	unsigned long		vaddr;
+	atomic64_t		ref;
 };
 
 extern void __init uprobes_init(void);
@@ -220,6 +228,10 @@ extern int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *p
 				     unsigned long vaddr, uprobe_opcode_t *new_opcode,
 				     int nbytes);
 extern bool arch_uprobe_is_register(uprobe_opcode_t *insn, int nbytes);
+extern struct uprobe_trampoline *uprobe_trampoline_get(unsigned long vaddr);
+extern void uprobe_trampoline_put(struct uprobe_trampoline *area);
+extern bool arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr);
+extern const struct vm_special_mapping *arch_uprobe_trampoline_mapping(void);
 #else /* !CONFIG_UPROBES */
 struct uprobes_state {
 };

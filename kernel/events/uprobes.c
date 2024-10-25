@@ -615,6 +615,118 @@ set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long v
 			(uprobe_opcode_t *)&auprobe->insn, UPROBE_SWBP_INSN_SIZE);
 }
 
+bool __weak arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr)
+{
+	return false;
+}
+
+const struct vm_special_mapping * __weak arch_uprobe_trampoline_mapping(void)
+{
+	return NULL;
+}
+
+static unsigned long find_nearest_page(unsigned long vaddr)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma, *prev;
+	VMA_ITERATOR(vmi, mm, 0);
+
+	prev = vma_next(&vmi);
+	vma = vma_next(&vmi);
+	while (vma) {
+		if (vma->vm_start - prev->vm_end  >= PAGE_SIZE) {
+			if (arch_uprobe_is_callable(prev->vm_end, vaddr))
+				return prev->vm_end;
+			if (arch_uprobe_is_callable(vma->vm_start - PAGE_SIZE, vaddr))
+				return vma->vm_start - PAGE_SIZE;
+		}
+
+		prev = vma;
+		vma = vma_next(&vmi);
+	}
+
+	return 0;
+}
+
+static struct uprobe_trampoline *create_uprobe_trampoline(unsigned long vaddr)
+{
+	const struct vm_special_mapping *mapping;
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	struct uprobe_trampoline *tramp;
+
+	mapping = arch_uprobe_trampoline_mapping();
+	if (!mapping)
+		return NULL;
+
+	vaddr = find_nearest_page(vaddr);
+	if (!vaddr)
+		return NULL;
+
+	tramp = kzalloc(sizeof(*tramp), GFP_KERNEL);
+	if (unlikely(!tramp))
+		return NULL;
+
+	atomic64_set(&tramp->ref, 1);
+	tramp->vaddr = vaddr;
+
+	vma = _install_special_mapping(mm, tramp->vaddr, PAGE_SIZE,
+				VM_READ|VM_EXEC|VM_MAYEXEC|VM_MAYREAD|VM_DONTCOPY|VM_IO,
+				mapping);
+	if (IS_ERR(vma))
+		goto free_area;
+	return tramp;
+
+ free_area:
+	kfree(tramp);
+	return NULL;
+}
+
+struct uprobe_trampoline *uprobe_trampoline_get(unsigned long vaddr)
+{
+	struct uprobes_state *state = &current->mm->uprobes_state;
+	struct uprobe_trampoline *tramp = NULL;
+
+	hlist_for_each_entry(tramp, &state->tramp_head, node) {
+		if (arch_uprobe_is_callable(tramp->vaddr, vaddr)) {
+			atomic64_inc(&tramp->ref);
+			return tramp;
+		}
+	}
+
+	tramp = create_uprobe_trampoline(vaddr);
+	if (!tramp)
+		return NULL;
+
+	hlist_add_head(&tramp->node, &state->tramp_head);
+	return tramp;
+}
+
+static void destroy_uprobe_trampoline(struct uprobe_trampoline *tramp)
+{
+	hlist_del(&tramp->node);
+	kfree(tramp);
+}
+
+void uprobe_trampoline_put(struct uprobe_trampoline *tramp)
+{
+	if (tramp == NULL)
+		return;
+
+	if (atomic64_dec_and_test(&tramp->ref))
+		destroy_uprobe_trampoline(tramp);
+}
+
+static void clear_tramp_head(struct mm_struct *mm)
+{
+	struct uprobes_state *state = &mm->uprobes_state;
+	struct uprobe_trampoline *tramp;
+	struct hlist_node *n;
+
+	hlist_for_each_entry_safe(tramp, n, &state->tramp_head, node)
+		destroy_uprobe_trampoline(tramp);
+}
+
 /* uprobe should have guaranteed positive refcount */
 static struct uprobe *get_uprobe(struct uprobe *uprobe)
 {
@@ -1786,6 +1898,8 @@ void uprobe_clear_state(struct mm_struct *mm)
 	mutex_lock(&delayed_uprobe_lock);
 	delayed_uprobe_remove(NULL, mm);
 	mutex_unlock(&delayed_uprobe_lock);
+
+	clear_tramp_head(mm);
 
 	if (!area)
 		return;
