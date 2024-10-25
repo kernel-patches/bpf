@@ -207,6 +207,7 @@ static void perf_ctx_unlock(struct perf_cpu_context *cpuctx,
 }
 
 #define TASK_TOMBSTONE ((void *)-1L)
+#define EVENT_TOMBSTONE ((void *)-1L)
 
 static bool is_kernel_event(struct perf_event *event)
 {
@@ -2352,6 +2353,11 @@ static void perf_child_detach(struct perf_event *event)
 
 	sync_child_event(event);
 	list_del_init(&event->child_list);
+	/*
+	 * Cannot set to NULL, as that would confuse the situation vs
+	 * not being a child event. See for example unaccount_event().
+	 */
+	event->parent = EVENT_TOMBSTONE;
 }
 
 static bool is_orphaned_event(struct perf_event *event)
@@ -2473,7 +2479,9 @@ ctx_time_update_event(struct perf_event_context *ctx, struct perf_event *event)
 
 #define DETACH_GROUP	0x01UL
 #define DETACH_CHILD	0x02UL
-#define DETACH_DEAD	0x04UL
+#define DETACH_EXIT	0x04UL
+#define DETACH_REVOKE	0x08UL
+#define DETACH_DEAD	0x10UL
 
 /*
  * Cross CPU call to remove a performance event
@@ -2488,6 +2496,7 @@ __perf_remove_from_context(struct perf_event *event,
 			   void *info)
 {
 	struct perf_event_pmu_context *pmu_ctx = event->pmu_ctx;
+	enum perf_event_state state = PERF_EVENT_STATE_OFF;
 	unsigned long flags = (unsigned long)info;
 
 	ctx_time_update(cpuctx, ctx);
@@ -2496,16 +2505,22 @@ __perf_remove_from_context(struct perf_event *event,
 	 * Ensure event_sched_out() switches to OFF, at the very least
 	 * this avoids raising perf_pending_task() at this time.
 	 */
-	if (flags & DETACH_DEAD)
+	if (flags & DETACH_EXIT)
+		state = PERF_EVENT_STATE_EXIT;
+	if (flags & DETACH_REVOKE)
+		state = PERF_EVENT_STATE_REVOKED;
+	if (flags & DETACH_DEAD) {
 		event->pending_disable = 1;
+		state = PERF_EVENT_STATE_DEAD;
+	}
 	event_sched_out(event, ctx);
 	if (flags & DETACH_GROUP)
 		perf_group_detach(event);
 	if (flags & DETACH_CHILD)
 		perf_child_detach(event);
 	list_del_event(event, ctx);
-	if (flags & DETACH_DEAD)
-		event->state = PERF_EVENT_STATE_DEAD;
+
+	event->state = min(event->state, state);
 
 	if (!pmu_ctx->nr_events) {
 		pmu_ctx->rotate_necessary = 0;
@@ -4564,7 +4579,8 @@ out:
 
 static void perf_remove_from_owner(struct perf_event *event);
 static void perf_event_exit_event(struct perf_event *event,
-				  struct perf_event_context *ctx);
+				  struct perf_event_context *ctx,
+				  bool revoke);
 
 /*
  * Removes all events from the current task that have been marked
@@ -4591,7 +4607,7 @@ static void perf_event_remove_on_exec(struct perf_event_context *ctx)
 
 		modified = true;
 
-		perf_event_exit_event(event, ctx);
+		perf_event_exit_event(event, ctx, false);
 	}
 
 	raw_spin_lock_irqsave(&ctx->lock, flags);
@@ -5191,6 +5207,7 @@ static bool is_sb_event(struct perf_event *event)
 	    attr->context_switch || attr->text_poke ||
 	    attr->bpf_event)
 		return true;
+
 	return false;
 }
 
@@ -5392,6 +5409,8 @@ static void perf_pending_task_sync(struct perf_event *event)
 /* vs perf_event_alloc() error */
 static void __free_event(struct perf_event *event)
 {
+	struct pmu *pmu = event->pmu;
+
 	if (event->attach_state & PERF_ATTACH_CALLCHAIN)
 		put_callchain_buffers();
 
@@ -5418,6 +5437,7 @@ static void __free_event(struct perf_event *event)
 		 * put_pmu_ctx() needs an event->ctx reference, because of
 		 * epc->ctx.
 		 */
+		WARN_ON_ONCE(!pmu);
 		WARN_ON_ONCE(!event->ctx);
 		WARN_ON_ONCE(event->pmu_ctx->ctx != event->ctx);
 		put_pmu_ctx(event->pmu_ctx);
@@ -5430,8 +5450,13 @@ static void __free_event(struct perf_event *event)
 	if (event->ctx)
 		put_ctx(event->ctx);
 
-	if (event->pmu)
-		module_put(event->pmu->module);
+	if (pmu) {
+		module_put(pmu->module);
+		scoped_guard (spinlock, &pmu->events_lock) {
+			list_del(&event->pmu_list);
+			wake_up_var(pmu);
+		}
+	}
 
 	call_rcu(&event->rcu_head, free_event_rcu);
 }
@@ -5579,7 +5604,11 @@ int perf_event_release_kernel(struct perf_event *event)
 	 * Thus this guarantees that we will in fact observe and kill _ALL_
 	 * child events.
 	 */
-	perf_remove_from_context(event, DETACH_GROUP|DETACH_DEAD);
+	if (event->state > PERF_EVENT_STATE_REVOKED) {
+		perf_remove_from_context(event, DETACH_GROUP|DETACH_DEAD);
+	} else {
+		event->state = PERF_EVENT_STATE_DEAD;
+	}
 
 	perf_event_ctx_unlock(event, ctx);
 
@@ -5632,7 +5661,7 @@ again:
 		mutex_unlock(&ctx->mutex);
 
 		if (child)
-			free_event(child);
+			put_event(child);
 		put_ctx(ctx);
 
 		goto again;
@@ -5867,7 +5896,7 @@ __perf_read(struct perf_event *event, char __user *buf, size_t count)
 	 * error state (i.e. because it was pinned but it couldn't be
 	 * scheduled on to the CPU at some point).
 	 */
-	if (event->state == PERF_EVENT_STATE_ERROR)
+	if (event->state <= PERF_EVENT_STATE_ERROR)
 		return 0;
 
 	if (count < event->read_size)
@@ -5906,7 +5935,13 @@ static __poll_t perf_poll(struct file *file, poll_table *wait)
 	struct perf_buffer *rb;
 	__poll_t events = EPOLLHUP;
 
+	if (event->state <= PERF_EVENT_STATE_REVOKED)
+		return EPOLLERR;
+
 	poll_wait(file, &event->waitq, wait);
+
+	if (event->state <= PERF_EVENT_STATE_REVOKED)
+		return EPOLLERR;
 
 	if (is_event_hup(event))
 		return events;
@@ -6081,6 +6116,9 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 {
 	void (*func)(struct perf_event *);
 	u32 flags = arg;
+
+	if (event->state <= PERF_EVENT_STATE_REVOKED)
+		return -ENODEV;
 
 	switch (cmd) {
 	case PERF_EVENT_IOC_ENABLE:
@@ -6457,9 +6495,22 @@ void ring_buffer_put(struct perf_buffer *rb)
 	call_rcu(&rb->rcu_head, rb_free_rcu);
 }
 
+typedef void (*mapped_f)(struct perf_event *event, struct mm_struct *mm);
+
+#define get_mapped(event, func)			\
+({	struct pmu *pmu;			\
+	mapped_f f = NULL;			\
+	guard(rcu)();				\
+	pmu = READ_ONCE(event->pmu);		\
+	if (pmu)				\
+		f = pmu->func;			\
+	f;					\
+})
+
 static void perf_mmap_open(struct vm_area_struct *vma)
 {
 	struct perf_event *event = vma->vm_file->private_data;
+	mapped_f mapped = get_mapped(event, event_mapped);
 
 	atomic_inc(&event->mmap_count);
 	atomic_inc(&event->rb->mmap_count);
@@ -6467,8 +6518,8 @@ static void perf_mmap_open(struct vm_area_struct *vma)
 	if (vma->vm_pgoff)
 		atomic_inc(&event->rb->aux_mmap_count);
 
-	if (event->pmu->event_mapped)
-		event->pmu->event_mapped(event, vma->vm_mm);
+	if (mapped)
+		mapped(event, vma->vm_mm);
 }
 
 static void perf_pmu_output_stop(struct perf_event *event);
@@ -6484,14 +6535,16 @@ static void perf_pmu_output_stop(struct perf_event *event);
 static void perf_mmap_close(struct vm_area_struct *vma)
 {
 	struct perf_event *event = vma->vm_file->private_data;
+	mapped_f unmapped = get_mapped(event, event_unmapped);
 	struct perf_buffer *rb = ring_buffer_get(event);
 	struct user_struct *mmap_user = rb->mmap_user;
 	int mmap_locked = rb->mmap_locked;
 	unsigned long size = perf_data_size(rb);
 	bool detach_rest = false;
 
-	if (event->pmu->event_unmapped)
-		event->pmu->event_unmapped(event, vma->vm_mm);
+	/* FIXIES vs perf_pmu_unregister() */
+	if (unmapped)
+		unmapped(event, vma->vm_mm);
 
 	/*
 	 * The AUX buffer is strictly a sub-buffer, serialize using aux_mutex
@@ -6684,6 +6737,7 @@ static int perf_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long nr_pages;
 	long user_extra = 0, extra = 0;
 	int ret, flags = 0;
+	mapped_f mapped;
 
 	/*
 	 * Don't allow mmap() of inherited per-task counters. This would
@@ -6713,6 +6767,16 @@ static int perf_mmap(struct file *file, struct vm_area_struct *vma)
 
 	mutex_lock(&event->mmap_mutex);
 	ret = -EINVAL;
+
+	/*
+	 * This relies on __pmu_detach_event() taking mmap_mutex after marking
+	 * the event REVOKED. Either we observe the state, or __pmu_detach_event()
+	 * will detach the rb created here.
+	 */
+	if (event->state <= PERF_EVENT_STATE_REVOKED) {
+		ret = -ENODEV;
+		goto unlock;
+	}
 
 	if (vma->vm_pgoff == 0) {
 		nr_pages -= 1;
@@ -6892,8 +6956,9 @@ aux_unlock:
 	if (!ret)
 		ret = map_range(rb, vma);
 
-	if (!ret && event->pmu->event_mapped)
-		event->pmu->event_mapped(event, vma->vm_mm);
+	mapped = get_mapped(event, event_mapped);
+	if (mapped)
+		mapped(event, vma->vm_mm);
 
 	return ret;
 }
@@ -6903,6 +6968,9 @@ static int perf_fasync(int fd, struct file *filp, int on)
 	struct inode *inode = file_inode(filp);
 	struct perf_event *event = filp->private_data;
 	int retval;
+
+	if (event->state <= PERF_EVENT_STATE_REVOKED)
+		return -ENODEV;
 
 	inode_lock(inode);
 	retval = fasync_helper(fd, filp, on, &event->fasync);
@@ -10870,6 +10938,9 @@ static int __perf_event_set_bpf_prog(struct perf_event *event,
 {
 	bool is_kprobe, is_uprobe, is_tracepoint, is_syscall_tp;
 
+	if (event->state <= PERF_EVENT_STATE_REVOKED)
+		return -ENODEV;
+
 	if (!perf_event_is_tracing(event))
 		return perf_event_set_bpf_handler(event, prog, bpf_cookie);
 
@@ -12054,6 +12125,9 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 	if (!pmu->event_idx)
 		pmu->event_idx = perf_event_idx_default;
 
+	INIT_LIST_HEAD(&pmu->events);
+	spin_lock_init(&pmu->events_lock);
+
 	/*
 	 * Now that the PMU is complete, make it visible to perf_try_init_event().
 	 */
@@ -12067,21 +12141,143 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 }
 EXPORT_SYMBOL_GPL(perf_pmu_register);
 
-void perf_pmu_unregister(struct pmu *pmu)
+static void __pmu_detach_event(struct pmu *pmu, struct perf_event *event,
+			       struct perf_event_context *ctx)
+{
+	/*
+	 * De-schedule the event and mark it REVOKED.
+	 */
+	perf_event_exit_event(event, ctx, true);
+
+	/*
+	 * All _free_event() bits that rely on event->pmu:
+	 *
+	 * Notably, perf_mmap() relies on the ordering here.
+	 */
+	scoped_guard (mutex, &event->mmap_mutex) {
+		WARN_ON_ONCE(pmu->event_unmapped);
+		/*
+		 * Mostly an empty lock sequence, such that perf_mmap(), which
+		 * relies on mmap_mutex, is sure to observe the state change.
+		 */
+	}
+
+	perf_event_free_bpf_prog(event);
+	perf_free_addr_filters(event);
+
+	if (event->destroy) {
+		event->destroy(event);
+		event->destroy = NULL;
+	}
+
+	if (event->pmu_ctx) {
+		put_pmu_ctx(event->pmu_ctx);
+		event->pmu_ctx = NULL;
+	}
+
+	exclusive_event_destroy(event);
+	module_put(pmu->module);
+
+	event->pmu = NULL; /* force fault instead of UAF */
+}
+
+static void pmu_detach_event(struct pmu *pmu, struct perf_event *event)
+{
+	struct perf_event_context *ctx;
+
+	ctx = perf_event_ctx_lock(event);
+	__pmu_detach_event(pmu, event, ctx);
+	perf_event_ctx_unlock(event, ctx);
+
+	scoped_guard (spinlock, &pmu->events_lock)
+		list_del(&event->pmu_list);
+}
+
+static struct perf_event *pmu_get_event(struct pmu *pmu)
+{
+	struct perf_event *event;
+
+	guard(spinlock)(&pmu->events_lock);
+	list_for_each_entry(event, &pmu->events, pmu_list) {
+		if (atomic_long_inc_not_zero(&event->refcount))
+			return event;
+	}
+
+	return NULL;
+}
+
+static bool pmu_empty(struct pmu *pmu)
+{
+	guard(spinlock)(&pmu->events_lock);
+	return list_empty(&pmu->events);
+}
+
+static void pmu_detach_events(struct pmu *pmu)
+{
+	struct perf_event *event;
+
+	for (;;) {
+		event = pmu_get_event(pmu);
+		if (!event)
+			break;
+
+		pmu_detach_event(pmu, event);
+		put_event(event);
+	}
+
+	/*
+	 * wait for pending _free_event()s
+	 */
+	wait_var_event(pmu, pmu_empty(pmu));
+}
+
+int perf_pmu_unregister(struct pmu *pmu)
 {
 	scoped_guard (mutex, &pmus_lock) {
+		if (!idr_cmpxchg(&pmu_idr, pmu->type, pmu, NULL))
+			return -EINVAL;
+
 		list_del_rcu(&pmu->entry);
-		idr_remove(&pmu_idr, pmu->type);
 	}
 
 	/*
 	 * We dereference the pmu list under both SRCU and regular RCU, so
 	 * synchronize against both of those.
+	 *
+	 * Notably, the entirety of event creation, from perf_init_event()
+	 * (which will now fail, because of the above) until
+	 * perf_install_in_context() should be under SRCU such that
+	 * this synchronizes against event creation. This avoids trying to
+	 * detach events that are not fully formed.
 	 */
 	synchronize_srcu(&pmus_srcu);
 	synchronize_rcu();
 
+	if (pmu->event_unmapped && !pmu_empty(pmu)) {
+		/*
+		 * Can't force remove events when pmu::event_unmapped()
+		 * is used in perf_mmap_close().
+		 */
+		guard(mutex)(&pmus_lock);
+		idr_cmpxchg(&pmu_idr, pmu->type, NULL, pmu);
+		list_add_rcu(&pmu->entry, &pmus);
+		return -EBUSY;
+	}
+
+	scoped_guard (mutex, &pmus_lock)
+		idr_remove(&pmu_idr, pmu->type);
+
+	/*
+	 * PMU is removed from the pmus list, so no new events will
+	 * be created, now take care of the existing ones.
+	 */
+	pmu_detach_events(pmu);
+
+	/*
+	 * PMU is unused, make it go away.
+	 */
 	perf_pmu_free(pmu);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(perf_pmu_unregister);
 
@@ -12175,7 +12371,7 @@ static struct pmu *perf_init_event(struct perf_event *event)
 	struct pmu *pmu;
 	int type, ret;
 
-	guard(srcu)(&pmus_srcu);
+	guard(srcu)(&pmus_srcu); /* pmu idr/list access */
 
 	/*
 	 * Save original type before calling pmu->event_init() since certain
@@ -12399,6 +12595,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 	INIT_LIST_HEAD(&event->active_entry);
 	INIT_LIST_HEAD(&event->addr_filters.list);
 	INIT_HLIST_NODE(&event->hlist_entry);
+	INIT_LIST_HEAD(&event->pmu_list);
 
 
 	init_waitqueue_head(&event->waitq);
@@ -12565,6 +12762,13 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 
 	/* symmetric to unaccount_event() in _free_event() */
 	account_event(event);
+
+	/*
+	 * Event creation should be under SRCU, see perf_pmu_unregister().
+	 */
+	lockdep_assert_held(&pmus_srcu);
+	scoped_guard (spinlock, &pmu->events_lock)
+		list_add(&event->pmu_list, &pmu->events);
 
 	return_ptr(event);
 }
@@ -12765,6 +12969,9 @@ set:
 		goto unlock;
 
 	if (output_event) {
+		if (output_event->state <= PERF_EVENT_STATE_REVOKED)
+			goto unlock;
+
 		/* get the rb we want to redirect to */
 		rb = ring_buffer_get(output_event);
 		if (!rb)
@@ -12946,6 +13153,11 @@ SYSCALL_DEFINE5(perf_event_open,
 	if (event_fd < 0)
 		return event_fd;
 
+	/*
+	 * Event creation should be under SRCU, see perf_pmu_unregister().
+	 */
+	guard(srcu)(&pmus_srcu);
+
 	CLASS(fd, group)(group_fd);     // group_fd == -1 => empty
 	if (group_fd != -1) {
 		if (!is_perf_file(group)) {
@@ -12953,6 +13165,10 @@ SYSCALL_DEFINE5(perf_event_open,
 			goto err_fd;
 		}
 		group_leader = fd_file(group)->private_data;
+		if (group_leader->state <= PERF_EVENT_STATE_REVOKED) {
+			err = -ENODEV;
+			goto err_fd;
+		}
 		if (flags & PERF_FLAG_FD_OUTPUT)
 			output_event = group_leader;
 		if (flags & PERF_FLAG_FD_NO_GROUP)
@@ -13286,6 +13502,11 @@ perf_event_create_kernel_counter(struct perf_event_attr *attr, int cpu,
 	if (attr->aux_output || attr->aux_action)
 		return ERR_PTR(-EINVAL);
 
+	/*
+	 * Event creation should be under SRCU, see perf_pmu_unregister().
+	 */
+	guard(srcu)(&pmus_srcu);
+
 	event = perf_event_alloc(attr, cpu, task, NULL, NULL,
 				 overflow_handler, context, -1);
 	if (IS_ERR(event)) {
@@ -13497,10 +13718,14 @@ static void sync_child_event(struct perf_event *child_event)
 }
 
 static void
-perf_event_exit_event(struct perf_event *event, struct perf_event_context *ctx)
+perf_event_exit_event(struct perf_event *event,
+		      struct perf_event_context *ctx, bool revoke)
 {
 	struct perf_event *parent_event = event->parent;
-	unsigned long detach_flags = 0;
+	unsigned long detach_flags = DETACH_EXIT;
+
+	if (parent_event == EVENT_TOMBSTONE)
+		parent_event = NULL;
 
 	if (parent_event) {
 		/*
@@ -13515,16 +13740,14 @@ perf_event_exit_event(struct perf_event *event, struct perf_event_context *ctx)
 		 * Do destroy all inherited groups, we don't care about those
 		 * and being thorough is better.
 		 */
-		detach_flags = DETACH_GROUP | DETACH_CHILD;
+		detach_flags |= DETACH_GROUP | DETACH_CHILD;
 		mutex_lock(&parent_event->child_mutex);
 	}
 
-	perf_remove_from_context(event, detach_flags);
+	if (revoke)
+		detach_flags |= DETACH_GROUP | DETACH_REVOKE;
 
-	raw_spin_lock_irq(&ctx->lock);
-	if (event->state > PERF_EVENT_STATE_EXIT)
-		perf_event_set_state(event, PERF_EVENT_STATE_EXIT);
-	raw_spin_unlock_irq(&ctx->lock);
+	perf_remove_from_context(event, detach_flags);
 
 	/*
 	 * Child events can be freed.
@@ -13535,7 +13758,10 @@ perf_event_exit_event(struct perf_event *event, struct perf_event_context *ctx)
 		 * Kick perf_poll() for is_event_hup();
 		 */
 		perf_event_wakeup(parent_event);
-		free_event(event);
+		/*
+		 * pmu_detach_event() will have an extra refcount.
+		 */
+		put_event(event);
 		put_event(parent_event);
 		return;
 	}
@@ -13601,7 +13827,7 @@ static void perf_event_exit_task_context(struct task_struct *task, bool exit)
 		perf_event_task(task, ctx, 0);
 
 	list_for_each_entry_safe(child_event, next, &ctx->event_list, event_entry)
-		perf_event_exit_event(child_event, ctx);
+		perf_event_exit_event(child_event, ctx, false);
 
 	mutex_unlock(&ctx->mutex);
 
@@ -13747,6 +13973,14 @@ inherit_event(struct perf_event *parent_event,
 	 */
 	if (parent_event->parent)
 		parent_event = parent_event->parent;
+
+	if (parent_event->state <= PERF_EVENT_STATE_REVOKED)
+		return NULL;
+
+	/*
+	 * Event creation should be under SRCU, see perf_pmu_unregister().
+	 */
+	guard(srcu)(&pmus_srcu);
 
 	child_event = perf_event_alloc(&parent_event->attr,
 					   parent_event->cpu,
