@@ -1367,6 +1367,7 @@ static int bcmasp_probe(struct platform_device *pdev)
 	bcmasp_core_init(priv);
 	bcmasp_core_init_filters(priv);
 
+	of_node_get(dev->of_node);
 	ports_node = of_find_node_by_name(dev->of_node, "ethernet-ports");
 	if (!ports_node) {
 		dev_warn(dev, "No ports found\n");
@@ -1500,7 +1501,7 @@ static SIMPLE_DEV_PM_OPS(bcmasp_pm_ops,
 
 static struct platform_driver bcmasp_driver = {
 	.probe = bcmasp_probe,
-	.remove_new = bcmasp_remove,
+	.remove = bcmasp_remove,
 	.shutdown = bcmasp_shutdown,
 	.driver = {
 		.name = "brcm,asp-v2",

@@ -663,7 +663,7 @@ static int get_link_ksettings(struct net_device *dev,
 			      struct ethtool_link_ksettings *link_ksettings)
 {
 	struct port_info *pi = netdev_priv(dev);
-	struct ethtool_link_settings *base = &link_ksettings->base;
+	struct ethtool_link_settings_hdr *base = &link_ksettings->base;
 
 	/* For the nonce, the Firmware doesn't send up Port State changes
 	 * when the Virtual Interface attached to the Port is down.  So
@@ -719,7 +719,7 @@ static int set_link_ksettings(struct net_device *dev,
 {
 	struct port_info *pi = netdev_priv(dev);
 	struct link_config *lc = &pi->link_cfg;
-	const struct ethtool_link_settings *base = &link_ksettings->base;
+	const struct ethtool_link_settings_hdr *base = &link_ksettings->base;
 	struct link_config old_lc;
 	unsigned int fw_caps;
 	int ret = 0;

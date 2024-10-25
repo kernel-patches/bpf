@@ -107,6 +107,11 @@ static bool log_ecn_error = true;
 module_param(log_ecn_error, bool, 0644);
 MODULE_PARM_DESC(log_ecn_error, "Log packets received with corrupted ECN");
 
+static bool netns_atomic;
+module_param(netns_atomic, bool, 0444);
+MODULE_PARM_DESC(netns_atomic,
+		 "Create tunnel in target net namespace directly and use current net namespace as link-netns by default");
+
 static struct rtnl_link_ops ipgre_link_ops __read_mostly;
 static const struct header_ops ipgre_header_ops;
 
@@ -1393,6 +1398,7 @@ static int ipgre_newlink(struct net *src_net, struct net_device *dev,
 			 struct nlattr *tb[], struct nlattr *data[],
 			 struct netlink_ext_ack *extack)
 {
+	struct net *link_net = netns_atomic ? src_net : dev_net(dev);
 	struct ip_tunnel_parm_kern p;
 	__u32 fwmark = 0;
 	int err;
@@ -1404,13 +1410,14 @@ static int ipgre_newlink(struct net *src_net, struct net_device *dev,
 	err = ipgre_netlink_parms(dev, data, tb, &p, &fwmark);
 	if (err < 0)
 		return err;
-	return ip_tunnel_newlink(dev, tb, &p, fwmark);
+	return ip_tunnel_newlink_net(link_net, dev, tb, &p, fwmark);
 }
 
 static int erspan_newlink(struct net *src_net, struct net_device *dev,
 			  struct nlattr *tb[], struct nlattr *data[],
 			  struct netlink_ext_ack *extack)
 {
+	struct net *link_net = netns_atomic ? src_net : dev_net(dev);
 	struct ip_tunnel_parm_kern p;
 	__u32 fwmark = 0;
 	int err;
@@ -1422,7 +1429,7 @@ static int erspan_newlink(struct net *src_net, struct net_device *dev,
 	err = erspan_netlink_parms(dev, data, tb, &p, &fwmark);
 	if (err)
 		return err;
-	return ip_tunnel_newlink(dev, tb, &p, fwmark);
+	return ip_tunnel_newlink_net(link_net, dev, tb, &p, fwmark);
 }
 
 static int ipgre_changelink(struct net_device *dev, struct nlattr *tb[],
@@ -1776,6 +1783,10 @@ static int __init ipgre_init(void)
 	int err;
 
 	pr_info("GRE over IPv4 tunneling driver\n");
+
+	ipgre_link_ops.netns_atomic = netns_atomic;
+	ipgre_tap_ops.netns_atomic = netns_atomic;
+	erspan_link_ops.netns_atomic = netns_atomic;
 
 	err = register_pernet_device(&ipgre_net_ops);
 	if (err < 0)

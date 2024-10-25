@@ -261,11 +261,11 @@ static int vlan_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		for (i = 0; i < ARRAY_SIZE(vlan->egress_priority_map); i++) {
 			for (pm = vlan->egress_priority_map[i]; pm;
 			     pm = pm->next) {
-				if (!pm->vlan_qos)
+				if (!pm->vlan_prio)
 					continue;
 
 				m.from = pm->priority;
-				m.to   = (pm->vlan_qos >> 13) & 0x7;
+				m.to   = pm->vlan_prio;
 				if (nla_put(skb, IFLA_VLAN_QOS_MAPPING,
 					    sizeof(m), &m))
 					goto nla_put_failure;
