@@ -12,6 +12,7 @@
 #include <net/tcp.h>
 #include <linux/sock_diag.h>
 #include <net/rstreason.h>
+#include <net/dropreason-core.h>
 
 /*
  * tcp event with arguments sk and skb
@@ -727,6 +728,58 @@ DEFINE_EVENT(tcp_ao_event_sne, tcp_ao_rcv_sne_update,
 	TP_PROTO(const struct sock *sk, __u32 new_sne),
 	TP_ARGS(sk, new_sne)
 );
+
+#undef FN
+#undef FNe
+#define FN(reason)	{ SKB_DROP_REASON_##reason, #reason },
+#define FNe(reason)	{ SKB_DROP_REASON_##reason, #reason }
+
+TRACE_EVENT(tcp_drop_reason,
+
+	TP_PROTO(const struct sock *sk, const struct sk_buff *skb,
+		 const enum skb_drop_reason reason),
+
+	TP_ARGS(sk, skb, reason),
+
+	TP_STRUCT__entry(
+		__field(const void *, skbaddr)
+		__field(const void *, skaddr)
+		__field(int, state)
+		__field(enum skb_drop_reason, reason)
+		__array(__u8, saddr, sizeof(struct sockaddr_in6))
+		__array(__u8, daddr, sizeof(struct sockaddr_in6))
+	),
+
+	TP_fast_assign(
+		__entry->skbaddr = skb;
+		__entry->skaddr = sk;
+		/* Zero means unknown state. */
+		__entry->state = sk ? sk->sk_state : 0;
+
+		memset(__entry->saddr, 0, sizeof(struct sockaddr_in6));
+		memset(__entry->daddr, 0, sizeof(struct sockaddr_in6));
+
+		if (sk && sk_fullsock(sk)) {
+			const struct inet_sock *inet = inet_sk(sk);
+
+			TP_STORE_ADDR_PORTS(__entry, inet, sk);
+		} else {
+			const struct tcphdr *th = (const struct tcphdr *)skb->data;
+
+			TP_STORE_ADDR_PORTS_SKB(skb, th, entry->saddr, entry->daddr);
+		}
+		__entry->reason = reason;
+	),
+
+	TP_printk("skbaddr=%p skaddr=%p src=%pISpc dest=%pISpc state=%s reason=%s",
+		  __entry->skbaddr, __entry->skaddr,
+		  __entry->saddr, __entry->daddr,
+		  __entry->state ? show_tcp_state_name(__entry->state) : "UNKNOWN",
+		  __print_symbolic(__entry->reason, DEFINE_DROP_REASON(FN, FNe)))
+);
+
+#undef FN
+#undef FNe
 
 #endif /* _TRACE_TCP_H */
 

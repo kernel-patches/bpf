@@ -216,6 +216,7 @@ tps23881_get_of_channels(struct tps23881_priv *priv,
 	if (!priv->np)
 		return -EINVAL;
 
+	of_node_get(priv->np);
 	channels_node = of_find_node_by_name(priv->np, "channels");
 	if (!channels_node)
 		return -EINVAL;

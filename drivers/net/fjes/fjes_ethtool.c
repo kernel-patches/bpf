@@ -92,42 +92,26 @@ static void fjes_get_strings(struct net_device *netdev,
 
 	switch (stringset) {
 	case ETH_SS_STATS:
-		for (i = 0; i < ARRAY_SIZE(fjes_gstrings_stats); i++) {
-			memcpy(p, fjes_gstrings_stats[i].stat_string,
-			       ETH_GSTRING_LEN);
-			p += ETH_GSTRING_LEN;
-		}
+		for (i = 0; i < ARRAY_SIZE(fjes_gstrings_stats); i++)
+			ethtool_puts(&p, fjes_gstrings_stats[i].stat_string);
+
 		for (i = 0; i < hw->max_epid; i++) {
 			if (i == hw->my_epid)
 				continue;
-			sprintf(p, "ep%u_com_regist_buf_exec", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_com_unregist_buf_exec", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_send_intr_rx", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_send_intr_unshare", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_send_intr_zoneupdate", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_recv_intr_rx", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_recv_intr_unshare", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_recv_intr_stop", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_recv_intr_zoneupdate", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_tx_buffer_full", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_tx_dropped_not_shared", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_tx_dropped_ver_mismatch", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_tx_dropped_buf_size_mismatch", i);
-			p += ETH_GSTRING_LEN;
-			sprintf(p, "ep%u_tx_dropped_vlanid_mismatch", i);
-			p += ETH_GSTRING_LEN;
+			ethtool_sprintf(&p, "ep%u_com_regist_buf_exec", i);
+			ethtool_sprintf(&p, "ep%u_com_unregist_buf_exec", i);
+			ethtool_sprintf(&p, "ep%u_send_intr_rx", i);
+			ethtool_sprintf(&p, "ep%u_send_intr_unshare", i);
+			ethtool_sprintf(&p, "ep%u_send_intr_zoneupdate", i);
+			ethtool_sprintf(&p, "ep%u_recv_intr_rx", i);
+			ethtool_sprintf(&p, "ep%u_recv_intr_unshare", i);
+			ethtool_sprintf(&p, "ep%u_recv_intr_stop", i);
+			ethtool_sprintf(&p, "ep%u_recv_intr_zoneupdate", i);
+			ethtool_sprintf(&p, "ep%u_tx_buffer_full", i);
+			ethtool_sprintf(&p, "ep%u_tx_dropped_not_shared", i);
+			ethtool_sprintf(&p, "ep%u_tx_dropped_ver_mismatch", i);
+			ethtool_sprintf(&p, "ep%u_tx_dropped_buf_size_mismatch", i);
+			ethtool_sprintf(&p, "ep%u_tx_dropped_vlanid_mismatch", i);
 		}
 		break;
 	}

@@ -236,6 +236,7 @@ Userspace to kernel:
   ``ETHTOOL_MSG_MM_GET``                get MAC merge layer state
   ``ETHTOOL_MSG_MM_SET``                set MAC merge layer parameters
   ``ETHTOOL_MSG_MODULE_FW_FLASH_ACT``   flash transceiver module firmware
+  ``ETHTOOL_MSG_PHY_GET``               get Ethernet PHY information
   ===================================== =================================
 
 Kernel to userspace:
@@ -283,6 +284,8 @@ Kernel to userspace:
   ``ETHTOOL_MSG_PLCA_NTF``                 PLCA RS parameters
   ``ETHTOOL_MSG_MM_GET_REPLY``             MAC merge layer status
   ``ETHTOOL_MSG_MODULE_FW_FLASH_NTF``      transceiver module flash updates
+  ``ETHTOOL_MSG_PHY_GET_REPLY``            Ethernet PHY information
+  ``ETHTOOL_MSG_PHY_NTF``                  Ethernet PHY information
   ======================================== =================================
 
 ``GET`` requests are sent by userspace applications to retrieve device
@@ -875,24 +878,35 @@ Request contents:
 
 Kernel response contents:
 
-  =======================================   ======  ===========================
-  ``ETHTOOL_A_RINGS_HEADER``                nested  reply header
-  ``ETHTOOL_A_RINGS_RX_MAX``                u32     max size of RX ring
-  ``ETHTOOL_A_RINGS_RX_MINI_MAX``           u32     max size of RX mini ring
-  ``ETHTOOL_A_RINGS_RX_JUMBO_MAX``          u32     max size of RX jumbo ring
-  ``ETHTOOL_A_RINGS_TX_MAX``                u32     max size of TX ring
-  ``ETHTOOL_A_RINGS_RX``                    u32     size of RX ring
-  ``ETHTOOL_A_RINGS_RX_MINI``               u32     size of RX mini ring
-  ``ETHTOOL_A_RINGS_RX_JUMBO``              u32     size of RX jumbo ring
-  ``ETHTOOL_A_RINGS_TX``                    u32     size of TX ring
-  ``ETHTOOL_A_RINGS_RX_BUF_LEN``            u32     size of buffers on the ring
-  ``ETHTOOL_A_RINGS_TCP_DATA_SPLIT``        u8      TCP header / data split
-  ``ETHTOOL_A_RINGS_CQE_SIZE``              u32     Size of TX/RX CQE
-  ``ETHTOOL_A_RINGS_TX_PUSH``               u8      flag of TX Push mode
-  ``ETHTOOL_A_RINGS_RX_PUSH``               u8      flag of RX Push mode
-  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN``       u32     size of TX push buffer
-  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN_MAX``   u32     max size of TX push buffer
-  =======================================   ======  ===========================
+  ================================================  ======  ====================
+  ``ETHTOOL_A_RINGS_HEADER``                        nested  reply header
+  ``ETHTOOL_A_RINGS_RX_MAX``                        u32     max size of RX ring
+  ``ETHTOOL_A_RINGS_RX_MINI_MAX``                   u32     max size of RX mini
+                                                            ring
+  ``ETHTOOL_A_RINGS_RX_JUMBO_MAX``                  u32     max size of RX jumbo
+                                                            ring
+  ``ETHTOOL_A_RINGS_TX_MAX``                        u32     max size of TX ring
+  ``ETHTOOL_A_RINGS_RX``                            u32     size of RX ring
+  ``ETHTOOL_A_RINGS_RX_MINI``                       u32     size of RX mini ring
+  ``ETHTOOL_A_RINGS_RX_JUMBO``                      u32     size of RX jumbo
+                                                            ring
+  ``ETHTOOL_A_RINGS_TX``                            u32     size of TX ring
+  ``ETHTOOL_A_RINGS_RX_BUF_LEN``                    u32     size of buffers on
+                                                            the ring
+  ``ETHTOOL_A_RINGS_TCP_DATA_SPLIT``                u8      TCP header / data
+                                                            split
+  ``ETHTOOL_A_RINGS_CQE_SIZE``                      u32     Size of TX/RX CQE
+  ``ETHTOOL_A_RINGS_TX_PUSH``                       u8      flag of TX Push mode
+  ``ETHTOOL_A_RINGS_RX_PUSH``                       u8      flag of RX Push mode
+  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN``               u32     size of TX push
+                                                            buffer
+  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN_MAX``           u32     max size of TX push
+                                                            buffer
+  ``ETHTOOL_A_RINGS_HEADER_DATA_SPLIT_THRESH``      u32     threshold of
+                                                            header / data split
+  ``ETHTOOL_A_RINGS_HEADER_DATA_SPLIT_THRESH_MAX``  u32     max threshold of
+                                                            header / data split
+  ================================================  ======  ====================
 
 ``ETHTOOL_A_RINGS_TCP_DATA_SPLIT`` indicates whether the device is usable with
 page-flipping TCP zero-copy receive (``getsockopt(TCP_ZEROCOPY_RECEIVE)``).
@@ -927,18 +941,22 @@ Sets ring sizes like ``ETHTOOL_SRINGPARAM`` ioctl request.
 
 Request contents:
 
-  ====================================  ======  ===========================
-  ``ETHTOOL_A_RINGS_HEADER``            nested  reply header
-  ``ETHTOOL_A_RINGS_RX``                u32     size of RX ring
-  ``ETHTOOL_A_RINGS_RX_MINI``           u32     size of RX mini ring
-  ``ETHTOOL_A_RINGS_RX_JUMBO``          u32     size of RX jumbo ring
-  ``ETHTOOL_A_RINGS_TX``                u32     size of TX ring
-  ``ETHTOOL_A_RINGS_RX_BUF_LEN``        u32     size of buffers on the ring
-  ``ETHTOOL_A_RINGS_CQE_SIZE``          u32     Size of TX/RX CQE
-  ``ETHTOOL_A_RINGS_TX_PUSH``           u8      flag of TX Push mode
-  ``ETHTOOL_A_RINGS_RX_PUSH``           u8      flag of RX Push mode
-  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN``   u32     size of TX push buffer
-  ====================================  ======  ===========================
+  ============================================  ======  =======================
+  ``ETHTOOL_A_RINGS_HEADER``                    nested  reply header
+  ``ETHTOOL_A_RINGS_RX``                        u32     size of RX ring
+  ``ETHTOOL_A_RINGS_RX_MINI``                   u32     size of RX mini ring
+  ``ETHTOOL_A_RINGS_RX_JUMBO``                  u32     size of RX jumbo ring
+  ``ETHTOOL_A_RINGS_TX``                        u32     size of TX ring
+  ``ETHTOOL_A_RINGS_RX_BUF_LEN``                u32     size of buffers on the
+                                                        ring
+  ``ETHTOOL_A_RINGS_TCP_DATA_SPLIT``            u8      TCP header / data split
+  ``ETHTOOL_A_RINGS_CQE_SIZE``                  u32     Size of TX/RX CQE
+  ``ETHTOOL_A_RINGS_TX_PUSH``                   u8      flag of TX Push mode
+  ``ETHTOOL_A_RINGS_RX_PUSH``                   u8      flag of RX Push mode
+  ``ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN``           u32     size of TX push buffer
+  ``ETHTOOL_A_RINGS_HEADER_DATA_SPLIT_THRESH``  u32     threshold of
+                                                        header / data split
+  ============================================  ======  =======================
 
 Kernel checks that requested ring sizes do not exceed limits reported by
 driver. Driver may impose additional constraints and may not support all
@@ -953,6 +971,10 @@ enables to modify the CQE size other than default size if NIC supports it.
 A bigger CQE can have more receive buffer pointers, and in turn the NIC can
 transfer a bigger frame from wire. Based on the NIC hardware, the overall
 completion queue size can be adjusted in the driver if CQE size is modified.
+
+``ETHTOOL_A_RINGS_HEADER_DATA_SPLIT_THRESH`` specifies the threshold value of
+header / data split feature. If a received packet size is larger than this
+threshold value, header and data will be split.
 
 CHANNELS_GET
 ============

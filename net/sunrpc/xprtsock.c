@@ -1287,6 +1287,9 @@ static void xs_reset_transport(struct sock_xprt *transport)
 	release_sock(sk);
 	mutex_unlock(&transport->recv_mutex);
 
+	if (sk->sk_prot == &tcp_prot)
+		tcp_abort(sk, ECONNABORTED);
+
 	trace_rpc_socket_close(xprt, sock);
 	__fput_sync(filp);
 

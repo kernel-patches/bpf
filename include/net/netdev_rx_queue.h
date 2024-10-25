@@ -55,6 +55,20 @@ get_netdev_rx_queue_index(struct netdev_rx_queue *queue)
 	return index;
 }
 
+static inline bool netdev_devmem_enabled(struct net_device *dev)
+{
+	struct netdev_rx_queue *queue;
+	int i;
+
+	for (i = 0; i < dev->real_num_rx_queues; i++) {
+		queue = __netif_get_rx_queue(dev, i);
+		if (queue->mp_params.mp_priv)
+			return true;
+	}
+
+	return false;
+}
+
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
 
 #endif

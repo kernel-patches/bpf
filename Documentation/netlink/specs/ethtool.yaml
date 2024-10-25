@@ -96,7 +96,12 @@ attribute-sets:
         name: bits
         type: nest
         nested-attributes: bitset-bits
-
+      -
+        name: value
+        type: binary
+      -
+        name: mask
+        type: binary
   -
     name: string
     attributes:
@@ -214,6 +219,12 @@ attribute-sets:
         type: u32
       -
         name: tx-push-buf-len-max
+        type: u32
+      -
+        name: header-data-split-thresh
+        type: u32
+      -
+        name: header-data-split-thresh-max
         type: u32
 
   -
@@ -1393,6 +1404,8 @@ operations:
             - rx-push
             - tx-push-buf-len
             - tx-push-buf-len-max
+            - header-data-split-thresh
+            - header-data-split-thresh-max
       dump: *ring-get-op
     -
       name: rings-set
@@ -1951,3 +1964,7 @@ operations:
             - upstream-sfp-name
             - downstream-sfp-name
       dump: *phy-get-op
+    -
+      name: phy-ntf
+      doc: Notification for change in PHY devices.
+      notify: phy-get

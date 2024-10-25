@@ -11,10 +11,10 @@ struct linkmodes_req_info {
 };
 
 struct linkmodes_reply_data {
-	struct ethnl_reply_data		base;
-	struct ethtool_link_ksettings	ksettings;
-	struct ethtool_link_settings	*lsettings;
-	bool				peer_empty;
+	struct ethnl_reply_data			base;
+	struct ethtool_link_ksettings		ksettings;
+	struct ethtool_link_settings_hdr	*lsettings;
+	bool					peer_empty;
 };
 
 #define LINKMODES_REPDATA(__reply_base) \
@@ -62,7 +62,7 @@ static int linkmodes_reply_size(const struct ethnl_req_info *req_base,
 {
 	const struct linkmodes_reply_data *data = LINKMODES_REPDATA(reply_base);
 	const struct ethtool_link_ksettings *ksettings = &data->ksettings;
-	const struct ethtool_link_settings *lsettings = &ksettings->base;
+	const struct ethtool_link_settings_hdr *lsettings = &ksettings->base;
 	bool compact = req_base->flags & ETHTOOL_FLAG_COMPACT_BITSETS;
 	int len, ret;
 
@@ -103,7 +103,7 @@ static int linkmodes_fill_reply(struct sk_buff *skb,
 {
 	const struct linkmodes_reply_data *data = LINKMODES_REPDATA(reply_base);
 	const struct ethtool_link_ksettings *ksettings = &data->ksettings;
-	const struct ethtool_link_settings *lsettings = &ksettings->base;
+	const struct ethtool_link_settings_hdr *lsettings = &ksettings->base;
 	bool compact = req_base->flags & ETHTOOL_FLAG_COMPACT_BITSETS;
 	int ret;
 
@@ -237,7 +237,7 @@ static int ethnl_update_linkmodes(struct genl_info *info, struct nlattr **tb,
 				  struct ethtool_link_ksettings *ksettings,
 				  bool *mod, const struct net_device *dev)
 {
-	struct ethtool_link_settings *lsettings = &ksettings->base;
+	struct ethtool_link_settings_hdr *lsettings = &ksettings->base;
 	bool req_speed, req_lanes, req_duplex;
 	const struct nlattr *master_slave_cfg, *lanes_cfg;
 	int ret;
