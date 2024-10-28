@@ -116,6 +116,21 @@ static void test_snprintf_negative(void)
 	ASSERT_ERR(load_single_snprintf("%llc"), "invalid specifier 7");
 	ASSERT_ERR(load_single_snprintf("\x80"), "non ascii character");
 	ASSERT_ERR(load_single_snprintf("\x1"), "non printable character");
+
+	ASSERT_OK(load_single_snprintf("valid %p"), "valid usage");
+
+	ASSERT_ERR(load_single_snprintf("%p%"), "too many specifiers 1");
+	ASSERT_ERR(load_single_snprintf("%pK%"), "too many specifiers 2");
+	ASSERT_ERR(load_single_snprintf("%px%"), "too many specifiers 3");
+	ASSERT_ERR(load_single_snprintf("%ps%"), "too many specifiers 4");
+	ASSERT_ERR(load_single_snprintf("%pS%"), "too many specifiers 5");
+	ASSERT_ERR(load_single_snprintf("%pB%"), "too many specifiers 6");
+	ASSERT_ERR(load_single_snprintf("%pi4%"), "too many specifiers 7");
+	ASSERT_ERR(load_single_snprintf("%pI4%"), "too many specifiers 8");
+	ASSERT_ERR(load_single_snprintf("%pi6%"), "too many specifiers 9");
+	ASSERT_ERR(load_single_snprintf("%pI6%"), "too many specifiers 10");
+	ASSERT_ERR(load_single_snprintf("%pks%"), "too many specifiers 11");
+	ASSERT_ERR(load_single_snprintf("%pus%"), "too many specifiers 12");
 }
 
 void test_snprintf(void)
