@@ -25,6 +25,7 @@
 #include <linux/kasan.h>
 #if IS_ENABLED(CONFIG_GENERIC_GETTIMEOFDAY)
 #include <vdso/datapage.h>
+#include <asm/vdso/vsyscall.h>
 #endif
 
 #include "../../lib/kstrtox.h"
@@ -3032,6 +3033,12 @@ __bpf_kfunc u64 bpf_get_cpu_cycles_counter(void)
 	       __arch_get_hw_counter(1, NULL) : 0;
 }
 
+__bpf_kfunc u64 bpf_cpu_cyc2ns(u64 cycles)
+{
+	const struct vdso_data *vd = __arch_get_k_vdso_data();
+
+	return vd ? mul_u64_u32_shr(cycles, vd->mult, vd->shift) : 0;
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3122,6 +3129,7 @@ BTF_ID_FLAGS(func, bpf_iter_bits_destroy, KF_ITER_DESTROY)
 BTF_ID_FLAGS(func, bpf_copy_from_user_str, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_kmem_cache)
 BTF_ID_FLAGS(func, bpf_get_cpu_cycles_counter, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_cpu_cyc2ns, KF_FASTCALL)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {

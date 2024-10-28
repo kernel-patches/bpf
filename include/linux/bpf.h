@@ -3330,6 +3330,7 @@ u64 bpf_get_raw_cpu_id(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 
 /* Inlined kfuncs */
 u64 bpf_get_cpu_cycles_counter(void);
+u64 bpf_cpu_cyc2ns(u64 cycles);
 
 #if defined(CONFIG_NET)
 bool bpf_sock_common_is_valid_access(int off, int size,
