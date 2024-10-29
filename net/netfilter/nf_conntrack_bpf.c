@@ -531,8 +531,8 @@ int register_nf_conntrack_bpf(void)
 {
 	int ret;
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &nf_conntrack_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &nf_conntrack_kfunc_set);
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_XDP, &nf_conntrack_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC, &nf_conntrack_kfunc_set);
 	if (!ret) {
 		mutex_lock(&nf_conn_btf_access_lock);
 		nfct_btf_struct_access = _nf_conntrack_btf_struct_access;

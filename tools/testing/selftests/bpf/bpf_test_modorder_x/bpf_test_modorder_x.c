@@ -24,7 +24,7 @@ static const struct btf_kfunc_id_set bpf_test_modorder_x_set = {
 
 static int __init bpf_test_modorder_x_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC,
 					 &bpf_test_modorder_x_set);
 }
 

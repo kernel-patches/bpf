@@ -7188,23 +7188,23 @@ static int __init scx_init(void)
 	 * them. For now, register them the same and make each kfunc explicitly
 	 * check using scx_kf_allowed().
 	 */
-	if ((ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	if ((ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_select_cpu)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_enqueue_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_cpu_release)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_unlocked)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_SYSCALL,
 					     &scx_kfunc_set_unlocked)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS,
 					     &scx_kfunc_set_any)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TRACING,
 					     &scx_kfunc_set_any)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+	    (ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_SYSCALL,
 					     &scx_kfunc_set_any))) {
 		pr_err("sched_ext: Failed to register kfunc sets (%d)\n", ret);
 		return ret;

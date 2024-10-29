@@ -112,6 +112,6 @@ static const struct btf_kfunc_id_set fou_bpf_kfunc_set = {
 
 int register_fou_bpf(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TC,
 					 &fou_bpf_kfunc_set);
 }

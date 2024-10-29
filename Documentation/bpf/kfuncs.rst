@@ -359,7 +359,7 @@ type. An example is shown below::
 
         static int init_subsystem(void)
         {
-                return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_task_kfunc_set);
+                return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TRACING, &bpf_task_kfunc_set);
         }
         late_initcall(init_subsystem);
 

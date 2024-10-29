@@ -1434,7 +1434,7 @@ static const struct btf_kfunc_id_set bpf_key_sig_kfunc_set = {
 
 static int __init bpf_key_sig_kfuncs_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TRACING,
 					 &bpf_key_sig_kfunc_set);
 }
 
@@ -3500,7 +3500,7 @@ static const struct btf_kfunc_id_set bpf_kprobe_multi_kfunc_set = {
 
 static int __init bpf_kprobe_multi_kfuncs_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_KPROBE, &bpf_kprobe_multi_kfunc_set);
+	return register_btf_kfunc_id_set(BTF_KFUNC_HOOK_KPROBE, &bpf_kprobe_multi_kfunc_set);
 }
 
 late_initcall(bpf_kprobe_multi_kfuncs_init);

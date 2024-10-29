@@ -658,13 +658,13 @@ static int __init hid_bpf_init(void)
 	 * This is not a big deal: nobody will be able to use the functionality.
 	 */
 
-	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &hid_bpf_kfunc_set);
+	err = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS, &hid_bpf_kfunc_set);
 	if (err) {
 		pr_warn("error while setting HID BPF tracing kfuncs: %d", err);
 		return 0;
 	}
 
-	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &hid_bpf_syscall_kfunc_set);
+	err = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_SYSCALL, &hid_bpf_syscall_kfunc_set);
 	if (err) {
 		pr_warn("error while setting HID BPF syscall kfuncs: %d", err);
 		return 0;

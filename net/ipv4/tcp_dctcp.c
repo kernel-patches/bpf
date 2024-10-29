@@ -291,7 +291,7 @@ static int __init dctcp_register(void)
 
 	BUILD_BUG_ON(sizeof(struct dctcp) > ICSK_CA_PRIV_SIZE);
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &tcp_dctcp_kfunc_set);
+	ret = register_btf_kfunc_id_set(BTF_KFUNC_HOOK_STRUCT_OPS, &tcp_dctcp_kfunc_set);
 	if (ret < 0)
 		return ret;
 	return tcp_register_congestion_control(&dctcp);

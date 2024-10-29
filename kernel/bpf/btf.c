@@ -204,24 +204,6 @@
 DEFINE_IDR(btf_idr);
 DEFINE_SPINLOCK(btf_idr_lock);
 
-enum btf_kfunc_hook {
-	BTF_KFUNC_HOOK_COMMON,
-	BTF_KFUNC_HOOK_XDP,
-	BTF_KFUNC_HOOK_TC,
-	BTF_KFUNC_HOOK_STRUCT_OPS,
-	BTF_KFUNC_HOOK_TRACING,
-	BTF_KFUNC_HOOK_SYSCALL,
-	BTF_KFUNC_HOOK_FMODRET,
-	BTF_KFUNC_HOOK_CGROUP,
-	BTF_KFUNC_HOOK_SCHED_ACT,
-	BTF_KFUNC_HOOK_SK_SKB,
-	BTF_KFUNC_HOOK_SOCKET_FILTER,
-	BTF_KFUNC_HOOK_LWT,
-	BTF_KFUNC_HOOK_NETFILTER,
-	BTF_KFUNC_HOOK_KPROBE,
-	BTF_KFUNC_HOOK_MAX,
-};
-
 enum {
 	BTF_KFUNC_SET_MAX_CNT = 256,
 	BTF_DTOR_KFUNC_MAX_CNT = 256,
@@ -8478,11 +8460,9 @@ err_out:
 }
 
 /* This function must be invoked only from initcalls/module init functions */
-int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
+int register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 			      const struct btf_kfunc_id_set *kset)
 {
-	enum btf_kfunc_hook hook;
-
 	/* All kfuncs need to be tagged as such in BTF.
 	 * WARN() for initcall registrations that do not check errors.
 	 */
@@ -8491,7 +8471,6 @@ int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 		return -EINVAL;
 	}
 
-	hook = bpf_prog_type_to_kfunc_hook(prog_type);
 	return __register_btf_kfunc_id_set(hook, kset);
 }
 EXPORT_SYMBOL_GPL(register_btf_kfunc_id_set);

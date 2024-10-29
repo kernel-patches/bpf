@@ -181,7 +181,7 @@ static const struct btf_kfunc_id_set bpf_fsverity_set = {
 
 void __init fsverity_init_bpf(void)
 {
-	register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_fsverity_set);
+	register_btf_kfunc_id_set(BTF_KFUNC_HOOK_TRACING, &bpf_fsverity_set);
 }
 
 #endif /* CONFIG_BPF_SYSCALL */
