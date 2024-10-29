@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2018 Facebook */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <byteswap.h>
 #include <endian.h>
 #include <stdio.h>
@@ -5064,6 +5067,49 @@ exit:
 	return err;
 }
 
+/* compare btf types by name, consider named < anonymous */
+static int btf_compare_type_names(const void *a, const void *b, void *priv)
+{
+	struct btf *btf = (struct btf *)priv;
+	struct btf_type *ta = btf_type_by_id(btf, *(__u32 *)a);
+	struct btf_type *tb = btf_type_by_id(btf, *(__u32 *)b);
+	const char *na, *nb;
+
+	/* ta w/o name is greater than tb */
+	if (!ta->name_off && tb->name_off)
+		return 1;
+	/* tb w/o name is smaller than ta */
+	if (ta->name_off && !tb->name_off)
+		return -1;
+
+	na = btf__str_by_offset(btf, ta->name_off);
+	nb = btf__str_by_offset(btf, tb->name_off);
+	return strcmp(na, nb);
+}
+
+static __u32 *get_sorted_canon_types(struct btf_dedup *d, __u32 *cnt)
+{
+	int i, j, id, types_cnt = 0;
+	__u32 *sorted_ids;
+
+	for (i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
+		if (d->map[id] == id)
+			++types_cnt;
+
+	sorted_ids = calloc(types_cnt, sizeof(*sorted_ids));
+	if (!sorted_ids)
+		return NULL;
+
+	for (j = 0, i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
+		if (d->map[id] == id)
+			sorted_ids[j++] = id;
+	qsort_r(sorted_ids, types_cnt, sizeof(*sorted_ids),
+		btf_compare_type_names, d->btf);
+	*cnt = types_cnt;
+
+	return sorted_ids;
+}
+
 /*
  * Compact types.
  *
@@ -5077,11 +5123,11 @@ exit:
  */
 static int btf_dedup_compact_types(struct btf_dedup *d)
 {
-	__u32 *new_offs;
-	__u32 next_type_id = d->btf->start_id;
+	__u32 canon_types_cnt = 0, canon_types_len = 0;
+	__u32 *new_offs = NULL, *canon_types = NULL;
 	const struct btf_type *t;
-	void *p;
-	int i, id, len;
+	void *p, *new_types = NULL;
+	int i, id, len, err;
 
 	/* we are going to reuse hypot_map to store compaction remapping */
 	d->hypot_map[0] = 0;
@@ -5091,36 +5137,61 @@ static int btf_dedup_compact_types(struct btf_dedup *d)
 	for (i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
 		d->hypot_map[id] = BTF_UNPROCESSED_ID;
 
-	p = d->btf->types_data;
+	canon_types = get_sorted_canon_types(d, &canon_types_cnt);
+	if (!canon_types) {
+		err = -ENOMEM;
+		goto out_err;
+	}
 
-	for (i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++) {
-		if (d->map[id] != id)
-			continue;
-
+	for (i = 0; i < canon_types_cnt; i++) {
+		id = canon_types[i];
 		t = btf__type_by_id(d->btf, id);
 		len = btf_type_size(t);
-		if (len < 0)
-			return len;
+		if (len < 0) {
+			err = len;
+			goto out_err;
+		}
+		canon_types_len += len;
+	}
 
-		memmove(p, t, len);
-		d->hypot_map[id] = next_type_id;
-		d->btf->type_offs[next_type_id - d->btf->start_id] = p - d->btf->types_data;
+	new_offs = calloc(canon_types_cnt, sizeof(*new_offs));
+	new_types = calloc(canon_types_len, 1);
+	if (!new_types || !new_offs) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
+	p = new_types;
+
+	for (i = 0; i < canon_types_cnt; i++) {
+		id = canon_types[i];
+		t = btf__type_by_id(d->btf, id);
+		len = btf_type_size(t);
+		memcpy(p, t, len);
+		d->hypot_map[id] = d->btf->start_id + i;
+		new_offs[i] = p - new_types;
 		p += len;
-		next_type_id++;
 	}
 
 	/* shrink struct btf's internal types index and update btf_header */
-	d->btf->nr_types = next_type_id - d->btf->start_id;
-	d->btf->type_offs_cap = d->btf->nr_types;
-	d->btf->hdr->type_len = p - d->btf->types_data;
-	new_offs = libbpf_reallocarray(d->btf->type_offs, d->btf->type_offs_cap,
-				       sizeof(*new_offs));
-	if (d->btf->type_offs_cap && !new_offs)
-		return -ENOMEM;
+	free(d->btf->types_data);
+	free(d->btf->type_offs);
+	d->btf->types_data = new_types;
 	d->btf->type_offs = new_offs;
+	d->btf->types_data_cap = canon_types_len;
+	d->btf->type_offs_cap = canon_types_cnt;
+	d->btf->nr_types = canon_types_cnt;
+	d->btf->hdr->type_len = canon_types_len;
 	d->btf->hdr->str_off = d->btf->hdr->type_len;
 	d->btf->raw_size = d->btf->hdr->hdr_len + d->btf->hdr->type_len + d->btf->hdr->str_len;
+	free(canon_types);
 	return 0;
+
+out_err:
+	free(canon_types);
+	free(new_types);
+	free(new_offs);
+	return err;
 }
 
 /*

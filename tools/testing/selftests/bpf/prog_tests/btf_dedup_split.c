@@ -311,18 +311,18 @@ static void test_split_struct_duped() {
 		"[5] STRUCT 's1' size=16 vlen=2\n"
 		"\t'f1' type_id=2 bits_offset=0\n"
 		"\t'f2' type_id=4 bits_offset=64",
-		"[6] PTR '(anon)' type_id=8",
-		"[7] PTR '(anon)' type_id=9",
-		"[8] STRUCT 's1' size=16 vlen=2\n"
-		"\t'f1' type_id=6 bits_offset=0\n"
-		"\t'f2' type_id=7 bits_offset=64",
-		"[9] STRUCT 's2' size=40 vlen=4\n"
-		"\t'f1' type_id=6 bits_offset=0\n"
-		"\t'f2' type_id=7 bits_offset=64\n"
+		"[6] STRUCT 's1' size=16 vlen=2\n"
+		"\t'f1' type_id=9 bits_offset=0\n"
+		"\t'f2' type_id=10 bits_offset=64",
+		"[7] STRUCT 's2' size=40 vlen=4\n"
+		"\t'f1' type_id=9 bits_offset=0\n"
+		"\t'f2' type_id=10 bits_offset=64\n"
 		"\t'f3' type_id=1 bits_offset=128\n"
-		"\t'f4' type_id=8 bits_offset=192",
-		"[10] STRUCT 's3' size=8 vlen=1\n"
-		"\t'f1' type_id=7 bits_offset=0");
+		"\t'f4' type_id=6 bits_offset=192",
+		"[8] STRUCT 's3' size=8 vlen=1\n"
+		"\t'f1' type_id=10 bits_offset=0",
+		"[9] PTR '(anon)' type_id=6",
+		"[10] PTR '(anon)' type_id=7");
 
 cleanup:
 	btf__free(btf2);
@@ -385,13 +385,13 @@ static void test_split_dup_struct_in_cu()
 
 	VALIDATE_RAW_BTF(
 			btf1,
-			"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
-			"[2] STRUCT 's' size=8 vlen=2\n"
-			"\t'a' type_id=3 bits_offset=0\n"
-			"\t'b' type_id=3 bits_offset=0",
-			"[3] STRUCT '(anon)' size=8 vlen=2\n"
-			"\t'f1' type_id=1 bits_offset=0\n"
-			"\t'f2' type_id=1 bits_offset=32");
+			"[1] STRUCT '(anon)' size=8 vlen=2\n"
+			"\t'f1' type_id=2 bits_offset=0\n"
+			"\t'f2' type_id=2 bits_offset=32",
+			"[2] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+			"[3] STRUCT 's' size=8 vlen=2\n"
+			"\t'a' type_id=1 bits_offset=0\n"
+			"\t'b' type_id=1 bits_offset=0");
 
 	/* and add the same data on top of it */
 	btf2 = btf__new_empty_split(btf1);
@@ -402,13 +402,13 @@ static void test_split_dup_struct_in_cu()
 
 	VALIDATE_RAW_BTF(
 			btf2,
-			"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
-			"[2] STRUCT 's' size=8 vlen=2\n"
-			"\t'a' type_id=3 bits_offset=0\n"
-			"\t'b' type_id=3 bits_offset=0",
-			"[3] STRUCT '(anon)' size=8 vlen=2\n"
-			"\t'f1' type_id=1 bits_offset=0\n"
-			"\t'f2' type_id=1 bits_offset=32",
+			"[1] STRUCT '(anon)' size=8 vlen=2\n"
+			"\t'f1' type_id=2 bits_offset=0\n"
+			"\t'f2' type_id=2 bits_offset=32",
+			"[2] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+			"[3] STRUCT 's' size=8 vlen=2\n"
+			"\t'a' type_id=1 bits_offset=0\n"
+			"\t'b' type_id=1 bits_offset=0",
 			"[4] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
 			"[5] STRUCT 's' size=8 vlen=2\n"
 			"\t'a' type_id=6 bits_offset=0\n"
@@ -427,13 +427,13 @@ static void test_split_dup_struct_in_cu()
 	/* after dedup it should match the original data */
 	VALIDATE_RAW_BTF(
 			btf2,
-			"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
-			"[2] STRUCT 's' size=8 vlen=2\n"
-			"\t'a' type_id=3 bits_offset=0\n"
-			"\t'b' type_id=3 bits_offset=0",
-			"[3] STRUCT '(anon)' size=8 vlen=2\n"
-			"\t'f1' type_id=1 bits_offset=0\n"
-			"\t'f2' type_id=1 bits_offset=32");
+			"[1] STRUCT '(anon)' size=8 vlen=2\n"
+			"\t'f1' type_id=2 bits_offset=0\n"
+			"\t'f2' type_id=2 bits_offset=32",
+			"[2] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+			"[3] STRUCT 's' size=8 vlen=2\n"
+			"\t'a' type_id=1 bits_offset=0\n"
+			"\t'b' type_id=1 bits_offset=0");
 
 cleanup:
 	btf__free(btf2);
