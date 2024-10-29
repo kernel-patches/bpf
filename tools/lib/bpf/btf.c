@@ -94,6 +94,10 @@ struct btf {
 	 *   - for split BTF counts number of types added on top of base BTF.
 	 */
 	__u32 nr_types;
+	/* number of types in this BTF instance which are sorted by name:
+	 *   - doesn't include special [0] void type;
+	 */
+	__u32 nr_types_sorted;
 	/* if not NULL, points to the base BTF on top of which the current
 	 * split BTF is based
 	 */
@@ -896,44 +900,109 @@ int btf__resolve_type(const struct btf *btf, __u32 type_id)
 	return type_id;
 }
 
-__s32 btf__find_by_name(const struct btf *btf, const char *type_name)
+static __s32 btf__find_by_name_bsearch(const struct btf *btf, const char *name,
+				    int *start, int *end)
 {
-	__u32 i, nr_types = btf__type_cnt(btf);
+	const struct btf_type *t;
+	const char *name_buf;
+	int low, low_start, mid, high, high_end;
+	int ret;
 
-	if (!strcmp(type_name, "void"))
-		return 0;
+	low_start = low = btf->start_id;
+	high_end = high = btf->start_id + btf->nr_types_sorted - 1;
 
-	for (i = 1; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name = btf__name_by_offset(btf, t->name_off);
-
-		if (name && !strcmp(type_name, name))
-			return i;
+	while (low <= high) {
+		mid = low + (high - low) / 2;
+		t = btf__type_by_id(btf, mid);
+		name_buf = btf__name_by_offset(btf, t->name_off);
+		ret = strcmp(name, name_buf);
+		if (ret > 0)
+			low = mid + 1;
+		else if (ret < 0)
+			high = mid - 1;
+		else
+			break;
 	}
 
-	return libbpf_err(-ENOENT);
+	if (low > high)
+		return -ESRCH;
+
+	if (start) {
+		low = mid;
+		while (low > low_start) {
+			t = btf__type_by_id(btf, low-1);
+			name_buf = btf__name_by_offset(btf, t->name_off);
+			if (strcmp(name, name_buf))
+				break;
+			low--;
+		}
+		*start = low;
+	}
+
+	if (end) {
+		high = mid;
+		while (high < high_end) {
+			t = btf__type_by_id(btf, high+1);
+			name_buf = btf__name_by_offset(btf, t->name_off);
+			if (strcmp(name, name_buf))
+				break;
+			high++;
+		}
+		*end = high;
+	}
+
+	return mid;
 }
 
 static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
 				   const char *type_name, __u32 kind)
 {
-	__u32 i, nr_types = btf__type_cnt(btf);
+	const struct btf_type *t;
+	const char *tname;
+	int start, end, id;
+	__u32 nr_types;
 
 	if (kind == BTF_KIND_UNKN || !strcmp(type_name, "void"))
 		return 0;
 
-	for (i = start_id; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name;
-
-		if (btf_kind(t) != kind)
+	while (btf) {
+		if (btf->start_id < start_id) {
+			btf = btf->base_btf;
 			continue;
-		name = btf__name_by_offset(btf, t->name_off);
-		if (name && !strcmp(type_name, name))
-			return i;
+		}
+
+		if (btf->nr_types_sorted) {
+			id = btf__find_by_name_bsearch(btf, type_name, &start, &end);
+			if (id > 0) {
+				while (start <= end) {
+					t = btf__type_by_id(btf, start);
+					if (kind == BTF_KIND_MAX ||
+						btf_kind(t) == kind)
+						return start;
+					start++;
+				}
+			}
+		} else {
+			nr_types = btf__type_cnt(btf);
+			for (id = btf->start_id; id < nr_types; id++) {
+				t = btf__type_by_id(btf, id);
+				if (kind != BTF_KIND_MAX && btf_kind(t) != kind)
+					continue;
+
+				tname = btf__name_by_offset(btf, t->name_off);
+				if (tname && !strcmp(tname, type_name))
+					return id;
+			}
+		}
+		btf = btf__base_btf(btf);
 	}
 
 	return libbpf_err(-ENOENT);
+}
+
+__s32 btf__find_by_name(const struct btf *btf, const char *type_name)
+{
+	return btf_find_by_name_kind(btf, 1, type_name, BTF_KIND_MAX);
 }
 
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
@@ -989,6 +1058,7 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 		return ERR_PTR(-ENOMEM);
 
 	btf->nr_types = 0;
+	btf->nr_types_sorted = 0;
 	btf->start_id = 1;
 	btf->start_str_off = 0;
 	btf->fd = -1;
@@ -1032,6 +1102,53 @@ struct btf *btf__new_empty_split(struct btf *base_btf)
 	return libbpf_ptr(btf_new_empty(base_btf));
 }
 
+static int btf_check_sort(struct btf *btf, __u32 start_id)
+{
+	__u32 i, n, nr_names = 0;
+
+	n = btf__type_cnt(btf);
+	for (i = start_id; i < n; i++) {
+		const struct btf_type *t;
+		const char *name;
+
+		t = btf__type_by_id(btf, i);
+		if (!t)
+			return libbpf_err(-EINVAL);
+
+		name = btf__str_by_offset(btf, t->name_off);
+		if (!str_is_empty(name))
+			nr_names++;
+	}
+
+	for (i = 0; i < nr_names - 1; i++) {
+		const struct btf_type *t1, *t2;
+		const char *s1, *s2;
+
+		t1 = btf__type_by_id(btf, start_id + i);
+		if (!t1)
+			return libbpf_err(-EINVAL);
+
+		s1 = btf__str_by_offset(btf, t1->name_off);
+		if (str_is_empty(s1))
+			goto out;
+
+		t2 = btf__type_by_id(btf, start_id + i + 1);
+		if (!t2)
+			return libbpf_err(-EINVAL);
+
+		s2 = btf__str_by_offset(btf, t2->name_off);
+		if (str_is_empty(s2))
+			goto out;
+
+		if (strcmp(s1, s2) > 0)
+			goto out;
+	}
+
+	btf->nr_types_sorted = nr_names;
+out:
+	return 0;
+}
+
 static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 {
 	struct btf *btf;
@@ -1042,6 +1159,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 		return ERR_PTR(-ENOMEM);
 
 	btf->nr_types = 0;
+	btf->nr_types_sorted = 0;
 	btf->start_id = 1;
 	btf->start_str_off = 0;
 	btf->fd = -1;
@@ -1071,6 +1189,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 	err = btf_parse_str_sec(btf);
 	err = err ?: btf_parse_type_sec(btf);
 	err = err ?: btf_sanity_check(btf);
+	err = err ?: btf_check_sort(btf, btf->start_id);
 	if (err)
 		goto done;
 
@@ -1690,6 +1809,8 @@ static int btf_ensure_modifiable(struct btf *btf)
 	btf->types_data_cap = btf->hdr->type_len;
 	btf->strs_data = NULL;
 	btf->strs_set = set;
+	/* clear when splitting */
+	btf->nr_types_sorted = 0;
 	/* if BTF was created from scratch, all strings are guaranteed to be
 	 * unique and deduplicated
 	 */
