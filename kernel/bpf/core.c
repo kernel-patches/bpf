@@ -2396,6 +2396,7 @@ static void bpf_prog_select_func(struct bpf_prog *fp)
  */
 struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 {
+	void __percpu *priv_stack_ptr;
 	/* In case of BPF to BPF calls, verifier did all the prep
 	 * work with regards to JITing, etc.
 	 */
@@ -2420,6 +2421,15 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 		*err = bpf_prog_alloc_jited_linfo(fp);
 		if (*err)
 			return fp;
+
+		if (fp->aux->use_priv_stack && fp->aux->stack_depth) {
+			priv_stack_ptr = __alloc_percpu_gfp(fp->aux->stack_depth, 16, GFP_KERNEL);
+			if (!priv_stack_ptr) {
+				*err = -ENOMEM;
+				return fp;
+			}
+			fp->aux->priv_stack_ptr = priv_stack_ptr;
+		}
 
 		fp = bpf_int_jit_compile(fp);
 		bpf_prog_jit_attempt_done(fp);
@@ -3041,6 +3051,11 @@ int __weak bpf_arch_text_invalidate(void *dst, size_t len)
 }
 
 bool __weak bpf_jit_supports_exceptions(void)
+{
+	return false;
+}
+
+bool __weak bpf_jit_supports_private_stack(void)
 {
 	return false;
 }
