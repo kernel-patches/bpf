@@ -114,8 +114,7 @@ disassemble_insn(disasm_ctx_t *ctx, unsigned char *image, ssize_t len, int pc)
 	char buf[256];
 	int count;
 
-	count = LLVMDisasmInstruction(*ctx, image + pc, len - pc, pc,
-				      buf, sizeof(buf));
+	count = LLVMDisasmInstruction(*ctx, image, len, pc, buf, sizeof(buf));
 	if (json_output)
 		printf_json(buf);
 	else
@@ -360,7 +359,8 @@ int disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
 			printf("%4x:" DISASM_SPACER, pc);
 		}
 
-		count = disassemble_insn(&ctx, image, len, pc);
+		count = disassemble_insn(&ctx, image + pc, len - pc,
+					 func_ksym + pc);
 
 		if (json_output) {
 			/* Operand array, was started in fprintf_json. Before
