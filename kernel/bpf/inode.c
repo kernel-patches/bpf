@@ -914,7 +914,7 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		str = param->string;
 		while ((p = strsep(&str, ":"))) {
 			if (strcmp(p, "any") == 0) {
-				msk |= ~0ULL;
+				msk = ~0ULL;
 			} else if (find_btf_enum_const(info.btf, enum_t, enum_pfx, p, &val)) {
 				msk |= 1ULL << val;
 			} else {
