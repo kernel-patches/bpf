@@ -508,6 +508,10 @@ static void bpf_ringbuf_commit(void *sample, u64 flags, bool discard)
 	rec_pos = (void *)hdr - (void *)rb->data;
 	cons_pos = smp_load_acquire(&rb->consumer_pos) & rb->mask;
 
+	/* Make sure the modification of data is visible on other CPU's
+	 * before consume the event
+	 */
+	smp_wmb();
 	if (flags & BPF_RB_FORCE_WAKEUP)
 		irq_work_queue(&rb->work);
 	else if (cons_pos == rec_pos && !(flags & BPF_RB_NO_WAKEUP))
