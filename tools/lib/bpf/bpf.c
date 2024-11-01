@@ -401,6 +401,28 @@ int bpf_map_update_elem(int fd, const void *key, const void *value,
 	return libbpf_err_errno(ret);
 }
 
+int bpf_map_update_elem_opts(int fd, const void *key, const void *value,
+			     __u64 flags, const struct bpf_map_update_opts *opts)
+{
+	union bpf_attr attr;
+	int ret;
+	__u64 *target_cpu;
+
+	if (!OPTS_VALID(opts, bpf_map_update_opts))
+		return libbpf_err(-EINVAL);
+
+	target_cpu = OPTS_GET(opts, target_cpu, NULL);
+	memset(&attr, 0, sizeof(attr));
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.value = ptr_to_u64(value);
+	attr.flags = flags;
+	attr.target_cpu = ptr_to_u64(target_cpu);
+
+	ret = sys_bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+	return libbpf_err_errno(ret);
+}
+
 int bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, flags);

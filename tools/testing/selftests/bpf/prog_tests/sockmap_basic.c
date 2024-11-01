@@ -190,13 +190,18 @@ out:
 	test_skmsg_load_helpers__destroy(skel);
 }
 
-static void test_sockmap_update(enum bpf_map_type map_type)
+static void test_sockmap_update(enum bpf_map_type map_type, bool cpu_affinity)
 {
 	int err, prog, src;
 	struct test_sockmap_update *skel;
 	struct bpf_map *dst_map;
 	const __u32 zero = 0;
 	char dummy[14] = {0};
+	__u64 target_cpu = 0;
+
+	LIBBPF_OPTS(bpf_map_update_opts, update_opts,
+		.target_cpu = &target_cpu,
+	);
 	LIBBPF_OPTS(bpf_test_run_opts, topts,
 		.data_in = dummy,
 		.data_size_in = sizeof(dummy),
@@ -219,7 +224,11 @@ static void test_sockmap_update(enum bpf_map_type map_type)
 	else
 		dst_map = skel->maps.dst_sock_hash;
 
-	err = bpf_map_update_elem(src, &zero, &sk, BPF_NOEXIST);
+	if (cpu_affinity)
+		err = bpf_map_update_elem_opts(src, &zero, &sk, BPF_NOEXIST, &update_opts);
+	else
+		err = bpf_map_update_elem(src, &zero, &sk, BPF_NOEXIST);
+
 	if (!ASSERT_OK(err, "update_elem(src)"))
 		goto out;
 
@@ -896,9 +905,11 @@ void test_sockmap_basic(void)
 	if (test__start_subtest("sockhash sk_msg load helpers"))
 		test_skmsg_helpers(BPF_MAP_TYPE_SOCKHASH);
 	if (test__start_subtest("sockmap update"))
-		test_sockmap_update(BPF_MAP_TYPE_SOCKMAP);
+		test_sockmap_update(BPF_MAP_TYPE_SOCKMAP, false);
+	if (test__start_subtest("sockmap update cpu affinity"))
+		test_sockmap_update(BPF_MAP_TYPE_SOCKMAP, true);
 	if (test__start_subtest("sockhash update"))
-		test_sockmap_update(BPF_MAP_TYPE_SOCKHASH);
+		test_sockmap_update(BPF_MAP_TYPE_SOCKHASH, false);
 	if (test__start_subtest("sockmap update in unsafe context"))
 		test_sockmap_invalid_update();
 	if (test__start_subtest("sockmap copy"))

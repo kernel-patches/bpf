@@ -17,6 +17,7 @@ LIBBPF_0.0.1 {
 		bpf_map_lookup_and_delete_elem;
 		bpf_map_lookup_elem;
 		bpf_map_update_elem;
+                bpf_map_update_elem_opts;
 		bpf_obj_get;
 		bpf_obj_get_info_by_fd;
 		bpf_obj_pin;

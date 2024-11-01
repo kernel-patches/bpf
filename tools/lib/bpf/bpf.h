@@ -147,6 +147,15 @@ LIBBPF_API int bpf_btf_load(const void *btf_data, size_t btf_size,
 
 LIBBPF_API int bpf_map_update_elem(int fd, const void *key, const void *value,
 				   __u64 flags);
+struct bpf_map_update_opts {
+	size_t sz;  /* size of this struct for forward/backward compatibility */
+	/* specify the CPU where the sockmap job run on */
+	__u64 *target_cpu;
+	size_t :0;
+};
+#define bpf_map_update_opts__last_field target_cpu
+LIBBPF_API int bpf_map_update_elem_opts(int fd, const void *key, const void *value,
+					__u64 flags, const struct bpf_map_update_opts *opts);
 
 LIBBPF_API int bpf_map_lookup_elem(int fd, const void *key, void *value);
 LIBBPF_API int bpf_map_lookup_elem_flags(int fd, const void *key, void *value,
