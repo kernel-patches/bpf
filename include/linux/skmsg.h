@@ -117,6 +117,7 @@ struct sk_psock {
 	struct delayed_work		work;
 	struct sock			*sk_pair;
 	struct rcu_work			rwork;
+	s32				target_cpu;
 };
 
 int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
@@ -512,6 +513,13 @@ static inline bool sk_psock_strp_enabled(struct sk_psock *psock)
 	if (!psock)
 		return false;
 	return !!psock->saved_data_ready;
+}
+
+static inline int sk_psock_strp_get_cpu(struct sk_psock *psock)
+{
+	if (psock->target_cpu != -1)
+		return psock->target_cpu;
+	return WORK_CPU_UNBOUND;
 }
 
 #if IS_ENABLED(CONFIG_NET_SOCK_MSG)

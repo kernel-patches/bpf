@@ -239,10 +239,9 @@ unpin_all:
 }
 
 static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
-				void *key, void *value, __u64 flags)
+				void *key, void *value, __u64 flags, s32 target_cpu)
 {
 	int err;
-
 	/* Need to create a kthread, thus must support schedule */
 	if (bpf_map_is_offloaded(map)) {
 		return bpf_map_offload_update_elem(map, key, value, flags);
@@ -252,7 +251,7 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 		return map->ops->map_update_elem(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_SOCKHASH ||
 		   map->map_type == BPF_MAP_TYPE_SOCKMAP) {
-		return sock_map_update_elem_sys(map, key, value, flags);
+		return sock_map_update_elem_sys(map, key, value, flags, target_cpu);
 	} else if (IS_FD_PROG_ARRAY(map)) {
 		return bpf_fd_array_map_update_elem(map, map_file, key, value,
 						    flags);
@@ -1680,12 +1679,14 @@ free_key:
 }
 
 
-#define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
+#define BPF_MAP_UPDATE_ELEM_LAST_FIELD target_cpu
 
 static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 {
 	bpfptr_t ukey = make_bpfptr(attr->key, uattr.is_kernel);
 	bpfptr_t uvalue = make_bpfptr(attr->value, uattr.is_kernel);
+	bpfptr_t utarget_cpu = make_bpfptr(attr->target_cpu, uattr.is_kernel);
+	s64 target_cpu = 0;
 	struct bpf_map *map;
 	void *key, *value;
 	u32 value_size;
@@ -1723,7 +1724,17 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto free_key;
 	}
 
-	err = bpf_map_update_value(map, fd_file(f), key, value, attr->flags);
+	if (map->map_type == BPF_MAP_TYPE_SOCKMAP &&
+	    !bpfptr_is_null(utarget_cpu)) {
+		if (copy_from_bpfptr(&target_cpu, utarget_cpu, sizeof(target_cpu)) ||
+		    target_cpu > nr_cpu_ids) {
+			err = -EINVAL;
+			goto err_put;
+		}
+	} else {
+		target_cpu = -1;
+	}
+	err = bpf_map_update_value(map, fd_file(f), key, value, attr->flags, (s32)target_cpu);
 	if (!err)
 		maybe_wait_bpf_programs(map);
 
@@ -1947,7 +1958,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 			break;
 
 		err = bpf_map_update_value(map, map_file, key, value,
-					   attr->batch.elem_flags);
+					   attr->batch.elem_flags, -1);
 
 		if (err)
 			break;

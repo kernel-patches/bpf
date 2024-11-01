@@ -1509,6 +1509,10 @@ union bpf_attr {
 			__aligned_u64 next_key;
 		};
 		__u64		flags;
+		union {
+			/* specify the CPU where the sockmap job run on */
+			__aligned_u64 target_cpu;
+		};
 	};
 
 	struct { /* struct used by BPF_MAP_*_BATCH commands */
