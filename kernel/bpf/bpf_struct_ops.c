@@ -38,6 +38,9 @@ struct bpf_struct_ops_map {
 	 * that stores the func args before calling the bpf_prog.
 	 */
 	void *image_pages[MAX_TRAMP_IMAGE_PAGES];
+	u32 ksyms_cnt;
+	/* ksyms for bpf trampolines */
+	struct bpf_ksym *ksyms;
 	/* The owner moduler's btf. */
 	struct btf *btf;
 	/* uvalue->data stores the kernel struct
@@ -586,6 +589,35 @@ int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_links *tlinks,
 	return 0;
 }
 
+static void bpf_struct_ops_ksym_init(struct bpf_prog *prog, void *image,
+				     unsigned int size, struct bpf_ksym *ksym)
+{
+	int n;
+
+	n = strscpy(ksym->name, "bpf_trampoline_", KSYM_NAME_LEN);
+	strncat(ksym->name + n, prog->aux->ksym.name, KSYM_NAME_LEN - 1 - n);
+	INIT_LIST_HEAD_RCU(&ksym->lnode);
+	bpf_image_ksym_init(image, size, ksym);
+}
+
+static void bpf_struct_ops_map_ksyms_add(struct bpf_struct_ops_map *st_map)
+{
+	struct bpf_ksym *ksym = st_map->ksyms;
+	struct bpf_ksym *end = ksym + st_map->ksyms_cnt;
+
+	while (ksym != end && ksym->start)
+		bpf_image_ksym_add(ksym++);
+}
+
+static void bpf_struct_ops_map_ksyms_del(struct bpf_struct_ops_map *st_map)
+{
+	struct bpf_ksym *ksym = st_map->ksyms;
+	struct bpf_ksym *end = ksym + st_map->ksyms_cnt;
+
+	while (ksym != end && ksym->start)
+		bpf_image_ksym_del(ksym++);
+}
+
 static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 					   void *value, u64 flags)
 {
@@ -601,6 +633,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	int prog_fd, err;
 	u32 i, trampoline_start, image_off = 0;
 	void *cur_image = NULL, *image = NULL;
+	struct bpf_ksym *ksym;
 
 	if (flags)
 		return -EINVAL;
@@ -640,6 +673,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	kdata = &kvalue->data;
 
 	module_type = btf_type_by_id(btf_vmlinux, st_ops_ids[IDX_MODULE_ID]);
+	ksym = st_map->ksyms;
 	for_each_member(i, t, member) {
 		const struct btf_type *mtype, *ptype;
 		struct bpf_prog *prog;
@@ -735,6 +769,11 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 
 		/* put prog_id to udata */
 		*(unsigned long *)(udata + moff) = prog->aux->id;
+
+		/* init ksym for this trampoline */
+		bpf_struct_ops_ksym_init(prog, image + trampoline_start,
+					 image_off - trampoline_start,
+					 ksym++);
 	}
 
 	if (st_ops->validate) {
@@ -790,6 +829,8 @@ reset_unlock:
 unlock:
 	kfree(tlinks);
 	mutex_unlock(&st_map->lock);
+	if (!err)
+		bpf_struct_ops_map_ksyms_add(st_map);
 	return err;
 }
 
@@ -883,6 +924,10 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	 */
 	synchronize_rcu_mult(call_rcu, call_rcu_tasks);
 
+	/* no trampoline in the map is running anymore, delete symbols */
+	bpf_struct_ops_map_ksyms_del(st_map);
+	synchronize_rcu();
+
 	__bpf_struct_ops_map_free(map);
 }
 
@@ -895,6 +940,19 @@ static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
 	return 0;
 }
 
+static u32 count_func_ptrs(const struct btf *btf, const struct btf_type *t)
+{
+	int i;
+	u32 count;
+	const struct btf_member *member;
+
+	count = 0;
+	for_each_member(i, t, member)
+		if (btf_type_resolve_func_ptr(btf, member->type, NULL))
+			count++;
+	return count;
+}
+
 static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 {
 	const struct bpf_struct_ops_desc *st_ops_desc;
@@ -905,6 +963,8 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	struct bpf_map *map;
 	struct btf *btf;
 	int ret;
+	size_t ksyms_offset;
+	u32 ksyms_cnt;
 
 	if (attr->map_flags & BPF_F_VTYPE_BTF_OBJ_FD) {
 		/* The map holds btf for its whole life time. */
@@ -951,6 +1011,11 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		 */
 		(vt->size - sizeof(struct bpf_struct_ops_value));
 
+	st_map_size = round_up(st_map_size, sizeof(struct bpf_ksym));
+	ksyms_offset = st_map_size;
+	ksyms_cnt = count_func_ptrs(btf, t);
+	st_map_size += ksyms_cnt * sizeof(struct bpf_ksym);
+
 	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
 	if (!st_map) {
 		ret = -ENOMEM;
@@ -958,6 +1023,8 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	}
 
 	st_map->st_ops_desc = st_ops_desc;
+	st_map->ksyms = (void *)st_map + ksyms_offset;
+	st_map->ksyms_cnt = ksyms_cnt;
 	map = &st_map->map;
 
 	st_map->uvalue = bpf_map_area_alloc(vt->size, NUMA_NO_NODE);
