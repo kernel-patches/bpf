@@ -8031,6 +8031,12 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 		return -EINVAL;
 	}
 	t = btf_type_by_id(meta->btf, btf_id);
+
+	// Ensure the iter arg is a stack pointer
+	if (reg->type != PTR_TO_STACK) {
+		verbose(env, "iter pointer should be the PTR_TO_STACK type\n");
+		return -EINVAL;
+	}
 	nr_slots = t->size / BPF_REG_SIZE;
 
 	if (is_iter_new_kfunc(meta)) {

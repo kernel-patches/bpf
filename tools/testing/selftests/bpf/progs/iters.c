@@ -1486,4 +1486,27 @@ int iter_subprog_check_stacksafe(const void *ctx)
 	return 0;
 }
 
+SEC("raw_tp")
+__failure __msg("iter pointer should be the PTR_TO_STACK type")
+int iter_check_arg_type(const void *ctx)
+{
+        struct bpf_iter_num it;
+        int *v;
+
+        int *map_val = NULL;
+        int key = 0;
+
+        map_val = bpf_map_lookup_elem(&arr_map, &key);
+        if (!map_val)
+                return 0;
+
+        bpf_iter_num_new(&it, 0, 3);
+        while ((v = bpf_iter_num_next((struct bpf_iter_num*)map_val))) {
+                bpf_printk("ITER_BASIC: E1 VAL: v=%d", *v);
+        }
+        bpf_iter_num_destroy(&it);
+
+        return 0;
+}
+
 char _license[] SEC("license") = "GPL";
