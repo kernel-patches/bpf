@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-
+/* Copyright (c) 2024 Ahnlab, Inc.  */
 #define _GNU_SOURCE
 #include <linux/bpf.h>
 #include <stdio.h>
