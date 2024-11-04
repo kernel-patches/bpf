@@ -1298,11 +1298,12 @@ static inline bool bpf_jit_blinding_enabled(struct bpf_prog *prog)
 	 */
 	if (!bpf_jit_is_ebpf())
 		return false;
-	if (!prog->jit_requested)
+	if (prog && !prog->jit_requested)
 		return false;
 	if (!bpf_jit_harden)
 		return false;
-	if (bpf_jit_harden == 1 && bpf_token_capable(prog->aux->token, CAP_BPF))
+	if (bpf_jit_harden == 1 &&
+	    bpf_token_capable(prog ? prog->aux->token : NULL, CAP_BPF))
 		return false;
 
 	return true;
