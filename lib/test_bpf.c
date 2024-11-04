@@ -2700,10 +2700,25 @@ static int __bpf_fill_staggered_jumps(struct bpf_test *self,
 				      u64 r1, u64 r2)
 {
 	int size = self->test[0].result - 1;
-	int len = 4 + 3 * (size + 1);
 	struct bpf_insn *insns;
-	int off, ind;
+	int len, off, ind;
 
+	/* Constant blinding triples the size of each instruction making use
+	 * of immediate values. Tweak the test to not overflow jump offsets.
+	 */
+	if (bpf_jit_blinding_enabled(NULL)) {
+		int bloat_factor = 2 * 3;
+
+		if (BPF_SRC(jmp->code) == BPF_K)
+			bloat_factor += 3;
+
+		size /= bloat_factor;
+		size &= ~1;
+
+		self->test[0].result = size + 1;
+	}
+
+	len = 4 + 3 * (size + 1);
 	insns = kmalloc_array(len, sizeof(*insns), GFP_KERNEL);
 	if (!insns)
 		return -ENOMEM;

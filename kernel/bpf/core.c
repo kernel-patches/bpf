@@ -570,6 +570,9 @@ int bpf_jit_kallsyms __read_mostly = IS_BUILTIN(CONFIG_BPF_JIT_DEFAULT_ON);
 int bpf_jit_harden   __read_mostly;
 long bpf_jit_limit   __read_mostly;
 long bpf_jit_limit_max __read_mostly;
+#if IS_MODULE(CONFIG_TEST_BPF)
+EXPORT_SYMBOL_GPL(bpf_jit_harden);
+#endif
 
 static void
 bpf_prog_ksym_set_addr(struct bpf_prog *prog)

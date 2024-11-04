@@ -26,6 +26,9 @@ bool bpf_token_capable(const struct bpf_token *token, int cap)
 		return false;
 	return true;
 }
+#if IS_MODULE(CONFIG_TEST_BPF)
+EXPORT_SYMBOL_GPL(bpf_token_capable);
+#endif
 
 void bpf_token_inc(struct bpf_token *token)
 {
