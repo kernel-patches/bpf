@@ -287,6 +287,10 @@ struct pt_regs___arm64 {
  * section "Function Calling Sequence")
  */
 
+struct pt_regs___powerpc {
+	unsigned long orig_gpr3;
+} __attribute__((preserve_access_index));
+
 #define __PT_PARM1_REG gpr[3]
 #define __PT_PARM2_REG gpr[4]
 #define __PT_PARM3_REG gpr[5]
@@ -296,8 +300,6 @@ struct pt_regs___arm64 {
 #define __PT_PARM7_REG gpr[9]
 #define __PT_PARM8_REG gpr[10]
 
-/* powerpc does not select ARCH_HAS_SYSCALL_WRAPPER. */
-#define PT_REGS_SYSCALL_REGS(ctx) ctx
 #define __PT_PARM1_SYSCALL_REG orig_gpr3
 #define __PT_PARM2_SYSCALL_REG __PT_PARM2_REG
 #define __PT_PARM3_SYSCALL_REG __PT_PARM3_REG
@@ -307,6 +309,9 @@ struct pt_regs___arm64 {
 #if !defined(__arch64__)
 #define __PT_PARM7_SYSCALL_REG __PT_PARM7_REG /* only powerpc (not powerpc64) */
 #endif
+#define PT_REGS_PARM1_SYSCALL(x) (((const struct pt_regs___powerpc *)(x))->orig_gpr3)
+#define PT_REGS_PARM1_CORE_SYSCALL(x) \
+	BPF_CORE_READ((const struct pt_regs___powerpc *)(x), __PT_PARM1_SYSCALL_REG)
 
 #define __PT_RET_REG regs[31]
 #define __PT_FP_REG __unsupported__
