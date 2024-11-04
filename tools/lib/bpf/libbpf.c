@@ -11184,9 +11184,7 @@ static const char *arch_specific_syscall_pfx(void)
 #elif defined(__riscv)
 	return "riscv";
 #elif defined(__powerpc__)
-	return "powerpc";
-#elif defined(__powerpc64__)
-	return "powerpc64";
+	return "";
 #else
 	return NULL;
 #endif
@@ -11201,7 +11199,11 @@ int probe_kern_syscall_wrapper(int token_fd)
 	if (!ksys_pfx)
 		return 0;
 
+#if defined(__powerpc__)
+	snprintf(syscall_name, sizeof(syscall_name), "sys_bpf");
+#else
 	snprintf(syscall_name, sizeof(syscall_name), "__%s_sys_bpf", ksys_pfx);
+#endif
 
 	if (determine_kprobe_perf_type() >= 0) {
 		int pfd;
@@ -11346,8 +11348,12 @@ struct bpf_link *bpf_program__attach_ksyscall(const struct bpf_program *prog,
 		 * compiler does not know that we have an explicit conditional
 		 * as well.
 		 */
+#if defined(__powerpc__)
+		snprintf(func_name, sizeof(func_name), "sys_%s", syscall_name);
+#else
 		snprintf(func_name, sizeof(func_name), "__%s_sys_%s",
 			 arch_specific_syscall_pfx() ? : "", syscall_name);
+#endif
 	} else {
 		snprintf(func_name, sizeof(func_name), "__se_sys_%s", syscall_name);
 	}
