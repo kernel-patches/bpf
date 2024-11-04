@@ -491,7 +491,7 @@ static int __bpf_fill_max_jmp(struct bpf_test *self, int jmp, int imm)
 	i = __bpf_ld_imm64(insns, R1, 0x0123456789abcdefULL);
 	insns[i++] = BPF_ALU64_IMM(BPF_MOV, R0, 1);
 	insns[i++] = BPF_JMP_IMM(jmp, R0, imm, S16_MAX);
-	insns[i++] = BPF_ALU64_IMM(BPF_MOV, R0, 2);
+	insns[i++] = BPF_ALU64_REG(BPF_ADD, R0, R0);
 	insns[i++] = BPF_EXIT_INSN();
 
 	while (i < len - 1) {
