@@ -59,7 +59,6 @@ drm-y := \
 	drm_ioctl.o \
 	drm_lease.o \
 	drm_managed.o \
-	drm_mm.o \
 	drm_mode_config.o \
 	drm_mode_object.o \
 	drm_modes.o \

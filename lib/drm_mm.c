@@ -126,14 +126,14 @@ static void show_leaks(struct drm_mm *mm)
 
 	list_for_each_entry(node, drm_mm_nodes(mm), node_list) {
 		if (!node->stack) {
-			DRM_ERROR("node [%08llx + %08llx]: unknown owner\n",
-				  node->start, node->size);
+			pr_err("node [%08llx + %08llx]: unknown owner\n",
+			       node->start, node->size);
 			continue;
 		}
 
 		stack_depot_snprint(node->stack, buf, BUFSZ, 0);
-		DRM_ERROR("node [%08llx + %08llx]: inserted at\n%s",
-			  node->start, node->size, buf);
+		pr_err("node [%08llx + %08llx]: inserted at\n%s",
+		       node->start, node->size, buf);
 	}
 
 	kfree(buf);
@@ -151,7 +151,7 @@ static void show_leaks(struct drm_mm *mm) { }
 
 INTERVAL_TREE_DEFINE(struct drm_mm_node, rb,
 		     u64, __subtree_last,
-		     START, LAST, static inline, drm_mm_interval_tree)
+		     START, LAST, static inline __maybe_unused, drm_mm_interval_tree)
 
 struct drm_mm_node *
 __drm_mm_interval_first(const struct drm_mm *mm, u64 start, u64 last)
@@ -966,41 +966,3 @@ void drm_mm_takedown(struct drm_mm *mm)
 		show_leaks(mm);
 }
 EXPORT_SYMBOL(drm_mm_takedown);
-
-static u64 drm_mm_dump_hole(struct drm_printer *p, const struct drm_mm_node *entry)
-{
-	u64 start, size;
-
-	size = entry->hole_size;
-	if (size) {
-		start = drm_mm_hole_node_start(entry);
-		drm_printf(p, "%#018llx-%#018llx: %llu: free\n",
-			   start, start + size, size);
-	}
-
-	return size;
-}
-/**
- * drm_mm_print - print allocator state
- * @mm: drm_mm allocator to print
- * @p: DRM printer to use
- */
-void drm_mm_print(const struct drm_mm *mm, struct drm_printer *p)
-{
-	const struct drm_mm_node *entry;
-	u64 total_used = 0, total_free = 0, total = 0;
-
-	total_free += drm_mm_dump_hole(p, &mm->head_node);
-
-	drm_mm_for_each_node(entry, mm) {
-		drm_printf(p, "%#018llx-%#018llx: %llu: used\n", entry->start,
-			   entry->start + entry->size, entry->size);
-		total_used += entry->size;
-		total_free += drm_mm_dump_hole(p, entry);
-	}
-	total = total_free + total_used;
-
-	drm_printf(p, "total: %llu, used %llu free %llu\n", total,
-		   total_used, total_free);
-}
-EXPORT_SYMBOL(drm_mm_print);

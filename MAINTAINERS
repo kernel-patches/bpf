@@ -7504,6 +7504,7 @@ F:	drivers/gpu/vga/
 F:	include/drm/drm
 F:	include/linux/vga*
 F:	include/uapi/drm/
+F:	lib/drm_mm.c
 X:	drivers/gpu/drm/amd/
 X:	drivers/gpu/drm/armada/
 X:	drivers/gpu/drm/etnaviv/
