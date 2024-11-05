@@ -6,6 +6,7 @@
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <drm/drm_mm.h>
 
 /*
  * bpf_arena is a sparsely populated shared memory region between bpf program and
@@ -45,7 +46,7 @@ struct bpf_arena {
 	u64 user_vm_start;
 	u64 user_vm_end;
 	struct vm_struct *kern_vm;
-	struct maple_tree mt;
+	struct drm_mm mm;
 	struct list_head vma_list;
 	struct mutex lock;
 };
@@ -132,7 +133,7 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 
 	INIT_LIST_HEAD(&arena->vma_list);
 	bpf_map_init_from_attr(&arena->map, attr);
-	mt_init_flags(&arena->mt, MT_FLAGS_ALLOC_RANGE);
+	drm_mm_init(&arena->mm, 0, attr->max_entries);
 	mutex_init(&arena->lock);
 
 	return &arena->map;
@@ -164,6 +165,7 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct drm_mm_node *node, *next;
 
 	/*
 	 * Check that user vma-s are not around when bpf map is freed.
@@ -183,7 +185,11 @@ static void arena_map_free(struct bpf_map *map)
 	apply_to_existing_page_range(&init_mm, bpf_arena_get_kern_vm_start(arena),
 				     KERN_VM_SZ - GUARD_SZ, existing_page_cb, NULL);
 	free_vm_area(arena->kern_vm);
-	mtree_destroy(&arena->mt);
+	drm_mm_for_each_node_safe(node, next, &arena->mm) {
+		drm_mm_remove_node(node);
+		kfree(node);
+	}
+	drm_mm_takedown(&arena->mm);
 	bpf_map_area_free(arena);
 }
 
@@ -257,6 +263,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 {
 	struct bpf_map *map = vmf->vma->vm_file->private_data;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct drm_mm_node *node;
 	struct page *page;
 	long kbase, kaddr;
 	int ret;
@@ -274,20 +281,30 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		/* User space requested to segfault when page is not allocated by bpf prog */
 		return VM_FAULT_SIGSEGV;
 
-	ret = mtree_insert(&arena->mt, vmf->pgoff, MT_ENTRY, GFP_KERNEL);
-	if (ret)
+	node = kzalloc(sizeof(*node), GFP_KERNEL);
+	if (!node)
 		return VM_FAULT_SIGSEGV;
+
+	node->start = vmf->pgoff;
+	node->size = 1;
+	ret = drm_mm_reserve_node(&arena->mm, node);
+	if (ret) {
+		kfree(node);
+		return VM_FAULT_SIGSEGV;
+	}
 
 	/* Account into memcg of the process that created bpf_arena */
 	ret = bpf_map_alloc_pages(map, GFP_KERNEL | __GFP_ZERO, NUMA_NO_NODE, 1, &page);
 	if (ret) {
-		mtree_erase(&arena->mt, vmf->pgoff);
+		drm_mm_remove_node(node);
+		kfree(node);
 		return VM_FAULT_SIGSEGV;
 	}
 
 	ret = vm_area_map_pages(arena->kern_vm, kaddr, kaddr + PAGE_SIZE, &page);
 	if (ret) {
-		mtree_erase(&arena->mt, vmf->pgoff);
+		drm_mm_remove_node(node);
+		kfree(node);
 		__free_page(page);
 		return VM_FAULT_SIGSEGV;
 	}
@@ -420,6 +437,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	/* user_vm_end/start are fixed before bpf prog runs */
 	long page_cnt_max = (arena->user_vm_end - arena->user_vm_start) >> PAGE_SHIFT;
 	u64 kern_vm_start = bpf_arena_get_kern_vm_start(arena);
+	struct drm_mm_node *node;
 	struct page **pages;
 	long pgoff = 0;
 	u32 uaddr32;
@@ -442,14 +460,21 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	if (!pages)
 		return 0;
 
+	node = kzalloc(sizeof(*node), GFP_KERNEL);
+	if (!node) {
+		kvfree(pages);
+		return 0;
+	}
 	guard(mutex)(&arena->lock);
 
-	if (uaddr)
-		ret = mtree_insert_range(&arena->mt, pgoff, pgoff + page_cnt - 1,
-					 MT_ENTRY, GFP_KERNEL);
-	else
-		ret = mtree_alloc_range(&arena->mt, &pgoff, MT_ENTRY,
-					page_cnt, 0, page_cnt_max - 1, GFP_KERNEL);
+	if (uaddr) {
+		node->start = pgoff;
+		node->size = page_cnt;
+		ret = drm_mm_reserve_node(&arena->mm, node);
+	} else {
+		ret = drm_mm_insert_node(&arena->mm, node, page_cnt);
+		pgoff = node->start;
+	}
 	if (ret)
 		goto out_free_pages;
 
@@ -476,7 +501,8 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	kvfree(pages);
 	return clear_lo32(arena->user_vm_start) + uaddr32;
 out:
-	mtree_erase(&arena->mt, pgoff);
+	drm_mm_remove_node(node);
+	kfree(node);
 out_free_pages:
 	kvfree(pages);
 	return 0;
@@ -499,6 +525,7 @@ static void zap_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 {
 	u64 full_uaddr, uaddr_end;
+	struct drm_mm_node *node, *to_remove;
 	long kaddr, pgoff, i;
 	struct page *page;
 
@@ -516,7 +543,17 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 
 	pgoff = compute_pgoff(arena, uaddr);
 	/* clear range */
-	mtree_store_range(&arena->mt, pgoff, pgoff + page_cnt - 1, NULL, GFP_KERNEL);
+	for (;;) {
+		to_remove = NULL;
+		drm_mm_for_each_node_in_range(node, &arena->mm, pgoff, pgoff + page_cnt) {
+			to_remove = node;
+			break;
+		}
+		if (!to_remove)
+			break;
+		drm_mm_remove_node(to_remove);
+		kfree(to_remove);
+	}
 
 	if (page_cnt > 1)
 		/* bulk zap if multiple pages being freed */
