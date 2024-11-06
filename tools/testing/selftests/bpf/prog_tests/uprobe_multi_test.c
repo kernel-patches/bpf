@@ -873,10 +873,20 @@ static int consumer_test(struct uprobe_multi_consumers *skel,
 			 * which means one of the 'return' uprobes was alive when probe was hit:
 			 *
 			 *   idxs: 2/3 uprobe return in 'installed' mask
+			 *
+			 * There's special case when we have one of the existing uretprobes removed
+			 * and at the same time we're adding the other uretprobe. In this case we get
+			 * hit on the new uretprobe consumer only if there was already another uprobe
+			 * existing so the uprobe object stayed valid for uprobe return instance.
 			 */
 			unsigned long had_uretprobes  = before & 0b1100; /* is uretprobe installed */
+			unsigned long b = before >> 2, a = after >> 2;
+			bool hit = true;
 
-			if (had_uretprobes && test_bit(idx, after))
+			if (((b == 0b01) && (a == 0b10)) || ((b == 0b10) && (a == 0b01)))
+				hit = before & 0b11;
+
+			if (hit && had_uretprobes && test_bit(idx, after))
 				val++;
 			fmt = "idx 2/3: uretprobe";
 		}
