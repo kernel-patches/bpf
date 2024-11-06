@@ -84,3 +84,25 @@ int bpf_iter_task_file_destroy_uninit_iter(void *ctx)
 
 	return 0;
 }
+
+SEC("syscall")
+__failure __msg("Possibly NULL pointer passed to trusted arg0")
+int bpf_fget_task_untrusted_file(void *ctx)
+{
+	struct task_struct *task = NULL;
+
+	bpf_fget_task(task, 1);
+
+	return 0;
+}
+
+SEC("syscall")
+__failure __msg("Possibly NULL pointer passed to trusted arg0")
+int bpf_get_file_ops_type_untrusted_file(void *ctx)
+{
+	struct file *file = NULL;
+
+	bpf_get_file_ops_type(file);
+
+	return 0;
+}

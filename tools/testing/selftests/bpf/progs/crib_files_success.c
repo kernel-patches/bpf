@@ -71,3 +71,49 @@ cleanup:
 	bpf_task_release(task);
 	return 0;
 }
+
+SEC("syscall")
+int test_bpf_fget_task(void *ctx)
+{
+	struct task_struct *task;
+	struct file *file;
+
+	task = bpf_task_from_vpid(pid);
+	if (task == NULL) {
+		err = 1;
+		return 0;
+	}
+
+	file = bpf_fget_task(task, 0);
+	if (file == NULL) {
+		err = 2;
+		goto cleanup;
+	}
+
+	bpf_put_file(file);
+
+	file = bpf_fget_task(task, 1);
+	if (file == NULL) {
+		err = 3;
+		goto cleanup;
+	}
+
+	bpf_put_file(file);
+
+	file = bpf_fget_task(task, 2);
+	if (file == NULL) {
+		err = 4;
+		goto cleanup;
+	}
+
+	bpf_put_file(file);
+
+	file = bpf_fget_task(task, 3);
+	if (file != NULL) {
+		err = 5;
+		bpf_put_file(file);
+	}
+cleanup:
+	bpf_task_release(task);
+	return 0;
+}

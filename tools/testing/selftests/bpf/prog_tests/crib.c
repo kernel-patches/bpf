@@ -108,6 +108,7 @@ cleanup_skel:
 
 static const char * const files_success_tests[] = {
 	"test_bpf_iter_task_file",
+	"test_bpf_fget_task",
 };
 
 void test_crib(void)
