@@ -59,4 +59,8 @@ static inline void bpf_strlcpy(char *dst, const char *src, size_t sz)
 	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
 #endif
 
+#ifndef ENOTSUPP
+#define ENOTSUPP 524
+#endif
+
 #endif /* __BPF_UTIL__ */
