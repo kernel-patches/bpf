@@ -496,6 +496,7 @@ CLIPPY_DRIVER	= clippy-driver
 BINDGEN		= bindgen
 PAHOLE		= pahole
 RESOLVE_BTFIDS	= $(objtree)/tools/bpf/resolve_btfids/resolve_btfids
+BPFTOOL		= $(objtree)/tools/bpf/bpftool/bootstrap/bpftool
 LEX		= flex
 YACC		= bison
 AWK		= awk
@@ -585,7 +586,7 @@ export RUSTC_BOOTSTRAP := 1
 export ARCH SRCARCH CONFIG_SHELL BASH HOSTCC KBUILD_HOSTCFLAGS CROSS_COMPILE LD CC HOSTPKG_CONFIG
 export RUSTC RUSTDOC RUSTFMT RUSTC_OR_CLIPPY_QUIET RUSTC_OR_CLIPPY BINDGEN
 export HOSTRUSTC KBUILD_HOSTRUSTFLAGS
-export CPP AR NM STRIP OBJCOPY OBJDUMP READELF PAHOLE RESOLVE_BTFIDS LEX YACC AWK INSTALLKERNEL
+export CPP AR NM STRIP OBJCOPY OBJDUMP READELF PAHOLE RESOLVE_BTFIDS BPFTOOL LEX YACC AWK INSTALLKERNEL
 export PERL PYTHON3 CHECK CHECKFLAGS MAKE UTS_MACHINE HOSTCXX
 export KGZIP KBZIP2 KLZOP LZMA LZ4 XZ ZSTD
 export KBUILD_HOSTCXXFLAGS KBUILD_HOSTLDFLAGS KBUILD_HOSTLDLIBS LDFLAGS_MODULE
@@ -1354,6 +1355,25 @@ resolve_btfids_O = $(abspath $(objtree))/tools/bpf/resolve_btfids
 resolve_btfids_clean:
 ifneq ($(wildcard $(resolve_btfids_O)),)
 	$(Q)$(MAKE) -sC $(srctree)/tools/bpf/resolve_btfids O=$(resolve_btfids_O) clean
+endif
+
+# TODO: cross compilation?
+# TODO: bootstrap! (to avoid vmlinux.h generation)
+PHONY += bpftool_bootstrap bpftool_clean
+bpftool_O = $(abspath $(objtree))/tools/bpf/bpftool
+
+ifdef CONFIG_BPF
+ifdef CONFIG_CC_IS_CLANG
+prepare: bpftool_bootstrap
+endif
+endif
+
+bpftool_bootstrap:
+	$(Q)$(MAKE) -sC $(srctree)/tools/bpf/bpftool O=$(bpftool_O) srctree=$(abspath $(srctree)) bootstrap
+
+bpftool_clean:
+ifneq ($(wildcard $(bpftool_O)),)
+	$(Q)$(MAKE) -sC $(srctree)/tools/bpf/bpftool O=$(bpftool_O) srctree=$(abspath $(srctree)) clean
 endif
 
 # Clear a bunch of variables before executing the submake

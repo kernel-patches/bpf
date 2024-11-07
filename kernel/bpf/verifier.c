@@ -20509,6 +20509,622 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return 0;
 }
 
+asm (
+"	.pushsection .data, \"a\"		\n"
+"	.global inlinable_kfuncs_data		\n"
+"inlinable_kfuncs_data:				\n"
+"	.incbin \"kernel/bpf/inlinable_kfuncs.bpf.linked.o\"\n"
+"	.global inlinable_kfuncs_data_end		\n"
+"inlinable_kfuncs_data_end:			\n"
+"	.popsection				\n"
+);
+
+extern void inlinable_kfuncs_data;
+extern void inlinable_kfuncs_data_end;
+
+struct blob {
+	void *mem;
+	u32 size;
+};
+
+struct inlinable_kfunc {
+	const char *name;
+	const struct bpf_insn *insns;
+	u32 insn_num;
+	u32 btf_id;
+};
+
+static struct inlinable_kfunc inlinable_kfuncs[16];
+
+static void *check_inlinable_kfuncs_ptr(struct blob *blob,
+				      void *ptr, u64 size, const char *context)
+{
+	if (ptr + size > blob->mem + blob->size) {
+		printk("malformed inlinable kfuncs data: bad offset/size 0x%lx/0x%llx: %s",
+		       ptr - blob->mem, size, context);
+		return NULL;
+	}
+	return ptr;
+}
+
+static void *get_inlinable_kfuncs_ptr(struct blob *blob,
+				    u64 off, u64 size, const char *context)
+{
+	return check_inlinable_kfuncs_ptr(blob, blob->mem + off, size, context);
+}
+
+struct inlinable_kfunc_regs_usage {
+	u32 used_regs_mask;
+	s32 lowest_stack_off;
+	bool r10_escapes;
+};
+
+static void scan_regs_usage(const struct bpf_insn *insns, u32 insn_num,
+			    struct inlinable_kfunc_regs_usage *usage)
+{
+	const struct bpf_insn *insn = insns;
+	s32 lowest_stack_off;
+	bool r10_escapes;
+	u32 i, mask;
+
+	lowest_stack_off = 0;
+	r10_escapes = false;
+	mask = 0;
+	for (i = 0; i < insn_num; ++i, ++insn) {
+		mask |= BIT(insn->src_reg);
+		mask |= BIT(insn->dst_reg);
+		switch (BPF_CLASS(insn->code)) {
+		case BPF_ST:
+		case BPF_STX:
+			if (insn->dst_reg == BPF_REG_10)
+				lowest_stack_off = min(lowest_stack_off, insn->off);
+			if (insn->src_reg == BPF_REG_10 && BPF_SRC(insn->code) == BPF_X)
+				r10_escapes = true;
+			break;
+		case BPF_LDX:
+			if (insn->src_reg == BPF_REG_10)
+				lowest_stack_off = min(lowest_stack_off, insn->off);
+			break;
+		case BPF_ALU:
+		case BPF_ALU64:
+			if (insn->src_reg == BPF_REG_10 && BPF_SRC(insn->code) == BPF_X)
+				r10_escapes = true;
+			break;
+		default:
+			break;
+		}
+	}
+	usage->used_regs_mask = mask;
+	usage->lowest_stack_off = lowest_stack_off;
+	usage->r10_escapes = r10_escapes;
+}
+
+#ifndef Elf_Rel
+#ifdef CONFIG_64BIT
+#define Elf_Rel		Elf64_Rel
+#else
+#define Elf_Rel		Elf32_Rel
+#endif
+#endif
+
+#define R_BPF_64_32 10
+
+struct sh_elf_sections {
+	Elf_Sym *sym;
+	Elf_Rel *rel;
+	void *text;
+	const char *strings;
+	u32 rel_cnt;
+	u32 sym_cnt;
+	u32 strings_sz;
+	u32 text_sz;
+	u32 symtab_idx;
+	u32 text_idx;
+};
+
+static int validate_inlinable_kfuncs_header(Elf_Ehdr *hdr)
+{
+	if (hdr->e_ident[EI_MAG0] != ELFMAG0 || hdr->e_ident[EI_MAG1] != ELFMAG1 ||
+	    hdr->e_ident[EI_MAG2] != ELFMAG2 || hdr->e_ident[EI_MAG3] != ELFMAG3 ||
+	    hdr->e_ident[EI_CLASS] != ELFCLASS64 || hdr->e_ident[EI_VERSION] != EV_CURRENT ||
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	    hdr->e_ident[EI_DATA] != ELFDATA2LSB ||
+#else
+	    hdr->e_ident[EI_DATA] != ELFDATA2MSB ||
+#endif
+	    hdr->e_type != ET_REL || hdr->e_machine != EM_BPF || hdr->e_version != EV_CURRENT) {
+		printk("malformed inlinable kfuncs data: bad ELF header\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int inlinable_kfuncs_parse_sections(struct blob *blob, struct sh_elf_sections *s)
+{
+	Elf_Shdr *sh_strings = NULL;
+	Elf_Shdr *sec_hdrs = NULL;
+	Elf_Shdr *symtab = NULL;
+	Elf_Shdr *text = NULL;
+	Elf_Shdr *text_rel = NULL;
+	Elf_Shdr *shdr;
+	Elf_Ehdr *hdr;
+	Elf_Sym *sym;
+	u32 i, symtab_idx, text_idx;
+	const char *strings, *name;
+	int err;
+
+	hdr = get_inlinable_kfuncs_ptr(blob, 0, sizeof(*hdr), "ELF header");
+	if (!hdr)
+		return -EINVAL;
+	err = validate_inlinable_kfuncs_header(hdr);
+	if (err < 0)
+		return err;
+	sec_hdrs = get_inlinable_kfuncs_ptr(blob, hdr->e_shoff, 0, "section headers table");
+	if (!sec_hdrs)
+		return -EINVAL;
+	sh_strings = check_inlinable_kfuncs_ptr(blob, &sec_hdrs[hdr->e_shstrndx], sizeof(*s),
+					      "string table header");
+	if (!sh_strings)
+		return -EINVAL;
+	strings = get_inlinable_kfuncs_ptr(blob, sh_strings->sh_offset, sh_strings->sh_size,
+					 "strings table");
+	if (!strings)
+		return -EINVAL;
+	if (strings[sh_strings->sh_size - 1] != 0) {
+		printk("malformed inlinable kfuncs data: string table is not null terminated\n");
+		return -EINVAL;
+	}
+	if (!check_inlinable_kfuncs_ptr(blob, &sec_hdrs[hdr->e_shnum - 1], sizeof(*sec_hdrs),
+				      "section table"))
+		return -EINVAL;
+
+	for (i = 1; i < hdr->e_shnum; i++) {
+		shdr = &sec_hdrs[i];
+		name = strings + shdr->sh_name;
+		if (shdr->sh_name >= sh_strings->sh_size) {
+			printk("malformed inlinable kfuncs data: bad section #%u name\n", i);
+			return -EINVAL;
+		}
+		if (!get_inlinable_kfuncs_ptr(blob, shdr->sh_offset, shdr->sh_size,
+					    "section size/offset"))
+			return -EINVAL;
+		switch (shdr->sh_type) {
+		case SHT_NULL:
+		case SHT_STRTAB:
+			continue;
+		case SHT_SYMTAB:
+			symtab = shdr;
+			symtab_idx = i;
+			if (symtab->sh_entsize != sizeof(*sym)) {
+				printk("malformed inlinable kfuncs data: unexpected symtab->sh_entsize: %llu\n",
+				       symtab->sh_entsize);
+				return -EINVAL;
+			}
+			if (symtab->sh_size % sizeof(*sym) != 0) {
+				printk("malformed inlinable kfuncs data: unexpected symtab->sh_size: %llu\n",
+				       symtab->sh_size);
+				return -EINVAL;
+			}
+			break;
+		case SHT_PROGBITS:
+			if (strcmp(name, ".text") == 0) {
+				text = shdr;
+				text_idx = i;
+			} else if (strcmp(name, ".BTF") == 0 || strcmp(name, ".BTF.ext") == 0) {
+				/* ignore BTF for now */
+				break;
+			} else {
+				printk("malformed inlinable kfuncs data: unexpected section #%u name ('%s')\n",
+				       i, name);
+				return -EINVAL;
+			}
+			break;
+		case SHT_REL:
+			if (text_rel) {
+				printk("malformed inlinable kfuncs data: unexpected relocation section #%u name ('%s')\n",
+				       i, name);
+				return -EINVAL;
+			}
+			text_rel = shdr;
+			break;
+		default:
+			printk("malformed inlinable kfuncs data: unexpected section #%u type (0x%x)\n",
+			       i, shdr->sh_type);
+			return -EINVAL;
+		}
+	}
+	if (!symtab) {
+		printk("malformed inlinable kfuncs data: SHT_SYMTAB section is missing\n");
+		return -EINVAL;
+	}
+	if (!text) {
+		printk("malformed inlinable kfuncs data: .text section is missing\n");
+		return -EINVAL;
+	}
+	if (text_rel && (text_rel->sh_info != text_idx || text_rel->sh_link != symtab_idx)) {
+		printk("malformed inlinable kfuncs data: SHT_REL section #%u '%s' unexpected sh_link %u\n",
+		       i, name, shdr->sh_link);
+		return -EINVAL;
+	}
+	s->sym = blob->mem + symtab->sh_offset;
+	s->text = blob->mem + text->sh_offset;
+	s->strings = strings;
+	s->sym_cnt = symtab->sh_size / sizeof(*s->sym);
+	s->text_sz = text->sh_size;
+	s->strings_sz = sh_strings->sh_size;
+	s->text_idx = text_idx;
+	s->symtab_idx = symtab_idx;
+	if (text_rel) {
+		s->rel = blob->mem + text_rel->sh_offset;
+		s->rel_cnt = text_rel->sh_size / sizeof(*s->rel);
+	} else {
+		s->rel = NULL;
+		s->rel_cnt = 0;
+	}
+	return 0;
+}
+
+/* Replace call instructions with function relocations by kfunc call
+ * instructions, looking up corresponding kernel functions by name.
+ * Inserted kfunc calls might refer to any kernel functions,
+ * not necessarily those marked with __bpf_kfunc.
+ * Any other relocation kinds are not supported.
+ */
+static int inlinable_kfuncs_apply_relocs(struct sh_elf_sections *s, struct btf *btf)
+{
+	Elf_Rel *rel;
+	u32 i;
+
+	if (!s->rel)
+		return 0;
+
+	if (!btf) {
+		printk("inlinable_kfuncs_init: no vmlinux btf\n");
+		return -EINVAL;
+	}
+	printk("inlinable_kfuncs_init: relocations:\n");
+	for (rel = s->rel, i = 0; i < s->rel_cnt; i++, rel++) {
+		printk("inlinable_kfuncs_init:  tp=0x%llx, sym=0x%llx, off=0x%llx\n",
+		       ELF_R_TYPE(rel->r_info), ELF_R_SYM(rel->r_info), rel->r_offset);
+	}
+	for (rel = s->rel, i = 0; i < s->rel_cnt; i++, rel++) {
+		struct bpf_insn *rinsn;
+		const char *rname;
+		Elf_Sym *rsym;
+		u32 idx;
+		s32 id;
+
+		if (ELF_R_TYPE(rel->r_info) != R_BPF_64_32) {
+			printk("relocation #%u unexpected relocation type: %llu\n", i, ELF_R_TYPE(rel->r_info));
+			return -EINVAL;
+		}
+		idx = ELF_R_SYM(rel->r_info);
+		rsym = s->sym + idx;
+		if (idx >= s->sym_cnt) {
+			printk("relocation #%u symbol index out of bounds: %u\n", i, idx);
+			return -EINVAL;
+		}
+		if (rsym->st_name >= s->strings_sz) {
+			printk("relocation #%u symbol name out of bounds: %u\n", i, rsym->st_name);
+			return -EINVAL;
+		}
+		rname = s->strings + rsym->st_name;
+		if (rel->r_offset + sizeof(struct bpf_insn) >= s->text_sz ||
+		    rel->r_offset % sizeof(struct bpf_insn) != 0) {
+			printk("relocation #%u invalid offset: %llu\n", i, rel->r_offset);
+			return -EINVAL;
+		}
+		rinsn = s->text + rel->r_offset;
+		if (rinsn->code != (BPF_JMP | BPF_CALL) ||
+		    rinsn->src_reg != BPF_PSEUDO_CALL ||
+		    rinsn->dst_reg != 0 ||
+		    rinsn->off != 0 ||
+		    rinsn->imm != -1) {
+			printk("relocation #%u invalid instruction at offset %llu\n", i, rel->r_offset);
+			return -EINVAL;
+		}
+		id = btf_find_by_name_kind(btf, rname, BTF_KIND_FUNC);
+		if (id < 0) {
+			printk("relocation #%u can't resolve function '%s'\n", i, rname);
+			return -EINVAL;
+		}
+		rinsn->src_reg = BPF_PSEUDO_KFUNC_CALL;
+		rinsn->imm = id;
+		printk("inlinable_kfuncs_init: patching insn %ld, imm=%d, off=%d\n",
+		       rinsn - (struct bpf_insn *)s->text, rinsn->imm, rinsn->off);
+	}
+	return 0;
+}
+
+/* Fill 'inlinable_kfuncs' table with STT_FUNC symbols from symbol table
+ * of the ELF file pointed to by elf_bin.
+ * Do some sanity checks for ELF data structures,
+ * (but refrain from being overly paranoid, as this ELF is a part of kernel build).
+ */
+static int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size)
+{
+	struct blob blob = { .mem = elf_bin, .size = size };
+	struct sh_elf_sections s;
+	struct btf *btf;
+	Elf_Sym *sym;
+	u32 i, idx;
+	int err;
+
+	btf = bpf_get_btf_vmlinux();
+	if (!btf)
+		return -EINVAL;
+
+	err = inlinable_kfuncs_parse_sections(&blob, &s);
+	if (err < 0)
+		return err;
+
+	err = inlinable_kfuncs_apply_relocs(&s, btf);
+	if (err < 0)
+		return err;
+
+	idx = 0;
+	for (sym = s.sym, i = 0; i < s.sym_cnt; i++, sym++) {
+		struct inlinable_kfunc *sh;
+		struct bpf_insn *insns;
+		const char *name;
+		u32 insn_num;
+		int id;
+
+		if (ELF_ST_TYPE(sym->st_info) != STT_FUNC)
+			continue;
+		if (ELF_ST_BIND(sym->st_info) != STB_GLOBAL ||
+		    sym->st_other != 0 ||
+		    sym->st_shndx != s.text_idx ||
+		    sym->st_size % sizeof(struct bpf_insn) != 0 ||
+		    sym->st_value % sizeof(struct bpf_insn) != 0 ||
+		    sym->st_name >= s.strings_sz) {
+			printk("malformed inlinable kfuncs data: bad symbol #%u\n", i);
+			return -EINVAL;
+		}
+		if (idx == ARRAY_SIZE(inlinable_kfuncs) - 1) {
+			printk("malformed inlinable kfuncs data: too many helper functions\n");
+			return -EINVAL;
+		}
+		insn_num = sym->st_size / sizeof(struct bpf_insn);
+		insns = s.text + sym->st_value;
+		name = s.strings + sym->st_name;
+		id = btf_find_by_name_kind(btf, name, BTF_KIND_FUNC);
+		if (id < 0) {
+			printk("can't add inlinable kfunc '%s': no btf_id\n", name);
+			return -EINVAL;
+		}
+		sh = &inlinable_kfuncs[idx++];
+		sh->insn_num = insn_num;
+		sh->insns = insns;
+		sh->name = name;
+		sh->btf_id = id;
+		printk("adding inlinable kfunc %s at 0x%llx, %u instructions, btf_id=%d\n",
+		       sh->name, sym->st_value, sh->insn_num, sh->btf_id);
+	}
+
+	return 0;
+}
+
+static int __init inlinable_kfuncs_init(void)
+{
+	return bpf_register_inlinable_kfuncs(&inlinable_kfuncs_data,
+					   &inlinable_kfuncs_data_end - &inlinable_kfuncs_data);
+}
+
+late_initcall(inlinable_kfuncs_init);
+
+static struct inlinable_kfunc *find_inlinable_kfunc(u32 btf_id)
+{
+	struct inlinable_kfunc *sh = inlinable_kfuncs;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(inlinable_kfuncs); ++i, ++sh)
+		if (sh->btf_id == btf_id)
+			return sh;
+	return NULL;
+}
+
+/* Given a kfunc call instruction, when kfunc is an inlinable kfunc,
+ * replace the call instruction with a body of said kfunc.
+ * Stack slots used within kfunc body become stack slots of with calling function,
+ * report extra stack used in 'stack_depth_extra'.
+ */
+static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
+					  int insn_idx, int *cnt, s32 stack_base, u16 *stack_depth_extra)
+{
+	struct inlinable_kfunc_regs_usage regs_usage;
+	const struct bpf_kfunc_desc *desc;
+	struct bpf_prog *new_prog;
+	struct bpf_insn *insn_buf;
+	struct inlinable_kfunc *sh;
+	int i, j, r, off, err, exit;
+	u32 subprog_insn_cnt;
+	u16 extra_slots;
+	s16 stack_off;
+	u32 insn_num;
+
+	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	if (!desc || IS_ERR(desc))
+		return ERR_PTR(-EFAULT);
+	sh = find_inlinable_kfunc(desc->func_id);
+	if (!sh)
+		return NULL;
+
+	subprog_insn_cnt = sh->insn_num;
+	scan_regs_usage(sh->insns, subprog_insn_cnt, &regs_usage);
+	if (regs_usage.r10_escapes) {
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "can't inline kfunc %s at insn %d, r10 escapes\n",
+				sh->name, insn_idx);
+		return NULL;
+	}
+
+	extra_slots = 0;
+	for (i = BPF_REG_6; i <= BPF_REG_9; ++i)
+		if (regs_usage.used_regs_mask & BIT(i))
+			++extra_slots;
+	*stack_depth_extra = extra_slots * BPF_REG_SIZE + -regs_usage.lowest_stack_off;
+	insn_num = subprog_insn_cnt + extra_slots * 2;
+	insn_buf = kmalloc_array(insn_num, sizeof(*insn_buf), GFP_KERNEL);
+	if (!insn_buf)
+		return ERR_PTR(-ENOMEM);
+
+	if (env->log.level & BPF_LOG_LEVEL2)
+		verbose(env, "inlining kfunc %s at insn %d\n", sh->name, insn_idx);
+	memcpy(insn_buf + extra_slots, sh->insns, subprog_insn_cnt * sizeof(*insn_buf));
+	off = stack_base;
+	i = 0;
+	j = insn_num - 1;
+	/* Generate spill/fill pairs for callee saved registers used
+         * by kfunc before/after inlined function body.
+	 */
+	for (r = BPF_REG_6; r <= BPF_REG_9; ++r) {
+		if ((regs_usage.used_regs_mask & BIT(r)) == 0)
+			continue;
+		off -= BPF_REG_SIZE;
+		insn_buf[i++] = BPF_STX_MEM(BPF_DW, BPF_REG_10, r, off);
+		insn_buf[j--] = BPF_LDX_MEM(BPF_DW, r, BPF_REG_10, off);
+	}
+	exit = insn_idx + subprog_insn_cnt + extra_slots;
+	new_prog = bpf_patch_insn_data(env, insn_idx, insn_buf, insn_num);
+	kfree(insn_buf);
+	if (!new_prog)
+		return ERR_PTR(-ENOMEM);
+
+	stack_off = 0;
+	if (!regs_usage.r10_escapes && (regs_usage.used_regs_mask & BIT(BPF_REG_10)))
+		stack_off = off;
+
+	for (j = 0; j < subprog_insn_cnt; ++j) {
+		i = insn_idx + extra_slots + j;
+		insn = new_prog->insnsi + i;
+
+		/* Replace 'exit' with jump to inlined body end. */
+		if (insn->code == (BPF_JMP | BPF_EXIT)) {
+			off = exit - i - 1;
+			if (off < S16_MAX)
+				*insn = BPF_JMP_A(off);
+			else
+				*insn = BPF_JMP32_A(off);
+		}
+
+		/* Adjust offsets of r10-based load and store instructions
+		 * to use slots not used by calling function.
+		 */
+		switch (BPF_CLASS(insn->code)) {
+		case BPF_ST:
+		case BPF_STX:
+			if (insn->dst_reg == BPF_REG_10)
+				insn->off += stack_off;
+			break;
+		case BPF_LDX:
+			if (insn->src_reg == BPF_REG_10)
+				insn->off += stack_off;
+			break;
+		default:
+			break;
+		}
+
+		/* Make sure kernel function calls from within kfunc body could be jitted. */
+		if (bpf_pseudo_kfunc_call(insn)) {
+			err = add_kfunc_call(env, insn->imm, insn->off);
+			if (err < 0)
+				return ERR_PTR(err);
+		}
+	}
+
+	*cnt = insn_num;
+
+	return new_prog;
+}
+
+/* Do this after all stack depth adjustments */
+static int inline_kfunc_calls(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *prog = env->prog;
+	struct bpf_insn *insn = prog->insnsi;
+	const int insn_cnt = prog->len;
+	struct bpf_prog *new_prog;
+	int i, cnt, delta = 0, cur_subprog = 0;
+	struct bpf_subprog_info *subprogs = env->subprog_info;
+	u16 stack_depth = subprogs[cur_subprog].stack_depth;
+	u16 call_extra_stack = 0, subprog_extra_stack = 0;
+
+	for (i = 0; i < insn_cnt;) {
+		if (!bpf_pseudo_kfunc_call(insn))
+			goto next_insn;
+
+		new_prog = inline_kfunc_call(env, insn, i + delta, &cnt,
+					     -stack_depth, &call_extra_stack);
+		if (IS_ERR(new_prog))
+			return PTR_ERR(new_prog);
+		if (!new_prog)
+			goto next_insn;
+
+		subprog_extra_stack = max(subprog_extra_stack, call_extra_stack);
+		delta	 += cnt - 1;
+		env->prog = prog = new_prog;
+		insn	  = new_prog->insnsi + i + delta;
+
+next_insn:
+		if (subprogs[cur_subprog + 1].start == i + delta + 1) {
+			subprogs[cur_subprog].stack_depth += subprog_extra_stack;
+			cur_subprog++;
+			stack_depth = subprogs[cur_subprog].stack_depth;
+			subprog_extra_stack = 0;
+		}
+		i++;
+		insn++;
+	}
+
+	env->prog->aux->stack_depth = subprogs[0].stack_depth;
+
+	return 0;
+}
+
+/* Prepare kfunc calls for jiting:
+ * - by replacing insn->imm fields with offsets to real functions;
+ * - or by replacing calls to certain kfuncs using hard-coded templates;
+ * - or by replacing calls to inlinable kfuncs by kfunc bodies.
+ */
+static int resolve_kfunc_calls(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *prog = env->prog;
+	struct bpf_insn *insn = prog->insnsi;
+	struct bpf_insn *insn_buf = env->insn_buf;
+	const int insn_cnt = prog->len;
+	struct bpf_prog *new_prog;
+	int i, ret, cnt, delta = 0;
+
+	for (i = 0; i < insn_cnt;) {
+		if (!bpf_pseudo_kfunc_call(insn))
+			goto next_insn;
+
+		ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
+		if (ret)
+			return ret;
+		if (cnt == 0)
+			goto next_insn;
+
+		new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+		if (!new_prog)
+			return -ENOMEM;
+
+		delta	 += cnt - 1;
+		env->prog = prog = new_prog;
+		insn	  = new_prog->insnsi + i + delta;
+		goto next_insn;
+
+next_insn:
+		i++;
+		insn++;
+	}
+
+	sort_kfunc_descs_by_imm_off(env->prog);
+
+	return 0;
+}
+
 /* The function requires that first instruction in 'patch' is insnsi[prog->len - 1] */
 static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *patch, int len)
 {
@@ -20848,22 +21464,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			goto next_insn;
-		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
-			if (ret)
-				return ret;
-			if (cnt == 0)
-				goto next_insn;
-
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
-			if (!new_prog)
-				return -ENOMEM;
-
-			delta	 += cnt - 1;
-			env->prog = prog = new_prog;
-			insn	  = new_prog->insnsi + i + delta;
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
 			goto next_insn;
-		}
 
 		/* Skip inlining the helper call if the JIT does it. */
 		if (bpf_jit_inlines_helper_call(insn->imm))
@@ -21380,6 +21982,15 @@ next_insn:
 		WARN_ON(adjust_jmp_off(env->prog, subprog_start, 1));
 	}
 
+	return 0;
+}
+
+static int notify_map_poke_trackers(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *prog = env->prog;
+	struct bpf_map *map_ptr;
+	int i, ret;
+
 	/* Since poke tab is now finalized, publish aux to tracker. */
 	for (i = 0; i < prog->aux->size_poke_tab; i++) {
 		map_ptr = prog->aux->poke_tab[i].tail_call.map;
@@ -21396,8 +22007,6 @@ next_insn:
 			return ret;
 		}
 	}
-
-	sort_kfunc_descs_by_imm_off(env->prog);
 
 	return 0;
 }
@@ -22557,6 +23166,15 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = do_misc_fixups(env);
+
+	if (ret == 0)
+		ret = inline_kfunc_calls(env);
+
+	if (ret == 0)
+		ret = resolve_kfunc_calls(env);
+
+	if (ret == 0)
+		ret = notify_map_poke_trackers(env);
 
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.

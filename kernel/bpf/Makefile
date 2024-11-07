@@ -6,7 +6,7 @@ cflags-nogcse-$(CONFIG_X86)$(CONFIG_CC_IS_GCC) := -fno-gcse
 endif
 CFLAGS_core.o += -Wno-override-init $(cflags-nogcse-yy)
 
-obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o helpers.o tnum.o log.o token.o
+obj-$(CONFIG_BPF_SYSCALL) += syscall.o verifier.o inode.o tnum.o log.o token.o
 obj-$(CONFIG_BPF_SYSCALL) += bpf_iter.o map_iter.o task_iter.o prog_iter.o link_iter.o
 obj-$(CONFIG_BPF_SYSCALL) += hashtab.o arraymap.o percpu_freelist.o bpf_lru_list.o lpm_trie.o map_in_map.o bloom_filter.o
 obj-$(CONFIG_BPF_SYSCALL) += local_storage.o queue_stack_maps.o ringbuf.o
@@ -53,3 +53,25 @@ obj-$(CONFIG_BPF_SYSCALL) += relo_core.o
 obj-$(CONFIG_BPF_SYSCALL) += btf_iter.o
 obj-$(CONFIG_BPF_SYSCALL) += btf_relocate.o
 obj-$(CONFIG_BPF_SYSCALL) += kmem_cache_iter.o
+obj-$(CONFIG_BPF_SYSCALL) += helpers.o inlinable_kfuncs.o
+
+ifdef CONFIG_CC_IS_CLANG
+
+LLC ?= $(LLVM_PREFIX)llc$(LLVM_SUFFIX)
+
+# -mfentry -pg is $(CC_FLAGS_FTRACE)
+# -fpatchable-function-entry=16,16 is $(PADDING_CFLAGS)
+CFLAGS_REMOVE_inlinable_kfuncs.bpf.bc.o += $(CC_FLAGS_FTRACE)
+CFLAGS_REMOVE_inlinable_kfuncs.bpf.bc.o += $(PADDING_CFLAGS)
+$(obj)/inlinable_kfuncs.bpf.bc.o: $(src)/inlinable_kfuncs.c
+	$(Q)$(CLANG) $(c_flags) -emit-llvm -c $< -o $@
+
+$(obj)/inlinable_kfuncs.bpf.o: $(obj)/inlinable_kfuncs.bpf.bc.o
+	$(Q)$(LLC) -mcpu=v3 --mtriple=bpf --filetype=obj $< -o $@
+
+$(obj)/inlinable_kfuncs.bpf.linked.o: $(obj)/inlinable_kfuncs.bpf.o
+	$(Q)$(BPFTOOL) gen object $@ $<
+
+$(obj)/verifier.o: $(obj)/inlinable_kfuncs.bpf.linked.o
+
+endif
