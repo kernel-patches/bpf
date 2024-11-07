@@ -582,6 +582,7 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
 int btf_check_iter_arg(struct btf *btf, const struct btf_type *func, int arg_idx);
+struct btf *btf_get_module_btf(const struct module *module);
 
 static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type *t)
 {
@@ -670,5 +671,11 @@ static inline int btf_check_iter_arg(struct btf *btf, const struct btf_type *fun
 {
 	return -EOPNOTSUPP;
 }
+struct btf *btf_get_module_btf(const struct module *module)
+{
+	return NULL;
+}
+
 #endif
+
 #endif

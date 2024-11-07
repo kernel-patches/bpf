@@ -20534,7 +20534,20 @@ struct inlinable_kfunc {
 	u32 btf_id;
 };
 
-static struct inlinable_kfunc inlinable_kfuncs[16];
+/* Represents inlinable kfuncs provided by a module */
+struct inlinable_kfuncs_block {
+	struct list_head list;
+	/* Module or kernel BTF, refcount not taken. Relies on correct
+         * calls to bpf_[un]register_inlinable_kfuncs to guarantee BTF
+         * object lifetime.
+	 */
+	const struct btf *btf;
+	struct inlinable_kfunc funcs[16];
+};
+
+/* List of inlinable_kfuncs_block objects. */
+static struct list_head inlinable_kfuncs = LIST_HEAD_INIT(inlinable_kfuncs);
+static DEFINE_RWLOCK(inlinable_kfuncs_lock);
 
 static void *check_inlinable_kfuncs_ptr(struct blob *blob,
 				      void *ptr, u64 size, const char *context)
@@ -20710,8 +20723,10 @@ static int inlinable_kfuncs_parse_sections(struct blob *blob, struct sh_elf_sect
 			if (strcmp(name, ".text") == 0) {
 				text = shdr;
 				text_idx = i;
-			} else if (strcmp(name, ".BTF") == 0 || strcmp(name, ".BTF.ext") == 0) {
-				/* ignore BTF for now */
+			} else if (strcmp(name, ".BTF") == 0 ||
+				   strcmp(name, ".BTF.ext") == 0 ||
+				   strcmp(name, ".modinfo") == 0) {
+				/* ignore */
 				break;
 			} else {
 				printk("malformed inlinable kfuncs data: unexpected section #%u name ('%s')\n",
@@ -20841,27 +20856,35 @@ static int inlinable_kfuncs_apply_relocs(struct sh_elf_sections *s, struct btf *
  * Do some sanity checks for ELF data structures,
  * (but refrain from being overly paranoid, as this ELF is a part of kernel build).
  */
-static int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size)
+int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size, struct module *module)
 {
 	struct blob blob = { .mem = elf_bin, .size = size };
+	struct inlinable_kfuncs_block *block = NULL;
 	struct sh_elf_sections s;
 	struct btf *btf;
 	Elf_Sym *sym;
 	u32 i, idx;
 	int err;
 
-	btf = bpf_get_btf_vmlinux();
+	btf = btf_get_module_btf(module);
 	if (!btf)
 		return -EINVAL;
 
 	err = inlinable_kfuncs_parse_sections(&blob, &s);
 	if (err < 0)
-		return err;
+		goto err_out;
 
 	err = inlinable_kfuncs_apply_relocs(&s, btf);
 	if (err < 0)
-		return err;
+		goto err_out;
 
+	block = kvmalloc(sizeof(*block), GFP_KERNEL | __GFP_ZERO);
+	if (!block) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	block->btf = btf;
 	idx = 0;
 	for (sym = s.sym, i = 0; i < s.sym_cnt; i++, sym++) {
 		struct inlinable_kfunc *sh;
@@ -20879,11 +20902,13 @@ static int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size)
 		    sym->st_value % sizeof(struct bpf_insn) != 0 ||
 		    sym->st_name >= s.strings_sz) {
 			printk("malformed inlinable kfuncs data: bad symbol #%u\n", i);
-			return -EINVAL;
+			err = -EINVAL;
+			goto err_out;
 		}
-		if (idx == ARRAY_SIZE(inlinable_kfuncs) - 1) {
+		if (idx == ARRAY_SIZE(block->funcs) - 1) {
 			printk("malformed inlinable kfuncs data: too many helper functions\n");
-			return -EINVAL;
+			err = -EINVAL;
+			goto err_out;
 		}
 		insn_num = sym->st_size / sizeof(struct bpf_insn);
 		insns = s.text + sym->st_value;
@@ -20891,9 +20916,10 @@ static int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size)
 		id = btf_find_by_name_kind(btf, name, BTF_KIND_FUNC);
 		if (id < 0) {
 			printk("can't add inlinable kfunc '%s': no btf_id\n", name);
-			return -EINVAL;
+			err = -EINVAL;
+			goto err_out;
 		}
-		sh = &inlinable_kfuncs[idx++];
+		sh = &block->funcs[idx++];
 		sh->insn_num = insn_num;
 		sh->insns = insns;
 		sh->name = name;
@@ -20902,25 +20928,86 @@ static int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size)
 		       sh->name, sym->st_value, sh->insn_num, sh->btf_id);
 	}
 
+	write_lock(&inlinable_kfuncs_lock);
+	list_add(&block->list, &inlinable_kfuncs);
+	write_unlock(&inlinable_kfuncs_lock);
+	if (module)
+		btf_put(btf);
 	return 0;
+
+err_out:
+	kvfree(block);
+	if (module)
+		btf_put(btf);
+	return err;
 }
+EXPORT_SYMBOL_GPL(bpf_register_inlinable_kfuncs);
+
+void bpf_unregister_inlinable_kfuncs(struct module *module)
+{
+	struct inlinable_kfuncs_block *block;
+	struct list_head *pos;
+	struct btf *btf;
+
+	btf = btf_get_module_btf(module);
+	if (!btf)
+		return;
+
+	write_lock(&inlinable_kfuncs_lock);
+	list_for_each(pos, &inlinable_kfuncs) {
+		if (pos == &inlinable_kfuncs)
+			continue;
+		block = container_of(pos, typeof(*block), list);
+		if (block->btf != btf)
+			continue;
+		list_del(&block->list);
+		kvfree(block);
+		break;
+	}
+	write_unlock(&inlinable_kfuncs_lock);
+	btf_put(btf);
+}
+EXPORT_SYMBOL_GPL(bpf_unregister_inlinable_kfuncs);
 
 static int __init inlinable_kfuncs_init(void)
 {
 	return bpf_register_inlinable_kfuncs(&inlinable_kfuncs_data,
-					   &inlinable_kfuncs_data_end - &inlinable_kfuncs_data);
+					     &inlinable_kfuncs_data_end - &inlinable_kfuncs_data,
+					     NULL);
 }
 
 late_initcall(inlinable_kfuncs_init);
 
-static struct inlinable_kfunc *find_inlinable_kfunc(u32 btf_id)
+/* If a program refers to a kfunc from some module, this module is guaranteed
+ * to not be unloaded for the duration of program verification.
+ * Hence there is no need to protect returned 'inlinable_kfunc' instance,
+ * as long as find_inlinable_kfunc() is called during program verification.
+ * However, read_lock(&inlinable_kfuncs_lock) for the duration of this
+ * function is necessary in case some unrelated modules are loaded/unloaded
+ * concurrently to find_inlinable_kfunc() call.
+ */
+static struct inlinable_kfunc *find_inlinable_kfunc(struct btf *btf, u32 btf_id)
 {
-	struct inlinable_kfunc *sh = inlinable_kfuncs;
+	struct inlinable_kfuncs_block *block;
+	struct inlinable_kfunc *sh;
+	struct list_head *pos;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(inlinable_kfuncs); ++i, ++sh)
-		if (sh->btf_id == btf_id)
+	read_lock(&inlinable_kfuncs_lock);
+	list_for_each(pos, &inlinable_kfuncs) {
+		block = container_of(pos, typeof(*block), list);
+		if (block->btf != btf)
+			continue;
+		sh = block->funcs;
+		for (i = 0; i < ARRAY_SIZE(block->funcs); ++i, ++sh) {
+			if (sh->btf_id != btf_id)
+				continue;
+			read_unlock(&inlinable_kfuncs_lock);
 			return sh;
+		}
+		break;
+	}
+	read_unlock(&inlinable_kfuncs_lock);
 	return NULL;
 }
 
@@ -20933,7 +21020,7 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 					  int insn_idx, int *cnt, s32 stack_base, u16 *stack_depth_extra)
 {
 	struct inlinable_kfunc_regs_usage regs_usage;
-	const struct bpf_kfunc_desc *desc;
+	struct bpf_kfunc_call_arg_meta meta;
 	struct bpf_prog *new_prog;
 	struct bpf_insn *insn_buf;
 	struct inlinable_kfunc *sh;
@@ -20943,10 +21030,10 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 	s16 stack_off;
 	u32 insn_num;
 
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
-	if (!desc || IS_ERR(desc))
+	err = fetch_kfunc_meta(env, insn, &meta, NULL);
+	if (err < 0)
 		return ERR_PTR(-EFAULT);
-	sh = find_inlinable_kfunc(desc->func_id);
+	sh = find_inlinable_kfunc(meta.btf, meta.func_id);
 	if (!sh)
 		return NULL;
 

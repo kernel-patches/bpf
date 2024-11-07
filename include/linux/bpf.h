@@ -3501,4 +3501,7 @@ static inline bool bpf_prog_is_raw_tp(const struct bpf_prog *prog)
 	       prog->expected_attach_type == BPF_TRACE_RAW_TP;
 }
 
+void bpf_unregister_inlinable_kfuncs(struct module *module);
+int bpf_register_inlinable_kfuncs(void *elf_bin, u32 size, struct module *module);
+
 #endif /* _LINUX_BPF_H */
