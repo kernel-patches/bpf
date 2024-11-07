@@ -13265,7 +13265,7 @@ static void sanitize_mark_insn_seen(struct bpf_verifier_env *env)
 	 * rewrite/sanitize them.
 	 */
 	if (!vstate->speculative)
-		env->insn_aux_data[env->insn_idx].seen = env->pass_cnt;
+		env->insn_aux_data[env->insn_idx].seen = env->pass_cnt > 0;
 }
 
 static int sanitize_err(struct bpf_verifier_env *env,
@@ -15484,6 +15484,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 {
 	struct bpf_verifier_state *this_branch = env->cur_state;
 	struct bpf_verifier_state *other_branch;
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[*insn_idx];
 	struct bpf_reg_state *regs = this_branch->frame[this_branch->curframe]->regs;
 	struct bpf_reg_state *dst_reg, *other_branch_regs, *src_reg = NULL;
 	struct bpf_reg_state *eq_branch_regs;
@@ -15510,6 +15511,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 				insn->off, insn->imm);
 			return -EINVAL;
 		}
+		aux->true_branch_taken = true;
+		aux->false_branch_taken = true;
 		prev_st = find_prev_entry(env, cur_st->parent, idx);
 
 		/* branch out 'fallthrough' insn as a new state to explore */
@@ -15579,6 +15582,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		 * the fall-through branch for simulation under speculative
 		 * execution.
 		 */
+		aux->true_branch_taken = true;
 		if (!env->bypass_spec_v1 &&
 		    !sanitize_speculative_path(env, insn, *insn_idx + 1,
 					       *insn_idx))
@@ -15592,6 +15596,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		 * program will go. If needed, push the goto branch for
 		 * simulation under speculative execution.
 		 */
+		aux->false_branch_taken = true;
 		if (!env->bypass_spec_v1 &&
 		    !sanitize_speculative_path(env, insn,
 					       *insn_idx + insn->off + 1,
@@ -15601,6 +15606,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			print_insn_state(env, this_branch->frame[this_branch->curframe]);
 		return 0;
 	}
+
+	aux->true_branch_taken = true;
+	aux->false_branch_taken = true;
 
 	/* Push scalar registers sharing same ID to jump history,
 	 * do this before creating 'other_branch', so that both
@@ -19288,7 +19296,7 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 {
 	struct bpf_insn_aux_data *old_data = env->insn_aux_data;
 	struct bpf_insn *insn = new_prog->insnsi;
-	u32 old_seen = old_data[off].seen;
+	bool old_seen = old_data[off].seen;
 	u32 prog_len;
 	int i;
 
@@ -19608,9 +19616,9 @@ static void opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 		if (!insn_is_cond_jump(insn->code))
 			continue;
 
-		if (!aux_data[i + 1].seen)
+		if (aux_data[i].true_branch_taken && !aux_data[i].false_branch_taken)
 			ja.off = insn->off;
-		else if (!aux_data[i + 1 + insn->off].seen)
+		else if (!aux_data[i].true_branch_taken && aux_data[i].false_branch_taken)
 			ja.off = 0;
 		else
 			continue;

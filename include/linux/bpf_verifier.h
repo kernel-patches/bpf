@@ -570,7 +570,9 @@ struct bpf_insn_aux_data {
 	struct btf_struct_meta *kptr_struct_meta;
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
-	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
+	bool seen; /* this insn was processed by the verifier at env->pass_cnt */
+	bool true_branch_taken; /* for cond jumps, set if verifier ever took true branch */
+	bool false_branch_taken; /* for cond jumps, set if verifier ever took false branch */
 	bool sanitize_stack_spill; /* subject to Spectre v4 sanitation */
 	bool zext_dst; /* this insn zero extends dst reg */
 	bool needs_zext; /* alu op needs to clear upper bits */
