@@ -586,6 +586,14 @@ BTF_ID_FLAGS(func, bpf_kfunc_trusted_num_test, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_rcu_task_test, KF_RCU)
 BTF_ID_FLAGS(func, bpf_testmod_ctx_create, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_testmod_ctx_release, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc1)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc2)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc3)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc4)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc5)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc6)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc7)
+BTF_ID_FLAGS(func, bpf_test_inline_kfunc8)
 BTF_KFUNCS_END(bpf_testmod_common_kfunc_ids)
 
 BTF_ID_LIST(bpf_testmod_dtor_ids)
@@ -1315,6 +1323,19 @@ static struct bpf_struct_ops testmod_st_ops = {
 
 extern int bpf_fentry_test1(int a);
 
+asm (
+"	.pushsection .data, \"a\"			\n"
+"	.global test_inlinable_kfuncs_data		\n"
+"test_inlinable_kfuncs_data:				\n"
+"	.incbin \"test_inlinable_kfuncs.bpf.linked.o\"	\n"
+"	.global test_inlinable_kfuncs_data_end		\n"
+"test_inlinable_kfuncs_data_end:				\n"
+"	.popsection					\n"
+);
+
+extern void test_inlinable_kfuncs_data;
+extern void test_inlinable_kfuncs_data_end;
+
 static int bpf_testmod_init(void)
 {
 	const struct btf_id_dtor_kfunc bpf_testmod_dtors[] = {
@@ -1336,6 +1357,9 @@ static int bpf_testmod_init(void)
 	ret = ret ?: register_bpf_struct_ops(&testmod_st_ops, bpf_testmod_st_ops);
 	ret = ret ?: register_btf_id_dtor_kfuncs(bpf_testmod_dtors,
 						 ARRAY_SIZE(bpf_testmod_dtors),
+						 THIS_MODULE);
+	ret = ret ?: bpf_register_inlinable_kfuncs(&test_inlinable_kfuncs_data,
+						 &test_inlinable_kfuncs_data_end - &test_inlinable_kfuncs_data,
 						 THIS_MODULE);
 	if (ret < 0)
 		return ret;
@@ -1373,6 +1397,7 @@ static void bpf_testmod_exit(void)
 	bpf_kfunc_close_sock();
 	sysfs_remove_bin_file(kernel_kobj, &bin_attr_bpf_testmod_file);
 	unregister_bpf_testmod_uprobe();
+	bpf_unregister_inlinable_kfuncs(THIS_MODULE);
 }
 
 module_init(bpf_testmod_init);
