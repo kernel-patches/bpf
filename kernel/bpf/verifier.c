@@ -19419,7 +19419,7 @@ static int adjust_jmp_off(struct bpf_prog *prog, u32 tgt_idx, u32 delta)
 static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 					      u32 off, u32 cnt)
 {
-	int i, j;
+	int i, j, first_hidden = env->subprog_cnt - env->hidden_subprog_cnt;
 
 	/* find first prog starting at or after off (first to remove) */
 	for (i = 0; i < env->subprog_cnt; i++)
@@ -19446,6 +19446,8 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 			env->subprog_info + j,
 			sizeof(*env->subprog_info) * move);
 		env->subprog_cnt -= j - i;
+		if (first_hidden <= j - 1)
+			env->hidden_subprog_cnt -= j - first_hidden;
 
 		/* remove func_info */
 		if (aux->func_info) {
@@ -21215,15 +21217,20 @@ next_insn:
 /* The function requires that first instruction in 'patch' is insnsi[prog->len - 1] */
 static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *patch, int len)
 {
-	struct bpf_subprog_info *info = env->subprog_info;
+	struct bpf_subprog_info *info, *tmp;
 	int cnt = env->subprog_cnt;
 	struct bpf_prog *prog;
 
-	/* We only reserve one slot for hidden subprogs in subprog_info. */
-	if (env->hidden_subprog_cnt) {
-		verbose(env, "verifier internal error: only one hidden subprog supported\n");
-		return -EFAULT;
+	if (cnt == env->subprog_cap) {
+		env->subprog_cap *= 2;
+		tmp = vrealloc(env->subprog_info,
+			       array_size(sizeof(*env->subprog_info), env->subprog_cap + 1),
+			       GFP_KERNEL | __GFP_ZERO);
+		if (!tmp)
+			return -ENOMEM;
+		env->subprog_info = tmp;
 	}
+	info = env->subprog_info;
 	/* We're not patching any existing instruction, just appending the new
 	 * ones for the hidden subprog. Hence all of the adjustment operations
 	 * in bpf_patch_insn_data are no-ops.
@@ -23122,6 +23129,13 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	ret = -ENOMEM;
 	if (!env->insn_aux_data)
 		goto err_free_env;
+	env->subprog_cap = BPF_MAX_SUBPROGS;
+	env->subprog_info = vzalloc(array_size(sizeof(*env->subprog_info),
+					       env->subprog_cap + 1 /* max + 1 for the fake subprog */));
+	if (!env->subprog_info) {
+		ret = -ENOMEM;
+		goto err_free_env;
+	}
 	for (i = 0; i < len; i++)
 		env->insn_aux_data[i].orig_idx = i;
 	env->prog = *prog;
@@ -23353,8 +23367,9 @@ err_release_maps:
 err_unlock:
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
-	vfree(env->insn_aux_data);
 err_free_env:
+	vfree(env->subprog_info);
+	vfree(env->insn_aux_data);
 	kvfree(env);
 	return ret;
 }
