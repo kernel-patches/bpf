@@ -13209,6 +13209,67 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return 0;
 }
 
+static int mark_stack_as_kernel_values(struct bpf_verifier_env *env, struct bpf_func_state *func)
+{
+	struct bpf_stack_state *slot;
+	struct bpf_reg_state *spill;
+	int spi, i;
+
+	if (!inside_inlinable_kfunc(env, func->callsite)) {
+		verbose(env, "verifier bug: shouldn't mark frame#%d as kernel values\n",
+			func->frameno);
+		return -EFAULT;
+	}
+
+	for (spi = 0; spi < func->allocated_stack / BPF_REG_SIZE; spi++) {
+		slot = &func->stack[spi];
+		spill = &slot->spilled_ptr;
+		mark_reg_kernel_value(spill);
+		spill->live |= REG_LIVE_WRITTEN;
+		for (i = 0; i < BPF_REG_SIZE; i++)
+			slot->slot_type[i] = STACK_SPILL;
+		mark_stack_slot_scratched(env, spi);
+	}
+
+	return 0;
+}
+
+static int check_internal_call(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_reg_state *reg, *regs = cur_regs(env);
+	struct bpf_kfunc_call_arg_meta meta;
+	int err, i, nargs;
+
+	err = fetch_kfunc_meta(env, insn, &meta, NULL);
+	if (err < 0)
+		return -EFAULT;
+
+	nargs = btf_type_vlen(meta.func_proto);
+	for (i = 0; i < nargs; i++) {
+		reg = &regs[BPF_REG_1 + i];
+		switch (reg->type) {
+		case SCALAR_VALUE:
+		case KERNEL_VALUE:
+			break;
+		case PTR_TO_STACK:
+			err = mark_stack_as_kernel_values(env, func(env, reg));
+			if (err)
+				return err;
+			break;
+		default:
+			verbose(env, "verifier bug: arg#%i unexpected register type %s\n",
+				i, reg_type_str(env, reg->type));
+			return -EFAULT;
+		}
+	}
+	for (i = 0; i < CALLER_SAVED_REGS; i++) {
+		mark_reg_not_init(env, regs, caller_saved[i]);
+		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
+	}
+	mark_reg_kernel_value(&regs[BPF_REG_0]);
+	return 0;
+}
+
 static bool check_reg_sane_offset(struct bpf_verifier_env *env,
 				  const struct bpf_reg_state *reg,
 				  enum bpf_reg_type type)
@@ -18828,7 +18889,8 @@ static int do_check(struct bpf_verifier_env *env)
 					return -EINVAL;
 				}
 
-				if (env->cur_state->active_lock.ptr) {
+				if (env->cur_state->active_lock.ptr &&
+				    !inside_inlinable_kfunc(env, env->insn_idx)) {
 					if ((insn->src_reg == BPF_REG_0 && insn->imm != BPF_FUNC_spin_unlock) ||
 					    (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
 					     (insn->off != 0 || !is_bpf_graph_api_kfunc(insn->imm)))) {
@@ -18838,6 +18900,9 @@ static int do_check(struct bpf_verifier_env *env)
 				}
 				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
+				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+					   inside_inlinable_kfunc(env, env->insn_idx)) {
+					err = check_internal_call(env, insn);
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
 					if (!err && is_bpf_throw_kfunc(insn)) {
