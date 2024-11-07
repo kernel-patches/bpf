@@ -560,6 +560,8 @@ struct bpf_insn_aux_data {
 		 * the state of the relevant registers to make decision about inlining
 		 */
 		struct bpf_loop_inline_state loop_inline_state;
+		/* for kfunc calls, instance of the inlinable kfunc instance subprog */
+		u32 kfunc_instance_subprog;
 	};
 	union {
 		/* remember the size of type passed to bpf_obj_new to rewrite R1 */
@@ -722,6 +724,8 @@ struct bpf_verifier_env {
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 id_gen;			/* used to generate unique reg IDs */
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
+	u32 first_kfunc_instance;	/* first inlinable kfunc instance subprog number */
+	u32 last_kfunc_instance;	/* last inlinable kfunc instance subprog number */
 	int exception_callback_subprog;
 	bool explore_alu_limits;
 	bool allow_ptr_leaks;
@@ -785,6 +789,7 @@ struct bpf_verifier_env {
 	 * e.g., in reg_type_str() to generate reg_type string
 	 */
 	char tmp_str_buf[TMP_STR_BUF_LEN];
+	char tmp_str_buf2[TMP_STR_BUF_LEN];
 	struct bpf_insn insn_buf[INSN_BUF_SIZE];
 	struct bpf_insn epilogue_buf[INSN_BUF_SIZE];
 };

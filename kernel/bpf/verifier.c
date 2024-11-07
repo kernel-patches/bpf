@@ -3420,6 +3420,25 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 	return env->insn_aux_data[insn_idx].jmp_point;
 }
 
+static bool is_inlinable_kfunc_call(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+
+	return bpf_pseudo_kfunc_call(insn) &&
+	       aux->kfunc_instance_subprog != 0;
+}
+
+static int inlinable_kfunc_instance_start(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	int subprog = aux->kfunc_instance_subprog;
+
+	if (!subprog)
+		return -1;
+	return env->subprog_info[subprog].start;
+}
+
 #define LR_FRAMENO_BITS	3
 #define LR_SPI_BITS	6
 #define LR_ENTRY_BITS	(LR_SPI_BITS + LR_FRAMENO_BITS + 1)
@@ -3906,13 +3925,20 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		if (class == BPF_STX)
 			bt_set_reg(bt, sreg);
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
-		if (bpf_pseudo_call(insn)) {
+		bool return_from_inlinable_kfunc_call =
+			is_inlinable_kfunc_call(env, idx) && subseq_idx == inlinable_kfunc_instance_start(env, idx);
+
+		if (bpf_pseudo_call(insn) || return_from_inlinable_kfunc_call) {
 			int subprog_insn_idx, subprog;
 
-			subprog_insn_idx = idx + insn->imm + 1;
-			subprog = find_subprog(env, subprog_insn_idx);
-			if (subprog < 0)
-				return -EFAULT;
+			if (is_inlinable_kfunc_call(env, idx)) {
+				subprog = env->insn_aux_data[idx].kfunc_instance_subprog;
+			} else {
+				subprog_insn_idx = idx + insn->imm + 1;
+				subprog = find_subprog(env, subprog_insn_idx);
+				if (subprog < 0)
+					return -EFAULT;
+			}
 
 			if (subprog_is_global(env, subprog)) {
 				/* check that jump history doesn't have any
@@ -3933,6 +3959,17 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				}
 				/* global subprog always sets R0 */
 				bt_clear_reg(bt, BPF_REG_0);
+				return 0;
+			} else if (is_inlinable_kfunc_call(env, idx)) {
+				if (bt_reg_mask(bt) & ~BPF_REGMASK_ARGS) {
+					verbose(env, "BUG regs %x\n", bt_reg_mask(bt));
+					WARN_ONCE(1, "verifier backtracking bug");
+					return -EFAULT;
+				}
+				/* do not backtrack to the callsite, clear any precision marks
+				 * that might be present in the fake frame (e.g. dynptr type spill).
+				 */
+				bt_reset(bt);
 				return 0;
 			} else {
 				/* static subprog call instruction, which
@@ -12525,6 +12562,123 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	return 0;
 }
 
+/* Establish an independent call stack for inlinable kfunc instance verification,
+ * copy "distilled" view of parameters from the callsite:
+ * - Scalars copied as-is.
+ * - Null pointers copied as-is.
+ * - For dynptrs:
+ *   - a fake frame #0 is created;
+ *   - a register spill corresponding to bpf_dynptr_kern->size field is created,
+ *     this spill range/tnum is set to represent dynptr type;
+ *   - a register spill corresponding to bpf_dynptr_kern->data field is created,
+ *     this spill's type is set to KERNEL_VALUE.
+ *   - the parameter itself is represented as pointer to stack.
+ * - Everything else is copied as KERNEL_VALUE.
+ *
+ * This allows to isolate main program verification from verification of
+ * kfunc instance bodies.
+ */
+static int push_inlinable_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta,
+			      u32 subprog)
+{
+	struct bpf_reg_state *reg, *sh_reg, *sh_regs, *regs = cur_regs(env);
+	const struct btf_param *args, *arg;
+	const struct btf *btf = meta->btf;
+	struct bpf_verifier_state *st;
+	struct bpf_func_state *frame;
+	const struct btf_type *t;
+	int fake_spi = 0;
+	u32 i, nargs;
+
+	st = push_async_cb(env, env->subprog_info[subprog].start,
+			   env->insn_idx, subprog, false);
+	if (!st)
+		return -ENOMEM;
+
+	frame = kzalloc(sizeof(*frame), GFP_KERNEL);
+	if (!frame)
+		return -ENOMEM;
+	init_func_state(env, frame,
+			BPF_MAIN_FUNC /* callsite */,
+			1 /* frameno within this callchain */,
+			subprog /* subprog number within this prog */);
+	/* Use frame #0 to represent memory objects with some known bits. */
+	st->frame[1] = frame;
+	st->curframe = 1;
+
+	args = (const struct btf_param *)(meta->func_proto + 1);
+	nargs = btf_type_vlen(meta->func_proto);
+	sh_regs = st->frame[1]->regs;
+	for (i = 0; i < nargs; i++) {
+		arg = &args[i];
+		reg = &regs[i + 1];
+		sh_reg = &sh_regs[i + 1];
+		t = btf_type_skip_modifiers(btf, arg->type, NULL);
+
+		if (is_kfunc_arg_dynptr(meta->btf, arg)) {
+			struct bpf_reg_state *fake_reg = &env->fake_reg[0];
+			enum bpf_dynptr_type type;
+			struct tnum a, b, c;
+			int spi;
+
+			if (reg->type == CONST_PTR_TO_DYNPTR) {
+				type = reg->dynptr.type;
+			} else if (reg->type == PTR_TO_STACK) {
+				spi = dynptr_get_spi(env, reg);
+				if (spi < 0) {
+					verbose(env, "BUG: can't recognize dynptr param\n");
+					return -EFAULT;
+				}
+				type = func(env, reg)->stack[spi].spilled_ptr.dynptr.type;
+			} else {
+				return -EFAULT;
+			}
+			grow_stack_state(env, st->frame[0], (fake_spi + 2) * BPF_REG_SIZE);
+
+			memset(fake_reg, 0, sizeof(*fake_reg));
+			__mark_reg_unknown_imprecise(fake_reg);
+			/* Setup bpf_dynptr_kern->size as expected by bpf_dynptr_get_type().
+			 * Exact value of the dynptr type could be recovered by verifier
+			 * when BPF code generated for bpf_dynptr_get_type() is processed.
+			 */
+			a = tnum_lshift(tnum_const(type), 28);	/* type */
+			b = tnum_rshift(tnum_unknown, 64 - 28);	/* size */
+			c = tnum_lshift(tnum_unknown, 31);		/* read-only bit */
+			fake_reg->var_off = tnum_or(tnum_or(a, b), c);
+			reg_bounds_sync(fake_reg);
+			save_register_state(env, st->frame[0], fake_spi++, fake_reg, 4);
+
+			/* bpf_dynptr_kern->data */
+			mark_reg_kernel_value(fake_reg);
+			save_register_state(env, st->frame[0], fake_spi++, fake_reg, BPF_REG_SIZE);
+
+			sh_reg->type = PTR_TO_STACK;
+			sh_reg->var_off = tnum_const(- fake_spi * BPF_REG_SIZE);
+			sh_reg->frameno = 0;
+			reg_bounds_sync(sh_reg);
+		} else if (register_is_null(reg) && btf_is_ptr(t)) {
+			__mark_reg_known_zero(sh_reg);
+			sh_reg->type = SCALAR_VALUE;
+		} else if (reg->type == SCALAR_VALUE) {
+			copy_register_state(sh_reg, reg);
+			sh_reg->subreg_def = 0;
+			sh_reg->id = 0;
+		} else {
+			mark_reg_kernel_value(sh_reg);
+		}
+	}
+	return 0;
+}
+
+static bool inside_inlinable_kfunc(struct bpf_verifier_env *env, u32 idx)
+{
+	struct bpf_subprog_info *subprog_info = env->subprog_info;
+
+	return env->first_kfunc_instance &&
+	       idx >= subprog_info[env->first_kfunc_instance].start &&
+	       idx < subprog_info[env->last_kfunc_instance + 1].start;
+}
+
 static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 			    struct bpf_insn *insn,
 			    struct bpf_kfunc_call_arg_meta *meta,
@@ -12534,6 +12688,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	u32 func_id, *kfunc_flags;
 	const char *func_name;
 	struct btf *desc_btf;
+	u32 zero = 0;
 
 	if (kfunc_name)
 		*kfunc_name = NULL;
@@ -12554,7 +12709,13 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 
 	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
 	if (!kfunc_flags) {
-		return -EACCES;
+		/* inlinable kfuncs can call any kernel functions,
+		 * not just those residing in id sets.
+		 */
+		if (inside_inlinable_kfunc(env, env->insn_idx))
+			kfunc_flags = &zero;
+		else
+			return -EACCES;
 	}
 
 	memset(meta, 0, sizeof(*meta));
@@ -12595,6 +12756,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return err;
 	desc_btf = meta.btf;
 	insn_aux = &env->insn_aux_data[insn_idx];
+	nargs = btf_type_vlen(meta.func_proto);
 
 	insn_aux->is_iter_next = is_iter_next_kfunc(&meta);
 
@@ -12613,6 +12775,22 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if (is_inlinable_kfunc_call(env, insn_idx)) {
+		err = push_inlinable_kfunc(env, &meta, insn_aux->kfunc_instance_subprog);
+		if (err < 0)
+			return err;
+		/* At the moment mark_chain_precision() does not
+                 * propagate precision from within inlinable kfunc
+                 * instance body. As push_inlinable_kfunc() passes
+                 * scalar parameters as-is any such parameter might be
+                 * used in the precise context. Conservatively mark
+                 * these parameters as precise.
+		 */
+		for (i = 0; i < nargs; ++i)
+			if (regs[i + 1].type == SCALAR_VALUE)
+				mark_chain_precision(env, i + 1);
+	}
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
@@ -13010,7 +13188,6 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
-	nargs = btf_type_vlen(meta.func_proto);
 	args = (const struct btf_param *)(meta.func_proto + 1);
 	for (i = 0; i < nargs; i++) {
 		u32 regno = i + 1;
@@ -16258,7 +16435,11 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 
 	if (visit_callee) {
 		mark_prune_point(env, t);
-		ret = push_insn(t, t + insns[t].imm + 1, BRANCH, env);
+		if (is_inlinable_kfunc_call(env, t))
+			/* visit inlinable kfunc instance bodies to establish prune point marks */
+			ret = push_insn(t, inlinable_kfunc_instance_start(env, t), BRANCH, env);
+		else
+			ret = push_insn(t, t + insns[t].imm + 1, BRANCH, env);
 	}
 	return ret;
 }
@@ -16595,7 +16776,9 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 				mark_force_checkpoint(env, t);
 			}
 		}
-		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
+		return visit_func_call_insn(t, insns, env,
+					    insn->src_reg == BPF_PSEUDO_CALL ||
+					    is_inlinable_kfunc_call(env, t));
 
 	case BPF_JA:
 		if (BPF_SRC(insn->code) != BPF_K)
@@ -18718,7 +18901,8 @@ process_bpf_exit_full:
 				if (exception_exit)
 					goto process_bpf_exit;
 
-				if (state->curframe) {
+				if (state->curframe &&
+				    state->frame[state->curframe]->callsite != BPF_MAIN_FUNC) {
 					/* exit from nested function */
 					err = prepare_func_exit(env, &env->insn_idx);
 					if (err)
@@ -21041,18 +21225,21 @@ static struct inlinable_kfunc *find_inlinable_kfunc(struct btf *btf, u32 btf_id)
  * report extra stack used in 'stack_depth_extra'.
  */
 static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
-					  int insn_idx, int *cnt, s32 stack_base, u16 *stack_depth_extra)
+					  int insn_idx, int *cnt, s32 stack_base, u16 *stack_depth_extra,
+					  u32 subprog)
 {
 	struct inlinable_kfunc_regs_usage regs_usage;
+	struct bpf_insn *insn_buf, *subprog_insns;
+	struct bpf_subprog_info *subprog_info;
 	struct bpf_kfunc_call_arg_meta meta;
 	struct bpf_prog *new_prog;
-	struct bpf_insn *insn_buf;
 	struct inlinable_kfunc *sh;
-	int i, j, r, off, err, exit;
+	int i, j, r, off, exit;
 	u32 subprog_insn_cnt;
 	u16 extra_slots;
 	s16 stack_off;
 	u32 insn_num;
+	int err;
 
 	err = fetch_kfunc_meta(env, insn, &meta, NULL);
 	if (err < 0)
@@ -21061,8 +21248,10 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 	if (!sh)
 		return NULL;
 
-	subprog_insn_cnt = sh->insn_num;
-	scan_regs_usage(sh->insns, subprog_insn_cnt, &regs_usage);
+	subprog_info = &env->subprog_info[subprog];
+	subprog_insn_cnt = (subprog_info + 1)->start - subprog_info->start;
+	subprog_insns = env->prog->insnsi + subprog_info->start;
+	scan_regs_usage(subprog_insns, subprog_insn_cnt, &regs_usage);
 	if (regs_usage.r10_escapes) {
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "can't inline kfunc %s at insn %d, r10 escapes\n",
@@ -21082,7 +21271,7 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "inlining kfunc %s at insn %d\n", sh->name, insn_idx);
-	memcpy(insn_buf + extra_slots, sh->insns, subprog_insn_cnt * sizeof(*insn_buf));
+	memcpy(insn_buf + extra_slots, subprog_insns, subprog_insn_cnt * sizeof(*insn_buf));
 	off = stack_base;
 	i = 0;
 	j = insn_num - 1;
@@ -21135,13 +21324,6 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 		default:
 			break;
 		}
-
-		/* Make sure kernel function calls from within kfunc body could be jitted. */
-		if (bpf_pseudo_kfunc_call(insn)) {
-			err = add_kfunc_call(env, insn->imm, insn->off);
-			if (err < 0)
-				return ERR_PTR(err);
-		}
 	}
 
 	*cnt = insn_num;
@@ -21149,24 +21331,33 @@ static struct bpf_prog *inline_kfunc_call(struct bpf_verifier_env *env, struct b
 	return new_prog;
 }
 
-/* Do this after all stack depth adjustments */
+/* Copy bodies of inlinable kfunc instances to the callsites
+ * and remove instance subprograms.
+ * Do this after all stack depth adjustments.
+ */
 static int inline_kfunc_calls(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog;
 	struct bpf_insn *insn = prog->insnsi;
 	const int insn_cnt = prog->len;
 	struct bpf_prog *new_prog;
-	int i, cnt, delta = 0, cur_subprog = 0;
+	int err, i, cnt, delta = 0, cur_subprog = 0;
 	struct bpf_subprog_info *subprogs = env->subprog_info;
 	u16 stack_depth = subprogs[cur_subprog].stack_depth;
 	u16 call_extra_stack = 0, subprog_extra_stack = 0;
+	struct bpf_insn_aux_data *aux;
 
 	for (i = 0; i < insn_cnt;) {
 		if (!bpf_pseudo_kfunc_call(insn))
 			goto next_insn;
 
+		aux = &env->insn_aux_data[i + delta];
+		if (!aux->kfunc_instance_subprog)
+			goto next_insn;
+
 		new_prog = inline_kfunc_call(env, insn, i + delta, &cnt,
-					     -stack_depth, &call_extra_stack);
+					     -stack_depth, &call_extra_stack,
+					     aux->kfunc_instance_subprog);
 		if (IS_ERR(new_prog))
 			return PTR_ERR(new_prog);
 		if (!new_prog)
@@ -21189,7 +21380,14 @@ next_insn:
 	}
 
 	env->prog->aux->stack_depth = subprogs[0].stack_depth;
-
+	if (env->first_kfunc_instance) {
+		/* Do not jit instance subprograms. */
+		cnt = subprogs[env->last_kfunc_instance + 1].start -
+		      subprogs[env->first_kfunc_instance].start;
+		err = verifier_remove_insns(env, subprogs[env->first_kfunc_instance].start, cnt);
+		if (err < 0)
+			return err;
+	}
 	return 0;
 }
 
@@ -21265,6 +21463,82 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	info[cnt].start = prog->len - len + 1;
 	env->subprog_cnt++;
 	env->hidden_subprog_cnt++;
+	return 0;
+}
+
+/* For each callsite of the inlinable kfunc add a hidden subprogram
+ * with a copy of kfunc body (instance). Record the number of the
+ * added subprogram in bpf_insn_aux_data->kfunc_instance_subprog
+ * field for the callsite.
+ *
+ * During main verification pass verifier would discover if some of
+ * the branches / code inside each body could be removed because of
+ * known parameter values.
+ *
+ * At the end of program processing inline_kfunc_calls()
+ * would copy bodies to callsites and delete the subprograms.
+ */
+static int instantiate_inlinable_kfuncs(struct bpf_verifier_env *env)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+	const int insn_cnt = env->prog->len;
+	struct bpf_kfunc_call_arg_meta meta;
+	struct bpf_insn *insn, *insn_buf;
+	struct inlinable_kfunc *sh = NULL;
+	int i, j, err;
+	u32 subprog;
+	void *tmp;
+
+	for (i = 0; i < insn_cnt; ++i) {
+		insn = env->prog->insnsi + i;
+		if (!bpf_pseudo_kfunc_call(insn))
+			continue;
+		err = fetch_kfunc_meta(env, insn, &meta, NULL);
+		if (err < 0)
+			/* missing kfunc, error would be reported later */
+			continue;
+		sh = find_inlinable_kfunc(meta.btf, meta.func_id);
+		if (!sh)
+			continue;
+		for (j = 0; j < sh->insn_num; ++j) {
+			if (!bpf_pseudo_kfunc_call(&sh->insns[j]))
+				continue;
+			err = add_kfunc_call(env, sh->insns[j].imm, sh->insns[j].off);
+			if (err < 0)
+				return err;
+		}
+		subprog = env->subprog_cnt;
+		insn_buf = kmalloc_array(sh->insn_num + 1, sizeof(*insn_buf), GFP_KERNEL);
+		if (!insn_buf)
+			return -ENOMEM;
+		/* this is an unfortunate requirement of add_hidden_subprog() */
+		insn_buf[0] = env->prog->insnsi[env->prog->len - 1];
+		memcpy(insn_buf + 1, sh->insns,  sh->insn_num * sizeof(*insn_buf));
+		err = add_hidden_subprog(env, insn_buf, sh->insn_num + 1);
+		kfree(insn_buf);
+		if (err)
+			return err;
+		tmp = krealloc_array(aux->func_info, aux->func_info_cnt + 1,
+				     sizeof(*aux->func_info), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+		aux->func_info = tmp;
+		memset(&aux->func_info[aux->func_info_cnt], 0, sizeof(*aux->func_info));
+		aux->func_info[aux->func_info_cnt].insn_off = env->subprog_info[subprog].start;
+		tmp = krealloc_array(aux->func_info_aux, aux->func_info_cnt + 1,
+				     sizeof(*aux->func_info_aux), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+		aux->func_info_aux = tmp;
+		memset(&aux->func_info_aux[aux->func_info_cnt], 0, sizeof(*aux->func_info_aux));
+		aux->func_info_aux[aux->func_info_cnt].linkage = BTF_FUNC_STATIC;
+		aux->func_info_cnt++;
+
+		if (!env->first_kfunc_instance)
+			env->first_kfunc_instance = subprog;
+		env->last_kfunc_instance = subprog;
+		env->insn_aux_data[i].kfunc_instance_subprog = subprog;
+	}
 	return 0;
 }
 
@@ -23204,13 +23478,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		env->test_state_freq = attr->prog_flags & BPF_F_TEST_STATE_FREQ;
 	env->test_reg_invariants = attr->prog_flags & BPF_F_TEST_REG_INVARIANTS;
 
-	env->explored_states = kvcalloc(state_htab_size(env),
-				       sizeof(struct bpf_verifier_state_list *),
-				       GFP_USER);
-	ret = -ENOMEM;
-	if (!env->explored_states)
-		goto skip_full_check;
-
 	ret = check_btf_info_early(env, attr, uattr);
 	if (ret < 0)
 		goto skip_full_check;
@@ -23241,8 +23508,19 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 			goto skip_full_check;
 	}
 
+	ret = instantiate_inlinable_kfuncs(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	ret = check_cfg(env);
 	if (ret < 0)
+		goto skip_full_check;
+
+	env->explored_states = kvcalloc(state_htab_size(env),
+				       sizeof(struct bpf_verifier_state_list *),
+				       GFP_USER);
+	ret = -ENOMEM;
+	if (!env->explored_states)
 		goto skip_full_check;
 
 	ret = mark_fastcall_patterns(env);
