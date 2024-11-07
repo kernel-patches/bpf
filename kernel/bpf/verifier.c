@@ -12317,6 +12317,11 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 			}
+			/* Ensure the iter arg is a stack pointer */
+			if (reg->type != PTR_TO_STACK) {
+				verbose(env, "arg#%d expected pointer to the iterator\n", i);
+				return -EINVAL;
+			}
 			ret = process_iter_arg(env, regno, insn_idx, meta);
 			if (ret < 0)
 				return ret;
