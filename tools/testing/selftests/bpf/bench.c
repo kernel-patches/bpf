@@ -549,6 +549,7 @@ extern const struct bench bench_local_storage_create;
 extern const struct bench bench_htab_mem;
 extern const struct bench bench_crypto_encrypt;
 extern const struct bench bench_crypto_decrypt;
+extern const struct bench bench_dynptr_slice;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -609,6 +610,7 @@ static const struct bench *benchs[] = {
 	&bench_htab_mem,
 	&bench_crypto_encrypt,
 	&bench_crypto_decrypt,
+	&bench_dynptr_slice,
 };
 
 static void find_benchmark(void)
