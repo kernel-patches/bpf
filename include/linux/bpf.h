@@ -1319,11 +1319,43 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_XDP,
 };
 
+/* Since the upper 8 bits of dynptr->size is reserved, the
+ * maximum supported size is 2^24 - 1.
+ */
+#define DYNPTR_MAX_SIZE	((1UL << 24) - 1)
+#define DYNPTR_TYPE_SHIFT	28
+#define DYNPTR_SIZE_MASK	0xFFFFFF
+#define DYNPTR_RDONLY_BIT	BIT(31)
+
 int bpf_dynptr_check_size(u32 size);
-u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr);
+
+static inline u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr)
+{
+	return ptr->size & DYNPTR_SIZE_MASK;
+}
+
 const void *__bpf_dynptr_data(const struct bpf_dynptr_kern *ptr, u32 len);
 void *__bpf_dynptr_data_rw(const struct bpf_dynptr_kern *ptr, u32 len);
-bool __bpf_dynptr_is_rdonly(const struct bpf_dynptr_kern *ptr);
+
+static inline bool __bpf_dynptr_is_rdonly(const struct bpf_dynptr_kern *ptr)
+{
+	return ptr->size & DYNPTR_RDONLY_BIT;
+}
+
+static inline enum bpf_dynptr_type bpf_dynptr_get_type(const struct bpf_dynptr_kern *ptr)
+{
+	return (ptr->size & ~(DYNPTR_RDONLY_BIT)) >> DYNPTR_TYPE_SHIFT;
+}
+
+static inline int bpf_dynptr_check_off_len(const struct bpf_dynptr_kern *ptr, u32 offset, u32 len)
+{
+	u32 size = __bpf_dynptr_size(ptr);
+
+	if (len > size || offset > size - len)
+		return -E2BIG;
+
+	return 0;
+}
 
 #ifdef CONFIG_BPF_JIT
 int bpf_trampoline_link_prog(struct bpf_tramp_link *link,

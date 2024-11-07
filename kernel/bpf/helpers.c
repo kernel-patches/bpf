@@ -1641,19 +1641,6 @@ static const struct bpf_func_proto bpf_kptr_xchg_proto = {
 	.arg2_btf_id  = BPF_PTR_POISON,
 };
 
-/* Since the upper 8 bits of dynptr->size is reserved, the
- * maximum supported size is 2^24 - 1.
- */
-#define DYNPTR_MAX_SIZE	((1UL << 24) - 1)
-#define DYNPTR_TYPE_SHIFT	28
-#define DYNPTR_SIZE_MASK	0xFFFFFF
-#define DYNPTR_RDONLY_BIT	BIT(31)
-
-bool __bpf_dynptr_is_rdonly(const struct bpf_dynptr_kern *ptr)
-{
-	return ptr->size & DYNPTR_RDONLY_BIT;
-}
-
 void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr)
 {
 	ptr->size |= DYNPTR_RDONLY_BIT;
@@ -1662,16 +1649,6 @@ void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr)
 static void bpf_dynptr_set_type(struct bpf_dynptr_kern *ptr, enum bpf_dynptr_type type)
 {
 	ptr->size |= type << DYNPTR_TYPE_SHIFT;
-}
-
-static enum bpf_dynptr_type bpf_dynptr_get_type(const struct bpf_dynptr_kern *ptr)
-{
-	return (ptr->size & ~(DYNPTR_RDONLY_BIT)) >> DYNPTR_TYPE_SHIFT;
-}
-
-u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr)
-{
-	return ptr->size & DYNPTR_SIZE_MASK;
 }
 
 static void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
@@ -1698,16 +1675,6 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr)
 {
 	memset(ptr, 0, sizeof(*ptr));
-}
-
-static int bpf_dynptr_check_off_len(const struct bpf_dynptr_kern *ptr, u32 offset, u32 len)
-{
-	u32 size = __bpf_dynptr_size(ptr);
-
-	if (len > size || offset > size - len)
-		return -E2BIG;
-
-	return 0;
 }
 
 BPF_CALL_4(bpf_dynptr_from_mem, void *, data, u32, size, u64, flags, struct bpf_dynptr_kern *, ptr)
@@ -2540,76 +2507,8 @@ __bpf_kfunc struct task_struct *bpf_task_from_vpid(s32 vpid)
 	return p;
 }
 
-/**
- * bpf_dynptr_slice() - Obtain a read-only pointer to the dynptr data.
- * @p: The dynptr whose data slice to retrieve
- * @offset: Offset into the dynptr
- * @buffer__opt: User-provided buffer to copy contents into.  May be NULL
- * @buffer__szk: Size (in bytes) of the buffer if present. This is the
- *               length of the requested slice. This must be a constant.
- *
- * For non-skb and non-xdp type dynptrs, there is no difference between
- * bpf_dynptr_slice and bpf_dynptr_data.
- *
- *  If buffer__opt is NULL, the call will fail if buffer_opt was needed.
- *
- * If the intention is to write to the data slice, please use
- * bpf_dynptr_slice_rdwr.
- *
- * The user must check that the returned pointer is not null before using it.
- *
- * Please note that in the case of skb and xdp dynptrs, bpf_dynptr_slice
- * does not change the underlying packet data pointers, so a call to
- * bpf_dynptr_slice will not invalidate any ctx->data/data_end pointers in
- * the bpf program.
- *
- * Return: NULL if the call failed (eg invalid dynptr), pointer to a read-only
- * data slice (can be either direct pointer to the data or a pointer to the user
- * provided buffer, with its contents containing the data, if unable to obtain
- * direct pointer)
- */
 __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u32 offset,
-				   void *buffer__opt, u32 buffer__szk)
-{
-	const struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
-	enum bpf_dynptr_type type;
-	u32 len = buffer__szk;
-	int err;
-
-	if (!ptr->data)
-		return NULL;
-
-	err = bpf_dynptr_check_off_len(ptr, offset, len);
-	if (err)
-		return NULL;
-
-	type = bpf_dynptr_get_type(ptr);
-
-	switch (type) {
-	case BPF_DYNPTR_TYPE_LOCAL:
-	case BPF_DYNPTR_TYPE_RINGBUF:
-		return ptr->data + ptr->offset + offset;
-	case BPF_DYNPTR_TYPE_SKB:
-		if (buffer__opt)
-			return skb_header_pointer(ptr->data, ptr->offset + offset, len, buffer__opt);
-		else
-			return skb_pointer_if_linear(ptr->data, ptr->offset + offset, len);
-	case BPF_DYNPTR_TYPE_XDP:
-	{
-		void *xdp_ptr = bpf_xdp_pointer(ptr->data, ptr->offset + offset, len);
-		if (!IS_ERR_OR_NULL(xdp_ptr))
-			return xdp_ptr;
-
-		if (!buffer__opt)
-			return NULL;
-		bpf_xdp_copy_buf(ptr->data, ptr->offset + offset, buffer__opt, len, false);
-		return buffer__opt;
-	}
-	default:
-		WARN_ONCE(true, "unknown dynptr type %d\n", type);
-		return NULL;
-	}
-}
+				   void *buffer__opt, u32 buffer__szk);
 
 /**
  * bpf_dynptr_slice_rdwr() - Obtain a writable pointer to the dynptr data.
@@ -2703,33 +2602,6 @@ __bpf_kfunc int bpf_dynptr_adjust(const struct bpf_dynptr *p, u32 start, u32 end
 	bpf_dynptr_set_size(ptr, end - start);
 
 	return 0;
-}
-
-__bpf_kfunc bool bpf_dynptr_is_null(const struct bpf_dynptr *p)
-{
-	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
-
-	return !ptr->data;
-}
-
-__bpf_kfunc bool bpf_dynptr_is_rdonly(const struct bpf_dynptr *p)
-{
-	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
-
-	if (!ptr->data)
-		return false;
-
-	return __bpf_dynptr_is_rdonly(ptr);
-}
-
-__bpf_kfunc __u32 bpf_dynptr_size(const struct bpf_dynptr *p)
-{
-	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
-
-	if (!ptr->data)
-		return -EINVAL;
-
-	return __bpf_dynptr_size(ptr);
 }
 
 __bpf_kfunc int bpf_dynptr_clone(const struct bpf_dynptr *p,

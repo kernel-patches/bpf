@@ -63,6 +63,7 @@ LLC ?= $(LLVM_PREFIX)llc$(LLVM_SUFFIX)
 # -fpatchable-function-entry=16,16 is $(PADDING_CFLAGS)
 CFLAGS_REMOVE_inlinable_kfuncs.bpf.bc.o += $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_inlinable_kfuncs.bpf.bc.o += $(PADDING_CFLAGS)
+CFLAGS_inlinable_kfuncs.bpf.bc.o += -D__FOR_BPF
 $(obj)/inlinable_kfuncs.bpf.bc.o: $(src)/inlinable_kfuncs.c
 	$(Q)$(CLANG) $(c_flags) -emit-llvm -c $< -o $@
 
