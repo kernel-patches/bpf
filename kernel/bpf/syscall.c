@@ -886,7 +886,12 @@ static void bpf_map_free_rcu_gp(struct rcu_head *rcu)
 
 static void bpf_map_free_mult_rcu_gp(struct rcu_head *rcu)
 {
-	if (rcu_trace_implies_rcu_gp())
+	struct bpf_map *map = container_of(rcu, struct bpf_map, rcu);
+
+	if (map->map_type == BPF_MAP_TYPE_STRUCT_OPS)
+		/* See comment in the end of bpf_struct_ops_map_alloc */
+		call_rcu_tasks(rcu, bpf_map_free_rcu_gp);
+	else if (rcu_trace_implies_rcu_gp())
 		bpf_map_free_rcu_gp(rcu);
 	else
 		call_rcu(rcu, bpf_map_free_rcu_gp);
