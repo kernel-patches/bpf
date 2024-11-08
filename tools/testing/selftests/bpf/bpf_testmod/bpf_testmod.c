@@ -1016,6 +1016,11 @@ __bpf_kfunc int bpf_kfunc_st_ops_inc10(struct st_ops_args *args)
 	return args->a;
 }
 
+__bpf_kfunc void bpf_kfunc_msleep(u32 msecs)
+{
+	msleep(msecs);
+}
+
 BTF_KFUNCS_START(bpf_testmod_check_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_testmod_test_mod_kfunc)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test1)
@@ -1056,6 +1061,7 @@ BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_prologue, KF_TRUSTED_ARGS | KF_SLEEPABL
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_epilogue, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_pro_epilogue, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_inc10, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_kfunc_msleep, KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
 static int bpf_testmod_ops_init(struct btf *btf)
@@ -1096,25 +1102,6 @@ static const struct bpf_verifier_ops bpf_testmod_verifier_ops = {
 	.is_valid_access = bpf_testmod_ops_is_valid_access,
 };
 
-static int bpf_dummy_reg(void *kdata, struct bpf_link *link)
-{
-	struct bpf_testmod_ops *ops = kdata;
-
-	if (ops->test_1)
-		ops->test_1();
-	/* Some test cases (ex. struct_ops_maybe_null) may not have test_2
-	 * initialized, so we need to check for NULL.
-	 */
-	if (ops->test_2)
-		ops->test_2(4, ops->data);
-
-	return 0;
-}
-
-static void bpf_dummy_unreg(void *kdata, struct bpf_link *link)
-{
-}
-
 static int bpf_testmod_test_1(void)
 {
 	return 0;
@@ -1122,11 +1109,6 @@ static int bpf_testmod_test_1(void)
 
 static void bpf_testmod_test_2(int a, int b)
 {
-}
-
-static int bpf_testmod_tramp(int value)
-{
-	return 0;
 }
 
 static int bpf_testmod_ops__test_maybe_null(int dummy,
@@ -1140,6 +1122,35 @@ static struct bpf_testmod_ops __bpf_testmod_ops = {
 	.test_2 = bpf_testmod_test_2,
 	.test_maybe_null = bpf_testmod_ops__test_maybe_null,
 };
+
+static struct bpf_testmod_ops *__bpf_dummy_ops = &__bpf_testmod_ops;
+
+static int bpf_dummy_reg(void *kdata, struct bpf_link *link)
+{
+	struct bpf_testmod_ops *ops = kdata;
+
+	if (ops->test_1)
+		ops->test_1();
+	/* Some test cases (ex. struct_ops_maybe_null) may not have test_2
+	 * initialized, so we need to check for NULL.
+	 */
+	if (ops->test_2)
+		ops->test_2(4, ops->data);
+
+	WRITE_ONCE(__bpf_dummy_ops, ops);
+
+	return 0;
+}
+
+static void bpf_dummy_unreg(void *kdata, struct bpf_link *link)
+{
+	WRITE_ONCE(__bpf_dummy_ops, &__bpf_testmod_ops);
+}
+
+static int bpf_testmod_tramp(int value)
+{
+	return 0;
+}
 
 struct bpf_struct_ops bpf_bpf_testmod_ops = {
 	.verifier_ops = &bpf_testmod_verifier_ops,
@@ -1375,6 +1386,31 @@ static void bpf_testmod_exit(void)
 	unregister_bpf_testmod_uprobe();
 }
 
+static int run_struct_ops(const char *val, const struct kernel_param *kp)
+{
+	int ret;
+	unsigned int repeat;
+	struct bpf_testmod_ops *ops;
+
+	ret = kstrtouint(val, 10, &repeat);
+	if (ret)
+		return ret;
+
+	if (repeat > 10000)
+		return -ERANGE;
+
+	while (repeat-- > 0) {
+		ops = READ_ONCE(__bpf_dummy_ops);
+		if (ops->test_1)
+			ops->test_1();
+		if (ops->test_2)
+			ops->test_2(0, 0);
+	}
+
+	return 0;
+}
+
+module_param_call(run_struct_ops, run_struct_ops, NULL, NULL, 0200);
 module_init(bpf_testmod_init);
 module_exit(bpf_testmod_exit);
 

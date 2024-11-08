@@ -9,6 +9,7 @@
 #include "struct_ops_nulled_out_cb.skel.h"
 #include "struct_ops_forgotten_cb.skel.h"
 #include "struct_ops_detach.skel.h"
+#include "struct_ops_map_release.skel.h"
 #include "unsupported_ops.skel.h"
 
 static void check_map_info(struct bpf_map_info *info)
@@ -246,6 +247,157 @@ cleanup:
 	struct_ops_forgotten_cb__destroy(skel);
 }
 
+struct test_context {
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+	int total_threads;
+	int wait_threads;
+	int dead_threads;
+	int repeat;
+	int loop;
+};
+
+static int wait_others(struct test_context *ctx)
+{
+	int ret = 0;
+
+	pthread_mutex_lock(&ctx->mutex);
+
+	if (ctx->dead_threads) {
+		pthread_cond_broadcast(&ctx->cond);
+		pthread_mutex_unlock(&ctx->mutex);
+		return -1;
+	}
+
+	++ctx->wait_threads;
+	if (ctx->wait_threads >= ctx->total_threads) {
+		pthread_cond_broadcast(&ctx->cond);
+		ctx->wait_threads = 0;
+	} else {
+		pthread_cond_wait(&ctx->cond, &ctx->mutex);
+		if (ctx->dead_threads)
+			ret = -1;
+	}
+
+	pthread_mutex_unlock(&ctx->mutex);
+
+	return ret;
+}
+
+static void mark_dead(struct test_context *ctx)
+{
+	pthread_mutex_lock(&ctx->mutex);
+	ctx->dead_threads++;
+	pthread_cond_broadcast(&ctx->cond);
+	pthread_mutex_unlock(&ctx->mutex);
+}
+
+static int load_release(struct test_context *ctx)
+{
+	int ret = 0;
+	struct bpf_link *link = NULL;
+	struct struct_ops_map_release *skel = NULL;
+
+	skel = struct_ops_map_release__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load")) {
+		ret = -1;
+		mark_dead(ctx);
+		goto out;
+	}
+
+	link = bpf_map__attach_struct_ops(skel->maps.testmod_ops);
+	if (!ASSERT_OK_PTR(link, "attach_struct_ops")) {
+		ret = -1;
+		mark_dead(ctx);
+		goto out;
+	}
+
+	if (wait_others(ctx)) {
+		ret = -1;
+		goto out;
+	}
+
+out:
+	bpf_link__destroy(link);
+	struct_ops_map_release__destroy(skel);
+	return ret;
+}
+
+static void *thread_load_release(void *arg)
+{
+	struct test_context *ctx = (struct test_context *)arg;
+
+	for (int i = 0; i < ctx->loop; i++)
+		if (load_release(ctx))
+			break;
+	return NULL;
+}
+
+static void *thread_run_prog(void *arg)
+{
+	int fd;
+	int len;
+	char buf[8];
+	struct test_context *ctx = (struct test_context *)arg;
+
+	fd = open("/sys/module/bpf_testmod/parameters/run_struct_ops", O_WRONLY);
+	if (!ASSERT_OK_FD(fd, "open run_struct_ops for write")) {
+		mark_dead(ctx);
+		return NULL;
+	}
+
+	len = snprintf(buf, sizeof(buf), "%d", ctx->repeat);
+	if (!ASSERT_GT(len, 0, "snprintf repeat number")) {
+		mark_dead(ctx);
+		goto out;
+	}
+
+	for (int i = 0; i < ctx->loop; i++) {
+		if (wait_others(ctx))
+			goto out;
+		if (!ASSERT_EQ(write(fd, buf, len), len, "write file")) {
+			mark_dead(ctx);
+			goto out;
+		}
+	}
+
+out:
+	close(fd);
+	return NULL;
+}
+
+#define NR_REL_THREAD	2
+#define NR_RUN_THREAD	8
+#define NR_THREAD	(NR_REL_THREAD + NR_RUN_THREAD)
+#define NR_REPEAT	4
+#define NR_LOOP		5
+
+static void test_struct_ops_map_release(void)
+{
+	int i, j;
+	pthread_t t[NR_THREAD];
+	struct test_context ctx = {
+		.loop = NR_LOOP,
+		.repeat = NR_REPEAT,
+		.total_threads = NR_THREAD,
+		.wait_threads = 0,
+		.dead_threads = 0,
+	};
+
+	pthread_mutex_init(&ctx.mutex, NULL);
+	pthread_cond_init(&ctx.cond, NULL);
+
+	j = 0;
+	for (i = 0; i < NR_REL_THREAD; i++)
+		pthread_create(&t[j++], NULL, thread_load_release, &ctx);
+
+	for (i = 0; i < NR_RUN_THREAD; i++)
+		pthread_create(&t[j++], NULL, thread_run_prog, &ctx);
+
+	for (i = 0; i < NR_THREAD; i++)
+		pthread_join(t[i], NULL);
+}
+
 /* Detach a link from a user space program */
 static void test_detach_link(void)
 {
@@ -310,6 +462,8 @@ void serial_test_struct_ops_module(void)
 		test_struct_ops_nulled_out_cb();
 	if (test__start_subtest("struct_ops_forgotten_cb"))
 		test_struct_ops_forgotten_cb();
+	if (test__start_subtest("struct_ops_map_release"))
+		test_struct_ops_map_release();
 	if (test__start_subtest("test_detach_link"))
 		test_detach_link();
 	RUN_TESTS(unsupported_ops);
