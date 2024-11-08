@@ -35,7 +35,7 @@ struct lpm_trie {
 	size_t				n_entries;
 	size_t				max_prefixlen;
 	size_t				data_size;
-	spinlock_t			lock;
+	raw_spinlock_t			lock;
 };
 
 /* This trie implements a longest prefix match algorithm that can be used to
@@ -330,7 +330,7 @@ static long trie_update_elem(struct bpf_map *map,
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
-	spin_lock_irqsave(&trie->lock, irq_flags);
+	raw_spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Allocate and fill a new node */
 
@@ -437,7 +437,7 @@ out:
 		kfree(im_node);
 	}
 
-	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 	kfree_rcu(free_node, rcu);
 
 	return ret;
@@ -459,7 +459,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
-	spin_lock_irqsave(&trie->lock, irq_flags);
+	raw_spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Walk the tree looking for an exact key/length match and keeping
 	 * track of the path we traverse.  We will need to know the node
@@ -535,7 +535,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	free_node = node;
 
 out:
-	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 	kfree_rcu(free_parent, rcu);
 	kfree_rcu(free_node, rcu);
 
@@ -581,7 +581,7 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 			  offsetof(struct bpf_lpm_trie_key_u8, data);
 	trie->max_prefixlen = trie->data_size * 8;
 
-	spin_lock_init(&trie->lock);
+	raw_spin_lock_init(&trie->lock);
 
 	return &trie->map;
 }
