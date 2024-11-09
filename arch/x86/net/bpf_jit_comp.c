@@ -325,6 +325,22 @@ struct jit_context {
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	(12 + ENDBR_INSN_SIZE)
 
+static void push_r9(u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	EMIT2(0x41, 0x51);   /* push r9 */
+	*pprog = prog;
+}
+
+static void pop_r9(u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	EMIT2(0x41, 0x59);   /* pop r9 */
+	*pprog = prog;
+}
+
 static void push_r12(u8 **pprog)
 {
 	u8 *prog = *pprog;
@@ -1404,6 +1420,24 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+static void emit_priv_frame_ptr(u8 **pprog, void __percpu *priv_frame_ptr)
+{
+	u8 *prog = *pprog;
+
+	/* movabs r9, priv_frame_ptr */
+	emit_mov_imm64(&prog, X86_REG_R9, (__force long) priv_frame_ptr >> 32,
+		       (u32) (__force long) priv_frame_ptr);
+
+#ifdef CONFIG_SMP
+	/* add <r9>, gs:[<off>] */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x03, 0x0c, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+
+	*pprog = prog;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -1421,6 +1455,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int insn_cnt = bpf_prog->len;
 	bool seen_exit = false;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
+	void __percpu *priv_frame_ptr = NULL;
 	u64 arena_vm_start, user_vm_start;
 	int i, excnt = 0;
 	int ilen, proglen = 0;
@@ -1429,6 +1464,10 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int err;
 
 	stack_depth = bpf_prog->aux->stack_depth;
+	if (bpf_prog->aux->priv_stack_ptr) {
+		priv_frame_ptr = bpf_prog->aux->priv_stack_ptr + round_up(stack_depth, 16);
+		stack_depth = 0;
+	}
 
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
@@ -1457,6 +1496,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
 
+	if (priv_frame_ptr)
+		emit_priv_frame_ptr(&prog, priv_frame_ptr);
+
 	ilen = prog - temp;
 	if (rw_image)
 		memcpy(rw_image + proglen, temp, ilen);
@@ -1475,6 +1517,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
+
+		if (priv_frame_ptr) {
+			if (src_reg == BPF_REG_FP)
+				src_reg = X86_REG_R9;
+
+			if (dst_reg == BPF_REG_FP)
+				dst_reg = X86_REG_R9;
+		}
 
 		switch (insn->code) {
 			/* ALU */
@@ -2136,9 +2186,15 @@ populate_extable:
 			}
 			if (!imm32)
 				return -EINVAL;
+			if (priv_frame_ptr) {
+				push_r9(&prog);
+				ip += 2;
+			}
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (priv_frame_ptr)
+				pop_r9(&prog);
 			break;
 		}
 
@@ -3323,6 +3379,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct bpf_binary_header *rw_header = NULL;
 	struct bpf_binary_header *header = NULL;
 	struct bpf_prog *tmp, *orig_prog = prog;
+	void __percpu *priv_stack_ptr = NULL;
 	struct x64_jit_data *jit_data;
 	int proglen, oldproglen = 0;
 	struct jit_context ctx = {};
@@ -3358,6 +3415,15 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 			goto out;
 		}
 		prog->aux->jit_data = jit_data;
+	}
+	priv_stack_ptr = prog->aux->priv_stack_ptr;
+	if (!priv_stack_ptr && prog->aux->jits_use_priv_stack) {
+		priv_stack_ptr = __alloc_percpu_gfp(prog->aux->stack_depth, 16, GFP_KERNEL);
+		if (!priv_stack_ptr) {
+			prog = orig_prog;
+			goto out_priv_stack;
+		}
+		prog->aux->priv_stack_ptr = priv_stack_ptr;
 	}
 	addrs = jit_data->addrs;
 	if (addrs) {
@@ -3494,6 +3560,11 @@ out_image:
 			bpf_prog_fill_jited_linfo(prog, addrs + 1);
 out_addrs:
 		kvfree(addrs);
+		if (!image && priv_stack_ptr) {
+			free_percpu(priv_stack_ptr);
+			prog->aux->priv_stack_ptr = NULL;
+		}
+out_priv_stack:
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
 	}
@@ -3547,6 +3618,7 @@ void bpf_jit_free(struct bpf_prog *prog)
 		prog->bpf_func = (void *)prog->bpf_func - cfi_get_offset();
 		hdr = bpf_jit_binary_pack_hdr(prog);
 		bpf_jit_binary_pack_free(hdr, NULL);
+		free_percpu(prog->aux->priv_stack_ptr);
 		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(prog));
 	}
 
@@ -3560,6 +3632,11 @@ bool bpf_jit_supports_exceptions(void)
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 */
 	return IS_ENABLED(CONFIG_UNWINDER_ORC);
+}
+
+bool bpf_jit_supports_private_stack(void)
+{
+	return true;
 }
 
 void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
