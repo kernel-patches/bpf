@@ -6054,7 +6054,7 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	case BPF_PROG_TYPE_TRACING:
 	case BPF_PROG_TYPE_LSM:
 	case BPF_PROG_TYPE_STRUCT_OPS:
-		if (bpf_prog_check_recur(prog))
+		if (prog->aux->priv_stack_requested || bpf_prog_check_recur(prog))
 			return PRIV_STACK_ADAPTIVE;
 		fallthrough;
 	default:
@@ -21998,6 +21998,11 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 				mname, st_ops->name);
 			return err;
 		}
+	}
+
+	if (prog->aux->priv_stack_requested && !bpf_jit_supports_private_stack()) {
+		verbose(env, "Private stack not supported by jit\n");
+		return -EACCES;
 	}
 
 	/* btf_ctx_access() used this to provide argument type info */
