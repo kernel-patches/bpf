@@ -12,6 +12,7 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
+#include <linux/clocksource.h>
 #include <asm/cacheflush.h>
 #include <asm/set_memory.h>
 #include <asm/nospec-branch.h>
@@ -2099,6 +2100,24 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 						EMIT3(0x0F, 0xAE, 0xE8);
 					EMIT2(0x0F, 0x31);
 					break;
+				}
+				if (imm32 == BPF_CALL_IMM(bpf_cpu_cycles_to_ns) &&
+				    boot_cpu_has(X86_FEATURE_CONSTANT_TSC)) {
+					u32 mult, shift;
+
+					clocks_calc_mult_shift(&mult, &shift, tsc_khz,
+							       USEC_PER_SEC, 0);
+
+					/* move parameter to BPF_REG_0 */
+					emit_ia32_mov_r64(true, bpf2ia32[BPF_REG_0],
+							  bpf2ia32[BPF_REG_1], true, true,
+							  &prog, bpf_prog->aux);
+					/* multiply parameter by mut */
+					emit_ia32_mul_i64(bpf2ia32[BPF_REG_0],
+							  mult, true, &prog);
+					/* shift parameter by shift which is less than 64 */
+					emit_ia32_rsh_i64(bpf2ia32[BPF_REG_0],
+							  shift, true, &prog);
 				}
 
 				err = emit_kfunc_call(bpf_prog,
