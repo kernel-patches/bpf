@@ -1423,6 +1423,11 @@ enum {
  */
 #define BPF_F_QUERY_EFFECTIVE	(1U << 0)
 
+/* Flags for batch operations. */
+
+/* If set, continue with batch operation even if a key is missing. */
+#define BPF_F_BATCH_IGNORE_MISSING_KEY          (1U << 1)
+
 /* Flags for BPF_PROG_TEST_RUN */
 
 /* If set, run the test on the cpu specified by bpf_attr.test.cpu */

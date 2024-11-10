@@ -1851,7 +1851,7 @@ int generic_map_delete_batch(struct bpf_map *map,
 			     union bpf_attr __user *uattr)
 {
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
-	u32 cp, max_count;
+	u32 count, cp, max_count;
 	int err = 0;
 	void *key;
 
@@ -1874,6 +1874,7 @@ int generic_map_delete_batch(struct bpf_map *map,
 	if (!key)
 		return -ENOMEM;
 
+	count = 0;
 	for (cp = 0; cp < max_count; cp++) {
 		err = -EFAULT;
 		if (copy_from_user(key, keys + cp * map->key_size,
@@ -1890,11 +1891,18 @@ int generic_map_delete_batch(struct bpf_map *map,
 		err = map->ops->map_delete_elem(map, key);
 		rcu_read_unlock();
 		bpf_enable_instrumentation();
-		if (err)
+		if (err) {
+			if (err == -ENOENT &&
+			    (attr->batch.flags & BPF_F_BATCH_IGNORE_MISSING_KEY)) {
+				cond_resched();
+				continue;
+			}
 			break;
+		}
 		cond_resched();
+		count++;
 	}
-	if (copy_to_user(&uattr->batch.count, &cp, sizeof(cp)))
+	if (copy_to_user(&uattr->batch.count, &count, sizeof(count)))
 		err = -EFAULT;
 
 	kvfree(key);
