@@ -136,7 +136,25 @@ void __test_map_lookup_and_delete_batch(bool is_pcpu)
 	err = bpf_map_get_next_key(map_fd, NULL, &key);
 	CHECK(!err, "bpf_map_get_next_key()", "error: %s\n", strerror(errno));
 
-	/* test 4: lookup/delete in a loop with various steps. */
+	/* test 4: batch delete with missing key */
+	map_batch_update(map_fd, max_entries, keys, values, is_pcpu);
+
+	key = 2;
+	err = bpf_map_delete_elem(map_fd, &key);
+	CHECK(err, "bpf_map_delete_elem()", "error: %s\n", strerror(errno));
+
+	DECLARE_LIBBPF_OPTS(bpf_map_batch_opts, ignore_opts,
+		.elem_flags = 0,
+		.flags = BPF_F_BATCH_IGNORE_MISSING_KEY,
+	);
+
+	err = bpf_map_delete_batch(map_fd, keys, &count,
+	       &ignore_opts);
+	CHECK(err, "batch delete with missing key", "error: %s\n", strerror(errno));
+	CHECK(count != max_entries-1, "count != max_entries-1",
+	      "count = %u, max_entries = %u\n", count, max_entries);
+
+	/* test 5: lookup/delete in a loop with various steps. */
 	total_success = 0;
 	for (step = 1; step < max_entries; step++) {
 		map_batch_update(map_fd, max_entries, keys, values, is_pcpu);
