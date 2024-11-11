@@ -2,6 +2,12 @@
 include ../../scripts/Makefile.include
 
 ifeq ($(srctree),)
+update_srctree := 1
+endif
+ifndef building_out_of_srctree
+update_srctree := 1
+endif
+ifeq ($(update_srctree),1)
 srctree := $(patsubst %/,%,$(dir $(CURDIR)))
 srctree := $(patsubst %/,%,$(dir $(srctree)))
 srctree := $(patsubst %/,%,$(dir $(srctree)))
