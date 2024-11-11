@@ -288,7 +288,7 @@ static int dump_btf_type(const struct btf *btf, __u32 id,
 				jsonw_end_object(w);
 			} else {
 				if (btf_kflag(t))
-					printf("\n\t'%s' val=%lldLL", name,
+					printf("\n\t'%s' val=%lluLL", name,
 					       (unsigned long long)val);
 				else
 					printf("\n\t'%s' val=%lluULL", name,
