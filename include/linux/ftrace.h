@@ -526,6 +526,8 @@ int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
 int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
 int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr);
 
+int register_ftrace_direct_hash(struct ftrace_ops *ops, struct ftrace_hash *hash);
+
 void ftrace_stub_direct_tramp(void);
 
 #else
@@ -548,6 +550,11 @@ static inline int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long add
 	return -ENODEV;
 }
 static inline int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr)
+{
+	return -ENODEV;
+}
+
+int register_ftrace_direct_hash(struct ftrace_ops *ops, struct ftrace_hash *hash)
 {
 	return -ENODEV;
 }
