@@ -250,6 +250,8 @@ EXPORT_SYMBOL(free_inode_nonrcu);
 static void i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
+
+	bpf_inode_storage_free(inode);
 	if (inode->free_inode)
 		inode->free_inode(inode);
 	else
