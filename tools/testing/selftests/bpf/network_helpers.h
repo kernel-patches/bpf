@@ -104,6 +104,29 @@ static __u16 csum_fold(__u32 csum)
 	return (__u16)~csum;
 }
 
+static unsigned long add_csum_hword(const __u16 *start, int num_u16)
+{
+	unsigned long sum = 0;
+	int i;
+
+	for (i = 0; i < num_u16; i++)
+		sum += start[i];
+
+	return sum;
+}
+
+static inline __sum16 build_ip_csum(struct iphdr *iph)
+{
+	__u32 sum = 0;
+	__u16 *p;
+
+	iph->check = 0;
+	p = (void *)iph;
+	sum = add_csum_hword(p, iph->ihl << 1);
+
+	return csum_fold(sum);
+}
+
 static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
 					__u32 len, __u8 proto,
 					__wsum csum)
