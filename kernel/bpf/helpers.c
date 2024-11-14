@@ -3038,6 +3038,12 @@ __bpf_kfunc int bpf_copy_from_user_str(void *dst, u32 dst__sz, const void __user
 	return ret + 1;
 }
 
+__bpf_kfunc void bpf_dentry_release_dtor(struct dentry *dentry)
+{
+	dput(dentry);
+}
+CFI_NOSEAL(bpf_dentry_release_dtor);
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3080,6 +3086,8 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 BTF_ID_LIST(generic_dtor_ids)
 BTF_ID(struct, task_struct)
 BTF_ID(func, bpf_task_release_dtor)
+BTF_ID(struct, dentry)
+BTF_ID(func, bpf_dentry_release_dtor)
 #ifdef CONFIG_CGROUPS
 BTF_ID(struct, cgroup)
 BTF_ID(func, bpf_cgroup_release_dtor)
@@ -3139,10 +3147,14 @@ static int __init kfunc_init(void)
 			.btf_id       = generic_dtor_ids[0],
 			.kfunc_btf_id = generic_dtor_ids[1]
 		},
-#ifdef CONFIG_CGROUPS
 		{
 			.btf_id       = generic_dtor_ids[2],
 			.kfunc_btf_id = generic_dtor_ids[3]
+		},
+#ifdef CONFIG_CGROUPS
+		{
+			.btf_id       = generic_dtor_ids[4],
+			.kfunc_btf_id = generic_dtor_ids[5]
 		},
 #endif
 	};
