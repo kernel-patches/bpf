@@ -231,10 +231,6 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 
 	switch (func_id) {
-	case BPF_FUNC_inode_storage_get:
-		return &bpf_inode_storage_get_proto;
-	case BPF_FUNC_inode_storage_delete:
-		return &bpf_inode_storage_delete_proto;
 #ifdef CONFIG_NET
 	case BPF_FUNC_sk_storage_get:
 		return &bpf_sk_storage_get_proto;
