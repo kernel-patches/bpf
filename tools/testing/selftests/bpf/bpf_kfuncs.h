@@ -87,4 +87,9 @@ struct dentry;
  */
 extern int bpf_get_dentry_xattr(struct dentry *dentry, const char *name,
 			      struct bpf_dynptr *value_ptr) __ksym __weak;
+
+struct fanotify_fastpath_event;
+extern struct inode *bpf_fanotify_data_inode(struct fanotify_fastpath_event *event) __ksym __weak;
+extern void bpf_iput(struct inode *inode) __ksym __weak;
+extern bool bpf_is_subdir(struct dentry *new_dentry, struct dentry *old_dentry) __ksym __weak;
 #endif
