@@ -25,3 +25,16 @@ config FANOTIFY_ACCESS_PERMISSIONS
 	   hierarchical storage management systems.
 
 	   If unsure, say N.
+
+config FANOTIFY_FASTPATH
+	bool "fanotify fastpath handler"
+	depends on FANOTIFY
+	default y
+	help
+	   Say Y here if you want to use fanotify in kernel fastpath handler.
+	   The fastpath handler can be implemented in a kernel module or a
+	   BPF program. The fastpath handler can speed up fanotify in many
+	   use cases. For example, when the listener is only interested in
+	   a subset of events.
+
+	   If unsure, say Y.

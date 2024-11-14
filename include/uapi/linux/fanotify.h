@@ -3,6 +3,7 @@
 #define _UAPI_LINUX_FANOTIFY_H
 
 #include <linux/types.h>
+#include <linux/ioctl.h>
 
 /* the following events that user-space can register for */
 #define FAN_ACCESS		0x00000001	/* File was accessed */
@@ -241,5 +242,29 @@ struct fanotify_response_info_audit_rule {
 #define FAN_EVENT_OK(meta, len)	((long)(len) >= (long)FAN_EVENT_METADATA_LEN && \
 				(long)(meta)->event_len >= (long)FAN_EVENT_METADATA_LEN && \
 				(long)(meta)->event_len <= (long)(len))
+
+#define FAN_FP_NAME_MAX 64
+#define FAN_FP_ARGS_MAX 64
+
+/* This is the arguments used to add fastpath handler to a group. */
+struct fanotify_fastpath_args {
+	char name[FAN_FP_NAME_MAX];
+
+	__u32 version;
+	__u32 flags;
+
+	/*
+	 * user space pointer to the init args of fastpath handler,
+	 * up to init_args_len (<= FAN_FP_ARGS_MAX).
+	 */
+	__u64 init_args;
+	/* size of init_args */
+	__u32 init_args_size;
+} __attribute__((__packed__));
+
+#define FAN_IOC_MAGIC 'F'
+
+#define FAN_IOC_ADD_FP _IOW(FAN_IOC_MAGIC, 0, struct fanotify_fastpath_args)
+#define FAN_IOC_DEL_FP _IOW(FAN_IOC_MAGIC, 1, char[FAN_FP_NAME_MAX])
 
 #endif /* _UAPI_LINUX_FANOTIFY_H */

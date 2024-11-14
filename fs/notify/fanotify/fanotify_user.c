@@ -976,6 +976,13 @@ static long fanotify_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 		spin_unlock(&group->notification_lock);
 		ret = put_user(send_len, (int __user *) p);
 		break;
+	case FAN_IOC_ADD_FP:
+		ret = fanotify_fastpath_add(group, p);
+		break;
+	case FAN_IOC_DEL_FP:
+		fanotify_fastpath_del(group);
+		ret = 0;
+		break;
 	}
 
 	return ret;

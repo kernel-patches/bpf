@@ -18,6 +18,8 @@
 
 #include "fanotify.h"
 
+extern struct srcu_struct fsnotify_mark_srcu;
+
 static bool fanotify_path_equal(const struct path *p1, const struct path *p2)
 {
 	return p1->mnt == p2->mnt && p1->dentry == p2->dentry;
@@ -888,6 +890,7 @@ static int fanotify_handle_event(struct fsnotify_group *group, u32 mask,
 	struct fsnotify_event *fsn_event;
 	__kernel_fsid_t fsid = {};
 	u32 match_mask = 0;
+	struct fanotify_fastpath_hook *fp_hook __maybe_unused;
 
 	BUILD_BUG_ON(FAN_ACCESS != FS_ACCESS);
 	BUILD_BUG_ON(FAN_MODIFY != FS_MODIFY);
@@ -933,6 +936,27 @@ static int fanotify_handle_event(struct fsnotify_group *group, u32 mask,
 	if (FAN_GROUP_FLAG(group, FANOTIFY_FID_BITS))
 		fsid = fanotify_get_fsid(iter_info);
 
+#ifdef CONFIG_FANOTIFY_FASTPATH
+	fp_hook = srcu_dereference(group->fanotify_data.fp_hook, &fsnotify_mark_srcu);
+	if (fp_hook) {
+		struct fanotify_fastpath_event fp_event = {
+			.mask = mask,
+			.data = data,
+			.data_type = data_type,
+			.dir = dir,
+			.file_name = file_name,
+			.fsid = &fsid,
+			.match_mask = match_mask,
+		};
+
+		ret = fp_hook->ops->fp_handler(group, fp_hook, &fp_event);
+		if (ret == FAN_FP_RET_SKIP_EVENT) {
+			ret = 0;
+			goto finish;
+		}
+	}
+#endif
+
 	event = fanotify_alloc_event(group, mask, data, data_type, dir,
 				     file_name, &fsid, match_mask);
 	ret = -ENOMEM;
@@ -976,6 +1000,11 @@ static void fanotify_free_group_priv(struct fsnotify_group *group)
 
 	if (mempool_initialized(&group->fanotify_data.error_events_pool))
 		mempool_exit(&group->fanotify_data.error_events_pool);
+
+#ifdef CONFIG_FANOTIFY_FASTPATH
+	if (group->fanotify_data.fp_hook)
+		fanotify_fastpath_hook_free(group->fanotify_data.fp_hook);
+#endif
 }
 
 static void fanotify_free_path_event(struct fanotify_event *event)

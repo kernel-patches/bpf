@@ -2,6 +2,7 @@
 #ifndef _LINUX_FANOTIFY_H
 #define _LINUX_FANOTIFY_H
 
+#include <linux/kobject.h>
 #include <linux/sysctl.h>
 #include <uapi/linux/fanotify.h>
 
@@ -134,5 +135,135 @@
 #undef FAN_ALL_EVENTS
 #undef FAN_ALL_PERM_EVENTS
 #undef FAN_ALL_OUTGOING_EVENTS
+
+struct fsnotify_group;
+struct qstr;
+struct inode;
+struct fanotify_fastpath_hook;
+
+/*
+ * Event passed to fanotify fastpath handler
+ *
+ * @mask:	event type and flags
+ * @data:	object that event happened on
+ * @data_type:	type of object for fanotify_data_XXX() accessors
+ * @dir:	optional directory associated with event -
+ *		if @file_name is not NULL, this is the directory that
+ *		@file_name is relative to
+ * @file_name:	optional file name associated with event
+ * @match_mask:	mark types of this group that matched the event
+ */
+struct fanotify_fastpath_event {
+	u32 mask;
+	const void *data;
+	int data_type;
+	struct inode *dir;
+	const struct qstr *file_name;
+	__kernel_fsid_t *fsid;
+	u32 match_mask;
+};
+
+/*
+ * fanotify fastpath handler should implement these ops.
+ *
+ * fp_handler - Main call for the fastpath handler.
+ * @group:	The group being notified
+ * @fp_hook:	fanotify_fastpath_hook for the attach on @group.
+ * Returns: enum fanotify_fastpath_return.
+ *
+ * fp_init - Initialize the fanotify_fastpath_hook.
+ * @hook:	fanotify_fastpath_hook to be initialized
+ * @args:	Arguments used to initialize @hook
+ *
+ * fp_free - Free the fanotify_fastpath_hook.
+ * @hook:	fanotify_fastpath_hook to be freed.
+ *
+ * @name:	Name of the fanotify_fastpath_ops. This need to be unique
+ *		in the system
+ * @owner:	Owner module of this fanotify_fastpath_ops
+ * @list:	Attach to global list of fanotify_fastpath_ops
+ * @flags:	Flags for the fanotify_fastpath_ops
+ * @desc:	Description of what this fastpath handler do (optional)
+ * @init_args:	Description of the init_args in a string (optional)
+ */
+struct fanotify_fastpath_ops {
+	int (*fp_handler)(struct fsnotify_group *group,
+			  struct fanotify_fastpath_hook *fp_hook,
+			  struct fanotify_fastpath_event *fp_event);
+	int (*fp_init)(struct fanotify_fastpath_hook *hook, void *args);
+	void (*fp_free)(struct fanotify_fastpath_hook *hook);
+
+	char name[FAN_FP_NAME_MAX];
+	struct module *owner;
+	struct list_head list;
+	u32 flags;
+	const char *desc;
+	const char *init_args;
+
+	/* internal */
+	struct kobject kobj;
+};
+
+/* Flags for fanotify_fastpath_ops->flags */
+enum fanotify_fastpath_flags {
+	/* CAP_SYS_ADMIN is required to use this fastpath handler */
+	FAN_FP_F_SYS_ADMIN_ONLY = BIT(0),
+
+	FAN_FP_F_ALL = FAN_FP_F_SYS_ADMIN_ONLY,
+};
+
+/* Return value of fp_handler */
+enum fanotify_fastpath_return {
+	/* The event should be sent to user space */
+	FAN_FP_RET_SEND_TO_USERSPACE = 0,
+	/* The event should NOT be sent to user space */
+	FAN_FP_RET_SKIP_EVENT = 1,
+};
+
+/*
+ * Hook that attaches fanotify_fastpath_ops to a group.
+ * @ops:	the ops
+ * @data:	per group data used by the ops
+ */
+struct fanotify_fastpath_hook {
+	struct fanotify_fastpath_ops *ops;
+	void *data;
+};
+
+#ifdef CONFIG_FANOTIFY_FASTPATH
+
+int fanotify_fastpath_register(struct fanotify_fastpath_ops *ops);
+void fanotify_fastpath_unregister(struct fanotify_fastpath_ops *ops);
+int fanotify_fastpath_add(struct fsnotify_group *group,
+			  struct fanotify_fastpath_args __user *args);
+void fanotify_fastpath_del(struct fsnotify_group *group);
+void fanotify_fastpath_hook_free(struct fanotify_fastpath_hook *fp_hook);
+
+#else /* CONFIG_FANOTIFY_FASTPATH */
+
+static inline int fanotify_fastpath_register(struct fanotify_fastpath_ops *ops)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void fanotify_fastpath_unregister(struct fanotify_fastpath_ops *ops)
+{
+}
+
+static inline int fanotify_fastpath_add(struct fsnotify_group *group,
+					struct fanotify_fastpath_args __user *args)
+{
+	return -ENOENT;
+}
+
+static inline void fanotify_fastpath_del(struct fsnotify_group *group)
+{
+}
+
+static inline void fanotify_fastpath_hook_free(struct fanotify_fastpath_hook *fp_hook)
+{
+}
+
+#endif /* CONFIG_FANOTIFY_FASTPATH */
 
 #endif /* _LINUX_FANOTIFY_H */
