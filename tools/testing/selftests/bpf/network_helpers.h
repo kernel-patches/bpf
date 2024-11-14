@@ -161,6 +161,33 @@ build_ipv6_pseudo_header_csum(const struct in6_addr *saddr,
 	return csum_fold((__u32)s);
 }
 
+static inline __sum16 build_udp_v4_csum(const struct iphdr *iph, __u8 l4_proto,
+					__u16 l4_len, const void *l4_start,
+					int num_words)
+{
+	unsigned long pseudo_sum;
+	int num_u16 = sizeof(iph->saddr); /* halfwords: twice byte len */
+
+	pseudo_sum = add_csum_hword((void *)&iph->saddr, num_u16);
+	pseudo_sum += htons(l4_proto);
+	pseudo_sum += l4_len;
+	pseudo_sum += add_csum_hword(l4_start, num_words);
+	return csum_fold(pseudo_sum);
+}
+
+static inline __sum16 build_udp_v6_csum(const struct ipv6hdr *ip6h,
+					const void *l4_start, int num_words)
+{
+	unsigned long pseudo_sum;
+	int num_u16 = sizeof(ip6h->saddr); /* halfwords: twice byte len */
+
+	pseudo_sum = add_csum_hword((void *)&ip6h->saddr, num_u16);
+	pseudo_sum += htons(ip6h->nexthdr);
+	pseudo_sum += ip6h->payload_len;
+	pseudo_sum += add_csum_hword(l4_start, num_words);
+	return csum_fold(pseudo_sum);
+}
+
 struct tmonitor_ctx;
 
 #ifdef TRAFFIC_MONITOR
