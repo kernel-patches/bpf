@@ -149,14 +149,32 @@ config SAMPLE_CONNECTOR
 	  with it.
 	  See also Documentation/driver-api/connector.rst
 
+config SAMPLE_FANOTIFY
+	bool "Build fanotify monitoring sample"
+	depends on FANOTIFY && CC_CAN_LINK && HEADERS_INSTALL
+	help
+	  When enabled, this builds samples for fanotify.
+	  There multiple samples for fanotify. Please see the
+	  following configs for more details of these
+	  samples.
+
 config SAMPLE_FANOTIFY_ERROR
 	bool "Build fanotify error monitoring sample"
-	depends on FANOTIFY && CC_CAN_LINK && HEADERS_INSTALL
+	depends on SAMPLE_FANOTIFY
 	help
 	  When enabled, this builds an example code that uses the
 	  FAN_FS_ERROR fanotify mechanism to monitor filesystem
 	  errors.
 	  See also Documentation/admin-guide/filesystem-monitoring.rst.
+
+config SAMPLE_FANOTIFY_FASTPATH
+	tristate "Build fanotify fastpath sample"
+	depends on SAMPLE_FANOTIFY && m
+	help
+	  When enabled, this builds kernel module that contains a
+	  fanotify fastpath handler.
+	  The fastpath handler filters out certain filename
+	  prefixes for the fanotify user.
 
 config SAMPLE_HIDRAW
 	bool "hidraw sample"

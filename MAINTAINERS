@@ -8636,6 +8636,7 @@ S:	Maintained
 F:	fs/notify/fanotify/
 F:	include/linux/fanotify.h
 F:	include/uapi/linux/fanotify.h
+F:	samples/fanotify/
 
 FARADAY FOTG210 USB2 DUAL-ROLE CONTROLLER
 M:	Linus Walleij <linus.walleij@linaro.org>
