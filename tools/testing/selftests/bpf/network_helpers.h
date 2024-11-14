@@ -127,9 +127,9 @@ static inline __sum16 build_ip_csum(struct iphdr *iph)
 	return csum_fold(sum);
 }
 
-static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
-					__u32 len, __u8 proto,
-					__wsum csum)
+static inline __sum16 build_ipv4_pseudo_header_csum(__be32 saddr, __be32 daddr,
+						    __u32 len, __u8 proto,
+						    __wsum csum)
 {
 	__u64 s = csum;
 
@@ -142,10 +142,10 @@ static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
 	return csum_fold((__u32)s);
 }
 
-static inline __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
-				      const struct in6_addr *daddr,
-					__u32 len, __u8 proto,
-					__wsum csum)
+static inline __sum16
+build_ipv6_pseudo_header_csum(const struct in6_addr *saddr,
+			      const struct in6_addr *daddr, __u32 len,
+			      __u8 proto, __wsum csum)
 {
 	__u64 s = csum;
 	int i;

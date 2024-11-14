@@ -378,11 +378,15 @@ static void ping_pong(struct xsk *xsk, void *rx_packet, clockid_t clock_id)
 
 	want_csum = udph->check;
 	if (ip6h)
-		udph->check = ~csum_ipv6_magic(&ip6h->saddr, &ip6h->daddr,
-					       ntohs(udph->len), IPPROTO_UDP, 0);
+		udph->check = ~build_ipv6_pseudo_header_csum(&ip6h->saddr,
+							     &ip6h->daddr,
+							     ntohs(udph->len),
+							     IPPROTO_UDP, 0);
 	else
-		udph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
-						 ntohs(udph->len), IPPROTO_UDP, 0);
+		udph->check = ~build_ipv4_pseudo_header_csum(iph->saddr,
+							     iph->daddr,
+							     ntohs(udph->len),
+							     IPPROTO_UDP, 0);
 
 	meta->flags |= XDP_TXMD_FLAGS_CHECKSUM;
 	if (iph)

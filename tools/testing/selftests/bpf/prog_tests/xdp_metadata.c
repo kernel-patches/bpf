@@ -180,8 +180,9 @@ static int generate_packet(struct xsk *xsk, __u16 dst_port)
 	udph->source = htons(UDP_SOURCE_PORT);
 	udph->dest = htons(dst_port);
 	udph->len = htons(sizeof(*udph) + UDP_PAYLOAD_BYTES);
-	udph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
-					 ntohs(udph->len), IPPROTO_UDP, 0);
+	udph->check = ~build_ipv4_pseudo_header_csum(iph->saddr, iph->daddr,
+						     ntohs(udph->len),
+						     IPPROTO_UDP, 0);
 
 	memset(udph + 1, 0xAA, UDP_PAYLOAD_BYTES);
 
