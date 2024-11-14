@@ -40,6 +40,7 @@
 
 #include <linux/uaccess.h>
 
+#include <linux/bpf_mprog.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
 #include <net/ip.h>
@@ -1505,13 +1506,20 @@ static int rtnl_fill_link_ifmap(struct sk_buff *skb,
 
 static u32 rtnl_xdp_prog_skb(struct net_device *dev)
 {
-	const struct bpf_prog *generic_xdp_prog;
+	const struct bpf_mprog_array *generic_xdp_array;
 	u32 res = 0;
 
 	rcu_read_lock();
-	generic_xdp_prog = rcu_dereference(dev->xdp_prog);
-	if (generic_xdp_prog)
-		res = generic_xdp_prog->aux->id;
+	generic_xdp_array = rcu_dereference(dev->xdp_array);
+	if (generic_xdp_array) {
+		const struct bpf_mprog_fp *fp;
+		struct bpf_prog *tmp;
+
+		bpf_mprog_foreach_prog(generic_xdp_array, fp, tmp) {
+			res = tmp->aux->id;
+			break;
+		}
+	}
 	rcu_read_unlock();
 
 	return res;

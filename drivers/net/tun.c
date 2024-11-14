@@ -207,7 +207,7 @@ struct tun_struct {
 	u32 flow_count;
 	u32 rx_batched;
 	atomic_long_t rx_frame_errors;
-	struct bpf_prog __rcu *xdp_prog;
+	struct bpf_mprog_array __rcu *xdp_array;
 	struct tun_prog __rcu *steering_prog;
 	struct tun_prog __rcu *filter_prog;
 	struct ethtool_link_ksettings link_ksettings;
@@ -826,7 +826,7 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 		tun_napi_init(tun, tfile, napi, napi_frags);
 	}
 
-	if (rtnl_dereference(tun->xdp_prog))
+	if (rtnl_dereference(tun->xdp_array))
 		sock_set_flag(&tfile->sk, SOCK_XDP);
 
 	/* device is allowed to go away first, so no need to hold extra
@@ -1188,28 +1188,28 @@ tun_net_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 		(unsigned long)atomic_long_read(&tun->rx_frame_errors);
 }
 
-static int tun_xdp_set(struct net_device *dev, struct bpf_prog *prog,
+static int tun_xdp_set(struct net_device *dev, struct bpf_mprog_array *arr,
 		       struct netlink_ext_ack *extack)
 {
 	struct tun_struct *tun = netdev_priv(dev);
 	struct tun_file *tfile;
-	struct bpf_prog *old_prog;
+	struct bpf_mprog_array *old_arr;
 	int i;
 
-	old_prog = rtnl_dereference(tun->xdp_prog);
-	rcu_assign_pointer(tun->xdp_prog, prog);
-	if (old_prog)
-		bpf_prog_put(old_prog);
+	old_arr = rtnl_dereference(tun->xdp_array);
+	rcu_assign_pointer(tun->xdp_array, arr);
+	if (old_arr)
+		bpf_mprog_array_put(old_arr);
 
 	for (i = 0; i < tun->numqueues; i++) {
 		tfile = rtnl_dereference(tun->tfiles[i]);
-		if (prog)
+		if (arr)
 			sock_set_flag(&tfile->sk, SOCK_XDP);
 		else
 			sock_reset_flag(&tfile->sk, SOCK_XDP);
 	}
 	list_for_each_entry(tfile, &tun->disabled, next) {
-		if (prog)
+		if (arr)
 			sock_set_flag(&tfile->sk, SOCK_XDP);
 		else
 			sock_reset_flag(&tfile->sk, SOCK_XDP);
@@ -1222,7 +1222,9 @@ static int tun_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 {
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		return tun_xdp_set(dev, xdp->prog, xdp->extack);
+		return tun_xdp_set(dev, xdp->arr, xdp->extack);
+	case XDP_QUERY_MPROG_SUPPORT:
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -1663,6 +1665,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 {
 	struct page_frag *alloc_frag = &current->task_frag;
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
+	struct bpf_mprog_array *xdp_array;
 	struct bpf_prog *xdp_prog;
 	int buflen = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	char *buf;
@@ -1671,8 +1674,8 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	int err = 0;
 
 	rcu_read_lock();
-	xdp_prog = rcu_dereference(tun->xdp_prog);
-	if (xdp_prog)
+	xdp_array = rcu_dereference(tun->xdp_array);
+	if (xdp_array)
 		pad += XDP_PACKET_HEADROOM;
 	buflen += SKB_DATA_ALIGN(len + pad);
 	rcu_read_unlock();
@@ -1692,7 +1695,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	 * of xdp_prog above, this should be rare and for simplicity
 	 * we do XDP on skb in case the headroom is not enough.
 	 */
-	if (hdr->gso_type || !xdp_prog) {
+	if (hdr->gso_type || !xdp_array) {
 		*skb_xdp = 1;
 		return __tun_build_skb(tfile, alloc_frag, buf, buflen, len,
 				       pad);
@@ -1703,15 +1706,15 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	local_bh_disable();
 	rcu_read_lock();
 	bpf_net_ctx = bpf_net_ctx_set(&__bpf_net_ctx);
-	xdp_prog = rcu_dereference(tun->xdp_prog);
-	if (xdp_prog) {
+	xdp_array = rcu_dereference(tun->xdp_array);
+	if (xdp_array) {
 		struct xdp_buff xdp;
 		u32 act;
 
 		xdp_init_buff(&xdp, buflen, &tfile->xdp_rxq);
 		xdp_prepare_buff(&xdp, buf, pad, len, false);
 
-		act = bpf_prog_run_xdp(xdp_prog, &xdp);
+		act = bpf_mprog_run_xdp(xdp_array, &xdp, &xdp_prog);
 		if (act == XDP_REDIRECT || act == XDP_TX) {
 			get_page(alloc_frag->page);
 			alloc_frag->offset += buflen;
@@ -1919,14 +1922,14 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	skb_record_rx_queue(skb, tfile->queue_index);
 
 	if (skb_xdp) {
-		struct bpf_prog *xdp_prog;
+		struct bpf_mprog_array *xdp_array;
 		int ret;
 
 		local_bh_disable();
 		rcu_read_lock();
-		xdp_prog = rcu_dereference(tun->xdp_prog);
-		if (xdp_prog) {
-			ret = do_xdp_generic(xdp_prog, &skb);
+		xdp_array = rcu_dereference(tun->xdp_array);
+		if (xdp_array) {
+			ret = do_xdp_generic(xdp_array, &skb);
 			if (ret != XDP_PASS) {
 				rcu_read_unlock();
 				local_bh_enable();
@@ -2447,6 +2450,7 @@ static int tun_xdp_one(struct tun_struct *tun,
 	unsigned int datasize = xdp->data_end - xdp->data;
 	struct tun_xdp_hdr *hdr = xdp->data_hard_start;
 	struct virtio_net_hdr *gso = &hdr->gso;
+	struct bpf_mprog_array *xdp_array;
 	struct bpf_prog *xdp_prog;
 	struct sk_buff *skb = NULL;
 	struct sk_buff_head *queue;
@@ -2459,8 +2463,8 @@ static int tun_xdp_one(struct tun_struct *tun,
 	if (unlikely(datasize < ETH_HLEN))
 		return -EINVAL;
 
-	xdp_prog = rcu_dereference(tun->xdp_prog);
-	if (xdp_prog) {
+	xdp_array = rcu_dereference(tun->xdp_array);
+	if (xdp_array) {
 		if (gso->gso_type) {
 			skb_xdp = true;
 			goto build;
@@ -2469,7 +2473,7 @@ static int tun_xdp_one(struct tun_struct *tun,
 		xdp_init_buff(xdp, buflen, &tfile->xdp_rxq);
 		xdp_set_data_meta_invalid(xdp);
 
-		act = bpf_prog_run_xdp(xdp_prog, xdp);
+		act = bpf_mprog_run_xdp(xdp_array, xdp, &xdp_prog);
 		ret = tun_xdp_act(tun, xdp_prog, xdp, act);
 		if (ret < 0) {
 			put_page(virt_to_head_page(xdp->data));
@@ -2520,7 +2524,7 @@ build:
 	skb_record_rx_queue(skb, tfile->queue_index);
 
 	if (skb_xdp) {
-		ret = do_xdp_generic(xdp_prog, &skb);
+		ret = do_xdp_generic(xdp_array, &skb);
 		if (ret != XDP_PASS) {
 			ret = 0;
 			goto out;

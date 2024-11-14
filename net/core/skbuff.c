@@ -1009,10 +1009,15 @@ int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
 EXPORT_SYMBOL(skb_pp_cow_data);
 
 int skb_cow_data_for_xdp(struct page_pool *pool, struct sk_buff **pskb,
-			 struct bpf_prog *prog)
+			 struct bpf_mprog_array *arr)
 {
-	if (!prog->aux->xdp_has_frags)
-		return -EINVAL;
+	const struct bpf_mprog_fp *fp;
+	struct bpf_prog *prog;
+
+	bpf_mprog_foreach_prog(arr, fp, prog) {
+		if (!prog->aux->xdp_has_frags)
+			return -EINVAL;
+	}
 
 	return skb_pp_cow_data(pool, pskb, XDP_PACKET_HEADROOM);
 }

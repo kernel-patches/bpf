@@ -1764,6 +1764,18 @@ union bpf_attr {
 				__u64		expected_revision;
 			} tcx;
 			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				/* link_create.flags contains XDP_* flags. This
+				 * field contains BPF_* flags. Field cannot be
+				 * the same since XDP_* and BPF_* enums overlap.
+				 */
+				__u32		flags;
+				__u64		expected_revision;
+			} xdp;
+			struct {
 				__aligned_u64	path;
 				__aligned_u64	offsets;
 				__aligned_u64	ref_ctr_offsets;

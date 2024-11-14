@@ -4928,8 +4928,9 @@ static struct netdev_rx_queue *netif_get_rxqueue(struct sk_buff *skb)
 	return rxqueue;
 }
 
-u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
-			     struct bpf_prog *xdp_prog)
+static u32 bpf_mprog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
+				     struct bpf_mprog_array *xdp_array,
+				     struct bpf_prog **xdp_prog)
 {
 	void *orig_data, *orig_data_end, *hard_start;
 	struct netdev_rx_queue *rxqueue;
@@ -4968,7 +4969,10 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	orig_bcast = is_multicast_ether_addr_64bits(eth->h_dest);
 	orig_eth_type = eth->h_proto;
 
-	act = bpf_prog_run_xdp(xdp_prog, xdp);
+	if (xdp_array)
+		act = bpf_mprog_run_xdp(xdp_array, xdp, xdp_prog);
+	else
+		act = bpf_prog_run_xdp(*xdp_prog, xdp);
 
 	/* check if bpf_xdp_adjust_head was used */
 	off = xdp->data - orig_data;
@@ -5030,13 +5034,19 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	return act;
 }
 
+u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
+			     struct bpf_prog *xdp_prog)
+{
+	return bpf_mprog_run_generic_xdp(skb, xdp, NULL, &xdp_prog);
+}
+
 static int
-netif_skb_check_for_xdp(struct sk_buff **pskb, struct bpf_prog *prog)
+netif_skb_check_for_xdp(struct sk_buff **pskb, struct bpf_mprog_array *arr)
 {
 	struct sk_buff *skb = *pskb;
 	int err, hroom, troom;
 
-	if (!skb_cow_data_for_xdp(this_cpu_read(system_page_pool), pskb, prog))
+	if (!skb_cow_data_for_xdp(this_cpu_read(system_page_pool), pskb, arr))
 		return 0;
 
 	/* In case we have to go down the path and also linearize,
@@ -5055,7 +5065,8 @@ netif_skb_check_for_xdp(struct sk_buff **pskb, struct bpf_prog *prog)
 
 static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
 				     struct xdp_buff *xdp,
-				     struct bpf_prog *xdp_prog)
+				     struct bpf_mprog_array *xdp_array,
+				     struct bpf_prog **xdp_prog)
 {
 	struct sk_buff *skb = *pskb;
 	u32 mac_len, act = XDP_DROP;
@@ -5075,23 +5086,23 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
 
 	if (skb_cloned(skb) || skb_is_nonlinear(skb) ||
 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
-		if (netif_skb_check_for_xdp(pskb, xdp_prog))
+		if (netif_skb_check_for_xdp(pskb, xdp_array))
 			goto do_drop;
 	}
 
 	__skb_pull(*pskb, mac_len);
 
-	act = bpf_prog_run_generic_xdp(*pskb, xdp, xdp_prog);
+	act = bpf_mprog_run_generic_xdp(*pskb, xdp, xdp_array, xdp_prog);
 	switch (act) {
 	case XDP_REDIRECT:
 	case XDP_TX:
 	case XDP_PASS:
 		break;
 	default:
-		bpf_warn_invalid_xdp_action((*pskb)->dev, xdp_prog, act);
+		bpf_warn_invalid_xdp_action((*pskb)->dev, *xdp_prog, act);
 		fallthrough;
 	case XDP_ABORTED:
-		trace_xdp_exception((*pskb)->dev, xdp_prog, act);
+		trace_xdp_exception((*pskb)->dev, *xdp_prog, act);
 		fallthrough;
 	case XDP_DROP:
 	do_drop:
@@ -5133,17 +5144,18 @@ void generic_xdp_tx(struct sk_buff *skb, struct bpf_prog *xdp_prog)
 
 static DEFINE_STATIC_KEY_FALSE(generic_xdp_needed_key);
 
-int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff **pskb)
+int do_xdp_generic(struct bpf_mprog_array *xdp_array, struct sk_buff **pskb)
 {
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
+	struct bpf_prog *xdp_prog;
 
-	if (xdp_prog) {
+	if (xdp_array) {
 		struct xdp_buff xdp;
 		u32 act;
 		int err;
 
 		bpf_net_ctx = bpf_net_ctx_set(&__bpf_net_ctx);
-		act = netif_receive_generic_xdp(pskb, &xdp, xdp_prog);
+		act = netif_receive_generic_xdp(pskb, &xdp, xdp_array, &xdp_prog);
 		if (act != XDP_PASS) {
 			switch (act) {
 			case XDP_REDIRECT:
@@ -5487,7 +5499,7 @@ another_round:
 		int ret2;
 
 		migrate_disable();
-		ret2 = do_xdp_generic(rcu_dereference(skb->dev->xdp_prog),
+		ret2 = do_xdp_generic(rcu_dereference(skb->dev->xdp_array),
 				      &skb);
 		migrate_enable();
 
@@ -5817,15 +5829,16 @@ static void __netif_receive_skb_list(struct list_head *head)
 
 static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 {
-	struct bpf_prog *old = rtnl_dereference(dev->xdp_prog);
-	struct bpf_prog *new = xdp->prog;
+	struct bpf_mprog_array *old, *new;
 	int ret = 0;
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		rcu_assign_pointer(dev->xdp_prog, new);
+		old = rtnl_dereference(dev->xdp_array);
+		new = xdp->arr;
+		rcu_assign_pointer(dev->xdp_array, new);
 		if (old)
-			bpf_prog_put(old);
+			bpf_mprog_array_put(old);
 
 		if (old && !new) {
 			static_branch_dec(&generic_xdp_needed_key);
@@ -5835,6 +5848,8 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 			dev_disable_gro_hw(dev);
 		}
 		break;
+	case XDP_QUERY_MPROG_SUPPORT:
+		return 0;
 
 	default:
 		ret = -EINVAL;
@@ -9324,6 +9339,11 @@ struct bpf_xdp_link {
 	int flags;
 };
 
+static inline struct bpf_xdp_link *xdp_link(const struct bpf_link *link)
+{
+	return container_of(link, struct bpf_xdp_link, link);
+}
+
 static enum bpf_xdp_mode dev_xdp_mode(struct net_device *dev, u32 flags)
 {
 	if (flags & XDP_FLAGS_HW_MODE)
@@ -9348,20 +9368,43 @@ static bpf_op_t dev_xdp_bpf_op(struct net_device *dev, enum bpf_xdp_mode mode)
 	}
 }
 
-static struct bpf_xdp_link *dev_xdp_link(struct net_device *dev,
-					 enum bpf_xdp_mode mode)
+static bool dev_xdp_has_link(struct net_device *dev, enum bpf_xdp_mode mode)
 {
-	return dev->xdp_state[mode].link;
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
+	struct bpf_tuple tuple = {};
+	struct bpf_mprog_fp *fp;
+	struct bpf_mprog_cp *cp;
+
+	if (entry)
+		bpf_mprog_foreach_tuple(entry, fp, cp, tuple)
+			if (tuple.link)
+				return true;
+	return false;
 }
 
-static struct bpf_prog *dev_xdp_prog(struct net_device *dev,
-				     enum bpf_xdp_mode mode)
+static bool dev_xdp_has_any_prog(struct net_device *dev, enum bpf_xdp_mode mode)
 {
-	struct bpf_xdp_link *link = dev_xdp_link(dev, mode);
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
 
-	if (link)
-		return link->link.prog;
-	return dev->xdp_state[mode].prog;
+	return entry ? xdp_entry_is_active(entry) : false;
+}
+
+static bool dev_xdp_has_prog(struct net_device *dev, enum bpf_xdp_mode mode, struct bpf_prog *prog)
+{
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
+
+	/* Special case for NULL program, in which case we check if no programs are attached. */
+	if (!prog)
+		return !entry || !xdp_entry_is_active(entry);
+
+	return entry ? bpf_mprog_exists(entry, prog) : false;
+}
+
+static int dev_xdp_prog_mode_count(struct net_device *dev, enum bpf_xdp_mode mode)
+{
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
+
+	return entry ? bpf_mprog_total(entry) : 0;
 }
 
 u8 dev_xdp_prog_count(struct net_device *dev)
@@ -9370,7 +9413,7 @@ u8 dev_xdp_prog_count(struct net_device *dev)
 	int i;
 
 	for (i = 0; i < __MAX_XDP_MODE; i++)
-		if (dev->xdp_state[i].prog || dev->xdp_state[i].link)
+		if (dev->xdp_state[i] && xdp_entry_is_active(dev->xdp_state[i]))
 			count++;
 	return count;
 }
@@ -9392,29 +9435,49 @@ EXPORT_SYMBOL_GPL(dev_xdp_propagate);
 
 u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode)
 {
-	struct bpf_prog *prog = dev_xdp_prog(dev, mode);
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
+	struct bpf_prog *prog;
 
-	return prog ? prog->aux->id : 0;
+	/* Legacy function required for netlink socket. Return the first ID
+	 * in the mprog array, otherwise 0.
+	 */
+	if (entry) {
+		prog = bpf_mprog_head(entry);
+		if (prog)
+			return prog->aux->id;
+	}
+	return 0;
 }
 
-static void dev_xdp_set_link(struct net_device *dev, enum bpf_xdp_mode mode,
-			     struct bpf_xdp_link *link)
+static bool dev_xdp_supports_mprog(struct net_device *dev, enum bpf_xdp_mode mode,
+				   bpf_op_t bpf_op)
 {
-	dev->xdp_state[mode].link = link;
-	dev->xdp_state[mode].prog = NULL;
+	struct netdev_bpf xdp;
+
+	memset(&xdp, 0, sizeof(xdp));
+	xdp.command = XDP_QUERY_MPROG_SUPPORT;
+	/* Returns 0 if mprog is supported, != 0 otherwise. */
+	return !bpf_op(dev, &xdp);
 }
 
-static void dev_xdp_set_prog(struct net_device *dev, enum bpf_xdp_mode mode,
-			     struct bpf_prog *prog)
+static int bpf_mprog_array_from_entry(struct bpf_mprog_entry *entry,
+				      struct bpf_mprog_array **arr)
 {
-	dev->xdp_state[mode].link = NULL;
-	dev->xdp_state[mode].prog = prog;
+	*arr = kzalloc(sizeof(**arr), GFP_KERNEL);
+	if (!*arr)
+		return -ENOMEM;
+	bpf_mprog_array_init(*arr, entry);
+	return 0;
 }
 
 static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 			   bpf_op_t bpf_op, struct netlink_ext_ack *extack,
-			   u32 flags, struct bpf_prog *prog)
+			   u32 flags, struct bpf_mprog_entry *entry,
+			   struct bpf_prog *nprog, struct bpf_prog *oprog)
 {
+	const bool supports_mprog = dev_xdp_supports_mprog(dev, mode, bpf_op);
+	struct bpf_mprog_array *arr = NULL;
+	struct bpf_prog *prog = NULL;
 	struct netdev_bpf xdp;
 	int err;
 
@@ -9423,75 +9486,102 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 		return -EBUSY;
 	}
 
+	if (!supports_mprog && entry && bpf_mprog_total(entry) > 1) {
+		NL_SET_ERR_MSG(extack, "Underlying driver does not support multiple XDP programs");
+		return -EOPNOTSUPP;
+	}
+
+	if (supports_mprog) {
+		if (entry && xdp_entry_is_active(entry)) {
+			err = bpf_mprog_array_from_entry(entry, &arr);
+			if (err)
+				return err;
+		}
+	} else {
+		prog = nprog;
+	}
+
 	memset(&xdp, 0, sizeof(xdp));
 	xdp.command = mode == XDP_MODE_HW ? XDP_SETUP_PROG_HW : XDP_SETUP_PROG;
 	xdp.extack = extack;
 	xdp.flags = flags;
-	xdp.prog = prog;
+	if (arr)
+		xdp.arr = arr;
+	if (prog)
+		xdp.prog = prog;
 
 	/* Drivers assume refcnt is already incremented (i.e, prog pointer is
 	 * "moved" into driver), so they don't increment it on their own, but
 	 * they do decrement refcnt when program is detached or replaced.
 	 * Given net_device also owns link/prog, we need to bump refcnt here
 	 * to prevent drivers from underflowing it.
+	 *
+	 * Don't do this for arrays since refcount is initialized in
+	 * bpf_mprog_array_init().
 	 */
 	if (prog)
 		bpf_prog_inc(prog);
 	err = bpf_op(dev, &xdp);
 	if (err) {
+		if (arr)
+			bpf_mprog_array_put(arr);
 		if (prog)
 			bpf_prog_put(prog);
 		return err;
 	}
 
 	if (mode != XDP_MODE_HW)
-		bpf_prog_change_xdp(dev_xdp_prog(dev, mode), prog);
+		bpf_prog_change_xdp(oprog, nprog);
 
 	return 0;
 }
 
 static void dev_xdp_uninstall(struct net_device *dev)
 {
-	struct bpf_xdp_link *link;
-	struct bpf_prog *prog;
+	struct bpf_mprog_entry *entry, *entry_new = NULL;
+	struct bpf_tuple tuple = {};
+	struct bpf_mprog_fp *fp;
+	struct bpf_mprog_cp *cp;
 	enum bpf_xdp_mode mode;
 	bpf_op_t bpf_op;
 
 	ASSERT_RTNL();
 
 	for (mode = XDP_MODE_SKB; mode < __MAX_XDP_MODE; mode++) {
-		prog = dev_xdp_prog(dev, mode);
-		if (!prog)
+		entry = xdp_entry_fetch(dev, mode);
+		if (!entry)
 			continue;
 
 		bpf_op = dev_xdp_bpf_op(dev, mode);
 		if (!bpf_op)
 			continue;
 
-		WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, NULL));
+		WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, NULL, NULL, NULL));
 
-		/* auto-detach link from net device */
-		link = dev_xdp_link(dev, mode);
-		if (link)
-			link->dev = NULL;
-		else
-			bpf_prog_put(prog);
+		bpf_mprog_clear_all(entry, &entry_new);
+		xdp_entry_update(dev, entry_new, mode);
+		xdp_entry_sync();
 
-		dev_xdp_set_link(dev, mode, NULL);
+		bpf_mprog_foreach_tuple(entry, fp, cp, tuple) {
+			if (tuple.link)
+				xdp_link(tuple.link)->dev = NULL;
+			else
+				bpf_prog_put(tuple.prog);
+		}
+
+		bpf_mprog_commit(entry);
+		xdp_entry_free(entry);
 	}
 }
 
-static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack,
-			  struct bpf_xdp_link *link, struct bpf_prog *new_prog,
-			  struct bpf_prog *old_prog, u32 flags)
+static int verify_dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack,
+				 struct bpf_xdp_link *link, struct bpf_prog *new_prog,
+				 struct bpf_prog *old_prog, u32 flags)
 {
 	unsigned int num_modes = hweight32(flags & XDP_FLAGS_MODES);
-	struct bpf_prog *cur_prog;
 	struct net_device *upper;
 	struct list_head *iter;
 	enum bpf_xdp_mode mode;
-	bpf_op_t bpf_op;
-	int err;
 
 	ASSERT_RTNL();
 
@@ -9521,8 +9611,12 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 	}
 
 	mode = dev_xdp_mode(dev, flags);
-	/* can't replace attached link */
-	if (dev_xdp_link(dev, mode)) {
+	if (!link && dev_xdp_prog_mode_count(dev, mode) > 1) {
+		NL_SET_ERR_MSG(extack, "Netlink does not support multiple XDP programs");
+		return -EOPNOTSUPP;
+	}
+	/* netlink socket can't replace attached link */
+	if (!link && dev_xdp_has_link(dev, mode)) {
 		NL_SET_ERR_MSG(extack, "Can't replace active BPF XDP link");
 		return -EBUSY;
 	}
@@ -9535,13 +9629,12 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		}
 	}
 
-	cur_prog = dev_xdp_prog(dev, mode);
-	/* can't replace attached prog with link */
-	if (link && cur_prog) {
+	/* attached links can't replace netlink socket */
+	if (link && dev_xdp_has_any_prog(dev, mode) && !dev_xdp_has_link(dev, mode)) {
 		NL_SET_ERR_MSG(extack, "Can't replace active XDP program with BPF link");
 		return -EBUSY;
 	}
-	if ((flags & XDP_FLAGS_REPLACE) && cur_prog != old_prog) {
+	if ((flags & XDP_FLAGS_REPLACE) && !dev_xdp_has_prog(dev, mode, old_prog)) {
 		NL_SET_ERR_MSG(extack, "Active program does not match expected");
 		return -EEXIST;
 	}
@@ -9555,11 +9648,11 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		enum bpf_xdp_mode other_mode = mode == XDP_MODE_SKB
 					       ? XDP_MODE_DRV : XDP_MODE_SKB;
 
-		if ((flags & XDP_FLAGS_UPDATE_IF_NOEXIST) && cur_prog) {
+		if ((flags & XDP_FLAGS_UPDATE_IF_NOEXIST) && dev_xdp_has_any_prog(dev, mode)) {
 			NL_SET_ERR_MSG(extack, "XDP program already attached");
 			return -EBUSY;
 		}
-		if (!offload && dev_xdp_prog(dev, other_mode)) {
+		if (!offload && dev_xdp_has_any_prog(dev, other_mode)) {
 			NL_SET_ERR_MSG(extack, "Native and generic XDP can't be active at the same time");
 			return -EEXIST;
 		}
@@ -9581,52 +9674,165 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		}
 	}
 
-	/* don't call drivers if the effective program didn't change */
-	if (new_prog != cur_prog) {
-		bpf_op = dev_xdp_bpf_op(dev, mode);
-		if (!bpf_op) {
-			NL_SET_ERR_MSG(extack, "Underlying driver does not support XDP in native mode");
-			return -EOPNOTSUPP;
-		}
+	return 0;
+}
 
-		err = dev_xdp_install(dev, mode, bpf_op, extack, flags, new_prog);
-		if (err)
-			return err;
+static int dev_xdp_attach_netlink(struct net_device *dev, struct netlink_ext_ack *extack,
+				  struct bpf_prog *new_prog, struct bpf_prog *old_prog,
+				  u32 flags)
+{
+	struct bpf_mprog_entry *entry, *entry_new;
+	struct bpf_prog *cur_prog;
+	enum bpf_xdp_mode mode;
+	bpf_op_t bpf_op;
+	int err;
+	bool created;
+
+	ASSERT_RTNL();
+
+	err = verify_dev_xdp_attach(dev, extack, NULL, new_prog, old_prog, flags);
+	if (err)
+		return err;
+
+	mode = dev_xdp_mode(dev, flags);
+	bpf_op = dev_xdp_bpf_op(dev, mode);
+	if (!bpf_op) {
+		NL_SET_ERR_MSG(extack, "Underlying driver does not support XDP in native mode");
+		return -EOPNOTSUPP;
 	}
 
-	if (link)
-		dev_xdp_set_link(dev, mode, link);
-	else
-		dev_xdp_set_prog(dev, mode, new_prog);
-	if (cur_prog)
-		bpf_prog_put(cur_prog);
+	entry = xdp_entry_fetch_or_create(dev, mode, &created);
+	if (!entry)
+		return -ENOMEM;
 
-	return 0;
+	/* Netlink does not support mprog and this is validated in verify_dev_xdp_attach(). */
+	cur_prog = bpf_mprog_head(entry);
+
+	/* If no new program to attach or current program to detach, there's nothing to do. */
+	if (!cur_prog && !new_prog)
+		return 0;
+
+	if (new_prog)
+		/* Insert new program or replace existing one. */
+		err = bpf_mprog_attach(entry, &entry_new, new_prog,
+				       NULL,
+				       cur_prog,
+				       cur_prog ? BPF_F_REPLACE | BPF_F_ID : 0,
+				       cur_prog ? cur_prog->aux->id : 0,
+				       0);
+	else
+		/* Detach old program. */
+		err = bpf_mprog_detach(entry, &entry_new, cur_prog, NULL, 0, 0, 0);
+
+	if (!xdp_entry_is_active(entry_new))
+		entry_new = NULL;
+
+	/* Don't call drivers if the effective program didn't change. */
+	if (new_prog != cur_prog) {
+		err = dev_xdp_install(dev, mode, bpf_op, extack, flags, entry_new, new_prog,
+				      cur_prog);
+		if (err)
+			goto out;
+	}
+
+	if (entry != entry_new) {
+		xdp_entry_update(dev, entry_new, mode);
+		xdp_entry_sync();
+	}
+	bpf_mprog_commit(entry);
+	if (!entry_new)
+		xdp_entry_free(entry);
+
+out:
+	if (err && created)
+		xdp_entry_free(entry);
+	return err;
 }
 
 static int dev_xdp_attach_link(struct net_device *dev,
 			       struct netlink_ext_ack *extack,
-			       struct bpf_xdp_link *link)
+			       struct bpf_xdp_link *link,
+			       u32 bpf_flags,
+			       u32 id_or_fd,
+			       u64 revision)
 {
-	return dev_xdp_attach(dev, extack, link, NULL, NULL, link->flags);
-}
-
-static int dev_xdp_detach_link(struct net_device *dev,
-			       struct netlink_ext_ack *extack,
-			       struct bpf_xdp_link *link)
-{
+	int flags = link->flags;
+	struct bpf_prog *prog = link->link.prog;
+	struct bpf_mprog_entry *entry, *entry_new;
 	enum bpf_xdp_mode mode;
 	bpf_op_t bpf_op;
+	int err;
+	bool created;
 
 	ASSERT_RTNL();
 
-	mode = dev_xdp_mode(dev, link->flags);
-	if (dev_xdp_link(dev, mode) != link)
-		return -EINVAL;
+	err = verify_dev_xdp_attach(dev, extack, link, NULL, NULL, flags);
+	if (err)
+		return err;
 
+	mode = dev_xdp_mode(dev, flags);
 	bpf_op = dev_xdp_bpf_op(dev, mode);
-	WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, NULL));
-	dev_xdp_set_link(dev, mode, NULL);
+	if (!bpf_op) {
+		NL_SET_ERR_MSG(extack, "Underlying driver does not support XDP in native mode");
+		return -EOPNOTSUPP;
+	}
+
+	entry = xdp_entry_fetch_or_create(dev, mode, &created);
+	if (!entry)
+		return -ENOMEM;
+
+	err = bpf_mprog_attach(entry, &entry_new, prog, &link->link, NULL, bpf_flags,
+			       id_or_fd,
+			       revision);
+	if (err)
+		goto out;
+
+	/* Attachment via link always installs a new program so always call the driver. */
+	err = dev_xdp_install(dev, mode, bpf_op, extack, flags, entry_new, prog, NULL);
+	if (err)
+		goto out;
+
+	if (entry != entry_new) {
+		xdp_entry_update(dev, entry_new, mode);
+		xdp_entry_sync();
+	}
+	bpf_mprog_commit(entry);
+
+out:
+	if (err && created)
+		xdp_entry_free(entry);
+	return err;
+}
+
+static int dev_xdp_detach_link(struct net_device *dev,
+			       struct bpf_xdp_link *xdp_link)
+{
+	struct bpf_link *link = &xdp_link->link;
+	struct bpf_mprog_entry *entry, *entry_new = NULL;
+	enum bpf_xdp_mode mode;
+	bpf_op_t bpf_op;
+	int ret;
+
+	ASSERT_RTNL();
+
+	mode = dev_xdp_mode(dev, xdp_link->flags);
+	entry = xdp_entry_fetch(dev, mode);
+	if (!entry)
+		return -ENOENT;
+
+	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0);
+	if (ret)
+		return ret;
+
+	if (!xdp_entry_is_active(entry_new))
+		entry_new = NULL;
+	bpf_op = dev_xdp_bpf_op(dev, mode);
+	WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, entry_new, NULL, link->prog));
+	xdp_entry_update(dev, entry_new, mode);
+	xdp_entry_sync();
+	bpf_mprog_commit(entry);
+	if (!entry_new)
+		xdp_entry_free(entry);
 	return 0;
 }
 
@@ -9640,7 +9846,7 @@ static void bpf_xdp_link_release(struct bpf_link *link)
 	 * already NULL, in which case link was already auto-detached
 	 */
 	if (xdp_link->dev) {
-		WARN_ON(dev_xdp_detach_link(xdp_link->dev, NULL, xdp_link));
+		WARN_ON(dev_xdp_detach_link(xdp_link->dev, xdp_link));
 		xdp_link->dev = NULL;
 	}
 
@@ -9693,6 +9899,7 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 			       struct bpf_prog *old_prog)
 {
 	struct bpf_xdp_link *xdp_link = container_of(link, struct bpf_xdp_link, link);
+	struct bpf_mprog_entry *entry, *entry_new;
 	enum bpf_xdp_mode mode;
 	bpf_op_t bpf_op;
 	int err = 0;
@@ -9723,16 +9930,34 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 	}
 
 	mode = dev_xdp_mode(xdp_link->dev, xdp_link->flags);
+
+	entry = xdp_entry_fetch(xdp_link->dev, mode);
+	if (!entry) {
+		err = -ENOENT;
+		goto out_unlock;
+	}
+
+	err = bpf_mprog_attach(entry, &entry_new, new_prog, link, old_prog,
+			       BPF_F_REPLACE | BPF_F_ID,
+			       link->prog->aux->id, 0);
+	if (err)
+		goto out_unlock;
+
+	WARN_ON_ONCE(entry != entry_new);
+
 	bpf_op = dev_xdp_bpf_op(xdp_link->dev, mode);
 	err = dev_xdp_install(xdp_link->dev, mode, bpf_op, NULL,
-			      xdp_link->flags, new_prog);
+			      xdp_link->flags, entry_new, new_prog, old_prog);
 	if (err)
 		goto out_unlock;
 
 	old_prog = xchg(&link->prog, new_prog);
 	bpf_prog_put(old_prog);
+	bpf_mprog_commit(entry);
 
 out_unlock:
+	if (err && new_prog)
+		bpf_prog_put(new_prog);
 	rtnl_unlock();
 	return err;
 }
@@ -9778,7 +10003,10 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		goto unlock;
 	}
 
-	err = dev_xdp_attach_link(dev, &extack, link);
+	err = dev_xdp_attach_link(dev, &extack, link,
+				  attr->link_create.xdp.flags,
+				  attr->link_create.xdp.relative_fd,
+				  attr->link_create.xdp.expected_revision);
 	rtnl_unlock();
 
 	if (err) {
@@ -9837,7 +10065,7 @@ int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 		}
 	}
 
-	err = dev_xdp_attach(dev, extack, NULL, new_prog, old_prog, flags);
+	err = dev_xdp_attach_netlink(dev, extack, new_prog, old_prog, flags);
 
 err_out:
 	if (err && new_prog)

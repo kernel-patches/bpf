@@ -932,13 +932,16 @@ enum bpf_netdev_command {
 	BPF_OFFLOAD_MAP_ALLOC,
 	BPF_OFFLOAD_MAP_FREE,
 	XDP_SETUP_XSK_POOL,
+	/* Queries whether multi-programs are supported by driver. Returns 0
+	 * for yes, < 0 for no. Requires no arguments.
+	 */
+	XDP_QUERY_MPROG_SUPPORT,
 };
 
 struct bpf_prog_offload_ops;
 struct netlink_ext_ack;
 struct xdp_umem;
 struct xdp_dev_bulk_queue;
-struct bpf_xdp_link;
 
 enum bpf_xdp_mode {
 	XDP_MODE_SKB = 0,
@@ -947,18 +950,16 @@ enum bpf_xdp_mode {
 	__MAX_XDP_MODE
 };
 
-struct bpf_xdp_entity {
-	struct bpf_prog *prog;
-	struct bpf_xdp_link *link;
-};
-
 struct netdev_bpf {
 	enum bpf_netdev_command command;
 	union {
 		/* XDP_SETUP_PROG */
 		struct {
 			u32 flags;
-			struct bpf_prog *prog;
+			union {
+				struct bpf_prog *prog;
+				struct bpf_mprog_array *arr;
+			};
 			struct netlink_ext_ack *extack;
 		};
 		/* BPF_OFFLOAD_MAP_ALLOC, BPF_OFFLOAD_MAP_FREE */
@@ -2069,7 +2070,7 @@ struct net_device {
 
 	/* RX read-mostly hotpath */
 	__cacheline_group_begin(net_device_read_rx);
-	struct bpf_prog __rcu	*xdp_prog;
+	struct bpf_mprog_array __rcu	*xdp_array;
 	struct list_head	ptype_specific;
 	int			ifindex;
 	unsigned int		real_num_rx_queues;
@@ -2378,7 +2379,7 @@ struct net_device {
 	struct ethtool_netdev_state *ethtool;
 
 	/* protected by rtnl_lock */
-	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
+	struct bpf_mprog_entry __rcu	*xdp_state[__MAX_XDP_MODE];
 
 	u8 dev_addr_shadow[MAX_ADDR_LEN];
 	netdevice_tracker	linkwatch_dev_tracker;
@@ -2417,7 +2418,7 @@ struct net_device {
 
 static inline bool netif_elide_gro(const struct net_device *dev)
 {
-	if (!(dev->features & NETIF_F_GRO) || dev->xdp_prog)
+	if (!(dev->features & NETIF_F_GRO) || dev->xdp_array)
 		return true;
 	return false;
 }
@@ -3886,7 +3887,7 @@ static inline void dev_consume_skb_any(struct sk_buff *skb)
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 			     struct bpf_prog *xdp_prog);
 void generic_xdp_tx(struct sk_buff *skb, struct bpf_prog *xdp_prog);
-int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff **pskb);
+int do_xdp_generic(struct bpf_mprog_array *xdp_array, struct sk_buff **pskb);
 int netif_rx(struct sk_buff *skb);
 int __netif_rx(struct sk_buff *skb);
 

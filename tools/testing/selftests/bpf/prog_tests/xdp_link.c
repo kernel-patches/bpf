@@ -93,22 +93,17 @@ void serial_test_xdp_link(void)
 	if (!ASSERT_ERR(err, "prog_detach_fail"))
 		goto cleanup;
 
-	/* BPF link is not allowed to replace another BPF link */
-	link = bpf_program__attach_xdp(skel2->progs.xdp_handler, IFINDEX_LO);
-	if (!ASSERT_ERR_PTR(link, "link_attach_should_fail")) {
-		bpf_link__destroy(link);
-		goto cleanup;
-	}
-
-	bpf_link__destroy(skel1->links.xdp_handler);
-	skel1->links.xdp_handler = NULL;
-
-	/* new link attach should succeed */
+	/* Multiple BPF links are supported for XDP */
 	link = bpf_program__attach_xdp(skel2->progs.xdp_handler, IFINDEX_LO);
 	if (!ASSERT_OK_PTR(link, "link_attach"))
 		goto cleanup;
 	skel2->links.xdp_handler = link;
 
+	/* Detach previous link */
+	bpf_link__destroy(skel1->links.xdp_handler);
+	skel1->links.xdp_handler = NULL;
+
+	/* Verify program ID now points to current link */
 	err = bpf_xdp_query_id(IFINDEX_LO, 0, &id0);
 	if (!ASSERT_OK(err, "id2_check_err") || !ASSERT_EQ(id0, id2, "id2_check_val"))
 		goto cleanup;

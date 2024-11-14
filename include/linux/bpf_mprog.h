@@ -110,6 +110,35 @@
  *
  * The READ_ONCE()/WRITE_ONCE() pairing for bpf_mprog_fp's prog access is for
  * the replacement case where we don't swap the bpf_mprog_entry.
+ *
+ * However, there are cases where multiple BPF programs must be co-owned with
+ * other modules e.g. netdevice and drivers both hold their own RCU protected
+ * pointers to BPF programs. Moreover, drivers may fail to detach multiple
+ * BPF programs while netdevice may successfully detach the program. To deal
+ * with these cases, we copy the fast-path BPF programs via bpf_mprog_array.
+ * For example, while attaching an XDP program:
+ *
+ *   struct bpf_mprog_entry *entry, *entry_new;
+ *   struct bpf_mprog_array *arr;
+ *   int ret;
+ *
+ *   // bpf_mprog user-side lock
+ *   // fetch active @entry from attach location
+ *   [...]
+ *   ret = bpf_mprog_attach(entry, &entry_new, [...]);
+ *   if (!ret) {
+ *       if (entry != entry_new) {
+ *           // allocate BPF program array
+ *           bpf_mprog_array_init(arr, entry);
+ *           // send BPF program array to xdp driver
+ *           synchronize_rcu();
+ *       }
+ *       bpf_mprog_commit(entry);
+ *   } else {
+ *       // error path, bail out, propagate @ret
+ *   }
+ *   // bpf_mprog user-side unlock
+ *
  */
 
 #define bpf_mprog_foreach_tuple(entry, fp, cp, t)			\
@@ -153,6 +182,11 @@ struct bpf_mprog_bundle {
 struct bpf_tuple {
 	struct bpf_prog *prog;
 	struct bpf_link *link;
+};
+
+struct bpf_mprog_array {
+	struct bpf_mprog_fp fp_items[BPF_MPROG_MAX];
+	struct rcu_head rcu;
 };
 
 static inline struct bpf_mprog_entry *
@@ -210,6 +244,16 @@ static inline bool bpf_mprog_exists(struct bpf_mprog_entry *entry,
 			return true;
 	}
 	return false;
+}
+
+static inline struct bpf_prog *bpf_mprog_head(struct bpf_mprog_entry *entry)
+{
+	const struct bpf_mprog_fp *fp;
+	struct bpf_prog *tmp;
+
+	bpf_mprog_foreach_prog(entry, fp, tmp)
+		return tmp;
+	return NULL;
 }
 
 static inline void bpf_mprog_mark_for_release(struct bpf_mprog_entry *entry,
@@ -335,9 +379,37 @@ static inline bool bpf_mprog_supported(enum bpf_prog_type type)
 {
 	switch (type) {
 	case BPF_PROG_TYPE_SCHED_CLS:
+	case BPF_PROG_TYPE_XDP:
 		return true;
 	default:
 		return false;
 	}
+}
+
+static inline void bpf_mprog_array_init(struct bpf_mprog_array *arr,
+					struct bpf_mprog_entry *src)
+{
+	const struct bpf_mprog_fp *fp;
+	struct bpf_prog *tmp;
+
+	BUILD_BUG_ON(sizeof(arr->fp_items[0]) > sizeof(u64));
+
+	memset(arr, 0, sizeof(*arr));
+	memcpy(arr->fp_items, src->fp_items, sizeof(src->fp_items));
+
+	bpf_mprog_foreach_prog(arr, fp, tmp) {
+		bpf_prog_inc(tmp);
+	}
+}
+
+static inline void bpf_mprog_array_put(struct bpf_mprog_array *arr)
+{
+	const struct bpf_mprog_fp *fp;
+	struct bpf_prog *tmp;
+
+	bpf_mprog_foreach_prog(arr, fp, tmp) {
+		bpf_prog_put(tmp);
+	}
+	kfree_rcu(arr, rcu);
 }
 #endif /* __BPF_MPROG_H */

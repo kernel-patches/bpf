@@ -7,6 +7,7 @@
 #define __LINUX_NET_XDP_H__
 
 #include <linux/bitfield.h>
+#include <linux/bpf_mprog.h>
 #include <linux/filter.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h> /* skb_shared_info */
@@ -519,5 +520,98 @@ static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
 	}
 
 	return act;
+}
+
+static __always_inline u32 bpf_mprog_run_xdp(const struct bpf_mprog_array *arr,
+					     struct xdp_buff *xdp,
+					     struct bpf_prog **prog)
+{
+	const struct bpf_mprog_fp *fp;
+	u32 act = XDP_PASS;
+
+	/* prog returns the program that returned the first non-pass XDP action.
+	 * If all programs return XDP_PASS, it returns the last program in the
+	 * array.
+	 */
+	bpf_mprog_foreach_prog(arr, fp, *prog) {
+		act = bpf_prog_run_xdp(*prog, xdp);
+		if (act != XDP_PASS)
+			break;
+	}
+	return act;
+}
+
+struct bpf_xdp_entry {
+	struct bpf_mprog_bundle bundle;
+	struct rcu_head rcu;
+};
+
+static inline struct bpf_xdp_entry *xdp_entry(struct bpf_mprog_entry *entry)
+{
+	struct bpf_mprog_bundle *bundle = entry->parent;
+
+	return container_of(bundle, struct bpf_xdp_entry, bundle);
+}
+
+static inline void
+xdp_entry_update(struct net_device *dev, struct bpf_mprog_entry *entry,
+		 enum bpf_xdp_mode mode)
+{
+	ASSERT_RTNL();
+	rcu_assign_pointer(dev->xdp_state[mode], entry);
+}
+
+static inline void xdp_entry_sync(void)
+{
+	/* bpf_mprog_entry got a/b swapped, therefore ensure that
+	 * there are no inflight users on the old one anymore.
+	 */
+	synchronize_rcu();
+}
+
+static inline struct bpf_mprog_entry *
+xdp_entry_fetch(struct net_device *dev, enum bpf_xdp_mode mode)
+{
+	ASSERT_RTNL();
+	return rcu_dereference_rtnl(dev->xdp_state[mode]);
+}
+
+static inline struct bpf_mprog_entry *xdp_entry_create_cb(void)
+{
+	struct bpf_xdp_entry *xdp = kzalloc(sizeof(*xdp), GFP_KERNEL);
+
+	if (xdp) {
+		bpf_mprog_bundle_init(&xdp->bundle);
+		return &xdp->bundle.a;
+	}
+	return NULL;
+}
+
+#define xdp_entry_create(...)	alloc_hooks(xdp_entry_create_cb(__VA_ARGS__))
+
+static inline void xdp_entry_free(struct bpf_mprog_entry *entry)
+{
+	kfree_rcu(xdp_entry(entry), rcu);
+}
+
+static inline struct bpf_mprog_entry *
+xdp_entry_fetch_or_create(struct net_device *dev, enum bpf_xdp_mode mode, bool *created)
+{
+	struct bpf_mprog_entry *entry = xdp_entry_fetch(dev, mode);
+
+	*created = false;
+	if (!entry) {
+		entry = xdp_entry_create();
+		if (!entry)
+			return NULL;
+		*created = true;
+	}
+	return entry;
+}
+
+static inline bool xdp_entry_is_active(struct bpf_mprog_entry *entry)
+{
+	ASSERT_RTNL();
+	return bpf_mprog_total(entry);
 }
 #endif /* __LINUX_NET_XDP_H__ */
