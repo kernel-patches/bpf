@@ -152,6 +152,44 @@ __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
 	return bpf_get_dentry_xattr(dentry, name__str, value_p);
 }
 
+/**
+ * bpf_iput - Drop a reference on the inode
+ *
+ * @inode: inode to drop reference.
+ *
+ * Drop a refcount on inode.
+ */
+__bpf_kfunc void bpf_iput(struct inode *inode)
+{
+	iput(inode);
+}
+
+/**
+ * bpf_dput - Drop a reference on the dentry
+ *
+ * @dentry: dentry to drop reference.
+ *
+ * Drop a refcount on dentry.
+ */
+__bpf_kfunc void bpf_dput(struct dentry *dentry)
+{
+	dput(dentry);
+}
+
+/**
+ * bpf_is_subdir - is new dentry a subdirectory of old_dentry
+ * @new_dentry: new dentry
+ * @old_dentry: old dentry
+ *
+ * Returns true if new_dentry is a subdirectory of the parent (at any depth).
+ * Returns false otherwise.
+ * Caller must ensure that "new_dentry" is pinned before calling is_subdir()
+ */
+__bpf_kfunc bool bpf_is_subdir(struct dentry *new_dentry, struct dentry *old_dentry)
+{
+	return is_subdir(new_dentry, old_dentry);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
@@ -161,6 +199,9 @@ BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_path_d_path, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_iput, KF_SLEEPABLE | KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_dput, KF_SLEEPABLE | KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_is_subdir, KF_RCU)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)

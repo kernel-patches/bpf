@@ -5438,6 +5438,7 @@ BTF_ID(struct, bpf_cpumask)
 #endif
 BTF_ID(struct, task_struct)
 BTF_ID(struct, bpf_crypto_ctx)
+BTF_ID(struct, dentry)
 BTF_SET_END(rcu_protected_types)
 
 static bool rcu_protected_object(const struct btf *btf, u32 btf_id)
