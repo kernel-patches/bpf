@@ -19185,21 +19185,9 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Add map behind fd to used maps list, if it's not already there, and return
- * its index.
- * Returns <0 on error, or >= 0 index, on success.
- */
-static int add_used_map_from_fd(struct bpf_verifier_env *env, int fd)
+static int add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 {
-	CLASS(fd, f)(fd);
-	struct bpf_map *map;
 	int i, err;
-
-	map = __bpf_map_get(f);
-	if (IS_ERR(map)) {
-		verbose(env, "fd %d is not pointing to valid bpf_map\n", fd);
-		return PTR_ERR(map);
-	}
 
 	/* check whether we recorded this map already */
 	for (i = 0; i < env->used_map_cnt; i++)
@@ -19229,6 +19217,24 @@ static int add_used_map_from_fd(struct bpf_verifier_env *env, int fd)
 	env->used_maps[env->used_map_cnt++] = map;
 
 	return env->used_map_cnt - 1;
+}
+
+/* Add map behind fd to used maps list, if it's not already there, and return
+ * its index.
+ * Returns <0 on error, or >= 0 index, on success.
+ */
+static int add_used_map_from_fd(struct bpf_verifier_env *env, int fd)
+{
+	struct bpf_map *map;
+	CLASS(fd, f)(fd);
+
+	map = __bpf_map_get(f);
+	if (IS_ERR(map)) {
+		verbose(env, "fd %d is not pointing to valid bpf_map\n", fd);
+		return PTR_ERR(map);
+	}
+
+	return add_used_map(env, map);
 }
 
 /* find and rewrite pseudo imm in ld_imm64 instructions:
@@ -22530,6 +22536,76 @@ struct btf *bpf_get_btf_vmlinux(void)
 	return btf_vmlinux;
 }
 
+/*
+ * The add_fd_from_fd_array() is executed only if fd_array_cnt is given.  In
+ * this case expect that every file descriptor in the array is either a map or
+ * a BTF, or a hole (0). Everything else is considered to be trash.
+ */
+static int add_fd_from_fd_array(struct bpf_verifier_env *env, int fd)
+{
+	struct bpf_map *map;
+	CLASS(fd, f)(fd);
+	int ret;
+
+	map = __bpf_map_get(f);
+	if (IS_ERR(map)) {
+		if (!IS_ERR(__btf_get_by_fd(f)))
+			return 0;
+
+		/* allow holes */
+		if (!fd)
+			return 0;
+
+		verbose(env, "fd %d is not pointing to valid bpf_map or btf\n", fd);
+		return PTR_ERR(map);
+	}
+
+	ret = add_used_map(env, map);
+	if (ret < 0)
+		return ret;
+	return 0;
+}
+
+static int env_init_fd_array(struct bpf_verifier_env *env, union bpf_attr *attr, bpfptr_t uattr)
+{
+	int size = sizeof(int) * attr->fd_array_cnt;
+	int *copy;
+	int ret;
+	int i;
+
+	if (attr->fd_array_cnt >= MAX_USED_MAPS)
+		return -E2BIG;
+
+	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
+
+	/*
+	 * The only difference between old (no fd_array_cnt is given) and new
+	 * APIs is that in the latter case the fd_array is expected to be
+	 * continuous and is scanned for map fds right away
+	 */
+	if (!size)
+		return 0;
+
+	copy = kzalloc(size, GFP_KERNEL);
+	if (!copy)
+		return -ENOMEM;
+
+	if (copy_from_bpfptr_offset(copy, env->fd_array, 0, size)) {
+		ret = -EFAULT;
+		goto free_copy;
+	}
+
+	for (i = 0; i < attr->fd_array_cnt; i++) {
+		ret = add_fd_from_fd_array(env, copy[i]);
+		if (ret)
+			goto free_copy;
+	}
+
+free_copy:
+	kfree(copy);
+	return ret;
+}
+
 int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
 	u64 start_time = ktime_get_ns();
@@ -22561,7 +22637,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		env->insn_aux_data[i].orig_idx = i;
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
-	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
+	ret = env_init_fd_array(env, attr, uattr);
+	if (ret)
+		goto err_free_aux_data;
 
 	env->allow_ptr_leaks = bpf_allow_ptr_leaks(env->prog->aux->token);
 	env->allow_uninit_stack = bpf_allow_uninit_stack(env->prog->aux->token);
@@ -22779,6 +22857,7 @@ err_release_maps:
 err_unlock:
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
+err_free_aux_data:
 	vfree(env->insn_aux_data);
 err_free_env:
 	kvfree(env);
