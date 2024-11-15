@@ -3548,7 +3548,7 @@ struct btf_dedup {
 	struct strset *strs_set;
 };
 
-static long hash_combine(long h, long value)
+static __u32 hash_combine(__u32 h, __u32 value)
 {
 	return h * 31 + value;
 }
