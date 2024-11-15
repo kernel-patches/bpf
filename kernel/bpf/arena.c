@@ -134,7 +134,9 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	INIT_LIST_HEAD(&arena->vma_list);
 	bpf_map_init_from_attr(&arena->map, attr);
 	range_tree_init(&arena->rt);
+	migrate_disable();
 	range_tree_set(&arena->rt, 0, attr->max_entries);
+	migrate_enable();
 	mutex_init(&arena->lock);
 
 	return &arena->map;
@@ -185,7 +187,9 @@ static void arena_map_free(struct bpf_map *map)
 	apply_to_existing_page_range(&init_mm, bpf_arena_get_kern_vm_start(arena),
 				     KERN_VM_SZ - GUARD_SZ, existing_page_cb, NULL);
 	free_vm_area(arena->kern_vm);
+	migrate_disable();
 	range_tree_destroy(&arena->rt);
+	migrate_enable();
 	bpf_map_area_free(arena);
 }
 
@@ -276,7 +280,9 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		/* User space requested to segfault when page is not allocated by bpf prog */
 		return VM_FAULT_SIGSEGV;
 
+	migrate_disable();
 	ret = range_tree_clear(&arena->rt, vmf->pgoff, 1);
+	migrate_enable();
 	if (ret)
 		return VM_FAULT_SIGSEGV;
 
