@@ -48,6 +48,7 @@ enum {
 	___GFP_THISNODE_BIT,
 	___GFP_ACCOUNT_BIT,
 	___GFP_ZEROTAGS_BIT,
+	___GFP_TRYLOCK_BIT,
 #ifdef CONFIG_KASAN_HW_TAGS
 	___GFP_SKIP_ZERO_BIT,
 	___GFP_SKIP_KASAN_BIT,
@@ -86,6 +87,7 @@ enum {
 #define ___GFP_THISNODE		BIT(___GFP_THISNODE_BIT)
 #define ___GFP_ACCOUNT		BIT(___GFP_ACCOUNT_BIT)
 #define ___GFP_ZEROTAGS		BIT(___GFP_ZEROTAGS_BIT)
+#define ___GFP_TRYLOCK		BIT(___GFP_TRYLOCK_BIT)
 #ifdef CONFIG_KASAN_HW_TAGS
 #define ___GFP_SKIP_ZERO	BIT(___GFP_SKIP_ZERO_BIT)
 #define ___GFP_SKIP_KASAN	BIT(___GFP_SKIP_KASAN_BIT)
@@ -293,6 +295,7 @@ enum {
 #define __GFP_COMP	((__force gfp_t)___GFP_COMP)
 #define __GFP_ZERO	((__force gfp_t)___GFP_ZERO)
 #define __GFP_ZEROTAGS	((__force gfp_t)___GFP_ZEROTAGS)
+#define __GFP_TRYLOCK	((__force gfp_t)___GFP_TRYLOCK)
 #define __GFP_SKIP_ZERO ((__force gfp_t)___GFP_SKIP_ZERO)
 #define __GFP_SKIP_KASAN ((__force gfp_t)___GFP_SKIP_KASAN)
 

@@ -347,6 +347,23 @@ static inline struct page *alloc_page_vma_noprof(gfp_t gfp,
 }
 #define alloc_page_vma(...)			alloc_hooks(alloc_page_vma_noprof(__VA_ARGS__))
 
+static inline struct page *try_alloc_page_noprof(int nid)
+{
+	/* If spin_locks are not held and interrupts are enabled, use normal path. */
+	if (preemptible())
+		return alloc_pages_node_noprof(nid, GFP_NOWAIT | __GFP_ZERO, 0);
+	/*
+	 * Best effort allocation from percpu free list.
+	 * If it's empty attempt to spin_trylock zone->lock.
+	 * Do not specify __GFP_KSWAPD_RECLAIM to avoid wakeup_kswapd
+	 * that may need to grab a lock.
+	 * Do not specify __GFP_ACCOUNT to avoid local_lock.
+	 * Do not warn either.
+	 */
+	return alloc_pages_node_noprof(nid, __GFP_TRYLOCK | __GFP_NOWARN | __GFP_ZERO, 0);
+}
+#define try_alloc_page(nid)			alloc_hooks(try_alloc_page_noprof(nid))
+
 extern unsigned long get_free_pages_noprof(gfp_t gfp_mask, unsigned int order);
 #define __get_free_pages(...)			alloc_hooks(get_free_pages_noprof(__VA_ARGS__))
 
