@@ -256,7 +256,6 @@ static void bpf_btf_load_log_buf(void)
 	ASSERT_LT(fd, 0, "bad_fd");
 	if (fd >= 0)
 		close(fd);
-	fd = -1;
 
 cleanup:
 	free(log_buf);
