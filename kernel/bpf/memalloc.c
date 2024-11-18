@@ -1014,3 +1014,15 @@ int bpf_mem_alloc_check_size(bool percpu, size_t size)
 
 	return 0;
 }
+
+bool bpf_mem_cache_is_mergeable(size_t size, size_t new_size, bool percpu)
+{
+	/* Only for fixed-size object allocator */
+	if (!size || !new_size)
+		return false;
+
+	return (percpu && ALIGN(size, PCPU_MIN_ALLOC_SIZE) ==
+			  ALIGN(new_size, PCPU_MIN_ALLOC_SIZE)) ||
+	       (!percpu && kmalloc_size_roundup(size + LLIST_NODE_SZ) ==
+			   kmalloc_size_roundup(new_size + LLIST_NODE_SZ));
+}

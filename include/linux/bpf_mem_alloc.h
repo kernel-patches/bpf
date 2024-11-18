@@ -47,5 +47,6 @@ void bpf_mem_cache_free(struct bpf_mem_alloc *ma, void *ptr);
 void bpf_mem_cache_free_rcu(struct bpf_mem_alloc *ma, void *ptr);
 void bpf_mem_cache_raw_free(void *ptr);
 void *bpf_mem_cache_alloc_flags(struct bpf_mem_alloc *ma, gfp_t flags);
+bool bpf_mem_cache_is_mergeable(size_t size, size_t new_size, bool percpu);
 
 #endif /* _BPF_MEM_ALLOC_H */
