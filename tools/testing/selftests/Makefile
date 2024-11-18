@@ -116,7 +116,7 @@ TARGETS += vDSO
 TARGETS += mm
 TARGETS += x86
 TARGETS += zram
-#Please keep the TARGETS list alphabetically sorted
+# Please keep the TARGETS list alphabetically sorted
 # Run "make quicktest=1 run_tests" or
 # "make quicktest=1 kselftest" from top level Makefile
 
@@ -132,11 +132,14 @@ endif
 
 # User can optionally provide a TARGETS skiplist. By default we skip
 # targets using BPF since it has cutting edge build time dependencies
-# which require more effort to install.
+# If user provide custom TARGETS, we just ignore SKIP_TARGETS so that
+# user can easy to test single target which defined in SKIP_TARGETS
 SKIP_TARGETS ?= bpf sched_ext
 ifneq ($(SKIP_TARGETS),)
+ifneq ($(words $(TARGETS)), 1)
 	TMP := $(filter-out $(SKIP_TARGETS), $(TARGETS))
 	override TARGETS := $(TMP)
+endif
 endif
 
 # User can set FORCE_TARGETS to 1 to require all targets to be successfully
