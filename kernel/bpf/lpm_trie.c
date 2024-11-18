@@ -310,6 +310,15 @@ static struct lpm_trie_node *lpm_trie_node_alloc(const struct lpm_trie *trie,
 	return node;
 }
 
+static int trie_check_noreplace_update(const struct lpm_trie *trie, u64 flags)
+{
+	if (flags == BPF_EXIST)
+		return -ENOENT;
+	if (trie->n_entries == trie->map.max_entries)
+		return -ENOSPC;
+	return 0;
+}
+
 /* Called from syscall or from eBPF program */
 static long trie_update_elem(struct bpf_map *map,
 			     void *_key, void *value, u64 flags)
@@ -333,19 +342,11 @@ static long trie_update_elem(struct bpf_map *map,
 	spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Allocate and fill a new node */
-
-	if (trie->n_entries == trie->map.max_entries) {
-		ret = -ENOSPC;
-		goto out;
-	}
-
 	new_node = lpm_trie_node_alloc(trie, value);
 	if (!new_node) {
 		ret = -ENOMEM;
 		goto out;
 	}
-
-	trie->n_entries++;
 
 	new_node->prefixlen = key->prefixlen;
 	RCU_INIT_POINTER(new_node->child[0], NULL);
@@ -375,10 +376,11 @@ static long trie_update_elem(struct bpf_map *map,
 	 * simply assign the @new_node to that slot and be done.
 	 */
 	if (!node) {
-		if (flags == BPF_EXIST) {
-			ret = -ENOENT;
+		ret = trie_check_noreplace_update(trie, flags);
+		if (ret)
 			goto out;
-		}
+
+		trie->n_entries++;
 		rcu_assign_pointer(*slot, new_node);
 		goto out;
 	}
@@ -392,10 +394,11 @@ static long trie_update_elem(struct bpf_map *map,
 				ret = -EEXIST;
 				goto out;
 			}
-			trie->n_entries--;
-		} else if (flags == BPF_EXIST) {
-			ret = -ENOENT;
-			goto out;
+		} else {
+			ret = trie_check_noreplace_update(trie, flags);
+			if (ret)
+				goto out;
+			trie->n_entries++;
 		}
 
 		new_node->child[0] = node->child[0];
@@ -407,15 +410,15 @@ static long trie_update_elem(struct bpf_map *map,
 		goto out;
 	}
 
-	if (flags == BPF_EXIST) {
-		ret = -ENOENT;
+	ret = trie_check_noreplace_update(trie, flags);
+	if (ret)
 		goto out;
-	}
 
 	/* If the new node matches the prefix completely, it must be inserted
 	 * as an ancestor. Simply insert it between @node and *@slot.
 	 */
 	if (matchlen == key->prefixlen) {
+		trie->n_entries++;
 		next_bit = extract_bit(node->data, matchlen);
 		rcu_assign_pointer(new_node->child[next_bit], node);
 		rcu_assign_pointer(*slot, new_node);
@@ -428,6 +431,7 @@ static long trie_update_elem(struct bpf_map *map,
 		goto out;
 	}
 
+	trie->n_entries++;
 	im_node->prefixlen = matchlen;
 	im_node->flags |= LPM_TREE_NODE_FLAG_IM;
 	memcpy(im_node->data, node->data, trie->data_size);
@@ -445,12 +449,8 @@ static long trie_update_elem(struct bpf_map *map,
 	rcu_assign_pointer(*slot, im_node);
 
 out:
-	if (ret) {
-		if (new_node)
-			trie->n_entries--;
+	if (ret)
 		kfree(new_node);
-	}
-
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
 	kfree_rcu(free_node, rcu);
 
