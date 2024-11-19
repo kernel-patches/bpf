@@ -13888,6 +13888,47 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 }
 
+/* Same as negative_bit_floor() below, but for 32-bit signed value */
+static inline s32 negative32_bit_floor(s32 v)
+{
+	u8 bits = fls(~v); /* find most-significant unset bit */
+	u32 delta;
+
+	/* Special case, see negative_bit_floor() for explanation */
+	if (bits > 31)
+		return 0;
+
+	delta = (1UL << bits) - 1;
+	return ~delta;
+}
+
+/* Clears all trailing bits after the most significant unset bit.
+ *
+ * Used for estimating the minimum possible value after BPF_AND. This
+ * effectively rounds a negative value down to a negative power-of-2 value
+ * (except for -1, which just return -1) and returning 0 for non-negative
+ * values. For example:
+ * - negative_bit_floor(0xffff000000000003) == 0xffff000000000000
+ * - negative_bit_floor(0xfffffb0000000000) == 0xfffff80000000000
+ * - negative_bit_floor(0xffffffffffffffff) == 0xffffffffffffffff
+ * - negative_bit_floor(0x0000fb0000000000) == 0x0000000000000000
+ */
+static inline s64 negative_bit_floor(s64 v)
+{
+	u8 bits = fls64(~v); /* find most-significant unset bit */
+	u64 delta;
+
+	/* Special case. When v is non-negative, ~v have the MSB set, thus
+	 * fls64(~v) = 64. However 1ULL << 64 is undefined, so just return the
+	 * result directly.
+	 */
+	if (bits > 63)
+		return 0;
+
+	delta = (1ULL << bits) - 1;
+	return ~delta;
+}
+
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -13906,17 +13947,14 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->u32_min_value = var32_off.value;
 	dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
+	/* u32 bounds are propogated into s32 bounds later via __reg_deduce_bounds() */
 
-	/* Safe to set s32 bounds by casting u32 result into s32 when u32
-	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
+	/* Handle the [-1, 0] & -CONSTANT case that's difficult for tnum, see
+	 * scalar_min_max_and() below for explanation.
 	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
-	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
-	}
+	dst_reg->s32_min_value = negative32_bit_floor(min(dst_reg->s32_min_value,
+							  src_reg->s32_min_value));
+	dst_reg->s32_max_value = max(dst_reg->s32_max_value, src_reg->s32_max_value);
 }
 
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
@@ -13936,18 +13974,45 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	 */
 	dst_reg->umin_value = dst_reg->var_off.value;
 	dst_reg->umax_value = min(dst_reg->umax_value, umax_val);
-
-	/* Safe to set s64 bounds by casting u64 result into s64 when u64
-	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
+	/* unsigned bounds are propogated into signed bounds later via
+	 * __reg_deduce_bounds().
 	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
-	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
-	}
-	/* We may learn something more from the var_off */
+
+	/* Now handle the [-1, 0] & -CONSTANT case that's difficult for tnum
+	 */
+	/* Consider different sign combinations:
+	 * - when at least one of the range is non-negative, the result is
+	 *   always non-negative because the sign bit is unset, hence we can
+	 *   use 0 for smin
+	 * - for negative & negative range, the result always preserve their
+	 *   common most-significant '1' bits prefix.
+	 *     1111 1100 xxxx xxxx  &  1111 0001 yyyy yyyy
+         *     = 1111 0000 zzzz zzzz  (prefix '1111' is preserved)
+	 *   we obtain this prefix with the rest of the bit unset with
+	 *   negative_bit_floor(min()).
+	 *
+	 * An approximation of lower bound, that is always safe (i.e. smaller
+	 * or equal to the above) would be to use negative_bit_floor(min()) on
+	 * the inputs, because it already work for negative & negative, and is
+	 * always smaller or equal to 0 on other cases.
+	 */
+	dst_reg->smin_value = negative_bit_floor(min(dst_reg->smin_value,
+						     src_reg->smin_value));
+	/* Consider different sign combinations:
+	 * - negative & negative: smax is larger of the inputs -> max()
+	 * - negative & non-negative: smax the non-negative input
+	 * - non-negative & non-negative: smax is smaller of the inputs -> min()
+	 *
+	 * An approximation of upper bound, that is always safe (i.e. larger or
+	 * equal to the above) would be to use max() on the inputs, because
+	 * that is always larger than both inputs (negative & non-negative), as
+	 * well as than min() on the inputs (non-negative & non-negative).
+	 */
+	dst_reg->smax_value = max(dst_reg->smax_value, src_reg->smax_value);
+
+	/* We may learn something more from the var_off, especially for signed
+	 * bounds when at least one of the input can be non-negative.
+	 */
 	__update_reg_bounds(dst_reg);
 }
 
