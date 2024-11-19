@@ -104,4 +104,60 @@ l0_%=:	r0 = 0;						\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("[-1,0] range vs negative constant")
+__success __success_unpriv __retval(0)
+__naked void and_mixed_range_vs_neg_const(void)
+{
+	/* Use ARSH with AND like compiler would */
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 <<= 63;					\
+	r0 s>>= 63; /* r0 = [-1, 0] */			\
+	r1 = -13;					\
+	r0 &= r1;					\
+	/* [-1, 0] & -13 give either -13 or 0. So	\
+	 * ideally this should be a tight range of	\
+	 * [-13, 0], but verifier is not advanced enough\
+	 * to deduce that. just knowing result is in	\
+	 * [-16, 0] is good enough.			\
+	 */                                             \
+	r2 = 0;						\
+	if r0 s> r2 goto l0_%=;				\
+	r2 = -16;					\
+	if r0 s< r2 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+l0_%=:  r1 = *(u32*)(r1 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("32-bit [-1,0] range vs negative constant")
+__success __success_unpriv __retval(0)
+__naked void and32_mixed_range_vs_neg_const(void)
+{
+	/* See and_mixed_range_vs_neg_const() */
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 <<= 31;					\
+	w0 s>>= 31;					\
+	w1 = -13;					\
+	w0 &= w1;					\
+	w2 = 0;						\
+	if w0 s> w2 goto l0_%=;				\
+	w2 = -16;					\
+	if w0 s< w2 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+l0_%=:  r1 = *(u32*)(r1 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
