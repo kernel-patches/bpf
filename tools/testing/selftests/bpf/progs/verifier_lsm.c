@@ -26,6 +26,22 @@ __naked int errno_zero_retval_test2(void *ctx)
 	::: __clobber_all);
 }
 
+SEC("lsm/file_alloc_security")
+__description("lsm bpf prog with -4095~0 retval. test 3")
+__success
+__naked int errno_zero_retval_test3(void *ctx)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r0 <<= 63;"
+	"r0 s>>= 63;"
+	"r0 &= -13;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("lsm/file_mprotect")
 __description("lsm bpf prog with -4095~0 retval. test 4")
 __failure __msg("R0 has smin=-4096 smax=-4096 should have been in [-4095, 0]")
