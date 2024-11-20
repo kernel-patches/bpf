@@ -263,7 +263,7 @@ static void uprobe_copy_to_page(struct page *page, unsigned long vaddr, const vo
 	kunmap_atomic(kaddr);
 }
 
-static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode)
+int uprobe_verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode)
 {
 	uprobe_opcode_t old_opcode;
 	bool is_swbp;
@@ -289,6 +289,13 @@ static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t
 	}
 
 	return 1;
+}
+
+__weak int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
+				     unsigned long vaddr, uprobe_opcode_t *new_opcode,
+				     int nbytes)
+{
+	return uprobe_verify_opcode(page, vaddr, new_opcode);
 }
 
 static struct delayed_uprobe *
@@ -490,7 +497,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = verify_opcode(old_page, vaddr, insn);
+	ret = arch_uprobe_verify_opcode(auprobe, old_page, vaddr, insn, nbytes);
 	if (ret <= 0)
 		goto put_old;
 
