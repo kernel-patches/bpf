@@ -215,6 +215,11 @@ extern void uprobe_handle_trampoline(struct pt_regs *regs);
 extern void *arch_uretprobe_trampoline(unsigned long *psize);
 extern unsigned long uprobe_get_trampoline_vaddr(void);
 extern void uprobe_copy_from_page(struct page *page, unsigned long vaddr, void *dst, int len);
+extern int uprobe_verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode);
+extern int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
+				     unsigned long vaddr, uprobe_opcode_t *new_opcode,
+				     int nbytes);
+extern bool arch_uprobe_is_register(uprobe_opcode_t *insn, int nbytes);
 #else /* !CONFIG_UPROBES */
 struct uprobes_state {
 };
