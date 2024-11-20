@@ -133,7 +133,6 @@ TEST_PROGS := test_kmod.sh \
 	test_tunnel.sh \
 	test_lwt_seg6local.sh \
 	test_lirc_mode2.sh \
-	test_flow_dissector.sh \
 	test_xdp_vlan_mode_generic.sh \
 	test_xdp_vlan_mode_native.sh \
 	test_lwt_ip_encap.sh \
@@ -154,7 +153,7 @@ TEST_PROGS_EXTENDED := with_addr.sh \
 
 # Compile but not part of 'make run_tests'
 TEST_GEN_PROGS_EXTENDED = \
-	flow_dissector_load test_flow_dissector test_tcp_check_syncookie_user \
+	flow_dissector_load test_tcp_check_syncookie_user \
 	test_lirc_mode2_user xdping test_cpp runqslower bench bpf_testmod.ko \
 	xskxceiver xdp_redirect_multi xdp_synproxy veristat xdp_hw_metadata \
 	xdp_features bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
