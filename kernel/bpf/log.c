@@ -843,11 +843,11 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_func_st
 			break;
 		}
 	}
-	if (state->acquired_refs && state->refs[0].id) {
-		verbose(env, " refs=%d", state->refs[0].id);
-		for (i = 1; i < state->acquired_refs; i++)
-			if (state->refs[i].id)
-				verbose(env, ",%d", state->refs[i].id);
+	if (state->acquired_res && state->res[0].id) {
+		verbose(env, " refs=%d", state->res[0].id);
+		for (i = 1; i < state->acquired_res; i++)
+			if (state->res[i].id)
+				verbose(env, ",%d", state->res[i].id);
 	}
 	if (state->in_callback_fn)
 		verbose(env, " cb");

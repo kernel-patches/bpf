@@ -249,20 +249,18 @@ struct bpf_stack_state {
 	u8 slot_type[BPF_REG_SIZE];
 };
 
-struct bpf_reference_state {
-	/* Each reference object has a type. Ensure REF_TYPE_PTR is zero to
-	 * default to pointer reference on zero initialization of a state.
-	 */
-	enum ref_state_type {
-		REF_TYPE_PTR = 0,
-		REF_TYPE_LOCK,
+struct bpf_resource_state {
+	enum res_state_type {
+		RES_TYPE_INV = -1,
+		RES_TYPE_PTR = 0,
+		RES_TYPE_LOCK,
 	} type;
-	/* Track each reference created with a unique id, even if the same
-	 * instruction creates the reference multiple times (eg, via CALL).
+	/* Track each resource created with a unique id, even if the same
+	 * instruction creates the resource multiple times (eg, via CALL).
 	 */
 	int id;
-	/* Instruction where the allocation of this reference occurred. This
-	 * is used purely to inform the user of a reference leak.
+	/* Instruction where the allocation of this resource occurred. This
+	 * is used purely to inform the user of a resource leak.
 	 */
 	int insn_idx;
 	/* Use to keep track of the source object of a lock, to ensure
@@ -315,9 +313,9 @@ struct bpf_func_state {
 	u32 callback_depth;
 
 	/* The following fields should be last. See copy_func_state() */
-	int acquired_refs;
+	int acquired_res;
 	int active_locks;
-	struct bpf_reference_state *refs;
+	struct bpf_resource_state *res;
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
 	 * (i.e. 8) bytes worth of stack memory.
 	 * stack[0] represents bytes [*(r10-8)..*(r10-1)]

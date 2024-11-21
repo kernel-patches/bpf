@@ -1279,15 +1279,15 @@ out:
 	return arr ? arr : ZERO_SIZE_PTR;
 }
 
-static int copy_reference_state(struct bpf_func_state *dst, const struct bpf_func_state *src)
+static int copy_resource_state(struct bpf_func_state *dst, const struct bpf_func_state *src)
 {
-	dst->refs = copy_array(dst->refs, src->refs, src->acquired_refs,
-			       sizeof(struct bpf_reference_state), GFP_KERNEL);
-	if (!dst->refs)
+	dst->res = copy_array(dst->res, src->res, src->acquired_res,
+			      sizeof(struct bpf_resource_state), GFP_KERNEL);
+	if (!dst->res)
 		return -ENOMEM;
 
+	dst->acquired_res = src->acquired_res;
 	dst->active_locks = src->active_locks;
-	dst->acquired_refs = src->acquired_refs;
 	return 0;
 }
 
@@ -1304,14 +1304,14 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 	return 0;
 }
 
-static int resize_reference_state(struct bpf_func_state *state, size_t n)
+static int resize_resource_state(struct bpf_func_state *state, size_t n)
 {
-	state->refs = realloc_array(state->refs, state->acquired_refs, n,
-				    sizeof(struct bpf_reference_state));
-	if (!state->refs)
+	state->res = realloc_array(state->res, state->acquired_res, n,
+				   sizeof(struct bpf_resource_state));
+	if (!state->res)
 		return -ENOMEM;
 
-	state->acquired_refs = n;
+	state->acquired_res = n;
 	return 0;
 }
 
@@ -1342,6 +1342,25 @@ static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state 
 	return 0;
 }
 
+static struct bpf_resource_state *acquire_resource_state(struct bpf_verifier_env *env, int insn_idx, int *id)
+{
+	struct bpf_func_state *state = cur_func(env);
+	int new_ofs = state->acquired_res;
+	struct bpf_resource_state *s;
+	int err;
+
+	err = resize_resource_state(state, state->acquired_res + 1);
+	if (err)
+		return NULL;
+	s = &state->res[new_ofs];
+	s->type = RES_TYPE_INV;
+	if (id)
+		*id = s->id = ++env->id_gen;
+	s->insn_idx = insn_idx;
+
+	return s;
+}
+
 /* Acquire a pointer id from the env and update the state->refs to include
  * this new pointer reference.
  * On success, returns a valid pointer id to associate with the register
@@ -1349,55 +1368,52 @@ static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state 
  */
 static int acquire_reference_state(struct bpf_verifier_env *env, int insn_idx)
 {
-	struct bpf_func_state *state = cur_func(env);
-	int new_ofs = state->acquired_refs;
-	int id, err;
+	struct bpf_resource_state *s;
+	int id;
 
-	err = resize_reference_state(state, state->acquired_refs + 1);
-	if (err)
-		return err;
-	id = ++env->id_gen;
-	state->refs[new_ofs].type = REF_TYPE_PTR;
-	state->refs[new_ofs].id = id;
-	state->refs[new_ofs].insn_idx = insn_idx;
-
+	s = acquire_resource_state(env, insn_idx, &id);
+	if (!s)
+		return -ENOMEM;
+	s->type = RES_TYPE_PTR;
 	return id;
 }
 
-static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum ref_state_type type,
+static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum res_state_type type,
 			      int id, void *ptr)
 {
 	struct bpf_func_state *state = cur_func(env);
-	int new_ofs = state->acquired_refs;
-	int err;
+	struct bpf_resource_state *s;
 
-	err = resize_reference_state(state, state->acquired_refs + 1);
-	if (err)
-		return err;
-	state->refs[new_ofs].type = type;
-	state->refs[new_ofs].id = id;
-	state->refs[new_ofs].insn_idx = insn_idx;
-	state->refs[new_ofs].ptr = ptr;
+	s = acquire_resource_state(env, insn_idx, NULL);
+	if (!s)
+		return -ENOMEM;
+	s->type = type;
+	s->id = id;
+	s->ptr = ptr;
 
 	state->active_locks++;
 	return 0;
 }
 
-/* release function corresponding to acquire_reference_state(). Idempotent. */
+static void erase_resource_state(struct bpf_func_state *state, int res_idx)
+{
+	int last_idx = state->acquired_res - 1;
+
+	if (last_idx && res_idx != last_idx)
+		memcpy(&state->res[res_idx], &state->res[last_idx], sizeof(*state->res));
+	memset(&state->res[last_idx], 0, sizeof(*state->res));
+	state->acquired_res--;
+}
+
 static int release_reference_state(struct bpf_func_state *state, int ptr_id)
 {
-	int i, last_idx;
+	int i;
 
-	last_idx = state->acquired_refs - 1;
-	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != REF_TYPE_PTR)
+	for (i = 0; i < state->acquired_res; i++) {
+		if (state->res[i].type != RES_TYPE_PTR)
 			continue;
-		if (state->refs[i].id == ptr_id) {
-			if (last_idx && i != last_idx)
-				memcpy(&state->refs[i], &state->refs[last_idx],
-				       sizeof(*state->refs));
-			memset(&state->refs[last_idx], 0, sizeof(*state->refs));
-			state->acquired_refs--;
+		if (state->res[i].id == ptr_id) {
+			erase_resource_state(state, i);
 			return 0;
 		}
 	}
@@ -1406,18 +1422,13 @@ static int release_reference_state(struct bpf_func_state *state, int ptr_id)
 
 static int release_lock_state(struct bpf_func_state *state, int type, int id, void *ptr)
 {
-	int i, last_idx;
+	int i;
 
-	last_idx = state->acquired_refs - 1;
-	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != type)
+	for (i = 0; i < state->acquired_res; i++) {
+		if (state->res[i].type != type)
 			continue;
-		if (state->refs[i].id == id && state->refs[i].ptr == ptr) {
-			if (last_idx && i != last_idx)
-				memcpy(&state->refs[i], &state->refs[last_idx],
-				       sizeof(*state->refs));
-			memset(&state->refs[last_idx], 0, sizeof(*state->refs));
-			state->acquired_refs--;
+		if (state->res[i].id == id && state->res[i].ptr == ptr) {
+			erase_resource_state(state, i);
 			state->active_locks--;
 			return 0;
 		}
@@ -1425,16 +1436,16 @@ static int release_lock_state(struct bpf_func_state *state, int type, int id, vo
 	return -EINVAL;
 }
 
-static struct bpf_reference_state *find_lock_state(struct bpf_verifier_env *env, enum ref_state_type type,
+static struct bpf_resource_state *find_lock_state(struct bpf_verifier_env *env, enum res_state_type type,
 						   int id, void *ptr)
 {
 	struct bpf_func_state *state = cur_func(env);
 	int i;
 
-	for (i = 0; i < state->acquired_refs; i++) {
-		struct bpf_reference_state *s = &state->refs[i];
+	for (i = 0; i < state->acquired_res; i++) {
+		struct bpf_resource_state *s = &state->res[i];
 
-		if (s->type == REF_TYPE_PTR || s->type != type)
+		if (s->type == RES_TYPE_PTR || s->type != type)
 			continue;
 
 		if (s->id == id && s->ptr == ptr)
@@ -1447,7 +1458,7 @@ static void free_func_state(struct bpf_func_state *state)
 {
 	if (!state)
 		return;
-	kfree(state->refs);
+	kfree(state->res);
 	kfree(state->stack);
 	kfree(state);
 }
@@ -1473,8 +1484,8 @@ static int copy_func_state(struct bpf_func_state *dst,
 {
 	int err;
 
-	memcpy(dst, src, offsetof(struct bpf_func_state, acquired_refs));
-	err = copy_reference_state(dst, src);
+	memcpy(dst, src, offsetof(struct bpf_func_state, acquired_res));
+	err = copy_resource_state(dst, src);
 	if (err)
 		return err;
 	return copy_stack_state(dst, src);
@@ -7907,7 +7918,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 				"Locking two bpf_spin_locks are not allowed\n");
 			return -EINVAL;
 		}
-		err = acquire_lock_state(env, env->insn_idx, REF_TYPE_LOCK, reg->id, ptr);
+		err = acquire_lock_state(env, env->insn_idx, RES_TYPE_LOCK, reg->id, ptr);
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
 			return err;
@@ -7925,7 +7936,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			return -EINVAL;
 		}
 
-		if (release_lock_state(cur_func(env), REF_TYPE_LOCK, reg->id, ptr)) {
+		if (release_lock_state(cur_func(env), RES_TYPE_LOCK, reg->id, ptr)) {
 			verbose(env, "bpf_spin_unlock of different lock\n");
 			return -EINVAL;
 		}
@@ -9758,7 +9769,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			state->curframe + 1 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
 	/* Transfer references to the callee */
-	err = copy_reference_state(callee, caller);
+	err = copy_resource_state(callee, caller);
 	err = err ?: set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
@@ -10334,7 +10345,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	}
 
 	/* Transfer references to the caller */
-	err = copy_reference_state(caller, callee);
+	err = copy_resource_state(caller, callee);
 	if (err)
 		return err;
 
@@ -10509,11 +10520,11 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 	if (!exception_exit && state->frameno)
 		return 0;
 
-	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != REF_TYPE_PTR)
+	for (i = 0; i < state->acquired_res; i++) {
+		if (state->res[i].type != RES_TYPE_PTR)
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
-			state->refs[i].id, state->refs[i].insn_idx);
+			state->res[i].id, state->res[i].insn_idx);
 		refs_lingering = true;
 	}
 	return refs_lingering ? -EINVAL : 0;
@@ -11777,8 +11788,8 @@ static int ref_convert_owning_non_owning(struct bpf_verifier_env *env, u32 ref_o
 		return -EFAULT;
 	}
 
-	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].id != ref_obj_id)
+	for (i = 0; i < state->acquired_res; i++) {
+		if (state->res[i].id != ref_obj_id)
 			continue;
 
 		/* Clear ref_obj_id here so release_reference doesn't clobber
@@ -11843,7 +11854,7 @@ static int ref_convert_owning_non_owning(struct bpf_verifier_env *env, u32 ref_o
  */
 static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
-	struct bpf_reference_state *s;
+	struct bpf_resource_state *s;
 	void *ptr;
 	u32 id;
 
@@ -11862,7 +11873,7 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 
 	if (!cur_func(env)->active_locks)
 		return -EINVAL;
-	s = find_lock_state(env, REF_TYPE_LOCK, id, ptr);
+	s = find_lock_state(env, RES_TYPE_LOCK, id, ptr);
 	if (!s) {
 		verbose(env, "held lock and object are not in the same allocation\n");
 		return -EINVAL;
@@ -17750,27 +17761,27 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	return true;
 }
 
-static bool refsafe(struct bpf_func_state *old, struct bpf_func_state *cur,
+static bool ressafe(struct bpf_func_state *old, struct bpf_func_state *cur,
 		    struct bpf_idmap *idmap)
 {
 	int i;
 
-	if (old->acquired_refs != cur->acquired_refs)
+	if (old->acquired_res != cur->acquired_res)
 		return false;
 
-	for (i = 0; i < old->acquired_refs; i++) {
-		if (!check_ids(old->refs[i].id, cur->refs[i].id, idmap) ||
-		    old->refs[i].type != cur->refs[i].type)
+	for (i = 0; i < old->acquired_res; i++) {
+		if (!check_ids(old->res[i].id, cur->res[i].id, idmap) ||
+		    old->res[i].type != cur->res[i].type)
 			return false;
-		switch (old->refs[i].type) {
-		case REF_TYPE_PTR:
+		switch (old->res[i].type) {
+		case RES_TYPE_PTR:
 			break;
-		case REF_TYPE_LOCK:
-			if (old->refs[i].ptr != cur->refs[i].ptr)
+		case RES_TYPE_LOCK:
+			if (old->res[i].ptr != cur->res[i].ptr)
 				return false;
 			break;
 		default:
-			WARN_ONCE(1, "Unhandled enum type for reference state: %d\n", old->refs[i].type);
+			WARN_ONCE(1, "Unhandled enum type for resource state: %d\n", old->res[i].type);
 			return false;
 		}
 	}
@@ -17820,7 +17831,7 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
 
-	if (!refsafe(old, cur, &env->idmap_scratch))
+	if (!ressafe(old, cur, &env->idmap_scratch))
 		return false;
 
 	return true;
