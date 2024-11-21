@@ -1436,10 +1436,9 @@ static int release_lock_state(struct bpf_func_state *state, int type, int id, vo
 	return -EINVAL;
 }
 
-static struct bpf_resource_state *find_lock_state(struct bpf_verifier_env *env, enum res_state_type type,
+static struct bpf_resource_state *find_lock_state(struct bpf_func_state *state, enum res_state_type type,
 						   int id, void *ptr)
 {
-	struct bpf_func_state *state = cur_func(env);
 	int i;
 
 	for (i = 0; i < state->acquired_res; i++) {
@@ -11873,7 +11872,7 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 
 	if (!cur_func(env)->active_locks)
 		return -EINVAL;
-	s = find_lock_state(env, RES_TYPE_LOCK, id, ptr);
+	s = find_lock_state(cur_func(env), RES_TYPE_LOCK, id, ptr);
 	if (!s) {
 		verbose(env, "held lock and object are not in the same allocation\n");
 		return -EINVAL;
