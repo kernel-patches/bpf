@@ -315,6 +315,8 @@ struct bpf_func_state {
 	/* The following fields should be last. See copy_func_state() */
 	int acquired_res;
 	int active_locks;
+	int active_preempt_locks;
+	bool active_rcu_lock;
 	struct bpf_resource_state *res;
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
 	 * (i.e. 8) bytes worth of stack memory.
@@ -418,8 +420,6 @@ struct bpf_verifier_state {
 	u32 curframe;
 
 	bool speculative;
-	bool active_rcu_lock;
-	u32 active_preempt_lock;
 	/* If this state was ever pointed-to by other state's loop_entry field
 	 * this flag would be set to true. Used to avoid freeing such states
 	 * while they are still in use.
