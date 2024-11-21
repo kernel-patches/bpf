@@ -233,6 +233,7 @@ enum bpf_stack_slot_type {
 	 */
 	STACK_DYNPTR,
 	STACK_ITER,
+	STACK_IRQ_FLAG,
 };
 
 #define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
@@ -253,6 +254,9 @@ struct bpf_resource_state {
 	enum res_state_type {
 		RES_TYPE_INV = -1,
 		RES_TYPE_PTR = 0,
+		RES_TYPE_IRQ,
+
+		__RES_TYPE_LOCK_BEGIN,
 		RES_TYPE_LOCK,
 	} type;
 	/* Track each resource created with a unique id, even if the same
@@ -263,10 +267,16 @@ struct bpf_resource_state {
 	 * is used purely to inform the user of a resource leak.
 	 */
 	int insn_idx;
-	/* Use to keep track of the source object of a lock, to ensure
-	 * it matches on unlock.
-	 */
-	void *ptr;
+	union {
+		/* Use to keep track of the source object of a lock, to ensure
+		 * it matches on unlock.
+		 */
+		void *ptr;
+		/* Track the reference id preceding the IRQ entry in acquisition
+		 * order, to enforce an ordering on the release.
+		 */
+		int prev_id;
+	};
 };
 
 struct bpf_retval_range {
@@ -317,6 +327,7 @@ struct bpf_func_state {
 	int active_locks;
 	int active_preempt_locks;
 	bool active_rcu_lock;
+	int active_irq_id;
 	struct bpf_resource_state *res;
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
 	 * (i.e. 8) bytes worth of stack memory.
