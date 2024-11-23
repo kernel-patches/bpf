@@ -732,7 +732,7 @@ static int emit_compare_and_branch(const u8 code, const u8 dst, u8 src,
 			br_opcode = BLE;
 			break;
 		default:
-			/* Make sure we dont leak kernel information to the
+			/* Make sure we don't leak kernel information to the
 			 * user.
 			 */
 			return -EFAULT;
