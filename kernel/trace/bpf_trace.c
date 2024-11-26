@@ -359,11 +359,16 @@ static const struct bpf_func_proto bpf_probe_write_user_proto = {
 
 static const struct bpf_func_proto *bpf_get_probe_write_proto(void)
 {
+	static pid_t last_warn_pid = -1;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return NULL;
 
-	pr_warn_ratelimited("%s[%d] is installing a program with bpf_probe_write_user helper that may corrupt user memory!",
-			    current->comm, task_pid_nr(current));
+	if (READ_ONCE(last_warn_pid) != task_pid_nr(current)) {
+		pr_warn("%s[%d] is installing a program with bpf_probe_write_user\n",
+			current->comm, task_pid_nr(current));
+		WRITE_ONCE(last_warn_pid, task_pid_nr(current));
+	}
 
 	return &bpf_probe_write_user_proto;
 }
