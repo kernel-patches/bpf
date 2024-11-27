@@ -11,7 +11,7 @@
 #include <net/tcp.h>
 #include <net/bpf_sk_storage.h>
 
-static struct bpf_struct_ops bpf_tcp_congestion_ops;
+static const struct bpf_struct_ops bpf_tcp_congestion_ops;
 
 static const struct btf_type *tcp_sock_type;
 static u32 tcp_sock_id, sock_id;
@@ -307,7 +307,7 @@ static void __bpf_tcp_ca_release(struct sock *sk)
 {
 }
 
-static struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = {
+static const struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = {
 	.ssthresh = bpf_tcp_ca_ssthresh,
 	.cong_avoid = bpf_tcp_ca_cong_avoid,
 	.set_state = bpf_tcp_ca_set_state,
@@ -323,7 +323,7 @@ static struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = {
 	.release = __bpf_tcp_ca_release,
 };
 
-static struct bpf_struct_ops bpf_tcp_congestion_ops = {
+static const struct bpf_struct_ops bpf_tcp_congestion_ops = {
 	.verifier_ops = &bpf_tcp_ca_verifier_ops,
 	.reg = bpf_tcp_ca_reg,
 	.unreg = bpf_tcp_ca_unreg,
