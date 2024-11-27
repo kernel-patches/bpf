@@ -15,6 +15,7 @@
 #include <net/ipv6.h>
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf_mem_alloc.h>
 
 /* Intermediate node */
 #define LPM_TREE_NODE_FLAG_IM BIT(0)
@@ -22,7 +23,6 @@
 struct lpm_trie_node;
 
 struct lpm_trie_node {
-	struct rcu_head rcu;
 	struct lpm_trie_node __rcu	*child[2];
 	u32				prefixlen;
 	u32				flags;
@@ -32,6 +32,7 @@ struct lpm_trie_node {
 struct lpm_trie {
 	struct bpf_map			map;
 	struct lpm_trie_node __rcu	*root;
+	struct bpf_mem_alloc		ma;
 	size_t				n_entries;
 	size_t				max_prefixlen;
 	size_t				data_size;
@@ -287,17 +288,12 @@ static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 	return found->data + trie->data_size;
 }
 
-static struct lpm_trie_node *lpm_trie_node_alloc(const struct lpm_trie *trie,
+static struct lpm_trie_node *lpm_trie_node_alloc(struct lpm_trie *trie,
 						 const void *value)
 {
 	struct lpm_trie_node *node;
-	size_t size = sizeof(struct lpm_trie_node) + trie->data_size;
 
-	if (value)
-		size += trie->map.value_size;
-
-	node = bpf_map_kmalloc_node(&trie->map, size, GFP_NOWAIT | __GFP_NOWARN,
-				    trie->map.numa_node);
+	node = bpf_mem_cache_alloc(&trie->ma);
 	if (!node)
 		return NULL;
 
@@ -448,9 +444,9 @@ static long trie_update_elem(struct bpf_map *map,
 
 out:
 	if (ret)
-		kfree(new_node);
+		bpf_mem_cache_free(&trie->ma, new_node);
+	bpf_mem_cache_free_rcu(&trie->ma, free_node);
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
-	kfree_rcu(free_node, rcu);
 
 	return ret;
 }
@@ -547,9 +543,9 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	free_node = node;
 
 out:
+	bpf_mem_cache_free_rcu(&trie->ma, free_parent);
+	bpf_mem_cache_free_rcu(&trie->ma, free_node);
 	spin_unlock_irqrestore(&trie->lock, irq_flags);
-	kfree_rcu(free_parent, rcu);
-	kfree_rcu(free_node, rcu);
 
 	return ret;
 }
@@ -571,6 +567,8 @@ out:
 static struct bpf_map *trie_alloc(union bpf_attr *attr)
 {
 	struct lpm_trie *trie;
+	size_t leaf_size;
+	int err;
 
 	/* check sanity of attributes */
 	if (attr->max_entries == 0 ||
@@ -595,7 +593,17 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 
 	spin_lock_init(&trie->lock);
 
+	/* Allocate intermediate and leaf nodes from the same allocator */
+	leaf_size = sizeof(struct lpm_trie_node) + trie->data_size +
+		    trie->map.value_size;
+	err = bpf_mem_alloc_init(&trie->ma, leaf_size, false);
+	if (err)
+		goto free_out;
 	return &trie->map;
+
+free_out:
+	bpf_map_area_free(trie);
+	return ERR_PTR(err);
 }
 
 static void trie_free(struct bpf_map *map)
@@ -627,13 +635,17 @@ static void trie_free(struct bpf_map *map)
 				continue;
 			}
 
-			kfree(node);
+			/* No bpf program may access the map, so freeing the
+			 * node without waiting for the extra RCU GP.
+			 */
+			bpf_mem_cache_raw_free(node);
 			RCU_INIT_POINTER(*slot, NULL);
 			break;
 		}
 	}
 
 out:
+	bpf_mem_alloc_destroy(&trie->ma);
 	bpf_map_area_free(trie);
 }
 
