@@ -1786,7 +1786,6 @@ struct btf_member;
  * @type: BTF type.
  * @value_type: Value type.
  * @name: The name of the struct bpf_struct_ops object.
- * @func_models: Func models
  * @type_id: BTF type id.
  * @value_id: BTF value id.
  */
@@ -1806,7 +1805,6 @@ struct bpf_struct_ops {
 	void *cfi_stubs;
 	struct module *owner;
 	const char *name;
-	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 };
 
 /* Every member of a struct_ops type has an instance even a member is not
@@ -1832,6 +1830,8 @@ struct bpf_struct_ops_desc {
 
 	/* Collection of argument information for each member */
 	struct bpf_struct_ops_arg_info *arg_info;
+
+	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 };
 
 enum bpf_struct_ops_state {

@@ -397,7 +397,7 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 
 		if (btf_distill_func_proto(log, btf,
 					   func_proto, mname,
-					   &st_ops->func_models[i])) {
+					   &st_ops_desc->func_models[i])) {
 			pr_warn("Error in parsing func ptr %s in struct %s\n",
 				mname, st_ops->name);
 			err = -EINVAL;
@@ -777,7 +777,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 
 		trampoline_start = image_off;
 		err = bpf_struct_ops_prepare_trampoline(tlinks, link,
-						&st_ops->func_models[i],
+						&st_ops_desc->func_models[i],
 						*(void **)(st_ops->cfi_stubs + moff),
 						&image, &image_off,
 						st_map->image_pages_cnt < MAX_TRAMP_IMAGE_PAGES);
