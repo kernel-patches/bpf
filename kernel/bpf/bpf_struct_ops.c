@@ -778,7 +778,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		trampoline_start = image_off;
 		err = bpf_struct_ops_prepare_trampoline(tlinks, link,
 						&st_ops_desc->func_models[i],
-						*(void **)(st_ops->cfi_stubs + moff),
+						*(void *const *)(st_ops->cfi_stubs + moff),
 						&image, &image_off,
 						st_map->image_pages_cnt < MAX_TRAMP_IMAGE_PAGES);
 		if (err)

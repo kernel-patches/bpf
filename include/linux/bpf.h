@@ -1802,7 +1802,7 @@ struct bpf_struct_ops {
 	void (*unreg)(void *kdata, struct bpf_link *link);
 	int (*update)(void *kdata, void *old_kdata, struct bpf_link *link);
 	int (*validate)(void *kdata);
-	void *cfi_stubs;
+	const void *cfi_stubs;
 	struct module *owner;
 	const char *name;
 };
