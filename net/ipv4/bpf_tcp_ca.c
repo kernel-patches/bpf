@@ -11,7 +11,6 @@
 #include <net/tcp.h>
 #include <net/bpf_sk_storage.h>
 
-/* "extern" is to avoid sparse warning.  It is only used in bpf_struct_ops.c. */
 static struct bpf_struct_ops bpf_tcp_congestion_ops;
 
 static const struct btf_type *tcp_sock_type;
