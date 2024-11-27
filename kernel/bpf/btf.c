@@ -9155,7 +9155,7 @@ bool btf_type_ids_nocast_alias(struct bpf_verifier_log *log,
 
 #ifdef CONFIG_BPF_JIT
 static int
-btf_add_struct_ops(struct btf *btf, struct bpf_struct_ops *st_ops,
+btf_add_struct_ops(struct btf *btf, const struct bpf_struct_ops *st_ops,
 		   struct bpf_verifier_log *log)
 {
 	struct btf_struct_ops_tab *tab, *new_tab;
@@ -9242,7 +9242,7 @@ bpf_struct_ops_find(struct btf *btf, u32 type_id)
 	return NULL;
 }
 
-int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+int __register_bpf_struct_ops(const struct bpf_struct_ops *st_ops)
 {
 	struct bpf_verifier_log *log;
 	struct btf *btf;

@@ -519,7 +519,7 @@ struct bpf_verifier_log;
 
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
 struct bpf_struct_ops;
-int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops);
+int __register_bpf_struct_ops(const struct bpf_struct_ops *st_ops);
 const struct bpf_struct_ops_desc *bpf_struct_ops_find_value(struct btf *btf, u32 value_id);
 const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id);
 #else

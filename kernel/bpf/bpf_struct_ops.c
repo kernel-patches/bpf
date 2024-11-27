@@ -314,7 +314,7 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			     struct btf *btf,
 			     struct bpf_verifier_log *log)
 {
-	struct bpf_struct_ops *st_ops = st_ops_desc->st_ops;
+	const struct bpf_struct_ops *st_ops = st_ops_desc->st_ops;
 	struct bpf_struct_ops_arg_info *arg_info;
 	const struct btf_member *member;
 	const struct btf_type *t;

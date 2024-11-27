@@ -1821,7 +1821,7 @@ struct bpf_struct_ops_arg_info {
 };
 
 struct bpf_struct_ops_desc {
-	struct bpf_struct_ops *st_ops;
+	const struct bpf_struct_ops *st_ops;
 
 	const struct btf_type *type;
 	const struct btf_type *value_type;
