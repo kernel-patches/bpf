@@ -1209,7 +1209,7 @@ static void mark_stack_slot_misc(struct bpf_verifier_env *env, u8 *stype)
 {
 	if (*stype == STACK_ZERO)
 		return;
-	if (env->allow_ptr_leaks && *stype == STACK_INVALID)
+	if (!env->allow_ptr_leaks && *stype == STACK_INVALID)
 		return;
 	*stype = STACK_MISC;
 }
