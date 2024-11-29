@@ -6723,13 +6723,14 @@ static void napi_save_config(struct napi_struct *n)
 	napi_hash_del(n);
 }
 
-void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
-			   int (*poll)(struct napi_struct *, int), int weight)
+int napi_init_for_gro(struct net_device *dev, struct napi_struct *napi,
+		      int (*poll)(struct napi_struct *, int), int weight)
 {
 	if (WARN_ON(test_and_set_bit(NAPI_STATE_LISTED, &napi->state)))
-		return;
+		return -EBUSY;
 
 	INIT_LIST_HEAD(&napi->poll_list);
+	INIT_LIST_HEAD(&napi->dev_list);
 	INIT_HLIST_NODE(&napi->napi_hash_node);
 	hrtimer_init(&napi->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
 	napi->timer.function = napi_watchdog;
@@ -6747,6 +6748,16 @@ void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
 	napi->poll_owner = -1;
 #endif
 	napi->list_owner = -1;
+
+	return 0;
+}
+
+void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
+			   int (*poll)(struct napi_struct *, int), int weight)
+{
+	if (napi_init_for_gro(dev, napi, poll, weight))
+		return;
+
 	set_bit(NAPI_STATE_SCHED, &napi->state);
 	set_bit(NAPI_STATE_NPSVC, &napi->state);
 	list_add_rcu(&napi->dev_list, &dev->napi_list);
