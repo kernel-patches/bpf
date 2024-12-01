@@ -663,7 +663,7 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	if (size < ETH_HLEN || size > PAGE_SIZE - headroom - tailroom)
 		return ERR_PTR(-EINVAL);
 
-	if (user_size > size)
+	if (user_size < ETH_HLEN || user_size > size)
 		return ERR_PTR(-EMSGSIZE);
 
 	size = SKB_DATA_ALIGN(size);
