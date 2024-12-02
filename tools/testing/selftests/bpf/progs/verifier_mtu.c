@@ -6,7 +6,8 @@
 
 SEC("tc/ingress")
 __description("uninit/mtu: write rejected")
-__failure __msg("invalid indirect read from stack")
+__success __failure_unpriv __msg_unpriv("invalid indirect read from stack")
+__caps_unpriv(CAP_BPF)
 int tc_uninit_mtu(struct __sk_buff *ctx)
 {
 	__u32 mtu;
