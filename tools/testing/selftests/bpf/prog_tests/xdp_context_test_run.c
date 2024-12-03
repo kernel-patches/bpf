@@ -2,6 +2,14 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include "test_xdp_context_test_run.skel.h"
+#include "test_xdp_meta.skel.h"
+
+#define TX_ADDR "10.0.0.1"
+#define RX_ADDR "10.0.0.2"
+#define RX_NAME "veth0"
+#define TX_NAME "veth1"
+#define TX_NETNS_NAME "xdp_context_tx"
+#define RX_NETNS_NAME "xdp_context_rx"
 
 void test_xdp_context_error(int prog_fd, struct bpf_test_run_opts opts,
 			    __u32 data_meta, __u32 data, __u32 data_end,
@@ -103,3 +111,94 @@ void test_xdp_context_test_run(void)
 
 	test_xdp_context_test_run__destroy(skel);
 }
+
+void test_xdp_context_functional(void) {
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	struct bpf_program *tc_prog, *xdp_prog;
+	struct netns_obj *rx_ns, *tx_ns;
+	struct test_xdp_meta *skel;
+	char message[] = "message";
+	int server_fd, client_fd;
+	struct nstoken *nstoken;
+	int rx_ifindex;
+	ssize_t nbytes;
+	int ret;
+
+	tx_ns = netns_new(TX_NETNS_NAME, false);
+	if (!ASSERT_OK_PTR(tx_ns, "create tx_ns"))
+		return;
+
+	rx_ns = netns_new(RX_NETNS_NAME, false);
+	if (!ASSERT_OK_PTR(rx_ns, "create rx_ns"))
+		goto free_txns;
+
+	SYS(free_rxns, "ip link add " RX_NAME " type veth peer name " TX_NAME);
+	SYS(free_rxns, "ip link set " RX_NAME " netns " RX_NETNS_NAME);
+	SYS(free_rxns, "ip link set " TX_NAME " netns " TX_NETNS_NAME);
+
+	nstoken = open_netns(RX_NETNS_NAME);
+	if (!ASSERT_OK_PTR(nstoken, "setns rx_ns"))
+		goto free_rxns;
+
+	SYS(free_rxns, "ip addr add " RX_ADDR "/24 dev " RX_NAME);
+	SYS(free_rxns, "ip link set dev " RX_NAME " up");
+
+	skel = test_xdp_meta__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open and load skeleton"))
+		goto free_rxns;
+
+	rx_ifindex = if_nametoindex(RX_NAME);
+	tc_hook.ifindex = rx_ifindex;
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto destroy_skel;
+
+	tc_prog = bpf_object__find_program_by_name(skel->obj, "ing_cls");
+	tc_opts.prog_fd = bpf_program__fd(tc_prog);
+	ret = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach"))
+		goto destroy_skel;
+
+	xdp_prog = bpf_object__find_program_by_name(skel->obj, "ing_xdp");
+	ret = bpf_xdp_attach(rx_ifindex,
+			     bpf_program__fd(xdp_prog),
+			     0, NULL);
+	if (!ASSERT_GE(ret, 0, "bpf_xdp_attach"))
+		goto destroy_skel;
+
+	server_fd = start_server_str(AF_INET, SOCK_DGRAM, RX_ADDR, 0, 0);
+	if (!ASSERT_GT(server_fd, 0, "server creation"))
+		goto destroy_skel;
+
+	nstoken = open_netns(TX_NETNS_NAME);
+	if (!ASSERT_OK_PTR(nstoken, "setns tx_ns"))
+		goto close_server;
+
+	SYS(close_server, "ip addr add " TX_ADDR "/24 dev " TX_NAME);
+	SYS(close_server, "ip link set dev " TX_NAME " up");
+
+	/* 1 ms timeout should be enough here */
+	client_fd = connect_to_fd(server_fd, 1);
+	if (!ASSERT_GT(client_fd, 0,  "server creation"))
+		goto close_server;
+
+	nbytes = write(client_fd, &message, sizeof(message));
+	if (!ASSERT_EQ(nbytes, sizeof(message), "send message"))
+		goto close_client;
+
+	nbytes = read(server_fd, &message, sizeof(message));
+	ASSERT_EQ(nbytes, sizeof(message), "read message");
+
+close_client:
+	close(client_fd);
+close_server:
+	close(server_fd);
+destroy_skel:
+	test_xdp_meta__destroy(skel);
+free_rxns:
+	netns_free(rx_ns);
+free_txns:
+	netns_free(tx_ns);
+}
+
