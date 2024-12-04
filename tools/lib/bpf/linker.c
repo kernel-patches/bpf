@@ -4,6 +4,10 @@
  *
  * Copyright (c) 2021 Facebook
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -16,6 +20,7 @@
 #include <elf.h>
 #include <libelf.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include "libbpf.h"
 #include "btf.h"
 #include "libbpf_internal.h"
@@ -152,6 +157,8 @@ struct bpf_linker {
 	/* global (including extern) ELF symbols */
 	int glob_sym_cnt;
 	struct glob_sym *glob_syms;
+
+	bool fd_is_owned;
 };
 
 #define pr_warn_elf(fmt, ...)									\
@@ -243,6 +250,54 @@ struct bpf_linker *bpf_linker__new(const char *filename, struct bpf_linker_opts 
 		pr_warn("failed to create '%s': %d\n", filename, err);
 		goto err_out;
 	}
+	linker->fd_is_owned = true;
+
+	err = init_output_elf(linker);
+	if (err)
+		goto err_out;
+
+	return linker;
+
+err_out:
+	bpf_linker__free(linker);
+	return errno = -err, NULL;
+}
+
+#define LINKER_MAX_FD_NAME_SIZE 24
+
+struct bpf_linker *bpf_linker__new_fd(int fd, struct bpf_linker_opts *opts)
+{
+	struct bpf_linker *linker;
+	const char *filename;
+	int err;
+
+	if (fd < 0)
+		return errno = EINVAL, NULL;
+
+	if (!OPTS_VALID(opts, bpf_linker_opts))
+		return errno = EINVAL, NULL;
+
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_warn_elf("libelf initialization failed");
+		return errno = EINVAL, NULL;
+	}
+
+	linker = calloc(1, sizeof(*linker));
+	if (!linker)
+		return errno = ENOMEM, NULL;
+
+	filename = OPTS_GET(opts, filename, NULL);
+	if (filename) {
+		linker->filename = strdup(filename);
+	} else {
+		linker->filename = malloc(LINKER_MAX_FD_NAME_SIZE);
+		if (!linker->filename)
+			return errno = ENOMEM, NULL;
+		snprintf(linker->filename, LINKER_MAX_FD_NAME_SIZE, "fd:%d", fd);
+	}
+
+	linker->fd = fd;
+	linker->fd_is_owned = false;
 
 	err = init_output_elf(linker);
 	if (err)
@@ -435,16 +490,15 @@ static int init_output_elf(struct bpf_linker *linker)
 }
 
 int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
-			 const struct bpf_linker_file_opts *opts)
+			 const struct bpf_linker_file_opts *input_opts)
 {
-	struct src_obj obj = {};
-	int err = 0, fd;
+	int fd, ret;
 
-	if (!OPTS_VALID(opts, bpf_linker_file_opts))
-		return libbpf_err(-EINVAL);
+	LIBBPF_OPTS(bpf_linker_file_opts, opts);
 
-	if (!linker->elf)
-		return libbpf_err(-EINVAL);
+	if (input_opts)
+		opts = *input_opts;
+	opts.filename = filename;
 
 	fd = open(filename, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
@@ -452,6 +506,37 @@ int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
 		return -errno;
 	}
 
+	ret = bpf_linker__add_fd(linker, fd, &opts);
+
+	close(fd);
+
+	return ret;
+}
+
+int bpf_linker__add_fd(struct bpf_linker *linker, int fd,
+		       const struct bpf_linker_file_opts *opts)
+{
+	struct src_obj obj = {};
+	const char *filename;
+	char name[LINKER_MAX_FD_NAME_SIZE];
+	int err = 0;
+
+	if (!OPTS_VALID(opts, bpf_linker_file_opts))
+		return libbpf_err(-EINVAL);
+
+	if (!linker->elf)
+		return libbpf_err(-EINVAL);
+
+	if (fd < 0)
+		return libbpf_err(-EINVAL);
+
+	filename = OPTS_GET(opts, filename, NULL);
+	if (filename) {
+		obj.filename = filename;
+	} else {
+		snprintf(name, sizeof(name), "fd:%d", fd);
+		obj.filename = name;
+	}
 	obj.fd = fd;
 
 	err = err ?: linker_load_obj_file(linker, opts, &obj);
@@ -469,10 +554,45 @@ int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
 	free(obj.sym_map);
 	if (obj.elf)
 		elf_end(obj.elf);
-	if (obj.fd >= 0)
-		close(obj.fd);
+	/* leave obj.fd for the caller to clean up if appropriate */
 
 	return libbpf_err(err);
+}
+
+int bpf_linker__add_buf(struct bpf_linker *linker, const char *name,
+			void *buf, int buf_sz,
+			const struct bpf_linker_file_opts *input_opts)
+{
+	int fd, written, ret;
+
+	LIBBPF_OPTS(bpf_linker_file_opts, opts);
+
+	if (input_opts)
+		opts = *input_opts;
+	opts.filename = name;
+
+	fd = memfd_create(name, 0);
+	if (fd < 0) {
+		pr_warn("failed to create memfd '%s': %s\n", name, errstr(errno));
+		return -errno;
+	}
+
+	written = 0;
+	while (written < buf_sz) {
+		ret = write(fd, buf, buf_sz);
+		if (ret < 0) {
+			pr_warn("failed to write '%s': %s\n", name, errstr(errno));
+			return -errno;
+		}
+		written += ret;
+	}
+
+	ret = bpf_linker__add_fd(linker, fd, &opts);
+
+	if (fd >= 0)
+		close(fd);
+
+	return ret;
 }
 
 static bool is_dwarf_sec_name(const char *name)
@@ -2691,9 +2811,10 @@ int bpf_linker__finalize(struct bpf_linker *linker)
 	}
 
 	elf_end(linker->elf);
-	close(linker->fd);
-
 	linker->elf = NULL;
+
+	if (linker->fd_is_owned)
+		close(linker->fd);
 	linker->fd = -1;
 
 	return 0;

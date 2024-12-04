@@ -1784,21 +1784,29 @@ enum libbpf_tristate {
 struct bpf_linker_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;
+	const char *filename;
 };
-#define bpf_linker_opts__last_field sz
+#define bpf_linker_opts__last_field filename
 
 struct bpf_linker_file_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;
+	const char *filename;
 };
-#define bpf_linker_file_opts__last_field sz
+#define bpf_linker_file_opts__last_field filename
 
 struct bpf_linker;
 
 LIBBPF_API struct bpf_linker *bpf_linker__new(const char *filename, struct bpf_linker_opts *opts);
+LIBBPF_API struct bpf_linker *bpf_linker__new_fd(int fd, struct bpf_linker_opts *opts);
 LIBBPF_API int bpf_linker__add_file(struct bpf_linker *linker,
 				    const char *filename,
 				    const struct bpf_linker_file_opts *opts);
+LIBBPF_API int bpf_linker__add_fd(struct bpf_linker *linker, int fd,
+				  const struct bpf_linker_file_opts *opts);
+LIBBPF_API int bpf_linker__add_buf(struct bpf_linker *linker, const char *name,
+				   void *buf, int buf_sz,
+				   const struct bpf_linker_file_opts *opts);
 LIBBPF_API int bpf_linker__finalize(struct bpf_linker *linker);
 LIBBPF_API void bpf_linker__free(struct bpf_linker *linker);
 
