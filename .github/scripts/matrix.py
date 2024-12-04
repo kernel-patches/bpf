@@ -70,7 +70,7 @@ class BuildConfig:
     @property
     def runs_on(self) -> List[str]:
         if is_managed_repo():
-            return DEFAULT_SELF_HOSTED_RUNNER_TAGS + [self.arch.value]
+            return DEFAULT_SELF_HOSTED_RUNNER_TAGS + ["s390x-native"]
         return [DEFAULT_RUNNER]
 
     @property
@@ -155,33 +155,6 @@ def generate_test_config(test: str) -> Dict[str, Union[str, int]]:
 
 if __name__ == "__main__":
     matrix = [
-        BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
-            run_veristat=True,
-            parallel_tests=True,
-        ),
-        BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.LLVM, version=DEFAULT_LLVM_VERSION),
-            build_release=True,
-        ),
-        BuildConfig(
-            arch=Arch.X86_64,
-            toolchain=Toolchain(compiler=Compiler.LLVM, version=18),
-            build_release=True,
-        ),
-        BuildConfig(
-            arch=Arch.AARCH64,
-            toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
-        ),
-        # BuildConfig(
-        #     arch=Arch.AARCH64,
-        #     toolchain=Toolchain(
-        #         compiler=Compiler.LLVM,
-        #         version=DEFAULT_LLVM_VERSION
-        #     ),
-        # ),
         BuildConfig(
             arch=Arch.S390X,
             toolchain=Toolchain(compiler=Compiler.GCC, version=DEFAULT_LLVM_VERSION),
