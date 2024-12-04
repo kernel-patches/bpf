@@ -157,9 +157,9 @@ struct bpf_linker {
 #define pr_warn_elf(fmt, ...)									\
 	libbpf_print(LIBBPF_WARN, "libbpf: " fmt ": %s\n", ##__VA_ARGS__, elf_errmsg(-1))
 
-static int init_output_elf(struct bpf_linker *linker, const char *file);
+static int init_output_elf(struct bpf_linker *linker);
 
-static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
+static int linker_load_obj_file(struct bpf_linker *linker,
 				const struct bpf_linker_file_opts *opts,
 				struct src_obj *obj);
 static int linker_sanity_check_elf(struct src_obj *obj);
@@ -233,9 +233,18 @@ struct bpf_linker *bpf_linker__new(const char *filename, struct bpf_linker_opts 
 	if (!linker)
 		return errno = ENOMEM, NULL;
 
-	linker->fd = -1;
+	linker->filename = strdup(filename);
+	if (!linker->filename)
+		return errno = ENOMEM, NULL;
 
-	err = init_output_elf(linker, filename);
+	linker->fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (linker->fd < 0) {
+		err = -errno;
+		pr_warn("failed to create '%s': %d\n", filename, err);
+		goto err_out;
+	}
+
+	err = init_output_elf(linker);
 	if (err)
 		goto err_out;
 
@@ -294,22 +303,11 @@ static Elf64_Sym *add_new_sym(struct bpf_linker *linker, size_t *sym_idx)
 	return sym;
 }
 
-static int init_output_elf(struct bpf_linker *linker, const char *file)
+static int init_output_elf(struct bpf_linker *linker)
 {
 	int err, str_off;
 	Elf64_Sym *init_sym;
 	struct dst_sec *sec;
-
-	linker->filename = strdup(file);
-	if (!linker->filename)
-		return -ENOMEM;
-
-	linker->fd = open(file, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-	if (linker->fd < 0) {
-		err = -errno;
-		pr_warn("failed to create '%s': %s\n", file, errstr(err));
-		return err;
-	}
 
 	linker->elf = elf_begin(linker->fd, ELF_C_WRITE, NULL);
 	if (!linker->elf) {
@@ -440,7 +438,7 @@ int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
 			 const struct bpf_linker_file_opts *opts)
 {
 	struct src_obj obj = {};
-	int err = 0;
+	int err = 0, fd;
 
 	if (!OPTS_VALID(opts, bpf_linker_file_opts))
 		return libbpf_err(-EINVAL);
@@ -448,7 +446,15 @@ int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
 	if (!linker->elf)
 		return libbpf_err(-EINVAL);
 
-	err = err ?: linker_load_obj_file(linker, filename, opts, &obj);
+	fd = open(filename, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		pr_warn("failed to open file '%s': %s\n", filename, errstr(errno));
+		return -errno;
+	}
+
+	obj.fd = fd;
+
+	err = err ?: linker_load_obj_file(linker, opts, &obj);
 	err = err ?: linker_append_sec_data(linker, &obj);
 	err = err ?: linker_append_elf_syms(linker, &obj);
 	err = err ?: linker_append_elf_relos(linker, &obj);
@@ -534,7 +540,7 @@ static struct src_sec *add_src_sec(struct src_obj *obj, const char *sec_name)
 	return sec;
 }
 
-static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
+static int linker_load_obj_file(struct bpf_linker *linker,
 				const struct bpf_linker_file_opts *opts,
 				struct src_obj *obj)
 {
@@ -554,20 +560,12 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 #error "Unknown __BYTE_ORDER__"
 #endif
 
-	pr_debug("linker: adding object file '%s'...\n", filename);
+	pr_debug("linker: adding object file '%s'...\n", obj->filename);
 
-	obj->filename = filename;
-
-	obj->fd = open(filename, O_RDONLY | O_CLOEXEC);
-	if (obj->fd < 0) {
-		err = -errno;
-		pr_warn("failed to open file '%s': %s\n", filename, errstr(err));
-		return err;
-	}
 	obj->elf = elf_begin(obj->fd, ELF_C_READ_MMAP, NULL);
 	if (!obj->elf) {
 		err = -errno;
-		pr_warn_elf("failed to parse ELF file '%s'", filename);
+		pr_warn_elf("failed to parse ELF file '%s'", obj->filename);
 		return err;
 	}
 
@@ -575,7 +573,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 	ehdr = elf64_getehdr(obj->elf);
 	if (!ehdr) {
 		err = -errno;
-		pr_warn_elf("failed to get ELF header for %s", filename);
+		pr_warn_elf("failed to get ELF header for %s", obj->filename);
 		return err;
 	}
 
@@ -583,7 +581,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 	obj_byteorder = ehdr->e_ident[EI_DATA];
 	if (obj_byteorder != ELFDATA2LSB && obj_byteorder != ELFDATA2MSB) {
 		err = -EOPNOTSUPP;
-		pr_warn("unknown byte order of ELF file %s\n", filename);
+		pr_warn("unknown byte order of ELF file %s\n", obj->filename);
 		return err;
 	}
 	if (link_byteorder == ELFDATANONE) {
@@ -593,7 +591,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 			 obj_byteorder == ELFDATA2MSB ? "big" : "little");
 	} else if (link_byteorder != obj_byteorder) {
 		err = -EOPNOTSUPP;
-		pr_warn("byte order mismatch with ELF file %s\n", filename);
+		pr_warn("byte order mismatch with ELF file %s\n", obj->filename);
 		return err;
 	}
 
@@ -601,13 +599,13 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 	    || ehdr->e_machine != EM_BPF
 	    || ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
 		err = -EOPNOTSUPP;
-		pr_warn_elf("unsupported kind of ELF file %s", filename);
+		pr_warn_elf("unsupported kind of ELF file %s", obj->filename);
 		return err;
 	}
 
 	if (elf_getshdrstrndx(obj->elf, &obj->shstrs_sec_idx)) {
 		err = -errno;
-		pr_warn_elf("failed to get SHSTRTAB section index for %s", filename);
+		pr_warn_elf("failed to get SHSTRTAB section index for %s", obj->filename);
 		return err;
 	}
 
@@ -620,7 +618,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 		if (!shdr) {
 			err = -errno;
 			pr_warn_elf("failed to get section #%zu header for %s",
-				    sec_idx, filename);
+				    sec_idx, obj->filename);
 			return err;
 		}
 
@@ -628,7 +626,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 		if (!sec_name) {
 			err = -errno;
 			pr_warn_elf("failed to get section #%zu name for %s",
-				    sec_idx, filename);
+				    sec_idx, obj->filename);
 			return err;
 		}
 
@@ -636,7 +634,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 		if (!data) {
 			err = -errno;
 			pr_warn_elf("failed to get section #%zu (%s) data from %s",
-				    sec_idx, sec_name, filename);
+				    sec_idx, sec_name, obj->filename);
 			return err;
 		}
 
@@ -672,7 +670,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 				err = libbpf_get_error(obj->btf);
 				if (err) {
 					pr_warn("failed to parse .BTF from %s: %s\n",
-						filename, errstr(err));
+						obj->filename, errstr(err));
 					return err;
 				}
 				sec->skipped = true;
@@ -683,7 +681,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 				err = libbpf_get_error(obj->btf_ext);
 				if (err) {
 					pr_warn("failed to parse .BTF.ext from '%s': %s\n",
-						filename, errstr(err));
+						obj->filename, errstr(err));
 					return err;
 				}
 				sec->skipped = true;
@@ -700,7 +698,7 @@ static int linker_load_obj_file(struct bpf_linker *linker, const char *filename,
 			break;
 		default:
 			pr_warn("unrecognized section #%zu (%s) in %s\n",
-				sec_idx, sec_name, filename);
+				sec_idx, sec_name, obj->filename);
 			err = -EINVAL;
 			return err;
 		}
