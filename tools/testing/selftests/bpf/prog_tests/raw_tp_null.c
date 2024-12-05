@@ -3,6 +3,12 @@
 
 #include <test_progs.h>
 #include "raw_tp_null.skel.h"
+#include "raw_tp_null_fail.skel.h"
+
+void test_raw_tp_null_fail(void)
+{
+	RUN_TESTS(raw_tp_null_fail);
+}
 
 void test_raw_tp_null(void)
 {
