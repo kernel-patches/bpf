@@ -25,15 +25,6 @@ struct bmof_priv {
 	struct bin_attribute bmof_bin_attr;
 };
 
-static ssize_t read_bmof(struct file *filp, struct kobject *kobj, struct bin_attribute *attr,
-			 char *buf, loff_t off, size_t count)
-{
-	struct bmof_priv *priv = container_of(attr, struct bmof_priv, bmof_bin_attr);
-
-	return memory_read_from_buffer(buf, count, &off, priv->bmofdata->buffer.pointer,
-				       priv->bmofdata->buffer.length);
-}
-
 static int wmi_bmof_probe(struct wmi_device *wdev, const void *context)
 {
 	struct bmof_priv *priv;
@@ -60,7 +51,8 @@ static int wmi_bmof_probe(struct wmi_device *wdev, const void *context)
 	sysfs_bin_attr_init(&priv->bmof_bin_attr);
 	priv->bmof_bin_attr.attr.name = "bmof";
 	priv->bmof_bin_attr.attr.mode = 0400;
-	priv->bmof_bin_attr.read = read_bmof;
+	priv->bmof_bin_attr.read_new = sysfs_bin_attr_simple_read;
+	priv->bmof_bin_attr.private = priv->bmofdata->buffer.pointer;
 	priv->bmof_bin_attr.size = priv->bmofdata->buffer.length;
 
 	ret = device_create_bin_file(&wdev->dev, &priv->bmof_bin_attr);
