@@ -448,6 +448,11 @@ int bpf_linker__add_file(struct bpf_linker *linker, const char *filename,
 	if (!linker->elf)
 		return libbpf_err(-EINVAL);
 
+	if (!strcmp(filename, linker->filename)) {
+		pr_warn_elf("Input and output files cannot be the same");
+		return libbpf_err(-EINVAL);
+	}
+
 	err = err ?: linker_load_obj_file(linker, filename, opts, &obj);
 	err = err ?: linker_append_sec_data(linker, &obj);
 	err = err ?: linker_append_elf_syms(linker, &obj);
