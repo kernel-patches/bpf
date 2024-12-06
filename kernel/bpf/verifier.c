@@ -15344,7 +15344,8 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 	return err;
 }
 
-static void mark_ptr_or_null_reg(struct bpf_func_state *state,
+static void mark_ptr_or_null_reg(struct bpf_verifier_env *env,
+				 struct bpf_func_state *state,
 				 struct bpf_reg_state *reg, u32 id,
 				 bool is_null)
 {
@@ -15361,7 +15362,9 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 		 */
 		if (WARN_ON_ONCE(reg->smin_value || reg->smax_value || !tnum_equals_const(reg->var_off, 0)))
 			return;
-		if (!(type_is_ptr_alloc_obj(reg->type) || type_is_non_owning_ref(reg->type)) &&
+		if (!type_is_ptr_alloc_obj(reg->type) &&
+		    !type_is_non_owning_ref(reg->type) &&
+		    !mask_raw_tp_reg_cond(env, reg) &&
 		    WARN_ON_ONCE(reg->off))
 			return;
 
@@ -15394,11 +15397,12 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 /* The logic is similar to find_good_pkt_pointers(), both could eventually
  * be folded together at some point.
  */
-static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
+static void mark_ptr_or_null_regs(struct bpf_verifier_env *env,
+				  struct bpf_verifier_state *vstate, u32 regno,
 				  bool is_null)
 {
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
-	struct bpf_reg_state *regs = state->regs, *reg;
+	struct bpf_reg_state *regs = state->regs, *reg = &regs[regno];
 	u32 ref_obj_id = regs[regno].ref_obj_id;
 	u32 id = regs[regno].id;
 
@@ -15409,8 +15413,28 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 		 */
 		WARN_ON_ONCE(release_reference_state(state, id));
 
+	/* For raw_tp args, compiler can produce code of the following
+	 * pattern:
+	 * r3 = r1; // r1 = trusted_or_null_(id=1) r3 = trusted_or_null_(id=1)
+	 * r3 += 8; // r3 = trusted_or_null_(id=1,off=8)
+	 * if r1 == 0 goto pc+N; // r1 = trusted_(id=1)
+	 *
+	 * But we musn't remove the or_null mark from r3, as it won't be
+	 * NULL.
+	 *
+	 * Only do unmarking of everything sharing id if operand of NULL check
+	 * has off = 0.
+	 */
+	if (mask_raw_tp_reg_cond(env, reg) && reg->off) {
+		/* We don't reset reg->id back to 0, as it's unexpected
+		 * when PTR_MAYBE_NULL is set. Simply avoid performing
+		 * a walk for other registers with the same id.
+		 */
+		return;
+	}
+
 	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
-		mark_ptr_or_null_reg(state, reg, id, is_null);
+		mark_ptr_or_null_reg(env, state, reg, id, is_null);
 	}));
 }
 
@@ -15836,9 +15860,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		/* Mark all identical registers in each branch as either
 		 * safe or unknown depending R == 0 or R != 0 conditional.
 		 */
-		mark_ptr_or_null_regs(this_branch, insn->dst_reg,
+		mark_ptr_or_null_regs(env, this_branch, insn->dst_reg,
 				      opcode == BPF_JNE);
-		mark_ptr_or_null_regs(other_branch, insn->dst_reg,
+		mark_ptr_or_null_regs(env, other_branch, insn->dst_reg,
 				      opcode == BPF_JEQ);
 	} else if (!try_match_pkt_pointers(insn, dst_reg, &regs[insn->src_reg],
 					   this_branch, other_branch) &&
