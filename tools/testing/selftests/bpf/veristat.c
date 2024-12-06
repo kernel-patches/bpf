@@ -26,6 +26,9 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #endif
 
+#define _STR(x) #x
+#define STR(x) _STR(x)
+
 enum stat_id {
 	VERDICT,
 	DURATION,
@@ -34,6 +37,11 @@ enum stat_id {
 	PEAK_STATES,
 	MAX_STATES_PER_INSN,
 	MARK_READ_MAX_LEN,
+	SIZE,
+	JITED_SIZE,
+	STACK,
+	PROG_TYPE,
+	ATTACH_TYPE,
 
 	FILE_NAME,
 	PROG_NAME,
@@ -640,19 +648,21 @@ cleanup:
 }
 
 static const struct stat_specs default_output_spec = {
-	.spec_cnt = 7,
+	.spec_cnt = 8,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
-		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
+		TOTAL_INSNS, TOTAL_STATES, SIZE, JITED_SIZE
 	},
 };
 
 static const struct stat_specs default_csv_output_spec = {
-	.spec_cnt = 9,
+	.spec_cnt = 14,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
 		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
 		MAX_STATES_PER_INSN, MARK_READ_MAX_LEN,
+		SIZE, JITED_SIZE, PROG_TYPE, ATTACH_TYPE,
+		STACK,
 	},
 };
 
@@ -688,6 +698,11 @@ static struct stat_def {
 	[PEAK_STATES] = { "Peak states", {"peak_states"}, },
 	[MAX_STATES_PER_INSN] = { "Max states per insn", {"max_states_per_insn"}, },
 	[MARK_READ_MAX_LEN] = { "Max mark read length", {"max_mark_read_len", "mark_read"}, },
+	[SIZE] = { "Prog size", {"prog_size"}, },
+	[JITED_SIZE] = { "Jited size", {"prog_size_jited"}, },
+	[STACK] = {"Stack depth", {"stack_depth", "stack"}, },
+	[PROG_TYPE] = { "Program type", {"prog_type"}, },
+	[ATTACH_TYPE] = { "Attach type", {"attach_type", }, },
 };
 
 static bool parse_stat_id_var(const char *name, size_t len, int *id,
@@ -835,7 +850,8 @@ static char verif_log_buf[64 * 1024];
 static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *s)
 {
 	const char *cur;
-	int pos, lines;
+	int pos, lines, sub_stack;
+	char *save_ptr, *token, stack[PATH_MAX + 1] = {'\0'};
 
 	buf[buf_sz - 1] = '\0';
 
@@ -853,15 +869,24 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 
 		if (1 == sscanf(cur, "verification time %ld usec\n", &s->stats[DURATION]))
 			continue;
-		if (6 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld",
+		if (5 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld",
 				&s->stats[TOTAL_INSNS],
 				&s->stats[MAX_STATES_PER_INSN],
 				&s->stats[TOTAL_STATES],
 				&s->stats[PEAK_STATES],
 				&s->stats[MARK_READ_MAX_LEN]))
 			continue;
-	}
 
+		if (1 == sscanf(cur, "stack depth %" STR(PATH_MAX) "s", stack))
+			continue;
+	}
+	token = strtok_r(stack, "+", &save_ptr);
+	while (token && token - stack < PATH_MAX) {
+		if (sscanf(token, "%d", &sub_stack) == 0)
+			break;
+		s->stats[STACK] += sub_stack;
+		token = strtok_r(NULL, "+", &save_ptr);
+	}
 	return 0;
 }
 
@@ -1146,8 +1171,11 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	char *buf;
 	int buf_sz, log_level;
 	struct verif_stats *stats;
+	struct bpf_prog_info info;
+	__u32 info_len = sizeof(info);
 	int err = 0;
 	void *tmp;
+	int fd;
 
 	if (!should_process_file_prog(base_filename, bpf_program__name(prog))) {
 		env.progs_skipped++;
@@ -1196,6 +1224,14 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	stats->file_name = strdup(base_filename);
 	stats->prog_name = strdup(bpf_program__name(prog));
 	stats->stats[VERDICT] = err == 0; /* 1 - success, 0 - failure */
+	stats->stats[SIZE] = bpf_program__insn_cnt(prog);
+	stats->stats[PROG_TYPE] = bpf_program__type(prog);
+	stats->stats[ATTACH_TYPE] = bpf_program__expected_attach_type(prog);
+	fd = bpf_program__fd(prog);
+	memset(&info, 0, info_len);
+	if (fd > 0 && bpf_prog_get_info_by_fd(fd, &info, &info_len) == 0)
+		stats->stats[JITED_SIZE] = info.jited_prog_len;
+
 	parse_verif_log(buf, buf_sz, stats);
 
 	if (env.verbose) {
@@ -1309,6 +1345,11 @@ static int cmp_stat(const struct verif_stats *s1, const struct verif_stats *s2,
 	case PROG_NAME:
 		cmp = strcmp(s1->prog_name, s2->prog_name);
 		break;
+	case ATTACH_TYPE:
+	case PROG_TYPE:
+	case SIZE:
+	case JITED_SIZE:
+	case STACK:
 	case VERDICT:
 	case DURATION:
 	case TOTAL_INSNS:
@@ -1523,12 +1564,27 @@ static void prepare_value(const struct verif_stats *s, enum stat_id id,
 		else
 			*str = s->stats[VERDICT] ? "success" : "failure";
 		break;
+	case ATTACH_TYPE:
+		if (!s)
+			*str = "N/A";
+		else
+			*str = libbpf_bpf_attach_type_str(s->stats[ATTACH_TYPE]) ? : "N/A";
+		break;
+	case PROG_TYPE:
+		if (!s)
+			*str = "N/A";
+		else
+			*str = libbpf_bpf_prog_type_str(s->stats[PROG_TYPE]) ? : "N/A";
+		break;
 	case DURATION:
 	case TOTAL_INSNS:
 	case TOTAL_STATES:
 	case PEAK_STATES:
 	case MAX_STATES_PER_INSN:
 	case MARK_READ_MAX_LEN:
+	case STACK:
+	case SIZE:
+	case JITED_SIZE:
 		*val = s ? s->stats[id] : 0;
 		break;
 	default:
