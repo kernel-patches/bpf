@@ -186,7 +186,7 @@ struct bpf_verifier_stack_elem {
 	u32 log_pos;
 };
 
-#define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
+#define BPF_COMPLEXITY_LIMIT_JMP_SEQ	(8192 * 4)
 #define BPF_COMPLEXITY_LIMIT_STATES	64
 
 #define BPF_MAP_KEY_POISON	(1ULL << 63)
@@ -11206,6 +11206,16 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		regs[BPF_REG_0].map_ptr = meta.map_ptr;
 		regs[BPF_REG_0].map_uid = meta.map_uid;
 		regs[BPF_REG_0].type = PTR_TO_MAP_VALUE | ret_flag;
+		if (ret_flag == PTR_MAYBE_NULL && !get_loop_entry(env->cur_state)) {
+			struct bpf_verifier_state *st;
+			struct bpf_reg_state *other_regs;
+
+			st = push_stack(env, insn_idx + 1, insn_idx, false);
+			other_regs = st->frame[st->curframe]->regs;
+			__mark_reg_const_zero(env, &other_regs[BPF_REG_0]);
+
+			mark_ptr_not_null_reg(&regs[BPF_REG_0]);
+		}
 		if (!type_may_be_null(ret_type) &&
 		    btf_record_has_field(meta.map_ptr->record, BPF_SPIN_LOCK)) {
 			regs[BPF_REG_0].id = ++env->id_gen;
