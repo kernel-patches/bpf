@@ -15369,6 +15369,12 @@ static void mark_ptr_or_null_reg(struct bpf_verifier_env *env,
 			return;
 
 		if (is_null) {
+			/* We never mark a raw_tp trusted pointer as scalar, to
+			 * preserve backwards compatibility, instead just leave
+			 * it as is.
+			 */
+			if (mask_raw_tp_reg_cond(env, reg))
+				return;
 			reg->type = SCALAR_VALUE;
 			/* We don't need id and ref_obj_id from this point
 			 * onwards anymore, thus we should better reset it,
