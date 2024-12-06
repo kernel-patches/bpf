@@ -1879,6 +1879,8 @@ static int do_object(int argc, char **argv)
 	struct bpf_linker *linker;
 	const char *output_file, *file;
 	int err = 0;
+	int argc_cpy;
+	char **argv_cpy;
 
 	if (!REQ_ARGS(2)) {
 		usage();
@@ -1886,6 +1888,17 @@ static int do_object(int argc, char **argv)
 	}
 
 	output_file = GET_ARG();
+
+	argc_cpy = argc;
+	argv_cpy = argv;
+
+	/* Ensure we don't overwrite any input file */
+	while (argc_cpy--) {
+		if (!strcmp(output_file, *argv_cpy++)) {
+			p_err("Input and output files cannot be the same");
+			goto out;
+		}
+	}
 
 	linker = bpf_linker__new(output_file, NULL);
 	if (!linker) {
