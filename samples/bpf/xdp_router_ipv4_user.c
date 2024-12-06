@@ -134,11 +134,11 @@ static void read_route(struct nlmsghdr *nh, int nll)
 					*((__be32 *)RTA_DATA(rt_attr)));
 				break;
 			case RTA_OIF:
-				sprintf(ifs, "%u",
+				sprintf(ifs, "%d",
 					*((int *)RTA_DATA(rt_attr)));
 				break;
 			case RTA_METRICS:
-				sprintf(metrics, "%u",
+				sprintf(metrics, "%d",
 					*((int *)RTA_DATA(rt_attr)));
 			default:
 				break;
