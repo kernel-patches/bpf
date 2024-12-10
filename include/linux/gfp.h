@@ -356,18 +356,17 @@ static inline struct page *try_alloc_pages_noprof(int nid, unsigned int order)
 	 */
 	if (preemptible() && !rcu_preempt_depth())
 		return alloc_pages_node_noprof(nid,
-					       GFP_NOWAIT | __GFP_ZERO,
+					       GFP_NOWAIT | __GFP_ZERO | __GFP_ACCOUNT,
 					       order);
 	/*
 	 * Best effort allocation from percpu free list.
 	 * If it's empty attempt to spin_trylock zone->lock.
 	 * Do not specify __GFP_KSWAPD_RECLAIM to avoid wakeup_kswapd
 	 * that may need to grab a lock.
-	 * Do not specify __GFP_ACCOUNT to avoid local_lock.
 	 * Do not warn either.
 	 */
 	return alloc_pages_node_noprof(nid,
-				       __GFP_TRYLOCK | __GFP_NOWARN | __GFP_ZERO,
+				       __GFP_TRYLOCK | __GFP_NOWARN | __GFP_ZERO | __GFP_ACCOUNT,
 				       order);
 }
 #define try_alloc_pages(...)			alloc_hooks(try_alloc_pages_noprof(__VA_ARGS__))

@@ -4818,7 +4818,10 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order,
 out:
 	if (memcg_kmem_online() && (gfp & __GFP_ACCOUNT) && page &&
 	    unlikely(__memcg_kmem_charge_page(page, gfp, order) != 0)) {
-		__free_pages(page, order);
+		if (unlikely(gfp & __GFP_TRYLOCK))
+			free_pages_nolock(page, order);
+		else
+			__free_pages(page, order);
 		page = NULL;
 	}
 
