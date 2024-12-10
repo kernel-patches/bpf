@@ -413,8 +413,6 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 
 	(void)bpf_testmod_test_arg_ptr_to_struct(&struct_arg1_2);
 
-	(void)trace_bpf_testmod_test_raw_tp_null(NULL);
-
 	bpf_testmod_test_struct_ops3();
 
 	struct_arg3 = kmalloc((sizeof(struct bpf_testmod_struct_arg_3) +
