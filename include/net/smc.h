@@ -18,6 +18,8 @@
 #include "linux/ism.h"
 
 struct sock;
+struct tcp_sock;
+struct inet_request_sock;
 
 #define SMC_MAX_PNETID_LEN	16	/* Max. length of PNET id */
 
@@ -96,5 +98,54 @@ struct smcd_dev {
 	wait_queue_head_t lgrs_deleted;
 	u8 going_away : 1;
 };
+
+#define  SMC_OPS_NAME_MAX 16
+
+enum {
+	/* ops can be inherit from init_net */
+	SMC_OPS_FLAG_INHERITABLE = 0x1,
+
+	SMC_OPS_ALL_FLAGS = SMC_OPS_FLAG_INHERITABLE,
+};
+
+struct smc_ops {
+	/* priavte */
+
+	struct list_head list;
+	struct module *owner;
+
+	/* public */
+
+	/* unique name */
+	char name[SMC_OPS_NAME_MAX];
+	int flags;
+
+	/* Invoked before computing SMC option for SYN packets.
+	 * We can control whether to set SMC options by returning varios value.
+	 * Return 0 to disable SMC, or return any other value to enable it.
+	 */
+	int (*set_option)(struct tcp_sock *tp);
+
+	/* Invoked before Set up SMC options for SYN-ACK packets
+	 * We can control whether to respond SMC options by returning varios value.
+	 * Return 0 to disable SMC, or return any other value to enable it.
+	 */
+	int (*set_option_cond)(const struct tcp_sock *tp, struct inet_request_sock *ireq);
+};
+
+#if IS_ENABLED(CONFIG_SMC_OPS)
+#define smc_call_retops(init_val, sk, func, ...) ({	\
+	typeof(init_val) __ret = (init_val);		\
+	struct smc_ops *ops;				\
+	rcu_read_lock();				\
+	ops = READ_ONCE(sock_net(sk)->smc.ops);		\
+	if (ops && ops->func)				\
+		__ret = ops->func(__VA_ARGS__);		\
+	rcu_read_unlock();				\
+	__ret;						\
+})
+#else
+#define smc_call_retops(init_val, ...) (init_val)
+#endif /* CONFIG_SMC_OPS */
 
 #endif	/* _SMC_H */
