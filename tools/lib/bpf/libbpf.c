@@ -995,6 +995,27 @@ static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
 				   const char *name, __u32 kind);
 
 static int
+find_ksym_btf_id_by_prefix_kind(struct bpf_object *obj, const char *prefix,
+				const char *name,
+				__u16 kind, struct btf **res_btf,
+				struct module_btf **res_mod_btf)
+{
+	char btf_type_name[128];
+	int ret;
+
+	ret = snprintf(btf_type_name, sizeof(btf_type_name),
+		       "%s%s", prefix, name);
+	/* snprintf returns the number of characters written excluding the
+	 * terminating null. So, if >= BTF_MAX_NAME_SIZE are written, it
+	 * indicates truncation.
+	 */
+	if (ret < 0 || ret >= sizeof(btf_type_name))
+		return -ENAMETOOLONG;
+
+	return find_ksym_btf_id(obj, btf_type_name, kind, res_btf, res_mod_btf);
+}
+
+static int
 find_struct_ops_kern_types(struct bpf_object *obj, const char *tname_raw,
 			   struct module_btf **mod_btf,
 			   const struct btf_type **type, __u32 *type_id,
@@ -1028,9 +1049,16 @@ find_struct_ops_kern_types(struct bpf_object *obj, const char *tname_raw,
 	kern_vtype_id = find_btf_by_prefix_kind(btf, STRUCT_OPS_VALUE_PREFIX,
 						tname, BTF_KIND_STRUCT);
 	if (kern_vtype_id < 0) {
-		pr_warn("struct_ops init_kern: struct %s%s is not found in kernel BTF\n",
-			STRUCT_OPS_VALUE_PREFIX, tname);
-		return kern_vtype_id;
+		if (kern_vtype_id == -ENOENT && !*mod_btf)
+			kern_vtype_id =
+				find_ksym_btf_id_by_prefix_kind(obj, STRUCT_OPS_VALUE_PREFIX,
+								tname, BTF_KIND_STRUCT, &btf,
+								mod_btf);
+		if (kern_vtype_id < 0) {
+			pr_warn("struct_ops init_kern: struct %s%s is not found in kernel BTF\n",
+				STRUCT_OPS_VALUE_PREFIX, tname);
+			return kern_vtype_id;
+		}
 	}
 	kern_vtype = btf__type_by_id(btf, kern_vtype_id);
 
