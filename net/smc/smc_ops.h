@@ -22,8 +22,10 @@
  * Note: Caller MUST ensure it's was invoked under rcu_read_lock.
  */
 struct smc_ops *smc_ops_find_by_name(const char *name);
+int smc_bpf_struct_ops_init(void);
 #else
 static inline struct smc_ops *smc_ops_find_by_name(const char *name) { return NULL; }
+static inline int smc_bpf_struct_ops_init(void) { return 0; }
 #endif /* CONFIG_SMC_OPS*/
 
 #endif /* __SMC_OPS */
