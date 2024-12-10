@@ -6439,6 +6439,96 @@ int btf_ctx_arg_offset(const struct btf *btf, const struct btf_type *func_proto,
 	return off;
 }
 
+struct bpf_raw_tp_null_args {
+	const char *func;
+	u64 mask;
+};
+
+#define RAW_TP_NULL_ARGS(str, arg) { .func = "btf_trace_" #str, .mask = (arg) }
+/* Use 1-based indexing for argno */
+#define NULL_ARG(argno) (1 << (argno))
+
+struct bpf_raw_tp_null_args raw_tp_null_args[] = {
+	/* sched */
+	RAW_TP_NULL_ARGS(sched_pi_setprio, NULL_ARG(2)),
+	/* ... from sched_numa_pair_template event class */
+	RAW_TP_NULL_ARGS(sched_stick_numa, NULL_ARG(3)),
+	RAW_TP_NULL_ARGS(sched_swap_numa, NULL_ARG(3)),
+	/* afs */
+	RAW_TP_NULL_ARGS(afs_make_fs_call, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(afs_make_fs_calli, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(afs_make_fs_call1, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(afs_make_fs_call2, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(afs_protocol_error, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(afs_flock_ev, NULL_ARG(2)),
+	/* cachefiles */
+	RAW_TP_NULL_ARGS(cachefiles_lookup, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_unlink, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_rename, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_prep_read, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_mark_active, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_mark_failed, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_mark_inactive, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_vfs_error, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_io_error, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_open, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_copen, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_close, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_read, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_cread, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_fd_write, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(cachefiles_ondemand_fd_release, NULL_ARG(1)),
+	/* ext4, from ext4__mballoc event class */
+	RAW_TP_NULL_ARGS(ext4_mballoc_discard, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(ext4_mballoc_free, NULL_ARG(2)),
+	/* fib */
+	RAW_TP_NULL_ARGS(fib_table_lookup, NULL_ARG(3)),
+	/* filelock */
+	/* ... from filelock_lock event class */
+	RAW_TP_NULL_ARGS(posix_lock_inode, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(fcntl_setlk, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(locks_remove_posix, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(flock_lock_inode, NULL_ARG(2)),
+	/* ... from filelock_lease event class */
+	RAW_TP_NULL_ARGS(break_lease_noblock, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(break_lease_block, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(break_lease_unblock, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(generic_delete_lease, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(time_out_leases, NULL_ARG(2)),
+	/* host1x */
+	RAW_TP_NULL_ARGS(host1x_cdma_push_gather, NULL_ARG(5)),
+	/* huge_memory */
+	RAW_TP_NULL_ARGS(mm_khugepaged_scan_pmd, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(mm_collapse_huge_page_isolate, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(mm_khugepaged_scan_file, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(mm_khugepaged_collapse_file, NULL_ARG(2)),
+	/* kmem */
+	RAW_TP_NULL_ARGS(mm_page_alloc, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(mm_page_pcpu_drain, NULL_ARG(1)),
+	/* .. from mm_page event class */
+	RAW_TP_NULL_ARGS(mm_page_alloc_zone_locked, NULL_ARG(1)),
+	/* netfs */
+	RAW_TP_NULL_ARGS(netfs_failure, NULL_ARG(2)),
+	/* power */
+	RAW_TP_NULL_ARGS(device_pm_callback_start, NULL_ARG(2)),
+	/* qdisc */
+	RAW_TP_NULL_ARGS(qdisc_dequeue, NULL_ARG(4)),
+	/* rxrpc */
+	RAW_TP_NULL_ARGS(rxrpc_recvdata, NULL_ARG(1)),
+	RAW_TP_NULL_ARGS(rxrpc_resend, NULL_ARG(2)),
+	/* sunrpc */
+	RAW_TP_NULL_ARGS(xs_stream_read_data, NULL_ARG(1)),
+	/* tcp */
+	RAW_TP_NULL_ARGS(tcp_send_reset, NULL_ARG(1) | NULL_ARG(2)),
+	/* tegra_apb_dma */
+	RAW_TP_NULL_ARGS(tegra_dma_tx_status, NULL_ARG(3)),
+	/* timer_migration */
+	RAW_TP_NULL_ARGS(tmigr_update_events, NULL_ARG(1)),
+	/* writeback, from writeback_folio_template event class */
+	RAW_TP_NULL_ARGS(writeback_dirty_folio, NULL_ARG(2)),
+	RAW_TP_NULL_ARGS(folio_wait_writeback, NULL_ARG(2)),
+};
+
 bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		    const struct bpf_prog *prog,
 		    struct bpf_insn_access_aux *info)
@@ -6449,6 +6539,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const char *tname = prog->aux->attach_func_name;
 	struct bpf_verifier_log *log = info->log;
 	const struct btf_param *args;
+	bool ptr_err_raw_tp = false;
 	const char *tag_value;
 	u32 nr_args, arg;
 	int i, ret;
@@ -6591,6 +6682,36 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (btf_param_match_suffix(btf, &args[arg], "__nullable"))
 		info->reg_type |= PTR_MAYBE_NULL;
 
+	if (prog->expected_attach_type == BPF_TRACE_RAW_TP) {
+		struct btf *btf = prog->aux->attach_btf;
+		const struct btf_type *t;
+		const char *tname;
+
+		t = btf_type_by_id(btf, prog->aux->attach_btf_id);
+		if (!t)
+			goto done;
+		tname = btf_name_by_offset(btf, t->name_off);
+		if (!tname)
+			goto done;
+		for (int i = 0; i < ARRAY_SIZE(raw_tp_null_args); i++) {
+			/* Is this a func with potential NULL args? */
+			if (strcmp(tname, raw_tp_null_args[i].func))
+				continue;
+			/* Is the current arg NULL? */
+			if (raw_tp_null_args[i].mask & NULL_ARG(arg + 1))
+				info->reg_type |= PTR_MAYBE_NULL;
+			break;
+		}
+		/* Hardcode the only cases which has a IS_ERR pointer, i.e.
+		 * mr_integ_alloc's 4th argument (mr), and
+		 * cachefiles_lookup's 3rd argument (de).
+		 */
+		if (!strcmp(tname, "btf_trace_mr_integ_alloc") && (arg + 1) == 4)
+			ptr_err_raw_tp = true;
+		if (!strcmp(tname, "btf_trace_cachefiles_lookup") && (arg + 1) == 3)
+			ptr_err_raw_tp = true;
+	}
+done:
 	if (tgt_prog) {
 		enum bpf_prog_type tgt_type;
 
@@ -6635,6 +6756,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	bpf_log(log, "func '%s' arg%d has btf_id %d type %s '%s'\n",
 		tname, arg, info->btf_id, btf_type_str(t),
 		__btf_name_by_offset(btf, t->name_off));
+
+	/* Perform all checks on the validity of type for this argument, but if
+	 * we know it can be IS_ERR at runtime, scrub pointer type and mark as
+	 * scalar. We do not handle is_retval case as we hardcode ptr_err_raw_tp
+	 * handling for known tps.
+	 */
+	if (ptr_err_raw_tp)
+		info->reg_type = SCALAR_VALUE;
 	return true;
 }
 EXPORT_SYMBOL_GPL(btf_ctx_access);
