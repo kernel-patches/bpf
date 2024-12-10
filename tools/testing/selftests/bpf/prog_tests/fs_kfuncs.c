@@ -9,6 +9,7 @@
 #include <test_progs.h>
 #include "test_get_xattr.skel.h"
 #include "test_set_remove_xattr.skel.h"
+#include "test_set_remove_xattr_failure.skel.h"
 #include "test_fsverity.skel.h"
 
 static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
@@ -285,6 +286,8 @@ void test_fs_kfuncs(void)
 
 	if (test__start_subtest("set_remove_xattr"))
 		test_set_remove_xattr();
+
+	RUN_TESTS(test_set_remove_xattr_failure);
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();
