@@ -148,14 +148,4 @@ int BPF_PROG(path_d_path_kfunc_invalid_buf_sz, struct file *file)
 	return 0;
 }
 
-SEC("fentry/vfs_open")
-__failure __msg("calling kernel function bpf_path_d_path is not allowed")
-int BPF_PROG(path_d_path_kfunc_non_lsm, struct path *path, struct file *f)
-{
-	/* Calling bpf_path_d_path() from a non-LSM BPF program isn't permitted.
-	 */
-	bpf_path_d_path(path, buf, sizeof(buf));
-	return 0;
-}
-
 char _license[] SEC("license") = "GPL";
