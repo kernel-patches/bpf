@@ -31,6 +31,13 @@ static inline void local_lock_acquire(local_lock_t *l)
 	l->owner = current;
 }
 
+static inline void local_trylock_acquire(local_lock_t *l)
+{
+	lock_map_acquire_try(&l->dep_map);
+	DEBUG_LOCKS_WARN_ON(l->owner);
+	l->owner = current;
+}
+
 static inline void local_lock_release(local_lock_t *l)
 {
 	DEBUG_LOCKS_WARN_ON(l->owner != current);
@@ -45,6 +52,7 @@ static inline void local_lock_debug_init(local_lock_t *l)
 #else /* CONFIG_DEBUG_LOCK_ALLOC */
 # define LOCAL_LOCK_DEBUG_INIT(lockname)
 static inline void local_lock_acquire(local_lock_t *l) { }
+static inline void local_trylock_acquire(local_lock_t *l) { }
 static inline void local_lock_release(local_lock_t *l) { }
 static inline void local_lock_debug_init(local_lock_t *l) { }
 #endif /* !CONFIG_DEBUG_LOCK_ALLOC */
@@ -90,6 +98,13 @@ do {								\
 		local_irq_save(flags);				\
 		local_lock_acquire(this_cpu_ptr(lock));		\
 	} while (0)
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		local_irq_save(flags);				\
+		local_trylock_acquire(this_cpu_ptr(lock));	\
+		1;						\
+	})
 
 #define __local_unlock(lock)					\
 	do {							\
@@ -147,6 +162,14 @@ typedef spinlock_t local_lock_t;
 		flags = 0;					\
 		__local_lock(lock);				\
 	} while (0)
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		typecheck(unsigned long, flags);		\
+		flags = 0;					\
+		migrate_disable();				\
+		spin_trylock(this_cpu_ptr((__lock)));		\
+	})
 
 #define __local_unlock(__lock)					\
 	do {							\
