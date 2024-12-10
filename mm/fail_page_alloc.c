@@ -31,6 +31,12 @@ bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
 		return false;
 	if (gfp_mask & __GFP_NOFAIL)
 		return false;
+	if (gfp_mask & __GFP_TRYLOCK)
+		/*
+		 * Internals of should_fail_ex() are not compatible
+		 * with trylock concept.
+		 */
+		return false;
 	if (fail_page_alloc.ignore_gfp_highmem && (gfp_mask & __GFP_HIGHMEM))
 		return false;
 	if (fail_page_alloc.ignore_gfp_reclaim &&

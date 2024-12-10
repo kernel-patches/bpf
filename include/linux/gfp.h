@@ -347,6 +347,31 @@ static inline struct page *alloc_page_vma_noprof(gfp_t gfp,
 }
 #define alloc_page_vma(...)			alloc_hooks(alloc_page_vma_noprof(__VA_ARGS__))
 
+static inline struct page *try_alloc_pages_noprof(int nid, unsigned int order)
+{
+	/*
+	 * If spin_locks are not held and interrupts are enabled, use normal
+	 * path. BPF progs run under rcu_read_lock(), so in PREEMPT_RT
+	 * rcu_preempt_depth() will be >= 1 and will use trylock path.
+	 */
+	if (preemptible() && !rcu_preempt_depth())
+		return alloc_pages_node_noprof(nid,
+					       GFP_NOWAIT | __GFP_ZERO,
+					       order);
+	/*
+	 * Best effort allocation from percpu free list.
+	 * If it's empty attempt to spin_trylock zone->lock.
+	 * Do not specify __GFP_KSWAPD_RECLAIM to avoid wakeup_kswapd
+	 * that may need to grab a lock.
+	 * Do not specify __GFP_ACCOUNT to avoid local_lock.
+	 * Do not warn either.
+	 */
+	return alloc_pages_node_noprof(nid,
+				       __GFP_TRYLOCK | __GFP_NOWARN | __GFP_ZERO,
+				       order);
+}
+#define try_alloc_pages(...)			alloc_hooks(try_alloc_pages_noprof(__VA_ARGS__))
+
 extern unsigned long get_free_pages_noprof(gfp_t gfp_mask, unsigned int order);
 #define __get_free_pages(...)			alloc_hooks(get_free_pages_noprof(__VA_ARGS__))
 
