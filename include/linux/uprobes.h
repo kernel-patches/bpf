@@ -232,6 +232,7 @@ extern struct uprobe_trampoline *uprobe_trampoline_get(unsigned long vaddr);
 extern void uprobe_trampoline_put(struct uprobe_trampoline *area);
 extern bool arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr);
 extern const struct vm_special_mapping *arch_uprobe_trampoline_mapping(void);
+extern void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr);
 #else /* !CONFIG_UPROBES */
 struct uprobes_state {
 };

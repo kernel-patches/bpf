@@ -425,6 +425,86 @@ sigill:
 	return -1;
 }
 
+static int tramp_mremap(const struct vm_special_mapping *sm, struct vm_area_struct *new_vma)
+{
+	return -EPERM;
+}
+
+static struct vm_special_mapping tramp_mapping = {
+	.name   = "[uprobes-trampoline]",
+	.mremap = tramp_mremap,
+};
+
+SYSCALL_DEFINE0(uprobe)
+{
+	struct pt_regs *regs = task_pt_regs(current);
+	struct vm_area_struct *vma;
+	unsigned long bp_vaddr;
+	int err;
+
+	err = copy_from_user(&bp_vaddr, (void __user *)regs->sp + 3*8, sizeof(bp_vaddr));
+	if (err) {
+		force_sig(SIGILL);
+		return -1;
+	}
+
+	/* Allow execution only from uprobe trampolines. */
+	vma = vma_lookup(current->mm, regs->ip);
+	if (!vma || vma->vm_private_data != (void *) &tramp_mapping) {
+		force_sig(SIGILL);
+		return -1;
+	}
+
+	handle_syscall_uprobe(regs, bp_vaddr - 5);
+	return 0;
+}
+
+asm (
+	".pushsection .rodata\n"
+	".global uprobe_trampoline_entry\n"
+	"uprobe_trampoline_entry:\n"
+	"endbr64\n"
+	"push %rcx\n"
+	"push %r11\n"
+	"push %rax\n"
+	"movq $" __stringify(__NR_uprobe) ", %rax\n"
+	"syscall\n"
+	"pop %rax\n"
+	"pop %r11\n"
+	"pop %rcx\n"
+	"ret\n"
+	".global uprobe_trampoline_end\n"
+	"uprobe_trampoline_end:\n"
+	".popsection\n"
+);
+
+extern __visible u8 uprobe_trampoline_entry[];
+extern __visible u8 uprobe_trampoline_end[];
+
+const struct vm_special_mapping *arch_uprobe_trampoline_mapping(void)
+{
+	struct pt_regs *regs = task_pt_regs(current);
+
+	return user_64bit_mode(regs) ? &tramp_mapping : NULL;
+}
+
+static int __init arch_uprobes_init(void)
+{
+	unsigned long size = uprobe_trampoline_end - uprobe_trampoline_entry;
+	static struct page *pages[2];
+	struct page *page;
+
+	page = alloc_page(GFP_HIGHUSER);
+	if (!page)
+		return -ENOMEM;
+	pages[0] = page;
+	tramp_mapping.pages = (struct page **) &pages;
+	arch_uprobe_copy_ixol(page, 0, uprobe_trampoline_entry, size);
+	return 0;
+}
+
+late_initcall(arch_uprobes_init);
+
 /*
  * If arch_uprobe->insn doesn't use rip-relative addressing, return
  * immediately.  Otherwise, rewrite the instruction so that it accesses
