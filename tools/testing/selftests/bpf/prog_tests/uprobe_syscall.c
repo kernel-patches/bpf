@@ -532,6 +532,81 @@ static void test_uprobe_usdt(void)
 cleanup:
 	uprobe_optimized__destroy(skel);
 }
+
+static bool race_stop;
+
+static void *worker_trigger(void *arg)
+{
+	unsigned long rounds = 0;
+
+	while (!race_stop) {
+		uprobe_test();
+		rounds++;
+	}
+
+	printf("tid %d trigger rounds: %lu\n", gettid(), rounds);
+	return NULL;
+}
+
+static void *worker_attach(void *arg)
+{
+	struct uprobe_optimized *skel;
+	unsigned long rounds = 0;
+
+	skel = uprobe_optimized__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_optimized__open_and_load"))
+		goto cleanup;
+
+	while (!race_stop) {
+		skel->links.test_2 = bpf_program__attach_uprobe_multi(skel->progs.test_2, -1,
+						"/proc/self/exe", "uprobe_test_nop5", NULL);
+		if (!ASSERT_OK_PTR(skel->links.test_2, "bpf_program__attach_uprobe_multi"))
+			break;
+		bpf_link__destroy(skel->links.test_2);
+		skel->links.test_2 = NULL;
+		rounds++;
+	}
+
+	printf("tid %d attach rounds: %lu hits: %lu\n", gettid(), rounds, skel->bss->executed);
+
+cleanup:
+	uprobe_optimized__destroy(skel);
+	return NULL;
+}
+
+static void test_uprobe_race(void)
+{
+	int err, i, nr_cpus, nr;
+	pthread_t *threads;
+
+        nr_cpus = libbpf_num_possible_cpus();
+	if (!ASSERT_GE(nr_cpus, 0, "nr_cpus"))
+		return;
+
+	nr = nr_cpus * 2;
+	threads = malloc(sizeof(*threads) * nr);
+	if (!ASSERT_OK_PTR(threads, "malloc"))
+		return;
+
+	for (i = 0; i < nr_cpus; i++) {
+		err = pthread_create(&threads[i], NULL, worker_trigger, NULL);
+		if (!ASSERT_OK(err, "pthread_create"))
+			goto cleanup;
+	}
+
+	for (; i < nr; i++) {
+		err = pthread_create(&threads[i], NULL, worker_attach, NULL);
+		if (!ASSERT_OK(err, "pthread_create"))
+			goto cleanup;
+	}
+
+	sleep(4);
+
+cleanup:
+	race_stop = true;
+	for (i = 0; i < nr; i++)
+		pthread_join(threads[i], NULL);
+}
 #else
 static void test_uretprobe_regs_equal(void)
 {
@@ -567,6 +642,11 @@ static void test_uprobe_usdt(void)
 {
 	test__skip();
 }
+
+static void test_uprobe_race(void)
+{
+	test__skip();
+}
 #endif
 
 void test_uprobe_syscall(void)
@@ -585,4 +665,6 @@ void test_uprobe_syscall(void)
 		test_uprobe_multi();
 	if (test__start_subtest("uprobe_usdt"))
 		test_uprobe_usdt();
+	if (test__start_subtest("uprobe_race"))
+		test_uprobe_race();
 }
