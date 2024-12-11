@@ -18,6 +18,7 @@
 #include <asm/processor.h>
 #include <asm/insn.h>
 #include <asm/mmu_context.h>
+#include <asm/nops.h>
 
 /* Post-execution fixups. */
 
@@ -914,8 +915,37 @@ static int is_nop5_insn(uprobe_opcode_t *insn)
 	return !memcmp(insn, x86_nops[5], 5);
 }
 
+static int is_call_insn(uprobe_opcode_t *insn)
+{
+	return *insn == CALL_INSN_OPCODE;
+}
+
+static void relative_insn(void *dest, void *from, void *to, u8 op)
+{
+	struct __arch_relative_insn {
+		u8 op;
+		s32 raddr;
+	} __packed *insn;
+
+	insn = (struct __arch_relative_insn *)dest;
+	insn->raddr = (s32)((long)(to) - ((long)(from) + 5));
+	insn->op = op;
+}
+
+static void relative_call(void *dest, void *from, void *to)
+{
+	relative_insn(dest, from, to, CALL_INSN_OPCODE);
+}
+
+static bool can_optimize_vaddr(unsigned long vaddr)
+{
+	/* We can't do cross page atomic writes yet. */
+	return PAGE_SIZE - (vaddr & ~PAGE_MASK) >= 5;
+}
+
 /* Returns -ENOSYS if branch_xol_ops doesn't handle this insn */
-static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
+static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn,
+				unsigned long vaddr)
 {
 	u8 opc1 = OPCODE1(insn);
 	insn_byte_t p;
@@ -933,8 +963,11 @@ static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 		break;
 
 	case 0x0f:
-		if (is_nop5_insn((uprobe_opcode_t *) &auprobe->insn))
+		if (is_nop5_insn((uprobe_opcode_t *) &auprobe->insn)) {
+			if (can_optimize_vaddr(vaddr))
+				set_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
 			goto setup;
+		}
 		if (insn->opcode.nbytes != 2)
 			return -ENOSYS;
 		/*
@@ -1065,7 +1098,7 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 	if (ret)
 		return ret;
 
-	ret = branch_setup_xol_ops(auprobe, &insn);
+	ret = branch_setup_xol_ops(auprobe, &insn, addr);
 	if (ret != -ENOSYS)
 		return ret;
 
@@ -1305,4 +1338,133 @@ bool arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check ctx,
 		return regs->sp < ret->stack;
 	else
 		return regs->sp <= ret->stack;
+}
+
+int arch_uprobe_verify_opcode(struct arch_uprobe *auprobe, struct page *page,
+			      unsigned long vaddr, uprobe_opcode_t *new_opcode,
+			      int nbytes)
+{
+	uprobe_opcode_t old_opcode[5];
+	bool is_call, is_swbp, is_nop5;
+
+	if (!test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags))
+		return uprobe_verify_opcode(page, vaddr, new_opcode);
+
+	/*
+	 * The ARCH_UPROBE_FLAG_CAN_OPTIMIZE flag guarantees the following
+	 * 5 bytes read won't cross the page boundary.
+	 */
+	uprobe_copy_from_page(page, vaddr, (uprobe_opcode_t *) &old_opcode, 5);
+	is_call = is_call_insn((uprobe_opcode_t *) &old_opcode);
+	is_swbp = is_swbp_insn((uprobe_opcode_t *) &old_opcode);
+	is_nop5 = is_nop5_insn((uprobe_opcode_t *) &old_opcode);
+
+	/*
+	 * We allow following trasitions for optimized uprobes:
+	 *
+	 *   nop5 -> swbp -> call
+	 *   ||      |       |
+	 *   |'--<---'       |
+	 *   '---<-----------'
+	 *
+	 * We return 1 to ack the write, 0 to do nothing, -1 to fail write.
+	 *
+	 * If the current opcode (old_opcode) has already desired value,
+	 * we do nothing, because we are racing with another thread doing
+	 * the update.
+	 */
+	switch (nbytes) {
+	case 5:
+		if (is_call_insn(new_opcode)) {
+			if (is_swbp)
+				return 1;
+			if (is_call && !memcmp(new_opcode, &old_opcode, 5))
+				return 0;
+		} else {
+			if (is_call || is_swbp)
+				return 1;
+			if (is_nop5)
+				return 0;
+		}
+		break;
+	case 1:
+		if (is_swbp_insn(new_opcode)) {
+			if (is_nop5)
+				return 1;
+			if (is_swbp || is_call)
+				return 0;
+		} else {
+			if (is_swbp || is_call)
+				return 1;
+			if (is_nop5)
+				return 0;
+		}
+	}
+	return -1;
+}
+
+bool arch_uprobe_is_register(uprobe_opcode_t *insn, int nbytes)
+{
+	return nbytes == 5 ? is_call_insn(insn) : is_swbp_insn(insn);
+}
+
+static void __arch_uprobe_optimize(struct arch_uprobe *auprobe, struct mm_struct *mm,
+				   unsigned long vaddr)
+{
+	struct uprobe_trampoline *tramp;
+	char call[5];
+
+	tramp = uprobe_trampoline_get(vaddr);
+	if (!tramp)
+		goto fail;
+
+	relative_call(call, (void *) vaddr, (void *) tramp->vaddr);
+	if (uprobe_write_opcode(auprobe, mm, vaddr, call, 5))
+		goto fail;
+
+	set_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags);
+	return;
+
+fail:
+	/* Once we fail we never try again. */
+	clear_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
+	uprobe_trampoline_put(tramp);
+}
+
+static bool should_optimize(struct arch_uprobe *auprobe)
+{
+	if (!test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags))
+		return false;
+	if (test_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags))
+		return false;
+	return true;
+}
+
+void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+	struct mm_struct *mm = current->mm;
+
+	if (!should_optimize(auprobe))
+		return;
+
+	mmap_write_lock(mm);
+	if (should_optimize(auprobe))
+		__arch_uprobe_optimize(auprobe, mm, vaddr);
+	mmap_write_unlock(mm);
+}
+
+int set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	uprobe_opcode_t *insn = (uprobe_opcode_t *) auprobe->insn;
+
+	if (test_bit(ARCH_UPROBE_FLAG_OPTIMIZED, &auprobe->flags))
+		return uprobe_write_opcode(auprobe, mm, vaddr, insn, 5);
+
+	return uprobe_write_opcode(auprobe, mm, vaddr, insn, UPROBE_SWBP_INSN_SIZE);
+}
+
+bool arch_uprobe_is_callable(unsigned long vtramp, unsigned long vaddr)
+{
+	long delta = (long)(vaddr + 5 - vtramp);
+	return delta >= INT_MIN && delta <= INT_MAX;
 }
