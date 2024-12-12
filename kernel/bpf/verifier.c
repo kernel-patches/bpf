@@ -10533,6 +10533,9 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 				*insn_idx, callee->callsite);
 			return -EFAULT;
 		}
+	} else if (env->subprog_info[state->frame[state->curframe]->subprogno].has_tail_call) {
+		/* if tailcall succeeds, r0 could hold anything */
+		__mark_reg_unknown(env, &caller->regs[BPF_REG_0]);
 	} else {
 		/* return to the caller whatever r0 had in the callee */
 		caller->regs[BPF_REG_0] = *r0;

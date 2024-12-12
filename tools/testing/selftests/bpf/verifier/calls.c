@@ -1341,6 +1341,41 @@
 	.result = ACCEPT,
 },
 {
+	"calls: call with nested tail_call r0 bounds",
+	.insns = {
+	/* main prog */
+	BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 1, 0, 4),
+	/* we shouldn't be able to index packet with r0, it could have any value */
+	BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6, offsetof(struct xdp_md, data)),
+	BPF_ALU64_REG(BPF_ADD, BPF_REG_7, BPF_REG_0),
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+
+	/* subprog */
+	BPF_LD_MAP_FD(BPF_REG_2, 0),
+	BPF_MOV64_IMM(BPF_REG_3, 1),
+	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_tail_call),
+	BPF_MOV64_IMM(BPF_REG_0, 0),
+	BPF_EXIT_INSN(),
+	},
+	.prog_type = BPF_PROG_TYPE_XDP,
+	.errstr = "math between pkt pointer and register with unbounded min value",
+	.result = REJECT,
+	.fixup_prog1 = { 6 },
+	.func_info = { { 0, 4 }, { 6, 4 } },
+	.func_info_cnt = 2,
+	.btf_strings = "\0int\0ctx\0main\0",
+	.btf_types = {
+		/* 1: int   */ BTF_TYPE_INT_ENC(1, BTF_INT_SIGNED, 0, 32, 4),
+		/* 2: void* */ BTF_PTR_ENC(0),
+		/* 3: int __(void*) */ BTF_FUNC_PROTO_ENC(1, 1),
+			BTF_FUNC_PROTO_ARG_ENC(5, 2),
+		/* 4 */ BTF_FUNC_ENC(9, 3),
+	BTF_END_RAW
+	},
+},
+{
 	"calls: ambiguous return value",
 	.insns = {
 	BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
