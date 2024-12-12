@@ -55,33 +55,4 @@ exit_%=:	r0 = 0;					\
 		      : __clobber_all);
 }
 
-static __noinline void dummy(void) {}
-
-/* Pass a pointer to uninitialized stack memory to a helper.
- * Passed memory block should be marked as STACK_MISC after helper call.
- */
-SEC("socket")
-__log_level(7) __msg("fp-104=mmmmmmmm")
-__naked int helper_uninit_to_misc(void *ctx)
-{
-	asm volatile ("					\
-		/* force stack depth to be 128 */	\
-		*(u64*)(r10 - 128) = r1;		\
-		r1 = r10;				\
-		r1 += -128;				\
-		r2 = 32;				\
-		call %[bpf_trace_printk];		\
-		/* Call to dummy() forces print_verifier_state(..., true),	\
-		 * thus showing the stack state, matched by __msg().		\
-		 */					\
-		call %[dummy];				\
-		r0 = 0;					\
-		exit;					\
-"
-		      :
-		      : __imm(bpf_trace_printk),
-			__imm(dummy)
-		      : __clobber_all);
-}
-
 char _license[] SEC("license") = "GPL";
