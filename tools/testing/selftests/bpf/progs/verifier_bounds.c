@@ -1202,7 +1202,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=some-range-here")
+__msg("8: (2f) r6 *= r7                      ; R6_w=scalar(smin=umin=0x1bc16d5cd4927ee1,smax=umax=0x1bc16d674ec80000,smax32=0x7ffffeff,umax32=0xfffffeff,var_off=(0x1bc16d4000000000; 0x3ffffffeff))")
 __naked void mult_mixed0_sign(void)
 {
     asm volatile (
@@ -1224,7 +1224,7 @@ __naked void mult_mixed0_sign(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=some-range-here")
+__msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=smin32=-100,smax=smax32=200)")
 __naked void mult_mixed1_sign(void)
 {
     asm volatile (
@@ -1246,7 +1246,7 @@ __naked void mult_mixed1_sign(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R8_w=some-range-here")
+__msg("r6 *= r7 {{.*}}; R8_w=scalar(smin=0xfffffffb94a3a7cd,smax=0)")
 __naked void mult_mixed2_sign(void)
 {
     asm volatile (
