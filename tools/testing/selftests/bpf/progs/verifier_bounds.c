@@ -1246,6 +1246,29 @@ __naked void mult_mixed1_sign(void)
 
 SEC("tc")
 __success __log_level(2)
+__msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=0x8000000000000001,smax=0x7ffff800000000b0,umin=smin32=umin32=1,umax=0xfffff800000000b0,smax32=umax32=176,var_off=(0x0; 0xfffff800000000ff))")
+__naked void mult_mixed2_sign(void)
+{
+    asm volatile (
+	"r8 = 0x7ffffffffff ll;"
+    "call %[bpf_get_prandom_u32];"
+    "r6 = r0;"
+    "call %[bpf_get_prandom_u32];"
+    "r7 = r0;"
+    "r6 &= 0xa;"
+    "r6 -= r8;"
+    "r7 &= 0xf;"
+    "r7 -= r8;"
+    "r6 *= r7;"
+    "exit"
+    :
+    : __imm(bpf_get_prandom_u32),
+      __imm(bpf_skb_store_bytes)
+    : __clobber_all);
+}
+
+SEC("tc")
+__success __log_level(2)
 __msg("r8 *= r6 {{.*}}; R6_w=scalar(smin=smin32=0,smax=umax=smax32=umax32=11,var_off=(0x0; 0xb)) R8_w=scalar(smin=0,smax=umax=0x7b96bb0a94a3a7cd,var_off=(0x0; 0x7fffffffffffffff))")
 __naked void mult_no_sign_crossing(void)
 {
@@ -1265,7 +1288,7 @@ __naked void mult_no_sign_crossing(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=something")
+__msg("r6 *= r7 {{.*}}; R6_w=scalar()")
 __naked void mult_unsign_ovf(void)
 {
     asm volatile (
@@ -1290,7 +1313,7 @@ __msg("r6 *= r7 {{.*}}; R6_w=something")
 __naked void mult_sign_ovf(void)
 {
     asm volatile (
-	"r8 = 0x7ffffffffff ll;"
+	"r8 = 0x7fffffffffffff ll;"
     "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
