@@ -1246,13 +1246,13 @@ __naked void mult_mixed1_sign(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R8_w=scalar(smin=0xfffffffb94a3a7cd,smax=0)")
+__msg("r8 *= r6 {{.*}}; R8_w=something)")
 __naked void mult_mixed2_sign(void)
 {
     asm volatile (
     "r6 = 0xb;"
     "r8 = 0xb3c3f8c99262687;"
-    "call %[bpf_get_prandom_u32];"
+    "call %[bpf_get_prandom_u64];"
     "r7 = r0;"
     "r6 &= r7;"
     "r8 *= r6;"
@@ -1262,4 +1262,47 @@ __naked void mult_mixed2_sign(void)
       __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
+
+SEC("tc")
+__success __log_level(2)
+__msg("r6 *= r7 {{.*}}; R6_w=something)")
+__naked void mult_mixed4_sign(void)
+{
+    asm volatile (
+    "call %[bpf_get_prandom_u32];"
+    "r6 = r0;"
+    "call %[bpf_get_prandom_u32];"
+    "r7 = r0;"
+    "r6 &= 0xffffffff;"
+    "r7 &= 0xffffffff;"
+    "r6 *= r7;"
+    "exit"
+    :
+    : __imm(bpf_get_prandom_u32),
+      __imm(bpf_skb_store_bytes)
+    : __clobber_all);
+}
+
+SEC("tc")
+__success __log_level(2)
+__msg("r6 *= r7 {{.*}}; R6_w=something)")
+__naked void mult_mixed5_sign(void)
+{
+    asm volatile (
+    "call %[bpf_get_prandom_u64];"
+    "r6 = r0;"
+    "call %[bpf_get_prandom_u64];"
+    "r7 = r0;"
+    "r6 &= 0xffffffff;"
+	"r6 -= 0xffffffff;"
+    "r7 &= 0xffffffff;"
+	"r7 -= 0xffffffff;"
+    "r6 *= r7;"
+    "exit"
+    :
+    : __imm(bpf_get_prandom_u64),
+      __imm(bpf_skb_store_bytes)
+    : __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
