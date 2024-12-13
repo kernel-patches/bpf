@@ -1201,6 +1201,7 @@ l0_%=:	r0 = 0;						\
 }
 
 SEC("tc")
+__description("multiply mixed sign bounds. test 1")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=umin=0x1bc16d5cd4927ee1,smax=umax=0x1bc16d674ec80000,smax32=0x7ffffeff,umax32=0xfffffeff,var_off=(0x1bc16d4000000000; 0x3ffffffeff))")
 __naked void mult_mixed0_sign(void)
@@ -1223,6 +1224,7 @@ __naked void mult_mixed0_sign(void)
 }
 
 SEC("tc")
+__description("multiply mixed sign bounds. test 2")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=smin32=-100,smax=smax32=200)")
 __naked void mult_mixed1_sign(void)
@@ -1245,12 +1247,13 @@ __naked void mult_mixed1_sign(void)
 }
 
 SEC("tc")
+__description("multiply negative bounds")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=0x8000000000000001,smax=0x7ffff800000000b0,umin=smin32=umin32=1,umax=0xfffff800000000b0,smax32=umax32=176,var_off=(0x0; 0xfffff800000000ff))")
-__naked void mult_mixed2_sign(void)
+__naked void mult_sign_bounds(void)
 {
     asm volatile (
-	"r8 = 0x7ffffffffff ll;"
+	"r8 = 0x7fff;"
     "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
@@ -1268,6 +1271,7 @@ __naked void mult_mixed2_sign(void)
 }
 
 SEC("tc")
+__description("multiply bounds that don't cross signed boundary")
 __success __log_level(2)
 __msg("r8 *= r6 {{.*}}; R6_w=scalar(smin=smin32=0,smax=umax=smax32=umax32=11,var_off=(0x0; 0xb)) R8_w=scalar(smin=0,smax=umax=0x7b96bb0a94a3a7cd,var_off=(0x0; 0x7fffffffffffffff))")
 __naked void mult_no_sign_crossing(void)
@@ -1287,6 +1291,7 @@ __naked void mult_no_sign_crossing(void)
 }
 
 SEC("tc")
+__description("multiplication overflow, result in unbounded reg. test 1")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=scalar()")
 __naked void mult_unsign_ovf(void)
@@ -1308,6 +1313,7 @@ __naked void mult_unsign_ovf(void)
 }
 
 SEC("tc")
+__description("multiplication overflow, result in unbounded reg. test 2")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=scalar()")
 __naked void mult_sign_ovf(void)
