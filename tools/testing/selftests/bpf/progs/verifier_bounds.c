@@ -1218,7 +1218,6 @@ __naked void mult_mixed0_sign(void)
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
-      __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
 
@@ -1240,7 +1239,6 @@ __naked void mult_mixed1_sign(void)
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
-      __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
 
@@ -1251,7 +1249,7 @@ __naked void mult_mixed2_sign(void)
 {
     asm volatile (
     "r6 = 0xb;"
-    "r8 = 809591906117232263;"
+    "*(u64*)(r8 + 0) = 0xb3c3f8c99262687;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
     "r6 &= r7;"
@@ -1259,7 +1257,6 @@ __naked void mult_mixed2_sign(void)
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
-      __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
 
@@ -1270,16 +1267,15 @@ __naked void mult_mixed4_sign(void)
 {
     asm volatile (
     "call %[bpf_get_prandom_u32];"
-    "r6 = r0;"
+    "r6 = *(u64*)(r0 + 0);"
     "call %[bpf_get_prandom_u32];"
-    "r7 = r0;"
+    "r7 = *(u64*)(r0 + 0);"
     "r6 &= 0xffffffff;"
     "r7 &= 0xffffffff;"
     "r6 *= r7;"
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
-      __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
 
@@ -1301,7 +1297,6 @@ __naked void mult_mixed5_sign(void)
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
-      __imm(bpf_skb_store_bytes)
     : __clobber_all);
 }
 
