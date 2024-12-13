@@ -10314,6 +10314,11 @@ static bool retval_range_within(struct bpf_retval_range range, const struct bpf_
 		return range.minval <= reg->smin_value && reg->smax_value <= range.maxval;
 }
 
+static bool has_abnormal_return(struct bpf_subprog_info *subprog_info)
+{
+	return subprog_info->has_ld_abs || subprog_info->has_tail_call;
+}
+
 static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state, *prev_st;
@@ -10359,6 +10364,10 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 				*insn_idx, callee->callsite);
 			return -EFAULT;
 		}
+	} else if (has_abnormal_return(
+		    &env->subprog_info[state->frame[state->curframe]->subprogno])) {
+		/* callee can return before exit instruction, r0 could hold anything */
+		__mark_reg_unknown(env, &caller->regs[BPF_REG_0]);
 	} else {
 		/* return to the caller whatever r0 had in the callee */
 		caller->regs[BPF_REG_0] = *r0;
@@ -16881,17 +16890,14 @@ err_free:
 	return ret;
 }
 
+
 static int check_abnormal_return(struct bpf_verifier_env *env)
 {
 	int i;
 
 	for (i = 1; i < env->subprog_cnt; i++) {
-		if (env->subprog_info[i].has_ld_abs) {
-			verbose(env, "LD_ABS is not allowed in subprogs without BTF\n");
-			return -EINVAL;
-		}
-		if (env->subprog_info[i].has_tail_call) {
-			verbose(env, "tail_call is not allowed in subprogs without BTF\n");
+		if (has_abnormal_return(&env->subprog_info[i])) {
+			verbose(env, "LD_ABS/tail_call is not allowed in subprogs without BTF\n");
 			return -EINVAL;
 		}
 	}
