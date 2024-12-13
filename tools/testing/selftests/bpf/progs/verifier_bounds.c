@@ -1249,7 +1249,7 @@ __naked void mult_mixed1_sign(void)
 SEC("tc")
 __description("multiply negative bounds")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=0x8000000000000001,smax=0x7ffff800000000b0,umin=smin32=umin32=1,umax=0xfffff800000000b0,smax32=umax32=176,var_off=(0x0; 0xfffff800000000ff))")
+__msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=umin=smin32=umin32=0x3ff280b0,smax=umax=smax32=umax32=0x3fff0001,var_off=(0x3ff00000; 0xf81ff))")
 __naked void mult_sign_bounds(void)
 {
     asm volatile (
