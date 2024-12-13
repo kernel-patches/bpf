@@ -1309,19 +1309,18 @@ __naked void mult_unsign_ovf(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=something")
+__msg("r6 *= r7 {{.*}}; R6_w=scalar()")
 __naked void mult_sign_ovf(void)
 {
     asm volatile (
-	"r8 = 0x7fffffffffffff ll;"
+	"r8 = 0x7ffffffff ll;"
     "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
     "r6 &= 0xa;"
     "r6 -= r8;"
-    "r7 &= 0xf;"
-    "r7 -= r8;"
+    "r7 &= 0x7fffffff;"
     "r6 *= r7;"
     "exit"
     :
