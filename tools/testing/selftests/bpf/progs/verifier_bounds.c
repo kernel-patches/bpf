@@ -1247,7 +1247,7 @@ __naked void mult_mixed1_sign(void)
 SEC("tc")
 __success __log_level(2)
 __msg("r4 *= r6 {{.*}}; R4_w=scalar(smin=0,smax=umax=0x7b96bb0a94a3a7cd,var_off=(0x0; 0x7fffffffffffffff))")
-__naked void mult_mixed2_sign(void)
+__naked void mult_test(void)
 {
     asm volatile (
     "r6 = 0xb;"
@@ -1266,7 +1266,7 @@ __naked void mult_mixed2_sign(void)
 SEC("tc")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=something)")
-__naked void mult_mixed4_sign(void)
+__naked void mult_unsign_ovf(void)
 {
     asm volatile (
     "call %[bpf_get_prandom_u32];"
@@ -1286,7 +1286,7 @@ __naked void mult_mixed4_sign(void)
 SEC("tc")
 __success __log_level(2)
 __msg("r6 *= r7 {{.*}}; R6_w=something)")
-__naked void mult_mixed4_sign(void)
+__naked void mult_sign_ovf(void)
 {
     asm volatile (
     "call %[bpf_get_prandom_u32];"
