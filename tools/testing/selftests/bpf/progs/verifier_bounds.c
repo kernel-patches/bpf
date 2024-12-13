@@ -1285,18 +1285,18 @@ __naked void mult_ovf_64(void)
 
 SEC("tc")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=something)")
+__msg("w6 *= w7 {{.*}}; W6_w=something)")
 __naked void mult_ovf_32(void)
 {
     asm volatile (
     "call %[bpf_get_prandom_u32];"
-    "w6 = r0;"
+    "w6 = w0;"
     "call %[bpf_get_prandom_u32];"
-    "w7 = r0;"
+    "w7 = w0;"
     "w6 &= 0x7fff;"
     "w7 &= 0xf;"
 	"w7 -= 0xff;"
-    "w6 *= r7;"
+    "w6 *= w7;"
     "exit"
     :
     : __imm(bpf_get_prandom_u32),
