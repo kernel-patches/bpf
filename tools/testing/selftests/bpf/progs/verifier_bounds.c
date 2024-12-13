@@ -1251,7 +1251,7 @@ __naked void mult_mixed2_sign(void)
 {
     asm volatile (
     "r6 = 0xb;"
-    "*(u64*)(r8 + 0) = 0xb3c3f8c99262687;"
+    "r8 = 0xb3c3f8c99262687 ll;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
     "r6 &= r7;"
@@ -1270,11 +1270,11 @@ __naked void mult_mixed4_sign(void)
 {
     asm volatile (
     "call %[bpf_get_prandom_u32];"
-    "r6 = *(u64*)(r0 + 0);"
+    "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
-    "r7 = *(u64*)(r0 + 0);"
-    "r6 &= 0xffffffff;"
-    "r7 &= 0xffffffff;"
+    "r7 = r0;"
+    "r6 &= 0xffffffff ll;"
+    "r7 &= 0xffffffff ll;"
     "r6 *= r7;"
     "exit"
     :
@@ -1293,10 +1293,10 @@ __naked void mult_mixed5_sign(void)
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
-    "r6 &= 0xffffffff;"
-	"r6 -= 0xffffffff;"
-    "r7 &= 0xffffffff;"
-	"r7 -= 0xffffffff;"
+    "r6 &= 0xffffffff ll;"
+	"r6 -= 0xffffffff ll;"
+    "r7 &= 0xffffffff ll;"
+	"r7 -= 0xffffffff ll;"
     "r6 *= r7;"
     "exit"
     :
