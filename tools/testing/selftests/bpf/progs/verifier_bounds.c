@@ -1269,12 +1269,13 @@ __msg("r6 *= r7 {{.*}}; R6_w=something")
 __naked void mult_unsign_ovf(void)
 {
     asm volatile (
+	"r8 = 0x7ffffffffff ll;"
     "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
     "r6 &= 0x7fffffff;"
-    "r7 &= 0x7ffffffff;"
+    "r7 &= r8;"
     "r6 *= r7;"
     "exit"
     :
@@ -1289,14 +1290,15 @@ __msg("r6 *= r7 {{.*}}; R6_w=something")
 __naked void mult_sign_ovf(void)
 {
     asm volatile (
+	"r8 = 0x7ffffffffff ll;"
     "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
     "r6 &= 0xa;"
-    "r6 -= 0x7fffffffff;"
+    "r6 -= r8;"
     "r7 &= 0xf;"
-    "r7 -= 0x7fffffffff;"
+    "r7 -= r8;"
     "r6 *= r7;"
     "exit"
     :
