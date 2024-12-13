@@ -1357,6 +1357,13 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 		rcu_assign_pointer(sch->stab, stab);
 	}
 
+#ifdef CONFIG_NET_SCH_BPF
+	if (ops->owner == BPF_MODULE_OWNER) {
+		err = bpf_qdisc_init_pre_op(sch, tca[TCA_OPTIONS], extack);
+		if (err != 0)
+			goto err_out4;
+	}
+#endif
 	if (ops->init) {
 		err = ops->init(sch, tca[TCA_OPTIONS], extack);
 		if (err != 0)
@@ -1393,6 +1400,10 @@ err_out4:
 	 */
 	if (ops->destroy)
 		ops->destroy(sch);
+#ifdef CONFIG_NET_SCH_BPF
+	if (ops->owner == BPF_MODULE_OWNER)
+		bpf_qdisc_destroy_post_op(sch);
+#endif
 	qdisc_put_stab(rtnl_dereference(sch->stab));
 err_out3:
 	lockdep_unregister_key(&sch->root_lock_key);

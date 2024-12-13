@@ -8,6 +8,10 @@
 
 static struct bpf_struct_ops bpf_Qdisc_ops;
 
+struct bpf_sched_data {
+	struct qdisc_watchdog watchdog;
+};
+
 struct bpf_sk_buff_ptr {
 	struct sk_buff *skb;
 };
@@ -16,6 +20,32 @@ static int bpf_qdisc_init(struct btf *btf)
 {
 	return 0;
 }
+
+int bpf_qdisc_init_pre_op(struct Qdisc *sch, struct nlattr *opt,
+			  struct netlink_ext_ack *extack)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+
+	qdisc_watchdog_init(&q->watchdog, sch);
+	return 0;
+}
+EXPORT_SYMBOL(bpf_qdisc_init_pre_op);
+
+void bpf_qdisc_reset_post_op(struct Qdisc *sch)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+
+	qdisc_watchdog_cancel(&q->watchdog);
+}
+EXPORT_SYMBOL(bpf_qdisc_reset_post_op);
+
+void bpf_qdisc_destroy_post_op(struct Qdisc *sch)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+
+	qdisc_watchdog_cancel(&q->watchdog);
+}
+EXPORT_SYMBOL(bpf_qdisc_destroy_post_op);
 
 static const struct bpf_func_proto *
 bpf_qdisc_get_func_proto(enum bpf_func_id func_id,
@@ -134,12 +164,25 @@ __bpf_kfunc void bpf_qdisc_skb_drop(struct sk_buff *skb,
 	__qdisc_drop(skb, (struct sk_buff **)to_free_list);
 }
 
+/* bpf_qdisc_watchdog_schedule - Schedule a qdisc to a later time using a timer.
+ * @sch: The qdisc to be scheduled.
+ * @expire: The expiry time of the timer.
+ * @delta_ns: The slack range of the timer.
+ */
+__bpf_kfunc void bpf_qdisc_watchdog_schedule(struct Qdisc *sch, u64 expire, u64 delta_ns)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+
+	qdisc_watchdog_schedule_range_ns(&q->watchdog, expire, delta_ns);
+}
+
 __bpf_kfunc_end_defs();
 
 #define BPF_QDISC_KFUNC_xxx \
 	BPF_QDISC_KFUNC(bpf_skb_get_hash, KF_TRUSTED_ARGS) \
 	BPF_QDISC_KFUNC(bpf_kfree_skb, KF_RELEASE) \
 	BPF_QDISC_KFUNC(bpf_qdisc_skb_drop, KF_RELEASE) \
+	BPF_QDISC_KFUNC(bpf_qdisc_watchdog_schedule, KF_TRUSTED_ARGS) \
 
 BTF_KFUNCS_START(bpf_qdisc_kfunc_ids)
 #define BPF_QDISC_KFUNC(name, flag) BTF_ID_FLAGS(func, name, flag)
@@ -154,9 +197,14 @@ BPF_QDISC_KFUNC_xxx
 
 static int bpf_qdisc_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
-	if (kfunc_id == bpf_qdisc_skb_drop_ids[0])
+	if (kfunc_id == bpf_qdisc_skb_drop_ids[0]) {
 		if (strcmp(prog->aux->attach_func_name, "enqueue"))
 			return -EACCES;
+	} else if (kfunc_id == bpf_qdisc_watchdog_schedule_ids[0]) {
+		if (strcmp(prog->aux->attach_func_name, "enqueue") &&
+		    strcmp(prog->aux->attach_func_name, "dequeue"))
+			return -EACCES;
+	}
 
 	return 0;
 }
@@ -189,6 +237,7 @@ static int bpf_qdisc_init_member(const struct btf_type *t,
 	case offsetof(struct Qdisc_ops, priv_size):
 		if (uqdisc_ops->priv_size)
 			return -EINVAL;
+		qdisc_ops->priv_size = sizeof(struct bpf_sched_data);
 		return 1;
 	case offsetof(struct Qdisc_ops, static_flags):
 		if (uqdisc_ops->static_flags)
