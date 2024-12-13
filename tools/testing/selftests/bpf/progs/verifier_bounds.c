@@ -1269,12 +1269,12 @@ __msg("r6 *= r7 {{.*}}; R6_w=something)")
 __naked void mult_mixed4_sign(void)
 {
     asm volatile (
-    "call %[bpf_get_prandom_u32] ll;"
+    "call %[bpf_get_prandom_u32];"
     "r6 = r0;"
-    "call %[bpf_get_prandom_u32] ll;"
+    "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
-    "r6 &= 0xfffffff;"
-    "r7 &= 0xfffffff;"
+    "r6 &= 0x0fffffff;"
+    "r7 &= 0x0fffffff;"
     "r6 *= r7;"
     "exit"
     :
@@ -1293,10 +1293,10 @@ __naked void mult_mixed5_sign(void)
     "r6 = r0;"
     "call %[bpf_get_prandom_u32];"
     "r7 = r0;"
-    "r6 &= 0xffffffff;"
-	"r6 -= 0xffffffff;"
-    "r7 &= 0xffffffff;"
-	"r7 -= 0xffffffff;"
+    "r6 &= 0x0ffffffff;"
+	"r6 -= 0x0ffffffff;"
+    "r7 &= 0x0ffffffff;"
+	"r7 -= 0x0ffffffff;"
     "r6 *= r7;"
     "exit"
     :
