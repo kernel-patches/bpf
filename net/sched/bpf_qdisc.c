@@ -176,6 +176,15 @@ __bpf_kfunc void bpf_qdisc_watchdog_schedule(struct Qdisc *sch, u64 expire, u64 
 	qdisc_watchdog_schedule_range_ns(&q->watchdog, expire, delta_ns);
 }
 
+/* bpf_qdisc_bstats_update - Update Qdisc basic statistics
+ * @sch: The qdisc from which an skb is dequeued.
+ * @skb: The skb to be dequeued.
+ */
+__bpf_kfunc void bpf_qdisc_bstats_update(struct Qdisc *sch, const struct sk_buff *skb)
+{
+	bstats_update(&sch->bstats, skb);
+}
+
 __bpf_kfunc_end_defs();
 
 #define BPF_QDISC_KFUNC_xxx \
@@ -183,6 +192,7 @@ __bpf_kfunc_end_defs();
 	BPF_QDISC_KFUNC(bpf_kfree_skb, KF_RELEASE) \
 	BPF_QDISC_KFUNC(bpf_qdisc_skb_drop, KF_RELEASE) \
 	BPF_QDISC_KFUNC(bpf_qdisc_watchdog_schedule, KF_TRUSTED_ARGS) \
+	BPF_QDISC_KFUNC(bpf_qdisc_bstats_update, KF_TRUSTED_ARGS) \
 
 BTF_KFUNCS_START(bpf_qdisc_kfunc_ids)
 #define BPF_QDISC_KFUNC(name, flag) BTF_ID_FLAGS(func, name, flag)
@@ -203,6 +213,9 @@ static int bpf_qdisc_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 	} else if (kfunc_id == bpf_qdisc_watchdog_schedule_ids[0]) {
 		if (strcmp(prog->aux->attach_func_name, "enqueue") &&
 		    strcmp(prog->aux->attach_func_name, "dequeue"))
+			return -EACCES;
+	} else if (kfunc_id == bpf_qdisc_bstats_update_ids[0]) {
+		if (strcmp(prog->aux->attach_func_name, "dequeue"))
 			return -EACCES;
 	}
 
