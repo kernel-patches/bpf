@@ -2227,7 +2227,7 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs,
 	}
 
 	trampoline_vaddr = uprobe_get_trampoline_vaddr();
-	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs);
+	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(&uprobe->arch, trampoline_vaddr, regs);
 	if (orig_ret_vaddr == -1)
 		goto free;
 

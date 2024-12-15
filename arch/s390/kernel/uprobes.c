@@ -140,7 +140,8 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 	current->thread.per_event.address = current->utask->vaddr;
 }
 
-unsigned long arch_uretprobe_hijack_return_addr(unsigned long trampoline,
+unsigned long arch_uretprobe_hijack_return_addr(struct arch_uprobe *auprobe,
+						unsigned long trampoline,
 						struct pt_regs *regs)
 {
 	unsigned long orig;

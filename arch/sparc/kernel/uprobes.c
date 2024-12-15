@@ -309,7 +309,7 @@ bool arch_uprobe_xol_was_trapped(struct task_struct *t)
 }
 
 unsigned long
-arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr,
+arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr, struct arch_uprobe *auprobe,
 				  struct pt_regs *regs)
 {
 	unsigned long orig_ret_vaddr = regs->u_regs[UREG_I7];

@@ -155,7 +155,7 @@ bool arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check ctx,
 }
 
 unsigned long
-arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr,
+arch_uretprobe_hijack_return_addr(struct arch_uprobe *auprobe, unsigned long trampoline_vaddr,
 				  struct pt_regs *regs)
 {
 	unsigned long orig_ret_vaddr;
