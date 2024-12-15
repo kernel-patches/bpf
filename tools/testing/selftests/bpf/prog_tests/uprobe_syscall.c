@@ -14,6 +14,34 @@
 #include <asm/prctl.h>
 #include "uprobe_syscall.skel.h"
 #include "uprobe_syscall_executed.skel.h"
+#include "sdt.h"
+
+static unsigned char nop5[5] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+
+/*
+ * Compiler (gcc) can ignore __naked attribute and place endbr64 at the
+ * begining of the function, so let's just scan few more bytes to make
+ * sure we have nop5 addres/offset.
+ */
+static void *find_nop5(void *fn)
+{
+	int i;
+
+	for (i = 0; i < 10; i++) {
+		if (!memcmp(nop5, fn + i, 5))
+			return fn + i;
+	}
+	return NULL;
+}
+
+static unsigned long get_nop5_offset(void *fn, void **paddr)
+{
+	void *addr = find_nop5(fn);
+
+	if (paddr)
+		*paddr = addr;
+	return addr ? get_uprobe_offset(addr) : -1;
+}
 
 __naked unsigned long uretprobe_regs_trigger(void)
 {
@@ -351,6 +379,206 @@ static void test_uretprobe_shadow_stack(void)
 	ARCH_PRCTL(ARCH_SHSTK_DISABLE, ARCH_SHSTK_SHSTK);
 }
 
+#define TRAMP "[uprobes-trampoline]"
+
+__naked noinline void uprobe_test(void)
+{
+	asm volatile ("					\n"
+		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00	\n"
+		"ret					\n"
+	);
+}
+
+noinline void usdt_test(void)
+{
+	STAP_PROBE(optimized_uprobe, usdt);
+}
+
+static int find_uprobes_trampoline(void **start, void **end)
+{
+	char line[128];
+	int ret = -1;
+	FILE *maps;
+
+	maps = fopen("/proc/self/maps", "r");
+	if (!maps) {
+		fprintf(stderr, "cannot open maps\n");
+		return -1;
+	}
+
+	while (fgets(line, sizeof(line), maps)) {
+		int m = -1;
+
+		/* We care only about private r-x mappings. */
+		if (sscanf(line, "%p-%p r-xp %*x %*x:%*x %*u %n", start, end, &m) != 2)
+			continue;
+		if (m < 0)
+			continue;
+		if (!strncmp(&line[m], TRAMP, sizeof(TRAMP)-1)) {
+			ret = 0;
+			break;
+		}
+	}
+
+	fclose(maps);
+	return ret;
+}
+
+static void check_attach(struct uprobe_syscall_executed *skel, void (*trigger)(void), void *addr)
+{
+	void *tramp_start, *tramp_end;
+	struct __arch_relative_insn {
+		u8 op;
+		s32 raddr;
+	} __packed *call;
+
+	s32 delta;
+
+	/* Uprobe gets optimized after first trigger, so let's press twice. */
+	trigger();
+	trigger();
+
+	if (!ASSERT_OK(find_uprobes_trampoline(&tramp_start, &tramp_end), "uprobes_trampoline"))
+		return;
+
+	/* Make sure bpf program got executed.. */
+	ASSERT_EQ(skel->bss->executed, 2, "executed");
+
+	/* .. and check the trampoline is as expected. */
+	call = (struct __arch_relative_insn *) addr;
+	delta = (unsigned long) tramp_start - ((unsigned long) addr + 5);
+
+	ASSERT_EQ(call->op, 0xe8, "call");
+	ASSERT_EQ(call->raddr, delta, "delta");
+	ASSERT_EQ(tramp_end - tramp_start, 4096, "size");
+}
+
+static void check_detach(struct uprobe_syscall_executed *skel, void (*trigger)(void), void *addr)
+{
+	void *tramp_start, *tramp_end;
+
+	/* [uprobes_trampoline] stays after detach */
+	ASSERT_OK(find_uprobes_trampoline(&tramp_start, &tramp_end), "uprobes_trampoline");
+	ASSERT_OK(memcmp(addr, nop5, 5), "nop5");
+}
+
+static void check(struct uprobe_syscall_executed *skel, struct bpf_link *link,
+		  void (*trigger)(void), void *addr)
+{
+	check_attach(skel, trigger, addr);
+	bpf_link__destroy(link);
+	check_detach(skel, trigger, addr);
+}
+
+static void test_uprobe_legacy(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, opts,
+		.retprobe = true,
+	);
+	struct uprobe_syscall_executed *skel;
+	struct bpf_link *link;
+	unsigned long offset;
+	void *addr;
+
+	offset = get_nop5_offset(&uprobe_test, &addr);
+	if (!ASSERT_GE(offset, 0, "get_nop5_offset"))
+		return;
+
+	/* uprobe */
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_executed__open_and_load"))
+		return;
+
+	link = bpf_program__attach_uprobe_opts(skel->progs.test_uprobe,
+				0, "/proc/self/exe", offset, NULL);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	check(skel, link, uprobe_test, addr);
+
+	/* uretprobe */
+	skel->bss->executed = 0;
+
+	link = bpf_program__attach_uprobe_opts(skel->progs.test_uretprobe,
+				0, "/proc/self/exe", offset, &opts);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	check(skel, link, uprobe_test, addr);
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+}
+
+static void test_uprobe_multi(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+	struct uprobe_syscall_executed *skel;
+	struct bpf_link *link;
+	unsigned long offset;
+	void *addr;
+
+	/* uprobe */
+	offset = get_nop5_offset(&uprobe_test, &addr);
+	if (!ASSERT_GE(offset, 0, "get_nop5_offset"))
+		return;
+
+	opts.offsets = &offset;
+	opts.cnt = 1;
+
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_executed__open_and_load"))
+		return;
+
+	/* uprobe.multi */
+	link = bpf_program__attach_uprobe_multi(skel->progs.test_uprobe_multi,
+				0, "/proc/self/exe", NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	check(skel, link, uprobe_test, addr);
+
+	/* uretprobe.multi */
+	skel->bss->executed = 0;
+	opts.retprobe = true;
+	link = bpf_program__attach_uprobe_multi(skel->progs.test_uretprobe_multi,
+				0, "/proc/self/exe", NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	check(skel, link, uprobe_test, addr);
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+}
+
+static void test_uprobe_usdt(void)
+{
+	struct uprobe_syscall_executed *skel;
+	struct bpf_link *link;
+	void *addr;
+
+	errno = 0;
+	addr = find_nop5(usdt_test);
+	if (!ASSERT_OK_PTR(addr, "find_nop5"))
+		return;
+
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall_executed__open_and_load"))
+		return;
+
+	link = bpf_program__attach_usdt(skel->progs.test_usdt,
+				-1 /* all PIDs */, "/proc/self/exe",
+				"optimized_uprobe", "usdt", NULL);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_usdt"))
+		goto cleanup;
+
+	check(skel, link, usdt_test, addr);
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+}
+
 static void __test_uprobe_syscall(void)
 {
 	if (test__start_subtest("uretprobe_regs_equal"))
@@ -361,6 +589,12 @@ static void __test_uprobe_syscall(void)
 		test_uretprobe_syscall_call();
 	if (test__start_subtest("uretprobe_shadow_stack"))
 		test_uretprobe_shadow_stack();
+	if (test__start_subtest("uprobe_legacy"))
+		test_uprobe_legacy();
+	if (test__start_subtest("uprobe_multi"))
+		test_uprobe_multi();
+	if (test__start_subtest("uprobe_usdt"))
+		test_uprobe_usdt();
 }
 #else
 static void __test_uprobe_syscall(void)
