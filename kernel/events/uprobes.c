@@ -2207,7 +2207,7 @@ static void cleanup_return_instances(struct uprobe_task *utask, bool chained,
 }
 
 static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs,
-			      struct return_instance *ri)
+			      struct return_instance *ri, bool swbp)
 {
 	struct uprobe_task *utask = current->utask;
 	unsigned long orig_ret_vaddr, trampoline_vaddr;
@@ -2225,7 +2225,7 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs,
 	}
 
 	trampoline_vaddr = uprobe_get_trampoline_vaddr();
-	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs);
+	orig_ret_vaddr = arch_uretprobe_hijack_return_addr(trampoline_vaddr, regs, swbp);
 	if (orig_ret_vaddr == -1)
 		goto free;
 
@@ -2504,7 +2504,7 @@ static bool ignore_ret_handler(int rc)
 	return rc == UPROBE_HANDLER_REMOVE || rc == UPROBE_HANDLER_IGNORE;
 }
 
-static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
+static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs, bool swbp)
 {
 	struct uprobe_consumer *uc;
 	bool has_consumers = false, remove = true;
@@ -2539,7 +2539,7 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 	utask->auprobe = NULL;
 
 	if (!ZERO_OR_NULL_PTR(ri))
-		prepare_uretprobe(uprobe, regs, ri);
+		prepare_uretprobe(uprobe, regs, ri, swbp);
 
 	if (remove && has_consumers) {
 		down_read(&uprobe->register_rwsem);
@@ -2721,7 +2721,7 @@ static void handle_swbp(struct pt_regs *regs)
 	if (arch_uprobe_ignore(&uprobe->arch, regs))
 		goto out;
 
-	handler_chain(uprobe, regs);
+	handler_chain(uprobe, regs, true);
 
 	if (arch_uprobe_skip_sstep(&uprobe->arch, regs))
 		goto out;

@@ -156,7 +156,7 @@ bool arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check ctx,
 
 unsigned long
 arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr,
-				  struct pt_regs *regs)
+				  struct pt_regs *regs, bool swbp)
 {
 	unsigned long orig_ret_vaddr;
 

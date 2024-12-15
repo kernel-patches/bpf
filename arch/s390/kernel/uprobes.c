@@ -141,7 +141,7 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 }
 
 unsigned long arch_uretprobe_hijack_return_addr(unsigned long trampoline,
-						struct pt_regs *regs)
+						struct pt_regs *regs, bool swbp)
 {
 	unsigned long orig;
 

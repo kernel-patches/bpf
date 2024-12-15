@@ -59,7 +59,7 @@ bool arch_uprobe_skip_sstep(struct arch_uprobe *auprobe, struct pt_regs *regs)
 
 unsigned long
 arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr,
-				  struct pt_regs *regs)
+				  struct pt_regs *regs, bool swbp)
 {
 	unsigned long orig_ret_vaddr;
 
