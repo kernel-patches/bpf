@@ -21592,7 +21592,7 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 
-#if defined(CONFIG_X86_64) && !defined(CONFIG_UML)
+#if defined(CONFIG_SMP) && defined(CONFIG_X86_64) && !defined(CONFIG_UML)
 		/* Implement bpf_get_smp_processor_id() inline. */
 		if (insn->imm == BPF_FUNC_get_smp_processor_id &&
 		    verifier_inlines_helper_call(env, insn->imm)) {
