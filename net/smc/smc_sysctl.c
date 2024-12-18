@@ -18,6 +18,7 @@
 #include "smc_core.h"
 #include "smc_llc.h"
 #include "smc_sysctl.h"
+#include "smc_ops.h"
 
 static int min_sndbuf = SMC_BUF_MIN_SIZE;
 static int min_rcvbuf = SMC_BUF_MIN_SIZE;
@@ -29,6 +30,70 @@ static int links_per_lgr_min = SMC_LINKS_ADD_LNK_MIN;
 static int links_per_lgr_max = SMC_LINKS_ADD_LNK_MAX;
 static int conns_per_lgr_min = SMC_CONN_PER_LGR_MIN;
 static int conns_per_lgr_max = SMC_CONN_PER_LGR_MAX;
+
+#if IS_ENABLED(CONFIG_SMC_OPS)
+static int smc_net_replace_smc_ops(struct net *net, const char *name)
+{
+	struct smc_ops *ops = NULL;
+
+	rcu_read_lock();
+	/* null or empty name ask to clear current ops */
+	if (name && name[0]) {
+		ops = smc_ops_find_by_name(name);
+		if (!ops) {
+			rcu_read_unlock();
+			return -EINVAL;
+		}
+		/* no change, just return */
+		if (ops == rcu_dereference(net->smc.ops)) {
+			rcu_read_unlock();
+			return 0;
+		}
+	}
+	if (!ops || bpf_try_module_get(ops, ops->owner)) {
+		/* xhcg */
+		ops = rcu_replace_pointer(net->smc.ops, ops, true);
+		/* release old ops */
+		if (ops)
+			bpf_module_put(ops, ops->owner);
+	} else if (ops) {
+		rcu_read_unlock();
+		return -EBUSY;
+	}
+	rcu_read_unlock();
+	return 0;
+}
+
+static int proc_smc_ops(const struct ctl_table *ctl, int write,
+			void *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct net *net = container_of(ctl->data, struct net,
+				       smc.ops);
+	char val[SMC_OPS_NAME_MAX];
+	struct ctl_table tbl = {
+		.data = val,
+		.maxlen = SMC_OPS_NAME_MAX,
+	};
+	struct smc_ops *ops;
+	int ret;
+
+	rcu_read_lock();
+	ops = rcu_dereference(net->smc.ops);
+	if (ops)
+		memcpy(val, ops->name, sizeof(ops->name));
+	else
+		val[0] = '\0';
+	rcu_read_unlock();
+
+	ret = proc_dostring(&tbl, write, buffer, lenp, ppos);
+	if (ret)
+		return ret;
+
+	if (write)
+		ret = smc_net_replace_smc_ops(net, val);
+	return ret;
+}
+#endif /* CONFIG_SMC_OPS */
 
 static struct ctl_table smc_table[] = {
 	{
@@ -99,6 +164,15 @@ static struct ctl_table smc_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+#if IS_ENABLED(CONFIG_SMC_OPS)
+	{
+		.procname	= "ops",
+		.data		= &init_net.smc.ops,
+		.mode		= 0644,
+		.maxlen		= SMC_OPS_NAME_MAX,
+		.proc_handler	= proc_smc_ops,
+	},
+#endif /* CONFIG_SMC_OPS */
 };
 
 int __net_init smc_sysctl_net_init(struct net *net)
@@ -109,6 +183,20 @@ int __net_init smc_sysctl_net_init(struct net *net)
 	table = smc_table;
 	if (!net_eq(net, &init_net)) {
 		int i;
+#if IS_ENABLED(CONFIG_SMC_OPS)
+		struct smc_ops *ops;
+
+		rcu_read_lock();
+		ops = rcu_dereference(init_net.smc.ops);
+		if (ops && ops->flags & SMC_OPS_FLAG_INHERITABLE) {
+			if (!bpf_try_module_get(ops, ops->owner)) {
+				rcu_read_unlock();
+				return -EBUSY;
+			}
+			rcu_assign_pointer(net->smc.ops, ops);
+		}
+		rcu_read_unlock();
+#endif /* CONFIG_SMC_OPS */
 
 		table = kmemdup(table, sizeof(smc_table), GFP_KERNEL);
 		if (!table)
@@ -139,6 +227,9 @@ err_reg:
 	if (!net_eq(net, &init_net))
 		kfree(table);
 err_alloc:
+#if IS_ENABLED(CONFIG_SMC_OPS)
+	smc_net_replace_smc_ops(net, NULL);
+#endif /* CONFIG_SMC_OPS */
 	return -ENOMEM;
 }
 
@@ -148,6 +239,10 @@ void __net_exit smc_sysctl_net_exit(struct net *net)
 
 	table = net->smc.smc_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->smc.smc_hdr);
+#if IS_ENABLED(CONFIG_SMC_OPS)
+	smc_net_replace_smc_ops(net, NULL);
+#endif /* CONFIG_SMC_OPS */
+
 	if (!net_eq(net, &init_net))
 		kfree(table);
 }

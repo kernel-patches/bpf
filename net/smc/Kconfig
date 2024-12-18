@@ -33,3 +33,15 @@ config SMC_LO
 	  of architecture or hardware.
 
 	  if unsure, say N.
+
+config SMC_OPS
+	bool "Generic hook for SMC subsystem"
+	depends on SMC && BPF_SYSCALL
+	default n
+	help
+	  SMC_OPS enables support to register genericfor hook via eBPF programs
+	  for SMC subsystem. eBPF programs offer much greater flexibility
+	  in modifying the behavior of the SMC protocol stack compared
+	  to a complete kernel-based approach.
+
+	  if unsure, say N.
