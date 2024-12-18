@@ -702,6 +702,7 @@ struct sk_psock *sk_psock_init(struct sock *sk, int node)
 {
 	struct sk_psock *psock;
 	struct proto *prot;
+	const struct proto_ops *proto_ops;
 
 	write_lock_bh(&sk->sk_callback_lock);
 
@@ -722,9 +723,11 @@ struct sk_psock *sk_psock_init(struct sock *sk, int node)
 	}
 
 	prot = READ_ONCE(sk->sk_prot);
+	proto_ops = likely(sk->sk_socket) ? sk->sk_socket->ops : NULL;
 	psock->sk = sk;
 	psock->eval = __SK_NONE;
 	psock->sk_proto = prot;
+	psock->sk_proto_ops = proto_ops;
 	psock->saved_unhash = prot->unhash;
 	psock->saved_destroy = prot->destroy;
 	psock->saved_close = prot->close;

@@ -353,6 +353,7 @@ ssize_t tcp_splice_read(struct socket *sk, loff_t *ppos,
 			unsigned int flags);
 struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, gfp_t gfp,
 				     bool force_schedule);
+void tcp_eat_recv_skb(struct sock *sk, struct sk_buff *skb);
 
 static inline void tcp_dec_quickack_mode(struct sock *sk)
 {

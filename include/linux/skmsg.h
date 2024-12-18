@@ -85,6 +85,7 @@ struct sk_psock {
 	struct sock			*sk_redir;
 	u32				apply_bytes;
 	u32				cork_bytes;
+	u32				strp_offset;
 	u32				eval;
 	bool				redir_ingress; /* undefined if sk_redir is null */
 	struct sk_msg			*cork;
@@ -112,6 +113,7 @@ struct sk_psock {
 	int  (*psock_update_sk_prot)(struct sock *sk, struct sk_psock *psock,
 				     bool restore);
 	struct proto			*sk_proto;
+	const struct proto_ops		*sk_proto_ops;
 	struct mutex			work_mutex;
 	struct sk_psock_work_state	work_state;
 	struct delayed_work		work;
