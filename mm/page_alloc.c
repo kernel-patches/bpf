@@ -7100,7 +7100,7 @@ static bool __free_unaccepted(struct page *page)
 struct page *try_alloc_pages_noprof(int nid, unsigned int order)
 {
 	gfp_t alloc_gfp = __GFP_NOWARN | __GFP_ZERO |
-			  __GFP_NOMEMALLOC | __GFP_TRYLOCK;
+			  __GFP_NOMEMALLOC | __GFP_TRYLOCK | __GFP_ACCOUNT;
 	unsigned int alloc_flags = ALLOC_TRYLOCK;
 	struct alloc_context ac = { };
 	struct page *page;
@@ -7136,13 +7136,17 @@ struct page *try_alloc_pages_noprof(int nid, unsigned int order)
 	 * If it's empty attempt to spin_trylock zone->lock.
 	 * Do not specify __GFP_KSWAPD_RECLAIM to avoid wakeup_kswapd
 	 * that may need to grab a lock.
-	 * Do not specify __GFP_ACCOUNT to avoid local_lock.
 	 * Do not warn either.
 	 */
 	page = get_page_from_freelist(alloc_gfp, order, alloc_flags, &ac);
 
 	/* Unlike regular alloc_pages() there is no __alloc_pages_slowpath(). */
 
+	if (memcg_kmem_online() && page &&
+	    unlikely(__memcg_kmem_charge_page(page, alloc_gfp, order) != 0)) {
+		free_pages_nolock(page, order);
+		page = NULL;
+	}
 	trace_mm_page_alloc(page, order, alloc_gfp & ~__GFP_TRYLOCK, ac.migratetype);
 	kmsan_alloc_page(page, order, alloc_gfp);
 	return page;
