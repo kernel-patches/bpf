@@ -9,6 +9,7 @@
 #ifndef CONFIG_PREEMPT_RT
 
 typedef struct {
+	int active;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 	struct task_struct	*owner;
@@ -22,11 +23,18 @@ typedef struct {
 		.wait_type_inner = LD_WAIT_CONFIG,	\
 		.lock_type = LD_LOCK_PERCPU,		\
 	},						\
-	.owner = NULL,
+	.owner = NULL, .active = 0
 
 static inline void local_lock_acquire(local_lock_t *l)
 {
 	lock_map_acquire(&l->dep_map);
+	DEBUG_LOCKS_WARN_ON(l->owner);
+	l->owner = current;
+}
+
+static inline void local_trylock_acquire(local_lock_t *l)
+{
+	lock_map_acquire_try(&l->dep_map);
 	DEBUG_LOCKS_WARN_ON(l->owner);
 	l->owner = current;
 }
@@ -45,6 +53,7 @@ static inline void local_lock_debug_init(local_lock_t *l)
 #else /* CONFIG_DEBUG_LOCK_ALLOC */
 # define LOCAL_LOCK_DEBUG_INIT(lockname)
 static inline void local_lock_acquire(local_lock_t *l) { }
+static inline void local_trylock_acquire(local_lock_t *l) { }
 static inline void local_lock_release(local_lock_t *l) { }
 static inline void local_lock_debug_init(local_lock_t *l) { }
 #endif /* !CONFIG_DEBUG_LOCK_ALLOC */
@@ -60,6 +69,7 @@ do {								\
 			      0, LD_WAIT_CONFIG, LD_WAIT_INV,	\
 			      LD_LOCK_PERCPU);			\
 	local_lock_debug_init(lock);				\
+	(lock)->active = 0;					\
 } while (0)
 
 #define __spinlock_nested_bh_init(lock)				\
@@ -75,37 +85,73 @@ do {								\
 
 #define __local_lock(lock)					\
 	do {							\
+		local_lock_t *l;				\
 		preempt_disable();				\
-		local_lock_acquire(this_cpu_ptr(lock));		\
+		l = this_cpu_ptr(lock);				\
+		lockdep_assert(l->active == 0);			\
+		WRITE_ONCE(l->active, 1);			\
+		local_lock_acquire(l);				\
 	} while (0)
 
 #define __local_lock_irq(lock)					\
 	do {							\
+		local_lock_t *l;				\
 		local_irq_disable();				\
-		local_lock_acquire(this_cpu_ptr(lock));		\
+		l = this_cpu_ptr(lock);				\
+		lockdep_assert(l->active == 0);			\
+		WRITE_ONCE(l->active, 1);			\
+		local_lock_acquire(l);				\
 	} while (0)
 
 #define __local_lock_irqsave(lock, flags)			\
 	do {							\
+		local_lock_t *l;				\
 		local_irq_save(flags);				\
-		local_lock_acquire(this_cpu_ptr(lock));		\
+		l = this_cpu_ptr(lock);				\
+		lockdep_assert(l->active == 0);			\
+		WRITE_ONCE(l->active, 1);			\
+		local_lock_acquire(l);				\
 	} while (0)
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		local_lock_t *l;				\
+		local_irq_save(flags);				\
+		l = this_cpu_ptr(lock);				\
+		if (READ_ONCE(l->active) == 1) {		\
+			local_irq_restore(flags);		\
+			l = NULL;				\
+		} else {					\
+			WRITE_ONCE(l->active, 1);		\
+			local_trylock_acquire(l);		\
+		}						\
+		!!l;						\
+	})
 
 #define __local_unlock(lock)					\
 	do {							\
-		local_lock_release(this_cpu_ptr(lock));		\
+		local_lock_t *l = this_cpu_ptr(lock);		\
+		lockdep_assert(l->active == 1);			\
+		WRITE_ONCE(l->active, 0);			\
+		local_lock_release(l);				\
 		preempt_enable();				\
 	} while (0)
 
 #define __local_unlock_irq(lock)				\
 	do {							\
-		local_lock_release(this_cpu_ptr(lock));		\
+		local_lock_t *l = this_cpu_ptr(lock);		\
+		lockdep_assert(l->active == 1);			\
+		WRITE_ONCE(l->active, 0);			\
+		local_lock_release(l);				\
 		local_irq_enable();				\
 	} while (0)
 
 #define __local_unlock_irqrestore(lock, flags)			\
 	do {							\
-		local_lock_release(this_cpu_ptr(lock));		\
+		local_lock_t *l = this_cpu_ptr(lock);		\
+		lockdep_assert(l->active == 1);			\
+		WRITE_ONCE(l->active, 0);			\
+		local_lock_release(l);				\
 		local_irq_restore(flags);			\
 	} while (0)
 
@@ -147,6 +193,22 @@ typedef spinlock_t local_lock_t;
 		flags = 0;					\
 		__local_lock(lock);				\
 	} while (0)
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		__label__ out;					\
+		int ret = 0;					\
+		typecheck(unsigned long, flags);		\
+		flags = 0;					\
+		if (in_nmi() || in_hardirq())			\
+			goto out;				\
+		migrate_disable();				\
+		ret = spin_trylock(this_cpu_ptr((lock)));	\
+		if (!ret)					\
+			migrate_enable();			\
+	out:							\
+		ret;						\
+	})
 
 #define __local_unlock(__lock)					\
 	do {							\

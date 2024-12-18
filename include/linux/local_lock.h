@@ -31,6 +31,15 @@
 	__local_lock_irqsave(lock, flags)
 
 /**
+ * local_trylock_irqsave - Try to acquire a per CPU local lock, save and disable
+ *			   interrupts. Always fails in RT when in_hardirq or NMI.
+ * @lock:	The lock variable
+ * @flags:	Storage for interrupt flags
+ */
+#define local_trylock_irqsave(lock, flags)			\
+	__local_trylock_irqsave(lock, flags)
+
+/**
  * local_unlock - Release a per CPU local lock
  * @lock:	The lock variable
  */
