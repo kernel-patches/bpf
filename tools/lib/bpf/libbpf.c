@@ -11522,7 +11522,7 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	struct bpf_link *link = NULL;
 	const unsigned long *addrs;
 	int err, link_fd, prog_fd;
-	bool retprobe, session;
+	bool retprobe, session, unique_match;
 	const __u64 *cookies;
 	const char **syms;
 	size_t cnt;
@@ -11558,6 +11558,14 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 			err = libbpf_available_kallsyms_parse(&res);
 		if (err)
 			goto error;
+
+		unique_match = OPTS_GET(opts, unique_match, false);
+		if (unique_match && res.cnt != 1) {
+			pr_warn("prog '%s': failed to find unique match: cnt %lu\n",
+				prog->name, res.cnt);
+			return libbpf_err_ptr(-EINVAL);
+		}
+
 		addrs = res.addrs;
 		cnt = res.cnt;
 	}
