@@ -226,6 +226,7 @@ enum {
 	BTF_KFUNC_SET_MAX_CNT = 256,
 	BTF_DTOR_KFUNC_MAX_CNT = 256,
 	BTF_KFUNC_FILTER_MAX_CNT = 16,
+	BTF_KFUNC_REMAP_MAX_CNT = 16,
 };
 
 struct btf_kfunc_hook_filter {
@@ -233,9 +234,15 @@ struct btf_kfunc_hook_filter {
 	u32 nr_filters;
 };
 
+struct btf_kfunc_hook_remap {
+	btf_kfunc_remap_t remaps[BTF_KFUNC_REMAP_MAX_CNT];
+	u32 nr_remaps;
+};
+
 struct btf_kfunc_set_tab {
 	struct btf_id_set8 *sets[BTF_KFUNC_HOOK_MAX];
 	struct btf_kfunc_hook_filter hook_filters[BTF_KFUNC_HOOK_MAX];
+	struct btf_kfunc_hook_remap hook_remaps[BTF_KFUNC_HOOK_MAX];
 };
 
 struct btf_id_dtor_kfunc_tab {
@@ -8377,16 +8384,35 @@ static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
 
 /* Kernel Function (kfunc) BTF ID set registration API */
 
+static void btf_add_kfunc_to_set(struct btf *btf, struct btf_id_set8 *set,
+				 struct btf_id_set8 *add_set)
+{
+	u32 i;
+
+	if (!add_set)
+		return;
+	/* Concatenate the two sets */
+	memcpy(set->pairs + set->cnt, add_set->pairs, add_set->cnt * sizeof(set->pairs[0]));
+	/* Now that the set is copied, update with relocated BTF ids */
+	for (i = set->cnt; i < set->cnt + add_set->cnt; i++)
+		set->pairs[i].id = btf_relocate_id(btf, set->pairs[i].id);
+
+	set->cnt += add_set->cnt;
+
+	sort(set->pairs, set->cnt, sizeof(set->pairs[0]), btf_id_cmp_func, NULL);
+}
+
 static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 				  const struct btf_kfunc_id_set *kset)
 {
 	struct btf_kfunc_hook_filter *hook_filter;
-	struct btf_id_set8 *add_set = kset->set;
+	struct btf_kfunc_hook_remap *hook_remap;
 	bool vmlinux_set = !btf_is_module(btf);
 	bool add_filter = !!kset->filter;
+	bool add_remap = !!kset->remap;
 	struct btf_kfunc_set_tab *tab;
 	struct btf_id_set8 *set;
-	u32 set_cnt, i;
+	u32 set_cnt, add_cnt, i;
 	int ret;
 
 	if (hook >= BTF_KFUNC_HOOK_MAX) {
@@ -8394,14 +8420,16 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 		goto end;
 	}
 
-	if (!add_set->cnt)
+	add_cnt = kset->set->cnt;
+	if (kset->hidden_set)
+		add_cnt += kset->hidden_set->cnt;
+
+	if (!add_cnt)
 		return 0;
 
 	tab = btf->kfunc_set_tab;
 
 	if (tab && add_filter) {
-		u32 i;
-
 		hook_filter = &tab->hook_filters[hook];
 		for (i = 0; i < hook_filter->nr_filters; i++) {
 			if (hook_filter->filters[i] == kset->filter) {
@@ -8411,6 +8439,21 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 		}
 
 		if (add_filter && hook_filter->nr_filters == BTF_KFUNC_FILTER_MAX_CNT) {
+			ret = -E2BIG;
+			goto end;
+		}
+	}
+
+	if (tab && add_remap) {
+		hook_remap = &tab->hook_remaps[hook];
+		for (i = 0; i < hook_remap->nr_remaps; i++) {
+			if (hook_remap->remaps[i] == kset->remap) {
+				add_remap = false;
+				break;
+			}
+		}
+
+		if (add_remap && hook_remap->nr_remaps == BTF_KFUNC_REMAP_MAX_CNT) {
 			ret = -E2BIG;
 			goto end;
 		}
@@ -8444,19 +8487,19 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 	 */
 	set_cnt = set ? set->cnt : 0;
 
-	if (set_cnt > U32_MAX - add_set->cnt) {
+	if (set_cnt > U32_MAX - add_cnt) {
 		ret = -EOVERFLOW;
 		goto end;
 	}
 
-	if (set_cnt + add_set->cnt > BTF_KFUNC_SET_MAX_CNT) {
+	if (set_cnt + add_cnt > BTF_KFUNC_SET_MAX_CNT) {
 		ret = -E2BIG;
 		goto end;
 	}
 
 	/* Grow set */
 	set = krealloc(tab->sets[hook],
-		       offsetof(struct btf_id_set8, pairs[set_cnt + add_set->cnt]),
+		       offsetof(struct btf_id_set8, pairs[set_cnt + add_cnt]),
 		       GFP_KERNEL | __GFP_NOWARN);
 	if (!set) {
 		ret = -ENOMEM;
@@ -8468,19 +8511,17 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 		set->cnt = 0;
 	tab->sets[hook] = set;
 
-	/* Concatenate the two sets */
-	memcpy(set->pairs + set->cnt, add_set->pairs, add_set->cnt * sizeof(set->pairs[0]));
-	/* Now that the set is copied, update with relocated BTF ids */
-	for (i = set->cnt; i < set->cnt + add_set->cnt; i++)
-		set->pairs[i].id = btf_relocate_id(btf, set->pairs[i].id);
-
-	set->cnt += add_set->cnt;
-
-	sort(set->pairs, set->cnt, sizeof(set->pairs[0]), btf_id_cmp_func, NULL);
+	btf_add_kfunc_to_set(btf, set, kset->set);
+	btf_add_kfunc_to_set(btf, set, kset->hidden_set);
 
 	if (add_filter) {
 		hook_filter = &tab->hook_filters[hook];
 		hook_filter->filters[hook_filter->nr_filters++] = kset->filter;
+	}
+
+	if (add_remap) {
+		hook_remap = &tab->hook_remaps[hook];
+		hook_remap->remaps[hook_remap->nr_remaps++] = kset->remap;
 	}
 	return 0;
 end:
@@ -8514,6 +8555,28 @@ static u32 *__btf_kfunc_id_set_contains(const struct btf *btf,
 		return NULL;
 	/* The flags for BTF ID are located next to it */
 	return id + 1;
+}
+
+static u32 __btf_kfunc_id_remap(const struct btf *btf,
+				enum btf_kfunc_hook hook,
+				u32 kfunc_btf_id,
+				const struct bpf_prog *prog)
+{
+	struct btf_kfunc_hook_remap *hook_remap;
+	u32 i, remap_id = 0;
+
+	if (hook >= BTF_KFUNC_HOOK_MAX)
+		return 0;
+	if (!btf->kfunc_set_tab)
+		return 0;
+	hook_remap = &btf->kfunc_set_tab->hook_remaps[hook];
+
+	for (i = 0; i < hook_remap->nr_remaps; i++) {
+		remap_id = hook_remap->remaps[i](prog, kfunc_btf_id);
+		if (remap_id)
+			break;
+	}
+	return remap_id;
 }
 
 static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
@@ -8582,6 +8645,26 @@ u32 *btf_kfunc_id_set_contains(const struct btf *btf,
 
 	hook = bpf_prog_type_to_kfunc_hook(prog_type);
 	return __btf_kfunc_id_set_contains(btf, hook, kfunc_btf_id, prog);
+}
+
+/* Reference to the module (obtained using btf_try_get_module)
+ * corresponding to the struct btf *MUST* be held when calling this
+ * function from the verifier
+ */
+u32 btf_kfunc_id_remap(const struct btf *btf, u32 kfunc_btf_id,
+		       const struct bpf_prog *prog)
+{
+	enum bpf_prog_type prog_type = resolve_prog_type(prog);
+	enum btf_kfunc_hook hook;
+	u32 remap_id;
+
+	remap_id = __btf_kfunc_id_remap(btf, BTF_KFUNC_HOOK_COMMON, kfunc_btf_id, prog);
+	if (remap_id)
+		return remap_id;
+
+	hook = bpf_prog_type_to_kfunc_hook(prog_type);
+	remap_id = __btf_kfunc_id_remap(btf, hook, kfunc_btf_id, prog);
+	return remap_id ?: kfunc_btf_id;
 }
 
 u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
