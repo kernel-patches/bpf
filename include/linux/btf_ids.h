@@ -212,6 +212,9 @@ extern struct btf_id_set8 name;
 #define BTF_KFUNCS_START(name)				\
 __BTF_SET8_START(name, local, BTF_SET8_KFUNCS)
 
+#define BTF_HIDDEN_KFUNCS_START(name)			\
+__BTF_SET8_START(name, local, 0)
+
 #define BTF_KFUNCS_END(name)				\
 BTF_SET8_END(name)
 

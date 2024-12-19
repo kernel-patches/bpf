@@ -3029,13 +3029,14 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
-static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
+static int add_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn, s16 offset)
 {
 	const struct btf_type *func, *func_proto;
 	struct bpf_kfunc_btf_tab *btf_tab;
 	struct bpf_kfunc_desc_tab *tab;
 	struct bpf_prog_aux *prog_aux;
 	struct bpf_kfunc_desc *desc;
+	u32 func_id = insn->imm;
 	const char *func_name;
 	struct btf *desc_btf;
 	unsigned long call_imm;
@@ -3094,6 +3095,7 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 		return PTR_ERR(desc_btf);
 	}
 
+	func_id = insn->imm = btf_kfunc_id_remap(desc_btf, insn->imm, env->prog);
 	if (find_kfunc_desc(env->prog, func_id, offset))
 		return 0;
 
@@ -3227,7 +3229,7 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 		if (bpf_pseudo_func(insn) || bpf_pseudo_call(insn))
 			ret = add_subprog(env, i + insn->imm + 1);
 		else
-			ret = add_kfunc_call(env, insn->imm, insn->off);
+			ret = add_kfunc_call(env, insn, insn->off);
 
 		if (ret < 0)
 			return ret;
