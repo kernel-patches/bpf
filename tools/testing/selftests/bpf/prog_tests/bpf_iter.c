@@ -34,6 +34,8 @@
 #include "bpf_iter_ksym.skel.h"
 #include "bpf_iter_sockmap.skel.h"
 
+static char test_data[] = "test_data";
+
 static void test_btf_id_or_null(void)
 {
 	struct bpf_iter_test_kern3 *skel;
@@ -328,12 +330,17 @@ static void test_task_sleepable(void)
 	if (!ASSERT_OK_PTR(skel, "bpf_iter_tasks__open_and_load"))
 		return;
 
+	skel->bss->user_ptr = test_data;
 	do_dummy_read(skel->progs.dump_task_sleepable);
 
 	ASSERT_GT(skel->bss->num_expected_failure_copy_from_user_task, 0,
 		  "num_expected_failure_copy_from_user_task");
 	ASSERT_GT(skel->bss->num_success_copy_from_user_task, 0,
 		  "num_success_copy_from_user_task");
+	ASSERT_GT(skel->bss->num_expected_failure_copy_from_user_task_str, 0,
+		  "num_expected_failure_copy_from_user_task_str");
+	ASSERT_GT(skel->bss->num_success_copy_from_user_task_str, 0,
+		  "num_success_copy_from_user_task_str");
 
 	bpf_iter_tasks__destroy(skel);
 }
