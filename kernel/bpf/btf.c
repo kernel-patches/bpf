@@ -6541,7 +6541,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const struct btf_param *args;
 	bool ptr_err_raw_tp = false;
 	const char *tag_value;
-	u32 nr_args, arg;
+	u32 nr_args, arg, nr_ref_args = 0;
 	int i, ret;
 
 	if (off % 8) {
@@ -6677,6 +6677,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			info->reg_type = ctx_arg_info->reg_type;
 			info->btf = ctx_arg_info->btf ? : btf_vmlinux;
 			info->btf_id = ctx_arg_info->btf_id;
+			info->ref_obj_id = ctx_arg_info->refcounted ? ++nr_ref_args : 0;
 			return true;
 		}
 	}
