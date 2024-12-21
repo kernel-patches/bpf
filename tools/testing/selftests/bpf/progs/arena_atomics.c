@@ -19,9 +19,15 @@ struct {
 } arena SEC(".maps");
 
 #if defined(ENABLE_ATOMICS_TESTS) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
-bool skip_tests __attribute((__section__(".data"))) = false;
+bool skip_all_tests __attribute((__section__(".data"))) = false;
 #else
-bool skip_tests = true;
+bool skip_all_tests = true;
+#endif
+
+#if defined(__BPF_FEATURE_LOAD_ACQ_STORE_REL) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+bool skip_lacq_srel_tests __attribute((__section__(".data"))) = false;
+#else
+bool skip_lacq_srel_tests = true;
 #endif
 
 __u32 pid = 0;
@@ -269,6 +275,58 @@ int uaf(const void *ctx)
 	uaf_recovery_fails -= 1;
 	uaf_sink += __sync_lock_test_and_set(page64, 1);
 	uaf_recovery_fails -= 1;
+#endif
+
+	return 0;
+}
+
+__u8 __arena_global load_acquire8_value = 0x12;
+__u16 __arena_global load_acquire16_value = 0x1234;
+__u32 __arena_global load_acquire32_value = 0x12345678;
+__u64 __arena_global load_acquire64_value = 0x1234567890abcdef;
+
+__u8 __arena_global load_acquire8_result = 0;
+__u16 __arena_global load_acquire16_result = 0;
+__u32 __arena_global load_acquire32_result = 0;
+__u64 __arena_global load_acquire64_result = 0;
+
+SEC("raw_tp/sys_enter")
+int load_acquire(const void *ctx)
+{
+	if (pid != (bpf_get_current_pid_tgid() >> 32))
+		return 0;
+
+#ifdef __BPF_FEATURE_LOAD_ACQ_STORE_REL
+	load_acquire8_result = __atomic_load_n(&load_acquire8_value, __ATOMIC_ACQUIRE);
+	load_acquire16_result = __atomic_load_n(&load_acquire16_value, __ATOMIC_ACQUIRE);
+	load_acquire32_result = __atomic_load_n(&load_acquire32_value, __ATOMIC_ACQUIRE);
+	load_acquire64_result = __atomic_load_n(&load_acquire64_value, __ATOMIC_ACQUIRE);
+#endif
+
+	return 0;
+}
+
+__u8 __arena_global store_release8_result = 0;
+__u16 __arena_global store_release16_result = 0;
+__u32 __arena_global store_release32_result = 0;
+__u64 __arena_global store_release64_result = 0;
+
+SEC("raw_tp/sys_enter")
+int store_release(const void *ctx)
+{
+	if (pid != (bpf_get_current_pid_tgid() >> 32))
+		return 0;
+
+#ifdef __BPF_FEATURE_LOAD_ACQ_STORE_REL
+	__u8 val8 = 0x12;
+	__u16 val16 = 0x1234;
+	__u32 val32 = 0x12345678;
+	__u64 val64 = 0x1234567890abcdef;
+
+	__atomic_store_n(&store_release8_result, val8, __ATOMIC_RELEASE);
+	__atomic_store_n(&store_release16_result, val16, __ATOMIC_RELEASE);
+	__atomic_store_n(&store_release32_result, val32, __ATOMIC_RELEASE);
+	__atomic_store_n(&store_release64_result, val64, __ATOMIC_RELEASE);
 #endif
 
 	return 0;

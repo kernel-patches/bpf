@@ -162,6 +162,56 @@ static void test_xchg(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->bss->xchg32_result, 1, "xchg32_result");
 }
 
+static void test_load_acquire(struct atomics_lskel *skel)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err, prog_fd;
+
+	if (skel->data->skip_lacq_srel_tests) {
+		printf("%s:SKIP:Clang does not support BPF load-acquire\n", __func__);
+		test__skip();
+		return;
+	}
+
+	/* No need to attach it, just run it directly */
+	prog_fd = skel->progs.load_acquire.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (!ASSERT_OK(err, "test_run_opts err"))
+		return;
+	if (!ASSERT_OK(topts.retval, "test_run_opts retval"))
+		return;
+
+	ASSERT_EQ(skel->bss->load_acquire8_result, 0x12, "load_acquire8_result");
+	ASSERT_EQ(skel->bss->load_acquire16_result, 0x1234, "load_acquire16_result");
+	ASSERT_EQ(skel->bss->load_acquire32_result, 0x12345678, "load_acquire32_result");
+	ASSERT_EQ(skel->bss->load_acquire64_result, 0x1234567890abcdef, "load_acquire64_result");
+}
+
+static void test_store_release(struct atomics_lskel *skel)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err, prog_fd;
+
+	if (skel->data->skip_lacq_srel_tests) {
+		printf("%s:SKIP:Clang does not support BPF store-release\n", __func__);
+		test__skip();
+		return;
+	}
+
+	/* No need to attach it, just run it directly */
+	prog_fd = skel->progs.store_release.prog_fd;
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (!ASSERT_OK(err, "test_run_opts err"))
+		return;
+	if (!ASSERT_OK(topts.retval, "test_run_opts retval"))
+		return;
+
+	ASSERT_EQ(skel->bss->store_release8_result, 0x12, "store_release8_result");
+	ASSERT_EQ(skel->bss->store_release16_result, 0x1234, "store_release16_result");
+	ASSERT_EQ(skel->bss->store_release32_result, 0x12345678, "store_release32_result");
+	ASSERT_EQ(skel->bss->store_release64_result, 0x1234567890abcdef, "store_release64_result");
+}
+
 void test_atomics(void)
 {
 	struct atomics_lskel *skel;
@@ -170,7 +220,7 @@ void test_atomics(void)
 	if (!ASSERT_OK_PTR(skel, "atomics skeleton load"))
 		return;
 
-	if (skel->data->skip_tests) {
+	if (skel->data->skip_all_tests) {
 		printf("%s:SKIP:no ENABLE_ATOMICS_TESTS (missing Clang BPF atomics support)",
 		       __func__);
 		test__skip();
@@ -192,6 +242,11 @@ void test_atomics(void)
 		test_cmpxchg(skel);
 	if (test__start_subtest("xchg"))
 		test_xchg(skel);
+
+	if (test__start_subtest("load_acquire"))
+		test_load_acquire(skel);
+	if (test__start_subtest("store_release"))
+		test_store_release(skel);
 
 cleanup:
 	atomics_lskel__destroy(skel);
