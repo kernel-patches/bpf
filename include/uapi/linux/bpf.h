@@ -51,6 +51,19 @@
 #define BPF_XCHG	(0xe0 | BPF_FETCH)	/* atomic exchange */
 #define BPF_CMPXCHG	(0xf0 | BPF_FETCH)	/* atomic compare-and-write */
 
+#define BPF_ATOMIC_LOAD		0x10
+#define BPF_ATOMIC_STORE	0x20
+#define BPF_ATOMIC_TYPE(imm)	((imm) & 0xf0)
+
+#define BPF_RELAXED	0x00
+#define BPF_ACQUIRE	0x01
+#define BPF_RELEASE	0x02
+#define BPF_ACQ_REL	0x03
+#define BPF_SEQ_CST	0x04
+
+#define BPF_LOAD_ACQ	(BPF_ATOMIC_LOAD | BPF_ACQUIRE)		/* load-acquire */
+#define BPF_STORE_REL	(BPF_ATOMIC_STORE | BPF_RELEASE)	/* store-release */
+
 enum bpf_cond_pseudo_jmp {
 	BPF_MAY_GOTO = 0,
 };

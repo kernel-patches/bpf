@@ -634,6 +634,80 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	return 0;
 }
 
+static inline bool is_atomic_load_store(const s32 imm)
+{
+	const s32 type = BPF_ATOMIC_TYPE(imm);
+
+	return type == BPF_ATOMIC_LOAD || type == BPF_ATOMIC_STORE;
+}
+
+static int emit_atomic_load_store(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	const s16 off = insn->off;
+	const u8 code = insn->code;
+	const bool arena = BPF_MODE(code) == BPF_PROBE_ATOMIC;
+	const u8 arena_vm_base = bpf2a64[ARENA_VM_START];
+	const u8 dst = bpf2a64[insn->dst_reg];
+	const u8 src = bpf2a64[insn->src_reg];
+	const u8 tmp = bpf2a64[TMP_REG_1];
+	u8 ptr;
+
+	if (BPF_ATOMIC_TYPE(insn->imm) == BPF_ATOMIC_LOAD)
+		ptr = src;
+	else
+		ptr = dst;
+
+	if (off) {
+		emit_a64_mov_i(true, tmp, off, ctx);
+		emit(A64_ADD(true, tmp, tmp, ptr), ctx);
+		ptr = tmp;
+	}
+	if (arena) {
+		emit(A64_ADD(true, tmp, ptr, arena_vm_base), ctx);
+		ptr = tmp;
+	}
+
+	switch (insn->imm) {
+	case BPF_LOAD_ACQ:
+		switch (BPF_SIZE(code)) {
+		case BPF_B:
+			emit(A64_LDARB(dst, ptr), ctx);
+			break;
+		case BPF_H:
+			emit(A64_LDARH(dst, ptr), ctx);
+			break;
+		case BPF_W:
+			emit(A64_LDAR32(dst, ptr), ctx);
+			break;
+		case BPF_DW:
+			emit(A64_LDAR64(dst, ptr), ctx);
+			break;
+		}
+		break;
+	case BPF_STORE_REL:
+		switch (BPF_SIZE(code)) {
+		case BPF_B:
+			emit(A64_STLRB(src, ptr), ctx);
+			break;
+		case BPF_H:
+			emit(A64_STLRH(src, ptr), ctx);
+			break;
+		case BPF_W:
+			emit(A64_STLR32(src, ptr), ctx);
+			break;
+		case BPF_DW:
+			emit(A64_STLR64(src, ptr), ctx);
+			break;
+		}
+		break;
+	default:
+		pr_err_once("unknown atomic load/store op code %02x\n", insn->imm);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 #ifdef CONFIG_ARM64_LSE_ATOMICS
 static int emit_lse_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 {
@@ -1641,11 +1715,17 @@ emit_cond_jmp:
 			return ret;
 		break;
 
+	case BPF_STX | BPF_ATOMIC | BPF_B:
+	case BPF_STX | BPF_ATOMIC | BPF_H:
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
+	case BPF_STX | BPF_PROBE_ATOMIC | BPF_B:
+	case BPF_STX | BPF_PROBE_ATOMIC | BPF_H:
 	case BPF_STX | BPF_PROBE_ATOMIC | BPF_W:
 	case BPF_STX | BPF_PROBE_ATOMIC | BPF_DW:
-		if (cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
+		if (is_atomic_load_store(insn->imm))
+			ret = emit_atomic_load_store(insn, ctx);
+		else if (cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
 			ret = emit_lse_atomic(insn, ctx);
 		else
 			ret = emit_ll_sc_atomic(insn, ctx);
@@ -2669,7 +2749,8 @@ bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 	switch (insn->code) {
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		if (!cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
+		if (!is_atomic_load_store(insn->imm) &&
+		    !cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
 			return false;
 	}
 	return true;

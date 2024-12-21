@@ -3480,7 +3480,7 @@ static bool is_reg64(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	if (class == BPF_STX) {
-		/* BPF_STX (including atomic variants) has multiple source
+		/* BPF_STX (including atomic variants) has one or more source
 		 * operands, one of which is a ptr. Check whether the caller is
 		 * asking about it.
 		 */
@@ -7550,6 +7550,8 @@ static int check_load(struct bpf_verifier_env *env, struct bpf_insn *insn, const
 
 static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_insn *insn)
 {
+	const int bpf_size = BPF_SIZE(insn->code);
+	bool write_only = false;
 	int load_reg;
 	int err;
 
@@ -7564,14 +7566,18 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	case BPF_XOR | BPF_FETCH:
 	case BPF_XCHG:
 	case BPF_CMPXCHG:
+		if (bpf_size != BPF_W && bpf_size != BPF_DW) {
+			verbose(env, "invalid atomic operand size\n");
+			return -EINVAL;
+		}
+		break;
+	case BPF_LOAD_ACQ:
+		return check_load(env, insn, "atomic");
+	case BPF_STORE_REL:
+		write_only = true;
 		break;
 	default:
 		verbose(env, "BPF_ATOMIC uses invalid atomic opcode %02x\n", insn->imm);
-		return -EINVAL;
-	}
-
-	if (BPF_SIZE(insn->code) != BPF_W && BPF_SIZE(insn->code) != BPF_DW) {
-		verbose(env, "invalid atomic operand size\n");
 		return -EINVAL;
 	}
 
@@ -7615,6 +7621,9 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 		return -EACCES;
 	}
 
+	if (write_only)
+		goto skip_read_check;
+
 	if (insn->imm & BPF_FETCH) {
 		if (insn->imm == BPF_CMPXCHG)
 			load_reg = BPF_REG_0;
@@ -7636,14 +7645,15 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	 * case to simulate the register fill.
 	 */
 	err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-			       BPF_SIZE(insn->code), BPF_READ, -1, true, false);
+			       bpf_size, BPF_READ, -1, true, false);
 	if (!err && load_reg >= 0)
 		err = check_mem_access(env, insn_idx, insn->dst_reg, insn->off,
-				       BPF_SIZE(insn->code), BPF_READ, load_reg,
-				       true, false);
+				       bpf_size, BPF_READ, load_reg, true,
+				       false);
 	if (err)
 		return err;
 
+skip_read_check:
 	if (is_arena_reg(env, insn->dst_reg)) {
 		err = save_aux_ptr_type(env, PTR_TO_ARENA, false);
 		if (err)
@@ -20320,7 +20330,9 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			   insn->code == (BPF_ST | BPF_MEM | BPF_W) ||
 			   insn->code == (BPF_ST | BPF_MEM | BPF_DW)) {
 			type = BPF_WRITE;
-		} else if ((insn->code == (BPF_STX | BPF_ATOMIC | BPF_W) ||
+		} else if ((insn->code == (BPF_STX | BPF_ATOMIC | BPF_B) ||
+			    insn->code == (BPF_STX | BPF_ATOMIC | BPF_H) ||
+			    insn->code == (BPF_STX | BPF_ATOMIC | BPF_W) ||
 			    insn->code == (BPF_STX | BPF_ATOMIC | BPF_DW)) &&
 			   env->insn_aux_data[i + delta].ptr_type == PTR_TO_ARENA) {
 			insn->code = BPF_STX | BPF_PROBE_ATOMIC | BPF_SIZE(insn->code);
