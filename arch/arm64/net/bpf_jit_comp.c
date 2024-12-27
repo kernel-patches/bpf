@@ -649,8 +649,14 @@ static int emit_lse_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	u8 reg = dst;
 
 	if (off) {
-		emit_a64_mov_i(1, tmp, off, ctx);
-		emit(A64_ADD(1, tmp, tmp, dst), ctx);
+		if (is_addsub_imm(off)) {
+			emit(A64_ADD_I(1, tmp, reg, off), ctx);
+		} else if (is_addsub_imm(-off)) {
+			emit(A64_SUB_I(1, tmp, reg, -off), ctx);
+		} else {
+			emit_a64_mov_i(1, tmp, off, ctx);
+			emit(A64_ADD(1, tmp, tmp, reg), ctx);
+		}
 		reg = tmp;
 	}
 	if (arena) {
@@ -721,7 +727,7 @@ static int emit_ll_sc_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const s32 imm = insn->imm;
 	const s16 off = insn->off;
 	const bool isdw = BPF_SIZE(code) == BPF_DW;
-	u8 reg;
+	u8 reg = dst;
 	s32 jmp_offset;
 
 	if (BPF_MODE(code) == BPF_PROBE_ATOMIC) {
@@ -730,11 +736,15 @@ static int emit_ll_sc_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 		return -EINVAL;
 	}
 
-	if (!off) {
-		reg = dst;
-	} else {
-		emit_a64_mov_i(1, tmp, off, ctx);
-		emit(A64_ADD(1, tmp, tmp, dst), ctx);
+	if (off) {
+		if (is_addsub_imm(off)) {
+			emit(A64_ADD_I(1, tmp, reg, off), ctx);
+		} else if (is_addsub_imm(-off)) {
+			emit(A64_SUB_I(1, tmp, reg, -off), ctx);
+		} else {
+			emit_a64_mov_i(1, tmp, off, ctx);
+			emit(A64_ADD(1, tmp, tmp, reg), ctx);
+		}
 		reg = tmp;
 	}
 
