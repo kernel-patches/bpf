@@ -4845,6 +4845,10 @@ union bpf_attr {
  *		including the trailing NUL character. On error, a negative
  *		value.
  *
+ *		If *buf* is too small, the resolved path is truncated from
+ *		the front and -ENAMETOOLONG is returned. The buffer is valid
+ *		in this case.
+ *
  * long bpf_copy_from_user(void *dst, u32 size, const void *user_ptr)
  * 	Description
  * 		Read *size* bytes from user space address *user_ptr* and store
