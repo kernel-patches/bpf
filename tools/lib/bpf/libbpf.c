@@ -1732,11 +1732,22 @@ static int sys_memfd_create(const char *name, unsigned flags)
 #define MFD_CLOEXEC 0x0001U
 #endif
 
+#ifndef MFD_NOEXEC_SEAL
+#define MFD_NOEXEC_SEAL 0x0008U
+#endif
+
 static int create_placeholder_fd(void)
 {
 	int fd;
+	int memfd;
 
-	fd = ensure_good_fd(sys_memfd_create("libbpf-placeholder-fd", MFD_CLOEXEC));
+	memfd = sys_memfd_create("libbpf-placeholder-fd", MFD_CLOEXEC);
+
+	/* MFD_NOEXEC_SEAL is missing from older kernels */
+	if (memfd < 0 && errno == EINVAL)
+		memfd = sys_memfd_create("libbpf-placeholder-fd", MFD_CLOEXEC | MFD_NOEXEC_SEAL);
+
+	fd = ensure_good_fd(memfd);
 	if (fd < 0)
 		return -errno;
 	return fd;
