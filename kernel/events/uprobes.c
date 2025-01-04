@@ -473,15 +473,13 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
 			unsigned long vaddr, uprobe_opcode_t opcode)
 {
-	struct uprobe *uprobe;
 	struct page *old_page, *new_page;
 	struct vm_area_struct *vma;
-	int ret, is_register, ref_ctr_updated = 0;
+	int ret, is_register;
 	bool orig_page_huge = false;
 	unsigned int gup_flags = FOLL_FORCE;
 
 	is_register = is_swbp_insn(&opcode);
-	uprobe = container_of(auprobe, struct uprobe, arch);
 
 retry:
 	if (is_register)
@@ -499,15 +497,6 @@ retry:
 		 "uprobe unregister should never work on compound page\n")) {
 		ret = -EINVAL;
 		goto put_old;
-	}
-
-	/* We are going to replace instruction, update ref_ctr. */
-	if (!ref_ctr_updated && uprobe->ref_ctr_offset) {
-		ret = update_ref_ctr(uprobe, mm, is_register ? 1 : -1);
-		if (ret)
-			goto put_old;
-
-		ref_ctr_updated = 1;
 	}
 
 	ret = 0;
@@ -560,10 +549,6 @@ put_old:
 	if (unlikely(ret == -EAGAIN))
 		goto retry;
 
-	/* Revert back reference counter if instruction update failed. */
-	if (ret && is_register && ref_ctr_updated)
-		update_ref_ctr(uprobe, mm, -1);
-
 	/* try collapse pmd for compound page */
 	if (!ret && orig_page_huge)
 		collapse_pte_mapped_thp(mm, vaddr, false);
@@ -585,6 +570,25 @@ int __weak set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned 
 	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN);
 }
 
+static int set_swbp_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	int err;
+
+	/* We are going to replace instruction, update ref_ctr. */
+	if (uprobe->ref_ctr_offset) {
+		err = update_ref_ctr(uprobe, mm, 1);
+		if (err)
+			return err;
+	}
+
+	err = set_swbp(&uprobe->arch, mm, vaddr);
+
+	/* Revert back reference counter if instruction update failed. */
+	if (err && uprobe->ref_ctr_offset)
+		update_ref_ctr(uprobe, mm, -1);
+	return err;
+}
+
 /**
  * set_orig_insn - Restore the original instruction.
  * @mm: the probed process address space.
@@ -599,6 +603,16 @@ set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long v
 {
 	return uprobe_write_opcode(auprobe, mm, vaddr,
 			*(uprobe_opcode_t *)&auprobe->insn);
+}
+
+static int set_orig_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	int err = set_orig_insn(&uprobe->arch, mm, vaddr);
+
+	/* Revert back reference counter even if instruction update failed. */
+	if (uprobe->ref_ctr_offset)
+		update_ref_ctr(uprobe, mm, -1);
+	return err;
 }
 
 /* uprobe should have guaranteed positive refcount */
@@ -1133,7 +1147,7 @@ install_breakpoint(struct uprobe *uprobe, struct mm_struct *mm,
 	if (first_uprobe)
 		set_bit(MMF_HAS_UPROBES, &mm->flags);
 
-	ret = set_swbp(&uprobe->arch, mm, vaddr);
+	ret = set_swbp_refctr(uprobe, mm, vaddr);
 	if (!ret)
 		clear_bit(MMF_RECALC_UPROBES, &mm->flags);
 	else if (first_uprobe)
@@ -1146,7 +1160,7 @@ static int
 remove_breakpoint(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
 {
 	set_bit(MMF_RECALC_UPROBES, &mm->flags);
-	return set_orig_insn(&uprobe->arch, mm, vaddr);
+	return set_orig_refctr(uprobe, mm, vaddr);
 }
 
 struct map_info {
