@@ -471,25 +471,23 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
  * Return 0 (success) or a negative errno.
  */
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
-			unsigned long vaddr, uprobe_opcode_t opcode)
+			unsigned long vaddr, uprobe_opcode_t opcode, bool orig)
 {
-	return uprobe_write(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode);
+	return uprobe_write(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode, orig);
 }
 
 int uprobe_write(struct arch_uprobe *auprobe, struct mm_struct *mm,
 		 unsigned long vaddr, uprobe_opcode_t *insn,
-		 int nbytes, uprobe_write_verify_t verify)
+		 int nbytes, uprobe_write_verify_t verify, bool orig)
 {
 	struct page *old_page, *new_page;
 	struct vm_area_struct *vma;
-	int ret, is_register;
+	int ret;
 	bool orig_page_huge = false;
 	unsigned int gup_flags = FOLL_FORCE;
 
-	is_register = is_swbp_insn(insn);
-
 retry:
-	if (is_register)
+	if (!orig)
 		gup_flags |= FOLL_SPLIT_PMD;
 	/* Read the page with vaddr into memory */
 	old_page = get_user_page_vma_remote(mm, vaddr, gup_flags, &vma);
@@ -500,14 +498,14 @@ retry:
 	if (ret <= 0)
 		goto put_old;
 
-	if (WARN(!is_register && PageCompound(old_page),
+	if (WARN(orig && PageCompound(old_page),
 		 "uprobe unregister should never work on compound page\n")) {
 		ret = -EINVAL;
 		goto put_old;
 	}
 
 	ret = 0;
-	if (!is_register && !PageAnon(old_page))
+	if (orig && !PageAnon(old_page))
 		goto put_old;
 
 	ret = anon_vma_prepare(vma);
@@ -523,7 +521,7 @@ retry:
 	copy_highpage(new_page, old_page);
 	uprobe_copy_to_page(new_page, vaddr, insn, nbytes);
 
-	if (!is_register) {
+	if (orig) {
 		struct page *orig_page;
 		pgoff_t index;
 
@@ -574,7 +572,7 @@ put_old:
  */
 int __weak set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 {
-	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN);
+	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN, false);
 }
 
 static int set_swbp_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
@@ -609,7 +607,7 @@ int __weak
 set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 {
 	return uprobe_write_opcode(auprobe, mm, vaddr,
-			*(uprobe_opcode_t *)&auprobe->insn);
+			*(uprobe_opcode_t *)&auprobe->insn, true);
 }
 
 static int set_orig_refctr(struct uprobe *uprobe, struct mm_struct *mm, unsigned long vaddr)
