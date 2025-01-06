@@ -653,6 +653,8 @@ struct bpf_prog_bind_opts {
 LIBBPF_API int bpf_prog_bind_map(int prog_fd, int map_fd,
 				 const struct bpf_prog_bind_opts *opts);
 
+LIBBPF_API int bpf_map_get_num_entries(int fd, unsigned int *num_entries);
+
 struct bpf_test_run_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	const void *data_in; /* optional */

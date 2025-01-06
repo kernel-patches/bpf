@@ -1330,3 +1330,19 @@ int bpf_token_create(int bpffs_fd, struct bpf_token_create_opts *opts)
 	fd = sys_bpf_fd(BPF_TOKEN_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(fd);
 }
+
+int bpf_map_get_num_entries(int fd, unsigned int *num_entries)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, map_get_num_entries);
+	union bpf_attr attr;
+	int ret;
+
+	memset(&attr, 0, attr_sz);
+	attr.map_get_num_entries.map_fd = fd;
+
+	ret = sys_bpf(BPF_MAP_GET_NUM_ENTRIES, &attr, attr_sz);
+	if (!ret)
+		*num_entries = attr.map_get_num_entries.num_entries;
+
+	return libbpf_err_errno(ret);
+}
