@@ -479,9 +479,10 @@ define CLANG_CPUV4_BPF_BUILD_RULE
 	$(Q)$(CLANG) $3 -O2 $(BPF_TARGET_ENDIAN) -c $1 -mcpu=v4 -o $2
 endef
 # Build BPF object using GCC
+GCC_BPF_CFLAGS += -std=gnu17 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes
 define GCC_BPF_BUILD_RULE
 	$(call msg,GCC-BPF,$4,$2)
-	$(Q)$(BPF_GCC) $3 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2 -c $1 -o $2
+	$(Q)$(BPF_GCC) $3 -O2 $(GCC_BPF_CFLAGS) -c $1 -o $2
 endef
 
 SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
