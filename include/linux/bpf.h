@@ -175,6 +175,7 @@ struct bpf_map_ops {
 				     void *callback_ctx, u64 flags);
 
 	u64 (*map_mem_usage)(const struct bpf_map *map);
+	s64 (*map_num_entries)(const struct bpf_map *map);
 
 	/* BTF id of struct allocated by map_alloc */
 	int *map_btf_id;
@@ -2401,6 +2402,8 @@ static inline void bpf_map_dec_elem_count(struct bpf_map *map)
 {
 	this_cpu_dec(*map->elem_count);
 }
+
+s64 bpf_map_sum_elem_count(const struct bpf_map *map);
 
 extern int sysctl_unprivileged_bpf_disabled;
 

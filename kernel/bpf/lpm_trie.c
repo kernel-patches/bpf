@@ -780,6 +780,13 @@ static u64 trie_mem_usage(const struct bpf_map *map)
 	return elem_size * READ_ONCE(trie->n_entries);
 }
 
+static s64 trie_num_entries(const struct bpf_map *map)
+{
+	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
+
+	return READ_ONCE(trie->n_entries);
+}
+
 BTF_ID_LIST_SINGLE(trie_map_btf_ids, struct, lpm_trie)
 const struct bpf_map_ops trie_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -794,5 +801,6 @@ const struct bpf_map_ops trie_map_ops = {
 	.map_delete_batch = generic_map_delete_batch,
 	.map_check_btf = trie_check_btf,
 	.map_mem_usage = trie_mem_usage,
+	.map_num_entries = trie_num_entries,
 	.map_btf_id = &trie_map_btf_ids[0],
 };

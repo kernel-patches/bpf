@@ -1041,6 +1041,18 @@ static u64 dev_map_mem_usage(const struct bpf_map *map)
 	return usage;
 }
 
+static s64 dev_map_num_entries(const struct bpf_map *map)
+{
+	struct bpf_dtab *dtab = container_of(map, struct bpf_dtab, map);
+	s64 entries = 0;
+
+	if (map->map_type == BPF_MAP_TYPE_DEVMAP_HASH)
+		entries = atomic_read((atomic_t *)&dtab->items);
+	else
+		entries = -EOPNOTSUPP;
+	return entries;
+}
+
 BTF_ID_LIST_SINGLE(dev_map_btf_ids, struct, bpf_dtab)
 const struct bpf_map_ops dev_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -1053,6 +1065,7 @@ const struct bpf_map_ops dev_map_ops = {
 	.map_delete_elem = dev_map_delete_elem,
 	.map_check_btf = map_check_no_btf,
 	.map_mem_usage = dev_map_mem_usage,
+	.map_num_entries = dev_map_num_entries,
 	.map_btf_id = &dev_map_btf_ids[0],
 	.map_redirect = dev_map_redirect,
 };
@@ -1068,6 +1081,7 @@ const struct bpf_map_ops dev_map_hash_ops = {
 	.map_delete_elem = dev_map_hash_delete_elem,
 	.map_check_btf = map_check_no_btf,
 	.map_mem_usage = dev_map_mem_usage,
+	.map_num_entries = dev_map_num_entries,
 	.map_btf_id = &dev_map_btf_ids[0],
 	.map_redirect = dev_hash_map_redirect,
 };
