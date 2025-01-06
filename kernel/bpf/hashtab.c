@@ -1502,10 +1502,9 @@ static void delete_all_elements(struct bpf_htab *htab)
 {
 	int i;
 
-	/* It's called from a worker thread, so disable migration here,
-	 * since bpf_mem_cache_free() relies on that.
+	/* It's called from a worker thread and migration has been disabled,
+	 * therefore, it is OK to invoke bpf_mem_cache_free() directly.
 	 */
-	migrate_disable();
 	for (i = 0; i < htab->n_buckets; i++) {
 		struct hlist_nulls_head *head = select_bucket(htab, i);
 		struct hlist_nulls_node *n;
@@ -1517,7 +1516,6 @@ static void delete_all_elements(struct bpf_htab *htab)
 		}
 		cond_resched();
 	}
-	migrate_enable();
 }
 
 static void htab_free_malloced_timers_and_wq(struct bpf_htab *htab)
@@ -1572,12 +1570,14 @@ static void htab_map_free(struct bpf_map *map)
 	 * underneath and is responsible for waiting for callbacks to finish
 	 * during bpf_mem_alloc_destroy().
 	 */
+	migrate_disable();
 	if (!htab_is_prealloc(htab)) {
 		delete_all_elements(htab);
 	} else {
 		htab_free_prealloced_fields(htab);
 		prealloc_destroy(htab);
 	}
+	migrate_enable();
 
 	bpf_map_free_elem_count(map);
 	free_percpu(htab->extra_elems);
