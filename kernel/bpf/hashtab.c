@@ -1570,14 +1570,12 @@ static void htab_map_free(struct bpf_map *map)
 	 * underneath and is responsible for waiting for callbacks to finish
 	 * during bpf_mem_alloc_destroy().
 	 */
-	migrate_disable();
 	if (!htab_is_prealloc(htab)) {
 		delete_all_elements(htab);
 	} else {
 		htab_free_prealloced_fields(htab);
 		prealloc_destroy(htab);
 	}
-	migrate_enable();
 
 	bpf_map_free_elem_count(map);
 	free_percpu(htab->extra_elems);

@@ -455,7 +455,6 @@ static void array_map_free(struct bpf_map *map)
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	int i;
 
-	migrate_disable();
 	if (!IS_ERR_OR_NULL(map->record)) {
 		if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 			for (i = 0; i < array->map.max_entries; i++) {
@@ -472,7 +471,6 @@ static void array_map_free(struct bpf_map *map)
 				bpf_obj_free_fields(map->record, array_map_elem_ptr(array, i));
 		}
 	}
-	migrate_enable();
 
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
 		bpf_array_free_percpu(array);
