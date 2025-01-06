@@ -903,6 +903,17 @@ union bpf_iter_link_info {
  *		A new file descriptor (a nonnegative integer), or -1 if an
  *		error occurred (in which case, *errno* is set appropriately).
  *
+ * BPF_MAP_GET_NUM_ENTRIES
+ *	Description
+ *		Get the number of entries currently present in the map.
+ *
+ *		This operation is supported only for a subset of maps. If the
+ *		map is not supported, the operation returns **EOPNOTSUPP**.
+ *
+ *	Return
+ *		Returns zero on success. On error, -1 is returned and *errno*
+ *		is set appropriately.
+ *
  * NOTES
  *	eBPF objects (maps and programs) can be shared between processes.
  *
@@ -958,6 +969,7 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TOKEN_CREATE,
+	BPF_MAP_GET_NUM_ENTRIES,
 	__MAX_BPF_CMD,
 };
 
@@ -1836,6 +1848,11 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
+
+	struct { /* struct used by BPF_MAP_GET_NUM_ENTRIES command*/
+		__u32 map_fd;
+		__u32 num_entries;
+	} map_get_num_entries;
 
 } __attribute__((aligned(8)));
 

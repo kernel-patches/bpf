@@ -5748,6 +5748,35 @@ static int token_create(union bpf_attr *attr)
 	return bpf_token_create(attr);
 }
 
+#define BPF_MAP_GET_NUM_ENTRIES_LAST_FIELD map_get_num_entries.num_entries
+
+static int bpf_get_num_entries(union bpf_attr *attr, union bpf_attr __user *uattr)
+{
+	__u32 num_entries = 0;
+	struct bpf_map *map;
+
+	if (CHECK_ATTR(BPF_MAP_GET_NUM_ENTRIES))
+		return -EINVAL;
+
+
+	CLASS(fd, f)(attr->map_fd);
+	map = __bpf_map_get(f);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	if (!map->ops->map_num_entries)
+		return -EOPNOTSUPP;
+
+	num_entries = map->ops->map_num_entries(map);
+	if (num_entries < 0)
+		return num_entries;
+
+	if (put_user(num_entries, &uattr->map_get_num_entries.num_entries))
+		return -EFAULT;
+
+	return 0;
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -5883,6 +5912,9 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_TOKEN_CREATE:
 		err = token_create(&attr);
+		break;
+	case BPF_MAP_GET_NUM_ENTRIES:
+		err = bpf_get_num_entries(&attr, uattr.user);
 		break;
 	default:
 		err = -EINVAL;
