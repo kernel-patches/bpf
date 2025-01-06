@@ -434,6 +434,11 @@ static void test_lpm_ipaddr(void)
 	inet_pton(AF_INET6, "2a00:ffff::", key_ipv6->data);
 	assert(bpf_map_lookup_elem(map_fd_ipv6, key_ipv6, &value) == -ENOENT);
 
+	unsigned int entries;
+	/* Check that the reported number of entries in the map is as expected. */
+	assert(bpf_map_get_num_entries(map_fd_ipv4, &entries) == 0 && entries == 5);
+	assert(bpf_map_get_num_entries(map_fd_ipv6, &entries) == 0 && entries == 1);
+
 	close(map_fd_ipv4);
 	close(map_fd_ipv6);
 }

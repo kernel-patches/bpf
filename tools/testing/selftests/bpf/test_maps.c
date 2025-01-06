@@ -109,6 +109,10 @@ static void test_hashmap(unsigned int task, void *data)
 	assert(bpf_map_get_next_key(fd, &next_key, &next_key) < 0 &&
 	       errno == ENOENT);
 
+	unsigned int entries;
+	/* Check that the number of entries in the map is 2. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 2);
+
 	/* Delete both elements. */
 	key = 1;
 	assert(bpf_map_delete_elem(fd, &key) == 0);
@@ -122,6 +126,7 @@ static void test_hashmap(unsigned int task, void *data)
 	       errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &next_key) < 0 &&
 	       errno == ENOENT);
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
 
 	close(fd);
 }
@@ -243,6 +248,11 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 	key = 1;
 	assert(bpf_map_update_elem(fd, &key, value, BPF_EXIST) == 0);
 
+
+	unsigned int entries;
+	/* Check that the number of entries in the map is 2. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 2);
+
 	/* Delete both elements. */
 	key = 1;
 	assert(bpf_map_delete_elem(fd, &key) == 0);
@@ -256,6 +266,7 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 	       errno == ENOENT);
 	assert(bpf_map_get_next_key(fd, &key, &next_key) < 0 &&
 	       errno == ENOENT);
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
 
 	close(fd);
 }
@@ -529,6 +540,10 @@ static void test_devmap_hash(unsigned int task, void *data)
 		exit(1);
 	}
 
+	unsigned int entries;
+	/* Check that the number of entries in the map is 0. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
+
 	close(fd);
 }
 
@@ -557,9 +572,16 @@ static void test_queuemap(unsigned int task, void *data)
 		exit(1);
 	}
 
+	unsigned int entries;
+	/* Check that the number of entries in the map is 0. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
+
 	/* Push MAP_SIZE elements */
 	for (i = 0; i < MAP_SIZE; i++)
 		assert(bpf_map_update_elem(fd, NULL, &vals[i], 0) == 0);
+
+	/* Check that the number of entries in the map is MAP_SIZE. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == MAP_SIZE);
 
 	/* Check that element cannot be pushed due to max_entries limit */
 	assert(bpf_map_update_elem(fd, NULL, &val, 0) < 0 &&
@@ -580,6 +602,9 @@ static void test_queuemap(unsigned int task, void *data)
 	/* Check that there are not elements left */
 	assert(bpf_map_lookup_and_delete_elem(fd, NULL, &val) < 0 &&
 	       errno == ENOENT);
+
+	/* Check that the number of entries in the map is 0. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
 
 	/* Check that non supported functions set errno to EINVAL */
 	assert(bpf_map_delete_elem(fd, NULL) < 0 && errno == EINVAL);
@@ -613,9 +638,16 @@ static void test_stackmap(unsigned int task, void *data)
 		exit(1);
 	}
 
+	unsigned int entries;
+	/* Check that the number of entries in the map is 0. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
+
 	/* Push MAP_SIZE elements */
 	for (i = 0; i < MAP_SIZE; i++)
 		assert(bpf_map_update_elem(fd, NULL, &vals[i], 0) == 0);
+
+	/* Check that the number of entries in the map is MAP_SIZE. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == MAP_SIZE);
 
 	/* Check that element cannot be pushed due to max_entries limit */
 	assert(bpf_map_update_elem(fd, NULL, &val, 0) < 0 &&
@@ -636,6 +668,9 @@ static void test_stackmap(unsigned int task, void *data)
 	/* Check that there are not elements left */
 	assert(bpf_map_lookup_and_delete_elem(fd, NULL, &val) < 0 &&
 	       errno == ENOENT);
+
+	/* Check that the number of entries in the map is 0. */
+	assert(bpf_map_get_num_entries(fd, &entries) == 0 && entries == 0);
 
 	/* Check that non supported functions set errno to EINVAL */
 	assert(bpf_map_delete_elem(fd, NULL) < 0 && errno == EINVAL);
