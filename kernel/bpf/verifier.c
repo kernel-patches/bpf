@@ -10488,13 +10488,20 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
-static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
+enum bpf_exit {
+	BPF_EXIT_INSN,
+	BPF_EXIT_EXCEPTION,
+	BPF_EXIT_TAIL_CALL,
+	BPF_EXIT_LD_ABS,
+};
+
+static int check_reference_leak(struct bpf_verifier_env *env, enum bpf_exit exit)
 {
 	struct bpf_func_state *state = cur_func(env);
 	bool refs_lingering = false;
 	int i;
 
-	if (!exception_exit && state->frameno)
+	if (exit != BPF_EXIT_EXCEPTION && state->frameno)
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
@@ -10507,16 +10514,32 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 	return refs_lingering ? -EINVAL : 0;
 }
 
-static int check_resource_leak(struct bpf_verifier_env *env, bool exception_exit, bool check_lock, const char *prefix)
+static int check_resource_leak(struct bpf_verifier_env *env, enum bpf_exit exit, bool check_lock)
 {
 	int err;
+	const char *prefix;
+
+	switch (exit) {
+	case BPF_EXIT_INSN:
+		prefix = "BPF_EXIT instruction";
+		break;
+	case BPF_EXIT_EXCEPTION:
+		prefix = "bpf_throw";
+		break;
+	case BPF_EXIT_TAIL_CALL:
+		prefix = "tail_call";
+		break;
+	case BPF_EXIT_LD_ABS:
+		prefix = "BPF_LD_[ABS|IND]";
+		break;
+	}
 
 	if (check_lock && cur_func(env)->active_locks) {
 		verbose(env, "%s cannot be used inside bpf_spin_lock-ed region\n", prefix);
 		return -EINVAL;
 	}
 
-	err = check_reference_leak(env, exception_exit);
+	err = check_reference_leak(env, exit);
 	if (err) {
 		verbose(env, "%s would lead to reference leak\n", prefix);
 		return err;
@@ -10802,11 +10825,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 
 	switch (func_id) {
-	case BPF_FUNC_tail_call:
-		err = check_resource_leak(env, false, true, "tail_call");
-		if (err)
-			return err;
-		break;
 	case BPF_FUNC_get_local_storage:
 		/* check that flags argument in get_local_storage(map, flags) is 0,
 		 * this is required because get_local_storage() can't return an error.
@@ -15963,14 +15981,6 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	if (err)
 		return err;
 
-	/* Disallow usage of BPF_LD_[ABS|IND] with reference tracking, as
-	 * gen_ld_abs() may terminate the program at runtime, leading to
-	 * reference leak.
-	 */
-	err = check_resource_leak(env, false, true, "BPF_LD_[ABS|IND]");
-	if (err)
-		return err;
-
 	if (regs[ctx_reg].type != PTR_TO_CTX) {
 		verbose(env,
 			"at the time of BPF_LD_ABS|IND R6 != pointer to skb\n");
@@ -18540,7 +18550,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int prev_insn_idx = -1;
 
 	for (;;) {
-		bool exception_exit = false;
+		enum bpf_exit exit;
 		struct bpf_insn *insn;
 		u8 class;
 		int err;
@@ -18760,7 +18770,7 @@ static int do_check(struct bpf_verifier_env *env)
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
 					if (!err && is_bpf_throw_kfunc(insn)) {
-						exception_exit = true;
+						exit = BPF_EXIT_EXCEPTION;
 						goto process_bpf_exit_full;
 					}
 				} else {
@@ -18770,6 +18780,21 @@ static int do_check(struct bpf_verifier_env *env)
 					return err;
 
 				mark_reg_scratched(env, BPF_REG_0);
+
+				if (insn->src_reg == 0 && insn->imm == BPF_FUNC_tail_call) {
+					/* Explore both cases: tail_call fails and we fallthrough,
+					 * or it succeeds and we exit the current function.
+					 */
+					if (!push_stack(env, env->insn_idx + 1, env->insn_idx, false))
+						return -ENOMEM;
+					/* bpf_tail_call() doesn't set r0 on failure / in the fallthrough case.
+					 * But it does on success, so we have to mark it after queueing the
+					 * fallthrough case, but before prepare_func_exit().
+					 */
+					__mark_reg_unknown(env, &state->frame[state->curframe]->regs[BPF_REG_0]);
+					exit = BPF_EXIT_TAIL_CALL;
+					goto process_bpf_exit_full;
+				}
 			} else if (opcode == BPF_JA) {
 				if (BPF_SRC(insn->code) != BPF_K ||
 				    insn->src_reg != BPF_REG_0 ||
@@ -18795,6 +18820,8 @@ static int do_check(struct bpf_verifier_env *env)
 					verbose(env, "BPF_EXIT uses reserved fields\n");
 					return -EINVAL;
 				}
+				exit = BPF_EXIT_INSN;
+
 process_bpf_exit_full:
 				/* We must do check_reference_leak here before
 				 * prepare_func_exit to handle the case when
@@ -18802,8 +18829,7 @@ process_bpf_exit_full:
 				 * function, for which reference_state must
 				 * match caller reference state when it exits.
 				 */
-				err = check_resource_leak(env, exception_exit, !env->cur_state->curframe,
-							  "BPF_EXIT instruction");
+				err = check_resource_leak(env, exit, !env->cur_state->curframe);
 				if (err)
 					return err;
 
@@ -18817,7 +18843,7 @@ process_bpf_exit_full:
 				 * exits. We also skip return code checks as
 				 * they are not needed for exceptional exits.
 				 */
-				if (exception_exit)
+				if (exit == BPF_EXIT_EXCEPTION)
 					goto process_bpf_exit;
 
 				if (state->curframe) {
@@ -18828,6 +18854,12 @@ process_bpf_exit_full:
 					do_print_state = true;
 					continue;
 				}
+
+				/* BPF_EXIT instruction is the only one that doesn't intrinsically
+				 * set R0.
+				 */
+				if (exit != BPF_EXIT_INSN)
+					goto process_bpf_exit;
 
 				err = check_return_code(env, BPF_REG_0, "R0");
 				if (err)
@@ -18857,7 +18889,13 @@ process_bpf_exit:
 				err = check_ld_abs(env, insn);
 				if (err)
 					return err;
-
+				/* Explore both cases: LD_ABS|IND succeeds and we fallthrough,
+				 * or it fails and we exit the current function.
+				 */
+				if (!push_stack(env, env->insn_idx + 1, env->insn_idx, false))
+					return -ENOMEM;
+				exit = BPF_EXIT_LD_ABS;
+				goto process_bpf_exit_full;
 			} else if (mode == BPF_IMM) {
 				err = check_ld_imm(env, insn);
 				if (err)
