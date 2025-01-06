@@ -69,6 +69,10 @@ progs/timer_crash.c-CFLAGS := -fno-strict-aliasing
 progs/test_global_func9.c-CFLAGS := -fno-strict-aliasing
 progs/verifier_nocsr.c-CFLAGS := -fno-strict-aliasing
 
+# Uninitialized variable warning on BPF_RAW_INSN
+progs/verifier_bpf_fastcall.c-CFLAGS := -fno-strict-aliasing
+progs/verifier_search_pruning.c-CFLAGS := -fno-strict-aliasing
+
 # Some utility functions use LLVM libraries
 jit_disasm_helpers.c-CFLAGS = $(LLVM_CFLAGS)
 
@@ -507,7 +511,7 @@ endef
 # Build BPF object using GCC
 define GCC_BPF_BUILD_RULE
 	$(call msg,GCC-BPF,$4,$2)
-	$(Q)$(BPF_GCC) $3 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2 -c $1 -o $2
+	$(Q)$(BPF_GCC) $3 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2 -std=gnu17 -c $1 -o $2
 endef
 
 SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
