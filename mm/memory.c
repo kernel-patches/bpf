@@ -6673,6 +6673,75 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	return buf - old_buf;
 }
 
+/*
+ * Copy a string from another process's address space as given in mm.
+ * Don't return partial results. If there is any error return -EFAULT.
+ */
+static int __copy_str_from_remote_vm(struct mm_struct *mm, unsigned long addr,
+			      void *buf, int len, unsigned int gup_flags)
+{
+	void *old_buf = buf;
+	int err = 0;
+
+	if (mmap_read_lock_killable(mm))
+		return -EFAULT;
+
+	/* Untag the address before looking up the VMA */
+	addr = untagged_addr_remote(mm, addr);
+
+	/* Avoid triggering the temporary warning in __get_user_pages */
+	if (!vma_lookup(mm, addr)) {
+		mmap_read_unlock(mm);
+		return -EFAULT;
+	}
+
+	while (len) {
+		int bytes, offset, retval;
+		void *maddr;
+		struct vm_area_struct *vma = NULL;
+		struct page *page = get_user_page_vma_remote(mm, addr,
+							     gup_flags, &vma);
+
+		if (IS_ERR(page)) {
+			/*
+			 * Treat as a total failure for now until we decide how
+			 * to handle the CONFIG_HAVE_IOREMAP_PROT case and
+			 * stack expansion.
+			 */
+			err = -EFAULT;
+			break;
+		}
+
+		bytes = len;
+		offset = addr & (PAGE_SIZE - 1);
+		if (bytes > PAGE_SIZE - offset)
+			bytes = PAGE_SIZE - offset;
+
+		maddr = kmap_local_page(page);
+		retval = strncpy_from_user(buf, (const char __user *)addr, bytes);
+		unmap_and_put_page(page, maddr);
+
+		if (retval < 0) {
+			err = retval;
+			break;
+		}
+
+		len -= retval;
+		buf += retval;
+		addr += retval;
+
+		/* Found the end of the string */
+		if (retval < bytes)
+			break;
+	}
+	mmap_read_unlock(mm);
+
+	if (err)
+		return err;
+
+	return buf - old_buf;
+}
+
 /**
  * access_remote_vm - access another process' address space
  * @mm:		the mm_struct of the target address space
@@ -6713,6 +6782,38 @@ int access_process_vm(struct task_struct *tsk, unsigned long addr,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(access_process_vm);
+
+/**
+ * copy_str_from_process_vm - copy a string from another process's address space.
+ * @tsk:	the task of the target address space
+ * @addr:	start address to access
+ * @buf:	source or destination buffer
+ * @len:	number of bytes to transfer
+ * @gup_flags:	flags modifying lookup behaviour
+ *
+ * The caller must hold a reference on @mm.
+ *
+ * Return: number of bytes copied from source to destination. If the string
+ * is shorter than @len then return the length of the string.
+ * On any error, return -EFAULT.
+ */
+int copy_str_from_process_vm(struct task_struct *tsk, unsigned long addr,
+		void *buf, int len, unsigned int gup_flags)
+{
+	struct mm_struct *mm;
+	int ret;
+
+	mm = get_task_mm(tsk);
+	if (!mm)
+		return -EFAULT;
+
+	ret = __copy_str_from_remote_vm(mm, addr, buf, len, gup_flags);
+
+	mmput(mm);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(copy_str_from_process_vm);
 
 /*
  * Print the name of a VMA.
