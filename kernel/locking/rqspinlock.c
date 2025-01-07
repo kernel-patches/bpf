@@ -247,6 +247,41 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
  */
 #define RES_RESET_TIMEOUT(ts) ({ (ts).timeout_end = 0; })
 
+#ifdef CONFIG_PARAVIRT
+
+static inline int resilient_virt_spin_lock(struct qspinlock *lock, struct rqspinlock_timeout *ts)
+{
+	int val, ret = 0;
+
+	RES_RESET_TIMEOUT(*ts);
+	grab_held_lock_entry(lock);
+retry:
+	val = atomic_read(&lock->val);
+
+	if (val || !atomic_try_cmpxchg(&lock->val, &val, _Q_LOCKED_VAL)) {
+		if (RES_CHECK_TIMEOUT(*ts, ret, ~0u)) {
+			lockevent_inc(rqspinlock_lock_timeout);
+			goto timeout;
+		}
+		cpu_relax();
+		goto retry;
+	}
+
+	return 0;
+timeout:
+	release_held_lock_entry();
+	return ret;
+}
+
+#else
+
+static __always_inline int resilient_virt_spin_lock(struct qspinlock *lock, struct rqspinlock_timeout *ts)
+{
+	return 0;
+}
+
+#endif /* CONFIG_PARAVIRT */
+
 /*
  * Per-CPU queue node structures; we can never have more than 4 nested
  * contexts: task, softirq, hardirq, nmi.
@@ -286,6 +321,9 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	BUILD_BUG_ON(CONFIG_NR_CPUS >= (1U << _Q_TAIL_CPU_BITS));
 
 	RES_INIT_TIMEOUT(ts, timeout);
+
+	if (resilient_virt_spin_lock_enabled())
+		return resilient_virt_spin_lock(lock, &ts);
 
 	/*
 	 * Wait for in-progress pending->locked hand-overs with a bounded

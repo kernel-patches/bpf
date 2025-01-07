@@ -17,6 +17,13 @@ struct qspinlock;
 
 extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout);
 
+#ifndef resilient_virt_spin_lock_enabled
+static __always_inline bool resilient_virt_spin_lock_enabled(void)
+{
+	return false;
+}
+#endif
+
 /*
  * Default timeout for waiting loops is 0.5 seconds
  */
