@@ -516,6 +516,7 @@ struct bpf_struct_ops {
 };
 
 #define DATA_SEC ".data"
+#define PERCPU_DATA_SEC ".data..percpu"
 #define BSS_SEC ".bss"
 #define RODATA_SEC ".rodata"
 #define KCONFIG_SEC ".kconfig"
@@ -562,6 +563,8 @@ struct bpf_map {
 	__u32 btf_value_type_id;
 	__u32 btf_vmlinux_value_type_id;
 	enum libbpf_map_type libbpf_type;
+	int num_cpus;
+	void *data;
 	void *mmaped;
 	struct bpf_struct_ops *st_ops;
 	struct bpf_map *inner_map;
@@ -1923,11 +1926,35 @@ static bool map_is_mmapable(struct bpf_object *obj, struct bpf_map *map)
 	return false;
 }
 
+static bool map_is_percpu_data(struct bpf_map *map)
+{
+	return str_has_pfx(map->real_name, PERCPU_DATA_SEC);
+}
+
+static void map_copy_data(struct bpf_map *map, const void *data)
+{
+	bool is_percpu_data = map_is_percpu_data(map);
+	size_t data_sz = map->def.value_size;
+	size_t elem_sz = roundup(data_sz, 8);
+	int i;
+
+	if (!data)
+		return;
+
+	if (!is_percpu_data)
+		memcpy(map->mmaped, data, data_sz);
+	else
+		for (i = 0; i < map->num_cpus; i++)
+			memcpy(map->data + i*elem_sz, data, data_sz);
+}
+
 static int
 bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 			      const char *real_name, int sec_idx, void *data, size_t data_sz)
 {
+	bool is_percpu_data = str_has_pfx(real_name, PERCPU_DATA_SEC);
 	struct bpf_map_def *def;
+	const char *data_desc;
 	struct bpf_map *map;
 	size_t mmap_sz;
 	int err;
@@ -1948,7 +1975,8 @@ bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 	}
 
 	def = &map->def;
-	def->type = BPF_MAP_TYPE_ARRAY;
+	def->type = is_percpu_data ? BPF_MAP_TYPE_PERCPU_ARRAY
+				   : BPF_MAP_TYPE_ARRAY;
 	def->key_size = sizeof(int);
 	def->value_size = data_sz;
 	def->max_entries = 1;
@@ -1958,29 +1986,57 @@ bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 	/* failures are fine because of maps like .rodata.str1.1 */
 	(void) map_fill_btf_type_info(obj, map);
 
-	if (map_is_mmapable(obj, map))
-		def->map_flags |= BPF_F_MMAPABLE;
+	data_desc = is_percpu_data ? "percpu " : "";
+	pr_debug("map '%s' (global %sdata): at sec_idx %d, offset %zu, flags %x.\n",
+		 map->name, data_desc, map->sec_idx, map->sec_offset,
+		 def->map_flags);
 
-	pr_debug("map '%s' (global data): at sec_idx %d, offset %zu, flags %x.\n",
-		 map->name, map->sec_idx, map->sec_offset, def->map_flags);
+	if (is_percpu_data) {
+		map->num_cpus = libbpf_num_possible_cpus();
+		if (map->num_cpus < 0) {
+			err = errno;
+			pr_warn("failed to get possible cpus\n");
+			goto free_name;
+		}
 
-	mmap_sz = bpf_map_mmap_sz(map);
-	map->mmaped = mmap(NULL, mmap_sz, PROT_READ | PROT_WRITE,
-			   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (map->mmaped == MAP_FAILED) {
-		err = -errno;
-		map->mmaped = NULL;
-		pr_warn("failed to alloc map '%s' content buffer: %s\n", map->name, errstr(err));
-		zfree(&map->real_name);
-		zfree(&map->name);
-		return err;
+		map->data = calloc(map->num_cpus, roundup(data_sz, 8));
+		if (!map->data) {
+			err = -ENOMEM;
+			pr_warn("failed to alloc percpu map '%s' content buffer: %s\n",
+				map->name, errstr(err));
+			goto free_name;
+		}
+
+		if (data)
+			map_copy_data(map, data);
+		else
+			memset(map->data, 0, map->num_cpus*roundup(data_sz, 8));
+	} else {
+		if (map_is_mmapable(obj, map))
+			def->map_flags |= BPF_F_MMAPABLE;
+
+		mmap_sz = bpf_map_mmap_sz(map);
+		map->mmaped = mmap(NULL, mmap_sz, PROT_READ | PROT_WRITE,
+				   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+		if (map->mmaped == MAP_FAILED) {
+			err = -errno;
+			map->mmaped = NULL;
+			pr_warn("failed to alloc map '%s' content buffer: %s\n",
+				map->name, errstr(err));
+			goto free_name;
+		}
+
+		if (data)
+			memcpy(map->mmaped, data, data_sz);
 	}
-
-	if (data)
-		memcpy(map->mmaped, data, data_sz);
 
 	pr_debug("map %td is \"%s\"\n", map - obj->maps, map->name);
 	return 0;
+
+free_name:
+	zfree(&map->real_name);
+	zfree(&map->name);
+	return err;
 }
 
 static int bpf_object__init_global_data_maps(struct bpf_object *obj)
@@ -5127,16 +5183,21 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 	enum libbpf_map_type map_type = map->libbpf_type;
 	int err, zero = 0;
 	size_t mmap_sz;
+	size_t data_sz;
+	void *data;
 
+	data_sz = map_is_percpu_data(map) ? roundup(map->def.value_size, 8)*map->num_cpus
+					  : map->def.value_size;
+	data = map_is_percpu_data(map) ? map->data : map->mmaped;
 	if (obj->gen_loader) {
 		bpf_gen__map_update_elem(obj->gen_loader, map - obj->maps,
-					 map->mmaped, map->def.value_size);
+					 data, data_sz);
 		if (map_type == LIBBPF_MAP_RODATA || map_type == LIBBPF_MAP_KCONFIG)
 			bpf_gen__map_freeze(obj->gen_loader, map - obj->maps);
 		return 0;
 	}
 
-	err = bpf_map_update_elem(map->fd, &zero, map->mmaped, 0);
+	err = bpf_map_update_elem(map->fd, &zero, data, 0);
 	if (err) {
 		err = -errno;
 		pr_warn("map '%s': failed to set initial contents: %s\n",
@@ -9041,6 +9102,8 @@ static void bpf_map__destroy(struct bpf_map *map)
 	if (map->mmaped && map->mmaped != map->obj->arena_data)
 		munmap(map->mmaped, bpf_map_mmap_sz(map));
 	map->mmaped = NULL;
+	if (map->data)
+		zfree(&map->data);
 
 	if (map->st_ops) {
 		zfree(&map->st_ops->data);
@@ -10348,7 +10411,8 @@ int bpf_map__set_initial_value(struct bpf_map *map,
 	if (map->obj->loaded || map->reused)
 		return libbpf_err(-EBUSY);
 
-	if (!map->mmaped || map->libbpf_type == LIBBPF_MAP_KCONFIG)
+	if ((!map->mmaped && !map->data) ||
+	    map->libbpf_type == LIBBPF_MAP_KCONFIG)
 		return libbpf_err(-EINVAL);
 
 	if (map->def.type == BPF_MAP_TYPE_ARENA)
@@ -10358,7 +10422,7 @@ int bpf_map__set_initial_value(struct bpf_map *map,
 	if (size != actual_sz)
 		return libbpf_err(-EINVAL);
 
-	memcpy(map->mmaped, data, size);
+	map_copy_data(map, data);
 	return 0;
 }
 
@@ -10370,7 +10434,7 @@ void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize)
 		return map->st_ops->data;
 	}
 
-	if (!map->mmaped)
+	if ((!map->mmaped && !map->data))
 		return NULL;
 
 	if (map->def.type == BPF_MAP_TYPE_ARENA)
@@ -10378,7 +10442,7 @@ void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize)
 	else
 		*psize = map->def.value_size;
 
-	return map->mmaped;
+	return map->def.type == BPF_MAP_TYPE_PERCPU_ARRAY ? map->data : map->mmaped;
 }
 
 bool bpf_map__is_internal(const struct bpf_map *map)
