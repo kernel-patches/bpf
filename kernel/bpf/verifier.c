@@ -455,7 +455,7 @@ static bool subprog_is_exc_cb(struct bpf_verifier_env *env, int subprog)
 
 static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
 {
-	return btf_record_has_field(reg_btf_record(reg), BPF_SPIN_LOCK);
+	return btf_record_has_field(reg_btf_record(reg), BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK);
 }
 
 static bool type_is_rdonly_mem(u32 type)
@@ -1147,7 +1147,8 @@ static int release_irq_state(struct bpf_verifier_state *state, int id);
 
 static int mark_stack_slot_irq_flag(struct bpf_verifier_env *env,
 				     struct bpf_kfunc_call_arg_meta *meta,
-				     struct bpf_reg_state *reg, int insn_idx)
+				     struct bpf_reg_state *reg, int insn_idx,
+				     int kfunc_class)
 {
 	struct bpf_func_state *state = func(env, reg);
 	struct bpf_stack_state *slot;
@@ -1169,6 +1170,7 @@ static int mark_stack_slot_irq_flag(struct bpf_verifier_env *env,
 	st->type = PTR_TO_STACK; /* we don't have dedicated reg type */
 	st->live |= REG_LIVE_WRITTEN;
 	st->ref_obj_id = id;
+	st->irq.kfunc_class = kfunc_class;
 
 	for (i = 0; i < BPF_REG_SIZE; i++)
 		slot->slot_type[i] = STACK_IRQ_FLAG;
@@ -1177,7 +1179,8 @@ static int mark_stack_slot_irq_flag(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+				      int kfunc_class)
 {
 	struct bpf_func_state *state = func(env, reg);
 	struct bpf_stack_state *slot;
@@ -1190,6 +1193,15 @@ static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_r
 
 	slot = &state->stack[spi];
 	st = &slot->spilled_ptr;
+
+	if (kfunc_class != IRQ_KFUNC_IGNORE && st->irq.kfunc_class != kfunc_class) {
+		const char *flag_kfunc = st->irq.kfunc_class == IRQ_NATIVE_KFUNC ? "native" : "lock";
+		const char *used_kfunc = kfunc_class == IRQ_NATIVE_KFUNC ? "native" : "lock";
+
+		verbose(env, "irq flag acquired by %s kfuncs cannot be restored with %s kfuncs\n",
+			flag_kfunc, used_kfunc);
+		return -EINVAL;
+	}
 
 	err = release_irq_state(env->cur_state, st->ref_obj_id);
 	WARN_ON_ONCE(err && err != -EACCES);
@@ -1588,7 +1600,7 @@ static struct bpf_reference_state *find_lock_state(struct bpf_verifier_state *st
 	for (i = 0; i < state->acquired_refs; i++) {
 		struct bpf_reference_state *s = &state->refs[i];
 
-		if (s->type != type)
+		if (!(s->type & type))
 			continue;
 
 		if (s->id == id && s->ptr == ptr)
@@ -7995,6 +8007,13 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
 	return err;
 }
 
+enum {
+	PROCESS_SPIN_LOCK = (1 << 0),
+	PROCESS_RES_LOCK  = (1 << 1),
+	PROCESS_LOCK_IRQ  = (1 << 2),
+	PROCESS_LOCK_FAIL = (1 << 3),
+};
+
 /* Implementation details:
  * bpf_map_lookup returns PTR_TO_MAP_VALUE_OR_NULL.
  * bpf_obj_new returns PTR_TO_BTF_ID | MEM_ALLOC | PTR_MAYBE_NULL.
@@ -8017,30 +8036,38 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
  * env->cur_state->active_locks remembers which map value element or allocated
  * object got locked and clears it after bpf_spin_unlock.
  */
-static int process_spin_lock(struct bpf_verifier_env *env, int regno,
-			     bool is_lock)
+static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_verifier_state *cur, int regno, int flags)
 {
+	bool is_lock = flags & PROCESS_SPIN_LOCK, is_res_lock = flags & PROCESS_RES_LOCK;
+	const char *lock_str = is_res_lock ? "bpf_res_spin" : "bpf_spin";
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
-	struct bpf_verifier_state *cur = env->cur_state;
 	bool is_const = tnum_is_const(reg->var_off);
+	bool is_irq = flags & PROCESS_LOCK_IRQ;
 	u64 val = reg->var_off.value;
 	struct bpf_map *map = NULL;
 	struct btf *btf = NULL;
 	struct btf_record *rec;
+	u32 spin_lock_off;
 	int err;
+
+	/* If the spin lock acquisition failed, we don't process the argument. */
+	if (flags & PROCESS_LOCK_FAIL)
+		return 0;
+	/* Success case always operates on current state only. */
+	WARN_ON_ONCE(cur != env->cur_state);
 
 	if (!is_const) {
 		verbose(env,
-			"R%d doesn't have constant offset. bpf_spin_lock has to be at the constant offset\n",
-			regno);
+			"R%d doesn't have constant offset. %s_lock has to be at the constant offset\n",
+			regno, lock_str);
 		return -EINVAL;
 	}
 	if (reg->type == PTR_TO_MAP_VALUE) {
 		map = reg->map_ptr;
 		if (!map->btf) {
 			verbose(env,
-				"map '%s' has to have BTF in order to use bpf_spin_lock\n",
-				map->name);
+				"map '%s' has to have BTF in order to use %s_lock\n",
+				map->name, lock_str);
 			return -EINVAL;
 		}
 	} else {
@@ -8048,36 +8075,53 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 	}
 
 	rec = reg_btf_record(reg);
-	if (!btf_record_has_field(rec, BPF_SPIN_LOCK)) {
-		verbose(env, "%s '%s' has no valid bpf_spin_lock\n", map ? "map" : "local",
-			map ? map->name : "kptr");
+	if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
+		verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
+			map ? map->name : "kptr", lock_str);
 		return -EINVAL;
 	}
-	if (rec->spin_lock_off != val + reg->off) {
-		verbose(env, "off %lld doesn't point to 'struct bpf_spin_lock' that is at %d\n",
-			val + reg->off, rec->spin_lock_off);
+	spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
+	if (spin_lock_off != val + reg->off) {
+		verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
+			val + reg->off, lock_str, spin_lock_off);
 		return -EINVAL;
 	}
 	if (is_lock) {
 		void *ptr;
+		int type;
 
 		if (map)
 			ptr = map;
 		else
 			ptr = btf;
 
-		if (cur->active_locks) {
-			verbose(env,
-				"Locking two bpf_spin_locks are not allowed\n");
-			return -EINVAL;
+		if (!is_res_lock && cur->active_locks) {
+			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, 0, NULL)) {
+				verbose(env,
+					"Locking two bpf_spin_locks are not allowed\n");
+				return -EINVAL;
+			}
+		} else if (is_res_lock) {
+			if (find_lock_state(env->cur_state, REF_TYPE_RES_LOCK, reg->id, ptr)) {
+				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
+				return -EINVAL;
+			}
 		}
-		err = acquire_lock_state(env, env->insn_idx, REF_TYPE_LOCK, reg->id, ptr);
+
+		if (is_res_lock && is_irq)
+			type = REF_TYPE_RES_LOCK_IRQ;
+		else if (is_res_lock)
+			type = REF_TYPE_RES_LOCK;
+		else
+			type = REF_TYPE_LOCK;
+		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr);
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
 			return err;
 		}
 	} else {
 		void *ptr;
+		int type;
 
 		if (map)
 			ptr = map;
@@ -8085,12 +8129,18 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			ptr = btf;
 
 		if (!cur->active_locks) {
-			verbose(env, "bpf_spin_unlock without taking a lock\n");
+			verbose(env, "%s_unlock without taking a lock\n", lock_str);
 			return -EINVAL;
 		}
 
-		if (release_lock_state(env->cur_state, REF_TYPE_LOCK, reg->id, ptr)) {
-			verbose(env, "bpf_spin_unlock of different lock\n");
+		if (is_res_lock && is_irq)
+			type = REF_TYPE_RES_LOCK_IRQ;
+		else if (is_res_lock)
+			type = REF_TYPE_RES_LOCK;
+		else
+			type = REF_TYPE_LOCK;
+		if (release_lock_state(env->cur_state, type, reg->id, ptr)) {
+			verbose(env, "%s_unlock of different lock\n", lock_str);
 			return -EINVAL;
 		}
 
@@ -9338,11 +9388,11 @@ skip_type_check:
 			return -EACCES;
 		}
 		if (meta->func_id == BPF_FUNC_spin_lock) {
-			err = process_spin_lock(env, regno, true);
+			err = process_spin_lock(env, env->cur_state, regno, PROCESS_SPIN_LOCK);
 			if (err)
 				return err;
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
-			err = process_spin_lock(env, regno, false);
+			err = process_spin_lock(env, env->cur_state, regno, 0);
 			if (err)
 				return err;
 		} else {
@@ -11529,6 +11579,7 @@ enum {
 	KF_ARG_RB_ROOT_ID,
 	KF_ARG_RB_NODE_ID,
 	KF_ARG_WORKQUEUE_ID,
+	KF_ARG_RES_SPIN_LOCK_ID,
 };
 
 BTF_ID_LIST(kf_arg_btf_ids)
@@ -11538,6 +11589,7 @@ BTF_ID(struct, bpf_list_node)
 BTF_ID(struct, bpf_rb_root)
 BTF_ID(struct, bpf_rb_node)
 BTF_ID(struct, bpf_wq)
+BTF_ID(struct, bpf_res_spin_lock)
 
 static bool __is_kfunc_ptr_arg_type(const struct btf *btf,
 				    const struct btf_param *arg, int type)
@@ -11584,6 +11636,11 @@ static bool is_kfunc_arg_rbtree_node(const struct btf *btf, const struct btf_par
 static bool is_kfunc_arg_wq(const struct btf *btf, const struct btf_param *arg)
 {
 	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_WORKQUEUE_ID);
+}
+
+static bool is_kfunc_arg_res_spin_lock(const struct btf *btf, const struct btf_param *arg)
+{
+	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_RES_SPIN_LOCK_ID);
 }
 
 static bool is_kfunc_arg_callback(struct bpf_verifier_env *env, const struct btf *btf,
@@ -11657,6 +11714,7 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_MAP,
 	KF_ARG_PTR_TO_WORKQUEUE,
 	KF_ARG_PTR_TO_IRQ_FLAG,
+	KF_ARG_PTR_TO_RES_SPIN_LOCK,
 };
 
 enum special_kfunc_type {
@@ -11693,6 +11751,10 @@ enum special_kfunc_type {
 	KF_bpf_iter_num_new,
 	KF_bpf_iter_num_next,
 	KF_bpf_iter_num_destroy,
+	KF_bpf_res_spin_lock,
+	KF_bpf_res_spin_unlock,
+	KF_bpf_res_spin_lock_irqsave,
+	KF_bpf_res_spin_unlock_irqrestore,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11771,6 +11833,10 @@ BTF_ID(func, bpf_local_irq_restore)
 BTF_ID(func, bpf_iter_num_new)
 BTF_ID(func, bpf_iter_num_next)
 BTF_ID(func, bpf_iter_num_destroy)
+BTF_ID(func, bpf_res_spin_lock)
+BTF_ID(func, bpf_res_spin_unlock)
+BTF_ID(func, bpf_res_spin_lock_irqsave)
+BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -11863,6 +11929,9 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 
 	if (is_kfunc_arg_irq_flag(meta->btf, &args[argno]))
 		return KF_ARG_PTR_TO_IRQ_FLAG;
+
+	if (is_kfunc_arg_res_spin_lock(meta->btf, &args[argno]))
+		return KF_ARG_PTR_TO_RES_SPIN_LOCK;
 
 	if ((base_type(reg->type) == PTR_TO_BTF_ID || reg2btf_ids[base_type(reg->type)])) {
 		if (!btf_type_is_struct(ref_t)) {
@@ -11967,21 +12036,33 @@ static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static int process_irq_flag(struct bpf_verifier_env *env, int regno,
-			     struct bpf_kfunc_call_arg_meta *meta)
+static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate, int regno,
+			    struct bpf_kfunc_call_arg_meta *meta, int flags)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	int err, kfunc_class = IRQ_NATIVE_KFUNC;
 	bool irq_save;
-	int err;
 
-	if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_save]) {
+	if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
+	    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]) {
 		irq_save = true;
-	} else if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_restore]) {
+		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
+			kfunc_class = IRQ_LOCK_KFUNC;
+	} else if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_restore] ||
+		   meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]) {
 		irq_save = false;
+		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
+			kfunc_class = IRQ_LOCK_KFUNC;
 	} else {
 		verbose(env, "verifier internal error: unknown irq flags kfunc\n");
 		return -EFAULT;
 	}
+
+	/* If the spin lock acquisition failed, we don't process the argument. */
+	if (kfunc_class == IRQ_LOCK_KFUNC && (flags & PROCESS_LOCK_FAIL))
+		return 0;
+	/* Success case always operates on current state only. */
+	WARN_ON_ONCE(vstate != env->cur_state);
 
 	if (irq_save) {
 		if (!is_irq_flag_reg_valid_uninit(env, reg)) {
@@ -11993,7 +12074,7 @@ static int process_irq_flag(struct bpf_verifier_env *env, int regno,
 		if (err)
 			return err;
 
-		err = mark_stack_slot_irq_flag(env, meta, reg, env->insn_idx);
+		err = mark_stack_slot_irq_flag(env, meta, reg, env->insn_idx, kfunc_class);
 		if (err)
 			return err;
 	} else {
@@ -12007,7 +12088,7 @@ static int process_irq_flag(struct bpf_verifier_env *env, int regno,
 		if (err)
 			return err;
 
-		err = unmark_stack_slot_irq_flag(env, reg);
+		err = unmark_stack_slot_irq_flag(env, reg, kfunc_class);
 		if (err)
 			return err;
 	}
@@ -12134,7 +12215,8 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 
 	if (!env->cur_state->active_locks)
 		return -EINVAL;
-	s = find_lock_state(env->cur_state, REF_TYPE_LOCK, id, ptr);
+	s = find_lock_state(env->cur_state, REF_TYPE_LOCK | REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_IRQ,
+			    id, ptr);
 	if (!s) {
 		verbose(env, "held lock and object are not in the same allocation\n");
 		return -EINVAL;
@@ -12170,9 +12252,18 @@ static bool is_bpf_graph_api_kfunc(u32 btf_id)
 	       btf_id == special_kfunc_list[KF_bpf_refcount_acquire_impl];
 }
 
+static bool is_bpf_res_spin_lock_kfunc(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
+	       btf_id == special_kfunc_list[KF_bpf_res_spin_unlock] ||
+	       btf_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
+	       btf_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore];
+}
+
 static bool kfunc_spin_allowed(u32 btf_id)
 {
-	return is_bpf_graph_api_kfunc(btf_id) || is_bpf_iter_num_api_kfunc(btf_id);
+	return is_bpf_graph_api_kfunc(btf_id) || is_bpf_iter_num_api_kfunc(btf_id) ||
+	       is_bpf_res_spin_lock_kfunc(btf_id);
 }
 
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
@@ -12431,8 +12522,9 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 	}
 }
 
-static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta,
-			    int insn_idx)
+static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
+			    struct bpf_kfunc_call_arg_meta *meta,
+			    int insn_idx, int arg_flags)
 {
 	const char *func_name = meta->func_name, *ref_tname;
 	const struct btf *btf = meta->btf;
@@ -12453,7 +12545,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	 * verifier sees.
 	 */
 	for (i = 0; i < nargs; i++) {
-		struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[i + 1];
+		struct bpf_reg_state *regs = vstate->frame[vstate->curframe]->regs, *reg = &regs[i + 1];
 		const struct btf_type *t, *ref_t, *resolve_ret;
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
 		u32 regno = i + 1, ref_id, type_size;
@@ -12604,6 +12696,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
 		case KF_ARG_PTR_TO_IRQ_FLAG:
+		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
 			break;
 		default:
 			WARN_ON_ONCE(1);
@@ -12898,10 +12991,32 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				verbose(env, "arg#%d doesn't point to an irq flag on stack\n", i);
 				return -EINVAL;
 			}
-			ret = process_irq_flag(env, regno, meta);
+			ret = process_irq_flag(env, vstate, regno, meta, arg_flags);
 			if (ret < 0)
 				return ret;
 			break;
+		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
+		{
+			int flags = PROCESS_RES_LOCK;
+
+			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
+				verbose(env, "arg#%d doesn't point to map value or allocated object\n", i);
+				return -EINVAL;
+			}
+
+			if (!is_bpf_res_spin_lock_kfunc(meta->func_id))
+				return -EFAULT;
+			if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
+			    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
+				flags |= PROCESS_SPIN_LOCK;
+			if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
+			    meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
+				flags |= PROCESS_LOCK_IRQ;
+			ret = process_spin_lock(env, vstate, regno, flags | arg_flags);
+			if (ret < 0)
+				return ret;
+			break;
+		}
 		}
 	}
 
@@ -12958,12 +13073,11 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
 
-static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
-			    int *insn_idx_p)
+static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
+			    struct bpf_insn *insn, int *insn_idx_p, int flags)
 {
 	bool sleepable, rcu_lock, rcu_unlock, preempt_disable, preempt_enable;
 	u32 i, nargs, ptr_type_id, release_ref_obj_id;
-	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
 	const struct btf_type *t, *ptr_type;
 	struct bpf_kfunc_call_arg_meta meta;
@@ -12971,7 +13085,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	int err, insn_idx = *insn_idx_p;
 	const struct btf_param *args;
 	const struct btf_type *ret_t;
+	struct bpf_reg_state *regs;
 	struct btf *desc_btf;
+
+	regs = vstate->frame[vstate->curframe]->regs;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
@@ -12999,7 +13116,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	/* Check the arguments */
-	err = check_kfunc_args(env, &meta, insn_idx);
+	err = check_kfunc_args(env, vstate, &meta, insn_idx, flags);
 	if (err < 0)
 		return err;
 
@@ -13157,6 +13274,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (btf_type_is_scalar(t)) {
 		mark_reg_unknown(env, regs, BPF_REG_0);
+		if (meta.btf == btf_vmlinux && (meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
+		    meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])) {
+			if (flags & PROCESS_LOCK_FAIL)
+				__mark_reg_s32_range(env, regs, BPF_REG_0, -MAX_ERRNO, -1);
+			else
+				__mark_reg_const_zero(env, &regs[BPF_REG_0]);
+		}
 		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
 	} else if (btf_type_is_ptr(t)) {
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
@@ -18040,7 +18164,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		case STACK_IRQ_FLAG:
 			old_reg = &old->stack[spi].spilled_ptr;
 			cur_reg = &cur->stack[spi].spilled_ptr;
-			if (!check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
+			if (!check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap) ||
+			    old_reg->irq.kfunc_class != cur_reg->irq.kfunc_class)
 				return false;
 			break;
 		case STACK_MISC:
@@ -18084,6 +18209,8 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 		case REF_TYPE_IRQ:
 			break;
 		case REF_TYPE_LOCK:
+		case REF_TYPE_RES_LOCK:
+		case REF_TYPE_RES_LOCK_IRQ:
 			if (old->refs[i].ptr != cur->refs[i].ptr)
 				return false;
 			break;
@@ -19074,7 +19201,19 @@ static int do_check(struct bpf_verifier_env *env)
 				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-					err = check_kfunc_call(env, insn, &env->insn_idx);
+					if (!insn->off &&
+					    (insn->imm == special_kfunc_list[KF_bpf_res_spin_lock] ||
+					     insn->imm == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])) {
+						struct bpf_verifier_state *branch;
+
+						branch = push_stack(env, env->insn_idx + 1, env->prev_insn_idx, false);
+						if (!branch) {
+							verbose(env, "failed to push state for failed lock acquisition\n");
+							return -ENOMEM;
+						}
+						err = check_kfunc_call(env, branch, insn, &env->insn_idx, PROCESS_LOCK_FAIL);
+					}
+					err = err ?: check_kfunc_call(env, env->cur_state, insn, &env->insn_idx, 0);
 					if (!err && is_bpf_throw_kfunc(insn)) {
 						exception_exit = true;
 						goto process_bpf_exit_full;
@@ -19417,7 +19556,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		}
 	}
 
-	if (btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
+	if (btf_record_has_field(map->record, BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK)) {
 		if (prog_type == BPF_PROG_TYPE_SOCKET_FILTER) {
 			verbose(env, "socket filter progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
