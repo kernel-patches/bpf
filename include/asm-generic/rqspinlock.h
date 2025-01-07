@@ -14,6 +14,10 @@
 #include <linux/percpu.h>
 #include <asm/qspinlock.h>
 
+struct bpf_res_spin_lock {
+	u32 val;
+};
+
 struct qspinlock;
 typedef struct qspinlock rqspinlock_t;
 
