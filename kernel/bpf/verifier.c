@@ -8281,7 +8281,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx, clone_ref_obj_id);
 	} else /* MEM_RDONLY and None case from above */ {
 		/* For the reg->type == PTR_TO_STACK case, bpf_dynptr is never const */
-		if (reg->type == CONST_PTR_TO_DYNPTR && !(arg_type & MEM_RDONLY)) {
+		if (reg->type == CONST_PTR_TO_DYNPTR && !type_is_rdonly_mem(arg_type)) {
 			verbose(env, "cannot pass pointer to const bpf_dynptr, the helper mutates it\n");
 			return -EINVAL;
 		}
@@ -8840,7 +8840,7 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	 *
 	 * Therefore we fold these flags depending on the arg_type before comparison.
 	 */
-	if (arg_type & MEM_RDONLY)
+	if (type_is_rdonly_mem(arg_type))
 		type &= ~MEM_RDONLY;
 	if (arg_type & PTR_MAYBE_NULL)
 		type &= ~PTR_MAYBE_NULL;
@@ -8873,7 +8873,7 @@ found:
 		return 0;
 
 	if (compatible == &mem_types) {
-		if (!(arg_type & MEM_RDONLY)) {
+		if (!type_is_rdonly_mem(arg_type)) {
 			verbose(env,
 				"%s() may write into memory pointed by R%d type=%s\n",
 				func_id_name(meta->func_id),
