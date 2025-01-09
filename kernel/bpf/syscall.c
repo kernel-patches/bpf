@@ -6105,6 +6105,245 @@ skip_mods_and_typedefs(const struct btf *btf, u32 id, u32 *res_id)
 	return t;
 }
 
+static void free_bpf_obj(struct bpf_obj *obj)
+{
+	int i;
+
+	if (!obj)
+		return;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		kfree(obj->progs[i].insn);
+		kfree(obj->progs[i].reloc_desc);
+	}
+
+	kfree(obj->progs);
+	vfree(obj->hdr);
+
+	btf_put(obj->btf);
+	btf_put(obj->btf_vmlinux);
+	btf_ext__free(obj->btf_ext);
+
+	for (i = 0; i < obj->btf_modules_cnt; i++)
+		btf_put(obj->btf_modules[i].btf);
+
+	kfree(obj->btf_modules);
+	kfree(obj->externs);
+	kfree(obj->maps);
+}
+
+#define BPF_LOADER_INODE_NAME "bpf-loader"
+
+static const struct inode_operations bpf_loader_iops = { };
+
+static int bpf_loader_release(struct inode *inode, struct file *filp)
+{
+	struct bpf_obj *obj = filp->private_data;
+
+	free_bpf_obj(obj);
+	return 0;
+}
+
+static void bpf_loader_show_fdinfo(struct seq_file *m, struct file *filp)
+{
+	int i;
+	struct bpf_obj *obj = filp->private_data;
+
+	for (i = 0; i < obj->nr_programs; i++)
+		seq_printf(m, "program: %s\n", obj->progs[i].name);
+}
+
+static const struct file_operations bpf_loader_fops = {
+	.release	= bpf_loader_release,
+	.show_fdinfo	= bpf_loader_show_fdinfo,
+};
+
+static int loader_create(unsigned int bpffs_fd)
+{
+	struct inode *inode;
+	struct bpf_obj *obj = NULL;
+	struct file *file;
+	struct path path;
+	struct fd f;
+	umode_t mode;
+	int err, fd;
+
+	f = fdget(bpffs_fd);
+	if (!fd_file(f))
+		return -EBADF;
+
+	path = fd_file(f)->f_path;
+	path_get(&path);
+	fdput(f);
+
+	if (path.dentry != path.mnt->mnt_sb->s_root) {
+		err = -EINVAL;
+		goto out_path;
+	}
+	if (path.mnt->mnt_sb->s_op != &bpf_super_ops) {
+		err = -EINVAL;
+		goto out_path;
+	}
+	err = path_permission(&path, MAY_ACCESS);
+	if (err)
+		goto out_path;
+
+	mode = S_IFREG | (0600 & ~current_umask());
+	inode = bpf_get_inode(path.mnt->mnt_sb, NULL, mode);
+	if (IS_ERR(inode)) {
+		err = PTR_ERR(inode);
+		goto out_path;
+	}
+
+	inode->i_op = &bpf_loader_iops;
+	inode->i_fop = &bpf_loader_fops;
+	clear_nlink(inode);
+
+	file = alloc_file_pseudo(inode, path.mnt, BPF_LOADER_INODE_NAME, O_RDWR, &bpf_loader_fops);
+	if (IS_ERR(file)) {
+		err = PTR_ERR(file);
+		goto out_inode;
+	}
+
+	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+	if (!obj) {
+		err = -ENOMEM;
+		goto out_inode;
+	}
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0) {
+		err = fd;
+		kfree(obj);
+		goto out_inode;
+	}
+
+	file->private_data = obj;
+	fd_install(fd, file);
+	path_put(&path);
+	return fd;
+
+out_inode:
+	iput(inode);
+	fput(file);
+out_path:
+	path_put(&path);
+	return err;
+}
+
+static int load_fd(union bpf_attr *attr)
+{
+	void *buf = NULL;
+	int len;
+	int i;
+	int obj_f;
+	struct fd obj_fd;
+	struct bpf_module_obj *modules;
+	struct bpf_obj *obj;
+	int err;
+
+	struct fd f;
+	struct fd bpffs_fd;
+
+	f = fdget(attr->load_fd.obj_fd);
+	if (!fd_file(f)) {
+		err = -EBADF;
+		goto out;
+	}
+
+	bpffs_fd = fdget(attr->load_fd.bpffs_fd);
+	if (!fd_file(bpffs_fd)) {
+		fdput(f);
+		err = -EBADF;
+		goto out;
+	}
+
+	obj_f = loader_create(attr->load_fd.bpffs_fd);
+	if (obj_f < 0) {
+		err = obj_f;
+		fdput(f);
+		fdput(bpffs_fd);
+		goto out;
+	}
+
+	obj_fd = fdget(obj_f);
+	obj = fd_file(obj_fd)->private_data;
+
+	len = kernel_read_file(fd_file(f), 0, &buf, INT_MAX, NULL, READING_EBPF);
+	if (len < 0) {
+		fdput(obj_fd);
+		err = len;
+		goto out;
+	}
+
+	obj->hdr = buf;
+	obj->len = len;
+	obj->nr_maps = attr->load_fd.map_cnt;
+	obj->maps = kmalloc_array(attr->load_fd.map_cnt, sizeof(struct bpf_map_obj), GFP_KERNEL);
+
+	if (!obj->maps) {
+		err = -ENOMEM;
+		goto free;
+	}
+
+	if (attr->load_fd.map_cnt) {
+		if (copy_from_user(obj->maps, (const void *)attr->load_fd.maps,
+				   sizeof(struct bpf_map_obj) * attr->load_fd.map_cnt) != 0) {
+			err = -EFAULT;
+			goto free;
+		}
+	}
+
+	obj->kconfig_map_idx = attr->load_fd.kconfig_map_idx;
+	obj->arena_map_idx = attr->load_fd.arena_map_idx;
+	obj->btf_vmlinux = bpf_get_btf_vmlinux();
+	modules = kmalloc_array(attr->load_fd.module_cnt,
+				sizeof(struct bpf_module_obj), GFP_KERNEL);
+
+	if (!modules) {
+		err = -ENOMEM;
+		goto free;
+	}
+
+
+	if (attr->load_fd.module_cnt) {
+		if (copy_from_user(modules, (const void *)attr->load_fd.modules,
+				   sizeof(struct bpf_module_obj) * attr->load_fd.module_cnt) != 0) {
+			err = -EFAULT;
+			goto free;
+		}
+	}
+
+	obj->btf_modules_cnt = attr->load_fd.module_cnt;
+	obj->btf_modules = kmalloc_array(attr->load_fd.module_cnt,
+					 sizeof(struct bpf_module_btf), GFP_KERNEL);
+
+	if (!obj->btf_modules) {
+		err = -ENOMEM;
+		goto free;
+	}
+
+	for (i = 0; i < obj->btf_modules_cnt; i++) {
+		obj->btf_modules[i].fd = modules[i].fd;
+		obj->btf_modules[i].id = modules[i].id;
+		obj->btf_modules[i].fd_array_idx = modules[i].fd_array_idx;
+		obj->btf_modules[i].btf = btf_get_by_fd(obj->btf_modules[i].fd);
+		if (IS_ERR(obj->btf_modules[i].btf)) {
+			err = PTR_ERR(obj->btf_modules[i].btf);
+			kfree(modules);
+			goto free;
+		}
+	}
+	kfree(modules);
+
+	return obj_f;
+free:
+	free_bpf_obj(obj);
+	fd_file(obj_fd)->private_data = NULL;
+out:
+	return err;
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -6240,6 +6479,9 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_TOKEN_CREATE:
 		err = token_create(&attr);
+		break;
+	case BPF_LOAD_FD:
+		err = load_fd(&attr);
 		break;
 	default:
 		err = -EINVAL;
