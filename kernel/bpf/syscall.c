@@ -2741,9 +2741,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
+	struct bpf_obj *obj = NULL;
+	struct bpf_prog_obj *prog_obj = NULL;
 	bool bpf_cap;
-	int err;
+	int err, i;
 	char license[128];
+	char symbol_name[32];
+	struct fd loader_fd;
 
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
@@ -2856,8 +2860,40 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 		goto put_token;
 	}
 
+	if (attr->prog_loader_fd) {
+		loader_fd = fdget(attr->prog_loader_fd);
+		if (!fd_file(loader_fd)) {
+			err = -EBADF;
+			goto put_token;
+		}
+
+		obj = fd_file(loader_fd)->private_data;
+
+		/* copy eBPF program symbol name from user space */
+		if (strncpy_from_bpfptr(symbol_name,
+					make_bpfptr(attr->symbol_loader_name, uattr.is_kernel),
+					sizeof(symbol_name) - 1) < 0)
+			goto put_token;
+
+		symbol_name[sizeof(symbol_name) - 1] = 0;
+
+		for (i = 0; i < obj->nr_programs; i++) {
+			if (strcmp(symbol_name, obj->progs[i].name) == 0) {
+				prog_obj = &obj->progs[i];
+				break;
+			}
+		}
+
+		if (!prog_obj)
+			goto put_token;
+	}
+
 	/* plain bpf_prog allocation */
-	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
+	if (prog_obj)
+		prog = bpf_prog_alloc(bpf_prog_size(prog_obj->insn_cnt), GFP_USER);
+	else
+		prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
+
 	if (!prog) {
 		if (dst_prog)
 			bpf_prog_put(dst_prog);
@@ -2880,13 +2916,19 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	token = NULL;
 
 	prog->aux->user = get_current_user();
-	prog->len = attr->insn_cnt;
 
 	err = -EFAULT;
-	if (copy_from_bpfptr(prog->insns,
-			     make_bpfptr(attr->insns, uattr.is_kernel),
-			     bpf_prog_insn_size(prog)) != 0)
-		goto free_prog;
+	if (prog_obj) {
+		prog->len = prog_obj->insn_cnt;
+		memcpy(prog->insnsi, prog_obj->insn, prog_obj->insn_cnt * sizeof(struct bpf_insn));
+	} else {
+		prog->len = attr->insn_cnt;
+		if (copy_from_bpfptr(prog->insns,
+				     make_bpfptr(attr->insns, uattr.is_kernel),
+				     bpf_prog_insn_size(prog)) != 0)
+			goto free_prog;
+	}
+
 	/* copy eBPF program license from user space */
 	if (strncpy_from_bpfptr(license,
 				make_bpfptr(attr->license, uattr.is_kernel),
