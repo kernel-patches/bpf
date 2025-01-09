@@ -5995,6 +5995,116 @@ done:
 	return btf_ext;
 }
 
+static int elf_sec_idx_by_name(struct bpf_obj *obj, const char *name)
+{
+	int i;
+	Elf_Shdr *shdr;
+
+	for (i = 1; i < obj->hdr->e_shnum; i++) {
+		shdr = &obj->sechdrs[i];
+		if (strcmp(name, obj->secstrings + shdr->sh_name) == 0)
+			return i;
+	}
+	return -ENOENT;
+}
+
+static const struct btf_var *btf_type_var(const struct btf_type *t)
+{
+	return (const struct btf_var *)(t + 1);
+}
+
+static int find_extern_btf_id(const struct btf *btf, const char *ext_name)
+{
+	const struct btf_type *t;
+	const char *tname;
+	int i, n;
+
+	if (!btf)
+		return -ESRCH;
+
+	n = btf_type_cnt(btf);
+
+	for (i = 1; i < n; i++) {
+		t = btf_type_by_id(btf, i);
+
+		if (!btf_type_is_var(t) && !btf_type_is_func(t))
+			continue;
+
+		tname = btf_str_by_offset(btf, t->name_off);
+		if (strcmp(tname, ext_name))
+			continue;
+
+		if (btf_type_is_var(t) &&
+		    btf_type_var(t)->linkage != BTF_VAR_GLOBAL_EXTERN)
+			return -EINVAL;
+
+		if (btf_type_is_func(t) && btf_func_linkage(t) != BTF_FUNC_EXTERN)
+			return -EINVAL;
+
+		return i;
+	}
+
+	return -ENOENT;
+}
+
+static inline struct btf_var_secinfo *
+btf_var_secinfos(const struct btf_type *t)
+{
+	return (struct btf_var_secinfo *)(t + 1);
+}
+
+static int find_extern_sec_btf_id(struct btf *btf, int ext_btf_id)
+{
+	const struct btf_var_secinfo *vs;
+	const struct btf_type *t;
+	int i, j, n;
+
+	if (!btf)
+		return -ESRCH;
+
+	n = btf_type_cnt(btf);
+	for (i = 1; i < n; i++) {
+		t = btf_type_by_id(btf, i);
+
+		if (!btf_type_is_datasec(t))
+			continue;
+
+		vs = btf_var_secinfos(t);
+		for (j = 0; j < btf_vlen(t); j++, vs++) {
+			if (vs->type == ext_btf_id)
+				return i;
+		}
+	}
+
+	return -ENOENT;
+}
+
+static bool sym_is_extern(const Elf64_Sym *sym)
+{
+	int bind = ELF64_ST_BIND(sym->st_info);
+	/* externs are symbols w/ type=NOTYPE, bind=GLOBAL|WEAK, section=UND */
+	return sym->st_shndx == SHN_UNDEF &&
+	       (bind == STB_GLOBAL || bind == STB_WEAK) &&
+	       ELF64_ST_TYPE(sym->st_info) == STT_NOTYPE;
+}
+
+static const struct btf_type *
+skip_mods_and_typedefs(const struct btf *btf, u32 id, u32 *res_id)
+{
+	const struct btf_type *t = btf_type_by_id(btf, id);
+
+	if (res_id)
+		*res_id = id;
+
+	while (btf_type_is_mod(t) || btf_type_is_typedef(t)) {
+		if (res_id)
+			*res_id = t->type;
+		t = btf_type_by_id(btf, t->type);
+	}
+
+	return t;
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
