@@ -6105,6 +6105,177 @@ skip_mods_and_typedefs(const struct btf *btf, u32 id, u32 *res_id)
 	return t;
 }
 
+static int init_btf(struct bpf_obj *obj, unsigned int btf_idx, unsigned int btf_ext_idx)
+{
+	Elf_Shdr *shdr =  &obj->sechdrs[btf_idx];
+	void *buffer = (void *)obj->hdr + shdr->sh_offset;
+	struct btf_ext_info *ext_segs[3];
+	int seg_num, sec_num;
+	int idx;
+	struct btf_ext_info *seg;
+	const struct btf_ext_info_sec *sec;
+	const char *sec_name;
+	struct btf *btf = btf_init_mem(buffer, shdr->sh_size, 0, 0, 0);
+
+	obj->btf = btf;
+	shdr = &obj->sechdrs[btf_ext_idx];
+	buffer = (void *)obj->hdr + shdr->sh_offset;
+	obj->btf_ext = btf_ext__new(buffer, shdr->sh_size);
+	obj->index.btf = btf_idx;
+	obj->index.btf_ext = btf_ext_idx;
+
+	/* setup .BTF.ext to ELF section mapping */
+	ext_segs[0] = &obj->btf_ext->func_info;
+	ext_segs[1] = &obj->btf_ext->line_info;
+	ext_segs[2] = &obj->btf_ext->core_relo_info;
+	for (seg_num = 0; seg_num < ARRAY_SIZE(ext_segs); seg_num++) {
+		seg = ext_segs[seg_num];
+
+		if (seg->sec_cnt == 0)
+			continue;
+
+		seg->sec_idxs = kcalloc(seg->sec_cnt, sizeof(*seg->sec_idxs), GFP_KERNEL);
+		if (!seg->sec_idxs)
+			return -ENOMEM;
+
+		sec_num = 0;
+		for_each_btf_ext_sec(seg, sec) {
+			/* preventively increment index to avoid doing
+			 * this before every continue below
+			 */
+			sec_num++;
+
+			sec_name = btf_str_by_offset(obj->btf, sec->sec_name_off);
+			if (str_is_empty(sec_name))
+				continue;
+
+			idx = elf_sec_idx_by_name(obj, sec_name);
+			if (idx < 0)
+				continue;
+			seg->sec_idxs[sec_num - 1] = idx;
+		}
+	}
+	return 0;
+}
+
+static int find_progs(struct bpf_obj *obj, unsigned int sec_idx)
+{
+	unsigned int i;
+	unsigned int prog_sz;
+	unsigned int sec_off;
+	Elf_Shdr *symsec = &obj->sechdrs[obj->index.sym];
+	Elf_Sym *sym = (void *)obj->hdr + symsec->sh_offset;
+	Elf_Shdr *shdr =  &obj->sechdrs[sec_idx];
+	struct bpf_prog_obj *progs;
+	int err;
+	struct bpf_insn *insns = NULL;
+	void *buffer;
+	unsigned int insn_cnt, ndx;
+	char *name;
+
+	for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
+		name = obj->strtab + sym[i].st_name;
+
+		if (sym[i].st_shndx != sec_idx)
+			continue;
+		if (ELF64_ST_TYPE(sym[i].st_info) != STT_FUNC)
+			continue;
+
+		prog_sz = sym[i].st_size;
+		sec_off = sym[i].st_value;
+		buffer = (void *)obj->hdr + shdr->sh_offset + sec_off;
+
+		insns = kmalloc(prog_sz, GFP_KERNEL);
+		if (!insns)
+			return -ENOMEM;
+
+		memcpy(insns, buffer, prog_sz);
+		insn_cnt = prog_sz / sizeof(struct bpf_insn);
+
+		progs = krealloc_array(obj->progs, obj->nr_programs + 1,
+				       sizeof(struct bpf_prog_obj), GFP_KERNEL);
+		if (!progs) {
+			err = -ENOMEM;
+			goto free_insns;
+		}
+
+		obj->progs = progs;
+		ndx = obj->nr_programs;
+		obj->progs[ndx].insn = insns;
+		obj->progs[ndx].insn_cnt = insn_cnt;
+		obj->progs[ndx].sec_idx = sec_idx;
+		obj->progs[ndx].sec_insn_off = sec_off / sizeof(struct bpf_insn);
+		obj->progs[ndx].sec_insn_cnt = insn_cnt;
+		obj->progs[ndx].name = name;
+		obj->progs[ndx].exception_cb_idx = -1;
+		obj->nr_programs++;
+
+	}
+	return 0;
+
+free_insns:
+	kfree(insns);
+	return err;
+}
+
+static int elf_collect(struct bpf_obj *obj)
+{
+	unsigned int i;
+	Elf_Shdr *shdr, *strhdr;
+	unsigned int sym_idx;
+	unsigned int sec_idx = 0;
+	unsigned int btf_idx = 0, btf_ext_idx = 0;
+	int err = 0;
+
+	obj->sechdrs = (void *)obj->hdr + obj->hdr->e_shoff;
+	strhdr = &obj->sechdrs[obj->hdr->e_shstrndx];
+	obj->secstrings = (void *)obj->hdr + strhdr->sh_offset;
+
+	for (i = 1; i < obj->hdr->e_shnum; i++) {
+		shdr = &obj->sechdrs[i];
+		switch (shdr->sh_type) {
+		case SHT_NULL:
+		case SHT_NOBITS:
+			continue;
+		case SHT_SYMTAB:
+			sym_idx = i;
+			fallthrough;
+		default:
+			break;
+		}
+	}
+
+	obj->index.sym = sym_idx;
+	shdr = &obj->sechdrs[sym_idx];
+	obj->index.str = shdr->sh_link;
+	obj->strtab = (char *)obj->hdr + obj->sechdrs[obj->index.str].sh_offset;
+
+	for (i = 1; i < obj->hdr->e_shnum; i++) {
+		shdr = &obj->sechdrs[i];
+		sec_idx = i;
+		if (strcmp(".text", obj->secstrings + shdr->sh_name) == 0)
+			obj->index.text = sec_idx;
+
+		if (shdr->sh_type == SHT_PROGBITS && shdr->sh_size > 0) {
+			err = find_progs(obj, sec_idx);
+			if (err)
+				return err;
+		}
+
+		if (strcmp(".BTF", obj->secstrings + shdr->sh_name) == 0)
+			btf_idx = i;
+
+		if (strcmp(".BTF.ext", obj->secstrings + shdr->sh_name) == 0)
+			btf_ext_idx = i;
+
+		if (strcmp(".addr_space.1", obj->secstrings + shdr->sh_name) == 0)
+			obj->index.arena = sec_idx;
+	}
+
+	err = init_btf(obj, btf_idx, btf_ext_idx);
+	return err;
+}
+
 static void free_bpf_obj(struct bpf_obj *obj)
 {
 	int i;
@@ -6335,6 +6506,10 @@ static int load_fd(union bpf_attr *attr)
 		}
 	}
 	kfree(modules);
+
+	err = elf_collect(obj);
+	if (err < 0)
+		goto free;
 
 	return obj_f;
 free:
