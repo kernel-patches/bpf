@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
+ * Copyright (c) 2018 Facebook
  */
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
@@ -5746,6 +5747,252 @@ static int token_create(union bpf_attr *attr)
 		return -EINVAL;
 
 	return bpf_token_create(attr);
+}
+
+struct btf_ext_sec_setup_param {
+	__u32 off;
+	__u32 len;
+	__u32 min_rec_size;
+	struct btf_ext_info *ext_info;
+	const char *desc;
+};
+
+struct bpf_func_info_min {
+	__u32   insn_off;
+	__u32   type_id;
+};
+
+/* The minimum bpf_line_info checked by the loader */
+struct bpf_line_info_min {
+	__u32	insn_off;
+	__u32	file_name_off;
+	__u32	line_off;
+	__u32	line_col;
+};
+
+static int btf_ext_setup_info(struct btf_ext *btf_ext,
+			      struct btf_ext_sec_setup_param *ext_sec)
+{
+	const struct btf_ext_info_sec *sinfo;
+	struct btf_ext_info *ext_info;
+	__u32 info_left, record_size;
+	size_t sec_cnt = 0;
+	/* The start of the info sec (including the __u32 record_size). */
+	void *info;
+
+	if (ext_sec->len == 0)
+		return 0;
+
+	if (ext_sec->off & 0x03) {
+		pr_debug(".BTF.ext %s section is not aligned to 4 bytes\n",
+		     ext_sec->desc);
+		return -EINVAL;
+	}
+
+	info = btf_ext->data + btf_ext->hdr->hdr_len + ext_sec->off;
+	info_left = ext_sec->len;
+
+	if (btf_ext->data + btf_ext->data_size < info + ext_sec->len) {
+		pr_debug("%s section (off:%u len:%u) is beyond the end of the ELF section .BTF.ext\n",
+			 ext_sec->desc, ext_sec->off, ext_sec->len);
+		return -EINVAL;
+	}
+
+	/* At least a record size */
+	if (info_left < sizeof(__u32)) {
+		pr_debug(".BTF.ext %s record size not found\n", ext_sec->desc);
+		return -EINVAL;
+	}
+
+	/* The record size needs to meet the minimum standard */
+	record_size = *(__u32 *)info;
+	if (record_size < ext_sec->min_rec_size ||
+	    record_size & 0x03) {
+		pr_debug("%s section in .BTF.ext has invalid record size %u\n",
+			 ext_sec->desc, record_size);
+		return -EINVAL;
+	}
+
+	sinfo = info + sizeof(__u32);
+	info_left -= sizeof(__u32);
+
+	/* If no records, return failure now so .BTF.ext won't be used. */
+	if (!info_left) {
+		pr_debug("%s section in .BTF.ext has no records", ext_sec->desc);
+		return -EINVAL;
+	}
+
+	while (info_left) {
+		unsigned int sec_hdrlen = sizeof(struct btf_ext_info_sec);
+		__u64 total_record_size;
+		__u32 num_records;
+
+		if (info_left < sec_hdrlen) {
+			pr_debug("%s section header is not found in .BTF.ext\n",
+			     ext_sec->desc);
+			return -EINVAL;
+		}
+
+		num_records = sinfo->num_info;
+		if (num_records == 0) {
+			pr_debug("%s section has incorrect num_records in .BTF.ext\n",
+			     ext_sec->desc);
+			return -EINVAL;
+		}
+
+		total_record_size = sec_hdrlen + (__u64)num_records * record_size;
+		if (info_left < total_record_size) {
+			pr_debug("%s section has incorrect num_records in .BTF.ext\n",
+			     ext_sec->desc);
+			return -EINVAL;
+		}
+
+		info_left -= total_record_size;
+		sinfo = (void *)sinfo + total_record_size;
+		sec_cnt++;
+	}
+
+	ext_info = ext_sec->ext_info;
+	ext_info->len = ext_sec->len - sizeof(__u32);
+	ext_info->rec_size = record_size;
+	ext_info->info = info + sizeof(__u32);
+	ext_info->sec_cnt = sec_cnt;
+
+	return 0;
+}
+
+static int btf_ext_setup_func_info(struct btf_ext *btf_ext)
+{
+	struct btf_ext_sec_setup_param param = {
+		.off = btf_ext->hdr->func_info_off,
+		.len = btf_ext->hdr->func_info_len,
+		.min_rec_size = sizeof(struct bpf_func_info_min),
+		.ext_info = &btf_ext->func_info,
+		.desc = "func_info"
+	};
+
+	return btf_ext_setup_info(btf_ext, &param);
+}
+
+static int btf_ext_setup_line_info(struct btf_ext *btf_ext)
+{
+	struct btf_ext_sec_setup_param param = {
+		.off = btf_ext->hdr->line_info_off,
+		.len = btf_ext->hdr->line_info_len,
+		.min_rec_size = sizeof(struct bpf_line_info_min),
+		.ext_info = &btf_ext->line_info,
+		.desc = "line_info",
+	};
+
+	return btf_ext_setup_info(btf_ext, &param);
+}
+
+static int btf_ext_setup_core_relos(struct btf_ext *btf_ext)
+{
+	struct btf_ext_sec_setup_param param = {
+		.off = btf_ext->hdr->core_relo_off,
+		.len = btf_ext->hdr->core_relo_len,
+		.min_rec_size = sizeof(struct bpf_core_relo),
+		.ext_info = &btf_ext->core_relo_info,
+		.desc = "core_relo",
+	};
+
+	return btf_ext_setup_info(btf_ext, &param);
+}
+
+static int btf_ext_parse_hdr(__u8 *data, __u32 data_size)
+{
+
+	const struct btf_ext_header *hdr = (struct btf_ext_header *)data;
+
+	if (data_size < offsetofend(struct btf_ext_header, hdr_len) ||
+	    data_size < hdr->hdr_len) {
+		pr_debug("BTF.ext header not found");
+		return -EINVAL;
+	}
+
+	if (hdr->magic != BTF_MAGIC) {
+		pr_debug("Invalid BTF.ext magic:%x\n", hdr->magic);
+		return -EINVAL;
+	}
+
+	if (hdr->version != BTF_VERSION) {
+		pr_debug("Unsupported BTF.ext version:%u\n", hdr->version);
+		return -EOPNOTSUPP;
+	}
+
+	if (hdr->flags) {
+		pr_debug("Unsupported BTF.ext flags:%x\n", hdr->flags);
+		return -EOPNOTSUPP;
+	}
+
+	if (data_size == hdr->hdr_len) {
+		pr_debug("BTF.ext has no data\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void btf_ext__free(struct btf_ext *btf_ext)
+{
+	if (IS_ERR_OR_NULL(btf_ext))
+		return;
+	kfree(btf_ext->func_info.sec_idxs);
+	kfree(btf_ext->line_info.sec_idxs);
+	kfree(btf_ext->core_relo_info.sec_idxs);
+	kfree(btf_ext->data);
+	kfree(btf_ext);
+}
+
+static struct btf_ext *btf_ext__new(const __u8 *data, __u32 size)
+{
+	struct btf_ext *btf_ext;
+	int err;
+
+	btf_ext = kzalloc(sizeof(struct btf_ext), GFP_KERNEL);
+	if (!btf_ext)
+		return ERR_PTR(-ENOMEM);
+
+	btf_ext->data_size = size;
+	btf_ext->data = kmalloc(size, GFP_KERNEL);
+	if (!btf_ext->data) {
+		err = -ENOMEM;
+		goto done;
+	}
+	memcpy(btf_ext->data, data, size);
+
+	err = btf_ext_parse_hdr(btf_ext->data, size);
+	if (err)
+		goto done;
+
+	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, line_info_len)) {
+		err = -EINVAL;
+		goto done;
+	}
+
+	err = btf_ext_setup_func_info(btf_ext);
+	if (err)
+		goto done;
+
+	err = btf_ext_setup_line_info(btf_ext);
+	if (err)
+		goto done;
+
+	if (btf_ext->hdr->hdr_len < offsetofend(struct btf_ext_header, core_relo_len))
+		goto done; /* skip core relos parsing */
+
+	err = btf_ext_setup_core_relos(btf_ext);
+	if (err)
+		goto done;
+
+done:
+	if (err) {
+		btf_ext__free(btf_ext);
+		return ERR_PTR(err);
+	}
+
+	return btf_ext;
 }
 
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
