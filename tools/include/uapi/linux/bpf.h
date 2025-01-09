@@ -958,6 +958,7 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TOKEN_CREATE,
+	BPF_LOAD_FD,
 	__MAX_BPF_CMD,
 };
 
@@ -1573,6 +1574,8 @@ union bpf_attr {
 		 * If provided, prog_flags should have BPF_F_TOKEN_FD flag set.
 		 */
 		__s32		prog_token_fd;
+		__s32           prog_loader_fd;
+		__aligned_u64   symbol_loader_name;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -1826,6 +1829,17 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
+
+	struct { /* struct used by BPF_PROG_LOAD command */
+		__u32		bpffs_fd;
+		__u32		obj_fd;
+		__aligned_u64   maps;
+		__u32           map_cnt;
+		__s32           kconfig_map_idx;
+		__s32           arena_map_idx;
+		__aligned_u64   modules;
+		__u32           module_cnt;
+	} load_fd;
 
 } __attribute__((aligned(8)));
 
