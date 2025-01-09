@@ -1094,7 +1094,7 @@ static int proc_watchdog_cpumask(const struct ctl_table *table, int write,
 
 static const int sixty = 60;
 
-static struct ctl_table watchdog_sysctls[] = {
+static const struct ctl_table watchdog_sysctls[] = {
 	{
 		.procname       = "watchdog",
 		.data		= &watchdog_user_enabled,
@@ -1175,7 +1175,7 @@ static struct ctl_table watchdog_sysctls[] = {
 #endif
 };
 
-static struct ctl_table watchdog_hardlockup_sysctl[] = {
+static const struct ctl_table watchdog_hardlockup_sysctl[] = {
 	{
 		.procname       = "nmi_watchdog",
 		.data		= &watchdog_hardlockup_user_enabled,

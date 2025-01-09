@@ -103,7 +103,7 @@ struct iwcm_work {
 static unsigned int default_backlog = 256;
 
 static struct ctl_table_header *iwcm_ctl_table_hdr;
-static struct ctl_table iwcm_ctl_table[] = {
+static const struct ctl_table iwcm_ctl_table[] = {
 	{
 		.procname	= "default_backlog",
 		.data		= &default_backlog,

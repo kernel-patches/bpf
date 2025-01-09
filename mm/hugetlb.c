@@ -4845,7 +4845,7 @@ out:
 	return ret;
 }
 
-static struct ctl_table hugetlb_table[] = {
+static const struct ctl_table hugetlb_table[] = {
 	{
 		.procname	= "nr_hugepages",
 		.data		= NULL,
