@@ -1591,12 +1591,19 @@ void bpf_timer_cancel_and_free(void *val)
 	 *  bpf_timer_cancel_and_free(timer2)	bpf_timer_cancel_and_free(timer1)
 	 *
 	 * To avoid these issues, punt to workqueue context when we are in a
-	 * timer callback.
+	 * timer callback. When the timer is running on other CPUs, also using
+	 * workqueue context to cancel the timer.
 	 */
-	if (this_cpu_read(hrtimer_running))
-		queue_work(system_unbound_wq, &t->cb.delete_work);
-	else
-		bpf_timer_delete_work(&t->cb.delete_work);
+	if (!this_cpu_read(hrtimer_running) && hrtimer_try_to_cancel(&t->timer) >= 0) {
+		kfree_rcu(t, cb.rcu);
+		return;
+	}
+
+	/* The timer is running on current or other CPU. Use a kworker to wait
+	 * for the completion of the timer instead of spinning on current CPU
+	 * or trying to acquire a sleepable lock to wait for its completion.
+	 */
+	queue_work(system_unbound_wq, &t->cb.delete_work);
 }
 
 /* This function is called by map_delete/update_elem for individual element and
