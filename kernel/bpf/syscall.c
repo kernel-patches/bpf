@@ -6609,6 +6609,191 @@ static int collect_externs(struct bpf_obj *obj)
 	return 0;
 }
 
+static int compare_vsi_off(const void *_a, const void *_b)
+{
+	const struct btf_var_secinfo *a = _a;
+	const struct btf_var_secinfo *b = _b;
+
+	return a->offset - b->offset;
+}
+
+static Elf_Shdr *elf_sec_by_name(const struct bpf_obj *obj, const char *name)
+{
+	unsigned int i;
+	Elf_Shdr *shdr;
+
+	for (i = 1; i < obj->hdr->e_shnum; i++) {
+		shdr = &obj->sechdrs[i];
+		if (strcmp(name, obj->secstrings + shdr->sh_name) == 0)
+			return shdr;
+	}
+	return NULL;
+}
+
+static int find_elf_sec_sz(const struct bpf_obj *obj, const char *name, u32 *size)
+{
+	Elf_Shdr *scn;
+
+	if (!name)
+		return -EINVAL;
+
+	scn = elf_sec_by_name(obj, name);
+	if (scn) {
+		*size = scn->sh_size;
+		return 0;
+	}
+
+	return -ENOENT;
+}
+
+static Elf64_Sym *find_elf_var_sym(const struct bpf_obj *obj, const char *name)
+{
+	unsigned int i;
+	Elf_Shdr *symsec = &obj->sechdrs[obj->index.sym];
+	Elf_Sym *sym = (void *)obj->hdr + symsec->sh_offset;
+
+	for (i = 1; i < symsec->sh_size / sizeof(Elf_Sym); i++) {
+		if (ELF64_ST_TYPE(sym[i].st_info) != STT_OBJECT)
+			continue;
+
+		if (ELF64_ST_BIND(sym[i].st_info) != STB_GLOBAL &&
+		    ELF64_ST_BIND(sym[i].st_info) != STB_WEAK)
+			continue;
+
+		if (strcmp(name,  obj->strtab + sym[i].st_name) == 0)
+			return &sym[i];
+
+	}
+	return ERR_PTR(-ENOENT);
+}
+
+#define ELF64_ST_VISIBILITY(o) ((o) & 0x03)
+
+/* Symbol visibility specification encoded in the st_other field.  */
+#define STV_DEFAULT	0		/* Default symbol visibility rules */
+#define STV_INTERNAL	1		/* Processor specific hidden class */
+#define STV_HIDDEN	2		/* Sym unavailable in other modules */
+#define STV_PROTECTED	3		/* Not preemptible, not exported */
+
+static int btf_fixup_datasec(struct bpf_obj *obj, struct btf *btf,
+			     struct btf_type *t)
+{
+	__u32 size = 0, i, vars = btf_vlen(t);
+	const char *sec_name = btf_str_by_offset(btf, t->name_off);
+	struct btf_var_secinfo *vsi;
+	bool fixup_offsets = false;
+	int err;
+
+	if (!sec_name) {
+		pr_debug("No name found in string section for DATASEC kind.\n");
+		return -ENOENT;
+	}
+
+	/* Extern-backing datasecs (.ksyms, .kconfig) have their size and
+	 * variable offsets set at the previous step. Further, not every
+	 * extern BTF VAR has corresponding ELF symbol preserved, so we skip
+	 * all fixups altogether for such sections and go straight to sorting
+	 * VARs within their DATASEC.
+	 */
+	if (strcmp(sec_name, ".kconfig") == 0 || strcmp(sec_name, ".ksyms") == 0)
+		goto sort_vars;
+
+	/* Clang leaves DATASEC size and VAR offsets as zeroes, so we need to
+	 * fix this up. But BPF static linker already fixes this up and fills
+	 * all the sizes and offsets during static linking. So this step has
+	 * to be optional. But the STV_HIDDEN handling is non-optional for any
+	 * non-extern DATASEC, so the variable fixup loop below handles both
+	 * functions at the same time, paying the cost of BTF VAR <-> ELF
+	 * symbol matching just once.
+	 */
+	if (t->size == 0) {
+		err = find_elf_sec_sz(obj, sec_name, &size);
+		if (err || !size) {
+			pr_debug("sec '%s': failed to determine size from ELF: size %u, err %d\n",
+				 sec_name, size, err);
+			return -ENOENT;
+		}
+
+		t->size = size;
+		fixup_offsets = true;
+	}
+
+	for (i = 0, vsi = btf_var_secinfos(t); i < vars; i++, vsi++) {
+		const struct btf_type *t_var;
+		struct btf_var *var;
+		const char *var_name;
+		Elf64_Sym *sym;
+
+		t_var = btf_type_by_id(btf, vsi->type);
+		if (!t_var || !(btf_kind(t_var) == BTF_KIND_VAR)) {
+			pr_debug("sec '%s': unexpected non-VAR type found\n", sec_name);
+			return -EINVAL;
+		}
+
+		var = btf_var(t_var);
+		if (var->linkage == BTF_VAR_STATIC || var->linkage == BTF_VAR_GLOBAL_EXTERN)
+			continue;
+
+		var_name = btf_str_by_offset(btf, t_var->name_off);
+		if (!var_name) {
+			pr_debug("sec '%s': failed to find name of DATASEC's member #%d\n",
+				 sec_name, i);
+			return -ENOENT;
+		}
+
+		sym = find_elf_var_sym(obj, var_name);
+		if (IS_ERR(sym)) {
+			pr_debug("sec '%s': failed to find ELF symbol for VAR '%s'\n",
+				 sec_name, var_name);
+			return -ENOENT;
+		}
+
+		if (fixup_offsets)
+			vsi->offset = sym->st_value;
+
+		/* if variable is a global/weak symbol, but has restricted
+		 * (STV_HIDDEN or STV_INTERNAL) visibility, mark its BTF VAR
+		 * as static. This follows similar logic for functions (BPF
+		 * subprogs) and influences libbpf's further decisions about
+		 * whether to make global data BPF array maps as
+		 * BPF_F_MMAPABLE.
+		 */
+		if (ELF64_ST_VISIBILITY(sym->st_other) == STV_HIDDEN
+		    || ELF64_ST_VISIBILITY(sym->st_other) == STV_INTERNAL)
+			var->linkage = BTF_VAR_STATIC;
+	}
+
+sort_vars:
+	sort(btf_var_secinfos(t), vars, sizeof(*vsi), compare_vsi_off, NULL);
+	return 0;
+}
+
+static int fixup_btf(struct bpf_obj *obj)
+{
+	int i, n, err = 0;
+
+	if (!obj->btf)
+		return 0;
+
+	n = btf_type_cnt(obj->btf);
+	for (i = 1; i < n; i++) {
+		struct btf_type *t = (struct btf_type *)btf_type_by_id(obj->btf, i);
+
+		/* Loader needs to fix up some of the things compiler
+		 * couldn't get its hands on while emitting BTF. This
+		 * is section size and global variable offset. We use
+		 * the info from the ELF itself for this purpose.
+		 */
+		if (btf_kind(t) == BTF_KIND_DATASEC) {
+			err = btf_fixup_datasec(obj, obj->btf, t);
+			if (err)
+				return err;
+		}
+	}
+
+	return 0;
+}
+
 static void free_bpf_obj(struct bpf_obj *obj)
 {
 	int i;
@@ -6845,6 +7030,10 @@ static int load_fd(union bpf_attr *attr)
 		goto free;
 
 	err = collect_externs(obj);
+	if (err < 0)
+		goto free;
+
+	err = fixup_btf(obj);
 	if (err < 0)
 		goto free;
 
