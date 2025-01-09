@@ -258,6 +258,11 @@ static inline bool btf_type_is_int(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_INT;
 }
 
+static inline u8 btf_type_int_bits(const struct btf_type *t)
+{
+	return BTF_INT_BITS(*(__u32 *)(t + 1));
+}
+
 static inline bool btf_type_is_small_int(const struct btf_type *t)
 {
 	return btf_type_is_int(t) && t->size <= sizeof(u64);
@@ -276,6 +281,21 @@ static inline bool btf_type_is_signed_int(const struct btf_type *t)
 static inline bool btf_type_is_enum(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_ENUM;
+}
+
+static inline bool btf_is_typedef(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPEDEF;
+}
+
+static inline bool btf_is_mod(const struct btf_type *t)
+{
+	u16 kind = BTF_INFO_KIND(t->info);
+
+	return kind == BTF_KIND_VOLATILE ||
+	       kind == BTF_KIND_CONST ||
+	       kind == BTF_KIND_RESTRICT ||
+	       kind == BTF_KIND_TYPE_TAG;
 }
 
 static inline bool btf_is_any_enum(const struct btf_type *t)
@@ -353,6 +373,16 @@ static inline bool btf_type_is_scalar(const struct btf_type *t)
 	return btf_type_is_int(t) || btf_type_is_enum(t);
 }
 
+static inline bool btf_type_is_mod(const struct btf_type *t)
+{
+	u16 kind = btf_kind(t);
+
+	return kind == BTF_KIND_VOLATILE ||
+	       kind == BTF_KIND_CONST ||
+	       kind == BTF_KIND_RESTRICT ||
+	       kind == BTF_KIND_TYPE_TAG;
+}
+
 static inline bool btf_type_is_typedef(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPEDEF;
@@ -381,6 +411,21 @@ static inline bool btf_type_is_var(const struct btf_type *t)
 static inline bool btf_type_is_type_tag(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPE_TAG;
+}
+
+static inline bool btf_type_is_datasec(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_DATASEC;
+}
+
+static inline bool btf_is_decl_tag(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_DECL_TAG;
+}
+
+static inline bool btf_is_func(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_FUNC;
 }
 
 /* union is only a special case of struct:
@@ -482,14 +527,19 @@ static inline const struct btf_var_secinfo *btf_type_var_secinfo(
 	return (const struct btf_var_secinfo *)(t + 1);
 }
 
-static inline struct btf_param *btf_params(const struct btf_type *t)
-{
-	return (struct btf_param *)(t + 1);
-}
-
 static inline struct btf_decl_tag *btf_decl_tag(const struct btf_type *t)
 {
 	return (struct btf_decl_tag *)(t + 1);
+}
+
+static inline struct btf_var *btf_var(const struct btf_type *t)
+{
+	return (struct btf_var *)(t + 1);
+}
+
+static inline struct btf_param *btf_params(const struct btf_type *t)
+{
+	return (struct btf_param *)(t + 1);
 }
 
 static inline int btf_id_cmp_func(const void *a, const void *b)
@@ -517,6 +567,16 @@ int btf_ctx_arg_offset(const struct btf *btf, const struct btf_type *func_proto,
 
 struct bpf_verifier_log;
 
+struct btf *btf_init_mem(void *btf_data,
+			 u32 size,
+			 u64 btf_log_buf,
+			 u32 btf_log_level,
+			 u32 btf_log_size);
+int btf_parse_mem(struct btf *btf);
+const char *btf_str_by_offset(const struct btf *btf, u32 offset);
+u32 btf_type_cnt(const struct btf *btf);
+int btf_align_of(const struct btf *btf, u32 id);
+int btf_add_var(struct btf *btf, int name_off, int linkage, int type_id);
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
 struct bpf_struct_ops;
 int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops);
