@@ -85,6 +85,8 @@ struct sk_psock {
 	struct sock			*sk_redir;
 	u32				apply_bytes;
 	u32				cork_bytes;
+	u32				copied_seq;
+	u32				ingress_bytes;
 	u32				eval;
 	bool				redir_ingress; /* undefined if sk_redir is null */
 	struct sk_msg			*cork;

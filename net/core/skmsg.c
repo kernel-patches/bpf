@@ -549,6 +549,7 @@ static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
 			return num_sge;
 	}
 
+	psock->ingress_bytes += len;
 	copied = len;
 	msg->sg.start = 0;
 	msg->sg.size = copied;
@@ -1092,6 +1093,43 @@ static int sk_psock_strp_read_done(struct strparser *strp, int err)
 	return err;
 }
 
+static int sk_psock_strp_read_sock(struct strparser *strp,
+				   read_descriptor_t *desc,
+				   sk_read_actor_t recv_actor)
+{
+	struct sock *sk = strp->sk;
+	struct sk_psock *psock;
+	struct tcp_sock *tp;
+	int copied;
+
+	if (WARN_ON(!sk_is_tcp(sk)))
+		return -EOPNOTSUPP;
+
+	/* caller already checked sk/psock != NULL */
+	tp = tcp_sk(sk);
+	psock = sk_psock(sk);
+	psock->ingress_bytes = 0;
+	/* We could easily add copied_seq and noack into desc then call
+	 * ops->read_sock without calling symbol directly. But unfortunately
+	 * most descriptors used by other modules are not inited with zero.
+	 * Also replacing ops->read_sock can't be workd without introducing
+	 * new ops as ops itself is located in rodata segment.
+	 */
+	copied = tcp_read_sock_noack(sk, desc, recv_actor, 1,
+				     &psock->copied_seq);
+	if (copied < 0)
+		return copied;
+	/* recv_actor may redirect skb to another socket(SK_REDIRECT) or
+	 * just put skb into ingress queue of current socket(SK_PASS).
+	 * For SK_REDIRECT, we need 'ack' the frame immediately but for
+	 * SK_PASS, the 'ack' was delay to tcp_bpf_recvmsg_parser()
+	 */
+	tp->copied_seq = psock->copied_seq - psock->ingress_bytes;
+	tcp_rcv_space_adjust(sk);
+	__tcp_cleanup_rbuf(sk, copied - psock->ingress_bytes);
+	return copied;
+}
+
 static int sk_psock_strp_parse(struct strparser *strp, struct sk_buff *skb)
 {
 	struct sk_psock *psock = container_of(strp, struct sk_psock, strp);
@@ -1136,6 +1174,7 @@ int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock)
 
 	static const struct strp_callbacks cb = {
 		.rcv_msg	= sk_psock_strp_read,
+		.read_sock	= sk_psock_strp_read_sock,
 		.read_sock_done	= sk_psock_strp_read_done,
 		.parse_msg	= sk_psock_strp_parse,
 	};
@@ -1143,6 +1182,9 @@ int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock)
 	ret = strp_init(&psock->strp, sk, &cb);
 	if (!ret)
 		sk_psock_set_state(psock, SK_PSOCK_RX_STRP_ENABLED);
+
+	if (sk_is_tcp(sk))
+		psock->copied_seq = tcp_sk(sk)->copied_seq;
 
 	return ret;
 }
