@@ -112,7 +112,7 @@ Functions
 Callbacks
 =========
 
-There are six callbacks:
+There are seven callbacks:
 
     ::
 
@@ -181,6 +181,15 @@ There are six callbacks:
     where the message starts in the skb, and full_len is the
     the length of the message. skb->len - offset may be greater
     then full_len since strparser does not trim the skb.
+
+    ::
+
+	int (*read_sock)(struct strparser *strp, read_descriptor_t *desc,
+                     sk_read_actor_t recv_actor);
+
+    read_sock is called when the user specify it, allowing for customized
+    read operations. If the callback is not set (NULL in strp_init) native
+    read_sock operation of the socket is used.
 
     ::
 
