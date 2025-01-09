@@ -1632,6 +1632,263 @@ struct bpf_prog {
 	};
 };
 
+struct btf_ext_info {
+	/*
+	 * info points to the individual info section (e.g. func_info and
+	 * line_info) from the .BTF.ext. It does not include the __u32 rec_size.
+	 */
+	void *info;
+	__u32 rec_size;
+	__u32 len;
+	/* optional (maintained internally by libbpf) mapping between .BTF.ext
+	 * section and corresponding ELF section. This is used to join
+	 * information like CO-RE relocation records with corresponding BPF
+	 * programs defined in ELF sections
+	 */
+	__u32 *sec_idxs;
+	int sec_cnt;
+};
+
+#define for_each_btf_ext_sec(seg, sec)					\
+	for (sec = (seg)->info;						\
+	     (void *)sec < (seg)->info + (seg)->len;			\
+	     sec = (void *)sec + sizeof(struct btf_ext_info_sec) +	\
+		   (seg)->rec_size * sec->num_info)
+
+#define for_each_btf_ext_rec(seg, sec, i, rec)				\
+	for (i = 0, rec = (void *)&(sec)->data;				\
+	     i < (sec)->num_info;					\
+	     i++, rec = (void *)rec + (seg)->rec_size)
+
+/*
+ * The .BTF.ext ELF section layout defined as
+ *   struct btf_ext_header
+ *   func_info subsection
+ *
+ * The func_info subsection layout:
+ *   record size for struct bpf_func_info in the func_info subsection
+ *   struct btf_sec_func_info for section #1
+ *   a list of bpf_func_info records for section #1
+ *     where struct bpf_func_info mimics one in include/uapi/linux/bpf.h
+ *     but may not be identical
+ *   struct btf_sec_func_info for section #2
+ *   a list of bpf_func_info records for section #2
+ *   ......
+ *
+ * Note that the bpf_func_info record size in .BTF.ext may not
+ * be the same as the one defined in include/uapi/linux/bpf.h.
+ * The loader should ensure that record_size meets minimum
+ * requirement and pass the record as is to the kernel. The
+ * kernel will handle the func_info properly based on its contents.
+ */
+struct btf_ext_header {
+	__u16	magic;
+	__u8	version;
+	__u8	flags;
+	__u32	hdr_len;
+
+	/* All offsets are in bytes relative to the end of this header */
+	__u32	func_info_off;
+	__u32	func_info_len;
+	__u32	line_info_off;
+	__u32	line_info_len;
+
+	/* optional part of .BTF.ext header */
+	__u32	core_relo_off;
+	__u32	core_relo_len;
+};
+
+struct btf_ext {
+	union {
+		struct btf_ext_header *hdr;
+		void *data;
+	};
+	struct btf_ext_info func_info;
+	struct btf_ext_info line_info;
+	struct btf_ext_info core_relo_info;
+	__u32 data_size;
+};
+
+struct btf_ext_info_sec {
+	__u32	sec_name_off;
+	__u32	num_info;
+	/* Followed by num_info * record_size number of bytes */
+	__u8	data[];
+};
+
+
+enum bpf_reloc_type {
+	RELO_LD64,
+	RELO_CALL,
+	RELO_DATA,
+	RELO_EXTERN_LD64,
+	RELO_EXTERN_CALL,
+	RELO_SUBPROG_ADDR,
+	RELO_CORE,
+};
+
+struct bpf_reloc_desc {
+	enum bpf_reloc_type type;
+	int insn_idx;
+	union {
+		const struct bpf_core_relo *core_relo; /* used when type == RELO_CORE */
+		struct {
+			int map_idx;
+			int sym_off;
+			int ext_idx;
+		};
+	};
+};
+
+enum bpf_extern_type {
+	EXT_UNKNOWN,
+	EXT_KCFG,
+	EXT_KSYM,
+};
+
+enum bpf_kcfg_type {
+	KCFG_UNKNOWN,
+	KCFG_CHAR,
+	KCFG_BOOL,
+	KCFG_INT,
+	KCFG_TRISTATE,
+	KCFG_CHAR_ARR,
+};
+
+struct bpf_extern_desc {
+	enum bpf_extern_type type;
+	int sym_idx;
+	int btf_id;
+	int sec_btf_id;
+	const char *name;
+	char *essent_name;
+	bool is_set;
+	bool is_weak;
+	union {
+		struct {
+			enum bpf_kcfg_type type;
+			int sz;
+			int align;
+			int data_off;
+			bool is_signed;
+		} kcfg;
+		struct {
+			unsigned long long addr;
+
+			/* target btf_id of the corresponding kernel var. */
+			int kernel_btf_obj_fd;
+			int kernel_btf_id;
+
+			/* local btf_id of the ksym extern's type. */
+			__u32 type_id;
+			/* BTF fd index to be patched in for insn->off, this is
+			 * 0 for vmlinux BTF, index in obj->fd_array for module
+			 * BTF
+			 */
+			__s16 btf_fd_idx;
+		} ksym;
+	};
+};
+
+
+struct bpf_prog_obj {
+	char *name;
+
+	struct bpf_insn *insn;
+	unsigned int insn_cnt;
+
+	size_t sec_idx;
+	size_t sec_insn_off;
+	size_t sec_insn_cnt;
+	size_t sub_insn_off;
+
+	struct bpf_reloc_desc *reloc_desc;
+	int nr_reloc;
+
+	int exception_cb_idx;
+
+};
+
+struct bpf_st_ops {
+	const char *tname;
+	const struct btf_type *type;
+	struct bpf_program **progs;
+	__u32 *kern_func_off;
+	/* e.g. struct tcp_congestion_ops in bpf_prog's btf format */
+	void *data;
+	/* e.g. struct bpf_struct_ops_tcp_congestion_ops in
+	 *      btf_vmlinux's format.
+	 * struct bpf_struct_ops_tcp_congestion_ops {
+	 *	[... some other kernel fields ...]
+	 *	struct tcp_congestion_ops data;
+	 * }
+	 * kern_vdata-size == sizeof(struct bpf_struct_ops_tcp_congestion_ops)
+	 * bpf_map__init_kern_struct_ops() will populate the "kern_vdata"
+	 * from "data".
+	 */
+	void *kern_vdata;
+	__u32 type_id;
+};
+
+enum libbpf_map_type {
+	LIBBPF_MAP_UNSPEC,
+	LIBBPF_MAP_DATA,
+	LIBBPF_MAP_BSS,
+	LIBBPF_MAP_RODATA,
+	LIBBPF_MAP_KCONFIG,
+};
+
+struct bpf_map_obj {
+	u32 map_type;
+	u32 fd;
+	u32 sec_idx;
+	u32 sec_offset;
+};
+
+struct bpf_module_obj {
+	u32 id;
+	u32 fd;
+	u32 fd_array_idx;
+};
+
+struct bpf_module_btf {
+	struct btf *btf;
+	u32 id;
+	int fd;
+	int fd_array_idx;
+};
+
+struct bpf_obj {
+	u32 nr_programs;
+	Elf_Ehdr *hdr;
+	unsigned long len;
+	Elf_Shdr *sechdrs;
+	char *secstrings, *strtab;
+
+	struct {
+		unsigned int sym, str, btf, btf_ext, text, arena;
+	} index;
+
+	struct bpf_prog_obj *progs;
+
+	struct btf *btf;
+	struct btf_ext *btf_ext;
+
+	struct bpf_extern_desc *externs;
+	int nr_extern;
+
+	struct bpf_map_obj *maps;
+	int nr_maps;
+
+	int arena_map_idx;
+	int kconfig_map_idx;
+
+	struct btf *btf_vmlinux;
+
+	struct bpf_module_btf *btf_modules;
+	int btf_modules_cnt;
+};
+
 struct bpf_array_aux {
 	/* Programs with direct jumps into programs part of this array. */
 	struct list_head poke_progs;
