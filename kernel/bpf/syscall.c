@@ -7098,6 +7098,176 @@ static int collect_relos(struct bpf_obj *obj)
 	return 0;
 }
 
+static int find_ksym_btf_id(struct bpf_obj *obj, const char *ksym_name, u16 kind,
+			    struct btf **res_btf,
+			    struct bpf_module_btf **res_mod_btf)
+{
+	struct bpf_module_btf *mod_btf;
+	struct btf *btf;
+	int i, id;
+
+	btf = obj->btf_vmlinux;
+	mod_btf = NULL;
+	id = btf_find_by_name_kind(btf, ksym_name, kind);
+	if (id == -ENOENT) {
+		for (i = 0; i < obj->btf_modules_cnt; i++) {
+			/*  we assume module_btf's BTF FD is always >0 */
+			mod_btf = &obj->btf_modules[i];
+			btf = mod_btf->btf;
+			id = btf_find_by_name_kind(btf, ksym_name, kind);
+			if (id != -ENOENT)
+				break;
+		}
+	}
+	if (id <= 0)
+		return -ESRCH;
+
+	*res_btf = btf;
+	*res_mod_btf = mod_btf;
+	return id;
+}
+
+static int resolve_ksym_var_btf_id(struct bpf_obj *obj, struct bpf_extern_desc *ext)
+{
+	const struct btf_type *targ_var, *targ_type;
+	u32 targ_type_id, local_type_id;
+	struct bpf_module_btf *mod_btf = NULL;
+	const char *targ_var_name;
+	struct btf *btf = NULL;
+	int id, err;
+
+	id = find_ksym_btf_id(obj, ext->name, BTF_KIND_VAR, &btf, &mod_btf);
+	if (id < 0) {
+		if (id == -ESRCH && ext->is_weak)
+			return 0;
+		pr_warn("extern (var ksym) '%s': not found in kernel BTF\n",
+			ext->name);
+		return id;
+	}
+
+	/* find local type_id */
+	local_type_id = ext->ksym.type_id;
+
+	/* find target type_id */
+	targ_var = btf_type_by_id(btf, id);
+	targ_var_name = btf_str_by_offset(btf, targ_var->name_off);
+	targ_type = skip_mods_and_typedefs(btf, targ_var->type, &targ_type_id);
+
+	err = bpf_core_types_are_compat(obj->btf, local_type_id,
+					btf, targ_type_id);
+	if (err <= 0) {
+		pr_warn("extern (var ksym) '%s': incompatible types\n", ext->name);
+		return -EINVAL;
+	}
+
+	ext->is_set = true;
+	ext->ksym.kernel_btf_obj_fd = mod_btf ? mod_btf->fd : 0;
+	ext->ksym.kernel_btf_id = id;
+
+	return 0;
+}
+
+static int resolve_ksym_func_btf_id(struct bpf_obj *obj, struct bpf_extern_desc *ext)
+{
+	int local_func_proto_id, kfunc_proto_id, kfunc_id;
+	struct bpf_module_btf *mod_btf = NULL;
+	const struct btf_type *kern_func;
+	struct btf *kern_btf = NULL;
+	int ret;
+
+	local_func_proto_id = ext->ksym.type_id;
+
+	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
+				    &mod_btf);
+	if (kfunc_id < 0) {
+		if (kfunc_id == -ESRCH && ext->is_weak)
+			return 0;
+		pr_warn("extern (func ksym) '%s': not found in kernel or module BTFs\n",
+			ext->name);
+		return kfunc_id;
+	}
+
+	kern_func = btf_type_by_id(kern_btf, kfunc_id);
+	kfunc_proto_id = kern_func->type;
+
+	ret = bpf_core_types_are_compat(obj->btf, local_func_proto_id,
+					kern_btf, kfunc_proto_id);
+	if (ret <= 0) {
+		if (ext->is_weak)
+			return 0;
+
+		pr_warn("extern (func ksym) '%s': func_proto [%d] incompatible with [%d]\n",
+			ext->name, local_func_proto_id,
+			kfunc_proto_id);
+		return -EINVAL;
+	}
+
+	ext->is_set = true;
+	ext->ksym.kernel_btf_id = kfunc_id;
+	ext->ksym.btf_fd_idx = mod_btf ? mod_btf->fd_array_idx : 0;
+
+	/* Also set kernel_btf_obj_fd to make sure that bpf_object__relocate_data()
+	 * populates FD into ld_imm64 insn when it's used to point to kfunc.
+	 * {kernel_btf_id, btf_fd_idx} -> fixup bpf_call.
+	 * {kernel_btf_id, kernel_btf_obj_fd} -> fixup ld_imm64.
+	 */
+	ext->ksym.kernel_btf_obj_fd = mod_btf ? mod_btf->fd : 0;
+
+	return 0;
+}
+
+static int resolve_externs(struct bpf_obj *obj)
+{
+	struct bpf_extern_desc *ext;
+	int err, i;
+	const struct btf_type *t;
+	unsigned long addr;
+
+	for (i = 0; i < obj->nr_extern; i++) {
+		ext = &obj->externs[i];
+
+		if (ext->type == EXT_KSYM) {
+			if (ext->ksym.type_id) {
+				t = btf_type_by_id(obj->btf, ext->btf_id);
+				if (btf_kind(t) == BTF_KIND_VAR)
+					err = resolve_ksym_var_btf_id(obj, ext);
+				else
+					err = resolve_ksym_func_btf_id(obj, ext);
+				if (err)
+					return err;
+			} else {
+				addr = kallsyms_lookup_name(ext->name);
+				if (addr > 0) {
+					ext->is_set = true;
+					ext->ksym.addr = addr;
+				}
+			}
+		} else if (ext->type == EXT_KCFG) {
+			pr_debug("extern (kcfg) '%s': loading from offset %d\n",
+				 ext->name, ext->kcfg.data_off);
+			ext->is_set = true;
+		} else {
+			pr_warn("extern '%s': unrecognized extern kind\n", ext->name);
+			return -EINVAL;
+		}
+	}
+
+	for (i = 0; i < obj->nr_extern; i++) {
+		ext = &obj->externs[i];
+
+		if (!ext->is_set && !ext->is_weak) {
+			pr_warn("extern '%s' (strong): not resolved\n", ext->name);
+			return -ESRCH;
+		} else if (!ext->is_set) {
+			pr_debug("extern '%s' (weak): not resolved, defaulting to zero\n",
+				 ext->name);
+		}
+	}
+
+
+	return 0;
+}
+
 static void free_bpf_obj(struct bpf_obj *obj)
 {
 	int i;
@@ -7342,6 +7512,10 @@ static int load_fd(union bpf_attr *attr)
 		goto free;
 
 	err = collect_relos(obj);
+	if (err < 0)
+		goto free;
+
+	err = resolve_externs(obj);
 	if (err < 0)
 		goto free;
 
