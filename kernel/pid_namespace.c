@@ -282,7 +282,7 @@ static int pid_ns_ctl_handler(const struct ctl_table *table, int write,
 }
 
 extern int pid_max;
-static struct ctl_table pid_ns_ctl_table[] = {
+static const struct ctl_table pid_ns_ctl_table[] = {
 	{
 		.procname = "ns_last_pid",
 		.maxlen = sizeof(int),

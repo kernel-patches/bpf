@@ -8790,7 +8790,7 @@ ftrace_enable_sysctl(const struct ctl_table *table, int write,
 	return ret;
 }
 
-static struct ctl_table ftrace_sysctls[] = {
+static const struct ctl_table ftrace_sysctls[] = {
 	{
 		.procname       = "ftrace_enabled",
 		.data           = &ftrace_enabled,

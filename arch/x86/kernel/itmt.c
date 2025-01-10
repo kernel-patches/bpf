@@ -64,7 +64,7 @@ static int sched_itmt_update_handler(const struct ctl_table *table, int write,
 	return ret;
 }
 
-static struct ctl_table itmt_kern_table[] = {
+static const struct ctl_table itmt_kern_table[] = {
 	{
 		.procname	= "sched_itmt_enabled",
 		.data		= &sysctl_sched_itmt_enabled,
