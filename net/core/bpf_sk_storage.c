@@ -729,7 +729,6 @@ bpf_sk_storage_map_seq_find_next(struct bpf_iter_seq_sk_storage_map_info *info,
 					 struct bpf_local_storage_elem, map_node);
 		if (!selem) {
 			/* not found, unlock and go to the next bucket */
-			b = &smap->buckets[bucket_id++];
 			rcu_read_unlock();
 			skip_elems = 0;
 			break;

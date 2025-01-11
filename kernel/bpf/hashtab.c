@@ -2039,7 +2039,6 @@ bpf_hash_map_seq_find_next(struct bpf_iter_seq_hash_map_info *info,
 			return elem;
 
 		/* not found, unlock and go to the next bucket */
-		b = &htab->buckets[bucket_id++];
 		rcu_read_unlock();
 		skip_elems = 0;
 	}
