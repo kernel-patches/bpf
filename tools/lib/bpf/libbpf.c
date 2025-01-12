@@ -11623,11 +11623,34 @@ error:
 	return libbpf_err_ptr(err);
 }
 
+/* A dynamic tracepoint: "kprobe/SUBSYSTEM/PROBE" */
+static int attach_dynamic_tracepoint(const struct bpf_program *prog, const char *func_name,
+				     struct bpf_link **link)
+{
+	char *tp_subsys, *tp_name;
+
+	tp_subsys = strdup(func_name);
+	if (!tp_subsys)
+		return -ENOMEM;
+
+	tp_name = strchr(tp_subsys, '/');
+	if (!tp_name) {
+		free(tp_subsys);
+		return -EINVAL;
+	}
+
+	*tp_name = '\0';
+	tp_name++;
+	*link = bpf_program__attach_tracepoint(prog, tp_subsys, tp_name);
+	free(tp_subsys);
+	return libbpf_get_error(*link);
+}
+
 static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf_link **link)
 {
 	DECLARE_LIBBPF_OPTS(bpf_kprobe_opts, opts);
+	const char *func_name, *dynamic_tp;
 	unsigned long offset = 0;
-	const char *func_name;
 	char *func;
 	int n;
 
@@ -11642,6 +11665,10 @@ static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf
 		func_name = prog->sec_name + sizeof("kretprobe/") - 1;
 	else
 		func_name = prog->sec_name + sizeof("kprobe/") - 1;
+
+	dynamic_tp = strchr(func_name, '/');
+	if (dynamic_tp)
+		return attach_dynamic_tracepoint(prog, func_name, link);
 
 	n = sscanf(func_name, "%m[a-zA-Z0-9_.]+%li", &func, &offset);
 	if (n < 1) {
