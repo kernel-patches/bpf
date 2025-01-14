@@ -693,4 +693,19 @@ __naked void key_lookup_at_invalid_fp(void)
 	: __clobber_all);
 }
 
+volatile __u32 __attribute__((aligned(8))) global_key = 1;
+
+SEC("socket")
+__description("invalid elided lookup using non-stack key")
+__failure __msg("R0 invalid mem access 'map_value_or_null'")
+unsigned int non_stack_key_lookup(void)
+{
+	struct test_val *val;
+
+	val = bpf_map_lookup_elem(&map_array, (void *)&global_key);
+	val->index = offsetof(struct test_val, foo);
+
+	return val->index;
+}
+
 char _license[] SEC("license") = "GPL";
