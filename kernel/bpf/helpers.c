@@ -1109,12 +1109,14 @@ struct bpf_async_cb {
  * freeing the timers when inner map is replaced or deleted by user space.
  */
 struct bpf_hrtimer {
+	/* cb must be the first member */
 	struct bpf_async_cb cb;
 	struct hrtimer timer;
 	atomic_t cancelling;
 };
 
 struct bpf_work {
+	/* cb must be the first member */
 	struct bpf_async_cb cb;
 	struct work_struct work;
 	struct work_struct delete_work;
@@ -1140,6 +1142,34 @@ enum bpf_async_type {
 };
 
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
+
+static void bpf_async_free(struct bpf_async_cb *cb)
+{
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		bpf_mem_free(&bpf_global_ma, cb);
+	else
+		kfree(cb);
+}
+
+static void bpf_async_free_rcu(struct bpf_async_cb *cb)
+{
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		bpf_mem_free_rcu(&bpf_global_ma, cb);
+	else
+		kfree_rcu(cb, rcu);
+}
+
+static struct bpf_async_cb *bpf_async_alloc(struct bpf_map *map, size_t size)
+{
+	struct bpf_async_cb *cb;
+
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		cb = bpf_mem_alloc(&bpf_global_ma, size);
+	else
+		/* allocate hrtimer via map_kmalloc to use memcg accounting */
+		cb = bpf_map_kmalloc_node(map, size, GFP_ATOMIC, map->numa_node);
+	return cb;
+}
 
 static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 {
@@ -1221,7 +1251,7 @@ static void bpf_wq_delete_work(struct work_struct *work)
 
 	cancel_work_sync(&w->work);
 
-	kfree_rcu(w, cb.rcu);
+	bpf_async_free_rcu(&w->cb);
 }
 
 static void bpf_timer_delete_work(struct work_struct *work)
@@ -1236,7 +1266,7 @@ static void bpf_timer_delete_work(struct work_struct *work)
 	 * bpf_timer_cancel_and_free will have been cancelled.
 	 */
 	hrtimer_cancel(&t->timer);
-	kfree_rcu(t, cb.rcu);
+	bpf_async_free_rcu(&t->cb);
 }
 
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
@@ -1263,17 +1293,15 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		return -EINVAL;
 	}
 
+	cb = bpf_async_alloc(map, size);
+	if (!cb)
+		return -ENOMEM;
+
 	__bpf_spin_lock_irqsave(&async->lock);
 	t = async->timer;
 	if (t) {
+		bpf_async_free(cb);
 		ret = -EBUSY;
-		goto out;
-	}
-
-	/* allocate hrtimer via map_kmalloc to use memcg accounting */
-	cb = bpf_map_kmalloc_node(map, size, GFP_ATOMIC, map->numa_node);
-	if (!cb) {
-		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -1313,7 +1341,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		 * or pinned in bpffs.
 		 */
 		WRITE_ONCE(async->cb, NULL);
-		kfree(cb);
+		bpf_async_free(cb);
 		ret = -EPERM;
 	}
 out:
