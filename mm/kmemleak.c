@@ -648,6 +648,9 @@ static struct kmemleak_object *__alloc_object(gfp_t gfp)
 {
 	struct kmemleak_object *object;
 
+	if (!gfpflags_allow_spinning(gfp))
+		return NULL;
+
 	object = mem_pool_alloc(gfp);
 	if (!object) {
 		pr_warn("Cannot allocate a kmemleak_object structure\n");

@@ -1096,6 +1096,10 @@ void *__kfence_alloc(struct kmem_cache *s, size_t size, gfp_t flags)
 	if (s->flags & SLAB_SKIP_KFENCE)
 		return NULL;
 
+	/* Bailout, since kfence_guarded_alloc() needs to take a lock */
+	if (!gfpflags_allow_spinning(flags))
+		return NULL;
+
 	allocation_gate = atomic_inc_return(&kfence_allocation_gate);
 	if (allocation_gate > 1)
 		return NULL;

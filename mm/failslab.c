@@ -27,6 +27,9 @@ int should_failslab(struct kmem_cache *s, gfp_t gfpflags)
 	if (gfpflags & __GFP_NOFAIL)
 		return 0;
 
+	if (!gfpflags_allow_spinning(gfpflags))
+		return 0;
+
 	if (failslab.ignore_gfp_reclaim &&
 			(gfpflags & __GFP_DIRECT_RECLAIM))
 		return 0;
