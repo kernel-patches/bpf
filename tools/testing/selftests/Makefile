@@ -154,14 +154,18 @@ override LDFLAGS =
 override MAKEFLAGS =
 endif
 
+top_srcdir ?= ../../..
+
 # Append kselftest to KBUILD_OUTPUT and O to avoid cluttering
 # KBUILD_OUTPUT with selftest objects and headers installed
 # by selftests Makefile or lib.mk.
+# Override the `srctree` variable to ensure it is correctly resolved in
+# sub-Makefiles, such as those within `bpf`, when managing targets like
+# `net` and `hid`.
 ifdef building_out_of_srctree
 override LDFLAGS =
+override srctree := $(top_srcdir)
 endif
-
-top_srcdir ?= ../../..
 
 ifeq ("$(origin O)", "command line")
   KBUILD_OUTPUT := $(O)
