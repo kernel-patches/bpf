@@ -569,11 +569,14 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 u32 *btf_kfunc_id_set_contains(const struct btf *btf, u32 kfunc_btf_id,
-			       const struct bpf_prog *prog);
+			       const struct bpf_prog *prog,
+			       u32 *capability);
 u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 				const struct bpf_prog *prog);
 int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 			      const struct btf_kfunc_id_set *s);
+int register_btf_kfunc_id_set_cap(enum bpf_capability capability,
+				  const struct btf_kfunc_id_set *s);
 int register_btf_fmodret_id_set(const struct btf_kfunc_id_set *kset);
 s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id);
 int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
@@ -632,7 +635,8 @@ static inline const char *btf_name_by_offset(const struct btf *btf,
 }
 static inline u32 *btf_kfunc_id_set_contains(const struct btf *btf,
 					     u32 kfunc_btf_id,
-					     struct bpf_prog *prog)
+					     struct bpf_prog *prog,
+					     u32 *capability)
 
 {
 	return NULL;

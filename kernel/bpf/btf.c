@@ -236,6 +236,7 @@ struct btf_kfunc_hook_filter {
 struct btf_kfunc_set_tab {
 	struct btf_id_set8 *sets[BTF_KFUNC_HOOK_MAX];
 	struct btf_kfunc_hook_filter hook_filters[BTF_KFUNC_HOOK_MAX];
+	struct btf_id_set8 *cap_poc_set;
 };
 
 struct btf_id_dtor_kfunc_tab {
@@ -8483,6 +8484,96 @@ end:
 	return ret;
 }
 
+static int btf_populate_kfunc_set_cap(struct btf *btf, enum bpf_capability capability,
+				  const struct btf_kfunc_id_set *kset)
+{
+	struct btf_id_set8 *add_set = kset->set;
+	bool vmlinux_set = !btf_is_module(btf);
+	struct btf_kfunc_set_tab *tab;
+	struct btf_id_set8 *set;
+	u32 set_cnt, i;
+	int ret;
+
+	if (capability >= __MAX_BPF_CAP) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	if (!add_set->cnt)
+		return 0;
+
+	tab = btf->kfunc_set_tab;
+
+	if (!tab) {
+		tab = kzalloc(sizeof(*tab), GFP_KERNEL | __GFP_NOWARN);
+		if (!tab)
+			return -ENOMEM;
+		btf->kfunc_set_tab = tab;
+	}
+
+	set = tab->cap_poc_set;
+	/* Warn when register_btf_kfunc_id_set is called twice for the same hook
+	 * for module sets.
+	 */
+	if (WARN_ON_ONCE(set && !vmlinux_set)) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	/* In case of vmlinux sets, there may be more than one set being
+	 * registered per hook. To create a unified set, we allocate a new set
+	 * and concatenate all individual sets being registered. While each set
+	 * is individually sorted, they may become unsorted when concatenated,
+	 * hence re-sorting the final set again is required to make binary
+	 * searching the set using btf_id_set8_contains function work.
+	 *
+	 * For module sets, we need to allocate as we may need to relocate
+	 * BTF ids.
+	 */
+	set_cnt = set ? set->cnt : 0;
+
+	if (set_cnt > U32_MAX - add_set->cnt) {
+		ret = -EOVERFLOW;
+		goto end;
+	}
+
+	if (set_cnt + add_set->cnt > BTF_KFUNC_SET_MAX_CNT) {
+		ret = -E2BIG;
+		goto end;
+	}
+
+	/* Grow set */
+	set = krealloc(tab->cap_poc_set,
+		       offsetof(struct btf_id_set8, pairs[set_cnt + add_set->cnt]),
+		       GFP_KERNEL | __GFP_NOWARN);
+	if (!set) {
+		ret = -ENOMEM;
+		goto end;
+	}
+
+	/* For newly allocated set, initialize set->cnt to 0 */
+	if (!tab->cap_poc_set)
+		set->cnt = 0;
+	tab->cap_poc_set = set;
+
+	/* Concatenate the two sets */
+	memcpy(set->pairs + set->cnt, add_set->pairs, add_set->cnt * sizeof(set->pairs[0]));
+	/* Now that the set is copied, update with relocated BTF ids */
+	for (i = set->cnt; i < set->cnt + add_set->cnt; i++) {
+		set->pairs[i].id = btf_relocate_id(btf, set->pairs[i].id);
+		set->pairs[i].capability = capability;
+	}
+
+	set->cnt += add_set->cnt;
+
+	sort(set->pairs, set->cnt, sizeof(set->pairs[0]), btf_id_cmp_func, NULL);
+
+	return 0;
+end:
+	btf_free_kfunc_set_tab(btf);
+	return ret;
+}
+
 static u32 *__btf_kfunc_id_set_contains(const struct btf *btf,
 					enum btf_kfunc_hook hook,
 					u32 kfunc_btf_id,
@@ -8507,6 +8598,30 @@ static u32 *__btf_kfunc_id_set_contains(const struct btf *btf,
 	id = btf_id_set8_contains(set, kfunc_btf_id);
 	if (!id)
 		return NULL;
+	/* The flags for BTF ID are located next to it */
+	return id + 1;
+}
+
+static u32 *__btf_kfunc_id_set_contains_cap(const struct btf *btf,
+					u32 kfunc_btf_id,
+					const struct bpf_prog *prog,
+					u32 *capability)
+{
+	struct btf_id_set8 *set;
+	u32 *id;
+
+	if (!btf->kfunc_set_tab)
+		return NULL;
+
+	set = btf->kfunc_set_tab->cap_poc_set;
+	if (!set)
+		return NULL;
+	id = btf_id_set8_contains(set, kfunc_btf_id);
+	if (!id)
+		return NULL;
+	/* The capability is next to flags */
+	if (capability)
+		*capability = *(id + 2);
 	/* The flags for BTF ID are located next to it */
 	return id + 1;
 }
@@ -8565,11 +8680,19 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
  */
 u32 *btf_kfunc_id_set_contains(const struct btf *btf,
 			       u32 kfunc_btf_id,
-			       const struct bpf_prog *prog)
+			       const struct bpf_prog *prog,
+			       u32 *capability)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(prog);
 	enum btf_kfunc_hook hook;
 	u32 *kfunc_flags;
+
+	kfunc_flags = __btf_kfunc_id_set_contains_cap(btf, kfunc_btf_id, prog, capability);
+	if (kfunc_flags)
+		return kfunc_flags;
+
+	if (capability)
+		*capability = BPF_CAP_NONE;
 
 	kfunc_flags = __btf_kfunc_id_set_contains(btf, BTF_KFUNC_HOOK_COMMON, kfunc_btf_id, prog);
 	if (kfunc_flags)
@@ -8611,6 +8734,31 @@ err_out:
 	return ret;
 }
 
+static int __register_btf_kfunc_id_set_cap(enum bpf_capability capability,
+					   const struct btf_kfunc_id_set *kset)
+{
+	struct btf *btf;
+	int ret, i;
+
+	btf = btf_get_module_btf(kset->owner);
+	if (!btf)
+		return check_btf_kconfigs(kset->owner, "kfunc");
+	if (IS_ERR(btf))
+		return PTR_ERR(btf);
+
+	for (i = 0; i < kset->set->cnt; i++) {
+		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
+					     kset->set->pairs[i].flags);
+		if (ret)
+			goto err_out;
+	}
+
+	ret = btf_populate_kfunc_set_cap(btf, capability, kset);
+err_out:
+	btf_put(btf);
+	return ret;
+}
+
 /* This function must be invoked only from initcalls/module init functions */
 int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 			      const struct btf_kfunc_id_set *kset)
@@ -8629,6 +8777,21 @@ int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 	return __register_btf_kfunc_id_set(hook, kset);
 }
 EXPORT_SYMBOL_GPL(register_btf_kfunc_id_set);
+
+int register_btf_kfunc_id_set_cap(enum bpf_capability capability,
+				  const struct btf_kfunc_id_set *kset)
+{
+	/* All kfuncs need to be tagged as such in BTF.
+	 * WARN() for initcall registrations that do not check errors.
+	 */
+	if (!(kset->set->flags & BTF_SET8_KFUNCS)) {
+		WARN_ON(!kset->owner);
+		return -EINVAL;
+	}
+
+	return __register_btf_kfunc_id_set_cap(capability, kset);
+}
+EXPORT_SYMBOL_GPL(register_btf_kfunc_id_set_cap);
 
 /* This function must be invoked only from initcalls/module init functions */
 int register_btf_fmodret_id_set(const struct btf_kfunc_id_set *kset)
