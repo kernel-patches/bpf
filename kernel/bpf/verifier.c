@@ -30,6 +30,7 @@
 #include <net/xdp.h>
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
+#include <uapi/linux/bpf.h>
 
 #include "disasm.h"
 
@@ -12917,7 +12918,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 			    struct bpf_insn *insn,
 			    struct bpf_kfunc_call_arg_meta *meta,
-			    const char **kfunc_name)
+			    const char **kfunc_name,
+			    u32 *capability)
 {
 	const struct btf_type *func, *func_proto;
 	u32 func_id, *kfunc_flags;
@@ -12941,7 +12943,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 		*kfunc_name = func_name;
 	func_proto = btf_type_by_id(desc_btf, func->type);
 
-	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
+	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog, capability);
 	if (!kfunc_flags) {
 		return -EACCES;
 	}
@@ -12972,16 +12974,26 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	const struct btf_param *args;
 	const struct btf_type *ret_t;
 	struct btf *desc_btf;
+	u32 capability;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
 		return 0;
 
-	err = fetch_kfunc_meta(env, insn, &meta, &func_name);
+	err = fetch_kfunc_meta(env, insn, &meta, &func_name, &capability);
 	if (err == -EACCES && func_name)
 		verbose(env, "calling kernel function %s is not allowed\n", func_name);
 	if (err)
 		return err;
+
+	if (capability != BPF_CAP_NONE) {
+		if (!IS_BPF_CAPABILITY_ENABLED(env->bpf_capabilities, capability) && func_name) {
+			verbose(env, "The bpf program does not have the capability to call %s\n",
+				func_name);
+			return -EACCES;
+		}
+	}
+
 	desc_btf = meta.btf;
 	insn_aux = &env->insn_aux_data[insn_idx];
 
@@ -16824,7 +16836,7 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 		struct bpf_kfunc_call_arg_meta meta;
 		int err;
 
-		err = fetch_kfunc_meta(env, call, &meta, NULL);
+		err = fetch_kfunc_meta(env, call, &meta, NULL, NULL);
 		if (err < 0)
 			/* error would be reported later */
 			return;
@@ -16980,7 +16992,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_kfunc_call_arg_meta meta;
 
-			ret = fetch_kfunc_meta(env, insn, &meta, NULL);
+			ret = fetch_kfunc_meta(env, insn, &meta, NULL, NULL);
 			if (ret == 0 && is_iter_next_kfunc(&meta)) {
 				mark_prune_point(env, t);
 				/* Checking and saving state checkpoints at iter_next() call
@@ -22093,6 +22105,9 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->first_insn_idx = env->subprog_info[subprog].start;
 	state->last_insn_idx = -1;
 
+	if (env->ops->bpf_capabilities_adjust)
+		env->ops->bpf_capabilities_adjust(env->bpf_capabilities, env->context_info, true);
+
 	regs = state->frame[state->curframe]->regs;
 	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
 		const char *sub_name = subprog_name(env, subprog);
@@ -22176,6 +22191,9 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	ret = do_check(env);
 out:
+	if (env->ops->bpf_capabilities_adjust)
+		env->ops->bpf_capabilities_adjust(env->bpf_capabilities, env->context_info, false);
+
 	/* check for NULL is necessary, since cur_state can be freed inside
 	 * do_check() under memory pressure.
 	 */
@@ -22385,6 +22403,7 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 	prog->aux->attach_func_proto = func_proto;
 	prog->aux->attach_func_name = mname;
 	env->ops = st_ops->verifier_ops;
+	env->context_info = __btf_member_bit_offset(t, member) / 8; // moff
 
 	return 0;
 }

@@ -784,7 +784,13 @@ struct bpf_verifier_env {
 	char tmp_str_buf[TMP_STR_BUF_LEN];
 	struct bpf_insn insn_buf[INSN_BUF_SIZE];
 	struct bpf_insn epilogue_buf[INSN_BUF_SIZE];
+	DECLARE_BITMAP(bpf_capabilities, __MAX_BPF_CAP);
+	u32 context_info;
 };
+
+#define ENABLE_BPF_CAPABILITY(caps, cap) __set_bit(cap, caps)
+#define DISABLE_BPF_CAPABILITY(caps, cap) __clear_bit(cap, caps)
+#define IS_BPF_CAPABILITY_ENABLED(caps, cap) test_bit(cap, caps)
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
 {

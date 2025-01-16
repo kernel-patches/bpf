@@ -1021,6 +1021,8 @@ struct bpf_verifier_ops {
 	int (*btf_struct_access)(struct bpf_verifier_log *log,
 				 const struct bpf_reg_state *reg,
 				 int off, int size);
+	int (*bpf_capabilities_adjust)(unsigned long *bpf_capabilities,
+				       u32 context_info, bool enter);
 };
 
 struct bpf_prog_offload_ops {
