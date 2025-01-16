@@ -495,7 +495,7 @@ static int symbols_collect(struct object *obj)
 			 * that - 1.
 			 */
 			if (id) {
-				id->cnt = sym.st_size / sizeof(uint64_t) - 1;
+				id->cnt = (sym.st_size - sizeof(u32) * 2) / (sizeof(u32) * 3);
 				id->is_set8 = true;
 			}
 		/* set */

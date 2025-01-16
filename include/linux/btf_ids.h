@@ -19,6 +19,7 @@ struct btf_id_set8 {
 	struct {
 		u32 id;
 		u32 flags;
+		u32 capability;
 	} pairs[];
 };
 
@@ -65,7 +66,10 @@ word							\
 	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), "")
 
 #define ____BTF_ID_FLAGS(prefix, name, flags) \
-	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), ".long " #flags "\n")
+	__BTF_ID(__ID(__BTF_ID__##prefix##__##name##__), \
+	".long " #flags "\n"				 \
+	".zero 4         \n")
+
 #define __BTF_ID_FLAGS(prefix, name, flags, ...) \
 	____BTF_ID_FLAGS(prefix, name, flags)
 #define BTF_ID_FLAGS(prefix, name, ...) \

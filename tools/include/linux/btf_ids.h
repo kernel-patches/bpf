@@ -16,6 +16,7 @@ struct btf_id_set8 {
 	struct {
 		u32 id;
 		u32 flags;
+		u32 capability;
 	} pairs[];
 };
 
