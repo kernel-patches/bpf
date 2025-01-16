@@ -5765,10 +5765,66 @@ bpf_scx_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
+static int bpf_scx_bpf_capabilities_adjust(unsigned long *bpf_capabilities,
+					   u32 context_info, bool enter)
+{
+	if (enter) {
+		switch (context_info) {
+		case offsetof(struct sched_ext_ops, select_cpu):
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_SELECT_CPU);
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_ENQUEUE);
+			break;
+		case offsetof(struct sched_ext_ops, enqueue):
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_ENQUEUE);
+			break;
+		case offsetof(struct sched_ext_ops, dispatch):
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_DISPATCH);
+			break;
+		case offsetof(struct sched_ext_ops, running):
+		case offsetof(struct sched_ext_ops, stopping):
+		case offsetof(struct sched_ext_ops, enable):
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_REST);
+			break;
+		case offsetof(struct sched_ext_ops, init):
+		case offsetof(struct sched_ext_ops, exit):
+			ENABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_UNLOCKED);
+			break;
+		default:
+			return -EINVAL;
+		}
+	} else {
+		switch (context_info) {
+		case offsetof(struct sched_ext_ops, select_cpu):
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_SELECT_CPU);
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_ENQUEUE);
+			break;
+		case offsetof(struct sched_ext_ops, enqueue):
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_ENQUEUE);
+			break;
+		case offsetof(struct sched_ext_ops, dispatch):
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_DISPATCH);
+			break;
+		case offsetof(struct sched_ext_ops, running):
+		case offsetof(struct sched_ext_ops, stopping):
+		case offsetof(struct sched_ext_ops, enable):
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_REST);
+			break;
+		case offsetof(struct sched_ext_ops, init):
+		case offsetof(struct sched_ext_ops, exit):
+			DISABLE_BPF_CAPABILITY(bpf_capabilities, BPF_CAP_SCX_KF_UNLOCKED);
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static const struct bpf_verifier_ops bpf_scx_verifier_ops = {
 	.get_func_proto = bpf_scx_get_func_proto,
 	.is_valid_access = bpf_scx_is_valid_access,
 	.btf_struct_access = bpf_scx_btf_struct_access,
+	.bpf_capabilities_adjust = bpf_scx_bpf_capabilities_adjust
 };
 
 static int bpf_scx_init_member(const struct btf_type *t,
@@ -7596,23 +7652,17 @@ static int __init scx_init(void)
 	 * them. For now, register them the same and make each kfunc explicitly
 	 * check using scx_kf_allowed().
 	 */
-	if ((ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	if ((ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_KF_SELECT_CPU,
 					     &scx_kfunc_set_select_cpu)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_KF_ENQUEUE,
 					     &scx_kfunc_set_enqueue_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_KF_DISPATCH,
 					     &scx_kfunc_set_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_KF_CPU_RELEASE,
 					     &scx_kfunc_set_cpu_release)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+	    (ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_KF_UNLOCKED,
 					     &scx_kfunc_set_unlocked)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
-					     &scx_kfunc_set_unlocked)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_any)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
-					     &scx_kfunc_set_any)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+	    (ret = register_btf_kfunc_id_set_cap(BPF_CAP_SCX_ANY,
 					     &scx_kfunc_set_any))) {
 		pr_err("sched_ext: Failed to register kfunc sets (%d)\n", ret);
 		return ret;
