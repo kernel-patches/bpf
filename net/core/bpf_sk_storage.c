@@ -352,8 +352,8 @@ const struct bpf_func_proto bpf_sk_storage_delete_proto = {
 
 static bool bpf_sk_storage_tracing_allowed(const struct bpf_prog *prog)
 {
-	const struct btf *btf_vmlinux;
 	const struct btf_type *t;
+	const struct btf *btf;
 	const char *tname;
 	u32 btf_id;
 
@@ -371,12 +371,12 @@ static bool bpf_sk_storage_tracing_allowed(const struct bpf_prog *prog)
 		return true;
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
-		btf_vmlinux = bpf_get_btf_vmlinux();
-		if (IS_ERR_OR_NULL(btf_vmlinux))
+		btf = prog->aux->attach_btf;
+		if (!btf)
 			return false;
 		btf_id = prog->aux->attach_btf_id;
-		t = btf_type_by_id(btf_vmlinux, btf_id);
-		tname = btf_name_by_offset(btf_vmlinux, t->name_off);
+		t = btf_type_by_id(btf, btf_id);
+		tname = btf_name_by_offset(btf, t->name_off);
 		return !!strncmp(tname, "bpf_sk_storage",
 				 strlen("bpf_sk_storage"));
 	default:
