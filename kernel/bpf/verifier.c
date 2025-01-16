@@ -22959,6 +22959,40 @@ static int process_fd_array(struct bpf_verifier_env *env, union bpf_attr *attr, 
 	return 0;
 }
 
+#define STRUCT_OPS_BASE_CAPS \
+	BPF_CAP_TEST_1, \
+	BPF_CAP_TEST_2, \
+	BPF_CAP_TEST_3
+
+static const enum bpf_capability struct_ops_caps[] = {
+	STRUCT_OPS_BASE_CAPS,
+	BPF_CAP_SCX_ANY
+};
+
+struct bpf_program_type_caps {
+	enum bpf_prog_type type;
+	u32 size;
+	const enum bpf_capability *capabilities;
+};
+
+static const struct bpf_program_type_caps bpf_default_capabilities[] = {
+	{
+		.type = BPF_PROG_TYPE_STRUCT_OPS,
+		.size = ARRAY_SIZE(struct_ops_caps),
+		.capabilities = struct_ops_caps
+	},
+};
+
+static void setup_bpf_capabilities(unsigned long *bpf_capabilities,
+				   const struct bpf_program_type_caps *caps)
+{
+	int i;
+
+	bitmap_zero(bpf_capabilities, __MAX_BPF_CAP);
+	for (i = 0; i < caps->size; i++)
+		ENABLE_BPF_CAPABILITY(bpf_capabilities, caps->capabilities[i]);
+}
+
 int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
 	u64 start_time = ktime_get_ns();
@@ -22996,6 +23030,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);
 	env->bypass_spec_v4 = bpf_bypass_spec_v4(env->prog->aux->token);
 	env->bpf_capable = is_priv = bpf_token_capable(env->prog->aux->token, CAP_BPF);
+
+	if (env->prog->type == BPF_PROG_TYPE_STRUCT_OPS)
+		setup_bpf_capabilities(env->bpf_capabilities, &bpf_default_capabilities[0]);
 
 	bpf_get_btf_vmlinux();
 
