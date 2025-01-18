@@ -20187,20 +20187,25 @@ static const struct bpf_insn NOP = BPF_JMP_IMM(BPF_JA, 0, 0, 0);
 
 static int opt_remove_nops(struct bpf_verifier_env *env)
 {
+	const struct bpf_insn may_goto_0 = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 0, 0);
 	const struct bpf_insn ja = NOP;
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
+	bool is_may_goto_0, is_ja;
 	int i, err;
 
 	for (i = 0; i < insn_cnt; i++) {
-		if (memcmp(&insn[i], &ja, sizeof(ja)))
+		is_may_goto_0 = !memcmp(&insn[i], &may_goto_0, sizeof(may_goto_0));
+		is_ja = !memcmp(&insn[i], &ja, sizeof(ja));
+
+		if (!is_may_goto_0 && !is_ja)
 			continue;
 
 		err = verifier_remove_insns(env, i, 1);
 		if (err)
 			return err;
 		insn_cnt--;
-		i--;
+		i -= (is_may_goto_0 && i > 0) ? 2 : 1;
 	}
 
 	return 0;
