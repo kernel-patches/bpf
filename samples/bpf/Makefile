@@ -23,6 +23,7 @@ tprogs-y += offwaketime
 tprogs-y += spintest
 tprogs-y += map_perf_test
 tprogs-y += xdp_router_ipv4
+tprogs-y += trace_counter
 tprogs-y += trace_event
 tprogs-y += sampleip
 tprogs-y += tc_l2_redirect
@@ -64,6 +65,7 @@ offwaketime-objs := offwaketime_user.o $(TRACE_HELPERS)
 spintest-objs := spintest_user.o $(TRACE_HELPERS)
 map_perf_test-objs := map_perf_test_user.o
 test_overhead-objs := test_overhead_user.o
+trace_counter-objs := trace_counter_user.o $(TRACE_HELPERS)
 trace_event-objs := trace_event_user.o $(TRACE_HELPERS)
 sampleip-objs := sampleip_user.o $(TRACE_HELPERS)
 tc_l2_redirect-objs := tc_l2_redirect_user.o
@@ -99,6 +101,7 @@ always-y += offwaketime.bpf.o
 always-y += spintest.bpf.o
 always-y += map_perf_test.bpf.o
 always-y += parse_varlen.o parse_simple.o parse_ldabs.o
+always-y += trace_counter.bpf.o
 always-y += trace_event_kern.o
 always-y += sampleip_kern.o
 always-y += lwt_len_hist.bpf.o
@@ -283,6 +286,7 @@ $(obj)/$(TRACE_HELPERS) $(obj)/$(CGROUP_HELPERS) $(obj)/$(XDP_SAMPLE): | libbpf_
 .PHONY: libbpf_hdrs
 
 $(obj)/xdp_router_ipv4_user.o: $(obj)/xdp_router_ipv4.skel.h
+$(obj)/trace_counter_user.o: $(obj)/trace_counter.skel.h
 
 $(obj)/tracex5.bpf.o: $(obj)/syscall_nrs.h
 $(obj)/hbm_out_kern.o: $(src)/hbm.h $(src)/hbm_kern.h
@@ -347,10 +351,11 @@ $(obj)/%.bpf.o: $(src)/%.bpf.c $(obj)/vmlinux.h $(src)/xdp_sample.bpf.h $(src)/x
 		-I$(LIBBPF_INCLUDE) $(CLANG_SYS_INCLUDES) \
 		-c $(filter %.bpf.c,$^) -o $@
 
-LINKED_SKELS := xdp_router_ipv4.skel.h
+LINKED_SKELS := xdp_router_ipv4.skel.h trace_counter.skel.h
 clean-files += $(LINKED_SKELS)
 
 xdp_router_ipv4.skel.h-deps := xdp_router_ipv4.bpf.o xdp_sample.bpf.o
+trace_counter.skel.h-deps := trace_counter.bpf.o
 
 LINKED_BPF_SRCS := $(patsubst %.bpf.o,%.bpf.c,$(foreach skel,$(LINKED_SKELS),$($(skel)-deps)))
 
