@@ -260,10 +260,10 @@ static int procmap_query(int fd, const void *addr, __u32 query_flags, size_t *st
 	memset(&q, 0, sizeof(q));
 	q.size = sizeof(q);
 	q.query_flags = query_flags;
-	q.query_addr = (__u64)addr;
-	q.vma_name_addr = (__u64)path_buf;
+	q.query_addr = (__u64)(uintptr_t)addr;
+	q.vma_name_addr = (__u64)(uintptr_t)path_buf;
 	q.vma_name_size = sizeof(path_buf);
-	q.build_id_addr = (__u64)build_id_buf;
+	q.build_id_addr = (__u64)(uintptr_t)build_id_buf;
 	q.build_id_size = sizeof(build_id_buf);
 
 	err = ioctl(fd, PROCMAP_QUERY, &q);
