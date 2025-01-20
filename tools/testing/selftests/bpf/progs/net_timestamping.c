@@ -131,7 +131,7 @@ static bool bpf_test_delay(struct bpf_sock_ops *skops, const struct sock *sk)
 
 	skops_kern = bpf_cast_to_kern_ctx(skops);
 	skb = skops_kern->skb;
-	shinfo = bpf_core_cast(skb->head + skb->end, struct skb_shared_info);
+	shinfo = bpf_core_cast(skb_end_pointer(skb), struct skb_shared_info);
 
 	key.cookie = bpf_get_socket_cookie(skops);
 	if (!key.cookie)
