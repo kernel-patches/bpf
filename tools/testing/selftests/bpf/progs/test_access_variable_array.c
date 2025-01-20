@@ -5,7 +5,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-unsigned long span = 0;
+u64 span = 0;
 
 SEC("fentry/sched_balance_rq")
 int BPF_PROG(fentry_fentry, int this_cpu, struct rq *this_rq,

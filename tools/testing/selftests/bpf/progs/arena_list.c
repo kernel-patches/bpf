@@ -32,11 +32,11 @@ int cnt;
 bool skip = false;
 
 #ifdef __BPF_FEATURE_ADDR_SPACE_CAST
-long __arena arena_sum;
+s64 __arena arena_sum;
 int __arena test_val = 1;
 struct arena_list_head __arena global_head;
 #else
-long arena_sum SEC(".addr_space.1");
+s64 arena_sum SEC(".addr_space.1");
 int test_val SEC(".addr_space.1");
 #endif
 

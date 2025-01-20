@@ -46,7 +46,8 @@ int md_skb(struct __sk_buff *skb)
 	/* Simulate the following kernel macro:
 	 *   #define skb_shinfo(SKB) ((struct skb_shared_info *)(skb_end_pointer(SKB)))
 	 */
-	shared_info = bpf_core_cast(kskb->head + kskb->end, struct skb_shared_info);
+	shared_info = (void *)&skb->gso_size - offsetof(struct skb_shared_info, gso_size);
+	shared_info = bpf_core_cast(shared_info, struct skb_shared_info);
 	meta_len = shared_info->meta_len;
 	frag0_len = shared_info->frag_list->len;
 
