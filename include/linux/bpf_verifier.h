@@ -515,6 +515,10 @@ struct bpf_map_ptr_state {
 	struct bpf_map *map_ptr;
 	bool poison;
 	bool unpriv;
+	/* true if instruction is a bpf_map_lookup_elem() with statically
+	 * known in-bounds key.
+	 */
+	bool inbounds;
 };
 
 /* Possible states for alu_state member. */
