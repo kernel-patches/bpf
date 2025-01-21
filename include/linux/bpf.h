@@ -117,7 +117,7 @@ struct bpf_map_ops {
 	 * may manipulate it, exists.
 	 */
 	void (*map_fd_put_ptr)(struct bpf_map *map, void *ptr, bool need_defer);
-	int (*map_gen_lookup)(struct bpf_map *map, struct bpf_insn *insn_buf);
+	int (*map_gen_lookup)(struct bpf_map *map, struct bpf_insn *insn_buf, bool inbounds);
 	u32 (*map_fd_sys_lookup_elem)(void *ptr);
 	void (*map_seq_show_elem)(struct bpf_map *map, void *key,
 				  struct seq_file *m);

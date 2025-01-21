@@ -21582,7 +21582,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			ops = map_ptr->ops;
 			if (insn->imm == BPF_FUNC_map_lookup_elem &&
 			    ops->map_gen_lookup) {
-				cnt = ops->map_gen_lookup(map_ptr, insn_buf);
+				cnt = ops->map_gen_lookup(map_ptr, insn_buf, aux->map_ptr_state.inbounds);
 				if (cnt == -EOPNOTSUPP)
 					goto patch_map_ops_generic;
 				if (cnt <= 0 || cnt >= INSN_BUF_SIZE) {

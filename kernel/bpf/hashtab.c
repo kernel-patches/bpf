@@ -720,7 +720,9 @@ static void *htab_map_lookup_elem(struct bpf_map *map, void *key)
  * bpf_prog
  *   __htab_map_lookup_elem
  */
-static int htab_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
+static int htab_map_gen_lookup(struct bpf_map *map,
+			       struct bpf_insn *insn_buf,
+			       bool inbounds)
 {
 	struct bpf_insn *insn = insn_buf;
 	const int ret = BPF_REG_0;
@@ -760,7 +762,8 @@ static void *htab_lru_map_lookup_elem_sys(struct bpf_map *map, void *key)
 }
 
 static int htab_lru_map_gen_lookup(struct bpf_map *map,
-				   struct bpf_insn *insn_buf)
+				   struct bpf_insn *insn_buf,
+				   bool inbounds)
 {
 	struct bpf_insn *insn = insn_buf;
 	const int ret = BPF_REG_0;
@@ -2342,7 +2345,9 @@ static void *htab_percpu_map_lookup_elem(struct bpf_map *map, void *key)
 }
 
 /* inline bpf_map_lookup_elem() call for per-CPU hashmap */
-static int htab_percpu_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
+static int htab_percpu_map_gen_lookup(struct bpf_map *map,
+				      struct bpf_insn *insn_buf,
+				      bool inbounds)
 {
 	struct bpf_insn *insn = insn_buf;
 
@@ -2626,7 +2631,8 @@ static void *htab_of_map_lookup_elem(struct bpf_map *map, void *key)
 }
 
 static int htab_of_map_gen_lookup(struct bpf_map *map,
-				  struct bpf_insn *insn_buf)
+				  struct bpf_insn *insn_buf,
+				  bool inbounds)
 {
 	struct bpf_insn *insn = insn_buf;
 	const int ret = BPF_REG_0;
