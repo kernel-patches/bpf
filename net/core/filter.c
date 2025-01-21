@@ -5391,6 +5391,10 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 		if (*optlen < 1)
 			return -EINVAL;
 		break;
+	case TCP_ULP:
+		if (getopt)
+			return -EINVAL;
+		break;
 	case TCP_BPF_SOCK_OPS_CB_FLAGS:
 		if (*optlen != sizeof(int))
 			return -EINVAL;
