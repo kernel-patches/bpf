@@ -221,11 +221,13 @@ static int array_map_gen_lookup(struct bpf_map *map,
 
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
 	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
-	if (!map->bypass_spec_v1) {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 4);
-		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
-	} else {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 3);
+	if (!inbounds) {
+		if (!map->bypass_spec_v1) {
+			*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 4);
+			*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
+		} else {
+			*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 3);
+		}
 	}
 
 	if (is_power_of_2(elem_size)) {
@@ -269,11 +271,13 @@ static int percpu_array_map_gen_lookup(struct bpf_map *map,
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, offsetof(struct bpf_array, pptrs));
 
 	*insn++ = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_2, 0);
-	if (!map->bypass_spec_v1) {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, BPF_REG_0, map->max_entries, 6);
-		*insn++ = BPF_ALU32_IMM(BPF_AND, BPF_REG_0, array->index_mask);
-	} else {
-		*insn++ = BPF_JMP_IMM(BPF_JGE, BPF_REG_0, map->max_entries, 5);
+	if (!inbounds) {
+		if (!map->bypass_spec_v1) {
+			*insn++ = BPF_JMP_IMM(BPF_JGE, BPF_REG_0, map->max_entries, 6);
+			*insn++ = BPF_ALU32_IMM(BPF_AND, BPF_REG_0, array->index_mask);
+		} else {
+			*insn++ = BPF_JMP_IMM(BPF_JGE, BPF_REG_0, map->max_entries, 5);
+		}
 	}
 
 	*insn++ = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, 3);
