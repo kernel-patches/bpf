@@ -11265,8 +11265,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (func_id == BPF_FUNC_map_lookup_elem &&
 		    can_elide_value_nullness(meta.map_ptr->map_type) &&
 		    meta.const_map_key >= 0 &&
-		    meta.const_map_key < meta.map_ptr->max_entries)
+		    meta.const_map_key < meta.map_ptr->max_entries) {
 			ret_flag &= ~PTR_MAYBE_NULL;
+			env->insn_aux_data[insn_idx].map_ptr_state.inbounds = true;
+		}
 
 		regs[BPF_REG_0].map_ptr = meta.map_ptr;
 		regs[BPF_REG_0].map_uid = meta.map_uid;
