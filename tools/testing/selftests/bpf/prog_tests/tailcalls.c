@@ -1602,6 +1602,7 @@ static void test_tailcall_bpf2bpf_freplace(void)
 	err = bpf_link__destroy(freplace_link);
 	if (!ASSERT_OK(err, "destroy link"))
 		goto out;
+	freplace_link = NULL;
 
 	/* OK to update prog_array map then delete element from the map. */
 
