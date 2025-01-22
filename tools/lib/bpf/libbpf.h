@@ -1918,6 +1918,22 @@ LIBBPF_API int libbpf_register_prog_handler(const char *sec,
  */
 LIBBPF_API int libbpf_unregister_prog_handler(int handler_id);
 
+/**
+ * The program load type:
+ *
+ * - BPF_PROG_LOAD_TYPE_DISABLED: the program is not loaded.
+ * - BPF_PROG_LOAD_TYPE_AUTO: the program is autoloaded when the bpf_object is loaded.
+ */
+enum bpf_prog_load_type {
+	BPF_PROG_LOAD_TYPE_DISABLED = 0,
+	BPF_PROG_LOAD_TYPE_AUTO,
+};
+
+LIBBPF_API int bpf_program__set_load_type(struct bpf_program *prog,
+					    enum bpf_prog_load_type loadtype);
+LIBBPF_API enum bpf_prog_load_type bpf_program__load_type(const struct bpf_program *prog);
+
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

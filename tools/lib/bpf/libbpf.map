@@ -436,4 +436,6 @@ LIBBPF_1.6.0 {
 		bpf_linker__add_buf;
 		bpf_linker__add_fd;
 		bpf_linker__new_fd;
+		bpf_program__load_type;
+		bpf_program__set_load_type;
 } LIBBPF_1.5.0;
