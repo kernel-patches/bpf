@@ -124,7 +124,7 @@ struct xdp_test_data {
  * must be updated accordingly this gets changed, otherwise BPF selftests
  * will fail.
  */
-#define TEST_XDP_FRAME_SIZE (PAGE_SIZE - sizeof(struct xdp_page_head))
+#define TEST_XDP_FRAME_SIZE (4096 - sizeof(struct xdp_page_head))
 #define TEST_XDP_MAX_BATCH 256
 
 static void xdp_test_run_init_page(netmem_ref netmem, void *arg)
@@ -660,7 +660,7 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	void __user *data_in = u64_to_user_ptr(kattr->test.data_in);
 	void *data;
 
-	if (size < ETH_HLEN || size > PAGE_SIZE - headroom - tailroom)
+	if (size < ETH_HLEN || size > 4096 - headroom - tailroom)
 		return ERR_PTR(-EINVAL);
 
 	if (user_size > size)
@@ -1298,7 +1298,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 			frag = &sinfo->frags[sinfo->nr_frags++];
 
 			data_len = min_t(u32, kattr->test.data_size_in - size,
-					 PAGE_SIZE);
+					 4096);
 			skb_frag_fill_page_desc(frag, page, 0, data_len);
 
 			if (copy_from_user(page_address(page), data_in + size,
