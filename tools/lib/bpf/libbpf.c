@@ -689,6 +689,7 @@ struct bpf_object {
 	bool loaded;
 	bool has_subcalls;
 	bool has_rodata;
+	bool has_dynload_progs;
 
 	struct bpf_gen *gen_loader;
 
@@ -7551,13 +7552,15 @@ retry_load:
 	 * custom log_buf is specified; if the program load fails, then we'll
 	 * bump log_level to 1 and use either custom log_buf or we'll allocate
 	 * our own and retry the load to get details on what failed
+	 * A shared buffer cannot be used for dynamically loaded programs as they
+	 * can be loaded concurrently.
 	 */
 	if (log_level) {
 		if (prog->log_buf) {
 			log_buf = prog->log_buf;
 			log_buf_size = prog->log_size;
 			own_log_buf = false;
-		} else if (obj->log_buf) {
+		} else if (obj->log_buf && prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC) {
 			log_buf = obj->log_buf;
 			log_buf_size = obj->log_size;
 			own_log_buf = false;
@@ -7911,6 +7914,7 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 			pr_debug("prog '%s': skipped auto-loading\n", prog->name);
 			continue;
 		}
+
 		prog->log_level |= log_level;
 
 		if (obj->gen_loader)
@@ -8588,8 +8592,11 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 			err = bpf_gen__finish(obj->gen_loader, obj->nr_programs, obj->nr_maps);
 	}
 
-	/* clean up fd_array */
-	zfree(&obj->fd_array);
+	/* The fd array is needed for dynamically loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (!obj->has_dynload_progs || !obj->fd_array_cnt)
+		zfree(&obj->fd_array);
 
 	/* clean up module BTFs */
 	for (i = 0; i < obj->btf_module_cnt; i++) {
@@ -8597,11 +8604,17 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 		btf__free(obj->btf_modules[i].btf);
 		free(obj->btf_modules[i].name);
 	}
-	free(obj->btf_modules);
+	obj->btf_module_cnt = 0;
+	zfree(&obj->btf_modules);
 
-	/* clean up vmlinux BTF */
-	btf__free(obj->btf_vmlinux);
-	obj->btf_vmlinux = NULL;
+	/* The btf_vmlinux data is needed for dynamically loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (!obj->has_dynload_progs) {
+		/* clean up vmlinux BTF */
+		btf__free(obj->btf_vmlinux);
+		obj->btf_vmlinux = NULL;
+	}
 
 	obj->loaded = true; /* doesn't matter if successfully or not */
 
@@ -9103,6 +9116,8 @@ void bpf_object__close(struct bpf_object *obj)
 
 	zfree(&obj->arena_data);
 
+	zfree(&obj->fd_array);
+
 	free(obj);
 }
 
@@ -9230,8 +9245,16 @@ bool bpf_program__autoload(const struct bpf_program *prog)
 
 int bpf_program__set_autoload(struct bpf_program *prog, bool autoload)
 {
-	return bpf_program__set_load_type(prog,
-		autoload ? BPF_PROG_LOAD_TYPE_AUTO : BPF_PROG_LOAD_TYPE_DISABLED);
+	enum bpf_prog_load_type type = prog->load_type;
+
+	if (autoload)
+		type = BPF_PROG_LOAD_TYPE_AUTO;
+	else if (prog->load_type == BPF_PROG_LOAD_TYPE_AUTO)
+		type = BPF_PROG_LOAD_TYPE_DISABLED;
+	else
+		return 0; /* Otherwise, keep the current load type. */
+
+	return bpf_program__set_load_type(prog, type);
 }
 
 bool bpf_program__autoattach(const struct bpf_program *prog)
@@ -14086,16 +14109,117 @@ void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 	free(s);
 }
 
+static int bpf_program__set_dynamicload(struct bpf_program *prog)
+{
+	struct bpf_object *obj;
+	const char *attach_name;
+
+	obj = prog->obj;
+	if (!obj)
+		return libbpf_err(-EINVAL);
+
+	/* Dynamically loaded programs are not supported for gen_loader.
+	 * This limitation exists because bpf_object_load_prog is not invoked
+	 * for dynamically loaded programs, making them invisible to gen_loader.
+	 * To ensure compatibility, bpf_program__set_dynamicload should not be
+	 * called when gen_loader is used to generate a BPF object loader.
+	 * The gen_loader implementation handles autoloaded programs and follows
+	 * its own model for loading BPF programs. To pass a BPF program to
+	 * gen_loader, set the program's load type to BPF_PROG_LOAD_TYPE_AUTO.
+	 */
+	if (obj->gen_loader)
+		return libbpf_err(-ENOTSUP);
+
+	if (prog_is_subprog(obj, prog))
+		return libbpf_err(-EINVAL);
+
+	attach_name = strchr(prog->sec_name, '/');
+	if (!attach_name || strchr(attach_name, ':')) {
+		/* Dynamic loading is not supported if module's BTF
+		 * data is required for a bpf program.
+		 * The module's BTF data is required in the folowing cases:
+		 * - If a BPF program is annotated with just SEC("fentry")
+		 * (or similar) without declaratively specifying
+		 * target, then it is expected that target will be
+		 * specified with bpf_program__set_attach_target() at
+		 * runtime before BPF object load step. The module's
+		 * BTF data will be required by libbpf_prepare_prog_load and
+		 * libbpf_find_attach_btf_id.
+		 * - The attach name is prepended with a module name.
+		 */
+		return libbpf_err(-EINVAL);
+	}
+
+	obj->has_dynload_progs = true;
+	prog->load_type = BPF_PROG_LOAD_TYPE_DYNAMIC;
+	prog->autoattach = false;
+
+	return 0;
+}
+
 int bpf_program__set_load_type(struct bpf_program *prog, enum bpf_prog_load_type type)
 {
 	if (prog->obj->loaded)
 		return libbpf_err(-EINVAL);
 
-	prog->load_type = type;
+	switch (type) {
+	case BPF_PROG_LOAD_TYPE_DYNAMIC:
+		return bpf_program__set_dynamicload(prog);
+	default:
+		prog->load_type = type;
+		break;
+	}
+
 	return 0;
 }
 
 enum bpf_prog_load_type bpf_program__load_type(const struct bpf_program *prog)
 {
 	return prog->load_type;
+}
+
+/*
+ * This function must be called after bpf_object__load_progs.
+ * Dynamically-loaded program data is initialized on object load.
+ * Post-load initialization is not supported.
+ */
+int
+bpf_program__load_dynamically(struct bpf_program *prog, int extra_log_level)
+{
+	int err;
+	struct bpf_object *obj;
+
+	obj = prog->obj;
+	if (!obj || !obj->loaded)
+		return libbpf_err(-EINVAL);
+
+	if (prog_is_subprog(obj, prog) || prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC)
+		return libbpf_err(-EINVAL);
+
+	prog->log_level |= extra_log_level;
+
+	err = bpf_object_load_prog(obj, prog, prog->insns, prog->insns_cnt,
+					obj->license, obj->kern_version, &prog->fd);
+	if (err) {
+		pr_warn("prog '%s': failed to dynamically load: %d\n", prog->name, err);
+		prog->log_level &= ~extra_log_level;
+		return err;
+	}
+
+	prog->log_level &= ~extra_log_level;
+	return 0;
+}
+
+int bpf_program__unload_dynamically(struct bpf_program *prog)
+{
+	int err;
+
+	if (!prog || prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC)
+		return libbpf_err(-EINVAL);
+
+	/* Close the file descriptor but retain the program's data to
+	 * support reloading the program if it is required again.
+	 */
+	err = zclose(prog->fd);
+	return err ? libbpf_err(-errno) : 0;
 }
