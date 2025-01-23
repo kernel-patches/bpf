@@ -24,5 +24,10 @@ void smc_ops_unreg(struct smc_ops *ops);
  * Note: Caller MUST ensure it's was invoked under rcu_read_lock.
  */
 struct smc_ops *smc_ops_find_by_name(const char *name);
+#if IS_ENABLED(CONFIG_SMC_OPS)
+int smc_bpf_struct_ops_init(void);
+#else
+static inline int smc_bpf_struct_ops_init(void) { return 0; }
+#endif
 
 #endif /* __SMC_OPS */
