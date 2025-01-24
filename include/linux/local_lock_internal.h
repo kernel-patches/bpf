@@ -15,6 +15,19 @@ typedef struct {
 #endif
 } local_lock_t;
 
+typedef struct {
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map	dep_map;
+	struct task_struct	*owner;
+#endif
+	/*
+	 * Same layout as local_lock_t with 'active' field
+	 * at the end, since (local_trylock_t *) will be
+	 * casted to (local_lock_t *).
+	 */
+	int active;
+} local_trylock_t;
+
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 # define LOCAL_LOCK_DEBUG_INIT(lockname)		\
 	.dep_map = {					\
@@ -27,6 +40,13 @@ typedef struct {
 static inline void local_lock_acquire(local_lock_t *l)
 {
 	lock_map_acquire(&l->dep_map);
+	DEBUG_LOCKS_WARN_ON(l->owner);
+	l->owner = current;
+}
+
+static inline void local_trylock_acquire(local_lock_t *l)
+{
+	lock_map_acquire_try(&l->dep_map);
 	DEBUG_LOCKS_WARN_ON(l->owner);
 	l->owner = current;
 }
@@ -45,6 +65,7 @@ static inline void local_lock_debug_init(local_lock_t *l)
 #else /* CONFIG_DEBUG_LOCK_ALLOC */
 # define LOCAL_LOCK_DEBUG_INIT(lockname)
 static inline void local_lock_acquire(local_lock_t *l) { }
+static inline void local_trylock_acquire(local_lock_t *l) { }
 static inline void local_lock_release(local_lock_t *l) { }
 static inline void local_lock_debug_init(local_lock_t *l) { }
 #endif /* !CONFIG_DEBUG_LOCK_ALLOC */
@@ -87,9 +108,36 @@ do {								\
 
 #define __local_lock_irqsave(lock, flags)			\
 	do {							\
+		local_trylock_t *tl;				\
+		local_lock_t *l;				\
 		local_irq_save(flags);				\
-		local_lock_acquire(this_cpu_ptr(lock));		\
+		l = (local_lock_t *)this_cpu_ptr(lock);		\
+		tl = (local_trylock_t *)l;			\
+		_Generic((lock),				\
+			local_trylock_t *: ({			\
+				lockdep_assert(tl->active == 0);\
+				WRITE_ONCE(tl->active, 1);	\
+			}),					\
+			default:(void)0);			\
+		local_lock_acquire(l);				\
 	} while (0)
+
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		local_trylock_t *tl;				\
+		local_irq_save(flags);				\
+		tl = this_cpu_ptr(lock);			\
+		if (READ_ONCE(tl->active) == 1) {		\
+			local_irq_restore(flags);		\
+			tl = NULL;				\
+		} else {					\
+			WRITE_ONCE(tl->active, 1);		\
+			local_trylock_acquire(			\
+				(local_lock_t *)tl);		\
+		}						\
+		!!tl;						\
+	})
 
 #define __local_unlock(lock)					\
 	do {							\
@@ -105,7 +153,17 @@ do {								\
 
 #define __local_unlock_irqrestore(lock, flags)			\
 	do {							\
-		local_lock_release(this_cpu_ptr(lock));		\
+		local_trylock_t *tl;				\
+		local_lock_t *l;				\
+		l = (local_lock_t *)this_cpu_ptr(lock);		\
+		tl = (local_trylock_t *)l;			\
+		_Generic((lock),				\
+			local_trylock_t *: ({			\
+				lockdep_assert(tl->active == 1);\
+				WRITE_ONCE(tl->active, 0);	\
+			}),					\
+			default:(void)0);			\
+		local_lock_release(l);				\
 		local_irq_restore(flags);			\
 	} while (0)
 
@@ -125,6 +183,7 @@ do {								\
  * critical section while staying preemptible.
  */
 typedef spinlock_t local_lock_t;
+typedef spinlock_t local_trylock_t;
 
 #define INIT_LOCAL_LOCK(lockname) __LOCAL_SPIN_LOCK_UNLOCKED((lockname))
 
@@ -147,6 +206,22 @@ typedef spinlock_t local_lock_t;
 		flags = 0;					\
 		__local_lock(lock);				\
 	} while (0)
+
+#define __local_trylock_irqsave(lock, flags)			\
+	({							\
+		__label__ out;					\
+		int ret = 0;					\
+		typecheck(unsigned long, flags);		\
+		flags = 0;					\
+		if (in_nmi() || in_hardirq())			\
+			goto out;				\
+		migrate_disable();				\
+		ret = spin_trylock(this_cpu_ptr((lock)));	\
+		if (!ret)					\
+			migrate_enable();			\
+	out:							\
+		ret;						\
+	})
 
 #define __local_unlock(__lock)					\
 	do {							\
