@@ -126,3 +126,38 @@ void test_libbpf_probe_helpers(void)
 		ASSERT_EQ(res, d->supported, buf);
 	}
 }
+
+void test_libbpf_probe_kfuncs(void)
+{
+	int ret, kfunc_id;
+	char *kfunc = "bpf_cpumask_create";
+	struct btf *btf;
+
+	btf = btf__parse("/sys/kernel/btf/vmlinux", NULL);
+	if (!ASSERT_OK_PTR(btf, "btf_parse"))
+		return;
+
+	kfunc_id = btf__find_by_name_kind(btf, kfunc, BTF_KIND_FUNC);
+	if (!ASSERT_GT(kfunc_id, 0, kfunc))
+		goto cleanup;
+
+	/* prog BPF_PROG_TYPE_SYSCALL supports kfunc bpf_cpumask_create */
+	ret = libbpf_probe_bpf_kfunc(BPF_PROG_TYPE_SYSCALL, kfunc_id, 0, NULL);
+	ASSERT_EQ(ret, 1, kfunc);
+
+	/* prog BPF_PROG_TYPE_KPROBE does not support kfunc bpf_cpumask_create */
+	ret = libbpf_probe_bpf_kfunc(BPF_PROG_TYPE_KPROBE, kfunc_id, 0, NULL);
+	ASSERT_EQ(ret, 0, kfunc);
+
+	/* invalid kfunc id */
+	ret = libbpf_probe_bpf_kfunc(BPF_PROG_TYPE_KPROBE, -1, 0, NULL);
+	ASSERT_EQ(ret, 0, "invalid kfunc id:-1");
+
+	/* invalid prog type */
+	ret = libbpf_probe_bpf_kfunc(100000, kfunc_id, 0, NULL);
+	if (!ASSERT_LE(ret, 0, "invalid prog type:100000"))
+		goto cleanup;
+
+cleanup:
+	btf__free(btf);
+}
