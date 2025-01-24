@@ -413,22 +413,20 @@ int libbpf_probe_bpf_map_type(enum bpf_map_type map_type, const void *opts)
 	return libbpf_err(ret);
 }
 
-int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helper_id,
-			    const void *opts)
+static int probe_func_comm(enum bpf_prog_type prog_type, struct bpf_insn insn,
+			   char *accepted_msgs, size_t msgs_size)
 {
 	struct bpf_insn insns[] = {
-		BPF_EMIT_CALL((__u32)helper_id),
+		BPF_EXIT_INSN(),
 		BPF_EXIT_INSN(),
 	};
 	const size_t insn_cnt = ARRAY_SIZE(insns);
-	char buf[4096];
-	int ret;
+	int err;
 
-	if (opts)
-		return libbpf_err(-EINVAL);
+	insns[0] = insn;
 
 	/* we can't successfully load all prog types to check for BPF helper
-	 * support, so bail out with -EOPNOTSUPP error
+	 * and kfunc support, so bail out with -EOPNOTSUPP error
 	 */
 	switch (prog_type) {
 	case BPF_PROG_TYPE_TRACING:
@@ -440,10 +438,26 @@ int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helpe
 		break;
 	}
 
-	buf[0] = '\0';
-	ret = probe_prog_load(prog_type, insns, insn_cnt, buf, sizeof(buf));
-	if (ret < 0)
-		return libbpf_err(ret);
+	accepted_msgs[0] = '\0';
+	err = probe_prog_load(prog_type, insns, insn_cnt, accepted_msgs, msgs_size);
+	if (err < 0)
+		return libbpf_err(err);
+
+	return 0;
+}
+
+int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helper_id,
+			    const void *opts)
+{
+	char buf[4096];
+	int ret;
+
+	if (opts)
+		return libbpf_err(-EINVAL);
+
+	ret = probe_func_comm(prog_type, BPF_EMIT_CALL((__u32)helper_id), buf, sizeof(buf));
+	if (ret)
+		return ret;
 
 	/* If BPF verifier doesn't recognize BPF helper ID (enum bpf_func_id)
 	 * at all, it will emit something like "invalid func unknown#181".
