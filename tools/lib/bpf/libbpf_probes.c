@@ -446,6 +446,36 @@ static int probe_func_comm(enum bpf_prog_type prog_type, struct bpf_insn insn,
 	return 0;
 }
 
+int libbpf_probe_bpf_kfunc(enum bpf_prog_type prog_type, int kfunc_id,
+			   __s16 btf_fd, const void *opts)
+{
+	struct bpf_insn insn;
+	int err;
+	char buf[4096];
+
+	if (opts)
+		return libbpf_err(-EINVAL);
+
+	insn.code = BPF_JMP | BPF_CALL;
+	insn.src_reg = BPF_PSEUDO_KFUNC_CALL;
+	insn.imm = kfunc_id;
+	insn.off = btf_fd;
+
+	err = probe_func_comm(prog_type, insn, buf, sizeof(buf));
+	if (err)
+		return err;
+
+	/* If BPF verifier recognizes BPF kfunc but it's not supported for
+	 * given BPF program type, it will emit "calling kernel function
+	 * bpf_cpumask_create is not allowed", if the kfunc id is invalid,
+	 * it will emit "kernel btf_id 4294967295 is not a function".
+	 */
+	if (err == 0 && (strstr(buf, "not allowed") || strstr(buf, "not a function")))
+		return 0;
+
+	return 1; /* assume supported */
+}
+
 int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helper_id,
 			    const void *opts)
 {
