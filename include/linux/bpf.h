@@ -184,8 +184,8 @@ struct bpf_map_ops {
 };
 
 enum {
-	/* Support at most 11 fields in a BTF type */
-	BTF_FIELDS_MAX	   = 11,
+	/* Support at most 13 fields in a BTF type */
+	BTF_FIELDS_MAX	   = 13,
 };
 
 enum btf_field_type {
@@ -204,6 +204,7 @@ enum btf_field_type {
 	BPF_REFCOUNT   = (1 << 9),
 	BPF_WORKQUEUE  = (1 << 10),
 	BPF_UPTR       = (1 << 11),
+	BPF_DYNPTR     = (1 << 12),
 };
 
 typedef void (*btf_dtor_kfunc_t)(void *);

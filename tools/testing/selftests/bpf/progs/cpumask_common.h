@@ -10,7 +10,7 @@
 /* Should use BTF_FIELDS_MAX, but it is not always available in vmlinux.h,
  * so use the hard-coded number as a workaround.
  */
-#define CPUMASK_KPTR_FIELDS_MAX 11
+#define CPUMASK_KPTR_FIELDS_MAX 13
 
 int err;
 
