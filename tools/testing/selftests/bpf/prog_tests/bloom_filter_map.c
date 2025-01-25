@@ -4,6 +4,7 @@
 #include <sys/syscall.h>
 #include <limits.h>
 #include <test_progs.h>
+#include <numa.h>
 #include "bloom_filter_map.skel.h"
 
 static void test_fail_cases(void)
@@ -69,6 +70,7 @@ static void test_success_cases(void)
 
 	/* Create a map */
 	opts.map_flags = BPF_F_ZERO_SEED | BPF_F_NUMA_NODE;
+	opts.numa_node = numa_node_of_cpu(sched_getcpu()); // Get the NUMA node of the current CPU
 	fd = bpf_map_create(BPF_MAP_TYPE_BLOOM_FILTER, NULL, 0, sizeof(value), 100, &opts);
 	if (!ASSERT_GE(fd, 0, "bpf_map_create bloom filter success case"))
 		return;
