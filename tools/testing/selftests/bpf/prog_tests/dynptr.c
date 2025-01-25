@@ -33,6 +33,7 @@ static struct {
 	{"test_dynptr_skb_tp_btf", SETUP_SKB_PROG_TP},
 	{"test_probe_read_kernel_dynptr", SETUP_RINGBUF},
 	{"test_probe_read_user_dynptr", SETUP_RINGBUF},
+	{"test_copy_from_user_dynptr", SETUP_RINGBUF},
 };
 
 static int ringbuf_cb(void *ctx, void *data, size_t len)
@@ -42,6 +43,8 @@ static int ringbuf_cb(void *ctx, void *data, size_t len)
 
 	if (!ASSERT_EQ(len, skel->data->test_buf.length, "length"))
 		return -E2BIG;
+
+	ASSERT_EQ(skel->bss->err, 0, "err");
 
 	if (!ASSERT_MEMEQ(buf, skel->data->test_buf.buf, len, "ringbuf_cb"))
 		return -EINVAL;
