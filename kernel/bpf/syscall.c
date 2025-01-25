@@ -1345,6 +1345,21 @@ static bool bpf_net_capable(void)
 	return capable(CAP_NET_ADMIN) || capable(CAP_SYS_ADMIN);
 }
 
+static struct btf *get_map_btf(int btf_fd)
+{
+	struct btf *btf = btf_get_by_fd(btf_fd);
+
+	if (IS_ERR(btf))
+		return btf;
+
+	if (btf_is_kernel(btf)) {
+		btf_put(btf);
+		return ERR_PTR(-EACCES);
+	}
+
+	return btf;
+}
+
 #define BPF_MAP_CREATE_LAST_FIELD map_token_fd
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
