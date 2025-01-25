@@ -271,7 +271,14 @@ struct bpf_map {
 	u64 map_extra; /* any per-map-type extra fields */
 	u32 map_flags;
 	u32 id;
+	/* BTF record for special fields in map value. bpf_dynptr is disallowed
+	 * at present.
+	 */
 	struct btf_record *record;
+	/* BTF record for special fields in map key. Only bpf_dynptr is allowed
+	 * at present.
+	 */
+	struct btf_record *key_record;
 	int numa_node;
 	u32 btf_key_type_id;
 	u32 btf_value_type_id;
@@ -336,6 +343,8 @@ static inline const char *btf_field_type_name(enum btf_field_type type)
 		return "bpf_rb_node";
 	case BPF_REFCOUNT:
 		return "bpf_refcount";
+	case BPF_DYNPTR:
+		return "bpf_dynptr";
 	default:
 		WARN_ON_ONCE(1);
 		return "unknown";
@@ -366,6 +375,8 @@ static inline u32 btf_field_type_size(enum btf_field_type type)
 		return sizeof(struct bpf_rb_node);
 	case BPF_REFCOUNT:
 		return sizeof(struct bpf_refcount);
+	case BPF_DYNPTR:
+		return sizeof(struct bpf_dynptr);
 	default:
 		WARN_ON_ONCE(1);
 		return 0;
@@ -396,6 +407,8 @@ static inline u32 btf_field_type_align(enum btf_field_type type)
 		return __alignof__(struct bpf_rb_node);
 	case BPF_REFCOUNT:
 		return __alignof__(struct bpf_refcount);
+	case BPF_DYNPTR:
+		return __alignof__(struct bpf_dynptr);
 	default:
 		WARN_ON_ONCE(1);
 		return 0;
@@ -426,6 +439,7 @@ static inline void bpf_obj_init_field(const struct btf_field *field, void *addr)
 	case BPF_KPTR_REF:
 	case BPF_KPTR_PERCPU:
 	case BPF_UPTR:
+	case BPF_DYNPTR:
 		break;
 	default:
 		WARN_ON_ONCE(1);
