@@ -1378,6 +1378,8 @@ static int map_create(union bpf_attr *attr)
 	if (err)
 		return -EINVAL;
 
+	if (attr->map_flags & BPF_INT_F_MASK)
+		return -EINVAL;
 	/* check BPF_F_TOKEN_FD flag, remember if it's set, and then clear it
 	 * to avoid per-map type checks tripping on unknown flag
 	 */
@@ -5057,7 +5059,7 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	info.key_size = map->key_size;
 	info.value_size = map->value_size;
 	info.max_entries = map->max_entries;
-	info.map_flags = map->map_flags;
+	info.map_flags = map->map_flags & ~BPF_INT_F_MASK;
 	info.map_extra = map->map_extra;
 	memcpy(info.name, map->name, sizeof(map->name));
 

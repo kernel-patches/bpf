@@ -258,6 +258,14 @@ struct bpf_list_node_kern {
 	void *owner;
 } __attribute__((aligned(8)));
 
+/* Internal map flags */
+enum {
+	/* map key supports bpf_dynptr */
+	BPF_INT_F_DYNPTR_IN_KEY = (1U << 31),
+};
+
+#define BPF_INT_F_MASK (1U << 31)
+
 struct bpf_map {
 	const struct bpf_map_ops *ops;
 	struct bpf_map *inner_map_meta;
@@ -269,6 +277,10 @@ struct bpf_map {
 	u32 value_size;
 	u32 max_entries;
 	u64 map_extra; /* any per-map-type extra fields */
+	/* The topmost bit of map_flags is used as an internal map flag
+	 * (aka BPF_INT_F_DYNPTR_IN_KEY) and it can't be set through bpf
+	 * syscall.
+	 */
 	u32 map_flags;
 	u32 id;
 	/* BTF record for special fields in map value. bpf_dynptr is disallowed
@@ -316,6 +328,11 @@ struct bpf_map {
 	atomic64_t sleepable_refcnt;
 	s64 __percpu *elem_count;
 };
+
+static inline bool bpf_map_has_dynptr_key(const struct bpf_map *map)
+{
+	return map->map_flags & BPF_INT_F_DYNPTR_IN_KEY;
+}
 
 static inline const char *btf_field_type_name(enum btf_field_type type)
 {
