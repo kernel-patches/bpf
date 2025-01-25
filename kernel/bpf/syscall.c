@@ -1360,6 +1360,34 @@ static struct btf *get_map_btf(int btf_fd)
 	return btf;
 }
 
+static int map_has_dynptr_in_key_type(struct btf *btf, u32 btf_key_id, u32 key_size)
+{
+	const struct btf_type *type;
+	struct btf_record *record;
+	u32 btf_key_size;
+
+	if (!btf_key_id)
+		return 0;
+
+	type = btf_type_id_size(btf, &btf_key_id, &btf_key_size);
+	if (!type || btf_key_size != key_size)
+		return -EINVAL;
+
+	/* For dynptr key, key BTF type must be struct */
+	if (!__btf_type_is_struct(type))
+		return 0;
+
+	if (btf_type_is_dynptr(btf, type))
+		return 1;
+
+	record = btf_parse_fields(btf, type, BPF_DYNPTR, key_size);
+	if (IS_ERR(record))
+		return PTR_ERR(record);
+
+	btf_record_free(record);
+	return !!record;
+}
+
 #define BPF_MAP_CREATE_LAST_FIELD map_token_fd
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
@@ -1398,6 +1426,14 @@ static int map_create(union bpf_attr *attr)
 		btf = get_map_btf(attr->btf_fd);
 		if (IS_ERR(btf))
 			return PTR_ERR(btf);
+
+		err = map_has_dynptr_in_key_type(btf, attr->btf_key_type_id, attr->key_size);
+		if (err < 0)
+			goto put_btf;
+		if (err > 0) {
+			attr->map_flags |= BPF_INT_F_DYNPTR_IN_KEY;
+			err = 0;
+		}
 	}
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
