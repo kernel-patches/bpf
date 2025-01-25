@@ -10,6 +10,7 @@ enum test_setup_type {
 	SETUP_SYSCALL_SLEEP,
 	SETUP_SKB_PROG,
 	SETUP_SKB_PROG_TP,
+	SETUP_RINGBUF,
 };
 
 static struct {
@@ -30,20 +31,37 @@ static struct {
 	{"test_dynptr_skb_no_buff", SETUP_SKB_PROG},
 	{"test_dynptr_skb_strcmp", SETUP_SKB_PROG},
 	{"test_dynptr_skb_tp_btf", SETUP_SKB_PROG_TP},
+	{"test_probe_read_kernel_dynptr", SETUP_RINGBUF},
 };
+
+static int ringbuf_cb(void *ctx, void *data, size_t len)
+{
+	struct dynptr_success *skel = ctx;
+	const char *buf = data;
+
+	if (!ASSERT_EQ(len, skel->data->test_buf.length, "length"))
+		return -E2BIG;
+
+	if (!ASSERT_MEMEQ(buf, skel->data->test_buf.buf, len, "ringbuf_cb"))
+		return -EINVAL;
+
+	return 0;
+}
 
 static void verify_success(const char *prog_name, enum test_setup_type setup_type)
 {
+	struct ring_buffer *rb = NULL;
 	struct dynptr_success *skel;
 	struct bpf_program *prog;
 	struct bpf_link *link;
-	int err;
+	int err, ret;
 
 	skel = dynptr_success__open();
 	if (!ASSERT_OK_PTR(skel, "dynptr_success__open"))
 		return;
 
 	skel->bss->pid = getpid();
+	skel->data->test_buf.length = 8;
 
 	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
 	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
@@ -62,6 +80,24 @@ static void verify_success(const char *prog_name, enum test_setup_type setup_typ
 			goto cleanup;
 
 		usleep(1);
+
+		bpf_link__destroy(link);
+		break;
+	case SETUP_RINGBUF:
+		link = bpf_program__attach(prog);
+		if (!ASSERT_OK_PTR(link, "bpf_program__attach"))
+			goto cleanup;
+
+		rb = ring_buffer__new(bpf_map__fd(skel->maps.ringbuf), ringbuf_cb, skel, NULL);
+		if (!ASSERT_OK_PTR(rb, "ring_buffer__new"))
+			goto cleanup;
+
+		usleep(1);
+
+		ret = ring_buffer__poll(rb, 5000);
+
+		if (!ASSERT_EQ(ret, 1, "ring_buffer__poll"))
+			goto cleanup;
 
 		bpf_link__destroy(link);
 		break;
@@ -125,6 +161,8 @@ static void verify_success(const char *prog_name, enum test_setup_type setup_typ
 	ASSERT_EQ(skel->bss->err, 0, "err");
 
 cleanup:
+	if (rb != NULL)
+		ring_buffer__free(rb);
 	dynptr_success__destroy(skel);
 }
 

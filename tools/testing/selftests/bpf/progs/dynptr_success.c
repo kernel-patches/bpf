@@ -567,3 +567,41 @@ int BPF_PROG(test_dynptr_skb_tp_btf, void *skb, void *location)
 
 	return 1;
 }
+
+#define MAX_BUFFER_LEN 20
+
+struct {
+	__u32 length;
+	char buf[MAX_BUFFER_LEN];
+} test_buf = {
+	.length = 0,
+	.buf = "0123456789abcdef",
+};
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_probe_read_kernel_dynptr(void *ctx)
+{
+	int copy_len = test_buf.length;
+	struct bpf_dynptr ptr;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	if (test_buf.length > MAX_BUFFER_LEN)
+		copy_len = MAX_BUFFER_LEN;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, copy_len, 0, &ptr);
+
+	if (-E2BIG != bpf_probe_read_kernel_dynptr(&ptr, 0, MAX_BUFFER_LEN + 1,
+		test_buf.buf, 0)) {
+		err = 1;
+		goto cleanup;
+	}
+
+	err = bpf_probe_read_kernel_dynptr(&ptr, 0, copy_len,
+		test_buf.buf, 0);
+
+cleanup:
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+	return 0;
+}
