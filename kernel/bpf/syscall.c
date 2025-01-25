@@ -1368,6 +1368,7 @@ static int map_create(union bpf_attr *attr)
 	struct bpf_token *token = NULL;
 	int numa_node = bpf_map_attr_numa_node(attr);
 	u32 map_type = attr->map_type;
+	struct btf *btf = NULL;
 	struct bpf_map *map;
 	bool token_flag;
 	int f_flags;
@@ -1391,43 +1392,63 @@ static int map_create(union bpf_attr *attr)
 		return -EINVAL;
 	}
 
+	if (attr->btf_key_type_id || attr->btf_value_type_id) {
+		btf = get_map_btf(attr->btf_fd);
+		if (IS_ERR(btf))
+			return PTR_ERR(btf);
+	}
+
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
 	    attr->map_type != BPF_MAP_TYPE_ARENA &&
-	    attr->map_extra != 0)
-		return -EINVAL;
+	    attr->map_extra != 0) {
+		err = -EINVAL;
+		goto put_btf;
+	}
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
-	if (f_flags < 0)
-		return f_flags;
+	if (f_flags < 0) {
+		err = f_flags;
+		goto put_btf;
+	}
 
 	if (numa_node != NUMA_NO_NODE &&
 	    ((unsigned int)numa_node >= nr_node_ids ||
-	     !node_online(numa_node)))
-		return -EINVAL;
+	     !node_online(numa_node))) {
+		err = -EINVAL;
+		goto put_btf;
+	}
 
 	/* find map type and init map: hashtable vs rbtree vs bloom vs ... */
 	map_type = attr->map_type;
-	if (map_type >= ARRAY_SIZE(bpf_map_types))
-		return -EINVAL;
+	if (map_type >= ARRAY_SIZE(bpf_map_types)) {
+		err = -EINVAL;
+		goto put_btf;
+	}
 	map_type = array_index_nospec(map_type, ARRAY_SIZE(bpf_map_types));
 	ops = bpf_map_types[map_type];
-	if (!ops)
-		return -EINVAL;
+	if (!ops) {
+		err = -EINVAL;
+		goto put_btf;
+	}
 
 	if (ops->map_alloc_check) {
 		err = ops->map_alloc_check(attr);
 		if (err)
-			return err;
+			goto put_btf;
 	}
 	if (attr->map_ifindex)
 		ops = &bpf_map_offload_ops;
-	if (!ops->map_mem_usage)
-		return -EINVAL;
+	if (!ops->map_mem_usage) {
+		err = -EINVAL;
+		goto put_btf;
+	}
 
 	if (token_flag) {
 		token = bpf_token_get_from_fd(attr->map_token_fd);
-		if (IS_ERR(token))
-			return PTR_ERR(token);
+		if (IS_ERR(token)) {
+			err = PTR_ERR(token);
+			goto put_btf;
+		}
 
 		/* if current token doesn't grant map creation permissions,
 		 * then we can't use this token, so ignore it and rely on
@@ -1517,30 +1538,27 @@ static int map_create(union bpf_attr *attr)
 	mutex_init(&map->freeze_mutex);
 	spin_lock_init(&map->owner.lock);
 
-	if (attr->btf_key_type_id || attr->btf_value_type_id ||
-	    /* Even the map's value is a kernel's struct,
-	     * the bpf_prog.o must have BTF to begin with
-	     * to figure out the corresponding kernel's
-	     * counter part.  Thus, attr->btf_fd has
-	     * to be valid also.
-	     */
-	    attr->btf_vmlinux_value_type_id) {
-		struct btf *btf;
+	/* Even the struct_ops map's value is a kernel's struct,
+	 * the bpf_prog.o must have BTF to begin with
+	 * to figure out the corresponding kernel's
+	 * counter part.  Thus, attr->btf_fd has
+	 * to be valid also.
+	 */
+	if (btf || attr->btf_vmlinux_value_type_id) {
+		if (!btf) {
+			btf = get_map_btf(attr->btf_fd);
+			if (IS_ERR(btf)) {
+				err = PTR_ERR(btf);
+				btf = NULL;
+				goto free_map;
+			}
+		}
 
-		btf = btf_get_by_fd(attr->btf_fd);
-		if (IS_ERR(btf)) {
-			err = PTR_ERR(btf);
-			goto free_map;
-		}
-		if (btf_is_kernel(btf)) {
-			btf_put(btf);
-			err = -EACCES;
-			goto free_map;
-		}
 		map->btf = btf;
+		btf = NULL;
 
 		if (attr->btf_value_type_id) {
-			err = map_check_btf(map, token, btf, attr->btf_key_type_id,
+			err = map_check_btf(map, token, map->btf, attr->btf_key_type_id,
 					    attr->btf_value_type_id);
 			if (err)
 				goto free_map;
@@ -1572,7 +1590,6 @@ static int map_create(union bpf_attr *attr)
 		 * have refcnt-ed it through BPF_MAP_GET_FD_BY_ID.
 		 */
 		bpf_map_put_with_uref(map);
-		return err;
 	}
 
 	return err;
@@ -1583,6 +1600,8 @@ free_map:
 	bpf_map_free(map);
 put_token:
 	bpf_token_put(token);
+put_btf:
+	btf_put(btf);
 	return err;
 }
 
