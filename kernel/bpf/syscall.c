@@ -1438,6 +1438,7 @@ static int map_create(union bpf_attr *attr)
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
 	    attr->map_type != BPF_MAP_TYPE_ARENA &&
+	    !(attr->map_flags & BPF_INT_F_DYNPTR_IN_KEY) &&
 	    attr->map_extra != 0) {
 		err = -EINVAL;
 		goto put_btf;
