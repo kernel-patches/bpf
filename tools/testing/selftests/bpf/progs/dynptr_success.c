@@ -576,7 +576,7 @@ struct {
 } test_buf = {
 	.length = 0,
 	.buf = "0123456789abcdef",
-};
+}, *user_ptr;
 
 SEC("?tp/syscalls/sys_enter_nanosleep")
 int test_probe_read_kernel_dynptr(void *ctx)
@@ -600,6 +600,40 @@ int test_probe_read_kernel_dynptr(void *ctx)
 
 	err = bpf_probe_read_kernel_dynptr(&ptr, 0, copy_len,
 		test_buf.buf, 0);
+
+cleanup:
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+	return 0;
+}
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_probe_read_user_dynptr(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	int copy_len;
+
+	if (bpf_get_current_pid_tgid() >> 32 != pid)
+		return 0;
+
+	err = bpf_probe_read_user(&copy_len, sizeof(copy_len), &user_ptr->length);
+	if (err < 0 || copy_len < 0) {
+		err = 1;
+		return 1;
+	}
+
+	if (copy_len > MAX_BUFFER_LEN)
+		copy_len = MAX_BUFFER_LEN;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, copy_len, 0, &ptr);
+
+	if (-E2BIG != bpf_probe_read_user_dynptr(&ptr, 0, MAX_BUFFER_LEN + 1,
+		&user_ptr->buf, 0)) {
+		err = 2;
+		goto cleanup;
+	}
+
+	err = bpf_probe_read_user_dynptr(&ptr, 0, copy_len,
+		&user_ptr->buf, 0);
 
 cleanup:
 	bpf_ringbuf_submit_dynptr(&ptr, 0);

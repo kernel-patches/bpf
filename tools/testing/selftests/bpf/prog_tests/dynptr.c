@@ -32,6 +32,7 @@ static struct {
 	{"test_dynptr_skb_strcmp", SETUP_SKB_PROG},
 	{"test_dynptr_skb_tp_btf", SETUP_SKB_PROG_TP},
 	{"test_probe_read_kernel_dynptr", SETUP_RINGBUF},
+	{"test_probe_read_user_dynptr", SETUP_RINGBUF},
 };
 
 static int ringbuf_cb(void *ctx, void *data, size_t len)
@@ -61,6 +62,7 @@ static void verify_success(const char *prog_name, enum test_setup_type setup_typ
 		return;
 
 	skel->bss->pid = getpid();
+	skel->bss->user_ptr = (void *)&skel->data->test_buf;
 	skel->data->test_buf.length = 8;
 
 	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
