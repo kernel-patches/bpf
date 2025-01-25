@@ -71,4 +71,13 @@ static inline void bpf_strlcpy(char *dst, const char *src, size_t sz)
 #define ENOTSUPP 524
 #endif
 
+/* sys_bpf() will check the validity of data and size */
+static inline void bpf_dynptr_user_init(void *data, __u32 size,
+					struct bpf_dynptr_user *dynptr)
+{
+	dynptr->data = data;
+	dynptr->size = size;
+	dynptr->reserved = 0;
+}
+
 #endif /* __BPF_UTIL__ */
