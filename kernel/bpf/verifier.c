@@ -791,7 +791,7 @@ static void invalidate_dynptr(struct bpf_verifier_env *env, struct bpf_func_stat
 	 * While we don't allow reading STACK_INVALID, it is still possible to
 	 * do <8 byte writes marking some but not all slots as STACK_MISC. Then,
 	 * helpers or insns can do partial read of that part without failing,
-	 * but check_stack_range_initialized, check_stack_read_var_off, and
+	 * but check_stack_range_access, check_stack_read_var_off, and
 	 * check_stack_read_fixed_off will do mark_reg_read for all 8-bytes of
 	 * the slot conservatively. Hence we need to prevent those liveness
 	 * marking walks.
@@ -5301,11 +5301,11 @@ enum bpf_access_src {
 	ACCESS_HELPER = 2,  /* the access is performed by a helper */
 };
 
-static int check_stack_range_initialized(struct bpf_verifier_env *env,
-					 int regno, int off, int access_size,
-					 bool zero_size_allowed,
-					 enum bpf_access_type type,
-					 struct bpf_call_arg_meta *meta);
+static int check_stack_range_access(struct bpf_verifier_env *env,
+				    int regno, int off, int access_size,
+				    bool zero_size_allowed,
+				    enum bpf_access_type type,
+				    struct bpf_call_arg_meta *meta);
 
 static struct bpf_reg_state *reg_state(struct bpf_verifier_env *env, int regno)
 {
@@ -5336,8 +5336,8 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env,
 
 	/* Note that we pass a NULL meta, so raw access will not be permitted.
 	 */
-	err = check_stack_range_initialized(env, ptr_regno, off, size,
-					    false, BPF_READ, NULL);
+	err = check_stack_range_access(env, ptr_regno, off, size,
+				       false, BPF_READ, NULL);
 	if (err)
 		return err;
 
@@ -7625,44 +7625,13 @@ static int check_atomic(struct bpf_verifier_env *env, int insn_idx, struct bpf_i
 	return 0;
 }
 
-/* When register 'regno' is used to read the stack (either directly or through
- * a helper function) make sure that it's within stack boundary and, depending
- * on the access type and privileges, that all elements of the stack are
- * initialized.
- *
- * 'off' includes 'regno->off', but not its dynamic part (if any).
- *
- * All registers that have been spilled on the stack in the slots within the
- * read offsets are marked as read.
- */
-static int check_stack_range_initialized(
-		struct bpf_verifier_env *env, int regno, int off,
-		int access_size, bool zero_size_allowed,
-		enum bpf_access_type type, struct bpf_call_arg_meta *meta)
+static int get_stack_access_range(struct bpf_verifier_env *env, int regno, int off,
+				  int *min_off, int *max_off)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno);
-	struct bpf_func_state *state = func(env, reg);
-	int err, min_off, max_off, i, j, slot, spi;
-	/* Some accesses can write anything into the stack, others are
-	 * read-only.
-	 */
-	bool clobber = false;
-
-	if (access_size == 0 && !zero_size_allowed) {
-		verbose(env, "invalid zero-sized read\n");
-		return -EACCES;
-	}
-
-	if (type == BPF_WRITE)
-		clobber = true;
-
-	err = check_stack_access_within_bounds(env, regno, off, access_size, type);
-	if (err)
-		return err;
-
 
 	if (tnum_is_const(reg->var_off)) {
-		min_off = max_off = reg->var_off.value + off;
+		*min_off = *max_off = reg->var_off.value + off;
 	} else {
 		/* Variable offset is prohibited for unprivileged mode for
 		 * simplicity since it requires corresponding support in
@@ -7677,49 +7646,76 @@ static int check_stack_range_initialized(
 				regno, tn_buf);
 			return -EACCES;
 		}
-		/* Only initialized buffer on stack is allowed to be accessed
-		 * with variable offset. With uninitialized buffer it's hard to
-		 * guarantee that whole memory is marked as initialized on
-		 * helper return since specific bounds are unknown what may
-		 * cause uninitialized stack leaking.
-		 */
-		if (meta && meta->raw_mode)
-			meta = NULL;
 
-		min_off = reg->smin_value + off;
-		max_off = reg->smax_value + off;
+		*min_off = reg->smin_value + off;
+		*max_off = reg->smax_value + off;
 	}
 
-	if (meta && meta->raw_mode) {
-		/* Ensure we won't be overwriting dynptrs when simulating byte
-		 * by byte access in check_helper_call using meta.access_size.
-		 * This would be a problem if we have a helper in the future
-		 * which takes:
-		 *
-		 *	helper(uninit_mem, len, dynptr)
-		 *
-		 * Now, uninint_mem may overlap with dynptr pointer. Hence, it
-		 * may end up writing to dynptr itself when touching memory from
-		 * arg 1. This can be relaxed on a case by case basis for known
-		 * safe cases, but reject due to the possibilitiy of aliasing by
-		 * default.
-		 */
-		for (i = min_off; i < max_off + access_size; i++) {
-			int stack_off = -i - 1;
+	return 0;
+}
 
-			spi = __get_spi(i);
-			/* raw_mode may write past allocated_stack */
-			if (state->allocated_stack <= stack_off)
-				continue;
-			if (state->stack[spi].slot_type[stack_off % BPF_REG_SIZE] == STACK_DYNPTR) {
-				verbose(env, "potential write to dynptr at off=%d disallowed\n", i);
-				return -EACCES;
-			}
-		}
-		meta->access_size = access_size;
-		meta->regno = regno;
+static int allow_uninitialized_stack_range(struct bpf_verifier_env *env, int regno,
+					   int min_off, int max_off, int access_size,
+					   struct bpf_call_arg_meta *meta)
+{
+	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_func_state *state = func(env, reg);
+	int i, stack_off, spi;
+
+	/* Disallow uninitialized buffer on stack */
+	if (!meta || !meta->raw_mode)
 		return 0;
+
+	/* Only initialized buffer on stack is allowed to be accessed
+	 * with variable offset. With uninitialized buffer it's hard to
+	 * guarantee that whole memory is marked as initialized on
+	 * helper return since specific bounds are unknown what may
+	 * cause uninitialized stack leaking.
+	 */
+	if (!tnum_is_const(reg->var_off))
+		return 0;
+
+	/* Ensure we won't be overwriting dynptrs when simulating byte
+	 * by byte access in check_helper_call using meta.access_size.
+	 * This would be a problem if we have a helper in the future
+	 * which takes:
+	 *
+	 *	helper(uninit_mem, len, dynptr)
+	 *
+	 * Now, uninint_mem may overlap with dynptr pointer. Hence, it
+	 * may end up writing to dynptr itself when touching memory from
+	 * arg 1. This can be relaxed on a case by case basis for known
+	 * safe cases, but reject due to the possibilitiy of aliasing by
+	 * default.
+	 */
+	for (i = min_off; i < max_off + access_size; i++) {
+		stack_off = -i - 1;
+		spi = __get_spi(i);
+		/* raw_mode may write past allocated_stack */
+		if (state->allocated_stack <= stack_off)
+			continue;
+		if (state->stack[spi].slot_type[stack_off % BPF_REG_SIZE] == STACK_DYNPTR) {
+			verbose(env, "potential write to dynptr at off=%d disallowed\n", i);
+			return -EACCES;
+		}
 	}
+	meta->access_size = access_size;
+	meta->regno = regno;
+
+	return 1;
+}
+
+static int check_stack_range_initialized(struct bpf_verifier_env *env, int regno,
+					 int min_off, int max_off, int access_size,
+					 enum bpf_access_type type)
+{
+	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_func_state *state = func(env, reg);
+	int i, j, slot, spi;
+	/* Some accesses can write anything into the stack, others are
+	 * read-only.
+	 */
+	bool clobber = type == BPF_WRITE;
 
 	for (i = min_off; i < max_off + access_size; i++) {
 		u8 *stype;
@@ -7768,17 +7764,56 @@ static int check_stack_range_initialized(
 mark:
 		/* reading any byte out of 8-byte 'spill_slot' will cause
 		 * the whole slot to be marked as 'read'
-		 */
-		mark_reg_read(env, &state->stack[spi].spilled_ptr,
-			      state->stack[spi].spilled_ptr.parent,
-			      REG_LIVE_READ64);
-		/* We do not set REG_LIVE_WRITTEN for stack slot, as we can not
+		 *
+		 * We do not set REG_LIVE_WRITTEN for stack slot, as we can not
 		 * be sure that whether stack slot is written to or not. Hence,
 		 * we must still conservatively propagate reads upwards even if
 		 * helper may write to the entire memory range.
 		 */
+		mark_reg_read(env, &state->stack[spi].spilled_ptr,
+			      state->stack[spi].spilled_ptr.parent,
+			      REG_LIVE_READ64);
 	}
+
 	return 0;
+}
+
+/* When register 'regno' is used to read the stack (either directly or through
+ * a helper function) make sure that it's within stack boundary and, depending
+ * on the access type and privileges, that all elements of the stack are
+ * initialized.
+ *
+ * 'off' includes 'regno->off', but not its dynamic part (if any).
+ *
+ * All registers that have been spilled on the stack in the slots within the
+ * read offsets are marked as read.
+ */
+static int check_stack_range_access(struct bpf_verifier_env *env, int regno, int off,
+				    int access_size, bool zero_size_allowed,
+				    enum bpf_access_type type, struct bpf_call_arg_meta *meta)
+{
+	int err, min_off, max_off;
+
+	if (access_size == 0 && !zero_size_allowed) {
+		verbose(env, "invalid zero-sized read\n");
+		return -EACCES;
+	}
+
+	err = check_stack_access_within_bounds(env, regno, off, access_size, type);
+	if (err)
+		return err;
+
+	err = get_stack_access_range(env, regno, off, &min_off, &max_off);
+	if (err)
+		return err;
+
+	err = allow_uninitialized_stack_range(env, regno, min_off, max_off, access_size, meta);
+	if (err < 0)
+		return err;
+	if (err > 0)
+		return 0;
+
+	return check_stack_range_initialized(env, regno, min_off, max_off, access_size, type);
 }
 
 static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
@@ -7834,10 +7869,8 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 					   access_size, zero_size_allowed,
 					   max_access);
 	case PTR_TO_STACK:
-		return check_stack_range_initialized(
-				env,
-				regno, reg->off, access_size,
-				zero_size_allowed, access_type, meta);
+		return check_stack_range_access(env, regno, reg->off, access_size,
+						zero_size_allowed, access_type, meta);
 	case PTR_TO_BTF_ID:
 		return check_ptr_to_btf_access(env, regs, regno, reg->off,
 					       access_size, BPF_READ, -1);
