@@ -1701,6 +1701,7 @@ struct bpf_map_skeleton {
 	const char *name;
 	struct bpf_map **map;
 	void **mmaped;
+	void **data;
 	struct bpf_link **link;
 };
 
