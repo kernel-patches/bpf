@@ -92,7 +92,7 @@ static void get_header_guard(char *guard, const char *obj_name, const char *suff
 
 static bool get_map_ident(const struct bpf_map *map, char *buf, size_t buf_sz)
 {
-	static const char *sfxs[] = { ".data", ".rodata", ".bss", ".kconfig" };
+	static const char *sfxs[] = { ".data", ".rodata", ".percpu", ".bss", ".kconfig" };
 	const char *name = bpf_map__name(map);
 	int i, n;
 
@@ -117,7 +117,7 @@ static bool get_map_ident(const struct bpf_map *map, char *buf, size_t buf_sz)
 
 static bool get_datasec_ident(const char *sec_name, char *buf, size_t buf_sz)
 {
-	static const char *pfxs[] = { ".data", ".rodata", ".bss", ".kconfig" };
+	static const char *pfxs[] = { ".data", ".rodata", ".percpu", ".bss", ".kconfig" };
 	int i, n;
 
 	/* recognize hard coded LLVM section name */
@@ -263,7 +263,9 @@ static bool is_mmapable_map(const struct bpf_map *map, char *buf, size_t sz)
 		return true;
 	}
 
-	if (!bpf_map__is_internal(map) || !(bpf_map__map_flags(map) & BPF_F_MMAPABLE))
+	if (!bpf_map__is_internal(map) ||
+	    (!(bpf_map__map_flags(map) & BPF_F_MMAPABLE) &&
+	     bpf_map__type(map) != BPF_MAP_TYPE_PERCPU_ARRAY))
 		return false;
 
 	if (!get_map_ident(map, buf, sz))
@@ -903,7 +905,10 @@ codegen_maps_skeleton(struct bpf_object *obj, size_t map_cnt, bool mmaped, bool 
 			i, bpf_map__name(map), ident);
 		/* memory-mapped internal maps */
 		if (mmaped && is_mmapable_map(map, ident, sizeof(ident))) {
-			printf("\tmap->mmaped = (void **)&obj->%s;\n", ident);
+			if (bpf_map__type(map) == BPF_MAP_TYPE_PERCPU_ARRAY)
+				printf("\tmap->data = (void **)&obj->%s;\n", ident);
+			else
+				printf("\tmap->mmaped = (void **)&obj->%s;\n", ident);
 		}
 
 		if (populate_links && bpf_map__type(map) == BPF_MAP_TYPE_STRUCT_OPS) {

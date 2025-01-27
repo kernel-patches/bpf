@@ -13915,6 +13915,7 @@ static int populate_skeleton_maps(const struct bpf_object *obj,
 		struct bpf_map **map = map_skel->map;
 		const char *name = map_skel->name;
 		void **mmaped = map_skel->mmaped;
+		void **data = map_skel->data;
 
 		*map = bpf_object__find_map_by_name(obj, name);
 		if (!*map) {
@@ -13925,6 +13926,8 @@ static int populate_skeleton_maps(const struct bpf_object *obj,
 		/* externs shouldn't be pre-setup from user code */
 		if (mmaped && (*map)->libbpf_type != LIBBPF_MAP_KCONFIG)
 			*mmaped = (*map)->mmaped;
+		if (data && (*map)->libbpf_type == LIBBPF_MAP_PERCPU_DATA)
+			*data = (*map)->data;
 	}
 	return 0;
 }
