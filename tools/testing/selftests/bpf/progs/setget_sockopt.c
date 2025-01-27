@@ -327,6 +327,18 @@ static int test_tcp_maxseg(void *ctx, struct sock *sk)
 	return 0;
 }
 
+static int test_tcp_ulp(void *ctx, struct sock *sk)
+{
+	__u8 saved_syn[20];
+
+	if (sk->sk_state == TCP_SYN_SENT)
+		return bpf_setsockopt(ctx, IPPROTO_TCP, TCP_ULP,
+						"smc", sizeof("smc"));
+
+	return bpf_getsockopt(ctx, IPPROTO_TCP, TCP_ULP,
+			    saved_syn, sizeof(saved_syn));
+}
+
 static int test_tcp_saved_syn(void *ctx, struct sock *sk)
 {
 	__u8 saved_syn[20];
@@ -395,16 +407,19 @@ int skops_sockopt(struct bpf_sock_ops *skops)
 		break;
 	case BPF_SOCK_OPS_TCP_CONNECT_CB:
 		nr_connect += !(bpf_test_sockopt(skops, sk) ||
-				test_tcp_maxseg(skops, sk));
+				test_tcp_maxseg(skops, sk) ||
+				test_tcp_ulp(skops, sk));
 		break;
 	case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
 		nr_active += !(bpf_test_sockopt(skops, sk) ||
-			       test_tcp_maxseg(skops, sk));
+			       test_tcp_maxseg(skops, sk) ||
+				   test_tcp_ulp(skops, sk));
 		break;
 	case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
 		nr_passive += !(bpf_test_sockopt(skops, sk) ||
 				test_tcp_maxseg(skops, sk) ||
-				test_tcp_saved_syn(skops, sk));
+				test_tcp_saved_syn(skops, sk) ||
+				test_tcp_ulp(skops, sk));
 		flags = skops->bpf_sock_ops_cb_flags | BPF_SOCK_OPS_STATE_CB_FLAG;
 		bpf_setsockopt(skops, SOL_TCP, TCP_BPF_SOCK_OPS_CB_FLAGS, &flags, sizeof(flags));
 		break;
