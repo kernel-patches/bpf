@@ -446,6 +446,17 @@ char *ping_command(int family)
 	return "ping";
 }
 
+int append_tid(char *str, size_t offset)
+{
+	if (!str)
+		return -1;
+
+	sprintf(&str[offset], "%07d", gettid());
+	str[offset + 7] = '\0';
+
+	return 0;
+}
+
 int remove_netns(const char *name)
 {
 	char *cmd;
