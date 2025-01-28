@@ -269,7 +269,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_before(void)
+void test_tc_links_before(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -432,7 +432,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_after(void)
+void test_tc_links_after(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -541,7 +541,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_revision(void)
+void test_tc_links_revision(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -654,7 +654,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_chain_classic(void)
+void test_tc_links_chain_classic(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -891,7 +891,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_replace(void)
+void test_tc_links_replace(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1212,7 +1212,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_invalid(void)
+void test_tc_links_invalid(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1377,7 +1377,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_prepend(void)
+void test_tc_links_prepend(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1542,7 +1542,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_append(void)
+void test_tc_links_append(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1649,7 +1649,7 @@ cleanup:
 	ASSERT_EQ(if_nametoindex("tcx_opts2"), 0, "dev2_removed");
 }
 
-void serial_test_tc_links_dev_cleanup(void)
+void test_tc_links_dev_cleanup(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1762,7 +1762,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_links_chain_mixed(void)
+void test_tc_links_chain_mixed(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1777,7 +1777,7 @@ void serial_test_tc_links_chain_mixed(void)
 	netns_free(ns);
 }
 
-static void test_tc_links_ingress(int target, bool chain_tc_old,
+static void tc_links_ingress(int target, bool chain_tc_old,
 				  bool tcx_teardown_first)
 {
 	LIBBPF_OPTS(bpf_tc_opts, tc_opts,
@@ -1881,7 +1881,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_links_ingress(void)
+void test_tc_links_ingress(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1890,9 +1890,9 @@ void serial_test_tc_links_ingress(void)
 	if (!ASSERT_OK_PTR(ns, "create and open ns"))
 		return;
 
-	test_tc_links_ingress(BPF_TCX_INGRESS, true, true);
-	test_tc_links_ingress(BPF_TCX_INGRESS, true, false);
-	test_tc_links_ingress(BPF_TCX_INGRESS, false, false);
+	tc_links_ingress(BPF_TCX_INGRESS, true, true);
+	tc_links_ingress(BPF_TCX_INGRESS, true, false);
+	tc_links_ingress(BPF_TCX_INGRESS, false, false);
 
 	netns_free(ns);
 }
@@ -1931,7 +1931,7 @@ static int qdisc_replace(int ifindex, const char *kind, bool block)
 	return err;
 }
 
-void serial_test_tc_links_dev_chain0(void)
+void test_tc_links_dev_chain0(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1963,7 +1963,7 @@ cleanup:
 	netns_free(ns);
 }
 
-static void test_tc_links_dev_mixed(int target)
+static void tc_links_dev_mixed(int target)
 {
 	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
 	LIBBPF_OPTS(bpf_tc_hook, tc_hook);
@@ -2070,7 +2070,7 @@ cleanup:
 	ASSERT_EQ(if_nametoindex("tcx_opts2"), 0, "dev2_removed");
 }
 
-void serial_test_tc_links_dev_mixed(void)
+void test_tc_links_dev_mixed(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2079,8 +2079,8 @@ void serial_test_tc_links_dev_mixed(void)
 	if (!ASSERT_OK_PTR(ns, "create and open ns"))
 		return;
 
-	test_tc_links_dev_mixed(BPF_TCX_INGRESS);
-	test_tc_links_dev_mixed(BPF_TCX_EGRESS);
+	tc_links_dev_mixed(BPF_TCX_INGRESS);
+	tc_links_dev_mixed(BPF_TCX_EGRESS);
 
 	netns_free(ns);
 }

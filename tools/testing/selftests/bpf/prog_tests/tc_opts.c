@@ -12,7 +12,7 @@
 #include "test_tc_link.skel.h"
 #include "tc_helpers.h"
 
-void serial_test_tc_opts_basic(void)
+void test_tc_opts_basic(void)
 {
 	LIBBPF_OPTS(bpf_prog_attach_opts, opta);
 	LIBBPF_OPTS(bpf_prog_detach_opts, optd);
@@ -263,7 +263,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_before(void)
+void test_tc_opts_before(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -463,7 +463,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_after(void)
+void test_tc_opts_after(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -581,7 +581,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_revision(void)
+void test_tc_opts_revision(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -691,7 +691,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_opts_chain_classic(void)
+void test_tc_opts_chain_classic(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -909,7 +909,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_replace(void)
+void test_tc_opts_replace(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1071,7 +1071,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_invalid(void)
+void test_tc_opts_invalid(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1220,7 +1220,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_prepend(void)
+void test_tc_opts_prepend(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1369,7 +1369,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_append(void)
+void test_tc_opts_append(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1468,7 +1468,7 @@ cleanup:
 	ASSERT_EQ(if_nametoindex("tcx_opts2"), 0, "dev2_removed");
 }
 
-void serial_test_tc_opts_dev_cleanup(void)
+void test_tc_opts_dev_cleanup(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1653,7 +1653,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_opts_mixed(void)
+void test_tc_opts_mixed(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1741,7 +1741,7 @@ cleanup:
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_opts_demixed(void)
+void test_tc_opts_demixed(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -1921,7 +1921,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_detach(void)
+void test_tc_opts_detach(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2137,7 +2137,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_detach_before(void)
+void test_tc_opts_detach_before(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2362,7 +2362,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_detach_after(void)
+void test_tc_opts_detach_after(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2377,7 +2377,7 @@ void serial_test_tc_opts_detach_after(void)
 	netns_free(ns);
 }
 
-static void test_tc_opts_delete_empty(int target, bool chain_tc_old)
+static void tc_opts_delete_empty(int target, bool chain_tc_old)
 {
 	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .ifindex = loopback);
 	LIBBPF_OPTS(bpf_prog_detach_opts, optd);
@@ -2400,7 +2400,7 @@ static void test_tc_opts_delete_empty(int target, bool chain_tc_old)
 	assert_mprog_count(target, 0);
 }
 
-void serial_test_tc_opts_delete_empty(void)
+void test_tc_opts_delete_empty(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2409,10 +2409,10 @@ void serial_test_tc_opts_delete_empty(void)
 	if (!ASSERT_OK_PTR(ns, "create and open ns"))
 		return;
 
-	test_tc_opts_delete_empty(BPF_TCX_INGRESS, false);
-	test_tc_opts_delete_empty(BPF_TCX_EGRESS, false);
-	test_tc_opts_delete_empty(BPF_TCX_INGRESS, true);
-	test_tc_opts_delete_empty(BPF_TCX_EGRESS, true);
+	tc_opts_delete_empty(BPF_TCX_INGRESS, false);
+	tc_opts_delete_empty(BPF_TCX_EGRESS, false);
+	tc_opts_delete_empty(BPF_TCX_INGRESS, true);
+	tc_opts_delete_empty(BPF_TCX_EGRESS, true);
 
 	netns_free(ns);
 }
@@ -2516,7 +2516,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_chain_mixed(void)
+void test_tc_opts_chain_mixed(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2599,7 +2599,7 @@ cleanup:
 	ASSERT_EQ(if_nametoindex("tcx_opts2"), 0, "dev2_removed");
 }
 
-void serial_test_tc_opts_max(void)
+void test_tc_opts_max(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2910,7 +2910,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_query(void)
+void test_tc_opts_query(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
@@ -2978,7 +2978,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void serial_test_tc_opts_query_attach(void)
+void test_tc_opts_query_attach(void)
 {
 	char ns_name[NS_NAME_MAX_LEN] = NS_NAME;
 	struct netns_obj *ns;
