@@ -1345,7 +1345,7 @@ __naked void and_testing(void)
 	"call %[bpf_get_prandom_u32];"
 	"r6 = r0;"
 	"r6 >>= 33;"
-	"r6 &= 15006383427903208883;;"
+	"r6 &= 15006383427903208883;"
 	"exit"
 	:
 	: __imm(bpf_get_prandom_u32),
