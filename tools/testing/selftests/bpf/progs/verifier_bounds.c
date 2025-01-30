@@ -1338,14 +1338,17 @@ __naked void mult_sign_ovf(void)
 SEC("tc")
 __description("bpf_and precision. test 1")
 __success __log_level(2)
-__retval(0)
+__msg("r6 *= r7 {{.*}}; R6_w=scalar(smin=smin32=-100,smax=smax32=200)")
 __naked void and_testing(void)
 {
 	asm volatile (
 	"call %[bpf_get_prandom_u32];"
 	"r6 = r0;"
+	"call %[bpf_get_prandom_u32];"
+	"r7 = r0;"
 	"r6 >>= 33;"
-	"r6 &= 15006383427903208883 ll;"
+	"r6 &= 0xd04162386f7abdb3 ll;"
+	"r6 *= r7;"
 	"exit"
 	:
 	: __imm(bpf_get_prandom_u32),
