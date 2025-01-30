@@ -1336,10 +1336,10 @@ __naked void mult_sign_ovf(void)
 }
 
 SEC("tc")
-__description("test 1 - bpf and")
+__description("test 1 - bpf and precision")
 __success __log_level(2)
-__msg("r6 *= r7 {{.*}}; R6_w=scalar()")
-__naked void mult_sign_ovf(void)
+__msg("r6 &= r7 {{.*}}; R6_w=scalar()")
+__naked void and_testing(void)
 {
 	asm volatile (
 	"call %[bpf_get_prandom_u32];"
