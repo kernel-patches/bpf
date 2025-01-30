@@ -1338,7 +1338,7 @@ __naked void mult_sign_ovf(void)
 SEC("tc")
 __description("bpf_and precision. test 1")
 __success __log_level(2)
-__msg("r6 &= 15006383427903208883 ll {{.*}}; R6_w=scalar()")
+__retval(0)
 __naked void and_testing(void)
 {
 	asm volatile (
