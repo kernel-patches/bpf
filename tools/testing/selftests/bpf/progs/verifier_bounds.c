@@ -1334,4 +1334,22 @@ __naked void mult_sign_ovf(void)
 	  __imm(bpf_skb_store_bytes)
 	: __clobber_all);
 }
+
+SEC("tc")
+__description("test 1 - bpf and")
+__success __log_level(2)
+__msg("r6 *= r7 {{.*}}; R6_w=scalar()")
+__naked void mult_sign_ovf(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r6 >>= 33;"
+	"r6 &= 15006383427903208883;;"
+	"exit"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_skb_store_bytes)
+	: __clobber_all);
+}
 char _license[] SEC("license") = "GPL";
