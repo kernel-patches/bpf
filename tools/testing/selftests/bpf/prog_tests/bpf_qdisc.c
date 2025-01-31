@@ -86,18 +86,125 @@ static void test_fq(void)
 	bpf_qdisc_fq__destroy(fq_skel);
 }
 
+static int netdevsim_write_cmd(const char *path, const char *cmd)
+{
+	FILE *fp;
+
+	fp = fopen(path, "w");
+	if (!ASSERT_OK_PTR(fp, "write_netdevsim_cmd"))
+		return -errno;
+
+	fprintf(fp, cmd);
+	fclose(fp);
+	return 0;
+}
+
+static void test_qdisc_attach_to_mq(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, hook,
+			    .attach_point = BPF_TC_QDISC,
+			    .parent = 0x00010001,
+			    .handle = 0x8000000,
+			    .qdisc = "bpf_fifo");
+	struct bpf_qdisc_fifo *fifo_skel;
+	struct bpf_link *link;
+	int err;
+
+	hook.ifindex = if_nametoindex("eni1np1");
+	if (!ASSERT_NEQ(hook.ifindex, 0, "if_nametoindex"))
+		return;
+
+	fifo_skel = bpf_qdisc_fifo__open_and_load();
+	if (!ASSERT_OK_PTR(fifo_skel, "bpf_qdisc_fifo__open_and_load"))
+		return;
+
+	link = bpf_map__attach_struct_ops(fifo_skel->maps.fifo);
+	if (!ASSERT_OK_PTR(link, "bpf_map__attach_struct_ops")) {
+		bpf_qdisc_fifo__destroy(fifo_skel);
+		return;
+	}
+
+	ASSERT_OK(system("tc qdisc add dev eni1np1 root handle 1: mq"), "create mq");
+
+	err = bpf_tc_hook_create(&hook);
+	ASSERT_OK(err, "attach qdisc");
+
+	bpf_tc_hook_destroy(&hook);
+
+	ASSERT_OK(system("tc qdisc delete dev eni1np1 root mq"), "delete mq");
+
+	bpf_link__destroy(link);
+	bpf_qdisc_fifo__destroy(fifo_skel);
+}
+
+static void test_qdisc_attach_to_non_root(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, hook, .ifindex = LO_IFINDEX,
+			    .attach_point = BPF_TC_QDISC,
+			    .parent = 0x00010001,
+			    .handle = 0x8000000,
+			    .qdisc = "bpf_fifo");
+	struct bpf_qdisc_fifo *fifo_skel;
+	struct bpf_link *link;
+	int err;
+
+	fifo_skel = bpf_qdisc_fifo__open_and_load();
+	if (!ASSERT_OK_PTR(fifo_skel, "bpf_qdisc_fifo__open_and_load"))
+		return;
+
+	link = bpf_map__attach_struct_ops(fifo_skel->maps.fifo);
+	if (!ASSERT_OK_PTR(link, "bpf_map__attach_struct_ops")) {
+		bpf_qdisc_fifo__destroy(fifo_skel);
+		return;
+	}
+
+	ASSERT_OK(system("tc qdisc add dev lo root handle 1: htb"), "create htb");
+	ASSERT_OK(system("tc class add dev lo parent 1: classid 1:1 htb rate 75Kbit"), "create htb class");
+
+	err = bpf_tc_hook_create(&hook);
+	ASSERT_ERR(err, "attach qdisc");
+
+	bpf_tc_hook_destroy(&hook);
+
+	ASSERT_OK(system("tc qdisc delete dev lo root htb"), "delete htb");
+
+	bpf_link__destroy(link);
+	bpf_qdisc_fifo__destroy(fifo_skel);
+}
+
 void test_bpf_qdisc(void)
 {
+	struct nstoken *nstoken = NULL;
 	struct netns_obj *netns;
+	int err;
 
-	netns = netns_new("bpf_qdisc_ns", true);
+	netns = netns_new("bpf_qdisc_ns", false);
 	if (!ASSERT_OK_PTR(netns, "netns_new"))
 		return;
+
+	err = netdevsim_write_cmd("/sys/bus/netdevsim/new_device", "1 1 4");
+	if (!ASSERT_OK(err, "create netdevsim")) {
+		netns_free(netns);
+		return;
+	}
+
+	ASSERT_OK(system("ip link set eni1np1 netns bpf_qdisc_ns"), "ip link set netdevsim");
+
+	nstoken = open_netns("bpf_qdisc_ns");
+	if (!ASSERT_OK_PTR(nstoken, "open_netns"))
+		goto out;
 
 	if (test__start_subtest("fifo"))
 		test_fifo();
 	if (test__start_subtest("fq"))
 		test_fq();
+	if (test__start_subtest("attach to mq"))
+		test_qdisc_attach_to_mq();
+	if (test__start_subtest("attach to non root"))
+		test_qdisc_attach_to_non_root();
 
+out:
+	err = netdevsim_write_cmd("/sys/bus/netdevsim/del_device", "1");
+	ASSERT_OK(err, "delete netdevsim");
 	netns_free(netns);
 }
