@@ -24,9 +24,9 @@ DEFINE_DROP_REASON(FN, FN)
 TRACE_EVENT(kfree_skb,
 
 	TP_PROTO(struct sk_buff *skb, void *location,
-		 enum skb_drop_reason reason, struct sock *rx_sk),
+		 enum skb_drop_reason reason, struct sock *rx_sk__nullable),
 
-	TP_ARGS(skb, location, reason, rx_sk),
+	TP_ARGS(skb, location, reason, rx_sk__nullable),
 
 	TP_STRUCT__entry(
 		__field(void *,		skbaddr)
@@ -39,7 +39,7 @@ TRACE_EVENT(kfree_skb,
 	TP_fast_assign(
 		__entry->skbaddr = skb;
 		__entry->location = location;
-		__entry->rx_sk = rx_sk;
+		__entry->rx_sk = rx_sk__nullable;
 		__entry->protocol = ntohs(skb->protocol);
 		__entry->reason = reason;
 	),
