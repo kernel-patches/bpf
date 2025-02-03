@@ -154,6 +154,11 @@ struct filter {
 	bool abs;
 };
 
+struct var_preset {
+	char *name;
+	long long value;
+};
+
 static struct env {
 	char **filenames;
 	int filename_cnt;
@@ -195,6 +200,8 @@ static struct env {
 	int progs_processed;
 	int progs_skipped;
 	int top_src_lines;
+	struct var_preset *presets;
+	int npresets;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -246,12 +253,14 @@ static const struct argp_option opts[] = {
 	{ "test-reg-invariants", 'r', NULL, 0,
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
 	{ "top-src-lines", 'S', "N", 0, "Emit N most frequent source code lines" },
+	{ "set-global-vars", 'g', "GLOBALS", 0, "Set global variables provided in the expression, for example \"var1 = 1; var2 = 2\"" },
 	{},
 };
 
 static int parse_stats(const char *stats_str, struct stat_specs *specs);
 static int append_filter(struct filter **filters, int *cnt, const char *str);
 static int append_filter_file(const char *path);
+static int parse_var_presets(char *expr, struct var_preset *presets, int capacity, int *size);
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
@@ -363,6 +372,17 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			return -ENOMEM;
 		env.filename_cnt++;
 		break;
+	case 'g': {
+		char *expr = strdup(arg);
+
+		env.presets = calloc(64, sizeof(*env.presets));
+		if (parse_var_presets(expr, env.presets, 64, &env.npresets)) {
+			fprintf(stderr, "Could not parse global variables preset: %s\n", arg);
+			argp_usage(state);
+		}
+		free(expr);
+		break;
+	}
 	default:
 		return ARGP_ERR_UNKNOWN;
 	}
@@ -1292,6 +1312,169 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	return 0;
 };
 
+static int parse_var_presets(char *expr, struct var_preset *presets, int capacity, int *size)
+{
+	char *state;
+	char *next;
+	int i = 0;
+
+	while ((next = strtok_r(i ? NULL : expr, ";", &state))) {
+		char *eq_ptr = strchr(next, '=');
+		char *name_ptr = next;
+		char *name_end = eq_ptr - 1;
+		char *val_ptr = eq_ptr + 1;
+
+		if (!eq_ptr)
+			continue;
+
+		if (i >= capacity) {
+			fprintf(stderr, "Too many global variable presets\n");
+			return -EINVAL;
+		}
+		while (isspace(*name_ptr))
+			++name_ptr;
+		while (isspace(*name_end))
+			--name_end;
+
+		*(name_end + 1) = '\0';
+		presets[i].name = strdup(name_ptr);
+		errno = 0;
+		presets[i].value = strtoll(val_ptr, NULL, 10);
+		if (errno == ERANGE) {
+			errno = 0;
+			presets[i].value = strtoull(val_ptr, NULL, 10);
+		}
+		if (errno) {
+			fprintf(stderr, "Could not parse integer value %s\n", val_ptr);
+			return -EINVAL;
+		}
+		++i;
+	}
+	*size = i;
+	return 0;
+}
+
+static bool is_signed_type(const struct btf_type *type)
+{
+	if (btf_is_int(type))
+		return btf_int_encoding(type) & BTF_INT_SIGNED;
+	return true;
+}
+
+static const struct btf_type *var_base_type(const struct btf *btf, const struct btf_type *type)
+{
+	switch (btf_kind(type)) {
+	case BTF_KIND_VAR:
+	case BTF_KIND_TYPE_TAG:
+	case BTF_KIND_CONST:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_DECL_TAG:
+		return var_base_type(btf, btf__type_by_id(btf, type->type));
+	}
+	return type;
+}
+
+static bool is_preset_supported(const struct btf_type *t)
+{
+	return btf_is_int(t) || btf_is_enum(t) || btf_is_enum64(t);
+}
+
+static int set_global_var(struct bpf_object *obj, struct btf *btf, const struct btf_type *t,
+			  struct bpf_map *map, struct btf_var_secinfo *sinfo, long long new_val)
+{
+	const struct btf_type *base_type;
+	void *ptr;
+	size_t size;
+
+	base_type = var_base_type(btf, t);
+	if (!is_preset_supported(base_type)) {
+		fprintf(stderr, "Setting global variable for btf kind %d is not supported\n",
+			btf_kind(base_type));
+		return -EINVAL;
+	}
+
+	/* Check if value fits into the target variable size */
+	if  (sinfo->size < sizeof(new_val)) {
+		bool is_signed = is_signed_type(base_type);
+		__u32 unsigned_bits = sinfo->size * 8 - (is_signed ? 1 : 0);
+		long long max_val = 1ll << unsigned_bits;
+
+		if (new_val >= max_val || new_val < -max_val) {
+			fprintf(stderr,
+				"Variable %s value %lld is out of range [%lld; %lld]\n",
+				btf__name_by_offset(btf, t->name_off), new_val,
+				is_signed ? -max_val : 0, max_val - 1);
+			return -EINVAL;
+		}
+	}
+
+	ptr = (void *)bpf_map__initial_value(map, &size);
+	if (!ptr || (sinfo->offset + sinfo->size > size))
+		return -EINVAL;
+
+	memcpy(ptr + sinfo->offset, &new_val, sinfo->size);
+	return 0;
+}
+
+static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, int npresets)
+{
+	struct btf_var_secinfo *sinfo;
+	const char *sec_name;
+	const struct btf_type *type;
+	struct bpf_map *map;
+	struct btf *btf;
+	int i, j, k, n, cnt, err, preset_cnt = 0;
+
+	if (npresets == 0)
+		return 0;
+
+	btf = bpf_object__btf(obj);
+	if (!btf)
+		return -EINVAL;
+
+	cnt = btf__type_cnt(btf);
+	for (i  = 0; i != cnt; ++i) {
+		type = btf__type_by_id(btf, i);
+
+		if (!btf_is_datasec(type))
+			continue;
+
+		sinfo = btf_var_secinfos(type);
+		sec_name = btf__name_by_offset(btf, type->name_off);
+		map = bpf_object__find_map_by_name(obj, sec_name);
+		if (!map)
+			continue;
+
+		n = btf_vlen(type);
+		for (j = 0; j < n; ++j, ++sinfo) {
+			const struct btf_type *var_type = btf__type_by_id(btf, sinfo->type);
+			const char *var_name = btf__name_by_offset(btf, var_type->name_off);
+
+			if (!btf_is_var(var_type))
+				continue;
+
+			for (k = 0; k < npresets; ++k) {
+				if (strcmp(var_name, presets[k].name) != 0)
+					continue;
+
+				err = set_global_var(obj, btf, var_type, map, sinfo,
+						     presets[k].value);
+				if (err)
+					return err;
+
+				preset_cnt++;
+				break;
+			}
+		}
+	}
+	if (preset_cnt != npresets)
+		fprintf(stderr, "Some global variable presets have not been applied\n");
+
+	return 0;
+}
+
 static int process_obj(const char *filename)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1336,6 +1519,12 @@ static int process_obj(const char *filename)
 
 	bpf_object__for_each_program(prog, obj) {
 		prog_cnt++;
+	}
+
+	err = set_global_vars(obj, env.presets, env.npresets);
+	if (err) {
+		fprintf(stderr, "Failed to set global variables\n");
+		goto cleanup;
 	}
 
 	if (prog_cnt == 1) {
