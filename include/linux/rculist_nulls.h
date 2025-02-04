@@ -52,6 +52,14 @@ static inline void hlist_nulls_del_init_rcu(struct hlist_nulls_node *n)
 #define hlist_nulls_next_rcu(node) \
 	(*((struct hlist_nulls_node __rcu __force **)&(node)->next))
 
+
+/**
+ * hlist_nulls_pprev_rcu - returns the element of the list before @node.
+ * @node: element of the list.
+ */
+#define hlist_nulls_pprev_rcu(node) \
+	(*((struct hlist_nulls_node __rcu __force **)(node)->pprev))
+
 /**
  * hlist_nulls_del_rcu - deletes entry from hash list without re-initialization
  * @n: the element to delete from the hash list.
@@ -143,6 +151,40 @@ static inline void hlist_nulls_add_tail_rcu(struct hlist_nulls_node *n,
 	} else {
 		hlist_nulls_add_head_rcu(n, h);
 	}
+}
+
+/**
+ * hlist_nulls_replace_rcu - replace an element in hash list
+ * @n: new element to add
+ * @o: old element to replace
+ *
+ * Description:
+ * Replace an existing element in a hash list with a new one,
+ * while permitting racing traversals.
+ *
+ * The caller must take whatever precautions are necessary
+ * (such as holding appropriate locks) to avoid racing
+ * with another list-mutation primitive, such as hlist_nulls_add_head_rcu()
+ * or hlist_nulls_del_rcu(), running on this same list.
+ * However, it is perfectly legal to run concurrently with
+ * the _rcu list-traversal primitives, such as
+ * hlist_nulls_for_each_entry_rcu(), used to prevent memory-consistency
+ * problems on Alpha CPUs.  Regardless of the type of CPU, the
+ * list-traversal primitive must be guarded by rcu_read_lock().
+ */
+static inline void hlist_nulls_replace_rcu(struct hlist_nulls_node *n,
+					   struct hlist_nulls_node *o)
+{
+	struct hlist_nulls_node *next = o->next;
+	struct hlist_nulls_node **pprev = o->pprev;
+
+	WRITE_ONCE(n->next, next);
+	WRITE_ONCE(n->pprev, pprev);
+	rcu_assign_pointer(hlist_nulls_pprev_rcu(o), n);
+
+	if (!is_a_nulls(next))
+		WRITE_ONCE(next->pprev, &n->next);
+	WRITE_ONCE(o->pprev, LIST_POISON2);
 }
 
 /* after that hlist_nulls_del will work */
