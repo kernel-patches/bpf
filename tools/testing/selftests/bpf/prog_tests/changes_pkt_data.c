@@ -19,7 +19,7 @@ static void test_aux(const char *main_prog_name,
 	struct bpf_program *freplace_prog = NULL;
 	struct bpf_program *main_prog = NULL;
 	LIBBPF_OPTS(bpf_object_open_opts, opts);
-	struct changes_pkt_data *main = NULL;
+	struct changes_pkt_data *main_data = NULL;
 	char log[16*1024];
 	int err;
 
@@ -27,14 +27,14 @@ static void test_aux(const char *main_prog_name,
 	opts.kernel_log_size = sizeof(log);
 	if (env.verbosity >= VERBOSE_SUPER)
 		opts.kernel_log_level = 1 | 2 | 4;
-	main = changes_pkt_data__open_opts(&opts);
-	if (!ASSERT_OK_PTR(main, "changes_pkt_data__open"))
+	main_data = changes_pkt_data__open_opts(&opts);
+	if (!ASSERT_OK_PTR(main_data, "changes_pkt_data__open"))
 		goto out;
-	main_prog = bpf_object__find_program_by_name(main->obj, main_prog_name);
+	main_prog = bpf_object__find_program_by_name(main_data->obj, main_prog_name);
 	if (!ASSERT_OK_PTR(main_prog, "main_prog"))
 		goto out;
 	bpf_program__set_autoload(main_prog, true);
-	err = changes_pkt_data__load(main);
+	err = changes_pkt_data__load(main_data);
 	print_verifier_log(log);
 	if (!ASSERT_OK(err, "changes_pkt_data__load"))
 		goto out;
@@ -60,7 +60,7 @@ static void test_aux(const char *main_prog_name,
 
 out:
 	changes_pkt_data_freplace__destroy(freplace);
-	changes_pkt_data__destroy(main);
+	changes_pkt_data__destroy(main_data);
 }
 
 /* There are two global subprograms in both changes_pkt_data.skel.h:
