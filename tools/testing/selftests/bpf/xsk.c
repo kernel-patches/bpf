@@ -8,6 +8,7 @@
  * Author(s): Magnus Karlsson <magnus.karlsson@intel.com>
  */
 
+#define _FILE_OFFSET_BITS 64
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
