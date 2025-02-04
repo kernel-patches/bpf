@@ -1179,12 +1179,14 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 		goto err;
 	}
 
-	/* add new element to the head of the list, so that
-	 * concurrent search will find it before old elem
-	 */
-	hlist_nulls_add_head_rcu(&l_new->hash_node, head);
-	if (l_old) {
-		hlist_nulls_del_rcu(&l_old->hash_node);
+	if (!l_old) {
+		hlist_nulls_add_head_rcu(&l_new->hash_node, head);
+	} else {
+		/* Replace the old element atomically, so that
+		 * concurrent search will find either the new element or
+		 * the old element.
+		 */
+		hlist_nulls_replace_rcu(&l_new->hash_node, &l_old->hash_node);
 
 		/* l_old has already been stashed in htab->extra_elems, free
 		 * its special fields before it is available for reuse. Also
