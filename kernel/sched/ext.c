@@ -6401,9 +6401,51 @@ BTF_KFUNCS_START(scx_kfunc_ids_select_cpu)
 BTF_ID_FLAGS(func, scx_bpf_select_cpu_dfl, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_select_cpu)
 
+static int scx_kfunc_ids_other_rqlocked_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	u32 moff = prog->aux->attach_st_ops_member_off;
+
+	if (moff == offsetof(struct sched_ext_ops, runnable) ||
+	    moff == offsetof(struct sched_ext_ops, dequeue) ||
+	    moff == offsetof(struct sched_ext_ops, stopping) ||
+	    moff == offsetof(struct sched_ext_ops, quiescent) ||
+	    moff == offsetof(struct sched_ext_ops, yield) ||
+	    moff == offsetof(struct sched_ext_ops, cpu_acquire) ||
+	    moff == offsetof(struct sched_ext_ops, running) ||
+	    moff == offsetof(struct sched_ext_ops, core_sched_before) ||
+	    moff == offsetof(struct sched_ext_ops, set_cpumask) ||
+	    moff == offsetof(struct sched_ext_ops, update_idle) ||
+	    moff == offsetof(struct sched_ext_ops, tick) ||
+	    moff == offsetof(struct sched_ext_ops, enable) ||
+	    moff == offsetof(struct sched_ext_ops, set_weight) ||
+	    moff == offsetof(struct sched_ext_ops, disable) ||
+	    moff == offsetof(struct sched_ext_ops, exit_task) ||
+	    moff == offsetof(struct sched_ext_ops, dump_task) ||
+	    moff == offsetof(struct sched_ext_ops, dump_cpu))
+		return 0;
+
+	return -EACCES;
+}
+
+static int scx_kfunc_ids_select_cpu_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	u32 moff;
+
+	if (!btf_id_set8_contains(&scx_kfunc_ids_select_cpu, kfunc_id) ||
+	    prog->aux->st_ops != &bpf_sched_ext_ops)
+		return 0;
+
+	moff = prog->aux->attach_st_ops_member_off;
+	if (moff == offsetof(struct sched_ext_ops, select_cpu))
+		return 0;
+
+	return scx_kfunc_ids_other_rqlocked_filter(prog, kfunc_id);
+}
+
 static const struct btf_kfunc_id_set scx_kfunc_set_select_cpu = {
 	.owner			= THIS_MODULE,
 	.set			= &scx_kfunc_ids_select_cpu,
+	.filter			= scx_kfunc_ids_select_cpu_filter,
 };
 
 static bool scx_dsq_insert_preamble(struct task_struct *p, u64 enq_flags)
