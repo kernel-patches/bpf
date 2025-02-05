@@ -523,6 +523,7 @@ struct bpf_struct_ops {
 #define STRUCT_OPS_SEC ".struct_ops"
 #define STRUCT_OPS_LINK_SEC ".struct_ops.link"
 #define ARENA_SEC ".addr_space.1"
+#define NOTE_SEC ".note"
 
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
@@ -3975,6 +3976,11 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 		} else if (sh->sh_type == SHT_NOBITS && (strcmp(name, BSS_SEC) == 0 ||
 							 str_has_pfx(name, BSS_SEC "."))) {
 			sec_desc->sec_type = SEC_BSS;
+			sec_desc->shdr = sh;
+			sec_desc->data = data;
+		} else if (sh->sh_type == SHT_NOTE && (strcmp(name, NOTE_SEC) == 0 ||
+						       str_has_pfx(name, NOTE_SEC "."))) {
+			sec_desc->sec_type = SEC_RODATA;
 			sec_desc->shdr = sh;
 			sec_desc->data = data;
 		} else {
