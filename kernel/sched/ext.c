@@ -7079,9 +7079,39 @@ BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime_from_dsq, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_unlocked)
 
+static int scx_kfunc_ids_unlocked_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	u32 moff;
+
+	if (!btf_id_set8_contains(&scx_kfunc_ids_unlocked, kfunc_id) ||
+	    prog->aux->st_ops != &bpf_sched_ext_ops)
+		return 0;
+
+	moff = prog->aux->attach_st_ops_member_off;
+	if (moff == offsetof(struct sched_ext_ops, init) ||
+	    moff == offsetof(struct sched_ext_ops, exit) ||
+	    moff == offsetof(struct sched_ext_ops, cpu_online) ||
+	    moff == offsetof(struct sched_ext_ops, cpu_offline) ||
+	    moff == offsetof(struct sched_ext_ops, init_task) ||
+	    moff == offsetof(struct sched_ext_ops, dump))
+		return 0;
+
+#ifdef CONFIG_EXT_GROUP_SCHED
+	if (moff == offsetof(struct sched_ext_ops, cgroup_init) ||
+	    moff == offsetof(struct sched_ext_ops, cgroup_exit) ||
+	    moff == offsetof(struct sched_ext_ops, cgroup_prep_move) ||
+	    moff == offsetof(struct sched_ext_ops, cgroup_cancel_move) ||
+	    moff == offsetof(struct sched_ext_ops, cgroup_move) ||
+	    moff == offsetof(struct sched_ext_ops, cgroup_set_weight))
+		return 0;
+#endif
+	return -EACCES;
+}
+
 static const struct btf_kfunc_id_set scx_kfunc_set_unlocked = {
 	.owner			= THIS_MODULE,
 	.set			= &scx_kfunc_ids_unlocked,
+	.filter			= scx_kfunc_ids_unlocked_filter,
 };
 
 __bpf_kfunc_start_defs();
