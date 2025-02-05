@@ -22384,7 +22384,7 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 	const struct bpf_struct_ops *st_ops;
 	const struct btf_member *member;
 	struct bpf_prog *prog = env->prog;
-	u32 btf_id, member_idx;
+	u32 btf_id, member_idx, member_off;
 	struct btf *btf;
 	const char *mname;
 	int err;
@@ -22435,7 +22435,8 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 		return -EINVAL;
 	}
 
-	err = bpf_struct_ops_supported(st_ops, __btf_member_bit_offset(t, member) / 8);
+	member_off = __btf_member_bit_offset(t, member) / 8;
+	err = bpf_struct_ops_supported(st_ops, member_off);
 	if (err) {
 		verbose(env, "attach to unsupported member %s of struct %s\n",
 			mname, st_ops->name);
@@ -22462,6 +22463,9 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 		st_ops_desc->arg_info[member_idx].info;
 	prog->aux->ctx_arg_info_size =
 		st_ops_desc->arg_info[member_idx].cnt;
+
+	prog->aux->st_ops = st_ops;
+	prog->aux->attach_st_ops_member_off = member_off;
 
 	prog->aux->attach_func_proto = func_proto;
 	prog->aux->attach_func_name = mname;
