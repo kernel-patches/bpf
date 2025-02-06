@@ -118,6 +118,9 @@
 #define IP6GENEVE_TUNL_DEV0 "ip6geneve00"
 #define IP6GENEVE_TUNL_DEV1 "ip6geneve11"
 
+#define IP6TNL_TUNL_DEV0 "ip6tnl00"
+#define IP6TNL_TUNL_DEV1 "ip6tnl11"
+
 #define PING_ARGS "-i 0.01 -c 3 -w 10 -q"
 
 static int config_device(void)
@@ -521,6 +524,11 @@ static void ipv4_check(void)
 static void veth0_ipv6_check(void)
 {
 	ASSERT_OK(test_ping(AF_INET6, IP6_ADDR_VETH0), "ping6 veth0");
+}
+
+static void dev0_ipv6_check(void)
+{
+	ASSERT_OK(test_ping(AF_INET6, IP6_ADDR_TUNL_DEV0), "ping6 TUNL_DEV0");
 }
 
 static void dev1_ipv6_check(void)
@@ -1054,6 +1062,54 @@ done:
 	test_tunnel_kern__destroy(skel);
 }
 
+enum ip6tnl_test {
+	IPIP6,
+	IP6IP6
+};
+
+static void test_ip6tnl_tunnel(enum ip6tnl_test test)
+{
+	struct test_tunnel_kern *skel;
+	int set_fd, get_fd;
+	int err;
+
+	skel = test_tunnel_kern__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_tunnel_kern__open_and_load"))
+		return;
+
+	err = add_ipv6_tunnel(IP6TNL_TUNL_DEV0, IP6TNL_TUNL_DEV1, "ip6tnl", "");
+	if (!ASSERT_OK(err, "add tunnel"))
+		goto done;
+
+	switch (test) {
+	case IPIP6:
+		set_fd = bpf_program__fd(skel->progs.ipip6_set_tunnel);
+		get_fd = bpf_program__fd(skel->progs.ipip6_get_tunnel);
+		break;
+	case IP6IP6:
+		set_fd = bpf_program__fd(skel->progs.ip6ip6_set_tunnel);
+		get_fd = bpf_program__fd(skel->progs.ip6ip6_get_tunnel);
+		break;
+	}
+	if (generic_attach(IP6TNL_TUNL_DEV1, get_fd, set_fd))
+		goto done;
+
+	veth0_ipv6_check();
+	switch (test) {
+	case IPIP6:
+		ipv4_check();
+		break;
+	case IP6IP6:
+		dev0_ipv6_check();
+		dev1_ipv6_check();
+		break;
+	}
+
+done:
+	delete_tunnel(IP6TNL_TUNL_DEV0, IP6TNL_TUNL_DEV1);
+	test_tunnel_kern__destroy(skel);
+}
+
 #define RUN_TEST(name, ...)						\
 	({								\
 		if (test__start_subtest(#name)) {			\
@@ -1083,6 +1139,8 @@ static void *test_tunnel_run_tests(void *arg)
 	RUN_TEST(ip6erspan_tunnel, V2);
 	RUN_TEST(geneve_tunnel);
 	RUN_TEST(ip6geneve_tunnel);
+	RUN_TEST(ip6tnl_tunnel, IPIP6);
+	RUN_TEST(ip6tnl_tunnel, IP6IP6);
 
 	return NULL;
 }
