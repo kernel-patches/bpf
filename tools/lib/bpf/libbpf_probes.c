@@ -433,6 +433,61 @@ static bool can_probe_prog_type(enum bpf_prog_type prog_type)
 	return true;
 }
 
+int libbpf_probe_bpf_kfunc(enum bpf_prog_type prog_type, int kfunc_id, int btf_fd,
+			   const void *opts)
+{
+	struct bpf_insn insns[] = {
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, btf_fd, kfunc_id),
+		BPF_EXIT_INSN(),
+	};
+	const size_t insn_cnt = ARRAY_SIZE(insns);
+	char buf[4096];
+	int *fd_array = NULL;
+	size_t fd_array_cnt = 0, fd_array_cap = fd_array_cnt;
+	int ret;
+
+	if (opts)
+		return libbpf_err(-EINVAL);
+
+	if (!can_probe_prog_type(prog_type))
+		return -EOPNOTSUPP;
+
+	if (btf_fd) {
+		ret = libbpf_ensure_mem((void **)&fd_array, &fd_array_cap,
+					sizeof(int), fd_array_cnt + btf_fd);
+		if (ret)
+			return ret;
+
+		/* In kernel, obtain the btf fd by means of the offset of
+		 * the fd_array, and the offset is the btf fd.
+		 */
+		fd_array[btf_fd] = btf_fd;
+	}
+
+	buf[0] = '\0';
+	ret = probe_prog_load(prog_type, insns, insn_cnt, fd_array,
+			      fd_array_cnt, buf, sizeof(buf));
+	if (ret < 0) {
+		free(fd_array);
+		return libbpf_err(ret);
+	}
+
+	free(fd_array);
+	/* If BPF verifier recognizes BPF kfunc but it's not supported for
+	 * given BPF program type, it will emit "calling kernel function
+	 * bpf_cpumask_create is not allowed", if the kfunc id is invalid,
+	 * it will emit "kernel btf_id 4294967295 is not a function". If btf fd
+	 * invalid in module btf, it will emit "invalid module BTF fd specified" or
+	 * "negative offset disallowed for kernel module function call"
+	 */
+	if (ret == 0 && (strstr(buf, "not allowed") || strstr(buf, "not a function") ||
+			(strstr(buf, "invalid module BTF fd")) ||
+			(strstr(buf, "negative offset disallowed"))))
+		return 0;
+
+	return 1; /* assume supported */
+}
+
 int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helper_id,
 			    const void *opts)
 {
