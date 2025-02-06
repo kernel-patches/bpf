@@ -382,6 +382,21 @@ static u32 prog_list_length(struct hlist_head *head)
 	return cnt;
 }
 
+static u32 prog_list_length_with_topdown_cnt(struct hlist_head *head, int *topdown_cnt)
+{
+	struct bpf_prog_list *pl;
+	u32 cnt = 0;
+
+	hlist_for_each_entry(pl, head, node) {
+		if (!prog_list_prog(pl))
+			continue;
+		cnt++;
+		if (pl->is_prio_topdown)
+			(*topdown_cnt) += 1;
+	}
+	return cnt;
+}
+
 /* if parent has non-overridable prog attached,
  * disallow attaching new programs to the descendent cgroup.
  * if parent has overridable or multi-prog, allow attaching
@@ -423,12 +438,13 @@ static int compute_effective_progs(struct cgroup *cgrp,
 	struct bpf_prog_array *progs;
 	struct bpf_prog_list *pl;
 	struct cgroup *p = cgrp;
-	int cnt = 0;
+	int i, cnt = 0, topdown_cnt = 0, fstart, bstart, init_bstart;
 
 	/* count number of effective programs by walking parents */
 	do {
 		if (cnt == 0 || (p->bpf.flags[atype] & BPF_F_ALLOW_MULTI))
-			cnt += prog_list_length(&p->bpf.progs[atype]);
+			cnt += prog_list_length_with_topdown_cnt(&p->bpf.progs[atype],
+								 &topdown_cnt);
 		p = cgroup_parent(p);
 	} while (p);
 
@@ -439,20 +455,34 @@ static int compute_effective_progs(struct cgroup *cgrp,
 	/* populate the array with effective progs */
 	cnt = 0;
 	p = cgrp;
+	fstart = topdown_cnt;
+	bstart = topdown_cnt - 1;
 	do {
 		if (cnt > 0 && !(p->bpf.flags[atype] & BPF_F_ALLOW_MULTI))
 			continue;
 
+		init_bstart = bstart;
 		hlist_for_each_entry(pl, &p->bpf.progs[atype], node) {
 			if (!prog_list_prog(pl))
 				continue;
 
-			item = &progs->items[cnt];
+			if (!pl->is_prio_topdown) {
+				item = &progs->items[fstart];
+				fstart++;
+			} else {
+				item = &progs->items[bstart];
+				bstart--;
+			}
 			item->prog = prog_list_prog(pl);
 			bpf_cgroup_storages_assign(item->cgroup_storage,
 						   pl->storage);
 			cnt++;
 		}
+
+		/* reverse topdown priority progs ordering at this cgroup level */
+		for (i = 0; i < (init_bstart - bstart)/2; i++)
+			swap(progs->items[init_bstart - i], progs->items[bstart + 1 + i]);
+
 	} while ((p = cgroup_parent(p)));
 
 	*array = progs;
@@ -698,6 +728,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 
 	pl->prog = prog;
 	pl->link = link;
+	pl->is_prio_topdown = !!(flags & BPF_F_PRIO_TOPDOWN);
 	bpf_cgroup_storages_assign(pl->storage, storage);
 	cgrp->bpf.flags[atype] = saved_flags;
 
