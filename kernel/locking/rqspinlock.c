@@ -325,6 +325,41 @@ out:
  */
 static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
 
+/*
+ * Hardcode smp_cond_load_acquire and atomic_cond_read_acquire implementations
+ * to the asm-generic implementation. In rqspinlock code, our conditional
+ * expression involves checking the value _and_ additionally a timeout. However,
+ * on arm64, the WFE-based implementation may never spin again if no stores
+ * occur to the locked byte in the lock word. As such, we may be stuck forever
+ * if event-stream based unblocking is not available on the platform for WFE
+ * spin loops (arch_timer_evtstrm_available).
+ *
+ * Once support for smp_cond_load_acquire_timewait [0] lands, we can drop this
+ * workaround.
+ *
+ * [0]: https://lore.kernel.org/lkml/20250203214911.898276-1-ankur.a.arora@oracle.com
+ */
+#define res_smp_cond_load_relaxed(ptr, cond_expr) ({		\
+	typeof(ptr) __PTR = (ptr);				\
+	__unqual_scalar_typeof(*ptr) VAL;			\
+	for (;;) {						\
+		VAL = READ_ONCE(*__PTR);			\
+		if (cond_expr)					\
+			break;					\
+		cpu_relax();					\
+	}							\
+	(typeof(*ptr))VAL;					\
+})
+
+#define res_smp_cond_load_acquire(ptr, cond_expr) ({		\
+	__unqual_scalar_typeof(*ptr) _val;			\
+	_val = res_smp_cond_load_relaxed(ptr, cond_expr);	\
+	smp_acquire__after_ctrl_dep();				\
+	(typeof(*ptr))_val;					\
+})
+
+#define res_atomic_cond_read_acquire(v, c) res_smp_cond_load_acquire(&(v)->counter, (c))
+
 /**
  * resilient_queued_spin_lock_slowpath - acquire the queued spinlock
  * @lock: Pointer to queued spinlock structure
@@ -419,7 +454,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(rqspinlock_t *lock, u32 val, 
 	 */
 	if (val & _Q_LOCKED_MASK) {
 		RES_RESET_TIMEOUT(ts);
-		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_MASK));
+		res_smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_MASK));
 	}
 
 	if (ret) {
@@ -568,8 +603,8 @@ queue:
 	 * does not imply a full barrier.
 	 */
 	RES_RESET_TIMEOUT(ts);
-	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
-				       RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_PENDING_MASK));
+	val = res_atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
+					   RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_PENDING_MASK));
 
 waitq_timeout:
 	if (ret) {
