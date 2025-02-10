@@ -413,10 +413,10 @@ __naked void test_tnum_scast_index(void)
         r1 &= 0x7F;                                    \
         r1 |= 0x80;                                    \
         r1 = (s8)r1;                                   \
-        if r1 s < 0 goto fail;                         \
+        if r1 s < 0 goto l0_%=;                         \
         r2 = 0;                                        \
         r2 += r1;  					\
-        if r2 s > 127 goto fail;                        \
+        if r2 s > 127 goto l0_%=;                        \
         r0 = 1;                                        \
         exit;                                         \
 l0_%=:		                                         \
