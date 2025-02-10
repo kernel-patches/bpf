@@ -421,7 +421,8 @@ __naked void test_tnum_scast_s8_refine(void)
         r2 = r10;                                       \
         r2 -= 128;                                     \
         r2 += r1;                                       \
-        (u8)(r2 + 0) = 0xAA;                         \
+	r2 += 0;					\
+        (u8)r2 = 0xAA;         		                \
         r0 = 1;                                         \
         exit;                                           \
 fail_%=:                                                \
