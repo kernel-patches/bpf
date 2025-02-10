@@ -414,13 +414,13 @@ __naked void test_tnum_scast_s8_refine(void)
         r2 = r0;                                        \
         r2 &= 1;                                        \
         r1 |= r2 << 7;                                  \
-        r1 = (s8) r1;                                   \
+        r1 = (s8)r1;                                   \
         if r1 s< 0 goto fail_%=;                        \
         if r1 s>= 127 goto fail_%=;                     \
         r2 = r10;                                       \
         r2 += -128;                                     \
         r2 += r1;                                       \
-        *(u8 *)(r2 + 0) = 0xAA;                         \
+        (u8)(r2 + 0) = 0xAA;                         \
         r0 = 1;                                         \
         exit;                                           \
 fail_%=:                                                \
