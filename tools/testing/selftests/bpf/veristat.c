@@ -154,6 +154,15 @@ struct filter {
 	bool abs;
 };
 
+struct var_preset {
+	char *name;
+	enum { INTEGRAL, NAME } type;
+	union {
+		long long ivalue;
+		char *svalue;
+	};
+};
+
 static struct env {
 	char **filenames;
 	int filename_cnt;
@@ -195,6 +204,8 @@ static struct env {
 	int progs_processed;
 	int progs_skipped;
 	int top_src_lines;
+	struct var_preset *presets;
+	int npresets;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -246,12 +257,16 @@ static const struct argp_option opts[] = {
 	{ "test-reg-invariants", 'r', NULL, 0,
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
 	{ "top-src-lines", 'S', "N", 0, "Emit N most frequent source code lines" },
+	{ "set-global-vars", 'G', "GLOBALS", 0, "Set global variables provided in the expression, for example \"var1 = 1\"" },
 	{},
 };
 
 static int parse_stats(const char *stats_str, struct stat_specs *specs);
 static int append_filter(struct filter **filters, int *cnt, const char *str);
 static int append_filter_file(const char *path);
+static int parse_var_presets(char *expr, struct var_preset **presets, int *capacity, int *size);
+static int parse_var_presets_from_file(const char *filename, struct var_preset **presets,
+				       int *capacity, int *size);
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
@@ -363,6 +378,24 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			return -ENOMEM;
 		env.filename_cnt++;
 		break;
+	case 'G': {
+		static int presets_cap;
+		char *expr = strdup(arg);
+
+		if (expr[0] == '@') {
+			if (parse_var_presets_from_file(expr + 1, &env.presets,
+							&presets_cap, &env.npresets)) {
+				fprintf(stderr, "Could not parse global variables preset: %s\n",
+					arg);
+				argp_usage(state);
+			}
+		} else if (parse_var_presets(expr, &env.presets, &presets_cap, &env.npresets)) {
+			fprintf(stderr, "Could not parse global variables preset: %s\n", arg);
+			argp_usage(state);
+		}
+		free(expr);
+		break;
+	}
 	default:
 		return ARGP_ERR_UNKNOWN;
 	}
@@ -1292,6 +1325,273 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	return 0;
 };
 
+static int parse_var_presets(char *expr, struct var_preset **presets, int *capacity, int *size)
+{
+	char *eq_ptr = strchr(expr, '=');
+	char *name_ptr = expr;
+	char *name_end = eq_ptr - 1;
+	char *val_ptr = eq_ptr + 1;
+	long long value;
+
+	if (!eq_ptr) {
+		fprintf(stderr, "No assignment in expression\n");
+		return -EINVAL;
+	}
+
+	while (isspace(*name_ptr))
+		++name_ptr;
+	while (isspace(*name_end))
+		--name_end;
+	while (isspace(*val_ptr))
+		++val_ptr;
+
+	if (name_ptr > name_end) {
+		fprintf(stderr, "Empty variable name in expression %s\n", expr);
+		return -EINVAL;
+	}
+
+	if (*size >= *capacity) {
+		*capacity = max(*capacity * 2, 1);
+		*presets = realloc(*presets, *capacity * sizeof(**presets));
+	}
+
+	if (isalpha(*val_ptr)) {
+		char *value_end = val_ptr + strlen(val_ptr) - 1;
+
+		while (isspace(*value_end))
+			--value_end;
+		*(value_end + 1) = '\0';
+
+		(*presets)[*size].svalue = strdup(val_ptr);
+		(*presets)[*size].type = NAME;
+	} else if (*val_ptr == '-' || isdigit(*val_ptr)) {
+		errno = 0;
+		value = strtoll(val_ptr, NULL, 0);
+		if (errno == ERANGE) {
+			errno = 0;
+			value = strtoull(val_ptr, NULL, 0);
+		}
+		(*presets)[*size].ivalue = value;
+		(*presets)[*size].type = INTEGRAL;
+		if (errno) {
+			fprintf(stderr, "Could not parse integer value %s\n", val_ptr);
+			return -EINVAL;
+		}
+	} else {
+		fprintf(stderr, "Could not parse value %s\n", val_ptr);
+		return -EINVAL;
+	}
+	*(name_end + 1) = '\0';
+	(*presets)[*size].name = strdup(name_ptr);
+	(*size)++;
+	return 0;
+}
+
+static int parse_var_presets_from_file(const char *filename, struct var_preset **presets,
+				       int *capacity, int *size)
+{
+	FILE *f;
+	char line[256];
+	int err = 0;
+
+	f = fopen(filename, "rt");
+	if (!f) {
+		fprintf(stderr, "Could not open file %s\n", filename);
+		return -EINVAL;
+	}
+
+	while (fgets(line, sizeof(line), f)) {
+		int err = parse_var_presets(line, presets, capacity, size);
+
+		if (err)
+			goto cleanup;
+	}
+
+cleanup:
+	fclose(f);
+	return err;
+}
+
+static bool is_signed_type(const struct btf_type *t)
+{
+	if (btf_is_int(t))
+		return btf_int_encoding(t) & BTF_INT_SIGNED;
+	if (btf_is_enum(t))
+		return btf_kflag(t);
+	return true;
+}
+
+static int enum_value_from_name(const struct btf *btf, const struct btf_type *t,
+				const char *evalue, long long *retval)
+{
+	if (btf_is_enum(t)) {
+		struct btf_enum *e = btf_enum(t);
+		int i, n = btf_vlen(t);
+
+		for (i = 0; i < n; ++i) {
+			const char *cur_name = btf__name_by_offset(btf, e[i].name_off);
+
+			if (strcmp(cur_name, evalue) == 0) {
+				*retval = e[i].val;
+				return 0;
+			}
+		}
+	} else if (btf_is_enum64(t)) {
+		struct btf_enum64 *e = btf_enum64(t);
+		int i, n = btf_vlen(t);
+
+		for (i = 0; i < n; ++i) {
+			struct btf_enum64 *cur = e + i;
+			const char *cur_name = btf__name_by_offset(btf, cur->name_off);
+			__u64 value =  btf_enum64_value(cur);
+
+			if (strcmp(cur_name, evalue) == 0) {
+				*retval = value;
+				return 0;
+			}
+		}
+	}
+	return -EINVAL;
+}
+
+static bool is_preset_supported(const struct btf_type *t)
+{
+	return btf_is_int(t) || btf_is_enum(t) || btf_is_enum64(t);
+}
+
+static int set_global_var(struct bpf_object *obj, struct btf *btf, const struct btf_type *t,
+			  struct bpf_map *map, struct btf_var_secinfo *sinfo,
+			  struct var_preset *preset)
+{
+	const struct btf_type *base_type;
+	void *ptr;
+	size_t size;
+
+	base_type = btf__type_by_id(btf, btf__resolve_type(btf, t->type));
+	if (!base_type) {
+		fprintf(stderr, "Could not resolve type %d\n", t->type);
+		return -EINVAL;
+	}
+	if (!is_preset_supported(base_type)) {
+		fprintf(stderr, "Setting global variable for btf kind %d is not supported\n",
+			btf_kind(base_type));
+		return -EINVAL;
+	}
+
+	if (preset->type == NAME && btf_is_any_enum(base_type)) {
+		/* Convert enum element name into integer */
+		long long ivalue;
+
+		if (enum_value_from_name(btf, base_type, preset->svalue, &ivalue) != 0) {
+			fprintf(stderr, "Could not find integer value for enum element %s\n",
+				preset->svalue);
+			return -EINVAL;
+		}
+		free(preset->svalue);
+		preset->ivalue = ivalue;
+		preset->type = INTEGRAL;
+	}
+
+	/* Check if value fits into the target variable size */
+	if  (sinfo->size < sizeof(preset->ivalue)) {
+		bool is_signed = is_signed_type(base_type);
+		__u32 unsigned_bits = sinfo->size * 8 - (is_signed ? 1 : 0);
+		long long max_val = 1ll << unsigned_bits;
+
+		if (preset->ivalue >= max_val || preset->ivalue < -max_val) {
+			fprintf(stderr,
+				"Variable %s value %lld is out of range [%lld; %lld]\n",
+				btf__name_by_offset(btf, t->name_off), preset->ivalue,
+				is_signed ? -max_val : 0, max_val - 1);
+			return -EINVAL;
+		}
+	}
+
+	ptr = (void *)bpf_map__initial_value(map, &size);
+	if (!ptr || (sinfo->offset + sinfo->size > size))
+		return -EINVAL;
+
+	if (__BYTE_ORDER == __LITTLE_ENDIAN) {
+		memcpy(ptr + sinfo->offset, &preset->ivalue, sinfo->size);
+	} else if (__BYTE_ORDER == __BIG_ENDIAN) {
+		__u8 src_offset = sizeof(preset->ivalue) - sinfo->size;
+
+		memcpy(ptr + sinfo->offset, (void *)&preset->ivalue + src_offset, sinfo->size);
+	}
+	return 0;
+}
+
+static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, int npresets)
+{
+	struct btf_var_secinfo *sinfo;
+	const char *sec_name;
+	const struct btf_type *type;
+	struct bpf_map *map;
+	struct btf *btf;
+	bool *set_var;
+	int i, j, k, n, cnt, err = 0;
+
+	if (npresets == 0)
+		return 0;
+
+	btf = bpf_object__btf(obj);
+	if (!btf)
+		return -EINVAL;
+
+	set_var = calloc(npresets, sizeof(bool));
+	for (i = 0; i < npresets; ++i)
+		set_var[i] = false;
+
+	cnt = btf__type_cnt(btf);
+	for (i  = 0; i != cnt; ++i) {
+		type = btf__type_by_id(btf, i);
+
+		if (!btf_is_datasec(type))
+			continue;
+
+		sinfo = btf_var_secinfos(type);
+		sec_name = btf__name_by_offset(btf, type->name_off);
+		map = bpf_object__find_map_by_name(obj, sec_name);
+		if (!map)
+			continue;
+
+		n = btf_vlen(type);
+		for (j = 0; j < n; ++j, ++sinfo) {
+			const struct btf_type *var_type = btf__type_by_id(btf, sinfo->type);
+			const char *var_name = btf__name_by_offset(btf, var_type->name_off);
+
+			if (!btf_is_var(var_type))
+				continue;
+
+			for (k = 0; k < npresets; ++k) {
+				if (strcmp(var_name, presets[k].name) != 0)
+					continue;
+
+				if (set_var[k]) {
+					fprintf(stderr, "Variable %s is set more than once",
+						var_name);
+				}
+
+				err = set_global_var(obj, btf, var_type, map, sinfo, presets + k);
+				if (err)
+					goto out;
+
+				set_var[k] = true;
+				break;
+			}
+		}
+	}
+	for (i = 0; i < npresets; ++i) {
+		if (!set_var[i]) {
+			fprintf(stderr, "Global variable preset %s has not been applied\n",
+				presets[i].name);
+		}
+	}
+out:
+	free(set_var);
+	return err;
+}
+
 static int process_obj(const char *filename)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1299,7 +1599,7 @@ static int process_obj(const char *filename)
 	struct bpf_program *prog, *tprog, *lprog;
 	libbpf_print_fn_t old_libbpf_print_fn;
 	LIBBPF_OPTS(bpf_object_open_opts, opts);
-	int err = 0, prog_cnt = 0;
+	int err = 0;
 
 	if (!should_process_file_prog(base_filename, NULL)) {
 		if (env.verbose)
@@ -1335,23 +1635,18 @@ static int process_obj(const char *filename)
 	env.files_processed++;
 
 	bpf_object__for_each_program(prog, obj) {
-		prog_cnt++;
-	}
-
-	if (prog_cnt == 1) {
-		prog = bpf_object__next_program(obj, NULL);
-		bpf_program__set_autoload(prog, true);
-		process_prog(filename, obj, prog);
-		goto cleanup;
-	}
-
-	bpf_object__for_each_program(prog, obj) {
 		const char *prog_name = bpf_program__name(prog);
 
 		tobj = bpf_object__open_file(filename, &opts);
 		if (!tobj) {
 			err = -errno;
 			fprintf(stderr, "Failed to open '%s': %d\n", filename, err);
+			goto cleanup;
+		}
+
+		err = set_global_vars(tobj, env.presets, env.npresets);
+		if (err) {
+			fprintf(stderr, "Failed to set global variables\n");
 			goto cleanup;
 		}
 
