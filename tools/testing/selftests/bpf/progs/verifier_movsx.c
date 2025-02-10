@@ -401,32 +401,44 @@ l0_%=:                                               	     \
 }
 
 SEC("socket")
-	__description("Test tnum_scast index into a 128-byte array using a sign-extended S8")
+	__description("tnum_scast: refine sign-unknown s8 across branches, index 128-byte stack")
 	__log_level(2)
-	__msg("using sign extended value with inferred range")
-	__success __retval(1)
-__naked void test_tnum_scast_index(void)
+	__success __success_unpriv __retval(1)
+__naked void test_tnum_scast_s8_refine(void)
 {
-    asm volatile ("					\
+    asm volatile ("                                      \
         call %[bpf_get_prandom_u32];                    \
-        r1 = r0;                                       \
-        r1 &= 0x7F;                                    \
-        r1 |= 0x80;                                    \
-        r1 = (s8)r1;                                   \
-        if r1 s < 0 goto l0_%=;                         \
-        r2 = 0;                                        \
-        r2 += r1;  					\
-        if r2 s > 127 goto l0_%=;                        \
-        r0 = 1;                                        \
-        exit;                                         \
-l0_%=:		                                         \
-        r0 = 0;                                        \
-        exit;                                         \
-        "  :
-	: __imm(bpf_get_prandom_u32)
-	: __clobber_all);
+                                                        \
+        r1 = r0;                                        \
+        r1 &= 0x7F;                                     \
+                                                        \
+        call %[bpf_get_prandom_u32];                    \
+        r2 = r0;                                        \
+        r2 &= 1;                                        \
+                                                        \
+        r1 |= r2 << 7;                                  \
+                                                        \
+        r1 = (s8) r1;                                   \
+                                                        \
+        if r1 s< 0 goto fail_%=;                        \
+                                                        \
+        if r1 s>= 128 goto fail_%=;                     \
+                                                        \
+        r2 = r10;                                       \
+        r2 += -128;                                     \
+        r2 += r1;                                       \
+                                                        \
+        *(u8 *)(r2 + 0) = 0xAA;                         \
+                                                        \
+        r0 = 1;                                         \
+        exit;                                           \
+fail_%=:                                                \
+        r0 = 0;                                         \
+        exit;                                           \
+    "   :
+        : __imm(bpf_get_prandom_u32)
+        : __clobber_all);
 }
-
 
 #else
 
