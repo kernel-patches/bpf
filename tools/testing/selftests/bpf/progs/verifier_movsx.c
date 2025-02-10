@@ -400,6 +400,34 @@ l0_%=:                                               	     \
 	: __clobber_all);
 }
 
+SEC("socket")
+	__description("Test tnum_scast index into a 128-byte array using a sign-extended S8")
+	__log_level(2)
+	__msg("using sign extended value with inferred range")
+	__success __retval(1)
+__naked void test_tnum_scast_index(void)
+{
+    asm volatile ("
+        call %[bpf_get_prandom_u32];                    \
+        r1 = r0;                                       \
+        r1 &= 0x7F;                                    \
+        r1 |= 0x80;                                    \
+        r1 = (s8)r1;                                   \
+        if r1 s < 0 goto fail;                         \
+        r2 = 0;                                        \
+        r2 += r1;  					\
+        if r2 s > 127 goto fail;                        \
+        r0 = 1;                                        \
+        exit;                                         \
+l0_%=:		                                         \
+        r0 = 0;                                        \
+        exit;                                         \
+        "  :
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+
 #else
 
 SEC("socket")
