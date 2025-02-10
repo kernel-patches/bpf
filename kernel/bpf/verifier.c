@@ -28,8 +28,6 @@
 #include <linux/cpumask.h>
 #include <linux/bpf_mem_alloc.h>
 #include <net/xdp.h>
-#include <linux/trace_events.h>
-#include <linux/kallsyms.h>
 
 #include "disasm.h"
 
@@ -22509,13 +22507,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 {
 	bool prog_extension = prog->type == BPF_PROG_TYPE_EXT;
 	bool prog_tracing = prog->type == BPF_PROG_TYPE_TRACING;
-	char trace_symbol[KSYM_SYMBOL_LEN];
 	const char prefix[] = "btf_trace_";
-	struct bpf_raw_event_map *btp;
 	int ret = 0, subprog = -1, i;
 	const struct btf_type *t;
 	bool conservative = true;
-	const char *tname, *fname;
+	const char *tname;
 	struct btf *btf;
 	long addr = 0;
 	struct module *mod = NULL;
@@ -22655,34 +22651,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			return -EINVAL;
 		}
 		tname += sizeof(prefix) - 1;
-
-		/* The func_proto of "btf_trace_##tname" is generated from typedef without argument
-		 * names. Thus using bpf_raw_event_map to get argument names.
-		 */
-		btp = bpf_get_raw_tracepoint(tname);
-		if (!btp)
+		t = btf_type_by_id(btf, t->type);
+		if (!btf_type_is_ptr(t))
+			/* should never happen in valid vmlinux build */
 			return -EINVAL;
-		fname = kallsyms_lookup((unsigned long)btp->bpf_func, NULL, NULL, NULL,
-					trace_symbol);
-		bpf_put_raw_tracepoint(btp);
-
-		if (fname)
-			ret = btf_find_by_name_kind(btf, fname, BTF_KIND_FUNC);
-
-		if (!fname || ret < 0) {
-			bpf_log(log, "Cannot find btf of tracepoint template, fall back to %s%s.\n",
-				prefix, tname);
-			t = btf_type_by_id(btf, t->type);
-			if (!btf_type_is_ptr(t))
-				/* should never happen in valid vmlinux build */
-				return -EINVAL;
-		} else {
-			t = btf_type_by_id(btf, ret);
-			if (!btf_type_is_func(t))
-				/* should never happen in valid vmlinux build */
-				return -EINVAL;
-		}
-
 		t = btf_type_by_id(btf, t->type);
 		if (!btf_type_is_func_proto(t))
 			/* should never happen in valid vmlinux build */
