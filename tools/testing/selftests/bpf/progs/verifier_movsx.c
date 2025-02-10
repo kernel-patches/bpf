@@ -407,7 +407,7 @@ SEC("socket")
 	__success __retval(1)
 __naked void test_tnum_scast_index(void)
 {
-    asm volatile ("
+    asm volatile ("					\
         call %[bpf_get_prandom_u32];                    \
         r1 = r0;                                       \
         r1 &= 0x7F;                                    \
