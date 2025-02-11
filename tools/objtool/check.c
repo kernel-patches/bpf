@@ -250,7 +250,7 @@ static bool __dead_end_function(struct objtool_file *file, struct symbol *func,
 
 #define NORETURN(func) __stringify(func),
 	static const char * const global_noreturns[] = {
-#include "noreturns.h"
+#include <linux/noreturns.h>
 	};
 #undef NORETURN
 

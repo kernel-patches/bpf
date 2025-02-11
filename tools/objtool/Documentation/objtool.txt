@@ -326,7 +326,8 @@ the objtool maintainers.
 
    The call from foo() to bar() doesn't return, but bar() is missing the
    __noreturn annotation.  NOTE: In addition to annotating the function
-   with __noreturn, please also add it to tools/objtool/noreturns.h.
+   with __noreturn, please also add it to tools/include/linux/noreturns.h and
+   include/linux/noreturns.h.
 
 4. file.o: warning: objtool: func(): can't find starting instruction
    or
