@@ -22930,6 +22930,13 @@ BTF_ID(func, __rcu_read_unlock)
 #endif
 BTF_SET_END(btf_id_deny)
 
+/* The functions annotated with __noreturn are denied. */
+BTF_SET_START(fexit_deny)
+#define NORETURN(fn) BTF_ID(func, fn)
+#include <linux/noreturns.h>
+#undef NORETURN
+BTF_SET_END(fexit_deny)
+
 static bool can_be_sleepable(struct bpf_prog *prog)
 {
 	if (prog->type == BPF_PROG_TYPE_TRACING) {
@@ -23015,6 +23022,9 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 			return ret;
 	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
 		   btf_id_set_contains(&btf_id_deny, btf_id)) {
+		return -EINVAL;
+	} else if (prog->expected_attach_type == BPF_TRACE_FEXIT &&
+		   btf_id_set_contains(&fexit_deny, btf_id)) {
 		return -EINVAL;
 	}
 
