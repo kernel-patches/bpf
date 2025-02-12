@@ -784,6 +784,7 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	struct llist_node *llnode = NULL;
 	unsigned long flags;
 	int cnt = 0;
+	bool retry = false;
 
 	/* Disable irqs to prevent the following race for majority of prog types:
 	 * prog_A
@@ -795,6 +796,7 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	 * Use per-cpu 'active' counter to order free_list access between
 	 * unit_alloc/unit_free/bpf_mem_refill.
 	 */
+retry_alloc:
 	local_irq_save(flags);
 	if (local_inc_return(&c->active) == 1) {
 		llnode = __llist_del_first(&c->free_llist);
@@ -814,6 +816,13 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	 * irq work before other task preempts current task.
 	 */
 	local_irq_restore(flags);
+
+	if (unlikely(!llnode && !retry)) {
+		int cpu = smp_processor_id();
+		alloc_bulk(c, 1, cpu_to_node(cpu), true);
+		retry = true;
+		goto retry_alloc;
+	}
 
 	return llnode;
 }
