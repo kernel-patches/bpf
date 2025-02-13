@@ -92,7 +92,7 @@ static void get_header_guard(char *guard, const char *obj_name, const char *suff
 
 static bool get_map_ident(const struct bpf_map *map, char *buf, size_t buf_sz)
 {
-	static const char *sfxs[] = { ".data", ".rodata", ".bss", ".kconfig" };
+	static const char *sfxs[] = { ".data", ".rodata", ".percpu", ".bss", ".kconfig" };
 	const char *name = bpf_map__name(map);
 	int i, n;
 
@@ -117,7 +117,7 @@ static bool get_map_ident(const struct bpf_map *map, char *buf, size_t buf_sz)
 
 static bool get_datasec_ident(const char *sec_name, char *buf, size_t buf_sz)
 {
-	static const char *pfxs[] = { ".data", ".rodata", ".bss", ".kconfig" };
+	static const char *pfxs[] = { ".data", ".rodata", ".percpu", ".bss", ".kconfig" };
 	int i, n;
 
 	/* recognize hard coded LLVM section name */
@@ -148,7 +148,8 @@ static int codegen_datasec_def(struct bpf_object *obj,
 			       struct btf *btf,
 			       struct btf_dump *d,
 			       const struct btf_type *sec,
-			       const char *obj_name)
+			       const char *obj_name,
+			       bool is_percpu)
 {
 	const char *sec_name = btf__name_by_offset(btf, sec->name_off);
 	const struct btf_var_secinfo *sec_var = btf_var_secinfos(sec);
@@ -228,7 +229,7 @@ static int codegen_datasec_def(struct bpf_object *obj,
 
 		off = sec_var->offset + sec_var->size;
 	}
-	printf("	} *%s;\n", sec_ident);
+	printf("	}%s *%s;\n", is_percpu ? " __aligned(8)" : "", sec_ident);
 	return 0;
 }
 
@@ -279,6 +280,7 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 	struct bpf_map *map;
 	const struct btf_type *sec;
 	char map_ident[256];
+	bool is_percpu;
 	int err = 0;
 
 	d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
@@ -286,8 +288,11 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 		return -errno;
 
 	bpf_object__for_each_map(map, obj) {
-		/* only generate definitions for memory-mapped internal maps */
-		if (!is_mmapable_map(map, map_ident, sizeof(map_ident)))
+		/* only generate definitions for memory-mapped or .percpu internal maps */
+		is_percpu = bpf_map__is_internal_percpu(map);
+		if (!is_mmapable_map(map, map_ident, sizeof(map_ident)) && !is_percpu)
+			continue;
+		if (is_percpu && (use_loader || !get_map_ident(map, map_ident, sizeof(map_ident))))
 			continue;
 
 		sec = find_type_for_map(btf, map_ident);
@@ -303,7 +308,7 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 			printf("	struct %s__%s {\n", obj_name, map_ident);
 			printf("	} *%s;\n", map_ident);
 		} else {
-			err = codegen_datasec_def(obj, btf, d, sec, obj_name);
+			err = codegen_datasec_def(obj, btf, d, sec, obj_name, is_percpu);
 			if (err)
 				goto out;
 		}
@@ -901,8 +906,9 @@ codegen_maps_skeleton(struct bpf_object *obj, size_t map_cnt, bool mmaped, bool 
 				map->map = &obj->maps.%s;	    \n\
 			",
 			i, bpf_map__name(map), ident);
-		/* memory-mapped internal maps */
-		if (mmaped && is_mmapable_map(map, ident, sizeof(ident))) {
+		/* memory-mapped or .percpu internal maps */
+		if (mmaped && (is_mmapable_map(map, ident, sizeof(ident)) ||
+			       bpf_map__is_internal_percpu(map))) {
 			printf("\tmap->mmaped = (void **)&obj->%s;\n", ident);
 		}
 
@@ -1434,7 +1440,28 @@ static int do_skeleton(int argc, char **argv)
 		static inline int					    \n\
 		%1$s__load(struct %1$s *obj)				    \n\
 		{							    \n\
-			return bpf_object__load_skeleton(obj->skeleton);    \n\
+			int err;					    \n\
+									    \n\
+			err = bpf_object__load_skeleton(obj->skeleton);	    \n\
+			if (err)					    \n\
+				return err;				    \n\
+									    \n\
+		", obj_name);
+
+	if (map_cnt) {
+		bpf_object__for_each_map(map, obj) {
+			if (!get_map_ident(map, ident, sizeof(ident)))
+				continue;
+			if (bpf_map__is_internal(map) &&
+			    bpf_map__type(map) == BPF_MAP_TYPE_PERCPU_ARRAY) {
+				printf("\tobj->%s = NULL;\n", ident);
+			}
+		}
+	}
+
+	codegen("\
+		\n\
+			return 0;					    \n\
 		}							    \n\
 									    \n\
 		static inline struct %1$s *				    \n\
