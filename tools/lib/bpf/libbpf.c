@@ -516,6 +516,7 @@ struct bpf_struct_ops {
 };
 
 #define DATA_SEC ".data"
+#define PERCPU_SEC ".percpu"
 #define BSS_SEC ".bss"
 #define RODATA_SEC ".rodata"
 #define KCONFIG_SEC ".kconfig"
@@ -530,6 +531,7 @@ enum libbpf_map_type {
 	LIBBPF_MAP_BSS,
 	LIBBPF_MAP_RODATA,
 	LIBBPF_MAP_KCONFIG,
+	LIBBPF_MAP_PERCPU,
 };
 
 struct bpf_map_def {
@@ -640,6 +642,7 @@ enum sec_type {
 	SEC_DATA,
 	SEC_RODATA,
 	SEC_ST_OPS,
+	SEC_PERCPU,
 };
 
 struct elf_sec_desc {
@@ -1903,7 +1906,7 @@ static bool map_is_mmapable(struct bpf_object *obj, struct bpf_map *map)
 	struct btf_var_secinfo *vsi;
 	int i, n;
 
-	if (!map->btf_value_type_id)
+	if (!map->btf_value_type_id || map->libbpf_type == LIBBPF_MAP_PERCPU)
 		return false;
 
 	t = btf__type_by_id(obj->btf, map->btf_value_type_id);
@@ -1927,6 +1930,7 @@ static int
 bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 			      const char *real_name, int sec_idx, void *data, size_t data_sz)
 {
+	bool is_percpu = type == LIBBPF_MAP_PERCPU;
 	struct bpf_map_def *def;
 	struct bpf_map *map;
 	size_t mmap_sz;
@@ -1948,9 +1952,9 @@ bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 	}
 
 	def = &map->def;
-	def->type = BPF_MAP_TYPE_ARRAY;
+	def->type = is_percpu ? BPF_MAP_TYPE_PERCPU_ARRAY : BPF_MAP_TYPE_ARRAY;
 	def->key_size = sizeof(int);
-	def->value_size = data_sz;
+	def->value_size = is_percpu ? roundup(data_sz, 8) : data_sz;
 	def->max_entries = 1;
 	def->map_flags = type == LIBBPF_MAP_RODATA || type == LIBBPF_MAP_KCONFIG
 		? BPF_F_RDONLY_PROG : 0;
@@ -1961,10 +1965,11 @@ bpf_object__init_internal_map(struct bpf_object *obj, enum libbpf_map_type type,
 	if (map_is_mmapable(obj, map))
 		def->map_flags |= BPF_F_MMAPABLE;
 
-	pr_debug("map '%s' (global data): at sec_idx %d, offset %zu, flags %x.\n",
-		 map->name, map->sec_idx, map->sec_offset, def->map_flags);
+	pr_debug("map '%s' (global %sdata): at sec_idx %d, offset %zu, flags %x.\n",
+		 map->name, is_percpu ? "percpu " : "", map->sec_idx,
+		 map->sec_offset, def->map_flags);
 
-	mmap_sz = bpf_map_mmap_sz(map);
+	mmap_sz = is_percpu ? def->value_size : bpf_map_mmap_sz(map);
 	map->mmaped = mmap(NULL, mmap_sz, PROT_READ | PROT_WRITE,
 			   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	if (map->mmaped == MAP_FAILED) {
@@ -2011,6 +2016,13 @@ static int bpf_object__init_global_data_maps(struct bpf_object *obj)
 			obj->has_rodata = true;
 			sec_name = elf_sec_name(obj, elf_sec_by_idx(obj, sec_idx));
 			err = bpf_object__init_internal_map(obj, LIBBPF_MAP_RODATA,
+							    sec_name, sec_idx,
+							    sec_desc->data->d_buf,
+							    sec_desc->data->d_size);
+			break;
+		case SEC_PERCPU:
+			sec_name = elf_sec_name(obj, elf_sec_by_idx(obj, sec_idx));
+			err = bpf_object__init_internal_map(obj, LIBBPF_MAP_PERCPU,
 							    sec_name, sec_idx,
 							    sec_desc->data->d_buf,
 							    sec_desc->data->d_size);
@@ -3364,6 +3376,10 @@ static int btf_fixup_datasec(struct bpf_object *obj, struct btf *btf,
 		fixup_offsets = true;
 	}
 
+	/* .percpu DATASEC must has __aligned(8) size. */
+	if (strcmp(sec_name, PERCPU_SEC) == 0 || str_has_pfx(sec_name, PERCPU_SEC))
+		t->size = roundup(t->size, 8);
+
 	for (i = 0, vsi = btf_var_secinfos(t); i < vars; i++, vsi++) {
 		const struct btf_type *t_var;
 		struct btf_var *var;
@@ -3934,6 +3950,11 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				sec_desc->sec_type = SEC_RODATA;
 				sec_desc->shdr = sh;
 				sec_desc->data = data;
+			} else if (strcmp(name, PERCPU_SEC) == 0 ||
+				   str_has_pfx(name, PERCPU_SEC)) {
+				sec_desc->sec_type = SEC_PERCPU;
+				sec_desc->shdr = sh;
+				sec_desc->data = data;
 			} else if (strcmp(name, STRUCT_OPS_SEC) == 0 ||
 				   strcmp(name, STRUCT_OPS_LINK_SEC) == 0 ||
 				   strcmp(name, "?" STRUCT_OPS_SEC) == 0 ||
@@ -4453,6 +4474,7 @@ static bool bpf_object__shndx_is_data(const struct bpf_object *obj,
 	case SEC_BSS:
 	case SEC_DATA:
 	case SEC_RODATA:
+	case SEC_PERCPU:
 		return true;
 	default:
 		return false;
@@ -4478,6 +4500,8 @@ bpf_object__section_to_libbpf_map_type(const struct bpf_object *obj, int shndx)
 		return LIBBPF_MAP_DATA;
 	case SEC_RODATA:
 		return LIBBPF_MAP_RODATA;
+	case SEC_PERCPU:
+		return LIBBPF_MAP_PERCPU;
 	default:
 		return LIBBPF_MAP_UNSPEC;
 	}
@@ -4795,7 +4819,7 @@ static int map_fill_btf_type_info(struct bpf_object *obj, struct bpf_map *map)
 
 	/*
 	 * LLVM annotates global data differently in BTF, that is,
-	 * only as '.data', '.bss' or '.rodata'.
+	 * only as '.data', '.bss', '.percpu' or '.rodata'.
 	 */
 	if (!bpf_map__is_internal(map))
 		return -ENOENT;
@@ -5125,23 +5149,47 @@ static int
 bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 {
 	enum libbpf_map_type map_type = map->libbpf_type;
-	int err, zero = 0;
-	size_t mmap_sz;
+	bool is_percpu = map_type == LIBBPF_MAP_PERCPU;
+	int err = 0, zero = 0, num_cpus, i;
+	size_t data_sz, elem_sz, mmap_sz;
+	void *data = NULL;
+
+	data_sz = map->def.value_size;
+	if (is_percpu) {
+		num_cpus = libbpf_num_possible_cpus();
+		if (num_cpus < 0) {
+			err = num_cpus;
+			return err;
+		}
+
+		data_sz = data_sz * num_cpus;
+		data = malloc(data_sz);
+		if (!data) {
+			err = -ENOMEM;
+			return err;
+		}
+
+		elem_sz = map->def.value_size;
+		for (i = 0; i < num_cpus; i++)
+			memcpy(data + i * elem_sz, map->mmaped, elem_sz);
+	} else {
+		data = map->mmaped;
+	}
 
 	if (obj->gen_loader) {
 		bpf_gen__map_update_elem(obj->gen_loader, map - obj->maps,
-					 map->mmaped, map->def.value_size);
+					 data, data_sz);
 		if (map_type == LIBBPF_MAP_RODATA || map_type == LIBBPF_MAP_KCONFIG)
 			bpf_gen__map_freeze(obj->gen_loader, map - obj->maps);
-		return 0;
+		goto free_data;
 	}
 
-	err = bpf_map_update_elem(map->fd, &zero, map->mmaped, 0);
+	err = bpf_map_update_elem(map->fd, &zero, data, 0);
 	if (err) {
 		err = -errno;
 		pr_warn("map '%s': failed to set initial contents: %s\n",
 			bpf_map__name(map), errstr(err));
-		return err;
+		goto free_data;
 	}
 
 	/* Freeze .rodata and .kconfig map as read-only from syscall side. */
@@ -5151,7 +5199,7 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 			err = -errno;
 			pr_warn("map '%s': failed to freeze as read-only: %s\n",
 				bpf_map__name(map), errstr(err));
-			return err;
+			goto free_data;
 		}
 	}
 
@@ -5178,7 +5226,7 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 			err = -errno;
 			pr_warn("map '%s': failed to re-mmap() contents: %s\n",
 				bpf_map__name(map), errstr(err));
-			return err;
+			goto free_data;
 		}
 		map->mmaped = mmaped;
 	} else if (map->mmaped) {
@@ -5186,7 +5234,10 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 		map->mmaped = NULL;
 	}
 
-	return 0;
+free_data:
+	if (is_percpu)
+		free(data);
+	return err;
 }
 
 static void bpf_map__destroy(struct bpf_map *map);
@@ -10132,13 +10183,16 @@ int bpf_map__fd(const struct bpf_map *map)
 
 static bool map_uses_real_name(const struct bpf_map *map)
 {
-	/* Since libbpf started to support custom .data.* and .rodata.* maps,
-	 * their user-visible name differs from kernel-visible name. Users see
-	 * such map's corresponding ELF section name as a map name.
-	 * This check distinguishes .data/.rodata from .data.* and .rodata.*
-	 * maps to know which name has to be returned to the user.
+	/* Since libbpf started to support custom .data.*, .percpu.* and
+	 * .rodata.* maps, their user-visible name differs from kernel-visible
+	 * name. Users see such map's corresponding ELF section name as a map
+	 * name. This check distinguishes .data/.percpu/.rodata from .data.*,
+	 * .percpu.* and .rodata.* maps to know which name has to be returned to
+	 * the user.
 	 */
 	if (map->libbpf_type == LIBBPF_MAP_DATA && strcmp(map->real_name, DATA_SEC) != 0)
+		return true;
+	if (map->libbpf_type == LIBBPF_MAP_PERCPU && strcmp(map->real_name, PERCPU_SEC) != 0)
 		return true;
 	if (map->libbpf_type == LIBBPF_MAP_RODATA && strcmp(map->real_name, RODATA_SEC) != 0)
 		return true;
@@ -10384,6 +10438,11 @@ void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize)
 bool bpf_map__is_internal(const struct bpf_map *map)
 {
 	return map->libbpf_type != LIBBPF_MAP_UNSPEC;
+}
+
+bool bpf_map__is_internal_percpu(const struct bpf_map *map)
+{
+	return map->libbpf_type == LIBBPF_MAP_PERCPU;
 }
 
 __u32 bpf_map__ifindex(const struct bpf_map *map)
