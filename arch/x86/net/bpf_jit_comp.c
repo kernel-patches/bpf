@@ -2184,6 +2184,7 @@ populate_extable:
 			/* call */
 		case BPF_JMP | BPF_CALL: {
 			u8 *ip = image + addrs[i - 1];
+			void *runtime_hook;
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
@@ -2197,6 +2198,13 @@ populate_extable:
 				ip += 2;
 			}
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
+			runtime_hook = select_bpf_runtime_hook(func);
+			if (runtime_hook) {
+				emit_mov_imm64(&prog, X86_REG_R9, (long)func >> 32,
+					       (u32) (long)func);
+				ip += 6;
+				func = (u8 *)runtime_hook;
+			}
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
 			if (priv_frame_ptr)

@@ -9739,3 +9739,42 @@ void bpf_runtime_release_hook(void *arg1, void *arg2, void *arg3,
 
 	print_bpf_active_refs();
 }
+
+void *select_bpf_runtime_hook(void *kfunc)
+{
+	struct btf_struct_kfunc *struct_kfunc, dummy_key;
+	struct btf_struct_kfunc_tab *tab;
+	struct btf *btf;
+
+	btf = bpf_get_btf_vmlinux();
+	dummy_key.kfunc_addr = (unsigned long)kfunc;
+
+	tab = btf->acquire_kfunc_tab;
+	if (tab) {
+		struct_kfunc = bsearch(&dummy_key, tab->set, tab->cnt,
+				       sizeof(struct btf_struct_kfunc),
+				       btf_kfunc_addr_cmp_func);
+		if (struct_kfunc)
+			return bpf_runtime_acquire_hook;
+	}
+
+	tab = btf->release_kfunc_tab;
+	if (tab) {
+		struct_kfunc = bsearch(&dummy_key, tab->set, tab->cnt,
+				       sizeof(struct btf_struct_kfunc),
+				       btf_kfunc_addr_cmp_func);
+		if (struct_kfunc)
+			return bpf_runtime_release_hook;
+	}
+
+	/*
+	 * For watchdog we may need
+	 *
+	 * tab = btf->may_run_repeatedly_long_time_kfunc_tab
+	 * struct_kfunc = bsearch(&dummy_key, tab->set, tab->cnt, sizeof(struct btf_struct_kfunc),
+	 *		       btf_kfunc_addr_cmp_func);
+	 * if (struct_kfunc)
+	 *	return bpf_runtime_watchdog_hook;
+	 */
+	return NULL;
+}
