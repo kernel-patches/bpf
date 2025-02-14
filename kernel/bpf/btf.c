@@ -9631,3 +9631,111 @@ bool btf_param_match_suffix(const struct btf *btf,
 	param_name += len - suffix_len;
 	return !strncmp(param_name, suffix, suffix_len);
 }
+
+static void print_bpf_active_refs(void)
+{
+	/* This function is only used to demonstrate the idea */
+	struct btf_struct_kfunc_tab *tab;
+	struct btf_struct_kfunc *kfunc;
+	struct bpf_run_ctx *bpf_ctx;
+	struct bpf_ref_node *node;
+	char sym[KSYM_SYMBOL_LEN];
+	int bkt, num = 0;
+	struct btf *btf;
+
+	btf = bpf_get_btf_vmlinux();
+	bpf_ctx = current->bpf_ctx;
+	tab = btf->release_kfunc_btf_tab;
+
+	pr_info("bpf prog current release table:\n");
+
+	if (hash_empty(bpf_ctx->active_ref_list)) {
+		pr_info("table empty\n");
+		return;
+	}
+
+	hash_for_each(bpf_ctx->active_ref_list, bkt, node, hnode) {
+		kfunc = bsearch(&node->struct_btf_id, tab->set, tab->cnt,
+				sizeof(struct btf_struct_kfunc), btf_id_cmp_func);
+		sprint_symbol(sym, kfunc->kfunc_addr);
+		pr_info("obj %d, obj addr = %lx, btf id = %d, can be released by %s\n",
+			num, node->obj_addr, node->struct_btf_id, sym);
+		num++;
+		/*
+		 * If we want to release this object, we can use
+		 * void (*release_kfunc)(void *) = (void (*)(void *))kfunc->kfunc_addr;
+		 * release_kfunc((void *)node->obj_addr);
+		 */
+	}
+}
+
+typedef void *(*bpf_kfunc_t)(void *arg1, void *arg2, void *arg3,
+			     void *arg4, void *arg5);
+
+void *bpf_runtime_acquire_hook(void *arg1, void *arg2, void *arg3,
+			       void *arg4, void *arg5, void *arg6 /* kfunc addr */)
+{
+	struct btf_struct_kfunc *struct_kfunc, dummy_key;
+	struct btf_struct_kfunc_tab *tab;
+	struct bpf_run_ctx *bpf_ctx;
+	struct bpf_ref_node *node;
+	bpf_kfunc_t kfunc;
+	struct btf *btf;
+	void *kfunc_ret;
+
+	kfunc = (bpf_kfunc_t)arg6;
+	kfunc_ret = kfunc(arg1, arg2, arg3, arg4, arg5);
+
+	if (!kfunc_ret)
+		return kfunc_ret;
+
+	bpf_ctx = current->bpf_ctx;
+	btf = bpf_get_btf_vmlinux();
+
+	tab = btf->acquire_kfunc_tab;
+	if (!tab)
+		return kfunc_ret;
+
+	dummy_key.kfunc_addr = (unsigned long)arg6;
+	struct_kfunc = bsearch(&dummy_key, tab->set, tab->cnt,
+			       sizeof(struct btf_struct_kfunc),
+			       btf_kfunc_addr_cmp_func);
+
+	node = list_first_entry(&bpf_ctx->free_ref_list, struct bpf_ref_node, lnode);
+	node->obj_addr = (unsigned long)kfunc_ret;
+	node->struct_btf_id = struct_kfunc->struct_btf_id;
+
+	list_del(&node->lnode);
+	hash_add(bpf_ctx->active_ref_list, &node->hnode, node->obj_addr);
+
+	pr_info("bpf prog acquire obj addr = %lx, btf id = %d\n",
+		node->obj_addr, node->struct_btf_id);
+	print_bpf_active_refs();
+
+	return kfunc_ret;
+}
+
+void bpf_runtime_release_hook(void *arg1, void *arg2, void *arg3,
+			      void *arg4, void *arg5, void *arg6 /* kfunc addr */)
+{
+	struct bpf_run_ctx *bpf_ctx;
+	struct bpf_ref_node *node;
+	bpf_kfunc_t kfunc;
+
+	kfunc = (bpf_kfunc_t)arg6;
+	kfunc(arg1, arg2, arg3, arg4, arg5);
+
+	bpf_ctx = current->bpf_ctx;
+
+	hash_for_each_possible(bpf_ctx->active_ref_list, node, hnode, (unsigned long)arg1) {
+		if (node->obj_addr == (unsigned long)arg1) {
+			hash_del(&node->hnode);
+			list_add(&node->lnode, &bpf_ctx->free_ref_list);
+
+			pr_info("bpf prog release obj addr = %lx, btf id = %d\n",
+				node->obj_addr, node->struct_btf_id);
+		}
+	}
+
+	print_bpf_active_refs();
+}

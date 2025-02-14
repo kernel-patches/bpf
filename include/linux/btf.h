@@ -567,6 +567,10 @@ struct btf_field_iter {
 };
 
 #ifdef CONFIG_BPF_SYSCALL
+void *bpf_runtime_acquire_hook(void *arg1, void *arg2, void *arg3,
+			       void *arg4, void *arg5, void *arg6);
+void bpf_runtime_release_hook(void *arg1, void *arg2, void *arg3,
+			      void *arg4, void *arg5, void *arg6);
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **map_ids);
