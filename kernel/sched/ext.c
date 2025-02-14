@@ -7,6 +7,7 @@
  * Copyright (c) 2022 David Vernet <dvernet@meta.com>
  */
 #define SCX_OP_IDX(op)		(offsetof(struct sched_ext_ops, op) / sizeof(void (*)(void)))
+#define SCX_MOFF_IDX(moff)	(moff / sizeof(void (*)(void)))
 
 enum scx_consts {
 	SCX_DSP_DFL_MAX_BATCH		= 32,
@@ -6449,11 +6450,6 @@ BTF_KFUNCS_START(scx_kfunc_ids_select_cpu)
 BTF_ID_FLAGS(func, scx_bpf_select_cpu_dfl, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_select_cpu)
 
-static const struct btf_kfunc_id_set scx_kfunc_set_select_cpu = {
-	.owner			= THIS_MODULE,
-	.set			= &scx_kfunc_ids_select_cpu,
-};
-
 static bool scx_dsq_insert_preamble(struct task_struct *p, u64 enq_flags)
 {
 	if (!scx_kf_allowed(SCX_KF_ENQUEUE | SCX_KF_DISPATCH))
@@ -6610,11 +6606,6 @@ BTF_ID_FLAGS(func, scx_bpf_dsq_insert_vtime, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_dispatch, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_enqueue_dispatch)
-
-static const struct btf_kfunc_id_set scx_kfunc_set_enqueue_dispatch = {
-	.owner			= THIS_MODULE,
-	.set			= &scx_kfunc_ids_enqueue_dispatch,
-};
 
 static bool scx_dsq_move(struct bpf_iter_scx_dsq_kern *kit,
 			 struct task_struct *p, u64 dsq_id, u64 enq_flags)
@@ -6931,11 +6922,6 @@ BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime_from_dsq, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_dispatch)
 
-static const struct btf_kfunc_id_set scx_kfunc_set_dispatch = {
-	.owner			= THIS_MODULE,
-	.set			= &scx_kfunc_ids_dispatch,
-};
-
 __bpf_kfunc_start_defs();
 
 /**
@@ -6998,11 +6984,6 @@ BTF_KFUNCS_START(scx_kfunc_ids_cpu_release)
 BTF_ID_FLAGS(func, scx_bpf_reenqueue_local)
 BTF_KFUNCS_END(scx_kfunc_ids_cpu_release)
 
-static const struct btf_kfunc_id_set scx_kfunc_set_cpu_release = {
-	.owner			= THIS_MODULE,
-	.set			= &scx_kfunc_ids_cpu_release,
-};
-
 __bpf_kfunc_start_defs();
 
 /**
@@ -7034,11 +7015,6 @@ BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq_set_vtime)
 BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime_from_dsq, KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_unlocked)
-
-static const struct btf_kfunc_id_set scx_kfunc_set_unlocked = {
-	.owner			= THIS_MODULE,
-	.set			= &scx_kfunc_ids_unlocked,
-};
 
 __bpf_kfunc_start_defs();
 
@@ -7770,6 +7746,83 @@ __bpf_kfunc u64 scx_bpf_now(void)
 
 __bpf_kfunc_end_defs();
 
+BTF_KFUNCS_START(scx_kfunc_ids_ops_context)
+/* scx_kfunc_ids_select_cpu */
+BTF_ID_FLAGS(func, scx_bpf_select_cpu_dfl, KF_RCU)
+/* scx_kfunc_ids_enqueue_dispatch */
+BTF_ID_FLAGS(func, scx_bpf_dsq_insert, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dsq_insert_vtime, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dispatch, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime, KF_RCU)
+/* scx_kfunc_ids_dispatch */
+BTF_ID_FLAGS(func, scx_bpf_dispatch_nr_slots)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_cancel)
+BTF_ID_FLAGS(func, scx_bpf_dsq_move_to_local)
+BTF_ID_FLAGS(func, scx_bpf_consume)
+/* scx_kfunc_ids_cpu_release */
+BTF_ID_FLAGS(func, scx_bpf_reenqueue_local)
+/* scx_kfunc_ids_unlocked */
+BTF_ID_FLAGS(func, scx_bpf_create_dsq, KF_SLEEPABLE)
+/* Intersection of scx_kfunc_ids_dispatch and scx_kfunc_ids_unlocked */
+BTF_ID_FLAGS(func, scx_bpf_dsq_move_set_slice)
+BTF_ID_FLAGS(func, scx_bpf_dsq_move_set_vtime)
+BTF_ID_FLAGS(func, scx_bpf_dsq_move, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dsq_move_vtime, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq_set_slice)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq_set_vtime)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_from_dsq, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_dispatch_vtime_from_dsq, KF_RCU)
+BTF_KFUNCS_END(scx_kfunc_ids_ops_context)
+
+static int scx_kfunc_ids_ops_context_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	u32 moff, flags;
+
+	if (!btf_id_set8_contains(&scx_kfunc_ids_ops_context, kfunc_id))
+		return 0;
+
+	if (prog->type == BPF_PROG_TYPE_SYSCALL &&
+	    btf_id_set8_contains(&scx_kfunc_ids_unlocked, kfunc_id))
+		return 0;
+
+	if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	    prog->aux->st_ops != &bpf_sched_ext_ops)
+		return 0;
+
+	/* prog->type == BPF_PROG_TYPE_STRUCT_OPS && prog->aux->st_ops == &bpf_sched_ext_ops*/
+
+	moff = prog->aux->attach_st_ops_member_off;
+	flags = scx_ops_context_flags[SCX_MOFF_IDX(moff)];
+
+	if ((flags & SCX_OPS_KF_UNLOCKED) &&
+	    btf_id_set8_contains(&scx_kfunc_ids_unlocked, kfunc_id))
+		return 0;
+
+	if ((flags & SCX_OPS_KF_CPU_RELEASE) &&
+	    btf_id_set8_contains(&scx_kfunc_ids_cpu_release, kfunc_id))
+		return 0;
+
+	if ((flags & SCX_OPS_KF_DISPATCH) &&
+	    btf_id_set8_contains(&scx_kfunc_ids_dispatch, kfunc_id))
+		return 0;
+
+	if ((flags & SCX_OPS_KF_ENQUEUE) &&
+	    btf_id_set8_contains(&scx_kfunc_ids_enqueue_dispatch, kfunc_id))
+		return 0;
+
+	if ((flags & SCX_OPS_KF_SELECT_CPU) &&
+	    btf_id_set8_contains(&scx_kfunc_ids_select_cpu, kfunc_id))
+		return 0;
+
+	return -EACCES;
+}
+
+static const struct btf_kfunc_id_set scx_kfunc_set_ops_context = {
+	.owner			= THIS_MODULE,
+	.set			= &scx_kfunc_ids_ops_context,
+	.filter			= scx_kfunc_ids_ops_context_filter,
+};
+
 BTF_KFUNCS_START(scx_kfunc_ids_any)
 BTF_ID_FLAGS(func, scx_bpf_kick_cpu)
 BTF_ID_FLAGS(func, scx_bpf_dsq_nr_queued)
@@ -7823,17 +7876,9 @@ static int __init scx_init(void)
 	 * check using scx_kf_allowed().
 	 */
 	if ((ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_select_cpu)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_enqueue_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_dispatch)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_cpu_release)) ||
-	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
-					     &scx_kfunc_set_unlocked)) ||
+					     &scx_kfunc_set_ops_context)) ||
 	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
-					     &scx_kfunc_set_unlocked)) ||
+					     &scx_kfunc_set_ops_context)) ||
 	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
 					     &scx_kfunc_set_any)) ||
 	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
