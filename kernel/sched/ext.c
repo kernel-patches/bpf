@@ -689,6 +689,54 @@ struct sched_ext_ops {
 	char name[SCX_OPS_NAME_LEN];
 };
 
+/* Each flag corresponds to a btf kfunc id set */
+enum scx_ops_kf_flags {
+	SCX_OPS_KF_ANY			= 0,
+	SCX_OPS_KF_UNLOCKED		= 1 << 1,
+	SCX_OPS_KF_CPU_RELEASE		= 1 << 2,
+	SCX_OPS_KF_DISPATCH		= 1 << 3,
+	SCX_OPS_KF_ENQUEUE		= 1 << 4,
+	SCX_OPS_KF_SELECT_CPU		= 1 << 5,
+};
+
+static const u32 scx_ops_context_flags[] = {
+	[SCX_OP_IDX(select_cpu)]		= SCX_OPS_KF_SELECT_CPU | SCX_OPS_KF_ENQUEUE,
+	[SCX_OP_IDX(enqueue)]			= SCX_OPS_KF_ENQUEUE,
+	[SCX_OP_IDX(dequeue)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(dispatch)]			= SCX_OPS_KF_DISPATCH | SCX_OPS_KF_ENQUEUE,
+	[SCX_OP_IDX(tick)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(runnable)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(running)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(stopping)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(quiescent)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(yield)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(core_sched_before)]		= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(set_weight)]		= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(set_cpumask)]		= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(update_idle)]		= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(cpu_acquire)]		= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(cpu_release)]		= SCX_OPS_KF_CPU_RELEASE,
+	[SCX_OP_IDX(init_task)]			= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(exit_task)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(enable)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(disable)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(dump)]			= SCX_OPS_KF_DISPATCH,
+	[SCX_OP_IDX(dump_cpu)]			= SCX_OPS_KF_ANY,
+	[SCX_OP_IDX(dump_task)]			= SCX_OPS_KF_ANY,
+#ifdef CONFIG_EXT_GROUP_SCHED
+	[SCX_OP_IDX(cgroup_init)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cgroup_exit)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cgroup_prep_move)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cgroup_move)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cgroup_cancel_move)]	= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cgroup_set_weight)]		= SCX_OPS_KF_UNLOCKED,
+#endif	/* CONFIG_EXT_GROUP_SCHED */
+	[SCX_OP_IDX(cpu_online)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(cpu_offline)]		= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(init)]			= SCX_OPS_KF_UNLOCKED,
+	[SCX_OP_IDX(exit)]			= SCX_OPS_KF_UNLOCKED,
+};
+
 enum scx_opi {
 	SCX_OPI_BEGIN			= 0,
 	SCX_OPI_NORMAL_BEGIN		= 0,
