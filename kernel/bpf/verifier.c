@@ -1479,6 +1479,9 @@ static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_e
 		return NULL;
 	state->refs[new_ofs].insn_idx = insn_idx;
 
+	if (env->prog->max_acquired_refs < state->acquired_refs)
+		env->prog->max_acquired_refs = state->acquired_refs;
+
 	return &state->refs[new_ofs];
 }
 
@@ -18926,6 +18929,8 @@ static int do_check(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	bool do_print_state = false;
 	int prev_insn_idx = -1;
+
+	env->prog->max_acquired_refs = 0;
 
 	for (;;) {
 		bool exception_exit = false;
