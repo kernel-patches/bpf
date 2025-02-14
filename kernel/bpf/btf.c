@@ -249,6 +249,17 @@ struct btf_struct_ops_tab {
 	struct bpf_struct_ops_desc ops[];
 };
 
+struct btf_struct_kfunc {
+	u32 struct_btf_id;
+	unsigned long kfunc_addr;
+};
+
+struct btf_struct_kfunc_tab {
+	u32 cnt;
+	u32 capacity;
+	struct btf_struct_kfunc *set;
+};
+
 struct btf {
 	void *data;
 	struct btf_type **types;
@@ -267,6 +278,9 @@ struct btf {
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
 	struct btf_struct_metas *struct_meta_tab;
 	struct btf_struct_ops_tab *struct_ops_tab;
+	struct btf_struct_kfunc_tab *acquire_kfunc_tab;
+	struct btf_struct_kfunc_tab *release_kfunc_tab;
+	struct btf_struct_kfunc_tab *release_kfunc_btf_tab;
 
 	/* split BTF support */
 	struct btf *base_btf;
@@ -8456,6 +8470,112 @@ static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
 	return 0;
 }
 
+static inline int btf_kfunc_addr_cmp_func(const void *a, const void *b)
+{
+	const struct btf_struct_kfunc *pa = a, *pb = b;
+
+	return pa->kfunc_addr - pb->kfunc_addr;
+}
+
+static int __btf_struct_kfunc_set_add(struct btf_struct_kfunc_tab **kfunc_tab, u32 struct_btf_id,
+				      unsigned long kfunc_addr, void *key, cmp_func_t cmp_func)
+{
+	struct btf_struct_kfunc_tab *tab;
+	struct btf_struct_kfunc *set;
+	int ret;
+
+	tab = *kfunc_tab;
+	if (!tab) {
+		tab = kzalloc(sizeof(*tab), GFP_KERNEL | __GFP_NOWARN);
+		if (!tab)
+			return -ENOMEM;
+
+		tab->cnt = 0;
+		tab->capacity = 0;
+
+		*kfunc_tab = tab;
+	}
+
+	set = tab->set;
+	if (set && bsearch(key, set, tab->cnt, sizeof(struct btf_struct_kfunc), cmp_func))
+		return 0;
+
+	if (tab->cnt + 1 > tab->capacity) {
+		set = krealloc(tab->set, sizeof(struct btf_struct_kfunc) * (tab->capacity + 16),
+			       GFP_KERNEL | __GFP_NOWARN);
+		if (!set) {
+			ret = -ENOMEM;
+			goto end;
+		}
+		tab->capacity += 16;
+	}
+
+	set[tab->cnt].struct_btf_id = struct_btf_id;
+	set[tab->cnt].kfunc_addr = kfunc_addr;
+
+	tab->set = set;
+	tab->cnt += 1;
+
+	sort(tab->set, tab->cnt, sizeof(struct btf_struct_kfunc), cmp_func, NULL);
+
+	return 0;
+end:
+	kfree(tab->set);
+	kfree(tab);
+	return ret;
+}
+
+static int btf_struct_kfunc_set_add(struct btf *btf, u32 kfunc_id, u32 kfunc_flags)
+{
+	const struct btf_type *kfunc, *kfunc_proto, *sturct_type;
+	struct btf_struct_kfunc dummy_key;
+	unsigned long kfunc_addr;
+	const char *kfunc_name;
+	u32 struct_btf_id;
+	int ret;
+
+	kfunc = btf_type_by_id(btf, kfunc_id);
+	kfunc_name = btf_name_by_offset(btf, kfunc->name_off);
+	if (!kfunc_name)
+		return -EINVAL;
+
+	kfunc_proto = btf_type_by_id(btf, kfunc->type);
+	if (!kfunc_proto || !btf_type_is_func_proto(kfunc_proto))
+		return -EINVAL;
+
+	if (kfunc_flags & KF_ACQUIRE) {
+		sturct_type = btf_type_skip_modifiers(btf, kfunc_proto->type, NULL);
+	} else { /* kfunc_flags & KF_RELEASE */
+		if (btf_type_vlen(kfunc_proto) < 1)
+			return -EINVAL;
+
+		sturct_type = btf_type_skip_modifiers(btf, btf_params(kfunc_proto)[0].type, NULL);
+	}
+
+	if (!sturct_type || !btf_type_is_ptr(sturct_type))
+		return -EINVAL;
+	sturct_type = btf_type_skip_modifiers(btf, sturct_type->type, &struct_btf_id);
+	if (!sturct_type || !__btf_type_is_struct(sturct_type))
+		return -EINVAL;
+
+	kfunc_addr = kallsyms_lookup_name(kfunc_name);
+	dummy_key.kfunc_addr = kfunc_addr;
+
+	if (kfunc_flags & KF_ACQUIRE) {
+		ret = __btf_struct_kfunc_set_add(&btf->acquire_kfunc_tab, struct_btf_id,
+						 kfunc_addr, &dummy_key, btf_kfunc_addr_cmp_func);
+	} else { /* kfunc_flags & KF_RELEASE */
+		ret = __btf_struct_kfunc_set_add(&btf->release_kfunc_tab, struct_btf_id,
+						 kfunc_addr, &dummy_key, btf_kfunc_addr_cmp_func);
+		if (ret)
+			return ret;
+		ret = __btf_struct_kfunc_set_add(&btf->release_kfunc_btf_tab, struct_btf_id,
+						 kfunc_addr, &struct_btf_id, btf_id_cmp_func);
+	}
+
+	return ret;
+}
+
 /* Kernel Function (kfunc) BTF ID set registration API */
 
 static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
@@ -8552,8 +8672,12 @@ static int btf_populate_kfunc_set(struct btf *btf, enum btf_kfunc_hook hook,
 	/* Concatenate the two sets */
 	memcpy(set->pairs + set->cnt, add_set->pairs, add_set->cnt * sizeof(set->pairs[0]));
 	/* Now that the set is copied, update with relocated BTF ids */
-	for (i = set->cnt; i < set->cnt + add_set->cnt; i++)
+	for (i = set->cnt; i < set->cnt + add_set->cnt; i++) {
 		set->pairs[i].id = btf_relocate_id(btf, set->pairs[i].id);
+
+		if (set->pairs[i].flags & (KF_ACQUIRE | KF_RELEASE))
+			btf_struct_kfunc_set_add(btf, set->pairs[i].id, set->pairs[i].flags);
+	}
 
 	set->cnt += add_set->cnt;
 
