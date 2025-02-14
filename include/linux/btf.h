@@ -139,6 +139,13 @@ struct btf_struct_metas {
 	struct btf_struct_meta types[];
 };
 
+struct bpf_ref_node {
+	struct hlist_node hnode;
+	struct list_head lnode;
+	u32 struct_btf_id;
+	unsigned long obj_addr;
+};
+
 extern const struct file_operations btf_fops;
 
 const char *btf_get_name(const struct btf *btf);

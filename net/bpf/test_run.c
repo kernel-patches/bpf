@@ -1530,12 +1530,43 @@ out:
 	return ret;
 }
 
+static void init_bpf_context(struct bpf_run_ctx *ctx, struct bpf_prog *prog)
+{
+	struct bpf_ref_node *node;
+	int i;
+
+	hash_init(ctx->active_ref_list);
+	INIT_LIST_HEAD(&ctx->free_ref_list);
+
+	for (i = 0; i < prog->max_acquired_refs; i++) {
+		node = kmalloc(sizeof(*node), GFP_KERNEL);
+		list_add(&node->lnode, &ctx->free_ref_list);
+	}
+}
+
+static void clear_bpf_context(struct bpf_run_ctx *ctx)
+{
+	struct bpf_ref_node *node, *tmp;
+	int bkt;
+
+	hash_for_each(ctx->active_ref_list, bkt, node, hnode) {
+		hash_del(&node->hnode);
+		kfree(node);
+	}
+
+	list_for_each_entry_safe(node, tmp, &ctx->free_ref_list, lnode) {
+		list_del(&node->lnode);
+		kfree(node);
+	}
+}
+
 int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 			      const union bpf_attr *kattr,
 			      union bpf_attr __user *uattr)
 {
 	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
 	__u32 ctx_size_in = kattr->test.ctx_size_in;
+	struct bpf_run_ctx *old_ctx, run_ctx;
 	void *ctx = NULL;
 	u32 retval;
 	int err = 0;
@@ -1557,9 +1588,15 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 			return PTR_ERR(ctx);
 	}
 
+	init_bpf_context(&run_ctx, prog);
+	old_ctx = bpf_set_run_ctx(&run_ctx);
+
 	rcu_read_lock_trace();
 	retval = bpf_prog_run_pin_on_cpu(prog, ctx);
 	rcu_read_unlock_trace();
+
+	bpf_reset_run_ctx(old_ctx);
+	clear_bpf_context(&run_ctx);
 
 	if (copy_to_user(&uattr->test.retval, &retval, sizeof(u32))) {
 		err = -EFAULT;

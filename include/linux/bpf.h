@@ -11,6 +11,7 @@
 #include <linux/file.h>
 #include <linux/percpu.h>
 #include <linux/err.h>
+#include <linux/hashtable.h>
 #include <linux/rbtree_latch.h>
 #include <linux/numa.h>
 #include <linux/mm_types.h>
@@ -2109,7 +2110,10 @@ int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			u64 bpf_cookie,
 			struct bpf_prog_array **new_array);
 
-struct bpf_run_ctx {};
+struct bpf_run_ctx {
+	DECLARE_HASHTABLE(active_ref_list, 5);
+	struct list_head free_ref_list;
+};
 
 struct bpf_cg_run_ctx {
 	struct bpf_run_ctx run_ctx;
