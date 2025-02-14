@@ -2315,6 +2315,8 @@ static void __bpf_prog_put_noref(struct bpf_prog *prog, bool deferred)
 	kfree(prog->aux->kfunc_tab);
 	if (prog->aux->attach_btf)
 		btf_put(prog->aux->attach_btf);
+	if (prog->aux->ctx_arg_info)
+		kfree(prog->aux->ctx_arg_info);
 
 	if (deferred) {
 		if (prog->sleepable)
