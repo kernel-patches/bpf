@@ -11,51 +11,24 @@
 #include "enq_select_cpu_fails.bpf.skel.h"
 #include "scx_test.h"
 
-static enum scx_test_status setup(void **ctx)
+static enum scx_test_status run(void *ctx)
 {
 	struct enq_select_cpu_fails *skel;
 
 	skel = enq_select_cpu_fails__open_and_load();
-	if (!skel) {
-		SCX_ERR("Failed to open and load skel");
-		return SCX_TEST_FAIL;
-	}
-	*ctx = skel;
-
-	return SCX_TEST_PASS;
-}
-
-static enum scx_test_status run(void *ctx)
-{
-	struct enq_select_cpu_fails *skel = ctx;
-	struct bpf_link *link;
-
-	link = bpf_map__attach_struct_ops(skel->maps.enq_select_cpu_fails_ops);
-	if (!link) {
-		SCX_ERR("Failed to attach scheduler");
+	if (skel) {
+		enq_select_cpu_fails__destroy(skel);
+		SCX_ERR("This program should fail to load");
 		return SCX_TEST_FAIL;
 	}
 
-	sleep(1);
-
-	bpf_link__destroy(link);
-
 	return SCX_TEST_PASS;
-}
-
-static void cleanup(void *ctx)
-{
-	struct enq_select_cpu_fails *skel = ctx;
-
-	enq_select_cpu_fails__destroy(skel);
 }
 
 struct scx_test enq_select_cpu_fails = {
 	.name = "enq_select_cpu_fails",
 	.description = "Verify we fail to call scx_bpf_select_cpu_dfl() "
 		       "from ops.enqueue()",
-	.setup = setup,
 	.run = run,
-	.cleanup = cleanup,
 };
 REGISTER_SCX_TEST(&enq_select_cpu_fails)
