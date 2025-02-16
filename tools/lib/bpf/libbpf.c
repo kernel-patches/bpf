@@ -12841,6 +12841,8 @@ struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 					      int target_fd,
 					      const char *attach_func_name)
 {
+	struct bpf_link *link;
+	char log_buf[64];
 	int btf_id;
 
 	if (!!target_fd != !!attach_func_name) {
@@ -12862,10 +12864,18 @@ struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 		if (btf_id < 0)
 			return libbpf_err_ptr(btf_id);
 
+		log_buf[0] = '\0';
 		target_opts.target_btf_id = btf_id;
-
-		return bpf_program_attach_fd(prog, target_fd, "freplace",
+		target_opts.tracing.log_buf = log_buf;
+		target_opts.tracing.log_size = sizeof(log_buf);
+		link = bpf_program_attach_fd(prog, target_fd, "freplace",
 					     &target_opts);
+		if (libbpf_get_error(link) && log_buf[0] != '\0') {
+			log_buf[sizeof(log_buf)-1] = '\0';
+			log_buf[sizeof(log_buf)-2] = '\n';
+			pr_warn("prog '%s': attach log: %s", prog->name, log_buf);
+		}
+		return link;
 	} else {
 		/* no target, so use raw_tracepoint_open for compatibility
 		 * with old kernels
