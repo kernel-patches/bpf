@@ -12837,10 +12837,11 @@ bpf_program__attach_netkit(const struct bpf_program *prog, int ifindex,
 	return bpf_program_attach_fd(prog, ifindex, "netkit", &link_create_opts);
 }
 
-struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
-					      int target_fd,
-					      const char *attach_func_name)
+static struct bpf_link *bpf_program_attach_freplace(const struct bpf_freplace_opts *opts)
 {
+	const char *attach_func_name = opts->attach_func_name;
+	const struct bpf_program *prog = opts->prog;
+	int target_fd = opts->target_prog_fd;
 	int btf_id;
 
 	if (!!target_fd != !!attach_func_name) {
@@ -12863,7 +12864,8 @@ struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 			return libbpf_err_ptr(btf_id);
 
 		target_opts.target_btf_id = btf_id;
-
+		target_opts.tracing.log_buf = opts->log_buf;
+		target_opts.tracing.log_size = opts->log_buf_size;
 		return bpf_program_attach_fd(prog, target_fd, "freplace",
 					     &target_opts);
 	} else {
@@ -12872,6 +12874,25 @@ struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
 		 */
 		return bpf_program__attach_trace(prog);
 	}
+}
+
+struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,
+					      int target_fd,
+					      const char *attach_func_name)
+{
+	LIBBPF_OPTS(bpf_freplace_opts, opts,
+		    .prog = prog,
+		    .target_prog_fd = target_fd,
+		    .attach_func_name = attach_func_name,
+	);
+
+	return bpf_program_attach_freplace(&opts);
+}
+
+struct bpf_link *
+bpf_program__attach_freplace_opts(const struct bpf_freplace_opts *opts)
+{
+	return bpf_program_attach_freplace(opts);
 }
 
 struct bpf_link *

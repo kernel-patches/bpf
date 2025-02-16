@@ -819,6 +819,20 @@ LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(const struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
 
+struct bpf_freplace_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+
+	/* freplace bpf prog */
+	const struct bpf_program *prog;
+	int target_prog_fd;
+	const char *attach_func_name;
+	/* buffer to receive error message when fail to bpf_check_attach_target */
+	const char *log_buf;
+	size_t log_buf_size;
+};
+LIBBPF_API struct bpf_link *
+bpf_program__attach_freplace_opts(const struct bpf_freplace_opts *opts);
+
 struct bpf_netfilter_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;
