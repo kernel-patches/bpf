@@ -303,11 +303,6 @@ BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
 	return ret;
 }
 
-static int notsupp_get_next_key(struct bpf_map *map, void *key, void *next_key)
-{
-	return -ENOTSUPP;
-}
-
 static struct bpf_map *task_storage_map_alloc(union bpf_attr *attr)
 {
 	return bpf_local_storage_map_alloc(attr, &task_cache, true);
@@ -324,7 +319,6 @@ const struct bpf_map_ops task_storage_map_ops = {
 	.map_alloc_check = bpf_local_storage_map_alloc_check,
 	.map_alloc = task_storage_map_alloc,
 	.map_free = task_storage_map_free,
-	.map_get_next_key = notsupp_get_next_key,
 	.map_lookup_elem = bpf_pid_task_storage_lookup_elem,
 	.map_update_elem = bpf_pid_task_storage_update_elem,
 	.map_delete_elem = bpf_pid_task_storage_delete_elem,

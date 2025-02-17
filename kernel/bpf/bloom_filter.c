@@ -65,11 +65,6 @@ static long bloom_map_push_elem(struct bpf_map *map, void *value, u64 flags)
 	return 0;
 }
 
-static int bloom_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
-{
-	return -EOPNOTSUPP;
-}
-
 /* Called from syscall */
 static int bloom_map_alloc_check(union bpf_attr *attr)
 {
@@ -196,7 +191,6 @@ const struct bpf_map_ops bloom_filter_map_ops = {
 	.map_alloc_check = bloom_map_alloc_check,
 	.map_alloc = bloom_map_alloc,
 	.map_free = bloom_map_free,
-	.map_get_next_key = bloom_map_get_next_key,
 	.map_push_elem = bloom_map_push_elem,
 	.map_peek_elem = bloom_map_peek_elem,
 	.map_lookup_elem = bloom_map_lookup_elem,

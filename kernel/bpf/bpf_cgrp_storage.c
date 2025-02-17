@@ -141,11 +141,6 @@ static long bpf_cgrp_storage_delete_elem(struct bpf_map *map, void *key)
 	return err;
 }
 
-static int notsupp_get_next_key(struct bpf_map *map, void *key, void *next_key)
-{
-	return -ENOTSUPP;
-}
-
 static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 {
 	return bpf_local_storage_map_alloc(attr, &cgroup_cache, true);
@@ -208,7 +203,6 @@ const struct bpf_map_ops cgrp_storage_map_ops = {
 	.map_alloc_check = bpf_local_storage_map_alloc_check,
 	.map_alloc = cgroup_storage_map_alloc,
 	.map_free = cgroup_storage_map_free,
-	.map_get_next_key = notsupp_get_next_key,
 	.map_lookup_elem = bpf_cgrp_storage_lookup_elem,
 	.map_update_elem = bpf_cgrp_storage_update_elem,
 	.map_delete_elem = bpf_cgrp_storage_delete_elem,

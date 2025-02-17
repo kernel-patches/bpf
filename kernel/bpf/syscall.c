@@ -1841,7 +1841,10 @@ static int map_get_next_key(union bpf_attr *attr)
 	}
 
 	rcu_read_lock();
-	err = map->ops->map_get_next_key(map, key, next_key);
+	if (map->ops->map_get_next_key)
+		err = map->ops->map_get_next_key(map, key, next_key);
+	else
+		err = -EOPNOTSUPP;
 	rcu_read_unlock();
 out:
 	if (err)
@@ -2028,7 +2031,10 @@ int generic_map_lookup_batch(struct bpf_map *map,
 
 	for (cp = 0; cp < max_count;) {
 		rcu_read_lock();
-		err = map->ops->map_get_next_key(map, prev_key, key);
+		if (map->ops->map_get_next_key)
+			err = map->ops->map_get_next_key(map, prev_key, key);
+		else
+			err = -EOPNOTSUPP;
 		rcu_read_unlock();
 		if (err)
 			break;

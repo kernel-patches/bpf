@@ -62,11 +62,6 @@ u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
 	return arena ? arena->user_vm_start : 0;
 }
 
-static int arena_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
-{
-	return -EOPNOTSUPP;
-}
-
 static long compute_pgoff(struct bpf_arena *arena, long uaddr)
 {
 	return (u32)(uaddr - (u32)arena->user_vm_start) >> PAGE_SHIFT;
@@ -382,7 +377,6 @@ const struct bpf_map_ops arena_map_ops = {
 	.map_direct_value_addr = arena_map_direct_value_addr,
 	.map_mmap = arena_map_mmap,
 	.map_get_unmapped_area = arena_get_unmapped_area,
-	.map_get_next_key = arena_map_get_next_key,
 	.map_lookup_elem = arena_map_lookup_elem,
 	.map_update_elem = arena_map_update_elem,
 	.map_check_btf = arena_map_check_btf,

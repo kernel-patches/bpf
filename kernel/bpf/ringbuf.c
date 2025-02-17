@@ -247,12 +247,6 @@ static long ringbuf_map_update_elem(struct bpf_map *map, void *key, void *value,
 	return -ENOTSUPP;
 }
 
-static int ringbuf_map_get_next_key(struct bpf_map *map, void *key,
-				    void *next_key)
-{
-	return -ENOTSUPP;
-}
-
 static int ringbuf_map_mmap_kern(struct bpf_map *map, struct vm_area_struct *vma)
 {
 	struct bpf_ringbuf_map *rb_map;
@@ -355,7 +349,6 @@ const struct bpf_map_ops ringbuf_map_ops = {
 	.map_poll = ringbuf_map_poll_kern,
 	.map_lookup_elem = ringbuf_map_lookup_elem,
 	.map_update_elem = ringbuf_map_update_elem,
-	.map_get_next_key = ringbuf_map_get_next_key,
 	.map_mem_usage = ringbuf_map_mem_usage,
 	.map_btf_id = &ringbuf_map_btf_ids[0],
 };
@@ -369,7 +362,6 @@ const struct bpf_map_ops user_ringbuf_map_ops = {
 	.map_poll = ringbuf_map_poll_user,
 	.map_lookup_elem = ringbuf_map_lookup_elem,
 	.map_update_elem = ringbuf_map_update_elem,
-	.map_get_next_key = ringbuf_map_get_next_key,
 	.map_mem_usage = ringbuf_map_mem_usage,
 	.map_btf_id = &user_ringbuf_map_btf_ids[0],
 };
