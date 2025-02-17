@@ -116,7 +116,10 @@ const struct bpf_func_proto bpf_map_pop_elem_proto = {
 
 BPF_CALL_2(bpf_map_peek_elem, struct bpf_map *, map, void *, value)
 {
-	return map->ops->map_peek_elem(map, value);
+	if (map->ops->map_peek_elem)
+		return map->ops->map_peek_elem(map, value);
+	else
+		return -EOPNOTSUPP;
 }
 
 const struct bpf_func_proto bpf_map_peek_elem_proto = {

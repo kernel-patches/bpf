@@ -325,7 +325,10 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 		   map->map_type == BPF_MAP_TYPE_STACK ||
 		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
-		err = map->ops->map_peek_elem(map, value);
+		if (map->ops->map_peek_elem)
+			err = map->ops->map_peek_elem(map, value);
+		else
+			err = -EOPNOTSUPP;
 	} else if (map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
 		/* struct_ops map requires directly updating "value" */
 		err = bpf_struct_ops_map_sys_lookup_elem(map, key, value);
