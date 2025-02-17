@@ -2133,7 +2133,10 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 	err = -ENOTSUPP;
 	if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 	    map->map_type == BPF_MAP_TYPE_STACK) {
-		err = map->ops->map_pop_elem(map, value);
+		if (map->ops->map_pop_elem)
+			err = map->ops->map_pop_elem(map, value);
+		else
+			err = -EOPNOTSUPP;
 	} else if (map->map_type == BPF_MAP_TYPE_HASH ||
 		   map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 		   map->map_type == BPF_MAP_TYPE_LRU_HASH ||
