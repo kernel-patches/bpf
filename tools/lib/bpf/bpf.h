@@ -421,6 +421,8 @@ struct bpf_link_create_opts {
 		} uprobe_multi;
 		struct {
 			__u64 cookie;
+			const char *log_buf;
+			__u32 log_size;
 		} tracing;
 		struct {
 			__u32 pf;

@@ -1759,6 +1759,8 @@ union bpf_attr {
 				 * accessible through bpf_get_attach_cookie() BPF helper
 				 */
 				__u64		cookie;
+				__aligned_u64	log_buf;	/* user supplied buffer */
+				__u32		log_size;	/* size of user buffer */
 			} tracing;
 			struct {
 				__u32		pf;
