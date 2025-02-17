@@ -1780,7 +1780,10 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 	} else if (IS_FD_PROG_ARRAY(map) ||
 		   map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
 		/* These maps require sleepable context */
-		err = map->ops->map_delete_elem(map, key);
+		if (map->ops->map_delete_elem)
+			err = map->ops->map_delete_elem(map, key);
+		else
+			err = -EOPNOTSUPP;
 		goto out;
 	}
 

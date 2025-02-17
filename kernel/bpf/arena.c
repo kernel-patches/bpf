@@ -62,11 +62,6 @@ u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
 	return arena ? arena->user_vm_start : 0;
 }
 
-static long arena_map_delete_elem(struct bpf_map *map, void *value)
-{
-	return -EOPNOTSUPP;
-}
-
 static int arena_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 {
 	return -EOPNOTSUPP;
@@ -390,7 +385,6 @@ const struct bpf_map_ops arena_map_ops = {
 	.map_get_next_key = arena_map_get_next_key,
 	.map_lookup_elem = arena_map_lookup_elem,
 	.map_update_elem = arena_map_update_elem,
-	.map_delete_elem = arena_map_delete_elem,
 	.map_check_btf = arena_map_check_btf,
 	.map_mem_usage = arena_map_mem_usage,
 	.map_btf_id = &bpf_arena_map_btf_ids[0],
