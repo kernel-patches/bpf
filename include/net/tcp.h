@@ -143,6 +143,7 @@ static_assert((1 << ATO_BITS) > TCP_DELACK_MAX);
 #define TCP_DELACK_MIN	4U
 #define TCP_ATO_MIN	4U
 #endif
+#define TCP_RTO_MAX_MIN_SEC 1
 #define TCP_RTO_MAX_SEC 120
 #define TCP_RTO_MAX	((unsigned)(TCP_RTO_MAX_SEC * HZ))
 #define TCP_RTO_MIN	((unsigned)(HZ / 5))

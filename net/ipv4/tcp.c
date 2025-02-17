@@ -3812,7 +3812,8 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 					   TCP_RTO_MAX / HZ));
 		return 0;
 	case TCP_RTO_MAX_MS:
-		if (val < MSEC_PER_SEC || val > TCP_RTO_MAX_SEC * MSEC_PER_SEC)
+		if (val < TCP_RTO_MAX_MIN_SEC * MSEC_PER_SEC ||
+		    val > TCP_RTO_MAX_SEC * MSEC_PER_SEC)
 			return -EINVAL;
 		WRITE_ONCE(inet_csk(sk)->icsk_rto_max, msecs_to_jiffies(val));
 		return 0;
