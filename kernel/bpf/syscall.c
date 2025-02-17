@@ -281,7 +281,10 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 		   map->map_type == BPF_MAP_TYPE_STACK ||
 		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
-		err = map->ops->map_push_elem(map, value, flags);
+		if (map->ops->map_push_elem)
+			err = map->ops->map_push_elem(map, value, flags);
+		else
+			err = -EOPNOTSUPP;
 	} else {
 		err = bpf_obj_pin_uptrs(map->record, value);
 		if (!err) {

@@ -88,7 +88,10 @@ const struct bpf_func_proto bpf_map_delete_elem_proto = {
 
 BPF_CALL_3(bpf_map_push_elem, struct bpf_map *, map, void *, value, u64, flags)
 {
-	return map->ops->map_push_elem(map, value, flags);
+	if (map->ops->map_push_elem)
+		return map->ops->map_push_elem(map, value, flags);
+	else
+		return -EOPNOTSUPP;
 }
 
 const struct bpf_func_proto bpf_map_push_elem_proto = {

@@ -62,11 +62,6 @@ u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
 	return arena ? arena->user_vm_start : 0;
 }
 
-static long arena_map_push_elem(struct bpf_map *map, void *value, u64 flags)
-{
-	return -EOPNOTSUPP;
-}
-
 static long arena_map_pop_elem(struct bpf_map *map, void *value)
 {
 	return -EOPNOTSUPP;
@@ -398,7 +393,6 @@ const struct bpf_map_ops arena_map_ops = {
 	.map_mmap = arena_map_mmap,
 	.map_get_unmapped_area = arena_get_unmapped_area,
 	.map_get_next_key = arena_map_get_next_key,
-	.map_push_elem = arena_map_push_elem,
 	.map_pop_elem = arena_map_pop_elem,
 	.map_lookup_elem = arena_map_lookup_elem,
 	.map_update_elem = arena_map_update_elem,
