@@ -128,6 +128,7 @@ enum {
 #define TCP_CM_INQ		TCP_INQ
 
 #define TCP_TX_DELAY		37	/* delay outgoing packets by XX usec */
+#define TCP_RTO_MAX_MS		44	/* max rto time in ms */
 
 
 #define TCP_REPAIR_ON		1
