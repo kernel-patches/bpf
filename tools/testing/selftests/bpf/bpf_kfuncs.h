@@ -44,6 +44,14 @@ extern __u32 bpf_dynptr_size(const struct bpf_dynptr *ptr) __ksym __weak;
 extern int bpf_dynptr_clone(const struct bpf_dynptr *ptr, struct bpf_dynptr *clone__init) __ksym __weak;
 
 /* Description
+ *  Copy data from one dynptr to another
+ * Returns
+ *  Error code
+ */
+extern int bpf_dynptr_copy(struct bpf_dynptr *dst, __u32 dst_off,
+			   struct bpf_dynptr *src, __u32 src_off, __u32 size) __ksym __weak;
+
+/* Description
  *  Modify the address of a AF_UNIX sockaddr.
  * Returns
  *  -EINVAL if the address size is too big or, 0 if the sockaddr was successfully modified.

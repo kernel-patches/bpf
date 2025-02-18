@@ -567,3 +567,80 @@ int BPF_PROG(test_dynptr_skb_tp_btf, void *skb, void *location)
 
 	return 1;
 }
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_dynptr_copy(void *ctx)
+{
+	char *data = "hello there, world!!";
+	char buf[32] = {'\0'};
+	__u32 sz = strlen(data);
+	struct bpf_dynptr src, dst;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sz, 0, &src);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sz, 0, &dst);
+
+	err = bpf_dynptr_write(&src, 0, data, sz, 0);
+	err = err ?: bpf_dynptr_copy(&dst, 0, &src, 0, sz);
+	err = err ?: bpf_dynptr_read(buf, sz, &dst, 0, 0);
+	err = err ?: __builtin_memcmp(data, buf, sz);
+
+	err = err ?: bpf_dynptr_copy(&dst, 3, &src, 5, sz - 5);
+	err = err ?: bpf_dynptr_read(buf, sz - 5, &dst, 3, 0);
+	err = err ?: __builtin_memcmp(data + 5, buf, sz - 5);
+
+	bpf_ringbuf_discard_dynptr(&src, 0);
+	bpf_ringbuf_discard_dynptr(&dst, 0);
+	return 0;
+}
+
+SEC("xdp")
+int test_dynptr_copy_xdp(struct xdp_md *xdp)
+{
+	struct bpf_dynptr ptr_buf, ptr_xdp;
+	char *data = "qwertyuiopasdfghjkl;";
+	char buf[32] = {'\0'};
+	__u32 len = strlen(data);
+	int i, chunks = 200;
+
+	bpf_dynptr_from_xdp(xdp, 0, &ptr_xdp);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, len * chunks, 0, &ptr_buf);
+
+	bpf_for(i, 0, chunks) {
+		err =  err ?: bpf_dynptr_write(&ptr_buf, i * len, data, len, 0);
+	}
+
+	err = err ?: bpf_dynptr_copy(&ptr_xdp, 0, &ptr_buf, 0, len * chunks);
+
+	bpf_for(i, 0, chunks) {
+		memset(buf, 0, sizeof(buf));
+		err = err ?: bpf_dynptr_read(&buf, len, &ptr_xdp, i * len, 0);
+		err = err ?: memcmp(data, buf, len);
+	}
+
+	memset(buf, 0, sizeof(buf));
+	bpf_for(i, 0, chunks) {
+		err = err ?: bpf_dynptr_write(&ptr_buf, i * len, buf, len, 0);
+	}
+
+	err = err ?: bpf_dynptr_copy(&ptr_buf, 0, &ptr_xdp, 0, len * chunks);
+
+	bpf_for(i, 0, chunks) {
+		memset(buf, 0, sizeof(buf));
+		err = err ?: bpf_dynptr_read(&buf, len, &ptr_buf, i * len, 0);
+		err = err ?: memcmp(data, buf, len);
+	}
+
+	bpf_ringbuf_discard_dynptr(&ptr_buf, 0);
+
+	err = err ?: bpf_dynptr_copy(&ptr_xdp, 2, &ptr_xdp, len, len * (chunks - 1));
+
+	bpf_for(i, 0, chunks - 1) {
+		memset(buf, 0, sizeof(buf));
+		err = err ?: bpf_dynptr_read(&buf, len, &ptr_xdp, 2 + i * len, 0);
+		err = err ?: memcmp(data, buf, len);
+	}
+
+	err = err ?: (bpf_dynptr_copy(&ptr_xdp, 2000, &ptr_xdp, 0, len * chunks) == -E2BIG ? 0 : 1);
+
+	return XDP_DROP;
+}
