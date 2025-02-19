@@ -330,6 +330,12 @@ struct bpf_kfunc_call_arg_meta {
 		struct btf_field *field;
 	} arg_rbtree_root;
 	struct {
+		u32 frameno;
+		s32 off;
+		struct tnum var_off;
+		bool found;
+	} arg_stack;
+	struct {
 		enum bpf_dynptr_type type;
 		u32 id;
 		u32 ref_obj_id;
@@ -7287,6 +7293,7 @@ static int check_stack_access_within_bounds(
 		min_off = (s64)reg->var_off.value + off;
 		max_off = min_off + access_size;
 	} else {
+
 		if (reg->smax_value >= BPF_MAX_VAR_OFF ||
 		    reg->smin_value <= -BPF_MAX_VAR_OFF) {
 			verbose(env, "invalid unbounded variable-offset%s stack R%d\n",
@@ -13017,6 +13024,22 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				meta->arg_constant.value = size_reg->var_off.value;
 			}
 
+			/* We need to simulate a path where return value is the
+			 * stack buffer passed into the kfunc, therefore store
+			 * its metadata here.
+			 */
+			if (buff_reg->type == PTR_TO_STACK &&
+			    meta->func_id == special_kfunc_list[KF_bpf_dynptr_slice_rdwr]) {
+				if (meta->arg_stack.found) {
+					verbose(env, "verifier internal error: only one stack argument permitted\n");
+					return -EFAULT;
+				}
+				meta->arg_stack.found = true;
+				meta->arg_stack.frameno = buff_reg->frameno;
+				meta->arg_stack.off = buff_reg->off;
+				meta->arg_stack.var_off = buff_reg->var_off;
+			}
+
 			/* Skip next '__sz' or '__szk' argument */
 			i++;
 			break;
@@ -13596,6 +13619,34 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		err = process_iter_next_call(env, insn_idx, &meta);
 		if (err)
 			return err;
+	}
+
+	/* Push a state for exploration where the returned buffer is pointing to
+	 * the stack buffer passed into bpf_dynptr_slice_rdwr, otherwise we
+	 * cannot see writes to the stack solely through marking it as
+	 * PTR_TO_MEM. We don't do the same for bpf_dynptr_slice, because the
+	 * returned pointer is MEM_RDONLY, hence cannot be used to write to the
+	 * stack.
+	 */
+	if (!insn->off && meta.arg_stack.found &&
+	    insn->imm == special_kfunc_list[KF_bpf_dynptr_slice_rdwr]) {
+		struct bpf_verifier_state *branch;
+		struct bpf_reg_state *regs, *r0;
+
+		branch = push_stack(env, env->insn_idx + 1, env->insn_idx, false);
+		if (!branch) {
+			verbose(env, "failed to push state to explore stack buffer in r0\n");
+			return -ENOMEM;
+		}
+
+		regs = branch->frame[branch->curframe]->regs;
+		r0 = &regs[BPF_REG_0];
+
+		r0->type = PTR_TO_STACK;
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		r0->frameno = meta.arg_stack.frameno;
+		r0->off = meta.arg_stack.off;
+		r0->var_off = meta.arg_stack.var_off;
 	}
 
 	return 0;
