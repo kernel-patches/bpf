@@ -1735,3 +1735,48 @@ int test_dynptr_reg_type(void *ctx)
 	global_call_bpf_dynptr((const struct bpf_dynptr *)current);
 	return 0;
 }
+
+SEC("?tc")
+__failure __msg("R8 invalid mem access 'scalar'") __log_level(2)
+int dynptr_slice_rdwr_overwrite(struct __sk_buff *ctx)
+{
+	asm volatile (
+		"r6 = %[array_map4] ll;			\
+		 r9 = r1;				\
+		 r1 = r6;				\
+		 r2 = r10;				\
+		 r2 += -8;				\
+		 call %[bpf_map_lookup_elem];		\
+		 if r0 == 0 goto rjmp1;			\
+		 *(u64 *)(r10 - 8) = r0;		\
+		 r8 = r0;				\
+		 r1 = r9;				\
+		 r2 = 0;				\
+		 r3 = r10;				\
+		 r3 += -24;				\
+		 call %[bpf_dynptr_from_skb];		\
+		 r1 = r10;				\
+		 r1 += -24;				\
+		 r2 = 0;				\
+		 r3 = r10;				\
+		 r3 += -8;				\
+		 r4 = 8;				\
+		 call %[bpf_dynptr_slice_rdwr];		\
+		 if r0 == 0 goto rjmp1;			\
+		 r1 = 0;				\
+		 *(u64 *)(r10 - 8) = r8;		\
+		 *(u64 *)(r0 + 0) = r1;			\
+		 r8 = *(u64 *)(r10 - 8);		\
+		 r0 = *(u64 *)(r8 + 0);			\
+	rjmp1:						\
+		 r0 = 0;				\
+		 "
+		:
+		: __imm(bpf_map_lookup_elem),
+		  __imm(bpf_dynptr_from_skb),
+		  __imm(bpf_dynptr_slice_rdwr),
+		  __imm_addr(array_map4)
+		: __clobber_all
+	);
+	return 0;
+}
