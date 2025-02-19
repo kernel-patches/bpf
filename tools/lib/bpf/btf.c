@@ -1447,10 +1447,11 @@ retry_load:
 			goto retry_load;
 
 		err = -errno;
-		pr_warn("BTF loading error: %s\n", errstr(err));
 		/* don't print out contents of custom log_buf */
-		if (!log_buf && buf[0])
+		if (!log_buf && buf[0]) {
+			pr_warn("BTF loading error: %s\n", errstr(err));
 			pr_warn("-- BEGIN BTF LOAD LOG ---\n%s\n-- END BTF LOAD LOG --\n", buf);
+		}
 	}
 
 done:
