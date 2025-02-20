@@ -1508,15 +1508,12 @@ emit_cond_jmp:
 
 	/* speculation barrier */
 	case BPF_ST | BPF_NOSPEC:
-		/*
-		 * Nothing required here.
-		 *
-		 * In case of arm64, we rely on the firmware mitigation of
-		 * Speculative Store Bypass as controlled via the ssbd kernel
-		 * parameter. Whenever the mitigation is enabled, it works
-		 * for all of the kernel code with no need to provide any
-		 * additional instructions.
-		 */
+#ifdef ARM64_HAS_SB
+		emit(A64_SB, ctx);
+#else
+		emit(A64_DSB_NSH, ctx);
+		emit(A64_ISB, ctx);
+#endif
 		break;
 
 	/* ST: *(size *)(dst + off) = imm */
