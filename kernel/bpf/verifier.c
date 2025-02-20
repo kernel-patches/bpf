@@ -1983,6 +1983,17 @@ static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
 	return 0;
 }
 
+static bool error_recoverable_with_nospec(int err)
+{
+	/* Should only return true for non-fatal errors that are allowed to
+	 * occur during speculative verification. For these we can insert a
+	 * nospec and the program might still be accepted. Do not include
+	 * something like ENOMEM because it is likely to re-occur for the next
+	 * architectural path once it has been recovered-from in all speculative
+	 * paths. */
+	return err == -EPERM || err == -EACCES || err == -EINVAL;
+}
+
 static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 					     int insn_idx, int prev_insn_idx,
 					     bool speculative)
@@ -19362,16 +19373,7 @@ static int do_check(struct bpf_verifier_env *env)
 					else
 						verbose(env, "%d: safe\n", env->insn_idx);
 				}
-				err = process_bpf_exit(env, &prev_insn_idx, pop_log,
-						       &do_print_state);
-				if (err == CHECK_NEXT_INSN) {
-					continue;
-				} else if (err == ALL_PATHS_CHECKED) {
-					break;
-				} else if (err) {
-					WARN_ON_ONCE(err > 0);
-					return err;
-				}
+				goto nospec_or_safe_state_found;
 			}
 		}
 
@@ -19425,14 +19427,44 @@ static int do_check(struct bpf_verifier_env *env)
 		sanitize_mark_insn_seen(env);
 		prev_insn_idx = env->insn_idx;
 
+		if (state->speculative && cur_aux(env)->nospec) {
+			/* Reduce verification complexity by only simulating
+			 * speculative paths until we reach a nospec.
+			 */
+			goto nospec_or_safe_state_found;
+		}
+
 		err = do_check_insn(env, insn, pop_log, &do_print_state, regs, state,
 				    &prev_insn_idx);
 		if (err == CHECK_NEXT_INSN) {
 			continue;
 		} else if (err == ALL_PATHS_CHECKED) {
 			break;
+		} else if (error_recoverable_with_nospec(err) && state->speculative) {
+			WARN_ON_ONCE(env->bypass_spec_v1);
+			WARN_ON_ONCE(env->cur_state != state);
+
+			/* Prevent this speculative path from ever reaching the
+			 * insn that would have been unsafe to execute.
+			 */
+			cur_aux(env)->nospec = true;
+
+			goto nospec_or_safe_state_found;
 		} else if (err) {
 			WARN_ON_ONCE(err > 0);
+			return err;
+		}
+
+		if (state->speculative && cur_aux(env)->nospec_result) {
+			/* Reduce verification complexity by stopping spec.
+			 * verification when nospec is encountered.
+			 */
+nospec_or_safe_state_found:
+			err = process_bpf_exit(env, &prev_insn_idx, pop_log, &do_print_state);
+			if (err == CHECK_NEXT_INSN)
+				continue;
+			else if (err == ALL_PATHS_CHECKED)
+				break;
 			return err;
 		}
 
@@ -20565,6 +20597,28 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		bpf_convert_ctx_access_t convert_ctx_access;
 		u8 mode;
 
+		if (env->insn_aux_data[i + delta].nospec) {
+			struct bpf_insn patch[] = {
+				BPF_ST_NOSPEC(),
+				*insn,
+			};
+
+			cnt = ARRAY_SIZE(patch);
+			new_prog = bpf_patch_insn_data(env, i + delta, patch, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			/* This can not be easily merged with the
+			 * nospec_result-case, because an insn may require a
+			 * nospec before and after itself. Therefore also do not
+			 * 'continue' here but potentially apply further
+			 * patching to insn. *insn should equal patch[1] now.
+			 */
+		}
+
 		if (insn->code == (BPF_LDX | BPF_MEM | BPF_B) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_H) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_W) ||
@@ -20613,6 +20667,9 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 
 		if (type == BPF_WRITE &&
 		    env->insn_aux_data[i + delta].nospec_result) {
+			/* nospec_result is only used to mitigate Spectre v4 and
+			 * to limit verification-time for Spectre v1.
+			 */
 			struct bpf_insn patch[] = {
 				*insn,
 				BPF_ST_NOSPEC(),

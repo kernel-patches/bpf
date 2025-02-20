@@ -620,7 +620,7 @@ l1_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check mixed 32bit and 64bit arithmetic. test1")
-__success __failure_unpriv __msg_unpriv("R0 invalid mem access 'scalar'")
+__success __success_unpriv
 __retval(0)
 __naked void _32bit_and_64bit_arithmetic_test1(void)
 {
@@ -636,6 +636,7 @@ __naked void _32bit_and_64bit_arithmetic_test1(void)
 	if w1 > 2 goto l0_%=;				\
 	goto l1_%=;					\
 l0_%=:	/* invalid ldx if bounds are lost above */	\
+	/* unpriv: nospec (inserted to prevent `R0 invalid mem access 'scalar'`) */\
 	r0 = *(u64*)(r0 - 1);				\
 l1_%=:	exit;						\
 "	::: __clobber_all);
@@ -643,7 +644,7 @@ l1_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check mixed 32bit and 64bit arithmetic. test2")
-__success __failure_unpriv __msg_unpriv("R0 invalid mem access 'scalar'")
+__success __success_unpriv
 __retval(0)
 __naked void _32bit_and_64bit_arithmetic_test2(void)
 {
@@ -660,6 +661,7 @@ __naked void _32bit_and_64bit_arithmetic_test2(void)
 	if r1 > r2 goto l0_%=;				\
 	goto l1_%=;					\
 l0_%=:	/* invalid ldx if bounds are lost above */	\
+	/* unpriv: nospec (inserted to prevent `R0 invalid mem access 'scalar'`) */\
 	r0 = *(u64*)(r0 - 1);				\
 l1_%=:	exit;						\
 "	::: __clobber_all);
@@ -691,8 +693,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("bounds check for reg = 0, reg xor 1")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success __success_unpriv
 __retval(0)
 __naked void reg_0_reg_xor_1(void)
 {
@@ -708,6 +709,7 @@ __naked void reg_0_reg_xor_1(void)
 l0_%=:	r1 = 0;						\
 	r1 ^= 1;					\
 	if r1 != 0 goto l1_%=;				\
+	/* unpriv: nospec (inserted to prevent `R0 min value is outside of the allowed memory range`) */\
 	r0 = *(u64*)(r0 + 8);				\
 l1_%=:	r0 = 0;						\
 	exit;						\
@@ -719,8 +721,7 @@ l1_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("bounds check for reg32 = 0, reg32 xor 1")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success __success_unpriv
 __retval(0)
 __naked void reg32_0_reg32_xor_1(void)
 {
@@ -736,6 +737,7 @@ __naked void reg32_0_reg32_xor_1(void)
 l0_%=:	w1 = 0;						\
 	w1 ^= 1;					\
 	if w1 != 0 goto l1_%=;				\
+	/* unpriv: nospec (inserted to prevent `R0 min value is outside of the allowed memory range`) */\
 	r0 = *(u64*)(r0 + 8);				\
 l1_%=:	r0 = 0;						\
 	exit;						\
@@ -747,8 +749,7 @@ l1_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("bounds check for reg = 2, reg xor 3")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success __success_unpriv
 __retval(0)
 __naked void reg_2_reg_xor_3(void)
 {
@@ -764,6 +765,7 @@ __naked void reg_2_reg_xor_3(void)
 l0_%=:	r1 = 2;						\
 	r1 ^= 3;					\
 	if r1 > 0 goto l1_%=;				\
+	/* unpriv: nospec (inserted to prevent `R0 min value is outside of the allowed memory range`) */\
 	r0 = *(u64*)(r0 + 8);				\
 l1_%=:	r0 = 0;						\
 	exit;						\
@@ -829,8 +831,7 @@ l1_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("bounds check for reg > 0, reg xor 3")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success __success_unpriv
 __retval(0)
 __naked void reg_0_reg_xor_3(void)
 {
@@ -843,7 +844,8 @@ __naked void reg_0_reg_xor_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 != 0 goto l0_%=;				\
 	exit;						\
-l0_%=:	r1 = *(u64*)(r0 + 0);				\
+l0_%=:	/* unpriv: nospec (inserted to prevent `R0 min value is outside of the allowed memory range`) */\
+	r1 = *(u64*)(r0 + 0);				\
 	if r1 <= 0 goto l1_%=;				\
 	r1 ^= 3;					\
 	if r1 >= 0 goto l1_%=;				\
@@ -858,8 +860,7 @@ l1_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("bounds check for reg32 > 0, reg32 xor 3")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success __success_unpriv
 __retval(0)
 __naked void reg32_0_reg32_xor_3(void)
 {
@@ -872,7 +873,8 @@ __naked void reg32_0_reg32_xor_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 != 0 goto l0_%=;				\
 	exit;						\
-l0_%=:	r1 = *(u64*)(r0 + 0);				\
+l0_%=:	/* unpriv: nospec (inserted to prevent `R0 min value is outside of the allowed memory range`) */\
+	r1 = *(u64*)(r0 + 0);				\
 	if w1 <= 0 goto l1_%=;				\
 	w1 ^= 3;					\
 	if w1 >= 0 goto l1_%=;				\
