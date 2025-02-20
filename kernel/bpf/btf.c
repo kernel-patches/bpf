@@ -7596,9 +7596,9 @@ static int btf_get_ptr_to_btf_id(struct bpf_verifier_log *log, int arg_idx,
 		err = -EOPNOTSUPP;
 		goto cand_cache_unlock;
 	}
-	kern_type_id = cc->cands[0].id;
 
 cand_cache_unlock:
+	kern_type_id = cc->cands[0].id;
 	mutex_unlock(&cand_cache_mutex);
 	if (err)
 		return err;
