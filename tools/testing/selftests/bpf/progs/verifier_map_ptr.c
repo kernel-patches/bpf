@@ -110,11 +110,12 @@ __naked void ptr_read_ops_field_accepted(void)
 
 SEC("socket")
 __description("bpf_map_ptr: r = 0, map_ptr = map_ptr + r")
-__success __failure_unpriv
-__msg_unpriv("R1 has pointer with unsupported alu operation")
+__success __success_unpriv
 __retval(0)
 __naked void map_ptr_map_ptr_r(void)
 {
+	/* unpriv: nospec inserted to prevent "R1 has pointer with unsupported
+	 * alu operation". */
 	asm volatile ("					\
 	r0 = 0;						\
 	*(u64*)(r10 - 8) = r0;				\
@@ -134,11 +135,12 @@ __naked void map_ptr_map_ptr_r(void)
 
 SEC("socket")
 __description("bpf_map_ptr: r = 0, r = r + map_ptr")
-__success __failure_unpriv
-__msg_unpriv("R0 has pointer with unsupported alu operation")
+__success __success_unpriv
 __retval(0)
 __naked void _0_r_r_map_ptr(void)
 {
+	/* unpriv: nospec inserted to prevent "R1 has pointer with unsupported
+	 * alu operation". */
 	asm volatile ("					\
 	r0 = 0;						\
 	*(u64*)(r10 - 8) = r0;				\
