@@ -108,19 +108,12 @@ int bpf_usdt_arg_cnt(struct pt_regs *ctx)
 	return spec->arg_cnt;
 }
 
-/* Fetch USDT argument #*arg_num* (zero-indexed) and put its value into *res.
- * Returns 0 on success; negative error, otherwise.
- * On error *res is guaranteed to be set to zero.
- */
-__weak __hidden
-int bpf_usdt_arg(struct pt_regs *ctx, __u64 arg_num, long *res)
+/* Validate ctx and arg_num, if ok set arg_spec pointer */
+static __always_inline
+int __bpf_usdt_arg_spec(struct pt_regs *ctx, __u64 arg_num, struct __bpf_usdt_arg_spec **arg_spec)
 {
 	struct __bpf_usdt_spec *spec;
-	struct __bpf_usdt_arg_spec *arg_spec;
-	unsigned long val;
-	int err, spec_id;
-
-	*res = 0;
+	int spec_id;
 
 	spec_id = __bpf_usdt_spec_id(ctx);
 	if (spec_id < 0)
@@ -136,7 +129,49 @@ int bpf_usdt_arg(struct pt_regs *ctx, __u64 arg_num, long *res)
 	if (arg_num >= spec->arg_cnt)
 		return -ENOENT;
 
-	arg_spec = &spec->args[arg_num];
+	*arg_spec = &spec->args[arg_num];
+
+	return 0;
+}
+
+/* Returns the size in bytes of the #*arg_num* (zero-indexed) USDT argument.
+ * Returns negative error if argument is not found or arg_num is invalid.
+ */
+static __always_inline
+int bpf_usdt_arg_size(struct pt_regs *ctx, __u64 arg_num)
+{
+	struct __bpf_usdt_arg_spec *arg_spec;
+	int err;
+
+	err = __bpf_usdt_arg_spec(ctx, arg_num, &arg_spec);
+	if (err)
+		return err;
+
+	/* arg_spec->arg_bitshift = 64 - arg_sz * 8
+	 * so: arg_sz = (64 - arg_spec->arg_bitshift) / 8
+	 * Do a bitshift instead of a division to avoid
+	 * "unsupported signed division" error.
+	 */
+	return (64 - arg_spec->arg_bitshift) >> 3;
+}
+
+/* Fetch USDT argument #*arg_num* (zero-indexed) and put its value into *res.
+ * Returns 0 on success; negative error, otherwise.
+ * On error *res is guaranteed to be set to zero.
+ */
+__weak __hidden
+int bpf_usdt_arg(struct pt_regs *ctx, __u64 arg_num, long *res)
+{
+	struct __bpf_usdt_arg_spec *arg_spec;
+	unsigned long val;
+	int err;
+
+	*res = 0;
+
+	err = __bpf_usdt_arg_spec(ctx, arg_num, &arg_spec);
+	if (err)
+		return err;
+
 	switch (arg_spec->arg_type) {
 	case BPF_USDT_ARG_CONST:
 		/* Arg is just a constant ("-4@$-9" in USDT arg spec).
