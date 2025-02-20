@@ -585,7 +585,7 @@ struct btf_struct_meta *btf_find_struct_meta(const struct btf *btf, u32 btf_id);
 bool btf_is_projection_of(const char *pname, const char *tname);
 bool btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 			   const struct btf_type *t, enum bpf_prog_type prog_type,
-			   int arg);
+			   int arg, bool check_proj);
 int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_type);
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
@@ -661,7 +661,7 @@ static inline struct btf_struct_meta *btf_find_struct_meta(const struct btf *btf
 static inline bool
 btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 		     const struct btf_type *t, enum bpf_prog_type prog_type,
-		     int arg)
+		     int arg, bool check_proj)
 {
 	return false;
 }

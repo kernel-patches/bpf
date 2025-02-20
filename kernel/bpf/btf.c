@@ -5909,7 +5909,7 @@ bool btf_is_projection_of(const char *pname, const char *tname)
 
 bool btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 			  const struct btf_type *t, enum bpf_prog_type prog_type,
-			  int arg)
+			  int arg, bool check_proj)
 {
 	const struct btf_type *ctx_type;
 	const char *tname, *ctx_tname;
@@ -5969,8 +5969,9 @@ again:
 	 * int socket_filter_bpf_prog(struct __sk_buff *skb)
 	 * { // no fields of skb are ever used }
 	 */
-	if (btf_is_projection_of(ctx_tname, tname))
-		return true;
+	if (check_proj)
+		if (btf_is_projection_of(ctx_tname, tname))
+			return true;
 	if (strcmp(ctx_tname, tname)) {
 		/* bpf_user_pt_regs_t is a typedef, so resolve it to
 		 * underlying struct and check name again
@@ -6133,7 +6134,7 @@ static int btf_translate_to_vmlinux(struct bpf_verifier_log *log,
 				     enum bpf_prog_type prog_type,
 				     int arg)
 {
-	if (!btf_is_prog_ctx_type(log, btf, t, prog_type, arg))
+	if (!btf_is_prog_ctx_type(log, btf, t, prog_type, arg, true))
 		return -ENOENT;
 	return find_kern_ctx_type_id(prog_type);
 }
@@ -7741,7 +7742,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 		if (!btf_type_is_ptr(t))
 			goto skip_pointer;
 
-		if ((tags & ARG_TAG_CTX) || btf_is_prog_ctx_type(log, btf, t, prog_type, i)) {
+		if ((tags & ARG_TAG_CTX) || btf_is_prog_ctx_type(log, btf, t, prog_type, i, true)) {
 			if (tags & ~ARG_TAG_CTX) {
 				bpf_log(log, "arg#%d has invalid combination of tags\n", i);
 				return -EINVAL;
