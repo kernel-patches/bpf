@@ -798,19 +798,134 @@ static __maybe_unused void uprobe_trampoline_put(struct uprobe_trampoline *tramp
 		destroy_uprobe_trampoline(tramp);
 }
 
+struct mm_uprobe {
+	struct rb_node rb_node;
+	unsigned long auprobe;
+	unsigned long vaddr;
+};
+
+#define __node_2_mm_uprobe(node) rb_entry((node), struct mm_uprobe, rb_node)
+
+struct __mm_uprobe_key {
+	unsigned long auprobe;
+	unsigned long vaddr;
+};
+
+static inline int mm_uprobe_cmp(unsigned long l_auprobe, unsigned long l_vaddr,
+				const struct mm_uprobe *r_mmu)
+{
+	if (l_auprobe < r_mmu->auprobe)
+		return -1;
+	if (l_auprobe > r_mmu->auprobe)
+		return 1;
+	if (l_vaddr < r_mmu->vaddr)
+		return -1;
+	if (l_vaddr > r_mmu->vaddr)
+		return 1;
+
+	return 0;
+}
+
+static inline int __mm_uprobe_cmp(struct rb_node *a, const struct rb_node *b)
+{
+	struct mm_uprobe *mmu_a = __node_2_mm_uprobe(a);
+
+	return mm_uprobe_cmp(mmu_a->auprobe, mmu_a->vaddr, __node_2_mm_uprobe(b));
+}
+
+static inline bool __mm_uprobe_less(struct rb_node *a, const struct rb_node *b)
+{
+	struct mm_uprobe *mmu_a = __node_2_mm_uprobe(a);
+
+	return mm_uprobe_cmp(mmu_a->auprobe, mmu_a->vaddr, __node_2_mm_uprobe(b)) < 0;
+}
+
+static inline int __mm_uprobe_cmp_key(const void *key, const struct rb_node *b)
+{
+	const struct __mm_uprobe_key *a = key;
+
+	return mm_uprobe_cmp(a->auprobe, a->vaddr, __node_2_mm_uprobe(b));
+}
+
+static struct mm_uprobe *find_mm_uprobe(struct mm_struct *mm, struct arch_uprobe *auprobe,
+					unsigned long vaddr)
+{
+	struct __mm_uprobe_key key = {
+		.auprobe = (unsigned long) auprobe,
+		.vaddr = vaddr,
+	};
+	struct rb_node *node;
+
+	node = rb_find(&key, &mm->uprobes_state.root_uprobes, __mm_uprobe_cmp_key);
+	return node ? __node_2_mm_uprobe(node) : NULL;
+}
+
+static struct mm_uprobe *insert_mm_uprobe(struct mm_struct *mm, struct arch_uprobe *auprobe,
+					  unsigned long vaddr)
+{
+	struct mm_uprobe *mmu;
+
+	mmu = kmalloc(sizeof(*mmu), GFP_KERNEL);
+	if (mmu) {
+		mmu->auprobe = (unsigned long) auprobe;
+		mmu->vaddr = vaddr;
+		RB_CLEAR_NODE(&mmu->rb_node);
+		rb_add(&mmu->rb_node, &mm->uprobes_state.root_uprobes, __mm_uprobe_less);
+	}
+	return mmu;
+}
+
+static void destroy_mm_uprobe(struct mm_uprobe *mmu, struct rb_root *root)
+{
+	rb_erase(&mmu->rb_node, root);
+	kfree(mmu);
+}
+
+int set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	struct mm_uprobe *mmu;
+
+	if (find_mm_uprobe(mm, auprobe, vaddr))
+		return 0;
+	mmu = insert_mm_uprobe(mm, auprobe, vaddr);
+	if (!mmu)
+		return -ENOMEM;
+	return uprobe_write_opcode(auprobe, mm, vaddr, UPROBE_SWBP_INSN, false);
+}
+
+int set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
+{
+	struct mm_uprobe *mmu;
+
+	mmu = find_mm_uprobe(mm, auprobe, vaddr);
+	if (!mmu)
+		return 0;
+	destroy_mm_uprobe(mmu, &mm->uprobes_state.root_uprobes);
+	return uprobe_write_opcode(auprobe, mm, vaddr, *(uprobe_opcode_t *)&auprobe->insn, true);
+}
+
 void arch_uprobe_init_state(struct mm_struct *mm)
 {
 	INIT_HLIST_HEAD(&mm->uprobes_state.head_tramps);
+	mm->uprobes_state.root_uprobes = RB_ROOT;
 }
 
 void arch_uprobe_clear_state(struct mm_struct *mm)
 {
 	struct uprobes_state *state = &mm->uprobes_state;
 	struct uprobe_trampoline *tramp;
+	struct rb_node *node, *next;
 	struct hlist_node *n;
 
 	hlist_for_each_entry_safe(tramp, n, &state->head_tramps, node)
 		destroy_uprobe_trampoline(tramp);
+
+	node = rb_first(&state->root_uprobes);
+	while (node) {
+		next = rb_next(node);
+		destroy_mm_uprobe(__node_2_mm_uprobe(node), &state->root_uprobes);
+		node = next;
+	}
 }
 #else /* 32-bit: */
 /*
