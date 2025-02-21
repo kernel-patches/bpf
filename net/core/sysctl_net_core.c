@@ -360,8 +360,10 @@ static int proc_dointvec_minmax_bpf_enable(const struct ctl_table *table, int wr
 		}
 	}
 
-	if (write && ret && min == max)
-		pr_info_once("CONFIG_BPF_JIT_ALWAYS_ON is enabled, bpf_jit_enable is permanently set to 1.\n");
+# ifdef CONFIG_BPF_JIT_ALWAYS_ON
+	if (write && ret && jit_enable < min)
+		pr_info_once("CONFIG_BPF_JIT_ALWAYS_ON is enabled, bpf_jit_enable is permanently set > 0.\n");
+# endif
 
 	return ret;
 }
@@ -445,7 +447,7 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= proc_dointvec_minmax_bpf_enable,
 # ifdef CONFIG_BPF_JIT_ALWAYS_ON
 		.extra1		= SYSCTL_ONE,
-		.extra2		= SYSCTL_ONE,
+		.extra2		= SYSCTL_TWO,
 # else
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO,
