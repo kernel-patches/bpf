@@ -473,13 +473,20 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
 			unsigned long vaddr, uprobe_opcode_t opcode)
 {
+	return uprobe_write(auprobe, mm, vaddr, &opcode, verify_opcode);
+}
+
+int uprobe_write(struct arch_uprobe *auprobe, struct mm_struct *mm,
+		 unsigned long vaddr, uprobe_opcode_t *opcode,
+		 uprobe_write_verify_t verify)
+{
 	struct page *old_page, *new_page;
 	struct vm_area_struct *vma;
 	int ret, is_register;
 	bool orig_page_huge = false;
 	unsigned int gup_flags = FOLL_FORCE;
 
-	is_register = is_swbp_insn(&opcode);
+	is_register = is_swbp_insn(opcode);
 
 retry:
 	if (is_register)
@@ -489,7 +496,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = verify_opcode(old_page, vaddr, &opcode);
+	ret = verify(old_page, vaddr, opcode);
 	if (ret <= 0)
 		goto put_old;
 
@@ -514,7 +521,7 @@ retry:
 
 	__SetPageUptodate(new_page);
 	copy_highpage(new_page, old_page);
-	uprobe_copy_to_page(new_page, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE);
+	uprobe_copy_to_page(new_page, vaddr, opcode, UPROBE_SWBP_INSN_SIZE);
 
 	if (!is_register) {
 		struct page *orig_page;
