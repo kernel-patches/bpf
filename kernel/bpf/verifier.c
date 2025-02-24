@@ -22996,6 +22996,59 @@ BTF_ID(func, __rcu_read_unlock)
 #endif
 BTF_SET_END(btf_id_deny)
 
+/* Functions annotated with __noreturn are denied. Currently, we must manually
+ * list all __noreturn functions here. Once a more robust solution is
+ * implemented, this workaround can be removed.
+ */
+BTF_SET_START(fexit_deny)
+#define NORETURN(fn) BTF_ID(func, fn)
+NORETURN(__fortify_panic)
+NORETURN(__ia32_sys_exit)
+NORETURN(__ia32_sys_exit_group)
+NORETURN(__kunit_abort)
+NORETURN(__module_put_and_kthread_exit)
+NORETURN(__stack_chk_fail)
+NORETURN(__tdx_hypercall_failed)
+NORETURN(__ubsan_handle_builtin_unreachable)
+NORETURN(__x64_sys_exit)
+NORETURN(__x64_sys_exit_group)
+NORETURN(arch_cpu_idle_dead)
+NORETURN(bch2_trans_in_restart_error)
+NORETURN(bch2_trans_restart_error)
+NORETURN(bch2_trans_unlocked_error)
+NORETURN(cpu_bringup_and_idle)
+NORETURN(cpu_startup_entry)
+NORETURN(do_exit)
+NORETURN(do_group_exit)
+NORETURN(do_task_dead)
+NORETURN(ex_handler_msr_mce)
+NORETURN(hlt_play_dead)
+NORETURN(hv_ghcb_terminate)
+NORETURN(kthread_complete_and_exit)
+NORETURN(kthread_exit)
+NORETURN(kunit_try_catch_throw)
+NORETURN(machine_real_restart)
+NORETURN(make_task_dead)
+NORETURN(mpt_halt_firmware)
+NORETURN(nmi_panic_self_stop)
+NORETURN(panic)
+NORETURN(panic_smp_self_stop)
+NORETURN(rest_init)
+NORETURN(rewind_stack_and_make_dead)
+NORETURN(rust_begin_unwind)
+NORETURN(rust_helper_BUG)
+NORETURN(sev_es_terminate)
+NORETURN(snp_abort)
+NORETURN(start_kernel)
+NORETURN(stop_this_cpu)
+NORETURN(usercopy_abort)
+NORETURN(x86_64_start_kernel)
+NORETURN(x86_64_start_reservations)
+NORETURN(xen_cpu_bringup_again)
+NORETURN(xen_start_kernel)
+#undef NORETURN
+BTF_SET_END(fexit_deny)
+
 static bool can_be_sleepable(struct bpf_prog *prog)
 {
 	if (prog->type == BPF_PROG_TYPE_TRACING) {
@@ -23081,6 +23134,10 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 			return ret;
 	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
 		   btf_id_set_contains(&btf_id_deny, btf_id)) {
+		return -EINVAL;
+	} else if (prog->expected_attach_type == BPF_TRACE_FEXIT &&
+		   btf_id_set_contains(&fexit_deny, btf_id)) {
+		verbose(env, "Attaching fexit to __noreturn functions is rejected.\n");
 		return -EINVAL;
 	}
 
