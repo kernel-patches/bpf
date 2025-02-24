@@ -264,7 +264,7 @@ static void uprobe_copy_to_page(struct page *page, unsigned long vaddr, const vo
 	kunmap_atomic(kaddr);
 }
 
-static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode)
+static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode, int nbytes)
 {
 	uprobe_opcode_t old_opcode;
 	bool is_swbp;
@@ -473,12 +473,12 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
 			unsigned long vaddr, uprobe_opcode_t opcode)
 {
-	return uprobe_write(auprobe, mm, vaddr, &opcode, verify_opcode);
+	return uprobe_write(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode);
 }
 
 int uprobe_write(struct arch_uprobe *auprobe, struct mm_struct *mm,
-		 unsigned long vaddr, uprobe_opcode_t *opcode,
-		 uprobe_write_verify_t verify)
+		 unsigned long vaddr, uprobe_opcode_t *insn,
+		 int nbytes, uprobe_write_verify_t verify)
 {
 	struct page *old_page, *new_page;
 	struct vm_area_struct *vma;
@@ -486,7 +486,7 @@ int uprobe_write(struct arch_uprobe *auprobe, struct mm_struct *mm,
 	bool orig_page_huge = false;
 	unsigned int gup_flags = FOLL_FORCE;
 
-	is_register = is_swbp_insn(opcode);
+	is_register = is_swbp_insn(insn);
 
 retry:
 	if (is_register)
@@ -496,7 +496,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = verify(old_page, vaddr, opcode);
+	ret = verify(old_page, vaddr, insn, nbytes);
 	if (ret <= 0)
 		goto put_old;
 
@@ -521,7 +521,7 @@ retry:
 
 	__SetPageUptodate(new_page);
 	copy_highpage(new_page, old_page);
-	uprobe_copy_to_page(new_page, vaddr, opcode, UPROBE_SWBP_INSN_SIZE);
+	uprobe_copy_to_page(new_page, vaddr, insn, nbytes);
 
 	if (!is_register) {
 		struct page *orig_page;
