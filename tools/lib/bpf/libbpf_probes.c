@@ -126,6 +126,7 @@ static int probe_prog_load(enum bpf_prog_type prog_type,
 		break;
 	case BPF_PROG_TYPE_KPROBE:
 		opts.kern_version = get_kernel_version();
+		opts.expected_attach_type = BPF_TRACE_KPROBE_SESSION;
 		break;
 	case BPF_PROG_TYPE_LIRC_MODE2:
 		opts.expected_attach_type = BPF_LIRC_MODE2;
