@@ -264,7 +264,8 @@ static void uprobe_copy_to_page(struct page *page, unsigned long vaddr, const vo
 	kunmap_atomic(kaddr);
 }
 
-static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode, int nbytes)
+static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode,
+			 int nbytes, void *data)
 {
 	uprobe_opcode_t old_opcode;
 	bool is_swbp;
@@ -473,12 +474,12 @@ static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm,
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm,
 			unsigned long vaddr, uprobe_opcode_t opcode, bool orig)
 {
-	return uprobe_write(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode, orig);
+	return uprobe_write(auprobe, mm, vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode, orig, NULL);
 }
 
 int uprobe_write(struct arch_uprobe *auprobe, struct mm_struct *mm,
 		 unsigned long vaddr, uprobe_opcode_t *insn,
-		 int nbytes, uprobe_write_verify_t verify, bool orig)
+		 int nbytes, uprobe_write_verify_t verify, bool orig, void *data)
 {
 	struct page *old_page, *new_page;
 	struct vm_area_struct *vma;
@@ -494,7 +495,7 @@ retry:
 	if (IS_ERR(old_page))
 		return PTR_ERR(old_page);
 
-	ret = verify(old_page, vaddr, insn, nbytes);
+	ret = verify(old_page, vaddr, insn, nbytes, data);
 	if (ret <= 0)
 		goto put_old;
 
@@ -2669,6 +2670,10 @@ bool __weak arch_uretprobe_is_alive(struct return_instance *ret, enum rp_check c
 	return true;
 }
 
+void __weak arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
+{
+}
+
 /*
  * Run handler and ask thread to singlestep.
  * Ensure all non-fatal signals cannot interrupt thread while it singlesteps.
@@ -2732,6 +2737,9 @@ static void handle_swbp(struct pt_regs *regs)
 		goto out;
 
 	handler_chain(uprobe, regs, true);
+
+	/* Try to optimize after first hit. */
+	arch_uprobe_optimize(&uprobe->arch, bp_vaddr);
 
 	if (arch_uprobe_skip_sstep(&uprobe->arch, regs))
 		goto out;
