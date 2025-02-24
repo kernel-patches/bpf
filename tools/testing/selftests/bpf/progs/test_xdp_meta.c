@@ -4,49 +4,57 @@
 
 #include <bpf/bpf_helpers.h>
 
-#define __round_mask(x, y) ((__typeof__(x))((y) - 1))
-#define round_up(x, y) ((((x) - 1) | __round_mask(x, y)) + 1)
-#define ctx_ptr(ctx, mem) (void *)(unsigned long)ctx->mem
+#define META_SIZE 32
+
+/* Demonstrates how metadata can be passed from an XDP program to a TC program
+ * using bpf_xdp_adjust_meta.
+ * For the sake of testing the metadata support in drivers, the XDP program uses
+ * a fixed-size payload after the Ethernet header as metadata. The TC program
+ * copies the metadata it receives into a map so it can be checked from
+ * userspace.
+ */
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__uint(value_size, META_SIZE);
+} test_result SEC(".maps");
 
 SEC("tc")
 int ing_cls(struct __sk_buff *ctx)
 {
-	__u8 *data, *data_meta, *data_end;
-	__u32 diff = 0;
+	void *data_meta = (void *)(unsigned long)ctx->data_meta;
+	void *data = (void *)(unsigned long)ctx->data;
 
-	data_meta = ctx_ptr(ctx, data_meta);
-	data_end  = ctx_ptr(ctx, data_end);
-	data      = ctx_ptr(ctx, data);
-
-	if (data + ETH_ALEN > data_end ||
-	    data_meta + round_up(ETH_ALEN, 4) > data)
+	if (data_meta + META_SIZE > data)
 		return TC_ACT_SHOT;
 
-	diff |= ((__u32 *)data_meta)[0] ^ ((__u32 *)data)[0];
-	diff |= ((__u16 *)data_meta)[2] ^ ((__u16 *)data)[2];
+	int key = 0;
 
-	return diff ? TC_ACT_SHOT : TC_ACT_OK;
+	bpf_map_update_elem(&test_result, &key, data_meta, BPF_ANY);
+
+	return TC_ACT_SHOT;
 }
 
 SEC("xdp")
 int ing_xdp(struct xdp_md *ctx)
 {
-	__u8 *data, *data_meta, *data_end;
-	int ret;
-
-	ret = bpf_xdp_adjust_meta(ctx, -round_up(ETH_ALEN, 4));
+	int ret = bpf_xdp_adjust_meta(ctx, -META_SIZE);
 	if (ret < 0)
 		return XDP_DROP;
 
-	data_meta = ctx_ptr(ctx, data_meta);
-	data_end  = ctx_ptr(ctx, data_end);
-	data      = ctx_ptr(ctx, data);
+	void *data_meta = (void *)(unsigned long)ctx->data_meta;
+	void *data = (void *)(unsigned long)ctx->data;
+	void *data_end = (void *)(unsigned long)ctx->data_end;
 
-	if (data + ETH_ALEN > data_end ||
-	    data_meta + round_up(ETH_ALEN, 4) > data)
+	void *payload = data + sizeof(struct ethhdr);
+
+	if (data_meta + META_SIZE > data || payload + META_SIZE > data_end)
 		return XDP_DROP;
 
-	__builtin_memcpy(data_meta, data, ETH_ALEN);
+	__builtin_memcpy(data_meta, payload, META_SIZE);
+
 	return XDP_PASS;
 }
 
