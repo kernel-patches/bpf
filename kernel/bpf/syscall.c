@@ -3414,7 +3414,8 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id,
-				   u64 bpf_cookie)
+				   u64 bpf_cookie,
+				   struct bpf_verifier_log *log)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
@@ -3539,7 +3540,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 */
 		struct bpf_attach_target_info tgt_info = {};
 
-		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
+		err = bpf_check_attach_target(log, prog, tgt_prog, btf_id,
 					      &tgt_info);
 		if (err)
 			goto out_unlock;
@@ -3951,7 +3952,7 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 			tp_name = prog->aux->attach_func_name;
 			break;
 		}
-		return bpf_tracing_prog_attach(prog, 0, 0, 0);
+		return bpf_tracing_prog_attach(prog, 0, 0, 0, NULL);
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
 		if (strncpy_from_user(buf, user_tp_name, sizeof(buf) - 1) < 0)
@@ -5313,9 +5314,13 @@ err_put:
 }
 
 #define BPF_LINK_CREATE_LAST_FIELD link_create.uprobe_multi.pid
-static int link_create(union bpf_attr *attr, bpfptr_t uattr)
+static int link_create(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
+	struct bpf_verifier_log *log;
+	u32 log_true_size, log_size;
 	struct bpf_prog *prog;
+	__aligned_u64 log_buf;
+	bool use_log;
 	int ret;
 
 	if (CHECK_ATTR(BPF_LINK_CREATE))
@@ -5328,10 +5333,33 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
 
+	switch (prog->type) {
+	case BPF_PROG_TYPE_EXT:
+		log_buf = attr->link_create.tracing.log_buf;
+		log_size = attr->link_create.tracing.log_size;
+		use_log = true;
+		break;
+	default:
+		use_log = false;
+	}
+
+	if (use_log) {
+		log = kvzalloc(sizeof(*log), GFP_KERNEL);
+		if (!log) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		ret = bpf_vlog_init(log, BPF_LOG_FIXED,
+				    (char __user *) (unsigned long) log_buf,
+				    log_size);
+		if (ret)
+			goto out_free_log;
+	}
+
 	ret = bpf_prog_attach_check_attach_type(prog,
 						attr->link_create.attach_type);
 	if (ret)
-		goto out;
+		goto out_free_log;
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_CGROUP_SKB:
@@ -5347,7 +5375,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = bpf_tracing_prog_attach(prog,
 					      attr->link_create.target_fd,
 					      attr->link_create.target_btf_id,
-					      attr->link_create.tracing.cookie);
+					      attr->link_create.tracing.cookie,
+					      log);
 		break;
 	case BPF_PROG_TYPE_LSM:
 	case BPF_PROG_TYPE_TRACING:
@@ -5365,7 +5394,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			ret = bpf_tracing_prog_attach(prog,
 						      attr->link_create.target_fd,
 						      attr->link_create.target_btf_id,
-						      attr->link_create.tracing.cookie);
+						      attr->link_create.tracing.cookie,
+						      NULL);
 		break;
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
 	case BPF_PROG_TYPE_SK_LOOKUP:
@@ -5408,6 +5438,11 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = -EINVAL;
 	}
 
+	if (ret < 0 && use_log)
+		(void) bpf_vlog_finalize(log, &log_true_size);
+out_free_log:
+	if (use_log)
+		kvfree(log);
 out:
 	if (ret < 0)
 		bpf_prog_put(prog);
@@ -5863,7 +5898,7 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		err = bpf_map_do_batch(&attr, uattr.user, BPF_MAP_DELETE_BATCH);
 		break;
 	case BPF_LINK_CREATE:
-		err = link_create(&attr, uattr);
+		err = link_create(&attr, uattr, size);
 		break;
 	case BPF_LINK_UPDATE:
 		err = link_update(&attr);
