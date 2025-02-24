@@ -431,6 +431,57 @@ static bool can_probe_prog_type(enum bpf_prog_type prog_type)
 	return true;
 }
 
+int libbpf_probe_bpf_kfunc(enum bpf_prog_type prog_type, int kfunc_id, int btf_fd,
+			   const void *opts)
+{
+	struct bpf_insn insns[] = {
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_KFUNC_CALL, 1, kfunc_id),
+		BPF_EXIT_INSN(),
+	};
+	const size_t insn_cnt = ARRAY_SIZE(insns);
+	char buf[4096];
+	int fd_array[2] = {-1};
+	int ret;
+
+	if (opts)
+		return libbpf_err(-EINVAL);
+
+	if (!can_probe_prog_type(prog_type))
+		return libbpf_err(-EOPNOTSUPP);
+
+	if (btf_fd >= 0)
+		fd_array[1] = btf_fd;
+	else
+		/* insn.off = 0, means vmlinux btf */
+		insns[0].off = 0;
+
+	buf[0] = '\0';
+	ret = probe_prog_load(prog_type, insns, insn_cnt, btf_fd >= 0 ? fd_array : NULL,
+			      buf, sizeof(buf));
+	if (ret < 0)
+		return libbpf_err(ret);
+
+	if (ret > 0)
+		return 1; /* assume supported */
+
+	/* If BPF verifier recognizes BPF kfunc but it's not supported for
+	 * given BPF program type, it will emit "calling kernel function
+	 * <name> is not allowed". If the kfunc id is invalid,
+	 * it will emit "kernel btf_id <id> is not a function". If BTF fd
+	 * invalid in module BTF, it will emit "invalid module BTF fd specified" or
+	 * "negative offset disallowed for kernel module function call". If
+	 * kfunc prog not dev buound, it will emit "metadata kfuncs require
+	 * device-bound program".
+	 */
+	if (strstr(buf, "not allowed") || strstr(buf, "not a function") ||
+	   strstr(buf, "invalid module BTF fd") ||
+	   strstr(buf, "negative offset disallowed") ||
+	   strstr(buf, "device-bound program"))
+		return 0;
+
+	return 1;
+}
+
 int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type, enum bpf_func_id helper_id,
 			    const void *opts)
 {
