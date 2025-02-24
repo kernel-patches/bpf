@@ -2734,6 +2734,28 @@ out:
 	rcu_read_unlock_trace();
 }
 
+void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr)
+{
+	struct uprobe *uprobe;
+	int is_swbp;
+
+	rcu_read_lock_trace();
+	uprobe = find_active_uprobe_rcu(bp_vaddr, &is_swbp);
+	if (!uprobe)
+		goto unlock;
+
+	if (!get_utask())
+		goto unlock;
+
+	if (arch_uprobe_ignore(&uprobe->arch, regs))
+		goto unlock;
+
+	handler_chain(uprobe, regs, false);
+
+ unlock:
+	rcu_read_unlock_trace();
+}
+
 /*
  * Perform required fix-ups and disable singlestep.
  * Allow pending signals to take effect.
