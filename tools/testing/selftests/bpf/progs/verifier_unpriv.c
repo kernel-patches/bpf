@@ -572,7 +572,7 @@ l0_%=:	exit;						\
 
 SEC("socket")
 __description("alu32: mov u32 const")
-__success __failure_unpriv __msg_unpriv("R7 invalid mem access 'scalar'")
+__success __success_unpriv
 __retval(0)
 __naked void alu32_mov_u32_const(void)
 {
@@ -581,6 +581,7 @@ __naked void alu32_mov_u32_const(void)
 	w7 &= 1;					\
 	w0 = w7;					\
 	if r0 == 0 goto l0_%=;				\
+	/* unpriv: nospec (inserted to prevent `R7 invalid mem access 'scalar'`) */\
 	r0 = *(u64*)(r7 + 0);				\
 l0_%=:	exit;						\
 "	::: __clobber_all);
