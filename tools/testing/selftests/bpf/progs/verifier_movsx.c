@@ -330,14 +330,17 @@ label_%=: 	                                        \
 SEC("socket")
 __description("MOV64SX, improved range tracking with tnum_scast")
 __success __log_level(2)
-__msg("R1 : -128 <= R1s <= 127")
+__retval(1)
+__msg("R1_w=scalar(smin=smin32=-128,smax=smax32=127)")
 __naked void mov64sx_improved_range_tracking(void)
 {
     asm volatile ("                                      \
     call %[bpf_get_prandom_u32];                        \
     r1 = r0;                                            \
-    r1 &= 0xFF;                   \
-    r1 = (s8)r1;            \
+    r1 &= 0xFF;      /* Keep only 8 bits */             \
+    r1 = (s8)r1;     /* Sign-extend to 64 bits */       \
+    /* Previous code would set r1 to [-2^63, 2^63-1] */ \
+    /* With tnum_scast, r1 is tracked as [-128, 127] */ \
     if r1 s< -1000 goto l0_%=;                          \
     if r1 s> 1000 goto l0_%=;                           \
     r0 = 1;                                             \
