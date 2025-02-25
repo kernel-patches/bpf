@@ -31,11 +31,14 @@
 #define SOCK_RECONF_CTR			10
 #define USLEEP_MAX			10000
 
+void xsk_log(const char *msg, ...);
 void xsk_verbose(const char *msg, ...);
+void xsk_skip(const char *msg, ...);
+void xsk_fail(const char *msg, ...);
+#define print_msg(x...) xsk_log(x)
 #define print_verbose(x...) xsk_verbose(x)
-#define print_msg(x...) ksft_print_msg(x)
-#define skip_reason(x...) ksft_test_result_skip(x)
-#define fail_reason(x...) ksft_test_result_fail(x)
+#define skip_reason(x...) xsk_skip(x)
+#define fail_reason(x...) xsk_fail(x)
 
 static void __exit_with_error(int error, const char *file, const char *func, int line)
 {

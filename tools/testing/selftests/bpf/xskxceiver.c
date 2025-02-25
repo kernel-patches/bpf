@@ -103,6 +103,15 @@
 
 static bool opt_verbose;
 
+void xsk_log(const char *msg, ...)
+{
+	va_list args;
+
+	va_start(args, msg);
+	ksft_print_msg(msg, args);
+	va_end(args);
+}
+
 void xsk_verbose(const char *msg, ...)
 {
 	if (opt_verbose) {
@@ -112,6 +121,24 @@ void xsk_verbose(const char *msg, ...)
 		ksft_print_msg(msg, args);
 		va_end(args);
 	}
+}
+
+void xsk_skip(const char *msg, ...)
+{
+	va_list args;
+
+	va_start(args, msg);
+	ksft_test_result_skip(msg, args);
+	va_end(args);
+}
+
+void xsk_fail(const char *msg, ...)
+{
+	va_list args;
+
+	va_start(args, msg);
+	ksft_test_result_fail(msg, args);
+	va_end(args);
 }
 
 static bool opt_print_tests;
