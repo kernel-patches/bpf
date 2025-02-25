@@ -327,6 +327,7 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
+// Clean rerun of CI
 SEC("socket")
 __description("MOV64SX, improved range tracking with tnum_scast")
 __success __log_level(2)
