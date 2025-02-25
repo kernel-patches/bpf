@@ -327,6 +327,29 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("MOV64SX, improved range tracking with tnum_scast")
+__success __log_level(2)
+__msg("R1 : -128 <= R1s <= 127")
+__naked void mov64sx_improved_range_tracking(void)
+{
+    asm volatile ("                                      \
+    call %[bpf_get_prandom_u32];                        \
+    r1 = r0;                                            \
+    r1 &= 0xFF;                   \
+    r1 = (s8)r1;            \
+    if r1 s< -1000 goto l0_%=;                          \
+    if r1 s> 1000 goto l0_%=;                           \
+    r0 = 1;                                             \
+    exit;                                               \
+l0_%=:                                                  \
+    r0 = 0;                                             \
+    exit;                                               \
+    "   :
+    : __imm(bpf_get_prandom_u32)
+    : __clobber_all);
+}
+
 #else
 
 SEC("socket")
