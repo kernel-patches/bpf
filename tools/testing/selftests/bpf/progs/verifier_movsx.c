@@ -331,7 +331,7 @@ SEC("socket")
 __description("MOV64SX, unknown sign bit tracking")
 __success __retval(0)
 __log_level(2)
-__msg("R2=scalar(smin=-1,smax=127)")
+//__msg("R2=scalar(smin=-1,smax=127)")
 __naked void mov64sx_unknown_sign_bit_precise(void)
 {
     asm volatile ("                                     \
