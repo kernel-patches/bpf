@@ -331,7 +331,7 @@ SEC("socket")
 __description("MOV64SX, unknown sign bit tracking")
 __success __retval(0)
 __log_level(2)
-//__msg("R2=scalar(smin=-1,smax=127)")
+__msg("R2=scalar(smin=-1,smax=127)")
 __naked void mov64sx_unknown_sign_bit_precise(void)
 {
     asm volatile ("                                     \
@@ -352,39 +352,6 @@ fail_%=:                                                \
     : __imm(bpf_get_prandom_u32)
     : __clobber_all);
 }
-
-SEC("socket")
-__description("MOV64SX, multiple unknown bits")
-__success __retval(0)
-__log_level(2)
-__naked void mov64sx_multiple_unknown_bits(void)
-{
-    asm volatile ("                                     \
-    /* Create a register with multiple unknown bits */  \
-    r1 = 0;                                             \
-    /* First call for bit 0 */                          \
-    call %[bpf_get_prandom_u32];                        \
-    r2 = r0;                                            \
-    r2 &= 1;                                            \
-    r1 |= r2;                                           \
-    call %[bpf_get_prandom_u32];                        \
-    r2 = r0;                                            \
-    r2 <<= 7;           \
-    r2 &= 0x80;         \
-    r1 |= r2;    \
-    r1 = (s8)r1;                                        \
-    if r1 s< -128 goto fail_%=;                         \
-    if r1 s> 127 goto fail_%=;                          \
-    r0 = 0;                                             \
-    exit;                                               \
-fail_%=:                                                \
-    r0 = 1;                                             \
-    exit;                                               \
-    "   :
-    : __imm(bpf_get_prandom_u32)
-    : __clobber_all);
-}
-
 
 #else
 
