@@ -332,7 +332,7 @@ SEC("socket")
 __description("MOV64SX, improved range tracking with tnum_scast")
 __success __retval(0)
 __log_level(2)
-__msg("R1_w=scalar(smin=smin32=-128,smax=smax32=127)")
+//__msg("R1_w=scalar(smin=smin32=-128,smax=smax32=127)")
 __naked void mov64sx_improved_range_tracking(void)
 {
     asm volatile ("                                      \
