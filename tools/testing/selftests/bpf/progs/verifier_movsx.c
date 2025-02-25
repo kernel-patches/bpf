@@ -337,11 +337,10 @@ __naked void mov64sx_improved_range_tracking(void)
 {
     asm volatile ("                                      \
     call %[bpf_get_prandom_u32];                        \
-    r1 = r0;                                            \
-    r1 &= 0xFF;                  			 \
-    r1 = (s8)r1;     				       \
-    if r1 s< -1000 goto l0_%=;                          \
-    if r1 s> 1000 goto l0_%=;                           \
+    w0 &= 0xFF;                  			 \
+    w0 = (s8)w0;     				       \
+    if w0 s< -1000 goto l0_%=;                          \
+    if w0 s> 1000 goto l0_%=;                           \
     r0 = 0;                                             \
     exit;                                               \
 l0_%=:                                                  \
