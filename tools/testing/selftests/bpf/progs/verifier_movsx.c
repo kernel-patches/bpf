@@ -339,8 +339,8 @@ __naked void mov64sx_improved_range_tracking(void)
     call %[bpf_get_prandom_u32];                        \
     w0 &= 0xFF;                  			 \
     w0 = (s8)w0;     				       \
-    if w0 s< -1000 goto l0_%=;                          \
-    if w0 s> 1000 goto l0_%=;                           \
+    if r0 s< -1000 goto l0_%=;                          \
+    if r0 s> 1000 goto l0_%=;                           \
     r0 = 0;                                             \
     exit;                                               \
 l0_%=:                                                  \
