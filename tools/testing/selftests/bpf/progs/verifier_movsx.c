@@ -327,23 +327,26 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
-// Clean rerun of CI
 SEC("socket")
-__description("MOV64SX, improved range tracking with tnum_scast")
+__description("MOV64SX, unknown sign bit tracking")
 __success __retval(0)
 __log_level(2)
-//__msg("R1_w=scalar(smin=smin32=-128,smax=smax32=127)")
-__naked void mov64sx_improved_range_tracking(void)
+__msg("R2=scalar(smin=-1,smax=127)")
+__naked void mov64sx_unknown_sign_bit_precise(void)
 {
-    asm volatile ("                                      \
+    asm volatile ("                                     \
     call %[bpf_get_prandom_u32];                        \
-    w0 &= 0xFF;                  			 \
-    w0 = (s8)w0;     				       \
-    if r0 s< -1000 goto l0_%=;                          \
-    if r0 s> 1000 goto l0_%=;                           \
+    r1 = 0x7F;                                          \
+    r2 = r0;                                            \
+    r2 &= 0x80;       \
+    r2 |= r1;                  \
+    r2 = (s8)r2;      \
+    if r2 s< -1 goto fail_%=;                           \
+    if r2 s> 127 goto fail_%=;                          \
     r0 = 0;                                             \
     exit;                                               \
-l0_%=:                                                  \
+fail_%=:                                                \
+    r0 = 1;                                             \
     exit;                                               \
     "   :
     : __imm(bpf_get_prandom_u32)
