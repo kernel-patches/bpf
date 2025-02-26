@@ -240,13 +240,18 @@ ifdef CONFIG_MITIGATION_SLS
 endif
 
 ifdef CONFIG_CALL_PADDING
-PADDING_CFLAGS := -fpatchable-function-entry=$(CONFIG_FUNCTION_PADDING_BYTES),$(CONFIG_FUNCTION_PADDING_BYTES)
-KBUILD_CFLAGS += $(PADDING_CFLAGS)
-export PADDING_CFLAGS
+  __padding_nops := $(CONFIG_FUNCTION_PADDING_BYTES)
+  ifneq ($(and $(CONFIG_FUNCTION_METADATA),$(CONFIG_CALL_THUNKS),$(CONFIG_CFI_CLANG)),)
+    __padding_nops := $(shell echo $(__padding_nops) + 5 | bc)
+  endif
 
-PADDING_RUSTFLAGS := -Zpatchable-function-entry=$(CONFIG_FUNCTION_PADDING_BYTES),$(CONFIG_FUNCTION_PADDING_BYTES)
-KBUILD_RUSTFLAGS += $(PADDING_RUSTFLAGS)
-export PADDING_RUSTFLAGS
+  PADDING_CFLAGS := -fpatchable-function-entry=$(__padding_nops),$(__padding_nops)
+  KBUILD_CFLAGS += $(PADDING_CFLAGS)
+  export PADDING_CFLAGS
+
+  PADDING_RUSTFLAGS := -Zpatchable-function-entry=$(__padding_nops),$(__padding_nops)
+  KBUILD_RUSTFLAGS += $(PADDING_RUSTFLAGS)
+  export PADDING_RUSTFLAGS
 endif
 
 KBUILD_LDFLAGS += -m elf_$(UTS_MACHINE)
