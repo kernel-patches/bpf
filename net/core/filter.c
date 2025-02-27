@@ -5168,6 +5168,12 @@ static const struct bpf_func_proto bpf_get_netns_cookie_sock_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX_OR_NULL,
 };
 
+const struct bpf_func_proto bpf_get_netns_cookie_sock_ptr_proto = {
+	.func		= bpf_get_netns_cookie_sock,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON | PTR_MAYBE_NULL,
+};
+
 BPF_CALL_1(bpf_get_netns_cookie_sock_addr, struct bpf_sock_addr_kern *, ctx)
 {
 	return __bpf_get_netns_cookie(ctx ? ctx->sk : NULL);
