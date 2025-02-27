@@ -1508,12 +1508,7 @@ emit_cond_jmp:
 
 	/* speculation barrier */
 	case BPF_ST | BPF_NOSPEC:
-#ifdef ARM64_HAS_SB
 		emit(A64_SB, ctx);
-#else
-		emit(A64_DSB_NSH, ctx);
-		emit(A64_ISB, ctx);
-#endif
 		break;
 
 	/* ST: *(size *)(dst + off) = imm */
