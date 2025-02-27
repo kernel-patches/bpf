@@ -52,6 +52,11 @@ void test_netns_cookie(void)
 	if (!ASSERT_OK_PTR(skel->links.get_netns_cookie_cgroup_skb, "prog_attach_cgroup_skb"))
 		goto cleanup_tc;
 
+	skel->links.get_netns_cookie_tracing = bpf_program__attach(
+			skel->progs.get_netns_cookie_tracing);
+	if (!ASSERT_OK_PTR(skel->links.get_netns_cookie_tracing, "prog_attach_tracing"))
+		goto cleanup_tc;
+
 	server_fd = start_server(AF_INET6, SOCK_STREAM, "::1", 0, 0);
 	if (CHECK(server_fd < 0, "start_server", "errno %d\n", errno))
 		goto cleanup_tc;
@@ -86,6 +91,8 @@ void test_netns_cookie(void)
 	ASSERT_EQ(skel->bss->tcx_netns_cookie, cookie_expected_value, "cookie_value_tcx");
 	ASSERT_EQ(skel->bss->cgroup_skb_init_netns_cookie, cookie_expected_value, "cookie_value_init_cgroup_skb");
 	ASSERT_EQ(skel->bss->cgroup_skb_netns_cookie, cookie_expected_value, "cookie_value_cgroup_skb");
+	ASSERT_EQ(skel->bss->tracing_init_netns_cookie, cookie_expected_value, "cookie_value_init_tracing");
+	ASSERT_EQ(skel->bss->tracing_netns_cookie, cookie_expected_value, "cookie_value_tracing");
 
 cleanup_tc:
 	err = bpf_prog_detach_opts(tc_fd, loopback, BPF_TCX_INGRESS, &optd);

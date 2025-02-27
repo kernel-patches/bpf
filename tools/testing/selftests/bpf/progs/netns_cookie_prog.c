@@ -3,6 +3,7 @@
 #include "vmlinux.h"
 
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 #define AF_INET6 10
 
@@ -29,6 +30,7 @@ struct {
 
 int tcx_init_netns_cookie, tcx_netns_cookie;
 int cgroup_skb_init_netns_cookie, cgroup_skb_netns_cookie;
+int tracing_init_netns_cookie, tracing_netns_cookie;
 
 SEC("sockops")
 int get_netns_cookie_sockops(struct bpf_sock_ops *ctx)
@@ -98,6 +100,17 @@ int get_netns_cookie_cgroup_skb(struct __sk_buff *skb)
 	cgroup_skb_init_netns_cookie = bpf_get_netns_cookie(NULL);
 	cgroup_skb_netns_cookie = bpf_get_netns_cookie(skb);
 	return SK_PASS;
+}
+
+SEC("fexit/inet_stream_connect")
+int BPF_PROG(get_netns_cookie_tracing, struct socket *sock,
+	struct sockaddr *uaddr, int addr_len, int flags)
+{
+	if (uaddr->sa_family != AF_INET6)
+		return 0;
+	tracing_init_netns_cookie = bpf_get_netns_cookie(NULL);
+	tracing_netns_cookie = bpf_get_netns_cookie(sock->sk);
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
