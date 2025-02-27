@@ -743,6 +743,7 @@ struct tmonitor_ctx {
 	pcap_t *pcap;
 	pcap_dumper_t *dumper;
 	pthread_t thread;
+	pthread_mutex_t *stdout_lock;
 	int wake_fd;
 
 	volatile bool done;
@@ -953,6 +954,7 @@ static void *traffic_monitor_thread(void *arg)
 		ifindex = ntohl(ifindex);
 		ptype = packet[10];
 
+		pthread_mutex_lock(ctx->stdout_lock);
 		if (proto == ETH_P_IPV6) {
 			show_ipv6_packet(payload, ifindex, ptype);
 		} else if (proto == ETH_P_IP) {
@@ -967,6 +969,7 @@ static void *traffic_monitor_thread(void *arg)
 			printf("%-7s %-3s Unknown network protocol type 0x%x\n",
 			       ifname, pkt_type_str(ptype), proto);
 		}
+		pthread_mutex_unlock(ctx->stdout_lock);
 	}
 
 	return NULL;
@@ -1055,7 +1058,8 @@ static void encode_test_name(char *buf, size_t len, const char *test_name, const
  * in the give network namespace.
  */
 struct tmonitor_ctx *traffic_monitor_start(const char *netns, const char *test_name,
-					   const char *subtest_name)
+					   const char *subtest_name,
+					   pthread_mutex_t *stdout_lock)
 {
 	struct nstoken *nstoken = NULL;
 	struct tmonitor_ctx *ctx;
@@ -1108,6 +1112,8 @@ struct tmonitor_ctx *traffic_monitor_start(const char *netns, const char *test_n
 		log_err("Failed to create eventfd");
 		goto fail_eventfd;
 	}
+
+	ctx->stdout_lock = stdout_lock;
 
 	r = pthread_create(&ctx->thread, NULL, traffic_monitor_thread, ctx);
 	if (r) {

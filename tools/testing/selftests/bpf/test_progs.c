@@ -88,7 +88,9 @@ static void stdio_hijack(char **log_buf, size_t *log_cnt)
 #endif
 }
 
-static void stdio_restore_cleanup(void)
+static pthread_mutex_t stdout_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void stdio_restore_cleanup(bool restore_default)
 {
 #ifdef __GLIBC__
 	if (verbose() && env.worker_id == -1) {
@@ -98,15 +100,25 @@ static void stdio_restore_cleanup(void)
 
 	fflush(stdout);
 
+	pthread_mutex_lock(&stdout_lock);
+
 	if (env.subtest_state) {
 		fclose(env.subtest_state->stdout_saved);
 		env.subtest_state->stdout_saved = NULL;
-		stdout = env.test_state->stdout_saved;
-		stderr = env.test_state->stdout_saved;
 	} else {
 		fclose(env.test_state->stdout_saved);
 		env.test_state->stdout_saved = NULL;
 	}
+
+	if (restore_default) {
+		stdout = env.stdout_saved;
+		stderr = env.stderr_saved;
+	} else if (env.subtest_state) {
+		stdout = env.test_state->stdout_saved;
+		stderr = env.test_state->stdout_saved;
+	}
+
+	pthread_mutex_unlock(&stdout_lock);
 #endif
 }
 
@@ -121,10 +133,7 @@ static void stdio_restore(void)
 	if (stdout == env.stdout_saved)
 		return;
 
-	stdio_restore_cleanup();
-
-	stdout = env.stdout_saved;
-	stderr = env.stderr_saved;
+	stdio_restore_cleanup(true);
 #endif
 }
 
@@ -541,7 +550,8 @@ void test__end_subtest(void)
 				   test_result(subtest_state->error_cnt,
 					       subtest_state->skipped));
 
-	stdio_restore_cleanup();
+	stdio_restore_cleanup(false);
+
 	env.subtest_state = NULL;
 }
 
@@ -779,7 +789,8 @@ struct netns_obj *netns_new(const char *nsname, bool open)
 	    (env.subtest_state && env.subtest_state->should_tmon)) {
 		test_name = env.test->test_name;
 		subtest_name = env.subtest_state ? env.subtest_state->name : NULL;
-		netns_obj->tmon = traffic_monitor_start(nsname, test_name, subtest_name);
+		netns_obj->tmon = traffic_monitor_start(nsname, test_name, subtest_name,
+							&stdout_lock);
 		if (!netns_obj->tmon) {
 			fprintf(stderr, "Failed to start traffic monitor for %s\n", nsname);
 			goto fail;
