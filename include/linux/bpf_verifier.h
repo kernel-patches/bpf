@@ -733,6 +733,7 @@ struct bpf_verifier_env {
 	 * to writes with variable offset and to indirect (helper) accesses.
 	 */
 	bool allow_uninit_stack;
+	bool allow_liveregs_dfa;
 	bool bpf_capable;
 	bool bypass_spec_v1;
 	bool bypass_spec_v4;

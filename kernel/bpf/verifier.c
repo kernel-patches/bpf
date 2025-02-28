@@ -18358,15 +18358,20 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
  * the current state will reach 'bpf_exit' instruction safely
  */
 static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			      struct bpf_func_state *cur, enum exact_level exact)
+			      struct bpf_func_state *cur, u32 insn_idx, enum exact_level exact)
 {
-	int i;
+	u16 live_regs;
+	u16 i;
 
 	if (old->callback_depth > cur->callback_depth)
 		return false;
 
+	live_regs = env->allow_liveregs_dfa
+		    ? env->insn_aux_data[insn_idx].live_regs_before
+		    : 0xffff;
 	for (i = 0; i < MAX_BPF_REG; i++)
-		if (!regsafe(env, &old->regs[i], &cur->regs[i],
+		if ((BIT(i) & live_regs) &&
+		    !regsafe(env, &old->regs[i], &cur->regs[i],
 			     &env->idmap_scratch, exact))
 			return false;
 
@@ -18387,6 +18392,7 @@ static bool states_equal(struct bpf_verifier_env *env,
 			 struct bpf_verifier_state *cur,
 			 enum exact_level exact)
 {
+	u32 insn_idx;
 	int i;
 
 	if (old->curframe != cur->curframe)
@@ -18410,9 +18416,12 @@ static bool states_equal(struct bpf_verifier_env *env,
 	 * and all frame states need to be equivalent
 	 */
 	for (i = 0; i <= old->curframe; i++) {
+		insn_idx = i == old->curframe
+			   ? env->insn_idx
+			   : old->frame[i + 1]->callsite;
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], exact))
+		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx, exact))
 			return false;
 	}
 	return true;
@@ -23647,6 +23656,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		ret = compute_live_registers(env);
 		if (ret < 0)
 			goto skip_full_check;
+		env->allow_liveregs_dfa = true;
 	}
 
 	ret = mark_fastcall_patterns(env);
