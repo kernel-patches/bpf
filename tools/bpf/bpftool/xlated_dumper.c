@@ -135,8 +135,7 @@ print_insn_json(void *private_data, const char *fmt, ...)
 
 	va_start(args, fmt);
 	if (l > 0) {
-		strncpy(chomped_fmt, fmt, l - 1);
-		chomped_fmt[l - 1] = '\0';
+		strscpy(chomped_fmt, fmt);
 	}
 	jsonw_vprintf_enquote(json_wtr, chomped_fmt, args);
 	va_end(args);
