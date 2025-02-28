@@ -33,10 +33,7 @@ static struct tcp_ulp_ops *tcp_ulp_find(const char *name)
 
 static const struct tcp_ulp_ops *__tcp_ulp_find_autoload(const char *name)
 {
-	const struct tcp_ulp_ops *ulp = NULL;
-
-	rcu_read_lock();
-	ulp = tcp_ulp_find(name);
+	const struct tcp_ulp_ops *ulp = tcp_ulp_find(name);
 
 #ifdef CONFIG_MODULES
 	if (!ulp && capable(CAP_NET_ADMIN)) {
@@ -46,10 +43,6 @@ static const struct tcp_ulp_ops *__tcp_ulp_find_autoload(const char *name)
 		ulp = tcp_ulp_find(name);
 	}
 #endif
-	if (!ulp || !try_module_get(ulp->owner))
-		ulp = NULL;
-
-	rcu_read_unlock();
 	return ulp;
 }
 
@@ -154,15 +147,24 @@ out_err:
 	return err;
 }
 
-int tcp_set_ulp(struct sock *sk, const char *name)
+int tcp_set_ulp(struct sock *sk, const char *name, bool load)
 {
 	const struct tcp_ulp_ops *ulp_ops;
+	int err = 0;
 
 	sock_owned_by_me(sk);
 
-	ulp_ops = __tcp_ulp_find_autoload(name);
-	if (!ulp_ops)
-		return -ENOENT;
+	rcu_read_lock();
+	if (!load)
+		ulp_ops = tcp_ulp_find(name);
+	else
+		ulp_ops = __tcp_ulp_find_autoload(name);
 
-	return __tcp_set_ulp(sk, ulp_ops);
+	if (!ulp_ops || !try_module_get(ulp_ops->owner))
+		err = -ENOENT;
+	rcu_read_unlock();
+
+	if (!err)
+		err = __tcp_set_ulp(sk, ulp_ops);
+	return err;
 }

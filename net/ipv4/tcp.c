@@ -3763,7 +3763,7 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 		name[val] = 0;
 
 		sockopt_lock_sock(sk);
-		err = tcp_set_ulp(sk, name);
+		err = tcp_set_ulp(sk, name, !has_current_bpf_ctx());
 		sockopt_release_sock(sk);
 		return err;
 	}
