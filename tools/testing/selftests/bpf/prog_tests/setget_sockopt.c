@@ -199,6 +199,36 @@ err_out:
 	bpf_link__destroy(getsockopt_link);
 }
 
+static void test_tcp_ulp(int family)
+{
+	struct setget_sockopt__bss *bss = skel->bss;
+	struct bpf_link *skops_sockopt_tcp_ulp = NULL;
+	int sfd = -1, cfd = -1;
+
+	memset(bss, 0, sizeof(*bss));
+
+	skops_sockopt_tcp_ulp =
+		bpf_program__attach_cgroup(skel->progs.skops_sockopt_tcp_ulp, cg_fd);
+	if (!ASSERT_OK_PTR(skel->links.skops_sockopt_tcp_ulp, "attach_cgroup"))
+		return;
+
+	sfd = start_server(family, SOCK_STREAM,
+			   family == AF_INET6 ? addr6_str : addr4_str, 0, 0);
+	if (!ASSERT_GE(sfd, 0, "start_server"))
+		goto err_out;
+
+	cfd = connect_to_fd(sfd, 0);
+	if (!ASSERT_GE(cfd, 0, "connect_to_fd_server"))
+		goto err_out;
+	ASSERT_EQ(bss->nr_tcp_ulp, 3, "nr_tcp_ulp");
+
+err_out:
+	close(sfd);
+	if (cfd != -1)
+		close(cfd);
+	bpf_link__destroy(skops_sockopt_tcp_ulp);
+}
+
 void test_setget_sockopt(void)
 {
 	cg_fd = test__join_cgroup(CG_NAME);
@@ -238,6 +268,8 @@ void test_setget_sockopt(void)
 	test_ktls(AF_INET);
 	test_nonstandard_opt(AF_INET);
 	test_nonstandard_opt(AF_INET6);
+	test_tcp_ulp(AF_INET6);
+	test_tcp_ulp(AF_INET);
 
 done:
 	setget_sockopt__destroy(skel);
