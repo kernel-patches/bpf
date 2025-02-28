@@ -5626,7 +5626,8 @@ int security_audit_rule_match(struct lsm_prop *prop, u32 field, u32 op,
  * security_bpf() - Check if the bpf syscall operation is allowed
  * @cmd: command
  * @attr: bpf attribute
- * @size: size
+ * @is_kernel: whether or not call originated from kernel
+ * @size: size of bpf attribute
  *
  * Do a initial check for all bpf syscalls after the attribute is copied into
  * the kernel. The actual security module can implement their own rules to
@@ -5634,9 +5635,9 @@ int security_audit_rule_match(struct lsm_prop *prop, u32 field, u32 op,
  *
  * Return: Returns 0 if permission is granted.
  */
-int security_bpf(int cmd, union bpf_attr *attr, unsigned int size)
+int security_bpf(int cmd, union bpf_attr *attr, bool is_kernel, unsigned int size)
 {
-	return call_int_hook(bpf, cmd, attr, size);
+	return call_int_hook(bpf, cmd, attr, is_kernel, size);
 }
 
 /**
@@ -5672,6 +5673,7 @@ int security_bpf_prog(struct bpf_prog *prog)
  * security_bpf_map_create() - Check if BPF map creation is allowed
  * @map: BPF map object
  * @attr: BPF syscall attributes used to create BPF map
+ * @is_kernel: whether or not call originated from kernel
  * @token: BPF token used to grant user access
  *
  * Do a check when the kernel creates a new BPF map. This is also the
@@ -5680,15 +5682,16 @@ int security_bpf_prog(struct bpf_prog *prog)
  * Return: Returns 0 on success, error on failure.
  */
 int security_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
-			    struct bpf_token *token)
+			    bool is_kernel, struct bpf_token *token)
 {
-	return call_int_hook(bpf_map_create, map, attr, token);
+	return call_int_hook(bpf_map_create, map, attr, is_kernel, token);
 }
 
 /**
  * security_bpf_prog_load() - Check if loading of BPF program is allowed
  * @prog: BPF program object
  * @attr: BPF syscall attributes used to create BPF program
+ * @is_kernel: whether or not call originated from kernel
  * @token: BPF token used to grant user access to BPF subsystem
  *
  * Perform an access control check when the kernel loads a BPF program and
@@ -5698,9 +5701,9 @@ int security_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
  * Return: Returns 0 on success, error on failure.
  */
 int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
-			   struct bpf_token *token)
+			   bool is_kernel, struct bpf_token *token)
 {
-	return call_int_hook(bpf_prog_load, prog, attr, token);
+	return call_int_hook(bpf_prog_load, prog, attr, is_kernel, token);
 }
 
 /**
