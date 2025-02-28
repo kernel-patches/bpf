@@ -81,6 +81,8 @@ static const char * const inproper_region_tests[] = {
 	"nested_rcu_region",
 	"rcu_read_lock_global_subprog_lock",
 	"rcu_read_lock_global_subprog_unlock",
+	"rcu_read_lock_sleepable_helper_global_subprog",
+	"rcu_read_lock_sleepable_kfunc_global_subprog",
 };
 
 static void test_inproper_region(void)
