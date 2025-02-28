@@ -10317,23 +10317,18 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (subprog_is_global(env, subprog)) {
 		const char *sub_name = subprog_name(env, subprog);
 
-		/* Only global subprogs cannot be called with a lock held. */
 		if (env->cur_state->active_locks) {
 			verbose(env, "global function calls are not allowed while holding a lock,\n"
 				     "use static function instead\n");
 			return -EINVAL;
 		}
 
-		/* Only global subprogs cannot be called with preemption disabled. */
-		if (env->cur_state->active_preempt_locks) {
-			verbose(env, "global function calls are not allowed with preemption disabled,\n"
-				     "use static function instead\n");
-			return -EINVAL;
-		}
-
-		if (env->cur_state->active_irq_id) {
-			verbose(env, "global function calls are not allowed with IRQs disabled,\n"
-				     "use static function instead\n");
+		if (env->subprog_info[subprog].sleepable &&
+		    (env->cur_state->active_rcu_lock || env->cur_state->active_preempt_locks ||
+		     env->cur_state->active_irq_id || !in_sleepable(env))) {
+			verbose(env, "global functions that may sleep are not allowed in non-sleepable context,\n"
+				     "i.e., in a RCU/IRQ/preempt-disabled section, or in\n"
+				     "a non-sleepable BPF program context\n");
 			return -EINVAL;
 		}
 
@@ -16703,6 +16698,14 @@ static void mark_subprog_changes_pkt_data(struct bpf_verifier_env *env, int off)
 	subprog->changes_pkt_data = true;
 }
 
+static void mark_subprog_sleepable(struct bpf_verifier_env *env, int off)
+{
+	struct bpf_subprog_info *subprog;
+
+	subprog = find_containing_subprog(env, off);
+	subprog->sleepable = true;
+}
+
 /* 't' is an index of a call-site.
  * 'w' is a callee entry point.
  * Eventually this function would be called when env->cfg.insn_state[w] == EXPLORED.
@@ -16716,6 +16719,7 @@ static void merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
 	caller = find_containing_subprog(env, t);
 	callee = find_containing_subprog(env, w);
 	caller->changes_pkt_data |= callee->changes_pkt_data;
+	caller->sleepable |= callee->sleepable;
 }
 
 /* non-recursive DFS pseudo code
@@ -17183,9 +17187,20 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			mark_prune_point(env, t);
 			mark_jmp_point(env, t);
 		}
-		if (bpf_helper_call(insn) && bpf_helper_changes_pkt_data(insn->imm))
-			mark_subprog_changes_pkt_data(env, t);
-		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+		if (bpf_helper_call(insn)) {
+			const struct bpf_func_proto *fp;
+
+			ret = get_helper_proto(env, insn->imm, &fp);
+			/* If called in a non-sleepable context program will be
+			 * rejected anyway, so we should end up with precise
+			 * sleepable marks on subprogs, except for dead code
+			 * elimination.
+			 */
+			if (ret == 0 && fp->might_sleep)
+				mark_subprog_sleepable(env, t);
+			if (bpf_helper_changes_pkt_data(insn->imm))
+				mark_subprog_changes_pkt_data(env, t);
+		} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_kfunc_call_arg_meta meta;
 
 			ret = fetch_kfunc_meta(env, insn, &meta, NULL);
@@ -17204,6 +17219,13 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 				 */
 				mark_force_checkpoint(env, t);
 			}
+			/* Same as helpers, if called in a non-sleepable context
+			 * program will be rejected anyway, so we should end up
+			 * with precise sleepable marks on subprogs, except for
+			 * dead code elimination.
+			 */
+			if (ret == 0 && is_kfunc_sleepable(&meta))
+				mark_subprog_sleepable(env, t);
 		}
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
