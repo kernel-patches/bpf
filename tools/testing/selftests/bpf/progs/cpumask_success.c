@@ -770,3 +770,26 @@ free_masks_return:
 		bpf_cpumask_release(mask2);
 	return 0;
 }
+
+SEC("syscall")
+__success
+int BPF_PROG(test_fill_reject_small_mask)
+{
+	struct bpf_cpumask *local;
+	u8 toofewbits;
+	int ret;
+
+	local = create_cpumask();
+	if (!local)
+		return 0;
+
+	/* The kfunc should prevent this operation */
+	ret = bpf_cpumask_fill((struct cpumask *)local, &toofewbits, sizeof(toofewbits));
+	if (ret != -EACCES)
+		err = 2;
+
+	bpf_cpumask_release(local);
+
+	return 0;
+}
+
