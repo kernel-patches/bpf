@@ -242,6 +242,15 @@ bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
 		     const struct bpf_object_open_opts *opts);
 
 /**
+ * @brief **bpf_object__prepare()** prepares BPF object for loading.
+ * @param obj Pointer to a valid BPF object instance returned by
+ * **bpf_object__open*()** API
+ * @return 0, on success; negative error code, otherwise, error code is
+ * stored in errno
+ */
+int bpf_object__prepare(struct bpf_object *obj);
+
+/**
  * @brief **bpf_object__load()** loads BPF object into kernel.
  * @param obj Pointer to a valid BPF object instance returned by
  * **bpf_object__open*()** APIs
