@@ -21503,7 +21503,34 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		}
 
-		if (is_may_goto_insn(insn)) {
+		if (is_may_goto_insn(insn) && bpf_jit_supports_timed_may_goto()) {
+			int stack_off_cnt = -stack_depth - 16;
+
+			/* Two 8 byte slots, depth-16 stores the count, and
+			 * depth-8 stores the start timestamp of the loop.
+			 */
+			stack_depth_extra = 16;
+			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off_cnt);
+			if (insn->off >= 0)
+				insn_buf[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, insn->off + 5);
+			else
+				insn_buf[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, insn->off - 1);
+			insn_buf[2] = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1);
+			insn_buf[3] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 1, 2);
+			insn_buf[4] = BPF_MOV64_IMM(BPF_REG_AX, stack_off_cnt);
+			insn_buf[5] = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_CALL_IMM(arch_bpf_timed_may_goto));
+			insn_buf[6] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off_cnt);
+			cnt = 7;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			goto next_insn;
+		} else if (is_may_goto_insn(insn)) {
 			int stack_off = -stack_depth - 8;
 
 			stack_depth_extra = 8;
@@ -22044,23 +22071,32 @@ next_insn:
 
 	env->prog->aux->stack_depth = subprogs[0].stack_depth;
 	for (i = 0; i < env->subprog_cnt; i++) {
+		int delta = bpf_jit_supports_timed_may_goto() ? 2 : 1;
 		int subprog_start = subprogs[i].start;
 		int stack_slots = subprogs[i].stack_extra / 8;
+		int slots = delta, cnt = 0;
 
 		if (!stack_slots)
 			continue;
-		if (stack_slots > 1) {
+		/* We need two in case timed may_goto is supported. */
+		if (stack_slots > slots) {
 			verbose(env, "verifier bug: stack_slots supports may_goto only\n");
 			return -EFAULT;
 		}
 
-		/* Add ST insn to subprog prologue to init extra stack */
-		insn_buf[0] = BPF_ST_MEM(BPF_DW, BPF_REG_FP,
-					 -subprogs[i].stack_depth, BPF_MAX_LOOPS);
+		if (bpf_jit_supports_timed_may_goto()) {
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -subprogs[i].stack_depth,
+						     BPF_MAX_TIMED_LOOPS);
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -subprogs[i].stack_depth + 8, 0);
+		} else {
+			/* Add ST insn to subprog prologue to init extra stack */
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -subprogs[i].stack_depth,
+						     BPF_MAX_LOOPS);
+		}
 		/* Copy first actual insn to preserve it */
-		insn_buf[1] = env->prog->insnsi[subprog_start];
+		insn_buf[cnt++] = env->prog->insnsi[subprog_start];
 
-		new_prog = bpf_patch_insn_data(env, subprog_start, insn_buf, 2);
+		new_prog = bpf_patch_insn_data(env, subprog_start, insn_buf, cnt);
 		if (!new_prog)
 			return -ENOMEM;
 		env->prog = prog = new_prog;
@@ -22070,7 +22106,7 @@ next_insn:
 		 * to insn after BPF_ST that inits may_goto count.
 		 * Adjustment will succeed because bpf_patch_insn_data() didn't fail.
 		 */
-		WARN_ON(adjust_jmp_off(env->prog, subprog_start, 1));
+		WARN_ON(adjust_jmp_off(env->prog, subprog_start, delta));
 	}
 
 	/* Since poke tab is now finalized, publish aux to tracker. */
