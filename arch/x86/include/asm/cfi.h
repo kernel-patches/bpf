@@ -109,15 +109,19 @@ enum bug_trap_type handle_cfi_failure(struct pt_regs *regs);
 extern u32 cfi_bpf_hash;
 extern u32 cfi_bpf_subprog_hash;
 
+#ifdef CONFIG_CALL_PADDING
+#define FINEIBT_INSN_OFFSET	16
+#define CFI_INSN_OFFSET		CONFIG_FUNCTION_ALIGNMENT
+#else
+#define CFI_INSN_OFFSET		5
+#endif
+
 static inline int cfi_get_offset(void)
 {
 	switch (cfi_mode) {
 	case CFI_FINEIBT:
-		return 16;
 	case CFI_KCFI:
-		if (IS_ENABLED(CONFIG_CALL_PADDING))
-			return 16;
-		return 5;
+		return CFI_INSN_OFFSET;
 	default:
 		return 0;
 	}

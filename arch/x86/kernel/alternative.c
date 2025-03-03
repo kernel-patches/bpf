@@ -908,7 +908,7 @@ void __init_or_module noinline apply_seal_endbr(s32 *start, s32 *end, struct mod
 
 		poison_endbr(addr, wr_addr, true);
 		if (IS_ENABLED(CONFIG_FINEIBT))
-			poison_cfi(addr - 16, wr_addr - 16);
+			poison_cfi(addr, wr_addr);
 	}
 }
 
@@ -974,12 +974,15 @@ u32 cfi_get_func_hash(void *func)
 {
 	u32 hash;
 
-	func -= cfi_get_offset();
 	switch (cfi_mode) {
+#ifdef CONFIG_FINEIBT
 	case CFI_FINEIBT:
+		func -= FINEIBT_INSN_OFFSET;
 		func += 7;
 		break;
+#endif
 	case CFI_KCFI:
+		func -= CFI_INSN_OFFSET;
 		func += 1;
 		break;
 	default:
@@ -1068,7 +1071,7 @@ early_param("cfi", cfi_parse_cmdline);
  *
  * caller:					caller:
  *	movl	$(-0x12345678),%r10d	 // 6	     movl   $0x12345678,%r10d	// 6
- *	addl	$-15(%r11),%r10d	 // 4	     sub    $16,%r11		// 4
+ *	addl	$-15(%r11),%r10d	 // 4	     sub    $FINEIBT_INSN_OFFSET,%r11 // 4
  *	je	1f			 // 2	     nop4			// 4
  *	ud2				 // 2
  * 1:	call	__x86_indirect_thunk_r11 // 5	     call   *%r11; nop2;	// 5
@@ -1092,10 +1095,14 @@ extern u8 fineibt_preamble_end[];
 #define fineibt_preamble_size (fineibt_preamble_end - fineibt_preamble_start)
 #define fineibt_preamble_hash 7
 
+#define ___OFFSET_STR(x)	#x
+#define __OFFSET_STR(x)		___OFFSET_STR(x)
+#define OFFSET_STR		__OFFSET_STR(FINEIBT_INSN_OFFSET)
+
 asm(	".pushsection .rodata			\n"
 	"fineibt_caller_start:			\n"
 	"	movl	$0x12345678, %r10d	\n"
-	"	sub	$16, %r11		\n"
+	"	sub	$"OFFSET_STR", %r11	\n"
 	ASM_NOP4
 	"fineibt_caller_end:			\n"
 	".popsection				\n"
@@ -1225,6 +1232,7 @@ static int cfi_rewrite_preamble(s32 *start, s32 *end, struct module *mod)
 			 addr, addr, 5, addr))
 			return -EINVAL;
 
+		wr_addr += (CFI_INSN_OFFSET - FINEIBT_INSN_OFFSET);
 		text_poke_early(wr_addr, fineibt_preamble_start, fineibt_preamble_size);
 		WARN_ON(*(u32 *)(wr_addr + fineibt_preamble_hash) != 0x12345678);
 		text_poke_early(wr_addr + fineibt_preamble_hash, &hash, 4);
@@ -1241,7 +1249,8 @@ static void cfi_rewrite_endbr(s32 *start, s32 *end, struct module *mod)
 		void *addr = (void *)s + *s;
 		void *wr_addr = module_writable_address(mod, addr);
 
-		poison_endbr(addr + 16, wr_addr + 16, false);
+		poison_endbr(addr + CFI_INSN_OFFSET, wr_addr + CFI_INSN_OFFSET,
+			     false);
 	}
 }
 
@@ -1347,12 +1356,12 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 		return;
 
 	case CFI_FINEIBT:
-		/* place the FineIBT preamble at func()-16 */
+		/* place the FineIBT preamble at func()-FINEIBT_INSN_OFFSET */
 		ret = cfi_rewrite_preamble(start_cfi, end_cfi, mod);
 		if (ret)
 			goto err;
 
-		/* rewrite the callers to target func()-16 */
+		/* rewrite the callers to target func()-FINEIBT_INSN_OFFSET */
 		ret = cfi_rewrite_callers(start_retpoline, end_retpoline, mod);
 		if (ret)
 			goto err;
@@ -1381,6 +1390,8 @@ static void poison_cfi(void *addr, void *wr_addr)
 {
 	switch (cfi_mode) {
 	case CFI_FINEIBT:
+		addr -= FINEIBT_INSN_OFFSET;
+		wr_addr -= FINEIBT_INSN_OFFSET;
 		/*
 		 * __cfi_\func:
 		 *	osp nopl (%rax)
@@ -1394,6 +1405,8 @@ static void poison_cfi(void *addr, void *wr_addr)
 		break;
 
 	case CFI_KCFI:
+		addr -= CFI_INSN_OFFSET;
+		wr_addr -= CFI_INSN_OFFSET;
 		/*
 		 * __cfi_\func:
 		 *	movl	$0, %eax
