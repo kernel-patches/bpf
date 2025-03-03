@@ -78,7 +78,7 @@ jobs:
       arch: ${{ inputs.arch }}
       toolchain_full: ${{ inputs.toolchain_full }}
       toolchain: ${{ inputs.toolchain }}
-      runs_on: ${{ inputs.runs_on }}
+      runs_on: ${{ inputs.build_runs_on }}
       llvm-version: ${{ inputs.llvm-version }}
       kernel: ${{ inputs.kernel }}
       download_sources: ${{ inputs.download_sources }}

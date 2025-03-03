@@ -42,22 +42,44 @@ on:
 jobs:
   build:
     name: build for ${{ inputs.arch }} with ${{ inputs.toolchain_full }}${{ inputs.release && '-O2' || '' }}
-    runs-on: ${{ fromJSON(inputs.runs_on) }}
-    timeout-minutes: 100
+    # To run on CodeBuild, runs-on value must correspond to the AWS
+    # CodeBuild project associated with the kernel-patches webhook
+    runs-on: >-
+      ${{
+          github.repository_owner == 'kernel-patches'
+          && format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt)
+          || fromJSON(inputs.runs_on)
+      }}
     env:
         ARTIFACTS_ARCHIVE: "vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst"
         BPF_NEXT_BASE_BRANCH: 'master'
         BPF_NEXT_FETCH_DEPTH: 64 # A bit of history is needed to facilitate incremental builds
+        CROSS_COMPILE: ${{ inputs.arch != 'x86_64' && 'true' || '' }}
         # BUILD_SCHED_EXT_SELFTESTS: ${{ inputs.arch == 'x86_64' || inputs.arch == 'aarch64' && 'true' || '' }}
         KBUILD_OUTPUT: ${{ github.workspace }}/kbuild-output
         KERNEL: ${{ inputs.kernel }}
         KERNEL_ROOT: ${{ github.workspace }}
         REPO_PATH: ""
         REPO_ROOT: ${{ github.workspace }}
+        RUNNER_TYPE: ${{ github.repository_owner == 'kernel-patches' && 'codebuild' || 'default' }}
     steps:
+      # Only checkout the CI scripts first
       - uses: actions/checkout@v4
         with:
-          fetch-depth: ${{ inputs.download_sources && 1 || env.BPF_NEXT_FETCH_DEPTH }}
+          sparse-checkout: |
+            .github
+            ci
+
+      - if: ${{ env.RUNNER_TYPE == 'codebuild' }}
+        shell: bash
+        run: .github/scripts/tmpfsify-workspace.sh
+
+      # Now fetch entire repo
+      - if: ${{ ! inputs.download_sources }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ env.BPF_NEXT_FETCH_DEPTH }}
+
       - if: ${{ inputs.download_sources }}
         name: Download bpf-next tree
         env:
@@ -97,6 +119,18 @@ jobs:
           arch: ${{ inputs.arch }}
           llvm-version: ${{ inputs.llvm-version }}
           pahole: master
+
+        # We have to setup qemu+binfmt in order to enable cross-compation of selftests.
+        # During selftests build, freshly built bpftool is executed.
+        # On self-hosted bare-metal hosts binfmt is pre-configured.
+      - if: ${{ env.RUNNER_TYPE == 'codebuild' && env.CROSS_COMPILE }}
+        name: Set up docker
+        uses: docker/setup-docker-action@v4
+      - if: ${{ env.RUNNER_TYPE == 'codebuild' && env.CROSS_COMPILE }}
+        name: Setup binfmt and qemu
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v9.2.0
 
       - name: Build kernel image
         uses: libbpf/ci/build-linux@v3
