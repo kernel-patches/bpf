@@ -58,6 +58,7 @@ struct bench {
 	void (*measure)(struct bench_res* res);
 	void (*report_progress)(int iter, struct bench_res* res, long delta_ns);
 	void (*report_final)(struct bench_res res[], int res_cnt);
+	void (*cleanup)(void);
 };
 
 struct counter {

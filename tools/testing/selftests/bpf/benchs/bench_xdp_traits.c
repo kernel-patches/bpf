@@ -57,7 +57,18 @@ static void trait_validate(void)
 
 static void trait_setup(void)
 {
-	int err;
+	int err, i, key;
+	union bpf_attr attr;
+
+	/* Register all keys so we can use them all. */
+	bzero(&attr, sizeof(attr));
+	for (i = 0; i < 64; i++) {
+		key = syscall(__NR_bpf, BPF_REGISTER_TRAIT, &attr, sizeof(attr));
+		if (key < 0) {
+			fprintf(stderr, "couldn't register trait: %d\n", key);
+			exit(1);
+		}
+	}
 
 	setup_libbpf();
 
@@ -74,6 +85,23 @@ static void trait_setup(void)
 		fprintf(stderr, "failed to load skeleton\n");
 		bench_xdp_traits__destroy(ctx.skel);
 		exit(1);
+	}
+}
+
+static void trait_cleanup(void)
+{
+	int err, i;
+	union bpf_attr attr;
+
+	/* Unregister all keys so we can run again. */
+	bzero(&attr, sizeof(attr));
+	for (i = 0; i < 64; i++) {
+		attr.unregister_trait.trait = i;
+		err = syscall(__NR_bpf, BPF_UNREGISTER_TRAIT, &attr, sizeof(attr));
+		if (err < 0) {
+			fprintf(stderr, "couldn't unregister trait %d: %d\n", i, err);
+			exit(1);
+		}
 	}
 }
 
@@ -135,6 +163,7 @@ const struct bench bench_xdp_trait_get = {
 	.measure = trait_measure,
 	.report_progress = ops_report_progress,
 	.report_final = ops_report_final,
+	.cleanup = trait_cleanup,
 };
 
 const struct bench bench_xdp_trait_set = {
@@ -146,6 +175,7 @@ const struct bench bench_xdp_trait_set = {
 	.measure = trait_measure,
 	.report_progress = ops_report_progress,
 	.report_final = ops_report_final,
+	.cleanup = trait_cleanup,
 };
 
 const struct bench bench_xdp_trait_move = {
@@ -157,4 +187,5 @@ const struct bench bench_xdp_trait_move = {
 	.measure = trait_measure,
 	.report_progress = ops_report_progress,
 	.report_final = ops_report_final,
+	.cleanup = trait_cleanup,
 };

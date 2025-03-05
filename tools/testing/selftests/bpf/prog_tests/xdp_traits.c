@@ -6,8 +6,16 @@ static void _test_xdp_traits(void)
 {
 	const char *file = "./test_xdp_traits.bpf.o";
 	struct bpf_object *obj;
-	int err, prog_fd;
+	int err, prog_fd, i, key;
 	char buf[128];
+	union bpf_attr attr;
+
+	/* Register all keys so we can use them all. */
+	bzero(&attr, sizeof(attr));
+	for (i = 0; i < 64; i++) {
+		key = syscall(__NR_bpf, BPF_REGISTER_TRAIT, &attr, sizeof(attr));
+		ASSERT_OK_FD(key, "test_xdp_traits");
+	}
 
 	LIBBPF_OPTS(bpf_test_run_opts, topts,
 		.data_in = &pkt_v4,
@@ -26,6 +34,14 @@ static void _test_xdp_traits(void)
 	ASSERT_EQ(topts.retval, XDP_PASS, "retval");
 
 	bpf_object__close(obj);
+
+	/* Unregister all keys so we can run again. */
+	bzero(&attr, sizeof(attr));
+	for (i = 0; i < 64; i++) {
+		attr.unregister_trait.trait = i;
+		err = syscall(__NR_bpf, BPF_UNREGISTER_TRAIT, &attr, sizeof(attr));
+		ASSERT_OK(err, "test_xdp_traits");
+	}
 }
 
 void test_xdp_traits(void)

@@ -752,5 +752,8 @@ int main(int argc, char **argv)
 		bench->report_final(state.results + env.warmup_sec,
 				    state.res_cnt - env.warmup_sec);
 
+	if (bench->cleanup)
+		bench->cleanup();
+
 	return 0;
 }
