@@ -1190,6 +1190,7 @@ static struct sk_buff *virtnet_receive_xsk_small(struct net_device *dev, struct 
 						 struct virtnet_rq_stats *stats)
 {
 	struct bpf_prog *prog;
+	struct sk_buff *skb;
 	u32 ret;
 
 	ret = XDP_PASS;
@@ -1201,7 +1202,9 @@ static struct sk_buff *virtnet_receive_xsk_small(struct net_device *dev, struct 
 
 	switch (ret) {
 	case XDP_PASS:
-		return xsk_construct_skb(rq, xdp);
+		skb = xsk_construct_skb(rq, xdp);
+		xdp_buff_update_skb(xdp, skb);
+		return skb;
 
 	case XDP_TX:
 	case XDP_REDIRECT:
@@ -1323,6 +1326,7 @@ static struct sk_buff *virtnet_receive_xsk_merge(struct net_device *dev, struct 
 		skb = xsk_construct_skb(rq, xdp);
 		if (!skb)
 			goto drop_bufs;
+		xdp_buff_update_skb(xdp, skb);
 
 		if (xsk_append_merge_buffer(vi, rq, skb, num_buf, hdr, stats)) {
 			dev_kfree_skb(skb);
@@ -1956,6 +1960,7 @@ static struct sk_buff *receive_small_xdp(struct net_device *dev,
 	skb = virtnet_build_skb(buf, buflen, xdp.data - buf, len);
 	if (unlikely(!skb))
 		goto err;
+	xdp_buff_update_skb(&xdp, skb);
 
 	if (metasize)
 		skb_metadata_set(skb, metasize);
@@ -2324,6 +2329,7 @@ static struct sk_buff *receive_mergeable_xdp(struct net_device *dev,
 		head_skb = build_skb_from_xdp_buff(dev, vi, &xdp, xdp_frags_truesz);
 		if (unlikely(!head_skb))
 			break;
+		xdp_buff_update_skb(&xdp, head_skb);
 		return head_skb;
 
 	case XDP_TX:
