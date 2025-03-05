@@ -39,6 +39,7 @@
 #include <net/net_debug.h>
 #include <net/dropreason-core.h>
 #include <net/netmem.h>
+#include <net/trait.h>
 
 /**
  * DOC: skb checksums
@@ -729,6 +730,8 @@ enum skb_traits_type {
 	SKB_TRAITS_NONE,
 	/* Trait store in headroom, offset by sizeof(struct xdp_frame) */
 	SKB_TRAITS_AFTER_XDP,
+	/* Trait store at start of headroom */
+	SKB_TRAITS_AT_HEAD,
 };
 
 /**
@@ -1029,7 +1032,7 @@ struct sk_buff {
 	__u8			csum_not_inet:1;
 #endif
 	__u8			unreadable:1;
-	__u8			traits_type:1;	/* See enum skb_traits_type */
+	__u8			traits_type:2;	/* See enum skb_traits_type */
 #if defined(CONFIG_NET_SCHED) || defined(CONFIG_NET_XGRESS)
 	__u16			tc_index;	/* traffic control index */
 #endif
@@ -2836,6 +2839,18 @@ static inline void *pskb_pull(struct sk_buff *skb, unsigned int len)
 
 void skb_condense(struct sk_buff *skb);
 
+static inline void *skb_traits(const struct sk_buff *skb)
+{
+	switch (skb->traits_type) {
+	case SKB_TRAITS_AFTER_XDP:
+		return skb->head + _XDP_FRAME_SIZE;
+	case SKB_TRAITS_AT_HEAD:
+		return skb->head;
+	default:
+		return NULL;
+	}
+}
+
 /**
  *	skb_headroom - bytes at buffer head
  *	@skb: buffer to check
@@ -2844,7 +2859,13 @@ void skb_condense(struct sk_buff *skb);
  */
 static inline unsigned int skb_headroom(const struct sk_buff *skb)
 {
-	return skb->data - skb->head;
+	int trait_size = 0;
+	void *traits = skb_traits(skb);
+
+	if (traits)
+		trait_size = traits_size(traits);
+
+	return skb->data - skb->head - trait_size;
 }
 
 /**

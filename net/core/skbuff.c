@@ -1515,6 +1515,19 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	atomic_inc(&(skb_shinfo(skb)->dataref));
 	skb->cloned = 1;
 
+	/* traits would end up shared with the clone,
+	 * and edits would be reflected there.
+	 *
+	 * Is that ok? What if the original skb and the clone take different paths?
+	 * Does that even happen?
+	 *
+	 * If that's not ok, we could copy the traits and store them in an extension header
+	 * for clones.
+	 *
+	 * For now, pretend the clone doesn't have any traits.
+	 */
+	skb->traits_type = SKB_TRAITS_NONE;
+
 	return n;
 #undef C
 }
@@ -2170,7 +2183,7 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	unsigned int osize = skb_end_offset(skb);
 	unsigned int size = osize + nhead + ntail;
 	long off;
-	u8 *data;
+	u8 *data, *head;
 	int i;
 
 	BUG_ON(nhead < 0);
@@ -2187,10 +2200,18 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 		goto nodata;
 	size = SKB_WITH_OVERHEAD(size);
 
+	head = skb->head;
+	if (skb->traits_type != SKB_TRAITS_NONE) {
+		head = skb_traits(skb) + traits_size(skb_traits(skb));
+		/* struct xdp_frame isn't needed in the headroom, drop it */
+		memcpy(data, skb_traits(skb), traits_size(skb_traits(skb)));
+		skb->traits_type = SKB_TRAITS_AT_HEAD;
+	}
+
 	/* Copy only real data... and, alas, header. This should be
 	 * optimized for the cases when header is void.
 	 */
-	memcpy(data + nhead, skb->head, skb_tail_pointer(skb) - skb->head);
+	memcpy(data + nhead, head, skb_tail_pointer(skb) - head);
 
 	memcpy((struct skb_shared_info *)(data + size),
 	       skb_shinfo(skb),
