@@ -5,7 +5,6 @@
 #include <linux/ethtool.h>
 #include <linux/if_xdp.h>
 
-#include "../kselftest.h"
 #include "xsk.h"
 
 #ifndef SO_PREFER_BUSY_POLL
@@ -40,13 +39,6 @@ void xsk_fail(const char *msg, ...);
 #define skip_reason(x...) xsk_skip(x)
 #define fail_reason(x...) xsk_fail(x)
 
-static void __exit_with_error(int error, const char *file, const char *func, int line)
-{
-	ksft_test_result_fail("[%s:%s:%i]: ERROR: %d/\"%s\"\n", file, func, line, error,
-			      strerror(error));
-	ksft_exit_xfail();
-}
-#define exit_with_error(error) __exit_with_error(error, __FILE__, __func__, __LINE__)
 
 static inline u32 ceil_u32(u32 a, u32 b)
 {
