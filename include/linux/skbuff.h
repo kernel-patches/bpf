@@ -274,6 +274,9 @@
 			 SKB_DATA_ALIGN(sizeof(struct sk_buff)) +	\
 			 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
+/* From xdp.h, to avoid indirectly including skbuff.h */
+#define _XDP_FRAME_SIZE (40)
+
 struct ahash_request;
 struct net_device;
 struct scatterlist;
