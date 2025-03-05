@@ -5769,6 +5769,26 @@ static int token_create(union bpf_attr *attr)
 	return bpf_token_create(attr);
 }
 
+#define BPF_REGISTER_TRAIT_LAST_FIELD register_trait.flags
+
+static int register_trait(union bpf_attr *attr)
+{
+	if (CHECK_ATTR(BPF_REGISTER_TRAIT))
+		return -EINVAL;
+
+	return netns_bpf_trait_register(attr);
+}
+
+#define BPF_UNREGISTER_TRAIT_LAST_FIELD unregister_trait.trait
+
+static int unregister_trait(union bpf_attr *attr)
+{
+	if (CHECK_ATTR(BPF_UNREGISTER_TRAIT))
+		return -EINVAL;
+
+	return netns_bpf_trait_unregister(attr);
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -5904,6 +5924,12 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_TOKEN_CREATE:
 		err = token_create(&attr);
+		break;
+	case BPF_REGISTER_TRAIT:
+		err = register_trait(&attr);
+		break;
+	case BPF_UNREGISTER_TRAIT:
+		err = unregister_trait(&attr);
 		break;
 	default:
 		err = -EINVAL;

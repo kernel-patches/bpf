@@ -37,6 +37,7 @@
 #include <net/netns/smc.h>
 #include <net/netns/bpf.h>
 #include <net/netns/mctp.h>
+#include <net/netns/trait.h>
 #include <net/net_trackers.h>
 #include <linux/ns_common.h>
 #include <linux/idr.h>
@@ -193,6 +194,11 @@ struct net {
 	/* Move to a better place when the config guard is removed. */
 	struct mutex		rtnl_mutex;
 #endif
+	/* Traits probably shouldn't be per namespace - otherwise we'd have to explicitly clear
+	 * them. And packet tracing should work across namespaces.
+	 * I just didn't know where to put this.
+	 */
+	struct netns_traits traits;
 } __randomize_layout;
 
 #include <linux/seq_file_net.h>

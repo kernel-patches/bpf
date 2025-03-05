@@ -906,6 +906,21 @@ union bpf_iter_link_info {
  *		A new file descriptor (a nonnegative integer), or -1 if an
  *		error occurred (in which case, *errno* is set appropriately).
  *
+ * BPF_REGISTER_TRAIT
+ *	Description
+ *		Register a trait. Docs to make bpf_doc.py not error out.
+ *	Return
+ *		Registered trait key.
+ *
+ * BPF_UNREGISTER_TRAIT
+ *	Description
+ *		Unregister a trait. Needed so services registering traits
+ *		can restart.
+ *		But what happens if a trait is currently being used?
+ *		And to in flight packets?
+ *	Return
+ *		-1 if an error occurred.
+ *
  * NOTES
  *	eBPF objects (maps and programs) can be shared between processes.
  *
@@ -961,6 +976,8 @@ enum bpf_cmd {
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
 	BPF_TOKEN_CREATE,
+	BPF_REGISTER_TRAIT,
+	BPF_UNREGISTER_TRAIT,
 	__MAX_BPF_CMD,
 };
 
@@ -1840,6 +1857,15 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
+
+	struct { /* struct used by BPF_REGISTER_TRAIT command */
+		char		name[BPF_OBJ_NAME_LEN];
+		__u32		flags;
+	} register_trait;
+
+	struct { /* struct used by BPF_UNREGISTER_TRAIT command */
+		__u64		trait;
+	} unregister_trait;
 
 } __attribute__((aligned(8)));
 

@@ -30,6 +30,7 @@
 #include <net/xdp.h>
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
+#include <linux/bpf-netns.h>
 
 #include "disasm.h"
 
@@ -12007,6 +12008,8 @@ enum special_kfunc_type {
 	KF_bpf_iter_num_destroy,
 	KF_bpf_set_dentry_xattr,
 	KF_bpf_remove_dentry_xattr,
+	KF_bpf_xdp_trait_set,
+	KF_bpf_skb_trait_set,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -12040,6 +12043,8 @@ BTF_ID(func, bpf_iter_css_task_new)
 BTF_ID(func, bpf_set_dentry_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
 #endif
+BTF_ID(func, bpf_xdp_trait_set)
+BTF_ID(func, bpf_skb_trait_set)
 BTF_SET_END(special_kfunc_set)
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12096,6 +12101,8 @@ BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_ID_UNUSED
 BTF_ID_UNUSED
 #endif
+BTF_ID(func, bpf_xdp_trait_set)
+BTF_ID(func, bpf_skb_trait_set)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -13288,7 +13295,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 {
 	bool sleepable, rcu_lock, rcu_unlock, preempt_disable, preempt_enable;
 	u32 i, nargs, ptr_type_id, release_ref_obj_id;
-	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state *regs = cur_regs(env), *reg;
 	const char *func_name, *ptr_type_name;
 	const struct btf_type *t, *ptr_type;
 	struct bpf_kfunc_call_arg_meta meta;
@@ -13297,6 +13304,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	const struct btf_param *args;
 	const struct btf_type *ret_t;
 	struct btf *desc_btf;
+	struct net *net;
+	bool trait_used;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
@@ -13460,6 +13469,34 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			err = check_return_code(env, BPF_REG_1, "R1");
 			if (err < 0)
 				return err;
+		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_xdp_trait_set] ||
+	    meta.func_id == special_kfunc_list[KF_bpf_skb_trait_set]) {
+		reg = &cur_regs(env)[BPF_REG_2];
+		if (reg->type != SCALAR_VALUE || !tnum_is_const(reg->var_off)) {
+			verbose(env, "trait_set() key is not a known constant\n");
+			return -EINVAL;
+		}
+
+		if (reg->var_off.value > 63) {
+			verbose(env, "trait_set() key %llu invalid\n", reg->var_off.value);
+			return -EINVAL;
+		}
+
+		net = current->nsproxy->net_ns;
+		mutex_lock(&netns_bpf_mutex);
+		trait_used = net->traits.traits[reg->var_off.value].used;
+		mutex_unlock(&netns_bpf_mutex);
+
+		/* Checking in the verifier is good for runtime performance, but what happens if
+		 * a trait is unregistered?
+		 * Should we track which traits are used by BPF programs and prevent it?
+		 */
+		if (!trait_used) {
+			verbose(env, "trait_set() key %llu is not registered\n", reg->var_off.value);
+			return -EINVAL;
 		}
 	}
 

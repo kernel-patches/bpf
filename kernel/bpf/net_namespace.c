@@ -526,6 +526,60 @@ out_put_net:
 	return err;
 }
 
+int netns_bpf_trait_register(const union bpf_attr *attr)
+{
+	struct net *net;
+	int i;
+	int ret;
+
+	net = current->nsproxy->net_ns;
+	mutex_lock(&netns_bpf_mutex);
+
+	for (i = 0; i < 64; i++) {
+		if (net->traits.traits[i].used)
+			continue;
+
+		net->traits.traits[i].used = true;
+		net->traits.traits[i].flags = attr->register_trait.flags;
+		memcpy(net->traits.traits[i].name, attr->register_trait.name,
+				sizeof(attr->register_trait.name));
+
+		ret = i;
+		goto out_unlock;
+	}
+	ret = -ENOSPC;
+
+out_unlock:
+	mutex_unlock(&netns_bpf_mutex);
+
+	return ret;
+}
+
+int netns_bpf_trait_unregister(const union bpf_attr *attr)
+{
+	struct net *net;
+	int ret;
+
+	if (attr->unregister_trait.trait > 63)
+		return -EINVAL;
+
+	net = current->nsproxy->net_ns;
+	mutex_lock(&netns_bpf_mutex);
+
+	if (!net->traits.traits[attr->unregister_trait.trait].used) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	net->traits.traits[attr->unregister_trait.trait].used = false;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&netns_bpf_mutex);
+
+	return ret;
+}
+
 static int __net_init netns_bpf_pernet_init(struct net *net)
 {
 	int type;
