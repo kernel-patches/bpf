@@ -725,6 +725,12 @@ enum skb_tstamp_type {
 	__SKB_CLOCK_MAX = SKB_CLOCK_TAI,
 };
 
+enum skb_traits_type {
+	SKB_TRAITS_NONE,
+	/* Trait store in headroom, offset by sizeof(struct xdp_frame) */
+	SKB_TRAITS_AFTER_XDP,
+};
+
 /**
  * DOC: Basic sk_buff geometry
  *
@@ -1023,6 +1029,7 @@ struct sk_buff {
 	__u8			csum_not_inet:1;
 #endif
 	__u8			unreadable:1;
+	__u8			traits_type:1;	/* See enum skb_traits_type */
 #if defined(CONFIG_NET_SCHED) || defined(CONFIG_NET_XGRESS)
 	__u16			tc_index;	/* traffic control index */
 #endif
