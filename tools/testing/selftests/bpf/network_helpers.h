@@ -249,10 +249,13 @@ static inline __sum16 build_udp_v6_csum(const struct ipv6hdr *ip6h,
 
 struct tmonitor_ctx;
 
+typedef int (*tm_print_fn_t)(const char *format, va_list args);
+
 #ifdef TRAFFIC_MONITOR
 struct tmonitor_ctx *traffic_monitor_start(const char *netns, const char *test_name,
 					   const char *subtest_name);
 void traffic_monitor_stop(struct tmonitor_ctx *ctx);
+tm_print_fn_t traffic_monitor_set_print(tm_print_fn_t fn);
 #else
 static inline struct tmonitor_ctx *traffic_monitor_start(const char *netns, const char *test_name,
 							 const char *subtest_name)
@@ -262,6 +265,11 @@ static inline struct tmonitor_ctx *traffic_monitor_start(const char *netns, cons
 
 static inline void traffic_monitor_stop(struct tmonitor_ctx *ctx)
 {
+}
+
+static inline tm_print_fn_t traffic_monitor_set_print(tm_print_fn_t fn)
+{
+	return NULL;
 }
 #endif
 
