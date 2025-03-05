@@ -5247,6 +5247,7 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 		metalen = xdp->data - xdp->data_meta;
 		if (metalen)
 			skb_metadata_set(skb, metalen);
+		xdp_buff_update_skb(xdp, skb);
 		break;
 	}
 
