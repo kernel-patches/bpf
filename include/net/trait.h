@@ -7,6 +7,7 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/bitops.h>
+#include <linux/unaligned.h>
 
 /* Traits are a very limited KV store, with:
  * - 64 keys (0-63).
@@ -145,23 +146,23 @@ int trait_set(void *traits, void *hard_end, u64 key, const void *val, u64 len, u
 			memmove(traits + off + len, traits + off, traits_size(traits) - off);
 	}
 
-	/* Set our value. */
-	memcpy(traits + off, val, len);
-
-	/* Store our length in header. */
 	u64 encode_len = 0;
-
 	switch (len) {
 	case 2:
+		/* Values are least two bytes, so they'll be two byte aligned */
+		*(u16 *)(traits + off) = *(u16 *)val;
 		encode_len = 1;
 		break;
 	case 4:
+		put_unaligned(*(u32 *)val, (u32 *)(traits + off));
 		encode_len = 2;
 		break;
 	case 8:
+		put_unaligned(*(u64 *)val, (u64 *)(traits + off));
 		encode_len = 3;
 		break;
 	}
+
 	h->high |= (encode_len >> 1) << key;
 	h->low |= (encode_len & 1) << key;
 	return 0;
@@ -201,7 +202,19 @@ int trait_get(void *traits, u64 key, void *val, u64 val_len)
 	if (real_len > val_len)
 		return -ENOSPC;
 
-	memcpy(val, traits + off, real_len);
+	switch (real_len) {
+	case 2:
+		/* Values are least two bytes, so they'll be two byte aligned */
+		*(u16 *)val = *(u16 *)(traits + off);
+		break;
+	case 4:
+		*(u32 *)val = get_unaligned((u32 *)(traits + off));
+		break;
+	case 8:
+		*(u64 *)val = get_unaligned((u64 *)(traits + off));
+		break;
+	}
+
 	return real_len;
 }
 
