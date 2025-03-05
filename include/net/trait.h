@@ -75,6 +75,40 @@ static __always_inline int __trait_offset(struct __trait_hdr h, u64 key)
 	return sizeof(struct __trait_hdr) + __trait_total_length(__trait_and(h, ~(~0llu << key)));
 }
 
+/* Avoid overhead of memmove() function call when possible. */
+static __always_inline void __trait_move(void *src, int off, size_t n)
+{
+	if (n == 0)
+		return;
+
+	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) || BITS_PER_LONG != 64) {
+		memmove(src + off, src, n);
+		return;
+	}
+
+	/* Need to move in reverse to handle overlap. */
+	if (off > 0)
+		src += n;
+
+#define ___trait_move(op) do { \
+		src -= (off > 0) ? sizeof(u##op) : 0; \
+		*(u##op *)(src + off) = *(u##op *)src; \
+		src += (off < 0) ? sizeof(u##op) : 0; \
+	} while (0)
+
+	for (int w = 0; w < n / 8; w++)
+		___trait_move(64);
+
+	if (n & 4)
+		___trait_move(32);
+
+	if (n & 2)
+		___trait_move(16);
+
+	if (n & 1)
+		___trait_move(8);
+}
+
 /**
  * traits_init() - Initialize a trait store.
  * @traits: Start of trait store area.
@@ -142,8 +176,7 @@ int trait_set(void *traits, void *hard_end, u64 key, const void *val, u64 len, u
 			return -ENOSPC;
 
 		/* Memmove all the kvs after us over. */
-		if (traits_size(traits) > off)
-			memmove(traits + off + len, traits + off, traits_size(traits) - off);
+		__trait_move(traits + off, len, traits_size(traits) - off);
 	}
 
 	u64 encode_len = 0;
@@ -244,8 +277,7 @@ static __always_inline int trait_del(void *traits, u64 key)
 	int len = __trait_total_length(__trait_and(*h, (1ull << key)));
 
 	/* Memmove all the kvs after us over */
-	if (traits_size(traits) > off + len)
-		memmove(traits + off, traits + off + len, traits_size(traits) - off - len);
+	__trait_move(traits + off + len, -len, traits_size(traits) - off - len);
 
 	/* Clear our length in header */
 	h->high &= ~(1ull << key);
