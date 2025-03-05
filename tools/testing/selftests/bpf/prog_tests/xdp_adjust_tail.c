@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include <bpf/btf.h>
 #include <network_helpers.h>
 
 static void test_xdp_adjust_tail_shrink(void)
@@ -41,21 +42,47 @@ static void test_xdp_adjust_tail_grow(void)
 {
 	const char *file = "./test_xdp_adjust_tail_grow.bpf.o";
 	struct bpf_object *obj;
-	char buf[4096]; /* avoid segfault: large buf to hold grow results */
+	struct btf *btf;
+	__u8 *buf;
 	__u32 expect_sz;
-	int err, prog_fd;
-	LIBBPF_OPTS(bpf_test_run_opts, topts,
-		.data_in = &pkt_v4,
-		.data_size_in = sizeof(pkt_v4),
-		.data_out = buf,
-		.data_size_out = sizeof(buf),
-		.repeat = 1,
-	);
+	int err, prog_fd, id, shinfo_size, map_fd;
+	int key = 0;
+	int page_size = sysconf(_SC_PAGESIZE);
+	int cache_linesize = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
 	if (!ASSERT_OK(err, "test_xdp_adjust_tail_grow"))
 		return;
 
+	btf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(btf))
+		return;
+
+	id = btf__find_by_name(btf, "skb_shared_info");
+	if (id < 0)
+		goto out;
+
+	shinfo_size = btf__resolve_size(btf, id);
+
+	map_fd = bpf_find_map(__func__, obj, "size");
+	if (map_fd < 0)
+		goto out;
+
+	bpf_map_update_elem(map_fd, &key, &shinfo_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &page_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &cache_linesize, BPF_ANY);
+
+	buf = malloc(page_size);
+
+	topts.data_in = &pkt_v4;
+	topts.data_size_in = sizeof(pkt_v4);
+	topts.data_out = buf;
+	topts.data_size_out = page_size;
+	topts.repeat = 1;
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 	ASSERT_OK(err, "ipv4");
 	ASSERT_EQ(topts.retval, XDP_DROP, "ipv4 retval");
@@ -63,45 +90,65 @@ static void test_xdp_adjust_tail_grow(void)
 	expect_sz = sizeof(pkt_v6) + 40; /* Test grow with 40 bytes */
 	topts.data_in = &pkt_v6;
 	topts.data_size_in = sizeof(pkt_v6);
-	topts.data_size_out = sizeof(buf);
+	topts.data_size_out = page_size;
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 	ASSERT_OK(err, "ipv6");
 	ASSERT_EQ(topts.retval, XDP_TX, "ipv6 retval");
 	ASSERT_EQ(topts.data_size_out, expect_sz, "ipv6 size");
 
+out:
 	bpf_object__close(obj);
+	btf__free(btf);
 }
 
 static void test_xdp_adjust_tail_grow2(void)
 {
 	const char *file = "./test_xdp_adjust_tail_grow.bpf.o";
-	char buf[4096]; /* avoid segfault: large buf to hold grow results */
+	__u8 *buf;
 	struct bpf_object *obj;
+	struct btf *btf;
 	int err, cnt, i;
-	int max_grow, prog_fd;
-	/* SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) */
-#if defined(__s390x__)
-	int tailroom = 512;
-#elif defined(__powerpc__)
-	int tailroom = 384;
-#else
-	int tailroom = 320;
-#endif
+	int max_grow, prog_fd, id, shinfo_size, map_fd, tailroom;
+	int key = 0;
+	int page_size = sysconf(_SC_PAGESIZE);
+	int cache_linesize = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
 
-	LIBBPF_OPTS(bpf_test_run_opts, tattr,
-		.repeat		= 1,
-		.data_in	= &buf,
-		.data_out	= &buf,
-		.data_size_in	= 0, /* Per test */
-		.data_size_out	= 0, /* Per test */
-	);
+	LIBBPF_OPTS(bpf_test_run_opts, tattr);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
 	if (!ASSERT_OK(err, "test_xdp_adjust_tail_grow"))
 		return;
 
+	btf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(btf))
+		return;
+
+	id = btf__find_by_name(btf, "skb_shared_info");
+	if (id < 0)
+		goto out;
+
+	shinfo_size = btf__resolve_size(btf, id);
+
+	/* SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) */
+	tailroom = __ALIGN_KERNEL(shinfo_size, cache_linesize);
+
+	map_fd = bpf_find_map(__func__, obj, "size");
+	if (map_fd < 0)
+		goto out;
+
+	bpf_map_update_elem(map_fd, &key, &shinfo_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &page_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &cache_linesize, BPF_ANY);
+
+	buf = malloc(page_size);
+
 	/* Test case-64 */
-	memset(buf, 1, sizeof(buf));
+	memset(buf, 1, page_size);
+	tattr.repeat = 1;
+	tattr.data_in = buf;
+	tattr.data_out = buf;
 	tattr.data_size_in  =  64; /* Determine test case via pkt size */
 	tattr.data_size_out = 128; /* Limit copy_size */
 	/* Kernel side alloc packet memory area that is zero init */
@@ -120,25 +167,30 @@ static void test_xdp_adjust_tail_grow2(void)
 	ASSERT_EQ(buf[191], 1, "case-64-data buf[191]");
 
 	/* Test case-128 */
-	memset(buf, 2, sizeof(buf));
+	memset(buf, 2, page_size);
+	tattr.repeat = 1;
+	tattr.data_in = buf;
+	tattr.data_out = buf;
 	tattr.data_size_in  = 128; /* Determine test case via pkt size */
-	tattr.data_size_out = sizeof(buf);   /* Copy everything */
+	tattr.data_size_out = page_size;   /* Copy everything */
 	err = bpf_prog_test_run_opts(prog_fd, &tattr);
 
-	max_grow = 4096 - XDP_PACKET_HEADROOM -	tailroom; /* 3520 */
+	max_grow = page_size - XDP_PACKET_HEADROOM - tailroom; /* 3520 */
 	ASSERT_OK(err, "case-128");
 	ASSERT_EQ(tattr.retval, XDP_TX, "case-128 retval");
 	ASSERT_EQ(tattr.data_size_out, max_grow, "case-128 data_size_out"); /* Expect max grow */
 
 	/* Extra checks for data content: Count grow size, will contain zeros */
-	for (i = 0, cnt = 0; i < sizeof(buf); i++) {
+	for (i = 0, cnt = 0; i < page_size; i++) {
 		if (buf[i] == 0)
 			cnt++;
 	}
 	ASSERT_EQ(cnt, max_grow - tattr.data_size_in, "case-128-data cnt"); /* Grow increase */
 	ASSERT_EQ(tattr.data_size_out, max_grow, "case-128-data data_size_out"); /* Total grow */
 
+out:
 	bpf_object__close(obj);
+	btf__free(btf);
 }
 
 static void test_xdp_adjust_frags_tail_shrink(void)
@@ -149,6 +201,7 @@ static void test_xdp_adjust_frags_tail_shrink(void)
 	struct bpf_object *obj;
 	int err, prog_fd;
 	__u8 *buf;
+
 	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
 	/* For the individual test cases, the first byte in the packet
@@ -214,12 +267,21 @@ static void test_xdp_adjust_frags_tail_grow(void)
 	__u32 exp_size;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	int err, i, prog_fd;
+	struct btf *btf;
+	int err, i, prog_fd, id, shinfo_size, map_fd;
+	int key = 0;
+	int page_size = sysconf(_SC_PAGESIZE);
+	int cache_linesize = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
 	__u8 *buf;
+
 	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
 	obj = bpf_object__open(file);
 	if (libbpf_get_error(obj))
+		return;
+
+	btf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(btf))
 		return;
 
 	prog = bpf_object__next_program(obj, NULL);
@@ -228,12 +290,27 @@ static void test_xdp_adjust_frags_tail_grow(void)
 
 	prog_fd = bpf_program__fd(prog);
 
-	buf = malloc(16384);
-	if (!ASSERT_OK_PTR(buf, "alloc buf 16Kb"))
+	id = btf__find_by_name(btf, "skb_shared_info");
+	if (id < 0)
+		goto out;
+
+	shinfo_size = btf__resolve_size(btf, id);
+	map_fd = bpf_find_map(__func__, obj, "size");
+	if (map_fd < 0)
+		goto out;
+
+	bpf_map_update_elem(map_fd, &key, &shinfo_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &page_size, BPF_ANY);
+	key++;
+	bpf_map_update_elem(map_fd, &key, &cache_linesize, BPF_ANY);
+
+	buf = malloc(4 * page_size);
+	if (!ASSERT_OK_PTR(buf, "alloc buf (4 x page size)Kb"))
 		goto out;
 
 	/* Test case add 10 bytes to last frag */
-	memset(buf, 1, 16384);
+	memset(buf, 1, 4 * page_size);
 	exp_size = 9000 + 10;
 
 	topts.data_in = buf;
@@ -256,12 +333,12 @@ static void test_xdp_adjust_frags_tail_grow(void)
 		ASSERT_EQ(buf[i], 1, "9Kb+10b-untouched");
 
 	/* Test a too large grow */
-	memset(buf, 1, 16384);
-	exp_size = 9001;
+	memset(buf, 1, 4 * page_size);
+	exp_size = 2 * page_size + 1;
 
 	topts.data_in = topts.data_out = buf;
-	topts.data_size_in = 9001;
-	topts.data_size_out = 16384;
+	topts.data_size_in = 2 * page_size + 1;
+	topts.data_size_out = 4 * page_size;
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 
 	ASSERT_OK(err, "9Kb+10b");
@@ -271,6 +348,7 @@ static void test_xdp_adjust_frags_tail_grow(void)
 	free(buf);
 out:
 	bpf_object__close(obj);
+	btf__free(btf);
 }
 
 void test_xdp_adjust_tail(void)
