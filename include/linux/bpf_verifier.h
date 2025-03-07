@@ -591,6 +591,7 @@ struct bpf_insn_aux_data {
 	 * accepts callback function as a parameter.
 	 */
 	bool calls_callback;
+	u32 scc;
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
 };

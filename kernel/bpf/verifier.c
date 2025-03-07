@@ -23716,6 +23716,10 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 	if (env->log.level & BPF_LOG_LEVEL2) {
 		verbose(env, "Live regs before insn:\n");
 		for (i = 0; i < insn_cnt; ++i) {
+			if (env->insn_aux_data[i].scc)
+				verbose(env, "%3d ", env->insn_aux_data[i].scc);
+			else
+				verbose(env, "    ");
 			verbose(env, "%3d: ", i);
 			for (j = BPF_REG_0; j < BPF_REG_10; ++j)
 				if (insn_aux[i].live_regs_before & BIT(j))
@@ -23734,6 +23738,91 @@ out:
 	kvfree(env->cfg.insn_postorder);
 	env->cfg.insn_postorder = NULL;
 	env->cfg.cur_postorder = 0;
+	return err;
+}
+
+/* Compute strongly connected components on the CFG.
+ * For each instruction assign its SCC number in env->insn_aux[*].scc.
+ * If instruction is a sole member of its SCC assume SCC number of zero.
+ * Use Tarjan's algorithm for SCC computation adapted to run non-recursively.
+ * CFG is implicitly defined by insn_successors() function.
+ */
+static int compute_scc(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	const u32 insn_cnt = env->prog->len;
+	int stack_sz, dfs_sz, err = 0;
+	u32 succ_cnt, i, j, t, w;
+	u32 *stack, *pre, *low;
+	u32 next_preorder_num;
+	u32 next_scc_id;
+	bool assign_scc;
+	u32 succ[2];
+	struct {
+		u32 on_stack:1;
+		u32 idx:31;
+	} *dfs;
+
+	next_preorder_num = 1;
+	next_scc_id = 1;
+	stack = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
+	pre = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
+	low = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
+	dfs = kvcalloc(insn_cnt, sizeof(*dfs), GFP_KERNEL);
+	if (!stack || !pre || !low || !dfs) {
+		err = -ENOMEM;
+		goto exit;
+	}
+	/* TODO: describe the algorithm a bit */
+	for (i = 0; i < insn_cnt; i++) {
+		if (pre[i])
+			continue;
+		stack_sz = 0;
+		dfs_sz = 1;
+		dfs[0].on_stack = false;
+		dfs[0].idx = i;
+dfs_continue:
+		while (dfs_sz) {
+			w = dfs[dfs_sz - 1].idx;
+			if (!dfs[dfs_sz - 1].on_stack) {
+				low[w] = next_preorder_num;
+				pre[w] = next_preorder_num;
+				next_preorder_num++;
+				stack[stack_sz++] = w;
+				dfs[dfs_sz - 1].on_stack = true;
+			}
+			succ_cnt = insn_successors(env->prog, w, succ);
+			for (j = 0; j < succ_cnt; ++j) {
+				if (pre[succ[j]]) {
+					low[w] = min(low[w], low[succ[j]]);
+				} else {
+					dfs[dfs_sz].idx = succ[j];
+					dfs[dfs_sz].on_stack = false;
+					dfs_sz++;
+					goto dfs_continue;
+				}
+			}
+			if (low[w] < pre[w]) {
+				dfs_sz--;
+				goto dfs_continue;
+			}
+			assign_scc = stack[stack_sz - 1] != w;
+			do {
+				t = stack[--stack_sz];
+				low[t] = insn_cnt + 1;
+				if (assign_scc)
+					aux[t].scc = next_scc_id;
+			} while (t != w);
+			if (assign_scc)
+				next_scc_id++;
+			dfs_sz--;
+		}
+	}
+exit:
+	kvfree(stack);
+	kvfree(pre);
+	kvfree(low);
+	kvfree(dfs);
 	return err;
 }
 
@@ -23856,6 +23945,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 
 	ret = check_attach_btf_id(env);
 	if (ret)
+		goto skip_full_check;
+
+	ret = compute_scc(env);
+	if (ret < 0)
 		goto skip_full_check;
 
 	ret = compute_live_registers(env);
