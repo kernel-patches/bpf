@@ -6145,6 +6145,8 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off, int size,
 			    enum bpf_access_type t, struct bpf_insn_access_aux *info)
 {
+	char symname[KSYM_NAME_LEN];
+
 	if (env->ops->is_valid_access &&
 	    env->ops->is_valid_access(off, size, t, env->prog, info)) {
 		/* A non zero info.ctx_field_size indicates that this field is a
@@ -6170,7 +6172,9 @@ static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off,
 		return 0;
 	}
 
-	verbose(env, "invalid bpf_context access off=%d size=%d\n", off, size);
+	(void)lookup_symbol_name((unsigned long)env->ops->is_valid_access, symname);
+	verbose(env, "invalid bpf_context access off=%d size=%d is_valid_access=%s\n",
+		off, size, symname);
 	return -EACCES;
 }
 
