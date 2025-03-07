@@ -269,6 +269,35 @@ static unsigned long elf_sym_offset(struct elf_sym *sym)
 	return sym->sym.st_value - sym->sh.sh_addr + sym->sh.sh_offset;
 }
 
+/* Transform symbol's virtual address (absolute for binaries and relative
+ * for shared libs) into file offset, which is what kernel is expecting
+ * for uprobe/uretprobe attachment.
+ * See Documentation/trace/uprobetracer.rst for more details. This is done
+ * by looking up symbol's containing program header and using its virtual
+ * address (p_vaddr) and corresponding file offset (p_offset) to transform
+ * sym.st_value (virtual address) into desired final file offset.
+ */
+static unsigned long elf_sym_offset_uprobe(Elf *elf, struct elf_sym *sym)
+{
+	size_t nhdrs, i;
+	GElf_Phdr phdr;
+
+	if (elf_getphdrnum(elf, &nhdrs))
+		return -1;
+
+	for (i = 0; i < nhdrs; i++) {
+		if (!gelf_getphdr(elf, (int)i, &phdr))
+			continue;
+		if (phdr.p_type != PT_LOAD || !(phdr.p_flags & PF_X))
+			continue;
+		if (sym->sym.st_value >= phdr.p_vaddr &&
+		    sym->sym.st_value < (phdr.p_vaddr + phdr.p_memsz))
+			return sym->sym.st_value - phdr.p_vaddr + phdr.p_offset;
+	}
+
+	return -1;
+}
+
 /* Find offset of function name in the provided ELF object. "binary_path" is
  * the path to the ELF binary represented by "elf", and only used for error
  * reporting matters. "name" matches symbol name or name@@LIB for library
@@ -329,7 +358,7 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 
 			if (ret > 0) {
 				/* handle multiple matches */
-				if (elf_sym_offset(sym) == ret) {
+				if (elf_sym_offset_uprobe(elf, sym) == ret) {
 					/* same offset, no problem */
 					continue;
 				} else if (last_bind != STB_WEAK && cur_bind != STB_WEAK) {
@@ -346,7 +375,7 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 				}
 			}
 
-			ret = elf_sym_offset(sym);
+			ret = elf_sym_offset_uprobe(elf, sym);
 			last_bind = cur_bind;
 		}
 		if (ret > 0)
