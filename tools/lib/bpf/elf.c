@@ -260,13 +260,29 @@ static bool symbol_match(struct elf_sym_iter *iter, int sh_type, struct elf_sym 
  * for shared libs) into file offset, which is what kernel is expecting
  * for uprobe/uretprobe attachment.
  * See Documentation/trace/uprobetracer.rst for more details. This is done
- * by looking up symbol's containing section's header and using iter's virtual
- * address (sh_addr) and corresponding file offset (sh_offset) to transform
+ * by looking up symbol's containing program header and using its virtual
+ * address (p_vaddr) and corresponding file offset (p_offset) to transform
  * sym.st_value (virtual address) into desired final file offset.
  */
-static unsigned long elf_sym_offset(struct elf_sym *sym)
+static unsigned long elf_sym_offset(Elf *elf, struct elf_sym *sym)
 {
-	return sym->sym.st_value - sym->sh.sh_addr + sym->sh.sh_offset;
+	size_t nhdrs, i;
+	GElf_Phdr phdr;
+
+	if (elf_getphdrnum(elf, &nhdrs))
+		return -1;
+
+	for (i = 0; i < nhdrs; i++) {
+		if (!gelf_getphdr(elf, (int)i, &phdr))
+			continue;
+		if (phdr.p_type != PT_LOAD || !(phdr.p_flags & PF_X))
+			continue;
+		if (sym->sym.st_value >= phdr.p_vaddr &&
+		    sym->sym.st_value < (phdr.p_vaddr + phdr.p_memsz))
+			return sym->sym.st_value - phdr.p_vaddr + phdr.p_offset;
+	}
+
+	return -1;
 }
 
 /* Find offset of function name in the provided ELF object. "binary_path" is
@@ -329,7 +345,7 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 
 			if (ret > 0) {
 				/* handle multiple matches */
-				if (elf_sym_offset(sym) == ret) {
+				if (elf_sym_offset(elf, sym) == ret) {
 					/* same offset, no problem */
 					continue;
 				} else if (last_bind != STB_WEAK && cur_bind != STB_WEAK) {
@@ -346,7 +362,7 @@ long elf_find_func_offset(Elf *elf, const char *binary_path, const char *name)
 				}
 			}
 
-			ret = elf_sym_offset(sym);
+			ret = elf_sym_offset(elf, sym);
 			last_bind = cur_bind;
 		}
 		if (ret > 0)
@@ -445,7 +461,7 @@ int elf_resolve_syms_offsets(const char *binary_path, int cnt,
 			goto out;
 
 		while ((sym = elf_sym_iter_next(&iter))) {
-			unsigned long sym_offset = elf_sym_offset(sym);
+			unsigned long sym_offset = elf_sym_offset(elf_fd.elf, sym);
 			int bind = GELF_ST_BIND(sym->sym.st_info);
 			struct symbol *found, tmp = {
 				.name = sym->name,
@@ -534,7 +550,7 @@ int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 			if (err)
 				goto out;
 
-			offsets[cnt++] = elf_sym_offset(sym);
+			offsets[cnt++] = elf_sym_offset(elf_fd.elf, sym);
 		}
 
 		/* If we found anything in the first symbol section,
