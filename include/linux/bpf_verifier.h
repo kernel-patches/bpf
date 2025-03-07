@@ -432,16 +432,6 @@ struct bpf_verifier_state {
 	/* first and last insn idx of this verifier state */
 	u32 first_insn_idx;
 	u32 last_insn_idx;
-	/* If this state is a part of states loop this field points to some
-	 * parent of this state such that:
-	 * - it is also a member of the same states loop;
-	 * - DFS states traversal starting from initial state visits loop_entry
-	 *   state before this state.
-	 * Used to compute topmost loop entry for state loops.
-	 * State loops might appear because of open coded iterators logic.
-	 * See get_loop_entry() for more information.
-	 */
-	struct bpf_verifier_state *loop_entry;
 	/* Sub-range of env->insn_hist[] corresponding to this state's
 	 * instruction history.
 	 * Backtracking is using it to go from last to first.
@@ -453,11 +443,7 @@ struct bpf_verifier_state {
 	u32 dfs_depth;
 	u32 callback_unroll_depth;
 	u32 may_goto_depth;
-	/* If this state was ever pointed-to by other state's loop_entry field
-	 * this flag would be set to true. Used to avoid freeing such states
-	 * while they are still in use.
-	 */
-	u32 used_as_loop_entry;
+	u32 scc_visit_count;
 };
 
 #define bpf_get_spilled_reg(slot, frame, mask)				\
@@ -591,6 +577,7 @@ struct bpf_insn_aux_data {
 	 * accepts callback function as a parameter.
 	 */
 	bool calls_callback;
+	/* CFG strongly connected component this instruction belongs to */
 	u32 scc;
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
@@ -701,6 +688,29 @@ struct bpf_idset {
 	u32 ids[BPF_ID_MAP_SIZE];
 };
 
+/* Information tracked for CFG strongly connected components */
+struct bpf_scc_info {
+	/* True if states_equal(... RANGE_WITHIN) ever returned
+         * true for a state with insn_idx in this SCC.
+	 * E.g. for iterator next call.
+	 * Meaning that read and precision marks are incomplete for
+	 * states with insn_idx in this SCC.
+	 */
+	u32 incomplete_read_marks:1;
+	/* Number of verifier states with .branches > 0 that have
+	 * state->parent->insn_idx in this SCC.
+	 * In other words, number of yet to be fully explored states
+	 * originating in this SCC.
+	 */
+	u32 branches:31;
+	/* Number of times this SCC was entered by some verifier state
+	 * and that state was fully explored.
+	 * In other words, number of times .branches became non-zero
+	 * and then zero again.
+	 */
+	u32 visit_count;
+};
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -793,6 +803,8 @@ struct bpf_verifier_env {
 	u64 prev_log_pos, prev_insn_print_pos;
 	/* buffer used to temporary hold constants as scalar registers */
 	struct bpf_reg_state fake_reg[2];
+	struct bpf_scc_info *scc_info;
+	u32 num_sccs;
 	/* buffer used to generate temporary string representations,
 	 * e.g., in reg_type_str() to generate reg_type string
 	 */
