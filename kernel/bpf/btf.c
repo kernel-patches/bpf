@@ -7123,8 +7123,8 @@ error:
 
 			if (msize != size || off != moff) {
 				bpf_log(log,
-					"cannot access ptr member %s with moff %u in struct %s with off %u size %u\n",
-					mname, moff, tname, off, size);
+					"cannot access ptr member %s with moff %u msize %u in struct %s with off %u size %u\n",
+					mname, moff, msize, tname, off, size);
 				return -EACCES;
 			}
 
