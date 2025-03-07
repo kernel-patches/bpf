@@ -143,10 +143,10 @@ static void sock_map_del_link(struct sock *sk,
 			      struct sk_psock *psock, void *link_raw)
 {
 	bool strp_stop = false, verdict_stop = false;
-	struct sk_psock_link *link, *tmp;
+	struct sk_psock_link *link;
 
 	spin_lock_bh(&psock->link_lock);
-	list_for_each_entry_safe(link, tmp, &psock->link, list) {
+	list_for_each_entry(link, &psock->link, list) {
 		if (link->link_raw == link_raw) {
 			struct bpf_map *map = link->map;
 			struct sk_psock_progs *progs = sock_map_progs(map);
