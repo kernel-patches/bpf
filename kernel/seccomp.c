@@ -750,12 +750,20 @@ static bool seccomp_is_const_allow(struct sock_fprog_kern *fprog,
 		return false;
 
 	/* Our single exception to filtering. */
-#ifdef __NR_uretprobe
+#if defined __NR_uretprobe || defined __NR_uprobe
 #ifdef SECCOMP_ARCH_COMPAT
 	if (sd->arch == SECCOMP_ARCH_NATIVE)
 #endif
+	{
+#ifdef __NR_uretprobe
 		if (sd->nr == __NR_uretprobe)
 			return true;
+#endif
+#ifdef __NR_uprobe
+		if (sd->nr == __NR_uprobe)
+			return true;
+#endif
+	}
 #endif
 
 	for (pc = 0; pc < fprog->len; pc++) {
@@ -1034,6 +1042,9 @@ static const int mode1_syscalls[] = {
 	__NR_seccomp_read, __NR_seccomp_write, __NR_seccomp_exit, __NR_seccomp_sigreturn,
 #ifdef __NR_uretprobe
 	__NR_uretprobe,
+#endif
+#ifdef __NR_uprobe
+	__NR_uprobe,
 #endif
 	-1, /* negative terminated */
 };
