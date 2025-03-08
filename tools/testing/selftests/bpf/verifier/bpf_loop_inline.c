@@ -30,6 +30,18 @@
 #define HELPER_CALL_INSN() \
 	BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, INSN_OFF_MASK, INSN_IMM_MASK)
 
+/* must account for verifier inlining of
+ * BPF_FUNC_jiffies64 on 64-bit only
+ */
+
+#if __SIZEOF_LONG__ == 4
+#define HELPER_INLINE_CALL() \
+	HELPER_CALL_INSN(), SKIP_INSNS()
+#else
+#define HELPER_INLINE_CALL() \
+	SKIP_INSNS()
+#endif
+
 {
 	"inline simple bpf_loop call",
 	.insns = {
@@ -54,8 +66,14 @@
 	BPF_ALU64_IMM(BPF_MOV, BPF_REG_0, 1),
 	BPF_EXIT_INSN(),
 	},
-	.expected_insns = { PSEUDO_CALL_INSN() },
-	.unexpected_insns = { HELPER_CALL_INSN() },
+	.expected_insns = {
+		HELPER_INLINE_CALL(),
+		PSEUDO_CALL_INSN()
+	},
+	.unexpected_insns = {
+		HELPER_INLINE_CALL(),
+		HELPER_CALL_INSN()
+	},
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	.flags = F_NEEDS_JIT_ENABLED,
 	.result = ACCEPT,
@@ -88,8 +106,14 @@
 	BPF_ALU64_IMM(BPF_MOV, BPF_REG_0, 1),
 	BPF_EXIT_INSN(),
 	},
-	.expected_insns = { HELPER_CALL_INSN() },
-	.unexpected_insns = { PSEUDO_CALL_INSN() },
+	.expected_insns = {
+		HELPER_INLINE_CALL(),
+		HELPER_INLINE_CALL(),
+		HELPER_CALL_INSN()
+	},
+	.unexpected_insns = {
+		PSEUDO_CALL_INSN()
+	},
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	.flags = F_NEEDS_JIT_ENABLED,
 	.result = ACCEPT,
@@ -126,8 +150,13 @@
 	BPF_ALU64_IMM(BPF_MOV, BPF_REG_0, 1),
 	BPF_EXIT_INSN(),
 	},
-	.expected_insns = { HELPER_CALL_INSN() },
-	.unexpected_insns = { PSEUDO_CALL_INSN() },
+	.expected_insns = {
+		HELPER_INLINE_CALL(),
+		HELPER_CALL_INSN()
+	},
+	.unexpected_insns = {
+		PSEUDO_CALL_INSN()
+	},
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	.flags = F_NEEDS_JIT_ENABLED,
 	.result = ACCEPT,
@@ -263,6 +292,7 @@
 	BTF_TYPES
 },
 
+#undef HELPER_INLINE_CALL
 #undef HELPER_CALL_INSN
 #undef PSEUDO_CALL_INSN
 #undef CALLBACK_TYPE
