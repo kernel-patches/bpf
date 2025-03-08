@@ -7121,7 +7121,7 @@ error:
 			enum bpf_type_flag tmp_flag = 0;
 			u32 id;
 
-			if (msize != size || off != moff) {
+			if (msize > size || off != moff) {
 				bpf_log(log,
 					"cannot access ptr member %s with moff %u msize %u in struct %s with off %u size %u\n",
 					mname, moff, msize, tname, off, size);
