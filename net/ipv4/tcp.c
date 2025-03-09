@@ -3352,7 +3352,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	icsk->icsk_probes_out = 0;
 	icsk->icsk_probes_tstamp = 0;
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
-	icsk->icsk_rto_min = TCP_RTO_MIN;
+	WRITE_ONCE(icsk->icsk_rto_min, TCP_RTO_MIN);
 	icsk->icsk_delack_max = TCP_DELACK_MAX;
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
 	tcp_snd_cwnd_set(tp, TCP_INIT_CWND);
@@ -3833,6 +3833,14 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 			return -EINVAL;
 		WRITE_ONCE(inet_csk(sk)->icsk_rto_max, msecs_to_jiffies(val));
 		return 0;
+	case TCP_RTO_MIN_US: {
+		int rto_min = usecs_to_jiffies(val);
+
+		if (rto_min > TCP_RTO_MIN || rto_min < TCP_TIMEOUT_MIN)
+			return -EINVAL;
+		WRITE_ONCE(inet_csk(sk)->icsk_rto_min, rto_min);
+		return 0;
+	}
 	}
 
 	sockopt_lock_sock(sk);
@@ -4672,6 +4680,12 @@ zerocopy_rcv_out:
 	case TCP_RTO_MAX_MS:
 		val = jiffies_to_msecs(tcp_rto_max(sk));
 		break;
+	case TCP_RTO_MIN_US: {
+		int rto_min = READ_ONCE(inet_csk(sk)->icsk_rto_min);
+
+		val = jiffies_to_usecs(rto_min);
+		break;
+	}
 	default:
 		return -ENOPROTOOPT;
 	}
