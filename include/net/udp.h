@@ -102,6 +102,7 @@ struct udp_table {
 #endif
 	unsigned int		mask;
 	unsigned int		log;
+	atomic64_t		ver;
 };
 extern struct udp_table udp_table;
 void udp_table_init(struct udp_table *, const char *);
