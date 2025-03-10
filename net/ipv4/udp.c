@@ -229,6 +229,11 @@ static int udp_reuseport_add_sock(struct sock *sk, struct udp_hslot *hslot)
 	return reuseport_alloc(sk, inet_rcv_saddr_any(sk));
 }
 
+static inline __s64 udp_table_next_idx(struct udp_table *udptable, bool pos)
+{
+	return (pos ? 1 : -1) * atomic64_inc_return(&udptable->ver);
+}
+
 /**
  *  udp_lib_get_port  -  UDP/-Lite port lookup for IPv4 and IPv6
  *
@@ -244,6 +249,7 @@ int udp_lib_get_port(struct sock *sk, unsigned short snum,
 	struct udp_hslot *hslot, *hslot2;
 	struct net *net = sock_net(sk);
 	int error = -EADDRINUSE;
+	bool add_tail;
 
 	if (!snum) {
 		DECLARE_BITMAP(bitmap, PORTS_PER_CHAIN);
@@ -335,14 +341,16 @@ found:
 
 		hslot2 = udp_hashslot2(udptable, udp_sk(sk)->udp_portaddr_hash);
 		spin_lock(&hslot2->lock);
-		if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
-		    sk->sk_family == AF_INET6)
+		add_tail = IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
+			   sk->sk_family == AF_INET6;
+		if (add_tail)
 			hlist_add_tail_rcu(&udp_sk(sk)->udp_portaddr_node,
 					   &hslot2->head);
 		else
 			hlist_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
 					   &hslot2->head);
 		hslot2->count++;
+		sk->sk_idx = udp_table_next_idx(udptable, add_tail);
 		spin_unlock(&hslot2->lock);
 	}
 
@@ -2250,6 +2258,8 @@ void udp_lib_rehash(struct sock *sk, u16 newhash, u16 newhash4)
 				hlist_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
 							 &nhslot2->head);
 				nhslot2->count++;
+				sk->sk_idx = udp_table_next_idx(udptable,
+								false);
 				spin_unlock(&nhslot2->lock);
 			}
 
@@ -3390,9 +3400,9 @@ struct bpf_udp_iter_state {
 	unsigned int cur_sk;
 	unsigned int end_sk;
 	unsigned int max_sk;
-	int offset;
 	struct sock **batch;
 	bool st_bucket_done;
+	__s64 prev_idx;
 };
 
 static int bpf_iter_udp_realloc_batch(struct bpf_udp_iter_state *iter,
@@ -3402,14 +3412,13 @@ static struct sock *bpf_iter_udp_batch(struct seq_file *seq)
 	struct bpf_udp_iter_state *iter = seq->private;
 	struct udp_iter_state *state = &iter->state;
 	struct net *net = seq_file_net(seq);
-	int resume_bucket, resume_offset;
 	struct udp_table *udptable;
 	unsigned int batch_sks = 0;
 	bool resized = false;
+	int resume_bucket;
 	struct sock *sk;
 
 	resume_bucket = state->bucket;
-	resume_offset = iter->offset;
 
 	/* The current batch is done, so advance the bucket. */
 	if (iter->st_bucket_done)
@@ -3436,18 +3445,19 @@ again:
 		if (hlist_empty(&hslot2->head))
 			continue;
 
-		iter->offset = 0;
 		spin_lock_bh(&hslot2->lock);
+		/* Reset prev_idx if this is a new bucket. */
+		if (!resume_bucket || state->bucket != resume_bucket)
+			iter->prev_idx = 0;
 		udp_portaddr_for_each_entry(sk, &hslot2->head) {
 			if (seq_sk_match(seq, sk)) {
-				/* Resume from the last iterated socket at the
-				 * offset in the bucket before iterator was stopped.
+				/* Resume from the first socket that we didn't
+				 * see last time around.
 				 */
 				if (state->bucket == resume_bucket &&
-				    iter->offset < resume_offset) {
-					++iter->offset;
+				    iter->prev_idx &&
+				    sk->sk_idx <= iter->prev_idx)
 					continue;
-				}
 				if (iter->end_sk < iter->max_sk) {
 					sock_hold(sk);
 					iter->batch[iter->end_sk++] = sk;
@@ -3492,8 +3502,9 @@ static void *bpf_iter_udp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	 * done with seq_show(), so unref the iter->cur_sk.
 	 */
 	if (iter->cur_sk < iter->end_sk) {
-		sock_put(iter->batch[iter->cur_sk++]);
-		++iter->offset;
+		sk = iter->batch[iter->cur_sk++];
+		iter->prev_idx = sk->sk_idx;
+		sock_put(sk);
 	}
 
 	/* After updating iter->cur_sk, check if there are more sockets
@@ -3740,6 +3751,7 @@ static struct udp_table __net_init *udp_pernet_table_alloc(unsigned int hash_ent
 	udptable->hash2 = (void *)(udptable->hash + hash_entries);
 	udptable->mask = hash_entries - 1;
 	udptable->log = ilog2(hash_entries);
+	atomic64_set(&udptable->ver, 0);
 
 	for (i = 0; i < hash_entries; i++) {
 		INIT_HLIST_HEAD(&udptable->hash[i].head);
