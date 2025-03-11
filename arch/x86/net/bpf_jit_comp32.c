@@ -12,6 +12,7 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
+#include <linux/clocksource.h>
 #include <asm/cacheflush.h>
 #include <asm/set_memory.h>
 #include <asm/nospec-branch.h>
@@ -2115,6 +2116,29 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 					EMIT2(0x0F, 0x31);
 					break;
 				}
+				if (IS_ENABLED(CONFIG_BPF_SYSCALL) &&
+				    imm32 == BPF_CALL_IMM(bpf_cpu_time_counter_to_ns) &&
+				    cpu_feature_enabled(X86_FEATURE_TSC) &&
+				    using_native_sched_clock() && sched_clock_stable()) {
+					struct cyc2ns_data data;
+					u32 mult, shift;
+
+					cyc2ns_read_begin(&data);
+					mult = data.cyc2ns_mul;
+					shift = data.cyc2ns_shift;
+					cyc2ns_read_end();
+
+					/* move parameter to BPF_REG_0 */
+					emit_ia32_mov_r64(true, bpf2ia32[BPF_REG_0],
+							  bpf2ia32[BPF_REG_1], true, true,
+							  &prog, bpf_prog->aux);
+					/* multiply parameter by mut */
+					emit_ia32_mul_i64(bpf2ia32[BPF_REG_0],
+							  mult, true, &prog);
+					/* shift parameter by shift which is less than 64 */
+					emit_ia32_rsh_i64(bpf2ia32[BPF_REG_0],
+							  shift, true, &prog);
+				}
 
 				err = emit_kfunc_call(bpf_prog,
 						      image + addrs[i],
@@ -2648,7 +2672,8 @@ bool bpf_jit_inlines_kfunc_call(s32 imm)
 {
 	if (!IS_ENABLED(CONFIG_BPF_SYSCALL))
 		return false;
-	if (imm == BPF_CALL_IMM(bpf_get_cpu_time_counter) &&
+	if ((imm == BPF_CALL_IMM(bpf_get_cpu_time_counter) ||
+	    imm == BPF_CALL_IMM(bpf_cpu_time_counter_to_ns)) &&
 	    cpu_feature_enabled(X86_FEATURE_TSC) &&
 	    using_native_sched_clock() && sched_clock_stable())
 		return true;
