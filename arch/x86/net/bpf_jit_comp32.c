@@ -16,6 +16,7 @@
 #include <asm/set_memory.h>
 #include <asm/nospec-branch.h>
 #include <asm/asm-prototypes.h>
+#include <asm/timer.h>
 #include <linux/bpf.h>
 
 /*
@@ -2094,6 +2095,27 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 				int err;
 
+				if (IS_ENABLED(CONFIG_BPF_SYSCALL) &&
+				    imm32 == BPF_CALL_IMM(bpf_get_cpu_time_counter) &&
+				    cpu_feature_enabled(X86_FEATURE_TSC) &&
+				    using_native_sched_clock() && sched_clock_stable()) {
+					/* The default implementation of this kfunc uses
+					 * ktime_get_raw_ns() which effectively is implemented as
+					 * `(u64)rdtsc_ordered() & S64_MAX`. For JIT We skip
+					 * masking part because we assume it's not needed in BPF
+					 * use case (two measurements close in time).
+					 * Original code for rdtsc_ordered() uses sequence:
+					 * 'rdtsc; nop; nop; nop' to patch it into
+					 * 'lfence; rdtsc' or 'rdtscp' depending on CPU features.
+					 * JIT uses 'lfence; rdtsc' variant because BPF program
+					 * doesn't care about cookie provided by rdtscp in ECX.
+					 */
+					if (cpu_feature_enabled(X86_FEATURE_LFENCE_RDTSC))
+						EMIT3(0x0F, 0xAE, 0xE8);
+					EMIT2(0x0F, 0x31);
+					break;
+				}
+
 				err = emit_kfunc_call(bpf_prog,
 						      image + addrs[i],
 						      insn, &prog);
@@ -2620,4 +2642,15 @@ out:
 bool bpf_jit_supports_kfunc_call(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_kfunc_call(s32 imm)
+{
+	if (!IS_ENABLED(CONFIG_BPF_SYSCALL))
+		return false;
+	if (imm == BPF_CALL_IMM(bpf_get_cpu_time_counter) &&
+	    cpu_feature_enabled(X86_FEATURE_TSC) &&
+	    using_native_sched_clock() && sched_clock_stable())
+		return true;
+	return false;
 }
